@@ -202,10 +202,12 @@ func needSpecialHandling(funcExpr *plan.Function) bool {
 	if funcExpr.Func.GetObjName() == "prefix_in" || funcExpr.Func.GetObjName() == "prefix_eq" || funcExpr.Func.GetObjName() == "prefix_between" {
 		return true
 	}
-	col := funcExpr.Args[0].GetCol()
-	if col != nil {
-		if strings.Contains(col.Name, catalog.PrefixCBColName) || strings.Contains(col.Name, catalog.PrefixPriColName) {
-			return true
+	if len(funcExpr.Args) > 0 {
+		col := funcExpr.Args[0].GetCol()
+		if col != nil {
+			if strings.Contains(col.Name, catalog.PrefixCBColName) || strings.Contains(col.Name, catalog.PrefixPriColName) {
+				return true
+			}
 		}
 	}
 	return false
