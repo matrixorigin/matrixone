@@ -113,7 +113,7 @@ func (or *ObjListRelData) GetBlockInfoSlice() objectio.BlockInfoSlice {
 }
 
 func (or *ObjListRelData) BuildEmptyRelData(i int) engine.RelData {
-	panic("not supported")
+	return or.blocklistRelData.BuildEmptyRelData(i)
 }
 
 func (or *ObjListRelData) GetBlockInfo(i int) objectio.BlockInfo {
