@@ -151,7 +151,7 @@ func (u *fulltextState) start(tf *TableFunction, proc *process.Process, nthRow i
 	if !u.inited {
 		u.batch = tf.createResultBatch()
 		u.errors = make(chan error)
-		u.stream_chan = make(chan executor.Result, 128)
+		u.stream_chan = make(chan executor.Result, 8)
 		u.idx2word = make(map[int]string)
 		u.inited = true
 	}
