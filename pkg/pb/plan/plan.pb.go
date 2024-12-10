@@ -778,6 +778,7 @@ const (
 	Node_FAIL   Node_OnDuplicateAction = 0
 	Node_IGNORE Node_OnDuplicateAction = 1
 	Node_UPDATE Node_OnDuplicateAction = 2
+	Node_NOCHECKING Node_OnDuplicateAction = 3
 )
 
 var Node_OnDuplicateAction_name = map[int32]string{

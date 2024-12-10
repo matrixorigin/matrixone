@@ -168,10 +168,10 @@ var (
 		output: "select rank() over (partition by a order by b desc) from t1",
 	}, {
 		input:  "load data url s3option {\"bucket\"='dan-test1', \"filepath\"='ex_table_dan_gzip.gz',\"role_arn\"='arn:aws:iam::468413122987:role/dev-cross-s3', \"external_id\"='5404f91c_4e59_4898_85b3', \"compression\"='auto'} into table hx3.t2 fields terminated by ',' enclosed by '\\\"' lines terminated by '\\n';\n",
-		output: "load data url s3option {'bucket'='dan-test1', 'filepath'='ex_table_dan_gzip.gz', 'role_arn'='arn:aws:iam::468413122987:role/dev-cross-s3', 'external_id'='5404f91c_4e59_4898_85b3', 'compression'='auto'} into table hx3.t2 fields terminated by , enclosed by \" lines terminated by \n",
+		output: "load data url s3option {'bucket'='dan-test1', 'filepath'='ex_table_dan_gzip.gz', 'role_arn'='arn:aws:iam::468413122987:role/dev-cross-s3', 'external_id'='5404f91c_4e59_4898_85b3', 'compression'='auto'} checking into table hx3.t2 fields terminated by , enclosed by \" lines terminated by \n",
 	}, {
 		input:  "load data url stageoption my_stage into table hx3.t2 fields terminated by ',' enclosed by '' lines terminated by '\\n';\n",
-		output: "load data url from stage my_stage into table hx3.t2 fields terminated by , lines terminated by \n",
+		output: "load data url from stage my_stage checking into table hx3.t2 fields terminated by , lines terminated by \n",
 	}, {
 		input:  "SHOW CREATE TABLE information_schema.PROCESSLIST;",
 		output: "show create table information_schema.processlist",
@@ -870,8 +870,11 @@ var (
 			input:  "load data infile 'test/loadfile5' ignore INTO TABLE T.A FIELDS TERMINATED BY  ',' (@,@,c,d,e,f)",
 			output: "load data infile test/loadfile5 ignore into table t.a fields terminated by , (, , c, d, e, f)",
 		}, {
+			input:  "load data infile 'test/loadfile5' nochecking INTO TABLE T.A FIELDS TERMINATED BY  ',' (@,@,c,d,e,f)",
+			output: "load data infile test/loadfile5 noChecking into table t.a fields terminated by , (, , c, d, e, f)",
+		}, {
 			input:  "load data infile '/root/lineorder_flat_10.tbl' into table lineorder_flat FIELDS TERMINATED BY '' OPTIONALLY ENCLOSED BY '' LINES TERMINATED BY '';",
-			output: "load data infile /root/lineorder_flat_10.tbl into table lineorder_flat fields terminated by '' optionally enclosed by '' lines terminated by ''",
+			output: "load data infile /root/lineorder_flat_10.tbl checking into table lineorder_flat fields terminated by '' optionally enclosed by '' lines terminated by ''",
 		}, {
 			input:  "load data local infile 'data' replace into table db.a (a, b, @vc, @vd) set a = @vc != 0, d = @vd != 1",
 			output: "load data local infile data replace into table db.a (a, b, @vc, @vd) set a = @vc != 0, d = @vd != 1",
@@ -889,17 +892,17 @@ var (
 			output: "load data local infile data replace into table db.a lines starting by # terminated by 	 ignore 2 lines",
 		}, {
 			input:  "load data infile 'data.txt' into table db.a fields terminated by '\t' escaped by '\t'",
-			output: "load data infile data.txt into table db.a fields terminated by \t escaped by \t",
+			output: "load data infile data.txt checking into table db.a fields terminated by \t escaped by \t",
 		}, {
 			input:  "load data infile 'data.txt' into table db.a fields terminated by '\t' enclosed by '\t' escaped by '\t'",
-			output: "load data infile data.txt into table db.a fields terminated by \t enclosed by \t escaped by \t",
+			output: "load data infile data.txt checking into table db.a fields terminated by \t enclosed by \t escaped by \t",
 		}, {
 			input:  "load data infile 'data.txt' into table db.a",
-			output: "load data infile data.txt into table db.a",
+			output: "load data infile data.txt checking into table db.a",
 		}, {
-			input: "load data infile {'filepath'='data.txt', 'compression'='auto'} into table db.a",
+			input: "load data infile {'filepath'='data.txt', 'compression'='auto'} checking into table db.a",
 		}, {
-			input: "load data infile {'filepath'='data.txt', 'compression'='none'} into table db.a",
+			input: "load data infile {'filepath'='data.txt', 'compression'='none'} checking into table db.a",
 		}, {
 			input:  "create external table t (a int) infile 'data.txt'",
 			output: "create external table t (a int) infile 'data.txt'",
@@ -920,58 +923,77 @@ var (
 			output: "load data infile test/loadfile5 ignore into table t.a fields terminated by , (, , c, d, e, f)",
 		}, {
 			input:  "load data infile '/root/lineorder_flat_10.tbl' into table lineorder_flat FIELDS TERMINATED BY '' OPTIONALLY ENCLOSED BY '' LINES TERMINATED BY '';",
-			output: "load data infile /root/lineorder_flat_10.tbl into table lineorder_flat fields terminated by '' optionally enclosed by '' lines terminated by ''",
+			output: "load data infile /root/lineorder_flat_10.tbl checking into table lineorder_flat fields terminated by '' optionally enclosed by '' lines terminated by ''",
 		}, {
 			input:  "load data infile '/root/lineorder_flat_10.tbl' into table lineorder_flat FIELDS TERMINATED BY '' OPTIONALLY ENCLOSED BY '' LINES TERMINATED BY '' parallel 'true';",
-			output: "load data infile /root/lineorder_flat_10.tbl into table lineorder_flat fields terminated by '' optionally enclosed by '' lines terminated by '' parallel true strict true ",
+			output: "load data infile /root/lineorder_flat_10.tbl checking into table lineorder_flat fields terminated by '' optionally enclosed by '' lines terminated by '' parallel true strict true ",
 		}, {
 			input:  "load data infile '/root/lineorder_flat_10.tbl' into table lineorder_flat FIELDS TERMINATED BY '' OPTIONALLY ENCLOSED BY '' LINES TERMINATED BY '' parallel 'true' strict 'true';",
-			output: "load data infile /root/lineorder_flat_10.tbl into table lineorder_flat fields terminated by '' optionally enclosed by '' lines terminated by '' parallel true strict true ",
+			output: "load data infile /root/lineorder_flat_10.tbl checking into table lineorder_flat fields terminated by '' optionally enclosed by '' lines terminated by '' parallel true strict true ",
 		}, {
-			input: "load data infile {'filepath'='data.txt', 'compression'='auto'} into table db.a",
+			input:  "load data infile {'filepath'='data.txt', 'compression'='auto'} into table db.a",
+			output: "load data infile {'filepath'='data.txt', 'compression'='auto'} checking into table db.a",
 		}, {
-			input: "load data infile {'filepath'='data.txt', 'compression'='none'} into table db.a",
+			input:  "load data infile {'filepath'='data.txt', 'compression'='none'} into table db.a",
+			output: "load data infile {'filepath'='data.txt', 'compression'='none'} checking into table db.a",
 		}, {
-			input: "load data infile {'filepath'='data.txt', 'compression'='GZIP'} into table db.a",
+			input:  "load data infile {'filepath'='data.txt', 'compression'='GZIP'} into table db.a",
+			output: "load data infile {'filepath'='data.txt', 'compression'='GZIP'} checking into table db.a",
 		}, {
-			input: "load data infile {'filepath'='data.txt', 'compression'='BZIP2'} into table db.a",
+			input:  "load data infile {'filepath'='data.txt', 'compression'='BZIP2'} into table db.a",
+			output: "load data infile {'filepath'='data.txt', 'compression'='BZIP2'} checking into table db.a",
 		}, {
-			input: "load data infile {'filepath'='data.txt', 'compression'='FLATE'} into table db.a",
+			input:  "load data infile {'filepath'='data.txt', 'compression'='FLATE'} into table db.a",
+			output: "load data infile {'filepath'='data.txt', 'compression'='FLATE'} checking into table db.a",
 		}, {
-			input: "load data infile {'filepath'='data.txt', 'compression'='LZW'} into table db.a",
+			input:  "load data infile {'filepath'='data.txt', 'compression'='LZW'} into table db.a",
+			output: "load data infile {'filepath'='data.txt', 'compression'='LZW'} checking into table db.a",
 		}, {
-			input: "load data infile {'filepath'='data.txt', 'compression'='ZLIB'} into table db.a",
+			input:  "load data infile {'filepath'='data.txt', 'compression'='ZLIB'} into table db.a",
+			output: "load data infile {'filepath'='data.txt', 'compression'='ZLIB'} checking into table db.a",
 		}, {
-			input: "load data infile {'filepath'='data.txt', 'compression'='LZ4'} into table db.a",
+			input:  "load data infile {'filepath'='data.txt', 'compression'='LZ4'} into table db.a",
+			output: "load data infile {'filepath'='data.txt', 'compression'='LZ4'} checking into table db.a",
 		}, {
 			input:  "LOAD DATA URL s3option{'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='XXX', 'secret_access_key'='XXX', 'bucket'='test', 'filepath'='*.txt', 'region'='us-west-2'} into table db.a",
-			output: "load data url s3option {'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='******', 'secret_access_key'='******', 'bucket'='test', 'filepath'='*.txt', 'region'='us-west-2'} into table db.a",
+			output: "load data url s3option {'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='******', 'secret_access_key'='******', 'bucket'='test', 'filepath'='*.txt', 'region'='us-west-2'} checking into table db.a",
 		},
 		{
-			input: `load data url s3option {'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='******', 'secret_access_key'='******', 'bucket'='test', 'filepath'='jsonline/jsonline_object.jl', 'region'='us-west-2', 'compression'='none', 'format'='jsonline', 'jsondata'='object'} into table t1`,
+			input:  `load data url s3option {'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='******', 'secret_access_key'='******', 'bucket'='test', 'filepath'='jsonline/jsonline_object.jl', 'region'='us-west-2', 'compression'='none', 'format'='jsonline', 'jsondata'='object'} into table t1`,
+			output: `load data url s3option {'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='******', 'secret_access_key'='******', 'bucket'='test', 'filepath'='jsonline/jsonline_object.jl', 'region'='us-west-2', 'compression'='none', 'format'='jsonline', 'jsondata'='object'} checking into table t1`,
 		}, {
-			input: "load data infile {'filepath'='data.txt', 'compression'='GZIP'} into table db.a",
+			input:  "load data infile {'filepath'='data.txt', 'compression'='GZIP'} into table db.a",
+			output: "load data infile {'filepath'='data.txt', 'compression'='GZIP'} checking into table db.a",
 		}, {
-			input: "load data infile {'filepath'='data.txt', 'compression'='BZIP2'} into table db.a",
+			input:  "load data infile {'filepath'='data.txt', 'compression'='BZIP2'} into table db.a",
+			output: "load data infile {'filepath'='data.txt', 'compression'='BZIP2'} checking into table db.a",
 		}, {
-			input: "load data infile {'filepath'='data.txt', 'compression'='FLATE'} into table db.a",
+			input:  "load data infile {'filepath'='data.txt', 'compression'='FLATE'} into table db.a",
+			output: "load data infile {'filepath'='data.txt', 'compression'='FLATE'} checking into table db.a",
 		}, {
-			input: "load data infile {'filepath'='data.txt', 'compression'='LZW'} into table db.a",
+			input:  "load data infile {'filepath'='data.txt', 'compression'='LZW'} into table db.a",
+			output: "load data infile {'filepath'='data.txt', 'compression'='LZW'} checking into table db.a",
 		}, {
-			input: "load data infile {'filepath'='data.txt', 'compression'='ZLIB'} into table db.a",
+			input:  "load data infile {'filepath'='data.txt', 'compression'='ZLIB'} into table db.a",
+			output: "load data infile {'filepath'='data.txt', 'compression'='ZLIB'} checking into table db.a",
 		}, {
-			input: "load data infile {'filepath'='data.txt', 'compression'='LZ4'} into table db.a",
+			input:  "load data infile {'filepath'='data.txt', 'compression'='LZ4'} into table db.a",
+			output: "load data infile {'filepath'='data.txt', 'compression'='LZ4'} checking into table db.a",
 		}, {
-			input: "load data infile {'filepath'='data.txt', 'format'='jsonline', 'jsondata'='array'} into table db.a",
+			input:  "load data infile {'filepath'='data.txt', 'format'='jsonline', 'jsondata'='array'} into table db.a",
+			output: "load data infile {'filepath'='data.txt', 'format'='jsonline', 'jsondata'='array'} checking into table db.a",
 		},
 		{
-			input: "load data infile {'filepath'='data.txt', 'format'='jsonline', 'jsondata'='object'} into table db.a",
+			input:  "load data infile {'filepath'='data.txt', 'format'='jsonline', 'jsondata'='object'} into table db.a",
+			output: "load data infile {'filepath'='data.txt', 'format'='jsonline', 'jsondata'='object'} checking into table db.a",
 		},
 		{
-			input: "load data infile {'filepath'='data.txt', 'compression'='BZIP2', 'format'='jsonline', 'jsondata'='object'} into table db.a",
+			input:  "load data infile {'filepath'='data.txt', 'compression'='BZIP2', 'format'='jsonline', 'jsondata'='object'} into table db.a",
+			output: "load data infile {'filepath'='data.txt', 'compression'='BZIP2', 'format'='jsonline', 'jsondata'='object'} checking into table db.a",
 		},
 		{
-			input: "load data inline format='jsonline', data='[1,2,3,4]', jsontype='array' into table t1",
+			input:  "load data inline format='jsonline', data='[1,2,3,4]', jsontype='array' into table t1",
+			output: "load data inline format='jsonline', data='[1,2,3,4]', jsontype='array' checking into table t1",
 		},
 		{
 			input:  "show tables from test01 where tables_in_test01 like '%t2%'",
@@ -2092,7 +2114,7 @@ var (
 		},
 		{
 			input:  "load data infile 'data.txt' into table db.a fields terminated by '\t' escaped by '\t'",
-			output: "load data infile data.txt into table db.a fields terminated by \t escaped by \t",
+			output: "load data infile data.txt checking into table db.a fields terminated by \t escaped by \t",
 		},
 		{
 			input:  `create function helloworld () returns int language sql as 'select id from test_table limit 1'`,
