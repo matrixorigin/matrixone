@@ -140,8 +140,8 @@ func Test_CanTransferCnFaultInject(t *testing.T) {
 		uuid.New().String(),
 	}
 	addrs := []string{
-		"127.0.0.1:7777",
-		"127.0.0.1:5555",
+		"127.0.0.1:7775",
+		"127.0.0.1:5557",
 	}
 
 	a1.proc = new(process.Process)
