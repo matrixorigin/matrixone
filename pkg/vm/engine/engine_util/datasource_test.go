@@ -111,7 +111,7 @@ func TestObjListRelData(t *testing.T) { // for test coverage
 		NeedFirstEmpty: true,
 		TotalBlocks:    1,
 	}
-	logutil.Infof(objlistRelData.String())
+	logutil.Infof("%v", objlistRelData.String())
 	var s objectio.BlockInfoSlice
 	s.AppendBlockInfo(&objectio.BlockInfo{BlockID: types.Blockid{1}})
 	objlistRelData.AppendBlockInfoSlice(s)
