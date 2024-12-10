@@ -46,6 +46,8 @@ type fulltextState struct {
 	limit       uint64
 	nrows       int
 	idx2word    map[int]string
+	agghtab     map[any][]uint8
+	aggcnt      []int64
 
 	// holding output batch
 	batch *batch.Batch
@@ -116,7 +118,7 @@ func (u *fulltextState) returnResult(proc *process.Process, scoremap map[any]flo
 		return vm.CancelResult, nil
 	}
 
-	//os.Stderr.WriteString(fmt.Sprintf("score MAP size = %d, %d rows returned\n", len(u.sacc.Agghtab), len(scoremap)))
+	//os.Stderr.WriteString(fmt.Sprintf("score MAP size = %d, %d rows returned\n", len(u.agghtab), len(scoremap)))
 	return vm.CallResult{Status: vm.ExecNext, Batch: u.batch}, nil
 
 }
@@ -350,9 +352,9 @@ func evaluate(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) 
 	scoremap = make(map[any]float32, 8192)
 	keys := make([]any, 0, 8192)
 
-	aggcnt := s.Aggcnt
+	aggcnt := u.aggcnt
 
-	for doc_id, docvec := range s.Agghtab {
+	for doc_id, docvec := range u.agghtab {
 		score, err := s.Eval(docvec, aggcnt)
 		if err != nil {
 			return nil, err
@@ -370,7 +372,7 @@ func evaluate(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) 
 	}
 
 	for _, k := range keys {
-		delete(s.Agghtab, k)
+		delete(u.agghtab, k)
 	}
 
 	return scoremap, nil
@@ -421,9 +423,9 @@ func groupby(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) (
 			// phrase search widx is dummy and fill in value 1 for all keywords
 			nwords := s.Nkeywords
 			for i := 0; i < nwords; i++ {
-				s.Aggcnt[i]++
+				u.aggcnt[i]++
 			}
-			docvec, ok := s.Agghtab[doc_id]
+			docvec, ok := u.agghtab[doc_id]
 			if ok {
 				for i := 0; i < nwords; i++ {
 					if docvec[i] < 255 {
@@ -435,12 +437,12 @@ func groupby(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) (
 				for i := 0; i < nwords; i++ {
 					docvec[i] = 1
 				}
-				s.Agghtab[doc_id] = docvec
+				u.agghtab[doc_id] = docvec
 			}
 		} else {
 
-			s.Aggcnt[widx]++
-			docvec, ok := s.Agghtab[doc_id]
+			u.aggcnt[widx]++
+			docvec, ok := u.agghtab[doc_id]
 			if ok {
 				if docvec[widx] < 255 {
 					// limit doc count to 255 to fit uint8
@@ -449,7 +451,7 @@ func groupby(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) (
 			} else {
 				docvec = make([]uint8, s.Nkeywords)
 				docvec[widx] = 1
-				s.Agghtab[doc_id] = docvec
+				u.agghtab[doc_id] = docvec
 			}
 
 		}
@@ -486,35 +488,43 @@ func runCountStar(proc *process.Process, s *fulltext.SearchAccum) (int64, error)
 }
 
 func fulltextIndexMatch(u *fulltextState, proc *process.Process, tableFunction *TableFunction, srctbl, tblname, pattern string,
-	mode int64, bat *batch.Batch) error {
+	mode int64, bat *batch.Batch) (err error) {
 
-	// parse the search string to []Pattern and create SearchAccum
-	s, err := fulltext.NewSearchAccum(srctbl, tblname, pattern, mode, "")
-	if err != nil {
-		return err
+	if u.sacc == nil {
+		// parse the search string to []Pattern and create SearchAccum
+		s, err := fulltext.NewSearchAccum(srctbl, tblname, pattern, mode, "")
+		if err != nil {
+			return err
+		}
+
+		nwords := fulltext.GetTextCountFromPattern(s.Pattern)
+
+		u.agghtab = make(map[any][]uint8, 1024)
+		u.aggcnt = make([]int64, nwords)
+
+		// count(*) to get number of records in source table
+		nrow, err := runCountStar(proc, s)
+		if err != nil {
+			return err
+		}
+		s.Nrow = nrow
+
+		u.sacc = s
+
 	}
-
-	// count(*) to get number of records in source table
-	nrow, err := runCountStar(proc, s)
-	if err != nil {
-		return err
-	}
-	s.Nrow = nrow
-
-	u.sacc = s
 
 	go func() {
 		//os.Stderr.WriteString("GO SQL START\n")
 		// get the statistic of search string ([]Pattern) and store in SearchAccum
-		if len(s.Pattern) > 0 && s.Pattern[0].Operator == fulltext.PHRASE {
-			_, err = runPhraseStats(u, proc, u.sacc)
+		if len(u.sacc.Pattern) > 0 && u.sacc.Pattern[0].Operator == fulltext.PHRASE {
+			_, err := runPhraseStats(u, proc, u.sacc)
 			if err != nil {
 				u.errors <- err
 				return
 			}
 
 		} else {
-			_, err = runWordStats(u, proc, u.sacc)
+			_, err := runWordStats(u, proc, u.sacc)
 			if err != nil {
 				u.errors <- err
 				return
@@ -537,7 +547,7 @@ func fulltextIndexMatch(u *fulltextState, proc *process.Process, tableFunction *
 		}
 		i++
 	}
-	os.Stderr.WriteString(fmt.Sprintf("FULLTEXT: GROUP BY END htab size %d\n", len(s.Agghtab)))
+	os.Stderr.WriteString(fmt.Sprintf("FULLTEXT: GROUP BY END htab size %d\n", len(u.agghtab)))
 
 	return nil
 }
