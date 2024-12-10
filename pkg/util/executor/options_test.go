@@ -23,9 +23,11 @@ import (
 func TestOptionsStreaming(t *testing.T) {
 	var opts Options
 	var ch chan Result
+	var errors chan Result
 
-	opts = opts.WithStreaming(ch)
-	ret, streaming := opts.Streaming()
+	opts = opts.WithStreaming(ch, errors)
+	ret, err_chan, streaming := opts.Streaming()
 	require.True(t, ret == ch)
 	require.True(t, streaming)
+	require.True(t, err_chan == errors)
 }

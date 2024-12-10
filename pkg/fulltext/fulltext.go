@@ -26,20 +26,24 @@ import (
 
 /*
   1. Parse the search string into list of pattern []*Pattern
-  2. With list of pattern, run SQL to get all pattern stats and store in SearchAccum/WordAccum.
+  2. With list of pattern, run SQL to get all pattern stats and store in vector []uint8.  The value of vector is the document count of the Text node of
+     the pattern with index Pattern.Index (only Text or Star node will have valid index)
+  3. []aggcnt is count(doc_id) group by doc_id of each Text node.  Index of []aggcnt corresponds to Pattern.Index of Text or Star node.
   3. foreach pattern in the list, call Eval() function to compute the rank score based on previous rank score and the accumulate of the current pattern
      and return rank score as result
 
      i.e.
 
+     aggcnt []int32 aggregate count for all document found for keywords in Patterns
+     docvec  document vector []uint8 with the document count for keywords in patterns of a particular doc_id
      result := nil
      for p := range searchAccum.Pattern {
-            wordAccum := searchAccum.WordAccums[p.Text]
-            result = p.Eval(result, wordAccum)
+            result = p.Eval(result, docvec, aggcnt)
      }
    4. return result as answer
 */
 
+// Init Search Accum
 func NewSearchAccum(srctbl string, tblname string, pattern string, mode int64, params string) (*SearchAccum, error) {
 
 	ps, err := ParsePattern(pattern, mode)
@@ -52,6 +56,7 @@ func NewSearchAccum(srctbl string, tblname string, pattern string, mode int64, p
 		Aggcnt: make([]int64, nwords), Nkeywords: nwords}, nil
 }
 
+// find pattern by operator
 func findPatternByOperator(ps []*Pattern, op int) []*Pattern {
 	var result []*Pattern
 

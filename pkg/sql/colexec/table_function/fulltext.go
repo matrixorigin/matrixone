@@ -16,6 +16,7 @@ package table_function
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -41,7 +42,6 @@ type fulltextState struct {
 	errors      chan error
 	stream_chan chan executor.Result
 	n_result    uint64
-	sql_closed  bool
 	sacc        *fulltext.SearchAccum
 	limit       uint64
 	nrows       int
@@ -75,6 +75,8 @@ func (u *fulltextState) free(tf *TableFunction, proc *process.Process, pipelineF
 	}
 }
 
+// return (doc_id, score) as result
+// when scoremap is empty, return result end.
 func (u *fulltextState) returnResult(proc *process.Process, scoremap map[any]float32) (vm.CallResult, error) {
 	// return result
 	if u.batch.VectorCount() == 1 {
@@ -110,9 +112,11 @@ func (u *fulltextState) returnResult(proc *process.Process, scoremap map[any]flo
 	u.n_result += uint64(len(scoremap))
 
 	if u.batch.RowCount() == 0 {
+		os.Stderr.WriteString("FULLTEXT: return result END\n")
 		return vm.CancelResult, nil
 	}
 
+	//os.Stderr.WriteString(fmt.Sprintf("score MAP size = %d, %d rows returned\n", len(u.sacc.Agghtab), len(scoremap)))
 	return vm.CallResult{Status: vm.ExecNext, Batch: u.batch}, nil
 
 }
@@ -145,7 +149,7 @@ func (u *fulltextState) start(tf *TableFunction, proc *process.Process, nthRow i
 	if !u.inited {
 		u.batch = tf.createResultBatch()
 		u.errors = make(chan error)
-		u.stream_chan = make(chan executor.Result, 8)
+		u.stream_chan = make(chan executor.Result, 128)
 		u.idx2word = make(map[int]string)
 		u.inited = true
 	}
@@ -196,6 +200,7 @@ func fulltextIndexScanPrepare(proc *process.Process, tableFunction *TableFunctio
 
 var ft_runSql = ft_runSql_fn
 
+// run SQL in batch mode. Result batches will stored in memory and return once all result batches received.
 func ft_runSql_fn(proc *process.Process, sql string) (executor.Result, error) {
 	v, ok := moruntime.ServiceRuntime(proc.GetService()).GetGlobalVariables(moruntime.InternalSQLExecutor)
 	if !ok {
@@ -216,7 +221,7 @@ func ft_runSql_fn(proc *process.Process, sql string) (executor.Result, error) {
 var ft_runSql_streaming = ft_runSql_streaming_fn
 
 // run SQL in WithStreaming() and pass the channel to SQL executor
-func ft_runSql_streaming_fn(proc *process.Process, sql string, stream_chan chan executor.Result) (executor.Result, error) {
+func ft_runSql_streaming_fn(proc *process.Process, sql string, stream_chan chan executor.Result, error_chan chan error) (executor.Result, error) {
 	v, ok := moruntime.ServiceRuntime(proc.GetService()).GetGlobalVariables(moruntime.InternalSQLExecutor)
 	if !ok {
 		panic("missing lock service")
@@ -230,11 +235,11 @@ func ft_runSql_streaming_fn(proc *process.Process, sql string, stream_chan chan 
 		WithDatabase(proc.GetSessionInfo().Database).
 		WithTimeZone(proc.GetSessionInfo().TimeZone).
 		WithAccountID(proc.GetSessionInfo().AccountId).
-		WithStreaming(stream_chan)
+		WithStreaming(stream_chan, error_chan)
 	return exec.Exec(proc.GetTopContext(), sql, opts)
 }
 
-// run SQL to get the (doc_id, pos) of all patterns (words) in the search string
+// run SQL to get the (doc_id, word_index) of all patterns (words) in the search string
 func runWordStats(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) (executor.Result, error) {
 	var union []string
 
@@ -280,7 +285,7 @@ func runWordStats(u *fulltextState, proc *process.Process, s *fulltext.SearchAcc
 
 	logutil.Infof("SQL is %s", sql)
 
-	res, err := ft_runSql_streaming(proc, sql, u.stream_chan)
+	res, err := ft_runSql_streaming(proc, sql, u.stream_chan, u.errors)
 	if err != nil {
 		return executor.Result{}, err
 	}
@@ -288,7 +293,8 @@ func runWordStats(u *fulltextState, proc *process.Process, s *fulltext.SearchAcc
 	return res, nil
 }
 
-// run SQL to get the (doc_id, pos) of all patterns (words) in the search string
+// run SQL to get the (doc_id, word_index) of all patterns (words) in the phrase search.
+// word_index is dummy and we should set document words for all keywords in Patterns to 1
 func runPhraseStats(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) (executor.Result, error) {
 	var sql string
 	var union []string
@@ -329,7 +335,7 @@ func runPhraseStats(u *fulltextState, proc *process.Process, s *fulltext.SearchA
 
 	logutil.Infof("SQL is %s", sql)
 
-	res, err := ft_runSql_streaming(proc, sql, u.stream_chan)
+	res, err := ft_runSql_streaming(proc, sql, u.stream_chan, u.errors)
 	if err != nil {
 		return executor.Result{}, err
 	}
@@ -337,6 +343,8 @@ func runPhraseStats(u *fulltextState, proc *process.Process, s *fulltext.SearchA
 	return res, nil
 }
 
+// evaluate the score for all document vectors in Agg hashtable.
+// whenever there is 8192 results, return it immediately.
 func evaluate(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) (scoremap map[any]float32, err error) {
 
 	scoremap = make(map[any]float32, 8192)
@@ -429,7 +437,6 @@ func groupby(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) (
 				}
 				s.Agghtab[doc_id] = docvec
 			}
-
 		} else {
 
 			s.Aggcnt[widx]++
@@ -444,9 +451,10 @@ func groupby(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) (
 				docvec[widx] = 1
 				s.Agghtab[doc_id] = docvec
 			}
-		}
 
+		}
 		//logutil.Infof("ROW widx=%d, docid = %v", widx, doc_id)
+
 	}
 
 	return false, nil
@@ -496,6 +504,7 @@ func fulltextIndexMatch(u *fulltextState, proc *process.Process, tableFunction *
 	u.sacc = s
 
 	go func() {
+		//os.Stderr.WriteString("GO SQL START\n")
 		// get the statistic of search string ([]Pattern) and store in SearchAccum
 		if len(s.Pattern) > 0 && s.Pattern[0].Operator == fulltext.PHRASE {
 			_, err = runPhraseStats(u, proc, u.sacc)
@@ -511,16 +520,24 @@ func fulltextIndexMatch(u *fulltextState, proc *process.Process, tableFunction *
 				return
 			}
 		}
+		os.Stderr.WriteString("FULLTEXT: SQL END\n")
 	}()
+	//os.Stderr.WriteString("MAIN FULLTEXT MATCH GROUP BY START\n")
 
 	// array is empty, try to get batch from SQL executor
-	for !u.sql_closed {
-		sql_closed, err := groupby(u, proc, u.sacc)
+	i := 0
+	sql_closed := false
+	for !sql_closed {
+		sql_closed, err = groupby(u, proc, u.sacc)
 		if err != nil {
 			return err
 		}
-		u.sql_closed = sql_closed
+		if (i % 1000) == 0 {
+			os.Stderr.WriteString(fmt.Sprintf("nrow processed %d, chan size =%d\n", u.nrows, len(u.stream_chan)))
+		}
+		i++
 	}
+	os.Stderr.WriteString(fmt.Sprintf("FULLTEXT: GROUP BY END htab size %d\n", len(s.Agghtab)))
 
 	return nil
 }
