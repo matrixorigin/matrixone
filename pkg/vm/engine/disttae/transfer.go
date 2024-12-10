@@ -474,6 +474,7 @@ func doTransferRowids(
 		objectList,
 		nil,
 		&blockList,
+		nil,
 		fs,
 	); err != nil {
 		return

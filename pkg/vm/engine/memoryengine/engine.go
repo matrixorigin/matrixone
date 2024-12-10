@@ -245,6 +245,10 @@ func (e *Engine) UnsubscribeTable(ctx context.Context, dbID, tbID uint64) error 
 	return nil
 }
 
+func (e *Engine) PrefetchTableMeta(ctx context.Context, key pb.StatsInfoKey) bool {
+	return true
+}
+
 func (e *Engine) Stats(ctx context.Context, key pb.StatsInfoKey, sync bool) *pb.StatsInfo {
 	return nil
 }
