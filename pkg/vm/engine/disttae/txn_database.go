@@ -241,7 +241,7 @@ func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bo
 	rmFault := func() {}
 
 	if objectio.Debug19524Injected() {
-		if rmFault, err = objectio.InjectRanges(
+		if rmFault, err = objectio.InjectLogRanges(
 			ctx,
 			catalog.MO_TABLES,
 		); err != nil {
