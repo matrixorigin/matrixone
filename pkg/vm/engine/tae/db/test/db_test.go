@@ -10122,25 +10122,25 @@ func TestStartStopTableMerge(t *testing.T) {
 
 	tbl := rel.GetMeta().(*catalog.TableEntry)
 	require.NoError(t, scheduler.StopMerge(tbl, false))
-	require.ErrorIs(t, scheduler.LoopProcessor.OnTable(tbl), moerr.GetOkStopCurrRecur())
+	require.ErrorIs(t, scheduler.OnTable(tbl), moerr.GetOkStopCurrRecur())
 	require.NoError(t, scheduler.StartMerge(tbl.GetID(), false))
-	require.NoError(t, scheduler.LoopProcessor.OnTable(tbl))
+	require.NoError(t, scheduler.OnTable(tbl))
 	require.Error(t, scheduler.StartMerge(tbl.GetID(), false))
 
 	require.NoError(t, scheduler.StopMerge(tbl, true))
-	require.ErrorIs(t, scheduler.LoopProcessor.OnTable(tbl), moerr.GetOkStopCurrRecur())
+	require.ErrorIs(t, scheduler.OnTable(tbl), moerr.GetOkStopCurrRecur())
 
 	require.NoError(t, scheduler.StopMerge(tbl, true))
-	require.ErrorIs(t, scheduler.LoopProcessor.OnTable(tbl), moerr.GetOkStopCurrRecur())
+	require.ErrorIs(t, scheduler.OnTable(tbl), moerr.GetOkStopCurrRecur())
 
 	require.Error(t, scheduler.StopMerge(tbl, false))
-	require.ErrorIs(t, scheduler.LoopProcessor.OnTable(tbl), moerr.GetOkStopCurrRecur())
+	require.ErrorIs(t, scheduler.OnTable(tbl), moerr.GetOkStopCurrRecur())
 
 	require.NoError(t, scheduler.StartMerge(tbl.GetID(), true))
-	require.ErrorIs(t, scheduler.LoopProcessor.OnTable(tbl), moerr.GetOkStopCurrRecur())
+	require.ErrorIs(t, scheduler.OnTable(tbl), moerr.GetOkStopCurrRecur())
 
 	require.NoError(t, scheduler.StartMerge(tbl.GetID(), true))
-	require.NoError(t, scheduler.LoopProcessor.OnTable(tbl))
+	require.NoError(t, scheduler.OnTable(tbl))
 }
 
 func TestDeleteByPhyAddrKeys(t *testing.T) {
