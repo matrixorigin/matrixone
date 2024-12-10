@@ -559,7 +559,7 @@ func (tbl *txnTable) CollectTombstones(
 //   - exprs: A slice of expressions used to filter data.
 //   - txnOffset: Transaction offset used to specify the starting position for reading data.
 func (tbl *txnTable) Ranges(ctx context.Context, rangesParam engine.RangesParam) (data engine.RelData, err error) {
-	if len(rangesParam.BlockFilters) == 0 && len(rangesParam.Rsp.Node.AggList) == 0 {
+	if len(rangesParam.BlockFilters) == 0 {
 		//no block filters, no agg optimization, return objlist instead of blocklist
 		return tbl.getObjList(ctx, rangesParam)
 	}
@@ -755,10 +755,10 @@ var slowPathCounter atomic.Int64
 func (tbl *txnTable) rangesOnePart(
 	ctx context.Context,
 	state *logtailreplay.PartitionState, // snapshot state of this transaction
-	tableDef *plan.TableDef,             // table definition (schema)
+	tableDef *plan.TableDef, // table definition (schema)
 	rangesParam engine.RangesParam,
 	outBlocks *objectio.BlockInfoSlice, // output marshaled block list after filtering
-	proc *process.Process,              // process of this transaction
+	proc *process.Process, // process of this transaction
 	uncommittedObjects []objectio.ObjectStats,
 ) (err error) {
 	var done bool
