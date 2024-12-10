@@ -298,6 +298,7 @@ drop table t1;
 
 
 
+
 -- create fulltext index on multi column
 drop table if exists articles;
 create table articles (
@@ -335,6 +336,7 @@ drop table articles;
 
 
 
+
 -- fulltext index query single column in natural language mode
 drop table if exists article;
 create table article (
@@ -368,11 +370,12 @@ drop table article;
 
 
 
+
 -- match with +/-/++/+-/*
 drop table if exists example1;
 create table example1 (
     id INT auto_increment primary key,
-    content TEXT,
+    content text,
     fulltext(content)
 );
 insert into example1 (content) values
@@ -421,5 +424,103 @@ select * from example1
 where match (content)
 against ('popular' in boolean mode);
 drop table example1;
+
+
+
+
+-- match json
+drop table if exists example_json;
+create table example_json (
+    id int auto_increment primary key,
+    data json
+);
+alter table example_json add fulltext index idx_jsondata (data) with parser json;
+
+insert into example_json (data) values
+('{"title": "MO Full-Text Search", "content": "Full-text search is a technique for searching text-based content."}'),
+('{"title": "Introduction to MO", "content": "MO is an open-source relational database management system."}'),
+('{"title": "MO development", "content": "MO history"}');
+select * from example_json where match(data) against ('MO development' in boolean mode);
+select * from example_json where match(data) against (' ');
+select * from example_json where match(data) against ('"MO development"' in boolean mode);
+select * from example_json where match(data) against ('+MO -open -source' in boolean mode);
+drop table example_json;
+
+
+
+
+-- fulltext index with join
+drop table if exists articles;
+drop table if exists authors;
+create table articles (
+    id int auto_increment primary key,
+    title varchar(255),
+    content text,
+    author_id int,
+    fulltext(content)
+);
+create table authors (
+    id int auto_increment primary key,
+    name varchar(100)
+);
+insert into authors (name) values ('John Doe'), ('Jane Smith'), ('Alice Johnson');
+insert into articles (title, content, author_id) values
+('MO全文索引入门', 'MO全文索引是一种强大的工具，可以帮助你快速检索数据库中的文本数据。', 1),
+('深入理解全文索引', '全文索引不仅可以提高搜索效率，还可以通过JOIN操作与其他表结合使用。', 2),
+('MO性能优化', '本文将探讨如何优化MO数据库的性能，包括索引优化和查询优化。', 3),
+('全文索引与JOIN操作', '全文索引可以与JOIN操作结合使用，以实现跨表的全文搜索。', 1);
+select * from articles;
+select * from authors;
+-- @bvt:issue#20687
+select a.title, a.content, au.name
+from articles a
+join authors au on a.author_id = au.id
+where match(a.content) against ('MO' IN NATURAL LANGUAGE MODE);
+-- @bvt:issue
+drop table articles;
+drop table authors;
+
+
+
+-- fulltext index with group by/union
+drop table if exists posts;
+drop table if exists comments;
+create table posts (
+    post_id int auto_increment primary key,
+    title varchar(255),
+    content text
+);
+create table comments (
+    comment_id int auto_increment primary key,
+    post_id int,
+    comment_text text,
+    foreign key (post_id) references posts(post_id)
+);
+alter table posts add fulltext(content);
+insert into posts (title, content) values
+('MO全文索引入门', 'MO全文索引是一种强大的工具，可以帮助你快速检索数据库中的文本数据。'),
+('深入理解全文索引', '全文索引不仅可以提高搜索效率，还可以通过JOIN操作与其他表结合使用。');
+insert into comments (post_id, comment_text) values
+(1, '这篇文章很有用，谢谢分享！'),
+(1, '我也在学习全文索引，很有帮助。'),
+(2, '全文索引真的很强大，学习了。');
+-- @bvt:issue#20687
+select count(posts.title), count(comments.comment_id) as comment_count
+from posts
+left join comments on posts.post_id = comments.post_id
+where match(posts.content) against ('全文索引' IN NATURAL LANGUAGE MODE)
+group by posts.post_id;
+
+select title, content from articles
+where match(content) against ('全文索引' IN NATURAL LANGUAGE MODE)
+union
+select comment_text as title, comment_text as content from comments
+where match(comment_text) AGAINST ('全文索引' IN NATURAL LANGUAGE MODE);
+-- @bvt:issue
+drop
+drop table posts;
+drop table comments;
+
+
 
 drop database test_fulltext;
