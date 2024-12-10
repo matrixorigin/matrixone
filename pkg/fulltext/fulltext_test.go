@@ -228,6 +228,8 @@ func TestFullTextNL(t *testing.T) {
 	var keywords []string
 	var indexes []int32
 	word2idx := make(map[string]int32)
+	agghtab := make(map[any][]uint8)
+	aggcnt := make([]int64, 64)
 
 	for _, p := range s.Pattern {
 		keywords, indexes = GetTextFromPattern(p, keywords, indexes)
@@ -247,24 +249,24 @@ func TestFullTextNL(t *testing.T) {
 	// init the word "apple"
 	//apple_idx := word2idx["apple"]
 	//banna_idx := word2idx["banna"]
-	s.Agghtab[0] = []uint8{uint8(2), uint8(2)}  // apple, banna
-	s.Agghtab[1] = []uint8{uint8(3), uint8(0)}  // apple
-	s.Agghtab[11] = []uint8{uint8(0), uint8(3)} // banna
-	s.Agghtab[12] = []uint8{uint8(0), uint8(4)} // banna
+	agghtab[0] = []uint8{uint8(2), uint8(2)}  // apple, banna
+	agghtab[1] = []uint8{uint8(3), uint8(0)}  // apple
+	agghtab[11] = []uint8{uint8(0), uint8(3)} // banna
+	agghtab[12] = []uint8{uint8(0), uint8(4)} // banna
 
-	s.Aggcnt[0] = 2
-	s.Aggcnt[1] = 3
+	aggcnt[0] = 2
+	aggcnt[1] = 3
 
 	s.Nrow = 100
 
 	test_result := make(map[any]float32, 4)
 	// eval
 	i := 0
-	for key := range s.Agghtab {
+	for key := range agghtab {
 		var result []float32
-		docvec := s.Agghtab[key]
+		docvec := agghtab[key]
 		for _, p := range s.Pattern {
-			result, err = p.Eval(s, docvec, s.Aggcnt, float32(1.0), result)
+			result, err = p.Eval(s, docvec, aggcnt, float32(1.0), result)
 			require.Nil(t, err)
 		}
 
@@ -295,6 +297,8 @@ func TestFullTextOr(t *testing.T) {
 	var keywords []string
 	var indexes []int32
 	word2idx := make(map[string]int32)
+	agghtab := make(map[any][]uint8)
+	aggcnt := make([]int64, 64)
 
 	for _, p := range s.Pattern {
 		keywords, indexes = GetTextFromPattern(p, keywords, indexes)
@@ -307,24 +311,24 @@ func TestFullTextOr(t *testing.T) {
 		word2idx[kw] = indexes[i]
 	}
 
-	s.Agghtab[0] = []uint8{uint8(2), uint8(2)}  // apple, banna
-	s.Agghtab[1] = []uint8{uint8(3), uint8(0)}  // apple
-	s.Agghtab[11] = []uint8{uint8(0), uint8(3)} // banna
-	s.Agghtab[12] = []uint8{uint8(0), uint8(4)} // banna
+	agghtab[0] = []uint8{uint8(2), uint8(2)}  // apple, banna
+	agghtab[1] = []uint8{uint8(3), uint8(0)}  // apple
+	agghtab[11] = []uint8{uint8(0), uint8(3)} // banna
+	agghtab[12] = []uint8{uint8(0), uint8(4)} // banna
 
-	s.Aggcnt[0] = 2
-	s.Aggcnt[1] = 3
+	aggcnt[0] = 2
+	aggcnt[1] = 3
 
 	s.Nrow = 100
 
 	test_result := make(map[any]float32, 4)
 	// eval
 	i := 0
-	for key := range s.Agghtab {
+	for key := range agghtab {
 		var result []float32
-		docvec := s.Agghtab[key]
+		docvec := agghtab[key]
 		for _, p := range s.Pattern {
-			result, err = p.Eval(s, docvec, s.Aggcnt, float32(1.0), result)
+			result, err = p.Eval(s, docvec, aggcnt, float32(1.0), result)
 			require.Nil(t, err)
 		}
 
@@ -355,6 +359,8 @@ func TestFullTextPlusPlus(t *testing.T) {
 	var keywords []string
 	var indexes []int32
 	word2idx := make(map[string]int32)
+	agghtab := make(map[any][]uint8)
+	aggcnt := make([]int64, 64)
 
 	for _, p := range s.Pattern {
 		keywords, indexes = GetTextFromPattern(p, keywords, indexes)
@@ -367,25 +373,25 @@ func TestFullTextPlusPlus(t *testing.T) {
 		word2idx[kw] = indexes[i]
 	}
 
-	s.Agghtab[0] = []uint8{uint8(2), uint8(2)}  // apple, banna
-	s.Agghtab[1] = []uint8{uint8(3), uint8(0)}  // apple
-	s.Agghtab[11] = []uint8{uint8(0), uint8(3)} // banna
-	s.Agghtab[12] = []uint8{uint8(0), uint8(4)} // banna
+	agghtab[0] = []uint8{uint8(2), uint8(2)}  // apple, banna
+	agghtab[1] = []uint8{uint8(3), uint8(0)}  // apple
+	agghtab[11] = []uint8{uint8(0), uint8(3)} // banna
+	agghtab[12] = []uint8{uint8(0), uint8(4)} // banna
 
-	s.Aggcnt[0] = 2
-	s.Aggcnt[1] = 3
+	aggcnt[0] = 2
+	aggcnt[1] = 3
 
 	s.Nrow = 100
 
 	test_result := make(map[any]float32, 4)
 	// eval
 	i := 0
-	for key := range s.Agghtab {
+	for key := range agghtab {
 		var result []float32
-		docvec := s.Agghtab[key]
+		docvec := agghtab[key]
 		//fmt.Printf("docvec %v %v\n", key, docvec)
 		for _, p := range s.Pattern {
-			result, err = p.Eval(s, docvec, s.Aggcnt, float32(1.0), result)
+			result, err = p.Eval(s, docvec, aggcnt, float32(1.0), result)
 			require.Nil(t, err)
 		}
 
@@ -416,6 +422,8 @@ func TestFullTextPlusOr(t *testing.T) {
 	var keywords []string
 	var indexes []int32
 	word2idx := make(map[string]int32)
+	agghtab := make(map[any][]uint8)
+	aggcnt := make([]int64, 64)
 
 	for _, p := range s.Pattern {
 		keywords, indexes = GetTextFromPattern(p, keywords, indexes)
@@ -428,25 +436,25 @@ func TestFullTextPlusOr(t *testing.T) {
 		word2idx[kw] = indexes[i]
 	}
 
-	s.Agghtab[0] = []uint8{uint8(2), uint8(2)}  // apple, banna
-	s.Agghtab[1] = []uint8{uint8(3), uint8(0)}  // apple
-	s.Agghtab[11] = []uint8{uint8(0), uint8(3)} // banna
-	s.Agghtab[12] = []uint8{uint8(0), uint8(4)} // banna
+	agghtab[0] = []uint8{uint8(2), uint8(2)}  // apple, banna
+	agghtab[1] = []uint8{uint8(3), uint8(0)}  // apple
+	agghtab[11] = []uint8{uint8(0), uint8(3)} // banna
+	agghtab[12] = []uint8{uint8(0), uint8(4)} // banna
 
-	s.Aggcnt[0] = 2
-	s.Aggcnt[1] = 3
+	aggcnt[0] = 2
+	aggcnt[1] = 3
 
 	s.Nrow = 100
 
 	test_result := make(map[any]float32, 4)
 	// eval
 	i := 0
-	for key := range s.Agghtab {
+	for key := range agghtab {
 		var result []float32
-		docvec := s.Agghtab[key]
+		docvec := agghtab[key]
 		//fmt.Printf("docvec %v %v\n", key, docvec)
 		for _, p := range s.Pattern {
-			result, err = p.Eval(s, docvec, s.Aggcnt, float32(1.0), result)
+			result, err = p.Eval(s, docvec, aggcnt, float32(1.0), result)
 			require.Nil(t, err)
 		}
 
@@ -477,6 +485,8 @@ func TestFullTextMinus(t *testing.T) {
 	var keywords []string
 	var indexes []int32
 	word2idx := make(map[string]int32)
+	agghtab := make(map[any][]uint8)
+	aggcnt := make([]int64, 64)
 
 	for _, p := range s.Pattern {
 		keywords, indexes = GetTextFromPattern(p, keywords, indexes)
@@ -489,25 +499,25 @@ func TestFullTextMinus(t *testing.T) {
 		word2idx[kw] = indexes[i]
 	}
 
-	s.Agghtab[0] = []uint8{uint8(2), uint8(2)}  // apple, banna
-	s.Agghtab[1] = []uint8{uint8(3), uint8(0)}  // apple
-	s.Agghtab[11] = []uint8{uint8(0), uint8(3)} // banna
-	s.Agghtab[12] = []uint8{uint8(0), uint8(4)} // banna
+	agghtab[0] = []uint8{uint8(2), uint8(2)}  // apple, banna
+	agghtab[1] = []uint8{uint8(3), uint8(0)}  // apple
+	agghtab[11] = []uint8{uint8(0), uint8(3)} // banna
+	agghtab[12] = []uint8{uint8(0), uint8(4)} // banna
 
-	s.Aggcnt[0] = 2
-	s.Aggcnt[1] = 3
+	aggcnt[0] = 2
+	aggcnt[1] = 3
 
 	s.Nrow = 100
 
 	test_result := make(map[any]float32, 4)
 	// eval
 	i := 0
-	for key := range s.Agghtab {
+	for key := range agghtab {
 		var result []float32
-		docvec := s.Agghtab[key]
+		docvec := agghtab[key]
 		//fmt.Printf("docvec %v %v\n", key, docvec)
 		for _, p := range s.Pattern {
-			result, err = p.Eval(s, docvec, s.Aggcnt, float32(1.0), result)
+			result, err = p.Eval(s, docvec, aggcnt, float32(1.0), result)
 			require.Nil(t, err)
 		}
 
@@ -539,6 +549,8 @@ func TestFullTextTilda(t *testing.T) {
 	var keywords []string
 	var indexes []int32
 	word2idx := make(map[string]int32)
+	agghtab := make(map[any][]uint8)
+	aggcnt := make([]int64, 64)
 
 	for _, p := range s.Pattern {
 		keywords, indexes = GetTextFromPattern(p, keywords, indexes)
@@ -551,25 +563,25 @@ func TestFullTextTilda(t *testing.T) {
 		word2idx[kw] = indexes[i]
 	}
 
-	s.Agghtab[0] = []uint8{uint8(2), uint8(2)}  // apple, banna
-	s.Agghtab[1] = []uint8{uint8(3), uint8(0)}  // apple
-	s.Agghtab[11] = []uint8{uint8(0), uint8(3)} // banna
-	s.Agghtab[12] = []uint8{uint8(0), uint8(4)} // banna
+	agghtab[0] = []uint8{uint8(2), uint8(2)}  // apple, banna
+	agghtab[1] = []uint8{uint8(3), uint8(0)}  // apple
+	agghtab[11] = []uint8{uint8(0), uint8(3)} // banna
+	agghtab[12] = []uint8{uint8(0), uint8(4)} // banna
 
-	s.Aggcnt[0] = 2
-	s.Aggcnt[1] = 3
+	aggcnt[0] = 2
+	aggcnt[1] = 3
 
 	s.Nrow = 100
 
 	test_result := make(map[any]float32, 4)
 	// eval
 	i := 0
-	for key := range s.Agghtab {
+	for key := range agghtab {
 		var result []float32
-		docvec := s.Agghtab[key]
+		docvec := agghtab[key]
 		//fmt.Printf("docvec %v %v\n", key, docvec)
 		for _, p := range s.Pattern {
-			result, err = p.Eval(s, docvec, s.Aggcnt, float32(1.0), result)
+			result, err = p.Eval(s, docvec, aggcnt, float32(1.0), result)
 			require.Nil(t, err)
 		}
 
@@ -600,6 +612,8 @@ func TestFullText1(t *testing.T) {
 	var keywords []string
 	var indexes []int32
 	word2idx := make(map[string]int32)
+	agghtab := make(map[any][]uint8)
+	aggcnt := make([]int64, 64)
 
 	for _, p := range s.Pattern {
 		keywords, indexes = GetTextFromPattern(p, keywords, indexes)
@@ -614,42 +628,42 @@ func TestFullText1(t *testing.T) {
 
 	// {we, are, so, happy}
 	// we
-	s.Agghtab[0] = []uint8{uint8(2), uint8(0), uint8(0), uint8(0)} // we
-	s.Agghtab[1] = []uint8{uint8(3), uint8(0), uint8(0), uint8(0)} // we
+	agghtab[0] = []uint8{uint8(2), uint8(0), uint8(0), uint8(0)} // we
+	agghtab[1] = []uint8{uint8(3), uint8(0), uint8(0), uint8(0)} // we
 
 	// are
-	s.Agghtab[10] = []uint8{uint8(0), uint8(2), uint8(0), uint8(0)} // are
-	s.Agghtab[11] = []uint8{uint8(0), uint8(3), uint8(0), uint8(0)} // are
-	s.Agghtab[12] = []uint8{uint8(0), uint8(4), uint8(0), uint8(0)} // are
+	agghtab[10] = []uint8{uint8(0), uint8(2), uint8(0), uint8(0)} // are
+	agghtab[11] = []uint8{uint8(0), uint8(3), uint8(0), uint8(0)} // are
+	agghtab[12] = []uint8{uint8(0), uint8(4), uint8(0), uint8(0)} // are
 
 	// so
-	s.Agghtab[20] = []uint8{uint8(0), uint8(0), uint8(5), uint8(0)}
-	s.Agghtab[21] = []uint8{uint8(0), uint8(0), uint8(6), uint8(0)}
-	s.Agghtab[22] = []uint8{uint8(0), uint8(0), uint8(7), uint8(0)}
-	s.Agghtab[23] = []uint8{uint8(0), uint8(0), uint8(8), uint8(0)}
+	agghtab[20] = []uint8{uint8(0), uint8(0), uint8(5), uint8(0)}
+	agghtab[21] = []uint8{uint8(0), uint8(0), uint8(6), uint8(0)}
+	agghtab[22] = []uint8{uint8(0), uint8(0), uint8(7), uint8(0)}
+	agghtab[23] = []uint8{uint8(0), uint8(0), uint8(8), uint8(0)}
 
 	// so
-	s.Agghtab[30] = []uint8{uint8(0), uint8(0), uint8(0), uint8(1)}
-	s.Agghtab[31] = []uint8{uint8(0), uint8(0), uint8(0), uint8(2)}
-	s.Agghtab[32] = []uint8{uint8(0), uint8(0), uint8(0), uint8(3)}
-	s.Agghtab[33] = []uint8{uint8(0), uint8(0), uint8(0), uint8(4)}
+	agghtab[30] = []uint8{uint8(0), uint8(0), uint8(0), uint8(1)}
+	agghtab[31] = []uint8{uint8(0), uint8(0), uint8(0), uint8(2)}
+	agghtab[32] = []uint8{uint8(0), uint8(0), uint8(0), uint8(3)}
+	agghtab[33] = []uint8{uint8(0), uint8(0), uint8(0), uint8(4)}
 
-	s.Aggcnt[0] = 2
-	s.Aggcnt[1] = 3
-	s.Aggcnt[2] = 4
-	s.Aggcnt[3] = 4
+	aggcnt[0] = 2
+	aggcnt[1] = 3
+	aggcnt[2] = 4
+	aggcnt[3] = 4
 
 	s.Nrow = 100
 
 	test_result := make(map[any]float32, 13)
 	// eval
 	i := 0
-	for key := range s.Agghtab {
+	for key := range agghtab {
 		var result []float32
-		docvec := s.Agghtab[key]
+		docvec := agghtab[key]
 		//fmt.Printf("docvec %v %v\n", key, docvec)
 		for _, p := range s.Pattern {
-			result, err = p.Eval(s, docvec, s.Aggcnt, float32(1.0), result)
+			result, err = p.Eval(s, docvec, aggcnt, float32(1.0), result)
 			require.Nil(t, err)
 			//fmt.Printf("result %v\n", result)
 		}
@@ -679,6 +693,8 @@ func TestFullText2(t *testing.T) {
 	var keywords []string
 	var indexes []int32
 	word2idx := make(map[string]int32)
+	agghtab := make(map[any][]uint8)
+	aggcnt := make([]int64, 64)
 
 	for _, p := range s.Pattern {
 		keywords, indexes = GetTextFromPattern(p, keywords, indexes)
@@ -693,39 +709,39 @@ func TestFullText2(t *testing.T) {
 
 	// {we, are, so, happy}
 	// we
-	s.Agghtab[0] = []uint8{uint8(2), uint8(2), uint8(2), uint8(2)} // we, are
-	s.Agghtab[1] = []uint8{uint8(3), uint8(0), uint8(0), uint8(0)} // we
+	agghtab[0] = []uint8{uint8(2), uint8(2), uint8(2), uint8(2)} // we, are
+	agghtab[1] = []uint8{uint8(3), uint8(0), uint8(0), uint8(0)} // we
 
 	// are
-	s.Agghtab[11] = []uint8{uint8(0), uint8(3), uint8(0), uint8(0)} // are
-	s.Agghtab[12] = []uint8{uint8(0), uint8(4), uint8(0), uint8(0)} // are
+	agghtab[11] = []uint8{uint8(0), uint8(3), uint8(0), uint8(0)} // are
+	agghtab[12] = []uint8{uint8(0), uint8(4), uint8(0), uint8(0)} // are
 
 	// so
-	s.Agghtab[21] = []uint8{uint8(0), uint8(0), uint8(6), uint8(0)}
-	s.Agghtab[22] = []uint8{uint8(0), uint8(0), uint8(7), uint8(0)}
-	s.Agghtab[23] = []uint8{uint8(0), uint8(0), uint8(8), uint8(0)}
+	agghtab[21] = []uint8{uint8(0), uint8(0), uint8(6), uint8(0)}
+	agghtab[22] = []uint8{uint8(0), uint8(0), uint8(7), uint8(0)}
+	agghtab[23] = []uint8{uint8(0), uint8(0), uint8(8), uint8(0)}
 
 	// so
-	s.Agghtab[31] = []uint8{uint8(0), uint8(0), uint8(0), uint8(2)}
-	s.Agghtab[32] = []uint8{uint8(0), uint8(0), uint8(0), uint8(3)}
-	s.Agghtab[33] = []uint8{uint8(0), uint8(0), uint8(0), uint8(4)}
+	agghtab[31] = []uint8{uint8(0), uint8(0), uint8(0), uint8(2)}
+	agghtab[32] = []uint8{uint8(0), uint8(0), uint8(0), uint8(3)}
+	agghtab[33] = []uint8{uint8(0), uint8(0), uint8(0), uint8(4)}
 
-	s.Aggcnt[0] = 2
-	s.Aggcnt[1] = 3
-	s.Aggcnt[2] = 3
-	s.Aggcnt[3] = 3
+	aggcnt[0] = 2
+	aggcnt[1] = 3
+	aggcnt[2] = 3
+	aggcnt[3] = 3
 
 	s.Nrow = 100
 
 	test_result := make(map[any]float32, 13)
 	// eval
 	i := 0
-	for key := range s.Agghtab {
+	for key := range agghtab {
 		var result []float32
-		docvec := s.Agghtab[key]
+		docvec := agghtab[key]
 		//fmt.Printf("docvec %v %v\n", key, docvec)
 		for _, p := range s.Pattern {
-			result, err = p.Eval(s, docvec, s.Aggcnt, float32(1.0), result)
+			result, err = p.Eval(s, docvec, aggcnt, float32(1.0), result)
 			require.Nil(t, err)
 			//fmt.Printf("result %v\n", result)
 		}
@@ -752,6 +768,8 @@ func TestFullText3(t *testing.T) {
 	var keywords []string
 	var indexes []int32
 	word2idx := make(map[string]int32)
+	agghtab := make(map[any][]uint8)
+	aggcnt := make([]int64, 64)
 
 	for _, p := range s.Pattern {
 		keywords, indexes = GetTextFromPattern(p, keywords, indexes)
@@ -766,41 +784,41 @@ func TestFullText3(t *testing.T) {
 
 	// {we, are, so, happy}
 	// we
-	s.Agghtab[0] = []uint8{uint8(2), uint8(2), uint8(0), uint8(0)} // we, are
-	s.Agghtab[1] = []uint8{uint8(3), uint8(0), uint8(0), uint8(0)} // we
+	agghtab[0] = []uint8{uint8(2), uint8(2), uint8(0), uint8(0)} // we, are
+	agghtab[1] = []uint8{uint8(3), uint8(0), uint8(0), uint8(0)} // we
 
 	// are
-	s.Agghtab[11] = []uint8{uint8(0), uint8(3), uint8(0), uint8(0)} // are
-	s.Agghtab[12] = []uint8{uint8(0), uint8(4), uint8(0), uint8(0)} // are
+	agghtab[11] = []uint8{uint8(0), uint8(3), uint8(0), uint8(0)} // are
+	agghtab[12] = []uint8{uint8(0), uint8(4), uint8(0), uint8(0)} // are
 
 	// so
-	s.Agghtab[20] = []uint8{uint8(0), uint8(0), uint8(5), uint8(0)}
-	s.Agghtab[21] = []uint8{uint8(0), uint8(0), uint8(6), uint8(0)}
-	s.Agghtab[22] = []uint8{uint8(0), uint8(0), uint8(7), uint8(0)}
-	s.Agghtab[23] = []uint8{uint8(0), uint8(0), uint8(8), uint8(0)}
+	agghtab[20] = []uint8{uint8(0), uint8(0), uint8(5), uint8(0)}
+	agghtab[21] = []uint8{uint8(0), uint8(0), uint8(6), uint8(0)}
+	agghtab[22] = []uint8{uint8(0), uint8(0), uint8(7), uint8(0)}
+	agghtab[23] = []uint8{uint8(0), uint8(0), uint8(8), uint8(0)}
 
 	// happy
-	s.Agghtab[30] = []uint8{uint8(0), uint8(0), uint8(0), uint8(1)}
-	s.Agghtab[31] = []uint8{uint8(0), uint8(0), uint8(0), uint8(2)}
-	s.Agghtab[32] = []uint8{uint8(0), uint8(0), uint8(0), uint8(3)}
-	s.Agghtab[33] = []uint8{uint8(0), uint8(0), uint8(0), uint8(4)}
+	agghtab[30] = []uint8{uint8(0), uint8(0), uint8(0), uint8(1)}
+	agghtab[31] = []uint8{uint8(0), uint8(0), uint8(0), uint8(2)}
+	agghtab[32] = []uint8{uint8(0), uint8(0), uint8(0), uint8(3)}
+	agghtab[33] = []uint8{uint8(0), uint8(0), uint8(0), uint8(4)}
 
-	s.Aggcnt[0] = 2
-	s.Aggcnt[1] = 3
-	s.Aggcnt[2] = 4
-	s.Aggcnt[3] = 4
+	aggcnt[0] = 2
+	aggcnt[1] = 3
+	aggcnt[2] = 4
+	aggcnt[3] = 4
 
 	s.Nrow = 100
 
 	test_result := make(map[any]float32, 13)
 	// eval
 	i := 0
-	for key := range s.Agghtab {
+	for key := range agghtab {
 		var result []float32
-		docvec := s.Agghtab[key]
+		docvec := agghtab[key]
 		//fmt.Printf("docvec %v %v\n", key, docvec)
 		for _, p := range s.Pattern {
-			result, err = p.Eval(s, docvec, s.Aggcnt, float32(1.0), result)
+			result, err = p.Eval(s, docvec, aggcnt, float32(1.0), result)
 			require.Nil(t, err)
 			//fmt.Printf("result %v\n", result)
 		}
@@ -826,6 +844,8 @@ func TestFullText5(t *testing.T) {
 	var keywords []string
 	var indexes []int32
 	word2idx := make(map[string]int32)
+	agghtab := make(map[any][]uint8)
+	aggcnt := make([]int64, 64)
 
 	for _, p := range s.Pattern {
 		keywords, indexes = GetTextFromPattern(p, keywords, indexes)
@@ -840,27 +860,27 @@ func TestFullText5(t *testing.T) {
 
 	// {we, are, so, happy}
 	// we
-	s.Agghtab[0] = []uint8{uint8(2), uint8(0), uint8(0), uint8(0)} // we
-	s.Agghtab[1] = []uint8{uint8(3), uint8(0), uint8(0), uint8(0)} // we
+	agghtab[0] = []uint8{uint8(2), uint8(0), uint8(0), uint8(0)} // we
+	agghtab[1] = []uint8{uint8(3), uint8(0), uint8(0), uint8(0)} // we
 
 	// are
-	s.Agghtab[11] = []uint8{uint8(0), uint8(3), uint8(0), uint8(0)} // are
-	s.Agghtab[12] = []uint8{uint8(0), uint8(4), uint8(0), uint8(0)} // are
+	agghtab[11] = []uint8{uint8(0), uint8(3), uint8(0), uint8(0)} // are
+	agghtab[12] = []uint8{uint8(0), uint8(4), uint8(0), uint8(0)} // are
 
-	s.Aggcnt[0] = 2
-	s.Aggcnt[1] = 2
+	aggcnt[0] = 2
+	aggcnt[1] = 2
 
 	s.Nrow = 100
 
 	test_result := make(map[any]float32, 13)
 	// eval
 	i := 0
-	for key := range s.Agghtab {
+	for key := range agghtab {
 		var result []float32
-		docvec := s.Agghtab[key]
+		docvec := agghtab[key]
 		//fmt.Printf("docvec %v %v\n", key, docvec)
 		for _, p := range s.Pattern {
-			result, err = p.Eval(s, docvec, s.Aggcnt, float32(1.0), result)
+			result, err = p.Eval(s, docvec, aggcnt, float32(1.0), result)
 			require.Nil(t, err)
 			//fmt.Printf("result %v\n", result)
 		}
@@ -885,6 +905,8 @@ func TestFullTextGroup(t *testing.T) {
 	var keywords []string
 	var indexes []int32
 	word2idx := make(map[string]int32)
+	agghtab := make(map[any][]uint8)
+	aggcnt := make([]int64, 64)
 
 	for _, p := range s.Pattern {
 		keywords, indexes = GetTextFromPattern(p, keywords, indexes)
@@ -899,34 +921,34 @@ func TestFullTextGroup(t *testing.T) {
 
 	// {we, are, so, happy}
 	// we
-	s.Agghtab[0] = []uint8{uint8(2), uint8(2), uint8(0), uint8(0)} // we, are
-	s.Agghtab[1] = []uint8{uint8(3), uint8(0), uint8(5), uint8(0)} // we, so
+	agghtab[0] = []uint8{uint8(2), uint8(2), uint8(0), uint8(0)} // we, are
+	agghtab[1] = []uint8{uint8(3), uint8(0), uint8(5), uint8(0)} // we, so
 
 	// are
-	s.Agghtab[11] = []uint8{uint8(0), uint8(3), uint8(0), uint8(0)} // are
-	s.Agghtab[12] = []uint8{uint8(0), uint8(4), uint8(0), uint8(0)} // are
+	agghtab[11] = []uint8{uint8(0), uint8(3), uint8(0), uint8(0)} // are
+	agghtab[12] = []uint8{uint8(0), uint8(4), uint8(0), uint8(0)} // are
 
 	// so
-	s.Agghtab[20] = []uint8{uint8(0), uint8(0), uint8(5), uint8(0)}
-	s.Agghtab[21] = []uint8{uint8(0), uint8(0), uint8(6), uint8(0)}
-	s.Agghtab[22] = []uint8{uint8(0), uint8(0), uint8(7), uint8(0)}
-	s.Agghtab[23] = []uint8{uint8(0), uint8(0), uint8(8), uint8(0)}
+	agghtab[20] = []uint8{uint8(0), uint8(0), uint8(5), uint8(0)}
+	agghtab[21] = []uint8{uint8(0), uint8(0), uint8(6), uint8(0)}
+	agghtab[22] = []uint8{uint8(0), uint8(0), uint8(7), uint8(0)}
+	agghtab[23] = []uint8{uint8(0), uint8(0), uint8(8), uint8(0)}
 
-	s.Aggcnt[0] = 2
-	s.Aggcnt[1] = 3
-	s.Aggcnt[2] = 6
+	aggcnt[0] = 2
+	aggcnt[1] = 3
+	aggcnt[2] = 6
 
 	s.Nrow = 100
 
 	test_result := make(map[any]float32, 13)
 	// eval
 	i := 0
-	for key := range s.Agghtab {
+	for key := range agghtab {
 		var result []float32
-		docvec := s.Agghtab[key]
+		docvec := agghtab[key]
 		//fmt.Printf("docvec %v %v\n", key, docvec)
 		for _, p := range s.Pattern {
-			result, err = p.Eval(s, docvec, s.Aggcnt, float32(1.0), result)
+			result, err = p.Eval(s, docvec, aggcnt, float32(1.0), result)
 			require.Nil(t, err)
 			//fmt.Printf("result %v\n", result)
 		}
@@ -954,6 +976,8 @@ func TestFullTextGroupTilda(t *testing.T) {
 	var keywords []string
 	var indexes []int32
 	word2idx := make(map[string]int32)
+	agghtab := make(map[any][]uint8)
+	aggcnt := make([]int64, 64)
 
 	for _, p := range s.Pattern {
 		keywords, indexes = GetTextFromPattern(p, keywords, indexes)
@@ -968,34 +992,34 @@ func TestFullTextGroupTilda(t *testing.T) {
 
 	// {we, are, so, happy}
 	// we
-	s.Agghtab[0] = []uint8{uint8(2), uint8(2), uint8(0), uint8(0)} // we, are
-	s.Agghtab[1] = []uint8{uint8(3), uint8(0), uint8(5), uint8(0)} // we, so
+	agghtab[0] = []uint8{uint8(2), uint8(2), uint8(0), uint8(0)} // we, are
+	agghtab[1] = []uint8{uint8(3), uint8(0), uint8(5), uint8(0)} // we, so
 
 	// are
-	s.Agghtab[11] = []uint8{uint8(0), uint8(3), uint8(0), uint8(0)} // are
-	s.Agghtab[12] = []uint8{uint8(0), uint8(4), uint8(0), uint8(0)} // are
+	agghtab[11] = []uint8{uint8(0), uint8(3), uint8(0), uint8(0)} // are
+	agghtab[12] = []uint8{uint8(0), uint8(4), uint8(0), uint8(0)} // are
 
 	// so
-	s.Agghtab[20] = []uint8{uint8(0), uint8(0), uint8(5), uint8(0)}
-	s.Agghtab[21] = []uint8{uint8(0), uint8(0), uint8(6), uint8(0)}
-	s.Agghtab[22] = []uint8{uint8(0), uint8(0), uint8(7), uint8(0)}
-	s.Agghtab[23] = []uint8{uint8(0), uint8(0), uint8(8), uint8(0)}
+	agghtab[20] = []uint8{uint8(0), uint8(0), uint8(5), uint8(0)}
+	agghtab[21] = []uint8{uint8(0), uint8(0), uint8(6), uint8(0)}
+	agghtab[22] = []uint8{uint8(0), uint8(0), uint8(7), uint8(0)}
+	agghtab[23] = []uint8{uint8(0), uint8(0), uint8(8), uint8(0)}
 
-	s.Aggcnt[0] = 2
-	s.Aggcnt[1] = 3
-	s.Aggcnt[2] = 6
+	aggcnt[0] = 2
+	aggcnt[1] = 3
+	aggcnt[2] = 6
 
 	s.Nrow = 100
 
 	test_result := make(map[any]float32, 13)
 	// eval
 	i := 0
-	for key := range s.Agghtab {
+	for key := range agghtab {
 		var result []float32
-		docvec := s.Agghtab[key]
+		docvec := agghtab[key]
 		//fmt.Printf("docvec %v %v\n", key, docvec)
 		for _, p := range s.Pattern {
-			result, err = p.Eval(s, docvec, s.Aggcnt, float32(1.0), result)
+			result, err = p.Eval(s, docvec, aggcnt, float32(1.0), result)
 			require.Nil(t, err)
 			//fmt.Printf("result %v\n", result)
 		}
@@ -1024,6 +1048,8 @@ func TestFullTextStar(t *testing.T) {
 	var keywords []string
 	var indexes []int32
 	word2idx := make(map[string]int32)
+	agghtab := make(map[any][]uint8)
+	aggcnt := make([]int64, 64)
 
 	for _, p := range s.Pattern {
 		keywords, indexes = GetTextFromPattern(p, keywords, indexes)
@@ -1041,22 +1067,22 @@ func TestFullTextStar(t *testing.T) {
 
 	// {apple*}
 	// apple*
-	s.Agghtab[0] = []uint8{uint8(2), uint8(2), uint8(0), uint8(0)} // we, are
-	s.Agghtab[1] = []uint8{uint8(3), uint8(0), uint8(5), uint8(0)} // we, so
+	agghtab[0] = []uint8{uint8(2), uint8(2), uint8(0), uint8(0)} // we, are
+	agghtab[1] = []uint8{uint8(3), uint8(0), uint8(5), uint8(0)} // we, so
 
-	s.Aggcnt[0] = 2
+	aggcnt[0] = 2
 
 	s.Nrow = 100
 
 	test_result := make(map[any]float32, 13)
 	// eval
 	i := 0
-	for key := range s.Agghtab {
+	for key := range agghtab {
 		var result []float32
-		docvec := s.Agghtab[key]
+		docvec := agghtab[key]
 		//fmt.Printf("docvec %v %v\n", key, docvec)
 		for _, p := range s.Pattern {
-			result, err = p.Eval(s, docvec, s.Aggcnt, float32(1.0), result)
+			result, err = p.Eval(s, docvec, aggcnt, float32(1.0), result)
 			require.Nil(t, err)
 			//fmt.Printf("result %v\n", result)
 		}
@@ -1085,6 +1111,8 @@ func TestFullTextPhrase(t *testing.T) {
 	var keywords []string
 	var indexes []int32
 	word2idx := make(map[string]int32)
+	agghtab := make(map[any][]uint8)
+	aggcnt := make([]int64, 64)
 
 	for _, p := range s.Pattern {
 		keywords, indexes = GetTextFromPattern(p, keywords, indexes)
@@ -1099,42 +1127,42 @@ func TestFullTextPhrase(t *testing.T) {
 
 	// {we, are, so, happy}
 	// we
-	s.Agghtab[0] = []uint8{uint8(2), uint8(2), uint8(2), uint8(2)} // we
-	s.Agghtab[1] = []uint8{uint8(3), uint8(2), uint8(0), uint8(0)} // we
+	agghtab[0] = []uint8{uint8(2), uint8(2), uint8(2), uint8(2)} // we
+	agghtab[1] = []uint8{uint8(3), uint8(2), uint8(0), uint8(0)} // we
 
 	// are
-	s.Agghtab[10] = []uint8{uint8(0), uint8(2), uint8(0), uint8(0)} // are
-	s.Agghtab[11] = []uint8{uint8(0), uint8(3), uint8(0), uint8(0)} // are
-	s.Agghtab[12] = []uint8{uint8(0), uint8(4), uint8(0), uint8(0)} // are
+	agghtab[10] = []uint8{uint8(0), uint8(2), uint8(0), uint8(0)} // are
+	agghtab[11] = []uint8{uint8(0), uint8(3), uint8(0), uint8(0)} // are
+	agghtab[12] = []uint8{uint8(0), uint8(4), uint8(0), uint8(0)} // are
 
 	// so
-	s.Agghtab[20] = []uint8{uint8(0), uint8(0), uint8(5), uint8(0)}
-	s.Agghtab[21] = []uint8{uint8(0), uint8(0), uint8(6), uint8(0)}
-	s.Agghtab[22] = []uint8{uint8(0), uint8(0), uint8(7), uint8(0)}
-	s.Agghtab[23] = []uint8{uint8(0), uint8(0), uint8(8), uint8(0)}
+	agghtab[20] = []uint8{uint8(0), uint8(0), uint8(5), uint8(0)}
+	agghtab[21] = []uint8{uint8(0), uint8(0), uint8(6), uint8(0)}
+	agghtab[22] = []uint8{uint8(0), uint8(0), uint8(7), uint8(0)}
+	agghtab[23] = []uint8{uint8(0), uint8(0), uint8(8), uint8(0)}
 
 	// so
-	s.Agghtab[30] = []uint8{uint8(0), uint8(0), uint8(0), uint8(1)}
-	s.Agghtab[31] = []uint8{uint8(0), uint8(0), uint8(0), uint8(2)}
-	s.Agghtab[32] = []uint8{uint8(0), uint8(0), uint8(0), uint8(3)}
-	s.Agghtab[33] = []uint8{uint8(0), uint8(0), uint8(0), uint8(4)}
+	agghtab[30] = []uint8{uint8(0), uint8(0), uint8(0), uint8(1)}
+	agghtab[31] = []uint8{uint8(0), uint8(0), uint8(0), uint8(2)}
+	agghtab[32] = []uint8{uint8(0), uint8(0), uint8(0), uint8(3)}
+	agghtab[33] = []uint8{uint8(0), uint8(0), uint8(0), uint8(4)}
 
-	s.Aggcnt[0] = 2
-	s.Aggcnt[1] = 5
-	s.Aggcnt[2] = 5
-	s.Aggcnt[3] = 5
+	aggcnt[0] = 2
+	aggcnt[1] = 5
+	aggcnt[2] = 5
+	aggcnt[3] = 5
 
 	s.Nrow = 100
 
 	test_result := make(map[any]float32, 13)
 	// eval
 	i := 0
-	for key := range s.Agghtab {
+	for key := range agghtab {
 		var result []float32
-		docvec := s.Agghtab[key]
+		docvec := agghtab[key]
 		//fmt.Printf("docvec %v %v\n", key, docvec)
 		for _, p := range s.Pattern {
-			result, err = p.Eval(s, docvec, s.Aggcnt, float32(1.0), result)
+			result, err = p.Eval(s, docvec, aggcnt, float32(1.0), result)
 			require.Nil(t, err)
 			//fmt.Printf("result %v\n", result)
 		}
