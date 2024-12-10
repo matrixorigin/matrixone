@@ -9,8 +9,8 @@ id    name    age
 2    Bob    25
 show index from t1;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t1    0    PRIMARY    1    id    A    0    NULL    NULL                        YES    NULL
-t1    1    idx1    1    name    A    0    NULL    NULL    YES                    YES    NULL
+t1    0    PRIMARY    1    id    A    0    NULL    NULL                        YES    id
+t1    1    idx1    1    name    A    0    NULL    NULL    YES                    YES    name
 show create table t1;
 Table    Create Table
 t1    CREATE TABLE `t1` (\n  `id` int NOT NULL,\n  `name` varchar(255) DEFAULT NULL,\n  `age` int DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  KEY `idx1` (`name`)\n)
@@ -31,8 +31,8 @@ id    name    age
 3    Dora    30
 show index from t1;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t1    0    PRIMARY    1    id    A    0    NULL    NULL                        YES    NULL
-t1    1    idx2    1    name    A    0    NULL    NULL    YES                    YES    NULL
+t1    0    PRIMARY    1    id    A    0    NULL    NULL                        YES    id
+t1    1    idx2    1    name    A    0    NULL    NULL    YES                    YES    name
 show create table t1;
 Table    Create Table
 t1    CREATE TABLE `t1` (\n  `id` int NOT NULL,\n  `name` varchar(255) DEFAULT NULL,\n  `age` int DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  KEY `idx2` (`name`)\n)
@@ -51,9 +51,9 @@ id    name    age
 2    Bob    25
 show index from t1;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t1    0    PRIMARY    1    id    A    0    NULL    NULL                        YES    NULL
-t1    1    idx3    1    id    A    0    NULL    NULL                        YES    NULL
-t1    1    idx3    2    name    A    0    NULL    NULL    YES                    YES    NULL
+t1    0    PRIMARY    1    id    A    0    NULL    NULL                        YES    id
+t1    1    idx3    1    id    A    0    NULL    NULL                        YES    id
+t1    1    idx3    2    name    A    0    NULL    NULL    YES                    YES    name
 show create table t1;
 Table    Create Table
 t1    CREATE TABLE `t1` (\n  `id` int NOT NULL,\n  `name` varchar(255) DEFAULT NULL,\n  `age` int DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  KEY `idx3` (`id`,`name`)\n)
@@ -74,8 +74,8 @@ b    Bob    25
 c    Danny    26
 show index from t1;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t1    0    PRIMARY    1    id    A    0    NULL    NULL                        YES    NULL
-t1    1    idx4    1    name    A    0    NULL    NULL    YES                    YES    NULL
+t1    0    PRIMARY    1    id    A    0    NULL    NULL                        YES    id
+t1    1    idx4    1    name    A    0    NULL    NULL    YES                    YES    name
 show create table t1;
 Table    Create Table
 t1    CREATE TABLE `t1` (\n  `id` varchar(255) NOT NULL,\n  `name` varchar(255) DEFAULT NULL,\n  `age` int DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  KEY `idx4` (`name`)\n)
@@ -95,8 +95,8 @@ b    Bob    25
 c    Carol    23
 show index from t1;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t1    1    idx5    1    name    A    0    NULL    NULL    YES                    YES    NULL
-t1    0    PRIMARY    1    id    A    0    NULL    NULL                        YES    NULL
+t1    1    idx5    1    name    A    0    NULL    NULL    YES                    YES    name
+t1    0    PRIMARY    1    id    A    0    NULL    NULL                        YES    id
 show create table t1;
 Table    Create Table
 t1    CREATE TABLE `t1` (\n  `id` varchar(255) NOT NULL,\n  `name` varchar(255) DEFAULT NULL,\n  `age` int DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  KEY `idx5` (`name`)\n)
@@ -115,8 +115,8 @@ a    b
 2.6    200
 show index from t1;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t1    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    NULL
-t1    1    idx6    1    a    A    0    NULL    NULL                        YES    NULL
+t1    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    a
+t1    1    idx6    1    a    A    0    NULL    NULL                        YES    a
 show create table t1;
 Table    Create Table
 t1    CREATE TABLE `t1` (\n  `a` double NOT NULL,\n  `b` int DEFAULT NULL,\n  PRIMARY KEY (`a`),\n  KEY `idx6` (`a`)\n)
@@ -129,8 +129,8 @@ create index idx7 using BTREE on t1(name);
 insert into t1 values(1,"Abby", 24);
 show index from t1;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t1    0    PRIMARY    1    id    A    0    NULL    NULL                        YES    NULL
-t1    1    idx7    1    name    A    0    NULL    NULL    YES    btree                YES    NULL
+t1    0    PRIMARY    1    id    A    0    NULL    NULL                        YES    id
+t1    1    idx7    1    name    A    0    NULL    NULL    YES    btree                YES    name
 show create table t1;
 Table    Create Table
 t1    CREATE TABLE `t1` (\n  `id` int NOT NULL,\n  `name` varchar(255) DEFAULT NULL,\n  `age` int DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  KEY `idx7` USING btree (`name`)\n)

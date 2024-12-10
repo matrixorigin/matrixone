@@ -204,7 +204,8 @@ type txnClient struct {
 		// all active txns
 		activeTxns map[string]*txnOperator
 		// FIFO queue for ready to active txn
-		waitActiveTxns []*txnOperator
+		waitActiveTxns            []*txnOperator
+		waitMarkAllActiveAbortedC chan struct{}
 	}
 
 	abortC chan time.Time
@@ -499,6 +500,8 @@ func (client *txnClient) openTxn(op *txnOperator) error {
 		client.mu.Unlock()
 	}()
 
+	client.waitMarkAllActiveAbortedLocked()
+
 	if !op.opts.skipWaitPushClient {
 		for client.mu.state == paused {
 			if client.normalStateNoWait {
@@ -695,13 +698,23 @@ func (client *txnClient) handleMarkActiveTxnAborted(
 	case from := <-client.abortC:
 		fn := func() {
 			client.mu.Lock()
-			defer client.mu.Unlock()
-
+			client.mu.waitMarkAllActiveAbortedC = make(chan struct{})
+			ops := make([]*txnOperator, 0, len(client.mu.activeTxns))
 			for _, op := range client.mu.activeTxns {
 				if op.reset.createAt.Before(from) {
-					op.addFlag(AbortedFlag)
+					ops = append(ops, op)
 				}
 			}
+			client.mu.Unlock()
+
+			for _, op := range ops {
+				op.addFlag(AbortedFlag)
+			}
+
+			client.mu.Lock()
+			close(client.mu.waitMarkAllActiveAbortedC)
+			client.mu.waitMarkAllActiveAbortedC = nil
+			client.mu.Unlock()
 		}
 		fn()
 
@@ -726,4 +739,10 @@ func (client *txnClient) removeFromWaitActiveLocked(txnID []byte) bool {
 	}
 	client.mu.waitActiveTxns = values
 	return ok
+}
+
+func (client *txnClient) waitMarkAllActiveAbortedLocked() {
+	if client.mu.waitMarkAllActiveAbortedC != nil {
+		<-client.mu.waitMarkAllActiveAbortedC
+	}
 }

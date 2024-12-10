@@ -272,9 +272,9 @@ a    b    c    d
 alter table t1 change b x VARCHAR(20);
 show index from t1;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t1    0    a    1    a    A    0    NULL    NULL                        YES    NULL
-t1    0    a    2    x    A    0    NULL    NULL    YES                    YES    NULL
-t1    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    NULL
+t1    0    a    1    a    A    0    NULL    NULL                        YES    a
+t1    0    a    2    x    A    0    NULL    NULL    YES                    YES    x
+t1    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    a
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
@@ -289,10 +289,10 @@ a    x    c    d
 alter table t1 change x y VARCHAR(20) UNIQUE KEY;
 show index from t1;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t1    0    a    1    a    A    0    NULL    NULL                        YES    NULL
-t1    0    a    2    y    A    0    NULL    NULL    YES                    YES    NULL
-t1    0    y    1    y    A    0    NULL    NULL    YES                    YES    NULL
-t1    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    NULL
+t1    0    a    1    a    A    0    NULL    NULL                        YES    a
+t1    0    a    2    y    A    0    NULL    NULL    YES                    YES    y
+t1    0    y    1    y    A    0    NULL    NULL    YES                    YES    y
+t1    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    a
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
@@ -307,11 +307,11 @@ a    y    c    d
 alter table t1 change y z VARCHAR(20) UNIQUE KEY;
 show index from t1;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t1    0    a    1    a    A    0    NULL    NULL                        YES    NULL
-t1    0    a    2    z    A    0    NULL    NULL    YES                    YES    NULL
-t1    0    y    1    z    A    0    NULL    NULL    YES                    YES    NULL
-t1    0    z    1    z    A    0    NULL    NULL    YES                    YES    NULL
-t1    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    NULL
+t1    0    a    1    a    A    0    NULL    NULL                        YES    a
+t1    0    a    2    z    A    0    NULL    NULL    YES                    YES    z
+t1    0    y    1    z    A    0    NULL    NULL    YES                    YES    z
+t1    0    z    1    z    A    0    NULL    NULL    YES                    YES    z
+t1    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    a
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
@@ -342,9 +342,9 @@ a    b    c    d
 alter table t1 rename column a to x;
 show index from t1;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t1    0    a    1    x    A    0    NULL    NULL                        YES    NULL
-t1    0    a    2    b    A    0    NULL    NULL    YES                    YES    NULL
-t1    0    PRIMARY    1    x    A    0    NULL    NULL                        YES    NULL
+t1    0    a    1    x    A    0    NULL    NULL                        YES    x
+t1    0    a    2    b    A    0    NULL    NULL    YES                    YES    b
+t1    0    PRIMARY    1    x    A    0    NULL    NULL                        YES    x
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
 x    INT(32)    NO    PRI    null        
@@ -359,9 +359,9 @@ x    b    c    d
 alter table t1 rename column b to y;
 show index from t1;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t1    0    a    1    x    A    0    NULL    NULL                        YES    NULL
-t1    0    a    2    y    A    0    NULL    NULL    YES                    YES    NULL
-t1    0    PRIMARY    1    x    A    0    NULL    NULL                        YES    NULL
+t1    0    a    1    x    A    0    NULL    NULL                        YES    x
+t1    0    a    2    y    A    0    NULL    NULL    YES                    YES    y
+t1    0    PRIMARY    1    x    A    0    NULL    NULL                        YES    x
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
 x    INT(32)    NO    PRI    null        
@@ -392,10 +392,10 @@ a    b    c    d
 alter table t1 change c x datetime;
 show index from t1;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t1    1    a    1    a    A    0    NULL    NULL                        YES    NULL
-t1    1    a    2    b    A    0    NULL    NULL    YES                    YES    NULL
-t1    1    c    1    x    A    0    NULL    NULL    YES                    YES    NULL
-t1    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    NULL
+t1    1    a    1    a    A    0    NULL    NULL                        YES    a
+t1    1    a    2    b    A    0    NULL    NULL    YES                    YES    b
+t1    1    c    1    x    A    0    NULL    NULL    YES                    YES    x
+t1    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    a
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
@@ -412,11 +412,11 @@ Multiple primary key defined
 alter table t1 change x y VARCHAR(20) UNIQUE KEY;
 show index from t1;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t1    0    y    1    y    A    0    NULL    NULL    YES                    YES    NULL
-t1    1    a    1    a    A    0    NULL    NULL                        YES    NULL
-t1    1    a    2    b    A    0    NULL    NULL    YES                    YES    NULL
-t1    1    c    1    y    A    0    NULL    NULL    YES                    YES    NULL
-t1    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    NULL
+t1    0    y    1    y    A    0    NULL    NULL    YES                    YES    y
+t1    1    a    1    a    A    0    NULL    NULL                        YES    a
+t1    1    a    2    b    A    0    NULL    NULL    YES                    YES    b
+t1    1    c    1    y    A    0    NULL    NULL    YES                    YES    y
+t1    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    a
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
@@ -645,9 +645,9 @@ a    b    c    d
 alter table t1 alter column a set default 100;
 show index from t1;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t1    0    a    1    a    A    0    NULL    NULL                        YES    NULL
-t1    0    a    2    b    A    0    NULL    NULL    YES                    YES    NULL
-t1    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    NULL
+t1    0    a    1    a    A    0    NULL    NULL                        YES    a
+t1    0    a    2    b    A    0    NULL    NULL    YES                    YES    b
+t1    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    a
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    100        
@@ -662,9 +662,9 @@ a    b    c    d
 alter table t1 alter column a drop default;
 show index from t1;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t1    0    a    1    a    A    0    NULL    NULL                        YES    NULL
-t1    0    a    2    b    A    0    NULL    NULL    YES                    YES    NULL
-t1    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    NULL
+t1    0    a    1    a    A    0    NULL    NULL                        YES    a
+t1    0    a    2    b    A    0    NULL    NULL    YES                    YES    b
+t1    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    a
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
@@ -679,9 +679,9 @@ a    b    c    d
 alter table t1 alter column b set visible;
 show index from t1;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t1    0    a    1    a    A    0    NULL    NULL                        YES    NULL
-t1    0    a    2    b    A    0    NULL    NULL    YES                    YES    NULL
-t1    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    NULL
+t1    0    a    1    a    A    0    NULL    NULL                        YES    a
+t1    0    a    2    b    A    0    NULL    NULL    YES                    YES    b
+t1    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    a
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
@@ -712,9 +712,9 @@ a    b    c    d
 alter table t1 alter column c set default '2003-12-17';
 show index from t1;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t1    0    a    1    a    A    0    NULL    NULL                        YES    NULL
-t1    0    a    2    b    A    0    NULL    NULL    YES                    YES    NULL
-t1    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    NULL
+t1    0    a    1    a    A    0    NULL    NULL                        YES    a
+t1    0    a    2    b    A    0    NULL    NULL    YES                    YES    b
+t1    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    a
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
@@ -729,9 +729,9 @@ a    b    c    d
 alter table t1 alter column c drop default;
 show index from t1;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t1    0    a    1    a    A    0    NULL    NULL                        YES    NULL
-t1    0    a    2    b    A    0    NULL    NULL    YES                    YES    NULL
-t1    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    NULL
+t1    0    a    1    a    A    0    NULL    NULL                        YES    a
+t1    0    a    2    b    A    0    NULL    NULL    YES                    YES    b
+t1    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    a
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
@@ -746,9 +746,9 @@ a    b    c    d
 alter table t1 alter column b set invisible;
 show index from t1;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t1    0    a    1    a    A    0    NULL    NULL                        YES    NULL
-t1    0    a    2    b    A    0    NULL    NULL    YES                    YES    NULL
-t1    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    NULL
+t1    0    a    1    a    A    0    NULL    NULL                        YES    a
+t1    0    a    2    b    A    0    NULL    NULL    YES                    YES    b
+t1    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    a
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
@@ -1353,14 +1353,14 @@ Table    Create Table
 index01    CREATE TABLE `index01` (\n  `a` int NOT NULL,\n  `bNew` varchar(20) DEFAULT NULL,\n  `c` date DEFAULT NULL,\n  `d` decimal(7,2) DEFAULT NULL,\n  UNIQUE KEY `a` (`a`,`bNew`)\n)
 show index from index01;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-index01    0    a    1    a    A    0    NULL    NULL                        YES    NULL
-index01    0    a    2    bNew    A    0    NULL    NULL    YES                    YES    NULL
+index01    0    a    1    a    A    0    NULL    NULL                        YES    a
+index01    0    a    2    bNew    A    0    NULL    NULL    YES                    YES    bNew
 alter table index01 change bNew bNewNew VARCHAR(20) UNIQUE KEY;
 show index from index01;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-index01    0    a    1    a    A    0    NULL    NULL                        YES    NULL
-index01    0    a    2    bNewNew    A    0    NULL    NULL    YES                    YES    NULL
-index01    0    bnewnew    1    bNewNew    A    0    NULL    NULL    YES                    YES    NULL
+index01    0    a    1    a    A    0    NULL    NULL                        YES    a
+index01    0    a    2    bNewNew    A    0    NULL    NULL    YES                    YES    bNewNew
+index01    0    bnewnew    1    bNewNew    A    0    NULL    NULL    YES                    YES    bNewNew
 show create table index01;
 Table    Create Table
 index01    CREATE TABLE `index01` (\n  `a` int NOT NULL,\n  `bNewNew` varchar(20) DEFAULT NULL,\n  `c` date DEFAULT NULL,\n  `d` decimal(7,2) DEFAULT NULL,\n  UNIQUE KEY `a` (`a`,`bNewNew`),\n  UNIQUE KEY `bnewnew` (`bNewNew`)\n)
@@ -1412,11 +1412,11 @@ index02    CREATE TABLE `index02` (\n  `a` int NOT NULL,\n  `b` char(10) DEFAULT
 alter table index02 change b bnewNew VARCHAR(20) UNIQUE KEY;
 show index from index02;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-index02    0    bnewnew    1    bnewNew    A    0    NULL    NULL    YES                    YES    NULL
-index02    1    a    1    a    A    0    NULL    NULL                        YES    NULL
-index02    1    a    2    bnewNew    A    0    NULL    NULL    YES                    YES    NULL
-index02    1    c    1    c    A    0    NULL    NULL    YES                    YES    NULL
-index02    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    NULL
+index02    0    bnewnew    1    bnewNew    A    0    NULL    NULL    YES                    YES    bnewNew
+index02    1    a    1    a    A    0    NULL    NULL                        YES    a
+index02    1    a    2    bnewNew    A    0    NULL    NULL    YES                    YES    bnewNew
+index02    1    c    1    c    A    0    NULL    NULL    YES                    YES    c
+index02    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    a
 show create table index02;
 Table    Create Table
 index02    CREATE TABLE `index02` (\n  `a` int NOT NULL,\n  `bnewNew` varchar(20) DEFAULT NULL,\n  `c` date DEFAULT NULL,\n  `d` decimal(7,2) DEFAULT NULL,\n  PRIMARY KEY (`a`),\n  UNIQUE KEY `bnewnew` (`bnewNew`),\n  KEY `a` (`a`,`bnewNew`),\n  KEY `c` (`c`)\n)
