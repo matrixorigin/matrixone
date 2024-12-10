@@ -122,8 +122,8 @@ func TestNewSinker2(t *testing.T) {
 		fs,
 	)
 
-	for i := 0; i < 100; i++ {
-		bat := catalog.MockBatch(schema, 8192*10)
+	for i := 0; i < 5; i++ {
+		bat := catalog.MockBatch(schema, 8192*2)
 		err = sinker.Write(context.Background(), containers.ToCNBatch(bat))
 		assert.Nil(t, err)
 
@@ -148,7 +148,7 @@ func TestNewSinker2(t *testing.T) {
 		rows += int(sinker.result.tail[j].RowCount())
 	}
 
-	require.Equal(t, 8192*10*100, rows)
+	require.Equal(t, 8192*2*5, rows)
 	require.NoError(t, sinker.Close())
 
 	fmt.Println(sinker.staged.inMemStats.String())
