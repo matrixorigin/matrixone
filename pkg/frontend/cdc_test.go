@@ -222,7 +222,7 @@ func Test_parseTables(t *testing.T) {
 	}
 
 	for _, tkase := range kases {
-		pirs, err := extractTablePairs(context.Background(), tkase.input, "")
+		pirs, err := getPatternTuples(context.Background(), tkase.input, "")
 		if tkase.wantErr {
 			assert.Errorf(t, err, tkase.input)
 		} else {
@@ -2555,22 +2555,22 @@ func TestCdcTask_ResetWatermarkForTable(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cdc := &CdcTask{
-				logger:               tt.fields.logger,
-				ie:                   tt.fields.ie,
-				cnUUID:               tt.fields.cnUUID,
-				cnTxnClient:          tt.fields.cnTxnClient,
-				cnEngine:             tt.fields.cnEngine,
-				fileService:          tt.fields.fileService,
-				cdcTask:              tt.fields.cdcTask,
-				mp:                   tt.fields.mp,
-				packerPool:           tt.fields.packerPool,
-				sinkUri:              tt.fields.sinkUri,
-				tables:               tt.fields.tables,
-				filters:              tt.fields.filters,
-				startTs:              tt.fields.startTs,
-				noFull:               tt.fields.noFull,
-				activeRoutine:        tt.fields.activeRoutine,
-				sunkWatermarkUpdater: tt.fields.sunkWatermarkUpdater,
+				logger:           tt.fields.logger,
+				ie:               tt.fields.ie,
+				cnUUID:           tt.fields.cnUUID,
+				cnTxnClient:      tt.fields.cnTxnClient,
+				cnEngine:         tt.fields.cnEngine,
+				fileService:      tt.fields.fileService,
+				cdcTask:          tt.fields.cdcTask,
+				mp:               tt.fields.mp,
+				packerPool:       tt.fields.packerPool,
+				sinkUri:          tt.fields.sinkUri,
+				tables:           tt.fields.tables,
+				exclude:          tt.fields.filters,
+				startTs:          tt.fields.startTs,
+				noFull:           tt.fields.noFull,
+				activeRoutine:    tt.fields.activeRoutine,
+				watermarkUpdater: tt.fields.sunkWatermarkUpdater,
 			}
 			err := cdc.resetWatermarkForTable(tt.args.info)
 			assert.NoErrorf(t, err, fmt.Sprintf("resetWatermarkForTable(%v)", tt.args.info))
@@ -2606,7 +2606,7 @@ func TestCdcTask_Restart(t *testing.T) {
 
 	cdc := &CdcTask{
 		activeRoutine: cdc2.NewCdcActiveRoutine(),
-		sunkWatermarkUpdater: cdc2.NewWatermarkUpdater(
+		watermarkUpdater: cdc2.NewWatermarkUpdater(
 			sysAccountID,
 			"taskID-0",
 			tie,
@@ -2658,7 +2658,7 @@ func TestCdcTask_Cancel(t *testing.T) {
 	}
 	cdc := &CdcTask{
 		activeRoutine: cdc2.NewCdcActiveRoutine(),
-		sunkWatermarkUpdater: cdc2.NewWatermarkUpdater(
+		watermarkUpdater: cdc2.NewWatermarkUpdater(
 			sysAccountID,
 			"taskID-1",
 			tie,
@@ -2792,22 +2792,22 @@ func TestCdcTask_retrieveCdcTask(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cdc := &CdcTask{
-				logger:               tt.fields.logger,
-				ie:                   tt.fields.ie,
-				cnUUID:               tt.fields.cnUUID,
-				cnTxnClient:          tt.fields.cnTxnClient,
-				cnEngine:             tt.fields.cnEngine,
-				fileService:          tt.fields.fileService,
-				cdcTask:              tt.fields.cdcTask,
-				mp:                   tt.fields.mp,
-				packerPool:           tt.fields.packerPool,
-				sinkUri:              tt.fields.sinkUri,
-				tables:               tt.fields.tables,
-				filters:              tt.fields.filters,
-				startTs:              tt.fields.startTs,
-				noFull:               tt.fields.noFull,
-				activeRoutine:        tt.fields.activeRoutine,
-				sunkWatermarkUpdater: tt.fields.sunkWatermarkUpdater,
+				logger:           tt.fields.logger,
+				ie:               tt.fields.ie,
+				cnUUID:           tt.fields.cnUUID,
+				cnTxnClient:      tt.fields.cnTxnClient,
+				cnEngine:         tt.fields.cnEngine,
+				fileService:      tt.fields.fileService,
+				cdcTask:          tt.fields.cdcTask,
+				mp:               tt.fields.mp,
+				packerPool:       tt.fields.packerPool,
+				sinkUri:          tt.fields.sinkUri,
+				tables:           tt.fields.tables,
+				exclude:          tt.fields.filters,
+				startTs:          tt.fields.startTs,
+				noFull:           tt.fields.noFull,
+				activeRoutine:    tt.fields.activeRoutine,
+				watermarkUpdater: tt.fields.sunkWatermarkUpdater,
 			}
 			err := cdc.retrieveCdcTask(tt.args.ctx)
 			assert.NoError(t, err, fmt.Sprintf("retrieveCdcTask(%v)", tt.args.ctx))
@@ -2970,11 +2970,11 @@ func Test_extractTablePair(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := extractTablePair(tt.args.ctx, tt.args.pattern, tt.args.defaultAcc)
-			if !tt.wantErr(t, err, fmt.Sprintf("extractTablePair(%v, %v, %v)", tt.args.ctx, tt.args.pattern, tt.args.defaultAcc)) {
+			got, err := getPatternTuple(tt.args.ctx, tt.args.pattern, tt.args.defaultAcc)
+			if !tt.wantErr(t, err, fmt.Sprintf("getPatternTuple(%v, %v, %v)", tt.args.ctx, tt.args.pattern, tt.args.defaultAcc)) {
 				return
 			}
-			assert.Equalf(t, tt.want, got, "extractTablePair(%v, %v, %v)", tt.args.ctx, tt.args.pattern, tt.args.defaultAcc)
+			assert.Equalf(t, tt.want, got, "getPatternTuple(%v, %v, %v)", tt.args.ctx, tt.args.pattern, tt.args.defaultAcc)
 		})
 	}
 }
