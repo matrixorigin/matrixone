@@ -657,26 +657,19 @@ func (tbl *txnTable) doRanges(ctx context.Context, rangesParam engine.RangesPara
 			tbl.enableLogFilterExpr.Store(true)
 		}
 
-		if tbl.enableLogFilterExpr.Load() {
+		if ok, _ := objectio.RangesLogInjected(tbl.db.databaseName, tbl.tableDef.Name); ok ||
+			err != nil ||
+			tbl.enableLogFilterExpr.Load() ||
+			cost > 5*time.Second {
 			logutil.Info(
 				"TXN-FILTER-RANGE-LOG",
-				zap.String("name", tbl.tableDef.Name),
-				zap.String("exprs", plan2.FormatExprs(rangesParam.BlockFilters)),
-				zap.Int("ranges-len", blocks.Len()),
-				zap.Uint64("tbl-id", tbl.tableId),
-				zap.String("txn", tbl.db.op.Txn().DebugString()),
-			)
-		}
-
-		if ok, _ := objectio.RangesLogInjected(tbl.db.databaseName, tbl.tableDef.Name); ok {
-			logutil.Info(
-				"INJECT-TRACE-RANGES",
 				zap.String("name", tbl.tableDef.Name),
 				zap.String("exprs", plan2.FormatExprs(rangesParam.BlockFilters)),
 				zap.Uint64("tbl-id", tbl.tableId),
 				zap.String("txn", tbl.db.op.Txn().DebugString()),
 				zap.String("blocks", blocks.String()),
 				zap.String("ps", fmt.Sprintf("%p", part)),
+				zap.Duration("cost", cost),
 				zap.Error(err),
 			)
 		}
