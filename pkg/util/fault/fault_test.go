@@ -237,7 +237,7 @@ func Test_panic(t *testing.T) {
 	var ctx = context.TODO()
 
 	Enable()
-	Disable()
+	defer Disable()
 	require.NoError(t, AddFaultPoint(ctx, "panic_moerr", ":::", "panic", PanicUseMoErr, "use moerr", false))
 	require.NoError(t, AddFaultPoint(ctx, "panic_non_moerr", ":::", "panic", PanicUseNonMoErr, "use non moerr", false))
 
