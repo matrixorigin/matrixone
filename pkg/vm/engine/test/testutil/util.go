@@ -94,6 +94,11 @@ func CreateEngines(
 		panic("cannot find account id in ctx")
 	}
 
+	_, ok := ctx.Deadline()
+	if ok {
+		panic("context should not have deadline")
+	}
+
 	var err error
 
 	rpcAgent = NewMockLogtailAgent()
@@ -252,26 +257,27 @@ type EnginePack struct {
 }
 
 func InitEnginePack(opts TestOptions, t *testing.T) *EnginePack {
-	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, uint32(0))
+	ctx, cancel := context.WithCancel(context.Background())
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(0))
+	pack := &EnginePack{
+		t:       t,
+		cancelF: cancel,
+	}
+	pack.D, pack.T, pack.R, pack.Mp = CreateEngines(ctx, opts, t)
 	timeout := opts.Timeout
 	if timeout == 0 {
 		timeout = 5 * time.Minute
 	}
-	ctx, cancel := context.WithTimeoutCause(ctx, timeout, moerr.CauseInitEnginePack)
-	pack := &EnginePack{
-		Ctx:     ctx,
-		t:       t,
-		cancelF: cancel,
-	}
-	pack.D, pack.T, pack.R, pack.Mp = CreateEngines(pack.Ctx, opts, t)
+	ctx, _ = context.WithTimeoutCause(ctx, timeout, moerr.CauseInitEnginePack)
+	pack.Ctx = ctx
 	return pack
 }
 
 func (p *EnginePack) Close() {
-	p.cancelF()
 	p.D.Close(p.Ctx)
 	p.T.Close(true)
 	p.R.Close()
+	p.cancelF()
 }
 
 func (p *EnginePack) StartCNTxn(opts ...client.TxnOption) client.TxnOperator {
