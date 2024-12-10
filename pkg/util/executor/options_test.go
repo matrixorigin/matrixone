@@ -23,7 +23,7 @@ import (
 func TestOptionsStreaming(t *testing.T) {
 	var opts Options
 	var ch chan Result
-	var errors chan Result
+	var errors chan error
 
 	opts = opts.WithStreaming(ch, errors)
 	ret, err_chan, streaming := opts.Streaming()
