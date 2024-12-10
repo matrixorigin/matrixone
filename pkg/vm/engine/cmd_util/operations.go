@@ -117,11 +117,12 @@ const (
 )
 
 type FaultPoint struct {
-	Name   string
-	Freq   string
-	Action string
-	Iarg   int64
-	Sarg   string
+	Name     string
+	Freq     string
+	Action   string
+	Iarg     int64
+	Sarg     string
+	Constant bool
 }
 
 func (m *FaultPoint) MarshalBinary() ([]byte, error) {
@@ -407,4 +408,17 @@ func (tlreq *GetChangedTableListReq) UnmarshalBinary(data []byte) error {
 func (tlresp *GetChangedTableListResp) MarshalBinary() ([]byte, error) { return tlresp.Marshal() }
 func (tlresp *GetChangedTableListResp) UnmarshalBinary(data []byte) error {
 	return tlresp.Unmarshal(data)
+}
+
+type FaultInjectReq struct {
+	Method    string
+	Parameter string
+}
+
+func (f *FaultInjectReq) MarshalBinary() ([]byte, error) {
+	return f.Marshal()
+}
+
+func (f *FaultInjectReq) UnmarshalBinary(data []byte) error {
+	return f.Unmarshal(data)
 }

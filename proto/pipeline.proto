@@ -410,17 +410,16 @@ message file_offset {
 }
 
 message ExternalScan {
-  repeated string attrs = 1;
+  repeated plan.ExternAttr attrs = 1[(gogoproto.nullable) = false];
   repeated int64 file_size = 2;
   repeated file_offset file_offset_total = 3;
   repeated plan.ColDef cols = 4;
-  repeated ExternalName2ColIndex name2_col_index = 5;
-  string create_sql = 6;
-  repeated string file_list = 7;
-  repeated plan.ColDef origin_cols = 8;
-  plan.Expr    filter = 9;
-  map<string, int32> TbColToDataCol = 10;
-  bool strict_sql_mode = 11;
+  string create_sql = 5;
+  repeated string file_list = 6;
+  repeated plan.ColDef origin_cols = 7;
+  plan.Expr    filter = 8;
+  bool strict_sql_mode = 9;
+  int32 column_list_len = 10;
 }
 
 message StreamScan {

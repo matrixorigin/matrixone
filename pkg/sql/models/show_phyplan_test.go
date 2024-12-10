@@ -176,8 +176,6 @@ func TestExplainPhyPlan(t *testing.T) {
 	phyPlan := NewPhyPlan()
 	phyPlan.LocalScope = []PhyScope{phyScope1}
 	phyPlan.RemoteScope = []PhyScope{phyScope1}
-	phyPlan.S3IOInputCount = 5
-	phyPlan.S3IOOutputCount = 0
 
 	statsInfo := new(statistic.StatsInfo)
 	statsInfo.ParseStage.ParseDuration = 72872
