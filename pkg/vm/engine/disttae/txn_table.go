@@ -559,7 +559,48 @@ func (tbl *txnTable) CollectTombstones(
 //   - exprs: A slice of expressions used to filter data.
 //   - txnOffset: Transaction offset used to specify the starting position for reading data.
 func (tbl *txnTable) Ranges(ctx context.Context, rangesParam engine.RangesParam) (data engine.RelData, err error) {
+	if len(rangesParam.BlockFilters) == 0 {
+		//no block filters, return objlist instead of blocklist
+		return tbl.getObjList(ctx, rangesParam)
+	}
 	return tbl.doRanges(ctx, rangesParam)
+}
+
+func (tbl *txnTable) getObjList(ctx context.Context, rangesParam engine.RangesParam) (data engine.RelData, err error) {
+	needUncommited := rangesParam.Policy&engine.Policy_CollectUncommittedData != 0
+	objRelData := &engine_util.ObjListRelData{
+		NeedFirstEmpty: needUncommited,
+	}
+
+	var uncommittedObjects []objectio.ObjectStats
+	if needUncommited {
+		uncommittedObjects, _ = tbl.collectUnCommittedDataObjs(rangesParam.TxnOffset)
+	}
+
+	var part *logtailreplay.PartitionState
+	// get the table's snapshot
+	if rangesParam.Policy&engine.Policy_CollectCommittedData != 0 {
+		if part, err = tbl.getPartitionState(ctx); err != nil {
+			return
+		}
+	}
+
+	if err = ForeachSnapshotObjects(
+		tbl.db.op.SnapshotTS(),
+		func(obj logtailreplay.ObjectInfo, isCommitted bool) (err2 error) {
+			//if need to shuffle objects
+			if plan2.ShouldSkipObjByShuffle(rangesParam.Rsp, &obj.ObjectStats) {
+				return
+			}
+			objRelData.AppendObj(&obj.ObjectStats)
+			return
+		},
+		part, nil, uncommittedObjects...); err != nil {
+		return nil, err
+	}
+
+	data = objRelData
+	return
 }
 
 func (tbl *txnTable) doRanges(ctx context.Context, rangesParam engine.RangesParam) (data engine.RelData, err error) {

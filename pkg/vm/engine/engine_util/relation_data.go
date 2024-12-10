@@ -18,6 +18,8 @@ import (
 	"bytes"
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -25,6 +27,7 @@ import (
 )
 
 var _ engine.RelData = new(BlockListRelData)
+var _ engine.RelData = new(ObjListRelData)
 
 func UnmarshalRelationData(data []byte) (engine.RelData, error) {
 	typ := engine.RelDataType(data[0])
@@ -56,6 +59,110 @@ func NewBlockListRelationDataOfObject(
 	return &BlockListRelData{
 		blklist: slice,
 	}
+}
+
+type ObjListRelData struct {
+	NeedFirstEmpty   bool
+	expanded         bool
+	totalBlocks      uint32
+	Objlist          []objectio.ObjectStats
+	blocklistRelData BlockListRelData
+}
+
+func (or *ObjListRelData) expand() {
+	if !or.expanded {
+		or.expanded = true
+		or.blocklistRelData.blklist = objectio.MultiObjectStatsToBlockInfoSlice(or.Objlist, or.NeedFirstEmpty)
+	}
+}
+
+func (or *ObjListRelData) AppendObj(obj *objectio.ObjectStats) {
+	or.Objlist = append(or.Objlist, *obj)
+	or.totalBlocks += obj.BlkCnt()
+}
+
+func (or *ObjListRelData) GetType() engine.RelDataType {
+	return engine.RelDataObjList
+}
+
+func (or *ObjListRelData) String() string {
+	return "ObjListRelData"
+}
+
+func (or *ObjListRelData) GetShardIDList() []uint64 {
+	panic("not supported")
+}
+func (or *ObjListRelData) GetShardID(i int) uint64 {
+	panic("not supported")
+}
+func (or *ObjListRelData) SetShardID(i int, id uint64) {
+	panic("not supported")
+}
+func (or *ObjListRelData) AppendShardID(id uint64) {
+	panic("not supported")
+}
+
+func (or *ObjListRelData) Split(i int) []engine.RelData {
+	logutil.Infof("objlist rel data split!!!!!!!!!!!!")
+	or.expand()
+	return or.blocklistRelData.Split(i)
+}
+
+func (or *ObjListRelData) GetBlockInfoSlice() objectio.BlockInfoSlice {
+	panic("not supported")
+}
+
+func (or *ObjListRelData) BuildEmptyRelData(i int) engine.RelData {
+	panic("not supported")
+}
+
+func (or *ObjListRelData) GetBlockInfo(i int) objectio.BlockInfo {
+	panic("not supported")
+}
+
+func (or *ObjListRelData) SetBlockInfo(i int, blk *objectio.BlockInfo) {
+	panic("not supported")
+}
+
+func (or *ObjListRelData) SetBlockList(slice objectio.BlockInfoSlice) {
+	panic("not supported")
+}
+
+func (or *ObjListRelData) AppendBlockInfo(blk *objectio.BlockInfo) {
+	panic("not supported")
+}
+
+func (or *ObjListRelData) AppendBlockInfoSlice(slice objectio.BlockInfoSlice) {
+	panic("not supported")
+}
+
+func (or *ObjListRelData) UnmarshalBinary(buf []byte) error {
+	panic("not supported")
+}
+
+func (or *ObjListRelData) MarshalBinary() ([]byte, error) {
+	panic("not supported")
+}
+
+func (or *ObjListRelData) AttachTombstones(tombstones engine.Tombstoner) error {
+	or.blocklistRelData.tombstones = tombstones
+	return nil
+}
+
+func (or *ObjListRelData) GetTombstones() engine.Tombstoner {
+	return or.blocklistRelData.tombstones
+}
+
+func (or *ObjListRelData) DataSlice(i, j int) engine.RelData {
+	panic("not supported")
+}
+
+func (or *ObjListRelData) GroupByPartitionNum() map[int16]engine.RelData {
+	panic("not supported")
+}
+
+func (or *ObjListRelData) DataCnt() int {
+	return int(or.totalBlocks)
 }
 
 type BlockListRelData struct {

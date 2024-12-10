@@ -671,6 +671,7 @@ const (
 	RelDataEmpty RelDataType = iota
 	RelDataShardIDList
 	RelDataBlockList
+	RelDataObjList
 )
 
 type RelData interface {
