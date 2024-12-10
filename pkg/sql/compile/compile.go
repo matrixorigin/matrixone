@@ -737,10 +737,12 @@ func (c *Compile) lockMetaTables() error {
 	}
 	sort.Strings(tables)
 
+	lockDbs := make(map[string]struct{})
 	for _, table := range tables {
 		names := strings.SplitN(table, " ", 2)
 
 		err := lockMoTable(c, names[0], names[1], lock.LockMode_Shared)
+		lockDbs[names[0]] = struct{}{}
 		if err != nil {
 			// if get error in locking mocatalog.mo_tables by it's dbName & tblName
 			// that means the origin table's schema was changed. then return NeedRetryWithDefChanged err
@@ -753,6 +755,13 @@ func (c *Compile) lockMetaTables() error {
 			return err
 		}
 	}
+	for dbName := range lockDbs {
+		err := lockMoDatabase(c, dbName, lock.LockMode_Shared)
+		if err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
