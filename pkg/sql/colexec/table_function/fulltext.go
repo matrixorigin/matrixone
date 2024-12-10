@@ -16,7 +16,6 @@ package table_function
 
 import (
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -114,7 +113,7 @@ func (u *fulltextState) returnResult(proc *process.Process, scoremap map[any]flo
 	u.n_result += uint64(len(scoremap))
 
 	if u.batch.RowCount() == 0 {
-		os.Stderr.WriteString("FULLTEXT: return result END\n")
+		//os.Stderr.WriteString("FULLTEXT: return result END\n")
 		return vm.CancelResult, nil
 	}
 
@@ -530,24 +529,26 @@ func fulltextIndexMatch(u *fulltextState, proc *process.Process, tableFunction *
 				return
 			}
 		}
-		os.Stderr.WriteString("FULLTEXT: SQL END\n")
+		//os.Stderr.WriteString("FULLTEXT: SQL END\n")
 	}()
 	//os.Stderr.WriteString("MAIN FULLTEXT MATCH GROUP BY START\n")
 
 	// array is empty, try to get batch from SQL executor
-	i := 0
+	//i := 0
 	sql_closed := false
 	for !sql_closed {
 		sql_closed, err = groupby(u, proc, u.sacc)
 		if err != nil {
 			return err
 		}
-		if (i % 1000) == 0 {
-			os.Stderr.WriteString(fmt.Sprintf("nrow processed %d, chan size =%d\n", u.nrows, len(u.stream_chan)))
-		}
-		i++
+		/*
+			if (i % 1000) == 0 {
+				os.Stderr.WriteString(fmt.Sprintf("nrow processed %d, chan size =%d\n", u.nrows, len(u.stream_chan)))
+			}
+			i++
+		*/
 	}
-	os.Stderr.WriteString(fmt.Sprintf("FULLTEXT: GROUP BY END htab size %d\n", len(u.agghtab)))
+	//os.Stderr.WriteString(fmt.Sprintf("FULLTEXT: GROUP BY END htab size %d\n", len(u.agghtab)))
 
 	return nil
 }
