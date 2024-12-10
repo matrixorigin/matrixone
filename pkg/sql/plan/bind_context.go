@@ -85,12 +85,22 @@ func (bc *BindContext) topTag() int32 {
 }
 
 func (bc *BindContext) findCTE(name string) *CTERef {
+	// the cte is masked already, we don't go further
+	if bc.maskedCTEs[name] {
+		return nil
+	}
 	if cte, ok := bc.cteByName[name]; ok {
-		return cte
+		if !bc.maskedCTEs[name] {
+			return cte
+		}
 	}
 
 	parent := bc.parent
 	for parent != nil {
+		// the cte is masked already, we don't go further
+		if _, ok2 := parent.maskedCTEs[name]; ok2 {
+			break
+		}
 		if cte, ok := parent.cteByName[name]; ok {
 			if !parent.maskedCTEs[name] {
 				return cte

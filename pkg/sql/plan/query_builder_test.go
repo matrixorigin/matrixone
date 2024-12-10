@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/golang/mock/gomock"
+	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -97,8 +98,7 @@ func TestBuildTable_AlterView(t *testing.T) {
 
 func Test_cte(t *testing.T) {
 	sqls := []string{
-		//"with recursive c as (select a from cte_test.t1 union all select a+1 from c where a < 2 union all select a from c where a < 2), d as (select a from c union all select a+1 from d where a < 2) select distinct tt.* from ( SELECT * FROM c UNION ALL SELECT * FROM d) tt order by tt.a;",
-		"select * from cte_test.v2",
+		"select information_schema.REFERENTIAL_CONSTRAINTS.CONSTRAINT_SCHEMA,\n       information_schema.REFERENTIAL_CONSTRAINTS.CONSTRAINT_NAME,\n       information_schema.REFERENTIAL_CONSTRAINTS.TABLE_NAME,\n       information_schema.REFERENTIAL_CONSTRAINTS.REFERENCED_TABLE_NAME,\n       information_schema.REFERENTIAL_CONSTRAINTS.UNIQUE_CONSTRAINT_NAME,\n       information_schema.REFERENTIAL_CONSTRAINTS.UNIQUE_CONSTRAINT_SCHEMA,\n       information_schema.KEY_COLUMN_USAGE.COLUMN_NAME\nfrom information_schema.REFERENTIAL_CONSTRAINTS\n         join information_schema.KEY_COLUMN_USAGE\n              on (information_schema.REFERENTIAL_CONSTRAINTS.CONSTRAINT_SCHEMA =\n                  information_schema.KEY_COLUMN_USAGE.CONSTRAINT_SCHEMA and\n                  information_schema.REFERENTIAL_CONSTRAINTS.CONSTRAINT_NAME =\n                  information_schema.KEY_COLUMN_USAGE.CONSTRAINT_NAME and\n                  information_schema.REFERENTIAL_CONSTRAINTS.TABLE_NAME =\n                  information_schema.KEY_COLUMN_USAGE.TABLE_NAME)\nwhere (information_schema.REFERENTIAL_CONSTRAINTS.CONSTRAINT_SCHEMA in ('plat_content') or\n       information_schema.REFERENTIAL_CONSTRAINTS.CONSTRAINT_SCHEMA in ('plat_content'))\norder by information_schema.KEY_COLUMN_USAGE.CONSTRAINT_SCHEMA asc,\n         information_schema.KEY_COLUMN_USAGE.CONSTRAINT_NAME asc,\n         information_schema.KEY_COLUMN_USAGE.ORDINAL_POSITION asc;",
 	}
 	testutil.NewProc()
 	mock := NewMockOptimizer(false)
@@ -109,5 +109,70 @@ func Test_cte(t *testing.T) {
 			t.Fatalf("%+v", err)
 		}
 		outPutPlan(logicPlan, true, t)
+	}
+}
+
+type Kase struct {
+	sql     string
+	comment string
+}
+
+var rightCases = []Kase{
+	{
+		"with recursive c as (select a from cte_test.t1 union all select a+1 from c where a < 2 union all select a from c where a < 2), d as (select a from c union all select a+1 from d where a < 2) select distinct tt.* from ( SELECT * FROM c UNION ALL SELECT * FROM d) tt order by tt.a;",
+		"",
+	},
+	{
+		"select * from cte_test.v2",
+		"",
+	},
+	{
+		"with \n    qn as (select * from t2),\n    qn2 as (\n        with qn3 as (select * from qn)\n        select * from qn3\n    )\nselect * from bvt_test2.t3 where exists (select * from qn);",
+		"",
+	},
+}
+
+func TestRightCases(t *testing.T) {
+	testutil.NewProc()
+	mock := NewMockOptimizer(false)
+	for _, kase := range rightCases {
+		_, err := runOneStmt(mock, t, kase.sql)
+		require.NoError(t, err, kase.comment, kase.sql)
+	}
+}
+
+var wrongCases = []Kase{
+	{
+		"WITH qn2 AS (SELECT a FROM qn WHERE a IS NULL or a>0),\nqn AS (SELECT b as a FROM bvt_test1.t1)\nSELECT qn2.a  FROM qn2;",
+		"SQL parser error: table \"qn\" does not exist",
+	},
+	{
+		"with qn1 as (with qn3 as (select * from qn2) select * from qn3),\n     qn2 as (select 1)\nselect * from qn1;",
+		"SQL parser error: table \"qn2\" does not exist",
+	},
+	{
+		"WITH qn2 AS (SELECT a FROM qn WHERE a IS NULL or a>0),\nqn AS (SELECT b as a FROM qn2)\nSELECT qn.a  FROM qn;",
+
+		"SQL parser error: table \"qn\" does not exist",
+	},
+	{
+
+		"with qn as (select * from t2 where t2.b=t3.a)\nselect * from bvt_test2.t3 where exists (select * from qn);",
+		"invalid input: missing FROM-clause entry for table 't3'",
+	},
+	{
+
+		"with qn as (select * from t2 where t2.b=t3.a)\nselect * from bvt_test2.t3 where not exists (select * from qn);",
+
+		"invalid input: missing FROM-clause entry for table 't3'",
+	},
+}
+
+func TestWrongCases(t *testing.T) {
+	testutil.NewProc()
+	mock := NewMockOptimizer(false)
+	for _, kase := range wrongCases {
+		_, err := runOneStmt(mock, t, kase.sql)
+		require.Error(t, err, kase.comment, kase.sql)
 	}
 }

@@ -159,12 +159,18 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 	moSchema := make(map[string]*Schema)
 	constraintTestSchema := make(map[string]*Schema)
 	cteTestSchema := make(map[string]*Schema)
+	bvtTest1Schema := make(map[string]*Schema)
+	bvtTest2Schema := make(map[string]*Schema)
+	informationSchemaSchema := make(map[string]*Schema)
 
 	schemas := map[string]map[string]*Schema{
-		"tpch":            tpchSchema,
-		"mo_catalog":      moSchema,
-		"constraint_test": constraintTestSchema,
-		"cte_test":        cteTestSchema,
+		"tpch":               tpchSchema,
+		"mo_catalog":         moSchema,
+		"constraint_test":    constraintTestSchema,
+		"cte_test":           cteTestSchema,
+		"bvt_test1":          bvtTest1Schema,
+		"bvt_test2":          bvtTest2Schema,
+		"information_schema": informationSchemaSchema,
 	}
 
 	dbs := make(map[string]bool)
@@ -759,6 +765,91 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 		viewCfg: ViewCfg{
 			sql: "create view v2 as\nwith \n\tv2 as (\n\t\tselect a from t1 \n\t)\nselect distinct \n\t* \nfrom \n\t(\n\t\tselect * from v2\n\t)\n",
 			db:  "cte_test",
+		},
+	}
+
+	bvtTest1Schema["t1"] = &Schema{
+		cols: []col{
+			{"a", types.T_int64, false, 64, 0},
+			{"b", types.T_int64, false, 64, 0},
+			{"c", types.T_int64, false, 64, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks: []int{0},
+	}
+
+	bvtTest2Schema["t2"] = &Schema{
+		cols: []col{
+			{"a", types.T_int64, false, 64, 0},
+			{"b", types.T_int64, false, 64, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks: []int{0},
+	}
+
+	bvtTest2Schema["t3"] = &Schema{
+		cols: []col{
+			{"a", types.T_int64, false, 64, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks: []int{0},
+	}
+
+	informationSchemaSchema["key_column_usage"] = &Schema{
+		cols: []col{
+			{"CONSTRAINT_CATALOG", types.T_varchar, false, 64, 0},
+			{"CONSTRAINT_SCHEMA", types.T_varchar, false, 64, 0},
+			{"CONSTRAINT_NAME", types.T_varchar, false, 64, 0},
+			{"TABLE_CATALOG", types.T_varchar, false, 64, 0},
+			{"TABLE_SCHEMA", types.T_varchar, false, 64, 0},
+			{"TABLE_NAME", types.T_varchar, false, 64, 0},
+			{"COLUMN_NAME", types.T_varchar, false, 64, 0},
+			{"ORDINAL_POSITION", types.T_uint32, false, 32, 0},
+			{"POSITION_IN_UNIQUE_CONSTRAINT", types.T_uint32, false, 32, 0},
+			{"REFERENCED_TABLE_SCHEMA", types.T_varchar, false, 64, 0},
+			{"REFERENCED_TABLE_NAME", types.T_varchar, false, 64, 0},
+			{"REFERENCED_COLUMN_NAME", types.T_varchar, false, 64, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks: []int{0},
+	}
+
+	informationSchemaSchema["test_referential_constraints"] = &Schema{
+		cols: []col{
+			{"CONSTRAINT_CATALOG", types.T_varchar, false, 3, 0},
+			{"CONSTRAINT_SCHEMA", types.T_varchar, false, 5000, 0},
+			{"CONSTRAINT_NAME", types.T_varchar, false, 5000, 0},
+			{"unique_constraint_catalog", types.T_varchar, false, 3, 0},
+			{"unique_constraint_schema", types.T_varchar, false, 5000, 0},
+			{"unique_constraint_name", types.T_varchar, false, 11, 0},
+			{"match_option", types.T_varchar, false, 4, 0},
+			{"update_rule", types.T_varchar, false, 128, 0},
+			{"delete_rule", types.T_varchar, false, 128, 0},
+			{"table_name", types.T_varchar, false, 5000, 0},
+			{"referenced_table_name", types.T_varchar, false, 5000, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks: []int{0},
+	}
+
+	informationSchemaSchema["referential_constraints"] = &Schema{
+		cols: []col{
+			{"CONSTRAINT_CATALOG", types.T_varchar, false, 3, 0},
+			{"CONSTRAINT_SCHEMA", types.T_varchar, false, 5000, 0},
+			{"CONSTRAINT_NAME", types.T_varchar, false, 5000, 0},
+			{"unique_constraint_catalog", types.T_varchar, false, 3, 0},
+			{"unique_constraint_schema", types.T_varchar, false, 5000, 0},
+			{"unique_constraint_name", types.T_varchar, false, 11, 0},
+			{"match_option", types.T_varchar, false, 4, 0},
+			{"update_rule", types.T_varchar, false, 128, 0},
+			{"delete_rule", types.T_varchar, false, 128, 0},
+			{"table_name", types.T_varchar, false, 5000, 0},
+			{"referenced_table_name", types.T_varchar, false, 5000, 0},
+		},
+		isView: true,
+		viewCfg: ViewCfg{
+			sql: "create view referential_constraints as select * from test_referential_constraints",
+			db:  "information_schema",
 		},
 	}
 
