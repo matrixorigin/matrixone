@@ -573,6 +573,7 @@ func (tbl *txnTable) getObjList(ctx context.Context, rangesParam engine.RangesPa
 	}
 
 	if needUncommited {
+		objRelData.TotalBlocks = 1 // first empty block
 		uncommittedObjects, _ := tbl.collectUnCommittedDataObjs(rangesParam.TxnOffset)
 		for i := range uncommittedObjects {
 			objRelData.AppendObj(&uncommittedObjects[i])

@@ -62,7 +62,7 @@ func NewBlockListRelationDataOfObject(
 type ObjListRelData struct {
 	NeedFirstEmpty   bool
 	expanded         bool
-	totalBlocks      uint32
+	TotalBlocks      uint32
 	Objlist          []objectio.ObjectStats
 	blocklistRelData BlockListRelData
 }
@@ -76,7 +76,7 @@ func (or *ObjListRelData) expand() {
 
 func (or *ObjListRelData) AppendObj(obj *objectio.ObjectStats) {
 	or.Objlist = append(or.Objlist, *obj)
-	or.totalBlocks += obj.BlkCnt()
+	or.TotalBlocks += obj.BlkCnt()
 }
 
 func (or *ObjListRelData) GetType() engine.RelDataType {
@@ -167,7 +167,7 @@ func (or *ObjListRelData) GroupByPartitionNum() map[int16]engine.RelData {
 }
 
 func (or *ObjListRelData) DataCnt() int {
-	return int(or.totalBlocks)
+	return int(or.TotalBlocks)
 }
 
 type BlockListRelData struct {
