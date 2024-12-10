@@ -259,6 +259,7 @@ func InjectPrefetchThreshold(threshold int) (rmFault func(), err error) {
 		"echo",
 		int64(threshold),
 		"",
+		false,
 	); err != nil {
 		return
 	}
