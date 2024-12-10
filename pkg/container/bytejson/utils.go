@@ -29,7 +29,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
-	"github.com/pingcap/errors"
 )
 
 func ParseFromString(s string) (ret ByteJson, err error) {
@@ -673,7 +672,7 @@ func appendBinaryValElem(buf []byte, docOff, valEntryOff int, val any) ([]byte, 
 	elemDocOff := len(buf)
 	typeCode, buf, err = appendBinaryJSON(buf, val)
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, moerr.NewInvalidArgNoCtx("invalid json value", val)
 	}
 	if typeCode == TpCodeLiteral {
 		litCode := buf[elemDocOff]

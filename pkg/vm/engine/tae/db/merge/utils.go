@@ -15,20 +15,24 @@
 package merge
 
 import (
+	"cmp"
 	"context"
 	"math"
 	"os"
+	"slices"
 	"sync/atomic"
 	"time"
 
 	"github.com/KimMachineGun/automemlimit/memlimit"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/shirou/gopsutil/v3/cpu"
 	"github.com/shirou/gopsutil/v3/process"
 )
@@ -45,17 +49,138 @@ const (
 	estimateMemUsagePerRow = 30
 )
 
+func score(objs []*catalog.ObjectEntry) float64 {
+	if len(objs) < 2 {
+		return 0
+	}
+	totalDiff := float64(0)
+	minMaxZM := objs[0].SortKeyZoneMap().Clone()
+	if !minMaxZM.GetType().IsFixedLen() {
+		return math.MaxFloat64
+	}
+	for _, obj := range objs {
+		zm := obj.SortKeyZoneMap()
+		index.UpdateZM(minMaxZM, zm.GetMinBuf())
+		index.UpdateZM(minMaxZM, zm.GetMaxBuf())
+		w := diff(zm.GetMax(), zm.GetMin(), zm.GetType())
+		if w == math.MaxUint64 {
+			return math.MaxFloat64
+		}
+		totalDiff += float64(w)
+	}
+	maxDiff := diff(minMaxZM.GetMax(), minMaxZM.GetMin(), minMaxZM.GetType())
+	if maxDiff == math.MaxUint64 {
+		return math.MaxFloat64
+	}
+	return totalDiff / float64(maxDiff)
+}
+
+func diff(a, b any, t types.T) uint64 {
+	switch t {
+	case types.T_bool:
+		if a == b {
+			return 0
+		}
+		return 1
+	case types.T_bit:
+		x, y := a.(uint64), b.(uint64)
+		return max(x, y) - min(x, y)
+	case types.T_int8:
+		x, y := a.(int8), b.(int8)
+		return uint64(max(x, y) - min(x, y))
+	case types.T_int16:
+		x, y := a.(int16), b.(int16)
+		return uint64(max(x, y) - min(x, y))
+	case types.T_int32:
+		x, y := a.(int32), b.(int32)
+		return uint64(max(x, y) - min(x, y))
+	case types.T_int64:
+		x, y := a.(int64), b.(int64)
+		return uint64(max(x, y) - min(x, y))
+	case types.T_uint8:
+		x, y := a.(uint8), b.(uint8)
+		return uint64(max(x, y) - min(x, y))
+	case types.T_uint16:
+		x, y := a.(uint16), b.(uint16)
+		return uint64(max(x, y) - min(x, y))
+	case types.T_uint32:
+		x, y := a.(uint32), b.(uint32)
+		return uint64(max(x, y) - min(x, y))
+	case types.T_uint64:
+		x, y := a.(uint64), b.(uint64)
+		return max(x, y) - min(x, y)
+	case types.T_float32:
+		x, y := a.(float32), b.(float32)
+		return uint64(max(x, y) - min(x, y))
+	case types.T_float64:
+		x, y := a.(float64), b.(float64)
+		return uint64(max(x, y) - min(x, y))
+	case types.T_date:
+		x, y := a.(types.Date), b.(types.Date)
+		return uint64(max(x, y) - min(x, y))
+	case types.T_time:
+		x, y := a.(types.Time), b.(types.Time)
+		return uint64(max(x, y) - min(x, y))
+	case types.T_datetime:
+		x, y := a.(types.Datetime), b.(types.Datetime)
+		return uint64(max(x, y) - min(x, y))
+	case types.T_timestamp:
+		x, y := a.(types.Timestamp), b.(types.Timestamp)
+		return uint64(max(x, y) - min(x, y))
+	case types.T_enum:
+		x, y := a.(types.Enum), b.(types.Enum)
+		return uint64(max(x, y) - min(x, y))
+	case types.T_decimal64:
+		x, y := a.(types.Decimal64), b.(types.Decimal64)
+		return uint64(max(x, y) - min(x, y))
+	default:
+	}
+	return math.MaxUint64
+}
+
+func removeOversize(objs []*catalog.ObjectEntry) []*catalog.ObjectEntry {
+	if len(objs) < 2 {
+		return objs
+	}
+	slices.SortFunc(objs, func(a, b *catalog.ObjectEntry) int {
+		return cmp.Compare(a.OriginSize(), b.OriginSize())
+	})
+
+	if len(objs) == 2 {
+		if uint(objs[1].OriginSize()) < 3*uint(objs[0].OriginSize()) {
+			return objs[:2]
+		}
+		return nil
+	}
+
+	accSize := int(objs[0].OriginSize()) + int(objs[1].OriginSize())
+	i := 2
+	for i < len(objs) {
+		size := int(objs[i].OriginSize())
+		if size > accSize {
+			break
+		}
+		accSize += size
+		i++
+	}
+	for j := i; j < len(objs); j++ {
+		objs[j] = nil
+	}
+	if i == 2 {
+		if uint(objs[1].OriginSize()) < 3*uint(objs[0].OriginSize()) {
+			return objs[:2]
+		}
+		return nil
+	}
+	return objs[:i]
+}
+
 func estimateMergeSize(objs []*catalog.ObjectEntry) int {
 	size := 0
 	for _, o := range objs {
-		size += int(o.Rows() * estimateMemUsagePerRow)
+		size += int(o.Rows()) * estimateMemUsagePerRow
 	}
 	return size
-}
-
-func entryOutdated(entry *catalog.ObjectEntry, lifetime time.Duration) bool {
-	createdAt := entry.CreatedAt.Physical()
-	return time.Unix(0, createdAt).Add(lifetime).Before(time.Now())
 }
 
 type resourceController struct {
