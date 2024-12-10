@@ -753,9 +753,9 @@ func (mr *MockDataSourceMockRecorder) GetTombstones(ctx, bid interface{}) *gomoc
 }
 
 // Next mocks base method.
-func (m *MockDataSource) Next(ctx context.Context, cols []string, types []types.Type, seqNums []uint16, memFilter any, mp *mpool.MPool, bat *batch.Batch) (*objectio.BlockInfo, engine.DataState, error) {
+func (m *MockDataSource) Next(ctx context.Context, cols []string, types []types.Type, seqNums []uint16, pkSeqNum int32, memFilter any, mp *mpool.MPool, bat *batch.Batch) (*objectio.BlockInfo, engine.DataState, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Next", ctx, cols, types, seqNums, memFilter, mp, bat)
+	ret := m.ctrl.Call(m, "Next", ctx, cols, types, seqNums, pkSeqNum, memFilter, mp, bat)
 	ret0, _ := ret[0].(*objectio.BlockInfo)
 	ret1, _ := ret[1].(engine.DataState)
 	ret2, _ := ret[2].(error)
@@ -763,9 +763,9 @@ func (m *MockDataSource) Next(ctx context.Context, cols []string, types []types.
 }
 
 // Next indicates an expected call of Next.
-func (mr *MockDataSourceMockRecorder) Next(ctx, cols, types, seqNums, memFilter, mp, bat interface{}) *gomock.Call {
+func (mr *MockDataSourceMockRecorder) Next(ctx, cols, types, seqNums, pkSeqNum, memFilter, mp, bat interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Next", reflect.TypeOf((*MockDataSource)(nil).Next), ctx, cols, types, seqNums, memFilter, mp, bat)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Next", reflect.TypeOf((*MockDataSource)(nil).Next), ctx, cols, types, seqNums, pkSeqNum, memFilter, mp, bat)
 }
 
 // SetFilterZM mocks base method.
@@ -2068,6 +2068,20 @@ func (m *MockEngine) Nodes(isInternal bool, tenant, username string, cnLabel map
 func (mr *MockEngineMockRecorder) Nodes(isInternal, tenant, username, cnLabel interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Nodes", reflect.TypeOf((*MockEngine)(nil).Nodes), isInternal, tenant, username, cnLabel)
+}
+
+// PrefetchTableMeta mocks base method.
+func (m *MockEngine) PrefetchTableMeta(ctx context.Context, key statsinfo.StatsInfoKey) bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "PrefetchTableMeta", ctx, key)
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// PrefetchTableMeta indicates an expected call of PrefetchTableMeta.
+func (mr *MockEngineMockRecorder) PrefetchTableMeta(ctx, key interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PrefetchTableMeta", reflect.TypeOf((*MockEngine)(nil).PrefetchTableMeta), ctx, key)
 }
 
 // Stats mocks base method.

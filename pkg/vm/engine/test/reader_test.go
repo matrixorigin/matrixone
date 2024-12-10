@@ -72,9 +72,8 @@ func Test_ReaderCanReadRangesBlocksWithoutDeletes(t *testing.T) {
 		disttaeEngine *testutil.TestDisttaeEngine
 	)
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
 
 	schema := catalog2.MockSchemaAll(4, primaryKeyIdx)
@@ -85,10 +84,7 @@ func Test_ReaderCanReadRangesBlocksWithoutDeletes(t *testing.T) {
 	require.NoError(t, err)
 	defer rmFault()
 
-	opt, err := testutil.GetS3SharedFileServiceOption(ctx, testutil.GetDefaultTestPath("test", t))
-	require.NoError(t, err)
-
-	disttaeEngine, taeEngine, rpcAgent, mp = testutil.CreateEngines(ctx, testutil.TestOptions{TaeEngineOptions: opt}, t)
+	disttaeEngine, taeEngine, rpcAgent, mp = testutil.CreateEngines(ctx, testutil.TestOptions{}, t)
 	hbMonkeyJob := testutil.MakeTxnHeartbeatMonkeyJob(
 		taeEngine, time.Millisecond*10,
 	)
@@ -100,6 +96,8 @@ func Test_ReaderCanReadRangesBlocksWithoutDeletes(t *testing.T) {
 		rpcAgent.Close()
 	}()
 
+	ctx, cancel = context.WithTimeout(ctx, time.Minute)
+	defer cancel()
 	_, _, err = disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
 	require.NoError(t, err)
 
@@ -193,24 +191,22 @@ func TestReaderCanReadUncommittedInMemInsertAndDeletes(t *testing.T) {
 		disttaeEngine *testutil.TestDisttaeEngine
 	)
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
 
 	schema := catalog2.MockSchemaAll(4, primaryKeyIdx)
 	schema.Name = tableName
 
-	opt, err := testutil.GetS3SharedFileServiceOption(ctx, testutil.GetDefaultTestPath("test", t))
-	require.NoError(t, err)
-
-	disttaeEngine, taeEngine, rpcAgent, mp = testutil.CreateEngines(ctx, testutil.TestOptions{TaeEngineOptions: opt}, t)
+	disttaeEngine, taeEngine, rpcAgent, mp = testutil.CreateEngines(ctx, testutil.TestOptions{}, t)
 	defer func() {
 		disttaeEngine.Close(ctx)
 		taeEngine.Close(true)
 		rpcAgent.Close()
 	}()
 
+	ctx, cancel = context.WithTimeout(ctx, time.Minute)
+	defer cancel()
 	_, _, err = disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
 	require.NoError(t, err)
 
@@ -265,7 +261,7 @@ func TestReaderCanReadUncommittedInMemInsertAndDeletes(t *testing.T) {
 
 func Test_ReaderCanReadCommittedInMemInsertAndDeletes(t *testing.T) {
 	var (
-		//err          error
+		err          error
 		mp           *mpool.MPool
 		accountId    = catalog.System_Account
 		tableName    = "test_reader_table"
@@ -278,14 +274,13 @@ func Test_ReaderCanReadCommittedInMemInsertAndDeletes(t *testing.T) {
 		disttaeEngine *testutil.TestDisttaeEngine
 	)
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
 
 	fault.Enable()
 	defer fault.Disable()
-	rmFault, err := objectio.InjectPartitionStateLogging(objectio.FJ_EmptyDB, catalog.MO_TABLES, 0)
+	rmFault, err := objectio.InjectLogPartitionState(objectio.FJ_EmptyDB, catalog.MO_TABLES, 0)
 	require.NoError(t, err)
 	defer rmFault()
 
@@ -297,12 +292,10 @@ func Test_ReaderCanReadCommittedInMemInsertAndDeletes(t *testing.T) {
 	schema.Name = tableName
 
 	{
-		opt, err := testutil.GetS3SharedFileServiceOption(ctx, testutil.GetDefaultTestPath("test", t))
-		require.NoError(t, err)
 
 		disttaeEngine, taeEngine, rpcAgent, mp = testutil.CreateEngines(
 			ctx,
-			testutil.TestOptions{TaeEngineOptions: opt},
+			testutil.TestOptions{},
 			t,
 			testutil.WithDisttaeEngineWorkspaceThreshold(mpool.MB*2),
 			testutil.WithDisttaeEngineInsertEntryMaxCount(10000),
@@ -313,6 +306,8 @@ func Test_ReaderCanReadCommittedInMemInsertAndDeletes(t *testing.T) {
 			rpcAgent.Close()
 		}()
 
+		ctx, cancel = context.WithTimeout(ctx, time.Minute)
+		defer cancel()
 		_, _, err = disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
 		require.NoError(t, err)
 
@@ -423,7 +418,7 @@ func Test_ReaderCanReadCommittedInMemInsertAndDeletes(t *testing.T) {
 
 func Test_ShardingHandler(t *testing.T) {
 	var (
-		//err          error
+		err error
 		//mp           *mpool.MPool
 		accountId    = catalog.System_Account
 		tableName    = "test_reader_table"
@@ -438,13 +433,12 @@ func Test_ShardingHandler(t *testing.T) {
 
 	fault.Enable()
 	defer fault.Disable()
-	rmFault, err := objectio.InjectPartitionStateLogging(catalog.MO_CATALOG, catalog.MO_TABLES, 0)
+	rmFault, err := objectio.InjectLogPartitionState(catalog.MO_CATALOG, catalog.MO_TABLES, 0)
 	require.NoError(t, err)
 	defer rmFault()
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
 
 	// mock a schema with 4 columns and the 4th column as primary key
@@ -455,12 +449,10 @@ func Test_ShardingHandler(t *testing.T) {
 	schema.Name = tableName
 
 	{
-		opt, err := testutil.GetS3SharedFileServiceOption(ctx, testutil.GetDefaultTestPath("test", t))
-		require.NoError(t, err)
 
 		disttaeEngine, taeEngine, rpcAgent, _ = testutil.CreateEngines(
 			ctx,
-			testutil.TestOptions{TaeEngineOptions: opt},
+			testutil.TestOptions{},
 			t,
 			testutil.WithDisttaeEngineWorkspaceThreshold(mpool.MB*2),
 			testutil.WithDisttaeEngineInsertEntryMaxCount(10000),
@@ -471,6 +463,8 @@ func Test_ShardingHandler(t *testing.T) {
 			rpcAgent.Close()
 		}()
 
+		ctx, cancel = context.WithTimeout(ctx, time.Minute)
+		defer cancel()
 		_, _, err = disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
 		require.NoError(t, err)
 
@@ -622,7 +616,7 @@ func Test_ShardingHandler(t *testing.T) {
 
 func Test_ShardingRemoteReader(t *testing.T) {
 	var (
-		//err          error
+		err          error
 		mp           *mpool.MPool
 		accountId    = catalog.System_Account
 		tableName    = "test_reader_table"
@@ -637,13 +631,12 @@ func Test_ShardingRemoteReader(t *testing.T) {
 
 	fault.Enable()
 	defer fault.Disable()
-	rmFault, err := objectio.InjectPartitionStateLogging(catalog.MO_CATALOG, objectio.FJ_EmptyTBL, 0)
+	rmFault, err := objectio.InjectLogPartitionState(catalog.MO_CATALOG, objectio.FJ_EmptyTBL, 0)
 	require.NoError(t, err)
 	defer rmFault()
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
 
 	// mock a schema with 4 columns and the 4th column as primary key
@@ -654,12 +647,9 @@ func Test_ShardingRemoteReader(t *testing.T) {
 	schema.Name = tableName
 
 	{
-		opt, err := testutil.GetS3SharedFileServiceOption(ctx, testutil.GetDefaultTestPath("test", t))
-		require.NoError(t, err)
-
 		disttaeEngine, taeEngine, rpcAgent, mp = testutil.CreateEngines(
 			ctx,
-			testutil.TestOptions{TaeEngineOptions: opt},
+			testutil.TestOptions{},
 			t,
 			testutil.WithDisttaeEngineWorkspaceThreshold(mpool.MB*2),
 			testutil.WithDisttaeEngineInsertEntryMaxCount(10000),
@@ -670,6 +660,8 @@ func Test_ShardingRemoteReader(t *testing.T) {
 			rpcAgent.Close()
 		}()
 
+		ctx, cancel = context.WithTimeout(ctx, time.Minute)
+		defer cancel()
 		_, _, err = disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
 		require.NoError(t, err)
 
@@ -932,7 +924,7 @@ func Test_ShardingRemoteReader(t *testing.T) {
 
 func Test_ShardingTableDelegate(t *testing.T) {
 	var (
-		//err          error
+		err error
 		//mp           *mpool.MPool
 		accountId    = catalog.System_Account
 		tableName    = "test_reader_table"
@@ -945,9 +937,8 @@ func Test_ShardingTableDelegate(t *testing.T) {
 		disttaeEngine *testutil.TestDisttaeEngine
 	)
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
 
 	// mock a schema with 4 columns and the 4th column as primary key
@@ -958,12 +949,9 @@ func Test_ShardingTableDelegate(t *testing.T) {
 	schema.Name = tableName
 
 	{
-		opt, err := testutil.GetS3SharedFileServiceOption(ctx, testutil.GetDefaultTestPath("test", t))
-		require.NoError(t, err)
-
 		disttaeEngine, taeEngine, rpcAgent, _ = testutil.CreateEngines(
 			ctx,
-			testutil.TestOptions{TaeEngineOptions: opt},
+			testutil.TestOptions{},
 			t,
 			testutil.WithDisttaeEngineWorkspaceThreshold(mpool.MB*2),
 			testutil.WithDisttaeEngineInsertEntryMaxCount(10000),
@@ -974,6 +962,8 @@ func Test_ShardingTableDelegate(t *testing.T) {
 			rpcAgent.Close()
 		}()
 
+		ctx, cancel = context.WithTimeout(ctx, time.Minute)
+		defer cancel()
 		_, _, err = disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
 		require.NoError(t, err)
 
@@ -1103,7 +1093,7 @@ func Test_ShardingTableDelegate(t *testing.T) {
 
 func Test_ShardingLocalReader(t *testing.T) {
 	var (
-		//err          error
+		err          error
 		mp           *mpool.MPool
 		accountId    = catalog.System_Account
 		tableName    = "test_reader_table"
@@ -1116,10 +1106,22 @@ func Test_ShardingLocalReader(t *testing.T) {
 		disttaeEngine *testutil.TestDisttaeEngine
 	)
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
+
+	fault.Enable()
+	defer fault.Disable()
+	rmFault1, err := objectio.InjectLogPartitionState(catalog.MO_CATALOG, objectio.FJ_EmptyTBL, 0)
+	require.NoError(t, err)
+	defer rmFault1()
+	rmFault2, err := objectio.InjectLogRanges(ctx, catalog.MO_TABLES)
+	require.NoError(t, err)
+	defer rmFault2()
+
+	rmFault5, err := objectio.InjectPrefetchThreshold(0)
+	require.NoError(t, err)
+	defer rmFault5()
 
 	// mock a schema with 4 columns and the 4th column as primary key
 	// the first column is the 9th column in the predefined columns in
@@ -1129,12 +1131,9 @@ func Test_ShardingLocalReader(t *testing.T) {
 	schema.Name = tableName
 
 	{
-		opt, err := testutil.GetS3SharedFileServiceOption(ctx, testutil.GetDefaultTestPath("test", t))
-		require.NoError(t, err)
-
 		disttaeEngine, taeEngine, rpcAgent, mp = testutil.CreateEngines(
 			ctx,
-			testutil.TestOptions{TaeEngineOptions: opt},
+			testutil.TestOptions{},
 			t,
 			testutil.WithDisttaeEngineWorkspaceThreshold(mpool.MB*2),
 			testutil.WithDisttaeEngineInsertEntryMaxCount(10000),
@@ -1145,6 +1144,8 @@ func Test_ShardingLocalReader(t *testing.T) {
 			rpcAgent.Close()
 		}()
 
+		ctx, cancel = context.WithTimeout(ctx, time.Minute)
+		defer cancel()
 		_, _, err = disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
 		require.NoError(t, err)
 

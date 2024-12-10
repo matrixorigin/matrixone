@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
+	"go.uber.org/zap"
 
 	"github.com/BurntSushi/toml"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -36,12 +37,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	gc2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc/v3"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/gc"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	w "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
@@ -279,94 +280,106 @@ func Open(
 		}, cmd_util.CheckerKeyTTL)
 	db.DiskCleaner = gc2.NewDiskCleaner(cleaner)
 	db.DiskCleaner.Start()
-	// Init gc manager at last
-	// TODO: clean-try-gc requires configuration parameters
-	cronJobs := []func(*gc.Manager){
-		gc.WithCronJob(
-			"clean-transfer-table",
-			opts.CheckpointCfg.TransferInterval,
-			func(_ context.Context) (err error) {
-				db.Runtime.PoolUsageReport()
-				db.Runtime.TransferDelsMap.Prune(opts.TransferTableTTL)
-				transferTable.RunTTL()
-				return
-			}),
 
-		gc.WithCronJob(
-			"disk-gc",
-			opts.GCCfg.ScanGCInterval,
-			func(ctx context.Context) (err error) {
-				db.DiskCleaner.GC(ctx)
+	db.CronJobs = tasks.NewCancelableJobs()
+
+	db.CronJobs.AddJob(
+		"GC-Transfer-Table",
+		opts.CheckpointCfg.TransferInterval,
+		func(ctx context.Context) {
+			db.Runtime.PoolUsageReport()
+			db.Runtime.TransferDelsMap.Prune(opts.TransferTableTTL)
+			transferTable.RunTTL()
+		},
+		1,
+	)
+	db.CronJobs.AddJob(
+		"GC-Disk",
+		opts.GCCfg.ScanGCInterval,
+		func(ctx context.Context) {
+			db.DiskCleaner.GC(ctx)
+		},
+		1,
+	)
+	db.CronJobs.AddJob(
+		"GC-Checkpoint",
+		opts.CheckpointCfg.GCCheckpointInterval,
+		func(ctx context.Context) {
+			if opts.CheckpointCfg.DisableGCCheckpoint {
 				return
-			}),
-		gc.WithCronJob(
-			"checkpoint-gc",
-			opts.CheckpointCfg.GCCheckpointInterval,
-			func(ctx context.Context) error {
-				if opts.CheckpointCfg.DisableGCCheckpoint {
-					return nil
-				}
-				gcWaterMark := db.DiskCleaner.GetCleaner().GetCheckpointGCWaterMark()
-				if gcWaterMark == nil {
-					return nil
-				}
-				return db.BGCheckpointRunner.GCByTS(ctx, *gcWaterMark)
-			}),
-		gc.WithCronJob(
-			"catalog-gc",
-			opts.CatalogCfg.GCInterval,
-			func(ctx context.Context) error {
-				if opts.CatalogCfg.DisableGC {
-					return nil
-				}
-				gcWaterMark := db.DiskCleaner.GetCleaner().GetScanWaterMark()
-				if gcWaterMark == nil {
-					return nil
-				}
-				db.Catalog.GCByTS(ctx, gcWaterMark.GetEnd())
-				return nil
-			}),
-		gc.WithCronJob(
-			"logtail-gc",
-			opts.CheckpointCfg.GCCheckpointInterval,
-			func(ctx context.Context) error {
-				logutil.Info(db.Runtime.ExportLogtailStats())
-				ckp := db.BGCheckpointRunner.MaxIncrementalCheckpoint()
-				if ckp != nil {
-					// use previous end to gc logtail
-					ts := types.BuildTS(ckp.GetStart().Physical(), 0) // GetStart is previous + 1, reset it here
-					db.LogtailMgr.GCByTS(ctx, ts)
-				}
-				return nil
-			},
-		),
-		gc.WithCronJob(
-			"prune-lockmerge",
-			options.DefaultLockMergePruneInterval,
-			func(ctx context.Context) error {
-				db.Runtime.LockMergeService.Prune()
-				return nil
-			},
-		),
-	}
+			}
+			gcWaterMark := db.DiskCleaner.GetCleaner().GetCheckpointGCWaterMark()
+			if gcWaterMark == nil {
+				return
+			}
+			if err := db.BGCheckpointRunner.GCByTS(ctx, *gcWaterMark); err != nil {
+				logutil.Error(
+					"GC-Checkpoint-Err",
+					zap.Error(err),
+				)
+			}
+		},
+		1,
+	)
+	db.CronJobs.AddJob(
+		"GC-Catalog-Cache",
+		opts.CatalogCfg.GCInterval,
+		func(ctx context.Context) {
+			if opts.CatalogCfg.DisableGC {
+				return
+			}
+			gcWaterMark := db.DiskCleaner.GetCleaner().GetScanWaterMark()
+			if gcWaterMark == nil {
+				return
+			}
+			db.Catalog.GCByTS(ctx, gcWaterMark.GetEnd())
+		},
+		1,
+	)
+	db.CronJobs.AddJob(
+		"GC-Logtail",
+		opts.CheckpointCfg.GCCheckpointInterval,
+		func(ctx context.Context) {
+			logutil.Info(db.Runtime.ExportLogtailStats())
+			ckp := db.BGCheckpointRunner.MaxIncrementalCheckpoint()
+			if ckp != nil {
+				ts := types.BuildTS(ckp.GetStart().Physical(), 0) // GetStart is previous + 1, reset it here
+				db.LogtailMgr.GCByTS(ctx, ts)
+			}
+		},
+		1,
+	)
+	db.CronJobs.AddJob(
+		"GC-LockMerge",
+		options.DefaultLockMergePruneInterval,
+		func(ctx context.Context) {
+			db.Runtime.LockMergeService.Prune()
+		},
+		1,
+	)
+
+	db.CronJobs.AddJob(
+		"REPORT-MPOOL-STATS",
+		time.Second*10,
+		func(ctx context.Context) {
+			mpoolAllocatorSubTask()
+		},
+		1,
+	)
+
 	if opts.CheckpointCfg.MetadataCheckInterval != 0 {
-		cronJobs = append(cronJobs,
-			gc.WithCronJob(
-				"metadata-check",
-				opts.CheckpointCfg.MetadataCheckInterval,
-				func(ctx context.Context) error {
-					db.Catalog.CheckMetadata()
-					return nil
-				}))
+		db.CronJobs.AddJob(
+			"META-CHECK",
+			opts.CheckpointCfg.MetadataCheckInterval,
+			func(ctx context.Context) {
+				db.Catalog.CheckMetadata()
+			},
+			1,
+		)
 	}
-	db.GCManager = gc.NewManager(cronJobs...)
-
-	db.GCManager.Start()
 
 	db.Controller = NewController(db)
 	db.Controller.Start()
-
-	go TaeMetricsTask(ctx)
 
 	// For debug or test
 	//fmt.Println(db.Catalog.SimplePPString(common.PPL3))
@@ -384,22 +397,6 @@ func Open(
 // 	}
 // 	db.Catalog.RecurLoop(p)
 // }
-
-func TaeMetricsTask(ctx context.Context) {
-	logutil.Info("tae metrics task started")
-	defer logutil.Info("tae metrics task exit")
-
-	timer := time.NewTicker(time.Second * 10)
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-timer.C:
-			mpoolAllocatorSubTask()
-		}
-	}
-
-}
 
 func mpoolAllocatorSubTask() {
 	v2.MemTAEDefaultAllocatorGauge.Set(float64(common.DefaultAllocator.CurrNB()))
