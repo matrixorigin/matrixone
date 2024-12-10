@@ -2902,3 +2902,138 @@ func TestCheckDbIsSubDb(t *testing.T) {
 		})
 	}
 }
+
+func Test_restoreViews(t *testing.T) {
+	convey.Convey("restoreViews", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
+		setPu("", pu)
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		rm, _ := NewRoutineManager(ctx, "")
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		viewMap := map[string]*tableInfo{}
+		err := restoreViews(ctx, ses, bh, "sp01", viewMap, 0)
+		assert.Error(t, err)
+
+		sql := "select * from mo_catalog.mo_snapshots where sname = 'sp01'"
+		// string/ string/ int64/ string/ string/ string/ string/ uint64
+		mrs := newMrsForPitrRecord([][]interface{}{{"1", "sp01", int64(0), "ACCOUNT", "sys", "", "", uint64(1)}})
+		bh.sql2result[sql] = mrs
+
+		sql = "select account_id, account_name, status, version, suspended_time from mo_catalog.mo_account where 1=1 and account_name = 'sys'"
+		mrs = newMrsForPitrRecord([][]interface{}{{uint64(0), "sys", "open", uint64(1), ""}})
+		bh.sql2result[sql] = mrs
+
+		err = restoreViews(ctx, ses, bh, "sp01", viewMap, 0)
+		assert.NoError(t, err)
+
+		viewMap = map[string]*tableInfo{
+			"view01": {
+				dbName:    "db01",
+				tblName:   "tbl01",
+				typ:       "VIEW",
+				createSql: "create view view01",
+			},
+		}
+		err = restoreViews(ctx, ses, bh, "sp01", viewMap, 0)
+		assert.Error(t, err)
+	})
+}
+
+func Test_restoreViewsWithPitr(t *testing.T) {
+	convey.Convey("restoreViewsWithPitr", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
+		setPu("", pu)
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		rm, _ := NewRoutineManager(ctx, "")
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		viewMap := map[string]*tableInfo{}
+		err := restoreViewsWithPitr(ctx, ses, bh, "sp01", 0, viewMap, "sys", 0)
+		assert.NoError(t, err)
+
+		viewMap = map[string]*tableInfo{
+			"view01": {
+				dbName:    "db01",
+				tblName:   "tbl01",
+				typ:       "VIEW",
+				createSql: "create view view01",
+			},
+		}
+		err = restoreViewsWithPitr(ctx, ses, bh, "sp01", 0, viewMap, "sys", 0)
+		assert.Error(t, err)
+
+		viewMap = map[string]*tableInfo{
+			"view01": {
+				dbName:    "db01",
+				tblName:   "tbl01",
+				typ:       "VIEW",
+				createSql: "create database db02",
+			},
+		}
+		err = restoreViewsWithPitr(ctx, ses, bh, "sp01", 0, viewMap, "sys", 0)
+		assert.NoError(t, err)
+	})
+}
