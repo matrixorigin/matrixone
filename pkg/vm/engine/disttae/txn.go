@@ -543,11 +543,11 @@ func (txn *Transaction) dumpInsertBatchLocked(ctx context.Context, offset int, s
 			*size += uint64(bat.Size())
 			*pkCount += bat.RowCount()
 			// skip rowid
-			newBat := batch.NewWithSize(len(bat.Vecs) - 1)
-			newBat.SetAttributes(bat.Attrs[1:])
-			newBat.Vecs = bat.Vecs[1:]
-			newBat.SetRowCount(bat.Vecs[0].Length())
-			mp[tbKey] = append(mp[tbKey], newBat)
+			newBatch := batch.NewWithSize(len(bat.Vecs) - 1)
+			newBatch.SetAttributes(bat.Attrs[1:])
+			newBatch.Vecs = bat.Vecs[1:]
+			newBatch.SetRowCount(bat.Vecs[0].Length())
+			mp[tbKey] = append(mp[tbKey], newBatch)
 			defer bat.Clean(txn.proc.Mp())
 
 			keepElement = false
