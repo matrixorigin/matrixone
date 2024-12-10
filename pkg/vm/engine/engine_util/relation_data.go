@@ -18,8 +18,6 @@ import (
 	"bytes"
 	"fmt"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -103,13 +101,13 @@ func (or *ObjListRelData) AppendShardID(id uint64) {
 }
 
 func (or *ObjListRelData) Split(i int) []engine.RelData {
-	logutil.Infof("objlist rel data split!!!!!!!!!!!!")
 	or.expand()
 	return or.blocklistRelData.Split(i)
 }
 
 func (or *ObjListRelData) GetBlockInfoSlice() objectio.BlockInfoSlice {
-	panic("not supported")
+	or.expand()
+	return or.blocklistRelData.GetBlockInfoSlice()
 }
 
 func (or *ObjListRelData) BuildEmptyRelData(i int) engine.RelData {
@@ -117,23 +115,28 @@ func (or *ObjListRelData) BuildEmptyRelData(i int) engine.RelData {
 }
 
 func (or *ObjListRelData) GetBlockInfo(i int) objectio.BlockInfo {
-	panic("not supported")
+	or.expand()
+	return or.blocklistRelData.GetBlockInfo(i)
 }
 
 func (or *ObjListRelData) SetBlockInfo(i int, blk *objectio.BlockInfo) {
-	panic("not supported")
+	or.expand()
+	or.blocklistRelData.SetBlockInfo(i, blk)
 }
 
 func (or *ObjListRelData) SetBlockList(slice objectio.BlockInfoSlice) {
-	panic("not supported")
+	or.expand()
+	or.blocklistRelData.SetBlockList()
 }
 
 func (or *ObjListRelData) AppendBlockInfo(blk *objectio.BlockInfo) {
-	panic("not supported")
+	or.expand()
+	or.blocklistRelData.AppendBlockInfo(blk)
 }
 
 func (or *ObjListRelData) AppendBlockInfoSlice(slice objectio.BlockInfoSlice) {
-	panic("not supported")
+	or.expand()
+	or.blocklistRelData.AppendBlockInfoSlice(slice)
 }
 
 func (or *ObjListRelData) UnmarshalBinary(buf []byte) error {
@@ -154,11 +157,13 @@ func (or *ObjListRelData) GetTombstones() engine.Tombstoner {
 }
 
 func (or *ObjListRelData) DataSlice(i, j int) engine.RelData {
-	panic("not supported")
+	or.expand()
+	return or.blocklistRelData.DataSlice(i, j)
 }
 
 func (or *ObjListRelData) GroupByPartitionNum() map[int16]engine.RelData {
-	panic("not supported")
+	or.expand()
+	return or.blocklistRelData.GroupByPartitionNum()
 }
 
 func (or *ObjListRelData) DataCnt() int {
