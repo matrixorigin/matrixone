@@ -349,23 +349,19 @@ func makeCountBatchFT(proc *process.Process) *batch.Batch {
 	return bat
 }
 
-// create (doc_id, pos, text)
+// create (doc_id, text)
 func makeTextBatchFT(proc *process.Process) *batch.Batch {
-	bat := batch.NewWithSize(3)
-	bat.Vecs[0] = vector.NewVec(types.New(types.T_int32, 4, 0))     // doc_id
-	bat.Vecs[1] = vector.NewVec(types.New(types.T_int32, 4, 0))     // pos
-	bat.Vecs[2] = vector.NewVec(types.New(types.T_varchar, 256, 0)) // text
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = vector.NewVec(types.New(types.T_int32, 4, 0)) // doc_id
+	bat.Vecs[1] = vector.NewVec(types.New(types.T_int32, 4, 0)) // word index
 
 	nitem := 8192*3 + 1
 	for i := 0; i < nitem; i++ {
 		// doc_id
 		vector.AppendFixed[int32](bat.Vecs[0], int32(i), false, proc.Mp())
 
-		// pos
-		vector.AppendFixed[int32](bat.Vecs[1], int32(i+1), false, proc.Mp())
-
-		// word
-		vector.AppendBytes(bat.Vecs[2], []byte("pattern"), false, proc.Mp())
+		// word index
+		vector.AppendFixed[int32](bat.Vecs[1], int32(0), false, proc.Mp())
 	}
 
 	bat.SetRowCount(nitem)

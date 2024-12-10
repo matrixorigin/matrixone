@@ -40,10 +40,6 @@ import (
    4. return result as answer
 */
 
-func NewWordAccum() *WordAccum {
-	return &WordAccum{Words: make(map[any]*Word)}
-}
-
 func NewSearchAccum(srctbl string, tblname string, pattern string, mode int64, params string) (*SearchAccum, error) {
 
 	ps, err := ParsePattern(pattern, mode)
@@ -51,7 +47,9 @@ func NewSearchAccum(srctbl string, tblname string, pattern string, mode int64, p
 		return nil, err
 	}
 
-	return &SearchAccum{SrcTblName: srctbl, TblName: tblname, Mode: mode, Pattern: ps, Params: params, WordAccums: make(map[string]*WordAccum)}, nil
+	nwords := GetTextCountFromPattern(ps)
+	return &SearchAccum{SrcTblName: srctbl, TblName: tblname, Mode: mode, Pattern: ps, Params: params, Agghtab: make(map[any][]uint8, 1024),
+		Aggcnt: make([]int64, nwords), Nkeywords: nwords}, nil
 }
 
 func findPatternByOperator(ps []*Pattern, op int) []*Pattern {
@@ -88,8 +86,8 @@ func (s *SearchAccum) PatternAnyPlus() bool {
 }
 
 // Evaluate the search string
-func (s *SearchAccum) Eval() (map[any]float32, error) {
-	var result map[any]float32
+func (s *SearchAccum) Eval(docvec []uint8, aggcnt []int64) ([]float32, error) {
+	var result []float32
 	var err error
 
 	if s.Nrow == 0 {
@@ -97,7 +95,7 @@ func (s *SearchAccum) Eval() (map[any]float32, error) {
 	}
 
 	for _, p := range s.Pattern {
-		result, err = p.Eval(s, float32(1.0), result)
+		result, err = p.Eval(s, docvec, aggcnt, float32(1.0), result)
 		if err != nil {
 			return nil, err
 		}
@@ -109,7 +107,7 @@ func (s *SearchAccum) Eval() (map[any]float32, error) {
 // Pattern
 func (p *Pattern) String() string {
 	if p.Operator == TEXT || p.Operator == STAR {
-		return fmt.Sprintf("(%s %s)", OperatorToString(p.Operator), p.Text)
+		return fmt.Sprintf("(%s %d %s)", OperatorToString(p.Operator), p.Index, p.Text)
 	}
 
 	str := fmt.Sprintf("(%s ", OperatorToString(p.Operator))
@@ -126,7 +124,7 @@ func (p *Pattern) String() string {
 
 func (p *Pattern) StringWithPosition() string {
 	if p.Operator == TEXT || p.Operator == STAR {
-		return fmt.Sprintf("(%s %d %s)", OperatorToString(p.Operator), p.Position, p.Text)
+		return fmt.Sprintf("(%s %d %d %s)", OperatorToString(p.Operator), p.Index, p.Position, p.Text)
 	}
 
 	str := fmt.Sprintf("(%s ", OperatorToString(p.Operator))
@@ -155,25 +153,29 @@ func (p *Pattern) GetLeafText(operator int) []string {
 }
 
 // Eval leaf node.  compute the tfidf from the data in WordAccums and return result as map[doc_id]float32
-func (p *Pattern) EvalLeaf(s *SearchAccum, weight float32, result map[any]float32) (map[any]float32, error) {
-	key := p.Text
-	acc, ok := s.WordAccums[key]
-	if !ok {
+func (p *Pattern) EvalLeaf(s *SearchAccum, docvec []uint8, aggcnt []int64, weight float32, result []float32) ([]float32, error) {
+	index := p.Index
+	cnt := docvec[index]
+
+	if cnt == 0 {
 		// never return nil result
-		result = make(map[any]float32)
+		result = []float32{}
 		return result, nil
 	}
 
 	if result == nil {
-		result = make(map[any]float32)
+		result = []float32{}
 	}
 
-	nmatch := float64(len(acc.Words))
+	nmatch := float64(aggcnt[index])
 	idf := math.Log10(float64(s.Nrow) / nmatch)
 	idfSq := float32(idf * idf)
-	for doc_id := range acc.Words {
-		tf := float32(acc.Words[doc_id].DocCount)
-		result[doc_id] = weight * tf * idfSq
+	tf := float32(docvec[index])
+	score := weight * tf * idfSq
+	if len(result) > 0 {
+		result[0] = score
+	} else {
+		result = append(result, score)
 	}
 
 	return result, nil
@@ -181,85 +183,71 @@ func (p *Pattern) EvalLeaf(s *SearchAccum, weight float32, result map[any]float3
 
 // Eval Plus Plus operation.  Basically AND operation between input argument and result from the previous Eval()
 // e.g. (+ (text apple)) (+ (text banana))
-func (p *Pattern) EvalPlusPlus(s *SearchAccum, arg, result map[any]float32) (map[any]float32, error) {
+func (p *Pattern) EvalPlusPlus(s *SearchAccum, docvec []uint8, aggcnt []int64, arg, result []float32) ([]float32, error) {
 	if result == nil {
-		result = make(map[any]float32)
+		result = []float32{}
 		return result, nil
 	}
 
-	keys := make([]any, 0, len(result))
-	for key := range result {
-		keys = append(keys, key)
+	if len(arg) == 0 {
+		return []float32{}, nil
 	}
-	for _, doc_id := range keys {
-		_, ok := arg[doc_id]
-		if ok {
-			result[doc_id] += arg[doc_id]
-		} else {
-			delete(result, doc_id)
-		}
+
+	if len(result) > 0 {
+		result[0] += arg[0]
 	}
 	return result, nil
 }
 
 // Eval Plus OR.  The previous result from Eval() is a Plus Operator and current Pattern is a Text or Star.
 // e.g. (+ (text apple)) (text banana)
-func (p *Pattern) EvalPlusOR(s *SearchAccum, arg, result map[any]float32) (map[any]float32, error) {
+func (p *Pattern) EvalPlusOR(s *SearchAccum, docvec []uint8, aggcnt []int64, arg, result []float32) ([]float32, error) {
 	if result == nil {
-		result = make(map[any]float32)
+		result = []float32{}
 		return result, nil
 	}
 
-	keys := make([]any, 0, len(result))
-	for key := range result {
-		keys = append(keys, key)
+	if len(arg) > 0 && len(result) > 0 {
+		result[0] += arg[0]
 	}
-	for _, doc_id := range keys {
-		_, ok := arg[doc_id]
-		if ok {
-			result[doc_id] += arg[doc_id]
-		}
-	}
+
 	return result, nil
 }
 
 // Minus operation.  Remove the result when doc_id is present in argument
 // e.g. (+ (text apple)) (- (text banana))
-func (p *Pattern) EvalMinus(s *SearchAccum, arg, result map[any]float32) (map[any]float32, error) {
+func (p *Pattern) EvalMinus(s *SearchAccum, docvec []uint8, aggcnt []int64, arg, result []float32) ([]float32, error) {
 	if result == nil {
-		result = make(map[any]float32)
+		result = []float32{}
 		return result, nil
 	}
 
-	for doc_id := range arg {
-		_, ok := result[doc_id]
-		if ok {
-			// remove from result
-			delete(result, doc_id)
-		}
+	if len(arg) > 0 {
+		return []float32{}, nil
 	}
+
 	return result, nil
 }
 
 // OR operation. Either apple and banana can be the result
 // e.g. (text apple) (text banana)
-func (p *Pattern) EvalOR(s *SearchAccum, arg, result map[any]float32) (map[any]float32, error) {
+func (p *Pattern) EvalOR(s *SearchAccum, docvec []uint8, aggcnt []int64, arg, result []float32) ([]float32, error) {
 	if result == nil {
-		result = make(map[any]float32)
+		result = []float32{}
 	}
 
-	for doc_id := range arg {
-		_, ok := result[doc_id]
-		if ok {
-			result[doc_id] += arg[doc_id]
+	if len(arg) > 0 {
+		if len(result) == 0 {
+			result = arg
 		} else {
-			result[doc_id] = arg[doc_id]
+			result[0] += arg[0]
 		}
 	}
 
 	return result, nil
 }
 
+/*
 func (p *Pattern) EvalPhrase(s *SearchAccum, arg map[any]float32) (map[any]float32, error) {
 	// check word order here
 
@@ -300,6 +288,7 @@ func (p *Pattern) EvalPhrase(s *SearchAccum, arg map[any]float32) (map[any]float
 
 	return result, nil
 }
+*/
 
 // Get the weight for compute the TFIDF
 // LESSTHAN is lower the ranking
@@ -319,67 +308,66 @@ func (p *Pattern) GetWeight() float32 {
 }
 
 // Combine two score maps into single map. max(float32) will return when same doc_id (key) exists in both arg and result.
-func (p *Pattern) Combine(s *SearchAccum, arg, result map[any]float32) (map[any]float32, error) {
+func (p *Pattern) Combine(s *SearchAccum, docvec []uint8, aggcnt []int64, arg, result []float32) ([]float32, error) {
 	if result == nil {
 		return arg, nil
 	}
-	for k1 := range arg {
-		v1 := arg[k1]
-		v, ok := result[k1]
-		if ok {
+
+	if len(arg) > 0 {
+		if len(result) > 0 {
 			// max
-			if v1 > v {
-				result[k1] = v1
+			if arg[0] > result[0] {
+				result[0] = arg[0]
 			}
 		} else {
-			result[k1] = v1
+			result = arg
 		}
 	}
 	return result, nil
 }
 
 // Eval() function to evaluate the previous result from Eval and the current pattern (with data from datasource)  and return map[doc_id]float32
-func (p *Pattern) Eval(accum *SearchAccum, weight float32, result map[any]float32) (map[any]float32, error) {
+func (p *Pattern) Eval(accum *SearchAccum, docvec []uint8, aggcnt []int64, weight float32, result []float32) ([]float32, error) {
 	switch p.Operator {
 	case TEXT, STAR:
 		// leaf node: TEXT, STAR
 		// calculate the score with weight
 		if result == nil {
-			return p.EvalLeaf(accum, weight, result)
+			return p.EvalLeaf(accum, docvec, aggcnt, weight, result)
 		} else {
-			child_result, err := p.EvalLeaf(accum, weight, nil)
+			child_result, err := p.EvalLeaf(accum, docvec, aggcnt, weight, nil)
 			if err != nil {
 				return nil, err
 			}
 			if accum.PatternAnyPlus() {
-				return p.EvalPlusOR(accum, child_result, result)
+				return p.EvalPlusOR(accum, docvec, aggcnt, child_result, result)
 			} else {
-				return p.EvalOR(accum, child_result, result)
+				return p.EvalOR(accum, docvec, aggcnt, child_result, result)
 			}
 		}
 
 	case PLUS:
 		if result == nil {
-			return p.Children[0].Eval(accum, weight, nil)
+			return p.Children[0].Eval(accum, docvec, aggcnt, weight, nil)
 		} else {
-			child_result, err := p.Children[0].Eval(accum, weight, nil)
+			child_result, err := p.Children[0].Eval(accum, docvec, aggcnt, weight, nil)
 			if err != nil {
 				return nil, err
 			}
 
-			return p.EvalPlusPlus(accum, child_result, result)
+			return p.EvalPlusPlus(accum, docvec, aggcnt, child_result, result)
 		}
 	case MINUS:
 		if result == nil {
-			result = make(map[any]float32)
+			result = []float32{}
 			return result, nil
 		} else {
-			child_result, err := p.Children[0].Eval(accum, weight, nil)
+			child_result, err := p.Children[0].Eval(accum, docvec, aggcnt, weight, nil)
 			if err != nil {
 				return nil, err
 			}
 
-			return p.EvalMinus(accum, child_result, result)
+			return p.EvalMinus(accum, docvec, aggcnt, child_result, result)
 		}
 
 	case LESSTHAN, GREATERTHAN:
@@ -387,44 +375,44 @@ func (p *Pattern) Eval(accum *SearchAccum, weight float32, result map[any]float3
 		weight *= p.GetWeight()
 
 		if result == nil {
-			return p.Children[0].Eval(accum, weight, nil)
+			return p.Children[0].Eval(accum, docvec, aggcnt, weight, nil)
 		} else {
-			child_result, err := p.Children[0].Eval(accum, weight, nil)
+			child_result, err := p.Children[0].Eval(accum, docvec, aggcnt, weight, nil)
 			if err != nil {
 				return nil, err
 			}
 
-			return p.EvalOR(accum, child_result, result)
+			return p.EvalOR(accum, docvec, aggcnt, child_result, result)
 		}
 	case RANKLESS:
 		// get weight by type
 		weight *= p.GetWeight()
 
 		if result == nil {
-			return p.Children[0].Eval(accum, weight, nil)
+			return p.Children[0].Eval(accum, docvec, aggcnt, weight, nil)
 		} else {
-			child_result, err := p.Children[0].Eval(accum, weight, nil)
+			child_result, err := p.Children[0].Eval(accum, docvec, aggcnt, weight, nil)
 			if err != nil {
 				return nil, err
 			}
 
 			// OR
 			if accum.PatternAnyPlus() {
-				return p.EvalPlusOR(accum, child_result, result)
+				return p.EvalPlusOR(accum, docvec, aggcnt, child_result, result)
 			} else {
-				return p.EvalOR(accum, child_result, result)
+				return p.EvalOR(accum, docvec, aggcnt, child_result, result)
 			}
 		}
 	case GROUP:
-		result := make(map[any]float32)
+		result := []float32{}
 		for _, c := range p.Children {
-			child_result, err := c.Eval(accum, weight, nil)
+			child_result, err := c.Eval(accum, docvec, aggcnt, weight, nil)
 			if err != nil {
 				return nil, err
 			}
 
 			// COMBINE results from children
-			result, err = p.Combine(accum, child_result, result)
+			result, err = p.Combine(accum, docvec, aggcnt, child_result, result)
 			if err != nil {
 				return nil, err
 			}
@@ -434,7 +422,7 @@ func (p *Pattern) Eval(accum *SearchAccum, weight float32, result map[any]float3
 	case PHRASE:
 		// all children are TEXT and AND operations
 		for i, c := range p.Children {
-			child_result, err := c.Eval(accum, weight, nil)
+			child_result, err := c.Eval(accum, docvec, aggcnt, weight, nil)
 			if err != nil {
 				return nil, err
 			}
@@ -443,7 +431,7 @@ func (p *Pattern) Eval(accum *SearchAccum, weight float32, result map[any]float3
 				result = child_result
 			} else {
 				// AND operators with the results
-				result, err = c.EvalPlusPlus(accum, child_result, result)
+				result, err = c.EvalPlusPlus(accum, docvec, aggcnt, child_result, result)
 				if err != nil {
 					return nil, err
 				}
@@ -451,7 +439,7 @@ func (p *Pattern) Eval(accum *SearchAccum, weight float32, result map[any]float3
 		}
 
 		// check word order
-		return p.EvalPhrase(accum, result)
+		return result, nil // p.EvalPhrase(accum, result)
 	default:
 		return nil, moerr.NewInternalErrorNoCtx("Eval() not handled")
 	}
@@ -625,7 +613,16 @@ func ParsePhrase(pattern string) ([]*Pattern, error) {
 	}
 
 	children = append(children, &Pattern{Text: string(pattern[offset:]), Operator: TEXT, Position: offset})
-	return []*Pattern{{Text: pattern, Operator: PHRASE, Children: children}}, nil
+	ret := []*Pattern{{Text: pattern, Operator: PHRASE, Children: children}}
+
+	// assign index
+	idx := int32(0)
+	for _, p := range ret {
+		assignPatternIndex(p, &idx)
+	}
+
+	return ret, nil
+
 }
 
 // Parse the search string in boolean mode
@@ -734,7 +731,90 @@ func ParsePatternInBooleanMode(pattern string) ([]*Pattern, error) {
 		}
 
 	}
+
+	// assign index
+	idx := int32(0)
+	for _, p := range tokens {
+		assignPatternIndex(p, &idx)
+	}
+
 	return tokens, nil
+}
+
+// assign word index to TEXT and START Node
+func assignPatternIndex(pattern *Pattern, idx *int32) {
+
+	if pattern.Operator == TEXT || pattern.Operator == STAR {
+		pattern.Index = *idx
+		(*idx)++
+		return
+	}
+
+	for _, p := range pattern.Children {
+		assignPatternIndex(p, idx)
+	}
+}
+
+func GetTextFromPattern(pattern *Pattern, text []string, index []int32) ([]string, []int32) {
+
+	if pattern.Operator == TEXT {
+		text = append(text, pattern.Text)
+		index = append(index, pattern.Index)
+		return text, index
+	}
+
+	for _, p := range pattern.Children {
+		text, index = GetTextFromPattern(p, text, index)
+	}
+	return text, index
+}
+
+func GetStarFromPattern(pattern *Pattern, text []string, index []int32) ([]string, []int32) {
+
+	if pattern.Operator == STAR {
+		text = append(text, pattern.Text)
+		index = append(index, pattern.Index)
+		return text, index
+	}
+
+	for _, p := range pattern.Children {
+		text, index = GetStarFromPattern(p, text, index)
+	}
+	return text, index
+}
+
+func GetPhraseTextFromPattern(pattern *Pattern, text []string, index []int32, pos []int32) ([]string, []int32, []int32) {
+
+	if pattern.Operator == TEXT {
+		text = append(text, pattern.Text)
+		index = append(index, pattern.Index)
+		pos = append(pos, pattern.Position)
+		return text, index, pos
+	}
+
+	for _, p := range pattern.Children {
+		text, index, pos = GetPhraseTextFromPattern(p, text, index, pos)
+	}
+	return text, index, pos
+}
+
+func getTextCount(pattern *Pattern, cnt *int) {
+	if pattern.Operator == TEXT || pattern.Operator == STAR {
+		(*cnt)++
+		return
+	}
+
+	for _, p := range pattern.Children {
+		getTextCount(p, cnt)
+	}
+}
+
+func GetTextCountFromPattern(ps []*Pattern) int {
+	cnt := 0
+	for _, p := range ps {
+		getTextCount(p, &cnt)
+	}
+	return cnt
 }
 
 // Parse search string in natural language mode
@@ -754,6 +834,12 @@ func ParsePatternInNLMode(pattern string) ([]*Pattern, error) {
 		word := string(t.TokenBytes[1 : slen+1])
 
 		list = append(list, &Pattern{Text: word, Operator: TEXT})
+	}
+
+	// assign index
+	idx := int32(0)
+	for _, p := range list {
+		assignPatternIndex(p, &idx)
 	}
 
 	return list, nil

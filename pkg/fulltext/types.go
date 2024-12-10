@@ -55,18 +55,6 @@ type FullTextParserParam struct {
 	Parser string `json:"parser"`
 }
 
-// Word is associated with particular DocId (index.doc_id) and could have multiple positions
-type Word struct {
-	DocId    any
-	Position []int32
-	DocCount int32
-}
-
-// Word accumulator accumulate the same word appeared in multiple (index.doc_id).
-type WordAccum struct {
-	Words map[any]*Word
-}
-
 // Search accumulator is to parse the search string into list of pattern and each pattern will associate with WordAccum by pattern.Text
 type SearchAccum struct {
 	SrcTblName string
@@ -74,8 +62,10 @@ type SearchAccum struct {
 	Mode       int64
 	Pattern    []*Pattern
 	Params     string
-	WordAccums map[string]*WordAccum
 	Nrow       int64
+	Agghtab    map[any][]uint8
+	Aggcnt     []int64
+	Nkeywords  int
 }
 
 // Boolean mode search string parsing
@@ -124,4 +114,5 @@ type Pattern struct {
 	Operator int
 	Children []*Pattern
 	Position int32
+	Index    int32
 }
