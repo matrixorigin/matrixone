@@ -300,8 +300,8 @@ Table    Create Table
 index01    CREATE TABLE `index01` (\n  `a` int NOT NULL,\n  `bNew` char(10) DEFAULT NULL,\n  `c` date DEFAULT NULL,\n  `d` decimal(7,2) DEFAULT NULL,\n  UNIQUE KEY `a` (`a`,`bNew`)\n)
 show index from index01;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-index01    0    a    1    a    A    0    NULL    NULL                        YES    NULL
-index01    0    a    2    bNew    A    0    NULL    NULL    YES                    YES    NULL
+index01    0    a    1    a    A    0    NULL    NULL                        YES    a
+index01    0    a    2    bNew    A    0    NULL    NULL    YES                    YES    bNew
 insert into index01 (a, b, c, d) values (5, 'bh', '1999-01-01', 3000);
 Unknown column 'b' in 'index01'
 insert into index01 (a, bnew, c, d) values (5, 'bh', '1999-01-01', 3000);
@@ -363,10 +363,10 @@ a    bnewnew    c    d
 3    database    1981-02-22    500.00
 show index from index02;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-index02    1    a    1    a    A    0    NULL    NULL                        YES    NULL
-index02    1    a    2    bNewNew    A    0    NULL    NULL    YES                    YES    NULL
-index02    1    c    1    c    A    0    NULL    NULL    YES                    YES    NULL
-index02    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    NULL
+index02    1    a    1    a    A    0    NULL    NULL                        YES    a
+index02    1    a    2    bNewNew    A    0    NULL    NULL    YES                    YES    bNewNew
+index02    1    c    1    c    A    0    NULL    NULL    YES                    YES    c
+index02    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    a
 show columns from index02;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        

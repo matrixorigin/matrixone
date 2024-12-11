@@ -224,7 +224,8 @@ func (entry *flushTableTailEntry) collectDelsAndTransfer(
 			row := rowid[i].GetRowOffset()
 			destpos, ok := mapping[row]
 			if !ok {
-				panic(fmt.Sprintf("%s find no transfer mapping for row %d", obj.ID().String(), row))
+				err = moerr.NewInternalErrorNoCtxf("%s find no transfer mapping for row %d", obj.ID().String(), row)
+				return
 			}
 			blkID := objectio.NewBlockidWithObjectID(entry.createdObjHandle.GetID(), destpos.BlkIdx)
 			entry.delTbls[destpos.BlkIdx] = blkID

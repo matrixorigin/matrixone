@@ -48,12 +48,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/gc"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/rpchandle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 
 	"go.uber.org/zap"
 )
@@ -64,9 +64,9 @@ const (
 )
 
 type Handle struct {
-	db        *db.DB
-	txnCtxs   *common.Map[string, *txnContext]
-	GCManager *gc.Manager
+	db      *db.DB
+	txnCtxs *common.Map[string, *txnContext]
+	GCJob   *tasks.CancelableJob
 
 	interceptMatchRegexp atomic.Pointer[regexp.Regexp]
 }
@@ -122,16 +122,16 @@ func NewTAEHandle(ctx context.Context, path string, opt *options.Options) *Handl
 	}
 	h.txnCtxs = common.NewMap[string, *txnContext](runtime.GOMAXPROCS(0))
 	h.interceptMatchRegexp.Store(regexp.MustCompile(`.*bmsql_stock.*`))
-	h.GCManager = gc.NewManager(
-		gc.WithCronJob(
-			"clean-txn-cache",
-			MAX_TXN_COMMIT_LATENCY,
-			func(ctx context.Context) error {
-				return h.GCCache(time.Now())
-			},
-		),
+	h.GCJob = tasks.NewCancelableCronJob(
+		"clean-txn-cache",
+		MAX_TXN_COMMIT_LATENCY,
+		func(ctx context.Context) {
+			h.GCCache(time.Now())
+		},
+		true,
+		1,
 	)
-	h.GCManager.Start()
+	h.GCJob.Start()
 
 	return h
 }
@@ -556,8 +556,8 @@ func (h *Handle) HandleRollback(
 
 func (h *Handle) HandleClose(ctx context.Context) (err error) {
 	//FIXME::should wait txn request's job done?
-	if h.GCManager != nil {
-		h.GCManager.Stop()
+	if h.GCJob != nil {
+		h.GCJob.Stop()
 	}
 	return h.db.Close()
 }
@@ -669,7 +669,8 @@ func (h *Handle) HandleCreateRelation(
 			)
 		})
 		ctx = defines.AttachAccount(ctx, c.AccountId, c.Creator, c.Owner)
-		dbH, err := txn.GetDatabaseWithCtx(ctx, c.DatabaseName)
+		txn.BindAccessInfo(c.AccountId, c.Creator, c.Owner)
+		dbH, err := txn.GetDatabaseByID(c.DatabaseId)
 		if err != nil {
 			return err
 		}

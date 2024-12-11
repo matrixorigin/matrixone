@@ -244,11 +244,10 @@ func initMoTableStatsConfig(
 	ctx context.Context,
 	eng *Engine,
 ) (err error) {
-
-	dynamicCtx.once.Do(func() {
+	eng.dynamicCtx.once.Do(func() {
 
 		defer func() {
-			dynamicCtx.defaultConf = dynamicCtx.conf
+			eng.dynamicCtx.defaultConf = eng.dynamicCtx.conf
 			if err != nil {
 				logutil.Error(logHeader,
 					zap.String("source", "init mo table stats config"),
@@ -256,49 +255,49 @@ func initMoTableStatsConfig(
 			}
 		}()
 
-		dynamicCtx.de = eng
+		eng.dynamicCtx.de = eng
 
-		if dynamicCtx.alphaTaskPool, err = ants.NewPool(
+		if eng.dynamicCtx.alphaTaskPool, err = ants.NewPool(
 			runtime.NumCPU(),
 			ants.WithNonblocking(false)); err != nil {
 			return
 		}
 
-		dynamicCtx.conf = eng.config.statsConf
+		eng.dynamicCtx.conf = eng.config.statsConf
 
-		function.MoTableRowsSizeUseOldImpl.Store(dynamicCtx.conf.DisableStatsTask)
+		function.MoTableRowsSizeUseOldImpl.Store(eng.dynamicCtx.conf.DisableStatsTask)
 
-		dynamicCtx.executorPool = sync.Pool{
+		eng.dynamicCtx.executorPool = sync.Pool{
 			New: func() interface{} {
 				return eng.config.ieFactory()
 			},
 		}
 
-		dynamicCtx.sqlOpts = ie.NewOptsBuilder().Database(catalog.MO_CATALOG).Internal(true).Finish()
+		eng.dynamicCtx.sqlOpts = ie.NewOptsBuilder().Database(catalog.MO_CATALOG).Internal(true).Finish()
 
-		if dynamicCtx.conf.GetTableListLimit <= 0 {
-			dynamicCtx.conf.GetTableListLimit = defaultGetTableListLimit
+		if eng.dynamicCtx.conf.GetTableListLimit <= 0 {
+			eng.dynamicCtx.conf.GetTableListLimit = defaultGetTableListLimit
 		}
 
-		if dynamicCtx.conf.UpdateDuration <= 0 {
-			dynamicCtx.conf.UpdateDuration = defaultAlphaCycleDur
+		if eng.dynamicCtx.conf.UpdateDuration <= 0 {
+			eng.dynamicCtx.conf.UpdateDuration = defaultAlphaCycleDur
 		}
 
-		if dynamicCtx.conf.CorrectionDuration <= 0 {
-			dynamicCtx.conf.CorrectionDuration = defaultGamaCycleDur
+		if eng.dynamicCtx.conf.CorrectionDuration <= 0 {
+			eng.dynamicCtx.conf.CorrectionDuration = defaultGamaCycleDur
 		}
 
-		dynamicCtx.objIdsPool = sync.Pool{
+		eng.dynamicCtx.objIdsPool = sync.Pool{
 			New: func() interface{} {
 				objIds := make([]types.Objectid, 0)
 				return &objIds
 			},
 		}
 
-		dynamicCtx.tblQueue = make(chan tablePair, options.DefaultBlockMaxRows*2)
+		eng.dynamicCtx.tblQueue = make(chan tablePair, options.DefaultBlockMaxRows*2)
 
-		dynamicCtx.cleanDeletesQueue = make(chan struct{})
-		dynamicCtx.updateForgottenQueue = make(chan struct{})
+		eng.dynamicCtx.cleanDeletesQueue = make(chan struct{})
+		eng.dynamicCtx.updateForgottenQueue = make(chan struct{})
 
 		// registerMoTableSizeRows
 		{
@@ -306,7 +305,7 @@ func initMoTableStatsConfig(
 				context.Context,
 				[]uint64, []uint64, []uint64,
 				engine.Engine, bool, bool) ([]uint64, error) {
-				return MTSTableSize
+				return eng.dynamicCtx.MTSTableSize
 			}
 			function.GetMoTableSizeFunc.Store(&ff1)
 
@@ -314,18 +313,18 @@ func initMoTableStatsConfig(
 				context.Context,
 				[]uint64, []uint64, []uint64,
 				engine.Engine, bool, bool) ([]uint64, error) {
-				return MTSTableRows
+				return eng.dynamicCtx.MTSTableRows
 			}
 			function.GetMoTableRowsFunc.Store(&ff2)
 		}
 
-		dynamicCtx.tableStock.tbls = make([]tablePair, 0, 1)
+		eng.dynamicCtx.tableStock.tbls = make([]tablePair, 0, 1)
 
 		{
-			dynamicCtx.beta.executor = betaTask
-			dynamicCtx.gama.executor = gamaTask
+			eng.dynamicCtx.beta.executor = eng.dynamicCtx.betaTask
+			eng.dynamicCtx.gama.executor = eng.dynamicCtx.gamaTask
 
-			if dynamicCtx.beta.taskPool, err = ants.NewPool(
+			if eng.dynamicCtx.beta.taskPool, err = ants.NewPool(
 				runtime.NumCPU(),
 				ants.WithNonblocking(false),
 				ants.WithPanicHandler(func(e interface{}) {
@@ -336,7 +335,7 @@ func initMoTableStatsConfig(
 				return
 			}
 
-			if dynamicCtx.gama.taskPool, err = ants.NewPool(
+			if eng.dynamicCtx.gama.taskPool, err = ants.NewPool(
 				runtime.NumCPU(),
 				ants.WithNonblocking(false),
 				ants.WithPanicHandler(func(e interface{}) {
@@ -362,26 +361,26 @@ func initMoTableStatsConfig(
 
 			go func() {
 				defer func() {
-					dynamicCtx.Lock()
+					eng.dynamicCtx.Lock()
 					task.running = false
-					dynamicCtx.Unlock()
+					eng.dynamicCtx.Unlock()
 				}()
 
 				// there should not have a deadline
-				taskCtx := turn2SysCtx(context.Background())
+				taskCtx := turn2SysCtx(ctx)
 				task.executor(taskCtx, eng.service, eng)
 			}()
 		}
 
-		dynamicCtx.launchTask = func() {
-			dynamicCtx.Lock()
-			defer dynamicCtx.Unlock()
+		eng.dynamicCtx.launchTask = func() {
+			eng.dynamicCtx.Lock()
+			defer eng.dynamicCtx.Unlock()
 
-			launch("beta task", &dynamicCtx.beta)
-			launch("gama task", &dynamicCtx.gama)
+			launch("beta task", &eng.dynamicCtx.beta)
+			launch("gama task", &eng.dynamicCtx.gama)
 		}
 
-		dynamicCtx.launchTask()
+		eng.dynamicCtx.launchTask()
 	})
 
 	return err
@@ -394,7 +393,7 @@ type taskState struct {
 	launchTimes int
 }
 
-var dynamicCtx struct {
+type dynamicCtx struct {
 	sync.RWMutex
 
 	once sync.Once
@@ -407,7 +406,6 @@ var dynamicCtx struct {
 	updateForgottenQueue chan struct{}
 
 	de         *Engine
-	service    string
 	objIdsPool sync.Pool
 
 	tableStock struct {
@@ -427,9 +425,21 @@ var dynamicCtx struct {
 	sqlOpts ie.SessionOverrideOptions
 }
 
+func (d *dynamicCtx) Close() {
+	if d.alphaTaskPool != nil {
+		d.alphaTaskPool.Release()
+	}
+	if d.beta.taskPool != nil {
+		d.beta.taskPool.Release()
+	}
+	if d.gama.taskPool != nil {
+		d.gama.taskPool.Release()
+	}
+}
+
 ////////////////// MoTableStats Interface //////////////////
 
-func HandleMoTableStatsCtl(cmd string) string {
+func (d *dynamicCtx) HandleMoTableStatsCtl(cmd string) string {
 	cmds := strings.Split(cmd, ":")
 
 	if len(cmds) != 2 {
@@ -447,30 +457,30 @@ func HandleMoTableStatsCtl(cmd string) string {
 
 	switch typ {
 	case "use_old_impl":
-		return setUseOldImpl(val == "true")
+		return d.setUseOldImpl(val == "true")
 
 	case "force_update":
-		return setForceUpdate(val == "true")
+		return d.setForceUpdate(val == "true")
 
 	case "move_on":
-		return setMoveOnTask(val == "true")
+		return d.setMoveOnTask(val == "true")
 
 	case "restore_default_setting":
-		return restoreDefaultSetting(val == "true")
+		return d.restoreDefaultSetting(val == "true")
 
 	case "echo_current_setting":
-		return echoCurrentSetting(val == "true")
+		return d.echoCurrentSetting(val == "true")
 
 	default:
 		return "failed, cmd invalid"
 	}
 }
 
-func checkMoveOnTask() bool {
-	dynamicCtx.Lock()
-	defer dynamicCtx.Unlock()
+func (d *dynamicCtx) checkMoveOnTask() bool {
+	d.Lock()
+	defer d.Unlock()
 
-	disable := dynamicCtx.conf.DisableStatsTask
+	disable := d.conf.DisableStatsTask
 
 	logutil.Info(logHeader,
 		zap.String("source", "check move on"),
@@ -479,44 +489,44 @@ func checkMoveOnTask() bool {
 	return disable
 }
 
-func echoCurrentSetting(ok bool) string {
+func (d *dynamicCtx) echoCurrentSetting(ok bool) string {
 	if !ok {
 		return "noop"
 	}
 
-	dynamicCtx.Lock()
-	defer dynamicCtx.Unlock()
+	d.Lock()
+	defer d.Unlock()
 
 	return fmt.Sprintf("move_on(%v), use_old_impl(%v), force_update(%v)",
-		!dynamicCtx.conf.DisableStatsTask,
-		dynamicCtx.conf.StatsUsingOldImpl,
-		dynamicCtx.conf.ForceUpdate)
+		!d.conf.DisableStatsTask,
+		d.conf.StatsUsingOldImpl,
+		d.conf.ForceUpdate)
 }
 
-func restoreDefaultSetting(ok bool) string {
+func (d *dynamicCtx) restoreDefaultSetting(ok bool) string {
 	if !ok {
 		return "noop"
 	}
 
-	dynamicCtx.Lock()
-	defer dynamicCtx.Unlock()
+	d.Lock()
+	defer d.Unlock()
 
-	dynamicCtx.conf = dynamicCtx.defaultConf
-	function.MoTableRowsSizeUseOldImpl.Store(dynamicCtx.conf.StatsUsingOldImpl)
-	function.MoTableRowsSizeForceUpdate.Store(dynamicCtx.conf.ForceUpdate)
+	d.conf = d.defaultConf
+	function.MoTableRowsSizeUseOldImpl.Store(d.conf.StatsUsingOldImpl)
+	function.MoTableRowsSizeForceUpdate.Store(d.conf.ForceUpdate)
 
 	return fmt.Sprintf("move_on(%v), use_old_impl(%v), force_update(%v)",
-		!dynamicCtx.conf.DisableStatsTask,
-		dynamicCtx.conf.StatsUsingOldImpl,
-		dynamicCtx.conf.ForceUpdate)
+		!d.conf.DisableStatsTask,
+		d.conf.StatsUsingOldImpl,
+		d.conf.ForceUpdate)
 }
 
-func setMoveOnTask(newVal bool) string {
-	dynamicCtx.Lock()
-	defer dynamicCtx.Unlock()
+func (d *dynamicCtx) setMoveOnTask(newVal bool) string {
+	d.Lock()
+	defer d.Unlock()
 
-	oldState := !dynamicCtx.conf.DisableStatsTask
-	dynamicCtx.conf.DisableStatsTask = !newVal
+	oldState := !d.conf.DisableStatsTask
+	d.conf.DisableStatsTask = !newVal
 
 	ret := fmt.Sprintf("move on: %v to %v", oldState, newVal)
 	logutil.Info(logHeader,
@@ -526,13 +536,13 @@ func setMoveOnTask(newVal bool) string {
 	return ret
 }
 
-func setUseOldImpl(newVal bool) string {
-	dynamicCtx.Lock()
-	defer dynamicCtx.Unlock()
+func (d *dynamicCtx) setUseOldImpl(newVal bool) string {
+	d.Lock()
+	defer d.Unlock()
 
-	oldState := dynamicCtx.conf.StatsUsingOldImpl
+	oldState := d.conf.StatsUsingOldImpl
 	function.MoTableRowsSizeUseOldImpl.Store(newVal)
-	dynamicCtx.conf.StatsUsingOldImpl = newVal
+	d.conf.StatsUsingOldImpl = newVal
 
 	ret := fmt.Sprintf("use old impl: %v to %v", oldState, newVal)
 	logutil.Info(logHeader,
@@ -542,13 +552,13 @@ func setUseOldImpl(newVal bool) string {
 	return ret
 }
 
-func setForceUpdate(newVal bool) string {
-	dynamicCtx.Lock()
-	defer dynamicCtx.Unlock()
+func (d *dynamicCtx) setForceUpdate(newVal bool) string {
+	d.Lock()
+	defer d.Unlock()
 
-	oldState := dynamicCtx.conf.ForceUpdate
+	oldState := d.conf.ForceUpdate
 	function.MoTableRowsSizeForceUpdate.Store(newVal)
-	dynamicCtx.conf.ForceUpdate = newVal
+	d.conf.ForceUpdate = newVal
 
 	ret := fmt.Sprintf("force update: %v to %v", oldState, newVal)
 	logutil.Info(logHeader,
@@ -558,9 +568,9 @@ func setForceUpdate(newVal bool) string {
 	return ret
 }
 
-func executeSQL(ctx context.Context, sql string, hint string) ie.InternalExecResult {
-	exec := dynamicCtx.executorPool.Get()
-	defer dynamicCtx.executorPool.Put(exec)
+func (d *dynamicCtx) executeSQL(ctx context.Context, sql string, hint string) ie.InternalExecResult {
+	exec := d.executorPool.Get()
+	defer d.executorPool.Put(exec)
 
 	var (
 		newCtx = ctx
@@ -572,7 +582,7 @@ func executeSQL(ctx context.Context, sql string, hint string) ie.InternalExecRes
 		defer cancel()
 	}
 
-	ret := exec.(ie.InternalExecutor).Query(newCtx, sql, dynamicCtx.sqlOpts)
+	ret := exec.(ie.InternalExecutor).Query(newCtx, sql, d.sqlOpts)
 	if ret.Error() != nil {
 		logutil.Info(logHeader,
 			zap.String("source", hint),
@@ -594,7 +604,7 @@ func intsJoin(items []uint64, delimiter string) string {
 	return str
 }
 
-func forceUpdateQuery(
+func (d *dynamicCtx) forceUpdateQuery(
 	ctx context.Context,
 	wantedStatsIdxes []int,
 	accs, dbs, tbls []uint64,
@@ -626,7 +636,7 @@ func forceUpdateQuery(
 			intsJoin(dbs, ","),
 			intsJoin(tbls, ","))
 
-		sqlRet := executeSQL(ctx, sql, "force update query")
+		sqlRet := d.executeSQL(ctx, sql, "force update query")
 		if sqlRet.Error() != nil {
 			return nil, sqlRet.Error()
 		}
@@ -667,11 +677,11 @@ func forceUpdateQuery(
 		}
 	}
 
-	if err = alphaTask(ctx, eng.service, eng, pairs, "forceUpdateQuery"); err != nil {
+	if err = d.alphaTask(ctx, eng.service, eng, pairs, "forceUpdateQuery"); err != nil {
 		return nil, err
 	}
 
-	if statsVals, err = normalQuery(
+	if statsVals, err = d.normalQuery(
 		ctx, wantedStatsIdxes,
 		accs, dbs, tbls); err != nil {
 		return nil, err
@@ -680,7 +690,7 @@ func forceUpdateQuery(
 	return
 }
 
-func normalQuery(
+func (d *dynamicCtx) normalQuery(
 	ctx context.Context,
 	wantedStatsIdxes []int,
 	accs, dbs, tbls []uint64,
@@ -697,7 +707,7 @@ func normalQuery(
 		intsJoin(dbs, ","),
 		intsJoin(tbls, ","))
 
-	sqlRet := executeSQL(ctx, sql, "normal query")
+	sqlRet := d.executeSQL(ctx, sql, "normal query")
 	if sqlRet.Error() != nil {
 		return nil, sqlRet.Error()
 	}
@@ -757,7 +767,7 @@ func normalQuery(
 	return statsVals, nil
 }
 
-func QueryTableStats(
+func (d *dynamicCtx) QueryTableStats(
 	ctx context.Context,
 	wantedStatsIdxes []int,
 	accs, dbs, tbls []uint64,
@@ -766,17 +776,17 @@ func QueryTableStats(
 	eng engine.Engine,
 ) (statsVals [][]any, err error) {
 
-	dynamicCtx.Lock()
-	useOld := dynamicCtx.conf.StatsUsingOldImpl
-	dynamicCtx.Unlock()
+	d.Lock()
+	useOld := d.conf.StatsUsingOldImpl
+	d.Unlock()
 	if useOld {
 		return
 	}
 
 	if eng == nil {
-		dynamicCtx.Lock()
-		eng = dynamicCtx.de
-		dynamicCtx.Unlock()
+		d.Lock()
+		eng = d.de
+		d.Unlock()
 	}
 
 	var now = time.Now()
@@ -809,17 +819,17 @@ func QueryTableStats(
 			de = eng.(*Engine)
 		}
 
-		return forceUpdateQuery(
+		return d.forceUpdateQuery(
 			newCtx, wantedStatsIdxes,
 			accs, dbs, tbls,
 			resetUpdateTime,
 			de)
 	}
 
-	return normalQuery(newCtx, wantedStatsIdxes, accs, dbs, tbls)
+	return d.normalQuery(newCtx, wantedStatsIdxes, accs, dbs, tbls)
 }
 
-func MTSTableSize(
+func (d *dynamicCtx) MTSTableSize(
 	ctx context.Context,
 	accs, dbs, tbls []uint64,
 	eng engine.Engine,
@@ -827,7 +837,7 @@ func MTSTableSize(
 	resetUpdateTime bool,
 ) (sizes []uint64, err error) {
 
-	statsVals, err := QueryTableStats(
+	statsVals, err := d.QueryTableStats(
 		ctx, []int{TableStatsTableSize},
 		accs, dbs, tbls,
 		forceUpdate, resetUpdateTime, eng)
@@ -846,7 +856,7 @@ func MTSTableSize(
 	return
 }
 
-func MTSTableRows(
+func (d *dynamicCtx) MTSTableRows(
 	ctx context.Context,
 	accs, dbs, tbls []uint64,
 	eng engine.Engine,
@@ -854,7 +864,7 @@ func MTSTableRows(
 	resetUpdateTime bool,
 ) (sizes []uint64, err error) {
 
-	statsVals, err := QueryTableStats(
+	statsVals, err := d.QueryTableStats(
 		ctx, []int{TableStatsTableRows},
 		accs, dbs, tbls,
 		forceUpdate, resetUpdateTime, eng)
@@ -1000,20 +1010,20 @@ func GetMOTableStatsExecutor(
 	sqlExecutor func() ie.InternalExecutor,
 ) func(ctx context.Context, task task.Task) error {
 	return func(ctx context.Context, task task.Task) error {
-		return tableStatsExecutor(ctx, service, eng)
+		return eng.(*Engine).dynamicCtx.tableStatsExecutor(ctx, service, eng)
 	}
 }
 
 func turn2SysCtx(ctx context.Context) context.Context {
 	newCtx := ctx
 	if val := ctx.Value(defines.TenantIDKey{}); val == nil || val.(uint32) != catalog.System_Account {
-		newCtx = context.WithValue(context.Background(), defines.TenantIDKey{}, catalog.System_Account)
+		newCtx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 	}
 
 	return newCtx
 }
 
-func tableStatsExecutor(
+func (d *dynamicCtx) tableStatsExecutor(
 	ctx context.Context,
 	service string,
 	eng engine.Engine,
@@ -1033,19 +1043,19 @@ func tableStatsExecutor(
 			return newCtx.Err()
 
 		case <-executeTicker.C:
-			if checkMoveOnTask() {
+			if d.checkMoveOnTask() {
 				continue
 			}
 
-			if err = prepare(newCtx, service, eng); err != nil {
+			if err = d.prepare(newCtx, service, eng); err != nil {
 				return err
 			}
 
-			dynamicCtx.Lock()
-			tbls := dynamicCtx.tableStock.tbls[:]
-			dynamicCtx.Unlock()
+			d.Lock()
+			tbls := d.tableStock.tbls[:]
+			d.Unlock()
 
-			if err = alphaTask(
+			if err = d.alphaTask(
 				newCtx, service, eng,
 				tbls,
 				"main routine",
@@ -1056,15 +1066,15 @@ func tableStatsExecutor(
 				return err
 			}
 
-			dynamicCtx.Lock()
-			executeTicker.Reset(dynamicCtx.conf.UpdateDuration)
-			dynamicCtx.tableStock.tbls = dynamicCtx.tableStock.tbls[:0]
-			dynamicCtx.Unlock()
+			d.Lock()
+			executeTicker.Reset(d.conf.UpdateDuration)
+			d.tableStock.tbls = d.tableStock.tbls[:0]
+			d.Unlock()
 		}
 	}
 }
 
-func insertNewTables(
+func (d *dynamicCtx) insertNewTables(
 	ctx context.Context,
 	service string,
 	eng engine.Engine,
@@ -1082,7 +1092,7 @@ func insertNewTables(
 
 	//if dynamicCtx.lastCheckNewTables.IsEmpty() {
 	sql = fmt.Sprintf(getMinTSSQL, catalog.MO_CATALOG, catalog.MO_TABLE_STATS)
-	sqlRet = executeSQL(ctx, sql, "insert new table-0: get min ts")
+	sqlRet = d.executeSQL(ctx, sql, "insert new table-0: get min ts")
 	if err = sqlRet.Error(); err != nil {
 		return err
 	}
@@ -1096,20 +1106,20 @@ func insertNewTables(
 			return
 		}
 
-		dynamicCtx.lastCheckNewTables = types.BuildTS(tm.UnixNano(), 0)
+		d.lastCheckNewTables = types.BuildTS(tm.UnixNano(), 0)
 	}
 
 	//}
 
 	sql = fmt.Sprintf(getNewTablesSQL,
 		catalog.MO_CATALOG, catalog.MO_TABLES,
-		dynamicCtx.lastCheckNewTables.
+		d.lastCheckNewTables.
 			ToTimestamp().
 			ToStdTime().
 			Format("2006-01-02 15:04:05"),
 	)
 
-	sqlRet = executeSQL(ctx, sql, "insert new table-1: get new tables")
+	sqlRet = d.executeSQL(ctx, sql, "insert new table-1: get new tables")
 	if err = sqlRet.Error(); err != nil {
 		return err
 	}
@@ -1157,26 +1167,26 @@ func insertNewTables(
 		catalog.MO_CATALOG, catalog.MO_TABLE_STATS,
 		strings.Join(values, ","))
 
-	sqlRet = executeSQL(ctx, sql, "insert new table-2: insert new tables")
+	sqlRet = d.executeSQL(ctx, sql, "insert new table-2: insert new tables")
 	return sqlRet.Error()
 }
 
-func prepare(
+func (d *dynamicCtx) prepare(
 	ctx context.Context,
 	service string,
 	eng engine.Engine,
 ) (err error) {
 
-	dynamicCtx.Lock()
-	defer dynamicCtx.Unlock()
+	d.Lock()
+	defer d.Unlock()
 
-	if err = insertNewTables(ctx, service, eng); err != nil {
+	if err = d.insertNewTables(ctx, service, eng); err != nil {
 		return
 	}
 
 	offsetTS := types.TS{}
-	for len(dynamicCtx.tableStock.tbls) == 0 {
-		accs, dbs, tbls, ts, err := getCandidates(ctx, service, eng, dynamicCtx.conf.GetTableListLimit, offsetTS)
+	for len(d.tableStock.tbls) == 0 {
+		accs, dbs, tbls, ts, err := d.getCandidates(ctx, service, eng, d.conf.GetTableListLimit, offsetTS)
 		if err != nil {
 			return err
 		}
@@ -1187,8 +1197,8 @@ func prepare(
 
 		err = getChangedTableList(
 			ctx, service, eng, accs, dbs, tbls, ts,
-			&dynamicCtx.tableStock.tbls,
-			&dynamicCtx.tableStock.newest)
+			&d.tableStock.tbls,
+			&d.tableStock.newest)
 
 		if err != nil {
 			return err
@@ -1197,13 +1207,13 @@ func prepare(
 		// in case of all candidates have been deleted.
 		offsetTS = types.TimestampToTS(*ts[len(ts)-1])
 
-		if len(dynamicCtx.tableStock.tbls) == 0 && offsetTS.IsEmpty() {
+		if len(d.tableStock.tbls) == 0 && offsetTS.IsEmpty() {
 			// there exists a large number of deleted table which are new inserts
 			logutil.Info(logHeader,
 				zap.String("source", "prepare"),
 				zap.String("info", "found new inserts deletes, force clean"))
 
-			NotifyCleanDeletes()
+			d.NotifyCleanDeletes()
 			break
 		}
 	}
@@ -1211,7 +1221,7 @@ func prepare(
 	return err
 }
 
-func alphaTask(
+func (d *dynamicCtx) alphaTask(
 	ctx context.Context,
 	service string,
 	eng engine.Engine,
@@ -1224,7 +1234,7 @@ func alphaTask(
 	}
 
 	// maybe the task exited, need to launch a new one
-	dynamicCtx.launchTask()
+	d.launchTask()
 
 	var (
 		errWaitToReceive = len(tbls)
@@ -1282,7 +1292,7 @@ func alphaTask(
 		case <-ticker.C:
 			if len(tbls) == 0 {
 				// all submitted
-				dynamicCtx.tblQueue <- tablePair{}
+				d.tblQueue <- tablePair{}
 				ticker.Reset(time.Second)
 
 				if enterWait {
@@ -1314,7 +1324,7 @@ func alphaTask(
 				submitted++
 				wg.Add(1)
 
-				err = dynamicCtx.alphaTaskPool.Submit(func() {
+				err = d.alphaTaskPool.Submit(func() {
 					defer wg.Done()
 
 					var err2 error
@@ -1333,7 +1343,7 @@ func alphaTask(
 
 					tbls[i].pState = pState
 					tbls[i].errChan = errQueue
-					dynamicCtx.tblQueue <- tbls[i]
+					d.tblQueue <- tbls[i]
 				})
 
 				if err != nil {
@@ -1349,7 +1359,7 @@ func alphaTask(
 			wg.Wait()
 
 			// let beta know that a batch done
-			dynamicCtx.tblQueue <- tablePair{}
+			d.tblQueue <- tablePair{}
 
 			dur := time.Since(start)
 			// the longer the update takes, the longer we would pause,
@@ -1362,7 +1372,7 @@ func alphaTask(
 	}
 }
 
-func betaTask(
+func (d *dynamicCtx) betaTask(
 	ctx context.Context,
 	service string,
 	eng engine.Engine,
@@ -1388,13 +1398,13 @@ func betaTask(
 			err = ctx.Err()
 			return
 
-		case tbl := <-dynamicCtx.tblQueue:
+		case tbl := <-d.tblQueue:
 			if !tbl.valid {
 				// an alpha batch transmit done
-				bulkUpdateTableOnlyTS(ctx, service, onlyTSBat)
+				d.bulkUpdateTableOnlyTS(ctx, service, onlyTSBat)
 
 				bulkWait.Wait()
-				_ = bulkUpdateTableStatsList(ctx, service, &slBat)
+				_ = d.bulkUpdateTableStatsList(ctx, service, &slBat)
 
 				slBat.Clear()
 				onlyTSBat = onlyTSBat[:0]
@@ -1411,10 +1421,10 @@ func betaTask(
 			}
 
 			bulkWait.Add(1)
-			if err = dynamicCtx.beta.taskPool.Submit(func() {
+			if err = d.beta.taskPool.Submit(func() {
 				defer bulkWait.Done()
 
-				sl, err2 := statsCalculateOp(ctx, service, de.fs, tbl.snapshot, tbl.pState)
+				sl, err2 := d.statsCalculateOp(ctx, service, de.fs, tbl.snapshot, tbl.pState)
 				if err2 != nil {
 					tbl.Done(err2)
 				} else {
@@ -1429,15 +1439,15 @@ func betaTask(
 	}
 }
 
-func NotifyCleanDeletes() {
-	dynamicCtx.cleanDeletesQueue <- struct{}{}
+func (d *dynamicCtx) NotifyCleanDeletes() {
+	d.cleanDeletesQueue <- struct{}{}
 }
 
-func NotifyUpdateForgotten() {
-	dynamicCtx.updateForgottenQueue <- struct{}{}
+func (d *dynamicCtx) NotifyUpdateForgotten() {
+	d.updateForgottenQueue <- struct{}{}
 }
 
-func gamaTask(
+func (d *dynamicCtx) gamaTask(
 	ctx context.Context,
 	service string,
 	eng engine.Engine,
@@ -1454,10 +1464,10 @@ func gamaTask(
 	})
 	cnCnt = max(cnCnt, 1)
 
-	dynamicCtx.Lock()
-	gamaDur := dynamicCtx.conf.CorrectionDuration
-	gamaLimit := max(dynamicCtx.conf.GetTableListLimit/100, 100)
-	dynamicCtx.Unlock()
+	d.Lock()
+	gamaDur := d.conf.CorrectionDuration
+	gamaLimit := max(d.conf.GetTableListLimit/100, 100)
+	d.Unlock()
 
 	decodeIdsFromSqlRet := func(
 		sqlRet ie.InternalExecResult,
@@ -1499,7 +1509,7 @@ func gamaTask(
 		now := time.Now()
 
 		sql := fmt.Sprintf(getNullStatsSQL, catalog.MO_CATALOG, catalog.MO_TABLE_STATS, gamaLimit)
-		sqlRet := executeSQL(ctx, sql, "gama task: get null stats list")
+		sqlRet := d.executeSQL(ctx, sql, "gama task: get null stats list")
 		if sqlRet.Error() != nil {
 			return
 		}
@@ -1522,7 +1532,7 @@ func gamaTask(
 			tbls = append(tbls, tbl)
 		}
 
-		if err = alphaTask(
+		if err = d.alphaTask(
 			ctx, service, eng, tbls, "gama opA"); err != nil {
 			return
 		}
@@ -1556,7 +1566,7 @@ func gamaTask(
 			colName2[step], colName2[step], catalog.MO_CATALOG, catalog.MO_TABLE_STATS,
 			colName2[step], options.DefaultBlockMaxRows)
 
-		sqlRet := executeSQL(ctx, sql, fmt.Sprintf("gama task-%d-0", step))
+		sqlRet := d.executeSQL(ctx, sql, fmt.Sprintf("gama task-%d-0", step))
 		if sqlRet.Error() != nil {
 			return
 		}
@@ -1569,7 +1579,7 @@ func gamaTask(
 		sql = fmt.Sprintf(getCheckAliveSQL,
 			colName1[step], catalog.MO_CATALOG, tblName[step],
 			colName1[step], intsJoin(ids, ","))
-		sqlRet = executeSQL(ctx, sql, fmt.Sprintf("gama task-%d-1", step))
+		sqlRet = d.executeSQL(ctx, sql, fmt.Sprintf("gama task-%d-1", step))
 		if sqlRet.Error() != nil {
 			return
 		}
@@ -1595,7 +1605,7 @@ func gamaTask(
 		if len(ids) != 0 {
 			sql = fmt.Sprintf(getDeleteFromStatsSQL, catalog.MO_CATALOG, catalog.MO_TABLE_STATS,
 				colName2[step], intsJoin(ids, ","))
-			sqlRet = executeSQL(ctx, sql, fmt.Sprintf("gama task-%d-2", step))
+			sqlRet = d.executeSQL(ctx, sql, fmt.Sprintf("gama task-%d-2", step))
 			if sqlRet.Error() != nil {
 				return
 			}
@@ -1636,26 +1646,26 @@ func gamaTask(
 			return
 
 		case <-tickerA.C:
-			dynamicCtx.gama.taskPool.Submit(opA)
+			d.gama.taskPool.Submit(opA)
 			tickerA.Reset(randDuration())
 
-		case <-dynamicCtx.updateForgottenQueue:
-			dynamicCtx.gama.taskPool.Submit(opA)
+		case <-d.updateForgottenQueue:
+			d.gama.taskPool.Submit(opA)
 			tickerA.Reset(randDuration())
 
 		case <-tickerB.C:
-			dynamicCtx.gama.taskPool.Submit(opB)
+			d.gama.taskPool.Submit(opB)
 			tickerB.Reset(randDuration())
 
-		case <-dynamicCtx.cleanDeletesQueue:
+		case <-d.cleanDeletesQueue:
 			// emergence, do clean now
-			dynamicCtx.gama.taskPool.Submit(opB)
+			d.gama.taskPool.Submit(opB)
 			tickerB.Reset(randDuration())
 		}
 	}
 }
 
-func statsCalculateOp(
+func (d *dynamicCtx) statsCalculateOp(
 	ctx context.Context,
 	service string,
 	fs fileservice.FileService,
@@ -1666,12 +1676,12 @@ func statsCalculateOp(
 	bcs := betaCycleStash{
 		born:       time.Now(),
 		snapshot:   snapshot,
-		dataObjIds: dynamicCtx.objIdsPool.Get().(*[]types.Objectid),
+		dataObjIds: d.objIdsPool.Get().(*[]types.Objectid),
 	}
 
 	defer func() {
 		*bcs.dataObjIds = (*bcs.dataObjIds)[:0]
-		dynamicCtx.objIdsPool.Put(bcs.dataObjIds)
+		d.objIdsPool.Put(bcs.dataObjIds)
 	}()
 
 	if err = collectVisibleData(&bcs, pState); err != nil {
@@ -1689,7 +1699,7 @@ func statsCalculateOp(
 	return sl, nil
 }
 
-func getCandidates(
+func (d *dynamicCtx) getCandidates(
 	ctx context.Context,
 	service string,
 	eng engine.Engine,
@@ -1711,7 +1721,7 @@ func getCandidates(
 	}
 
 	sql = fmt.Sprintf(getNextReadyListSQL, catalog.MO_CATALOG, catalog.MO_TABLE_STATS, where, limit)
-	sqlRet = executeSQL(ctx, sql, "get next ready to update list")
+	sqlRet = d.executeSQL(ctx, sql, "get next ready to update list")
 	if err = sqlRet.Error(); err != nil {
 		return
 	}
@@ -2069,7 +2079,7 @@ func applyTombstones(
 	return nil
 }
 
-func bulkUpdateTableStatsList(
+func (d *dynamicCtx) bulkUpdateTableStatsList(
 	ctx context.Context,
 	service string,
 	bat *sync.Map,
@@ -2123,11 +2133,11 @@ func bulkUpdateTableStatsList(
 		catalog.MO_CATALOG, catalog.MO_TABLE_STATS,
 		strings.Join(vals, ","))
 
-	ret := executeSQL(ctx, sql, "bulk update table stats")
+	ret := d.executeSQL(ctx, sql, "bulk update table stats")
 	return ret.Error()
 }
 
-func bulkUpdateTableOnlyTS(
+func (d *dynamicCtx) bulkUpdateTableOnlyTS(
 	ctx context.Context,
 	service string,
 	tbls []tablePair,
@@ -2160,7 +2170,7 @@ func bulkUpdateTableOnlyTS(
 		catalog.MO_CATALOG, catalog.MO_TABLE_STATS,
 		strings.Join(vals, ","))
 
-	ret := executeSQL(ctx, sql, "bulk update only ts")
+	ret := d.executeSQL(ctx, sql, "bulk update only ts")
 
 	for i := range tbls {
 		tbls[i].Done(ret.Error())
