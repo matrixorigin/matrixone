@@ -254,15 +254,11 @@ func (gs *GlobalStats) Get(ctx context.Context, key pb.StatsInfoKey, sync bool) 
 		return info
 	}
 
-	if ok = ctx.Value(perfcounter.BuildPlanMarkKey{}); ok {
-
+	if _, ok = ctx.Value(perfcounter.CalcTableStatsKey{}).(bool); ok {
+		stats := statistic.StatsInfoFromContext(ctx)
+		start := time.Now()
+		defer stats.AddBuildPlanStatsIOConsumption(time.Since(start))
 	}
-
-	stats := statistic.StatsInfoFromContext(ctx)
-	start := time.Now()
-	defer func() {
-		stats.AddBuildPlanStatsIOConsumption(time.Since(start))
-	}()
 
 	// Get stats info from remote node.
 	if gs.KeyRouter != nil {

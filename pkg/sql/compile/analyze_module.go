@@ -523,25 +523,26 @@ func explainResourceOverview(queryResult *util.RunResult, statsInfo *statistic.S
 			cpuTimeVal := gblStats.OperatorTimeConsumed +
 				int64(statsInfo.ParseStage.ParseDuration+statsInfo.PlanStage.PlanDuration+statsInfo.CompileStage.CompileDuration) +
 				statsInfo.PrepareRunStage.ScopePrepareDuration + statsInfo.PrepareRunStage.CompilePreRunOnceDuration -
-				statsInfo.PrepareRunStage.CompilePreRunOnceWaitLock -
+				statsInfo.PrepareRunStage.CompilePreRunOnceWaitLock - statsInfo.PlanStage.BuildPlanStatsIOConsumption -
 				(statsInfo.IOAccessTimeConsumption + statsInfo.S3FSPrefetchFileIOMergerTimeConsumption)
 
 			buffer.WriteString("\tCPU Usage: \n")
 			buffer.WriteString(fmt.Sprintf("\t\t- Total CPU Time: %dns \n", cpuTimeVal))
-			buffer.WriteString(fmt.Sprintf("\t\t- CPU Time Detail: Parse(%d)+BuildPlan(%d)+Compile(%d)+PhyExec(%d)+PrepareRun(%d)-PreRunWaitLock(%d)-IOAccess(%d)-IOMerge(%d)\n",
+			buffer.WriteString(fmt.Sprintf("\t\t- CPU Time Detail: Parse(%d)+BuildPlan(%d)+Compile(%d)+PhyExec(%d)+PrepareRun(%d)-PreRunWaitLock(%d)-PlanStatsIO(%d)-IOAccess(%d)-IOMerge(%d)\n",
 				statsInfo.ParseStage.ParseDuration,
 				statsInfo.PlanStage.PlanDuration,
 				statsInfo.CompileStage.CompileDuration,
 				gblStats.OperatorTimeConsumed,
 				gblStats.ScopePrepareTimeConsumed+statsInfo.PrepareRunStage.CompilePreRunOnceDuration,
 				statsInfo.PrepareRunStage.CompilePreRunOnceWaitLock,
+				statsInfo.PlanStage.BuildPlanStatsIOConsumption,
 				statsInfo.IOAccessTimeConsumption,
 				statsInfo.S3FSPrefetchFileIOMergerTimeConsumption))
 
 			//-------------------------------------------------------------------------------------------------------
 			if option.Analyze {
 				buffer.WriteString("\tQuery Build Plan Stage:\n")
-				buffer.WriteString(fmt.Sprintf("\t\t- CPU Time: %dns \n", statsInfo.PlanStage.PlanDuration))
+				buffer.WriteString(fmt.Sprintf("\t\t- CPU Time: %dns \n", int64(statsInfo.PlanStage.PlanDuration)-statsInfo.PlanStage.BuildPlanStatsIOConsumption))
 				buffer.WriteString(fmt.Sprintf("\t\t- S3List:%d, S3Head:%d, S3Put:%d, S3Get:%d, S3Delete:%d, S3DeleteMul:%d\n",
 					statsInfo.PlanStage.BuildPlanS3Request.List,
 					statsInfo.PlanStage.BuildPlanS3Request.Head,
@@ -550,8 +551,9 @@ func explainResourceOverview(queryResult *util.RunResult, statsInfo *statistic.S
 					statsInfo.PlanStage.BuildPlanS3Request.Delete,
 					statsInfo.PlanStage.BuildPlanS3Request.DeleteMul,
 				))
+				buffer.WriteString(fmt.Sprintf("\t\t- Build Plan Duration: %dns \n", int64(statsInfo.PlanStage.PlanDuration)))
 				buffer.WriteString(fmt.Sprintf("\t\t- Call Stats Duration: %dns \n", statsInfo.PlanStage.BuildPlanStatsDuration))
-
+				buffer.WriteString(fmt.Sprintf("\t\t- Call Stats IO Consumption: %dns \n", statsInfo.PlanStage.BuildPlanStatsIOConsumption))
 				//-------------------------------------------------------------------------------------------------------
 				buffer.WriteString("\tQuery Compile Stage:\n")
 				buffer.WriteString(fmt.Sprintf("\t\t- CPU Time: %dns \n", statsInfo.CompileStage.CompileDuration))
