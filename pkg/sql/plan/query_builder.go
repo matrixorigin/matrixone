@@ -4204,6 +4204,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 
 			if viewDefString != "" {
 				viewCtx := NewBindContext(builder, nil)
+				viewCtx.snapshot = snapshot
 				//if viewCtx.cteByName == nil {
 				//	viewCtx.cteByName = make(map[string]*CTERef)
 				//}
@@ -4294,7 +4295,10 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 
 				//nodeID, err = builder.buildTable(aliasSubquery, ctx, preNodeId, leftCtx)
 
+				oldSnapshot := builder.compCtx.GetSnapshot()
+				builder.compCtx.SetSnapshot(viewCtx.snapshot)
 				nodeID, err = builder.bindSelect(viewStmt.AsSource, viewCtx, false)
+				builder.compCtx.SetSnapshot(oldSnapshot)
 				//if err != nil {
 				//	return 0, err
 				//}
