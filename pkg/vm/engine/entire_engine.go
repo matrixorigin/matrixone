@@ -121,3 +121,13 @@ func (e *EntireEngine) GetMessageCenter() any {
 func (e *EntireEngine) GetService() string {
 	return e.Engine.GetService()
 }
+
+func (e *EntireEngine) QueryTableStatsByAccounts(
+	ctx context.Context,
+	wantedStatsIdxes []int,
+	accs []uint64,
+	forceUpdate bool,
+	resetUpdateTime bool,
+) (statsVals [][]any, retAcc []uint64, err error, ok bool) {
+	return e.Engine.QueryTableStatsByAccounts(ctx, wantedStatsIdxes, accs, forceUpdate, resetUpdateTime)
+}
