@@ -1157,6 +1157,19 @@ func (tbl *txnTable) DoPrecommitDedupByPK(
 	pksZM index.ZM,
 	isTombstone bool,
 ) (err error) {
+	start := time.Now()
+	defer func() {
+		duration := time.Since(start)
+		if duration > time.Second {
+			logutil.Info(
+				"SLOW-LOG-DoPrecommitDedupByPK",
+				zap.String("txn", tbl.store.txn.String()),
+				zap.String("table", tbl.GetLocalSchema(isTombstone).Name),
+				zap.Bool("is-tombstone", isTombstone),
+				zap.Duration("duration", time.Since(start)),
+			)
+		}
+	}()
 	moprobe.WithRegion(context.Background(), moprobe.TxnTableDoPrecommitDedupByPK, func() {
 		var rowIDs containers.Vector
 		rowIDs, err = tbl.getBaseTable(isTombstone).preCommitGetRowsByPK(tbl.store.ctx, pks)
