@@ -19,13 +19,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 )
 
 type mergeScanner struct {
-	logtailMgr *logtail.Manager
-	catalog    *catalog.Catalog
-	op         *merge.Scheduler
+	catalog *catalog.Catalog
+	op      *merge.Scheduler
 }
 
 func (scanner *mergeScanner) OnStopped() {
@@ -34,10 +32,6 @@ func (scanner *mergeScanner) OnStopped() {
 
 func (scanner *mergeScanner) OnExec() {
 	dbutils.PrintMemStats()
-
-	// compact logtail table
-	scanner.logtailMgr.TryCompactTable()
-
 	err := scanner.op.PreExecute()
 	if err != nil {
 		panic(err)
@@ -51,11 +45,10 @@ func (scanner *mergeScanner) OnExec() {
 	}
 }
 
-func newMergeScanner(cata *catalog.Catalog, logtailMgr *logtail.Manager, scheduler *merge.Scheduler) *mergeScanner {
+func newMergeScanner(cata *catalog.Catalog, scheduler *merge.Scheduler) *mergeScanner {
 	return &mergeScanner{
-		logtailMgr: logtailMgr,
-		catalog:    cata,
-		op:         scheduler,
+		catalog: cata,
+		op:      scheduler,
 	}
 }
 

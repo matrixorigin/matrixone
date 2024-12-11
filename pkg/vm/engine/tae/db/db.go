@@ -78,7 +78,6 @@ type DB struct {
 
 	CronJobs *tasks.CancelableJobs
 
-	MergeJob           *tasks.CancelableJob
 	BGCheckpointRunner checkpoint.Runner
 
 	MergeScheduler *merge.Scheduler
@@ -273,7 +272,6 @@ func (db *DB) Close() error {
 	db.Closed.Store(ErrClosed)
 	db.Controller.Stop()
 	db.CronJobs.Reset()
-	db.MergeJob.Stop()
 	db.BGCheckpointRunner.Stop()
 	db.Runtime.Scheduler.Stop()
 	db.TxnMgr.Stop()
