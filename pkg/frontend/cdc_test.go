@@ -396,7 +396,7 @@ func Test_handleCreateCdc(t *testing.T) {
 			cdc2.TableLevel,
 			"Account",
 			sysAccountName,
-			"Rules",
+			"Exclude",
 			"db2.t3,db2.t4",
 			cdc2.InitSnapshotSplitTxn,
 			"false",

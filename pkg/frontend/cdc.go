@@ -303,7 +303,7 @@ func doCreateCdc(ctx context.Context, ses *Session, create *tree.CreateCDC) (err
 	}
 
 	// step 2: handle exclude (regular expression)
-	exclude := cdcTaskOptionsMap["Rules"]
+	exclude := cdcTaskOptionsMap["Exclude"]
 	if _, err = regexp.Compile(exclude); err != nil {
 		return moerr.NewInternalErrorf(ctx, "invalid exclude expression: %s, err: %v", exclude, err)
 	}
@@ -335,10 +335,7 @@ func doCreateCdc(ctx context.Context, ses *Session, create *tree.CreateCDC) (err
 	}
 
 	//step 6: no full
-	noFull, err := strconv.ParseBool(cdcTaskOptionsMap["NoFull"])
-	if err != nil {
-		return
-	}
+	noFull, _ := strconv.ParseBool(cdcTaskOptionsMap["NoFull"])
 
 	//step 7: additionalConfig
 	additionalConfig := make(map[string]any)
@@ -721,7 +718,11 @@ func NewCdcTask(
 }
 
 func (cdc *CdcTask) Start(rootCtx context.Context) (err error) {
-	logutil.Infof("cdc task %s start on cn %s", cdc.cdcTask.TaskName, cdc.cnUUID)
+	taskId := cdc.cdcTask.TaskId
+	taskName := cdc.cdcTask.TaskName
+	cnUUID := cdc.cnUUID
+	accountId := uint32(cdc.cdcTask.Accounts[0].GetId())
+	logutil.Infof("cdc task %s start on cn %s", taskName, cnUUID)
 
 	defer func() {
 		if err != nil {
@@ -731,14 +732,13 @@ func (cdc *CdcTask) Start(rootCtx context.Context) (err error) {
 			cdc.activeRoutine.CloseCancel()
 
 			if updateErrMsgErr := cdc.updateErrMsg(rootCtx, err.Error()); updateErrMsgErr != nil {
-				logutil.Errorf("cdc task %s update err msg failed, err: %v", cdc.cdcTask.TaskName, updateErrMsgErr)
+				logutil.Errorf("cdc task %s update err msg failed, err: %v", taskName, updateErrMsgErr)
 			}
 		}
 
-		cdc2.GetTableScanner(cdc.cnUUID).UnRegister(cdc.cdcTask.TaskId)
+		cdc2.GetTableScanner(cnUUID).UnRegister(taskId)
 	}()
 
-	accountId := uint32(cdc.cdcTask.Accounts[0].GetId())
 	ctx := defines.AttachAccountId(rootCtx, accountId)
 
 	// get cdc task definition
@@ -750,17 +750,17 @@ func (cdc *CdcTask) Start(rootCtx context.Context) (err error) {
 	cdc.runningReaders = &sync.Map{}
 
 	// start watermarkUpdater
-	cdc.watermarkUpdater = cdc2.NewWatermarkUpdater(accountId, cdc.cdcTask.TaskId, cdc.ie)
+	cdc.watermarkUpdater = cdc2.NewWatermarkUpdater(accountId, taskId, cdc.ie)
 	go cdc.watermarkUpdater.Run(ctx, cdc.activeRoutine)
 
 	// register to table scanner
-	cdc2.GetTableScanner(cdc.cnUUID).Register(cdc.cdcTask.TaskId, cdc.handleNewTables)
+	cdc2.GetTableScanner(cnUUID).Register(taskId, cdc.handleNewTables)
 
 	cdc.isRunning = true
-	logutil.Infof("cdc task %s start on cn %s success", cdc.cdcTask.TaskName, cdc.cnUUID)
+	logutil.Infof("cdc task %s start on cn %s success", taskName, cnUUID)
 	// start success, clear err msg
 	if err = cdc.updateErrMsg(ctx, ""); err != nil {
-		logutil.Errorf("cdc task %s update err msg failed, err: %v", cdc.cdcTask.TaskName, err)
+		logutil.Errorf("cdc task %s update err msg failed, err: %v", taskName, err)
 	}
 
 	// hold
