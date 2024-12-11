@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"go.uber.org/zap"
 )
 
 type txnDB struct {
@@ -483,6 +484,14 @@ func (db *txnDB) PrePrepare(ctx context.Context) (err error) {
 		}
 	}
 	v2.TxnTNPrePrepareDeduplicateDurationHistogram.Observe(time.Since(now).Seconds())
+	if time.Since(now) > time.Second {
+		logutil.Info(
+			"SLOW-LOG-PrePrepareDedup",
+			zap.String("txn", db.store.txn.String()),
+			zap.String("db", db.entry.GetName()),
+			zap.Duration("duration", time.Since(now)),
+		)
+	}
 
 	for _, table := range db.tables {
 		if err = table.PrePrepare(); err != nil {

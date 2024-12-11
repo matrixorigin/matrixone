@@ -746,7 +746,9 @@ func (store *txnStore) PrePrepare(ctx context.Context) (err error) {
 	}
 	approxSize := store.approxSize()
 	if approxSize > MaxWalSize {
-		return moerr.NewInternalError(ctx, fmt.Sprintf("WAL entry approxSize %d is too large, max is %d", approxSize, MaxWalSize))
+		return moerr.NewInternalError(
+			ctx, fmt.Sprintf("Txn %x WAL entry approxSize %d is too large, max is %d", store.txn.GetID(), approxSize, MaxWalSize),
+		)
 	}
 	if approxSize > 50*mpool.MB {
 		logutil.Warnf("[Large-WAL-Entry]txn %x, WAL entry approxSize %d", store.txn.GetID(), approxSize)
