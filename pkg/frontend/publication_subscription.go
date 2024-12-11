@@ -628,9 +628,6 @@ func dropPublication(ctx context.Context, bh BackgroundExec, ifExists bool, pubN
 func getAccounts(ctx context.Context, bh BackgroundExec, accName string, forUpdate bool) (idInfoMap map[int32]*pubsub.AccountInfo, nameInfoMap map[string]*pubsub.AccountInfo, err error) {
 	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 	sql := getAccountIdNamesSql
-	if len(accName) != 0 {
-		sql += fmt.Sprintf(` and account_name = "%s"`, accName)
-	}
 	sql += " order by account_id "
 	if forUpdate {
 		sql += " for update"
