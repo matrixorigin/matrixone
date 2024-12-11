@@ -1336,7 +1336,7 @@ func alphaTask(
 	)
 
 	// batCnt -> [200, 500]
-	batCnt := min(max(500, len(tbls)/5), 1500)
+	batCnt := min(max(500, len(tbls)/5), 1000)
 
 	now := time.Now()
 	defer func() {
@@ -1830,7 +1830,7 @@ func gamaTask(
 
 	dynamicCtx.Lock()
 	gamaDur := dynamicCtx.conf.CorrectionDuration
-	gamaLimit := max(dynamicCtx.conf.GetTableListLimit/10, 100)
+	gamaLimit := max(dynamicCtx.conf.GetTableListLimit, 8192)
 	dynamicCtx.Unlock()
 
 	randDuration := func(n int) time.Duration {
