@@ -1219,6 +1219,18 @@ func TestPool(t *testing.T) {
 		id := GetPartitionId(addr)
 		offset := GetPartitionOffset(addr)
 		fmt.Printf("ID %d, offset %d, data = %v\n", id, offset, data)
+
+		for i := range data {
+			data[i] = 111
+		}
+	}
+
+	for _, addr := range addrs {
+		data, err := mp.GetItem(addr)
+		require.Nil(t, err)
+		id := GetPartitionId(addr)
+		offset := GetPartitionOffset(addr)
+		fmt.Printf("ID %d, offset %d, data = %v\n", id, offset, data)
 	}
 
 	for _, addr := range addrs {

@@ -16,6 +16,7 @@ package table_function
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -45,8 +46,9 @@ type fulltextState struct {
 	limit       uint64
 	nrows       int
 	idx2word    map[int]string
-	agghtab     map[any][]uint8
+	agghtab     map[any]uint64
 	aggcnt      []int64
+	mpool       *fulltext.FixedBytePool
 
 	// holding output batch
 	batch *batch.Batch
@@ -354,7 +356,12 @@ func evaluate(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) 
 
 	aggcnt := u.aggcnt
 
-	for doc_id, docvec := range u.agghtab {
+	for doc_id, addr := range u.agghtab {
+		docvec, err := u.mpool.GetItem(addr)
+		if err != nil {
+			return nil, err
+		}
+
 		score, err := s.Eval(docvec, aggcnt)
 		if err != nil {
 			return nil, err
@@ -372,6 +379,7 @@ func evaluate(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) 
 	}
 
 	for _, k := range keys {
+		u.mpool.FreeItem(u.agghtab[k])
 		delete(u.agghtab, k)
 	}
 
@@ -384,6 +392,7 @@ func groupby(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) (
 	// We don't need to calculate mini-batch?????
 	var res executor.Result
 	var ok bool
+
 	select {
 	case res, ok = <-u.stream_chan:
 		if !ok {
@@ -419,22 +428,32 @@ func groupby(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) (
 		// word string
 		widx := vector.GetFixedAtWithTypeCheck[int32](bat.Vecs[1], i)
 
+		var docvec []uint8
 		if s.Pattern[0].Operator == fulltext.PHRASE {
 			// phrase search widx is dummy and fill in value 1 for all keywords
 			nwords := s.Nkeywords
-			docvec, ok := u.agghtab[doc_id]
+			addr, ok := u.agghtab[doc_id]
 			if ok {
+				docvec, err = u.mpool.GetItem(addr)
+				if err != nil {
+					return false, err
+				}
 				for i := 0; i < nwords; i++ {
 					if docvec[i] < 255 {
 						docvec[i]++
 					}
 				}
 			} else {
-				docvec = make([]uint8, s.Nkeywords)
+				//docvec = make([]uint8, s.Nkeywords)
+				addr, docvec, err = u.mpool.NewItem()
+				if err != nil {
+					return false, err
+				}
+
 				for i := 0; i < nwords; i++ {
 					docvec[i] = 1
 				}
-				u.agghtab[doc_id] = docvec
+				u.agghtab[doc_id] = addr
 			}
 
 			// update only once per doc_id
@@ -445,16 +464,24 @@ func groupby(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) (
 			}
 		} else {
 
-			docvec, ok := u.agghtab[doc_id]
+			addr, ok := u.agghtab[doc_id]
 			if ok {
+				docvec, err = u.mpool.GetItem(addr)
+				if err != nil {
+					return false, err
+				}
 				if docvec[widx] < 255 {
 					// limit doc count to 255 to fit uint8
 					docvec[widx]++
 				}
 			} else {
-				docvec = make([]uint8, s.Nkeywords)
+				//docvec = make([]uint8, s.Nkeywords)
+				addr, docvec, err = u.mpool.NewItem()
+				if err != nil {
+					return false, err
+				}
 				docvec[widx] = 1
-				u.agghtab[doc_id] = docvec
+				u.agghtab[doc_id] = addr
 			}
 
 			// update only once per doc_id
@@ -507,7 +534,8 @@ func fulltextIndexMatch(u *fulltextState, proc *process.Process, tableFunction *
 
 		nwords := fulltext.GetTextCountFromPattern(s.Pattern)
 
-		u.agghtab = make(map[any][]uint8, 1024)
+		u.mpool = fulltext.NewFixedBytePool(proc.Ctx, uint64(nwords), 0)
+		u.agghtab = make(map[any]uint64, 1024)
 		u.aggcnt = make([]int64, nwords)
 
 		// count(*) to get number of records in source table
@@ -538,26 +566,26 @@ func fulltextIndexMatch(u *fulltextState, proc *process.Process, tableFunction *
 				return
 			}
 		}
-		//os.Stderr.WriteString("FULLTEXT: SQL END\n")
+		os.Stderr.WriteString("FULLTEXT: SQL END\n")
 	}()
-	//os.Stderr.WriteString("MAIN FULLTEXT MATCH GROUP BY START\n")
+	os.Stderr.WriteString("MAIN FULLTEXT MATCH GROUP BY START\n")
 
 	// array is empty, try to get batch from SQL executor
-	//i := 0
+	i := 0
 	sql_closed := false
 	for !sql_closed {
 		sql_closed, err = groupby(u, proc, u.sacc)
 		if err != nil {
 			return err
 		}
-		/*
-			if (i % 1000) == 0 {
-				os.Stderr.WriteString(fmt.Sprintf("nrow processed %d, chan size =%d\n", u.nrows, len(u.stream_chan)))
-			}
-			i++
-		*/
+
+		if (i % 1000) == 0 {
+			os.Stderr.WriteString(fmt.Sprintf("nrow processed %d, chan size =%d\n", u.nrows, len(u.stream_chan)))
+		}
+		i++
+
 	}
-	//os.Stderr.WriteString(fmt.Sprintf("FULLTEXT: GROUP BY END htab size %d\n", len(u.agghtab)))
+	os.Stderr.WriteString(fmt.Sprintf("FULLTEXT: GROUP BY END htab size %d\n", len(u.agghtab)))
 
 	return nil
 }
