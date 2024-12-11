@@ -2342,10 +2342,10 @@ func (bc *BindContext) generateForceWinSpecList() ([]*plan.Expr, error) {
 }
 
 func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isRoot bool) (int32, error) {
-	fctx := tree.NewFmtCtx(dialect.MYSQL)
-	stmt.Format(fctx)
-	fmt.Println("bindSelect===>")
-	fmt.Println(fctx.String())
+	//fctx := tree.NewFmtCtx(dialect.MYSQL)
+	//stmt.Format(fctx)
+	//fmt.Println("bindSelect===>")
+	//fmt.Println(fctx.String())
 
 	// preprocess CTEs
 	if stmt.With != nil {
@@ -4203,7 +4203,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 			viewDefString := tableDef.ViewSql.View
 
 			if viewDefString != "" {
-				//viewCtx := NewBindContext(builder, nil)
+				viewCtx := NewBindContext(builder, nil)
 				//if viewCtx.cteByName == nil {
 				//	viewCtx.cteByName = make(map[string]*CTERef)
 				//}
@@ -4262,7 +4262,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 				//	snapshot:        snapshot,
 				//}
 				// consist with frontend.genKey()
-				ctx.views = append(ctx.views, schema+"#"+table)
+				viewCtx.views = append(viewCtx.views, schema+"#"+table)
 
 				//FIXME:
 				//newTableName := tree.NewTableName(viewName, tree.ObjectNamePrefix{
@@ -4274,26 +4274,27 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 				//return builder.buildTable(newTableName, viewCtx, preNodeId, leftCtx)
 
 				viewName := string(viewStmt.Name.ObjectName)
-				if ctx.viewInBinding(viewName, viewStmt) {
+				if viewCtx.viewInBinding(viewName, viewStmt) {
 					return 0, moerr.NewParseErrorf(builder.GetContext(), "view %s reference itself", viewName)
 				}
+				viewCtx.cteName = viewName
 
-				aliasSubquery := &tree.AliasedTableExpr{
-					Expr: viewStmt.AsSource,
-					As: tree.AliasClause{
-						Alias: viewStmt.Name.ObjectName,
-						Cols:  viewStmt.ColNames,
-					},
-				}
+				//aliasSubquery := &tree.AliasedTableExpr{
+				//	Expr: viewStmt.AsSource,
+				//	As: tree.AliasClause{
+				//		Alias: viewStmt.Name.ObjectName,
+				//		Cols:  viewStmt.ColNames,
+				//	},
+				//}
 
 				//alias := tree.AliasClause{
 				//	Alias: viewStmt.Name.ObjectName,
 				//	Cols:  viewStmt.ColNames,
 				//}
 
-				nodeID, err = builder.buildTable(aliasSubquery, ctx, preNodeId, leftCtx)
+				//nodeID, err = builder.buildTable(aliasSubquery, ctx, preNodeId, leftCtx)
 
-				//nodeID, err = builder.bindSelect(viewStmt.AsSource, ctx, false)
+				nodeID, err = builder.bindSelect(viewStmt.AsSource, viewCtx, false)
 				//if err != nil {
 				//	return 0, err
 				//}
