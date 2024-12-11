@@ -2,6 +2,7 @@ package fulltext
 
 import (
 	"context"
+	"fmt"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -69,25 +70,26 @@ func (part *Partition) GetItem(offset uint64) ([]byte, error) {
 	return unsafe.Slice(&part.data[offset], part.dsize), nil
 }
 
-func (part *Partition) FreeItem(offfset uint64) error {
+func (part *Partition) FreeItem(offfset uint64) (uint64, error) {
 	if part.refcnt == 0 {
-		return moerr.NewInternalError(part.cxt, "FreeItem: refcnt = 0, double free")
+		return 0, moerr.NewInternalError(part.cxt, "FreeItem: refcnt = 0, double free")
 	}
 	part.refcnt--
 
+	ret := uint64(0)
 	if part.refcnt == 0 {
 		// no more reference delete the data
+		ret = part.capacity
 		part.data = nil
 		part.capacity = 0
 		part.cpos = 0
 	}
-	return nil
+	return ret, nil
 }
 
 type FixedBytePool struct {
 	capacity      uint64
 	partition_cap uint64
-	npart         int64
 	dsize         uint64
 	partitions    []*Partition
 	cxt           context.Context
@@ -143,5 +145,15 @@ func (pool *FixedBytePool) FreeItem(addr uint64) error {
 	}
 
 	p := pool.partitions[id]
-	return p.FreeItem(offset)
+	freesize, err := p.FreeItem(offset)
+	if err != nil {
+		return err
+	}
+	pool.capacity -= freesize
+	return nil
+}
+
+func (pool *FixedBytePool) String() string {
+	return fmt.Sprintf("FixedBytePool: capacity %d, part_cap %d, npart %d, dsize %d\n",
+		pool.capacity, pool.partition_cap, len(pool.partitions), pool.dsize)
 }
