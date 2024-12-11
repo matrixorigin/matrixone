@@ -510,7 +510,7 @@ func (db *txnDB) PrePrepare(ctx context.Context) (err error) {
 		logutil.Info(
 			"SLOW-LOG-PrePrepareDedup",
 			zap.String("txn", db.store.txn.String()),
-			zap.Duration(duration),
+			zap.Duration("duration", duration),
 		)
 	}
 
