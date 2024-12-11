@@ -82,6 +82,95 @@ const (
 	defaultGlobalCheckpointTimeout = 10 * time.Second
 )
 
+func TestCancelableJob(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+
+	var v1 atomic.Int32
+	jobName := "job"
+	job := tasks.NewCancelableJob(
+		jobName,
+		func(ctx context.Context) {
+			time.Sleep(time.Millisecond * 2)
+			v1.Store(int32(10))
+		},
+		1,
+	)
+	assert.True(t, strings.Contains(job.Name(), jobName))
+	job.Start()
+	job.Stop()
+	assert.Equal(t, int32(10), v1.Load())
+
+	v1.Store(0)
+
+	job = tasks.NewCancelableCronJob(
+		jobName,
+		time.Millisecond*1,
+		func(ctx context.Context) {
+			if v := v1.Add(1); v == 3 {
+				panic("panic-test")
+			}
+		},
+		true,
+		1,
+	)
+	job.Start()
+
+	testutils.WaitExpect(5000, func() bool {
+		return v1.Load() > 5
+	})
+	assert.Truef(t, v1.Load() > 5, "v1=%d", v1.Load())
+	job.Stop()
+
+	jobs := tasks.NewCancelableJobs()
+
+	err := jobs.AddJob(
+		"job1",
+		time.Millisecond*1,
+		func(ctx context.Context) {
+		},
+		1,
+	)
+	assert.NoError(t, err)
+
+	v1.Store(0)
+	var v2 atomic.Int32
+	err = jobs.AddJob(
+		"job1",
+		time.Millisecond*1,
+		func(ctx context.Context) {
+			if v := v1.Add(1); v == 3 {
+				panic("panic-job1-test")
+			}
+		},
+		1,
+	)
+	assert.Equal(t, tasks.DuplicateJobErr, err)
+	err = jobs.AddJob(
+		"job2",
+		time.Millisecond*1,
+		func(ctx context.Context) {
+			if v := v2.Add(1); v == 3 {
+				panic("panic-job2-test")
+			}
+		},
+		1,
+	)
+	assert.NoError(t, err)
+	assert.Equal(t, 2, jobs.JobCount())
+
+	testutils.WaitExpect(5000, func() bool {
+		return v1.Load() > 5 && v2.Load() > 5
+	})
+
+	jobs.Reset()
+	assert.Equal(t, 0, jobs.JobCount())
+	vv1, vv2 := v1.Load(), v2.Load()
+	time.Sleep(time.Millisecond * 5)
+	assert.Equal(t, vv1, v1.Load())
+	assert.Equal(t, vv2, v2.Load())
+}
+
 func TestPrintVector(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
@@ -7914,10 +8003,10 @@ func TestForceCheckpoint(t *testing.T) {
 	ctx := context.Background()
 	fault.Enable()
 	defer fault.Disable()
-	err := fault.AddFaultPoint(ctx, objectio.FJ_FlushTimeout, ":::", "echo", 0, "mock flush timeout")
+	err := fault.AddFaultPoint(ctx, objectio.FJ_FlushTimeout, ":::", "echo", 0, "mock flush timeout", false)
 	assert.NoError(t, err)
 	defer func() {
-		err := fault.RemoveFaultPoint(ctx, objectio.FJ_FlushTimeout)
+		_, err := fault.RemoveFaultPoint(ctx, objectio.FJ_FlushTimeout)
 		assert.NoError(t, err)
 	}()
 
@@ -9828,10 +9917,10 @@ func TestMergeBlocks4(t *testing.T) {
 		defer wg.Done()
 		fault.Enable()
 		defer fault.Disable()
-		err := fault.AddFaultPoint(ctx, objectio.FJ_TransferSlow, ":::", "echo", 0, "mock flush timeout")
+		err := fault.AddFaultPoint(ctx, objectio.FJ_TransferSlow, ":::", "echo", 0, "mock flush timeout", false)
 		assert.NoError(t, err)
 		defer func() {
-			err := fault.RemoveFaultPoint(ctx, objectio.FJ_TransferSlow)
+			_, err := fault.RemoveFaultPoint(ctx, objectio.FJ_TransferSlow)
 			assert.NoError(t, err)
 		}()
 		tae.DeleteAll(true)
@@ -10420,7 +10509,7 @@ func TestReplayDebugLog(t *testing.T) {
 
 	fault.Enable()
 	defer fault.Disable()
-	fault.AddFaultPoint(ctx, "replay debug log", ":::", "echo", 0, "debug")
+	fault.AddFaultPoint(ctx, "replay debug log", ":::", "echo", 0, "debug", false)
 	defer fault.RemoveFaultPoint(ctx, "replay debug log")
 
 	tae.Restart(ctx)

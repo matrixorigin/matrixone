@@ -35,8 +35,8 @@ var (
 		//output: "upgrade account acc1 with retry 5",
 		//input:  "upgrade account 'acc1'",
 		//output: "upgrade account acc1",
-		input:  "show upgrade",
-		output: "show upgrade",
+		input:  "use ",
+		output: "use",
 	}
 )
 
@@ -3158,6 +3158,10 @@ var (
 		{
 			input:  "SELECT SQL_NO_CACHE HIGH_PRIORITY STRAIGHT_JOIN SQL_SMALL_RESULT SQL_BIG_RESULT SQL_BUFFER_RESULT SQL_NO_CACHE SQL_CALC_FOUND_ROWS abc, tbl_test.* FROM `tbl_test`;",
 			output: "select high_priority straight_join sql_small_result sql_big_result sql_buffer_result sql_no_cache sql_calc_found_rows abc, tbl_test.* from tbl_test",
+		},
+		{
+			input:  "use ",
+			output: "use",
 		},
 	}
 )
