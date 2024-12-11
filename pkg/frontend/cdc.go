@@ -336,6 +336,9 @@ func doCreateCdc(ctx context.Context, ses *Session, create *tree.CreateCDC) (err
 
 	//step 6: no full
 	noFull, err := strconv.ParseBool(cdcTaskOptionsMap["NoFull"])
+	if err != nil {
+		return
+	}
 
 	//step 7: additionalConfig
 	additionalConfig := make(map[string]any)

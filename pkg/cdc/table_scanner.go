@@ -96,7 +96,7 @@ func (s *TableScanner) UnRegister(id string) {
 	defer s.Unlock()
 
 	delete(s.Callbacks, id)
-	if len(s.Callbacks) == 0 {
+	if len(s.Callbacks) == 0 && s.cancel != nil {
 		s.cancel()
 		s.cancel = nil
 	}
@@ -116,9 +116,11 @@ func (s *TableScanner) scanTableLoop(ctx context.Context) {
 		case <-timeTick:
 			s.scanTable()
 			// do callbacks
+			s.Lock()
 			for _, cb := range s.Callbacks {
 				go cb(s.Mp)
 			}
+			s.Unlock()
 		}
 	}
 }
