@@ -114,6 +114,13 @@ func (group *Group) evaluateGroupByAndAgg(proc *process.Process, bat *batch.Batc
 		}
 	}
 
+	// grouping flag.
+	for i, flag := range group.GroupingFlag {
+		if !flag {
+			group.ctr.groupByEvaluate.Vec[i] = vector.NewRollupConst(group.ctr.groupByEvaluate.Typ[i], group.ctr.groupByEvaluate.Vec[i].Length(), proc.Mp())
+		}
+	}
+
 	return nil
 }
 
