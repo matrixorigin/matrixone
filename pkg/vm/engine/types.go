@@ -671,6 +671,7 @@ const (
 	RelDataEmpty RelDataType = iota
 	RelDataShardIDList
 	RelDataBlockList
+	RelDataObjList
 )
 
 type RelData interface {
@@ -698,6 +699,7 @@ type RelData interface {
 	AppendShardID(id uint64)
 
 	// for block info list
+	Split(i int) []RelData
 	GetBlockInfoSlice() objectio.BlockInfoSlice
 	GetBlockInfo(i int) objectio.BlockInfo
 	SetBlockInfo(i int, blk *objectio.BlockInfo)
@@ -834,18 +836,20 @@ type RangesShuffleParam struct {
 }
 
 type RangesParam struct {
-	BlockFilters   []*plan.Expr //Slice of expressions used to filter zonemap
-	PreAllocBlocks int          //estimated count of blocks
-	TxnOffset      int          //Transaction offset used to specify the starting position for reading data.
-	Policy         DataCollectPolicy
-	Rsp            *RangesShuffleParam
+	BlockFilters       []*plan.Expr //Slice of expressions used to filter zonemap
+	PreAllocBlocks     int          //estimated count of blocks
+	TxnOffset          int          //Transaction offset used to specify the starting position for reading data.
+	Policy             DataCollectPolicy
+	Rsp                *RangesShuffleParam
+	DontSupportRelData bool
 }
 
 var DefaultRangesParam RangesParam = RangesParam{
-	BlockFilters:   nil,
-	PreAllocBlocks: 2,
-	TxnOffset:      0,
-	Policy:         Policy_CollectAllData,
+	BlockFilters:       nil,
+	PreAllocBlocks:     2,
+	TxnOffset:          0,
+	Policy:             Policy_CollectAllData,
+	DontSupportRelData: true,
 }
 
 type Relation interface {
@@ -1077,6 +1081,10 @@ func (rd *EmptyRelationData) SetShardID(i int, id uint64) {
 }
 
 func (rd *EmptyRelationData) AppendShardID(id uint64) {
+	panic("not supported")
+}
+
+func (rd *EmptyRelationData) Split(i int) []RelData {
 	panic("not supported")
 }
 
