@@ -17,6 +17,7 @@ package rpc
 import (
 	"context"
 	"encoding/hex"
+	"fmt"
 	"sync"
 	"time"
 
@@ -90,6 +91,13 @@ func WithTxnSender(sender TxnSender) ServerOption {
 	}
 }
 
+func WithTxnForwardHandler(
+	handler func(context.Context, *txn.TxnRequest, *txn.TxnResponse) error) ServerOption {
+	return func(s *server) {
+		s.handleState.forward.forwardFunc = handler
+	}
+}
+
 func WithForwardTarget(tn metadata.TNShard) ServerOption {
 	return func(s *server) {
 		s.handleState.forward.target = tn
@@ -128,6 +136,8 @@ type server struct {
 			target    metadata.TNShard
 			sender    TxnSender
 			waitReady chan struct{}
+
+			forwardFunc func(context.Context, *txn.TxnRequest, *txn.TxnResponse) error
 		}
 	}
 
@@ -296,20 +306,24 @@ func (s *server) handleTxnRequest(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case req := <-s.queue:
-			state, waitReady := s.getTxnHandleState()
+			state, waitReady, newHandler := s.getTxnHandleState()
 			switch state {
-			case TxnLocalHandle:
-			case TxnForwarding:
-				req.handler = s.forwardingTxnRequest
 			case TxnForwardWait:
-				for {
+				wait := true
+				for wait {
 					select {
 					case <-ctx.Done():
-						return
+						wait = false
 					case <-waitReady:
-						req.handler = s.forwardingTxnRequest
+						wait = false
+						req.handler = newHandler
 					}
 				}
+
+			case TxnLocalHandle:
+
+			case TxnForwarding:
+				req.handler = newHandler
 			}
 
 			if txnID, err := req.exec(); err != nil {
@@ -357,39 +371,65 @@ func checkMethodVersion(
 
 /////////////////////// forward txn request to another tn /////////////////////
 
+// valid state switch path
+//
+// txnLocalHandle --> txnLocalHandle
+//				  --> txnForwardWait --> txnLocalHandle
+// 									 --> txnForwardWait
+//									 --> txnForwarding --> txnLocalHandle
+//													   --> txnForwarding
+//													   --> txnForwardWait
+
 func (s *server) SwitchTxnHandleStateTo(state int, opts ...ServerOption) error {
+	currentState := s.handleState.state
+
 	switch state {
 	case TxnLocalHandle:
 		return s.enterLocalHandleState()
 	case TxnForwardWait:
 		return s.enterForwardWaitState(opts...)
 	case TxnForwarding:
+		if currentState != TxnForwarding && currentState != TxnForwardWait {
+			return moerr.NewInternalErrorNoCtx(
+				fmt.Sprintf("state %d -> state %d invalid", currentState, state))
+		}
 		return s.enterForwardingState()
 	}
 
 	return moerr.NewInternalErrorNoCtx("no state matched")
 }
 
-func (s *server) getTxnHandleState() (int, chan struct{}) {
+func (s *server) getTxnHandleState() (
+	int, chan struct{},
+	func(context.Context, *txn.TxnRequest, *txn.TxnResponse) error) {
+
 	s.handleState.RLock()
 	defer s.handleState.RUnlock()
 
-	return s.handleState.state, s.handleState.forward.waitReady
+	return s.handleState.state,
+		s.handleState.forward.waitReady,
+		s.handleState.forward.forwardFunc
 }
 
 func (s *server) enterForwardWaitState(opts ...ServerOption) error {
 	s.handleState.Lock()
 	defer s.handleState.Unlock()
 
-	if len(opts) != 1 {
-		return moerr.NewInternalErrorNoCtx("no target tn specified")
-	}
-
 	if s.handleState.state == TxnForwardWait {
 		return nil
 	}
 
-	opts[0](s)
+	for _, f := range opts {
+		f(s)
+	}
+
+	if len(s.handleState.forward.target.Address) == 0 {
+		return moerr.NewInternalErrorNoCtx("no target tn specified")
+	}
+
+	if s.handleState.forward.forwardFunc == nil {
+		s.handleState.forward.forwardFunc = s.forwardingTxnRequest
+	}
 
 	s.handleState.state = TxnForwardWait
 	s.handleState.forward.waitReady = make(chan struct{})
