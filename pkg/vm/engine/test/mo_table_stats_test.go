@@ -132,6 +132,9 @@ func TestMoTableStatsMoCtl2(t *testing.T) {
 
 	disttae.LaunchMTSTasksForUT()
 
+	ret := disttae.HandleMoTableStatsCtl("recomputing:0")
+	fmt.Println(ret)
+
 	disttae.NotifyCleanDeletes()
 	disttae.NotifyUpdateForgotten()
 
@@ -142,7 +145,7 @@ func TestMoTableStatsMoCtl2(t *testing.T) {
 	_, rel := p.CreateDBAndTable(txnop, "db1", schema)
 	require.NoError(t, txnop.Commit(p.Ctx))
 
-	ret := disttae.HandleMoTableStatsCtl("restore_default_setting:true")
+	ret = disttae.HandleMoTableStatsCtl("restore_default_setting:true")
 	require.Equal(t, "move_on(true), use_old_impl(false), force_update(false)", ret)
 
 	dbId := rel.GetDBID(p.Ctx)
