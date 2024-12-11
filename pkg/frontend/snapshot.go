@@ -370,8 +370,9 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 		return stats, err
 	}
 
-	if snapshot.accountName != srcAccountName && snapshot.level != tree.RESTORELEVELCLUSTER.String() {
-		return stats, moerr.NewInternalErrorf(ctx, "accountName(%v) does not match snapshot.accountName(%v)", srcAccountName, snapshot.accountName)
+	// check restore priv
+	if err = checkRestorePriv(ctx, ses, snapshot, stmt); err != nil {
+		return stats, err
 	}
 
 	// default restore to src account
@@ -381,62 +382,11 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 	}
 
 	if len(toAccountName) > 0 {
-		// can't restore to another account if cur account is not sys
-		if !ses.GetTenantInfo().IsSysTenant() {
-			err = moerr.NewInternalError(ctx, "non-sys account can't restore snapshot to another account")
-			return
-		}
-
-		if toAccountName == sysAccountName && snapshot.accountName != sysAccountName {
-			err = moerr.NewInternalError(ctx, "non-sys account's snapshot can't restore to sys account")
-			return
-		}
-
 		if toAccountId, err = getAccountId(ctx, bh, string(stmt.ToAccountName)); err != nil {
 			return stats, err
 		}
 	} else {
 		toAccountId = restoreAccount
-	}
-
-	// check restore cluster
-	if stmt.Level == tree.RESTORELEVELCLUSTER {
-		if !ses.GetTenantInfo().IsSysTenant() {
-			err = moerr.NewInternalError(ctx, "non-sys account can't restore cluster level snapshot")
-			return
-		}
-
-		if snapshot.level != tree.SNAPSHOTLEVELCLUSTER.String() {
-			err = moerr.NewInternalErrorf(ctx, "snapshot %s is not cluster level snapshot", snapshotName)
-			return
-		}
-	}
-
-	if len(dbName) > 0 && needSkipDb(dbName) {
-		return stats, moerr.NewInternalErrorf(ctx, "can't restore db: %v", dbName)
-	}
-	if snapshot.level == tree.RESTORELEVELCLUSTER.String() && (len(dbName) != 0 || len(tblName) != 0) {
-		return stats, moerr.NewInternalError(ctx, "can't restore db or table from cluster level snapshot")
-	}
-
-	if snapshot.level == tree.RESTORELEVELCLUSTER.String() && len(srcAccountName) != 0 {
-		var srcAccountId uint32
-		srcAccountId, err = getAccountId(ctx, bh, srcAccountName)
-		if err != nil {
-			return
-		}
-
-		var sp string
-		sp, err = insertSnapshotRecord(ctx, ses.GetService(), bh, snapshot.snapshotName, snapshot.ts, uint64(srcAccountId), srcAccountName)
-		if err != nil {
-			return
-		}
-		snapshotName = sp
-		defer func() {
-			if err != nil {
-				deleteSnapshotRecord(ctx, ses.GetService(), bh, snapshot.snapshotName, sp)
-			}
-		}()
 	}
 
 	// restore cluster
@@ -457,6 +407,27 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 			}
 		}
 		return
+	}
+
+	// restore account by cluster level snapshot
+	if snapshot.level == tree.RESTORELEVELCLUSTER.String() && len(srcAccountName) != 0 {
+		var srcAccountId uint32
+		srcAccountId, err = getAccountId(ctx, bh, srcAccountName)
+		if err != nil {
+			return
+		}
+
+		var sp string
+		sp, err = insertSnapshotRecord(ctx, ses.GetService(), bh, snapshot.snapshotName, snapshot.ts, uint64(srcAccountId), srcAccountName)
+		if err != nil {
+			return
+		}
+		snapshotName = sp
+		defer func() {
+			if err != nil {
+				deleteSnapshotRecord(ctx, ses.GetService(), bh, snapshot.snapshotName, sp)
+			}
+		}()
 	}
 
 	// drop foreign key related tables first
@@ -549,6 +520,55 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 	}
 
 	return
+}
+
+func checkRestorePriv(ctx context.Context, ses *Session, snapshot *snapshotRecord, stmt *tree.RestoreSnapShot) (err error) {
+	restoreLevel := stmt.Level
+	switch restoreLevel {
+	case tree.RESTORELEVELCLUSTER:
+		if !ses.GetTenantInfo().IsSysTenant() {
+			return moerr.NewInternalError(ctx, "non-sys account can't restore cluster level snapshot")
+		}
+
+		if snapshot.level != tree.SNAPSHOTLEVELCLUSTER.String() {
+			return moerr.NewInternalErrorf(ctx, "snapshot %s is not cluster level snapshot", snapshot.snapshotName)
+		}
+	case tree.RESTORELEVELACCOUNT:
+		if len(stmt.ToAccountName) > 0 {
+			if !ses.GetTenantInfo().IsSysTenant() {
+				return moerr.NewInternalError(ctx, "non-sys account can't restore snapshot to another account")
+
+			}
+
+			if stmt.ToAccountName == sysAccountName && snapshot.accountName != sysAccountName {
+				return moerr.NewInternalError(ctx, "non-sys account's snapshot can't restore to sys account")
+			}
+		}
+	case tree.RESTORELEVELDATABASE:
+		dbname := string(stmt.DatabaseName)
+		if len(dbname) > 0 && needSkipDb(dbname) {
+			return moerr.NewInternalErrorf(ctx, "can't restore db: %v", dbname)
+		}
+
+		if snapshot.level == tree.RESTORELEVELCLUSTER.String() {
+			return moerr.NewInternalError(ctx, "can't restore db from cluster level snapshot")
+		}
+	case tree.RESTORELEVELTABLE:
+		dbname := string(stmt.DatabaseName)
+		if len(dbname) > 0 && needSkipDb(dbname) {
+			return moerr.NewInternalErrorf(ctx, "can't restore db: %v", dbname)
+		}
+		if snapshot.level == tree.RESTORELEVELCLUSTER.String() {
+			return moerr.NewInternalError(ctx, "can't restore db from cluster level snapshot")
+		}
+	default:
+		return moerr.NewInternalErrorf(ctx, "unknown restore level: %v", restoreLevel)
+	}
+
+	if snapshot.accountName != string(stmt.AccountName) && snapshot.level != tree.RESTORELEVELCLUSTER.String() {
+		return moerr.NewInternalErrorf(ctx, "accountName(%v) does not match snapshot.accountName(%v)", string(stmt.AccountName), snapshot.accountName)
+	}
+	return nil
 }
 
 func deleteCurFkTables(ctx context.Context, sid string, bh BackgroundExec, dbName string, tblName string, toAccountId uint32) (err error) {
