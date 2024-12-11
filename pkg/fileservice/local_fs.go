@@ -601,7 +601,7 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector, bytesCounter *atom
 				entry.Size = int64(len(data))
 
 			} else {
-				finally := entry.prepareData()
+				finally := entry.prepareData(ctx)
 				defer finally(&err)
 				var n int
 				n, err = io.ReadFull(r, entry.Data)
