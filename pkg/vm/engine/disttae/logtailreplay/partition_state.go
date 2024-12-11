@@ -587,17 +587,15 @@ func (p *PartitionState) Copy() *PartitionState {
 		rows:                      p.rows.Copy(),
 		dataObjectsNameIndex:      p.dataObjectsNameIndex.Copy(),
 		tombstoneObjectsNameIndex: p.tombstoneObjectsNameIndex.Copy(),
-		//blockDeltas:     p.blockDeltas.Copy(),
-		rowPrimaryKeyIndex:       p.rowPrimaryKeyIndex.Copy(),
-		inMemTombstoneRowIdIndex: p.inMemTombstoneRowIdIndex.Copy(),
-		noData:                   p.noData,
-		//dirtyBlocks:     p.dirtyBlocks.Copy(),
-		dataObjectTSIndex:       p.dataObjectTSIndex.Copy(),
-		tombstoneObjectDTSIndex: p.tombstoneObjectDTSIndex.Copy(),
-		shared:                  p.shared,
-		lastFlushTimestamp:      p.lastFlushTimestamp,
-		start:                   p.start,
-		end:                     p.end,
+		rowPrimaryKeyIndex:        p.rowPrimaryKeyIndex.Copy(),
+		inMemTombstoneRowIdIndex:  p.inMemTombstoneRowIdIndex.Copy(),
+		noData:                    p.noData,
+		dataObjectTSIndex:         p.dataObjectTSIndex.Copy(),
+		tombstoneObjectDTSIndex:   p.tombstoneObjectDTSIndex.Copy(),
+		shared:                    p.shared,
+		lastFlushTimestamp:        p.lastFlushTimestamp,
+		start:                     p.start,
+		end:                       p.end,
 	}
 	if len(p.checkpoints) > 0 {
 		state.checkpoints = make([]string, len(p.checkpoints))
@@ -642,7 +640,8 @@ func NewPartitionState(
 	tid uint64,
 ) *PartitionState {
 	opts := btree.Options{
-		Degree: 64,
+		Degree:  32, // may good for heap alloc
+		NoLocks: true,
 	}
 	ps := &PartitionState{
 		service:                   service,
@@ -795,7 +794,7 @@ func (p *PartitionState) PKExistInMemBetween(
 	to types.TS,
 	keys [][]byte,
 ) (bool, bool) {
-	iter := p.rowPrimaryKeyIndex.Copy().Iter()
+	iter := p.rowPrimaryKeyIndex.Iter()
 	pivot := RowEntry{
 		Time: types.BuildTS(math.MaxInt64, math.MaxUint32),
 	}
@@ -952,7 +951,7 @@ func (p *PartitionState) ScanRows(
 }
 
 func (p *PartitionState) CheckRowIdDeletedInMem(ts types.TS, rowId types.Rowid) bool {
-	iter := p.rows.Copy().Iter()
+	iter := p.rows.Iter()
 	defer iter.Release()
 
 	if !iter.Seek(RowEntry{
