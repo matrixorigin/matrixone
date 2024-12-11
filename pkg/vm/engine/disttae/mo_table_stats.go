@@ -944,8 +944,6 @@ func QueryTableStatsByAccounts(
 		zap.Bool("ok", ok),
 		zap.Error(err))
 
-	fmt.Println("B", statsVals)
-
 	return statsVals, accs2, err, ok
 }
 
@@ -1010,11 +1008,6 @@ func QueryTableStats(
 	}
 
 	statsVals, err = normalQuery(newCtx, wantedStatsIdxes, accs, dbs, tbls)
-
-	fmt.Println("C", statsVals)
-	fmt.Println("C", accs)
-	fmt.Println("C", dbs)
-	fmt.Println("C", tbls)
 
 	return statsVals, err, true
 }
