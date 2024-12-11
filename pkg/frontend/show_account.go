@@ -365,6 +365,8 @@ func tryGetSizeFromMTS(
 		sizes[int64(accs[i])] += uint64(vals[0][i].(float64))
 	}
 
+	fmt.Println("A", sizes)
+
 	return sizes, true
 }
 

@@ -204,7 +204,7 @@ const (
 const (
 	defaultAlphaCycleDur     = time.Minute
 	defaultGamaCycleDur      = time.Minute
-	defaultGetTableListLimit = options.DefaultBlockMaxRows
+	defaultGetTableListLimit = options.DefaultBlockMaxRows * 10
 
 	logHeader = "MO-TABLE-STATS-TASK"
 )
@@ -834,8 +834,6 @@ func normalQuery(
 		idxes   = make([]int, 0, sqlRet.RowCount())
 		gotTIds = make([]int64, 0, sqlRet.RowCount())
 
-		stats map[string]any
-
 		tblIdColIdx = uint64(0)
 		statsColIdx = uint64(2)
 	)
@@ -867,6 +865,7 @@ func normalQuery(
 			return nil, err
 		}
 
+		var stats map[string]any
 		if err = json.Unmarshal([]byte(val.(bytejson.ByteJson).String()), &stats); err != nil {
 			return
 		}
@@ -945,6 +944,8 @@ func QueryTableStatsByAccounts(
 		zap.Bool("ok", ok),
 		zap.Error(err))
 
+	fmt.Println("B", statsVals)
+
 	return statsVals, accs2, err, ok
 }
 
@@ -1009,6 +1010,11 @@ func QueryTableStats(
 	}
 
 	statsVals, err = normalQuery(newCtx, wantedStatsIdxes, accs, dbs, tbls)
+
+	fmt.Println("C", statsVals)
+	fmt.Println("C", accs)
+	fmt.Println("C", dbs)
+	fmt.Println("C", tbls)
 
 	return statsVals, err, true
 }
@@ -1337,7 +1343,7 @@ func alphaTask(
 	)
 
 	// batCnt -> [200, 500]
-	batCnt := min(max(100, len(tbls)/5), 500)
+	batCnt := min(max(500, len(tbls)/5), 1500)
 
 	now := time.Now()
 	defer func() {
@@ -1831,7 +1837,7 @@ func gamaTask(
 
 	dynamicCtx.Lock()
 	gamaDur := dynamicCtx.conf.CorrectionDuration
-	gamaLimit := max(dynamicCtx.conf.GetTableListLimit/100, 100)
+	gamaLimit := max(dynamicCtx.conf.GetTableListLimit/10, 100)
 	dynamicCtx.Unlock()
 
 	randDuration := func(n int) time.Duration {
