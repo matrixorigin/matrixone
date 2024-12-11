@@ -513,15 +513,17 @@ func LogDynamicCtx() string {
 	defer dynamicCtx.Unlock()
 
 	var buf bytes.Buffer
-	buf.WriteString(fmt.Sprintf("cur-conf:[alpha-dur: %v; gama-dur: %v; limit: %v; force-update: %v; use-old-impl: %v; disable-task: %v]\n",
-		dynamicCtx.conf.UpdateDuration,
-		dynamicCtx.conf.CorrectionDuration,
-		dynamicCtx.conf.GetTableListLimit,
-		dynamicCtx.conf.ForceUpdate,
-		dynamicCtx.conf.StatsUsingOldImpl,
-		dynamicCtx.conf.DisableStatsTask))
 
-	buf.WriteString(fmt.Sprintf("default-conf:[alpha-dur: %v; gama-dur: %v; limit: %v; force-update: %v; use-old-impl: %v; disable-task: %v]\n",
+	buf.WriteString(fmt.Sprintf("gama: [running: %v; launched-time: %v]\n",
+		dynamicCtx.gama.running,
+		dynamicCtx.gama.launchTimes))
+
+	buf.WriteString(fmt.Sprintf("beta: [running: %v; launched-time: %v]\n",
+		dynamicCtx.beta.running,
+		dynamicCtx.beta.launchTimes))
+
+	buf.WriteString(fmt.Sprintf(
+		"default-conf:[alpha-dur: %v; gama-dur: %v; limit: %v; force-update: %v; use-old-impl: %v; disable-task: %v]\n",
 		dynamicCtx.defaultConf.UpdateDuration,
 		dynamicCtx.defaultConf.CorrectionDuration,
 		dynamicCtx.defaultConf.GetTableListLimit,
@@ -529,13 +531,14 @@ func LogDynamicCtx() string {
 		dynamicCtx.defaultConf.StatsUsingOldImpl,
 		dynamicCtx.defaultConf.DisableStatsTask))
 
-	buf.WriteString(fmt.Sprintf("beta: [running: %v; launched-time: %v]\n",
-		dynamicCtx.beta.running,
-		dynamicCtx.beta.launchTimes))
-
-	buf.WriteString(fmt.Sprintf("gama: [running: %v; launched-time: %v]\n",
-		dynamicCtx.gama.running,
-		dynamicCtx.gama.launchTimes))
+	buf.WriteString(fmt.Sprintf(
+		"cur-conf:[alpha-dur: %v; gama-dur: %v; limit: %v; force-update: %v; use-old-impl: %v; disable-task: %v]\n",
+		dynamicCtx.conf.UpdateDuration,
+		dynamicCtx.conf.CorrectionDuration,
+		dynamicCtx.conf.GetTableListLimit,
+		dynamicCtx.conf.ForceUpdate,
+		dynamicCtx.conf.StatsUsingOldImpl,
+		dynamicCtx.conf.DisableStatsTask))
 
 	return buf.String()
 }
@@ -616,19 +619,19 @@ func recomputing(para string) string {
 	_, retAcc, err, ok = QueryTableStatsByAccounts(
 		context.Background(), nil, accIds, false, true)
 
-	if ok {
-		uniqueAcc := make(map[uint64]struct{})
-		for i := range retAcc {
-			uniqueAcc[retAcc[i]] = struct{}{}
-		}
-
-		for k := range uniqueAcc {
-			buf.WriteString(fmt.Sprintf("%d ", k))
-		}
-
-		buf.WriteString("succeed")
+	if !ok {
+		buf.WriteString(fmt.Sprintf("failed, err: %v, acc: ", err))
 	} else {
-		buf.WriteString(fmt.Sprintf("failed, err: %v", err))
+		buf.WriteString("succeed, acc: ")
+	}
+
+	uniqueAcc := make(map[uint64]struct{})
+	for i := range retAcc {
+		uniqueAcc[retAcc[i]] = struct{}{}
+	}
+
+	for k := range uniqueAcc {
+		buf.WriteString(fmt.Sprintf("%d ", k))
 	}
 
 	return buf.String()
@@ -1052,7 +1055,7 @@ func QueryTableStats(
 		}
 
 		var de *Engine
-		if val, ok := eng.(*engine.EntireEngine); ok {
+		if val, yes := eng.(*engine.EntireEngine); yes {
 			de = val.Engine.(*Engine)
 		} else {
 			de = eng.(*Engine)
@@ -1063,12 +1066,12 @@ func QueryTableStats(
 			accs, dbs, tbls,
 			resetUpdateTime,
 			de)
-		return statsVals, err, true
+		return statsVals, err, err == nil
 	}
 
 	statsVals, err = normalQuery(newCtx, wantedStatsIdxes, accs, dbs, tbls)
 
-	return statsVals, err, true
+	return statsVals, err, err == nil
 }
 
 func MTSTableSize(
