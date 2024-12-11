@@ -401,19 +401,19 @@ func initMoTableStatsConfig(
 		}
 
 		go func() {
-			ctx = turn2SysCtx(ctx)
+			newCtx := turn2SysCtx(ctx)
 			ticker := time.NewTicker(time.Second)
 
 			for {
 				select {
-				case <-ctx.Done():
+				case <-newCtx.Done():
 					return
 				case <-ticker.C:
 					if eng.config.moServerStateChecker == nil || !eng.config.moServerStateChecker() {
 						continue
 					}
 
-					if eng.dynamicCtx.initCronTask(ctx) {
+					if eng.dynamicCtx.initCronTask(newCtx) {
 						return
 					}
 
@@ -486,8 +486,6 @@ type dynamicCtx struct {
 
 	once sync.Once
 
-	moServerStateChecker func() bool
-
 	defaultConf MoTableStatsConfig
 	conf        MoTableStatsConfig
 
@@ -513,8 +511,6 @@ type dynamicCtx struct {
 	executorPool sync.Pool
 
 	sqlOpts ie.SessionOverrideOptions
-
-	initCronTaskCtxCancel context.CancelFunc
 }
 
 func (d *dynamicCtx) LogDynamicCtx() string {
