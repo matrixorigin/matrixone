@@ -3756,12 +3756,14 @@ func (h *marshalPlanHandler) Stats(ctx context.Context, ses FeSession) (statsByt
 			int64(statsInfo.PlanStage.PlanDuration) +
 			int64(statsInfo.CompileStage.CompileDuration) +
 			statsInfo.PrepareRunStage.ScopePrepareDuration +
-			statsInfo.PrepareRunStage.CompilePreRunOnceDuration - statsInfo.PrepareRunStage.CompilePreRunOnceWaitLock -
+			statsInfo.PrepareRunStage.CompilePreRunOnceDuration -
+			statsInfo.PrepareRunStage.CompilePreRunOnceWaitLock -
+			statsInfo.PlanStage.BuildPlanStatsIOConsumption -
 			(statsInfo.IOAccessTimeConsumption + statsInfo.S3FSPrefetchFileIOMergerTimeConsumption)
 
 		if totalTime < 0 {
 			if !h.isInternalSubStmt {
-				ses.Infof(ctx, "negative cpu statement_id:%s, statement_type:%s, statsInfo:[Parse(%d)+BuildPlan(%d)+Compile(%d)+PhyExec(%d)+PrepareRun(%d)-PreRunWaitLock(%d)-IOAccess(%d)-IOMerge(%d) = %d]",
+				ses.Infof(ctx, "negative cpu statement_id:%s, statement_type:%s, statsInfo:[Parse(%d)+BuildPlan(%d)+Compile(%d)+PhyExec(%d)+PrepareRun(%d)-PreRunWaitLock(%d)-PlanStatsIO(%d)-IOAccess(%d)-IOMerge(%d) = %d]",
 					uuid.UUID(h.stmt.StatementID).String(),
 					h.stmt.StatementType,
 					statsInfo.ParseStage.ParseDuration,
@@ -3770,6 +3772,7 @@ func (h *marshalPlanHandler) Stats(ctx context.Context, ses FeSession) (statsByt
 					operatorTimeConsumed,
 					statsInfo.PrepareRunStage.ScopePrepareDuration+statsInfo.PrepareRunStage.CompilePreRunOnceDuration,
 					statsInfo.PrepareRunStage.CompilePreRunOnceWaitLock,
+					statsInfo.PlanStage.BuildPlanStatsIOConsumption,
 					statsInfo.IOAccessTimeConsumption,
 					statsInfo.S3FSPrefetchFileIOMergerTimeConsumption,
 					totalTime,

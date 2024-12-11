@@ -909,6 +909,7 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, snapshot *plan2.Snaps
 				return cached, err
 			}
 			newParCtx := perfcounter.AttachS3RequestKey(parCtx, crs)
+			newParCtx = perfcounter.AttachCalcTableStatsKey(newParCtx)
 			parStats, err := parTable.Stats(newParCtx, true)
 			if err != nil {
 				return cached, err
@@ -928,6 +929,7 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, snapshot *plan2.Snaps
 	} else {
 		crs := new(perfcounter.CounterSet)
 		newCtx := perfcounter.AttachS3RequestKey(ctx, crs)
+		newCtx = perfcounter.AttachCalcTableStatsKey(newCtx)
 
 		statsInfo, err = table.Stats(newCtx, true)
 		if err != nil {
