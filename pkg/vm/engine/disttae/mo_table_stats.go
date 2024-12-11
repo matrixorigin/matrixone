@@ -401,15 +401,23 @@ func initMoTableStatsConfig(
 		}
 
 		go func() {
-			ctx = turn2SysCtx(context.Background())
-			for {
-				if eng.config.moServerStateChecker == nil || !eng.config.moServerStateChecker() {
-					time.Sleep(time.Second * 5)
-					continue
-				}
+			ctx = turn2SysCtx(ctx)
+			ticker := time.NewTicker(time.Second)
 
-				if initCronTask(ctx) {
-					break
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					if eng.config.moServerStateChecker == nil || !eng.config.moServerStateChecker() {
+						continue
+					}
+
+					if eng.dynamicCtx.initCronTask(ctx) {
+						return
+					}
+
+					ticker.Reset(time.Second)
 				}
 			}
 		}()
@@ -418,7 +426,7 @@ func initMoTableStatsConfig(
 	return err
 }
 
-func initCronTask(
+func (d *dynamicCtx) initCronTask(
 	ctx context.Context,
 ) bool {
 	// insert mo table stats task meta into sys_cron_task table.
@@ -436,11 +444,11 @@ func initCronTask(
 				zap.Error(err))
 		}
 
-		executeSQL(ctx, sql, "init cron task")
+		d.executeSQL(ctx, sql, "init cron task")
 	}
 
 	checkTask := func() bool {
-		sqlRet := executeSQL(ctx,
+		sqlRet := d.executeSQL(ctx,
 			fmt.Sprintf(`select count(*) from %s.%s where task_metadata_id = '%s';`,
 				catalog.MOTaskDB, "sys_cron_task", "mo_table_stats"), "check cron task")
 
@@ -505,36 +513,38 @@ type dynamicCtx struct {
 	executorPool sync.Pool
 
 	sqlOpts ie.SessionOverrideOptions
+
+	initCronTaskCtxCancel context.CancelFunc
 }
 
-func LogDynamicCtx() string {
-	dynamicCtx.Lock()
-	defer dynamicCtx.Unlock()
+func (d *dynamicCtx) LogDynamicCtx() string {
+	d.Lock()
+	defer d.Unlock()
 
 	var buf bytes.Buffer
 	buf.WriteString(fmt.Sprintf("cur-conf:[alpha-dur: %v; gama-dur: %v; limit: %v; force-update: %v; use-old-impl: %v; disable-task: %v]\n",
-		dynamicCtx.conf.UpdateDuration,
-		dynamicCtx.conf.CorrectionDuration,
-		dynamicCtx.conf.GetTableListLimit,
-		dynamicCtx.conf.ForceUpdate,
-		dynamicCtx.conf.StatsUsingOldImpl,
-		dynamicCtx.conf.DisableStatsTask))
+		d.conf.UpdateDuration,
+		d.conf.CorrectionDuration,
+		d.conf.GetTableListLimit,
+		d.conf.ForceUpdate,
+		d.conf.StatsUsingOldImpl,
+		d.conf.DisableStatsTask))
 
 	buf.WriteString(fmt.Sprintf("default-conf:[alpha-dur: %v; gama-dur: %v; limit: %v; force-update: %v; use-old-impl: %v; disable-task: %v]\n",
-		dynamicCtx.defaultConf.UpdateDuration,
-		dynamicCtx.defaultConf.CorrectionDuration,
-		dynamicCtx.defaultConf.GetTableListLimit,
-		dynamicCtx.defaultConf.ForceUpdate,
-		dynamicCtx.defaultConf.StatsUsingOldImpl,
-		dynamicCtx.defaultConf.DisableStatsTask))
+		d.defaultConf.UpdateDuration,
+		d.defaultConf.CorrectionDuration,
+		d.defaultConf.GetTableListLimit,
+		d.defaultConf.ForceUpdate,
+		d.defaultConf.StatsUsingOldImpl,
+		d.defaultConf.DisableStatsTask))
 
 	buf.WriteString(fmt.Sprintf("beta: [running: %v; launched-time: %v]\n",
-		dynamicCtx.beta.running,
-		dynamicCtx.beta.launchTimes))
+		d.beta.running,
+		d.beta.launchTimes))
 
 	buf.WriteString(fmt.Sprintf("gama: [running: %v; launched-time: %v]\n",
-		dynamicCtx.gama.running,
-		dynamicCtx.gama.launchTimes))
+		d.gama.running,
+		d.gama.launchTimes))
 
 	return buf.String()
 }
@@ -597,12 +607,12 @@ func (d *dynamicCtx) HandleMoTableStatsCtl(cmd string) string {
 
 func (d *dynamicCtx) recomputing(para string) string {
 	{
-		dynamicCtx.Lock()
-		if !dynamicCtx.isMainRunner {
-			dynamicCtx.Unlock()
+		d.Lock()
+		if !d.isMainRunner {
+			d.Unlock()
 			return "not main runner"
 		}
-		dynamicCtx.Unlock()
+		d.Unlock()
 	}
 
 	var (
@@ -624,7 +634,7 @@ func (d *dynamicCtx) recomputing(para string) string {
 		}
 	}
 
-	_, retAcc, err, ok = QueryTableStatsByAccounts(
+	_, retAcc, err, ok = d.QueryTableStatsByAccounts(
 		context.Background(), nil, accIds, false, true)
 
 	if ok {
@@ -971,7 +981,7 @@ func (d *dynamicCtx) QueryTableStatsByAccounts(
 	sql := fmt.Sprintf(accumulateIdsByAccSQL,
 		catalog.MO_CATALOG, catalog.MO_TABLES, intsJoin(accs, ","))
 
-	sqlRet := executeSQL(newCtx, sql, "query table stats by accounts")
+	sqlRet := d.executeSQL(newCtx, sql, "query table stats by accounts")
 	if err = sqlRet.Error(); err != nil {
 		return
 	}
@@ -1346,7 +1356,7 @@ func (d *dynamicCtx) prepare(
 
 	offsetTS := types.TS{}
 	for len(d.tableStock.tbls) == 0 {
-		accs, dbs, tbls, ts, err := getCandidates(ctx, service, eng, dynamicCtx.conf.GetTableListLimit, offsetTS)
+		accs, dbs, tbls, ts, err := d.getCandidates(ctx, service, eng, d.conf.GetTableListLimit, offsetTS)
 		if err != nil {
 			return err
 		}
@@ -1695,7 +1705,7 @@ func (d *dynamicCtx) gamaInsertNewTables(
 		catalog.MO_CATALOG, catalog.MO_TABLE_STATS,
 		strings.Join(values, ","))
 
-	sqlRet = executeSQL(ctx, sql, "insert new table-1: insert new tables")
+	sqlRet = d.executeSQL(ctx, sql, "insert new table-1: insert new tables")
 	err = sqlRet.Error()
 }
 

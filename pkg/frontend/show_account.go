@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"go.uber.org/zap"
 	"math"
@@ -327,6 +328,7 @@ func updateStorageUsageCache(usages *cmd_util.StorageUsageResp_V3) {
 
 func tryGetSizeFromMTS(
 	ctx context.Context,
+	eng engine.Engine,
 	accIds [][]int64,
 ) (sizes map[int64]uint64, ok bool) {
 
@@ -334,14 +336,21 @@ func tryGetSizeFromMTS(
 		err  error
 		accs []uint64
 		vals [][]any
+
+		de *disttae.Engine
 	)
+
 	for i := range accIds {
 		for j := range accIds[i] {
 			accs = append(accs, uint64(accIds[i][j]))
 		}
 	}
 
-	vals, accs, err, ok = disttae.QueryTableStatsByAccounts(
+	if de, ok = eng.(*disttae.Engine); !ok {
+		de = eng.(*engine.EntireEngine).Engine.(*disttae.Engine)
+	}
+
+	vals, accs, err, ok = de.QueryTableStatsByAccounts(
 		ctx,
 		[]int{disttae.TableStatsTableSize},
 		accs,
@@ -374,6 +383,7 @@ func tryGetSizeFromMTS(
 func getAccountsStorageUsage(
 	ctx context.Context,
 	ses *Session,
+	eng engine.Engine,
 	accIds [][]int64,
 ) (ret map[int64][]uint64, err error) {
 
@@ -386,7 +396,7 @@ func getAccountsStorageUsage(
 			return
 		}
 
-		sizes, ok := tryGetSizeFromMTS(ctx, accIds)
+		sizes, ok := tryGetSizeFromMTS(ctx, eng, accIds)
 		if ok {
 			for k, v := range sizes {
 				if len(ret[k]) == 0 {
@@ -536,7 +546,8 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (e
 		return err
 	}
 
-	usage, err := getAccountsStorageUsage(ctx, ses, accIds)
+	eng := ses.GetTxnHandler().GetStorage()
+	usage, err := getAccountsStorageUsage(ctx, ses, eng, accIds)
 	v2.TaskShowAccountsGetUsageDurationHistogram.Observe(time.Since(t1).Seconds())
 	if err != nil {
 		return err
