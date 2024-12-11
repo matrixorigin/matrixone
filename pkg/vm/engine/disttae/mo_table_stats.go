@@ -80,6 +80,7 @@ import (
 //	mo_ctl("cn", "MoTableStats", "move_on:false|true");
 //	mo_ctl("cn", "MoTableStats", "restore_default_setting:true|false");
 //  mo_ctl("cn", "MoTableStats", "echo_current_setting:true|false");
+//	mo_ctl("cn", "MoTableStats", "recomputing:account_id, account_id...")
 //
 // bootstrap config
 
@@ -392,6 +393,7 @@ func initMoTableStatsConfig(
 
 			switch name {
 			case gamaTaskName:
+				dynamicCtx.isMainRunner = true
 				launch("gama task", &dynamicCtx.gama)
 			case betaTaskName:
 				launch("beta task", &dynamicCtx.beta)
@@ -494,6 +496,8 @@ var dynamicCtx struct {
 		newest types.TS
 	}
 
+	isMainRunner bool
+
 	beta, gama taskState
 	launchTask func(name string)
 
@@ -550,8 +554,10 @@ func HandleMoTableStatsCtl(cmd string) string {
 	typ = strings.TrimSpace(typ)
 	val = strings.TrimSpace(val)
 
-	if val != "false" && val != "true" {
-		return "failed, cmd invalid"
+	if typ != "recomputing" {
+		if val != "false" && val != "true" {
+			return "failed, cmd invalid"
+		}
 	}
 
 	switch typ {
@@ -570,9 +576,62 @@ func HandleMoTableStatsCtl(cmd string) string {
 	case "echo_current_setting":
 		return echoCurrentSetting(val == "true")
 
+	case "recomputing":
+		return recomputing(val)
+
 	default:
 		return "failed, cmd invalid"
 	}
+}
+
+func recomputing(para string) string {
+	{
+		dynamicCtx.Lock()
+		if !dynamicCtx.isMainRunner {
+			dynamicCtx.Unlock()
+			return "not main runner"
+		}
+		dynamicCtx.Unlock()
+	}
+
+	var (
+		err    error
+		ok     bool
+		id     uint64
+		buf    bytes.Buffer
+		retAcc []uint64
+	)
+
+	ids := strings.Split(para, ",")
+
+	accIds := make([]uint64, 0, len(ids))
+
+	for i := range ids {
+		id, err = strconv.ParseUint(ids[i], 10, 64)
+		if err == nil {
+			accIds = append(accIds, id)
+		}
+	}
+
+	_, retAcc, err, ok = QueryTableStatsByAccounts(
+		context.Background(), nil, accIds, false, true)
+
+	if ok {
+		uniqueAcc := make(map[uint64]struct{})
+		for i := range retAcc {
+			uniqueAcc[retAcc[i]] = struct{}{}
+		}
+
+		for k := range uniqueAcc {
+			buf.WriteString(fmt.Sprintf("%d ", k))
+		}
+
+		buf.WriteString("succeed")
+	} else {
+		buf.WriteString(fmt.Sprintf("failed, err: %v", err))
+	}
+
+	return buf.String()
 }
 
 func checkMoveOnTask() bool {
