@@ -4203,7 +4203,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 			viewDefString := tableDef.ViewSql.View
 
 			if viewDefString != "" {
-				viewCtx := NewBindContext(builder, nil)
+				//viewCtx := NewBindContext(builder, nil)
 				//if viewCtx.cteByName == nil {
 				//	viewCtx.cteByName = make(map[string]*CTERef)
 				//}
@@ -4262,7 +4262,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 				//	snapshot:        snapshot,
 				//}
 				// consist with frontend.genKey()
-				viewCtx.views = append(viewCtx.views, schema+"#"+table)
+				ctx.views = append(ctx.views, schema+"#"+table)
 
 				//FIXME:
 				//newTableName := tree.NewTableName(viewName, tree.ObjectNamePrefix{
@@ -4274,7 +4274,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 				//return builder.buildTable(newTableName, viewCtx, preNodeId, leftCtx)
 
 				viewName := string(viewStmt.Name.ObjectName)
-				if viewCtx.viewInBinding(viewName, viewStmt) {
+				if ctx.viewInBinding(viewName, viewStmt) {
 					return 0, moerr.NewParseErrorf(builder.GetContext(), "view %s reference itself", viewName)
 				}
 
@@ -4286,7 +4286,18 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 					},
 				}
 
-				nodeID, err = builder.buildTable(aliasSubquery, viewCtx, preNodeId, leftCtx)
+				//alias := tree.AliasClause{
+				//	Alias: viewStmt.Name.ObjectName,
+				//	Cols:  viewStmt.ColNames,
+				//}
+
+				nodeID, err = builder.buildTable(aliasSubquery, ctx, preNodeId, leftCtx)
+
+				//nodeID, err = builder.bindSelect(viewStmt.AsSource, ctx, false)
+				//if err != nil {
+				//	return 0, err
+				//}
+				//err = builder.addBinding(nodeID, alias, viewCtx)
 				return nodeID, err
 			}
 		}
