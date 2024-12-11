@@ -1,0 +1,34 @@
+drop account if exists acc01;
+create account acc01 admin_name = 'test_account' identified by '111';
+show accounts;
+account_name    admin_name    created_time    status    suspended_time    db_count    tbl_count    size    snapshot_size    comments
+sys    root    2024-12-11 09:07:44    open    null    7    99    0.0    0.0    system account
+acc01    test_account    2024-12-11 09:08:46    open    null    5    65    0.0    0.0    
+drop snapshot if exists snapshot_acc01_dropped;
+create snapshot snapshot_acc01_dropped for account acc01;
+drop account if exists acc01;
+restore account acc01 from snapshot snapshot_acc01_dropped;
+internal error: no such account, account name: acc01
+show accounts;
+account_name    admin_name    created_time    status    suspended_time    db_count    tbl_count    size    snapshot_size    comments
+sys    root    2024-12-11 09:07:44    open    null    7    99    0.0    0.0    system account
+drop account if exists acc01;
+drop snapshot if exists snapshot_acc01_dropped;
+drop account if exists acc01;
+create account acc01 admin_name = 'test_account' identified by '111';
+show accounts;
+account_name    admin_name    created_time    status    suspended_time    db_count    tbl_count    size    snapshot_size    comments
+sys    root    2024-12-11 09:07:44    open    null    7    99    0.0    0.0    system account
+acc01    test_account    2024-12-11 09:08:46    open    null    5    65    0.0    0.0    
+drop snapshot if exists snapshot_acc01_dropped_created;
+create snapshot snapshot_acc01_dropped_created for account acc01;
+drop account if exists acc01;
+create account acc01 admin_name = 'test_account' identified by '1111';
+restore account acc01 from snapshot snapshot_acc01_dropped_created;
+SQL parser error: table "mo_foreign_keys" does not exist
+show accounts;
+account_name    admin_name    created_time    status    suspended_time    db_count    tbl_count    size    snapshot_size    comments
+sys    root    2024-12-11 09:07:44    open    null    7    99    0.0    0.0    system account
+acc01    test_account    2024-12-11 09:08:47    open    null    5    65    0.0    0.0    
+drop account if exists acc01;
+drop snapshot if exists snapshot_acc01_dropped_created;

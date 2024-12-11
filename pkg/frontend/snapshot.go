@@ -352,7 +352,6 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 	dbName := string(stmt.DatabaseName)
 	tblName := string(stmt.TableName)
 	snapshotName := string(stmt.SnapShotName)
-	toAccountName := string(stmt.ToAccountName)
 
 	var restoreAccount uint32
 	var toAccountId uint32
@@ -376,17 +375,9 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 	}
 
 	// default restore to src account
-	restoreAccount, err = getAccountId(ctx, bh, srcAccountName)
+	restoreAccount, toAccountId, err = getFromAccountIdAndToAccountId(ctx, ses, bh, stmt, *snapshot)
 	if err != nil {
 		return stats, err
-	}
-
-	if len(toAccountName) > 0 {
-		if toAccountId, err = getAccountId(ctx, bh, string(stmt.ToAccountName)); err != nil {
-			return stats, err
-		}
-	} else {
-		toAccountId = restoreAccount
 	}
 
 	// restore cluster
@@ -436,7 +427,7 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 	}
 
 	// get topo sorted tables with foreign key
-	sortedFkTbls, err := fkTablesTopoSort(ctx, bh, snapshotName, dbName, tblName)
+	sortedFkTbls, err := fkTablesTopoSort(ctx, bh, snapshotName, dbName, tblName, restoreAccount, toAccountId)
 	if err != nil {
 		return
 	}
@@ -534,10 +525,12 @@ func checkRestorePriv(ctx context.Context, ses *Session, snapshot *snapshotRecor
 			return moerr.NewInternalErrorf(ctx, "snapshot %s is not cluster level snapshot", snapshot.snapshotName)
 		}
 	case tree.RESTORELEVELACCOUNT:
+		if stmt.AccountName == sysAccountName && !ses.GetTenantInfo().IsSysTenant() {
+			return moerr.NewInternalError(ctx, "non-sys account can't restore sys account")
+		}
 		if len(stmt.ToAccountName) > 0 {
 			if !ses.GetTenantInfo().IsSysTenant() {
 				return moerr.NewInternalError(ctx, "non-sys account can't restore snapshot to another account")
-
 			}
 
 			if stmt.ToAccountName == sysAccountName && snapshot.accountName != sysAccountName {
@@ -571,13 +564,85 @@ func checkRestorePriv(ctx context.Context, ses *Session, snapshot *snapshotRecor
 	return nil
 }
 
+func getFromAccountIdAndToAccountId(ctx context.Context, ses *Session, bh BackgroundExec, stmt *tree.RestoreSnapShot, snapshot snapshotRecord) (fromAccountId uint32, toAccountId uint32, err error) {
+	srcAccount := string(stmt.AccountName)
+	toAccount := string(stmt.ToAccountName)
+
+	if ses.GetTenantInfo().IsSysTenant() {
+		if srcAccount == sysAccountName {
+			fromAccountId = 0
+			toAccountId = 0
+			return
+		} else {
+			if len(toAccount) > 0 {
+				fromAccountId, err = getAccountId(ctx, bh, srcAccount)
+				if err != nil {
+					return
+				}
+				toAccountId, err = getAccountId(ctx, bh, toAccount)
+				if err != nil {
+					return
+				}
+				return
+			} else {
+				// need detect whether the account exists
+				if snapshot.level == tree.RESTORELEVELACCOUNT.String() {
+					// restore account by account snapshot
+					fromAccountId = uint32(snapshot.objId)
+
+					toAccountId, err = getAccountId(ctx, bh, srcAccount)
+					if err != nil {
+						// create new account
+						var accountRecord *accountRecord
+						var rntErr error
+						accountRecord, rntErr = getAccountRecordByTs(ctx, ses, bh, snapshot.snapshotName, snapshot.ts, srcAccount)
+						if rntErr != nil {
+							return
+						}
+
+						rntErr = createDroppedAccount(ctx, ses, bh, snapshot.snapshotName, *accountRecord)
+						if rntErr != nil {
+							return
+						}
+
+						toAccountId, rntErr = getAccountId(ctx, bh, accountRecord.accountName)
+						if rntErr != nil {
+							return
+						}
+
+						return fromAccountId, toAccountId, nil
+					}
+					return
+				} else {
+					// restore by cluster snapshot
+					fromAccountId, err = getAccountId(ctx, bh, srcAccount)
+					if err != nil {
+						return
+					}
+					toAccountId = fromAccountId
+					return
+				}
+			}
+		}
+	} else {
+		// normal restore normal
+		fromAccountId, err = getAccountId(ctx, bh, srcAccount)
+		if err != nil {
+			return
+		}
+		toAccountId = fromAccountId
+		return
+	}
+	return
+}
+
 func deleteCurFkTables(ctx context.Context, sid string, bh BackgroundExec, dbName string, tblName string, toAccountId uint32) (err error) {
 	getLogger(sid).Info("start to drop cur fk tables")
 
 	ctx = defines.AttachAccountId(ctx, toAccountId)
 
 	// get topo sorted tables with foreign key
-	sortedFkTbls, err := fkTablesTopoSort(ctx, bh, "", dbName, tblName)
+	sortedFkTbls, err := fkTablesTopoSort(ctx, bh, "", dbName, tblName, toAccountId, toAccountId)
 	if err != nil {
 		return
 	}
@@ -1506,7 +1571,7 @@ func getAccountId(ctx context.Context, bh BackgroundExec, accountName string) (u
 	return 0, moerr.NewInternalErrorf(ctx, "no such account, account name: %v", accountName)
 }
 
-func getFkDeps(ctx context.Context, bh BackgroundExec, snapshotName string, dbName string, tblName string) (ans map[string][]string, err error) {
+func getFkDeps(ctx context.Context, bh BackgroundExec, snapshotName string, dbName string, tblName string, from, to uint32) (ans map[string][]string, err error) {
 	sql := "select db_name, table_name, refer_db_name, refer_table_name from mo_catalog.mo_foreign_keys"
 	if len(snapshotName) > 0 {
 		sql += fmt.Sprintf(" {snapshot = '%s'}", snapshotName)
@@ -1519,7 +1584,7 @@ func getFkDeps(ctx context.Context, bh BackgroundExec, snapshotName string, dbNa
 	}
 
 	bh.ClearExecResultSet()
-	if err = bh.Exec(ctx, sql); err != nil {
+	if err = bh.ExecRestore(ctx, sql, from, to); err != nil {
 		return
 	}
 
@@ -1591,9 +1656,9 @@ func getTableInfoMap(
 	return
 }
 
-func fkTablesTopoSort(ctx context.Context, bh BackgroundExec, snapshotName string, dbName string, tblName string) (sortedTbls []string, err error) {
+func fkTablesTopoSort(ctx context.Context, bh BackgroundExec, snapshotName string, dbName string, tblName string, from, to uint32) (sortedTbls []string, err error) {
 	// get foreign key deps from mo_catalog.mo_foreign_keys
-	fkDeps, err := getFkDeps(ctx, bh, snapshotName, dbName, tblName)
+	fkDeps, err := getFkDeps(ctx, bh, snapshotName, dbName, tblName, from, to)
 	if err != nil {
 		return
 	}
@@ -1809,7 +1874,7 @@ func restoreAccountUsingClusterSnapshot(ctx context.Context,
 	// get topo sorted tables with foreign key
 	var sortedFkTbls []string
 	var fkTableMap map[string]*tableInfo
-	sortedFkTbls, err = fkTablesTopoSort(ctx, bh, newSnapshot, "", "")
+	sortedFkTbls, err = fkTablesTopoSort(ctx, bh, newSnapshot, "", "", uint32(fromAccount), uint32(toAccountId))
 	if err != nil {
 		return err
 	}
@@ -1882,7 +1947,7 @@ func restoreAccountUsingClusterSnapshotToNew(ctx context.Context,
 	// get topo sorted tables with foreign key
 	var sortedFkTbls []string
 	var fkTableMap map[string]*tableInfo
-	sortedFkTbls, err = fkTablesTopoSortWithDropped(ctx, bh, uint32(fromAccount), uint32(toAccountId))
+	sortedFkTbls, err = fkTablesTopoSort(ctx, bh, newSnapshot, "", "", uint32(fromAccount), uint32(toAccountId))
 	if err != nil {
 		return err
 	}
@@ -2424,63 +2489,36 @@ func checkDbWhetherSub(ctx context.Context, createDbsql string) (bool, error) {
 	return false, nil
 }
 
-func fkTablesTopoSortWithDropped(ctx context.Context, bh BackgroundExec, from, to uint32) (sortedTbls []string, err error) {
-	// get foreign key deps from mo_catalog.mo_foreign_keys
-	fkDeps, err := getFkDepsWithDropped(ctx, bh, from, to)
-	if err != nil {
-		return
-	}
-
-	g := toposort{next: make(map[string][]string)}
-	for key, deps := range fkDeps {
-		g.addVertex(key)
-		for _, depTbl := range deps {
-			// exclude self dep
-			if key != depTbl {
-				g.addEdge(depTbl, key)
-			}
-		}
-	}
-	sortedTbls, err = g.sort()
-	return
-}
-
-func getFkDepsWithDropped(ctx context.Context, bh BackgroundExec, from, to uint32) (ans map[string][]string, err error) {
-	sql := "select db_name, table_name, refer_db_name, refer_table_name from mo_catalog.mo_foreign_keys"
-
+func getAccountRecordByTs(ctx context.Context, ses *Session, bh BackgroundExec, snapshotName string, ts int64, accountName string) (*accountRecord, error) {
+	getLogger(ses.GetService()).Info(fmt.Sprintf("[%s] start to get account %s record by ts", snapshotName, accountName))
+	sql := fmt.Sprintf("select account_id, account_name, admin_name, comments from mo_catalog.mo_account {MO_TS = %d } where account_name = '%s';", ts, accountName)
 	bh.ClearExecResultSet()
-	if err = bh.ExecRestore(ctx, sql, from, to); err != nil {
-		return
+	if err := bh.Exec(ctx, sql); err != nil {
+		return &accountRecord{}, err
 	}
 
-	resultSet, err := getResultSet(ctx, bh)
+	erArray, err := getResultSet(ctx, bh)
 	if err != nil {
-		return nil, err
+		return &accountRecord{}, err
 	}
 
-	ans = make(map[string][]string)
-	var dbName, tblName string
-	var referDbName, referTblName string
-
-	for _, rs := range resultSet {
-		for row := uint64(0); row < rs.GetRowCount(); row++ {
-			if dbName, err = rs.GetString(ctx, row, 0); err != nil {
-				return
-			}
-			if tblName, err = rs.GetString(ctx, row, 1); err != nil {
-				return
-			}
-			if referDbName, err = rs.GetString(ctx, row, 2); err != nil {
-				return
-			}
-			if referTblName, err = rs.GetString(ctx, row, 3); err != nil {
-				return
-			}
-
-			u := genKey(dbName, tblName)
-			v := genKey(referDbName, referTblName)
-			ans[u] = append(ans[u], v)
+	if execResultArrayHasData(erArray) {
+		var account accountRecord
+		if account.accountId, err = erArray[0].GetUint64(ctx, 0, 0); err != nil {
+			return &accountRecord{}, err
 		}
+		if account.accountName, err = erArray[0].GetString(ctx, 0, 1); err != nil {
+			return &accountRecord{}, err
+		}
+		if account.adminName, err = erArray[0].GetString(ctx, 0, 2); err != nil {
+			return &accountRecord{}, err
+		}
+		if account.comments, err = erArray[0].GetString(ctx, 0, 3); err != nil {
+			return &accountRecord{}, err
+		}
+		account.pwd = "111"
+		return &account, nil
 	}
-	return
+
+	return &accountRecord{}, moerr.NewInternalErrorf(ctx, "no such account, snapshot name: %v, ts: %v", snapshotName, ts)
 }

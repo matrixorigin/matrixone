@@ -1017,7 +1017,7 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 			}
 
 			// get topo sorted tables with foreign key
-			sortedFkTbls, rtnErr = fkTablesTopoSort(ctx, bh, snapshotName, dbName, tblName)
+			sortedFkTbls, rtnErr = fkTablesTopoSort(ctx, bh, snapshotName, dbName, tblName, fromAccountId, toAccountId)
 			if rtnErr != nil {
 				return
 			}
@@ -1599,7 +1599,7 @@ func deleteCurFkTableInPitrRestore(ctx context.Context,
 	)
 
 	// get topo sorted tables with foreign key
-	sortedFkTbls, err = fkTablesTopoSort(ctx, bh, "", dbName, tblName)
+	sortedFkTbls, err = fkTablesTopoSortInPitrRestore(ctx, bh, 0, dbName, tblName)
 	if err != nil {
 		return
 	}
