@@ -56,11 +56,13 @@ type container struct {
 
 func (mergeGroup *MergeGroup) Reset(proc *process.Process, _ bool, _ error) {
 	mergeGroup.Free(proc, false, nil)
+	mergeGroup.ResetProjection(proc)
 }
 
 func (mergeGroup *MergeGroup) Free(proc *process.Process, _ bool, _ error) {
 	mergeGroup.ctr.result.Free0(proc.Mp())
 	mergeGroup.ctr.hr.Free0()
+	mergeGroup.FreeProjection(proc)
 }
 
 func (mergeGroup *MergeGroup) GetOperatorBase() *vm.OperatorBase {

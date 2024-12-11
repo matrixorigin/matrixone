@@ -172,6 +172,7 @@ func (group *Group) Free(proc *process.Process, _ bool, _ error) {
 
 	group.ctr.freeGroupEvaluate()
 	group.ctr.freeAggEvaluate()
+	group.FreeProjection(proc)
 }
 
 func (group *Group) Reset(proc *process.Process, pipelineFailed bool, err error) {
@@ -181,6 +182,7 @@ func (group *Group) Reset(proc *process.Process, pipelineFailed bool, err error)
 	for i := range group.ctr.aggregateEvaluate {
 		group.ctr.aggregateEvaluate[i].ResetForNextQuery()
 	}
+	group.ResetProjection(proc)
 }
 
 func (group *Group) freeCannotReuse(mp *mpool.MPool) {
@@ -197,9 +199,7 @@ func (ctr *container) freeAggEvaluate() {
 }
 
 func (ctr *container) freeGroupEvaluate() {
-	for i := range ctr.groupByEvaluate.Executor {
-		ctr.groupByEvaluate.Executor[i].Free()
-	}
+	ctr.groupByEvaluate.Free()
 	ctr.groupByEvaluate = ExprEvalVector{}
 }
 
