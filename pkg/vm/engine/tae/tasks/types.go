@@ -175,16 +175,6 @@ type IOpWorker interface {
 	StatsString() string
 }
 
-type IHeartbeater interface {
-	Start()
-	Stop()
-}
-
-type IHBHandle interface {
-	OnExec()
-	OnStopped()
-}
-
 type OpDoneCB func(IOp)
 
 type Op struct {

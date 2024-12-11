@@ -3581,12 +3581,12 @@ func TestDelete3(t *testing.T) {
 
 	// this task won't affect logic of TestAppend2, it just prints logs about dirty count
 	forest := logtail.NewDirtyCollector(tae.LogtailMgr, opts.Clock, tae.Catalog, new(catalog.LoopProcessor))
-	hb := tasks.NewHeartBeaterWithFunc(5*time.Millisecond, func() {
+	job := tasks.NewCancelableCronJob("TestDelete3", 5*time.Millisecond, func(ctx context.Context) {
 		forest.Run(0)
 		t.Log(forest.String())
-	}, nil)
-	hb.Start()
-	defer hb.Stop()
+	}, false, 0)
+	job.Start()
+	defer job.Stop()
 	schema := catalog.MockSchemaAll(3, 2)
 	schema.Extra.BlockMaxRows = 10
 	schema.Extra.ObjectMaxBlocks = 2

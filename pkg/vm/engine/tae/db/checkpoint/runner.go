@@ -1125,20 +1125,26 @@ func (r *runner) crontask(ctx context.Context) {
 		// test env, no need to lag
 		lag = 0 * time.Second
 	}
-	hb := tasks.NewHeartBeaterWithFunc(r.options.collectInterval, func() {
-		r.source.Run(lag)
-		entry := r.source.GetAndRefreshMerged()
-		if !entry.IsEmpty() {
-			e := new(DirtyCtx)
-			e.tree = entry
-			r.dirtyEntryQueue.Enqueue(e)
-		}
-		_, endts := entry.GetTimeRange()
-		r.tryScheduleCheckpoint(endts)
-	}, nil)
-	hb.Start()
+	job := tasks.NewCancelableCronJob(
+		"dirty-collector-job",
+		r.options.collectInterval,
+		func(ctx context.Context) {
+			r.source.Run(lag)
+			entry := r.source.GetAndRefreshMerged()
+			if !entry.IsEmpty() {
+				e := new(DirtyCtx)
+				e.tree = entry
+				r.dirtyEntryQueue.Enqueue(e)
+			}
+			_, endts := entry.GetTimeRange()
+			r.tryScheduleCheckpoint(endts)
+		},
+		true,
+		0,
+	)
+	job.Start()
 	<-ctx.Done()
-	hb.Stop()
+	job.Stop()
 }
 
 func (r *runner) EnqueueWait(item any) (err error) {
