@@ -134,3 +134,9 @@ type ExecPipelineMarkKey struct{}
 func AttachExecPipelineKey(ctx context.Context, counter *CounterSet) context.Context {
 	return context.WithValue(ctx, ExecPipelineMarkKey{}, counter)
 }
+
+type StatsInBuildPlan struct{}
+
+func AttachStatsInBuildPlan(ctx context.Context, counter *CounterSet) context.Context {
+	return context.WithValue(ctx, ExecPipelineMarkKey{}, counter)
+}
