@@ -34,9 +34,6 @@ import (
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/google/uuid"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -64,6 +61,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/explain"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	txnTrace "github.com/matrixorigin/matrixone/pkg/txn/trace"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -73,6 +71,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/route"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 func createDropDatabaseErrorInfo() string {
@@ -386,24 +386,29 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 	needRowsAndSizeTableTypes := []string{catalog.SystemOrdinaryRel, catalog.SystemMaterializedRel}
 
 	getTableStats := func(tblNames []string) (rows, sizes map[string]int64, err error) {
+		if len(tblNames) == 0 {
+			return
+		}
+
 		// set session variable
-		if err = ses.SetSessionSysVar(ctx, "mo_table_stats.reset_update_time", "yes"); err != nil {
+		if err = ses.SetSessionSysVar(ctx, "mo_table_stats.force_update", "yes"); err != nil {
 			return
 		}
 		defer func() {
-			_ = ses.SetSessionSysVar(ctx, "mo_table_stats.reset_update_time", "no")
+			_ = ses.SetSessionSysVar(ctx, "mo_table_stats.force_update", "no")
 		}()
 
 		sqlBuilder := strings.Builder{}
-		sqlBuilder.WriteString("select tbl, mo_table_rows(db, tbl), mo_table_size(db, tbl) from (")
+		sqlBuilder.WriteString("select tbl, mo_table_rows(db, tbl), mo_table_size(db, tbl) from (values ")
 		for i, tblName := range tblNames {
-			if i > 0 {
-				sqlBuilder.WriteString(" union all ")
+			if i != 0 {
+				sqlBuilder.WriteString(", ")
 			}
-			sqlBuilder.WriteString(fmt.Sprintf("select '%s' as db, '%s' as tbl", dbName, tblName))
+			sqlBuilder.WriteString(fmt.Sprintf("row('%s', '%s')", dbName, tblName))
 		}
-		sqlBuilder.WriteString(") tmp")
+		sqlBuilder.WriteString(") as tmp(db, tbl)")
 
+		// get table stats
 		var rets []ExecResult
 		if rets, err = executeSQLInBackgroundSession(ctx, bh, sqlBuilder.String()); err != nil {
 			return
@@ -2526,8 +2531,20 @@ func executeStmtWithWorkspace(ses FeSession,
 	//7. pass or commit or rollback txn
 	// defer transaction state management.
 	defer func() {
+		if e := recover(); e != nil {
+			moe, ok := e.(*moerr.Error)
+			if !ok {
+				err = errors.Join(err, moerr.ConvertPanicError(execCtx.reqCtx, e))
+			} else {
+				err = errors.Join(err, moe)
+			}
+
+			ses.Error(execCtx.reqCtx, "recover from panic before finishTxnFunc", zap.Error(err))
+		}
 		err = finishTxnFunc(ses, err, execCtx)
 	}()
+
+	_, _, _ = fault.TriggerFault("executeStmtWithWorkspace_panic")
 
 	//1. start txn
 	//special BEGIN,COMMIT,ROLLBACK
@@ -3148,15 +3165,18 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		if e := recover(); e != nil {
 			moe, ok := e.(*moerr.Error)
 			if !ok {
-				err = moerr.ConvertPanicError(execCtx.reqCtx, e)
+				err = errors.Join(err, moerr.ConvertPanicError(execCtx.reqCtx, e))
 				resp = NewGeneralErrorResponse(COM_QUERY, ses.txnHandler.GetServerStatus(), err)
 			} else {
+				err = errors.Join(err, moe)
 				resp = NewGeneralErrorResponse(COM_QUERY, ses.txnHandler.GetServerStatus(), moe)
 			}
 			// log the query's statement and error info.
 			logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, err)
 		}
 	}()
+	_, _, _ = fault.TriggerFault("exec_request_panic")
+
 	ses.EnterFPrint(FPExecRequest)
 	defer ses.ExitFPrint(FPExecRequest)
 

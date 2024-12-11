@@ -16,9 +16,12 @@ package fault
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 func TestCount(t *testing.T) {
@@ -227,4 +230,35 @@ func TestFaultMapRace3(t *testing.T) {
 	}()
 
 	Disable()
+}
+
+func Test_panic(t *testing.T) {
+	var ctx = context.TODO()
+
+	Enable()
+	defer Disable()
+	AddFaultPoint(ctx, "panic_moerr", ":::", "panic", PanicUseMoErr, "use moerr")
+	AddFaultPoint(ctx, "panic_non_moerr", ":::", "panic", PanicUseNonMoErr, "use non moerr")
+
+	fun := func(useMoerr bool) {
+		defer func() {
+			if e := recover(); e != nil {
+				_, ok := e.(*moerr.Error)
+				if !ok {
+					fmt.Println("moerr recovered")
+				} else {
+					fmt.Println("non moerr recovered")
+				}
+			}
+		}()
+
+		if useMoerr {
+			TriggerFault("panic_moerr")
+		} else {
+			TriggerFault("panic_non_moerr")
+		}
+	}
+
+	fun(true)
+	fun(false)
 }

@@ -450,13 +450,13 @@ func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
 
 	//offset < 0 indicates commit.
 	if offset < 0 {
-		if txn.approximateInMemInsertSize < txn.engine.config.workspaceThreshold &&
+		if txn.approximateInMemInsertSize < txn.engine.config.commitWorkspaceThreshold &&
 			txn.approximateInMemInsertCnt < txn.engine.config.insertEntryMaxCount &&
 			txn.approximateInMemDeleteCnt < txn.engine.config.insertEntryMaxCount {
 			return nil
 		}
 	} else {
-		if txn.approximateInMemInsertSize < txn.engine.config.workspaceThreshold {
+		if txn.approximateInMemInsertSize < txn.writeWorkspaceThreshold {
 			return nil
 		}
 	}
@@ -480,7 +480,7 @@ func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
 				size += uint64(txn.writes[i].bat.Size())
 			}
 		}
-		if size < txn.engine.config.workspaceThreshold {
+		if size < txn.writeWorkspaceThreshold {
 			return nil
 		}
 		size = 0
@@ -1478,6 +1478,7 @@ func (txn *Transaction) CloneSnapshotWS() client.Workspace {
 		batchSelectList: make(map[*batch.Batch][]int64),
 		toFreeBatches:   make(map[tableKey][]*batch.Batch),
 		cn_flushed_s3_tombstone_object_stats_list: new(sync.Map),
+		writeWorkspaceThreshold:                   txn.writeWorkspaceThreshold,
 	}
 
 	ws.readOnly.Store(true)
