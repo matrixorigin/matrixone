@@ -10141,6 +10141,12 @@ func TestStartStopTableMerge(t *testing.T) {
 
 	require.NoError(t, scheduler.StartMerge(tbl.GetID(), true))
 	require.NoError(t, scheduler.OnTable(tbl))
+	require.NoError(t, scheduler.OnPostTable(tbl))
+
+	scheduler.StopMergeService()
+	require.ErrorIs(t, scheduler.OnTable(tbl), moerr.GetOkStopCurrRecur())
+	require.ErrorIs(t, scheduler.OnPostTable(tbl), moerr.GetOkStopCurrRecur())
+	scheduler.StartMergeService()
 }
 
 func TestDeleteByPhyAddrKeys(t *testing.T) {
