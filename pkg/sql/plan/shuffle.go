@@ -465,6 +465,29 @@ func determineShuffleType(col *plan.ColRef, node *plan.Node, builder *QueryBuild
 	node.Stats.HashmapStats.Nullcnt = int64(s.NullCntMap[colName])
 }
 
+func findFirstEquiCon(n *plan.Node, builder *QueryBuilder) int32 {
+	var idx int32 = 0
+	if !builder.IsEquiJoin(n) {
+		return -1
+	}
+	leftTags := make(map[int32]bool)
+	for _, tag := range builder.enumerateTags(n.Children[0]) {
+		leftTags[tag] = true
+	}
+	rightTags := make(map[int32]bool)
+	for _, tag := range builder.enumerateTags(n.Children[1]) {
+		rightTags[tag] = true
+	}
+	// for now ,only support the first join condition
+	for i := range n.OnList {
+		if isEquiCond(n.OnList[i], leftTags, rightTags) {
+			idx = int32(i)
+			break
+		}
+	}
+	return idx
+}
+
 // to determine if join need to go shuffle
 func determineShuffleForJoin(n *plan.Node, builder *QueryBuilder) {
 	// do not shuffle by default
@@ -476,6 +499,24 @@ func determineShuffleForJoin(n *plan.Node, builder *QueryBuilder) {
 	case plan.Node_DEDUP:
 		rightchild := builder.qry.Nodes[n.Children[1]]
 		if rightchild.Stats.Outcnt > 320000 {
+			idx := findFirstEquiCon(n, builder)
+			if idx == -1 {
+				return
+			}
+
+			// get the column of left child
+			var expr0 *plan.Expr
+			cond := n.OnList[idx]
+			switch condImpl := cond.Expr.(type) {
+			case *plan.Expr_F:
+				expr0 = condImpl.F.Args[0]
+			}
+
+			leftHashCol, typ := GetHashColumn(expr0)
+			if leftHashCol == nil || typ == int32(types.T_int8) || typ == int32(types.T_uint8) {
+				return
+			}
+
 			//dedup join always go hash shuffle, optimize this in the future
 			n.Stats.HashmapStats.Shuffle = true
 			n.Stats.HashmapStats.ShuffleColIdx = 0
@@ -493,24 +534,9 @@ func determineShuffleForJoin(n *plan.Node, builder *QueryBuilder) {
 		return
 	}
 
-	idx := 0
-	if !builder.IsEquiJoin(n) {
+	idx := findFirstEquiCon(n, builder)
+	if idx == -1 {
 		return
-	}
-	leftTags := make(map[int32]bool)
-	for _, tag := range builder.enumerateTags(n.Children[0]) {
-		leftTags[tag] = true
-	}
-	rightTags := make(map[int32]bool)
-	for _, tag := range builder.enumerateTags(n.Children[1]) {
-		rightTags[tag] = true
-	}
-	// for now ,only support the first join condition
-	for i := range n.OnList {
-		if isEquiCond(n.OnList[i], leftTags, rightTags) {
-			idx = i
-			break
-		}
 	}
 
 	if n.BuildOnLeft {
@@ -536,7 +562,7 @@ func determineShuffleForJoin(n *plan.Node, builder *QueryBuilder) {
 	}
 
 	leftHashCol, typ := GetHashColumn(expr0)
-	if leftHashCol == nil {
+	if leftHashCol == nil || typ == int32(types.T_int8) || typ == int32(types.T_uint8) {
 		return
 	}
 	rightHashCol, _ := GetHashColumn(expr1)
@@ -619,7 +645,7 @@ func determineShuffleForGroupBy(n *plan.Node, builder *QueryBuilder) {
 	}
 
 	hashCol, typ := GetHashColumn(n.GroupBy[idx])
-	if hashCol == nil {
+	if hashCol == nil || typ == int32(types.T_int8) || typ == int32(types.T_uint8) {
 		return
 	}
 	//for now ,only support integer and string type
