@@ -589,7 +589,7 @@ func (p *primaryKeyDelIter) Next() bool {
 }
 
 func (p *PartitionState) NewRowsIter(ts types.TS, blockID *types.Blockid, iterDeleted bool) *rowsIter {
-	iter := p.rows.Copy().Iter()
+	iter := p.rows.Iter()
 	ret := &rowsIter{
 		ts:          ts,
 		iter:        iter,
@@ -606,13 +606,13 @@ func (p *PartitionState) NewPrimaryKeyIter(
 	ts types.TS,
 	spec PrimaryKeyMatchSpec,
 ) *primaryKeyIter {
-	index := p.rowPrimaryKeyIndex.Copy()
+	index := p.rowPrimaryKeyIndex
 	return &primaryKeyIter{
 		ts:           ts,
 		spec:         spec,
 		iter:         index.Iter(),
 		primaryIndex: index,
-		rows:         p.rows.Copy(),
+		rows:         p.rows,
 	}
 }
 
@@ -621,15 +621,15 @@ func (p *PartitionState) NewPrimaryKeyDelIter(
 	spec PrimaryKeyMatchSpec,
 	bid *types.Blockid,
 ) *primaryKeyDelIter {
-	index := p.rowPrimaryKeyIndex.Copy()
+	index := p.rowPrimaryKeyIndex
 	delIter := &primaryKeyDelIter{
 		primaryKeyIter: primaryKeyIter{
 			ts:                *ts,
 			spec:              spec,
 			primaryIndex:      index,
 			iter:              index.Iter(),
-			rows:              p.rows.Copy(),
-			tombstoneRowIdIdx: p.inMemTombstoneRowIdIndex.Copy(),
+			rows:              p.rows,
+			tombstoneRowIdIdx: p.inMemTombstoneRowIdIndex,
 		},
 		bid: *bid,
 	}
