@@ -16,7 +16,9 @@ package rpc
 
 import (
 	"context"
+	"fmt"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -256,4 +258,128 @@ func newMessage(req morpc.Message) morpc.RPCMessage {
 		Cancel:  cancel,
 		Message: req,
 	}
+}
+
+func TestTNCanForwardingTxnWriteRequestsSimpleVersion(t *testing.T) {
+	size := 10
+	runTestTxnServer(t, testTN4Addr, func(s *server) {
+		s.RegisterMethodHandler(txn.TxnMethod_Read,
+			func(ctx context.Context, req *txn.TxnRequest, resp *txn.TxnResponse) error {
+				msg := "normal"
+				resp.CNOpResponse = &txn.CNOpResponse{Payload: []byte(msg)}
+				return nil
+			})
+
+		cli, err := NewSender(Config{MaxMessageSize: toml.ByteSize(size + 1024)},
+			newTestRuntime(newTestClock(), s.rt.Logger().RawLogger()))
+		assert.NoError(t, err)
+		defer func() {
+			assert.NoError(t, cli.Close())
+		}()
+
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+
+		var cnt = 1000
+		var wg sync.WaitGroup
+		var resps []*txn.CNOpResponse
+
+		wg.Add(2)
+
+		go func() {
+			tickerA := time.NewTicker(time.Millisecond * 1)
+
+			defer func() {
+				fmt.Println("sender done")
+				wg.Done()
+			}()
+
+			send := 0
+
+			for {
+				select {
+				case <-ctx.Done():
+					return
+
+				case <-tickerA.C:
+					if send >= cnt {
+						return
+					}
+
+					send++
+					resp, err := cli.Send(ctx, []txn.TxnRequest{{
+						CNRequest: &txn.CNOpRequest{
+							Target:  metadata.TNShard{Address: testTN4Addr},
+							Payload: make([]byte, size),
+						},
+					}})
+
+					require.NoError(t, err)
+					resps = append(resps, resp.Responses[0].CNOpResponse)
+					tickerA.Reset(time.Millisecond * 1)
+				}
+			}
+		}()
+
+		go func() {
+			tickerB := time.NewTicker(time.Millisecond * 100)
+
+			defer func() {
+				wg.Done()
+				require.NoError(t, s.SwitchTxnHandleStateTo(TxnLocalHandle))
+				fmt.Println("state controller done")
+			}()
+
+			newCtx, cc := context.WithTimeout(context.Background(), time.Second*5)
+			defer cc()
+
+			currentState := TxnLocalHandle
+
+			for {
+				select {
+				case <-newCtx.Done():
+					return
+
+				case <-tickerB.C:
+					currentState = (currentState + 1) % 3
+
+					err = s.SwitchTxnHandleStateTo(currentState,
+						WithForwardTarget(metadata.TNShard{
+							Address: "mocked forwarding addr",
+						}),
+						WithTxnForwardHandler(func(ctx context.Context, req *txn.TxnRequest, resp *txn.TxnResponse) error {
+							msg := "forwarded"
+							resp.CNOpResponse = &txn.CNOpResponse{Payload: []byte(msg)}
+							return nil
+						}))
+
+					require.NoError(t, err)
+					tickerB.Reset(time.Millisecond * 100)
+				}
+			}
+		}()
+
+		wg.Wait()
+
+		var normal, forwarded, others int
+		for i := range resps {
+			msg := string(resps[i].Payload)
+			if msg == "normal" {
+				normal++
+			} else if msg == "forwarded" {
+				forwarded++
+			} else {
+				others++
+			}
+		}
+
+		fmt.Println(normal, forwarded, others)
+
+		require.Zero(t, others)
+		require.NotZero(t, normal)
+		require.NotZero(t, forwarded)
+		require.Equal(t, cnt, normal+forwarded)
+
+	}, WithServerMaxMessageSize(1024*10))
+
 }
