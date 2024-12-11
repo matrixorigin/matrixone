@@ -27,6 +27,8 @@ import (
 
 	jsoniter "github.com/json-iterator/go"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"go.uber.org/zap"
 )
 
 const (
@@ -209,12 +211,30 @@ func stopFaultMap() bool {
 
 // Enable fault injection
 func Enable() bool {
-	return startFaultMap()
+	changeStatus := startFaultMap()
+	status := "enabled"
+	if changeStatus {
+		status = "disabled"
+	}
+	logutil.Info(
+		"FAULT-INJECTION-ENABLED",
+		zap.String("previous-status", status),
+	)
+	return changeStatus
 }
 
 // Disable fault injection
 func Disable() bool {
-	return stopFaultMap()
+	changeStatus := stopFaultMap()
+	status := "enabled"
+	if !changeStatus {
+		status = "disabled"
+	}
+	logutil.Info(
+		"FAULT-INJECTION-DISABLED",
+		zap.String("previous-status", status),
+	)
+	return changeStatus
 }
 
 func Status() bool {

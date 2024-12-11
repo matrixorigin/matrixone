@@ -36,7 +36,12 @@ func (cs *testClientSession) SessionCtx() context.Context {
 
 func (cs *testClientSession) Close() error { return nil }
 func (cs *testClientSession) Write(ctx context.Context, response morpc.Message) error {
-	cs.tailReceiveQueue <- response
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+
+	case cs.tailReceiveQueue <- response:
+	}
 	return nil
 }
 
