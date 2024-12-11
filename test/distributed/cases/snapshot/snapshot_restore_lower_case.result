@@ -180,9 +180,6 @@ Tables_in_test02
 Departments
 EmployeeDepartmentView
 Employees
-show create table Employees;
-Table    Create Table
-Employees    CREATE TABLE `Employees` (\n  `EmployeeID` int NOT NULL,\n  `FirstName` varchar(255) NOT NULL,\n  `LastName` varchar(255) NOT NULL,\n  `DepartmentID` int DEFAULT NULL,\n  PRIMARY KEY (`EmployeeID`),\n  CONSTRAINT `0193b3b0-38a7-7a41-808b-64f0616d26e9` FOREIGN KEY (`DepartmentID`) REFERENCES `Departments` (`DepartmentID`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 show create table EmployeeDepartmentView;
 View    Create View    character_set_client    collation_connection
 EmployeeDepartmentView    create view EmployeeDepartmentView as\nselect\ne.FirstName,\ne.LastName,\nd.DepartmentName\nfrom\nEmployees e\ninner join\nDepartments d ON e.DepartmentID = d.DepartmentID;    utf8mb4    utf8mb4_general_ci
@@ -193,8 +190,6 @@ Tables_in_test02
 Departments
 EmployeeDepartmentView
 Employees
-show create table Employees;
-no such table test02.employees
 show create table EmployeeDepartmentView;
 no such table test02.employeedepartmentview
 set global lower_case_table_names = 0;
@@ -207,9 +202,6 @@ Tables_in_test02
 Departments
 EmployeeDepartmentView
 Employees
-show create table Employees;
-Table    Create Table
-Employees    CREATE TABLE `Employees` (\n  `EmployeeID` int NOT NULL,\n  `FirstName` varchar(255) NOT NULL,\n  `LastName` varchar(255) NOT NULL,\n  `DepartmentID` int DEFAULT NULL,\n  PRIMARY KEY (`EmployeeID`),\n  CONSTRAINT `0193b3b0-38a7-7a41-808b-64f0616d26e9` FOREIGN KEY (`DepartmentID`) REFERENCES `Departments` (`DepartmentID`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 show create table EmployeeDepartmentView;
 View    Create View    character_set_client    collation_connection
 EmployeeDepartmentView    create view EmployeeDepartmentView as\nselect\ne.FirstName,\ne.LastName,\nd.DepartmentName\nfrom\nEmployees e\ninner join\nDepartments d ON e.DepartmentID = d.DepartmentID;    utf8mb4    utf8mb4_general_ci

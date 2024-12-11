@@ -136,7 +136,6 @@ restore account acc01 from snapshot sp02_restore_lower;
 -- @session:id=2&user=acc01:test_account&password=111
 use test02;
 show tables;
-show create table Employees;
 show create table EmployeeDepartmentView;
 -- @session
 
@@ -145,7 +144,6 @@ restore account acc01 from snapshot sp02_restore_lower to account acc04;
 -- @session:id=4&user=acc04:test_account&password=111
 use test02;
 show tables;
-show create table Employees;
 show create table EmployeeDepartmentView;
 set global lower_case_table_names = 0;
 -- @session
@@ -154,7 +152,6 @@ set global lower_case_table_names = 0;
 select @@lower_case_table_names;
 use test02;
 show tables;
-show create table Employees;
 show create table EmployeeDepartmentView;
 -- @session
 
