@@ -1440,6 +1440,16 @@ select col2, col1, min(col1) over (partition by col2 order by col1 desc) from wi
 select col2, col1, max(col1) over (partition by col2 order by col1 desc) from window01;
 select col2, col1, count(col1) over (partition by col2 order by col1 desc) from window01;
 
+create table item(i_item_sk integer not null,i_manufact_id  integer , primary key (i_item_sk));
+INSERT INTO item (i_item_sk, i_manufact_id) VALUES (1, 100);
+INSERT INTO item (i_item_sk, i_manufact_id) VALUES (2, 200);
+INSERT INTO item (i_item_sk, i_manufact_id) VALUES (3, 300);
+create table store_sales( ss_item_sk       integer     not null, ss_ticket_number       integer    not null, ss_sales_price   decimal(7,2)  , primary key (ss_item_sk, ss_ticket_number));
+INSERT INTO store_sales (ss_item_sk, ss_ticket_number, ss_sales_price) VALUES (1, 101, 19.99);
+INSERT INTO store_sales (ss_item_sk, ss_ticket_number, ss_sales_price) VALUES (1, 102, 29.99);
+INSERT INTO store_sales (ss_item_sk, ss_ticket_number, ss_sales_price) VALUES (2, 201, 39.99);
+select * from (select i_manufact_id, sum(ss_sales_price) sum_sales, avg(sum(ss_sales_price)) over (partition by i_manufact_id) avg_quarterly_sales from item, store_sales group by i_manufact_id) tmp1 where abs(sum_sales - avg_quarterly_sales) / avg_quarterly_sales > 0.1 limit 1;
+
 -- information_schema is now a table which is compatible with mysql, it is now an empty table
 select group_concat(c.column_name order by ordinal_position) key_columns  from information_schema.key_column_usage c where c.table_schema='test1' and c.table_name='region' and constraint_name='PRIMARY';
 drop database test;

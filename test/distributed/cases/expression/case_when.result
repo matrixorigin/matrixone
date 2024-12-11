@@ -86,6 +86,14 @@ nothing    2
 drop table if exists t1;
 create table t1 (`row` int not null, col int not null, val varchar(255) not null);
 insert into t1 values (1,1,'orange'),(1,2,'large'),(2,1,'yellow'),(2,2,'medium'),(3,1,'green'),(3,2,'small');
+select col,val, case when val="orange" then 1 when upper(val)="LARGE" then 2  else 3 end from t1;
+col    val    case when val = orange then 1 when upper(val) = LARGE then 2 else 3 end
+1    orange    1
+2    large    2
+1    yellow    3
+2    medium    3
+1    green    3
+2    small    3
 select max(case col when 1 then val else null end) as color from t1 group by `row`;
 color
 orange
@@ -220,3 +228,9 @@ id    xxx
 19    3
 20    3
 DROP TABLE t1;
+create table t1(a varchar(100));
+insert into t1 values ("a");
+select a, case when a="a" then 1 when upper(a)="b" then 2 end from t1;
+a    case when a = a then 1 when upper(a) = b then 2 end
+a    1
+drop table if exists t1;
