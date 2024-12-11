@@ -31,9 +31,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
@@ -251,6 +253,16 @@ func (gs *GlobalStats) Get(ctx context.Context, key pb.StatsInfoKey, sync bool) 
 	if ok && info != nil {
 		return info
 	}
+
+	if ok = ctx.Value(perfcounter.BuildPlanMarkKey{}); ok {
+
+	}
+
+	stats := statistic.StatsInfoFromContext(ctx)
+	start := time.Now()
+	defer func() {
+		stats.AddBuildPlanStatsIOConsumption(time.Since(start))
+	}()
 
 	// Get stats info from remote node.
 	if gs.KeyRouter != nil {

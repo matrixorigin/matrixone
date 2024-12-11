@@ -296,6 +296,7 @@ type StatsInfo struct {
 		BuildPlanStatsS3   S3Request     `json:"BuildPlanStatsS3"`
 		// The following attributes belong to independent statistics during the `buildPlan` stage, only for analysis reference.
 		BuildPlanStatsDuration      int64 `json:"BuildPlanStatsDuration"`      // unit: ns
+		BUildPlanStatsIODuration    int64 `json:"BuildPlanStatsIODuration"`    // unit: ns
 		BuildPlanResolveVarDuration int64 `json:"BuildPlanResolveVarDuration"` // unit: ns
 	}
 
@@ -512,6 +513,13 @@ func (stats *StatsInfo) AddBuildPlanStatsConsumption(d time.Duration) {
 		return
 	}
 	atomic.AddInt64(&stats.PlanStage.BuildPlanStatsDuration, int64(d))
+}
+
+func (stats *StatsInfo) AddBuildPlanStatsIOConsumption(d time.Duration) {
+	if stats == nil {
+		return
+	}
+	atomic.AddInt64(&stats.PlanStage.BUildPlanStatsIODuration, int64(d))
 }
 
 func (stats *StatsInfo) AddBuildPlanResolveVarConsumption(d time.Duration) {
