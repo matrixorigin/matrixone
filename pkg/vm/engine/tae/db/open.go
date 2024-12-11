@@ -359,17 +359,20 @@ func Open(
 		1,
 	)
 
-	db.CronJobs.AddJob("Compact",
+	db.CronJobs.AddJob(
+		"Compact",
 		opts.CheckpointCfg.ScanInterval,
 		func(ctx context.Context) { db.LogtailMgr.TryCompactTable() },
-		0)
+		0,
+	)
 
 	db.MergeScheduler = merge.NewScheduler(db.Runtime, merge.NewTaskServiceGetter(opts.TaskServiceGetter))
-	scanner := newMergeScanner(db.Catalog, db.MergeScheduler)
-	db.CronJobs.AddJob("Merge",
+	db.CronJobs.AddJob(
+		"Merge",
 		opts.CheckpointCfg.ScanInterval,
-		func(ctx context.Context) { scanner.OnExec() },
-		1)
+		func(ctx context.Context) { db.MergeScheduler.Schedule() },
+		0,
+	)
 
 	if opts.CheckpointCfg.MetadataCheckInterval != 0 {
 		db.CronJobs.AddJob(

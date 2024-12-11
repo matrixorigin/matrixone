@@ -33,6 +33,8 @@ import (
 type Scheduler struct {
 	tid uint64
 
+	catalog *catalog.Catalog
+
 	policies *policyGroup
 	executor *executor
 
@@ -54,6 +56,24 @@ func NewScheduler(rt *dbutils.Runtime, sched *CNMergeScheduler) *Scheduler {
 		rc:       new(resourceController),
 	}
 	return op
+}
+
+func (s *Scheduler) Schedule() {
+	if s.stopMerge.Load() {
+		return
+	}
+	dbutils.PrintMemStats()
+	err := s.PreExecute()
+	if err != nil {
+		panic(err)
+	}
+	if err = s.catalog.RecurLoop(s); err != nil {
+		logutil.Errorf("DBScanner Execute: %v", err)
+	}
+	err = s.PostExecute()
+	if err != nil {
+		panic(err)
+	}
 }
 
 func (s *Scheduler) ConfigPolicy(tbl *catalog.TableEntry, txn txnif.AsyncTxn, c *BasicPolicyConfig) error {
@@ -168,6 +188,14 @@ func (s *Scheduler) OnObject(objectEntry *catalog.ObjectEntry) (err error) {
 
 func (s *Scheduler) OnTombstone(tombstone *catalog.ObjectEntry) error {
 	return s.OnObject(tombstone)
+}
+
+func (s *Scheduler) OnPostDatabase(database *catalog.DBEntry) error {
+	return nil
+}
+
+func (s *Scheduler) OnPostObject(object *catalog.ObjectEntry) error {
+	return nil
 }
 
 func (s *Scheduler) StopMerge(tblEntry *catalog.TableEntry, reentrant bool) error {
