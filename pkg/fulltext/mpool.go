@@ -28,6 +28,7 @@ func GetPartitionAddr(partid uint64, offset uint64) uint64 {
 type Partition struct {
 	cxt         context.Context
 	id          uint64
+	nitem       uint64
 	used        uint64
 	capacity    uint64
 	refcnt      uint64
@@ -47,6 +48,18 @@ func NewPartition(cxt context.Context, id uint64, capacity uint64, dsize uint64)
 	return &p, nil
 }
 
+func (part *Partition) Close() {
+	part.data = nil
+	part.capacity = 0
+	part.refcnt = 0
+	// TODO: delete the temp file
+	/*
+		if part.spilled {
+
+		}
+	*/
+}
+
 func (part *Partition) NewItem() (addr uint64, b []byte, err error) {
 	if part.cpos+part.dsize > part.capacity {
 		return 0, nil, moerr.NewInternalError(part.cxt, "Partition NewItem out of bound")
@@ -57,6 +70,7 @@ func (part *Partition) NewItem() (addr uint64, b []byte, err error) {
 	part.cpos += part.dsize
 	part.used += part.dsize
 	part.refcnt++
+	part.nitem++
 	if part.cpos+part.dsize > part.capacity {
 		part.full = true
 	}
@@ -156,4 +170,11 @@ func (pool *FixedBytePool) FreeItem(addr uint64) error {
 func (pool *FixedBytePool) String() string {
 	return fmt.Sprintf("FixedBytePool: capacity %d, part_cap %d, npart %d, dsize %d\n",
 		pool.capacity, pool.partition_cap, len(pool.partitions), pool.dsize)
+}
+
+func (pool *FixedBytePool) Close() {
+	for i, p := range pool.partitions {
+		p.Close()
+		pool.partitions[i] = nil
+	}
 }

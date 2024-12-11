@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -63,6 +64,10 @@ func (u *fulltextState) reset(tf *TableFunction, proc *process.Process) {
 func (u *fulltextState) free(tf *TableFunction, proc *process.Process, pipelineFailed bool, err error) {
 	if u.batch != nil {
 		u.batch.Clean(proc.Mp())
+	}
+
+	if u.mpool != nil {
+		u.mpool.Close()
 	}
 
 	for {
@@ -374,6 +379,7 @@ func evaluate(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) 
 		}
 
 		if len(scoremap) >= 8192 {
+			//os.Stderr.WriteString(u.mpool.String())
 			break
 		}
 	}
@@ -549,6 +555,7 @@ func fulltextIndexMatch(u *fulltextState, proc *process.Process, tableFunction *
 
 	}
 
+	t1 := time.Now()
 	go func() {
 		//os.Stderr.WriteString("GO SQL START\n")
 		// get the statistic of search string ([]Pattern) and store in SearchAccum
@@ -587,5 +594,10 @@ func fulltextIndexMatch(u *fulltextState, proc *process.Process, tableFunction *
 	}
 	os.Stderr.WriteString(fmt.Sprintf("FULLTEXT: GROUP BY END htab size %d\n", len(u.agghtab)))
 
+	t2 := time.Now()
+	diff := t2.Sub(t1)
+
+	os.Stderr.WriteString(fmt.Sprintf("FULLTEXT: diff %v\n", diff))
+	os.Stderr.WriteString(u.mpool.String())
 	return nil
 }
