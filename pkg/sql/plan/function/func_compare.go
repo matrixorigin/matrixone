@@ -135,14 +135,14 @@ func equalFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 			return a == b
 		}, selectList)
 	case types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink:
-		if parameters[0].GetArea() == nil && parameters[1].GetArea() == nil {
+		if parameters[0].GetArea() == nil && parameters[1].GetArea() == nil && (selectList == nil) {
 			return compareVarlenaEqual(parameters, rs, proc, length, selectList)
 		}
 		return opBinaryStrStrToFixed[bool](parameters, rs, proc, length, func(v1, v2 string) bool {
 			return v1 == v2
 		}, selectList)
 	case types.T_array_float32:
-		if parameters[0].GetArea() == nil && parameters[1].GetArea() == nil {
+		if parameters[0].GetArea() == nil && parameters[1].GetArea() == nil && (selectList == nil) {
 			return compareVarlenaEqual(parameters, rs, proc, length, selectList)
 		}
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
@@ -152,7 +152,7 @@ func equalFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 			return moarray.Compare[float32](_v1, _v2) == 0
 		}, selectList)
 	case types.T_array_float64:
-		if parameters[0].GetArea() == nil && parameters[1].GetArea() == nil {
+		if parameters[0].GetArea() == nil && parameters[1].GetArea() == nil && (selectList == nil) {
 			return compareVarlenaEqual(parameters, rs, proc, length, selectList)
 		}
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
