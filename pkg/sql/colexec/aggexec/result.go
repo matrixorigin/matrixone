@@ -221,15 +221,15 @@ type optSplitResult struct {
 func (r *optSplitResult) marshalToBytes() ([][]byte, [][]byte, error) {
 	var err error
 
-	resultData := make([][]byte, len(r.resultList))
-	emptyData := make([][]byte, len(r.emptyList))
+	resultData := make([][]byte, min(r.nowIdx1+1, len(r.resultList)))
+	emptyData := make([][]byte, min(r.nowIdx1+1, len(r.emptyList)))
 
-	for i := range r.resultList {
+	for i := range resultData {
 		if resultData[i], err = r.resultList[i].MarshalBinary(); err != nil {
 			return nil, nil, err
 		}
 	}
-	for i := range r.emptyList {
+	for i := range emptyData {
 		if emptyData[i], err = r.emptyList[i].MarshalBinary(); err != nil {
 			return nil, nil, err
 		}
@@ -237,8 +237,8 @@ func (r *optSplitResult) marshalToBytes() ([][]byte, [][]byte, error) {
 	return resultData, emptyData, nil
 }
 
-func (r *optSplitResult) unmarshalFromBytes(resultData [][]byte, emptyData [][]byte) error {
-	var err error
+func (r *optSplitResult) unmarshalFromBytes(resultData [][]byte, emptyData [][]byte) (err error) {
+	r.free()
 	defer func() {
 		if err != nil {
 			for i := range r.resultList {
@@ -257,6 +257,7 @@ func (r *optSplitResult) unmarshalFromBytes(resultData [][]byte, emptyData [][]b
 	r.resultList = make([]*vector.Vector, len(resultData))
 	r.emptyList = make([]*vector.Vector, len(emptyData))
 	r.bsFromEmptyList = make([][]bool, len(emptyData))
+	r.nowIdx1 = max(0, len(resultData)-1)
 	for i := range r.resultList {
 		r.resultList[i] = vector.NewOffHeapVecWithType(r.resultType)
 		if err = vectorUnmarshal(r.resultList[i], resultData[i], r.mp); err != nil {

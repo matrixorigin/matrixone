@@ -80,3 +80,64 @@ func checkCapSituation(t *testing.T, expected []int, src []*vector.Vector, ourLi
 		require.LessOrEqual(t, expected[i], min(src[i].Capacity(), ourLimitation))
 	}
 }
+
+func TestResultSerialization(t *testing.T) {
+	proc := hackAggMemoryManager()
+	{
+		before := proc.Mp().CurrNB()
+		r1 := aggResultWithFixedType[int64]{}
+		r1.optSplitResult.optInformation.chunkSize = 2
+		r1.optSplitResult.optInformation.doesThisNeedEmptyList = true
+		r1.init(proc, types.T_int64.ToType(), true)
+
+		_, _, _, _, err := r1.resExtend(7)
+		require.NoError(t, err)
+
+		data1, data2, err := r1.marshalToBytes()
+		require.NoError(t, err)
+
+		r2 := aggResultWithFixedType[int64]{}
+		r2.init(proc, types.T_int64.ToType(), true)
+		r2.optSplitResult.optInformation.chunkSize = 2
+		r2.optSplitResult.optInformation.doesThisNeedEmptyList = true
+
+		require.NoError(t, r2.unmarshalFromBytes(data1, data2))
+
+		require.Equal(t, len(r1.resultList), len(r2.resultList))
+		require.Equal(t, len(r1.emptyList), len(r2.emptyList))
+		require.Equal(t, r1.nowIdx1, r2.nowIdx1)
+
+		r1.free()
+		r2.free()
+		require.Equal(t, before, proc.Mp().CurrNB())
+	}
+
+	{
+		before := proc.Mp().CurrNB()
+		r1 := aggResultWithBytesType{}
+		r1.optSplitResult.optInformation.chunkSize = 2
+		r1.optSplitResult.optInformation.doesThisNeedEmptyList = true
+		r1.init(proc, types.T_varchar.ToType(), true)
+
+		_, _, _, _, err := r1.resExtend(15)
+		require.NoError(t, err)
+
+		data1, data2, err := r1.marshalToBytes()
+		require.NoError(t, err)
+
+		r2 := aggResultWithBytesType{}
+		r2.init(proc, types.T_varchar.ToType(), true)
+		r2.optSplitResult.optInformation.chunkSize = 2
+		r2.optSplitResult.optInformation.doesThisNeedEmptyList = true
+
+		require.NoError(t, r2.unmarshalFromBytes(data1, data2))
+
+		require.Equal(t, len(r1.resultList), len(r2.resultList))
+		require.Equal(t, len(r1.emptyList), len(r2.emptyList))
+		require.Equal(t, r1.nowIdx1, r2.nowIdx1)
+
+		r1.free()
+		r2.free()
+		require.Equal(t, before, proc.Mp().CurrNB())
+	}
+}
