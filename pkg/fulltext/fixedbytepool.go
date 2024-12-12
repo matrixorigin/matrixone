@@ -139,6 +139,8 @@ func (part *Partition) Close() {
 	//delete the temp file
 	if part.spilled {
 		os.Remove(part.spill_fpath)
+		part.spilled = false
+		part.spill_fpath = ""
 	}
 }
 

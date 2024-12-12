@@ -241,4 +241,8 @@ func TestPartitionSpill3(t *testing.T) {
 	_, _, err = p.NewItem()
 	require.NotNil(t, err)
 
+	p.Close()
+	p.Close()
+	p.Close()
+
 }
