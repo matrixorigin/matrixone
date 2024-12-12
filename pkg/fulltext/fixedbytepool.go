@@ -396,7 +396,7 @@ func (pool *FixedBytePool) Spill() error {
 		return lru[i].last_update.Before(lru[j].last_update)
 	})
 
-	fmt.Printf("sorted %v\n", lru)
+	//fmt.Printf("sorted %v\n", lru)
 
 	// double the spill size every time
 	nspill := pool.spill_size
@@ -428,7 +428,7 @@ func (pool *FixedBytePool) Spill() error {
 
 	pool.mem_in_use -= uint64(nspill) * pool.partition_cap
 
-	fmt.Printf("%d spilled, mem in use %d\n", nspill, pool.mem_in_use)
+	//fmt.Printf("%d spilled, mem in use %d\n", nspill, pool.mem_in_use)
 	return nil
 }
 
