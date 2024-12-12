@@ -122,6 +122,10 @@ func (part *Partition) GetItem(offset uint64) ([]byte, error) {
 	if part.spilled {
 		return nil, moerr.NewInternalError(part.cxt, "GetItem: partition is spillled")
 	}
+	if offset+part.dsize > part.used {
+		return nil, moerr.NewInternalError(part.cxt, "GetItem: offset out of bound")
+	}
+
 	return unsafe.Slice(&part.data[offset], part.dsize), nil
 }
 
@@ -372,4 +376,57 @@ func (pool *FixedBytePool) Spill() error {
 
 	fmt.Printf("%d spilled, mem in use %d\n", nspill, pool.mem_in_use)
 	return nil
+}
+
+type FixedBytePoolIterator struct {
+	pool   *FixedBytePool
+	idx    int
+	offset uint64
+}
+
+func NewFixedBytePoolIterator(p *FixedBytePool) *FixedBytePoolIterator {
+	return &FixedBytePoolIterator{pool: p}
+}
+
+func (it *FixedBytePoolIterator) HasNext() bool {
+	if it.idx < len(it.pool.partitions) && it.offset < it.pool.partitions[it.idx].used {
+		return true
+	}
+	return false
+}
+
+func (it *FixedBytePoolIterator) Next() ([]byte, error) {
+	for {
+		if it.idx >= len(it.pool.partitions) {
+			break
+		}
+
+		p := it.pool.partitions[it.idx]
+		if p.Spilled() {
+			err := p.Unspill()
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		if it.offset >= p.used {
+			// next partition
+			it.idx++
+			it.offset = 0
+
+			// close partition
+			p.Close()
+			continue
+		}
+
+		b, err := p.GetItem(it.offset)
+		if err != nil {
+			return nil, err
+		}
+
+		it.offset += it.pool.dsize
+		return b, nil
+	}
+
+	return nil, nil
 }

@@ -121,6 +121,18 @@ func TestPoolSpill(t *testing.T) {
 		offset := GetPartitionOffset(addr)
 		fmt.Printf("ID %d, offset %d, data = %v\n", id, offset, data)
 	}
+
+	it := NewFixedBytePoolIterator(mp)
+	for {
+		data, err := it.Next()
+		require.Nil(t, err)
+		if data == nil {
+			// EOF
+			break
+		}
+		fmt.Printf("data = %v\n", data)
+	}
+
 }
 
 func TestPartitionSpill(t *testing.T) {
