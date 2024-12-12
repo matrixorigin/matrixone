@@ -23,9 +23,6 @@ import (
 
   There is a memory limit of the pool.  If memory in use exceed the limit, partitions will be spilled out to disk.
 
-  After hash build/aggregate, all data will reside in partitions.  You can use FixedBytePoolIterator to tranverse all data
-  in partitions.  You don't need to tranverse the data with hashtable which you are using for aggregate.  It is a sequential
-  access and should be faster than hashtable.
 
   Assumption:
   - During hash build, you won't do any delete.
@@ -436,6 +433,9 @@ func (pool *FixedBytePool) Spill() error {
 }
 
 // Iterator
+//
+//	After hash build/aggregate, all data will reside in partitions.  You can use FixedBytePoolIterator to tranverse all data
+//	in partitions. We don't provide you the hash key here. just the values
 func NewFixedBytePoolIterator(p *FixedBytePool) *FixedBytePoolIterator {
 	return &FixedBytePoolIterator{pool: p}
 }
