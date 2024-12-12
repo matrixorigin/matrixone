@@ -237,7 +237,6 @@ func (db *DB) ForceCheckpointForBackup(
 			zap.Duration("total-cost", time.Since(t0)),
 			zap.Duration("force-flush-cost", forceFlushCost),
 			zap.Duration("flush-duration", flushDuration),
-			zap.Duration("version-interval", versionInterval),
 			zap.String("location", location),
 			zap.Error(err),
 		)
