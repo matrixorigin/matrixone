@@ -109,7 +109,8 @@ func TestExecutorCNMerge(t *testing.T) {
 	require.NotEmpty(t, cnScheduler.activeObjsString())
 
 	executor.executeFor(tbl, []*catalog.ObjectEntry{entry}, taskHostCN)
-	executor.executeFor(tbl, slices.Repeat([]*catalog.ObjectEntry{entry}, 31), taskHostCN)
+	entry2 := newSortedDataEntryWithTableEntry(t, tbl, txn2, 0, 1, overlapSizeThreshold)
+	executor.executeFor(tbl, slices.Repeat([]*catalog.ObjectEntry{entry2}, 31), taskHostCN)
 
 	executor.cnSched.prune(0, 0)
 	executor.cnSched.prune(0, time.Hour)
