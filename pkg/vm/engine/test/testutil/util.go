@@ -17,7 +17,6 @@ package testutil
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"os"
 	"os/user"
 	"path"
@@ -25,13 +24,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
-
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	catalog2 "github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -42,7 +39,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 )
 
 func GetDefaultTestPath(module string, t *testing.T) string {
@@ -266,7 +265,7 @@ func InitEnginePack(opts TestOptions, t *testing.T) *EnginePack {
 		t:       t,
 		cancelF: cancel,
 	}
-	pack.D, pack.T, pack.R, pack.Mp = CreateEngines(pack.Ctx, opts, t)
+	pack.D, pack.T, pack.R, pack.Mp = CreateEngines(pack.Ctx, opts, t, opts.DisttaeOptions...)
 	return pack
 }
 
