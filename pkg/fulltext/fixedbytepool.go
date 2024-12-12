@@ -215,12 +215,12 @@ func (part *Partition) Spill() error {
 
 	defer f.Close()
 
-	part.spill_fpath = f.Name()
 	if _, err := f.Write(part.data); err != nil {
 		return err
 	}
 
 	part.spilled = true
+	part.spill_fpath = f.Name()
 	part.mp.Free(part.data)
 	part.data = nil
 	return nil
