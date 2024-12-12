@@ -403,7 +403,10 @@ func (pool *FixedBytePool) Spill() error {
 	if nspill > uint64(len(lru)) {
 		nspill = uint64(len(lru))
 	}
-	pool.spill_size *= 2
+	// max 16 spill size
+	if pool.spill_size < 16 {
+		pool.spill_size *= 2
+	}
 
 	// concurrent spill partitions
 	var wg sync.WaitGroup
