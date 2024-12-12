@@ -222,6 +222,7 @@ type FixedBytePool struct {
 	dsize         uint64
 	mem_in_use    uint64
 	mem_limit     uint64
+	spill_size    uint64
 }
 
 func NewFixedBytePool(mp *mpool.MPool, context context.Context, dsize uint64, partition_cap uint64, mem_limit uint64) *FixedBytePool {
@@ -233,7 +234,7 @@ func NewFixedBytePool(mp *mpool.MPool, context context.Context, dsize uint64, pa
 		mem_limit = uint64(1024 * 1024 * 1024) // 1G
 	}
 
-	pool := FixedBytePool{mp: mp, dsize: dsize, cxt: context, partition_cap: partition_cap, mem_limit: mem_limit}
+	pool := FixedBytePool{mp: mp, dsize: dsize, cxt: context, partition_cap: partition_cap, mem_limit: mem_limit, spill_size: 2}
 	pool.partitions = make([]*Partition, 0, 32)
 	return &pool
 }
@@ -337,16 +338,17 @@ func (pool *FixedBytePool) Spill() error {
 
 	fmt.Printf("sorted %v\n", lru)
 
-	// need a better spill strategy
-	nspill := 1
-	if len(lru) > 2 {
-		nspill = 2
+	// double the spill size every time
+	nspill := pool.spill_size
+	if nspill > uint64(len(lru)) {
+		nspill = uint64(len(lru))
 	}
+	pool.spill_size *= 2
 
 	// concurrent spill partitions
 	var wg sync.WaitGroup
 	var errs error
-	for i := 0; i < nspill; i++ {
+	for i := 0; i < int(nspill); i++ {
 		wg.Add(1)
 
 		go func() {
@@ -366,5 +368,6 @@ func (pool *FixedBytePool) Spill() error {
 
 	pool.mem_in_use -= uint64(nspill) * pool.partition_cap
 
+	fmt.Printf("%d spilled, mem in use %d\n", nspill, pool.mem_in_use)
 	return nil
 }
