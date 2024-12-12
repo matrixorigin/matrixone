@@ -248,7 +248,9 @@ func (c *Controller) handleToReplayCmd(cmd *controlCmd) {
 
 	// 3. build forward write request tunnel to the new write candidate
 	if err = c.db.TxnServer.SwitchTxnHandleStateTo(
-		rpc2.TxnForwardWait, rpc2.WithForwardTarget(metadata.TNShard{})); err != nil {
+		rpc2.TxnForwardWait, rpc2.WithForwardTarget(metadata.TNShard{
+			Address: "todo",
+		})); err != nil {
 		return
 	}
 
