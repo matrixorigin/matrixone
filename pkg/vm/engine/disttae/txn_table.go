@@ -1252,6 +1252,8 @@ func (tbl *txnTable) isCreatedInTxn(ctx context.Context) (bool, error) {
 		if err := tbl.db.op.UpdateSnapshot(ctx, cacheTS); err != nil {
 			return false, err
 		}
+		// When logtail reconnect, this error may be thrown to client if
+		// disableRetry is true for some SQL requests.
 		return false, moerr.NewTxnNeedRetry(ctx)
 	}
 
