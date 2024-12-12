@@ -80,6 +80,7 @@ import (
 //	mo_ctl("cn", "MoTableStats", "move_on:false|true");
 //	mo_ctl("cn", "MoTableStats", "restore_default_setting:true|false");
 //  mo_ctl("cn", "MoTableStats", "echo_current_setting:true|false");
+//	mo_ctl("cn", "MoTableStats", "recomputing:account_id, account_id...")
 //
 // bootstrap config
 
@@ -204,7 +205,7 @@ const (
 const (
 	defaultAlphaCycleDur     = time.Minute
 	defaultGamaCycleDur      = time.Minute
-	defaultGetTableListLimit = options.DefaultBlockMaxRows
+	defaultGetTableListLimit = options.DefaultBlockMaxRows * 10
 
 	logHeader = "MO-TABLE-STATS-TASK"
 )
@@ -392,6 +393,7 @@ func initMoTableStatsConfig(
 
 			switch name {
 			case gamaTaskName:
+				dynamicCtx.isMainRunner = true
 				launch("gama task", &dynamicCtx.gama)
 			case betaTaskName:
 				launch("beta task", &dynamicCtx.beta)
@@ -494,6 +496,8 @@ var dynamicCtx struct {
 		newest types.TS
 	}
 
+	isMainRunner bool
+
 	beta, gama taskState
 	launchTask func(name string)
 
@@ -509,15 +513,17 @@ func LogDynamicCtx() string {
 	defer dynamicCtx.Unlock()
 
 	var buf bytes.Buffer
-	buf.WriteString(fmt.Sprintf("cur-conf:[alpha-dur: %v; gama-dur: %v; limit: %v; force-update: %v; use-old-impl: %v; disable-task: %v]\n",
-		dynamicCtx.conf.UpdateDuration,
-		dynamicCtx.conf.CorrectionDuration,
-		dynamicCtx.conf.GetTableListLimit,
-		dynamicCtx.conf.ForceUpdate,
-		dynamicCtx.conf.StatsUsingOldImpl,
-		dynamicCtx.conf.DisableStatsTask))
 
-	buf.WriteString(fmt.Sprintf("default-conf:[alpha-dur: %v; gama-dur: %v; limit: %v; force-update: %v; use-old-impl: %v; disable-task: %v]\n",
+	buf.WriteString(fmt.Sprintf("gama: [running: %v; launched-time: %v]\n",
+		dynamicCtx.gama.running,
+		dynamicCtx.gama.launchTimes))
+
+	buf.WriteString(fmt.Sprintf("beta: [running: %v; launched-time: %v]\n",
+		dynamicCtx.beta.running,
+		dynamicCtx.beta.launchTimes))
+
+	buf.WriteString(fmt.Sprintf(
+		"default-conf:[alpha-dur: %v; gama-dur: %v; limit: %v; force-update: %v; use-old-impl: %v; disable-task: %v]\n",
 		dynamicCtx.defaultConf.UpdateDuration,
 		dynamicCtx.defaultConf.CorrectionDuration,
 		dynamicCtx.defaultConf.GetTableListLimit,
@@ -525,13 +531,14 @@ func LogDynamicCtx() string {
 		dynamicCtx.defaultConf.StatsUsingOldImpl,
 		dynamicCtx.defaultConf.DisableStatsTask))
 
-	buf.WriteString(fmt.Sprintf("beta: [running: %v; launched-time: %v]\n",
-		dynamicCtx.beta.running,
-		dynamicCtx.beta.launchTimes))
-
-	buf.WriteString(fmt.Sprintf("gama: [running: %v; launched-time: %v]\n",
-		dynamicCtx.gama.running,
-		dynamicCtx.gama.launchTimes))
+	buf.WriteString(fmt.Sprintf(
+		"cur-conf:[alpha-dur: %v; gama-dur: %v; limit: %v; force-update: %v; use-old-impl: %v; disable-task: %v]\n",
+		dynamicCtx.conf.UpdateDuration,
+		dynamicCtx.conf.CorrectionDuration,
+		dynamicCtx.conf.GetTableListLimit,
+		dynamicCtx.conf.ForceUpdate,
+		dynamicCtx.conf.StatsUsingOldImpl,
+		dynamicCtx.conf.DisableStatsTask))
 
 	return buf.String()
 }
@@ -550,8 +557,10 @@ func HandleMoTableStatsCtl(cmd string) string {
 	typ = strings.TrimSpace(typ)
 	val = strings.TrimSpace(val)
 
-	if val != "false" && val != "true" {
-		return "failed, cmd invalid"
+	if typ != "recomputing" {
+		if val != "false" && val != "true" {
+			return "failed, cmd invalid"
+		}
 	}
 
 	switch typ {
@@ -570,9 +579,62 @@ func HandleMoTableStatsCtl(cmd string) string {
 	case "echo_current_setting":
 		return echoCurrentSetting(val == "true")
 
+	case "recomputing":
+		return recomputing(val)
+
 	default:
 		return "failed, cmd invalid"
 	}
+}
+
+func recomputing(para string) string {
+	{
+		dynamicCtx.Lock()
+		if !dynamicCtx.isMainRunner {
+			dynamicCtx.Unlock()
+			return "not main runner"
+		}
+		dynamicCtx.Unlock()
+	}
+
+	var (
+		err    error
+		ok     bool
+		id     uint64
+		buf    bytes.Buffer
+		retAcc []uint64
+	)
+
+	ids := strings.Split(para, ",")
+
+	accIds := make([]uint64, 0, len(ids))
+
+	for i := range ids {
+		id, err = strconv.ParseUint(ids[i], 10, 64)
+		if err == nil {
+			accIds = append(accIds, id)
+		}
+	}
+
+	_, retAcc, err, ok = QueryTableStatsByAccounts(
+		context.Background(), nil, accIds, false, true)
+
+	if !ok {
+		buf.WriteString(fmt.Sprintf("failed, err: %v, acc: ", err))
+	} else {
+		buf.WriteString("succeed, acc: ")
+	}
+
+	uniqueAcc := make(map[uint64]struct{})
+	for i := range retAcc {
+		uniqueAcc[retAcc[i]] = struct{}{}
+	}
+
+	for k := range uniqueAcc {
+		buf.WriteString(fmt.Sprintf("%d ", k))
+	}
+
+	return buf.String()
 }
 
 func checkMoveOnTask() bool {
@@ -834,8 +896,6 @@ func normalQuery(
 		idxes   = make([]int, 0, sqlRet.RowCount())
 		gotTIds = make([]int64, 0, sqlRet.RowCount())
 
-		stats map[string]any
-
 		tblIdColIdx = uint64(0)
 		statsColIdx = uint64(2)
 	)
@@ -867,6 +927,7 @@ func normalQuery(
 			return nil, err
 		}
 
+		var stats map[string]any
 		if err = json.Unmarshal([]byte(val.(bytejson.ByteJson).String()), &stats); err != nil {
 			return
 		}
@@ -994,7 +1055,7 @@ func QueryTableStats(
 		}
 
 		var de *Engine
-		if val, ok := eng.(*engine.EntireEngine); ok {
+		if val, yes := eng.(*engine.EntireEngine); yes {
 			de = val.Engine.(*Engine)
 		} else {
 			de = eng.(*Engine)
@@ -1005,12 +1066,12 @@ func QueryTableStats(
 			accs, dbs, tbls,
 			resetUpdateTime,
 			de)
-		return statsVals, err, true
+		return statsVals, err, err == nil
 	}
 
 	statsVals, err = normalQuery(newCtx, wantedStatsIdxes, accs, dbs, tbls)
 
-	return statsVals, err, true
+	return statsVals, err, err == nil
 }
 
 func MTSTableSize(
@@ -1337,7 +1398,7 @@ func alphaTask(
 	)
 
 	// batCnt -> [200, 500]
-	batCnt := min(max(100, len(tbls)/5), 500)
+	batCnt := min(max(500, len(tbls)/5), 1000)
 
 	now := time.Now()
 	defer func() {
@@ -1831,7 +1892,7 @@ func gamaTask(
 
 	dynamicCtx.Lock()
 	gamaDur := dynamicCtx.conf.CorrectionDuration
-	gamaLimit := max(dynamicCtx.conf.GetTableListLimit/100, 100)
+	gamaLimit := max(dynamicCtx.conf.GetTableListLimit, 8192)
 	dynamicCtx.Unlock()
 
 	randDuration := func(n int) time.Duration {
