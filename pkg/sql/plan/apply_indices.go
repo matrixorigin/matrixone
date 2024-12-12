@@ -1055,7 +1055,7 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 		idxScanInfo := plan.IndexScanInfo{
 			IsIndexScan:    true,
 			IndexName:      idxDef.IndexName,
-			BelongToTable:  node.ObjRef.ObjName,
+			BelongToTable:  leftChild.ObjRef.ObjName,
 			Parts:          slices.Clone(idxDef.Parts),
 			IsUnique:       idxDef.Unique,
 			IndexTableName: idxDef.IndexTableName,
