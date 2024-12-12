@@ -16,9 +16,7 @@ package table_function
 
 import (
 	"fmt"
-	"os"
 	"strings"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -555,7 +553,7 @@ func fulltextIndexMatch(u *fulltextState, proc *process.Process, tableFunction *
 
 	}
 
-	t1 := time.Now()
+	//t1 := time.Now()
 	go func() {
 		//os.Stderr.WriteString("GO SQL START\n")
 		// get the statistic of search string ([]Pattern) and store in SearchAccum
@@ -573,12 +571,10 @@ func fulltextIndexMatch(u *fulltextState, proc *process.Process, tableFunction *
 				return
 			}
 		}
-		os.Stderr.WriteString("FULLTEXT: SQL END\n")
 	}()
-	os.Stderr.WriteString("MAIN FULLTEXT MATCH GROUP BY START\n")
 
 	// array is empty, try to get batch from SQL executor
-	i := 0
+	//i := 0
 	sql_closed := false
 	for !sql_closed {
 		sql_closed, err = groupby(u, proc, u.sacc)
@@ -586,18 +582,21 @@ func fulltextIndexMatch(u *fulltextState, proc *process.Process, tableFunction *
 			return err
 		}
 
-		if (i % 1000) == 0 {
-			os.Stderr.WriteString(fmt.Sprintf("nrow processed %d, chan size =%d\n", u.nrows, len(u.stream_chan)))
-		}
-		i++
+		/*
+			if (i % 1000) == 0 {
+				os.Stderr.WriteString(fmt.Sprintf("nrow processed %d, chan size =%d\n", u.nrows, len(u.stream_chan)))
+			}
+			i++
+		*/
 
 	}
-	os.Stderr.WriteString(fmt.Sprintf("FULLTEXT: GROUP BY END htab size %d\n", len(u.agghtab)))
 
-	t2 := time.Now()
-	diff := t2.Sub(t1)
+	/*
+		t2 := time.Now()
+		diff := t2.Sub(t1)
 
-	os.Stderr.WriteString(fmt.Sprintf("FULLTEXT: diff %v\n", diff))
-	os.Stderr.WriteString(u.mpool.String())
+		os.Stderr.WriteString(fmt.Sprintf("FULLTEXT: diff %v\n", diff))
+		os.Stderr.WriteString(u.mpool.String())
+	*/
 	return nil
 }
