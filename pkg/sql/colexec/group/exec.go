@@ -421,7 +421,7 @@ func (group *Group) consumeBatchToGetIntermediateResult(
 
 	default:
 		// with group by.
-		if err = group.ctr.hr.BuildHashTable(false, group.ctr.mtyp == HStr, group.ctr.keyNullable, 0); err != nil {
+		if err = group.ctr.hr.BuildHashTable(true, group.ctr.mtyp == HStr, group.ctr.keyNullable, 0); err != nil {
 			return nil, err
 		}
 

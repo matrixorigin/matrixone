@@ -57,6 +57,8 @@ func (hr *ResHashRelated) BuildHashTable(
 
 		if hr.Itr == nil {
 			hr.Itr = h.NewIterator()
+		} else {
+			hashmap.IteratorChangeOwner(hr.Itr, hr.Hash)
 		}
 		if preAllocated > 0 {
 			if err = h.PreAlloc(preAllocated); err != nil {
@@ -74,6 +76,8 @@ func (hr *ResHashRelated) BuildHashTable(
 
 	if hr.Itr == nil {
 		hr.Itr = h.NewIterator()
+	} else {
+		hashmap.IteratorChangeOwner(hr.Itr, hr.Hash)
 	}
 	if preAllocated > 0 {
 		if err = h.PreAlloc(preAllocated); err != nil {
