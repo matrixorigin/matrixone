@@ -225,6 +225,7 @@ func InjectLogging(
 		"echo",
 		iarg,
 		sarg,
+		false,
 	); err != nil {
 		return
 	}
@@ -258,6 +259,7 @@ func InjectPrefetchThreshold(threshold int) (rmFault func(), err error) {
 		"echo",
 		int64(threshold),
 		"",
+		false,
 	); err != nil {
 		return
 	}

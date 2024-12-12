@@ -55,7 +55,7 @@ func AddFaultPoint(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 
 	rs := vector.MustFunctionResult[bool](result)
 
-	if err = fault.AddFaultPoint(proc.Ctx, string(name), string(freq), string(action), iarg, string(sarg)); err != nil {
+	if err = fault.AddFaultPoint(proc.Ctx, string(name), string(freq), string(action), iarg, string(sarg), false); err != nil {
 		return err
 	}
 	if err = rs.Append(true, false); err != nil {
