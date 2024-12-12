@@ -6,6 +6,7 @@ import (
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 )
 
 // 24 bits low bits - offset in partition (16MB)
@@ -26,6 +27,7 @@ func GetPartitionAddr(partid uint64, offset uint64) uint64 {
 }
 
 type Partition struct {
+	mp          *mpool.MPool
 	cxt         context.Context
 	id          uint64
 	nitem       uint64
@@ -40,16 +42,33 @@ type Partition struct {
 	full        bool
 }
 
-func NewPartition(cxt context.Context, id uint64, capacity uint64, dsize uint64) (*Partition, error) {
+func NewPartition(mp *mpool.MPool, cxt context.Context, id uint64, capacity uint64, dsize uint64) (*Partition, error) {
 	if capacity > uint64(LOWER_BIT_MASK) || capacity < 0 {
 		return nil, moerr.NewInternalError(cxt, "request capacity is larger than 16MB (24 bits)")
 	}
-	p := Partition{cxt: cxt, id: id, capacity: capacity, dsize: dsize, data: make([]byte, capacity)}
+	p := Partition{mp: mp, cxt: cxt, id: id, dsize: dsize}
+	err := p.alloc(capacity)
+	if err != nil {
+		return nil, err
+	}
+
 	return &p, nil
 }
 
+func (part *Partition) alloc(capacity uint64) (err error) {
+	part.data, err = part.mp.Alloc(int(capacity), false)
+	if err != nil {
+		return err
+	}
+	part.capacity = capacity
+	return nil
+}
+
 func (part *Partition) Close() {
-	part.data = nil
+	if part.data != nil {
+		part.mp.Free(part.data)
+		part.data = nil
+	}
 	part.capacity = 0
 	part.refcnt = 0
 	// TODO: delete the temp file
@@ -88,8 +107,8 @@ func (part *Partition) FreeItem(offfset uint64) (uint64, error) {
 	if part.refcnt == 0 {
 		return 0, moerr.NewInternalError(part.cxt, "FreeItem: refcnt = 0, double free")
 	}
-	part.refcnt--
 
+	part.refcnt--
 	ret := uint64(0)
 	if part.refcnt == 0 {
 		// no more reference delete the data
@@ -102,6 +121,7 @@ func (part *Partition) FreeItem(offfset uint64) (uint64, error) {
 }
 
 type FixedBytePool struct {
+	mp            *mpool.MPool
 	capacity      uint64
 	partition_cap uint64
 	dsize         uint64
@@ -109,12 +129,12 @@ type FixedBytePool struct {
 	cxt           context.Context
 }
 
-func NewFixedBytePool(context context.Context, dsize uint64, partition_cap uint64) *FixedBytePool {
+func NewFixedBytePool(mp *mpool.MPool, context context.Context, dsize uint64, partition_cap uint64) *FixedBytePool {
 	if partition_cap == 0 {
 		partition_cap = LOWER_BIT_MASK
 	}
 
-	pool := FixedBytePool{dsize: dsize, cxt: context, partition_cap: partition_cap}
+	pool := FixedBytePool{mp: mp, dsize: dsize, cxt: context, partition_cap: partition_cap}
 	pool.partitions = make([]*Partition, 0, 32)
 	return &pool
 }
@@ -129,7 +149,7 @@ func (pool *FixedBytePool) NewItem() (addr uint64, b []byte, err error) {
 
 	// partition not found and create new partition
 	id := uint64(len(pool.partitions))
-	part, err := NewPartition(pool.cxt, id, pool.partition_cap, pool.dsize)
+	part, err := NewPartition(pool.mp, pool.cxt, id, pool.partition_cap, pool.dsize)
 	if err != nil {
 		return 0, nil, err
 	}

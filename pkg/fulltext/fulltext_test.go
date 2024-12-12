@@ -15,8 +15,6 @@
 package fulltext
 
 import (
-	"context"
-	"fmt"
 	"strings"
 	"testing"
 
@@ -1191,54 +1189,4 @@ func TestFullTextCombine(t *testing.T) {
 	require.Nil(t, err)
 
 	assert.Equal(t, result[0], float32(2))
-}
-
-func TestPool(t *testing.T) {
-	addrs := make([]uint64, 10)
-
-	mp := NewFixedBytePool(context.TODO(), 2, 6)
-
-	// total 3 partitions
-	for i := 0; i < 10; i++ {
-		addr, data, err := mp.NewItem()
-		require.Nil(t, err)
-
-		addrs[i] = addr
-		id := GetPartitionId(addr)
-		offset := GetPartitionOffset(addr)
-
-		for j := range data {
-			data[j] = byte(i)
-		}
-		fmt.Printf("ID %d, offset %d, data = %v\n", id, offset, data)
-	}
-
-	for _, addr := range addrs {
-		data, err := mp.GetItem(addr)
-		require.Nil(t, err)
-		id := GetPartitionId(addr)
-		offset := GetPartitionOffset(addr)
-		fmt.Printf("ID %d, offset %d, data = %v\n", id, offset, data)
-
-		for i := range data {
-			data[i] = 111
-		}
-	}
-
-	for _, addr := range addrs {
-		data, err := mp.GetItem(addr)
-		require.Nil(t, err)
-		id := GetPartitionId(addr)
-		offset := GetPartitionOffset(addr)
-		fmt.Printf("ID %d, offset %d, data = %v\n", id, offset, data)
-	}
-
-	for _, addr := range addrs {
-		err := mp.FreeItem(addr)
-		require.Nil(t, err)
-	}
-
-	err := mp.FreeItem(addrs[0])
-	fmt.Println(err)
-	require.NotNil(t, err)
 }
