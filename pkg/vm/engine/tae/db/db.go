@@ -188,7 +188,7 @@ func (db *DB) ForceGlobalCheckpoint(
 	db.BGCheckpointRunner.CleanPenddingCheckpoint()
 	t0 := time.Now()
 	err = db.BGCheckpointRunner.ForceFlush(ts, ctx, flushDuration)
-	forceFlushCost := time.Since()
+	forceFlushCost := time.Since(t0)
 	defer func() {
 		logger := logutil.Info
 		if err != nil {
