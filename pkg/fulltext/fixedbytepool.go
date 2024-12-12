@@ -2,8 +2,11 @@ package fulltext
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"sort"
+	"sync"
 	"time"
 	"unsafe"
 
@@ -26,6 +29,12 @@ func GetPartitionId(addr uint64) uint64 {
 
 func GetPartitionAddr(partid uint64, offset uint64) uint64 {
 	return (partid << LOWER_BIT_SHIFT) | offset
+}
+
+// Least recently use
+type Lru struct {
+	id          uint64
+	last_update time.Time
 }
 
 type Partition struct {
@@ -55,7 +64,12 @@ func NewPartition(mp *mpool.MPool, cxt context.Context, id uint64, capacity uint
 		return nil, err
 	}
 
+	p.last_update = time.Now()
 	return &p, nil
+}
+
+func (part *Partition) Id() uint64 {
+	return part.id
 }
 
 func (part *Partition) alloc(capacity uint64) (err error) {
@@ -87,10 +101,7 @@ func (part *Partition) NewItem() (addr uint64, b []byte, err error) {
 	}
 
 	if part.spilled {
-		err := part.Unspill()
-		if err != nil {
-			return 0, nil, err
-		}
+		return 0, nil, moerr.NewInternalError(part.cxt, "NewItem: partition is spillled")
 	}
 
 	b = unsafe.Slice(&part.data[part.cpos], part.dsize)
@@ -109,10 +120,7 @@ func (part *Partition) NewItem() (addr uint64, b []byte, err error) {
 func (part *Partition) GetItem(offset uint64) ([]byte, error) {
 	part.last_update = time.Now()
 	if part.spilled {
-		err := part.Unspill()
-		if err != nil {
-			return nil, err
-		}
+		return nil, moerr.NewInternalError(part.cxt, "GetItem: partition is spillled")
 	}
 	return unsafe.Slice(&part.data[offset], part.dsize), nil
 }
@@ -197,21 +205,35 @@ func (part *Partition) Unspill() error {
 	return nil
 }
 
+func (part *Partition) Spilled() bool {
+	return part.spilled
+}
+
+func (part *Partition) LastUpdate() time.Time {
+	return part.last_update
+}
+
 type FixedBytePool struct {
 	mp            *mpool.MPool
+	cxt           context.Context
+	partitions    []*Partition
 	capacity      uint64
 	partition_cap uint64
 	dsize         uint64
-	partitions    []*Partition
-	cxt           context.Context
+	mem_in_use    uint64
+	mem_limit     uint64
 }
 
-func NewFixedBytePool(mp *mpool.MPool, context context.Context, dsize uint64, partition_cap uint64) *FixedBytePool {
+func NewFixedBytePool(mp *mpool.MPool, context context.Context, dsize uint64, partition_cap uint64, mem_limit uint64) *FixedBytePool {
 	if partition_cap == 0 {
 		partition_cap = LOWER_BIT_MASK
 	}
 
-	pool := FixedBytePool{mp: mp, dsize: dsize, cxt: context, partition_cap: partition_cap}
+	if mem_limit == 0 {
+		mem_limit = uint64(1024 * 1024 * 1024) // 1G
+	}
+
+	pool := FixedBytePool{mp: mp, dsize: dsize, cxt: context, partition_cap: partition_cap, mem_limit: mem_limit}
 	pool.partitions = make([]*Partition, 0, 32)
 	return &pool
 }
@@ -224,6 +246,11 @@ func (pool *FixedBytePool) NewItem() (addr uint64, b []byte, err error) {
 		}
 	}
 
+	if pool.mem_in_use+pool.partition_cap > pool.mem_limit {
+		// spill
+		pool.Spill()
+	}
+
 	// partition not found and create new partition
 	id := uint64(len(pool.partitions))
 	part, err := NewPartition(pool.mp, pool.cxt, id, pool.partition_cap, pool.dsize)
@@ -233,6 +260,8 @@ func (pool *FixedBytePool) NewItem() (addr uint64, b []byte, err error) {
 
 	pool.partitions = append(pool.partitions, part)
 	pool.capacity += part.capacity
+	pool.mem_in_use += part.capacity
+
 	return part.NewItem()
 }
 
@@ -245,6 +274,15 @@ func (pool *FixedBytePool) GetItem(addr uint64) ([]byte, error) {
 	}
 
 	p := pool.partitions[id]
+
+	if p.Spilled() {
+		err := p.Unspill()
+		if err != nil {
+			return nil, err
+		}
+		pool.mem_in_use += pool.partition_cap
+	}
+
 	return p.GetItem(offset)
 }
 
@@ -260,7 +298,7 @@ func (pool *FixedBytePool) FreeItem(addr uint64) error {
 	if err != nil {
 		return err
 	}
-	pool.capacity -= freesize
+	pool.mem_in_use -= freesize
 	return nil
 }
 
@@ -274,4 +312,59 @@ func (pool *FixedBytePool) Close() {
 		p.Close()
 		pool.partitions[i] = nil
 	}
+}
+
+// spill at least 2 partitions
+func (pool *FixedBytePool) Spill() error {
+
+	// find unspilled partitions
+	lru := make([]Lru, 0, len(pool.partitions))
+
+	for _, p := range pool.partitions {
+		if p.Spilled() {
+			continue
+		}
+		lru = append(lru, Lru{id: p.Id(), last_update: p.LastUpdate()})
+	}
+
+	if len(lru) == 0 {
+		return nil
+	}
+
+	sort.Slice(lru, func(i, j int) bool {
+		return lru[i].last_update.Before(lru[j].last_update)
+	})
+
+	fmt.Printf("sorted %v\n", lru)
+
+	// need a better spill strategy
+	nspill := 1
+	if len(lru) > 2 {
+		nspill = 2
+	}
+
+	// concurrent spill partitions
+	var wg sync.WaitGroup
+	var errs error
+	for i := 0; i < nspill; i++ {
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+			err := pool.partitions[lru[i].id].Spill()
+			if err != nil {
+				errs = errors.Join(errs, err)
+			}
+		}()
+	}
+
+	wg.Wait()
+
+	if errs != nil {
+		return errs
+	}
+
+	pool.mem_in_use -= uint64(nspill) * pool.partition_cap
+
+	return nil
 }
