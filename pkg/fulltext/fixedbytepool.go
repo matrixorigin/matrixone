@@ -164,7 +164,7 @@ func (part *Partition) Spill() error {
 
 func (part *Partition) Unspill() error {
 	if !part.spilled {
-		return moerr.NewInternalError(part.cxt, "Unspill: partition is not spilled")
+		return nil
 	}
 
 	fpath := part.spill_fpath
