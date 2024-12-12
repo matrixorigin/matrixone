@@ -20,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -117,6 +118,10 @@ func (c *compilerContext) ResolveAccountIds(accountNames []string) ([]uint32, er
 }
 
 func (c *compilerContext) Stats(obj *plan.ObjectRef, snapshot *plan.Snapshot) (*pb.StatsInfo, error) {
+	stats := statistic.StatsInfoFromContext(c.GetContext())
+	start := time.Now()
+	defer stats.AddBuildPlanStatsConsumption(time.Since(start))
+
 	dbName := obj.GetSchemaName()
 	tableName := obj.GetObjName()
 
@@ -147,7 +152,6 @@ func (c *compilerContext) Stats(obj *plan.ObjectRef, snapshot *plan.Snapshot) (*
 		}
 	}
 	var statsInfo *pb.StatsInfo
-	stats := statistic.StatsInfoFromContext(ctx)
 	// This is a partition table.
 	if partitionInfo != nil {
 		crs := new(perfcounter.CounterSet)
@@ -158,6 +162,7 @@ func (c *compilerContext) Stats(obj *plan.ObjectRef, snapshot *plan.Snapshot) (*
 				return nil, err
 			}
 			newParCtx := perfcounter.AttachS3RequestKey(parCtx, crs)
+			newParCtx = perfcounter.AttachCalcTableStatsKey(newParCtx)
 			parStats, err := parTable.Stats(newParCtx, true)
 			if err != nil {
 				return nil, err
@@ -176,6 +181,7 @@ func (c *compilerContext) Stats(obj *plan.ObjectRef, snapshot *plan.Snapshot) (*
 	} else {
 		crs := new(perfcounter.CounterSet)
 		newCtx := perfcounter.AttachS3RequestKey(ctx, crs)
+		newCtx = perfcounter.AttachCalcTableStatsKey(newCtx)
 
 		statsInfo, err = table.Stats(newCtx, true)
 		if err != nil {
