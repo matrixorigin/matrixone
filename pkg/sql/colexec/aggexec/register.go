@@ -87,7 +87,6 @@ func generateKeyOfSingleColumnAgg(aggID int64, argType types.Type) aggKey {
 var (
 	// agg type record map.
 	singleAgg  = make(map[int64]bool)
-	multiAgg   = make(map[int64]bool)
 	specialAgg = make(map[int64]bool)
 
 	// agg implementation map.

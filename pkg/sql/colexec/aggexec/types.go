@@ -162,9 +162,6 @@ func MakeAgg(
 	if _, ok = singleAgg[aggID]; ok && len(param) == 1 {
 		return makeSingleAgg(mg, aggID, isDistinct, param[0])
 	}
-	if _, ok = multiAgg[aggID]; ok && len(param) > 0 {
-		panic("do not support multi-column aggregation now.")
-	}
 	panic(fmt.Sprintf("unexpected aggID %d and param types %v.", aggID, param))
 }
 

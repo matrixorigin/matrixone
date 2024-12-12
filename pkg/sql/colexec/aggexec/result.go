@@ -90,6 +90,17 @@ type aggResultWithFixedType[T types.FixedSizeTExceptStrType] struct {
 	values [][]T
 }
 
+func (r *aggResultWithFixedType[T]) unmarshalFromBytes(resultData [][]byte, emptyData [][]byte) error {
+	if err := r.optSplitResult.unmarshalFromBytes(resultData, emptyData); err != nil {
+		return err
+	}
+	r.values = make([][]T, len(resultData))
+	for i := range r.values {
+		r.values[i] = vector.MustFixedColNoTypeCheck[T](r.optSplitResult.resultList[i])
+	}
+	return nil
+}
+
 func (r *aggResultWithFixedType[T]) grows(more int) error {
 	x1, y1, x2, y2, err := r.resExtend(more)
 	if err != nil {
@@ -245,6 +256,7 @@ func (r *optSplitResult) unmarshalFromBytes(resultData [][]byte, emptyData [][]b
 
 	r.resultList = make([]*vector.Vector, len(resultData))
 	r.emptyList = make([]*vector.Vector, len(emptyData))
+	r.bsFromEmptyList = make([][]bool, len(emptyData))
 	for i := range r.resultList {
 		r.resultList[i] = vector.NewOffHeapVecWithType(r.resultType)
 		if err = vectorUnmarshal(r.resultList[i], resultData[i], r.mp); err != nil {
@@ -256,6 +268,7 @@ func (r *optSplitResult) unmarshalFromBytes(resultData [][]byte, emptyData [][]b
 		if err = vectorUnmarshal(r.emptyList[i], emptyData[i], r.mp); err != nil {
 			return err
 		}
+		r.bsFromEmptyList[i] = vector.MustFixedColNoTypeCheck[bool](r.emptyList[i])
 	}
 	return nil
 }
