@@ -14,6 +14,26 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 )
 
+/*
+  FixedBytePool is the memory pool for store a fixed size byte slice.
+  data will be stored in multiple partitions.  Each partition has the maximum capacity.
+  When data grow exceed the partition limit, new partition will be created.
+
+  Data can be accessed by address which is uint64 with high 40 bits (partition ID) and low 24 bits (offset in partition).
+
+  There is a memory limit of the pool.  If memory in use exceed the limit, partitions will be spilled out to disk.
+
+  After hash build/aggregate, all data will reside in partitions.  You can use FixedBytePoolIterator to tranverse all data
+  in partitions.  You don't need to tranverse the data with hashtable which you are using for aggregate.  It is a sequential
+  access and should be faster than hashtable.
+
+  Assumption:
+  - During hash build, you won't do any delete.
+  - Iterator will free up the memory once it finish traverse a partition with partition.Close().  If not doing this, we will
+    have OOM due to keep all partitions in memory.  When partition was spilled into disk, iterator will read the file into
+    memory.
+*/
+
 // 24 bits low bits - offset in partition (16MB)
 // high bits - partition id
 var LOWER_BIT_MASK = uint64(0xffffff)
@@ -25,6 +45,7 @@ type Lru struct {
 	last_update time.Time
 }
 
+// Partition which is able to spill/unspill.  Data must be fixed size when init
 type Partition struct {
 	mp          *mpool.MPool
 	cxt         context.Context
@@ -42,6 +63,7 @@ type Partition struct {
 	last_update time.Time
 }
 
+// FixedBytePool
 type FixedBytePool struct {
 	mp            *mpool.MPool
 	cxt           context.Context
@@ -54,24 +76,29 @@ type FixedBytePool struct {
 	spill_size    uint64
 }
 
+// FixedBytePoolIterator to tranverse the data in the pool
 type FixedBytePoolIterator struct {
 	pool   *FixedBytePool
 	idx    int
 	offset uint64
 }
 
+// get offset from address
 func GetPartitionOffset(addr uint64) uint64 {
 	return (addr & LOWER_BIT_MASK)
 }
 
+// get partition ID from address
 func GetPartitionId(addr uint64) uint64 {
 	return (addr >> LOWER_BIT_SHIFT)
 }
 
+// convert partition id and offset into address
 func GetPartitionAddr(partid uint64, offset uint64) uint64 {
 	return (partid << LOWER_BIT_SHIFT) | offset
 }
 
+// New Partition with capacity, fixed data size
 func NewPartition(mp *mpool.MPool, cxt context.Context, id uint64, capacity uint64, dsize uint64) (*Partition, error) {
 	if capacity > uint64(LOWER_BIT_MASK) || capacity < 0 {
 		return nil, moerr.NewInternalError(cxt, "request capacity is larger than 16MB (24 bits)")
@@ -90,6 +117,7 @@ func (part *Partition) Id() uint64 {
 	return part.id
 }
 
+// memory allocation with mpool.MPool
 func (part *Partition) alloc(capacity uint64) (err error) {
 	part.data, err = part.mp.Alloc(int(capacity), false)
 	if err != nil {
@@ -99,6 +127,7 @@ func (part *Partition) alloc(capacity uint64) (err error) {
 	return nil
 }
 
+// Close the partition
 func (part *Partition) Close() {
 	if part.data != nil {
 		part.mp.Free(part.data)
@@ -113,6 +142,7 @@ func (part *Partition) Close() {
 	}
 }
 
+// NewItem will return the []byte and address and set full is true when partition is full for next item
 func (part *Partition) NewItem() (addr uint64, b []byte, err error) {
 	if part.cpos+part.dsize > part.capacity {
 		return 0, nil, moerr.NewInternalError(part.cxt, "Partition NewItem out of bound")
@@ -135,6 +165,7 @@ func (part *Partition) NewItem() (addr uint64, b []byte, err error) {
 	return addr, b, nil
 }
 
+// GetItem with offset
 func (part *Partition) GetItem(offset uint64) ([]byte, error) {
 	part.last_update = time.Now()
 	if part.spilled {
@@ -168,6 +199,7 @@ func (part *Partition) FreeItem(offfset uint64) (uint64, error) {
 	return ret, nil
 }
 
+// Spill to spill the memory into disk and free up memory
 func (part *Partition) Spill() error {
 
 	if part.data == nil {
@@ -192,6 +224,9 @@ func (part *Partition) Spill() error {
 	return nil
 }
 
+// read the spill file to memory and remove the temp file
+// the state of the partition should be the same with spill/unspill so that
+// partition can still perform NewItem() and GetItem() after unspill()
 func (part *Partition) Unspill() error {
 	if !part.spilled {
 		return nil
@@ -227,10 +262,12 @@ func (part *Partition) Unspill() error {
 	return nil
 }
 
+// check partition is already spilled
 func (part *Partition) Spilled() bool {
 	return part.spilled
 }
 
+// check last update of the partition.  Spill always choose LRU partitions
 func (part *Partition) LastUpdate() time.Time {
 	return part.last_update
 }
@@ -250,6 +287,9 @@ func NewFixedBytePool(mp *mpool.MPool, context context.Context, dsize uint64, pa
 	return &pool
 }
 
+// NewItem will find a available partition for NewItem.  Usually the last item of partition slice
+// If memory in use exceed the memory limit, spill
+// If no avaiable partition, create a new partition
 func (pool *FixedBytePool) NewItem() (addr uint64, b []byte, err error) {
 	// find last partition to new item
 	np := len(pool.partitions)
@@ -279,6 +319,7 @@ func (pool *FixedBytePool) NewItem() (addr uint64, b []byte, err error) {
 	return part.NewItem()
 }
 
+// Getitem return item with partitions.  If requested partition was spilled, unspill()
 func (pool *FixedBytePool) GetItem(addr uint64) ([]byte, error) {
 	id := GetPartitionId(addr)
 	offset := GetPartitionOffset(addr)
@@ -300,6 +341,7 @@ func (pool *FixedBytePool) GetItem(addr uint64) ([]byte, error) {
 	return p.GetItem(offset)
 }
 
+// FreeItem call partition.FreeItem
 func (pool *FixedBytePool) FreeItem(addr uint64) error {
 	id := GetPartitionId(addr)
 	offset := GetPartitionOffset(addr)
@@ -321,6 +363,7 @@ func (pool *FixedBytePool) String() string {
 		pool.capacity, pool.partition_cap, len(pool.partitions), pool.dsize)
 }
 
+// Close the pool and cleanup memory and temp files
 func (pool *FixedBytePool) Close() {
 	for i, p := range pool.partitions {
 		p.Close()
@@ -328,7 +371,7 @@ func (pool *FixedBytePool) Close() {
 	}
 }
 
-// spill at least 2 partitions
+// spill will find LRU partitions to spill and will double the number of partitions to spill for the next time
 func (pool *FixedBytePool) Spill() error {
 
 	// find unspilled partitions
@@ -390,13 +433,7 @@ func NewFixedBytePoolIterator(p *FixedBytePool) *FixedBytePoolIterator {
 	return &FixedBytePoolIterator{pool: p}
 }
 
-func (it *FixedBytePoolIterator) HasNext() bool {
-	if it.idx < len(it.pool.partitions) && it.offset < it.pool.partitions[it.idx].used {
-		return true
-	}
-	return false
-}
-
+// Get next []byte from the pool.  If no more data, return nil []byte and nil error
 func (it *FixedBytePoolIterator) Next() ([]byte, error) {
 	for {
 		if it.idx >= len(it.pool.partitions) {
