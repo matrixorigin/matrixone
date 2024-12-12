@@ -240,8 +240,10 @@ func NewFixedBytePool(mp *mpool.MPool, context context.Context, dsize uint64, pa
 }
 
 func (pool *FixedBytePool) NewItem() (addr uint64, b []byte, err error) {
-	// find a free partition
-	for _, p := range pool.partitions {
+	// find last partition to new item
+	np := len(pool.partitions)
+	if np > 0 {
+		p := pool.partitions[np-1]
 		if !p.full {
 			return p.NewItem()
 		}
