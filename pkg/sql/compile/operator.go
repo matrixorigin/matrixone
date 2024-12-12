@@ -1557,9 +1557,8 @@ func constructDispatch(idx int, target []*Scope, source *Scope, node *plan.Node,
 	return arg
 }
 
-func constructMergeGroup(needEval bool) *mergegroup.MergeGroup {
+func constructMergeGroup() *mergegroup.MergeGroup {
 	arg := mergegroup.NewArgument()
-	arg.NeedEval = needEval
 	return arg
 }
 

@@ -49,7 +49,8 @@ func UnmarshalAggFuncExec(
 		mp = mg.Mp()
 	}
 
-	if err := exec.unmarshal(mp, encoded.Result, encoded.Groups); err != nil {
+	if err := exec.unmarshal(
+		mp, encoded.Result, encoded.Empties, encoded.Groups); err != nil {
 		exec.Free()
 		return nil, err
 	}
