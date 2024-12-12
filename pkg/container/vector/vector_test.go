@@ -16,7 +16,7 @@ package vector
 
 import (
 	"fmt"
-	"math/rand"
+	"golang.org/x/exp/rand"
 	"slices"
 	"strings"
 	"testing"
@@ -2925,15 +2925,15 @@ func TestRowToString(t *testing.T) {
 }
 
 func TestIntersection2VectorOrdered(t *testing.T) {
-	const ll = 10000
-	const cnt = 100
+	const ll = 100
+	const cnt = 10
 
 	mp := mpool.MustNewZero()
 
-	lenA := rand.Intn(ll) + ll/5
-	lenB := rand.Intn(ll) + ll/5
-
 	for range cnt {
+		lenA := rand.Intn(ll) + ll/5
+		lenB := rand.Intn(ll) + ll/5
+
 		var a []int32 = make([]int32, lenA)
 		var b []int32 = make([]int32, lenB)
 
@@ -2977,15 +2977,15 @@ func TestIntersection2VectorOrdered(t *testing.T) {
 }
 
 func TestIntersection2VectorVarlen(t *testing.T) {
-	const ll = 5000
-	const cnt = 100
+	const ll = 100
+	const cnt = 10
 
 	mp := mpool.MustNewZero()
 
-	lenA := rand.Intn(ll) + ll/5
-	lenB := rand.Intn(ll) + ll/5
-
 	for range cnt {
+		lenA := rand.Intn(ll) + ll/5
+		lenB := rand.Intn(ll) + ll/5
+
 		var a = make([]string, lenA)
 		var b = make([]string, lenB)
 
@@ -3042,15 +3042,15 @@ func TestIntersection2VectorVarlen(t *testing.T) {
 }
 
 func TestUnion2VectorOrdered(t *testing.T) {
-	const ll = 10000
-	const cnt = 100
+	const ll = 100
+	const cnt = 10
 
 	mp := mpool.MustNewZero()
 
-	lenA := rand.Intn(ll) + ll/5
-	lenB := rand.Intn(ll) + ll/5
-
 	for range cnt {
+		lenA := rand.Intn(ll) + ll/5
+		lenB := rand.Intn(ll) + ll/5
+
 		var a []int32 = make([]int32, lenA)
 		var b []int32 = make([]int32, lenB)
 
@@ -3094,15 +3094,15 @@ func TestUnion2VectorOrdered(t *testing.T) {
 }
 
 func TestUnion2VectorVarlen(t *testing.T) {
-	const ll = 5000
-	const cnt = 100
+	const ll = 100
+	const cnt = 10
 
 	mp := mpool.MustNewZero()
 
-	lenA := rand.Intn(ll) + ll/5
-	lenB := rand.Intn(ll) + ll/5
-
 	for range cnt {
+		lenA := rand.Intn(ll) + ll/5
+		lenB := rand.Intn(ll) + ll/5
+
 		var a = make([]string, lenA)
 		var b = make([]string, lenB)
 

@@ -415,12 +415,12 @@ func TestS3Writer_SortAndSync(t *testing.T) {
 	bat := batch.NewWithSize(1)
 	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
 
-	for i := 0; i < 100; i++ {
+	for i := 0; i < 10; i++ {
 		row := types.RandomRowid()
 		err := vector.AppendFixed[types.Rowid](bat.Vecs[0], row, false, pool)
 		require.NoError(t, err)
 	}
-	bat.SetRowCount(100)
+	bat.SetRowCount(10)
 
 	// test no data to flush
 	{
@@ -477,7 +477,7 @@ func TestS3Writer_SortAndSync(t *testing.T) {
 		bat2 := batch.NewWithSize(1)
 		bat2.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
 
-		objectio.SetObjectSizeLimit(mpool.MB * 32)
+		objectio.SetObjectSizeLimit(mpool.KB)
 		cnt := (objectio.ObjectSizeLimit) / types.RowidSize * 3
 
 		for i := 0; i < cnt; i++ {

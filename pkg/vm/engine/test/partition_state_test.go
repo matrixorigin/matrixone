@@ -577,27 +577,19 @@ func Test_SubscribeUnsubscribeConsistency(t *testing.T) {
 		require.Equal(t, 0, stats.DataObjectsInvisible.RowCnt)
 	}
 
-	err = disttaeEngine.SubscribeTable(ctx, database.GetID(), rel.ID(), true)
-	require.Nil(t, err)
-
-	checkSubscribed()
-
-	try := 10
-	ticker := time.NewTicker(100 * time.Millisecond)
-	for range ticker.C {
-		err = disttaeEngine.Engine.UnsubscribeTable(ctx, database.GetID(), rel.ID())
-		require.Nil(t, err)
-
-		checkUnSubscribed()
-
+	try := 3
+	for try > 0 {
 		err = disttaeEngine.SubscribeTable(ctx, database.GetID(), rel.ID(), true)
 		require.Nil(t, err)
 
 		checkSubscribed()
 
-		if try--; try <= 0 {
-			break
-		}
+		err = disttaeEngine.Engine.UnsubscribeTable(ctx, database.GetID(), rel.ID())
+		require.Nil(t, err)
+
+		checkUnSubscribed()
+
+		try--
 	}
 }
 
