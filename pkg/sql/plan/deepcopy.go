@@ -257,8 +257,16 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 	newNode.Stats = DeepCopyStats(node.Stats)
 
 	newNode.ObjRef = DeepCopyObjectRef(node.ObjRef)
-	newNode.IndexName = node.IndexName
 	newNode.ParentObjRef = DeepCopyObjectRef(node.ParentObjRef)
+
+	newNode.IndexScanInfo = plan.IndexScanInfo{
+		IsIndexScan:    node.IndexScanInfo.IsIndexScan,
+		IndexName:      node.IndexScanInfo.IndexName,
+		BelongToTable:  node.IndexScanInfo.BelongToTable,
+		Parts:          slices.Clone(node.IndexScanInfo.Parts),
+		IsUnique:       node.IndexScanInfo.IsUnique,
+		IndexTableName: node.IndexScanInfo.IndexTableName,
+	}
 
 	if node.WinSpecList != nil {
 		newNode.WinSpecList = make([]*Expr, len(node.WinSpecList))
