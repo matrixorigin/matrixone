@@ -52,3 +52,13 @@ func SortedList(seq iter.Seq2[*DirEntry, error]) (ret []DirEntry, err error) {
 	})
 	return
 }
+
+func firstNonZero[T comparable](args ...T) T {
+	var zero T
+	for _, arg := range args {
+		if arg != zero {
+			return arg
+		}
+	}
+	return zero
+}
