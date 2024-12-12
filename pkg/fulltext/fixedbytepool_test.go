@@ -133,6 +133,10 @@ func TestPoolSpill(t *testing.T) {
 		fmt.Printf("data = %v\n", data)
 	}
 
+	mp.Close()
+	mp.Close()
+	mp.Close()
+
 }
 
 func TestPartitionSpill(t *testing.T) {

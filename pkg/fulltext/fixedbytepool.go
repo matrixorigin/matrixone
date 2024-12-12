@@ -368,8 +368,10 @@ func (pool *FixedBytePool) String() string {
 // Close the pool and cleanup memory and temp files
 func (pool *FixedBytePool) Close() {
 	for i, p := range pool.partitions {
-		p.Close()
-		pool.partitions[i] = nil
+		if p != nil {
+			p.Close()
+			pool.partitions[i] = nil
+		}
 	}
 }
 
