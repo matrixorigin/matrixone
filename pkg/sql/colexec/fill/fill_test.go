@@ -143,6 +143,7 @@ func TestPrepare(t *testing.T) {
 
 func TestFill(t *testing.T) {
 	for _, tc := range tcs {
+		tc.arg.ctr.bats = make([]*batch.Batch, 10)
 		resetChildren(tc.arg)
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
@@ -162,7 +163,7 @@ func TestFill(t *testing.T) {
 
 func resetChildren(arg *Fill) {
 	bat := colexec.MakeMockBatchs()
-	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat, bat})
 	arg.Children = nil
 	arg.AppendChild(op)
 }
