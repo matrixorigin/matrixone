@@ -262,7 +262,7 @@ func (c *CkpReplayer) ReadCkpFiles() (err error) {
 }
 
 // ReplayThreeTablesObjectlist replays the object list the three tables, and check the LSN and TS.
-func (c *CkpReplayer) ReplayThreeTablesObjectlist() (
+func (c *CkpReplayer) ReplayThreeTablesObjectlist(phase string) (
 	maxTs types.TS,
 	maxLSN uint64,
 	isLSNValid bool,
@@ -293,7 +293,8 @@ func (c *CkpReplayer) ReplayThreeTablesObjectlist() (
 			logger = logutil.Error
 		}
 		logger(
-			"Replay-Checkpoint-Global",
+			"Replay-3-Table-From-Global",
+			zap.String("phase", phase),
 			zap.String("checkpoint", maxGlobal.String()),
 			zap.Duration("cost", time.Since(t0)),
 			zap.Error(err),
@@ -335,7 +336,8 @@ func (c *CkpReplayer) ReplayThreeTablesObjectlist() (
 			logger = logutil.Error
 		}
 		logger(
-			"Replay-Checkpoint",
+			"Replay-3-Table-From-Incremental",
+			zap.String("phase", phase),
 			zap.String("checkpoint", checkpointEntry.String()),
 			zap.Duration("cost", time.Since(start)),
 			zap.Error(err),
@@ -364,7 +366,10 @@ func (c *CkpReplayer) ReplayThreeTablesObjectlist() (
 	return
 }
 
-func (c *CkpReplayer) ReplayCatalog(readTxn txnif.AsyncTxn) (err error) {
+func (c *CkpReplayer) ReplayCatalog(
+	readTxn txnif.AsyncTxn,
+	phase string,
+) (err error) {
 	start := time.Now()
 
 	defer func() {
@@ -373,8 +378,8 @@ func (c *CkpReplayer) ReplayCatalog(readTxn txnif.AsyncTxn) (err error) {
 			logger = logutil.Error
 		}
 		logger(
-			"open-tae",
-			zap.String("replay", "checkpoint-catalog"),
+			"Replay-Catalog",
+			zap.String("phase", phase),
 			zap.Duration("cost", time.Since(start)),
 			zap.Error(err),
 		)
@@ -401,7 +406,7 @@ func (c *CkpReplayer) ReplayCatalog(readTxn txnif.AsyncTxn) (err error) {
 }
 
 // ReplayObjectlist replays the data part of the checkpoint.
-func (c *CkpReplayer) ReplayObjectlist() (err error) {
+func (c *CkpReplayer) ReplayObjectlist(phase string) (err error) {
 	if len(c.ckpEntries) == 0 {
 		return
 	}
@@ -447,8 +452,8 @@ func (c *CkpReplayer) ReplayObjectlist() (err error) {
 	r.catalog.GetUsageMemo().(*logtail.TNUsageMemo).PrepareReplay(ckpDatas, ckpVers)
 	r.source.Init(maxTs)
 	logutil.Info(
-		"open-tae",
-		zap.String("replay", "checkpoint-objectlist"),
+		"Replay-Checkpoints",
+		zap.String("phase", phase),
 		zap.Duration("apply-cost", c.applyDuration),
 		zap.Duration("read-cost", c.readDuration),
 		zap.Int("apply-count", c.applyCount),
