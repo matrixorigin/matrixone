@@ -183,17 +183,46 @@ func (ctr *container) initIndex() {
 	ctr.subStatus = findNullPre
 }
 
-func processNextCol(ctr *container, idx int, proc *process.Process) error {
+func processNextCol(ctr *container, ap *Fill, idx int, proc *process.Process, analyzer process.Analyzer) error {
 	var err error
 	ctr.initIndex()
-	k := 0
+	ctr.preIdx = ctr.doneIdx[idx]
+	ctr.status = findNull
 	for {
 		switch ctr.status {
 		case receiveBat:
-			if k == len(ctr.bats) {
+			if ctr.doneIdx[idx] == len(ctr.bats) ||
+				ctr.endBatch[idx] {
 				return nil
 			}
-			k++
+
+			result, err := vm.ChildrenCall(ap.GetChildren(0), proc, analyzer)
+			if err != nil {
+				return err
+			}
+			if result.Batch == nil {
+				ctr.endBatch[idx] = true
+				return nil
+			} else {
+				if len(ctr.bats) > ctr.i {
+					if ctr.bats[ctr.i] != nil {
+						ctr.bats[ctr.i].CleanOnlyData()
+					}
+					ctr.bats[ctr.i], err = ctr.bats[ctr.i].AppendWithCopy(proc.Ctx, proc.Mp(), result.Batch)
+					if err != nil {
+						return err
+					}
+				} else {
+					appBat, err := result.Batch.Dup(proc.Mp())
+					if err != nil {
+						return err
+					}
+					analyzer.Alloc(int64(appBat.Size()))
+					ctr.bats = append(ctr.bats, appBat)
+				}
+				ctr.i++
+			}
+
 			if ctr.subStatus == findNull {
 				ctr.status = findNull
 			} else {
@@ -214,8 +243,8 @@ func processNextCol(ctr *container, idx int, proc *process.Process) error {
 				ctr.status = findValue
 			} else {
 				ctr.preIdx++
-				ctr.preRow = 0
-				ctr.status = receiveBat
+				ctr.doneIdx[idx] = ctr.preIdx
+				return nil
 			}
 		case findValue:
 			ctr.curIdx = ctr.preIdx
@@ -317,19 +346,47 @@ func processPrev(ctr *container, ap *Fill, proc *process.Process, analyzer proce
 	return result, nil
 }
 
-func processLinearCol(ctr *container, proc *process.Process, idx int) error {
+func processLinearCol(ctr *container, ap *Fill, proc *process.Process, idx int, analyzer process.Analyzer) error {
 	var err error
 
 	ctr.initIndex()
-	k := 0
+	ctr.status = findNullPre
+	ctr.preIdx = ctr.doneIdx[idx]
 
 	for {
 		switch ctr.status {
 		case receiveBat:
-			if k == len(ctr.bats) {
+			if ctr.doneIdx[idx] == len(ctr.bats) ||
+				ctr.endBatch[idx] {
 				return nil
 			}
-			k++
+
+			result, err := vm.ChildrenCall(ap.GetChildren(0), proc, analyzer)
+			if err != nil {
+				return err
+			}
+			if result.Batch == nil {
+				ctr.endBatch[idx] = true
+				break
+			} else {
+				if len(ctr.bats) > ctr.i {
+					if ctr.bats[ctr.i] != nil {
+						ctr.bats[ctr.i].CleanOnlyData()
+					}
+					ctr.buf, err = ctr.buf.AppendWithCopy(proc.Ctx, proc.Mp(), result.Batch)
+					if err != nil {
+						return err
+					}
+				} else {
+					appBat, err := result.Batch.Dup(proc.Mp())
+					if err != nil {
+						return err
+					}
+					analyzer.Alloc(int64(appBat.Size()))
+					ctr.bats = append(ctr.bats, appBat)
+				}
+			}
+
 			if ctr.subStatus == findNullPre {
 				ctr.status = findNullPre
 			} else {
@@ -365,7 +422,8 @@ func processLinearCol(ctr *container, proc *process.Process, idx int) error {
 				}
 				ctr.nullIdx++
 				ctr.nullRow = 0
-				ctr.status = receiveBat
+				ctr.doneIdx[idx] = ctr.nullIdx
+				return nil
 			}
 		case findValue:
 			ctr.curIdx = ctr.nullIdx
@@ -454,7 +512,7 @@ func processNext(ctr *container, ap *Fill, proc *process.Process, analyzer proce
 		analyzer.Output(result.Batch)
 		return result, nil
 	}
-	for i := 0; ; i++ {
+	for ; ctr.i < 1; ctr.i++ {
 		result, err = vm.ChildrenCall(ap.GetChildren(0), proc, analyzer)
 		if err != nil {
 			return result, err
@@ -462,11 +520,11 @@ func processNext(ctr *container, ap *Fill, proc *process.Process, analyzer proce
 		if result.Batch == nil {
 			break
 		}
-		if len(ctr.bats) > i {
-			if ctr.bats[i] != nil {
-				ctr.bats[i].CleanOnlyData()
+		if len(ctr.bats) > ctr.i {
+			if ctr.bats[ctr.i] != nil {
+				ctr.bats[ctr.i].CleanOnlyData()
 			}
-			ctr.bats[i], err = ctr.bats[i].AppendWithCopy(proc.Ctx, proc.Mp(), result.Batch)
+			ctr.bats[ctr.i], err = ctr.bats[ctr.i].AppendWithCopy(proc.Ctx, proc.Mp(), result.Batch)
 			if err != nil {
 				return result, err
 			}
@@ -478,6 +536,8 @@ func processNext(ctr *container, ap *Fill, proc *process.Process, analyzer proce
 			analyzer.Alloc(int64(appBat.Size()))
 			ctr.bats = append(ctr.bats, appBat)
 		}
+		ctr.doneIdx = make([]int, ctr.bats[0].VectorCount())
+		ctr.endBatch = make([]bool, ctr.bats[0].VectorCount())
 	}
 	if len(ctr.bats) == 0 {
 		result.Batch = nil
@@ -486,7 +546,7 @@ func processNext(ctr *container, ap *Fill, proc *process.Process, analyzer proce
 	}
 
 	for i := range ctr.bats[0].Vecs {
-		if err = processNextCol(ctr, i, proc); err != nil {
+		if err = processNextCol(ctr, ap, i, proc, analyzer); err != nil {
 			return result, err
 		}
 	}
@@ -514,7 +574,7 @@ func processLinear(ctr *container, ap *Fill, proc *process.Process, analyzer pro
 		analyzer.Output(result.Batch)
 		return result, nil
 	}
-	for i := 0; ; i++ {
+	for ; ctr.i < 1; ctr.i++ {
 		result, err = vm.ChildrenCall(ap.GetChildren(0), proc, analyzer)
 		if err != nil {
 			return result, err
@@ -523,9 +583,9 @@ func processLinear(ctr *container, ap *Fill, proc *process.Process, analyzer pro
 			break
 		}
 
-		if len(ctr.bats) > i {
-			if ctr.bats[i] != nil {
-				ctr.bats[i].CleanOnlyData()
+		if len(ctr.bats) > ctr.i {
+			if ctr.bats[ctr.i] != nil {
+				ctr.bats[ctr.i].CleanOnlyData()
 			}
 			ctr.buf, err = ctr.buf.AppendWithCopy(proc.Ctx, proc.Mp(), result.Batch)
 			if err != nil {
@@ -539,6 +599,8 @@ func processLinear(ctr *container, ap *Fill, proc *process.Process, analyzer pro
 			analyzer.Alloc(int64(appBat.Size()))
 			ctr.bats = append(ctr.bats, appBat)
 		}
+		ctr.doneIdx = make([]int, ctr.bats[0].VectorCount())
+		ctr.endBatch = make([]bool, ctr.bats[0].VectorCount())
 	}
 	if len(ctr.bats) == 0 {
 		result.Batch = nil
@@ -546,7 +608,7 @@ func processLinear(ctr *container, ap *Fill, proc *process.Process, analyzer pro
 		return result, nil
 	}
 	for i := range ctr.bats[0].Vecs {
-		if err = processLinearCol(ctr, proc, i); err != nil {
+		if err = processLinearCol(ctr, ap, proc, i, analyzer); err != nil {
 			return result, err
 		}
 	}
