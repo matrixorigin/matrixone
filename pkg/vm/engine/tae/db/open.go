@@ -114,11 +114,10 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 	}
 
 	db = &DB{
-		Dir:          dirname,
-		Opts:         opts,
-		Closed:       new(atomic.Value),
-		usageMemo:    logtail.NewTNUsageMemo(nil),
-		CNMergeSched: merge.NewTaskServiceGetter(opts.TaskServiceGetter),
+		Dir:       dirname,
+		Opts:      opts,
+		Closed:    new(atomic.Value),
+		usageMemo: logtail.NewTNUsageMemo(nil),
 	}
 	fs := objectio.NewObjectFS(opts.Fs, serviceDir)
 	localFs := objectio.NewObjectFS(opts.LocalFs, serviceDir)
@@ -242,7 +241,7 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 
 	// Init timed scanner
 	scanner := NewDBScanner(db, nil)
-	db.MergeScheduler = merge.NewScheduler(db.Runtime, db.CNMergeSched)
+	db.MergeScheduler = merge.NewScheduler(db.Runtime, merge.NewTaskServiceGetter(opts.TaskServiceGetter))
 	scanner.RegisterOp(db.MergeScheduler)
 	db.Wal.Start()
 	db.BGCheckpointRunner.Start()
