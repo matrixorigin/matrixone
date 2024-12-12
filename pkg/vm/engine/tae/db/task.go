@@ -61,7 +61,7 @@ func (task *ScheduledTxnTask) Execute(ctx context.Context) (err error) {
 		logutil.Warnf("Execute ScheduleTxnTask: %v. Rollbacked", err)
 		return
 	}
-	err = txnTask.OnExec(task.db.Opts.Ctx)
+	err = txnTask.OnExec(ctx)
 	if err != nil {
 		logutil.Warnf("Task[%d] exec error: %v", task.ID(), err)
 		err2 := txn.Rollback(ctx)

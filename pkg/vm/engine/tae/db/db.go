@@ -38,7 +38,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
-	wb "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
@@ -79,7 +78,6 @@ type DB struct {
 
 	CronJobs *tasks.CancelableJobs
 
-	BGScanner          wb.IHeartbeater
 	BGCheckpointRunner checkpoint.Runner
 
 	MergeScheduler *merge.Scheduler
@@ -274,7 +272,6 @@ func (db *DB) Close() error {
 	db.Closed.Store(ErrClosed)
 	db.Controller.Stop()
 	db.CronJobs.Reset()
-	db.BGScanner.Stop()
 	db.BGCheckpointRunner.Stop()
 	db.Runtime.Scheduler.Stop()
 	db.TxnMgr.Stop()

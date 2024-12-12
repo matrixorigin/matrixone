@@ -80,8 +80,8 @@ func TestStopStartMerge(t *testing.T) {
 	_, ok := lockService.Indexes()["__mo_index_test"]
 	require.True(t, ok)
 
-	require.Error(t, scheduler.onTable(tblEntry1))
-	require.Error(t, scheduler.onTable(tblEntry2))
+	require.Error(t, scheduler.OnTable(tblEntry1))
+	require.Error(t, scheduler.OnTable(tblEntry2))
 
 	require.Empty(t, scheduler.CNActiveObjectsString())
 

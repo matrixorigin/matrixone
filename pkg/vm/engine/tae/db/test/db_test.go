@@ -65,7 +65,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
-	ops "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -681,7 +680,7 @@ func TestAddObjsWithMetaLoc(t *testing.T) {
 	db := testutil.InitTestDB(ctx, ModuleName, t, opts)
 	defer db.Close()
 
-	worker := ops.NewOpWorker(context.Background(), "xx")
+	worker := tasks.NewOpWorker(context.Background(), "xx")
 	worker.Start()
 	defer worker.Stop()
 	schema := catalog.MockSchemaAll(13, 2)
@@ -859,7 +858,7 @@ func TestCompactMemAlter(t *testing.T) {
 	db := testutil.InitTestDB(ctx, ModuleName, t, opts)
 	defer db.Close()
 
-	worker := ops.NewOpWorker(context.Background(), "xx")
+	worker := tasks.NewOpWorker(context.Background(), "xx")
 	worker.Start()
 	defer worker.Stop()
 	schema := catalog.MockSchemaAll(5, 2)
@@ -920,7 +919,7 @@ func TestFlushTableMergeOrder(t *testing.T) {
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 
-	worker := ops.NewOpWorker(context.Background(), "xx")
+	worker := tasks.NewOpWorker(context.Background(), "xx")
 	worker.Start()
 	defer worker.Stop()
 
@@ -994,7 +993,7 @@ func TestFlushTableMergeOrderPK(t *testing.T) {
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 
-	worker := ops.NewOpWorker(context.Background(), "xx")
+	worker := tasks.NewOpWorker(context.Background(), "xx")
 	worker.Start()
 	defer worker.Stop()
 
@@ -1070,7 +1069,7 @@ func TestFlushTableNoPk(t *testing.T) {
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 
-	worker := ops.NewOpWorker(context.Background(), "xx")
+	worker := tasks.NewOpWorker(context.Background(), "xx")
 	worker.Start()
 	defer worker.Stop()
 	schema := catalog.MockSchemaAll(13, -1)
@@ -1106,7 +1105,7 @@ func TestFlushTableDroppedEntry(t *testing.T) {
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 
-	worker := ops.NewOpWorker(context.Background(), "xx")
+	worker := tasks.NewOpWorker(context.Background(), "xx")
 	worker.Start()
 	defer worker.Stop()
 	schema := catalog.MockSchemaAll(3, 1)
@@ -1172,7 +1171,7 @@ func TestFlushTableErrorHandle(t *testing.T) {
 	tae := testutil.NewTestEngine(context.Background(), ModuleName, t, opts)
 	defer tae.Close()
 
-	worker := ops.NewOpWorker(ctx, "xx")
+	worker := tasks.NewOpWorker(ctx, "xx")
 	worker.Start()
 	defer worker.Stop()
 	schema := catalog.MockSchemaAll(13, 2)
@@ -1223,10 +1222,10 @@ func TestFlushTableErrorHandle2(t *testing.T) {
 	tae := testutil.NewTestEngine(context.Background(), ModuleName, t, opts)
 	defer tae.Close()
 
-	worker := ops.NewOpWorker(ctx, "xx")
+	worker := tasks.NewOpWorker(ctx, "xx")
 	worker.Start()
 	defer worker.Stop()
-	goodworker := ops.NewOpWorker(context.Background(), "goodworker")
+	goodworker := tasks.NewOpWorker(context.Background(), "goodworker")
 	goodworker.Start()
 	defer goodworker.Stop()
 	schema := catalog.MockSchemaAll(13, 2)
@@ -1236,7 +1235,7 @@ func TestFlushTableErrorHandle2(t *testing.T) {
 	bat1, bat2 := bats[0], bats[1]
 	defer bat1.Close()
 	defer bat2.Close()
-	flushTable := func(worker *ops.OpWorker) {
+	flushTable := func(worker *tasks.OpWorker) {
 		txn, rel := testutil.GetDefaultRelation(t, tae.DB, schema.Name)
 		blkMetas := testutil.GetAllAppendableMetas(rel, false)
 		tombstoneMetas := testutil.GetAllAppendableMetas(rel, true)
@@ -1274,7 +1273,7 @@ func TestFlushTabletail(t *testing.T) {
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 
-	worker := ops.NewOpWorker(context.Background(), "xx")
+	worker := tasks.NewOpWorker(context.Background(), "xx")
 	worker.Start()
 	defer worker.Stop()
 	schema := catalog.MockSchemaAll(13, 2)
@@ -3582,12 +3581,12 @@ func TestDelete3(t *testing.T) {
 
 	// this task won't affect logic of TestAppend2, it just prints logs about dirty count
 	forest := logtail.NewDirtyCollector(tae.LogtailMgr, opts.Clock, tae.Catalog, new(catalog.LoopProcessor))
-	hb := ops.NewHeartBeaterWithFunc(5*time.Millisecond, func() {
+	job := tasks.NewCancelableCronJob("TestDelete3", 5*time.Millisecond, func(ctx context.Context) {
 		forest.Run(0)
 		t.Log(forest.String())
-	}, nil)
-	hb.Start()
-	defer hb.Stop()
+	}, false, 0)
+	job.Start()
+	defer job.Stop()
 	schema := catalog.MockSchemaAll(3, 2)
 	schema.Extra.BlockMaxRows = 10
 	schema.Extra.ObjectMaxBlocks = 2
@@ -6469,12 +6468,12 @@ func TestAppendAndGC(t *testing.T) {
 	opts := new(options.Options)
 	opts = config.WithQuickScanAndCKPOpts(opts)
 	options.WithDisableGCCheckpoint()(opts)
-	merge.StopMerge.Store(true)
-	defer merge.StopMerge.Store(false)
 
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	db := tae.DB
+	db.MergeScheduler.StopMergeService()
+	defer db.MergeScheduler.StartMergeService()
 
 	schema1 := catalog.MockSchemaAll(13, 2)
 	schema1.Extra.BlockMaxRows = 10
@@ -6858,11 +6857,11 @@ func TestSnapshotMeta(t *testing.T) {
 	opts := new(options.Options)
 	opts = config.WithQuickScanAndCKPOpts(opts)
 	options.WithDisableGCCheckpoint()(opts)
-	merge.StopMerge.Store(true)
-	defer merge.StopMerge.Store(false)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	db := tae.DB
+	db.MergeScheduler.StopMergeService()
+	defer db.MergeScheduler.StartMergeService()
 
 	snapshotSchema := catalog.MockSnapShotSchema()
 	snapshotSchema.Extra.BlockMaxRows = 2
@@ -10123,25 +10122,31 @@ func TestStartStopTableMerge(t *testing.T) {
 
 	tbl := rel.GetMeta().(*catalog.TableEntry)
 	require.NoError(t, scheduler.StopMerge(tbl, false))
-	require.ErrorIs(t, scheduler.LoopProcessor.OnTable(tbl), moerr.GetOkStopCurrRecur())
+	require.ErrorIs(t, scheduler.OnTable(tbl), moerr.GetOkStopCurrRecur())
 	require.NoError(t, scheduler.StartMerge(tbl.GetID(), false))
-	require.NoError(t, scheduler.LoopProcessor.OnTable(tbl))
+	require.NoError(t, scheduler.OnTable(tbl))
 	require.Error(t, scheduler.StartMerge(tbl.GetID(), false))
 
 	require.NoError(t, scheduler.StopMerge(tbl, true))
-	require.ErrorIs(t, scheduler.LoopProcessor.OnTable(tbl), moerr.GetOkStopCurrRecur())
+	require.ErrorIs(t, scheduler.OnTable(tbl), moerr.GetOkStopCurrRecur())
 
 	require.NoError(t, scheduler.StopMerge(tbl, true))
-	require.ErrorIs(t, scheduler.LoopProcessor.OnTable(tbl), moerr.GetOkStopCurrRecur())
+	require.ErrorIs(t, scheduler.OnTable(tbl), moerr.GetOkStopCurrRecur())
 
 	require.Error(t, scheduler.StopMerge(tbl, false))
-	require.ErrorIs(t, scheduler.LoopProcessor.OnTable(tbl), moerr.GetOkStopCurrRecur())
+	require.ErrorIs(t, scheduler.OnTable(tbl), moerr.GetOkStopCurrRecur())
 
 	require.NoError(t, scheduler.StartMerge(tbl.GetID(), true))
-	require.ErrorIs(t, scheduler.LoopProcessor.OnTable(tbl), moerr.GetOkStopCurrRecur())
+	require.ErrorIs(t, scheduler.OnTable(tbl), moerr.GetOkStopCurrRecur())
 
 	require.NoError(t, scheduler.StartMerge(tbl.GetID(), true))
-	require.NoError(t, scheduler.LoopProcessor.OnTable(tbl))
+	require.NoError(t, scheduler.OnTable(tbl))
+	require.NoError(t, scheduler.OnPostTable(tbl))
+
+	scheduler.StopMergeService()
+	require.ErrorIs(t, scheduler.OnTable(tbl), moerr.GetOkStopCurrRecur())
+	require.ErrorIs(t, scheduler.OnPostTable(tbl), moerr.GetOkStopCurrRecur())
+	scheduler.StartMergeService()
 }
 
 func TestDeleteByPhyAddrKeys(t *testing.T) {

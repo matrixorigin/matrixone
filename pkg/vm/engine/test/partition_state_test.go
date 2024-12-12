@@ -40,7 +40,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
-	ops "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/test/testutil"
 )
@@ -679,7 +678,7 @@ func Test_Bug_DupEntryWhenGCInMemTombstones(t *testing.T) {
 		tombstone := it.GetObject().GetMeta().(*catalog.ObjectEntry)
 		require.NoError(t, it.Close())
 
-		worker := ops.NewOpWorker(context.Background(), "xx")
+		worker := tasks.NewOpWorker(context.Background(), "xx")
 		worker.Start()
 		defer worker.Stop()
 

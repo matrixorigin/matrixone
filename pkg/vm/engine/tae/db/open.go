@@ -43,7 +43,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
-	w "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
@@ -250,16 +249,9 @@ func Open(
 	db.DBLocker, dbLocker = dbLocker, nil
 
 	// Init timed scanner
-	scanner := NewDBScanner(db, nil)
-	db.MergeScheduler = merge.NewScheduler(db.Runtime, merge.NewTaskServiceGetter(opts.TaskServiceGetter))
-	scanner.RegisterOp(db.MergeScheduler)
+
 	db.Wal.Start()
 	db.BGCheckpointRunner.Start()
-
-	db.BGScanner = w.NewHeartBeater(
-		opts.CheckpointCfg.ScanInterval,
-		scanner)
-	db.BGScanner.Start()
 	// TODO: WithGCInterval requires configuration parameters
 	gc2.SetDeleteTimeout(opts.GCCfg.GCDeleteTimeout)
 	gc2.SetDeleteBatchSize(opts.GCCfg.GCDeleteBatchSize)
@@ -365,6 +357,21 @@ func Open(
 			mpoolAllocatorSubTask()
 		},
 		1,
+	)
+
+	db.CronJobs.AddJob(
+		"Compact",
+		opts.CheckpointCfg.ScanInterval,
+		func(ctx context.Context) { db.LogtailMgr.TryCompactTable() },
+		0,
+	)
+
+	db.MergeScheduler = merge.NewScheduler(db.Runtime, merge.NewTaskServiceGetter(opts.TaskServiceGetter))
+	db.CronJobs.AddJob(
+		"Merge",
+		opts.CheckpointCfg.ScanInterval,
+		func(ctx context.Context) { db.MergeScheduler.Schedule() },
+		0,
 	)
 
 	if opts.CheckpointCfg.MetadataCheckInterval != 0 {
