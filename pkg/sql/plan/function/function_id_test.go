@@ -385,8 +385,8 @@ var predefinedFunids = map[int]int{
 
 	FULLTEXT_MATCH:       338,
 	FULLTEXT_MATCH_SCORE: 339,
-
-	FUNCTION_END_NUMBER: 340,
+	FAULT_INJECT:         340,
+	FUNCTION_END_NUMBER:  341,
 }
 
 func Test_funids(t *testing.T) {
