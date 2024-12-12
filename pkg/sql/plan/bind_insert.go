@@ -237,7 +237,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 
 	// handle primary/unique key confliction
 	if builder.canSkipDedup(dmlCtx.tableDefs[0]) {
-		// load do not handle primary/unique key confliction
+		// restore/load do not handle primary/unique key confliction
 		for i, idxDef := range tableDef.Indexes {
 			if !idxDef.TableExist || skipUniqueIdx[i] {
 				continue
