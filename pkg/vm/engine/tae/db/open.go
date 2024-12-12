@@ -51,6 +51,8 @@ import (
 
 const (
 	WALDir = "wal"
+
+	Phase_Open = "open-tae"
 )
 
 func fillRuntimeOptions(opts *options.Options) {
@@ -78,9 +80,9 @@ func Open(
 	dbLocker, err := createDBLock(dirname)
 
 	logutil.Info(
-		"open-tae",
-		common.OperationField("Start"),
-		common.OperandField("open"),
+		Phase_Open,
+		zap.String("db-dirname", dirname),
+		zap.Error(err),
 	)
 	totalTime := time.Now()
 
@@ -92,10 +94,9 @@ func Open(
 			dbLocker.Close()
 		}
 		logutil.Info(
-			"open-tae", common.OperationField("End"),
-			common.OperandField("open"),
-			common.AnyField("cost", time.Since(totalTime)),
-			common.AnyField("err", err),
+			Phase_Open,
+			zap.Duration("open-tae-cost", time.Since(totalTime)),
+			zap.Error(err),
 		)
 	}()
 
@@ -105,10 +106,9 @@ func Open(
 	wbuf := &bytes.Buffer{}
 	werr := toml.NewEncoder(wbuf).Encode(opts)
 	logutil.Info(
-		"open-tae",
-		common.OperationField("Config"),
-		common.AnyField("toml", wbuf.String()),
-		common.ErrorField(werr),
+		Phase_Open,
+		zap.String("config", wbuf.String()),
+		zap.Error(werr),
 	)
 	serviceDir := path.Join(dirname, "data")
 	if opts.Fs == nil {
@@ -205,7 +205,7 @@ func Open(
 	}
 
 	// 1. replay three tables objectlist
-	checkpointed, ckpLSN, valid, err := ckpReplayer.ReplayThreeTablesObjectlist()
+	checkpointed, ckpLSN, valid, err := ckpReplayer.ReplayThreeTablesObjectlist(Phase_Open)
 	if err != nil {
 		panic(err)
 	}
@@ -219,20 +219,18 @@ func Open(
 		store.BindTxn(txn)
 	}
 	// 2. replay all table Entries
-	if err = ckpReplayer.ReplayCatalog(txn); err != nil {
+	if err = ckpReplayer.ReplayCatalog(txn, Phase_Open); err != nil {
 		panic(err)
 	}
 
 	// 3. replay other tables' objectlist
-	if err = ckpReplayer.ReplayObjectlist(); err != nil {
+	if err = ckpReplayer.ReplayObjectlist(Phase_Open); err != nil {
 		panic(err)
 	}
 	logutil.Info(
-		"open-tae",
-		common.OperationField("replay"),
-		common.OperandField("checkpoints"),
-		common.AnyField("cost", time.Since(now)),
-		common.AnyField("checkpointed", checkpointed.ToString()),
+		Phase_Open,
+		zap.Duration("replay-checkpoints-cost", time.Since(now)),
+		zap.String("max-checkpoint", checkpointed.ToString()),
 	)
 
 	now = time.Now()
@@ -241,10 +239,8 @@ func Open(
 
 	// checkObjectState(db)
 	logutil.Info(
-		"open-tae",
-		common.OperationField("replay"),
-		common.OperandField("wal"),
-		common.AnyField("cost", time.Since(now)),
+		Phase_Open,
+		zap.Duration("replay-wal-cost", time.Since(now)),
 	)
 
 	db.DBLocker, dbLocker = dbLocker, nil
