@@ -290,117 +290,117 @@ const (
 	JSON_UNQUOTE         = 256
 	JSON_ROW             = 257
 
-	JSON_SET     = 258
-	JSON_INSERT  = 259
-	JSON_REPLACE = 260
+	JQ       = 258
+	TRY_JQ   = 259
+	WASM     = 260
+	TRY_WASM = 261
+	FORMAT   = 262
+	SLEEP    = 263
+	INSTR    = 264
+	LOCATE   = 265
 
-	JQ       = 261
-	TRY_JQ   = 262
-	WASM     = 263
-	TRY_WASM = 264
-	FORMAT   = 265
-	SLEEP    = 266
-	INSTR    = 267
-	LOCATE   = 268
+	UUID           = 266
+	SERIAL         = 267
+	SERIAL_FULL    = 268
+	SERIAL_EXTRACT = 269
+	BIN            = 270
 
-	UUID           = 269
-	SERIAL         = 270
-	SERIAL_FULL    = 271
-	SERIAL_EXTRACT = 272
-	BIN            = 273
+	ENABLE_FAULT_INJECTION  = 271
+	DISABLE_FAULT_INJECTION = 272
+	ADD_FAULT_POINT         = 273 // Add a fault point
+	REMOVE_FAULT_POINT      = 274 // Remove
+	TRIGGER_FAULT_POINT     = 275 // Trigger.
+	MO_WIN_TRUNCATE         = 276
 
-	ENABLE_FAULT_INJECTION  = 274
-	DISABLE_FAULT_INJECTION = 275
-	ADD_FAULT_POINT         = 276 // Add a fault point
-	REMOVE_FAULT_POINT      = 277 // Remove
-	TRIGGER_FAULT_POINT     = 278 // Trigger.
-	MO_WIN_TRUNCATE         = 279
-
-	MO_MEMORY_USAGE                = 280 // Dump memory usage
-	MO_ENABLE_MEMORY_USAGE_DETAIL  = 281
-	MO_DISABLE_MEMORY_USAGE_DETAIL = 282
+	MO_MEMORY_USAGE                = 277 // Dump memory usage
+	MO_ENABLE_MEMORY_USAGE_DETAIL  = 278
+	MO_DISABLE_MEMORY_USAGE_DETAIL = 279
 
 	// MO_CTL is used to check some internal status, and issue some ctl commands to the service.
 	// see builtin.ctl.ctl.go to get detail.
-	MO_CTL = 283
+	MO_CTL = 280
 
-	MO_SHOW_VISIBLE_BIN      = 284 // parse type/onUpdate/default []byte to visible string
-	MO_SHOW_VISIBLE_BIN_ENUM = 285 //  parse type/onUpdate/default []byte to visible string for enum
-	MO_SHOW_COL_UNIQUE       = 286 // show column whether unique key
+	MO_SHOW_VISIBLE_BIN      = 281 // parse type/onUpdate/default []byte to visible string
+	MO_SHOW_VISIBLE_BIN_ENUM = 282 //  parse type/onUpdate/default []byte to visible string for enum
+	MO_SHOW_COL_UNIQUE       = 283 // show column whether unique key
 
-	MO_TABLE_ROWS    = 287 // table rows
-	MO_TABLE_SIZE    = 288 // table size
-	MO_TABLE_COL_MAX = 289 // table column max value
-	MO_TABLE_COL_MIN = 290 // table column min value
+	MO_TABLE_ROWS    = 284 // table rows
+	MO_TABLE_SIZE    = 285 // table size
+	MO_TABLE_COL_MAX = 286 // table column max value
+	MO_TABLE_COL_MIN = 287 // table column min value
 
-	MO_LOG_DATE    = 291 // parse date from string, like __mo_filepath
-	PURGE_LOG      = 292 // purge mo internal log, like rawlog, statement_info, metric
-	MO_ADMIN_NAME  = 293 // get mo admin name of account
-	MO_CU          = 294
-	MO_CU_V1       = 295
-	MO_EXPLAIN_PHY = 296
+	MO_LOG_DATE    = 288 // parse date from string, like __mo_filepath
+	PURGE_LOG      = 289 // purge mo internal log, like rawlog, statement_info, metric
+	MO_ADMIN_NAME  = 290 // get mo admin name of account
+	MO_CU          = 291
+	MO_CU_V1       = 292
+	MO_EXPLAIN_PHY = 293
 
-	GIT_VERSION   = 297
-	BUILD_VERSION = 298
+	GIT_VERSION   = 294
+	BUILD_VERSION = 295
 
 	// be used: insert into t1 values(1,1) on duplicate key update a=values(a)+a+1
-	VALUES                        = 299
-	BINARY                        = 300
-	INTERNAL_CHAR_LENGTH          = 301
-	INTERNAL_CHAR_SIZE            = 302
-	INTERNAL_NUMERIC_PRECISION    = 303
-	INTERNAL_NUMERIC_SCALE        = 304
-	INTERNAL_DATETIME_SCALE       = 305
-	INTERNAL_COLUMN_CHARACTER_SET = 306
-	INTERNAL_AUTO_INCREMENT       = 307
+	VALUES                        = 296
+	BINARY                        = 297
+	INTERNAL_CHAR_LENGTH          = 298
+	INTERNAL_CHAR_SIZE            = 299
+	INTERNAL_NUMERIC_PRECISION    = 300
+	INTERNAL_NUMERIC_SCALE        = 301
+	INTERNAL_DATETIME_SCALE       = 302
+	INTERNAL_COLUMN_CHARACTER_SET = 303
+	INTERNAL_AUTO_INCREMENT       = 304
 
 	// be used: enum
-	CAST_INDEX_TO_VALUE       = 308
-	CAST_VALUE_TO_INDEX       = 309
-	CAST_INDEX_VALUE_TO_INDEX = 310
+	CAST_INDEX_TO_VALUE       = 305
+	CAST_VALUE_TO_INDEX       = 306
+	CAST_INDEX_VALUE_TO_INDEX = 307
 
 	// be used: show snapshots
-	CAST_NANO_TO_TIMESTAMP = 311
+	CAST_NANO_TO_TIMESTAMP = 308
 	// be used: show pitr
-	CAST_RANGE_VALUE_UNIT = 312
+	CAST_RANGE_VALUE_UNIT = 309
 
 	//Sequence function
-	NEXTVAL = 313
-	SETVAL  = 314
-	CURRVAL = 315
-	LASTVAL = 316
+	NEXTVAL = 310
+	SETVAL  = 311
+	CURRVAL = 312
+	LASTVAL = 313
 
 	// Array Function
-	SUMMATION         = 317
-	L1_NORM           = 318 // L1_NORMALIZATION
-	L2_NORM           = 319 // L2 NORMALIZATION
-	INNER_PRODUCT     = 320
-	COSINE_SIMILARITY = 321
-	VECTOR_DIMS       = 322 //VECTOR DIMENSIONS
-	NORMALIZE_L2      = 323 //NORMALIZE L2
-	L2_DISTANCE       = 324 //L2_DISTANCE
-	L2_DISTANCE_SQ    = 325 //L2_DISTANCE_SQ
-	COSINE_DISTANCE   = 326 //COSINE_DISTANCE
-	CLUSTER_CENTERS   = 327 // CLUSTER_CENTERS
-	SUB_VECTOR        = 328 // SUB_VECTOR
+	SUMMATION         = 314
+	L1_NORM           = 315 // L1_NORMALIZATION
+	L2_NORM           = 316 // L2 NORMALIZATION
+	INNER_PRODUCT     = 317
+	COSINE_SIMILARITY = 318
+	VECTOR_DIMS       = 319 //VECTOR DIMENSIONS
+	NORMALIZE_L2      = 320 //NORMALIZE L2
+	L2_DISTANCE       = 321 //L2_DISTANCE
+	L2_DISTANCE_SQ    = 322 //L2_DISTANCE_SQ
+	COSINE_DISTANCE   = 323 //COSINE_DISTANCE
+	CLUSTER_CENTERS   = 324 // CLUSTER_CENTERS
+	SUB_VECTOR        = 325 // SUB_VECTOR
 
-	PYTHON_UDF = 329
+	PYTHON_UDF = 326
 
 	// observation function
-	MO_CPU      = 330
-	MO_MEMORY   = 331
-	MO_CPU_DUMP = 332
+	MO_CPU      = 327
+	MO_MEMORY   = 328
+	MO_CPU_DUMP = 329
 
 	// bitmap function
-	BITMAP_BIT_POSITION  = 333
-	BITMAP_BUCKET_NUMBER = 334
-	BITMAP_COUNT         = 335
-	BITMAP_CONSTRUCT_AGG = 336
-	BITMAP_OR_AGG        = 337
+	BITMAP_BIT_POSITION  = 330
+	BITMAP_BUCKET_NUMBER = 331
+	BITMAP_COUNT         = 332
+	BITMAP_CONSTRUCT_AGG = 333
+	BITMAP_OR_AGG        = 334
 
 	// fulltext function
-	FULLTEXT_MATCH       = 338
-	FULLTEXT_MATCH_SCORE = 339
+	FULLTEXT_MATCH       = 335
+	FULLTEXT_MATCH_SCORE = 336
+
+	JSON_SET     = 337
+	JSON_INSERT  = 338
+	JSON_REPLACE = 339
 
 	// fault inject function
 	FAULT_INJECT = 340
@@ -413,37 +413,38 @@ const (
 // functionIdRegister is what function we have registered already.
 var functionIdRegister = map[string]int32{
 	// operators
-	"=":              EQUAL,
-	">":              GREAT_THAN,
-	">=":             GREAT_EQUAL,
-	"<":              LESS_THAN,
-	"<=":             LESS_EQUAL,
-	"<>":             NOT_EQUAL,
-	"!=":             NOT_EQUAL,
-	"not":            NOT,
-	"and":            AND,
-	"or":             OR,
-	"xor":            XOR,
-	"like":           LIKE,
-	"between":        BETWEEN,
-	"in":             IN,
-	"not_in":         NOT_IN,
-	"+":              PLUS,
-	"-":              MINUS,
-	"*":              MULTI,
-	"/":              DIV,
-	"div":            INTEGER_DIV,
-	"%":              MOD,
-	"mod":            MOD,
-	"unary_plus":     UNARY_PLUS,
-	"unary_minus":    UNARY_MINUS,
-	"unary_tilde":    UNARY_TILDE,
-	"unary_mark":     NOT,
-	"case":           CASE,
-	"coalesce":       COALESCE,
-	"cast":           CAST,
-	"bit_cast":       BIT_CAST,
-	"is":             IS,
+	"=":           EQUAL,
+	">":           GREAT_THAN,
+	">=":          GREAT_EQUAL,
+	"<":           LESS_THAN,
+	"<=":          LESS_EQUAL,
+	"<>":          NOT_EQUAL,
+	"!=":          NOT_EQUAL,
+	"not":         NOT,
+	"and":         AND,
+	"or":          OR,
+	"xor":         XOR,
+	"like":        LIKE,
+	"between":     BETWEEN,
+	"in":          IN,
+	"not_in":      NOT_IN,
+	"+":           PLUS,
+	"-":           MINUS,
+	"*":           MULTI,
+	"/":           DIV,
+	"div":         INTEGER_DIV,
+	"%":           MOD,
+	"mod":         MOD,
+	"unary_plus":  UNARY_PLUS,
+	"unary_minus": UNARY_MINUS,
+	"unary_tilde": UNARY_TILDE,
+	"unary_mark":  NOT,
+	"case":        CASE,
+	"coalesce":    COALESCE,
+	"cast":        CAST,
+	"bit_cast":    BIT_CAST,
+	"is":          IS,
+
 	"is_not":         ISNOT,
 	"isnot":          ISNOT,
 	"is_null":        ISNULL,
