@@ -3,6 +3,8 @@ package fulltext
 import (
 	"context"
 	"fmt"
+	"os"
+	"time"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -40,6 +42,7 @@ type Partition struct {
 	cpos        uint64
 	data        []byte
 	full        bool
+	last_update time.Time
 }
 
 func NewPartition(mp *mpool.MPool, cxt context.Context, id uint64, capacity uint64, dsize uint64) (*Partition, error) {
@@ -71,17 +74,23 @@ func (part *Partition) Close() {
 	}
 	part.capacity = 0
 	part.refcnt = 0
-	// TODO: delete the temp file
-	/*
-		if part.spilled {
 
-		}
-	*/
+	//delete the temp file
+	if part.spilled {
+		os.Remove(part.spill_fpath)
+	}
 }
 
 func (part *Partition) NewItem() (addr uint64, b []byte, err error) {
 	if part.cpos+part.dsize > part.capacity {
 		return 0, nil, moerr.NewInternalError(part.cxt, "Partition NewItem out of bound")
+	}
+
+	if part.spilled {
+		err := part.Unspill()
+		if err != nil {
+			return 0, nil, err
+		}
 	}
 
 	b = unsafe.Slice(&part.data[part.cpos], part.dsize)
@@ -90,6 +99,7 @@ func (part *Partition) NewItem() (addr uint64, b []byte, err error) {
 	part.used += part.dsize
 	part.refcnt++
 	part.nitem++
+	part.last_update = time.Now()
 	if part.cpos+part.dsize > part.capacity {
 		part.full = true
 	}
@@ -97,12 +107,17 @@ func (part *Partition) NewItem() (addr uint64, b []byte, err error) {
 }
 
 func (part *Partition) GetItem(offset uint64) ([]byte, error) {
+	part.last_update = time.Now()
 	if part.spilled {
-		return nil, moerr.NewInternalError(part.cxt, "GetItem: Spill not supported yet")
+		err := part.Unspill()
+		if err != nil {
+			return nil, err
+		}
 	}
 	return unsafe.Slice(&part.data[offset], part.dsize), nil
 }
 
+// FreeItem simply reduce reference count by one and free the data when refcnt == 0
 func (part *Partition) FreeItem(offfset uint64) (uint64, error) {
 	if part.refcnt == 0 {
 		return 0, moerr.NewInternalError(part.cxt, "FreeItem: refcnt = 0, double free")
@@ -113,11 +128,73 @@ func (part *Partition) FreeItem(offfset uint64) (uint64, error) {
 	if part.refcnt == 0 {
 		// no more reference delete the data
 		ret = part.capacity
-		part.data = nil
+		if part.data != nil {
+			part.mp.Free(part.data)
+			part.data = nil
+		}
 		part.capacity = 0
 		part.cpos = 0
 	}
 	return ret, nil
+}
+
+func (part *Partition) Spill() error {
+
+	if part.data == nil {
+		return nil
+	}
+
+	f, err := os.CreateTemp("", "fulltext")
+	if err != nil {
+		return err
+	}
+
+	defer f.Close()
+
+	part.spill_fpath = f.Name()
+	if _, err := f.Write(part.data); err != nil {
+		return err
+	}
+
+	part.spilled = true
+	part.mp.Free(part.data)
+	part.data = nil
+	return nil
+}
+
+func (part *Partition) Unspill() error {
+	if !part.spilled {
+		return moerr.NewInternalError(part.cxt, "Unspill: partition is not spilled")
+	}
+
+	fpath := part.spill_fpath
+	f, err := os.Open(fpath)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		f.Close()
+		os.Remove(fpath)
+	}()
+
+	// alloc memory with capacity
+	capacity := part.capacity
+	err = part.alloc(capacity)
+	if err != nil {
+		return err
+	}
+
+	n, err := f.Read(part.data)
+	if err != nil {
+		return err
+	}
+	if uint64(n) != capacity {
+		return moerr.NewInternalError(part.cxt, "Spill file size not match with capacity")
+	}
+
+	part.spilled = false
+	part.spill_fpath = ""
+	return nil
 }
 
 type FixedBytePool struct {
