@@ -19,18 +19,6 @@ import (
 var LOWER_BIT_MASK = uint64(0xffffff)
 var LOWER_BIT_SHIFT = uint64(24)
 
-func GetPartitionOffset(addr uint64) uint64 {
-	return (addr & LOWER_BIT_MASK)
-}
-
-func GetPartitionId(addr uint64) uint64 {
-	return (addr >> LOWER_BIT_SHIFT)
-}
-
-func GetPartitionAddr(partid uint64, offset uint64) uint64 {
-	return (partid << LOWER_BIT_SHIFT) | offset
-}
-
 // Least recently use
 type Lru struct {
 	id          uint64
@@ -52,6 +40,36 @@ type Partition struct {
 	data        []byte
 	full        bool
 	last_update time.Time
+}
+
+type FixedBytePool struct {
+	mp            *mpool.MPool
+	cxt           context.Context
+	partitions    []*Partition
+	capacity      uint64
+	partition_cap uint64
+	dsize         uint64
+	mem_in_use    uint64
+	mem_limit     uint64
+	spill_size    uint64
+}
+
+type FixedBytePoolIterator struct {
+	pool   *FixedBytePool
+	idx    int
+	offset uint64
+}
+
+func GetPartitionOffset(addr uint64) uint64 {
+	return (addr & LOWER_BIT_MASK)
+}
+
+func GetPartitionId(addr uint64) uint64 {
+	return (addr >> LOWER_BIT_SHIFT)
+}
+
+func GetPartitionAddr(partid uint64, offset uint64) uint64 {
+	return (partid << LOWER_BIT_SHIFT) | offset
 }
 
 func NewPartition(mp *mpool.MPool, cxt context.Context, id uint64, capacity uint64, dsize uint64) (*Partition, error) {
@@ -217,18 +235,7 @@ func (part *Partition) LastUpdate() time.Time {
 	return part.last_update
 }
 
-type FixedBytePool struct {
-	mp            *mpool.MPool
-	cxt           context.Context
-	partitions    []*Partition
-	capacity      uint64
-	partition_cap uint64
-	dsize         uint64
-	mem_in_use    uint64
-	mem_limit     uint64
-	spill_size    uint64
-}
-
+// FixedBytePool
 func NewFixedBytePool(mp *mpool.MPool, context context.Context, dsize uint64, partition_cap uint64, mem_limit uint64) *FixedBytePool {
 	if partition_cap == 0 {
 		partition_cap = LOWER_BIT_MASK
@@ -378,12 +385,7 @@ func (pool *FixedBytePool) Spill() error {
 	return nil
 }
 
-type FixedBytePoolIterator struct {
-	pool   *FixedBytePool
-	idx    int
-	offset uint64
-}
-
+// Iterator
 func NewFixedBytePoolIterator(p *FixedBytePool) *FixedBytePoolIterator {
 	return &FixedBytePoolIterator{pool: p}
 }
