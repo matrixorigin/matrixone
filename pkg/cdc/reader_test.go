@@ -38,15 +38,16 @@ import (
 
 func TestNewTableReader(t *testing.T) {
 	type args struct {
-		cnTxnClient  client.TxnClient
-		cnEngine     engine.Engine
-		mp           *mpool.MPool
-		packerPool   *fileservice.Pool[*types.Packer]
-		info         *DbTableInfo
-		sinker       Sinker
-		wMarkUpdater *WatermarkUpdater
-		tableDef     *plan.TableDef
-		restartFunc  func(*DbTableInfo) error
+		cnTxnClient    client.TxnClient
+		cnEngine       engine.Engine
+		mp             *mpool.MPool
+		packerPool     *fileservice.Pool[*types.Packer]
+		info           *DbTableInfo
+		sinker         Sinker
+		wMarkUpdater   *WatermarkUpdater
+		tableDef       *plan.TableDef
+		restartFunc    func(*DbTableInfo) error
+		runningReaders *sync.Map
 	}
 
 	tableDef := &plan.TableDef{
@@ -76,7 +77,29 @@ func TestNewTableReader(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.NotNilf(t, NewTableReader(tt.args.cnTxnClient, tt.args.cnEngine, tt.args.mp, tt.args.packerPool, tt.args.info, tt.args.sinker, tt.args.wMarkUpdater, tt.args.tableDef, tt.args.restartFunc, true), "NewTableReader(%v, %v, %v, %v, %v, %v, %v, %v, %v)", tt.args.cnTxnClient, tt.args.cnEngine, tt.args.mp, tt.args.packerPool, tt.args.info, tt.args.sinker, tt.args.wMarkUpdater, tt.args.tableDef, tt.args.restartFunc)
+			assert.NotNilf(t, NewTableReader(
+				tt.args.cnTxnClient,
+				tt.args.cnEngine,
+				tt.args.mp,
+				tt.args.packerPool,
+				tt.args.info,
+				tt.args.sinker,
+				tt.args.wMarkUpdater,
+				tt.args.tableDef,
+				tt.args.restartFunc,
+				true,
+				tt.args.runningReaders,
+			),
+				"NewTableReader(%v,%v,%v,%v,%v,%v,%v,%v,%v)",
+				tt.args.cnTxnClient,
+				tt.args.cnEngine,
+				tt.args.mp,
+				tt.args.packerPool,
+				tt.args.info,
+				tt.args.sinker,
+				tt.args.wMarkUpdater,
+				tt.args.tableDef,
+				tt.args.restartFunc)
 		})
 	}
 }
@@ -218,6 +241,7 @@ func Test_tableReader_Run(t *testing.T) {
 				insCompositedPkColIdx: tt.fields.insCompositedPkColIdx,
 				delTsColIdx:           tt.fields.delTsColIdx,
 				delCompositedPkColIdx: tt.fields.delCompositedPkColIdx,
+				runningReaders:        &sync.Map{},
 			}
 			reader.Run(tt.args.ctx, tt.args.ar)
 		})
@@ -238,6 +262,11 @@ func Test_tableReader_Run_StaleRead(t *testing.T) {
 		tick:               time.NewTicker(time.Millisecond * 300),
 		sinker:             NewConsoleSinker(nil, nil),
 		resetWatermarkFunc: func(*DbTableInfo) error { return nil },
+		runningReaders:     &sync.Map{},
+		info: &DbTableInfo{
+			SourceDbName:  "db1",
+			SourceTblName: "t1",
+		},
 	}
 	reader.Run(ctx, NewCdcActiveRoutine())
 	cancel()
@@ -254,10 +283,12 @@ func Test_tableReader_Run_StaleRead(t *testing.T) {
 		tick:   time.NewTicker(time.Millisecond * 300),
 		sinker: NewConsoleSinker(nil, nil),
 		info: &DbTableInfo{
-			SourceTblIdStr: "1_0",
+			SourceDbName:  "db1",
+			SourceTblName: "t1",
 		},
 		wMarkUpdater:       u,
 		resetWatermarkFunc: func(*DbTableInfo) error { return moerr.NewInternalErrorNoCtx("") },
+		runningReaders:     &sync.Map{},
 	}
 	reader.Run(ctx, NewCdcActiveRoutine())
 	cancel()
@@ -283,10 +314,12 @@ func Test_tableReader_Run_NonStaleReadErr(t *testing.T) {
 		tick:   time.NewTicker(time.Millisecond * 300),
 		sinker: NewConsoleSinker(nil, nil),
 		info: &DbTableInfo{
-			SourceTblIdStr: "1_0",
+			SourceDbName:  "db1",
+			SourceTblName: "t1",
 		},
 		wMarkUpdater:       u,
 		resetWatermarkFunc: func(*DbTableInfo) error { return nil },
+		runningReaders:     &sync.Map{},
 	}
 	reader.Run(ctx, NewCdcActiveRoutine())
 }
@@ -319,8 +352,8 @@ func Test_tableReader_readTableWithTxn(t *testing.T) {
 
 	reader := &tableReader{
 		info: &DbTableInfo{
-			SourceTblName:  "t1",
-			SourceTblIdStr: "123",
+			SourceDbName:  "db1",
+			SourceTblName: "t1",
 		},
 		packerPool:            pool,
 		wMarkUpdater:          watermarkUpdater,
@@ -328,6 +361,7 @@ func Test_tableReader_readTableWithTxn(t *testing.T) {
 		insTsColIdx:           0,
 		insCompositedPkColIdx: 3,
 		sinker:                NewConsoleSinker(nil, nil),
+		runningReaders:        &sync.Map{},
 	}
 
 	getRelationByIdStub := gostub.Stub(&GetRelationById, func(_ context.Context, _ engine.Engine, _ client.TxnOperator, _ uint64) (string, string, engine.Relation, error) {
