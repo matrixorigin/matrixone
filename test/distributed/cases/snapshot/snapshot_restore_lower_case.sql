@@ -75,7 +75,6 @@ drop database test;
 
 
 
--- @bvt:issue#20544
 -- view
 -- @session:id=2&user=acc01:test_account&password=111
 select @@lower_case_table_names;
@@ -137,7 +136,6 @@ restore account acc01 from snapshot sp02_restore_lower;
 -- @session:id=2&user=acc01:test_account&password=111
 use test02;
 show tables;
-show create table Employees;
 show create table EmployeeDepartmentView;
 -- @session
 
@@ -146,10 +144,16 @@ restore account acc01 from snapshot sp02_restore_lower to account acc04;
 -- @session:id=4&user=acc04:test_account&password=111
 use test02;
 show tables;
-show create table Employees;
+show create table EmployeeDepartmentView;
+set global lower_case_table_names = 0;
+-- @session
+
+-- @session:id=5&user=acc04:test_account&password=111
+select @@lower_case_table_names;
+use test02;
+show tables;
 show create table EmployeeDepartmentView;
 -- @session
--- @bvt:issue
 
 drop account if exists acc01;
 drop account if exists acc02;
