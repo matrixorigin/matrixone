@@ -242,6 +242,8 @@ func (part *Partition) Unspill() error {
 	defer func() {
 		f.Close()
 		os.Remove(fpath)
+		part.spilled = false
+		part.spill_fpath = ""
 	}()
 
 	// alloc memory with capacity
@@ -259,8 +261,6 @@ func (part *Partition) Unspill() error {
 		return moerr.NewInternalError(part.cxt, "Spill file size not match with capacity")
 	}
 
-	part.spilled = false
-	part.spill_fpath = ""
 	return nil
 }
 
