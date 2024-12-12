@@ -180,21 +180,37 @@ func (db *DB) ForceCheckpoint(
 func (db *DB) ForceGlobalCheckpoint(
 	ctx context.Context,
 	ts types.TS,
-	flushDuration, versionInterval time.Duration) (err error) {
+	flushDuration, versionInterval time.Duration,
+) (err error) {
 	// FIXME: cannot disable with a running job
 	db.BGCheckpointRunner.DisableCheckpoint()
 	defer db.BGCheckpointRunner.EnableCheckpoint()
 	db.BGCheckpointRunner.CleanPenddingCheckpoint()
 	t0 := time.Now()
 	err = db.BGCheckpointRunner.ForceFlush(ts, ctx, flushDuration)
-	logutil.Infof("[Force Global Checkpoint] flush takes %v: %v", time.Since(t0), err)
+	forceFlushCost := time.Since()
+	defer func() {
+		logger := logutil.Info
+		if err != nil {
+			logger = logutil.Error
+		}
+		logger(
+			"Control-ForceGlobalCheckpoint",
+			zap.Duration("total-cost", time.Since(t0)),
+			zap.Duration("force-flush-cost", forceFlushCost),
+			zap.Duration("flush-duration", flushDuration),
+			zap.Duration("version-interval", versionInterval),
+			zap.Error(err),
+		)
+	}()
+
 	if err != nil {
-		return err
+		return
 	}
-	if err = db.BGCheckpointRunner.ForceGlobalCheckpointSynchronously(ctx, ts, versionInterval); err != nil {
-		return err
-	}
-	logutil.Infof("[Force Global Checkpoint] takes %v", time.Since(t0))
+
+	err = db.BGCheckpointRunner.ForceGlobalCheckpointSynchronously(
+		ctx, ts, versionInterval,
+	)
 	return err
 }
 
@@ -209,14 +225,30 @@ func (db *DB) ForceCheckpointForBackup(
 	db.BGCheckpointRunner.CleanPenddingCheckpoint()
 	t0 := time.Now()
 	err = db.BGCheckpointRunner.ForceFlush(ts, ctx, flushDuration)
-	logutil.Infof("[Force Checkpoint] flush takes %v: %v", time.Since(t0), err)
+	forceFlushCost := time.Since(t0)
+
+	defer func() {
+		logger := logutil.Info
+		if err != nil {
+			logger = logutil.Error
+		}
+		logger(
+			"Control-ForeCheckpointForBackup",
+			zap.Duration("total-cost", time.Since(t0)),
+			zap.Duration("force-flush-cost", forceFlushCost),
+			zap.Duration("flush-duration", flushDuration),
+			zap.Duration("version-interval", versionInterval),
+			zap.String("location", location),
+			zap.Error(err),
+		)
+	}()
+
 	if err != nil {
 		return
 	}
-	if location, err = db.BGCheckpointRunner.ForceCheckpointForBackup(ts); err != nil {
-		return
-	}
-	logutil.Debugf("[Force Checkpoint] takes %v", time.Since(t0))
+
+	location, err = db.BGCheckpointRunner.ForceCheckpointForBackup(ts)
+
 	return
 }
 
