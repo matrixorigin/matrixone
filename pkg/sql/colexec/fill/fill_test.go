@@ -161,7 +161,7 @@ func TestFill(t *testing.T) {
 }
 
 func resetChildren(arg *Fill) {
-	bat := colexec.MakeMockBatchs()
+	bat := colexec.MakeMockBatchsWithNullVec()
 	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
 	arg.Children = nil
 	arg.AppendChild(op)
