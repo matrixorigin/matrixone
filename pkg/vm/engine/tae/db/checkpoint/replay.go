@@ -352,6 +352,7 @@ func (c *CkpReplayer) ReplayThreeTablesObjectlist() (
 			isLSNValid = false
 		}
 	}
+	c.wg.Wait()
 	return
 }
 
@@ -435,6 +436,7 @@ func (c *CkpReplayer) ReplayObjectlist() (err error) {
 		ckpVers = append(ckpVers, checkpointEntry.version)
 		ckpDatas = append(ckpDatas, datas[i])
 	}
+	c.wg.Wait()
 	c.applyDuration += time.Since(t0)
 	r.catalog.GetUsageMemo().(*logtail.TNUsageMemo).PrepareReplay(ckpDatas, ckpVers)
 	r.source.Init(maxTs)
@@ -449,7 +451,7 @@ func (c *CkpReplayer) ReplayObjectlist() (err error) {
 		"open-tae",
 		zap.String("replay", "checkpoint-objectlist"),
 		zap.Uint64("max table tid", maxTableID),
-		zap.Int("object count", maxObjectCount),
+		zap.Int("object count (create count + delete count)", maxObjectCount),
 		zap.Duration("apply-cost", c.applyDuration),
 		zap.Duration("read-cost", c.readDuration),
 		zap.Int("apply-count", c.applyCount),

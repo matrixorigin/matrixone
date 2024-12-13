@@ -429,7 +429,7 @@ func (catalog *Catalog) OnReplayObjectBatch(replayer ObjectListReplayer, objectI
 	for i := 0; i < objectInfo.Length(); i++ {
 		tid := objectInfo.GetVectorByName(SnapshotAttr_TID).Get(i).(uint64)
 		if forSys != pkgcatalog.IsSystemTable(tid) {
-			return
+			continue
 		}
 		replayFn := func() {
 			dbid := objectInfo.GetVectorByName(SnapshotAttr_DBID).Get(i).(uint64)
