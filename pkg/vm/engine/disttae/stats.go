@@ -42,6 +42,10 @@ var (
 	// MinUpdateInterval is the minimal interval to update stats info as it
 	// is necessary to update stats every time.
 	MinUpdateInterval = time.Second * 15
+
+	initCheckInterval = time.Millisecond * 10
+	maxCheckInterval  = time.Second * 5
+	checkTimeout      = time.Minute
 )
 
 // waitKeeper is used to mark the table has finished waited,
@@ -137,6 +141,20 @@ func WithUpdateWorkerFactor(f int) GlobalStatsOption {
 	}
 }
 
+// WithStatsUpdater set the update function to update stats info.
+func WithStatsUpdater(f func(pb.StatsInfoKey, *pb.StatsInfo) bool) GlobalStatsOption {
+	return func(s *GlobalStats) {
+		s.statsUpdater = f
+	}
+}
+
+// WithApproxObjectNumUpdater set the update function to update approx object num.
+func WithApproxObjectNumUpdater(f func() int64) GlobalStatsOption {
+	return func(s *GlobalStats) {
+		s.approxObjectNumUpdater = f
+	}
+}
+
 // updateRecord records the update status of a key.
 type updateRecord struct {
 	// inProgress indicates if the stats of a table is being updated.
@@ -193,6 +211,12 @@ type GlobalStats struct {
 	KeyRouter client.KeyRouter[pb.StatsInfoKey]
 
 	concurrentExecutor ConcurrentExecutor
+
+	// statsUpdate is the function which updates the stats info.
+	// If it is nil, set it to doUpdate.
+	statsUpdater func(pb.StatsInfoKey, *pb.StatsInfo) bool
+	// for test only currently.
+	approxObjectNumUpdater func() int64
 }
 
 func NewGlobalStats(
@@ -213,6 +237,9 @@ func NewGlobalStats(
 	s.mu.cond = sync.NewCond(&s.mu)
 	for _, opt := range opts {
 		opt(s)
+	}
+	if s.statsUpdater == nil {
+		s.statsUpdater = s.doUpdate
 	}
 	s.concurrentExecutor = newConcurrentExecutor(runtime.GOMAXPROCS(0) * s.updateWorkerFactor * 4)
 	s.concurrentExecutor.Run(ctx)
@@ -462,11 +489,11 @@ func (gs *GlobalStats) waitLogtailUpdated(tid uint64) {
 	//   1. context done
 	//   2. interval checking, whose init interval is 10ms and max interval is 5s
 	//   3. logtail update notify, to check if it is the required table.
-	initCheckInterval := time.Millisecond * 10
-	maxCheckInterval := time.Second * 5
 	checkInterval := initCheckInterval
 	timer := time.NewTimer(checkInterval)
 	defer timer.Stop()
+	timeout := time.NewTimer(checkTimeout)
+	defer timeout.Stop()
 
 	var done bool
 	for {
@@ -479,6 +506,10 @@ func (gs *GlobalStats) waitLogtailUpdated(tid uint64) {
 		select {
 		case <-gs.ctx.Done():
 			return
+
+		case <-timeout.C:
+			logutil.Warnf("wait logtail updated timeout, table ID: %d", tid)
+			timeout.Reset(checkTimeout)
 
 		case <-timer.C:
 			if checkUpdated() {
@@ -581,35 +612,38 @@ func (gs *GlobalStats) updateTableStats(key pb.StatsInfoKey) {
 	var updated bool
 
 	stats := plan2.NewStatsInfo()
-	defer func() {
-		gs.mu.Lock()
-		defer gs.mu.Unlock()
+	if gs.statsUpdater != nil {
+		updated = gs.statsUpdater(key, stats)
+	}
 
-		if updated {
-			gs.mu.statsInfoMap[key] = stats
-			gs.broadcastStats(key)
-		} else if _, ok := gs.mu.statsInfoMap[key]; !ok {
-			gs.mu.statsInfoMap[key] = nil
-		}
+	gs.mu.Lock()
+	defer gs.mu.Unlock()
+	if updated {
+		gs.mu.statsInfoMap[key] = stats
+		gs.broadcastStats(key)
+	} else if _, ok := gs.mu.statsInfoMap[key]; !ok {
+		gs.mu.statsInfoMap[key] = nil
+	}
 
-		// Notify all the waiters to read the new stats info.
-		gs.mu.cond.Broadcast()
+	// Notify all the waiters to read the new stats info.
+	gs.mu.cond.Broadcast()
 
-		gs.doneUpdate(key, updated)
-	}()
+	gs.doneUpdate(key, updated)
+}
 
+func (gs *GlobalStats) doUpdate(key pb.StatsInfoKey, stats *pb.StatsInfo) bool {
 	table := gs.engine.GetLatestCatalogCache().GetTableById(key.AccId, key.DatabaseID, key.TableID)
 	// table or its definition is nil, means that the table is created but not committed yet.
 	if table == nil || table.TableDef == nil {
 		logutil.Errorf("cannot get table by ID %v", key)
-		return
+		return false
 	}
 
 	partitionState := gs.engine.GetOrCreateLatestPart(key.DatabaseID, key.TableID).Snapshot()
 	approxObjectNum := int64(partitionState.ApproxDataObjectsNum())
-	if approxObjectNum == 0 {
+	if gs.approxObjectNumUpdater == nil && approxObjectNum == 0 {
 		// There are no objects flushed yet.
-		return
+		return false
 	}
 
 	// the time used to init stats info is not need to be too precise.
@@ -624,10 +658,10 @@ func (gs *GlobalStats) updateTableStats(key pb.StatsInfoKey) {
 	)
 	if err := UpdateStats(gs.ctx, req, gs.concurrentExecutor); err != nil {
 		logutil.Errorf("failed to init stats info for table %v, err: %v", key, err)
-		return
+		return false
 	}
 	v2.StatsUpdateBlockCounter.Add(float64(stats.BlockNumber))
-	updated = true
+	return true
 }
 
 func getMinMaxValueByFloat64(typ types.Type, buf []byte) float64 {
