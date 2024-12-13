@@ -751,6 +751,7 @@ type DataSource interface {
 		cols []string,
 		types []types.Type,
 		seqNums []uint16,
+		pkSeqNum int32,
 		memFilter any,
 		mp *mpool.MPool,
 		bat *batch.Batch,
@@ -997,6 +998,14 @@ type Engine interface {
 	GetService() string
 
 	LatestLogtailAppliedTime() timestamp.Timestamp
+
+	QueryTableStatsByAccounts(
+		ctx context.Context,
+		wantedStatsIdxes []int,
+		accs []uint64,
+		forceUpdate bool,
+		resetUpdateTime bool,
+	) (statsVals [][]any, retAcc []uint64, err error, ok bool)
 }
 
 type VectorPool interface {
