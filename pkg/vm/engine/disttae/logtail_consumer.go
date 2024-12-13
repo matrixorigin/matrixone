@@ -151,6 +151,8 @@ type PushClient struct {
 	eng         *Engine
 
 	LogtailRPCClientFactory func(string, string, morpc.RPCClient) (morpc.RPCClient, morpc.Stream, error)
+
+	reconnectHandler func()
 }
 
 type delayedCacheApply struct {
@@ -225,7 +227,7 @@ func (c *PushClient) SetSubscribeState(dbId, tblId uint64, state SubscribeState)
 }
 
 func (c *PushClient) IsSubscriberReady() bool {
-	return c.subscriber.ready.Load()
+	return c.subscriber.ready()
 }
 
 func (c *PushClient) IsSubscribed(tblId uint64) bool {
@@ -277,7 +279,7 @@ func (c *PushClient) init(
 	c.serviceID = e.GetService()
 	c.timestampWaiter = timestampWaiter
 	if c.subscriber == nil {
-		c.subscriber = new(logTailSubscriber)
+		c.subscriber = newLogTailSubscriber()
 	}
 
 	// lock all.
@@ -310,6 +312,10 @@ func (c *PushClient) init(
 		serviceAddr,
 		c.LogtailRPCClientFactory,
 	)
+}
+
+func (c *PushClient) SetReconnectHandler(handler func()) {
+	c.reconnectHandler = handler
 }
 
 func (c *PushClient) validLogTailMustApplied(snapshotTS timestamp.Timestamp) {
@@ -615,7 +621,12 @@ func (c *PushClient) receiveLogtails(ctx context.Context, e *Engine) {
 			}
 
 			// Wait for resuming logtail receiver.
-			<-c.resumeC
+			select {
+			case <-ctx.Done():
+				return
+
+			case <-c.resumeC:
+			}
 			logutil.Infof("%s logtail receiver resumed", logTag)
 
 		default:
@@ -824,7 +835,9 @@ func (c *PushClient) connect(ctx context.Context, e *Engine) {
 			c.waitTimestamp()
 
 			if err := c.replayCatalogCache(ctx, e); err != nil {
-				panic(err)
+				c.pause(false)
+				logutil.Errorf("%s replay catalog cache failed, err %v", logTag, err)
+				continue
 			}
 
 			e.setPushClientStatus(true)
@@ -852,9 +865,10 @@ func (c *PushClient) connect(ctx context.Context, e *Engine) {
 		}
 		logutil.Infof("%s %s: client init finished", logTag, c.serviceID)
 
-		// set all the running transaction to be aborted.
-		e.abortAllRunningTxn()
-		logutil.Infof("%s %s: abort all running transactions finished", logTag, c.serviceID)
+		// This is only for test.
+		if c.reconnectHandler != nil {
+			c.reconnectHandler()
+		}
 
 		// clean memory table.
 		err := e.init(ctx)
@@ -897,7 +911,7 @@ func (c *PushClient) UnsubscribeTable(ctx context.Context, dbID, tbID uint64) er
 	if c.subscriber == nil {
 		return moerr.NewInternalErrorf(ctx, "%s cannot unsubscribe table %d-%d as subscriber not initialized", logTag, dbID, tbID)
 	}
-	if !c.subscriber.ready.Load() {
+	if !c.subscriber.ready() {
 		return moerr.NewInternalErrorf(ctx, "%s cannot unsubscribe table %d-%d as logtail subscriber is not ready", logTag, dbID, tbID)
 	}
 	if !c.receivedLogTailTime.ready.Load() {
@@ -941,7 +955,7 @@ func (c *PushClient) unusedTableGCTicker(ctx context.Context) {
 				return
 
 			case <-ticker.C:
-				if !c.subscriber.ready.Load() {
+				if !c.subscriber.ready() {
 					continue
 				}
 				if c.subscriber == nil {
@@ -1072,8 +1086,17 @@ func (c *PushClient) toSubIfUnsubscribed(ctx context.Context, dbId, tblId uint64
 	defer c.subscribed.mutex.Unlock()
 	_, ok := c.subscribed.m[tblId]
 	if !ok {
-		if !c.subscriber.ready.Load() {
-			return Unsubscribed, moerr.NewInternalError(ctx, "log tail subscriber is not ready")
+		if !c.subscriber.ready() {
+			if err := func() error {
+				c.subscribed.mutex.Unlock()
+				defer c.subscribed.mutex.Lock()
+				if err := c.subscriber.waitReady(ctx); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return InvalidSubState, err
+			}
 		}
 		c.subscribed.m[tblId] = SubTableStatus{
 			DBID:     dbId,
@@ -1131,7 +1154,7 @@ func (c *PushClient) loadAndConsumeLatestCkp(
 	}
 	//if unsubscribed, need to subscribe table.
 	if !exist {
-		if !c.subscriber.ready.Load() {
+		if !c.subscriber.ready() {
 			return Unsubscribed, nil, moerr.NewInternalError(ctx, "log tail subscriber is not ready")
 		}
 		c.subscribed.m[tableId] = SubTableStatus{
@@ -1206,7 +1229,7 @@ func (c *PushClient) isNotSubscribing(ctx context.Context, dbId, tblId uint64) (
 		return true, v.SubState, nil
 	}
 	//table is unsubscribed
-	if !c.subscriber.ready.Load() {
+	if !c.subscriber.ready() {
 		return true, Unsubscribed, moerr.NewInternalError(ctx, "log tail subscriber is not ready")
 	}
 	c.subscribed.m[tblId] = SubTableStatus{
@@ -1234,7 +1257,7 @@ func (c *PushClient) isNotUnsubscribing(ctx context.Context, dbId, tblId uint64)
 		}
 	}
 	//table is unsubscribed
-	if !c.subscriber.ready.Load() {
+	if !c.subscriber.ready() {
 		return true, Unsubscribed, moerr.NewInternalError(ctx, "log tail subscriber is not ready")
 	}
 	c.subscribed.m[tblId] = SubTableStatus{
@@ -1354,10 +1377,20 @@ type logTailSubscriber struct {
 	rpcStream     morpc.Stream
 	logTailClient *service.LogtailClient
 
-	ready atomic.Bool
+	mu struct {
+		sync.RWMutex
+		cond  *sync.Cond
+		ready bool
+	}
 
 	sendSubscribe   func(context.Context, api.TableID) error
 	sendUnSubscribe func(context.Context, api.TableID) error
+}
+
+func newLogTailSubscriber() *logTailSubscriber {
+	l := &logTailSubscriber{}
+	l.mu.cond = sync.NewCond(&l.mu)
+	return l
 }
 
 func clientIsPreparing(context.Context, api.TableID) error {
@@ -1453,20 +1486,39 @@ func (s *logTailSubscriber) init(
 
 	s.sendSubscribe = s.subscribeTable
 	s.sendUnSubscribe = s.unSubscribeTable
-	s.ready.Store(false)
+	s.setReady()
 	return nil
 }
 
 func (s *logTailSubscriber) setReady() {
-	if !s.ready.Load() {
-		s.ready.Store(true)
-	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.mu.ready = true
+	s.mu.cond.Broadcast()
 }
 
 func (s *logTailSubscriber) setNotReady() {
-	if s.ready.Load() {
-		s.ready.Store(false)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.mu.ready = false
+}
+
+func (s *logTailSubscriber) ready() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.mu.ready
+}
+
+func (s *logTailSubscriber) waitReady(ctx context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for !s.mu.ready {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		s.mu.cond.Wait()
 	}
+	return nil
 }
 
 // can't call this method directly.
@@ -1788,6 +1840,9 @@ func (c *PushClient) createRoutineToConsumeLogTails(
 		errHappen := false
 		for {
 			select {
+			case <-ctx.Done():
+				return
+
 			case cmd := <-receiver.signalChan:
 				if errHappen {
 					continue

@@ -326,6 +326,7 @@ func updateStorageUsageCache(usages *cmd_util.StorageUsageResp_V3) {
 
 func tryGetSizeFromMTS(
 	ctx context.Context,
+	serviceID string,
 	accIds [][]int64,
 ) (sizes map[int64]uint64, ok bool) {
 
@@ -340,7 +341,7 @@ func tryGetSizeFromMTS(
 		}
 	}
 
-	vals, accs, err, ok = disttae.QueryTableStatsByAccounts(
+	vals, accs, err, ok = getPu(serviceID).StorageEngine.QueryTableStatsByAccounts(
 		ctx,
 		[]int{disttae.TableStatsTableSize},
 		accs,
@@ -385,7 +386,7 @@ func getAccountsStorageUsage(
 			return
 		}
 
-		sizes, ok := tryGetSizeFromMTS(ctx, accIds)
+		sizes, ok := tryGetSizeFromMTS(ctx, ses.service, accIds)
 		if ok {
 			for k, v := range sizes {
 				if len(ret[k]) == 0 {

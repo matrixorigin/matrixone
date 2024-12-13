@@ -358,6 +358,16 @@ func (e *testEngine) LatestLogtailAppliedTime() timestamp.Timestamp {
 	return timestamp.Timestamp{}
 }
 
+func (e *testEngine) QueryTableStatsByAccounts(
+	ctx context.Context,
+	wantedStatsIdxes []int,
+	accs []uint64,
+	forceUpdate bool,
+	resetUpdateTime bool,
+) (statsVals [][]any, retAcc []uint64, err error, ok bool) {
+	return nil, nil, nil, false
+}
+
 func newtestOperator() *testOperator {
 	return &testOperator{}
 }
