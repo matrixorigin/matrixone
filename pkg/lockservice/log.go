@@ -18,13 +18,15 @@ import (
 	"bytes"
 	"encoding/hex"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/common/util"
+
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
 )
 
 func getLogger(sid string) *log.MOLogger {
@@ -42,10 +44,10 @@ func logLocalLock(
 		return
 	}
 
-	if logger.Enabled(zap.DebugLevel) {
+	if logger.Enabled(zap.InfoLevel) {
 		logger.Log(
 			"try to lock on local",
-			getLogOptions(zap.DebugLevel),
+			getLogOptions(zap.InfoLevel),
 			txnField(txn),
 			zap.Uint64("table", tableID),
 			bytesArrayField("rows", rows),
@@ -403,9 +405,9 @@ func logDeadLockFound(
 		return
 	}
 
-	if logger.Enabled(zap.DebugLevel) {
+	if logger.Enabled(zap.InfoLevel) {
 		logger.Log("dead lock found",
-			getLogOptions(zap.DebugLevel),
+			getLogOptions(zap.InfoLevel),
 			zap.String("txn", txn.DebugString()),
 			waitTxnArrayField("wait-txn-list", waiters.waitTxns),
 		)
