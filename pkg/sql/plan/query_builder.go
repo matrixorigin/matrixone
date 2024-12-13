@@ -4102,7 +4102,6 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 			if err != nil {
 				return 0, err
 			}
-
 		}
 
 		var snapshot *Snapshot
