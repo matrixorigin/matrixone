@@ -124,6 +124,61 @@ func init() {
 				},
 			},
 		},
+
+		{
+			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			arg: &Fill{
+				AggIds:   []int32{function.MAX},
+				FillType: plan.Node_NEXT,
+				FillVal: []*plan.Expr{
+					{
+						Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+							Isnull: false,
+							Value: &plan.Literal_I64Val{
+								I64Val: 1,
+							},
+						}},
+						Typ: plan.Type{
+							Id: int32(types.T_int64),
+						},
+					},
+				},
+				OperatorBase: vm.OperatorBase{
+					OperatorInfo: vm.OperatorInfo{
+						Idx:     0,
+						IsFirst: false,
+						IsLast:  false,
+					},
+				},
+			},
+		},
+		{
+			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			arg: &Fill{
+				AggIds:   []int32{function.MAX},
+				FillType: plan.Node_LINEAR,
+				FillVal: []*plan.Expr{
+					{
+						Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+							Isnull: false,
+							Value: &plan.Literal_I64Val{
+								I64Val: 1,
+							},
+						}},
+						Typ: plan.Type{
+							Id: int32(types.T_int64),
+						},
+					},
+				},
+				OperatorBase: vm.OperatorBase{
+					OperatorInfo: vm.OperatorInfo{
+						Idx:     0,
+						IsFirst: false,
+						IsLast:  false,
+					},
+				},
+			},
+		},
 	}
 }
 
@@ -143,6 +198,7 @@ func TestPrepare(t *testing.T) {
 
 func TestFill(t *testing.T) {
 	for _, tc := range tcs {
+		tc.arg.ctr.bats = make([]*batch.Batch, 10)
 		resetChildren(tc.arg)
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
@@ -161,8 +217,9 @@ func TestFill(t *testing.T) {
 }
 
 func resetChildren(arg *Fill) {
-	bat := colexec.MakeMockBatchs()
-	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	bat1 := colexec.MakeMockBatchsWithNullVec1()
+	bat := colexec.MakeMockBatchsWithNullVec()
+	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat1, bat, bat})
 	arg.Children = nil
 	arg.AppendChild(op)
 }

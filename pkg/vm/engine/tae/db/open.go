@@ -96,6 +96,7 @@ func Open(
 		logutil.Info(
 			Phase_Open,
 			zap.Duration("open-tae-cost", time.Since(totalTime)),
+			zap.String("mode", db.GetTxnMode().String()),
 			zap.Error(err),
 		)
 	}()
@@ -127,6 +128,10 @@ func Open(
 	}
 	for _, opt := range dbOpts {
 		opt(db)
+	}
+	txnMode := db.GetTxnMode()
+	if !txnMode.IsValid() {
+		panic(fmt.Sprintf("open-tae: invalid txn mode %s", txnMode))
 	}
 
 	fs := objectio.NewObjectFS(opts.Fs, serviceDir)
@@ -172,7 +177,16 @@ func Open(
 		opts.MaxMessageSize,
 	)
 	txnFactory := txnimpl.TxnFactory(db.Catalog)
-	db.TxnMgr = txnbase.NewTxnManager(txnStoreFactory, txnFactory, db.Opts.Clock)
+	var txnMgrOpts []txnbase.TxnManagerOption
+	switch txnMode {
+	case DBTxnMode_Write:
+		txnMgrOpts = append(txnMgrOpts, txnbase.WithWriteMode)
+	case DBTxnMode_Replay:
+		txnMgrOpts = append(txnMgrOpts, txnbase.WithReplayMode)
+	}
+	db.TxnMgr = txnbase.NewTxnManager(
+		txnStoreFactory, txnFactory, db.Opts.Clock, txnMgrOpts...,
+	)
 	db.LogtailMgr = logtail.NewManager(
 		db.Runtime,
 		int(db.Opts.LogtailCfg.PageSize),
@@ -247,6 +261,8 @@ func Open(
 
 	// Init timed scanner
 	scanner := NewDBScanner(db, nil)
+
+	// w-zr TODO: need to support replay and write mode
 	db.MergeScheduler = merge.NewScheduler(db.Runtime, merge.NewTaskServiceGetter(opts.TaskServiceGetter))
 	scanner.RegisterOp(db.MergeScheduler)
 	db.Wal.Start()
@@ -259,6 +275,8 @@ func Open(
 	// TODO: WithGCInterval requires configuration parameters
 	gc2.SetDeleteTimeout(opts.GCCfg.GCDeleteTimeout)
 	gc2.SetDeleteBatchSize(opts.GCCfg.GCDeleteBatchSize)
+
+	// sjw TODO: cleaner need to support replay and write mode
 	cleaner := gc2.NewCheckpointCleaner(opts.Ctx,
 		opts.SID, fs, db.BGCheckpointRunner,
 		gc2.WithCanGCCacheSize(opts.GCCfg.CacheSize),
