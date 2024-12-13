@@ -19,8 +19,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/stretchr/testify/require"
 )
 
@@ -41,6 +39,7 @@ func TestDiskCleaner_WriteToReplay(t *testing.T) {
 			return nil
 		}),
 		WithProcessFunc(func() (err error) {
+			time.Sleep(time.Millisecond * 2)
 			executeCnt++
 			return nil
 		}),
@@ -53,18 +52,18 @@ func TestDiskCleaner_WriteToReplay(t *testing.T) {
 	require.Equal(t, executeCnt, 0)
 
 	diskCleaner.Start()
-	jobErr := moerr.NewInternalErrorNoCtx("test")
-	noopJob, err := diskCleaner.addJob(
-		context.Background(),
-		JT_GCNoop,
-		func(ctx context.Context) *tasks.JobResult {
-			time.Sleep(time.Millisecond)
-			result := new(tasks.JobResult)
-			result.Err = jobErr
-			return result
-		},
-	)
+	err := diskCleaner.WaitFlushAll(context.Background())
 	require.NoError(t, err)
-	result := noopJob.WaitDone()
-	require.Equal(t, jobErr, result.Err)
+	require.Equal(t, tryGC, 1)
+	require.Equal(t, replayCnt, 1)
+	require.Equal(t, executeCnt, 0)
+
+	err = diskCleaner.GC(context.Background())
+	require.NoError(t, err)
+	err = diskCleaner.WaitFlushAll(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, tryGC, 1)
+	require.Equal(t, replayCnt, 1)
+	require.Equal(t, executeCnt, 1)
+
 }

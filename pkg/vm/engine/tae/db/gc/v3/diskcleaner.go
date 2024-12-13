@@ -105,35 +105,45 @@ func (cleaner *DiskCleaner) SwitchToReplayMode(ctx context.Context) (err error) 
 		err = moerr.NewTxnControlErrorNoCtxf("Bad cleaner state: %d", oldStep)
 		return
 	}
+	now := time.Now()
 	defer func() {
+		logger := logutil.Info
 		// any error occurs, switch back to StateStep_Write
 		if err != nil {
 			cleaner.step.Store(StateStep_Write)
+			logger = logutil.Error
 		}
+		logger(
+			"GC-Switch2Replay",
+			zap.Duration("duration", time.Since(now)),
+			zap.Error(err),
+		)
 	}()
 
 	// the current state is StateStep_Write2Replay
+	if err = cleaner.WaitFlushAll(ctx); err != nil {
+		return
+	}
 
-	var noopJob *tasks.Job
-	noopJob, err = cleaner.addJob(
+	cleaner.step.Store(StateStep_Replay)
+	return
+}
+
+func (cleaner *DiskCleaner) WaitFlushAll(
+	ctx context.Context,
+) (err error) {
+	var job *tasks.Job
+	if job, err = cleaner.addJob(
 		ctx,
 		JT_GCNoop,
 		func(context.Context) *tasks.JobResult {
-			logutil.Info(
-				"GC-SwitchToReplay",
-				zap.String("job", noopJob.String()),
-			)
-			return nil
+			result := new(tasks.JobResult)
+			return result
 		},
-	)
-	if err != nil {
+	); err != nil {
 		return
 	}
-	if result := noopJob.WaitDone(); result.Err != nil {
-		err = result.Err
-		return
-	}
-	cleaner.step.Store(StateStep_Replay)
+	job.WaitDone()
 	return
 }
 
