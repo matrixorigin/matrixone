@@ -257,6 +257,8 @@ type Engine struct {
 	moColumnsCreatedTime  *vector.Vector
 
 	dynamicCtx
+	// for test only.
+	skipConsume bool
 }
 
 func (e *Engine) SetService(svr string) {
