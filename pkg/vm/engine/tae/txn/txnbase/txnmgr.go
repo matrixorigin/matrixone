@@ -260,9 +260,11 @@ func (mgr *TxnManager) GetTxnSkipFlags() TxnSkipFlag {
 }
 
 func (mgr *TxnManager) Init(prevTs types.TS) error {
-	logutil.Infof("init ts to %v", prevTs.ToString())
+	logutil.Info(
+		"TxnManager-Init",
+		zap.String("prev-ts", prevTs.ToString()),
+	)
 	mgr.ts.allocator.SetStart(prevTs)
-	logutil.Debug("[INIT]", TxnMgrField(mgr))
 	return nil
 }
 
@@ -826,16 +828,29 @@ func (mgr *TxnManager) ResetHeartbeat() {
 }
 
 func (mgr *TxnManager) Start(ctx context.Context) {
+	isReplayMode := mgr.IsRelayMode()
+	isWriteMode := mgr.IsWriteMode()
 	mgr.FlushQueue.Start()
 	mgr.PreparingSM.Start()
 	mgr.ResetHeartbeat()
+	logutil.Info(
+		"TxnManager-Started",
+		zap.Bool("is-replay-mode", isReplayMode),
+		zap.Bool("is-write-mode", isWriteMode),
+	)
 }
 
 func (mgr *TxnManager) Stop() {
+	isReplayMode := mgr.IsRelayMode()
+	isWriteMode := mgr.IsWriteMode()
 	mgr.StopHeartbeat()
 	mgr.PreparingSM.Stop()
 	mgr.FlushQueue.Stop()
 	mgr.OnException(sm.ErrClose)
 	mgr.workers.Release()
-	logutil.Info("[Stop]", TxnMgrField(mgr))
+	logutil.Info(
+		"TxnManager-Stopped",
+		zap.Bool("is-replay-mode", isReplayMode),
+		zap.Bool("is-write-mode", isWriteMode),
+	)
 }
