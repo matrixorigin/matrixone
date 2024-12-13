@@ -141,7 +141,7 @@ var (
 
 type Cleaner interface {
 	Replay() error
-	Process()
+	Process() error
 	TryGC() error
 	AddChecker(checker func(item any) bool, key string) int
 	RemoveChecker(key string) error

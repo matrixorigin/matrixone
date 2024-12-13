@@ -1374,7 +1374,7 @@ func (c *checkpointCleaner) DoCheck() error {
 	return nil
 }
 
-func (c *checkpointCleaner) Process() {
+func (c *checkpointCleaner) Process() (err error) {
 	if !c.GCEnabled() {
 		return
 	}
@@ -1386,7 +1386,6 @@ func (c *checkpointCleaner) Process() {
 	startScanWaterMark := c.GetScanWaterMark()
 	startGCWaterMark := c.GetGCWaterMark()
 
-	var err error
 	defer func() {
 		endScanWaterMark := c.GetScanWaterMark()
 		endGCWaterMark := c.GetGCWaterMark()
@@ -1408,9 +1407,8 @@ func (c *checkpointCleaner) Process() {
 	if err = c.tryScanLocked(memoryBuffer); err != nil {
 		return
 	}
-	if err := c.tryGCLocked(memoryBuffer); err != nil {
-		return
-	}
+	err = c.tryGCLocked(memoryBuffer)
+	return
 }
 
 // tryScanLocked scans the incremental checkpoints and tries to create a new GC window

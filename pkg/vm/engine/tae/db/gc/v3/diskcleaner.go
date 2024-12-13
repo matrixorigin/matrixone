@@ -180,7 +180,7 @@ func (cleaner *DiskCleaner) doExecute() (err error) {
 			cleaner.replayError.Store(nil)
 		}
 	}
-	cleaner.cleaner.Process()
+	err = cleaner.cleaner.Process()
 	return
 }
 
