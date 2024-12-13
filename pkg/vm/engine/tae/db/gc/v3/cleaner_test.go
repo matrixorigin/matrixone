@@ -16,9 +16,11 @@ package gc
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/stretchr/testify/require"
 )
 
@@ -66,4 +68,33 @@ func TestDiskCleaner_WriteToReplay(t *testing.T) {
 	require.Equal(t, replayCnt, 1)
 	require.Equal(t, executeCnt, 1)
 
+	var wg sync.WaitGroup
+	wg.Add(1)
+
+	WithProcessFunc(func() (err error) {
+		wg.Wait()
+		executeCnt++
+		return nil
+	})(&cleaner)
+
+	err = diskCleaner.GC(context.Background())
+	require.NoError(t, err)
+	go func() {
+		time.Sleep(time.Millisecond * 2)
+		wg.Done()
+	}()
+
+	err = diskCleaner.SwitchToReplayMode(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, executeCnt, 2)
+	require.True(t, diskCleaner.IsReplayMode())
+
+	WithProcessFunc(func() (err error) {
+		executeCnt++
+		return nil
+	})(&cleaner)
+
+	err = diskCleaner.GC(context.Background())
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnControl))
 }
