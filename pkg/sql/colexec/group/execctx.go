@@ -298,6 +298,11 @@ func (r *GroupResultNoneBlock) getResultBatch(
 		} else {
 			r.res.Aggs = make([]aggexec.AggFuncExec, len(aExpressions))
 		}
+
+		for i := range r.res.Vecs {
+			r.res.Vecs[i].ResetWithSameType()
+		}
+		r.res.SetRowCount(0)
 	}
 
 	// set agg.
@@ -311,7 +316,6 @@ func (r *GroupResultNoneBlock) getResultBatch(
 			}
 		}
 	}
-
 	return r.res, nil
 }
 

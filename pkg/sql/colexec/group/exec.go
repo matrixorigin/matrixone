@@ -452,6 +452,7 @@ func (group *Group) consumeBatchToGetIntermediateResult(
 						return nil, err
 					}
 				}
+				res.AddRowCount(cnt)
 			}
 
 			for j, ag := range res.Aggs {
