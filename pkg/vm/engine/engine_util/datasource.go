@@ -61,6 +61,7 @@ func (rs *RemoteDataSource) Next(
 	_ []string,
 	_ []types.Type,
 	seqNums []uint16,
+	_ int32,
 	_ any,
 	_ *mpool.MPool,
 	_ *batch.Batch,
