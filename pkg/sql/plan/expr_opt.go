@@ -221,6 +221,11 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 		},
 	}
 
+	compositePKFilterSel := 1.0
+	for i := range filterIdx {
+		compositePKFilterSel *= (filters[filterIdx[i]]).Selectivity
+	}
+
 	lastFilter := filters[filterIdx[len(filterIdx)-1]]
 	if lastFilter.GetF().Func.ObjName == "in" {
 		serialArgs := make([]*plan.Expr, len(filterIdx)-1)
@@ -269,6 +274,7 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 			rightArg,
 		})
 	}
+	compositePKFilter.Selectivity = compositePKFilterSel
 
 	hitFilterSet := make(map[int]bool)
 	for i := range filterIdx {
