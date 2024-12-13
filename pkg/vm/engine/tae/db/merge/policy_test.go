@@ -50,7 +50,7 @@ func newSortedDataEntryWithTableEntry(t *testing.T, tbl *catalog.TableEntry, txn
 	zm := index.NewZM(types.T_int32, 0)
 	index.UpdateZM(zm, types.EncodeInt32(&v1))
 	index.UpdateZM(zm, types.EncodeInt32(&v2))
-	stats := objectio.NewObjectStats()
+	stats := objectio.NewObjectStatsWithObjectID(objectio.NewObjectid(), false, true, false)
 	require.NoError(t, objectio.SetObjectStatsSortKeyZoneMap(stats, zm))
 	require.NoError(t, objectio.SetObjectStatsOriginSize(stats, size))
 	require.NoError(t, objectio.SetObjectStatsRowCnt(stats, 2))

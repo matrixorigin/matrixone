@@ -513,17 +513,17 @@ func NewBaseHandler(state *PartitionState, changesHandle *ChangeHandler, start, 
 	}
 	var iter btree.IterG[ObjectEntry]
 	if tombstone {
-		iter = state.tombstoneObjectsNameIndex.Copy().Iter()
+		iter = state.tombstoneObjectsNameIndex.Iter()
 	} else {
-		iter = state.dataObjectsNameIndex.Copy().Iter()
+		iter = state.dataObjectsNameIndex.Iter()
 	}
 	defer iter.Release()
 	if tombstone {
-		dataIter := state.dataObjectsNameIndex.Copy().Iter()
+		dataIter := state.dataObjectsNameIndex.Iter()
 		p.fillInSkipTS(dataIter, start, end)
 		dataIter.Release()
 	}
-	rowIter := state.rows.Copy().Iter()
+	rowIter := state.rows.Iter()
 	defer rowIter.Release()
 	p.inMemoryHandle = p.newBatchHandleWithRowIterator(ctx, rowIter, start, end, tombstone, mp)
 	aobj, cnObj := p.getObjectEntries(iter, start, end)

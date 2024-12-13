@@ -51,6 +51,8 @@ import (
 
 const (
 	WALDir = "wal"
+
+	Phase_Open = "open-tae"
 )
 
 func fillRuntimeOptions(opts *options.Options) {
@@ -78,9 +80,9 @@ func Open(
 	dbLocker, err := createDBLock(dirname)
 
 	logutil.Info(
-		"open-tae",
-		common.OperationField("Start"),
-		common.OperandField("open"),
+		Phase_Open,
+		zap.String("db-dirname", dirname),
+		zap.Error(err),
 	)
 	totalTime := time.Now()
 
@@ -92,10 +94,10 @@ func Open(
 			dbLocker.Close()
 		}
 		logutil.Info(
-			"open-tae", common.OperationField("End"),
-			common.OperandField("open"),
-			common.AnyField("cost", time.Since(totalTime)),
-			common.AnyField("err", err),
+			Phase_Open,
+			zap.Duration("open-tae-cost", time.Since(totalTime)),
+			zap.String("mode", db.GetTxnMode().String()),
+			zap.Error(err),
 		)
 	}()
 
@@ -105,10 +107,9 @@ func Open(
 	wbuf := &bytes.Buffer{}
 	werr := toml.NewEncoder(wbuf).Encode(opts)
 	logutil.Info(
-		"open-tae",
-		common.OperationField("Config"),
-		common.AnyField("toml", wbuf.String()),
-		common.ErrorField(werr),
+		Phase_Open,
+		zap.String("config", wbuf.String()),
+		zap.Error(werr),
 	)
 	serviceDir := path.Join(dirname, "data")
 	if opts.Fs == nil {
@@ -127,6 +128,10 @@ func Open(
 	}
 	for _, opt := range dbOpts {
 		opt(db)
+	}
+	txnMode := db.GetTxnMode()
+	if !txnMode.IsValid() {
+		panic(fmt.Sprintf("open-tae: invalid txn mode %s", txnMode))
 	}
 
 	fs := objectio.NewObjectFS(opts.Fs, serviceDir)
@@ -172,7 +177,16 @@ func Open(
 		opts.MaxMessageSize,
 	)
 	txnFactory := txnimpl.TxnFactory(db.Catalog)
-	db.TxnMgr = txnbase.NewTxnManager(txnStoreFactory, txnFactory, db.Opts.Clock)
+	var txnMgrOpts []txnbase.TxnManagerOption
+	switch txnMode {
+	case DBTxnMode_Write:
+		txnMgrOpts = append(txnMgrOpts, txnbase.WithWriteMode)
+	case DBTxnMode_Replay:
+		txnMgrOpts = append(txnMgrOpts, txnbase.WithReplayMode)
+	}
+	db.TxnMgr = txnbase.NewTxnManager(
+		txnStoreFactory, txnFactory, db.Opts.Clock, txnMgrOpts...,
+	)
 	db.LogtailMgr = logtail.NewManager(
 		db.Runtime,
 		int(db.Opts.LogtailCfg.PageSize),
@@ -205,7 +219,7 @@ func Open(
 	}
 
 	// 1. replay three tables objectlist
-	checkpointed, ckpLSN, valid, err := ckpReplayer.ReplayThreeTablesObjectlist()
+	checkpointed, ckpLSN, valid, err := ckpReplayer.ReplayThreeTablesObjectlist(Phase_Open)
 	if err != nil {
 		panic(err)
 	}
@@ -219,20 +233,18 @@ func Open(
 		store.BindTxn(txn)
 	}
 	// 2. replay all table Entries
-	if err = ckpReplayer.ReplayCatalog(txn); err != nil {
+	if err = ckpReplayer.ReplayCatalog(txn, Phase_Open); err != nil {
 		panic(err)
 	}
 
 	// 3. replay other tables' objectlist
-	if err = ckpReplayer.ReplayObjectlist(); err != nil {
+	if err = ckpReplayer.ReplayObjectlist(Phase_Open); err != nil {
 		panic(err)
 	}
 	logutil.Info(
-		"open-tae",
-		common.OperationField("replay"),
-		common.OperandField("checkpoints"),
-		common.AnyField("cost", time.Since(now)),
-		common.AnyField("checkpointed", checkpointed.ToString()),
+		Phase_Open,
+		zap.Duration("replay-checkpoints-cost", time.Since(now)),
+		zap.String("max-checkpoint", checkpointed.ToString()),
 	)
 
 	now = time.Now()
@@ -241,16 +253,16 @@ func Open(
 
 	// checkObjectState(db)
 	logutil.Info(
-		"open-tae",
-		common.OperationField("replay"),
-		common.OperandField("wal"),
-		common.AnyField("cost", time.Since(now)),
+		Phase_Open,
+		zap.Duration("replay-wal-cost", time.Since(now)),
 	)
 
 	db.DBLocker, dbLocker = dbLocker, nil
 
 	// Init timed scanner
 	scanner := NewDBScanner(db, nil)
+
+	// w-zr TODO: need to support replay and write mode
 	db.MergeScheduler = merge.NewScheduler(db.Runtime, merge.NewTaskServiceGetter(opts.TaskServiceGetter))
 	scanner.RegisterOp(db.MergeScheduler)
 	db.Wal.Start()
@@ -263,6 +275,8 @@ func Open(
 	// TODO: WithGCInterval requires configuration parameters
 	gc2.SetDeleteTimeout(opts.GCCfg.GCDeleteTimeout)
 	gc2.SetDeleteBatchSize(opts.GCCfg.GCDeleteBatchSize)
+
+	// sjw TODO: cleaner need to support replay and write mode
 	cleaner := gc2.NewCheckpointCleaner(opts.Ctx,
 		opts.SID, fs, db.BGCheckpointRunner,
 		gc2.WithCanGCCacheSize(opts.GCCfg.CacheSize),
@@ -281,9 +295,9 @@ func Open(
 	db.DiskCleaner = gc2.NewDiskCleaner(cleaner)
 	db.DiskCleaner.Start()
 
-	db.GCJobs = tasks.NewCancelableJobs()
+	db.CronJobs = tasks.NewCancelableJobs()
 
-	db.GCJobs.AddJob(
+	db.CronJobs.AddJob(
 		"GC-Transfer-Table",
 		opts.CheckpointCfg.TransferInterval,
 		func(ctx context.Context) {
@@ -293,7 +307,7 @@ func Open(
 		},
 		1,
 	)
-	db.GCJobs.AddJob(
+	db.CronJobs.AddJob(
 		"GC-Disk",
 		opts.GCCfg.ScanGCInterval,
 		func(ctx context.Context) {
@@ -301,7 +315,7 @@ func Open(
 		},
 		1,
 	)
-	db.GCJobs.AddJob(
+	db.CronJobs.AddJob(
 		"GC-Checkpoint",
 		opts.CheckpointCfg.GCCheckpointInterval,
 		func(ctx context.Context) {
@@ -321,7 +335,7 @@ func Open(
 		},
 		1,
 	)
-	db.GCJobs.AddJob(
+	db.CronJobs.AddJob(
 		"GC-Catalog-Cache",
 		opts.CatalogCfg.GCInterval,
 		func(ctx context.Context) {
@@ -336,7 +350,7 @@ func Open(
 		},
 		1,
 	)
-	db.GCJobs.AddJob(
+	db.CronJobs.AddJob(
 		"GC-Logtail",
 		opts.CheckpointCfg.GCCheckpointInterval,
 		func(ctx context.Context) {
@@ -349,7 +363,7 @@ func Open(
 		},
 		1,
 	)
-	db.GCJobs.AddJob(
+	db.CronJobs.AddJob(
 		"GC-LockMerge",
 		options.DefaultLockMergePruneInterval,
 		func(ctx context.Context) {
@@ -358,8 +372,17 @@ func Open(
 		1,
 	)
 
+	db.CronJobs.AddJob(
+		"REPORT-MPOOL-STATS",
+		time.Second*10,
+		func(ctx context.Context) {
+			mpoolAllocatorSubTask()
+		},
+		1,
+	)
+
 	if opts.CheckpointCfg.MetadataCheckInterval != 0 {
-		db.GCJobs.AddJob(
+		db.CronJobs.AddJob(
 			"META-CHECK",
 			opts.CheckpointCfg.MetadataCheckInterval,
 			func(ctx context.Context) {
@@ -371,8 +394,6 @@ func Open(
 
 	db.Controller = NewController(db)
 	db.Controller.Start()
-
-	go TaeMetricsTask(ctx)
 
 	// For debug or test
 	//fmt.Println(db.Catalog.SimplePPString(common.PPL3))
@@ -390,22 +411,6 @@ func Open(
 // 	}
 // 	db.Catalog.RecurLoop(p)
 // }
-
-func TaeMetricsTask(ctx context.Context) {
-	logutil.Info("tae metrics task started")
-	defer logutil.Info("tae metrics task exit")
-
-	timer := time.NewTicker(time.Second * 10)
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-timer.C:
-			mpoolAllocatorSubTask()
-		}
-	}
-
-}
 
 func mpoolAllocatorSubTask() {
 	v2.MemTAEDefaultAllocatorGauge.Set(float64(common.DefaultAllocator.CurrNB()))
