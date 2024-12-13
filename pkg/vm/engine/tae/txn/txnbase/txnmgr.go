@@ -211,7 +211,7 @@ func (mgr *TxnManager) ToWriteMode() {
 	mgr.ResetHeartbeat()
 }
 
-func (mgr *TxnManager) IsRelayMode() bool {
+func (mgr *TxnManager) IsReplayMode() bool {
 	skipFlags := mgr.GetTxnSkipFlags()
 	if skipFlags&TxnFlag_Replay == 0 && skipFlags&TxnFlag_Normal != 0 && skipFlags&TxnFlag_Heartbeat != 0 {
 		return true
@@ -828,7 +828,7 @@ func (mgr *TxnManager) ResetHeartbeat() {
 }
 
 func (mgr *TxnManager) Start(ctx context.Context) {
-	isReplayMode := mgr.IsRelayMode()
+	isReplayMode := mgr.IsReplayMode()
 	isWriteMode := mgr.IsWriteMode()
 	mgr.FlushQueue.Start()
 	mgr.PreparingSM.Start()
@@ -841,7 +841,7 @@ func (mgr *TxnManager) Start(ctx context.Context) {
 }
 
 func (mgr *TxnManager) Stop() {
-	isReplayMode := mgr.IsRelayMode()
+	isReplayMode := mgr.IsReplayMode()
 	isWriteMode := mgr.IsWriteMode()
 	mgr.StopHeartbeat()
 	mgr.PreparingSM.Stop()

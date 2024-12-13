@@ -113,6 +113,14 @@ func (db *DB) GetTxnMode() DBTxnMode {
 	return DBTxnMode(db.TxnMode.Load())
 }
 
+func (db *DB) IsReplayMode() bool {
+	return db.GetTxnMode() == DBTxnMode_Replay
+}
+
+func (db *DB) IsWriteMode() bool {
+	return db.GetTxnMode() == DBTxnMode_Write
+}
+
 func (db *DB) SwitchTxnMode(
 	ctx context.Context,
 	iarg int,
