@@ -90,7 +90,7 @@ func (back *backExec) Exec(ctx context.Context, sql string) error {
 	}
 	ctx = perfcounter.AttachBackgroundExecutorKey(ctx)
 
-	_, err := defines.GetAccountId(ctx)
+	accountId, err := defines.GetAccountId(ctx)
 	if err != nil {
 		return err
 	}
@@ -137,6 +137,7 @@ func (back *backExec) Exec(ctx context.Context, sql string) error {
 	userInput := &UserInput{
 		sql:       sql,
 		isRestore: isRestore,
+		opAccount: accountId,
 	}
 	execCtx := ExecCtx{
 		reqCtx: ctx,
