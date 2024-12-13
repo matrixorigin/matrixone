@@ -153,7 +153,7 @@ func (mergeGroup *MergeGroup) consumeBatch(proc *process.Process, b *batch.Batch
 	}
 
 	if mergeGroup.ctr.result.IsEmpty() {
-		mergeGroup.ctr.result.InitWithBatch(aggexec.GetChunkSizeOfAggregator(b.Aggs[0]), b.Aggs, b)
+		mergeGroup.ctr.result.InitWithBatch(aggexec.SyncAggregatorsChunkSize(b.Vecs, b.Aggs, false), b.Aggs, b)
 		b.Aggs = nil
 	}
 

@@ -50,6 +50,18 @@ var blockCapacityMap = map[int]int{
 	128: blockCapacityFor128Byte,
 }
 
+// GetChunkSizeFromType return the chunk size for the input type.
+// This chunk size ensures that each chunk with this type does not exceed 1 GB of memory.
+func GetChunkSizeFromType(typ types.Type) (s int) {
+	s = blockCapacityForStrType
+	if !typ.IsVarlen() {
+		if newCap, ok := blockCapacityMap[s]; ok {
+			s = newCap
+		}
+	}
+	return s
+}
+
 type SplitResult interface {
 	getChunkSize() int
 	modifyChunkSize(int2 int)
@@ -283,13 +295,7 @@ func (r *optSplitResult) init(
 
 	r.optInformation.doesThisNeedEmptyList = needEmptyList
 	r.optInformation.shouldSetNullToEmptyGroup = needEmptyList
-
-	r.optInformation.chunkSize = blockCapacityForStrType
-	if !typ.IsVarlen() {
-		if newCap, ok := blockCapacityMap[typ.TypeSize()]; ok {
-			r.optInformation.chunkSize = newCap
-		}
-	}
+	r.optInformation.chunkSize = GetChunkSizeFromType(typ)
 
 	r.resultList = append(r.resultList, vector.NewOffHeapVecWithType(typ))
 	if needEmptyList {

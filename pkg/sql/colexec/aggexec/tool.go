@@ -78,14 +78,14 @@ func FromD64ToD128(v types.Decimal64) types.Decimal128 {
 	return k
 }
 
-func ModifyChunkSizeOfAggregator(a AggFuncExec, n int) {
+func modifyChunkSizeOfAggregator(a AggFuncExec, n int) {
 	r := a.GetOptResult()
 	if r != nil {
 		r.modifyChunkSize(n)
 	}
 }
 
-func GetChunkSizeOfAggregator(a AggFuncExec) int {
+func getChunkSizeOfAggregator(a AggFuncExec) int {
 	r := a.GetOptResult()
 	if r != nil {
 		return r.getChunkSize()
@@ -93,21 +93,22 @@ func GetChunkSizeOfAggregator(a AggFuncExec) int {
 	return math.MaxInt64
 }
 
-// SyncAggregatorsChunkSize sync all aggregator with their min chunk size.
-func SyncAggregatorsChunkSize(as []AggFuncExec) (syncLimit int) {
-	if len(as) == 0 {
-		return math.MaxInt64
+func SyncAggregatorsChunkSize(outer []*vector.Vector, as []AggFuncExec, doSync bool) (syncLimit int) {
+	m := math.MaxInt64
+	for _, o := range outer {
+		if s := GetChunkSizeFromType(*o.GetType()); s < m {
+			m = s
+		}
+	}
+	for _, a := range as {
+		if s := getChunkSizeOfAggregator(a); s < m {
+			m = s
+		}
 	}
 
-	m := GetChunkSizeOfAggregator(as[0])
-	if len(as) > 1 {
-		for i := 1; i < len(as); i++ {
-			if s := GetChunkSizeOfAggregator(as[i]); s < m {
-				m = s
-			}
-		}
+	if doSync {
 		for i := range as {
-			ModifyChunkSizeOfAggregator(as[i], m)
+			modifyChunkSizeOfAggregator(as[i], m)
 		}
 	}
 	return m
