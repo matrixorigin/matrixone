@@ -19,6 +19,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math"
+	"sort"
 	"sync"
 	"time"
 
@@ -450,13 +451,13 @@ func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
 
 	//offset < 0 indicates commit.
 	if offset < 0 {
-		if txn.approximateInMemInsertSize < txn.engine.config.workspaceThreshold &&
+		if txn.approximateInMemInsertSize < txn.commitWorkspaceThreshold &&
 			txn.approximateInMemInsertCnt < txn.engine.config.insertEntryMaxCount &&
 			txn.approximateInMemDeleteCnt < txn.engine.config.insertEntryMaxCount {
 			return nil
 		}
 	} else {
-		if txn.approximateInMemInsertSize < txn.engine.config.workspaceThreshold {
+		if txn.approximateInMemInsertSize < txn.writeWorkspaceThreshold {
 			return nil
 		}
 	}
@@ -478,7 +479,7 @@ func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
 				size += uint64(txn.writes[i].bat.Size())
 			}
 		}
-		if size < txn.engine.config.workspaceThreshold {
+		if size < txn.writeWorkspaceThreshold {
 			return nil
 		}
 		size = 0
@@ -516,10 +517,46 @@ func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
 }
 
 func (txn *Transaction) dumpInsertBatchLocked(ctx context.Context, offset int, size *uint64, pkCount *int) error {
+	tbSize := make(map[uint64]uint64)
+	skipTable := make(map[uint64]bool)
+
+	for i := offset; i < len(txn.writes); i++ {
+		if txn.writes[i].isCatalog() {
+			continue
+		}
+		if txn.writes[i].bat == nil || txn.writes[i].bat.RowCount() == 0 {
+			continue
+		}
+		if txn.writes[i].typ == INSERT && txn.writes[i].fileName == "" {
+			tbSize[txn.writes[i].tableId] += uint64(txn.writes[i].bat.Size())
+		}
+	}
+
+	keys := make([]uint64, 0, len(tbSize))
+	for k := range tbSize {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		return tbSize[keys[i]] < tbSize[keys[j]]
+	})
+	sum := uint64(0)
+	for _, k := range keys {
+		if sum+tbSize[k] > txn.writeWorkspaceThreshold {
+			break
+		}
+		sum += tbSize[k]
+		skipTable[k] = true
+	}
+
 	lastWritesIndex := offset
 	writes := txn.writes
 	mp := make(map[tableKey][]*batch.Batch)
 	for i := offset; i < len(txn.writes); i++ {
+		if skipTable[txn.writes[i].tableId] {
+			writes[lastWritesIndex] = writes[i]
+			lastWritesIndex++
+			continue
+		}
 		if txn.writes[i].isCatalog() {
 			writes[lastWritesIndex] = writes[i]
 			lastWritesIndex++
@@ -1474,6 +1511,9 @@ func (txn *Transaction) CloneSnapshotWS() client.Workspace {
 		cnBlkId_Pos:     map[types.Blockid]Pos{},
 		batchSelectList: make(map[*batch.Batch][]int64),
 		cn_flushed_s3_tombstone_object_stats_list: new(sync.Map),
+
+		commitWorkspaceThreshold: txn.commitWorkspaceThreshold,
+		writeWorkspaceThreshold:  txn.writeWorkspaceThreshold,
 	}
 
 	ws.readOnly.Store(true)
