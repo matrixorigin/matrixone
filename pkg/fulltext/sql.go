@@ -40,7 +40,71 @@ func GenJoinPlusSql(p *Pattern, mode int64, idxtbl string, joinsql []*SqlNode, i
 // JOIN node
 func GenJoinSql(p *Pattern, mode int64, idxtbl string, joinsql []*SqlNode, isJoin bool) ([]*SqlNode, error) {
 
-	return nil, nil
+	var sql string
+	var keywords []string
+	var indexes []int32
+	tables := make([]string, 0)
+
+	sqlnode := &SqlNode{IsJoin: true, Index: p.Index}
+	idx := p.Index
+	subidx := 0
+
+	keywords, indexes = GetTextFromPattern(p, keywords, indexes)
+
+	for _, kw := range keywords {
+		alias := fmt.Sprintf("t%d%d", idx, subidx)
+		if len(joinsql) == 0 {
+			sql = fmt.Sprintf("%s AS (SELECT doc_id FROM %s WHERE word = '%s')", alias, idxtbl, kw)
+		} else {
+			sql = fmt.Sprintf("%s AS (SELECT %s.doc_id FROM %s as %s, %s WHERE %s.doc_id = %s.doc_id AND word = '%s')",
+				alias, alias, idxtbl, alias, joinsql[0].Label, joinsql[0].Label, alias, kw)
+		}
+		sqlnode.Children = append(sqlnode.Children, &SqlNode{Index: idx, Label: alias, IsJoin: isJoin, Sql: sql})
+		tables = append(tables, alias)
+		subidx++
+	}
+
+	keywords = keywords[:0]
+	indexes = indexes[:0]
+	keywords, indexes = GetStarFromPattern(p, keywords, indexes)
+
+	for _, kw := range keywords {
+		alias := fmt.Sprintf("t%d%d", idx, subidx)
+		if kw[len(kw)-1] != '*' {
+			return nil, moerr.NewInternalErrorNoCtx("wildcard search without character *")
+		}
+		prefix := kw[0 : len(kw)-1]
+		if len(joinsql) == 0 {
+			sql = fmt.Sprintf("%s AS (SELECT doc_id, CAST(%d as int) FROM %s WHERE prefix_eq(word,'%s'))", alias, idx, idxtbl, prefix)
+		} else {
+			sql = fmt.Sprintf("%s AS (SELECT %s.doc_id, CAST(%d as int) FROM %s as %s, %s WHERE %s.doc_id = %s.doc_id AND prefix_eq(word, '%s'))",
+				alias, alias, idx, idxtbl, alias, joinsql[0].Label, joinsql[0].Label, alias, prefix)
+		}
+		sqlnode.Children = append(sqlnode.Children, &SqlNode{Index: idx, Label: alias, IsJoin: isJoin, Sql: sql})
+		tables = append(tables, alias)
+		subidx++
+	}
+
+	oncond := make([]string, 0, len(sqlnode.Children)-1)
+	for i := range tables {
+		if i > 0 {
+			oncond = append(oncond, fmt.Sprintf("%s.doc_id = %s.doc_id", tables[0], tables[i]))
+		}
+	}
+
+	label := fmt.Sprintf("t%d", p.Index)
+	sql = fmt.Sprintf("%s AS (SELECT %s.doc_id FROM %s WHERE %s)", label, tables[0], strings.Join(tables, ", "),
+		strings.Join(oncond, " AND "))
+	sqlnode.Children = append(sqlnode.Children, &SqlNode{Index: idx, Label: label, IsJoin: isJoin, Sql: sql})
+
+	sqlnode.Sql = fmt.Sprintf("SELECT %s.doc_id, CAST(%d as int) FROM %s", label, sqlnode.Index, label)
+	sqlnode.Label = label
+
+	fmt.Printf("GEN SQL %s\n", sqlnode.Sql)
+	for _, ss := range sqlnode.Children {
+		fmt.Printf("SUBSQL %s\n", ss.Sql)
+	}
+	return []*SqlNode{sqlnode}, nil
 }
 
 func GenSql(p *Pattern, mode int64, idxtbl string, joinsql []*SqlNode, isJoin bool) ([]*SqlNode, error) {
@@ -65,8 +129,8 @@ func GenSql(p *Pattern, mode int64, idxtbl string, joinsql []*SqlNode, isJoin bo
 		if len(joinsql) == 0 {
 			sql = fmt.Sprintf("SELECT doc_id, CAST(%d as int) FROM %s WHERE word = '%s'", idx, idxtbl, kw)
 		} else {
-			sql = fmt.Sprintf("SELECT doc_id, CAST(%d as int) FROM %s as %s, %s WHERE %s.doc_id = %s.doc AND word = '%s'",
-				idx, idxtbl, alias, joinsql[0].Label, joinsql[0].Label, alias, kw)
+			sql = fmt.Sprintf("SELECT %s.doc_id, CAST(%d as int) FROM %s as %s, %s WHERE %s.doc_id = %s.doc_id AND %s.word = '%s'",
+				joinsql[0].Label, idx, idxtbl, alias, joinsql[0].Label, joinsql[0].Label, alias, alias, kw)
 		}
 		sqls = append(sqls, &SqlNode{Index: idx, Label: alias, IsJoin: isJoin, Sql: sql})
 	}
@@ -86,12 +150,15 @@ func GenSql(p *Pattern, mode int64, idxtbl string, joinsql []*SqlNode, isJoin bo
 		if len(joinsql) == 0 {
 			sql = fmt.Sprintf("SELECT doc_id, CAST(%d as int) FROM %s WHERE prefix_eq(word,'%s')", idx, idxtbl, prefix)
 		} else {
-			sql = fmt.Sprintf("SELECT doc_id, CAST(%d as int) FROM %s as %s, %s WHERE %s.doc_id = %s.doc AND prefix_eq(word, '%s')",
-				idx, idxtbl, alias, joinsql[0].Label, joinsql[0].Label, alias, prefix)
+			sql = fmt.Sprintf("SELECT %s.doc_id, CAST(%d as int) FROM %s as %s, %s WHERE %s.doc_id = %s.doc_id AND prefix_eq(%s.word, '%s')",
+				joinsql[0].Label, idx, idxtbl, alias, joinsql[0].Label, joinsql[0].Label, alias, alias, prefix)
 		}
 		sqls = append(sqls, &SqlNode{Index: idx, Label: alias, IsJoin: isJoin, Sql: sql})
 	}
 
+	for _, s := range sqls {
+		fmt.Printf("GEN SQL %s\n", s.Sql)
+	}
 	return sqls, nil
 }
 
@@ -102,8 +169,10 @@ func SqlBoolean(ps []*Pattern, mode int64, idxtbl string) (string, error) {
 	var sqls []*SqlNode
 	// check JOIN
 
+	fmt.Println("SQL BOOLEABN")
 	if len(ps) == 1 {
 		if ps[0].Operator == JOIN {
+			fmt.Println("JOIN...")
 			join, err = GenSql(ps[0], mode, idxtbl, nil, true)
 			if err != nil {
 				return "", err
@@ -119,6 +188,7 @@ func SqlBoolean(ps []*Pattern, mode int64, idxtbl string) (string, error) {
 	} else {
 		startidx := 0
 		if ps[0].Operator == JOIN {
+			fmt.Println("JOIN..JOIN.")
 			join, err = GenSql(ps[0], mode, idxtbl, nil, true)
 			if err != nil {
 				return "", err
@@ -150,7 +220,23 @@ func SqlBoolean(ps []*Pattern, mode int64, idxtbl string) (string, error) {
 
 	// generate final sql
 
-	return "", nil
+	subsql := make([]string, 0)
+	union := make([]string, 0)
+
+	for _, s := range sqls {
+		union = append(union, s.Sql)
+		for _, c := range s.Children {
+			subsql = append(subsql, c.Sql)
+		}
+	}
+
+	ret := "WITH "
+	ret += strings.Join(subsql, ", ")
+	ret += " "
+	ret += strings.Join(union, " UNION ALL ")
+
+	fmt.Sprintf("BOOLEAN %s\n", ret)
+	return ret, nil
 }
 
 func SqlNL(ps []*Pattern, mode int64, idxtbl string) (string, error) {
