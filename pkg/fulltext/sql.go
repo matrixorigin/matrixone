@@ -31,14 +31,55 @@ type SqlNode struct {
 	Children []*SqlNode
 }
 
-// PLUS node as JOIN
-func GenJoinPlusSql(p *Pattern, mode int64, idxtbl string, joinsql []*SqlNode, isJoin bool) ([]*SqlNode, error) {
+// PLUS node as JOIN.  Index is from TEXT/STAR node
+func GenJoinPlusSql(p *Pattern, mode int64, idxtbl string) ([]*SqlNode, error) {
 
-	return nil, nil
+	var sql string
+	var keywords []string
+	var indexes []int32
+	tables := make([]string, 0)
+
+	sqlnode := &SqlNode{IsJoin: true, Index: p.Index}
+
+	keywords, indexes = GetTextFromPattern(p, keywords, indexes)
+
+	for i, kw := range keywords {
+		alias := fmt.Sprintf("t%d", indexes[i])
+		sql = fmt.Sprintf("%s AS (SELECT doc_id FROM %s WHERE word = '%s')", alias, idxtbl, kw)
+		sqlnode.Children = append(sqlnode.Children, &SqlNode{Index: indexes[i], Label: alias, IsJoin: true, Sql: sql})
+		sqlnode.Index = indexes[i]
+		tables = append(tables, alias)
+	}
+
+	keywords = keywords[:0]
+	indexes = indexes[:0]
+	keywords, indexes = GetStarFromPattern(p, keywords, indexes)
+
+	for i, kw := range keywords {
+		alias := fmt.Sprintf("t%d", indexes[i])
+		if kw[len(kw)-1] != '*' {
+			return nil, moerr.NewInternalErrorNoCtx("wildcard search without character *")
+		}
+		prefix := kw[0 : len(kw)-1]
+		sql = fmt.Sprintf("%s AS (SELECT doc_id, CAST(%d as int) FROM %s WHERE prefix_eq(word,'%s'))", alias, indexes[i], idxtbl, prefix)
+		sqlnode.Children = append(sqlnode.Children, &SqlNode{Index: indexes[i], Label: alias, IsJoin: true, Sql: sql})
+		sqlnode.Index = indexes[i]
+		tables = append(tables, alias)
+	}
+
+	sqlnode.Sql = fmt.Sprintf("SELECT %s.doc_id, CAST(%d as int) FROM %s", tables[0], sqlnode.Index, tables[0])
+	sqlnode.Label = tables[0]
+
+	fmt.Printf("GEN SQL %s\n", sqlnode.Sql)
+	for _, ss := range sqlnode.Children {
+		fmt.Printf("SUBSQL %s\n", ss.Sql)
+	}
+	return []*SqlNode{sqlnode}, nil
+
 }
 
-// JOIN node
-func GenJoinSql(p *Pattern, mode int64, idxtbl string, joinsql []*SqlNode, isJoin bool) ([]*SqlNode, error) {
+// JOIN node.  Index is from JOIN node.  Index of TEXT/STAR is invalid
+func GenJoinSql(p *Pattern, mode int64, idxtbl string) ([]*SqlNode, error) {
 
 	var sql string
 	var keywords []string
@@ -53,13 +94,8 @@ func GenJoinSql(p *Pattern, mode int64, idxtbl string, joinsql []*SqlNode, isJoi
 
 	for _, kw := range keywords {
 		alias := fmt.Sprintf("t%d%d", idx, subidx)
-		if len(joinsql) == 0 {
-			sql = fmt.Sprintf("%s AS (SELECT doc_id FROM %s WHERE word = '%s')", alias, idxtbl, kw)
-		} else {
-			sql = fmt.Sprintf("%s AS (SELECT %s.doc_id FROM %s as %s, %s WHERE %s.doc_id = %s.doc_id AND word = '%s')",
-				alias, alias, idxtbl, alias, joinsql[0].Label, joinsql[0].Label, alias, kw)
-		}
-		sqlnode.Children = append(sqlnode.Children, &SqlNode{Index: idx, Label: alias, IsJoin: isJoin, Sql: sql})
+		sql = fmt.Sprintf("%s AS (SELECT doc_id FROM %s WHERE word = '%s')", alias, idxtbl, kw)
+		sqlnode.Children = append(sqlnode.Children, &SqlNode{Index: idx, Label: alias, IsJoin: true, Sql: sql})
 		tables = append(tables, alias)
 		subidx++
 	}
@@ -74,13 +110,8 @@ func GenJoinSql(p *Pattern, mode int64, idxtbl string, joinsql []*SqlNode, isJoi
 			return nil, moerr.NewInternalErrorNoCtx("wildcard search without character *")
 		}
 		prefix := kw[0 : len(kw)-1]
-		if len(joinsql) == 0 {
-			sql = fmt.Sprintf("%s AS (SELECT doc_id, CAST(%d as int) FROM %s WHERE prefix_eq(word,'%s'))", alias, idx, idxtbl, prefix)
-		} else {
-			sql = fmt.Sprintf("%s AS (SELECT %s.doc_id, CAST(%d as int) FROM %s as %s, %s WHERE %s.doc_id = %s.doc_id AND prefix_eq(word, '%s'))",
-				alias, alias, idx, idxtbl, alias, joinsql[0].Label, joinsql[0].Label, alias, prefix)
-		}
-		sqlnode.Children = append(sqlnode.Children, &SqlNode{Index: idx, Label: alias, IsJoin: isJoin, Sql: sql})
+		sql = fmt.Sprintf("%s AS (SELECT doc_id, CAST(%d as int) FROM %s WHERE prefix_eq(word,'%s'))", alias, idx, idxtbl, prefix)
+		sqlnode.Children = append(sqlnode.Children, &SqlNode{Index: idx, Label: alias, IsJoin: true, Sql: sql})
 		tables = append(tables, alias)
 		subidx++
 	}
@@ -95,7 +126,7 @@ func GenJoinSql(p *Pattern, mode int64, idxtbl string, joinsql []*SqlNode, isJoi
 	label := fmt.Sprintf("t%d", p.Index)
 	sql = fmt.Sprintf("%s AS (SELECT %s.doc_id FROM %s WHERE %s)", label, tables[0], strings.Join(tables, ", "),
 		strings.Join(oncond, " AND "))
-	sqlnode.Children = append(sqlnode.Children, &SqlNode{Index: idx, Label: label, IsJoin: isJoin, Sql: sql})
+	sqlnode.Children = append(sqlnode.Children, &SqlNode{Index: idx, Label: label, IsJoin: true, Sql: sql})
 
 	sqlnode.Sql = fmt.Sprintf("SELECT %s.doc_id, CAST(%d as int) FROM %s", label, sqlnode.Index, label)
 	sqlnode.Label = label
@@ -116,9 +147,9 @@ func GenSql(p *Pattern, mode int64, idxtbl string, joinsql []*SqlNode, isJoin bo
 
 	if isJoin {
 		if p.Operator == JOIN {
-			return GenJoinSql(p, mode, idxtbl, joinsql, isJoin)
+			return GenJoinSql(p, mode, idxtbl)
 		} else {
-			return GenJoinPlusSql(p, mode, idxtbl, joinsql, isJoin)
+			return GenJoinPlusSql(p, mode, idxtbl)
 		}
 	}
 
