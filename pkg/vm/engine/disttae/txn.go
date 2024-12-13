@@ -705,10 +705,6 @@ func (txn *Transaction) dumpDeleteBatchLocked(ctx context.Context, offset int, s
 		}
 	}
 
-	if deleteCnt < txn.engine.config.insertEntryMaxCount {
-		return nil
-	}
-
 	txn.writes = writes[:lastWritesIndex]
 
 	for tbKey := range mp {

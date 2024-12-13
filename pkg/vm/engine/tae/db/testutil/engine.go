@@ -16,11 +16,12 @@ package testutil
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -69,14 +70,30 @@ func NewTestEngineWithDir(
 	}
 }
 
-func NewTestEngine(
+func NewReplayTestEngine(
 	ctx context.Context,
 	moduleName string,
 	t *testing.T,
 	opts *options.Options,
 ) *TestEngine {
+	return NewTestEngine(
+		ctx,
+		moduleName,
+		t,
+		opts,
+		db.WithTxnMode(db.DBTxnMode_Replay),
+	)
+}
+
+func NewTestEngine(
+	ctx context.Context,
+	moduleName string,
+	t *testing.T,
+	opts *options.Options,
+	dbOpts ...db.DBOption,
+) *TestEngine {
 	blockio.Start("")
-	db := InitTestDB(ctx, moduleName, t, opts)
+	db := InitTestDB(ctx, moduleName, t, opts, dbOpts...)
 	return &TestEngine{
 		DB: db,
 		T:  t,
@@ -378,10 +395,11 @@ func InitTestDB(
 	moduleName string,
 	t *testing.T,
 	opts *options.Options,
+	dbOpts ...db.DBOption,
 ) *db.DB {
 	blockio.Start("")
 	dir := testutils.InitTestEnv(moduleName, t)
-	db, _ := db.Open(ctx, dir, opts)
+	db, _ := db.Open(ctx, dir, opts, dbOpts...)
 	// only ut executes this checker
 	db.DiskCleaner.GetCleaner().AddChecker(
 		func(item any) bool {
