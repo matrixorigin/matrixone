@@ -236,6 +236,8 @@ func (cleaner *DiskCleaner) process(items ...any) {
 			default:
 				logutil.Error("GC-Unknown-JobType", zap.Any("job-type", v))
 			}
+		case *tasks.Job:
+			v.Run()
 		}
 	}
 }
