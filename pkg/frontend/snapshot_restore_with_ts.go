@@ -30,9 +30,10 @@ import (
 )
 
 func fkTablesTopoSortWithDropped(ctx context.Context, bh BackgroundExec, dbName string, tblName string, ts int64, from, to uint32) (sortedTbls []string, err error) {
+	newCtx := defines.AttachAccountId(ctx, from)
 	getLogger("").Info(fmt.Sprintf("[%d:%d] start to get fk tables topo sort from account %d", from, ts, from))
 	// get foreign key deps from mo_catalog.mo_foreign_keys
-	fkDeps, err := getFkDepsWithDropped(ctx, bh, dbName, tblName, ts, from, to)
+	fkDeps, err := getFkDepsWithDropped(newCtx, bh, dbName, tblName, ts, from, to)
 	if err != nil {
 		return
 	}
