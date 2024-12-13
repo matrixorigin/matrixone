@@ -1363,6 +1363,11 @@ func (s *Scope) CreateTable(c *Compile) error {
 			return err
 		}
 
+		c.proc.Info(c.proc.Ctx, "create index table success when create table",
+			zap.String("databaseName", c.db),
+			zap.String("tableName", qry.GetTableDef().GetName()),
+			zap.String("index tableName", def.Name),
+		)
 	}
 
 	if checkIndexInitializable(dbName, tblName) {
