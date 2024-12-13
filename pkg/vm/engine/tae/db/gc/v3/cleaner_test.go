@@ -17,6 +17,7 @@ package gc
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
@@ -57,6 +58,7 @@ func TestDiskCleaner_WriteToReplay(t *testing.T) {
 		context.Background(),
 		JT_GCNoop,
 		func(ctx context.Context) *tasks.JobResult {
+			time.Sleep(time.Millisecond)
 			result := new(tasks.JobResult)
 			result.Err = jobErr
 			return result
