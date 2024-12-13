@@ -81,6 +81,8 @@ func (fill *Fill) Prepare(proc *process.Process) (err error) {
 		ctr.subStatus = findNull
 		ctr.process = processNext
 	case plan.Node_LINEAR:
+		ctr.i = 0
+		ctr.idx = 0
 		if len(ctr.exes) == 0 {
 			ctr.valVecs = make([]*vector.Vector, len(fill.FillVal))
 			for _, v := range fill.FillVal {
@@ -355,13 +357,13 @@ func processLinearCol(ctr *container, ap *Fill, proc *process.Process, idx int, 
 			}
 			if result.Batch == nil {
 				ctr.endBatch[idx] = true
-				break
+				return nil
 			} else {
 				if len(ctr.bats) > ctr.i {
 					if ctr.bats[ctr.i] != nil {
 						ctr.bats[ctr.i].CleanOnlyData()
 					}
-					ctr.buf, err = ctr.buf.AppendWithCopy(proc.Ctx, proc.Mp(), result.Batch)
+					ctr.bats[ctr.i], err = ctr.bats[ctr.i].AppendWithCopy(proc.Ctx, proc.Mp(), result.Batch)
 					if err != nil {
 						return err
 					}
@@ -404,13 +406,14 @@ func processLinearCol(ctr *container, ap *Fill, proc *process.Process, idx int, 
 			if hasNullPre {
 				ctr.status = findValue
 			} else {
-				if b.Vecs[idx].IsNull(uint64(ctr.preRow)) {
-					ctr.preIdx++
-					ctr.nullRow = 0
-				}
 				ctr.nullIdx++
 				ctr.nullRow = 0
 				ctr.doneIdx[idx] = ctr.nullIdx
+				if b.Vecs[idx].IsNull(uint64(ctr.preRow)) {
+					ctr.preIdx++
+					ctr.nullRow = 0
+					ctr.doneIdx[idx] = ctr.preIdx
+				}
 				return nil
 			}
 		case findValue:
@@ -572,7 +575,7 @@ func processLinear(ctr *container, ap *Fill, proc *process.Process, analyzer pro
 			if ctr.bats[ctr.i] != nil {
 				ctr.bats[ctr.i].CleanOnlyData()
 			}
-			ctr.buf, err = ctr.buf.AppendWithCopy(proc.Ctx, proc.Mp(), result.Batch)
+			ctr.bats[ctr.i], err = ctr.bats[ctr.i].AppendWithCopy(proc.Ctx, proc.Mp(), result.Batch)
 			if err != nil {
 				return result, err
 			}
