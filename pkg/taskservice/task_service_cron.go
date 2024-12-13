@@ -276,7 +276,7 @@ func (j *cronJob) checkConcurrency() bool {
 	defer cancel()
 
 	queryTask, err := j.s.QueryAsyncTask(ctx,
-		WithTaskStatusCond(task.TaskStatus_Running),
+		WithTaskStatusCond(task.TaskStatus_Running, task.TaskStatus_Created),
 		WithTaskExecutorCond(EQ, j.task.Metadata.Executor))
 	if err != nil ||
 		uint32(len(queryTask)) >= j.task.Metadata.Options.Concurrency {

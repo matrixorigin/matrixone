@@ -93,6 +93,7 @@ func (d *BackupDeltaLocDataSource) Next(
 	_ []string,
 	_ []types.Type,
 	_ []uint16,
+	_ int32,
 	_ any,
 	_ *mpool.MPool,
 	_ *batch.Batch,
