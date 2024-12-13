@@ -517,7 +517,8 @@ func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
 }
 
 func (txn *Transaction) dumpInsertBatchLocked(ctx context.Context, offset int, size *uint64, pkCount *int) error {
-	tbSize := make(map[uint64]uint64)
+	tbSize := make(map[uint64]int)
+	tbCount := make(map[uint64]int)
 	skipTable := make(map[uint64]bool)
 
 	for i := offset; i < len(txn.writes); i++ {
@@ -528,7 +529,8 @@ func (txn *Transaction) dumpInsertBatchLocked(ctx context.Context, offset int, s
 			continue
 		}
 		if txn.writes[i].typ == INSERT && txn.writes[i].fileName == "" {
-			tbSize[txn.writes[i].tableId] += uint64(txn.writes[i].bat.Size())
+			tbSize[txn.writes[i].tableId] += txn.writes[i].bat.Size()
+			tbCount[txn.writes[i].tableId] += txn.writes[i].bat.RowCount()
 		}
 	}
 
@@ -539,9 +541,12 @@ func (txn *Transaction) dumpInsertBatchLocked(ctx context.Context, offset int, s
 	sort.Slice(keys, func(i, j int) bool {
 		return tbSize[keys[i]] < tbSize[keys[j]]
 	})
-	sum := uint64(0)
+	sum := 0
 	for _, k := range keys {
-		if sum+tbSize[k] > txn.writeWorkspaceThreshold {
+		if tbCount[k] > txn.engine.config.insertEntryMaxCount {
+			continue
+		}
+		if uint64(sum+tbSize[k]) > txn.writeWorkspaceThreshold {
 			break
 		}
 		sum += tbSize[k]
