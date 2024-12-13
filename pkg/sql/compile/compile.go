@@ -724,46 +724,6 @@ func (c *Compile) appendMetaTables(objRes *plan.ObjectRef) {
 	c.lockMeta.appendMetaTables(objRes)
 }
 
-// func (c *Compile) lockMetaTables() error {
-// 	lockLen := len(c.metaTables)
-// 	if lockLen == 0 {
-// 		return nil
-// 	}
-
-// 	tables := make([]string, 0, lockLen)
-// 	for table := range c.metaTables {
-// 		tables = append(tables, table)
-// 	}
-// 	sort.Strings(tables)
-
-// 	lockDbs := make(map[string]struct{})
-// 	for _, table := range tables {
-// 		names := strings.SplitN(table, " ", 2)
-
-// 		err := lockMoTable(c, names[0], names[1], lock.LockMode_Shared)
-// 		lockDbs[names[0]] = struct{}{}
-// 		if err != nil {
-// 			// if get error in locking mocatalog.mo_tables by it's dbName & tblName
-// 			// that means the origin table's schema was changed. then return NeedRetryWithDefChanged err
-// 			if moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) ||
-// 				moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
-// 				return moerr.NewTxnNeedRetryWithDefChangedNoCtx()
-// 			}
-
-// 			// other errors, just throw  out
-// 			return err
-// 		}
-// 	}
-// 	for dbName := range lockDbs {
-// 		err := lockMoDatabase(c, dbName, lock.LockMode_Shared)
-// 		if err != nil {
-// 			return err
-// 		}
-// 	}
-
-// 	return nil
-// }
-
 func (c *Compile) lockTable() error {
 	for _, tbl := range c.lockTables {
 		typ := plan2.MakeTypeByPlan2Type(tbl.PrimaryColTyp)

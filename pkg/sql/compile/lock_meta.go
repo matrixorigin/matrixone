@@ -190,7 +190,7 @@ func (l *LockMeta) initLockExe(e engine.Engine, proc *process.Process) error {
 	if l.lockTableExe != nil {
 		return nil
 	}
-	//serial only have one overload
+
 	accountTyp := types.T_uint32.ToType()
 	accountIdExpr := &plan.Expr{
 		Typ: plan2.MakePlan2Type(&accountTyp),
