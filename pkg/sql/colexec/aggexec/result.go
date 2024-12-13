@@ -58,10 +58,10 @@ type SplitResult interface {
 func initAggResultWithFixedTypeResult[T types.FixedSizeTExceptStrType](
 	mg AggMemoryManager,
 	resultType types.Type,
-	setEmptyGroupToNull bool, initialValue T) aggResultWithFixedType[T] {
+	needEmptySituationList bool, initialValue T) aggResultWithFixedType[T] {
 
 	res := aggResultWithFixedType[T]{}
-	res.init(mg, resultType, setEmptyGroupToNull)
+	res.init(mg, resultType, needEmptySituationList)
 	res.InitialValue = initialValue
 	res.values = make([][]T, 1)
 

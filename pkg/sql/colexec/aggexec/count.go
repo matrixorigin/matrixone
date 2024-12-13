@@ -238,8 +238,6 @@ func (exec *countColumnExec) BatchMerge(next AggFuncExec, offset int, groups []u
 		}
 		x1, y1 := exec.ret.updateNextAccessIdx(int(groups[i]) - 1)
 		x2, y2 := other.ret.updateNextAccessIdx(i + offset)
-
-		exec.ret.MergeAnotherEmpty(x1, y1, other.ret.isGroupEmpty(x2, y2))
 		vs1[x1][y1] += vs2[x2][y2]
 	}
 	return exec.distinctHash.merge(&other.distinctHash)
