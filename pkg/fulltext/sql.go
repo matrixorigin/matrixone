@@ -19,7 +19,6 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
@@ -69,11 +68,6 @@ func GenJoinPlusSql(p *Pattern, mode int64, idxtbl string) ([]*SqlNode, error) {
 
 	sqlnode.Sql = fmt.Sprintf("SELECT %s.doc_id, CAST(%d as int) FROM %s", tables[0], sqlnode.Index, tables[0])
 	sqlnode.Label = tables[0]
-
-	fmt.Printf("GEN SQL %s\n", sqlnode.Sql)
-	for _, ss := range sqlnode.Children {
-		fmt.Printf("SUBSQL %s\n", ss.Sql)
-	}
 	return []*SqlNode{sqlnode}, nil
 
 }
@@ -131,10 +125,6 @@ func GenJoinSql(p *Pattern, mode int64, idxtbl string) ([]*SqlNode, error) {
 	sqlnode.Sql = fmt.Sprintf("SELECT %s.doc_id, CAST(%d as int) FROM %s", label, sqlnode.Index, label)
 	sqlnode.Label = label
 
-	fmt.Printf("GEN SQL %s\n", sqlnode.Sql)
-	for _, ss := range sqlnode.Children {
-		fmt.Printf("SUBSQL %s\n", ss.Sql)
-	}
 	return []*SqlNode{sqlnode}, nil
 }
 
@@ -187,9 +177,6 @@ func GenSql(p *Pattern, mode int64, idxtbl string, joinsql []*SqlNode, isJoin bo
 		sqls = append(sqls, &SqlNode{Index: idx, Label: alias, IsJoin: isJoin, Sql: sql})
 	}
 
-	for _, s := range sqls {
-		fmt.Printf("GEN SQL %s\n", s.Sql)
-	}
 	return sqls, nil
 }
 
@@ -200,10 +187,8 @@ func SqlBoolean(ps []*Pattern, mode int64, idxtbl string) (string, error) {
 	var sqls []*SqlNode
 	// check JOIN
 
-	fmt.Println("SQL BOOLEABN")
 	if len(ps) == 1 {
 		if ps[0].Operator == JOIN {
-			fmt.Println("JOIN...")
 			join, err = GenSql(ps[0], mode, idxtbl, nil, true)
 			if err != nil {
 				return "", err
@@ -219,7 +204,6 @@ func SqlBoolean(ps []*Pattern, mode int64, idxtbl string) (string, error) {
 	} else {
 		startidx := 0
 		if ps[0].Operator == JOIN {
-			fmt.Println("JOIN..JOIN.")
 			join, err = GenSql(ps[0], mode, idxtbl, nil, true)
 			if err != nil {
 				return "", err
@@ -266,7 +250,6 @@ func SqlBoolean(ps []*Pattern, mode int64, idxtbl string) (string, error) {
 	ret += " "
 	ret += strings.Join(union, " UNION ALL ")
 
-	fmt.Sprintf("BOOLEAN %s\n", ret)
 	return ret, nil
 }
 
@@ -283,6 +266,7 @@ func SqlNL(ps []*Pattern, mode int64, idxtbl string) (string, error) {
 		keywords, indexes, positions = GetPhraseTextFromPattern(p, keywords, indexes, positions)
 	}
 
+	fmt.Printf("SQL NL len = %d\n", len(keywords))
 	if len(keywords) == 1 {
 		sql = fmt.Sprintf("SELECT doc_id, CAST(%d as int) FROM %s WHERE word = '%s'",
 			indexes[0], idxtbl, keywords[0])
@@ -307,9 +291,9 @@ func SqlNL(ps []*Pattern, mode int64, idxtbl string) (string, error) {
 		sql += strings.Join(oncond, " AND ")
 	}
 
-	logutil.Infof("SQL is %s", sql)
+	//logutil.Infof("SQL is %s", sql)
 
-	return "", nil
+	return sql, nil
 }
 
 func SqlPhrase(ps []*Pattern, mode int64, idxtbl string) (string, error) {
@@ -349,7 +333,7 @@ func SqlPhrase(ps []*Pattern, mode int64, idxtbl string) (string, error) {
 		sql += strings.Join(oncond, " AND ")
 	}
 
-	logutil.Infof("SQL is %s", sql)
+	//logutil.Infof("SQL is %s", sql)
 
 	return "", nil
 }
