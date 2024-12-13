@@ -66,6 +66,10 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 		if err = lockTable(c.proc.Ctx, c.e, c.proc, originRel, dbName, partitionTableNames, true); err != nil {
 			if !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
 				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
+				c.proc.Error(c.proc.Ctx, "lock origin table for alter table",
+					zap.String("databaseName", c.db),
+					zap.String("origin tableName", qry.GetTableDef().Name),
+					zap.Error(err))
 				return err
 			}
 			retryErr = err
@@ -75,6 +79,12 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 			for _, indexdef := range qry.TableDef.Indexes {
 				if indexdef.TableExist {
 					if err = lockIndexTable(c.proc.Ctx, dbSource, c.e, c.proc, indexdef.IndexTableName, true); err != nil {
+						c.proc.Error(c.proc.Ctx, "lock index table for alter table",
+							zap.String("databaseName", c.db),
+							zap.String("origin tableName", qry.GetTableDef().Name),
+							zap.String("index name", indexdef.IndexName),
+							zap.String("index tableName", indexdef.IndexTableName),
+							zap.Error(err))
 						return err
 					}
 				}
@@ -274,7 +284,7 @@ func (s *Scope) AlterTable(c *Compile) (err error) {
 		err = s.AlterTableInplace(c)
 	}
 	if err != nil {
-		return err
+		return err // add log
 	}
 
 	if !plan2.IsFkBannedDatabase(qry.Database) {
