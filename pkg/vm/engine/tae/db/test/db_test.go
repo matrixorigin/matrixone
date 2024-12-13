@@ -10532,3 +10532,10 @@ func Test_BasicTxnModeSwitch(t *testing.T) {
 	assert.Equal(t, db.DBTxnMode_Write, tae.GetTxnMode())
 	assert.True(t, tae.TxnMgr.IsWriteMode())
 }
+
+func Test_OpenReplayDB1(t *testing.T) {
+	ctx := context.Background()
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewReplayTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+}
