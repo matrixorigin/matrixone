@@ -196,6 +196,8 @@ func showFullTablesFromDropped(ctx context.Context,
 	ts int64,
 	from,
 	to uint32) ([]*tableInfo, error) {
+	getLogger(sid).Info(fmt.Sprintf("[%d:%d] start to show full table `%s.%s`", from, ts, dbName, tblName))
+	newCtx := defines.AttachAccountId(ctx, from)
 	sql := fmt.Sprintf("show full tables from `%s`", dbName)
 
 	if len(tblName) > 0 {
@@ -208,7 +210,7 @@ func showFullTablesFromDropped(ctx context.Context,
 
 	getLogger(sid).Info(fmt.Sprintf("[%d:%d] show full table `%s.%s` sql: %s", from, ts, dbName, tblName, sql))
 	// cols: table name, table type
-	colsList, err := getStringColsListFromDropped(ctx, bh, sql, from, to, 0, 1)
+	colsList, err := getStringColsListFromDropped(newCtx, bh, sql, from, to, 0, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -252,13 +254,14 @@ func getStringColsListFromDropped(ctx context.Context, bh BackgroundExec, sql st
 
 func getCreateTableSqlFromDropped(ctx context.Context, bh BackgroundExec, dbName string, tblName string, ts int64, from, to uint32) (string, error) {
 	getLogger("").Info(fmt.Sprintf("[%d:%d] start to get create table sql: datatabse `%s`, table `%s`", from, ts, dbName, tblName))
+	newCtx := defines.AttachAccountId(ctx, from)
 	sql := fmt.Sprintf("show create table `%s`.`%s`", dbName, tblName)
 	if ts > 0 {
 		sql += fmt.Sprintf(" {MO_TS = %d}", ts)
 	}
 
 	// cols: table_name, create_sql
-	colsList, err := getStringColsListFromDropped(ctx, bh, sql, from, to, 1)
+	colsList, err := getStringColsListFromDropped(newCtx, bh, sql, from, to, 1)
 	if err != nil {
 		return "", err
 	}
@@ -477,6 +480,7 @@ func getCreateDatabaseSqlFromDropped(ctx context.Context,
 	from,
 	to uint32) (string, error) {
 
+	newCtx := defines.AttachAccountId(ctx, from)
 	sql := "select datname, dat_createsql from mo_catalog.mo_database"
 	if ts > 0 {
 		sql += fmt.Sprintf(" {MO_TS = %d }", ts)
@@ -485,12 +489,12 @@ func getCreateDatabaseSqlFromDropped(ctx context.Context,
 	getLogger(sid).Info(fmt.Sprintf("[%d:%d] get create database `%s` sql: %s", from, ts, dbName, sql))
 
 	// cols: database_name, create_sql
-	colsList, err := getStringColsListFromDropped(ctx, bh, sql, from, to, 0, 1)
+	colsList, err := getStringColsListFromDropped(newCtx, bh, sql, from, to, 0, 1)
 	if err != nil {
 		return "", err
 	}
 	if len(colsList) == 0 || len(colsList[0]) == 0 {
-		return "", moerr.NewBadDB(ctx, dbName)
+		return "", moerr.NewBadDB(newCtx, dbName)
 	}
 	return colsList[0][1], nil
 }
@@ -506,21 +510,21 @@ func recreateTableFromDropped(
 ) (err error) {
 	getLogger(sid).Info(fmt.Sprintf("[%d:%d] start to restore table: %v, restore timestamp: %d", restoreAccount, snapshotTs, tblInfo.tblName, snapshotTs))
 
-	ctx = defines.AttachAccountId(ctx, toAccountId)
-	if err = bh.Exec(ctx, fmt.Sprintf("use `%s`", tblInfo.dbName)); err != nil {
+	newCtx := defines.AttachAccountId(ctx, toAccountId)
+	if err = bh.Exec(newCtx, fmt.Sprintf("use `%s`", tblInfo.dbName)); err != nil {
 		return
 	}
 
 	// create table
 	getLogger(sid).Info(fmt.Sprintf("[%d:%d] start to create table: %v, create table sql: %s", restoreAccount, snapshotTs, tblInfo.tblName, tblInfo.createSql))
-	if err = bh.Exec(ctx, tblInfo.createSql); err != nil {
+	if err = bh.Exec(newCtx, tblInfo.createSql); err != nil {
 		return
 	}
 
 	insertIntoSql := fmt.Sprintf(restoreTableDataByTsFmt, tblInfo.dbName, tblInfo.tblName, tblInfo.dbName, tblInfo.tblName, snapshotTs)
 	beginTime := time.Now()
 	getLogger(sid).Info(fmt.Sprintf("[%d:%d] start to insert select table: %v, insert sql: %s", restoreAccount, snapshotTs, tblInfo.tblName, insertIntoSql))
-	if err = bh.ExecRestore(ctx, insertIntoSql, restoreAccount, toAccountId); err != nil {
+	if err = bh.ExecRestore(newCtx, insertIntoSql, restoreAccount, toAccountId); err != nil {
 		return
 	}
 	getLogger(sid).Info(fmt.Sprintf("[%d:%d] insert select table: %v, cost: %v", restoreAccount, snapshotTs, tblInfo.tblName, time.Since(beginTime)))
