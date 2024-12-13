@@ -266,7 +266,6 @@ func SqlNL(ps []*Pattern, mode int64, idxtbl string) (string, error) {
 		keywords, indexes, positions = GetPhraseTextFromPattern(p, keywords, indexes, positions)
 	}
 
-	fmt.Printf("SQL NL len = %d\n", len(keywords))
 	if len(keywords) == 1 {
 		sql = fmt.Sprintf("SELECT doc_id, CAST(%d as int) FROM %s WHERE word = '%s'",
 			indexes[0], idxtbl, keywords[0])
@@ -279,8 +278,8 @@ func SqlNL(ps []*Pattern, mode int64, idxtbl string) (string, error) {
 			union = append(union, fmt.Sprintf("%s AS (SELECT doc_id, pos FROM %s WHERE word = '%s')",
 				tblname, idxtbl, kw))
 			if i > 0 {
-				oncond[i-1] = fmt.Sprintf("%s.doc_id = %s.doc_id AND %s.pos > %s.pos",
-					tables[0], tables[i], tables[i], tables[0])
+				oncond[i-1] = fmt.Sprintf("%s.doc_id = %s.doc_id AND %s.pos - %s.pos = %d",
+					tables[0], tables[i], tables[i], tables[0], positions[i]-positions[0])
 			}
 		}
 		sql = "WITH "
@@ -335,7 +334,7 @@ func SqlPhrase(ps []*Pattern, mode int64, idxtbl string) (string, error) {
 
 	//logutil.Infof("SQL is %s", sql)
 
-	return "", nil
+	return sql, nil
 }
 
 func PatternToSql(ps []*Pattern, mode int64, idxtbl string) (string, error) {

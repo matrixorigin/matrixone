@@ -153,20 +153,20 @@ func TestPatternNL(t *testing.T) {
 	tests := []TestCase{
 		{
 			pattern: "Matrix Origin",
-			expect:  "(text 0 matrix) (text 1 origin)",
+			expect:  "(text 0 0 matrix) (text 1 7 origin)",
 		},
 		{
 			pattern: "读写汉字 学中文",
-			expect:  "(text 0 读写汉) (text 1 写汉字) (text 2 汉字) (text 3 字) (text 4 学中文) (text 5 中文) (text 6 文)",
+			expect:  "(text 0 0 读写汉) (text 1 3 写汉字) (* 2 6 汉字*) (* 3 9 字*) (text 4 13 学中文) (* 5 16 中文*) (* 6 19 文*)",
 		},
 		{
 			pattern: "读写",
-			expect:  "(* 0 读写*)",
+			expect:  "(* 0 0 读写*)",
 		},
 	}
 
 	for _, c := range tests {
-		result, err := PatternToString(c.pattern, int64(tree.FULLTEXT_NL))
+		result, err := PatternToStringWithPosition(c.pattern, int64(tree.FULLTEXT_NL))
 		require.Nil(t, err)
 		assert.Equal(t, c.expect, result)
 	}
@@ -358,9 +358,17 @@ func TestFullTextOr(t *testing.T) {
 
 func TestFullTextPlusPlus(t *testing.T) {
 
-	pattern := "+apple +banana -orange"
+	pattern := "+apple -orange"
+	//pattern := "+apple +banana -orange"
 	s, err := NewSearchAccum("src", "index", pattern, int64(tree.FULLTEXT_BOOLEAN), "")
 	require.Nil(t, err)
+
+	// ERIC
+	ss, err := PatternToString(pattern, int64(tree.FULLTEXT_BOOLEAN))
+	fmt.Println(ss)
+	sql, err := PatternToSql(s.Pattern, int64(tree.FULLTEXT_BOOLEAN), "`__mo_index_secondary_0193b0b9-07c2-782d-aa6f-fc892c464561`")
+	require.Nil(t, err)
+	fmt.Println(sql)
 
 	var keywords []string
 	var indexes []int32

@@ -848,7 +848,12 @@ func ParsePatternInNLMode(pattern string) ([]*Pattern, error) {
 		slen := t.TokenBytes[0]
 		word := string(t.TokenBytes[1 : slen+1])
 
-		list = append(list, &Pattern{Text: word, Operator: TEXT})
+		runeSlice = []rune(word)
+		if len(runeSlice) < ngram_size {
+			list = append(list, &Pattern{Text: word + "*", Operator: STAR, Position: t.BytePos})
+		} else {
+			list = append(list, &Pattern{Text: word, Operator: TEXT, Position: t.BytePos})
+		}
 	}
 
 	// assign index
