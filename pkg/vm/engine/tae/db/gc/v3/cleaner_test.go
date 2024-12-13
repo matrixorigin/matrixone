@@ -52,7 +52,7 @@ func TestDiskCleaner_WriteToReplay(t *testing.T) {
 	require.Equal(t, executeCnt, 0)
 
 	diskCleaner.Start()
-	err := diskCleaner.WaitFlushAll(context.Background())
+	err := diskCleaner.FlushQueue(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, tryGC, 1)
 	require.Equal(t, replayCnt, 1)
@@ -60,7 +60,7 @@ func TestDiskCleaner_WriteToReplay(t *testing.T) {
 
 	err = diskCleaner.GC(context.Background())
 	require.NoError(t, err)
-	err = diskCleaner.WaitFlushAll(context.Background())
+	err = diskCleaner.FlushQueue(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, tryGC, 1)
 	require.Equal(t, replayCnt, 1)

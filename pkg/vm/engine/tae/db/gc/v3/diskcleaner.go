@@ -121,7 +121,7 @@ func (cleaner *DiskCleaner) SwitchToReplayMode(ctx context.Context) (err error) 
 	}()
 
 	// the current state is StateStep_Write2Replay
-	if err = cleaner.WaitFlushAll(ctx); err != nil {
+	if err = cleaner.FlushQueue(ctx); err != nil {
 		return
 	}
 
@@ -129,7 +129,7 @@ func (cleaner *DiskCleaner) SwitchToReplayMode(ctx context.Context) (err error) 
 	return
 }
 
-func (cleaner *DiskCleaner) WaitFlushAll(
+func (cleaner *DiskCleaner) FlushQueue(
 	ctx context.Context,
 ) (err error) {
 	var job *tasks.Job
