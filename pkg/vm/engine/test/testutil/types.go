@@ -17,6 +17,7 @@ package testutil
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -25,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
-	"path/filepath"
 )
 
 type PObjectStats struct {
@@ -92,6 +92,7 @@ func (s *PartitionStateStats) String() string {
 type TestOptions struct {
 	TaeEngineOptions *options.Options
 	Timeout          time.Duration
+	DisttaeOptions   []TestDisttaeEngineOptions
 }
 
 func getS3SharedFileServiceOption(ctx context.Context, dir string) (*options.Options, error) {
