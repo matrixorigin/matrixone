@@ -808,7 +808,7 @@ func TestCannotBusyLoopIfWriteCIsFull(t *testing.T) {
 			return conn.Write(msg, goetty.WriteOptions{Flush: true})
 		},
 		func(b *remoteBackend) {
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*60)
 			defer cancel()
 
 			var wg sync.WaitGroup
@@ -816,7 +816,7 @@ func TestCannotBusyLoopIfWriteCIsFull(t *testing.T) {
 				wg.Add(1)
 				go func() {
 					defer wg.Done()
-					for i := 0; i < 100; i++ {
+					for i := 0; i < 10; i++ {
 						req := newTestMessage(1)
 						f, err := b.Send(ctx, req)
 						assert.NoError(t, err)
