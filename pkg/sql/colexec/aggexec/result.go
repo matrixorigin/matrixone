@@ -55,7 +55,7 @@ var blockCapacityMap = map[int]int{
 func GetChunkSizeFromType(typ types.Type) (s int) {
 	s = blockCapacityForStrType
 	if !typ.IsVarlen() {
-		if newCap, ok := blockCapacityMap[s]; ok {
+		if newCap, ok := blockCapacityMap[typ.TypeSize()]; ok {
 			s = newCap
 		}
 	}
