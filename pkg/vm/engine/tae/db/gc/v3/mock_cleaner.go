@@ -15,6 +15,8 @@
 package gc
 
 import (
+	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -24,28 +26,28 @@ import (
 
 type MockCleanerOption func(*MockCleaner)
 
-func WithReplayFunc(f func() error) MockCleanerOption {
+func WithReplayFunc(f func(context.Context) error) MockCleanerOption {
 	return func(c *MockCleaner) {
 		c.repalyFunc = f
 	}
 }
 
-func WithProcessFunc(f func() error) MockCleanerOption {
+func WithProcessFunc(f func(context.Context) error) MockCleanerOption {
 	return func(c *MockCleaner) {
 		c.processFunc = f
 	}
 }
 
-func WithTryGCFunc(f func() error) MockCleanerOption {
+func WithTryGCFunc(f func(context.Context) error) MockCleanerOption {
 	return func(c *MockCleaner) {
 		c.tryGC = f
 	}
 }
 
 type MockCleaner struct {
-	repalyFunc  func() error
-	processFunc func() error
-	tryGC       func() error
+	repalyFunc  func(context.Context) error
+	processFunc func(context.Context) error
+	tryGC       func(context.Context) error
 }
 
 func NewMockCleaner(opts ...MockCleanerOption) MockCleaner {
@@ -56,23 +58,23 @@ func NewMockCleaner(opts ...MockCleanerOption) MockCleaner {
 	return cleaner
 }
 
-func (c *MockCleaner) Replay() error {
+func (c *MockCleaner) Replay(ctx context.Context) error {
 	if c.repalyFunc != nil {
-		return c.repalyFunc()
+		return c.repalyFunc(ctx)
 	}
 	return nil
 }
 
-func (c *MockCleaner) Process() error {
+func (c *MockCleaner) Process(ctx context.Context) error {
 	if c.processFunc != nil {
-		return c.processFunc()
+		return c.processFunc(ctx)
 	}
 	return nil
 }
 
-func (c *MockCleaner) TryGC() error {
+func (c *MockCleaner) TryGC(ctx context.Context) error {
 	if c.tryGC != nil {
-		return c.tryGC()
+		return c.tryGC(ctx)
 	}
 	return nil
 }

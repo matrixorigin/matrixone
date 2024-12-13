@@ -189,7 +189,7 @@ func (cleaner *DiskCleaner) scheduleGCJob(ctx context.Context) (err error) {
 // execute the GC job
 // 1. it should be replayed first with no error
 // 2. then execute the GC job
-func (cleaner *DiskCleaner) doExecute() (err error) {
+func (cleaner *DiskCleaner) doExecute(ctx context.Context) (err error) {
 	now := time.Now()
 	msg := "GC-Execute"
 	defer func() {
@@ -206,7 +206,7 @@ func (cleaner *DiskCleaner) doExecute() (err error) {
 	var ok bool
 	if replayErr := cleaner.replayError.Load(); replayErr != nil {
 		if _, ok = replayErr.(error); ok {
-			if err = cleaner.cleaner.Replay(); err != nil {
+			if err = cleaner.cleaner.Replay(ctx); err != nil {
 				msg = "GC-Replay"
 				cleaner.replayError.Store(err)
 				return
@@ -215,13 +215,13 @@ func (cleaner *DiskCleaner) doExecute() (err error) {
 			}
 		}
 	}
-	err = cleaner.cleaner.Process()
+	err = cleaner.cleaner.Process(ctx)
 	return
 }
 
 // it will update the replayError after replay
-func (cleaner *DiskCleaner) doReplay() (err error) {
-	if err = cleaner.cleaner.Replay(); err != nil {
+func (cleaner *DiskCleaner) doReplay(ctx context.Context) (err error) {
+	if err = cleaner.cleaner.Replay(ctx); err != nil {
 		logutil.Error("GC-Replay-Error", zap.Error(err))
 		cleaner.replayError.Store(err)
 	} else {
@@ -230,7 +230,7 @@ func (cleaner *DiskCleaner) doReplay() (err error) {
 	return
 }
 
-func (cleaner *DiskCleaner) doReplayAndExecute() (err error) {
+func (cleaner *DiskCleaner) doReplayAndExecute(ctx context.Context) (err error) {
 	// defer func() {
 	// 	if err := recover(); err != nil {
 	// 		logutil.Error("GC-Replay-Panic", zap.Any("err", err))
@@ -249,11 +249,11 @@ func (cleaner *DiskCleaner) doReplayAndExecute() (err error) {
 			zap.Error(err),
 		)
 	}()
-	if err = cleaner.doReplay(); err != nil {
+	if err = cleaner.doReplay(ctx); err != nil {
 		return
 	}
 	msg = "GC-TryGC"
-	err = cleaner.cleaner.TryGC()
+	err = cleaner.cleaner.TryGC(ctx)
 	return
 }
 
@@ -263,11 +263,11 @@ func (cleaner *DiskCleaner) process(items ...any) {
 		case tasks.JobType:
 			switch v {
 			case JT_GCReplay:
-				cleaner.doReplay()
+				cleaner.doReplay(context.Background())
 			case JT_GCReplayAndExecute:
-				cleaner.doReplayAndExecute()
+				cleaner.doReplayAndExecute(context.Background())
 			case JT_GCExecute:
-				cleaner.doExecute()
+				cleaner.doExecute(context.Background())
 			default:
 				logutil.Error("GC-Unknown-JobType", zap.Any("job-type", v))
 			}

@@ -258,7 +258,7 @@ func (c *checkpointCleaner) TaskNameLocked() string {
 	return c.mutation.taskState.name
 }
 
-func (c *checkpointCleaner) Replay() (err error) {
+func (c *checkpointCleaner) Replay(ctx context.Context) (err error) {
 	now := time.Now()
 
 	c.StartMutationTask("gc-replay")
@@ -890,7 +890,7 @@ func (c *checkpointCleaner) GetPITRsLocked() (*logtail.PitrInfo, error) {
 	return c.mutation.snapshotMeta.GetPITR(c.ctx, c.sid, ts, c.fs.Service, c.mp)
 }
 
-func (c *checkpointCleaner) TryGC() (err error) {
+func (c *checkpointCleaner) TryGC(ctx context.Context) (err error) {
 	now := time.Now()
 	c.StartMutationTask("gc-try-gc")
 	defer c.StopMutationTask()
@@ -1374,7 +1374,7 @@ func (c *checkpointCleaner) DoCheck() error {
 	return nil
 }
 
-func (c *checkpointCleaner) Process() (err error) {
+func (c *checkpointCleaner) Process(ctx context.Context) (err error) {
 	if !c.GCEnabled() {
 		return
 	}

@@ -32,15 +32,15 @@ func TestDiskCleaner_WriteToReplay(t *testing.T) {
 		tryGC      int
 	)
 	cleaner := NewMockCleaner(
-		WithTryGCFunc(func() (err error) {
+		WithTryGCFunc(func(context.Context) (err error) {
 			tryGC++
 			return nil
 		}),
-		WithReplayFunc(func() (err error) {
+		WithReplayFunc(func(context.Context) (err error) {
 			replayCnt++
 			return nil
 		}),
-		WithProcessFunc(func() (err error) {
+		WithProcessFunc(func(context.Context) (err error) {
 			time.Sleep(time.Millisecond * 2)
 			executeCnt++
 			return nil
@@ -71,7 +71,7 @@ func TestDiskCleaner_WriteToReplay(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(1)
 
-	WithProcessFunc(func() (err error) {
+	WithProcessFunc(func(context.Context) (err error) {
 		wg.Wait()
 		executeCnt++
 		return nil
@@ -89,7 +89,7 @@ func TestDiskCleaner_WriteToReplay(t *testing.T) {
 	require.Equal(t, executeCnt, 2)
 	require.True(t, diskCleaner.IsReplayMode())
 
-	WithProcessFunc(func() (err error) {
+	WithProcessFunc(func(context.Context) (err error) {
 		executeCnt++
 		return nil
 	})(&cleaner)

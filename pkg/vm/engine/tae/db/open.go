@@ -277,7 +277,8 @@ func Open(
 	gc2.SetDeleteBatchSize(opts.GCCfg.GCDeleteBatchSize)
 
 	// sjw TODO: cleaner need to support replay and write mode
-	cleaner := gc2.NewCheckpointCleaner(opts.Ctx,
+	cleaner := gc2.NewCheckpointCleaner(
+		opts.Ctx,
 		opts.SID, fs, db.BGCheckpointRunner,
 		gc2.WithCanGCCacheSize(opts.GCCfg.CacheSize),
 		gc2.WithMaxMergeCheckpointCount(opts.GCCfg.GCMergeCount),
