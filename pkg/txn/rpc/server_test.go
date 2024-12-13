@@ -260,6 +260,56 @@ func newMessage(req morpc.Message) morpc.RPCMessage {
 	}
 }
 
+func TestTxnStateSwitch(t *testing.T) {
+	runTestTxnServer(t, testTN5Addr, func(s *server) {
+		curr, waitReady, handler := s.getTxnHandleState()
+		require.Equal(t, TxnLocalHandle, curr)
+		require.Nil(t, waitReady)
+		require.Nil(t, handler)
+
+		err := s.SwitchTxnHandleStateTo(TxnForwarding)
+		require.NotNil(t, err)
+
+		err = s.SwitchTxnHandleStateTo(TxnForwardWait)
+		require.NotNil(t, err)
+
+		err = s.SwitchTxnHandleStateTo(TxnForwardWait,
+			WithForwardTarget(metadata.TNShard{
+				Address: "test",
+			}))
+		require.NoError(t, err)
+
+		curr, waitReady, handler = s.getTxnHandleState()
+		require.Equal(t, TxnForwardWait, curr)
+		require.NotNil(t, waitReady)
+		require.NotNil(t, handler)
+
+		err = s.SwitchTxnHandleStateTo(TxnForwarding)
+		require.NoError(t, err)
+
+		curr, waitReady, handler = s.getTxnHandleState()
+		require.Equal(t, TxnForwarding, curr)
+		require.Nil(t, waitReady)
+		require.NotNil(t, handler)
+
+		err = handler(context.Background(), nil, nil)
+		require.NotNil(t, err)
+
+		err = handler(context.Background(), &txn.TxnRequest{
+			CNRequest: &txn.CNOpRequest{},
+		}, nil)
+		require.NotNil(t, err)
+
+		err = handler(context.Background(), &txn.TxnRequest{
+			CNRequest: &txn.CNOpRequest{},
+		}, &txn.TxnResponse{})
+
+		require.NotNil(t, err)
+
+		fmt.Println(s.logTxnHandleState())
+	})
+}
+
 func TestTNCanForwardingTxnWriteRequestsSimpleVersion(t *testing.T) {
 	size := 10
 	runTestTxnServer(t, testTN4Addr, func(s *server) {

@@ -470,12 +470,33 @@ func (s *server) enterLocalHandleState() error {
 	return nil
 }
 
+func (s *server) logTxnHandleState() string {
+	stateName := []string{"local handle", "forwarding wait", "forwarding"}
+
+	return fmt.Sprintf("STATE(%s)-TARGET(%s)-SENDER(nil=%v)",
+		stateName[s.handleState.state],
+		s.handleState.forward.target.Address,
+		s.handleState.forward.sender == nil)
+}
+
 func (s *server) forwardingTxnRequest(
 	ctx context.Context,
 	req *txn.TxnRequest,
 	resp *txn.TxnResponse) error {
 
+	if req == nil {
+		return moerr.NewInternalErrorNoCtx("req is nil")
+	}
+
 	req.ResetTargetTN(s.handleState.forward.target)
+
+	if resp == nil {
+		return moerr.NewInternalErrorNoCtx("resp is nil")
+	}
+
+	if s.handleState.forward.sender == nil {
+		return moerr.NewInternalErrorNoCtx("txn sender is nil")
+	}
 
 	result, err := s.handleState.forward.sender.Send(ctx, []txn.TxnRequest{*req})
 	if err != nil {

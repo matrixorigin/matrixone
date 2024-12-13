@@ -37,6 +37,7 @@ var (
 	testTN2Addr = "unix:///tmp/test-dn2.sock"
 	testTN3Addr = "unix:///tmp/test-dn3.sock"
 	testTN4Addr = "unix:///tmp/test-dn4.sock"
+	testTN5Addr = "unix:///tmp/test-dn5.sock"
 )
 
 func TestSendWithSingleRequest(t *testing.T) {
