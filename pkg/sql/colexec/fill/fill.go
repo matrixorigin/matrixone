@@ -77,6 +77,8 @@ func (fill *Fill) Prepare(proc *process.Process) (err error) {
 		}
 		ctr.process = processPrev
 	case plan.Node_NEXT:
+		ctr.i = 0
+		ctr.idx = 0
 		ctr.status = receiveBat
 		ctr.subStatus = findNull
 		ctr.process = processNext
