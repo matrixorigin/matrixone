@@ -1348,7 +1348,7 @@ func doResolveSnapshotWithSnapshotName(ctx context.Context, ses FeSession, snaps
 
 	var accountId uint32
 	// cluster level record has no accountName, so accountId is 0
-	if record.accountName != "" {
+	if len(record.accountName) != 0 {
 		accountId = uint32(record.objId)
 	}
 
