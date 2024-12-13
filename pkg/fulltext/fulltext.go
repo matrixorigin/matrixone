@@ -115,7 +115,13 @@ func (p *Pattern) String() string {
 		return fmt.Sprintf("(%s %d %s)", OperatorToString(p.Operator), p.Index, p.Text)
 	}
 
-	str := fmt.Sprintf("(%s ", OperatorToString(p.Operator))
+	var str string
+	if p.Operator == JOIN {
+		str = fmt.Sprintf("(%s %d ", OperatorToString(p.Operator), p.Index)
+	} else {
+		str = fmt.Sprintf("(%s ", OperatorToString(p.Operator))
+
+	}
 	for i, c := range p.Children {
 		if i > 0 {
 			str += " "
@@ -351,6 +357,17 @@ func (p *Pattern) Eval(accum *SearchAccum, docvec []uint8, aggcnt []int64, weigh
 			}
 		}
 
+	case JOIN:
+		if result == nil {
+			return p.EvalLeaf(accum, docvec, aggcnt, weight, nil)
+		} else {
+			child_result, err := p.EvalLeaf(accum, docvec, aggcnt, weight, nil)
+			if err != nil {
+				return nil, err
+			}
+			return p.EvalPlusPlus(accum, docvec, aggcnt, child_result, result)
+
+		}
 	case PLUS:
 		if result == nil {
 			return p.Children[0].Eval(accum, docvec, aggcnt, weight, nil)
@@ -737,24 +754,17 @@ func ParsePatternInBooleanMode(pattern string) ([]*Pattern, error) {
 
 	}
 
-	// assign index
-	idx := int32(0)
-	for _, p := range tokens {
-		assignPatternIndex(p, &idx)
-	}
-
 	return tokens, nil
 }
 
 // assign word index to TEXT and START Node
 func assignPatternIndex(pattern *Pattern, idx *int32) {
 
-	if pattern.Operator == TEXT || pattern.Operator == STAR {
+	if pattern.Operator == TEXT || pattern.Operator == STAR || pattern.Operator == JOIN {
 		pattern.Index = *idx
 		(*idx)++
 		return
 	}
-
 	for _, p := range pattern.Children {
 		assignPatternIndex(p, idx)
 	}
@@ -850,6 +860,46 @@ func ParsePatternInNLMode(pattern string) ([]*Pattern, error) {
 	return list, nil
 }
 
+func PatternOptimizeJoin(ps []*Pattern) []*Pattern {
+
+	// search for plus with single text child
+	var join_children []*Pattern
+	var idxs []int
+
+	for i, p := range ps {
+		if p.Operator == PLUS {
+			if len(p.Children) == 1 && (p.Children[0].Operator == TEXT || p.Children[0].Operator == STAR) {
+				join_children = append(join_children, p)
+				idxs = append(idxs, i)
+			}
+		}
+	}
+
+	// not enough PLUS, NO JOIN
+	if len(join_children) <= 1 {
+		return ps
+	}
+
+	join := &Pattern{Operator: JOIN, Children: join_children}
+	var ret []*Pattern
+	ret = append(ret, join)
+
+	for i := range ps {
+		removed := false
+		for _, idx := range idxs {
+			if i == idx {
+				removed = true
+				break
+			}
+		}
+		if !removed {
+			ret = append(ret, ps[i])
+		}
+	}
+
+	return ret
+}
+
 // Parse search string into list of patterns
 func ParsePattern(pattern string, mode int64) ([]*Pattern, error) {
 	switch mode {
@@ -892,6 +942,14 @@ func ParsePattern(pattern string, mode int64) ([]*Pattern, error) {
 		finalp = append(finalp, values...)
 		finalp = append(finalp, minus...)
 
+		// optimize with JOIN
+		finalp = PatternOptimizeJoin(finalp)
+
+		// assign index
+		idx := int32(0)
+		for _, p := range finalp {
+			assignPatternIndex(p, &idx)
+		}
 		return finalp, nil
 	default:
 		return nil, moerr.NewInternalErrorNoCtx("invalid fulltext search mode")

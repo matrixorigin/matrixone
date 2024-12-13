@@ -15,6 +15,7 @@
 package fulltext
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -116,11 +117,11 @@ func TestPatternBoolean(t *testing.T) {
 		},
 		{
 			pattern: "Matrix +(<Origin >One)",
-			expect:  "(+ (group (< (text 1 origin)) (> (text 2 one)))) (text 0 matrix)",
+			expect:  "(+ (group (< (text 0 origin)) (> (text 1 one)))) (text 2 matrix)",
 		},
 		{
 			pattern: "+Matrix +Origin",
-			expect:  "(+ (text 0 matrix)) (+ (text 1 origin))",
+			expect:  "(join 0 (+ (text 0 matrix)) (+ (text 0 origin)))",
 		},
 		{
 			pattern: "\"Matrix origin\"",
@@ -224,6 +225,11 @@ func TestFullTextNL(t *testing.T) {
 	pattern := "apple banana"
 	s, err := NewSearchAccum("src", "index", pattern, int64(tree.FULLTEXT_NL), "")
 	require.Nil(t, err)
+
+	sql, err := PatternToSql(s.Pattern, int64(tree.FULLTEXT_NL), "indextbl")
+	require.Nil(t, err)
+
+	fmt.Println(sql)
 
 	var keywords []string
 	var indexes []int32
@@ -352,7 +358,7 @@ func TestFullTextOr(t *testing.T) {
 
 func TestFullTextPlusPlus(t *testing.T) {
 
-	pattern := "+apple +banana"
+	pattern := "+apple +banana -orange"
 	s, err := NewSearchAccum("src", "index", pattern, int64(tree.FULLTEXT_BOOLEAN), "")
 	require.Nil(t, err)
 
@@ -373,10 +379,12 @@ func TestFullTextPlusPlus(t *testing.T) {
 		word2idx[kw] = indexes[i]
 	}
 
-	agghtab[0] = []uint8{uint8(2), uint8(2)}  // apple, banna
-	agghtab[1] = []uint8{uint8(3), uint8(0)}  // apple
-	agghtab[11] = []uint8{uint8(0), uint8(3)} // banna
-	agghtab[12] = []uint8{uint8(0), uint8(4)} // banna
+	//fmt.Printf("PATTERN %v\n", s.Pattern)
+	// [(join 0 (+ (text 0 apple)) (+ (text 0 banana))) (- (text orange))]
+	agghtab[0] = []uint8{uint8(2), uint8(2)}  // join
+	agghtab[1] = []uint8{uint8(3), uint8(0)}  // join
+	agghtab[11] = []uint8{uint8(0), uint8(3)} // orange
+	agghtab[12] = []uint8{uint8(0), uint8(4)} // ornage
 
 	aggcnt[0] = 2
 	aggcnt[1] = 3
@@ -404,9 +412,9 @@ func TestFullTextPlusPlus(t *testing.T) {
 
 	var ok bool
 	_, ok = test_result[0]
-	assert.Equal(t, ok, true)
-	_, ok = test_result[1]
 	assert.Equal(t, ok, false)
+	_, ok = test_result[1]
+	assert.Equal(t, ok, true)
 	_, ok = test_result[11]
 	assert.Equal(t, ok, false)
 	_, ok = test_result[12]
@@ -851,6 +859,7 @@ func TestFullText5(t *testing.T) {
 		keywords, indexes = GetTextFromPattern(p, keywords, indexes)
 	}
 
+	fmt.Printf("Text5 %v\n", s.Pattern)
 	//fmt.Println(keywords)
 	//fmt.Println(indexes)
 
@@ -858,17 +867,18 @@ func TestFullText5(t *testing.T) {
 		word2idx[kw] = indexes[i]
 	}
 
+	// [(+ (text 0 happy)) (text 1 we) (text 2 are) (text 3 so)]
 	// {we, are, so, happy}
 	// we
-	agghtab[0] = []uint8{uint8(2), uint8(0), uint8(0), uint8(0)} // we
-	agghtab[1] = []uint8{uint8(3), uint8(0), uint8(0), uint8(0)} // we
+	agghtab[0] = []uint8{uint8(0), uint8(2), uint8(0), uint8(0)} // we
+	agghtab[1] = []uint8{uint8(0), uint8(3), uint8(0), uint8(0)} // we
 
 	// are
-	agghtab[11] = []uint8{uint8(0), uint8(3), uint8(0), uint8(0)} // are
-	agghtab[12] = []uint8{uint8(0), uint8(4), uint8(0), uint8(0)} // are
+	agghtab[11] = []uint8{uint8(0), uint8(0), uint8(3), uint8(0)} // are
+	agghtab[12] = []uint8{uint8(0), uint8(0), uint8(4), uint8(0)} // are
 
-	aggcnt[0] = 2
 	aggcnt[1] = 2
+	aggcnt[2] = 2
 
 	s.Nrow = 100
 
@@ -1107,6 +1117,10 @@ func TestFullTextPhrase(t *testing.T) {
 	pattern := "\"we aRe so Happy\""
 	s, err := NewSearchAccum("src", "index", pattern, int64(tree.FULLTEXT_BOOLEAN), "")
 	require.Nil(t, err)
+
+	sql, err := PatternToSql(s.Pattern, int64(tree.FULLTEXT_BOOLEAN), "idxtbl")
+	require.Nil(t, err)
+	fmt.Println(sql)
 
 	var keywords []string
 	var indexes []int32

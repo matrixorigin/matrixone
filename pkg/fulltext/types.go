@@ -79,6 +79,7 @@ var (
 	RANKLESS    = 6
 	GROUP       = 7
 	PHRASE      = 8
+	JOIN        = 9
 )
 
 func OperatorToString(op int) string {
@@ -101,6 +102,8 @@ func OperatorToString(op int) string {
 		return "group"
 	case PHRASE:
 		return "phrase"
+	case JOIN:
+		return "join"
 	default:
 		return ""
 	}
