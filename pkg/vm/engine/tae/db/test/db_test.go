@@ -5660,7 +5660,7 @@ func TestGCWithCheckpoint(t *testing.T) {
 			tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 			defer tae.Close()
 			cleaner := gc.NewCheckpointCleaner(context.Background(), "", tae.Runtime.Fs, tae.BGCheckpointRunner)
-			manager := gc.NewDiskCleaner(cleaner)
+			manager := gc.NewDiskCleaner(cleaner, true)
 			manager.Start()
 			defer manager.Stop()
 
@@ -5697,7 +5697,7 @@ func TestGCWithCheckpoint(t *testing.T) {
 			maxEnd := manager.GetCleaner().GetScanWaterMark().GetEnd()
 			assert.True(t, end.Equal(&maxEnd))
 			cleaner2 := gc.NewCheckpointCleaner(context.Background(), "", tae.Runtime.Fs, tae.BGCheckpointRunner)
-			manager2 := gc.NewDiskCleaner(cleaner2)
+			manager2 := gc.NewDiskCleaner(cleaner2, true)
 			manager2.Start()
 			defer manager2.Stop()
 			testutils.WaitExpect(5000, func() bool {
@@ -5730,7 +5730,7 @@ func TestGCDropDB(t *testing.T) {
 			tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 			defer tae.Close()
 			cleaner := gc.NewCheckpointCleaner(context.Background(), "", tae.Runtime.Fs, tae.BGCheckpointRunner)
-			manager := gc.NewDiskCleaner(cleaner)
+			manager := gc.NewDiskCleaner(cleaner, true)
 			manager.Start()
 			defer manager.Stop()
 			schema := catalog.MockSchemaAll(3, 1)
@@ -5770,7 +5770,7 @@ func TestGCDropDB(t *testing.T) {
 			maxEnd := manager.GetCleaner().GetScanWaterMark().GetEnd()
 			assert.True(t, end.Equal(&maxEnd))
 			cleaner2 := gc.NewCheckpointCleaner(context.Background(), "", tae.Runtime.Fs, tae.BGCheckpointRunner)
-			manager2 := gc.NewDiskCleaner(cleaner2)
+			manager2 := gc.NewDiskCleaner(cleaner2, true)
 			manager2.Start()
 			defer manager2.Stop()
 			testutils.WaitExpect(5000, func() bool {
@@ -5804,7 +5804,7 @@ func TestGCDropTable(t *testing.T) {
 			tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 			defer tae.Close()
 			cleaner := gc.NewCheckpointCleaner(context.Background(), "", tae.Runtime.Fs, tae.BGCheckpointRunner)
-			manager := gc.NewDiskCleaner(cleaner)
+			manager := gc.NewDiskCleaner(cleaner, true)
 			manager.Start()
 			defer manager.Stop()
 			schema := catalog.MockSchemaAll(3, 1)
@@ -5859,7 +5859,7 @@ func TestGCDropTable(t *testing.T) {
 			maxEnd := manager.GetCleaner().GetScanWaterMark().GetEnd()
 			assert.True(t, end.Equal(&maxEnd))
 			cleaner2 := gc.NewCheckpointCleaner(context.Background(), "", tae.Runtime.Fs, tae.BGCheckpointRunner)
-			manager2 := gc.NewDiskCleaner(cleaner2)
+			manager2 := gc.NewDiskCleaner(cleaner2, true)
 			manager2.Start()
 			defer manager2.Stop()
 			testutils.WaitExpect(5000, func() bool {

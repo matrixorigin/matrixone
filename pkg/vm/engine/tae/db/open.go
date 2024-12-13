@@ -292,7 +292,8 @@ func Open(
 			endTS := checkpoint.GetEnd()
 			return !endTS.GE(&ts)
 		}, cmd_util.CheckerKeyTTL)
-	db.DiskCleaner = gc2.NewDiskCleaner(cleaner)
+
+	db.DiskCleaner = gc2.NewDiskCleaner(cleaner, db.IsWriteMode())
 	db.DiskCleaner.Start()
 
 	db.CronJobs = tasks.NewCancelableJobs()
