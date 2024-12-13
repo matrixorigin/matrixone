@@ -176,6 +176,84 @@ type GetMoTableSizeRowsFuncType = func() func(
 var GetMoTableSizeFunc atomic.Pointer[GetMoTableSizeRowsFuncType]
 var GetMoTableRowsFunc atomic.Pointer[GetMoTableSizeRowsFuncType]
 
+func isSubscribedTable(
+	proc *process.Process,
+	reqAcc uint32,
+	db engine.Database,
+	dbName, tblName string,
+) (accId, dbId, tblId uint64, ok bool, err error) {
+
+	var (
+		sql  string
+		ret  [][]interface{}
+		meta *plan.SubscriptionMeta
+	)
+
+	if db.IsSubscription(proc.Ctx) {
+		defer func() {
+			if err != nil {
+				metaInfo := ""
+				if meta != nil {
+					metaInfo = fmt.Sprintf("ACC(%s,%d)-DB(%s)-TBLS(%s)",
+						meta.AccountName, meta.AccountId, meta.DbName, meta.Tables)
+				}
+
+				logutil.Error("MO_TABLE_SIZE/ROWS",
+					zap.String("source", "isSubscribedTable"),
+					zap.Error(err),
+					zap.String("sub meta", metaInfo),
+					zap.Uint32("request acc", reqAcc),
+					zap.String("db name", dbName),
+					zap.String("tbl name", tblName),
+					zap.String("sql", sql),
+				)
+			}
+		}()
+
+		meta, err = proc.GetSessionInfo().SqlHelper.GetSubscriptionMeta(dbName)
+		if err != nil {
+			return 0, 0, 0, false,
+				moerr.NewInternalErrorNoCtx(fmt.Sprintf("get subscription meta failed, err: %v", err))
+		}
+
+		if meta.Tables != pubsub.TableAll && !strings.Contains(meta.Tables, tblName) {
+			return 0, 0, 0, false, moerr.NewInternalErrorNoCtx("no such subscribed table")
+		}
+
+		// check passed, get acc, db, tbl info
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		ctx = defines.AttachAccountId(ctx, uint32(sysAccountID))
+		defer cancel()
+
+		sql = fmt.Sprintf(`
+					select 
+    					reldatabase_id, rel_id 
+					from 
+					    mo_catalog.mo_tables 
+					where 
+					    account_id = %d and reldatabase = '%s' and relname = '%s';`,
+			meta.AccountId, meta.DbName, tblName)
+
+		ret, err = proc.GetSessionInfo().SqlHelper.ExecSqlWithCtx(ctx, fmt.Sprintf(sql))
+		if err != nil {
+			return 0, 0, 0, false,
+				moerr.NewInternalErrorNoCtx(fmt.Sprintf("exec get subscribed tbl info sql failed, err: %v", err))
+		}
+
+		if len(ret) != 1 {
+			return 0, 0, 0, false,
+				moerr.NewInternalErrorNoCtx(fmt.Sprintf("get the subscribed tbl info empty: %s", tblName))
+		}
+
+		dbId = ret[0][0].(uint64)
+		tblId = ret[0][1].(uint64)
+
+		return uint64(meta.AccountId), dbId, tblId, true, nil
+	}
+
+	return 0, 0, 0, false, nil
+}
+
 func MoTableSizeRowsHelper(
 	iVecs []*vector.Vector,
 	result vector.FunctionResultWrapper,
@@ -283,17 +361,28 @@ func MoTableSizeRowsHelper(
 			return err
 		}
 
-		if rel, err = db.Relation(proc.Ctx, tblName, nil); err != nil {
-			if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
-				return moerr.NewInternalErrorNoCtxf("tbl not exist: %s-%s(%s)",
-					dbName, tblName, "OkExpectedEOB")
-			}
+		var subAcc, subDb, subTbl uint64
+		if subAcc, subDb, subTbl, ok, err = isSubscribedTable(
+			proc, accountId, db, dbName, tblName); err != nil {
 			return err
-		}
+		} else if ok {
+			// is subscription
+			accIds = append(accIds, subAcc)
+			dbIds = append(dbIds, subDb)
+			tblIds = append(tblIds, subTbl)
+		} else {
+			if rel, err = db.Relation(proc.Ctx, tblName, nil); err != nil {
+				if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+					return moerr.NewInternalErrorNoCtxf("tbl not exist: %s-%s(%s)",
+						dbName, tblName, "OkExpectedEOB")
+				}
+				return err
+			}
 
-		accIds = append(accIds, uint64(accountId))
-		dbIds = append(dbIds, uint64(rel.GetDBID(proc.Ctx)))
-		tblIds = append(tblIds, uint64(rel.GetTableID(proc.Ctx)))
+			accIds = append(accIds, uint64(accountId))
+			dbIds = append(dbIds, uint64(rel.GetDBID(proc.Ctx)))
+			tblIds = append(tblIds, uint64(rel.GetTableID(proc.Ctx)))
+		}
 	}
 
 	ret, err = (*executor.Load())()(
