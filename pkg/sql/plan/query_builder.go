@@ -2684,20 +2684,6 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 			}
 		}
 
-		if stmt.IsRestore {
-			builder.isRestore = true
-			oldSnapshot := builder.compCtx.GetSnapshot()
-			builder.compCtx.SetSnapshot(&Snapshot{
-				Tenant: &plan.SnapshotTenant{
-					TenantName: "xxx",
-					TenantID:   stmt.FromDataTenantID,
-				},
-			})
-			defer func() {
-				builder.compCtx.SetSnapshot(oldSnapshot)
-			}()
-		}
-
 		// build FROM clause
 		nodeID, err = builder.buildFrom(clause.From.Tables, ctx, isRoot)
 		if err != nil {
@@ -4843,8 +4829,7 @@ func (builder *QueryBuilder) resolveTsHint(tsExpr *tree.AtTimeStamp) (snapshot *
 	}
 
 	var tenant *SnapshotTenant
-	bgSnapshot := builder.compCtx.GetSnapshot()
-	if builder.isRestore {
+	if bgSnapshot := builder.compCtx.GetSnapshot(); IsSnapshotValid(bgSnapshot) {
 		tenant = &SnapshotTenant{
 			TenantName: bgSnapshot.Tenant.TenantName,
 			TenantID:   bgSnapshot.Tenant.TenantID,

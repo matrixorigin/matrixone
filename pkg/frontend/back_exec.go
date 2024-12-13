@@ -90,7 +90,7 @@ func (back *backExec) Exec(ctx context.Context, sql string) error {
 	}
 	ctx = perfcounter.AttachBackgroundExecutorKey(ctx)
 
-	accountId, err := defines.GetAccountId(ctx)
+	_, err := defines.GetAccountId(ctx)
 	if err != nil {
 		return err
 	}
@@ -137,7 +137,6 @@ func (back *backExec) Exec(ctx context.Context, sql string) error {
 	userInput := &UserInput{
 		sql:       sql,
 		isRestore: isRestore,
-		opAccount: accountId,
 	}
 	execCtx := ExecCtx{
 		reqCtx: ctx,
@@ -404,11 +403,6 @@ func doComQueryInBack(
 		if insertStmt, ok := stmt.(*tree.Insert); ok && input.isRestore {
 			insertStmt.IsRestore = true
 			insertStmt.FromDataTenantID = input.opAccount
-		}
-
-		if selectStmt, ok := stmt.(*tree.Select); ok && input.isRestore {
-			selectStmt.IsRestore = true
-			selectStmt.FromDataTenantID = input.opAccount
 		}
 
 		statsInfo.Reset()

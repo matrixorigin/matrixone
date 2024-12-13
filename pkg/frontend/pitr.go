@@ -897,7 +897,7 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 		sortedFkTbls []string
 		fkTableMap   map[string]*tableInfo
 	)
-	// reslove timestamp
+	// resolve timestamp
 	ts, err = doResolveTimeStamp(stmt.TimeStamp)
 	if err != nil {
 		return stats, err
