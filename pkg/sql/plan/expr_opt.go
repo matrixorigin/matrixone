@@ -18,6 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
 func (builder *QueryBuilder) mergeFiltersOnCompositeKey(nodeID int32) {
@@ -41,9 +42,15 @@ func (builder *QueryBuilder) mergeFiltersOnCompositeKey(nodeID int32) {
 }
 
 func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDef, tableTag int32, filters ...*plan.Expr) []*plan.Expr {
-	pkIdx := tableDef.Name2ColIndex[tableDef.Pkey.PkeyColName]
+	sortkeyIdx := tableDef.Name2ColIndex[tableDef.Pkey.PkeyColName]
 	col2filter := make(map[int32]int)
-	numParts := len(tableDef.Pkey.Names)
+	Parts := tableDef.Pkey.Names
+	numParts := len(Parts)
+	if tableDef.ClusterBy != nil && util.JudgeIsCompositeClusterByColumn(tableDef.ClusterBy.Name) {
+		sortkeyIdx = tableDef.Name2ColIndex[tableDef.ClusterBy.Name]
+		Parts = util.SplitCompositeClusterByColumnName(tableDef.ClusterBy.Name)
+		numParts = len(Parts)
+	}
 
 	for i, expr := range filters {
 		fn := expr.GetF()
@@ -179,7 +186,7 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 			if len(newOrArgs) == 1 {
 				filters[i] = newOrArgs[0]
 				colPos := firstEquiExpr.GetF().Args[0].GetCol().ColPos
-				if colPos != pkIdx {
+				if colPos != sortkeyIdx {
 					col2filter[colPos] = i
 				}
 			} else {
@@ -193,7 +200,7 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 	}
 
 	filterIdx := make([]int, 0, numParts)
-	for _, part := range tableDef.Pkey.Names {
+	for _, part := range Parts {
 		colIdx := tableDef.Name2ColIndex[part]
 		idx, ok := col2filter[colIdx]
 		if !ok {
@@ -212,11 +219,11 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 
 	var compositePKFilter *plan.Expr
 	pkExpr := &plan.Expr{
-		Typ: tableDef.Cols[pkIdx].Typ,
+		Typ: tableDef.Cols[sortkeyIdx].Typ,
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
 				RelPos: tableTag,
-				ColPos: pkIdx,
+				ColPos: sortkeyIdx,
 			},
 		},
 	}

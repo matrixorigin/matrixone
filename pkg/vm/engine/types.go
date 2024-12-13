@@ -997,6 +997,14 @@ type Engine interface {
 	GetService() string
 
 	LatestLogtailAppliedTime() timestamp.Timestamp
+
+	QueryTableStatsByAccounts(
+		ctx context.Context,
+		wantedStatsIdxes []int,
+		accs []uint64,
+		forceUpdate bool,
+		resetUpdateTime bool,
+	) (statsVals [][]any, retAcc []uint64, err error, ok bool)
 }
 
 type VectorPool interface {
