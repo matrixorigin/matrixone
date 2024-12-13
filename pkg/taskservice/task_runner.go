@@ -374,9 +374,7 @@ func (r *taskRunner) doFetch() ([]task.AsyncTask, error) {
 			}
 		}
 	}
-	for k := range r.runningTasks.completedTasks {
-		delete(r.runningTasks.completedTasks, k)
-	}
+	clear(r.runningTasks.completedTasks)
 	r.runningTasks.Unlock()
 
 	if len(newTasks) == 0 {
@@ -402,14 +400,15 @@ func (r *taskRunner) addToWait(ctx context.Context, task task.AsyncTask) bool {
 
 	r.runningTasks.Lock()
 	defer r.runningTasks.Unlock()
+	r.runningTasks.m[task.ID] = rt
 	select {
 	case r.waitTasksC <- rt:
-		r.runningTasks.m[task.ID] = rt
 		r.logger.Info("task added to wait queue",
 			zap.String("task", task.DebugString()))
 		return true
 	default:
 	}
+	delete(r.runningTasks.m, task.ID)
 	return false
 }
 
@@ -483,7 +482,7 @@ func (r *taskRunner) run(rt runningTask) {
 
 		if executor, err := r.getExecutor(rt.task.Metadata.Executor); err != nil {
 			r.taskExecResult(rt, err, false)
-		} else if err := executor(rt.ctx, &rt.task); err != nil {
+		} else if err = executor(rt.ctx, &rt.task); err != nil {
 			r.taskExecResult(rt, err, true)
 		} else {
 			r.taskExecResult(rt, nil, false)
