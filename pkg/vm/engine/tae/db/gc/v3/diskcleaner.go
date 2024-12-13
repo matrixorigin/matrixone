@@ -83,6 +83,14 @@ func (cleaner *DiskCleaner) GC(ctx context.Context) (err error) {
 	return cleaner.scheduleGCJob(ctx)
 }
 
+func (cleaner *DiskCleaner) IsWriteMode() bool {
+	return cleaner.step.Load() == StateStep_Write
+}
+
+func (cleaner *DiskCleaner) IsReplayMode() bool {
+	return cleaner.step.Load() == StateStep_Replay
+}
+
 func (cleaner *DiskCleaner) SwitchToReplayMode(ctx context.Context) (err error) {
 	oldStep := cleaner.step.Load()
 	switch oldStep {
@@ -106,10 +114,9 @@ func (cleaner *DiskCleaner) SwitchToReplayMode(ctx context.Context) (err error) 
 
 	// the current state is StateStep_Write2Replay
 
-	noopJob := new(tasks.Job)
-	noopJob.Init(
+	var noopJob *tasks.Job
+	noopJob, err = cleaner.addJob(
 		ctx,
-		uuid.Must(uuid.NewV7()).String(),
 		JT_GCNoop,
 		func(context.Context) *tasks.JobResult {
 			logutil.Info(
@@ -119,8 +126,7 @@ func (cleaner *DiskCleaner) SwitchToReplayMode(ctx context.Context) (err error) 
 			return nil
 		},
 	)
-
-	if _, err = cleaner.processQueue.Enqueue(noopJob); err != nil {
+	if err != nil {
 		return
 	}
 	if result := noopJob.WaitDone(); result.Err != nil {
@@ -128,6 +134,22 @@ func (cleaner *DiskCleaner) SwitchToReplayMode(ctx context.Context) (err error) 
 		return
 	}
 	cleaner.step.Store(StateStep_Replay)
+	return
+}
+
+func (cleaner *DiskCleaner) addJob(
+	ctx context.Context, jt tasks.JobType, execFn func(context.Context) *tasks.JobResult,
+) (job *tasks.Job, err error) {
+	job = new(tasks.Job)
+	job.Init(
+		ctx,
+		uuid.Must(uuid.NewV7()).String(),
+		jt,
+		execFn,
+	)
+	if _, err = cleaner.processQueue.Enqueue(job); err != nil {
+		job = nil
+	}
 	return
 }
 
@@ -171,13 +193,16 @@ func (cleaner *DiskCleaner) doExecute() (err error) {
 			zap.Error(err),
 		)
 	}()
+	var ok bool
 	if replayErr := cleaner.replayError.Load(); replayErr != nil {
-		if err = cleaner.cleaner.Replay(); err != nil {
-			msg = "GC-Replay"
-			cleaner.replayError.Store(err)
-			return
-		} else {
-			cleaner.replayError.Store(nil)
+		if _, ok = replayErr.(error); ok {
+			if err = cleaner.cleaner.Replay(); err != nil {
+				msg = "GC-Replay"
+				cleaner.replayError.Store(err)
+				return
+			} else {
+				cleaner.replayError.Store(0)
+			}
 		}
 	}
 	err = cleaner.cleaner.Process()
@@ -190,7 +215,7 @@ func (cleaner *DiskCleaner) doReplay() (err error) {
 		logutil.Error("GC-Replay-Error", zap.Error(err))
 		cleaner.replayError.Store(err)
 	} else {
-		cleaner.replayError.Store(nil)
+		cleaner.replayError.Store(0)
 	}
 	return
 }

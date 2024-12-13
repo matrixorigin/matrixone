@@ -89,7 +89,8 @@ func (c *MockCleaner) GetChecker(key string) func(item any) bool {
 	return nil
 }
 
-func (c *MockCleaner) RemoveChecker(key string) {
+func (c *MockCleaner) RemoveChecker(key string) error {
+	return nil
 }
 
 func (c *MockCleaner) GetScanWaterMark() *checkpoint.CheckpointEntry {
