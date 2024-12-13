@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -156,6 +157,12 @@ func performLock(
 	targetIdx int,
 ) error {
 	needRetry := false
+	sort.Slice(lockOp.targets, func(i, j int) bool {
+		return lockOp.targets[i].tableID < lockOp.targets[j].tableID
+	})
+
+	txnInfo := proc.GetTxnOperator().Txn().DebugString()
+
 	for idx, target := range lockOp.targets {
 		if targetIdx != -1 && targetIdx != idx {
 			continue
@@ -163,7 +170,8 @@ func performLock(
 		if proc.GetTxnOperator().LockSkipped(target.tableID, target.mode) {
 			return nil
 		}
-		lockOp.logger.Debug("lock",
+		lockOp.logger.Info("lock",
+			zap.String("txn", txnInfo),
 			zap.Uint64("table", target.tableID),
 			zap.Bool("filter", target.filter != nil),
 			zap.Int32("filter-col", target.filterColIndexInBatch),

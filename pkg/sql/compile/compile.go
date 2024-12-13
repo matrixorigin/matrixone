@@ -703,6 +703,7 @@ func (c *Compile) lockTable() error {
 	for _, tbl := range c.lockTables {
 		typ := plan2.MakeTypeByPlan2Type(tbl.PrimaryColTyp)
 		if len(tbl.PartitionTableIds) == 0 {
+			logutil.Infof("txn %s  tid %d", c.proc.GetTxnOperator().Txn().DebugString(), tbl.TableId)
 			return lockop.LockTable(
 				c.e,
 				c.proc,
