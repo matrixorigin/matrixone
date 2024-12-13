@@ -405,6 +405,11 @@ func doComQueryInBack(
 			insertStmt.FromDataTenantID = input.opAccount
 		}
 
+		if selectStmt, ok := stmt.(*tree.Select); ok && input.isRestore {
+			selectStmt.IsRestore = true
+			selectStmt.FromDataTenantID = input.opAccount
+		}
+
 		statsInfo.Reset()
 		//average parse duration
 		statsInfo.ParseStage.ParseStartTime = beginInstant

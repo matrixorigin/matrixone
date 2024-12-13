@@ -26,13 +26,15 @@ type SelectStatement interface {
 // Select represents a SelectStatement with an ORDER and/or LIMIT.
 type Select struct {
 	statementImpl
-	Select         SelectStatement
-	TimeWindow     *TimeWindow
-	OrderBy        OrderBy
-	Limit          *Limit
-	With           *With
-	Ep             *ExportParam
-	SelectLockInfo *SelectLockInfo
+	Select           SelectStatement
+	TimeWindow       *TimeWindow
+	OrderBy          OrderBy
+	Limit            *Limit
+	With             *With
+	Ep               *ExportParam
+	SelectLockInfo   *SelectLockInfo
+	IsRestore        bool
+	FromDataTenantID uint32
 }
 
 func (node *Select) Format(ctx *FmtCtx) {

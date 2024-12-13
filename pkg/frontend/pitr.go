@@ -1017,7 +1017,7 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 			}
 
 			// get topo sorted tables with foreign key
-			sortedFkTbls, rtnErr = fkTablesTopoSort(ctx, bh, snapshotName, dbName, tblName, fromAccountId, toAccountId)
+			sortedFkTbls, rtnErr = fkTablesTopoSort(ctx, bh, snapshotName, dbName, tblName)
 			if rtnErr != nil {
 				return
 			}

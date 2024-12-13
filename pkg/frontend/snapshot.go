@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2024 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -68,11 +68,9 @@ var (
 
 	restoreTableDataByNameFmt = "insert into `%s`.`%s` SELECT * FROM `%s`.`%s` {SNAPSHOT = '%s'}"
 
-	getRestoreAccountsFmt = "select account_name, account_id from mo_catalog.mo_account where account_name in (select account_name from mo_catalog.mo_account {MO_TS = %d }) ORDER BY account_id ASC;"
+	getPastAccountsFmt = "select account_id, account_name, admin_name, comments from mo_catalog.mo_account {MO_TS = %d } ORDER BY account_id ASC;"
 
-	getRestoreToDropAccountsFmt = "select account_name, account_id from mo_catalog.mo_account where account_name not in (select account_name from mo_catalog.mo_account {MO_TS = %d }) ORDER BY account_id ASC;"
-
-	getRestoreDropedAccountsFmt = "select account_id, account_name, admin_name, comments from mo_catalog.mo_account {MO_TS = %d } ORDER BY account_id ASC;"
+	getCurrentExistsAccountsFmt = "select account_id, account_name from mo_catalog.mo_account;"
 
 	getSubsSqlFmt = "select sub_account_id, sub_name, sub_time, pub_account_name, pub_name, pub_database, pub_tables, pub_time, pub_comment, status from mo_catalog.mo_subs %s where 1=1"
 
@@ -427,7 +425,7 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 	}
 
 	// get topo sorted tables with foreign key
-	sortedFkTbls, err := fkTablesTopoSort(ctx, bh, snapshotName, dbName, tblName, restoreAccount, toAccountId)
+	sortedFkTbls, err := fkTablesTopoSort(ctx, bh, snapshotName, dbName, tblName)
 	if err != nil {
 		return
 	}
@@ -633,7 +631,6 @@ func getFromAccountIdAndToAccountId(ctx context.Context, ses *Session, bh Backgr
 		toAccountId = fromAccountId
 		return
 	}
-	return
 }
 
 func deleteCurFkTables(ctx context.Context, sid string, bh BackgroundExec, dbName string, tblName string, toAccountId uint32) (err error) {
@@ -642,7 +639,7 @@ func deleteCurFkTables(ctx context.Context, sid string, bh BackgroundExec, dbNam
 	ctx = defines.AttachAccountId(ctx, toAccountId)
 
 	// get topo sorted tables with foreign key
-	sortedFkTbls, err := fkTablesTopoSort(ctx, bh, "", dbName, tblName, toAccountId, toAccountId)
+	sortedFkTbls, err := fkTablesTopoSort(ctx, bh, "", dbName, tblName)
 	if err != nil {
 		return
 	}
@@ -1571,7 +1568,7 @@ func getAccountId(ctx context.Context, bh BackgroundExec, accountName string) (u
 	return 0, moerr.NewInternalErrorf(ctx, "no such account, account name: %v", accountName)
 }
 
-func getFkDeps(ctx context.Context, bh BackgroundExec, snapshotName string, dbName string, tblName string, from, to uint32) (ans map[string][]string, err error) {
+func getFkDeps(ctx context.Context, bh BackgroundExec, snapshotName string, dbName string, tblName string) (ans map[string][]string, err error) {
 	sql := "select db_name, table_name, refer_db_name, refer_table_name from mo_catalog.mo_foreign_keys"
 	if len(snapshotName) > 0 {
 		sql += fmt.Sprintf(" {snapshot = '%s'}", snapshotName)
@@ -1584,7 +1581,7 @@ func getFkDeps(ctx context.Context, bh BackgroundExec, snapshotName string, dbNa
 	}
 
 	bh.ClearExecResultSet()
-	if err = bh.ExecRestore(ctx, sql, from, to); err != nil {
+	if err = bh.Exec(ctx, sql); err != nil {
 		return
 	}
 
@@ -1656,9 +1653,9 @@ func getTableInfoMap(
 	return
 }
 
-func fkTablesTopoSort(ctx context.Context, bh BackgroundExec, snapshotName string, dbName string, tblName string, from, to uint32) (sortedTbls []string, err error) {
+func fkTablesTopoSort(ctx context.Context, bh BackgroundExec, snapshotName string, dbName string, tblName string) (sortedTbls []string, err error) {
 	// get foreign key deps from mo_catalog.mo_foreign_keys
-	fkDeps, err := getFkDeps(ctx, bh, snapshotName, dbName, tblName, from, to)
+	fkDeps, err := getFkDeps(ctx, bh, snapshotName, dbName, tblName)
 	if err != nil {
 		return
 	}
@@ -1687,11 +1684,49 @@ func restoreToCluster(ctx context.Context,
 	getLogger(ses.GetService()).Info(fmt.Sprintf("[%s] start to restore cluster, restore timestamp: %d", snapshotName, snapshotTs))
 
 	// drop account which not in snapshot
-	var toDropAccount []accountRecord
-	toDropAccount, err = getRestoreToDropAccount(ctx, ses.GetService(), bh, snapshotName, snapshotTs)
+	var currentExistsAccount []accountRecord
+	currentExistsAccount, err = getRestoreAcurrentExistsAccount(ctx, ses.GetService(), bh, snapshotName, snapshotTs)
 	if err != nil {
 		return err
 	}
+
+	var pastExistsAccount []accountRecord
+	pastExistsAccount, err = getPastExistsAccounts(ctx, ses.GetService(), bh, snapshotName, snapshotTs)
+	if err != nil {
+		return err
+	}
+
+	var currentMap = make(map[string]bool)
+	for _, account := range currentExistsAccount {
+		currentMap[account.accountName] = true
+	}
+
+	var postMap = make(map[string]bool)
+	for _, account := range pastExistsAccount {
+		postMap[account.accountName] = true
+	}
+
+	// droped account is past exists account but not in current exists account
+	// to drop account is current exists account but not in past exists account
+	// to restore account is current exists account and in past exists account
+	var dropedAccounts []accountRecord
+	var toDropAccount []accountRecord
+	var toRestoreAccount []accountRecord
+	for _, account := range pastExistsAccount {
+		if _, ok := currentMap[account.accountName]; !ok {
+			dropedAccounts = append(dropedAccounts, account)
+		} else {
+			toRestoreAccount = append(toRestoreAccount, account)
+		}
+	}
+
+	for _, account := range currentExistsAccount {
+		if _, ok := postMap[account.accountName]; !ok {
+			toDropAccount = append(toDropAccount, account)
+		}
+	}
+
+	// drop account
 	for _, account := range toDropAccount {
 		getLogger(ses.GetService()).Info(fmt.Sprintf("[%s] start to drop account: %v, account id: %d", snapshotName, account.accountName, account.accountId))
 		err = dropExistsAccount(ctx, ses, bh, snapshotName, account)
@@ -1701,41 +1736,31 @@ func restoreToCluster(ctx context.Context,
 	}
 
 	// get restore accounts exists in snapshot
-	var accounts []accountRecord
-	accounts, err = getRestoreAccounts(ctx, ses.GetService(), bh, snapshotName, snapshotTs)
-	if err != nil {
-		return err
-	}
-
 	// restore to each account
-	for _, account := range accounts {
+	for _, account := range toRestoreAccount {
 		getLogger(ses.GetService()).Info(fmt.Sprintf("[%s] cluster restore start to restore account: %v, account id: %d", snapshotName, account.accountName, account.accountId))
+		// the account id may change
 		var newAccountId uint32
 		newAccountId, err = getAccountId(ctx, bh, account.accountName)
 		if err != nil {
 			return err
 		}
-		if err = restoreAccountUsingClusterSnapshot(ctx, ses, bh, snapshotName, snapshotTs, account, subDbToRestore, newAccountId); err != nil {
-			return err
+		if newAccountId != uint32(account.accountId) {
+			if err = restoreAccountUsingClusterSnapshotToNew(ctx, ses, bh, snapshotName, snapshotTs, account, subDbToRestore, uint64(newAccountId)); err != nil {
+				return err
+			}
+		} else {
+			if err = restoreAccountUsingClusterSnapshot(ctx, ses, bh, snapshotName, snapshotTs, account, subDbToRestore, newAccountId); err != nil {
+				return err
+			}
 		}
 
 		getLogger(ses.GetService()).Info(fmt.Sprintf("[%s] restore account: %v, account id: %d success", snapshotName, account.accountName, account.accountId))
 	}
 
 	// restore droped accounts
-	currentExistsAccount := make(map[string]bool)
-	for _, account := range accounts {
-		currentExistsAccount[account.accountName] = true
-	}
-	var dropedAccounts []accountRecord
-	dropedAccounts, err = getRestoreDropedAccounts(ctx, ses.GetService(), bh, snapshotName, snapshotTs)
-	if err != nil {
-		return err
-	}
+
 	for _, account := range dropedAccounts {
-		if _, ok := currentExistsAccount[account.accountName]; ok {
-			continue
-		}
 		getLogger(ses.GetService()).Info(fmt.Sprintf("[%s] cluster restore start to restore droped account: %v, account id: %d", snapshotName, account.accountName, account.accountId))
 
 		// create dropped account
@@ -1754,7 +1779,6 @@ func restoreToCluster(ctx context.Context,
 		}
 
 		// 2.0 restore droped account to new account
-		getLogger(ses.GetService()).Info(fmt.Sprintf("[%s] start to restore droped account: %v, account id: %d to new account id: %d", snapshotName, account.accountName, account.accountId, newAccountId))
 		err = restoreAccountUsingClusterSnapshotToNew(ctx, ses, bh, snapshotName, snapshotTs, account, subDbToRestore, uint64(newAccountId))
 		if err != nil {
 			return err
@@ -1874,7 +1898,7 @@ func restoreAccountUsingClusterSnapshot(ctx context.Context,
 	// get topo sorted tables with foreign key
 	var sortedFkTbls []string
 	var fkTableMap map[string]*tableInfo
-	sortedFkTbls, err = fkTablesTopoSort(ctx, bh, newSnapshot, "", "", uint32(fromAccount), uint32(toAccountId))
+	sortedFkTbls, err = fkTablesTopoSort(ctx, bh, newSnapshot, "", "")
 	if err != nil {
 		return err
 	}
@@ -1933,26 +1957,18 @@ func restoreAccountUsingClusterSnapshotToNew(ctx context.Context,
 	toAccountId uint64,
 ) (err error) {
 
+	getLogger(ses.GetService()).Info(fmt.Sprintf("[%s] start to restore dropped account: %v, account id: %d to new account id: %d, restore timestamp: %d", snapshotName, account.accountName, account.accountId, toAccountId, snapshotTs))
 	fromAccount := account.accountId
-	newSnapshot, err := insertSnapshotRecord(ctx, ses.GetService(), bh, snapshotName, snapshotTs, fromAccount, account.accountName)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if err != nil {
-			deleteSnapshotRecord(ctx, ses.GetService(), bh, snapshotName, newSnapshot)
-		}
-	}()
 
 	// get topo sorted tables with foreign key
 	var sortedFkTbls []string
 	var fkTableMap map[string]*tableInfo
-	sortedFkTbls, err = fkTablesTopoSort(ctx, bh, newSnapshot, "", "", uint32(fromAccount), uint32(toAccountId))
+	sortedFkTbls, err = fkTablesTopoSortWithDropped(ctx, bh, "", "", snapshotTs, uint32(fromAccount), uint32(toAccountId))
 	if err != nil {
 		return err
 	}
 	// get foreign key table infos
-	fkTableMap, err = getTableInfoMap(ctx, ses.GetService(), bh, newSnapshot, "", "", sortedFkTbls)
+	fkTableMap, err = getTableInfoMapFromDropped(ctx, ses.GetService(), bh, "", "", sortedFkTbls, snapshotTs, uint32(fromAccount), uint32(toAccountId))
 	if err != nil {
 		return err
 	}
@@ -1961,81 +1977,56 @@ func restoreAccountUsingClusterSnapshotToNew(ctx context.Context,
 	viewMap := make(map[string]*tableInfo)
 
 	// restore to account
-	if err = restoreToAccount(ctx,
+	if err = restoreToAccountFromDropped(
+		ctx,
 		ses.GetService(),
 		bh,
-		newSnapshot,
+		snapshotTs,
+		uint32(fromAccount),
 		uint32(toAccountId),
 		fkTableMap,
 		viewMap,
-		snapshotTs,
-		uint32(fromAccount),
 		true,
 		subDbToRestore); err != nil {
 		return err
 	}
 
 	if len(fkTableMap) > 0 {
-		if err = restoreTablesWithFk(ctx, ses.GetService(), bh, newSnapshot, sortedFkTbls, fkTableMap, uint32(toAccountId), snapshotTs); err != nil {
+		if err = restoreTablesWithFkFromDropped(ctx,
+			ses.GetService(),
+			bh,
+			snapshotTs,
+			uint32(fromAccount),
+			uint32(toAccountId),
+			sortedFkTbls,
+			fkTableMap); err != nil {
 			return err
 		}
 	}
 
 	if len(viewMap) > 0 {
-		if err = restoreViews(ctx, ses, bh, newSnapshot, viewMap, uint32(toAccountId)); err != nil {
+		if err = restoreViewsFromDropped(
+			ctx,
+			ses,
+			bh,
+			snapshotTs,
+			uint32(fromAccount),
+			uint32(toAccountId),
+			viewMap,
+			account.accountName); err != nil {
 			return err
 		}
 	}
-
-	deleteSnapshotRecord(ctx, ses.GetService(), bh, snapshotName, newSnapshot)
 
 	// checks if the given context has been canceled.
 	if err = CancelCheck(ctx); err != nil {
 		return err
 	}
+	getLogger(ses.GetService()).Info(fmt.Sprintf("[%s] success restore dropped account: %v, account id: %d to new account id: %d", snapshotName, account.accountName, account.accountId, toAccountId))
 	return
 }
 
-func getRestoreAccounts(ctx context.Context,
-	sid string,
-	bh BackgroundExec,
-	snapshotName string,
-	snapshotTs int64,
-) (accounts []accountRecord, err error) {
-	getLogger(sid).Info(fmt.Sprintf("[%s] start to get restore accounts", snapshotName))
-	var erArray []ExecResult
-
-	sql := fmt.Sprintf(getRestoreAccountsFmt, snapshotTs)
-	getLogger(sid).Info(fmt.Sprintf("[%s] get restore accounts sql: %s", snapshotName, sql))
-	bh.ClearExecResultSet()
-	err = bh.Exec(ctx, sql)
-	if err != nil {
-		return nil, err
-	}
-
-	erArray, err = getResultSet(ctx, bh)
-	if err != nil {
-		return nil, err
-	}
-
-	if execResultArrayHasData(erArray) {
-		for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
-			var account accountRecord
-			if account.accountName, err = erArray[0].GetString(ctx, i, 0); err != nil {
-				return nil, err
-			}
-			if account.accountId, err = erArray[0].GetUint64(ctx, i, 1); err != nil {
-				return nil, err
-			}
-			accounts = append(accounts, account)
-			getLogger(sid).Info(fmt.Sprintf("[%s] get account: %v, account id: %d", snapshotName, account.accountName, account.accountId))
-
-		}
-	}
-	return
-}
-
-func getRestoreToDropAccount(
+func getRestoreAcurrentExistsAccount(
 	ctx context.Context,
 	sid string,
 	bh BackgroundExec,
@@ -2045,7 +2036,7 @@ func getRestoreToDropAccount(
 	getLogger(sid).Info(fmt.Sprintf("[%s] start to get restore to drop accounts", snapshotName))
 	var erArray []ExecResult
 
-	sql := fmt.Sprintf(getRestoreToDropAccountsFmt, snapshotTs)
+	sql := getCurrentExistsAccountsFmt
 	getLogger(sid).Info(fmt.Sprintf("[%s] get restore to drop accounts sql: %s", snapshotName, sql))
 	bh.ClearExecResultSet()
 	err = bh.Exec(ctx, sql)
@@ -2061,14 +2052,14 @@ func getRestoreToDropAccount(
 	if execResultArrayHasData(erArray) {
 		for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
 			var account accountRecord
-			if account.accountName, err = erArray[0].GetString(ctx, i, 0); err != nil {
+			if account.accountId, err = erArray[0].GetUint64(ctx, i, 0); err != nil {
 				return nil, err
 			}
-			if account.accountId, err = erArray[0].GetUint64(ctx, i, 1); err != nil {
+			if account.accountName, err = erArray[0].GetString(ctx, i, 1); err != nil {
 				return nil, err
 			}
 			accounts = append(accounts, account)
-			getLogger(sid).Info(fmt.Sprintf("[%s] get account: %v, account id: %d", snapshotName, account.accountName, account.accountId))
+			getLogger(sid).Info(fmt.Sprintf("[%d] get account: %v, account id: %d", snapshotTs, account.accountName, account.accountId))
 		}
 	}
 	return
@@ -2100,18 +2091,18 @@ func makeDropAccountSqlByAccountRecord(record accountRecord) string {
 	return baseSQL
 }
 
-func getRestoreDropedAccounts(
+func getPastExistsAccounts(
 	ctx context.Context,
 	sid string,
 	bh BackgroundExec,
 	snapshotName string,
 	snapshotTs int64,
 ) (accounts []accountRecord, err error) {
-	getLogger(sid).Info(fmt.Sprintf("[%s] start to get restore droped accounts", snapshotName))
+	getLogger(sid).Info(fmt.Sprintf("[%s] start to get past exists accounts", snapshotName))
 	var erArray []ExecResult
 
-	sql := fmt.Sprintf(getRestoreDropedAccountsFmt, snapshotTs)
-	getLogger(sid).Info(fmt.Sprintf("[%s] get restore droped accounts sql: %s", snapshotName, sql))
+	sql := fmt.Sprintf(getPastAccountsFmt, snapshotTs)
+	getLogger(sid).Info(fmt.Sprintf("[%s] get restore past exists accounts sql: %s", snapshotName, sql))
 
 	bh.ClearExecResultSet()
 	err = bh.Exec(ctx, sql)

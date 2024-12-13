@@ -16,7 +16,6 @@ package frontend
 
 import (
 	"context"
-	"fmt"
 	"testing"
 
 	"github.com/golang/mock/gomock"
@@ -27,8 +26,8 @@ import (
 	"github.com/smartystreets/goconvey/convey"
 )
 
-func Test_getRestoreDropedAccounts(t *testing.T) {
-	convey.Convey("getRestoreDropedAccounts ", t, func() {
+func Test_fkTablesTopoSortWithDropped(t *testing.T) {
+	convey.Convey("fkTablesTopoSortWithDropped ", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
@@ -60,65 +59,26 @@ func Test_getRestoreDropedAccounts(t *testing.T) {
 
 		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
 
-		_, err := getRestoreDropedAccounts(ctx, "", bh, "sp01", 0)
+		_, err := fkTablesTopoSortWithDropped(ctx, bh, "", "", 0, 0, 0)
 		convey.So(err, convey.ShouldNotBeNil)
 
-		sql := fmt.Sprintf(getRestoreDropedAccountsFmt, 0)
+		sql := "select db_name, table_name, refer_db_name, refer_table_name from mo_catalog.mo_foreign_keys"
 		mrs := newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		_, err = getRestoreDropedAccounts(ctx, "", bh, "sp01", 0)
+		_, err = fkTablesTopoSortWithDropped(ctx, bh, "", "", 0, 0, 0)
 		convey.So(err, convey.ShouldBeNil)
 
-		sql = fmt.Sprintf(getRestoreDropedAccountsFmt, 0)
-		mrs = newMrsForPitrRecord([][]interface{}{
-			{uint64(0), "sys", "root", "system account"},
-		})
+		sql = "select db_name, table_name, refer_db_name, refer_table_name from mo_catalog.mo_foreign_keys"
+		mrs = newMrsForPitrRecord([][]interface{}{{"db1", "table1", "db2", "table2"}})
 		bh.sql2result[sql] = mrs
-
-		_, err = getRestoreDropedAccounts(ctx, "", bh, "sp01", 0)
+		_, err = fkTablesTopoSortWithDropped(ctx, bh, "", "", 0, 0, 0)
 		convey.So(err, convey.ShouldBeNil)
-
-		sql = fmt.Sprintf(getRestoreDropedAccountsFmt, 0)
-		mrs = newMrsForPitrRecord([][]interface{}{
-			{"abc", "sys", "root", "system account"},
-		})
-		bh.sql2result[sql] = mrs
-
-		_, err = getRestoreDropedAccounts(ctx, "", bh, "sp01", 0)
-		convey.So(err, convey.ShouldNotBeNil)
-
-		sql = fmt.Sprintf(getRestoreDropedAccountsFmt, 0)
-		mrs = newMrsForPitrRecord([][]interface{}{
-			{uint64(0), types.Day_Hour, "root", "system account"},
-		})
-		bh.sql2result[sql] = mrs
-
-		_, err = getRestoreDropedAccounts(ctx, "", bh, "sp01", 0)
-		convey.So(err, convey.ShouldNotBeNil)
-
-		sql = fmt.Sprintf(getRestoreDropedAccountsFmt, 0)
-		mrs = newMrsForPitrRecord([][]interface{}{
-			{uint64(0), "sys", types.Day_Hour, "system account"},
-		})
-		bh.sql2result[sql] = mrs
-
-		_, err = getRestoreDropedAccounts(ctx, "", bh, "sp01", 0)
-		convey.So(err, convey.ShouldNotBeNil)
-
-		sql = fmt.Sprintf(getRestoreDropedAccountsFmt, 0)
-		mrs = newMrsForPitrRecord([][]interface{}{
-			{uint64(0), "sys", "root", types.Day_Hour},
-		})
-		bh.sql2result[sql] = mrs
-
-		_, err = getRestoreDropedAccounts(ctx, "", bh, "sp01", 0)
-		convey.So(err, convey.ShouldNotBeNil)
 	})
 }
 
-func Test_getRestoreToDropAccount(t *testing.T) {
-	convey.Convey("getRestoreToDropAccount ", t, func() {
+func Test_getFkDepsWithDropped(t *testing.T) {
+	convey.Convey("getFkDepsWithDropped ", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
@@ -150,42 +110,49 @@ func Test_getRestoreToDropAccount(t *testing.T) {
 
 		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
 
-		_, err := getRestoreToDropAccount(ctx, "", bh, "sp01", 0)
+		_, err := getFkDepsWithDropped(ctx, bh, "", "", 0, 0, 0)
 		convey.So(err, convey.ShouldNotBeNil)
 
-		sql := fmt.Sprintf(getRestoreToDropAccountsFmt, 0)
+		sql := "select db_name, table_name, refer_db_name, refer_table_name from mo_catalog.mo_foreign_keys"
 		mrs := newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		_, err = getRestoreToDropAccount(ctx, "", bh, "sp01", 0)
+		_, err = getFkDepsWithDropped(ctx, bh, "", "", 0, 0, 0)
 		convey.So(err, convey.ShouldBeNil)
 
-		sql = fmt.Sprintf(getRestoreToDropAccountsFmt, 0)
-		mrs = newMrsForPitrRecord([][]interface{}{
-			{"sys", uint64(0)},
-		})
+		sql = "select db_name, table_name, refer_db_name, refer_table_name from mo_catalog.mo_foreign_keys"
+		mrs = newMrsForPitrRecord([][]interface{}{{"db1", "table1", "db2", "table2"}})
 		bh.sql2result[sql] = mrs
 
-		_, err = getRestoreToDropAccount(ctx, "", bh, "sp01", 0)
+		_, err = getFkDepsWithDropped(ctx, bh, "", "", 0, 0, 0)
 		convey.So(err, convey.ShouldBeNil)
 
-		sql = fmt.Sprintf(getRestoreToDropAccountsFmt, 0)
-		mrs = newMrsForPitrRecord([][]interface{}{
-			{types.Day_Hour, uint64(0)},
-			{"sys", uint64(0)},
-		})
+		sql = "select db_name, table_name, refer_db_name, refer_table_name from mo_catalog.mo_foreign_keys"
+		mrs = newMrsForPitrRecord([][]interface{}{{types.Day_Hour, "table1", "db2", "table2"}})
 		bh.sql2result[sql] = mrs
 
-		_, err = getRestoreToDropAccount(ctx, "", bh, "sp01", 0)
+		_, err = getFkDepsWithDropped(ctx, bh, "", "", 0, 0, 0)
 		convey.So(err, convey.ShouldNotBeNil)
 
-		sql = fmt.Sprintf(getRestoreToDropAccountsFmt, 0)
-		mrs = newMrsForPitrRecord([][]interface{}{
-			{"sys", types.Day_Hour},
-		})
+		sql = "select db_name, table_name, refer_db_name, refer_table_name from mo_catalog.mo_foreign_keys"
+		mrs = newMrsForPitrRecord([][]interface{}{{"db1", types.Day_Hour, "db2", "table2"}})
 		bh.sql2result[sql] = mrs
 
-		_, err = getRestoreToDropAccount(ctx, "", bh, "sp01", 0)
+		_, err = getFkDepsWithDropped(ctx, bh, "", "", 0, 0, 0)
+		convey.So(err, convey.ShouldNotBeNil)
+
+		sql = "select db_name, table_name, refer_db_name, refer_table_name from mo_catalog.mo_foreign_keys"
+		mrs = newMrsForPitrRecord([][]interface{}{{"db1", "table1", types.Day_Hour, "table2"}})
+		bh.sql2result[sql] = mrs
+
+		_, err = getFkDepsWithDropped(ctx, bh, "", "", 0, 0, 0)
+		convey.So(err, convey.ShouldNotBeNil)
+
+		sql = "select db_name, table_name, refer_db_name, refer_table_name from mo_catalog.mo_foreign_keys"
+		mrs = newMrsForPitrRecord([][]interface{}{{"db1", "table1", "db2", types.Day_Hour}})
+		bh.sql2result[sql] = mrs
+
+		_, err = getFkDepsWithDropped(ctx, bh, "", "", 0, 0, 0)
 		convey.So(err, convey.ShouldNotBeNil)
 	})
 }
