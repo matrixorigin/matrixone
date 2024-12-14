@@ -60,6 +60,22 @@ func TestDiskCleaner_ReplayToWrite(t *testing.T) {
 	require.Equal(t, tryGC, 0)
 	require.Equal(t, replayCnt, 1)
 	require.Equal(t, executeCnt, 0)
+
+	err = diskCleaner.GC(context.Background())
+	require.Error(t, err)
+
+	err = diskCleaner.SwitchToWriteMode(context.Background())
+	require.NoError(t, err)
+	require.True(t, diskCleaner.IsWriteMode())
+
+	err = diskCleaner.GC(context.Background())
+	require.NoError(t, err)
+	err = diskCleaner.FlushQueue(context.Background())
+
+	require.NoError(t, err)
+	require.Equal(t, tryGC, 0)
+	require.Equal(t, replayCnt, 1)
+	require.Equal(t, executeCnt, 1)
 }
 
 // write to replay mode
