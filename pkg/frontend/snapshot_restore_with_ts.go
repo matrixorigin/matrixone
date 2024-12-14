@@ -525,7 +525,7 @@ func recreateTableFromDropped(
 	insertIntoSql := fmt.Sprintf(restoreTableDataByTsFmt, tblInfo.dbName, tblInfo.tblName, tblInfo.dbName, tblInfo.tblName, snapshotTs)
 	beginTime := time.Now()
 	getLogger(sid).Info(fmt.Sprintf("[%d:%d] start to insert select table: %v, insert sql: %s", restoreAccount, snapshotTs, tblInfo.tblName, insertIntoSql))
-	if err = bh.ExecRestore(ctx, insertIntoSql, restoreAccount, toAccountId); err != nil {
+	if err = bh.ExecRestore(toCtx, insertIntoSql, restoreAccount, toAccountId); err != nil {
 		return
 	}
 	getLogger(sid).Info(fmt.Sprintf("[%d:%d] insert select table: %v, cost: %v", restoreAccount, snapshotTs, tblInfo.tblName, time.Since(beginTime)))
