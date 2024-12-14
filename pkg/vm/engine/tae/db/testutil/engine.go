@@ -377,19 +377,23 @@ func InitTestDBWithDir(
 	t *testing.T,
 	opts *options.Options,
 ) *db.DB {
-	if db, err := db.Open(ctx, dir, opts); err != nil {
+	var (
+		err error
+		tae *db.DB
+	)
+	if tae, err = db.Open(ctx, dir, opts); err != nil {
 		panic(err)
 	}
 	// only ut executes this checker
-	db.DiskCleaner.GetCleaner().AddChecker(
+	tae.DiskCleaner.GetCleaner().AddChecker(
 		func(item any) bool {
-			min := db.TxnMgr.MinTSForTest()
+			min := tae.TxnMgr.MinTSForTest()
 			ckp := item.(*checkpoint.CheckpointEntry)
 			//logutil.Infof("min: %v, checkpoint: %v", min.ToString(), checkpoint.GetStart().ToString())
 			end := ckp.GetEnd()
 			return !end.GE(&min)
 		}, cmd_util.CheckerKeyMinTS)
-	return db
+	return tae
 }
 
 func InitTestDB(
