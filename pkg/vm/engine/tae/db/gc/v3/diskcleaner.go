@@ -99,6 +99,40 @@ func (cleaner *DiskCleaner) IsReplayMode() bool {
 	return cleaner.step.Load() == StateStep_Replay
 }
 
+func (cleaner *DiskCleaner) SwitchToWriteMode(ctx context.Context) (err error) {
+	oldStep := cleaner.step.Load()
+	switch oldStep {
+	case StateStep_Write:
+		return
+	case StateStep_Replay2Write, StateStep_Write2Replay:
+		err = moerr.NewTxnControlErrorNoCtxf("Bad cleaner state: %d", oldStep)
+		return
+	}
+
+	if !cleaner.step.CompareAndSwap(oldStep, StateStep_Replay2Write) {
+		err = moerr.NewTxnControlErrorNoCtxf("Bad cleaner state: %d", oldStep)
+		return
+	}
+
+	now := time.Now()
+	defer func() {
+		logger := logutil.Info
+		// any error occurs, switch back to StateStep_Write
+		if err != nil {
+			cleaner.step.Store(StateStep_Replay)
+			logger = logutil.Error
+		}
+		logger(
+			"GC-Switch2Write",
+			zap.Duration("duration", time.Since(now)),
+			zap.Error(err),
+		)
+	}()
+
+	cleaner.step.Store(StateStep_Write)
+	return
+}
+
 func (cleaner *DiskCleaner) SwitchToReplayMode(ctx context.Context) (err error) {
 	oldStep := cleaner.step.Load()
 	switch oldStep {
