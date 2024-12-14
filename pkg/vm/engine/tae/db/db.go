@@ -70,6 +70,14 @@ func (m DBTxnMode) IsValid() bool {
 	return m == DBTxnMode_Write || m == DBTxnMode_Replay
 }
 
+func (m DBTxnMode) IsWriteMode() bool {
+	return m == DBTxnMode_Write
+}
+
+func (m DBTxnMode) IsReplayMode() bool {
+	return m == DBTxnMode_Replay
+}
+
 type DBOption func(*DB)
 
 func WithTxnMode(mode DBTxnMode) DBOption {
