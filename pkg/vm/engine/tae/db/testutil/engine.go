@@ -377,7 +377,9 @@ func InitTestDBWithDir(
 	t *testing.T,
 	opts *options.Options,
 ) *db.DB {
-	db, _ := db.Open(ctx, dir, opts)
+	if db, err := db.Open(ctx, dir, opts); err != nil {
+		panic(err)
+	}
 	// only ut executes this checker
 	db.DiskCleaner.GetCleaner().AddChecker(
 		func(item any) bool {

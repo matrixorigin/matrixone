@@ -191,6 +191,7 @@ func (c *Controller) handleToReplayCmd(cmd *controlCmd) {
 	// 11.2 TODO: replay the log entries
 
 	WithTxnMode(DBTxnMode_Replay)(c.db)
+	return CheckCronJobs(c.db)
 }
 
 func (c *Controller) handleToWriteCmd(cmd *controlCmd) {
@@ -267,6 +268,7 @@ func (c *Controller) handleToWriteCmd(cmd *controlCmd) {
 	// 5.x TODO
 
 	WithTxnMode(DBTxnMode_Write)(c.db)
+	return CheckCronJobs(c.db)
 }
 
 func (c *Controller) Start() {
