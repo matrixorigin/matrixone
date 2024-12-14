@@ -104,7 +104,7 @@ func AddCronJobs(db *DB) (err error) {
 			return
 		}
 	}
-	err = CheckCronJobs(db)
+	err = CheckCronJobs(db, db.GetTxnMode())
 	return
 }
 
@@ -233,12 +233,11 @@ func RemoveCronJob(db *DB, name string) {
 	db.CronJobs.RemoveJob(name)
 }
 
-func CheckCronJobs(db *DB) (err error) {
-	txnMode := db.GetTxnMode()
+func CheckCronJobs(db *DB, expectMode DBTxnMode) (err error) {
 	for name, spec := range CronJobs_Spec {
-		if (txnMode.IsWriteMode() && spec[1]) || (txnMode.IsReplayMode() && spec[3]) {
+		if (expectMode.IsWriteMode() && spec[1]) || (expectMode.IsReplayMode() && spec[3]) {
 			if job := db.CronJobs.GetJob(name); job == nil {
-				err = moerr.NewInternalErrorNoCtxf("missing cron job %s in %s mode", name, txnMode)
+				err = moerr.NewInternalErrorNoCtxf("missing cron job %s in %s mode", name, expectMode)
 				return
 			}
 		}
@@ -248,14 +247,14 @@ func CheckCronJobs(db *DB) (err error) {
 			err = moerr.NewInternalErrorNoCtxf("unknown cron job name: %s", name)
 			return false
 		} else {
-			if txnMode.IsWriteMode() {
+			if expectMode.IsWriteMode() {
 				if !spec[0] {
-					err = moerr.NewInternalErrorNoCtxf("invalid cron job %s in %s mode", name, txnMode)
+					err = moerr.NewInternalErrorNoCtxf("invalid cron job %s in %s mode", name, expectMode)
 					return false
 				}
 			} else {
 				if !spec[2] {
-					err = moerr.NewInternalErrorNoCtxf("invalid cron job %s in %s mode", name, txnMode)
+					err = moerr.NewInternalErrorNoCtxf("invalid cron job %s in %s mode", name, expectMode)
 					return false
 				}
 			}

@@ -185,13 +185,16 @@ func (c *Controller) handleToReplayCmd(cmd *controlCmd) {
 	// 10. forward the write requests to the new write candidate
 	// TODO
 
+	if err = CheckCronJobs(c.db, DBTxnMode_Replay); err != nil {
+		// rollback
+		return
+	}
 	// 11. replay the log entries from the logservice
 	// 11.1 switch the txn mode to replay mode
 	c.db.TxnMgr.ToReplayMode()
 	// 11.2 TODO: replay the log entries
 
 	WithTxnMode(DBTxnMode_Replay)(c.db)
-	return CheckCronJobs(c.db)
 }
 
 func (c *Controller) handleToWriteCmd(cmd *controlCmd) {
@@ -265,10 +268,13 @@ func (c *Controller) handleToWriteCmd(cmd *controlCmd) {
 		// Rollback
 		return
 	}
+	if err = CheckCronJobs(c.db, DBTxnMode_Write); err != nil {
+		// Rollback
+		return
+	}
 	// 5.x TODO
 
 	WithTxnMode(DBTxnMode_Write)(c.db)
-	return CheckCronJobs(c.db)
 }
 
 func (c *Controller) Start() {
