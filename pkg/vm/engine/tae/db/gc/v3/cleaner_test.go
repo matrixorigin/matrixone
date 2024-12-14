@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/exp/rand"
 )
 
 // write to replay mode
@@ -71,22 +72,37 @@ func TestDiskCleaner_WriteToReplay(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(1)
 
-	WithProcessFunc(func(context.Context) (err error) {
-		wg.Wait()
-		executeCnt++
+	WithProcessFunc(func(ctx context.Context) (err error) {
+		defer func() {
+			executeCnt++
+		}()
+		if rand.Intn(10) > 5 {
+			wg.Wait()
+		} else {
+			select {
+			case <-ctx.Done():
+				err = context.Cause(ctx)
+				t.Logf("%d: %v", executeCnt, err)
+				return
+			default:
+			}
+			time.Sleep(2 * time.Millisecond)
+		}
 		return nil
 	})(&cleaner)
 
-	err = diskCleaner.GC(context.Background())
-	require.NoError(t, err)
+	for i := 0; i < 10; i++ {
+		err = diskCleaner.GC(context.Background())
+		require.NoError(t, err)
+	}
 	go func() {
-		time.Sleep(time.Millisecond * 2)
+		time.Sleep(time.Millisecond * 4)
 		wg.Done()
 	}()
 
 	err = diskCleaner.SwitchToReplayMode(context.Background())
 	require.NoError(t, err)
-	require.Equal(t, executeCnt, 2)
+	require.Equal(t, executeCnt, 11)
 	require.True(t, diskCleaner.IsReplayMode())
 
 	WithProcessFunc(func(context.Context) (err error) {

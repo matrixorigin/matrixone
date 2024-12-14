@@ -29,6 +29,8 @@ import (
 	"go.uber.org/zap"
 )
 
+var CauseSwitchWrite2Replay = moerr.NewInternalErrorNoCtx("SwitchWrite2Replay")
+
 const (
 	JT_GCNoop tasks.JobType = 300 + iota
 	JT_GCExecute
@@ -52,6 +54,11 @@ const (
 	StateStep_Replay2Write
 )
 
+type runningCtx struct {
+	ctx    context.Context
+	cancel context.CancelCauseFunc
+}
+
 // DiskCleaner is the main structure of v2 operation,
 // and provides "JobFactory" to let tae notify itself
 // to perform a v2
@@ -60,6 +67,7 @@ type DiskCleaner struct {
 
 	step        atomic.Uint32
 	replayError atomic.Value
+	runningCtx  atomic.Pointer[runningCtx]
 
 	processQueue sm.Queue
 
@@ -119,6 +127,8 @@ func (cleaner *DiskCleaner) SwitchToReplayMode(ctx context.Context) (err error) 
 			zap.Error(err),
 		)
 	}()
+
+	cleaner.CancelRunning(CauseSwitchWrite2Replay)
 
 	// the current state is StateStep_Write2Replay
 	if err = cleaner.FlushQueue(ctx); err != nil {
@@ -261,19 +271,41 @@ func (cleaner *DiskCleaner) process(items ...any) {
 	for _, item := range items {
 		switch v := item.(type) {
 		case tasks.JobType:
+			ctx := cleaner.runningCtx.Load()
+			if ctx == nil {
+				ctx = new(runningCtx)
+				ctx.ctx, ctx.cancel = context.WithCancelCause(context.Background())
+				cleaner.runningCtx.Store(ctx)
+			}
 			switch v {
 			case JT_GCReplay:
-				cleaner.doReplay(context.Background())
+				cleaner.doReplay(ctx.ctx)
 			case JT_GCReplayAndExecute:
-				cleaner.doReplayAndExecute(context.Background())
+				cleaner.doReplayAndExecute(ctx.ctx)
 			case JT_GCExecute:
-				cleaner.doExecute(context.Background())
+				cleaner.doExecute(ctx.ctx)
 			default:
 				logutil.Error("GC-Unknown-JobType", zap.Any("job-type", v))
 			}
 		case *tasks.Job:
+			// noop will reset the runningCtx
+			if v.Type() == JT_GCNoop {
+				runningCtx := new(runningCtx)
+				runningCtx.ctx, runningCtx.cancel = context.WithCancelCause(context.Background())
+				if oldCtx := cleaner.runningCtx.Load(); oldCtx != nil {
+					oldCtx.cancel(nil)
+				}
+
+				cleaner.runningCtx.Store(runningCtx)
+			}
 			v.Run()
 		}
+	}
+}
+
+func (cleaner *DiskCleaner) CancelRunning(cause error) {
+	if ctx := cleaner.runningCtx.Load(); ctx != nil {
+		ctx.cancel(cause)
 	}
 }
 
