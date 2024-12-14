@@ -81,7 +81,11 @@ func NewDiskCleaner(
 	cleaner := &DiskCleaner{
 		cleaner: diskCleaner,
 	}
-	cleaner.step.Store(StateStep_Write)
+	if isWriteMode {
+		cleaner.step.Store(StateStep_Write)
+	} else {
+		cleaner.step.Store(StateStep_Replay)
+	}
 
 	cleaner.processQueue = sm.NewSafeQueue(1000, 100, cleaner.process)
 	return cleaner

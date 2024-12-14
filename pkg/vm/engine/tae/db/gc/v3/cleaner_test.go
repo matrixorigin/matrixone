@@ -25,6 +25,43 @@ import (
 	"golang.org/x/exp/rand"
 )
 
+func TestDiskCleaner_ReplayToWrite(t *testing.T) {
+	var (
+		replayCnt  int
+		executeCnt int
+		tryGC      int
+	)
+
+	cleaner := NewMockCleaner(
+		WithTryGCFunc(func(context.Context) (err error) {
+			tryGC++
+			return nil
+		}),
+		WithReplayFunc(func(context.Context) (err error) {
+			replayCnt++
+			return nil
+		}),
+		WithProcessFunc(func(context.Context) (err error) {
+			time.Sleep(time.Millisecond * 2)
+			executeCnt++
+			return nil
+		}),
+	)
+
+	diskCleaner := NewDiskCleaner(&cleaner, false)
+	require.True(t, diskCleaner.IsReplayMode())
+	require.Equal(t, tryGC, 0)
+	require.Equal(t, replayCnt, 0)
+	require.Equal(t, executeCnt, 0)
+
+	diskCleaner.Start()
+	err := diskCleaner.FlushQueue(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, tryGC, 0)
+	require.Equal(t, replayCnt, 1)
+	require.Equal(t, executeCnt, 0)
+}
+
 // write to replay mode
 func TestDiskCleaner_WriteToReplay(t *testing.T) {
 	var (
