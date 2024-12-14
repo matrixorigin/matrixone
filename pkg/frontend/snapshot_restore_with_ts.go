@@ -511,21 +511,21 @@ func recreateTableFromDropped(
 ) (err error) {
 	getLogger(sid).Info(fmt.Sprintf("[%d:%d] start to restore table: %v, restore timestamp: %d", restoreAccount, snapshotTs, tblInfo.tblName, snapshotTs))
 
-	newCtx := defines.AttachAccountId(ctx, toAccountId)
-	if err = bh.Exec(newCtx, fmt.Sprintf("use `%s`", tblInfo.dbName)); err != nil {
+	toCtx := defines.AttachAccountId(ctx, toAccountId)
+	if err = bh.Exec(toCtx, fmt.Sprintf("use `%s`", tblInfo.dbName)); err != nil {
 		return
 	}
 
 	// create table
 	getLogger(sid).Info(fmt.Sprintf("[%d:%d] start to create table: %v, create table sql: %s", restoreAccount, snapshotTs, tblInfo.tblName, tblInfo.createSql))
-	if err = bh.Exec(newCtx, tblInfo.createSql); err != nil {
+	if err = bh.Exec(toCtx, tblInfo.createSql); err != nil {
 		return
 	}
 
 	insertIntoSql := fmt.Sprintf(restoreTableDataByTsFmt, tblInfo.dbName, tblInfo.tblName, tblInfo.dbName, tblInfo.tblName, snapshotTs)
 	beginTime := time.Now()
 	getLogger(sid).Info(fmt.Sprintf("[%d:%d] start to insert select table: %v, insert sql: %s", restoreAccount, snapshotTs, tblInfo.tblName, insertIntoSql))
-	if err = bh.ExecRestore(newCtx, insertIntoSql, restoreAccount, toAccountId); err != nil {
+	if err = bh.ExecRestore(ctx, insertIntoSql, restoreAccount, toAccountId); err != nil {
 		return
 	}
 	getLogger(sid).Info(fmt.Sprintf("[%d:%d] insert select table: %v, cost: %v", restoreAccount, snapshotTs, tblInfo.tblName, time.Since(beginTime)))
