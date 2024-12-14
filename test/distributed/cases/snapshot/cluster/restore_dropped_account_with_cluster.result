@@ -379,26 +379,26 @@ drop account if exists acc07;
 create account acc07 admin_name = 'test_account' identified by '111111111'  comment 'test_comment';
 show accounts;
 account_name    admin_name    created_time    status    suspended_time    db_count    tbl_count    size    snapshot_size    comments
-acc05    test_account    2024-12-13 07:50:41    open    null    5    65    0.0    0.0    test_comment
-acc06    test_account    2024-12-13 07:50:42    open    null    5    65    0.0    0.0    test_comment
-acc07    test_account    2024-12-13 07:50:42    open    null    5    65    0.0    0.0    test_comment
-sys    root    2024-12-13 07:41:00    open    null    7    99    0.636247    0.0    system account
+acc05    test_account    2024-12-14 09:49:38    open    null    5    65    0.0    0.0    test_comment
+acc06    test_account    2024-12-14 09:49:38    open    null    5    65    0.0    0.0    test_comment
+acc07    test_account    2024-12-14 09:49:39    open    null    5    65    0.0    0.0    test_comment
+sys    root    2024-12-14 09:42:21    open    null    7    99    0.59069    0.0    system account
 create account acc03 admin_name = 'test_account' identified by '123';
 show accounts;
 account_name    admin_name    created_time    status    suspended_time    db_count    tbl_count    size    snapshot_size    comments
-acc05    test_account    2024-12-13 07:50:41    open    null    5    65    0.0    0.0    test_comment
-acc06    test_account    2024-12-13 07:50:42    open    null    5    65    0.0    0.0    test_comment
-acc07    test_account    2024-12-13 07:50:42    open    null    5    65    0.0    0.0    test_comment
-acc03    test_account    2024-12-13 07:50:43    open    null    5    65    0.0    0.0    
-sys    root    2024-12-13 07:41:00    open    null    7    99    0.636247    0.0    system account
+acc05    test_account    2024-12-14 09:49:38    open    null    5    65    0.0    0.0    test_comment
+acc06    test_account    2024-12-14 09:49:38    open    null    5    65    0.0    0.0    test_comment
+acc07    test_account    2024-12-14 09:49:39    open    null    5    65    0.0    0.0    test_comment
+acc03    test_account    2024-12-14 09:49:39    open    null    5    65    0.0    0.0    
+sys    root    2024-12-14 09:42:21    open    null    7    99    0.59069    0.0    system account
 restore cluster from snapshot snapshot_01;
 show accounts;
 account_name    admin_name    created_time    status    suspended_time    db_count    tbl_count    size    snapshot_size    comments
-acc03    test_account    2024-12-13 07:50:43    open    null    6    73    0.0    0.0    
-acc01    test_account    2024-12-13 07:50:45    open    null    6    66    0.0    0.0    
-acc02    test_account    2024-12-13 07:50:45    open    null    6    73    0.0    0.0    test_comment
-acc04    test_account    2024-12-13 07:50:46    open    null    5    65    0.0    0.0    test_comment
-sys    root    2024-12-13 07:41:00    open    null    7    99    0.637239    0.0    system account
+acc03    test_account    2024-12-14 09:49:39    open    null    6    73    0.0    0.0    
+acc01    test_account    2024-12-14 09:49:56    open    null    6    66    0.0    0.0    
+acc02    test_account    2024-12-14 09:49:56    open    null    6    73    0.0    0.0    test_comment
+acc04    test_account    2024-12-14 09:49:57    open    null    5    65    0.0    0.0    test_comment
+sys    root    2024-12-14 09:42:21    open    null    7    99    0.584922    0.0    system account
 drop account if exists acc01;
 drop account if exists acc02;
 drop account if exists acc03;
