@@ -427,13 +427,13 @@ type dynamicCtx struct {
 
 func (d *dynamicCtx) Close() {
 	if d.alphaTaskPool != nil {
-		d.alphaTaskPool.Release()
+		_ = d.alphaTaskPool.ReleaseTimeout(time.Second * 3)
 	}
 	if d.beta.taskPool != nil {
-		d.beta.taskPool.Release()
+		_ = d.beta.taskPool.ReleaseTimeout(time.Second * 3)
 	}
 	if d.gama.taskPool != nil {
-		d.gama.taskPool.Release()
+		_ = d.gama.taskPool.ReleaseTimeout(time.Second * 3)
 	}
 }
 
