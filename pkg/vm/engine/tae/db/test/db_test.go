@@ -10539,5 +10539,10 @@ func Test_OpenReplayDB1(t *testing.T) {
 	tae := testutil.NewReplayTestEngine(ctx, ModuleName, t, opts)
 	assert.True(t, tae.IsReplayMode())
 	assert.True(t, tae.TxnMgr.IsReplayMode())
+	for name, spec := range db.CronJobs_Spec {
+		if !spec[2] {
+			assert.Error(t, db.AddCronJob(tae.DB, name, false))
+		}
+	}
 	defer tae.Close()
 }
