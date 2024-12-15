@@ -210,17 +210,13 @@ func (obj *aobject) GetDuplicatedRows(
 	node := obj.PinNode()
 	defer node.Unref()
 	if !node.IsPersisted() {
-		fn := func() (min, max int32, err error) {
+		fn := func() (minv, maxv int32, err error) {
 			obj.RUnlock()
 			defer obj.RLock()
-			max, err = obj.GetMaxRowByTS(to)
-			if err != nil {
+			if maxv, err = obj.GetMaxRowByTS(to); err != nil {
 				return
 			}
-			min, err = obj.GetMaxRowByTS(from)
-			if err != nil {
-				return
-			}
+			minv, err = obj.GetMaxRowByTS(from)
 			return
 		}
 		return node.GetDuplicatedRows(
