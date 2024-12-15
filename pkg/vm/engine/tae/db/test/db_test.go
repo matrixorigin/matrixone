@@ -10531,12 +10531,14 @@ func Test_BasicTxnModeSwitch(t *testing.T) {
 	assert.NoError(t, err)
 	assert.True(t, tae.IsWriteMode())
 	assert.True(t, tae.TxnMgr.IsWriteMode())
+	assert.Error(t, db.CheckCronJobs(tae.DB, db.DBTxnMode_Replay))
 }
 
 func Test_OpenReplayDB1(t *testing.T) {
 	ctx := context.Background()
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := testutil.NewReplayTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
 	assert.True(t, tae.IsReplayMode())
 	assert.True(t, tae.TxnMgr.IsReplayMode())
 	for name, spec := range db.CronJobs_Spec {
@@ -10544,5 +10546,6 @@ func Test_OpenReplayDB1(t *testing.T) {
 			assert.Error(t, db.AddCronJob(tae.DB, name, false))
 		}
 	}
-	defer tae.Close()
+	assert.Error(t, db.AddCronJob(tae.DB, "unknown", false))
+	assert.Error(t, db.CheckCronJobs(tae.DB, db.DBTxnMode_Write))
 }
