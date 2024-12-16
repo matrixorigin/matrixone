@@ -50,7 +50,7 @@ Since NOT filter is slow in SQL, we change the plan into A UNION (A INTERSECT B)
 
 # The result SQL will be
 
-SELECT A UNION ALL (A JOIN B)
+A UNION ALL (A JOIN B)
 
 In case there are multiple + operators like the search string "+A +B -(<C >D)"
 JOIN will be used to optimize the SQL with Pattern/Plan
