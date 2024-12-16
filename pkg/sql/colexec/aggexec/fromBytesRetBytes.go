@@ -20,17 +20,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
-var _ AggFuncExec = &aggregatorFromBytesToBytes{}
+var _ AggFuncExec = &singleAggFuncExecNew4{}
 
 func RegisterAggFromBytesRetBytes(
 	basicInformation SingleColumnAggInformation,
 	initCommonContext AggCommonContextInit,
 	initGroupContext AggGroupContextInit,
-	initResult InitBytesResultOfAgg,
-	fill bytesBytesFill,
-	fills bytesBytesFills,
-	merge bytesBytesMerge,
-	flush bytesBytesFlush) {
+	initResult SingleAggInitResultVar,
+	fill SingleAggFill4NewVersion,
+	fills SingleAggFills4NewVersion,
+	merge SingleAggMerge4NewVersion,
+	flush SingleAggFlush4NewVersion) {
 
 	key := generateKeyOfSingleColumnAgg(basicInformation.id, basicInformation.arg)
 	if _, ok := registeredAggFunctions[key]; ok {
@@ -72,83 +72,81 @@ func RegisterAggFromBytesRetBytes(
 	singleAgg[basicInformation.id] = true
 }
 
-func newAggregatorFromBytesToBytes(
+// newSingleAggFuncExec4NewVersion creates a singleAggFuncExecNew4 from the agg information.
+func newSingleAggFuncExec4NewVersion(
 	mg AggMemoryManager, info singleAggInfo, impl aggImplementation) AggFuncExec {
-	e := &aggregatorFromBytesToBytes{}
+	e := &singleAggFuncExecNew4{}
 	e.init(mg, info, impl)
 	return e
 }
 
-// aggregatorFromBytesToBytes is the aggregator which accept bytes column and return a bytes result.
-type aggregatorFromBytesToBytes struct {
+// singleAggFuncExecNew4 is the agg executor for single-column aggregation function
+// with fixed input and output types were both var-len types.
+type singleAggFuncExecNew4 struct {
 	singleAggInfo
 	singleAggExecExtraInformation
 	distinctHash
 
 	arg sBytesArg
-	ret aggResultWithBytesType
+	ret aggFuncBytesResult
 
 	execContext *AggContext
 
-	fill  bytesBytesFill
-	fills bytesBytesFills
-	merge bytesBytesMerge
-	flush bytesBytesFlush
+	fill  SingleAggFill4NewVersion
+	fills SingleAggFills4NewVersion
+	merge SingleAggMerge4NewVersion
+	flush SingleAggFlush4NewVersion
 }
 
-func (exec *aggregatorFromBytesToBytes) GetOptResult() SplitResult {
-	return &exec.ret.optSplitResult
-}
-
-func (exec *aggregatorFromBytesToBytes) marshal() ([]byte, error) {
+func (exec *singleAggFuncExecNew4) marshal() ([]byte, error) {
 	d := exec.singleAggInfo.getEncoded()
-	r, em, err := exec.ret.marshalToBytes()
+	r, err := exec.ret.marshal()
 	if err != nil {
 		return nil, err
 	}
-	encoded := EncodedAgg{
-		Info:    d,
-		Result:  r,
-		Empties: em,
-		Groups:  exec.execContext.getGroupContextEncodings(),
+	encoded := &EncodedAgg{
+		Info:   d,
+		Result: r,
+		Groups: exec.execContext.getGroupContextEncodings(),
 	}
 	return encoded.Marshal()
 }
 
-func (exec *aggregatorFromBytesToBytes) unmarshal(_ *mpool.MPool, result, empties, groups [][]byte) error {
+func (exec *singleAggFuncExecNew4) unmarshal(mp *mpool.MPool, result []byte, groups [][]byte) error {
 	exec.execContext.decodeGroupContexts(groups, exec.singleAggInfo.retType, exec.singleAggInfo.argType)
-	return exec.ret.unmarshalFromBytes(result, empties)
+	return exec.ret.unmarshal(result)
 }
 
-func (exec *aggregatorFromBytesToBytes) init(
+func (exec *singleAggFuncExecNew4) init(
 	mg AggMemoryManager,
 	info singleAggInfo,
 	impl aggImplementation) {
 
 	if info.IsDistinct() {
-		exec.distinctHash = newDistinctHash()
+		exec.distinctHash = newDistinctHash(mg.Mp(), false)
 	}
 
-	var v string
 	if resultInitMethod := impl.logic.init; resultInitMethod != nil {
-		v = string(resultInitMethod.(InitBytesResultOfAgg)(info.retType, info.argType))
+		v := resultInitMethod.(SingleAggInitResultVar)(info.retType, info.argType)
+		exec.ret = initBytesAggFuncResult2(mg, info.retType, info.emptyNull, v)
+	} else {
+		exec.ret = initBytesAggFuncResult(mg, info.retType, info.emptyNull)
 	}
-	exec.ret = initAggResultWithBytesTypeResult(mg, info.retType, info.emptyNull, v)
 
 	exec.singleAggInfo = info
 	exec.singleAggExecExtraInformation = emptyExtraInfo
 	exec.execContext = newAggContextFromImpl(impl.ctx, info.retType, info.argType)
 
 	if flushMethod := impl.logic.flush; flushMethod != nil {
-		exec.flush = flushMethod.(bytesBytesFlush)
+		exec.flush = flushMethod.(SingleAggFlush4NewVersion)
 	}
 
-	exec.fill = impl.logic.fill.(bytesBytesFill)
-	exec.fills = impl.logic.fills.(bytesBytesFills)
-	exec.merge = impl.logic.merge.(bytesBytesMerge)
+	exec.fill = impl.logic.fill.(SingleAggFill4NewVersion)
+	exec.fills = impl.logic.fills.(SingleAggFills4NewVersion)
+	exec.merge = impl.logic.merge.(SingleAggMerge4NewVersion)
 }
 
-func (exec *aggregatorFromBytesToBytes) GroupGrow(more int) error {
+func (exec *singleAggFuncExecNew4) GroupGrow(more int) error {
 	if err := exec.ret.grows(more); err != nil {
 		return err
 	}
@@ -163,12 +161,12 @@ func (exec *aggregatorFromBytesToBytes) GroupGrow(more int) error {
 	return nil
 }
 
-func (exec *aggregatorFromBytesToBytes) PreAllocateGroups(more int) error {
+func (exec *singleAggFuncExecNew4) PreAllocateGroups(more int) error {
 	exec.execContext.preAllocate(more)
-	return exec.ret.preExtend(more)
+	return exec.ret.preAllocate(more)
 }
 
-func (exec *aggregatorFromBytesToBytes) Fill(
+func (exec *singleAggFuncExecNew4) Fill(
 	group int, row int, vectors []*vector.Vector) error {
 	if vectors[0].IsNull(uint64(row)) {
 		return nil
@@ -184,18 +182,18 @@ func (exec *aggregatorFromBytesToBytes) Fill(
 		}
 	}
 
-	x, y := exec.ret.updateNextAccessIdx(group)
+	exec.ret.groupToSet = group
 	err := exec.fill(
 		exec.execContext.getGroupContext(group),
 		exec.execContext.getCommonContext(),
 		vectors[0].GetBytesAt(row),
-		exec.ret.isGroupEmpty(x, y),
-		exec.ret.get, exec.ret.set)
-	exec.ret.setGroupNotEmpty(x, y)
+		exec.ret.groupIsEmpty(group),
+		exec.ret.aggGet, exec.ret.aggSet)
+	exec.ret.setGroupNotEmpty(group)
 	return err
 }
 
-func (exec *aggregatorFromBytesToBytes) BulkFill(
+func (exec *singleAggFuncExecNew4) BulkFill(
 	group int, vectors []*vector.Vector) error {
 	length := vectors[0].Length()
 	if length == 0 || vectors[0].IsConstNull() {
@@ -206,9 +204,9 @@ func (exec *aggregatorFromBytesToBytes) BulkFill(
 		return exec.distinctBulkFill(group, vectors, length)
 	}
 
-	x, y := exec.ret.updateNextAccessIdx(group)
-	getter := exec.ret.get
-	setter := exec.ret.set
+	exec.ret.groupToSet = group
+	getter := exec.ret.aggGet
+	setter := exec.ret.aggSet
 	groupContext := exec.execContext.getGroupContext(group)
 	commonContext := exec.execContext.getCommonContext()
 
@@ -217,22 +215,22 @@ func (exec *aggregatorFromBytesToBytes) BulkFill(
 			groupContext,
 			commonContext,
 			vectors[0].GetBytesAt(0),
-			length, exec.ret.isGroupEmpty(x, y),
+			length, exec.ret.groupIsEmpty(group),
 			getter, setter)
-		exec.ret.setGroupNotEmpty(x, y)
+		exec.ret.setGroupNotEmpty(group)
 		return err
 	}
 
 	exec.arg.prepare(vectors[0])
-	bs := exec.ret.getEmptyListOnX(x)
+	bs := exec.ret.basicResult.empty
 	if exec.arg.w.WithAnyNullValue() {
 		for i, j := uint64(0), uint64(length); i < j; i++ {
 			v, null := exec.arg.w.GetStrValue(i)
 			if !null {
-				if err := exec.fill(groupContext, commonContext, v, bs[y], getter, setter); err != nil {
+				if err := exec.fill(groupContext, commonContext, v, bs[group], getter, setter); err != nil {
 					return err
 				}
-				exec.ret.setGroupNotEmpty(x, y)
+				exec.ret.setGroupNotEmpty(group)
 			}
 		}
 		return nil
@@ -240,19 +238,19 @@ func (exec *aggregatorFromBytesToBytes) BulkFill(
 
 	for i, j := uint64(0), uint64(length); i < j; i++ {
 		v, _ := exec.arg.w.GetStrValue(i)
-		if err := exec.fill(groupContext, commonContext, v, bs[y], getter, setter); err != nil {
+		if err := exec.fill(groupContext, commonContext, v, bs[group], getter, setter); err != nil {
 			return err
 		}
-		exec.ret.setGroupNotEmpty(x, y)
+		exec.ret.setGroupNotEmpty(group)
 	}
 	return nil
 }
 
-func (exec *aggregatorFromBytesToBytes) distinctBulkFill(
+func (exec *singleAggFuncExecNew4) distinctBulkFill(
 	group int, vectors []*vector.Vector, length int) error {
-	x, y := exec.ret.updateNextAccessIdx(group)
-	getter := exec.ret.get
-	setter := exec.ret.set
+	exec.ret.groupToSet = group
+	getter := exec.ret.aggGet
+	setter := exec.ret.aggSet
 	groupContext := exec.execContext.getGroupContext(group)
 	commonContext := exec.execContext.getCommonContext()
 
@@ -260,8 +258,8 @@ func (exec *aggregatorFromBytesToBytes) distinctBulkFill(
 		if need, err := exec.distinctHash.fill(group, vectors, 0); !need || err != nil {
 			return err
 		}
-		err := exec.fill(groupContext, commonContext, vectors[0].GetBytesAt(0), exec.ret.isGroupEmpty(x, y), getter, setter)
-		exec.ret.setGroupNotEmpty(x, y)
+		err := exec.fill(groupContext, commonContext, vectors[0].GetBytesAt(0), exec.ret.groupIsEmpty(group), getter, setter)
+		exec.ret.setGroupNotEmpty(group)
 		return err
 	}
 
@@ -271,16 +269,16 @@ func (exec *aggregatorFromBytesToBytes) distinctBulkFill(
 		return err
 	}
 
-	bs := exec.ret.getEmptyListOnX(x)
+	bs := exec.ret.basicResult.empty
 	if exec.arg.w.WithAnyNullValue() {
 		for i, j := uint64(0), uint64(length); i < j; i++ {
 			if needs[i] {
 				v, null := exec.arg.w.GetStrValue(i)
 				if !null {
-					if err = exec.fill(groupContext, commonContext, v, bs[y], getter, setter); err != nil {
+					if err = exec.fill(groupContext, commonContext, v, bs[group], getter, setter); err != nil {
 						return err
 					}
-					exec.ret.setGroupNotEmpty(x, y)
+					exec.ret.setGroupNotEmpty(group)
 				}
 			}
 		}
@@ -290,16 +288,16 @@ func (exec *aggregatorFromBytesToBytes) distinctBulkFill(
 	for i, j := uint64(0), uint64(length); i < j; i++ {
 		if needs[i] {
 			v, _ := exec.arg.w.GetStrValue(i)
-			if err = exec.fill(groupContext, commonContext, v, bs[y], getter, setter); err != nil {
+			if err = exec.fill(groupContext, commonContext, v, bs[group], getter, setter); err != nil {
 				return err
 			}
-			exec.ret.setGroupNotEmpty(x, y)
+			exec.ret.setGroupNotEmpty(group)
 		}
 	}
 	return nil
 }
 
-func (exec *aggregatorFromBytesToBytes) BatchFill(
+func (exec *singleAggFuncExecNew4) BatchFill(
 	offset int, groups []uint64, vectors []*vector.Vector) error {
 	if len(groups) == 0 || vectors[0].IsConstNull() {
 		return nil
@@ -309,22 +307,22 @@ func (exec *aggregatorFromBytesToBytes) BatchFill(
 		return exec.distinctBatchFill(offset, groups, vectors)
 	}
 
-	getter := exec.ret.get
-	setter := exec.ret.set
+	getter := exec.ret.aggGet
+	setter := exec.ret.aggSet
 	commonContext := exec.execContext.getCommonContext()
-	bs := exec.ret.getEmptyList()
+	bs := exec.ret.basicResult.empty
 
 	if vectors[0].IsConst() {
 		value := vectors[0].GetBytesAt(0)
 		for _, group := range groups {
 			if group != GroupNotMatched {
 				idx := int(group - 1)
-				x, y := exec.ret.updateNextAccessIdx(idx)
+				exec.ret.groupToSet = idx
 				if err := exec.fill(
-					exec.execContext.getGroupContext(idx), commonContext, value, bs[x][y], getter, setter); err != nil {
+					exec.execContext.getGroupContext(idx), commonContext, value, bs[idx], getter, setter); err != nil {
 					return err
 				}
-				exec.ret.setGroupNotEmpty(x, y)
+				exec.ret.setGroupNotEmpty(idx)
 			}
 		}
 		return nil
@@ -337,12 +335,12 @@ func (exec *aggregatorFromBytesToBytes) BatchFill(
 				v, null := exec.arg.w.GetStrValue(i)
 				if !null {
 					groupIdx := int(groups[idx] - 1)
-					x, y := exec.ret.updateNextAccessIdx(groupIdx)
+					exec.ret.groupToSet = groupIdx
 					if err := exec.fill(
-						exec.execContext.getGroupContext(groupIdx), commonContext, v, bs[x][y], getter, setter); err != nil {
+						exec.execContext.getGroupContext(groupIdx), commonContext, v, bs[groupIdx], getter, setter); err != nil {
 						return err
 					}
-					exec.ret.setGroupNotEmpty(x, y)
+					exec.ret.setGroupNotEmpty(groupIdx)
 				}
 			}
 			idx++
@@ -354,24 +352,24 @@ func (exec *aggregatorFromBytesToBytes) BatchFill(
 		if groups[idx] != GroupNotMatched {
 			v, _ := exec.arg.w.GetStrValue(i)
 			groupIdx := int(groups[idx] - 1)
-			x, y := exec.ret.updateNextAccessIdx(groupIdx)
+			exec.ret.groupToSet = groupIdx
 			if err := exec.fill(
-				exec.execContext.getGroupContext(groupIdx), commonContext, v, bs[x][y], getter, setter); err != nil {
+				exec.execContext.getGroupContext(groupIdx), commonContext, v, bs[groupIdx], getter, setter); err != nil {
 				return err
 			}
-			exec.ret.setGroupNotEmpty(x, y)
+			exec.ret.setGroupNotEmpty(groupIdx)
 		}
 		idx++
 	}
 	return nil
 }
 
-func (exec *aggregatorFromBytesToBytes) distinctBatchFill(
+func (exec *singleAggFuncExecNew4) distinctBatchFill(
 	offset int, groups []uint64, vectors []*vector.Vector) error {
-	getter := exec.ret.get
-	setter := exec.ret.set
+	getter := exec.ret.aggGet
+	setter := exec.ret.aggSet
 	commonContext := exec.execContext.getCommonContext()
-	bs := exec.ret.getEmptyList()
+	bs := exec.ret.basicResult.empty
 
 	needs, err := exec.distinctHash.batchFill(vectors, offset, groups)
 	if err != nil {
@@ -383,12 +381,12 @@ func (exec *aggregatorFromBytesToBytes) distinctBatchFill(
 		for i, group := range groups {
 			if needs[i] && group != GroupNotMatched {
 				idx := int(group - 1)
-				x, y := exec.ret.updateNextAccessIdx(idx)
+				exec.ret.groupToSet = idx
 				if err = exec.fill(
-					exec.execContext.getGroupContext(idx), commonContext, value, bs[x][y], getter, setter); err != nil {
+					exec.execContext.getGroupContext(idx), commonContext, value, bs[idx], getter, setter); err != nil {
 					return err
 				}
-				exec.ret.setGroupNotEmpty(x, y)
+				exec.ret.setGroupNotEmpty(idx)
 			}
 		}
 		return nil
@@ -401,12 +399,12 @@ func (exec *aggregatorFromBytesToBytes) distinctBatchFill(
 				v, null := exec.arg.w.GetStrValue(i)
 				if !null {
 					groupIdx := int(groups[idx] - 1)
-					x, y := exec.ret.updateNextAccessIdx(groupIdx)
+					exec.ret.groupToSet = groupIdx
 					if err = exec.fill(
-						exec.execContext.getGroupContext(groupIdx), commonContext, v, bs[x][y], getter, setter); err != nil {
+						exec.execContext.getGroupContext(groupIdx), commonContext, v, bs[groupIdx], getter, setter); err != nil {
 						return err
 					}
-					exec.ret.setGroupNotEmpty(x, y)
+					exec.ret.setGroupNotEmpty(groupIdx)
 				}
 			}
 			idx++
@@ -418,109 +416,85 @@ func (exec *aggregatorFromBytesToBytes) distinctBatchFill(
 		if needs[idx] && groups[idx] != GroupNotMatched {
 			v, _ := exec.arg.w.GetStrValue(i)
 			groupIdx := int(groups[idx] - 1)
-			x, y := exec.ret.updateNextAccessIdx(groupIdx)
+			exec.ret.groupToSet = groupIdx
 			if err = exec.fill(
-				exec.execContext.getGroupContext(groupIdx), commonContext, v, bs[x][y], getter, setter); err != nil {
+				exec.execContext.getGroupContext(groupIdx), commonContext, v, bs[groupIdx], getter, setter); err != nil {
 				return err
 			}
-			exec.ret.setGroupNotEmpty(x, y)
+			exec.ret.setGroupNotEmpty(groupIdx)
 		}
 		idx++
 	}
 	return nil
 }
 
-func (exec *aggregatorFromBytesToBytes) Flush() ([]*vector.Vector, error) {
-	getter := exec.ret.get
-	setter := exec.ret.set
+func (exec *singleAggFuncExecNew4) Flush() (*vector.Vector, error) {
+	getter := exec.ret.aggGet
+	setter := exec.ret.aggSet
 	commonContext := exec.execContext.getCommonContext()
 
 	if exec.partialResult != nil {
 		if value, ok := exec.partialResult.([]byte); ok {
-			x, y := exec.ret.updateNextAccessIdx(exec.partialGroup)
+			exec.ret.groupToSet = exec.partialGroup
 			if err := exec.fill(
-				exec.execContext.getGroupContext(exec.partialGroup), commonContext, value, exec.ret.isGroupEmpty(x, y), getter, setter); err != nil {
+				exec.execContext.getGroupContext(exec.partialGroup), commonContext, value, exec.ret.groupIsEmpty(exec.partialGroup), getter, setter); err != nil {
 				return nil, err
 			}
-			exec.ret.setGroupNotEmpty(x, y)
+			exec.ret.setGroupNotEmpty(exec.partialGroup)
 		}
 	}
 
 	if exec.flush != nil {
-		lim := exec.ret.getEachBlockLimitation()
-		groups := exec.ret.totalGroupCount()
-
-		if exec.ret.optInformation.shouldSetNullToEmptyGroup {
-			for i, x := 0, 0; i < groups; i += lim {
-				n := groups - i
-				if n > lim {
-					n = lim
+		groups := exec.ret.res.Length()
+		if exec.ret.emptyBeNull {
+			for i := 0; i < groups; i++ {
+				if exec.ret.groupIsEmpty(i) {
+					continue
 				}
-
-				for j, k := 0, i; j < n; j++ {
-					if exec.ret.isGroupEmpty(x, j) {
-						k++
-						continue
-					}
-					exec.ret.setNextAccessDirectly(x, j)
-
-					if err := exec.flush(exec.execContext.getGroupContext(k), commonContext, getter, setter); err != nil {
-						return nil, err
-					}
-					k++
+				exec.ret.groupToSet = i
+				if err := exec.flush(exec.execContext.getGroupContext(i), commonContext, getter, setter); err != nil {
+					return nil, err
 				}
-				x++
 			}
-
 		} else {
-			for i, x := 0, 0; i < groups; i += lim {
-				n := groups - i
-				if n > lim {
-					n = lim
+			for i := 0; i < groups; i++ {
+				exec.ret.groupToSet = i
+				if err := exec.flush(exec.execContext.getGroupContext(i), commonContext, getter, setter); err != nil {
+					return nil, err
 				}
-
-				for j, k := 0, i; j < n; j++ {
-					exec.ret.setNextAccessDirectly(x, j)
-
-					if err := exec.flush(exec.execContext.getGroupContext(k), commonContext, getter, setter); err != nil {
-						return nil, err
-					}
-					k++
-				}
-				x++
 			}
 		}
 	}
 
-	return exec.ret.flushAll(), nil
+	return exec.ret.flush(), nil
 }
 
-func (exec *aggregatorFromBytesToBytes) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) error {
-	other := next.(*aggregatorFromBytesToBytes)
-
-	x1, y1 := exec.ret.updateNextAccessIdx(groupIdx1)
-	x2, y2 := other.ret.updateNextAccessIdx(groupIdx2)
-	isNextEmpty := other.ret.isGroupEmpty(x2, y2)
+func (exec *singleAggFuncExecNew4) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) error {
+	other := next.(*singleAggFuncExecNew4)
+	getter1 := exec.ret.aggGet
+	getter2 := other.ret.aggGet
+	setter := exec.ret.aggSet
+	commonContext := exec.execContext.getCommonContext()
 
 	if err := exec.merge(
 		exec.execContext.getGroupContext(groupIdx1),
 		other.execContext.getGroupContext(groupIdx2),
-		exec.execContext.getCommonContext(),
-		exec.ret.isGroupEmpty(x1, y1),
-		isNextEmpty,
-		exec.ret.get, other.ret.get, exec.ret.set); err != nil {
+		commonContext,
+		exec.ret.groupIsEmpty(groupIdx1),
+		other.ret.groupIsEmpty(groupIdx2),
+		getter1, getter2, setter); err != nil {
 		return err
 	}
-	exec.ret.MergeAnotherEmpty(x1, x2, isNextEmpty)
+	exec.ret.mergeEmpty(other.ret.basicResult, groupIdx1, groupIdx2)
 
 	return exec.distinctHash.merge(&other.distinctHash)
 }
 
-func (exec *aggregatorFromBytesToBytes) BatchMerge(next AggFuncExec, offset int, groups []uint64) error {
-	other := next.(*aggregatorFromBytesToBytes)
-	getter1 := exec.ret.get
-	getter2 := other.ret.get
-	setter := exec.ret.set
+func (exec *singleAggFuncExecNew4) BatchMerge(next AggFuncExec, offset int, groups []uint64) error {
+	other := next.(*singleAggFuncExecNew4)
+	getter1 := exec.ret.aggGet
+	getter2 := other.ret.aggGet
+	setter := exec.ret.aggSet
 	commonContext := exec.execContext.getCommonContext()
 
 	for i := range groups {
@@ -528,28 +502,26 @@ func (exec *aggregatorFromBytesToBytes) BatchMerge(next AggFuncExec, offset int,
 			continue
 		}
 		groupIdx1, groupIdx2 := int(groups[i]-1), i+offset
-
-		x1, y1 := exec.ret.updateNextAccessIdx(groupIdx1)
-		x2, y2 := other.ret.updateNextAccessIdx(groupIdx2)
-		isNextEmpty := other.ret.isGroupEmpty(x2, y2)
+		exec.ret.groupToSet = groupIdx1
+		other.ret.groupToSet = groupIdx2
 
 		if err := exec.merge(
 			exec.execContext.getGroupContext(groupIdx1),
 			other.execContext.getGroupContext(groupIdx2),
 			commonContext,
-			exec.ret.isGroupEmpty(x1, y1),
-			isNextEmpty,
+			exec.ret.groupIsEmpty(groupIdx1),
+			other.ret.groupIsEmpty(groupIdx2),
 			getter1, getter2,
 			setter); err != nil {
 			return err
 		}
-		exec.ret.MergeAnotherEmpty(x1, y1, isNextEmpty)
+		exec.ret.mergeEmpty(other.ret.basicResult, groupIdx1, groupIdx2)
 	}
 
 	return exec.distinctHash.merge(&other.distinctHash)
 }
 
-func (exec *aggregatorFromBytesToBytes) Free() {
+func (exec *singleAggFuncExecNew4) Free() {
 	exec.ret.free()
 	exec.distinctHash.free()
 }

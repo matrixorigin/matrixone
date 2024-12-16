@@ -17,22 +17,27 @@ package aggexec
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
 type distinctHash struct {
-	maps []*hashmap.StrHashMap
-	itrs []hashmap.Iterator
+	mp          *mpool.MPool
+	maps        []*hashmap.StrHashMap
+	itrs        []hashmap.Iterator
+	hashHasNull bool
 
 	// optimized for bulk and batch insertions.
 	bs  []bool
 	bs1 []bool
 }
 
-func newDistinctHash() distinctHash {
+func newDistinctHash(mp *mpool.MPool, containNullValue bool) distinctHash {
 	return distinctHash{
-		maps: nil,
-		itrs: nil,
+		mp:          mp,
+		maps:        nil,
+		itrs:        nil,
+		hashHasNull: containNullValue,
 	}
 }
 
