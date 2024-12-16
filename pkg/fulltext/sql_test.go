@@ -92,6 +92,10 @@ func TestSqlBoolean(t *testing.T) {
 			expect:  "SELECT doc_id, CAST(0 as int) FROM `__mo_index_secondary_` WHERE word = 'matrix' UNION ALL SELECT doc_id, CAST(1 as int) FROM `__mo_index_secondary_` WHERE prefix_eq(word,'origin')",
 		},
 		{
+			pattern: "+Matrix* Origin*",
+			expect:  "WITH t0 AS (SELECT doc_id FROM `__mo_index_secondary_` WHERE prefix_eq(word,'matrix')) SELECT t0.doc_id, CAST(0 as int) FROM t0 UNION ALL SELECT t0.doc_id, CAST(1 as int) FROM `__mo_index_secondary_` as t1, t0 WHERE t0.doc_id = t1.doc_id AND prefix_eq(t1.word, 'origin')",
+		},
+		{
 			pattern: "+Matrix +(Origin (One Two))",
 			expect:  "WITH t0 AS (SELECT doc_id FROM `__mo_index_secondary_` WHERE word = 'matrix') SELECT t0.doc_id, CAST(0 as int) FROM t0 UNION ALL SELECT t0.doc_id, CAST(1 as int) FROM `__mo_index_secondary_` as t1, t0 WHERE t0.doc_id = t1.doc_id AND t1.word = 'origin' UNION ALL SELECT t0.doc_id, CAST(2 as int) FROM `__mo_index_secondary_` as t2, t0 WHERE t0.doc_id = t2.doc_id AND t2.word = 'one' UNION ALL SELECT t0.doc_id, CAST(3 as int) FROM `__mo_index_secondary_` as t3, t0 WHERE t0.doc_id = t3.doc_id AND t3.word = 'two'",
 		},

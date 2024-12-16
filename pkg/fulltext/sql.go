@@ -127,7 +127,7 @@ func GenJoinPlusSql(p *Pattern, mode int64, idxtbl string) ([]*SqlNode, error) {
 				return nil, moerr.NewInternalErrorNoCtx("wildcard search without character *")
 			}
 			prefix := kw[0 : len(kw)-1]
-			sql = fmt.Sprintf("%s AS (SELECT doc_id, CAST(%d as int) FROM %s WHERE prefix_eq(word,'%s'))", alias, tp.Index, idxtbl, prefix)
+			sql = fmt.Sprintf("%s AS (SELECT doc_id FROM %s WHERE prefix_eq(word,'%s'))", alias, idxtbl, prefix)
 			sqlnode.Children = append(sqlnode.Children, &SqlNode{Index: tp.Index, Label: alias, IsJoin: true, Sql: sql})
 		}
 
@@ -165,7 +165,7 @@ func GenJoinSql(p *Pattern, mode int64, idxtbl string) ([]*SqlNode, error) {
 				return nil, moerr.NewInternalErrorNoCtx("wildcard search without character *")
 			}
 			prefix := kw[0 : len(kw)-1]
-			sql = fmt.Sprintf("%s AS (SELECT doc_id, CAST(%d as int) FROM %s WHERE prefix_eq(word,'%s'))", alias, idx, idxtbl, prefix)
+			sql = fmt.Sprintf("%s AS (SELECT doc_id FROM %s WHERE prefix_eq(word,'%s'))", alias, idxtbl, prefix)
 			sqlnode.Children = append(sqlnode.Children, &SqlNode{Index: idx, Label: alias, IsJoin: true, Sql: sql})
 			subidx++
 		}
