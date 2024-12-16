@@ -284,7 +284,9 @@ func (gs *GlobalStats) Get(ctx context.Context, key pb.StatsInfoKey, sync bool) 
 	if _, ok = ctx.Value(perfcounter.CalcTableStatsKey{}).(bool); ok {
 		stats := statistic.StatsInfoFromContext(ctx)
 		start := time.Now()
-		defer stats.AddBuildPlanStatsIOConsumption(time.Since(start))
+		defer func() {
+			stats.AddBuildPlanStatsIOConsumption(time.Since(start))
+		}()
 	}
 
 	// Get stats info from remote node.
