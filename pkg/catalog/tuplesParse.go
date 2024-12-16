@@ -105,9 +105,9 @@ func ParseEntryList(es []*api.Entry) (any, []*api.Entry, error) {
 		bat, _ := batch.ProtoBatchToBatch(e.Bat)
 		batstr := ""
 		if bat != nil {
-			batstr = common.MoBatchToString(bat, 20)
+			batstr = common.MoBatchToString(bat, 5)
 		}
-		return nil, nil, moerr.NewInternalErrorNoCtxf("bad write format %q, %s", e.EntryType, batstr)
+		return nil, nil, moerr.NewInternalErrorNoCtxf("bad write format %q, %v, batch %s", e.EntryType, len(es), batstr)
 	}
 	if e.EntryType == api.Entry_Alter {
 		bat, err := batch.ProtoBatchToBatch(e.Bat)
