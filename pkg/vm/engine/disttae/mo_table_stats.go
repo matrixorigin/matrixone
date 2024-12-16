@@ -189,7 +189,9 @@ const (
 				from 
 				    %s.%s
 				where 
-				    table_stats = "{}"
+				    table_stats = "{}" 
+				or
+				    update_time < '%s' 
 				limit
 					%d;`
 
@@ -205,7 +207,7 @@ const (
 const (
 	defaultAlphaCycleDur     = time.Minute
 	defaultGamaCycleDur      = time.Minute
-	defaultGetTableListLimit = options.DefaultBlockMaxRows * 10
+	defaultGetTableListLimit = options.DefaultBlockMaxRows
 
 	logHeader = "MO-TABLE-STATS-TASK"
 )
@@ -1403,6 +1405,7 @@ func (d *dynamicCtx) alphaTask(
 	d.launchTask(betaTaskName)
 
 	var (
+		requestCnt       = len(tbls)
 		errWaitToReceive = len(tbls)
 		ticker           *time.Ticker
 		processed        int
@@ -1421,6 +1424,7 @@ func (d *dynamicCtx) alphaTask(
 		logutil.Info(logHeader,
 			zap.String("source", "alpha task"),
 			zap.Int("processed", processed),
+			zap.Int("requested", requestCnt),
 			zap.Int("batch count", batCnt),
 			zap.Duration("takes", dur),
 			zap.Duration("wait err", waitErrDur),
@@ -1747,9 +1751,13 @@ func (d *dynamicCtx) gamaUpdateForgotten(
 	de *Engine,
 	limit int,
 ) {
-	// incremental update tables with heartbeat update_time
-	// may leave some tables never been updated.
-	// this opA does such correction.
+	// case 1:
+	// 		incremental update tables with heartbeat update_time
+	// 		may leave some tables never been updated.
+	// 		this opA does such correction.
+	//
+	// case 2:
+	// 		stats update time un changed for long time. ( >= 1H?)
 
 	var (
 		err error
@@ -1769,7 +1777,11 @@ func (d *dynamicCtx) gamaUpdateForgotten(
 			zap.Error(err))
 	}()
 
-	sql := fmt.Sprintf(getNullStatsSQL, catalog.MO_CATALOG, catalog.MO_TABLE_STATS, limit)
+	staleTS := types.BuildTS(time.Now().Add(-2*time.Hour).UnixNano(), 0).ToTimestamp()
+
+	sql := fmt.Sprintf(getNullStatsSQL,
+		catalog.MO_CATALOG, catalog.MO_TABLE_STATS,
+		staleTS.ToStdTime().Format("2006-01-02 15:04:05.000000"), limit)
 	sqlRet := d.executeSQL(ctx, sql, "gama task: get null stats list")
 	if err = sqlRet.Error(); err != nil {
 		return
@@ -2083,6 +2095,12 @@ func getChangedTableList(
 				continue
 			}
 
+			if dbs[i] == catalog.MO_CATALOG_ID {
+				// the account id will always be 0 if mo_catalog db is given on tn side,
+				// later causing account_id, db_id, tbl_id un matched ==> catalogCache returns nil.
+				continue
+			}
+
 			req.AccIds = append(req.AccIds, accs[i])
 			req.DatabaseIds = append(req.DatabaseIds, dbs[i])
 			req.TableIds = append(req.TableIds, tbls[i])
@@ -2127,14 +2145,21 @@ func getChangedTableList(
 		de.us, nil,
 	)
 
-	//fmt.Println("get table request")
-	handler := ctl.GetTNHandlerFunc(api.OpCode_OpGetChangedTableList, whichTN, payload, responseUnmarshaler)
-	ret, err := handler(proc, "DN", "", ctl.MoCtlTNCmdSender)
-	if err != nil {
-		return err
-	}
+	var resp *cmd_util.GetChangedTableListResp
+	if len(req.AccIds) != 0 {
+		handler := ctl.GetTNHandlerFunc(api.OpCode_OpGetChangedTableList, whichTN, payload, responseUnmarshaler)
+		ret, err := handler(proc, "DN", "", ctl.MoCtlTNCmdSender)
+		if err != nil {
+			return err
+		}
 
-	resp := ret.Data.([]any)[0].(*cmd_util.GetChangedTableListResp)
+		resp = ret.Data.([]any)[0].(*cmd_util.GetChangedTableListResp)
+	} else {
+		now := types.BuildTS(time.Now().UnixNano(), 0).ToTimestamp()
+		resp = &cmd_util.GetChangedTableListResp{
+			Newest: &now,
+		}
+	}
 
 	*to = types.TimestampToTS(*resp.Newest)
 
@@ -2148,19 +2173,26 @@ func getChangedTableList(
 		*pairs = append(*pairs, tp)
 	}
 
-	for i := range req.AccIds {
-		if idx := slices.Index(resp.TableIds, req.TableIds[i]); idx != -1 {
+	for i := range tbls {
+		if idx := slices.Index(resp.TableIds, tbls[i]); idx != -1 {
 			// need calculate, already in it
 			continue
 		}
 
-		// has no changes, only update TS
-		tp, ok := buildTablePairFromCache(de, req.AccIds[i],
-			req.DatabaseIds[i], req.TableIds[i], *to, true)
+		// 1. if the tbls belongs to mo_catalog
+		//		force update it.
+		// 2. otherwise, has no changes, only update TS
+
+		onlyUpdateTS := true
+		if dbs[i] == catalog.MO_CATALOG_ID {
+			onlyUpdateTS = false
+		}
+
+		tp, ok := buildTablePairFromCache(de,
+			accs[i], dbs[i], tbls[i], *to, onlyUpdateTS)
 		if !ok {
 			continue
 		}
-
 		*pairs = append(*pairs, tp)
 	}
 
