@@ -46,7 +46,7 @@ with set theory, we can formulae the above plans into
 
 A\B = A - (A INTERSECT B)
 
-Since NOT filter is slow in SQL, we change the plan into A + (A&B) and process the negative later.
+Since NOT filter is slow in SQL, we change the plan into A UNION (A INTERSECT B) and process the negative later.
 
 # The result SQL will be
 
