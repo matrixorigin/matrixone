@@ -75,6 +75,18 @@ Although operator + with GROUP cannot be optimized with JOIN Pattern node,  we c
 A UNION B UNION (A INTERSECT C) UNION (A INTERSECT D) UNION (B INTERSECT C) UNION (B INTERSECT D)
 
 (A) UNION ALL (B) UNION ALL (A JOIN C) UNION ALL (A JOIN D) UNION ALL (B JOIN C) UNION ALL (B JOIN D)
+
+In case multiple + operator with single values and + operator with GROUP like "+A +B +(C D) E"
+
+The plan like the followings:
+((JOIN (+ (TEXT A)) (+ (TEXT B))) (+ (GROUP (TEXT C) (TEXT D))) (TEXT E))
+
+To simplify the SQL, (+ (GROUP (TEXT C) (TEXT D))) will not considered as JOIN.
+
+(A INTERSECT B) UNION (A INTERSECT B  INTERSECT C) UNION (A INTEREST B INTERSECT D) UNION (A INTERSECT B INTERSECT E)
+
+WITH t0 (A JOIN B)
+(t0) UNION ALL (t0 JOIN C) UNION ALL (t0 JOIN D) UNION ALL (t0 JOIN E)
 */
 type SqlNode struct {
 	Index    int32
