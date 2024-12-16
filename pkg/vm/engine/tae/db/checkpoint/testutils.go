@@ -37,7 +37,6 @@ type TestRunner interface {
 	ForceGlobalCheckpointSynchronously(ctx context.Context, end types.TS, versionInterval time.Duration) error
 	ForceCheckpointForBackup(end types.TS) (string, error)
 	ForceIncrementalCheckpoint(end types.TS, truncate bool) error
-	IsAllChangesFlushed(start, end types.TS, printTree bool) bool
 	MaxLSNInRange(end types.TS) uint64
 
 	ExistPendingEntryToGC() bool
@@ -315,13 +314,4 @@ func (r *runner) ForceCheckpointForBackup(end types.TS) (location string, err er
 	}
 	logutil.Infof("checkpoint for backup %s, takes %s", entry.String(), time.Since(now))
 	return location, nil
-}
-
-func (r *runner) IsAllChangesFlushed(start, end types.TS, printTree bool) bool {
-	tree := r.source.ScanInRangePruned(start, end)
-	tree.GetTree().Compact()
-	if printTree && !tree.IsEmpty() {
-		logutil.Infof("%v", tree.String())
-	}
-	return tree.IsEmpty()
 }

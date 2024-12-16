@@ -45,6 +45,7 @@ type FlushMutableCfg struct {
 }
 
 type Flusher interface {
+	IsAllChangesFlushed(start, end types.TS, doPrint bool) bool
 	FlushTable(ctx context.Context, dbID, tableID uint64, ts types.TS) error
 	ForceFlush(ts types.TS, ctx context.Context, duration time.Duration) error
 	ForceFlushWithInterval(ts types.TS, ctx context.Context, forceDuration, flushInterval time.Duration) (err error)
@@ -547,13 +548,27 @@ func (flusher *flusher) FlushTable(
 	return
 }
 
+func (flusher *flusher) IsAllChangesFlushed(
+	start, end types.TS, doPrint bool,
+) bool {
+	tree := flusher.sourcer.ScanInRangePruned(start, end)
+	tree.GetTree().Compact()
+	if doPrint && !tree.IsEmpty() {
+		logutil.Info(
+			"IsAllChangesFlushed",
+			zap.String("dirty-tree", tree.String()),
+		)
+	}
+	return tree.IsEmpty()
+}
+
 func (flusher *flusher) Start() {
 	flusher.onceStart.Do(func() {
 		flusher.flushRequestQ.Start()
 		flusher.cronTrigger.Start()
 		cfg := flusher.mutableCfg.Load()
 		logutil.Info(
-			"flusher-Started",
+			"Flusher-Started",
 			zap.Duration("cron-period", flusher.cronPeriod),
 			zap.Duration("flush-interval", flusher.flushInterval),
 			zap.Duration("flush-lag", flusher.flushLag),
@@ -567,6 +582,6 @@ func (flusher *flusher) Stop() {
 	flusher.onceStop.Do(func() {
 		flusher.cronTrigger.Stop()
 		flusher.flushRequestQ.Stop()
-		logutil.Info("flusher-Stopped")
+		logutil.Info("Flusher-Stopped")
 	})
 }
