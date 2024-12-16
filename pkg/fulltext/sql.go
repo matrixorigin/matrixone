@@ -22,6 +22,61 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
+/*
+fulltext SQL generation
+
+For natural language mode, it is a phrase search.  The search will be AND operation and with position as filter.
+
+For boolean mode, the rule are the followings:
+- operation JOIN contains a list of + operators which is single TEXT or STAR values
+- operator + is considered as AND Operation.  + Operators can be a single TEXT/STAR or Group.  Operator + with children Group cannot be optimized to under JOIN.
+- operator - is not considered as AND operation because NOT filter is slow in SQL. Change the formula from A & !B -> A + (A&B) and process the negative filter afterwards.
+- other operators are OR operation.
+
+SQL generation from boolean search string is a Set theory.
+
+e.g. search string +hello -world
+
+the search string will convert into Pattern/Plan
+
+((+ (TEXT hello)) (- (TEXT world)))
+
+with set theory, we can formulae the above plans into
+
+A & (!B) = A - (A&B)
+
+Since NOT filter is slow in SQL, we change the plan into A + (A&B) and process the negative later.
+
+# The result SQL will be
+
+SELECT A UNION ALL (A JOIN B)
+
+In case there are multiple + operators like the search string "+A +B -(<C >D)"
+JOIN will be used to optimize the SQL with Pattern/Plan
+
+(((JOIN (+ (TEXT A)) (+ (TEXT B))) (- (GROUP (< (TEXT C)) (> (TEXT D)))))
+
+# With plan above, we can formula the SQL like belows
+
+(A & B) + ((A & B) & C) + ((A & B) & D)
+
+WITH t0 (A JOIN B)
+SELECT (t0) UNION ALL (t0 JOIN C) UNION ALL (t0 JOIN B)
+
+In case + operator with GROUP such as "+(A B) ~C -D",
+
+Although operator + with GROUP cannot be optimized with JOIN,  we can still optimize the SQL with JOIN like below
+
+(+ (GROUP (TEXT A) (TEXT B))) (~ (TEXT C)) (- (TEXT D)))
+
+A + B + (A & C) - (A & D) + (B & C) + (B & D)
+
+# Replace the negative filter with positive filter, the final SQL
+
+A + B + (A & C) + (A & D) + (B & C) + (B & D)
+
+SELECT (A) UNION ALL (B) UNION ALL (A JOIN C) UNION ALL (A JOIN D) UNION ALL (B JOIN C) UNION ALL (B JOIN D)
+*/
 type SqlNode struct {
 	Index    int32
 	Label    string
