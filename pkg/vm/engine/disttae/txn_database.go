@@ -175,10 +175,10 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 	//	fmt.Println("------------------wuxiliang1-txn_database.go-------------------")
 	//}
 	if rel == nil {
-		if strings.HasPrefix(name, "__mo_index_secondary_") {
+		if strings.HasPrefix(name, "__mo_index_") {
 			stackInfo := debug.Stack()
 			logutil.Error(moerr.NewParseErrorf(ctx, "table %q does not exist wuxiliang1-txn_database.go", name).Error(),
-				zap.String("Detailed Stack Trace", string(stackInfo)),
+				zap.String("---Detailed Stack Trace", string(stackInfo)),
 			)
 		}
 		return nil, moerr.NewParseErrorf(ctx, "table %q does not exist", name)
