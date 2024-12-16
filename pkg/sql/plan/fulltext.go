@@ -17,6 +17,7 @@ package plan
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/fulltext"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -81,9 +82,14 @@ func (builder *QueryBuilder) buildFullTextIndexScan(tbl *tree.TableFunction, ctx
 
 	colDefs := _getColDefs(ftIndexColdefs)
 
+	sql, err := builder.getFullTextSql(tbl.Func)
+	if err != nil {
+		return 0, err
+	}
+
 	node := &plan.Node{
 		NodeType: plan.Node_FUNCTION_SCAN,
-		Stats:    &plan.Stats{},
+		Stats:    &plan.Stats{Sql: sql},
 		TableDef: &plan.TableDef{
 			TableType: "func_table", //test if ok
 			//Name:               tbl.String(),
@@ -98,6 +104,34 @@ func (builder *QueryBuilder) buildFullTextIndexScan(tbl *tree.TableFunction, ctx
 		Children:        []int32{childId},
 	}
 	return builder.appendNode(node, ctx), nil
+}
+
+func (builder *QueryBuilder) getFullTextSql(fn *tree.FuncExpr) (string, error) {
+	if _, ok := fn.Exprs[1].(*tree.NumVal); !ok {
+		return "", moerr.NewInvalidInput(builder.GetContext(), "index table name is not a constant")
+	}
+
+	idxtbl := fn.Exprs[1].String()
+
+	if _, ok := fn.Exprs[2].(*tree.NumVal); !ok {
+		return "", moerr.NewInvalidInput(builder.GetContext(), "pattern is not a constant")
+	}
+
+	pattern := fn.Exprs[2].String()
+	modeVal, ok := fn.Exprs[3].(*tree.NumVal)
+	if !ok {
+		return "", moerr.NewInvalidInput(builder.GetContext(), "mode is not a constant")
+	}
+	mode, ok := modeVal.Int64()
+	if !ok {
+		return "", moerr.NewInvalidInput(builder.GetContext(), "mode is not an integer")
+	}
+
+	ps, err := fulltext.ParsePattern(pattern, mode)
+	if err != nil {
+		return "", err
+	}
+	return fulltext.PatternToSql(ps, mode, idxtbl)
 }
 
 // select * from index_table, fulltext_index_tokenize(doc_id, concat(body, ' ', title))
