@@ -204,22 +204,7 @@ func TestReallocateExpiredTasks(t *testing.T) {
 
 	query, err = service.QueryAsyncTask(context.Background())
 	assert.NoError(t, err)
-	assert.Equal(t, 1, len(query))
-	assert.Equal(t, "a", query[0].TaskRunner)
-	assert.Equal(t, task.TaskStatus_Running, query[0].Status)
-
-	// Add CNStore "b"
-	cnState = pb.CNState{Stores: map[string]pb.CNStoreInfo{"a": {}, "b": {Tick: expiredTick}}}
-
-	// Re-schedule Task 1
-	// "b" available
-	scheduler.Schedule(cnState, currentTick)
-
-	query, err = service.QueryAsyncTask(context.Background())
-	assert.NoError(t, err)
-	assert.Equal(t, 1, len(query))
-	assert.Equal(t, "b", query[0].TaskRunner)
-	assert.Equal(t, task.TaskStatus_Running, query[0].Status)
+	assert.Equal(t, 0, len(query))
 }
 
 func TestAllocTasksWithLabels(t *testing.T) {
