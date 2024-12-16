@@ -43,8 +43,6 @@ type TestRunner interface {
 	ExistPendingEntryToGC() bool
 	MaxGlobalCheckpoint() *CheckpointEntry
 	MaxIncrementalCheckpoint() *CheckpointEntry
-	ForceFlush(ts types.TS, ctx context.Context, duration time.Duration) (err error)
-	ForceFlushWithInterval(ts types.TS, ctx context.Context, forceDuration, flushInterval time.Duration) (err error)
 	GetDirtyCollector() logtail.Collector
 }
 
@@ -156,27 +154,13 @@ func (r *runner) ForceGlobalCheckpointSynchronously(ctx context.Context, end typ
 	err := common.RetryWithIntervalAndTimeout(
 		op,
 		time.Minute,
-		r.options.forceFlushCheckInterval, false)
+		time.Millisecond*400,
+		false,
+	)
 	if err != nil {
 		return moerr.NewInternalErrorf(ctx, "force global checkpoint failed: %v", err)
 	}
 	return nil
-}
-
-func (r *runner) ForceFlushWithInterval(
-	ts types.TS, ctx context.Context, forceDuration, flushInterval time.Duration,
-) (err error) {
-	return r.flusher.ForceFlushWithInterval(
-		ts, ctx, forceDuration, flushInterval,
-	)
-}
-
-func (r *runner) ForceFlush(
-	ts types.TS, ctx context.Context, forceDuration time.Duration,
-) (err error) {
-	return r.flusher.ForceFlushWithInterval(
-		ts, ctx, forceDuration, 0,
-	)
 }
 
 func (r *runner) ForceIncrementalCheckpoint(end types.TS, truncate bool) error {

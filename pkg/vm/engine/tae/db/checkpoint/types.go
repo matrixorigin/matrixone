@@ -54,11 +54,9 @@ type Runner interface {
 	String() string
 	Replay(catalog.DataFactory) *CkpReplayer
 
-	FlushTable(ctx context.Context, dbID, tableID uint64, ts types.TS) error
 	GCByTS(ctx context.Context, ts types.TS) error
 
 	// for test, delete in next phase
-	DebugUpdateOptions(opts ...Option)
 	GetAllCheckpoints() []*CheckpointEntry
 	GetAllCheckpointsForBackup(compact *CheckpointEntry) []*CheckpointEntry
 }

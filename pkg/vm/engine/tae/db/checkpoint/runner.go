@@ -175,9 +175,6 @@ type runner struct {
 		// minimum count of uncheckpointed transactions allowed before the next checkpoint
 		minCount int
 
-		forceFlushTimeout       time.Duration
-		forceFlushCheckInterval time.Duration
-
 		checkpointQueueSize int
 
 		checkpointBlockRows int
@@ -189,7 +186,6 @@ type runner struct {
 	ctx context.Context
 
 	// logtail source
-	flusher   *Flusher
 	source    logtail.Collector
 	catalog   *catalog.Catalog
 	rt        *dbutils.Runtime
@@ -263,16 +259,6 @@ func NewRunner(
 	r.postCheckpointQueue = sm.NewSafeQueue(1000, 1, r.onPostCheckpointEntries)
 	r.checkpointMetaFiles.files = make(map[string]struct{})
 
-	r.flusher = NewFlusher(
-		r.rt,
-		r,
-		r.catalog,
-		r.source,
-		WithFlusherInterval(r.options.maxFlushInterval),
-		WithFlusherCronPeriod(r.options.collectInterval),
-		WithFlusherForceTimeout(r.options.forceFlushTimeout),
-		WithFlusherForceCheckInterval(r.options.forceFlushCheckInterval),
-	)
 	return r
 }
 
@@ -285,8 +271,6 @@ func (r *runner) String() string {
 	_, _ = fmt.Fprintf(&buf, "globalMinCount=%v, ", r.options.globalMinCount)
 	_, _ = fmt.Fprintf(&buf, "globalVersionInterval=%v, ", r.options.globalVersionInterval)
 	_, _ = fmt.Fprintf(&buf, "minCount=%v, ", r.options.minCount)
-	_, _ = fmt.Fprintf(&buf, "forceFlushTimeout=%v, ", r.options.forceFlushTimeout)
-	_, _ = fmt.Fprintf(&buf, "forceFlushCheckInterval=%v, ", r.options.forceFlushCheckInterval)
 	_, _ = fmt.Fprintf(&buf, "checkpointQueueSize=%v, ", r.options.checkpointQueueSize)
 	_, _ = fmt.Fprintf(&buf, "checkpointBlockRows=%v, ", r.options.checkpointBlockRows)
 	_, _ = fmt.Fprintf(&buf, "checkpointSize=%v, ", r.options.checkpointSize)
@@ -318,13 +302,6 @@ func (r *runner) GetCheckpointMetaFiles() map[string]struct{} {
 		files[k] = v
 	}
 	return files
-}
-
-// Only used in UT
-func (r *runner) DebugUpdateOptions(opts ...Option) {
-	for _, opt := range opts {
-		opt(r)
-	}
 }
 
 func (r *runner) onGlobalCheckpointEntries(items ...any) {
@@ -514,10 +491,6 @@ func (r *runner) DeleteGlobalEntry(entry *CheckpointEntry) {
 	perfcounter.Update(r.ctx, func(counter *perfcounter.CounterSet) {
 		counter.TAE.CheckPoint.DeleteGlobalEntry.Add(1)
 	})
-}
-
-func (r *runner) FlushTable(ctx context.Context, dbID, tableID uint64, ts types.TS) (err error) {
-	return r.flusher.FlushTable(ctx, dbID, tableID, ts)
 }
 
 func (r *runner) saveCheckpoint(start, end types.TS, ckpLSN, truncateLSN uint64) (name string, err error) {
@@ -820,12 +793,6 @@ func (r *runner) TryScheduleCheckpoint(endts types.TS) {
 }
 
 func (r *runner) fillDefaults() {
-	if r.options.forceFlushTimeout <= 0 {
-		r.options.forceFlushTimeout = time.Second * 90
-	}
-	if r.options.forceFlushCheckInterval <= 0 {
-		r.options.forceFlushCheckInterval = time.Millisecond * 400
-	}
 	if r.options.collectInterval <= 0 {
 		// TODO: define default value
 		r.options.collectInterval = time.Second * 5
@@ -856,13 +823,11 @@ func (r *runner) Start() {
 		r.incrementalCheckpointQueue.Start()
 		r.globalCheckpointQueue.Start()
 		r.gcCheckpointQueue.Start()
-		r.flusher.Start()
 	})
 }
 
 func (r *runner) Stop() {
 	r.onceStop.Do(func() {
-		r.flusher.Stop()
 		r.incrementalCheckpointQueue.Stop()
 		r.globalCheckpointQueue.Stop()
 		r.gcCheckpointQueue.Stop()

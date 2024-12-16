@@ -4531,8 +4531,7 @@ func TestFlushTable(t *testing.T) {
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 
-	tae.BGCheckpointRunner.DebugUpdateOptions(
-		checkpoint.WithForceFlushCheckInterval(time.Millisecond * 5))
+	tae.BGFlusher.ChangeForceCheckInterval(time.Millisecond * 5)
 
 	schema := catalog.MockSchemaAll(3, 1)
 	schema.Extra.BlockMaxRows = 10
