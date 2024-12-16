@@ -366,6 +366,10 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 	}
 
 	getRoleName := func(roleId uint32) (roleName string, err error) {
+		if !ses.GetTenantInfo().IsSysTenant() && roleId == moAdminRoleID {
+			return accountAdminRoleName, nil
+		}
+
 		sql := getSqlForRoleNameOfRoleId(int64(roleId))
 
 		var rets []ExecResult
