@@ -62,7 +62,13 @@ JOIN will be used to optimize the SQL with Pattern/Plan
 (A INTERSECT B) UNION ((A INTERSECT B) INTERSECT C) UNION ((A INTERSECT B) INTERSECT D)
 
 WITH t0 (A JOIN B)
-(t0) UNION ALL (t0 JOIN C) UNION ALL (t0 JOIN B)
+(t0) UNION ALL (t0 JOIN C) UNION ALL (t0 JOIN D)
+
+(A JOIN B) is the result contain both A and B. Consider it is the appearance of A and B (as index 0).
+(t0 JOIN C) is the result contain both A, B and C. Consider it is the appearance of C (as index 1).
+(t0 JOIN D) is the result contain both A, B and D. Consider it is the appearance of D (as index 2).
+
+We can calculate the TD-IDF with the index 0, 1, 2 and return the doc_id and score.
 
 In case + operator with GROUP such as "+(A B) ~C -D",
 
