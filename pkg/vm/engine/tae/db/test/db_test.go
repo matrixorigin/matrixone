@@ -10537,6 +10537,7 @@ func Test_BasicTxnModeSwitch(t *testing.T) {
 func Test_OpenReplayDB1(t *testing.T) {
 	ctx := context.Background()
 	opts := config.WithLongScanAndCKPOpts(nil)
+	opts.CheckpointCfg.MetadataCheckInterval = time.Millisecond * 2
 	tae := testutil.NewReplayTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	assert.True(t, tae.IsReplayMode())

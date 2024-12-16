@@ -167,3 +167,30 @@ func TestDiskCleaner_WriteToReplay(t *testing.T) {
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnControl))
 }
+
+func TestForMockCoverage(t *testing.T) {
+	var cleaner MockCleaner
+	ctx := context.Background()
+	require.NoError(t, cleaner.Replay(ctx))
+	require.NoError(t, cleaner.Process(ctx))
+	require.NoError(t, cleaner.TryGC(ctx))
+	cleaner.AddChecker(nil, "")
+	require.Nil(t, cleaner.GetChecker(""))
+	require.Nil(t, cleaner.RemoveChecker(""))
+	require.Nil(t, cleaner.GetScanWaterMark())
+	require.Nil(t, cleaner.GetCheckpointGCWaterMark())
+	require.Nil(t, cleaner.GetScannedWindow())
+	require.Nil(t, cleaner.GetMinMerged())
+	require.Nil(t, cleaner.DoCheck())
+	v1, v2 := cleaner.GetPITRs()
+	require.Nil(t, v1)
+	require.Nil(t, v2)
+	cleaner.GCEnabled()
+	require.Nil(t, cleaner.GetMPool())
+	v3, v4 := cleaner.GetSnapshots()
+	require.Nil(t, v3)
+	require.Nil(t, v4)
+	require.Equal(t, "", cleaner.GetTablePK(0))
+
+	require.NoError(t, cleaner.Close())
+}
