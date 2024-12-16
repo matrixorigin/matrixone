@@ -40,6 +40,148 @@ func UnmarshalRelationData(data []byte) (engine.RelData, error) {
 	}
 }
 
+type EmptyRelationData struct {
+	tombs engine.Tombstoner
+}
+
+func BuildEmptyRelData() engine.RelData {
+	return &EmptyRelationData{}
+}
+
+func (rd *EmptyRelationData) String() string {
+	return fmt.Sprintf("RelData[%d]", engine.RelDataEmpty)
+}
+
+func (rd *EmptyRelationData) GetShardIDList() []uint64 {
+	panic("not supported")
+}
+
+func (rd *EmptyRelationData) GetShardID(i int) uint64 {
+	panic("not supported")
+}
+
+func (rd *EmptyRelationData) SetShardID(i int, id uint64) {
+	panic("not supported")
+}
+
+func (rd *EmptyRelationData) AppendShardID(id uint64) {
+	panic("not supported")
+}
+
+func (rd *EmptyRelationData) GetBlockInfoSlice() objectio.BlockInfoSlice {
+	panic("not supported")
+}
+
+func (rd *EmptyRelationData) GetBlockInfo(i int) objectio.BlockInfo {
+	panic("not supported")
+}
+
+func (rd *EmptyRelationData) SetBlockInfo(i int, blk *objectio.BlockInfo) {
+	panic("not supported")
+}
+
+func (rd *EmptyRelationData) AppendBlockInfo(blk *objectio.BlockInfo) {
+	panic("not supported")
+}
+
+func (rd *EmptyRelationData) AppendBlockInfoSlice(objectio.BlockInfoSlice) {
+	panic("not supported")
+}
+
+func (rd *EmptyRelationData) GetType() engine.RelDataType {
+	return engine.RelDataEmpty
+}
+
+func (rd *EmptyRelationData) MarshalBinaryWithBuffer(w *bytes.Buffer) (err error) {
+	typ := uint8(rd.GetType())
+	if _, err = w.Write(types.EncodeUint8(&typ)); err != nil {
+		return
+	}
+
+	// marshal tombstones
+	offset := w.Len()
+	tombstoneLen := uint32(0)
+	if _, err = w.Write(types.EncodeUint32(&tombstoneLen)); err != nil {
+		return
+	}
+	if rd.tombs != nil {
+		if err = rd.tombs.MarshalBinaryWithBuffer(w); err != nil {
+			return
+		}
+		tombstoneLen = uint32(w.Len() - offset - 4)
+		buf := w.Bytes()
+		copy(buf[offset:], types.EncodeUint32(&tombstoneLen))
+	}
+	return nil
+}
+func (rd *EmptyRelationData) MarshalBinary() ([]byte, error) {
+	var w bytes.Buffer
+	if err := rd.MarshalBinaryWithBuffer(&w); err != nil {
+		return nil, err
+	}
+	buf := w.Bytes()
+	return buf, nil
+}
+
+func (rd *EmptyRelationData) UnmarshalBinary(data []byte) (err error) {
+	typ := engine.RelDataType(types.DecodeUint8(data))
+	if typ != engine.RelDataEmpty {
+		return moerr.NewInternalErrorNoCtxf("UnmarshalBinary empty rel data with type:%v", typ)
+	}
+	data = data[1:]
+
+	tombstoneLen := types.DecodeUint32(data)
+	data = data[4:]
+
+	if tombstoneLen == 0 {
+		return
+	}
+	//FIXME:: cycle import ??
+	rd.tombs, err = UnmarshalTombstoneData(data[:tombstoneLen])
+	return
+}
+
+func (rd *EmptyRelationData) AttachTombstones(tombstones engine.Tombstoner) error {
+	rd.tombs = tombstones
+	return nil
+}
+
+func (rd *EmptyRelationData) GetTombstones() engine.Tombstoner {
+	return rd.tombs
+}
+
+func (rd *EmptyRelationData) ForeachDataBlk(begin, end int, f func(blk any) error) error {
+	panic("Not Supported")
+}
+
+func (rd *EmptyRelationData) GetDataBlk(i int) any {
+	panic("Not Supported")
+}
+
+func (rd *EmptyRelationData) SetDataBlk(i int, blk any) {
+	panic("Not Supported")
+}
+
+func (rd *EmptyRelationData) DataSlice(begin, end int) engine.RelData {
+	panic("Not Supported")
+}
+
+func (rd *EmptyRelationData) GroupByPartitionNum() map[int16]engine.RelData {
+	panic("Not Supported")
+}
+
+func (rd *EmptyRelationData) AppendDataBlk(blk any) {
+	panic("Not Supported")
+}
+
+func (rd *EmptyRelationData) BuildEmptyRelData(i int) engine.RelData {
+	return &EmptyRelationData{}
+}
+
+func (rd *EmptyRelationData) DataCnt() int {
+	return 0
+}
+
 // emptyCnt is the number of empty blocks preserved
 func NewBlockListRelationData(emptyCnt int) *BlockListRelData {
 	return &BlockListRelData{
@@ -156,12 +298,12 @@ func (relData *BlockListRelData) MarshalBinaryWithBuffer(w *bytes.Buffer) (err e
 		return
 	}
 
+	// marshal blk list
 	sizeofblks := uint32(relData.blklist.Size())
 	if _, err = w.Write(types.EncodeUint32(&sizeofblks)); err != nil {
 		return
 	}
 
-	// marshal blk list
 	if _, err = w.Write(relData.blklist); err != nil {
 		return
 	}

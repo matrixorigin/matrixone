@@ -96,6 +96,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -4192,7 +4193,7 @@ func (c *Compile) handleDbRelContext(node *plan.Node, onRemoteCN bool) (engine.R
 }
 
 func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
-	_, _, _, err := c.handleDbRelContext(n, false)
+	rel, _, _, err := c.handleDbRelContext(n, false)
 	if err != nil {
 		return nil, err
 	}
@@ -4225,13 +4226,21 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 
 	// scan on multi CN
 	for i := range c.cnList {
-		nodes = append(nodes, engine.Node{
+		node := engine.Node{
 			Id:    c.cnList[i].Id,
 			Addr:  c.cnList[i].Addr,
 			Mcpu:  c.cnList[i].Mcpu,
 			CNCNT: int32(len(c.cnList)),
 			CNIDX: int32(i),
-		})
+		}
+		if node.Addr != c.addr {
+			uncommittedTombs, err := collectTombstones(c, n, rel, engine.Policy_CollectUncommittedTombstones)
+			if err != nil {
+				return nil, err
+			}
+			node.Data = engine_util.BuildEmptyRelData()
+			node.Data.AttachTombstones(uncommittedTombs)
+		}
 	}
 	return nodes, nil
 }

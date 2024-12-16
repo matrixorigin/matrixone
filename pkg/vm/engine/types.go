@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
-	"fmt"
 	"strconv"
 	"sync"
 	"time"
@@ -41,9 +40,10 @@ import (
 type Nodes []Node
 
 type Node struct {
-	Mcpu  int
-	Id    string `json:"id"`
-	Addr  string `json:"address"`
+	Mcpu int
+	Id   string `json:"id"`
+	Addr string `json:"address"`
+	//TODO::change RelData to Tombstoner, since only Tombstones ned to be serialized.
 	Data  RelData
 	CNCNT int32 // number of all cns
 	CNIDX int32 // cn index , starts from 0
@@ -1052,104 +1052,6 @@ type EntireEngine struct {
 
 func IsMemtable(tblRange []byte) bool {
 	return bytes.Equal(tblRange, objectio.EmptyBlockInfoBytes)
-}
-
-type EmptyRelationData struct{}
-
-func BuildEmptyRelData() RelData {
-	return &EmptyRelationData{}
-}
-
-func (rd *EmptyRelationData) String() string {
-	return fmt.Sprintf("RelData[%d]", RelDataEmpty)
-}
-
-func (rd *EmptyRelationData) GetShardIDList() []uint64 {
-	panic("not supported")
-}
-
-func (rd *EmptyRelationData) GetShardID(i int) uint64 {
-	panic("not supported")
-}
-
-func (rd *EmptyRelationData) SetShardID(i int, id uint64) {
-	panic("not supported")
-}
-
-func (rd *EmptyRelationData) AppendShardID(id uint64) {
-	panic("not supported")
-}
-
-func (rd *EmptyRelationData) GetBlockInfoSlice() objectio.BlockInfoSlice {
-	panic("not supported")
-}
-
-func (rd *EmptyRelationData) GetBlockInfo(i int) objectio.BlockInfo {
-	panic("not supported")
-}
-
-func (rd *EmptyRelationData) SetBlockInfo(i int, blk *objectio.BlockInfo) {
-	panic("not supported")
-}
-
-func (rd *EmptyRelationData) AppendBlockInfo(blk *objectio.BlockInfo) {
-	panic("not supported")
-}
-
-func (rd *EmptyRelationData) AppendBlockInfoSlice(objectio.BlockInfoSlice) {
-	panic("not supported")
-}
-
-func (rd *EmptyRelationData) GetType() RelDataType {
-	return RelDataEmpty
-}
-
-func (rd *EmptyRelationData) MarshalBinary() ([]byte, error) {
-	panic("Not Supported")
-}
-
-func (rd *EmptyRelationData) UnmarshalBinary(buf []byte) error {
-	panic("Not Supported")
-}
-
-func (rd *EmptyRelationData) AttachTombstones(tombstones Tombstoner) error {
-	panic("Not Supported")
-}
-
-func (rd *EmptyRelationData) GetTombstones() Tombstoner {
-	panic("Not Supported")
-}
-
-func (rd *EmptyRelationData) ForeachDataBlk(begin, end int, f func(blk any) error) error {
-	panic("Not Supported")
-}
-
-func (rd *EmptyRelationData) GetDataBlk(i int) any {
-	panic("Not Supported")
-}
-
-func (rd *EmptyRelationData) SetDataBlk(i int, blk any) {
-	panic("Not Supported")
-}
-
-func (rd *EmptyRelationData) DataSlice(begin, end int) RelData {
-	panic("Not Supported")
-}
-
-func (rd *EmptyRelationData) GroupByPartitionNum() map[int16]RelData {
-	panic("Not Supported")
-}
-
-func (rd *EmptyRelationData) AppendDataBlk(blk any) {
-	panic("Not Supported")
-}
-
-func (rd *EmptyRelationData) BuildEmptyRelData(i int) RelData {
-	return &EmptyRelationData{}
-}
-
-func (rd *EmptyRelationData) DataCnt() int {
-	return 0
 }
 
 type forceBuildRemoteDSConfig struct {

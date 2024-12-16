@@ -183,7 +183,7 @@ func (s *Scope) Run(c *Compile) (err error) {
 			_, err = p.Run(s.Proc)
 		} else {
 			if s.DataSource.R == nil {
-				s.NodeInfo.Data = engine.BuildEmptyRelData()
+				s.NodeInfo.Data = engine_util.BuildEmptyRelData()
 				stats := statistic.StatsInfoFromContext(c.proc.GetTopContext())
 
 				buildStart := time.Now()
@@ -658,10 +658,7 @@ func (s *Scope) handleBlockList(c *Compile, runtimeInExprList []*plan.Expr) erro
 		}
 		s.NodeInfo.Data.AppendBlockInfoSlice(commited.GetBlockInfoSlice())
 	} else {
-		tombstones, err := collectTombstones(c, s.DataSource.node, rel, engine.Policy_CollectCommittedTombstones)
-		if err != nil {
-			return err
-		}
+		tombstones := s.NodeInfo.Data.GetTombstones()
 		commited.AttachTombstones(tombstones)
 		s.NodeInfo.Data = commited
 	}

@@ -570,8 +570,9 @@ message NodeInfo {
   int32 mcpu = 1;
   string id = 2;
   string addr = 3;
-  int32 cn_cnt = 4;
-  int32 cn_idx = 5;
+  string payload = 4;
+  int32 cn_cnt = 5;
+  int32 cn_idx = 6;
 }
 
 message ProcessLimitation {
