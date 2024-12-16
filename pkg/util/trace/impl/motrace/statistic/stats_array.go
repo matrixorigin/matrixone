@@ -298,6 +298,14 @@ type StatsInfo struct {
 		BuildPlanStatsDuration      int64 `json:"BuildPlanStatsDuration"`      // unit: ns
 		BuildPlanStatsIOConsumption int64 `json:"BuildPlanStatsIOConsumption"` // unit: ns
 		BuildPlanResolveVarDuration int64 `json:"BuildPlanResolveVarDuration"` // unit: ns
+
+		StatsCalcPhase1Duration int64 `json:"StatsCalcPhase1Duration"` // unit: ns
+		StatsCalcPhase2Duration int64 `json:"StatsCalcPhase2Duration"` // unit: ns
+		StatsCalcPhase3Duration int64 `json:"StatsCalcPhase3Duration"` // unit: ns
+		StatsCalcPhase4Duration int64 `json:"StatsCalcPhase4Duration"` // unit: ns
+
+		StatsCalcPhase5Duration int64 `json:"StatsCalcPhase5Duration"` // unit: ns
+		StatsCalcPhase6Duration int64 `json:"StatsCalcPhase6Duration"` // unit: ns
 	}
 
 	// Compile phase statistics
@@ -520,6 +528,48 @@ func (stats *StatsInfo) AddBuildPlanStatsIOConsumption(d time.Duration) {
 		return
 	}
 	atomic.AddInt64(&stats.PlanStage.BuildPlanStatsIOConsumption, int64(d))
+}
+
+func (stats *StatsInfo) AddStatsCalcPhase1Duration(d time.Duration) {
+	if stats == nil {
+		return
+	}
+	atomic.AddInt64(&stats.PlanStage.StatsCalcPhase1Duration, int64(d))
+}
+
+func (stats *StatsInfo) AddStatsCalcPhase2Duration(d time.Duration) {
+	if stats == nil {
+		return
+	}
+	atomic.AddInt64(&stats.PlanStage.StatsCalcPhase2Duration, int64(d))
+}
+
+func (stats *StatsInfo) AddStatsCalcPhase3Duration(d time.Duration) {
+	if stats == nil {
+		return
+	}
+	atomic.AddInt64(&stats.PlanStage.StatsCalcPhase3Duration, int64(d))
+}
+
+func (stats *StatsInfo) AddStatsCalcPhase4Duration(d time.Duration) {
+	if stats == nil {
+		return
+	}
+	atomic.AddInt64(&stats.PlanStage.StatsCalcPhase4Duration, int64(d))
+}
+
+func (stats *StatsInfo) AddStatsCalcPhase5Duration(d time.Duration) {
+	if stats == nil {
+		return
+	}
+	atomic.AddInt64(&stats.PlanStage.StatsCalcPhase5Duration, int64(d))
+}
+
+func (stats *StatsInfo) AddStatsCalcPhase6Duration(d time.Duration) {
+	if stats == nil {
+		return
+	}
+	atomic.AddInt64(&stats.PlanStage.StatsCalcPhase6Duration, int64(d))
 }
 
 func (stats *StatsInfo) AddBuildPlanResolveVarConsumption(d time.Duration) {

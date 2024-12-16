@@ -20,7 +20,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -119,8 +118,8 @@ func (c *compilerContext) ResolveAccountIds(accountNames []string) ([]uint32, er
 
 func (c *compilerContext) Stats(obj *plan.ObjectRef, snapshot *plan.Snapshot) (*pb.StatsInfo, error) {
 	stats := statistic.StatsInfoFromContext(c.GetContext())
-	start := time.Now()
-	defer stats.AddBuildPlanStatsConsumption(time.Since(start))
+	//start := time.Now()
+	//defer stats.AddBuildPlanStatsConsumption(time.Since(start))
 
 	dbName := obj.GetSchemaName()
 	tableName := obj.GetObjName()

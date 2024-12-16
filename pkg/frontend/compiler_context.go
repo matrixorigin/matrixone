@@ -803,10 +803,12 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, snapshot *plan2.Snaps
 	stats := statistic.StatsInfoFromContext(tcc.execCtx.reqCtx)
 	start := time.Now()
 	defer func() {
-		v2.TxnStatementStatsDurationHistogram.Observe(time.Since(start).Seconds())
 		stats.AddBuildPlanStatsConsumption(time.Since(start))
+		v2.TxnStatementStatsDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 
+	//------------------------------------------------------------------------------------------------------------------
+	start1 := time.Now()
 	dbName := obj.GetSchemaName()
 	tableName := obj.GetObjName()
 	checkSub := true
@@ -826,17 +828,26 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, snapshot *plan2.Snaps
 			DbName:    dbName,
 		}
 	}
+	stats.AddStatsCalcPhase1Duration(time.Since(start1))
+	//------------------------------------------------------------------------------------------------------------------
+	start2 := time.Now()
 	ctx, table, err := tcc.getRelation(dbName, tableName, sub, snapshot)
 	if err != nil {
 		return nil, err
 	}
+	stats.AddStatsCalcPhase2Duration(time.Since(start2))
+	//------------------------------------------------------------------------------------------------------------------
+
+	start3 := time.Now()
 	cached, needUpdate := tcc.statsInCache(ctx, dbName, table, snapshot)
+	stats.AddStatsCalcPhase3Duration(time.Since(start3))
 	if cached == nil {
 		return nil, nil
 	}
 	if !needUpdate {
 		return cached, nil
 	}
+	start4 := time.Now()
 	tableDefs, err := table.TableDefs(ctx)
 	if err != nil {
 		return nil, err
@@ -855,7 +866,9 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, snapshot *plan2.Snaps
 			break
 		}
 	}
+	stats.AddStatsCalcPhase4Duration(time.Since(start4))
 
+	start5 := time.Now()
 	var statsInfo *pb.StatsInfo
 	// This is a partition table.
 	if partitionInfo != nil {
@@ -903,9 +916,12 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, snapshot *plan2.Snaps
 			DeleteMul: crs.FileService.S3.DeleteMulti.Load(),
 		})
 	}
+	stats.AddStatsCalcPhase5Duration(time.Since(start5))
 
 	if statsInfo != nil {
+		start6 := time.Now()
 		tcc.UpdateStatsInCache(table.GetTableID(ctx), statsInfo)
+		stats.AddStatsCalcPhase6Duration(time.Since(start6))
 		return statsInfo, nil
 	}
 	return cached, nil
