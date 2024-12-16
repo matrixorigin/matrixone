@@ -194,23 +194,8 @@ func TestFullTextNL(t *testing.T) {
 
 	fmt.Println(sql)
 
-	var keywords []string
-	var indexes []int32
-	word2idx := make(map[string]int32)
 	agghtab := make(map[any][]uint8)
 	aggcnt := make([]int64, 64)
-
-	for _, p := range s.Pattern {
-		keywords, indexes = GetTextFromPattern(p, keywords, indexes)
-	}
-
-	//fmt.Println(keywords)
-	//fmt.Println(indexes)
-
-	for i, kw := range keywords {
-		word2idx[kw] = indexes[i]
-		//fmt.Printf("idx %d, text %s\n", indexes[i], kw)
-	}
 
 	//fmt.Println(PatternListToString(s.Pattern))
 
@@ -263,22 +248,8 @@ func TestFullTextOr(t *testing.T) {
 	s, err := NewSearchAccum("src", "index", pattern, int64(tree.FULLTEXT_BOOLEAN), "")
 	require.Nil(t, err)
 
-	var keywords []string
-	var indexes []int32
-	word2idx := make(map[string]int32)
 	agghtab := make(map[any][]uint8)
 	aggcnt := make([]int64, 64)
-
-	for _, p := range s.Pattern {
-		keywords, indexes = GetTextFromPattern(p, keywords, indexes)
-	}
-
-	//fmt.Println(keywords)
-	//fmt.Println(indexes)
-
-	for i, kw := range keywords {
-		word2idx[kw] = indexes[i]
-	}
 
 	agghtab[0] = []uint8{uint8(2), uint8(2)}  // apple, banna
 	agghtab[1] = []uint8{uint8(3), uint8(0)}  // apple
@@ -333,22 +304,8 @@ func TestFullTextPlusPlus(t *testing.T) {
 	require.Nil(t, err)
 	fmt.Println(sql)
 
-	var keywords []string
-	var indexes []int32
-	word2idx := make(map[string]int32)
 	agghtab := make(map[any][]uint8)
 	aggcnt := make([]int64, 64)
-
-	for _, p := range s.Pattern {
-		keywords, indexes = GetTextFromPattern(p, keywords, indexes)
-	}
-
-	//fmt.Println(keywords)
-	//fmt.Println(indexes)
-
-	for i, kw := range keywords {
-		word2idx[kw] = indexes[i]
-	}
 
 	//fmt.Printf("PATTERN %v\n", s.Pattern)
 	// [(join 0 (+ (text 0 apple)) (+ (text 0 banana))) (- (text orange))]
@@ -398,22 +355,8 @@ func TestFullTextPlusOr(t *testing.T) {
 	s, err := NewSearchAccum("src", "index", pattern, int64(tree.FULLTEXT_BOOLEAN), "")
 	require.Nil(t, err)
 
-	var keywords []string
-	var indexes []int32
-	word2idx := make(map[string]int32)
 	agghtab := make(map[any][]uint8)
 	aggcnt := make([]int64, 64)
-
-	for _, p := range s.Pattern {
-		keywords, indexes = GetTextFromPattern(p, keywords, indexes)
-	}
-
-	//fmt.Println(keywords)
-	//fmt.Println(indexes)
-
-	for i, kw := range keywords {
-		word2idx[kw] = indexes[i]
-	}
 
 	agghtab[0] = []uint8{uint8(2), uint8(2)}  // apple, banna
 	agghtab[1] = []uint8{uint8(3), uint8(0)}  // apple
@@ -461,22 +404,8 @@ func TestFullTextMinus(t *testing.T) {
 	s, err := NewSearchAccum("src", "index", pattern, int64(tree.FULLTEXT_BOOLEAN), "")
 	require.Nil(t, err)
 
-	var keywords []string
-	var indexes []int32
-	word2idx := make(map[string]int32)
 	agghtab := make(map[any][]uint8)
 	aggcnt := make([]int64, 64)
-
-	for _, p := range s.Pattern {
-		keywords, indexes = GetTextFromPattern(p, keywords, indexes)
-	}
-
-	//fmt.Println(keywords)
-	//fmt.Println(indexes)
-
-	for i, kw := range keywords {
-		word2idx[kw] = indexes[i]
-	}
 
 	agghtab[0] = []uint8{uint8(2), uint8(2)}  // apple, banna
 	agghtab[1] = []uint8{uint8(3), uint8(0)}  // apple
@@ -525,22 +454,8 @@ func TestFullTextTilda(t *testing.T) {
 	s, err := NewSearchAccum("src", "index", pattern, int64(tree.FULLTEXT_BOOLEAN), "")
 	require.Nil(t, err)
 
-	var keywords []string
-	var indexes []int32
-	word2idx := make(map[string]int32)
 	agghtab := make(map[any][]uint8)
 	aggcnt := make([]int64, 64)
-
-	for _, p := range s.Pattern {
-		keywords, indexes = GetTextFromPattern(p, keywords, indexes)
-	}
-
-	//fmt.Println(keywords)
-	//fmt.Println(indexes)
-
-	for i, kw := range keywords {
-		word2idx[kw] = indexes[i]
-	}
 
 	agghtab[0] = []uint8{uint8(2), uint8(2)}  // apple, banna
 	agghtab[1] = []uint8{uint8(3), uint8(0)}  // apple
@@ -588,22 +503,8 @@ func TestFullText1(t *testing.T) {
 	s, err := NewSearchAccum("src", "index", pattern, int64(tree.FULLTEXT_BOOLEAN), "")
 	require.Nil(t, err)
 
-	var keywords []string
-	var indexes []int32
-	word2idx := make(map[string]int32)
 	agghtab := make(map[any][]uint8)
 	aggcnt := make([]int64, 64)
-
-	for _, p := range s.Pattern {
-		keywords, indexes = GetTextFromPattern(p, keywords, indexes)
-	}
-
-	//fmt.Println(keywords)
-	//fmt.Println(indexes)
-
-	for i, kw := range keywords {
-		word2idx[kw] = indexes[i]
-	}
 
 	// {we, are, so, happy}
 	// we
@@ -669,22 +570,8 @@ func TestFullText2(t *testing.T) {
 	s, err := NewSearchAccum("src", "index", pattern, int64(tree.FULLTEXT_BOOLEAN), "")
 	require.Nil(t, err)
 
-	var keywords []string
-	var indexes []int32
-	word2idx := make(map[string]int32)
 	agghtab := make(map[any][]uint8)
 	aggcnt := make([]int64, 64)
-
-	for _, p := range s.Pattern {
-		keywords, indexes = GetTextFromPattern(p, keywords, indexes)
-	}
-
-	//fmt.Println(keywords)
-	//fmt.Println(indexes)
-
-	for i, kw := range keywords {
-		word2idx[kw] = indexes[i]
-	}
 
 	// {we, are, so, happy}
 	// we
@@ -744,22 +631,8 @@ func TestFullText3(t *testing.T) {
 	s, err := NewSearchAccum("src", "index", pattern, int64(tree.FULLTEXT_BOOLEAN), "")
 	require.Nil(t, err)
 
-	var keywords []string
-	var indexes []int32
-	word2idx := make(map[string]int32)
 	agghtab := make(map[any][]uint8)
 	aggcnt := make([]int64, 64)
-
-	for _, p := range s.Pattern {
-		keywords, indexes = GetTextFromPattern(p, keywords, indexes)
-	}
-
-	//fmt.Println(keywords)
-	//fmt.Println(indexes)
-
-	for i, kw := range keywords {
-		word2idx[kw] = indexes[i]
-	}
 
 	// {we, are, so, happy}
 	// we
@@ -820,23 +693,8 @@ func TestFullText5(t *testing.T) {
 	s, err := NewSearchAccum("src", "index", pattern, int64(tree.FULLTEXT_BOOLEAN), "")
 	require.Nil(t, err)
 
-	var keywords []string
-	var indexes []int32
-	word2idx := make(map[string]int32)
 	agghtab := make(map[any][]uint8)
 	aggcnt := make([]int64, 64)
-
-	for _, p := range s.Pattern {
-		keywords, indexes = GetTextFromPattern(p, keywords, indexes)
-	}
-
-	fmt.Printf("Text5 %v\n", s.Pattern)
-	//fmt.Println(keywords)
-	//fmt.Println(indexes)
-
-	for i, kw := range keywords {
-		word2idx[kw] = indexes[i]
-	}
 
 	// [(+ (text 0 happy)) (text 1 we) (text 2 are) (text 3 so)]
 	// {we, are, so, happy}
@@ -883,22 +741,8 @@ func TestFullTextGroup(t *testing.T) {
 	s, err := NewSearchAccum("src", "index", pattern, int64(tree.FULLTEXT_BOOLEAN), "")
 	require.Nil(t, err)
 
-	var keywords []string
-	var indexes []int32
-	word2idx := make(map[string]int32)
 	agghtab := make(map[any][]uint8)
 	aggcnt := make([]int64, 64)
-
-	for _, p := range s.Pattern {
-		keywords, indexes = GetTextFromPattern(p, keywords, indexes)
-	}
-
-	//fmt.Println(keywords)
-	//fmt.Println(indexes)
-
-	for i, kw := range keywords {
-		word2idx[kw] = indexes[i]
-	}
 
 	// {we, are, so, happy}
 	// we
@@ -954,22 +798,8 @@ func TestFullTextGroupTilda(t *testing.T) {
 	s, err := NewSearchAccum("src", "index", pattern, int64(tree.FULLTEXT_BOOLEAN), "")
 	require.Nil(t, err)
 
-	var keywords []string
-	var indexes []int32
-	word2idx := make(map[string]int32)
 	agghtab := make(map[any][]uint8)
 	aggcnt := make([]int64, 64)
-
-	for _, p := range s.Pattern {
-		keywords, indexes = GetTextFromPattern(p, keywords, indexes)
-	}
-
-	//fmt.Println(keywords)
-	//fmt.Println(indexes)
-
-	for i, kw := range keywords {
-		word2idx[kw] = indexes[i]
-	}
 
 	// {we, are, so, happy}
 	// we
@@ -1026,25 +856,8 @@ func TestFullTextStar(t *testing.T) {
 	require.Nil(t, err)
 
 	//fmt.Println(PatternListToString(s.Pattern))
-	var keywords []string
-	var indexes []int32
-	word2idx := make(map[string]int32)
 	agghtab := make(map[any][]uint8)
 	aggcnt := make([]int64, 64)
-
-	for _, p := range s.Pattern {
-		keywords, indexes = GetTextFromPattern(p, keywords, indexes)
-	}
-	for _, p := range s.Pattern {
-		keywords, indexes = GetStarFromPattern(p, keywords, indexes)
-	}
-
-	//fmt.Println(keywords)
-	//fmt.Println(indexes)
-
-	for i, kw := range keywords {
-		word2idx[kw] = indexes[i]
-	}
 
 	// {apple*}
 	// apple*
@@ -1093,22 +906,8 @@ func TestFullTextPhrase(t *testing.T) {
 	require.Nil(t, err)
 	fmt.Println(sql)
 
-	var keywords []string
-	var indexes []int32
-	word2idx := make(map[string]int32)
 	agghtab := make(map[any][]uint8)
 	aggcnt := make([]int64, 64)
-
-	for _, p := range s.Pattern {
-		keywords, indexes = GetTextFromPattern(p, keywords, indexes)
-	}
-
-	//fmt.Println(keywords)
-	//fmt.Println(indexes)
-
-	for i, kw := range keywords {
-		word2idx[kw] = indexes[i]
-	}
 
 	// {we, are, so, happy}
 	// we

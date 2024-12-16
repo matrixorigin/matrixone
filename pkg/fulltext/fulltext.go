@@ -783,51 +783,8 @@ func findTextOrStarFromPattern(pattern *Pattern, out []*Pattern) []*Pattern {
 
 }
 
-func GetTextFromPattern(pattern *Pattern, text []string, index []int32) ([]string, []int32) {
-
-	if pattern.Operator == TEXT {
-		text = append(text, pattern.Text)
-		index = append(index, pattern.Index)
-		return text, index
-	}
-
-	for _, p := range pattern.Children {
-		text, index = GetTextFromPattern(p, text, index)
-	}
-	return text, index
-}
-
-func GetStarFromPattern(pattern *Pattern, text []string, index []int32) ([]string, []int32) {
-
-	if pattern.Operator == STAR {
-		text = append(text, pattern.Text)
-		index = append(index, pattern.Index)
-		return text, index
-	}
-
-	for _, p := range pattern.Children {
-		text, index = GetStarFromPattern(p, text, index)
-	}
-	return text, index
-}
-
-func GetPhraseTextFromPattern(pattern *Pattern, text []string, index []int32, pos []int32) ([]string, []int32, []int32) {
-
-	if pattern.Operator == TEXT {
-		text = append(text, pattern.Text)
-		index = append(index, pattern.Index)
-		pos = append(pos, pattern.Position)
-		return text, index, pos
-	}
-
-	for _, p := range pattern.Children {
-		text, index, pos = GetPhraseTextFromPattern(p, text, index, pos)
-	}
-	return text, index, pos
-}
-
 func getTextCount(pattern *Pattern, cnt *int) {
-	if pattern.Operator == TEXT || pattern.Operator == STAR {
+	if pattern.Operator == TEXT || pattern.Operator == STAR || pattern.Operator == JOIN {
 		(*cnt)++
 		return
 	}
