@@ -16,6 +16,7 @@ package merge
 
 import (
 	"context"
+	"math"
 	"math/rand/v2"
 	"testing"
 
@@ -74,10 +75,25 @@ func newSortedTombstoneEntryWithTableEntry(t *testing.T, tbl *catalog.TableEntry
 	return entry
 }
 
-func newSortedTestObjectEntry(t *testing.T, v1, v2 int32, size uint32) *catalog.ObjectEntry {
+func newSortedTestObjectEntry(t testing.TB, v1, v2 int32, size uint32) *catalog.ObjectEntry {
 	zm := index.NewZM(types.T_int32, 0)
 	index.UpdateZM(zm, types.EncodeInt32(&v1))
 	index.UpdateZM(zm, types.EncodeInt32(&v2))
+	stats := objectio.NewObjectStats()
+	objName := objectio.BuildObjectNameWithObjectID(objectio.NewObjectid())
+	require.NoError(t, objectio.SetObjectStatsObjectName(stats, objName))
+	require.NoError(t, objectio.SetObjectStatsSortKeyZoneMap(stats, zm))
+	require.NoError(t, objectio.SetObjectStatsOriginSize(stats, size))
+	require.NoError(t, objectio.SetObjectStatsRowCnt(stats, 2))
+	return &catalog.ObjectEntry{
+		ObjectMVCCNode: catalog.ObjectMVCCNode{ObjectStats: *stats},
+	}
+}
+
+func newTestVarcharObjectEntry(t testing.TB, v1, v2 string, size uint32) *catalog.ObjectEntry {
+	zm := index.NewZM(types.T_varchar, 0)
+	index.UpdateZM(zm, []byte(v1))
+	index.UpdateZM(zm, []byte(v2))
 	stats := objectio.NewObjectStats()
 	objName := objectio.BuildObjectNameWithObjectID(objectio.NewObjectid())
 	require.NoError(t, objectio.SetObjectStatsObjectName(stats, objName))
@@ -269,7 +285,13 @@ func TestPolicyCompact(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, txn1.Commit(context.Background()))
 
-	p.resetForTable(tbl, nil)
+	obj := catalog.MockObjEntryWithTbl(tbl, math.MaxUint32, false)
+	tombstone := catalog.MockObjEntryWithTbl(tbl, math.MaxUint32, true)
+	require.NoError(t, objectio.SetObjectStatsOriginSize(tombstone.GetObjectStats(), math.MaxUint32))
+	tbl.AddEntryLocked(obj)
+	tbl.AddEntryLocked(tombstone)
+	p.resetForTable(tbl, &BasicPolicyConfig{})
+	p.onObject(obj, &BasicPolicyConfig{})
 
 	objs := p.revise(rc)
 	require.Equal(t, 0, len(objs))
@@ -373,7 +395,7 @@ func TestCheckTombstone(t *testing.T) {
 
 		ss := writer.GetObjectStats()
 		require.Equal(t, rowCnt, int(ss.Rows()))
-		meta, err := loadTombstoneMeta(context.TODO(), &ss, fs)
+		meta, err := loadTombstoneMeta(&ss, fs)
 		require.NoError(t, err)
 		metas[i] = meta
 	}
@@ -391,12 +413,12 @@ func TestCheckTombstone(t *testing.T) {
 }
 
 func TestObjectsWithMaximumOverlaps(t *testing.T) {
-	o1 := newSortedTestObjectEntry(t, 0, 50, 0)
-	o2 := newSortedTestObjectEntry(t, 51, 100, 0)
-	o3 := newSortedTestObjectEntry(t, 49, 52, 0)
-	o4 := newSortedTestObjectEntry(t, 1, 52, 0)
-	o5 := newSortedTestObjectEntry(t, 50, 51, 0)
-	o6 := newSortedTestObjectEntry(t, 55, 60, 0)
+	o1 := newSortedTestObjectEntry(t, 0, 50, math.MaxInt32)
+	o2 := newSortedTestObjectEntry(t, 51, 100, math.MaxInt32)
+	o3 := newSortedTestObjectEntry(t, 49, 52, math.MaxInt32)
+	o4 := newSortedTestObjectEntry(t, 1, 52, math.MaxInt32)
+	o5 := newSortedTestObjectEntry(t, 50, 51, math.MaxInt32)
+	o6 := newSortedTestObjectEntry(t, 55, 60, math.MaxInt32)
 
 	res1 := objectsWithGivenOverlaps([]*catalog.ObjectEntry{o1, o2}, 2)
 	require.Equal(t, 0, len(res1))

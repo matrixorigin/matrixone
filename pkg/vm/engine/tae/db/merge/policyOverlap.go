@@ -31,14 +31,12 @@ var levels = [6]int{
 type objOverlapPolicy struct {
 	leveledObjects [len(levels)][]*catalog.ObjectEntry
 
-	segments           map[objectio.Segmentid]map[*catalog.ObjectEntry]struct{}
-	overlappingObjsSet [][]*catalog.ObjectEntry
+	segments map[objectio.Segmentid]map[*catalog.ObjectEntry]struct{}
 }
 
 func newObjOverlapPolicy() *objOverlapPolicy {
 	return &objOverlapPolicy{
-		overlappingObjsSet: make([][]*catalog.ObjectEntry, 0),
-		segments:           make(map[objectio.Segmentid]map[*catalog.ObjectEntry]struct{}),
+		segments: make(map[objectio.Segmentid]map[*catalog.ObjectEntry]struct{}),
 	}
 }
 
@@ -70,10 +68,12 @@ func (m *objOverlapPolicy) revise(rc *resourceController) []reviseResult {
 			continue
 		}
 
-		m.overlappingObjsSet = m.overlappingObjsSet[:0]
-		objs := objectsWithGivenOverlaps(m.leveledObjects[i], 5)
-		for _, obj := range objs {
-			result := reviseResult{objs: obj, kind: taskHostDN}
+		for _, objs := range objectsWithGivenOverlaps(m.leveledObjects[i], 5) {
+			objs = removeOversize(objs)
+			if len(objs) < 2 || score(objs) < 1.1 {
+				continue
+			}
+			result := reviseResult{objs: objs, kind: taskHostDN}
 			if result.kind == taskHostDN {
 				if rc.cpuPercent > 80 {
 					continue
@@ -92,7 +92,6 @@ func (m *objOverlapPolicy) revise(rc *resourceController) []reviseResult {
 }
 
 func (m *objOverlapPolicy) resetForTable(*catalog.TableEntry, *BasicPolicyConfig) {
-	m.overlappingObjsSet = m.overlappingObjsSet[:0]
 	for i := range m.leveledObjects {
 		m.leveledObjects[i] = m.leveledObjects[i][:0]
 	}
@@ -143,6 +142,7 @@ func objectsWithGivenOverlaps(objects []*catalog.ObjectEntry, overlaps int) [][]
 	tmp := make(map[*catalog.ObjectEntry]struct{})
 	for {
 		objs := make([]*catalog.ObjectEntry, 0, len(points)/2)
+		clear(tmp)
 		for _, p := range points {
 			if p.s == 1 {
 				tmp[p.obj] = struct{}{}
