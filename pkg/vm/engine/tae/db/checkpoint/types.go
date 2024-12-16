@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 )
 
 type State int8
@@ -59,11 +58,6 @@ type Runner interface {
 	// for test, delete in next phase
 	GetAllCheckpoints() []*CheckpointEntry
 	GetAllCheckpointsForBackup(compact *CheckpointEntry) []*CheckpointEntry
-}
-
-type DirtyCtx struct {
-	force bool
-	tree  *logtail.DirtyTreeEntry
 }
 
 type Observer interface {
