@@ -449,9 +449,6 @@ func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
 	var size uint64
 	var pkCount int
 
-	logutil.Info("asdf", zap.Uint64("commitWorkspaceThreshold", txn.commitWorkspaceThreshold),
-		zap.Uint64("writeWorkspaceThreshold", txn.writeWorkspaceThreshold))
-
 	//offset < 0 indicates commit.
 	if offset < 0 {
 		if txn.approximateInMemInsertSize < txn.commitWorkspaceThreshold &&
