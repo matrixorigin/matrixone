@@ -34,80 +34,65 @@ type SqlNode struct {
 func GenJoinPlusSql(p *Pattern, mode int64, idxtbl string) ([]*SqlNode, error) {
 
 	var sql string
-	var keywords []string
-	var indexes []int32
-	tables := make([]string, 0)
+	var textps []*Pattern
 
-	sqlnode := &SqlNode{IsJoin: true, Index: p.Index}
+	textps = findTextOrStarFromPattern(p, textps)
+	sqlns := make([]*SqlNode, 0, len(textps))
+	for _, tp := range textps {
+		kw := tp.Text
+		alias := fmt.Sprintf("t%d", tp.Index)
+		sqlnode := &SqlNode{IsJoin: true, Index: tp.Index, Label: alias}
+		if tp.Operator == TEXT {
+			// TEXT
+			sql = fmt.Sprintf("%s AS (SELECT doc_id FROM %s WHERE word = '%s')", alias, idxtbl, kw)
+			sqlnode.Children = append(sqlnode.Children, &SqlNode{Index: tp.Index, Label: alias, IsJoin: true, Sql: sql})
 
-	keywords, indexes = GetTextFromPattern(p, keywords, indexes)
-
-	for i, kw := range keywords {
-		alias := fmt.Sprintf("t%d", indexes[i])
-		sql = fmt.Sprintf("%s AS (SELECT doc_id FROM %s WHERE word = '%s')", alias, idxtbl, kw)
-		sqlnode.Children = append(sqlnode.Children, &SqlNode{Index: indexes[i], Label: alias, IsJoin: true, Sql: sql})
-		sqlnode.Index = indexes[i]
-		tables = append(tables, alias)
-	}
-
-	keywords = keywords[:0]
-	indexes = indexes[:0]
-	keywords, indexes = GetStarFromPattern(p, keywords, indexes)
-
-	for i, kw := range keywords {
-		alias := fmt.Sprintf("t%d", indexes[i])
-		if kw[len(kw)-1] != '*' {
-			return nil, moerr.NewInternalErrorNoCtx("wildcard search without character *")
+		} else {
+			// STAR
+			if kw[len(kw)-1] != '*' {
+				return nil, moerr.NewInternalErrorNoCtx("wildcard search without character *")
+			}
+			prefix := kw[0 : len(kw)-1]
+			sql = fmt.Sprintf("%s AS (SELECT doc_id, CAST(%d as int) FROM %s WHERE prefix_eq(word,'%s'))", alias, tp.Index, idxtbl, prefix)
+			sqlnode.Children = append(sqlnode.Children, &SqlNode{Index: tp.Index, Label: alias, IsJoin: true, Sql: sql})
 		}
-		prefix := kw[0 : len(kw)-1]
-		sql = fmt.Sprintf("%s AS (SELECT doc_id, CAST(%d as int) FROM %s WHERE prefix_eq(word,'%s'))", alias, indexes[i], idxtbl, prefix)
-		sqlnode.Children = append(sqlnode.Children, &SqlNode{Index: indexes[i], Label: alias, IsJoin: true, Sql: sql})
-		sqlnode.Index = indexes[i]
-		tables = append(tables, alias)
+
+		sqlnode.Sql = fmt.Sprintf("SELECT %s.doc_id, CAST(%d as int) FROM %s", alias, sqlnode.Index, alias)
+		sqlns = append(sqlns, sqlnode)
 	}
 
-	sqlnode.Sql = fmt.Sprintf("SELECT %s.doc_id, CAST(%d as int) FROM %s", tables[0], sqlnode.Index, tables[0])
-	sqlnode.Label = tables[0]
-	return []*SqlNode{sqlnode}, nil
-
+	return sqlns, nil
 }
 
 // JOIN node.  Index is from JOIN node.  Index of TEXT/STAR is invalid
 func GenJoinSql(p *Pattern, mode int64, idxtbl string) ([]*SqlNode, error) {
 
 	var sql string
-	var keywords []string
-	var indexes []int32
+	var textps []*Pattern
 	tables := make([]string, 0)
 
 	sqlnode := &SqlNode{IsJoin: true, Index: p.Index}
 	idx := p.Index
 	subidx := 0
+	textps = findTextOrStarFromPattern(p, textps)
 
-	keywords, indexes = GetTextFromPattern(p, keywords, indexes)
-
-	for _, kw := range keywords {
+	for _, tp := range textps {
+		kw := tp.Text
 		alias := fmt.Sprintf("t%d%d", idx, subidx)
-		sql = fmt.Sprintf("%s AS (SELECT doc_id FROM %s WHERE word = '%s')", alias, idxtbl, kw)
-		sqlnode.Children = append(sqlnode.Children, &SqlNode{Index: idx, Label: alias, IsJoin: true, Sql: sql})
 		tables = append(tables, alias)
-		subidx++
-	}
-
-	keywords = keywords[:0]
-	indexes = indexes[:0]
-	keywords, indexes = GetStarFromPattern(p, keywords, indexes)
-
-	for _, kw := range keywords {
-		alias := fmt.Sprintf("t%d%d", idx, subidx)
-		if kw[len(kw)-1] != '*' {
-			return nil, moerr.NewInternalErrorNoCtx("wildcard search without character *")
+		if tp.Operator == TEXT {
+			sql = fmt.Sprintf("%s AS (SELECT doc_id FROM %s WHERE word = '%s')", alias, idxtbl, kw)
+			sqlnode.Children = append(sqlnode.Children, &SqlNode{Index: idx, Label: alias, IsJoin: true, Sql: sql})
+			subidx++
+		} else {
+			if kw[len(kw)-1] != '*' {
+				return nil, moerr.NewInternalErrorNoCtx("wildcard search without character *")
+			}
+			prefix := kw[0 : len(kw)-1]
+			sql = fmt.Sprintf("%s AS (SELECT doc_id, CAST(%d as int) FROM %s WHERE prefix_eq(word,'%s'))", alias, idx, idxtbl, prefix)
+			sqlnode.Children = append(sqlnode.Children, &SqlNode{Index: idx, Label: alias, IsJoin: true, Sql: sql})
+			subidx++
 		}
-		prefix := kw[0 : len(kw)-1]
-		sql = fmt.Sprintf("%s AS (SELECT doc_id, CAST(%d as int) FROM %s WHERE prefix_eq(word,'%s'))", alias, idx, idxtbl, prefix)
-		sqlnode.Children = append(sqlnode.Children, &SqlNode{Index: idx, Label: alias, IsJoin: true, Sql: sql})
-		tables = append(tables, alias)
-		subidx++
 	}
 
 	oncond := make([]string, 0, len(sqlnode.Children)-1)
@@ -131,9 +116,7 @@ func GenJoinSql(p *Pattern, mode int64, idxtbl string) ([]*SqlNode, error) {
 func GenSql(p *Pattern, mode int64, idxtbl string, joinsql []*SqlNode, isJoin bool) ([]*SqlNode, error) {
 
 	var sqls []*SqlNode
-	var keywords []string
-	var indexes []int32
-	keywords, indexes = GetTextFromPattern(p, keywords, indexes)
+	var textps []*Pattern
 
 	if isJoin {
 		if p.Operator == JOIN {
@@ -143,38 +126,55 @@ func GenSql(p *Pattern, mode int64, idxtbl string, joinsql []*SqlNode, isJoin bo
 		}
 	}
 
-	for i, kw := range keywords {
-		var sql string
-		idx := indexes[i]
-		alias := fmt.Sprintf("t%d", idx)
-		if len(joinsql) == 0 {
-			sql = fmt.Sprintf("SELECT doc_id, CAST(%d as int) FROM %s WHERE word = '%s'", idx, idxtbl, kw)
-		} else {
-			sql = fmt.Sprintf("SELECT %s.doc_id, CAST(%d as int) FROM %s as %s, %s WHERE %s.doc_id = %s.doc_id AND %s.word = '%s'",
-				joinsql[0].Label, idx, idxtbl, alias, joinsql[0].Label, joinsql[0].Label, alias, alias, kw)
-		}
-		sqls = append(sqls, &SqlNode{Index: idx, Label: alias, IsJoin: isJoin, Sql: sql})
-	}
+	textps = findTextOrStarFromPattern(p, textps)
 
-	keywords = keywords[:0]
-	indexes = indexes[:0]
-	keywords, indexes = GetStarFromPattern(p, keywords, indexes)
+	if len(joinsql) == 0 {
+		// NO JOIN
 
-	for i, kw := range keywords {
-		var sql string
-		idx := indexes[i]
-		alias := fmt.Sprintf("t%d", idx)
-		if kw[len(kw)-1] != '*' {
-			return nil, moerr.NewInternalErrorNoCtx("wildcard search without character *")
+		for _, tp := range textps {
+			var sql string
+			idx := tp.Index
+			kw := tp.Text
+			alias := fmt.Sprintf("t%d", idx)
+			if tp.Operator == TEXT {
+				sql = fmt.Sprintf("SELECT doc_id, CAST(%d as int) FROM %s WHERE word = '%s'", idx, idxtbl, kw)
+
+			} else {
+				if kw[len(kw)-1] != '*' {
+					return nil, moerr.NewInternalErrorNoCtx("wildcard search without character *")
+				}
+				prefix := kw[0 : len(kw)-1]
+				sql = fmt.Sprintf("SELECT doc_id, CAST(%d as int) FROM %s WHERE prefix_eq(word,'%s')", idx, idxtbl, prefix)
+
+			}
+			sqls = append(sqls, &SqlNode{Index: idx, Label: alias, IsJoin: isJoin, Sql: sql})
 		}
-		prefix := kw[0 : len(kw)-1]
-		if len(joinsql) == 0 {
-			sql = fmt.Sprintf("SELECT doc_id, CAST(%d as int) FROM %s WHERE prefix_eq(word,'%s')", idx, idxtbl, prefix)
-		} else {
-			sql = fmt.Sprintf("SELECT %s.doc_id, CAST(%d as int) FROM %s as %s, %s WHERE %s.doc_id = %s.doc_id AND prefix_eq(%s.word, '%s')",
-				joinsql[0].Label, idx, idxtbl, alias, joinsql[0].Label, joinsql[0].Label, alias, alias, prefix)
+
+	} else {
+
+		for _, jn := range joinsql {
+			for _, tp := range textps {
+				var sql string
+				idx := tp.Index
+				kw := tp.Text
+				alias := fmt.Sprintf("t%d", idx)
+				if tp.Operator == TEXT {
+					sql = fmt.Sprintf("SELECT %s.doc_id, CAST(%d as int) FROM %s as %s, %s WHERE %s.doc_id = %s.doc_id AND %s.word = '%s'",
+						jn.Label, idx, idxtbl, alias, jn.Label, jn.Label, alias, alias, kw)
+
+				} else {
+					if kw[len(kw)-1] != '*' {
+						return nil, moerr.NewInternalErrorNoCtx("wildcard search without character *")
+					}
+					prefix := kw[0 : len(kw)-1]
+					sql = fmt.Sprintf("SELECT %s.doc_id, CAST(%d as int) FROM %s as %s, %s WHERE %s.doc_id = %s.doc_id AND prefix_eq(%s.word, '%s')",
+						jn.Label, idx, idxtbl, alias, jn.Label, jn.Label, alias, alias, prefix)
+
+				}
+				sqls = append(sqls, &SqlNode{Index: idx, Label: alias, IsJoin: isJoin, Sql: sql})
+			}
+
 		}
-		sqls = append(sqls, &SqlNode{Index: idx, Label: alias, IsJoin: isJoin, Sql: sql})
 	}
 
 	return sqls, nil
@@ -211,16 +211,13 @@ func SqlBoolean(ps []*Pattern, mode int64, idxtbl string) (string, error) {
 			sqls = append(sqls, join...)
 			startidx++
 		} else if ps[0].Operator == PLUS {
-			// check if singe text.  Mark it as JOIN too
-			if ps[0].Children[0].Operator == TEXT || ps[0].Children[0].Operator == STAR {
-				// make as JOIN
-				join, err = GenSql(ps[0], mode, idxtbl, nil, true)
-				if err != nil {
-					return "", err
-				}
-				sqls = append(sqls, join...)
-				startidx++
+			// Plus with Group also make as JOIN
+			join, err = GenSql(ps[0], mode, idxtbl, nil, true)
+			if err != nil {
+				return "", err
 			}
+			sqls = append(sqls, join...)
+			startidx++
 		}
 
 		for i := startidx; i < len(ps); i++ {

@@ -770,6 +770,19 @@ func assignPatternIndex(pattern *Pattern, idx *int32) {
 	}
 }
 
+func findTextOrStarFromPattern(pattern *Pattern, out []*Pattern) []*Pattern {
+	if pattern.Operator == TEXT || pattern.Operator == STAR {
+		out = append(out, pattern)
+		return out
+	}
+
+	for _, p := range pattern.Children {
+		out = findTextOrStarFromPattern(p, out)
+	}
+	return out
+
+}
+
 func GetTextFromPattern(pattern *Pattern, text []string, index []int32) ([]string, []int32) {
 
 	if pattern.Operator == TEXT {
