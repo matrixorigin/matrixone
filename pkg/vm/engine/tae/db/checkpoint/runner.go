@@ -289,6 +289,8 @@ func NewRunner(
 		r.source,
 		WithFlusherInterval(r.options.maxFlushInterval),
 		WithFlusherCronPeriod(r.options.collectInterval),
+		WithFlusherForceTimeout(r.options.forceFlushTimeout),
+		WithFlusherForceCheckInterval(r.options.forceFlushCheckInterval),
 	)
 	return r
 }

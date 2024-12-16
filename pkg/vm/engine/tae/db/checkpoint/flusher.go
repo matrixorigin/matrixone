@@ -23,7 +23,9 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
@@ -60,16 +62,25 @@ func WithFlusherQueueSize(size int) FlusherOption {
 	}
 }
 
-// type flushTraiggerSepc struct {
-// 	mode    uint32
-// 	trigger *tasks.CancelableFunc
-// }
+func WithFlusherForceTimeout(timeout time.Duration) FlusherOption {
+	return func(flusher *Flusher) {
+		flusher.forceFlushTimeout = timeout
+	}
+}
+
+func WithFlusherForceCheckInterval(interval time.Duration) FlusherOption {
+	return func(flusher *Flusher) {
+		flusher.forceFlushCheckInterval = interval
+	}
+}
 
 type Flusher struct {
-	flushInterval  time.Duration
-	flushLag       time.Duration
-	cronPeriod     time.Duration
-	flushQueueSize int
+	flushInterval           time.Duration
+	flushLag                time.Duration
+	cronPeriod              time.Duration
+	flushQueueSize          int
+	forceFlushTimeout       time.Duration
+	forceFlushCheckInterval time.Duration
 
 	sourcer          logtail.Collector
 	catalogCache     *catalog.Catalog
@@ -121,6 +132,15 @@ func NewFlusher(
 }
 
 func (flusher *Flusher) fillDefaults() {
+	if flusher.cronPeriod <= 0 {
+		flusher.cronPeriod = time.Second * 5
+	}
+	if flusher.forceFlushTimeout <= 0 {
+		flusher.forceFlushTimeout = time.Second * 90
+	}
+	if flusher.forceFlushCheckInterval <= 0 {
+		flusher.forceFlushCheckInterval = time.Millisecond * 500
+	}
 	if flusher.flushInterval <= 0 {
 		flusher.flushInterval = time.Minute
 	}
@@ -359,6 +379,54 @@ func (flusher *Flusher) checkFlushConditionAndFire(
 	}
 }
 
+func (flusher *Flusher) FlushTable(
+	ctx context.Context, dbID, tableID uint64, ts types.TS,
+) (err error) {
+	iarg, sarg, flush := fault.TriggerFault("flush_table_error")
+	if flush && (iarg == 0 || rand.Int63n(iarg) == 0) {
+		return moerr.NewInternalError(ctx, sarg)
+	}
+	makeRequest := func() *FlushRequest {
+		tree := flusher.sourcer.ScanInRangePruned(types.TS{}, ts)
+		tree.GetTree().Compact()
+		tableTree := tree.GetTree().GetTable(tableID)
+		if tableTree == nil {
+			return nil
+		}
+		nTree := model.NewTree()
+		nTree.Tables[tableID] = tableTree
+		entry := logtail.NewDirtyTreeEntry(types.TS{}, ts, nTree)
+		request := new(FlushRequest)
+		request.tree = entry
+		request.force = true
+		return request
+	}
+
+	op := func() (ok bool, err error) {
+		request := makeRequest()
+		if request == nil {
+			return true, nil
+		}
+		if _, err = flusher.flushRequestQ.Enqueue(request); err != nil {
+			// TODO: why (true,nil)???
+			return true, nil
+		}
+		return false, nil
+	}
+
+	err = common.RetryWithIntervalAndTimeout(
+		op,
+		flusher.forceFlushTimeout,
+		flusher.forceFlushCheckInterval,
+		true,
+	)
+	if moerr.IsMoErrCode(err, moerr.ErrInternal) || moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+		logutil.Warnf("Flush %d-%d :%v", dbID, tableID, err)
+		return nil
+	}
+	return
+}
+
 func (flusher *Flusher) Start() {
 	flusher.onceStart.Do(func() {
 		flusher.flushRequestQ.Start()
@@ -368,6 +436,8 @@ func (flusher *Flusher) Start() {
 			zap.Duration("cron-period", flusher.cronPeriod),
 			zap.Duration("flush-interval", flusher.flushInterval),
 			zap.Duration("flush-lag", flusher.flushLag),
+			zap.Duration("force-flush-timeout", flusher.forceFlushTimeout),
+			zap.Duration("force-flush-check-interval", flusher.forceFlushCheckInterval),
 		)
 	})
 }
