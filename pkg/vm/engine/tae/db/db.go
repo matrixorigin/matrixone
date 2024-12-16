@@ -16,6 +16,7 @@ package db
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"sync/atomic"
 	"time"
@@ -53,6 +54,29 @@ const (
 	DBTxnMode_Write DBTxnMode = iota
 	DBTxnMode_Replay
 )
+
+func (m DBTxnMode) String() string {
+	switch m {
+	case DBTxnMode_Write:
+		return "TxnWriteMode"
+	case DBTxnMode_Replay:
+		return "TxnReplayMode"
+	default:
+		return fmt.Sprintf("UnknownTxnMode(%d)", m)
+	}
+}
+
+func (m DBTxnMode) IsValid() bool {
+	return m == DBTxnMode_Write || m == DBTxnMode_Replay
+}
+
+func (m DBTxnMode) IsWriteMode() bool {
+	return m == DBTxnMode_Write
+}
+
+func (m DBTxnMode) IsReplayMode() bool {
+	return m == DBTxnMode_Replay
+}
 
 type DBOption func(*DB)
 
@@ -95,6 +119,14 @@ type DB struct {
 
 func (db *DB) GetTxnMode() DBTxnMode {
 	return DBTxnMode(db.TxnMode.Load())
+}
+
+func (db *DB) IsReplayMode() bool {
+	return db.GetTxnMode() == DBTxnMode_Replay
+}
+
+func (db *DB) IsWriteMode() bool {
+	return db.GetTxnMode() == DBTxnMode_Write
 }
 
 func (db *DB) SwitchTxnMode(

@@ -230,7 +230,7 @@ func TestAvgTwCache(t *testing.T) {
 		{
 			require.NotNil(t, v)
 		}
-		v.Free(mg.Mp())
+		v[0].Free(mg.Mp())
 	}
 	{
 		executor.Free()
@@ -287,7 +287,7 @@ func TestAvgTwCacheDecimal64(t *testing.T) {
 		{
 			require.NotNil(t, v)
 		}
-		v.Free(mg.Mp())
+		v[0].Free(mg.Mp())
 	}
 	{
 		executor.Free()
@@ -344,7 +344,7 @@ func TestAvgTwCacheDecimal128(t *testing.T) {
 		{
 			require.NotNil(t, v)
 		}
-		v.Free(mg.Mp())
+		v[0].Free(mg.Mp())
 	}
 	{
 		executor.Free()
@@ -410,7 +410,7 @@ func TestAvgTwResult(t *testing.T) {
 		{
 			require.NotNil(t, v)
 		}
-		v.Free(mg.Mp())
+		v[0].Free(mg.Mp())
 	}
 	{
 		executor.Free()
@@ -478,7 +478,7 @@ func TestAvgTwResultDecimal(t *testing.T) {
 		{
 			require.NotNil(t, v)
 		}
-		v.Free(mg.Mp())
+		v[0].Free(mg.Mp())
 	}
 	{
 		executor.Free()
