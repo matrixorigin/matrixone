@@ -21,8 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
@@ -165,50 +163,20 @@ func (r *runner) ForceGlobalCheckpointSynchronously(ctx context.Context, end typ
 	return nil
 }
 
-func (r *runner) ForceFlushWithInterval(ts types.TS, ctx context.Context, forceDuration, flushInterval time.Duration) (err error) {
-	makeCtx := func() *DirtyCtx {
-		tree := r.source.ScanInRangePruned(types.TS{}, ts)
-		tree.GetTree().Compact()
-		if tree.IsEmpty() {
-			return nil
-		}
-		entry := logtail.NewDirtyTreeEntry(types.TS{}, ts, tree.GetTree())
-		dirtyCtx := new(DirtyCtx)
-		dirtyCtx.tree = entry
-		dirtyCtx.force = true
-		// logutil.Infof("try flush %v",tree.String())
-		return dirtyCtx
-	}
-	op := func() (ok bool, err error) {
-		dirtyCtx := makeCtx()
-		if dirtyCtx == nil {
-			return true, nil
-		}
-		if _, err = r.dirtyEntryQueue.Enqueue(dirtyCtx); err != nil {
-			return true, nil
-		}
-		return false, nil
-	}
-
-	if forceDuration == 0 {
-		forceDuration = r.options.forceFlushTimeout
-	}
-	err = common.RetryWithIntervalAndTimeout(
-		op,
-		forceDuration,
-		flushInterval, false)
-	if err != nil {
-		return moerr.NewInternalErrorf(ctx, "force flush failed: %v", err)
-	}
-	_, sarg, _ := fault.TriggerFault(objectio.FJ_FlushTimeout)
-	if sarg != "" {
-		err = moerr.NewInternalError(ctx, sarg)
-	}
-	return
-
+func (r *runner) ForceFlushWithInterval(
+	ts types.TS, ctx context.Context, forceDuration, flushInterval time.Duration,
+) (err error) {
+	return r.flusher.ForceFlushWithInterval(
+		ts, ctx, forceDuration, flushInterval,
+	)
 }
-func (r *runner) ForceFlush(ts types.TS, ctx context.Context, forceDuration time.Duration) (err error) {
-	return r.ForceFlushWithInterval(ts, ctx, forceDuration, r.options.forceFlushCheckInterval)
+
+func (r *runner) ForceFlush(
+	ts types.TS, ctx context.Context, forceDuration time.Duration,
+) (err error) {
+	return r.flusher.ForceFlushWithInterval(
+		ts, ctx, forceDuration, 0,
+	)
 }
 
 func (r *runner) ForceIncrementalCheckpoint(end types.TS, truncate bool) error {

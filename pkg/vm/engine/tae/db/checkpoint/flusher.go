@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -377,6 +378,55 @@ func (flusher *Flusher) checkFlushConditionAndFire(
 			}
 		}
 	}
+}
+
+func (flusher *Flusher) ForceFlushWithInterval(
+	ts types.TS, ctx context.Context, forceDuration, flushInterval time.Duration,
+) (err error) {
+	makeRequest := func() *FlushRequest {
+		tree := flusher.sourcer.ScanInRangePruned(types.TS{}, ts)
+		tree.GetTree().Compact()
+		if tree.IsEmpty() {
+			return nil
+		}
+		entry := logtail.NewDirtyTreeEntry(types.TS{}, ts, tree.GetTree())
+		request := new(FlushRequest)
+		request.tree = entry
+		request.force = true
+		// logutil.Infof("try flush %v",tree.String())
+		return request
+	}
+	op := func() (ok bool, err error) {
+		request := makeRequest()
+		if request == nil {
+			return true, nil
+		}
+		if _, err = flusher.flushRequestQ.Enqueue(request); err != nil {
+			return true, nil
+		}
+		return false, nil
+	}
+
+	if forceDuration <= 0 {
+		forceDuration = flusher.forceFlushTimeout
+	}
+	if flushInterval <= 0 {
+		flushInterval = flusher.forceFlushCheckInterval
+	}
+	if err = common.RetryWithIntervalAndTimeout(
+		op,
+		forceDuration,
+		flushInterval,
+		false,
+	); err != nil {
+		return moerr.NewInternalErrorf(ctx, "force flush failed: %v", err)
+	}
+	_, sarg, _ := fault.TriggerFault(objectio.FJ_FlushTimeout)
+	if sarg != "" {
+		err = moerr.NewInternalError(ctx, sarg)
+	}
+	return
+
 }
 
 func (flusher *Flusher) FlushTable(
