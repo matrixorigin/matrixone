@@ -119,6 +119,13 @@ func explainResourceOverview(phy *PhyPlan, statsInfo *statistic.StatsInfo, optio
 				buffer.WriteString(fmt.Sprintf("\t\t- Build Plan Duration: %dns \n", int64(statsInfo.PlanStage.PlanDuration)))
 				buffer.WriteString(fmt.Sprintf("\t\t- Call Stats Duration: %dns \n", statsInfo.PlanStage.BuildPlanStatsDuration))
 				buffer.WriteString(fmt.Sprintf("\t\t- Call Stats IO Consumption: %dns \n", statsInfo.PlanStage.BuildPlanStatsIOConsumption))
+				buffer.WriteString(fmt.Sprintf("\t\t- Calc StatsPhase1 Duration: %dns \n", statsInfo.PlanStage.StatsCalcPhase1Duration))
+				buffer.WriteString(fmt.Sprintf("\t\t- Calc StatsPhase2 Duration: %dns \n", statsInfo.PlanStage.StatsCalcPhase2Duration))
+				buffer.WriteString(fmt.Sprintf("\t\t- Calc StatsPhase3 Duration: %dns \n", statsInfo.PlanStage.StatsCalcPhase3Duration))
+				buffer.WriteString(fmt.Sprintf("\t\t- Calc StatsPhase4 Duration: %dns \n", statsInfo.PlanStage.StatsCalcPhase4Duration))
+				buffer.WriteString(fmt.Sprintf("\t\t- Calc StatsPhase5 Duration: %dns \n", statsInfo.PlanStage.StatsCalcPhase5Duration))
+				buffer.WriteString(fmt.Sprintf("\t\t- Calc StatsPhase6 Duration: %dns \n", statsInfo.PlanStage.StatsCalcPhase6Duration))
+
 				//-------------------------------------------------------------------------------------------------------
 				buffer.WriteString("\tQuery Compile Stage:\n")
 				buffer.WriteString(fmt.Sprintf("\t\t- CPU Time: %dns \n", statsInfo.CompileStage.CompileDuration))
