@@ -28,10 +28,11 @@ fulltext SQL generation
 For natural language mode, it is a phrase search.  The search will be AND operation and with position as filter.
 
 For boolean mode, the rule are the followings:
-- operation JOIN contains a list of + operators which is single TEXT or STAR values
-- operator + is considered as AND Operation.  + Operators can be a single TEXT/STAR or Group.  Operator + with children Group cannot be optimized to under JOIN.
-- operator - is not considered as AND operation because NOT filter is slow in SQL. Change the formula from A & !B -> A + (A&B) and process the negative filter afterwards.
-- other operators are OR operation.
+  - operation JOIN contains a list of + operators which is single TEXT or STAR values
+  - operator + is considered as AND Operation.  + Operators can be a single TEXT/STAR or Group.  Operator + with children Group cannot be optimized to under JOIN.
+  - operator - is not considered as AND operation because NOT filter is slow in SQL.
+    Change the formula from A INTERSECT (NOT B) into A UNION (A INTERSECT B) and process the negative filter afterwards.
+  - other operators are OR operation.
 
 SQL generation from boolean search string is a Set theory.
 
