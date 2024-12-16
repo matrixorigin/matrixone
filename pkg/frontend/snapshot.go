@@ -78,6 +78,8 @@ var (
 
 	checkDatabaseIsMasterFormat = "select db_name from mo_catalog.mo_foreign_keys where refer_db_name = '%s'"
 
+	getAccountIdNamesByTsSql = "select account_id, account_name, status, version, suspended_time from mo_catalog.mo_account {mo_ts = %d } where 1=1"
+
 	skipDbs = []string{"mysql", "system", "system_metrics", "mo_task", "mo_debug", "information_schema", moCatalog}
 
 	needSkipTablesInMocatalog = map[string]int8{
@@ -400,23 +402,10 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 
 	// restore account by cluster level snapshot
 	if snapshot.level == tree.RESTORELEVELCLUSTER.String() && len(srcAccountName) != 0 {
-		var srcAccountId uint32
-		srcAccountId, err = getAccountId(ctx, bh, srcAccountName)
+		err = restoreToAccountUsingCluster(ctx, ses, bh, stmt, *snapshot)
 		if err != nil {
-			return
+			return stats, err
 		}
-
-		var sp string
-		sp, err = insertSnapshotRecord(ctx, ses.GetService(), bh, snapshot.snapshotName, snapshot.ts, uint64(srcAccountId), srcAccountName)
-		if err != nil {
-			return
-		}
-		snapshotName = sp
-		defer func() {
-			if err != nil {
-				deleteSnapshotRecord(ctx, ses.GetService(), bh, snapshot.snapshotName, sp)
-			}
-		}()
 	}
 
 	// drop foreign key related tables first
@@ -493,13 +482,6 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 	if len(viewMap) > 0 {
 		if err = restoreViews(ctx, ses, bh, snapshotName, viewMap, toAccountId); err != nil {
 			return
-		}
-	}
-
-	if snapshot.level == tree.RESTORELEVELCLUSTER.String() && len(srcAccountName) != 0 {
-		err = deleteSnapshotRecord(ctx, ses.GetService(), bh, snapshot.snapshotName, snapshotName)
-		if err != nil {
-			return stats, err
 		}
 	}
 
@@ -1776,6 +1758,55 @@ func restoreToCluster(ctx context.Context,
 		}
 	}
 
+	return err
+}
+
+func restoreToAccountUsingCluster(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	stmt *tree.RestoreSnapShot,
+	sp snapshotRecord,
+) (err error) {
+	srcAccount := string(stmt.AccountName)
+	snapshotName := string(stmt.SnapShotName)
+	snapshotTs := sp.ts
+	getLogger(ses.GetService()).Info(fmt.Sprintf("[%s] start to restore account using cluster snapshot: %v, restore timestamp: %d", snapshotName, srcAccount, snapshotTs))
+
+	var toAccountId uint32
+
+	// get account id
+	var ar *accountRecord
+	ar, err = getAccountRecordByTs(ctx, ses, bh, snapshotName, snapshotTs, srcAccount)
+	if err != nil {
+		return err
+	}
+
+	destAccount := string(stmt.ToAccountName)
+	if len(destAccount) > 0 {
+		toAccountId, err = getAccountId(ctx, bh, destAccount)
+		if err != nil {
+			return err
+		}
+	} else {
+		toAccountId, err = getAccountId(ctx, bh, srcAccount)
+		if err != nil {
+			// create account
+			err = createDroppedAccount(ctx, ses, bh, snapshotName, *ar)
+			if err != nil {
+				return err
+			}
+			toAccountId, err = getAccountId(ctx, bh, srcAccount)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	err = restoreAccountUsingClusterSnapshotToNew(ctx, ses, bh, snapshotName, snapshotTs, *ar, nil, uint64(toAccountId))
+	if err != nil {
+		return err
+	}
 	return err
 }
 
