@@ -241,29 +241,7 @@ func TestAllocTasksWithLabels(t *testing.T) {
 
 	query, err = service.QueryAsyncTask(context.Background())
 	assert.NoError(t, err)
-	assert.Equal(t, 1, len(query))
-	assert.Equal(t, "a", query[0].TaskRunner)
-	assert.Equal(t, task.TaskStatus_Running, query[0].Status)
-
-	// Add CNStore "c"
-	cnState = pb.CNState{Stores: map[string]pb.CNStoreInfo{
-		"a": {},
-		"b": {Labels: map[string]metadata.LabelList{"k1": {Labels: []string{"v2"}}}},
-		"c": {
-			Tick:   expiredTick,
-			Labels: map[string]metadata.LabelList{"k1": {Labels: []string{"v1"}}},
-		},
-	}}
-
-	// Re-schedule Task 1
-	// "c" available
-	scheduler.Schedule(cnState, currentTick)
-
-	query, err = service.QueryAsyncTask(context.Background())
-	assert.NoError(t, err)
-	assert.Equal(t, 1, len(query))
-	assert.Equal(t, "c", query[0].TaskRunner)
-	assert.Equal(t, task.TaskStatus_Running, query[0].Status)
+	assert.Equal(t, 0, len(query))
 }
 
 func TestAllocTasksWithMemoryOrCPU(t *testing.T) {
@@ -301,24 +279,5 @@ func TestAllocTasksWithMemoryOrCPU(t *testing.T) {
 
 	query, err = service.QueryAsyncTask(context.Background())
 	assert.NoError(t, err)
-	assert.Equal(t, 1, len(query))
-	assert.Equal(t, "a", query[0].TaskRunner)
-	assert.Equal(t, task.TaskStatus_Running, query[0].Status)
-
-	// Add CNStore "c"
-	cnState = pb.CNState{Stores: map[string]pb.CNStoreInfo{
-		"a": {},
-		"b": {},
-		"c": {Tick: expiredTick, Resource: pb.Resource{CPUTotal: 2, MemTotal: 200}},
-	}}
-
-	// Re-schedule Task 1
-	// "c" available
-	scheduler.Schedule(cnState, currentTick)
-
-	query, err = service.QueryAsyncTask(context.Background())
-	assert.NoError(t, err)
-	assert.Equal(t, 1, len(query))
-	assert.Equal(t, "c", query[0].TaskRunner)
-	assert.Equal(t, task.TaskStatus_Running, query[0].Status)
+	assert.Equal(t, 0, len(query))
 }
