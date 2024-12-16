@@ -103,6 +103,8 @@ type SqlNode struct {
 }
 
 // PLUS node as JOIN.  Index is from TEXT/STAR node
+// children of PLUS node can be a single TEXT/STAR or GROUP.
+// In case of GROUP, mutiple SqlNodes will be generated.
 func GenJoinPlusSql(p *Pattern, mode int64, idxtbl string) ([]*SqlNode, error) {
 
 	var sql string
@@ -137,6 +139,8 @@ func GenJoinPlusSql(p *Pattern, mode int64, idxtbl string) ([]*SqlNode, error) {
 }
 
 // JOIN node.  Index is from JOIN node.  Index of TEXT/STAR is invalid
+// Generate a JOIN subsql in children and union sql in Sql.
+// subsql t0 is the table for all JOIN
 func GenJoinSql(p *Pattern, mode int64, idxtbl string) ([]*SqlNode, error) {
 
 	var sql string
@@ -185,6 +189,9 @@ func GenJoinSql(p *Pattern, mode int64, idxtbl string) ([]*SqlNode, error) {
 	return []*SqlNode{sqlnode}, nil
 }
 
+// generate the sql with the pattern.
+// isJoin flag is true, geneate the SQL in JOIN mode (only for JOIN and PLUS node)
+// if joinsql is not NILL, all the OR TEXT/STAR node will be joined with joinsql
 func GenSql(p *Pattern, mode int64, idxtbl string, joinsql []*SqlNode, isJoin bool) ([]*SqlNode, error) {
 
 	var sqls []*SqlNode
@@ -252,6 +259,7 @@ func GenSql(p *Pattern, mode int64, idxtbl string, joinsql []*SqlNode, isJoin bo
 	return sqls, nil
 }
 
+// Generate SQL in boolean mode
 func SqlBoolean(ps []*Pattern, mode int64, idxtbl string) (string, error) {
 
 	var err error
@@ -325,6 +333,7 @@ func SqlBoolean(ps []*Pattern, mode int64, idxtbl string) (string, error) {
 	return ret, nil
 }
 
+// Generate SQL in phrase mode.  It is the same for natural language mode and phrase search in boolean mode
 func SqlPhrase(ps []*Pattern, mode int64, idxtbl string) (string, error) {
 
 	var sql string
@@ -387,6 +396,7 @@ func SqlPhrase(ps []*Pattern, mode int64, idxtbl string) (string, error) {
 	return sql, nil
 }
 
+// API for generate SQL from pattern
 func PatternToSql(ps []*Pattern, mode int64, idxtbl string) (string, error) {
 
 	switch mode {
