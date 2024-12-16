@@ -16,7 +16,7 @@ package table_function
 
 import (
 	"fmt"
-	"strings"
+	"os"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -24,9 +24,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fulltext"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -248,100 +248,13 @@ func ft_runSql_streaming_fn(proc *process.Process, sql string, stream_chan chan 
 // run SQL to get the (doc_id, word_index) of all patterns (words) in the search string
 func runWordStats(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) (executor.Result, error) {
 
-	var keywords []string
-	var indexes []int32
-
-	// get plain text
-	for _, p := range s.Pattern {
-		keywords, indexes = fulltext.GetTextFromPattern(p, keywords, indexes)
-	}
-
-	union := make([]string, 0, len(keywords))
-
-	for i, kw := range keywords {
-		idx := indexes[i]
-		union = append(union, fmt.Sprintf("SELECT doc_id, CAST(%d as int) FROM %s WHERE word = '%s'",
-			idx, s.TblName, kw))
-		u.idx2word[int(idx)] = kw
-	}
-
-	// clear array
-	keywords = keywords[:0]
-	indexes = indexes[:0]
-
-	// get star text
-	for _, p := range s.Pattern {
-		keywords, indexes = fulltext.GetStarFromPattern(p, keywords, indexes)
-	}
-
-	sqlfmt := "SELECT doc_id, CAST(%d as int) FROM %s WHERE prefix_eq(word, '%s')"
-	for i, w := range keywords {
-		idx := indexes[i]
-		// remove the last character which should be '*' for prefix search
-		slen := len(w)
-		if w[slen-1] != '*' {
-			return executor.Result{}, moerr.NewInternalError(proc.Ctx, "wildcard search without character *")
-		}
-		// prefix search
-		prefix := w[0 : slen-1]
-		union = append(union, fmt.Sprintf(sqlfmt, idx, s.TblName, prefix))
-		u.idx2word[int(idx)] = w
-	}
-
-	sql := strings.Join(union, " UNION ALL ")
-
-	logutil.Infof("SQL is %s", sql)
-
-	res, err := ft_runSql_streaming(proc, sql, u.stream_chan, u.errors)
+	sql, err := fulltext.PatternToSql(s.Pattern, s.Mode, s.TblName)
 	if err != nil {
 		return executor.Result{}, err
 	}
 
-	return res, nil
-}
-
-// run SQL to get the (doc_id, word_index) of all patterns (words) in the phrase search.
-// word_index is dummy and we should set document words for all keywords in Patterns to 1
-func runPhraseStats(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) (executor.Result, error) {
-	var sql string
-	var union []string
-	var keywords []string
-	var indexes []int32
-	var positions []int32
-
-	// get plain text
-	for _, p := range s.Pattern {
-		keywords, indexes, positions = fulltext.GetPhraseTextFromPattern(p, keywords, indexes, positions)
-	}
-
-	if len(keywords) == 1 {
-		sql = fmt.Sprintf("SELECT doc_id, CAST(%d as int) FROM %s WHERE word = '%s'",
-			indexes[0], s.TblName, keywords[0])
-	} else {
-		oncond := make([]string, len(keywords)-1)
-		tables := make([]string, len(keywords))
-		for i, kw := range keywords {
-			idx := indexes[i]
-			tblname := fmt.Sprintf("kw%d", i)
-			tables[i] = tblname
-			union = append(union, fmt.Sprintf("%s AS (SELECT doc_id, pos FROM %s WHERE word = '%s')",
-				tblname, s.TblName, kw))
-			u.idx2word[int(idx)] = kw
-			if i > 0 {
-				oncond[i-1] = fmt.Sprintf("%s.doc_id = %s.doc_id AND %s.pos - %s.pos = %d",
-					tables[0], tables[i], tables[i], tables[0], positions[i]-positions[0])
-			}
-		}
-		sql = "WITH "
-		sql += strings.Join(union, ", ")
-		sql += fmt.Sprintf(" SELECT %s.doc_id, CAST(0 as int) FROM ", tables[0])
-		sql += strings.Join(tables, ", ")
-		sql += " WHERE "
-		sql += strings.Join(oncond, " AND ")
-	}
-
-	logutil.Infof("SQL is %s", sql)
-
+	//logutil.Infof("SQL is %s", sql)
+	os.Stderr.WriteString(sql)
 	res, err := ft_runSql_streaming(proc, sql, u.stream_chan, u.errors)
 	if err != nil {
 		return executor.Result{}, err
@@ -433,7 +346,7 @@ func groupby(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) (
 		widx := vector.GetFixedAtWithTypeCheck[int32](bat.Vecs[1], i)
 
 		var docvec []uint8
-		if s.Pattern[0].Operator == fulltext.PHRASE {
+		if s.Mode == int64(tree.FULLTEXT_NL) || s.Pattern[0].Operator == fulltext.PHRASE {
 			// phrase search widx is dummy and fill in value 1 for all keywords
 			nwords := s.Nkeywords
 			addr, ok := u.agghtab[doc_id]
@@ -536,11 +449,9 @@ func fulltextIndexMatch(u *fulltextState, proc *process.Process, tableFunction *
 			return err
 		}
 
-		nwords := fulltext.GetTextCountFromPattern(s.Pattern)
-
-		u.mpool = fulltext.NewFixedBytePool(proc.Mp(), proc.Ctx, uint64(nwords), 0, 0)
+		u.mpool = fulltext.NewFixedBytePool(proc.Mp(), proc.Ctx, uint64(s.Nkeywords), 0, 0)
 		u.agghtab = make(map[any]uint64, 1024)
-		u.aggcnt = make([]int64, nwords)
+		u.aggcnt = make([]int64, s.Nkeywords)
 
 		// count(*) to get number of records in source table
 		nrow, err := runCountStar(proc, s)
@@ -557,19 +468,10 @@ func fulltextIndexMatch(u *fulltextState, proc *process.Process, tableFunction *
 	go func() {
 		//os.Stderr.WriteString("GO SQL START\n")
 		// get the statistic of search string ([]Pattern) and store in SearchAccum
-		if len(u.sacc.Pattern) > 0 && u.sacc.Pattern[0].Operator == fulltext.PHRASE {
-			_, err := runPhraseStats(u, proc, u.sacc)
-			if err != nil {
-				u.errors <- err
-				return
-			}
-
-		} else {
-			_, err := runWordStats(u, proc, u.sacc)
-			if err != nil {
-				u.errors <- err
-				return
-			}
+		_, err := runWordStats(u, proc, u.sacc)
+		if err != nil {
+			u.errors <- err
+			return
 		}
 	}()
 

@@ -51,7 +51,7 @@ func NewSearchAccum(srctbl string, tblname string, pattern string, mode int64, p
 		return nil, err
 	}
 
-	nwords := GetTextCountFromPattern(ps)
+	nwords := GetResultCountFromPattern(ps)
 	return &SearchAccum{SrcTblName: srctbl, TblName: tblname, Mode: mode,
 		Pattern: ps, Params: params, Nkeywords: nwords}, nil
 }
@@ -783,21 +783,21 @@ func findTextOrStarFromPattern(pattern *Pattern, out []*Pattern) []*Pattern {
 
 }
 
-func getTextCount(pattern *Pattern, cnt *int) {
+func getResultCount(pattern *Pattern, cnt *int) {
 	if pattern.Operator == TEXT || pattern.Operator == STAR || pattern.Operator == JOIN {
 		(*cnt)++
 		return
 	}
 
 	for _, p := range pattern.Children {
-		getTextCount(p, cnt)
+		getResultCount(p, cnt)
 	}
 }
 
-func GetTextCountFromPattern(ps []*Pattern) int {
+func GetResultCountFromPattern(ps []*Pattern) int {
 	cnt := 0
 	for _, p := range ps {
-		getTextCount(p, &cnt)
+		getResultCount(p, &cnt)
 	}
 	return cnt
 }
