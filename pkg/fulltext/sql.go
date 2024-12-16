@@ -303,7 +303,7 @@ func SqlBoolean(ps []*Pattern, mode int64, idxtbl string) (string, error) {
 	return ret, nil
 }
 
-func SqlNL(ps []*Pattern, mode int64, idxtbl string) (string, error) {
+func SqlPhrase(ps []*Pattern, mode int64, idxtbl string) (string, error) {
 
 	var sql string
 	var union []string
@@ -365,53 +365,11 @@ func SqlNL(ps []*Pattern, mode int64, idxtbl string) (string, error) {
 	return sql, nil
 }
 
-func SqlPhrase(ps []*Pattern, mode int64, idxtbl string) (string, error) {
-
-	var sql string
-	var union []string
-	var keywords []string
-	var indexes []int32
-	var positions []int32
-
-	// get plain text
-	for _, p := range ps {
-		keywords, indexes, positions = GetPhraseTextFromPattern(p, keywords, indexes, positions)
-	}
-
-	if len(keywords) == 1 {
-		sql = fmt.Sprintf("SELECT doc_id, CAST(%d as int) FROM %s WHERE word = '%s'",
-			indexes[0], idxtbl, keywords[0])
-	} else {
-		oncond := make([]string, len(keywords)-1)
-		tables := make([]string, len(keywords))
-		for i, kw := range keywords {
-			tblname := fmt.Sprintf("kw%d", i)
-			tables[i] = tblname
-			union = append(union, fmt.Sprintf("%s AS (SELECT doc_id, pos FROM %s WHERE word = '%s')",
-				tblname, idxtbl, kw))
-			if i > 0 {
-				oncond[i-1] = fmt.Sprintf("%s.doc_id = %s.doc_id AND %s.pos - %s.pos = %d",
-					tables[0], tables[i], tables[i], tables[0], positions[i]-positions[0])
-			}
-		}
-		sql = "WITH "
-		sql += strings.Join(union, ", ")
-		sql += fmt.Sprintf(" SELECT %s.doc_id, CAST(0 as int) FROM ", tables[0])
-		sql += strings.Join(tables, ", ")
-		sql += " WHERE "
-		sql += strings.Join(oncond, " AND ")
-	}
-
-	//logutil.Infof("SQL is %s", sql)
-
-	return sql, nil
-}
-
 func PatternToSql(ps []*Pattern, mode int64, idxtbl string) (string, error) {
 
 	switch mode {
 	case int64(tree.FULLTEXT_NL), int64(tree.FULLTEXT_DEFAULT):
-		return SqlNL(ps, mode, idxtbl)
+		return SqlPhrase(ps, mode, idxtbl)
 	case int64(tree.FULLTEXT_BOOLEAN):
 		if ps[0].Operator == PHRASE {
 			return SqlPhrase(ps, mode, idxtbl)
