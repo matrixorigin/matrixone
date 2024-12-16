@@ -105,7 +105,7 @@ type DB struct {
 
 	BGScanner          wb.IHeartbeater
 	BGCheckpointRunner checkpoint.Runner
-	BGFlusher          *checkpoint.Flusher
+	BGFlusher          checkpoint.Flusher
 
 	MergeScheduler *merge.Scheduler
 
