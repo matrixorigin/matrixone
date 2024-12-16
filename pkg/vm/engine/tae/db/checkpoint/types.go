@@ -41,7 +41,12 @@ const (
 	ET_Compacted
 )
 
+type CheckpointScheduler interface {
+	TryScheduleCheckpoint(types.TS)
+}
+
 type Runner interface {
+	CheckpointScheduler
 	TestRunner
 	RunnerReader
 	Start()

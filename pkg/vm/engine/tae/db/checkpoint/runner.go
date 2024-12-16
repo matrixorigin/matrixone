@@ -763,7 +763,7 @@ func (r *runner) tryScheduleIncrementalCheckpoint(start, end types.TS) {
 	r.tryAddNewIncrementalCheckpointEntry(entry)
 }
 
-func (r *runner) tryScheduleCheckpoint(endts types.TS) {
+func (r *runner) TryScheduleCheckpoint(endts types.TS) {
 	if r.disabled.Load() {
 		return
 	}

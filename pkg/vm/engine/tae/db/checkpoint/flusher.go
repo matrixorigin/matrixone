@@ -83,10 +83,10 @@ type Flusher struct {
 	forceFlushTimeout       time.Duration
 	forceFlushCheckInterval time.Duration
 
-	sourcer          logtail.Collector
-	catalogCache     *catalog.Catalog
-	checkpointRunner *runner
-	rt               *dbutils.Runtime
+	sourcer            logtail.Collector
+	catalogCache       *catalog.Catalog
+	checkpointSchduler CheckpointScheduler
+	rt                 *dbutils.Runtime
 
 	cronTrigger   *tasks.CancelableJob
 	flushRequestQ sm.Queue
@@ -99,16 +99,16 @@ type Flusher struct {
 
 func NewFlusher(
 	rt *dbutils.Runtime,
-	checkpointRunner *runner,
+	checkpointSchduler CheckpointScheduler,
 	catalogCache *catalog.Catalog,
 	sourcer logtail.Collector,
 	opts ...FlusherOption,
 ) *Flusher {
 	flusher := &Flusher{
-		rt:               rt,
-		checkpointRunner: checkpointRunner,
-		catalogCache:     catalogCache,
-		sourcer:          sourcer,
+		rt:                 rt,
+		checkpointSchduler: checkpointSchduler,
+		catalogCache:       catalogCache,
+		sourcer:            sourcer,
 	}
 	for _, opt := range opts {
 		opt(flusher)
@@ -168,7 +168,7 @@ func (flusher *Flusher) triggerJob(ctx context.Context) {
 		flusher.flushRequestQ.Enqueue(request)
 	}
 	_, endTS := entry.GetTimeRange()
-	flusher.checkpointRunner.tryScheduleCheckpoint(endTS)
+	flusher.checkpointSchduler.TryScheduleCheckpoint(endTS)
 }
 
 func (flusher *Flusher) onFlushRequest(items ...any) {
