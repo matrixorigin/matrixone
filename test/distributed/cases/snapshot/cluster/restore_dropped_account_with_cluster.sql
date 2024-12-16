@@ -318,9 +318,6 @@ create account acc06 admin_name = 'test_account' identified by '11111111'  comme
 drop account if exists acc07;
 create account acc07 admin_name = 'test_account' identified by '111111111'  comment 'test_comment';
 
--- @ignore:2,5,6,7
-show accounts;
-
 create account acc03 admin_name = 'test_account' identified by '123';
 
 -- @ignore:2,5,6,7
@@ -330,6 +327,32 @@ restore cluster from snapshot snapshot_01;
 
 -- @ignore:2,5,6,7
 show accounts;
+
+-- @session:id=5&user=acc01:test_account&password=111
+select * from db01.t01;
+-- @session
+
+-- @session:id=6&user=acc02:test_account&password=1111
+select * from Company.Departments;
+select * from Company.Employees;
+select * from Company.Positions;
+select * from Company.EmployeePositions;
+select * from Company.Salaries;
+select * from Company.Benefits;
+select * from Company.TimeOff;
+select * from Company.PerformanceReviews;
+-- @session
+
+-- @session:id=7&user=acc03:test_account&password=11111
+select * from Company.Departments;
+select * from Company.Employees;
+select * from Company.Positions;
+select * from Company.EmployeePositions;
+select * from Company.Salaries;
+select * from Company.Benefits;
+select * from Company.TimeOff;
+select * from Company.PerformanceReviews;
+-- @session
 
 drop account if exists acc01;
 drop account if exists acc02;

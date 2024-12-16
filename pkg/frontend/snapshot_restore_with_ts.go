@@ -319,7 +319,7 @@ func restoreToAccountFromDropped(
 	for _, dbName := range dbNames {
 		if needSkipDb(dbName) {
 			getLogger(sid).Info(fmt.Sprintf("[%d:%d] skip restore db: %v", restoreAccount, snapshotTs, dbName))
-			return
+			continue
 		}
 		if err = restoreDatabaseFromDropped(ctx,
 			sid,
@@ -513,6 +513,11 @@ func recreateTableFromDropped(
 
 	ctx = defines.AttachAccountId(ctx, toAccountId)
 	if err = bh.Exec(ctx, fmt.Sprintf("use `%s`", tblInfo.dbName)); err != nil {
+		return
+	}
+
+	getLogger(sid).Info(fmt.Sprintf("[%d:%d] start to drop table: %v,", restoreAccount, snapshotTs, tblInfo.tblName))
+	if err = bh.Exec(ctx, fmt.Sprintf("drop table if exists `%s`", tblInfo.tblName)); err != nil {
 		return
 	}
 

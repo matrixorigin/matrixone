@@ -377,28 +377,153 @@ drop account if exists acc06;
 create account acc06 admin_name = 'test_account' identified by '11111111'  comment 'test_comment';
 drop account if exists acc07;
 create account acc07 admin_name = 'test_account' identified by '111111111'  comment 'test_comment';
-show accounts;
-account_name    admin_name    created_time    status    suspended_time    db_count    tbl_count    size    snapshot_size    comments
-acc05    test_account    2024-12-14 09:49:38    open    null    5    65    0.0    0.0    test_comment
-acc06    test_account    2024-12-14 09:49:38    open    null    5    65    0.0    0.0    test_comment
-acc07    test_account    2024-12-14 09:49:39    open    null    5    65    0.0    0.0    test_comment
-sys    root    2024-12-14 09:42:21    open    null    7    99    0.59069    0.0    system account
 create account acc03 admin_name = 'test_account' identified by '123';
 show accounts;
 account_name    admin_name    created_time    status    suspended_time    db_count    tbl_count    size    snapshot_size    comments
-acc05    test_account    2024-12-14 09:49:38    open    null    5    65    0.0    0.0    test_comment
-acc06    test_account    2024-12-14 09:49:38    open    null    5    65    0.0    0.0    test_comment
-acc07    test_account    2024-12-14 09:49:39    open    null    5    65    0.0    0.0    test_comment
-acc03    test_account    2024-12-14 09:49:39    open    null    5    65    0.0    0.0    
-sys    root    2024-12-14 09:42:21    open    null    7    99    0.59069    0.0    system account
+acc05    test_account    2024-12-16 08:11:17    open    null    5    65    0.0    0.0    test_comment
+acc06    test_account    2024-12-16 08:11:17    open    null    5    65    0.0    0.0    test_comment
+acc07    test_account    2024-12-16 08:11:18    open    null    5    65    0.0    0.0    test_comment
+acc03    test_account    2024-12-16 08:11:18    open    null    5    65    0.0    0.0    
+sys    root    2024-12-16 07:47:54    open    null    7    99    4.422488    0.0    system account
 restore cluster from snapshot snapshot_01;
 show accounts;
 account_name    admin_name    created_time    status    suspended_time    db_count    tbl_count    size    snapshot_size    comments
-acc03    test_account    2024-12-14 09:49:39    open    null    6    73    0.0    0.0    
-acc01    test_account    2024-12-14 09:49:56    open    null    6    66    0.0    0.0    
-acc02    test_account    2024-12-14 09:49:56    open    null    6    73    0.0    0.0    test_comment
-acc04    test_account    2024-12-14 09:49:57    open    null    5    65    0.0    0.0    test_comment
-sys    root    2024-12-14 09:42:21    open    null    7    99    0.584922    0.0    system account
+acc03    test_account    2024-12-16 08:11:18    open    null    6    73    0.0    0.0    
+acc01    test_account    2024-12-16 08:11:20    open    null    6    66    0.0    0.0    
+acc02    test_account    2024-12-16 08:11:21    open    null    6    73    0.0    0.0    test_comment
+acc04    test_account    2024-12-16 08:11:21    open    null    5    65    0.0    0.0    test_comment
+sys    root    2024-12-16 07:47:54    open    null    7    99    4.422488    0.0    system account
+select * from db01.t01;
+a
+1
+select * from Company.Departments;
+departmentid    name    managerid
+1    Research and Development    null
+2    Human Resources    null
+3    Sales    null
+4    Marketing    null
+5    Finance    null
+6    Legal    null
+select * from Company.Employees;
+employeeid    firstname    lastname    birthdate    departmentid
+1    John    Doe    1980-01-01    1
+2    Jane    Smith    1981-02-02    2
+3    Alice    Jones    1982-03-03    3
+4    Bob    Brown    1983-04-04    4
+5    Charlie    White    1984-05-05    5
+6    David    Black    1985-06-06    6
+select * from Company.Positions;
+positionid    title    departmentid
+1    Software Engineer    1
+2    HR Specialist    2
+3    Sales Associate    3
+4    Marketing Specialist    4
+5    Accountant    5
+6    Attorney    6
+select * from Company.EmployeePositions;
+employeeid    positionid
+1    1
+2    2
+3    3
+4    4
+5    5
+6    6
+select * from Company.Salaries;
+salaryid    employeeid    positionid    salary
+1    1    1    100000.00
+2    2    2    50000.00
+3    3    3    60000.00
+4    4    4    70000.00
+5    5    5    80000.00
+6    6    6    90000.00
+select * from Company.Benefits;
+benefitid    employeeid    benefit
+1    1    Health Insurance
+2    2    Dental Insurance
+3    3    Vision Insurance
+4    4    401k
+5    5    Stock Options
+6    6    Paid Time Off
+select * from Company.TimeOff;
+timeoffid    employeeid    startdate    enddate
+1    1    2020-01-01    2020-01-02
+2    2    2020-02-02    2020-02-03
+3    3    2020-03-03    2020-03-04
+4    4    2020-04-04    2020-04-05
+5    5    2020-05-05    2020-05-06
+6    6    2020-06-06    2020-06-07
+select * from Company.PerformanceReviews;
+performancereviewid    employeeid    reviewdate    reviewerid
+1    1    2020-01-01    2
+2    2    2020-02-02    3
+3    3    2020-03-03    4
+4    4    2020-04-04    5
+5    5    2020-05-05    6
+6    6    2020-06-06    1
+select * from Company.Departments;
+departmentid    name    managerid
+1    Research and Development    null
+2    Human Resources    null
+3    Sales    null
+4    Marketing    null
+5    Finance    null
+6    Legal    null
+select * from Company.Employees;
+employeeid    firstname    lastname    birthdate    departmentid
+1    John    Doe    1980-01-01    1
+2    Jane    Smith    1981-02-02    2
+3    Alice    Jones    1982-03-03    3
+4    Bob    Brown    1983-04-04    4
+5    Charlie    White    1984-05-05    5
+6    David    Black    1985-06-06    6
+select * from Company.Positions;
+positionid    title    departmentid
+1    Software Engineer    1
+2    HR Specialist    2
+3    Sales Associate    3
+4    Marketing Specialist    4
+5    Accountant    5
+6    Attorney    6
+select * from Company.EmployeePositions;
+employeeid    positionid
+1    1
+2    2
+3    3
+4    4
+5    5
+6    6
+select * from Company.Salaries;
+salaryid    employeeid    positionid    salary
+1    1    1    100000.00
+2    2    2    50000.00
+3    3    3    60000.00
+4    4    4    70000.00
+5    5    5    80000.00
+6    6    6    90000.00
+select * from Company.Benefits;
+benefitid    employeeid    benefit
+1    1    Health Insurance
+2    2    Dental Insurance
+3    3    Vision Insurance
+4    4    401k
+5    5    Stock Options
+6    6    Paid Time Off
+select * from Company.TimeOff;
+timeoffid    employeeid    startdate    enddate
+1    1    2020-01-01    2020-01-02
+2    2    2020-02-02    2020-02-03
+3    3    2020-03-03    2020-03-04
+4    4    2020-04-04    2020-04-05
+5    5    2020-05-05    2020-05-06
+6    6    2020-06-06    2020-06-07
+select * from Company.PerformanceReviews;
+performancereviewid    employeeid    reviewdate    reviewerid
+1    1    2020-01-01    2
+2    2    2020-02-02    3
+3    3    2020-03-03    4
+4    4    2020-04-04    5
+5    5    2020-05-05    6
+6    6    2020-06-06    1
 drop account if exists acc01;
 drop account if exists acc02;
 drop account if exists acc03;

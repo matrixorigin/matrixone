@@ -611,14 +611,6 @@ func getFromAccountIdAndToAccountId(ctx context.Context, ses *Session, bh Backgr
 						return fromAccountId, toAccountId, nil
 					}
 					return
-				} else {
-					// restore by cluster snapshot
-					fromAccountId, err = getAccountId(ctx, bh, srcAccount)
-					if err != nil {
-						return
-					}
-					toAccountId = fromAccountId
-					return
 				}
 			}
 		}
@@ -631,6 +623,7 @@ func getFromAccountIdAndToAccountId(ctx context.Context, ses *Session, bh Backgr
 		toAccountId = fromAccountId
 		return
 	}
+	return
 }
 
 func deleteCurFkTables(ctx context.Context, sid string, bh BackgroundExec, dbName string, tblName string, toAccountId uint32) (err error) {
@@ -1683,7 +1676,7 @@ func restoreToCluster(ctx context.Context,
 
 	// drop account which not in snapshot
 	var currentExistsAccount []accountRecord
-	currentExistsAccount, err = getRestoreAcurrentExistsAccount(ctx, ses.GetService(), bh, snapshotName, snapshotTs)
+	currentExistsAccount, err = getRestoreAcurrentExistsAccount(ctx, ses.GetService(), bh, snapshotName)
 	if err != nil {
 		return err
 	}
@@ -2029,7 +2022,6 @@ func getRestoreAcurrentExistsAccount(
 	sid string,
 	bh BackgroundExec,
 	snapshotName string,
-	snapshotTs int64,
 ) (accounts []accountRecord, err error) {
 	getLogger(sid).Info(fmt.Sprintf("[%s] start to get restore to drop accounts", snapshotName))
 	var erArray []ExecResult
@@ -2057,7 +2049,7 @@ func getRestoreAcurrentExistsAccount(
 				return nil, err
 			}
 			accounts = append(accounts, account)
-			getLogger(sid).Info(fmt.Sprintf("[%d] get account: %v, account id: %d", snapshotTs, account.accountName, account.accountId))
+			getLogger(sid).Info(fmt.Sprintf("[%s] get account: %v, account id: %d", snapshotName, account.accountName, account.accountId))
 		}
 	}
 	return
