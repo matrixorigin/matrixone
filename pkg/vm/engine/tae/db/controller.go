@@ -23,6 +23,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 	"go.uber.org/zap"
 )
@@ -34,6 +35,70 @@ const (
 	ControlCmd_ToReplayMode
 	ControlCmd_ToWriteMode
 )
+
+type stepFunc struct {
+	fn   func() error
+	desc string
+}
+
+type stepFuncs []stepFunc
+
+func (s stepFuncs) Apply(msg string, reversed bool, logLevel int) (err error) {
+	now := time.Now()
+	defer func() {
+		if logLevel > 0 {
+			logutil.Info(
+				msg,
+				zap.String("step", "all"),
+				zap.Duration("duration", time.Since(now)),
+				zap.Error(err),
+			)
+		}
+	}()
+
+	if reversed {
+		for i := len(s) - 1; i >= 0; i-- {
+			start := time.Now()
+			if err = s[i].fn(); err != nil {
+				logutil.Error(
+					msg,
+					zap.String("step", s[i].desc),
+					zap.Error(err),
+				)
+				return
+			}
+			if logLevel > 1 {
+				logutil.Info(
+					msg,
+					zap.String("step", s[i].desc),
+					zap.Duration("duration", time.Since(start)),
+				)
+			}
+		}
+	} else {
+		for i := 0; i < len(s); i++ {
+			if err = s[i].fn(); err != nil {
+				logutil.Error(
+					msg,
+					zap.String("step", s[i].desc),
+					zap.Error(err),
+				)
+				return
+			}
+			if logLevel > 1 {
+				logutil.Info(
+					msg,
+					zap.String("step", s[i].desc),
+				)
+			}
+		}
+	}
+	return nil
+}
+
+func (s stepFuncs) Push(ss ...stepFunc) stepFuncs {
+	return append(s, ss...)
+}
 
 func newControlCmd(
 	ctx context.Context,
@@ -118,8 +183,9 @@ func (c *Controller) handleToReplayCmd(cmd *controlCmd) {
 	// TODO: error handling
 
 	var (
-		err   error
-		start time.Time = time.Now()
+		err           error
+		start         time.Time = time.Now()
+		rollbackSteps stepFuncs
 	)
 
 	ctx, cancel := context.WithTimeout(cmd.ctx, 10*time.Minute)
@@ -132,13 +198,21 @@ func (c *Controller) handleToReplayCmd(cmd *controlCmd) {
 	)
 
 	defer func() {
-		if err != nil {
+		err2 := err
+		if err2 != nil {
+			err = rollbackSteps.Apply("DB-SwitchToReplay-Rollback", true, 1)
+		}
+		if err2 != nil {
 			logger = logutil.Error
+		}
+		if err != nil {
+			logger = logutil.Fatal
 		}
 		logger(
 			"DB-SwitchToReplay-Done",
 			zap.String("cmd", cmd.String()),
 			zap.Duration("duration", time.Since(start)),
+			zap.Any("rollback-error", err2),
 			zap.Error(err),
 		)
 		cmd.setError(err)
@@ -157,6 +231,19 @@ func (c *Controller) handleToReplayCmd(cmd *controlCmd) {
 		return
 	}
 	// 2.x TODO: checkpoint runner
+	flushCfg := c.db.BGFlusher.GetCfg()
+	c.db.BGFlusher.Stop()
+	rollbackSteps.Push(
+		struct {
+			fn   func() error
+			desc string
+		}{
+			fn: func() error {
+				c.db.BGFlusher.Restart(checkpoint.WithFlusherCfg(flushCfg))
+				return nil
+			},
+			desc: "start bg flusher",
+		})
 
 	// 3. build forward write request tunnel to the new write candidate
 	// TODO
@@ -210,8 +297,9 @@ func (c *Controller) handleToWriteCmd(cmd *controlCmd) {
 		)
 	}
 	var (
-		err   error
-		start time.Time = time.Now()
+		err           error
+		start         time.Time = time.Now()
+		rollbackSteps stepFuncs
 	)
 
 	ctx, cancel := context.WithTimeout(cmd.ctx, 10*time.Minute)
@@ -224,13 +312,21 @@ func (c *Controller) handleToWriteCmd(cmd *controlCmd) {
 	)
 
 	defer func() {
-		if err != nil {
+		err2 := err
+		if err2 != nil {
+			err = rollbackSteps.Apply("DB-SwitchToWrite-Rollback", true, 1)
+		}
+		if err2 != nil {
 			logger = logutil.Error
+		}
+		if err != nil {
+			logger = logutil.Fatal
 		}
 		logger(
 			"DB-SwitchToWrite-Done",
 			zap.String("cmd", cmd.String()),
 			zap.Duration("duration", time.Since(start)),
+			zap.Any("rollback-error", err2),
 			zap.Error(err),
 		)
 		cmd.setError(err)
@@ -252,7 +348,22 @@ func (c *Controller) handleToWriteCmd(cmd *controlCmd) {
 	// TODO
 
 	// 5. start merge scheduler|checkpoint|diskcleaner
-	// 5.1 switch the diskcleaner to write mode
+	// 5.1 TODO: start the merger|checkpoint|flusher
+	c.db.BGFlusher.Restart() // TODO: Restart with new config
+	rollbackSteps.Push(
+		struct {
+			fn   func() error
+			desc string
+		}{
+			fn: func() error {
+				c.db.BGFlusher.Stop()
+				return nil
+			},
+			desc: "stop bg flusher",
+		},
+	)
+
+	// 5.2 switch the diskcleaner to write mode
 	if err = c.db.DiskCleaner.SwitchToWriteMode(ctx); err != nil {
 		// Rollback
 		return
