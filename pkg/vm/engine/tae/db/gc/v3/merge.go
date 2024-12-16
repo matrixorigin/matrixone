@@ -16,12 +16,13 @@ package gc
 
 import (
 	"context"
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"go.uber.org/zap"
-	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -55,13 +56,25 @@ func MergeCheckpoint(
 	datas := make([]*logtail.CheckpointData, 0)
 	deleteFiles = make([]string, 0)
 	for _, ckpEntry := range ckpEntries {
+		select {
+		case <-ctx.Done():
+			err = context.Cause(ctx)
+			return
+		default:
+		}
 		logutil.Info("[MergeCheckpoint]",
 			zap.String("checkpoint", ckpEntry.String()))
 		var data *logtail.CheckpointData
 		var locations map[string]objectio.Location
-		_, data, err = logtail.LoadCheckpointEntriesFromKey(context.Background(), sid, fs,
-			ckpEntry.GetLocation(), ckpEntry.GetVersion(), nil, &types.TS{})
-		if err != nil {
+		if _, data, err = logtail.LoadCheckpointEntriesFromKey(
+			ctx,
+			sid,
+			fs,
+			ckpEntry.GetLocation(),
+			ckpEntry.GetVersion(),
+			nil,
+			&types.TS{},
+		); err != nil {
 			return
 		}
 		datas = append(datas, data)
@@ -81,7 +94,8 @@ func MergeCheckpoint(
 		// add checkpoint idx file to deleteFiles
 		deleteFiles = append(deleteFiles, ckpEntry.GetLocation().Name().String())
 		locations, err = logtail.LoadCheckpointLocations(
-			ctx, sid, ckpEntry.GetTNLocation(), ckpEntry.GetVersion(), fs)
+			ctx, sid, ckpEntry.GetTNLocation(), ckpEntry.GetVersion(), fs,
+		)
 		if err != nil {
 			if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
 				deleteFiles = append(deleteFiles, nameMeta)
@@ -107,6 +121,12 @@ func MergeCheckpoint(
 
 	// merge objects referenced by sansphot and pitr
 	for _, data := range datas {
+		select {
+		case <-ctx.Done():
+			err = context.Cause(ctx)
+			return
+		default:
+		}
 		ins := data.GetObjectBatchs()
 		tombstone := data.GetTombstoneObjectBatchs()
 		bf.Test(ins.GetVectorByName(catalog.ObjectAttr_ObjectStats).GetDownstreamVector(),

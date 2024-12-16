@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2024 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,7 +15,6 @@
 package group
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -28,11 +27,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var _ vm.Operator = new(Group)
+const (
+	H0 = iota
+	H8
+	HStr
+)
 
 const (
-	H8 = iota
-	HStr
+	thisOperatorName = "group"
 )
 
 type ExprEvalVector struct {
@@ -60,11 +62,9 @@ func MakeEvalVector(proc *process.Process, expressions []*plan.Expr) (ev ExprEva
 
 func (ev *ExprEvalVector) Free() {
 	for i := range ev.Executor {
-		if ev.Executor[i] == nil {
-			continue
+		if ev.Executor[i] != nil {
+			ev.Executor[i].Free()
 		}
-		ev.Executor[i].Free()
-		ev.Executor[i] = nil
 	}
 }
 
@@ -76,43 +76,52 @@ func (ev *ExprEvalVector) ResetForNextQuery() {
 	}
 }
 
-type container struct {
-	// if skipInitReusableMem is true, we will skip some initialization of reusable.
-	skipInitReusableMem bool
-	itr                 hashmap.Iterator
-	typ                 int
-	state               vm.CtrState
-	inserted            []uint8
-	zInserted           []uint8
+var _ vm.Operator = &Group{}
 
-	intHashMap *hashmap.IntHashMap
-	strHashMap *hashmap.StrHashMap
-
-	aggVecs   []ExprEvalVector
-	groupVecs ExprEvalVector
-
-	// keyWidth is the width of group by columns, it determines which hash map to use.
-	keyWidth          int
-	groupVecsNullable bool
-
-	bat *batch.Batch
-}
-
+// Group
+// the group operator using new implement.
 type Group struct {
-	ctr          container
-	NeedEval     bool // need to projection the aggregate column
-	GroupingFlag []bool
-	PreAllocSize uint64
-
-	Exprs []*plan.Expr // group Expressions
-	Aggs  []aggexec.AggFuncExecExpression
-
 	vm.OperatorBase
 	colexec.Projection
+
+	ctr          container
+	NeedEval     bool
+	PreAllocSize uint64
+
+	// group-by column.
+	Exprs        []*plan.Expr
+	GroupingFlag []bool
+	// agg info and agg column.
+	Aggs []aggexec.AggFuncExecExpression
 }
 
-func (group *Group) GetOperatorBase() *vm.OperatorBase {
-	return &group.OperatorBase
+func (group *Group) evaluateGroupByAndAgg(proc *process.Process, bat *batch.Batch) (err error) {
+	input := []*batch.Batch{bat}
+
+	// group.
+	for i := range group.ctr.groupByEvaluate.Vec {
+		if group.ctr.groupByEvaluate.Vec[i], err = group.ctr.groupByEvaluate.Executor[i].Eval(proc, input, nil); err != nil {
+			return err
+		}
+	}
+
+	// agg.
+	for i := range group.ctr.aggregateEvaluate {
+		for j := range group.ctr.aggregateEvaluate[i].Vec {
+			if group.ctr.aggregateEvaluate[i].Vec[j], err = group.ctr.aggregateEvaluate[i].Executor[j].Eval(proc, input, nil); err != nil {
+				return err
+			}
+		}
+	}
+
+	// grouping flag.
+	for i, flag := range group.GroupingFlag {
+		if !flag {
+			group.ctr.groupByEvaluate.Vec[i] = vector.NewRollupConst(group.ctr.groupByEvaluate.Typ[i], group.ctr.groupByEvaluate.Vec[i].Length(), proc.Mp())
+		}
+	}
+
+	return nil
 }
 
 func (group *Group) AnyDistinctAgg() bool {
@@ -122,6 +131,88 @@ func (group *Group) AnyDistinctAgg() bool {
 		}
 	}
 	return false
+}
+
+func (group *Group) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
+	if group.ProjectList == nil {
+		return input, nil
+	}
+	return group.EvalProjection(input, proc)
+}
+
+// container
+// running context.
+type container struct {
+	state             vm.CtrState
+	dataSourceIsEmpty bool
+
+	// hash.
+	hr          ResHashRelated
+	mtyp        int
+	keyWidth    int
+	keyNullable bool
+
+	// x, y of `group by x, y`.
+	// m, n of `select agg1(m, n), agg2(m, n)`.
+	groupByEvaluate   ExprEvalVector
+	aggregateEvaluate []ExprEvalVector
+
+	// result if NeedEval is true.
+	result1 GroupResultBuffer
+	// result if NeedEval is false.
+	result2 GroupResultNoneBlock
+}
+
+func (ctr *container) isDataSourceEmpty() bool {
+	return ctr.dataSourceIsEmpty
+}
+
+func (group *Group) Free(proc *process.Process, _ bool, _ error) {
+	group.freeCannotReuse(proc.Mp())
+
+	group.ctr.freeGroupEvaluate()
+	group.ctr.freeAggEvaluate()
+	group.FreeProjection(proc)
+}
+
+func (group *Group) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	group.freeCannotReuse(proc.Mp())
+
+	group.ctr.groupByEvaluate.ResetForNextQuery()
+	for i := range group.ctr.aggregateEvaluate {
+		group.ctr.aggregateEvaluate[i].ResetForNextQuery()
+	}
+	group.ResetProjection(proc)
+}
+
+func (group *Group) freeCannotReuse(mp *mpool.MPool) {
+	group.ctr.hr.Free0()
+	group.ctr.result1.Free0(mp)
+	group.ctr.result2.Free0(mp)
+}
+
+func (ctr *container) freeAggEvaluate() {
+	for i := range ctr.aggregateEvaluate {
+		ctr.aggregateEvaluate[i].Free()
+	}
+	ctr.aggregateEvaluate = nil
+}
+
+func (ctr *container) freeGroupEvaluate() {
+	ctr.groupByEvaluate.Free()
+	ctr.groupByEvaluate = ExprEvalVector{}
+}
+
+func (group *Group) OpType() vm.OpType {
+	return vm.Group
+}
+
+func (group Group) TypeName() string {
+	return thisOperatorName
+}
+
+func (group *Group) GetOperatorBase() *vm.OperatorBase {
+	return &group.OperatorBase
 }
 
 func init() {
@@ -137,75 +228,12 @@ func init() {
 	)
 }
 
-func (group Group) TypeName() string {
-	return opName
-}
-
 func NewArgument() *Group {
 	return reuse.Alloc[Group](nil)
-}
-
-func (group *Group) WithExprs(exprs []*plan.Expr) *Group {
-	group.Exprs = exprs
-	return group
-}
-
-func (group *Group) WithAggsNew(aggs []aggexec.AggFuncExecExpression) *Group {
-	group.Aggs = aggs
-	return group
 }
 
 func (group *Group) Release() {
 	if group != nil {
 		reuse.Free[Group](group, nil)
-	}
-}
-
-func (group *Group) Free(proc *process.Process, pipelineFailed bool, err error) {
-	mp := proc.Mp()
-	group.ctr.cleanBatch(mp)
-	group.ctr.cleanHashMap()
-	group.ctr.cleanAggVectors()
-	group.ctr.cleanGroupVectors()
-	group.ctr.skipInitReusableMem = false
-
-	group.FreeProjection(proc)
-}
-
-func (group *Group) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
-	batch := input
-	var err error
-	if group.ProjectList != nil {
-		batch, err = group.EvalProjection(input, proc)
-	}
-	return batch, err
-}
-
-func (ctr *container) cleanBatch(mp *mpool.MPool) {
-	if ctr.bat != nil {
-		ctr.bat.Clean(mp)
-		ctr.bat = nil
-	}
-}
-
-func (ctr *container) cleanAggVectors() {
-	for i := range ctr.aggVecs {
-		ctr.aggVecs[i].Free()
-	}
-	ctr.aggVecs = nil
-}
-
-func (ctr *container) cleanGroupVectors() {
-	ctr.groupVecs.Free()
-}
-
-func (ctr *container) cleanHashMap() {
-	if ctr.intHashMap != nil {
-		ctr.intHashMap.Free()
-		ctr.intHashMap = nil
-	}
-	if ctr.strHashMap != nil {
-		ctr.strHashMap.Free()
-		ctr.strHashMap = nil
 	}
 }
