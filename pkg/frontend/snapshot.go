@@ -78,8 +78,6 @@ var (
 
 	checkDatabaseIsMasterFormat = "select db_name from mo_catalog.mo_foreign_keys where refer_db_name = '%s'"
 
-	getAccountIdNamesByTsSql = "select account_id, account_name, status, version, suspended_time from mo_catalog.mo_account {mo_ts = %d } where 1=1"
-
 	skipDbs = []string{"mysql", "system", "system_metrics", "mo_task", "mo_debug", "information_schema", moCatalog}
 
 	needSkipTablesInMocatalog = map[string]int8{
