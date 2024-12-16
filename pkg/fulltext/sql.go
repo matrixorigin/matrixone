@@ -43,7 +43,7 @@ the search string will convert into Pattern/Plan
 
 with set theory, we can formulae the above plans into
 
-A & (!B) = A - (A&B)
+A\B = A - (A INTERSECT B)
 
 Since NOT filter is slow in SQL, we change the plan into A + (A&B) and process the negative later.
 
@@ -58,7 +58,7 @@ JOIN will be used to optimize the SQL with Pattern/Plan
 
 # With plan above, we can formula the SQL like belows
 
-(A & B) + ((A & B) & C) + ((A & B) & D)
+(A INTERSECT B) UNION ((A INTERSECT B) INTERSECT C) UNION ((A INTERSECT B) INTERSECT D)
 
 WITH t0 (A JOIN B)
 SELECT (t0) UNION ALL (t0 JOIN C) UNION ALL (t0 JOIN B)
@@ -69,11 +69,9 @@ Although operator + with GROUP cannot be optimized with JOIN,  we can still opti
 
 (+ (GROUP (TEXT A) (TEXT B))) (~ (TEXT C)) (- (TEXT D)))
 
-A + B + (A & C) - (A & D) + (B & C) + (B & D)
+# The generated SQL is like
 
-# Replace the negative filter with positive filter, the final SQL
-
-A + B + (A & C) + (A & D) + (B & C) + (B & D)
+A UNION B UNION (A INTERSECT C) UNION (A INTERSECT D) UNION (B INTERSECT C) UNION (B INTERSECT D)
 
 SELECT (A) UNION ALL (B) UNION ALL (A JOIN C) UNION ALL (A JOIN D) UNION ALL (B JOIN C) UNION ALL (B JOIN D)
 */
@@ -309,29 +307,49 @@ func SqlNL(ps []*Pattern, mode int64, idxtbl string) (string, error) {
 
 	var sql string
 	var union []string
-	var keywords []string
-	var indexes []int32
-	var positions []int32
 
 	// get plain text
-	for _, p := range ps {
-		keywords, indexes, positions = GetPhraseTextFromPattern(p, keywords, indexes, positions)
-	}
+	if len(ps) == 1 {
+		tp := ps[0]
+		kw := tp.Text
 
-	if len(keywords) == 1 {
-		sql = fmt.Sprintf("SELECT doc_id, CAST(%d as int) FROM %s WHERE word = '%s'",
-			indexes[0], idxtbl, keywords[0])
+		if tp.Operator == TEXT {
+			sql = fmt.Sprintf("SELECT doc_id, CAST(%d as int) FROM %s WHERE word = '%s'",
+				tp.Index, idxtbl, kw)
+		} else {
+			if kw[len(kw)-1] != '*' {
+				return "", moerr.NewInternalErrorNoCtx("wildcard search without character *")
+			}
+			prefix := kw[0 : len(kw)-1]
+			sql = fmt.Sprintf("SELECT doc_id, CAST(%d as int) FROM %s WHERE prefix_eq(word,'%s'))",
+				tp.Index, idxtbl, prefix)
+
+		}
 	} else {
-		oncond := make([]string, len(keywords)-1)
-		tables := make([]string, len(keywords))
-		for i, kw := range keywords {
+
+		oncond := make([]string, len(ps)-1)
+		tables := make([]string, len(ps))
+		for i, tp := range ps {
+			var subsql string
+			kw := tp.Text
 			tblname := fmt.Sprintf("kw%d", i)
 			tables[i] = tblname
-			union = append(union, fmt.Sprintf("%s AS (SELECT doc_id, pos FROM %s WHERE word = '%s')",
-				tblname, idxtbl, kw))
+			if tp.Operator == TEXT {
+				subsql = fmt.Sprintf("%s AS (SELECT doc_id, pos FROM %s WHERE word = '%s')",
+					tblname, idxtbl, kw)
+			} else {
+				if kw[len(kw)-1] != '*' {
+					return "", moerr.NewInternalErrorNoCtx("wildcard search without character *")
+				}
+				prefix := kw[0 : len(kw)-1]
+				subsql = fmt.Sprintf("%s AS (SELECT doc_id, pos FROM %s WHERE prefix_eq(word,'%s'))",
+					tblname, idxtbl, prefix)
+
+			}
+			union = append(union, subsql)
 			if i > 0 {
 				oncond[i-1] = fmt.Sprintf("%s.doc_id = %s.doc_id AND %s.pos - %s.pos = %d",
-					tables[0], tables[i], tables[i], tables[0], positions[i]-positions[0])
+					tables[0], tables[i], tables[i], tables[0], ps[i].Position-ps[0].Position)
 			}
 		}
 		sql = "WITH "
