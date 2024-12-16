@@ -39,6 +39,8 @@ import (
 	"go.uber.org/zap"
 )
 
+var ErrFlusherStopped = moerr.NewInternalErrorNoCtx("flusher stopped")
+
 type FlushCfg struct {
 	ForceFlushTimeout       time.Duration
 	ForceFlushCheckInterval time.Duration
@@ -60,6 +62,7 @@ type Flusher interface {
 	ChangeForceCheckInterval(interval time.Duration)
 	GetCfg() FlushCfg
 	Restart(opts ...FlusherOption)
+	IsStopped() bool
 	Start()
 	Stop()
 }
@@ -168,6 +171,10 @@ func NewFlusher(
 	return flusher
 }
 
+func (f *flusher) IsStopped() bool {
+	return f.impl.Load() == nil
+}
+
 func (f *flusher) IsAllChangesFlushed(start, end types.TS, doPrint bool) bool {
 	impl := f.impl.Load()
 	if impl == nil {
@@ -200,7 +207,7 @@ func (f *flusher) Restart(opts ...FlusherOption) {
 func (f *flusher) FlushTable(ctx context.Context, dbID, tableID uint64, ts types.TS) error {
 	impl := f.impl.Load()
 	if impl == nil {
-		return moerr.NewInternalError(ctx, "flusher not started")
+		return ErrFlusherStopped
 	}
 	return impl.FlushTable(ctx, dbID, tableID, ts)
 }
@@ -208,7 +215,7 @@ func (f *flusher) FlushTable(ctx context.Context, dbID, tableID uint64, ts types
 func (f *flusher) ForceFlush(ts types.TS, ctx context.Context, duration time.Duration) error {
 	impl := f.impl.Load()
 	if impl == nil {
-		return moerr.NewInternalError(ctx, "flusher not started")
+		return ErrFlusherStopped
 	}
 	return impl.ForceFlush(ts, ctx, duration)
 }
@@ -218,7 +225,7 @@ func (f *flusher) ForceFlushWithInterval(
 ) (err error) {
 	impl := f.impl.Load()
 	if impl == nil {
-		return moerr.NewInternalError(ctx, "flusher not started")
+		return ErrFlusherStopped
 	}
 	return impl.ForceFlushWithInterval(ts, ctx, forceDuration, flushInterval)
 }
@@ -226,6 +233,7 @@ func (f *flusher) ForceFlushWithInterval(
 func (f *flusher) ChangeForceFlushTimeout(timeout time.Duration) {
 	impl := f.impl.Load()
 	if impl == nil {
+		logutil.Warn("flusher stopped")
 		return
 	}
 	impl.ChangeForceFlushTimeout(timeout)
@@ -234,6 +242,7 @@ func (f *flusher) ChangeForceFlushTimeout(timeout time.Duration) {
 func (f *flusher) ChangeForceCheckInterval(interval time.Duration) {
 	impl := f.impl.Load()
 	if impl == nil {
+		logutil.Warn("flusher stopped")
 		return
 	}
 	impl.ChangeForceCheckInterval(interval)
@@ -250,6 +259,7 @@ func (f *flusher) GetCfg() FlushCfg {
 func (f *flusher) Start() {
 	impl := f.impl.Load()
 	if impl == nil {
+		logutil.Warn("need restart")
 		return
 	}
 	impl.Start()
@@ -260,7 +270,9 @@ func (f *flusher) Stop() {
 	if impl == nil {
 		return
 	}
-	impl.Stop()
+	if f.impl.CompareAndSwap(impl, nil) {
+		impl.Stop()
+	}
 }
 
 type flushImpl struct {
