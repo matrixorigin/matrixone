@@ -170,7 +170,7 @@ func printTuple(tuple Tuple) string {
 		case Decimal128:
 			res.WriteString(fmt.Sprintf("(decimal128: %v)", t.Format(0)))
 		case []byte:
-			res.WriteString(fmt.Sprintf("([]byte: %v)", t))
+			res.WriteString(fmt.Sprintf("([]byte: %v --str--: %v)", t, string(t)))
 		case float32:
 			res.WriteString(fmt.Sprintf("(float32: %v)", t))
 		case float64:

@@ -19,10 +19,11 @@ import (
 	"encoding/hex"
 	"fmt"
 
-	"github.com/matrixorigin/matrixone/pkg/common/util"
-
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
+
+	"github.com/matrixorigin/matrixone/pkg/common/util"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -953,7 +954,13 @@ func bytesArrayField(name string, values [][]byte) zap.Field {
 	var buffer bytes.Buffer
 	buffer.WriteString("[")
 	for idx, row := range values {
-		buffer.WriteString(fmt.Sprintf("%x", row))
+		unpack, err := types.Unpack(row)
+		if err != nil {
+			buffer.WriteString(fmt.Sprintf("(%x)", row))
+		} else {
+			buffer.WriteString(unpack.String())
+		}
+
 		if idx != len(values)-1 {
 			buffer.WriteString(",")
 		}

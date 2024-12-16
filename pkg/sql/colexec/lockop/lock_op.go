@@ -205,8 +205,8 @@ func performLock(
 				WithLockTable(target.lockTable, target.changeDef).
 				WithHasNewVersionInRangeFunc(lockOp.ctr.hasNewVersionInRange),
 		)
-		if lockOp.logger.Enabled(zap.DebugLevel) {
-			lockOp.logger.Debug("lock result",
+		if lockOp.logger.Enabled(zap.InfoLevel) {
+			lockOp.logger.Info("lock result",
 				zap.Uint64("table", target.tableID),
 				zap.Bool("locked", locked),
 				zap.Int32("primary-index", target.primaryColumnIndexInBatch),
