@@ -16,7 +16,6 @@ package fulltext
 
 import (
 	"fmt"
-	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -27,42 +26,6 @@ import (
 type TestCase struct {
 	pattern string
 	expect  string
-}
-
-func PatternListToString(ps []*Pattern) string {
-	ss := make([]string, 0, len(ps))
-	for _, p := range ps {
-		ss = append(ss, p.String())
-	}
-
-	return strings.Join(ss, " ")
-}
-
-func PatternToString(pattern string, mode int64) (string, error) {
-	ps, err := ParsePattern(pattern, mode)
-	if err != nil {
-		return "", err
-	}
-
-	return PatternListToString(ps), nil
-}
-
-func PatternListToStringWithPosition(ps []*Pattern) string {
-	ss := make([]string, 0, len(ps))
-	for _, p := range ps {
-		ss = append(ss, p.StringWithPosition())
-	}
-
-	return strings.Join(ss, " ")
-}
-
-func PatternToStringWithPosition(pattern string, mode int64) (string, error) {
-	ps, err := ParsePattern(pattern, mode)
-	if err != nil {
-		return "", err
-	}
-
-	return PatternListToStringWithPosition(ps), nil
 }
 
 func TestPatternPhrase(t *testing.T) {

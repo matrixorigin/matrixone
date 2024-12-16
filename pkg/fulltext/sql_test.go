@@ -106,6 +106,7 @@ func TestSqlBoolean(t *testing.T) {
 		s, err := NewSearchAccum("src", "index", c.pattern, int64(tree.FULLTEXT_BOOLEAN), "")
 		require.Nil(t, err)
 		result, err := PatternToSql(s.Pattern, int64(tree.FULLTEXT_BOOLEAN), "`__mo_index_secondary_0193b0b9-07c2-782d-aa6f-fc892c464561`")
+		fmt.Println(PatternListToStringWithPosition(s.Pattern))
 		require.Nil(t, err)
 		fmt.Println(result)
 		assert.Equal(t, c.expect, result)

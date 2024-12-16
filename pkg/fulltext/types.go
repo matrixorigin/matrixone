@@ -14,6 +14,8 @@
 
 package fulltext
 
+import "strings"
+
 /*
 The following examples demonstrate some search strings that use boolean full-text operators:
 
@@ -116,4 +118,40 @@ type Pattern struct {
 	Children []*Pattern
 	Position int32
 	Index    int32
+}
+
+func PatternListToString(ps []*Pattern) string {
+	ss := make([]string, 0, len(ps))
+	for _, p := range ps {
+		ss = append(ss, p.String())
+	}
+
+	return strings.Join(ss, " ")
+}
+
+func PatternToString(pattern string, mode int64) (string, error) {
+	ps, err := ParsePattern(pattern, mode)
+	if err != nil {
+		return "", err
+	}
+
+	return PatternListToString(ps), nil
+}
+
+func PatternListToStringWithPosition(ps []*Pattern) string {
+	ss := make([]string, 0, len(ps))
+	for _, p := range ps {
+		ss = append(ss, p.StringWithPosition())
+	}
+
+	return strings.Join(ss, " ")
+}
+
+func PatternToStringWithPosition(pattern string, mode int64) (string, error) {
+	ps, err := ParsePattern(pattern, mode)
+	if err != nil {
+		return "", err
+	}
+
+	return PatternListToStringWithPosition(ps), nil
 }

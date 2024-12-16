@@ -372,7 +372,7 @@ func PatternToSql(ps []*Pattern, mode int64, idxtbl string) (string, error) {
 		return SqlPhrase(ps, mode, idxtbl)
 	case int64(tree.FULLTEXT_BOOLEAN):
 		if ps[0].Operator == PHRASE {
-			return SqlPhrase(ps, mode, idxtbl)
+			return SqlPhrase(ps[0].Children, mode, idxtbl)
 		} else {
 			return SqlBoolean(ps, mode, idxtbl)
 		}
