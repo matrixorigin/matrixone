@@ -7918,10 +7918,10 @@ func TestForceCheckpoint(t *testing.T) {
 	ctx := context.Background()
 	fault.Enable()
 	defer fault.Disable()
-	err := fault.AddFaultPoint(ctx, objectio.FJ_FlushTimeout, ":::", "echo", 0, "mock flush timeout")
+	err := fault.AddFaultPoint(ctx, objectio.FJ_FlushTimeout, ":::", "echo", 0, "mock flush timeout", false)
 	assert.NoError(t, err)
 	defer func() {
-		err := fault.RemoveFaultPoint(ctx, objectio.FJ_FlushTimeout)
+		_, err := fault.RemoveFaultPoint(ctx, objectio.FJ_FlushTimeout)
 		assert.NoError(t, err)
 	}()
 
@@ -9832,10 +9832,10 @@ func TestMergeBlocks4(t *testing.T) {
 		defer wg.Done()
 		fault.Enable()
 		defer fault.Disable()
-		err := fault.AddFaultPoint(ctx, objectio.FJ_TransferSlow, ":::", "echo", 0, "mock flush timeout")
+		err := fault.AddFaultPoint(ctx, objectio.FJ_TransferSlow, ":::", "echo", 0, "mock flush timeout", false)
 		assert.NoError(t, err)
 		defer func() {
-			err := fault.RemoveFaultPoint(ctx, objectio.FJ_TransferSlow)
+			_, err := fault.RemoveFaultPoint(ctx, objectio.FJ_TransferSlow)
 			assert.NoError(t, err)
 		}()
 		tae.DeleteAll(true)
@@ -10407,4 +10407,26 @@ func TestDedup5(t *testing.T) {
 	err = tae.DoAppendWithTxn(bats[0], insertTxn, true)
 	assert.Error(t, err)
 	assert.NoError(t, insertTxn.Commit(ctx))
+}
+
+func TestReplayDebugLog(t *testing.T) {
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(3, 2)
+	schema.Extra.BlockMaxRows = 5
+	schema.Extra.ObjectMaxBlocks = 256
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 5)
+	tae.CreateRelAndAppend(bat, true)
+
+	fault.Enable()
+	defer fault.Disable()
+	fault.AddFaultPoint(ctx, "replay debug log", ":::", "echo", 0, "debug", false)
+	defer fault.RemoveFaultPoint(ctx, "replay debug log")
+
+	tae.Restart(ctx)
+
 }

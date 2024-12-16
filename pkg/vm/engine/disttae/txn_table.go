@@ -77,6 +77,23 @@ func (tbl *txnTable) getTxn() *Transaction {
 	return tbl.db.getTxn()
 }
 
+// true if the prefetch is received
+// false if the prefetch is rejected
+func (tbl *txnTable) PrefetchAllMeta(ctx context.Context) bool {
+	// TODO: remove this check
+	if !tbl.db.op.IsSnapOp() {
+		return tbl.eng.PrefetchTableMeta(
+			ctx,
+			pb.StatsInfoKey{
+				AccId:      tbl.accountId,
+				DatabaseID: tbl.db.databaseId,
+				TableID:    tbl.tableId,
+			},
+		)
+	}
+	return true
+}
+
 func (tbl *txnTable) Stats(ctx context.Context, sync bool) (*pb.StatsInfo, error) {
 	_, err := tbl.getPartitionState(ctx)
 	if err != nil {
@@ -633,6 +650,7 @@ func (tbl *txnTable) doRanges(
 				zap.Int("ranges-len", blocks.Len()),
 				zap.Uint64("tbl-id", tbl.tableId),
 				zap.String("txn", tbl.db.op.Txn().DebugString()),
+				zap.Duration("cost", cost),
 			)
 		}
 
@@ -647,6 +665,7 @@ func (tbl *txnTable) doRanges(
 				zap.Bool("is-snap", tbl.db.op.IsSnapOp()),
 				zap.String("blocks", blocks.String()),
 				zap.String("ps", fmt.Sprintf("%p", part)),
+				zap.Duration("cost", cost),
 				zap.Error(err),
 			)
 		}
@@ -737,6 +756,7 @@ func (tbl *txnTable) rangesOnePart(
 		nil,
 		uncommittedObjects,
 		outBlocks,
+		tbl.PrefetchAllMeta,
 		tbl.getTxn().engine.fs,
 	); err != nil {
 		return err
@@ -1232,6 +1252,8 @@ func (tbl *txnTable) isCreatedInTxn(ctx context.Context) (bool, error) {
 		if err := tbl.db.op.UpdateSnapshot(ctx, cacheTS); err != nil {
 			return false, err
 		}
+		// When logtail reconnect, this error may be thrown to client if
+		// disableRetry is true for some SQL requests.
 		return false, moerr.NewTxnNeedRetry(ctx)
 	}
 

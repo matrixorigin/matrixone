@@ -330,6 +330,10 @@ func (e *testEngine) UnsubscribeTable(ctx context.Context, dbID, tbID uint64) er
 	return nil
 }
 
+func (e *testEngine) PrefetchTableMeta(ctx context.Context, key pb.StatsInfoKey) bool {
+	return true
+}
+
 func (e *testEngine) Stats(ctx context.Context, key pb.StatsInfoKey, sync bool) *pb.StatsInfo {
 	return nil
 }
@@ -352,6 +356,16 @@ func (e *testEngine) GetService() string {
 
 func (e *testEngine) LatestLogtailAppliedTime() timestamp.Timestamp {
 	return timestamp.Timestamp{}
+}
+
+func (e *testEngine) QueryTableStatsByAccounts(
+	ctx context.Context,
+	wantedStatsIdxes []int,
+	accs []uint64,
+	forceUpdate bool,
+	resetUpdateTime bool,
+) (statsVals [][]any, retAcc []uint64, err error, ok bool) {
+	return nil, nil, nil, false
 }
 
 func newtestOperator() *testOperator {

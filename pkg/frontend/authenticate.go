@@ -3624,7 +3624,7 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 			return rtnErr
 		}
 		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, getAccountIdNamesSql)
-		_, nameInfoMap, rtnErr := getAccounts(ctx, bh)
+		_, nameInfoMap, rtnErr := getAccounts(ctx, bh, true)
 		if rtnErr != nil {
 			return rtnErr
 		}
@@ -7743,7 +7743,7 @@ func createTablesInInformationSchemaOfGeneralTenant(ctx context.Context, bh Back
 // createSubscription insert records into mo_subs of To-All-Publications
 func createSubscription(ctx context.Context, bh BackgroundExec, newTenant *TenantInfo) (err error) {
 	// get all accounts
-	accIdInfoMap, accNameInfoMap, err := getAccounts(ctx, bh)
+	accIdInfoMap, accNameInfoMap, err := getAccounts(ctx, bh, false)
 	if err != nil {
 		return
 	}

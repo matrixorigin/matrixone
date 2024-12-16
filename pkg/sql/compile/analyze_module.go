@@ -171,6 +171,16 @@ func applyOpStatsToNode(op *models.PhyOperator, nodes []*plan.Node, scopeParalle
 		node.AnalyzeInfo.S3Delete += op.OpStats.S3Delete
 		node.AnalyzeInfo.S3DeleteMul += op.OpStats.S3DeleteMul
 		node.AnalyzeInfo.DiskIO += op.OpStats.DiskIO
+
+		node.AnalyzeInfo.CacheRead += op.OpStats.CacheRead
+		node.AnalyzeInfo.CacheHit += op.OpStats.CacheHit
+		node.AnalyzeInfo.CacheMemoryRead += op.OpStats.CacheMemoryRead
+		node.AnalyzeInfo.CacheMemoryHit += op.OpStats.CacheMemoryHit
+		node.AnalyzeInfo.CacheDiskRead += op.OpStats.CacheDiskRead
+		node.AnalyzeInfo.CacheDiskHit += op.OpStats.CacheDiskHit
+		node.AnalyzeInfo.CacheRemoteRead += op.OpStats.CacheRemoteRead
+		node.AnalyzeInfo.CacheRemoteHit += op.OpStats.CacheRemoteHit
+
 		node.AnalyzeInfo.WrittenRows += op.OpStats.WrittenRows
 		node.AnalyzeInfo.DeletedRows += op.OpStats.DeletedRows
 
@@ -417,21 +427,9 @@ func (c *Compile) GenPhyPlan(runC *Compile) {
 		}
 	}
 
-	// record the number of local cn s3 requests
-	c.anal.phyPlan.S3IOInputCount += runC.counterSet.FileService.S3.Put.Load()
-	c.anal.phyPlan.S3IOInputCount += runC.counterSet.FileService.S3.List.Load()
-
-	c.anal.phyPlan.S3IOOutputCount += runC.counterSet.FileService.S3.Head.Load()
-	c.anal.phyPlan.S3IOOutputCount += runC.counterSet.FileService.S3.Get.Load()
-	c.anal.phyPlan.S3IOOutputCount += runC.counterSet.FileService.S3.Delete.Load()
-	c.anal.phyPlan.S3IOOutputCount += runC.counterSet.FileService.S3.DeleteMulti.Load()
-	//-------------------------------------------------------------------------------------------
-
 	// record the number of remote cn s3 requests
 	for _, remotePhy := range runC.anal.remotePhyPlans {
 		c.anal.phyPlan.RemoteScope = append(c.anal.phyPlan.RemoteScope, remotePhy.LocalScope[0])
-		c.anal.phyPlan.S3IOInputCount += remotePhy.S3IOInputCount
-		c.anal.phyPlan.S3IOOutputCount += remotePhy.S3IOOutputCount
 	}
 }
 

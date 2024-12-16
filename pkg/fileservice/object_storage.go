@@ -21,6 +21,8 @@ import (
 	"time"
 )
 
+const smallObjectThreshold = 64 * (1 << 20)
+
 type ObjectStorage interface {
 	// List lists objects with specified prefix
 	List(

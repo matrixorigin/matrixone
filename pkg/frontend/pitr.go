@@ -883,8 +883,10 @@ func doAlterPitr(ctx context.Context, ses *Session, stmt *tree.AlterPitr) (err e
 
 func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (stats statistic.StatsArray, err error) {
 	bh := ses.GetBackgroundExec(ctx)
+	bh.SetRestore(true)
 	defer func() {
 		stats = bh.GetExecStatsArray()
+		bh.SetRestore(false)
 		bh.Close()
 	}()
 
@@ -1685,7 +1687,15 @@ func restoreViewsWithPitr(
 	viewMap map[string]*tableInfo,
 	accountName string,
 	curAccount uint32) error {
-	snapshot := &pbplan.Snapshot{
+	getLogger(ses.GetService()).Info(fmt.Sprintf("[%s] start to restore views", pitrName))
+	var (
+		err         error
+		stmts       []tree.Statement
+		sortedViews []string
+		snapshot    *pbplan.Snapshot
+		oldSnapshot *pbplan.Snapshot
+	)
+	snapshot = &pbplan.Snapshot{
 		TS: &timestamp.Timestamp{PhysicalTime: ts},
 		Tenant: &pbplan.SnapshotTenant{
 			TenantName: accountName,
@@ -1694,23 +1704,29 @@ func restoreViewsWithPitr(
 	}
 
 	compCtx := ses.GetTxnCompileCtx()
-	oldSnapshot := compCtx.GetSnapshot()
+	oldSnapshot = compCtx.GetSnapshot()
 	compCtx.SetSnapshot(snapshot)
 	defer func() {
 		compCtx.SetSnapshot(oldSnapshot)
 	}()
 
 	g := toposort{next: make(map[string][]string)}
-	for key, view := range viewMap {
-		stmts, err := parsers.Parse(ctx, dialect.MYSQL, view.createSql, 1)
+	for key, viewEntry := range viewMap {
+		getLogger(ses.GetService()).Info(fmt.Sprintf("[%s] start to restore view: %v", pitrName, viewEntry.tblName))
+		stmts, err = parsers.Parse(ctx, dialect.MYSQL, viewEntry.createSql, 1)
 		if err != nil {
 			return err
 		}
 
-		compCtx.SetDatabase(view.dbName)
+		compCtx.SetDatabase(viewEntry.dbName)
 		// build create sql to find dependent views
-		if _, err = plan.BuildPlan(compCtx, stmts[0], false); err != nil {
-			return err
+		_, err = plan.BuildPlan(compCtx, stmts[0], false)
+		if err != nil {
+			stmts, _ = parsers.Parse(ctx, dialect.MYSQL, viewEntry.createSql, 0)
+			_, err = plan.BuildPlan(compCtx, stmts[0], false)
+			if err != nil {
+				return err
+			}
 		}
 
 		g.addVertex(key)
@@ -1720,7 +1736,7 @@ func restoreViewsWithPitr(
 	}
 
 	// topsort
-	sortedViews, err := g.sort()
+	sortedViews, err = g.sort()
 	if err != nil {
 		return err
 	}

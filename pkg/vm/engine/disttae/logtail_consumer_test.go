@@ -185,3 +185,7 @@ func TestGetLogTailServiceAddr(t *testing.T) {
 		})
 	})
 }
+
+func TestLogTailConnect(t *testing.T) {
+	// this case is tested by TestSpeedupAbortAllTxn
+}

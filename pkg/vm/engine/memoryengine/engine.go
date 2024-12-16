@@ -245,6 +245,10 @@ func (e *Engine) UnsubscribeTable(ctx context.Context, dbID, tbID uint64) error 
 	return nil
 }
 
+func (e *Engine) PrefetchTableMeta(ctx context.Context, key pb.StatsInfoKey) bool {
+	return true
+}
+
 func (e *Engine) Stats(ctx context.Context, key pb.StatsInfoKey, sync bool) *pb.StatsInfo {
 	return nil
 }
@@ -261,4 +265,14 @@ func getTNServices(cluster clusterservice.MOCluster) []metadata.TNService {
 
 func (e *Engine) GetMessageCenter() any {
 	return nil
+}
+
+func (e *Engine) QueryTableStatsByAccounts(
+	ctx context.Context,
+	wantedStatsIdxes []int,
+	accs []uint64,
+	forceUpdate bool,
+	resetUpdateTime bool,
+) (statsVals [][]any, retAcc []uint64, err error, ok bool) {
+	return nil, nil, nil, false
 }

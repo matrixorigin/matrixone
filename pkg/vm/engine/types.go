@@ -751,6 +751,7 @@ type DataSource interface {
 		cols []string,
 		types []types.Type,
 		seqNums []uint16,
+		pkSeqNum int32,
 		memFilter any,
 		mp *mpool.MPool,
 		bat *batch.Batch,
@@ -989,11 +990,22 @@ type Engine interface {
 	// just return nil if the current stats info has not been initialized.
 	Stats(ctx context.Context, key pb.StatsInfoKey, sync bool) *pb.StatsInfo
 
+	// true if the prefetch is received, false if the prefetch is rejected
+	PrefetchTableMeta(ctx context.Context, key pb.StatsInfoKey) bool
+
 	GetMessageCenter() any
 
 	GetService() string
 
 	LatestLogtailAppliedTime() timestamp.Timestamp
+
+	QueryTableStatsByAccounts(
+		ctx context.Context,
+		wantedStatsIdxes []int,
+		accs []uint64,
+		forceUpdate bool,
+		resetUpdateTime bool,
+	) (statsVals [][]any, retAcc []uint64, err error, ok bool)
 }
 
 type VectorPool interface {

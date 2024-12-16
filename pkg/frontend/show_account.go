@@ -17,6 +17,9 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
+	"go.uber.org/zap"
 	"math"
 	"strconv"
 	"strings"
@@ -321,16 +324,85 @@ func updateStorageUsageCache(usages *cmd_util.StorageUsageResp_V3) {
 	}
 }
 
+func tryGetSizeFromMTS(
+	ctx context.Context,
+	serviceID string,
+	accIds [][]int64,
+) (sizes map[int64]uint64, ok bool) {
+
+	var (
+		err  error
+		accs []uint64
+		vals [][]any
+	)
+	for i := range accIds {
+		for j := range accIds[i] {
+			accs = append(accs, uint64(accIds[i][j]))
+		}
+	}
+
+	vals, accs, err, ok = getPu(serviceID).StorageEngine.QueryTableStatsByAccounts(
+		ctx,
+		[]int{disttae.TableStatsTableSize},
+		accs,
+		false,
+		false,
+	)
+
+	if err != nil || !ok {
+		logutil.Info("show accounts",
+			zap.Bool("get size from mts failed", ok),
+			zap.Error(err))
+
+		return nil, false
+	}
+
+	if len(vals) == 0 {
+		return nil, false
+	}
+
+	sizes = make(map[int64]uint64)
+	for i := range accs {
+		sizes[int64(accs[i])] += uint64(vals[0][i].(float64))
+	}
+
+	return sizes, true
+}
+
 // getAccountStorageUsage calculates the storage usage of all accounts
 // by handling checkpoint
-func getAccountsStorageUsage(ctx context.Context, ses *Session, accIds [][]int64) (map[int64][]uint64, error) {
+func getAccountsStorageUsage(
+	ctx context.Context,
+	ses *Session,
+	accIds [][]int64,
+) (ret map[int64][]uint64, err error) {
+
 	if len(accIds) == 0 {
 		return nil, nil
 	}
 
+	defer func() {
+		if err != nil || ret == nil {
+			return
+		}
+
+		sizes, ok := tryGetSizeFromMTS(ctx, ses.service, accIds)
+		if ok {
+			for k, v := range sizes {
+				if len(ret[k]) == 0 {
+					ret[k] = append(ret[k], 0, 0)
+				}
+				ret[k][0] = v
+			}
+			logutil.Info("show accounts",
+				zap.Int("get size from mts (acc cnt)", len(sizes)))
+		}
+	}()
+
 	// step 1: check cache
 	if usage, succeed := checkStorageUsageCache(accIds); succeed {
-		return usage, nil
+		ret = usage
+		return
 	}
 
 	// step 2: query to tn
@@ -346,7 +418,8 @@ func getAccountsStorageUsage(ctx context.Context, ses *Session, accIds [][]int64
 		}
 		updateStorageUsageCache_V2(usage)
 		// step 3: handling these pulled data
-		return handleStorageUsageResponse_V2(ctx, usage)
+		ret, err = handleStorageUsageResponse_V2(ctx, usage)
+		return
 
 	} else {
 		usage, ok := response.(*cmd_util.StorageUsageResp_V3)
@@ -357,7 +430,8 @@ func getAccountsStorageUsage(ctx context.Context, ses *Session, accIds [][]int64
 		updateStorageUsageCache(usage)
 
 		// step 3: handling these pulled data
-		return handleStorageUsageResponse(ctx, usage)
+		ret, err = handleStorageUsageResponse(ctx, usage)
+		return
 	}
 }
 

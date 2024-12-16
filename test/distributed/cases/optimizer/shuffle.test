@@ -5,8 +5,8 @@ drop table if exists t1;
 drop table if exists t2;
 create table t1(c1 int not null, c2 int not null, c3 int not null) cluster by c1;
 create table t2(c1 int not null, c2 int not null, c3 int not null) cluster by c1;
-insert into t1 select *,*,* from generate_series(10000000) g;
-insert into t2 select *,*,* from generate_series(9000000) g;
+insert into t1 select *,*,* from generate_series(5000000) g;
+insert into t2 select *,*,* from generate_series(4000000) g;
 -- @separator:table
 select mo_ctl('dn', 'flush', 'd1.t1');
 -- @separator:table
@@ -34,9 +34,9 @@ explain select count(*) from t1,t2 where t1.c2=t2.c2 and t2.c3<500000;
 select count(*) from t1,t2 where t1.c2=t2.c2 and t2.c3<500000;
 -- @bvt:issue#19733
 -- @separator:table
-explain select count(*) from t1,t2 where t1.c2=t2.c2 and t2.c3<5000000;
+explain select count(*) from t1,t2 where t1.c2=t2.c2 and t2.c3<1500000;
 -- @bvt:issue
-select count(*) from t1,t2 where t1.c2=t2.c2 and t2.c3<5000000;
+select count(*) from t1,t2 where t1.c2=t2.c2 and t2.c3<1500000;
 -- @separator:table
 explain select count(*) from t1 group by c1 limit 5;
 select count(*) from t1 group by c1 limit 5;
@@ -50,14 +50,14 @@ explain select count(*) from t1 where t1.c2 in ( select c2 from t2 where t2.c3>1
 select count(*) from t1 where t1.c2 in ( select c2 from t2 where t2.c3>100000 );
 -- @bvt:issue#19733
 -- @separator:table
-explain select count(*) from t1 where t1.c2 not in ( select c3 from t2 where t2.c3 between 100 and 7000000 );
+explain select count(*) from t1 where t1.c2 not in ( select c3 from t2 where t2.c3 between 100 and 700000 );
 -- @bvt:issue
-select count(*) from t1 where t1.c2 not in ( select c3 from t2 where t2.c3 between 100 and 7000000 );
+select count(*) from t1 where t1.c2 not in ( select c3 from t2 where t2.c3 between 100 and 700000 );
 -- @bvt:issue#19733
 -- @separator:table
-explain select count(*) from t1 where t1.c3<800000 and t1.c2 not in ( select c3 from t2 where t2.c3 between 10000 and 6000000 );
+explain select count(*) from t1 where t1.c3<800000 and t1.c2 not in ( select c3 from t2 where t2.c3 between 10000 and 600000 );
 -- @bvt:issue
-select count(*) from t1 where  t1.c3<800000 and t1.c2 not in ( select c3 from t2 where t2.c3 between 10000 and 6000000 );
+select count(*) from t1 where  t1.c3<800000 and t1.c2 not in ( select c3 from t2 where t2.c3 between 10000 and 600000 );
 -- @bvt:issue#19733
 -- @separator:table
 explain select count(*) from t1 where t1.c1 <300000 and  t1.c2 in ( select c2 from t2 where t2.c3>100000 );

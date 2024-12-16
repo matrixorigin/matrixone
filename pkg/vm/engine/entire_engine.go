@@ -106,6 +106,10 @@ func (e *EntireEngine) UnsubscribeTable(ctx context.Context, dbID, tbID uint64) 
 	return e.Engine.UnsubscribeTable(ctx, dbID, tbID)
 }
 
+func (e *EntireEngine) PrefetchTableMeta(ctx context.Context, key pb.StatsInfoKey) bool {
+	return e.Engine.PrefetchTableMeta(ctx, key)
+}
+
 func (e *EntireEngine) Stats(ctx context.Context, key pb.StatsInfoKey, sync bool) *pb.StatsInfo {
 	return e.Engine.Stats(ctx, key, sync)
 }
@@ -116,4 +120,14 @@ func (e *EntireEngine) GetMessageCenter() any {
 
 func (e *EntireEngine) GetService() string {
 	return e.Engine.GetService()
+}
+
+func (e *EntireEngine) QueryTableStatsByAccounts(
+	ctx context.Context,
+	wantedStatsIdxes []int,
+	accs []uint64,
+	forceUpdate bool,
+	resetUpdateTime bool,
+) (statsVals [][]any, retAcc []uint64, err error, ok bool) {
+	return e.Engine.QueryTableStatsByAccounts(ctx, wantedStatsIdxes, accs, forceUpdate, resetUpdateTime)
 }

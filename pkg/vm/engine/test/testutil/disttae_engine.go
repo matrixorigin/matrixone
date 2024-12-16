@@ -16,14 +16,16 @@ package testutil
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/config"
-	"github.com/matrixorigin/matrixone/pkg/frontend"
-	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
-	"github.com/matrixorigin/matrixone/pkg/util/toml"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
+	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
+	"github.com/matrixorigin/matrixone/pkg/util/toml"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
@@ -56,18 +58,22 @@ import (
 )
 
 type TestDisttaeEngine struct {
-	Engine              *disttae.Engine
-	logtailReceiver     chan morpc.Message
-	broken              chan struct{}
-	wg                  sync.WaitGroup
-	ctx                 context.Context
-	cancel              context.CancelFunc
-	txnClient           client.TxnClient
-	txnOperator         client.TxnOperator
-	timestampWaiter     client.TimestampWaiter
-	mp                  *mpool.MPool
-	workspaceThreshold  uint64
-	insertEntryMaxCount int
+	Engine                   *disttae.Engine
+	logtailReceiver          chan morpc.Message
+	broken                   chan struct{}
+	wg                       sync.WaitGroup
+	ctx                      context.Context
+	cancel                   context.CancelFunc
+	txnClient                client.TxnClient
+	queryClient              qclient.QueryClient
+	txnOperator              client.TxnOperator
+	timestampWaiter          client.TimestampWaiter
+	mp                       *mpool.MPool
+	commitWorkspaceThreshold uint64
+	writeWorkspaceThreshold  uint64
+	insertEntryMaxCount      int
+
+	rootDir string
 }
 
 func setServerLevelParams(de *TestDisttaeEngine) {
@@ -123,8 +129,11 @@ func NewTestDisttaeEngine(
 	if de.insertEntryMaxCount != 0 {
 		engineOpts = append(engineOpts, disttae.WithInsertEntryMaxCount(de.insertEntryMaxCount))
 	}
-	if de.workspaceThreshold != 0 {
-		engineOpts = append(engineOpts, disttae.WithWorkspaceThreshold(de.workspaceThreshold))
+	if de.commitWorkspaceThreshold != 0 {
+		engineOpts = append(engineOpts, disttae.WithCommitWorkspaceThreshold(de.commitWorkspaceThreshold))
+	}
+	if de.writeWorkspaceThreshold != 0 {
+		engineOpts = append(engineOpts, disttae.WithWriteWorkspaceThreshold(de.writeWorkspaceThreshold))
 	}
 
 	internalExecutorFactory := func() ie.InternalExecutor {
@@ -132,8 +141,10 @@ func NewTestDisttaeEngine(
 	}
 	engineOpts = append(engineOpts, disttae.WithSQLExecFunc(internalExecutorFactory))
 
+	engineOpts = append(engineOpts, disttae.WithMoServerStateChecker(func() bool { return false }))
+
 	catalog.SetupDefines("")
-	de.Engine = disttae.New(ctx,
+	de.Engine = disttae.New(de.ctx,
 		"",
 		de.mp,
 		fs,
@@ -157,7 +168,7 @@ func NewTestDisttaeEngine(
 		}
 	}()
 
-	op, err := de.txnClient.New(ctx, types.TS{}.ToTimestamp())
+	op, err := de.txnClient.New(de.ctx, types.TS{}.ToTimestamp())
 	if err != nil {
 		return nil, err
 	}
@@ -165,11 +176,12 @@ func NewTestDisttaeEngine(
 	close(wait)
 
 	de.txnOperator = op
-	if err = de.Engine.New(ctx, op); err != nil {
+	if err = de.Engine.New(de.ctx, op); err != nil {
 		return nil, err
 	}
 
 	qc, _ := qclient.NewQueryClient("", morpc.Config{})
+	de.queryClient = qc
 	sqlExecutor := compile.NewSQLExecutor(
 		"127.0.0.1:2000",
 		de.Engine,
@@ -197,7 +209,7 @@ func NewTestDisttaeEngine(
 	setServerLevelParams(de)
 
 	// InitLoTailPushModel presupposes that the internal sql executor has been initialized.
-	err = de.Engine.InitLogTailPushModel(ctx, de.timestampWaiter)
+	err = de.Engine.InitLogTailPushModel(de.ctx, de.timestampWaiter)
 	//err = de.prevSubscribeSysTables(ctx, rpcAgent)
 	return de, err
 }
@@ -430,6 +442,12 @@ func (de *TestDisttaeEngine) Close(ctx context.Context) {
 	close(de.logtailReceiver)
 	de.cancel()
 	de.wg.Wait()
+	de.Engine.Close()
+	de.queryClient.Close()
+
+	if err := os.RemoveAll(de.rootDir); err != nil {
+		logutil.Errorf("remove root dir failed (%s): %v", de.rootDir, err)
+	}
 }
 
 func (de *TestDisttaeEngine) GetTable(

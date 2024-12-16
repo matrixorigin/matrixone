@@ -51,6 +51,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/explain"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -1556,4 +1557,56 @@ func Benchmark_RecordStatement_IsTrue(b *testing.B) {
 			}
 		}
 	})
+}
+
+func Test_panic(t *testing.T) {
+	fault.Enable()
+	defer fault.Disable()
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	runPanic := func(panicChoice int64) {
+		fault.AddFaultPoint(context.Background(), "exec_request_panic", ":::", "panic", panicChoice, "has panic", false)
+		defer fault.RemoveFaultPoint(context.Background(), "exec_request_panic")
+
+		ses := newTestSession(t, ctrl)
+		execCtx := &ExecCtx{
+			ses: ses,
+		}
+		req := &Request{
+			cmd:  COM_SET_OPTION,
+			data: []byte("123"),
+		}
+
+		_, err := ExecRequest(ses, execCtx, req)
+		assert.NotNil(t, err)
+	}
+
+	runPanic(fault.PanicUseMoErr)
+	runPanic(fault.PanicUseNonMoErr)
+}
+
+func Test_run_panic(t *testing.T) {
+	fault.Enable()
+	defer fault.Disable()
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	runPanic := func(panicChoice int64) {
+		fault.AddFaultPoint(context.Background(), "executeStmtWithWorkspace_panic", ":::", "panic", panicChoice, "has panic", false)
+		defer fault.RemoveFaultPoint(context.Background(), "executeStmtWithWorkspace_panic")
+
+		ses := newTestSession(t, ctrl)
+		execCtx := &ExecCtx{
+			ses: ses,
+		}
+
+		err := executeStmtWithWorkspace(ses, nil, execCtx)
+		assert.NotNil(t, err)
+	}
+
+	runPanic(fault.PanicUseMoErr)
+	runPanic(fault.PanicUseNonMoErr)
 }

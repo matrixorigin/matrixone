@@ -221,8 +221,11 @@ func (db *DB) Replay(dataFactory *tables.DataFactory, maxTs types.TS, lsn uint64
 	}
 }
 
-func (db *DB) AddFaultPoint(ctx context.Context, name string, freq string, action string, iarg int64, sarg string) error {
-	return fault.AddFaultPoint(ctx, name, freq, action, iarg, sarg)
+func (db *DB) AddFaultPoint(
+	ctx context.Context, name string, freq string,
+	action string, iarg int64, sarg string, constant bool,
+) error {
+	return fault.AddFaultPoint(ctx, name, freq, action, iarg, sarg, constant)
 }
 
 func (db *DB) Close() error {

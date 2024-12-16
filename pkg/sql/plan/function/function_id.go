@@ -289,6 +289,11 @@ const (
 	JSON_QUOTE
 	JSON_UNQUOTE
 	JSON_ROW
+
+	JSON_SET
+	JSON_INSERT
+	JSON_REPLACE
+
 	JQ
 	TRY_JQ
 	WASM
@@ -396,6 +401,9 @@ const (
 	// fulltext function
 	FULLTEXT_MATCH
 	FULLTEXT_MATCH_SCORE
+
+	// fault inject function
+	FAULT_INJECT
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
@@ -601,6 +609,9 @@ var functionIdRegister = map[string]int32{
 	"json_quote":                     JSON_QUOTE,
 	"json_unquote":                   JSON_UNQUOTE,
 	"json_row":                       JSON_ROW,
+	"json_set":                       JSON_SET,
+	"json_insert":                    JSON_INSERT,
+	"json_replace":                   JSON_REPLACE,
 	"jq":                             JQ,
 	"try_jq":                         TRY_JQ,
 	"wasm":                           WASM,
@@ -723,4 +734,7 @@ var functionIdRegister = map[string]int32{
 	// match function
 	"fulltext_match":       FULLTEXT_MATCH,
 	"fulltext_match_score": FULLTEXT_MATCH_SCORE,
+
+	// fault inject function
+	"fault_inject": FAULT_INJECT,
 }

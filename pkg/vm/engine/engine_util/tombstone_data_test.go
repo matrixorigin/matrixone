@@ -229,3 +229,35 @@ func TestTombstoneData1(t *testing.T) {
 	require.True(t, deleted.Contains(4))
 	require.Equal(t, 4, deleted.Count())
 }
+
+func TestRowIdsToOffset(t *testing.T) {
+
+	objId := types.NewObjectid()
+	blkId := types.NewBlockidWithObjectID(objId, 1)
+
+	rowIds := make([]types.Rowid, 0, 10)
+	for i := 0; i < 10; i++ {
+		row := types.NewRowid(blkId, uint32(i))
+		rowIds = append(rowIds, *row)
+	}
+
+	skipMask := objectio.GetReusableBitmap()
+	skipMask.Add(1)
+	skipMask.Add(3)
+
+	left1 := RowIdsToOffset(rowIds, int32(0), skipMask).([]int32)
+	left2 := RowIdsToOffset(rowIds, uint32(0), skipMask).([]uint32)
+	left3 := RowIdsToOffset(rowIds, uint64(0), skipMask).([]uint64)
+
+	expect := []int{0, 2, 4, 5, 6, 7, 8, 9}
+
+	require.Equal(t, len(expect), len(left1))
+	require.Equal(t, len(expect), len(left2))
+	require.Equal(t, len(expect), len(left3))
+
+	for i := 0; i < len(expect); i++ {
+		require.Equal(t, expect[i], int(left1[i]))
+		require.Equal(t, expect[i], int(left2[i]))
+		require.Equal(t, expect[i], int(left3[i]))
+	}
+}

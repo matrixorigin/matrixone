@@ -135,18 +135,33 @@ func New(
 	}
 
 	e.pClient.LogtailRPCClientFactory = DefaultNewRpcStreamToTnLogTailService
+	e.pClient.ctx = ctx
 
-	initMoTableStatsConfig(ctx, e)
+	err = initMoTableStatsConfig(ctx, e)
+	if err != nil {
+		panic(err)
+	}
 
 	return e
+}
+
+func (e *Engine) Close() error {
+	if e.gcPool != nil {
+		e.gcPool.Release()
+	}
+	e.dynamicCtx.Close()
+	return nil
 }
 
 func (e *Engine) fillDefaults() {
 	if e.config.insertEntryMaxCount <= 0 {
 		e.config.insertEntryMaxCount = InsertEntryThreshold
 	}
-	if e.config.workspaceThreshold <= 0 {
-		e.config.workspaceThreshold = WorkspaceThreshold
+	if e.config.commitWorkspaceThreshold <= 0 {
+		e.config.commitWorkspaceThreshold = CommitWorkspaceThreshold
+	}
+	if e.config.writeWorkspaceThreshold <= 0 {
+		e.config.writeWorkspaceThreshold = WriteWorkspaceThreshold
 	}
 	if e.config.cnTransferTxnLifespanThreshold <= 0 {
 		e.config.cnTransferTxnLifespanThreshold = CNTransferTxnLifespanThreshold
@@ -155,7 +170,8 @@ func (e *Engine) fillDefaults() {
 	logutil.Info(
 		"INIT-ENGINE-CONFIG",
 		zap.Int("InsertEntryMaxCount", e.config.insertEntryMaxCount),
-		zap.Uint64("WorkspaceThreshold", e.config.workspaceThreshold),
+		zap.Uint64("CommitWorkspaceThreshold", e.config.commitWorkspaceThreshold),
+		zap.Uint64("WriteWorkspaceThreshold", e.config.writeWorkspaceThreshold),
 		zap.Duration("CNTransferTxnLifespanThreshold", e.config.cnTransferTxnLifespanThreshold),
 	)
 }
@@ -708,12 +724,6 @@ func (e *Engine) setPushClientStatus(ready bool) {
 	}
 }
 
-func (e *Engine) abortAllRunningTxn() {
-	e.Lock()
-	defer e.Unlock()
-	e.cli.AbortAllRunningTxn()
-}
-
 func (e *Engine) cleanMemoryTableWithTable(dbId, tblId uint64) {
 	e.Lock()
 	defer e.Unlock()
@@ -748,6 +758,12 @@ func (e *Engine) UnsubscribeTable(ctx context.Context, dbID, tbID uint64) error 
 
 func (e *Engine) Stats(ctx context.Context, key pb.StatsInfoKey, sync bool) *pb.StatsInfo {
 	return e.globalStats.Get(ctx, key, sync)
+}
+
+// return true if the prefetch is received
+// return false if the prefetch is not rejected
+func (e *Engine) PrefetchTableMeta(ctx context.Context, key pb.StatsInfoKey) bool {
+	return e.globalStats.PrefetchTableMeta(ctx, key)
 }
 
 func (e *Engine) GetMessageCenter() any {
