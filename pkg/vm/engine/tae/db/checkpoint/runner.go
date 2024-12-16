@@ -201,6 +201,7 @@ type runner struct {
 	ctx context.Context
 
 	// logtail source
+	flusher   *Flusher
 	source    logtail.Collector
 	catalog   *catalog.Catalog
 	rt        *dbutils.Runtime
@@ -280,6 +281,15 @@ func NewRunner(
 	r.gcCheckpointQueue = sm.NewSafeQueue(100, 100, r.onGCCheckpointEntries)
 	r.postCheckpointQueue = sm.NewSafeQueue(1000, 1, r.onPostCheckpointEntries)
 	r.checkpointMetaFiles.files = make(map[string]struct{})
+
+	r.flusher = NewFlusher(
+		r.rt,
+		r,
+		r.catalog,
+		r.source,
+		WithFlusherInterval(r.options.maxFlushInterval),
+		WithFlusherCronPeriod(r.options.collectInterval),
+	)
 	return r
 }
 
@@ -1150,11 +1160,13 @@ func (r *runner) Start() {
 		if err := r.stopper.RunNamedTask("dirty-collector-job", r.crontask); err != nil {
 			panic(err)
 		}
+		r.flusher.Start()
 	})
 }
 
 func (r *runner) Stop() {
 	r.onceStop.Do(func() {
+		r.flusher.Stop()
 		r.stopper.Stop()
 		r.dirtyEntryQueue.Stop()
 		r.incrementalCheckpointQueue.Stop()

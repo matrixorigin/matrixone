@@ -60,10 +60,10 @@ func WithFlusherQueueSize(size int) FlusherOption {
 	}
 }
 
-type flushTraiggerSepc struct {
-	mode    uint32
-	trigger *tasks.CancelableFunc
-}
+// type flushTraiggerSepc struct {
+// 	mode    uint32
+// 	trigger *tasks.CancelableFunc
+// }
 
 type Flusher struct {
 	flushInterval  time.Duration
