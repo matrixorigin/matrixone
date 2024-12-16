@@ -38,6 +38,7 @@ import (
 	"github.com/shirou/gopsutil/v3/cpu"
 	"github.com/shirou/gopsutil/v3/mem"
 	"github.com/shirou/gopsutil/v3/process"
+	"go.uber.org/zap"
 )
 
 type activeTaskStats map[uint64]struct {
@@ -62,6 +63,8 @@ type executor struct {
 		o map[objectio.ObjectId]struct{}
 		m activeTaskStats
 	}
+
+	proc atomic.Pointer[process.Process]
 }
 
 func newMergeExecutor(rt *dbutils.Runtime, sched CNMergeScheduler) *executor {
@@ -99,13 +102,18 @@ func (e *executor) setMemLimit(total uint64) {
 	)
 }
 
-var proc *process.Process
-
 func (e *executor) refreshMemInfo() {
-	if proc == nil {
-		proc, _ = process.NewProcess(int32(os.Getpid()))
-	} else if mem, err := proc.MemoryInfo(); err == nil {
-		e.memUsing = int(mem.RSS)
+	if e.proc.Load() == nil {
+		p, err := process.NewProcess(int32(os.Getpid()))
+		if err != nil {
+			logutil.Error("failed to init proc", zap.Error(err))
+			return
+		}
+		e.proc.CompareAndSwap(nil, p)
+	}
+
+	if memInfo, err := e.proc.Load().MemoryInfo(); err == nil {
+		e.memUsing = int(memInfo.RSS)
 	}
 
 	if e.memLimit == 0 {
