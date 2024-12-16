@@ -223,8 +223,8 @@ create table pro (
     name varchar(255),
     details json
 );
-prepare stmt2 from 'alter table pro add fulltext index pro1(details) with PARSER json';
-execute stmt2;
+prepare stmt4 from 'alter table pro add fulltext index pro1(details) with PARSER json';
+execute stmt4;
 prepare stmt3 from 'alter table pro add fulltext index pro2(name)';
 execute stmt3;
 -- @bvt:issue#20613
@@ -517,9 +517,8 @@ union
 select comment_text as title, comment_text as content from comments
 where match(comment_text) AGAINST ('全文索引' IN NATURAL LANGUAGE MODE);
 -- @bvt:issue
-drop
-drop table posts;
 drop table comments;
+drop table posts;
 
 
 
