@@ -61,11 +61,11 @@ JOIN will be used to optimize the SQL with Pattern/Plan
 (A INTERSECT B) UNION ((A INTERSECT B) INTERSECT C) UNION ((A INTERSECT B) INTERSECT D)
 
 WITH t0 (A JOIN B)
-SELECT (t0) UNION ALL (t0 JOIN C) UNION ALL (t0 JOIN B)
+(t0) UNION ALL (t0 JOIN C) UNION ALL (t0 JOIN B)
 
 In case + operator with GROUP such as "+(A B) ~C -D",
 
-Although operator + with GROUP cannot be optimized with JOIN,  we can still optimize the SQL with JOIN like below
+Although operator + with GROUP cannot be optimized with JOIN Pattern node,  we can still optimize the SQL with JOIN like below
 
 (+ (GROUP (TEXT A) (TEXT B))) (~ (TEXT C)) (- (TEXT D)))
 
@@ -73,7 +73,7 @@ Although operator + with GROUP cannot be optimized with JOIN,  we can still opti
 
 A UNION B UNION (A INTERSECT C) UNION (A INTERSECT D) UNION (B INTERSECT C) UNION (B INTERSECT D)
 
-SELECT (A) UNION ALL (B) UNION ALL (A JOIN C) UNION ALL (A JOIN D) UNION ALL (B JOIN C) UNION ALL (B JOIN D)
+(A) UNION ALL (B) UNION ALL (A JOIN C) UNION ALL (A JOIN D) UNION ALL (B JOIN C) UNION ALL (B JOIN D)
 */
 type SqlNode struct {
 	Index    int32
