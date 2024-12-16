@@ -543,7 +543,7 @@ func (txn *Transaction) dumpInsertBatchLocked(ctx context.Context, offset int, s
 	})
 	sum := 0
 	for _, k := range keys {
-		if tbCount[k] > txn.engine.config.insertEntryMaxCount {
+		if tbCount[k] >= txn.engine.config.insertEntryMaxCount {
 			continue
 		}
 		if uint64(sum+tbSize[k]) > txn.writeWorkspaceThreshold {
