@@ -225,7 +225,6 @@ type runner struct {
 	globalPolicy      *countBasedPolicy
 
 	dirtyEntryQueue            sm.Queue
-	waitQueue                  sm.Queue
 	incrementalCheckpointQueue sm.Queue
 	globalCheckpointQueue      sm.Queue
 	postCheckpointQueue        sm.Queue
@@ -276,7 +275,6 @@ func NewRunner(
 	r.globalPolicy = &countBasedPolicy{minCount: r.options.globalMinCount}
 	r.stopper = stopper.NewStopper("CheckpointRunner")
 	r.dirtyEntryQueue = sm.NewSafeQueue(r.options.dirtyEntryQueueSize, 100, r.onDirtyEntries)
-	r.waitQueue = sm.NewSafeQueue(r.options.waitQueueSize, 100, r.onWaitWaitableItems)
 	r.incrementalCheckpointQueue = sm.NewSafeQueue(r.options.checkpointQueueSize, 100, r.onIncrementalCheckpointEntries)
 	r.globalCheckpointQueue = sm.NewSafeQueue(r.options.checkpointQueueSize, 100, r.onGlobalCheckpointEntries)
 	r.gcCheckpointQueue = sm.NewSafeQueue(100, 100, r.onGCCheckpointEntries)
@@ -1142,11 +1140,6 @@ func (r *runner) crontask(ctx context.Context) {
 	hb.Stop()
 }
 
-func (r *runner) EnqueueWait(item any) (err error) {
-	_, err = r.waitQueue.Enqueue(item)
-	return
-}
-
 func (r *runner) Start() {
 	r.onceStart.Do(func() {
 		r.postCheckpointQueue.Start()
@@ -1154,7 +1147,6 @@ func (r *runner) Start() {
 		r.globalCheckpointQueue.Start()
 		r.gcCheckpointQueue.Start()
 		r.dirtyEntryQueue.Start()
-		r.waitQueue.Start()
 		if err := r.stopper.RunNamedTask("dirty-collector-job", r.crontask); err != nil {
 			panic(err)
 		}
@@ -1169,7 +1161,6 @@ func (r *runner) Stop() {
 		r.globalCheckpointQueue.Stop()
 		r.gcCheckpointQueue.Stop()
 		r.postCheckpointQueue.Stop()
-		r.waitQueue.Stop()
 	})
 }
 

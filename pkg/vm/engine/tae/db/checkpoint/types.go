@@ -47,7 +47,6 @@ type Runner interface {
 	Start()
 	Stop()
 	String() string
-	EnqueueWait(any) error
 	Replay(catalog.DataFactory) *CkpReplayer
 
 	FlushTable(ctx context.Context, dbID, tableID uint64, ts types.TS) error
