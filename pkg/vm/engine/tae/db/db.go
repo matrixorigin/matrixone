@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
@@ -52,6 +53,21 @@ const (
 	DBTxnMode_Write DBTxnMode = iota
 	DBTxnMode_Replay
 )
+
+func (m DBTxnMode) String() string {
+	switch m {
+	case DBTxnMode_Write:
+		return "TxnWriteMode"
+	case DBTxnMode_Replay:
+		return "TxnReplayMode"
+	default:
+		return fmt.Sprintf("UnknownTxnMode(%d)", m)
+	}
+}
+
+func (m DBTxnMode) IsValid() bool {
+	return m == DBTxnMode_Write || m == DBTxnMode_Replay
+}
 
 type DBOption func(*DB)
 
@@ -95,6 +111,14 @@ func (db *DB) GetTxnMode() DBTxnMode {
 	return DBTxnMode(db.TxnMode.Load())
 }
 
+func (db *DB) IsReplayMode() bool {
+	return db.GetTxnMode() == DBTxnMode_Replay
+}
+
+func (db *DB) IsWriteMode() bool {
+	return db.GetTxnMode() == DBTxnMode_Write
+}
+
 func (db *DB) SwitchTxnMode(
 	ctx context.Context,
 	iarg int,
@@ -119,7 +143,8 @@ func (db *DB) FlushTable(
 func (db *DB) ForceCheckpoint(
 	ctx context.Context,
 	ts types.TS,
-	flushDuration time.Duration) (err error) {
+	flushDuration time.Duration,
+) (err error) {
 	// FIXME: cannot disable with a running job
 	db.BGCheckpointRunner.DisableCheckpoint()
 	defer db.BGCheckpointRunner.EnableCheckpoint()
@@ -129,7 +154,23 @@ func (db *DB) ForceCheckpoint(
 	}
 	t0 := time.Now()
 	err = db.BGCheckpointRunner.ForceFlush(ts, ctx, flushDuration)
-	logutil.Infof("[Force Checkpoint] flush takes %v: %v", time.Since(t0), err)
+	forceFlushCost := time.Since(t0)
+
+	defer func() {
+		logger := logutil.Info
+		if err != nil {
+			logger = logutil.Error
+		}
+		logger(
+			"Control-Force-Checkpoint",
+			zap.Error(err),
+			zap.Duration("total-cost", time.Since(t0)),
+			zap.String("ts", ts.ToString()),
+			zap.Duration("flush-duration", flushDuration),
+			zap.Duration("force-flush-cost", forceFlushCost),
+		)
+	}()
+
 	if err != nil {
 		return err
 	}
@@ -143,7 +184,8 @@ func (db *DB) ForceCheckpoint(
 	for {
 		select {
 		case <-timeout:
-			return moerr.NewInternalError(ctx, fmt.Sprintf("timeout for: %v", err))
+			err = moerr.NewInternalError(ctx, "force checkpoint timeout")
+			return
 		default:
 			err = db.BGCheckpointRunner.ForceIncrementalCheckpoint(ts, true)
 			if dbutils.IsRetrieableCheckpoint(err) {
@@ -152,8 +194,7 @@ func (db *DB) ForceCheckpoint(
 				time.Sleep(time.Duration(interval))
 				break
 			}
-			logutil.Debugf("[Force Checkpoint] takes %v", time.Since(t0))
-			return err
+			return
 		}
 	}
 }
@@ -161,21 +202,37 @@ func (db *DB) ForceCheckpoint(
 func (db *DB) ForceGlobalCheckpoint(
 	ctx context.Context,
 	ts types.TS,
-	flushDuration, versionInterval time.Duration) (err error) {
+	flushDuration, versionInterval time.Duration,
+) (err error) {
 	// FIXME: cannot disable with a running job
 	db.BGCheckpointRunner.DisableCheckpoint()
 	defer db.BGCheckpointRunner.EnableCheckpoint()
 	db.BGCheckpointRunner.CleanPenddingCheckpoint()
 	t0 := time.Now()
 	err = db.BGCheckpointRunner.ForceFlush(ts, ctx, flushDuration)
-	logutil.Infof("[Force Global Checkpoint] flush takes %v: %v", time.Since(t0), err)
+	forceFlushCost := time.Since(t0)
+	defer func() {
+		logger := logutil.Info
+		if err != nil {
+			logger = logutil.Error
+		}
+		logger(
+			"Control-ForceGlobalCheckpoint",
+			zap.Duration("total-cost", time.Since(t0)),
+			zap.Duration("force-flush-cost", forceFlushCost),
+			zap.Duration("flush-duration", flushDuration),
+			zap.Duration("version-interval", versionInterval),
+			zap.Error(err),
+		)
+	}()
+
 	if err != nil {
-		return err
+		return
 	}
-	if err = db.BGCheckpointRunner.ForceGlobalCheckpointSynchronously(ctx, ts, versionInterval); err != nil {
-		return err
-	}
-	logutil.Infof("[Force Global Checkpoint] takes %v", time.Since(t0))
+
+	err = db.BGCheckpointRunner.ForceGlobalCheckpointSynchronously(
+		ctx, ts, versionInterval,
+	)
 	return err
 }
 
@@ -190,14 +247,29 @@ func (db *DB) ForceCheckpointForBackup(
 	db.BGCheckpointRunner.CleanPenddingCheckpoint()
 	t0 := time.Now()
 	err = db.BGCheckpointRunner.ForceFlush(ts, ctx, flushDuration)
-	logutil.Infof("[Force Checkpoint] flush takes %v: %v", time.Since(t0), err)
+	forceFlushCost := time.Since(t0)
+
+	defer func() {
+		logger := logutil.Info
+		if err != nil {
+			logger = logutil.Error
+		}
+		logger(
+			"Control-ForeCheckpointForBackup",
+			zap.Duration("total-cost", time.Since(t0)),
+			zap.Duration("force-flush-cost", forceFlushCost),
+			zap.Duration("flush-duration", flushDuration),
+			zap.String("location", location),
+			zap.Error(err),
+		)
+	}()
+
 	if err != nil {
 		return
 	}
-	if location, err = db.BGCheckpointRunner.ForceCheckpointForBackup(ts); err != nil {
-		return
-	}
-	logutil.Debugf("[Force Checkpoint] takes %v", time.Since(t0))
+
+	location, err = db.BGCheckpointRunner.ForceCheckpointForBackup(ts)
+
 	return
 }
 

@@ -87,7 +87,7 @@ func (p *PartitionState) newTombstoneObjectsIter(
 	snapshot types.TS,
 	onlyVisible bool) (ObjectsIter, error) {
 
-	iter := p.tombstoneObjectDTSIndex.Copy().Iter()
+	iter := p.tombstoneObjectDTSIndex.Iter()
 	if onlyVisible {
 		pivot := ObjectEntry{
 			ObjectInfo{
@@ -99,7 +99,7 @@ func (p *PartitionState) newTombstoneObjectsIter(
 		if !iter.Prev() && p.tombstoneObjectDTSIndex.Len() > 0 {
 			// reset iter only when seeked to the first item
 			iter.Release()
-			iter = p.tombstoneObjectDTSIndex.Copy().Iter()
+			iter = p.tombstoneObjectDTSIndex.Iter()
 		}
 	}
 
@@ -115,7 +115,7 @@ func (p *PartitionState) newDataObjectIter(
 	snapshot types.TS,
 	onlyVisible bool) (ObjectsIter, error) {
 
-	iter := p.dataObjectsNameIndex.Copy().Iter()
+	iter := p.dataObjectsNameIndex.Iter()
 	ret := &objectsIter{
 		onlyVisible: onlyVisible,
 		ts:          snapshot,
@@ -165,7 +165,7 @@ func (p *PartitionState) HasTombstoneChanged(from, to types.TS) (exist bool) {
 	if p.tombstoneObjectDTSIndex.Len() == 0 {
 		return false
 	}
-	iter := p.tombstoneObjectDTSIndex.Copy().Iter()
+	iter := p.tombstoneObjectDTSIndex.Iter()
 	defer iter.Release()
 
 	// Created after from
@@ -195,7 +195,7 @@ func (p *PartitionState) GetChangedObjsBetween(
 	inserted = make(map[objectio.ObjectNameShort]struct{})
 	deleted = make(map[objectio.ObjectNameShort]struct{})
 
-	iter := p.dataObjectTSIndex.Copy().Iter()
+	iter := p.dataObjectTSIndex.Iter()
 	defer iter.Release()
 
 	for ok := iter.Seek(ObjectIndexByTSEntry{
@@ -223,7 +223,7 @@ func (p *PartitionState) GetChangedObjsBetween(
 }
 
 func (p *PartitionState) BlockPersisted(blockID *types.Blockid) bool {
-	iter := p.dataObjectsNameIndex.Copy().Iter()
+	iter := p.dataObjectsNameIndex.Iter()
 	defer iter.Release()
 
 	pivot := ObjectEntry{}
@@ -241,7 +241,7 @@ func (p *PartitionState) CollectObjectsBetween(
 	start, end types.TS,
 ) (insertList, deletedList []objectio.ObjectStats) {
 
-	iter := p.dataObjectTSIndex.Copy().Iter()
+	iter := p.dataObjectTSIndex.Iter()
 	defer iter.Release()
 
 	if !iter.Seek(ObjectIndexByTSEntry{
@@ -250,7 +250,7 @@ func (p *PartitionState) CollectObjectsBetween(
 		return
 	}
 
-	nameIdx := p.dataObjectsNameIndex.Copy()
+	nameIdx := p.dataObjectsNameIndex
 
 	for ok := true; ok; ok = iter.Next() {
 		entry := iter.Item()
@@ -303,9 +303,9 @@ func (p *PartitionState) CheckIfObjectDeletedBeforeTS(
 
 	var tree *btree.BTreeG[ObjectEntry]
 	if isTombstone {
-		tree = p.tombstoneObjectsNameIndex.Copy()
+		tree = p.tombstoneObjectsNameIndex
 	} else {
-		tree = p.dataObjectsNameIndex.Copy()
+		tree = p.dataObjectsNameIndex
 	}
 
 	var stats objectio.ObjectStats
@@ -324,7 +324,7 @@ func (p *PartitionState) CheckIfObjectDeletedBeforeTS(
 }
 
 func (p *PartitionState) GetObject(name objectio.ObjectNameShort) (ObjectInfo, bool) {
-	iter := p.dataObjectsNameIndex.Copy().Iter()
+	iter := p.dataObjectsNameIndex.Iter()
 	defer iter.Release()
 
 	pivot := ObjectEntry{}

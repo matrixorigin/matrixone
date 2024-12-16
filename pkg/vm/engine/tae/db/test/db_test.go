@@ -10526,14 +10526,23 @@ func Test_BasicTxnModeSwitch(t *testing.T) {
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 
-	assert.Equal(t, db.DBTxnMode_Write, tae.GetTxnMode())
+	assert.True(t, tae.IsWriteMode())
 	err := tae.SwitchTxnMode(ctx, 1, "todo")
 	assert.NoError(t, err)
-	assert.Equal(t, db.DBTxnMode_Replay, tae.GetTxnMode())
-	assert.True(t, tae.TxnMgr.IsRelayMode())
+	assert.True(t, tae.IsReplayMode())
+	assert.True(t, tae.TxnMgr.IsReplayMode())
 
 	err = tae.SwitchTxnMode(ctx, 2, "todo")
 	assert.NoError(t, err)
-	assert.Equal(t, db.DBTxnMode_Write, tae.GetTxnMode())
+	assert.True(t, tae.IsWriteMode())
 	assert.True(t, tae.TxnMgr.IsWriteMode())
+}
+
+func Test_OpenReplayDB1(t *testing.T) {
+	ctx := context.Background()
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewReplayTestEngine(ctx, ModuleName, t, opts)
+	assert.True(t, tae.IsReplayMode())
+	assert.True(t, tae.TxnMgr.IsReplayMode())
+	defer tae.Close()
 }
