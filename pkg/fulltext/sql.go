@@ -295,9 +295,12 @@ func SqlBoolean(ps []*Pattern, mode int64, idxtbl string) (string, error) {
 		}
 	}
 
-	ret := "WITH "
-	ret += strings.Join(subsql, ", ")
-	ret += " "
+	ret := ""
+	if len(subsql) > 0 {
+		ret = "WITH "
+		ret += strings.Join(subsql, ", ")
+		ret += " "
+	}
 	ret += strings.Join(union, " UNION ALL ")
 
 	return ret, nil
@@ -321,7 +324,7 @@ func SqlPhrase(ps []*Pattern, mode int64, idxtbl string) (string, error) {
 				return "", moerr.NewInternalErrorNoCtx("wildcard search without character *")
 			}
 			prefix := kw[0 : len(kw)-1]
-			sql = fmt.Sprintf("SELECT doc_id, CAST(%d as int) FROM %s WHERE prefix_eq(word,'%s'))",
+			sql = fmt.Sprintf("SELECT doc_id, CAST(%d as int) FROM %s WHERE prefix_eq(word,'%s')",
 				tp.Index, idxtbl, prefix)
 
 		}
