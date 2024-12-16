@@ -204,6 +204,7 @@ const (
 	STARTSWITH
 	STDDEV_POP
 	STDDEV_SAMPLE
+	STRCMP
 	SUBSTR
 	SUM
 	SYSDATE
@@ -561,6 +562,7 @@ var functionIdRegister = map[string]int32{
 	"sin":                            SIN,
 	"sinh":                           SINH,
 	"space":                          SPACE,
+	"strcmp":                         STRCMP,
 	"tan":                            TAN,
 	"week":                           WEEK,
 	"weekday":                        WEEKDAY,
