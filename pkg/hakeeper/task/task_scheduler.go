@@ -73,6 +73,9 @@ func (s *scheduler) Schedule(cnState logservice.CNState, currentTick uint64) {
 		zap.Int("created", len(createdTasks)),
 		zap.Int("expired", len(expiredTasks)))
 	s.allocateTasks(createdTasks, workingCNPool)
+	for _, t := range expiredTasks {
+		s.markCompleted(s.service, t)
+	}
 	s.allocateTasks(expiredTasks, workingCNPool)
 
 	s.truncateTasks()
@@ -168,6 +171,23 @@ func allocateTask(
 		zap.String("task-metadata-id", t.Metadata.ID),
 		zap.String("task-runner", runner.uuid))
 	heap.Push(cnPool, runner)
+}
+
+func (s *scheduler) markCompleted(service string, t task.AsyncTask) {
+	ts := s.taskServiceGetter()
+	ctx, cancel := context.WithTimeoutCause(context.Background(), taskSchedulerDefaultTimeout, moerr.CauseAllocateTasks)
+	defer cancel()
+	err := ts.Complete(ctx, t.TaskRunner, t, task.ExecuteResult{
+		Code:  task.ResultCode_Failed,
+		Error: "heartbeat expired",
+	})
+	if err != nil {
+		runtime.ServiceRuntime(service).Logger().Error("failed to complete expired task",
+			zap.Uint64("task-id", t.ID),
+			zap.String("task-metadata-id", t.Metadata.ID),
+			zap.String("task-runner", t.TaskRunner),
+			zap.Error(err))
+	}
 }
 
 func (s *scheduler) truncateTasks() {
