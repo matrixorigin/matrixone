@@ -123,20 +123,14 @@ select @@lower_case_table_names;
 @@lower_case_table_names
 0
 drop database if exists test02;
-
 create database test02;
-
 use test02;
-
 drop table if exists Departments;
-
 drop table if exists Employees;
-
 create table Departments (
 DepartmentID INT PRIMARY KEY,
 DepartmentName VARCHAR(255) NOT NULL
 );
-
 create table Employees (
 EmployeeID INT PRIMARY KEY,
 FirstName VARCHAR(255) NOT NULL,
@@ -144,23 +138,19 @@ LastName VARCHAR(255) NOT NULL,
 DepartmentID INT,
 foreign key (DepartmentID) REFERENCES Departments(DepartmentID)
 );
-
 insert into Departments (DepartmentID, DepartmentName) values
 (1, 'Human Resources'),
 (2, 'Engineering'),
 (3, 'Marketing'),
 (4, 'Sales'),
 (5, 'Finance');
-
 insert into Employees (EmployeeID, FirstName, LastName, DepartmentID) values
 (101, 'John', 'Doe', 1),
 (102, 'Jane', 'Smith', 2),
 (103, 'Alice', 'Johnson', 3),
 (104, 'Mark', 'Patterson', 4),
 (105, 'David', 'Finley', 5);
-
 drop view if exists EmployeeDepartmentView;
-
 create view EmployeeDepartmentView as
 select
 e.FirstName,
@@ -170,7 +160,6 @@ from
 Employees e
 inner join
 Departments d ON e.DepartmentID = d.DepartmentID;
-
 select * from EmployeeDepartmentView;
 firstname    lastname    departmentname
 John    Doe    Human Resources
@@ -179,34 +168,43 @@ Alice    Johnson    Marketing
 Mark    Patterson    Sales
 David    Finley    Finance
 drop snapshot if exists sp02_restore_lower;
-
 create snapshot sp02_restore_lower for account acc01;
-
 select @@lower_case_table_names;
 @@lower_case_table_names
 0
 drop database test02;
-
 restore account acc01 from snapshot sp02_restore_lower;
-SQL parser error: table "employees" does not exist
 use test02;
-Unknown database test02
 show tables;
-No database selected
-show create table Employees;
-No database selected
+Tables_in_test02
+Departments
+EmployeeDepartmentView
+Employees
 show create table EmployeeDepartmentView;
-No database selected
+View    Create View    character_set_client    collation_connection
+EmployeeDepartmentView    create view EmployeeDepartmentView as\nselect\ne.FirstName,\ne.LastName,\nd.DepartmentName\nfrom\nEmployees e\ninner join\nDepartments d ON e.DepartmentID = d.DepartmentID;    utf8mb4    utf8mb4_general_ci
 restore account acc01 from snapshot sp02_restore_lower to account acc04;
-SQL parser error: table "employees" does not exist
 use test02;
-Unknown database test02
 show tables;
-No database selected
-show create table Employees;
-No database selected
+Tables_in_test02
+Departments
+EmployeeDepartmentView
+Employees
 show create table EmployeeDepartmentView;
-No database selected
+no such table test02.employeedepartmentview
+set global lower_case_table_names = 0;
+select @@lower_case_table_names;
+@@lower_case_table_names
+0
+use test02;
+show tables;
+Tables_in_test02
+Departments
+EmployeeDepartmentView
+Employees
+show create table EmployeeDepartmentView;
+View    Create View    character_set_client    collation_connection
+EmployeeDepartmentView    create view EmployeeDepartmentView as\nselect\ne.FirstName,\ne.LastName,\nd.DepartmentName\nfrom\nEmployees e\ninner join\nDepartments d ON e.DepartmentID = d.DepartmentID;    utf8mb4    utf8mb4_general_ci
 drop account if exists acc01;
 drop account if exists acc02;
 drop account if exists acc04;
