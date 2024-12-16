@@ -157,6 +157,14 @@ func (db *DB) FlushTable(
 	return
 }
 
+func (db *DB) ForceFlush(
+	ts types.TS, ctx context.Context, forceDuration time.Duration,
+) (err error) {
+	return db.BGFlusher.ForceFlush(
+		ts, ctx, forceDuration,
+	)
+}
+
 func (db *DB) ForceCheckpoint(
 	ctx context.Context,
 	ts types.TS,

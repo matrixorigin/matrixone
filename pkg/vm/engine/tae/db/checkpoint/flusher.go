@@ -181,11 +181,16 @@ func (flusher *flusher) fillDefaults() {
 	if flusher.cronPeriod <= 0 {
 		flusher.cronPeriod = time.Second * 5
 	}
-	if flusher.mutableCfg.Load().ForceFlushTimeout <= 0 {
-		flusher.mutableCfg.Load().ForceFlushTimeout = time.Second * 90
+	cfg := flusher.mutableCfg.Load()
+	if cfg == nil {
+		cfg = new(FlushMutableCfg)
+		flusher.mutableCfg.Store(cfg)
 	}
-	if flusher.mutableCfg.Load().ForceFlushCheckInterval <= 0 {
-		flusher.mutableCfg.Load().ForceFlushCheckInterval = time.Millisecond * 500
+	if cfg.ForceFlushTimeout <= 0 {
+		cfg.ForceFlushTimeout = time.Second * 90
+	}
+	if cfg.ForceFlushCheckInterval <= 0 {
+		cfg.ForceFlushCheckInterval = time.Millisecond * 500
 	}
 	if flusher.flushInterval <= 0 {
 		flusher.flushInterval = time.Minute
