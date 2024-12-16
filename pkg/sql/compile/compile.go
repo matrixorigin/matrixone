@@ -3987,7 +3987,7 @@ func (c *Compile) expandRanges(
 	blockFilterList []*plan.Expr, policy engine.DataCollectPolicy, rsp *engine.RangesShuffleParam) (engine.RelData, error) {
 
 	preAllocBlocks := 2
-	if policy&engine.Policy_CollectCommittedData != 0 {
+	if policy&engine.Policy_CollectCommittedPersistedData != 0 {
 		if !c.IsTpQuery() {
 			if len(blockFilterList) > 0 {
 				preAllocBlocks = 64
@@ -4016,7 +4016,8 @@ func (c *Compile) expandRanges(
 
 	if n.TableDef.Partition != nil {
 		begin := 0
-		if policy&engine.Policy_CollectUncommittedData != 0 {
+		if policy&engine.Policy_CollectCommittedInmemData != 0 ||
+			policy&engine.Policy_CollectUncommittedInmemData != 0 {
 			begin = 1 //skip empty block info
 		}
 		rangesParam.PreAllocBlocks = 2
@@ -4193,7 +4194,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 			CNIDX: int32(i),
 		}
 		if node.Addr != c.addr {
-			uncommittedTombs, err := collectTombstones(c, n, rel, engine.Policy_CollectUncommittedTombstones)
+			uncommittedTombs, err := collectTombstones(c, n, rel, engine.Policy_CollectAllTombstones)
 			if err != nil {
 				return nil, err
 			}

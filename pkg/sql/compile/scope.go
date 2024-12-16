@@ -640,7 +640,7 @@ func (s *Scope) handleBlockList(c *Compile, runtimeInExprList []*plan.Expr) erro
 		rsp.IsLocalCN = true
 	}
 
-	commited, err = c.expandRanges(s.DataSource.node, rel, db, ctx, newExprList, engine.Policy_CollectCommittedData, rsp)
+	commited, err = c.expandRanges(s.DataSource.node, rel, db, ctx, newExprList, engine.Policy_CollectCommittedPersistedData, rsp)
 	if err != nil {
 		return err
 	}

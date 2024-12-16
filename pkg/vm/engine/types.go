@@ -587,9 +587,13 @@ const (
 type DataCollectPolicy uint64
 
 const (
-	Policy_CollectCommittedData = 1 << iota
-	Policy_CollectUncommittedData
-	Policy_CollectAllData = Policy_CollectCommittedData | Policy_CollectUncommittedData
+	Policy_CollectCommittedInmemData = 1 << iota
+	Policy_CollectUncommittedInmemData
+	Policy_CollectCommittedPersistedData
+	Policy_CollectUncommittedPersistedData
+	Policy_CollectCommittedData   = Policy_CollectCommittedInmemData | Policy_CollectCommittedPersistedData
+	Policy_CollectUncommittedData = Policy_CollectUncommittedInmemData | Policy_CollectUncommittedPersistedData
+	Policy_CollectAllData         = Policy_CollectCommittedData | Policy_CollectUncommittedData
 )
 
 type TombstoneCollectPolicy uint64
