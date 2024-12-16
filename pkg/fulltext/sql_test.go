@@ -15,7 +15,6 @@
 package fulltext
 
 import (
-	"fmt"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -27,23 +26,23 @@ func TestSqlPhrase(t *testing.T) {
 	tests := []TestCase{
 		{
 			pattern: "\"Matrix Origin\"",
-			expect:  "(phrase (text 0 0 matrix) (text 1 7 origin))",
+			expect:  "WITH kw0 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = 'matrix'), kw1 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = 'origin') SELECT kw0.doc_id, CAST(0 as int) FROM kw0, kw1 WHERE kw0.doc_id = kw1.doc_id AND kw1.pos - kw0.pos = 7",
 		},
 		{
 			pattern: "\"Matrix\"",
-			expect:  "(phrase (text 0 0 matrix))",
+			expect:  "SELECT doc_id, CAST(0 as int) FROM `__mo_index_secondary_` WHERE word = 'matrix'",
 		},
 		{
 			pattern: "\"    Matrix     \"",
-			expect:  "(phrase (text 0 0 matrix))",
+			expect:  "SELECT doc_id, CAST(0 as int) FROM `__mo_index_secondary_` WHERE word = 'matrix'",
 		},
 		{
 			pattern: "\"Matrix     Origin\"",
-			expect:  "(phrase (text 0 0 matrix) (text 1 11 origin))",
+			expect:  "WITH kw0 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = 'matrix'), kw1 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = 'origin') SELECT kw0.doc_id, CAST(0 as int) FROM kw0, kw1 WHERE kw0.doc_id = kw1.doc_id AND kw1.pos - kw0.pos = 11",
 		},
 		{
 			pattern: "\"  你好嗎? Hello World  在一起  Happy  再见  \"",
-			expect:  "(phrase (text 0 0 你好嗎?) (text 1 11 hello) (text 2 17 world) (text 3 24 在一起) (text 4 35 happy) (text 5 42 再见))",
+			expect:  "WITH kw0 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = '你好嗎?'), kw1 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = 'hello'), kw2 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = 'world'), kw3 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = '在一起'), kw4 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = 'happy'), kw5 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = '再见') SELECT kw0.doc_id, CAST(0 as int) FROM kw0, kw1, kw2, kw3, kw4, kw5 WHERE kw0.doc_id = kw1.doc_id AND kw1.pos - kw0.pos = 11 AND kw0.doc_id = kw2.doc_id AND kw2.pos - kw0.pos = 17 AND kw0.doc_id = kw3.doc_id AND kw3.pos - kw0.pos = 24 AND kw0.doc_id = kw4.doc_id AND kw4.pos - kw0.pos = 35 AND kw0.doc_id = kw5.doc_id AND kw5.pos - kw0.pos = 42",
 		},
 	}
 
@@ -52,7 +51,7 @@ func TestSqlPhrase(t *testing.T) {
 		require.Nil(t, err)
 		result, err := PatternToSql(s.Pattern, int64(tree.FULLTEXT_BOOLEAN), "`__mo_index_secondary_`")
 		require.Nil(t, err)
-		fmt.Println(result)
+		//fmt.Println(result)
 		assert.Equal(t, c.expect, result)
 	}
 }
@@ -62,43 +61,43 @@ func TestSqlBoolean(t *testing.T) {
 	tests := []TestCase{
 		{
 			pattern: "Matrix Origin",
-			expect:  "(text 0 matrix) (text 1 origin)",
+			expect:  "SELECT doc_id, CAST(0 as int) FROM `__mo_index_secondary_` WHERE word = 'matrix' UNION ALL SELECT doc_id, CAST(1 as int) FROM `__mo_index_secondary_` WHERE word = 'origin'",
 		},
 		{
 			pattern: "+Matrix Origin",
-			expect:  "(+ (text 0 matrix)) (text 1 origin)",
+			expect:  "WITH t0 AS (SELECT doc_id FROM `__mo_index_secondary_` WHERE word = 'matrix') SELECT t0.doc_id, CAST(0 as int) FROM t0 UNION ALL SELECT t0.doc_id, CAST(1 as int) FROM `__mo_index_secondary_` as t1, t0 WHERE t0.doc_id = t1.doc_id AND t1.word = 'origin'",
 		},
 		{
 			pattern: "+Matrix -Origin",
-			expect:  "(+ (text 0 matrix)) (- (text 1 origin))",
+			expect:  "WITH t0 AS (SELECT doc_id FROM `__mo_index_secondary_` WHERE word = 'matrix') SELECT t0.doc_id, CAST(0 as int) FROM t0 UNION ALL SELECT t0.doc_id, CAST(1 as int) FROM `__mo_index_secondary_` as t1, t0 WHERE t0.doc_id = t1.doc_id AND t1.word = 'origin'",
 		},
 		{
 			pattern: "Matrix ~Origin",
-			expect:  "(text 0 matrix) (~ (text 1 origin))",
+			expect:  "SELECT doc_id, CAST(0 as int) FROM `__mo_index_secondary_` WHERE word = 'matrix' UNION ALL SELECT doc_id, CAST(1 as int) FROM `__mo_index_secondary_` WHERE word = 'origin'",
 		},
 		{
 			pattern: "Matrix +(<Origin >One)",
-			expect:  "(+ (group (< (text 0 origin)) (> (text 1 one)))) (text 2 matrix)",
+			expect:  "WITH t0 AS (SELECT doc_id FROM `__mo_index_secondary_` WHERE word = 'origin'), t1 AS (SELECT doc_id FROM `__mo_index_secondary_` WHERE word = 'one') SELECT t0.doc_id, CAST(0 as int) FROM t0 UNION ALL SELECT t1.doc_id, CAST(1 as int) FROM t1 UNION ALL SELECT t0.doc_id, CAST(2 as int) FROM `__mo_index_secondary_` as t2, t0 WHERE t0.doc_id = t2.doc_id AND t2.word = 'matrix' UNION ALL SELECT t1.doc_id, CAST(2 as int) FROM `__mo_index_secondary_` as t2, t1 WHERE t1.doc_id = t2.doc_id AND t2.word = 'matrix'",
 		},
 		{
 			pattern: "+Matrix +Origin",
-			expect:  "(join 0 (+ (text 0 matrix)) (+ (text 0 origin)))",
+			expect:  "WITH t00 AS (SELECT doc_id FROM `__mo_index_secondary_` WHERE word = 'matrix'), t01 AS (SELECT doc_id FROM `__mo_index_secondary_` WHERE word = 'origin'), t0 AS (SELECT t00.doc_id FROM t00, t01 WHERE t00.doc_id = t01.doc_id) SELECT t0.doc_id, CAST(0 as int) FROM t0",
 		},
 		{
 			pattern: "\"Matrix origin\"",
-			expect:  "(phrase (text 0 matrix) (text 1 origin))",
+			expect:  "WITH kw0 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = 'matrix'), kw1 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = 'origin') SELECT kw0.doc_id, CAST(0 as int) FROM kw0, kw1 WHERE kw0.doc_id = kw1.doc_id AND kw1.pos - kw0.pos = 7",
 		},
 		{
 			pattern: "Matrix Origin*",
-			expect:  "(text 0 matrix) (* 1 origin*)",
+			expect:  "SELECT doc_id, CAST(0 as int) FROM `__mo_index_secondary_` WHERE word = 'matrix' UNION ALL SELECT doc_id, CAST(1 as int) FROM `__mo_index_secondary_` WHERE prefix_eq(word,'origin')",
 		},
 		{
 			pattern: "+Matrix +(Origin (One Two))",
-			expect:  "(+ (text 0 matrix)) (+ (group (text 1 origin) (group (text 2 one) (text 3 two))))",
+			expect:  "WITH t0 AS (SELECT doc_id FROM `__mo_index_secondary_` WHERE word = 'matrix') SELECT t0.doc_id, CAST(0 as int) FROM t0 UNION ALL SELECT t0.doc_id, CAST(1 as int) FROM `__mo_index_secondary_` as t1, t0 WHERE t0.doc_id = t1.doc_id AND t1.word = 'origin' UNION ALL SELECT t0.doc_id, CAST(2 as int) FROM `__mo_index_secondary_` as t2, t0 WHERE t0.doc_id = t2.doc_id AND t2.word = 'one' UNION ALL SELECT t0.doc_id, CAST(3 as int) FROM `__mo_index_secondary_` as t3, t0 WHERE t0.doc_id = t3.doc_id AND t3.word = 'two'",
 		},
 		{
 			pattern: "+读写汉字 -学中文",
-			expect:  "(+ (text 0 读写汉字)) (- (text 1 学中文))",
+			expect:  "WITH t0 AS (SELECT doc_id FROM `__mo_index_secondary_` WHERE word = '读写汉字') SELECT t0.doc_id, CAST(0 as int) FROM t0 UNION ALL SELECT t0.doc_id, CAST(1 as int) FROM `__mo_index_secondary_` as t1, t0 WHERE t0.doc_id = t1.doc_id AND t1.word = '学中文'",
 		},
 	}
 
@@ -106,9 +105,9 @@ func TestSqlBoolean(t *testing.T) {
 		s, err := NewSearchAccum("src", "index", c.pattern, int64(tree.FULLTEXT_BOOLEAN), "")
 		require.Nil(t, err)
 		result, err := PatternToSql(s.Pattern, int64(tree.FULLTEXT_BOOLEAN), "`__mo_index_secondary_`")
-		fmt.Println(PatternListToStringWithPosition(s.Pattern))
+		//fmt.Println(PatternListToStringWithPosition(s.Pattern))
 		require.Nil(t, err)
-		fmt.Println(result)
+		//fmt.Println(result)
 		assert.Equal(t, c.expect, result)
 	}
 }
@@ -118,15 +117,15 @@ func TestSqlNL(t *testing.T) {
 	tests := []TestCase{
 		{
 			pattern: "Matrix Origin",
-			expect:  "(text 0 matrix) (text 1 origin)",
+			expect:  "WITH kw0 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = 'matrix'), kw1 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = 'origin') SELECT kw0.doc_id, CAST(0 as int) FROM kw0, kw1 WHERE kw0.doc_id = kw1.doc_id AND kw1.pos - kw0.pos = 7",
 		},
 		{
 			pattern: "读写汉字 学中文",
-			expect:  "(text 0 读写汉) (text 1 写汉字) (text 2 汉字) (text 3 字) (text 4 学中文) (text 5 中文) (text 6 文)",
+			expect:  "WITH kw0 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = '读写汉'), kw1 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = '写汉字'), kw2 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE prefix_eq(word,'汉字')), kw3 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE prefix_eq(word,'字')), kw4 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = '学中文'), kw5 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE prefix_eq(word,'中文')), kw6 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE prefix_eq(word,'文')) SELECT kw0.doc_id, CAST(0 as int) FROM kw0, kw1, kw2, kw3, kw4, kw5, kw6 WHERE kw0.doc_id = kw1.doc_id AND kw1.pos - kw0.pos = 3 AND kw0.doc_id = kw2.doc_id AND kw2.pos - kw0.pos = 6 AND kw0.doc_id = kw3.doc_id AND kw3.pos - kw0.pos = 9 AND kw0.doc_id = kw4.doc_id AND kw4.pos - kw0.pos = 13 AND kw0.doc_id = kw5.doc_id AND kw5.pos - kw0.pos = 16 AND kw0.doc_id = kw6.doc_id AND kw6.pos - kw0.pos = 19",
 		},
 		{
 			pattern: "读写",
-			expect:  "(* 0 读写*)",
+			expect:  "SELECT doc_id, CAST(0 as int) FROM `__mo_index_secondary_` WHERE prefix_eq(word,'读写')",
 		},
 	}
 
@@ -135,7 +134,7 @@ func TestSqlNL(t *testing.T) {
 		require.Nil(t, err)
 		result, err := PatternToSql(s.Pattern, int64(tree.FULLTEXT_NL), "`__mo_index_secondary_`")
 		require.Nil(t, err)
-		fmt.Println(result)
+		//fmt.Println(result)
 		assert.Equal(t, c.expect, result)
 	}
 }
