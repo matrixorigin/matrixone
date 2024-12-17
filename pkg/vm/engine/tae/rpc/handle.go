@@ -524,7 +524,7 @@ func (h *Handle) HandleGetLogTail(
 	resp *api.SyncLogTailResp) (closeCB func(), err error) {
 	res, closeCB, err := logtail.HandleSyncLogTailReq(
 		ctx,
-		h.db.BGCheckpointRunner,
+		h.db,
 		h.db.LogtailMgr,
 		h.db.Catalog,
 		*req,
