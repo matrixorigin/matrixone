@@ -385,10 +385,6 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 	}
 
 	tblName := qry.GetTableDef().GetName()
-
-	if err := lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
-		return err
-	}
 	dbSource, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
 		return moerr.NewBadDB(c.proc.Ctx, dbName)
@@ -409,13 +405,22 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 
 	if c.proc.GetTxnOperator().Txn().IsPessimistic() {
 		var retryErr error
+		// 0. lock origin database metadata in catalog
+		if err = lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
+			if !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
+				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
+				return err
+			}
+			retryErr = moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
+		}
+
 		// 1. lock origin table metadata in catalog
 		if err = lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
 			if !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
 				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
 				return err
 			}
-			retryErr = err
+			retryErr = moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
 		}
 
 		// 2. lock origin table
@@ -428,8 +433,28 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
 				return err
 			}
-			retryErr = err
+			retryErr = moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
 		}
+
+		if qry.TableDef.Indexes != nil {
+			for _, indexdef := range qry.TableDef.Indexes {
+				if indexdef.TableExist {
+					if err = lockIndexTable(c.proc.Ctx, dbSource, c.e, c.proc, indexdef.IndexTableName, true); err != nil {
+						if !moerr.IsMoErrCode(err, moerr.ErrParseError) {
+							c.proc.Error(c.proc.Ctx, "lock index table for alter table",
+								zap.String("databaseName", c.db),
+								zap.String("origin tableName", qry.GetTableDef().Name),
+								zap.String("index name", indexdef.IndexName),
+								zap.String("index tableName", indexdef.IndexTableName),
+								zap.Error(err))
+							return err
+						}
+						retryErr = moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
+					}
+				}
+			}
+		}
+
 		if retryErr != nil {
 			return retryErr
 		}

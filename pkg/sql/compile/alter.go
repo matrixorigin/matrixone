@@ -21,7 +21,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -36,10 +35,6 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 		dbName = c.db
 	}
 	tblName := qry.GetTableDef().GetName()
-
-	if err := lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
-		return err
-	}
 	dbSource, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
 		return moerr.NewBadDB(c.proc.Ctx, dbName)
@@ -52,13 +47,22 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 
 	if c.proc.GetTxnOperator().Txn().IsPessimistic() {
 		var retryErr error
+		// 0. lock origin database metadata in catalog
+		if err = lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
+			if !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
+				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
+				return err
+			}
+			retryErr = moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
+		}
+
 		// 1. lock origin table metadata in catalog
 		if err = lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
 			if !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
 				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
 				return err
 			}
-			retryErr = err
+			retryErr = moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
 		}
 
 		// 2. lock origin table
@@ -76,29 +80,23 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 					zap.Error(err))
 				return err
 			}
-			retryErr = err
-		}
-
-		accountId, err2 := defines.GetAccountId(c.proc.Ctx)
-		if err2 != nil {
-			c.proc.Error(c.proc.Ctx, "get accoutId for alter table",
-				zap.String("databaseName", c.db),
-				zap.String("origin tableName", qry.GetTableDef().Name),
-				zap.Error(err2))
+			retryErr = moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
 		}
 
 		if qry.TableDef.Indexes != nil {
 			for _, indexdef := range qry.TableDef.Indexes {
 				if indexdef.TableExist {
 					if err = lockIndexTable(c.proc.Ctx, dbSource, c.e, c.proc, indexdef.IndexTableName, true); err != nil {
-						c.proc.Error(c.proc.Ctx, "lock index table for alter table",
-							zap.Uint32("accountId:", accountId),
-							zap.String("databaseName", c.db),
-							zap.String("origin tableName", qry.GetTableDef().Name),
-							zap.String("index name", indexdef.IndexName),
-							zap.String("index tableName", indexdef.IndexTableName),
-							zap.Error(err))
-						return err
+						if !moerr.IsMoErrCode(err, moerr.ErrParseError) {
+							c.proc.Error(c.proc.Ctx, "lock index table for alter table",
+								zap.String("databaseName", c.db),
+								zap.String("origin tableName", qry.GetTableDef().Name),
+								zap.String("index name", indexdef.IndexName),
+								zap.String("index tableName", indexdef.IndexTableName),
+								zap.Error(err))
+							return err
+						}
+						retryErr = moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
 					}
 				}
 			}
@@ -172,6 +170,11 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 						zap.Error(err))
 					return err
 				}
+				c.proc.Info(c.proc.Ctx, "delete index table of origin table for alter table",
+					zap.String("databaseName", c.db),
+					zap.String("origin tableName", qry.GetTableDef().Name),
+					zap.String("index name", indexdef.IndexName),
+					zap.String("origin tableName index table", indexdef.IndexTableName))
 			}
 		}
 	}
@@ -297,7 +300,7 @@ func (s *Scope) AlterTable(c *Compile) (err error) {
 		err = s.AlterTableInplace(c)
 	}
 	if err != nil {
-		return err // add log
+		return err
 	}
 
 	if !plan2.IsFkBannedDatabase(qry.Database) {

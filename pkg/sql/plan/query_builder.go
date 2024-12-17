@@ -18,14 +18,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"runtime/debug"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
-	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -4140,16 +4138,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 
 		// TODO
 		obj, tableDef := builder.compCtx.Resolve(schema, table, snapshot)
-		//if strings.HasPrefix(table, "__mo_index_secondary_") {
-		//	fmt.Println("------------------wuxiliang2-query_builder.go-------------------")
-		//}
 		if tableDef == nil {
-			if strings.HasPrefix(table, "__mo_index_secondary_") {
-				stackInfo := debug.Stack()
-				logutil.Error(moerr.NewParseErrorf(builder.GetContext(), "table %q does not exist wuxiliang2-query_builder.go", table).Error(),
-					zap.String("Detailed Stack Trace", string(stackInfo)),
-				)
-			}
 			return 0, moerr.NewParseErrorf(builder.GetContext(), "table %q does not exist", table)
 		}
 
