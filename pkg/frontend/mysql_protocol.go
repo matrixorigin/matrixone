@@ -35,6 +35,7 @@ import (
 	"golang.org/x/exp/slices"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	util2 "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -1215,7 +1216,7 @@ func (mp *MysqlProtocolImpl) writeStringFix(data []byte, pos int, value string, 
 // append a string with fixed length to the buffer
 // return the buffer
 func (mp *MysqlProtocolImpl) appendStringFix(value string, length int) error {
-	err := mp.append([]byte(value[:length])...)
+	err := mp.append(util2.UnsafeStringToBytes(value[:length])...)
 	if err != nil {
 		return err
 	}
