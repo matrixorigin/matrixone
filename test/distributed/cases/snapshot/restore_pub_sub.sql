@@ -6,6 +6,8 @@ drop account if exists acc02;
 create account acc02 admin_name = 'test_account' identified by '111';
 drop account if exists acc03;
 create account acc03 admin_name = 'test_account' identified by '111';
+drop account if exists acc04;
+create account acc04 admin_name = 'test_account' identified by '111';
 
 -- restore a subscription db does not restore the data of the subscription data, only restore the
 -- subscription relationship, because the original data is in the publishing account
@@ -527,9 +529,60 @@ select * from src;
 
 drop database pub_fulltext_table;
 drop snapshot sp_pub01;
+drop publication pub_full01;
+
+
+
+
+-- restore sub table which has been deleted
+drop database if exists restore_fulltext_table;
+create database restore_fulltext_table;
+use restore_fulltext_table;
+drop table if exists src2;
+create table src2 (id1 varchar, id2 bigint, body char(128), title text, primary key (id1, id2));
+insert into src2 values ('id0', 0, 'red', 't1'), ('id1', 1, 'yellow', 't2'), ('id2', 2, 'blue', 't3'), ('id3', 3, 'blue red', 't4');
+create fulltext index ftidx2 on src2 (body, title);
+drop publication if exists pub_full02;
+create publication pub_full02 database restore_fulltext_table account acc01;
+
+-- @session:id=1&user=acc01:test_account&password=111
+drop database if exists fulltext_sub02;
+create database fulltext_sub02 from sys publication pub_full02;
+-- @ignore:5,7
+show subscriptions;
+-- @session
+
+drop snapshot if exists sp_full02;
+create snapshot sp_full02 for account acc01;
+drop publication pub_full02;
+
+-- @session:id=1&user=acc01:test_account&password=111
+drop database fulltext_sub02;
+-- @ignore:5,7
+show subscriptions;
+-- @session
+
+restore account acc01 from snapshot sp_full02;
+
+-- @session:id=1&user=acc01:test_account&password=111
+show databases;
+-- @ignore:5,7
+show subscriptions;
+-- @session
+
+restore account acc01 from snapshot sp_full02 to account acc04;
+
+-- @session:id=4&user=acc04:test_account&password=111
+show databases;
+-- @ignore:5,7
+show subscriptions;
+-- @session
+
+drop snapshot sp_full02;
 drop account acc01;
 drop account acc02;
 drop account acc03;
+drop account acc04;
 -- @ignore:1
 show snapshots;
 -- @ignore:5,6
