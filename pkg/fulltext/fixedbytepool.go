@@ -8,10 +8,10 @@ import (
 	"sort"
 	"sync"
 	"time"
-	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 )
 
 /*
@@ -151,7 +151,7 @@ func (part *Partition) NewItem() (addr uint64, b []byte, err error) {
 		return 0, nil, moerr.NewInternalError(part.cxt, "NewItem: partition is spillled")
 	}
 
-	b = unsafe.Slice(&part.data[part.cpos], part.dsize)
+	b = util.UnsafeToBytesWithLength(&part.data[part.cpos], int(part.dsize))
 	addr = GetPartitionAddr(part.id, part.cpos)
 	part.cpos += part.dsize
 	part.used += part.dsize
@@ -174,7 +174,7 @@ func (part *Partition) GetItem(offset uint64) ([]byte, error) {
 		return nil, moerr.NewInternalError(part.cxt, "GetItem: offset out of bound")
 	}
 
-	return unsafe.Slice(&part.data[offset], part.dsize), nil
+	return util.UnsafeToBytesWithLength(&part.data[offset], int(part.dsize)), nil
 }
 
 // FreeItem simply reduce reference count by one and free the data when refcnt == 0

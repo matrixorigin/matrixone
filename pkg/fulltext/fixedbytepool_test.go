@@ -16,7 +16,6 @@ package fulltext
 
 import (
 	"context"
-	"fmt"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -35,33 +34,37 @@ func TestPool(t *testing.T) {
 		require.Nil(t, err)
 
 		addrs[i] = addr
-		id := GetPartitionId(addr)
-		offset := GetPartitionOffset(addr)
 
 		for j := range data {
 			data[j] = byte(i)
 		}
-		fmt.Printf("ID %d, offset %d, data = %v\n", id, offset, data)
+		//id := GetPartitionId(addr)
+		//offset := GetPartitionOffset(addr)
+		//fmt.Printf("ID %d, offset %d, data = %v\n", id, offset, data)
 	}
 
-	for _, addr := range addrs {
+	for i, addr := range addrs {
 		data, err := mp.GetItem(addr)
 		require.Nil(t, err)
-		id := GetPartitionId(addr)
-		offset := GetPartitionOffset(addr)
-		fmt.Printf("ID %d, offset %d, data = %v\n", id, offset, data)
+		//id := GetPartitionId(addr)
+		//offset := GetPartitionOffset(addr)
+		//fmt.Printf("ID %d, offset %d, data = %v\n", id, offset, data)
 
-		for i := range data {
-			data[i] = 111
+		for j := range data {
+			require.Equal(t, byte(i), data[j])
+			data[j] += 8
 		}
 	}
 
-	for _, addr := range addrs {
+	for i, addr := range addrs {
 		data, err := mp.GetItem(addr)
 		require.Nil(t, err)
-		id := GetPartitionId(addr)
-		offset := GetPartitionOffset(addr)
-		fmt.Printf("ID %d, offset %d, data = %v\n", id, offset, data)
+		//id := GetPartitionId(addr)
+		//offset := GetPartitionOffset(addr)
+		//fmt.Printf("ID %d, offset %d, data = %v\n", id, offset, data)
+		for j := range data {
+			require.Equal(t, byte(i+8), data[j])
+		}
 	}
 
 	for _, addr := range addrs {
@@ -70,7 +73,7 @@ func TestPool(t *testing.T) {
 	}
 
 	err = mp.FreeItem(addrs[0])
-	fmt.Println(err)
+	//fmt.Println(err)
 	require.NotNil(t, err)
 }
 
@@ -87,13 +90,13 @@ func TestPoolSpill(t *testing.T) {
 		require.Nil(t, err)
 
 		addrs[i] = addr
-		id := GetPartitionId(addr)
-		offset := GetPartitionOffset(addr)
 
 		for j := range data {
 			data[j] = byte(i)
 		}
-		fmt.Printf("ID %d, offset %d, data = %v\n", id, offset, data)
+		//id := GetPartitionId(addr)
+		//offset := GetPartitionOffset(addr)
+		//fmt.Printf("ID %d, offset %d, data = %v\n", id, offset, data)
 	}
 
 	//mp.Spill()
@@ -104,24 +107,28 @@ func TestPoolSpill(t *testing.T) {
 		require.Nil(t, err)
 
 		addrs = append(addrs, addr)
-		id := GetPartitionId(addr)
-		offset := GetPartitionOffset(addr)
 
 		for j := range data {
 			data[j] = byte(i)
 		}
-		fmt.Printf("ID %d, offset %d, data = %v\n", id, offset, data)
+		//id := GetPartitionId(addr)
+		//offset := GetPartitionOffset(addr)
+		//fmt.Printf("ID %d, offset %d, data = %v\n", id, offset, data)
 	}
 
 	// after spill and NewItem directly.  It should unspill and GetItem
-	for _, addr := range addrs {
+	for i, addr := range addrs {
 		data, err := mp.GetItem(addr)
 		require.Nil(t, err)
-		id := GetPartitionId(addr)
-		offset := GetPartitionOffset(addr)
-		fmt.Printf("ID %d, offset %d, data = %v\n", id, offset, data)
+		//id := GetPartitionId(addr)
+		//offset := GetPartitionOffset(addr)
+		//fmt.Printf("ID %d, offset %d, data = %v\n", id, offset, data)
+		for j := range data {
+			require.Equal(t, byte(i), data[j])
+		}
 	}
 
+	i := 0
 	it := NewFixedBytePoolIterator(mp)
 	for {
 		data, err := it.Next()
@@ -130,7 +137,11 @@ func TestPoolSpill(t *testing.T) {
 			// EOF
 			break
 		}
-		fmt.Printf("data = %v\n", data)
+		//fmt.Printf("data = %v\n", data)
+		for j := range data {
+			require.Equal(t, byte(i), data[j])
+		}
+		i++
 	}
 
 	mp.Close()
@@ -152,13 +163,13 @@ func TestPartitionSpill(t *testing.T) {
 		require.Nil(t, err)
 
 		addrs[i] = addr
-		id := GetPartitionId(addr)
-		offset := GetPartitionOffset(addr)
 
 		for j := range data {
 			data[j] = byte(i)
 		}
-		fmt.Printf("ID %d, offset %d, data = %v\n", id, offset, data)
+		//id := GetPartitionId(addr)
+		//offset := GetPartitionOffset(addr)
+		//fmt.Printf("ID %d, offset %d, data = %v\n", id, offset, data)
 	}
 
 	// no effect
@@ -171,17 +182,21 @@ func TestPartitionSpill(t *testing.T) {
 	err = p.Unspill()
 	require.Nil(t, err)
 
-	for _, addr := range addrs {
+	for i, addr := range addrs {
 		data, err := p.GetItem(addr)
 		require.Nil(t, err)
-		id := GetPartitionId(addr)
-		offset := GetPartitionOffset(addr)
-		fmt.Printf("ID %d, offset %d, data = %v\n", id, offset, data)
+		//id := GetPartitionId(addr)
+		//offset := GetPartitionOffset(addr)
+		//fmt.Printf("ID %d, offset %d, data = %v\n", id, offset, data)
+
+		for j := range data {
+			require.Equal(t, byte(i), data[j])
+		}
 	}
 
 }
 
-func TestPartitionSpill2(t *testing.T) {
+func TestPartitionSpillError(t *testing.T) {
 
 	addrs := make([]uint64, 10)
 	m, err := mpool.NewMPool("test", 0, 0)
@@ -194,13 +209,13 @@ func TestPartitionSpill2(t *testing.T) {
 		require.Nil(t, err)
 
 		addrs[i] = addr
-		id := GetPartitionId(addr)
-		offset := GetPartitionOffset(addr)
 
 		for j := range data {
 			data[j] = byte(i)
 		}
-		fmt.Printf("ID %d, offset %d, data = %v\n", id, offset, data)
+		//id := GetPartitionId(addr)
+		//offset := GetPartitionOffset(addr)
+		//fmt.Printf("ID %d, offset %d, data = %v\n", id, offset, data)
 	}
 
 	err = p.Unspill()
@@ -214,7 +229,7 @@ func TestPartitionSpill2(t *testing.T) {
 
 }
 
-func TestPartitionSpill3(t *testing.T) {
+func TestPartitionSpillError2(t *testing.T) {
 
 	addrs := make([]uint64, 10)
 	m, err := mpool.NewMPool("test", 0, 0)
@@ -227,13 +242,13 @@ func TestPartitionSpill3(t *testing.T) {
 		require.Nil(t, err)
 
 		addrs[i] = addr
-		id := GetPartitionId(addr)
-		offset := GetPartitionOffset(addr)
 
 		for j := range data {
 			data[j] = byte(i)
 		}
-		fmt.Printf("ID %d, offset %d, data = %v\n", id, offset, data)
+		//id := GetPartitionId(addr)
+		//offset := GetPartitionOffset(addr)
+		//fmt.Printf("ID %d, offset %d, data = %v\n", id, offset, data)
 	}
 
 	err = p.Unspill()
