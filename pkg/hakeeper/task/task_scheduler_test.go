@@ -281,3 +281,8 @@ func TestAllocTasksWithMemoryOrCPU(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, 0, len(query))
 }
+
+func TestNilGetter(t *testing.T) {
+	s := NewScheduler("", func() taskservice.TaskService { return nil }, hakeeper.Config{})
+	s.(*scheduler).completeTasks(nil)
+}
