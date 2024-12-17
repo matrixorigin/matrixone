@@ -111,7 +111,7 @@ func GetPartitionAddr(partid uint64, offset uint64) uint64 {
 
 // New Partition with capacity, fixed data size
 func NewPartition(mp *mpool.MPool, cxt context.Context, id uint64, capacity uint64, dsize uint64) (*Partition, error) {
-	if capacity > uint64(LOWER_BIT_MASK) || capacity < 0 {
+	if capacity > uint64(LOWER_BIT_MASK) {
 		return nil, moerr.NewInternalError(cxt, "request capacity is larger than 16MB (24 bits)")
 	}
 	p := Partition{mp: mp, cxt: cxt, id: id, dsize: dsize}

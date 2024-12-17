@@ -297,13 +297,6 @@ func TestFullTextPlusPlus(t *testing.T) {
 	s, err := NewSearchAccum("src", "index", pattern, int64(tree.FULLTEXT_BOOLEAN), "")
 	require.Nil(t, err)
 
-	// ERIC
-	ss, err := PatternToString(pattern, int64(tree.FULLTEXT_BOOLEAN))
-	fmt.Println(ss)
-	sql, err := PatternToSql(s.Pattern, int64(tree.FULLTEXT_BOOLEAN), "`__mo_index_secondary_0193b0b9-07c2-782d-aa6f-fc892c464561`")
-	require.Nil(t, err)
-	fmt.Println(sql)
-
 	agghtab := make(map[any][]uint8)
 	aggcnt := make([]int64, 64)
 

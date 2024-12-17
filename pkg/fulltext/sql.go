@@ -64,11 +64,15 @@ JOIN will be used to optimize the SQL with Pattern/Plan
 WITH t0 (A JOIN B)
 (t0) UNION ALL (t0 JOIN C) UNION ALL (t0 JOIN D)
 
-(A JOIN B) is the result contain both A and B. Consider it is the appearance of A and B (as index 0).
-(t0 JOIN C) is the result contain both A, B and C. Consider it is the appearance of C (as index 1).
-(t0 JOIN D) is the result contain both A, B and D. Consider it is the appearance of D (as index 2).
+(A JOIN B) is the result contain both A and B. Consider it is the appearance of A and B (as index of "A & B)).
+(t0 JOIN C) is the result contain both A, B and C. Consider it is the appearance of A, B and C (as index of "C").
+(t0 JOIN D) is the result contain both A, B and D. Consider it is the appearance of A, B and D (as index of "D").
 
-We can calculate the TD-IDF with the index 0, 1, 2 and return the doc_id and score.
+For TD-IDF calculation,
+
+Instead of caculating the TD-IDF from the words A, B, C and D, we will calculate the score
+from word groups (A & B) -> "A & B" , (A & B & C) -> "C", (A & B & D) -> "D".
+The ordering of the result remain the same and of course the score is different.
 
 In case + operator with GROUP such as "+(A B) ~C -D",
 
@@ -413,5 +417,4 @@ func PatternToSql(ps []*Pattern, mode int64, idxtbl string) (string, error) {
 	default:
 		return "", moerr.NewInternalErrorNoCtx("invalid fulltext search mode")
 	}
-	return "", nil
 }

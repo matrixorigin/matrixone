@@ -26,6 +26,7 @@ func TestPool(t *testing.T) {
 	addrs := make([]uint64, 10)
 
 	m, err := mpool.NewMPool("test", 0, 0)
+	require.Nil(t, err)
 	mp := NewFixedBytePool(m, context.TODO(), 2, 6, 0)
 
 	// total 3 partitions
