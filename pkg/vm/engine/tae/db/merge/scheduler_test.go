@@ -91,3 +91,18 @@ func TestStopStartMerge(t *testing.T) {
 	require.Equal(t, 0, len(lockService.LockedInfos()))
 	require.Equal(t, 0, len(lockService.Indexes()))
 }
+
+func TestSchedule(t *testing.T) {
+	cnScheduler := NewTaskServiceGetter(func() (taskservice.TaskService, bool) {
+		return taskservice.NewTaskService(runtime.DefaultRuntime(), taskservice.NewMemTaskStorage()), true
+	})
+
+	scheduler := Scheduler{
+		executor: newMergeExecutor(&dbutils.Runtime{
+			LockMergeService: dbutils.NewLockMergeService(),
+		}, cnScheduler),
+	}
+
+	scheduler.StopMergeService()
+	require.Error(t, scheduler.OnTombstone(nil))
+}
