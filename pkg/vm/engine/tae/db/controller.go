@@ -254,6 +254,15 @@ func (c *Controller) handleToReplayCmd(cmd *controlCmd) {
 		})); err != nil {
 		return
 	}
+	rollbackSteps.Push(struct {
+		fn   func() error
+		desc string
+	}{
+		fn: func() error {
+			return c.db.TxnServer.SwitchTxnHandleStateTo(rpc2.TxnLocalHandle)
+		},
+		desc: "rollback txn handle state",
+	})
 
 	// 4. build logtail tunnel to the new write candidate
 	// TODO
