@@ -380,7 +380,7 @@ func TestTNCanForwardingTxnWriteRequestsSimpleVersion(t *testing.T) {
 				fmt.Println("state controller done")
 			}()
 
-			newCtx, cc := context.WithTimeout(context.Background(), time.Second*5)
+			newCtx, cc := context.WithTimeout(context.Background(), time.Second*2)
 			defer cc()
 
 			currentState := TxnLocalHandle
