@@ -61,23 +61,23 @@ func TestSqlBoolean(t *testing.T) {
 	tests := []TestCase{
 		{
 			pattern: "Matrix Origin",
-			expect:  "SELECT doc_id, CAST(0 as int) FROM `__mo_index_secondary_` WHERE word = 'matrix' UNION ALL SELECT doc_id, CAST(1 as int) FROM `__mo_index_secondary_` WHERE word = 'origin'",
+			expect:  "WITH t0 AS (SELECT doc_id FROM `__mo_index_secondary_` WHERE word = 'matrix'), t1 AS (SELECT doc_id FROM `__mo_index_secondary_` WHERE word = 'origin') SELECT doc_id, CAST(0 as int) FROM t0 UNION ALL SELECT doc_id, CAST(1 as int) FROM t1",
 		},
 		{
 			pattern: "+Matrix Origin",
-			expect:  "WITH t0 AS (SELECT doc_id FROM `__mo_index_secondary_` WHERE word = 'matrix') SELECT t0.doc_id, CAST(0 as int) FROM t0 UNION ALL SELECT t0.doc_id, CAST(1 as int) FROM `__mo_index_secondary_` as t1, t0 WHERE t0.doc_id = t1.doc_id AND t1.word = 'origin'",
+			expect:  "WITH t0 AS (SELECT doc_id FROM `__mo_index_secondary_` WHERE word = 'matrix'), t1 AS (SELECT doc_id FROM `__mo_index_secondary_` WHERE word = 'origin') SELECT t0.doc_id, CAST(0 as int) FROM t0 UNION ALL SELECT t0.doc_id, CAST(1 as int) FROM t1, t0 WHERE t0.doc_id = t1.doc_id",
 		},
 		{
 			pattern: "+Matrix -Origin",
-			expect:  "WITH t0 AS (SELECT doc_id FROM `__mo_index_secondary_` WHERE word = 'matrix') SELECT t0.doc_id, CAST(0 as int) FROM t0 UNION ALL SELECT t0.doc_id, CAST(1 as int) FROM `__mo_index_secondary_` as t1, t0 WHERE t0.doc_id = t1.doc_id AND t1.word = 'origin'",
+			expect:  "WITH t0 AS (SELECT doc_id FROM `__mo_index_secondary_` WHERE word = 'matrix'), t1 AS (SELECT doc_id FROM `__mo_index_secondary_` WHERE word = 'origin') SELECT t0.doc_id, CAST(0 as int) FROM t0 UNION ALL SELECT t0.doc_id, CAST(1 as int) FROM t1, t0 WHERE t0.doc_id = t1.doc_id",
 		},
 		{
 			pattern: "Matrix ~Origin",
-			expect:  "SELECT doc_id, CAST(0 as int) FROM `__mo_index_secondary_` WHERE word = 'matrix' UNION ALL SELECT doc_id, CAST(1 as int) FROM `__mo_index_secondary_` WHERE word = 'origin'",
+			expect:  "WITH t0 AS (SELECT doc_id FROM `__mo_index_secondary_` WHERE word = 'matrix'), t1 AS (SELECT doc_id FROM `__mo_index_secondary_` WHERE word = 'origin') SELECT doc_id, CAST(0 as int) FROM t0 UNION ALL SELECT doc_id, CAST(1 as int) FROM t1",
 		},
 		{
 			pattern: "Matrix +(<Origin >One)",
-			expect:  "WITH t0 AS (SELECT doc_id FROM `__mo_index_secondary_` WHERE word = 'origin'), t1 AS (SELECT doc_id FROM `__mo_index_secondary_` WHERE word = 'one') SELECT t0.doc_id, CAST(0 as int) FROM t0 UNION ALL SELECT t1.doc_id, CAST(1 as int) FROM t1 UNION ALL SELECT t0.doc_id, CAST(2 as int) FROM `__mo_index_secondary_` as t2, t0 WHERE t0.doc_id = t2.doc_id AND t2.word = 'matrix' UNION ALL SELECT t1.doc_id, CAST(2 as int) FROM `__mo_index_secondary_` as t2, t1 WHERE t1.doc_id = t2.doc_id AND t2.word = 'matrix'",
+			expect:  "WITH t0 AS (SELECT doc_id FROM `__mo_index_secondary_` WHERE word = 'origin'), t1 AS (SELECT doc_id FROM `__mo_index_secondary_` WHERE word = 'one'), t2 AS (SELECT doc_id FROM `__mo_index_secondary_` WHERE word = 'matrix') SELECT t0.doc_id, CAST(0 as int) FROM t0 UNION ALL SELECT t1.doc_id, CAST(1 as int) FROM t1 UNION ALL SELECT t0.doc_id, CAST(2 as int) FROM t2, t0 WHERE t0.doc_id = t2.doc_id UNION ALL SELECT t1.doc_id, CAST(2 as int) FROM t2, t1 WHERE t1.doc_id = t2.doc_id",
 		},
 		{
 			pattern: "+Matrix +Origin",
@@ -89,7 +89,7 @@ func TestSqlBoolean(t *testing.T) {
 		},
 		{
 			pattern: "Matrix Origin*",
-			expect:  "SELECT doc_id, CAST(0 as int) FROM `__mo_index_secondary_` WHERE word = 'matrix' UNION ALL SELECT doc_id, CAST(1 as int) FROM `__mo_index_secondary_` WHERE prefix_eq(word,'origin')",
+			expect:  "WITH t0 AS (SELECT doc_id FROM `__mo_index_secondary_` WHERE word = 'matrix') SELECT doc_id, CAST(0 as int) FROM t0 UNION ALL SELECT doc_id, CAST(1 as int) FROM `__mo_index_secondary_` WHERE prefix_eq(word,'origin')",
 		},
 		{
 			pattern: "+Matrix* Origin*",
@@ -97,11 +97,11 @@ func TestSqlBoolean(t *testing.T) {
 		},
 		{
 			pattern: "+Matrix +(Origin (One Two))",
-			expect:  "WITH t0 AS (SELECT doc_id FROM `__mo_index_secondary_` WHERE word = 'matrix') SELECT t0.doc_id, CAST(0 as int) FROM t0 UNION ALL SELECT t0.doc_id, CAST(1 as int) FROM `__mo_index_secondary_` as t1, t0 WHERE t0.doc_id = t1.doc_id AND t1.word = 'origin' UNION ALL SELECT t0.doc_id, CAST(2 as int) FROM `__mo_index_secondary_` as t2, t0 WHERE t0.doc_id = t2.doc_id AND t2.word = 'one' UNION ALL SELECT t0.doc_id, CAST(3 as int) FROM `__mo_index_secondary_` as t3, t0 WHERE t0.doc_id = t3.doc_id AND t3.word = 'two'",
+			expect:  "WITH t0 AS (SELECT doc_id FROM `__mo_index_secondary_` WHERE word = 'matrix'), t1 AS (SELECT doc_id FROM `__mo_index_secondary_` WHERE word = 'origin'), t2 AS (SELECT doc_id FROM `__mo_index_secondary_` WHERE word = 'one'), t3 AS (SELECT doc_id FROM `__mo_index_secondary_` WHERE word = 'two') SELECT t0.doc_id, CAST(0 as int) FROM t0 UNION ALL SELECT t0.doc_id, CAST(1 as int) FROM t1, t0 WHERE t0.doc_id = t1.doc_id UNION ALL SELECT t0.doc_id, CAST(2 as int) FROM t2, t0 WHERE t0.doc_id = t2.doc_id UNION ALL SELECT t0.doc_id, CAST(3 as int) FROM t3, t0 WHERE t0.doc_id = t3.doc_id",
 		},
 		{
 			pattern: "+读写汉字 -学中文",
-			expect:  "WITH t0 AS (SELECT doc_id FROM `__mo_index_secondary_` WHERE word = '读写汉字') SELECT t0.doc_id, CAST(0 as int) FROM t0 UNION ALL SELECT t0.doc_id, CAST(1 as int) FROM `__mo_index_secondary_` as t1, t0 WHERE t0.doc_id = t1.doc_id AND t1.word = '学中文'",
+			expect:  "WITH t0 AS (WITH kw0 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = '读写汉'), kw1 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = '写汉字'), kw2 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE prefix_eq(word,'汉字')), kw3 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE prefix_eq(word,'字')) SELECT kw0.doc_id FROM kw0, kw1, kw2, kw3 WHERE kw0.doc_id = kw1.doc_id AND kw1.pos - kw0.pos = 3 AND kw0.doc_id = kw2.doc_id AND kw2.pos - kw0.pos = 6 AND kw0.doc_id = kw3.doc_id AND kw3.pos - kw0.pos = 9), t1 AS (WITH kw0 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = '学中文'), kw1 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE prefix_eq(word,'中文')), kw2 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE prefix_eq(word,'文')) SELECT kw0.doc_id FROM kw0, kw1, kw2 WHERE kw0.doc_id = kw1.doc_id AND kw1.pos - kw0.pos = 3 AND kw0.doc_id = kw2.doc_id AND kw2.pos - kw0.pos = 6) SELECT t0.doc_id, CAST(0 as int) FROM t0 UNION ALL SELECT t0.doc_id, CAST(1 as int) FROM t1, t0 WHERE t0.doc_id = t1.doc_id",
 		},
 	}
 
