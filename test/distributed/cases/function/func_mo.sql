@@ -44,9 +44,13 @@ delete from tmp where dbName = "testdb_sub" and tblName = "t4";
 
 set mo_table_stats.use_old_impl = yes;
 select mo_table_rows(dbName, tblName) from (select * from testdb_nor.tmp order by dbName, tblName asc);
+-- @ignore:0
+select mo_table_size(dbName, tblName) from (select * from testdb_nor.tmp order by dbName, tblName asc);
 
 insert into tmp values ("testdb_sub", "t4");
 select mo_table_rows(dbName, tblName) from (select * from testdb_nor.tmp order by dbName, tblName asc);
+-- @ignore:0
+select mo_table_size(dbName, tblName) from (select * from testdb_nor.tmp order by dbName, tblName asc);
 
 set mo_table_stats.use_old_impl = no;
 
