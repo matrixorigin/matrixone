@@ -244,7 +244,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 				continue
 			}
 
-			idxObjRef, idxTableDef := builder.compCtx.Resolve(dmlCtx.objRefs[i].SchemaName, idxDef.IndexTableName, bindCtx.snapshot)
+			idxObjRef, idxTableDef := builder.compCtx.ResolveIndexTableByRef(dmlCtx.objRefs[i], idxDef.IndexTableName, bindCtx.snapshot)
 			idxTag := builder.genNewTag()
 			builder.addNameByColRef(idxTag, idxTableDef)
 
