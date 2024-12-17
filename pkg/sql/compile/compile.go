@@ -41,7 +41,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -139,6 +138,7 @@ func NewCompile(
 	c.startAt = startAt
 	c.disableRetry = false
 	c.ncpu = system.GoMaxProcs()
+	c.lockMeta = NewLockMeta()
 	if c.proc.GetTxnOperator() != nil {
 		// TODO: The action of updating the WriteOffset logic should be executed in the `func (c *Compile) Run(_ uint64)` method.
 		// However, considering that the delay ranges are not completed yet, the UpdateSnapshotWriteOffset() and
@@ -191,6 +191,9 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 	c.affectRows.Store(0)
 	c.anal.Reset()
 
+	if c.lockMeta != nil {
+		c.lockMeta.reset(c.proc)
+	}
 	for _, s := range c.scopes {
 		s.Reset(c)
 	}
@@ -268,14 +271,16 @@ func (c *Compile) clear() {
 	c.hasMergeOp = false
 	c.needBlock = false
 
+	if c.lockMeta != nil {
+		c.lockMeta.clear(c.proc)
+		c.lockMeta = nil
+	}
+
 	for _, exe := range c.filterExprExes {
 		exe.Free()
 	}
 	c.filterExprExes = nil
 
-	for k := range c.metaTables {
-		delete(c.metaTables, k)
-	}
 	for k := range c.lockTables {
 		delete(c.lockTables, k)
 	}
@@ -477,7 +482,7 @@ func (c *Compile) printPipeline() {
 // 2. init data source.
 func (c *Compile) prePipelineInitializer() (err error) {
 	// do table lock.
-	if err = c.lockMetaTables(); err != nil {
+	if err = c.lockMeta.doLock(c.e, c.proc); err != nil {
 		return err
 	}
 	if err = c.lockTable(); err != nil {
@@ -716,53 +721,7 @@ func (c *Compile) appendMetaTables(objRes *plan.ObjectRef) {
 	if !c.needLockMeta {
 		return
 	}
-
-	if objRes.SchemaName == catalog.MO_CATALOG && (objRes.ObjName == catalog.MO_DATABASE || objRes.ObjName == catalog.MO_TABLES || objRes.ObjName == catalog.MO_COLUMNS) {
-		// do not lock meta table for meta table
-	} else {
-		key := fmt.Sprintf("%s %s", objRes.SchemaName, objRes.ObjName)
-		c.metaTables[key] = struct{}{}
-	}
-}
-
-func (c *Compile) lockMetaTables() error {
-	lockLen := len(c.metaTables)
-	if lockLen == 0 {
-		return nil
-	}
-
-	tables := make([]string, 0, lockLen)
-	for table := range c.metaTables {
-		tables = append(tables, table)
-	}
-	sort.Strings(tables)
-
-	lockDbs := make(map[string]struct{})
-	for _, table := range tables {
-		names := strings.SplitN(table, " ", 2)
-
-		err := lockMoTable(c, names[0], names[1], lock.LockMode_Shared)
-		lockDbs[names[0]] = struct{}{}
-		if err != nil {
-			// if get error in locking mocatalog.mo_tables by it's dbName & tblName
-			// that means the origin table's schema was changed. then return NeedRetryWithDefChanged err
-			if moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) ||
-				moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
-				return moerr.NewTxnNeedRetryWithDefChangedNoCtx()
-			}
-
-			// other errors, just throw  out
-			return err
-		}
-	}
-	for dbName := range lockDbs {
-		err := lockMoDatabase(c, dbName, lock.LockMode_Shared)
-		if err != nil {
-			return err
-		}
-	}
-
-	return nil
+	c.lockMeta.appendMetaTables(objRes)
 }
 
 func (c *Compile) lockTable() error {
@@ -3007,7 +2966,7 @@ func (c *Compile) compileTPGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*
 		op := constructGroup(c.proc.Ctx, n, ns[n.Children[0]], false, 0, c.proc)
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[0].setRootOperator(op)
-		arg := constructMergeGroup(true)
+		arg := constructMergeGroup()
 		arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[0].setRootOperator(arg)
 	} else {
@@ -3042,7 +3001,7 @@ func (c *Compile) compileMergeGroup(n *plan.Node, ss []*Scope, ns []*plan.Node, 
 		rs := c.newMergeScope([]*Scope{mergeToGroup})
 
 		currentFirstFlag = c.anal.isFirst
-		arg := constructMergeGroup(true)
+		arg := constructMergeGroup()
 		arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		rs.setRootOperator(arg)
 		c.anal.isFirst = false
@@ -3061,7 +3020,7 @@ func (c *Compile) compileMergeGroup(n *plan.Node, ss []*Scope, ns []*plan.Node, 
 		rs := c.newMergeScope(ss)
 
 		currentFirstFlag = c.anal.isFirst
-		arg := constructMergeGroup(true)
+		arg := constructMergeGroup()
 		arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		rs.setRootOperator(arg)
 		c.anal.isFirst = false

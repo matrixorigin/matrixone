@@ -26,22 +26,27 @@ type approxCountFixedExec[T types.FixedSizeTExceptStrType] struct {
 	singleAggInfo
 	singleAggExecExtraInformation
 	arg sFixedArg[T]
-	ret aggFuncResult[uint64]
+	ret aggResultWithFixedType[uint64]
 
 	groups []*hll.Sketch
 }
 
+func (exec *approxCountFixedExec[T]) GetOptResult() SplitResult {
+	return &exec.ret.optSplitResult
+}
+
 func (exec *approxCountFixedExec[T]) marshal() ([]byte, error) {
 	d := exec.singleAggInfo.getEncoded()
-	r, err := exec.ret.marshal()
+	r, em, err := exec.ret.marshalToBytes()
 	if err != nil {
 		return nil, err
 	}
 
-	encoded := &EncodedAgg{
-		Info:   d,
-		Result: r,
-		Groups: nil,
+	encoded := EncodedAgg{
+		Info:    d,
+		Result:  r,
+		Empties: em,
+		Groups:  nil,
 	}
 	if len(exec.groups) > 0 {
 		encoded.Groups = make([][]byte, len(exec.groups))
@@ -55,8 +60,8 @@ func (exec *approxCountFixedExec[T]) marshal() ([]byte, error) {
 	return encoded.Marshal()
 }
 
-func (exec *approxCountFixedExec[T]) unmarshal(mp *mpool.MPool, result []byte, groups [][]byte) error {
-	err := exec.ret.unmarshal(result)
+func (exec *approxCountFixedExec[T]) unmarshal(_ *mpool.MPool, result, empties, groups [][]byte) error {
+	err := exec.ret.unmarshalFromBytes(result, empties)
 	if err != nil {
 		return err
 	}
@@ -76,22 +81,27 @@ type approxCountVarExec struct {
 	singleAggInfo
 	singleAggExecExtraInformation
 	arg sBytesArg
-	ret aggFuncResult[uint64]
+	ret aggResultWithFixedType[uint64]
 
 	groups []*hll.Sketch
 }
 
+func (exec *approxCountVarExec) GetOptResult() SplitResult {
+	return &exec.ret.optSplitResult
+}
+
 func (exec *approxCountVarExec) marshal() ([]byte, error) {
 	d := exec.singleAggInfo.getEncoded()
-	r, err := exec.ret.marshal()
+	r, em, err := exec.ret.marshalToBytes()
 	if err != nil {
 		return nil, err
 	}
 
-	encoded := &EncodedAgg{
-		Info:   d,
-		Result: r,
-		Groups: nil,
+	encoded := EncodedAgg{
+		Info:    d,
+		Result:  r,
+		Empties: em,
+		Groups:  nil,
 	}
 	if len(exec.groups) > 0 {
 		encoded.Groups = make([][]byte, len(exec.groups))
@@ -105,8 +115,8 @@ func (exec *approxCountVarExec) marshal() ([]byte, error) {
 	return encoded.Marshal()
 }
 
-func (exec *approxCountVarExec) unmarshal(mp *mpool.MPool, result []byte, groups [][]byte) error {
-	err := exec.ret.unmarshal(result)
+func (exec *approxCountVarExec) unmarshal(_ *mpool.MPool, result, empties, groups [][]byte) error {
+	err := exec.ret.unmarshalFromBytes(result, empties)
 	if err != nil {
 		return err
 	}
@@ -125,7 +135,7 @@ func (exec *approxCountVarExec) unmarshal(mp *mpool.MPool, result []byte, groups
 func newApproxCountFixedExec[T types.FixedSizeTExceptStrType](mg AggMemoryManager, info singleAggInfo) AggFuncExec {
 	return &approxCountFixedExec[T]{
 		singleAggInfo: info,
-		ret:           initFixedAggFuncResult[uint64](mg, info.retType, false),
+		ret:           initAggResultWithFixedTypeResult[uint64](mg, info.retType, false, 0),
 	}
 }
 
@@ -141,7 +151,7 @@ func makeApproxCount(mg AggMemoryManager, id int64, arg types.Type) AggFuncExec 
 	if info.argType.IsVarlen() {
 		return &approxCountVarExec{
 			singleAggInfo: info,
-			ret:           initFixedAggFuncResult[uint64](mg, info.retType, false),
+			ret:           initAggResultWithFixedTypeResult[uint64](mg, info.retType, false, 0),
 		}
 	}
 
@@ -199,7 +209,7 @@ func (exec *approxCountFixedExec[T]) GroupGrow(more int) error {
 }
 
 func (exec *approxCountFixedExec[T]) PreAllocateGroups(more int) error {
-	return exec.ret.preAllocate(more)
+	return exec.ret.preExtend(more)
 }
 
 func (exec *approxCountFixedExec[T]) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
@@ -297,19 +307,19 @@ func (exec *approxCountFixedExec[T]) BatchMerge(next AggFuncExec, offset int, gr
 	return nil
 }
 
-func (exec *approxCountFixedExec[T]) Flush() (*vector.Vector, error) {
-	setter := exec.ret.aggSet
+func (exec *approxCountFixedExec[T]) Flush() ([]*vector.Vector, error) {
+	setter := exec.ret.set
 	for i, group := range exec.groups {
-		exec.ret.groupToSet = i
+		exec.ret.updateNextAccessIdx(i)
 		setter(group.Estimate())
 	}
 
 	if exec.partialResult != nil {
-		getter := exec.ret.aggGet
-		exec.ret.groupToSet = exec.partialGroup
+		getter := exec.ret.get
+		exec.ret.updateNextAccessIdx(exec.partialGroup)
 		setter(getter() + exec.partialResult.(uint64))
 	}
-	return exec.ret.flush(), nil
+	return exec.ret.flushAll(), nil
 }
 
 func (exec *approxCountFixedExec[T]) Free() {
@@ -340,7 +350,7 @@ func (exec *approxCountVarExec) PreAllocateGroups(more int) error {
 		exec.groups = exec.groups[:oldLength]
 	}
 
-	return exec.ret.preAllocate(more)
+	return exec.ret.preExtend(more)
 }
 
 func (exec *approxCountVarExec) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
@@ -436,19 +446,19 @@ func (exec *approxCountVarExec) BatchMerge(next AggFuncExec, offset int, groups 
 	return nil
 }
 
-func (exec *approxCountVarExec) Flush() (*vector.Vector, error) {
-	setter := exec.ret.aggSet
+func (exec *approxCountVarExec) Flush() ([]*vector.Vector, error) {
+	setter := exec.ret.set
 	for i, group := range exec.groups {
-		exec.ret.groupToSet = i
+		exec.ret.updateNextAccessIdx(i)
 		setter(group.Estimate())
 	}
 
 	if exec.partialResult != nil {
-		getter := exec.ret.aggGet
-		exec.ret.groupToSet = exec.partialGroup
+		getter := exec.ret.get
+		exec.ret.updateNextAccessIdx(exec.partialGroup)
 		setter(getter() + exec.partialResult.(uint64))
 	}
-	return exec.ret.flush(), nil
+	return exec.ret.flushAll(), nil
 }
 
 func (exec *approxCountVarExec) Free() {

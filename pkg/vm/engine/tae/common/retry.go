@@ -27,7 +27,9 @@ type WaitOp = func() (ok bool, err error)
 func RetryWithIntervalAndTimeout(
 	op WaitOp,
 	timeout time.Duration,
-	interval time.Duration, suppressTimout bool) (err error) {
+	interval time.Duration,
+	suppressTimout bool,
+) (err error) {
 
 	ctx, cancel := context.WithTimeoutCause(context.Background(), timeout, moerr.CauseRetryWithIntervalAndTimeout)
 	defer cancel()
