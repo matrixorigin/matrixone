@@ -527,6 +527,9 @@ func MoTableRowsOld(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 			var sub subscription
 			if sub, err = isSubscribedTable(
 				proc, accId, dbo, dbStr, tblStr); err != nil {
+				logutil.Error("MoTableRowsOld",
+					zap.String("source", "isSubscribeTable"),
+					zap.Error(err))
 				return err
 			} else if sub.valid {
 				// subscription
@@ -666,6 +669,9 @@ func MoTableSizeOld(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 			var sub subscription
 			if sub, err = isSubscribedTable(
 				proc, accId, dbo, dbStr, tblStr); err != nil {
+				logutil.Error("MoTableSizeOld",
+					zap.String("source", "isSubscribeTable"),
+					zap.Error(err))
 				return err
 			} else if sub.valid {
 				// subscription
