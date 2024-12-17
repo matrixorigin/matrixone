@@ -54,18 +54,6 @@ func WithGlobalMinCount(count int) Option {
 	}
 }
 
-func WithForceFlushTimeout(to time.Duration) Option {
-	return func(r *runner) {
-		r.options.forceFlushTimeout = to
-	}
-}
-
-func WithForceFlushCheckInterval(interval time.Duration) Option {
-	return func(r *runner) {
-		r.options.forceFlushCheckInterval = interval
-	}
-}
-
 func WithGlobalVersionInterval(interval time.Duration) Option {
 	return func(r *runner) {
 		r.options.globalVersionInterval = interval

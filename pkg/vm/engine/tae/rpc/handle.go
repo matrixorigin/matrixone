@@ -524,7 +524,7 @@ func (h *Handle) HandleGetLogTail(
 	resp *api.SyncLogTailResp) (closeCB func(), err error) {
 	res, closeCB, err := logtail.HandleSyncLogTailReq(
 		ctx,
-		h.db.BGCheckpointRunner,
+		h.db,
 		h.db.LogtailMgr,
 		h.db.Catalog,
 		*req,
@@ -578,13 +578,6 @@ func (h *Handle) HandleCreateDatabase(
 	_, span := trace.Start(ctx, "HandleCreateDatabase")
 	defer span.End()
 
-	defer func() {
-		common.DoIfDebugEnabled(func() {
-			logutil.Debugf("[precommit] create database end txn: %s", txn.String())
-		})
-	}()
-
-	// modify memory structure
 	for i, c := range req.Cmds {
 		common.DoIfInfoEnabled(func() {
 			logutil.Info(
@@ -617,12 +610,8 @@ func (h *Handle) HandleCreateDatabase(
 func (h *Handle) HandleDropDatabase(
 	ctx context.Context,
 	txn txnif.AsyncTxn,
-	req *pkgcatalog.DropDatabaseReq) (err error) {
-	defer func() {
-		common.DoIfDebugEnabled(func() {
-			logutil.Debugf("[precommit] drop database end: %s", txn.String())
-		})
-	}()
+	req *pkgcatalog.DropDatabaseReq,
+) (err error) {
 	for i, c := range req.Cmds {
 		common.DoIfInfoEnabled(func() {
 			logutil.Info(
@@ -652,13 +641,8 @@ func (h *Handle) HandleDropDatabase(
 func (h *Handle) HandleCreateRelation(
 	ctx context.Context,
 	txn txnif.AsyncTxn,
-	req *pkgcatalog.CreateTableReq) error {
-	defer func() {
-		common.DoIfDebugEnabled(func() {
-			logutil.Debugf("[precommit] create relation end txn: %s", txn.String())
-		})
-	}()
-
+	req *pkgcatalog.CreateTableReq,
+) error {
 	for i, c := range req.Cmds {
 		common.DoIfInfoEnabled(func() {
 			logutil.Info(
@@ -698,13 +682,8 @@ func (h *Handle) HandleCreateRelation(
 func (h *Handle) HandleDropRelation(
 	ctx context.Context,
 	txn txnif.AsyncTxn,
-	req *pkgcatalog.DropTableReq) error {
-	defer func() {
-		common.DoIfDebugEnabled(func() {
-			logutil.Debugf("[precommit] drop/truncate relation end txn: %s", txn.String())
-		})
-	}()
-
+	req *pkgcatalog.DropTableReq,
+) error {
 	for i, c := range req.Cmds {
 		common.DoIfInfoEnabled(func() {
 			logutil.Info(

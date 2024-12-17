@@ -19,11 +19,11 @@ import (
 	"time"
 
 	"github.com/panjf2000/ants/v2"
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 )
@@ -136,14 +136,13 @@ func (d *LogServiceDriver) Replay(h driver.ApplyHandle) error {
 	d.onReplay(r)
 	r.d.resetReadCache()
 	d.PostReplay()
-	logutil.Info("open-tae", common.OperationField("replay"),
-		common.OperandField("wal"),
-		common.AnyField("backend", "logservice"),
-		common.AnyField("apply cost", r.applyDuration),
-		common.AnyField("read cost", d.readDuration),
-		common.AnyField("read count", r.readCount),
-		common.AnyField("internal count", r.internalCount),
-		common.AnyField("apply count", r.applyCount),
+	logutil.Info(
+		"Replay-Wal-From-LogService",
+		zap.Duration("apply-cost", r.applyDuration),
+		zap.Duration("read-cost", d.readDuration),
+		zap.Int("read-count", r.readCount),
+		zap.Int("internal-count", r.internalCount),
+		zap.Int("apply-count", r.applyCount),
 	)
 
 	return nil
