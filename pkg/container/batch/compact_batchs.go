@@ -18,7 +18,6 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
 const (
@@ -31,7 +30,6 @@ const (
 // until bats.Batchs[lastIdx].rowCount to  DefaultBatchMaxRow
 type CompactBatchs struct {
 	batchs []*Batch
-	ufs    []func(*vector.Vector, *vector.Vector) error // functions for vector union
 }
 
 func NewCompactBatchs() *CompactBatchs {
@@ -160,13 +158,6 @@ func (bats *CompactBatchs) fillData(mpool *mpool.MPool, inBatch *Batch) error {
 	var tmpBat *Batch
 	var err error
 
-	if len(bats.ufs) == 0 {
-		for i := 0; i < inBatch.VectorCount(); i++ {
-			typ := *inBatch.GetVector(int32(i)).GetType()
-			bats.ufs = append(bats.ufs, vector.GetUnionAllFunction(typ, mpool))
-		}
-	}
-
 	//fill data
 	start, end := 0, inBatch.RowCount()
 	isNewBat := false
@@ -193,21 +184,15 @@ func (bats *CompactBatchs) fillData(mpool *mpool.MPool, inBatch *Batch) error {
 					return err
 				}
 			}
+			tmpBat.AddRowCount(addRowCount)
 		} else {
-			for i := range tmpBat.Vecs {
-				srcVec, err := inBatch.Vecs[i].Window(start, start+addRowCount)
-				if err != nil {
-					return err
-				}
-				err = bats.ufs[i](tmpBat.Vecs[i], srcVec)
-				if err != nil {
-					return err
-				}
+			err := tmpBat.UnionWindow(inBatch, start, addRowCount, mpool)
+			if err != nil {
+				return err
 			}
 		}
 
 		start = start + addRowCount
-		tmpBat.AddRowCount(addRowCount)
 	}
 
 	return nil
