@@ -2623,7 +2623,7 @@ func (c *dummyCpkGetter) CollectCheckpointsInRange(ctx context.Context, start, e
 	return "", types.TS{}, nil
 }
 
-func (c *dummyCpkGetter) FlushTable(ctx context.Context, dbID, tableID uint64, ts types.TS) error {
+func (c *dummyCpkGetter) FlushTable(ctx context.Context, accoutID uint32, dbID, tableID uint64, ts types.TS) error {
 	return nil
 }
 
@@ -4531,8 +4531,7 @@ func TestFlushTable(t *testing.T) {
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 
-	tae.BGCheckpointRunner.DebugUpdateOptions(
-		checkpoint.WithForceFlushCheckInterval(time.Millisecond * 5))
+	tae.BGFlusher.ChangeForceCheckInterval(time.Millisecond * 5)
 
 	schema := catalog.MockSchemaAll(3, 1)
 	schema.Extra.BlockMaxRows = 10
@@ -8022,7 +8021,7 @@ func TestForceCheckpoint(t *testing.T) {
 
 	tae.CreateRelAndAppend(bat, true)
 
-	err = tae.BGCheckpointRunner.ForceFlushWithInterval(tae.TxnMgr.Now(), context.Background(), time.Second*2, time.Millisecond*10)
+	err = tae.BGFlusher.ForceFlushWithInterval(tae.TxnMgr.Now(), context.Background(), time.Second*2, time.Millisecond*10)
 	assert.Error(t, err)
 	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.Now(), false)
 	assert.NoError(t, err)
