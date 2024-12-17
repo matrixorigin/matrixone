@@ -175,12 +175,33 @@ type GetMoTableSizeRowsFuncType = func() func(
 var GetMoTableSizeFunc atomic.Pointer[GetMoTableSizeRowsFuncType]
 var GetMoTableRowsFunc atomic.Pointer[GetMoTableSizeRowsFuncType]
 
+type subscription struct {
+	valid bool
+
+	oriAccId      uint64
+	oriDatabaseId uint64
+	oriTableId    uint64
+
+	oriTableName    string
+	oriDatabaseName string
+}
+
+func (s subscription) String() string {
+	return fmt.Sprintf("valid: %v, oriAcc(%d), oriDatabase(%d-%s), oriTable(%d-%s)",
+		s.valid,
+		s.oriAccId,
+		s.oriDatabaseId,
+		s.oriDatabaseName,
+		s.oriTableId,
+		s.oriTableName)
+}
+
 func isSubscribedTable(
 	proc *process.Process,
 	reqAcc uint32,
 	db engine.Database,
 	dbName, tblName string,
-) (accId, dbId, tblId uint64, ok bool, err error) {
+) (sub subscription, err error) {
 
 	var (
 		sql  string
@@ -191,6 +212,8 @@ func isSubscribedTable(
 	if db.IsSubscription(proc.Ctx) {
 		defer func() {
 			if err != nil {
+				sub.valid = false
+
 				metaInfo := ""
 				if meta != nil {
 					metaInfo = fmt.Sprintf("ACC(%s,%d)-DB(%s)-TBLS(%s)",
@@ -204,6 +227,7 @@ func isSubscribedTable(
 					zap.Uint32("request acc", reqAcc),
 					zap.String("db name", dbName),
 					zap.String("tbl name", tblName),
+					zap.String("subscription", sub.String()),
 					zap.String("sql", sql),
 				)
 			}
@@ -211,12 +235,12 @@ func isSubscribedTable(
 
 		meta, err = proc.GetSessionInfo().SqlHelper.GetSubscriptionMeta(dbName)
 		if err != nil {
-			return 0, 0, 0, false,
+			return sub,
 				moerr.NewInternalErrorNoCtx(fmt.Sprintf("get subscription meta failed, err: %v", err))
 		}
 
 		if meta.Tables != pubsub.TableAll && !strings.Contains(meta.Tables, tblName) {
-			return 0, 0, 0, false, moerr.NewInternalErrorNoCtx("no such subscribed table")
+			return sub, moerr.NewInternalErrorNoCtx("no such subscribed table")
 		}
 
 		// check passed, get acc, db, tbl info
@@ -235,22 +259,27 @@ func isSubscribedTable(
 
 		ret, err = proc.GetSessionInfo().SqlHelper.ExecSqlWithCtx(ctx, fmt.Sprintf(sql))
 		if err != nil {
-			return 0, 0, 0, false,
+			return sub,
 				moerr.NewInternalErrorNoCtx(fmt.Sprintf("exec get subscribed tbl info sql failed, err: %v", err))
 		}
 
 		if len(ret) != 1 {
-			return 0, 0, 0, false,
+			return sub,
 				moerr.NewInternalErrorNoCtx(fmt.Sprintf("get the subscribed tbl info empty: %s", tblName))
 		}
 
-		dbId = ret[0][0].(uint64)
-		tblId = ret[0][1].(uint64)
+		sub.valid = true
+		sub.oriAccId = uint64(meta.AccountId)
+		sub.oriDatabaseId = ret[0][0].(uint64)
+		sub.oriTableId = ret[0][1].(uint64)
+		sub.oriTableName = tblName
+		sub.oriDatabaseName = meta.DbName
 
-		return uint64(meta.AccountId), dbId, tblId, true, nil
+		return sub, nil
 	}
 
-	return 0, 0, 0, false, nil
+	sub.valid = false
+	return sub, nil
 }
 
 func MoTableSizeRowsHelper(
@@ -360,15 +389,15 @@ func MoTableSizeRowsHelper(
 			return err
 		}
 
-		var subAcc, subDb, subTbl uint64
-		if subAcc, subDb, subTbl, ok, err = isSubscribedTable(
+		var sub subscription
+		if sub, err = isSubscribedTable(
 			proc, accountId, db, dbName, tblName); err != nil {
 			return err
-		} else if ok {
+		} else if sub.valid {
 			// is subscription
-			accIds = append(accIds, subAcc)
-			dbIds = append(dbIds, subDb)
-			tblIds = append(tblIds, subTbl)
+			accIds = append(accIds, sub.oriAccId)
+			dbIds = append(dbIds, sub.oriDatabaseId)
+			tblIds = append(tblIds, sub.oriTableId)
 		} else {
 			if rel, err = db.Relation(proc.Ctx, tblName, nil); err != nil {
 				if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
@@ -487,6 +516,26 @@ func MoTableRowsOld(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 				}
 				return err
 			}
+
+			var accId uint32
+			accId, err = defines.GetAccountId(foolCtx)
+			if err != nil {
+				return err
+			}
+
+			var sub subscription
+			if sub, err = isSubscribedTable(
+				proc, accId, dbo, dbStr, tblStr); err != nil {
+				return err
+			} else if sub.valid {
+				// subscription
+				foolCtx = defines.AttachAccountId(foolCtx, uint32(sub.oriAccId))
+				dbo, err = e.Database(foolCtx, sub.oriDatabaseName, txn)
+				if err != nil {
+					return err
+				}
+			}
+
 			rel, err = dbo.Relation(foolCtx, tblStr, nil)
 			if err != nil {
 				return err
@@ -606,6 +655,26 @@ func MoTableSizeOld(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 				}
 				return err
 			}
+
+			var accId uint32
+			accId, err = defines.GetAccountId(foolCtx)
+			if err != nil {
+				return err
+			}
+
+			var sub subscription
+			if sub, err = isSubscribedTable(
+				proc, accId, dbo, dbStr, tblStr); err != nil {
+				return err
+			} else if sub.valid {
+				// subscription
+				foolCtx = defines.AttachAccountId(foolCtx, uint32(sub.oriAccId))
+				dbo, err = e.Database(foolCtx, sub.oriDatabaseName, txn)
+				if err != nil {
+					return err
+				}
+			}
+
 			rel, err = dbo.Relation(foolCtx, tblStr, nil)
 			if err != nil {
 				return err
