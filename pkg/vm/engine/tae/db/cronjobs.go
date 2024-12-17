@@ -231,7 +231,7 @@ func AddCronJob(db *DB, name string, skipMode bool) (err error) {
 		return
 	case CronJobs_Name_Compact:
 		err = db.CronJobs.AddJob(
-			"Compact",
+			CronJobs_Name_Compact,
 			db.Opts.CheckpointCfg.ScanInterval,
 			func(ctx context.Context) { db.LogtailMgr.TryCompactTable() },
 			1,
@@ -239,7 +239,7 @@ func AddCronJob(db *DB, name string, skipMode bool) (err error) {
 		return
 	case CronJobs_Name_MergeScheduler:
 		err = db.CronJobs.AddJob(
-			"Merge",
+			CronJobs_Name_MergeScheduler,
 			db.Opts.CheckpointCfg.ScanInterval,
 			func(ctx context.Context) { db.MergeScheduler.Schedule() },
 			0,
