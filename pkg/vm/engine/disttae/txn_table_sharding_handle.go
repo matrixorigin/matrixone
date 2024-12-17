@@ -17,19 +17,15 @@ package disttae
 import (
 	"bytes"
 	"context"
-	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
-
-	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/shard"
@@ -685,18 +681,7 @@ func getTxnTable(
 	if err != nil {
 		return nil, err
 	}
-
-	//if strings.HasPrefix(param.TxnTable.TableName, "__mo_index_secondary_") {
-	//	fmt.Println("------------------wuxiliang0-txn_table_sharding_handle.go-------------------")
-	//}
-
 	if item == nil {
-		if strings.HasPrefix(param.TxnTable.TableName, "__mo_index_secondary_") {
-			stackInfo := debug.Stack()
-			logutil.Error(moerr.NewParseErrorf(ctx, "table %q does not exist wuxiliang0-txn_table_sharding_handle.go", param.TxnTable.TableName).Error(),
-				zap.String("Detailed Stack Trace", string(stackInfo)),
-			)
-		}
 		return nil, moerr.NewParseErrorf(ctx, "table %q does not exist", param.TxnTable.TableName)
 	}
 
