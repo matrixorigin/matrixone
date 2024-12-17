@@ -404,6 +404,7 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 		if err != nil {
 			return stats, err
 		}
+		return
 	}
 
 	// drop foreign key related tables first
@@ -2042,7 +2043,7 @@ func restoreAccountUsingClusterSnapshotToNew(ctx context.Context,
 	if err = CancelCheck(ctx); err != nil {
 		return err
 	}
-	getLogger(ses.GetService()).Info(fmt.Sprintf("[%s] success restore dropped account: %v, account id: %d to new account id: %d", snapshotName, account.accountName, account.accountId, toAccountId))
+	getLogger(ses.GetService()).Info(fmt.Sprintf("[%s] success restore account: %v, account id: %d to new account id: %d", snapshotName, account.accountName, account.accountId, toAccountId))
 	return
 }
 
