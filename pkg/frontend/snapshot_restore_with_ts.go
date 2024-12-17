@@ -412,6 +412,22 @@ func restoreDatabaseFromDropped(
 		return
 	}
 
+	var isMasterDb bool
+	isMasterDb, err = checkDatabaseIsMaster(toCtx, sid, bh, fmt.Sprintf("%d:%d", restoreAccount, snapshotTs), dbName)
+	if err != nil {
+		return err
+	}
+	if isMasterDb {
+		getLogger(sid).Info(fmt.Sprintf("[%d:%d] skip restore master db: %v, which has been referenced by foreign keys", restoreAccount, snapshotTs, dbName))
+		return
+	}
+
+	// drop db
+	getLogger(sid).Info(fmt.Sprintf("[%d:%d] start to drop database: %v", restoreAccount, snapshotTs, dbName))
+	if err = dropDb(toCtx, bh, dbName); err != nil {
+		return
+	}
+
 	if isSubDb {
 		var isPubExist bool
 		isPubExist, _ = checkPubExistOrNot(toCtx, sid, bh, "", dbName, snapshotTs)
