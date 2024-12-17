@@ -1668,5 +1668,8 @@ func Test_handleShowTableStatus(t *testing.T) {
 		ec := newTestExecCtx(ctx, ctrl)
 		shv := &tree.ShowTableStatus{}
 		convey.So(handleShowTableStatus(ses, ec, shv), convey.ShouldBeNil)
+
+		ec = newTestExecCtx(context.Background(), ctrl)
+		convey.So(handleShowTableStatus(ses, ec, shv), convey.ShouldNotBeNil)
 	})
 }
