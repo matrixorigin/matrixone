@@ -578,6 +578,7 @@ show databases;
 show subscriptions;
 -- @session
 
+drop database restore_fulltext_table;
 drop snapshot sp_full02;
 drop account acc01;
 drop account acc02;

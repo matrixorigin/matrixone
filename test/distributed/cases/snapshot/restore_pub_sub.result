@@ -574,6 +574,7 @@ system
 system_metrics
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+drop database restore_fulltext_table;
 drop snapshot sp_full02;
 drop account acc01;
 drop account acc02;
