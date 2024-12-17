@@ -1705,7 +1705,7 @@ func restoreToCluster(ctx context.Context,
 			return err
 		}
 		if newAccountId != uint32(account.accountId) {
-			if err = restoreAccountUsingClusterSnapshotToNew(ctx, ses, bh, snapshotName, snapshotTs, account, subDbToRestore, uint64(newAccountId), true, true); err != nil {
+			if err = restoreAccountUsingClusterSnapshotToNew(ctx, ses, bh, snapshotName, snapshotTs, account, uint64(newAccountId), subDbToRestore, true, true); err != nil {
 				return err
 			}
 		} else {
@@ -1738,7 +1738,7 @@ func restoreToCluster(ctx context.Context,
 		}
 
 		// 2.0 restore droped account to new account
-		err = restoreAccountUsingClusterSnapshotToNew(ctx, ses, bh, snapshotName, snapshotTs, account, subDbToRestore, uint64(newAccountId), true, false)
+		err = restoreAccountUsingClusterSnapshotToNew(ctx, ses, bh, snapshotName, snapshotTs, account, uint64(newAccountId), subDbToRestore, true, false)
 		if err != nil {
 			return err
 		}
@@ -1793,7 +1793,7 @@ func restoreToAccountUsingCluster(
 		}
 	}
 
-	err = restoreAccountUsingClusterSnapshotToNew(ctx, ses, bh, snapshotName, snapshotTs, *ar, nil, uint64(toAccountId), false, isNeedToCleanToDatabase)
+	err = restoreAccountUsingClusterSnapshotToNew(ctx, ses, bh, snapshotName, snapshotTs, *ar, uint64(toAccountId), nil, false, isNeedToCleanToDatabase)
 	if err != nil {
 		return err
 	}
@@ -1965,8 +1965,8 @@ func restoreAccountUsingClusterSnapshotToNew(ctx context.Context,
 	snapshotName string,
 	snapshotTs int64,
 	account accountRecord,
-	subDbToRestore map[string]*subDbRestoreRecord,
 	toAccountId uint64,
+	subDbToRestore map[string]*subDbRestoreRecord,
 	isRestoreCluster bool,
 	isNeedToCleanToDatabase bool,
 ) (err error) {
