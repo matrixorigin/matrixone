@@ -190,14 +190,14 @@ func Test_restoreAccountUsingClusterSnapshotToNew(t *testing.T) {
 
 		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
 
-		err := restoreAccountUsingClusterSnapshotToNew(ctx, ses, bh, "sp01", 0, accountRecord{accountName: "sys", accountId: 0}, nil, 0, false)
+		err := restoreAccountUsingClusterSnapshotToNew(ctx, ses, bh, "sp01", 0, accountRecord{accountName: "sys", accountId: 0}, nil, 0, false, false)
 		convey.So(err, convey.ShouldNotBeNil)
 
 		sql := "select db_name, table_name, refer_db_name, refer_table_name from mo_catalog.mo_foreign_keys"
 		mrs := newMrsForPitrRecord([][]interface{}{{"db1", "table1", "db2", "table2"}})
 		bh.sql2result[sql] = mrs
 
-		err = restoreAccountUsingClusterSnapshotToNew(ctx, ses, bh, "sp01", 0, accountRecord{accountName: "sys", accountId: 0}, nil, 0, false)
+		err = restoreAccountUsingClusterSnapshotToNew(ctx, ses, bh, "sp01", 0, accountRecord{accountName: "sys", accountId: 0}, nil, 0, false, false)
 		convey.So(err, convey.ShouldNotBeNil)
 	})
 }
