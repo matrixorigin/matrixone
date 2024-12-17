@@ -170,11 +170,6 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 						zap.Error(err))
 					return err
 				}
-				c.proc.Info(c.proc.Ctx, "delete index table of origin table for alter table",
-					zap.String("databaseName", c.db),
-					zap.String("origin tableName", qry.GetTableDef().Name),
-					zap.String("index name", indexdef.IndexName),
-					zap.String("origin tableName index table", indexdef.IndexTableName))
 			}
 		}
 	}
