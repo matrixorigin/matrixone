@@ -15,6 +15,8 @@
 package plan
 
 import (
+	"encoding/json"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fulltext"
@@ -73,16 +75,24 @@ var (
 	}
 )
 
-// arg list [source_table_name, index_table_name, search_against, mode]
+// arg list [param, source_table_name, index_table_name, search_against, mode]
 func (builder *QueryBuilder) buildFullTextIndexScan(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, childId int32) (int32, error) {
 
-	if len(exprs) != 4 {
-		return 0, moerr.NewInvalidInput(builder.GetContext(), "Invalid number of arguments (NARGS != 4).")
+	if len(exprs) != 5 {
+		return 0, moerr.NewInvalidInput(builder.GetContext(), "Invalid number of arguments (NARGS != 5).")
 	}
 
 	colDefs := _getColDefs(ftIndexColdefs)
 
-	sql, err := builder.getFullTextSql(tbl.Func)
+	params, err := builder.getFullTextParams(tbl.Func)
+	if err != nil {
+		return 0, err
+	}
+	// remove the first argment and put the first argument to Param
+	exprs = exprs[1:]
+
+	// get the generated SQL
+	sql, err := builder.getFullTextSql(tbl.Func, params)
 	if err != nil {
 		return 0, err
 	}
@@ -95,7 +105,7 @@ func (builder *QueryBuilder) buildFullTextIndexScan(tbl *tree.TableFunction, ctx
 			//Name:               tbl.String(),
 			TblFunc: &plan.TableFunction{
 				Name:  fulltext_index_scan_func_name,
-				Param: []byte(""),
+				Param: []byte(params),
 			},
 			Cols: colDefs,
 		},
@@ -106,19 +116,27 @@ func (builder *QueryBuilder) buildFullTextIndexScan(tbl *tree.TableFunction, ctx
 	return builder.appendNode(node, ctx), nil
 }
 
-func (builder *QueryBuilder) getFullTextSql(fn *tree.FuncExpr) (string, error) {
-	if _, ok := fn.Exprs[1].(*tree.NumVal); !ok {
+func (builder *QueryBuilder) getFullTextSql(fn *tree.FuncExpr, params string) (string, error) {
+	var param fulltext.FullTextParserParam
+	if len(params) > 0 {
+		err := json.Unmarshal([]byte(params), &param)
+		if err != nil {
+			return "", err
+		}
+	}
+
+	if _, ok := fn.Exprs[2].(*tree.NumVal); !ok {
 		return "", moerr.NewInvalidInput(builder.GetContext(), "index table name is not a constant")
 	}
 
-	idxtbl := fn.Exprs[1].String()
+	idxtbl := fn.Exprs[2].String()
 
-	if _, ok := fn.Exprs[2].(*tree.NumVal); !ok {
+	if _, ok := fn.Exprs[3].(*tree.NumVal); !ok {
 		return "", moerr.NewInvalidInput(builder.GetContext(), "pattern is not a constant")
 	}
 
-	pattern := fn.Exprs[2].String()
-	modeVal, ok := fn.Exprs[3].(*tree.NumVal)
+	pattern := fn.Exprs[3].String()
+	modeVal, ok := fn.Exprs[4].(*tree.NumVal)
 	if !ok {
 		return "", moerr.NewInvalidInput(builder.GetContext(), "mode is not a constant")
 	}
@@ -131,7 +149,7 @@ func (builder *QueryBuilder) getFullTextSql(fn *tree.FuncExpr) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return fulltext.PatternToSql(ps, mode, idxtbl)
+	return fulltext.PatternToSql(ps, mode, idxtbl, param.Parser)
 }
 
 // select * from index_table, fulltext_index_tokenize(doc_id, concat(body, ' ', title))

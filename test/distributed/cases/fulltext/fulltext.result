@@ -72,6 +72,11 @@ select * from src where match(body, title) against('"red"' in boolean mode);
 id    body    title
 0    color is red    t1
 3    blue is not red    colorful
+select * from src where match(body, title) against('+教學指引 +短篇小說' in boolean mode);
+id    body    title
+6    各個單元主題內容涵蓋中華文化及生活應用的介紹。本套教材含課本、教學指引、生字卡、學生作業本與CD，中英對照，精美大字版。本系列有繁體字及簡體字兩種版本印行。    中文短篇小說
+select * from src where match(body, title) against('+教學指引 -短篇小說' in boolean mode);
+id    body    title
 select * from src where match(body, title) against('"is  not red"' in boolean mode);
 id    body    title
 select * from src where match(body, title) against('"blue is red"' in boolean mode);

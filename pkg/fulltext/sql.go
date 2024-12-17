@@ -106,10 +106,33 @@ type SqlNode struct {
 	Children []*SqlNode
 }
 
+// GenTextSql that support ngram in boolean mode
+// TEXT is a word. For english, it is fine to have a simple filter word = 'word".
+// For Chinese, word should be tokenize into ngram
+func GenTextSql(p *Pattern, mode int64, idxtbl string, parser string) (string, error) {
+
+	if parser == "json_value" {
+		sql := fmt.Sprintf("SELECT doc_id FROM %s WHERE word = '%s'", idxtbl, p.Text)
+		return sql, nil
+	}
+
+	ps, err := ParsePatternInNLMode(p.Text)
+	if err != nil {
+		return "", err
+	}
+
+	sql, err := SqlPhrase(ps, mode, idxtbl, false)
+	if err != nil {
+		return "", err
+	}
+
+	return sql, nil
+}
+
 // PLUS node as JOIN.  Index is from TEXT/STAR node
 // children of PLUS node can be a single TEXT/STAR or GROUP.
 // In case of GROUP, mutiple SqlNodes will be generated.
-func GenJoinPlusSql(p *Pattern, mode int64, idxtbl string) ([]*SqlNode, error) {
+func GenJoinPlusSql(p *Pattern, mode int64, idxtbl string, parser string) ([]*SqlNode, error) {
 
 	var sql string
 	var textps []*Pattern
@@ -122,7 +145,13 @@ func GenJoinPlusSql(p *Pattern, mode int64, idxtbl string) ([]*SqlNode, error) {
 		sqlnode := &SqlNode{IsJoin: true, Index: tp.Index, Label: alias}
 		if tp.Operator == TEXT {
 			// TEXT
-			sql = fmt.Sprintf("%s AS (SELECT doc_id FROM %s WHERE word = '%s')", alias, idxtbl, kw)
+			textsql, err := GenTextSql(tp, mode, idxtbl, parser)
+			if err != nil {
+				return nil, err
+			}
+			sql = fmt.Sprintf("%s AS (%s)", alias, textsql)
+
+			//sql = fmt.Sprintf("%s AS (SELECT doc_id FROM %s WHERE word = '%s')", alias, idxtbl, kw)
 			sqlnode.Children = append(sqlnode.Children, &SqlNode{Index: tp.Index, Label: alias, IsJoin: true, Sql: sql})
 
 		} else {
@@ -145,7 +174,7 @@ func GenJoinPlusSql(p *Pattern, mode int64, idxtbl string) ([]*SqlNode, error) {
 // JOIN node.  Index is from JOIN node.  Index of TEXT/STAR is invalid
 // Generate a JOIN subsql in children and union sql in Sql.
 // subsql t0 is the table for all JOIN
-func GenJoinSql(p *Pattern, mode int64, idxtbl string) ([]*SqlNode, error) {
+func GenJoinSql(p *Pattern, mode int64, idxtbl string, parser string) ([]*SqlNode, error) {
 
 	var sql string
 	var textps []*Pattern
@@ -161,7 +190,13 @@ func GenJoinSql(p *Pattern, mode int64, idxtbl string) ([]*SqlNode, error) {
 		alias := fmt.Sprintf("t%d%d", idx, subidx)
 		tables = append(tables, alias)
 		if tp.Operator == TEXT {
-			sql = fmt.Sprintf("%s AS (SELECT doc_id FROM %s WHERE word = '%s')", alias, idxtbl, kw)
+			textsql, err := GenTextSql(tp, mode, idxtbl, parser)
+			if err != nil {
+				return nil, err
+			}
+			sql = fmt.Sprintf("%s AS (%s)", alias, textsql)
+
+			//sql = fmt.Sprintf("%s AS (SELECT doc_id FROM %s WHERE word = '%s')", alias, idxtbl, kw)
 			sqlnode.Children = append(sqlnode.Children, &SqlNode{Index: idx, Label: alias, IsJoin: true, Sql: sql})
 			subidx++
 		} else {
@@ -196,16 +231,16 @@ func GenJoinSql(p *Pattern, mode int64, idxtbl string) ([]*SqlNode, error) {
 // generate the sql with the pattern.
 // isJoin flag is true, geneate the SQL in JOIN mode (only for JOIN and PLUS node)
 // if joinsql is not NILL, all the OR TEXT/STAR node will be joined with joinsql
-func GenSql(p *Pattern, mode int64, idxtbl string, joinsql []*SqlNode, isJoin bool) ([]*SqlNode, error) {
+func GenSql(p *Pattern, mode int64, idxtbl string, joinsql []*SqlNode, isJoin bool, parser string) ([]*SqlNode, error) {
 
 	var sqls []*SqlNode
 	var textps []*Pattern
 
 	if isJoin {
 		if p.Operator == JOIN {
-			return GenJoinSql(p, mode, idxtbl)
+			return GenJoinSql(p, mode, idxtbl, parser)
 		} else {
-			return GenJoinPlusSql(p, mode, idxtbl)
+			return GenJoinPlusSql(p, mode, idxtbl, parser)
 		}
 	}
 
@@ -219,8 +254,16 @@ func GenSql(p *Pattern, mode int64, idxtbl string, joinsql []*SqlNode, isJoin bo
 			idx := tp.Index
 			kw := tp.Text
 			alias := fmt.Sprintf("t%d", idx)
+			sqlnode := &SqlNode{Index: idx, Label: alias, IsJoin: isJoin}
 			if tp.Operator == TEXT {
-				sql = fmt.Sprintf("SELECT doc_id, CAST(%d as int) FROM %s WHERE word = '%s'", idx, idxtbl, kw)
+				textsql, err := GenTextSql(tp, mode, idxtbl, parser)
+				if err != nil {
+					return nil, err
+				}
+				subsql := fmt.Sprintf("%s AS (%s)", alias, textsql)
+				sql = fmt.Sprintf("SELECT doc_id, CAST(%d as int) FROM %s", idx, alias)
+				sqlnode.Sql = sql
+				sqlnode.Children = append(sqlnode.Children, &SqlNode{Index: idx, Label: alias, IsJoin: isJoin, Sql: subsql})
 
 			} else {
 				if kw[len(kw)-1] != '*' {
@@ -228,9 +271,10 @@ func GenSql(p *Pattern, mode int64, idxtbl string, joinsql []*SqlNode, isJoin bo
 				}
 				prefix := kw[0 : len(kw)-1]
 				sql = fmt.Sprintf("SELECT doc_id, CAST(%d as int) FROM %s WHERE prefix_eq(word,'%s')", idx, idxtbl, prefix)
+				sqlnode.Sql = sql
 
 			}
-			sqls = append(sqls, &SqlNode{Index: idx, Label: alias, IsJoin: isJoin, Sql: sql})
+			sqls = append(sqls, sqlnode)
 		}
 
 	} else {
@@ -241,9 +285,17 @@ func GenSql(p *Pattern, mode int64, idxtbl string, joinsql []*SqlNode, isJoin bo
 				idx := tp.Index
 				kw := tp.Text
 				alias := fmt.Sprintf("t%d", idx)
+				sqlnode := &SqlNode{Index: idx, Label: alias, IsJoin: isJoin}
 				if tp.Operator == TEXT {
-					sql = fmt.Sprintf("SELECT %s.doc_id, CAST(%d as int) FROM %s as %s, %s WHERE %s.doc_id = %s.doc_id AND %s.word = '%s'",
-						jn.Label, idx, idxtbl, alias, jn.Label, jn.Label, alias, alias, kw)
+					textsql, err := GenTextSql(tp, mode, idxtbl, parser)
+					if err != nil {
+						return nil, err
+					}
+					subsql := fmt.Sprintf("%s AS (%s)", alias, textsql)
+					sql = fmt.Sprintf("SELECT %s.doc_id, CAST(%d as int) FROM %s, %s WHERE %s.doc_id = %s.doc_id",
+						jn.Label, idx, alias, jn.Label, jn.Label, alias)
+					sqlnode.Sql = sql
+					sqlnode.Children = append(sqlnode.Children, &SqlNode{Index: idx, Label: alias, IsJoin: isJoin, Sql: subsql})
 
 				} else {
 					if kw[len(kw)-1] != '*' {
@@ -252,9 +304,10 @@ func GenSql(p *Pattern, mode int64, idxtbl string, joinsql []*SqlNode, isJoin bo
 					prefix := kw[0 : len(kw)-1]
 					sql = fmt.Sprintf("SELECT %s.doc_id, CAST(%d as int) FROM %s as %s, %s WHERE %s.doc_id = %s.doc_id AND prefix_eq(%s.word, '%s')",
 						jn.Label, idx, idxtbl, alias, jn.Label, jn.Label, alias, alias, prefix)
+					sqlnode.Sql = sql
 
 				}
-				sqls = append(sqls, &SqlNode{Index: idx, Label: alias, IsJoin: isJoin, Sql: sql})
+				sqls = append(sqls, sqlnode)
 			}
 
 		}
@@ -264,7 +317,7 @@ func GenSql(p *Pattern, mode int64, idxtbl string, joinsql []*SqlNode, isJoin bo
 }
 
 // Generate SQL in boolean mode
-func SqlBoolean(ps []*Pattern, mode int64, idxtbl string) (string, error) {
+func SqlBoolean(ps []*Pattern, mode int64, idxtbl string, parser string) (string, error) {
 
 	var err error
 	var join []*SqlNode
@@ -273,13 +326,13 @@ func SqlBoolean(ps []*Pattern, mode int64, idxtbl string) (string, error) {
 
 	if len(ps) == 1 {
 		if ps[0].Operator == JOIN {
-			join, err = GenSql(ps[0], mode, idxtbl, nil, true)
+			join, err = GenSql(ps[0], mode, idxtbl, nil, true, parser)
 			if err != nil {
 				return "", err
 			}
 			sqls = append(sqls, join...)
 		} else {
-			s, err := GenSql(ps[0], mode, idxtbl, nil, false)
+			s, err := GenSql(ps[0], mode, idxtbl, nil, false, parser)
 			if err != nil {
 				return "", err
 			}
@@ -288,7 +341,7 @@ func SqlBoolean(ps []*Pattern, mode int64, idxtbl string) (string, error) {
 	} else {
 		startidx := 0
 		if ps[0].Operator == JOIN {
-			join, err = GenSql(ps[0], mode, idxtbl, nil, true)
+			join, err = GenSql(ps[0], mode, idxtbl, nil, true, parser)
 			if err != nil {
 				return "", err
 			}
@@ -296,7 +349,7 @@ func SqlBoolean(ps []*Pattern, mode int64, idxtbl string) (string, error) {
 			startidx++
 		} else if ps[0].Operator == PLUS {
 			// Plus with Group also make as JOIN
-			join, err = GenSql(ps[0], mode, idxtbl, nil, true)
+			join, err = GenSql(ps[0], mode, idxtbl, nil, true, parser)
 			if err != nil {
 				return "", err
 			}
@@ -306,7 +359,7 @@ func SqlBoolean(ps []*Pattern, mode int64, idxtbl string) (string, error) {
 
 		for i := startidx; i < len(ps); i++ {
 			p := ps[i]
-			s, err := GenSql(p, mode, idxtbl, join, false)
+			s, err := GenSql(p, mode, idxtbl, join, false, parser)
 			if err != nil {
 				return "", err
 			}
@@ -318,11 +371,16 @@ func SqlBoolean(ps []*Pattern, mode int64, idxtbl string) (string, error) {
 
 	subsql := make([]string, 0)
 	union := make([]string, 0)
+	duplicate := make(map[string]bool)
 
 	for _, s := range sqls {
 		union = append(union, s.Sql)
 		for _, c := range s.Children {
-			subsql = append(subsql, c.Sql)
+			_, ok := duplicate[c.Label]
+			if !ok {
+				subsql = append(subsql, c.Sql)
+				duplicate[c.Label] = true
+			}
 		}
 	}
 
@@ -338,7 +396,7 @@ func SqlBoolean(ps []*Pattern, mode int64, idxtbl string) (string, error) {
 }
 
 // Generate SQL in phrase mode.  It is the same for natural language mode and phrase search in boolean mode
-func SqlPhrase(ps []*Pattern, mode int64, idxtbl string) (string, error) {
+func SqlPhrase(ps []*Pattern, mode int64, idxtbl string, withIndex bool) (string, error) {
 
 	var sql string
 	var union []string
@@ -349,15 +407,27 @@ func SqlPhrase(ps []*Pattern, mode int64, idxtbl string) (string, error) {
 		kw := tp.Text
 
 		if tp.Operator == TEXT {
-			sql = fmt.Sprintf("SELECT doc_id, CAST(%d as int) FROM %s WHERE word = '%s'",
-				tp.Index, idxtbl, kw)
+			if withIndex {
+				sql = fmt.Sprintf("SELECT doc_id, CAST(%d as int) FROM %s WHERE word = '%s'",
+					tp.Index, idxtbl, kw)
+			} else {
+				sql = fmt.Sprintf("SELECT doc_id FROM %s WHERE word = '%s'",
+					idxtbl, kw)
+
+			}
 		} else {
 			if kw[len(kw)-1] != '*' {
 				return "", moerr.NewInternalErrorNoCtx("wildcard search without character *")
 			}
 			prefix := kw[0 : len(kw)-1]
-			sql = fmt.Sprintf("SELECT doc_id, CAST(%d as int) FROM %s WHERE prefix_eq(word,'%s')",
-				tp.Index, idxtbl, prefix)
+			if withIndex {
+				sql = fmt.Sprintf("SELECT doc_id, CAST(%d as int) FROM %s WHERE prefix_eq(word,'%s')",
+					tp.Index, idxtbl, prefix)
+			} else {
+				sql = fmt.Sprintf("SELECT doc_id FROM %s WHERE prefix_eq(word,'%s')",
+					idxtbl, prefix)
+
+			}
 
 		}
 	} else {
@@ -389,7 +459,12 @@ func SqlPhrase(ps []*Pattern, mode int64, idxtbl string) (string, error) {
 		}
 		sql = "WITH "
 		sql += strings.Join(union, ", ")
-		sql += fmt.Sprintf(" SELECT %s.doc_id, CAST(0 as int) FROM ", tables[0])
+		if withIndex {
+			sql += fmt.Sprintf(" SELECT %s.doc_id, CAST(0 as int) FROM ", tables[0])
+		} else {
+			sql += fmt.Sprintf(" SELECT %s.doc_id FROM ", tables[0])
+		}
+
 		sql += strings.Join(tables, ", ")
 		sql += " WHERE "
 		sql += strings.Join(oncond, " AND ")
@@ -401,16 +476,16 @@ func SqlPhrase(ps []*Pattern, mode int64, idxtbl string) (string, error) {
 }
 
 // API for generate SQL from pattern
-func PatternToSql(ps []*Pattern, mode int64, idxtbl string) (string, error) {
+func PatternToSql(ps []*Pattern, mode int64, idxtbl string, parser string) (string, error) {
 
 	switch mode {
 	case int64(tree.FULLTEXT_NL), int64(tree.FULLTEXT_DEFAULT):
-		return SqlPhrase(ps, mode, idxtbl)
+		return SqlPhrase(ps, mode, idxtbl, true)
 	case int64(tree.FULLTEXT_BOOLEAN):
 		if ps[0].Operator == PHRASE {
-			return SqlPhrase(ps[0].Children, mode, idxtbl)
+			return SqlPhrase(ps[0].Children, mode, idxtbl, true)
 		} else {
-			return SqlBoolean(ps, mode, idxtbl)
+			return SqlBoolean(ps, mode, idxtbl, parser)
 		}
 	case int64(tree.FULLTEXT_QUERY_EXPANSION), int64(tree.FULLTEXT_NL_QUERY_EXPANSION):
 		return "", moerr.NewInternalErrorNoCtx("Query Expansion mode not supported")

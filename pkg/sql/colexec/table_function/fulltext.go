@@ -15,6 +15,7 @@
 package table_function
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 
@@ -48,6 +49,7 @@ type fulltextState struct {
 	agghtab     map[any]uint64
 	aggcnt      []int64
 	mpool       *fulltext.FixedBytePool
+	param       fulltext.FullTextParserParam
 
 	// holding output batch
 	batch *batch.Batch
@@ -153,6 +155,12 @@ func (u *fulltextState) call(tf *TableFunction, proc *process.Process) (vm.CallR
 func (u *fulltextState) start(tf *TableFunction, proc *process.Process, nthRow int, analyzer process.Analyzer) error {
 
 	if !u.inited {
+		if len(tf.Params) > 0 {
+			err := json.Unmarshal([]byte(tf.Params), &u.param)
+			if err != nil {
+				return err
+			}
+		}
 		u.batch = tf.createResultBatch()
 		u.errors = make(chan error)
 		u.stream_chan = make(chan executor.Result, 8)
@@ -248,7 +256,7 @@ func ft_runSql_streaming_fn(proc *process.Process, sql string, stream_chan chan 
 // run SQL to get the (doc_id, word_index) of all patterns (words) in the search string
 func runWordStats(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) (executor.Result, error) {
 
-	sql, err := fulltext.PatternToSql(s.Pattern, s.Mode, s.TblName)
+	sql, err := fulltext.PatternToSql(s.Pattern, s.Mode, s.TblName, u.param.Parser)
 	if err != nil {
 		return executor.Result{}, err
 	}
