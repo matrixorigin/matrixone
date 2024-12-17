@@ -124,8 +124,8 @@ func (mergeGroup *MergeGroup) consumeBatch(proc *process.Process, b *batch.Batch
 		if mergeGroup.ctr.result.IsEmpty() {
 			mergeGroup.ctr.result.InitOnlyAgg(math.MaxInt32, aggexec.MakeInitialAggListFromList(proc, b.Aggs))
 			mergeGroup.ctr.result.ToPopped[0].SetRowCount(1)
-			for i := range mergeGroup.ctr.result.ToPopped[0].Aggs {
-				if err := mergeGroup.ctr.result.ToPopped[0].Aggs[i].GroupGrow(1); err != nil {
+			for i := range mergeGroup.ctr.result.AggList {
+				if err := mergeGroup.ctr.result.AggList[i].GroupGrow(1); err != nil {
 					return err
 				}
 			}
