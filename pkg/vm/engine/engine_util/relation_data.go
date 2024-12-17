@@ -35,6 +35,12 @@ func UnmarshalRelationData(data []byte) (engine.RelData, error) {
 			return nil, err
 		}
 		return relData, nil
+	case engine.RelDataEmpty:
+		relData := BuildEmptyRelData()
+		if err := relData.UnmarshalBinary(data); err != nil {
+			return nil, err
+		}
+		return relData, nil
 	default:
 		return nil, moerr.NewInternalErrorNoCtx("unsupported relation data type")
 	}

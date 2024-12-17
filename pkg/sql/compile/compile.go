@@ -4201,6 +4201,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 			node.Data = engine_util.BuildEmptyRelData()
 			node.Data.AttachTombstones(uncommittedTombs)
 		}
+		nodes = append(nodes, node)
 	}
 	return nodes, nil
 }
