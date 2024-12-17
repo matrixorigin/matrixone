@@ -142,7 +142,6 @@ func (rd *EmptyRelationData) UnmarshalBinary(data []byte) (err error) {
 	if tombstoneLen == 0 {
 		return
 	}
-	//FIXME:: cycle import ??
 	rd.tombs, err = UnmarshalTombstoneData(data[:tombstoneLen])
 	return
 }
