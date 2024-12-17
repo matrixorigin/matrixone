@@ -3720,7 +3720,7 @@ func lockMoDatabase(c *Compile, dbName string, lockMode lock.LockMode) error {
 		return err
 	}
 	defer vec.Free(c.proc.Mp())
-	if err := lockRows(c.e, c.proc, dbRel, vec, lockMode, lock.Sharding_ByRow, accountID); err != nil {
+	if err := lockRows(c.e, c.proc, dbRel, vec, lockMode, lock.Sharding_None, accountID); err != nil {
 		return err
 	}
 	return nil
@@ -3742,7 +3742,7 @@ func lockMoTable(
 	}
 	defer vec.Free(c.proc.Mp())
 
-	if err := lockRows(c.e, c.proc, dbRel, vec, lockMode, lock.Sharding_ByRow, accountID); err != nil {
+	if err := lockRows(c.e, c.proc, dbRel, vec, lockMode, lock.Sharding_None, accountID); err != nil {
 		return err
 	}
 	return nil

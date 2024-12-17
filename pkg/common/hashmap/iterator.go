@@ -20,6 +20,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
+func IteratorChangeOwner(itr Iterator, m HashMap) {
+	if it, ok := itr.(*intHashMapIterator); ok {
+		it.mp = m.(*IntHashMap)
+		return
+	}
+	it := itr.(*strHashmapIterator)
+	it.mp = m.(*StrHashMap)
+}
+
 func (itr *strHashmapIterator) Find(start, count int, vecs []*vector.Vector) ([]uint64, []int64) {
 	for i := 0; i < count; i++ {
 		itr.keys[i] = itr.keys[i][:0]

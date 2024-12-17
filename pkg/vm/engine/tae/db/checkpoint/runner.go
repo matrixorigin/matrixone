@@ -18,8 +18,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"math/rand"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -31,27 +29,19 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"go.uber.org/zap"
 
-	"github.com/matrixorigin/matrixone/pkg/util/fault"
-
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
-	w "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 	"github.com/tidwall/btree"
 )
@@ -185,11 +175,6 @@ type runner struct {
 		// minimum count of uncheckpointed transactions allowed before the next checkpoint
 		minCount int
 
-		forceFlushTimeout       time.Duration
-		forceFlushCheckInterval time.Duration
-
-		dirtyEntryQueueSize int
-		waitQueueSize       int
 		checkpointQueueSize int
 
 		checkpointBlockRows int
@@ -208,8 +193,6 @@ type runner struct {
 	wal       wal.Driver
 	disabled  atomic.Bool
 
-	stopper *stopper.Stopper
-
 	// memory storage of the checkpoint entries
 	storage struct {
 		sync.RWMutex
@@ -224,14 +207,10 @@ type runner struct {
 	incrementalPolicy *timeBasedPolicy
 	globalPolicy      *countBasedPolicy
 
-	dirtyEntryQueue            sm.Queue
-	waitQueue                  sm.Queue
 	incrementalCheckpointQueue sm.Queue
 	globalCheckpointQueue      sm.Queue
 	postCheckpointQueue        sm.Queue
 	gcCheckpointQueue          sm.Queue
-
-	objMemSizeList []tableAndSize
 
 	checkpointMetaFiles struct {
 		sync.RWMutex
@@ -274,14 +253,12 @@ func NewRunner(
 
 	r.incrementalPolicy = &timeBasedPolicy{interval: r.options.minIncrementalInterval}
 	r.globalPolicy = &countBasedPolicy{minCount: r.options.globalMinCount}
-	r.stopper = stopper.NewStopper("CheckpointRunner")
-	r.dirtyEntryQueue = sm.NewSafeQueue(r.options.dirtyEntryQueueSize, 100, r.onDirtyEntries)
-	r.waitQueue = sm.NewSafeQueue(r.options.waitQueueSize, 100, r.onWaitWaitableItems)
 	r.incrementalCheckpointQueue = sm.NewSafeQueue(r.options.checkpointQueueSize, 100, r.onIncrementalCheckpointEntries)
 	r.globalCheckpointQueue = sm.NewSafeQueue(r.options.checkpointQueueSize, 100, r.onGlobalCheckpointEntries)
 	r.gcCheckpointQueue = sm.NewSafeQueue(100, 100, r.onGCCheckpointEntries)
 	r.postCheckpointQueue = sm.NewSafeQueue(1000, 1, r.onPostCheckpointEntries)
 	r.checkpointMetaFiles.files = make(map[string]struct{})
+
 	return r
 }
 
@@ -294,10 +271,6 @@ func (r *runner) String() string {
 	_, _ = fmt.Fprintf(&buf, "globalMinCount=%v, ", r.options.globalMinCount)
 	_, _ = fmt.Fprintf(&buf, "globalVersionInterval=%v, ", r.options.globalVersionInterval)
 	_, _ = fmt.Fprintf(&buf, "minCount=%v, ", r.options.minCount)
-	_, _ = fmt.Fprintf(&buf, "forceFlushTimeout=%v, ", r.options.forceFlushTimeout)
-	_, _ = fmt.Fprintf(&buf, "forceFlushCheckInterval=%v, ", r.options.forceFlushCheckInterval)
-	_, _ = fmt.Fprintf(&buf, "dirtyEntryQueueSize=%v, ", r.options.dirtyEntryQueueSize)
-	_, _ = fmt.Fprintf(&buf, "waitQueueSize=%v, ", r.options.waitQueueSize)
 	_, _ = fmt.Fprintf(&buf, "checkpointQueueSize=%v, ", r.options.checkpointQueueSize)
 	_, _ = fmt.Fprintf(&buf, "checkpointBlockRows=%v, ", r.options.checkpointBlockRows)
 	_, _ = fmt.Fprintf(&buf, "checkpointSize=%v, ", r.options.checkpointSize)
@@ -329,13 +302,6 @@ func (r *runner) GetCheckpointMetaFiles() map[string]struct{} {
 		files[k] = v
 	}
 	return files
-}
-
-// Only used in UT
-func (r *runner) DebugUpdateOptions(opts ...Option) {
-	for _, opt := range opts {
-		opt(r)
-	}
 }
 
 func (r *runner) onGlobalCheckpointEntries(items ...any) {
@@ -525,49 +491,6 @@ func (r *runner) DeleteGlobalEntry(entry *CheckpointEntry) {
 	perfcounter.Update(r.ctx, func(counter *perfcounter.CounterSet) {
 		counter.TAE.CheckPoint.DeleteGlobalEntry.Add(1)
 	})
-}
-
-func (r *runner) FlushTable(ctx context.Context, dbID, tableID uint64, ts types.TS) (err error) {
-	iarg, sarg, flush := fault.TriggerFault("flush_table_error")
-	if flush && (iarg == 0 || rand.Int63n(iarg) == 0) {
-		return moerr.NewInternalError(ctx, sarg)
-	}
-	makeCtx := func() *DirtyCtx {
-		tree := r.source.ScanInRangePruned(types.TS{}, ts)
-		tree.GetTree().Compact()
-		tableTree := tree.GetTree().GetTable(tableID)
-		if tableTree == nil {
-			return nil
-		}
-		nTree := model.NewTree()
-		nTree.Tables[tableID] = tableTree
-		entry := logtail.NewDirtyTreeEntry(types.TS{}, ts, nTree)
-		dirtyCtx := new(DirtyCtx)
-		dirtyCtx.tree = entry
-		dirtyCtx.force = true
-		return dirtyCtx
-	}
-
-	op := func() (ok bool, err error) {
-		dirtyCtx := makeCtx()
-		if dirtyCtx == nil {
-			return true, nil
-		}
-		if _, err = r.dirtyEntryQueue.Enqueue(dirtyCtx); err != nil {
-			return true, nil
-		}
-		return false, nil
-	}
-
-	err = common.RetryWithIntervalAndTimeout(
-		op,
-		r.options.forceFlushTimeout,
-		r.options.forceFlushCheckInterval, true)
-	if moerr.IsMoErrCode(err, moerr.ErrInternal) || moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
-		logutil.Warnf("Flush %d-%d :%v", dbID, tableID, err)
-		return nil
-	}
-	return
 }
 
 func (r *runner) saveCheckpoint(start, end types.TS, ckpLSN, truncateLSN uint64) (name string, err error) {
@@ -813,7 +736,7 @@ func (r *runner) tryScheduleIncrementalCheckpoint(start, end types.TS) {
 	r.tryAddNewIncrementalCheckpointEntry(entry)
 }
 
-func (r *runner) tryScheduleCheckpoint(endts types.TS) {
+func (r *runner) TryScheduleCheckpoint(endts types.TS) {
 	if r.disabled.Load() {
 		return
 	}
@@ -870,21 +793,9 @@ func (r *runner) tryScheduleCheckpoint(endts types.TS) {
 }
 
 func (r *runner) fillDefaults() {
-	if r.options.forceFlushTimeout <= 0 {
-		r.options.forceFlushTimeout = time.Second * 90
-	}
-	if r.options.forceFlushCheckInterval <= 0 {
-		r.options.forceFlushCheckInterval = time.Millisecond * 400
-	}
 	if r.options.collectInterval <= 0 {
 		// TODO: define default value
 		r.options.collectInterval = time.Second * 5
-	}
-	if r.options.dirtyEntryQueueSize <= 0 {
-		r.options.dirtyEntryQueueSize = 10000
-	}
-	if r.options.waitQueueSize <= 1000 {
-		r.options.waitQueueSize = 1000
 	}
 	if r.options.checkpointQueueSize <= 1000 {
 		r.options.checkpointQueueSize = 1000
@@ -906,270 +817,21 @@ func (r *runner) fillDefaults() {
 	}
 }
 
-func (r *runner) onWaitWaitableItems(items ...any) {
-	// TODO: change for more waitable items
-	start := time.Now()
-	for _, item := range items {
-		ckpEntry := item.(wal.LogEntry)
-		err := ckpEntry.WaitDone()
-		if err != nil {
-			panic(err)
-		}
-		ckpEntry.Free()
-	}
-	logutil.Debugf("Total [%d] WAL Checkpointed | [%s]", len(items), time.Since(start))
-}
-
-func (r *runner) fireFlushTabletail(table *catalog.TableEntry, tree *model.TableTree) error {
-	tableDesc := fmt.Sprintf("%d-%s", table.ID, table.GetLastestSchemaLocked(false).Name)
-	metas := make([]*catalog.ObjectEntry, 0, 10)
-	for _, obj := range tree.Objs {
-		object, err := table.GetObjectByID(obj.ID, false)
-		if err != nil {
-			panic(err)
-		}
-		metas = append(metas, object)
-	}
-	tombstoneMetas := make([]*catalog.ObjectEntry, 0, 10)
-	for _, obj := range tree.Tombstones {
-		object, err := table.GetObjectByID(obj.ID, true)
-		if err != nil {
-			panic(err)
-		}
-		tombstoneMetas = append(tombstoneMetas, object)
-	}
-
-	// freeze all append
-	scopes := make([]common.ID, 0, len(metas))
-	for _, meta := range metas {
-		if !meta.GetObjectData().PrepareCompact() {
-			logutil.Info("[FlushTabletail] data prepareCompact false", zap.String("table", tableDesc), zap.String("obj", meta.ID().String()))
-			return moerr.GetOkExpectedEOB()
-		}
-		scopes = append(scopes, *meta.AsCommonID())
-	}
-	for _, meta := range tombstoneMetas {
-		if !meta.GetObjectData().PrepareCompact() {
-			logutil.Info("[FlushTabletail] tomb prepareCompact false", zap.String("table", tableDesc), zap.String("obj", meta.ID().String()))
-			return moerr.GetOkExpectedEOB()
-		}
-		scopes = append(scopes, *meta.AsCommonID())
-	}
-
-	factory := jobs.FlushTableTailTaskFactory(metas, tombstoneMetas, r.rt)
-	if _, err := r.rt.Scheduler.ScheduleMultiScopedTxnTask(nil, tasks.FlushTableTailTask, scopes, factory); err != nil {
-		if err != tasks.ErrScheduleScopeConflict {
-			logutil.Error("[FlushTabletail] Sched Failure", zap.String("table", tableDesc), zap.Error(err))
-		}
-		return moerr.GetOkExpectedEOB()
-	}
-	return nil
-}
-
-func (r *runner) EstimateTableMemSize(table *catalog.TableEntry, tree *model.TableTree) (asize int, dsize int) {
-	for _, obj := range tree.Objs {
-		object, err := table.GetObjectByID(obj.ID, false)
-		if err != nil {
-			panic(err)
-		}
-		a, _ := object.GetObjectData().EstimateMemSize()
-		asize += a
-	}
-	for _, obj := range tree.Tombstones {
-		object, err := table.GetObjectByID(obj.ID, true)
-		if err != nil {
-			panic(err)
-		}
-		a, _ := object.GetObjectData().EstimateMemSize()
-		dsize += a
-	}
-	return
-}
-
-func (r *runner) collectTableMemUsage(entry *logtail.DirtyTreeEntry) (memPressureRate float64) {
-	// reuse the list
-	r.objMemSizeList = r.objMemSizeList[:0]
-	sizevisitor := new(model.BaseTreeVisitor)
-	var totalSize int
-	sizevisitor.TableFn = func(did, tid uint64) error {
-		db, err := r.catalog.GetDatabaseByID(did)
-		if err != nil {
-			panic(err)
-		}
-		table, err := db.GetTableEntryByID(tid)
-		if err != nil {
-			panic(err)
-		}
-		table.Stats.Init(r.options.maxFlushInterval)
-		dirtyTree := entry.GetTree().GetTable(tid)
-		asize, dsize := r.EstimateTableMemSize(table, dirtyTree)
-		totalSize += asize + dsize
-		r.objMemSizeList = append(r.objMemSizeList, tableAndSize{table, asize, dsize})
-		return moerr.GetOkStopCurrRecur()
-	}
-	if err := entry.GetTree().Visit(sizevisitor); err != nil {
-		panic(err)
-	}
-
-	slices.SortFunc(r.objMemSizeList, func(a, b tableAndSize) int {
-		return b.asize - a.asize // sort by asize desc
-	})
-
-	pressure := float64(totalSize) / float64(common.RuntimeOverallFlushMemCap.Load())
-	if pressure > 1.0 {
-		pressure = 1.0
-	}
-	logutil.Info(
-		"Flush-CollectMemUsage",
-		zap.Float64("pressure", pressure),
-		zap.String("size", common.HumanReadableBytes(totalSize)),
-	)
-
-	return pressure
-}
-
-func (r *runner) checkFlushConditionAndFire(entry *logtail.DirtyTreeEntry, force bool, pressure float64) {
-	count := 0
-	for _, ticket := range r.objMemSizeList {
-		table, asize, dsize := ticket.tbl, ticket.asize, ticket.dsize
-		dirtyTree := entry.GetTree().GetTable(table.ID)
-
-		if force {
-			logutil.Info(
-				"Flush-Force",
-				zap.Uint64("id", table.ID),
-				zap.String("name", table.GetLastestSchemaLocked(false).Name),
-			)
-			if err := r.fireFlushTabletail(table, dirtyTree); err == nil {
-				table.Stats.ResetDeadline(r.options.maxFlushInterval)
-			}
-			continue
-		}
-
-		flushReady := func() bool {
-			if !table.IsActive() {
-				count++
-				if pressure < 0.5 || count < 200 {
-					// if the table has been dropped, flush it immediately if
-					// resources are available.
-					// count is used to avoid too many flushes in one round
-					return true
-				}
-				return false
-			}
-			// time to flush
-			if table.Stats.GetFlushDeadline().Before(time.Now()) {
-				return true
-			}
-			// this table is too large, flush it
-			if asize+dsize > int(common.FlushMemCapacity.Load()) {
-				return true
-			}
-			// unflushed data is too large, flush it
-			if asize > common.Const1MBytes && rand.Float64() < pressure {
-				return true
-			}
-			return false
-		}
-
-		ready := flushReady()
-
-		if asize+dsize > 2*1000*1024 {
-			logutil.Info(
-				"Flush-Tabletail",
-				zap.String("name", table.GetLastestSchemaLocked(false).Name),
-				zap.String("size", common.HumanReadableBytes(asize+dsize)),
-				zap.String("dsize", common.HumanReadableBytes(dsize)),
-				zap.Duration("count-down", time.Until(table.Stats.GetFlushDeadline())),
-				zap.Bool("ready", ready),
-			)
-		}
-
-		if ready {
-			if err := r.fireFlushTabletail(table, dirtyTree); err == nil {
-				table.Stats.ResetDeadline(r.options.maxFlushInterval)
-			}
-		}
-	}
-}
-
-// for a non-forced dirty tree, it contains all unflushed data in the db at the latest moment
-func (r *runner) scheduleFlush(entry *logtail.DirtyTreeEntry, force bool) {
-	if entry.IsEmpty() {
-		return
-	}
-	// logutil.Debug(entry.String())
-
-	pressure := r.collectTableMemUsage(entry)
-	r.checkFlushConditionAndFire(entry, force, pressure)
-}
-
-func (r *runner) onDirtyEntries(entries ...any) {
-	normal := logtail.NewEmptyDirtyTreeEntry()
-	force := logtail.NewEmptyDirtyTreeEntry()
-	for _, entry := range entries {
-		e := entry.(*DirtyCtx)
-		if e.force {
-			force.Merge(e.tree)
-		} else {
-			normal.Merge(e.tree)
-		}
-	}
-	r.scheduleFlush(force, true)
-	r.scheduleFlush(normal, false)
-}
-
-func (r *runner) crontask(ctx context.Context) {
-	// friendly for freezing objects, avoiding fierece refer cnt compectition
-	lag := 3 * time.Second
-	if r.options.maxFlushInterval < time.Second {
-		// test env, no need to lag
-		lag = 0 * time.Second
-	}
-	hb := w.NewHeartBeaterWithFunc(r.options.collectInterval, func() {
-		r.source.Run(lag)
-		entry := r.source.GetAndRefreshMerged()
-		if !entry.IsEmpty() {
-			e := new(DirtyCtx)
-			e.tree = entry
-			r.dirtyEntryQueue.Enqueue(e)
-		}
-		_, endts := entry.GetTimeRange()
-		r.tryScheduleCheckpoint(endts)
-	}, nil)
-	hb.Start()
-	<-ctx.Done()
-	hb.Stop()
-}
-
-func (r *runner) EnqueueWait(item any) (err error) {
-	_, err = r.waitQueue.Enqueue(item)
-	return
-}
-
 func (r *runner) Start() {
 	r.onceStart.Do(func() {
 		r.postCheckpointQueue.Start()
 		r.incrementalCheckpointQueue.Start()
 		r.globalCheckpointQueue.Start()
 		r.gcCheckpointQueue.Start()
-		r.dirtyEntryQueue.Start()
-		r.waitQueue.Start()
-		if err := r.stopper.RunNamedTask("dirty-collector-job", r.crontask); err != nil {
-			panic(err)
-		}
 	})
 }
 
 func (r *runner) Stop() {
 	r.onceStop.Do(func() {
-		r.stopper.Stop()
-		r.dirtyEntryQueue.Stop()
 		r.incrementalCheckpointQueue.Stop()
 		r.globalCheckpointQueue.Stop()
 		r.gcCheckpointQueue.Stop()
 		r.postCheckpointQueue.Stop()
-		r.waitQueue.Stop()
 	})
 }
 
