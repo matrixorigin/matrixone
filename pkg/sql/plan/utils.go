@@ -2720,3 +2720,11 @@ func offsetToString(offset int) string {
 // }
 // return !strings.HasPrefix(tableDef.Name, catalog.IndexTableNamePrefix)
 // }
+
+// DbNameOfObjRef return subscription name of ObjectRef if exists,
+func DbNameOfObjRef(objRef *ObjectRef) string {
+	if objRef.SubscriptionName == "" {
+		return objRef.SchemaName
+	}
+	return objRef.SubscriptionName
+}
