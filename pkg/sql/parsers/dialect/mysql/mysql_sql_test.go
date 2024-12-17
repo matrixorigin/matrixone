@@ -2569,7 +2569,8 @@ var (
 			input: "create snapshot snapshot_01 for database db1",
 		},
 		{
-			input: "create snapshot snapshot_01 for table db1 t1",
+			input:  "create snapshot snapshot_01 for table db1 t1",
+			output: "create snapshot snapshot_01 for table db1.t1",
 		},
 		{
 			input: "restore cluster from snapshot snapshot_01",
