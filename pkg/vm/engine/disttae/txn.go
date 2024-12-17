@@ -590,7 +590,6 @@ func (txn *Transaction) dumpInsertBatchLocked(ctx context.Context, offset int, s
 			newBat.Vecs = bat.Vecs[1:]
 			newBat.SetRowCount(bat.Vecs[0].Length())
 			mp[tbKey] = append(mp[tbKey], newBat)
-			txn.toFreeBatches[tbKey] = append(txn.toFreeBatches[tbKey], bat)
 
 			keepElement = false
 		}
