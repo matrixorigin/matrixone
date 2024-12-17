@@ -552,10 +552,7 @@ func getFromAccountIdAndToAccountId(ctx context.Context, ses *Session, bh Backgr
 			return
 		} else {
 			if len(toAccount) > 0 {
-				fromAccountId, err = getAccountId(ctx, bh, srcAccount)
-				if err != nil {
-					return
-				}
+				fromAccountId = uint32(snapshot.objId)
 				toAccountId, err = getAccountId(ctx, bh, toAccount)
 				if err != nil {
 					return
@@ -1708,7 +1705,7 @@ func restoreToCluster(ctx context.Context,
 			return err
 		}
 		if newAccountId != uint32(account.accountId) {
-			if err = restoreAccountUsingClusterSnapshotToNew(ctx, ses, bh, snapshotName, snapshotTs, account, subDbToRestore, uint64(newAccountId), true); err != nil {
+			if err = restoreAccountUsingClusterSnapshotToNew(ctx, ses, bh, snapshotName, snapshotTs, account, subDbToRestore, uint64(newAccountId), true, true); err != nil {
 				return err
 			}
 		} else {
@@ -1741,7 +1738,7 @@ func restoreToCluster(ctx context.Context,
 		}
 
 		// 2.0 restore droped account to new account
-		err = restoreAccountUsingClusterSnapshotToNew(ctx, ses, bh, snapshotName, snapshotTs, account, subDbToRestore, uint64(newAccountId), true)
+		err = restoreAccountUsingClusterSnapshotToNew(ctx, ses, bh, snapshotName, snapshotTs, account, subDbToRestore, uint64(newAccountId), true, false)
 		if err != nil {
 			return err
 		}
@@ -1760,6 +1757,7 @@ func restoreToAccountUsingCluster(
 	srcAccount := string(stmt.AccountName)
 	snapshotName := string(stmt.SnapShotName)
 	snapshotTs := sp.ts
+	isNeedToCleanToDatabase := false
 	getLogger(ses.GetService()).Info(fmt.Sprintf("[%s] start to restore account using cluster snapshot: %v, restore timestamp: %d", snapshotName, srcAccount, snapshotTs))
 
 	var toAccountId uint32
@@ -1777,7 +1775,9 @@ func restoreToAccountUsingCluster(
 		if err != nil {
 			return err
 		}
+		isNeedToCleanToDatabase = true
 	} else {
+		isNeedToCleanToDatabase = true
 		toAccountId, err = getAccountId(ctx, bh, srcAccount)
 		if err != nil {
 			// create account
@@ -1789,10 +1789,11 @@ func restoreToAccountUsingCluster(
 			if err != nil {
 				return err
 			}
+			isNeedToCleanToDatabase = false
 		}
 	}
 
-	err = restoreAccountUsingClusterSnapshotToNew(ctx, ses, bh, snapshotName, snapshotTs, *ar, nil, uint64(toAccountId), false)
+	err = restoreAccountUsingClusterSnapshotToNew(ctx, ses, bh, snapshotName, snapshotTs, *ar, nil, uint64(toAccountId), false, isNeedToCleanToDatabase)
 	if err != nil {
 		return err
 	}
@@ -1967,10 +1968,18 @@ func restoreAccountUsingClusterSnapshotToNew(ctx context.Context,
 	subDbToRestore map[string]*subDbRestoreRecord,
 	toAccountId uint64,
 	isRestoreCluster bool,
+	isNeedToCleanToDatabase bool,
 ) (err error) {
 
 	getLogger(ses.GetService()).Info(fmt.Sprintf("[%s] start to restore dropped account: %v, account id: %d to new account id: %d, restore timestamp: %d", snapshotName, account.accountName, account.accountId, toAccountId, snapshotTs))
 	fromAccount := account.accountId
+
+	// drop foreign key related tables first
+	if isNeedToCleanToDatabase {
+		if err = deleteCurFkTables(ctx, ses.GetService(), bh, "", "", uint32(toAccountId)); err != nil {
+			return
+		}
+	}
 
 	// get topo sorted tables with foreign key
 	var sortedFkTbls []string
