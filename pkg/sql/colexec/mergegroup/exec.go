@@ -122,8 +122,7 @@ func (mergeGroup *MergeGroup) consumeBatch(proc *process.Process, b *batch.Batch
 	if len(b.Vecs) == 0 {
 
 		if mergeGroup.ctr.result.IsEmpty() {
-			mergeGroup.ctr.result.InitOnlyAgg(math.MaxInt32, b.Aggs)
-			b.Aggs = nil
+			mergeGroup.ctr.result.InitOnlyAgg(math.MaxInt32, aggexec.MakeInitialAggListFromList(proc, b.Aggs))
 			mergeGroup.ctr.result.ToPopped[0].SetRowCount(1)
 		}
 
@@ -153,8 +152,7 @@ func (mergeGroup *MergeGroup) consumeBatch(proc *process.Process, b *batch.Batch
 	}
 
 	if mergeGroup.ctr.result.IsEmpty() {
-		mergeGroup.ctr.result.InitWithBatch(aggexec.SyncAggregatorsChunkSize(b.Vecs, b.Aggs), b.Aggs, b)
-		b.Aggs = nil
+		mergeGroup.ctr.result.InitWithBatch(aggexec.SyncAggregatorsChunkSize(b.Vecs, b.Aggs), aggexec.MakeInitialAggListFromList(proc, b.Aggs), b)
 	}
 
 	for i, count := 0, b.RowCount(); i < count; i += hashmap.UnitLimit {
