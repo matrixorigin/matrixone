@@ -2192,6 +2192,7 @@ func Test_resultset(t *testing.T) {
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
 		pu.SV.KillRountinesInterval = 0
+		setSessionAlloc("", NewLeakCheckAllocator())
 		setPu("", pu)
 		ioses, err := NewIOSession(&testConn{}, pu, "")
 		convey.ShouldBeNil(err)
