@@ -147,7 +147,7 @@ func New(
 
 func (e *Engine) Close() error {
 	if e.gcPool != nil {
-		e.gcPool.Release()
+		_ = e.gcPool.ReleaseTimeout(time.Second * 3)
 	}
 	e.dynamicCtx.Close()
 	return nil
@@ -157,8 +157,11 @@ func (e *Engine) fillDefaults() {
 	if e.config.insertEntryMaxCount <= 0 {
 		e.config.insertEntryMaxCount = InsertEntryThreshold
 	}
-	if e.config.workspaceThreshold <= 0 {
-		e.config.workspaceThreshold = WorkspaceThreshold
+	if e.config.commitWorkspaceThreshold <= 0 {
+		e.config.commitWorkspaceThreshold = CommitWorkspaceThreshold
+	}
+	if e.config.writeWorkspaceThreshold <= 0 {
+		e.config.writeWorkspaceThreshold = WriteWorkspaceThreshold
 	}
 	if e.config.cnTransferTxnLifespanThreshold <= 0 {
 		e.config.cnTransferTxnLifespanThreshold = CNTransferTxnLifespanThreshold
@@ -167,9 +170,25 @@ func (e *Engine) fillDefaults() {
 	logutil.Info(
 		"INIT-ENGINE-CONFIG",
 		zap.Int("InsertEntryMaxCount", e.config.insertEntryMaxCount),
-		zap.Uint64("WorkspaceThreshold", e.config.workspaceThreshold),
+		zap.Uint64("CommitWorkspaceThreshold", e.config.commitWorkspaceThreshold),
+		zap.Uint64("WriteWorkspaceThreshold", e.config.writeWorkspaceThreshold),
 		zap.Duration("CNTransferTxnLifespanThreshold", e.config.cnTransferTxnLifespanThreshold),
 	)
+}
+
+// SetWorkspaceThreshold updates the commit and write workspace thresholds (in MB).
+// Non-zero values override the current thresholds, while zero keeps them unchanged.
+// Returns the previous thresholds (in MB).
+func (e *Engine) SetWorkspaceThreshold(commitThreshold, writeThreshold uint64) (commit, write uint64) {
+	commit = e.config.commitWorkspaceThreshold / mpool.MB
+	write = e.config.writeWorkspaceThreshold / mpool.MB
+	if commitThreshold != 0 {
+		e.config.commitWorkspaceThreshold = commitThreshold * mpool.MB
+	}
+	if writeThreshold != 0 {
+		e.config.writeWorkspaceThreshold = writeThreshold * mpool.MB
+	}
+	return
 }
 
 func (e *Engine) GetService() string {

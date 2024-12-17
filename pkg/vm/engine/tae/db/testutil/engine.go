@@ -16,11 +16,12 @@ package testutil
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -69,14 +70,30 @@ func NewTestEngineWithDir(
 	}
 }
 
-func NewTestEngine(
+func NewReplayTestEngine(
 	ctx context.Context,
 	moduleName string,
 	t *testing.T,
 	opts *options.Options,
 ) *TestEngine {
+	return NewTestEngine(
+		ctx,
+		moduleName,
+		t,
+		opts,
+		db.WithTxnMode(db.DBTxnMode_Replay),
+	)
+}
+
+func NewTestEngine(
+	ctx context.Context,
+	moduleName string,
+	t *testing.T,
+	opts *options.Options,
+	dbOpts ...db.DBOption,
+) *TestEngine {
 	blockio.Start("")
-	db := InitTestDB(ctx, moduleName, t, opts)
+	db := InitTestDB(ctx, moduleName, t, opts, dbOpts...)
 	return &TestEngine{
 		DB: db,
 		T:  t,
@@ -145,21 +162,21 @@ func (e *TestEngine) CheckRowsByScan(exp int, applyDelete bool) {
 	assert.NoError(e.T, txn.Commit(context.Background()))
 }
 func (e *TestEngine) ForceCheckpoint() {
-	err := e.BGCheckpointRunner.ForceFlushWithInterval(e.TxnMgr.Now(), context.Background(), time.Second*2, time.Millisecond*10)
+	err := e.BGFlusher.ForceFlushWithInterval(e.TxnMgr.Now(), context.Background(), time.Second*2, time.Millisecond*10)
 	assert.NoError(e.T, err)
 	err = e.BGCheckpointRunner.ForceIncrementalCheckpoint(e.TxnMgr.Now(), false)
 	assert.NoError(e.T, err)
 }
 
 func (e *TestEngine) ForceLongCheckpoint() {
-	err := e.BGCheckpointRunner.ForceFlush(e.TxnMgr.Now(), context.Background(), 20*time.Second)
+	err := e.BGFlusher.ForceFlush(e.TxnMgr.Now(), context.Background(), 20*time.Second)
 	assert.NoError(e.T, err)
 	err = e.BGCheckpointRunner.ForceIncrementalCheckpoint(e.TxnMgr.Now(), false)
 	assert.NoError(e.T, err)
 }
 
 func (e *TestEngine) ForceLongCheckpointTruncate() {
-	err := e.BGCheckpointRunner.ForceFlush(e.TxnMgr.Now(), context.Background(), 20*time.Second)
+	err := e.BGFlusher.ForceFlush(e.TxnMgr.Now(), context.Background(), 20*time.Second)
 	assert.NoError(e.T, err)
 	err = e.BGCheckpointRunner.ForceIncrementalCheckpoint(e.TxnMgr.Now(), true)
 	assert.NoError(e.T, err)
@@ -286,10 +303,10 @@ func (e *TestEngine) IncrementalCheckpoint(
 	}
 	if waitFlush {
 		testutils.WaitExpect(4000, func() bool {
-			flushed := e.DB.BGCheckpointRunner.IsAllChangesFlushed(types.TS{}, end, false)
+			flushed := e.DB.BGFlusher.IsAllChangesFlushed(types.TS{}, end, false)
 			return flushed
 		})
-		flushed := e.DB.BGCheckpointRunner.IsAllChangesFlushed(types.TS{}, end, true)
+		flushed := e.DB.BGFlusher.IsAllChangesFlushed(types.TS{}, end, true)
 		require.True(e.T, flushed)
 	}
 	err := e.DB.BGCheckpointRunner.ForceIncrementalCheckpoint(end, false)
@@ -360,17 +377,23 @@ func InitTestDBWithDir(
 	t *testing.T,
 	opts *options.Options,
 ) *db.DB {
-	db, _ := db.Open(ctx, dir, opts)
+	var (
+		err error
+		tae *db.DB
+	)
+	if tae, err = db.Open(ctx, dir, opts); err != nil {
+		panic(err)
+	}
 	// only ut executes this checker
-	db.DiskCleaner.GetCleaner().AddChecker(
+	tae.DiskCleaner.GetCleaner().AddChecker(
 		func(item any) bool {
-			min := db.TxnMgr.MinTSForTest()
+			min := tae.TxnMgr.MinTSForTest()
 			ckp := item.(*checkpoint.CheckpointEntry)
 			//logutil.Infof("min: %v, checkpoint: %v", min.ToString(), checkpoint.GetStart().ToString())
 			end := ckp.GetEnd()
 			return !end.GE(&min)
 		}, cmd_util.CheckerKeyMinTS)
-	return db
+	return tae
 }
 
 func InitTestDB(
@@ -378,10 +401,11 @@ func InitTestDB(
 	moduleName string,
 	t *testing.T,
 	opts *options.Options,
+	dbOpts ...db.DBOption,
 ) *db.DB {
 	blockio.Start("")
 	dir := testutils.InitTestEnv(moduleName, t)
-	db, _ := db.Open(ctx, dir, opts)
+	db, _ := db.Open(ctx, dir, opts, dbOpts...)
 	// only ut executes this checker
 	db.DiskCleaner.GetCleaner().AddChecker(
 		func(item any) bool {

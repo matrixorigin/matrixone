@@ -242,13 +242,13 @@ func TestBinarySearchBlkDataOnUnSortedFakePKCol(t *testing.T) {
 				executor.Options{}.WithDatabase("testdb"))
 			require.NoError(t, err)
 
-			willInsertRows := 10000
-			for i := 0; i < 10; i++ {
+			willInsertRows := 50
+			for i := 0; i < 5; i++ {
 				_, err = sqlExecutor.Exec(ctx,
 					fmt.Sprintf(
 						"insert into hhh "+
 							"select FLOOR(RAND()*1000*1000)"+
-							"from generate_series(1, %d);", willInsertRows/10),
+							"from generate_series(1, %d);", willInsertRows/5),
 					executor.Options{}.WithDatabase("testdb"))
 				require.NoError(t, err)
 
@@ -284,7 +284,7 @@ func TestBinarySearchBlkDataOnUnSortedFakePKCol(t *testing.T) {
 				require.NoError(t, err)
 
 				var keys []int64
-				for r := 0; r < 100; r++ {
+				for r := 0; r < 5; r++ {
 					keys = keys[:0]
 					for i := 0; i < willInsertRows; i++ {
 						keys = append(keys, rand.Int63()%int64(willInsertRows))

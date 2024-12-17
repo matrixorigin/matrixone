@@ -1,0 +1,31 @@
+drop account if exists acc01;
+create account acc01 admin_name = 'test_account' identified by '111';
+drop account if exists acc02;
+create account acc02 admin_name = 'test_account' identified by '111';
+show accounts;
+account_name    admin_name    created_time    status    suspended_time    db_count    tbl_count    size    snapshot_size    comments
+acc01    test_account    2024-12-17 06:08:57    open    null    5    65    0.0    0.0    
+acc02    test_account    2024-12-17 06:08:57    open    null    5    65    0.0    0.0    
+sys    root    2024-12-17 02:09:17    open    null    7    99    8.548347    0.0    system account
+drop database if exists db01;
+create database db01;
+use db01;
+create table t01 (a int);
+insert into t01 values (1);
+drop snapshot if exists snapshot_acc01_dropped;
+create snapshot snapshot_acc01_dropped for account acc01;
+drop account if exists acc01;
+select * from db01.t01{snapshot='snapshot_acc01_dropped'};
+a
+1
+restore account acc01 from snapshot snapshot_acc01_dropped to account acc02;
+select * from db01.t01;
+a
+1
+show accounts;
+account_name    admin_name    created_time    status    suspended_time    db_count    tbl_count    size    snapshot_size    comments
+acc02    test_account    2024-12-17 06:08:57    open    null    6    66    0.0    0.0    
+sys    root    2024-12-17 02:09:17    open    null    7    99    8.548347    0.0    system account
+drop account if exists acc01;
+drop account if exists acc02;
+drop snapshot if exists snapshot_acc01_dropped;
