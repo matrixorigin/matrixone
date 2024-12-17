@@ -25,6 +25,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/panjf2000/ants/v2"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -46,14 +49,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/util/stack"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/panjf2000/ants/v2"
-	"go.uber.org/zap"
 )
 
 const (
@@ -761,7 +763,9 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 			zap.String("txn", hex.EncodeToString(txn.op.Txn().ID)),
 			zap.Int("before", beforeEntries),
 			zap.Int("after", afterEntries),
+			zap.String("stack", fmt.Sprintf("%+v", stack.Callers(3))),
 		)
+
 	}()
 	txn.Lock()
 	defer txn.Unlock()

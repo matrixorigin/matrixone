@@ -60,7 +60,8 @@ func rollbackTxnFunc(ses FeSession, execErr error, execCtx *ExecCtx) error {
 	if ses.GetTxnHandler().InMultiStmtTransactionMode() && ses.GetTxnHandler().InActiveTxn() {
 		ses.cleanCache()
 	}
-	ses.Error(execCtx.reqCtx, execErr.Error())
+	txnInfo := ses.GetTxnHandler().GetTxn().Txn().DebugString()
+	ses.Error(execCtx.reqCtx, execErr.Error(), zap.String("txn", txnInfo))
 	execCtx.txnOpt.byRollback = execCtx.txnOpt.byRollback || isErrorRollbackWholeTxn(execErr)
 	txnErr := ses.GetTxnHandler().Rollback(execCtx)
 	if txnErr != nil {

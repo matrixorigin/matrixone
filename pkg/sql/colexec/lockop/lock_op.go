@@ -207,9 +207,12 @@ func performLock(
 		)
 		if lockOp.logger.Enabled(zap.InfoLevel) {
 			lockOp.logger.Info("lock result",
+				zap.String("txn", txnInfo),
 				zap.Uint64("table", target.tableID),
-				zap.Bool("locked", locked),
+				zap.Bool("filter", target.filter != nil),
+				zap.Int32("filter-col", target.filterColIndexInBatch),
 				zap.Int32("primary-index", target.primaryColumnIndexInBatch),
+				zap.Bool("locked", locked),
 				zap.String("refresh-ts", refreshTS.DebugString()),
 				zap.Error(err))
 		}

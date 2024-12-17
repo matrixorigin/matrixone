@@ -241,7 +241,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 			if !isInExecutor {
 				stats.StoreCompilePreRunOnceDuration(time.Since(preRunOnceStart))
 			}
-
+			getLogger(c.proc.GetService()).Info("runOnce", zap.String("txn", txnOperator.Txn().DebugString()), zap.Int("retryTimes", retryTimes))
 			if err = runC.runOnce(); err == nil {
 				if runC.anal != nil {
 					runC.anal.retryTimes = retryTimes
