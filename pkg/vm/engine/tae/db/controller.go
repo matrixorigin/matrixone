@@ -122,6 +122,9 @@ func (c *Controller) handleToReplayCmd(cmd *controlCmd) {
 		start time.Time = time.Now()
 	)
 
+	ctx, cancel := context.WithTimeout(cmd.ctx, 10*time.Minute)
+	defer cancel()
+
 	logger := logutil.Info
 	logger(
 		"DB-SwitchToReplay-Start",
@@ -145,7 +148,15 @@ func (c *Controller) handleToReplayCmd(cmd *controlCmd) {
 	// TODO
 
 	// 2. switch the checkpoint|diskcleaner to replay mode
-	// TODO
+
+	// 2.1 remove GC disk cron job. no new GC job will be issued from now on
+	RemoveCronJob(c.db, CronJobs_Name_GCDisk)
+	RemoveCronJob(c.db, CronJobs_Name_GCCheckpoint)
+	if err = c.db.DiskCleaner.SwitchToReplayMode(ctx); err != nil {
+		// Rollback
+		return
+	}
+	// 2.x TODO: checkpoint runner
 
 	// 3. build forward write request tunnel to the new write candidate
 	// TODO
@@ -175,6 +186,10 @@ func (c *Controller) handleToReplayCmd(cmd *controlCmd) {
 	// 10. forward the write requests to the new write candidate
 	// TODO
 
+	if err = CheckCronJobs(c.db, DBTxnMode_Replay); err != nil {
+		// rollback
+		return
+	}
 	// 11. replay the log entries from the logservice
 	// 11.1 switch the txn mode to replay mode
 	c.db.TxnMgr.ToReplayMode()
@@ -198,6 +213,9 @@ func (c *Controller) handleToWriteCmd(cmd *controlCmd) {
 		err   error
 		start time.Time = time.Now()
 	)
+
+	ctx, cancel := context.WithTimeout(cmd.ctx, 10*time.Minute)
+	defer cancel()
 
 	logger := logutil.Info
 	logger(
@@ -234,7 +252,28 @@ func (c *Controller) handleToWriteCmd(cmd *controlCmd) {
 	// TODO
 
 	// 5. start merge scheduler|checkpoint|diskcleaner
-	// TODO
+	// 5.1 switch the diskcleaner to write mode
+	if err = c.db.DiskCleaner.SwitchToWriteMode(ctx); err != nil {
+		// Rollback
+		return
+	}
+	if err = AddCronJob(
+		c.db, CronJobs_Name_GCDisk, true,
+	); err != nil {
+		// Rollback
+		return
+	}
+	if err = AddCronJob(
+		c.db, CronJobs_Name_GCCheckpoint, true,
+	); err != nil {
+		// Rollback
+		return
+	}
+	if err = CheckCronJobs(c.db, DBTxnMode_Write); err != nil {
+		// Rollback
+		return
+	}
+	// 5.x TODO
 
 	WithTxnMode(DBTxnMode_Write)(c.db)
 }

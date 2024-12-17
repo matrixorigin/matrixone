@@ -17,7 +17,9 @@ package logservice
 import (
 	"context"
 	"path"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -76,4 +78,35 @@ func TestGetBackupData(t *testing.T) {
 	assert.NotNil(t, restore)
 	assert.Equal(t, nextID, restore.NextID)
 	assert.Equal(t, nextIDByKey, restore.NextIDByKey)
+}
+
+func TestServiceBootstrap(t *testing.T) {
+	t.Run("ok", func(t *testing.T) {
+		fn := func(t *testing.T, s *Service) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			assert.Greater(t, len(s.cfg.BootstrapConfig.InitHAKeeperMembers), 0)
+			member := s.cfg.BootstrapConfig.InitHAKeeperMembers[0]
+			parts := strings.Split(member, ":")
+			assert.Equal(t, 2, len(parts))
+			s.cfg.UUID = parts[1]
+			assert.NoError(t, s.BootstrapHAKeeper(ctx, s.cfg))
+		}
+		runServiceTest(t, false, false, fn)
+	})
+
+	t.Run("context cancelled", func(t *testing.T) {
+		fn := func(t *testing.T, s *Service) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			cancel()
+			assert.Greater(t, len(s.cfg.BootstrapConfig.InitHAKeeperMembers), 0)
+			member := s.cfg.BootstrapConfig.InitHAKeeperMembers[0]
+			parts := strings.Split(member, ":")
+			assert.Equal(t, 2, len(parts))
+			s.cfg.UUID = parts[1]
+			s.cfg.BootstrapConfig.Restore.FilePath = ""
+			assert.NoError(t, s.BootstrapHAKeeper(ctx, s.cfg))
+		}
+		runServiceTest(t, false, false, fn)
+	})
 }

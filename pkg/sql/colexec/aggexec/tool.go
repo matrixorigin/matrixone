@@ -18,6 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"math"
 )
 
 // vectorAppendWildly is a more efficient version of vector.AppendFixed.
@@ -75,4 +76,40 @@ func FromD64ToD128(v types.Decimal64) types.Decimal128 {
 		k.B64_127 = ^k.B64_127
 	}
 	return k
+}
+
+func modifyChunkSizeOfAggregator(a AggFuncExec, n int) {
+	r := a.GetOptResult()
+	if r != nil {
+		r.modifyChunkSize(n)
+	}
+}
+
+func getChunkSizeOfAggregator(a AggFuncExec) int {
+	r := a.GetOptResult()
+	if r != nil {
+		return r.getChunkSize()
+	}
+	return math.MaxInt64
+}
+
+func SyncAggregatorsChunkSize(outer []*vector.Vector, as []AggFuncExec, doSync bool) (syncLimit int) {
+	m := math.MaxInt64
+	for _, o := range outer {
+		if s := GetChunkSizeFromType(*o.GetType()); s < m {
+			m = s
+		}
+	}
+	for _, a := range as {
+		if s := getChunkSizeOfAggregator(a); s < m {
+			m = s
+		}
+	}
+
+	if doSync {
+		for i := range as {
+			modifyChunkSizeOfAggregator(as[i], m)
+		}
+	}
+	return m
 }
