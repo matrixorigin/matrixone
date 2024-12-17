@@ -46,8 +46,18 @@ mo_table_rows(dbName, tblName)
 1000
 1000
 1000
+select mo_table_size(dbName, tblName) from (select * from testdb_nor.tmp order by dbName, tblName asc);
+mo_table_size(dbName, tblName)
+36036
+36036
+36036
+36000
+36000
+36000
 insert into tmp values ("testdb_sub", "t4");
 select mo_table_rows(dbName, tblName) from (select * from testdb_nor.tmp order by dbName, tblName asc);
+internal error: get the subscribed tbl info empty: t4
+select mo_table_size(dbName, tblName) from (select * from testdb_nor.tmp order by dbName, tblName asc);
 internal error: get the subscribed tbl info empty: t4
 set mo_table_stats.use_old_impl = no;
 drop database testdb_nor;
