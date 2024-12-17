@@ -71,9 +71,14 @@ func WithDisttaeEngineInsertEntryMaxCount(v int) TestDisttaeEngineOptions {
 		e.insertEntryMaxCount = v
 	}
 }
-func WithDisttaeEngineWorkspaceThreshold(v uint64) TestDisttaeEngineOptions {
+func WithDisttaeEngineCommitWorkspaceThreshold(v uint64) TestDisttaeEngineOptions {
 	return func(e *TestDisttaeEngine) {
-		e.workspaceThreshold = v
+		e.commitWorkspaceThreshold = v
+	}
+}
+func WithDisttaeEngineWriteWorkspaceThreshold(v uint64) TestDisttaeEngineOptions {
+	return func(e *TestDisttaeEngine) {
+		e.writeWorkspaceThreshold = v
 	}
 }
 
