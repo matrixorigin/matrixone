@@ -220,7 +220,7 @@ func (group *Group) generateInitialResult1WithoutGroupBy(proc *process.Process) 
 	if err != nil {
 		return err
 	}
-	limit := aggexec.SyncAggregatorsChunkSize(nil, aggs, true)
+	limit := aggexec.SyncAggregatorsChunkSize(nil, aggs)
 
 	group.ctr.result1.InitOnlyAgg(limit, aggs)
 	for i := range group.ctr.result1.AggList {
@@ -266,7 +266,7 @@ func (group *Group) consumeBatchToGetFinalResult(
 			if err != nil {
 				return err
 			}
-			limit := aggexec.SyncAggregatorsChunkSize(group.ctr.groupByEvaluate.Vec, aggs, true)
+			limit := aggexec.SyncAggregatorsChunkSize(group.ctr.groupByEvaluate.Vec, aggs)
 			group.ctr.result1.InitWithGroupBy(limit, aggs, group.ctr.groupByEvaluate.Vec)
 			if err = preExtendAggExecs(aggs, group.PreAllocSize); err != nil {
 				return err
