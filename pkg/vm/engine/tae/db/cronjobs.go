@@ -74,6 +74,8 @@ var CronJobs_Spec = map[string][]bool{
 	CronJobs_Name_GCLockMerge:     {true, true, true, false},
 	CronJobs_Name_ReportStats:     {true, true, true, true},
 	CronJobs_Name_Checker:         {true, false, true, false},
+	CronJobs_Name_MergeScheduler:  {true, true, false, false},
+	CronJobs_Name_Compact:         {true, true, false, false},
 }
 
 func CanAddCronJob(name string, isWriteModeDB, skipMode bool) bool {
