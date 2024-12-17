@@ -1718,7 +1718,7 @@ func restoreToCluster(ctx context.Context,
 			return err
 		}
 		if newAccountId != uint32(account.accountId) {
-			if err = restoreAccountUsingClusterSnapshotToNew(ctx, ses, bh, snapshotName, snapshotTs, account, subDbToRestore, uint64(newAccountId)); err != nil {
+			if err = restoreAccountUsingClusterSnapshotToNew(ctx, ses, bh, snapshotName, snapshotTs, account, subDbToRestore, uint64(newAccountId), true); err != nil {
 				return err
 			}
 		} else {
@@ -1751,7 +1751,7 @@ func restoreToCluster(ctx context.Context,
 		}
 
 		// 2.0 restore droped account to new account
-		err = restoreAccountUsingClusterSnapshotToNew(ctx, ses, bh, snapshotName, snapshotTs, account, subDbToRestore, uint64(newAccountId))
+		err = restoreAccountUsingClusterSnapshotToNew(ctx, ses, bh, snapshotName, snapshotTs, account, subDbToRestore, uint64(newAccountId), true)
 		if err != nil {
 			return err
 		}
@@ -1802,7 +1802,7 @@ func restoreToAccountUsingCluster(
 		}
 	}
 
-	err = restoreAccountUsingClusterSnapshotToNew(ctx, ses, bh, snapshotName, snapshotTs, *ar, nil, uint64(toAccountId))
+	err = restoreAccountUsingClusterSnapshotToNew(ctx, ses, bh, snapshotName, snapshotTs, *ar, nil, uint64(toAccountId), false)
 	if err != nil {
 		return err
 	}
@@ -1976,6 +1976,7 @@ func restoreAccountUsingClusterSnapshotToNew(ctx context.Context,
 	account accountRecord,
 	subDbToRestore map[string]*subDbRestoreRecord,
 	toAccountId uint64,
+	isRestoreCluster bool,
 ) (err error) {
 
 	getLogger(ses.GetService()).Info(fmt.Sprintf("[%s] start to restore dropped account: %v, account id: %d to new account id: %d, restore timestamp: %d", snapshotName, account.accountName, account.accountId, toAccountId, snapshotTs))
@@ -2007,7 +2008,7 @@ func restoreAccountUsingClusterSnapshotToNew(ctx context.Context,
 		uint32(toAccountId),
 		fkTableMap,
 		viewMap,
-		true,
+		isRestoreCluster,
 		subDbToRestore); err != nil {
 		return err
 	}
