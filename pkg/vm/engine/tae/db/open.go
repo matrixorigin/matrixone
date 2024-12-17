@@ -201,15 +201,22 @@ func Open(
 		db.Catalog,
 		logtail.NewDirtyCollector(db.LogtailMgr, db.Opts.Clock, db.Catalog, new(catalog.LoopProcessor)),
 		db.Wal,
-		checkpoint.WithFlushInterval(opts.CheckpointCfg.FlushInterval),
-		checkpoint.WithCollectInterval(opts.CheckpointCfg.ScanInterval),
 		checkpoint.WithMinCount(int(opts.CheckpointCfg.MinCount)),
 		checkpoint.WithCheckpointBlockRows(opts.CheckpointCfg.BlockRows),
 		checkpoint.WithCheckpointSize(opts.CheckpointCfg.Size),
 		checkpoint.WithMinIncrementalInterval(opts.CheckpointCfg.IncrementalInterval),
 		checkpoint.WithGlobalMinCount(int(opts.CheckpointCfg.GlobalMinCount)),
 		checkpoint.WithGlobalVersionInterval(opts.CheckpointCfg.GlobalVersionInterval),
-		checkpoint.WithReserveWALEntryCount(opts.CheckpointCfg.ReservedWALEntryCount))
+		checkpoint.WithReserveWALEntryCount(opts.CheckpointCfg.ReservedWALEntryCount),
+	)
+	db.BGFlusher = checkpoint.NewFlusher(
+		db.Runtime,
+		db.BGCheckpointRunner,
+		db.Catalog,
+		db.BGCheckpointRunner.GetDirtyCollector(),
+		checkpoint.WithFlusherInterval(opts.CheckpointCfg.FlushInterval),
+		checkpoint.WithFlusherCronPeriod(opts.CheckpointCfg.ScanInterval),
+	)
 
 	now := time.Now()
 	ckpReplayer := db.BGCheckpointRunner.Replay(dataFactory)
@@ -260,12 +267,14 @@ func Open(
 
 	db.Wal.Start()
 	db.BGCheckpointRunner.Start()
+	db.BGFlusher.Start()
 	// TODO: WithGCInterval requires configuration parameters
 	gc2.SetDeleteTimeout(opts.GCCfg.GCDeleteTimeout)
 	gc2.SetDeleteBatchSize(opts.GCCfg.GCDeleteBatchSize)
 
 	// sjw TODO: cleaner need to support replay and write mode
-	cleaner := gc2.NewCheckpointCleaner(opts.Ctx,
+	cleaner := gc2.NewCheckpointCleaner(
+		opts.Ctx,
 		opts.SID, fs, db.BGCheckpointRunner,
 		gc2.WithCanGCCacheSize(opts.GCCfg.CacheSize),
 		gc2.WithMaxMergeCheckpointCount(opts.GCCfg.GCMergeCount),
@@ -280,119 +289,16 @@ func Open(
 			endTS := checkpoint.GetEnd()
 			return !endTS.GE(&ts)
 		}, cmd_util.CheckerKeyTTL)
-	db.DiskCleaner = gc2.NewDiskCleaner(cleaner)
+
+	db.DiskCleaner = gc2.NewDiskCleaner(cleaner, db.IsWriteMode())
 	db.DiskCleaner.Start()
 
 	db.CronJobs = tasks.NewCancelableJobs()
 
-	db.CronJobs.AddJob(
-		"GC-Transfer-Table",
-		opts.CheckpointCfg.TransferInterval,
-		func(ctx context.Context) {
-			db.Runtime.PoolUsageReport()
-			db.Runtime.TransferDelsMap.Prune(opts.TransferTableTTL)
-			transferTable.RunTTL()
-		},
-		1,
-	)
-	db.CronJobs.AddJob(
-		"GC-Disk",
-		opts.GCCfg.ScanGCInterval,
-		func(ctx context.Context) {
-			db.DiskCleaner.GC(ctx)
-		},
-		1,
-	)
-	db.CronJobs.AddJob(
-		"GC-Checkpoint",
-		opts.CheckpointCfg.GCCheckpointInterval,
-		func(ctx context.Context) {
-			if opts.CheckpointCfg.DisableGCCheckpoint {
-				return
-			}
-			gcWaterMark := db.DiskCleaner.GetCleaner().GetCheckpointGCWaterMark()
-			if gcWaterMark == nil {
-				return
-			}
-			if err := db.BGCheckpointRunner.GCByTS(ctx, *gcWaterMark); err != nil {
-				logutil.Error(
-					"GC-Checkpoint-Err",
-					zap.Error(err),
-				)
-			}
-		},
-		1,
-	)
-	db.CronJobs.AddJob(
-		"GC-Catalog-Cache",
-		opts.CatalogCfg.GCInterval,
-		func(ctx context.Context) {
-			if opts.CatalogCfg.DisableGC {
-				return
-			}
-			gcWaterMark := db.DiskCleaner.GetCleaner().GetScanWaterMark()
-			if gcWaterMark == nil {
-				return
-			}
-			db.Catalog.GCByTS(ctx, gcWaterMark.GetEnd())
-		},
-		1,
-	)
-	db.CronJobs.AddJob(
-		"GC-Logtail",
-		opts.CheckpointCfg.GCCheckpointInterval,
-		func(ctx context.Context) {
-			logutil.Info(db.Runtime.ExportLogtailStats())
-			ckp := db.BGCheckpointRunner.MaxIncrementalCheckpoint()
-			if ckp != nil {
-				ts := types.BuildTS(ckp.GetStart().Physical(), 0) // GetStart is previous + 1, reset it here
-				db.LogtailMgr.GCByTS(ctx, ts)
-			}
-		},
-		1,
-	)
-	db.CronJobs.AddJob(
-		"GC-LockMerge",
-		options.DefaultLockMergePruneInterval,
-		func(ctx context.Context) {
-			db.Runtime.LockMergeService.Prune()
-		},
-		1,
-	)
-
-	db.CronJobs.AddJob(
-		"REPORT-MPOOL-STATS",
-		time.Second*10,
-		func(ctx context.Context) {
-			mpoolAllocatorSubTask()
-		},
-		1,
-	)
-
-	db.CronJobs.AddJob(
-		"Compact",
-		opts.CheckpointCfg.ScanInterval,
-		func(ctx context.Context) { db.LogtailMgr.TryCompactTable() },
-		0,
-	)
-
 	db.MergeScheduler = merge.NewScheduler(db.Runtime, merge.NewTaskServiceGetter(opts.TaskServiceGetter))
-	db.CronJobs.AddJob(
-		"Merge",
-		opts.CheckpointCfg.ScanInterval,
-		func(ctx context.Context) { db.MergeScheduler.Schedule() },
-		0,
-	)
 
-	if opts.CheckpointCfg.MetadataCheckInterval != 0 {
-		db.CronJobs.AddJob(
-			"META-CHECK",
-			opts.CheckpointCfg.MetadataCheckInterval,
-			func(ctx context.Context) {
-				db.Catalog.CheckMetadata()
-			},
-			1,
-		)
+	if err = AddCronJobs(db); err != nil {
+		return
 	}
 
 	db.Controller = NewController(db)

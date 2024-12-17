@@ -15,6 +15,7 @@
 package gc
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -140,9 +141,9 @@ var (
 )
 
 type Cleaner interface {
-	Replay() error
-	Process()
-	TryGC() error
+	Replay(context.Context) error
+	Process(context.Context) error
+	TryGC(context.Context) error
 	AddChecker(checker func(item any) bool, key string) int
 	RemoveChecker(key string) error
 	GetScanWaterMark() *checkpoint.CheckpointEntry

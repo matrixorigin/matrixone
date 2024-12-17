@@ -590,6 +590,11 @@ func (sinker *Sinker) Write(
 }
 
 func (sinker *Sinker) Sync(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return context.Cause(ctx)
+	default:
+	}
 	if len(sinker.staged.persisted) == 0 && len(sinker.staged.inMemory) == 0 {
 		return nil
 	}

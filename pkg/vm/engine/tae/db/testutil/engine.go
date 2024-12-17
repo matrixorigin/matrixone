@@ -162,21 +162,21 @@ func (e *TestEngine) CheckRowsByScan(exp int, applyDelete bool) {
 	assert.NoError(e.T, txn.Commit(context.Background()))
 }
 func (e *TestEngine) ForceCheckpoint() {
-	err := e.BGCheckpointRunner.ForceFlushWithInterval(e.TxnMgr.Now(), context.Background(), time.Second*2, time.Millisecond*10)
+	err := e.BGFlusher.ForceFlushWithInterval(e.TxnMgr.Now(), context.Background(), time.Second*2, time.Millisecond*10)
 	assert.NoError(e.T, err)
 	err = e.BGCheckpointRunner.ForceIncrementalCheckpoint(e.TxnMgr.Now(), false)
 	assert.NoError(e.T, err)
 }
 
 func (e *TestEngine) ForceLongCheckpoint() {
-	err := e.BGCheckpointRunner.ForceFlush(e.TxnMgr.Now(), context.Background(), 20*time.Second)
+	err := e.BGFlusher.ForceFlush(e.TxnMgr.Now(), context.Background(), 20*time.Second)
 	assert.NoError(e.T, err)
 	err = e.BGCheckpointRunner.ForceIncrementalCheckpoint(e.TxnMgr.Now(), false)
 	assert.NoError(e.T, err)
 }
 
 func (e *TestEngine) ForceLongCheckpointTruncate() {
-	err := e.BGCheckpointRunner.ForceFlush(e.TxnMgr.Now(), context.Background(), 20*time.Second)
+	err := e.BGFlusher.ForceFlush(e.TxnMgr.Now(), context.Background(), 20*time.Second)
 	assert.NoError(e.T, err)
 	err = e.BGCheckpointRunner.ForceIncrementalCheckpoint(e.TxnMgr.Now(), true)
 	assert.NoError(e.T, err)
@@ -303,10 +303,10 @@ func (e *TestEngine) IncrementalCheckpoint(
 	}
 	if waitFlush {
 		testutils.WaitExpect(4000, func() bool {
-			flushed := e.DB.BGCheckpointRunner.IsAllChangesFlushed(types.TS{}, end, false)
+			flushed := e.DB.BGFlusher.IsAllChangesFlushed(types.TS{}, end, false)
 			return flushed
 		})
-		flushed := e.DB.BGCheckpointRunner.IsAllChangesFlushed(types.TS{}, end, true)
+		flushed := e.DB.BGFlusher.IsAllChangesFlushed(types.TS{}, end, true)
 		require.True(e.T, flushed)
 	}
 	err := e.DB.BGCheckpointRunner.ForceIncrementalCheckpoint(end, false)
@@ -377,17 +377,23 @@ func InitTestDBWithDir(
 	t *testing.T,
 	opts *options.Options,
 ) *db.DB {
-	db, _ := db.Open(ctx, dir, opts)
+	var (
+		err error
+		tae *db.DB
+	)
+	if tae, err = db.Open(ctx, dir, opts); err != nil {
+		panic(err)
+	}
 	// only ut executes this checker
-	db.DiskCleaner.GetCleaner().AddChecker(
+	tae.DiskCleaner.GetCleaner().AddChecker(
 		func(item any) bool {
-			min := db.TxnMgr.MinTSForTest()
+			min := tae.TxnMgr.MinTSForTest()
 			ckp := item.(*checkpoint.CheckpointEntry)
 			//logutil.Infof("min: %v, checkpoint: %v", min.ToString(), checkpoint.GetStart().ToString())
 			end := ckp.GetEnd()
 			return !end.GE(&min)
 		}, cmd_util.CheckerKeyMinTS)
-	return db
+	return tae
 }
 
 func InitTestDB(
