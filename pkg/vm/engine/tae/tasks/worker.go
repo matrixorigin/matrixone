@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package ops
+package tasks
 
 import (
 	"context"
@@ -22,8 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	iops "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/ops/base"
-	iw "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker/base"
 )
 
 type Cmd = uint8
@@ -46,10 +44,10 @@ const (
 )
 
 var (
-	_ iw.IOpWorker = (*OpWorker)(nil)
+	_ IOpWorker = (*OpWorker)(nil)
 )
 
-type OpExecFunc func(op iops.IOp)
+type OpExecFunc func(op IOp)
 
 type Stats struct {
 	Processed atomic.Uint64
@@ -87,16 +85,17 @@ func (s *Stats) String() string {
 }
 
 type OpWorker struct {
-	Ctx        context.Context
-	Name       string
-	OpC        chan iops.IOp
-	CmdC       chan Cmd
-	State      atomic.Int32
-	Pending    atomic.Int64
-	ClosedCh   chan struct{}
-	Stats      Stats
-	ExecFunc   OpExecFunc
-	CancelFunc OpExecFunc
+	ctx        context.Context
+	cancel     context.CancelFunc
+	name       string
+	opC        chan IOp
+	cmdC       chan Cmd
+	state      atomic.Int32
+	pending    atomic.Int64
+	closedC    chan struct{}
+	stats      Stats
+	execFunc   OpExecFunc
+	cancelFunc OpExecFunc
 }
 
 func NewOpWorker(ctx context.Context, name string, args ...int) *OpWorker {
@@ -114,40 +113,40 @@ func NewOpWorker(ctx context.Context, name string, args ...int) *OpWorker {
 		name = fmt.Sprintf("[worker-%d]", common.NextGlobalSeqNum())
 	}
 	worker := &OpWorker{
-		Ctx:      ctx,
-		Name:     name,
-		OpC:      make(chan iops.IOp, l),
-		CmdC:     make(chan Cmd, l),
-		ClosedCh: make(chan struct{}),
+		name:    name,
+		opC:     make(chan IOp, l),
+		cmdC:    make(chan Cmd, l),
+		closedC: make(chan struct{}),
 	}
-	worker.State.Store(CREATED)
-	worker.ExecFunc = worker.onOp
-	worker.CancelFunc = worker.opCancelOp
+	worker.ctx, worker.cancel = context.WithCancel(ctx)
+	worker.state.Store(CREATED)
+	worker.execFunc = worker.onOp
+	worker.cancelFunc = worker.opCancelOp
 	return worker
 }
 
 func (w *OpWorker) Start() {
-	logutil.Debugf("%s Started", w.Name)
-	if w.State.Load() != CREATED {
-		panic(fmt.Sprintf("logic error: %v", w.State.Load()))
+	logutil.Debugf("%s Started", w.name)
+	if w.state.Load() != CREATED {
+		panic(fmt.Sprintf("logic error: %v", w.state.Load()))
 	}
-	w.State.Store(RUNNING)
+	w.state.Store(RUNNING)
 	go func() {
 		for {
-			state := w.State.Load()
+			state := w.state.Load()
 			if state == STOPPED {
 				break
 			}
 			select {
-			case op := <-w.OpC:
-				w.ExecFunc(op)
+			case op := <-w.opC:
+				w.execFunc(op)
 				// if state == RUNNING {
 				// 	w.ExecFunc(op)
 				// } else {
 				// 	w.CancelFunc(op)
 				// }
-				w.Pending.Add(-1)
-			case cmd := <-w.CmdC:
+				w.pending.Add(-1)
+			case cmd := <-w.cmdC:
 				w.onCmd(cmd)
 			}
 		}
@@ -157,85 +156,85 @@ func (w *OpWorker) Start() {
 func (w *OpWorker) Stop() {
 	w.StopReceiver()
 	w.WaitStop()
-	logutil.Debugf("%s Stopped", w.Name)
+	logutil.Debugf("%s Stopped", w.name)
 }
 
 func (w *OpWorker) StopReceiver() {
-	state := w.State.Load()
+	state := w.state.Load()
 	if state >= StoppingReceiver {
 		return
 	}
-	w.State.CompareAndSwap(state, StoppingReceiver)
+	w.state.CompareAndSwap(state, StoppingReceiver)
 }
 
 func (w *OpWorker) WaitStop() {
-	state := w.State.Load()
+	state := w.state.Load()
 	if state <= RUNNING {
 		panic("logic error")
 	}
 	if state == STOPPED {
 		return
 	}
-	if w.State.CompareAndSwap(StoppingReceiver, StoppingCMD) {
-		pending := w.Pending.Load()
+	if w.state.CompareAndSwap(StoppingReceiver, StoppingCMD) {
+		pending := w.pending.Load()
 		for {
 			if pending == 0 {
 				break
 			}
-			pending = w.Pending.Load()
+			pending = w.pending.Load()
 		}
-		w.CmdC <- QUIT
+		w.cmdC <- QUIT
 	}
-	<-w.ClosedCh
+	<-w.closedC
 }
 
-func (w *OpWorker) SendOp(op iops.IOp) bool {
-	state := w.State.Load()
+func (w *OpWorker) SendOp(op IOp) bool {
+	state := w.state.Load()
 	if state != RUNNING {
 		return false
 	}
-	w.Pending.Add(1)
-	if w.State.Load() != RUNNING {
-		w.Pending.Add(-1)
+	w.pending.Add(1)
+	if w.state.Load() != RUNNING {
+		w.pending.Add(-1)
 		return false
 	}
 	select {
-	case w.OpC <- op:
+	case w.opC <- op:
 		return true
 	default:
 	}
-	w.Pending.Add(-1)
+	w.pending.Add(-1)
 	return false
 }
 
-func (w *OpWorker) opCancelOp(op iops.IOp) {
+func (w *OpWorker) opCancelOp(op IOp) {
 	op.SetError(moerr.NewInternalErrorNoCtx("op cancelled"))
 }
 
-func (w *OpWorker) onOp(op iops.IOp) {
-	err := op.OnExec(w.Ctx)
-	w.Stats.AddProcessed()
+func (w *OpWorker) onOp(op IOp) {
+	err := op.OnExec(w.ctx)
+	w.stats.AddProcessed()
 	if err != nil {
-		w.Stats.AddFailed()
+		w.stats.AddFailed()
 	} else {
-		w.Stats.AddSuccessed()
+		w.stats.AddSuccessed()
 	}
 	op.SetError(err)
-	w.Stats.RecordTime(op.GetExecutTime())
+	w.stats.RecordTime(op.GetExecutTime())
 }
 
 func (w *OpWorker) onCmd(cmd Cmd) {
 	switch cmd {
 	case QUIT:
 		// log.Infof("Quit OpWorker")
-		close(w.CmdC)
-		close(w.OpC)
-		if !w.State.CompareAndSwap(StoppingCMD, STOPPED) {
+		close(w.cmdC)
+		close(w.opC)
+		if !w.state.CompareAndSwap(StoppingCMD, STOPPED) {
 			panic("logic error")
 		}
-		w.ClosedCh <- struct{}{}
+		w.closedC <- struct{}{}
 	case stuck: // For test only
-		<-w.Ctx.Done()
+		<-w.ctx.Done()
 		return
 	default:
 		panic(fmt.Sprintf("Unsupported cmd %d", cmd))
@@ -243,6 +242,6 @@ func (w *OpWorker) onCmd(cmd Cmd) {
 }
 
 func (w *OpWorker) StatsString() string {
-	s := fmt.Sprintf("| Stats | %s | w | %s", w.Stats.String(), w.Name)
+	s := fmt.Sprintf("| Stats | %s | w | %s", w.stats.String(), w.name)
 	return s
 }

@@ -30,7 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
-	w "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker"
 )
 
 var (
@@ -454,12 +453,18 @@ func (p *IoPipeline) onWait(jobs ...any) {
 }
 
 func (p *IoPipeline) crontask(ctx context.Context) {
-	hb := w.NewHeartBeaterWithFunc(time.Second*40, func() {
-		logutil.Info(objectio.BitmapPoolReport())
-	}, nil)
-	hb.Start()
+	job := tasks.NewCancelableCronJob(
+		"io-pipeline",
+		40*time.Second,
+		func(ctx context.Context) {
+			logutil.Info(objectio.BitmapPoolReport())
+		},
+		false,
+		0,
+	)
+	job.Start()
 	<-ctx.Done()
-	hb.Stop()
+	job.Stop()
 }
 
 func RunPipelineTest(

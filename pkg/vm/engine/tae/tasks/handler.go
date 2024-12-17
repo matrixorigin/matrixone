@@ -16,27 +16,29 @@ package tasks
 
 import (
 	"context"
+	"sync"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	ops "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker"
+	"github.com/panjf2000/ants/v2"
 )
 
 var (
 	ErrTaskHandleEnqueue = moerr.NewInternalErrorNoCtx("tae: task handle enqueue")
 )
 
-type BaseTaskHandler struct {
-	ops.OpWorker
+type baseTaskHandler struct {
+	OpWorker
 }
 
-func NewBaseEventHandler(ctx context.Context, name string) *BaseTaskHandler {
-	h := &BaseTaskHandler{
-		OpWorker: *ops.NewOpWorker(ctx, name),
+func NewBaseEventHandler(ctx context.Context, name string) *baseTaskHandler {
+	h := &baseTaskHandler{
+		OpWorker: *NewOpWorker(ctx, name),
 	}
 	return h
 }
 
-func (h *BaseTaskHandler) Enqueue(task Task) {
+func (h *baseTaskHandler) Enqueue(task Task) {
 	if !h.SendOp(task) {
 		task.SetError(ErrTaskHandleEnqueue)
 		err := task.Cancel()
@@ -46,22 +48,58 @@ func (h *BaseTaskHandler) Enqueue(task Task) {
 	}
 }
 
-func (h *BaseTaskHandler) Execute(task Task) {
-	h.ExecFunc(task)
+func (h *baseTaskHandler) Execute(task Task) {
+	h.execFunc(task)
 }
 
-func (h *BaseTaskHandler) Close() error {
-	h.Stop()
-	return nil
+var (
+	poolHandlerName = "PoolHandler"
+)
+
+type poolHandler struct {
+	baseTaskHandler
+	opExec OpExecFunc
+	pool   *ants.Pool
+	wg     *sync.WaitGroup
 }
 
-type singleWorkerHandler struct {
-	BaseTaskHandler
-}
-
-func NewSingleWorkerHandler(ctx context.Context, name string) *singleWorkerHandler {
-	h := &singleWorkerHandler{
-		BaseTaskHandler: *NewBaseEventHandler(ctx, name),
+func NewPoolHandler(ctx context.Context, num int) *poolHandler {
+	pool, err := ants.NewPool(num)
+	if err != nil {
+		panic(err)
 	}
+	h := &poolHandler{
+		baseTaskHandler: *NewBaseEventHandler(ctx, poolHandlerName),
+		pool:            pool,
+		wg:              &sync.WaitGroup{},
+	}
+	h.opExec = h.execFunc
+	h.execFunc = h.doHandle
 	return h
+}
+
+func (h *poolHandler) Execute(task Task) {
+	h.opExec(task)
+}
+
+func (h *poolHandler) doHandle(op IOp) {
+	closure := func(o IOp, wg *sync.WaitGroup) func() {
+		return func() {
+			h.opExec(o)
+			wg.Done()
+		}
+	}
+	h.wg.Add(1)
+	err := h.pool.Submit(closure(op, h.wg))
+	if err != nil {
+		logutil.Warnf("%v", err)
+		op.SetError(err)
+		h.wg.Done()
+	}
+}
+
+func (h *poolHandler) Stop() {
+	h.pool.Release()
+	h.baseTaskHandler.Stop()
+	h.wg.Wait()
 }

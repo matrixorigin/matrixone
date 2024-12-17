@@ -80,8 +80,8 @@ func TestStopStartMerge(t *testing.T) {
 	_, ok := lockService.Indexes()["__mo_index_test"]
 	require.True(t, ok)
 
-	require.Error(t, scheduler.onTable(tblEntry1))
-	require.Error(t, scheduler.onTable(tblEntry2))
+	require.Error(t, scheduler.OnTable(tblEntry1))
+	require.Error(t, scheduler.OnTable(tblEntry2))
 
 	require.Empty(t, scheduler.CNActiveObjectsString())
 
@@ -90,4 +90,19 @@ func TestStopStartMerge(t *testing.T) {
 	scheduler.StartMerge(tblEntry2.GetID(), false)
 	require.Equal(t, 0, len(lockService.LockedInfos()))
 	require.Equal(t, 0, len(lockService.Indexes()))
+}
+
+func TestSchedule(t *testing.T) {
+	cnScheduler := NewTaskServiceGetter(func() (taskservice.TaskService, bool) {
+		return taskservice.NewTaskService(runtime.DefaultRuntime(), taskservice.NewMemTaskStorage()), true
+	})
+
+	scheduler := Scheduler{
+		executor: newMergeExecutor(&dbutils.Runtime{
+			LockMergeService: dbutils.NewLockMergeService(),
+		}, cnScheduler),
+	}
+
+	scheduler.StopMergeService()
+	require.Error(t, scheduler.OnTombstone(nil))
 }

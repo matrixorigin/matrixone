@@ -15,6 +15,9 @@
 package merge
 
 import (
+	"sync/atomic"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -25,12 +28,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	dto "github.com/prometheus/client_model/go"
-	"time"
 )
 
 type Scheduler struct {
-	*catalog.LoopProcessor
 	tid uint64
+
+	catalog *catalog.Catalog
 
 	policies *policyGroup
 	executor *executor
@@ -38,28 +41,39 @@ type Scheduler struct {
 	skipForTransPageLimit bool
 
 	rc *resourceController
+
+	stopMerge atomic.Bool
 }
 
 func NewScheduler(rt *dbutils.Runtime, sched *CNMergeScheduler) *Scheduler {
-	policySlice := []policy{
-		newObjOverlapPolicy(),
-		newObjCompactPolicy(rt.Fs.Service),
-		newTombstonePolicy(),
-	}
 	op := &Scheduler{
-		LoopProcessor: new(catalog.LoopProcessor),
-		policies:      newPolicyGroup(policySlice...),
-		executor:      newMergeExecutor(rt, sched),
-		rc:            new(resourceController),
+		policies: newPolicyGroup(
+			newObjOverlapPolicy(),
+			newObjCompactPolicy(rt.Fs.Service),
+			newTombstonePolicy(),
+		),
+		executor: newMergeExecutor(rt, sched),
+		rc:       new(resourceController),
 	}
-
-	op.DatabaseFn = op.onDataBase
-	op.TableFn = op.onTable
-	op.ObjectFn = op.onObject
-	op.TombstoneFn = op.onTombstone
-	op.PostObjectFn = op.onPostObject
-	op.PostTableFn = op.onPostTable
 	return op
+}
+
+func (s *Scheduler) Schedule() {
+	if s.stopMerge.Load() {
+		return
+	}
+	dbutils.PrintMemStats()
+	err := s.PreExecute()
+	if err != nil {
+		panic(err)
+	}
+	if err = s.catalog.RecurLoop(s); err != nil {
+		logutil.Errorf("DBScanner Execute: %v", err)
+	}
+	err = s.PostExecute()
+	if err != nil {
+		panic(err)
+	}
 }
 
 func (s *Scheduler) ConfigPolicy(tbl *catalog.TableEntry, txn txnif.AsyncTxn, c *BasicPolicyConfig) error {
@@ -100,8 +114,8 @@ func (s *Scheduler) PostExecute() error {
 	return nil
 }
 
-func (s *Scheduler) onDataBase(*catalog.DBEntry) (err error) {
-	if StopMerge.Load() {
+func (s *Scheduler) OnDatabase(*catalog.DBEntry) (err error) {
+	if s.stopMerge.Load() {
 		return moerr.GetOkStopCurrRecur()
 	}
 	if s.rc.availableMem() < 100*common.Const1MBytes {
@@ -115,8 +129,8 @@ func (s *Scheduler) onDataBase(*catalog.DBEntry) (err error) {
 	return
 }
 
-func (s *Scheduler) onTable(tableEntry *catalog.TableEntry) (err error) {
-	if StopMerge.Load() {
+func (s *Scheduler) OnTable(tableEntry *catalog.TableEntry) (err error) {
+	if s.stopMerge.Load() {
 		return moerr.GetOkStopCurrRecur()
 	}
 
@@ -141,7 +155,10 @@ func (s *Scheduler) onTable(tableEntry *catalog.TableEntry) (err error) {
 	return
 }
 
-func (s *Scheduler) onPostTable(tableEntry *catalog.TableEntry) (err error) {
+func (s *Scheduler) OnPostTable(tableEntry *catalog.TableEntry) (err error) {
+	if s.stopMerge.Load() {
+		return moerr.GetOkStopCurrRecur()
+	}
 	// base on the info of tableEntry, we can decide whether to merge or not
 	if s.tid == 0 {
 		return
@@ -157,7 +174,10 @@ func (s *Scheduler) onPostTable(tableEntry *catalog.TableEntry) (err error) {
 	return
 }
 
-func (s *Scheduler) onObject(objectEntry *catalog.ObjectEntry) (err error) {
+func (s *Scheduler) OnObject(objectEntry *catalog.ObjectEntry) (err error) {
+	if s.stopMerge.Load() {
+		return moerr.GetOkStopCurrRecur()
+	}
 	if !objectValid(objectEntry) {
 		return moerr.GetOkStopCurrRecur()
 	}
@@ -165,10 +185,16 @@ func (s *Scheduler) onObject(objectEntry *catalog.ObjectEntry) (err error) {
 	s.policies.onObject(objectEntry)
 	return
 }
-func (s *Scheduler) onTombstone(objectEntry *catalog.ObjectEntry) (err error) {
-	return s.onObject(objectEntry)
+
+func (s *Scheduler) OnTombstone(tombstone *catalog.ObjectEntry) error {
+	return s.OnObject(tombstone)
 }
-func (s *Scheduler) onPostObject(*catalog.ObjectEntry) (err error) {
+
+func (s *Scheduler) OnPostDatabase(database *catalog.DBEntry) error {
+	return nil
+}
+
+func (s *Scheduler) OnPostObject(object *catalog.ObjectEntry) error {
 	return nil
 }
 
@@ -194,6 +220,14 @@ func (s *Scheduler) StopMerge(tblEntry *catalog.TableEntry, reentrant bool) erro
 
 func (s *Scheduler) StartMerge(tblID uint64, reentrant bool) error {
 	return s.executor.rt.LockMergeService.UnlockFromUser(tblID, reentrant)
+}
+
+func (s *Scheduler) StopMergeService() {
+	s.stopMerge.Store(true)
+}
+
+func (s *Scheduler) StartMergeService() {
+	s.stopMerge.Store(false)
 }
 
 func (s *Scheduler) CNActiveObjectsString() string {
