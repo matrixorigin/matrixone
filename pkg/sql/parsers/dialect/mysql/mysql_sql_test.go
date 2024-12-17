@@ -2560,6 +2560,18 @@ var (
 			output: "alter publication pub1 account acc0 database db1 table t1, t2",
 		},
 		{
+			input: "create snapshot cluster_sp for cluster",
+		},
+		{
+			input: "create snapshot snapshot_01 for account account_01",
+		},
+		{
+			input: "create snapshot snapshot_01 for database db1",
+		},
+		{
+			input: "create snapshot snapshot_01 for table db1 t1",
+		},
+		{
 			input: "restore cluster from snapshot snapshot_01",
 		},
 		{
