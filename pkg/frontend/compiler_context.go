@@ -509,6 +509,48 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string, snapshot
 	return obj, tableDef
 }
 
+func (tcc *TxnCompilerContext) ResolveIndexTableByRef(
+	ref *plan.ObjectRef,
+	tblName string,
+	snapshot *plan2.Snapshot,
+) (*plan2.ObjectRef, *plan2.TableDef) {
+	start := time.Now()
+	defer func() {
+		end := time.Since(start).Seconds()
+		v2.TxnStatementResolveDurationHistogram.Observe(end)
+		v2.TotalResolveDurationHistogram.Observe(end)
+	}()
+
+	// no need to ensureDatabaseIsNotEmpty
+
+	var subMeta *plan.SubscriptionMeta
+	if ref.PubInfo != nil {
+		subMeta = &plan.SubscriptionMeta{
+			AccountId: ref.PubInfo.TenantId,
+		}
+	}
+
+	ctx, table, err := tcc.getRelation(ref.SchemaName, tblName, subMeta, snapshot)
+	if err != nil {
+		return nil, nil
+	}
+
+	obj := &plan2.ObjectRef{
+		SchemaName:       ref.SchemaName,
+		ObjName:          tblName,
+		Obj:              int64(table.GetTableID(ctx)),
+		SubscriptionName: ref.SubscriptionName,
+		PubInfo:          ref.PubInfo,
+	}
+
+	tableDef := table.CopyTableDef(ctx)
+	if tableDef.IsTemporary {
+		tableDef.Name = tblName
+	}
+
+	return obj, tableDef
+}
+
 func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (udf *function.Udf, err error) {
 	var matchNum int
 	var argstr string

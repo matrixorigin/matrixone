@@ -127,6 +127,8 @@ func (buf *GroupResultBuffer) IsEmpty() bool {
 }
 
 func (buf *GroupResultBuffer) InitOnlyAgg(chunkSize int, aggList []aggexec.AggFuncExec) {
+	aggexec.SyncAggregatorsToChunkSize(aggList, chunkSize)
+
 	buf.ChunkSize = chunkSize
 	buf.AggList = aggList
 	buf.ToPopped = make([]*batch.Batch, 0, 1)
@@ -134,6 +136,8 @@ func (buf *GroupResultBuffer) InitOnlyAgg(chunkSize int, aggList []aggexec.AggFu
 }
 
 func (buf *GroupResultBuffer) InitWithGroupBy(chunkSize int, aggList []aggexec.AggFuncExec, groupByVec []*vector.Vector) {
+	aggexec.SyncAggregatorsToChunkSize(aggList, chunkSize)
+
 	buf.ChunkSize = chunkSize
 	buf.AggList = aggList
 	buf.ToPopped = make([]*batch.Batch, 0, 1)
@@ -141,6 +145,8 @@ func (buf *GroupResultBuffer) InitWithGroupBy(chunkSize int, aggList []aggexec.A
 }
 
 func (buf *GroupResultBuffer) InitWithBatch(chunkSize int, aggList []aggexec.AggFuncExec, vecExampleBatch *batch.Batch) {
+	aggexec.SyncAggregatorsToChunkSize(aggList, chunkSize)
+
 	buf.ChunkSize = chunkSize
 	buf.AggList = aggList
 	buf.ToPopped = make([]*batch.Batch, 0, 1)
