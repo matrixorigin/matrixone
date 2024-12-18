@@ -1284,7 +1284,7 @@ func Test_convertRowsIntoBatch(t *testing.T) {
 	for i := 0; i < cnt; i++ {
 		row := make([]any, len(data.Vecs))
 		for j := 0; j < len(data.Vecs); j++ {
-			err = extractRowFromVector(context.TODO(), ses, data.Vecs[j], j, row, i)
+			err = extractRowFromVector(context.TODO(), ses, data.Vecs[j], j, row, i, false)
 			assert.NoError(t, err)
 			switch data.Vecs[j].GetType().Oid {
 			case types.T_varchar:
