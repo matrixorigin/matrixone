@@ -290,9 +290,9 @@ func (r *GroupResultNoneBlock) getResultBatch(
 
 	// prepare an OK result.
 	if r.res == nil {
-		r.res = batch.NewOffHeapWithSize(len(gEval.Vec))
+		r.res = batch.NewOffHeapWithSize(len(gEval.Typ))
 		for i := range r.res.Vecs {
-			r.res.Vecs[i] = vector.NewOffHeapVecWithType(*gEval.Vec[i].GetType())
+			r.res.Vecs[i] = vector.NewOffHeapVecWithType(gEval.Typ[i])
 		}
 		r.res.Aggs = make([]aggexec.AggFuncExec, len(aExpressions))
 	} else {

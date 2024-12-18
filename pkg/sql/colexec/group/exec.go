@@ -28,6 +28,11 @@ import (
 
 var makeAggExec = aggexec.MakeAgg
 
+// intermediateResultSendActionTrigger is the row number to trigger an action
+// to send the intermediate result
+// if the result row is not less than this number.
+var intermediateResultSendActionTrigger = 8192
+
 func (group *Group) String(buf *bytes.Buffer) {
 	buf.WriteString(thisOperatorName + ": group([")
 	for i, expr := range group.Exprs {
@@ -151,7 +156,7 @@ func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
 	if group.NeedEval {
 		b, err = group.callToGetFinalResult(proc)
 	} else {
-		b, err = group.callToGetIntermediateResult(proc)
+		b, err = group.callToGetIntermediateResultBatchBy8192(proc)
 	}
 	if err != nil {
 		return vm.CancelResult, err
@@ -389,6 +394,56 @@ func (group *Group) callToGetIntermediateResult(proc *process.Process) (*batch.B
 	}
 }
 
+// callToGetIntermediateResultBatchBy8192 返回分组聚合的中间结果，每当结果满8192行发送一次。
+func (group *Group) callToGetIntermediateResultBatchBy8192(proc *process.Process) (*batch.Batch, error) {
+	group.ctr.result2.resetLastPopped()
+	if group.ctr.state == vm.End {
+		return nil, nil
+	}
+
+	r, err := group.initCtxToGetIntermediateResult(proc)
+	if err != nil {
+		return nil, err
+	}
+
+	var input *batch.Batch
+	for {
+		if group.ctr.state == vm.End {
+			return nil, nil
+		}
+
+		input, err = group.getInputBatch(proc)
+		if err != nil {
+			return nil, err
+		}
+		if input == nil {
+			group.ctr.state = vm.End
+
+			if group.ctr.isDataSourceEmpty() && len(group.Exprs) == 0 {
+				r.SetRowCount(1)
+				return r, nil
+			}
+			if r.RowCount() > 0 {
+				return r, nil
+			}
+			continue
+		}
+		if input.IsEmpty() {
+			continue
+		}
+		group.ctr.dataSourceIsEmpty = false
+
+		if next, er := group.consumeBatchToRes(proc, input, r); er != nil {
+			return nil, er
+		} else {
+			if next {
+				continue
+			}
+			return r, nil
+		}
+	}
+}
+
 func (group *Group) consumeBatchToGetIntermediateResult(
 	proc *process.Process, bat *batch.Batch) (*batch.Batch, error) {
 
@@ -463,4 +518,89 @@ func (group *Group) consumeBatchToGetIntermediateResult(
 	}
 
 	return res, nil
+}
+
+func (group *Group) initCtxToGetIntermediateResult(
+	proc *process.Process) (*batch.Batch, error) {
+
+	r, err := group.ctr.result2.getResultBatch(
+		proc, &group.ctr.groupByEvaluate, group.ctr.aggregateEvaluate, group.Aggs)
+	if err != nil {
+		return nil, err
+	}
+
+	if group.ctr.mtyp == H0 {
+		for i := range r.Aggs {
+			if err = r.Aggs[i].GroupGrow(1); err != nil {
+				return nil, err
+			}
+		}
+	} else {
+		if err = group.ctr.hr.BuildHashTable(true, group.ctr.mtyp == HStr, group.ctr.keyNullable, 0); err != nil {
+			return nil, err
+		}
+	}
+
+	return r, nil
+}
+
+func (group *Group) consumeBatchToRes(
+	proc *process.Process, bat *batch.Batch, res *batch.Batch) (receiveNext bool, err error) {
+
+	if err = group.evaluateGroupByAndAgg(proc, bat); err != nil {
+		return false, err
+	}
+
+	switch group.ctr.mtyp {
+	case H0:
+		// without group by.
+		for i := range res.Aggs {
+			if err = res.Aggs[i].BulkFill(0, group.ctr.aggregateEvaluate[i].Vec); err != nil {
+				return false, err
+			}
+		}
+		res.SetRowCount(1)
+		return false, nil
+
+	default:
+		// with group by.
+		count := bat.RowCount()
+		for i := 0; i < count; i += hashmap.UnitLimit {
+			n := count - i
+			if n > hashmap.UnitLimit {
+				n = hashmap.UnitLimit
+			}
+
+			originGroupCount := group.ctr.hr.Hash.GroupCount()
+			vals, _, err1 := group.ctr.hr.Itr.Insert(i, n, group.ctr.groupByEvaluate.Vec)
+			if err1 != nil {
+				return false, err1
+			}
+			insertList, more := group.ctr.hr.GetBinaryInsertList(vals, originGroupCount)
+
+			cnt := int(more)
+			if cnt > 0 {
+				for j, vec := range res.Vecs {
+					if err = vec.UnionBatch(group.ctr.groupByEvaluate.Vec[j], int64(i), n, insertList, proc.Mp()); err != nil {
+						return false, err
+					}
+				}
+
+				for _, ag := range res.Aggs {
+					if err = ag.GroupGrow(cnt); err != nil {
+						return false, err
+					}
+				}
+				res.AddRowCount(cnt)
+			}
+
+			for j, ag := range res.Aggs {
+				if err = ag.BatchFill(i, vals[:n], group.ctr.aggregateEvaluate[j].Vec); err != nil {
+					return false, err
+				}
+			}
+		}
+
+		return res.RowCount() < intermediateResultSendActionTrigger, nil
+	}
 }
