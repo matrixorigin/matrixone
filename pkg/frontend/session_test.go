@@ -384,6 +384,16 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 		convey.So(object, convey.ShouldNotBeNil)
 		convey.So(tableRef, convey.ShouldNotBeNil)
 
+		ref := &plan.ObjectRef{
+			SchemaName: "schema",
+			PubInfo: &plan.PubInfo{
+				TenantId: 0,
+			},
+		}
+		object, tableRef = tcc.ResolveIndexTableByRef(ref, "indexTable", &plan2.Snapshot{TS: ts})
+		convey.So(object, convey.ShouldNotBeNil)
+		convey.So(tableRef, convey.ShouldNotBeNil)
+
 		pkd := tcc.GetPrimaryKeyDef("abc", "t1", &plan2.Snapshot{TS: ts})
 		convey.So(len(pkd), convey.ShouldBeZeroValue)
 
