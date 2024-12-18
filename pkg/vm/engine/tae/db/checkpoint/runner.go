@@ -227,7 +227,8 @@ func NewRunner(
 	catalog *catalog.Catalog,
 	source logtail.Collector,
 	wal wal.Driver,
-	opts ...Option) *runner {
+	opts ...Option,
+) *runner {
 	r := &runner{
 		ctx:       ctx,
 		rt:        rt,
@@ -236,16 +237,20 @@ func NewRunner(
 		observers: new(observers),
 		wal:       wal,
 	}
-	r.storage.incrementals = btree.NewBTreeGOptions(func(a, b *CheckpointEntry) bool {
-		return a.end.LT(&b.end)
-	}, btree.Options{
-		NoLocks: true,
-	})
-	r.storage.globals = btree.NewBTreeGOptions(func(a, b *CheckpointEntry) bool {
-		return a.end.LT(&b.end)
-	}, btree.Options{
-		NoLocks: true,
-	})
+	r.storage.incrementals = btree.NewBTreeGOptions(
+		func(a, b *CheckpointEntry) bool {
+			return a.end.LT(&b.end)
+		}, btree.Options{
+			NoLocks: true,
+		},
+	)
+	r.storage.globals = btree.NewBTreeGOptions(
+		func(a, b *CheckpointEntry) bool {
+			return a.end.LT(&b.end)
+		}, btree.Options{
+			NoLocks: true,
+		},
+	)
 	for _, opt := range opts {
 		opt(r)
 	}
