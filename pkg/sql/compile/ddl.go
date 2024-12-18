@@ -590,11 +590,11 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 				}
 			}
 		case *plan.AlterTable_Action_AddFk:
+			//check fk existed in table
+			if _, has := oldFkNames[act.AddFk.Fkey.Name]; has {
+				return moerr.NewErrDuplicateKeyName(c.proc.Ctx, act.AddFk.Fkey.Name)
+			}
 			if !c.proc.GetTxnOperator().Txn().IsPessimistic() {
-				//check fk existed in table
-				if _, has := oldFkNames[act.AddFk.Fkey.Name]; has {
-					return moerr.NewErrDuplicateKeyName(c.proc.Ctx, act.AddFk.Fkey.Name)
-				}
 				//check fk existed in this alter table statement
 				if _, has := newAddedFkNames[act.AddFk.Fkey.Name]; has {
 					return moerr.NewErrDuplicateKeyName(c.proc.Ctx, act.AddFk.Fkey.Name)
