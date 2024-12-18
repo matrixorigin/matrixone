@@ -765,15 +765,7 @@ func (flusher *flushImpl) FlushTable(
 func (flusher *flushImpl) IsAllChangesFlushed(
 	start, end types.TS, doPrint bool,
 ) bool {
-	tree := flusher.sourcer.ScanInRangePruned(start, end)
-	tree.GetTree().Compact()
-	if doPrint && !tree.IsEmpty() {
-		logutil.Info(
-			"IsAllChangesFlushed",
-			zap.String("dirty-tree", tree.String()),
-		)
-	}
-	return tree.IsEmpty()
+	return IsAllDirtyFlushed(flusher.sourcer, flusher.catalogCache, start, end, doPrint)
 }
 
 func (flusher *flushImpl) Start() {

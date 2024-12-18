@@ -736,7 +736,37 @@ func (r *runner) tryScheduleIncrementalCheckpoint(start, end types.TS) {
 	r.tryAddNewIncrementalCheckpointEntry(entry)
 }
 
-func isTableTailFlushed(table *catalog.TableEntry, start, end types.TS, isTombstone bool) (bool, *catalog.ObjectEntry) {
+func IsAllDirtyFlushed(source logtail.Collector, cata *catalog.Catalog, start, end types.TS, doPrint bool) bool {
+	tree, _ := source.ScanInRange(start, end)
+	ready := true
+	var notFlushed *catalog.ObjectEntry
+	for _, table := range tree.GetTree().Tables {
+		db, err := cata.GetDatabaseByID(table.DbID)
+		if err != nil {
+			continue
+		}
+		table, err := db.GetTableEntryByID(table.ID)
+		if err != nil {
+			continue
+		}
+		ready, notFlushed = IsTableTailFlushed(table, start, end, false)
+		if !ready {
+			break
+		}
+		ready, notFlushed = IsTableTailFlushed(table, start, end, true)
+		if !ready {
+			break
+		}
+	}
+	if !ready && doPrint {
+		table := notFlushed.GetTable()
+		tableDesc := fmt.Sprintf("%d-%s", table.ID, table.GetLastestSchemaLocked(false).Name)
+		logutil.Info("waiting for dirty tree %s", zap.String("table", tableDesc), zap.String("obj", notFlushed.StringWithLevel(2)))
+	}
+	return ready
+}
+
+func IsTableTailFlushed(table *catalog.TableEntry, start, end types.TS, isTombstone bool) (bool, *catalog.ObjectEntry) {
 	var it btree.IterG[*catalog.ObjectEntry]
 	if isTombstone {
 		table.WaitTombstoneObjectCommitted(end)
@@ -796,29 +826,8 @@ func (r *runner) TryScheduleCheckpoint(endts types.TS) {
 	if entry.IsPendding() {
 		check := func() (done bool) {
 			start, end := entry.GetStart(), entry.GetEnd()
-			tree, _ := r.source.ScanInRange(start, end)
-			ready := true
-			var notFlushed *catalog.ObjectEntry
-			for _, table := range tree.GetTree().Tables {
-				db, err := r.catalog.GetDatabaseByID(table.DbID)
-				if err != nil {
-					continue
-				}
-				table, err := db.GetTableEntryByID(table.ID)
-				if err != nil {
-					continue
-				}
-				ready, notFlushed = isTableTailFlushed(table, start, end, false)
-				if !ready {
-					break
-				}
-				ready, notFlushed = isTableTailFlushed(table, start, end, true)
-				if !ready {
-					break
-				}
-			}
-			if !ready && entry.TooOld() {
-				logutil.Infof("waiting for dirty tree %s", notFlushed.StringWithLevel(2))
+			ready := IsAllDirtyFlushed(r.source, r.catalog, start, end, entry.TooOld())
+			if !ready {
 				entry.DeferRetirement()
 			}
 			return ready
