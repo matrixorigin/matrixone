@@ -83,7 +83,7 @@ func findValuePattern(ps []*Pattern) []*Pattern {
 
 func (s *SearchAccum) PatternAnyPlus() bool {
 	for _, p := range s.Pattern {
-		if p.Operator == PLUS {
+		if p.Operator == PLUS || p.Operator == JOIN {
 			return true
 		}
 	}
