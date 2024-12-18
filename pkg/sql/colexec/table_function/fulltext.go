@@ -119,11 +119,9 @@ func (u *fulltextState) returnResult(proc *process.Process, scoremap map[any]flo
 	u.n_result += uint64(len(scoremap))
 
 	if u.batch.RowCount() == 0 {
-		//os.Stderr.WriteString("FULLTEXT: return result END\n")
 		return vm.CancelResult, nil
 	}
 
-	//os.Stderr.WriteString(fmt.Sprintf("score MAP size = %d, %d rows returned\n", len(u.agghtab), len(scoremap)))
 	return vm.CallResult{Status: vm.ExecNext, Batch: u.batch}, nil
 
 }
@@ -296,7 +294,6 @@ func evaluate(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) 
 		}
 
 		if len(scoremap) >= 8192 {
-			//os.Stderr.WriteString(u.mpool.String())
 			break
 		}
 	}
