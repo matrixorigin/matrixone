@@ -65,15 +65,12 @@ func (s *Scheduler) Schedule() {
 	dbutils.PrintMemStats()
 	err := s.PreExecute()
 	if err != nil {
-		panic(err)
+		logutil.Errorf("pre execute err %s", err.Error())
 	}
 	if err = s.catalog.RecurLoop(s); err != nil {
 		logutil.Errorf("DBScanner Execute: %v", err)
 	}
-	err = s.PostExecute()
-	if err != nil {
-		panic(err)
-	}
+	s.rc.printStats()
 }
 
 func (s *Scheduler) ConfigPolicy(tbl *catalog.TableEntry, txn txnif.AsyncTxn, c *BasicPolicyConfig) error {
@@ -106,11 +103,6 @@ func (s *Scheduler) PreExecute() error {
 			common.HumanReadableBytes(int(s.rc.transferPageLimit)))
 		s.skipForTransPageLimit = true
 	}
-	return nil
-}
-
-func (s *Scheduler) PostExecute() error {
-	s.rc.printStats()
 	return nil
 }
 
