@@ -16,9 +16,6 @@ package taestorage
 
 import (
 	"context"
-
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 )
 
@@ -28,14 +25,15 @@ func (s *taeStorage) Write(
 	txnMeta txn.TxnMeta,
 	op uint32,
 	payload []byte) (result []byte, err error) {
-	switch op {
-	case uint32(apipb.OpCode_OpPreCommit):
-		return HandleWrite(ctx, txnMeta, payload, s.taeHandler.HandlePreCommitWrite)
-	case uint32(apipb.OpCode_OpCommitMerge):
-		return HandleWrite(ctx, txnMeta, payload, s.taeHandler.HandleCommitMerge)
-	default:
-		return nil, moerr.NewNotSupportedf(ctx, "unknown write op: %v", op)
-	}
+	//switch op {
+	//case uint32(apipb.OpCode_OpPreCommit):
+	//	return HandleWrite(ctx, txnMeta, payload, s.taeHandler.HandlePreCommitWrite)
+	//case uint32(apipb.OpCode_OpCommitMerge):
+	return HandleWrite(ctx, txnMeta, payload, s.taeHandler.HandleCommitMerge)
+	//default:
+	//	return nil, moerr.NewNotSupportedf(ctx, "unknown write op: %v", op)
+	//}
+	return
 }
 
 func HandleWrite[PReq unmarshaler[Req], PResp marshaller[Resp], Req, Resp any](
