@@ -309,6 +309,10 @@ func evaluate(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) 
 	return scoremap, nil
 }
 
+// result from SQL is (doc_id, index constant (refer to Pattern.Index))
+// Two group by happens here
+// 1. Group by the result into []uint8 which is DocCount[Pattern.Index].
+// 2. Aggregate the total number of documents contain the word index (Pattern.Index). AggCnt[Pattern.Index].
 func groupby(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) (stream_closed bool, err error) {
 
 	// first receive the batch and calculate the scoremap
