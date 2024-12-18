@@ -39,8 +39,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingMasterIndex(nodeID int32
 	//ts1 := scanNode.ScanTS
 	for i, filterExp := range scanNode.FilterList {
 		// TODO: node should hold snapshot info and account info
-		//idxObjRef, idxTableDef := builder.compCtx.Resolve(scanNode.ObjRef.SchemaName, indexDef.IndexTableName, timestamp.Timestamp{})
-		idxObjRef, idxTableDef := builder.compCtx.Resolve(scanNode.ObjRef.SchemaName, indexDef.IndexTableName, nil)
+		idxObjRef, idxTableDef := builder.compCtx.ResolveIndexTableByRef(scanNode.ObjRef, indexDef.IndexTableName, nil)
 
 		// 1. SELECT pk from idx WHERE prefix_eq(`__mo_index_idx_col`,serial_full("0","value"))
 		currIdxScanTag, currScanId := makeIndexTblScan(builder, builder.ctxByNode[nodeID], filterExp, idxTableDef, idxObjRef, scanNode.ScanSnapshot, colDefs)
