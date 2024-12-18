@@ -423,6 +423,11 @@ func (group *Group) initCtxToGetIntermediateResult(
 		allocated := uint64(0)
 		if trigger := uint64(intermediateResultSendActionTrigger); group.PreAllocSize > trigger {
 			allocated = trigger
+			for i := range r.Aggs {
+				if err = r.Aggs[i].PreAllocateGroups(intermediateResultSendActionTrigger); err != nil {
+					return nil, err
+				}
+			}
 		}
 
 		if err = group.ctr.hr.BuildHashTable(true, group.ctr.mtyp == HStr, group.ctr.keyNullable, allocated); err != nil {

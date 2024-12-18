@@ -59,6 +59,46 @@ func TestExtendResultPurely(t *testing.T) {
 	}
 }
 
+func TestFlushAll(t *testing.T) {
+	blockLimitation := 100
+
+	mg := SimpleAggMemoryManager{mp: mpool.MustNewZeroNoFixed()}
+	{
+		osr := optSplitResult{}
+		osr.init(mg, types.T_bool.ToType(), false)
+		osr.optInformation.chunkSize = blockLimitation
+
+		require.NoError(t, osr.preExtend(130))
+		vs := osr.flushAll()
+		require.Equal(t, 0, len(vs))
+		require.NoError(t, osr.extendResultPurely(50))
+		vs = osr.flushAll()
+		require.Equal(t, 1, len(vs))
+		for i := range vs {
+			vs[i].Free(mg.mp)
+		}
+
+		osr.free()
+		require.Equal(t, int64(0), mg.mp.CurrNB())
+	}
+
+	{
+		osr := optSplitResult{}
+		osr.init(mg, types.T_bool.ToType(), false)
+		osr.optInformation.chunkSize = blockLimitation
+
+		require.NoError(t, osr.extendResultPurely(201))
+		vs := osr.flushAll()
+		require.Equal(t, 3, len(vs))
+		for i := range vs {
+			vs[i].Free(mg.mp)
+		}
+
+		osr.free()
+		require.Equal(t, int64(0), mg.mp.CurrNB())
+	}
+}
+
 func checkRowDistribution(t *testing.T, expected []int, src []*vector.Vector) {
 	require.Equal(t, len(expected), len(src))
 

@@ -664,7 +664,6 @@ func (exec *aggregatorFromFixedToFixed[from, to]) Flush() ([]*vector.Vector, err
 		}
 	}
 
-	// todo: 等全部代码改完后修改接口。
 	return exec.ret.flushAll(), nil
 }
 
