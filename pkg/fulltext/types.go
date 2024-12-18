@@ -50,6 +50,22 @@ Find rows that contain words such as “apple”, “apples”, “applesauce”
 '"some words"'
 
 Find rows that contain the exact phrase “some words” (for example, rows that contain “some words of wisdom” but not “some noise words”). Note that the " characters that enclose the phrase are operator characters that delimit the phrase. They are not the quotation marks that enclose the search string itself.
+
+
+Pattern/Plan is generated from search string.
+
+In boolean mode,
+
+search string: 'Matrix Origin' -> pattern: "(text 0 matrix) (text 1 origin)"
+search string: '"Matrix Origin"' -> pattern: "(phrase (text 0 0 matrix) (text 1 7 origin))"
+search string: '+Matrix +Origin' -> pattern: "(join 0 (+ (text 0 matrix)) (+ (text 0 origin)))"
+search string: '+读写汉字 -学中文' -> pattern: "(+ (text 0 读写汉字)) (- (text 1 学中文))"
+search string: 'Matrix +(<Origin >One)' -> pattern: "(+ (group (< (text 0 origin)) (> (text 1 one)))) (text 2 matrix)"
+
+In natural language mode,
+
+search string: '读写汉字 学中文' -> pattern: "(text 0 0 读写汉) (text 1 3 写汉字) (* 2 6 汉字*) (* 3 9 字*) (text 4 13 学中文) (* 5 16 中文*) (* 6 19 文*)"
+
 */
 
 // Parser parameters
