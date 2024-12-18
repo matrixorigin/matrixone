@@ -37,6 +37,10 @@ func consumeEntry(
 	e *api.Entry,
 	isSub bool,
 ) error {
+	// for test only.
+	if engine.skipConsume {
+		return nil
+	}
 	start := time.Now()
 	defer func() {
 		v2.LogtailUpdatePartitonConsumeLogtailOneEntryDurationHistogram.Observe(time.Since(start).Seconds())
