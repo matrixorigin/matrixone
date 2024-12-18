@@ -156,7 +156,7 @@ func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
 	if group.NeedEval {
 		b, err = group.callToGetFinalResult(proc)
 	} else {
-		b, err = group.callToGetIntermediateResultBatchBy8192(proc)
+		b, err = group.callToGetIntermediateResult(proc)
 	}
 	if err != nil {
 		return vm.CancelResult, err
@@ -351,51 +351,11 @@ func preExtendAggExecs(execs []aggexec.AggFuncExec, preAllocated uint64) (err er
 	return nil
 }
 
-// callToGetIntermediateResult
-// if this operator should only return aggregations' intermediate results because one MergeGroup operator was behind.
-// we do not engage in any waiting actions at this operator,
-// once a batch is received, a batch with the corresponding intermediate result will be returned.
+// callToGetIntermediateResult return the intermediate result of grouped data aggregation,
+// sending out intermediate results once the group count exceeds intermediateResultSendActionTrigger.
+//
+// this function will be only called when there is one MergeGroup operator was behind.
 func (group *Group) callToGetIntermediateResult(proc *process.Process) (*batch.Batch, error) {
-	group.ctr.result2.resetLastPopped()
-	if group.ctr.state == vm.End {
-		return nil, nil
-	}
-
-	for {
-		res, err := group.getInputBatch(proc)
-		if err != nil {
-			return nil, err
-		}
-		if res == nil {
-			group.ctr.state = vm.End
-
-			if group.ctr.isDataSourceEmpty() && len(group.Exprs) == 0 {
-				r, er := group.ctr.result2.getResultBatch(
-					proc, &group.ctr.groupByEvaluate, group.ctr.aggregateEvaluate, group.Aggs)
-				if er != nil {
-					return nil, er
-				}
-				for i := range r.Aggs {
-					if err = r.Aggs[i].GroupGrow(1); err != nil {
-						return nil, err
-					}
-				}
-				r.SetRowCount(1)
-				return r, nil
-			}
-
-			return nil, nil
-		}
-		if res.IsEmpty() {
-			continue
-		}
-		group.ctr.dataSourceIsEmpty = false
-		return group.consumeBatchToGetIntermediateResult(proc, res)
-	}
-}
-
-// callToGetIntermediateResultBatchBy8192 返回分组聚合的中间结果，每当结果满8192行发送一次。
-func (group *Group) callToGetIntermediateResultBatchBy8192(proc *process.Process) (*batch.Batch, error) {
 	group.ctr.result2.resetLastPopped()
 	if group.ctr.state == vm.End {
 		return nil, nil
@@ -442,82 +402,6 @@ func (group *Group) callToGetIntermediateResultBatchBy8192(proc *process.Process
 			return r, nil
 		}
 	}
-}
-
-func (group *Group) consumeBatchToGetIntermediateResult(
-	proc *process.Process, bat *batch.Batch) (*batch.Batch, error) {
-
-	if err := group.evaluateGroupByAndAgg(proc, bat); err != nil {
-		return nil, err
-	}
-
-	res, err := group.ctr.result2.getResultBatch(
-		proc, &group.ctr.groupByEvaluate, group.ctr.aggregateEvaluate, group.Aggs)
-	if err != nil {
-		return nil, err
-	}
-
-	switch group.ctr.mtyp {
-	case H0:
-		// without group by.
-		for i := range res.Aggs {
-			if err = res.Aggs[i].GroupGrow(1); err != nil {
-				return nil, err
-			}
-		}
-		res.SetRowCount(1)
-		for i := range res.Aggs {
-			if err = res.Aggs[i].BulkFill(0, group.ctr.aggregateEvaluate[i].Vec); err != nil {
-				return nil, err
-			}
-		}
-
-	default:
-		// with group by.
-		if err = group.ctr.hr.BuildHashTable(true, group.ctr.mtyp == HStr, group.ctr.keyNullable, 0); err != nil {
-			return nil, err
-		}
-
-		count := bat.RowCount()
-		for i := 0; i < count; i += hashmap.UnitLimit {
-			n := count - i
-			if n > hashmap.UnitLimit {
-				n = hashmap.UnitLimit
-			}
-
-			originGroupCount := group.ctr.hr.Hash.GroupCount()
-			vals, _, err1 := group.ctr.hr.Itr.Insert(i, n, group.ctr.groupByEvaluate.Vec)
-			if err1 != nil {
-				return nil, err1
-			}
-			insertList, more := group.ctr.hr.GetBinaryInsertList(vals, originGroupCount)
-
-			cnt := int(more)
-			if cnt > 0 {
-				for j, vec := range res.Vecs {
-					if err = vec.UnionBatch(group.ctr.groupByEvaluate.Vec[j], int64(i), n, insertList, proc.Mp()); err != nil {
-						return nil, err
-					}
-				}
-
-				for _, ag := range res.Aggs {
-					if err = ag.GroupGrow(cnt); err != nil {
-						return nil, err
-					}
-				}
-				res.AddRowCount(cnt)
-			}
-
-			for j, ag := range res.Aggs {
-				if err = ag.BatchFill(i, vals[:n], group.ctr.aggregateEvaluate[j].Vec); err != nil {
-					return nil, err
-				}
-			}
-		}
-
-	}
-
-	return res, nil
 }
 
 func (group *Group) initCtxToGetIntermediateResult(
