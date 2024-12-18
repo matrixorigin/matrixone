@@ -907,7 +907,7 @@ func makeMysqlVarcharResultSet() *MysqlResultSet {
 	var cases = []string{"abc", "abcde", "", "x-", "xx"}
 	for _, v := range cases {
 		var data = make([]interface{}, 1)
-		data[0] = v
+		data[0] = []byte(v)
 		rs.AddRow(data)
 	}
 
@@ -933,7 +933,7 @@ func makeMysqlVarStringResultSet() *MysqlResultSet {
 	var cases = []string{"abc", "abcde", "", "x-", "xx"}
 	for _, v := range cases {
 		var data = make([]interface{}, 1)
-		data[0] = v
+		data[0] = []byte(v)
 		rs.AddRow(data)
 	}
 
@@ -959,7 +959,7 @@ func makeMysqlStringResultSet() *MysqlResultSet {
 	var cases = []string{"abc", "abcde", "", "x-", "xx"}
 	for _, v := range cases {
 		var data = make([]interface{}, 1)
-		data[0] = v
+		data[0] = []byte(v)
 		rs.AddRow(data)
 	}
 
@@ -1156,10 +1156,10 @@ func make9ColumnsResultSet() *MysqlResultSet {
 	t3, _ := types.ParseTime("2015-03-03 12:12:12", 0)
 
 	var cases = [][]interface{}{
-		{int8(-128), int16(-32768), int32(-2147483648), int64(-9223372036854775808), "abc", float32(math.MaxFloat32), d1, t1, dt1, float64(0.01)},
-		{int8(-127), int16(0), int32(0), int64(0), "abcde", float32(math.SmallestNonzeroFloat32), d2, t2, dt2, float64(0.01)},
-		{int8(127), int16(32767), int32(2147483647), int64(9223372036854775807), "", float32(-math.MaxFloat32), d1, t3, dt3, float64(0.01)},
-		{int8(126), int16(32766), int32(2147483646), int64(9223372036854775806), "x-", float32(-math.SmallestNonzeroFloat32), d2, t1, dt1, float64(0.01)},
+		{int8(-128), int16(-32768), int32(-2147483648), int64(-9223372036854775808), []byte("abc"), float32(math.MaxFloat32), d1, t1, dt1, float64(0.01)},
+		{int8(-127), int16(0), int32(0), int64(0), []byte("abcde"), float32(math.SmallestNonzeroFloat32), d2, t2, dt2, float64(0.01)},
+		{int8(127), int16(32767), int32(2147483647), int64(9223372036854775807), []byte(""), float32(-math.MaxFloat32), d1, t3, dt3, float64(0.01)},
+		{int8(126), int16(32766), int32(2147483646), int64(9223372036854775806), []byte("x-"), float32(-math.SmallestNonzeroFloat32), d2, t1, dt1, float64(0.01)},
 	}
 
 	for i, ct := range columnTypes {
@@ -1198,7 +1198,7 @@ func makeMoreThan16MBResultSet() *MysqlResultSet {
 		"Varchar",
 	}
 
-	var rowCase = []interface{}{int64(9223372036854775807), math.MaxFloat64, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+	var rowCase = []interface{}{int64(9223372036854775807), math.MaxFloat64, []byte("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")}
 
 	for i, ct := range columnTypes {
 		name := names[i]
@@ -1266,7 +1266,7 @@ func make16MBRowResultSet() *MysqlResultSet {
 		stuff[i] = 'a'
 	}
 
-	var rowCase = []interface{}{string(stuff)}
+	var rowCase = []interface{}{stuff}
 	for i := 0; i < 1; i++ {
 		rs.AddRow(rowCase)
 	}
@@ -1314,6 +1314,7 @@ func TestMysqlResultSet(t *testing.T) {
 	pu.SV.SkipCheckUser = true
 	pu.SV.KillRountinesInterval = 0
 	setPu("", pu)
+	setSessionAlloc("", NewLeakCheckAllocator())
 
 	noResultSet := make(map[string]bool)
 	resultSet := make(map[string]*result)

@@ -2375,9 +2375,26 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow(mrs *MysqlResultSet, rowId
 			if value, err := mrs.GetValue(mp.ctx, rowIdx, i); err != nil {
 				return err
 			} else {
-				err = mp.appendCountOfBytesLenEnc(value.([]byte))
-				if err != nil {
-					return err
+				switch realVal := value.(type) {
+				case []byte:
+					err = mp.appendCountOfBytesLenEnc(realVal)
+					if err != nil {
+						return err
+					}
+				case string:
+					err = mp.appendStringLenEnc(realVal)
+					if err != nil {
+						return err
+					}
+				default:
+					if value2, err3 := mrs.GetString(mp.ctx, rowIdx, i); err3 != nil {
+						return err3
+					} else {
+						err = mp.appendStringLenEnc(value2)
+						if err != nil {
+							return err
+						}
+					}
 				}
 			}
 		// TODO: some type, we use string now. someday need fix it
@@ -2494,15 +2511,6 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow(mrs *MysqlResultSet, r uint6
 		}
 
 		switch mysqlColumn.ColumnType() {
-		case defines.MYSQL_TYPE_JSON:
-			if value, err2 := mrs.GetValue(mp.ctx, r, i); err2 != nil {
-				return err2
-			} else {
-				err = mp.appendCountOfBytesLenEnc(value.([]byte))
-				if err != nil {
-					return err
-				}
-			}
 		case defines.MYSQL_TYPE_BOOL:
 			if value, err2 := mrs.GetString(mp.ctx, r, i); err2 != nil {
 				return err2
@@ -2624,13 +2632,30 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow(mrs *MysqlResultSet, r uint6
 			}
 		// Binary/varbinary will be sent out as varchar type.
 		case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING,
-			defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TEXT:
+			defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TEXT, defines.MYSQL_TYPE_JSON:
 			if value, err2 := mrs.GetValue(mp.ctx, r, i); err2 != nil {
 				return err2
 			} else {
-				err = mp.appendCountOfBytesLenEnc(value.([]byte))
-				if err != nil {
-					return err
+				switch realVal := value.(type) {
+				case []byte:
+					err = mp.appendCountOfBytesLenEnc(realVal)
+					if err != nil {
+						return err
+					}
+				case string:
+					err = mp.appendStringLenEnc(realVal)
+					if err != nil {
+						return err
+					}
+				default:
+					if value2, err3 := mrs.GetString(mp.ctx, r, i); err3 != nil {
+						return err3
+					} else {
+						err = mp.appendStringLenEnc(value2)
+						if err != nil {
+							return err
+						}
+					}
 				}
 			}
 		case defines.MYSQL_TYPE_DATE:

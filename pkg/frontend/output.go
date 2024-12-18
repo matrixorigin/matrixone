@@ -25,7 +25,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
-// extractRowFromEveryVector gets the j row from the every vector and outputs the row
+// extractRowFromEveryVector gets the j row from the every vector and outputs the row.
+// !!!NOTE!!! use safeRefSlice before you know what you are doing.
+// safeRefSlice is used to determine whether to copy the slice or not.
+// types.T_json, types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink are
+// stored as bytes slice.
 func extractRowFromEveryVector(ctx context.Context, ses FeSession, dataSet *batch.Batch, j int, row []any, safeRefSlice bool) error {
 	var rowIndex = j
 	for i, vec := range dataSet.Vecs { //col index
