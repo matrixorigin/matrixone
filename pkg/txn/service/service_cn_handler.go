@@ -217,7 +217,8 @@ func (s *service) Commit(ctx context.Context, request *txn.TxnRequest, response 
 	}
 
 	txnID := request.Txn.ID
-	txnCtx := s.getTxnContext(txnID)
+	txnCtx, _ := s.maybeAddTxn(request.Txn)
+
 	if txnCtx == nil {
 		util.LogTxnNotFoundOn(s.logger, request.Txn, s.shard)
 		response.TxnError = txn.WrapError(moerr.NewTNShardNotFound(ctx, "", request.GetTargetTN().ShardID), 0)
@@ -261,7 +262,7 @@ func (s *service) Commit(ctx context.Context, request *txn.TxnRequest, response 
 	if len(newTxn.TNShards) == 1 {
 		util.LogTxnStart1PCCommit(s.logger, newTxn)
 
-		commitTS, err := s.storage.Commit(ctx, newTxn)
+		commitTS, err := s.storage.Commit(ctx, newTxn, response, request.CommitRequest)
 		v2.TxnTNCommitHandledCounter.Inc()
 		if err != nil {
 			util.LogTxnStart1PCCommitFailed(s.logger, newTxn, err)
@@ -469,7 +470,7 @@ func (s *service) startAsyncCommitTask(txnCtx *txnContext) error {
 					util.TxnIDFieldWithID(txnMeta.ID))
 			}
 
-			if _, err := s.storage.Commit(ctx, txnMeta); err != nil {
+			if _, err := s.storage.Commit(ctx, txnMeta, nil, nil); err != nil {
 				err = moerr.AttachCause(ctx, err)
 				s.logger.Fatal("commit failed after prepared",
 					util.TxnIDFieldWithID(txnMeta.ID),

@@ -16,12 +16,11 @@ package rpc
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 
-	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
 
 ///
@@ -45,23 +44,16 @@ func (h *Handle) HandleCommitting(
 func (h *Handle) HandlePrepare(
 	ctx context.Context,
 	meta txn.TxnMeta) (pts timestamp.Timestamp, err error) {
-	txnCtx, ok := h.txnCtxs.Load(util.UnsafeBytesToString(meta.GetID()))
 	var txn txnif.AsyncTxn
-	defer func() {
-		if ok {
-			//delete the txn's context.
-			h.txnCtxs.Delete(util.UnsafeBytesToString(meta.GetID()))
-		}
-	}()
-	if ok {
-		//handle pre-commit write for 2PC
-		txn, err = h.db.GetOrCreateTxnWithMeta(nil, meta.GetID(),
-			types.TimestampToTS(meta.GetSnapshotTS()))
-		if err != nil {
-			return
-		}
-		h.handleRequests(ctx, txn, txnCtx)
+
+	//handle pre-commit write for 2PC
+	txn, err = h.db.GetOrCreateTxnWithMeta(nil, meta.GetID(),
+		types.TimestampToTS(meta.GetSnapshotTS()))
+	if err != nil {
+		return
 	}
+	h.handleRequests(ctx, txn, nil, nil, meta)
+
 	txn, err = h.db.GetTxnByID(meta.GetID())
 	if err != nil {
 		return timestamp.Timestamp{}, err

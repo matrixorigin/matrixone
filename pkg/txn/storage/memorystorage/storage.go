@@ -38,7 +38,12 @@ func New(
 
 var _ storage.TxnStorage = new(Storage)
 
-func (s *Storage) Commit(ctx context.Context, txnMeta txn.TxnMeta) (timestamp.Timestamp, error) {
+func (s *Storage) Commit(
+	ctx context.Context,
+	txnMeta txn.TxnMeta,
+	response *txn.TxnResponse,
+	commitRequests *txn.TxnCommitRequest,
+) (timestamp.Timestamp, error) {
 	return s.handler.HandleCommit(ctx, txnMeta)
 }
 
