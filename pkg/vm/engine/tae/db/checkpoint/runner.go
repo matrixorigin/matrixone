@@ -374,13 +374,13 @@ func (r *runner) gcCheckpointEntries(ts types.TS) {
 	}
 	incrementals := r.GetAllIncrementalCheckpoints()
 	for _, incremental := range incrementals {
-		if incremental.LessEq(ts) {
+		if incremental.LessEq(&ts) {
 			r.DeleteIncrementalEntry(incremental)
 		}
 	}
 	globals := r.GetAllGlobalCheckpoints()
 	for _, global := range globals {
-		if global.LessEq(ts) {
+		if global.LessEq(&ts) {
 			r.DeleteGlobalEntry(global)
 		}
 	}
