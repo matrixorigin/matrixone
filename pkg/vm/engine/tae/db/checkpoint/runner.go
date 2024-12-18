@@ -776,7 +776,8 @@ func IsTableTailFlushed(table *catalog.TableEntry, start, end types.TS, isTombst
 		it = table.MakeDataObjectIt()
 	}
 	earlybreak := false
-	key := &catalog.ObjectEntry{EntryMVCCNode: catalog.EntryMVCCNode{DeletedAt: end}}
+	// some entries shared the same timestamp with end, so we need to seek to the next one
+	key := &catalog.ObjectEntry{EntryMVCCNode: catalog.EntryMVCCNode{DeletedAt: end.Next()}}
 	var ok bool
 	if ok = it.Seek(key); !ok {
 		ok = it.Last()

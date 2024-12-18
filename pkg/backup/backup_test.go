@@ -17,12 +17,13 @@ package backup
 import (
 	"context"
 	"fmt"
-	"github.com/panjf2000/ants/v2"
-	"github.com/prashantv/gostub"
 	"path"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/panjf2000/ants/v2"
+	"github.com/prashantv/gostub"
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -91,8 +92,8 @@ func TestBackupData(t *testing.T) {
 		txn, rel := testutil.GetDefaultRelation(t, db.DB, schema.Name)
 		testutil.CheckAllColRowsByScan(t, rel, int(totalRows), false)
 
-		obj := testutil.GetOneObject(rel)
-		id := obj.GetMeta().(*catalog.ObjectEntry).AsCommonID()
+		obj := testutil.GetOneBlockMeta(rel)
+		id := obj.AsCommonID()
 		err := rel.RangeDelete(id, 0, 0, handle.DT_Normal)
 		require.NoError(t, err)
 		deletedRows = 1
@@ -116,7 +117,7 @@ func TestBackupData(t *testing.T) {
 		v := testutil.GetSingleSortKeyValue(data, schema, 2)
 		filter := handle.NewEQFilter(v)
 		err := rel.DeleteByFilter(context.Background(), filter)
-		assert.NoError(t, err)
+		assert.NoError(t, err, v)
 		assert.NoError(t, txn.Commit(context.Background()))
 	}
 	backupTime := time.Now().UTC()

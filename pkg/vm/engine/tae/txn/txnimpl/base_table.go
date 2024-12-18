@@ -41,8 +41,6 @@ type baseTable struct {
 	isTombstone bool
 
 	tableSpace *tableSpace
-
-	lastInvisibleNOBJSortHint uint64
 }
 
 func newBaseTable(schema *catalog.Schema, isTombstone bool, txnTable *txnTable) *baseTable {

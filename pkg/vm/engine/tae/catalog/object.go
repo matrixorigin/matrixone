@@ -118,14 +118,15 @@ func (entry *ObjectEntry) GetCommandMVCCNode() *MVCCNode[*ObjectMVCCNode] {
 }
 func (entry *ObjectEntry) GetDropEntry(
 	txn txnif.TxnReader,
-) (dropped *ObjectEntry, isNewNode bool) {
+) (dropped *ObjectEntry, updatedCEntry *ObjectEntry, isNewNode bool) {
 	dropped = entry.Clone()
 	dropped.ObjectState = ObjectState_Delete_Active
 	dropped.DeletedAt = txnif.UncommitTS
 	dropped.DeleteNode = *txnbase.NewTxnMVCCNodeWithTxn(txn)
 	dropped.GetObjectData().UpdateMeta(dropped)
-	entry.nextVersion = dropped
-	dropped.prevVersion = entry
+	updatedCEntry = entry.Clone()
+	updatedCEntry.nextVersion = dropped
+	dropped.prevVersion = updatedCEntry
 	if entry.CreateNode.Txn != nil && txn.GetID() == entry.CreateNode.Txn.GetID() {
 		return
 	}
@@ -137,14 +138,17 @@ func (entry *ObjectEntry) GetUpdateEntry(
 	stats *objectio.ObjectStats,
 ) (
 	dropped *ObjectEntry,
+	updatedCEntry *ObjectEntry,
 	isNewNode bool,
 ) {
 	dropped = entry.Clone()
 	node := dropped.GetLastMVCCNode()
 	objectio.SetObjectStats(&dropped.ObjectStats, stats)
 	dropped.GetObjectData().UpdateMeta(dropped)
-	if dropped.prevVersion != nil {
-		dropped.prevVersion.nextVersion = dropped
+	if dropped.IsDEntry() { // Only in UT it can not be a D Entry
+		updatedCEntry = entry.prevVersion.Clone()
+		updatedCEntry.nextVersion = dropped
+		dropped.prevVersion = updatedCEntry
 	}
 	if node.Txn != nil && txn.GetID() == node.Txn.GetID() {
 		return
@@ -199,10 +203,15 @@ func (entry *ObjectEntry) ApplyCommit(tid string) error {
 		return err
 	}
 	entry.objData.UpdateMeta(newNode)
-	if newNode.prevVersion != nil {
-		newNode.prevVersion.nextVersion = newNode
+	var updatedCEntry *ObjectEntry
+	if newNode.IsDEntry() {
+		// update C entry
+		updatedCEntry = newNode.prevVersion.Clone()
+		updatedCEntry.nextVersion = newNode
+		newNode.prevVersion = updatedCEntry
 	}
-	entry.table.getObjectList(entry.IsTombstone).Update(newNode, lastNode)
+	// delete prepared state, insert committed state and update C entry if needed
+	entry.table.getObjectList(entry.IsTombstone).modify(lastNode, newNode, updatedCEntry)
 	return nil
 }
 
@@ -227,10 +236,15 @@ func (entry *ObjectEntry) PrepareCommit() error {
 		return err
 	}
 	entry.objData.UpdateMeta(newNode)
-	if newNode.prevVersion != nil {
-		newNode.prevVersion.nextVersion = newNode
+	var updatedCEntry *ObjectEntry
+	if newNode.IsDEntry() {
+		// update C entry
+		updatedCEntry = newNode.prevVersion.Clone()
+		updatedCEntry.nextVersion = newNode
+		newNode.prevVersion = updatedCEntry
 	}
-	entry.table.getObjectList(entry.IsTombstone).Update(newNode, lastNode)
+	// delete active state, insert prepared state and update C entry if needed
+	entry.table.getObjectList(entry.IsTombstone).modify(lastNode, newNode, lastNode)
 	return nil
 }
 
@@ -251,7 +265,8 @@ func (entry *ObjectEntry) PrepareRollback() (err error) {
 		newEntry.ObjectState = ObjectState_Create_ApplyCommit
 		newEntry.DeletedAt = types.TS{}
 		entry.objData.UpdateMeta(newEntry)
-		entry.table.getObjectList(entry.IsTombstone).Update(newEntry, lastNode)
+		// delete deleting state, replace with created state
+		entry.table.getObjectList(entry.IsTombstone).modify(lastNode, newEntry, nil)
 	default:
 		panic(fmt.Sprintf("invalid object state %v", lastNode.ObjectState))
 	}

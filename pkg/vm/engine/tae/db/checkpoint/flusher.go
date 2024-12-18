@@ -439,7 +439,8 @@ func foreachAobjBefore(_ context.Context,
 	// table.WaitDataObjectCommitted(ts)
 	// table.WaitTombstoneObjectCommitted(ts)
 	var ok bool
-	key := &catalog.ObjectEntry{EntryMVCCNode: catalog.EntryMVCCNode{DeletedAt: ts}}
+	// some entries shared the same timestamp with end, so we need to seek to the next one
+	key := &catalog.ObjectEntry{EntryMVCCNode: catalog.EntryMVCCNode{DeletedAt: ts.Next()}}
 
 	data := table.MakeDataObjectIt()
 	if ok = data.Seek(key); !ok {
@@ -469,8 +470,6 @@ func foreachAobjBefore(_ context.Context,
 			tf(item)
 		}
 	}
-
-	return
 }
 
 func (flusher *flushImpl) collectTableMemUsage(entry *logtail.DirtyTreeEntry, lastCkp types.TS) (memPressureRate float64) {

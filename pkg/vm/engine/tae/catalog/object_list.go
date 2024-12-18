@@ -124,6 +124,7 @@ func (l *ObjectList) getNodes(id *objectio.ObjectId, latestOnly bool) []*ObjectE
 	tree := l.tree.Load()
 	l.RUnlock()
 	if !ok {
+		return nil
 	}
 	return l.getNodesSnap(tree, ts, id, latestOnly)
 }
@@ -189,8 +190,11 @@ func (l *ObjectList) UpdateReplayTs(id *objectio.ObjectId, ts types.TS) {
 	l.maxTs_objectID[*id] = ts
 }
 
-// modify deletes the del entry (if not nil) and inserts the ins entry
-func (l *ObjectList) modify(del, ins *ObjectEntry) (deleted, replaced bool) {
+// 1. del\ins\updated should all belong to the same object
+// 2. del and ins should be two entry with different sort key, like different DeleteAt, so modify deletes the del entry (if not nil), inserts the ins entry and updates index map according to the ins entry
+// 3. updated will be inserted into the tree, and the index map WON'T be updated. The Caller make sure the updated entry has the same sort key as the target entry.
+// 4. all operations are atomic from the view of the caller of modify
+func (l *ObjectList) modify(del, ins, updated *ObjectEntry) (deleted, replaced1, replaced2 bool) {
 	maxTs := ins.CreatedAt
 	if maxTs.LT(&ins.DeletedAt) {
 		maxTs = ins.DeletedAt
@@ -208,7 +212,10 @@ func (l *ObjectList) modify(del, ins *ObjectEntry) (deleted, replaced bool) {
 		}
 		_, deleted = newTree.Delete(del)
 	}
-	_, replaced = newTree.Set(ins)
+	if updated != nil {
+		_, replaced2 = newTree.Set(updated)
+	}
+	_, replaced1 = newTree.Set(ins)
 	ok := l.tree.CompareAndSwap(oldTree, newTree)
 	if !ok {
 		panic("concurrent mutation")
@@ -216,18 +223,11 @@ func (l *ObjectList) modify(del, ins *ObjectEntry) (deleted, replaced bool) {
 	return
 }
 
-// Set inserts the objectstate, used in CreateObject
-func (l *ObjectList) Set(object *ObjectEntry) (replaced bool) {
-	_, replaced = l.modify(nil, object)
-	return
-}
-
-// Update updates the objectstate, used in Prepare\ApplyCommit\Rollback
-func (l *ObjectList) Update(new, old *ObjectEntry) {
-	deleted, _ := l.modify(old, new)
-	if !deleted {
-		// TODO(aptend): remove
-		panic("logic error")
+// Set inserts a brand the objectstate, used in CreateObject
+func (l *ObjectList) Set(object *ObjectEntry) {
+	_, replaced, _ := l.modify(nil, object, nil)
+	if replaced {
+		logutil.Error("Object list Set replaced", zap.String("obj", object.ID().ShortStringEx()), zap.Uint64("tableID", object.table.ID))
 	}
 }
 
@@ -245,6 +245,7 @@ func (l *ObjectList) DropObjectByID(
 		return
 	}
 	if obj.HasDropIntent() {
+		logutil.Error("DropObjectByID HasDropIntent", zap.String("obj", objectID.ShortStringEx()))
 		return nil, false, moerr.GetOkExpectedEOB()
 	}
 	if !obj.DeleteNode.IsEmpty() {
@@ -257,12 +258,14 @@ func (l *ObjectList) DropObjectByID(
 	if err := obj.CreateNode.CheckConflict(txn); err != nil {
 		return nil, false, err
 	}
-	droppedObj, isNew = obj.GetDropEntry(txn)
-	replaced := l.Set(droppedObj)
-	if replaced {
-		// TODO(aptend): remove
-		panic("logic error")
+	droppedObj, updatedCEntry, isNew := obj.GetDropEntry(txn)
+	if !isNew && obj.IsCreating() {
+		tableDesc := fmt.Sprintf("%v-%s", obj.table.ID, obj.table.GetLastestSchema(false).Name)
+		logutil.Error("DropObjectByID IsCreating", zap.String("obj", objectID.ShortStringEx()), zap.String("table", tableDesc))
+		return nil, false, moerr.NewNYINoCtx("DropObjectByID creating obj.")
 	}
+	// insert the D Entry and update the C Entry
+	l.modify(nil, droppedObj, updatedCEntry)
 	return
 }
 
@@ -279,13 +282,14 @@ func (l *ObjectList) UpdateObjectInfo(
 	if err := obj.GetLastMVCCNode().CheckConflict(txn); err != nil {
 		return false, err
 	}
-	newObj, isNew := obj.GetUpdateEntry(txn, stats)
-	// overwrite the old object
-	replaced := l.Set(newObj)
-	if !replaced {
-		// TODO(aptend): remove
-		panic("logic error")
+	newDroppedObj, udpateCEntry, isNew := obj.GetUpdateEntry(txn, stats)
+	if isNew {
+		tableDesc := fmt.Sprintf("%v-%s", obj.table.ID, obj.table.GetLastestSchema(false).Name)
+		logutil.Error("UpdateObjectInfo Before Deleting", zap.String("obj", obj.ID().ShortStringEx()), zap.String("table", tableDesc))
+		return false, moerr.NewNYINoCtx("UpdateObjectInfo before deleting.")
 	}
+	// replace the D entry and update the C entry
+	l.modify(nil, newDroppedObj, udpateCEntry)
 	return
 }
 
@@ -384,7 +388,7 @@ func (it *VisibleCommittedObjectIt) Next() bool {
 			if entry.IsDEntry() { // exclude D entries
 				continue
 			}
-			if !entry.HasDCounterpart() || !entry.nextVersion.IsVisible(it.txn) {
+			if !entry.HasDCounterpart() || !entry.GetNextVersion().IsVisible(it.txn) {
 				// 1. serving committed C entries or creating C entry created by this txn
 				// 2. C entried being dropped by other invisible txn
 				it.curr = entry

@@ -533,11 +533,11 @@ func (entry *TableEntry) TryFindLastAppendableObject(isTombstone bool) (obj *Obj
 	for ok := it.Last(); ok; ok = it.Prev() {
 		itObj := it.Item()
 		// exclude non-appendable objects and D entries
-		if !itObj.IsAppendable() || itObj.prevVersion != nil {
+		if !itObj.IsAppendable() || itObj.IsDEntry() {
 			continue
 		}
 		// first serving appendable objects
-		if itObj.nextVersion == nil {
+		if !itObj.HasDCounterpart() {
 			obj = itObj
 			break
 		}
@@ -570,7 +570,7 @@ func (entry *TableEntry) RecurLoop(processor Processor) (err error) {
 	for ok := objIt.Last(); ok; ok = objIt.Prev() {
 		objectEntry := objIt.Item()
 		// exclude C entries having drop intent(category-b)
-		if objectEntry.prevVersion == nil && objectEntry.nextVersion != nil {
+		if objectEntry.IsCEntry() && objectEntry.HasDCounterpart() {
 			continue
 		}
 		if err = processor.OnObject(objectEntry); err != nil {
@@ -588,7 +588,7 @@ func (entry *TableEntry) RecurLoop(processor Processor) (err error) {
 	defer tombstoneIt.Release()
 	for ok := tombstoneIt.Last(); ok; ok = tombstoneIt.Prev() {
 		objectEntry := tombstoneIt.Item()
-		if objectEntry.prevVersion == nil && objectEntry.nextVersion != nil {
+		if objectEntry.IsCEntry() && objectEntry.HasDCounterpart() {
 			continue
 		}
 		if err = processor.OnTombstone(objectEntry); err != nil {
