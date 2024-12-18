@@ -1100,7 +1100,7 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 		if err = restoreToCluster(ctx, ses, bh, pitrName, ts, subDbToRestore); err != nil {
 			return
 		}
-		if err = restorePubsWithSnapshotName(ctx, ses.GetService(), bh, pitrName); err != nil {
+		if err = restorePubsWithSnapshotName(ctx, ses.GetService(), bh, pitrName, ts); err != nil {
 			return
 		}
 
@@ -1109,6 +1109,7 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 				return
 			}
 		}
+		getLogger(ses.GetService()).Info(fmt.Sprintf("[%s]restore cluster success", pitrName))
 		return
 	case tree.RESTORELEVELACCOUNT:
 		if err = restoreToAccountWithPitr(ctx, ses.GetService(), bh, pitrName, ts, fkTableMap, viewMap, tenantInfo.TenantID); err != nil {
