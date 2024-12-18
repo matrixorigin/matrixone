@@ -2909,7 +2909,29 @@ func newMrsForBinary() *MysqlResultSet {
 	return mrs
 }
 
-func Test_appendResultSetBinaryRow(t *testing.T) {
+func newMrsForBinary2() *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+
+	col3 := &MysqlColumn{}
+	col3.SetName("c")
+	col3.SetColumnType(defines.MYSQL_TYPE_JSON)
+
+	mrs.AddColumn(col3)
+
+	c3, _ := bytejson.CreateByteJSON("c1")
+
+	rows := [][]any{
+		{c3},
+	}
+
+	for _, row := range rows {
+		mrs.AddRow(row)
+	}
+
+	return mrs
+}
+
+func Test_appendResultSet(t *testing.T) {
 	ctx := context.TODO()
 	convey.Convey("append result set binary row", t, func() {
 		sv, err := getSystemVariables("test/system_vars_config.toml")
@@ -2951,5 +2973,131 @@ func Test_appendResultSetBinaryRow(t *testing.T) {
 
 		err = proto.appendResultSetTextRow(newMrsForBinary(), 0)
 		convey.So(err, convey.ShouldBeNil)
+	})
+}
+
+func Test_appendResultSetBinaryRow_error(t *testing.T) {
+	ctx := context.TODO()
+	convey.Convey("append result set binary row", t, func() {
+		sv, err := getSystemVariables("test/system_vars_config.toml")
+		if err != nil {
+			t.Error(err)
+		}
+		pu := config.NewParameterUnit(sv, nil, nil, nil)
+		pu.SV.SkipCheckUser = true
+		pu.SV.KillRountinesInterval = 0
+		setSessionAlloc("", NewLeakCheckAllocator())
+		setPu("", pu)
+		ioses, err := NewIOSession(&testConn{}, pu, "")
+		convey.ShouldBeNil(err)
+		proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
+
+		ses := NewSession(ctx, "", proto, nil)
+		proto.ses = ses
+
+		mrs := newMrsForBinary()
+
+		testFun := func(col int) {
+			switch col {
+			case 0:
+				stub1 := gostub.Stub(&AppendCountOfBytesLenEnc, func(mp *MysqlProtocolImpl, value []byte) error {
+					return moerr.NewInternalError(ctx, "AppendCountOfBytesLenEnc return error")
+				})
+				defer stub1.Reset()
+			case 1, 2:
+				stub1 := gostub.Stub(&AppendStringLenEnc, func(mp *MysqlProtocolImpl, value string) error {
+					return moerr.NewInternalError(ctx, "AppendStringLenEnc return error")
+				})
+				defer stub1.Reset()
+			default:
+				panic("usp")
+			}
+
+			err = proto.appendResultSetBinaryRow(mrs, 0)
+			convey.So(err, convey.ShouldNotBeNil)
+		}
+		for i := 0; i < int(mrs.GetColumnCount()); i++ {
+			testFun(i)
+		}
+
+		mrs2 := newMrsForBinary2()
+		testFun2 := func(col int) {
+			switch col {
+			case 0:
+				stub1 := gostub.Stub(&AppendStringLenEnc, func(mp *MysqlProtocolImpl, value string) error {
+					return moerr.NewInternalError(ctx, "AppendStringLenEnc return error")
+				})
+				defer stub1.Reset()
+			default:
+				panic("usp")
+			}
+
+			err = proto.appendResultSetBinaryRow(mrs2, 0)
+			convey.So(err, convey.ShouldNotBeNil)
+		}
+		for i := 0; i < int(mrs2.GetColumnCount()); i++ {
+			testFun2(i)
+		}
+	})
+	convey.Convey("append result set binary row", t, func() {
+		sv, err := getSystemVariables("test/system_vars_config.toml")
+		if err != nil {
+			t.Error(err)
+		}
+		pu := config.NewParameterUnit(sv, nil, nil, nil)
+		pu.SV.SkipCheckUser = true
+		pu.SV.KillRountinesInterval = 0
+		setSessionAlloc("", NewLeakCheckAllocator())
+		setPu("", pu)
+		ioses, err := NewIOSession(&testConn{}, pu, "")
+		convey.ShouldBeNil(err)
+		proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
+
+		ses := NewSession(ctx, "", proto, nil)
+		proto.ses = ses
+
+		mrs := newMrsForBinary()
+
+		testFun := func(col int) {
+			switch col {
+			case 0:
+				stub1 := gostub.Stub(&AppendCountOfBytesLenEnc, func(mp *MysqlProtocolImpl, value []byte) error {
+					return moerr.NewInternalError(ctx, "AppendCountOfBytesLenEnc return error")
+				})
+				defer stub1.Reset()
+			case 1, 2:
+				stub1 := gostub.Stub(&AppendStringLenEnc, func(mp *MysqlProtocolImpl, value string) error {
+					return moerr.NewInternalError(ctx, "AppendStringLenEnc return error")
+				})
+				defer stub1.Reset()
+			default:
+				panic("usp")
+			}
+
+			err = proto.appendResultSetTextRow(mrs, 0)
+			convey.So(err, convey.ShouldNotBeNil)
+		}
+		for i := 0; i < int(mrs.GetColumnCount()); i++ {
+			testFun(i)
+		}
+
+		mrs2 := newMrsForBinary2()
+		testFun2 := func(col int) {
+			switch col {
+			case 0:
+				stub1 := gostub.Stub(&AppendStringLenEnc, func(mp *MysqlProtocolImpl, value string) error {
+					return moerr.NewInternalError(ctx, "AppendStringLenEnc return error")
+				})
+				defer stub1.Reset()
+			default:
+				panic("usp")
+			}
+
+			err = proto.appendResultSetTextRow(mrs2, 0)
+			convey.So(err, convey.ShouldNotBeNil)
+		}
+		for i := 0; i < int(mrs2.GetColumnCount()); i++ {
+			testFun2(i)
+		}
 	})
 }

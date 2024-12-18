@@ -1264,6 +1264,10 @@ func (mp *MysqlProtocolImpl) writeStringLenEnc(data []byte, pos int, value strin
 	return mp.writeStringFix(data, pos, value, len(value))
 }
 
+var AppendStringLenEnc = func(mp *MysqlProtocolImpl, value string) error {
+	return mp.appendStringLenEnc(value)
+}
+
 // append a string with length encoded to the buffer
 // return the buffer
 func (mp *MysqlProtocolImpl) appendStringLenEnc(value string) error {
@@ -1276,6 +1280,10 @@ func (mp *MysqlProtocolImpl) appendStringLenEnc(value string) error {
 		return err
 	}
 	return nil
+}
+
+var AppendCountOfBytesLenEnc = func(mp *MysqlProtocolImpl, value []byte) error {
+	return mp.appendCountOfBytesLenEnc(value)
 }
 
 // append bytes with length encoded to the buffer
@@ -2377,12 +2385,12 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow(mrs *MysqlResultSet, rowId
 			} else {
 				switch realVal := value.(type) {
 				case []byte:
-					err = mp.appendCountOfBytesLenEnc(realVal)
+					err = AppendCountOfBytesLenEnc(mp, realVal)
 					if err != nil {
 						return err
 					}
 				case string:
-					err = mp.appendStringLenEnc(realVal)
+					err = AppendStringLenEnc(mp, realVal)
 					if err != nil {
 						return err
 					}
@@ -2390,7 +2398,7 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow(mrs *MysqlResultSet, rowId
 					if value2, err3 := mrs.GetString(mp.ctx, rowIdx, i); err3 != nil {
 						return err3
 					} else {
-						err = mp.appendStringLenEnc(value2)
+						err = AppendStringLenEnc(mp, value2)
 						if err != nil {
 							return err
 						}
@@ -2638,12 +2646,12 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow(mrs *MysqlResultSet, r uint6
 			} else {
 				switch realVal := value.(type) {
 				case []byte:
-					err = mp.appendCountOfBytesLenEnc(realVal)
+					err = AppendCountOfBytesLenEnc(mp, realVal)
 					if err != nil {
 						return err
 					}
 				case string:
-					err = mp.appendStringLenEnc(realVal)
+					err = AppendStringLenEnc(mp, realVal)
 					if err != nil {
 						return err
 					}
@@ -2651,7 +2659,7 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow(mrs *MysqlResultSet, r uint6
 					if value2, err3 := mrs.GetString(mp.ctx, r, i); err3 != nil {
 						return err3
 					} else {
-						err = mp.appendStringLenEnc(value2)
+						err = AppendStringLenEnc(mp, value2)
 						if err != nil {
 							return err
 						}
