@@ -797,29 +797,29 @@ func TestFullTextGroup(t *testing.T) {
 	assert.Equal(t, ok, true)
 }
 
-func TestFullTextGroupTilda(t *testing.T) {
+func TestFullTextJoinGroupTilda(t *testing.T) {
 
-	pattern := "+we ~(<are >so)"
+	pattern := "+we +also ~(<are >so)"
 	s, err := NewSearchAccum("src", "index", pattern, int64(tree.FULLTEXT_BOOLEAN), "")
 	require.Nil(t, err)
 
 	agghtab := make(map[any][]uint8)
 	aggcnt := make([]int64, 64)
 
-	// {we, are, so, happy}
-	// we
-	agghtab[0] = []uint8{uint8(2), uint8(2), uint8(0), uint8(0)} // we, are
-	agghtab[1] = []uint8{uint8(3), uint8(0), uint8(5), uint8(0)} // we, so
+	// {(we, also), are, so}
+	// (we, also)
+	agghtab[0] = []uint8{uint8(2), uint8(2), uint8(0)} // (we, also), are
+	agghtab[1] = []uint8{uint8(3), uint8(0), uint8(5)} // (we, also), so
 
 	// are
-	agghtab[11] = []uint8{uint8(0), uint8(3), uint8(0), uint8(0)} // are
-	agghtab[12] = []uint8{uint8(0), uint8(4), uint8(0), uint8(0)} // are
+	agghtab[11] = []uint8{uint8(0), uint8(3), uint8(0)} // are
+	agghtab[12] = []uint8{uint8(0), uint8(4), uint8(0)} // are
 
 	// so
-	agghtab[20] = []uint8{uint8(0), uint8(0), uint8(5), uint8(0)}
-	agghtab[21] = []uint8{uint8(0), uint8(0), uint8(6), uint8(0)}
-	agghtab[22] = []uint8{uint8(0), uint8(0), uint8(7), uint8(0)}
-	agghtab[23] = []uint8{uint8(0), uint8(0), uint8(8), uint8(0)}
+	agghtab[20] = []uint8{uint8(0), uint8(0), uint8(5)}
+	agghtab[21] = []uint8{uint8(0), uint8(0), uint8(6)}
+	agghtab[22] = []uint8{uint8(0), uint8(0), uint8(7)}
+	agghtab[23] = []uint8{uint8(0), uint8(0), uint8(8)}
 
 	aggcnt[0] = 2
 	aggcnt[1] = 3
@@ -852,6 +852,65 @@ func TestFullTextGroupTilda(t *testing.T) {
 	assert.Equal(t, ok, true)
 	_, ok = test_result[1]
 	assert.Equal(t, ok, true)
+	assert.Equal(t, 2, len(test_result))
+}
+
+func TestFullTextGroupTilda(t *testing.T) {
+
+	pattern := "+we ~(<are >so)"
+	s, err := NewSearchAccum("src", "index", pattern, int64(tree.FULLTEXT_BOOLEAN), "")
+	require.Nil(t, err)
+
+	agghtab := make(map[any][]uint8)
+	aggcnt := make([]int64, 64)
+
+	// {we, are, so}
+	// we
+	agghtab[0] = []uint8{uint8(2), uint8(2), uint8(0)} // we, are
+	agghtab[1] = []uint8{uint8(3), uint8(0), uint8(5)} // we, so
+
+	// are
+	agghtab[11] = []uint8{uint8(0), uint8(3), uint8(0)} // are
+	agghtab[12] = []uint8{uint8(0), uint8(4), uint8(0)} // are
+
+	// so
+	agghtab[20] = []uint8{uint8(0), uint8(0), uint8(5)}
+	agghtab[21] = []uint8{uint8(0), uint8(0), uint8(6)}
+	agghtab[22] = []uint8{uint8(0), uint8(0), uint8(7)}
+	agghtab[23] = []uint8{uint8(0), uint8(0), uint8(8)}
+
+	aggcnt[0] = 2
+	aggcnt[1] = 3
+	aggcnt[2] = 6
+
+	s.Nrow = 100
+
+	test_result := make(map[any]float32, 13)
+	// eval
+	i := 0
+	for key := range agghtab {
+		var result []float32
+		docvec := agghtab[key]
+		//fmt.Printf("docvec %v %v\n", key, docvec)
+		for _, p := range s.Pattern {
+			result, err = p.Eval(s, docvec, aggcnt, float32(1.0), result)
+			require.Nil(t, err)
+			//fmt.Printf("result %v\n", result)
+		}
+
+		if len(result) > 0 {
+			//fmt.Printf("result %v %f\n", key, result[0])
+			test_result[key] = result[0]
+		}
+		i++
+	}
+
+	var ok bool
+	_, ok = test_result[0]
+	assert.Equal(t, ok, true)
+	_, ok = test_result[1]
+	assert.Equal(t, ok, true)
+	assert.Equal(t, 2, len(test_result))
 }
 
 func TestFullTextStar(t *testing.T) {
