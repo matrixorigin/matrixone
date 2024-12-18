@@ -897,7 +897,7 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 		sortedFkTbls []string
 		fkTableMap   map[string]*tableInfo
 	)
-	// reslove timestamp
+	// resolve timestamp
 	ts, err = doResolveTimeStamp(stmt.TimeStamp)
 	if err != nil {
 		return stats, err
@@ -1600,7 +1600,7 @@ func deleteCurFkTableInPitrRestore(ctx context.Context,
 	)
 
 	// get topo sorted tables with foreign key
-	sortedFkTbls, err = fkTablesTopoSort(ctx, bh, "", dbName, tblName)
+	sortedFkTbls, err = fkTablesTopoSortInPitrRestore(ctx, bh, 0, dbName, tblName)
 	if err != nil {
 		return
 	}

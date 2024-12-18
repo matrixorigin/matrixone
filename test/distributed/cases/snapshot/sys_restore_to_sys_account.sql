@@ -1,3 +1,4 @@
+set experimental_fulltext_index=1;
 use mo_catalog;
 create cluster table clu01(col1 int, col2 decimal);
 insert into clu01 values(1,2,0);
@@ -732,5 +733,43 @@ select attname from mo_catalog.mo_columns{snapshot = 'sp18'} where att_database 
 drop database db11;
 drop snapshot sp18;
 drop snapshot sp17;
+
+
+
+
+drop database if exists test_fulltext_restore;
+create database test_fulltext_restore;
+use test_fulltext_restore;
+drop table if exists posts;
+drop table if exists comments;
+create table posts (
+    post_id int auto_increment primary key,
+    title varchar(255),
+    content text
+);
+create table comments (
+    comment_id int auto_increment primary key,
+    post_id int,
+    comment_text text,
+    foreign key (post_id) references posts(post_id)
+);
+drop snapshot if exists sp_fulltext;
+create snapshot sp_fulltext for account sys;
+alter table posts add fulltext(content);
+insert into posts (title, content) values
+('MO全文索引入门', 'MO全文索引是一种强大的工具，可以帮助你快速检索数据库中的文本数据。'),
+('深入理解全文索引', '全文索引不仅可以提高搜索效率，还可以通过JOIN操作与其他表结合使用。');
+insert into comments (post_id, comment_text) values
+(1, '这篇文章很有用，谢谢分享！'),
+(1, '我也在学习全文索引，很有帮助。'),
+(2, '全文索引真的很强大，学习了。');
+restore account sys from snapshot sp_fulltext;
+show create table posts;
+select * from posts;
+select * from comments;
+drop table comments;
+drop table posts;
+drop database test_fulltext_restore;
+drop snapshot sp_fulltext;
 -- @ignore:1
 show snapshots;
