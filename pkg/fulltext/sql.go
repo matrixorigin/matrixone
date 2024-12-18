@@ -64,14 +64,14 @@ JOIN will be used to optimize the SQL with Pattern/Plan
 WITH t0 (A JOIN B)
 (t0) UNION ALL (t0 JOIN C) UNION ALL (t0 JOIN D)
 
-(A JOIN B) is the result contain both A and B. Consider it is the appearance of A and B (as index of "A & B)).
-(t0 JOIN C) is the result contain both A, B and C. Consider it is the appearance of A, B and C (as index of "C").
-(t0 JOIN D) is the result contain both A, B and D. Consider it is the appearance of A, B and D (as index of "D").
+(A JOIN B) is the result contain both A and B. Consider it is the appearance of A and B (denoted as index 0 in SQL)).
+(t0 JOIN C) is the result contain both A, B and C. Consider it is the appearance of A, B and C (denoted as index 1 in SQL).
+(t0 JOIN D) is the result contain both A, B and D. Consider it is the appearance of A, B and D (denoted as index 2 in SQL).
 
 For TD-IDF calculation,
 
-Instead of caculating the TD-IDF from the words A, B, C and D, we will calculate the score
-from word groups (A & B) -> "A & B" , (A & B & C) -> "C", (A & B & D) -> "D".
+Instead of caculating the TD-IDF from the words A, B, C and D,
+we will calculate the score from word groups (A & B) -> "0" , (A & B & C) -> "1", (A & B & D) -> "2".
 The ordering of the result remain the same and of course the score is different.
 
 In case + operator with GROUP such as "+(A B) ~C -D",
