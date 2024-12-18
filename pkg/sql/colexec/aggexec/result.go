@@ -379,16 +379,7 @@ func (r *optSplitResult) flushAll() []*vector.Vector {
 	}
 
 	var ret []*vector.Vector
-	if r.resultList[r.nowIdx1].Length() == 0 {
-		if r.nowIdx1 == 0 {
-			ret = nil
-		} else {
-			ret, r.resultList = r.resultList[:r.nowIdx1-1], r.resultList[r.nowIdx1+1:]
-		}
-	} else {
-		ret, r.resultList = r.resultList[:r.nowIdx1+1], r.resultList[r.nowIdx1+1:]
-	}
-
+	ret, r.resultList = r.resultList[:r.nowIdx1+1], r.resultList[r.nowIdx1+1:]
 	return ret
 }
 
