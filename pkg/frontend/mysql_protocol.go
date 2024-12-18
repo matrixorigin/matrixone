@@ -282,6 +282,9 @@ type MysqlProtocolImpl struct {
 	// table. It is cached here to send it proxy when proxy tries to reuse
 	// a connection and do the authentication.
 	authString []byte
+
+	//for encoding the date into bytes
+	dateEncBuffer []byte
 }
 
 func (mp *MysqlProtocolImpl) GetStr(id PropertyID) string {
@@ -2670,7 +2673,8 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow(mrs *MysqlResultSet, r uint6
 			if value, err2 := mrs.GetValue(mp.ctx, r, i); err2 != nil {
 				return err2
 			} else {
-				err = mp.appendStringLenEnc(value.(types.Date).String())
+				mp.dateEncBuffer = value.(types.Date).ToBytes(mp.dateEncBuffer[:0])
+				err = mp.appendCountOfBytesLenEnc(mp.dateEncBuffer[:types.DateToBytesLength])
 				if err != nil {
 					return err
 				}
@@ -3118,6 +3122,7 @@ func NewMysqlClientProtocol(sid string, connectionID uint32, tcp *Conn, maxBytes
 		strconvBuffer:    make([]byte, 0, 16*1024),
 		lenEncBuffer:     make([]byte, 0, 10),
 		binaryNullBuffer: make([]byte, 0, 512),
+		dateEncBuffer:    make([]byte, 0, types.DateToBytesLength),
 		SV:               SV,
 	}
 
