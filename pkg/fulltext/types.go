@@ -52,6 +52,7 @@ Find rows that contain words such as “apple”, “apples”, “applesauce”
 Find rows that contain the exact phrase “some words” (for example, rows that contain “some words of wisdom” but not “some noise words”). Note that the " characters that enclose the phrase are operator characters that delimit the phrase. They are not the quotation marks that enclose the search string itself.
 
 
+# Step 1
 Pattern/Plan is generated from search string.
 
 In boolean mode,
@@ -65,6 +66,18 @@ search string: 'Matrix +(<Origin >One)' -> pattern: "(+ (group (< (text 0 origin
 In natural language mode,
 
 search string: '读写汉字 学中文' -> pattern: "(text 0 0 读写汉) (text 1 3 写汉字) (* 2 6 汉字*) (* 3 9 字*) (text 4 13 学中文) (* 5 16 中文*) (* 6 19 文*)"
+
+# Step 2
+
+Generate the SQL from pattern
+
+# Step 3
+
+Run the SQL and get the statistics
+
+# Step 4
+
+Run Eval() to get final answer and score
 
 */
 
