@@ -270,7 +270,11 @@ func (group *Group) consumeBatchToGetFinalResult(
 			if err != nil {
 				return err
 			}
-			group.ctr.result1.InitWithGroupBy(aggexec.GetMinAggregatorsChunkSize(group.ctr.groupByEvaluate.Vec, aggs), aggs, group.ctr.groupByEvaluate.Vec)
+			if err = group.ctr.result1.InitWithGroupBy(
+				proc.Mp(),
+				aggexec.GetMinAggregatorsChunkSize(group.ctr.groupByEvaluate.Vec, aggs), aggs, group.ctr.groupByEvaluate.Vec, group.PreAllocSize); err != nil {
+				return err
+			}
 			if err = preExtendAggExecs(aggs, group.PreAllocSize); err != nil {
 				return err
 			}

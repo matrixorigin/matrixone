@@ -135,13 +135,35 @@ func (buf *GroupResultBuffer) InitOnlyAgg(chunkSize int, aggList []aggexec.AggFu
 	buf.ToPopped = append(buf.ToPopped, batch.NewOffHeapEmpty())
 }
 
-func (buf *GroupResultBuffer) InitWithGroupBy(chunkSize int, aggList []aggexec.AggFuncExec, groupByVec []*vector.Vector) {
+func (buf *GroupResultBuffer) InitWithGroupBy(
+	mp *mpool.MPool,
+	chunkSize int, aggList []aggexec.AggFuncExec, groupByVec []*vector.Vector, preAllocated uint64) error {
 	aggexec.SyncAggregatorsToChunkSize(aggList, chunkSize)
 
 	buf.ChunkSize = chunkSize
 	buf.AggList = aggList
-	buf.ToPopped = make([]*batch.Batch, 0, 1)
-	buf.ToPopped = append(buf.ToPopped, getInitialBatchWithSameTypeVecs(groupByVec))
+
+	if preAllocated > 0 {
+		fullNum, moreRow := preAllocated/uint64(buf.ChunkSize), preAllocated%uint64(buf.ChunkSize)
+		for i := uint64(0); i < fullNum; i++ {
+			buf.ToPopped = append(buf.ToPopped, getInitialBatchWithSameTypeVecs(groupByVec))
+			if err := buf.ToPopped[len(buf.ToPopped)-1].PreExtend(mp, buf.ChunkSize); err != nil {
+				return err
+			}
+		}
+		if moreRow > 0 {
+			buf.ToPopped = append(buf.ToPopped, getInitialBatchWithSameTypeVecs(groupByVec))
+			if err := buf.ToPopped[len(buf.ToPopped)-1].PreExtend(mp, int(moreRow)); err != nil {
+				return err
+			}
+		}
+
+	} else {
+		buf.ToPopped = append(buf.ToPopped, getInitialBatchWithSameTypeVecs(groupByVec))
+	}
+
+	buf.ToPopped = buf.ToPopped[:1]
+	return nil
 }
 
 func (buf *GroupResultBuffer) InitWithBatch(chunkSize int, aggList []aggexec.AggFuncExec, vecExampleBatch *batch.Batch) {
@@ -176,7 +198,14 @@ func (buf *GroupResultBuffer) AppendBatch(
 		return toIncrease, err
 	}
 
-	buf.ToPopped = append(buf.ToPopped, getInitialBatchWithSameTypeVecs(vs))
+	if cap(buf.ToPopped) > len(buf.ToPopped) {
+		buf.ToPopped = buf.ToPopped[:len(buf.ToPopped)+1]
+	} else {
+		buf.ToPopped = append(buf.ToPopped, nil)
+	}
+	if buf.ToPopped[len(buf.ToPopped)-1] == nil {
+		buf.ToPopped[len(buf.ToPopped)-1] = getInitialBatchWithSameTypeVecs(vs)
+	}
 	_, err = buf.AppendBatch(mp, vs, offset+k+1, insertList[k+1:])
 
 	return toIncrease, err
