@@ -1149,6 +1149,7 @@ func (builder *QueryBuilder) parseOptimizeHints() {
 func (builder *QueryBuilder) optimizeFilters(rootID int32) int32 {
 	rootID, _ = builder.pushdownFilters(rootID, nil, false)
 	foldTableScanFilters(builder.compCtx.GetProcess(), builder.qry, rootID, false)
+	ReCalcNodeStats(rootID, builder, true, true, true)
 	builder.mergeFiltersOnCompositeKey(rootID)
 	foldTableScanFilters(builder.compCtx.GetProcess(), builder.qry, rootID, true)
 	builder.optimizeDateFormatExpr(rootID)
@@ -1185,7 +1186,7 @@ func (builder *QueryBuilder) lockTableIfLockNoRowsAtTheEndForDelAndUpdate() (err
 	tableIDs[tableDef.TblId] = true
 	for _, idx := range tableDef.Indexes {
 		if idx.TableExist {
-			_, idxTableDef := builder.compCtx.Resolve(objRef.SchemaName, idx.IndexTableName, nil)
+			_, idxTableDef := builder.compCtx.ResolveIndexTableByRef(objRef, idx.IndexTableName, nil)
 			if idxTableDef == nil {
 				return
 			}

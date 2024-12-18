@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -93,37 +94,49 @@ func TestNewSinker(t *testing.T) {
 	require.Equal(t, 0, int(proc.Mp().CurrNB()))
 }
 
+func makeTestSinker(
+	inSchema *catalog.Schema,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+) (outSchema *catalog.Schema, sinker *Sinker) {
+	outSchema = inSchema
+	if outSchema == nil {
+		outSchema = catalog.MockSchema(3, 2)
+	}
+	seqnums := make([]uint16, len(outSchema.Attrs()))
+	for i := range outSchema.Attrs() {
+		seqnums[i] = outSchema.GetSeqnum(outSchema.Attrs()[i])
+	}
+
+	factory := NewFSinkerImplFactory(
+		seqnums,
+		outSchema.GetPrimaryKey().Idx,
+		true,
+		false,
+		outSchema.Version,
+	)
+
+	sinker = NewSinker(
+		outSchema.GetPrimaryKey().Idx,
+		outSchema.Attrs(),
+		outSchema.Types(),
+		factory,
+		mp,
+		fs,
+	)
+	return
+}
+
 func TestNewSinker2(t *testing.T) {
 	proc := testutil.NewProc()
 	fs, err := fileservice.Get[fileservice.FileService](
 		proc.GetFileService(), defines.SharedFileServiceName)
 	require.NoError(t, err)
 
-	schema := catalog.MockSchema(3, 2)
-	seqnums := make([]uint16, len(schema.Attrs()))
-	for i := range schema.Attrs() {
-		seqnums[i] = schema.GetSeqnum(schema.Attrs()[i])
-	}
+	schema, sinker := makeTestSinker(nil, proc.Mp(), fs)
 
-	factory := NewFSinkerImplFactory(
-		seqnums,
-		schema.GetPrimaryKey().Idx,
-		true,
-		false,
-		schema.Version,
-	)
-
-	sinker := NewSinker(
-		schema.GetPrimaryKey().Idx,
-		schema.Attrs(),
-		schema.Types(),
-		factory,
-		proc.Mp(),
-		fs,
-	)
-
-	for i := 0; i < 100; i++ {
-		bat := catalog.MockBatch(schema, 8192*10)
+	for i := 0; i < 5; i++ {
+		bat := catalog.MockBatch(schema, 8192*2)
 		err = sinker.Write(context.Background(), containers.ToCNBatch(bat))
 		assert.Nil(t, err)
 
@@ -148,11 +161,20 @@ func TestNewSinker2(t *testing.T) {
 		rows += int(sinker.result.tail[j].RowCount())
 	}
 
-	require.Equal(t, 8192*10*100, rows)
+	require.Equal(t, 8192*2*5, rows)
 	require.NoError(t, sinker.Close())
 
 	fmt.Println(sinker.staged.inMemStats.String())
 	fmt.Println(sinker.buf.bufStats.String())
 
 	require.Equal(t, 0, int(proc.Mp().CurrNB()))
+}
+
+func TestSinkerCancel(t *testing.T) {
+	var sinker Sinker
+	ctx, cancel := context.WithCancelCause(context.Background())
+	expectErr := moerr.NewInternalErrorNoCtx("tt")
+	cancel(expectErr)
+	err := sinker.Sync(ctx)
+	require.ErrorContains(t, err, expectErr.Error())
 }

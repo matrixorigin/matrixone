@@ -35,7 +35,14 @@ message EncodedBasicInfo {
 }
 
 message EncodedAgg {
-    EncodedBasicInfo info = 1;
-    bytes  result = 2;
-    repeated bytes groups = 3;
+    EncodedBasicInfo info = 1 [
+        (gogoproto.nullable) = false
+    ];
+
+    /* agg result part. */
+    repeated bytes  result = 2;
+    repeated bytes empties = 3;
+
+    /* agg executing context */
+    repeated bytes groups = 4;
 }

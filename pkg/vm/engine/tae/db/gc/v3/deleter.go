@@ -93,6 +93,12 @@ func (g *Deleter) DeleteMany(
 	toDeletePaths := g.toDeletePaths
 
 	for i := 0; i < cnt; i += g.deleteBatchSize {
+		select {
+		case <-ctx.Done():
+			err = context.Cause(ctx)
+			return
+		default:
+		}
 		end := i + g.deleteBatchSize
 		if end > cnt {
 			end = cnt

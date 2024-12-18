@@ -759,6 +759,11 @@ func (sm *SnapshotMeta) GetSnapshot(
 		snapshotSchemaTypes[ColObjId],
 	}
 	for tid, objectMap := range objects {
+		select {
+		case <-ctx.Done():
+			return nil, context.Cause(ctx)
+		default:
+		}
 		tombstonesStats := make([]objectio.ObjectStats, 0)
 		for ttid, tombstoneMap := range tombstones {
 			if ttid != tid {
@@ -873,6 +878,11 @@ func (sm *SnapshotMeta) GetPITR(
 		tables:   make(map[uint64]types.TS),
 	}
 	for _, object := range sm.pitr.objects {
+		select {
+		case <-ctx.Done():
+			return nil, context.Cause(ctx)
+		default:
+		}
 		location := object.stats.ObjectLocation()
 		name := object.stats.ObjectName()
 		for i := uint32(0); i < object.stats.BlkCnt(); i++ {
@@ -1265,6 +1275,12 @@ func (sm *SnapshotMeta) Rebuild(
 }
 
 func (sm *SnapshotMeta) ReadMeta(ctx context.Context, name string, fs fileservice.FileService) error {
+	select {
+	case <-ctx.Done():
+		return context.Cause(ctx)
+	default:
+	}
+
 	reader, err := blockio.NewFileReaderNoCache(fs, name)
 	if err != nil {
 		return err
