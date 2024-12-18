@@ -15,18 +15,26 @@
 package checkpoint
 
 import (
+	"context"
+	"fmt"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/tidwall/btree"
 )
 
 func newRunnerStore(
+	sid string,
 	globalHistoryDuration time.Duration,
 ) *runnerStore {
 	s := new(runnerStore)
+	s.sid = sid
 	s.globalHistoryDuration = globalHistoryDuration
 	s.incrementals = btree.NewBTreeGOptions(
 		func(a, b *CheckpointEntry) bool {
@@ -47,6 +55,7 @@ func newRunnerStore(
 
 type runnerStore struct {
 	sync.RWMutex
+	sid string
 
 	globalHistoryDuration time.Duration
 
@@ -59,6 +68,331 @@ type runnerStore struct {
 	gcCount     int
 	gcTime      time.Time
 	gcWatermark atomic.Value
+}
+
+func (s *runnerStore) AddNewIncrementalEntry(entry *CheckpointEntry) {
+	s.Lock()
+	defer s.Unlock()
+	s.incrementals.Set(entry)
+}
+
+func (s *runnerStore) CleanPenddingCheckpoint() {
+	prev := s.MaxIncrementalCheckpoint()
+	if prev == nil {
+		return
+	}
+	if !prev.IsFinished() {
+		s.Lock()
+		s.incrementals.Delete(prev)
+		s.Unlock()
+	}
+	if prev.IsRunning() {
+		logutil.Warnf("Delete a running checkpoint entry")
+	}
+	prev = s.MaxGlobalCheckpoint()
+	if prev == nil {
+		return
+	}
+	if !prev.IsFinished() {
+		s.Lock()
+		s.incrementals.Delete(prev)
+		s.Unlock()
+	}
+	if prev.IsRunning() {
+		logutil.Warnf("Delete a running checkpoint entry")
+	}
+}
+
+func (s *runnerStore) TryAddNewCompactedCheckpointEntry(entry *CheckpointEntry) (success bool) {
+	if entry.entryType != ET_Compacted {
+		panic("TryAddNewCompactedCheckpointEntry entry type is error")
+	}
+	s.Lock()
+	defer s.Unlock()
+	old := s.compacted.Load()
+	if old != nil {
+		end := old.end
+		if entry.end.LT(&end) {
+			return true
+		}
+	}
+	s.compacted.Store(entry)
+	return true
+}
+
+func (s *runnerStore) TryAddNewIncrementalCheckpointEntry(entry *CheckpointEntry) (success bool) {
+	s.Lock()
+	defer s.Unlock()
+	maxEntry, _ := s.incrementals.Max()
+
+	// if it's the first entry, add it
+	if maxEntry == nil {
+		s.incrementals.Set(entry)
+		success = true
+		return
+	}
+
+	// if it is not the right candidate, skip this request
+	// [startTs, endTs] --> [endTs+1, ?]
+	endTS := maxEntry.GetEnd()
+	startTS := entry.GetStart()
+	nextTS := endTS.Next()
+	if !nextTS.Equal(&startTS) {
+		success = false
+		return
+	}
+
+	// if the max entry is not finished, skip this request
+	if !maxEntry.IsFinished() {
+		success = false
+		return
+	}
+
+	s.incrementals.Set(entry)
+
+	success = true
+	return
+}
+
+// Since there is no wal after recovery, the checkpoint lsn before backup must be set to 0.
+func (s *runnerStore) TryAddNewBackupCheckpointEntry(entry *CheckpointEntry) (success bool) {
+	entry.entryType = ET_Incremental
+	success = s.TryAddNewIncrementalCheckpointEntry(entry)
+	if !success {
+		return
+	}
+	s.Lock()
+	defer s.Unlock()
+	it := s.incrementals.Iter()
+	for it.Next() {
+		e := it.Item()
+		e.ckpLSN = 0
+		e.truncateLSN = 0
+	}
+	return
+}
+
+func (s *runnerStore) TryAddNewGlobalCheckpointEntry(
+	entry *CheckpointEntry,
+) (success bool) {
+	s.Lock()
+	defer s.Unlock()
+	s.globals.Set(entry)
+	return true
+}
+
+func (s *runnerStore) GetAllGlobalCheckpoints() []*CheckpointEntry {
+	s.Lock()
+	snapshot := s.globals.Copy()
+	s.Unlock()
+	return snapshot.Items()
+}
+
+func (s *runnerStore) GetAllCheckpointsForBackup(compact *CheckpointEntry) []*CheckpointEntry {
+	ckps := make([]*CheckpointEntry, 0)
+	var ts types.TS
+	if compact != nil {
+		ts = compact.GetEnd()
+		ckps = append(ckps, compact)
+	}
+	s.Lock()
+	g := s.MaxFinishedGlobalCheckpointLocked()
+	tree := s.incrementals.Copy()
+	s.Unlock()
+	if g != nil {
+		if ts.IsEmpty() {
+			ts = g.GetEnd()
+		}
+		ckps = append(ckps, g)
+	}
+	pivot := NewCheckpointEntry(s.sid, ts.Next(), ts.Next(), ET_Incremental)
+	iter := tree.Iter()
+	defer iter.Release()
+	if ok := iter.Seek(pivot); ok {
+		for {
+			e := iter.Item()
+			if !e.IsFinished() {
+				break
+			}
+			ckps = append(ckps, e)
+			if !iter.Next() {
+				break
+			}
+		}
+	}
+	return ckps
+}
+
+func (s *runnerStore) GetAllCheckpoints() []*CheckpointEntry {
+	ckps := make([]*CheckpointEntry, 0)
+	var ts types.TS
+	s.Lock()
+	g := s.MaxFinishedGlobalCheckpointLocked()
+	tree := s.incrementals.Copy()
+	s.Unlock()
+	if g != nil {
+		ts = g.GetEnd()
+		ckps = append(ckps, g)
+	}
+	pivot := NewCheckpointEntry(s.sid, ts.Next(), ts.Next(), ET_Incremental)
+	iter := tree.Iter()
+	defer iter.Release()
+	if ok := iter.Seek(pivot); ok {
+		for {
+			e := iter.Item()
+			if !e.IsFinished() {
+				break
+			}
+			ckps = append(ckps, e)
+			if !iter.Next() {
+				break
+			}
+		}
+	}
+	return ckps
+}
+
+func (s *runnerStore) MaxFinishedGlobalCheckpointLocked() *CheckpointEntry {
+	g, ok := s.globals.Max()
+	if !ok {
+		return nil
+	}
+	if g.IsFinished() {
+		return g
+	}
+	it := s.globals.Iter()
+	it.Seek(g)
+	defer it.Release()
+	if !it.Prev() {
+		return nil
+	}
+	return it.Item()
+}
+
+func (s *runnerStore) GetPenddingIncrementalCount() int {
+	entries := s.GetAllIncrementalCheckpoints()
+	global := s.MaxGlobalCheckpoint()
+
+	count := 0
+	for i := len(entries) - 1; i >= 0; i-- {
+		if global != nil && entries[i].end.LE(&global.end) {
+			break
+		}
+		if !entries[i].IsFinished() {
+			continue
+		}
+		count++
+	}
+	return count
+}
+
+func (s *runnerStore) GetAllIncrementalCheckpoints() []*CheckpointEntry {
+	s.Lock()
+	snapshot := s.incrementals.Copy()
+	s.Unlock()
+	return snapshot.Items()
+}
+
+func (s *runnerStore) GetGlobalCheckpointCount() int {
+	s.RLock()
+	defer s.RUnlock()
+	return s.globals.Len()
+}
+
+func (s *runnerStore) GetLowWaterMark() types.TS {
+	s.RLock()
+	defer s.RUnlock()
+	global, okG := s.globals.Min()
+	incremental, okI := s.incrementals.Min()
+	if !okG && !okI {
+		return types.TS{}
+	}
+	if !okG {
+		return incremental.start
+	}
+	if !okI {
+		return global.start
+	}
+	if global.end.LT(&incremental.start) {
+		return global.end
+	}
+	return incremental.start
+}
+
+func (s *runnerStore) GetCompacted() *CheckpointEntry {
+	return s.compacted.Load()
+}
+
+func (s *runnerStore) UpdateCompacted(entry *CheckpointEntry) {
+	s.compacted.Store(entry)
+}
+
+func (s *runnerStore) ICKPRange(
+	start, end *types.TS, cnt int,
+) []*CheckpointEntry {
+	s.Lock()
+	tree := s.incrementals.Copy()
+	s.Unlock()
+	it := tree.Iter()
+	ok := it.Seek(NewCheckpointEntry(s.sid, *start, *start, ET_Incremental))
+	incrementals := make([]*CheckpointEntry, 0)
+	if ok {
+		for len(incrementals) < cnt {
+			e := it.Item()
+			if !e.IsFinished() {
+				break
+			}
+			if e.start.GE(start) && e.start.LT(end) {
+				incrementals = append(incrementals, e)
+			}
+			if !it.Next() {
+				break
+			}
+		}
+	}
+	return incrementals
+}
+
+func (s *runnerStore) ICKPSeekLT(ts types.TS, cnt int) []*CheckpointEntry {
+	s.Lock()
+	tree := s.incrementals.Copy()
+	s.Unlock()
+	it := tree.Iter()
+	ok := it.Seek(NewCheckpointEntry(s.sid, ts, ts, ET_Incremental))
+	incrementals := make([]*CheckpointEntry, 0)
+	if ok {
+		for len(incrementals) < cnt {
+			e := it.Item()
+			if !e.IsFinished() {
+				break
+			}
+			if e.start.LT(&ts) {
+				if !it.Next() {
+					break
+				}
+				continue
+			}
+			incrementals = append(incrementals, e)
+			if !it.Next() {
+				break
+			}
+		}
+	}
+	return incrementals
+}
+
+func (s *runnerStore) MaxGlobalCheckpoint() *CheckpointEntry {
+	s.RLock()
+	defer s.RUnlock()
+	global, _ := s.globals.Max()
+	return global
+}
+
+func (s *runnerStore) MaxIncrementalCheckpoint() *CheckpointEntry {
+	s.RLock()
+	defer s.RUnlock()
+	entry, _ := s.incrementals.Max()
+	return entry
 }
 
 func (s *runnerStore) IsStale(ts *types.TS) bool {
@@ -95,6 +429,17 @@ func (s *runnerStore) TryGC() (gdeleted, ideleted int) {
 	return s.doGC(&intent)
 }
 
+func (s *runnerStore) UpdateGCIntent(newIntent *types.TS) (oldIntent types.TS, updated bool) {
+	s.Lock()
+	defer s.Unlock()
+	oldIntent = s.gcIntent
+	if s.gcIntent.LT(newIntent) {
+		s.gcIntent = *newIntent
+		updated = true
+	}
+	return
+}
+
 func (s *runnerStore) GCNeeded() bool {
 	s.RLock()
 	defer s.RUnlock()
@@ -110,6 +455,136 @@ func (s *runnerStore) GCNeeded() bool {
 	}
 	minTS := s.minTSLocked()
 	return intent.LT(&minTS)
+}
+
+func (s *runnerStore) CollectCheckpointsInRange(
+	ctx context.Context, start, end types.TS,
+) (locations string, checkpointed types.TS, err error) {
+	if s.IsStale(&end) {
+		return "", types.TS{}, moerr.NewInternalErrorf(ctx, "ts %v is staled", end.ToString())
+	}
+	s.Lock()
+	tree := s.incrementals.Copy()
+	global, _ := s.globals.Max()
+	s.Unlock()
+	locs := make([]string, 0)
+	ckpStart := types.MaxTs()
+	newStart := start
+	if global != nil && global.HasOverlap(start, end) {
+		locs = append(locs, global.GetLocation().String())
+		locs = append(locs, strconv.Itoa(int(global.version)))
+		newStart = global.end.Next()
+		ckpStart = global.GetEnd()
+		checkpointed = global.GetEnd()
+	}
+	pivot := NewCheckpointEntry(s.sid, newStart, newStart, ET_Incremental)
+
+	// For debug
+	// checkpoints := make([]*CheckpointEntry, 0)
+	// defer func() {
+	// 	items := tree.Items()
+	// 	logutil.Infof("CollectCheckpointsInRange: Pivot: %s", pivot.String())
+	// 	for i, item := range items {
+	// 		logutil.Infof("CollectCheckpointsInRange: Source[%d]: %s", i, item.String())
+	// 	}
+	// 	for i, ckp := range checkpoints {
+	// 		logutil.Infof("CollectCheckpointsInRange: Found[%d]:%s", i, ckp.String())
+	// 	}
+	// 	logutil.Infof("CollectCheckpointsInRange: Checkpointed=%s", checkpointed.ToString())
+	// }()
+
+	iter := tree.Iter()
+	defer iter.Release()
+
+	if ok := iter.Seek(pivot); ok {
+		if ok = iter.Prev(); ok {
+			e := iter.Item()
+			if !e.IsCommitted() {
+				if len(locs) == 0 {
+					return
+				}
+				duration := fmt.Sprintf("[%s_%s]",
+					ckpStart.ToString(),
+					ckpStart.ToString())
+				locs = append(locs, duration)
+				locations = strings.Join(locs, ";")
+				return
+			}
+			if e.HasOverlap(newStart, end) {
+				locs = append(locs, e.GetLocation().String())
+				locs = append(locs, strconv.Itoa(int(e.version)))
+				start := e.GetStart()
+				if start.LT(&ckpStart) {
+					ckpStart = start
+				}
+				checkpointed = e.GetEnd()
+				// checkpoints = append(checkpoints, e)
+			}
+			iter.Next()
+		}
+		for {
+			e := iter.Item()
+			if !e.IsCommitted() || !e.HasOverlap(newStart, end) {
+				break
+			}
+			locs = append(locs, e.GetLocation().String())
+			locs = append(locs, strconv.Itoa(int(e.version)))
+			start := e.GetStart()
+			if start.LT(&ckpStart) {
+				ckpStart = start
+			}
+			checkpointed = e.GetEnd()
+			// checkpoints = append(checkpoints, e)
+			if ok = iter.Next(); !ok {
+				break
+			}
+		}
+	} else {
+		// if it is empty, quick quit
+		if ok = iter.Last(); !ok {
+			if len(locs) == 0 {
+				return
+			}
+			duration := fmt.Sprintf("[%s_%s]",
+				ckpStart.ToString(),
+				ckpStart.ToString())
+			locs = append(locs, duration)
+			locations = strings.Join(locs, ";")
+			return
+		}
+		// get last entry
+		e := iter.Item()
+		// if it is committed and visible, quick quit
+		if !e.IsCommitted() || !e.HasOverlap(newStart, end) {
+			if len(locs) == 0 {
+				return
+			}
+			duration := fmt.Sprintf("[%s_%s]",
+				ckpStart.ToString(),
+				ckpStart.ToString())
+			locs = append(locs, duration)
+			locations = strings.Join(locs, ";")
+			return
+		}
+		locs = append(locs, e.GetLocation().String())
+		locs = append(locs, strconv.Itoa(int(e.version)))
+		start := e.GetStart()
+		if start.LT(&ckpStart) {
+			ckpStart = start
+		}
+		checkpointed = e.GetEnd()
+		// checkpoints = append(checkpoints, e)
+	}
+
+	if len(locs) == 0 {
+		return
+	}
+	duration := fmt.Sprintf("[%s_%s]",
+		ckpStart.ToString(),
+		checkpointed.ToString())
+	locs = append(locs, duration)
+	locations = strings.Join(locs, ";")
+	return
 }
 
 // -----------------------------------------------------------------------

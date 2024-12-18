@@ -38,7 +38,7 @@ type TestRunner interface {
 	ForceIncrementalCheckpoint(end types.TS, truncate bool) error
 	MaxLSNInRange(end types.TS) uint64
 
-	ExistPendingEntryToGC() bool
+	GCNeeded() bool
 }
 
 // DisableCheckpoint stops generating checkpoint
@@ -51,30 +51,7 @@ func (r *runner) EnableCheckpoint() {
 }
 
 func (r *runner) CleanPenddingCheckpoint() {
-	prev := r.MaxIncrementalCheckpoint()
-	if prev == nil {
-		return
-	}
-	if !prev.IsFinished() {
-		r.storage.Lock()
-		r.storage.incrementals.Delete(prev)
-		r.storage.Unlock()
-	}
-	if prev.IsRunning() {
-		logutil.Warnf("Delete a running checkpoint entry")
-	}
-	prev = r.MaxGlobalCheckpoint()
-	if prev == nil {
-		return
-	}
-	if !prev.IsFinished() {
-		r.storage.Lock()
-		r.storage.incrementals.Delete(prev)
-		r.storage.Unlock()
-	}
-	if prev.IsRunning() {
-		logutil.Warnf("Delete a running checkpoint entry")
-	}
+	r.store.CleanPenddingCheckpoint()
 }
 
 func (r *runner) ForceGlobalCheckpoint(end types.TS, interval time.Duration) error {
@@ -128,9 +105,7 @@ func (r *runner) ForceGlobalCheckpoint(end types.TS, interval time.Duration) err
 
 func (r *runner) ForceGlobalCheckpointSynchronously(ctx context.Context, end types.TS, versionInterval time.Duration) error {
 	prevGlobalEnd := types.TS{}
-	r.storage.RLock()
-	global, _ := r.storage.globals.Max()
-	r.storage.RUnlock()
+	global := r.store.MaxGlobalCheckpoint()
 	if global != nil {
 		prevGlobalEnd = global.end
 	}
@@ -138,9 +113,7 @@ func (r *runner) ForceGlobalCheckpointSynchronously(ctx context.Context, end typ
 	r.ForceGlobalCheckpoint(end, versionInterval)
 
 	op := func() (ok bool, err error) {
-		r.storage.RLock()
-		global, _ := r.storage.globals.Max()
-		r.storage.RUnlock()
+		global := r.store.MaxGlobalCheckpoint()
 		if global == nil {
 			return false, nil
 		}
@@ -214,9 +187,8 @@ func (r *runner) ForceIncrementalCheckpoint(end types.TS, truncate bool) error {
 		}
 	}()
 
-	r.storage.Lock()
-	r.storage.incrementals.Set(entry)
-	r.storage.Unlock()
+	// TODO: change me
+	r.store.AddNewIncrementalEntry(entry)
 
 	var files []string
 	if fields, files, err = r.doIncrementalCheckpoint(entry); err != nil {
@@ -273,10 +245,9 @@ func (r *runner) ForceCheckpointForBackup(end types.TS) (location string, err er
 		start = prev.end.Next()
 	}
 	entry := NewCheckpointEntry(r.rt.SID(), start, end, ET_Incremental)
-	r.storage.Lock()
-	r.storage.incrementals.Set(entry)
+	// TODO: change me
+	r.store.AddNewIncrementalEntry(entry)
 	now := time.Now()
-	r.storage.Unlock()
 	var files []string
 	if _, files, err = r.doIncrementalCheckpoint(entry); err != nil {
 		return

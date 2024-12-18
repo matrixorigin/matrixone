@@ -4617,11 +4617,11 @@ func TestReadCheckpoint(t *testing.T) {
 	now = time.Now()
 	assert.Equal(t, uint64(0), tae.Wal.GetPenddingCnt())
 	testutils.WaitExpect(10000, func() bool {
-		tae.BGCheckpointRunner.ExistPendingEntryToGC()
-		return !tae.BGCheckpointRunner.ExistPendingEntryToGC()
+		tae.BGCheckpointRunner.GCNeeded()
+		return !tae.BGCheckpointRunner.GCNeeded()
 	})
 	t.Log(time.Since(now))
-	assert.False(t, tae.BGCheckpointRunner.ExistPendingEntryToGC())
+	assert.False(t, tae.BGCheckpointRunner.GCNeeded())
 	entries := tae.BGCheckpointRunner.GetAllGlobalCheckpoints()
 	for _, entry := range entries {
 		t.Log(entry.String())
@@ -7720,10 +7720,10 @@ func TestGCCheckpoint1(t *testing.T) {
 	maxGlobal := tae.BGCheckpointRunner.MaxGlobalCheckpoint()
 
 	testutils.WaitExpect(4000, func() bool {
-		tae.BGCheckpointRunner.ExistPendingEntryToGC()
-		return !tae.BGCheckpointRunner.ExistPendingEntryToGC()
+		tae.BGCheckpointRunner.GCNeeded()
+		return !tae.BGCheckpointRunner.GCNeeded()
 	})
-	assert.False(t, tae.BGCheckpointRunner.ExistPendingEntryToGC())
+	assert.False(t, tae.BGCheckpointRunner.GCNeeded())
 
 	globals := tae.BGCheckpointRunner.GetAllGlobalCheckpoints()
 	assert.Equal(t, 1, len(globals))
