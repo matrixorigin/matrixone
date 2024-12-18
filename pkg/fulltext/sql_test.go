@@ -25,6 +25,10 @@ import (
 func TestSqlPhrase(t *testing.T) {
 	tests := []TestCase{
 		{
+			pattern: "\"Ma'trix Origin\"",
+			expect:  "WITH kw0 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = 'ma\\'trix'), kw1 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = 'origin') SELECT kw0.doc_id, CAST(0 as int) FROM kw0, kw1 WHERE kw0.doc_id = kw1.doc_id AND kw1.pos - kw0.pos = 8",
+		},
+		{
 			pattern: "\"Matrix Origin\"",
 			expect:  "WITH kw0 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = 'matrix'), kw1 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = 'origin') SELECT kw0.doc_id, CAST(0 as int) FROM kw0, kw1 WHERE kw0.doc_id = kw1.doc_id AND kw1.pos - kw0.pos = 7",
 		},
@@ -59,6 +63,10 @@ func TestSqlPhrase(t *testing.T) {
 func TestSqlBoolean(t *testing.T) {
 
 	tests := []TestCase{
+		{
+			pattern: "Ma'trix Origin",
+			expect:  "WITH t0 AS (WITH kw0 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE prefix_eq(word,'ma')), kw1 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = 'trix') SELECT kw0.doc_id FROM kw0, kw1 WHERE kw0.doc_id = kw1.doc_id AND kw1.pos - kw0.pos = 3), t1 AS (SELECT doc_id FROM `__mo_index_secondary_` WHERE word = 'origin') SELECT doc_id, CAST(0 as int) FROM t0 UNION ALL SELECT doc_id, CAST(1 as int) FROM t1",
+		},
 		{
 			pattern: "Matrix Origin",
 			expect:  "WITH t0 AS (SELECT doc_id FROM `__mo_index_secondary_` WHERE word = 'matrix'), t1 AS (SELECT doc_id FROM `__mo_index_secondary_` WHERE word = 'origin') SELECT doc_id, CAST(0 as int) FROM t0 UNION ALL SELECT doc_id, CAST(1 as int) FROM t1",
@@ -119,6 +127,10 @@ func TestSqlBoolean(t *testing.T) {
 func TestSqlNL(t *testing.T) {
 
 	tests := []TestCase{
+		{
+			pattern: "Ma'trix Origin",
+			expect:  "WITH kw0 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE prefix_eq(word,'ma')), kw1 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = 'trix'), kw2 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = 'origin') SELECT kw0.doc_id, CAST(0 as int) FROM kw0, kw1, kw2 WHERE kw0.doc_id = kw1.doc_id AND kw1.pos - kw0.pos = 3 AND kw0.doc_id = kw2.doc_id AND kw2.pos - kw0.pos = 8",
+		},
 		{
 			pattern: "Matrix Origin",
 			expect:  "WITH kw0 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = 'matrix'), kw1 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = 'origin') SELECT kw0.doc_id, CAST(0 as int) FROM kw0, kw1 WHERE kw0.doc_id = kw1.doc_id AND kw1.pos - kw0.pos = 7",

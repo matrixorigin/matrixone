@@ -31,6 +31,10 @@ type TestCase struct {
 func TestPatternPhrase(t *testing.T) {
 	tests := []TestCase{
 		{
+			pattern: "\"Ma'trix     Origin\"",
+			expect:  "(phrase (text 0 0 ma'trix) (text 1 12 origin))",
+		},
+		{
 			pattern: "\"Matrix Origin\"",
 			expect:  "(phrase (text 0 0 matrix) (text 1 7 origin))",
 		},
@@ -62,6 +66,10 @@ func TestPatternPhrase(t *testing.T) {
 func TestPatternBoolean(t *testing.T) {
 
 	tests := []TestCase{
+		{
+			pattern: "Ma'trix Origin",
+			expect:  "(text 0 ma'trix) (text 1 origin)",
+		},
 		{
 			pattern: "Matrix Origin",
 			expect:  "(text 0 matrix) (text 1 origin)",
@@ -114,6 +122,10 @@ func TestPatternBoolean(t *testing.T) {
 func TestPatternNL(t *testing.T) {
 
 	tests := []TestCase{
+		{
+			pattern: "Ma'trix Origin",
+			expect:  "(* 0 0 ma*) (text 1 3 trix) (text 2 8 origin)",
+		},
 		{
 			pattern: "Matrix Origin",
 			expect:  "(text 0 0 matrix) (text 1 7 origin)",

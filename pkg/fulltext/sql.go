@@ -106,13 +106,17 @@ type SqlNode struct {
 	Children []*SqlNode
 }
 
+func escape(src string) string {
+	return strings.ReplaceAll(src, "'", `\'`)
+}
+
 // GenTextSql that support ngram in boolean mode
 // TEXT is a word. For english, it is fine to have a simple filter word = 'word".
 // For Chinese, word should be tokenize into ngram
 func GenTextSql(p *Pattern, mode int64, idxtbl string, parser string) (string, error) {
 
 	if parser == "json_value" {
-		sql := fmt.Sprintf("SELECT doc_id FROM %s WHERE word = '%s'", idxtbl, p.Text)
+		sql := fmt.Sprintf("SELECT doc_id FROM %s WHERE word = '%s'", idxtbl, escape(p.Text))
 		return sql, nil
 	}
 
@@ -160,7 +164,7 @@ func GenJoinPlusSql(p *Pattern, mode int64, idxtbl string, parser string) ([]*Sq
 				return nil, moerr.NewInternalErrorNoCtx("wildcard search without character *")
 			}
 			prefix := kw[0 : len(kw)-1]
-			sql = fmt.Sprintf("%s AS (SELECT doc_id FROM %s WHERE prefix_eq(word,'%s'))", alias, idxtbl, prefix)
+			sql = fmt.Sprintf("%s AS (SELECT doc_id FROM %s WHERE prefix_eq(word,'%s'))", alias, idxtbl, escape(prefix))
 			sqlnode.Children = append(sqlnode.Children, &SqlNode{Index: tp.Index, Label: alias, IsJoin: true, Sql: sql})
 		}
 
@@ -204,7 +208,7 @@ func GenJoinSql(p *Pattern, mode int64, idxtbl string, parser string) ([]*SqlNod
 				return nil, moerr.NewInternalErrorNoCtx("wildcard search without character *")
 			}
 			prefix := kw[0 : len(kw)-1]
-			sql = fmt.Sprintf("%s AS (SELECT doc_id FROM %s WHERE prefix_eq(word,'%s'))", alias, idxtbl, prefix)
+			sql = fmt.Sprintf("%s AS (SELECT doc_id FROM %s WHERE prefix_eq(word,'%s'))", alias, idxtbl, escape(prefix))
 			sqlnode.Children = append(sqlnode.Children, &SqlNode{Index: idx, Label: alias, IsJoin: true, Sql: sql})
 			subidx++
 		}
@@ -270,7 +274,7 @@ func GenSql(p *Pattern, mode int64, idxtbl string, joinsql []*SqlNode, isJoin bo
 					return nil, moerr.NewInternalErrorNoCtx("wildcard search without character *")
 				}
 				prefix := kw[0 : len(kw)-1]
-				sql = fmt.Sprintf("SELECT doc_id, CAST(%d as int) FROM %s WHERE prefix_eq(word,'%s')", idx, idxtbl, prefix)
+				sql = fmt.Sprintf("SELECT doc_id, CAST(%d as int) FROM %s WHERE prefix_eq(word,'%s')", idx, idxtbl, escape(prefix))
 				sqlnode.Sql = sql
 
 			}
@@ -303,7 +307,7 @@ func GenSql(p *Pattern, mode int64, idxtbl string, joinsql []*SqlNode, isJoin bo
 					}
 					prefix := kw[0 : len(kw)-1]
 					sql = fmt.Sprintf("SELECT %s.doc_id, CAST(%d as int) FROM %s as %s, %s WHERE %s.doc_id = %s.doc_id AND prefix_eq(%s.word, '%s')",
-						jn.Label, idx, idxtbl, alias, jn.Label, jn.Label, alias, alias, prefix)
+						jn.Label, idx, idxtbl, alias, jn.Label, jn.Label, alias, alias, escape(prefix))
 					sqlnode.Sql = sql
 
 				}
@@ -409,10 +413,10 @@ func SqlPhrase(ps []*Pattern, mode int64, idxtbl string, withIndex bool) (string
 		if tp.Operator == TEXT {
 			if withIndex {
 				sql = fmt.Sprintf("SELECT doc_id, CAST(%d as int) FROM %s WHERE word = '%s'",
-					tp.Index, idxtbl, kw)
+					tp.Index, idxtbl, escape(kw))
 			} else {
 				sql = fmt.Sprintf("SELECT doc_id FROM %s WHERE word = '%s'",
-					idxtbl, kw)
+					idxtbl, escape(kw))
 
 			}
 		} else {
@@ -422,10 +426,10 @@ func SqlPhrase(ps []*Pattern, mode int64, idxtbl string, withIndex bool) (string
 			prefix := kw[0 : len(kw)-1]
 			if withIndex {
 				sql = fmt.Sprintf("SELECT doc_id, CAST(%d as int) FROM %s WHERE prefix_eq(word,'%s')",
-					tp.Index, idxtbl, prefix)
+					tp.Index, idxtbl, escape(prefix))
 			} else {
 				sql = fmt.Sprintf("SELECT doc_id FROM %s WHERE prefix_eq(word,'%s')",
-					idxtbl, prefix)
+					idxtbl, escape(prefix))
 
 			}
 
@@ -441,14 +445,14 @@ func SqlPhrase(ps []*Pattern, mode int64, idxtbl string, withIndex bool) (string
 			tables[i] = tblname
 			if tp.Operator == TEXT {
 				subsql = fmt.Sprintf("%s AS (SELECT doc_id, pos FROM %s WHERE word = '%s')",
-					tblname, idxtbl, kw)
+					tblname, idxtbl, escape(kw))
 			} else {
 				if kw[len(kw)-1] != '*' {
 					return "", moerr.NewInternalErrorNoCtx("wildcard search without character *")
 				}
 				prefix := kw[0 : len(kw)-1]
 				subsql = fmt.Sprintf("%s AS (SELECT doc_id, pos FROM %s WHERE prefix_eq(word,'%s'))",
-					tblname, idxtbl, prefix)
+					tblname, idxtbl, escape(prefix))
 
 			}
 			union = append(union, subsql)
