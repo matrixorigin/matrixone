@@ -1035,6 +1035,10 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 			if rtnErr != nil {
 				return rtnErr
 			}
+
+			if rtnErr = CancelCheck(ctx); rtnErr != nil {
+				return
+			}
 			return rtnErr
 		}
 
