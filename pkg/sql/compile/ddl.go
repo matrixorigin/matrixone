@@ -533,6 +533,10 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 			alterTableDrop := act.Drop
 			constraintName := alterTableDrop.Name
 			if alterTableDrop.Typ == plan.AlterTableDrop_FOREIGN_KEY {
+				//check fk existed in table
+				if _, has := oldFkNames[constraintName]; !has {
+					return moerr.NewErrCantDropFieldOrKey(c.proc.Ctx, constraintName)
+				}
 				alterKinds = addAlterKind(alterKinds, api.AlterKind_UpdateConstraint)
 				tableDef.Fkeys = plan2.RemoveIf[*plan.ForeignKeyDef](tableDef.Fkeys, func(fk *plan.ForeignKeyDef) bool {
 					if fk.Name == constraintName {
@@ -586,6 +590,18 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 				}
 			}
 		case *plan.AlterTable_Action_AddFk:
+			if !c.proc.GetTxnOperator().Txn().IsPessimistic() {
+				//check fk existed in table
+				if _, has := oldFkNames[act.AddFk.Fkey.Name]; has {
+					return moerr.NewErrDuplicateKeyName(c.proc.Ctx, act.AddFk.Fkey.Name)
+				}
+				//check fk existed in this alter table statement
+				if _, has := newAddedFkNames[act.AddFk.Fkey.Name]; has {
+					return moerr.NewErrDuplicateKeyName(c.proc.Ctx, act.AddFk.Fkey.Name)
+				}
+				newAddedFkNames[act.AddFk.Fkey.Name] = true
+			}
+
 			alterKinds = addAlterKind(alterKinds, api.AlterKind_UpdateConstraint)
 			addRefChildTbls = append(addRefChildTbls, act.AddFk.Fkey.ForeignTbl)
 			newFkeys = append(newFkeys, act.AddFk.Fkey)
