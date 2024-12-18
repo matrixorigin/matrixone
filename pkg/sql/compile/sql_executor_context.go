@@ -356,6 +356,10 @@ func (c *compilerContext) ResolveById(tableId uint64, snapshot *plan.Snapshot) (
 	return c.Resolve(dbName, tableName, snapshot)
 }
 
+func (c *compilerContext) ResolveIndexTableByRef(ref *plan.ObjectRef, tblName string, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef) {
+	return c.Resolve(plan.DbNameOfObjRef(ref), tblName, snapshot)
+}
+
 func (c *compilerContext) Resolve(dbName string, tableName string, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef) {
 	// In order to be compatible with various GUI clients and BI tools, lower case db and table name if it's a mysql system table
 	if slices.Contains(mysql.CaseInsensitiveDbs, strings.ToLower(dbName)) {
