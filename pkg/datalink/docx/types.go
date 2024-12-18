@@ -42,7 +42,7 @@ type Style struct {
 	Val string `xml:"val,attr"`
 }
 type Row struct {
-	Text string `xml:"t"`
+	Texts []string `xml:"t"`
 }
 
 // methods
@@ -50,7 +50,12 @@ func (w WordDocument) AsText() string {
 	text := ""
 	for _, v := range w.Paragraphs {
 		for _, rv := range v.Rows {
-			text += rv.Text
+			for i, tv := range rv.Texts {
+				if i > 0 {
+					text += "\n"
+				}
+				text += tv
+			}
 		}
 		text += "\n"
 	}
