@@ -603,10 +603,10 @@ func logTxnUnlockTable(
 		return
 	}
 
-	if logger.Enabled(zap.DebugLevel) {
+	if logger.Enabled(zap.InfoLevel) {
 		logger.Log(
 			"txn unlock table",
-			getLogOptions(zap.DebugLevel),
+			getLogOptions(zap.InfoLevel),
 			txnField(txn),
 			zap.Uint64("table", table),
 		)
@@ -623,12 +623,12 @@ func logTxnUnlockTableCompleted(
 		return
 	}
 
-	if logger.Enabled(zap.DebugLevel) {
+	if logger.Enabled(zap.InfoLevel) {
 		locks := cs.slice()
 		defer locks.unref()
 		logger.Log(
 			"txn unlock table completed",
-			getLogOptions(zap.DebugLevel),
+			getLogOptions(zap.InfoLevel),
 			txnField(txn),
 			zap.Uint64("table", table),
 			bytesArrayField("rows", locks.values[:locks.len()]),
@@ -645,10 +645,10 @@ func logUnlockTableOnLocal(
 		return
 	}
 
-	if logger.Enabled(zap.DebugLevel) {
+	if logger.Enabled(zap.InfoLevel) {
 		logger.Log(
 			"txn unlock table on local",
-			getLogOptions(zap.DebugLevel),
+			getLogOptions(zap.InfoLevel),
 			txnField(txn),
 			zap.String("bind", bind.DebugString()),
 		)
