@@ -454,7 +454,7 @@ func (s *runnerStore) GCNeeded() bool {
 		intent = safeTS
 	}
 	minTS := s.minTSLocked()
-	return intent.LT(&minTS)
+	return minTS.LT(&intent)
 }
 
 func (s *runnerStore) CollectCheckpointsInRange(
