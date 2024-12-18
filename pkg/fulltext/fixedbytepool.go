@@ -39,9 +39,6 @@ import (
 
   Assumption:
   - During hash build, you won't do any delete.
-  - Iterator will free up the memory once it finish traverse a partition with partition.Close().  If not doing this, we will
-    have OOM due to keep all partitions in memory.  When partition was spilled into disk, iterator will read the file into
-    memory.
 */
 
 // 24 bits low bits - offset in partition (16MB)
@@ -449,8 +446,12 @@ func (pool *FixedBytePool) Spill() error {
 
 // Iterator
 //
-//	After hash build/aggregate, all data will reside in partitions.  You can use FixedBytePoolIterator to tranverse all data
-//	in partitions. We don't provide you the hash key here. just the values
+// After hash build/aggregate, all data will reside in partitions.  You can use FixedBytePoolIterator to tranverse all data
+// in partitions. We don't provide you the hash key here. just the values
+//
+// Iterator will free up the memory once it finish traverse a partition with partition.Close().  If not doing this, we will
+// have OOM due to keep all partitions in memory.  When partition was spilled into disk, iterator will read the file into
+// memory.
 func NewFixedBytePoolIterator(p *FixedBytePool) *FixedBytePoolIterator {
 	return &FixedBytePoolIterator{pool: p}
 }
