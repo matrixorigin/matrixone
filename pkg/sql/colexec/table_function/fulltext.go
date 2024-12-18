@@ -17,7 +17,6 @@ package table_function
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -262,7 +261,6 @@ func runWordStats(u *fulltextState, proc *process.Process, s *fulltext.SearchAcc
 	}
 
 	//logutil.Infof("SQL is %s", sql)
-	os.Stderr.WriteString(sql)
 	res, err := ft_runSql_streaming(proc, sql, u.stream_chan, u.errors)
 	if err != nil {
 		return executor.Result{}, err
