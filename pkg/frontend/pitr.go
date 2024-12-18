@@ -973,13 +973,11 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 					toAccountId, rtnErr = getAccountId(ctx, bh, accountName)
 					if rtnErr != nil {
 						// need create a new account
-						rtnErr = createDroppedAccount(ctx, ses, bh, pitrName, *accountRecord)
-						if rtnErr != nil {
+						if rtnErr = createDroppedAccount(ctx, ses, bh, pitrName, *accountRecord); rtnErr != nil {
 							return
 						}
 
-						toAccountId, rtnErr = getAccountId(ctx, bh, accountRecord.accountName)
-						if rtnErr != nil {
+						if toAccountId, rtnErr = getAccountId(ctx, bh, accountRecord.accountName); rtnErr != nil {
 							return
 						}
 					}
