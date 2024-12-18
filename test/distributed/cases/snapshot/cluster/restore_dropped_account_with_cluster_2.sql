@@ -301,29 +301,22 @@ select * from PerformanceReviews;
 -- @session
 
 
-drop snapshot if exists snapshot_01;
-create snapshot snapshot_01 for cluster;
+drop snapshot if exists snapshot_cls;
+create snapshot snapshot_cls for cluster;
 
 drop account if exists acc01;
 drop account if exists acc02;
 drop account if exists acc03;
 drop account if exists acc04;
 
-drop account if exists acc05;
-create account acc05 admin_name = 'test_account' identified by '1111111'  comment 'test_comment';
-
-drop account if exists acc06;
-create account acc06 admin_name = 'test_account' identified by '11111111'  comment 'test_comment';
-
-drop account if exists acc07;
-create account acc07 admin_name = 'test_account' identified by '111111111'  comment 'test_comment';
-
 create account acc03 admin_name = 'test_account' identified by '123';
 
 -- @ignore:2,5,6,7
 show accounts;
 
-restore cluster from snapshot snapshot_01;
+restore account acc01 from snapshot snapshot_cls;
+restore account acc02 from snapshot snapshot_cls;
+restore account acc03 from snapshot snapshot_cls;
 
 -- @ignore:2,5,6,7
 show accounts;
@@ -358,8 +351,4 @@ drop account if exists acc01;
 drop account if exists acc02;
 drop account if exists acc03;
 drop account if exists acc04;
-drop account if exists acc05;
-drop account if exists acc06;
-drop account if exists acc07;
-
-drop snapshot if exists snapshot_01;
+drop snapshot if exists snapshot_cls;
