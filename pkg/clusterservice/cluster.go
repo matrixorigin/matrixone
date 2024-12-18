@@ -16,6 +16,7 @@ package clusterservice
 
 import (
 	"context"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -343,12 +344,21 @@ func (c *cluster) refresh() {
 			c.logger.Debug("cn service added", zap.String("cn", v.DebugString()))
 		}
 	}
+	// sort as the tick, with the bigger one at the front.
+	sort.Slice(details.TNStores, func(i, j int) bool {
+		return details.TNStores[i].Tick > details.TNStores[j].Tick
+	})
 	for _, tn := range details.TNStores {
-		if tn.State == logpb.NormalState {
-			v := newTNService(tn)
-			new.addTN([]metadata.TNService{v})
+		v := newTNService(tn)
+		new.addTN([]metadata.TNService{v})
+		if c.logger.Enabled(zap.DebugLevel) {
 			c.logger.Debug("dn service added", zap.String("dn", v.DebugString()))
 		}
+	}
+	// if there are multiple tn services, only take the first one, which has
+	// the biggest tick.
+	if len(new.tn) > 1 {
+		new.tn = new.tn[:1]
 	}
 	c.services.Store(new)
 	c.readyOnce.Do(func() {
