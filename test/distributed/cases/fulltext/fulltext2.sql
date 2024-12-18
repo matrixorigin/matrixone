@@ -362,10 +362,10 @@ against ('DataBase' in natural language mode) as score
 from article;
 -- filter with where clause and select
 select id, body, match (body)
-against ('MO tutorial DBMS stands for Database' in natural language mode) as score
+against ('DBMS stands for Database' in natural language mode) as score
 from article
 where match (body)
-against ('MO tutorial DBMS stands for Database' in natural language mode);
+against ('DBMS stands for Database' in natural language mode);
 drop table article;
 
 

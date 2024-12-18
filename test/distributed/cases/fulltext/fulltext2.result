@@ -436,11 +436,12 @@ id    score
 1    0.2276447
 5    0.2276447
 select id, body, match (body)
-against ('MO tutorial DBMS stands for Database' in natural language mode) as score
+against ('DBMS stands for Database' in natural language mode) as score
 from article
 where match (body)
-against ('MO tutorial DBMS stands for Database' in natural language mode);
+against ('DBMS stands for Database' in natural language mode);
 id    body    score
+1    DBMS stands for DataBase ...    2.4220774
 drop table article;
 drop table if exists example1;
 create table example1 (
