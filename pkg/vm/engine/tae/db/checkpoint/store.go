@@ -23,17 +23,37 @@ import (
 	"github.com/tidwall/btree"
 )
 
+func newRunnerStore(
+	globalHistoryDuration time.Duration,
+) *runnerStore {
+	s := new(runnerStore)
+	s.globalHistoryDuration = globalHistoryDuration
+	s.incrementals = btree.NewBTreeGOptions(
+		func(a, b *CheckpointEntry) bool {
+			return a.end.LT(&b.end)
+		}, btree.Options{
+			NoLocks: true,
+		},
+	)
+	s.globals = btree.NewBTreeGOptions(
+		func(a, b *CheckpointEntry) bool {
+			return a.end.LT(&b.end)
+		}, btree.Options{
+			NoLocks: true,
+		},
+	)
+	return s
+}
+
 type runnerStore struct {
 	sync.RWMutex
 
-	options struct {
-		globalHistoryDuration time.Duration
-	}
+	globalHistoryDuration time.Duration
 
 	incrementals *btree.BTreeG[*CheckpointEntry]
 	globals      *btree.BTreeG[*CheckpointEntry]
 	compacted    atomic.Pointer[CheckpointEntry]
-	metaFiles    map[string]struct{}
+	// metaFiles    map[string]struct{}
 
 	gcIntent    types.TS
 	gcCount     int
@@ -47,7 +67,7 @@ func (s *runnerStore) IsStale(ts *types.TS) bool {
 		return false
 	}
 	wm := waterMark.(types.TS)
-	minPhysical := wm.Physical() - s.options.globalHistoryDuration.Nanoseconds()
+	minPhysical := wm.Physical() - s.globalHistoryDuration.Nanoseconds()
 	return ts.Physical() < minPhysical
 }
 
