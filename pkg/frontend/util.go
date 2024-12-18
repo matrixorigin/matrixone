@@ -1560,10 +1560,14 @@ rule:
 	it means all most all string can be legal.
 */
 func dbNameIsLegal(name string) bool {
+	name = strings.TrimSpace(name)
 	if hasSpecialChars(name) {
 		return false
 	}
-	name = strings.TrimSpace(name)
+	if name == cdc.MatchAll {
+		return true
+	}
+
 	createDBSqls := []string{
 		"create database " + name,
 		"create database `" + name + "`",
@@ -1581,10 +1585,14 @@ rule:
 	it means all most all string can be legal.
 */
 func tableNameIsLegal(name string) bool {
+	name = strings.TrimSpace(name)
 	if hasSpecialChars(name) {
 		return false
 	}
-	name = strings.TrimSpace(name)
+	if name == cdc.MatchAll {
+		return true
+	}
+
 	createTableSqls := []string{
 		"create table " + name + "(a int)",
 		"create table `" + name + "`(a int)",
