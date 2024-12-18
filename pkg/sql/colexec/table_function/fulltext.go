@@ -457,7 +457,7 @@ func fulltextIndexMatch(u *fulltextState, proc *process.Process, tableFunction *
 			return err
 		}
 
-		u.mpool = fulltext.NewFixedBytePool(proc.Mp(), proc.Ctx, uint64(s.Nkeywords), 0, 0)
+		u.mpool = fulltext.NewFixedBytePool(proc, uint64(s.Nkeywords), 0, 0)
 		u.agghtab = make(map[any]uint64, 1024)
 		u.aggcnt = make([]int64, s.Nkeywords)
 

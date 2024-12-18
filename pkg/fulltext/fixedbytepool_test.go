@@ -16,18 +16,40 @@ package fulltext
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestPool(t *testing.T) {
 	addrs := make([]uint64, 10)
 
-	m, err := mpool.NewMPool("test", 0, 0)
-	require.Nil(t, err)
-	mp := NewFixedBytePool(m, context.TODO(), 2, 6, 0)
+	fmt.Printf("%v\n", t.TempDir())
+	localFS, err := fileservice.NewLocalFS(
+		context.Background(),
+		defines.LocalFileServiceName,
+		t.TempDir(),
+		fileservice.DisabledCacheConfig,
+		nil,
+	)
+	assert.Nil(t, err)
+	m := mpool.MustNewZeroNoFixed()
+
+	proc := &process.Process{
+		Base: &process.BaseProcess{
+			FileService: localFS,
+		},
+		Ctx: context.Background(),
+	}
+	proc.SetMPool(m)
+
+	mp := NewFixedBytePool(proc, 2, 6, 0)
 
 	// total 3 partitions
 	for i := 0; i < 10; i++ {
@@ -81,10 +103,25 @@ func TestPool(t *testing.T) {
 func TestPoolSpill(t *testing.T) {
 
 	addrs := make([]uint64, 10)
-	m, err := mpool.NewMPool("test", 0, 0)
-	require.Nil(t, err)
-	mp := NewFixedBytePool(m, context.TODO(), 2, 6, 19)
-	require.Nil(t, err)
+	localFS, err := fileservice.NewLocalFS(
+		context.Background(),
+		defines.LocalFileServiceName,
+		t.TempDir(),
+		fileservice.DisabledCacheConfig,
+		nil,
+	)
+	assert.Nil(t, err)
+	m := mpool.MustNewZeroNoFixed()
+
+	proc := &process.Process{
+		Base: &process.BaseProcess{
+			FileService: localFS,
+		},
+		Ctx: context.Background(),
+	}
+	proc.SetMPool(m)
+
+	mp := NewFixedBytePool(proc, 2, 6, 19)
 
 	for i := 0; i < 10; i++ {
 		addr, data, err := mp.NewItem()
@@ -154,9 +191,25 @@ func TestPoolSpill(t *testing.T) {
 func TestPartitionSpill(t *testing.T) {
 
 	addrs := make([]uint64, 10)
-	m, err := mpool.NewMPool("test", 0, 0)
-	require.Nil(t, err)
-	p, err := NewPartition(m, context.TODO(), 0, LOWER_BIT_MASK, 8)
+	localFS, err := fileservice.NewLocalFS(
+		context.Background(),
+		defines.LocalFileServiceName,
+		t.TempDir(),
+		fileservice.DisabledCacheConfig,
+		nil,
+	)
+	assert.Nil(t, err)
+	mp := mpool.MustNewZeroNoFixed()
+
+	proc := &process.Process{
+		Base: &process.BaseProcess{
+			FileService: localFS,
+		},
+		Ctx: context.Background(),
+	}
+	proc.SetMPool(mp)
+
+	p, err := NewPartition(proc, 0, LOWER_BIT_MASK, 8)
 	require.Nil(t, err)
 
 	for i := 0; i < 10; i++ {
@@ -200,9 +253,26 @@ func TestPartitionSpill(t *testing.T) {
 func TestPartitionSpillError(t *testing.T) {
 
 	addrs := make([]uint64, 10)
-	m, err := mpool.NewMPool("test", 0, 0)
-	require.Nil(t, err)
-	p, err := NewPartition(m, context.TODO(), 0, LOWER_BIT_MASK, 8)
+
+	localFS, err := fileservice.NewLocalFS(
+		context.Background(),
+		defines.LocalFileServiceName,
+		t.TempDir(),
+		fileservice.DisabledCacheConfig,
+		nil,
+	)
+	assert.Nil(t, err)
+	mp := mpool.MustNewZeroNoFixed()
+
+	proc := &process.Process{
+		Base: &process.BaseProcess{
+			FileService: localFS,
+		},
+		Ctx: context.Background(),
+	}
+	proc.SetMPool(mp)
+
+	p, err := NewPartition(proc, 0, LOWER_BIT_MASK, 8)
 	require.Nil(t, err)
 
 	for i := 0; i < 10; i++ {
@@ -233,9 +303,24 @@ func TestPartitionSpillError(t *testing.T) {
 func TestPartitionSpillError2(t *testing.T) {
 
 	addrs := make([]uint64, 10)
-	m, err := mpool.NewMPool("test", 0, 0)
-	require.Nil(t, err)
-	p, err := NewPartition(m, context.TODO(), 0, LOWER_BIT_MASK, 8)
+	localFS, err := fileservice.NewLocalFS(
+		context.Background(),
+		defines.LocalFileServiceName,
+		t.TempDir(),
+		fileservice.DisabledCacheConfig,
+		nil,
+	)
+	assert.Nil(t, err)
+	mp := mpool.MustNewZeroNoFixed()
+
+	proc := &process.Process{
+		Base: &process.BaseProcess{
+			FileService: localFS,
+		},
+		Ctx: context.Background(),
+	}
+	proc.SetMPool(mp)
+	p, err := NewPartition(proc, 0, LOWER_BIT_MASK, 8)
 	require.Nil(t, err)
 
 	for i := 0; i < 10; i++ {

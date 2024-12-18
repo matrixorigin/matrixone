@@ -15,7 +15,6 @@
 package fulltext
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -24,8 +23,8 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 /*
@@ -58,8 +57,7 @@ type Lru struct {
 
 // Partition which is able to spill/unspill.  Data must be fixed size when init
 type Partition struct {
-	mp          *mpool.MPool
-	cxt         context.Context
+	proc        *process.Process
 	id          uint64
 	nitem       uint64
 	used        uint64
@@ -76,8 +74,7 @@ type Partition struct {
 
 // FixedBytePool
 type FixedBytePool struct {
-	mp            *mpool.MPool
-	cxt           context.Context
+	proc          *process.Process
 	partitions    []*Partition
 	capacity      uint64
 	partition_cap uint64
@@ -110,11 +107,11 @@ func GetPartitionAddr(partid uint64, offset uint64) uint64 {
 }
 
 // New Partition with capacity, fixed data size
-func NewPartition(mp *mpool.MPool, cxt context.Context, id uint64, capacity uint64, dsize uint64) (*Partition, error) {
+func NewPartition(proc *process.Process, id uint64, capacity uint64, dsize uint64) (*Partition, error) {
 	if capacity > uint64(LOWER_BIT_MASK) {
-		return nil, moerr.NewInternalError(cxt, "request capacity is larger than 16MB (24 bits)")
+		return nil, moerr.NewInternalError(proc.Ctx, "request capacity is larger than 16MB (24 bits)")
 	}
-	p := Partition{mp: mp, cxt: cxt, id: id, dsize: dsize}
+	p := Partition{proc: proc, id: id, dsize: dsize}
 	err := p.alloc(capacity)
 	if err != nil {
 		return nil, err
@@ -130,7 +127,7 @@ func (part *Partition) Id() uint64 {
 
 // memory allocation with mpool.MPool
 func (part *Partition) alloc(capacity uint64) (err error) {
-	part.data, err = part.mp.Alloc(int(capacity), false)
+	part.data, err = part.proc.Mp().Alloc(int(capacity), false)
 	if err != nil {
 		return err
 	}
@@ -141,7 +138,7 @@ func (part *Partition) alloc(capacity uint64) (err error) {
 // Close the partition
 func (part *Partition) Close() {
 	if part.data != nil {
-		part.mp.Free(part.data)
+		part.proc.Mp().Free(part.data)
 		part.data = nil
 	}
 	part.capacity = 0
@@ -158,11 +155,11 @@ func (part *Partition) Close() {
 // NewItem will return the []byte and address and set full is true when partition is full for next item
 func (part *Partition) NewItem() (addr uint64, b []byte, err error) {
 	if part.cpos+part.dsize > part.capacity {
-		return 0, nil, moerr.NewInternalError(part.cxt, "Partition NewItem out of bound")
+		return 0, nil, moerr.NewInternalError(part.proc.Ctx, "Partition NewItem out of bound")
 	}
 
 	if part.spilled {
-		return 0, nil, moerr.NewInternalError(part.cxt, "NewItem: partition is spillled")
+		return 0, nil, moerr.NewInternalError(part.proc.Ctx, "NewItem: partition is spillled")
 	}
 
 	b = util.UnsafeToBytesWithLength(&part.data[part.cpos], int(part.dsize))
@@ -182,10 +179,10 @@ func (part *Partition) NewItem() (addr uint64, b []byte, err error) {
 func (part *Partition) GetItem(offset uint64) ([]byte, error) {
 	part.last_update = time.Now()
 	if part.spilled {
-		return nil, moerr.NewInternalError(part.cxt, "GetItem: partition is spillled")
+		return nil, moerr.NewInternalError(part.proc.Ctx, "GetItem: partition is spillled")
 	}
 	if offset+part.dsize > part.used {
-		return nil, moerr.NewInternalError(part.cxt, "GetItem: offset out of bound")
+		return nil, moerr.NewInternalError(part.proc.Ctx, "GetItem: offset out of bound")
 	}
 
 	return util.UnsafeToBytesWithLength(&part.data[offset], int(part.dsize)), nil
@@ -194,7 +191,7 @@ func (part *Partition) GetItem(offset uint64) ([]byte, error) {
 // FreeItem simply reduce reference count by one and free the data when refcnt == 0
 func (part *Partition) FreeItem(offfset uint64) (uint64, error) {
 	if part.refcnt == 0 {
-		return 0, moerr.NewInternalError(part.cxt, "FreeItem: refcnt = 0, double free")
+		return 0, moerr.NewInternalError(part.proc.Ctx, "FreeItem: refcnt = 0, double free")
 	}
 
 	part.refcnt--
@@ -203,7 +200,7 @@ func (part *Partition) FreeItem(offfset uint64) (uint64, error) {
 		// no more reference delete the data
 		ret = part.capacity
 		if part.data != nil {
-			part.mp.Free(part.data)
+			part.proc.Mp().Free(part.data)
 			part.data = nil
 		}
 		part.capacity = 0
@@ -232,7 +229,7 @@ func (part *Partition) Spill() error {
 
 	part.spilled = true
 	part.spill_fpath = f.Name()
-	part.mp.Free(part.data)
+	part.proc.Mp().Free(part.data)
 	part.data = nil
 	return nil
 }
@@ -246,6 +243,7 @@ func (part *Partition) Unspill() error {
 	}
 
 	fpath := part.spill_fpath
+
 	f, err := os.Open(fpath)
 	if err != nil {
 		return err
@@ -269,7 +267,7 @@ func (part *Partition) Unspill() error {
 		return err
 	}
 	if uint64(n) != capacity {
-		return moerr.NewInternalError(part.cxt, "Spill file size not match with capacity")
+		return moerr.NewInternalError(part.proc.Ctx, "Spill file size not match with capacity")
 	}
 
 	return nil
@@ -286,7 +284,7 @@ func (part *Partition) LastUpdate() time.Time {
 }
 
 // FixedBytePool
-func NewFixedBytePool(mp *mpool.MPool, context context.Context, dsize uint64, partition_cap uint64, mem_limit uint64) *FixedBytePool {
+func NewFixedBytePool(proc *process.Process, dsize uint64, partition_cap uint64, mem_limit uint64) *FixedBytePool {
 	if partition_cap == 0 {
 		partition_cap = LOWER_BIT_MASK
 	}
@@ -295,7 +293,7 @@ func NewFixedBytePool(mp *mpool.MPool, context context.Context, dsize uint64, pa
 		mem_limit = uint64(1024 * 1024 * 1024) // 1G
 	}
 
-	pool := FixedBytePool{mp: mp, dsize: dsize, cxt: context, partition_cap: partition_cap, mem_limit: mem_limit, spill_size: 2}
+	pool := FixedBytePool{proc: proc, dsize: dsize, partition_cap: partition_cap, mem_limit: mem_limit, spill_size: 2}
 	pool.partitions = make([]*Partition, 0, 32)
 	return &pool
 }
@@ -315,12 +313,15 @@ func (pool *FixedBytePool) NewItem() (addr uint64, b []byte, err error) {
 
 	if pool.mem_in_use+pool.partition_cap > pool.mem_limit {
 		// spill
-		pool.Spill()
+		err := pool.Spill()
+		if err != nil {
+			return 0, nil, err
+		}
 	}
 
 	// partition not found and create new partition
 	id := uint64(len(pool.partitions))
-	part, err := NewPartition(pool.mp, pool.cxt, id, pool.partition_cap, pool.dsize)
+	part, err := NewPartition(pool.proc, id, pool.partition_cap, pool.dsize)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -338,7 +339,7 @@ func (pool *FixedBytePool) GetItem(addr uint64) ([]byte, error) {
 	offset := GetPartitionOffset(addr)
 
 	if id >= uint64(len(pool.partitions)) {
-		return nil, moerr.NewInternalError(pool.cxt, "GetItem: id out of bound")
+		return nil, moerr.NewInternalError(pool.proc.Ctx, "GetItem: id out of bound")
 	}
 
 	p := pool.partitions[id]
@@ -359,7 +360,7 @@ func (pool *FixedBytePool) FreeItem(addr uint64) error {
 	id := GetPartitionId(addr)
 	offset := GetPartitionOffset(addr)
 	if id >= uint64(len(pool.partitions)) {
-		return moerr.NewInternalError(pool.cxt, "FreeItem: id out of bound")
+		return moerr.NewInternalError(pool.proc.Ctx, "FreeItem: id out of bound")
 	}
 
 	p := pool.partitions[id]
