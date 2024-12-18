@@ -969,6 +969,7 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 				}
 				if fromAccount == accountName {
 					// restore to the same account
+					getLogger(ses.GetService()).Info("restore to the same account", zap.String("fromAccount", accountName), zap.String("toAccount", accountName))
 					toAccountId, rtnErr = getAccountId(ctx, bh, accountName)
 					if rtnErr != nil {
 						// need create a new account
@@ -984,6 +985,7 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 					}
 				} else {
 					// restore to new account
+					getLogger(ses.GetService()).Info("restore to the same account", zap.String("fromAccount", fromAccount), zap.String("toAccount", accountName))
 					toAccountId, rtnErr = getAccountId(ctx, bh, accountName)
 					if rtnErr != nil {
 						return
@@ -997,6 +999,7 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 				}
 				if fromAccount == accountName {
 					// restore to the same account
+					getLogger(ses.GetService()).Info("restore to the same account", zap.String("fromAccount", accountName), zap.String("toAccount", accountName))
 					toAccountId, rtnErr = getAccountId(ctx, bh, fromAccount)
 					if rtnErr != nil {
 						// need create a new account
@@ -1012,6 +1015,7 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 					}
 				} else {
 					// restore to new account
+					getLogger(ses.GetService()).Info("restore to the same account", zap.String("fromAccount", fromAccount), zap.String("toAccount", accountName))
 					toAccountId, rtnErr = getAccountId(ctx, bh, accountName)
 					if rtnErr != nil {
 						return rtnErr
