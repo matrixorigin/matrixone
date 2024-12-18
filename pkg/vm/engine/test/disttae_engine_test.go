@@ -1254,3 +1254,29 @@ func TestRelationExists(t *testing.T) {
 	require.Error(t, err)
 	require.Nil(t, rel)
 }
+
+func TestWorkspaceQuota(t *testing.T) {
+	quotaSize := uint64(1000)
+
+	p := testutil.InitEnginePack(testutil.TestOptions{
+		DisttaeOptions: []testutil.TestDisttaeEngineOptions{testutil.WithDisttaeEngineQuota(quotaSize)}}, t)
+	defer p.Close()
+	e := p.D.Engine
+	var wg sync.WaitGroup
+	wg.Add(10)
+	for i := range uint64(10) {
+		go func(size uint64, wg *sync.WaitGroup) {
+			var q disttae.MemoryQuota
+			e.AcquireQuota(100, &q)
+			e.ReleaseQuota(&q)
+			e.ReleaseQuota(&q)
+			wg.Done()
+		}(i*100, &wg)
+	}
+
+	var q disttae.MemoryQuota
+	remaining, _ := e.AcquireQuota(0, &q)
+	require.Equal(t, int(quotaSize), int(remaining))
+	_, acquired := e.AcquireQuota(quotaSize+1, &q)
+	require.False(t, acquired)
+}

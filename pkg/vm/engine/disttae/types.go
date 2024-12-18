@@ -134,6 +134,7 @@ const (
 const (
 	CommitWorkspaceThreshold       uint64 = 1 * mpool.MB
 	WriteWorkspaceThreshold        uint64 = 5 * mpool.MB
+	ExtraWorkspaceThreshold        uint64 = 10 * mpool.MB
 	InsertEntryThreshold                  = 5000
 	GCBatchOfFileCount             int    = 1000
 	GCPoolSize                     int    = 5
@@ -168,6 +169,12 @@ func WithWriteWorkspaceThreshold(th uint64) EngineOptions {
 	}
 }
 
+func WithExtraWorkspaceThresholdQuota(quota uint64) EngineOptions {
+	return func(e *Engine) {
+		e.config.extraWorkspaceThresholdQuota = quota
+	}
+}
+
 func WithInsertEntryMaxCount(th int) EngineOptions {
 	return func(e *Engine) {
 		e.config.insertEntryMaxCount = th
@@ -192,6 +199,29 @@ func WithSQLExecFunc(f func() ie.InternalExecutor) EngineOptions {
 	}
 }
 
+type MemoryQuota struct {
+	state uint8 // active 0, released 1
+	size  uint64
+}
+
+func (q *MemoryQuota) Apply(size uint64) bool {
+	if q.state != 0 {
+		return false
+	}
+	q.size += size
+	return true
+}
+
+func (q *MemoryQuota) Release() (size uint64) {
+	if q.state == 1 || q.size == 0 {
+		return 0
+	}
+	q.state = 1
+	size = q.size
+	q.size = 0
+	return size
+}
+
 type Engine struct {
 	sync.RWMutex
 	service  string
@@ -206,9 +236,10 @@ type Engine struct {
 	tnID     string
 
 	config struct {
-		insertEntryMaxCount      int
-		commitWorkspaceThreshold uint64
-		writeWorkspaceThreshold  uint64
+		insertEntryMaxCount          int
+		commitWorkspaceThreshold     uint64
+		writeWorkspaceThreshold      uint64
+		extraWorkspaceThresholdQuota uint64
 
 		cnTransferTxnLifespanThreshold time.Duration
 
@@ -252,6 +283,8 @@ type Engine struct {
 	dynamicCtx
 	// for test only.
 	skipConsume bool
+
+	extraWorkspaceQuota atomic.Uint64
 }
 
 func (e *Engine) SetService(svr string) {
@@ -359,6 +392,8 @@ type Transaction struct {
 
 	writeWorkspaceThreshold  uint64
 	commitWorkspaceThreshold uint64
+
+	quota MemoryQuota
 }
 
 type Pos struct {

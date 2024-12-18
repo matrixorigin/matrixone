@@ -482,6 +482,17 @@ func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
 		if size < txn.writeWorkspaceThreshold {
 			return nil
 		}
+
+		// try to increase the write threshold from quota
+		threshold := txn.writeWorkspaceThreshold
+		for size >= threshold {
+			threshold *= 2
+		}
+		_, acquired := txn.engine.AcquireQuota(threshold-txn.writeWorkspaceThreshold, &txn.quota)
+		if acquired {
+			txn.writeWorkspaceThreshold = threshold
+			return nil
+		}
 		size = 0
 	}
 	txn.hasS3Op.Store(true)
@@ -1463,6 +1474,8 @@ func (txn *Transaction) delTransaction() {
 	txn.transfer.timestamps = nil
 	txn.transfer.lastTransferred = types.TS{}
 	txn.transfer.pendingTransfer = false
+
+	txn.engine.ReleaseQuota(&txn.quota)
 }
 
 func (txn *Transaction) rollbackTableOpLocked() {

@@ -163,8 +163,14 @@ func (e *Engine) fillDefaults() {
 	if e.config.writeWorkspaceThreshold <= 0 {
 		e.config.writeWorkspaceThreshold = WriteWorkspaceThreshold
 	}
+	if e.config.extraWorkspaceThresholdQuota <= 0 {
+		e.config.extraWorkspaceThresholdQuota = ExtraWorkspaceThreshold
+	}
 	if e.config.cnTransferTxnLifespanThreshold <= 0 {
 		e.config.cnTransferTxnLifespanThreshold = CNTransferTxnLifespanThreshold
+	}
+	if e.extraWorkspaceQuota.Load() <= 0 {
+		e.extraWorkspaceQuota.Store(e.config.extraWorkspaceThresholdQuota)
 	}
 
 	logutil.Info(
@@ -189,6 +195,28 @@ func (e *Engine) SetWorkspaceThreshold(commitThreshold, writeThreshold uint64) (
 		e.config.writeWorkspaceThreshold = writeThreshold * mpool.MB
 	}
 	return
+}
+
+func (e *Engine) AcquireQuota(v uint64, quota *MemoryQuota) (uint64, bool) {
+	for {
+		oldRemaining := e.extraWorkspaceQuota.Load()
+		if oldRemaining < v {
+			return 0, false
+		}
+		remaining := oldRemaining - v
+		if e.extraWorkspaceQuota.CompareAndSwap(oldRemaining, remaining) {
+			quota.Apply(v)
+			return remaining, true
+		}
+	}
+}
+
+func (e *Engine) ReleaseQuota(quota *MemoryQuota) {
+	size := quota.Release()
+	if size == 0 {
+		return
+	}
+	e.extraWorkspaceQuota.Add(size)
 }
 
 func (e *Engine) GetService() string {
