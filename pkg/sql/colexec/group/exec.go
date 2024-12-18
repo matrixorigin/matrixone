@@ -420,7 +420,12 @@ func (group *Group) initCtxToGetIntermediateResult(
 			}
 		}
 	} else {
-		if err = group.ctr.hr.BuildHashTable(true, group.ctr.mtyp == HStr, group.ctr.keyNullable, 0); err != nil {
+		allocated := uint64(0)
+		if trigger := uint64(intermediateResultSendActionTrigger); group.PreAllocSize > trigger {
+			allocated = trigger
+		}
+
+		if err = group.ctr.hr.BuildHashTable(true, group.ctr.mtyp == HStr, group.ctr.keyNullable, allocated); err != nil {
 			return nil, err
 		}
 	}
