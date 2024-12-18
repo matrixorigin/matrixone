@@ -976,11 +976,15 @@ func (tcc *TxnCompilerContext) UpdateStatsInCache(tid uint64, s *pb.StatsInfo) {
 // statsInCache get the *pb.StatsInfo from session cache. If the info is nil, just return nil and false,
 // else, check if the info needs to be updated.
 func (tcc *TxnCompilerContext) statsInCache(ctx context.Context, dbName string, table engine.Relation, snapshot *plan2.Snapshot) (*pb.StatsInfo, bool) {
+	start1 := time.Now()
+	stats := statistic.StatsInfoFromContext(tcc.execCtx.reqCtx)
 	s := tcc.GetStatsCache().GetStatsInfo(table.GetTableID(ctx), true)
 	if s == nil {
 		return nil, false
 	}
+	stats.AddLogic1InPhase3Duration(time.Since(start1))
 
+	start2 := time.Now()
 	var partitionInfo *plan2.PartitionByDef
 	engineDefs, err := table.TableDefs(ctx)
 	if err != nil {
@@ -998,6 +1002,7 @@ func (tcc *TxnCompilerContext) statsInCache(ctx context.Context, dbName string, 
 			}
 		}
 	}
+	stats.AddLogic2InPhase3Duration(time.Since(start2))
 
 	second := time.Now().Unix()
 	var diff int64 = 3
@@ -1010,6 +1015,7 @@ func (tcc *TxnCompilerContext) statsInCache(ctx context.Context, dbName string, 
 	}
 	s.TimeSecond = second
 
+	start3 := time.Now()
 	approxNumObjects := 0
 	if partitionInfo != nil {
 		for _, PartitionTableName := range partitionInfo.PartitionTableNames {
@@ -1022,6 +1028,7 @@ func (tcc *TxnCompilerContext) statsInCache(ctx context.Context, dbName string, 
 	} else {
 		approxNumObjects = table.ApproxObjectsNum(ctx)
 	}
+	stats.AddLogic3InPhase3Duration(time.Since(start3))
 	if approxNumObjects == 0 {
 		return nil, false
 	}

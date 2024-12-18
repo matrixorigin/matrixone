@@ -548,6 +548,9 @@ func explainResourceOverview(queryResult *util.RunResult, statsInfo *statistic.S
 				buffer.WriteString(fmt.Sprintf("\t\t- Calc StatsPhase4 Duration: %dns \n", statsInfo.PlanStage.StatsCalcPhase4Duration))
 				buffer.WriteString(fmt.Sprintf("\t\t- Calc StatsPhase5 Duration: %dns \n", statsInfo.PlanStage.StatsCalcPhase5Duration))
 				buffer.WriteString(fmt.Sprintf("\t\t- Calc StatsPhase6 Duration: %dns \n", statsInfo.PlanStage.StatsCalcPhase6Duration))
+				buffer.WriteString(fmt.Sprintf("\t\t- Logic1 In Phase3 Duration: %dns \n", statsInfo.PlanStage.Logic1InPhase3Duration))
+				buffer.WriteString(fmt.Sprintf("\t\t- Logic2 In Phase3 Duration: %dns \n", statsInfo.PlanStage.Logic2InPhase3Duration))
+				buffer.WriteString(fmt.Sprintf("\t\t- Logic3 In Phase3 Duration: %dns \n", statsInfo.PlanStage.Logic3InPhase3Duration))
 
 				//-------------------------------------------------------------------------------------------------------
 				buffer.WriteString("\tQuery Compile Stage:\n")

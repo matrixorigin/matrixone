@@ -302,8 +302,12 @@ type StatsInfo struct {
 		StatsCalcPhase1Duration int64 `json:"StatsCalcPhase1Duration"` // unit: ns
 		StatsCalcPhase2Duration int64 `json:"StatsCalcPhase2Duration"` // unit: ns
 		StatsCalcPhase3Duration int64 `json:"StatsCalcPhase3Duration"` // unit: ns
-		StatsCalcPhase4Duration int64 `json:"StatsCalcPhase4Duration"` // unit: ns
 
+		Logic1InPhase3Duration int64 `json:"Logic1InPhase3Duration"` // unit: ns
+		Logic2InPhase3Duration int64 `json:"Logic2InPhase3Duration"` // unit: ns
+		Logic3InPhase3Duration int64 `json:"Logic3InPhase3Duration"` // unit: ns
+
+		StatsCalcPhase4Duration int64 `json:"StatsCalcPhase4Duration"` // unit: ns
 		StatsCalcPhase5Duration int64 `json:"StatsCalcPhase5Duration"` // unit: ns
 		StatsCalcPhase6Duration int64 `json:"StatsCalcPhase6Duration"` // unit: ns
 	}
@@ -549,6 +553,27 @@ func (stats *StatsInfo) AddStatsCalcPhase3Duration(d time.Duration) {
 		return
 	}
 	atomic.AddInt64(&stats.PlanStage.StatsCalcPhase3Duration, int64(d))
+}
+
+func (stats *StatsInfo) AddLogic1InPhase3Duration(d time.Duration) {
+	if stats == nil {
+		return
+	}
+	atomic.AddInt64(&stats.PlanStage.Logic1InPhase3Duration, int64(d))
+}
+
+func (stats *StatsInfo) AddLogic2InPhase3Duration(d time.Duration) {
+	if stats == nil {
+		return
+	}
+	atomic.AddInt64(&stats.PlanStage.Logic2InPhase3Duration, int64(d))
+}
+
+func (stats *StatsInfo) AddLogic3InPhase3Duration(d time.Duration) {
+	if stats == nil {
+		return
+	}
+	atomic.AddInt64(&stats.PlanStage.Logic3InPhase3Duration, int64(d))
 }
 
 func (stats *StatsInfo) AddStatsCalcPhase4Duration(d time.Duration) {
