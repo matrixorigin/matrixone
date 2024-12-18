@@ -140,6 +140,8 @@ func NewTestDisttaeEngine(
 	}
 	engineOpts = append(engineOpts, disttae.WithSQLExecFunc(internalExecutorFactory))
 
+	engineOpts = append(engineOpts, disttae.WithMoServerStateChecker(func() bool { return false }))
+
 	catalog.SetupDefines("")
 	de.Engine = disttae.New(de.ctx,
 		"",

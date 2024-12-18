@@ -32,6 +32,7 @@ import (
 	mo_ctl("cn", "MoTableStats", "move_on:false|true");
 	mo_ctl("cn", "MoTableStats", "restore_default_setting:true");
 	mo_ctl("cn", "MoTableStats", "echo_current_setting:true");
+	mo_ctl("cn", "MoTableStats", "recomputing:account_id, account_id...")
 */
 
 func handleMoTableStats(
@@ -52,7 +53,7 @@ func handleMoTableStats(
 
 	clusterservice.GetMOCluster(
 		proc.GetService()).GetCNService(clusterservice.Selector{}, func(cn metadata.CNService) bool {
-		ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second, moerr.CauseTransferRequest2OtherCNs)
+		ctx, cancel := context.WithTimeoutCause(context.Background(), time.Minute*5, moerr.CauseTransferRequest2OtherCNs)
 		defer cancel()
 
 		resp, err := proc.GetQueryClient().SendMessage(ctx, cn.QueryAddress, request)
