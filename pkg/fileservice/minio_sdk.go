@@ -568,7 +568,14 @@ func (a *MinioSDK) getObject(ctx context.Context, key string, min *int64, max *i
 					return nil, err
 				}
 			}
-			return obj, nil
+			return &readCloser{
+				r: obj,
+				closeFunc: func() error {
+					// drain
+					io.Copy(io.Discard, obj)
+					return obj.Close()
+				},
+			}, nil
 		},
 		*min,
 		IsRetryableError,
