@@ -490,7 +490,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 				newAddedFkNames[act.AddFk.Fkey.Name] = true
 
 				// lock fk table
-				if act.AddFk.DbName != dbName || act.AddFk.TableName != tblName { //skip self ref foreign key
+				if !(act.AddFk.DbName != dbName && act.AddFk.TableName != tblName) { //skip self ref foreign key
 					if err = lockMoTable(c, act.AddFk.DbName, act.AddFk.TableName, lock.LockMode_Exclusive); err != nil {
 						if !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
 							!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
