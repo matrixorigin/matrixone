@@ -515,7 +515,25 @@ func (d *dynamicCtx) LogDynamicCtx() string {
 	d.Lock()
 	defer d.Unlock()
 
-	var buf bytes.Buffer
+	buf := bytes.Buffer{}
+
+	buf.WriteString(fmt.Sprintf(
+		"cur-conf:[limit: %v; alpha-dur: %v; gama-dur: %v; disable-task: %v; use-old-impl: %v; force-update: %v]\n",
+		d.conf.GetTableListLimit,
+		d.conf.UpdateDuration,
+		d.conf.CorrectionDuration,
+		d.conf.DisableStatsTask,
+		d.conf.StatsUsingOldImpl,
+		d.conf.ForceUpdate))
+
+	buf.WriteString(fmt.Sprintf(
+		"default-conf:[limit: %v; alpha-dur: %v; gama-dur: %v; disable-task: %v; use-old-impl: %v; force-update: %v]\n",
+		d.defaultConf.GetTableListLimit,
+		d.defaultConf.UpdateDuration,
+		d.defaultConf.CorrectionDuration,
+		d.defaultConf.DisableStatsTask,
+		d.defaultConf.StatsUsingOldImpl,
+		d.defaultConf.ForceUpdate))
 
 	buf.WriteString(fmt.Sprintf("gama: [running: %v; launched-time: %v]\n",
 		d.gama.running,
@@ -524,24 +542,6 @@ func (d *dynamicCtx) LogDynamicCtx() string {
 	buf.WriteString(fmt.Sprintf("beta: [running: %v; launched-time: %v]\n",
 		d.beta.running,
 		d.beta.launchTimes))
-
-	buf.WriteString(fmt.Sprintf(
-		"default-conf:[alpha-dur: %v; gama-dur: %v; limit: %v; force-update: %v; use-old-impl: %v; disable-task: %v]\n",
-		d.defaultConf.UpdateDuration,
-		d.defaultConf.CorrectionDuration,
-		d.defaultConf.GetTableListLimit,
-		d.defaultConf.ForceUpdate,
-		d.defaultConf.StatsUsingOldImpl,
-		d.defaultConf.DisableStatsTask))
-
-	buf.WriteString(fmt.Sprintf(
-		"cur-conf:[alpha-dur: %v; gama-dur: %v; limit: %v; force-update: %v; use-old-impl: %v; disable-task: %v]\n",
-		d.conf.UpdateDuration,
-		d.conf.CorrectionDuration,
-		d.conf.GetTableListLimit,
-		d.conf.ForceUpdate,
-		d.conf.StatsUsingOldImpl,
-		d.conf.DisableStatsTask))
 
 	return buf.String()
 }
@@ -2094,9 +2094,9 @@ func (d *dynamicCtx) getChangedTableList(
 				continue
 			}
 
+			// the account id will always be 0 if mo_catalog db is given on tn side,
+			// later causing account_id, db_id, tbl_id un matched ==> catalogCache returns nil.
 			if dbs[i] == catalog.MO_CATALOG_ID {
-				// the account id will always be 0 if mo_catalog db is given on tn side,
-				// later causing account_id, db_id, tbl_id un matched ==> catalogCache returns nil.
 				continue
 			}
 
