@@ -101,3 +101,39 @@ func TestHandleOptimizerHints(t *testing.T) {
 	handleOptimizerHints("skipDedup=1", builder)
 	require.Equal(t, 1, builder.optimizerHints.skipDedup)
 }
+
+func TestDbNameOfObjRef(t *testing.T) {
+	type args struct {
+		objRef *ObjectRef
+	}
+	tests := []struct {
+		name string
+		args args
+		want string
+	}{
+		{
+			name: "case 1",
+			args: args{
+				objRef: &ObjectRef{
+					SchemaName: "db",
+				},
+			},
+			want: "db",
+		},
+		{
+			name: "case 2",
+			args: args{
+				objRef: &ObjectRef{
+					SchemaName:       "whatever",
+					SubscriptionName: "sub",
+				},
+			},
+			want: "sub",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equalf(t, tt.want, DbNameOfObjRef(tt.args.objRef), "DbNameOfObjRef(%v)", tt.args.objRef)
+		})
+	}
+}

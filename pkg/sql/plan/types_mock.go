@@ -385,6 +385,14 @@ func (mr *MockCompilerContext2MockRecorder) ReplacePlan(execPlan interface{}) *g
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ReplacePlan", reflect.TypeOf((*MockCompilerContext2)(nil).InitExecuteStmtParam), execPlan)
 }
 
+func (m *MockCompilerContext2) ResolveIndexTableByRef(ref *ObjectRef, tblName string, snapshot *Snapshot) (*ObjectRef, *TableDef) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ResolveIndexTableByRef", ref, tblName, snapshot)
+	ret0, _ := ret[0].(*ObjectRef)
+	ret1, _ := ret[1].(*TableDef)
+	return ret0, ret1
+}
+
 // Resolve mocks base method.
 func (m *MockCompilerContext2) Resolve(schemaName, tableName string, snapshot *Snapshot) (*ObjectRef, *TableDef) {
 	m.ctrl.T.Helper()
