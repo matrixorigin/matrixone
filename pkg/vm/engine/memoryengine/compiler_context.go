@@ -240,6 +240,10 @@ func (c *CompilerContext) ResolveById(tableId uint64, snapshot *plan.Snapshot) (
 	return c.Resolve(dbName, tableName, snapshot)
 }
 
+func (c *CompilerContext) ResolveIndexTableByRef(ref *plan.ObjectRef, tblName string, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef) {
+	return c.Resolve(plan.DbNameOfObjRef(ref), tblName, snapshot)
+}
+
 func (c *CompilerContext) Resolve(schemaName string, tableName string, snapshot *plan.Snapshot) (objRef *plan.ObjectRef, tableDef *plan.TableDef) {
 	if schemaName == "" {
 		schemaName = c.defaultDB

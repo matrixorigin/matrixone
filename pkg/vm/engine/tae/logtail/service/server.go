@@ -449,13 +449,19 @@ func (s *LogtailServer) pullLogtailsPhase1(ctx context.Context, sub subscription
 
 // logtailSender sends total or incremental logtail.
 func (s *LogtailServer) logtailSender(ctx context.Context) {
-	e, ok := <-s.event.C
-	if !ok {
-		s.logger.Info("publishment channel closed")
+	select {
+	case <-s.rootCtx.Done():
+		s.logger.Info("context done", zap.Error(s.rootCtx.Err()))
 		return
+
+	case e, ok := <-s.event.C:
+		if !ok {
+			s.logger.Info("publishment channel closed")
+			return
+		}
+		s.waterline.Advance(e.to)
+		s.logger.Info("init waterline", zap.String("to", e.to.String()))
 	}
-	s.waterline.Advance(e.to)
-	s.logger.Info("init waterline", zap.String("to", e.to.String()))
 
 	for {
 		select {
