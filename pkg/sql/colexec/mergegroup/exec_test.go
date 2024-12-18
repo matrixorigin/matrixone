@@ -31,6 +31,7 @@ import (
 // 主要用于测试在该算子中，每个接口被调用的次数，以及传入的值。
 type hackAggExecToTestMerge struct {
 	toFlush int
+	dst     *hackAggExecToTestMerge
 
 	aggexec.AggFuncExec
 	groupNumber  int
@@ -76,6 +77,18 @@ func (h *hackAggExecToTestMerge) Free() {
 var hackVecResult = vector.NewVec(types.T_int64.ToType())
 
 func hackMakeAggExecToTestMerge(r int) *hackAggExecToTestMerge {
+	makeInitialAggListFromList = func(mg aggexec.AggMemoryManager, list []aggexec.AggFuncExec) []aggexec.AggFuncExec {
+		res := make([]aggexec.AggFuncExec, len(list))
+		for i := range res {
+			res[i] = &hackAggExecToTestMerge{
+				toFlush: r,
+				isFree:  false,
+			}
+			list[i].(*hackAggExecToTestMerge).dst = res[i].(*hackAggExecToTestMerge)
+		}
+		return res
+	}
+
 	return &hackAggExecToTestMerge{
 		toFlush: r,
 		isFree:  false,
@@ -108,9 +121,9 @@ func TestMergeGroup_WithoutGroupBy(t *testing.T) {
 		if b := r.Batch; b != nil {
 			require.Equal(t, 1, len(b.Vecs))
 			require.Equal(t, hackVecResult, b.Vecs[0])
-			require.Equal(t, 1, exec1.groupNumber)
-			require.Equal(t, 1, exec1.doMergeTime)
-			require.Equal(t, 1, exec1.doFlushTime)
+			require.Equal(t, 1, exec1.dst.groupNumber)
+			require.Equal(t, 2, exec1.dst.doMergeTime)
+			require.Equal(t, 1, exec1.dst.doFlushTime)
 		}
 
 		r, err = g.Call(proc)
@@ -159,9 +172,9 @@ func TestMergeGroup_WithGroupBy(t *testing.T) {
 			require.Equal(t, int64(2), vs[1])
 			require.Equal(t, int64(3), vs[2])
 			require.Equal(t, int64(4), vs[3])
-			require.Equal(t, 4, exec1.groupNumber) // 1, 2, 3, 4
-			require.Equal(t, 2, exec1.doBatchMerge)
-			require.Equal(t, 1, exec1.doFlushTime)
+			require.Equal(t, 4, exec1.dst.groupNumber) // 1, 2, 3, 4
+			require.Equal(t, 3, exec1.dst.doBatchMerge)
+			require.Equal(t, 1, exec1.dst.doFlushTime)
 		}
 
 		r, err = g.Call(proc)
