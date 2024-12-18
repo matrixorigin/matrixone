@@ -18,14 +18,13 @@ import (
 	"context"
 	"math"
 
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/mem"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
@@ -33,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/logservicedriver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
+	"go.uber.org/zap"
 )
 
 var (
@@ -43,7 +43,12 @@ var (
 	}
 )
 
-func (s *store) createTxnStorage(ctx context.Context, shard metadata.TNShard) (storage.TxnStorage, error) {
+func (s *store) createTxnStorage(
+	ctx context.Context,
+	shard metadata.TNShard,
+	txnServer rpc.TxnServer,
+) (storage.TxnStorage, error) {
+
 	factory := s.createLogServiceClientFactroy(shard)
 	closeLogClientFn := func(logClient logservice.Client) {
 		if err := logClient.Close(); err != nil {
@@ -73,7 +78,7 @@ func (s *store) createTxnStorage(ctx context.Context, shard metadata.TNShard) (s
 		return s.newMemKVStorage(shard, logClient)
 
 	case StorageTAE:
-		ts, err := s.newTAEStorage(ctx, shard, factory)
+		ts, err := s.newTAEStorage(ctx, shard, factory, txnServer)
 		if err != nil {
 			return nil, err
 		}
@@ -135,7 +140,13 @@ func (s *store) newMemKVStorage(shard metadata.TNShard, logClient logservice.Cli
 	return mem.NewKVTxnStorage(0, logClient, s.rt.Clock()), nil
 }
 
-func (s *store) newTAEStorage(ctx context.Context, shard metadata.TNShard, factory logservice.ClientFactory) (storage.TxnStorage, error) {
+func (s *store) newTAEStorage(
+	ctx context.Context,
+	shard metadata.TNShard,
+	factory logservice.ClientFactory,
+	txnServer rpc.TxnServer,
+) (storage.TxnStorage, error) {
+
 	// use s3 as main fs
 	fs, err := fileservice.Get[fileservice.FileService](s.fileService, defines.SharedFileServiceName)
 	if err != nil {
@@ -219,5 +230,6 @@ func (s *store) newTAEStorage(ctx context.Context, shard metadata.TNShard, facto
 		s.rt,
 		logtailServerAddr,
 		logtailServerCfg,
+		txnServer,
 	)
 }

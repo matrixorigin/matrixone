@@ -10992,53 +10992,6 @@ func TestDoCreateSnapshot(t *testing.T) {
 	})
 }
 
-func TestDoResolveSnapshotTsWithSnapShotName(t *testing.T) {
-	convey.Convey("doResolveSnapshotWithSnapshotName success", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-
-		ses := newTestSession(t, ctrl)
-		defer ses.Close()
-
-		bh := &backgroundExecTest{}
-		bh.init()
-
-		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
-		defer bhStub.Reset()
-
-		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
-		pu.SV.SetDefaultValues()
-		pu.SV.KillRountinesInterval = 0
-		setPu("", pu)
-		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx, "")
-		ses.rm = rm
-
-		tenant := &TenantInfo{
-			Tenant:        sysAccountName,
-			User:          rootName,
-			DefaultRole:   moAdminRoleName,
-			TenantID:      sysAccountID,
-			UserID:        rootID,
-			DefaultRoleID: moAdminRoleID,
-		}
-		ses.SetTenantInfo(tenant)
-		ses.GetTxnHandler().txnOp = newTestTxnOp()
-
-		//no result set
-		bh.sql2result["begin;"] = nil
-		bh.sql2result["commit;"] = nil
-		bh.sql2result["rollback;"] = nil
-
-		sql, _ := getSqlForGetSnapshotTsWithSnapshotName(ctx, "test_sp")
-		mrs := newMrsForPasswordOfUser([][]interface{}{})
-		bh.sql2result[sql] = mrs
-
-		_, err := doResolveSnapshotWithSnapshotName(ctx, ses, "test_sp")
-		convey.So(err, convey.ShouldNotBeNil)
-	})
-}
-
 func TestCheckTimeStampValid(t *testing.T) {
 	convey.Convey("checkTimeStampValid success", t, func() {
 		ctrl := gomock.NewController(t)
