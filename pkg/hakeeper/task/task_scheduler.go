@@ -73,7 +73,7 @@ func (s *scheduler) Schedule(cnState logservice.CNState, currentTick uint64) {
 		zap.Int("created", len(createdTasks)),
 		zap.Int("expired", len(expiredTasks)))
 	s.allocateTasks(createdTasks, workingCNPool)
-	s.allocateTasks(expiredTasks, workingCNPool)
+	s.completeTasks(expiredTasks)
 
 	s.truncateTasks()
 }
@@ -134,7 +134,6 @@ func allocateTask(
 		for key, label := range t.Metadata.Options.Labels {
 			rules = append(rules, containsLabel(key, label))
 		}
-
 	}
 	if t.Metadata.Options.Resource.GetCPU() > 0 {
 		rules = append(rules, withCPU(t.Metadata.Options.Resource.CPU))
@@ -168,6 +167,32 @@ func allocateTask(
 		zap.String("task-metadata-id", t.Metadata.ID),
 		zap.String("task-runner", runner.uuid))
 	heap.Push(cnPool, runner)
+}
+
+func (s *scheduler) completeTasks(tasks []task.AsyncTask) {
+	ts := s.taskServiceGetter()
+	if ts == nil {
+		return
+	}
+
+	for _, t := range tasks {
+		markCompleted(s.service, ts, t)
+	}
+}
+
+func markCompleted(service string, ts taskservice.TaskService, t task.AsyncTask) {
+	ctx, cancel := context.WithTimeoutCause(context.Background(), taskSchedulerDefaultTimeout, moerr.CauseAllocateTasks)
+	defer cancel()
+	if err := ts.Complete(ctx, t.TaskRunner, t, task.ExecuteResult{
+		Code:  task.ResultCode_Failed,
+		Error: "heartbeat expired",
+	}); err != nil {
+		runtime.ServiceRuntime(service).Logger().Error("failed to complete expired task",
+			zap.Uint64("task-id", t.ID),
+			zap.String("task-metadata-id", t.Metadata.ID),
+			zap.String("task-runner", t.TaskRunner),
+			zap.Error(err))
+	}
 }
 
 func (s *scheduler) truncateTasks() {

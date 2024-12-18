@@ -274,6 +274,12 @@ func GetCheckpointData(
 	location objectio.Location,
 	version uint32,
 ) (*CheckpointData, error) {
+	select {
+	case <-ctx.Done():
+		return nil, context.Cause(ctx)
+	default:
+	}
+
 	data := NewCheckpointData(sid, common.CheckpointAllocator)
 	reader, err := blockio.NewObjectReader(sid, fs, location)
 	if err != nil {
@@ -730,6 +736,10 @@ func ReWriteCheckpointAndBlockFromKey(
 						objectio.WithSorted()(insertObjData[i].stats)
 						newMeta.GetVectorByName(ObjectAttr_ObjectStats).Update(row, insertObjData[i].stats[:], false)
 						newMeta.GetVectorByName(EntryNode_DeleteAt).Update(row, types.TS{}, false)
+						createTS := newMeta.GetVectorByName(EntryNode_CreateAt).Get(i).(types.TS)
+						newMeta.GetVectorByName(txnbase.SnapshotAttr_CommitTS).Update(row, createTS, false)
+						newMeta.GetVectorByName(txnbase.SnapshotAttr_PrepareTS).Update(row, createTS, false)
+						newMeta.GetVectorByName(txnbase.SnapshotAttr_StartTS).Update(row, createTS.Prev(), false)
 					}
 				}
 			}

@@ -132,7 +132,8 @@ const (
 )
 
 const (
-	WorkspaceThreshold             uint64 = 1 * mpool.MB
+	CommitWorkspaceThreshold       uint64 = 1 * mpool.MB
+	WriteWorkspaceThreshold        uint64 = 5 * mpool.MB
 	InsertEntryThreshold                  = 5000
 	GCBatchOfFileCount             int    = 1000
 	GCPoolSize                     int    = 5
@@ -155,9 +156,15 @@ type IDGenerator interface {
 
 type EngineOptions func(*Engine)
 
-func WithWorkspaceThreshold(th uint64) EngineOptions {
+func WithCommitWorkspaceThreshold(th uint64) EngineOptions {
 	return func(e *Engine) {
-		e.config.workspaceThreshold = th
+		e.config.commitWorkspaceThreshold = th
+	}
+}
+
+func WithWriteWorkspaceThreshold(th uint64) EngineOptions {
+	return func(e *Engine) {
+		e.config.writeWorkspaceThreshold = th
 	}
 }
 
@@ -205,8 +212,9 @@ type Engine struct {
 	tnID     string
 
 	config struct {
-		workspaceThreshold  uint64
-		insertEntryMaxCount int
+		insertEntryMaxCount      int
+		commitWorkspaceThreshold uint64
+		writeWorkspaceThreshold  uint64
 
 		cnTransferTxnLifespanThreshold time.Duration
 
@@ -249,6 +257,8 @@ type Engine struct {
 	moColumnsCreatedTime  *vector.Vector
 
 	dynamicCtx
+	// for test only.
+	skipConsume bool
 }
 
 func (e *Engine) SetService(svr string) {
@@ -353,6 +363,9 @@ type Transaction struct {
 	adjustCount int
 
 	haveDDL atomic.Bool
+
+	writeWorkspaceThreshold  uint64
+	commitWorkspaceThreshold uint64
 }
 
 type Pos struct {
@@ -436,6 +449,9 @@ func NewTxnWorkSpace(eng *Engine, proc *process.Process) *Transaction {
 		batchSelectList:      make(map[*batch.Batch][]int64),
 		syncCommittedTSCount: eng.cli.GetSyncLatestCommitTSTimes(),
 		cn_flushed_s3_tombstone_object_stats_list: new(sync.Map),
+
+		commitWorkspaceThreshold: eng.config.commitWorkspaceThreshold,
+		writeWorkspaceThreshold:  eng.config.writeWorkspaceThreshold,
 	}
 
 	//txn.transfer.workerPool, _ = ants.NewPool(min(runtime.NumCPU(), 4))
