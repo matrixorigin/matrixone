@@ -548,6 +548,11 @@ func (r *reader) Read(
 		return false, err
 	}
 
+	if outBatch.RowCount() == 1 {
+		// found one row in this blk for the pk equal, record it
+		r.withFilterMixin.filterState.memFilter.RecordExactHit()
+	}
+
 	if filter.Valid {
 		// we collect mem cache hit related statistics info for blk read here
 		gatherStats(numRead, numHit)
