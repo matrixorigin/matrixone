@@ -3535,7 +3535,7 @@ func doLockTable(
 	return err
 }
 
-func lockTable(
+var lockTable = func(
 	ctx context.Context,
 	eng engine.Engine,
 	proc *process.Process,
@@ -3755,7 +3755,7 @@ func getLockVector(proc *process.Process, accountId uint32, names []string) (*ve
 	return vec, nil
 }
 
-func lockMoDatabase(c *Compile, dbName string, lockMode lock.LockMode) error {
+var lockMoDatabase = func(c *Compile, dbName string, lockMode lock.LockMode) error {
 	dbRel, err := getRelFromMoCatalog(c, catalog.MO_DATABASE)
 	if err != nil {
 		return err
@@ -3772,7 +3772,7 @@ func lockMoDatabase(c *Compile, dbName string, lockMode lock.LockMode) error {
 	return nil
 }
 
-func lockMoTable(
+var lockMoTable = func(
 	c *Compile,
 	dbName string,
 	tblName string,
