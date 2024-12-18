@@ -35,8 +35,11 @@ import (
 )
 
 const (
-	AccountLevel    = "account"
-	ClusterLevel    = "cluster"
+	TableLevel   = "table"
+	DbLevel      = "database"
+	AccountLevel = "account"
+	MatchAll     = "*"
+
 	MysqlSink       = "mysql"
 	MatrixoneSink   = "matrixone"
 	ConsoleSink     = "console"
@@ -90,6 +93,18 @@ type Sink interface {
 	SendCommit(ctx context.Context, ar *ActiveRoutine) error
 	SendRollback(ctx context.Context, ar *ActiveRoutine) error
 	Close()
+}
+
+type IWatermarkUpdater interface {
+	Run(ctx context.Context, ar *ActiveRoutine)
+	InsertIntoDb(dbTableInfo *DbTableInfo, watermark types.TS) error
+	GetFromMem(dbName, tblName string) types.TS
+	GetFromDb(dbName, tblName string) (watermark types.TS, err error)
+	UpdateMem(dbName, tblName string, watermark types.TS)
+	DeleteFromMem(dbName, tblName string)
+	DeleteFromDb(dbName, tblName string) error
+	DeleteAllFromDb() error
+	SaveErrMsg(dbName, tblName string, errMsg string) error
 }
 
 type ActiveRoutine struct {
@@ -161,17 +176,14 @@ type RowIterator interface {
 }
 
 type DbTableInfo struct {
-	SourceAccountName string
-	SourceDbName      string
-	SourceTblName     string
-	SourceAccountId   uint64
-	SourceDbId        uint64
-	SourceTblId       uint64
-	SourceTblIdStr    string
+	SourceDbId      uint64
+	SourceDbName    string
+	SourceTblId     uint64
+	SourceTblName   string
+	SourceCreateSql string
 
-	SinkAccountName string
-	SinkDbName      string
-	SinkTblName     string
+	SinkDbName  string
+	SinkTblName string
 }
 
 func (info DbTableInfo) String() string {
@@ -365,16 +377,12 @@ func (info *UriInfo) String() string {
 }
 
 type PatternTable struct {
-	AccountId     uint64 `json:"account_id"`
-	Account       string `json:"account"`
-	Database      string `json:"database"`
-	Table         string `json:"table"`
-	TableIsRegexp bool   `json:"table_is_regexp"`
-	Reserved      bool   `json:"reserved"`
+	Database string `json:"database"`
+	Table    string `json:"table"`
 }
 
 func (table PatternTable) String() string {
-	return fmt.Sprintf("(%s,%d,%s,%s)", table.Account, table.AccountId, table.Database, table.Table)
+	return fmt.Sprintf("%s.%s", table.Database, table.Table)
 }
 
 type PatternTuple struct {
