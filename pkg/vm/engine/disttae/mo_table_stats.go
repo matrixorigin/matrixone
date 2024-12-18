@@ -1918,7 +1918,7 @@ func (d *dynamicCtx) gamaTask(
 
 	d.Lock()
 	gamaDur := d.conf.CorrectionDuration
-	gamaLimit := max(d.conf.GetTableListLimit, 8192)
+	gamaLimit := max(d.conf.GetTableListLimit/10, 8192)
 	d.Unlock()
 
 	randDuration := func(n int) time.Duration {

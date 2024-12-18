@@ -17,10 +17,6 @@ package frontend
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
-	"go.uber.org/zap"
 	"math"
 	"strconv"
 	"strings"
@@ -31,15 +27,19 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 )
 
 const (
