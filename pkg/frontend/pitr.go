@@ -1020,7 +1020,7 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 			}
 
 			// check account exists or not
-			err = restoreAccountUsingClusterSnapshotToNew(
+			rtnErr = restoreAccountUsingClusterSnapshotToNew(
 				ctx,
 				ses,
 				bh,
@@ -1032,10 +1032,10 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 				isClusterRestore,
 				isNeedToCleanToDatabase,
 			)
-			if err != nil {
-				return err
+			if rtnErr != nil {
+				return rtnErr
 			}
-			return nil
+			return rtnErr
 		}
 
 		err = restoreOtherAccount()
