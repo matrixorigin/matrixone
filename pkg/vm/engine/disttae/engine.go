@@ -147,7 +147,7 @@ func New(
 
 func (e *Engine) Close() error {
 	if e.gcPool != nil {
-		e.gcPool.Release()
+		_ = e.gcPool.ReleaseTimeout(time.Second * 3)
 	}
 	e.dynamicCtx.Close()
 	return nil
