@@ -49,11 +49,7 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 		var retryErr error
 		// 0. lock origin database metadata in catalog
 		if err = lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
-			if !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
-				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
-				return err
-			}
-			retryErr = moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
+			return err
 		}
 
 		// 1. lock origin table metadata in catalog
