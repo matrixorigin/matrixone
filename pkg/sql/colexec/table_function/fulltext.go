@@ -474,7 +474,6 @@ func fulltextIndexMatch(u *fulltextState, proc *process.Process, tableFunction *
 
 	//t1 := time.Now()
 	go func() {
-		//os.Stderr.WriteString("GO SQL START\n")
 		// get the statistic of search string ([]Pattern) and store in SearchAccum
 		_, err := runWordStats(u, proc, u.sacc)
 		if err != nil {
@@ -483,28 +482,18 @@ func fulltextIndexMatch(u *fulltextState, proc *process.Process, tableFunction *
 		}
 	}()
 
-	// array is empty, try to get batch from SQL executor
-	//i := 0
+	// get batch from SQL executor
 	sql_closed := false
 	for !sql_closed {
 		sql_closed, err = groupby(u, proc, u.sacc)
 		if err != nil {
 			return err
 		}
-
-		/*
-			if (i % 1000) == 0 {
-				os.Stderr.WriteString(fmt.Sprintf("nrow processed %d, chan size =%d\n", u.nrows, len(u.stream_chan)))
-			}
-			i++
-		*/
-
 	}
 
 	/*
 		t2 := time.Now()
 		diff := t2.Sub(t1)
-
 		os.Stderr.WriteString(fmt.Sprintf("FULLTEXT: diff %v\n", diff))
 		os.Stderr.WriteString(u.mpool.String())
 	*/

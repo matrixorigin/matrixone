@@ -58,30 +58,30 @@ type Lru struct {
 // Partition which is able to spill/unspill.  Data must be fixed size when init
 type Partition struct {
 	proc        *process.Process
-	id          uint64
-	nitem       uint64
-	used        uint64
-	capacity    uint64
-	refcnt      uint64
-	spilled     bool
-	spill_fpath string
-	dsize       uint64 // fixed data size of docvec []uint8
-	cpos        uint64
-	data        []byte
-	full        bool
-	last_update time.Time
+	id          uint64    // id of the partition
+	nitem       uint64    // number of item in partition
+	used        uint64    // number of byte used in partition
+	capacity    uint64    // total capacity of the partition (fixed when init)
+	refcnt      uint64    // reference counter
+	spilled     bool      // partition spilled or not
+	spill_fpath string    // filepath of the spill file
+	dsize       uint64    // fixed data size of docvec []uint8
+	cpos        uint64    // current position for next item
+	data        []byte    // data in []byte
+	full        bool      // is partition full. If true, no more new item
+	last_update time.Time // last update time
 }
 
 // FixedBytePool
 type FixedBytePool struct {
 	proc          *process.Process
-	partitions    []*Partition
-	capacity      uint64
-	partition_cap uint64
-	dsize         uint64
-	mem_in_use    uint64
-	mem_limit     uint64
-	spill_size    uint64
+	partitions    []*Partition // list of partitions
+	capacity      uint64       // total capacity of all partitions
+	partition_cap uint64       // max capacity of partition (fixed when init)
+	dsize         uint64       // data size (fixed when init)
+	mem_in_use    uint64       // memory in use
+	mem_limit     uint64       // memory limit to check with mem_in_use to see spill or not
+	spill_size    uint64       // total number of spilled partitions for the next round, start from 2 and double each time with max 16.
 }
 
 // FixedBytePoolIterator to tranverse the data in the pool
