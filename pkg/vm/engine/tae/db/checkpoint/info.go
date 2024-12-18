@@ -16,8 +16,10 @@ package checkpoint
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -25,24 +27,35 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
+type RunnerWriter interface {
+	RemoveCheckpointMetaFile(string)
+	AddCheckpointMetaFile(string)
+	UpdateCompacted(entry *CheckpointEntry)
+}
+
 type RunnerReader interface {
+	String() string
 	GetAllIncrementalCheckpoints() []*CheckpointEntry
 	GetAllGlobalCheckpoints() []*CheckpointEntry
 	GetPenddingIncrementalCount() int
 	GetGlobalCheckpointCount() int
 	CollectCheckpointsInRange(ctx context.Context, start, end types.TS) (ckpLoc string, lastEnd types.TS, err error)
 	ICKPSeekLT(ts types.TS, cnt int) []*CheckpointEntry
-	MaxGlobalCheckpoint() *CheckpointEntry
 	GetLowWaterMark() types.TS
 	MaxLSN() uint64
 	GetCatalog() *catalog.Catalog
 	GetCheckpointMetaFiles() map[string]struct{}
-	RemoveCheckpointMetaFile(string)
-	AddCheckpointMetaFile(string)
 	ICKPRange(start, end *types.TS, cnt int) []*CheckpointEntry
 	GetCompacted() *CheckpointEntry
-	UpdateCompacted(entry *CheckpointEntry)
 	GetDriver() wal.Driver
+
+	// for test, delete in next phase
+	GetAllCheckpoints() []*CheckpointEntry
+	GetAllCheckpointsForBackup(compact *CheckpointEntry) []*CheckpointEntry
+
+	MaxGlobalCheckpoint() *CheckpointEntry
+	MaxIncrementalCheckpoint() *CheckpointEntry
+	GetDirtyCollector() logtail.Collector
 }
 
 func (r *runner) collectCheckpointMetadata(start, end types.TS, ckpLSN, truncateLSN uint64) *containers.Batch {

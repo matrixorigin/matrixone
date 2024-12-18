@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 	"go.uber.org/zap"
 )
@@ -40,9 +39,6 @@ type TestRunner interface {
 	MaxLSNInRange(end types.TS) uint64
 
 	ExistPendingEntryToGC() bool
-	MaxGlobalCheckpoint() *CheckpointEntry
-	MaxIncrementalCheckpoint() *CheckpointEntry
-	GetDirtyCollector() logtail.Collector
 }
 
 // DisableCheckpoint stops generating checkpoint

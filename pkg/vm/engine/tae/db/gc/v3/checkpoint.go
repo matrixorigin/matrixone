@@ -48,7 +48,7 @@ type checkpointCleaner struct {
 	mp *mpool.MPool
 	fs *objectio.ObjectFS
 
-	checkpointCli checkpoint.RunnerReader
+	checkpointCli checkpoint.Runner
 	deleter       *Deleter
 
 	watermarks struct {
@@ -167,7 +167,7 @@ func NewCheckpointCleaner(
 	ctx context.Context,
 	sid string,
 	fs *objectio.ObjectFS,
-	checkpointCli checkpoint.RunnerReader,
+	checkpointCli checkpoint.Runner,
 	opts ...CheckpointCleanerOption,
 ) Cleaner {
 	cleaner := &checkpointCleaner{
