@@ -500,6 +500,7 @@ func (catalog *Catalog) onReplayCheckpointObject(
 		if objid.Offset() == Backup_Object_Offset && entryNode.DeletedAt.IsEmpty() {
 			obj = newObject()
 			rel.AddEntryLocked(obj)
+			obj.CreateNode = *txnbase.NewTxnMVCCNodeWithTS(obj.CreatedAt)
 			logutil.Warnf("obj %v, tbl %v-%d create %v, delete %v, end %v",
 				objid.String(), rel.fullName, rel.ID, entryNode.CreatedAt.ToString(),
 				entryNode.DeletedAt.ToString(), txnNode.End.ToString())
