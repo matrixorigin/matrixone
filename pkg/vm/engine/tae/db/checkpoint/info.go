@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -47,7 +46,6 @@ type RunnerReader interface {
 	GetCheckpointMetaFiles() map[string]struct{}
 	ICKPRange(start, end *types.TS, cnt int) []*CheckpointEntry
 	GetCompacted() *CheckpointEntry
-	GetDriver() wal.Driver
 
 	// for test, delete in next phase
 	GetAllCheckpoints() []*CheckpointEntry
