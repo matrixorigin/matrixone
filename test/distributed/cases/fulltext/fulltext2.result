@@ -397,27 +397,17 @@ id    score
 1    0.2276447
 3    0.2276447
 select id, body, match (title, body)
-against ('Security implications of running MO as root' in natural language mode) as score
+against ('MO tutorial DBMS stands for' in natural language mode) as score
 from articles;
 id    body    score
-4    1. Never run MOd as root. 2. ...    1.2110387
-6    When configured properly, MO ...    0.60551935
-1    DBMS stands for DataBase ...    0.0
-2    After you went through a ...    0.0
-3    In this tutorial, we show ...    0.0
-5    In the following database comparison ...    0.0
+1    DBMS stands for DataBase ...    3.0275967
 select id, body, match (title, body)
-against ('Security implications of running MO as root' in natural language mode) as score
+against ('MO tutorial DBMS stands for' in natural language mode) as score
 from articles
 where match (title, body)
-against ('Security implications of running MO as root' in natural language mode);
+against ('MO tutorial DBMS stands for' in natural language mode);
 id    body    score
-4    1. Never run MOd as root. 2. ...    1.2110387
-6    When configured properly, MO ...    0.60551935
-1    DBMS stands for DataBase ...    0.0
-2    After you went through a ...    0.0
-3    In this tutorial, we show ...    0.0
-5    In the following database comparison ...    0.0
+1    DBMS stands for DataBase ...    3.0275967
 drop table articles;
 drop table if exists article;
 create table article (
@@ -446,13 +436,11 @@ id    score
 1    0.2276447
 5    0.2276447
 select id, body, match (body)
-against ('Security implications of running MO as root' in natural language mode) as score
+against ('MO tutorial DBMS stands for Database' in natural language mode) as score
 from article
 where match (body)
-against ('Security implications of running MO as root' in natural language mode);
+against ('MO tutorial DBMS stands for Database' in natural language mode);
 id    body    score
-4    1. Never run MOd as root. 2. ...    1.2110387
-6    When configured properly, MO ...    0.60551935
 drop table article;
 drop table if exists example1;
 create table example1 (
