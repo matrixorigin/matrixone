@@ -2640,7 +2640,7 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow(mrs *MysqlResultSet, r uint6
 			if value, err2 := mrs.GetValue(mp.ctx, r, i); err2 != nil {
 				return err2
 			} else {
-				value.(types.Date).ToBytes(mp.dateEncBuffer[:0])
+				mp.dateEncBuffer = value.(types.Date).ToBytes(mp.dateEncBuffer[:0])
 				err = mp.appendCountOfBytesLenEnc(mp.dateEncBuffer[:types.DateToBytesLength])
 				if err != nil {
 					return err

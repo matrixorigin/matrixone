@@ -2873,3 +2873,48 @@ func (fp *testMysqlWriter) Flush() error {
 func (fp *testMysqlWriter) MakeColumnDefData(ctx context.Context, columns []*planPb.ColDef) ([][]byte, error) {
 	return nil, nil
 }
+
+func newMrsForDate() *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+
+	col1 := &MysqlColumn{}
+	col1.SetName("a")
+	col1.SetColumnType(defines.MYSQL_TYPE_DATE)
+
+	mrs.AddColumn(col1)
+
+	dt, _ := types.ParseDateCast("2024-12-18")
+	rows := [][]any{
+		{dt},
+	}
+
+	for _, row := range rows {
+		mrs.AddRow(row)
+	}
+
+	return mrs
+}
+
+func Test_appendResultSetDate(t *testing.T) {
+	ctx := context.TODO()
+	convey.Convey("append result set date", t, func() {
+		sv, err := getSystemVariables("test/system_vars_config.toml")
+		if err != nil {
+			t.Error(err)
+		}
+		pu := config.NewParameterUnit(sv, nil, nil, nil)
+		pu.SV.SkipCheckUser = true
+		pu.SV.KillRountinesInterval = 0
+		setSessionAlloc("", NewLeakCheckAllocator())
+		setPu("", pu)
+		ioses, err := NewIOSession(&testConn{}, pu, "")
+		convey.ShouldBeNil(err)
+		proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
+
+		ses := NewSession(ctx, "", proto, nil)
+		proto.ses = ses
+
+		err = proto.appendResultSetTextRow(newMrsForDate(), 0)
+		convey.So(err, convey.ShouldBeNil)
+	})
+}
