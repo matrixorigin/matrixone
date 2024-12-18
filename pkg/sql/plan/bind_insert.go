@@ -43,6 +43,9 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 
 	if stmt.IsRestore {
 		builder.isRestore = true
+		if stmt.IsRestoreByTs {
+			builder.isRestoreByTs = true
+		}
 		oldSnapshot := builder.compCtx.GetSnapshot()
 		builder.compCtx.SetSnapshot(&Snapshot{
 			Tenant: &plan.SnapshotTenant{

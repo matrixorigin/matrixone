@@ -1166,8 +1166,9 @@ type UserInput struct {
 	isInternalInput bool
 	// operator account, the account executes restoration
 	// e.g. sys takes a snapshot sn1 for acc1, then restores acc1 from snapshot sn1. In this scenario, sys is the operator account
-	opAccount uint32
-	toAccount uint32
+	isRestoreByTs bool
+	opAccount     uint32
+	toAccount     uint32
 }
 
 func (ui *UserInput) getSql() string {
