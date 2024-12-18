@@ -1109,7 +1109,6 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 				return
 			}
 		}
-		getLogger(ses.GetService()).Info(fmt.Sprintf("[%s]restore cluster success", pitrName))
 		return
 	case tree.RESTORELEVELACCOUNT:
 		if err = restoreToAccountWithPitr(ctx, ses.GetService(), bh, pitrName, ts, fkTableMap, viewMap, tenantInfo.TenantID); err != nil {
