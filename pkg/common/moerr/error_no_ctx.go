@@ -318,10 +318,6 @@ func NewTxnStaleNoCtx(msg string) *Error {
 	return newError(Context(), ErrTxnStale, msg)
 }
 
-func NewWaiterPausedNoCtx() *Error {
-	return newError(Context(), ErrWaiterPaused)
-}
-
 func NewRetryForCNRollingRestart() *Error {
 	return newError(Context(), ErrRetryForCNRollingRestart)
 }

@@ -285,7 +285,7 @@ type Compile struct {
 
 	needLockMeta bool
 	needBlock    bool
-	metaTables   map[string]struct{}
+	lockMeta     *LockMeta
 	lockTables   map[uint64]*plan.LockTarget
 	disableRetry bool
 

@@ -2115,7 +2115,7 @@ func getParamTypes(params []tree.Expr, ctx CompilerContext, isPrepareStmt bool) 
 func HasMoCtrl(expr *plan.Expr) bool {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
-		if exprImpl.F.Func.ObjName == "mo_ctl" {
+		if exprImpl.F.Func.ObjName == "mo_ctl" || exprImpl.F.Func.ObjName == "fault_inject" {
 			return true
 		}
 		for _, arg := range exprImpl.F.Args {
@@ -2720,3 +2720,11 @@ func offsetToString(offset int) string {
 // }
 // return !strings.HasPrefix(tableDef.Name, catalog.IndexTableNamePrefix)
 // }
+
+// DbNameOfObjRef return subscription name of ObjectRef if exists, to avoid the mismatching of account id and db name
+func DbNameOfObjRef(objRef *ObjectRef) string {
+	if objRef.SubscriptionName == "" {
+		return objRef.SchemaName
+	}
+	return objRef.SubscriptionName
+}

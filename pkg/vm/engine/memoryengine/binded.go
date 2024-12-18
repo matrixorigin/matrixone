@@ -123,3 +123,13 @@ func (b *BindedEngine) GetMessageCenter() any {
 func (b *BindedEngine) GetService() string {
 	return b.engine.GetService()
 }
+
+func (b *BindedEngine) QueryTableStatsByAccounts(
+	ctx context.Context,
+	wantedStatsIdxes []int,
+	accs []uint64,
+	forceUpdate bool,
+	resetUpdateTime bool,
+) (statsVals [][]any, retAcc []uint64, err error, ok bool) {
+	return nil, nil, nil, false
+}
