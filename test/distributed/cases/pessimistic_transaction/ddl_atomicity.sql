@@ -121,3 +121,24 @@ insert into t2 values(1);
 drop database db1;
 -- @session}
 commit;
+
+create database db1;
+use db1;
+create table t1(a int primary key);
+create table t2(a int primary key, b int);
+begin;
+insert into t1 values(1);
+-- @session:id=1{
+use db1;
+-- @wait:0:commit
+alter table t2 add constraint fk_t2_t1 foreign key(b) references t1(a);
+-- @session}
+commit;
+begin;
+insert into t1 values(2);
+-- @session:id=1{
+use db1;
+-- @wait:0:commit
+alter table t2 drop foreign key fk_t2_t1;
+-- @session}
+commit;
