@@ -91,6 +91,10 @@ func ToSliceNoTypeCheck[T any](vec *Vector, ret *[]T) {
 	*ret = unsafe.Slice((*T)(vec.col.Ptr), vec.col.Cap)
 }
 
+func ToSliceNoTypeCheck2[T any](vec *Vector) any {
+	return unsafe.Slice((*T)(vec.col.Ptr), vec.col.Cap)
+}
+
 func ToSlice[T any](vec *Vector, ret *[]T) {
 	//if (uintptr(unsafe.Pointer(vec))^uintptr(unsafe.Pointer(ret)))&0xffff == 0 {
 	if !typeCompatible[T](vec.typ) {
@@ -264,6 +268,13 @@ func GetFixedAtNoTypeCheck[T any](v *Vector, idx int) T {
 	return slice[idx]
 }
 
+func GetFixedAtNoTypeCheck2[T any](v *Vector, slice []T, idx int) T {
+	if v.IsConst() {
+		idx = 0
+	}
+	return slice[idx]
+}
+
 // Note:
 // it is much inefficient than GetFixedAtNoTypeCheck
 // if type check is done before calling this function, use GetFixedAtNoTypeCheck
@@ -282,6 +293,13 @@ func (v *Vector) GetBytesAt(i int) []byte {
 	}
 	var bs []types.Varlena
 	ToSliceNoTypeCheck(v, &bs)
+	return bs[i].GetByteSlice(v.area)
+}
+
+func (v *Vector) GetBytesAt2(bs []types.Varlena, i int) []byte {
+	if v.IsConst() {
+		i = 0
+	}
 	return bs[i].GetByteSlice(v.area)
 }
 
@@ -340,6 +358,13 @@ func GetArrayAt[T types.RealNumbers](v *Vector, i int) []T {
 	}
 	var bs []types.Varlena
 	ToSliceNoTypeCheck(v, &bs)
+	return types.GetArray[T](&bs[i], v.area)
+}
+
+func GetArrayAt2[T types.RealNumbers](v *Vector, bs []types.Varlena, i int) []T {
+	if v.IsConst() {
+		i = 0
+	}
 	return types.GetArray[T](&bs[i], v.area)
 }
 

@@ -380,10 +380,16 @@ func (mp *MysqlProtocolImpl) Write(execCtx *ExecCtx, crs *perfcounter.CounterSet
 	for i := 0; i < countOfResultSet; i++ {
 		mrs.Data[i] = make([]interface{}, len(bat.Vecs))
 	}
+
+	colSlices := make([]any, len(bat.Vecs))
+	err := convertBatchToSlices(execCtx.reqCtx, execCtx.ses, bat, colSlices)
+	if err != nil {
+		return err
+	}
 	ses := execCtx.ses.(*Session)
 	isShowTableStatus := ses.GetShowStmtType() == ShowTableStatus
 	for j := 0; j < n; j++ { //row index
-		err := extractRowFromEveryVector(execCtx.reqCtx, execCtx.ses, bat, j, mrs.Data[0], !isShowTableStatus)
+		err := extractRowFromEveryVector2(execCtx.reqCtx, execCtx.ses, bat, j, mrs.Data[0], !isShowTableStatus, colSlices)
 		if err != nil {
 			return err
 		}

@@ -133,3 +133,195 @@ func extractRowFromVector(ctx context.Context, ses FeSession, vec *vector.Vector
 	}
 	return nil
 }
+
+func extractRowFromEveryVector2(ctx context.Context, ses FeSession, dataSet *batch.Batch, j int, row []any, safeRefSlice bool, colSlices []any) error {
+	var rowIndex = j
+	for i, vec := range dataSet.Vecs { //col index
+		rowIndexBackup := rowIndex
+		if vec.IsConstNull() {
+			row[i] = nil
+			continue
+		}
+		if vec.IsConst() {
+			rowIndex = 0
+		}
+
+		err := extractRowFromVector2(ctx, ses, vec, i, row, rowIndex, safeRefSlice, colSlices)
+		if err != nil {
+			return err
+		}
+		rowIndex = rowIndexBackup
+	}
+	return nil
+}
+
+func extractRowFromVector2(ctx context.Context, ses FeSession, vec *vector.Vector, i int, row []any, rowIndex int, safeRefSlice bool, colSlices []any) error {
+	if vec.IsConstNull() || vec.GetNulls().Contains(uint64(rowIndex)) {
+		row[i] = nil
+		return nil
+	}
+
+	switch vec.GetType().Oid { //get col
+	case types.T_json:
+		row[i] = types.DecodeJson(copyBytes(vec.GetBytesAt2(colSlices[i].([]types.Varlena), rowIndex), !safeRefSlice))
+	case types.T_bool:
+		row[i] = vector.GetFixedAtNoTypeCheck2[bool](vec, colSlices[i].([]bool), rowIndex)
+	case types.T_bit:
+		row[i] = vector.GetFixedAtNoTypeCheck2[uint64](vec, colSlices[i].([]uint64), rowIndex)
+	case types.T_int8:
+		row[i] = vector.GetFixedAtNoTypeCheck2[int8](vec, colSlices[i].([]int8), rowIndex)
+	case types.T_uint8:
+		row[i] = vector.GetFixedAtNoTypeCheck2[uint8](vec, colSlices[i].([]uint8), rowIndex)
+	case types.T_int16:
+		row[i] = vector.GetFixedAtNoTypeCheck2[int16](vec, colSlices[i].([]int16), rowIndex)
+	case types.T_uint16:
+		row[i] = vector.GetFixedAtNoTypeCheck2[uint16](vec, colSlices[i].([]uint16), rowIndex)
+	case types.T_int32:
+		row[i] = vector.GetFixedAtNoTypeCheck2[int32](vec, colSlices[i].([]int32), rowIndex)
+	case types.T_uint32:
+		row[i] = vector.GetFixedAtNoTypeCheck2[uint32](vec, colSlices[i].([]uint32), rowIndex)
+	case types.T_int64:
+		row[i] = vector.GetFixedAtNoTypeCheck2[int64](vec, colSlices[i].([]int64), rowIndex)
+	case types.T_uint64:
+		row[i] = vector.GetFixedAtNoTypeCheck2[uint64](vec, colSlices[i].([]uint64), rowIndex)
+	case types.T_float32:
+		row[i] = vector.GetFixedAtNoTypeCheck2[float32](vec, colSlices[i].([]float32), rowIndex)
+	case types.T_float64:
+		row[i] = vector.GetFixedAtNoTypeCheck2[float64](vec, colSlices[i].([]float64), rowIndex)
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink:
+		row[i] = copyBytes(vec.GetBytesAt2(colSlices[i].([]types.Varlena), rowIndex), !safeRefSlice)
+	case types.T_array_float32:
+		// NOTE: Don't merge it with T_varchar. You will get raw binary in the SQL output
+		//+------------------------------+
+		//| abs(cast([1,2,3] as vecf32)) |
+		//+------------------------------+
+		//|   �?   @  @@                  |
+		//+------------------------------+
+		row[i] = vector.GetArrayAt2[float32](vec, colSlices[i].([]types.Varlena), rowIndex)
+	case types.T_array_float64:
+		row[i] = vector.GetArrayAt2[float64](vec, colSlices[i].([]types.Varlena), rowIndex)
+	case types.T_date:
+		row[i] = vector.GetFixedAtNoTypeCheck2[types.Date](vec, colSlices[i].([]types.Date), rowIndex)
+	case types.T_datetime:
+		scale := vec.GetType().Scale
+		row[i] = vector.GetFixedAtNoTypeCheck2[types.Datetime](vec, colSlices[i].([]types.Datetime), rowIndex).String2(scale)
+	case types.T_time:
+		scale := vec.GetType().Scale
+		row[i] = vector.GetFixedAtNoTypeCheck2[types.Time](vec, colSlices[i].([]types.Time), rowIndex).String2(scale)
+	case types.T_timestamp:
+		scale := vec.GetType().Scale
+		timeZone := ses.GetTimeZone()
+		row[i] = vector.GetFixedAtNoTypeCheck2[types.Timestamp](vec, colSlices[i].([]types.Timestamp), rowIndex).String2(timeZone, scale)
+	case types.T_decimal64:
+		scale := vec.GetType().Scale
+		row[i] = vector.GetFixedAtNoTypeCheck2[types.Decimal64](vec, colSlices[i].([]types.Decimal64), rowIndex).Format(scale)
+	case types.T_decimal128:
+		scale := vec.GetType().Scale
+		row[i] = vector.GetFixedAtNoTypeCheck2[types.Decimal128](vec, colSlices[i].([]types.Decimal128), rowIndex).Format(scale)
+	case types.T_uuid:
+		row[i] = vector.GetFixedAtNoTypeCheck2[types.Uuid](vec, colSlices[i].([]types.Uuid), rowIndex).String()
+	case types.T_Rowid:
+		row[i] = vector.GetFixedAtNoTypeCheck2[types.Rowid](vec, colSlices[i].([]types.Rowid), rowIndex)
+	case types.T_Blockid:
+		row[i] = vector.GetFixedAtNoTypeCheck2[types.Blockid](vec, colSlices[i].([]types.Blockid), rowIndex)
+	case types.T_TS:
+		row[i] = vector.GetFixedAtNoTypeCheck2[types.TS](vec, colSlices[i].([]types.TS), rowIndex)
+	case types.T_enum:
+		row[i] = vector.GetFixedAtNoTypeCheck2[types.Enum](vec, colSlices[i].([]types.Enum), rowIndex)
+	default:
+		ses.Error(ctx,
+			"Failed to extract row from vector, unsupported type",
+			zap.Int("typeID", int(vec.GetType().Oid)))
+		return moerr.NewInternalErrorf(ctx, "extractRowFromVector : unsupported type %d", vec.GetType().Oid)
+	}
+	return nil
+}
+
+func convertBatchToSlices(ctx context.Context, ses FeSession, dataSet *batch.Batch, colSlices []any) error {
+	for i, vec := range dataSet.Vecs { //col index
+		if vec.IsConstNull() {
+			continue
+		}
+
+		err := convertVectorToSlice(ctx, ses, vec, i, colSlices)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func convertVectorToSlice(ctx context.Context, ses FeSession, vec *vector.Vector, i int, colSlices []any) error {
+	if vec.IsConstNull() {
+		return nil
+	}
+
+	switch vec.GetType().Oid { //get col
+	case types.T_json:
+		colSlices[i] = vector.ToSliceNoTypeCheck2[types.Varlena](vec)
+	case types.T_bool:
+		colSlices[i] = vector.ToSliceNoTypeCheck2[bool](vec)
+	case types.T_bit:
+		colSlices[i] = vector.ToSliceNoTypeCheck2[uint64](vec)
+	case types.T_int8:
+		colSlices[i] = vector.ToSliceNoTypeCheck2[int8](vec)
+	case types.T_uint8:
+		colSlices[i] = vector.ToSliceNoTypeCheck2[uint8](vec)
+	case types.T_int16:
+		colSlices[i] = vector.ToSliceNoTypeCheck2[int16](vec)
+	case types.T_uint16:
+		colSlices[i] = vector.ToSliceNoTypeCheck2[uint16](vec)
+	case types.T_int32:
+		colSlices[i] = vector.ToSliceNoTypeCheck2[int32](vec)
+	case types.T_uint32:
+		colSlices[i] = vector.ToSliceNoTypeCheck2[uint32](vec)
+	case types.T_int64:
+		colSlices[i] = vector.ToSliceNoTypeCheck2[int64](vec)
+	case types.T_uint64:
+		colSlices[i] = vector.ToSliceNoTypeCheck2[uint64](vec)
+	case types.T_float32:
+		colSlices[i] = vector.ToSliceNoTypeCheck2[float32](vec)
+	case types.T_float64:
+		colSlices[i] = vector.ToSliceNoTypeCheck2[float64](vec)
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink:
+		colSlices[i] = vector.ToSliceNoTypeCheck2[types.Varlena](vec)
+	case types.T_array_float32:
+		// NOTE: Don't merge it with T_varchar. You will get raw binary in the SQL output
+		//+------------------------------+
+		//| abs(cast([1,2,3] as vecf32)) |
+		//+------------------------------+
+		//|   �?   @  @@                  |
+		//+------------------------------+
+		colSlices[i] = vector.ToSliceNoTypeCheck2[types.Varlena](vec)
+	case types.T_array_float64:
+		colSlices[i] = vector.ToSliceNoTypeCheck2[types.Varlena](vec)
+	case types.T_date:
+		colSlices[i] = vector.ToSliceNoTypeCheck2[types.Date](vec)
+	case types.T_datetime:
+		colSlices[i] = vector.ToSliceNoTypeCheck2[types.Datetime](vec)
+	case types.T_time:
+		colSlices[i] = vector.ToSliceNoTypeCheck2[types.Time](vec)
+	case types.T_timestamp:
+		colSlices[i] = vector.ToSliceNoTypeCheck2[types.Timestamp](vec)
+	case types.T_decimal64:
+		colSlices[i] = vector.ToSliceNoTypeCheck2[types.Decimal64](vec)
+	case types.T_decimal128:
+		colSlices[i] = vector.ToSliceNoTypeCheck2[types.Decimal128](vec)
+	case types.T_uuid:
+		colSlices[i] = vector.ToSliceNoTypeCheck2[types.Uuid](vec)
+	case types.T_Rowid:
+		colSlices[i] = vector.ToSliceNoTypeCheck2[types.Rowid](vec)
+	case types.T_Blockid:
+		colSlices[i] = vector.ToSliceNoTypeCheck2[types.Blockid](vec)
+	case types.T_TS:
+		colSlices[i] = vector.ToSliceNoTypeCheck2[types.TS](vec)
+	case types.T_enum:
+		colSlices[i] = vector.ToSliceNoTypeCheck2[types.Enum](vec)
+	default:
+		ses.Error(ctx,
+			"Failed to convert vector to slice, unsupported type",
+			zap.Int("typeID", int(vec.GetType().Oid)))
+		return moerr.NewInternalErrorf(ctx, "convertVectorToSlice : unsupported type %d", vec.GetType().Oid)
+	}
+	return nil
+}
