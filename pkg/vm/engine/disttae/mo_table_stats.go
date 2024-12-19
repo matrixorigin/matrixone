@@ -189,7 +189,9 @@ const (
 				from 
 				    %s.%s
 				where 
-				    table_stats = "{}"
+				    table_stats = "{}" 
+				or
+				    update_time < '%s' 
 				limit
 					%d;`
 
@@ -205,7 +207,7 @@ const (
 const (
 	defaultAlphaCycleDur     = time.Minute
 	defaultGamaCycleDur      = time.Minute
-	defaultGetTableListLimit = options.DefaultBlockMaxRows * 10
+	defaultGetTableListLimit = options.DefaultBlockMaxRows
 
 	logHeader = "MO-TABLE-STATS-TASK"
 )
@@ -513,7 +515,25 @@ func (d *dynamicCtx) LogDynamicCtx() string {
 	d.Lock()
 	defer d.Unlock()
 
-	var buf bytes.Buffer
+	buf := bytes.Buffer{}
+
+	buf.WriteString(fmt.Sprintf(
+		"cur-conf:[limit: %v; alpha-dur: %v; gama-dur: %v; disable-task: %v; use-old-impl: %v; force-update: %v]\n",
+		d.conf.GetTableListLimit,
+		d.conf.UpdateDuration,
+		d.conf.CorrectionDuration,
+		d.conf.DisableStatsTask,
+		d.conf.StatsUsingOldImpl,
+		d.conf.ForceUpdate))
+
+	buf.WriteString(fmt.Sprintf(
+		"default-conf:[limit: %v; alpha-dur: %v; gama-dur: %v; disable-task: %v; use-old-impl: %v; force-update: %v]\n",
+		d.defaultConf.GetTableListLimit,
+		d.defaultConf.UpdateDuration,
+		d.defaultConf.CorrectionDuration,
+		d.defaultConf.DisableStatsTask,
+		d.defaultConf.StatsUsingOldImpl,
+		d.defaultConf.ForceUpdate))
 
 	buf.WriteString(fmt.Sprintf("gama: [running: %v; launched-time: %v]\n",
 		d.gama.running,
@@ -522,24 +542,6 @@ func (d *dynamicCtx) LogDynamicCtx() string {
 	buf.WriteString(fmt.Sprintf("beta: [running: %v; launched-time: %v]\n",
 		d.beta.running,
 		d.beta.launchTimes))
-
-	buf.WriteString(fmt.Sprintf(
-		"default-conf:[alpha-dur: %v; gama-dur: %v; limit: %v; force-update: %v; use-old-impl: %v; disable-task: %v]\n",
-		d.defaultConf.UpdateDuration,
-		d.defaultConf.CorrectionDuration,
-		d.defaultConf.GetTableListLimit,
-		d.defaultConf.ForceUpdate,
-		d.defaultConf.StatsUsingOldImpl,
-		d.defaultConf.DisableStatsTask))
-
-	buf.WriteString(fmt.Sprintf(
-		"cur-conf:[alpha-dur: %v; gama-dur: %v; limit: %v; force-update: %v; use-old-impl: %v; disable-task: %v]\n",
-		d.conf.UpdateDuration,
-		d.conf.CorrectionDuration,
-		d.conf.GetTableListLimit,
-		d.conf.ForceUpdate,
-		d.conf.StatsUsingOldImpl,
-		d.conf.DisableStatsTask))
 
 	return buf.String()
 }
@@ -1402,6 +1404,7 @@ func (d *dynamicCtx) alphaTask(
 	d.launchTask(betaTaskName)
 
 	var (
+		requestCnt       = len(tbls)
 		errWaitToReceive = len(tbls)
 		ticker           *time.Ticker
 		processed        int
@@ -1420,6 +1423,7 @@ func (d *dynamicCtx) alphaTask(
 		logutil.Info(logHeader,
 			zap.String("source", "alpha task"),
 			zap.Int("processed", processed),
+			zap.Int("requested", requestCnt),
 			zap.Int("batch count", batCnt),
 			zap.Duration("takes", dur),
 			zap.Duration("wait err", waitErrDur),
@@ -1746,9 +1750,13 @@ func (d *dynamicCtx) gamaUpdateForgotten(
 	de *Engine,
 	limit int,
 ) {
-	// incremental update tables with heartbeat update_time
-	// may leave some tables never been updated.
-	// this opA does such correction.
+	// case 1:
+	// 		incremental update tables with heartbeat update_time
+	// 		may leave some tables never been updated.
+	// 		this opA does such correction.
+	//
+	// case 2:
+	// 		stats update time un changed for long time. ( >= 1H?)
 
 	var (
 		err error
@@ -1768,7 +1776,11 @@ func (d *dynamicCtx) gamaUpdateForgotten(
 			zap.Error(err))
 	}()
 
-	sql := fmt.Sprintf(getNullStatsSQL, catalog.MO_CATALOG, catalog.MO_TABLE_STATS, limit)
+	staleTS := types.BuildTS(time.Now().Add(-2*time.Hour).UnixNano(), 0).ToTimestamp()
+
+	sql := fmt.Sprintf(getNullStatsSQL,
+		catalog.MO_CATALOG, catalog.MO_TABLE_STATS,
+		staleTS.ToStdTime().Format("2006-01-02 15:04:05.000000"), limit)
 	sqlRet := d.executeSQL(ctx, sql, "gama task: get null stats list")
 	if err = sqlRet.Error(); err != nil {
 		return
@@ -1905,7 +1917,7 @@ func (d *dynamicCtx) gamaTask(
 
 	d.Lock()
 	gamaDur := d.conf.CorrectionDuration
-	gamaLimit := max(d.conf.GetTableListLimit, 8192)
+	gamaLimit := max(d.conf.GetTableListLimit/10, 8192)
 	d.Unlock()
 
 	randDuration := func(n int) time.Duration {
@@ -2082,6 +2094,12 @@ func (d *dynamicCtx) getChangedTableList(
 				continue
 			}
 
+			// the account id will always be 0 if mo_catalog db is given on tn side,
+			// later causing account_id, db_id, tbl_id un matched ==> catalogCache returns nil.
+			if dbs[i] == catalog.MO_CATALOG_ID {
+				continue
+			}
+
 			req.AccIds = append(req.AccIds, accs[i])
 			req.DatabaseIds = append(req.DatabaseIds, dbs[i])
 			req.TableIds = append(req.TableIds, tbls[i])
@@ -2126,14 +2144,15 @@ func (d *dynamicCtx) getChangedTableList(
 		de.us, nil,
 	)
 
-	//fmt.Println("get table request")
+	var resp *cmd_util.GetChangedTableListResp
+
 	handler := ctl.GetTNHandlerFunc(api.OpCode_OpGetChangedTableList, whichTN, payload, responseUnmarshaler)
 	ret, err := handler(proc, "DN", "", ctl.MoCtlTNCmdSender)
 	if err != nil {
 		return err
 	}
 
-	resp := ret.Data.([]any)[0].(*cmd_util.GetChangedTableListResp)
+	resp = ret.Data.([]any)[0].(*cmd_util.GetChangedTableListResp)
 
 	*to = types.TimestampToTS(*resp.Newest)
 
@@ -2147,19 +2166,26 @@ func (d *dynamicCtx) getChangedTableList(
 		*pairs = append(*pairs, tp)
 	}
 
-	for i := range req.AccIds {
-		if idx := slices.Index(resp.TableIds, req.TableIds[i]); idx != -1 {
+	for i := range tbls {
+		if idx := slices.Index(resp.TableIds, tbls[i]); idx != -1 {
 			// need calculate, already in it
 			continue
 		}
 
-		// has no changes, only update TS
-		tp, ok := buildTablePairFromCache(de, req.AccIds[i],
-			req.DatabaseIds[i], req.TableIds[i], *to, true)
+		// 1. if the tbls belongs to mo_catalog
+		//		force update it.
+		// 2. otherwise, has no changes, only update TS
+
+		onlyUpdateTS := true
+		if dbs[i] == catalog.MO_CATALOG_ID {
+			onlyUpdateTS = false
+		}
+
+		tp, ok := buildTablePairFromCache(de,
+			accs[i], dbs[i], tbls[i], *to, onlyUpdateTS)
 		if !ok {
 			continue
 		}
-
 		*pairs = append(*pairs, tp)
 	}
 
