@@ -210,13 +210,23 @@ func logMergeStart(name, txnInfo, host, startTS string, mergedObjs [][]byte) {
 	rows, blkn := 0, 0
 	for _, o := range mergedObjs {
 		obj := objectio.ObjectStats(o)
-		fromObjsDescBuilder.WriteString(fmt.Sprintf("%s(%v, %s)Rows(%v)[%v, %v],",
-			obj.ObjectName().ObjectId().ShortStringEx(),
-			obj.BlkCnt(),
-			units.BytesSize(float64(obj.OriginSize())),
-			obj.Rows(),
-			obj.SortKeyZoneMap().GetMin(),
-			obj.SortKeyZoneMap().GetMax()))
+		zm := obj.SortKeyZoneMap()
+		if strings.Contains(name, "tombstone") {
+			fromObjsDescBuilder.WriteString(fmt.Sprintf("%s(%v, %s)Rows(%v),",
+				obj.ObjectName().ObjectId().ShortStringEx(),
+				obj.BlkCnt(),
+				units.BytesSize(float64(obj.OriginSize())),
+				obj.Rows()))
+		} else {
+			fromObjsDescBuilder.WriteString(fmt.Sprintf("%s(%v, %s)Rows(%v)[%v, %v],",
+				obj.ObjectName().ObjectId().ShortStringEx(),
+				obj.BlkCnt(),
+				units.BytesSize(float64(obj.OriginSize())),
+				obj.Rows(),
+				cutIfByteSlice(zm.GetMin()),
+				cutIfByteSlice(zm.GetMax())))
+		}
+
 		fromSize += float64(obj.OriginSize())
 		estSize += float64(obj.Rows() * 20)
 		rows += int(obj.Rows())
@@ -266,4 +276,13 @@ func logMergeEnd(name string, start time.Time, objs [][]byte) {
 		common.AnyField("to-size", units.BytesSize(toSize)),
 		common.DurationField(time.Since(start)),
 	)
+}
+
+func cutIfByteSlice(value any) any {
+	switch value.(type) {
+	case []byte:
+		return "-"
+	default:
+	}
+	return value
 }
