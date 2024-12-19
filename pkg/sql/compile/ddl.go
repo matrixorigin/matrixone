@@ -435,6 +435,8 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
 				return err
 			}
+			// The changes recorded in the data dictionary table imply a change in the structure of the corresponding entity table,
+			// therefore it is necessary to rebuild the logical plan and redirect err to ErrTxnNeedRetryWithDefChanged
 			retryErr = moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
 		}
 
@@ -455,7 +457,9 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 			for _, indexdef := range qry.TableDef.Indexes {
 				if indexdef.TableExist {
 					if err = lockIndexTable(c.proc.Ctx, dbSource, c.e, c.proc, indexdef.IndexTableName, true); err != nil {
-						if !moerr.IsMoErrCode(err, moerr.ErrParseError) {
+						if !moerr.IsMoErrCode(err, moerr.ErrParseError) &&
+							!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
+							!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
 							c.proc.Error(c.proc.Ctx, "lock index table for alter table",
 								zap.String("databaseName", c.db),
 								zap.String("origin tableName", qry.GetTableDef().Name),
