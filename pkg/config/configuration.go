@@ -633,7 +633,7 @@ func NewObservabilityParameters() *ObservabilityParameters {
 		MoVersion:                          "",
 		Host:                               defaultHost,
 		StatusPort:                         defaultStatusPort,
-		EnableMetricToProm:                 true,
+		EnableMetricToProm:                 false,
 		DisableMetric:                      false,
 		DisableTrace:                       false,
 		EnableTraceDebug:                   false,
