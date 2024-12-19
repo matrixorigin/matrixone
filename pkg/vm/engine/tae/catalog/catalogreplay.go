@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -500,7 +501,10 @@ func (catalog *Catalog) onReplayCheckpointObject(
 		if objid.Offset() == Backup_Object_Offset && entryNode.DeletedAt.IsEmpty() {
 			obj = newObject()
 			rel.AddEntryLocked(obj)
-			obj.CreateNode = *txnbase.NewTxnMVCCNodeWithTS(obj.CreatedAt)
+			_, sarg, _ := fault.TriggerFault("back up UT")
+			if sarg == "" {
+				obj.CreateNode = *txnbase.NewTxnMVCCNodeWithTS(obj.CreatedAt)
+			}
 			logutil.Warnf("obj %v, tbl %v-%d create %v, delete %v, end %v",
 				objid.String(), rel.fullName, rel.ID, entryNode.CreatedAt.ToString(),
 				entryNode.DeletedAt.ToString(), txnNode.End.ToString())
