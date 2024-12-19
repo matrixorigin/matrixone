@@ -1088,7 +1088,7 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 		if err = restoreToCluster(ctx, ses, bh, pitrName, ts, subDbToRestore); err != nil {
 			return
 		}
-		if err = restorePubsWithSnapshotName(ctx, ses.GetService(), bh, pitrName); err != nil {
+		if err = restorePubsWithSnapshotName(ctx, ses.GetService(), bh, pitrName, ts); err != nil {
 			return
 		}
 
