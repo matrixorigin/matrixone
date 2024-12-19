@@ -2699,7 +2699,7 @@ func (s *Scope) DropTable(c *Compile) error {
 	return err
 }
 
-func planDefsToExeDefs(tableDef *plan.TableDef) ([]engine.TableDef, error) {
+var planDefsToExeDefs = func(tableDef *plan.TableDef) ([]engine.TableDef, error) {
 	planDefs := tableDef.GetDefs()
 	var exeDefs []engine.TableDef
 	c := new(engine.ConstraintDef)
