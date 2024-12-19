@@ -31,10 +31,14 @@ func TestExtractRowFromVector(t *testing.T) {
 	rowCount := len(values)
 	vec := testutil.NewVector(rowCount, types.New(types.T_bit, 10, 0), mp, false, values)
 
+	colSlices := make([]any, 1)
+	err := convertVectorToSlice(context.TODO(), nil, vec, 0, colSlices)
+	require.NoError(t, err)
+
 	for rowIdx := 0; rowIdx < rowCount; rowIdx++ {
 		columnIdx := 0
 		row := make([]interface{}, 1)
-		err := extractRowFromVector(context.TODO(), nil, vec, columnIdx, row, rowIdx, false)
+		err := extractRowFromVector(context.TODO(), nil, vec, columnIdx, row, rowIdx, false, colSlices)
 		require.NoError(t, err)
 		require.Equal(t, row[columnIdx].(uint64), values[rowIdx])
 	}

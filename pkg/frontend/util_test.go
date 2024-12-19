@@ -1281,10 +1281,13 @@ func Test_convertRowsIntoBatch(t *testing.T) {
 
 	ses := &Session{}
 	ses.SetTimeZone(time.UTC)
+	colSlices := make([]any, len(data.Vecs))
+	err = convertBatchToSlices(context.TODO(), ses, data, colSlices)
+	assert.NoError(t, err)
 	for i := 0; i < cnt; i++ {
 		row := make([]any, len(data.Vecs))
 		for j := 0; j < len(data.Vecs); j++ {
-			err = extractRowFromVector(context.TODO(), ses, data.Vecs[j], j, row, i, false)
+			err = extractRowFromVector(context.TODO(), ses, data.Vecs[j], j, row, i, false, colSlices)
 			assert.NoError(t, err)
 			switch data.Vecs[j].GetType().Oid {
 			case types.T_varchar:
