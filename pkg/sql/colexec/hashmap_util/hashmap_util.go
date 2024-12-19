@@ -189,6 +189,24 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, nee
 		return err
 	}
 
+	if hb.IsDedup && hb.InputBatchRowCount == 1 && needUniqueVec {
+		if len(hb.UniqueJoinKeys) == 0 {
+			hb.UniqueJoinKeys = make([]*vector.Vector, len(hb.executor))
+			for j, vec := range hb.vecs[0] {
+				hb.UniqueJoinKeys[j] = vector.NewVec(*vec.GetType())
+			}
+		}
+
+		for i, vec := range hb.vecs[0] {
+			err = hb.UniqueJoinKeys[i].UnionOne(vec, 0, proc.Mp())
+			if err != nil {
+				return err
+			}
+		}
+
+		return nil
+	}
+
 	var itr hashmap.Iterator
 	if hb.keyWidth <= 8 {
 		if hb.IntHashMap, err = hashmap.NewIntHashMap(false); err != nil {
@@ -228,7 +246,7 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, nee
 
 	var (
 		cardinality uint64
-		sels        []int32
+		newSels     []int64
 	)
 
 	vOld := uint64(0)
@@ -336,25 +354,22 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, nee
 					}
 				}
 			} else {
-				if sels == nil {
-					sels = make([]int32, hashmap.UnitLimit)
+				if newSels == nil {
+					newSels = make([]int64, hashmap.UnitLimit)
 				}
 
-				sels = sels[:0]
+				newSels = newSels[:0]
 				for j, v := range vals[:n] {
 					if v > cardinality {
-						sels = append(sels, int32(i+j))
+						newSels = append(newSels, int64(vecIdx2+j))
 						cardinality = v
 					}
 				}
 
 				for j, vec := range hb.vecs[vecIdx1] {
-					for _, sel := range sels {
-						_, idx2 := sel/colexec.DefaultBatchSize, sel%colexec.DefaultBatchSize
-						err = hb.UniqueJoinKeys[j].UnionOne(vec, int64(idx2), proc.Mp())
-						if err != nil {
-							return err
-						}
+					err = hb.UniqueJoinKeys[j].Union(vec, newSels, proc.Mp())
+					if err != nil {
+						return err
 					}
 				}
 			}
@@ -370,16 +385,15 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, nee
 
 	// if groupcount == inputrowcount, it means building hashmap on unique rows
 	// we can free sels now
-	if !hb.IsDedup {
-		if hb.keyWidth <= 8 {
-			if hb.InputBatchRowCount == int(hb.IntHashMap.GroupCount()) {
-				hb.MultiSels.Free()
-			}
-		} else {
-			if hb.InputBatchRowCount == int(hb.StrHashMap.GroupCount()) {
-				hb.MultiSels.Free()
-			}
+	if hb.keyWidth <= 8 {
+		if hb.InputBatchRowCount == int(hb.IntHashMap.GroupCount()) {
+			hb.MultiSels.Free()
+		}
+	} else {
+		if hb.InputBatchRowCount == int(hb.StrHashMap.GroupCount()) {
+			hb.MultiSels.Free()
 		}
 	}
+
 	return nil
 }
