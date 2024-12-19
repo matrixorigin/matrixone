@@ -35,7 +35,7 @@ func newTestSchema(colCnt, pkIdx int, config *BasicPolicyConfig) *catalog.Schema
 }
 
 func TestString(t *testing.T) {
-	require.Equal(t, "minOsizeObj:110MiB, maxOneRun:16, maxOsizeMergedObj: 128MiB, offloadToCNSize:78.12GiB, hints: []", defaultBasicConfig.String())
+	require.Equal(t, "minOsizeObj:90MiB, maxOneRun:16, maxOsizeMergedObj: 128MiB, offloadToCNSize:78.12GiB, hints: []", defaultBasicConfig.String())
 }
 
 func TestConfigForTable(t *testing.T) {
@@ -77,5 +77,5 @@ func TestConfigForTable(t *testing.T) {
 	config = configProvider.getConfig(tbl3)
 	require.Equal(t, defaultBasicConfig.MaxOsizeMergedObj, config.MaxOsizeMergedObj)
 
-	require.Equal(t, "customConfigProvider: 0-:115343360,2 | ", configProvider.String())
+	require.Equal(t, "customConfigProvider: 0-:94371840,2 | ", configProvider.String())
 }

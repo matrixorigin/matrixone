@@ -124,6 +124,77 @@ func TestParseDateCast(t *testing.T) {
 	}
 }
 
+func Test_date_toBytes(t *testing.T) {
+	type args struct {
+		s string
+	}
+	tests := []struct {
+		name    string
+		args    args
+		want    string
+		wantErr bool
+	}{
+		// 1. yyyy-mm-dd
+		{
+			name: "yyyy-mm-dd",
+			args: args{
+				s: "2005-02-23",
+			},
+			want: "2005-02-23",
+		},
+		// 2. yyyymmdd
+		{
+			name: "yyyymmdd",
+			args: args{
+				s: "20050223",
+			},
+			want: "2005-02-23",
+		},
+		// 4. yyyy-m-dd
+		{
+			name: "yyyy-m-dd",
+			args: args{
+				s: "2005-2-23",
+			},
+			want: "2005-02-23",
+		},
+		// 5. yyyy-mm-d
+		{
+			name: "yyyy-mm-d",
+			args: args{
+				s: "2005-02-2",
+			},
+			want: "2005-02-02",
+		},
+		// 6. yyyy-m-d
+		{
+			name: "yyyy-m-d",
+			args: args{
+				s: "2005-2-3",
+			},
+			want: "2005-02-03",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ParseDateCast(tt.args.s)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ParseDateCast() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if err != nil && tt.wantErr {
+				return
+			}
+			var dBytes [DateToBytesLength]byte
+			dSlice := got.ToBytes(dBytes[:0])
+			s := string(dSlice)
+			if s != tt.want {
+				t.Errorf("ParseDateCast() got = %v, want %v", s, tt.want)
+			}
+		})
+	}
+}
+
 func BenchmarkParseDate(b *testing.B) {
 	s := "2020-12-21"
 	b.ResetTimer()
