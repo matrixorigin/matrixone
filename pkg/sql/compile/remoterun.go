@@ -760,6 +760,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			OnDuplicateAction: t.OnDuplicateAction,
 			DedupColName:      t.DedupColName,
 			DedupColTypes:     t.DedupColTypes,
+			DelColIdx:         t.DelColIdx,
 		}
 	case *shufflebuild.ShuffleBuild:
 		in.ShuffleBuild = &pipeline.Shufflebuild{
@@ -774,6 +775,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			OnDuplicateAction: t.OnDuplicateAction,
 			DedupColName:      t.DedupColName,
 			DedupColTypes:     t.DedupColTypes,
+			DelColIdx:         t.DelColIdx,
 		}
 	case *indexbuild.IndexBuild:
 		in.IndexBuild = &pipeline.Indexbuild{
@@ -793,6 +795,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			OnDuplicateAction:      t.OnDuplicateAction,
 			DedupColName:           t.DedupColName,
 			DedupColTypes:          t.DedupColTypes,
+			DelColIdx:              t.DelColIdx,
 			LeftTypes:              convertToPlanTypes(t.LeftTypes),
 			RightTypes:             convertToPlanTypes(t.RightTypes),
 			UpdateColIdxList:       t.UpdateColIdxList,
@@ -1286,6 +1289,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.OnDuplicateAction = t.OnDuplicateAction
 		arg.DedupColName = t.DedupColName
 		arg.DedupColTypes = t.DedupColTypes
+		arg.DelColIdx = t.DelColIdx
 		op = arg
 	case vm.ShuffleBuild:
 		arg := shufflebuild.NewArgument()
@@ -1301,6 +1305,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.OnDuplicateAction = t.OnDuplicateAction
 		arg.DedupColName = t.DedupColName
 		arg.DedupColTypes = t.DedupColTypes
+		arg.DelColIdx = t.DelColIdx
 		op = arg
 	case vm.IndexBuild:
 		arg := indexbuild.NewArgument()
@@ -1320,6 +1325,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.OnDuplicateAction = t.OnDuplicateAction
 		arg.DedupColName = t.DedupColName
 		arg.DedupColTypes = t.DedupColTypes
+		arg.DelColIdx = t.DelColIdx
 		arg.UpdateColIdxList = t.UpdateColIdxList
 		arg.UpdateColExprList = t.UpdateColExprList
 		op = arg

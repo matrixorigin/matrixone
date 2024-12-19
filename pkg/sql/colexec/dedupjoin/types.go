@@ -88,6 +88,7 @@ type DedupJoin struct {
 	OnDuplicateAction plan.Node_OnDuplicateAction
 	DedupColName      string
 	DedupColTypes     []plan.Type
+	DelColIdx         int32
 	UpdateColIdxList  []int32
 	UpdateColExprList []*plan.Expr
 
