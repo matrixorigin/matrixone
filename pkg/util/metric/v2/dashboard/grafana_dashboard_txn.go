@@ -54,6 +54,7 @@ func (c *DashboardCreator) initTxnDashboard() error {
 			c.initCNCommittedObjectQuantityRow(),
 			c.initTombstoneTransferRow(),
 			c.initTxnCheckPKChangedRow(),
+			c.initTxnExtraWorkspaceQuota(),
 		)...)
 	if err != nil {
 		return err
@@ -588,5 +589,18 @@ func (c *DashboardCreator) initTombstoneTransferRow() dashboard.Option {
 			SpanNulls(true),
 			timeseries.Span(4),
 		),
+	)
+}
+
+func (c *DashboardCreator) initTxnExtraWorkspaceQuota() dashboard.Option {
+	return dashboard.Row(
+		"Extra Workspace Quota",
+		c.getHistogram(
+			"Extra Workspace Quota",
+			c.getMetricWithFilter(`mo_txn_extra_workspace_quota_bucket`, ``),
+			[]float64{0.50, 0.8, 0.90, 0.99},
+			12,
+			axis.Unit("s"),
+			axis.Min(0)),
 	)
 }

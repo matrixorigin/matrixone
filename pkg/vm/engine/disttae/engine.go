@@ -171,6 +171,7 @@ func (e *Engine) fillDefaults() {
 	}
 	if e.extraWorkspaceQuota.Load() <= 0 {
 		e.extraWorkspaceQuota.Store(e.config.extraWorkspaceThresholdQuota)
+		v2.TxnExtraWorkspaceQuotaGauge.Set(float64(e.config.extraWorkspaceThresholdQuota))
 	}
 
 	logutil.Info(
@@ -206,6 +207,7 @@ func (e *Engine) AcquireQuota(v uint64, quota *MemoryQuota) (uint64, bool) {
 		remaining := oldRemaining - v
 		if e.extraWorkspaceQuota.CompareAndSwap(oldRemaining, remaining) {
 			quota.Apply(v)
+			v2.TxnExtraWorkspaceQuotaGauge.Set(float64(remaining))
 			return remaining, true
 		}
 	}
@@ -217,6 +219,7 @@ func (e *Engine) ReleaseQuota(quota *MemoryQuota) {
 		return
 	}
 	e.extraWorkspaceQuota.Add(size)
+	v2.TxnExtraWorkspaceQuotaGauge.Set(float64(e.extraWorkspaceQuota.Load()))
 }
 
 func (e *Engine) GetService() string {
