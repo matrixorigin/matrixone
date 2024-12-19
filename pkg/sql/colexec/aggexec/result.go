@@ -362,14 +362,6 @@ func (r *optSplitResult) getEachBlockLimitation() int {
 	return r.optInformation.chunkSize
 }
 
-func (r *optSplitResult) getEmptyList() [][]bool {
-	return r.bsFromEmptyList
-}
-
-func (r *optSplitResult) getEmptyListOnX(x int) []bool {
-	return r.bsFromEmptyList[x]
-}
-
 // flushAll return all the result.
 func (r *optSplitResult) flushAll() []*vector.Vector {
 	if r.optInformation.doesThisNeedEmptyList && r.optInformation.shouldSetNullToEmptyGroup {
