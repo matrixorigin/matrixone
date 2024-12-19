@@ -484,7 +484,6 @@ func (exec *aggregatorFromFixedToFixed[from, to]) BatchFill(
 	getter := exec.ret.get
 	setter := exec.ret.set
 	commonContext := exec.execContext.getCommonContext()
-	bs := exec.ret.getEmptyList()
 
 	if vectors[0].IsConst() {
 		value := vector.MustFixedColWithTypeCheck[from](vectors[0])[0]
@@ -493,7 +492,7 @@ func (exec *aggregatorFromFixedToFixed[from, to]) BatchFill(
 				idx := int(group - 1)
 				x, y := exec.ret.updateNextAccessIdx(idx)
 				if err := exec.fill(
-					exec.execContext.getGroupContext(idx), commonContext, value, bs[x][y], getter, setter); err != nil {
+					exec.execContext.getGroupContext(idx), commonContext, value, exec.ret.bsFromEmptyList[x][y], getter, setter); err != nil {
 					return err
 				}
 				exec.ret.setGroupNotEmpty(x, y)
@@ -511,7 +510,7 @@ func (exec *aggregatorFromFixedToFixed[from, to]) BatchFill(
 					groupIdx := int(groups[idx] - 1)
 					x, y := exec.ret.updateNextAccessIdx(groupIdx)
 					if err := exec.fill(
-						exec.execContext.getGroupContext(groupIdx), commonContext, v, bs[x][y], getter, setter); err != nil {
+						exec.execContext.getGroupContext(groupIdx), commonContext, v, exec.ret.bsFromEmptyList[x][y], getter, setter); err != nil {
 						return err
 					}
 					exec.ret.setGroupNotEmpty(x, y)
@@ -522,13 +521,13 @@ func (exec *aggregatorFromFixedToFixed[from, to]) BatchFill(
 		return nil
 	}
 
-	vs := exec.arg.w.UnSafeGetAllValue()
+	k := exec.arg.w.(*vector.FunctionParameterWithoutNull[from])
 	for i, j, idx := uint64(offset), uint64(offset+len(groups)), 0; i < j; i++ {
 		if groups[idx] != GroupNotMatched {
 			groupIdx := int(groups[idx] - 1)
 			x, y := exec.ret.updateNextAccessIdx(groupIdx)
 			if err := exec.fill(
-				exec.execContext.getGroupContext(groupIdx), commonContext, vs[i], bs[x][y], getter, setter); err != nil {
+				exec.execContext.getGroupContext(groupIdx), commonContext, k.Values[i], exec.ret.bsFromEmptyList[x][y], getter, setter); err != nil {
 				return err
 			}
 			exec.ret.setGroupNotEmpty(x, y)

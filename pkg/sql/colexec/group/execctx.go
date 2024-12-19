@@ -123,7 +123,7 @@ type GroupResultBuffer struct {
 }
 
 func (buf *GroupResultBuffer) IsEmpty() bool {
-	return len(buf.ToPopped) == 0
+	return cap(buf.ToPopped) == 0
 }
 
 func (buf *GroupResultBuffer) InitOnlyAgg(chunkSize int, aggList []aggexec.AggFuncExec) {
@@ -146,18 +146,21 @@ func (buf *GroupResultBuffer) InitWithGroupBy(
 	if preAllocated > 0 {
 		fullNum, moreRow := preAllocated/uint64(buf.ChunkSize), preAllocated%uint64(buf.ChunkSize)
 		for i := uint64(0); i < fullNum; i++ {
-			buf.ToPopped = append(buf.ToPopped, getInitialBatchWithSameTypeVecs(groupByVec))
-			if err := buf.ToPopped[len(buf.ToPopped)-1].PreExtend(mp, buf.ChunkSize); err != nil {
+			vec := getInitialBatchWithSameTypeVecs(groupByVec)
+			if err := vec.PreExtend(mp, buf.ChunkSize); err != nil {
+				vec.Clean(mp)
 				return err
 			}
+			buf.ToPopped = append(buf.ToPopped, vec)
 		}
 		if moreRow > 0 {
-			buf.ToPopped = append(buf.ToPopped, getInitialBatchWithSameTypeVecs(groupByVec))
-			if err := buf.ToPopped[len(buf.ToPopped)-1].PreExtend(mp, int(moreRow)); err != nil {
+			vec := getInitialBatchWithSameTypeVecs(groupByVec)
+			if err := vec.PreExtend(mp, int(moreRow)); err != nil {
+				vec.Clean(mp)
 				return err
 			}
+			buf.ToPopped = append(buf.ToPopped, vec)
 		}
-
 	} else {
 		buf.ToPopped = append(buf.ToPopped, getInitialBatchWithSameTypeVecs(groupByVec))
 	}
