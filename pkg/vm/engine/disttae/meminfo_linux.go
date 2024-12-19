@@ -14,6 +14,8 @@
 
 package disttae
 
+import "syscall"
+
 func totalMem() uint64 {
 	in := new(syscall.Sysinfo_t)
 	err := syscall.Sysinfo(in)
