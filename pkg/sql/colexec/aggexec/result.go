@@ -34,7 +34,7 @@ const (
 	blockCapacityFor32Byte  = 1024 * 1024 * 25
 	blockCapacityFor64Byte  = 1024 * 1024 * 12
 	blockCapacityFor128Byte = 1024 * 1024 * 6
-	blockCapacityForStrType = 8192 * 4
+	BlockCapacityForStrType = 8192 * 4
 )
 
 var blockCapacityMap = map[int]int{
@@ -53,7 +53,7 @@ var blockCapacityMap = map[int]int{
 // GetChunkSizeFromType return the chunk size for the input type.
 // This chunk size ensures that each chunk with this type does not exceed 1 GB of memory.
 func GetChunkSizeFromType(typ types.Type) (s int) {
-	s = blockCapacityForStrType
+	s = BlockCapacityForStrType
 	if !typ.IsVarlen() {
 		if newCap, ok := blockCapacityMap[typ.TypeSize()]; ok {
 			s = newCap
@@ -362,14 +362,6 @@ func (r *optSplitResult) getEachBlockLimitation() int {
 	return r.optInformation.chunkSize
 }
 
-func (r *optSplitResult) getEmptyList() [][]bool {
-	return r.bsFromEmptyList
-}
-
-func (r *optSplitResult) getEmptyListOnX(x int) []bool {
-	return r.bsFromEmptyList[x]
-}
-
 // flushAll return all the result.
 func (r *optSplitResult) flushAll() []*vector.Vector {
 	if r.optInformation.doesThisNeedEmptyList && r.optInformation.shouldSetNullToEmptyGroup {
@@ -378,8 +370,8 @@ func (r *optSplitResult) flushAll() []*vector.Vector {
 		}
 	}
 
-	ret := r.resultList
-	r.resultList = nil
+	var ret []*vector.Vector
+	ret, r.resultList = r.resultList[:r.nowIdx1+1], r.resultList[r.nowIdx1+1:]
 	return ret
 }
 

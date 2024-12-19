@@ -338,6 +338,7 @@ func TestGroup_GetFinalEvaluation_WithGroupBy(t *testing.T) {
 
 func TestGroup_GetIntermediateResult_NoneGroupBy(t *testing.T) {
 	proc := testutil.NewProcess()
+	intermediateResultSendActionTrigger = 0
 
 	// datasource.
 	{
@@ -436,6 +437,7 @@ func TestGroup_GetIntermediateResult_NoneGroupBy(t *testing.T) {
 
 func TestGroup_GetIntermediateResult_WithGroupBy(t *testing.T) {
 	proc := testutil.NewProcess()
+	intermediateResultSendActionTrigger = 0
 
 	// datasource.
 	{

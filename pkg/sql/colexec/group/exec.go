@@ -28,6 +28,11 @@ import (
 
 var makeAggExec = aggexec.MakeAgg
 
+// intermediateResultSendActionTrigger is the row number to trigger an action
+// to send the intermediate result
+// if the result row is not less than this number.
+var intermediateResultSendActionTrigger = aggexec.BlockCapacityForStrType
+
 func (group *Group) String(buf *bytes.Buffer) {
 	buf.WriteString(thisOperatorName + ": group([")
 	for i, expr := range group.Exprs {
@@ -265,8 +270,9 @@ func (group *Group) consumeBatchToGetFinalResult(
 			if err != nil {
 				return err
 			}
-			group.ctr.result1.InitWithGroupBy(aggexec.GetMinAggregatorsChunkSize(group.ctr.groupByEvaluate.Vec, aggs), aggs, group.ctr.groupByEvaluate.Vec)
-			if err = preExtendAggExecs(aggs, group.PreAllocSize); err != nil {
+			if err = group.ctr.result1.InitWithGroupBy(
+				proc.Mp(),
+				aggexec.GetMinAggregatorsChunkSize(group.ctr.groupByEvaluate.Vec, aggs), aggs, group.ctr.groupByEvaluate.Vec, group.PreAllocSize); err != nil {
 				return err
 			}
 		}
@@ -346,83 +352,105 @@ func preExtendAggExecs(execs []aggexec.AggFuncExec, preAllocated uint64) (err er
 	return nil
 }
 
-// callToGetIntermediateResult
-// if this operator should only return aggregations' intermediate results because one MergeGroup operator was behind.
-// we do not engage in any waiting actions at this operator,
-// once a batch is received, a batch with the corresponding intermediate result will be returned.
+// callToGetIntermediateResult return the intermediate result of grouped data aggregation,
+// sending out intermediate results once the group count exceeds intermediateResultSendActionTrigger.
+//
+// this function will be only called when there is one MergeGroup operator was behind.
 func (group *Group) callToGetIntermediateResult(proc *process.Process) (*batch.Batch, error) {
 	group.ctr.result2.resetLastPopped()
 	if group.ctr.state == vm.End {
 		return nil, nil
 	}
 
+	r, err := group.initCtxToGetIntermediateResult(proc)
+	if err != nil {
+		return nil, err
+	}
+
+	var input *batch.Batch
 	for {
-		res, err := group.getInputBatch(proc)
+		if group.ctr.state == vm.End {
+			return nil, nil
+		}
+
+		input, err = group.getInputBatch(proc)
 		if err != nil {
 			return nil, err
 		}
-		if res == nil {
+		if input == nil {
 			group.ctr.state = vm.End
 
 			if group.ctr.isDataSourceEmpty() && len(group.Exprs) == 0 {
-				r, er := group.ctr.result2.getResultBatch(
-					proc, &group.ctr.groupByEvaluate, group.ctr.aggregateEvaluate, group.Aggs)
-				if er != nil {
-					return nil, er
-				}
-				for i := range r.Aggs {
-					if err = r.Aggs[i].GroupGrow(1); err != nil {
-						return nil, err
-					}
-				}
 				r.SetRowCount(1)
 				return r, nil
 			}
-
-			return nil, nil
+			if r.RowCount() > 0 {
+				return r, nil
+			}
+			continue
 		}
-		if res.IsEmpty() {
+		if input.IsEmpty() {
 			continue
 		}
 		group.ctr.dataSourceIsEmpty = false
-		return group.consumeBatchToGetIntermediateResult(proc, res)
+
+		if next, er := group.consumeBatchToRes(proc, input, r); er != nil {
+			return nil, er
+		} else {
+			if next {
+				continue
+			}
+			return r, nil
+		}
 	}
 }
 
-func (group *Group) consumeBatchToGetIntermediateResult(
-	proc *process.Process, bat *batch.Batch) (*batch.Batch, error) {
+func (group *Group) initCtxToGetIntermediateResult(
+	proc *process.Process) (*batch.Batch, error) {
 
-	if err := group.evaluateGroupByAndAgg(proc, bat); err != nil {
-		return nil, err
-	}
-
-	res, err := group.ctr.result2.getResultBatch(
+	r, err := group.ctr.result2.getResultBatch(
 		proc, &group.ctr.groupByEvaluate, group.ctr.aggregateEvaluate, group.Aggs)
 	if err != nil {
 		return nil, err
+	}
+
+	if group.ctr.mtyp == H0 {
+		for i := range r.Aggs {
+			if err = r.Aggs[i].GroupGrow(1); err != nil {
+				return nil, err
+			}
+		}
+	} else {
+		allocated := max(min(group.PreAllocSize, uint64(intermediateResultSendActionTrigger)), 0)
+		if err = group.ctr.hr.BuildHashTable(true, group.ctr.mtyp == HStr, group.ctr.keyNullable, allocated); err != nil {
+			return nil, err
+		}
+		err = preExtendAggExecs(r.Aggs, allocated)
+	}
+
+	return r, err
+}
+
+func (group *Group) consumeBatchToRes(
+	proc *process.Process, bat *batch.Batch, res *batch.Batch) (receiveNext bool, err error) {
+
+	if err = group.evaluateGroupByAndAgg(proc, bat); err != nil {
+		return false, err
 	}
 
 	switch group.ctr.mtyp {
 	case H0:
 		// without group by.
 		for i := range res.Aggs {
-			if err = res.Aggs[i].GroupGrow(1); err != nil {
-				return nil, err
+			if err = res.Aggs[i].BulkFill(0, group.ctr.aggregateEvaluate[i].Vec); err != nil {
+				return false, err
 			}
 		}
 		res.SetRowCount(1)
-		for i := range res.Aggs {
-			if err = res.Aggs[i].BulkFill(0, group.ctr.aggregateEvaluate[i].Vec); err != nil {
-				return nil, err
-			}
-		}
+		return false, nil
 
 	default:
 		// with group by.
-		if err = group.ctr.hr.BuildHashTable(true, group.ctr.mtyp == HStr, group.ctr.keyNullable, 0); err != nil {
-			return nil, err
-		}
-
 		count := bat.RowCount()
 		for i := 0; i < count; i += hashmap.UnitLimit {
 			n := count - i
@@ -433,7 +461,7 @@ func (group *Group) consumeBatchToGetIntermediateResult(
 			originGroupCount := group.ctr.hr.Hash.GroupCount()
 			vals, _, err1 := group.ctr.hr.Itr.Insert(i, n, group.ctr.groupByEvaluate.Vec)
 			if err1 != nil {
-				return nil, err1
+				return false, err1
 			}
 			insertList, more := group.ctr.hr.GetBinaryInsertList(vals, originGroupCount)
 
@@ -441,13 +469,13 @@ func (group *Group) consumeBatchToGetIntermediateResult(
 			if cnt > 0 {
 				for j, vec := range res.Vecs {
 					if err = vec.UnionBatch(group.ctr.groupByEvaluate.Vec[j], int64(i), n, insertList, proc.Mp()); err != nil {
-						return nil, err
+						return false, err
 					}
 				}
 
 				for _, ag := range res.Aggs {
 					if err = ag.GroupGrow(cnt); err != nil {
-						return nil, err
+						return false, err
 					}
 				}
 				res.AddRowCount(cnt)
@@ -455,12 +483,11 @@ func (group *Group) consumeBatchToGetIntermediateResult(
 
 			for j, ag := range res.Aggs {
 				if err = ag.BatchFill(i, vals[:n], group.ctr.aggregateEvaluate[j].Vec); err != nil {
-					return nil, err
+					return false, err
 				}
 			}
 		}
 
+		return res.RowCount() < intermediateResultSendActionTrigger, nil
 	}
-
-	return res, nil
 }
