@@ -3565,7 +3565,7 @@ var lockTable = func(
 }
 
 // lockIndexTable
-func lockIndexTable(ctx context.Context, dbSource engine.Database, eng engine.Engine, proc *process.Process, tableName string, defChanged bool) error {
+var lockIndexTable = func(ctx context.Context, dbSource engine.Database, eng engine.Engine, proc *process.Process, tableName string, defChanged bool) error {
 	rel, err := dbSource.Relation(ctx, tableName, nil)
 	if err != nil {
 		return err
