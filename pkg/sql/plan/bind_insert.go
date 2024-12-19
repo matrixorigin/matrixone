@@ -188,11 +188,11 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	for _, col := range tableDef.Cols {
 		if col.Name == pkName && pkName != catalog.FakePrimaryKeyColName {
 			lockTarget := &plan.LockTarget{
-				TableId:            tableDef.TblId,
-				ObjRef:             DeepCopyObjectRef(objRef),
-				PrimaryColIdxInBat: int32(colName2Idx[tableDef.Name+"."+col.Name]),
-				PrimaryColRelPos:   selectTag,
-				PrimaryColTyp:      col.Typ,
+				TableId:             tableDef.TblId,
+				ObjRef:              DeepCopyObjectRef(objRef),
+				PrimaryColsIdxInBat: []int32{colName2Idx[tableDef.Name+"."+col.Name]},
+				PrimaryColRelPos:    selectTag,
+				PrimaryColTyp:       col.Typ,
 			}
 			lockTargets = append(lockTargets, lockTarget)
 			break
@@ -212,11 +212,11 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			pkIdxInBat = colName2Idx[idxTableDef.Name+"."+catalog.IndexTableIndexColName]
 		}
 		lockTarget := &plan.LockTarget{
-			TableId:            idxTableDef.TblId,
-			ObjRef:             idxObjRef,
-			PrimaryColIdxInBat: pkIdxInBat,
-			PrimaryColRelPos:   selectTag,
-			PrimaryColTyp:      selectNode.ProjectList[int(pkIdxInBat)].Typ,
+			TableId:             idxTableDef.TblId,
+			ObjRef:              idxObjRef,
+			PrimaryColsIdxInBat: []int32{pkIdxInBat},
+			PrimaryColRelPos:    selectTag,
+			PrimaryColTyp:       selectNode.ProjectList[int(pkIdxInBat)].Typ,
 		}
 		lockTargets = append(lockTargets, lockTarget)
 	}

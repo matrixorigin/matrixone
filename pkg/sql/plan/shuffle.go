@@ -19,18 +19,15 @@ import (
 	"math/bits"
 	"unsafe"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 const (
@@ -473,6 +470,10 @@ func determineShuffleForJoin(n *plan.Node, builder *QueryBuilder) {
 	}
 	switch n.JoinType {
 	case plan.Node_DEDUP:
+		if n.OnDuplicateAction == plan.Node_FAIL && len(n.GetDedupJoinCtx().GetOldColList()) > 0 {
+			return
+		}
+
 		rightchild := builder.qry.Nodes[n.Children[1]]
 		if rightchild.Stats.Outcnt > 320000 {
 			//dedup join always go hash shuffle, optimize this in the future
