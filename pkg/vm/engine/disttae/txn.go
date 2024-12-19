@@ -23,6 +23,8 @@ import (
 	"sync"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -43,7 +45,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"go.uber.org/zap"
 )
 
 //func (txn *Transaction) getObjInfos(
@@ -1284,24 +1285,33 @@ func (txn *Transaction) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
 
 	if txn.workspaceSize > 10*mpool.MB {
 		logutil.Info(
-			"BIG-TXN",
+			"Start to commit a big txn with workspace size > 10MB",
 			zap.Uint64("workspace-size", txn.workspaceSize),
 			zap.String("txn", txn.op.Txn().DebugString()),
 		)
 	}
 
 	if txn.workspaceSize > 100*mpool.MB {
-		size := 0
+		sizeOfData := 0
+		sizeOfObjStats := 0
 		for _, e := range txn.writes {
 			if e.bat == nil || e.bat.RowCount() == 0 {
 				continue
 			}
-			size += e.bat.Size()
+			if e.fileName == "" {
+				sizeOfData += e.bat.Size()
+			} else {
+				sizeOfObjStats += e.bat.Size()
+			}
 		}
 		logutil.Warn(
-			"BIG-TXN",
+			"Start to commit a big txn with workspace size > 100MB",
 			zap.Uint64("statistical-size", txn.workspaceSize),
-			zap.Int("actual-size", size),
+			zap.Int("actual-size-of-data", sizeOfData),
+			zap.Int("actual-size-of-obj-stats", sizeOfObjStats),
+			zap.Int("approximate-in-mem-insert-cnt", txn.approximateInMemInsertCnt),
+			zap.Int("approximate-in-mem-delete-cnt", txn.approximateInMemDeleteCnt),
+			zap.Uint64("approximate-in-mem-insert-size", txn.approximateInMemInsertSize),
 			zap.String("txn", txn.op.Txn().DebugString()),
 		)
 	}
