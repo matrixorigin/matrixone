@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/tidwall/btree"
+	"go.uber.org/zap"
 )
 
 func newRunnerStore(
@@ -68,6 +69,19 @@ type runnerStore struct {
 	gcCount     int
 	gcTime      time.Time
 	gcWatermark atomic.Value
+}
+
+func (s *runnerStore) ExportStatsLocked() []zap.Field {
+	fields := make([]zap.Field, 0, 8)
+	fields = append(fields, zap.Int("gc-count", s.gcCount))
+	fields = append(fields, zap.Time("gc-time", s.gcTime))
+	wm := s.gcWatermark.Load()
+	if wm != nil {
+		fields = append(fields, zap.String("gc-watermark", wm.(types.TS).ToString()))
+	}
+	fields = append(fields, zap.Int("global-count", s.globals.Len()))
+	fields = append(fields, zap.Int("incremental-count", s.incrementals.Len()))
+	return fields
 }
 
 func (s *runnerStore) AddNewIncrementalEntry(entry *CheckpointEntry) {
@@ -654,5 +668,12 @@ func (s *runnerStore) doGC(ts *types.TS) (gdeleted, ideleted int) {
 	s.gcCount++
 	s.gcTime = time.Now()
 	s.gcWatermark.Store(*ts)
+	fields := s.ExportStatsLocked()
+	fields = append(fields, zap.Int("this-g-deleted", gdeleted))
+	fields = append(fields, zap.Int("this-i-deleted", ideleted))
+	logutil.Info(
+		"GC-Inmemory-Checkpoints",
+		fields...,
+	)
 	return
 }
