@@ -1610,3 +1610,66 @@ func Test_run_panic(t *testing.T) {
 	runPanic(fault.PanicUseMoErr)
 	runPanic(fault.PanicUseNonMoErr)
 }
+
+func Test_handleShowTableStatus(t *testing.T) {
+	ctx := defines.AttachAccountId(context.TODO(), 1)
+	convey.Convey("handleShowTableStatus succ", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		relation := mock_frontend.NewMockRelation(ctrl)
+		relation.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{TableType: catalog.SystemViewRel}).AnyTimes()
+
+		database := mock_frontend.NewMockDatabase(ctrl)
+		database.EXPECT().IsSubscription(gomock.Any()).Return(false).AnyTimes()
+		database.EXPECT().Relation(gomock.Any(), gomock.Any(), nil).Return(relation, nil).AnyTimes()
+
+		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		eng.EXPECT().Database(gomock.Any(), gomock.Any(), nil).Return(database, nil).AnyTimes()
+
+		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
+		txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
+		txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
+		txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
+		txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
+
+		txnClient := mock_frontend.NewMockTxnClient(ctrl)
+		txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
+
+		sv, err := getSystemVariables("test/system_vars_config.toml")
+		if err != nil {
+			t.Error(err)
+		}
+		pu := config.NewParameterUnit(sv, eng, txnClient, nil)
+		pu.SV.SkipCheckUser = true
+		setPu("", pu)
+		setSessionAlloc("", NewLeakCheckAllocator())
+		ioses, err := NewIOSession(&testConn{}, pu, "")
+		convey.So(err, convey.ShouldBeNil)
+		pu.StorageEngine = eng
+		pu.TxnClient = txnClient
+		proto := NewMysqlClientProtocol("", 0, ioses, 1024, pu.SV)
+
+		ses := NewSession(ctx, "", proto, nil)
+		tenant := &TenantInfo{
+			Tenant:   "sys",
+			TenantID: 0,
+			User:     DefaultTenantMoAdmin,
+		}
+		ses.SetTenantInfo(tenant)
+		ses.mrs = &MysqlResultSet{}
+		ses.SetDatabaseName("t")
+		ses.data = [][]interface{}{{[]byte("t"), nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, uint32(0), nil}}
+
+		proto.SetSession(ses)
+
+		ec := newTestExecCtx(ctx, ctrl)
+		shv := &tree.ShowTableStatus{}
+		convey.So(handleShowTableStatus(ses, ec, shv), convey.ShouldBeNil)
+
+		ec = newTestExecCtx(context.Background(), ctrl)
+		convey.So(handleShowTableStatus(ses, ec, shv), convey.ShouldNotBeNil)
+	})
+}
