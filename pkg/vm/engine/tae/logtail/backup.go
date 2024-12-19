@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"go.uber.org/zap"
@@ -736,10 +737,13 @@ func ReWriteCheckpointAndBlockFromKey(
 						objectio.WithSorted()(insertObjData[i].stats)
 						newMeta.GetVectorByName(ObjectAttr_ObjectStats).Update(row, insertObjData[i].stats[:], false)
 						newMeta.GetVectorByName(EntryNode_DeleteAt).Update(row, types.TS{}, false)
-						createTS := newMeta.GetVectorByName(EntryNode_CreateAt).Get(i).(types.TS)
-						newMeta.GetVectorByName(txnbase.SnapshotAttr_CommitTS).Update(row, createTS, false)
-						newMeta.GetVectorByName(txnbase.SnapshotAttr_PrepareTS).Update(row, createTS, false)
-						newMeta.GetVectorByName(txnbase.SnapshotAttr_StartTS).Update(row, createTS.Prev(), false)
+						_, sarg, _ := fault.TriggerFault("back up UT")
+						if sarg == "" {
+							createTS := newMeta.GetVectorByName(EntryNode_CreateAt).Get(i).(types.TS)
+							newMeta.GetVectorByName(txnbase.SnapshotAttr_CommitTS).Update(row, createTS, false)
+							newMeta.GetVectorByName(txnbase.SnapshotAttr_PrepareTS).Update(row, createTS, false)
+							newMeta.GetVectorByName(txnbase.SnapshotAttr_StartTS).Update(row, createTS.Prev(), false)
+						}
 					}
 				}
 			}
