@@ -24,9 +24,10 @@ import (
 )
 
 const (
-	daysPer400Years = 365*400 + 97
-	daysPer100Years = 365*100 + 24
-	daysPer4Years   = 365*4 + 1
+	daysPer400Years   = 365*400 + 97
+	daysPer100Years   = 365*100 + 24
+	daysPer4Years     = 365*4 + 1
+	DateToBytesLength = 10
 )
 
 type Weekday uint8
@@ -287,6 +288,12 @@ func ValidDate(year int32, month, day uint8) bool {
 func (d Date) String() string {
 	y, m, day, _ := d.Calendar(true)
 	return fmt.Sprintf("%04d-%02d-%02d", y, m, day)
+}
+
+// ToBytes converts Date to bytes like Data.String().
+func (d Date) ToBytes(dst []byte) []byte {
+	y, m, day, _ := d.Calendar(true)
+	return fmt.Appendf(dst, "%04d-%02d-%02d", y, m, day)
 }
 
 // Today Holds number of days since January 1, year 1 in Gregorian calendar
