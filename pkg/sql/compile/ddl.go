@@ -1621,7 +1621,7 @@ func (s *Scope) CreateView(c *Compile) error {
 	return nil
 }
 
-func checkIndexInitializable(dbName string, tblName string) bool {
+var checkIndexInitializable = func(dbName string, tblName string) bool {
 	if dbName == catalog.MOTaskDB {
 		return false
 	} else if dbName == catalog.MO_CATALOG && strings.HasPrefix(tblName, catalog.MO_INDEXES) {
