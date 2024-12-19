@@ -403,6 +403,25 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 		return err
 	}
 
+	/*
+		collect old fk names.
+		ForeignKeyDef.Name may be empty in previous design.
+		So, we only use ForeignKeyDef.Name that is no empty.
+	*/
+	oldFkNames := make(map[string]bool)
+	for _, ct := range oldCt.Cts {
+		switch t := ct.(type) {
+		case *engine.ForeignKeyDef:
+			for _, fkey := range t.Fkeys {
+				if len(fkey.Name) != 0 {
+					oldFkNames[fkey.Name] = true
+				}
+			}
+		}
+	}
+	//added fk in this alter table statement
+	newAddedFkNames := make(map[string]bool)
+
 	if c.proc.GetTxnOperator().Txn().IsPessimistic() {
 		var retryErr error
 		// 0. lock origin database metadata in catalog
@@ -451,31 +470,65 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 			}
 		}
 
+
+		// 3. lock foreign key's table
+		for _, action := range qry.Actions {
+			switch act := action.Action.(type) {
+			case *plan.AlterTable_Action_Drop:
+				alterTableDrop := act.Drop
+				constraintName := alterTableDrop.Name
+				if alterTableDrop.Typ == plan.AlterTableDrop_FOREIGN_KEY {
+					//check fk existed in table
+					if _, has := oldFkNames[constraintName]; !has {
+						return moerr.NewErrCantDropFieldOrKey(c.proc.Ctx, constraintName)
+					}
+					for _, fk := range tableDef.Fkeys {
+						if fk.Name == constraintName && fk.ForeignTbl != 0 { //skip self ref foreign key
+							// lock fk table
+							fkDbName, fkTableName, err := c.e.GetNameById(c.proc.Ctx, c.proc.GetTxnOperator(), fk.ForeignTbl)
+							if err != nil {
+								return err
+							}
+							if err = lockMoTable(c, fkDbName, fkTableName, lock.LockMode_Exclusive); err != nil {
+								if !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
+									!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
+									return err
+								}
+								retryErr = moerr.NewTxnNeedRetryWithDefChangedNoCtx()
+							}
+						}
+					}
+				}
+			case *plan.AlterTable_Action_AddFk:
+				//check fk existed in table
+				if _, has := oldFkNames[act.AddFk.Fkey.Name]; has {
+					return moerr.NewErrDuplicateKeyName(c.proc.Ctx, act.AddFk.Fkey.Name)
+				}
+				//check fk existed in this alter table statement
+				if _, has := newAddedFkNames[act.AddFk.Fkey.Name]; has {
+					return moerr.NewErrDuplicateKeyName(c.proc.Ctx, act.AddFk.Fkey.Name)
+				}
+				newAddedFkNames[act.AddFk.Fkey.Name] = true
+
+				// lock fk table
+				if !(act.AddFk.DbName != dbName && act.AddFk.TableName != tblName) { //skip self ref foreign key
+					if err = lockMoTable(c, act.AddFk.DbName, act.AddFk.TableName, lock.LockMode_Exclusive); err != nil {
+						if !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
+							!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
+							return err
+						}
+						retryErr = moerr.NewTxnNeedRetryWithDefChangedNoCtx()
+					}
+				}
+			}
+		}
+
 		if retryErr != nil {
 			return retryErr
 		}
 	}
 	newCt := &engine.ConstraintDef{
 		Cts: []engine.Constraint{},
-	}
-
-	//added fk in this alter table statement
-	newAddedFkNames := make(map[string]bool)
-	/*
-		collect old fk names.
-		ForeignKeyDef.Name may be empty in previous design.
-		So, we only use ForeignKeyDef.Name that is no empty.
-	*/
-	oldFkNames := make(map[string]bool)
-	for _, ct := range oldCt.Cts {
-		switch t := ct.(type) {
-		case *engine.ForeignKeyDef:
-			for _, fkey := range t.Fkeys {
-				if len(fkey.Name) != 0 {
-					oldFkNames[fkey.Name] = true
-				}
-			}
-		}
 	}
 
 	removeRefChildTbls := make(map[string]uint64)
@@ -562,11 +615,14 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 			if _, has := oldFkNames[act.AddFk.Fkey.Name]; has {
 				return moerr.NewErrDuplicateKeyName(c.proc.Ctx, act.AddFk.Fkey.Name)
 			}
-			//check fk existed in this alter table statement
-			if _, has := newAddedFkNames[act.AddFk.Fkey.Name]; has {
-				return moerr.NewErrDuplicateKeyName(c.proc.Ctx, act.AddFk.Fkey.Name)
+			if !c.proc.GetTxnOperator().Txn().IsPessimistic() {
+				//check fk existed in this alter table statement
+				if _, has := newAddedFkNames[act.AddFk.Fkey.Name]; has {
+					return moerr.NewErrDuplicateKeyName(c.proc.Ctx, act.AddFk.Fkey.Name)
+				}
+				newAddedFkNames[act.AddFk.Fkey.Name] = true
 			}
-			newAddedFkNames[act.AddFk.Fkey.Name] = true
+
 			alterKinds = addAlterKind(alterKinds, api.AlterKind_UpdateConstraint)
 			addRefChildTbls = append(addRefChildTbls, act.AddFk.Fkey.ForeignTbl)
 			newFkeys = append(newFkeys, act.AddFk.Fkey)
