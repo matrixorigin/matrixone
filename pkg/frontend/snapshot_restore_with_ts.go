@@ -29,11 +29,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 )
 
-func fkTablesTopoSortWithDropped(ctx context.Context, bh BackgroundExec, dbName string, tblName string, ts int64, from, to uint32) (sortedTbls []string, err error) {
+func fkTablesTopoSortWithTS(ctx context.Context, bh BackgroundExec, dbName string, tblName string, ts int64, from, to uint32) (sortedTbls []string, err error) {
 	newCtx := defines.AttachAccountId(ctx, from)
 	getLogger("").Info(fmt.Sprintf("[%d:%d] start to get fk tables topo sort from account %d", from, ts, from))
 	// get foreign key deps from mo_catalog.mo_foreign_keys
-	fkDeps, err := getFkDepsWithDropped(newCtx, bh, dbName, tblName, ts, from, to)
+	fkDeps, err := getFkDepsWithTS(newCtx, bh, dbName, tblName, ts, from, to)
 	if err != nil {
 		return
 	}
@@ -52,7 +52,7 @@ func fkTablesTopoSortWithDropped(ctx context.Context, bh BackgroundExec, dbName 
 	return
 }
 
-func getFkDepsWithDropped(ctx context.Context, bh BackgroundExec, db string, tbl string, ts int64, from, to uint32) (ans map[string][]string, err error) {
+func getFkDepsWithTS(ctx context.Context, bh BackgroundExec, db string, tbl string, ts int64, from, to uint32) (ans map[string][]string, err error) {
 	sql := "select db_name, table_name, refer_db_name, refer_table_name from mo_catalog.mo_foreign_keys"
 	if ts > 0 {
 		sql += fmt.Sprintf(" {MO_TS = %d}", ts)
@@ -103,7 +103,7 @@ func getFkDepsWithDropped(ctx context.Context, bh BackgroundExec, db string, tbl
 	return
 }
 
-func getTableInfoMapFromDropped(
+func getTableInfoMapFromTS(
 	ctx context.Context,
 	sid string,
 	bh BackgroundExec,
@@ -135,14 +135,14 @@ func getTableInfoMapFromDropped(
 			continue
 		}
 
-		if tblInfoMap[key], err = getTableInfoFromDropped(newCtx, sid, bh, d, t, ts, from, to); err != nil {
+		if tblInfoMap[key], err = getTableInfoFromTS(newCtx, sid, bh, d, t, ts, from, to); err != nil {
 			return
 		}
 	}
 	return
 }
 
-func getTableInfoFromDropped(ctx context.Context,
+func getTableInfoFromTS(ctx context.Context,
 	sid string,
 	bh BackgroundExec,
 	dbName,
@@ -151,7 +151,7 @@ func getTableInfoFromDropped(ctx context.Context,
 	from,
 	to uint32) (*tableInfo, error) {
 	getLogger(sid).Info(fmt.Sprintf("[%d:%d]start to get table info: datatabse `%s`, table `%s`", from, ts, dbName, tblName))
-	tableInfos, err := getTableInfosFromDropped(ctx, sid, bh, dbName, tblName, ts, from, to)
+	tableInfos, err := getTableInfosFromTS(ctx, sid, bh, dbName, tblName, ts, from, to)
 	if err != nil {
 		return nil, err
 	}
@@ -163,7 +163,7 @@ func getTableInfoFromDropped(ctx context.Context,
 	return tableInfos[0], nil
 }
 
-func getTableInfosFromDropped(ctx context.Context,
+func getTableInfosFromTS(ctx context.Context,
 	sid string,
 	bh BackgroundExec,
 	dbName string,
@@ -173,7 +173,7 @@ func getTableInfosFromDropped(ctx context.Context,
 	to uint32) ([]*tableInfo, error) {
 	newCtx := defines.AttachAccountId(ctx, from)
 	getLogger(sid).Info(fmt.Sprintf("[%d:%d] start to get table info: datatabse `%s`, table `%s`", from, ts, dbName, tblName))
-	tableInfos, err := showFullTablesFromDropped(newCtx, sid, bh, dbName, tblName, ts, from, to)
+	tableInfos, err := showFullTablesFromTS(newCtx, sid, bh, dbName, tblName, ts, from, to)
 	if err != nil {
 		return nil, err
 	}
@@ -181,7 +181,7 @@ func getTableInfosFromDropped(ctx context.Context,
 	// only recreate snapshoted table need create sql
 	if ts > 0 {
 		for _, tblInfo := range tableInfos {
-			if tblInfo.createSql, err = getCreateTableSqlFromDropped(newCtx, bh, dbName, tblInfo.tblName, ts, from, to); err != nil {
+			if tblInfo.createSql, err = getCreateTableSqlFromTS(newCtx, bh, dbName, tblInfo.tblName, ts, from, to); err != nil {
 				return nil, err
 			}
 		}
@@ -189,7 +189,7 @@ func getTableInfosFromDropped(ctx context.Context,
 	return tableInfos, nil
 }
 
-func showFullTablesFromDropped(ctx context.Context,
+func showFullTablesFromTS(ctx context.Context,
 	sid string,
 	bh BackgroundExec,
 	dbName string,
@@ -211,7 +211,7 @@ func showFullTablesFromDropped(ctx context.Context,
 
 	getLogger(sid).Info(fmt.Sprintf("[%d:%d] show full table `%s.%s` sql: %s", from, ts, dbName, tblName, sql))
 	// cols: table name, table type
-	colsList, err := getStringColsListFromDropped(newCtx, bh, sql, from, to, 0, 1)
+	colsList, err := getStringColsListFromTS(newCtx, bh, sql, from, to, 0, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -228,7 +228,7 @@ func showFullTablesFromDropped(ctx context.Context,
 	return ans, nil
 }
 
-func getStringColsListFromDropped(ctx context.Context, bh BackgroundExec, sql string, from, to uint32, colIndices ...uint64) (ans [][]string, err error) {
+func getStringColsListFromTS(ctx context.Context, bh BackgroundExec, sql string, from, to uint32, colIndices ...uint64) (ans [][]string, err error) {
 	bh.ClearExecResultSet()
 	if err = bh.ExecRestore(ctx, sql, from, to); err != nil {
 		return
@@ -253,7 +253,7 @@ func getStringColsListFromDropped(ctx context.Context, bh BackgroundExec, sql st
 	return
 }
 
-func getCreateTableSqlFromDropped(ctx context.Context, bh BackgroundExec, dbName string, tblName string, ts int64, from, to uint32) (string, error) {
+func getCreateTableSqlFromTS(ctx context.Context, bh BackgroundExec, dbName string, tblName string, ts int64, from, to uint32) (string, error) {
 	getLogger("").Info(fmt.Sprintf("[%d:%d] start to get create table sql: datatabse `%s`, table `%s`", from, ts, dbName, tblName))
 	newCtx := defines.AttachAccountId(ctx, from)
 	sql := fmt.Sprintf("show create table `%s`.`%s`", dbName, tblName)
@@ -262,7 +262,7 @@ func getCreateTableSqlFromDropped(ctx context.Context, bh BackgroundExec, dbName
 	}
 
 	// cols: table_name, create_sql
-	colsList, err := getStringColsListFromDropped(newCtx, bh, sql, from, to, 1)
+	colsList, err := getStringColsListFromTS(newCtx, bh, sql, from, to, 1)
 	if err != nil {
 		return "", err
 	}
@@ -272,7 +272,7 @@ func getCreateTableSqlFromDropped(ctx context.Context, bh BackgroundExec, dbName
 	return colsList[0][0], nil
 }
 
-func restoreToAccountFromDropped(
+func restoreToAccountFromTS(
 	ctx context.Context,
 	sid string,
 	bh BackgroundExec,
@@ -312,7 +312,7 @@ func restoreToAccountFromDropped(
 	}
 
 	// restore dbs
-	if dbNames, err = showDatabasesFromDropped(ctx, sid, bh, snapshotTs, restoreAccount, toAccountId); err != nil {
+	if dbNames, err = showDatabasesFromTS(ctx, sid, bh, snapshotTs, restoreAccount, toAccountId); err != nil {
 		return
 	}
 
@@ -321,7 +321,7 @@ func restoreToAccountFromDropped(
 			getLogger(sid).Info(fmt.Sprintf("[%d:%d] skip restore db: %v", restoreAccount, snapshotTs, dbName))
 			continue
 		}
-		if err = restoreDatabaseFromDropped(ctx,
+		if err = restoreDatabaseFromTS(ctx,
 			sid,
 			bh,
 			dbName,
@@ -337,7 +337,7 @@ func restoreToAccountFromDropped(
 	}
 
 	// restore system db
-	if err = restoreSystemDatabaseFromDropped(ctx,
+	if err = restoreSystemDatabaseFromTS(ctx,
 		sid,
 		bh,
 		snapshotTs,
@@ -349,7 +349,7 @@ func restoreToAccountFromDropped(
 	return
 }
 
-func showDatabasesFromDropped(ctx context.Context, sid string, bh BackgroundExec, ts int64, from, to uint32) ([]string, error) {
+func showDatabasesFromTS(ctx context.Context, sid string, bh BackgroundExec, ts int64, from, to uint32) ([]string, error) {
 	getLogger(sid).Info(fmt.Sprintf("[%d:%d] start to get all database ", from, ts))
 	newCtx := defines.AttachAccountId(ctx, from)
 	sql := "show databases"
@@ -358,7 +358,7 @@ func showDatabasesFromDropped(ctx context.Context, sid string, bh BackgroundExec
 	}
 
 	// cols: dbname
-	colsList, err := getStringColsListFromDropped(newCtx, bh, sql, from, to, 0)
+	colsList, err := getStringColsListFromTS(newCtx, bh, sql, from, to, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -370,7 +370,7 @@ func showDatabasesFromDropped(ctx context.Context, sid string, bh BackgroundExec
 	return dbNames, nil
 }
 
-func restoreDatabaseFromDropped(
+func restoreDatabaseFromTS(
 	ctx context.Context,
 	sid string,
 	bh BackgroundExec,
@@ -386,7 +386,7 @@ func restoreDatabaseFromDropped(
 
 	var createDbSql string
 	var isSubDb bool
-	createDbSql, err = getCreateDatabaseSqlFromDropped(ctx, sid, bh, dbName, snapshotTs, restoreAccount, toAccountId)
+	createDbSql, err = getCreateDatabaseSqlFromTS(ctx, sid, bh, dbName, snapshotTs, restoreAccount, toAccountId)
 	if err != nil {
 		return
 	}
@@ -452,7 +452,7 @@ func restoreDatabaseFromDropped(
 		}
 	}
 
-	tableInfos, err := getTableInfosFromDropped(ctx, sid, bh, dbName, "", snapshotTs, restoreAccount, toAccountId)
+	tableInfos, err := getTableInfosFromTS(ctx, sid, bh, dbName, "", snapshotTs, restoreAccount, toAccountId)
 	if err != nil {
 		return
 	}
@@ -476,7 +476,7 @@ func restoreDatabaseFromDropped(
 			return
 		}
 
-		if err = recreateTableFromDropped(ctx,
+		if err = recreateTableFromTS(ctx,
 			sid,
 			bh,
 			tblInfo,
@@ -489,7 +489,7 @@ func restoreDatabaseFromDropped(
 	return
 }
 
-func getCreateDatabaseSqlFromDropped(ctx context.Context,
+func getCreateDatabaseSqlFromTS(ctx context.Context,
 	sid string,
 	bh BackgroundExec,
 	dbName string,
@@ -506,7 +506,7 @@ func getCreateDatabaseSqlFromDropped(ctx context.Context,
 	getLogger(sid).Info(fmt.Sprintf("[%d:%d] get create database `%s` sql: %s", from, ts, dbName, sql))
 
 	// cols: database_name, create_sql
-	colsList, err := getStringColsListFromDropped(newCtx, bh, sql, from, to, 0, 1)
+	colsList, err := getStringColsListFromTS(newCtx, bh, sql, from, to, 0, 1)
 	if err != nil {
 		return "", err
 	}
@@ -516,7 +516,7 @@ func getCreateDatabaseSqlFromDropped(ctx context.Context,
 	return colsList[0][1], nil
 }
 
-func recreateTableFromDropped(
+func recreateTableFromTS(
 	ctx context.Context,
 	sid string,
 	bh BackgroundExec,
@@ -553,7 +553,7 @@ func recreateTableFromDropped(
 	return
 }
 
-func restoreSystemDatabaseFromDropped(
+func restoreSystemDatabaseFromTS(
 	ctx context.Context,
 	sid string,
 	bh BackgroundExec,
@@ -568,7 +568,7 @@ func restoreSystemDatabaseFromDropped(
 		tableInfos []*tableInfo
 	)
 
-	tableInfos, err = showFullTablesFromDropped(ctx, sid, bh, dbName, "", snapshotTs, restoreAccount, toAccountId)
+	tableInfos, err = showFullTablesFromTS(ctx, sid, bh, dbName, "", snapshotTs, restoreAccount, toAccountId)
 	if err != nil {
 		return err
 	}
@@ -581,7 +581,7 @@ func restoreSystemDatabaseFromDropped(
 		}
 
 		getLogger(sid).Info(fmt.Sprintf("[%d:%d] start to restore system table: %v.%v", restoreAccount, snapshotTs, moCatalog, tblInfo.tblName))
-		tblInfo.createSql, err = getCreateTableSqlFromDropped(ctx, bh, dbName, tblInfo.tblName, snapshotTs, restoreAccount, toAccountId)
+		tblInfo.createSql, err = getCreateTableSqlFromTS(ctx, bh, dbName, tblInfo.tblName, snapshotTs, restoreAccount, toAccountId)
 		if err != nil {
 			return err
 		}
@@ -591,14 +591,14 @@ func restoreSystemDatabaseFromDropped(
 			return
 		}
 
-		if err = recreateTableFromDropped(ctx, sid, bh, tblInfo, snapshotTs, restoreAccount, toAccountId); err != nil {
+		if err = recreateTableFromTS(ctx, sid, bh, tblInfo, snapshotTs, restoreAccount, toAccountId); err != nil {
 			return
 		}
 	}
 	return
 }
 
-func restoreTablesWithFkFromDropped(
+func restoreTablesWithFkFromTS(
 	ctx context.Context,
 	sid string,
 	bh BackgroundExec,
@@ -616,7 +616,7 @@ func restoreTablesWithFkFromDropped(
 		// e.g. t1.pk <- t2.fk, we only want to restore t2, fkTableMap[t1.key] is nil, ignore t1
 		if tblInfo := fkTableMap[key]; tblInfo != nil {
 			getLogger(sid).Info(fmt.Sprintf("[%d:%d] start to restore table with fk: %v, restore timestamp: %d", restoreAccount, snapshotTs, tblInfo.tblName, snapshotTs))
-			err = recreateTableFromDropped(ctx, sid, bh, tblInfo, snapshotTs, restoreAccount, toAccountId)
+			err = recreateTableFromTS(ctx, sid, bh, tblInfo, snapshotTs, restoreAccount, toAccountId)
 			if err != nil {
 				return
 			}
@@ -625,7 +625,7 @@ func restoreTablesWithFkFromDropped(
 	return
 }
 
-func restoreViewsFromDropped(
+func restoreViewsFromTS(
 	ctx context.Context,
 	ses *Session,
 	bh BackgroundExec,
