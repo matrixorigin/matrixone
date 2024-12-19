@@ -32,6 +32,10 @@ const (
 	Backup_Object_Offset uint16 = 1000
 )
 
+type ObjectListReplayer interface {
+	Submit(uint64, func())
+}
+
 //#region Replay WAL related
 
 func (catalog *Catalog) ReplayCmd(
@@ -420,18 +424,21 @@ func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, tx
 	tbl.InsertLocked(un)
 }
 
-func (catalog *Catalog) OnReplayObjectBatch(objectInfo *containers.Batch, isTombstone bool, dataFactory DataFactory, forSys bool) {
+func (catalog *Catalog) OnReplayObjectBatch(replayer ObjectListReplayer, objectInfo *containers.Batch, isTombstone bool, dataFactory DataFactory, forSys bool) {
 	for i := 0; i < objectInfo.Length(); i++ {
 		tid := objectInfo.GetVectorByName(SnapshotAttr_TID).Get(i).(uint64)
 		if forSys != pkgcatalog.IsSystemTable(tid) {
 			continue
 		}
-		dbid := objectInfo.GetVectorByName(SnapshotAttr_DBID).Get(i).(uint64)
-		objectNode := ReadObjectInfoTuple(objectInfo, i)
-		sid := objectNode.ObjectName().ObjectId()
-		txnNode := txnbase.ReadTuple(objectInfo, i)
-		entryNode := ReadEntryNodeTuple(objectInfo, i)
-		catalog.onReplayCheckpointObject(dbid, tid, sid, objectNode, entryNode, txnNode, isTombstone, dataFactory)
+		replayFn := func() {
+			dbid := objectInfo.GetVectorByName(SnapshotAttr_DBID).Get(i).(uint64)
+			objectNode := ReadObjectInfoTuple(objectInfo, i)
+			sid := objectNode.ObjectName().ObjectId()
+			txnNode := txnbase.ReadTuple(objectInfo, i)
+			entryNode := ReadEntryNodeTuple(objectInfo, i)
+			catalog.onReplayCheckpointObject(dbid, tid, sid, objectNode, entryNode, txnNode, isTombstone, dataFactory)
+		}
+		replayer.Submit(tid, replayFn)
 	}
 }
 
