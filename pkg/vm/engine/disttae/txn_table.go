@@ -587,7 +587,8 @@ func (tbl *txnTable) doRanges(ctx context.Context, rangesParam engine.RangesPara
 	var part *logtailreplay.PartitionState
 	var uncommittedObjects []objectio.ObjectStats
 	blocks := objectio.PreAllocBlockInfoSlice(rangesParam.PreAllocBlocks)
-	if rangesParam.Policy&engine.Policy_CollectUncommittedData != 0 {
+	if rangesParam.Policy&engine.Policy_CollectCommittedInmemData != 0 ||
+		rangesParam.Policy&engine.Policy_CollectUncommittedInmemData != 0 {
 		blocks.AppendBlockInfo(&objectio.EmptyBlockInfo)
 	}
 
@@ -670,12 +671,12 @@ func (tbl *txnTable) doRanges(ctx context.Context, rangesParam engine.RangesPara
 		}
 	}()
 
-	if rangesParam.Policy&engine.Policy_CollectUncommittedData != 0 {
+	if rangesParam.Policy&engine.Policy_CollectUncommittedPersistedData != 0 {
 		uncommittedObjects, _ = tbl.collectUnCommittedDataObjs(rangesParam.TxnOffset)
 	}
 
 	// get the table's snapshot
-	if rangesParam.Policy&engine.Policy_CollectCommittedData != 0 {
+	if rangesParam.Policy&engine.Policy_CollectCommittedPersistedData != 0 {
 		if part, err = tbl.getPartitionState(ctx); err != nil {
 			return
 		}
