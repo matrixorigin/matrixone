@@ -295,7 +295,6 @@ func (c *CkpReplayer) ReplayThreeTablesObjectlist() (
 	dataFactory := c.dataF
 	maxGlobal := r.MaxGlobalCheckpoint()
 	if maxGlobal != nil {
-		logutil.Infof("replay checkpoint %v", maxGlobal)
 		err = datas[c.globalCkpIdx].ApplyReplayTo(c, r.catalog, dataFactory, true)
 		c.applyCount++
 		if err != nil {
@@ -448,8 +447,8 @@ func (c *CkpReplayer) ReplayObjectlist() (err error) {
 		}
 	}
 	logutil.Info(
-		"open-tae",
-		zap.String("replay", "checkpoint-objectlist"),
+		"Replay-Checkpoints",
+		zap.String("phase", phase),
 		zap.Uint64("max table tid", maxTableID),
 		zap.Int("object count (create count + delete count)", maxObjectCount),
 		zap.Duration("apply-cost", c.applyDuration),
