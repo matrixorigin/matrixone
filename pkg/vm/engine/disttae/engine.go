@@ -176,6 +176,21 @@ func (e *Engine) fillDefaults() {
 	)
 }
 
+// SetWorkspaceThreshold updates the commit and write workspace thresholds (in MB).
+// Non-zero values override the current thresholds, while zero keeps them unchanged.
+// Returns the previous thresholds (in MB).
+func (e *Engine) SetWorkspaceThreshold(commitThreshold, writeThreshold uint64) (commit, write uint64) {
+	commit = e.config.commitWorkspaceThreshold / mpool.MB
+	write = e.config.writeWorkspaceThreshold / mpool.MB
+	if commitThreshold != 0 {
+		e.config.commitWorkspaceThreshold = commitThreshold * mpool.MB
+	}
+	if writeThreshold != 0 {
+		e.config.writeWorkspaceThreshold = writeThreshold * mpool.MB
+	}
+	return
+}
+
 func (e *Engine) GetService() string {
 	return e.service
 }
