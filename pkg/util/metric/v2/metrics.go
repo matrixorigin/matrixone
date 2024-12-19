@@ -162,6 +162,7 @@ func initTxnMetrics() {
 	registry.MustRegister(txnReaderTombstoneSelectivityHistogram)
 	registry.MustRegister(txnTransferDurationHistogram)
 	registry.MustRegister(TransferTombstonesCountHistogram)
+	registry.MustRegister(TxnExtraWorkspaceQuotaGauge)
 }
 
 func initRPCMetrics() {
