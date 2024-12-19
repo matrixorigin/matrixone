@@ -1054,7 +1054,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 		//due to the colId may be changed.
 		newRelation, err := dbSource.Relation(c.proc.Ctx, tblName, nil)
 		if err != nil {
-			c.proc.Error(c.proc.Ctx, "createTable",
+			c.proc.Info(c.proc.Ctx, "createTable",
 				zap.String("databaseName", c.db),
 				zap.String("tableName", qry.GetTableDef().GetName()),
 				zap.Error(err),
@@ -1065,7 +1065,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 
 		newTableDef, err := newRelation.TableDefs(c.proc.Ctx)
 		if err != nil {
-			c.proc.Error(c.proc.Ctx, "createTable",
+			c.proc.Info(c.proc.Ctx, "createTable",
 				zap.String("databaseName", c.db),
 				zap.String("tableName", qry.GetTableDef().GetName()),
 				zap.Error(err),
@@ -1129,7 +1129,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 			Fkeys: newFkeys,
 		})
 		if err != nil {
-			c.proc.Error(c.proc.Ctx, "createTable",
+			c.proc.Info(c.proc.Ctx, "createTable",
 				zap.String("databaseName", c.db),
 				zap.String("tableName", qry.GetTableDef().GetName()),
 				zap.Error(err),
@@ -1138,7 +1138,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 		}
 		err = newRelation.UpdateConstraint(c.proc.Ctx, newCt)
 		if err != nil {
-			c.proc.Error(c.proc.Ctx, "createTable",
+			c.proc.Info(c.proc.Ctx, "createTable",
 				zap.String("databaseName", c.db),
 				zap.String("tableName", qry.GetTableDef().GetName()),
 				zap.Error(err),
@@ -1155,7 +1155,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 				//add current table to parent's children table
 				err = AddChildTblIdToParentTable(c.proc.Ctx, newRelation, 0)
 				if err != nil {
-					c.proc.Error(c.proc.Ctx, "createTable",
+					c.proc.Info(c.proc.Ctx, "createTable",
 						zap.String("databaseName", c.db),
 						zap.String("tableName", qry.GetTableDef().GetName()),
 						zap.Error(err),
@@ -1166,7 +1166,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 			}
 			fkDbSource, err := c.e.Database(c.proc.Ctx, fkDbName, c.proc.GetTxnOperator())
 			if err != nil {
-				c.proc.Error(c.proc.Ctx, "createTable",
+				c.proc.Info(c.proc.Ctx, "createTable",
 					zap.String("databaseName", c.db),
 					zap.String("tableName", qry.GetTableDef().GetName()),
 					zap.Error(err),
@@ -1175,7 +1175,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 			}
 			fkRelation, err := fkDbSource.Relation(c.proc.Ctx, fkTableName, nil)
 			if err != nil {
-				c.proc.Error(c.proc.Ctx, "createTable",
+				c.proc.Info(c.proc.Ctx, "createTable",
 					zap.String("databaseName", c.db),
 					zap.String("tableName", qry.GetTableDef().GetName()),
 					zap.Error(err),
@@ -1185,7 +1185,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 			//add current table to parent's children table
 			err = AddChildTblIdToParentTable(c.proc.Ctx, fkRelation, tblId)
 			if err != nil {
-				c.proc.Error(c.proc.Ctx, "createTable",
+				c.proc.Info(c.proc.Ctx, "createTable",
 					zap.String("databaseName", c.db),
 					zap.String("tableName", qry.GetTableDef().GetName()),
 					zap.Error(err),
@@ -1203,7 +1203,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 		//due to the colId may be changed.
 		newRelation, err := dbSource.Relation(c.proc.Ctx, tblName, nil)
 		if err != nil {
-			c.proc.Error(c.proc.Ctx, "createTable",
+			c.proc.Info(c.proc.Ctx, "createTable",
 				zap.String("databaseName", c.db),
 				zap.String("tableName", qry.GetTableDef().GetName()),
 				zap.Error(err),
@@ -1214,7 +1214,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 
 		newTableDef, err := newRelation.TableDefs(c.proc.Ctx)
 		if err != nil {
-			c.proc.Error(c.proc.Ctx, "createTable",
+			c.proc.Info(c.proc.Ctx, "createTable",
 				zap.String("databaseName", c.db),
 				zap.String("tableName", qry.GetTableDef().GetName()),
 				zap.Error(err),
@@ -1249,7 +1249,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 					newDef.ForeignCols[j] = id
 				} else {
 					err := moerr.NewInternalErrorf(c.proc.Ctx, "no column %s", colReferred)
-					c.proc.Error(c.proc.Ctx, "createTable",
+					c.proc.Info(c.proc.Ctx, "createTable",
 						zap.String("databaseName", c.db),
 						zap.String("tableName", qry.GetTableDef().GetName()),
 						zap.Error(err),
@@ -1261,7 +1261,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 			// add the fk def into the child table
 			childDb, err := c.e.Database(c.proc.Ctx, info.Db, c.proc.GetTxnOperator())
 			if err != nil {
-				c.proc.Error(c.proc.Ctx, "createTable",
+				c.proc.Info(c.proc.Ctx, "createTable",
 					zap.String("databaseName", c.db),
 					zap.String("tableName", qry.GetTableDef().GetName()),
 					zap.Error(err),
@@ -1270,7 +1270,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 			}
 			childTable, err := childDb.Relation(c.proc.Ctx, info.Table, nil)
 			if err != nil {
-				c.proc.Error(c.proc.Ctx, "createTable",
+				c.proc.Info(c.proc.Ctx, "createTable",
 					zap.String("databaseName", c.db),
 					zap.String("tableName", qry.GetTableDef().GetName()),
 					zap.Error(err),
@@ -1279,7 +1279,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 			}
 			err = AddFkeyToRelation(c.proc.Ctx, childTable, newDef)
 			if err != nil {
-				c.proc.Error(c.proc.Ctx, "createTable",
+				c.proc.Info(c.proc.Ctx, "createTable",
 					zap.String("databaseName", c.db),
 					zap.String("tableName", qry.GetTableDef().GetName()),
 					zap.Error(err),
@@ -1289,7 +1289,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 			// add the child table id -- tblId into the current table -- refChildDef
 			err = AddChildTblIdToParentTable(c.proc.Ctx, newRelation, childTable.GetTableID(c.proc.Ctx))
 			if err != nil {
-				c.proc.Error(c.proc.Ctx, "createTable",
+				c.proc.Info(c.proc.Ctx, "createTable",
 					zap.String("databaseName", c.db),
 					zap.String("tableName", qry.GetTableDef().GetName()),
 					zap.Error(err),
