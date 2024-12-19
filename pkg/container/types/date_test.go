@@ -17,6 +17,7 @@ package types
 import (
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -201,5 +202,14 @@ func BenchmarkParseDate(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		_, err := ParseDateCast(s)
 		require.NoError(b, err)
+	}
+}
+
+func Test_date_String(t *testing.T) {
+	for i := 0; i < 100; i++ {
+		x, y := i/10, i%10
+		chs := hundredToChars[i]
+		assert.Equal(t, uint8(x+'0'), chs[0])
+		assert.Equal(t, uint8(y+'0'), chs[1])
 	}
 }
