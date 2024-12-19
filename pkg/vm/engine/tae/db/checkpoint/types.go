@@ -47,17 +47,14 @@ type CheckpointScheduler interface {
 type Runner interface {
 	CheckpointScheduler
 	TestRunner
+	RunnerWriter
 	RunnerReader
+
 	Start()
 	Stop()
-	String() string
+
 	Replay(catalog.DataFactory) *CkpReplayer
-
 	GCByTS(ctx context.Context, ts types.TS) error
-
-	// for test, delete in next phase
-	GetAllCheckpoints() []*CheckpointEntry
-	GetAllCheckpointsForBackup(compact *CheckpointEntry) []*CheckpointEntry
 }
 
 type Observer interface {
