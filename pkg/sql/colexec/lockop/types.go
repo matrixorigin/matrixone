@@ -105,11 +105,11 @@ func (lockOp *LockOp) Release() {
 type lockTarget struct {
 	tableID                      uint64
 	objRef                       *plan.ObjectRef
-	primaryColumnIndexInBatch    int32
+	primaryColumnIndexInBatch    []int32
 	refreshTimestampIndexInBatch int32
 	primaryColumnType            types.Type
 	filter                       RowsFilter
-	filterColIndexInBatch        int32
+	filterColIndexInBatch        []int32
 	lockTable                    bool
 	changeDef                    bool
 	mode                         lock.LockMode

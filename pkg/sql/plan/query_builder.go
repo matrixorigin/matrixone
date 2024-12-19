@@ -24,7 +24,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -1387,24 +1386,23 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 	case plan.Node_LOCK_OP:
 		preNode := builder.qry.Nodes[node.Children[0]]
 
-		var pkExprs, partExprs []*plan.Expr
-		var oldPkPos, oldPartPos [][2]int32
+		var pkExprs []*plan.Expr
+		var oldPkPos [][2]int32
 		for _, lockTarget := range node.LockTargets {
-			pkExpr := &plan.Expr{
-				// Typ: node.LockTargets[0].GetPrimaryColTyp(),
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: lockTarget.PrimaryColRelPos,
-						ColPos: lockTarget.PrimaryColIdxInBat,
+			for _, col := range lockTarget.PrimaryColsIdxInBat {
+				pkExpr := &plan.Expr{
+					// Typ: node.LockTargets[0].GetPrimaryColTyp(),
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: lockTarget.PrimaryColRelPos,
+							ColPos: col,
+						},
 					},
-				},
+				}
+				increaseRefCnt(pkExpr, 1, colRefCnt)
+				pkExprs = append(pkExprs, pkExpr)
+				oldPkPos = append(oldPkPos, [2]int32{lockTarget.PrimaryColRelPos, col})
 			}
-			increaseRefCnt(pkExpr, 1, colRefCnt)
-			pkExprs = append(pkExprs, pkExpr)
-			oldPkPos = append(oldPkPos, [2]int32{lockTarget.PrimaryColRelPos, lockTarget.PrimaryColIdxInBat})
-
-			partExprs = append(partExprs, nil)
-			oldPartPos = append(oldPartPos, [2]int32{-1, -1})
 		}
 
 		childRemapping, err := builder.remapAllColRefs(node.Children[0], step, colRefCnt, colRefBool, sinkColRef)
@@ -1412,19 +1410,15 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			return nil, err
 		}
 
-		for pkIdx, pkExpr := range pkExprs {
-			if newPos, ok := childRemapping.globalToLocal[oldPkPos[pkIdx]]; ok {
-				node.LockTargets[pkIdx].PrimaryColRelPos = newPos[0]
-				node.LockTargets[pkIdx].PrimaryColIdxInBat = newPos[1]
-			}
-			increaseRefCnt(pkExpr, -1, colRefCnt)
-
-			if partExprs[pkIdx] != nil {
-				if newPos, ok := childRemapping.globalToLocal[oldPartPos[pkIdx]]; ok {
-					node.LockTargets[pkIdx].FilterColRelPos = newPos[0]
-					node.LockTargets[pkIdx].FilterColIdxInBat = newPos[1]
+		oldPkIdx := 0
+		for _, lockTarget := range node.LockTargets {
+			for j := range lockTarget.PrimaryColsIdxInBat {
+				if newPos, ok := childRemapping.globalToLocal[oldPkPos[oldPkIdx]]; ok {
+					lockTarget.PrimaryColRelPos = newPos[0]
+					lockTarget.PrimaryColsIdxInBat[j] = newPos[1]
 				}
-				increaseRefCnt(partExprs[pkIdx], -1, colRefCnt)
+				increaseRefCnt(pkExprs[oldPkIdx], -1, colRefCnt)
+				oldPkIdx++
 			}
 		}
 
@@ -2841,12 +2835,12 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 			pkPos, pkTyp := getPkPos(tableDef, false)
 			lastTag := builder.qry.Nodes[nodeID].BindingTags[0]
 			lockTarget := &plan.LockTarget{
-				TableId:            tableDef.TblId,
-				PrimaryColIdxInBat: int32(pkPos),
-				PrimaryColRelPos:   lastTag,
-				PrimaryColTyp:      pkTyp,
-				Block:              true,
-				RefreshTsIdxInBat:  -1, //unsupport now
+				TableId:             tableDef.TblId,
+				PrimaryColsIdxInBat: []int32{int32(pkPos)},
+				PrimaryColRelPos:    lastTag,
+				PrimaryColTyp:       pkTyp,
+				Block:               true,
+				RefreshTsIdxInBat:   -1, //unsupport now
 			}
 
 			lockNode = &Node{
