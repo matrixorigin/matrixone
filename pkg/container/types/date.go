@@ -299,17 +299,17 @@ func (d Date) ToBytes(dst []byte) []byte {
 		return fmt.Appendf(dst, "%04d-%02d-%02d", y, m, day)
 	}
 	//2. yUpper & yLower to chars. four bytes
-	dst = append(dst, yearToChars[yUpper][:]...)
-	dst = append(dst, yearToChars[yLower][:]...)
+	dst = append(dst, hundredToChars[yUpper][:2]...)
+	dst = append(dst, hundredToChars[yLower][:2]...)
 	dst = append(dst, '-')
-	dst = append(dst, monthOrDayToChars[m][:]...)
+	dst = append(dst, hundredToChars[m][:2]...)
 	dst = append(dst, '-')
-	dst = append(dst, monthOrDayToChars[day][:]...)
+	dst = append(dst, hundredToChars[day][:2]...)
 	return dst
 }
 
 // 1~99 to two chars
-var yearToChars = [100][2]byte{
+var hundredToChars = [100][2]byte{
 	{'0', '0'},
 	{'0', '1'},
 	{'0', '2'},
@@ -410,42 +410,6 @@ var yearToChars = [100][2]byte{
 	{'9', '7'},
 	{'9', '8'},
 	{'9', '9'},
-}
-
-// 1~31 to two chars
-var monthOrDayToChars = [32][2]byte{
-	{'0', '0'},
-	{'0', '1'},
-	{'0', '2'},
-	{'0', '3'},
-	{'0', '4'},
-	{'0', '5'},
-	{'0', '6'},
-	{'0', '7'},
-	{'0', '8'},
-	{'0', '9'},
-	{'1', '0'},
-	{'1', '1'},
-	{'1', '2'},
-	{'1', '3'},
-	{'1', '4'},
-	{'1', '5'},
-	{'1', '6'},
-	{'1', '7'},
-	{'1', '8'},
-	{'1', '9'},
-	{'2', '0'},
-	{'2', '1'},
-	{'2', '2'},
-	{'2', '3'},
-	{'2', '4'},
-	{'2', '5'},
-	{'2', '6'},
-	{'2', '7'},
-	{'2', '8'},
-	{'2', '9'},
-	{'3', '0'},
-	{'3', '1'},
 }
 
 // Today Holds number of days since January 1, year 1 in Gregorian calendar
