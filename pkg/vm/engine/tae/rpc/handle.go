@@ -244,7 +244,6 @@ func (h *Handle) tryLockMergeForBulkDelete(reqs []any, txn txnif.AsyncTxn) (rele
 type txnCommitRequestsIter struct {
 	cursor         int
 	curNorReq      *api.PrecommitWriteCmd
-	curMergeReq    *api.MergeCommitEntry
 	commitRequests *txn.TxnCommitRequest
 
 	// cache requests only used in ut
