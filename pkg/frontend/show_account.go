@@ -27,15 +27,19 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 )
 
 const (
@@ -322,16 +326,93 @@ func updateStorageUsageCache(usages *cmd_util.StorageUsageResp_V3) {
 	}
 }
 
+func tryGetSizeFromMTS(
+	ctx context.Context,
+	eng engine.Engine,
+	accIds [][]int64,
+) (sizes map[int64]uint64, ok bool) {
+
+	var (
+		err  error
+		accs []uint64
+		vals [][]any
+
+		de *disttae.Engine
+	)
+
+	for i := range accIds {
+		for j := range accIds[i] {
+			accs = append(accs, uint64(accIds[i][j]))
+		}
+	}
+
+	if de, ok = eng.(*disttae.Engine); !ok {
+		de = eng.(*engine.EntireEngine).Engine.(*disttae.Engine)
+	}
+
+	vals, accs, err, ok = de.QueryTableStatsByAccounts(
+		ctx,
+		[]int{disttae.TableStatsTableSize},
+		accs,
+		false,
+		false,
+	)
+
+	if err != nil || !ok {
+		logutil.Info("show accounts",
+			zap.Bool("get size from mts failed", ok),
+			zap.Error(err))
+
+		return nil, false
+	}
+
+	if len(vals) == 0 {
+		return nil, false
+	}
+
+	sizes = make(map[int64]uint64)
+	for i := range accs {
+		sizes[int64(accs[i])] += uint64(vals[0][i].(float64))
+	}
+
+	return sizes, true
+}
+
 // getAccountStorageUsage calculates the storage usage of all accounts
 // by handling checkpoint
-func getAccountsStorageUsage(ctx context.Context, ses *Session, accIds [][]int64) (map[int64][]uint64, error) {
+func getAccountsStorageUsage(
+	ctx context.Context,
+	ses *Session,
+	eng engine.Engine,
+	accIds [][]int64,
+) (ret map[int64][]uint64, err error) {
+
 	if len(accIds) == 0 {
 		return nil, nil
 	}
 
+	defer func() {
+		if err != nil || ret == nil {
+			return
+		}
+
+		sizes, ok := tryGetSizeFromMTS(ctx, eng, accIds)
+		if ok {
+			for k, v := range sizes {
+				if len(ret[k]) == 0 {
+					ret[k] = append(ret[k], 0, 0)
+				}
+				ret[k][0] = v
+			}
+			logutil.Info("show accounts",
+				zap.Int("get size from mts (acc cnt)", len(sizes)))
+		}
+	}()
+
 	// step 1: check cache
 	if usage, succeed := checkStorageUsageCache(accIds); succeed {
-		return usage, nil
+		ret = usage
+		return
 	}
 
 	// step 2: query to tn
@@ -347,7 +428,8 @@ func getAccountsStorageUsage(ctx context.Context, ses *Session, accIds [][]int64
 		}
 		updateStorageUsageCache_V2(usage)
 		// step 3: handling these pulled data
-		return handleStorageUsageResponse_V2(ctx, usage)
+		ret, err = handleStorageUsageResponse_V2(ctx, usage)
+		return
 
 	} else {
 		usage, ok := response.(*cmd_util.StorageUsageResp_V3)
@@ -358,7 +440,8 @@ func getAccountsStorageUsage(ctx context.Context, ses *Session, accIds [][]int64
 		updateStorageUsageCache(usage)
 
 		// step 3: handling these pulled data
-		return handleStorageUsageResponse(ctx, usage)
+		ret, err = handleStorageUsageResponse(ctx, usage)
+		return
 	}
 }
 
@@ -463,7 +546,8 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (e
 		return err
 	}
 
-	usage, err := getAccountsStorageUsage(ctx, ses, accIds)
+	eng := ses.GetTxnHandler().GetStorage()
+	usage, err := getAccountsStorageUsage(ctx, ses, eng, accIds)
 	v2.TaskShowAccountsGetUsageDurationHistogram.Observe(time.Since(t1).Seconds())
 	if err != nil {
 		return err
