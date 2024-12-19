@@ -509,8 +509,13 @@ func (catalog *Catalog) onReplayCheckpointObject(
 				logutil.Warnf("obj %v, tbl %v-%d create %v, delete %v, end %v",
 					objid.String(), rel.fullName, rel.ID, entryNode.CreatedAt.ToString(),
 					entryNode.DeletedAt.ToString(), txnNode.End.ToString())
-				obj.CreateNode = *txnbase.NewTxnMVCCNodeWithTS(obj.CreatedAt)
-				obj.DeleteNode = *txnbase.NewTxnMVCCNodeWithTS(obj.DeleteAt)
+				obj, _ = rel.GetObjectByID(objid, isTombstone)
+				if obj == nil {
+					obj = newObject()
+					rel.AddEntryLocked(obj)
+				}
+				obj.CreateNode = *txnbase.NewTxnMVCCNodeWithTS(entryNode.CreatedAt)
+				obj.DeleteNode = *txnbase.NewTxnMVCCNodeWithTS(entryNode.DeletedAt)
 			}
 		}
 	}
