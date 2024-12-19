@@ -678,9 +678,14 @@ func fakeDataSetFetcher2(handle FeSession, execCtx *ExecCtx, dataSet *batch.Batc
 
 func fillResultSet(ctx context.Context, dataSet *batch.Batch, ses FeSession, mrs *MysqlResultSet) error {
 	n := dataSet.RowCount()
+	colSlices := make([]any, len(dataSet.Vecs))
+	err := convertBatchToSlices(ctx, ses, dataSet, colSlices)
+	if err != nil {
+		return err
+	}
 	for j := 0; j < n; j++ { //row index
 		row := make([]any, mrs.GetColumnCount())
-		err := extractRowFromEveryVector(ctx, ses, dataSet, j, row, false)
+		err := extractRowFromEveryVector(ctx, ses, dataSet, j, row, false, colSlices)
 		if err != nil {
 			return err
 		}

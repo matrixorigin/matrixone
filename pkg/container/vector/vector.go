@@ -91,7 +91,9 @@ func ToSliceNoTypeCheck[T any](vec *Vector, ret *[]T) {
 	*ret = unsafe.Slice((*T)(vec.col.Ptr), vec.col.Cap)
 }
 
-func ToSliceNoTypeCheck2[T any](vec *Vector) any {
+// ToSliceNoTypeCheck2 returns the slice of vector's data
+// for reference all slices from the batch in the unified way conveniently.
+func ToSliceNoTypeCheck2[T any](vec *Vector) []T {
 	return unsafe.Slice((*T)(vec.col.Ptr), vec.col.Cap)
 }
 
@@ -268,13 +270,6 @@ func GetFixedAtNoTypeCheck[T any](v *Vector, idx int) T {
 	return slice[idx]
 }
 
-func GetFixedAtNoTypeCheck2[T any](v *Vector, slice []T, idx int) T {
-	if v.IsConst() {
-		idx = 0
-	}
-	return slice[idx]
-}
-
 // Note:
 // it is much inefficient than GetFixedAtNoTypeCheck
 // if type check is done before calling this function, use GetFixedAtNoTypeCheck
@@ -296,6 +291,10 @@ func (v *Vector) GetBytesAt(i int) []byte {
 	return bs[i].GetByteSlice(v.area)
 }
 
+// GetBytesAt2 Returns the bytes at the specific index of the vector.
+// it is the same as GetBytesAt, but it takes a slice of Varlena as input to
+// avoid converting the slice.
+// !!!NOTE!!! input bs must be the same as the slice from the vector.
 func (v *Vector) GetBytesAt2(bs []types.Varlena, i int) []byte {
 	if v.IsConst() {
 		i = 0
@@ -361,6 +360,10 @@ func GetArrayAt[T types.RealNumbers](v *Vector, i int) []T {
 	return types.GetArray[T](&bs[i], v.area)
 }
 
+// GetArrayAt2 Returns []T at the specific index of the vector.
+// it is the same as GetArrayAt, but it takes a slice of Varlena as input to
+// avoid converting the slice.
+// !!!NOTE!!! input bs must be the same as the slice from the vector.
 func GetArrayAt2[T types.RealNumbers](v *Vector, bs []types.Varlena, i int) []T {
 	if v.IsConst() {
 		i = 0

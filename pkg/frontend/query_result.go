@@ -651,6 +651,11 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 			//step2.1: converts it into the csv string
 			//step2.2: writes the csv string into the outfile
 			n := tmpBatch.RowCount()
+			colSlices := make([]any, len(bat.Vecs))
+			err = convertBatchToSlices(ctx, ses, bat, colSlices)
+			if err != nil {
+				return err
+			}
 			for j := 0; j < n; j++ { //row index
 				select {
 				case <-ctx.Done():
@@ -662,7 +667,7 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 					break
 				}
 
-				err = extractRowFromEveryVector(ctx, ses, tmpBatch, j, mrs.Data[0], false)
+				err = extractRowFromEveryVector(ctx, ses, tmpBatch, j, mrs.Data[0], false, colSlices)
 				if err != nil {
 					return err
 				}
