@@ -135,7 +135,11 @@ func (c *CkpReplayer) ReadCkpFiles() (err error) {
 		var checkpointVersion int
 		// in version 1, checkpoint metadata doesn't contain 'version'.
 		vecLen := len(bats[0].Vecs)
-		logutil.Infof("checkpoint version: %d, list and load duration: %v", vecLen, time.Since(t0))
+		logutil.Info(
+			"Replay-Checkpoint",
+			zap.Int("col-cnt", vecLen),
+			zap.Duration("load-cost", time.Since(t0)),
+		)
 		if vecLen < CheckpointSchemaColumnCountV1 {
 			checkpointVersion = 1
 		} else if vecLen < CheckpointSchemaColumnCountV2 {
@@ -271,7 +275,7 @@ func (c *CkpReplayer) ReadCkpFiles() (err error) {
 }
 
 // ReplayThreeTablesObjectlist replays the object list the three tables, and check the LSN and TS.
-func (c *CkpReplayer) ReplayThreeTablesObjectlist() (
+func (c *CkpReplayer) ReplayThreeTablesObjectlist(phase string) (
 	maxTs types.TS,
 	maxLSN uint64,
 	isLSNValid bool,
@@ -295,9 +299,24 @@ func (c *CkpReplayer) ReplayThreeTablesObjectlist() (
 	dataFactory := c.dataF
 	maxGlobal := r.MaxGlobalCheckpoint()
 	if maxGlobal != nil {
+<<<<<<< HEAD
 		logutil.Infof("replay checkpoint %v", maxGlobal)
 		err = datas[c.globalCkpIdx].ApplyReplayTo(c, r.catalog, dataFactory, true)
+=======
+		err = datas[c.globalCkpIdx].ApplyReplayTo(r.catalog, dataFactory, true)
+>>>>>>> main
 		c.applyCount++
+		logger := logutil.Info
+		if err != nil {
+			logger = logutil.Error
+		}
+		logger(
+			"Replay-3-Table-From-Global",
+			zap.String("phase", phase),
+			zap.String("checkpoint", maxGlobal.String()),
+			zap.Duration("cost", time.Since(t0)),
+			zap.Error(err),
+		)
 		if err != nil {
 			return
 		}
@@ -321,6 +340,7 @@ func (c *CkpReplayer) ReplayThreeTablesObjectlist() (
 					e.String())
 		}
 	}
+	logger := logutil.Info
 	for i := 0; i < len(entries); i++ {
 		checkpointEntry := entries[i]
 		if checkpointEntry == nil {
@@ -329,8 +349,17 @@ func (c *CkpReplayer) ReplayThreeTablesObjectlist() (
 		if checkpointEntry.end.LE(&maxTs) {
 			continue
 		}
-		logutil.Infof("replay checkpoint %v", checkpointEntry)
-		err = datas[i].ApplyReplayTo(c, r.catalog, dataFactory, true)
+		start := time.Now()
+		if err = datas[i].ApplyReplayTo(c, r.catalog, dataFactory, true); err != nil {
+			logger = logutil.Error
+		}
+		logger(
+			"Replay-3-Table-From-Incremental",
+			zap.String("phase", phase),
+			zap.String("checkpoint", checkpointEntry.String()),
+			zap.Duration("cost", time.Since(start)),
+			zap.Error(err),
+		)
 		c.applyCount++
 		if err != nil {
 			return
@@ -356,7 +385,10 @@ func (c *CkpReplayer) ReplayThreeTablesObjectlist() (
 	return
 }
 
-func (c *CkpReplayer) ReplayCatalog(readTxn txnif.AsyncTxn) (err error) {
+func (c *CkpReplayer) ReplayCatalog(
+	readTxn txnif.AsyncTxn,
+	phase string,
+) (err error) {
 	start := time.Now()
 
 	defer func() {
@@ -365,8 +397,8 @@ func (c *CkpReplayer) ReplayCatalog(readTxn txnif.AsyncTxn) (err error) {
 			logger = logutil.Error
 		}
 		logger(
-			"open-tae",
-			zap.String("replay", "checkpoint-catalog"),
+			"Replay-Catalog",
+			zap.String("phase", phase),
 			zap.Duration("cost", time.Since(start)),
 			zap.Error(err),
 		)
@@ -393,7 +425,7 @@ func (c *CkpReplayer) ReplayCatalog(readTxn txnif.AsyncTxn) (err error) {
 }
 
 // ReplayObjectlist replays the data part of the checkpoint.
-func (c *CkpReplayer) ReplayObjectlist() (err error) {
+func (c *CkpReplayer) ReplayObjectlist(phase string) (err error) {
 	if len(c.ckpEntries) == 0 {
 		return
 	}
@@ -448,10 +480,15 @@ func (c *CkpReplayer) ReplayObjectlist() (err error) {
 		}
 	}
 	logutil.Info(
+<<<<<<< HEAD
 		"open-tae",
 		zap.String("replay", "checkpoint-objectlist"),
 		zap.Uint64("max table tid", maxTableID),
 		zap.Int("object count (create count + delete count)", maxObjectCount),
+=======
+		"Replay-Checkpoints",
+		zap.String("phase", phase),
+>>>>>>> main
 		zap.Duration("apply-cost", c.applyDuration),
 		zap.Duration("read-cost", c.readDuration),
 		zap.Int("apply-count", c.applyCount),

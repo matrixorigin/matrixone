@@ -1378,6 +1378,11 @@ func LoadCheckpointLocations(
 	version uint32,
 	fs fileservice.FileService,
 ) (map[string]objectio.Location, error) {
+	select {
+	case <-ctx.Done():
+		return nil, context.Cause(ctx)
+	default:
+	}
 	var err error
 	data := NewCheckpointData(sid, common.CheckpointAllocator)
 	defer data.Close()

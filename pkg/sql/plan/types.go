@@ -83,6 +83,8 @@ type CompilerContext interface {
 	DatabaseExists(name string, snapshot *Snapshot) bool
 	// get table definition by database/schema
 	Resolve(schemaName string, tableName string, snapshot *Snapshot) (*ObjectRef, *TableDef)
+	// get index table definition by an ObjectRef, will skip unnecessary subscription check
+	ResolveIndexTableByRef(ref *ObjectRef, tblName string, snapshot *Snapshot) (*ObjectRef, *TableDef)
 	// get table definition by table id
 	ResolveById(tableId uint64, snapshot *Snapshot) (*ObjectRef, *TableDef)
 	// get the value of variable
@@ -181,6 +183,7 @@ type QueryBuilder struct {
 	haveOnDuplicateKey    bool // if it's a plan contain onduplicate key node, we can not use some optmize rule
 	isForUpdate           bool // if it's a query plan for update
 	isRestore             bool
+	isRestoreByTs         bool
 	isSkipResolveTableDef bool
 	skipStats             bool
 
