@@ -49,7 +49,7 @@ func MergeCheckpoint(
 	ckpEntries []*checkpoint.CheckpointEntry,
 	bf *bloomfilter.BloomFilter,
 	end *types.TS,
-	client checkpoint.RunnerReader,
+	client checkpoint.Runner,
 	pool *mpool.MPool,
 ) (deleteFiles, newFiles []string, checkpointEntry *checkpoint.CheckpointEntry, ckpData *logtail.CheckpointData, err error) {
 	ckpData = logtail.NewCheckpointData(sid, pool)
