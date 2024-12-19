@@ -384,7 +384,7 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 			return
 		}
 
-		if err = restorePubsWithSnapshotName(ctx, ses.GetService(), bh, snapshotName); err != nil {
+		if err = restorePubsWithSnapshotName(ctx, ses.GetService(), bh, snapshotName, snapshot.ts); err != nil {
 			return
 		}
 
@@ -393,6 +393,7 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 				return
 			}
 		}
+		getLogger(ses.GetService()).Info(fmt.Sprintf("[%s]restore cluster success", snapshotName))
 		return
 	}
 
@@ -2304,11 +2305,12 @@ func restorePubsWithSnapshotName(
 	sid string,
 	bh BackgroundExec,
 	snapshotName string,
+	restoreTs int64,
 ) (err error) {
-	getLogger(sid).Info(fmt.Sprintf("[%s] start to restorePub with snapshot", snapshotName))
+	getLogger(sid).Info(fmt.Sprintf("[%s] start to restorePub, restore timestamp %d", snapshotName, restoreTs))
 
 	var pubInfos []*pubsub.PubInfo
-	if pubInfos, err = getAllPubInfosBySnapshotName(ctx, bh, snapshotName); err != nil {
+	if pubInfos, err = getAllPubInfosBySnapshotName(ctx, bh, snapshotName, restoreTs); err != nil {
 		return
 	}
 

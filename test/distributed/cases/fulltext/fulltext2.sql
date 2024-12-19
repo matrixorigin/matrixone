@@ -289,7 +289,7 @@ create table t1(
     col12 bool
 );
 create fulltext index f06 on t1(col9);
-load data infile {'filepath'='$resources/load_data/jsonline_object.jl','format'='jsonline','jsondata'='object'} into table t1;
+load data infile {'filepath'='$resources/load_data/jsonline_object01.jl','format'='jsonline','jsondata'='object'} into table t1;
 select * from t1;
 -- @bvt:issue#20613
 show create table t1;
