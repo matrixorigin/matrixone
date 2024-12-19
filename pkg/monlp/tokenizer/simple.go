@@ -144,7 +144,7 @@ func (t *SimpleTokenizer) outputLatin(pos int, yield func(Token) bool) {
 		if t.input[t.begin+MAX_TOKEN_SIZE-1] <= 127 {
 			bs = t.input[t.begin : t.begin+MAX_TOKEN_SIZE]
 		} else {
-			bs = t.input[t.begin : pos+MAX_TOKEN_SIZE-1]
+			bs = t.input[t.begin : t.begin+MAX_TOKEN_SIZE-1]
 		}
 	}
 
