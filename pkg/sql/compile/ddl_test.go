@@ -370,6 +370,76 @@ func TestScope_CreateTable(t *testing.T) {
 		c := NewCompile("test", "test", sql, "", "", eng, proc, nil, false, nil, time.Now())
 		assert.Error(t, s.CreateTable(c))
 	})
+
+	convey.Convey("create table FaultTolerance10", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		proc := testutil.NewProcess()
+		proc.Base.SessionInfo.Buf = buffer.New()
+
+		ctx := context.Background()
+		proc.Ctx = context.Background()
+		txnCli, txnOp := newTestTxnClientAndOp(ctrl)
+		proc.Base.TxnClient = txnCli
+		proc.Base.TxnOperator = txnOp
+		proc.ReplaceTopCtx(ctx)
+
+		relation := mock_frontend.NewMockRelation(ctrl)
+		relation.EXPECT().GetTableID(gomock.Any()).Return(uint64(1)).AnyTimes()
+
+		mockDbMeta := mock_frontend.NewMockDatabase(ctrl)
+		mockDbMeta.EXPECT().Relation(gomock.Any(), catalog.MO_DATABASE, gomock.Any()).Return(relation, nil).AnyTimes()
+		mockDbMeta.EXPECT().RelationExists(gomock.Any(), gomock.Any(), gomock.Any()).Return(false, nil).AnyTimes()
+		mockDbMeta.EXPECT().Create(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, tblName string, _ []engine.TableDef) error {
+			if tblName == "dept" {
+				return nil
+			} else if tblName == "%!%p0%!%dept" || tblName == "%!%p1%!%dept" {
+				return nil
+			} else if tblName == "__mo_index_secondary_0193d918-3e7b-7506-9f70-64fbcf055c19" {
+				return nil
+			}
+			return nil
+		}).AnyTimes()
+
+		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(mockDbMeta, nil).AnyTimes()
+
+		planDef2ExecDef := gostub.Stub(&planDefsToExeDefs, func(tbl *plan.TableDef) ([]engine.TableDef, error) {
+			if tbl.Name == "dept" {
+				return nil, nil
+			} else if tbl.Name == "%!%p0%!%dept" || tbl.Name == "%!%p1%!%dept" {
+				return nil, nil
+			} else if tbl.Name == "__mo_index_secondary_0193d918-3e7b-7506-9f70-64fbcf055c19" {
+				return nil, nil
+			}
+			return nil, nil
+		})
+		defer planDef2ExecDef.Reset()
+
+		lockMoDb := gostub.Stub(&lockMoDatabase, func(_ *Compile, _ string, _ lock.LockMode) error {
+			return nil
+		})
+		defer lockMoDb.Reset()
+
+		lockMoTbl := gostub.Stub(&lockMoTable, func(_ *Compile, _ string, _ string, _ lock.LockMode) error {
+			return nil
+		})
+		defer lockMoTbl.Reset()
+
+		checkIndexInit := gostub.Stub(&checkIndexInitializable, func(_ string, _ string) bool {
+			return false
+		})
+		defer checkIndexInit.Reset()
+
+		createAutoIncrement := gostub.Stub(&maybeCreateAutoIncrement, func(_ context.Context, _ string, _ engine.Database, _ *plan.TableDef, _ client.TxnOperator, _ func() string) error {
+			return moerr.NewInternalErrorNoCtx("test err")
+		})
+		defer createAutoIncrement.Reset()
+
+		c := NewCompile("test", "test", sql, "", "", eng, proc, nil, false, nil, time.Now())
+		assert.Error(t, s.CreateTable(c))
+	})
 }
 
 func TestScope_CreateTable2(t *testing.T) {
