@@ -160,3 +160,31 @@ func TestDbNameOfObjRef(t *testing.T) {
 		})
 	}
 }
+
+func TestDoResolveTimeStamp(t *testing.T) {
+	tests := []struct {
+		timeStamp string
+		expected  int64
+		expectErr bool
+	}{
+		{"2023-10-01 12:00:00", 1696156800000000000, false},
+		{"invalid-timestamp", 0, true},
+		{"2023-10-01 25:00:00", 0, true}, // Invalid hour
+	}
+
+	for _, test := range tests {
+		result, err := doResolveTimeStamp(test.timeStamp)
+		if test.expectErr {
+			if err == nil {
+				t.Errorf("expected an error for timestamp %s, got none", test.timeStamp)
+			}
+		} else {
+			if err != nil {
+				t.Errorf("did not expect an error for timestamp %s, got %v", test.timeStamp, err)
+			}
+			if result != test.expected {
+				t.Errorf("for timestamp %s, expected %d, got %d", test.timeStamp, test.expected, result)
+			}
+		}
+	}
+}
