@@ -44,6 +44,15 @@ func TestUnsafeToBytes(t *testing.T) {
 	assert.Equal(t, 64*8, len(bs))
 }
 
+func TestUnsafeToBytesWithLength(t *testing.T) {
+	b := [10]byte{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}
+	bs := UnsafeToBytesWithLength(&b[4], 4)
+	assert.Equal(t, 4, len(bs))
+	for i := 4; i < 8; i++ {
+		assert.Equal(t, bs[i-4], byte(i))
+	}
+}
+
 func TestUnsafeSliceCast(t *testing.T) {
 	s := UnsafeSliceCast[int]([]int64{1, 2})
 	assert.Equal(t, []int{1, 2}, s)
