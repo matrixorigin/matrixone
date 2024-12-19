@@ -650,7 +650,14 @@ func (a *AwsSDKv2) getObject(ctx context.Context, min *int64, max *int64, params
 			if err != nil {
 				return nil, err
 			}
-			return output.Body, nil
+			return &readCloser{
+				r: output.Body,
+				closeFunc: func() error {
+					// drain
+					io.Copy(io.Discard, output.Body)
+					return output.Body.Close()
+				},
+			}, nil
 		},
 		*min,
 		IsRetryableError,
