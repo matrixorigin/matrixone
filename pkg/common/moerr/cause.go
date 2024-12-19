@@ -249,6 +249,7 @@ var (
 	//pkg/vm/engine/tae/db/merge
 	CauseCleanUpUselessFiles = NewInternalError(context.Background(), "CleanUpUselessFiles")
 	CauseOnObject            = NewInternalError(context.Background(), "OnObject")
+	CauseCreateCNMerge       = NewInternalError(context.Background(), "CreateCNMergeTask")
 	//pkg/vm/engine/tae/logstore/driver/logservicedriver
 	CauseDriverAppender1        = NewInternalError(context.Background(), "DriverAppender append 1")
 	CauseDriverAppender2        = NewInternalError(context.Background(), "DriverAppender append 2")

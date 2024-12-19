@@ -41,6 +41,8 @@ import (
 
 const (
 	IndexScaleZero        = 0
+	IndexScaleOne         = 1
+	IndexScaleTiny        = 10
 	MuchGreaterThanFactor = 100
 )
 
@@ -940,4 +942,24 @@ func (p *PartitionState) ScanRows(
 	}
 
 	return
+}
+
+func (p *PartitionState) CheckRowIdDeletedInMem(ts types.TS, rowId types.Rowid) bool {
+	iter := p.rows.Copy().Iter()
+	defer iter.Release()
+
+	if !iter.Seek(RowEntry{
+		Time:    ts,
+		BlockID: rowId.CloneBlockID(),
+		RowID:   rowId,
+	}) {
+		return false
+	}
+
+	item := iter.Item()
+	if !item.Deleted {
+		return false
+	}
+
+	return item.RowID.EQ(&rowId)
 }

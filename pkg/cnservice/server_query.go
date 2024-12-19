@@ -16,6 +16,7 @@ package cnservice
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"runtime/debug"
 	"strings"
 
@@ -95,8 +96,9 @@ func (s *service) initQueryCommandHandler() {
 	s.queryService.AddHandleFunc(query.CmdMethod_FileServiceCache, s.handleFileServiceCacheRequest, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_FileServiceCacheEvict, s.handleFileServiceCacheEvictRequest, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_MetadataCache, s.handleMetadataCacheRequest, false)
-	s.queryService.AddHandleFunc(query.CmdMethod_FaultInjection, s.handleFaultInjection, false)
+	s.queryService.AddHandleFunc(query.CmdMethod_FaultInject, s.handleFaultInjection, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_CtlMoTableStats, s.handleMoTableStats, false)
+	s.queryService.AddHandleFunc(query.CmdMethod_WorkspaceThreshold, s.handleWorkspaceThresholdRequest, false)
 }
 
 func (s *service) handleKillConn(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
@@ -148,17 +150,16 @@ func (s *service) handleTraceSpan(ctx context.Context, req *query.Request, resp 
 }
 
 func (s *service) handleFaultInjection(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
-	resp.TraceSpanResponse = new(query.TraceSpanResponse)
-	resp.FaultInjectionResponse.Resp = ctl.HandleCnFaultInjection(
-		ctx, req.FaultInjectionRequest.Name,
-		req.FaultInjectionRequest.Freq, req.FaultInjectionRequest.Action,
-		req.FaultInjectionRequest.Iarg, req.FaultInjectionRequest.Sarg,
+	resp.FaultInjectResponse = new(query.FaultInjectResponse)
+	resp.FaultInjectResponse.Resp = fault.HandleFaultInject(
+		ctx, req.FaultInjectRequest.Method, req.FaultInjectRequest.Parameters,
 	)
 	return nil
 }
 
 func (s *service) handleMoTableStats(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
-	ret := disttae.HandleMoTableStatsCtl(req.CtlMoTableStatsRequest.Cmd)
+	e := s.storeEngine.(*disttae.Engine)
+	ret := e.HandleMoTableStatsCtl(req.CtlMoTableStatsRequest.Cmd)
 	resp.CtlMoTableStatsResponse = query.CtlMoTableStatsResponse{
 		Resp: ret,
 	}
@@ -627,6 +628,30 @@ func (s *service) handleMetadataCacheRequest(
 	target := objectio.EvictCache(ctx)
 	// response
 	resp.MetadataCacheResponse.CacheCapacity = target
+
+	return nil
+}
+
+func (s *service) handleWorkspaceThresholdRequest(
+	ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer,
+) error {
+
+	logutil.Info(
+		"WORKSPACE-THRESHOLD-CHANGED",
+		zap.Uint64("commit-threshold", req.WorkspaceThresholdRequest.CommitThreshold),
+		zap.Uint64("write-threshold", req.WorkspaceThresholdRequest.WriteThreshold),
+	)
+
+	e := s.storeEngine.(*disttae.Engine)
+	commit, write := e.SetWorkspaceThreshold(
+		req.WorkspaceThresholdRequest.CommitThreshold,
+		req.WorkspaceThresholdRequest.WriteThreshold,
+	)
+
+	resp.WorkspaceThresholdResponse = &query.WorkspaceThresholdResponse{
+		CommitThreshold: commit,
+		WriteThreshold:  write,
+	}
 
 	return nil
 }

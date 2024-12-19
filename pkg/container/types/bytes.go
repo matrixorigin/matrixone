@@ -30,10 +30,10 @@ const (
 	MaxBinaryLen      = 255
 	MaxEnumLen        = 65535
 	MaxBitLen         = 64
-	MaxBlobLen        = 65535
-	MaxVarcharLen     = MaxBlobLen
-	MaxVarBinaryLen   = MaxBlobLen
-	MaxStringSize     = MaxBlobLen
+	MaxBlobLen        = 67108864 // 64 MB
+	MaxStringSize     = 65535    // 64 KB
+	MaxVarcharLen     = MaxStringSize
+	MaxVarBinaryLen   = MaxStringSize
 )
 
 func (v *Varlena) UnsafePtr() unsafe.Pointer {
