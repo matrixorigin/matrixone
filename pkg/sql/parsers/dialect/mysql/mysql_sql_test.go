@@ -2560,6 +2560,14 @@ var (
 			output: "alter publication pub1 account acc0 database db1 table t1, t2",
 		},
 		{
+			input:  "select * from t1 {as of timestamp '2019-01-01 00:00:00'}",
+			output: "select * from t1{as of timestamp = 2019-01-01 00:00:00}",
+		},
+		{
+			input:  "create table t1 as select * from t2 {as of timestamp '2019-01-01 00:00:00'}",
+			output: "create table t1 as select * from t2{as of timestamp = 2019-01-01 00:00:00}",
+		},
+		{
 			input: "restore cluster from snapshot snapshot_01",
 		},
 		{
