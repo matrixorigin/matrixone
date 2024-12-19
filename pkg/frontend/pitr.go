@@ -2393,7 +2393,7 @@ func updatePitrObjectId(ctx context.Context,
 	return
 }
 
-func getPitrLengthAndUnit(
+var getPitrLengthAndUnit = func(
 	ctx context.Context,
 	bh BackgroundExec,
 	level string,

@@ -2828,3 +2828,38 @@ func TestCdcTask_addExecPipelineForTable(t *testing.T) {
 
 	assert.NoError(t, cdc.addExecPipelineForTable(context.Background(), info, txnOperator))
 }
+
+func TestCdcTask_checkPitr(t *testing.T) {
+	stubGetPitrLength := gostub.Stub(&getPitrLengthAndUnit,
+		func(_ context.Context, _ BackgroundExec, level, _, _, _ string) (int64, string, bool, error) {
+			return 0, "", level == "table", nil
+		},
+	)
+	defer stubGetPitrLength.Reset()
+
+	pts := &cdc2.PatternTuples{
+		Pts: []*cdc2.PatternTuple{
+			{
+				Source: cdc2.PatternTable{
+					Database: "db1",
+					Table:    "tb1",
+				},
+			},
+			{
+				Source: cdc2.PatternTable{
+					Database: "db2",
+					Table:    cdc2.MatchAll,
+				},
+			},
+			{
+				Source: cdc2.PatternTable{
+					Database: cdc2.MatchAll,
+					Table:    cdc2.MatchAll,
+				},
+			},
+		},
+	}
+
+	err := checkPitr(context.Background(), nil, "acc1", pts)
+	assert.Error(t, err)
+}
