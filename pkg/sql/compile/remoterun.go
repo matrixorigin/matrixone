@@ -839,7 +839,6 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			AffectedRows:  t.GetAffectedRows(),
 			Action:        uint32(t.Action),
 			UpdateCtxList: updateCtxList,
-			SegmentMap:    t.SegmentMap,
 		}
 	case *postdml.PostDml:
 		in.PostDml = &pipeline.PostDml{
@@ -1341,7 +1340,6 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		t := opr.GetMultiUpdate()
 		arg.SetAffectedRows(t.AffectedRows)
 		arg.Action = multi_update.UpdateAction(t.Action)
-		arg.SegmentMap = t.SegmentMap
 
 		arg.MultiUpdateCtx = make([]*multi_update.MultiUpdateCtx, len(t.UpdateCtxList))
 		for i, muCtx := range t.UpdateCtxList {
