@@ -237,7 +237,9 @@ func TestScope_AlterTableInplace(t *testing.T) {
 		eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(mockDb, nil).AnyTimes()
 
 		getConstraintDef := gostub.Stub(&GetConstraintDef, func(_ context.Context, _ engine.Relation) (*engine.ConstraintDef, error) {
-			return nil, nil
+			cstrDef := &engine.ConstraintDef{}
+			cstrDef.Cts = make([]engine.Constraint, 0)
+			return cstrDef, nil
 		})
 		defer getConstraintDef.Reset()
 
@@ -275,7 +277,9 @@ func TestScope_AlterTableInplace(t *testing.T) {
 		eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(mockDb, nil).AnyTimes()
 
 		getConstraintDef := gostub.Stub(&GetConstraintDef, func(_ context.Context, _ engine.Relation) (*engine.ConstraintDef, error) {
-			return nil, nil
+			cstrDef := &engine.ConstraintDef{}
+			cstrDef.Cts = make([]engine.Constraint, 0)
+			return cstrDef, nil
 		})
 		defer getConstraintDef.Reset()
 
@@ -328,7 +332,9 @@ func TestScope_AlterTableInplace(t *testing.T) {
 		eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(mockDb, nil).AnyTimes()
 
 		getConstraintDef := gostub.Stub(&GetConstraintDef, func(_ context.Context, _ engine.Relation) (*engine.ConstraintDef, error) {
-			return nil, nil
+			cstrDef := &engine.ConstraintDef{}
+			cstrDef.Cts = make([]engine.Constraint, 0)
+			return cstrDef, nil
 		})
 		defer getConstraintDef.Reset()
 
@@ -381,7 +387,9 @@ func TestScope_AlterTableInplace(t *testing.T) {
 		eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(mockDb, nil).AnyTimes()
 
 		getConstraintDef := gostub.Stub(&GetConstraintDef, func(_ context.Context, _ engine.Relation) (*engine.ConstraintDef, error) {
-			return nil, nil
+			cstrDef := &engine.ConstraintDef{}
+			cstrDef.Cts = make([]engine.Constraint, 0)
+			return cstrDef, nil
 		})
 		defer getConstraintDef.Reset()
 

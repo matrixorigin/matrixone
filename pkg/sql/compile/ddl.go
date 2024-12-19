@@ -470,7 +470,6 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 			}
 		}
 
-
 		// 3. lock foreign key's table
 		for _, action := range qry.Actions {
 			switch act := action.Action.(type) {
