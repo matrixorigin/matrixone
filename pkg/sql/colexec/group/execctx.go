@@ -208,6 +208,11 @@ func (buf *GroupResultBuffer) AppendBatch(
 	}
 	if buf.ToPopped[len(buf.ToPopped)-1] == nil {
 		buf.ToPopped[len(buf.ToPopped)-1] = getInitialBatchWithSameTypeVecs(vs)
+		if len(buf.ToPopped) > 4 {
+			if err = buf.ToPopped[len(buf.ToPopped)-1].PreExtend(mp, buf.ChunkSize); err != nil {
+				return toIncrease, err
+			}
+		}
 	}
 	_, err = buf.AppendBatch(mp, vs, offset+k+1, insertList[k+1:])
 
