@@ -452,7 +452,7 @@ func foreachAobjBefore(_ context.Context,
 		if item.IsCEntry() && item.CreatedAt.LT(&lastCkp) {
 			break
 		}
-		if item.IsAppendable() && item.IsCEntry() && !item.HasDCounterpart() {
+		if item.IsAppendable() && item.IsCEntry() && !item.HasDCounterpart() && item.CreatedAt.LE(&ts) {
 			df(item)
 		}
 	}
@@ -466,7 +466,7 @@ func foreachAobjBefore(_ context.Context,
 		if item.IsCEntry() && item.CreatedAt.LT(&lastCkp) {
 			break
 		}
-		if item.IsAppendable() && item.IsCEntry() && !item.HasDCounterpart() {
+		if item.IsAppendable() && item.IsCEntry() && !item.HasDCounterpart() && item.CreatedAt.LE(&ts) {
 			tf(item)
 		}
 	}

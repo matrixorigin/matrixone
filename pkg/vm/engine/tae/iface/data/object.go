@@ -48,6 +48,7 @@ type ObjectAppender interface {
 	ReplayAppend(bat *containers.Batch,
 		txn txnif.AsyncTxn) (int, error)
 	Close()
+	PPString() string
 }
 
 type ObjectReplayer interface {
