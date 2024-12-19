@@ -58,7 +58,7 @@ func testDatabase(
 		},
 	}
 	defer func() {
-		_, err := s.Commit(ctx, txnMeta)
+		_, err := s.Commit(ctx, txnMeta, nil, nil)
 		assert.Nil(t, err)
 	}()
 

@@ -27,6 +27,8 @@ type Handler interface {
 	HandleCommit(
 		ctx context.Context,
 		meta txn.TxnMeta,
+		response *txn.TxnResponse,
+		commitRequests *txn.TxnCommitRequest,
 	) (timestamp.Timestamp, error)
 
 	HandleRollback(

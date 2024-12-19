@@ -59,12 +59,17 @@ func (d *DynamicStorage) Close(ctx context.Context) error {
 	return storage.Close(ctx)
 }
 
-func (d *DynamicStorage) Commit(ctx context.Context, txnMeta txn.TxnMeta) (timestamp.Timestamp, error) {
+func (d *DynamicStorage) Commit(
+	ctx context.Context,
+	txnMeta txn.TxnMeta,
+	response *txn.TxnResponse,
+	commitRequests *txn.TxnCommitRequest,
+) (timestamp.Timestamp, error) {
 	storage, err := d.get(ctx)
 	if err != nil {
 		return timestamp.Timestamp{}, err
 	}
-	return storage.Commit(ctx, txnMeta)
+	return storage.Commit(ctx, txnMeta, response, commitRequests)
 }
 
 func (d *DynamicStorage) Committing(ctx context.Context, txnMeta txn.TxnMeta) error {
