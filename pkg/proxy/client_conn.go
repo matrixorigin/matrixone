@@ -107,7 +107,8 @@ type ClientConn interface {
 }
 
 type migration struct {
-	setVarStmts []string
+	setVarStmtMap map[string]struct{}
+	setVarStmts   []string
 }
 
 // clientConn is the connection between proxy and client.
@@ -231,6 +232,7 @@ func newClientConn(
 		}
 		c.tlsConfig = tlsConfig
 	}
+	c.migration.setVarStmtMap = make(map[string]struct{})
 	return c, nil
 }
 
@@ -408,6 +410,17 @@ func (c *clientConn) handleKill(e *killEvent, resp chan<- []byte) error {
 // handleSetVar handles the set variable event.
 func (c *clientConn) handleSetVar(e *setVarEvent) error {
 	defer e.notify()
+	_, ok := c.migration.setVarStmtMap[e.stmt]
+	if ok {
+		for i := 0; i < len(c.migration.setVarStmts); i++ {
+			if c.migration.setVarStmts[i] == e.stmt {
+				c.migration.setVarStmts = append(c.migration.setVarStmts[:i], c.migration.setVarStmts[i+1:]...)
+				i--
+			}
+		}
+	} else {
+		c.migration.setVarStmtMap[e.stmt] = struct{}{}
+	}
 	c.migration.setVarStmts = append(c.migration.setVarStmts, e.stmt)
 	return nil
 }
