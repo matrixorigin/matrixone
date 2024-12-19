@@ -506,9 +506,11 @@ func (catalog *Catalog) onReplayCheckpointObject(
 				entryNode.DeletedAt.ToString(), txnNode.End.ToString())
 		} else {
 			if !entryNode.DeletedAt.IsEmpty() {
-				panic(fmt.Sprintf("logic error: obj %v, tbl %v-%d create %v, delete %v, end %v",
+				logutil.Warnf("obj %v, tbl %v-%d create %v, delete %v, end %v",
 					objid.String(), rel.fullName, rel.ID, entryNode.CreatedAt.ToString(),
-					entryNode.DeletedAt.ToString(), txnNode.End.ToString()))
+					entryNode.DeletedAt.ToString(), txnNode.End.ToString())
+				obj.CreateNode = *txnbase.NewTxnMVCCNodeWithTS(obj.CreatedAt)
+				obj.DeleteNode = *txnbase.NewTxnMVCCNodeWithTS(obj.DeleteAt)
 			}
 		}
 	}
