@@ -384,7 +384,7 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 			return
 		}
 
-		if err = restorePubsWithSnapshotName(ctx, ses.GetService(), bh, snapshotName); err != nil {
+		if err = restorePubsWithSnapshotName(ctx, ses.GetService(), bh, snapshotName, snapshot.ts); err != nil {
 			return
 		}
 
@@ -393,6 +393,7 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 				return
 			}
 		}
+		getLogger(ses.GetService()).Info(fmt.Sprintf("[%s]restore cluster success", snapshotName))
 		return
 	}
 
@@ -1705,7 +1706,7 @@ func restoreToCluster(ctx context.Context,
 			return err
 		}
 		if newAccountId != uint32(account.accountId) {
-			if err = restoreAccountUsingClusterSnapshotToNew(ctx, ses, bh, snapshotName, snapshotTs, account, subDbToRestore, uint64(newAccountId), true, true); err != nil {
+			if err = restoreAccountUsingClusterSnapshotToNew(ctx, ses, bh, snapshotName, snapshotTs, account, uint64(newAccountId), subDbToRestore, true, true); err != nil {
 				return err
 			}
 		} else {
@@ -1738,7 +1739,7 @@ func restoreToCluster(ctx context.Context,
 		}
 
 		// 2.0 restore droped account to new account
-		err = restoreAccountUsingClusterSnapshotToNew(ctx, ses, bh, snapshotName, snapshotTs, account, subDbToRestore, uint64(newAccountId), true, false)
+		err = restoreAccountUsingClusterSnapshotToNew(ctx, ses, bh, snapshotName, snapshotTs, account, uint64(newAccountId), subDbToRestore, true, false)
 		if err != nil {
 			return err
 		}
@@ -1793,7 +1794,7 @@ func restoreToAccountUsingCluster(
 		}
 	}
 
-	err = restoreAccountUsingClusterSnapshotToNew(ctx, ses, bh, snapshotName, snapshotTs, *ar, nil, uint64(toAccountId), false, isNeedToCleanToDatabase)
+	err = restoreAccountUsingClusterSnapshotToNew(ctx, ses, bh, snapshotName, snapshotTs, *ar, uint64(toAccountId), nil, false, isNeedToCleanToDatabase)
 	if err != nil {
 		return err
 	}
@@ -1965,8 +1966,8 @@ func restoreAccountUsingClusterSnapshotToNew(ctx context.Context,
 	snapshotName string,
 	snapshotTs int64,
 	account accountRecord,
-	subDbToRestore map[string]*subDbRestoreRecord,
 	toAccountId uint64,
+	subDbToRestore map[string]*subDbRestoreRecord,
 	isRestoreCluster bool,
 	isNeedToCleanToDatabase bool,
 ) (err error) {
@@ -1984,12 +1985,12 @@ func restoreAccountUsingClusterSnapshotToNew(ctx context.Context,
 	// get topo sorted tables with foreign key
 	var sortedFkTbls []string
 	var fkTableMap map[string]*tableInfo
-	sortedFkTbls, err = fkTablesTopoSortWithDropped(ctx, bh, "", "", snapshotTs, uint32(fromAccount), uint32(toAccountId))
+	sortedFkTbls, err = fkTablesTopoSortWithTS(ctx, bh, "", "", snapshotTs, uint32(fromAccount), uint32(toAccountId))
 	if err != nil {
 		return err
 	}
 	// get foreign key table infos
-	fkTableMap, err = getTableInfoMapFromDropped(ctx, ses.GetService(), bh, "", "", sortedFkTbls, snapshotTs, uint32(fromAccount), uint32(toAccountId))
+	fkTableMap, err = getTableInfoMapFromTS(ctx, ses.GetService(), bh, "", "", sortedFkTbls, snapshotTs, uint32(fromAccount), uint32(toAccountId))
 	if err != nil {
 		return err
 	}
@@ -1998,7 +1999,7 @@ func restoreAccountUsingClusterSnapshotToNew(ctx context.Context,
 	viewMap := make(map[string]*tableInfo)
 
 	// restore to account
-	if err = restoreToAccountFromDropped(
+	if err = restoreToAccountFromTS(
 		ctx,
 		ses.GetService(),
 		bh,
@@ -2013,7 +2014,7 @@ func restoreAccountUsingClusterSnapshotToNew(ctx context.Context,
 	}
 
 	if len(fkTableMap) > 0 {
-		if err = restoreTablesWithFkFromDropped(ctx,
+		if err = restoreTablesWithFkFromTS(ctx,
 			ses.GetService(),
 			bh,
 			snapshotTs,
@@ -2026,7 +2027,7 @@ func restoreAccountUsingClusterSnapshotToNew(ctx context.Context,
 	}
 
 	if len(viewMap) > 0 {
-		if err = restoreViewsFromDropped(
+		if err = restoreViewsFromTS(
 			ctx,
 			ses,
 			bh,
@@ -2304,11 +2305,12 @@ func restorePubsWithSnapshotName(
 	sid string,
 	bh BackgroundExec,
 	snapshotName string,
+	restoreTs int64,
 ) (err error) {
-	getLogger(sid).Info(fmt.Sprintf("[%s] start to restorePub with snapshot", snapshotName))
+	getLogger(sid).Info(fmt.Sprintf("[%s] start to restorePub, restore timestamp %d", snapshotName, restoreTs))
 
 	var pubInfos []*pubsub.PubInfo
-	if pubInfos, err = getAllPubInfosBySnapshotName(ctx, bh, snapshotName); err != nil {
+	if pubInfos, err = getAllPubInfosBySnapshotName(ctx, bh, snapshotName, restoreTs); err != nil {
 		return
 	}
 

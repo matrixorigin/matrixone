@@ -60,6 +60,11 @@ func NewCheckpointEntry(sid string, start, end types.TS, typ EntryType) *Checkpo
 	}
 }
 
+// e.start >= o.end
+func (e *CheckpointEntry) AllGE(o *CheckpointEntry) bool {
+	return e.start.GE(&o.end)
+}
+
 func (e *CheckpointEntry) SetVersion(version uint32) {
 	e.Lock()
 	defer e.Unlock()
@@ -111,8 +116,8 @@ func (e *CheckpointEntry) HasOverlap(from, to types.TS) bool {
 	}
 	return true
 }
-func (e *CheckpointEntry) LessEq(ts types.TS) bool {
-	return e.end.LE(&ts)
+func (e *CheckpointEntry) LessEq(ts *types.TS) bool {
+	return e.end.LE(ts)
 }
 func (e *CheckpointEntry) SetLocation(cn, tn objectio.Location) {
 	e.Lock()
