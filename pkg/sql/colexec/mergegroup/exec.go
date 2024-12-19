@@ -25,6 +25,8 @@ import (
 	"math"
 )
 
+var makeInitialAggListFromList = aggexec.MakeInitialAggListFromList
+
 func (mergeGroup *MergeGroup) String(buf *bytes.Buffer) {
 	buf.WriteString(thisOperatorName)
 }
@@ -122,9 +124,13 @@ func (mergeGroup *MergeGroup) consumeBatch(proc *process.Process, b *batch.Batch
 	if len(b.Vecs) == 0 {
 
 		if mergeGroup.ctr.result.IsEmpty() {
-			mergeGroup.ctr.result.InitOnlyAgg(math.MaxInt32, b.Aggs)
-			b.Aggs = nil
+			mergeGroup.ctr.result.InitOnlyAgg(math.MaxInt32, makeInitialAggListFromList(proc, b.Aggs))
 			mergeGroup.ctr.result.ToPopped[0].SetRowCount(1)
+			for i := range mergeGroup.ctr.result.AggList {
+				if err := mergeGroup.ctr.result.AggList[i].GroupGrow(1); err != nil {
+					return err
+				}
+			}
 		}
 
 		for i, input := range b.Aggs {
@@ -153,8 +159,7 @@ func (mergeGroup *MergeGroup) consumeBatch(proc *process.Process, b *batch.Batch
 	}
 
 	if mergeGroup.ctr.result.IsEmpty() {
-		mergeGroup.ctr.result.InitWithBatch(aggexec.SyncAggregatorsChunkSize(b.Vecs, b.Aggs, false), b.Aggs, b)
-		b.Aggs = nil
+		mergeGroup.ctr.result.InitWithBatch(aggexec.GetMinAggregatorsChunkSize(b.Vecs, b.Aggs), makeInitialAggListFromList(proc, b.Aggs), b)
 	}
 
 	for i, count := 0, b.RowCount(); i < count; i += hashmap.UnitLimit {

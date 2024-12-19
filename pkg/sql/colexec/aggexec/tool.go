@@ -93,23 +93,23 @@ func getChunkSizeOfAggregator(a AggFuncExec) int {
 	return math.MaxInt64
 }
 
-func SyncAggregatorsChunkSize(outer []*vector.Vector, as []AggFuncExec, doSync bool) (syncLimit int) {
-	m := math.MaxInt64
+func GetMinAggregatorsChunkSize(outer []*vector.Vector, as []AggFuncExec) (minLimit int) {
+	minLimit = math.MaxInt64
 	for _, o := range outer {
-		if s := GetChunkSizeFromType(*o.GetType()); s < m {
-			m = s
+		if s := GetChunkSizeFromType(*o.GetType()); s < minLimit {
+			minLimit = s
 		}
 	}
 	for _, a := range as {
-		if s := getChunkSizeOfAggregator(a); s < m {
-			m = s
+		if s := getChunkSizeOfAggregator(a); s < minLimit {
+			minLimit = s
 		}
 	}
+	return minLimit
+}
 
-	if doSync {
-		for i := range as {
-			modifyChunkSizeOfAggregator(as[i], m)
-		}
+func SyncAggregatorsToChunkSize(as []AggFuncExec, syncLimit int) {
+	for _, a := range as {
+		modifyChunkSizeOfAggregator(a, syncLimit)
 	}
-	return m
 }

@@ -17,14 +17,12 @@ package cdc
 import (
 	"context"
 	"regexp"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/stretchr/testify/assert"
@@ -32,35 +30,34 @@ import (
 )
 
 type wmMockSQLExecutor struct {
-	mp          map[string]string
-	insertRe    *regexp.Regexp
-	updateRe    *regexp.Regexp
-	selectRe    *regexp.Regexp
-	selectAllRe *regexp.Regexp
+	mp       map[string]string
+	insertRe *regexp.Regexp
+	updateRe *regexp.Regexp
+	selectRe *regexp.Regexp
 }
 
 func newWmMockSQLExecutor() *wmMockSQLExecutor {
 	return &wmMockSQLExecutor{
-		mp:          make(map[string]string),
-		insertRe:    regexp.MustCompile(`^insert .* values \(.*\, .*\, \'(.*)\'\, .*\, .*\, \'(.*)\'\, \'\'\)$`),
-		updateRe:    regexp.MustCompile(`^update .* set watermark\=\'(.*)\' where .* and table_id \= '(.*)'$`),
-		selectRe:    regexp.MustCompile(`^select .* and table_id \= '(.*)'$`),
-		selectAllRe: regexp.MustCompile(`^select .* where account_id \= (.*) and task_id .*`),
+		mp: make(map[string]string),
+		// matches[1] = db_name, matches[2] = table_name, matches[3] = watermark
+		insertRe: regexp.MustCompile(`^insert .* values \(.*\, .*\, \'(.*)\'\, \'(.*)\'\, \'(.*)\'\, \'\'\)$`),
+		updateRe: regexp.MustCompile(`^update .* set watermark\=\'(.*)\' where .* and db_name \= '(.*)' and table_name \= '(.*)'$`),
+		selectRe: regexp.MustCompile(`^select .* and db_name \= '(.*)' and table_name \= '(.*)'$`),
 	}
 }
 
 func (m *wmMockSQLExecutor) Exec(_ context.Context, sql string, _ ie.SessionOverrideOptions) error {
 	if strings.HasPrefix(sql, "insert") {
 		matches := m.insertRe.FindStringSubmatch(sql)
-		m.mp[matches[1]] = matches[2]
+		m.mp[GenDbTblKey(matches[1], matches[2])] = matches[3]
 	} else if strings.HasPrefix(sql, "update mo_catalog.mo_cdc_watermark set err_msg") {
 		// do nothing
 	} else if strings.HasPrefix(sql, "update") {
 		matches := m.updateRe.FindStringSubmatch(sql)
-		m.mp[matches[2]] = matches[1]
+		m.mp[GenDbTblKey(matches[2], matches[3])] = matches[1]
 	} else if strings.HasPrefix(sql, "delete") {
 		if strings.Contains(sql, "table_id") {
-			delete(m.mp, "1_0")
+			delete(m.mp, "db1.t1")
 		} else {
 			m.mp = make(map[string]string)
 		}
@@ -120,27 +117,7 @@ func (res *internalExecResult) GetString(ctx context.Context, i uint64, j uint64
 }
 
 func (m *wmMockSQLExecutor) Query(ctx context.Context, sql string, pts ie.SessionOverrideOptions) ie.InternalExecResult {
-	if strings.HasPrefix(sql, "select table_id") {
-		matches := m.selectAllRe.FindStringSubmatch(sql)
-		accountId, _ := strconv.Atoi(matches[1])
-		if accountId == 1 { // normal path
-			var data [][]interface{}
-			for k, v := range m.mp {
-				data = append(data, []interface{}{k, v})
-			}
-			return &internalExecResult{
-				affectedRows: 1,
-				resultSet: &MysqlResultSet{
-					Columns:    nil,
-					Name2Index: nil,
-					Data:       data,
-				},
-				err: nil,
-			}
-		} else { // error path
-			return &internalExecResult{err: moerr.NewInternalErrorNoCtx("error")}
-		}
-	} else if strings.HasPrefix(sql, "select") {
+	if strings.HasPrefix(sql, "select") {
 		matches := m.selectRe.FindStringSubmatch(sql)
 		return &internalExecResult{
 			affectedRows: 1,
@@ -148,13 +125,12 @@ func (m *wmMockSQLExecutor) Query(ctx context.Context, sql string, pts ie.Sessio
 				Columns:    nil,
 				Name2Index: nil,
 				Data: [][]interface{}{
-					{m.mp[matches[1]]},
+					{m.mp[GenDbTblKey(matches[1], matches[2])]},
 				},
 			},
 			err: nil,
 		}
 	}
-
 	return nil
 }
 
@@ -165,7 +141,7 @@ func TestNewWatermarkUpdater(t *testing.T) {
 	require.NoError(t, err)
 
 	type args struct {
-		accountId uint64
+		accountId uint32
 		taskId    string
 		ie        ie.InternalExecutor
 	}
@@ -205,12 +181,12 @@ func TestWatermarkUpdater_MemOps(t *testing.T) {
 	}
 
 	t1 := types.BuildTS(1, 1)
-	u.UpdateMem("1_0", t1)
-	actual := u.GetFromMem("1_0")
+	u.UpdateMem("db1", "t1", t1)
+	actual := u.GetFromMem("db1", "t1")
 	assert.Equal(t, t1, actual)
 
-	u.DeleteFromMem("1_0")
-	actual = u.GetFromMem("1_0")
+	u.DeleteFromMem("db1", "t1")
+	actual = u.GetFromMem("db1", "t1")
 	assert.Equal(t, types.TS{}, actual)
 }
 
@@ -222,69 +198,49 @@ func TestWatermarkUpdater_DbOps(t *testing.T) {
 		watermarkMap: &sync.Map{},
 	}
 
-	// ---------- init count is 0
-	mp, err := u.GetAllFromDb()
-	assert.NoError(t, err)
-	assert.Equal(t, 0, len(mp))
-
 	// ---------- insert into a record
 	t1 := types.BuildTS(1, 1)
 	info1 := &DbTableInfo{
-		SourceTblIdStr: "1_0",
-		SourceDbName:   "dbName",
-		SourceTblName:  "tblName",
+		SourceDbName:  "db1",
+		SourceTblName: "t1",
 	}
-	err = u.InsertIntoDb(info1, t1)
+	err := u.InsertIntoDb(info1, t1)
 	assert.NoError(t, err)
-	// count is 1
-	mp, err = u.GetAllFromDb()
-	assert.NoError(t, err)
-	assert.Equal(t, 1, len(mp))
 	// get value of tableId 1
-	actual, err := u.GetFromDb("1_0")
+	actual, err := u.GetFromDb("db1", "t1")
 	assert.NoError(t, err)
 	assert.Equal(t, t1, actual)
 
 	// ---------- update t1 -> t2
 	t2 := types.BuildTS(2, 1)
-	err = u.flush("1_0", t2)
+	err = u.flush("db1.t1", t2)
 	assert.NoError(t, err)
 	// value is t2
-	actual, err = u.GetFromDb("1_0")
+	actual, err = u.GetFromDb("db1", "t1")
 	assert.NoError(t, err)
 	assert.Equal(t, t2, actual)
 
+	// ---------- delete tableId 1
+	err = u.DeleteFromDb("db1", "t1")
+	assert.NoError(t, err)
+
 	// ---------- insert more records
 	info2 := &DbTableInfo{
-		SourceTblIdStr: "2_0",
-		SourceDbName:   "dbName",
-		SourceTblName:  "tblName",
+		SourceDbName:  "db2",
+		SourceTblName: "t2",
 	}
 	err = u.InsertIntoDb(info2, t1)
 	assert.NoError(t, err)
 	info3 := &DbTableInfo{
-		SourceTblIdStr: "3_0",
-		SourceDbName:   "dbName",
-		SourceTblName:  "tblName",
+		SourceDbName:  "db3",
+		SourceTblName: "t3",
 	}
 	err = u.InsertIntoDb(info3, t1)
 	assert.NoError(t, err)
 
-	// ---------- delete tableId 1
-	err = u.DeleteFromDb("1_0")
-	assert.NoError(t, err)
-	// count is 2
-	mp, err = u.GetAllFromDb()
-	assert.NoError(t, err)
-	assert.Equal(t, 2, len(mp))
-
 	// ---------- delete all
 	err = u.DeleteAllFromDb()
 	assert.NoError(t, err)
-	// count is 0
-	mp, err = u.GetAllFromDb()
-	assert.NoError(t, err)
-	assert.Equal(t, 0, len(mp))
 }
 
 func TestWatermarkUpdater_Run(t *testing.T) {
@@ -311,50 +267,37 @@ func TestWatermarkUpdater_flushAll(t *testing.T) {
 
 	t1 := types.BuildTS(1, 1)
 	info1 := &DbTableInfo{
-		SourceTblIdStr: "1_0",
-		SourceDbName:   "dbName",
-		SourceTblName:  "tblName",
+		SourceDbName:  "db1",
+		SourceTblName: "t1",
 	}
 	err := u.InsertIntoDb(info1, t1)
 	assert.NoError(t, err)
 	info2 := &DbTableInfo{
-		SourceTblIdStr: "1_0",
-		SourceDbName:   "dbName",
-		SourceTblName:  "tblName",
+		SourceDbName:  "db2",
+		SourceTblName: "t2",
 	}
 	err = u.InsertIntoDb(info2, t1)
 	assert.NoError(t, err)
 	info3 := &DbTableInfo{
-		SourceTblIdStr: "1_0",
-		SourceDbName:   "dbName",
-		SourceTblName:  "tblName",
+		SourceDbName:  "db3",
+		SourceTblName: "t3",
 	}
 	err = u.InsertIntoDb(info3, t1)
 	assert.NoError(t, err)
 
 	t2 := types.BuildTS(2, 1)
-	u.UpdateMem("1_0", t2)
-	u.UpdateMem("2_0", t2)
-	u.UpdateMem("3_0", t2)
+	u.UpdateMem("db1", "t1", t2)
+	u.UpdateMem("db2", "t2", t2)
+	u.UpdateMem("db3", "t3", t2)
 	u.flushAll()
 
-	actual, err := u.GetFromDb("1_0")
+	actual, err := u.GetFromDb("db1", "t1")
 	assert.NoError(t, err)
 	assert.Equal(t, t2, actual)
-	actual, err = u.GetFromDb("2_0")
+	actual, err = u.GetFromDb("db2", "t2")
 	assert.NoError(t, err)
 	assert.Equal(t, t2, actual)
-	actual, err = u.GetFromDb("3_0")
+	actual, err = u.GetFromDb("db3", "t3")
 	assert.NoError(t, err)
 	assert.Equal(t, t2, actual)
-}
-
-func TestWatermarkUpdater_GetAllFromDb(t *testing.T) {
-	u := &WatermarkUpdater{
-		accountId: 2,
-		taskId:    uuid.New(),
-		ie:        newWmMockSQLExecutor(),
-	}
-	_, err := u.GetAllFromDb()
-	assert.Error(t, err)
 }

@@ -1,3 +1,4 @@
+set experimental_fulltext_index=1;
 use mo_catalog;
 create cluster table clu01(col1 int, col2 decimal);
 insert into clu01 values(1,2,0);
@@ -62,7 +63,7 @@ count(*)
 1
 select * from mo_catalog.mo_database{snapshot = 'sp01'} where datname = 'test01';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-275129    test01    def    create database test01    0    1    2024-10-28 18:09:06    0    
+273476    test01    def    create database test01    0    1    2024-12-16 17:56:22    0    
 select attname from mo_catalog.mo_columns{snapshot = 'sp01'} where att_database = 'test01';
 attname
 col1
@@ -87,7 +88,7 @@ count(*)
 1
 select * from mo_catalog.mo_database{snapshot = 'sp01'} where datname = 'test01';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-275129    test01    def    create database test01    0    1    2024-10-28 18:09:06    0    
+273476    test01    def    create database test01    0    1    2024-12-16 17:56:22    0    
 select attname from mo_catalog.mo_columns{snapshot = 'sp01'} where att_database = 'test01';
 attname
 col1
@@ -141,10 +142,10 @@ count(*)
 2
 select * from mo_catalog.mo_database{snapshot = 'sp02'} where datname = 'test02';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-275155    test02    def    create database test02    0    1    2024-10-28 18:09:06    0    
+273504    test02    def    create database test02    0    1    2024-12-16 17:56:24    0    
 select * from mo_catalog.mo_database{snapshot = 'sp02'} where datname = 'mo_catalog';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-1    mo_catalog    mo_catalog        0    0    2024-10-28 18:07:36    0    
+1    mo_catalog    mo_catalog        0    0    2024-12-16 17:53:47    0    
 select attname from mo_catalog.mo_columns{snapshot = 'sp02'} where att_database = 'test02';
 attname
 col1
@@ -272,7 +273,7 @@ drop snapshot if exists sp04;
 create snapshot sp04 for account sys;
 show snapshots where snapshot_name = 'sp04';
 snapshot_name    timestamp    snapshot_level    account_name    database_name    table_name
-sp04    2024-10-28 10:09:07.352055113    account    sys        
+sp04    2024-12-16 09:56:26.988168    account    sys        
 select * from aff01{snapshot = 'sp04'};
 empno    ename    job    mgr    hiredate    sal    comm    deptno
 7369    SMITH    CLERK    7902    1980-12-17    800.00    null    20
@@ -508,8 +509,8 @@ drop snapshot if exists sp08;
 create snapshot sp08 for account sys;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp08    2024-10-28 10:09:08.549594483    account    sys        
-sp07    2024-10-28 10:09:08.528357764    account    sys        
+sp08    2024-12-16 09:56:38.090964    account    sys        
+sp07    2024-12-16 09:56:37.988555    account    sys        
 restore account sys from snapshot sp08;
 select * from table02;
 col1    col2
@@ -555,8 +556,8 @@ drop snapshot if exists sp10;
 create snapshot sp10 for account sys;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp10    2024-10-28 10:09:09.136585304    account    sys        
-sp09    2024-10-28 10:09:09.110649963    account    sys        
+sp10    2024-12-16 09:56:40.775367    account    sys        
+sp09    2024-12-16 09:56:40.666321    account    sys        
 restore account sys from snapshot sp09;
 select * from table02;
 col1    col2
@@ -913,8 +914,8 @@ select * from table01;
 SQL parser error: table "table01" does not exist
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp15    2024-10-28 10:09:11.10873344    account    sys        
-sp14    2024-10-28 10:09:11.057121731    account    sys        
+sp15    2024-12-16 09:56:59.876794    account    sys        
+sp14    2024-12-16 09:56:58.785736    account    sys        
 drop snapshot sp14;
 drop snapshot sp15;
 drop database db07;
@@ -1016,7 +1017,7 @@ emp_no    birth_date    first_name    last_name    gender    hire_date
 9002    1981-02-20    ALLEN    SALESMAN    F    2008-02-20
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp16    2024-10-28 10:09:11.352094939    account    sys        
+sp16    2024-12-16 09:57:01.043206    account    sys        
 drop database db09;
 drop database db10;
 drop snapshot sp16;
@@ -1092,7 +1093,7 @@ count(*)
 1
 select * from mo_catalog.mo_database{snapshot = 'sp18'} where datname = 'db11';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-275488    db11    def    create database db11    0    1    2024-10-28 18:09:11    0    
+273846    db11    def    create database db11    0    1    2024-12-16 17:57:01    0    
 select attname from mo_catalog.mo_columns{snapshot = 'sp18'} where att_database = 'db11';
 attname
 col1
@@ -1101,5 +1102,43 @@ __mo_rowid
 drop database db11;
 drop snapshot sp18;
 drop snapshot sp17;
+drop database if exists test_fulltext_restore;
+create database test_fulltext_restore;
+use test_fulltext_restore;
+drop table if exists posts;
+drop table if exists comments;
+create table posts (
+post_id int auto_increment primary key,
+title varchar(255),
+content text
+);
+create table comments (
+comment_id int auto_increment primary key,
+post_id int,
+comment_text text,
+foreign key (post_id) references posts(post_id)
+);
+drop snapshot if exists sp_fulltext;
+create snapshot sp_fulltext for account sys;
+alter table posts add fulltext(content);
+insert into posts (title, content) values
+('MO全文索引入门', 'MO全文索引是一种强大的工具，可以帮助你快速检索数据库中的文本数据。'),
+('深入理解全文索引', '全文索引不仅可以提高搜索效率，还可以通过JOIN操作与其他表结合使用。');
+insert into comments (post_id, comment_text) values
+(1, '这篇文章很有用，谢谢分享！'),
+(1, '我也在学习全文索引，很有帮助。'),
+(2, '全文索引真的很强大，学习了。');
+restore account sys from snapshot sp_fulltext;
+show create table posts;
+Table    Create Table
+posts    CREATE TABLE `posts` (\n  `post_id` int NOT NULL AUTO_INCREMENT,\n  `title` varchar(255) DEFAULT NULL,\n  `content` text DEFAULT NULL,\n  PRIMARY KEY (`post_id`)\n)
+select * from posts;
+post_id    title    content
+select * from comments;
+comment_id    post_id    comment_text
+drop table comments;
+drop table posts;
+drop database test_fulltext_restore;
+drop snapshot sp_fulltext;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME

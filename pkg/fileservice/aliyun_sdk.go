@@ -498,7 +498,14 @@ func (a *AliyunSDK) getObject(ctx context.Context, key string, min *int64, max *
 			if err != nil {
 				return nil, err
 			}
-			return r, nil
+			return &readCloser{
+				r: r,
+				closeFunc: func() error {
+					// drain
+					io.Copy(io.Discard, r)
+					return r.Close()
+				},
+			}, nil
 		},
 		*min,
 		IsRetryableError,

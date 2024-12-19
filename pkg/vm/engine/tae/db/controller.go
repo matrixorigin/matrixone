@@ -23,6 +23,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	rpc2 "github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 	"go.uber.org/zap"
@@ -246,7 +248,21 @@ func (c *Controller) handleToReplayCmd(cmd *controlCmd) {
 		})
 
 	// 3. build forward write request tunnel to the new write candidate
-	// TODO
+	if err = c.db.TxnServer.SwitchTxnHandleStateTo(
+		rpc2.TxnForwardWait, rpc2.WithForwardTarget(metadata.TNShard{
+			Address: "todo",
+		})); err != nil {
+		return
+	}
+	rollbackSteps.Push(struct {
+		fn   func() error
+		desc string
+	}{
+		fn: func() error {
+			return c.db.TxnServer.SwitchTxnHandleStateTo(rpc2.TxnLocalHandle)
+		},
+		desc: "rollback txn handle state",
+	})
 
 	// 4. build logtail tunnel to the new write candidate
 	// TODO
@@ -271,7 +287,9 @@ func (c *Controller) handleToReplayCmd(cmd *controlCmd) {
 	// TODO
 
 	// 10. forward the write requests to the new write candidate
-	// TODO
+	if err = c.db.TxnServer.SwitchTxnHandleStateTo(rpc2.TxnForwarding); err != nil {
+		return
+	}
 
 	if err = CheckCronJobs(c.db, DBTxnMode_Replay); err != nil {
 		// rollback
@@ -345,7 +363,9 @@ func (c *Controller) handleToWriteCmd(cmd *controlCmd) {
 	c.db.TxnMgr.ToWriteMode()
 
 	// 4. unfreeze the write requests
-	// TODO
+	if err = c.db.TxnServer.SwitchTxnHandleStateTo(rpc2.TxnLocalHandle); err != nil {
+		return
+	}
 
 	// 5. start merge scheduler|checkpoint|diskcleaner
 	// 5.1 TODO: start the merger|checkpoint|flusher

@@ -1,0 +1,52 @@
+drop account if exists acc01;
+create account acc01 admin_name = 'test_account' identified by '111';
+show accounts;
+account_name    admin_name    created_time    status    suspended_time    db_count    tbl_count    size    snapshot_size    comments
+acc01    test_account    2024-12-16 08:08:01    open    null    5    65    0.0    0.0    
+sys    root    2024-12-16 07:47:54    open    null    7    99    3.484402    0.0    system account
+drop database if exists db01;
+create database db01;
+use db01;
+create table t01 (a int);
+insert into t01 values (1);
+drop snapshot if exists snapshot_acc01_dropped;
+create snapshot snapshot_acc01_dropped for account acc01;
+drop account if exists acc01;
+select * from db01.t01{snapshot='snapshot_acc01_dropped'};
+a
+1
+restore account acc01 from snapshot snapshot_acc01_dropped;
+select * from db01.t01;
+a
+1
+show accounts;
+account_name    admin_name    created_time    status    suspended_time    db_count    tbl_count    size    snapshot_size    comments
+acc01    test_account    2024-12-16 08:08:02    open    null    6    66    0.0    0.0    
+sys    root    2024-12-16 07:47:54    open    null    7    99    3.484402    0.0    system account
+drop account if exists acc01;
+drop snapshot if exists snapshot_acc01_dropped;
+drop account if exists acc01;
+create account acc01 admin_name = 'test_account' identified by '111';
+show accounts;
+account_name    admin_name    created_time    status    suspended_time    db_count    tbl_count    size    snapshot_size    comments
+acc01    test_account    2024-12-16 08:08:03    open    null    5    65    0.0    0.0    
+sys    root    2024-12-16 07:47:54    open    null    7    99    3.484402    0.0    system account
+drop database if exists db01;
+create database db01;
+use db01;
+create table t01 (a int);
+insert into t01 values (1);
+drop snapshot if exists snapshot_acc01_dropped_created;
+create snapshot snapshot_acc01_dropped_created for account acc01;
+drop account if exists acc01;
+create account acc01 admin_name = 'test_account' identified by '123456';
+restore account acc01 from snapshot snapshot_acc01_dropped_created;
+select * from db01.t01;
+a
+1
+show accounts;
+account_name    admin_name    created_time    status    suspended_time    db_count    tbl_count    size    snapshot_size    comments
+acc01    test_account    2024-12-16 08:08:03    open    null    6    66    0.0    0.0    
+sys    root    2024-12-16 07:47:54    open    null    7    99    3.484402    0.0    system account
+drop account if exists acc01;
+drop snapshot if exists snapshot_acc01_dropped_created;

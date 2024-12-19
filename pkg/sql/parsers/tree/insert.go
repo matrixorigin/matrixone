@@ -25,6 +25,7 @@ type Insert struct {
 	Rows              *Select
 	OnDuplicateUpdate UpdateExprs
 	IsRestore         bool
+	IsRestoreByTs     bool
 	FromDataTenantID  uint32
 }
 

@@ -165,6 +165,15 @@ func MakeAgg(
 	panic(fmt.Sprintf("unexpected aggID %d and param types %v.", aggID, param))
 }
 
+func MakeInitialAggListFromList(mg AggMemoryManager, list []AggFuncExec) []AggFuncExec {
+	result := make([]AggFuncExec, 0, len(list))
+	for _, v := range list {
+		param, _ := v.TypesInfo()
+		result = append(result, MakeAgg(mg, v.AggID(), v.IsDistinct(), param...))
+	}
+	return result
+}
+
 // makeSingleAgg supports to create an aggregation function executor for single column.
 func makeSingleAgg(
 	mg AggMemoryManager,

@@ -214,10 +214,11 @@ func (back *backExec) ExecRestore(ctx context.Context, sql string, opAccount uin
 	}
 
 	userInput := &UserInput{
-		sql:       sql,
-		isRestore: true,
-		opAccount: opAccount,
-		toAccount: toAccount,
+		sql:           sql,
+		isRestore:     true,
+		opAccount:     opAccount,
+		toAccount:     toAccount,
+		isRestoreByTs: true,
 	}
 
 	execCtx := ExecCtx{
@@ -403,6 +404,9 @@ func doComQueryInBack(
 		if insertStmt, ok := stmt.(*tree.Insert); ok && input.isRestore {
 			insertStmt.IsRestore = true
 			insertStmt.FromDataTenantID = input.opAccount
+			if input.isRestoreByTs {
+				insertStmt.IsRestoreByTs = true
+			}
 		}
 
 		statsInfo.Reset()

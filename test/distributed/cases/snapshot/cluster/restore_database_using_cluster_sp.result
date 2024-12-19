@@ -132,9 +132,9 @@ cluster_sp    2024-06-24 08:47:05.296059    cluster
 drop database if exists snapshot_read;
 drop database if exists test_snapshot_restore;
 restore account acc01 database snapshot_read from snapshot cluster_sp;
-internal error: can't restore db or table from cluster level snapshot
+internal error: can't restore db from cluster level snapshot
 restore account acc01 database test_snapshot_restore from snapshot cluster_sp;
-internal error: can't restore db or table from cluster level snapshot
+internal error: can't restore db from cluster level snapshot
 restore account acc01 from snapshot cluster_sp;
 select count(*) from snapshot_read.test_snapshot_read;
 count(*)
@@ -483,11 +483,11 @@ drop database if exists Payroll;
 drop database if exists Projects;
 drop database if exists Company;
 restore account acc01 database Company from snapshot cluster_sp;
-internal error: can't restore db or table from cluster level snapshot
+internal error: can't restore db from cluster level snapshot
 restore account acc01 database Projects from snapshot cluster_sp;
-internal error: can't restore db or table from cluster level snapshot
+internal error: can't restore db from cluster level snapshot
 restore account acc01 database Payroll from snapshot cluster_sp;
-internal error: can't restore db or table from cluster level snapshot
+internal error: can't restore db from cluster level snapshot
 restore account acc01 from snapshot cluster_sp;
 select * from Company.Departments;
 departmentid    name    managerid
@@ -1305,11 +1305,11 @@ drop database if exists School;
 drop database if exists University;
 drop database if exists EducationSystem;
 restore account acc01 database School from snapshot cluster_sp;
-internal error: can't restore db or table from cluster level snapshot
+internal error: can't restore db from cluster level snapshot
 restore account acc01 database University from snapshot cluster_sp;
-internal error: can't restore db or table from cluster level snapshot
+internal error: can't restore db from cluster level snapshot
 restore account acc01 database EducationSystem from snapshot cluster_sp;
-internal error: can't restore db or table from cluster level snapshot
+internal error: can't restore db from cluster level snapshot
 restore account acc01 from snapshot cluster_sp;
 select * from School.Students;
 studentid    name    grade

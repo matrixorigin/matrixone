@@ -4889,6 +4889,12 @@ func (builder *QueryBuilder) resolveTsHint(tsExpr *tree.AtTimeStamp) (snapshot *
 				err = moerr.NewInvalidArg(builder.GetContext(), "invalid timestamp value", lit.I64Val)
 				return
 			}
+			if bgSnapshot := builder.compCtx.GetSnapshot(); builder.isRestoreByTs {
+				tenant = &SnapshotTenant{
+					TenantName: bgSnapshot.Tenant.TenantName,
+					TenantID:   bgSnapshot.Tenant.TenantID,
+				}
+			}
 			snapshot = &Snapshot{TS: &timestamp.Timestamp{PhysicalTime: lit.I64Val}, Tenant: tenant}
 		} else {
 			err = moerr.NewInvalidArg(builder.GetContext(), "invalid timestamp hint for snapshot hint", lit.I64Val)

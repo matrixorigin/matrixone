@@ -17,6 +17,7 @@ package rpc
 import (
 	"context"
 	"encoding/hex"
+	"fmt"
 	"sync"
 	"time"
 
@@ -27,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -83,6 +85,31 @@ func WithServerQueueWorkers(value int) ServerOption {
 	}
 }
 
+func WithTxnSender(sender TxnSender) ServerOption {
+	return func(s *server) {
+		s.handleState.forward.sender = sender
+	}
+}
+
+func WithTxnForwardHandler(
+	handler func(context.Context, *txn.TxnRequest, *txn.TxnResponse) error) ServerOption {
+	return func(s *server) {
+		s.handleState.forward.forwardFunc = handler
+	}
+}
+
+func WithForwardTarget(tn metadata.TNShard) ServerOption {
+	return func(s *server) {
+		s.handleState.forward.target = tn
+	}
+}
+
+const (
+	TxnLocalHandle = iota
+	TxnForwardWait
+	TxnForwarding
+)
+
 type server struct {
 	rt       runtime.Runtime
 	rpc      morpc.RPCServer
@@ -99,6 +126,19 @@ type server struct {
 		enableCompress       bool
 		maxChannelBufferSize int
 		workers              int
+	}
+
+	handleState struct {
+		sync.RWMutex
+		state int
+
+		forward struct {
+			target    metadata.TNShard
+			sender    TxnSender
+			waitReady chan struct{}
+
+			forwardFunc func(context.Context, *txn.TxnRequest, *txn.TxnResponse) error
+		}
 	}
 
 	// in order not to block tcp, the data read from tcp will be put into this ringbuffer. This ringbuffer will
@@ -266,6 +306,26 @@ func (s *server) handleTxnRequest(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case req := <-s.queue:
+			state, waitReady, newHandler := s.getTxnHandleState()
+			switch state {
+			case TxnForwardWait:
+				wait := true
+				for wait {
+					select {
+					case <-ctx.Done():
+						wait = false
+					case <-waitReady:
+						wait = false
+						req.handler = newHandler
+					}
+				}
+
+			case TxnLocalHandle:
+
+			case TxnForwarding:
+				req.handler = newHandler
+			}
+
 			if txnID, err := req.exec(); err != nil {
 				if s.rt.Logger().Enabled(zap.DebugLevel) {
 					s.rt.Logger().Error("handle txn request failed",
@@ -307,4 +367,144 @@ func checkMethodVersion(
 	req *txn.TxnRequest,
 ) error {
 	return runtime.CheckMethodVersionWithRuntime(ctx, rt, methodVersions, req)
+}
+
+/////////////////////// forward txn request to another tn /////////////////////
+
+// valid state switch path
+//
+// txnLocalHandle --> txnLocalHandle
+//				  --> txnForwardWait --> txnLocalHandle
+// 									 --> txnForwardWait
+//									 --> txnForwarding --> txnLocalHandle
+//													   --> txnForwarding
+//													   --> txnForwardWait
+
+func (s *server) SwitchTxnHandleStateTo(state int, opts ...ServerOption) error {
+	currentState := s.handleState.state
+
+	switch state {
+	case TxnLocalHandle:
+		return s.enterLocalHandleState()
+	case TxnForwardWait:
+		return s.enterForwardWaitState(opts...)
+	case TxnForwarding:
+		if currentState != TxnForwarding && currentState != TxnForwardWait {
+			return moerr.NewInternalErrorNoCtx(
+				fmt.Sprintf("state %d -> state %d invalid", currentState, state))
+		}
+		return s.enterForwardingState()
+	}
+
+	return moerr.NewInternalErrorNoCtx("no state matched")
+}
+
+func (s *server) getTxnHandleState() (
+	int, chan struct{},
+	func(context.Context, *txn.TxnRequest, *txn.TxnResponse) error) {
+
+	s.handleState.RLock()
+	defer s.handleState.RUnlock()
+
+	return s.handleState.state,
+		s.handleState.forward.waitReady,
+		s.handleState.forward.forwardFunc
+}
+
+func (s *server) enterForwardWaitState(opts ...ServerOption) error {
+	s.handleState.Lock()
+	defer s.handleState.Unlock()
+
+	if s.handleState.state == TxnForwardWait {
+		return nil
+	}
+
+	for _, f := range opts {
+		f(s)
+	}
+
+	if len(s.handleState.forward.target.Address) == 0 {
+		return moerr.NewInternalErrorNoCtx("no target tn specified")
+	}
+
+	if s.handleState.forward.forwardFunc == nil {
+		s.handleState.forward.forwardFunc = s.forwardingTxnRequest
+	}
+
+	s.handleState.state = TxnForwardWait
+	s.handleState.forward.waitReady = make(chan struct{})
+
+	return nil
+}
+
+func (s *server) enterForwardingState() error {
+	s.handleState.Lock()
+	defer s.handleState.Unlock()
+
+	if s.handleState.state == TxnForwarding {
+		return nil
+	}
+
+	close(s.handleState.forward.waitReady)
+	s.handleState.forward.waitReady = nil
+	s.handleState.state = TxnForwarding
+
+	return nil
+}
+
+func (s *server) enterLocalHandleState() error {
+	s.handleState.Lock()
+	defer s.handleState.Unlock()
+
+	if s.handleState.state == TxnLocalHandle {
+		return nil
+	}
+
+	if s.handleState.forward.waitReady != nil {
+		close(s.handleState.forward.waitReady)
+		s.handleState.forward.waitReady = nil
+	}
+
+	s.handleState.state = TxnLocalHandle
+
+	return nil
+}
+
+func (s *server) logTxnHandleState() string {
+	stateName := []string{"local handle", "forwarding wait", "forwarding"}
+
+	return fmt.Sprintf("STATE(%s)-TARGET(%s)-SENDER(nil=%v)",
+		stateName[s.handleState.state],
+		s.handleState.forward.target.Address,
+		s.handleState.forward.sender == nil)
+}
+
+func (s *server) forwardingTxnRequest(
+	ctx context.Context,
+	req *txn.TxnRequest,
+	resp *txn.TxnResponse) error {
+
+	if req == nil {
+		return moerr.NewInternalErrorNoCtx("req is nil")
+	}
+
+	req.ResetTargetTN(s.handleState.forward.target)
+
+	if resp == nil {
+		return moerr.NewInternalErrorNoCtx("resp is nil")
+	}
+
+	if s.handleState.forward.sender == nil {
+		return moerr.NewInternalErrorNoCtx("txn sender is nil")
+	}
+
+	result, err := s.handleState.forward.sender.Send(ctx, []txn.TxnRequest{*req})
+	if err != nil {
+		return err
+	}
+
+	*resp = result.Responses[0]
+	result.Release()
+
+	return nil
 }

@@ -362,6 +362,42 @@ drop snapshot sp03;
 drop database test01;
 -- @session
 
+
+
+-- sys restore nonsys to nonsys account: fulltext index table
+-- @session:id=1&user=acc01:test_account&password=111
+set experimental_fulltext_index=1;
+drop database if exists fulltext_index_acc01;
+create database fulltext_index_acc01;
+use fulltext_index_acc01;
+create table articles (id INT UNSIGNED AUTO_INCREMENT NOT NULL PRIMARY KEY, title json, body json);
+insert into articles (title,body) VALUES ('{"title": "MO Tutorial"}','{"body":"DBMS stands for DataBase ..."}'),
+                                         ('{"title":"How To Use MO Well"}','{"body":"After you went through a ..."}'),
+                                         ('{"title":"Optimizing MO"}','{"body":"In this tutorial, we show ..."}'),
+                                         ('{"title":"1001 MO Tricks"}','{"body":"1. Never run MO  as root. 2. ..."}'),
+                                         ('{"title":"MO vs. YourSQL"}','{"body":"In the following database comparison ..."}'),
+                                         ('{"title":"MO Security"}','{"body":"When configured properly, MO ..."}');
+
+
+create fulltext index fdx_01 on articles(title, body) with parser json;
+-- @session
+
+drop snapshot if exists fu_sp01;
+create snapshot fu_sp01 for account acc01;
+
+-- @session:id=1&user=acc01:test_account&password=111
+drop database fulltext_index_acc01;
+-- @session
+
+restore account acc01 from snapshot fu_sp01 to account acc02;
+
+-- @session:id=2&user=acc02:test_account&password=111
+show databases;
+use fulltext_index_acc01;
+show create table articles;
+select * from articles;
+-- @session
+drop snapshot fu_sp01;
 drop account acc01;
 drop account acc02;
 -- @ignore:1

@@ -1186,7 +1186,7 @@ func (builder *QueryBuilder) lockTableIfLockNoRowsAtTheEndForDelAndUpdate() (err
 	tableIDs[tableDef.TblId] = true
 	for _, idx := range tableDef.Indexes {
 		if idx.TableExist {
-			_, idxTableDef := builder.compCtx.Resolve(objRef.SchemaName, idx.IndexTableName, nil)
+			_, idxTableDef := builder.compCtx.ResolveIndexTableByRef(objRef, idx.IndexTableName, nil)
 			if idxTableDef == nil {
 				return
 			}

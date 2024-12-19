@@ -35,9 +35,11 @@ import (
 
 const (
 	// sqlBufReserved leave 5 bytes for mysql driver
-	sqlBufReserved = 5
-	sqlPrintLen    = 200
-	fakeSql        = "fakeSql"
+	sqlBufReserved         = 5
+	sqlPrintLen            = 200
+	fakeSql                = "fakeSql"
+	createTable            = "create table"
+	createTableIfNotExists = "create table if not exists"
 )
 
 var (
@@ -47,10 +49,10 @@ var (
 	dummy    = []byte("")
 )
 
-func NewSinker(
+var NewSinker = func(
 	sinkUri UriInfo,
 	dbTblInfo *DbTableInfo,
-	watermarkUpdater *WatermarkUpdater,
+	watermarkUpdater IWatermarkUpdater,
 	tableDef *plan.TableDef,
 	retryTimes int,
 	retryDuration time.Duration,
@@ -68,6 +70,21 @@ func NewSinker(
 		return nil, err
 	}
 
+	ctx := context.Background()
+	padding := strings.Repeat(" ", sqlBufReserved)
+	// create db
+	_ = sink.Send(ctx, ar, []byte(padding+fmt.Sprintf("CREATE DATABASE IF NOT EXISTS `%s`", dbTblInfo.SinkDbName)))
+	// use db
+	_ = sink.Send(ctx, ar, []byte(padding+fmt.Sprintf("use `%s`", dbTblInfo.SinkDbName)))
+	// create table
+	createSql := strings.TrimSpace(dbTblInfo.SourceCreateSql)
+	if len(createSql) < len(createTableIfNotExists) || !strings.EqualFold(createSql[:len(createTableIfNotExists)], createTableIfNotExists) {
+		createSql = createTableIfNotExists + createSql[len(createTable):]
+	}
+	createSql = strings.ReplaceAll(createSql, dbTblInfo.SourceDbName, dbTblInfo.SinkDbName)
+	createSql = strings.ReplaceAll(createSql, dbTblInfo.SourceTblName, dbTblInfo.SinkTblName)
+	_ = sink.Send(ctx, ar, []byte(padding+createSql))
+
 	return NewMysqlSinker(sink, dbTblInfo, watermarkUpdater, tableDef, ar, maxSqlLength), nil
 }
 
@@ -75,12 +92,12 @@ var _ Sinker = new(consoleSinker)
 
 type consoleSinker struct {
 	dbTblInfo        *DbTableInfo
-	watermarkUpdater *WatermarkUpdater
+	watermarkUpdater IWatermarkUpdater
 }
 
 func NewConsoleSinker(
 	dbTblInfo *DbTableInfo,
-	watermarkUpdater *WatermarkUpdater,
+	watermarkUpdater IWatermarkUpdater,
 ) Sinker {
 	return &consoleSinker{
 		dbTblInfo:        dbTblInfo,
@@ -142,7 +159,7 @@ var _ Sinker = new(mysqlSinker)
 type mysqlSinker struct {
 	mysql            Sink
 	dbTblInfo        *DbTableInfo
-	watermarkUpdater *WatermarkUpdater
+	watermarkUpdater IWatermarkUpdater
 	ar               *ActiveRoutine
 
 	// buf of sql statement
@@ -179,7 +196,7 @@ type mysqlSinker struct {
 var NewMysqlSinker = func(
 	mysql Sink,
 	dbTblInfo *DbTableInfo,
-	watermarkUpdater *WatermarkUpdater,
+	watermarkUpdater IWatermarkUpdater,
 	tableDef *plan.TableDef,
 	ar *ActiveRoutine,
 	maxSqlLength uint64,
@@ -288,7 +305,7 @@ func (s *mysqlSinker) Run(ctx context.Context, ar *ActiveRoutine) {
 }
 
 func (s *mysqlSinker) Sink(ctx context.Context, data *DecoderOutput) {
-	watermark := s.watermarkUpdater.GetFromMem(s.dbTblInfo.SourceTblIdStr)
+	watermark := s.watermarkUpdater.GetFromMem(s.dbTblInfo.SourceDbName, s.dbTblInfo.SourceTblName)
 	if data.toTs.LE(&watermark) {
 		logutil.Errorf("cdc mysqlSinker(%v): unexpected watermark: %s, current watermark: %s",
 			s.dbTblInfo, data.toTs.ToString(), watermark.ToString())
@@ -417,7 +434,7 @@ func (s *mysqlSinker) sinkSnapshot(ctx context.Context, bat *batch.Batch) {
 		}
 
 		// step3: append to sqlBuf, send sql if sqlBuf is full
-		if err = s.appendSqlBuf(ctx, InsertRow); err != nil {
+		if err = s.appendSqlBuf(InsertRow); err != nil {
 			s.err.Store(err)
 			return
 		}
@@ -501,7 +518,7 @@ func (s *mysqlSinker) sinkInsert(ctx context.Context, insertIter *atomicBatchRow
 	}
 
 	// step3: append to sqlBuf
-	if err = s.appendSqlBuf(ctx, InsertRow); err != nil {
+	if err = s.appendSqlBuf(InsertRow); err != nil {
 		return
 	}
 
@@ -530,7 +547,7 @@ func (s *mysqlSinker) sinkDelete(ctx context.Context, deleteIter *atomicBatchRow
 	}
 
 	// step3: append to sqlBuf
-	if err = s.appendSqlBuf(ctx, DeleteRow); err != nil {
+	if err = s.appendSqlBuf(DeleteRow); err != nil {
 		return
 	}
 
@@ -539,7 +556,7 @@ func (s *mysqlSinker) sinkDelete(ctx context.Context, deleteIter *atomicBatchRow
 
 // appendSqlBuf appends rowBuf to sqlBuf if not exceed its cap
 // otherwise, send sql to downstream first, then reset sqlBuf and append
-func (s *mysqlSinker) appendSqlBuf(ctx context.Context, rowType RowType) (err error) {
+func (s *mysqlSinker) appendSqlBuf(rowType RowType) (err error) {
 	// insert suffix: `;`, delete suffix: `);`
 	suffixLen := 1
 	if rowType == DeleteRow {
@@ -668,8 +685,8 @@ var NewMysqlSink = func(
 	return ret, err
 }
 
+// Send must leave 5 bytes at the head of sqlBuf
 func (s *mysqlSink) Send(ctx context.Context, ar *ActiveRoutine, sqlBuf []byte) error {
-	// must leave 5 bytes at the head of sqlBuf
 	reuseQueryArg := sql.NamedArg{
 		Name:  mysql.ReuseQueryBuf,
 		Value: sqlBuf,

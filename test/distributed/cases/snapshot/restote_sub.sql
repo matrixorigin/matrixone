@@ -273,8 +273,8 @@ select * from t1;
 select count(*) from t2;
 -- @ignore:5,7
 show subscriptions;
-drop database sub05;
-drop snapshot sp05;
+drop database if exists sub05;
+drop snapshot if exists sp05;
 
 -- @session:id=1&user=acc01:test_account&password=111
 drop PUBLICATION pub04;

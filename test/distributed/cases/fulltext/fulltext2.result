@@ -1,0 +1,622 @@
+set experimental_fulltext_index=1;
+drop database if exists test_fulltext;
+create database test_fulltext;
+use test_fulltext;
+drop table if exists fulltext01;
+create table fulltext01
+(
+LastName char(10) primary key,
+FirstName char(10),
+Gender char(1),
+DepartmentName char(20),
+Age int
+);
+insert into fulltext01 VALUES('Gilbert', 'Kevin','M','Tool Design',33);
+insert into fulltext01 VALUES('Tamburello', 'Andrea','F','Marketing',45);
+insert into fulltext01 VALUES('Johnson', 'David','M','Engineering',66);
+insert into fulltext01 VALUES('Sharma', 'Bradley','M','Production',27);
+insert into fulltext01 VALUES('Rapier', 'Abigail','F',	'Human Resources',38);
+select * from fulltext01;
+lastname    firstname    gender    departmentname    age
+Gilbert    Kevin    M    Tool Design    33
+Tamburello    Andrea    F    Marketing    45
+Johnson    David    M    Engineering    66
+Sharma    Bradley    M    Production    27
+Rapier    Abigail    F    Human Resources    38
+create fulltext index ftidx on fulltext01 (LastName, FirstName);
+alter table fulltext01 add column newcolumn decimal after LastName;
+show create table fulltext01;
+
+select * from fulltext01;
+lastname    newcolumn    firstname    gender    departmentname    age
+Gilbert    null    Kevin    M    Tool Design    33
+Tamburello    null    Andrea    F    Marketing    45
+Johnson    null    David    M    Engineering    66
+Sharma    null    Bradley    M    Production    27
+Rapier    null    Abigail    F    Human Resources    38
+truncate fulltext01;
+drop table fulltext01;
+drop table if exists employees;
+create table employees (
+employeeNumber int(11) NOT NULL,
+lastName varchar(50) NOT NULL,
+firstName varchar(50) NOT NULL,
+extension varchar(10) NOT NULL,
+email varchar(100) NOT NULL,
+officeCode varchar(10) NOT NULL,
+reportsTo int(11) DEFAULT NULL,
+jobTitle varchar(50) NOT NULL,
+PRIMARY KEY (employeeNumber)
+);
+insert into employees(employeeNumber,lastName,firstName,extension,email,officeCode,reportsTo,jobTitle) values
+(1002,'Murphy','Diane','x5800','dmurphy@classicmodelcars.com','1',NULL,'President'),
+(1056,'Patterson','Mary','x4611','mpatterso@classicmodelcars.com','1',1002,'VP Sales'),
+(1076,'Firrelli','Jeff','x9273','jfirrelli@classicmodelcars.com','1',1002,'VP Marketing');
+select * from employees;
+employeenumber    lastname    firstname    extension    email    officecode    reportsto    jobtitle
+1002    Murphy    Diane    x5800    dmurphy@classicmodelcars.com    1    null    President
+1056    Patterson    Mary    x4611    mpatterso@classicmodelcars.com    1    1002    VP Sales
+1076    Firrelli    Jeff    x9273    jfirrelli@classicmodelcars.com    1    1002    VP Marketing
+create fulltext index f01 on employees (LastName, FirstName);
+alter table employees drop column LastName;
+show create table employees;
+
+select * from employees;
+employeenumber    firstname    extension    email    officecode    reportsto    jobtitle
+1002    Diane    x5800    dmurphy@classicmodelcars.com    1    null    President
+1056    Mary    x4611    mpatterso@classicmodelcars.com    1    1002    VP Sales
+1076    Jeff    x9273    jfirrelli@classicmodelcars.com    1    1002    VP Marketing
+select count(*) from employees;
+count(*)
+3
+truncate employees;
+drop table employees;
+drop table if exists t1;
+create table t1 (col1 int primary key , col2 longtext);
+insert into t1 values(1, 'abcdef');
+insert into t1 values(2, '_bcdef');
+insert into t1 values(3, 'a_cdef');
+insert into t1 values(4, 'ab_def');
+create fulltext index f02 on t1 (col2);
+alter table t1 modify column col2 text;
+show create table t1;
+
+select * from t1;
+col1    col2
+1    abcdef
+2    _bcdef
+3    a_cdef
+4    ab_def
+drop table t1;
+drop table if exists t1;
+create table t1 (a json, b int primary key);
+insert into t1 values ('{"t1":"a"}',1),('{"t1":"b"}',2),('{"t1":"c"}',3),('{"t1":"d"}',4);
+select * from t1;
+a    b
+{"t1": "a"}    1
+{"t1": "b"}    2
+{"t1": "c"}    3
+{"t1": "d"}    4
+create fulltext index f03 on t1 (a);
+insert into t1 values ('{"t1":"c"}',5);
+select count(a) from t1;
+count(a)
+5
+select * from t1;
+a    b
+{"t1": "a"}    1
+{"t1": "b"}    2
+{"t1": "c"}    3
+{"t1": "d"}    4
+{"t1": "c"}    5
+drop table t1;
+drop table if exists table01;
+create table table01 (col1 int primary key, col2 datalink);
+insert into table01 values (1, 'file://$resources/load_data/test_columnlist_01.csv?offset=5');
+insert into table01 values (2, 'file://$resources/load_data/test_columnlist_02.csv?offset=10');
+create fulltext index f06 on table01 (col2);
+drop table table01;
+drop table if exists ab01;
+create table ab01(col1 int not null primary key , col2 char, col3 varchar(10));
+insert into ab01 values (1,2,'da');
+insert into ab01 values (2,3,'e4r34f');
+select * from ab01;
+col1    col2    col3
+1    2    da
+2    3    e4r34f
+create fulltext index f01 on ab01 (col2);
+create fulltext index f02 on ab01 (col2);
+
+drop table ab01;
+drop table if exists char01;
+create table char01 (col1 varchar(200) primary key , col2 char(10));
+insert into char01 values ('23789178942u1uj3ridjfh2d28u49u4ueji32jf2f32ef32894rjk32nv432f432f', '367283r343');
+insert into char01 values ('32jhbfchjecmwd%^&^(*&)UJHFRE%^T&YUHIJKNM', null);
+select * from char01;
+col1    col2
+23789178942u1uj3ridjfh2d28u49u4ueji32jf2f32ef32894rjk32nv432f432f    367283r343
+32jhbfchjecmwd%^&^(*&)UJHFRE%^T&YUHIJKNM    null
+alter table char01 add fulltext index f01(col1);
+alter table char01 add fulltext index f02(col2);
+show create table char01;
+
+drop table char01;
+drop table if exists ab02;
+create table ab02 (a bigint unsigned not null, primary key(a));
+insert into ab02 values (18446744073709551615), (0xFFFFFFFFFFFFFFFE), (18446744073709551613), (18446744073709551612);
+select * from ab02;
+a
+18446744073709551615
+18446744073709551614
+18446744073709551613
+18446744073709551612
+create fulltext index f03 on ab02 (a);
+not supported: fulltext index only support char, varchar, text, datalink and json
+drop table ab02;
+drop table if exists t1;
+create table t1(a binary(2) primary key);
+insert into t1 values(null);
+constraint violation: Column 'a' cannot be null
+select * from t1;
+a
+insert into t1 values("时");
+select * from t1;
+a
+æ¶
+insert into t1 values(rpad("1", 500, "1"));
+internal error: Can't cast '1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111...' from VARCHAR type to BINARY type. Src length 500 is larger than Dest length 2
+delete from t1 where a="时";
+insert into t1 values("6");
+insert into t1 values("66");
+create fulltext index f04 on t1 (a);
+not supported: fulltext index only support char, varchar, text, datalink and json
+drop table t1;
+drop table if exists t1;
+create table t1(t time(3) primary key );
+insert into t1 values("100:00:20");
+insert into t1 values("-800:59:59");
+insert into t1 values("2012-12-12 12:00:20");
+insert into t1 values("2012-12-12 12:00:20.1234");
+insert into t1 values("2012-12-12 12:00:20.1235");
+create fulltext index f05 on t1 (t);
+not supported: fulltext index only support char, varchar, text, datalink and json
+drop table t1;
+drop table if exists articles;
+create table articles (
+id int auto_increment primary key,
+title varchar(255),
+content text,
+fulltext(title, content) with parser ngram
+);
+insert into articles (title, content) values
+('MO全文索引示例', '这是一个关于MO全文索引的例子。它展示了如何使用ngram解析器进行全文搜索。'),
+('ngram解析器', 'ngram解析器允许MO对中文等语言进行分词，以优化全文搜索。');
+show create table articles;
+Table    Create Table
+articles    CREATE TABLE `articles` (\n  `id` int NOT NULL AUTO_INCREMENT,\n  `title` varchar(255) DEFAULT NULL,\n  `content` text DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT(`title`,`content`) WITH PARSER ngram\n)
+select * from articles where match(title, content) against('全文索引' IN NATURAL LANGUAGE MODE);
+id    title    content
+1    MO全文索引示例    这是一个关于MO全文索引的例子。它展示了如何使用ngram解析器进行全文搜索。
+select * from articles;
+id    title    content
+1    MO全文索引示例    这是一个关于MO全文索引的例子。它展示了如何使用ngram解析器进行全文搜索。
+2    ngram解析器    ngram解析器允许MO对中文等语言进行分词，以优化全文搜索。
+drop table articles;
+drop table if exists products;
+create table products (
+id int auto_increment primary key,
+name varchar(255),
+details json,
+fulltext(details) with PARSER json
+);
+insert into products (name, details) values
+('ノートパソコン', '{"brand": "Dell", "specs": "i7, 16GB RAM", "price": 1200}'),
+('스마트폰', '{"brand": "Apple", "model": "iPhone 12", "price": 800}');
+show create table products;
+Table    Create Table
+products    CREATE TABLE `products` (\n  `id` int NOT NULL AUTO_INCREMENT,\n  `name` varchar(255) DEFAULT NULL,\n  `details` json DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT(`details`) WITH PARSER json\n)
+insert into products (name, details) values('手机', '{"brand": "Apple", "model": "iPhone 12", "price": 800}');
+select * from products;
+id    name    details
+1    ノートパソコン    {"brand": "Dell", "price": 1200, "specs": "i7, 16GB RAM"}
+2    스마트폰    {"brand": "Apple", "model": "iPhone 12", "price": 800}
+3    手机    {"brand": "Apple", "model": "iPhone 12", "price": 800}
+select * from products where match(details) against('Dell' IN NATURAL LANGUAGE MODE);
+id    name    details
+1    ノートパソコン    {"brand": "Dell", "price": 1200, "specs": "i7, 16GB RAM"}
+select id, name from products where match(details) against('Apple' IN NATURAL LANGUAGE MODE);
+id    name
+2    스마트폰
+3    手机
+drop table products;
+drop table if exists prepare_fulltext;
+create table prepare_fulltext (a char primary key , b varchar(20));
+insert into prepare_fulltext values (1, 11), (2, 22), (3, 33);
+prepare stmt1 from 'create fulltext index f06 on prepare_fulltext (a)';
+execute stmt1;
+show create table prepare_fulltext;
+
+select * from prepare_fulltext;
+a    b
+1    11
+2    22
+3    33
+drop table prepare_fulltext;
+drop table if exists pro;
+create table pro (
+id int auto_increment primary key,
+name varchar(255),
+details json
+);
+prepare stmt4 from 'alter table pro add fulltext index pro1(details) with PARSER json';
+execute stmt4;
+prepare stmt3 from 'alter table pro add fulltext index pro2(name)';
+execute stmt3;
+show create table pro;
+
+insert into pro (name, details) values('手机', '{"brand": "Apple", "model": "iPhone 12", "price": 800}');
+select * from pro;
+id    name    details
+1    手机    {"brand": "Apple", "model": "iPhone 12", "price": 800}
+drop table pro;
+drop table if exists test_table;
+create table test_table(
+col1 int auto_increment,
+col2 float,
+col3 bool,
+col4 Date,
+col5 varchar(255),
+col6 text,
+PRIMARY KEY (`col1`),
+fulltext(col5)
+);
+show create table test_table;
+
+load data infile '$resources/load_data/test_1.csv' into table test_table fields terminated by ',' parallel 'true';
+select * from test_table;
+col1    col2    col3    col4    col5    col6
+0    0.1    true    1982-03-24    varchar_0    text_0
+1    1.1    false    1982-07-31    varchar_1    text_1
+2    2.1    true    2002-04-13    varchar_2    text_2
+3    3.1    false    2019-09-29    varchar_3    text_3
+4    4.1    true    1996-08-20    varchar_4    text_4
+5    5.1    false    2008-10-13    varchar_5    text_5
+6    6.1    true    2002-03-05    varchar_6    text_6
+7    7.1    false    1993-11-07    varchar_7    text_7
+8    8.1    true    1994-01-08    varchar_8    text_8
+9    9.1    false    1999-09-17    varchar_9    text_9
+10    10.1    true    2003-09-28    varchar_10    text_10
+11    11.1    false    1984-01-22    varchar_11    text_11
+12    12.1    true    1994-02-10    varchar_12    text_12
+13    13.1    false    1994-12-02    varchar_13    text_13
+14    14.1    true    2013-01-19    varchar_14    text_14
+15    15.1    false    2002-09-29    varchar_15    text_15
+16    16.1    true    2001-12-07    varchar_16    text_16
+17    17.1    false    1989-03-11    varchar_17    text_17
+18    18.1    true    2019-11-04    varchar_18    text_18
+19    19.1    false    2002-08-15    varchar_19    text_19
+20    20.1    true    1995-12-20    varchar_20    text_20
+21    21.1    false    2018-08-03    varchar_21    text_21
+22    22.1    true    1998-03-10    varchar_22    text_22
+23    23.1    false    2022-04-08    varchar_23    text_23
+24    24.1    true    1989-04-27    varchar_24    text_24
+25    25.1    false    2009-03-14    varchar_25    text_25
+26    26.1    true    2019-03-27    varchar_26    text_26
+27    27.1    false    1983-10-28    varchar_27    text_27
+28    28.1    true    1993-07-19    varchar_28    text_28
+29    29.1    false    1986-09-11    varchar_29    text_29
+30    30.1    true    1992-08-19    varchar_30    text_30
+31    31.1    false    1981-08-07    varchar_31    text_31
+32    32.1    true    1984-03-25    varchar_32    text_32
+33    33.1    false    2001-09-05    varchar_33    text_33
+34    34.1    true    2022-03-17    varchar_34    text_34
+35    35.1    false    2008-06-24    varchar_35    text_35
+36    36.1    true    1987-11-23    varchar_36    text_36
+37    37.1    false    2008-11-10    varchar_37    text_37
+38    38.1    true    1986-01-29    varchar_38    text_38
+39    39.1    false    1985-02-27    varchar_39    text_39
+40    40.1    true    2016-11-28    varchar_40    text_40
+41    41.1    false    1991-02-11    varchar_41    text_41
+42    42.1    true    2019-01-08    varchar_42    text_42
+43    43.1    false    2009-05-01    varchar_43    text_43
+44    44.1    true    1986-11-15    varchar_44    text_44
+45    45.1    false    2000-07-22    varchar_45    text_45
+46    46.1    true    2002-09-07    varchar_46    text_46
+47    47.1    false    1987-09-23    varchar_47    text_47
+48    48.1    true    1985-10-25    varchar_48    text_48
+49    49.1    false    1988-10-06    varchar_49    text_49
+drop table test_table;
+drop table if exists jsonline_t2;
+create table jsonline_t2(
+col1 char(225),
+col2 varchar(225) ,
+col3 text,
+col4 varchar(225) primary key
+);
+create fulltext index f05 on jsonline_t2(col3);
+load data infile{'filepath'='$resources/load_data/char_varchar_2.jl','format'='jsonline','jsondata'='object'}into table jsonline_t2;
+select * from jsonline_t2;
+col1    col2    col3    col4
+a    中文    #¥%……&#    234cccc重要
+"a"    "b"    "c"    "d"
+'d'    '123456'    'b'    'a'
+"'a'"    "'b'"    "'c'"    abc
+ 123f fff     yeah     红tu    bb"
+drop table jsonline_t2;
+drop table if exists t1;
+create table t1(
+col1 bool,
+col2 int primary key,
+col3 varchar(100),
+col4 date,
+col5 datetime,
+col6 timestamp,
+col7 decimal,
+col8 float,
+col9 json,
+col10 text,
+col11 json,
+col12 bool
+);
+create fulltext index f06 on t1(col9);
+load data infile {'filepath'='$resources/load_data/jsonline_object01.jl','format'='jsonline','jsondata'='object'} into table t1;
+select * from t1;
+col1    col2    col3    col4    col5    col6    col7    col8    col9    col10    col11    col12
+true    1    var    2020-09-07    2020-09-07 00:00:00    2020-09-07 00:00:00    18    121.11    ["1", 2, null, false, true, {"q": 1}]    1qaz    null    null
+true    2    var    2020-09-07    2020-09-07 00:00:00    2020-09-07 00:00:00    18    121.11    {"b": ["a", "b", {"q": 4}], "c": 1}    1aza    null    null
+true    3    var    2020-09-07    2020-09-07 00:00:00    2020-09-07 00:00:00    18    121.11    ["1", 2, null, false, true, {"q": 1}]    1az    null    null
+true    4    var    2020-09-07    2020-09-07 00:00:00    2020-09-07 00:00:00    18    121.11    {"b": ["a", "b", {"q": 4}], "c": 1}    1qaz    null    null
+show create table t1;
+
+drop table t1;
+drop table if exists articles;
+create table articles (
+id int unsigned auto_increment not null primary key,
+title varchar(200),
+body text,
+fulltext (title, body)
+);
+insert into articles (title, body) VALUES
+('MO Tutorial', 'DBMS stands for DataBase ...'),
+('How To Use MO Well', 'After you went through a ...'),
+('Optimizing MO', 'In this tutorial, we show ...'),
+('1001 MO Tricks', '1. Never run MOd as root. 2. ...'),
+('MO vs. YourSQL', 'In the following database comparison ...'),
+('MO Security', 'When configured properly, MO ...');
+select * from articles
+where match (title, body)
+against ('database' in natural language mode);
+id    title    body
+1    MO Tutorial    DBMS stands for DataBase ...
+5    MO vs. YourSQL    In the following database comparison ...
+select id, match (title, body)
+against ('Tutorial' in natural language mode) as score
+from articles;
+id    score
+1    0.2276447
+3    0.2276447
+select id, body, match (title, body)
+against ('Security implications of running MO as root' in natural language mode) as score
+from articles;
+id    body    score
+4    1. Never run MOd as root. 2. ...    1.2110387
+6    When configured properly, MO ...    0.60551935
+1    DBMS stands for DataBase ...    0.0
+2    After you went through a ...    0.0
+3    In this tutorial, we show ...    0.0
+5    In the following database comparison ...    0.0
+select id, body, match (title, body)
+against ('Security implications of running MO as root' in natural language mode) as score
+from articles
+where match (title, body)
+against ('Security implications of running MO as root' in natural language mode);
+id    body    score
+4    1. Never run MOd as root. 2. ...    1.2110387
+6    When configured properly, MO ...    0.60551935
+1    DBMS stands for DataBase ...    0.0
+2    After you went through a ...    0.0
+3    In this tutorial, we show ...    0.0
+5    In the following database comparison ...    0.0
+drop table articles;
+drop table if exists article;
+create table article (
+id int unsigned auto_increment not null primary key,
+title varchar(200),
+body text,
+fulltext (body)
+);
+insert into article (title, body) VALUES
+('MO Tutorial', 'DBMS stands for DataBase ...'),
+('How To Use MO Well', 'After you went through a ...'),
+('Optimizing MO', 'In this tutorial, we show ...'),
+('1001 MO Tricks', '1. Never run MOd as root. 2. ...'),
+('MO vs. YourSQL', 'In the following database comparison ...'),
+('MO Security', 'When configured properly, MO ...');
+select * from article
+where match (body)
+against ('database' in natural language mode);
+id    title    body
+1    MO Tutorial    DBMS stands for DataBase ...
+5    MO vs. YourSQL    In the following database comparison ...
+select id, match (body)
+against ('DataBase' in natural language mode) as score
+from article;
+id    score
+1    0.2276447
+5    0.2276447
+select id, body, match (body)
+against ('Security implications of running MO as root' in natural language mode) as score
+from article
+where match (body)
+against ('Security implications of running MO as root' in natural language mode);
+id    body    score
+4    1. Never run MOd as root. 2. ...    1.2110387
+6    When configured properly, MO ...    0.60551935
+drop table article;
+drop table if exists example1;
+create table example1 (
+id INT auto_increment primary key,
+content text,
+fulltext(content)
+);
+insert into example1 (content) values
+('MO is a database management system.'),
+('A database management system is a software that manages databases.'),
+('MO is a popular choice for development.'),
+('PHP is a popular server-side scripting language for web development.'),
+('Python is a high-level programming language used for various applications.');
+select * from example1
+where match (content)
+against ('+MO +database' in boolean mode);
+id    content
+1    MO is a database management system.
+select * from example1
+where match(content)
+against ('+database' in boolean mode);
+id    content
+1    MO is a database management system.
+2    A database management system is a software that manages databases.
+select * from example1
+where match(content)
+against ('-database' in boolean mode);
+id    content
+select * from example1
+where match (content)
+against ('+web development -MO' in boolean mode);
+id    content
+4    PHP is a popular server-side scripting language for web development.
+select * from example1
+where match (content)
+against ('+MO' in boolean mode);
+id    content
+1    MO is a database management system.
+3    MO is a popular choice for development.
+select * from example1
+where match (content)
+against ('+MO ~popular' in boolean mode);
+id    content
+1    MO is a database management system.
+3    MO is a popular choice for development.
+select * from example1
+where match (content)
+against ('MO*' in boolean mode);
+id    content
+1    MO is a database management system.
+3    MO is a popular choice for development.
+select * from example1
+where match (content)
+against ('+MO +(<popular >database)' in boolean mode);
+id    content
+1    MO is a database management system.
+3    MO is a popular choice for development.
+select * from example1
+where match (content)
+against ('+MO popular' in boolean mode);
+id    content
+3    MO is a popular choice for development.
+1    MO is a database management system.
+select * from example1
+where match (content)
+against ('popular' in boolean mode);
+id    content
+3    MO is a popular choice for development.
+4    PHP is a popular server-side scripting language for web development.
+drop table example1;
+drop table if exists example_json;
+create table example_json (
+id int auto_increment primary key,
+data json
+);
+alter table example_json add fulltext index idx_jsondata (data) with parser json;
+insert into example_json (data) values
+('{"title": "MO Full-Text Search", "content": "Full-text search is a technique for searching text-based content."}'),
+('{"title": "Introduction to MO", "content": "MO is an open-source relational database management system."}'),
+('{"title": "MO development", "content": "MO history"}');
+select * from example_json where match(data) against ('MO development' in boolean mode);
+id    data
+3    {"content": "MO history", "title": "MO development"}
+1    {"content": "Full-text search is a technique for searching text-based content.", "title": "MO Full-Text Search"}
+2    {"content": "MO is an open-source relational database management system.", "title": "Introduction to MO"}
+select * from example_json where match(data) against (' ');
+id    data
+select * from example_json where match(data) against ('"MO development"' in boolean mode);
+id    data
+3    {"content": "MO history", "title": "MO development"}
+select * from example_json where match(data) against ('+MO -open -source' in boolean mode);
+id    data
+1    {"content": "Full-text search is a technique for searching text-based content.", "title": "MO Full-Text Search"}
+3    {"content": "MO history", "title": "MO development"}
+drop table example_json;
+drop table if exists articles;
+drop table if exists authors;
+create table articles (
+id int auto_increment primary key,
+title varchar(255),
+content text,
+author_id int,
+fulltext(content)
+);
+create table authors (
+id int auto_increment primary key,
+name varchar(100)
+);
+insert into authors (name) values ('John Doe'), ('Jane Smith'), ('Alice Johnson');
+insert into articles (title, content, author_id) values
+('MO全文索引入门', 'MO全文索引是一种强大的工具，可以帮助你快速检索数据库中的文本数据。', 1),
+('深入理解全文索引', '全文索引不仅可以提高搜索效率，还可以通过JOIN操作与其他表结合使用。', 2),
+('MO性能优化', '本文将探讨如何优化MO数据库的性能，包括索引优化和查询优化。', 3),
+('全文索引与JOIN操作', '全文索引可以与JOIN操作结合使用，以实现跨表的全文搜索。', 1);
+select * from articles;
+id    title    content    author_id
+1    MO全文索引入门    MO全文索引是一种强大的工具，可以帮助你快速检索数据库中的文本数据。    1
+2    深入理解全文索引    全文索引不仅可以提高搜索效率，还可以通过JOIN操作与其他表结合使用。    2
+3    MO性能优化    本文将探讨如何优化MO数据库的性能，包括索引优化和查询优化。    3
+4    全文索引与JOIN操作    全文索引可以与JOIN操作结合使用，以实现跨表的全文搜索。    1
+select * from authors;
+id    name
+1    John Doe
+2    Jane Smith
+3    Alice Johnson
+select a.title, a.content, au.name
+from articles a
+join authors au on a.author_id = au.id
+where match(a.content) against ('MO' IN NATURAL LANGUAGE MODE);
+
+drop table articles;
+drop table authors;
+drop table if exists posts;
+drop table if exists comments;
+create table posts (
+post_id int auto_increment primary key,
+title varchar(255),
+content text
+);
+create table comments (
+comment_id int auto_increment primary key,
+post_id int,
+comment_text text,
+foreign key (post_id) references posts(post_id)
+);
+alter table posts add fulltext(content);
+insert into posts (title, content) values
+('MO全文索引入门', 'MO全文索引是一种强大的工具，可以帮助你快速检索数据库中的文本数据。'),
+('深入理解全文索引', '全文索引不仅可以提高搜索效率，还可以通过JOIN操作与其他表结合使用。');
+insert into comments (post_id, comment_text) values
+(1, '这篇文章很有用，谢谢分享！'),
+(1, '我也在学习全文索引，很有帮助。'),
+(2, '全文索引真的很强大，学习了。');
+select count(posts.title), count(comments.comment_id) as comment_count
+from posts
+left join comments on posts.post_id = comments.post_id
+where match(posts.content) against ('全文索引' IN NATURAL LANGUAGE MODE)
+group by posts.post_id;
+
+select title, content from articles
+where match(content) against ('全文索引' IN NATURAL LANGUAGE MODE)
+union
+select comment_text as title, comment_text as content from comments
+where match(comment_text) AGAINST ('全文索引' IN NATURAL LANGUAGE MODE);
+
+drop table comments;
+drop table posts;
+drop database test_fulltext;

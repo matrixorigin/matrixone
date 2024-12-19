@@ -860,8 +860,9 @@ func getPubInfosByDbname(ctx context.Context, bh BackgroundExec, dbName string) 
 	return extractPubInfosFromExecResult(ctx, erArray)
 }
 
-func getAllPubInfosBySnapshotName(ctx context.Context, bh BackgroundExec, snapshotName string) (pubInfo []*pubsub.PubInfo, err error) {
-	sql := getAllPubInfoSql + fmt.Sprintf(" {SNAPSHOT = '%s'}", snapshotName)
+func getAllPubInfosBySnapshotName(ctx context.Context, bh BackgroundExec, snapshotName string, restoreTs int64) (pubInfo []*pubsub.PubInfo, err error) {
+	getLogger("").Info("getAllPubInfosBySnapshotName", zap.String("snapshotName", snapshotName), zap.Int64("restoreTs", restoreTs))
+	sql := getAllPubInfoSql + fmt.Sprintf(" {MO_TS = %d}", restoreTs)
 
 	bh.ClearExecResultSet()
 	if err = bh.Exec(defines.AttachAccountId(ctx, catalog.System_Account), sql); err != nil {

@@ -1166,8 +1166,9 @@ type UserInput struct {
 	isInternalInput bool
 	// operator account, the account executes restoration
 	// e.g. sys takes a snapshot sn1 for acc1, then restores acc1 from snapshot sn1. In this scenario, sys is the operator account
-	opAccount uint32
-	toAccount uint32
+	isRestoreByTs bool
+	opAccount     uint32
+	toAccount     uint32
 }
 
 func (ui *UserInput) getSql() string {
@@ -1558,10 +1559,14 @@ rule:
 	it means all most all string can be legal.
 */
 func dbNameIsLegal(name string) bool {
+	name = strings.TrimSpace(name)
 	if hasSpecialChars(name) {
 		return false
 	}
-	name = strings.TrimSpace(name)
+	if name == cdc.MatchAll {
+		return true
+	}
+
 	createDBSqls := []string{
 		"create database " + name,
 		"create database `" + name + "`",
@@ -1579,10 +1584,14 @@ rule:
 	it means all most all string can be legal.
 */
 func tableNameIsLegal(name string) bool {
+	name = strings.TrimSpace(name)
 	if hasSpecialChars(name) {
 		return false
 	}
-	name = strings.TrimSpace(name)
+	if name == cdc.MatchAll {
+		return true
+	}
+
 	createTableSqls := []string{
 		"create table " + name + "(a int)",
 		"create table `" + name + "`(a int)",

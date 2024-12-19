@@ -669,7 +669,7 @@ func getPartitionInfos(ctx CompilerContext, objRef *ObjectRef, tableDef *TableDe
 	partTableIds := make([]uint64, tableDef.Partition.PartitionNum)
 	partTableNames := make([]string, tableDef.Partition.PartitionNum)
 	for i, partition := range tableDef.Partition.Partitions {
-		_, partTableDef := ctx.Resolve(objRef.SchemaName, partition.PartitionTableName, nil)
+		_, partTableDef := ctx.Resolve(DbNameOfObjRef(objRef), partition.PartitionTableName, nil)
 		partTableIds[i] = partTableDef.TblId
 		partTableNames[i] = partition.PartitionTableName
 	}

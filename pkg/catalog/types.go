@@ -833,3 +833,13 @@ const (
 	SAVED_ROW_COUNT_IDX = 14
 	QUERY_ROW_COUNT_IDX = 15
 )
+
+var SystemDatabases = []string{
+	"information_schema",
+	"mo_catalog",
+	"mo_debug",
+	"mo_task",
+	"mysql",
+	"system",
+	"system_metrics",
+}

@@ -406,3 +406,17 @@ func TestFixedToFixedFrameWork_withExecContext(t *testing.T) {
 		[]int64{1, 2, 3, 4, 5}, nil, int64(15/5), false,
 		[]int64{2, 3, 4, 5, 6}, []int{3}, int64(15/4), false)
 }
+
+func TestMakeInitialAggListFromList(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	RegisterGroupConcatAgg(123, ",")
+	mg := NewSimpleAggMemoryManager(mp)
+	agg0 := MakeAgg(mg, 123, true, []types.Type{types.T_varchar.ToType()}...)
+
+	res := MakeInitialAggListFromList(mg, []AggFuncExec{agg0})
+
+	require.Equal(t, 1, len(res))
+	require.Equal(t, int64(123), res[0].AggID())
+	require.Equal(t, true, res[0].IsDistinct())
+}
