@@ -519,13 +519,13 @@ func (exec *aggregatorFromFixedToFixed[from, to]) BatchFill(
 		return nil
 	}
 
-	k := exec.arg.w.(*vector.FunctionParameterWithoutNull[from])
+	vs := exec.arg.w.UnSafeGetAllValue()
 	for i, j, idx := uint64(offset), uint64(offset+len(groups)), 0; i < j; i++ {
 		if groups[idx] != GroupNotMatched {
 			groupIdx := int(groups[idx] - 1)
 			x, y := exec.ret.updateNextAccessIdx(groupIdx)
 			if err := exec.fill(
-				exec.execContext.getGroupContext(groupIdx), commonContext, k.Values[i], exec.ret.bsFromEmptyList[x][y], getter, setter); err != nil {
+				exec.execContext.getGroupContext(groupIdx), commonContext, vs[i], exec.ret.bsFromEmptyList[x][y], getter, setter); err != nil {
 				return err
 			}
 			exec.ret.setGroupNotEmpty(x, y)

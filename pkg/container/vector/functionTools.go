@@ -83,7 +83,7 @@ func GenerateFunctionFixedTypeParameter[T types.FixedSizeTExceptStrType](v *Vect
 	return &FunctionParameterWithoutNull[T]{
 		typ:          *t,
 		sourceVector: v,
-		Values:       cols,
+		values:       cols,
 	}
 }
 
@@ -121,7 +121,7 @@ func ReuseFunctionFixedTypeParameter[T types.FixedSizeTExceptStrType](v *Vector,
 		return false
 	}
 	r.sourceVector = v
-	r.Values = cols
+	r.values = cols
 	return true
 }
 
@@ -320,7 +320,7 @@ func (p *FunctionParameterNormalSpecial1[T]) WithAnyNullValue() bool {
 type FunctionParameterWithoutNull[T types.FixedSizeT] struct {
 	typ          types.Type
 	sourceVector *Vector
-	Values       []T
+	values       []T
 	strValues    []types.Varlena
 	area         []byte
 }
@@ -334,7 +334,7 @@ func (p *FunctionParameterWithoutNull[T]) GetSourceVector() *Vector {
 }
 
 func (p *FunctionParameterWithoutNull[T]) GetValue(idx uint64) (T, bool) {
-	return p.Values[idx], false
+	return p.values[idx], false
 }
 
 func (p *FunctionParameterWithoutNull[T]) GetStrValue(idx uint64) ([]byte, bool) {
@@ -342,7 +342,7 @@ func (p *FunctionParameterWithoutNull[T]) GetStrValue(idx uint64) ([]byte, bool)
 }
 
 func (p *FunctionParameterWithoutNull[T]) UnSafeGetAllValue() []T {
-	return p.Values
+	return p.values
 }
 
 func (p *FunctionParameterWithoutNull[T]) WithAnyNullValue() bool {
