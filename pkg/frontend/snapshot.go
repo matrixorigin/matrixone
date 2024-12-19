@@ -1984,12 +1984,12 @@ func restoreAccountUsingClusterSnapshotToNew(ctx context.Context,
 	// get topo sorted tables with foreign key
 	var sortedFkTbls []string
 	var fkTableMap map[string]*tableInfo
-	sortedFkTbls, err = fkTablesTopoSortWithDropped(ctx, bh, "", "", snapshotTs, uint32(fromAccount), uint32(toAccountId))
+	sortedFkTbls, err = fkTablesTopoSortWithTS(ctx, bh, "", "", snapshotTs, uint32(fromAccount), uint32(toAccountId))
 	if err != nil {
 		return err
 	}
 	// get foreign key table infos
-	fkTableMap, err = getTableInfoMapFromDropped(ctx, ses.GetService(), bh, "", "", sortedFkTbls, snapshotTs, uint32(fromAccount), uint32(toAccountId))
+	fkTableMap, err = getTableInfoMapFromTS(ctx, ses.GetService(), bh, "", "", sortedFkTbls, snapshotTs, uint32(fromAccount), uint32(toAccountId))
 	if err != nil {
 		return err
 	}
@@ -1998,7 +1998,7 @@ func restoreAccountUsingClusterSnapshotToNew(ctx context.Context,
 	viewMap := make(map[string]*tableInfo)
 
 	// restore to account
-	if err = restoreToAccountFromDropped(
+	if err = restoreToAccountFromTS(
 		ctx,
 		ses.GetService(),
 		bh,
@@ -2013,7 +2013,7 @@ func restoreAccountUsingClusterSnapshotToNew(ctx context.Context,
 	}
 
 	if len(fkTableMap) > 0 {
-		if err = restoreTablesWithFkFromDropped(ctx,
+		if err = restoreTablesWithFkFromTS(ctx,
 			ses.GetService(),
 			bh,
 			snapshotTs,
@@ -2026,7 +2026,7 @@ func restoreAccountUsingClusterSnapshotToNew(ctx context.Context,
 	}
 
 	if len(viewMap) > 0 {
-		if err = restoreViewsFromDropped(
+		if err = restoreViewsFromTS(
 			ctx,
 			ses,
 			bh,
