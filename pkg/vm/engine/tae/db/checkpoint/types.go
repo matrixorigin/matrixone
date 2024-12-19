@@ -42,6 +42,7 @@ const (
 
 type CheckpointScheduler interface {
 	TryScheduleCheckpoint(types.TS)
+	RunnerReader
 }
 
 type Runner interface {

@@ -16,8 +16,9 @@ package checkpoint
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -33,6 +34,7 @@ type RunnerReader interface {
 	CollectCheckpointsInRange(ctx context.Context, start, end types.TS) (ckpLoc string, lastEnd types.TS, err error)
 	ICKPSeekLT(ts types.TS, cnt int) []*CheckpointEntry
 	MaxGlobalCheckpoint() *CheckpointEntry
+	MaxIncrementalCheckpoint() *CheckpointEntry
 	GetLowWaterMark() types.TS
 	MaxLSN() uint64
 	GetCatalog() *catalog.Catalog

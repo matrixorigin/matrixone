@@ -58,7 +58,7 @@ func (h *tableHandle) ThrowAppenderAndErr() (appender data.ObjectAppender, err e
 func (h *tableHandle) GetAppender() (appender data.ObjectAppender, err error) {
 	var objEntry *catalog.ObjectEntry
 	if h.appender == nil {
-		objEntry = h.table.meta.LastAppendableObject(h.isTombstone)
+		objEntry = h.table.meta.TryFindLastAppendableObject(h.isTombstone)
 		if objEntry == nil {
 			err = data.ErrAppendableObjectNotFound
 			return

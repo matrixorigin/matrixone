@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
 
 const (
@@ -946,7 +947,7 @@ func (c *tableStatArg) Run() (err error) {
 		return moerr.NewInfoNoCtx(fmt.Sprintf("failed to get table %v", c.tid))
 	}
 	c.name = table.GetFullName()
-	it := table.MakeObjectIt(true)
+	it := table.MakeDataVisibleObjectIt(txnbase.MockTxnReaderWithNow())
 	defer it.Release()
 	for it.Next() {
 		entry := it.Item()

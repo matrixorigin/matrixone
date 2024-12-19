@@ -736,6 +736,72 @@ func (r *runner) tryScheduleIncrementalCheckpoint(start, end types.TS) {
 	r.tryAddNewIncrementalCheckpointEntry(entry)
 }
 
+func IsAllDirtyFlushed(source logtail.Collector, cata *catalog.Catalog, start, end types.TS, doPrint bool) bool {
+	tree, _ := source.ScanInRange(start, end)
+	ready := true
+	var notFlushed *catalog.ObjectEntry
+	for _, table := range tree.GetTree().Tables {
+		db, err := cata.GetDatabaseByID(table.DbID)
+		if err != nil {
+			continue
+		}
+		table, err := db.GetTableEntryByID(table.ID)
+		if err != nil {
+			continue
+		}
+		ready, notFlushed = IsTableTailFlushed(table, start, end, false)
+		if !ready {
+			break
+		}
+		ready, notFlushed = IsTableTailFlushed(table, start, end, true)
+		if !ready {
+			break
+		}
+	}
+	if !ready && doPrint {
+		table := notFlushed.GetTable()
+		tableDesc := fmt.Sprintf("%d-%s", table.ID, table.GetLastestSchemaLocked(false).Name)
+		logutil.Info("waiting for dirty tree %s", zap.String("table", tableDesc), zap.String("obj", notFlushed.StringWithLevel(2)))
+	}
+	return ready
+}
+
+func IsTableTailFlushed(table *catalog.TableEntry, start, end types.TS, isTombstone bool) (bool, *catalog.ObjectEntry) {
+	var it btree.IterG[*catalog.ObjectEntry]
+	if isTombstone {
+		table.WaitTombstoneObjectCommitted(end)
+		it = table.MakeTombstoneObjectIt()
+	} else {
+		table.WaitDataObjectCommitted(end)
+		it = table.MakeDataObjectIt()
+	}
+	earlybreak := false
+	// some entries shared the same timestamp with end, so we need to seek to the next one
+	key := &catalog.ObjectEntry{EntryMVCCNode: catalog.EntryMVCCNode{DeletedAt: end.Next()}}
+	var ok bool
+	if ok = it.Seek(key); !ok {
+		ok = it.Last()
+	}
+	for ; ok; ok = it.Prev() {
+		if earlybreak {
+			break
+		}
+		obj := it.Item()
+		if !obj.IsAppendable() || obj.IsDEntry() {
+			continue
+		}
+		// check only appendable C entries
+		if obj.CreatedAt.LT(&start) {
+			earlybreak = true
+		}
+		// the C entry has no counterpart D entry or the D entry is not committed yet
+		if next := obj.GetNextVersion(); next == nil || !next.IsCommitted() {
+			return false, obj
+		}
+	}
+	return true, nil
+}
+
 func (r *runner) TryScheduleCheckpoint(endts types.TS) {
 	if r.disabled.Load() {
 		return
@@ -760,16 +826,12 @@ func (r *runner) TryScheduleCheckpoint(endts types.TS) {
 
 	if entry.IsPendding() {
 		check := func() (done bool) {
-			if !r.source.IsCommitted(entry.GetStart(), entry.GetEnd()) {
-				return false
-			}
-			tree := r.source.ScanInRangePruned(entry.GetStart(), entry.GetEnd())
-			tree.GetTree().Compact()
-			if !tree.IsEmpty() && entry.TooOld() {
-				logutil.Infof("waiting for dirty tree %s", tree.String())
+			start, end := entry.GetStart(), entry.GetEnd()
+			ready := IsAllDirtyFlushed(r.source, r.catalog, start, end, entry.TooOld())
+			if !ready {
 				entry.DeferRetirement()
 			}
-			return tree.IsEmpty()
+			return ready
 		}
 
 		if !check() {
