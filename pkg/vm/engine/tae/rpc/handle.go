@@ -256,6 +256,10 @@ func (h *Handle) newTxnCommitRequestsIter(
 	meta txn.TxnMeta,
 ) *txnCommitRequestsIter {
 
+	// in the normal commit processes, the new logic won't cache the write requests anymore.
+	// however, there exist massive ut code that verified the preCommit-commit 2PC logic,
+	// which cached the write requests in the preCommit call.
+	// to keep that, there also leave the commiting code of the cached requests un-changed, but only for ut.
 	if cr == nil {
 		// for now, only test will into this logic
 		key := util.UnsafeBytesToString(meta.GetID())
@@ -289,7 +293,7 @@ func (cri *txnCommitRequestsIter) Next() bool {
 	return cri.cursor < len(cri.commitRequests.Payload)
 }
 
-func (cri *txnCommitRequestsIter) Entry() (entry any, isMerge bool, err error) {
+func (cri *txnCommitRequestsIter) Entry() (entry any, err error) {
 
 	if cri.commitRequests == nil {
 		entry = cri.cached[cri.cursor]
@@ -298,34 +302,20 @@ func (cri *txnCommitRequestsIter) Entry() (entry any, isMerge bool, err error) {
 	}
 
 	cnReq := cri.commitRequests.Payload[cri.cursor].CNRequest
-	if cnReq.OpCode == uint32(api.OpCode_OpCommitMerge) {
-		if cri.curMergeReq == nil {
-			cri.curMergeReq = new(api.MergeCommitEntry)
-		}
 
-		if err = cri.curMergeReq.UnmarshalBinary(cnReq.Payload); err != nil {
+	if cri.curNorReq == nil {
+		cri.curNorReq = new(api.PrecommitWriteCmd)
+	}
+
+	if len(cri.curNorReq.EntryList) == 0 {
+		if err = cri.curNorReq.UnmarshalBinary(cnReq.Payload); err != nil {
 			return
 		}
+	}
 
+	entry, cri.curNorReq.EntryList, err = pkgcatalog.ParseEntryList(cri.curNorReq.EntryList)
+	if len(cri.curNorReq.EntryList) == 0 {
 		cri.cursor++
-		isMerge = true
-		entry = cri.curMergeReq
-
-	} else {
-		if cri.curNorReq == nil {
-			cri.curNorReq = new(api.PrecommitWriteCmd)
-		}
-
-		if len(cri.curNorReq.EntryList) == 0 {
-			if err = cri.curNorReq.UnmarshalBinary(cnReq.Payload); err != nil {
-				return
-			}
-		}
-
-		entry, cri.curNorReq.EntryList, err = pkgcatalog.ParseEntryList(cri.curNorReq.EntryList)
-		if len(cri.curNorReq.EntryList) == 0 {
-			cri.cursor++
-		}
 	}
 
 	return
@@ -340,8 +330,7 @@ func (h *Handle) handleRequests(
 ) (releaseF []func(), hasDDL bool, err error) {
 
 	var (
-		entry         any
-		isMergeCommit bool
+		entry any
 
 		iter *txnCommitRequestsIter
 
@@ -356,21 +345,8 @@ func (h *Handle) handleRequests(
 	}
 
 	for iter.Next() {
-		if entry, isMergeCommit, err = iter.Entry(); err != nil {
+		if entry, err = iter.Entry(); err != nil {
 			return
-		}
-
-		if isMergeCommit {
-			resp := api.TNStringResponse{}
-			if err = h.HandleCommitMerge(ctx, txnMeta, entry.(*api.MergeCommitEntry), &resp); err != nil {
-				return
-			}
-
-			if response.CNOpResponse.Payload, err = resp.Marshal(); err != nil {
-				return
-			}
-
-			continue
 		}
 
 		switch req := entry.(type) {
