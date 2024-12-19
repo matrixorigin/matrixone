@@ -25,6 +25,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -33,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -1279,4 +1281,108 @@ func TestWorkspaceQuota(t *testing.T) {
 	require.Equal(t, int(quotaSize), int(remaining))
 	_, acquired := e.AcquireQuota(quotaSize+1, &q)
 	require.False(t, acquired)
+}
+
+func TestWorkspaceQuota2(t *testing.T) {
+
+	var (
+		err          error
+		mp           *mpool.MPool
+		txn          client.TxnOperator
+		accountId    = catalog.System_Account
+		tableName    = "test_table"
+		databaseName = "test_database"
+
+		primaryKeyIdx = 3
+
+		relation engine.Relation
+		_        engine.Database
+
+		taeEngine     *testutil.TestTxnStorage
+		rpcAgent      *testutil.MockRPCAgent
+		disttaeEngine *testutil.TestDisttaeEngine
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
+
+	schema := catalog2.MockSchemaAll(4, primaryKeyIdx)
+	schema.Name = tableName
+
+	disttaeEngine, taeEngine, rpcAgent, mp = testutil.CreateEngines(
+		ctx,
+		testutil.TestOptions{},
+		t,
+		testutil.WithDisttaeEngineInsertEntryMaxCount(1),
+		testutil.WithDisttaeEngineWriteWorkspaceThreshold(1),
+		testutil.WithDisttaeEngineQuota(256),
+	)
+	defer func() {
+		disttaeEngine.Close(ctx)
+		taeEngine.Close(true)
+		rpcAgent.Close()
+	}()
+
+	ctx, cancel = context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	_, _, err = disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
+	require.NoError(t, err)
+
+	rowsCount := 15
+	bat := catalog2.MockBatch(schema, rowsCount)
+	bat1, _ := containers.ToCNBatch(bat).Window(0, 5)
+	bat2, _ := containers.ToCNBatch(bat).Window(5, 10)
+	bat3, _ := containers.ToCNBatch(bat).Window(10, 15)
+
+	{
+		_, relation, txn, err = disttaeEngine.GetTable(ctx, databaseName, tableName)
+		require.NoError(t, err)
+		// exceed workspace write threshold, acquire quota success, do not write s3
+		require.NoError(t, testutil.WriteToRelation(ctx, txn, relation, bat1, false, true))
+		// exceed workspace write threshold, acquire quota success, do not write s3
+		require.NoError(t, testutil.WriteToRelation(ctx, txn, relation, bat2, false, true))
+		// exceed workspace write threshold, acquire quota failed,  write s3
+		require.NoError(t, testutil.WriteToRelation(ctx, txn, relation, bat3, false, true))
+		// exceed workspace commit threshold, write s3
+		require.NoError(t, txn.Commit(ctx))
+	}
+
+	require.NoError(t, disttaeEngine.SubscribeTable(ctx, relation.GetDBID(ctx), relation.GetTableID(ctx), false))
+	state, err := disttaeEngine.GetPartitionStateStats(ctx, relation.GetDBID(ctx), relation.GetTableID(ctx))
+	require.NoError(t, err)
+	t.Log(state.String())
+	// should get 2 objects
+	// 1 object is 5 rows, bat3
+	// 1 object is 10 rows, bat1 + bat2
+	require.Equal(t, 2, state.DataObjectsVisible.ObjCnt)
+
+	_, relation, txn, err = disttaeEngine.GetTable(ctx, databaseName, tableName)
+
+	require.NoError(t, err)
+	reader, err := testutil.GetRelationReader(
+		ctx,
+		disttaeEngine,
+		txn,
+		relation,
+		nil,
+		mp,
+		t,
+	)
+	require.NoError(t, err)
+
+	ret := testutil.EmptyBatchFromSchema(schema, primaryKeyIdx)
+	cnt := 0
+	for {
+		ok, err := reader.Read(ctx, ret.Attrs, nil, mp, ret)
+		require.NoError(t, err)
+		cnt += ret.RowCount()
+		if ok {
+			break
+		}
+	}
+	require.NoError(t, err)
+
+	require.Equal(t, rowsCount, cnt)
+	require.NoError(t, txn.Commit(ctx))
 }

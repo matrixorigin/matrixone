@@ -134,7 +134,6 @@ const (
 const (
 	CommitWorkspaceThreshold       uint64 = 1 * mpool.MB
 	WriteWorkspaceThreshold        uint64 = 5 * mpool.MB
-	ExtraWorkspaceThreshold        uint64 = 10 * mpool.MB
 	InsertEntryThreshold                  = 5000
 	GCBatchOfFileCount             int    = 1000
 	GCPoolSize                     int    = 5
@@ -171,7 +170,7 @@ func WithWriteWorkspaceThreshold(th uint64) EngineOptions {
 
 func WithExtraWorkspaceThresholdQuota(quota uint64) EngineOptions {
 	return func(e *Engine) {
-		e.config.extraWorkspaceThresholdQuota = quota
+		e.config.extraWorkspaceQuota.Store(quota)
 	}
 }
 
@@ -236,10 +235,10 @@ type Engine struct {
 	tnID     string
 
 	config struct {
-		insertEntryMaxCount          int
-		commitWorkspaceThreshold     uint64
-		writeWorkspaceThreshold      uint64
-		extraWorkspaceThresholdQuota uint64
+		insertEntryMaxCount      int
+		commitWorkspaceThreshold uint64
+		writeWorkspaceThreshold  uint64
+		extraWorkspaceQuota      atomic.Uint64
 
 		cnTransferTxnLifespanThreshold time.Duration
 
@@ -283,8 +282,6 @@ type Engine struct {
 	dynamicCtx
 	// for test only.
 	skipConsume bool
-
-	extraWorkspaceQuota atomic.Uint64
 }
 
 func (e *Engine) SetService(svr string) {
