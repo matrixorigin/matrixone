@@ -1493,7 +1493,14 @@ func doResolveSnapshotWithSnapshotName(ctx context.Context, ses FeSession, snaps
 	var accountId uint32
 	// cluster level record has no accountName, so accountId is 0
 	if len(record.accountName) != 0 {
-		accountId = uint32(record.objId)
+		if record.level == tree.RESTORELEVELACCOUNT.String() {
+			accountId = uint32(record.objId)
+		} else {
+			accountId, err = defines.GetAccountId(ctx)
+			if err != nil {
+				return
+			}
+		}
 	}
 
 	return &pbplan.Snapshot{
