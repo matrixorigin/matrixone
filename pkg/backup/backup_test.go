@@ -345,7 +345,7 @@ func TestBackupData4(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
-	
+
 	fault.Enable()
 	defer fault.Disable()
 	fault.AddFaultPoint(ctx, "back up UT", ":::", "echo", 0, "debug", false)
