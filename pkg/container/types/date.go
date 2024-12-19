@@ -295,9 +295,6 @@ func (d Date) ToBytes(dst []byte) []byte {
 	y, m, day, _ := d.Calendar(true)
 	//1. year to upper, lower
 	yUpper, yLower := y/100, y%100
-	if yUpper > 99 { //impossible
-		return fmt.Appendf(dst, "%04d-%02d-%02d", y, m, day)
-	}
 	//2. yUpper & yLower to chars. four bytes
 	dst = append(dst, hundredToChars[yUpper][:2]...)
 	dst = append(dst, hundredToChars[yLower][:2]...)
