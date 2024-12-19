@@ -31,7 +31,7 @@ var makeAggExec = aggexec.MakeAgg
 // intermediateResultSendActionTrigger is the row number to trigger an action
 // to send the intermediate result
 // if the result row is not less than this number.
-var intermediateResultSendActionTrigger = 8192
+var intermediateResultSendActionTrigger = aggexec.BlockCapacityForStrType
 
 func (group *Group) String(buf *bytes.Buffer) {
 	buf.WriteString(thisOperatorName + ": group([")
@@ -273,9 +273,6 @@ func (group *Group) consumeBatchToGetFinalResult(
 			if err = group.ctr.result1.InitWithGroupBy(
 				proc.Mp(),
 				aggexec.GetMinAggregatorsChunkSize(group.ctr.groupByEvaluate.Vec, aggs), aggs, group.ctr.groupByEvaluate.Vec, group.PreAllocSize); err != nil {
-				return err
-			}
-			if err = preExtendAggExecs(aggs, group.PreAllocSize); err != nil {
 				return err
 			}
 		}

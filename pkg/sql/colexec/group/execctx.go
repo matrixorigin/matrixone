@@ -163,7 +163,7 @@ func (buf *GroupResultBuffer) InitWithGroupBy(
 	}
 
 	buf.ToPopped = buf.ToPopped[:1]
-	return nil
+	return preExtendAggExecs(buf.AggList, preAllocated)
 }
 
 func (buf *GroupResultBuffer) InitWithBatch(chunkSize int, aggList []aggexec.AggFuncExec, vecExampleBatch *batch.Batch) {
@@ -276,6 +276,7 @@ func (buf *GroupResultBuffer) CleanLastPopped(m *mpool.MPool) {
 }
 
 func (buf *GroupResultBuffer) Free0(m *mpool.MPool) {
+	buf.ToPopped = buf.ToPopped[:cap(buf.ToPopped)]
 	for i := range buf.ToPopped {
 		if buf.ToPopped[i] != nil {
 			buf.ToPopped[i].Clean(m)

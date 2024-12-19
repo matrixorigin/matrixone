@@ -34,7 +34,7 @@ const (
 	blockCapacityFor32Byte  = 1024 * 1024 * 25
 	blockCapacityFor64Byte  = 1024 * 1024 * 12
 	blockCapacityFor128Byte = 1024 * 1024 * 6
-	blockCapacityForStrType = 8192 * 4
+	BlockCapacityForStrType = 8192 * 4
 )
 
 var blockCapacityMap = map[int]int{
@@ -53,7 +53,7 @@ var blockCapacityMap = map[int]int{
 // GetChunkSizeFromType return the chunk size for the input type.
 // This chunk size ensures that each chunk with this type does not exceed 1 GB of memory.
 func GetChunkSizeFromType(typ types.Type) (s int) {
-	s = blockCapacityForStrType
+	s = BlockCapacityForStrType
 	if !typ.IsVarlen() {
 		if newCap, ok := blockCapacityMap[typ.TypeSize()]; ok {
 			s = newCap
