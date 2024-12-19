@@ -83,7 +83,7 @@ func (task *BaseTask) onDone(_ base.IOp) {
 		common.ErrorField(task.Err))
 }
 func (task *BaseTask) Type() TaskType      { return task.taskType }
-func (task *BaseTask) Cancel() (err error) { panic("todo") }
+func (task *BaseTask) Cancel() (err error) { return nil }
 func (task *BaseTask) ID() uint64          { return task.id }
 func (task *BaseTask) Execute() (err error) {
 	if task.exec != nil {
