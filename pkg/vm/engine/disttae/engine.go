@@ -166,12 +166,18 @@ func (e *Engine) fillDefaults() {
 	if e.config.cnTransferTxnLifespanThreshold <= 0 {
 		e.config.cnTransferTxnLifespanThreshold = CNTransferTxnLifespanThreshold
 	}
+	if e.config.extraWorkspaceQuota.Load() <= 0 {
+		mem := totalMem() / 100 * 5
+		e.config.extraWorkspaceQuota.Store(mem)
+		v2.TxnExtraWorkspaceQuotaGauge.Set(float64(mem))
+	}
 
 	logutil.Info(
 		"INIT-ENGINE-CONFIG",
 		zap.Int("InsertEntryMaxCount", e.config.insertEntryMaxCount),
 		zap.Uint64("CommitWorkspaceThreshold", e.config.commitWorkspaceThreshold),
 		zap.Uint64("WriteWorkspaceThreshold", e.config.writeWorkspaceThreshold),
+		zap.Uint64("ExtraWorkspaceThresholdQuota", e.config.extraWorkspaceQuota.Load()),
 		zap.Duration("CNTransferTxnLifespanThreshold", e.config.cnTransferTxnLifespanThreshold),
 	)
 }
@@ -189,6 +195,40 @@ func (e *Engine) SetWorkspaceThreshold(commitThreshold, writeThreshold uint64) (
 		e.config.writeWorkspaceThreshold = writeThreshold * mpool.MB
 	}
 	return
+}
+
+func (e *Engine) AcquireQuota(v uint64, quota *MemoryQuota) (uint64, bool) {
+	for {
+		oldRemaining := e.config.extraWorkspaceQuota.Load()
+		if oldRemaining < v {
+			return 0, false
+		}
+		remaining := oldRemaining - v
+		if e.config.extraWorkspaceQuota.CompareAndSwap(oldRemaining, remaining) {
+			quota.Apply(v)
+			v2.TxnExtraWorkspaceQuotaGauge.Set(float64(remaining))
+			logutil.Info(
+				"WORKSPACE-QUOTA-ACQUIRE",
+				zap.Uint64("quota", v),
+				zap.Uint64("remaining", remaining),
+			)
+			return remaining, true
+		}
+	}
+}
+
+func (e *Engine) ReleaseQuota(quota *MemoryQuota) {
+	size := quota.Release()
+	if size == 0 {
+		return
+	}
+	e.config.extraWorkspaceQuota.Add(size)
+	v2.TxnExtraWorkspaceQuotaGauge.Set(float64(e.config.extraWorkspaceQuota.Load()))
+	logutil.Info(
+		"WORKSPACE-QUOTA-RELEASE",
+		zap.Uint64("quota", size),
+		zap.Uint64("remaining", e.config.extraWorkspaceQuota.Load()),
+	)
 }
 
 func (e *Engine) GetService() string {
