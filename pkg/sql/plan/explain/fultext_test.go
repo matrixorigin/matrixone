@@ -1,4 +1,4 @@
-// Copyright 2023 Matrix Origin
+// Copyright 2021 - 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,22 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package executor
+package explain
 
 import (
+	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
 )
 
-func TestOptionsStreaming(t *testing.T) {
-	var opts Options
-	var ch chan Result
-	var errors chan error
-
-	opts = opts.WithStreaming(ch, errors)
-	ret, err_chan, streaming := opts.Streaming()
-	require.True(t, ret == ch)
-	require.True(t, streaming)
-	require.True(t, err_chan == errors)
+func TestFullTextSql(t *testing.T) {
+	node := &plan.Node{
+		NodeType: plan.Node_FUNCTION_SCAN,
+		Stats:    &plan.Stats{Sql: "SELECT * FROM TABLE"},
+	}
+	nodedesc := &NodeDescribeImpl{Node: node}
+	lines, err := nodedesc.GetExtraInfo(context.TODO(), &ExplainOptions{Verbose: true})
+	require.Nil(t, err)
+	require.Equal(t, 1, len(lines))
+	require.Equal(t, "Sql: SELECT * FROM TABLE", lines[0])
 }
