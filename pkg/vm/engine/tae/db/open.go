@@ -224,7 +224,7 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 		common.AnyField("cost", time.Since(now)),
 		common.AnyField("checkpointed", checkpointed.ToString()),
 	)
-	ckpReplayer.Close()
+	defer ckpReplayer.Close()
 
 	now = time.Now()
 	db.Replay(dataFactory, checkpointed, ckpLSN, valid)
