@@ -165,6 +165,15 @@ message SubscriptionMeta{
 	string tables = 6; // pubTables (separated by ',')
 }
 
+message IndexScanInfo {
+	bool is_index_scan = 1;
+	string index_name   = 2;
+	string belong_to_table = 3;
+	repeated string parts  = 4;
+	bool is_unique		    = 5;
+	string index_table_name  = 6;
+}
+
 message Function {
 	// Function flags
 	enum FuncFlag {
@@ -842,6 +851,8 @@ message Node {
 	ObjectRef obj_ref = 18;
 	ObjectRef parent_obj_ref = 19;
 	RowsetData rowset_data = 20;
+
+	IndexScanInfo index_scan_info = 21 [(gogoproto.nullable) = false];
 
 	string extra_options = 22;
 	DeleteCtx delete_ctx = 23;
