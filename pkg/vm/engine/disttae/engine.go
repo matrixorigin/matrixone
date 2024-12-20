@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"strings"
 	"sync"
 	"time"
@@ -166,9 +167,9 @@ func (e *Engine) fillDefaults() {
 	if e.config.cnTransferTxnLifespanThreshold <= 0 {
 		e.config.cnTransferTxnLifespanThreshold = CNTransferTxnLifespanThreshold
 	}
-	if e.config.extraWorkspaceQuota.Load() <= 0 {
-		mem := totalMem() / 100 * 5
-		e.config.extraWorkspaceQuota.Store(mem)
+	if e.Limiter.quota.Load() <= 0 {
+		mem := objectio.TotalMem() / 100 * 5
+		e.Limiter.quota.Store(mem)
 		v2.TxnExtraWorkspaceQuotaGauge.Set(float64(mem))
 	}
 
@@ -177,7 +178,7 @@ func (e *Engine) fillDefaults() {
 		zap.Int("InsertEntryMaxCount", e.config.insertEntryMaxCount),
 		zap.Uint64("CommitWorkspaceThreshold", e.config.commitWorkspaceThreshold),
 		zap.Uint64("WriteWorkspaceThreshold", e.config.writeWorkspaceThreshold),
-		zap.Uint64("ExtraWorkspaceThresholdQuota", e.config.extraWorkspaceQuota.Load()),
+		zap.Uint64("ExtraWorkspaceThresholdQuota", e.Limiter.quota.Load()),
 		zap.Duration("CNTransferTxnLifespanThreshold", e.config.cnTransferTxnLifespanThreshold),
 	)
 }
@@ -197,14 +198,14 @@ func (e *Engine) SetWorkspaceThreshold(commitThreshold, writeThreshold uint64) (
 	return
 }
 
-func (e *Engine) AcquireQuota(v uint64, quota *MemoryQuota) (uint64, bool) {
+func (e *limiter) AcquireQuota(v uint64, quota *MemoryQuota) (uint64, bool) {
 	for {
-		oldRemaining := e.config.extraWorkspaceQuota.Load()
+		oldRemaining := e.quota.Load()
 		if oldRemaining < v {
 			return 0, false
 		}
 		remaining := oldRemaining - v
-		if e.config.extraWorkspaceQuota.CompareAndSwap(oldRemaining, remaining) {
+		if e.quota.CompareAndSwap(oldRemaining, remaining) {
 			quota.Apply(v)
 			v2.TxnExtraWorkspaceQuotaGauge.Set(float64(remaining))
 			logutil.Info(
@@ -217,17 +218,17 @@ func (e *Engine) AcquireQuota(v uint64, quota *MemoryQuota) (uint64, bool) {
 	}
 }
 
-func (e *Engine) ReleaseQuota(quota *MemoryQuota) {
+func (e *limiter) ReleaseQuota(quota *MemoryQuota) {
 	size := quota.Release()
 	if size == 0 {
 		return
 	}
-	e.config.extraWorkspaceQuota.Add(size)
-	v2.TxnExtraWorkspaceQuotaGauge.Set(float64(e.config.extraWorkspaceQuota.Load()))
+	e.quota.Add(size)
+	v2.TxnExtraWorkspaceQuotaGauge.Set(float64(e.quota.Load()))
 	logutil.Info(
 		"WORKSPACE-QUOTA-RELEASE",
 		zap.Uint64("quota", size),
-		zap.Uint64("remaining", e.config.extraWorkspaceQuota.Load()),
+		zap.Uint64("remaining", e.quota.Load()),
 	)
 }
 
