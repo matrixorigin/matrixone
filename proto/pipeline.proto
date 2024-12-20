@@ -137,8 +137,7 @@ message MultiUpdate {
   uint32 Action = 2;
   uint32 IBucket = 3;
   uint32 NBucket = 4;
-  map<string,int32> SegmentMap = 5;
-  repeated plan.UpdateCtx update_ctx_list = 6;
+  repeated plan.UpdateCtx update_ctx_list = 5;
 }
 
 message Array{
