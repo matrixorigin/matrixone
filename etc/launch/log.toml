@@ -8,3 +8,18 @@ level = "info"
 [malloc]
 check-fraction = 65536
 enable-metrics = true
+
+[observability.cu]
+cu_unit = 5.5797810200e-09
+cpu_price = 8.54e-15
+mem_price = 1.83e-25
+io_in_price = 0
+io_out_price = 0
+traffic_price_0 = 4.99e-13
+traffic_price_1 = 0
+traffic_price_2 = 4.99e-13
+
+[observability]
+#enableMetricToProm = true
+enable-metric-to-prom = true
+enable-stmt-merge = true
