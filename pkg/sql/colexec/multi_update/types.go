@@ -73,7 +73,7 @@ type MultiUpdate struct {
 
 	Engine engine.Engine
 
-	SegmentMap map[string]int32
+	// SegmentMap map[string]int32
 
 	vm.OperatorBase
 }

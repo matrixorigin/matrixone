@@ -221,6 +221,7 @@ func Open(
 
 	now := time.Now()
 	ckpReplayer := db.BGCheckpointRunner.Replay(dataFactory)
+	defer ckpReplayer.Close()
 	if err = ckpReplayer.ReadCkpFiles(); err != nil {
 		panic(err)
 	}
