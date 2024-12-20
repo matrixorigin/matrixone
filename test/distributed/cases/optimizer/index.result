@@ -35,7 +35,7 @@ Project
                     Filter Cond: (t1.c3 = 11)
                     Block Filter Cond: (t1.c3 = 11)
                     Runtime Filter Probe: t1.c1
-              ->  Table Scan on d1.id1(index) [ForceOneCN]
+              ->  Index Table Scan on t1.id1 [ForceOneCN]
                     Filter Cond: (#[0,0] = 11)
                     Block Filter Cond: (#[0,0] = 11)
 select * from t1,t2 where t1.c1=t2.c0 and t1.c3=11;
@@ -213,7 +213,7 @@ select * from t1 where c2=1;
 c1    c2    c3
 1    1    1
 explain select * from t1 where c3<2000;
-TP QURERY PLAN
+TP QUERY PLAN
 Project
   ->  Table Scan on d1.t1
         Filter Cond: (t1.c3 < 2000)
