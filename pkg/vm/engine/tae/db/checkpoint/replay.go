@@ -199,7 +199,7 @@ func (c *CkpReplayer) ReadCkpFiles() (err error) {
 
 	closecbs := make([]func(), 0)
 	c.totalCount = len(entries)
-	readfn := func(i int, readType uint16) {
+	readfn := func(i int, readType uint16) (err error) {
 		checkpointEntry := entries[i]
 		checkpointEntry.sid = r.rt.SID()
 		if checkpointEntry.end.LT(&maxGlobalEnd) {
@@ -230,6 +230,7 @@ func (c *CkpReplayer) ReadCkpFiles() (err error) {
 				closecbs = append(closecbs, func() { datas[i].CloseWhenLoadFromCache(checkpointEntry.version) })
 			}
 		}
+		return nil
 	}
 	c.closes = append(c.closes, closecbs...)
 	t0 = time.Now()
@@ -241,16 +242,24 @@ func (c *CkpReplayer) ReadCkpFiles() (err error) {
 		}
 	}
 	for i := 0; i < bat.Length(); i++ {
-		readfn(i, PrefetchMetaIdx)
+		if err = readfn(i, PrefetchMetaIdx); err != nil {
+			return
+		}
 	}
 	for i := 0; i < bat.Length(); i++ {
-		readfn(i, ReadMetaIdx)
+		if err = readfn(i, ReadMetaIdx); err != nil {
+			return
+		}
 	}
 	for i := 0; i < bat.Length(); i++ {
-		readfn(i, PrefetchData)
+		if err = readfn(i, PrefetchData); err != nil {
+			return
+		}
 	}
 	for i := 0; i < bat.Length(); i++ {
-		readfn(i, ReadData)
+		if err = readfn(i, ReadData); err != nil {
+			return
+		}
 	}
 	c.ckpdatas = datas
 	c.readDuration += time.Since(t0)
