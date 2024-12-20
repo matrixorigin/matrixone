@@ -82,7 +82,7 @@ Project
         ->  Table Scan on d1.t1 [ForceOneCN]
               Filter Cond: (t1.c2 = '123')
               Runtime Filter Probe: t1.c1
-        ->  Table Scan on d1.c2(index) [ForceOneCN]
+        ->  Index Table Scan on t1.c2 [ForceOneCN]
               Filter Cond: prefix_eq(#[0,0])
               Block Filter Cond: prefix_eq(#[0,0])
 select * from t1 where c2 like '123';

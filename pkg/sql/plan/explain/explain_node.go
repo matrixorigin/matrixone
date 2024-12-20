@@ -44,6 +44,7 @@ func NewNodeDescriptionImpl(node *plan.Node) *NodeDescribeImpl {
 }
 
 const TableScan = "Table Scan"
+const IndexTableScan = "Index Table Scan"
 const ExternalScan = "External Scan"
 
 func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *ExplainOptions) (string, error) {
@@ -58,6 +59,9 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 		pname = "Values Scan"
 	case plan.Node_TABLE_SCAN:
 		pname = TableScan
+		if ndesc.Node.IndexScanInfo.IsIndexScan {
+			pname = IndexTableScan
+		}
 	case plan.Node_EXTERNAL_SCAN:
 		pname = ExternalScan
 	case plan.Node_SOURCE_SCAN:
@@ -164,20 +168,10 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 		case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_MATERIAL_SCAN, plan.Node_INSERT, plan.Node_SOURCE_SCAN:
 			buf.WriteString(" on ")
 			if ndesc.Node.ObjRef != nil {
-				if ndesc.Node.ParentObjRef == nil || options.CmpContext == nil { // original table
+				if ndesc.Node.IndexScanInfo.IsIndexScan {
+					buf.WriteString(ndesc.Node.IndexScanInfo.BelongToTable + "." + ndesc.Node.IndexScanInfo.IndexName)
+				} else {
 					buf.WriteString(ndesc.Node.ObjRef.GetSchemaName() + "." + ndesc.Node.ObjRef.GetObjName())
-				} else { // index table, need to get index table name
-					scanSnapshot := ndesc.Node.ScanSnapshot
-					if scanSnapshot == nil {
-						scanSnapshot = &plan.Snapshot{}
-					}
-					_, origTableDef := options.CmpContext.Resolve(ndesc.Node.ParentObjRef.GetSchemaName(), ndesc.Node.ParentObjRef.GetObjName(), scanSnapshot)
-					for i := range origTableDef.Indexes {
-						if origTableDef.Indexes[i].IndexTableName == ndesc.Node.ObjRef.GetObjName() {
-							buf.WriteString(ndesc.Node.ObjRef.GetSchemaName() + "." + origTableDef.Indexes[i].IndexName + "(index)")
-							break
-						}
-					}
 				}
 			} else if ndesc.Node.TableDef != nil {
 				buf.WriteString(ndesc.Node.TableDef.GetName())
@@ -448,7 +442,24 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(ctx context.Context, options *Explai
 		}
 	}
 
+	if ndesc.Node.NodeType == plan.Node_FUNCTION_SCAN {
+		msg, err := ndesc.GetFullTextSql(ctx, options)
+		if err != nil {
+			return nil, err
+		}
+		if len(msg) > 0 {
+			lines = append(lines, msg)
+		}
+	}
 	return lines, nil
+}
+
+func (ndesc *NodeDescribeImpl) GetFullTextSql(ctx context.Context, options *ExplainOptions) (string, error) {
+	if options.Verbose && len(ndesc.Node.GetStats().Sql) > 0 {
+		result := "Sql: " + ndesc.Node.GetStats().Sql
+		return result, nil
+	}
+	return "", nil
 }
 
 func (ndesc *NodeDescribeImpl) GetProjectListInfo(ctx context.Context, options *ExplainOptions) (string, error) {
