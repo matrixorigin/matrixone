@@ -1643,6 +1643,8 @@ func restoreToCluster(ctx context.Context,
 ) (err error) {
 	getLogger(ses.GetService()).Info(fmt.Sprintf("[%s] start to restore cluster, restore timestamp: %d", snapshotName, snapshotTs))
 
+	var isRestoreToCluster bool
+	var isNeedToCleanToDatabase bool
 	// drop account which not in snapshot
 	var currentExistsAccount []accountRecord
 	currentExistsAccount, err = getRestoreAcurrentExistsAccount(ctx, ses.GetService(), bh, snapshotName)
@@ -1698,6 +1700,8 @@ func restoreToCluster(ctx context.Context,
 	// get restore accounts exists in snapshot
 	// restore to each account
 	for _, account := range toRestoreAccount {
+		isRestoreToCluster = true
+		isNeedToCleanToDatabase = true
 		getLogger(ses.GetService()).Info(fmt.Sprintf("[%s] cluster restore start to restore account: %v, account id: %d", snapshotName, account.accountName, account.accountId))
 		// the account id may change
 		var newAccountId uint32
@@ -1706,7 +1710,7 @@ func restoreToCluster(ctx context.Context,
 			return err
 		}
 
-		if err = restoreAccountUsingClusterSnapshotToNew(ctx, ses, bh, snapshotName, snapshotTs, account, uint64(newAccountId), subDbToRestore, true, true); err != nil {
+		if err = restoreAccountUsingClusterSnapshotToNew(ctx, ses, bh, snapshotName, snapshotTs, account, uint64(newAccountId), subDbToRestore, isRestoreToCluster, isNeedToCleanToDatabase); err != nil {
 			return err
 		}
 
@@ -1733,8 +1737,11 @@ func restoreToCluster(ctx context.Context,
 			return err
 		}
 
+		isRestoreToCluster = true
+		isNeedToCleanToDatabase = false
+
 		// 2.0 restore droped account to new account
-		err = restoreAccountUsingClusterSnapshotToNew(ctx, ses, bh, snapshotName, snapshotTs, account, uint64(newAccountId), subDbToRestore, true, false)
+		err = restoreAccountUsingClusterSnapshotToNew(ctx, ses, bh, snapshotName, snapshotTs, account, uint64(newAccountId), subDbToRestore, isRestoreToCluster, isNeedToCleanToDatabase)
 		if err != nil {
 			return err
 		}
@@ -1757,6 +1764,7 @@ func restoreToAccountUsingCluster(
 	getLogger(ses.GetService()).Info(fmt.Sprintf("[%s] start to restore account using cluster snapshot: %v, restore timestamp: %d", snapshotName, srcAccount, snapshotTs))
 
 	var toAccountId uint32
+	isRestoreToCluster := false
 
 	// get account id
 	var ar *accountRecord
@@ -1789,7 +1797,7 @@ func restoreToAccountUsingCluster(
 		}
 	}
 
-	err = restoreAccountUsingClusterSnapshotToNew(ctx, ses, bh, snapshotName, snapshotTs, *ar, uint64(toAccountId), nil, false, isNeedToCleanToDatabase)
+	err = restoreAccountUsingClusterSnapshotToNew(ctx, ses, bh, snapshotName, snapshotTs, *ar, uint64(toAccountId), nil, isRestoreToCluster, isNeedToCleanToDatabase)
 	if err != nil {
 		return err
 	}
