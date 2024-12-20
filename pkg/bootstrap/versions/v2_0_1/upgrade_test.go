@@ -215,8 +215,8 @@ func Test_HandleTenantUpgrade(t *testing.T) {
 				return executor.Result{}, nil
 			}, txnOperator)
 
-			upg_mo_user_add_password_last_changed.Upgrade(executor, uint32(0))
-			upg_mo_user_add_lock_time.Upgrade(executor, uint32(0))
+			upg_mo_user_add_password_last_changed.Upgrade(executor, uint32(1))
+			upg_mo_user_add_lock_time.Upgrade(executor, uint32(1))
 		},
 	)
 	runtime.RunTest(
