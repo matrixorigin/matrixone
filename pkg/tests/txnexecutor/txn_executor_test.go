@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package upgrade
+package txnexecutor
 
 import (
 	"context"
@@ -21,13 +21,12 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v2_0_1"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
-func Test_UpgradeEntry201(t *testing.T) {
+func Test_TxnExecutorExec(t *testing.T) {
 	c, err := embed.NewCluster(embed.WithCNCount(1))
 	require.NoError(t, err)
 	require.NoError(t, c.Start())
@@ -42,12 +41,8 @@ func Test_UpgradeEntry201(t *testing.T) {
 	defer cancel()
 
 	err = exec.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
-		err = v2_0_1.Handler.HandleClusterUpgrade(ctx, txn)
+		_, err = txn.Exec("select count(*) from mo_catalog.mo_tables", executor.StatementOption{}.WithAccountID(1).WithUserID(2).WithRoleID(2))
 		require.NoError(t, err)
-
-		err = v2_0_1.Handler.HandleTenantUpgrade(ctx, 0, txn)
-		require.NoError(t, err)
-
 		return nil
 	}, executor.Options{}.WithWaitCommittedLogApplied())
 	require.NoError(t, err)
