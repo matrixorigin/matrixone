@@ -253,7 +253,7 @@ func Open(
 		zap.Duration("replay-checkpoints-cost", time.Since(now)),
 		zap.String("max-checkpoint", checkpointed.ToString()),
 	)
-	ckpReplayer.Close()
+	defer ckpReplayer.Close()
 
 	now = time.Now()
 	db.Replay(dataFactory, checkpointed, ckpLSN, valid)
