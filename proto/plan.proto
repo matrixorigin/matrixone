@@ -541,6 +541,7 @@ message Stats {
 	bool forceOneCN = 7;
 
 	HashMapStats hashmapStats = 8;
+        string sql = 9;
 }
 
 message RowsetExpr {
