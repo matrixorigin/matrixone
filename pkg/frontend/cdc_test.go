@@ -411,7 +411,7 @@ func Test_handleCreateCdc(t *testing.T) {
 
 	cdc2.AesKey = "test-aes-key-not-use-it-in-cloud"
 	defer func() { cdc2.AesKey = "" }()
-	stub := gostub.Stub(&initAesKeyBySqlExecutor, func(context.Context, taskservice.SqlExecutor, uint32, string) (err error) {
+	stub := gostub.Stub(&initAesKeyWrapper, func(context.Context, taskservice.SqlExecutor, uint32, string) (err error) {
 		return nil
 	})
 	defer stub.Reset()
@@ -420,11 +420,6 @@ func Test_handleCreateCdc(t *testing.T) {
 		return nil, nil
 	})
 	defer stubOpenDbConn.Reset()
-
-	stubCheckPitr := gostub.Stub(&checkPitr, func(ctx context.Context, bh BackgroundExec, accName string, pts *cdc2.PatternTuples) error {
-		return nil
-	})
-	defer stubCheckPitr.Reset()
 
 	tests := []struct {
 		name    string
@@ -2477,7 +2472,7 @@ func Test_initAesKey(t *testing.T) {
 
 	{
 		e := moerr.NewInternalErrorNoCtx("error")
-		queryTableStub := gostub.Stub(&queryTable, func(context.Context, taskservice.SqlExecutor, string, func(ctx context.Context, rows *sql.Rows) (bool, error)) (bool, error) {
+		queryTableStub := gostub.Stub(&queryTableWrapper, func(context.Context, taskservice.SqlExecutor, string, func(ctx context.Context, rows *sql.Rows) (bool, error)) (bool, error) {
 			return true, e
 		})
 		defer queryTableStub.Reset()
@@ -2487,7 +2482,7 @@ func Test_initAesKey(t *testing.T) {
 	}
 
 	{
-		queryTableStub := gostub.Stub(&queryTable, func(context.Context, taskservice.SqlExecutor, string, func(ctx context.Context, rows *sql.Rows) (bool, error)) (bool, error) {
+		queryTableStub := gostub.Stub(&queryTableWrapper, func(context.Context, taskservice.SqlExecutor, string, func(ctx context.Context, rows *sql.Rows) (bool, error)) (bool, error) {
 			return false, nil
 		})
 		defer queryTableStub.Reset()
@@ -2497,12 +2492,12 @@ func Test_initAesKey(t *testing.T) {
 	}
 
 	{
-		queryTableStub := gostub.Stub(&queryTable, func(context.Context, taskservice.SqlExecutor, string, func(ctx context.Context, rows *sql.Rows) (bool, error)) (bool, error) {
+		queryTableStub := gostub.Stub(&queryTableWrapper, func(context.Context, taskservice.SqlExecutor, string, func(ctx context.Context, rows *sql.Rows) (bool, error)) (bool, error) {
 			return true, nil
 		})
 		defer queryTableStub.Reset()
 
-		decryptStub := gostub.Stub(&cdc2.AesCFBDecodeWithKey, func(context.Context, string, []byte) (string, error) {
+		decryptStub := gostub.Stub(&decrypt, func(context.Context, string, []byte) (string, error) {
 			return "aesKey", nil
 		})
 		defer decryptStub.Reset()
@@ -2623,7 +2618,7 @@ func TestCdcTask_initAesKeyByInternalExecutor(t *testing.T) {
 		ie: mie,
 	}
 
-	decryptStub := gostub.Stub(&cdc2.AesCFBDecodeWithKey, func(context.Context, string, []byte) (string, error) {
+	decryptStub := gostub.Stub(&decrypt, func(context.Context, string, []byte) (string, error) {
 		return "aesKey", nil
 	})
 	defer decryptStub.Reset()
@@ -2827,39 +2822,4 @@ func TestCdcTask_addExecPipelineForTable(t *testing.T) {
 	defer stubReader.Reset()
 
 	assert.NoError(t, cdc.addExecPipelineForTable(context.Background(), info, txnOperator))
-}
-
-func TestCdcTask_checkPitr(t *testing.T) {
-	stubGetPitrLength := gostub.Stub(&getPitrLengthAndUnit,
-		func(_ context.Context, _ BackgroundExec, level, _, _, _ string) (int64, string, bool, error) {
-			return 0, "", level == "table", nil
-		},
-	)
-	defer stubGetPitrLength.Reset()
-
-	pts := &cdc2.PatternTuples{
-		Pts: []*cdc2.PatternTuple{
-			{
-				Source: cdc2.PatternTable{
-					Database: "db1",
-					Table:    "tb1",
-				},
-			},
-			{
-				Source: cdc2.PatternTable{
-					Database: "db2",
-					Table:    cdc2.MatchAll,
-				},
-			},
-			{
-				Source: cdc2.PatternTable{
-					Database: cdc2.MatchAll,
-					Table:    cdc2.MatchAll,
-				},
-			},
-		},
-	}
-
-	err := checkPitr(context.Background(), nil, "acc1", pts)
-	assert.Error(t, err)
 }

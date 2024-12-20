@@ -297,13 +297,6 @@ func doCreateCdc(ctx context.Context, ses *Session, create *tree.CreateCDC) (err
 	if err != nil {
 		return err
 	}
-
-	bh := ses.GetBackgroundExec(ctx)
-	defer bh.Close()
-	if err = checkPitr(ctx, bh, ses.GetTenantName(), tablePts); err != nil {
-		return
-	}
-
 	jsonTables, err := cdc2.JsonEncode(tablePts)
 	if err != nil {
 		return
@@ -405,7 +398,7 @@ func doCreateCdc(ctx context.Context, ses *Session, create *tree.CreateCDC) (err
 		var encodedSinkPwd string
 		if !useConsole {
 			// TODO replace with creatorAccountId
-			if err = initAesKeyBySqlExecutor(ctx, tx, catalog.System_Account, service); err != nil {
+			if err = initAesKeyWrapper(ctx, tx, catalog.System_Account, service); err != nil {
 				return
 			}
 
@@ -477,7 +470,7 @@ func cdcTaskMetadata(cdcId string) task.TaskMetadata {
 	}
 }
 
-var queryTable = func(
+func queryTable(
 	ctx context.Context,
 	tx taskservice.SqlExecutor,
 	query string,
@@ -506,60 +499,6 @@ var queryTable = func(
 		}
 	}
 	return false, nil
-}
-
-var checkPitr = func(ctx context.Context, bh BackgroundExec, accName string, pts *cdc2.PatternTuples) error {
-	// TODO min length
-	minPitrLen := int64(2)
-	checkPitrByLevel := func(level, dbName, tblName string) (bool, error) {
-		length, unit, ok, err := getPitrLengthAndUnit(ctx, bh, level, accName, dbName, tblName)
-		if err != nil {
-			return false, err
-		}
-		if !ok {
-			return false, nil
-		}
-		return !(unit == "h" && length < minPitrLen), nil
-	}
-
-	for _, pt := range pts.Pts {
-		dbName := pt.Source.Database
-		tblName := pt.Source.Table
-		level := cdc2.TableLevel
-		if dbName == cdc2.MatchAll && tblName == cdc2.MatchAll { // account level
-			level = cdc2.AccountLevel
-		} else if tblName == cdc2.MatchAll { // db level
-			level = cdc2.DbLevel
-		}
-
-		if ok, err := checkPitrByLevel(cdc2.AccountLevel, dbName, tblName); err != nil {
-			return err
-		} else if ok {
-			// covered by account level pitr
-			continue
-		}
-
-		if level == cdc2.DbLevel || level == cdc2.TableLevel {
-			if ok, err := checkPitrByLevel(cdc2.DbLevel, dbName, tblName); err != nil {
-				return err
-			} else if ok {
-				// covered by db level pitr
-				continue
-			}
-		}
-
-		if level == cdc2.TableLevel {
-			if ok, err := checkPitrByLevel(cdc2.TableLevel, dbName, tblName); err != nil {
-				return err
-			} else if ok {
-				// covered by table level pitr
-				continue
-			}
-		}
-
-		return moerr.NewInternalErrorf(ctx, "no account/db/table level pitr with enough length found for pattern: %s, min pitr length: %d h", pt.OriginString, minPitrLen)
-	}
-	return nil
 }
 
 // getPatternTuple pattern example:
@@ -951,7 +890,7 @@ func (cdc *CdcTask) initAesKeyByInternalExecutor(ctx context.Context, accountId 
 		return err
 	}
 
-	cdc2.AesKey, err = cdc2.AesCFBDecodeWithKey(ctx, encryptedKey, []byte(getGlobalPuWrapper(cdc.cnUUID).SV.KeyEncryptionKey))
+	cdc2.AesKey, err = decrypt(ctx, encryptedKey, []byte(getGlobalPuWrapper(cdc.cnUUID).SV.KeyEncryptionKey))
 	return
 }
 
@@ -1201,7 +1140,6 @@ func handleDropCdc(ses *Session, execCtx *ExecCtx, st *tree.DropCDC) error {
 }
 
 func handlePauseCdc(ses *Session, execCtx *ExecCtx, st *tree.PauseCDC) error {
-	ses.GetResponser()
 	return updateCdc(execCtx.reqCtx, ses, st)
 }
 
@@ -1616,10 +1554,13 @@ func getTaskCkp(ctx context.Context, bh BackgroundExec, accountId uint32, taskId
 }
 
 var (
+	queryTableWrapper  = queryTable
+	decrypt            = cdc2.AesCFBDecodeWithKey
 	getGlobalPuWrapper = getPu
+	initAesKeyWrapper  = initAesKeyBySqlExecutor
 )
 
-var initAesKeyBySqlExecutor = func(ctx context.Context, executor taskservice.SqlExecutor, accountId uint32, service string) (err error) {
+func initAesKeyBySqlExecutor(ctx context.Context, executor taskservice.SqlExecutor, accountId uint32, service string) (err error) {
 	if len(cdc2.AesKey) > 0 {
 		return nil
 	}
@@ -1628,7 +1569,7 @@ var initAesKeyBySqlExecutor = func(ctx context.Context, executor taskservice.Sql
 	var ret bool
 	querySql := fmt.Sprintf(getDataKeyFormat, accountId, cdc2.InitKeyId)
 
-	ret, err = queryTable(ctx, executor, querySql, func(ctx context.Context, rows *sql.Rows) (bool, error) {
+	ret, err = queryTableWrapper(ctx, executor, querySql, func(ctx context.Context, rows *sql.Rows) (bool, error) {
 		if err = rows.Scan(&encryptedKey); err != nil {
 			return false, err
 		}
@@ -1640,6 +1581,6 @@ var initAesKeyBySqlExecutor = func(ctx context.Context, executor taskservice.Sql
 		return moerr.NewInternalError(ctx, "no data key")
 	}
 
-	cdc2.AesKey, err = cdc2.AesCFBDecodeWithKey(ctx, encryptedKey, []byte(getGlobalPuWrapper(service).SV.KeyEncryptionKey))
+	cdc2.AesKey, err = decrypt(ctx, encryptedKey, []byte(getGlobalPuWrapper(service).SV.KeyEncryptionKey))
 	return
 }
