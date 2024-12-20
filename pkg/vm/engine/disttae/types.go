@@ -134,6 +134,7 @@ const (
 const (
 	CommitWorkspaceThreshold       uint64 = 1 * mpool.MB
 	WriteWorkspaceThreshold        uint64 = 5 * mpool.MB
+	ExtraWorkspaceThreshold        uint64 = 500 * mpool.MB
 	InsertEntryThreshold                  = 5000
 	GCBatchOfFileCount             int    = 1000
 	GCPoolSize                     int    = 5
@@ -221,6 +222,7 @@ type Engine struct {
 		insertEntryMaxCount      int
 		commitWorkspaceThreshold uint64
 		writeWorkspaceThreshold  uint64
+		extraWorkspaceThreshold  uint64
 		quota                    atomic.Uint64
 
 		cnTransferTxnLifespanThreshold time.Duration

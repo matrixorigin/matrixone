@@ -479,7 +479,7 @@ func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
 				size += uint64(txn.writes[i].bat.Size())
 			}
 		}
-		if size < txn.writeWorkspaceThreshold {
+		if size < txn.writeWorkspaceThreshold || size >= txn.engine.config.extraWorkspaceThreshold {
 			return nil
 		}
 
@@ -1487,6 +1487,16 @@ func (txn *Transaction) delTransaction() {
 	txn.transfer.timestamps = nil
 	txn.transfer.lastTransferred = types.TS{}
 	txn.transfer.pendingTransfer = false
+
+	if txn.extraWriteWorkspaceThreshold > 0 {
+		remaining := txn.engine.ReleaseQuota(txn.extraWriteWorkspaceThreshold)
+		logutil.Info(
+			"WORKSPACE-QUOTA-RELEASE",
+			zap.Uint64("quota", txn.extraWriteWorkspaceThreshold),
+			zap.Uint64("remaining", remaining),
+		)
+		txn.extraWriteWorkspaceThreshold = 0
+	}
 }
 
 func (txn *Transaction) rollbackTableOpLocked() {
