@@ -204,11 +204,6 @@ func WithSQLExecFunc(f func() ie.InternalExecutor) EngineOptions {
 	}
 }
 
-type MemoryQuota struct {
-	state uint8 // active 0, released 1
-	size  uint64
-}
-
 type Engine struct {
 	sync.RWMutex
 	service  string
