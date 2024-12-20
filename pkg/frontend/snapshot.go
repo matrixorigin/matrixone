@@ -1705,14 +1705,9 @@ func restoreToCluster(ctx context.Context,
 		if err != nil {
 			return err
 		}
-		if newAccountId != uint32(account.accountId) {
-			if err = restoreAccountUsingClusterSnapshotToNew(ctx, ses, bh, snapshotName, snapshotTs, account, subDbToRestore, uint64(newAccountId), true, true); err != nil {
-				return err
-			}
-		} else {
-			if err = restoreAccountUsingClusterSnapshot(ctx, ses, bh, snapshotName, snapshotTs, account, subDbToRestore, newAccountId); err != nil {
-				return err
-			}
+
+		if err = restoreAccountUsingClusterSnapshotToNew(ctx, ses, bh, snapshotName, snapshotTs, account, subDbToRestore, uint64(newAccountId), true, true); err != nil {
+			return err
 		}
 
 		getLogger(ses.GetService()).Info(fmt.Sprintf("[%s] restore account: %v, account id: %d success", snapshotName, account.accountName, account.accountId))
@@ -1878,84 +1873,6 @@ func dropExistsAccount(
 	err = doDropAccount(ctx, bh, ses, drop)
 	if err != nil {
 		return
-	}
-	return
-}
-
-func restoreAccountUsingClusterSnapshot(ctx context.Context,
-	ses *Session,
-	bh BackgroundExec,
-	snapshotName string,
-	snapshotTs int64,
-	account accountRecord,
-	subDbToRestore map[string]*subDbRestoreRecord,
-	toAccountId uint32,
-) (err error) {
-	fromAccount := account.accountId
-
-	newSnapshot, err := insertSnapshotRecord(ctx, ses.GetService(), bh, snapshotName, snapshotTs, fromAccount, account.accountName)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if err != nil {
-			deleteSnapshotRecord(ctx, ses.GetService(), bh, snapshotName, newSnapshot)
-		}
-	}()
-
-	// pre restore account
-	// drop foreign key related tables first
-	if err = deleteCurFkTables(ctx, ses.GetService(), bh, "", "", uint32(toAccountId)); err != nil {
-		return err
-	}
-	// get topo sorted tables with foreign key
-	var sortedFkTbls []string
-	var fkTableMap map[string]*tableInfo
-	sortedFkTbls, err = fkTablesTopoSort(ctx, bh, newSnapshot, "", "")
-	if err != nil {
-		return err
-	}
-	// get foreign key table infos
-	fkTableMap, err = getTableInfoMap(ctx, ses.GetService(), bh, newSnapshot, "", "", sortedFkTbls)
-	if err != nil {
-		return err
-	}
-
-	// collect views and tables during table restoration
-	viewMap := make(map[string]*tableInfo)
-
-	// restore to account
-	if err = restoreToAccount(ctx,
-		ses.GetService(),
-		bh,
-		newSnapshot,
-		uint32(toAccountId),
-		fkTableMap,
-		viewMap,
-		snapshotTs,
-		uint32(fromAccount),
-		true,
-		subDbToRestore); err != nil {
-		return err
-	}
-
-	if len(fkTableMap) > 0 {
-		if err = restoreTablesWithFk(ctx, ses.GetService(), bh, newSnapshot, sortedFkTbls, fkTableMap, uint32(toAccountId), snapshotTs); err != nil {
-			return err
-		}
-	}
-
-	if len(viewMap) > 0 {
-		if err = restoreViews(ctx, ses, bh, newSnapshot, viewMap, uint32(toAccountId)); err != nil {
-			return err
-		}
-	}
-
-	deleteSnapshotRecord(ctx, ses.GetService(), bh, snapshotName, newSnapshot)
-
-	// checks if the given context has been canceled.
-	if err = CancelCheck(ctx); err != nil {
-		return err
 	}
 	return
 }
@@ -2161,44 +2078,6 @@ func getPastExistsAccounts(
 
 			accounts = append(accounts, account)
 		}
-	}
-	return
-}
-
-func insertSnapshotRecord(ctx context.Context, sid string, bh BackgroundExec, spName string, spTs int64, toAccountId uint64, accountName string) (snapshotName string, err error) {
-	// mock snapshot id and snapshot name
-	snapshotUId, err := uuid.NewV7()
-	if err != nil {
-		return "", err
-	}
-	snapshotId := snapshotUId.String()
-
-	snapshotName = snapshotId + "_" + spName + "_mock"
-	var sql string
-	sql, err = getSqlForCreateSnapshot(ctx,
-		snapshotId,
-		snapshotName,
-		spTs,
-		tree.SNAPSHOTLEVELACCOUNT.String(),
-		accountName,
-		"",
-		"",
-		toAccountId)
-	if err != nil {
-		return "", err
-	}
-	getLogger(sid).Info(fmt.Sprintf("[%s] mock insert snapshot record sql: %s", spName, sql))
-	if err = bh.Exec(ctx, sql); err != nil {
-		return "", err
-	}
-	return
-}
-
-func deleteSnapshotRecord(ctx context.Context, sid string, bh BackgroundExec, spName string, snapshotName string) (err error) {
-	sql := getSqlForDropSnapshot(snapshotName)
-	getLogger(sid).Info(fmt.Sprintf("[%s] mock delete snapshot record sql: %s", spName, sql))
-	if err = bh.Exec(ctx, sql); err != nil {
-		return err
 	}
 	return
 }
