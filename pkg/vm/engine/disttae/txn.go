@@ -479,23 +479,25 @@ func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
 				size += uint64(txn.writes[i].bat.Size())
 			}
 		}
-		if size < txn.writeWorkspaceThreshold || size >= txn.engine.config.extraWorkspaceThreshold {
+		if size < txn.writeWorkspaceThreshold {
 			return nil
 		}
 
-		// try to increase the write threshold from quota, if failed, then dump all
-		// acquire 5M more than we need
-		quota := size - txn.writeWorkspaceThreshold + txn.engine.config.writeWorkspaceThreshold
-		remaining, acquired := txn.engine.AcquireQuota(quota)
-		if acquired {
-			logutil.Info(
-				"WORKSPACE-QUOTA-ACQUIRE",
-				zap.Uint64("quota", quota),
-				zap.Uint64("remaining", remaining),
-			)
-			txn.writeWorkspaceThreshold += quota
-			txn.extraWriteWorkspaceThreshold += quota
-			return nil
+		if size < txn.engine.config.extraWorkspaceThreshold {
+			// try to increase the write threshold from quota, if failed, then dump all
+			// acquire 5M more than we need
+			quota := size - txn.writeWorkspaceThreshold + txn.engine.config.writeWorkspaceThreshold
+			remaining, acquired := txn.engine.AcquireQuota(quota)
+			if acquired {
+				logutil.Info(
+					"WORKSPACE-QUOTA-ACQUIRE",
+					zap.Uint64("quota", quota),
+					zap.Uint64("remaining", remaining),
+				)
+				txn.writeWorkspaceThreshold += quota
+				txn.extraWriteWorkspaceThreshold += quota
+				return nil
+			}
 		}
 		size = 0
 	}
