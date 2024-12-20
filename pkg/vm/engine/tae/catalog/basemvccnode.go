@@ -179,10 +179,10 @@ func (un EntryMVCCNode) AppendTupleWithCommitTS(bat *containers.Batch, ts types.
 	)
 }
 
-func ReadEntryNodeTuple(bat *containers.Batch, row int) (un *EntryMVCCNode) {
+func ReadEntryNodeTuple(createAt, deleteAt types.TS) (un *EntryMVCCNode) {
 	un = &EntryMVCCNode{
-		CreatedAt: bat.GetVectorByName(EntryNode_CreateAt).Get(row).(types.TS),
-		DeletedAt: bat.GetVectorByName(EntryNode_DeleteAt).Get(row).(types.TS),
+		CreatedAt: createAt,
+		DeletedAt: deleteAt,
 	}
 	return
 }
