@@ -74,6 +74,8 @@ var (
 
 	// update mo_pitr object id
 	updateMoPitrAccountObjectIdFmt = `update mo_catalog.mo_pitr set obj_id = %d, modified_time = '%s' where account_name = '%s';`
+
+	getLengthAndUnitFmt = `select pitr_length, pitr_unit from mo_catalog.mo_pitr where account_id = %d and level = '%s'`
 )
 
 type pitrRecord struct {
@@ -158,6 +160,18 @@ func getPubInfoWithPitr(ts int64, accountId uint32, dbName string) string {
 
 func getSqlForUpdateMoPitrAccountObjectId(accountName string, objId uint64, modifiedTime string) string {
 	return fmt.Sprintf(updateMoPitrAccountObjectIdFmt, objId, modifiedTime, accountName)
+}
+
+func getSqlForGetLengthAndUnitFmt(accountId uint32, level, accName, dbName, tblName string) string {
+	sql := fmt.Sprintf(getLengthAndUnitFmt, accountId, level)
+	if level == "account" {
+		sql += fmt.Sprintf(" and account_name = '%s'", accName)
+	} else if level == "database" {
+		sql += fmt.Sprintf(" and database_name = '%s'", dbName)
+	} else if level == "table" {
+		sql += fmt.Sprintf(" and table_name = '%s'", tblName)
+	}
+	return sql
 }
 
 func checkPitrDup(ctx context.Context, bh BackgroundExec, createAccount string, createAccountId uint64, stmt *tree.CreatePitr) (bool, error) {
@@ -2366,5 +2380,44 @@ func updatePitrObjectId(ctx context.Context,
 	if err != nil {
 		return
 	}
+	return
+}
+
+var getPitrLengthAndUnit = func(
+	ctx context.Context,
+	bh BackgroundExec,
+	level string,
+	accName, dbName, tblName string,
+) (length int64, unit string, ok bool, err error) {
+	accountId, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return
+	}
+
+	sql := getSqlForGetLengthAndUnitFmt(accountId, level, accName, dbName, tblName)
+	ctx = defines.AttachAccountId(ctx, sysAccountID)
+	bh.ClearExecResultSet()
+	if err = bh.Exec(ctx, sql); err != nil {
+		return
+	}
+
+	erArray, err := getResultSet(ctx, bh)
+	if err != nil {
+		return
+	}
+
+	if !execResultArrayHasData(erArray) {
+		return
+	}
+
+	if length, err = erArray[0].GetInt64(ctx, 0, 0); err != nil {
+		return
+	}
+
+	if unit, err = erArray[0].GetString(ctx, 0, 1); err != nil {
+		return
+	}
+
+	ok = true
 	return
 }
