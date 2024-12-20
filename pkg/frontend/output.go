@@ -16,6 +16,8 @@ package frontend
 
 import (
 	"context"
+	"strconv"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -161,7 +163,7 @@ func extractRowFromVector2(ctx context.Context, ses FeSession, vec *vector.Vecto
 		return nil
 	}
 
-	sliceIdx := colSlices.ColIdx2SliceIdx(i)
+	sliceIdx := colSlices.GetSliceIdx(uint64(i))
 	if vec.IsConst() {
 		rowIndex = 0
 	}
@@ -243,6 +245,7 @@ func extractRowFromVector2(ctx context.Context, ses FeSession, vec *vector.Vecto
 }
 
 type ColumnSlices struct {
+	dataSet         *batch.Batch
 	colIdx2SliceIdx []int
 	arrVarlena      [][]types.Varlena
 	arrBool         [][]bool
@@ -267,10 +270,210 @@ type ColumnSlices struct {
 	arrBlockid      [][]types.Blockid
 	arrTS           [][]types.TS
 	arrEnum         [][]types.Enum
+	safeRefSlice    bool
 }
 
-func (slices *ColumnSlices) ColIdx2SliceIdx(idx int) int {
-	return slices.colIdx2SliceIdx[idx]
+func (slices *ColumnSlices) GetType(colIdx uint64) *types.Type {
+	return slices.dataSet.Vecs[colIdx].GetType()
+}
+
+func (slices *ColumnSlices) ColumnCount() int {
+	return len(slices.colIdx2SliceIdx)
+}
+
+func (slices *ColumnSlices) GetSliceIdx(colIdx uint64) int {
+	return slices.colIdx2SliceIdx[colIdx]
+}
+
+func (slices *ColumnSlices) IsNull(rowIdx int, colIdx int) bool {
+	vec := slices.dataSet.Vecs[colIdx]
+	return vec.IsConstNull() || vec.GetNulls().Contains(uint64(rowIdx))
+}
+
+func (slices *ColumnSlices) IsConst(colIdx uint64) bool {
+	return slices.dataSet.Vecs[colIdx].IsConst()
+}
+
+func (slices *ColumnSlices) GetBool(rowIdx uint64, colIdx uint64) bool {
+	if slices.IsConst(colIdx) {
+		rowIdx = 0
+	}
+	sliceIdx := slices.GetSliceIdx(colIdx)
+	return slices.arrBool[sliceIdx][rowIdx]
+}
+
+func (slices *ColumnSlices) GetUint64(r uint64, i uint64) uint64 {
+	if slices.IsConst(i) {
+		r = 0
+	}
+	sliceIdx := slices.GetSliceIdx(i)
+	return slices.arrUint64[sliceIdx][r]
+}
+
+func (slices *ColumnSlices) GetDecimal(r uint64, i uint64) string {
+	if slices.IsConst(i) {
+		r = 0
+	}
+	sliceIdx := slices.GetSliceIdx(i)
+	vec := slices.dataSet.Vecs[i]
+	switch vec.GetType().Oid {
+	case types.T_decimal64:
+		scale := vec.GetType().Scale
+		return slices.arrDecimal64[sliceIdx][r].Format(scale)
+	case types.T_decimal128:
+		scale := vec.GetType().Scale
+		return slices.arrDecimal128[sliceIdx][r].Format(scale)
+	default:
+		return "unknown decimal"
+	}
+}
+
+func (slices *ColumnSlices) GetUUID(r uint64, i uint64) string {
+	if slices.IsConst(i) {
+		r = 0
+	}
+	sliceIdx := slices.GetSliceIdx(i)
+	return slices.arrUuid[sliceIdx][r].String()
+}
+
+func (slices *ColumnSlices) GetInt64(r uint64, i uint64) int64 {
+	if slices.IsConst(i) {
+		r = 0
+	}
+	sliceIdx := slices.GetSliceIdx(i)
+	vec := slices.dataSet.Vecs[i]
+	switch vec.GetType().Oid {
+	case types.T_int8:
+		return int64(slices.arrInt8[sliceIdx][r])
+	case types.T_uint8:
+		return int64(slices.arrUint8[sliceIdx][r])
+	case types.T_int16:
+		return int64(slices.arrInt16[sliceIdx][r])
+	case types.T_uint16:
+		return int64(slices.arrUint16[sliceIdx][r])
+	case types.T_int32:
+		return int64(slices.arrInt32[sliceIdx][r])
+	case types.T_uint32:
+		return int64(slices.arrUint32[sliceIdx][r])
+	case types.T_int64:
+		return slices.arrInt64[sliceIdx][r]
+	default:
+		panic("unknown integer")
+	}
+}
+
+func (slices *ColumnSlices) GetFloat32(r uint64, i uint64) float32 {
+	if slices.IsConst(i) {
+		r = 0
+	}
+	sliceIdx := slices.GetSliceIdx(i)
+	return slices.arrFloat32[sliceIdx][r]
+}
+
+func (slices *ColumnSlices) GetFloat64(r uint64, i uint64) float64 {
+	if slices.IsConst(i) {
+		r = 0
+	}
+	sliceIdx := slices.GetSliceIdx(i)
+	return slices.arrFloat64[sliceIdx][r]
+}
+
+func (slices *ColumnSlices) GetStringBased(r uint64, i uint64) string {
+	if slices.IsConst(i) {
+		r = 0
+	}
+	sliceIdx := slices.GetSliceIdx(i)
+	vec := slices.dataSet.Vecs[i]
+	switch vec.GetType().Oid { //get col
+	case types.T_json:
+		return types.DecodeJson(copyBytes(vec.GetBytesAt2(slices.arrVarlena[sliceIdx], int(r)), !slices.safeRefSlice)).String()
+	case types.T_array_float32:
+		// NOTE: Don't merge it with T_varchar. You will get raw binary in the SQL output
+		//+------------------------------+
+		//| abs(cast([1,2,3] as vecf32)) |
+		//+------------------------------+
+		//|   �?   @  @@                  |
+		//+------------------------------+
+		return types.ArrayToString[float32](vector.GetArrayAt2[float32](vec, slices.arrVarlena[sliceIdx], int(r)))
+	case types.T_array_float64:
+		return types.ArrayToString[float64](vector.GetArrayAt2[float64](vec, slices.arrVarlena[sliceIdx], int(r)))
+	case types.T_Rowid:
+		return slices.arrRowid[sliceIdx][r].String()
+	case types.T_Blockid:
+		return slices.arrBlockid[sliceIdx][r].String()
+	case types.T_TS:
+		return slices.arrTS[sliceIdx][r].ToString()
+	case types.T_enum:
+		return strconv.FormatUint(uint64(slices.arrEnum[sliceIdx][r]), 10)
+	default:
+		panic("unknown string based type")
+	}
+}
+
+func (slices *ColumnSlices) GetBytesBased(r uint64, i uint64) []byte {
+	if slices.IsConst(i) {
+		r = 0
+	}
+	sliceIdx := slices.GetSliceIdx(i)
+	vec := slices.dataSet.Vecs[i]
+	switch vec.GetType().Oid { //get col
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink:
+		return copyBytes(vec.GetBytesAt2(slices.arrVarlena[sliceIdx], int(r)), !slices.safeRefSlice)
+	default:
+		panic("unknown bytes based type")
+	}
+
+}
+
+func (slices *ColumnSlices) GetDate(r uint64, i uint64) types.Date {
+	if slices.IsConst(i) {
+		r = 0
+	}
+	sliceIdx := slices.GetSliceIdx(i)
+	return slices.arrDate[sliceIdx][r]
+}
+
+func (slices *ColumnSlices) GetDatetime(r uint64, i uint64) string {
+	if slices.IsConst(i) {
+		r = 0
+	}
+	sliceIdx := slices.GetSliceIdx(i)
+	vec := slices.dataSet.Vecs[i]
+	scale := vec.GetType().Scale
+	return slices.arrDatetime[sliceIdx][r].String2(scale)
+}
+
+func (slices *ColumnSlices) GetTime(r uint64, i uint64) string {
+	if slices.IsConst(i) {
+		r = 0
+	}
+	sliceIdx := slices.GetSliceIdx(i)
+	vec := slices.dataSet.Vecs[i]
+	scale := vec.GetType().Scale
+	return slices.arrTime[sliceIdx][r].String2(scale)
+}
+
+func (slices *ColumnSlices) GetTimestamp(r uint64, i uint64, timeZone *time.Location) string {
+	if slices.IsConst(i) {
+		r = 0
+	}
+	sliceIdx := slices.GetSliceIdx(i)
+	vec := slices.dataSet.Vecs[i]
+	scale := vec.GetType().Scale
+	return slices.arrTimestamp[sliceIdx][r].String2(timeZone, scale)
+}
+
+var (
+	trueSlice  = []byte("true")
+	falseSlice = []byte("false")
+)
+
+func getBoolSlice(v bool) []byte {
+	if v {
+		return trueSlice
+	} else {
+		return falseSlice
+	}
 }
 
 func convertBatchToSlices(ctx context.Context, ses FeSession, dataSet *batch.Batch, colSlices *ColumnSlices) error {

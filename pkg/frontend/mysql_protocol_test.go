@@ -2661,6 +2661,11 @@ type testMysqlWriter struct {
 	mod      int
 }
 
+func (fp *testMysqlWriter) WriteResultSetRow2(mrs *MysqlResultSet, colSlices *ColumnSlices, count uint64) error {
+	//TODO implement me
+	panic("implement me")
+}
+
 func (fp *testMysqlWriter) FreeLoadLocal() {
 
 }

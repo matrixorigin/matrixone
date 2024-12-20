@@ -18,6 +18,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -37,5 +38,47 @@ func TestExtractRowFromVector(t *testing.T) {
 		err := extractRowFromVector(context.TODO(), nil, vec, columnIdx, row, rowIdx, false)
 		require.NoError(t, err)
 		require.Equal(t, row[columnIdx].(uint64), values[rowIdx])
+	}
+}
+
+func BenchmarkName(b *testing.B) {
+
+	mp := mpool.MustNewZero()
+	values := []int32{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
+	rowCount := len(values)
+	vec := testutil.NewVector(rowCount, types.New(types.T_int32, 10, 0), mp, false, values)
+
+	colSlices := &ColumnSlices{
+		colIdx2SliceIdx: make([]int, 1),
+	}
+	err := convertVectorToSlice(context.TODO(), nil, vec, 0, colSlices)
+	assert.NoError(b, err)
+	row := make([]any, 1)
+
+	for i := 0; i < b.N; i++ {
+		for j := 0; j < rowCount; j++ {
+			_ = extractRowFromVector2(context.TODO(), nil, vec, 0, row, j, false, colSlices)
+		}
+	}
+}
+
+func BenchmarkName2(b *testing.B) {
+
+	mp := mpool.MustNewZero()
+	values := []string{"1", "2", "3", "4", "5", "6", "7", "8", "9", "10"}
+	rowCount := len(values)
+	vec := testutil.NewVector(rowCount, types.New(types.T_varchar, 10, 0), mp, false, values)
+
+	colSlices := &ColumnSlices{
+		colIdx2SliceIdx: make([]int, 1),
+	}
+	err := convertVectorToSlice(context.TODO(), nil, vec, 0, colSlices)
+	assert.NoError(b, err)
+	row := make([]any, 1)
+
+	for i := 0; i < b.N; i++ {
+		for j := 0; j < rowCount; j++ {
+			_ = extractRowFromVector2(context.TODO(), nil, vec, 0, row, j, false, colSlices)
+		}
 	}
 }
