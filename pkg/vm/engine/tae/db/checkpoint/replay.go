@@ -74,6 +74,9 @@ func (c *CkpReplayer) Close() {
 	for _, worker := range c.objectReplayWorker {
 		worker.Stop()
 	}
+	for _, data := range c.ckpdatas {
+		data.Close()
+	}
 }
 
 func (c *CkpReplayer) ReadCkpFiles() (err error) {
