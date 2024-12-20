@@ -74,15 +74,6 @@ func GetTombstoneSchema(objectSchema *Schema) *Schema {
 	return schema
 }
 
-// rowid, pk
-// used in range delete
-func NewTombstoneBatchWithPKVector(pkVec, rowIDVec containers.Vector, mp *mpool.MPool) *containers.Batch {
-	bat := containers.NewBatchWithCapacity(2)
-	bat.AddVector(objectio.TombstoneAttr_Rowid_Attr, rowIDVec)
-	bat.AddVector(objectio.TombstoneAttr_PK_Attr, pkVec)
-	return bat
-}
-
 // rowid, pk, commitTS
 // used in Collect Delete in Range
 func NewTombstoneBatchByPKType(pkType types.Type, mp *mpool.MPool) *containers.Batch {
