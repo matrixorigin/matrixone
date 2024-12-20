@@ -170,7 +170,7 @@ func WithWriteWorkspaceThreshold(th uint64) EngineOptions {
 
 func WithExtraWorkspaceThresholdQuota(quota uint64) EngineOptions {
 	return func(e *Engine) {
-		e.Limiter.quota.Store(quota)
+		e.config.quota.Store(quota)
 	}
 }
 
@@ -209,28 +209,6 @@ type MemoryQuota struct {
 	size  uint64
 }
 
-func (q *MemoryQuota) Apply(size uint64) bool {
-	if q.state != 0 {
-		return false
-	}
-	q.size += size
-	return true
-}
-
-func (q *MemoryQuota) Release() (size uint64) {
-	if q.state == 1 || q.size == 0 {
-		return 0
-	}
-	q.state = 1
-	size = q.size
-	q.size = 0
-	return size
-}
-
-type limiter struct {
-	quota atomic.Uint64
-}
-
 type Engine struct {
 	sync.RWMutex
 	service  string
@@ -248,6 +226,7 @@ type Engine struct {
 		insertEntryMaxCount      int
 		commitWorkspaceThreshold uint64
 		writeWorkspaceThreshold  uint64
+		quota                    atomic.Uint64
 
 		cnTransferTxnLifespanThreshold time.Duration
 
@@ -292,8 +271,6 @@ type Engine struct {
 	dynamicCtx
 	// for test only.
 	skipConsume bool
-	// workspace extra threshold limit
-	Limiter limiter
 }
 
 func (e *Engine) SetService(svr string) {
@@ -399,10 +376,9 @@ type Transaction struct {
 
 	haveDDL atomic.Bool
 
-	writeWorkspaceThreshold  uint64
-	commitWorkspaceThreshold uint64
-
-	quota MemoryQuota
+	writeWorkspaceThreshold      uint64
+	commitWorkspaceThreshold     uint64
+	extraWriteWorkspaceThreshold uint64 // acquired from engine quota
 }
 
 type Pos struct {
@@ -460,7 +436,6 @@ func (b *deletedBlocks) iter(fn func(*types.Blockid, []int64) bool) {
 func NewTxnWorkSpace(eng *Engine, proc *process.Process) *Transaction {
 	id := objectio.NewSegmentid()
 	bytes := types.EncodeUuid(id)
-
 	txn := &Transaction{
 		proc:               proc,
 		engine:             eng,

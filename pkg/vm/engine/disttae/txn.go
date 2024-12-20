@@ -483,14 +483,18 @@ func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
 			return nil
 		}
 
-		// try to increase the write threshold from quota
-		threshold := txn.writeWorkspaceThreshold
-		for size >= threshold {
-			threshold *= 2
-		}
-		_, acquired := txn.engine.Limiter.AcquireQuota(threshold-txn.writeWorkspaceThreshold, &txn.quota)
+		// try to increase the write threshold from quota, if failed, then dump all
+		// acquire 5M more than we need
+		quota := size - txn.writeWorkspaceThreshold + txn.engine.config.writeWorkspaceThreshold
+		remaining, acquired := txn.engine.AcquireQuota(quota)
 		if acquired {
-			txn.writeWorkspaceThreshold = threshold
+			logutil.Info(
+				"WORKSPACE-QUOTA-ACQUIRE",
+				zap.Uint64("quota", quota),
+				zap.Uint64("remaining", remaining),
+			)
+			txn.writeWorkspaceThreshold += quota
+			txn.extraWriteWorkspaceThreshold += quota
 			return nil
 		}
 		size = 0
@@ -499,6 +503,16 @@ func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
 
 	if err := txn.dumpInsertBatchLocked(ctx, offset, &size, &pkCount); err != nil {
 		return err
+	}
+	// release the extra quota
+	if txn.extraWriteWorkspaceThreshold > 0 {
+		remaining := txn.engine.ReleaseQuota(txn.extraWriteWorkspaceThreshold)
+		logutil.Info(
+			"WORKSPACE-QUOTA-RELEASE",
+			zap.Uint64("quota", txn.extraWriteWorkspaceThreshold),
+			zap.Uint64("remaining", remaining),
+		)
+		txn.extraWriteWorkspaceThreshold = 0
 	}
 
 	if dumpAll {
@@ -1473,8 +1487,6 @@ func (txn *Transaction) delTransaction() {
 	txn.transfer.timestamps = nil
 	txn.transfer.lastTransferred = types.TS{}
 	txn.transfer.pendingTransfer = false
-
-	txn.engine.Limiter.ReleaseQuota(&txn.quota)
 }
 
 func (txn *Transaction) rollbackTableOpLocked() {
