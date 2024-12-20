@@ -164,6 +164,9 @@ func (e *Engine) fillDefaults() {
 	if e.config.writeWorkspaceThreshold <= 0 {
 		e.config.writeWorkspaceThreshold = WriteWorkspaceThreshold
 	}
+	if e.config.extraWorkspaceThreshold <= 0 {
+		e.config.extraWorkspaceThreshold = ExtraWorkspaceThreshold
+	}
 	if e.config.cnTransferTxnLifespanThreshold <= 0 {
 		e.config.cnTransferTxnLifespanThreshold = CNTransferTxnLifespanThreshold
 	}

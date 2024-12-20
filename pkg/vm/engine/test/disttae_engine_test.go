@@ -1380,3 +1380,106 @@ func TestWorkspaceQuota2(t *testing.T) {
 	require.Equal(t, rowsCount, cnt)
 	require.NoError(t, txn.Commit(ctx))
 }
+
+func TestWorkspaceQuota3(t *testing.T) {
+
+	var (
+		err          error
+		mp           *mpool.MPool
+		txn          client.TxnOperator
+		accountId    = catalog.System_Account
+		tableName    = "test_table"
+		databaseName = "test_database"
+
+		primaryKeyIdx = 3
+
+		relation engine.Relation
+		_        engine.Database
+
+		taeEngine     *testutil.TestTxnStorage
+		rpcAgent      *testutil.MockRPCAgent
+		disttaeEngine *testutil.TestDisttaeEngine
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
+
+	schema := catalog2.MockSchemaAll(4, primaryKeyIdx)
+	schema.Name = tableName
+
+	disttaeEngine, taeEngine, rpcAgent, mp = testutil.CreateEngines(
+		ctx,
+		testutil.TestOptions{},
+		t,
+		testutil.WithDisttaeEngineWriteWorkspaceThreshold(1),
+		testutil.WithDisttaeEngineQuota(10000),
+	)
+	defer func() {
+		disttaeEngine.Close(ctx)
+		taeEngine.Close(true)
+		rpcAgent.Close()
+	}()
+
+	ctx, cancel = context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	_, _, err = disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
+	require.NoError(t, err)
+
+	rowsCount := 30
+	bat := catalog2.MockBatch(schema, rowsCount)
+	bat1, _ := containers.ToCNBatch(bat).Window(0, 10)
+	bat2, _ := containers.ToCNBatch(bat).Window(10, 20)
+	bat3, _ := containers.ToCNBatch(bat).Window(20, 30)
+
+	{
+		_, relation, txn, err = disttaeEngine.GetTable(ctx, databaseName, tableName)
+		require.NoError(t, err)
+		require.NoError(t, relation.Write(ctx, bat1))
+		require.NoError(t, relation.Write(ctx, bat2))
+		require.NoError(t, relation.Write(ctx, bat3))
+		require.NoError(t, txn.Rollback(ctx))
+	}
+
+	{
+		_, relation, txn, err = disttaeEngine.GetTable(ctx, databaseName, tableName)
+		require.NoError(t, err)
+		require.NoError(t, relation.Write(ctx, bat1))
+		require.NoError(t, relation.Write(ctx, bat2))
+		require.NoError(t, relation.Write(ctx, bat3))
+		require.NoError(t, txn.Commit(ctx))
+	}
+
+	// test quota leak
+	quota, _ := disttaeEngine.Engine.AcquireQuota(0)
+	require.Equal(t, 10000, int(quota))
+
+	_, relation, txn, err = disttaeEngine.GetTable(ctx, databaseName, tableName)
+
+	require.NoError(t, err)
+	reader, err := testutil.GetRelationReader(
+		ctx,
+		disttaeEngine,
+		txn,
+		relation,
+		nil,
+		mp,
+		t,
+	)
+	require.NoError(t, err)
+
+	ret := testutil.EmptyBatchFromSchema(schema, primaryKeyIdx)
+	cnt := 0
+	for {
+		ok, err := reader.Read(ctx, ret.Attrs, nil, mp, ret)
+		require.NoError(t, err)
+		cnt += ret.RowCount()
+		if ok {
+			break
+		}
+	}
+	require.NoError(t, err)
+
+	require.Equal(t, rowsCount, cnt)
+	require.NoError(t, txn.Commit(ctx))
+}
