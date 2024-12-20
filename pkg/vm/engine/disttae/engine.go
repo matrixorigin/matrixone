@@ -167,9 +167,9 @@ func (e *Engine) fillDefaults() {
 	if e.config.cnTransferTxnLifespanThreshold <= 0 {
 		e.config.cnTransferTxnLifespanThreshold = CNTransferTxnLifespanThreshold
 	}
-	if e.Limiter.quota.Load() <= 0 {
+	if e.config.quota.Load() <= 0 {
 		mem := objectio.TotalMem() / 100 * 5
-		e.Limiter.quota.Store(mem)
+		e.config.quota.Store(mem)
 		v2.TxnExtraWorkspaceQuotaGauge.Set(float64(mem))
 	}
 
@@ -178,7 +178,7 @@ func (e *Engine) fillDefaults() {
 		zap.Int("InsertEntryMaxCount", e.config.insertEntryMaxCount),
 		zap.Uint64("CommitWorkspaceThreshold", e.config.commitWorkspaceThreshold),
 		zap.Uint64("WriteWorkspaceThreshold", e.config.writeWorkspaceThreshold),
-		zap.Uint64("ExtraWorkspaceThresholdQuota", e.Limiter.quota.Load()),
+		zap.Uint64("ExtraWorkspaceThresholdQuota", e.config.quota.Load()),
 		zap.Duration("CNTransferTxnLifespanThreshold", e.config.cnTransferTxnLifespanThreshold),
 	)
 }
@@ -198,38 +198,25 @@ func (e *Engine) SetWorkspaceThreshold(commitThreshold, writeThreshold uint64) (
 	return
 }
 
-func (e *limiter) AcquireQuota(v uint64, quota *MemoryQuota) (uint64, bool) {
+func (e *Engine) AcquireQuota(v uint64) (uint64, bool) {
 	for {
-		oldRemaining := e.quota.Load()
+		oldRemaining := e.config.quota.Load()
 		if oldRemaining < v {
 			return 0, false
 		}
 		remaining := oldRemaining - v
-		if e.quota.CompareAndSwap(oldRemaining, remaining) {
-			quota.Apply(v)
+		if e.config.quota.CompareAndSwap(oldRemaining, remaining) {
 			v2.TxnExtraWorkspaceQuotaGauge.Set(float64(remaining))
-			logutil.Info(
-				"WORKSPACE-QUOTA-ACQUIRE",
-				zap.Uint64("quota", v),
-				zap.Uint64("remaining", remaining),
-			)
 			return remaining, true
 		}
 	}
 }
 
-func (e *limiter) ReleaseQuota(quota *MemoryQuota) {
-	size := quota.Release()
-	if size == 0 {
-		return
-	}
-	e.quota.Add(size)
-	v2.TxnExtraWorkspaceQuotaGauge.Set(float64(e.quota.Load()))
-	logutil.Info(
-		"WORKSPACE-QUOTA-RELEASE",
-		zap.Uint64("quota", size),
-		zap.Uint64("remaining", e.quota.Load()),
-	)
+func (e *Engine) ReleaseQuota(quota uint64) (remaining uint64) {
+	e.config.quota.Add(quota)
+	remaining = e.config.quota.Load()
+	v2.TxnExtraWorkspaceQuotaGauge.Set(float64(remaining))
+	return
 }
 
 func (e *Engine) GetService() string {

@@ -1268,18 +1268,16 @@ func TestWorkspaceQuota(t *testing.T) {
 	wg.Add(10)
 	for i := range uint64(10) {
 		go func(size uint64, wg *sync.WaitGroup) {
-			var q disttae.MemoryQuota
-			e.Limiter.AcquireQuota(100, &q)
-			e.Limiter.ReleaseQuota(&q)
-			e.Limiter.ReleaseQuota(&q)
+			e.AcquireQuota(100)
+			e.ReleaseQuota(100)
 			wg.Done()
 		}(i*100, &wg)
 	}
 
-	var q disttae.MemoryQuota
-	remaining, _ := e.Limiter.AcquireQuota(0, &q)
+	wg.Wait()
+	remaining, _ := e.AcquireQuota(0)
 	require.Equal(t, int(quotaSize), int(remaining))
-	_, acquired := e.Limiter.AcquireQuota(quotaSize+1, &q)
+	_, acquired := e.AcquireQuota(quotaSize + 1)
 	require.False(t, acquired)
 }
 
@@ -1314,9 +1312,8 @@ func TestWorkspaceQuota2(t *testing.T) {
 		ctx,
 		testutil.TestOptions{},
 		t,
-		testutil.WithDisttaeEngineInsertEntryMaxCount(1),
 		testutil.WithDisttaeEngineWriteWorkspaceThreshold(1),
-		testutil.WithDisttaeEngineQuota(256),
+		testutil.WithDisttaeEngineQuota(800),
 	)
 	defer func() {
 		disttaeEngine.Close(ctx)
@@ -1329,21 +1326,21 @@ func TestWorkspaceQuota2(t *testing.T) {
 	_, _, err = disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
 	require.NoError(t, err)
 
-	rowsCount := 15
+	rowsCount := 30
 	bat := catalog2.MockBatch(schema, rowsCount)
-	bat1, _ := containers.ToCNBatch(bat).Window(0, 5)
-	bat2, _ := containers.ToCNBatch(bat).Window(5, 10)
-	bat3, _ := containers.ToCNBatch(bat).Window(10, 15)
+	bat1, _ := containers.ToCNBatch(bat).Window(0, 10)
+	bat2, _ := containers.ToCNBatch(bat).Window(10, 20)
+	bat3, _ := containers.ToCNBatch(bat).Window(20, 30)
 
 	{
 		_, relation, txn, err = disttaeEngine.GetTable(ctx, databaseName, tableName)
 		require.NoError(t, err)
 		// exceed workspace write threshold, acquire quota success, do not write s3
-		require.NoError(t, testutil.WriteToRelation(ctx, txn, relation, bat1, false, true))
+		require.NoError(t, relation.Write(ctx, bat1))
 		// exceed workspace write threshold, acquire quota success, do not write s3
-		require.NoError(t, testutil.WriteToRelation(ctx, txn, relation, bat2, false, true))
+		require.NoError(t, relation.Write(ctx, bat2))
 		// exceed workspace write threshold, acquire quota failed,  write s3
-		require.NoError(t, testutil.WriteToRelation(ctx, txn, relation, bat3, false, true))
+		require.NoError(t, relation.Write(ctx, bat3))
 		// exceed workspace commit threshold, write s3
 		require.NoError(t, txn.Commit(ctx))
 	}
@@ -1352,10 +1349,7 @@ func TestWorkspaceQuota2(t *testing.T) {
 	state, err := disttaeEngine.GetPartitionStateStats(ctx, relation.GetDBID(ctx), relation.GetTableID(ctx))
 	require.NoError(t, err)
 	t.Log(state.String())
-	// should get 2 objects
-	// 1 object is 5 rows, bat3
-	// 1 object is 10 rows, bat1 + bat2
-	require.Equal(t, 2, state.DataObjectsVisible.ObjCnt)
+	require.Equal(t, 1, state.DataObjectsVisible.ObjCnt)
 
 	_, relation, txn, err = disttaeEngine.GetTable(ctx, databaseName, tableName)
 
