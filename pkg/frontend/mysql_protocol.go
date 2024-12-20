@@ -402,6 +402,7 @@ func (mp *MysqlProtocolImpl) Write(execCtx *ExecCtx, crs *perfcounter.CounterSet
 			ses.AppendData(row2)
 		}
 	} else {
+		colSlices.safeRefSlice = true
 		if err = mp.WriteResultSetRow2(&mrs, colSlices, uint64(n)); err != nil {
 			execCtx.ses.Error(execCtx.reqCtx,
 				"Flush error",
