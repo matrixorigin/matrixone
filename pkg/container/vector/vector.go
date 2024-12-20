@@ -91,7 +91,7 @@ func ToSliceNoTypeCheck[T any](vec *Vector, ret *[]T) {
 	*ret = unsafe.Slice((*T)(vec.col.Ptr), vec.col.Cap)
 }
 
-func ToSliceNoTypeCheck2[T any](vec *Vector) any {
+func ToSliceNoTypeCheck2[T any](vec *Vector) []T {
 	return unsafe.Slice((*T)(vec.col.Ptr), vec.col.Cap)
 }
 

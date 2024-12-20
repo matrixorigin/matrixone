@@ -134,7 +134,7 @@ func extractRowFromVector(ctx context.Context, ses FeSession, vec *vector.Vector
 	return nil
 }
 
-func extractRowFromEveryVector2(ctx context.Context, ses FeSession, dataSet *batch.Batch, j int, row []any, safeRefSlice bool, colSlices []any) error {
+func extractRowFromEveryVector2(ctx context.Context, ses FeSession, dataSet *batch.Batch, j int, row []any, safeRefSlice bool, colSlices *ColumnSlices) error {
 	var rowIndex = j
 	for i, vec := range dataSet.Vecs { //col index
 		rowIndexBackup := rowIndex
@@ -155,41 +155,46 @@ func extractRowFromEveryVector2(ctx context.Context, ses FeSession, dataSet *bat
 	return nil
 }
 
-func extractRowFromVector2(ctx context.Context, ses FeSession, vec *vector.Vector, i int, row []any, rowIndex int, safeRefSlice bool, colSlices []any) error {
+func extractRowFromVector2(ctx context.Context, ses FeSession, vec *vector.Vector, i int, row []any, rowIndex int, safeRefSlice bool, colSlices *ColumnSlices) error {
 	if vec.IsConstNull() || vec.GetNulls().Contains(uint64(rowIndex)) {
 		row[i] = nil
 		return nil
 	}
 
+	sliceIdx := colSlices.ColIdx2SliceIdx(i)
+	if vec.IsConst() {
+		rowIndex = 0
+	}
+
 	switch vec.GetType().Oid { //get col
 	case types.T_json:
-		row[i] = types.DecodeJson(copyBytes(vec.GetBytesAt2(colSlices[i].([]types.Varlena), rowIndex), !safeRefSlice))
+		row[i] = types.DecodeJson(copyBytes(vec.GetBytesAt2(colSlices.arrVarlena[sliceIdx], rowIndex), !safeRefSlice))
 	case types.T_bool:
-		row[i] = vector.GetFixedAtNoTypeCheck2[bool](vec, colSlices[i].([]bool), rowIndex)
+		row[i] = colSlices.arrBool[sliceIdx][rowIndex]
 	case types.T_bit:
-		row[i] = vector.GetFixedAtNoTypeCheck2[uint64](vec, colSlices[i].([]uint64), rowIndex)
+		row[i] = colSlices.arrUint64[sliceIdx][rowIndex]
 	case types.T_int8:
-		row[i] = vector.GetFixedAtNoTypeCheck2[int8](vec, colSlices[i].([]int8), rowIndex)
+		row[i] = colSlices.arrInt8[sliceIdx][rowIndex]
 	case types.T_uint8:
-		row[i] = vector.GetFixedAtNoTypeCheck2[uint8](vec, colSlices[i].([]uint8), rowIndex)
+		row[i] = colSlices.arrUint8[sliceIdx][rowIndex]
 	case types.T_int16:
-		row[i] = vector.GetFixedAtNoTypeCheck2[int16](vec, colSlices[i].([]int16), rowIndex)
+		row[i] = colSlices.arrInt16[sliceIdx][rowIndex]
 	case types.T_uint16:
-		row[i] = vector.GetFixedAtNoTypeCheck2[uint16](vec, colSlices[i].([]uint16), rowIndex)
+		row[i] = colSlices.arrUint16[sliceIdx][rowIndex]
 	case types.T_int32:
-		row[i] = vector.GetFixedAtNoTypeCheck2[int32](vec, colSlices[i].([]int32), rowIndex)
+		row[i] = colSlices.arrInt32[sliceIdx][rowIndex]
 	case types.T_uint32:
-		row[i] = vector.GetFixedAtNoTypeCheck2[uint32](vec, colSlices[i].([]uint32), rowIndex)
+		row[i] = colSlices.arrUint32[sliceIdx][rowIndex]
 	case types.T_int64:
-		row[i] = vector.GetFixedAtNoTypeCheck2[int64](vec, colSlices[i].([]int64), rowIndex)
+		row[i] = colSlices.arrInt64[sliceIdx][rowIndex]
 	case types.T_uint64:
-		row[i] = vector.GetFixedAtNoTypeCheck2[uint64](vec, colSlices[i].([]uint64), rowIndex)
+		row[i] = colSlices.arrUint64[sliceIdx][rowIndex]
 	case types.T_float32:
-		row[i] = vector.GetFixedAtNoTypeCheck2[float32](vec, colSlices[i].([]float32), rowIndex)
+		row[i] = colSlices.arrFloat32[sliceIdx][rowIndex]
 	case types.T_float64:
-		row[i] = vector.GetFixedAtNoTypeCheck2[float64](vec, colSlices[i].([]float64), rowIndex)
+		row[i] = colSlices.arrFloat64[sliceIdx][rowIndex]
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink:
-		row[i] = copyBytes(vec.GetBytesAt2(colSlices[i].([]types.Varlena), rowIndex), !safeRefSlice)
+		row[i] = copyBytes(vec.GetBytesAt2(colSlices.arrVarlena[sliceIdx], rowIndex), !safeRefSlice)
 	case types.T_array_float32:
 		// NOTE: Don't merge it with T_varchar. You will get raw binary in the SQL output
 		//+------------------------------+
@@ -197,37 +202,37 @@ func extractRowFromVector2(ctx context.Context, ses FeSession, vec *vector.Vecto
 		//+------------------------------+
 		//|   �?   @  @@                  |
 		//+------------------------------+
-		row[i] = vector.GetArrayAt2[float32](vec, colSlices[i].([]types.Varlena), rowIndex)
+		row[i] = vector.GetArrayAt2[float32](vec, colSlices.arrVarlena[sliceIdx], rowIndex)
 	case types.T_array_float64:
-		row[i] = vector.GetArrayAt2[float64](vec, colSlices[i].([]types.Varlena), rowIndex)
+		row[i] = vector.GetArrayAt2[float64](vec, colSlices.arrVarlena[sliceIdx], rowIndex)
 	case types.T_date:
-		row[i] = vector.GetFixedAtNoTypeCheck2[types.Date](vec, colSlices[i].([]types.Date), rowIndex)
+		row[i] = colSlices.arrDate[sliceIdx][rowIndex]
 	case types.T_datetime:
 		scale := vec.GetType().Scale
-		row[i] = vector.GetFixedAtNoTypeCheck2[types.Datetime](vec, colSlices[i].([]types.Datetime), rowIndex).String2(scale)
+		row[i] = colSlices.arrDatetime[sliceIdx][rowIndex].String2(scale)
 	case types.T_time:
 		scale := vec.GetType().Scale
-		row[i] = vector.GetFixedAtNoTypeCheck2[types.Time](vec, colSlices[i].([]types.Time), rowIndex).String2(scale)
+		row[i] = colSlices.arrTime[sliceIdx][rowIndex].String2(scale)
 	case types.T_timestamp:
 		scale := vec.GetType().Scale
 		timeZone := ses.GetTimeZone()
-		row[i] = vector.GetFixedAtNoTypeCheck2[types.Timestamp](vec, colSlices[i].([]types.Timestamp), rowIndex).String2(timeZone, scale)
+		row[i] = colSlices.arrTimestamp[sliceIdx][rowIndex].String2(timeZone, scale)
 	case types.T_decimal64:
 		scale := vec.GetType().Scale
-		row[i] = vector.GetFixedAtNoTypeCheck2[types.Decimal64](vec, colSlices[i].([]types.Decimal64), rowIndex).Format(scale)
+		row[i] = colSlices.arrDecimal64[sliceIdx][rowIndex].Format(scale)
 	case types.T_decimal128:
 		scale := vec.GetType().Scale
-		row[i] = vector.GetFixedAtNoTypeCheck2[types.Decimal128](vec, colSlices[i].([]types.Decimal128), rowIndex).Format(scale)
+		row[i] = colSlices.arrDecimal128[sliceIdx][rowIndex].Format(scale)
 	case types.T_uuid:
-		row[i] = vector.GetFixedAtNoTypeCheck2[types.Uuid](vec, colSlices[i].([]types.Uuid), rowIndex).String()
+		row[i] = colSlices.arrUuid[sliceIdx][rowIndex].String()
 	case types.T_Rowid:
-		row[i] = vector.GetFixedAtNoTypeCheck2[types.Rowid](vec, colSlices[i].([]types.Rowid), rowIndex)
+		row[i] = colSlices.arrRowid[sliceIdx][rowIndex]
 	case types.T_Blockid:
-		row[i] = vector.GetFixedAtNoTypeCheck2[types.Blockid](vec, colSlices[i].([]types.Blockid), rowIndex)
+		row[i] = colSlices.arrBlockid[sliceIdx][rowIndex]
 	case types.T_TS:
-		row[i] = vector.GetFixedAtNoTypeCheck2[types.TS](vec, colSlices[i].([]types.TS), rowIndex)
+		row[i] = colSlices.arrTS[sliceIdx][rowIndex]
 	case types.T_enum:
-		row[i] = vector.GetFixedAtNoTypeCheck2[types.Enum](vec, colSlices[i].([]types.Enum), rowIndex)
+		row[i] = colSlices.arrEnum[sliceIdx][rowIndex]
 	default:
 		ses.Error(ctx,
 			"Failed to extract row from vector, unsupported type",
@@ -237,7 +242,38 @@ func extractRowFromVector2(ctx context.Context, ses FeSession, vec *vector.Vecto
 	return nil
 }
 
-func convertBatchToSlices(ctx context.Context, ses FeSession, dataSet *batch.Batch, colSlices []any) error {
+type ColumnSlices struct {
+	colIdx2SliceIdx []int
+	arrVarlena      [][]types.Varlena
+	arrBool         [][]bool
+	arrInt8         [][]int8
+	arrInt16        [][]int16
+	arrInt32        [][]int32
+	arrInt64        [][]int64
+	arrUint8        [][]uint8
+	arrUint16       [][]uint16
+	arrUint32       [][]uint32
+	arrUint64       [][]uint64
+	arrFloat32      [][]float32
+	arrFloat64      [][]float64
+	arrDate         [][]types.Date
+	arrDatetime     [][]types.Datetime
+	arrTime         [][]types.Time
+	arrTimestamp    [][]types.Timestamp
+	arrDecimal64    [][]types.Decimal64
+	arrDecimal128   [][]types.Decimal128
+	arrUuid         [][]types.Uuid
+	arrRowid        [][]types.Rowid
+	arrBlockid      [][]types.Blockid
+	arrTS           [][]types.TS
+	arrEnum         [][]types.Enum
+}
+
+func (slices *ColumnSlices) ColIdx2SliceIdx(idx int) int {
+	return slices.colIdx2SliceIdx[idx]
+}
+
+func convertBatchToSlices(ctx context.Context, ses FeSession, dataSet *batch.Batch, colSlices *ColumnSlices) error {
 	for i, vec := range dataSet.Vecs { //col index
 		if vec.IsConstNull() {
 			continue
@@ -251,40 +287,54 @@ func convertBatchToSlices(ctx context.Context, ses FeSession, dataSet *batch.Bat
 	return nil
 }
 
-func convertVectorToSlice(ctx context.Context, ses FeSession, vec *vector.Vector, i int, colSlices []any) error {
+func convertVectorToSlice(ctx context.Context, ses FeSession, vec *vector.Vector, i int, colSlices *ColumnSlices) error {
 	if vec.IsConstNull() {
 		return nil
 	}
 
 	switch vec.GetType().Oid { //get col
 	case types.T_json:
-		colSlices[i] = vector.ToSliceNoTypeCheck2[types.Varlena](vec)
+		colSlices.colIdx2SliceIdx[i] = len(colSlices.arrVarlena)
+		colSlices.arrVarlena = append(colSlices.arrVarlena, vector.ToSliceNoTypeCheck2[types.Varlena](vec))
 	case types.T_bool:
-		colSlices[i] = vector.ToSliceNoTypeCheck2[bool](vec)
+		colSlices.colIdx2SliceIdx[i] = len(colSlices.arrBool)
+		colSlices.arrBool = append(colSlices.arrBool, vector.ToSliceNoTypeCheck2[bool](vec))
 	case types.T_bit:
-		colSlices[i] = vector.ToSliceNoTypeCheck2[uint64](vec)
+		colSlices.colIdx2SliceIdx[i] = len(colSlices.arrUint64)
+		colSlices.arrUint64 = append(colSlices.arrUint64, vector.ToSliceNoTypeCheck2[uint64](vec))
 	case types.T_int8:
-		colSlices[i] = vector.ToSliceNoTypeCheck2[int8](vec)
+		colSlices.colIdx2SliceIdx[i] = len(colSlices.arrInt8)
+		colSlices.arrInt8 = append(colSlices.arrInt8, vector.ToSliceNoTypeCheck2[int8](vec))
 	case types.T_uint8:
-		colSlices[i] = vector.ToSliceNoTypeCheck2[uint8](vec)
+		colSlices.colIdx2SliceIdx[i] = len(colSlices.arrUint8)
+		colSlices.arrUint8 = append(colSlices.arrUint8, vector.ToSliceNoTypeCheck2[uint8](vec))
 	case types.T_int16:
-		colSlices[i] = vector.ToSliceNoTypeCheck2[int16](vec)
+		colSlices.colIdx2SliceIdx[i] = len(colSlices.arrInt16)
+		colSlices.arrInt16 = append(colSlices.arrInt16, vector.ToSliceNoTypeCheck2[int16](vec))
 	case types.T_uint16:
-		colSlices[i] = vector.ToSliceNoTypeCheck2[uint16](vec)
+		colSlices.colIdx2SliceIdx[i] = len(colSlices.arrUint16)
+		colSlices.arrUint16 = append(colSlices.arrUint16, vector.ToSliceNoTypeCheck2[uint16](vec))
 	case types.T_int32:
-		colSlices[i] = vector.ToSliceNoTypeCheck2[int32](vec)
+		colSlices.colIdx2SliceIdx[i] = len(colSlices.arrInt32)
+		colSlices.arrInt32 = append(colSlices.arrInt32, vector.ToSliceNoTypeCheck2[int32](vec))
 	case types.T_uint32:
-		colSlices[i] = vector.ToSliceNoTypeCheck2[uint32](vec)
+		colSlices.colIdx2SliceIdx[i] = len(colSlices.arrUint32)
+		colSlices.arrUint32 = append(colSlices.arrUint32, vector.ToSliceNoTypeCheck2[uint32](vec))
 	case types.T_int64:
-		colSlices[i] = vector.ToSliceNoTypeCheck2[int64](vec)
+		colSlices.colIdx2SliceIdx[i] = len(colSlices.arrInt64)
+		colSlices.arrInt64 = append(colSlices.arrInt64, vector.ToSliceNoTypeCheck2[int64](vec))
 	case types.T_uint64:
-		colSlices[i] = vector.ToSliceNoTypeCheck2[uint64](vec)
+		colSlices.colIdx2SliceIdx[i] = len(colSlices.arrUint64)
+		colSlices.arrUint64 = append(colSlices.arrUint64, vector.ToSliceNoTypeCheck2[uint64](vec))
 	case types.T_float32:
-		colSlices[i] = vector.ToSliceNoTypeCheck2[float32](vec)
+		colSlices.colIdx2SliceIdx[i] = len(colSlices.arrFloat32)
+		colSlices.arrFloat32 = append(colSlices.arrFloat32, vector.ToSliceNoTypeCheck2[float32](vec))
 	case types.T_float64:
-		colSlices[i] = vector.ToSliceNoTypeCheck2[float64](vec)
+		colSlices.colIdx2SliceIdx[i] = len(colSlices.arrFloat64)
+		colSlices.arrFloat64 = append(colSlices.arrFloat64, vector.ToSliceNoTypeCheck2[float64](vec))
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink:
-		colSlices[i] = vector.ToSliceNoTypeCheck2[types.Varlena](vec)
+		colSlices.colIdx2SliceIdx[i] = len(colSlices.arrVarlena)
+		colSlices.arrVarlena = append(colSlices.arrVarlena, vector.ToSliceNoTypeCheck2[types.Varlena](vec))
 	case types.T_array_float32:
 		// NOTE: Don't merge it with T_varchar. You will get raw binary in the SQL output
 		//+------------------------------+
@@ -292,31 +342,44 @@ func convertVectorToSlice(ctx context.Context, ses FeSession, vec *vector.Vector
 		//+------------------------------+
 		//|   �?   @  @@                  |
 		//+------------------------------+
-		colSlices[i] = vector.ToSliceNoTypeCheck2[types.Varlena](vec)
+		colSlices.colIdx2SliceIdx[i] = len(colSlices.arrVarlena)
+		colSlices.arrVarlena = append(colSlices.arrVarlena, vector.ToSliceNoTypeCheck2[types.Varlena](vec))
 	case types.T_array_float64:
-		colSlices[i] = vector.ToSliceNoTypeCheck2[types.Varlena](vec)
+		colSlices.colIdx2SliceIdx[i] = len(colSlices.arrVarlena)
+		colSlices.arrVarlena = append(colSlices.arrVarlena, vector.ToSliceNoTypeCheck2[types.Varlena](vec))
 	case types.T_date:
-		colSlices[i] = vector.ToSliceNoTypeCheck2[types.Date](vec)
+		colSlices.colIdx2SliceIdx[i] = len(colSlices.arrDate)
+		colSlices.arrDate = append(colSlices.arrDate, vector.ToSliceNoTypeCheck2[types.Date](vec))
 	case types.T_datetime:
-		colSlices[i] = vector.ToSliceNoTypeCheck2[types.Datetime](vec)
+		colSlices.colIdx2SliceIdx[i] = len(colSlices.arrDatetime)
+		colSlices.arrDatetime = append(colSlices.arrDatetime, vector.ToSliceNoTypeCheck2[types.Datetime](vec))
 	case types.T_time:
-		colSlices[i] = vector.ToSliceNoTypeCheck2[types.Time](vec)
+		colSlices.colIdx2SliceIdx[i] = len(colSlices.arrTime)
+		colSlices.arrTime = append(colSlices.arrTime, vector.ToSliceNoTypeCheck2[types.Time](vec))
 	case types.T_timestamp:
-		colSlices[i] = vector.ToSliceNoTypeCheck2[types.Timestamp](vec)
+		colSlices.colIdx2SliceIdx[i] = len(colSlices.arrTimestamp)
+		colSlices.arrTimestamp = append(colSlices.arrTimestamp, vector.ToSliceNoTypeCheck2[types.Timestamp](vec))
 	case types.T_decimal64:
-		colSlices[i] = vector.ToSliceNoTypeCheck2[types.Decimal64](vec)
+		colSlices.colIdx2SliceIdx[i] = len(colSlices.arrDecimal64)
+		colSlices.arrDecimal64 = append(colSlices.arrDecimal64, vector.ToSliceNoTypeCheck2[types.Decimal64](vec))
 	case types.T_decimal128:
-		colSlices[i] = vector.ToSliceNoTypeCheck2[types.Decimal128](vec)
+		colSlices.colIdx2SliceIdx[i] = len(colSlices.arrDecimal128)
+		colSlices.arrDecimal128 = append(colSlices.arrDecimal128, vector.ToSliceNoTypeCheck2[types.Decimal128](vec))
 	case types.T_uuid:
-		colSlices[i] = vector.ToSliceNoTypeCheck2[types.Uuid](vec)
+		colSlices.colIdx2SliceIdx[i] = len(colSlices.arrUuid)
+		colSlices.arrUuid = append(colSlices.arrUuid, vector.ToSliceNoTypeCheck2[types.Uuid](vec))
 	case types.T_Rowid:
-		colSlices[i] = vector.ToSliceNoTypeCheck2[types.Rowid](vec)
+		colSlices.colIdx2SliceIdx[i] = len(colSlices.arrRowid)
+		colSlices.arrRowid = append(colSlices.arrRowid, vector.ToSliceNoTypeCheck2[types.Rowid](vec))
 	case types.T_Blockid:
-		colSlices[i] = vector.ToSliceNoTypeCheck2[types.Blockid](vec)
+		colSlices.colIdx2SliceIdx[i] = len(colSlices.arrBlockid)
+		colSlices.arrBlockid = append(colSlices.arrBlockid, vector.ToSliceNoTypeCheck2[types.Blockid](vec))
 	case types.T_TS:
-		colSlices[i] = vector.ToSliceNoTypeCheck2[types.TS](vec)
+		colSlices.colIdx2SliceIdx[i] = len(colSlices.arrTS)
+		colSlices.arrTS = append(colSlices.arrTS, vector.ToSliceNoTypeCheck2[types.TS](vec))
 	case types.T_enum:
-		colSlices[i] = vector.ToSliceNoTypeCheck2[types.Enum](vec)
+		colSlices.colIdx2SliceIdx[i] = len(colSlices.arrEnum)
+		colSlices.arrEnum = append(colSlices.arrEnum, vector.ToSliceNoTypeCheck2[types.Enum](vec))
 	default:
 		ses.Error(ctx,
 			"Failed to convert vector to slice, unsupported type",

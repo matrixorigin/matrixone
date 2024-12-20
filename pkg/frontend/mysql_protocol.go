@@ -381,7 +381,9 @@ func (mp *MysqlProtocolImpl) Write(execCtx *ExecCtx, crs *perfcounter.CounterSet
 		mrs.Data[i] = make([]interface{}, len(bat.Vecs))
 	}
 
-	colSlices := make([]any, len(bat.Vecs))
+	colSlices := &ColumnSlices{
+		colIdx2SliceIdx: make([]int, len(bat.Vecs)),
+	}
 	err := convertBatchToSlices(execCtx.reqCtx, execCtx.ses, bat, colSlices)
 	if err != nil {
 		return err
