@@ -75,7 +75,9 @@ func (c *CkpReplayer) Close() {
 		worker.Stop()
 	}
 	for _, data := range c.ckpdatas {
-		data.Close()
+		if data != nil {
+			data.Close()
+		}
 	}
 }
 
