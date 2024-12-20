@@ -55,7 +55,6 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			})
 		}
 
-		// TODO: support update primary key or unique key or secondary key or master index or ivfflat index
 		var pkAndUkCols = make(map[string]bool)
 		if tableDef.Pkey != nil {
 			for _, colName := range tableDef.Pkey.Names {
@@ -77,7 +76,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 
 		for colName, updateExpr := range dmlCtx.updateCol2Expr[i] {
 			if pkAndUkCols[colName] {
-				return 0, moerr.NewUnsupportedDML(builder.compCtx.GetContext(), "update primary key or unique key or master index or ivfflat index")
+				return 0, moerr.NewUnsupportedDML(builder.compCtx.GetContext(), "update master index or ivfflat index")
 			}
 
 			if !dmlCtx.updatePartCol[i] {
@@ -217,6 +216,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 
 	selectNodeTag := selectNode.BindingTags[0]
 	idxScanNodes := make([][]*plan.Node, len(dmlCtx.tableDefs))
+	//pkNeedUpdate := make([]bool, len(dmlCtx.tableDefs))
 	idxNeedUpdate := make([][]bool, len(dmlCtx.tableDefs))
 
 	for i, tableDef := range dmlCtx.tableDefs {
