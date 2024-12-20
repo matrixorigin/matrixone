@@ -67,7 +67,7 @@ func (h *Handle) HandleAddFaultPoint(
 		fault.Disable()
 		return nil, nil
 	}
-	return nil, h.db.AddFaultPoint(ctx, req.Name, req.Freq, req.Action, req.Iarg, req.Sarg)
+	return nil, h.db.AddFaultPoint(ctx, req.Name, req.Freq, req.Action, req.Iarg, req.Sarg, req.Constant)
 }
 
 func (h *Handle) HandleTraceSpan(ctx context.Context,
@@ -215,6 +215,14 @@ func (h *Handle) HandleGetChangedTableList(
 	req *cmd_util.GetChangedTableListReq,
 	resp *cmd_util.GetChangedTableListResp,
 ) (func(), error) {
+
+	if len(req.TableIds) == 0 {
+		now := types.BuildTS(time.Now().UnixNano(), 0).ToTimestamp()
+		resp = &cmd_util.GetChangedTableListResp{
+			Newest: &now,
+		}
+		return nil, nil
+	}
 
 	isTheTblIWant := func(tblId uint64, commit types.TS) bool {
 		if slices.Index(resp.TableIds, tblId) != -1 {
@@ -569,7 +577,7 @@ func (h *Handle) HandleCommitMerge(
 		stat := objectio.ObjectStats(o)
 		ids = append(ids, *stat.ObjectName().ObjectId())
 	}
-	merge.ActiveCNObj.RemoveActiveCNObj(ids)
+	h.GetDB().MergeScheduler.RemoveCNActiveObjects(ids)
 	if req.Err != "" {
 		resp.ReturnStr = req.Err
 		err = moerr.NewInternalErrorf(ctx, "merge err in cn: %s", req.Err)
@@ -692,5 +700,15 @@ func marshalTransferMaps(
 		}
 		return booking, nil
 	}
+	return nil, nil
+}
+
+func (h *Handle) HandleFaultInject(
+	ctx context.Context,
+	meta txn.TxnMeta,
+	req *cmd_util.FaultInjectReq,
+	resp *api.TNStringResponse,
+) (cb func(), err error) {
+	resp.ReturnStr = fault.HandleFaultInject(ctx, req.Method, req.Parameter)
 	return nil, nil
 }

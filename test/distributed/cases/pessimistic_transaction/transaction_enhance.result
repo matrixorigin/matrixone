@@ -276,7 +276,7 @@ insert into atomic_table_17 values (6,"a"),(7,"b");
 drop table atomic_table_17;
 use transaction_enhance;
 alter table atomic_table_17 add constraint unique key (c1);
-SQL parser error: table "atomic_table_17" does not exist
+no such table transaction_enhance.atomic_table_17
 update atomic_table_17 set c1=8 where c2="b";
 no such table transaction_enhance.atomic_table_17
 commit;

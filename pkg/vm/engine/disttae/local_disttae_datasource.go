@@ -21,8 +21,6 @@ import (
 	"slices"
 	"sort"
 
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -39,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
+	"go.uber.org/zap"
 )
 
 func NewLocalDataSource(
@@ -279,14 +278,15 @@ func (ls *LocalDisttaeDataSource) Next(
 	cols []string,
 	types []types.Type,
 	seqNums []uint16,
+	pkSeqNum int32,
 	filter any,
 	mp *mpool.MPool,
 	outBatch *batch.Batch,
 ) (*objectio.BlockInfo, engine.DataState, error) {
 
 	if ls.memPKFilter == nil {
-		ff := filter.(engine_util.MemPKFilter)
-		ls.memPKFilter = &ff
+		ff := filter.(*engine_util.MemPKFilter)
+		ls.memPKFilter = ff
 	}
 
 	if len(cols) == 0 {
@@ -300,7 +300,7 @@ func (ls *LocalDisttaeDataSource) Next(
 		switch ls.iteratePhase {
 		case engine.InMem:
 			outBatch.CleanOnlyData()
-			err := ls.iterateInMemData(ctx, cols, types, seqNums, outBatch, mp)
+			err := ls.iterateInMemData(ctx, cols, types, seqNums, pkSeqNum, outBatch, mp)
 			if err != nil {
 				return nil, engine.InMem, err
 			}
@@ -313,6 +313,14 @@ func (ls *LocalDisttaeDataSource) Next(
 			return nil, engine.InMem, nil
 
 		case engine.Persisted:
+			// if satisfies:
+			//	  1. pk equal
+			//    2. already found one row
+			// then skip all the following blocks
+			if ok1, ok2 := ls.memPKFilter.Exact(); ok1 && ok2 {
+				return nil, engine.End, nil
+			}
+
 			if ls.rangesCursor >= ls.rangeSlice.Len() {
 				return nil, engine.End, nil
 			}
@@ -360,6 +368,7 @@ func (ls *LocalDisttaeDataSource) iterateInMemData(
 	cols []string,
 	colTypes []types.Type,
 	seqNums []uint16,
+	pkSeqNums int32,
 	outBatch *batch.Batch,
 	mp *mpool.MPool,
 ) (err error) {
@@ -367,7 +376,7 @@ func (ls *LocalDisttaeDataSource) iterateInMemData(
 	outBatch.SetRowCount(0)
 
 	if ls.category != engine.ShardingRemoteDataSource {
-		if err = ls.filterInMemUnCommittedInserts(ctx, seqNums, mp, outBatch); err != nil {
+		if err = ls.filterInMemUnCommittedInserts(ctx, seqNums, pkSeqNums, mp, outBatch); err != nil {
 			return err
 		}
 	}
@@ -419,6 +428,7 @@ func checkWorkspaceEntryType(
 func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 	_ context.Context,
 	seqNums []uint16,
+	pkSeqNums int32,
 	mp *mpool.MPool,
 	outBatch *batch.Batch,
 ) error {
@@ -439,7 +449,20 @@ func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 		return nil
 	}
 
-	var retainedRowIds []objectio.Rowid
+	var (
+		skipMask objectio.Bitmap
+		packer   *types.Packer
+
+		enableFilter bool
+
+		retainedRowIds []objectio.Rowid
+	)
+
+	if ls.memPKFilter.SpecFactory != nil && ls.wsCursor < ls.txnOffset {
+		enableFilter = true
+		// __mo_rowid is the first
+		pkSeqNums++
+	}
 
 	for ; ls.wsCursor < ls.txnOffset; ls.wsCursor++ {
 		if writes[ls.wsCursor].bat == nil {
@@ -454,8 +477,22 @@ func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 
 		retainedRowIds = vector.MustFixedColWithTypeCheck[objectio.Rowid](entry.bat.Vecs[0])
 		// Note: this implementation depends on that the offsets from rowids is a 0-based consecutive seq.
-		// Refter to genBlock and genRowid method.
-		offsets := engine_util.RowIdsToOffset(retainedRowIds, int64(0)).([]int64)
+		// Refer to genBlock and genRowid method.
+
+		// apply pk filter on workspace entries
+		if enableFilter {
+			skipMask = objectio.GetReusableBitmap()
+			put := ls.table.db.getEng().packerPool.Get(&packer)
+			ls.memPKFilter.FilterVector(entry.bat.Vecs[pkSeqNums], packer, &skipMask)
+			put.Put()
+		}
+
+		offsets := engine_util.RowIdsToOffset(retainedRowIds, int64(0), skipMask).([]int64)
+		skipMask.Release()
+
+		if len(offsets) == 0 {
+			continue
+		}
 
 		b := retainedRowIds[0].BorrowBlockID()
 		sels, err := ls.ApplyTombstones(
@@ -644,6 +681,11 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 
 	if summaryBuf != nil {
 		summaryBuf.WriteString(fmt.Sprintf("[PScan] scan:%d, inserted:%d, delInFile:%d, outBatchRowCnt: %v\n", scan, inserted, delInFile, outBatch.RowCount()))
+	}
+
+	if outBatch.RowCount()-inputRowCnt == 1 {
+		// found one row in InMemCommitted for the pk equal, record it
+		ls.memPKFilter.RecordExactHit()
 	}
 
 	return nil
@@ -902,6 +944,7 @@ func (ls *LocalDisttaeDataSource) applyWorkspaceRawRowIdDeletes(
 
 func (ls *LocalDisttaeDataSource) getInMemDelIter(
 	bid *types.Blockid,
+	offsetCnt int,
 ) (logtailreplay.RowsIter, bool) {
 
 	inMemTombstoneCnt := ls.pState.ApproxInMemTombstones()
@@ -909,7 +952,8 @@ func (ls *LocalDisttaeDataSource) getInMemDelIter(
 		return nil, true
 	}
 
-	if ls.memPKFilter == nil || ls.memPKFilter.SpecFactory == nil {
+	if offsetCnt <= logtailreplay.IndexScaleTiny ||
+		ls.memPKFilter == nil || ls.memPKFilter.SpecFactory == nil {
 		return ls.pState.NewRowsIter(ls.snapshotTS, bid, true), false
 	}
 
@@ -942,7 +986,15 @@ func (ls *LocalDisttaeDataSource) applyPStateInMemDeletes(
 
 	leftRows = offsets
 
-	delIter, fastReturn := ls.getInMemDelIter(bid)
+	if len(leftRows) == logtailreplay.IndexScaleOne {
+		if ls.pState.CheckRowIdDeletedInMem(ls.snapshotTS, *types.NewRowid(bid, uint32(offsets[0]))) {
+			return nil
+		}
+
+		return leftRows
+	}
+
+	delIter, fastReturn := ls.getInMemDelIter(bid, len(offsets))
 	if fastReturn {
 		return leftRows
 	}

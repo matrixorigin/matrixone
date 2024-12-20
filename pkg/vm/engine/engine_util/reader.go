@@ -102,6 +102,7 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
 	mixin.columns.colTypes = make([]types.Type, len(cols))
 	// mixin.columns.colNulls = make([]bool, len(cols))
 	mixin.columns.indexOfFirstSortedColumn = -1
+	mixin.filterState.pkSeqNum = -1
 
 	pkPos := -1
 
@@ -142,6 +143,12 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
 		// if the primary key is not found, it returns empty slice
 		mixin.filterState.seqnums = []uint16{mixin.columns.seqnums[pkPos]}
 		mixin.filterState.colTypes = mixin.columns.colTypes[pkPos : pkPos+1]
+	}
+
+	if mixin.tableDef.Pkey != nil {
+		colIdx := mixin.tableDef.Name2ColIndex[mixin.tableDef.Pkey.PkeyColName]
+		colDef := mixin.tableDef.Cols[colIdx]
+		mixin.filterState.pkSeqNum = int32(colDef.Seqnum)
 	}
 }
 
@@ -220,6 +227,7 @@ type withFilterMixin struct {
 		filter    objectio.BlockReadFilter
 		memFilter MemPKFilter
 		seqnums   []uint16 // seqnums of the columns in the filter
+		pkSeqNum  int32
 		colTypes  []types.Type
 	}
 }
@@ -481,7 +489,8 @@ func (r *reader) Read(
 		cols,
 		r.columns.colTypes,
 		r.columns.seqnums,
-		r.filterState.memFilter,
+		r.filterState.pkSeqNum,
+		&r.filterState.memFilter,
 		mp,
 		outBatch)
 
@@ -537,6 +546,11 @@ func (r *reader) Read(
 	)
 	if err != nil {
 		return false, err
+	}
+
+	if outBatch.RowCount() == 1 {
+		// found one row in this blk for the pk equal, record it
+		r.withFilterMixin.filterState.memFilter.RecordExactHit()
 	}
 
 	if filter.Valid {

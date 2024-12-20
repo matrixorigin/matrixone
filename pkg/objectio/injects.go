@@ -33,7 +33,6 @@ const (
 	FJ_FlushTimeout  = "fj/flush/timeout"
 
 	FJ_PrefetchThreshold = "fj/prefetch/threshold"
-	FJ_WriteThreshold    = "fj/write/threshold"
 
 	FJ_LogRanges         = "fj/log/ranges"
 	FJ_LogPartitionState = "fj/log/partitionstate"
@@ -225,6 +224,7 @@ func InjectLogging(
 		"echo",
 		iarg,
 		sarg,
+		false,
 	); err != nil {
 		return
 	}
@@ -232,14 +232,6 @@ func InjectLogging(
 		fault.RemoveFaultPoint(context.Background(), key)
 	}
 	return
-}
-
-func WriteWorkspaceThresholdInjected() (bool, int) {
-	iarg, _, injected := fault.TriggerFault(FJ_WriteThreshold)
-	if !injected {
-		return false, 0
-	}
-	return true, int(iarg)
 }
 
 func RangesLogInjected(dbName, tableName string) (bool, int) {
@@ -258,6 +250,7 @@ func InjectPrefetchThreshold(threshold int) (rmFault func(), err error) {
 		"echo",
 		int64(threshold),
 		"",
+		false,
 	); err != nil {
 		return
 	}

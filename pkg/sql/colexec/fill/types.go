@@ -53,6 +53,9 @@ type container struct {
 	subStatus int
 	idx       int
 	buf       *batch.Batch
+	i         int
+	doneIdx   []int
+	endBatch  []bool
 
 	// linear
 	nullIdx int

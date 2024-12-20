@@ -57,6 +57,7 @@ var (
 	CtlReaderMethod          = strings.ToUpper("reader")
 	GetTableShards           = strings.ToUpper("get-table-shards")
 	MoTableStats             = strings.ToUpper("MoTableStats")
+	WorkspaceThreshold       = strings.ToUpper("WorkspaceThreshold")
 )
 
 var (
@@ -81,7 +82,7 @@ var (
 		LabelMethod:              handleSetLabel,
 		WorkStateMethod:          handleSetWorkState,
 		SyncCommitMethod:         handleSyncCommit,
-		AddFaultPointMethod:      handleAddFaultPoint,
+		AddFaultPointMethod:      handleAddFaultPoint(),
 		BackupMethod:             handleBackup(),
 		TraceSpanMethod:          handleTraceSpan,
 		CoreDumpMethod:           handleCoreDump,
@@ -98,6 +99,7 @@ var (
 		CtlReaderMethod:          handleCtlReader,
 		GetTableShards:           handleGetTableShards,
 		MoTableStats:             handleMoTableStats,
+		WorkspaceThreshold:       handleWorkspaceThreshold,
 	}
 )
 
