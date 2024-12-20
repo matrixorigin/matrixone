@@ -71,6 +71,8 @@ type Options struct {
 type StatementOption struct {
 	waitPolicy       lock.WaitPolicy
 	accountId        uint32
+	roleId           uint32
+	userId           uint32
 	disableLog       bool
 	ignoreForeignKey bool
 }
