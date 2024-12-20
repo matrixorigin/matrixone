@@ -8,7 +8,7 @@ create database if not exists db1;
 create snapshot sn2 for database db1;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sn2    2024-12-19 09:20:24.366799    database    sys    db1    
+sn2    2024-12-20 02:58:51.442498    database    sys    db1    
 drop database if exists db1;
 drop snapshot if exists sn2;
 drop snapshot if exists sn1;
@@ -26,7 +26,7 @@ create database if not exists db1;
 create snapshot sn2 for database db1;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sn2    2024-12-19 09:20:24.988119    database    acc01    db1    
+sn2    2024-12-20 02:58:51.951431    database    acc01    db1    
 drop database if exists db1;
 drop snapshot if exists sn2;
 drop snapshot if exists sn1;
@@ -43,7 +43,7 @@ insert into db1.tbl1 values (1), (2), (3);
 create snapshot sn2 for table db1 tbl1;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sn2    2024-12-19 09:20:25.053164    table    sys    db1    tbl1
+sn2    2024-12-20 02:58:52.013035    table    sys    db1    tbl1
 drop database if exists db1;
 drop snapshot if exists sn2;
 drop snapshot if exists sn1;
@@ -63,8 +63,18 @@ insert into db1.tbl1 values (1), (2), (3);
 create snapshot sn2 for table db1 tbl1;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sn2    2024-12-19 09:20:25.586236    table    acc01    db1    tbl1
+sn2    2024-12-20 02:58:52.689975    table    acc01    db1    tbl1
 drop database if exists db1;
 drop snapshot if exists sn2;
 drop snapshot if exists sn1;
 drop account if exists acc1;
+create snapshot sn1 for account sys;
+create snapshot sn1 for account sys;
+internal error: snapshot sn1 already exists
+create snapshot if not exists sn1  for account sys;
+drop snapshot if exists sn1;
+create snapshot sn1 for database mo_catalog;
+internal error: can not create snapshot for current database mo_catalog
+create snapshot sn1 for table mo_catalog mo_user;
+internal error: can not create pitr for current table mo_catalog.mo_user
+drop snapshot if exists sn1;

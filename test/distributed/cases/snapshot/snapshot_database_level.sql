@@ -79,3 +79,14 @@ drop snapshot if exists sn1;
 -- @session
 
 drop account if exists acc1;
+
+create snapshot sn1 for account sys;
+create snapshot sn1 for account sys;
+create snapshot if not exists sn1  for account sys;
+
+drop snapshot if exists sn1;
+
+create snapshot sn1 for database mo_catalog;
+create snapshot sn1 for table mo_catalog mo_user;
+
+drop snapshot if exists sn1;
