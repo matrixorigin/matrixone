@@ -26,8 +26,8 @@ import (
 	"github.com/smartystreets/goconvey/convey"
 )
 
-func Test_fkTablesTopoSortWithDropped(t *testing.T) {
-	convey.Convey("fkTablesTopoSortWithDropped ", t, func() {
+func Test_fkTablesTopoSortWithTS(t *testing.T) {
+	convey.Convey("fkTablesTopoSortWithTS ", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
@@ -59,26 +59,26 @@ func Test_fkTablesTopoSortWithDropped(t *testing.T) {
 
 		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
 
-		_, err := fkTablesTopoSortWithDropped(ctx, bh, "", "", 0, 0, 0)
+		_, err := fkTablesTopoSortWithTS(ctx, bh, "", "", 0, 0, 0)
 		convey.So(err, convey.ShouldNotBeNil)
 
 		sql := "select db_name, table_name, refer_db_name, refer_table_name from mo_catalog.mo_foreign_keys"
 		mrs := newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		_, err = fkTablesTopoSortWithDropped(ctx, bh, "", "", 0, 0, 0)
+		_, err = fkTablesTopoSortWithTS(ctx, bh, "", "", 0, 0, 0)
 		convey.So(err, convey.ShouldBeNil)
 
 		sql = "select db_name, table_name, refer_db_name, refer_table_name from mo_catalog.mo_foreign_keys"
 		mrs = newMrsForPitrRecord([][]interface{}{{"db1", "table1", "db2", "table2"}})
 		bh.sql2result[sql] = mrs
-		_, err = fkTablesTopoSortWithDropped(ctx, bh, "", "", 0, 0, 0)
+		_, err = fkTablesTopoSortWithTS(ctx, bh, "", "", 0, 0, 0)
 		convey.So(err, convey.ShouldBeNil)
 	})
 }
 
-func Test_getFkDepsWithDropped(t *testing.T) {
-	convey.Convey("getFkDepsWithDropped ", t, func() {
+func Test_getFkDepsWithTS(t *testing.T) {
+	convey.Convey("getFkDepsWithTS ", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
@@ -110,49 +110,49 @@ func Test_getFkDepsWithDropped(t *testing.T) {
 
 		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
 
-		_, err := getFkDepsWithDropped(ctx, bh, "", "", 0, 0, 0)
+		_, err := getFkDepsWithTS(ctx, bh, "", "", 0, 0, 0)
 		convey.So(err, convey.ShouldNotBeNil)
 
 		sql := "select db_name, table_name, refer_db_name, refer_table_name from mo_catalog.mo_foreign_keys"
 		mrs := newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		_, err = getFkDepsWithDropped(ctx, bh, "", "", 0, 0, 0)
+		_, err = getFkDepsWithTS(ctx, bh, "", "", 0, 0, 0)
 		convey.So(err, convey.ShouldBeNil)
 
 		sql = "select db_name, table_name, refer_db_name, refer_table_name from mo_catalog.mo_foreign_keys"
 		mrs = newMrsForPitrRecord([][]interface{}{{"db1", "table1", "db2", "table2"}})
 		bh.sql2result[sql] = mrs
 
-		_, err = getFkDepsWithDropped(ctx, bh, "", "", 0, 0, 0)
+		_, err = getFkDepsWithTS(ctx, bh, "", "", 0, 0, 0)
 		convey.So(err, convey.ShouldBeNil)
 
 		sql = "select db_name, table_name, refer_db_name, refer_table_name from mo_catalog.mo_foreign_keys"
 		mrs = newMrsForPitrRecord([][]interface{}{{types.Day_Hour, "table1", "db2", "table2"}})
 		bh.sql2result[sql] = mrs
 
-		_, err = getFkDepsWithDropped(ctx, bh, "", "", 0, 0, 0)
+		_, err = getFkDepsWithTS(ctx, bh, "", "", 0, 0, 0)
 		convey.So(err, convey.ShouldNotBeNil)
 
 		sql = "select db_name, table_name, refer_db_name, refer_table_name from mo_catalog.mo_foreign_keys"
 		mrs = newMrsForPitrRecord([][]interface{}{{"db1", types.Day_Hour, "db2", "table2"}})
 		bh.sql2result[sql] = mrs
 
-		_, err = getFkDepsWithDropped(ctx, bh, "", "", 0, 0, 0)
+		_, err = getFkDepsWithTS(ctx, bh, "", "", 0, 0, 0)
 		convey.So(err, convey.ShouldNotBeNil)
 
 		sql = "select db_name, table_name, refer_db_name, refer_table_name from mo_catalog.mo_foreign_keys"
 		mrs = newMrsForPitrRecord([][]interface{}{{"db1", "table1", types.Day_Hour, "table2"}})
 		bh.sql2result[sql] = mrs
 
-		_, err = getFkDepsWithDropped(ctx, bh, "", "", 0, 0, 0)
+		_, err = getFkDepsWithTS(ctx, bh, "", "", 0, 0, 0)
 		convey.So(err, convey.ShouldNotBeNil)
 
 		sql = "select db_name, table_name, refer_db_name, refer_table_name from mo_catalog.mo_foreign_keys"
 		mrs = newMrsForPitrRecord([][]interface{}{{"db1", "table1", "db2", types.Day_Hour}})
 		bh.sql2result[sql] = mrs
 
-		_, err = getFkDepsWithDropped(ctx, bh, "", "", 0, 0, 0)
+		_, err = getFkDepsWithTS(ctx, bh, "", "", 0, 0, 0)
 		convey.So(err, convey.ShouldNotBeNil)
 	})
 }
@@ -190,14 +190,14 @@ func Test_restoreAccountUsingClusterSnapshotToNew(t *testing.T) {
 
 		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
 
-		err := restoreAccountUsingClusterSnapshotToNew(ctx, ses, bh, "sp01", 0, accountRecord{accountName: "sys", accountId: 0}, nil, 0, false, false)
+		err := restoreAccountUsingClusterSnapshotToNew(ctx, ses, bh, "sp01", 0, accountRecord{accountName: "sys", accountId: 0}, 0, nil, false, false)
 		convey.So(err, convey.ShouldNotBeNil)
 
 		sql := "select db_name, table_name, refer_db_name, refer_table_name from mo_catalog.mo_foreign_keys"
 		mrs := newMrsForPitrRecord([][]interface{}{{"db1", "table1", "db2", "table2"}})
 		bh.sql2result[sql] = mrs
 
-		err = restoreAccountUsingClusterSnapshotToNew(ctx, ses, bh, "sp01", 0, accountRecord{accountName: "sys", accountId: 0}, nil, 0, false, false)
+		err = restoreAccountUsingClusterSnapshotToNew(ctx, ses, bh, "sp01", 0, accountRecord{accountName: "sys", accountId: 0}, 0, nil, false, false)
 		convey.So(err, convey.ShouldNotBeNil)
 	})
 }
