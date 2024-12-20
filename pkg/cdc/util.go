@@ -672,7 +672,7 @@ func AesCFBDecode(ctx context.Context, data string) (string, error) {
 	return AesCFBDecodeWithKey(ctx, data, []byte(AesKey))
 }
 
-var AesCFBDecodeWithKey = func(ctx context.Context, data string, aesKey []byte) (string, error) {
+func AesCFBDecodeWithKey(ctx context.Context, data string, aesKey []byte) (string, error) {
 	if len(aesKey) == 0 {
 		return "", moerr.NewInternalErrorNoCtx("AesKey is not initialized")
 	}
