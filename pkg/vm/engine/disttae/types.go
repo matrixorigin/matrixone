@@ -170,7 +170,7 @@ func WithWriteWorkspaceThreshold(th uint64) EngineOptions {
 
 func WithExtraWorkspaceThresholdQuota(quota uint64) EngineOptions {
 	return func(e *Engine) {
-		e.config.extraWorkspaceQuota.Store(quota)
+		e.Limiter.quota.Store(quota)
 	}
 }
 
@@ -227,6 +227,10 @@ func (q *MemoryQuota) Release() (size uint64) {
 	return size
 }
 
+type limiter struct {
+	quota atomic.Uint64
+}
+
 type Engine struct {
 	sync.RWMutex
 	service  string
@@ -244,7 +248,6 @@ type Engine struct {
 		insertEntryMaxCount      int
 		commitWorkspaceThreshold uint64
 		writeWorkspaceThreshold  uint64
-		extraWorkspaceQuota      atomic.Uint64
 
 		cnTransferTxnLifespanThreshold time.Duration
 
@@ -289,6 +292,8 @@ type Engine struct {
 	dynamicCtx
 	// for test only.
 	skipConsume bool
+	// workspace extra threshold limit
+	Limiter limiter
 }
 
 func (e *Engine) SetService(svr string) {

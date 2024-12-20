@@ -1261,17 +1261,17 @@ func TestWorkspaceQuota(t *testing.T) {
 	for i := range uint64(10) {
 		go func(size uint64, wg *sync.WaitGroup) {
 			var q disttae.MemoryQuota
-			e.AcquireQuota(100, &q)
-			e.ReleaseQuota(&q)
-			e.ReleaseQuota(&q)
+			e.Limiter.AcquireQuota(100, &q)
+			e.Limiter.ReleaseQuota(&q)
+			e.Limiter.ReleaseQuota(&q)
 			wg.Done()
 		}(i*100, &wg)
 	}
 
 	var q disttae.MemoryQuota
-	remaining, _ := e.AcquireQuota(0, &q)
+	remaining, _ := e.Limiter.AcquireQuota(0, &q)
 	require.Equal(t, int(quotaSize), int(remaining))
-	_, acquired := e.AcquireQuota(quotaSize+1, &q)
+	_, acquired := e.Limiter.AcquireQuota(quotaSize+1, &q)
 	require.False(t, acquired)
 }
 
