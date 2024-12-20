@@ -1043,8 +1043,7 @@ type MultiUpdate struct {
 	Action               uint32            `protobuf:"varint,2,opt,name=Action,proto3" json:"Action,omitempty"`
 	IBucket              uint32            `protobuf:"varint,3,opt,name=IBucket,proto3" json:"IBucket,omitempty"`
 	NBucket              uint32            `protobuf:"varint,4,opt,name=NBucket,proto3" json:"NBucket,omitempty"`
-	SegmentMap           map[string]int32  `protobuf:"bytes,5,rep,name=SegmentMap,proto3" json:"SegmentMap,omitempty" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"varint,2,opt,name=value,proto3"`
-	UpdateCtxList        []*plan.UpdateCtx `protobuf:"bytes,6,rep,name=update_ctx_list,json=updateCtxList,proto3" json:"update_ctx_list,omitempty"`
+	UpdateCtxList        []*plan.UpdateCtx `protobuf:"bytes,5,rep,name=update_ctx_list,json=updateCtxList,proto3" json:"update_ctx_list,omitempty"`
 	XXX_NoUnkeyedLiteral struct{}          `json:"-"`
 	XXX_unrecognized     []byte            `json:"-"`
 	XXX_sizecache        int32             `json:"-"`
@@ -1109,13 +1108,6 @@ func (m *MultiUpdate) GetNBucket() uint32 {
 		return m.NBucket
 	}
 	return 0
-}
-
-func (m *MultiUpdate) GetSegmentMap() map[string]int32 {
-	if m != nil {
-		return m.SegmentMap
-	}
-	return nil
 }
 
 func (m *MultiUpdate) GetUpdateCtxList() []*plan.UpdateCtx {
@@ -5859,7 +5851,6 @@ func init() {
 	proto.RegisterType((*Group)(nil), "pipeline.Group")
 	proto.RegisterType((*Insert)(nil), "pipeline.Insert")
 	proto.RegisterType((*MultiUpdate)(nil), "pipeline.MultiUpdate")
-	proto.RegisterMapType((map[string]int32)(nil), "pipeline.MultiUpdate.SegmentMapEntry")
 	proto.RegisterType((*Array)(nil), "pipeline.Array")
 	proto.RegisterType((*Map)(nil), "pipeline.Map")
 	proto.RegisterMapType((map[string]int32)(nil), "pipeline.Map.MpEntry")
@@ -7154,23 +7145,6 @@ func (m *MultiUpdate) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 				i -= size
 				i = encodeVarintPipeline(dAtA, i, uint64(size))
 			}
-			i--
-			dAtA[i] = 0x32
-		}
-	}
-	if len(m.SegmentMap) > 0 {
-		for k := range m.SegmentMap {
-			v := m.SegmentMap[k]
-			baseI := i
-			i = encodeVarintPipeline(dAtA, i, uint64(v))
-			i--
-			dAtA[i] = 0x10
-			i -= len(k)
-			copy(dAtA[i:], k)
-			i = encodeVarintPipeline(dAtA, i, uint64(len(k)))
-			i--
-			dAtA[i] = 0xa
-			i = encodeVarintPipeline(dAtA, i, uint64(baseI-i))
 			i--
 			dAtA[i] = 0x2a
 		}
@@ -12714,14 +12688,6 @@ func (m *MultiUpdate) ProtoSize() (n int) {
 	if m.NBucket != 0 {
 		n += 1 + sovPipeline(uint64(m.NBucket))
 	}
-	if len(m.SegmentMap) > 0 {
-		for k, v := range m.SegmentMap {
-			_ = k
-			_ = v
-			mapEntrySize := 1 + len(k) + sovPipeline(uint64(len(k))) + 1 + sovPipeline(uint64(v))
-			n += mapEntrySize + 1 + sovPipeline(uint64(mapEntrySize))
-		}
-	}
 	if len(m.UpdateCtxList) > 0 {
 		for _, e := range m.UpdateCtxList {
 			l = e.ProtoSize()
@@ -17340,119 +17306,6 @@ func (m *MultiUpdate) Unmarshal(dAtA []byte) error {
 				}
 			}
 		case 5:
-			if wireType != 2 {
-				return fmt.Errorf("proto: wrong wireType = %d for field SegmentMap", wireType)
-			}
-			var msglen int
-			for shift := uint(0); ; shift += 7 {
-				if shift >= 64 {
-					return ErrIntOverflowPipeline
-				}
-				if iNdEx >= l {
-					return io.ErrUnexpectedEOF
-				}
-				b := dAtA[iNdEx]
-				iNdEx++
-				msglen |= int(b&0x7F) << shift
-				if b < 0x80 {
-					break
-				}
-			}
-			if msglen < 0 {
-				return ErrInvalidLengthPipeline
-			}
-			postIndex := iNdEx + msglen
-			if postIndex < 0 {
-				return ErrInvalidLengthPipeline
-			}
-			if postIndex > l {
-				return io.ErrUnexpectedEOF
-			}
-			if m.SegmentMap == nil {
-				m.SegmentMap = make(map[string]int32)
-			}
-			var mapkey string
-			var mapvalue int32
-			for iNdEx < postIndex {
-				entryPreIndex := iNdEx
-				var wire uint64
-				for shift := uint(0); ; shift += 7 {
-					if shift >= 64 {
-						return ErrIntOverflowPipeline
-					}
-					if iNdEx >= l {
-						return io.ErrUnexpectedEOF
-					}
-					b := dAtA[iNdEx]
-					iNdEx++
-					wire |= uint64(b&0x7F) << shift
-					if b < 0x80 {
-						break
-					}
-				}
-				fieldNum := int32(wire >> 3)
-				if fieldNum == 1 {
-					var stringLenmapkey uint64
-					for shift := uint(0); ; shift += 7 {
-						if shift >= 64 {
-							return ErrIntOverflowPipeline
-						}
-						if iNdEx >= l {
-							return io.ErrUnexpectedEOF
-						}
-						b := dAtA[iNdEx]
-						iNdEx++
-						stringLenmapkey |= uint64(b&0x7F) << shift
-						if b < 0x80 {
-							break
-						}
-					}
-					intStringLenmapkey := int(stringLenmapkey)
-					if intStringLenmapkey < 0 {
-						return ErrInvalidLengthPipeline
-					}
-					postStringIndexmapkey := iNdEx + intStringLenmapkey
-					if postStringIndexmapkey < 0 {
-						return ErrInvalidLengthPipeline
-					}
-					if postStringIndexmapkey > l {
-						return io.ErrUnexpectedEOF
-					}
-					mapkey = string(dAtA[iNdEx:postStringIndexmapkey])
-					iNdEx = postStringIndexmapkey
-				} else if fieldNum == 2 {
-					for shift := uint(0); ; shift += 7 {
-						if shift >= 64 {
-							return ErrIntOverflowPipeline
-						}
-						if iNdEx >= l {
-							return io.ErrUnexpectedEOF
-						}
-						b := dAtA[iNdEx]
-						iNdEx++
-						mapvalue |= int32(b&0x7F) << shift
-						if b < 0x80 {
-							break
-						}
-					}
-				} else {
-					iNdEx = entryPreIndex
-					skippy, err := skipPipeline(dAtA[iNdEx:])
-					if err != nil {
-						return err
-					}
-					if (skippy < 0) || (iNdEx+skippy) < 0 {
-						return ErrInvalidLengthPipeline
-					}
-					if (iNdEx + skippy) > postIndex {
-						return io.ErrUnexpectedEOF
-					}
-					iNdEx += skippy
-				}
-			}
-			m.SegmentMap[mapkey] = mapvalue
-			iNdEx = postIndex
-		case 6:
 			if wireType != 2 {
 				return fmt.Errorf("proto: wrong wireType = %d for field UpdateCtxList", wireType)
 			}
