@@ -288,7 +288,10 @@ func Open(
 	// sjw TODO: cleaner need to support replay and write mode
 	cleaner := gc2.NewCheckpointCleaner(
 		opts.Ctx,
-		opts.SID, fs, db.BGCheckpointRunner,
+		opts.SID,
+		fs,
+		db.Wal,
+		db.BGCheckpointRunner,
 		gc2.WithCanGCCacheSize(opts.GCCfg.CacheSize),
 		gc2.WithMaxMergeCheckpointCount(opts.GCCfg.GCMergeCount),
 		gc2.WithEstimateRows(opts.GCCfg.GCestimateRows),

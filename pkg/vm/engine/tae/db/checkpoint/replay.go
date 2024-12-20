@@ -179,7 +179,7 @@ func (c *CkpReplayer) ReadCkpFiles() (err error) {
 				}
 				panic("invalid compacted checkpoint file")
 			}
-			r.tryAddNewCompactedCheckpointEntry(entry[0])
+			r.store.TryAddNewCompactedCheckpointEntry(entry[0])
 			closeCB()
 		}
 	}
@@ -267,11 +267,11 @@ func (c *CkpReplayer) ReadCkpFiles() (err error) {
 		}
 		if checkpointEntry.GetType() == ET_Global {
 			c.globalCkpIdx = i
-			r.tryAddNewGlobalCheckpointEntry(checkpointEntry)
+			r.store.TryAddNewGlobalCheckpointEntry(checkpointEntry)
 		} else if checkpointEntry.GetType() == ET_Incremental {
-			r.tryAddNewIncrementalCheckpointEntry(checkpointEntry)
+			r.store.TryAddNewIncrementalCheckpointEntry(checkpointEntry)
 		} else if checkpointEntry.GetType() == ET_Backup {
-			r.tryAddNewBackupCheckpointEntry(checkpointEntry)
+			r.store.TryAddNewBackupCheckpointEntry(checkpointEntry)
 		}
 	}
 	return nil
