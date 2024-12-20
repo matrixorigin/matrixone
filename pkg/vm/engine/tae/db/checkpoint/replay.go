@@ -461,8 +461,8 @@ func (c *CkpReplayer) ReplayObjectlist() (err error) {
 		}
 	}
 	logutil.Info(
-		"Replay-Checkpoints",
-		zap.String("phase", phase),
+		"open-tae",
+		zap.String("replay", "checkpoint-objectlist"),
 		zap.Uint64("max table tid", maxTableID),
 		zap.Int("object count (create count + delete count)", maxObjectCount),
 		zap.Duration("apply-cost", c.applyDuration),

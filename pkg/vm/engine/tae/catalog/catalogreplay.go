@@ -536,10 +536,10 @@ func (catalog *Catalog) onReplayCheckpointObject(
 				objid.String(), rel.fullName, rel.ID, createTS.ToString(),
 				deleteTS.ToString(), end.ToString())
 		} else {
-			if !entryNode.DeletedAt.IsEmpty() {
+			if !deleteTS.IsEmpty() {
 				logutil.Warnf("obj %v, tbl %v-%d create %v, delete %v, end %v",
 					objid.String(), rel.fullName, rel.ID, createTS.ToString(),
-					deleteTS.ToString(),end.ToString())
+					deleteTS.ToString(), end.ToString())
 				obj, _ = rel.GetObjectByID(objid, isTombstone)
 				if obj == nil {
 					obj = newObject()
