@@ -221,6 +221,7 @@ func Open(
 
 	now := time.Now()
 	ckpReplayer := db.BGCheckpointRunner.Replay(dataFactory)
+	defer ckpReplayer.Close()
 	if err = ckpReplayer.ReadCkpFiles(); err != nil {
 		panic(err)
 	}
@@ -253,7 +254,6 @@ func Open(
 		zap.Duration("replay-checkpoints-cost", time.Since(now)),
 		zap.String("max-checkpoint", checkpointed.ToString()),
 	)
-	defer ckpReplayer.Close()
 
 	now = time.Now()
 	db.Replay(dataFactory, checkpointed, ckpLSN, valid)
