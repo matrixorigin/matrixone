@@ -342,7 +342,6 @@ a    中文    #¥%……&#    234cccc重要
 'd'    '123456'    'b'    'a'
 "'a'"    "'b'"    "'c'"    abc
  123f fff     yeah     红tu    bb"
-"aa""""    aa"    "bb""""    bb"
 drop table jsonline_t2;
 drop table if exists t1;
 create table t1(
@@ -360,13 +359,13 @@ col11 json,
 col12 bool
 );
 create fulltext index f06 on t1(col9);
-load data infile {'filepath'='$resources/load_data/jsonline_object.jl','format'='jsonline','jsondata'='object'} into table t1;
+load data infile {'filepath'='$resources/load_data/jsonline_object01.jl','format'='jsonline','jsondata'='object'} into table t1;
 select * from t1;
 col1    col2    col3    col4    col5    col6    col7    col8    col9    col10    col11    col12
 true    1    var    2020-09-07    2020-09-07 00:00:00    2020-09-07 00:00:00    18    121.11    ["1", 2, null, false, true, {"q": 1}]    1qaz    null    null
-true    1    var    2020-09-07    2020-09-07 00:00:00    2020-09-07 00:00:00    18    121.11    {"b": ["a", "b", {"q": 4}], "c": 1}    1aza    null    null
-true    1    var    2020-09-07    2020-09-07 00:00:00    2020-09-07 00:00:00    18    121.11    ["1", 2, null, false, true, {"q": 1}]    1az    null    null
-true    1    var    2020-09-07    2020-09-07 00:00:00    2020-09-07 00:00:00    18    121.11    {"b": ["a", "b", {"q": 4}], "c": 1}    1qaz    null    null
+true    2    var    2020-09-07    2020-09-07 00:00:00    2020-09-07 00:00:00    18    121.11    {"b": ["a", "b", {"q": 4}], "c": 1}    1aza    null    null
+true    3    var    2020-09-07    2020-09-07 00:00:00    2020-09-07 00:00:00    18    121.11    ["1", 2, null, false, true, {"q": 1}]    1az    null    null
+true    4    var    2020-09-07    2020-09-07 00:00:00    2020-09-07 00:00:00    18    121.11    {"b": ["a", "b", {"q": 4}], "c": 1}    1qaz    null    null
 show create table t1;
 
 drop table t1;
