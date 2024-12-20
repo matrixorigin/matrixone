@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 	"go.uber.org/zap"
 )
 
@@ -48,7 +49,8 @@ type checkpointCleaner struct {
 	mp *mpool.MPool
 	fs *objectio.ObjectFS
 
-	checkpointCli checkpoint.RunnerReader
+	logDriver     wal.Driver
+	checkpointCli checkpoint.Runner
 	deleter       *Deleter
 
 	watermarks struct {
@@ -167,13 +169,15 @@ func NewCheckpointCleaner(
 	ctx context.Context,
 	sid string,
 	fs *objectio.ObjectFS,
-	checkpointCli checkpoint.RunnerReader,
+	logDriver wal.Driver,
+	checkpointCli checkpoint.Runner,
 	opts ...CheckpointCleanerOption,
 ) Cleaner {
 	cleaner := &checkpointCleaner{
 		ctx:           ctx,
 		sid:           sid,
 		fs:            fs,
+		logDriver:     logDriver,
 		checkpointCli: checkpointCli,
 	}
 	for _, opt := range opts {
@@ -1580,15 +1584,14 @@ func (c *checkpointCleaner) RemoveChecker(key string) error {
 
 // appendFilesToWAL append the GC meta files to WAL.
 func (c *checkpointCleaner) appendFilesToWAL(files ...string) error {
-	driver := c.checkpointCli.GetDriver()
-	if driver == nil {
+	if c.logDriver == nil {
 		return nil
 	}
 	entry, err := store.BuildFilesEntry(files)
 	if err != nil {
 		return err
 	}
-	_, err = driver.AppendEntry(store.GroupFiles, entry)
+	_, err = c.logDriver.AppendEntry(store.GroupFiles, entry)
 	if err != nil {
 		return err
 	}
