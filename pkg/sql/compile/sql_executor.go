@@ -336,7 +336,7 @@ func (exec *txnExecutor) Exec(
 
 	result := executor.NewResult(exec.s.mp)
 
-	stream_chan, streaming := exec.opts.Streaming()
+	stream_chan, err_chan, streaming := exec.opts.Streaming()
 	if streaming {
 		defer close(stream_chan)
 	}
@@ -359,6 +359,7 @@ func (exec *txnExecutor) Exec(
 					for len(stream_chan) == cap(stream_chan) {
 						select {
 						case <-proc.Ctx.Done():
+							err_chan <- moerr.NewInternalError(proc.Ctx, "context cancelled")
 							return moerr.NewInternalError(proc.Ctx, "context cancelled")
 						default:
 							time.Sleep(1 * time.Millisecond)
@@ -374,11 +375,17 @@ func (exec *txnExecutor) Exec(
 
 		})
 	if err != nil {
+		if streaming {
+			err_chan <- err
+		}
 		return executor.Result{}, err
 	}
 	var runResult *util.RunResult
 	runResult, err = c.Run(0)
 	if err != nil {
+		if streaming {
+			err_chan <- err
+		}
 		for _, bat := range batches {
 			if bat != nil {
 				bat.Clean(exec.s.mp)
