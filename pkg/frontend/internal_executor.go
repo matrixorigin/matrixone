@@ -254,6 +254,11 @@ type internalProtocol struct {
 	username    string
 }
 
+func (ip *internalProtocol) WriteResultSetRow2(mrs *MysqlResultSet, colSlices *ColumnSlices, count uint64) error {
+	//TODO implement me
+	panic("implement me")
+}
+
 func (ip *internalProtocol) FreeLoadLocal() {
 }
 
