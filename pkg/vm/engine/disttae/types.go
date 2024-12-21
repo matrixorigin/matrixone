@@ -134,6 +134,7 @@ const (
 const (
 	CommitWorkspaceThreshold       uint64 = 1 * mpool.MB
 	WriteWorkspaceThreshold        uint64 = 5 * mpool.MB
+	ExtraWorkspaceThreshold        uint64 = 500 * mpool.MB
 	InsertEntryThreshold                  = 5000
 	GCBatchOfFileCount             int    = 1000
 	GCPoolSize                     int    = 5
@@ -165,6 +166,12 @@ func WithCommitWorkspaceThreshold(th uint64) EngineOptions {
 func WithWriteWorkspaceThreshold(th uint64) EngineOptions {
 	return func(e *Engine) {
 		e.config.writeWorkspaceThreshold = th
+	}
+}
+
+func WithExtraWorkspaceThresholdQuota(quota uint64) EngineOptions {
+	return func(e *Engine) {
+		e.config.quota.Store(quota)
 	}
 }
 
@@ -215,6 +222,8 @@ type Engine struct {
 		insertEntryMaxCount      int
 		commitWorkspaceThreshold uint64
 		writeWorkspaceThreshold  uint64
+		extraWorkspaceThreshold  uint64
+		quota                    atomic.Uint64
 
 		cnTransferTxnLifespanThreshold time.Duration
 
@@ -364,8 +373,9 @@ type Transaction struct {
 
 	haveDDL atomic.Bool
 
-	writeWorkspaceThreshold  uint64
-	commitWorkspaceThreshold uint64
+	writeWorkspaceThreshold      uint64
+	commitWorkspaceThreshold     uint64
+	extraWriteWorkspaceThreshold uint64 // acquired from engine quota
 }
 
 type Pos struct {
@@ -423,7 +433,6 @@ func (b *deletedBlocks) iter(fn func(*types.Blockid, []int64) bool) {
 func NewTxnWorkSpace(eng *Engine, proc *process.Process) *Transaction {
 	id := objectio.NewSegmentid()
 	bytes := types.EncodeUuid(id)
-
 	txn := &Transaction{
 		proc:               proc,
 		engine:             eng,

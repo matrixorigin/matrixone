@@ -39,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
@@ -163,8 +164,16 @@ func (e *Engine) fillDefaults() {
 	if e.config.writeWorkspaceThreshold <= 0 {
 		e.config.writeWorkspaceThreshold = WriteWorkspaceThreshold
 	}
+	if e.config.extraWorkspaceThreshold <= 0 {
+		e.config.extraWorkspaceThreshold = ExtraWorkspaceThreshold
+	}
 	if e.config.cnTransferTxnLifespanThreshold <= 0 {
 		e.config.cnTransferTxnLifespanThreshold = CNTransferTxnLifespanThreshold
+	}
+	if e.config.quota.Load() <= 0 {
+		mem := objectio.TotalMem() / 100 * 5
+		e.config.quota.Store(mem)
+		v2.TxnExtraWorkspaceQuotaGauge.Set(float64(mem))
 	}
 
 	logutil.Info(
@@ -172,6 +181,7 @@ func (e *Engine) fillDefaults() {
 		zap.Int("InsertEntryMaxCount", e.config.insertEntryMaxCount),
 		zap.Uint64("CommitWorkspaceThreshold", e.config.commitWorkspaceThreshold),
 		zap.Uint64("WriteWorkspaceThreshold", e.config.writeWorkspaceThreshold),
+		zap.Uint64("ExtraWorkspaceThresholdQuota", e.config.quota.Load()),
 		zap.Duration("CNTransferTxnLifespanThreshold", e.config.cnTransferTxnLifespanThreshold),
 	)
 }
@@ -188,6 +198,27 @@ func (e *Engine) SetWorkspaceThreshold(commitThreshold, writeThreshold uint64) (
 	if writeThreshold != 0 {
 		e.config.writeWorkspaceThreshold = writeThreshold * mpool.MB
 	}
+	return
+}
+
+func (e *Engine) AcquireQuota(v uint64) (uint64, bool) {
+	for {
+		oldRemaining := e.config.quota.Load()
+		if oldRemaining < v {
+			return 0, false
+		}
+		remaining := oldRemaining - v
+		if e.config.quota.CompareAndSwap(oldRemaining, remaining) {
+			v2.TxnExtraWorkspaceQuotaGauge.Set(float64(remaining))
+			return remaining, true
+		}
+	}
+}
+
+func (e *Engine) ReleaseQuota(quota uint64) (remaining uint64) {
+	e.config.quota.Add(quota)
+	remaining = e.config.quota.Load()
+	v2.TxnExtraWorkspaceQuotaGauge.Set(float64(remaining))
 	return
 }
 

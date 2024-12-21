@@ -1442,6 +1442,7 @@ func Test_DeleteUncommittedBlock(t *testing.T) {
 			testutil.WithDisttaeEngineInsertEntryMaxCount(1),
 			testutil.WithDisttaeEngineCommitWorkspaceThreshold(1),
 			testutil.WithDisttaeEngineWriteWorkspaceThreshold(1),
+			testutil.WithDisttaeEngineQuota(1),
 		)
 		defer func() {
 			disttaeEngine.Close(ctx)
