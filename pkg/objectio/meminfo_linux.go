@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package merge
+package objectio
 
 import "syscall"
 
-func totalMem() uint64 {
+func TotalMem() uint64 {
 	in := new(syscall.Sysinfo_t)
 	err := syscall.Sysinfo(in)
 	if err != nil {
