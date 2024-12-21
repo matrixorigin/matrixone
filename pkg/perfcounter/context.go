@@ -134,3 +134,22 @@ type ExecPipelineMarkKey struct{}
 func AttachExecPipelineKey(ctx context.Context, counter *CounterSet) context.Context {
 	return context.WithValue(ctx, ExecPipelineMarkKey{}, counter)
 }
+
+// ------------------------------------------------------------------------------------------------
+type CalcTableStatsKey struct{}
+
+func AttachCalcTableStatsKey(ctx context.Context) context.Context {
+	return context.WithValue(ctx, CalcTableStatsKey{}, true)
+}
+
+type CalcTableSizeKey struct{}
+
+func AttachCalcTableSizeKey(ctx context.Context) context.Context {
+	return context.WithValue(ctx, CalcTableSizeKey{}, true)
+}
+
+type CalcTableRowsKey struct{}
+
+func AttachCalcTableRowsKey(ctx context.Context) context.Context {
+	return context.WithValue(ctx, CalcTableRowsKey{}, true)
+}
