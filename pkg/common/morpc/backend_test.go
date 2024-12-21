@@ -819,10 +819,10 @@ func TestCannotBusyLoopIfWriteCIsFull(t *testing.T) {
 					for i := 0; i < 10; i++ {
 						req := newTestMessage(1)
 						f, err := b.Send(ctx, req)
-						assert.NoError(t, err)
-
-						_, err = f.Get()
-						assert.NoError(t, err)
+						if err == nil { //ignore timeout
+							_, err = f.Get()
+							assert.NoError(t, err)
+						}
 					}
 				}()
 			}

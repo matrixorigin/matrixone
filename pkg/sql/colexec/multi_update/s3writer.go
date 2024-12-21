@@ -104,7 +104,6 @@ func newS3Writer(update *MultiUpdate) (*s3Writer, error) {
 	tableCount := len(update.MultiUpdateCtx)
 	writer := &s3Writer{
 		cacheBatchs:    batch.NewCompactBatchs(),
-		segmentMap:     update.SegmentMap,
 		updateCtxInfos: update.ctr.updateCtxInfos,
 		seqnums:        make([][]uint16, 0, tableCount),
 		sortIdxs:       make([]int, 0, tableCount),
