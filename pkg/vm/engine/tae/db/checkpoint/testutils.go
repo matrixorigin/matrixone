@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 	"go.uber.org/zap"
 )
 
@@ -35,7 +34,6 @@ type TestRunner interface {
 	ForceGlobalCheckpoint(end types.TS, versionInterval time.Duration) error
 	ForceGlobalCheckpointSynchronously(ctx context.Context, end types.TS, versionInterval time.Duration) error
 	ForceCheckpointForBackup(end types.TS) (string, error)
-	ForceIncrementalCheckpoint(end types.TS, truncate bool) error
 	ForceIncrementalCheckpoint2(end types.TS) error
 	MaxLSNInRange(end types.TS) uint64
 
@@ -172,106 +170,6 @@ func (r *runner) ForceIncrementalCheckpoint2(ts types.TS) (err error) {
 	case <-intent.Wait():
 	}
 	return
-}
-
-func (r *runner) ForceIncrementalCheckpoint(end types.TS, truncate bool) error {
-	now := time.Now()
-	prev := r.MaxIncrementalCheckpoint()
-	if prev != nil && !prev.IsFinished() {
-		return moerr.NewPrevCheckpointNotFinished()
-	}
-
-	if prev != nil && end.LE(&prev.end) {
-		return nil
-	}
-	var (
-		err      error
-		errPhase string
-		start    types.TS
-		fatal    bool
-		fields   []zap.Field
-	)
-
-	if prev == nil {
-		global := r.MaxGlobalCheckpoint()
-		if global != nil {
-			start = global.end
-		}
-	} else {
-		start = prev.end.Next()
-	}
-
-	entry := NewCheckpointEntry(r.rt.SID(), start, end, ET_Incremental)
-	logutil.Info(
-		"Checkpoint-Start-Force",
-		zap.String("entry", entry.String()),
-	)
-
-	defer func() {
-		if err != nil {
-			logger := logutil.Error
-			if fatal {
-				logger = logutil.Fatal
-			}
-			logger(
-				"Checkpoint-Error-Force",
-				zap.String("entry", entry.String()),
-				zap.String("phase", errPhase),
-				zap.Error(err),
-				zap.Duration("cost", time.Since(now)),
-			)
-		} else {
-			fields = append(fields, zap.Duration("cost", time.Since(now)))
-			fields = append(fields, zap.String("entry", entry.String()))
-			logutil.Info(
-				"Checkpoint-End-Force",
-				fields...,
-			)
-		}
-	}()
-
-	// TODO: change me
-	r.store.AddNewIncrementalEntry(entry)
-
-	var files []string
-	if fields, files, err = r.doIncrementalCheckpoint(entry); err != nil {
-		errPhase = "do-ckp"
-		return err
-	}
-
-	var lsn, lsnToTruncate uint64
-	if truncate {
-		lsn = r.source.GetMaxLSN(entry.start, entry.end)
-		if lsn > r.options.reservedWALEntryCount {
-			lsnToTruncate = lsn - r.options.reservedWALEntryCount
-		}
-		entry.ckpLSN = lsn
-		entry.truncateLSN = lsnToTruncate
-	}
-
-	var file string
-	if file, err = r.saveCheckpoint(
-		entry.start, entry.end, lsn, lsnToTruncate,
-	); err != nil {
-		errPhase = "save-ckp"
-		return err
-	}
-	files = append(files, file)
-	entry.SetState(ST_Finished)
-	if truncate {
-		var e wal.LogEntry
-		if e, err = r.wal.RangeCheckpoint(1, lsnToTruncate, files...); err != nil {
-			errPhase = "wal-ckp"
-			fatal = true
-			return err
-		}
-		if err = e.WaitDone(); err != nil {
-			errPhase = "wait-wal-ckp"
-			fatal = true
-			return err
-		}
-	}
-	return nil
 }
 
 func (r *runner) ForceCheckpointForBackup(end types.TS) (location string, err error) {
