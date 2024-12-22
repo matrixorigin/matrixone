@@ -188,6 +188,12 @@ func (e *CheckpointEntry) Age() time.Duration {
 	defer e.RUnlock()
 	return time.Since(e.bornTime)
 }
+func (e *CheckpointEntry) ResetAge() {
+	e.Lock()
+	defer e.Unlock()
+	e.bornTime = time.Now()
+	e.refreshCnt = 0
+}
 func (e *CheckpointEntry) TooOld() bool {
 	e.RLock()
 	defer e.RUnlock()

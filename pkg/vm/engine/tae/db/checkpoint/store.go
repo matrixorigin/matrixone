@@ -113,6 +113,27 @@ func (s *runnerStore) UpdateICKPIntent(
 ) (intent *CheckpointEntry, updated bool) {
 	for {
 		old := s.incrementalIntent.Load()
+		// in the case we will decrease the end ts of the old intent
+		if old != nil && !old.AllChecked() && policyChecked && flushChecked {
+			checkpointed := s.GetCheckpointed()
+			// no need to do checkpoint
+			if checkpointed.GE(ts) {
+				intent = nil
+				return
+			}
+			newIntent := InheritCheckpointEntry(
+				old,
+				WithEndEntryOption(*ts),
+				WithCheckedEntryOption(policyChecked, flushChecked),
+			)
+			newIntent.ResetAge()
+			if s.incrementalIntent.CompareAndSwap(old, newIntent) {
+				intent = newIntent
+				updated = true
+				return
+			}
+			continue
+		}
 		// Scenario 1:
 		// there is already an intent meets one of the following conditions:
 		// 1. the range of the old intent contains the ts, no need to update

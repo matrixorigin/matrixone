@@ -586,3 +586,59 @@ func Test_RunnerStore3(t *testing.T) {
 		assert.Equal(t, 1, 0)
 	}
 }
+
+func Test_RunnerStore4(t *testing.T) {
+	store := newRunnerStore("", time.Second, time.Second*1000)
+
+	t1 := types.NextGlobalTsForTest()
+	intent, updated := store.UpdateICKPIntent(&t1, true, false)
+	assert.True(t, updated)
+	assert.True(t, intent.start.IsEmpty())
+	assert.True(t, intent.end.EQ(&t1))
+	assert.True(t, intent.IsPendding())
+
+	t2 := types.NextGlobalTsForTest()
+	intent2, updated := store.UpdateICKPIntent(&t2, true, true)
+	assert.True(t, updated)
+	assert.True(t, intent2.start.IsEmpty())
+	assert.True(t, intent2.end.EQ(&t2))
+	assert.True(t, intent2.IsPendding())
+	assert.True(t, intent2.AllChecked())
+
+	taken, rollback := store.TakeICKPIntent()
+	assert.NotNil(t, taken)
+	assert.NotNil(t, rollback)
+
+	t3 := types.NextGlobalTsForTest()
+	intent3, updated := store.UpdateICKPIntent(&t3, true, true)
+	assert.False(t, updated)
+	assert.True(t, intent3.IsRunning())
+	assert.True(t, intent3.end.EQ(&t2))
+
+	rollback()
+	intent4 := store.incrementalIntent.Load()
+	assert.True(t, intent4.IsPendding())
+	assert.True(t, intent4.end.EQ(&t2))
+	assert.True(t, intent4.start.IsEmpty())
+	assert.True(t, intent4.AllChecked())
+}
+
+func Test_RunnerStore5(t *testing.T) {
+	store := newRunnerStore("", time.Second, time.Second*1000)
+
+	t1 := types.NextGlobalTsForTest()
+	t2 := types.NextGlobalTsForTest()
+	intent, updated := store.UpdateICKPIntent(&t2, true, false)
+	assert.True(t, updated)
+	assert.True(t, intent.start.IsEmpty())
+	assert.True(t, intent.end.EQ(&t2))
+	t.Log(intent.String())
+
+	intent2, updated := store.UpdateICKPIntent(&t1, true, true)
+	assert.True(t, updated)
+	assert.True(t, intent2.end.EQ(&t1))
+	assert.True(t, intent2.start.IsEmpty())
+	assert.True(t, intent2.IsPendding())
+	assert.True(t, intent2.AllChecked())
+	t.Log(intent2.String())
+}
