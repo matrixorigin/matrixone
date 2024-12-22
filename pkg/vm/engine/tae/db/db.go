@@ -208,7 +208,7 @@ func (db *DB) ForceCheckpoint(
 			err = moerr.NewInternalError(ctx, "force checkpoint timeout")
 			return
 		default:
-			err = db.BGCheckpointRunner.ForceIncrementalCheckpoint2(ts)
+			err = db.BGCheckpointRunner.ForceIncrementalCheckpoint(ts)
 			if dbutils.IsRetrieableCheckpoint(err) {
 				db.BGCheckpointRunner.CleanPenddingCheckpoint()
 				interval := flushDuration.Milliseconds() / 400
