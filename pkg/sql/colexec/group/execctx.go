@@ -123,24 +123,55 @@ type GroupResultBuffer struct {
 }
 
 func (buf *GroupResultBuffer) IsEmpty() bool {
-	return len(buf.ToPopped) == 0
+	return cap(buf.ToPopped) == 0
 }
 
 func (buf *GroupResultBuffer) InitOnlyAgg(chunkSize int, aggList []aggexec.AggFuncExec) {
+	aggexec.SyncAggregatorsToChunkSize(aggList, chunkSize)
+
 	buf.ChunkSize = chunkSize
 	buf.AggList = aggList
 	buf.ToPopped = make([]*batch.Batch, 0, 1)
 	buf.ToPopped = append(buf.ToPopped, batch.NewOffHeapEmpty())
 }
 
-func (buf *GroupResultBuffer) InitWithGroupBy(chunkSize int, aggList []aggexec.AggFuncExec, groupByVec []*vector.Vector) {
+func (buf *GroupResultBuffer) InitWithGroupBy(
+	mp *mpool.MPool,
+	chunkSize int, aggList []aggexec.AggFuncExec, groupByVec []*vector.Vector, preAllocated uint64) error {
+	aggexec.SyncAggregatorsToChunkSize(aggList, chunkSize)
+
 	buf.ChunkSize = chunkSize
 	buf.AggList = aggList
-	buf.ToPopped = make([]*batch.Batch, 0, 1)
-	buf.ToPopped = append(buf.ToPopped, getInitialBatchWithSameTypeVecs(groupByVec))
+
+	if preAllocated > 0 {
+		fullNum, moreRow := preAllocated/uint64(buf.ChunkSize), preAllocated%uint64(buf.ChunkSize)
+		for i := uint64(0); i < fullNum; i++ {
+			vec := getInitialBatchWithSameTypeVecs(groupByVec)
+			if err := vec.PreExtend(mp, buf.ChunkSize); err != nil {
+				vec.Clean(mp)
+				return err
+			}
+			buf.ToPopped = append(buf.ToPopped, vec)
+		}
+		if moreRow > 0 {
+			vec := getInitialBatchWithSameTypeVecs(groupByVec)
+			if err := vec.PreExtend(mp, int(moreRow)); err != nil {
+				vec.Clean(mp)
+				return err
+			}
+			buf.ToPopped = append(buf.ToPopped, vec)
+		}
+	} else {
+		buf.ToPopped = append(buf.ToPopped, getInitialBatchWithSameTypeVecs(groupByVec))
+	}
+
+	buf.ToPopped = buf.ToPopped[:1]
+	return preExtendAggExecs(buf.AggList, preAllocated)
 }
 
 func (buf *GroupResultBuffer) InitWithBatch(chunkSize int, aggList []aggexec.AggFuncExec, vecExampleBatch *batch.Batch) {
+	aggexec.SyncAggregatorsToChunkSize(aggList, chunkSize)
+
 	buf.ChunkSize = chunkSize
 	buf.AggList = aggList
 	buf.ToPopped = make([]*batch.Batch, 0, 1)
@@ -170,7 +201,19 @@ func (buf *GroupResultBuffer) AppendBatch(
 		return toIncrease, err
 	}
 
-	buf.ToPopped = append(buf.ToPopped, getInitialBatchWithSameTypeVecs(vs))
+	if cap(buf.ToPopped) > len(buf.ToPopped) {
+		buf.ToPopped = buf.ToPopped[:len(buf.ToPopped)+1]
+	} else {
+		buf.ToPopped = append(buf.ToPopped, nil)
+	}
+	if buf.ToPopped[len(buf.ToPopped)-1] == nil {
+		buf.ToPopped[len(buf.ToPopped)-1] = getInitialBatchWithSameTypeVecs(vs)
+		if len(buf.ToPopped) > 4 {
+			if err = buf.ToPopped[len(buf.ToPopped)-1].PreExtend(mp, buf.ChunkSize); err != nil {
+				return toIncrease, err
+			}
+		}
+	}
 	_, err = buf.AppendBatch(mp, vs, offset+k+1, insertList[k+1:])
 
 	return toIncrease, err
@@ -241,6 +284,7 @@ func (buf *GroupResultBuffer) CleanLastPopped(m *mpool.MPool) {
 }
 
 func (buf *GroupResultBuffer) Free0(m *mpool.MPool) {
+	buf.ToPopped = buf.ToPopped[:cap(buf.ToPopped)]
 	for i := range buf.ToPopped {
 		if buf.ToPopped[i] != nil {
 			buf.ToPopped[i].Clean(m)
@@ -284,9 +328,9 @@ func (r *GroupResultNoneBlock) getResultBatch(
 
 	// prepare an OK result.
 	if r.res == nil {
-		r.res = batch.NewOffHeapWithSize(len(gEval.Vec))
+		r.res = batch.NewOffHeapWithSize(len(gEval.Typ))
 		for i := range r.res.Vecs {
-			r.res.Vecs[i] = vector.NewOffHeapVecWithType(*gEval.Vec[i].GetType())
+			r.res.Vecs[i] = vector.NewOffHeapVecWithType(gEval.Typ[i])
 		}
 		r.res.Aggs = make([]aggexec.AggFuncExec, len(aExpressions))
 	} else {

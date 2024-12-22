@@ -1,3 +1,4 @@
+set experimental_fulltext_index=1;
 drop account if exists acc01;
 create account acc01 admin_name = 'test_account' identified by '111';
 
@@ -366,6 +367,38 @@ drop snapshot sp03;
 -- @session:id=1&user=acc01:test_account&password=111
 drop database test01;
 -- @session
+
+
+
+-- @session:id=1&user=acc01:test_account&password=111
+drop database if exists fulltext_acc01;
+create database fulltext_acc01;
+use fulltext_acc01;
+drop table if exists src;
+create table src (id bigint primary key, json1 text, json2 varchar, fulltext(json1) with parser json);
+insert into src values  (0, '{"a":1, "b":"red"}', '{"d": "happy birthday", "f":"winter"}'),
+(1, '{"a":2, "b":"中文學習教材"}', '["apple", "orange", "banana", "指引"]'),
+(2, '{"a":3, "b":"red blue"}', '{"d":"兒童中文"}');
+-- @session
+
+drop snapshot if exists full_sp_acc01;
+create snapshot full_sp_acc01 for account acc01;
+
+-- @session:id=1&user=acc01:test_account&password=111
+drop database fulltext_acc01;
+-- @session
+
+restore account acc01 from snapshot full_sp_acc01;
+
+-- @session:id=1&user=acc01:test_account&password=111
+show databases;
+use fulltext_acc01;
+show create table src;
+select * from src;
+drop database fulltext_acc01;
+-- @session
+
+drop snapshot full_sp_acc01;
 
 drop account acc01;
 -- @ignore:1

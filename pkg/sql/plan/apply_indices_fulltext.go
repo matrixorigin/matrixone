@@ -236,8 +236,10 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 
 		fulltext_func := tree.NewCStr(fulltext_index_scan_func_name, 1)
 		alias_name := fmt.Sprintf("mo_fulltext_alias_%d", i)
+		params := idxdef.IndexAlgoParams
 
 		var exprs tree.Exprs
+		exprs = append(exprs, tree.NewNumVal[string](params, params, false, tree.P_char))
 		exprs = append(exprs, tree.NewNumVal[string](srctblname, srctblname, false, tree.P_char))
 		exprs = append(exprs, tree.NewNumVal[string](idxtblname, idxtblname, false, tree.P_char))
 		exprs = append(exprs, tree.NewNumVal[string](pattern, pattern, false, tree.P_char))

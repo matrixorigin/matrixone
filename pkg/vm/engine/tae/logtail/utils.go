@@ -492,14 +492,15 @@ func NewGlobalCollector(
 }
 
 func (data *CheckpointData) ApplyReplayTo(
+	objectlistReplayer catalog.ObjectListReplayer,
 	c *catalog.Catalog,
 	dataFactory catalog.DataFactory,
 	forSys bool,
 ) (err error) {
 	objectInfo := data.GetTombstoneObjectBatchs()
-	c.OnReplayObjectBatch(objectInfo, true, dataFactory, forSys)
+	c.OnReplayObjectBatch(objectlistReplayer, objectInfo, true, dataFactory, forSys)
 	objectInfo = data.GetObjectBatchs()
-	c.OnReplayObjectBatch(objectInfo, false, dataFactory, forSys)
+	c.OnReplayObjectBatch(objectlistReplayer, objectInfo, false, dataFactory, forSys)
 	return
 }
 
@@ -1377,6 +1378,11 @@ func LoadCheckpointLocations(
 	version uint32,
 	fs fileservice.FileService,
 ) (map[string]objectio.Location, error) {
+	select {
+	case <-ctx.Done():
+		return nil, context.Cause(ctx)
+	default:
+	}
 	var err error
 	data := NewCheckpointData(sid, common.CheckpointAllocator)
 	defer data.Close()

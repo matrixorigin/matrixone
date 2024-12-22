@@ -59,6 +59,10 @@ select * from src where match(body, title) against('"is not red"' in boolean mod
 
 select * from src where match(body, title) against('"red"' in boolean mode);
 
+-- boolean mode in Chinese
+select * from src where match(body, title) against('+教學指引 +短篇小說' in boolean mode);
+select * from src where match(body, title) against('+教學指引 -短篇小說' in boolean mode);
+
 -- phrase exact match.  double space cannot be matched and empty result
 select * from src where match(body, title) against('"is  not red"' in boolean mode);
 
