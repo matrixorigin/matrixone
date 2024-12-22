@@ -144,6 +144,14 @@ func (r *runner) ForceIncrementalCheckpoint(ts types.TS) (err error) {
 	if intent == nil {
 		return
 	}
+
+	entry := intent.(*CheckpointEntry)
+
+	if entry.end.LT(&ts) || !entry.AllChecked() {
+		err = ErrPendingCheckpoint
+		return
+	}
+
 	// TODO: use context
 	timeout := time.After(time.Minute * 2)
 	now := time.Now()
@@ -159,6 +167,8 @@ func (r *runner) ForceIncrementalCheckpoint(ts types.TS) (err error) {
 			zap.Error(err),
 		)
 	}()
+
+	r.incrementalCheckpointQueue.Enqueue(struct{}{})
 
 	select {
 	case <-r.ctx.Done():
