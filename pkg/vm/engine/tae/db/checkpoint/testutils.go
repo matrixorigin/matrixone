@@ -95,10 +95,9 @@ func (r *runner) ForceGlobalCheckpoint(end types.TS, interval time.Duration) err
 		default:
 			err = r.ForceIncrementalCheckpoint(end)
 			if err != nil {
-				if dbutils.IsRetrieableCheckpoint(err) {
+				if dbutils.IsCheckpointRetryableErr(err) {
 					retryTime++
-					interval := interval.Milliseconds() / 400
-					time.Sleep(time.Duration(interval))
+					time.Sleep(interval / 20)
 					break
 				}
 				return err

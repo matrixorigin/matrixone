@@ -698,7 +698,7 @@ func (r *runner) softScheduleCheckpoint(ts *types.TS) (ret *CheckpointEntry, err
 	}
 
 	if intent.end.LT(ts) {
-		err = moerr.NewPrevCheckpointNotFinished()
+		err = ErrPendingCheckpoint
 		r.incrementalCheckpointQueue.Enqueue(struct{}{})
 		return
 	}
@@ -737,7 +737,7 @@ func (r *runner) TryScheduleCheckpoint(
 	r.incrementalCheckpointQueue.Enqueue(struct{}{})
 
 	if intent.end.LT(&ts) {
-		err = moerr.NewPrevCheckpointNotFinished()
+		err = ErrPendingCheckpoint
 		return
 	}
 

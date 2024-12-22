@@ -209,10 +209,9 @@ func (db *DB) ForceCheckpoint(
 			return
 		default:
 			err = db.BGCheckpointRunner.ForceIncrementalCheckpoint(ts)
-			if dbutils.IsRetrieableCheckpoint(err) {
+			if dbutils.IsCheckpointRetryableErr(err) {
 				db.BGCheckpointRunner.CleanPenddingCheckpoint()
-				interval := flushDuration.Milliseconds() / 400
-				time.Sleep(time.Duration(interval))
+				time.Sleep(flushDuration / 20)
 				break
 			}
 			return
