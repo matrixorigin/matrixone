@@ -185,7 +185,7 @@ func TestCheckpointCatalog2(t *testing.T) {
 	}
 	wg.Wait()
 	ts := types.BuildTS(time.Now().UTC().UnixNano(), 0)
-	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(ts, false)
+	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint2(ts)
 	assert.NoError(t, err)
 	lsn := tae.BGCheckpointRunner.MaxLSNInRange(ts)
 	entry, err := tae.Wal.RangeCheckpoint(1, lsn)

@@ -36,6 +36,7 @@ type TestRunner interface {
 	ForceGlobalCheckpointSynchronously(ctx context.Context, end types.TS, versionInterval time.Duration) error
 	ForceCheckpointForBackup(end types.TS) (string, error)
 	ForceIncrementalCheckpoint(end types.TS, truncate bool) error
+	ForceIncrementalCheckpoint2(end types.TS) error
 	MaxLSNInRange(end types.TS) uint64
 
 	GCNeeded() bool
@@ -63,7 +64,7 @@ func (r *runner) ForceGlobalCheckpoint(end types.TS, interval time.Duration) err
 		if end2.GE(&end) {
 			r.globalCheckpointQueue.Enqueue(&globalCheckpointContext{
 				force:    true,
-				end:      end,
+				end:      end2,
 				interval: interval,
 			})
 			return nil
@@ -83,6 +84,7 @@ func (r *runner) ForceGlobalCheckpoint(end types.TS, interval time.Duration) err
 			"ForceGlobalCheckpoint-End",
 			zap.Int("retry-time", retryTime),
 			zap.Duration("cost", time.Since(now)),
+			zap.String("ts", end.ToString()),
 			zap.Error(err),
 		)
 	}()
@@ -93,7 +95,7 @@ func (r *runner) ForceGlobalCheckpoint(end types.TS, interval time.Duration) err
 		case <-timeout:
 			return moerr.NewInternalError(r.ctx, "timeout")
 		default:
-			err = r.ForceIncrementalCheckpoint(end, false)
+			err = r.ForceIncrementalCheckpoint2(end)
 			if err != nil {
 				if dbutils.IsRetrieableCheckpoint(err) {
 					retryTime++
@@ -134,6 +136,42 @@ func (r *runner) ForceGlobalCheckpointSynchronously(ctx context.Context, end typ
 		return moerr.NewInternalErrorf(ctx, "force global checkpoint failed: %v", err)
 	}
 	return nil
+}
+
+func (r *runner) ForceIncrementalCheckpoint2(ts types.TS) (err error) {
+	var intent Intent
+	if intent, err = r.TryScheduleCheckpoint(ts, true); err != nil {
+		return
+	}
+	if intent == nil {
+		return
+	}
+	// TODO: use context
+	timeout := time.After(time.Minute * 2)
+	now := time.Now()
+	defer func() {
+		logger := logutil.Info
+		if err != nil {
+			logger = logutil.Error
+		}
+		logger(
+			"ForceIncrementalCheckpoint-End",
+			zap.String("entry", intent.String()),
+			zap.Duration("cost", time.Since(now)),
+			zap.Error(err),
+		)
+	}()
+
+	select {
+	case <-r.ctx.Done():
+		err = context.Cause(r.ctx)
+		return
+	case <-timeout:
+		err = moerr.NewInternalErrorNoCtx("timeout")
+		return
+	case <-intent.Wait():
+	}
+	return
 }
 
 func (r *runner) ForceIncrementalCheckpoint(end types.TS, truncate bool) error {

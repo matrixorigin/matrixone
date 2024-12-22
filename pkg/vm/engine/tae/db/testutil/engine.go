@@ -164,21 +164,21 @@ func (e *TestEngine) CheckRowsByScan(exp int, applyDelete bool) {
 func (e *TestEngine) ForceCheckpoint() {
 	err := e.BGFlusher.ForceFlushWithInterval(e.TxnMgr.Now(), context.Background(), time.Second*2, time.Millisecond*10)
 	assert.NoError(e.T, err)
-	err = e.BGCheckpointRunner.ForceIncrementalCheckpoint(e.TxnMgr.Now(), false)
+	err = e.BGCheckpointRunner.ForceIncrementalCheckpoint2(e.TxnMgr.Now())
 	assert.NoError(e.T, err)
 }
 
 func (e *TestEngine) ForceLongCheckpoint() {
 	err := e.BGFlusher.ForceFlush(e.TxnMgr.Now(), context.Background(), 20*time.Second)
 	assert.NoError(e.T, err)
-	err = e.BGCheckpointRunner.ForceIncrementalCheckpoint(e.TxnMgr.Now(), false)
+	err = e.BGCheckpointRunner.ForceIncrementalCheckpoint2(e.TxnMgr.Now())
 	assert.NoError(e.T, err)
 }
 
 func (e *TestEngine) ForceLongCheckpointTruncate() {
 	err := e.BGFlusher.ForceFlush(e.TxnMgr.Now(), context.Background(), 20*time.Second)
 	assert.NoError(e.T, err)
-	err = e.BGCheckpointRunner.ForceIncrementalCheckpoint(e.TxnMgr.Now(), true)
+	err = e.BGCheckpointRunner.ForceIncrementalCheckpoint2(e.TxnMgr.Now())
 	assert.NoError(e.T, err)
 }
 
@@ -309,7 +309,7 @@ func (e *TestEngine) IncrementalCheckpoint(
 		flushed := e.DB.BGFlusher.IsAllChangesFlushed(types.TS{}, end, true)
 		require.True(e.T, flushed)
 	}
-	err := e.DB.BGCheckpointRunner.ForceIncrementalCheckpoint(end, false)
+	err := e.DB.BGCheckpointRunner.ForceIncrementalCheckpoint2(end)
 	require.NoError(e.T, err)
 	if truncate {
 		lsn := e.DB.BGCheckpointRunner.MaxLSNInRange(end)

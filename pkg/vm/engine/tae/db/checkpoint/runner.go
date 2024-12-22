@@ -22,9 +22,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"
 
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -231,7 +232,7 @@ func NewRunner(
 	}
 	r.fillDefaults()
 
-	r.store = newRunnerStore(r.rt.SID(), r.options.globalVersionInterval)
+	r.store = newRunnerStore(r.rt.SID(), r.options.globalVersionInterval, time.Minute*2)
 
 	r.incrementalPolicy = &timeBasedPolicy{interval: r.options.minIncrementalInterval}
 	r.globalPolicy = &countBasedPolicy{minCount: r.options.globalMinCount}
@@ -321,11 +322,8 @@ func (r *runner) onGCCheckpointEntries(items ...any) {
 
 func (r *runner) onIncrementalCheckpointEntries(items ...any) {
 	now := time.Now()
-	entry := r.MaxIncrementalCheckpoint()
-	// In some unit tests, ckp is managed manually, and ckp deletion (CleanPendingCheckpoint)
-	// can be called when the queue still has unexecuted task.
-	// Add `entry == nil` here as protective codes
-	if entry == nil || entry.GetState() != ST_Running {
+	entry, rollback := r.store.TakeICKPIntent()
+	if entry == nil {
 		return
 	}
 	var (
@@ -364,6 +362,7 @@ func (r *runner) onIncrementalCheckpointEntries(items ...any) {
 			fields = append(fields, zap.Uint64("lsn", lsn))
 			fields = append(fields, zap.Uint64("reserve", r.options.reservedWALEntryCount))
 			fields = append(fields, zap.String("entry", entry.String()))
+			fields = append(fields, zap.Duration("age", entry.Age()))
 			logutil.Info(
 				"Checkpoint-End",
 				fields...,
@@ -375,6 +374,7 @@ func (r *runner) onIncrementalCheckpointEntries(items ...any) {
 	var file string
 	if fields, files, err = r.doIncrementalCheckpoint(entry); err != nil {
 		errPhase = "do-ckp"
+		rollback()
 		return
 	}
 
@@ -382,17 +382,28 @@ func (r *runner) onIncrementalCheckpointEntries(items ...any) {
 	if lsn > r.options.reservedWALEntryCount {
 		lsnToTruncate = lsn - r.options.reservedWALEntryCount
 	}
+
 	entry.SetLSN(lsn, lsnToTruncate)
-	entry.SetState(ST_Finished)
+	if !r.store.CommitICKPIntent(entry, false) {
+		errPhase = "commit"
+		rollback()
+		err = moerr.NewInternalErrorNoCtxf("cannot commit ickp")
+		return
+	}
+	v2.TaskCkpEntryPendingDurationHistogram.Observe(entry.Age().Seconds())
+	defer entry.Done()
 
 	if file, err = r.saveCheckpoint(
 		entry.start, entry.end, lsn, lsnToTruncate,
 	); err != nil {
 		errPhase = "save-ckp"
+		rollback()
 		return
 	}
+
 	files = append(files, file)
 
+	// PXU TODO: if crash here, the checkpoint log entry will be lost
 	var logEntry wal.LogEntry
 	if logEntry, err = r.wal.RangeCheckpoint(1, lsnToTruncate, files...); err != nil {
 		errPhase = "wal-ckp"
@@ -571,70 +582,166 @@ func (r *runner) onPostCheckpointEntries(entries ...any) {
 	}
 }
 
-func (r *runner) tryScheduleIncrementalCheckpoint(start, end types.TS) {
-	// ts := types.BuildTS(time.Now().UTC().UnixNano(), 0)
-	_, count := r.source.ScanInRange(start, end)
-	if count < r.options.minCount {
+func (r *runner) softScheduleCheckpoint(ts *types.TS) (ret *CheckpointEntry, err error) {
+	var (
+		updated bool
+	)
+	intent := r.store.GetICKPIntent()
+
+	check := func() (done bool) {
+		if !r.source.IsCommitted(intent.GetStart(), intent.GetEnd()) {
+			return false
+		}
+		tree := r.source.ScanInRangePruned(intent.GetStart(), intent.GetEnd())
+		tree.GetTree().Compact()
+		if !tree.IsEmpty() && intent.TooOld() {
+			logutil.Warn(
+				"CheckPoint-Wait-TooOld",
+				zap.String("entry", intent.String()),
+				zap.Duration("age", intent.Age()),
+			)
+			intent.DeferRetirement()
+		}
+		return tree.IsEmpty()
+	}
+
+	now := time.Now()
+
+	defer func() {
+		logger := logutil.Info
+		if err != nil {
+			logger = logutil.Error
+		} else {
+			ret = intent
+		}
+		intentInfo := "nil"
+		if intent != nil {
+			intentInfo = intent.String()
+		}
+		logger(
+			"ScheduleCheckpoint",
+			zap.String("intent", intentInfo),
+			zap.Error(err),
+			zap.String("ts", ts.ToString()),
+			zap.Duration("cost", time.Since(now)),
+		)
+	}()
+
+	if intent == nil {
+		start := r.store.GetCheckpointed()
+		if ts.LT(&start) {
+			return
+		}
+		if !r.incrementalPolicy.Check(start) {
+			return
+		}
+		_, count := r.source.ScanInRange(start, *ts)
+		if count < r.options.minCount {
+			return
+		}
+		intent, updated = r.store.UpdateICKPIntent(ts, true, false)
+		if updated {
+			logutil.Info(
+				"Checkpoint-Incremental-Updated",
+				zap.String("intent", intent.String()),
+				zap.String("ts", ts.ToString()),
+				zap.Bool("updated", updated),
+			)
+		}
+	}
+
+	// [intent == nil]
+	// if intent is nil, it means no need to do checkpoint
+	if intent == nil {
 		return
 	}
-	entry := NewCheckpointEntry(r.rt.SID(), start, end, ET_Incremental)
-	r.store.TryAddNewIncrementalCheckpointEntry(entry)
+
+	// [intent != nil]
+
+	var (
+		policyChecked  bool
+		flushedChecked bool
+	)
+	policyChecked = intent.IsPolicyChecked()
+	if !policyChecked {
+		if !r.incrementalPolicy.Check(intent.GetStart()) {
+			return
+		}
+		_, count := r.source.ScanInRange(intent.GetStart(), intent.GetEnd())
+		if count < r.options.minCount {
+			return
+		}
+		policyChecked = true
+	}
+
+	flushedChecked = intent.IsFlushChecked()
+	if !flushedChecked && check() {
+		flushedChecked = true
+	}
+
+	if policyChecked != intent.IsPolicyChecked() || flushedChecked != intent.IsFlushChecked() {
+		endTS := intent.GetEnd()
+		intent, updated = r.store.UpdateICKPIntent(&endTS, policyChecked, flushedChecked)
+
+		if updated {
+			logutil.Info(
+				"Checkpoint-Incremental-Updated",
+				zap.String("intent", intent.String()),
+				zap.String("endTS", ts.ToString()),
+			)
+		}
+	}
+
+	// no need to do checkpoint
+	if intent == nil {
+		return
+	}
+
+	if intent.end.LT(ts) {
+		err = moerr.NewPrevCheckpointNotFinished()
+		r.incrementalCheckpointQueue.Enqueue(struct{}{})
+		return
+	}
+
+	if intent.AllChecked() {
+		r.incrementalCheckpointQueue.Enqueue(struct{}{})
+	}
+	return
 }
 
-func (r *runner) TryScheduleCheckpoint(endts types.TS) {
+// NOTE:
+// when `force` is true, it must be called after force flush till the given ts
+// force: if true, not to check the validness of the checkpoint
+func (r *runner) TryScheduleCheckpoint(
+	ts types.TS, force bool,
+) (ret Intent, err error) {
 	if r.disabled.Load() {
 		return
 	}
-	entry := r.MaxIncrementalCheckpoint()
-	global := r.MaxGlobalCheckpoint()
-
-	// no prev checkpoint found. try schedule the first
-	// checkpoint
-	if entry == nil {
-		if global == nil {
-			r.tryScheduleIncrementalCheckpoint(types.TS{}, endts)
-			return
-		} else {
-			maxTS := global.end.Prev()
-			if r.incrementalPolicy.Check(maxTS) {
-				r.tryScheduleIncrementalCheckpoint(maxTS.Next(), endts)
-			}
-			return
-		}
+	if !force {
+		return r.softScheduleCheckpoint(&ts)
 	}
 
-	if entry.IsPendding() {
-		check := func() (done bool) {
-			if !r.source.IsCommitted(entry.GetStart(), entry.GetEnd()) {
-				return false
-			}
-			tree := r.source.ScanInRangePruned(entry.GetStart(), entry.GetEnd())
-			tree.GetTree().Compact()
-			if !tree.IsEmpty() && entry.TooOld() {
-				logutil.Infof("waiting for dirty tree %s", tree.String())
-				entry.DeferRetirement()
-			}
-			return tree.IsEmpty()
-		}
-
-		if !check() {
-			logutil.Debugf("%s is waiting", entry.String())
-			return
-		}
-		entry.SetState(ST_Running)
-		v2.TaskCkpEntryPendingDurationHistogram.Observe(entry.Age().Seconds())
-		r.incrementalCheckpointQueue.Enqueue(struct{}{})
+	intent, updated := r.store.UpdateICKPIntent(&ts, true, true)
+	if intent == nil {
 		return
 	}
 
-	if entry.IsRunning() {
-		r.incrementalCheckpointQueue.Enqueue(struct{}{})
+	logutil.Info(
+		"ForceScheduleCheckpoint",
+		zap.String("intent", intent.String()),
+		zap.String("ts", ts.ToString()),
+		zap.Bool("updated", updated),
+	)
+
+	r.incrementalCheckpointQueue.Enqueue(struct{}{})
+
+	if intent.end.LT(&ts) {
+		err = moerr.NewPrevCheckpointNotFinished()
 		return
 	}
 
-	if r.incrementalPolicy.Check(entry.end) {
-		r.tryScheduleIncrementalCheckpoint(entry.end.Next(), endts)
-	}
+	return intent, nil
 }
 
 func (r *runner) fillDefaults() {

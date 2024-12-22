@@ -33,10 +33,12 @@ import (
 func newRunnerStore(
 	sid string,
 	globalHistoryDuration time.Duration,
+	intentOldAge time.Duration,
 ) *runnerStore {
 	s := new(runnerStore)
 	s.sid = sid
 	s.globalHistoryDuration = globalHistoryDuration
+	s.intentOldAge = intentOldAge
 	s.incrementals = btree.NewBTreeGOptions(
 		func(a, b *CheckpointEntry) bool {
 			return a.end.LT(&b.end)
@@ -59,6 +61,9 @@ type runnerStore struct {
 	sid string
 
 	globalHistoryDuration time.Duration
+	intentOldAge          time.Duration
+
+	incrementalIntent atomic.Pointer[CheckpointEntry]
 
 	incrementals *btree.BTreeG[*CheckpointEntry]
 	globals      *btree.BTreeG[*CheckpointEntry]
@@ -69,6 +74,223 @@ type runnerStore struct {
 	gcCount     int
 	gcTime      time.Time
 	gcWatermark atomic.Value
+}
+
+func (s *runnerStore) GetICKPIntent() *CheckpointEntry {
+	return s.incrementalIntent.Load()
+}
+
+func (s *runnerStore) GetCheckpointed() types.TS {
+	s.RLock()
+	defer s.RUnlock()
+	return s.GetCheckpointedLocked()
+}
+
+func (s *runnerStore) GetCheckpointedLocked() types.TS {
+	var ret types.TS
+	maxICKP, _ := s.incrementals.Max()
+	maxGCKP, _ := s.globals.Max()
+	if maxICKP == nil {
+		// no ickp and no gckp, it's the first ickp
+		if maxGCKP == nil {
+			ret = types.TS{}
+		} else {
+			ret = maxGCKP.end
+		}
+	} else {
+		ret = maxICKP.end.Next()
+	}
+	return ret
+}
+
+// updated:
+// true:  updated and intent must contain the updated ts
+// false: not updated and intent is the old intent
+// policyChecked, flushChecked:
+// it cannot update the intent if the intent is checked by policy or flush
+func (s *runnerStore) UpdateICKPIntent(
+	ts *types.TS, policyChecked, flushChecked bool,
+) (intent *CheckpointEntry, updated bool) {
+	for {
+		old := s.incrementalIntent.Load()
+		// Scenario 1:
+		// there is already an intent meets one of the following conditions:
+		// 1. the range of the old intent contains the ts, no need to update
+		// 2. the intent is not pendding: Running or Finished, cannot update
+		if old != nil && (old.end.GT(ts) || !old.IsPendding() || old.Age() > s.intentOldAge) {
+			intent = old
+			return
+		}
+
+		// Here
+		// 1. old == nil
+		// 2. old.end <= ts && old.IsPendding() && old.Age() <= s.intentOldAge
+
+		if old != nil {
+			// if the old intent is checked by policy and the incoming intent is not checked by policy
+			// incoming vs old: false vs true
+			// it cannot update the intent in this case
+
+			if !policyChecked && old.IsPolicyChecked() {
+				intent = old
+				return
+			}
+			if !flushChecked && old.IsFlushChecked() {
+				intent = old
+				return
+			}
+		}
+
+		var start types.TS
+		if old != nil {
+			// Scenario 2:
+			// there is an pendding intent with smaller end ts. we need to update
+			// the intent to extend the end ts to the given ts
+			start = old.start
+		} else {
+			// Scenario 3:
+			// there is no intent, we need to create a new intent
+			// start-ts:
+			// 1. if there is no ickp and no gckp, it's the first ickp, start ts is empty
+			// 2. if there is no ickp but has gckp, start ts is the end ts of the max gckp
+			// 3. if there is ickp, start ts is the end ts of the max ickp
+			// end-ts: the given ts
+			start = s.GetCheckpointed()
+		}
+
+		if old != nil && old.end.EQ(ts) {
+			if old.IsPolicyChecked() == policyChecked && old.IsFlushChecked() == flushChecked {
+				intent = old
+				return
+			}
+		}
+
+		// if the start ts is larger equal to the given ts, no need to update
+		if start.GE(ts) {
+			intent = old
+			return
+		}
+		var newIntent *CheckpointEntry
+		if old == nil {
+			newIntent = NewCheckpointEntry(
+				s.sid,
+				start,
+				*ts,
+				ET_Incremental,
+				WithCheckedEntryOption(policyChecked, flushChecked),
+			)
+		} else {
+			// the incoming checked status can override the old status
+			// it is impossible that the old is checked and the incoming is not checked here
+			// false -> true: impossible here
+			newIntent = InheritCheckpointEntry(
+				old,
+				WithEndEntryOption(*ts),
+				WithCheckedEntryOption(policyChecked, flushChecked),
+			)
+		}
+		if s.incrementalIntent.CompareAndSwap(old, newIntent) {
+			intent = newIntent
+			updated = true
+			return
+		}
+	}
+	return
+}
+
+func (s *runnerStore) TakeICKPIntent() (taken *CheckpointEntry, rollback func()) {
+	for {
+		old := s.incrementalIntent.Load()
+		if old == nil || !old.IsPendding() || !old.AllChecked() {
+			return
+		}
+		taken = InheritCheckpointEntry(
+			old,
+			WithStateEntryOption(ST_Running),
+		)
+		if s.incrementalIntent.CompareAndSwap(old, taken) {
+			rollback = func() {
+				// rollback the intent
+				putBack := InheritCheckpointEntry(
+					taken,
+					WithStateEntryOption(ST_Pending),
+				)
+				s.incrementalIntent.Store(putBack)
+			}
+			break
+		}
+		taken = nil
+		rollback = nil
+	}
+	return
+}
+
+// intent must be in Running state
+func (s *runnerStore) CommitICKPIntent(intent *CheckpointEntry, done bool) (committed bool) {
+	defer func() {
+		if done && committed {
+			intent.Done()
+		}
+	}()
+	old := s.incrementalIntent.Load()
+	// should not happen
+	if old != intent {
+		logutil.Error(
+			"CommitICKPIntent-Error",
+			zap.String("intent", intent.String()),
+			zap.String("expected", old.String()),
+		)
+		return
+	}
+	s.Lock()
+	defer s.Unlock()
+	maxICKP, _ := s.incrementals.Max()
+	maxGCKP, _ := s.globals.Max()
+	var (
+		maxICKPEndNext types.TS
+		maxGCKPEnd     types.TS
+	)
+	if maxICKP != nil {
+		maxICKPEndNext = maxICKP.end.Next()
+	}
+	if maxGCKP != nil {
+		maxGCKPEnd = maxGCKP.end
+	}
+	if maxICKP == nil && maxGCKP == nil {
+		if !intent.start.IsEmpty() {
+			logutil.Error(
+				"CommitICKPIntent-Error",
+				zap.String("intent", intent.String()),
+				zap.String("max-i", "nil"),
+				zap.String("max-g", "nil"),
+			)
+			// PXU TODO: err = xxx
+			return
+		}
+	} else if (maxICKP == nil && !maxGCKPEnd.EQ(&intent.start)) ||
+		(maxICKP != nil && !maxICKPEndNext.EQ(&intent.start)) {
+		maxi := "nil"
+		maxg := "nil"
+		if maxICKP != nil {
+			maxi = maxICKP.String()
+		}
+		if maxGCKP != nil {
+			maxg = maxGCKP.String()
+		}
+		logutil.Error(
+			"CommitICKPIntent-Error",
+			zap.String("intent", intent.String()),
+			zap.String("max-i", maxi),
+			zap.String("max-g", maxg),
+		)
+		// PXU TODO: err = xxx
+		return
+	}
+	s.incrementalIntent.Store(nil)
+	intent.SetState(ST_Finished)
+	s.incrementals.Set(intent)
+	committed = true
+	return
 }
 
 func (s *runnerStore) ExportStatsLocked() []zap.Field {

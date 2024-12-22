@@ -2710,14 +2710,14 @@ func TestSegDelLogtail(t *testing.T) {
 	testutil.CompactBlocks(t, 0, tae.DB, pkgcatalog.MO_CATALOG, catalog.SystemDBSchema, false)
 	testutil.CompactBlocks(t, 0, tae.DB, pkgcatalog.MO_CATALOG, catalog.SystemTableSchema, false)
 	testutil.CompactBlocks(t, 0, tae.DB, pkgcatalog.MO_CATALOG, catalog.SystemColumnSchema, false)
-	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.Now(), false)
+	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint2(tae.TxnMgr.Now())
 	assert.NoError(t, err)
 
 	check := func() {
 		ckpEntries := tae.BGCheckpointRunner.GetAllIncrementalCheckpoints()
 		assert.Equal(t, 1, len(ckpEntries))
 		entry := ckpEntries[0]
-		ins, del, dataObj, tombstoneObj, err := entry.GetByTableID(context.Background(), tae.Runtime.Fs, tid)
+		ins, del, dataObj, tombstoneObj, err := entry.GetTableByID(context.Background(), tae.Runtime.Fs, tid)
 		assert.NoError(t, err)
 		assert.Nil(t, ins)                              // 0 ins
 		assert.Nil(t, del)                              // 0  del
@@ -3687,7 +3687,7 @@ func TestDropCreated3(t *testing.T) {
 	testutil.CompactBlocks(t, 0, tae.DB, pkgcatalog.MO_CATALOG, catalog.SystemDBSchema, false)
 	testutil.CompactBlocks(t, 0, tae.DB, pkgcatalog.MO_CATALOG, catalog.SystemTableSchema, false)
 	testutil.CompactBlocks(t, 0, tae.DB, pkgcatalog.MO_CATALOG, catalog.SystemColumnSchema, false)
-	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.Now(), false)
+	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint2(tae.TxnMgr.Now())
 	assert.Nil(t, err)
 
 	tae.Restart(ctx)
@@ -3744,7 +3744,7 @@ func TestDropCreated4(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit(context.Background()))
 
-	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.Now(), false)
+	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint2(tae.TxnMgr.Now())
 	assert.Nil(t, err)
 
 	tae.Restart(ctx)
@@ -4628,7 +4628,7 @@ func TestReadCheckpoint(t *testing.T) {
 	}
 	for _, entry := range entries {
 		for _, tid := range tids {
-			ins, del, _, _, err := entry.GetByTableID(context.Background(), tae.Runtime.Fs, tid)
+			ins, del, _, _, err := entry.GetTableByID(context.Background(), tae.Runtime.Fs, tid)
 			assert.NoError(t, err)
 			t.Logf("table %d", tid)
 			if ins != nil {
@@ -4644,7 +4644,7 @@ func TestReadCheckpoint(t *testing.T) {
 	entries = tae.BGCheckpointRunner.GetAllGlobalCheckpoints()
 	entry := entries[len(entries)-1]
 	for _, tid := range tids {
-		ins, del, _, _, err := entry.GetByTableID(context.Background(), tae.Runtime.Fs, tid)
+		ins, del, _, _, err := entry.GetTableByID(context.Background(), tae.Runtime.Fs, tid)
 		assert.NoError(t, err)
 		t.Logf("table %d", tid)
 		if ins != nil {
@@ -8033,7 +8033,7 @@ func TestForceCheckpoint(t *testing.T) {
 
 	err = tae.BGFlusher.ForceFlushWithInterval(tae.TxnMgr.Now(), context.Background(), time.Second*2, time.Millisecond*10)
 	assert.Error(t, err)
-	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.Now(), false)
+	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint2(tae.TxnMgr.Now())
 	assert.NoError(t, err)
 }
 
@@ -8129,7 +8129,7 @@ func TestMarshalPartioned(t *testing.T) {
 	testutil.CompactBlocks(t, 0, tae.DB, pkgcatalog.MO_CATALOG, catalog.SystemDBSchema, false)
 	testutil.CompactBlocks(t, 0, tae.DB, pkgcatalog.MO_CATALOG, catalog.SystemTableSchema, false)
 	testutil.CompactBlocks(t, 0, tae.DB, pkgcatalog.MO_CATALOG, catalog.SystemColumnSchema, false)
-	err := tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.Now(), false)
+	err := tae.BGCheckpointRunner.ForceIncrementalCheckpoint2(tae.TxnMgr.Now())
 	assert.NoError(t, err)
 	lsn := tae.BGCheckpointRunner.MaxLSNInRange(tae.TxnMgr.Now())
 	entry, err := tae.Wal.RangeCheckpoint(1, lsn)

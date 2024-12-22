@@ -41,7 +41,7 @@ const (
 )
 
 type CheckpointScheduler interface {
-	TryScheduleCheckpoint(types.TS)
+	TryScheduleCheckpoint(types.TS, bool) (Intent, error)
 }
 
 type Runner interface {
