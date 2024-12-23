@@ -190,6 +190,7 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 
 	now := time.Now()
 	ckpReplayer := db.BGCheckpointRunner.Replay(dataFactory)
+	defer ckpReplayer.Close()
 	if err = ckpReplayer.ReadCkpFiles(); err != nil {
 		panic(err)
 	}
