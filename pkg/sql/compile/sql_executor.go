@@ -22,7 +22,6 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -241,27 +240,26 @@ func (exec *txnExecutor) Exec(
 	sql string,
 	statementOption executor.StatementOption,
 ) (executor.Result, error) {
-
-	//-----------------------------------------------------------------------------------------
 	// NOTE: This code is to restore tenantID information in the Context when temporarily switching tenants
 	// so that it can be restored to its original state after completing the task.
-	recoverAccount := func(exec *txnExecutor, accId uint32) {
-		exec.ctx = context.WithValue(exec.ctx, defines.TenantIDKey{}, accId)
-	}
-
+	var originCtx context.Context
 	if statementOption.HasAccountID() {
-		originAccountID := catalog.System_Account
-		if v := exec.ctx.Value(defines.TenantIDKey{}); v != nil {
-			originAccountID = v.(uint32)
+		// save the current context
+		originCtx = exec.ctx
+		// switch tenantID
+		exec.ctx = context.WithValue(exec.ctx, defines.TenantIDKey{}, statementOption.AccountID())
+		if statementOption.HasUserID() {
+			exec.ctx = context.WithValue(exec.ctx, defines.UserIDKey{}, statementOption.UserID())
 		}
-
-		exec.ctx = context.WithValue(exec.ctx,
-			defines.TenantIDKey{},
-			statementOption.AccountID())
-		// NOTE: Restore AccountID information in context.Context
-		defer recoverAccount(exec, originAccountID)
+		if statementOption.HasRoleID() {
+			exec.ctx = context.WithValue(exec.ctx, defines.RoleIDKey{}, statementOption.RoleID())
+		}
+		defer func() {
+			// restore context at the end of the function
+			exec.ctx = originCtx
+		}()
 	}
-	//-----------------------------------------------------------------------------------------
+	//------------------------------------------------------------------------------------------------------------------
 	if statementOption.IgnoreForeignKey() {
 		exec.ctx = context.WithValue(exec.ctx,
 			defines.IgnoreForeignKey{},
