@@ -204,7 +204,7 @@
 /pkg/vm @XuPeng-SH
 /pkg/vm/engine @XuPeng-SH
 /pkg/vm/pipeline @ouyuanning @badboynt1 @aunjgr
-/pkg/vm/process @reusee @aunjgr @badboynt1
+/pkg/vm/process @reusee @aunjgr @badboynt1 @XuPeng-SH
 /pkg/vm/message @badboynt1
 /pkg/vm/engine/disttae @XuPeng-SH @triump2020
 /pkg/vm/engine/disttae/logtailreplay @triump2020 @XuPeng-SH
