@@ -46,7 +46,7 @@ const (
 	taskHostDN
 
 	constMaxMemCap         = 12 * common.Const1GBytes // max original memory for an object
-	estimateMemUsagePerRow = 30
+	estimateMemUsagePerRow = 60
 )
 
 func score(objs []*catalog.ObjectEntry) float64 {
@@ -228,7 +228,7 @@ func (c *resourceController) setMemLimit(total uint64) {
 
 func (c *resourceController) refresh() {
 	if c.limit == 0 {
-		c.setMemLimit(totalMem())
+		c.setMemLimit(objectio.TotalMem())
 	}
 
 	if c.proc == nil {
