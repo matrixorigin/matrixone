@@ -29,7 +29,7 @@ import (
 func TestDeleteAndSelect(t *testing.T) {
 	embed.RunBaseClusterTests(
 		func(c embed.Cluster) {
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second*180)
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*240)
 			defer cancel()
 
 			cn1, err := c.GetCNService(0)

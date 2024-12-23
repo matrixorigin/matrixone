@@ -23,7 +23,7 @@ import (
 // Add for just pass UT coverage check
 func TestEmptyRelationData(t *testing.T) {
 	relData := BuildEmptyRelData()
-	relData.String()
+	require.True(t, len(relData.String()) > 0)
 	require.Panics(t, func() {
 		relData.GetShardIDList()
 	})
