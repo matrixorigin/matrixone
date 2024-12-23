@@ -268,13 +268,6 @@ func GetFixedAtNoTypeCheck[T any](v *Vector, idx int) T {
 	return slice[idx]
 }
 
-func GetFixedAtNoTypeCheck2[T any](v *Vector, slice []T, idx int) T {
-	if v.IsConst() {
-		idx = 0
-	}
-	return slice[idx]
-}
-
 // Note:
 // it is much inefficient than GetFixedAtNoTypeCheck
 // if type check is done before calling this function, use GetFixedAtNoTypeCheck

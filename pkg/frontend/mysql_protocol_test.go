@@ -1249,6 +1249,39 @@ func makeMysqlTimeResultSet() *MysqlResultSet {
 	return rs
 }
 
+func makeMysqlTimeResultSet2() *MysqlResultSet {
+	var rs = &MysqlResultSet{}
+
+	name := "Time"
+
+	mysqlCol := new(MysqlColumn)
+	mysqlCol.SetName(name)
+	mysqlCol.SetOrgName(name + "OrgName")
+	mysqlCol.SetColumnType(defines.MYSQL_TYPE_TIME)
+	mysqlCol.SetSchema(name + "Schema")
+	mysqlCol.SetTable(name + "Table")
+	mysqlCol.SetOrgTable(name + "Table")
+	mysqlCol.SetCharset(uint16(Utf8mb4CollationID))
+	mysqlCol.SetLength(6)
+	rs.AddColumn(mysqlCol)
+
+	t1, _ := types.ParseTime("110:21:15", 6)
+	t2, _ := types.ParseTime("10:21:15.123", 6)
+	t3, _ := types.ParseTime("-112:12:12", 6)
+	var cases = []types.Time{
+		t1,
+		t2,
+		t3,
+	}
+	for _, v := range cases {
+		var data = make([]interface{}, 1)
+		data[0] = v
+		rs.AddRow(data)
+	}
+
+	return rs
+}
+
 func makeMysqlDatetimeResultSet() *MysqlResultSet {
 	var rs = &MysqlResultSet{}
 
@@ -1301,6 +1334,39 @@ func makeMysqlDatetimeResultSet2() *MysqlResultSet {
 	d1, _ := types.ParseDatetime("2018-04-28 10:21:15", 0)
 	d2, _ := types.ParseDatetime("2018-04-28 10:21:15.123", 0)
 	d3, _ := types.ParseDatetime("2015-03-03 12:12:12", 0)
+	var cases = []types.Datetime{
+		d1,
+		d2,
+		d3,
+	}
+	for _, v := range cases {
+		var data = make([]interface{}, 1)
+		data[0] = v
+		rs.AddRow(data)
+	}
+
+	return rs
+}
+
+func makeMysqlDatetimeResultSet3() *MysqlResultSet {
+	var rs = &MysqlResultSet{}
+
+	name := "Datetime"
+
+	mysqlCol := new(MysqlColumn)
+	mysqlCol.SetName(name)
+	mysqlCol.SetOrgName(name + "OrgName")
+	mysqlCol.SetColumnType(defines.MYSQL_TYPE_DATETIME)
+	mysqlCol.SetSchema(name + "Schema")
+	mysqlCol.SetTable(name + "Table")
+	mysqlCol.SetOrgTable(name + "Table")
+	mysqlCol.SetCharset(uint16(Utf8mb4CollationID))
+	mysqlCol.SetLength(6)
+	rs.AddColumn(mysqlCol)
+
+	d1, _ := types.ParseDatetime("2018-04-28 10:21:15", 6)
+	d2, _ := types.ParseDatetime("2018-04-28 10:21:15.123", 6)
+	d3, _ := types.ParseDatetime("2015-03-03 12:12:12", 6)
 	var cases = []types.Datetime{
 		d1,
 		d2,
@@ -3480,8 +3546,16 @@ func makeKases() []kase {
 			mrs: makeMysqlTimeResultSet(),
 		},
 		{
+			sql: "select time2",
+			mrs: makeMysqlTimeResultSet2(),
+		},
+		{
 			sql: "select datetime",
 			mrs: makeMysqlDatetimeResultSet2(),
+		},
+		{
+			sql: "select datetime",
+			mrs: makeMysqlDatetimeResultSet3(),
 		},
 		{
 			sql: "select timestamp",
@@ -3646,18 +3720,24 @@ func makeKases() []kase {
 				}
 				bat.Vecs[colIdx] = testutil.NewDateVector(len(mrs.Data), types.T_date.ToType(), mp, false, vecData)
 			case defines.MYSQL_TYPE_TIME:
+				scale := col.Length()
 				vecData := make([]string, 0)
 				for i := 0; i < len(mrs.Data); i++ {
-					vecData = append(vecData, mrs.Data[i][colIdx].(types.Time).String())
+					vecData = append(vecData, mrs.Data[i][colIdx].(types.Time).String2(int32(scale)))
 				}
-				bat.Vecs[colIdx] = testutil.NewTimeVector(len(mrs.Data), types.T_time.ToType(), mp, false, vecData)
+				typ := types.T_time.ToType()
+				typ.Scale = int32(scale)
+				bat.Vecs[colIdx] = testutil.NewTimeVector(len(mrs.Data), typ, mp, false, vecData)
 
 			case defines.MYSQL_TYPE_DATETIME:
+				scale := col.Length()
 				vecData := make([]string, 0)
 				for i := 0; i < len(mrs.Data); i++ {
-					vecData = append(vecData, mrs.Data[i][colIdx].(types.Datetime).String())
+					vecData = append(vecData, mrs.Data[i][colIdx].(types.Datetime).String2(int32(scale)))
 				}
-				bat.Vecs[colIdx] = testutil.NewDatetimeVector(len(mrs.Data), types.T_datetime.ToType(), mp, false, vecData)
+				typ := types.T_datetime.ToType()
+				typ.Scale = int32(scale)
+				bat.Vecs[colIdx] = testutil.NewDatetimeVector(len(mrs.Data), typ, mp, false, vecData)
 			case defines.MYSQL_TYPE_FLOAT:
 				vecData := make([]float32, 0)
 				for i := 0; i < len(mrs.Data); i++ {
@@ -3792,6 +3872,48 @@ func Test_appendResultSet2(t *testing.T) {
 				convey.So(err, convey.ShouldBeNil)
 
 				err = proto.appendResultSetBinaryRow2(mrs, colSlices, 0)
+				convey.So(err, convey.ShouldBeNil)
+			}
+			fun()
+		}
+	})
+}
+
+func Test_appendResultSet3(t *testing.T) {
+	ctx := context.TODO()
+	convey.Convey("append result set", t, func() {
+		sv, err := getSystemVariables("test/system_vars_config.toml")
+		if err != nil {
+			t.Error(err)
+		}
+		pu := config.NewParameterUnit(sv, nil, nil, nil)
+		pu.SV.SkipCheckUser = true
+		pu.SV.KillRountinesInterval = 0
+		setSessionAlloc("", NewLeakCheckAllocator())
+		setPu("", pu)
+		ioses, err := NewIOSession(&testConn{}, pu, "")
+		convey.ShouldBeNil(err)
+		proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
+
+		ses := NewSession(ctx, "", proto, nil)
+		proto.ses = ses
+
+		kases := makeKases()
+		for _, kse := range kases {
+			mrs := kse.mrs
+			bat := kse.bat
+
+			fun := func() {
+				colSlices := &ColumnSlices{
+					ctx:             context.TODO(),
+					colIdx2SliceIdx: make([]int, len(bat.Vecs)),
+					dataSet:         bat,
+				}
+				defer colSlices.Close()
+				err = convertBatchToSlices(context.TODO(), ses, bat, colSlices)
+				convey.So(err, convey.ShouldBeNil)
+
+				err = proto.appendResultSetTextRow2(mrs, colSlices, 0)
 				convey.So(err, convey.ShouldBeNil)
 			}
 			fun()
