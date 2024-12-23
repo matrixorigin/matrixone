@@ -268,6 +268,7 @@ select count(*) from snapshot_read.users;
 -- @session
 
 restore account test_account database snapshot_read table users from snapshot sp_01;
+restore account test_account from snapshot sp_01;
 
 -- @session:id=5&user=test_account:test_user&password=111
 select count(*) from snapshot_read.users;

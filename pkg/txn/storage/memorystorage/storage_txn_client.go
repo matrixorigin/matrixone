@@ -198,7 +198,7 @@ func (s *StorageTxnOperator) Debug(ctx context.Context, ops []txn.TxnRequest) (*
 
 func (s *StorageTxnOperator) Commit(ctx context.Context) error {
 	for _, storage := range s.storages {
-		if _, err := storage.Commit(ctx, s.meta); err != nil {
+		if _, err := storage.Commit(ctx, s.meta, nil, nil); err != nil {
 			return err
 		}
 	}
