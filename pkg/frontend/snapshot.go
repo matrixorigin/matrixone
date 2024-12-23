@@ -685,7 +685,7 @@ func checkRestorePriv(ctx context.Context, ses *Session, snapshot *snapshotRecor
 			return moerr.NewInternalError(ctx, "can't restore db from table level snapshot")
 		}
 		if string(stmt.AccountName) != ses.GetTenantInfo().GetTenant() {
-			return moerr.NewInternalError(ctx, "can't restore table from other account's snapshot")
+			return moerr.NewInternalError(ctx, "can't restore database from other account's snapshot")
 		}
 		if snapshot.level == tree.RESTORELEVELDATABASE.String() && snapshot.databaseName != string(stmt.DatabaseName) {
 			return moerr.NewInternalErrorf(ctx, "databaseName(%v) does not match snapshot.databaseName(%v)", string(stmt.DatabaseName), snapshot.databaseName)

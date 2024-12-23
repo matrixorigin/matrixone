@@ -279,6 +279,8 @@ use snapshot_read;
 drop table students;
 drop table users;
 restore account test_account database snapshot_read from snapshot sp_01;
+internal error: can't restore database from other account's snapshot
+restore account test_account from snapshot sp_01;
 select count(*) from snapshot_read.students;
 count(*)
 50
@@ -287,6 +289,8 @@ count(*)
 11
 drop database snapshot_read;
 restore account test_account database snapshot_read from snapshot sp_01;
+internal error: can't restore database from other account's snapshot
+restore account test_account from snapshot sp_01;
 select count(*) from snapshot_read.students;
 count(*)
 50
