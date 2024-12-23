@@ -512,9 +512,7 @@ func Test_RunnerStore3(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		select {
-		case <-ii2.Wait():
-		}
+		<-ii2.Wait()
 	}()
 
 	taken, rollback = store.TakeICKPIntent()

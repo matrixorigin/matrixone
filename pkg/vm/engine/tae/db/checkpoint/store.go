@@ -216,7 +216,6 @@ func (s *runnerStore) UpdateICKPIntent(
 			return
 		}
 	}
-	return
 }
 
 func (s *runnerStore) TakeICKPIntent() (taken *CheckpointEntry, rollback func()) {
