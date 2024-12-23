@@ -367,8 +367,8 @@ func (slices *ColumnSlices) GetUint64(r uint64, i uint64) (uint64, error) {
 		return uint64(slices.arrUint32[sliceIdx][r]), nil
 	case types.T_int64:
 		return uint64(slices.arrInt64[sliceIdx][r]), nil
-	case types.T_uint64:
-		return uint64(slices.arrUint64[sliceIdx][r]), nil
+	case types.T_uint64, types.T_bit:
+		return slices.arrUint64[sliceIdx][r], nil
 	default:
 		return 0, moerr.NewInternalError(slices.ctx, "invalid uint64 slice")
 	}
@@ -395,7 +395,7 @@ func (slices *ColumnSlices) GetInt64(r uint64, i uint64) (int64, error) {
 		return int64(slices.arrUint32[sliceIdx][r]), nil
 	case types.T_int64:
 		return slices.arrInt64[sliceIdx][r], nil
-	case types.T_uint64:
+	case types.T_uint64, types.T_bit:
 		return int64(slices.arrUint64[sliceIdx][r]), nil
 	default:
 		return 0, moerr.NewInternalError(slices.ctx, "invalid int64 slice")
