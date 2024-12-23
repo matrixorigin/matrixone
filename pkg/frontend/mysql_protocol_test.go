@@ -21,6 +21,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+	"math/rand"
 	"net"
 	"reflect"
 	"strconv"
@@ -653,6 +654,170 @@ func TestReadStringLenEnc(t *testing.T) {
 //	wg.Wait()
 //}
 
+func makeMysqlBoolResultSet() *MysqlResultSet {
+	var rs = &MysqlResultSet{}
+
+	name := "Bool"
+
+	mysqlCol := new(MysqlColumn)
+	mysqlCol.SetName(name)
+	mysqlCol.SetOrgName(name + "OrgName")
+	mysqlCol.SetColumnType(defines.MYSQL_TYPE_BOOL)
+	mysqlCol.SetSchema(name + "Schema")
+	mysqlCol.SetTable(name + "Table")
+	mysqlCol.SetOrgTable(name + "Table")
+	mysqlCol.SetCharset(uint16(Utf8mb4CollationID))
+
+	rs.AddColumn(mysqlCol)
+	var cases = []bool{true, false}
+	for _, v := range cases {
+		var data = make([]interface{}, 1)
+		data[0] = v
+		rs.AddRow(data)
+	}
+
+	return rs
+}
+
+func makeMysqlBitResultSet() *MysqlResultSet {
+	var rs = &MysqlResultSet{}
+
+	name := "Bit"
+
+	mysqlCol := new(MysqlColumn)
+	mysqlCol.SetName(name)
+	mysqlCol.SetOrgName(name + "OrgName")
+	mysqlCol.SetColumnType(defines.MYSQL_TYPE_BIT)
+	mysqlCol.SetSchema(name + "Schema")
+	mysqlCol.SetTable(name + "Table")
+	mysqlCol.SetOrgTable(name + "Table")
+	mysqlCol.SetCharset(uint16(Utf8mb4CollationID))
+	mysqlCol.SetLength(32)
+	rs.AddColumn(mysqlCol)
+	var cases = []uint64{0x0000FFFF, 0xFFFF0000}
+	for _, v := range cases {
+		var data = make([]interface{}, 1)
+		data[0] = v
+		rs.AddRow(data)
+	}
+
+	return rs
+}
+
+func makeMysqlRowIdResultSet() *MysqlResultSet {
+	var rs = &MysqlResultSet{}
+
+	name := "Rowid"
+
+	mysqlCol := new(MysqlColumn)
+	mysqlCol.SetName(name)
+	mysqlCol.SetOrgName(name + "OrgName")
+	mysqlCol.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	mysqlCol.SetSchema(name + "Schema")
+	mysqlCol.SetTable(name + "Table")
+	mysqlCol.SetOrgTable(name + "Table")
+	mysqlCol.SetCharset(uint16(Utf8mb4CollationID))
+	rs.AddColumn(mysqlCol)
+
+	var cases = []types.Rowid{}
+	for i := 0; i < 8; i++ {
+		rid1 := types.Rowid{}
+		rid1[i] = byte('a' + i)
+		cases = append(cases, rid1)
+	}
+	for _, v := range cases {
+		var data = make([]interface{}, 1)
+		data[0] = v
+		rs.AddRow(data)
+	}
+
+	return rs
+}
+
+func makeMysqlJsonResultSet() *MysqlResultSet {
+	var rs = &MysqlResultSet{}
+
+	name := "Json"
+
+	mysqlCol := new(MysqlColumn)
+	mysqlCol.SetName(name)
+	mysqlCol.SetOrgName(name + "OrgName")
+	mysqlCol.SetColumnType(defines.MYSQL_TYPE_JSON)
+	mysqlCol.SetSchema(name + "Schema")
+	mysqlCol.SetTable(name + "Table")
+	mysqlCol.SetOrgTable(name + "Table")
+	mysqlCol.SetCharset(uint16(Utf8mb4CollationID))
+	rs.AddColumn(mysqlCol)
+
+	var cases = []bytejson.ByteJson{}
+	for i := 0; i < 8; i++ {
+		json, _ := bytejson.CreateByteJSON("abc")
+		cases = append(cases, json)
+	}
+	for _, v := range cases {
+		var data = make([]interface{}, 1)
+		data[0] = v
+		rs.AddRow(data)
+	}
+
+	return rs
+}
+
+func makeMysqlDecimalResultSet() *MysqlResultSet {
+	var rs = &MysqlResultSet{}
+
+	name := "Decimal"
+
+	mysqlCol := new(MysqlColumn)
+	mysqlCol.SetName(name)
+	mysqlCol.SetOrgName(name + "OrgName")
+	mysqlCol.SetColumnType(defines.MYSQL_TYPE_DECIMAL)
+	mysqlCol.SetSchema(name + "Schema")
+	mysqlCol.SetTable(name + "Table")
+	mysqlCol.SetOrgTable(name + "Table")
+	mysqlCol.SetCharset(uint16(Utf8mb4CollationID))
+
+	rs.AddColumn(mysqlCol)
+	var cases = []types.Decimal64{0x0000FFFF, 0xFFFF0000}
+	for _, v := range cases {
+		var data = make([]interface{}, 1)
+		data[0] = v
+		rs.AddRow(data)
+	}
+
+	return rs
+}
+
+func makeMysqlUUIDResultSet() *MysqlResultSet {
+	var rs = &MysqlResultSet{}
+
+	name := "uuid"
+
+	mysqlCol := new(MysqlColumn)
+	mysqlCol.SetName(name)
+	mysqlCol.SetOrgName(name + "OrgName")
+	mysqlCol.SetColumnType(defines.MYSQL_TYPE_UUID)
+	mysqlCol.SetSchema(name + "Schema")
+	mysqlCol.SetTable(name + "Table")
+	mysqlCol.SetOrgTable(name + "Table")
+	mysqlCol.SetCharset(uint16(Utf8mb4CollationID))
+
+	rs.AddColumn(mysqlCol)
+	var cases = []types.Uuid{}
+	for i := 0; i < 4; i++ {
+		uid := types.Uuid{}
+		uid[i] = byte('a' + i)
+		cases = append(cases, uid)
+	}
+	for _, v := range cases {
+		var data = make([]interface{}, 1)
+		data[0] = v
+		rs.AddRow(data)
+	}
+
+	return rs
+}
+
 func makeMysqlTinyIntResultSet(unsigned bool) *MysqlResultSet {
 	var rs = &MysqlResultSet{}
 
@@ -1087,7 +1252,7 @@ func makeMysqlTimeResultSet() *MysqlResultSet {
 func makeMysqlDatetimeResultSet() *MysqlResultSet {
 	var rs = &MysqlResultSet{}
 
-	name := "Date"
+	name := "Datetime"
 
 	mysqlCol := new(MysqlColumn)
 	mysqlCol.SetName(name)
@@ -1104,6 +1269,72 @@ func makeMysqlDatetimeResultSet() *MysqlResultSet {
 	d2, _ := types.ParseDatetime("2018-04-28 10:21:15.123", 0)
 	d3, _ := types.ParseDatetime("2015-03-03 12:12:12", 0)
 	var cases = []types.Datetime{
+		d1,
+		d2,
+		d3,
+	}
+	for _, v := range cases {
+		var data = make([]interface{}, 1)
+		data[0] = v
+		rs.AddRow(data)
+	}
+
+	return rs
+}
+
+func makeMysqlDatetimeResultSet2() *MysqlResultSet {
+	var rs = &MysqlResultSet{}
+
+	name := "Datetime"
+
+	mysqlCol := new(MysqlColumn)
+	mysqlCol.SetName(name)
+	mysqlCol.SetOrgName(name + "OrgName")
+	mysqlCol.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
+	mysqlCol.SetSchema(name + "Schema")
+	mysqlCol.SetTable(name + "Table")
+	mysqlCol.SetOrgTable(name + "Table")
+	mysqlCol.SetCharset(uint16(Utf8mb4CollationID))
+
+	rs.AddColumn(mysqlCol)
+
+	d1, _ := types.ParseDatetime("2018-04-28 10:21:15", 0)
+	d2, _ := types.ParseDatetime("2018-04-28 10:21:15.123", 0)
+	d3, _ := types.ParseDatetime("2015-03-03 12:12:12", 0)
+	var cases = []types.Datetime{
+		d1,
+		d2,
+		d3,
+	}
+	for _, v := range cases {
+		var data = make([]interface{}, 1)
+		data[0] = v
+		rs.AddRow(data)
+	}
+
+	return rs
+}
+
+func makeMysqlTimestampResultSet() *MysqlResultSet {
+	var rs = &MysqlResultSet{}
+
+	name := "timestamp"
+
+	mysqlCol := new(MysqlColumn)
+	mysqlCol.SetName(name)
+	mysqlCol.SetOrgName(name + "OrgName")
+	mysqlCol.SetColumnType(defines.MYSQL_TYPE_TIMESTAMP)
+	mysqlCol.SetSchema(name + "Schema")
+	mysqlCol.SetTable(name + "Table")
+	mysqlCol.SetOrgTable(name + "Table")
+	mysqlCol.SetCharset(uint16(Utf8mb4CollationID))
+
+	rs.AddColumn(mysqlCol)
+
+	d1, _ := types.ParseTimestamp(time.UTC, "2012-01-01 11:11:11", 6)
+	d2, _ := types.ParseTimestamp(time.UTC, "2012-01-01 11:11:11", 6)
+	d3, _ := types.ParseTimestamp(time.UTC, "2012-01-01 11:11:11", 6)
+	var cases = []types.Timestamp{
 		d1,
 		d2,
 		d3,
@@ -3164,6 +3395,30 @@ func makeKases() []kase {
 
 	kases1 := []kase{
 		{
+			sql: "select bool",
+			mrs: makeMysqlBoolResultSet(),
+		},
+		{
+			sql: "select bit",
+			mrs: makeMysqlBitResultSet(),
+		},
+		{
+			sql: "select rowid",
+			mrs: makeMysqlRowIdResultSet(),
+		},
+		{
+			sql: "select json",
+			mrs: makeMysqlJsonResultSet(),
+		},
+		{
+			sql: "select decimal",
+			mrs: makeMysqlDecimalResultSet(),
+		},
+		{
+			sql: "select uuid",
+			mrs: makeMysqlUUIDResultSet(),
+		},
+		{
 			sql: "select tiny",
 			mrs: makeMysqlTinyIntResultSet(false),
 		},
@@ -3226,7 +3481,11 @@ func makeKases() []kase {
 		},
 		{
 			sql: "select datetime",
-			mrs: makeMysqlDatetimeResultSet(),
+			mrs: makeMysqlDatetimeResultSet2(),
+		},
+		{
+			sql: "select timestamp",
+			mrs: makeMysqlTimestampResultSet(),
 		},
 		{
 			sql: "select 16mbrow",
@@ -3270,6 +3529,18 @@ func makeKases() []kase {
 			col, err := mrs.GetColumn(context.TODO(), colIdx)
 			convey.So(err, convey.ShouldBeNil)
 			switch col.ColumnType() {
+			case defines.MYSQL_TYPE_BOOL:
+				vecData := make([]bool, 0)
+				for i := 0; i < len(mrs.Data); i++ {
+					vecData = append(vecData, mrs.Data[i][colIdx].(bool))
+				}
+				bat.Vecs[colIdx] = testutil.NewBoolVector(len(mrs.Data), types.T_bool.ToType(), mp, false, vecData)
+			case defines.MYSQL_TYPE_BIT:
+				vecData := make([]uint64, 0)
+				for i := 0; i < len(mrs.Data); i++ {
+					vecData = append(vecData, mrs.Data[i][colIdx].(uint64))
+				}
+				bat.Vecs[colIdx] = testutil.NewUInt64Vector(len(mrs.Data), types.T_bit.ToType(), mp, false, vecData)
 			case defines.MYSQL_TYPE_TINY:
 				switch mrs.Data[0][colIdx].(type) {
 				case int8:
@@ -3333,18 +3604,35 @@ func makeKases() []kase {
 					bat.Vecs[colIdx] = testutil.NewUInt64Vector(len(mrs.Data), types.T_uint64.ToType(), mp, false, vecData)
 				}
 			case defines.MYSQL_TYPE_VARCHAR:
-				vecData := make([]string, 0)
-				for i := 0; i < len(mrs.Data); i++ {
-					vecData = append(vecData, string(mrs.Data[i][colIdx].([]uint8)))
+				switch mrs.Data[0][colIdx].(type) {
+				case []uint8:
+					vecData := make([]string, 0)
+					for i := 0; i < len(mrs.Data); i++ {
+						vecData = append(vecData, string(mrs.Data[i][colIdx].([]uint8)))
+					}
+					bat.Vecs[colIdx] = testutil.NewStringVector(len(mrs.Data), types.T_binary.ToType(), mp, false, vecData)
+				case types.Rowid:
+					vecData := make([]string, 0)
+					for i := 0; i < len(mrs.Data); i++ {
+						vecData = append(vecData, string(mrs.Data[i][colIdx].(types.Rowid).String()))
+					}
+					bat.Vecs[colIdx] = testutil.NewStringVector(len(mrs.Data), types.T_Rowid.ToType(), mp, false, vecData)
 				}
-				bat.Vecs[colIdx] = testutil.NewStringVector(len(mrs.Data), types.T_binary.ToType(), mp, false, vecData)
-
 			case defines.MYSQL_TYPE_VAR_STRING:
-				vecData := make([]string, 0)
-				for i := 0; i < len(mrs.Data); i++ {
-					vecData = append(vecData, string(mrs.Data[i][colIdx].([]uint8)))
+				switch mrs.Data[0][colIdx].(type) {
+				case []uint8:
+					vecData := make([]string, 0)
+					for i := 0; i < len(mrs.Data); i++ {
+						vecData = append(vecData, string(mrs.Data[i][colIdx].([]uint8)))
+					}
+					bat.Vecs[colIdx] = testutil.NewStringVector(len(mrs.Data), types.T_varchar.ToType(), mp, false, vecData)
+				case types.Datetime:
+					vecData := make([]string, 0)
+					for i := 0; i < len(mrs.Data); i++ {
+						vecData = append(vecData, mrs.Data[i][colIdx].(types.Datetime).String())
+					}
+					bat.Vecs[colIdx] = testutil.NewDatetimeVector(len(mrs.Data), types.T_datetime.ToType(), mp, false, vecData)
 				}
-				bat.Vecs[colIdx] = testutil.NewStringVector(len(mrs.Data), types.T_varchar.ToType(), mp, false, vecData)
 			case defines.MYSQL_TYPE_STRING:
 				vecData := make([]string, 0)
 				for i := 0; i < len(mrs.Data); i++ {
@@ -3383,6 +3671,28 @@ func makeKases() []kase {
 					vecData = append(vecData, mrs.Data[i][colIdx].(float64))
 				}
 				bat.Vecs[colIdx] = testutil.NewFloat64Vector(len(mrs.Data), types.T_float64.ToType(), mp, false, vecData)
+
+			case defines.MYSQL_TYPE_JSON:
+				bat.Vecs[colIdx] = testutil.NewJsonVector(len(mrs.Data), types.T_json.ToType(), mp, true, nil)
+			case defines.MYSQL_TYPE_DECIMAL:
+				vecData := make([]types.Decimal64, 0)
+				for i := 0; i < len(mrs.Data); i++ {
+					vecData = append(vecData, mrs.Data[i][colIdx].(types.Decimal64))
+				}
+				bat.Vecs[colIdx] = testutil.NewDecimal64Vector(len(mrs.Data), types.T_decimal64.ToType(), mp, false, vecData)
+			case defines.MYSQL_TYPE_UUID:
+				vecData := make([]types.Uuid, 0)
+				for i := 0; i < len(mrs.Data); i++ {
+					vecData = append(vecData, mrs.Data[i][colIdx].(types.Uuid))
+				}
+				bat.Vecs[colIdx] = NewUUIDVector(len(mrs.Data), types.T_uuid.ToType(), mp, false, vecData)
+			case defines.MYSQL_TYPE_TIMESTAMP:
+				vecData := make([]string, 0)
+				for i := 0; i < len(mrs.Data); i++ {
+					vecData = append(vecData, mrs.Data[i][colIdx].(types.Timestamp).String2(time.UTC, 6))
+				}
+				bat.Vecs[colIdx] = NewTimestampVector(len(mrs.Data), types.T_timestamp.ToType(), mp, false, vecData)
+
 			default:
 				panic(fmt.Sprintf("usp %v", col.ColumnType()))
 			}
@@ -3390,6 +3700,61 @@ func makeKases() []kase {
 		kases[i].bat = bat
 	}
 	return kases
+}
+
+func NewTimestampVector(n int, typ types.Type, m *mpool.MPool, random bool, vs []string) *vector.Vector {
+	vec := vector.NewVec(typ)
+	if vs != nil {
+		for i := range vs {
+			d, err := types.ParseTimestamp(time.UTC, vs[i], 6)
+			if err != nil {
+				return nil
+			}
+			if err := vector.AppendFixed(vec, d, false, m); err != nil {
+				vec.Free(m)
+				return nil
+			}
+		}
+		return vec
+	}
+	for i := 0; i < n; i++ {
+		v := i
+		if random {
+			v = rand.Int()
+		}
+		if err := vector.AppendFixed(vec, types.Timestamp(v), false, m); err != nil {
+			vec.Free(m)
+			return nil
+		}
+	}
+	return vec
+}
+
+func NewUUIDVector(n int, typ types.Type, m *mpool.MPool, random bool, vs []types.Uuid) *vector.Vector {
+	vec := vector.NewVec(typ)
+	if vs != nil {
+		for i := range vs {
+			if err := vector.AppendFixed(vec, vs[i], false, m); err != nil {
+				vec.Free(m)
+				return nil
+			}
+		}
+		return vec
+	}
+	for i := 0; i < n; i++ {
+		v := byte(0)
+		if random {
+			v = byte(rand.Intn(8))
+		}
+		d := types.Uuid{}
+		d[0] = 'a' + v
+		if err := vector.AppendFixed(vec, d, false, m); err != nil {
+
+			vec.Free(m)
+			return nil
+		}
+	}
+	return vec
 }
 
 func Test_appendResultSet2(t *testing.T) {
