@@ -126,7 +126,9 @@ func (s *runnerStore) UpdateICKPIntent(
 				WithEndEntryOption(*ts),
 				WithCheckedEntryOption(policyChecked, flushChecked),
 			)
-			newIntent.ResetAge()
+			if old.end.GT(ts) {
+				newIntent.ResetAge()
+			}
 			if s.incrementalIntent.CompareAndSwap(old, newIntent) {
 				intent = newIntent
 				updated = true
