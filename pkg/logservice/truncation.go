@@ -243,6 +243,11 @@ func (l *store) processShardTruncateLog(ctx context.Context, shardID uint64) err
 				zap.Error(err))
 			return err
 		}
+		l.runtime.Logger().Info("do truncate log",
+			zap.Uint64("shard ID", shardID),
+			zap.Uint64("replica ID", replicaID),
+			zap.Uint64("lsn", lsn),
+		)
 		return nil
 	}
 
