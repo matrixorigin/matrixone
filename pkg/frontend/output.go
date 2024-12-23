@@ -25,8 +25,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
-// extractRowFromEveryVector gets the j row from the every vector and outputs the row
-func extractRowFromEveryVector(ctx context.Context, ses FeSession, dataSet *batch.Batch, j int, row []any) error {
+// extractRowFromEveryVector gets the j row from the every vector and outputs the row.
+// !!!NOTE!!! use safeRefSlice before you know what you are doing.
+// safeRefSlice is used to determine whether to copy the slice or not.
+// types.T_json, types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink are
+// stored as bytes slice.
+func extractRowFromEveryVector(ctx context.Context, ses FeSession, dataSet *batch.Batch, j int, row []any, safeRefSlice bool) error {
 	var rowIndex = j
 	for i, vec := range dataSet.Vecs { //col index
 		rowIndexBackup := rowIndex
@@ -38,7 +42,7 @@ func extractRowFromEveryVector(ctx context.Context, ses FeSession, dataSet *batc
 			rowIndex = 0
 		}
 
-		err := extractRowFromVector(ctx, ses, vec, i, row, rowIndex)
+		err := extractRowFromVector(ctx, ses, vec, i, row, rowIndex, safeRefSlice)
 		if err != nil {
 			return err
 		}
@@ -48,7 +52,7 @@ func extractRowFromEveryVector(ctx context.Context, ses FeSession, dataSet *batc
 }
 
 // extractRowFromVector gets the rowIndex row from the i vector
-func extractRowFromVector(ctx context.Context, ses FeSession, vec *vector.Vector, i int, row []any, rowIndex int) error {
+func extractRowFromVector(ctx context.Context, ses FeSession, vec *vector.Vector, i int, row []any, rowIndex int, safeRefSlice bool) error {
 	if vec.IsConstNull() || vec.GetNulls().Contains(uint64(rowIndex)) {
 		row[i] = nil
 		return nil
@@ -56,7 +60,7 @@ func extractRowFromVector(ctx context.Context, ses FeSession, vec *vector.Vector
 
 	switch vec.GetType().Oid { //get col
 	case types.T_json:
-		row[i] = types.DecodeJson(copyBytes(vec.GetBytesAt(rowIndex), true))
+		row[i] = types.DecodeJson(copyBytes(vec.GetBytesAt(rowIndex), !safeRefSlice))
 	case types.T_bool:
 		row[i] = vector.GetFixedAtNoTypeCheck[bool](vec, rowIndex)
 	case types.T_bit:
@@ -82,7 +86,7 @@ func extractRowFromVector(ctx context.Context, ses FeSession, vec *vector.Vector
 	case types.T_float64:
 		row[i] = vector.GetFixedAtNoTypeCheck[float64](vec, rowIndex)
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink:
-		row[i] = copyBytes(vec.GetBytesAt(rowIndex), true)
+		row[i] = copyBytes(vec.GetBytesAt(rowIndex), !safeRefSlice)
 	case types.T_array_float32:
 		// NOTE: Don't merge it with T_varchar. You will get raw binary in the SQL output
 		//+------------------------------+
