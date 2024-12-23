@@ -29,9 +29,14 @@ import (
 type checkpointJob struct {
 	doneCh chan struct{}
 	runner *runner
+
+	runICKPFunc func(context.Context, *runner) error
 }
 
 func (job *checkpointJob) RunICKP(ctx context.Context) (err error) {
+	if job.runICKPFunc != nil {
+		return job.runICKPFunc(ctx, job.runner)
+	}
 	select {
 	case <-ctx.Done():
 		return context.Cause(ctx)
@@ -157,7 +162,8 @@ type checkpointExecutor struct {
 	active  atomic.Bool
 	running atomic.Pointer[checkpointJob]
 
-	runner *runner
+	runner      *runner
+	runICKPFunc func(context.Context, *runner) error
 }
 
 func newCheckpointExecutor(
@@ -193,8 +199,9 @@ func (e *checkpointExecutor) RunICKPJob() (err error) {
 		err = ErrPendingCheckpoint
 	}
 	job := &checkpointJob{
-		doneCh: make(chan struct{}),
-		runner: e.runner,
+		doneCh:      make(chan struct{}),
+		runner:      e.runner,
+		runICKPFunc: e.runICKPFunc,
 	}
 	if !e.running.CompareAndSwap(nil, job) {
 		err = ErrPendingCheckpoint
