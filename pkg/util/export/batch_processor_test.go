@@ -357,10 +357,10 @@ func Test_newBufferHolder_AddAfterStop(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			buf := newBufferHolder(tt.args.ctx, tt.args.name, tt.args.impl, tt.args.signal, tt.args.c)
 			buf.Start()
-			buf.Add(newDummy(1))
+			buf.Add(newDummy(1), true)
 			buf.Stop()
-			buf.Add(newDummy(2))
-			buf.Add(newDummy(3))
+			buf.Add(newDummy(2), true)
+			buf.Add(newDummy(3), true)
 			b, _ := buf.buffer.(*dummyBuffer)
 			require.Equal(t, []batchpipe.HasName{newDummy(1)}, b.arr)
 		})
