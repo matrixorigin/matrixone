@@ -110,7 +110,12 @@ func (s *taeStorage) Debug(ctx context.Context,
 		resp, _ := handleRead(ctx, txnMeta, data, s.taeHandler.HandleStorageUsage)
 		return resp.Read()
 	case uint32(api.OpCode_OpSnapshotRead):
-		resp, _ := handleRead(ctx, txnMeta, data, s.taeHandler.HandleSnapshotRead)
+		resp, err := handleRead(ctx, txnMeta, data, s.taeHandler.HandleSnapshotRead)
+		if err != nil {
+			return types.Encode(&cmd_util.SnapshotReadResp{
+				Succeed: false,
+			})
+		}
 		return resp.Read()
 	case uint32(api.OpCode_OpInterceptCommit):
 		resp, err := handleRead(ctx, txnMeta, data, s.taeHandler.HandleInterceptCommit)
@@ -134,6 +139,18 @@ func (s *taeStorage) Debug(ctx context.Context,
 		return resp, nil
 	case uint32(api.OpCode_OpGetLatestCheckpoint):
 		resp, err := handleRead(ctx, txnMeta, data, s.taeHandler.HandleGetLatestCheckpoint)
+		if err != nil {
+			return nil, err
+		}
+		return resp.Read()
+	case uint32(api.OpCode_OpGetChangedTableList):
+		resp, err := handleRead(ctx, txnMeta, data, s.taeHandler.HandleGetChangedTableList)
+		if err != nil {
+			return nil, err
+		}
+		return resp.Read()
+	case uint32(api.OpCode_OpFaultInject):
+		resp, err := handleRead(ctx, txnMeta, data, s.taeHandler.HandleFaultInject)
 		if err != nil {
 			return nil, err
 		}

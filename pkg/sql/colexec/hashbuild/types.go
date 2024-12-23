@@ -16,9 +16,9 @@ package hashbuild
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
-	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashmap_util"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -30,6 +30,7 @@ const (
 	BuildHashMap = iota
 	HandleRuntimeFilter
 	SendJoinMap
+	SendSucceed
 )
 
 type container struct {
@@ -47,7 +48,13 @@ type HashBuild struct {
 	Conditions        []*plan.Expr
 	JoinMapTag        int32
 	JoinMapRefCnt     int32
-	RuntimeFilterSpec *pbplan.RuntimeFilterSpec
+	RuntimeFilterSpec *plan.RuntimeFilterSpec
+
+	IsDedup           bool
+	OnDuplicateAction plan.Node_OnDuplicateAction
+	DedupColName      string
+	DedupColTypes     []plan.Type
+
 	vm.OperatorBase
 }
 
@@ -83,21 +90,19 @@ func (hashBuild *HashBuild) Release() {
 }
 
 func (hashBuild *HashBuild) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	runtimeSucceed := hashBuild.ctr.state > HandleRuntimeFilter
+	mapSucceed := hashBuild.ctr.state == SendSucceed
+
+	hashBuild.ctr.hashmapBuilder.Reset(proc, !mapSucceed)
 	hashBuild.ctr.state = BuildHashMap
 	hashBuild.ctr.runtimeFilterIn = false
-	message.FinalizeRuntimeFilter(hashBuild.RuntimeFilterSpec, pipelineFailed, err, proc.GetMessageBoard())
-	message.FinalizeJoinMapMessage(proc.GetMessageBoard(), hashBuild.JoinMapTag, false, 0, pipelineFailed, err)
-	if pipelineFailed || err != nil {
-		hashBuild.ctr.hashmapBuilder.FreeWithError(proc)
-	} else {
-		hashBuild.ctr.hashmapBuilder.Reset(proc)
-	}
+	message.FinalizeRuntimeFilter(hashBuild.RuntimeFilterSpec, runtimeSucceed, proc.GetMessageBoard())
+	message.FinalizeJoinMapMessage(proc.GetMessageBoard(), hashBuild.JoinMapTag, false, 0, mapSucceed)
 }
 func (hashBuild *HashBuild) Free(proc *process.Process, pipelineFailed bool, err error) {
+	hashBuild.ctr.hashmapBuilder.Free(proc)
+}
 
-	if pipelineFailed || err != nil {
-		hashBuild.ctr.hashmapBuilder.FreeWithError(proc)
-	} else {
-		hashBuild.ctr.hashmapBuilder.Free(proc)
-	}
+func (hashBuild *HashBuild) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
+	return input, nil
 }

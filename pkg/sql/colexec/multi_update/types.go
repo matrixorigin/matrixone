@@ -27,12 +27,20 @@ var _ vm.Operator = new(MultiUpdate)
 
 const opName = "MultiUpdate"
 
-type updateTableType int
+type UpdateAction int
 
 const (
-	updateMainTable updateTableType = iota
-	updateUniqueIndexTable
-	updateSecondaryIndexTable
+	UpdateWriteTable UpdateAction = iota
+	UpdateWriteS3
+	UpdateFlushS3Info
+)
+
+type UpdateTableType int
+
+const (
+	UpdateMainTable UpdateTableType = iota
+	UpdateUniqueIndexTable
+	UpdateSecondaryIndexTable
 )
 
 type actionType int
@@ -60,39 +68,48 @@ type MultiUpdate struct {
 	ctr            container
 	MultiUpdateCtx []*MultiUpdateCtx
 
-	ToWriteS3              bool
+	Action                 UpdateAction
 	IsOnduplicateKeyUpdate bool
 
 	Engine engine.Engine
 
+	// SegmentMap map[string]int32
+
 	vm.OperatorBase
+}
+
+type updateCtxInfo struct {
+	Sources     []engine.Relation
+	tableType   UpdateTableType
+	insertAttrs []string
 }
 
 type container struct {
 	state        vm.CtrState
 	affectedRows uint64
+	action       actionType
 
-	s3Writer *s3Writer
+	s3Writer       *s3Writer
+	updateCtxInfos map[string]*updateCtxInfo
 
 	insertBuf []*batch.Batch
 	deleteBuf []*batch.Batch
 }
 
 type MultiUpdateCtx struct {
-	ref      *plan.ObjectRef
-	tableDef *plan.TableDef
+	ObjRef   *plan.ObjectRef
+	TableDef *plan.TableDef
 
-	tableType updateTableType
+	InsertCols []int
+	DeleteCols []int
 
-	insertCols []int
-	deleteCols []int
+	PartitionTableIDs   []uint64 // Align array index with the partition number
+	PartitionTableNames []string // Align array index with the partition number
+	OldPartitionIdx     int      // The array index position of the partition expression column for delete
+	NewPartitionIdx     int      // The array index position of the partition expression column for insert
 
-	partitionTableIDs   []int32  // Align array index with the partition number
-	partitionTableNames []string // Align array index with the partition number
-	partitionIdx        int      // The array index position of the partition expression column
-
-	source           engine.Relation
-	partitionSources []engine.Relation // Align array index with the partition number
+	// Source           engine.Relation
+	// PartitionSources []engine.Relation // Align array index with the partition number
 }
 
 func (update MultiUpdate) TypeName() string {
@@ -128,8 +145,10 @@ func (update *MultiUpdate) Reset(proc *process.Process, pipelineFailed bool, err
 	if update.ctr.s3Writer != nil {
 		update.ctr.s3Writer.reset(proc)
 	}
+	for _, info := range update.ctr.updateCtxInfos {
+		info.Sources = nil
+	}
 	update.ctr.state = vm.Build
-	update.ctr.affectedRows = 0
 }
 
 func (update *MultiUpdate) Free(proc *process.Process, pipelineFailed bool, err error) {
@@ -152,8 +171,40 @@ func (update *MultiUpdate) Free(proc *process.Process, pipelineFailed bool, err 
 		update.ctr.s3Writer.free(proc)
 		update.ctr.s3Writer = nil
 	}
+
+	update.ctr.updateCtxInfos = nil
+}
+
+func (update *MultiUpdate) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
+	return input, nil
 }
 
 func (update *MultiUpdate) GetAffectedRows() uint64 {
 	return update.ctr.affectedRows
+}
+
+func (update *MultiUpdate) SetAffectedRows(affectedRows uint64) {
+	update.ctr.affectedRows = affectedRows
+}
+
+func (update *MultiUpdate) addInsertAffectRows(tableType UpdateTableType, rowCount uint64) {
+	if tableType != UpdateMainTable {
+		return
+	}
+	switch update.ctr.action {
+	case actionInsert:
+		update.ctr.affectedRows += rowCount
+	}
+}
+
+func (update *MultiUpdate) addDeleteAffectRows(tableType UpdateTableType, rowCount uint64) {
+	if tableType != UpdateMainTable {
+		return
+	}
+	switch update.ctr.action {
+	case actionDelete:
+		update.ctr.affectedRows += rowCount
+	case actionUpdate:
+		update.ctr.affectedRows += rowCount
+	}
 }

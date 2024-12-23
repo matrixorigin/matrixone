@@ -47,7 +47,7 @@ GO_VERSION=$(shell go version)
 BRANCH_NAME=$(shell git rev-parse --abbrev-ref HEAD)
 LAST_COMMIT_ID=$(shell git rev-parse --short HEAD)
 BUILD_TIME=$(shell date +%s)
-MO_VERSION=$(shell git describe --always --contains $(shell git rev-parse HEAD))
+MO_VERSION=$(shell git symbolic-ref -q --short HEAD || git describe --tags --exact-match)
 GO_MODULE=$(shell go list -m)
 MUSL_DIR=$(ROOT_DIR)/musl
 MUSL_CC=$(MUSL_DIR)/bin/musl-gcc
@@ -98,7 +98,7 @@ pb: vendor-build generate-pb fmt
 RACE_OPT :=
 DEBUG_OPT :=
 CGO_DEBUG_OPT :=
-CGO_OPTS=CGO_CFLAGS="-I$(ROOT_DIR)/cgo " CGO_LDFLAGS="-L$(ROOT_DIR)/cgo -lm -lmo"
+CGO_OPTS :=
 GOLDFLAGS=-ldflags="-X '$(GO_MODULE)/pkg/version.GoVersion=$(GO_VERSION)' -X '$(GO_MODULE)/pkg/version.BranchName=$(BRANCH_NAME)' -X '$(GO_MODULE)/pkg/version.CommitID=$(LAST_COMMIT_ID)' -X '$(GO_MODULE)/pkg/version.BuildTime=$(BUILD_TIME)' -X '$(GO_MODULE)/pkg/version.Version=$(MO_VERSION)'"
 TAGS :=
 
@@ -108,7 +108,7 @@ cgo:
 
 # build mo-service binary
 .PHONY: build
-build: config cgo
+build: config
 	$(info [Build binary])
 	$(CGO_OPTS) go build $(TAGS) $(RACE_OPT) $(GOLDFLAGS) $(DEBUG_OPT) -o $(BIN_NAME) ./cmd/mo-service
 
@@ -139,7 +139,7 @@ musl:
 
 # build mo-tool
 .PHONY: mo-tool
-mo-tool: config cgo
+mo-tool: config
 	$(info [Build mo-tool tool])
 	$(CGO_OPTS) go build -o mo-tool ./cmd/mo-tool
 
@@ -158,7 +158,7 @@ debug: build
 # Excluding frontend test cases temporarily
 # Argument SKIP_TEST to skip a specific go test
 .PHONY: ut
-ut: config cgo
+ut: config
 	$(info [Unit testing])
 ifeq ($(UNAME_S),Darwin)
 	@cd optools && ./run_ut.sh UT $(SKIP_TEST)
@@ -240,7 +240,7 @@ install-static-check-tools:
 	@go install github.com/apache/skywalking-eyes/cmd/license-eye@v0.4.0
 
 .PHONY: static-check
-static-check: config cgo err-check
+static-check: config err-check
 	$(CGO_OPTS) go vet -vettool=`which molint` ./...
 	$(CGO_OPTS) license-eye -c .licenserc.yml header check
 	$(CGO_OPTS) license-eye -c .licenserc.yml dep check

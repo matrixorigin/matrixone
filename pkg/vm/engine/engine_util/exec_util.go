@@ -16,6 +16,10 @@ package engine_util
 
 import (
 	"context"
+	"time"
+
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -98,6 +102,7 @@ func ForeachObjectsExecute(
 
 func FilterObjects(
 	ctx context.Context,
+	rangesParam engine.RangesParam,
 	fastFilterOp FastFilterOp,
 	loadOp LoadOp,
 	objectFilterOp ObjectFilterOp,
@@ -108,6 +113,7 @@ func FilterObjects(
 	extraObjects []objectio.ObjectStats,
 	outBlocks *objectio.BlockInfoSlice,
 	highSelectivityHint bool,
+	metaPrefetcher func(context.Context) bool,
 	fs fileservice.FileService,
 ) (
 	totalBlocks int,
@@ -120,7 +126,24 @@ func FilterObjects(
 	fastFilterHit int,
 	err error,
 ) {
+	var (
+		start     time.Time
+		threshold time.Duration
+	)
+	if metaPrefetcher != nil {
+		start = time.Now()
+		ok, ms := objectio.PrefetchMetaThresholdInjected()
+		if ok {
+			threshold = time.Duration(ms) * time.Millisecond
+		} else {
+			threshold = time.Second * 10
+		}
+	}
 	onObject := func(objStats *objectio.ObjectStats) (err error) {
+		//if need to shuffle objects
+		if plan2.ShouldSkipObjByShuffle(rangesParam.Rsp, objStats) {
+			return
+		}
 		var ok bool
 		totalBlocks += int(objStats.BlkCnt())
 		if fastFilterOp != nil {
@@ -128,6 +151,13 @@ func FilterObjects(
 			if ok, err = fastFilterOp(objStats); err != nil || !ok {
 				fastFilterHit++
 				return
+			}
+		}
+
+		if metaPrefetcher != nil && time.Since(start) > threshold {
+			// stop sending new request to prefetch if it was received
+			if received := metaPrefetcher(ctx); received {
+				metaPrefetcher = nil
 			}
 		}
 
@@ -217,20 +247,22 @@ func TryFastFilterBlocks(
 	ctx context.Context,
 	snapshotTS timestamp.Timestamp,
 	tableDef *plan.TableDef,
-	exprs []*plan.Expr,
+	rangesParam engine.RangesParam,
 	snapshot *logtailreplay.PartitionState,
 	extraCommittedObjects []objectio.ObjectStats,
 	uncommittedObjects []objectio.ObjectStats,
 	outBlocks *objectio.BlockInfoSlice,
+	metaPrefetcher func(context.Context) bool,
 	fs fileservice.FileService,
 ) (ok bool, err error) {
-	fastFilterOp, loadOp, objectFilterOp, blockFilterOp, seekOp, ok, highSelectivityHint := CompileFilterExprs(exprs, tableDef, fs)
+	fastFilterOp, loadOp, objectFilterOp, blockFilterOp, seekOp, ok, highSelectivityHint := CompileFilterExprs(rangesParam.BlockFilters, tableDef, fs)
 	if !ok {
 		return false, nil
 	}
 
 	err = FilterTxnObjects(
 		ctx,
+		rangesParam,
 		snapshotTS,
 		fastFilterOp,
 		loadOp,
@@ -241,6 +273,7 @@ func TryFastFilterBlocks(
 		extraCommittedObjects,
 		uncommittedObjects,
 		outBlocks,
+		metaPrefetcher,
 		fs,
 		highSelectivityHint,
 	)
@@ -249,6 +282,7 @@ func TryFastFilterBlocks(
 
 func FilterTxnObjects(
 	ctx context.Context,
+	rangesParam engine.RangesParam,
 	snapshotTS timestamp.Timestamp,
 	fastFilterOp FastFilterOp,
 	loadOp LoadOp,
@@ -259,6 +293,7 @@ func FilterTxnObjects(
 	extraCommittedObjects []objectio.ObjectStats,
 	uncommittedObjects []objectio.ObjectStats,
 	outBlocks *objectio.BlockInfoSlice,
+	metaPrefetcher func(context.Context) bool,
 	fs fileservice.FileService,
 	highSelectivityHint bool,
 ) (err error) {
@@ -297,6 +332,7 @@ func FilterTxnObjects(
 		fastFilterTotal, fastFilterHit,
 		err := FilterObjects(
 		ctx,
+		rangesParam,
 		fastFilterOp,
 		loadOp,
 		objectFilterOp,
@@ -307,6 +343,7 @@ func FilterTxnObjects(
 		extraCommittedObjects,
 		outBlocks,
 		highSelectivityHint,
+		metaPrefetcher,
 		fs,
 	)
 

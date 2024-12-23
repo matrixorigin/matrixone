@@ -67,6 +67,9 @@ type cnMergeTask struct {
 	blkIters []*StatsBlkIter
 
 	targetObjSize uint32
+
+	segmentID *objectio.Segmentid
+	num       uint16
 }
 
 func newCNMergeTask(
@@ -124,6 +127,7 @@ func newCNMergeTask(
 		blkCnts:       blkCnts,
 		blkIters:      blkIters,
 		targetObjSize: targetObjSize,
+		segmentID:     objectio.NewSegmentid(),
 	}, nil
 }
 
@@ -244,14 +248,18 @@ func (t *cnMergeTask) prepareCommitEntry() *api.MergeCommitEntry {
 }
 
 func (t *cnMergeTask) PrepareNewWriter() *blockio.BlockWriter {
-	return blockio.ConstructWriter(
+	writer := blockio.ConstructWriterWithSegmentID(
+		t.segmentID,
+		t.num,
 		t.host.version,
 		t.host.seqnums,
 		t.sortkeyPos,
 		t.sortkeyIsPK,
 		false,
 		t.fs,
-	) // TODO obj.isTombstone
+	)
+	t.num++
+	return writer // TODO obj.isTombstone
 }
 
 // readblock reads block data. there is no rowid column, no ablk

@@ -115,6 +115,41 @@ func TestInsertS3PartitionTable(t *testing.T) {
 	runTestCases(t, proc, []*testCase{case1})
 }
 
+func TestInsertHaveNull(t *testing.T) {
+	hasUniqueKey := false
+	hasSecondaryKey := false
+	isPartition := true
+
+	_, ctrl, proc := prepareTestCtx(t, true)
+	eng := prepareTestEng(ctrl)
+
+	batchs, _ := prepareTestInsertBatchs(proc.Mp(), 40, hasUniqueKey, hasSecondaryKey, isPartition)
+	multiUpdateCtxs := prepareTestInsertMultiUpdateCtx(hasUniqueKey, hasSecondaryKey, isPartition)
+	pkNull := batchs[0].Vecs[0].GetNulls()
+	pkNull.Set(0)
+	action := UpdateWriteS3
+	retCase := buildTestCase(multiUpdateCtxs, eng, batchs, 0, action)
+
+	runTestCases(t, proc, []*testCase{retCase})
+}
+
+func TestFlushS3Info(t *testing.T) {
+	hasUniqueKey := false
+	hasSecondaryKey := false
+	isPartition := false
+
+	_, ctrl, proc := prepareTestCtx(t, true)
+	eng := prepareTestEng(ctrl)
+
+	batchs, rowCount := buildFlushS3InfoBatch(proc.GetMPool(), hasUniqueKey, hasSecondaryKey, isPartition)
+
+	multiUpdateCtxs := prepareTestInsertMultiUpdateCtx(hasUniqueKey, hasSecondaryKey, isPartition)
+	action := UpdateFlushS3Info
+	retCase := buildTestCase(multiUpdateCtxs, eng, batchs, rowCount, action)
+
+	runTestCases(t, proc, []*testCase{retCase})
+}
+
 // ----- util function ----
 func buildInsertTestCase(t *testing.T, hasUniqueKey bool, hasSecondaryKey bool, isPartition bool) (*process.Process, *testCase) {
 	_, ctrl, proc := prepareTestCtx(t, false)
@@ -122,8 +157,8 @@ func buildInsertTestCase(t *testing.T, hasUniqueKey bool, hasSecondaryKey bool, 
 
 	batchs, affectRows := prepareTestInsertBatchs(proc.GetMPool(), 2, hasUniqueKey, hasSecondaryKey, isPartition)
 	multiUpdateCtxs := prepareTestInsertMultiUpdateCtx(hasUniqueKey, hasSecondaryKey, isPartition)
-	toWriteS3 := false
-	retCase := buildTestCase(multiUpdateCtxs, eng, batchs, affectRows, toWriteS3)
+	action := UpdateWriteTable
+	retCase := buildTestCase(multiUpdateCtxs, eng, batchs, affectRows, action)
 	return proc, retCase
 }
 
@@ -131,10 +166,10 @@ func buildInsertS3TestCase(t *testing.T, hasUniqueKey bool, hasSecondaryKey bool
 	_, ctrl, proc := prepareTestCtx(t, true)
 	eng := prepareTestEng(ctrl)
 
-	batchs, affectRows := prepareTestInsertBatchs(proc.GetMPool(), 500, hasUniqueKey, hasSecondaryKey, isPartition)
+	batchs, _ := prepareTestInsertBatchs(proc.GetMPool(), 10, hasUniqueKey, hasSecondaryKey, isPartition)
 	multiUpdateCtxs := prepareTestInsertMultiUpdateCtx(hasUniqueKey, hasSecondaryKey, isPartition)
-	toWriteS3 := true
-	retCase := buildTestCase(multiUpdateCtxs, eng, batchs, affectRows, toWriteS3)
+	action := UpdateWriteS3
+	retCase := buildTestCase(multiUpdateCtxs, eng, batchs, 0, action)
 	return proc, retCase
 }
 
@@ -190,10 +225,11 @@ func prepareTestInsertMultiUpdateCtx(hasUniqueKey bool, hasSecondaryKey bool, is
 	objRef, tableDef := getTestMainTable(isPartition)
 
 	updateCtx := &MultiUpdateCtx{
-		ref:        objRef,
-		tableDef:   tableDef,
-		tableType:  updateMainTable,
-		insertCols: []int{0, 1, 2, 3},
+		ObjRef:          objRef,
+		TableDef:        tableDef,
+		InsertCols:      []int{0, 1, 2, 3},
+		OldPartitionIdx: -1,
+		NewPartitionIdx: -1,
 	}
 	colCount := 4
 	updateCtxs := []*MultiUpdateCtx{updateCtx}
@@ -214,10 +250,11 @@ func prepareTestInsertMultiUpdateCtx(hasUniqueKey bool, hasSecondaryKey bool, is
 		uniqueObjRef, uniqueTableDef := getTestUniqueIndexTable(uniqueTblName, isPartition)
 
 		updateCtxs = append(updateCtxs, &MultiUpdateCtx{
-			ref:        uniqueObjRef,
-			tableDef:   uniqueTableDef,
-			tableType:  updateUniqueIndexTable,
-			insertCols: []int{4, 0},
+			ObjRef:          uniqueObjRef,
+			TableDef:        uniqueTableDef,
+			InsertCols:      []int{4, 0},
+			OldPartitionIdx: -1,
+			NewPartitionIdx: -1,
 		})
 		colCount += 1
 	}
@@ -241,25 +278,51 @@ func prepareTestInsertMultiUpdateCtx(hasUniqueKey bool, hasSecondaryKey bool, is
 			secondaryPkPos += 1
 		}
 		updateCtxs = append(updateCtxs, &MultiUpdateCtx{
-			ref:        secondaryIdxObjRef,
-			tableDef:   secondaryIdxTableDef,
-			tableType:  updateSecondaryIndexTable,
-			insertCols: []int{secondaryPkPos, 0},
+			ObjRef:          secondaryIdxObjRef,
+			TableDef:        secondaryIdxTableDef,
+			InsertCols:      []int{secondaryPkPos, 0},
+			OldPartitionIdx: -1,
+			NewPartitionIdx: -1,
 		})
 		colCount += 1
 	}
 
 	if isPartition {
-		for i, updateCtx := range updateCtxs {
-			partTblIDs := make([]int32, len(tableDef.Partition.PartitionTableNames))
-			for j := range tableDef.Partition.PartitionTableNames {
-				partTblIDs[j] = int32(i*1000 + j)
-			}
-			updateCtx.partitionIdx = colCount
-			updateCtx.partitionTableIDs = partTblIDs
-			updateCtx.partitionTableNames = tableDef.Partition.PartitionTableNames
+		partTblIDs := make([]uint64, len(tableDef.Partition.PartitionTableNames))
+		for j := range tableDef.Partition.PartitionTableNames {
+			partTblIDs[j] = uint64(1000 + j)
 		}
+		updateCtxs[0].NewPartitionIdx = colCount
+		updateCtxs[0].PartitionTableIDs = partTblIDs
+		updateCtxs[0].PartitionTableNames = tableDef.Partition.PartitionTableNames
 	}
 
 	return updateCtxs
+}
+
+func buildFlushS3InfoBatch(mp *mpool.MPool, hasUniqueKey bool, hasSecondaryKey bool, isPartition bool) ([]*batch.Batch, uint64) {
+	insertBats, _ := prepareTestInsertBatchs(mp, 5, hasUniqueKey, hasSecondaryKey, isPartition)
+	retBat := batch.NewWithSize(6)
+	action := uint8(actionInsert)
+
+	retBat.Vecs[0] = testutil.NewUInt8Vector(5, types.T_uint8.ToType(), mp, false, []uint8{action, action, action, action, action})
+	retBat.Vecs[1] = testutil.NewUInt16Vector(5, types.T_uint16.ToType(), mp, false, []uint16{0, 0, 0, 0, 0})       //idx
+	retBat.Vecs[2] = testutil.NewUInt16Vector(5, types.T_uint16.ToType(), mp, false, []uint16{0, 0, 0, 0, 0})       //partIdx
+	retBat.Vecs[3] = vector.NewVec(types.T_uint64.ToType())                                                         //rowCount
+	retBat.Vecs[4] = testutil.NewStringVector(5, types.T_varchar.ToType(), mp, false, []string{"", "", "", "", ""}) //name
+	retBat.Vecs[5] = vector.NewVec(types.T_text.ToType())                                                           //batch bytes
+
+	totalRowCount := 0
+	for _, bat := range insertBats {
+		totalRowCount += bat.RowCount()
+		_ = vector.AppendFixed(retBat.Vecs[3], bat.RowCount(), false, mp)
+
+		val, _ := bat.MarshalBinary()
+		_ = vector.AppendBytes(retBat.Vecs[5], val, false, mp)
+
+		bat.Clean(mp)
+	}
+
+	retBat.SetRowCount(retBat.Vecs[0].Length())
+	return []*batch.Batch{retBat}, uint64(totalRowCount)
 }

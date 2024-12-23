@@ -16,11 +16,18 @@ package plan
 
 import (
 	"bytes"
+	"encoding/binary"
+	"fmt"
 	"math/rand"
 	"testing"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	index2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/stretchr/testify/require"
 )
 
@@ -197,7 +204,9 @@ func TestRangeShuffleSlice(t *testing.T) {
 }
 
 func TestGetShuffleDop(t *testing.T) {
-	n := GetShuffleDop(4, 2, 100000000000)
+	n := GetShuffleDop(1, 1, 100)
+	require.Equal(t, 4, n)
+	n = GetShuffleDop(4, 2, 100000000000)
 	require.Equal(t, 16, n)
 	n = GetShuffleDop(64, 1, 10000000000000)
 	require.Equal(t, 64, n)
@@ -205,34 +214,34 @@ func TestGetShuffleDop(t *testing.T) {
 	n = GetShuffleDop(16, 3, 1500000000)
 	require.Equal(t, 40, n)
 	n = GetShuffleDop(16, 3, 150000000)
-	require.Equal(t, 16, n)
+	require.Equal(t, 64, n)
 	n = GetShuffleDop(16, 3, 15000000)
-	require.Equal(t, 16, n)
+	require.Equal(t, 32, n)
 	n = GetShuffleDop(16, 3, 1500000)
 	require.Equal(t, 16, n)
 
 	n = GetShuffleDop(16, 4, 1500000000)
 	require.Equal(t, 64, n)
 	n = GetShuffleDop(16, 4, 150000000)
-	require.Equal(t, 16, n)
+	require.Equal(t, 64, n)
 	n = GetShuffleDop(16, 4, 15000000)
-	require.Equal(t, 16, n)
+	require.Equal(t, 32, n)
 	n = GetShuffleDop(16, 4, 1500000)
 	require.Equal(t, 16, n)
 
 	n = GetShuffleDop(16, 3, 300000000)
-	require.Equal(t, 32, n)
+	require.Equal(t, 64, n)
 	n = GetShuffleDop(16, 3, 30000000)
-	require.Equal(t, 16, n)
+	require.Equal(t, 48, n)
 	n = GetShuffleDop(16, 3, 3000000)
 	require.Equal(t, 16, n)
 	n = GetShuffleDop(16, 3, 300000)
 	require.Equal(t, 16, n)
 
 	n = GetShuffleDop(16, 4, 300000000)
-	require.Equal(t, 16, n)
+	require.Equal(t, 64, n)
 	n = GetShuffleDop(16, 4, 30000000)
-	require.Equal(t, 16, n)
+	require.Equal(t, 32, n)
 	n = GetShuffleDop(16, 4, 3000000)
 	require.Equal(t, 16, n)
 	n = GetShuffleDop(16, 4, 300000)
@@ -250,9 +259,137 @@ func TestGetShuffleDop(t *testing.T) {
 	n = GetShuffleDop(16, 1, 1500000000)
 	require.Equal(t, 64, n)
 	n = GetShuffleDop(16, 1, 150000000)
-	require.Equal(t, 32, n)
+	require.Equal(t, 64, n)
 	n = GetShuffleDop(16, 1, 15000000)
-	require.Equal(t, 16, n)
+	require.Equal(t, 48, n)
 	n = GetShuffleDop(16, 1, 1500000)
 	require.Equal(t, 16, n)
+}
+
+func TestShouldSkipObjByShuffle(t *testing.T) {
+	row := types.RandomRowid()
+	stats := objectio.NewObjectStatsWithObjectID(row.BorrowObjectID(), false, false, true)
+	objectio.SetObjectStatsRowCnt(stats, 100)
+	tableDef := &plan.TableDef{
+		Pkey: &plan.PrimaryKeyDef{
+			PkeyColName: "a",
+			Names:       []string{"a"},
+		},
+	}
+	node := &plan.Node{
+		TableDef: tableDef,
+		Stats:    DefaultStats(),
+	}
+	node.Stats.HashmapStats.Shuffle = true
+	node.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Hash
+	rsp := &engine.RangesShuffleParam{
+		Node:  node,
+		CNCNT: 2,
+		CNIDX: 0,
+		Init:  false,
+	}
+	ShouldSkipObjByShuffle(rsp, stats)
+	rsp.CNIDX = 1
+	ShouldSkipObjByShuffle(rsp, stats)
+	node.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Range
+	node.Stats.HashmapStats.ShuffleColMin = 0
+	node.Stats.HashmapStats.ShuffleColMax = 10000
+	ShouldSkipObjByShuffle(rsp, stats)
+	zm := index2.NewZM(types.T_int32, 0)
+	bs := make([]byte, 4)
+	binary.LittleEndian.PutUint32(bs, 0)
+	index2.UpdateZM(zm, bs)
+	binary.LittleEndian.PutUint32(bs, 10)
+	index2.UpdateZM(zm, bs)
+	objectio.SetObjectStatsSortKeyZoneMap(stats, zm)
+	ShouldSkipObjByShuffle(rsp, stats)
+}
+
+func TestGetRangeShuffleIndexForZM(t *testing.T) {
+	zm := index2.NewZM(types.T_datetime, 0)
+	defer func() {
+		r := recover()
+		fmt.Println("panic recover", r)
+	}()
+	GetRangeShuffleIndexForZM(0, 1000, zm, 4)
+}
+
+func TestShuffleByZonemap(t *testing.T) {
+	node := &plan.Node{
+		Stats: DefaultStats(),
+	}
+	node.Stats.HashmapStats.Shuffle = true
+	node.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Range
+	node.Stats.HashmapStats.ShuffleColMin = 0
+	node.Stats.HashmapStats.ShuffleColMax = 10000
+	node.Stats.HashmapStats.Ranges = []float64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
+
+	zm := index2.NewZM(types.T_uint32, 0)
+	bs := make([]byte, 4)
+	binary.LittleEndian.PutUint32(bs, 0)
+	index2.UpdateZM(zm, bs)
+	binary.LittleEndian.PutUint32(bs, 10)
+	index2.UpdateZM(zm, bs)
+
+	rsp := &engine.RangesShuffleParam{
+		Node:  node,
+		CNCNT: 2,
+		CNIDX: 0,
+		Init:  false,
+	}
+	shuffleByZonemap(rsp, zm)
+}
+
+func TestShuffleByValueExtractedFromZonemap(t *testing.T) {
+	node := &plan.Node{
+		Stats: DefaultStats(),
+	}
+	node.Stats.HashmapStats.Shuffle = true
+	node.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Range
+	node.Stats.HashmapStats.ShuffleColMin = 0
+	node.Stats.HashmapStats.ShuffleColMax = 4000000000
+	node.Stats.HashmapStats.ShuffleColIdx = int32(types.T_int64)
+
+	zm := index2.NewZM(types.T_varchar, 0)
+	bs := []byte{59, 24, 223, 254, 115, 192, 58, 21, 1}
+	index2.UpdateZM(zm, bs)
+	bs = []byte{59, 24, 224, 7, 119, 160, 58, 21, 5}
+	index2.UpdateZM(zm, bs)
+
+	rsp := &engine.RangesShuffleParam{
+		Node:  node,
+		CNCNT: 3,
+		CNIDX: 0,
+		Init:  false,
+	}
+	idx := shuffleByValueExtractedFromZonemap(rsp, zm)
+	require.Equal(t, idx, uint64(2))
+
+	node = &plan.Node{
+		Stats: DefaultStats(),
+	}
+	node.Stats.HashmapStats.Shuffle = true
+	node.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Range
+	node.Stats.HashmapStats.ShuffleColMin = 0
+	node.Stats.HashmapStats.ShuffleColMax = 4000000000
+	node.Stats.HashmapStats.ShuffleColIdx = int32(types.T_uint64)
+
+	zm = index2.NewZM(types.T_varchar, 0)
+	packer := types.NewPacker()
+	packer.EncodeUint64(1500000000)
+	packer.EncodeUint64(1)
+	index2.UpdateZM(zm, packer.Bytes())
+	packer = types.NewPacker()
+	packer.EncodeUint64(1600000000)
+	packer.EncodeUint64(1)
+	index2.UpdateZM(zm, packer.Bytes())
+
+	rsp = &engine.RangesShuffleParam{
+		Node:  node,
+		CNCNT: 4,
+		CNIDX: 0,
+		Init:  false,
+	}
+	idx = shuffleByValueExtractedFromZonemap(rsp, zm)
+	require.Equal(t, idx, uint64(1))
 }

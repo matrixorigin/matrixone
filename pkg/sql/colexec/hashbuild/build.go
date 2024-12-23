@@ -43,20 +43,17 @@ func (hashBuild *HashBuild) Prepare(proc *process.Process) (err error) {
 	}
 
 	if hashBuild.NeedHashMap {
+		hashBuild.ctr.hashmapBuilder.IsDedup = hashBuild.IsDedup
+		hashBuild.ctr.hashmapBuilder.OnDuplicateAction = hashBuild.OnDuplicateAction
+		hashBuild.ctr.hashmapBuilder.DedupColName = hashBuild.DedupColName
+		hashBuild.ctr.hashmapBuilder.DedupColTypes = hashBuild.DedupColTypes
 		return hashBuild.ctr.hashmapBuilder.Prepare(hashBuild.Conditions, proc)
 	}
 	return nil
 }
 
 func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
-	if err, isCancel := vm.CancelCheck(proc); isCancel {
-		return vm.CancelResult, err
-	}
-
 	analyzer := hashBuild.OpAnalyzer
-	analyzer.Start()
-	defer analyzer.Stop()
-
 	result := vm.NewCallResult()
 	ap := hashBuild
 	ctr := &ap.ctr
@@ -64,7 +61,6 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 		switch ctr.state {
 		case BuildHashMap:
 			if err := ctr.build(ap, proc, analyzer); err != nil {
-				analyzer.Output(result.Batch)
 				return result, err
 			}
 			analyzer.Alloc(ctr.hashmapBuilder.GetSize())
@@ -72,7 +68,6 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 
 		case HandleRuntimeFilter:
 			if err := ctr.handleRuntimeFilter(ap, proc); err != nil {
-				analyzer.Output(result.Batch)
 				return result, err
 			}
 			ctr.state = SendJoinMap
@@ -82,6 +77,7 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 			if ctr.hashmapBuilder.InputBatchRowCount > 0 {
 				jm = message.NewJoinMap(ctr.hashmapBuilder.MultiSels, ctr.hashmapBuilder.IntHashMap, ctr.hashmapBuilder.StrHashMap, ctr.hashmapBuilder.Batches.Buf, proc.Mp())
 				jm.SetPushedRuntimeFilterIn(ctr.runtimeFilterIn)
+				//jm.SetIgnoreRows(ctr.hashmapBuilder.IgnoreRows)
 				if ap.NeedBatches {
 					jm.SetRowCount(int64(ctr.hashmapBuilder.InputBatchRowCount))
 				}
@@ -91,10 +87,11 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 				panic("wrong joinmap message tag!")
 			}
 			message.SendMessage(message.JoinMapMsg{JoinMapPtr: jm, Tag: ap.JoinMapTag}, proc.GetMessageBoard())
+			ctr.state = SendSucceed
 
+		case SendSucceed:
 			result.Batch = nil
 			result.Status = vm.ExecStop
-			analyzer.Output(result.Batch)
 			return result, nil
 		}
 	}

@@ -89,6 +89,10 @@ type GCWindow struct {
 	}
 }
 
+func (w *GCWindow) GetObjectStats() []objectio.ObjectStats {
+	return w.files
+}
+
 func (w *GCWindow) Clone() GCWindow {
 	w2 := *w
 	w2.files = make([]objectio.ObjectStats, len(w.files))
@@ -170,7 +174,7 @@ func (w *GCWindow) ExecuteGlobalCheckpointBasedGC(
 func (w *GCWindow) ScanCheckpoints(
 	ctx context.Context,
 	checkpointEntries []*checkpoint.CheckpointEntry,
-	collectCkpData func(*checkpoint.CheckpointEntry) (*logtail.CheckpointData, error),
+	collectCkpData func(context.Context, *checkpoint.CheckpointEntry) (*logtail.CheckpointData, error),
 	processCkpData func(*checkpoint.CheckpointEntry, *logtail.CheckpointData) error,
 	onScanDone func() error,
 	buffer *containers.OneSchemaBatchBuffer,
@@ -181,10 +185,15 @@ func (w *GCWindow) ScanCheckpoints(
 	start := checkpointEntries[0].GetStart()
 	end := checkpointEntries[len(checkpointEntries)-1].GetEnd()
 	getOneBatch := func(cxt context.Context, bat *batch.Batch, mp *mpool.MPool) (bool, error) {
+		select {
+		case <-cxt.Done():
+			return false, context.Cause(cxt)
+		default:
+		}
 		if len(checkpointEntries) == 0 {
 			return true, nil
 		}
-		data, err := collectCkpData(checkpointEntries[0])
+		data, err := collectCkpData(ctx, checkpointEntries[0])
 		if err != nil {
 			return false, err
 		}
@@ -261,6 +270,11 @@ func (w *GCWindow) writeMetaForRemainings(
 	ctx context.Context,
 	stats []objectio.ObjectStats,
 ) (string, error) {
+	select {
+	case <-ctx.Done():
+		return "", context.Cause(ctx)
+	default:
+	}
 	name := blockio.EncodeGCMetadataFileName(PrefixGCMeta, w.tsRange.start, w.tsRange.end)
 	ret := batch.NewWithSchema(
 		false, ObjectTableMetaAttrs, ObjectTableMetaTypes,
@@ -455,7 +469,13 @@ func (w *GCWindow) replayData(
 }
 
 // ReadTable reads an s3 file and replays a GCWindow in memory
-func (w *GCWindow) ReadTable(ctx context.Context, name string, fs *objectio.ObjectFS) error {
+func (w *GCWindow) ReadTable(ctx context.Context, name string, fs fileservice.FileService) error {
+	select {
+	case <-ctx.Done():
+		return context.Cause(ctx)
+	default:
+	}
+
 	var release1 func()
 	var buffer *batch.Batch
 	defer func() {
@@ -466,7 +486,7 @@ func (w *GCWindow) ReadTable(ctx context.Context, name string, fs *objectio.Obje
 	start, end, _ := blockio.DecodeGCMetadataFileName(name)
 	w.tsRange.start = start
 	w.tsRange.end = end
-	reader, err := blockio.NewFileReaderNoCache(fs.Service, name)
+	reader, err := blockio.NewFileReaderNoCache(fs, name)
 	if err != nil {
 		return err
 	}

@@ -65,16 +65,6 @@ type JobResult struct {
 	Res any
 }
 
-var SerialJobScheduler = new(simpleJobScheduler)
-
-type simpleJobScheduler struct{}
-
-func (s *simpleJobScheduler) Stop() {}
-func (s *simpleJobScheduler) Schedule(job *Job) (err error) {
-	job.Run()
-	return
-}
-
 type parallelJobScheduler struct {
 	pool *ants.Pool
 }

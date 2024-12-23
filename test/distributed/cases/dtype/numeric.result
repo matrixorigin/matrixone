@@ -1170,7 +1170,7 @@ a    b    c
 -28.32320    387213.0    3.2132313E7
 null    327.32892    -38922.2123
 INSERT INTO numeric15 VALUES(271.212121,387213.0,3289);
-Duplicate entry '271.21212' for key '__mo_index_idx_col'
+Duplicate entry '271.21212' for key '(.*)'
 DROP TABLE numeric15;
 DROP TABLE IF EXISTS numeric16;
 CREATE TABLE numeric16(a numeric, b numeric(38,10), c varchar(20),UNIQUE INDEX(a),INDEX(b));

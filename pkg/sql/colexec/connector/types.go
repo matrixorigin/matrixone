@@ -16,7 +16,9 @@ package connector
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/pSpool"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -84,9 +86,13 @@ func (connector *Connector) Reset(proc *process.Process, pipelineFailed bool, er
 		connector.ctr.sp.Close()
 		connector.ctr.sp = nil
 	} else {
-		connector.Reg.Ch2 <- process.NewPipelineSignalToDirectly(nil, proc.Mp())
+		connector.Reg.Ch2 <- process.NewPipelineSignalToDirectly(nil, err, proc.Mp())
 	}
 }
 
 func (connector *Connector) Free(proc *process.Process, pipelineFailed bool, err error) {
+}
+
+func (connector *Connector) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
+	return input, nil
 }

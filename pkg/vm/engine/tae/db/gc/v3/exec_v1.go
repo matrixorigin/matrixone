@@ -342,11 +342,25 @@ func MakeFinalCanGCSinker(
 		ctx context.Context, bat *batch.Batch,
 	) error {
 		clear(buffer)
+		var dropTSs []types.TS
+		var tableIDs []uint64
+		if bat.Vecs[0].Length() > 0 {
+			dropTSs = vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[2])
+			tableIDs = vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[4])
+		}
 		for i := 0; i < bat.Vecs[0].Length(); i++ {
 			buf := bat.Vecs[0].GetRawBytesAt(i)
 			stats := (*objectio.ObjectStats)(unsafe.Pointer(&buf[0]))
 			name := stats.ObjectName().String()
-			buffer[name] = struct{}{}
+			dropTS := dropTSs[i]
+			tableID := tableIDs[i]
+			if !dropTS.IsEmpty() {
+				buffer[name] = struct{}{}
+				continue
+			}
+			if !logtail.IsMoTable(tableID) {
+				buffer[name] = struct{}{}
+			}
 		}
 		for name := range buffer {
 			*filesToGC = append(*filesToGC, name)

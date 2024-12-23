@@ -43,17 +43,30 @@ func NewGetParamRule() *GetParamRule {
 }
 
 func (rule *GetParamRule) MatchNode(node *Node) bool {
-	if node.NodeType == plan.Node_TABLE_SCAN || node.NodeType == plan.Node_INSERT || node.NodeType == plan.Node_MULTI_UPDATE {
+	if node.NodeType == plan.Node_TABLE_SCAN || node.NodeType == plan.Node_INSERT {
 		rule.schemas = append(rule.schemas, &plan.ObjectRef{
 			Server:     int64(node.TableDef.Version), //we use this unused field to store table's version
-			Db:         node.ObjRef.Db,
-			Schema:     node.ObjRef.Schema,
+			Db:         int64(node.TableDef.DbId),
+			Schema:     int64(node.TableDef.DbId),
 			Obj:        node.ObjRef.Obj,
 			ServerName: node.ObjRef.ServerName,
 			DbName:     node.ObjRef.DbName,
 			SchemaName: node.ObjRef.SchemaName,
 			ObjName:    node.ObjRef.ObjName,
 		})
+	} else if node.NodeType == plan.Node_MULTI_UPDATE {
+		for _, updateCtx := range node.UpdateCtxList {
+			rule.schemas = append(rule.schemas, &plan.ObjectRef{
+				Server:     int64(updateCtx.TableDef.Version), //we use this unused field to store table's version
+				Db:         int64(updateCtx.TableDef.DbId),
+				Schema:     int64(updateCtx.TableDef.DbId),
+				Obj:        updateCtx.ObjRef.Obj,
+				ServerName: updateCtx.ObjRef.ServerName,
+				DbName:     updateCtx.ObjRef.DbName,
+				SchemaName: updateCtx.ObjRef.SchemaName,
+				ObjName:    updateCtx.ObjRef.ObjName,
+			})
+		}
 	}
 	return false
 }

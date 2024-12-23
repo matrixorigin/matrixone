@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -34,8 +35,11 @@ import (
 )
 
 const (
-	AccountLevel    = "account"
-	ClusterLevel    = "cluster"
+	TableLevel   = "table"
+	DbLevel      = "database"
+	AccountLevel = "account"
+	MatchAll     = "*"
+
 	MysqlSink       = "mysql"
 	MatrixoneSink   = "matrixone"
 	ConsoleSink     = "console"
@@ -46,7 +50,16 @@ const (
 	SASCommon = "common"
 	SASError  = "error"
 
-	InitSnapshotSplitTxn = "InitSnapshotSplitTxn"
+	InitSnapshotSplitTxn        = "InitSnapshotSplitTxn"
+	DefaultInitSnapshotSplitTxn = true
+
+	SendSqlTimeout        = "SendSqlTimeout"
+	DefaultSendSqlTimeout = "10m"
+	DefaultRetryTimes     = -1
+	DefaultRetryDuration  = 30 * time.Minute
+
+	MaxSqlLength        = "MaxSqlLength"
+	DefaultMaxSqlLength = 4 * 1024 * 1024
 )
 
 var (
@@ -60,25 +73,58 @@ type Reader interface {
 
 // Sinker manages and drains the sql parts
 type Sinker interface {
-	Sink(ctx context.Context, data *DecoderOutput) error
-	SendBegin(ctx context.Context) error
-	SendCommit(ctx context.Context) error
-	SendRollback(ctx context.Context) error
+	Run(ctx context.Context, ar *ActiveRoutine)
+	Sink(ctx context.Context, data *DecoderOutput)
+	SendBegin()
+	SendCommit()
+	SendRollback()
+	// SendDummy to guarantee the last sql is sent
+	SendDummy()
+	// Error must be called after Sink
+	Error() error
+	Reset()
 	Close()
 }
 
 // Sink represents the destination mysql or matrixone
 type Sink interface {
-	Send(ctx context.Context, ar *ActiveRoutine, sql string) error
-	SendBegin(ctx context.Context) error
-	SendCommit(ctx context.Context) error
-	SendRollback(ctx context.Context) error
+	Send(ctx context.Context, ar *ActiveRoutine, sqlBuf []byte) error
+	SendBegin(ctx context.Context, ar *ActiveRoutine) error
+	SendCommit(ctx context.Context, ar *ActiveRoutine) error
+	SendRollback(ctx context.Context, ar *ActiveRoutine) error
 	Close()
 }
 
+type IWatermarkUpdater interface {
+	Run(ctx context.Context, ar *ActiveRoutine)
+	InsertIntoDb(dbTableInfo *DbTableInfo, watermark types.TS) error
+	GetFromMem(dbName, tblName string) types.TS
+	GetFromDb(dbName, tblName string) (watermark types.TS, err error)
+	UpdateMem(dbName, tblName string, watermark types.TS)
+	DeleteFromMem(dbName, tblName string)
+	DeleteFromDb(dbName, tblName string) error
+	DeleteAllFromDb() error
+	SaveErrMsg(dbName, tblName string, errMsg string) error
+}
+
 type ActiveRoutine struct {
+	sync.Mutex
 	Pause  chan struct{}
 	Cancel chan struct{}
+}
+
+func (ar *ActiveRoutine) ClosePause() {
+	ar.Lock()
+	defer ar.Unlock()
+	close(ar.Pause)
+	// can't set to nil, because some goroutines may still be running, when it goes next round loop,
+	// it found the channel is nil, not closed, will hang there forever
+}
+
+func (ar *ActiveRoutine) CloseCancel() {
+	ar.Lock()
+	defer ar.Unlock()
+	close(ar.Cancel)
 }
 
 func NewCdcActiveRoutine() *ActiveRoutine {
@@ -130,17 +176,14 @@ type RowIterator interface {
 }
 
 type DbTableInfo struct {
-	SourceAccountName string
-	SourceDbName      string
-	SourceTblName     string
-	SourceAccountId   uint64
-	SourceDbId        uint64
-	SourceTblId       uint64
-	SourceTblIdStr    string
+	SourceDbId      uint64
+	SourceDbName    string
+	SourceTblId     uint64
+	SourceTblName   string
+	SourceCreateSql string
 
-	SinkAccountName string
-	SinkDbName      string
-	SinkTblName     string
+	SinkDbName  string
+	SinkTblName string
 }
 
 func (info DbTableInfo) String() string {
@@ -256,8 +299,10 @@ func (bat *AtomicBatch) Close() {
 	for _, oneBat := range bat.Batches {
 		oneBat.Clean(bat.Mp)
 	}
-	bat.Rows.Clear()
-	bat.Rows = nil
+	if bat.Rows != nil {
+		bat.Rows.Clear()
+		bat.Rows = nil
+	}
 	bat.Batches = nil
 	bat.Mp = nil
 }
@@ -332,16 +377,12 @@ func (info *UriInfo) String() string {
 }
 
 type PatternTable struct {
-	AccountId     uint64 `json:"account_id"`
-	Account       string `json:"account"`
-	Database      string `json:"database"`
-	Table         string `json:"table"`
-	TableIsRegexp bool   `json:"table_is_regexp"`
-	Reserved      bool   `json:"reserved"`
+	Database string `json:"database"`
+	Table    string `json:"table"`
 }
 
 func (table PatternTable) String() string {
-	return fmt.Sprintf("(%s,%d,%s,%s)", table.Account, table.AccountId, table.Database, table.Table)
+	return fmt.Sprintf("%s.%s", table.Database, table.Table)
 }
 
 type PatternTuple struct {

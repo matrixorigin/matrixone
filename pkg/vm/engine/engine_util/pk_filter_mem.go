@@ -17,12 +17,15 @@ package engine_util
 import (
 	"bytes"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 )
 
@@ -33,6 +36,11 @@ type MemPKFilter struct {
 	isValid bool
 	TS      types.TS
 
+	exact struct {
+		hit bool
+	}
+
+	filterHint  engine.FilterHint
 	SpecFactory func(f *MemPKFilter) logtailreplay.PrimaryKeyMatchSpec
 }
 
@@ -41,17 +49,8 @@ func NewMemPKFilter(
 	ts timestamp.Timestamp,
 	packerPool *fileservice.Pool[*types.Packer],
 	basePKFilter BasePKFilter,
+	filterHint engine.FilterHint,
 ) (filter MemPKFilter, err error) {
-	//defer func() {
-	//	if filter.iter == nil {
-	//		filter.isValid = true
-	//		filter.iter = state.NewRowsIter(
-	//			types.TimestampToTS(ts),
-	//			nil,
-	//			false,
-	//		)
-	//	}
-	//}()
 
 	filter.TS = types.TimestampToTS(ts)
 
@@ -207,16 +206,42 @@ func NewMemPKFilter(
 		return
 	}
 
-	filter.tryConstructPrimaryKeyIndexIter(ts)
+	filter.tryConstructPrimaryKeyIndexIter(ts, tableDef.Name)
+
+	filter.filterHint = filterHint
+
 	return
+}
+
+func (f *MemPKFilter) InKind() (int, bool) {
+	return len(f.packed), f.op == function.IN || f.op == function.PREFIX_IN
+}
+
+func (f *MemPKFilter) Exact() (bool, bool) {
+	return f.op == function.EQUAL && len(f.packed) == 1, f.exact.hit
+}
+
+func (f *MemPKFilter) RecordExactHit() bool {
+	if ok, _ := f.Exact(); !ok {
+		return false
+	}
+
+	f.exact.hit = true
+
+	return true
+}
+
+func (f *MemPKFilter) Must() bool {
+	return f.filterHint.Must
 }
 
 func (f *MemPKFilter) String() string {
 	var buf bytes.Buffer
-	buf.WriteString(
-		fmt.Sprintf("InMemPKFilter{op: %d, isVec: %v, isValid: %v, val: %v, data(len=%d)",
-			f.op, f.isVec, f.isValid, f.packed, len(f.packed),
-		))
+	buf.WriteString(fmt.Sprintf("InMemPKFilter{op: %d, isVec: %v, isValid: %v vals: [", f.op, f.isVec, f.isValid))
+	for x := range f.packed {
+		buf.WriteString(fmt.Sprintf("%x, ", f.packed[x]))
+	}
+	buf.WriteString(fmt.Sprintf("][%d]}", len(f.packed)))
 	return buf.String()
 }
 
@@ -231,13 +256,21 @@ func (f *MemPKFilter) SetFullData(op int, isVec bool, val ...[]byte) {
 	f.isValid = true
 }
 
-func (f *MemPKFilter) tryConstructPrimaryKeyIndexIter(ts timestamp.Timestamp) {
+func (f *MemPKFilter) tryConstructPrimaryKeyIndexIter(
+	ts timestamp.Timestamp,
+	tableName string,
+) {
 	if !f.isValid {
 		return
 	}
 
 	switch f.op {
-	case function.EQUAL, function.PREFIX_EQ:
+	case function.EQUAL:
+		f.SpecFactory = func(f *MemPKFilter) logtailreplay.PrimaryKeyMatchSpec {
+			return logtailreplay.Exact(f.packed[0])
+		}
+
+	case function.PREFIX_EQ:
 		//spec = logtailreplay.Prefix(f.packed[0])
 		f.SpecFactory = func(f *MemPKFilter) logtailreplay.PrimaryKeyMatchSpec {
 			return logtailreplay.Prefix(f.packed[0])
@@ -286,4 +319,96 @@ func (f *MemPKFilter) tryConstructPrimaryKeyIndexIter(ts timestamp.Timestamp) {
 		}
 	}
 
+}
+
+func (f *MemPKFilter) FilterVector(
+	vec *vector.Vector,
+	packer *types.Packer,
+	skipMask *objectio.Bitmap,
+) {
+
+	if (f.op == function.IN || f.op == function.PREFIX_IN) && len(f.packed) > 4 {
+		return
+	}
+
+	keys := logtailreplay.EncodePrimaryKeyVector(vec, packer)
+
+	for i := 0; i < len(keys); i++ {
+		switch f.op {
+		case function.EQUAL:
+			if !bytes.Equal(keys[i], f.packed[0]) {
+				skipMask.Add(uint64(i))
+			}
+
+		case function.PREFIX_EQ:
+			if !bytes.HasPrefix(keys[i], f.packed[0]) {
+				skipMask.Add(uint64(i))
+			}
+
+		case function.IN:
+			in := false
+			for _, k := range f.packed {
+				if bytes.Equal(keys[i], k) {
+					in = true
+					break
+				}
+			}
+			if !in {
+				skipMask.Add(uint64(i))
+			}
+		case function.PREFIX_IN:
+			in := false
+			for _, k := range f.packed {
+				if bytes.HasPrefix(keys[i], k) {
+					in = true
+					break
+				}
+			}
+			if !in {
+				skipMask.Add(uint64(i))
+			}
+		case function.BETWEEN:
+			if !(bytes.Compare(keys[i], f.packed[0]) >= 0 && bytes.Compare(keys[i], f.packed[1]) <= 0) {
+				skipMask.Add(uint64(i))
+			}
+
+		case RangeRightOpen:
+			if !(bytes.Compare(keys[i], f.packed[0]) >= 0 && bytes.Compare(keys[i], f.packed[1]) < 0) {
+				skipMask.Add(uint64(i))
+			}
+
+		case RangeLeftOpen:
+			if !(bytes.Compare(keys[i], f.packed[0]) > 0 && bytes.Compare(keys[i], f.packed[1]) <= 0) {
+				skipMask.Add(uint64(i))
+			}
+
+		case RangeBothOpen:
+			if !(bytes.Compare(keys[i], f.packed[0]) > 0 && bytes.Compare(keys[i], f.packed[1]) < 0) {
+				skipMask.Add(uint64(i))
+			}
+
+		case function.GREAT_EQUAL:
+			if !(bytes.Compare(keys[i], f.packed[0]) >= 0) {
+				skipMask.Add(uint64(i))
+			}
+
+		case function.GREAT_THAN:
+			if !(bytes.Compare(keys[i], f.packed[0]) > 0) {
+				skipMask.Add(uint64(i))
+			}
+
+		case function.LESS_EQUAL:
+			if !(bytes.Compare(keys[i], f.packed[0]) <= 0) {
+				skipMask.Add(uint64(i))
+			}
+
+		case function.LESS_THAN:
+			if !(bytes.Compare(keys[i], f.packed[0]) < 0) {
+				skipMask.Add(uint64(i))
+			}
+
+		default:
+			// skip nothing
+		}
+	}
 }

@@ -17,6 +17,8 @@ package timewin
 import (
 	"bytes"
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -114,14 +116,6 @@ func (timeWin *TimeWin) Prepare(proc *process.Process) (err error) {
 }
 
 func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
-	if err, isCancel := vm.CancelCheck(proc); isCancel {
-		return vm.CancelResult, err
-	}
-
-	analyzer := timeWin.OpAnalyzer
-	analyzer.Start()
-	defer analyzer.Stop()
-
 	ctr := &timeWin.ctr
 	var err error
 
@@ -129,7 +123,7 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 	for {
 		switch ctr.status {
 		case interval:
-			result, err := timeWin.GetChildren(0).Call(proc)
+			result, err := vm.Exec(timeWin.GetChildren(0), proc)
 			if err != nil {
 				return result, err
 			}
@@ -147,10 +141,9 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 			result.Batch = ctr.bat
-			analyzer.Output(result.Batch)
 			return result, nil
 		case receive:
-			result, err := timeWin.GetChildren(0).Call(proc)
+			result, err := vm.Exec(timeWin.GetChildren(0), proc)
 			if err != nil {
 				return result, err
 			}
@@ -213,7 +206,7 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 				break
 			}
 
-			result, err := timeWin.GetChildren(0).Call(proc)
+			result, err := vm.Exec(timeWin.GetChildren(0), proc)
 			if err != nil {
 				return result, err
 			}
@@ -265,13 +258,11 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 			result.Batch = ctr.bat
-			analyzer.Output(result.Batch)
 			return result, nil
 
 		case end:
 			result.Batch = nil
 			result.Status = vm.ExecStop
-			analyzer.Output(result.Batch)
 			return result, nil
 
 		}
@@ -406,11 +397,18 @@ func (ctr *container) calRes(ap *TimeWin, proc *process.Process) (err error) {
 	ctr.bat = batch.NewWithSize(ctr.colCnt)
 	i := 0
 	for _, agg := range ctr.aggs {
-		vec, err := agg.Flush()
+		vecs, err := agg.Flush()
 		if err != nil {
 			return err
 		}
-		ctr.bat.SetVector(int32(i), vec)
+		if len(vecs) > 1 {
+			for _, vec := range vecs {
+				vec.Free(proc.Mp())
+			}
+			return moerr.NewInternalErrorNoCtx("the TimeWin operator currently does not support sending split result of window function.")
+		}
+
+		ctr.bat.SetVector(int32(i), vecs[0])
 		i++
 	}
 

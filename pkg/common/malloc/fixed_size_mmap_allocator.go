@@ -80,11 +80,7 @@ func NewFixedSizeMmapAllocator(
 			func(hints Hints, args *fixedSizeMmapDeallocatorArgs) {
 
 				if hints&DoNotReuse > 0 {
-					if err := unix.Munmap(
-						unsafe.Slice((*byte)(args.ptr), size),
-					); err != nil {
-						panic(err)
-					}
+					ret.freeMem(args.ptr)
 					return
 				}
 
@@ -103,12 +99,6 @@ func NewFixedSizeMmapAllocator(
 						// buffer in buffer2
 
 					default:
-						// unmap
-						if err := unix.Munmap(
-							unsafe.Slice((*byte)(args.ptr), size),
-						); err != nil {
-							panic(err)
-						}
 
 					}
 

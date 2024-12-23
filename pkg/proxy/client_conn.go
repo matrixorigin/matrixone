@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
+	"github.com/petermattis/goid"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
@@ -106,7 +107,8 @@ type ClientConn interface {
 }
 
 type migration struct {
-	setVarStmts []string
+	setVarStmtMap map[string]struct{}
+	setVarStmts   []string
 }
 
 // clientConn is the connection between proxy and client.
@@ -230,6 +232,7 @@ func newClientConn(
 		}
 		c.tlsConfig = tlsConfig
 	}
+	c.migration.setVarStmtMap = make(map[string]struct{})
 	return c, nil
 }
 
@@ -407,6 +410,17 @@ func (c *clientConn) handleKill(e *killEvent, resp chan<- []byte) error {
 // handleSetVar handles the set variable event.
 func (c *clientConn) handleSetVar(e *setVarEvent) error {
 	defer e.notify()
+	_, ok := c.migration.setVarStmtMap[e.stmt]
+	if ok {
+		for i := 0; i < len(c.migration.setVarStmts); i++ {
+			if c.migration.setVarStmts[i] == e.stmt {
+				c.migration.setVarStmts = append(c.migration.setVarStmts[:i], c.migration.setVarStmts[i+1:]...)
+				i--
+			}
+		}
+	} else {
+		c.migration.setVarStmtMap[e.stmt] = struct{}{}
+	}
 	c.migration.setVarStmts = append(c.migration.setVarStmts, e.stmt)
 	return nil
 }
@@ -511,10 +525,6 @@ func (c *clientConn) connectToBackend(prevAdd string) (ServerConn, error) {
 				return nil, err
 			}
 			v2.ProxyConnectSuccessCounter.Inc()
-
-			// manage this connection in the manager.
-			c.tun.rebalancer.connManager.connect(sc.GetCNServer(), c.tun)
-
 			return sc, nil
 		}
 	}
@@ -609,6 +619,7 @@ func (c *clientConn) connectToBackend(prevAdd string) (ServerConn, error) {
 					zap.String("current uuid", cn.uuid),
 					zap.String("current addr", cn.addr),
 					zap.Any("bad backend servers", badCNServers),
+					zap.Int64("goId", goid.Get()),
 					zap.Error(err),
 				)
 				badCNServers[cn.addr] = struct{}{}

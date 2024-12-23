@@ -16,8 +16,10 @@ package fifocache
 
 import (
 	"context"
+	"hash/maphash"
 	"math"
 
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 )
@@ -28,16 +30,23 @@ type DataCache struct {
 
 func NewDataCache(
 	capacity fscache.CapacityFunc,
-	postSet func(key fscache.CacheKey, value fscache.Data),
-	postGet func(key fscache.CacheKey, value fscache.Data),
-	postEvict func(key fscache.CacheKey, value fscache.Data),
+	postSet func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64),
+	postGet func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64),
+	postEvict func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64),
 ) *DataCache {
-	keyShardFunc := func(key fscache.CacheKey) uint8 {
-		return uint8(key.Offset ^ key.Sz)
-	}
 	return &DataCache{
-		fifo: New(capacity, keyShardFunc, postSet, postGet, postEvict),
+		fifo: New(capacity, shardCacheKey, postSet, postGet, postEvict),
 	}
+}
+
+var seed = maphash.MakeSeed()
+
+func shardCacheKey(key fscache.CacheKey) uint64 {
+	hasher := new(maphash.Hash)
+	hasher.SetSeed(seed)
+	hasher.Write(util.UnsafeToBytes(&key.Offset))
+	hasher.WriteString(key.Path)
+	return hasher.Sum64()
 }
 
 var _ fscache.DataCache = new(DataCache)
@@ -59,12 +68,12 @@ func (d *DataCache) Capacity() int64 {
 func (d *DataCache) DeletePaths(ctx context.Context, paths []string) {
 	for _, path := range paths {
 		for i := 0; i < len(d.fifo.shards); i++ {
-			d.deletePath(i, path)
+			d.deletePath(ctx, i, path)
 		}
 	}
 }
 
-func (d *DataCache) deletePath(shardIndex int, path string) {
+func (d *DataCache) deletePath(ctx context.Context, shardIndex int, path string) {
 	shard := &d.fifo.shards[shardIndex]
 	shard.Lock()
 	defer shard.Unlock()
@@ -72,37 +81,30 @@ func (d *DataCache) deletePath(shardIndex int, path string) {
 		if key.Path == path {
 			delete(shard.values, key)
 			if d.fifo.postEvict != nil {
-				d.fifo.postEvict(item.key, item.value)
+				d.fifo.postEvict(ctx, item.key, item.value, item.size)
 			}
 		}
 	}
 }
 
-func (d *DataCache) EnsureNBytes(want int, target int) {
-	if int(d.Available()) >= want {
-		return
-	}
-	d.fifo.queueLock.Lock()
-	defer d.fifo.queueLock.Unlock()
-	d.fifo.evict(nil, int64(target))
+func (d *DataCache) EnsureNBytes(ctx context.Context, want int) {
+	d.fifo.Evict(ctx, nil, int64(want))
 }
 
-func (d *DataCache) Evict(ch chan int64) {
-	d.fifo.Evict(ch)
+func (d *DataCache) Evict(ctx context.Context, ch chan int64) {
+	d.fifo.Evict(ctx, ch, 0)
 }
 
-func (d *DataCache) Flush() {
-	d.fifo.queueLock.Lock()
-	defer d.fifo.queueLock.Unlock()
-	d.fifo.evict(nil, math.MaxInt64)
+func (d *DataCache) Flush(ctx context.Context) {
+	d.fifo.Evict(ctx, nil, math.MaxInt64)
 }
 
 func (d *DataCache) Get(ctx context.Context, key query.CacheKey) (fscache.Data, bool) {
-	return d.fifo.Get(key)
+	return d.fifo.Get(ctx, key)
 }
 
 func (d *DataCache) Set(ctx context.Context, key query.CacheKey, value fscache.Data) error {
-	d.fifo.Set(key, value, int64(len(value.Bytes())))
+	d.fifo.Set(ctx, key, value, int64(len(value.Bytes())))
 	return nil
 }
 

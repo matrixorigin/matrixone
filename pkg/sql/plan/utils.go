@@ -31,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/common/stage"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -45,6 +44,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"github.com/matrixorigin/matrixone/pkg/stage"
+	"github.com/matrixorigin/matrixone/pkg/stage/stageutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -640,13 +641,13 @@ func extractColRefInFilter(expr *plan.Expr) *ColRef {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		switch exprImpl.F.Func.ObjName {
-		case "=", ">", "<", ">=", "<=", "prefix_eq", "between", "in", "prefix_in":
+		case "=", ">", "<", ">=", "<=", "prefix_eq", "between", "in", "prefix_in", "cast":
 			switch e := exprImpl.F.Args[1].Expr.(type) {
-			case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_V, *plan.Expr_Vec, *plan.Expr_List:
+			case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_V, *plan.Expr_Vec, *plan.Expr_List, *plan.Expr_T:
 				return extractColRefInFilter(exprImpl.F.Args[0])
 			case *plan.Expr_F:
 				switch e.F.Func.ObjName {
-				case "cast", "serial":
+				case "cast", "serial", "date_sub":
 					return extractColRefInFilter(exprImpl.F.Args[0])
 				}
 				return nil
@@ -779,6 +780,10 @@ func combinePlanConjunction(ctx context.Context, exprs []*plan.Expr) (expr *plan
 }
 
 func rejectsNull(filter *plan.Expr, proc *process.Process) bool {
+	if filter.GetF() != nil && filter.GetF().Func.ObjName == "in" && filter.GetF().Args[0].GetCol() != nil {
+		return true // in is always null rejecting
+	}
+
 	filter = replaceColRefWithNull(DeepCopyExpr(filter))
 
 	filter, err := ConstantFold(batch.EmptyForConstFoldBatch, filter, proc, false, true)
@@ -1048,11 +1053,11 @@ func ExprIsZonemappable(ctx context.Context, expr *plan.Expr) bool {
 	case *plan.Expr_F:
 		isConst := true
 		for _, arg := range exprImpl.F.Args {
-			switch arg.Expr.(type) {
-			case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_V, *plan.Expr_T:
+			if isRuntimeConstExpr(arg) {
 				continue
+			} else {
+				isConst = false
 			}
-			isConst = false
 			isZonemappable := ExprIsZonemappable(ctx, arg)
 			if !isZonemappable {
 				return false
@@ -1060,6 +1065,16 @@ func ExprIsZonemappable(ctx context.Context, expr *plan.Expr) bool {
 		}
 		if isConst {
 			return true
+		}
+
+		if exprImpl.F.Func.ObjName == "cast" {
+			switch exprImpl.F.Args[0].Typ.Id {
+			case int32(types.T_date), int32(types.T_time), int32(types.T_datetime), int32(types.T_timestamp):
+				if exprImpl.F.Args[1].Typ.Id == int32(types.T_timestamp) {
+					//this cast is monotonic, can safely pushdown to block filters
+					return true
+				}
+			}
 		}
 
 		isZonemappable, _ := function.GetFunctionIsZonemappableById(ctx, exprImpl.F.Func.GetObj())
@@ -1569,7 +1584,7 @@ func InitInfileOrStageParam(param *tree.ExternParam, proc *process.Process) erro
 		return InitInfileParam(param)
 	}
 
-	s, err := stage.UrlToStageDef(fpath, proc)
+	s, err := stageutil.UrlToStageDef(fpath, proc)
 	if err != nil {
 		return err
 	}
@@ -1699,12 +1714,14 @@ func ReadDir(param *tree.ExternParam) (fileList []string, fileSize []int64, err 
 // GetUniqueColAndIdxFromTableDef
 // if get table:  t1(a int primary key, b int, c int, d int, unique key(b,c));
 // return : []map[string]int { {'a'=1},  {'b'=2,'c'=3} }
-func GetUniqueColAndIdxFromTableDef(tableDef *TableDef) []map[string]int {
+func GetUniqueColAndIdxFromTableDef(tableDef *TableDef) ([]map[string]int, map[string]bool) {
 	uniqueCols := make([]map[string]int, 0, len(tableDef.Cols))
+	uniqueColNames := make(map[string]bool)
 	if tableDef.Pkey != nil && !onlyHasHiddenPrimaryKey(tableDef) {
 		pkMap := make(map[string]int)
 		for _, colName := range tableDef.Pkey.Names {
 			pkMap[colName] = int(tableDef.Name2ColIndex[colName])
+			uniqueColNames[colName] = true
 		}
 		uniqueCols = append(uniqueCols, pkMap)
 	}
@@ -1714,11 +1731,12 @@ func GetUniqueColAndIdxFromTableDef(tableDef *TableDef) []map[string]int {
 			pkMap := make(map[string]int)
 			for _, part := range index.Parts {
 				pkMap[part] = int(tableDef.Name2ColIndex[part])
+				uniqueColNames[part] = true
 			}
 			uniqueCols = append(uniqueCols, pkMap)
 		}
 	}
-	return uniqueCols
+	return uniqueCols, uniqueColNames
 }
 
 // GenUniqueColJoinExpr
@@ -2098,7 +2116,7 @@ func getParamTypes(params []tree.Expr, ctx CompilerContext, isPrepareStmt bool) 
 func HasMoCtrl(expr *plan.Expr) bool {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
-		if exprImpl.F.Func.ObjName == "mo_ctl" {
+		if exprImpl.F.Func.ObjName == "mo_ctl" || exprImpl.F.Func.ObjName == "fault_inject" {
 			return true
 		}
 		for _, arg := range exprImpl.F.Args {
@@ -2168,6 +2186,7 @@ func MakeCPKEYRuntimeFilter(tag int32, upperlimit int32, expr *Expr, tableDef *p
 	}
 	col := expr.GetCol()
 	col.ColPos = cpkeyIdx
+	expr.Typ = tableDef.Cols[cpkeyIdx].Typ
 	return &plan.RuntimeFilterSpec{
 		Tag:         tag,
 		UpperLimit:  upperlimit,
@@ -2691,4 +2710,22 @@ func offsetToString(offset int) string {
 		return fmt.Sprintf("-%02d:%02d", -hours, -minutes)
 	}
 	return fmt.Sprintf("+%02d:%02d", hours, minutes)
+}
+
+// do not lock table if lock no rows now.
+// if need to lock table, uncomment these codes
+// func getLockTableAtTheEnd(tableDef *TableDef) bool {
+// if tableDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName || //fake pk, skip
+// 	tableDef.Partition != nil { // unsupport partition table
+// 	return false
+// }
+// return !strings.HasPrefix(tableDef.Name, catalog.IndexTableNamePrefix)
+// }
+
+// DbNameOfObjRef return subscription name of ObjectRef if exists, to avoid the mismatching of account id and db name
+func DbNameOfObjRef(objRef *ObjectRef) string {
+	if objRef.SubscriptionName == "" {
+		return objRef.SchemaName
+	}
+	return objRef.SubscriptionName
 }

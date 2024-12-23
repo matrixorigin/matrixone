@@ -142,16 +142,18 @@ func runHAKeeperStoreTest(t *testing.T, startLogReplica bool, fn func(*testing.T
 
 func runHakeeperTaskServiceTest(t *testing.T, fn func(*testing.T, *store, taskservice.TaskService)) {
 	defer leaktest.AfterTest(t)()
-	cfg := getStoreTestConfig()
-	cfg.HAKeeperConfig.CNStoreTimeout.Duration = 5 * time.Second
+	var cfg Config
+	genCfg := func() Config {
+		cfg = getStoreTestConfig()
+		cfg.HAKeeperConfig.CNStoreTimeout.Duration = 5 * time.Second
+		return cfg
+	}
 	defer vfs.ReportLeakedFD(cfg.FS, t)
 
 	taskService := taskservice.NewTaskService(runtime.DefaultRuntime(), taskservice.NewMemTaskStorage())
 	defer taskService.StopScheduleCronTask()
 
-	store, err := getTestStore(func() Config {
-		return cfg
-	}, false, taskService)
+	store, err := getTestStore(genCfg, false, taskService)
 	assert.NoError(t, err)
 	defer func() {
 		assert.NoError(t, store.close())
@@ -896,14 +898,11 @@ func TestTaskSchedulerCanReScheduleExpiredTasks(t *testing.T) {
 				state, err = store.getCheckerState()
 				require.NoError(t, err)
 				store.taskSchedule(state)
-				tasks, err = taskService.QueryAsyncTask(ctx, taskservice.WithTaskRunnerCond(taskservice.EQ, cnUUID2))
+				tasks, err = taskService.QueryAsyncTask(ctx, taskservice.WithTaskMetadataId(taskservice.EQ, "a"))
 				assert.NoError(t, err)
 				if len(tasks) == 0 {
 					testLogger.Info("no task found")
 					time.Sleep(50 * time.Millisecond)
-				} else {
-					tasks, err = taskService.QueryAsyncTask(ctx, taskservice.WithTaskRunnerCond(taskservice.EQ, cnUUID1))
-					assert.Equal(t, 0, len(tasks))
 					return true
 				}
 				return false

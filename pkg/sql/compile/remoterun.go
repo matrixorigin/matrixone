@@ -18,8 +18,7 @@ import (
 	"fmt"
 	"unsafe"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
-
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -31,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/apply"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dedupjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
@@ -54,6 +54,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/onduplicatekey"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
@@ -83,8 +84,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-
-	"github.com/google/uuid"
 )
 
 // encodeScope generate a pipeline.Pipeline from Scope, encode pipeline, and returns.
@@ -180,17 +179,13 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 		// only encode the first one.
 		p.Qry = s.Plan
 	}
-	var data []byte
-	if s.NodeInfo.Data != nil {
-		if data, err = s.NodeInfo.Data.MarshalBinary(); err != nil {
-			return nil, -1, err
-		}
-	}
+
 	p.Node = &pipeline.NodeInfo{
-		Id:      s.NodeInfo.Id,
-		Addr:    s.NodeInfo.Addr,
-		Mcpu:    int32(s.NodeInfo.Mcpu),
-		Payload: string(data),
+		Id:    s.NodeInfo.Id,
+		Addr:  s.NodeInfo.Addr,
+		Mcpu:  int32(s.NodeInfo.Mcpu),
+		CnCnt: s.NodeInfo.CNCNT,
+		CnIdx: s.NodeInfo.CNIDX,
 	}
 	ctx.pipe = p
 	ctx.scope = s
@@ -212,6 +207,7 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 			PushdownAddr:           s.DataSource.PushdownAddr,
 			Expr:                   s.DataSource.FilterExpr,
 			TableDef:               s.DataSource.TableDef,
+			Node:                   s.DataSource.node,
 			Timestamp:              &s.DataSource.Timestamp,
 			RuntimeFilterProbeList: s.DataSource.RuntimeFilterSpecs,
 			IsConst:                s.DataSource.isConst,
@@ -323,6 +319,7 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 			PushdownAddr:       dsc.PushdownAddr,
 			FilterExpr:         dsc.Expr,
 			TableDef:           dsc.TableDef,
+			node:               dsc.Node,
 			Timestamp:          *dsc.Timestamp,
 			RuntimeFilterSpecs: dsc.RuntimeFilterProbeList,
 			isConst:            dsc.IsConst,
@@ -333,17 +330,8 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 		s.NodeInfo.Id = p.Node.Id
 		s.NodeInfo.Addr = p.Node.Addr
 		s.NodeInfo.Mcpu = int(p.Node.Mcpu)
-
-		bs := []byte(p.Node.Payload)
-		var relData engine.RelData
-		if len(bs) > 0 {
-			rd, err := engine_util.UnmarshalRelationData(bs)
-			if err != nil {
-				return nil, err
-			}
-			relData = rd
-		}
-		s.NodeInfo.Data = relData
+		s.NodeInfo.CNCNT = p.Node.CnCnt
+		s.NodeInfo.CNIDX = p.Node.CnIdx
 	}
 	s.Proc = proc.NewNoContextChildProcWithChannel(int(p.ChildrenCount), p.ChannelBufferSize, p.NilBatchCnt)
 	{
@@ -415,7 +403,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		}
 	case *deletion.Deletion:
 		in.Delete = &pipeline.Deletion{
-			AffectedRows: t.AffectedRows(),
+			AffectedRows: t.GetAffectedRows(),
 			RemoteDelete: t.RemoteDelete,
 			SegmentMap:   t.SegmentMap,
 			IBucket:      t.IBucket,
@@ -695,9 +683,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		}
 	case *mergerecursive.MergeRecursive:
 	case *mergegroup.MergeGroup:
-		in.Agg = &pipeline.Group{
-			NeedEval: t.NeedEval,
-		}
+		in.Agg = &pipeline.Group{}
 		in.ProjectList = t.ProjectList
 		EncodeMergeGroup(t, in.Agg)
 	case *mergetop.MergeTop:
@@ -721,22 +707,15 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		}
 
 	case *external.External:
-		name2ColIndexSlice := make([]*pipeline.ExternalName2ColIndex, len(t.Es.Name2ColIndex))
-		i := 0
-		for k, v := range t.Es.Name2ColIndex {
-			name2ColIndexSlice[i] = &pipeline.ExternalName2ColIndex{Name: k, Index: v}
-			i++
-		}
 		in.ExternalScan = &pipeline.ExternalScan{
 			Attrs:           t.Es.Attrs,
+			ColumnListLen:   t.Es.ColumnListLen,
 			Cols:            t.Es.Cols,
 			FileSize:        t.Es.FileSize,
 			FileOffsetTotal: t.Es.FileOffsetTotal,
-			Name2ColIndex:   name2ColIndexSlice,
 			CreateSql:       t.Es.CreateSql,
 			FileList:        t.Es.FileList,
 			Filter:          t.Es.Filter.FilterExpr,
-			TbColToDataCol:  t.Es.TbColToDataCol,
 			StrictSqlMode:   t.Es.StrictSqlMode,
 		}
 		in.ProjectList = t.ProjectList
@@ -777,6 +756,10 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			JoinMapTag:        t.JoinMapTag,
 			JoinMapRefCnt:     t.JoinMapRefCnt,
 			RuntimeFilterSpec: t.RuntimeFilterSpec,
+			IsDedup:           t.IsDedup,
+			OnDuplicateAction: t.OnDuplicateAction,
+			DedupColName:      t.DedupColName,
+			DedupColTypes:     t.DedupColTypes,
 		}
 	case *shufflebuild.ShuffleBuild:
 		in.ShuffleBuild = &pipeline.Shufflebuild{
@@ -787,10 +770,33 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			RuntimeFilterSpec: t.RuntimeFilterSpec,
 			JoinMapTag:        t.JoinMapTag,
 			ShuffleIdx:        t.ShuffleIdx,
+			IsDedup:           t.IsDedup,
+			OnDuplicateAction: t.OnDuplicateAction,
+			DedupColName:      t.DedupColName,
+			DedupColTypes:     t.DedupColTypes,
 		}
 	case *indexbuild.IndexBuild:
 		in.IndexBuild = &pipeline.Indexbuild{
 			RuntimeFilterSpec: t.RuntimeFilterSpec,
+		}
+	case *dedupjoin.DedupJoin:
+		relList, colList := getRelColList(t.Result)
+		in.DedupJoin = &pipeline.DedupJoin{
+			RelList:                relList,
+			ColList:                colList,
+			LeftCond:               t.Conditions[0],
+			RightCond:              t.Conditions[1],
+			RuntimeFilterBuildList: t.RuntimeFilterSpecs,
+			IsShuffle:              t.IsShuffle,
+			JoinMapTag:             t.JoinMapTag,
+			ShuffleIdx:             t.ShuffleIdx,
+			OnDuplicateAction:      t.OnDuplicateAction,
+			DedupColName:           t.DedupColName,
+			DedupColTypes:          t.DedupColTypes,
+			LeftTypes:              convertToPlanTypes(t.LeftTypes),
+			RightTypes:             convertToPlanTypes(t.RightTypes),
+			UpdateColIdxList:       t.UpdateColIdxList,
+			UpdateColExprList:      t.UpdateColExprList,
 		}
 	case *apply.Apply:
 		relList, colList := getRelColList(t.Result)
@@ -800,13 +806,39 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			ColList:   colList,
 			Types:     convertToPlanTypes(t.Typs),
 		}
-		in.ProjectList = t.ProjectList
 		in.TableFunction = &pipeline.TableFunction{
 			Attrs:  t.TableFunction.Attrs,
 			Rets:   t.TableFunction.Rets,
 			Args:   t.TableFunction.Args,
 			Params: t.TableFunction.Params,
 			Name:   t.TableFunction.FuncName,
+		}
+	case *multi_update.MultiUpdate:
+		updateCtxList := make([]*plan.UpdateCtx, len(t.MultiUpdateCtx))
+		for i, muCtx := range t.MultiUpdateCtx {
+			updateCtxList[i] = &plan.UpdateCtx{
+				ObjRef:              muCtx.ObjRef,
+				TableDef:            muCtx.TableDef,
+				PartitionTableIds:   muCtx.PartitionTableIDs,
+				PartitionTableNames: muCtx.PartitionTableNames,
+				OldPartitionIdx:     int32(muCtx.OldPartitionIdx),
+				NewPartitionIdx:     int32(muCtx.NewPartitionIdx),
+			}
+
+			updateCtxList[i].InsertCols = make([]plan.ColRef, len(muCtx.InsertCols))
+			for j, pos := range muCtx.InsertCols {
+				updateCtxList[i].InsertCols[j].ColPos = int32(pos)
+			}
+
+			updateCtxList[i].DeleteCols = make([]plan.ColRef, len(muCtx.DeleteCols))
+			for j, pos := range muCtx.DeleteCols {
+				updateCtxList[i].DeleteCols[j].ColPos = int32(pos)
+			}
+		}
+		in.MultiUpdate = &pipeline.MultiUpdate{
+			AffectedRows:  t.GetAffectedRows(),
+			Action:        uint32(t.Action),
+			UpdateCtxList: updateCtxList,
 		}
 	case *postdml.PostDml:
 		in.PostDml = &pipeline.PostDml{
@@ -888,7 +920,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		lockArg := lockop.NewArgumentByEngine(eng)
 		for _, target := range t.Targets {
 			typ := plan2.MakeTypeByPlan2Type(target.PrimaryColTyp)
-			lockArg.AddLockTarget(target.GetTableId(), target.GetPrimaryColIdxInBat(), typ, target.GetRefreshTsIdxInBat())
+			lockArg.AddLockTarget(target.GetTableId(), target.GetPrimaryColIdxInBat(), typ, target.GetRefreshTsIdxInBat(), target.GetLockRows(), target.GetLockTableAtTheEnd())
 		}
 		for _, target := range t.Targets {
 			if target.LockTable {
@@ -1173,7 +1205,6 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		op = mergerecursive.NewArgument()
 	case vm.MergeGroup:
 		arg := mergegroup.NewArgument()
-		arg.NeedEval = opr.Agg.NeedEval
 		arg.ProjectList = opr.ProjectList
 		op = arg
 		DecodeMergeGroup(op.(*mergegroup.MergeGroup), opr.Agg)
@@ -1195,21 +1226,16 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		op = arg
 	case vm.External:
 		t := opr.GetExternalScan()
-		name2ColIndex := make(map[string]int32)
-		for _, n2i := range t.Name2ColIndex {
-			name2ColIndex[n2i.Name] = n2i.Index
-		}
 		op = external.NewArgument().WithEs(
 			&external.ExternalParam{
 				ExParamConst: external.ExParamConst{
 					Attrs:           t.Attrs,
+					ColumnListLen:   t.ColumnListLen,
 					FileSize:        t.FileSize,
 					FileOffsetTotal: t.FileOffsetTotal,
 					Cols:            t.Cols,
 					CreateSql:       t.CreateSql,
-					Name2ColIndex:   name2ColIndex,
 					FileList:        t.FileList,
-					TbColToDataCol:  t.TbColToDataCol,
 					StrictSqlMode:   t.StrictSqlMode,
 				},
 				ExParam: external.ExParam{
@@ -1233,7 +1259,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		op = table_scan.NewArgument().WithTypes(opr.TableScan.Types)
 		op.(*table_scan.TableScan).ProjectList = opr.ProjectList
 	case vm.ValueScan:
-		op = value_scan.NewValueScanFromProcess()
+		op = value_scan.NewArgument()
 		op.(*value_scan.ValueScan).ProjectList = opr.ProjectList
 		if len(opr.ValueScan.BatchBlock) > 0 {
 			bat := batch.NewOffHeapEmpty()
@@ -1255,6 +1281,10 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.JoinMapTag = t.JoinMapTag
 		arg.JoinMapRefCnt = t.JoinMapRefCnt
 		arg.RuntimeFilterSpec = t.RuntimeFilterSpec
+		arg.IsDedup = t.IsDedup
+		arg.OnDuplicateAction = t.OnDuplicateAction
+		arg.DedupColName = t.DedupColName
+		arg.DedupColTypes = t.DedupColTypes
 		op = arg
 	case vm.ShuffleBuild:
 		arg := shufflebuild.NewArgument()
@@ -1266,10 +1296,31 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.RuntimeFilterSpec = t.RuntimeFilterSpec
 		arg.JoinMapTag = t.JoinMapTag
 		arg.ShuffleIdx = t.ShuffleIdx
+		arg.IsDedup = t.IsDedup
+		arg.OnDuplicateAction = t.OnDuplicateAction
+		arg.DedupColName = t.DedupColName
+		arg.DedupColTypes = t.DedupColTypes
 		op = arg
 	case vm.IndexBuild:
 		arg := indexbuild.NewArgument()
 		arg.RuntimeFilterSpec = opr.GetIndexBuild().RuntimeFilterSpec
+		op = arg
+	case vm.DedupJoin:
+		arg := dedupjoin.NewArgument()
+		t := opr.GetDedupJoin()
+		arg.Result = convertToResultPos(t.RelList, t.ColList)
+		arg.LeftTypes = convertToTypes(t.LeftTypes)
+		arg.RightTypes = convertToTypes(t.RightTypes)
+		arg.Conditions = [][]*plan.Expr{t.LeftCond, t.RightCond}
+		arg.RuntimeFilterSpecs = t.RuntimeFilterBuildList
+		arg.IsShuffle = t.IsShuffle
+		arg.JoinMapTag = t.JoinMapTag
+		arg.ShuffleIdx = t.ShuffleIdx
+		arg.OnDuplicateAction = t.OnDuplicateAction
+		arg.DedupColName = t.DedupColName
+		arg.DedupColTypes = t.DedupColTypes
+		arg.UpdateColIdxList = t.UpdateColIdxList
+		arg.UpdateColExprList = t.UpdateColExprList
 		op = arg
 	case vm.Apply:
 		arg := apply.NewArgument()
@@ -1277,7 +1328,6 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.ApplyType = int(t.ApplyType)
 		arg.Result = convertToResultPos(t.RelList, t.ColList)
 		arg.Typs = convertToTypes(t.Types)
-		arg.ProjectList = opr.ProjectList
 		arg.TableFunction = table_function.NewArgument()
 		arg.TableFunction.Attrs = opr.TableFunction.Attrs
 		arg.TableFunction.Rets = opr.TableFunction.Rets
@@ -1285,6 +1335,37 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.TableFunction.FuncName = opr.TableFunction.Name
 		arg.TableFunction.Params = opr.TableFunction.Params
 		op = arg
+	case vm.MultiUpdate:
+		arg := multi_update.NewArgument()
+		t := opr.GetMultiUpdate()
+		arg.SetAffectedRows(t.AffectedRows)
+		arg.Action = multi_update.UpdateAction(t.Action)
+
+		arg.MultiUpdateCtx = make([]*multi_update.MultiUpdateCtx, len(t.UpdateCtxList))
+		for i, muCtx := range t.UpdateCtxList {
+
+			arg.MultiUpdateCtx[i] = &multi_update.MultiUpdateCtx{
+				ObjRef:              muCtx.ObjRef,
+				TableDef:            muCtx.TableDef,
+				PartitionTableIDs:   muCtx.PartitionTableIds,
+				PartitionTableNames: muCtx.PartitionTableNames,
+				OldPartitionIdx:     int(muCtx.OldPartitionIdx),
+				NewPartitionIdx:     int(muCtx.NewPartitionIdx),
+			}
+
+			arg.MultiUpdateCtx[i].InsertCols = make([]int, len(muCtx.InsertCols))
+			for j, pos := range muCtx.InsertCols {
+				arg.MultiUpdateCtx[i].InsertCols[j] = int(pos.ColPos)
+			}
+
+			arg.MultiUpdateCtx[i].DeleteCols = make([]int, len(muCtx.DeleteCols))
+			for j, pos := range muCtx.DeleteCols {
+				arg.MultiUpdateCtx[i].DeleteCols[j] = int(pos.ColPos)
+			}
+		}
+
+		op = arg
+
 	case vm.PostDml:
 		t := opr.GetPostDml()
 		arg := postdml.NewArgument()
@@ -1428,7 +1509,7 @@ func (ctx *scopeContext) findRegister(reg *process.WaitRegister) (int32, *scopeC
 }
 
 func EncodeMergeGroup(merge *mergegroup.MergeGroup, pipe *pipeline.Group) {
-	if !merge.NeedEval || merge.PartialResults == nil {
+	if merge.PartialResults == nil {
 		return
 	}
 	pipe.PartialResultTypes = make([]uint32, len(merge.PartialResultTypes))
@@ -1533,7 +1614,7 @@ func EncodeMergeGroup(merge *mergegroup.MergeGroup, pipe *pipeline.Group) {
 }
 
 func DecodeMergeGroup(merge *mergegroup.MergeGroup, pipe *pipeline.Group) {
-	if !pipe.NeedEval || pipe.PartialResults == nil {
+	if pipe.PartialResults == nil {
 		return
 	}
 	merge.PartialResultTypes = make([]types.T, len(pipe.PartialResultTypes))

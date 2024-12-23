@@ -154,12 +154,8 @@ func (l Lock) release() {
 	holdersPool.Put(l.holders)
 }
 
-func (l Lock) closeWaiter(w *waiter) bool {
+func (l Lock) closeWaiter(w *waiter, logger *log.MOLogger) bool {
 	canRemove := func() bool {
-		if !l.isLockRow() {
-			panic("BUG: range lock cannot call closeWaiter")
-		}
-
 		if l.holders.size() > 0 {
 			return false
 		}
@@ -183,7 +179,7 @@ func (l Lock) closeWaiter(w *waiter) bool {
 	if canRemove {
 		// close all ref in waiter queue
 		l.waiters.iter(func(w *waiter) bool {
-			w.close()
+			w.close("Lock closeWaiter", logger)
 			return true
 		})
 	}

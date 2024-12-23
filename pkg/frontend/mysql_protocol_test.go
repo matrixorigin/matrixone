@@ -100,6 +100,7 @@ func TestMysqlClientProtocol_Handshake(t *testing.T) {
 	_, err = toml.DecodeFile("test/system_vars_config.toml", pu.SV)
 	require.NoError(t, err)
 	pu.SV.SkipCheckUser = true
+	pu.SV.KillRountinesInterval = 0
 	setSessionAlloc("", NewLeakCheckAllocator())
 	setPu("", pu)
 
@@ -186,22 +187,21 @@ func TestKill(t *testing.T) {
 	eng.EXPECT().Hints().Return(engine.Hints{CommitOrRollbackTimeout: time.Second * 10}).AnyTimes()
 
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
-	txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, commitTS any, options ...any) (client.TxnOperator, error) {
-		wp := newTestWorkspace()
-		txnOp := mock_frontend.NewMockTxnOperator(ctrl)
-		txnOp.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
-		txnOp.EXPECT().GetWorkspace().Return(wp).AnyTimes()
-		txnOp.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
-		txnOp.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
-		txnOp.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
-		txnOp.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
-		txnOp.EXPECT().EnterRunSql().Return().AnyTimes()
-		txnOp.EXPECT().ExitRunSql().Return().AnyTimes()
-		return txnOp, nil
-	}).AnyTimes()
+	txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+		func(ctx context.Context, commitTS any, options ...any) (client.TxnOperator, error) {
+			txnOp := newTestTxnOp()
+			return txnOp, nil
+		}).AnyTimes()
+	txnClient.EXPECT().RestartTxn(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+		func(ctx context.Context, txnOp TxnOperator, commitTS any, options ...any) (client.TxnOperator, error) {
+			tTxnOp := txnOp.(*testTxnOp)
+			tTxnOp.meta.Status = txn.TxnStatus_Active
+			return txnOp, nil
+		}).AnyTimes()
 	pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
 	require.NoError(t, err)
 	pu.SV.SkipCheckUser = true
+	pu.SV.KillRountinesInterval = 0
 	setPu("", pu)
 	setSessionAlloc("", NewLeakCheckAllocator())
 	sql1 := "select connection_id();"
@@ -1312,6 +1312,7 @@ func TestMysqlResultSet(t *testing.T) {
 	pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
 	require.NoError(t, err)
 	pu.SV.SkipCheckUser = true
+	pu.SV.KillRountinesInterval = 0
 	setPu("", pu)
 
 	noResultSet := make(map[string]bool)
@@ -1762,6 +1763,7 @@ func Test_writePackets(t *testing.T) {
 
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ioses, err := NewIOSession(&testConn{}, pu, "")
 		if err != nil {
@@ -1817,6 +1819,7 @@ func Test_beginPacket(t *testing.T) {
 		}
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ioses, err := NewIOSession(&testConn{}, pu, "")
 		convey.ShouldBeNil(err)
@@ -1835,6 +1838,7 @@ func Test_beginPacket(t *testing.T) {
 		}
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ioses, err := NewIOSession(&testConn{}, pu, "")
 		convey.ShouldBeNil(err)
@@ -1859,6 +1863,7 @@ func Test_beginPacket(t *testing.T) {
 		}
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ioses, err := NewIOSession(&testConn{}, pu, "")
 		convey.ShouldBeNil(err)
@@ -1882,6 +1887,7 @@ func Test_beginPacket(t *testing.T) {
 		}
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ioses, err := NewIOSession(&testConn{}, pu, "")
 		convey.ShouldBeNil(err)
@@ -1984,6 +1990,7 @@ func TestSendPrepareResponse(t *testing.T) {
 		}
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ioses, err := NewIOSession(&testConn{}, pu, "")
 		convey.ShouldBeNil(err)
@@ -2021,6 +2028,7 @@ func TestSendPrepareResponse(t *testing.T) {
 		}
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ioses, err := NewIOSession(&testConn{}, pu, "")
 		convey.ShouldBeNil(err)
@@ -2056,6 +2064,7 @@ func FuzzParseExecuteData(f *testing.F) {
 	}
 	pu := config.NewParameterUnit(sv, nil, nil, nil)
 	pu.SV.SkipCheckUser = true
+	pu.SV.KillRountinesInterval = 0
 	setPu("", pu)
 	ioses, err := NewIOSession(&testConn{}, pu, "")
 	if err != nil {
@@ -2182,6 +2191,7 @@ func Test_resultset(t *testing.T) {
 		}
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ioses, err := NewIOSession(&testConn{}, pu, "")
 		convey.ShouldBeNil(err)
@@ -2203,6 +2213,7 @@ func Test_resultset(t *testing.T) {
 		}
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ioses, err := NewIOSession(&testConn{}, pu, "")
 		convey.ShouldBeNil(err)
@@ -2224,6 +2235,7 @@ func Test_resultset(t *testing.T) {
 		}
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ioses, err := NewIOSession(&testConn{}, pu, "")
 		convey.ShouldBeNil(err)
@@ -2248,6 +2260,7 @@ func Test_resultset(t *testing.T) {
 		}
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ioses, err := NewIOSession(&testConn{}, pu, "")
 		convey.ShouldBeNil(err)
@@ -2272,6 +2285,7 @@ func Test_send_packet(t *testing.T) {
 		}
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ioses, err := NewIOSession(&testConn{}, pu, "")
 		convey.ShouldBeNil(err)
@@ -2287,6 +2301,7 @@ func Test_send_packet(t *testing.T) {
 		}
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ioses, err := NewIOSession(&testConn{}, pu, "")
 		convey.ShouldBeNil(err)
@@ -2312,6 +2327,7 @@ func Test_analyse320resp(t *testing.T) {
 		}
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ioses, err := NewIOSession(&testConn{}, pu, "")
 		convey.ShouldBeNil(err)
@@ -2355,6 +2371,7 @@ func Test_analyse320resp(t *testing.T) {
 		}
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ioses, err := NewIOSession(&testConn{}, pu, "")
 		convey.ShouldBeNil(err)
@@ -2398,6 +2415,7 @@ func Test_analyse41resp(t *testing.T) {
 		}
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ioses, err := NewIOSession(tConn, pu, "")
 		convey.ShouldBeNil(err)
@@ -2445,6 +2463,7 @@ func Test_analyse41resp(t *testing.T) {
 		}
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ioses, err := NewIOSession(tConn, pu, "")
 		convey.ShouldBeNil(err)
@@ -2545,6 +2564,7 @@ func Test_handleHandshake(t *testing.T) {
 		}
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ioses, err := NewIOSession(&testConn{}, pu, "")
 		convey.ShouldBeNil(err)
@@ -2580,6 +2600,7 @@ func Test_handleHandshake_Recover(t *testing.T) {
 	}
 	pu := config.NewParameterUnit(sv, nil, nil, nil)
 	pu.SV.SkipCheckUser = true
+	pu.SV.KillRountinesInterval = 0
 	setPu("", pu)
 	ioses, err := NewIOSession(&testConn{}, pu, "")
 	if err != nil {
@@ -2615,6 +2636,7 @@ func TestMysqlProtocolImpl_Close(t *testing.T) {
 	}
 	pu := config.NewParameterUnit(sv, nil, nil, nil)
 	pu.SV.SkipCheckUser = true
+	pu.SV.KillRountinesInterval = 0
 	setPu("", pu)
 	ioses, err := NewIOSession(&testConn{}, pu, "")
 	convey.ShouldBeNil(err)

@@ -17,17 +17,20 @@ package disttae
 import (
 	"context"
 	"fmt"
-	"runtime"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/panjf2000/ants/v2"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -36,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
@@ -53,12 +57,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/panjf2000/ants/v2"
-	"go.uber.org/zap"
 )
 
 var _ engine.Engine = new(Engine)
-var ncpu = runtime.GOMAXPROCS(0)
 
 func New(
 	ctx context.Context,
@@ -106,10 +107,6 @@ func New(
 			},
 		),
 	}
-	e.snapCatalog = &struct {
-		sync.Mutex
-		snaps []*cache.CatalogCache
-	}{}
 	e.mu.snapParts = make(map[[2]uint64]*struct {
 		sync.Mutex
 		snaps []*logtailreplay.Partition
@@ -139,26 +136,90 @@ func New(
 	}
 
 	e.pClient.LogtailRPCClientFactory = DefaultNewRpcStreamToTnLogTailService
+	e.pClient.ctx = ctx
+
+	err = initMoTableStatsConfig(ctx, e)
+	if err != nil {
+		panic(err)
+	}
+
 	return e
+}
+
+func (e *Engine) Close() error {
+	if e.gcPool != nil {
+		_ = e.gcPool.ReleaseTimeout(time.Second * 3)
+	}
+	e.dynamicCtx.Close()
+	return nil
 }
 
 func (e *Engine) fillDefaults() {
 	if e.config.insertEntryMaxCount <= 0 {
 		e.config.insertEntryMaxCount = InsertEntryThreshold
 	}
-	if e.config.workspaceThreshold <= 0 {
-		e.config.workspaceThreshold = WorkspaceThreshold
+	if e.config.commitWorkspaceThreshold <= 0 {
+		e.config.commitWorkspaceThreshold = CommitWorkspaceThreshold
+	}
+	if e.config.writeWorkspaceThreshold <= 0 {
+		e.config.writeWorkspaceThreshold = WriteWorkspaceThreshold
+	}
+	if e.config.extraWorkspaceThreshold <= 0 {
+		e.config.extraWorkspaceThreshold = ExtraWorkspaceThreshold
 	}
 	if e.config.cnTransferTxnLifespanThreshold <= 0 {
 		e.config.cnTransferTxnLifespanThreshold = CNTransferTxnLifespanThreshold
+	}
+	if e.config.quota.Load() <= 0 {
+		mem := objectio.TotalMem() / 100 * 5
+		e.config.quota.Store(mem)
+		v2.TxnExtraWorkspaceQuotaGauge.Set(float64(mem))
 	}
 
 	logutil.Info(
 		"INIT-ENGINE-CONFIG",
 		zap.Int("InsertEntryMaxCount", e.config.insertEntryMaxCount),
-		zap.Uint64("WorkspaceThreshold", e.config.workspaceThreshold),
+		zap.Uint64("CommitWorkspaceThreshold", e.config.commitWorkspaceThreshold),
+		zap.Uint64("WriteWorkspaceThreshold", e.config.writeWorkspaceThreshold),
+		zap.Uint64("ExtraWorkspaceThresholdQuota", e.config.quota.Load()),
 		zap.Duration("CNTransferTxnLifespanThreshold", e.config.cnTransferTxnLifespanThreshold),
 	)
+}
+
+// SetWorkspaceThreshold updates the commit and write workspace thresholds (in MB).
+// Non-zero values override the current thresholds, while zero keeps them unchanged.
+// Returns the previous thresholds (in MB).
+func (e *Engine) SetWorkspaceThreshold(commitThreshold, writeThreshold uint64) (commit, write uint64) {
+	commit = e.config.commitWorkspaceThreshold / mpool.MB
+	write = e.config.writeWorkspaceThreshold / mpool.MB
+	if commitThreshold != 0 {
+		e.config.commitWorkspaceThreshold = commitThreshold * mpool.MB
+	}
+	if writeThreshold != 0 {
+		e.config.writeWorkspaceThreshold = writeThreshold * mpool.MB
+	}
+	return
+}
+
+func (e *Engine) AcquireQuota(v uint64) (uint64, bool) {
+	for {
+		oldRemaining := e.config.quota.Load()
+		if oldRemaining < v {
+			return 0, false
+		}
+		remaining := oldRemaining - v
+		if e.config.quota.CompareAndSwap(oldRemaining, remaining) {
+			v2.TxnExtraWorkspaceQuotaGauge.Set(float64(remaining))
+			return remaining, true
+		}
+	}
+}
+
+func (e *Engine) ReleaseQuota(quota uint64) (remaining uint64) {
+	e.config.quota.Add(quota)
+	remaining = e.config.quota.Load()
+	v2.TxnExtraWorkspaceQuotaGauge.Set(float64(remaining))
+	return
 }
 
 func (e *Engine) GetService() string {
@@ -358,34 +419,23 @@ func (e *Engine) GetNameById(ctx context.Context, op client.TxnOperator, tableId
 }
 
 func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName, tableName string, rel engine.Relation, err error) {
-	switch tableId {
-	case catalog.MO_DATABASE_ID:
+	if catalog.IsSystemTable(tableId) {
+		dbName = catalog.MO_CATALOG
 		db := &txnDatabase{
 			op:           op,
 			databaseId:   catalog.MO_CATALOG_ID,
-			databaseName: catalog.MO_CATALOG,
+			databaseName: dbName,
 		}
-		defs := catalog.GetDefines(e.service).MoDatabaseTableDefs
-		return catalog.MO_CATALOG, catalog.MO_DATABASE,
-			db.openSysTable(nil, tableId, catalog.MO_DATABASE, defs), nil
-	case catalog.MO_TABLES_ID:
-		db := &txnDatabase{
-			op:           op,
-			databaseId:   catalog.MO_CATALOG_ID,
-			databaseName: catalog.MO_CATALOG,
+		switch tableId {
+		case catalog.MO_DATABASE_ID:
+			tableName = catalog.MO_DATABASE
+		case catalog.MO_TABLES_ID:
+			tableName = catalog.MO_TABLES
+		case catalog.MO_COLUMNS_ID:
+			tableName = catalog.MO_COLUMNS
 		}
-		defs := catalog.GetDefines(e.service).MoTablesTableDefs
-		return catalog.MO_CATALOG, catalog.MO_TABLES,
-			db.openSysTable(nil, tableId, catalog.MO_TABLES, defs), nil
-	case catalog.MO_COLUMNS_ID:
-		db := &txnDatabase{
-			op:           op,
-			databaseId:   catalog.MO_CATALOG_ID,
-			databaseName: catalog.MO_CATALOG,
-		}
-		defs := catalog.GetDefines(e.service).MoColumnsTableDefs
-		return catalog.MO_CATALOG, catalog.MO_COLUMNS,
-			db.openSysTable(nil, tableId, catalog.MO_COLUMNS, defs), nil
+		rel, err = db.Relation(ctx, tableName, nil)
+		return
 	}
 
 	accountId, _ := defines.GetAccountId(ctx)
@@ -567,6 +617,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 func (e *Engine) Nodes(
 	isInternal bool, tenant string, username string, cnLabel map[string]string,
 ) (engine.Nodes, error) {
+	var ncpu = system.GoMaxProcs()
 	var nodes engine.Nodes
 
 	start := time.Now()
@@ -656,6 +707,9 @@ func (e *Engine) BuildBlockReaders(
 			rds = append(rds, new(engine_util.EmptyReader))
 		}
 	}
+	if blkCnt == 0 {
+		return rds, nil
+	}
 	fs, err := fileservice.Get[fileservice.FileService](e.fs, defines.SharedFileServiceName)
 	if err != nil {
 		return nil, err
@@ -684,6 +738,7 @@ func (e *Engine) BuildBlockReaders(
 			expr,
 			ds,
 			engine_util.GetThresholdForReader(newNum),
+			engine.FilterHint{},
 		)
 		if err != nil {
 			return nil, err
@@ -718,12 +773,6 @@ func (e *Engine) setPushClientStatus(ready bool) {
 	}
 }
 
-func (e *Engine) abortAllRunningTxn() {
-	e.Lock()
-	defer e.Unlock()
-	e.cli.AbortAllRunningTxn()
-}
-
 func (e *Engine) cleanMemoryTableWithTable(dbId, tblId uint64) {
 	e.Lock()
 	defer e.Unlock()
@@ -736,6 +785,10 @@ func (e *Engine) cleanMemoryTableWithTable(dbId, tblId uint64) {
 	// When re-subscribing, globalStats will wait for the PartitionState to be consumed before updating the object state.
 	e.globalStats.RemoveTid(tblId)
 	logutil.Debugf("clean memory table of tbl[dbId: %d, tblId: %d]", dbId, tblId)
+}
+
+func (e *Engine) safeToUnsubscribe(tid uint64) bool {
+	return e.globalStats.safeToUnsubscribe(tid)
 }
 
 func (e *Engine) PushClient() *PushClient {
@@ -754,6 +807,12 @@ func (e *Engine) UnsubscribeTable(ctx context.Context, dbID, tbID uint64) error 
 
 func (e *Engine) Stats(ctx context.Context, key pb.StatsInfoKey, sync bool) *pb.StatsInfo {
 	return e.globalStats.Get(ctx, key, sync)
+}
+
+// return true if the prefetch is received
+// return false if the prefetch is not rejected
+func (e *Engine) PrefetchTableMeta(ctx context.Context, key pb.StatsInfoKey) bool {
+	return e.globalStats.PrefetchTableMeta(ctx, key)
 }
 
 func (e *Engine) GetMessageCenter() any {

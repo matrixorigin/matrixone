@@ -36,9 +36,7 @@ select * from t1 where a IS NULL;
 select * from t1 where b is NOT NULL;
 select * from t1 where a IS NULL and b is NOT NULL;
 select * from t1 where a>b order by a asc;
--- @bvt:issue#3250
 select * from t2 where a<1 AND NOT b order by b desc;
--- @bvt:issue
 select b,max(b) from t1 where b is not NULL group by b order by b;
 select * from t1 where a<=b and a is not NULL;
 

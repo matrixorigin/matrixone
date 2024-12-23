@@ -18,6 +18,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/stretchr/testify/require"
 )
@@ -36,7 +38,7 @@ func TestRangesIsLocalErr(t *testing.T) {
 	runIsLocalErrTests(
 		t,
 		func(tbl *txnTableDelegate) {
-			_, err := tbl.Ranges(context.Background(), nil, 2, 0)
+			_, err := tbl.Ranges(context.Background(), engine.DefaultRangesParam)
 			require.Error(t, err)
 		},
 	)
@@ -66,7 +68,11 @@ func TestBuildReadersIsLocalErr(t *testing.T) {
 	runIsLocalErrTests(
 		t,
 		func(tbl *txnTableDelegate) {
-			_, err := tbl.BuildReaders(context.Background(), nil, nil, nil, 0, 0, false, 0)
+			_, err := tbl.BuildReaders(
+				context.Background(),
+				nil, nil, nil,
+				0, 0,
+				false, 0, engine.FilterHint{})
 			require.Error(t, err)
 		},
 	)

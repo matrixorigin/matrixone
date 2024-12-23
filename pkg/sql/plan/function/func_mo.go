@@ -21,7 +21,10 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -33,9 +36,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"go.uber.org/zap"
 )
 
 const (
@@ -46,8 +49,416 @@ const (
 // Mo function unit tests are not ported, because it is too heavy and does not test enough cases.
 // Mo functions are better tested with bvt.
 
-// MoTableRows returns an estimated row number of a table.
-func MoTableRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+var MoTableRowsSizeUseOldImpl atomic.Bool
+var MoTableRowsSizeForceUpdate atomic.Bool
+
+const (
+	MoTableRowsSizeForceUpdateVarName    = "mo_table_stats.force_update"
+	MoTableRowSizeUseOldImplVarName      = "mo_table_stats.use_old_impl"
+	MoTableRowSizeResetUpdateTimeVarName = "mo_table_stats.reset_update_time"
+)
+
+func GetUseOldImplVariable(proc *process.Process) bool {
+	var (
+		err        error
+		useOldImpl interface{}
+	)
+
+	if proc == nil || proc.Base == nil || proc.GetResolveVariableFunc() == nil {
+		return false
+	}
+
+	if useOldImpl, err = proc.GetResolveVariableFunc()(
+		MoTableRowSizeUseOldImplVarName, true, false); err != nil {
+		logutil.Info("get sys variable failed",
+			zap.String("variable", MoTableRowSizeUseOldImplVarName),
+			zap.Error(err))
+
+		return false
+	}
+
+	if useOldImpl == nil {
+		return false
+	}
+
+	return strings.ToLower(useOldImpl.(string)) == "yes"
+}
+
+func GetForceUpdateVariable(proc *process.Process) bool {
+	var (
+		err         error
+		forceUpdate interface{}
+	)
+
+	if proc == nil || proc.Base == nil || proc.GetResolveVariableFunc() == nil {
+		return false
+	}
+
+	if forceUpdate, err = proc.GetResolveVariableFunc()(
+		MoTableRowsSizeForceUpdateVarName, true, false); err != nil {
+		logutil.Info("get sys variable failed",
+			zap.String("variable", MoTableRowsSizeForceUpdateVarName),
+			zap.Error(err))
+
+		return false
+	}
+
+	return strings.ToLower(forceUpdate.(string)) == "yes"
+}
+
+func GetResetUpdateTimeVariable(proc *process.Process) bool {
+	var (
+		err             error
+		resetUpdateTime interface{}
+	)
+
+	if proc == nil || proc.Base == nil || proc.GetResolveVariableFunc() == nil {
+		return false
+	}
+
+	if resetUpdateTime, err = proc.GetResolveVariableFunc()(
+		MoTableRowSizeResetUpdateTimeVarName, true, false); err != nil {
+		logutil.Info("get sys variable failed",
+			zap.String("variable", MoTableRowSizeResetUpdateTimeVarName),
+			zap.Error(err))
+
+		return false
+	}
+
+	return strings.ToLower(resetUpdateTime.(string)) == "yes"
+}
+
+func MoTableSize(
+	iVecs []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	proc *process.Process,
+	length int,
+	selectList *FunctionSelectList,
+) (err error) {
+
+	useOldStr := GetUseOldImplVariable(proc)
+	if (MoTableRowsSizeUseOldImpl.Load()) || useOldStr {
+		// the old implement
+		return MoTableSizeOld(iVecs, result, proc, length, selectList)
+	}
+
+	return MoTableSizeNew(iVecs, result, proc, length, selectList)
+}
+
+func MoTableRows(
+	iVecs []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	proc *process.Process,
+	length int,
+	selectList *FunctionSelectList,
+) (err error) {
+
+	useOldStr := GetUseOldImplVariable(proc)
+	if (MoTableRowsSizeUseOldImpl.Load()) || useOldStr {
+		// the old implement
+		return MoTableRowsOld(iVecs, result, proc, length, selectList)
+	}
+
+	return MoTableRowsNew(iVecs, result, proc, length, selectList)
+}
+
+//#region MoTableSizeRows New Implements
+
+// MoTableSize/Rows get the estimated table size/rows in bytes
+// an account can only query these tables that belongs to it.
+// some special cases:
+// 1. cluster table
+
+type GetMoTableSizeRowsFuncType = func() func(
+	context.Context, []uint64, []uint64, []uint64,
+	engine.Engine, bool, bool) ([]uint64, error)
+
+var GetMoTableSizeFunc atomic.Pointer[GetMoTableSizeRowsFuncType]
+var GetMoTableRowsFunc atomic.Pointer[GetMoTableSizeRowsFuncType]
+
+type subscription struct {
+	valid bool
+
+	oriAccId      uint64
+	oriDatabaseId uint64
+	oriTableId    uint64
+
+	oriTableName    string
+	oriDatabaseName string
+}
+
+func (s subscription) String() string {
+	return fmt.Sprintf("valid: %v, oriAcc(%d), oriDatabase(%d-%s), oriTable(%d-%s)",
+		s.valid,
+		s.oriAccId,
+		s.oriDatabaseId,
+		s.oriDatabaseName,
+		s.oriTableId,
+		s.oriTableName)
+}
+
+func isSubscribedTable(
+	proc *process.Process,
+	reqAcc uint32,
+	db engine.Database,
+	dbName, tblName string,
+) (sub subscription, err error) {
+
+	var (
+		sql  string
+		ret  [][]interface{}
+		meta *plan.SubscriptionMeta
+	)
+
+	if db.IsSubscription(proc.Ctx) {
+		defer func() {
+			if err != nil {
+				sub.valid = false
+
+				metaInfo := ""
+				if meta != nil {
+					metaInfo = fmt.Sprintf("ACC(%s,%d)-DB(%s)-TBLS(%s)",
+						meta.AccountName, meta.AccountId, meta.DbName, meta.Tables)
+				}
+
+				logutil.Error("MO_TABLE_SIZE/ROWS",
+					zap.String("source", "isSubscribedTable"),
+					zap.Error(err),
+					zap.String("sub meta", metaInfo),
+					zap.Uint32("request acc", reqAcc),
+					zap.String("db name", dbName),
+					zap.String("tbl name", tblName),
+					zap.String("subscription", sub.String()),
+					zap.String("sql", sql),
+				)
+			}
+		}()
+
+		meta, err = proc.GetSessionInfo().SqlHelper.GetSubscriptionMeta(dbName)
+		if err != nil {
+			return sub,
+				moerr.NewInternalErrorNoCtx(fmt.Sprintf("get subscription meta failed, err: %v", err))
+		}
+
+		if meta.Tables != pubsub.TableAll && !strings.Contains(meta.Tables, tblName) {
+			return sub, moerr.NewInternalErrorNoCtx("no such subscribed table")
+		}
+
+		// check passed, get acc, db, tbl info
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		ctx = defines.AttachAccountId(ctx, uint32(sysAccountID))
+		defer cancel()
+
+		sql = fmt.Sprintf(`
+					select 
+    					reldatabase_id, rel_id 
+					from 
+					    mo_catalog.mo_tables 
+					where 
+					    account_id = %d and reldatabase = '%s' and relname = '%s';`,
+			meta.AccountId, meta.DbName, tblName)
+
+		ret, err = proc.GetSessionInfo().SqlHelper.ExecSqlWithCtx(ctx, sql)
+		if err != nil {
+			return sub,
+				moerr.NewInternalErrorNoCtx(fmt.Sprintf("exec get subscribed tbl info sql failed, err: %v", err))
+		}
+
+		if len(ret) != 1 {
+			return sub,
+				moerr.NewInternalErrorNoCtx(fmt.Sprintf("get the subscribed tbl info empty: %s", tblName))
+		}
+
+		sub.valid = true
+		sub.oriAccId = uint64(meta.AccountId)
+		sub.oriDatabaseId = ret[0][0].(uint64)
+		sub.oriTableId = ret[0][1].(uint64)
+		sub.oriTableName = tblName
+		sub.oriDatabaseName = meta.DbName
+
+		return sub, nil
+	}
+
+	sub.valid = false
+	return sub, nil
+}
+
+func MoTableSizeRowsHelper(
+	iVecs []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	proc *process.Process,
+	length int,
+	selectList *FunctionSelectList,
+	executor *atomic.Pointer[GetMoTableSizeRowsFuncType],
+) (err error) {
+
+	var (
+		ok  bool
+		db  engine.Database
+		rel engine.Relation
+
+		dbNull, tblNull   bool
+		dbBytes, tblBytes []byte
+
+		dbName, tblName string
+
+		eng engine.Engine
+		txn client.TxnOperator
+
+		ret                   []uint64
+		accIds, dbIds, tblIds []uint64
+
+		forceUpdate     = GetForceUpdateVariable(proc)
+		resetUpdateTime = GetResetUpdateTimeVariable(proc)
+
+		rs   *vector.FunctionResult[int64]
+		dbs  vector.FunctionParameterWrapper[types.Varlena]
+		tbls vector.FunctionParameterWrapper[types.Varlena]
+	)
+
+	rs = vector.MustFunctionResult[int64](result)
+	dbs = vector.GenerateFunctionStrParameter(iVecs[0])
+	tbls = vector.GenerateFunctionStrParameter(iVecs[1])
+
+	eng = proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
+	if eng == nil {
+		return moerr.NewInternalError(proc.Ctx, "MoTableSizeRows: mo table engine is nil")
+	}
+
+	if proc.GetTxnOperator() == nil {
+		return moerr.NewInternalError(proc.Ctx, "MoTableSizeRows: txn operator is nil")
+	}
+
+	accountId := proc.Ctx.Value(defines.TenantIDKey{}).(uint32)
+
+	decodeNames := func(i uint64) (string, string, bool) {
+		dbBytes, dbNull = dbs.GetStrValue(i)
+		tblBytes, tblNull = tbls.GetStrValue(i)
+		if dbNull || tblNull {
+			return "", "", false
+		}
+
+		d := functionUtil.QuickBytesToStr(dbBytes)
+		t := functionUtil.QuickBytesToStr(tblBytes)
+
+		return d, t, true
+	}
+
+	defer func() {
+		if err != nil {
+			var names []string
+			for i := uint64(0); i < uint64(length); i++ {
+				d, t, _ := decodeNames(i)
+				names = append(names, fmt.Sprintf("[%s-%s]; ", d, t))
+			}
+
+			logutil.Error("MoTableSizeRows",
+				zap.Error(err),
+				zap.String("db", dbName),
+				zap.String("table", tblName),
+				zap.Uint32("account id", accountId),
+				zap.String("tbl list", strings.Join(names, ",")))
+		}
+	}()
+
+	txn = proc.GetTxnOperator()
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if dbName, tblName, ok = decodeNames(i); !ok {
+			if err = rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		if ok, err = specialTableFilterForNonSys(proc.Ctx, dbName, tblName); ok && err == nil {
+			if err = rs.Append(int64(0), false); err != nil {
+				return err
+			}
+			continue
+		}
+
+		if err != nil {
+			return err
+		}
+
+		if db, err = eng.Database(proc.Ctx, dbName, txn); err != nil {
+			if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+				return moerr.NewInternalErrorNoCtxf("db not exist: %s(%s)",
+					dbName, "OkExpectedEOB")
+			}
+			return err
+		}
+
+		var sub subscription
+		if sub, err = isSubscribedTable(
+			proc, accountId, db, dbName, tblName); err != nil {
+			return err
+		} else if sub.valid {
+			// is subscription
+			accIds = append(accIds, sub.oriAccId)
+			dbIds = append(dbIds, sub.oriDatabaseId)
+			tblIds = append(tblIds, sub.oriTableId)
+		} else {
+			if rel, err = db.Relation(proc.Ctx, tblName, nil); err != nil {
+				if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+					return moerr.NewInternalErrorNoCtxf("tbl not exist: %s-%s(%s)",
+						dbName, tblName, "OkExpectedEOB")
+				}
+				return err
+			}
+
+			accIds = append(accIds, uint64(accountId))
+			dbIds = append(dbIds, uint64(rel.GetDBID(proc.Ctx)))
+			tblIds = append(tblIds, uint64(rel.GetTableID(proc.Ctx)))
+		}
+	}
+
+	ret, err = (*executor.Load())()(
+		proc.Ctx, accIds, dbIds, tblIds, eng,
+		forceUpdate || MoTableRowsSizeForceUpdate.Load(),
+		resetUpdateTime)
+
+	if err != nil {
+		return err
+	}
+
+	for _, val := range ret {
+		if err = rs.Append(int64(val), false); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func MoTableSizeNew(
+	iVecs []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	proc *process.Process,
+	length int,
+	selectList *FunctionSelectList,
+) (err error) {
+
+	return MoTableSizeRowsHelper(iVecs, result, proc, length, selectList, &GetMoTableSizeFunc)
+}
+
+func MoTableRowsNew(
+	iVecs []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	proc *process.Process,
+	length int,
+	selectList *FunctionSelectList,
+) (err error) {
+
+	return MoTableSizeRowsHelper(iVecs, result, proc, length, selectList, &GetMoTableRowsFunc)
+}
+
+//#endregion MoTableSizeRows New Implements
+
+//#region MoTableSizeRows Old Implements
+
+func MoTableRowsOld(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	rs := vector.MustFunctionResult[int64](result)
 	dbs := vector.GenerateFunctionStrParameter(ivecs[0])
 	tbls := vector.GenerateFunctionStrParameter(ivecs[1])
@@ -106,6 +517,29 @@ func MoTableRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 				}
 				return err
 			}
+
+			var accId uint32
+			accId, err = defines.GetAccountId(foolCtx)
+			if err != nil {
+				return err
+			}
+
+			var sub subscription
+			if sub, err = isSubscribedTable(
+				proc, accId, dbo, dbStr, tblStr); err != nil {
+				logutil.Error("MoTableRowsOld",
+					zap.String("source", "isSubscribeTable"),
+					zap.Error(err))
+				return err
+			} else if sub.valid {
+				// subscription
+				foolCtx = defines.AttachAccountId(foolCtx, uint32(sub.oriAccId))
+				dbo, err = e.Database(foolCtx, sub.oriDatabaseName, txn)
+				if err != nil {
+					return err
+				}
+			}
+
 			rel, err = dbo.Relation(foolCtx, tblStr, nil)
 			if err != nil {
 				return err
@@ -162,8 +596,7 @@ func MoTableRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 	return nil
 }
 
-// MoTableSize returns an estimated size of a table.
-func MoTableSize(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+func MoTableSizeOld(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	rs := vector.MustFunctionResult[int64](result)
 	dbs := vector.GenerateFunctionStrParameter(ivecs[0])
 	tbls := vector.GenerateFunctionStrParameter(ivecs[1])
@@ -226,6 +659,29 @@ func MoTableSize(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 				}
 				return err
 			}
+
+			var accId uint32
+			accId, err = defines.GetAccountId(foolCtx)
+			if err != nil {
+				return err
+			}
+
+			var sub subscription
+			if sub, err = isSubscribedTable(
+				proc, accId, dbo, dbStr, tblStr); err != nil {
+				logutil.Error("MoTableSizeOld",
+					zap.String("source", "isSubscribeTable"),
+					zap.Error(err))
+				return err
+			} else if sub.valid {
+				// subscription
+				foolCtx = defines.AttachAccountId(foolCtx, uint32(sub.oriAccId))
+				dbo, err = e.Database(foolCtx, sub.oriDatabaseName, txn)
+				if err != nil {
+					return err
+				}
+			}
+
 			rel, err = dbo.Relation(foolCtx, tblStr, nil)
 			if err != nil {
 				return err
@@ -245,26 +701,6 @@ func MoTableSize(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 		}
 	}
 	return nil
-}
-
-var specialRegexp = regexp.MustCompile(fmt.Sprintf("%s|%s|%s",
-	catalog.MO_TABLES, catalog.MO_DATABASE, catalog.MO_COLUMNS))
-
-func specialTableFilterForNonSys(ctx context.Context, dbStr, tblStr string) (bool, error) {
-	accountId, err := defines.GetAccountId(ctx)
-	if err != nil {
-		return false, err
-	}
-
-	if accountId == sysAccountID || dbStr != catalog.MO_CATALOG {
-		return false, nil
-	}
-
-	if specialRegexp.MatchString(tblStr) || isClusterTable(dbStr, tblStr) {
-		return true, nil
-	}
-
-	return false, nil
 }
 
 func originalTableSize(ctx context.Context, db engine.Database, rel engine.Relation) (size uint64, err error) {
@@ -345,6 +781,28 @@ func indexesTableSize(ctx context.Context, db engine.Database, rel engine.Relati
 	// this fix does not fix the issue but only avoids the failure caused by it.
 	err = nil
 	return totalSize, err
+}
+
+//#endregion
+
+var specialRegexp = regexp.MustCompile(fmt.Sprintf("%s|%s|%s",
+	catalog.MO_TABLES, catalog.MO_DATABASE, catalog.MO_COLUMNS))
+
+func specialTableFilterForNonSys(ctx context.Context, dbStr, tblStr string) (bool, error) {
+	accountId, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return false, err
+	}
+
+	if accountId == sysAccountID || dbStr != catalog.MO_CATALOG {
+		return false, nil
+	}
+
+	if specialRegexp.MatchString(tblStr) || isClusterTable(dbStr, tblStr) {
+		return true, nil
+	}
+
+	return false, nil
 }
 
 // MoTableColMax return the max value of the column
@@ -439,9 +897,7 @@ func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vec
 			if err != nil {
 				return err
 			}
-
-			//ranges, err := rel.Ranges(ctx, nil)
-			ranges, err := rel.Ranges(ctx, nil, 2, 0)
+			ranges, err := rel.Ranges(ctx, engine.DefaultRangesParam)
 			if err != nil {
 				return err
 			}
@@ -585,6 +1041,7 @@ var (
 		"mo_stages":                   0,
 		"mo_snapshots":                0,
 		"mo_pitr":                     0,
+		catalog.MO_TABLE_STATS:        0,
 	}
 )
 

@@ -23,8 +23,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -44,9 +42,11 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/udf"
+	"github.com/matrixorigin/matrixone/pkg/util/debug/goroutine"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 )
 
 // CnServerMessageHandler receive and deal the message from cn-client.
@@ -91,6 +91,9 @@ func CnServerMessageHandler(
 	if !ok {
 		logutil.Errorf("cn server should receive *pipeline.Message, but get %v", message)
 		panic("cn server receive a message with unexpected type")
+	}
+	if msg.DebugMsg != "" {
+		logutil.Infof("%s, goRoutineId=%d", msg.GetDebugMsg(), goroutine.GetRoutineId())
 	}
 
 	// prepare the receiver structure, just for easy using the `send` method.
@@ -156,13 +159,13 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		cancel()
 
 		if err != nil || !succeed {
-			dispatchProc.Cancel()
+			dispatchProc.Cancel(err)
 			return err
 		}
 
 		select {
 		case <-receiver.connectionCtx.Done():
-			dispatchProc.Cancel()
+			dispatchProc.Cancel(err)
 
 		// there is no need to check the dispatchProc.Ctx.Done() here.
 		// because we need to receive the error from dispatchProc.DispatchNotifyCh.
@@ -195,9 +198,9 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		colexec.Get().RecordBuiltPipeline(receiver.clientSession, receiver.messageId, runCompile.proc)
 
 		// running pipeline.
-		GetCompileService().recordRunningCompile(runCompile, runCompile.proc.GetTxnOperator())
+		MarkQueryRunning(runCompile, runCompile.proc.GetTxnOperator())
 		defer func() {
-			GetCompileService().removeRunningCompile(runCompile, runCompile.proc.GetTxnOperator())
+			MarkQueryDone(runCompile, runCompile.proc.GetTxnOperator())
 		}()
 
 		err = s.MergeRun(runCompile)

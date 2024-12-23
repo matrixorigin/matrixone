@@ -37,6 +37,10 @@ func consumeEntry(
 	e *api.Entry,
 	isSub bool,
 ) error {
+	// for test only.
+	if engine.skipConsume {
+		return nil
+	}
 	start := time.Now()
 	defer func() {
 		v2.LogtailUpdatePartitonConsumeLogtailOneEntryDurationHistogram.Observe(time.Since(start).Seconds())
@@ -53,7 +57,7 @@ func consumeEntry(
 	}
 
 	// Try to handle the memory records of the three tables
-	if !catalog.IsSystemTable(e.TableId) || logtailreplay.IsMetaEntry(e.TableName) {
+	if !catalog.IsSystemTable(e.TableId) || logtailreplay.IsMetaEntry(e.TableName) || e.EntryType == api.Entry_DataObject || e.EntryType == api.Entry_TombstoneObject {
 		return nil
 	}
 

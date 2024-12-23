@@ -63,7 +63,7 @@ func (s *Scope) CreateDatabase(c *Compile) error {
 		return moerr.NewDBAlreadyExists(ctx, dbName)
 	}
 
-	if err := lockMoDatabase(c, dbName); err != nil {
+	if err := lockMoDatabase(c, dbName, lock.LockMode_Exclusive); err != nil {
 		return err
 	}
 
@@ -119,7 +119,7 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		return moerr.NewErrDropNonExistsDB(c.proc.Ctx, dbName)
 	}
 
-	if err = lockMoDatabase(c, dbName); err != nil {
+	if err = lockMoDatabase(c, dbName, lock.LockMode_Exclusive); err != nil {
 		return err
 	}
 
@@ -130,17 +130,82 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		}
 	}
 
+	// whether foreign_key_checks = 0 or 1
+	err = s.removeFkeysRelationships(c, dbName)
+	if err != nil {
+		return err
+	}
+
+	database, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
+	if err != nil {
+		return err
+	}
+	relations, err := database.Relations(c.proc.Ctx)
+	if err != nil {
+		return err
+	}
+	var ignoreTables []string
+	for _, r := range relations {
+		t, err := database.Relation(c.proc.Ctx, r, nil)
+		if err != nil {
+			return err
+		}
+		defs, err := t.TableDefs(c.proc.Ctx)
+		if err != nil {
+			return err
+		}
+
+		constrain := GetConstraintDefFromTableDefs(defs)
+		for _, ct := range constrain.Cts {
+			if ds, ok := ct.(*engine.IndexDef); ok {
+				for _, d := range ds.Indexes {
+					ignoreTables = append(ignoreTables, d.IndexTableName)
+				}
+			}
+		}
+
+		for _, def := range defs {
+			if partitionDef, ok := def.(*engine.PartitionDef); ok {
+				if partitionDef.Partitioned > 0 {
+					p := &plan.PartitionByDef{}
+					err = p.UnMarshalPartitionInfo(([]byte)(partitionDef.Partition))
+					if err != nil {
+						return err
+					}
+					ignoreTables = append(ignoreTables, p.PartitionTableNames...)
+				}
+				break
+			}
+		}
+	}
+
+	deleteTables := make([]string, 0, len(relations)-len(ignoreTables))
+	for _, r := range relations {
+		isIndexTable := false
+		for _, d := range ignoreTables {
+			if d == r {
+				isIndexTable = true
+				break
+			}
+		}
+		if !isIndexTable {
+			deleteTables = append(deleteTables, r)
+		}
+	}
+
+	for _, t := range deleteTables {
+		dropSql := fmt.Sprintf(dropTableBeforeDropDatabase, dbName, t)
+		err = c.runSql(dropSql)
+		if err != nil {
+			return err
+		}
+	}
+
 	sql := s.Plan.GetDdl().GetDropDatabase().GetCheckFKSql()
 	if len(sql) != 0 {
 		if err = runDetectFkReferToDBSql(c, sql); err != nil {
 			return err
 		}
-	}
-
-	// whether foreign_key_checks = 0 or 1
-	err = s.removeFkeysRelationships(c, dbName)
-	if err != nil {
-		return err
 	}
 
 	err = c.e.Delete(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
@@ -235,6 +300,9 @@ func (s *Scope) AlterView(c *Compile) error {
 	dbName := c.db
 	tblName := qry.GetTableDef().GetName()
 
+	if err := lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
+		return err
+	}
 	dbSource, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
 		if qry.GetIfExists() {
@@ -246,7 +314,7 @@ func (s *Scope) AlterView(c *Compile) error {
 		if qry.GetIfExists() {
 			return nil
 		}
-		return err
+		return moerr.NewBadDB(c.proc.Ctx, dbName)
 	}
 
 	if err := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
@@ -317,10 +385,9 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 	}
 
 	tblName := qry.GetTableDef().GetName()
-
 	dbSource, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
-		return err
+		return moerr.NewBadDB(c.proc.Ctx, dbName)
 	}
 	databaseId := dbSource.GetDatabaseId(c.proc.Ctx)
 
@@ -336,39 +403,6 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 		return err
 	}
 
-	if c.proc.GetTxnOperator().Txn().IsPessimistic() {
-		var retryErr error
-		// 1. lock origin table metadata in catalog
-		if err = lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
-			if !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
-				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
-				return err
-			}
-			retryErr = err
-		}
-
-		// 2. lock origin table
-		var partitionTableNames []string
-		if tableDef.Partition != nil {
-			partitionTableNames = tableDef.Partition.PartitionTableNames
-		}
-		if err = lockTable(c.proc.Ctx, c.e, c.proc, rel, dbName, partitionTableNames, true); err != nil {
-			if !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
-				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
-				return err
-			}
-			retryErr = err
-		}
-		if retryErr != nil {
-			return retryErr
-		}
-	}
-	newCt := &engine.ConstraintDef{
-		Cts: []engine.Constraint{},
-	}
-
-	//added fk in this alter table statement
-	newAddedFkNames := make(map[string]bool)
 	/*
 		collect old fk names.
 		ForeignKeyDef.Name may be empty in previous design.
@@ -384,6 +418,120 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 				}
 			}
 		}
+	}
+	//added fk in this alter table statement
+	newAddedFkNames := make(map[string]bool)
+
+	if c.proc.GetTxnOperator().Txn().IsPessimistic() {
+		var retryErr error
+		// 0. lock origin database metadata in catalog
+		if err = lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
+			return err
+		}
+
+		// 1. lock origin table metadata in catalog
+		if err = lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
+			if !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
+				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
+				return err
+			}
+			// The changes recorded in the data dictionary table imply a change in the structure of the corresponding entity table,
+			// therefore it is necessary to rebuild the logical plan and redirect err to ErrTxnNeedRetryWithDefChanged
+			retryErr = moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
+		}
+
+		// 2. lock origin table
+		var partitionTableNames []string
+		if tableDef.Partition != nil {
+			partitionTableNames = tableDef.Partition.PartitionTableNames
+		}
+		if err = lockTable(c.proc.Ctx, c.e, c.proc, rel, dbName, partitionTableNames, true); err != nil {
+			if !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
+				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
+				return err
+			}
+			retryErr = moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
+		}
+
+		if qry.TableDef.Indexes != nil {
+			for _, indexdef := range qry.TableDef.Indexes {
+				if indexdef.TableExist {
+					if err = lockIndexTable(c.proc.Ctx, dbSource, c.e, c.proc, indexdef.IndexTableName, true); err != nil {
+						if !moerr.IsMoErrCode(err, moerr.ErrParseError) &&
+							!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
+							!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
+							c.proc.Error(c.proc.Ctx, "lock index table for alter table",
+								zap.String("databaseName", c.db),
+								zap.String("origin tableName", qry.GetTableDef().Name),
+								zap.String("index name", indexdef.IndexName),
+								zap.String("index tableName", indexdef.IndexTableName),
+								zap.Error(err))
+							return err
+						}
+						retryErr = moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
+					}
+				}
+			}
+		}
+
+		// 3. lock foreign key's table
+		for _, action := range qry.Actions {
+			switch act := action.Action.(type) {
+			case *plan.AlterTable_Action_Drop:
+				alterTableDrop := act.Drop
+				constraintName := alterTableDrop.Name
+				if alterTableDrop.Typ == plan.AlterTableDrop_FOREIGN_KEY {
+					//check fk existed in table
+					if _, has := oldFkNames[constraintName]; !has {
+						return moerr.NewErrCantDropFieldOrKey(c.proc.Ctx, constraintName)
+					}
+					for _, fk := range tableDef.Fkeys {
+						if fk.Name == constraintName && fk.ForeignTbl != 0 { //skip self ref foreign key
+							// lock fk table
+							fkDbName, fkTableName, err := c.e.GetNameById(c.proc.Ctx, c.proc.GetTxnOperator(), fk.ForeignTbl)
+							if err != nil {
+								return err
+							}
+							if err = lockMoTable(c, fkDbName, fkTableName, lock.LockMode_Exclusive); err != nil {
+								if !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
+									!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
+									return err
+								}
+								retryErr = moerr.NewTxnNeedRetryWithDefChangedNoCtx()
+							}
+						}
+					}
+				}
+			case *plan.AlterTable_Action_AddFk:
+				//check fk existed in table
+				if _, has := oldFkNames[act.AddFk.Fkey.Name]; has {
+					return moerr.NewErrDuplicateKeyName(c.proc.Ctx, act.AddFk.Fkey.Name)
+				}
+				//check fk existed in this alter table statement
+				if _, has := newAddedFkNames[act.AddFk.Fkey.Name]; has {
+					return moerr.NewErrDuplicateKeyName(c.proc.Ctx, act.AddFk.Fkey.Name)
+				}
+				newAddedFkNames[act.AddFk.Fkey.Name] = true
+
+				// lock fk table
+				if !(act.AddFk.DbName != dbName && act.AddFk.TableName != tblName) { //skip self ref foreign key
+					if err = lockMoTable(c, act.AddFk.DbName, act.AddFk.TableName, lock.LockMode_Exclusive); err != nil {
+						if !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
+							!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
+							return err
+						}
+						retryErr = moerr.NewTxnNeedRetryWithDefChangedNoCtx()
+					}
+				}
+			}
+		}
+
+		if retryErr != nil {
+			return retryErr
+		}
+	}
+	newCt := &engine.ConstraintDef{
+		Cts: []engine.Constraint{},
 	}
 
 	removeRefChildTbls := make(map[string]uint64)
@@ -470,11 +618,14 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 			if _, has := oldFkNames[act.AddFk.Fkey.Name]; has {
 				return moerr.NewErrDuplicateKeyName(c.proc.Ctx, act.AddFk.Fkey.Name)
 			}
-			//check fk existed in this alter table statement
-			if _, has := newAddedFkNames[act.AddFk.Fkey.Name]; has {
-				return moerr.NewErrDuplicateKeyName(c.proc.Ctx, act.AddFk.Fkey.Name)
+			if !c.proc.GetTxnOperator().Txn().IsPessimistic() {
+				//check fk existed in this alter table statement
+				if _, has := newAddedFkNames[act.AddFk.Fkey.Name]; has {
+					return moerr.NewErrDuplicateKeyName(c.proc.Ctx, act.AddFk.Fkey.Name)
+				}
+				newAddedFkNames[act.AddFk.Fkey.Name] = true
 			}
-			newAddedFkNames[act.AddFk.Fkey.Name] = true
+
 			alterKinds = addAlterKind(alterKinds, api.AlterKind_UpdateConstraint)
 			addRefChildTbls = append(addRefChildTbls, act.AddFk.Fkey.ForeignTbl)
 			newFkeys = append(newFkeys, act.AddFk.Fkey)
@@ -500,16 +651,16 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 
 				if indexDef.Unique {
 					// 1. Unique Index related logic
-					err = s.handleUniqueIndexTable(c, indexDef, qry.Database, tableDef, indexInfo)
+					err = s.handleUniqueIndexTable(c, dbSource, indexDef, qry.Database, tableDef, indexInfo)
 				} else if !indexDef.Unique && catalog.IsRegularIndexAlgo(indexDef.IndexAlgo) {
 					// 2. Regular Secondary index
-					err = s.handleRegularSecondaryIndexTable(c, indexDef, qry.Database, tableDef, indexInfo)
+					err = s.handleRegularSecondaryIndexTable(c, dbSource, indexDef, qry.Database, tableDef, indexInfo)
 				} else if !indexDef.Unique && catalog.IsMasterIndexAlgo(indexDef.IndexAlgo) {
 					// 3. Master index
-					err = s.handleMasterIndexTable(c, indexDef, qry.Database, tableDef, indexInfo)
+					err = s.handleMasterIndexTable(c, dbSource, indexDef, qry.Database, tableDef, indexInfo)
 				} else if !indexDef.Unique && catalog.IsFullTextIndexAlgo(indexDef.IndexAlgo) {
 					// 3. FullText index
-					err = s.handleFullTextIndexTable(c, indexDef, qry.Database, tableDef, indexInfo)
+					err = s.handleFullTextIndexTable(c, dbSource, indexDef, qry.Database, tableDef, indexInfo)
 				} else if !indexDef.Unique && catalog.IsIvfIndexAlgo(indexDef.IndexAlgo) {
 					// 4. IVF indexDefs are aggregated and handled later
 					if _, ok := multiTableIndexes[indexDef.IndexName]; !ok {
@@ -528,7 +679,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 			for _, multiTableIndex := range multiTableIndexes {
 				switch multiTableIndex.IndexAlgo { // no need for catalog.ToLower() here
 				case catalog.MoIndexIvfFlatAlgo.ToString():
-					err = s.handleVectorIvfFlatIndex(c, multiTableIndex.IndexDefs, qry.Database, tableDef, indexInfo)
+					err = s.handleVectorIvfFlatIndex(c, dbSource, multiTableIndex.IndexDefs, qry.Database, tableDef, indexInfo)
 				}
 
 				if err != nil {
@@ -636,7 +787,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 			for _, multiTableIndex := range multiTableIndexes {
 				switch multiTableIndex.IndexAlgo {
 				case catalog.MoIndexIvfFlatAlgo.ToString():
-					err = s.handleVectorIvfFlatIndex(c, multiTableIndex.IndexDefs, qry.Database, tableDef, nil)
+					err = s.handleVectorIvfFlatIndex(c, dbSource, multiTableIndex.IndexDefs, qry.Database, tableDef, nil)
 				}
 
 				if err != nil {
@@ -843,7 +994,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 	// convert the plan's defs to the execution's defs
 	exeDefs, err := planDefsToExeDefs(qry.GetTableDef())
 	if err != nil {
-		c.proc.Info(c.proc.Ctx, "createTable",
+		c.proc.Error(c.proc.Ctx, "createTable",
 			zap.String("databaseName", c.db),
 			zap.String("tableName", qry.GetTableDef().GetName()),
 			zap.Error(err),
@@ -857,44 +1008,56 @@ func (s *Scope) CreateTable(c *Compile) error {
 	}
 	tblName := qry.GetTableDef().GetName()
 
+	if err := lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
+		return err
+	}
+
 	dbSource, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
 		if dbName == "" {
 			return moerr.NewNoDB(c.proc.Ctx)
 		}
+		return moerr.NewBadDB(c.proc.Ctx, dbName)
+	}
+
+	exists, err := dbSource.RelationExists(c.proc.Ctx, tblName, nil)
+	if err != nil {
+		c.proc.Error(c.proc.Ctx, "check table relation exists failed",
+			zap.String("databaseName", c.db),
+			zap.String("tableName", tblName),
+			zap.Error(err),
+		)
 		return err
 	}
-	if _, err := dbSource.Relation(c.proc.Ctx, tblName, nil); err == nil {
+	if exists {
 		if qry.GetIfNotExists() {
 			return nil
 		}
-
-		c.proc.Info(c.proc.Ctx, "createTable",
-			zap.String("databaseName", c.db),
-			zap.String("tableName", qry.GetTableDef().GetName()),
-			zap.Error(err),
-		)
 		return moerr.NewTableAlreadyExists(c.proc.Ctx, tblName)
 	}
 
 	// check in EntireEngine.TempEngine, notice that TempEngine may not init
 	tmpDBSource, err := c.e.Database(c.proc.Ctx, defines.TEMPORARY_DBNAME, c.proc.GetTxnOperator())
 	if err == nil {
-		if _, err := tmpDBSource.Relation(c.proc.Ctx, engine.GetTempTableName(dbName, tblName), nil); err == nil {
+		exists, err := tmpDBSource.RelationExists(c.proc.Ctx, engine.GetTempTableName(dbName, tblName), nil)
+		if err != nil {
+			c.proc.Error(c.proc.Ctx, "check temporary table relation exists failed",
+				zap.String("databaseName", c.db),
+				zap.String("tableName", tblName),
+				zap.Error(err),
+			)
+			return err
+		}
+		if exists {
 			if qry.GetIfNotExists() {
 				return nil
 			}
-			c.proc.Info(c.proc.Ctx, "createTable",
-				zap.String("databaseName", c.db),
-				zap.String("tableName", qry.GetTableDef().GetName()),
-				zap.Error(err),
-			)
 			return moerr.NewTableAlreadyExists(c.proc.Ctx, fmt.Sprintf("temporary '%s'", tblName))
 		}
 	}
 
 	if err = lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
-		c.proc.Info(c.proc.Ctx, "createTable",
+		c.proc.Error(c.proc.Ctx, "createTable",
 			zap.String("databaseName", c.db),
 			zap.String("tableName", qry.GetTableDef().GetName()),
 			zap.Error(err),
@@ -903,7 +1066,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 	}
 
 	if err = dbSource.Create(context.WithValue(c.proc.Ctx, defines.SqlKey{}, c.sql), tblName, append(exeCols, exeDefs...)); err != nil {
-		c.proc.Info(c.proc.Ctx, "createTable",
+		c.proc.Error(c.proc.Ctx, "createTable",
 			zap.String("databaseName", c.db),
 			zap.String("tableName", qry.GetTableDef().GetName()),
 			zap.Error(err),
@@ -916,7 +1079,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 		storageCols := planColsToExeCols(table.GetCols())
 		storageDefs, err := planDefsToExeDefs(table)
 		if err != nil {
-			c.proc.Info(c.proc.Ctx, "createTable",
+			c.proc.Error(c.proc.Ctx, "createTable",
 				zap.String("databaseName", c.db),
 				zap.String("tableName", qry.GetTableDef().GetName()),
 				zap.Error(err),
@@ -925,7 +1088,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 		}
 		err = dbSource.Create(c.proc.Ctx, table.GetName(), append(storageCols, storageDefs...))
 		if err != nil {
-			c.proc.Info(c.proc.Ctx, "createTable",
+			c.proc.Error(c.proc.Ctx, "createTable",
 				zap.String("databaseName", c.db),
 				zap.String("tableName", qry.GetTableDef().GetName()),
 				zap.Error(err),
@@ -1201,23 +1364,29 @@ func (s *Scope) CreateTable(c *Compile) error {
 		exeCols = planColsToExeCols(planCols)
 		exeDefs, err = planDefsToExeDefs(def)
 		if err != nil {
-			c.proc.Info(c.proc.Ctx, "createTable",
+			c.proc.Error(c.proc.Ctx, "createTable",
 				zap.String("databaseName", c.db),
 				zap.String("tableName", qry.GetTableDef().GetName()),
 				zap.Error(err),
 			)
 			return err
 		}
-		if _, err := dbSource.Relation(c.proc.Ctx, def.Name, nil); err == nil {
-			c.proc.Info(c.proc.Ctx, "createTable",
+
+		exists, err := dbSource.RelationExists(c.proc.Ctx, def.Name, nil)
+		if err != nil {
+			c.proc.Error(c.proc.Ctx, "check index relation exists failed",
 				zap.String("databaseName", c.db),
-				zap.String("tableName", qry.GetTableDef().GetName()),
+				zap.String("tableName", def.GetName()),
 				zap.Error(err),
 			)
+			return err
+		}
+		if exists {
 			return moerr.NewTableAlreadyExists(c.proc.Ctx, def.Name)
 		}
+
 		if err := dbSource.Create(c.proc.Ctx, def.Name, append(exeCols, exeDefs...)); err != nil {
-			c.proc.Info(c.proc.Ctx, "createTable",
+			c.proc.Error(c.proc.Ctx, "createTable",
 				zap.String("databaseName", c.db),
 				zap.String("tableName", qry.GetTableDef().GetName()),
 				zap.Error(err),
@@ -1234,6 +1403,12 @@ func (s *Scope) CreateTable(c *Compile) error {
 			nil,
 		)
 		if err != nil {
+			c.proc.Error(c.proc.Ctx, "create index table for maybeCreateAutoIncrement",
+				zap.String("databaseName", c.db),
+				zap.String("tableName", qry.GetTableDef().GetName()),
+				zap.String("index tableName", def.Name),
+				zap.Error(err),
+			)
 			return err
 		}
 
@@ -1258,15 +1433,21 @@ func (s *Scope) CreateTable(c *Compile) error {
 		}
 		err = c.runSql(initSQL)
 		if err != nil {
+			c.proc.Error(c.proc.Ctx, "create index table for execute initSQL",
+				zap.String("databaseName", c.db),
+				zap.String("tableName", qry.GetTableDef().GetName()),
+				zap.String("index tableName", def.Name),
+				zap.String("initSQL", initSQL),
+				zap.Error(err),
+			)
 			return err
 		}
-
 	}
 
 	if checkIndexInitializable(dbName, tblName) {
 		newRelation, err := dbSource.Relation(c.proc.Ctx, tblName, nil)
 		if err != nil {
-			c.proc.Info(c.proc.Ctx, "createTable",
+			c.proc.Error(c.proc.Ctx, "createTable",
 				zap.String("databaseName", c.db),
 				zap.String("tableName", qry.GetTableDef().GetName()),
 				zap.Error(err),
@@ -1297,7 +1478,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 
 		insertSQL2, err := makeInsertTablePartitionsSQL(c.proc.Ctx, dbSource, newRelation)
 		if err != nil {
-			c.proc.Info(c.proc.Ctx, "createTable",
+			c.proc.Error(c.proc.Ctx, "createTable",
 				zap.String("databaseName", c.db),
 				zap.String("tableName", qry.GetTableDef().GetName()),
 				zap.Error(err),
@@ -1306,7 +1487,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 		}
 		err = c.runSql(insertSQL2)
 		if err != nil {
-			c.proc.Info(c.proc.Ctx, "createTable",
+			c.proc.Error(c.proc.Ctx, "createTable",
 				zap.String("databaseName", c.db),
 				zap.String("tableName", qry.GetTableDef().GetName()),
 				zap.Error(err),
@@ -1325,6 +1506,11 @@ func (s *Scope) CreateTable(c *Compile) error {
 		nil,
 	)
 	if err != nil {
+		c.proc.Error(c.proc.Ctx, "create table for maybeCreateAutoIncrement",
+			zap.String("databaseName", c.db),
+			zap.String("tableName", qry.GetTableDef().GetName()),
+			zap.Error(err),
+		)
 		return err
 	}
 
@@ -1333,6 +1519,12 @@ func (s *Scope) CreateTable(c *Compile) error {
 			catalog.MO_CATALOG, catalog.MO_RETENTION, dbName, tblName, qry.RetentionDeadline)
 		err = c.runSql(insertRetention)
 		if err != nil {
+			c.proc.Error(c.proc.Ctx, "create table for RetentionDeadline",
+				zap.String("databaseName", c.db),
+				zap.String("tableName", qry.GetTableDef().GetName()),
+				zap.String("insertRetention sql", insertRetention),
+				zap.Error(err),
+			)
 			return err
 		}
 	}
@@ -1406,16 +1598,29 @@ func (s *Scope) CreateView(c *Compile) error {
 	if qry.GetDatabase() != "" {
 		dbName = qry.GetDatabase()
 	}
+	if err := lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
+		return err
+	}
 	dbSource, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
 		if dbName == "" {
 			return moerr.NewNoDB(c.proc.Ctx)
 		}
-		return err
+		return moerr.NewBadDB(c.proc.Ctx, dbName)
 	}
 
 	viewName := qry.GetTableDef().GetName()
-	if _, err = dbSource.Relation(c.proc.Ctx, viewName, nil); err == nil {
+	exists, err := dbSource.RelationExists(c.proc.Ctx, viewName, nil)
+	if err != nil {
+		getLogger(s.Proc.GetService()).Error("check view relation exists failed",
+			zap.String("databaseName", c.db),
+			zap.String("viewName", qry.GetTableDef().GetName()),
+			zap.Error(err),
+		)
+		return err
+	}
+
+	if exists {
 		if qry.GetIfNotExists() {
 			return nil
 		}
@@ -1423,7 +1628,7 @@ func (s *Scope) CreateView(c *Compile) error {
 		if qry.GetReplace() {
 			err = c.runSql(fmt.Sprintf("drop view if exists %s", viewName))
 			if err != nil {
-				getLogger(s.Proc.GetService()).Info("createView",
+				getLogger(s.Proc.GetService()).Error("drop existing view failed",
 					zap.String("databaseName", c.db),
 					zap.String("viewName", qry.GetTableDef().GetName()),
 					zap.Error(err),
@@ -1431,11 +1636,6 @@ func (s *Scope) CreateView(c *Compile) error {
 				return err
 			}
 		} else {
-			getLogger(s.Proc.GetService()).Info("createView",
-				zap.String("databaseName", c.db),
-				zap.String("viewName", qry.GetTableDef().GetName()),
-				zap.Error(err),
-			)
 			return moerr.NewTableAlreadyExists(c.proc.Ctx, viewName)
 		}
 	}
@@ -1443,15 +1643,19 @@ func (s *Scope) CreateView(c *Compile) error {
 	// check in EntireEngine.TempEngine, notice that TempEngine may not init
 	tmpDBSource, err := c.e.Database(c.proc.Ctx, defines.TEMPORARY_DBNAME, c.proc.GetTxnOperator())
 	if err == nil {
-		if _, err = tmpDBSource.Relation(c.proc.Ctx, engine.GetTempTableName(dbName, viewName), nil); err == nil {
+		exists, err = tmpDBSource.RelationExists(c.proc.Ctx, engine.GetTempTableName(dbName, viewName), nil)
+		if err != nil {
+			c.proc.Error(c.proc.Ctx, "check temporary table relation exists failed",
+				zap.String("databaseName", c.db),
+				zap.String("tableName", viewName),
+				zap.Error(err),
+			)
+			return err
+		}
+		if exists {
 			if qry.GetIfNotExists() {
 				return nil
 			}
-			getLogger(s.Proc.GetService()).Info("createView",
-				zap.String("databaseName", c.db),
-				zap.String("viewName", qry.GetTableDef().GetName()),
-				zap.Error(err),
-			)
 			return moerr.NewTableAlreadyExists(c.proc.Ctx, fmt.Sprintf("temporary '%s'", viewName))
 		}
 	}
@@ -1476,7 +1680,7 @@ func (s *Scope) CreateView(c *Compile) error {
 	return nil
 }
 
-func checkIndexInitializable(dbName string, tblName string) bool {
+var checkIndexInitializable = func(dbName string, tblName string) bool {
 	if dbName == catalog.MOTaskDB {
 		return false
 	} else if dbName == catalog.MO_CATALOG && strings.HasPrefix(tblName, catalog.MO_INDEXES) {
@@ -1597,19 +1801,22 @@ func (s *Scope) CreateIndex(c *Compile) error {
 		if qry.GetDatabase() != "" {
 			dbName = qry.GetDatabase()
 		}
+		if err := lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
+			return moerr.NewBadDB(c.proc.Ctx, dbName)
+		}
 		tblName := qry.GetTableDef().GetName()
 		if err := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
 			return err
 		}
 	}
 
-	d, err := c.e.Database(c.proc.Ctx, qry.Database, c.proc.GetTxnOperator())
+	dbSource, err := c.e.Database(c.proc.Ctx, qry.Database, c.proc.GetTxnOperator())
 	if err != nil {
 		return err
 	}
-	databaseId := d.GetDatabaseId(c.proc.Ctx)
+	databaseId := dbSource.GetDatabaseId(c.proc.Ctx)
 
-	r, err := d.Relation(c.proc.Ctx, qry.Table, nil)
+	r, err := dbSource.Relation(c.proc.Ctx, qry.Table, nil)
 	if err != nil {
 		return err
 	}
@@ -1620,6 +1827,7 @@ func (s *Scope) CreateIndex(c *Compile) error {
 	indexInfo := qry.GetIndex() // IndexInfo is named same as planner's IndexInfo
 	indexTableDef := indexInfo.GetTableDef()
 
+	// In MySQL, the `CREATE INDEX` syntax can only create one index instance at a time
 	// indexName -> meta      -> indexDef[0]
 	//     		 -> centroids -> indexDef[1]
 	//     		 -> entries   -> indexDef[2]
@@ -1629,13 +1837,15 @@ func (s *Scope) CreateIndex(c *Compile) error {
 		indexAlgo := indexDef.IndexAlgo
 		if indexDef.Unique {
 			// 1. Unique Index related logic
-			err = s.handleUniqueIndexTable(c, indexDef, qry.Database, originalTableDef, indexInfo)
+			//err = s.handleUniqueIndexTable(c, indexDef, qry.Database, originalTableDef, indexInfo)
+			err = s.handleUniqueIndexTable(c, dbSource, indexDef, qry.Database, originalTableDef, indexInfo)
 		} else if !indexDef.Unique && catalog.IsRegularIndexAlgo(indexAlgo) {
 			// 2. Regular Secondary index
-			err = s.handleRegularSecondaryIndexTable(c, indexDef, qry.Database, originalTableDef, indexInfo)
+			//err = s.handleRegularSecondaryIndexTable(c, indexDef, qry.Database, originalTableDef, indexInfo)
+			err = s.handleRegularSecondaryIndexTable(c, dbSource, indexDef, qry.Database, originalTableDef, indexInfo)
 		} else if !indexDef.Unique && catalog.IsMasterIndexAlgo(indexAlgo) {
 			// 3. Master index
-			err = s.handleMasterIndexTable(c, indexDef, qry.Database, originalTableDef, indexInfo)
+			err = s.handleMasterIndexTable(c, dbSource, indexDef, qry.Database, originalTableDef, indexInfo)
 		} else if !indexDef.Unique && catalog.IsIvfIndexAlgo(indexAlgo) {
 			// 4. IVF indexDefs are aggregated and handled later
 			if _, ok := multiTableIndexes[indexDef.IndexName]; !ok {
@@ -1647,7 +1857,7 @@ func (s *Scope) CreateIndex(c *Compile) error {
 			multiTableIndexes[indexDef.IndexName].IndexDefs[catalog.ToLower(indexDef.IndexAlgoTableType)] = indexDef
 		} else if !indexDef.Unique && catalog.IsFullTextIndexAlgo(indexAlgo) {
 			// 5. FullText index
-			err = s.handleFullTextIndexTable(c, indexDef, qry.Database, originalTableDef, indexInfo)
+			err = s.handleFullTextIndexTable(c, dbSource, indexDef, qry.Database, originalTableDef, indexInfo)
 		}
 		if err != nil {
 			return err
@@ -1657,7 +1867,7 @@ func (s *Scope) CreateIndex(c *Compile) error {
 	for _, multiTableIndex := range multiTableIndexes {
 		switch multiTableIndex.IndexAlgo {
 		case catalog.MoIndexIvfFlatAlgo.ToString():
-			err = s.handleVectorIvfFlatIndex(c, multiTableIndex.IndexDefs, qry.Database, originalTableDef, indexInfo)
+			err = s.handleVectorIvfFlatIndex(c, dbSource, multiTableIndex.IndexDefs, qry.Database, originalTableDef, indexInfo)
 		}
 
 		if err != nil {
@@ -1699,7 +1909,57 @@ func (s *Scope) CreateIndex(c *Compile) error {
 	return nil
 }
 
-func (s *Scope) handleVectorIvfFlatIndex(c *Compile, indexDefs map[string]*plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef, indexInfo *plan.CreateTable) error {
+// indexTableBuild is used to build the index table corresponding to the index
+// It converts the column definitions and execution definitions into plan, and then create the table in target database.
+func indexTableBuild(c *Compile, def *plan.TableDef, dbSource engine.Database) error {
+	planCols := def.GetCols()
+	exeCols := planColsToExeCols(planCols)
+	exeDefs, err := planDefsToExeDefs(def)
+	if err != nil {
+		c.proc.Info(c.proc.Ctx, "createTable",
+			zap.String("databaseName", c.db),
+			zap.String("tableName", def.GetName()),
+			zap.Error(err),
+		)
+		return err
+	}
+
+	exists, err := dbSource.RelationExists(c.proc.Ctx, def.Name, nil)
+	if err != nil {
+		c.proc.Error(c.proc.Ctx, "check index relation exists failed",
+			zap.String("databaseName", c.db),
+			zap.String("tableName", def.GetName()),
+			zap.Error(err),
+		)
+		return err
+	}
+	if exists {
+		return moerr.NewTableAlreadyExists(c.proc.Ctx, def.Name)
+	}
+
+	if err = dbSource.Create(c.proc.Ctx, def.Name, append(exeCols, exeDefs...)); err != nil {
+		c.proc.Info(c.proc.Ctx, "createTable",
+			zap.String("databaseName", c.db),
+			zap.String("tableName", def.GetName()),
+			zap.Error(err),
+		)
+		return err
+	}
+
+	c.setHaveDDL(true)
+
+	err = maybeCreateAutoIncrement(
+		c.proc.Ctx,
+		c.proc.GetService(),
+		dbSource,
+		def,
+		c.proc.GetTxnOperator(),
+		nil,
+	)
+	return err
+}
+
+func (s *Scope) handleVectorIvfFlatIndex(c *Compile, dbSource engine.Database, indexDefs map[string]*plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef, indexInfo *plan.CreateTable) error {
 	if ok, err := s.isExperimentalEnabled(c, ivfFlatIndexFlag); err != nil {
 		return err
 	} else if !ok {
@@ -1715,15 +1975,8 @@ func (s *Scope) handleVectorIvfFlatIndex(c *Compile, indexDefs map[string]*plan.
 
 	// 2. create hidden tables
 	if indexInfo != nil {
-
-		tables := make([]string, 3)
-		tables[0] = genCreateIndexTableSqlForIvfIndex(indexInfo.GetIndexTables()[0], indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata], qryDatabase)
-		tables[1] = genCreateIndexTableSqlForIvfIndex(indexInfo.GetIndexTables()[1], indexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids], qryDatabase)
-		tables[2] = genCreateIndexTableSqlForIvfIndex(indexInfo.GetIndexTables()[2], indexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries], qryDatabase)
-
-		for _, createTableSql := range tables {
-			err := c.runSql(createTableSql)
-			if err != nil {
+		for _, table := range indexInfo.GetIndexTables() {
+			if err := indexTableBuild(c, table, dbSource); err != nil {
 				return err
 			}
 		}
@@ -1779,9 +2032,12 @@ func (s *Scope) DropIndex(c *Compile) error {
 	defer s.ScopeAnalyzer.Stop()
 
 	qry := s.Plan.GetDdl().GetDropIndex()
+	if err := lockMoDatabase(c, qry.Database, lock.LockMode_Shared); err != nil {
+		return err
+	}
 	d, err := c.e.Database(c.proc.Ctx, qry.Database, c.proc.GetTxnOperator())
 	if err != nil {
-		return err
+		return moerr.NewBadDB(c.proc.Ctx, qry.Database)
 	}
 	r, err := d.Relation(c.proc.Ctx, qry.Table, nil)
 	if err != nil {
@@ -2026,9 +2282,12 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	keepAutoIncrement := false
 	affectedRows := uint64(0)
 
+	if err := lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
+		return err
+	}
 	dbSource, err = c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
-		return err
+		return moerr.NewBadDB(c.proc.Ctx, dbName)
 	}
 
 	if rel, err = dbSource.Relation(c.proc.Ctx, tblName, nil); err != nil {
@@ -2046,7 +2305,7 @@ func (s *Scope) TruncateTable(c *Compile) error {
 
 	if !isTemp && c.proc.GetTxnOperator().Txn().IsPessimistic() {
 		var err error
-		if e := lockMoTable(c, dbName, tblName, lock.LockMode_Shared); e != nil {
+		if e := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); e != nil {
 			if !moerr.IsMoErrCode(e, moerr.ErrTxnNeedRetry) &&
 				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
 				return e
@@ -2261,13 +2520,17 @@ func (s *Scope) DropTable(c *Compile) error {
 	var err error
 	var isTemp bool
 
+	if err := lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
+		return err
+	}
+
 	tblId := qry.GetTableId()
 	dbSource, err = c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
 		if qry.GetIfExists() {
 			return nil
 		}
-		return err
+		return moerr.NewBadDB(c.proc.Ctx, dbName)
 	}
 
 	if rel, err = dbSource.Relation(c.proc.Ctx, tblName, nil); err != nil {
@@ -2495,7 +2758,7 @@ func (s *Scope) DropTable(c *Compile) error {
 	return err
 }
 
-func planDefsToExeDefs(tableDef *plan.TableDef) ([]engine.TableDef, error) {
+var planDefsToExeDefs = func(tableDef *plan.TableDef) ([]engine.TableDef, error) {
 	planDefs := tableDef.GetDefs()
 	var exeDefs []engine.TableDef
 	c := new(engine.ConstraintDef)
@@ -2625,7 +2888,6 @@ func (s *Scope) CreateSequence(c *Compile) error {
 		dbName = qry.GetDatabase()
 	}
 	tblName := qry.GetTableDef().GetName()
-
 	dbSource, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
 		if dbName == "" {
@@ -2697,7 +2959,6 @@ func (s *Scope) AlterSequence(c *Compile) error {
 		dbName = qry.GetDatabase()
 	}
 	tblName := qry.GetTableDef().GetName()
-
 	dbSource, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
 		if dbName == "" {
@@ -3331,7 +3592,7 @@ func doLockTable(
 	return err
 }
 
-func lockTable(
+var lockTable = func(
 	ctx context.Context,
 	eng engine.Engine,
 	proc *process.Process,
@@ -3363,7 +3624,7 @@ func lockTable(
 }
 
 // lockIndexTable
-func lockIndexTable(ctx context.Context, dbSource engine.Database, eng engine.Engine, proc *process.Process, tableName string, defChanged bool) error {
+var lockIndexTable = func(ctx context.Context, dbSource engine.Database, eng engine.Engine, proc *process.Process, tableName string, defChanged bool) error {
 	rel, err := dbSource.Relation(ctx, tableName, nil)
 	if err != nil {
 		return err
@@ -3398,7 +3659,7 @@ func lockRows(
 	return err
 }
 
-func maybeCreateAutoIncrement(
+var maybeCreateAutoIncrement = func(
 	ctx context.Context,
 	sid string,
 	db engine.Database,
@@ -3551,23 +3812,24 @@ func getLockVector(proc *process.Process, accountId uint32, names []string) (*ve
 	return vec, nil
 }
 
-func lockMoDatabase(c *Compile, dbName string) error {
+var lockMoDatabase = func(c *Compile, dbName string, lockMode lock.LockMode) error {
 	dbRel, err := getRelFromMoCatalog(c, catalog.MO_DATABASE)
 	if err != nil {
 		return err
 	}
-	vec, err := getLockVector(c.proc, c.proc.GetSessionInfo().AccountId, []string{dbName})
+	accountID := c.proc.GetSessionInfo().AccountId
+	vec, err := getLockVector(c.proc, accountID, []string{dbName})
 	if err != nil {
 		return err
 	}
 	defer vec.Free(c.proc.Mp())
-	if err := lockRows(c.e, c.proc, dbRel, vec, lock.LockMode_Exclusive, lock.Sharding_ByRow, c.proc.GetSessionInfo().AccountId); err != nil {
+	if err := lockRows(c.e, c.proc, dbRel, vec, lockMode, lock.Sharding_None, accountID); err != nil {
 		return err
 	}
 	return nil
 }
 
-func lockMoTable(
+var lockMoTable = func(
 	c *Compile,
 	dbName string,
 	tblName string,
@@ -3576,13 +3838,14 @@ func lockMoTable(
 	if err != nil {
 		return err
 	}
-	vec, err := getLockVector(c.proc, c.proc.GetSessionInfo().AccountId, []string{dbName, tblName})
+	accountID := c.proc.GetSessionInfo().AccountId
+	vec, err := getLockVector(c.proc, accountID, []string{dbName, tblName})
 	if err != nil {
 		return err
 	}
 	defer vec.Free(c.proc.Mp())
 
-	if err := lockRows(c.e, c.proc, dbRel, vec, lockMode, lock.Sharding_ByRow, c.proc.GetSessionInfo().AccountId); err != nil {
+	if err := lockRows(c.e, c.proc, dbRel, vec, lockMode, lock.Sharding_None, accountID); err != nil {
 		return err
 	}
 	return nil

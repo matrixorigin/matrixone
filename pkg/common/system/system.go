@@ -39,6 +39,8 @@ var (
 	memoryTotal atomic.Uint64
 	// cpuUsage is the CPU statistics updated every second.
 	cpuUsage atomic.Uint64
+
+	goMaxProcs atomic.Int32
 )
 
 // InContainer returns if the process is running in a container.
@@ -107,6 +109,27 @@ func MemoryGolang() int {
 // GoRoutines returns the number of goroutine.
 func GoRoutines() int {
 	return runtime.NumGoroutine()
+}
+
+// GoMaxProcs returns the maximum number of CPUs that can be executing goroutine.
+// co-operate with SetGoMaxProcs
+func GoMaxProcs() int {
+	return int(goMaxProcs.Load())
+}
+
+// SetGoMaxProcs
+// co-operate with pkg/cnservice/service.handleGoMaxProcs
+func SetGoMaxProcs(n int) (ret int) {
+	ret = runtime.GOMAXPROCS(n)
+	if n < 1 {
+		// fix https://github.com/matrixorigin/MO-Cloud/issues/4486
+		goMaxProcs.Store(int32(ret))
+		logutil.Infof("call runtime.GOMAXPROCS(%d): %d, keep: %d", n, ret, ret)
+	} else {
+		goMaxProcs.Store(int32(n))
+		logutil.Infof("call runtime.GOMAXPROCS(%d): %d, keep: %d", n, ret, n)
+	}
+	return ret
 }
 
 func runWithContainer(stopper *stopper.Stopper) {
@@ -242,4 +265,5 @@ func refreshQuotaConfig() {
 func init() {
 	pid = os.Getpid()
 	refreshQuotaConfig()
+	SetGoMaxProcs(int(cpuNum.Load()))
 }

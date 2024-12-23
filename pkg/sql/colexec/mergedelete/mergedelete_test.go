@@ -17,8 +17,9 @@ package mergedelete
 import (
 	"bytes"
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -174,22 +175,22 @@ func TestMergeDelete(t *testing.T) {
 	// require.NoError(t, argument1.Prepare(proc))
 	argument1.OpAnalyzer = process.NewAnalyzer(0, false, false, "mergedelete")
 	resetChildren(&argument1, batch1)
-	_, err = argument1.Call(proc)
+	_, err = vm.Exec(&argument1, proc)
 	require.NoError(t, err)
-	require.Equal(t, uint64(15), argument1.AffectedRows())
+	require.Equal(t, uint64(15), argument1.GetAffectedRows())
 
 	argument1.Reset(proc, false, err)
 	resetChildren(&argument1, batch2)
-	_, err = argument1.Call(proc)
+	_, err = vm.Exec(&argument1, proc)
 	require.NoError(t, err)
-	require.Equal(t, uint64(60), argument1.AffectedRows())
+	require.Equal(t, uint64(60), argument1.GetAffectedRows())
 
 	argument1.ctr.affectedRows = 0
 	argument1.Reset(proc, false, err)
 	resetChildren(&argument1, nil)
-	_, err = argument1.Call(proc)
+	_, err = vm.Exec(&argument1, proc)
 	require.NoError(t, err)
-	require.Equal(t, uint64(0), argument1.AffectedRows())
+	require.Equal(t, uint64(0), argument1.GetAffectedRows())
 
 	var partitionSources []engine.Relation
 	partitionSources = append(partitionSources, &mockRelation{})
@@ -213,9 +214,9 @@ func TestMergeDelete(t *testing.T) {
 	argument2.Reset(proc, false, err)
 	resetChildren(&argument2, batch2)
 	argument2.OpAnalyzer = process.NewAnalyzer(0, false, false, "mergedelete")
-	_, err = argument2.Call(proc)
+	_, err = vm.Exec(&argument2, proc)
 	require.NoError(t, err)
-	require.Equal(t, uint64(45), argument2.AffectedRows())
+	require.Equal(t, uint64(45), argument2.GetAffectedRows())
 
 	// free resource
 	argument1.Free(proc, false, nil)

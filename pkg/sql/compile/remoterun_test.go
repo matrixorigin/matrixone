@@ -16,47 +16,36 @@ package compile
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/morpc"
-	"github.com/matrixorigin/matrixone/pkg/pb/txn"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
-	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-
+	"github.com/golang/mock/gomock"
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/apply"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/indexbuild"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/postdml"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shufflebuild"
-
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/common/reuse"
-
-	"github.com/golang/mock/gomock"
-	"github.com/google/uuid"
-	"github.com/stretchr/testify/require"
-
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/source"
-
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/apply"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dedupjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/indexbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersect"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
@@ -74,6 +63,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/onduplicatekey"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/postdml"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertunique"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/product"
@@ -83,12 +73,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightsemi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/semi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shufflebuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/source"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/stretchr/testify/require"
 )
 
 func Test_EncodeProcessInfo(t *testing.T) {
@@ -244,7 +240,13 @@ func Test_convertToPipelineInstruction(t *testing.T) {
 		&source.Source{},
 		&apply.Apply{TableFunction: &table_function.TableFunction{}},
 		&postdml.PostDml{
-			PostDmlCtx: &postdml.PostDmlCtx{FullText: &postdml.PostDmlFullTextCtx{}}},
+			PostDmlCtx: &postdml.PostDmlCtx{
+				FullText: &postdml.PostDmlFullTextCtx{},
+			},
+		},
+		&dedupjoin.DedupJoin{
+			Conditions: [][]*plan.Expr{nil, nil},
+		},
 	}
 	ctx := &scopeContext{
 		id:       1,
@@ -320,6 +322,7 @@ func Test_convertToVmInstruction(t *testing.T) {
 		{Op: int32(vm.IndexBuild), IndexBuild: &pipeline.Indexbuild{}},
 		{Op: int32(vm.Apply), Apply: &pipeline.Apply{}, TableFunction: &pipeline.TableFunction{}},
 		{Op: int32(vm.PostDml), PostDml: &pipeline.PostDml{}},
+		{Op: int32(vm.DedupJoin), DedupJoin: &pipeline.DedupJoin{}},
 	}
 	for _, instruction := range instructions {
 		_, err := convertToVmOperator(instruction, ctx, nil)
@@ -533,7 +536,7 @@ func Test_prepareRemoteRunSendingData(t *testing.T) {
 		Proc:   proc,
 		RootOp: dispatch.NewArgument(),
 	}
-	s2.RootOp.AppendChild(value_scan.NewValueScanFromItSelf())
+	s2.RootOp.AppendChild(value_scan.NewArgument())
 	_, withoutOut, _, err = prepareRemoteRunSendingData("", s2)
 	require.NoError(t, err)
 	require.False(t, withoutOut)
@@ -542,9 +545,9 @@ func Test_prepareRemoteRunSendingData(t *testing.T) {
 	// this should return withoutOut == true.
 	s3 := &Scope{
 		Proc:   proc,
-		RootOp: value_scan.NewValueScanFromItSelf(),
+		RootOp: value_scan.NewArgument(),
 	}
-	s3.RootOp.AppendChild(value_scan.NewValueScanFromItSelf())
+	s3.RootOp.AppendChild(value_scan.NewArgument())
 	_, withoutOut, _, err = prepareRemoteRunSendingData("", s3)
 	require.NoError(t, err)
 	require.True(t, withoutOut)
@@ -561,7 +564,7 @@ func Test_MessageSenderSendPipeline(t *testing.T) {
 		sender.streamSender.(*fakeStreamSender).sentCnt = 0
 		sender.streamSender.(*fakeStreamSender).nextSendError = nil
 
-		err := sender.sendPipeline(make([]byte, 10), make([]byte, 10), true, 100)
+		err := sender.sendPipeline(make([]byte, 10), make([]byte, 10), true, 100, "")
 		require.Nil(t, err)
 
 		require.Equal(t, 1, sender.streamSender.(*fakeStreamSender).sentCnt)
@@ -572,7 +575,7 @@ func Test_MessageSenderSendPipeline(t *testing.T) {
 		sender.streamSender.(*fakeStreamSender).sentCnt = 0
 		sender.streamSender.(*fakeStreamSender).nextSendError = nil
 
-		err := sender.sendPipeline(make([]byte, 10), make([]byte, 10), true, 5)
+		err := sender.sendPipeline(make([]byte, 10), make([]byte, 10), true, 5, "")
 		require.Nil(t, err)
 
 		require.True(t, sender.streamSender.(*fakeStreamSender).sentCnt > 1)
@@ -583,7 +586,7 @@ func Test_MessageSenderSendPipeline(t *testing.T) {
 		sender.streamSender.(*fakeStreamSender).sentCnt = 0
 		sender.streamSender.(*fakeStreamSender).nextSendError = moerr.NewInternalErrorNoCtx("timeout")
 
-		err := sender.sendPipeline(make([]byte, 10), make([]byte, 10), true, 100)
+		err := sender.sendPipeline(make([]byte, 10), make([]byte, 10), true, 100, "")
 		require.NotNil(t, err)
 	}
 }
@@ -635,7 +638,7 @@ func Test_ReceiveMessageFromCnServer(t *testing.T) {
 		// if others.
 		s3 := &Scope{
 			Proc:   proc,
-			RootOp: value_scan.NewValueScanFromItSelf(),
+			RootOp: value_scan.NewArgument(),
 		}
 		ch, err1 := sender.streamSender.Receive()
 		require.Nil(t, err1)
@@ -649,7 +652,7 @@ func Test_ReceiveMessageFromCnServer(t *testing.T) {
 		// if not withoutOutput and no connector / dispatch, it's an unexpected case, should throw error.
 		s4 := &Scope{
 			Proc:   proc,
-			RootOp: value_scan.NewValueScanFromItSelf(),
+			RootOp: value_scan.NewArgument(),
 		}
 		ch, err1 := sender.streamSender.Receive()
 		require.Nil(t, err1)

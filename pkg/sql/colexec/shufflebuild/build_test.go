@@ -80,11 +80,11 @@ func TestBuild(t *testing.T) {
 		err = tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 		tc.arg.SetChildren([]vm.Operator{tc.marg})
-		tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(newBatch(tc.types, tc.proc, Rows), tc.proc.Mp())
-		tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(batch.EmptyBatch, tc.proc.Mp())
-		tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(nil, tc.proc.Mp())
+		tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(newBatch(tc.types, tc.proc, Rows), nil, tc.proc.Mp())
+		tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(batch.EmptyBatch, nil, tc.proc.Mp())
+		tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, tc.proc.Mp())
 
-		ok, err := tc.arg.Call(tc.proc)
+		ok, err := vm.Exec(tc.arg, tc.proc)
 		require.NoError(t, err)
 		require.Equal(t, true, ok.Status == vm.ExecStop)
 
@@ -106,14 +106,14 @@ func BenchmarkBuild(b *testing.B) {
 		for _, tc := range tcs {
 			err := tc.arg.Prepare(tc.proc)
 			require.NoError(t, err)
-			tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(newBatch(tc.types, tc.proc, Rows), tc.proc.Mp())
-			tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(batch.EmptyBatch, tc.proc.Mp())
-			tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(nil, tc.proc.Mp())
+			tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(newBatch(tc.types, tc.proc, Rows), nil, tc.proc.Mp())
+			tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(batch.EmptyBatch, nil, tc.proc.Mp())
+			tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, tc.proc.Mp())
 			for {
-				ok, err := tc.arg.Call(tc.proc)
+				ok, err := vm.Exec(tc.arg, tc.proc)
 				require.NoError(t, err)
 				require.Equal(t, true, ok)
-				tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(nil, tc.proc.Mp())
+				tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, tc.proc.Mp())
 				ok.Batch.Clean(tc.proc.Mp())
 				break
 			}

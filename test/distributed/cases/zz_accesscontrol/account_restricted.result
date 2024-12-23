@@ -10,15 +10,15 @@ mysql
 system
 system_metrics
 create table r_test(c1 int);
-internal error: do not have privilege to execute the statement
+internal error: do not have enough storage to execute the statement
 insert into r_test values(3);
-internal error: do not have privilege to execute the statement
+internal error: do not have enough storage to execute the statement
 update r_test set c1=5;
-internal error: do not have privilege to execute the statement
+internal error: do not have enough storage to execute the statement
 truncate table r_test;
-internal error: do not have privilege to execute the statement
+internal error: do not have enough storage to execute the statement
 drop table r_test;
-internal error: do not have privilege to execute the statement
+internal error: do not have enough storage to execute the statement
 drop account if exists acc1;
 create account if not exists acc1 ADMIN_NAME 'admin' IDENTIFIED BY '123efg' comment 'account comment';
 create database res_test;
@@ -28,38 +28,38 @@ insert into r_test values(3,'a'),(4,'b'),(7,'h');
 update r_test set c1=2 where c2='a';
 alter account acc1 restricted;
 create database rdb;
-internal error: do not have privilege to execute the statement
+internal error: do not have enough storage to execute the statement
 drop database rdb;
-internal error: do not have privilege to execute the statement
+internal error: do not have enough storage to execute the statement
 create table r1(c1 int,c2 varchar(20));
-internal error: do not have privilege to execute the statement
+internal error: do not have enough storage to execute the statement
 insert into r_test values(8,'c');
-internal error: do not have privilege to execute the statement
+internal error: do not have enough storage to execute the statement
 load data infile '$resources/load_data/integer_numbers_1.csv' into table r_test fields terminated by ',';
-internal error: do not have privilege to execute the statement
+internal error: do not have enough storage to execute the statement
 update r_test set c1=5 where c2='h';
-internal error: do not have privilege to execute the statement
+internal error: do not have enough storage to execute the statement
 delete from r_test where c1=4;
 select * from r_test;
 c1    c2
 7    h
 2    a
 truncate table r_test;
-internal error: do not have privilege to execute the statement
+internal error: do not have enough storage to execute the statement
 create view r_view as select * from r_test;
-internal error: do not have privilege to execute the statement
+internal error: do not have enough storage to execute the statement
 drop view r_view;
-internal error: do not have privilege to execute the statement
+internal error: do not have enough storage to execute the statement
 create  table ti2(a INT primary key AUTO_INCREMENT, b INT, c INT);
-internal error: do not have privilege to execute the statement
+internal error: do not have enough storage to execute the statement
 create  table tm2(a INT primary key AUTO_INCREMENT, b INT, c INT);
-internal error: do not have privilege to execute the statement
+internal error: do not have enough storage to execute the statement
 insert into ti1 values (1,1,1), (2,2,2);
-internal error: do not have privilege to execute the statement
+internal error: do not have enough storage to execute the statement
 insert into ti2 values (1,1,1), (2,2,2);
-internal error: do not have privilege to execute the statement
+internal error: do not have enough storage to execute the statement
 alter table ti1 add constraint fi1 foreign key (b) references ti2(a);
-internal error: do not have privilege to execute the statement
+internal error: do not have enough storage to execute the statement
 show databases;
 Database
 information_schema
@@ -160,8 +160,8 @@ SHOW CREATE TABLE information_schema.columns;
 View    Create View    character_set_client    collation_connection
 columns    CREATE VIEW information_schema.COLUMNS AS select 'def' as TABLE_CATALOG,mc.att_database as TABLE_SCHEMA,mc.att_relname AS TABLE_NAME,mc.attname AS COLUMN_NAME,mc.attnum AS ORDINAL_POSITION,mo_show_visible_bin(mc.att_default,1) as COLUMN_DEFAULT,(case when mc.attnotnull != 0 then 'NO' else 'YES' end) as IS_NULLABLE,mo_show_visible_bin(mc.atttyp,2) as DATA_TYPE,internal_char_length(mc.atttyp) AS CHARACTER_MAXIMUM_LENGTH,internal_char_size(mc.atttyp) AS CHARACTER_OCTET_LENGTH,internal_numeric_precision(mc.atttyp) AS NUMERIC_PRECISION,internal_numeric_scale(mc.atttyp) AS NUMERIC_SCALE,internal_datetime_scale(mc.atttyp) AS DATETIME_PRECISION,(case internal_column_character_set(mc.atttyp) WHEN 0 then 'utf8' WHEN 1 then 'utf8' else NULL end) AS CHARACTER_SET_NAME,(case internal_column_character_set(mc.atttyp) WHEN 0 then 'utf8_bin' WHEN 1 then 'utf8_bin' else NULL end) AS COLLATION_NAME,mo_show_visible_bin(mc.atttyp,3) as COLUMN_TYPE,case when mc.att_constraint_type = 'p' then 'PRI' when mo_show_col_unique(mt.`constraint`, mc.attname) then 'UNI' else '' end as COLUMN_KEY,case when mc.att_is_auto_increment = 1 then 'auto_increment' else '' end as EXTRA,'select,insert,update,references' as `PRIVILEGES`,mc.att_comment as COLUMN_COMMENT,cast('' as varchar(500)) as GENERATION_EXPRESSION,if(true, NULL, 0) as SRS_ID from mo_catalog.mo_columns mc join mo_catalog.mo_tables mt ON mc.account_id = mt.account_id AND mc.att_database = mt.reldatabase AND mc.att_relname = mt.relname where mc.account_id = current_account_id() and mc.att_relname!='mo_increment_columns' and mc.att_relname not like '__mo_cpkey_%' and mc.attname != '__mo_rowid' and mc.att_relname not like '\%!\%%\%!\%%'    utf8mb4    utf8mb4_general_ci
 show index from r_test;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
-r_test    0    ui    1    c1    A    0    NULL    NULL    YES                YES    NULL
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+r_test    0    ui    1    c1    A    0    NULL    NULL    YES                    YES    c1
 show node list;
 1
 show locks;
@@ -186,7 +186,7 @@ show full tables from res_test;;
 Tables_in_res_test    Table_type
 r_test    BASE TABLE
 alter database test set mysql_compatibility_mode = '8.0.30-MatrixOne-v0.7.0';
-internal error: do not have privilege to execute the statement
+internal error: do not have enough storage to execute the statement
 select privilege_name, obj_type, privilege_level from mo_catalog.mo_role_privs where privilege_name = 'values';
 privilege_name    obj_type    privilege_level
 values    table    *.*
@@ -194,25 +194,25 @@ select user_name from mo_catalog.mo_user;
 user_name
 admin
 create account abc ADMIN_NAME 'admin' IDENTIFIED BY '123456';
-internal error: do not have privilege to execute the statement
+internal error: do not have enough storage to execute the statement
 alter table r_test drop index ui;
-internal error: do not have privilege to execute the statement
+internal error: do not have enough storage to execute the statement
 create role role1;
-internal error: do not have privilege to execute the statement
+internal error: do not have enough storage to execute the statement
 grant all on table *.* to role1;
-internal error: do not have privilege to execute the statement
+internal error: do not have enough storage to execute the statement
 grant create table, drop table on database *.* to role1;
-internal error: do not have privilege to execute the statement
+internal error: do not have enough storage to execute the statement
 create user user1 identified by 'pass1';
-internal error: do not have privilege to execute the statement
+internal error: do not have enough storage to execute the statement
 grant role1 to user1;
-internal error: do not have privilege to execute the statement
+internal error: do not have enough storage to execute the statement
 drop user user1;
-internal error: do not have privilege to execute the statement
+internal error: do not have enough storage to execute the statement
 drop role role1;
-internal error: do not have privilege to execute the statement
+internal error: do not have enough storage to execute the statement
 drop database account_res;
-internal error: do not have privilege to execute the statement
+internal error: do not have enough storage to execute the statement
 alter account acc1 suspend;
 select account_name,status,comments from mo_catalog.mo_account where account_name='acc1';
 account_name    status    comments
@@ -273,8 +273,8 @@ SHOW CREATE TABLE information_schema.columns;
 View    Create View    character_set_client    collation_connection
 columns    CREATE VIEW information_schema.COLUMNS AS select 'def' as TABLE_CATALOG,mc.att_database as TABLE_SCHEMA,mc.att_relname AS TABLE_NAME,mc.attname AS COLUMN_NAME,mc.attnum AS ORDINAL_POSITION,mo_show_visible_bin(mc.att_default,1) as COLUMN_DEFAULT,(case when mc.attnotnull != 0 then 'NO' else 'YES' end) as IS_NULLABLE,mo_show_visible_bin(mc.atttyp,2) as DATA_TYPE,internal_char_length(mc.atttyp) AS CHARACTER_MAXIMUM_LENGTH,internal_char_size(mc.atttyp) AS CHARACTER_OCTET_LENGTH,internal_numeric_precision(mc.atttyp) AS NUMERIC_PRECISION,internal_numeric_scale(mc.atttyp) AS NUMERIC_SCALE,internal_datetime_scale(mc.atttyp) AS DATETIME_PRECISION,(case internal_column_character_set(mc.atttyp) WHEN 0 then 'utf8' WHEN 1 then 'utf8' else NULL end) AS CHARACTER_SET_NAME,(case internal_column_character_set(mc.atttyp) WHEN 0 then 'utf8_bin' WHEN 1 then 'utf8_bin' else NULL end) AS COLLATION_NAME,mo_show_visible_bin(mc.atttyp,3) as COLUMN_TYPE,case when mc.att_constraint_type = 'p' then 'PRI' when mo_show_col_unique(mt.`constraint`, mc.attname) then 'UNI' else '' end as COLUMN_KEY,case when mc.att_is_auto_increment = 1 then 'auto_increment' else '' end as EXTRA,'select,insert,update,references' as `PRIVILEGES`,mc.att_comment as COLUMN_COMMENT,cast('' as varchar(500)) as GENERATION_EXPRESSION,if(true, NULL, 0) as SRS_ID from mo_catalog.mo_columns mc join mo_catalog.mo_tables mt ON mc.account_id = mt.account_id AND mc.att_database = mt.reldatabase AND mc.att_relname = mt.relname where mc.account_id = current_account_id() and mc.att_relname!='mo_increment_columns' and mc.att_relname not like '__mo_cpkey_%' and mc.attname != '__mo_rowid' and mc.att_relname not like '\%!\%%\%!\%%'    utf8mb4    utf8mb4_general_ci
 show index from r_test;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
-r_test    0    ui    1    c1    A    0    NULL    NULL    YES                YES    NULL
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+r_test    0    ui    1    c1    A    0    NULL    NULL    YES                    YES    c1
 show node list;
 1
 show locks;

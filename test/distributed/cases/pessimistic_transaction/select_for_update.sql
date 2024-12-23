@@ -93,6 +93,7 @@ select * from su_01 where c1=7 for update;
 -- @session:id=1{
 use select_for_update;
 select * from su_01;
+-- @wait:0:commit
 delete from su_01 where c1=7;
 -- @session}
 commit;

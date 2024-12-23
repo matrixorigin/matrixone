@@ -26,7 +26,7 @@ const (
 	InFilterCardLimitNonPK   = 10000
 	InFilterCardLimitPK      = 1000000
 	BloomFilterCardLimit     = 100 * InFilterCardLimitNonPK
-	InFilterSelectivityLimit = 0.05
+	InFilterSelectivityLimit = 0.2
 )
 
 func GetInFilterCardLimit(sid string) int32 {
@@ -50,6 +50,14 @@ func GetInFilterCardLimitOnPK(
 		upper = lower
 	}
 	return int32(upper)
+}
+
+func mustRuntimeFilter(n *plan.Node) bool {
+	switch n.JoinType {
+	case plan.Node_INDEX, plan.Node_DEDUP:
+		return true
+	}
+	return false
 }
 
 func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
@@ -97,7 +105,7 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 	}
 
 	rightChild := builder.qry.Nodes[node.Children[1]]
-	if node.JoinType != plan.Node_INDEX && rightChild.Stats.Outcnt > 5000000 {
+	if !mustRuntimeFilter(node) && rightChild.Stats.Outcnt > 5000000 {
 		return
 	}
 	if node.Stats.HashmapStats.HashOnPK && rightChild.Stats.Outcnt > 320000 {
@@ -155,7 +163,11 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 		sortOrder := GetSortOrder(tableDef, probeCol.ColPos)
 		if node.JoinType != plan.Node_INDEX {
 			probeNdv := getExprNdv(probeExprs[0], builder)
-			if probeNdv == -1 || node.Stats.HashmapStats.HashmapSize/probeNdv >= 0.1 {
+			if probeNdv <= 1 {
+				//maybe not flushed yet, set at least 100 to continue calculation
+				probeNdv = 100
+			}
+			if node.Stats.HashmapStats.HashmapSize/probeNdv >= 0.1 {
 				return
 			}
 			if sortOrder != 0 {
@@ -163,7 +175,7 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 					return
 				}
 			} else {
-				if len(tableDef.Pkey.Names) > 1 {
+				if len(tableDef.Pkey.Names) > 1 && probeCol.Name != catalog.CPrimaryKeyColName {
 					convertToCPKey = true
 				}
 			}
@@ -173,7 +185,7 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 			//}
 		}
 
-		if builder.optimizerHints != nil && builder.optimizerHints.runtimeFilter != 0 && node.JoinType != plan.Node_INDEX {
+		if builder.optimizerHints != nil && builder.optimizerHints.runtimeFilter != 0 && !mustRuntimeFilter(node) {
 			return
 		}
 

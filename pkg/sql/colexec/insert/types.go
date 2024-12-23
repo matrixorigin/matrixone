@@ -137,12 +137,12 @@ func (insert *Insert) Free(proc *process.Process, pipelineFailed bool, err error
 	}
 }
 
-func (insert *Insert) AffectedRows() uint64 {
-	return insert.ctr.affectedRows
+func (insert *Insert) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
+	return input, nil
 }
 
-func (insert *Insert) GetAffectedRows() *uint64 {
-	return &insert.ctr.affectedRows
+func (insert *Insert) GetAffectedRows() uint64 {
+	return insert.ctr.affectedRows
 }
 
 func (insert *Insert) initBufForS3() {

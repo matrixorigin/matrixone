@@ -83,6 +83,7 @@ func MakeDefaultTransientPool(name string) *containers.VectorPool {
 		name,
 		trasientCapacity,
 		containers.WithAllocationLimit(limit),
+		containers.WithMPool(common.SmallAllocator),
 	)
 }
 func FormatMemStats(memstats runtime.MemStats) string {

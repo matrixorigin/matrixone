@@ -33,43 +33,64 @@ var (
 	maxIdleConns        = 100
 	maxIdleConnsPerHost = 100
 	maxConnsPerHost     = 100
-	idleConnTimeout     = 180 * time.Second
+	idleConnTimeout     = 10 * time.Second
 )
 
 var dnsResolver = dns.NewCachingResolver(
-	net.DefaultResolver,
+	nil,
 	dns.MaxCacheEntries(128),
 )
 
+func init() {
+	net.DefaultResolver = dnsResolver
+	http.DefaultTransport = httpRoundTripper
+}
+
+var httpDialer = &net.Dialer{
+	Timeout:  connectTimeout,
+	Resolver: dnsResolver,
+}
+
+var httpTransport = &http.Transport{
+	DialContext:           wrapDialContext(httpDialer.DialContext),
+	MaxIdleConns:          maxIdleConns,
+	IdleConnTimeout:       idleConnTimeout,
+	MaxIdleConnsPerHost:   maxIdleConnsPerHost,
+	MaxConnsPerHost:       maxConnsPerHost,
+	TLSHandshakeTimeout:   connectTimeout,
+	ResponseHeaderTimeout: readWriteTimeout,
+	TLSClientConfig: &tls.Config{
+		InsecureSkipVerify: true,
+		RootCAs:            caPool,
+	},
+	Proxy: http.ProxyFromEnvironment,
+}
+
+func init() {
+	// don't know why there is a large number of connections even though MaxConnsPerHost is set.
+	// close idle connections periodically.
+	go func() {
+		for range time.NewTicker(time.Second).C {
+			httpTransport.CloseIdleConnections()
+		}
+	}()
+}
+
+var httpRoundTripper = wrapRoundTripper(httpTransport)
+
+var caPool = func() *x509.CertPool {
+	pool, err := x509.SystemCertPool()
+	if err != nil {
+		panic(err)
+	}
+	return pool
+}()
+
 func newHTTPClient(args ObjectStorageArguments) *http.Client {
-
-	// dialer
-	dialer := &net.Dialer{
-		Timeout:   connectTimeout,
-		KeepAlive: 5 * time.Second,
-		Resolver:  dnsResolver,
-	}
-
-	// transport
-	transport := &http.Transport{
-		DialContext:           dialer.DialContext,
-		MaxIdleConns:          maxIdleConns,
-		IdleConnTimeout:       idleConnTimeout,
-		MaxIdleConnsPerHost:   maxIdleConnsPerHost,
-		MaxConnsPerHost:       maxConnsPerHost,
-		TLSHandshakeTimeout:   connectTimeout,
-		ResponseHeaderTimeout: readWriteTimeout,
-		//Proxy:                 http.ProxyFromEnvironment,
-		//ForceAttemptHTTP2:     true,
-	}
 
 	// custom certs
 	if len(args.CertFiles) > 0 {
 		// custom certs
-		pool, err := x509.SystemCertPool()
-		if err != nil {
-			panic(err)
-		}
 		for _, path := range args.CertFiles {
 			content, err := os.ReadFile(path)
 			if err != nil {
@@ -82,18 +103,13 @@ func newHTTPClient(args ObjectStorageArguments) *http.Client {
 			logutil.Info("file service: load cert file",
 				zap.Any("path", path),
 			)
-			pool.AppendCertsFromPEM(content)
+			caPool.AppendCertsFromPEM(content)
 		}
-		tlsConfig := &tls.Config{
-			InsecureSkipVerify: true,
-			RootCAs:            pool,
-		}
-		transport.TLSClientConfig = tlsConfig
 	}
 
 	// client
 	client := &http.Client{
-		Transport: transport,
+		Transport: httpRoundTripper,
 	}
 
 	return client

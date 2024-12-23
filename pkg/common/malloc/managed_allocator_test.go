@@ -112,3 +112,20 @@ func BenchmarkManagedAllocatorLargeAmount(b *testing.B) {
 		}
 	}
 }
+
+func FuzzManagedAllocator(f *testing.F) {
+	allocator := NewManagedAllocator(newUpstreamAllocatorForTest())
+	f.Fuzz(func(t *testing.T, i int) {
+		if i == 0 {
+			return
+		}
+		bs, err := allocator.Allocate(uint64(i)%8192, NoHints)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i := range bs {
+			bs[i] = uint8(i)
+		}
+		allocator.Deallocate(bs, NoHints)
+	})
+}

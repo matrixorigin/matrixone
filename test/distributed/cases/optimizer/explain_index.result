@@ -15,7 +15,7 @@ Sleep(1)
 explain select c3,c4,c5 from t1 where c3=1;
 TP QUERY PLAN
 Project
-  ->  Table Scan on d1.t1i1(index)
+  ->  Index Table Scan on t1.t1i1
         Filter Cond: prefix_eq(#[0,0])
         Block Filter Cond: prefix_eq(#[0,0])
 select c3,c4,c5 from t1 where c3=1;
@@ -43,17 +43,9 @@ count(*)
 explain select c3,c4,c5 from t1 where c3 in (1,5,10,20);
 TP QUERY PLAN
 Project
-  ->  Join
-        Join Type: INDEX
-        Join Cond: (t1.__mo_cpkey_col = #[1,0])
-        Runtime Filter Build: #[-1,0]
-        ->  Table Scan on d1.t1 [ForceOneCN]
-              Filter Cond: t1.c3 in ([1 5 10 20])
-              Block Filter Cond: t1.c3 in ([1 5 10 20])
-              Runtime Filter Probe: t1.__mo_cpkey_col
-        ->  Table Scan on d1.t1i1(index) [ForceOneCN]
-              Filter Cond: prefix_in(#[0,0])
-              Block Filter Cond: prefix_in(#[0,0])
+  ->  Index Table Scan on t1.t1i1
+        Filter Cond: prefix_in(#[0,0])
+        Block Filter Cond: prefix_in(#[0,0])
 select c3,c4,c5 from t1 where c3 in (1,5,10,20);
 c3    c4    c5
 1    2    0
@@ -99,17 +91,9 @@ c3    c4    c5
 explain select c3,c4,c5 from t1 where c3 between 4 and 7 and c5=5;
 TP QUERY PLAN
 Project
-  ->  Join
-        Join Type: INDEX
-        Join Cond: (t1.__mo_cpkey_col = #[1,0])
-        Runtime Filter Build: #[-1,0]
-        ->  Table Scan on d1.t1 [ForceOneCN]
-              Filter Cond: t1.c3 BETWEEN 4 AND 7, (t1.c5 = 5)
-              Block Filter Cond: t1.c3 BETWEEN 4 AND 7
-              Runtime Filter Probe: t1.__mo_cpkey_col
-        ->  Table Scan on d1.t1i1(index) [ForceOneCN]
-              Filter Cond: prefix_between(#[0,0]), (serial_extract(#[0,0], 2, INT)) = 5)
-              Block Filter Cond: prefix_between(#[0,0])
+  ->  Index Table Scan on t1.t1i1
+        Filter Cond: prefix_between(#[0,0]), (serial_extract(#[0,0], 2, INT)) = 5)
+        Block Filter Cond: prefix_between(#[0,0])
 select c3,c4,c5 from t1 where c3 between 4 and 7 and c5=5;
 c3    c4    c5
 6    2    5
@@ -176,7 +160,7 @@ Project
               Filter Cond: (t1.c3 = 1)
               Block Filter Cond: (t1.c3 = 1)
               Runtime Filter Probe: t1.__mo_cpkey_col
-        ->  Table Scan on d1.t1i1(index) [ForceOneCN]
+        ->  Index Table Scan on t1.t1i1 [ForceOneCN]
               Filter Cond: prefix_eq(#[0,0])
               Block Filter Cond: prefix_eq(#[0,0])
 select * from t1 where c3=1;
@@ -205,7 +189,7 @@ TP QUERY PLAN
 Project
   ->  Aggregate
         Aggregate Functions: starcount(1)
-        ->  Table Scan on d1.t1i1(index)
+        ->  Index Table Scan on t1.t1i1
               Filter Cond: prefix_between(#[0,0])
               Block Filter Cond: prefix_between(#[0,0])
 select count(*) from t1 where c3 between 100 and 200;
@@ -226,7 +210,7 @@ TP QUERY PLAN
 Project
   ->  Aggregate
         Aggregate Functions: starcount(1)
-        ->  Table Scan on d1.t1i1(index)
+        ->  Index Table Scan on t1.t1i1
               Filter Cond: prefix_in(#[0,0])
               Block Filter Cond: prefix_in(#[0,0])
 select count(*) from t1 where c3 in(1,13,15,90,99);
@@ -237,16 +221,9 @@ TP QUERY PLAN
 Project
   ->  Aggregate
         Aggregate Functions: starcount(1)
-        ->  Join
-              Join Type: INDEX
-              Join Cond: (t1.__mo_cpkey_col = #[1,0])
-              Runtime Filter Build: #[-1,0]
-              ->  Table Scan on d1.t1 [ForceOneCN]
-                    Filter Cond: t1.c3 BETWEEN 1 AND 100, (t1.c5 < 100)
-                    Runtime Filter Probe: t1.__mo_cpkey_col
-              ->  Table Scan on d1.t1i1(index) [ForceOneCN]
-                    Filter Cond: prefix_between(#[0,0]), (serial_extract(#[0,0], 2, INT)) < 100)
-                    Block Filter Cond: prefix_between(#[0,0])
+        ->  Index Table Scan on t1.t1i1
+              Filter Cond: prefix_between(#[0,0]), (serial_extract(#[0,0], 2, INT)) < 100)
+              Block Filter Cond: prefix_between(#[0,0])
 select count(*) from t1 where c3 between 1 and 100 and c5 <100;
 count(*)
 1000
@@ -255,16 +232,9 @@ TP QUERY PLAN
 Project
   ->  Aggregate
         Aggregate Functions: starcount(1)
-        ->  Join
-              Join Type: INDEX
-              Join Cond: (t1.__mo_cpkey_col = #[1,0])
-              Runtime Filter Build: #[-1,0]
-              ->  Table Scan on d1.t1 [ForceOneCN]
-                    Filter Cond: t1.c3 BETWEEN 100 AND 200, (t1.c5 = -1)
-                    Runtime Filter Probe: t1.__mo_cpkey_col
-              ->  Table Scan on d1.t1i1(index) [ForceOneCN]
-                    Filter Cond: prefix_between(#[0,0]), (serial_extract(#[0,0], 2, INT)) = -1)
-                    Block Filter Cond: prefix_between(#[0,0])
+        ->  Index Table Scan on t1.t1i1
+              Filter Cond: prefix_between(#[0,0]), (serial_extract(#[0,0], 2, INT)) = -1)
+              Block Filter Cond: prefix_between(#[0,0])
 select count(*) from t1 where c3 between 100 and 200 and c5 =-1;
 count(*)
 110
@@ -279,7 +249,7 @@ Project
               Filter Cond: (t1.c2 < 650), t1.c3 BETWEEN 200 AND 300
               Block Filter Cond: (t1.c2 < 650)
               Runtime Filter Probe: t1.__mo_cpkey_col
-        ->  Table Scan on d1.t1i1(index) [ForceOneCN]
+        ->  Index Table Scan on t1.t1i1 [ForceOneCN]
               Filter Cond: prefix_between(#[0,0]), (serial_extract(#[0,1], 1, INT)) < 650)
               Block Filter Cond: prefix_between(#[0,0])
 select * from t1 where c3 between 200 and 300 and c2 <650;
@@ -312,7 +282,7 @@ Project
               Filter Cond: t1.c2 in ([271386 271461 271485]), t1.c3 BETWEEN 100 AND 500
               Block Filter Cond: t1.c2 in ([271386 271461 271485])
               Runtime Filter Probe: t1.__mo_cpkey_col
-        ->  Table Scan on d1.t1i1(index) [ForceOneCN]
+        ->  Index Table Scan on t1.t1i1 [ForceOneCN]
               Filter Cond: prefix_between(#[0,0]), serial_extract(#[0,1], 1, INT)) in ([271386 271461 271485])
               Block Filter Cond: prefix_between(#[0,0])
 select * from t1 where c3 between 100 and 500 and c2 in (271461, 271485, 271386);
@@ -320,6 +290,71 @@ c1    c2    c3    c4    c5
 90462    271386    462    3    1
 90487    271461    487    3    6
 90495    271485    495    1    4
+explain select * from t1 where c3 between 100 and 500 or c3 between 1000 and 1100 or c3 between 1300 and 1500;
+TP QUERY PLAN
+Project
+  ->  Join
+        Join Type: INDEX
+        Join Cond: (t1.__mo_cpkey_col = #[1,0])
+        Runtime Filter Build: #[-1,0]
+        ->  Table Scan on d1.t1 [ForceOneCN]
+              Filter Cond: (t1.c3 BETWEEN 100 AND 500 or t1.c3 BETWEEN 1000 AND 1100 or t1.c3 BETWEEN 1300 AND 1500)
+              Runtime Filter Probe: t1.__mo_cpkey_col
+        ->  Index Table Scan on t1.t1i1 [ForceOneCN]
+              Filter Cond: (prefix_between(#[0,0]) or prefix_between(#[0,0]) or prefix_between(#[0,0]))
+              Block Filter Cond: (prefix_between(#[0,0]) or prefix_between(#[0,0]) or prefix_between(#[0,0]))
+explain select count(*) from t1 where c3 between 100 and 500 or c3 between 1000 and 1100 or c3 between 1300 and 1500;
+TP QUERY PLAN
+Project
+  ->  Aggregate
+        Aggregate Functions: starcount(1)
+        ->  Index Table Scan on t1.t1i1
+              Filter Cond: (prefix_between(#[0,0]) or prefix_between(#[0,0]) or prefix_between(#[0,0]))
+              Block Filter Cond: (prefix_between(#[0,0]) or prefix_between(#[0,0]) or prefix_between(#[0,0]))
+select count(*) from t1 where c3 between 100 and 500 or c3 between 1000 and 1100 or c3 between 1300 and 1500;
+count(*)
+7030
+explain select * from t1 where c2 between 100 and 500 or c2 between 1000 and 1100 or c2 between 1300 and 1500;
+TP QUERY PLAN
+Project
+  ->  Table Scan on d1.t1
+        Filter Cond: (t1.c2 BETWEEN 100 AND 500 or t1.c2 BETWEEN 1000 AND 1100 or t1.c2 BETWEEN 1300 AND 1500)
+        Block Filter Cond: (t1.c2 BETWEEN 100 AND 500 or t1.c2 BETWEEN 1000 AND 1100 or t1.c2 BETWEEN 1300 AND 1500)
+explain select count(*) from t1 where c2 between 100 and 500 or c2 between 1000 and 1100 or c2 between 1300 and 1500;
+TP QUERY PLAN
+Project
+  ->  Aggregate
+        Aggregate Functions: starcount(1)
+        ->  Table Scan on d1.t1
+              Filter Cond: (t1.c2 BETWEEN 100 AND 500 or t1.c2 BETWEEN 1000 AND 1100 or t1.c2 BETWEEN 1300 AND 1500)
+              Block Filter Cond: (t1.c2 BETWEEN 100 AND 500 or t1.c2 BETWEEN 1000 AND 1100 or t1.c2 BETWEEN 1300 AND 1500)
+select count(*) from t1 where c2 between 100 and 500 or c2 between 1000 and 1100 or c2 between 1300 and 1500;
+count(*)
+233
+explain select * from t1 where c3 between 100 and 500 or c3 between 1000 and 1100 or c3 in (271461, 271485, 271386);
+TP QUERY PLAN
+Project
+  ->  Join
+        Join Type: INDEX
+        Join Cond: (t1.__mo_cpkey_col = #[1,0])
+        Runtime Filter Build: #[-1,0]
+        ->  Table Scan on d1.t1 [ForceOneCN]
+              Filter Cond: (t1.c3 BETWEEN 100 AND 500 or t1.c3 BETWEEN 1000 AND 1100 or t1.c3 in ([271386 271461 271485]))
+              Runtime Filter Probe: t1.__mo_cpkey_col
+        ->  Index Table Scan on t1.t1i1 [ForceOneCN]
+              Filter Cond: (prefix_between(#[0,0]) or prefix_between(#[0,0]) or prefix_in(#[0,0]))
+              Block Filter Cond: (prefix_between(#[0,0]) or prefix_between(#[0,0]) or prefix_in(#[0,0]))
+explain select count(*) from t1 where c3 between 100 and 500 or c3 between 1000 and 1100 or c3 in (271461, 271485, 271386);
+TP QUERY PLAN
+Project
+  ->  Aggregate
+        Aggregate Functions: starcount(1)
+        ->  Index Table Scan on t1.t1i1
+              Filter Cond: (prefix_between(#[0,0]) or prefix_between(#[0,0]) or prefix_in(#[0,0]))
+              Block Filter Cond: (prefix_between(#[0,0]) or prefix_between(#[0,0]) or prefix_in(#[0,0]))
+select count(*) from t1 where c3 between 100 and 500 or c3 between 1000 and 1100 or c3 in (271461, 271485, 271386);
+count(*)
+5020
 drop table if exists t2;
 create table t2(c1 int primary key, c2 int, c3 int, c4 int, c5 int);
 insert into t2 select result, (result+1) %50000, result %100, (result*3) %40000, result % 20 +1 from generate_series(1,100000)g;
@@ -342,7 +377,7 @@ Project
               Filter Cond: t2.c2 in ([1 2 3 4 5 6 7 8 9])
               Block Filter Cond: t2.c2 in ([1 2 3 4 5 6 7 8 9])
               Runtime Filter Probe: t2.c1
-        ->  Table Scan on d1.t2i1(index) [ForceOneCN]
+        ->  Index Table Scan on t2.t2i1 [ForceOneCN]
               Filter Cond: prefix_in(#[0,0])
               Block Filter Cond: prefix_in(#[0,0])
 select * from t2 where c2 in (1,2,3,4,5,6,7,8,9);
@@ -376,7 +411,7 @@ Project
               Filter Cond: t2.c2 in ([1 2 3 4 5 6 7 8 9]), t2.c3 in ([1 2 3])
               Block Filter Cond: t2.c2 in ([1 2 3 4 5 6 7 8 9])
               Runtime Filter Probe: t2.c1
-        ->  Table Scan on d1.t2i1(index) [ForceOneCN]
+        ->  Index Table Scan on t2.t2i1 [ForceOneCN]
               Filter Cond: prefix_in(#[0,0]), serial_extract(#[0,0], 1, INT)) in ([1 2 3])
               Block Filter Cond: prefix_in(#[0,0])
 select * from t2 where c2 in (1,2,3,4,5,6,7,8,9) and c3 in (1,2,3);
@@ -398,7 +433,7 @@ Project
               Filter Cond: t2.c4 in ([1 2 3 4 5 6 7 8 9]), t2.c5 in ([2 3 4])
               Block Filter Cond: t2.c4 in ([1 2 3 4 5 6 7 8 9])
               Runtime Filter Probe: t2.c1
-        ->  Table Scan on d1.t2i2(index) [ForceOneCN]
+        ->  Index Table Scan on t2.t2i2 [ForceOneCN]
               Filter Cond: prefix_in(#[0,0]), serial_extract(#[0,0], 1, INT)) in ([2 3 4])
               Block Filter Cond: prefix_in(#[0,0])
 select * from t2 where c4 in (1,2,3,4,5,6,7,8,9) and c5 in (2,3,4);
@@ -423,7 +458,7 @@ Project
               Filter Cond: t2.c4 in ([1 2 3 4 5 6 7 8 9]), t2.c1 BETWEEN 1 AND 10000
               Block Filter Cond: t2.c4 in ([1 2 3 4 5 6 7 8 9]), t2.c1 BETWEEN 1 AND 10000
               Runtime Filter Probe: t2.c1
-        ->  Table Scan on d1.t2i2(index) [ForceOneCN]
+        ->  Index Table Scan on t2.t2i2 [ForceOneCN]
               Filter Cond: prefix_in(#[0,0]), serial_extract(#[0,0], 2, INT)) BETWEEN 1 AND 10000
               Block Filter Cond: prefix_in(#[0,0])
 select * from t2 where c4 in (1,2,3,4,5,6,7,8,9) and c1 between 1 and 10000;

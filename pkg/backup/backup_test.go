@@ -17,12 +17,13 @@ package backup
 import (
 	"context"
 	"fmt"
-	"github.com/panjf2000/ants/v2"
-	"github.com/prashantv/gostub"
 	"path"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/panjf2000/ants/v2"
+	"github.com/prashantv/gostub"
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -30,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
@@ -52,7 +54,7 @@ func TestBackupData(t *testing.T) {
 	opts := config.WithLongScanAndCKPOptsAndQuickGC(nil)
 	db := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer db.Close()
-	defer opts.Fs.Close()
+	defer opts.Fs.Close(ctx)
 
 	schema := catalog.MockSchemaAll(13, 3)
 	schema.Extra.BlockMaxRows = 10
@@ -110,7 +112,7 @@ func TestBackupData(t *testing.T) {
 	}
 	service, err := fileservice.NewFileService(ctx, c, nil)
 	assert.Nil(t, err)
-	defer service.Close()
+	defer service.Close(ctx)
 	for _, data := range bats {
 		txn, rel := db.GetRelation()
 		v := testutil.GetSingleSortKeyValue(data, schema, 2)
@@ -155,6 +157,267 @@ func TestBackupData(t *testing.T) {
 	txn, rel := testutil.GetDefaultRelation(t, db.DB, schema.Name)
 	testutil.CheckAllColRowsByScan(t, rel, int(totalRows-100)-deletedRows, true)
 	assert.NoError(t, txn.Commit(context.Background()))
+
+}
+
+func TestBackupData2(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
+	opts := config.WithQuickScanAndCKPOpts(nil)
+	db := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer db.Close()
+	defer opts.Fs.Close(ctx)
+
+	schema := catalog.MockSchemaAll(13, 3)
+	schema.Extra.BlockMaxRows = 10
+	schema.Extra.ObjectMaxBlocks = 10
+	db.BindSchema(schema)
+	{
+		txn, err := db.DB.StartTxn(nil)
+		require.NoError(t, err)
+		dbH, err := testutil.CreateDatabase2(ctx, txn, "db")
+		require.NoError(t, err)
+		_, err = testutil.CreateRelation2(ctx, txn, dbH, schema)
+		require.NoError(t, err)
+		require.NoError(t, txn.Commit(ctx))
+	}
+
+	totalRows := uint64(schema.Extra.BlockMaxRows * 30)
+	bat := catalog.MockBatch(schema, int(totalRows))
+	defer bat.Close()
+	bats := bat.Split(100)
+
+	var wg sync.WaitGroup
+	pool, _ := ants.NewPool(80)
+	defer pool.Release()
+
+	start := time.Now()
+	for _, data := range bats {
+		wg.Add(1)
+		err := pool.Submit(testutil.AppendClosure(t, data, schema.Name, db.DB, &wg))
+		assert.Nil(t, err)
+	}
+	wg.Wait()
+	opts = config.WithLongScanAndCKPOpts(nil)
+	testutils.WaitExpect(5000, func() bool {
+		return db.DiskCleaner.GetCleaner().GetScanWaterMark() != nil
+	})
+	db.Restart(ctx, opts)
+	t.Logf("Append %d rows takes: %s", totalRows, time.Since(start))
+	deletedRows := 0
+	t.Log(db.Catalog.SimplePPString(common.PPL1))
+
+	dir := path.Join(db.Dir, "/local")
+	c := fileservice.Config{
+		Name:    defines.LocalFileServiceName,
+		Backend: "DISK",
+		DataDir: dir,
+	}
+	service, err := fileservice.NewFileService(ctx, c, nil)
+	assert.Nil(t, err)
+	defer service.Close(ctx)
+	for _, data := range bats {
+		txn, rel := db.GetRelation()
+		v := testutil.GetSingleSortKeyValue(data, schema, 2)
+		filter := handle.NewEQFilter(v)
+		err := rel.DeleteByFilter(context.Background(), filter)
+		assert.NoError(t, err)
+		assert.NoError(t, txn.Commit(context.Background()))
+	}
+	backupTime := time.Now().UTC()
+	currTs := types.BuildTS(backupTime.UnixNano(), 0)
+	locations := make([]string, 0)
+	locations = append(locations, backupTime.Format(time.DateTime))
+	location, err := db.ForceCheckpointForBackup(ctx, currTs, 20*time.Second)
+	assert.Nil(t, err)
+	db.BGCheckpointRunner.DisableCheckpoint()
+	locations = append(locations, location)
+	compacted := db.BGCheckpointRunner.GetCompacted()
+	checkpoints := db.BGCheckpointRunner.GetAllCheckpointsForBackup(compacted)
+	files := make(map[string]string, 0)
+	for _, candidate := range checkpoints {
+		if files[candidate.GetLocation().Name().String()] == "" {
+			var loc string
+			loc = candidate.GetLocation().String()
+			loc += ":"
+			loc += fmt.Sprintf("%d", candidate.GetVersion())
+			files[candidate.GetLocation().Name().String()] = loc
+		}
+	}
+	for _, location := range files {
+		locations = append(locations, location)
+	}
+	fileList := make([]*taeFile, 0)
+	err = execBackup(ctx, "", db.Opts.Fs, service, locations, 1, types.TS{}, "full", &fileList)
+	assert.Nil(t, err)
+	fileMap := make(map[string]struct{})
+	for _, file := range fileList {
+		_, ok := fileMap[file.path]
+		assert.True(t, !ok)
+		fileMap[file.path] = struct{}{}
+	}
+	db.Opts.Fs = service
+	db.Restart(ctx)
+	txn, rel := testutil.GetDefaultRelation(t, db.DB, schema.Name)
+	testutil.CheckAllColRowsByScan(t, rel, int(totalRows-100)-deletedRows, true)
+	assert.NoError(t, txn.Commit(context.Background()))
+
+}
+
+func TestBackupData3(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	db := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer db.Close()
+	defer opts.Fs.Close(ctx)
+
+	schema := catalog.MockSchemaAll(13, 3)
+	schema.Extra.BlockMaxRows = 10
+	schema.Extra.ObjectMaxBlocks = 10
+	db.BindSchema(schema)
+
+	totalRows := 20
+	bat := catalog.MockBatch(schema, int(totalRows))
+	defer bat.Close()
+	db.CreateRelAndAppend2(bat, true)
+	t.Log(db.Catalog.SimplePPString(common.PPL1))
+
+	dir := path.Join(db.Dir, "/local")
+	c := fileservice.Config{
+		Name:    defines.LocalFileServiceName,
+		Backend: "DISK",
+		DataDir: dir,
+	}
+	service, err := fileservice.NewFileService(ctx, c, nil)
+	assert.Nil(t, err)
+	defer service.Close(ctx)
+	backupTime := time.Now().UTC()
+	currTs := types.BuildTS(backupTime.UnixNano(), 0)
+	locations := make([]string, 0)
+	locations = append(locations, backupTime.Format(time.DateTime))
+	location, err := db.ForceCheckpointForBackup(ctx, currTs, 20*time.Second)
+	assert.Nil(t, err)
+	db.BGCheckpointRunner.DisableCheckpoint()
+	locations = append(locations, location)
+	compacted := db.BGCheckpointRunner.GetCompacted()
+	checkpoints := db.BGCheckpointRunner.GetAllCheckpointsForBackup(compacted)
+	files := make(map[string]string, 0)
+	for _, candidate := range checkpoints {
+		if files[candidate.GetLocation().Name().String()] == "" {
+			var loc string
+			loc = candidate.GetLocation().String()
+			loc += ":"
+			loc += fmt.Sprintf("%d", candidate.GetVersion())
+			files[candidate.GetLocation().Name().String()] = loc
+		}
+	}
+	for _, location := range files {
+		locations = append(locations, location)
+	}
+	fileList := make([]*taeFile, 0)
+	err = execBackup(ctx, "", db.Opts.Fs, service, locations, 1, types.TS{}, "full", &fileList)
+	assert.Nil(t, err)
+	fileMap := make(map[string]struct{})
+	for _, file := range fileList {
+		_, ok := fileMap[file.path]
+		assert.True(t, !ok)
+		fileMap[file.path] = struct{}{}
+	}
+	db.Opts.Fs = service
+	db.Restart(ctx)
+	t.Log(db.Catalog.SimplePPString(3))
+	txn, rel := testutil.GetDefaultRelation(t, db.DB, schema.Name)
+	testutil.CheckAllColRowsByScan(t, rel, int(totalRows), true)
+	assert.NoError(t, txn.Commit(context.Background()))
+	db.MergeBlocks(true)
+	db.ForceGlobalCheckpoint(ctx, db.TxnMgr.Now(), time.Second, time.Second)
+	t.Log(db.Catalog.SimplePPString(3))
+	db.Restart(ctx)
+
+}
+
+func TestBackupData4(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
+	fault.Enable()
+	defer fault.Disable()
+	fault.AddFaultPoint(ctx, "back up UT", ":::", "echo", 0, "debug", false)
+	defer fault.RemoveFaultPoint(ctx, "back up UT")
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	db := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer db.Close()
+	defer opts.Fs.Close(ctx)
+
+	schema := catalog.MockSchemaAll(13, 3)
+	schema.Extra.BlockMaxRows = 10
+	schema.Extra.ObjectMaxBlocks = 10
+	db.BindSchema(schema)
+
+	totalRows := 20
+	bat := catalog.MockBatch(schema, int(totalRows))
+	defer bat.Close()
+	db.CreateRelAndAppend2(bat, true)
+	t.Log(db.Catalog.SimplePPString(common.PPL1))
+
+	dir := path.Join(db.Dir, "/local")
+	c := fileservice.Config{
+		Name:    defines.LocalFileServiceName,
+		Backend: "DISK",
+		DataDir: dir,
+	}
+	service, err := fileservice.NewFileService(ctx, c, nil)
+	assert.Nil(t, err)
+	defer service.Close(ctx)
+	backupTime := time.Now().UTC()
+	currTs := types.BuildTS(backupTime.UnixNano(), 0)
+	locations := make([]string, 0)
+	locations = append(locations, backupTime.Format(time.DateTime))
+	location, err := db.ForceCheckpointForBackup(ctx, currTs, 20*time.Second)
+	assert.Nil(t, err)
+	db.BGCheckpointRunner.DisableCheckpoint()
+	locations = append(locations, location)
+	compacted := db.BGCheckpointRunner.GetCompacted()
+	checkpoints := db.BGCheckpointRunner.GetAllCheckpointsForBackup(compacted)
+	files := make(map[string]string, 0)
+	for _, candidate := range checkpoints {
+		if files[candidate.GetLocation().Name().String()] == "" {
+			var loc string
+			loc = candidate.GetLocation().String()
+			loc += ":"
+			loc += fmt.Sprintf("%d", candidate.GetVersion())
+			files[candidate.GetLocation().Name().String()] = loc
+		}
+	}
+	for _, location := range files {
+		locations = append(locations, location)
+	}
+	fileList := make([]*taeFile, 0)
+	err = execBackup(ctx, "", db.Opts.Fs, service, locations, 1, types.TS{}, "full", &fileList)
+	assert.Nil(t, err)
+	fileMap := make(map[string]struct{})
+	for _, file := range fileList {
+		_, ok := fileMap[file.path]
+		assert.True(t, !ok)
+		fileMap[file.path] = struct{}{}
+	}
+	db.Opts.Fs = service
+	db.Restart(ctx)
+	t.Log(db.Catalog.SimplePPString(3))
+	txn, rel := testutil.GetDefaultRelation(t, db.DB, schema.Name)
+	testutil.CheckAllColRowsByScan(t, rel, int(totalRows), true)
+	assert.NoError(t, txn.Commit(context.Background()))
+	db.MergeBlocks(true)
+	db.ForceGlobalCheckpoint(ctx, db.TxnMgr.Now(), time.Second, time.Second)
+	t.Log(db.Catalog.SimplePPString(3))
+	db.Restart(ctx)
 
 }
 

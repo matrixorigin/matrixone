@@ -17,6 +17,7 @@ package engine_util
 import (
 	"context"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -492,6 +493,7 @@ func (sinker *Sinker) trySpill(ctx context.Context) error {
 			buffer,
 			innersinker,
 			sinker.mp,
+			true,
 		); err != nil {
 			return err
 		}
@@ -588,6 +590,11 @@ func (sinker *Sinker) Write(
 }
 
 func (sinker *Sinker) Sync(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return context.Cause(ctx)
+	default:
+	}
 	if len(sinker.staged.persisted) == 0 && len(sinker.staged.inMemory) == 0 {
 		return nil
 	}

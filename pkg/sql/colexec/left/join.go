@@ -67,13 +67,7 @@ func (leftJoin *LeftJoin) Prepare(proc *process.Process) (err error) {
 }
 
 func (leftJoin *LeftJoin) Call(proc *process.Process) (vm.CallResult, error) {
-	if err, isCancel := vm.CancelCheck(proc); isCancel {
-		return vm.CancelResult, err
-	}
-
 	analyzer := leftJoin.OpAnalyzer
-	analyzer.Start()
-	defer analyzer.Stop()
 
 	ctr := &leftJoin.ctr
 	input := vm.NewCallResult()
@@ -105,7 +99,7 @@ func (leftJoin *LeftJoin) Call(proc *process.Process) (vm.CallResult, error) {
 					continue
 				}
 				ctr.inbat = bat
-				ctr.lastrow = 0
+				ctr.lastRow = 0
 			}
 
 			if ctr.rbat == nil {
@@ -128,7 +122,7 @@ func (leftJoin *LeftJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				}
 			}
 
-			startrow := leftJoin.ctr.lastrow
+			startRow := leftJoin.ctr.lastRow
 			if ctr.mp == nil {
 				err = ctr.emptyProbe(leftJoin, proc, &probeResult)
 			} else {
@@ -137,9 +131,9 @@ func (leftJoin *LeftJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			if err != nil {
 				return result, err
 			}
-			if leftJoin.ctr.lastrow == 0 {
+			if leftJoin.ctr.lastRow == 0 {
 				leftJoin.ctr.inbat = nil
-			} else if leftJoin.ctr.lastrow == startrow {
+			} else if leftJoin.ctr.lastRow == startRow {
 				return result, moerr.NewInternalErrorNoCtx("left join hanging")
 			}
 
@@ -147,7 +141,6 @@ func (leftJoin *LeftJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			if err != nil {
 				return result, err
 			}
-			analyzer.Output(result.Batch)
 			return result, nil
 
 		default:
@@ -187,7 +180,7 @@ func (ctr *container) emptyProbe(ap *LeftJoin, proc *process.Process, result *vm
 	}
 	ctr.rbat.AddRowCount(ap.ctr.inbat.RowCount())
 	result.Batch = ctr.rbat
-	ap.ctr.lastrow = 0
+	ap.ctr.lastRow = 0
 	return nil
 }
 
@@ -210,10 +203,10 @@ func (ctr *container) probe(ap *LeftJoin, proc *process.Process, result *vm.Call
 		ctr.itr = ctr.mp.NewIterator()
 	}
 	itr := ctr.itr
-	for i := ap.ctr.lastrow; i < count; i += hashmap.UnitLimit {
+	for i := ap.ctr.lastRow; i < count; i += hashmap.UnitLimit {
 		if ctr.rbat.RowCount() >= colexec.DefaultBatchSize {
 			result.Batch = ctr.rbat
-			ap.ctr.lastrow = i
+			ap.ctr.lastRow = i
 			return nil
 		}
 		n := count - i
@@ -371,7 +364,7 @@ func (ctr *container) probe(ap *LeftJoin, proc *process.Process, result *vm.Call
 		ctr.rbat.SetRowCount(ctr.rbat.RowCount() + rowCount)
 	}
 	result.Batch = ctr.rbat
-	ap.ctr.lastrow = 0
+	ap.ctr.lastRow = 0
 	return nil
 }
 

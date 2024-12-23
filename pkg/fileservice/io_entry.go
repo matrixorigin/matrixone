@@ -40,7 +40,7 @@ func (i *IOEntry) setCachedData(ctx context.Context, allocator CacheDataAllocato
 		return nil
 	}
 	LogEvent(ctx, str_to_cache_data_begin)
-	cacheData, err := i.ToCacheData(bytes.NewReader(i.Data), i.Data, allocator)
+	cacheData, err := i.ToCacheData(ctx, bytes.NewReader(i.Data), i.Data, allocator)
 	LogEvent(ctx, str_to_cache_data_end)
 	if err != nil {
 		return err
@@ -53,10 +53,16 @@ func (i *IOEntry) setCachedData(ctx context.Context, allocator CacheDataAllocato
 }
 
 func (i *IOEntry) ReadFromOSFile(ctx context.Context, file *os.File, allocator CacheDataAllocator) (err error) {
-	finally := i.prepareData()
+	LogEvent(ctx, str_ReadFromOSFile_begin)
+	defer LogEvent(ctx, str_ReadFromOSFile_end)
+
+	finally := i.prepareData(ctx)
 	defer finally(&err)
+
 	r := io.LimitReader(file, i.Size)
+	LogEvent(ctx, str_io_readfull_begin)
 	n, err := io.ReadFull(r, i.Data)
+	LogEvent(ctx, str_io_readfull_end)
 	if err != nil {
 		return err
 	}
@@ -65,7 +71,10 @@ func (i *IOEntry) ReadFromOSFile(ctx context.Context, file *os.File, allocator C
 	}
 
 	if i.WriterForRead != nil {
-		if _, err := i.WriterForRead.Write(i.Data); err != nil {
+		LogEvent(ctx, str_WriterForRead_Write_begin)
+		_, err := i.WriterForRead.Write(i.Data)
+		LogEvent(ctx, str_WriterForRead_Write_end)
+		if err != nil {
 			return err
 		}
 	}
@@ -81,18 +90,20 @@ func (i *IOEntry) ReadFromOSFile(ctx context.Context, file *os.File, allocator C
 	return nil
 }
 
-func CacheOriginalData(r io.Reader, data []byte, allocator CacheDataAllocator) (cacheData fscache.Data, err error) {
+func CacheOriginalData(ctx context.Context, r io.Reader, data []byte, allocator CacheDataAllocator) (cacheData fscache.Data, err error) {
 	if len(data) == 0 {
 		data, err = io.ReadAll(r)
 		if err != nil {
 			return
 		}
 	}
-	cacheData = allocator.CopyToCacheData(data)
+	cacheData = allocator.CopyToCacheData(ctx, data)
 	return
 }
 
-func (i *IOEntry) prepareData() (finally func(err *error)) {
+func (i *IOEntry) prepareData(ctx context.Context) (finally func(err *error)) {
+	LogEvent(ctx, str_prepareData_begin)
+	defer LogEvent(ctx, str_prepareData_end)
 	if cap(i.Data) < int(i.Size) {
 		slice, dec, err := ioAllocator().Allocate(uint64(i.Size), malloc.NoHints)
 		if err != nil {

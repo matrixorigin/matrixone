@@ -16,8 +16,7 @@ package shuffle
 
 import (
 	"bytes"
-
-	"github.com/matrixorigin/matrixone/pkg/vm/message"
+	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -25,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -32,7 +32,6 @@ const opName = "shuffle"
 
 func (shuffle *Shuffle) String(buf *bytes.Buffer) {
 	buf.WriteString(opName)
-	buf.WriteString(": shuffle")
 }
 
 func (shuffle *Shuffle) OpType() vm.OpType {
@@ -41,7 +40,7 @@ func (shuffle *Shuffle) OpType() vm.OpType {
 
 func (shuffle *Shuffle) Prepare(proc *process.Process) error {
 	if shuffle.OpAnalyzer == nil {
-		shuffle.OpAnalyzer = process.NewAnalyzer(shuffle.GetIdx(), shuffle.IsFirst, shuffle.IsLast, "shuffle")
+		shuffle.OpAnalyzer = process.NewAnalyzer(shuffle.GetIdx(), shuffle.IsFirst, shuffle.IsLast, opName)
 	} else {
 		shuffle.OpAnalyzer.Reset()
 	}
@@ -66,13 +65,7 @@ func (shuffle *Shuffle) Prepare(proc *process.Process) error {
 // next time, set this bucket rowcount to 0 and reuse it
 // for now, we shuffle null to the first bucket
 func (shuffle *Shuffle) Call(proc *process.Process) (vm.CallResult, error) {
-	if err, isCancel := vm.CancelCheck(proc); isCancel {
-		return vm.CancelResult, err
-	}
-
 	analyzer := shuffle.OpAnalyzer
-	analyzer.Start()
-	defer analyzer.Stop()
 
 	result := vm.NewCallResult()
 SENDLAST:
@@ -86,7 +79,6 @@ SENDLAST:
 				result.Status = vm.ExecHasMore
 			}
 			shuffle.ctr.buf = result.Batch
-			analyzer.Output(result.Batch)
 		}
 		return result, nil
 	}
@@ -125,7 +117,6 @@ SENDLAST:
 				if err = shuffle.handleRuntimeFilter(proc); err != nil {
 					return vm.CancelResult, err
 				}
-				analyzer.Output(result.Batch)
 				return result, nil
 			}
 		}
@@ -136,7 +127,6 @@ SENDLAST:
 	}
 	// send the batch
 	result.Batch = shuffle.ctr.buf
-	analyzer.Output(result.Batch)
 	return result, nil
 }
 
@@ -321,6 +311,18 @@ func getShuffledSelsByHashWithoutNull(ap *Shuffle, bat *batch.Batch) [][]int32 {
 			regIndex := plan2.SimpleInt64HashToRange(uint64(v), bucketNum)
 			sels[regIndex] = append(sels[regIndex], int32(row))
 		}
+	case types.T_decimal64:
+		groupByCol := vector.MustFixedColNoTypeCheck[types.Decimal64](groupByVec)
+		for row, v := range groupByCol {
+			regIndex := plan2.SimpleInt64HashToRange(uint64(v), bucketNum)
+			sels[regIndex] = append(sels[regIndex], int32(row))
+		}
+	case types.T_decimal128:
+		groupByCol := vector.MustFixedColNoTypeCheck[types.Decimal128](groupByVec)
+		for row, v := range groupByCol {
+			regIndex := plan2.SimpleInt64HashToRange(uint64(v.B0_63^v.B64_127), bucketNum)
+			sels[regIndex] = append(sels[regIndex], int32(row))
+		}
 	case types.T_char, types.T_varchar, types.T_text:
 		groupByCol, area := vector.MustVarlenaRawData(groupByVec)
 		for row := range groupByCol {
@@ -328,7 +330,7 @@ func getShuffledSelsByHashWithoutNull(ap *Shuffle, bat *batch.Batch) [][]int32 {
 			sels[regIndex] = append(sels[regIndex], int32(row))
 		}
 	default:
-		panic("unsupported shuffle type, wrong plan!") //something got wrong here!
+		panic(fmt.Sprintf("unsupported shuffle type %v, wrong plan!", groupByVec.GetType())) //something got wrong here!
 	}
 	return sels
 }

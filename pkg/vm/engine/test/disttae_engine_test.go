@@ -25,6 +25,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -33,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -62,9 +64,9 @@ func Test_InsertRows(t *testing.T) {
 		databaseName = "db1"
 	)
 
-	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, accountId)
-	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
 
 	disttaeEngine, taeHandler, rpcAgent, _ := testutil.CreateEngines(ctx, testutil.TestOptions{}, t)
 	defer func() {
@@ -73,6 +75,8 @@ func Test_InsertRows(t *testing.T) {
 		rpcAgent.Close()
 	}()
 
+	ctx, cancel = context.WithTimeout(ctx, time.Minute*5)
+	defer cancel()
 	txn, err := disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Now())
 	require.Nil(t, err)
 
@@ -230,7 +234,7 @@ func (c *dummyCpkGetter) CollectCheckpointsInRange(ctx context.Context, start, e
 	return "", types.TS{}, nil
 }
 
-func (c *dummyCpkGetter) FlushTable(ctx context.Context, dbID, tableID uint64, ts types.TS) error {
+func (c *dummyCpkGetter) FlushTable(ctx context.Context, _ uint32, dbID, tableID uint64, ts types.TS) error {
 	return nil
 }
 
@@ -612,6 +616,7 @@ func TestInProgressTransfer(t *testing.T) {
 		"echo",
 		0,
 		"trace delete",
+		false,
 	)
 	require.NoError(t, err1)
 	defer fault.RemoveFaultPoint(p.Ctx, objectio.FJ_CommitDelete)
@@ -622,6 +627,7 @@ func TestInProgressTransfer(t *testing.T) {
 		"echo",
 		0,
 		"trace slowlog",
+		false,
 	)
 	require.NoError(t, err1)
 	defer fault.RemoveFaultPoint(p.Ctx, objectio.FJ_CommitSlowLog)
@@ -876,9 +882,9 @@ func TestShowDatabasesInRestoreTxn(t *testing.T) {
 func TestObjectStats1(t *testing.T) {
 	catalog.SetupDefines("")
 
-	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, catalog.System_Account)
-	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 
 	disttaeEngine, taeHandler, rpcAgent, _ := testutil.CreateEngines(ctx, testutil.TestOptions{}, t)
 	defer func() {
@@ -891,6 +897,8 @@ func TestObjectStats1(t *testing.T) {
 
 	testutil2.CreateRelationAndAppend(t, catalog.System_Account, taeHandler.GetDB(), "db", schema, bat, true)
 
+	ctx, cancel = context.WithTimeout(ctx, time.Minute*5)
+	defer cancel()
 	txn, rel := testutil2.GetRelation(t, catalog.System_Account, taeHandler.GetDB(), "db", schema.Name)
 	id := rel.GetMeta().(*catalog2.TableEntry).AsCommonID()
 	appendableObjectID := testutil2.GetOneObject(rel).GetID()
@@ -963,9 +971,9 @@ func TestObjectStats1(t *testing.T) {
 func TestObjectStats2(t *testing.T) {
 	catalog.SetupDefines("")
 
-	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, catalog.System_Account)
-	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 
 	disttaeEngine, taeHandler, rpcAgent, _ := testutil.CreateEngines(ctx, testutil.TestOptions{}, t)
 	defer func() {
@@ -978,6 +986,8 @@ func TestObjectStats2(t *testing.T) {
 
 	testutil2.CreateRelationAndAppend(t, catalog.System_Account, taeHandler.GetDB(), "db", schema, bat, true)
 
+	ctx, cancel = context.WithTimeout(ctx, time.Minute*5)
+	defer cancel()
 	txn, rel := testutil2.GetRelation(t, catalog.System_Account, taeHandler.GetDB(), "db", schema.Name)
 	id := rel.GetMeta().(*catalog2.TableEntry).AsCommonID()
 	appendableObjectID := testutil2.GetOneObject(rel).GetID()
@@ -1052,6 +1062,14 @@ func TestApplyDeletesForWorkspaceAndPart(t *testing.T) {
 	p := testutil.InitEnginePack(testutil.TestOptions{TaeEngineOptions: opts}, t)
 	defer p.Close()
 	tae := p.T.GetDB()
+	fault.Enable()
+	defer fault.Disable()
+	rmFault, err := objectio.InjectLog1(
+		"mo_account",
+		2,
+	)
+	require.NoError(t, err)
+	defer rmFault()
 
 	schema := catalog2.MockSchemaAll(5, 1)
 	schema.Name = "mo_account"
@@ -1072,7 +1090,7 @@ func TestApplyDeletesForWorkspaceAndPart(t *testing.T) {
 	exec := v.(executor.SQLExecutor)
 
 	txnop = p.StartCNTxn()
-	_, err := exec.Exec(p.Ctx, "delete from db.mo_account where mock_1 in (0, 1)", executor.Options{}.WithTxn(txnop))
+	_, err = exec.Exec(p.Ctx, "delete from db.mo_account where mock_1 in (0, 1)", executor.Options{}.WithTxn(txnop))
 	require.NoError(t, err)
 	require.NoError(t, txnop.Commit(p.Ctx))
 
@@ -1115,4 +1133,353 @@ func TestApplyDeletesForWorkspaceAndPart(t *testing.T) {
 		pkSum += vector.GetFixedAtWithTypeCheck[int16](res.Batches[0].Vecs[1], i)
 	}
 	require.Equal(t, int16(5 /*2+3*/), pkSum)
+}
+
+func TestApplyDeletesFromTombstoneObjects(t *testing.T) {
+	opts := config.WithLongScanAndCKPOpts(nil)
+	p := testutil.InitEnginePack(testutil.TestOptions{TaeEngineOptions: opts}, t)
+	defer p.Close()
+	tae := p.T.GetDB()
+
+	schema := catalog2.MockSchemaAll(8189, 1)
+	schema.Name = "padding"
+	txnop := p.StartCNTxn()
+	p.CreateDBAndTable(txnop, "db", schema)
+
+	schema2 := catalog2.MockSchemaAll(4, 1)
+	schema2.Name = "table2"
+	p.CreateTableInDB(txnop, "db", schema2)
+	require.NoError(t, txnop.Commit(p.Ctx))
+
+	txnop = p.StartCNTxn()
+	p.DeleteTableInDB(txnop, "db", schema.Name)
+	p.DeleteTableInDB(txnop, "db", schema2.Name)
+	require.NoError(t, txnop.Commit(p.Ctx))
+
+	txnop = p.StartCNTxn()
+	rel := p.CreateTableInDB(txnop, "db", schema2)
+	require.NoError(t, txnop.Commit(p.Ctx))
+
+	querySql := fmt.Sprintf(catalog.MoColumnsRowidsQueryFormat, 0, "db", "table2", rel.GetTableID(p.Ctx))
+
+	txn, _ := tae.StartTxn(nil)
+	udb, _ := txn.GetDatabaseByID(catalog.MO_CATALOG_ID)
+	utbl, _ := udb.GetRelationByID(catalog.MO_COLUMNS_ID)
+	worker := ops.NewOpWorker(context.Background(), "xx")
+	worker.Start()
+	defer worker.Stop()
+	// flusht tombstone ahead of data insert
+	it := utbl.MakeObjectIt(true)
+	require.True(t, it.Next())
+	firstEntry := it.GetObject().GetMeta().(*catalog2.ObjectEntry)
+	require.True(t, it.Next())
+	secondEntry := it.GetObject().GetMeta().(*catalog2.ObjectEntry)
+	t.Log(firstEntry.ID().ShortStringEx())
+	task1, err := jobs.NewFlushTableTailTask(
+		tasks.WaitableCtx, txn,
+		nil,
+		[]*catalog2.ObjectEntry{firstEntry, secondEntry},
+		tae.Runtime)
+	require.NoError(t, err)
+	worker.SendOp(task1)
+	err = task1.WaitDone(context.Background())
+	require.NoError(t, err)
+	require.NoError(t, txn.Commit(p.Ctx))
+
+	v, ok := runtime.ServiceRuntime("").GetGlobalVariables(runtime.InternalSQLExecutor)
+	if !ok {
+		panic(fmt.Sprintf("missing sql executor in service %q", ""))
+	}
+	exec := v.(executor.SQLExecutor)
+	txnop = p.StartCNTxn()
+	buf := new(bytes.Buffer)
+	ctx := context.WithValue(p.Ctx, defines.ReaderSummaryKey{}, buf)
+	result, err := exec.Exec(ctx, querySql, executor.Options{}.WithTxn(txnop))
+	require.NoError(t, err)
+	t.Log("readerSummary", buf.String())
+	require.Equal(t, 1, len(result.Batches))
+	require.Equal(t, 5, result.Batches[0].RowCount())
+	require.NoError(t, txnop.Commit(p.Ctx))
+}
+
+func TestCache3Tables(t *testing.T) {
+	opts := config.WithLongScanAndCKPOpts(nil)
+	p := testutil.InitEnginePack(testutil.TestOptions{TaeEngineOptions: opts}, t)
+	defer p.Close()
+	txnop := p.StartCNTxn()
+	dbname, tname, rel, err := p.D.Engine.GetRelationById(p.Ctx, txnop, catalog.MO_DATABASE_ID)
+	require.NoError(t, err)
+	require.Equal(t, catalog.MO_CATALOG, dbname)
+	require.Equal(t, catalog.MO_DATABASE, tname)
+	require.NotNil(t, rel)
+
+	dbname, tname, rel, err = p.D.Engine.GetRelationById(p.Ctx, txnop, catalog.MO_TABLES_ID)
+	require.NoError(t, err)
+	require.Equal(t, catalog.MO_CATALOG, dbname)
+	require.Equal(t, catalog.MO_TABLES, tname)
+	require.NotNil(t, rel)
+
+	dbname, tname, rel, err = p.D.Engine.GetRelationById(p.Ctx, txnop, catalog.MO_COLUMNS_ID)
+	require.NoError(t, err)
+	require.Equal(t, catalog.MO_CATALOG, dbname)
+	require.Equal(t, catalog.MO_COLUMNS, tname)
+	require.NotNil(t, rel)
+}
+
+func TestRelationExists(t *testing.T) {
+	opts := config.WithLongScanAndCKPOpts(nil)
+	p := testutil.InitEnginePack(testutil.TestOptions{TaeEngineOptions: opts}, t)
+	defer p.Close()
+	txnop := p.StartCNTxn()
+	schema := catalog2.MockSchemaAll(2, 0)
+	schema.Name = "test"
+	p.CreateDBAndTable(txnop, "db", schema)
+
+	db, err := p.D.Engine.Database(p.Ctx, "db", txnop)
+	require.NoError(t, err)
+
+	exist, err := db.RelationExists(p.Ctx, "test", nil)
+	require.NoError(t, err)
+	require.True(t, exist)
+
+	exist, err = db.RelationExists(p.Ctx, "testxx", nil)
+	require.NoError(t, err)
+	require.False(t, exist)
+
+	// craft no-account-id error
+	ctx := context.WithValue(p.Ctx, defines.TenantIDKey{}, nil)
+	exist, err = db.RelationExists(ctx, "testxx", nil)
+	require.Error(t, err)
+	require.False(t, exist)
+
+	rel, err := db.Relation(ctx, "test", nil)
+	require.Error(t, err)
+	require.Nil(t, rel)
+}
+
+func TestWorkspaceQuota(t *testing.T) {
+	quotaSize := uint64(1000)
+
+	p := testutil.InitEnginePack(testutil.TestOptions{
+		DisttaeOptions: []testutil.TestDisttaeEngineOptions{testutil.WithDisttaeEngineQuota(quotaSize)}}, t)
+	defer p.Close()
+	e := p.D.Engine
+	var wg sync.WaitGroup
+	wg.Add(10)
+	for i := range uint64(10) {
+		go func(size uint64, wg *sync.WaitGroup) {
+			e.AcquireQuota(100)
+			e.ReleaseQuota(100)
+			wg.Done()
+		}(i*100, &wg)
+	}
+
+	wg.Wait()
+	remaining, _ := e.AcquireQuota(0)
+	require.Equal(t, int(quotaSize), int(remaining))
+	_, acquired := e.AcquireQuota(quotaSize + 1)
+	require.False(t, acquired)
+}
+
+func TestWorkspaceQuota2(t *testing.T) {
+
+	var (
+		err          error
+		mp           *mpool.MPool
+		txn          client.TxnOperator
+		accountId    = catalog.System_Account
+		tableName    = "test_table"
+		databaseName = "test_database"
+
+		primaryKeyIdx = 3
+
+		relation engine.Relation
+		_        engine.Database
+
+		taeEngine     *testutil.TestTxnStorage
+		rpcAgent      *testutil.MockRPCAgent
+		disttaeEngine *testutil.TestDisttaeEngine
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
+
+	schema := catalog2.MockSchemaAll(4, primaryKeyIdx)
+	schema.Name = tableName
+
+	disttaeEngine, taeEngine, rpcAgent, mp = testutil.CreateEngines(
+		ctx,
+		testutil.TestOptions{},
+		t,
+		testutil.WithDisttaeEngineWriteWorkspaceThreshold(1),
+		testutil.WithDisttaeEngineQuota(800),
+	)
+	defer func() {
+		disttaeEngine.Close(ctx)
+		taeEngine.Close(true)
+		rpcAgent.Close()
+	}()
+
+	ctx, cancel = context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	_, _, err = disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
+	require.NoError(t, err)
+
+	rowsCount := 30
+	bat := catalog2.MockBatch(schema, rowsCount)
+	bat1, _ := containers.ToCNBatch(bat).Window(0, 10)
+	bat2, _ := containers.ToCNBatch(bat).Window(10, 20)
+	bat3, _ := containers.ToCNBatch(bat).Window(20, 30)
+
+	{
+		_, relation, txn, err = disttaeEngine.GetTable(ctx, databaseName, tableName)
+		require.NoError(t, err)
+		// exceed workspace write threshold, acquire quota success, do not write s3
+		require.NoError(t, relation.Write(ctx, bat1))
+		// exceed workspace write threshold, acquire quota success, do not write s3
+		require.NoError(t, relation.Write(ctx, bat2))
+		// exceed workspace write threshold, acquire quota failed,  write s3
+		require.NoError(t, relation.Write(ctx, bat3))
+		// exceed workspace commit threshold, write s3
+		require.NoError(t, txn.Commit(ctx))
+	}
+
+	require.NoError(t, disttaeEngine.SubscribeTable(ctx, relation.GetDBID(ctx), relation.GetTableID(ctx), false))
+	state, err := disttaeEngine.GetPartitionStateStats(ctx, relation.GetDBID(ctx), relation.GetTableID(ctx))
+	require.NoError(t, err)
+	t.Log(state.String())
+	require.Equal(t, 1, state.DataObjectsVisible.ObjCnt)
+
+	_, relation, txn, err = disttaeEngine.GetTable(ctx, databaseName, tableName)
+
+	require.NoError(t, err)
+	reader, err := testutil.GetRelationReader(
+		ctx,
+		disttaeEngine,
+		txn,
+		relation,
+		nil,
+		mp,
+		t,
+	)
+	require.NoError(t, err)
+
+	ret := testutil.EmptyBatchFromSchema(schema, primaryKeyIdx)
+	cnt := 0
+	for {
+		ok, err := reader.Read(ctx, ret.Attrs, nil, mp, ret)
+		require.NoError(t, err)
+		cnt += ret.RowCount()
+		if ok {
+			break
+		}
+	}
+	require.NoError(t, err)
+
+	require.Equal(t, rowsCount, cnt)
+	require.NoError(t, txn.Commit(ctx))
+}
+
+func TestWorkspaceQuota3(t *testing.T) {
+
+	var (
+		err          error
+		mp           *mpool.MPool
+		txn          client.TxnOperator
+		accountId    = catalog.System_Account
+		tableName    = "test_table"
+		databaseName = "test_database"
+
+		primaryKeyIdx = 3
+
+		relation engine.Relation
+		_        engine.Database
+
+		taeEngine     *testutil.TestTxnStorage
+		rpcAgent      *testutil.MockRPCAgent
+		disttaeEngine *testutil.TestDisttaeEngine
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
+
+	schema := catalog2.MockSchemaAll(4, primaryKeyIdx)
+	schema.Name = tableName
+
+	disttaeEngine, taeEngine, rpcAgent, mp = testutil.CreateEngines(
+		ctx,
+		testutil.TestOptions{},
+		t,
+		testutil.WithDisttaeEngineWriteWorkspaceThreshold(1),
+		testutil.WithDisttaeEngineQuota(10000),
+	)
+	defer func() {
+		disttaeEngine.Close(ctx)
+		taeEngine.Close(true)
+		rpcAgent.Close()
+	}()
+
+	ctx, cancel = context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	_, _, err = disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
+	require.NoError(t, err)
+
+	rowsCount := 30
+	bat := catalog2.MockBatch(schema, rowsCount)
+	bat1, _ := containers.ToCNBatch(bat).Window(0, 10)
+	bat2, _ := containers.ToCNBatch(bat).Window(10, 20)
+	bat3, _ := containers.ToCNBatch(bat).Window(20, 30)
+
+	{
+		_, relation, txn, err = disttaeEngine.GetTable(ctx, databaseName, tableName)
+		require.NoError(t, err)
+		require.NoError(t, relation.Write(ctx, bat1))
+		require.NoError(t, relation.Write(ctx, bat2))
+		require.NoError(t, relation.Write(ctx, bat3))
+		require.NoError(t, txn.Rollback(ctx))
+	}
+
+	{
+		_, relation, txn, err = disttaeEngine.GetTable(ctx, databaseName, tableName)
+		require.NoError(t, err)
+		require.NoError(t, relation.Write(ctx, bat1))
+		require.NoError(t, relation.Write(ctx, bat2))
+		require.NoError(t, relation.Write(ctx, bat3))
+		require.NoError(t, txn.Commit(ctx))
+	}
+
+	// test quota leak
+	quota, _ := disttaeEngine.Engine.AcquireQuota(0)
+	require.Equal(t, 10000, int(quota))
+
+	_, relation, txn, err = disttaeEngine.GetTable(ctx, databaseName, tableName)
+
+	require.NoError(t, err)
+	reader, err := testutil.GetRelationReader(
+		ctx,
+		disttaeEngine,
+		txn,
+		relation,
+		nil,
+		mp,
+		t,
+	)
+	require.NoError(t, err)
+
+	ret := testutil.EmptyBatchFromSchema(schema, primaryKeyIdx)
+	cnt := 0
+	for {
+		ok, err := reader.Read(ctx, ret.Attrs, nil, mp, ret)
+		require.NoError(t, err)
+		cnt += ret.RowCount()
+		if ok {
+			break
+		}
+	}
+	require.NoError(t, err)
+
+	require.Equal(t, rowsCount, cnt)
+	require.NoError(t, txn.Commit(ctx))
 }

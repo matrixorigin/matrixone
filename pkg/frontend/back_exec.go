@@ -39,13 +39,24 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type backExec struct {
-	backSes *backSession
+	backSes    *backSession
+	statsArray *statistic.StatsArray
+}
+
+func (back *backExec) init(ses FeSession, txnOp TxnOperator, db string, callBack outputCallBackFunc) {
+	back.backSes = newBackSession(ses, txnOp, db, callBack)
+	if back.statsArray != nil {
+		back.statsArray.Reset()
+	} else {
+		back.statsArray = statistic.NewStatsArray()
+	}
 }
 
 func (back *backExec) Service() string {
@@ -53,21 +64,22 @@ func (back *backExec) Service() string {
 }
 
 func (back *backExec) Close() {
-	tempExecCtx := ExecCtx{
-		ses:    back.backSes,
-		txnOpt: FeTxnOption{byRollback: true},
-	}
-	defer tempExecCtx.Close()
-	err := back.backSes.GetTxnHandler().Rollback(&tempExecCtx)
-	if err != nil {
-		back.backSes.Error(tempExecCtx.reqCtx,
-			"Failed to rollback txn in back session",
-			zap.Error(err))
+	if back == nil {
+		return
 	}
 	back.Clear()
 	back.backSes.Close()
-	back.backSes.Clear()
 	back.backSes = nil
+}
+
+func (back *backExec) GetExecStatsArray() statistic.StatsArray {
+	if back.statsArray != nil {
+		return *back.statsArray
+	} else {
+		var stats statistic.StatsArray
+		stats.Reset()
+		return stats
+	}
 }
 
 func (back *backExec) Exec(ctx context.Context, sql string) error {
@@ -76,7 +88,7 @@ func (back *backExec) Exec(ctx context.Context, sql string) error {
 	if ctx == nil {
 		return moerr.NewInternalError(context.Background(), "context is nil")
 	}
-	ctx = perfcounter.AttachInternalExecutorKey(ctx)
+	ctx = perfcounter.AttachBackgroundExecutorKey(ctx)
 
 	_, err := defines.GetAccountId(ctx)
 	if err != nil {
@@ -91,6 +103,7 @@ func (back *backExec) Exec(ctx context.Context, sql string) error {
 	if err != nil {
 		v = int64(1)
 	}
+
 	statements, err := mysql.Parse(ctx, sql, v.(int64))
 	if err != nil {
 		return err
@@ -108,7 +121,7 @@ func (back *backExec) Exec(ctx context.Context, sql string) error {
 	if back.backSes.GetTxnHandler().IsShareTxn() {
 		for _, stmt := range statements {
 			switch stmt.(type) {
-			case *tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction:
+			case *tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction, *tree.SavePoint, *tree.ReleaseSavePoint, *tree.RollbackToSavePoint:
 				return moerr.NewInternalErrorf(ctx, "Exec() can not run transaction statement in share transaction, sql = %s", sql)
 			}
 		}
@@ -130,7 +143,31 @@ func (back *backExec) Exec(ctx context.Context, sql string) error {
 		ses:    back.backSes,
 	}
 	defer execCtx.Close()
-	return doComQueryInBack(back.backSes, &execCtx, userInput)
+
+	tmpStatsArray := statistic.NewStatsArray()
+	defer func() {
+		back.statsArray.Add(tmpStatsArray)
+	}()
+
+	err = doComQueryInBack(back.backSes, tmpStatsArray, &execCtx, userInput) // statsInfo ,
+	if err != nil {
+		// if is restore and stmt is create view
+		if back.backSes.GetRestore() {
+			if _, ok := statements[0].(*tree.CreateView); ok {
+				// reset restore flag
+				// redo doComQueryInBack
+				back.backSes.SetRestoreFail(true)
+				defer func() {
+					back.backSes.SetRestoreFail(false)
+				}()
+				err = doComQueryInBack(back.backSes, tmpStatsArray, &execCtx, userInput)
+				if err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return err
 }
 
 func (back *backExec) ExecRestore(ctx context.Context, sql string, opAccount uint32, toAccount uint32) error {
@@ -140,7 +177,7 @@ func (back *backExec) ExecRestore(ctx context.Context, sql string, opAccount uin
 		return moerr.NewInternalError(context.Background(), "context is nil")
 	}
 
-	ctx = perfcounter.AttachInternalExecutorKey(ctx)
+	ctx = perfcounter.AttachBackgroundExecutorKey(ctx)
 
 	_, err := defines.GetAccountId(ctx)
 	if err != nil {
@@ -170,17 +207,18 @@ func (back *backExec) ExecRestore(ctx context.Context, sql string, opAccount uin
 	if back.backSes.GetTxnHandler().IsShareTxn() {
 		for _, stmt := range statements {
 			switch stmt.(type) {
-			case *tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction:
+			case *tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction, *tree.SavePoint, *tree.ReleaseSavePoint, *tree.RollbackToSavePoint:
 				return moerr.NewInternalErrorf(ctx, "Exec() can not run transaction statement in share transaction, sql = %s", sql)
 			}
 		}
 	}
 
 	userInput := &UserInput{
-		sql:       sql,
-		isRestore: true,
-		opAccount: opAccount,
-		toAccount: toAccount,
+		sql:           sql,
+		isRestore:     true,
+		opAccount:     opAccount,
+		toAccount:     toAccount,
+		isRestoreByTs: true,
 	}
 
 	execCtx := ExecCtx{
@@ -188,7 +226,12 @@ func (back *backExec) ExecRestore(ctx context.Context, sql string, opAccount uin
 		ses:    back.backSes,
 	}
 	defer execCtx.Close()
-	return doComQueryInBack(back.backSes, &execCtx, userInput)
+
+	tmpStatsArray := statistic.NewStatsArray()
+	defer func() {
+		back.statsArray.Add(tmpStatsArray)
+	}()
+	return doComQueryInBack(back.backSes, tmpStatsArray, &execCtx, userInput)
 }
 
 func (back *backExec) ExecStmt(ctx context.Context, statement tree.Statement) error {
@@ -205,6 +248,10 @@ func (back *backExec) GetExecResultSet() []interface{} {
 		ret[i] = mr
 	}
 	return ret
+}
+
+func (back *backExec) SetRestore(b bool) {
+	back.backSes.SetRestore(b)
 }
 
 func (back *backExec) ClearExecResultSet() {
@@ -225,12 +272,17 @@ func (back *backExec) ClearExecResultBatches() {
 }
 
 func (back *backExec) Clear() {
+	if back == nil {
+		return
+	}
+	back.statsArray = nil
 	back.backSes.Clear()
 }
 
 // execute query
 func doComQueryInBack(
 	backSes *backSession,
+	statsArr *statistic.StatsArray,
 	execCtx *ExecCtx,
 	input *UserInput,
 ) (retErr error) {
@@ -238,6 +290,10 @@ func doComQueryInBack(
 	defer backSes.ExitFPrint(FPDoComQueryInBack)
 	backSes.GetTxnCompileCtx().SetExecCtx(execCtx)
 	backSes.SetSql(input.getSql())
+
+	// record start time of parsing
+	beginInstant := time.Now()
+
 	//the ses.GetUserName returns the user_name with the account_name.
 	//here,we only need the user_name.
 	userNameOnly := rootName
@@ -296,6 +352,11 @@ func doComQueryInBack(
 	execCtx.reqCtx, span = trace.Start(execCtx.reqCtx, "backExec.doComQueryInBack",
 		trace.WithKind(trace.SpanKindStatement))
 	defer span.End()
+
+	// Instantiate StatsInfo to track SQL resource statistics
+	statsInfo := new(statistic.StatsInfo)
+	statsInfo.ParseStage.ParseStartTime = beginInstant
+	execCtx.reqCtx = statistic.ContextWithStatsInfo(execCtx.reqCtx, statsInfo)
 	execCtx.input = input
 
 	proc.Base.SessionInfo.User = userNameOnly
@@ -307,8 +368,12 @@ func doComQueryInBack(
 		proc,
 		backSes,
 	)
+	// SQL parsing completed, record end time
+	ParseDuration := time.Since(beginInstant)
 
 	if err != nil {
+		statsInfo.ParseStage.ParseDuration = ParseDuration
+
 		retErr = err
 		if _, ok := err.(*moerr.Error); !ok {
 			retErr = moerr.NewParseError(execCtx.reqCtx, err.Error())
@@ -339,7 +404,15 @@ func doComQueryInBack(
 		if insertStmt, ok := stmt.(*tree.Insert); ok && input.isRestore {
 			insertStmt.IsRestore = true
 			insertStmt.FromDataTenantID = input.opAccount
+			if input.isRestoreByTs {
+				insertStmt.IsRestoreByTs = true
+			}
 		}
+
+		statsInfo.Reset()
+		//average parse duration
+		statsInfo.ParseStage.ParseStartTime = beginInstant
+		statsInfo.ParseStage.ParseDuration = time.Duration(ParseDuration.Nanoseconds() / int64(len(cws)))
 
 		tenant := backSes.GetTenantNameWithStmt(stmt)
 
@@ -372,7 +445,7 @@ func doComQueryInBack(
 		execCtx.proc = proc
 		execCtx.ses = backSes
 		execCtx.cws = cws
-		err = executeStmtWithTxn(backSes, execCtx)
+		err = executeStmtWithTxn(backSes, statsArr, execCtx)
 		if err != nil {
 			return err
 		}
@@ -382,6 +455,7 @@ func doComQueryInBack(
 }
 
 func executeStmtInBack(backSes *backSession,
+	statsArr *statistic.StatsArray,
 	execCtx *ExecCtx,
 ) (err error) {
 	execCtx.ses.EnterFPrint(FPExecStmtInBack)
@@ -432,7 +506,10 @@ func executeStmtInBack(backSes *backSession,
 	}
 
 	defer func() {
-		if c, ok := ret.(*compile.Compile); ok {
+		if c, ok := ret.(*compile.Compile); ok && statsArr != nil {
+			statsByte := execCtx.cw.StatsCompositeSubStmtResource(execCtx.reqCtx)
+			statsArr.Reset()
+			statsArr.Add(&statsByte)
 			c.Release()
 		}
 	}()
@@ -506,32 +583,25 @@ var GetComputationWrapperInBack = func(execCtx *ExecCtx, db string, input *UserI
 var NewBackgroundExec = func(
 	reqCtx context.Context,
 	upstream FeSession,
+	opts ...*BackgroundExecOption,
 ) BackgroundExec {
-	backSes := newBackSession(upstream, nil, "", fakeDataSetFetcher2)
-	if up, ok := upstream.(*Session); ok {
-		backSes.upstream = up
-	}
-	bh := &backExec{
-		backSes: backSes,
-	}
+	return upstream.InitBackExec(nil, "", fakeDataSetFetcher2, opts...)
+}
 
-	return bh
+var NewShareTxnBackgroundExec = func(ctx context.Context, ses FeSession, rawBatch bool) BackgroundExec {
+	return ses.GetShareTxnBackgroundExec(ctx, rawBatch)
 }
 
 // ExeSqlInBgSes for mock stub
-var ExeSqlInBgSes = func(reqCtx context.Context, upstream *Session, sql string) ([]ExecResult, error) {
-	return executeSQLInBackgroundSession(reqCtx, upstream, sql)
+var ExeSqlInBgSes = func(reqCtx context.Context, bh BackgroundExec, sql string) ([]ExecResult, error) {
+	return executeSQLInBackgroundSession(reqCtx, bh, sql)
 }
 
 // executeSQLInBackgroundSession executes the sql in an independent session and transaction.
 // It sends nothing to the client.
-func executeSQLInBackgroundSession(reqCtx context.Context, upstream *Session, sql string) ([]ExecResult, error) {
-	bh := NewBackgroundExec(reqCtx, upstream)
-	defer bh.Close()
-
-	upstream.Debugf(reqCtx, "background exec sql:%v", sql)
+func executeSQLInBackgroundSession(reqCtx context.Context, bh BackgroundExec, sql string) ([]ExecResult, error) {
+	bh.ClearExecResultSet()
 	err := bh.Exec(reqCtx, sql)
-	upstream.Debug(reqCtx, "background exec sql done")
 	if err != nil {
 		return nil, err
 	}
@@ -591,7 +661,7 @@ func executeStmtInSameSession(ctx context.Context, ses *Session, execCtx *ExecCt
 	ses.Debug(ctx, "query trace(ExecStmtInSameSession)",
 		logutil.ConnectionIdField(ses.GetConnectionID()))
 	//3. execute the statement
-	return doComQuery(ses, execCtx, &UserInput{stmt: stmt})
+	return doComQuery(ses, execCtx, &UserInput{stmt: stmt, isInternalInput: true})
 }
 
 // fakeDataSetFetcher2 gets the result set from the pipeline and save it in the session.
@@ -672,27 +742,43 @@ type backSession struct {
 func newBackSession(ses FeSession, txnOp TxnOperator, db string, callBack outputCallBackFunc) *backSession {
 	service := ses.GetService()
 	txnHandler := InitTxnHandler(ses.GetService(), getPu(service).StorageEngine, ses.GetTxnHandler().GetConnCtx(), txnOp)
-	backSes := &backSession{
-		feSessionImpl: feSessionImpl{
-			pool:           ses.GetMemPool(),
-			buf:            buffer.New(),
-			stmtProfile:    process.StmtProfile{},
-			tenant:         nil,
-			txnHandler:     txnHandler,
-			txnCompileCtx:  InitTxnCompilerContext(db),
-			mrs:            nil,
-			outputCallback: callBack,
-			allResultSet:   nil,
-			resultBatches:  nil,
-			derivedStmt:    false,
-			label:          make(map[string]string),
-			timeZone:       time.Local,
-			respr:          defResper,
-			service:        service,
-		},
-	}
+	backSes := &backSession{}
+	backSes.initFeSes(ses, txnHandler, db, callBack)
 	backSes.uuid, _ = uuid.NewV7()
 	return backSes
+}
+
+func (backSes *backSession) initFeSes(
+	ses FeSession,
+	txnHandler *TxnHandler,
+	db string,
+	callBack outputCallBackFunc) *backSession {
+	backSes.pool = ses.GetMemPool()
+	backSes.buf = buffer.New()
+	backSes.stmtProfile = process.StmtProfile{}
+	backSes.tenant = nil
+	backSes.txnHandler = txnHandler
+	backSes.txnCompileCtx = InitTxnCompilerContext(db)
+	backSes.mrs = nil
+	backSes.outputCallback = callBack
+	backSes.allResultSet = nil
+	backSes.resultBatches = nil
+	backSes.derivedStmt = false
+	backSes.label = make(map[string]string)
+	backSes.timeZone = time.Local
+	backSes.respr = defResper
+	backSes.service = ses.GetService()
+	return backSes
+}
+
+func (backSes *backSession) InitBackExec(txnOp TxnOperator, db string, callBack outputCallBackFunc, opts ...*BackgroundExecOption) BackgroundExec {
+	if txnOp != nil {
+		be := &backExec{}
+		be.init(backSes, txnOp, db, callBack)
+		return be
+	} else {
+		panic("backSession does not support non-txn-shared backExec recursively")
+	}
 }
 
 func (backSes *backSession) getCachedPlan(sql string) *cachedPlan {
@@ -700,11 +786,38 @@ func (backSes *backSession) getCachedPlan(sql string) *cachedPlan {
 }
 
 func (backSes *backSession) Close() {
-	backSes.feSessionImpl.Close()
+	if backSes == nil {
+		return
+	}
+	txnHandler := backSes.GetTxnHandler()
+	if txnHandler != nil {
+		tempExecCtx := ExecCtx{
+			ses:    backSes,
+			txnOpt: FeTxnOption{byRollback: true},
+		}
+		defer tempExecCtx.Close()
+		err := txnHandler.Rollback(&tempExecCtx)
+		if err != nil {
+			backSes.Error(tempExecCtx.reqCtx,
+				"Failed to rollback txn in back session",
+				zap.Error(err))
+		}
+	}
+
+	//if the txn is not shared outside, we clean feSessionImpl.
+	//reset else
+	if txnHandler == nil || !txnHandler.IsShareTxn() {
+		backSes.feSessionImpl.Close()
+	} else {
+		backSes.feSessionImpl.Reset()
+	}
 	backSes.upstream = nil
 }
 
 func (backSes *backSession) Clear() {
+	if backSes == nil {
+		return
+	}
 	backSes.feSessionImpl.Clear()
 }
 
@@ -853,7 +966,7 @@ func (backSes *backSession) GetTenantName() string {
 }
 
 func (backSes *backSession) GetFromRealUser() bool {
-	return false
+	return backSes.fromRealUser
 }
 
 func (backSes *backSession) GetDebugString() string {
@@ -871,13 +984,10 @@ func (backSes *backSession) GetShareTxnBackgroundExec(ctx context.Context, newRa
 		txnOp = backSes.GetTxnHandler().GetTxn()
 	}
 
-	newBackSes := newBackSession(backSes, txnOp, "", fakeDataSetFetcher2)
-	bh := &backExec{
-		backSes: newBackSes,
-	}
+	be := backSes.InitBackExec(txnOp, "", fakeDataSetFetcher2)
 	//the derived statement execute in a shared transaction in background session
-	bh.backSes.ReplaceDerivedStmt(true)
-	return bh
+	be.(*backExec).backSes.ReplaceDerivedStmt(true)
+	return be
 }
 
 func (backSes *backSession) GetUserDefinedVar(name string) (*UserDefinedVar, error) {
@@ -889,15 +999,20 @@ func (backSes *backSession) GetSessionSysVar(name string) (interface{}, error) {
 	case "autocommit":
 		return true, nil
 	case "lower_case_table_names":
+		if backSes.GetRestore() && !backSes.GetRestoreFail() {
+			return int64(0), nil
+		}
 		return int64(1), nil
+	case "mo_table_stats.force_update", "mo_table_stats.use_old_impl", "mo_table_stats.reset_update_time":
+		return backSes.upstream.GetSessionSysVar(name)
 	}
 	return nil, nil
 }
 
-func (backSes *backSession) GetBackgroundExec(ctx context.Context) BackgroundExec {
+func (backSes *backSession) GetBackgroundExec(ctx context.Context, opts ...*BackgroundExecOption) BackgroundExec {
 	backSes.EnterFPrint(FPGetBackgroundExecInBackSession)
 	defer backSes.ExitFPrint(FPGetBackgroundExecInBackSession)
-	return NewBackgroundExec(ctx, backSes)
+	return NewBackgroundExec(ctx, backSes, opts...)
 }
 
 func (backSes *backSession) GetStorage() engine.Engine {
@@ -973,6 +1088,10 @@ func (backSes *backSession) Debug(ctx context.Context, msg string, fields ...zap
 	backSes.log(ctx, zap.DebugLevel, msg, fields...)
 }
 
+func (backSes *backSession) LogDebug() bool {
+	return backSes.getMOLogger().Enabled(zap.DebugLevel)
+}
+
 func (backSes *backSession) Infof(ctx context.Context, msg string, args ...any) {
 	backSes.logf(ctx, zap.InfoLevel, msg, args...)
 }
@@ -993,6 +1112,22 @@ func (backSes *backSession) Debugf(ctx context.Context, msg string, args ...any)
 	backSes.logf(ctx, zap.DebugLevel, msg, args...)
 }
 
+func (backSes *backSession) SetRestore(b bool) {
+	backSes.isRestore = b
+}
+
+func (backSes *backSession) GetRestore() bool {
+	return backSes.isRestore
+}
+
+func (backSes *backSession) SetRestoreFail(b bool) {
+	backSes.isRestoreFail = b
+}
+
+func (backSes *backSession) GetRestoreFail() bool {
+	return backSes.isRestoreFail
+}
+
 type SqlHelper struct {
 	ses *Session
 }
@@ -1005,11 +1140,12 @@ func (sh *SqlHelper) GetSubscriptionMeta(dbName string) (*plan.SubscriptionMeta,
 	return sh.ses.txnCompileCtx.GetSubscriptionMeta(dbName, nil)
 }
 
-// Made for sequence func. nextval, setval.
-func (sh *SqlHelper) ExecSql(sql string) (ret [][]interface{}, err error) {
+func (sh *SqlHelper) execSql(
+	ctx context.Context,
+	sql string,
+) (ret [][]interface{}, err error) {
 	var erArray []ExecResult
 
-	ctx := sh.ses.txnCompileCtx.execCtx.reqCtx
 	/*
 		if we run the transaction statement (BEGIN, ect) here , it creates an independent transaction.
 		if we do not run the transaction statement (BEGIN, ect) here, it runs the sql in the share transaction
@@ -1035,4 +1171,14 @@ func (sh *SqlHelper) ExecSql(sql string) (ret [][]interface{}, err error) {
 	}
 
 	return erArray[0].(*MysqlResultSet).Data, nil
+}
+
+// Made for sequence func. nextval, setval.
+func (sh *SqlHelper) ExecSql(sql string) (ret [][]interface{}, err error) {
+	ctx := sh.ses.txnCompileCtx.execCtx.reqCtx
+	return sh.execSql(ctx, sql)
+}
+
+func (sh *SqlHelper) ExecSqlWithCtx(ctx context.Context, sql string) ([][]interface{}, error) {
+	return sh.execSql(ctx, sql)
 }

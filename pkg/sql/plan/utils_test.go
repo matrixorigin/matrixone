@@ -19,8 +19,12 @@ import (
 	"net/url"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/common/stage"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -94,4 +98,65 @@ func TestInitStageS3Param(t *testing.T) {
 		Id:          1000}
 	err = InitStageS3Param(param, s)
 	require.Nil(t, err)
+}
+
+func TestHandleOptimizerHints(t *testing.T) {
+	builder := &QueryBuilder{}
+	handleOptimizerHints("skipDedup=1", builder)
+	require.Equal(t, 1, builder.optimizerHints.skipDedup)
+}
+
+func TestMakeCPKEYRuntimeFilter(t *testing.T) {
+	name2colidx := make(map[string]int32, 0)
+	name2colidx[catalog.CPrimaryKeyColName] = 0
+	typ := plan.Type{
+		Id: int32(types.T_varchar),
+	}
+	tableDef := &plan.TableDef{
+		Cols: []*plan.ColDef{
+			{
+				Name: "catalog.CPrimaryKeyColName",
+				Typ:  typ,
+			},
+		},
+		Name2ColIndex: name2colidx,
+	}
+	expr := GetColExpr(typ, 0, 0)
+	MakeCPKEYRuntimeFilter(0, 0, expr, tableDef)
+}
+
+func TestDbNameOfObjRef(t *testing.T) {
+	type args struct {
+		objRef *ObjectRef
+	}
+	tests := []struct {
+		name string
+		args args
+		want string
+	}{
+		{
+			name: "case 1",
+			args: args{
+				objRef: &ObjectRef{
+					SchemaName: "db",
+				},
+			},
+			want: "db",
+		},
+		{
+			name: "case 2",
+			args: args{
+				objRef: &ObjectRef{
+					SchemaName:       "whatever",
+					SubscriptionName: "sub",
+				},
+			},
+			want: "sub",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equalf(t, tt.want, DbNameOfObjRef(tt.args.objRef), "DbNameOfObjRef(%v)", tt.args.objRef)
+		})
+	}
 }

@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
@@ -123,22 +124,6 @@ func (proc *Process) SetPrepareParams(prepareParams *vector.Vector) {
 	proc.Base.prepareParams = prepareParams
 }
 
-func (proc *Process) SetPrepareBatch(bat *batch.Batch) {
-	proc.Base.prepareBatch = bat
-}
-
-func (proc *Process) GetPrepareBatch() *batch.Batch {
-	return proc.Base.prepareBatch
-}
-
-func (proc *Process) SetPrepareExprList(exprList any) {
-	proc.Base.prepareExprList = exprList
-}
-
-func (proc *Process) GetPrepareExprList() any {
-	return proc.Base.prepareExprList
-}
-
 func (proc *Process) OperatorOutofMemory(size int64) bool {
 	return proc.Mp().Cap() < size
 }
@@ -154,10 +139,6 @@ func (proc *Process) AllocVectorOfRows(typ types.Type, nele int, nsp *nulls.Null
 		nulls.Set(vec.GetNulls(), nsp)
 	}
 	return vec, nil
-}
-
-func (proc *Process) CopyValueScanBatch(src *Process) {
-	proc.Base.valueScanBatch = src.Base.valueScanBatch
 }
 
 func (proc *Process) NewBatchFromSrc(src *batch.Batch, preAllocSize int) (*batch.Batch, error) {
@@ -253,4 +234,12 @@ func appendTraceField(fields []zap.Field, ctx context.Context) []zap.Field {
 		fields = append(fields, trace.ContextField(ctx))
 	}
 	return fields
+}
+
+func (proc *Process) GetSpillFileService() (fileservice.MutableFileService, error) {
+	local, err := fileservice.Get[fileservice.MutableFileService](proc.Base.FileService, defines.LocalFileServiceName)
+	if err != nil {
+		return nil, err
+	}
+	return fileservice.SubPath(local, defines.SpillFileServiceName).(fileservice.MutableFileService), nil
 }

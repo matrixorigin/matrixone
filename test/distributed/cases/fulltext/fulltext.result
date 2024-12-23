@@ -10,9 +10,9 @@ insert into src values (0, 'color is red', 't1'), (1, 'car is yellow', 'crazy ca
 (10, NULL, NULL);
 create fulltext index ftidx on src (body, title);
 select * from src where match(body) against('red');
-not supported: fulltext_match() not implemented yet.  Please create FULLTEXT INDEX.
+not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
 select match(body) against('red') from src;
-not supported: fulltext_match_score() not implemented yet. Please create FULLTEXT INDEX.
+not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
 alter table src add fulltext index ftidx2 (body);
 select * from src where match(body, title) against('red');
 id    body    title
@@ -20,10 +20,7 @@ id    body    title
 3    blue is not red    colorful
 select *, match(body, title) against('is red' in natural language mode) as score from src;
 id    body    title    score
-0    color is red    t1    0.74115014
-3    blue is not red    colorful    0.74115014
-1    car is yellow    crazy car    0.19301322
-2    sky is blue    no limit    0.19301322
+0    color is red    t1    2.1689975
 select * from src where match(body, title) against('教學指引');
 id    body    title
 6    各個單元主題內容涵蓋中華文化及生活應用的介紹。本套教材含課本、教學指引、生字卡、學生作業本與CD，中英對照，精美大字版。本系列有繁體字及簡體字兩種版本印行。    中文短篇小說
@@ -39,11 +36,11 @@ id    body    title
 4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文
 select *, match(body, title) against('遠東兒童中文' in natural language mode) as score from src;
 id    body    title    score
-4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    5.4813685
+4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    6.577643
 5    每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。    遠東兒童中文    3.2888215
 select *, match(body) against('遠東兒童中文' in natural language mode) as score from src;
 id    body    title    score
-4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    4.337995
+4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    6.506993
 select * from src where match(body, title) against('+red blue' in boolean mode);
 id    body    title
 3    blue is not red    colorful
@@ -71,6 +68,19 @@ id    body    title
 select * from src where match(body, title) against('"is not red"' in boolean mode);
 id    body    title
 3    blue is not red    colorful
+select * from src where match(body, title) against('"red"' in boolean mode);
+id    body    title
+0    color is red    t1
+3    blue is not red    colorful
+select * from src where match(body, title) against('+教學指引 +短篇小說' in boolean mode);
+id    body    title
+6    各個單元主題內容涵蓋中華文化及生活應用的介紹。本套教材含課本、教學指引、生字卡、學生作業本與CD，中英對照，精美大字版。本系列有繁體字及簡體字兩種版本印行。    中文短篇小說
+select * from src where match(body, title) against('+教學指引 -短篇小說' in boolean mode);
+id    body    title
+select * from src where match(body, title) against('"is  not red"' in boolean mode);
+id    body    title
+select * from src where match(body, title) against('"blue is red"' in boolean mode);
+id    body    title
 select src.*, match(body, title) against('blue') from src;
 id    body    title    MATCH (body, title) AGAINST (blue)
 2    sky is blue    no limit    0.5481369
@@ -116,10 +126,7 @@ id    body    title
 3    blue is not red    colorful
 select *, match(body, title) against('is red' in natural language mode) as score from src;
 id    body    title    score
-0    color is red    t1    0.74115014
-3    blue is not red    colorful    0.74115014
-1    car is yellow    crazy car    0.19301322
-2    sky is blue    no limit    0.19301322
+0    color is red    t1    2.1689975
 select * from src where match(body, title) against('教學指引');
 id    body    title
 6    各個單元主題內容涵蓋中華文化及生活應用的介紹。本套教材含課本、教學指引、生字卡、學生作業本與CD，中英對照，精美大字版。本系列有繁體字及簡體字兩種版本印行。    中文短>篇小說
@@ -135,11 +142,11 @@ id    body    title
 4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文
 select *, match(body, title) against('遠東兒童中文' in natural language mode) as score from src;
 id    body    title    score
-4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    5.4813685
+4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    6.577643
 5    每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。    遠東兒童中文    3.2888215
 select *, match(body) against('遠東兒童中文' in natural language mode) as score from src;
 id    body    title    score
-4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    4.337995
+4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    6.506993
 select * from src where match(body, title) against('+red blue' in boolean mode);
 id    body    title
 3    blue is not red    colorful
@@ -185,6 +192,14 @@ Project
               ->  Table Scan on fulltext.src
               ->  Table Function on fulltext_index_scan
                     ->  Values Scan "*VALUES*" 
+desc src;
+Field    Type    Null    Key    Default    Extra    Comment
+id    BIGINT(64)    NO    PRI    null        
+body    VARCHAR(65535)    YES    MUL    null        
+title    TEXT(0)    YES        null        
+show create table src;
+Table    Create Table
+src    CREATE TABLE `src` (\n  `id` bigint NOT NULL,\n  `body` varchar(65535) DEFAULT NULL,\n  `title` text DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT(`body`,`title`),\n FULLTEXT(`body`)\n)
 drop table src;
 create table src2 (id1 varchar, id2 bigint, body char(128), title text, primary key (id1, id2));
 insert into src2 values ('id0', 0, 'red', 't1'), ('id1', 1, 'yellow', 't2'), ('id2', 2, 'blue', 't3'), ('id3', 3, 'blue red', 't4');
@@ -208,6 +223,10 @@ insert into src2 values ('id4', 4, 'light brown', 't5');
 select * from src2 where match(body, title) against('t5');
 id1    id2    body    title
 id4    4    light brown    t5
+desc src;
+no such table fulltext.src
+show create table src;
+no such table fulltext.src
 drop table src2;
 create table src (id bigint primary key, json1 json, json2 json);
 insert into src values  (0, '{"a":1, "b":"red"}', '{"d": "happy birthday", "f":"winter"}'),
@@ -217,16 +236,25 @@ create fulltext index ftidx on src (json1) with parser json;
 select * from src where match(json1) against('red' in boolean mode);
 id    json1    json2
 0    {"a": 1, "b": "red"}    {"d": "happy birthday", "f": "winter"}
-select * from src where match(json1) against('中文學習教材' in boolean mode);
+2    {"a": 3, "b": "red blue"}    {"d": "兒童中文"}
+select * from src where match(json1) against('中文學習教材' in natural language mode);
 id    json1    json2
 1    {"a": 2, "b": "中文學習教材"}    ["apple", "orange", "banana", "指引"]
 create fulltext index ftidx2 on src (json1, json2) with parser json;
 select * from src where match(json1, json2) against('+red +winter' in boolean mode);
 id    json1    json2
 0    {"a": 1, "b": "red"}    {"d": "happy birthday", "f": "winter"}
-select * from src where match(json1, json2) against('中文學習教材' in boolean mode);
+select * from src where match(json1, json2) against('中文學習教材' in natural language mode);
 id    json1    json2
 1    {"a": 2, "b": "中文學習教材"}    ["apple", "orange", "banana", "指引"]
+desc src;
+Field    Type    Null    Key    Default    Extra    Comment
+id    BIGINT(64)    NO    PRI    null        
+json1    JSON(0)    YES    MUL    null        
+json2    JSON(0)    YES        null        
+show create table src;
+Table    Create Table
+src    CREATE TABLE `src` (\n  `id` bigint NOT NULL,\n  `json1` json DEFAULT NULL,\n  `json2` json DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT(`json1`) WITH PARSER json,\n FULLTEXT(`json1`,`json2`) WITH PARSER json\n)
 drop table src;
 create table src (id bigint primary key, json1 text, json2 varchar);
 insert into src values  (0, '{"a":1, "b":"red"}', '{"d": "happy birthday", "f":"winter"}'),
@@ -236,16 +264,25 @@ create fulltext index ftidx on src (json1) with parser json;
 select * from src where match(json1) against('red' in boolean mode);
 id    json1    json2
 0    {"a":1, "b":"red"}    {"d": "happy birthday", "f":"winter"}
-select * from src where match(json1) against('中文學習教材' in boolean mode);
+2    {"a":3, "b":"red blue"}    {"d":"兒童中文"}
+select * from src where match(json1) against('中文學習教材' in natural language  mode);
 id    json1    json2
 1    {"a":2, "b":"中文學習教材"}    ["apple", "orange", "banana", "指引"]
 create fulltext index ftidx2 on src (json1, json2) with parser json;
 select * from src where match(json1, json2) against('+red +winter' in boolean mode);
 id    json1    json2
 0    {"a":1, "b":"red"}    {"d": "happy birthday", "f":"winter"}
-select * from src where match(json1, json2) against('中文學習教材' in boolean mode);
+select * from src where match(json1, json2) against('中文學習教材' in natural language mode);
 id    json1    json2
 1    {"a":2, "b":"中文學習教材"}    ["apple", "orange", "banana", "指引"]
+desc src;
+Field    Type    Null    Key    Default    Extra    Comment
+id    BIGINT(64)    NO    PRI    null        
+json1    TEXT(0)    YES    MUL    null        
+json2    VARCHAR(65535)    YES        null        
+show create table src;
+Table    Create Table
+src    CREATE TABLE `src` (\n  `id` bigint NOT NULL,\n  `json1` text DEFAULT NULL,\n  `json2` varchar(65535) DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT(`json1`) WITH PARSER json,\n FULLTEXT(`json1`,`json2`) WITH PARSER json\n)
 drop table src;
 create table src (id bigint primary key, body varchar, title text, FULLTEXT(title, body));
 insert into src values (0, 'color is red', 't1'), (1, 'car is yellow', 'crazy car'), (2, 'sky is blue', 'no limit'), (3, 'blue is not red', 'colorful'),
@@ -258,17 +295,14 @@ insert into src values (0, 'color is red', 't1'), (1, 'car is yellow', 'crazy ca
 (9, 'NOT INCLUDED BODY', NULL),
 (10, NULL, NULL);
 select *, match(body) against('遠東兒童中文' in natural language mode) as score from src;
-not supported: fulltext_match_score() not implemented yet. Please create FULLTEXT INDEX.
+not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
 select * from src where match(body, title) against('red');
 id    body    title
 0    color is red    t1
 3    blue is not red    colorful
 select *, match(body, title) against('is red' in natural language mode) as score from src;
 id    body    title    score
-0    color is red    t1    0.74115014
-3    blue is not red    colorful    0.74115014
-1    car is yellow    crazy car    0.19301322
-2    sky is blue    no limit    0.19301322
+0    color is red    t1    2.1689975
 select * from src where match(body, title) against('教學指引');
 id    body    title
 6    各個單元主題內容涵蓋中華文化及生活應用的介紹。本套教材含課本、教學指引、生字卡、學生作業本與CD，中英對照，精美大字版。本系列有繁體字及簡體字兩種版本印行。    中文短篇小說\n
@@ -284,7 +318,7 @@ id    body    title
 4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文
 select *, match(body, title) against('遠東兒童中文' in natural language mode) as score from src;
 id    body    title    score
-4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    5.4813685
+4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    6.577643
 5    每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。    遠東兒童中文    3.2888215
 select * from src where match(body, title) against('+red blue' in boolean mode);
 id    body    title
@@ -349,6 +383,14 @@ delete from src;
 select count(*) from src;
 count(*)
 0
+desc src;
+Field    Type    Null    Key    Default    Extra    Comment
+id    BIGINT(64)    NO    PRI    null        
+body    VARCHAR(65535)    YES        null        
+title    TEXT(0)    YES    MUL    null        
+show create table src;
+Table    Create Table
+src    CREATE TABLE `src` (\n  `id` bigint NOT NULL,\n  `body` varchar(65535) DEFAULT NULL,\n  `title` text DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT(`title`,`body`)\n)
 drop table src;
 create table src2 (id1 varchar, id2 bigint, body char(128), title text, primary key (id1, id2), FULLTEXT(body, title));
 insert into src2 values ('id0', 0, 'red', 't1'), ('id1', 1, 'yellow', 't2'), ('id2', 2, 'blue', 't3'), ('id3', 3, 'blue red', 't4');
@@ -360,6 +402,15 @@ select src2.*, match(body, title) against('blue') from src2;
 id1    id2    body    title    MATCH (body, title) AGAINST (blue)
 id2    2    blue    t3    0.09061906
 id3    3    blue red    t4    0.09061906
+desc src2;
+Field    Type    Null    Key    Default    Extra    Comment
+id1    VARCHAR(65535)    NO    PRI    null        
+id2    BIGINT(64)    NO    PRI    null        
+body    CHAR(128)    YES    MUL    null        
+title    TEXT(0)    YES        null        
+show create table src2;
+Table    Create Table
+src2    CREATE TABLE `src2` (\n  `id1` varchar(65535) NOT NULL,\n  `id2` bigint NOT NULL,\n  `body` char(128) DEFAULT NULL,\n  `title` text DEFAULT NULL,\n  PRIMARY KEY (`id1`,`id2`),\n FULLTEXT(`body`,`title`)\n)
 drop table src2;
 create table src (id bigint primary key, json1 json, json2 json, FULLTEXT(json1) with parser json);
 insert into src values  (0, '{"a":1, "b":"red"}', '{"d": "happy birthday", "f":"winter"}'),
@@ -368,16 +419,26 @@ insert into src values  (0, '{"a":1, "b":"red"}', '{"d": "happy birthday", "f":"
 select * from src where match(json1) against('red' in boolean mode);
 id    json1    json2
 0    {"a": 1, "b": "red"}    {"d": "happy birthday", "f": "winter"}
-select * from src where match(json1) against('中文學習教材' in boolean mode);
+2    {"a": 3, "b": "red blue"}    {"d": "兒童中文"}
+select * from src where match(json1) against('中文學習教材' in natural language mode);
 id    json1    json2
 1    {"a": 2, "b": "中文學習教材"}    ["apple", "orange", "banana", "指引"]
 create fulltext index ftidx2 on src (json1, json2) with parser json;
 select * from src where match(json1, json2) against('+red +winter' in boolean mode);
 id    json1    json2
 0    {"a": 1, "b": "red"}    {"d": "happy birthday", "f": "winter"}
-select * from src where match(json1, json2) against('中文學習教材' in boolean mode);
+select * from src where match(json1, json2) against('中文學習教材' in natural language mode);
 id    json1    json2
 1    {"a": 2, "b": "中文學習教材"}    ["apple", "orange", "banana", "指引"]
+update src set json1='{"c":"update json"}' where id=0;
+desc src;
+Field    Type    Null    Key    Default    Extra    Comment
+id    BIGINT(64)    NO    PRI    null        
+json1    JSON(0)    YES    MUL    null        
+json2    JSON(0)    YES        null        
+show create table src;
+Table    Create Table
+src    CREATE TABLE `src` (\n  `id` bigint NOT NULL,\n  `json1` json DEFAULT NULL,\n  `json2` json DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT(`json1`) WITH PARSER json,\n FULLTEXT(`json1`,`json2`) WITH PARSER json\n)
 drop table src;
 create table src (id bigint primary key, json1 text, json2 varchar, fulltext(json1) with parser json);
 insert into src values  (0, '{"a":1, "b":"red"}', '{"d": "happy birthday", "f":"winter"}'),
@@ -386,14 +447,70 @@ insert into src values  (0, '{"a":1, "b":"red"}', '{"d": "happy birthday", "f":"
 select * from src where match(json1) against('red' in boolean mode);
 id    json1    json2
 0    {"a":1, "b":"red"}    {"d": "happy birthday", "f":"winter"}
-select * from src where match(json1) against('中文學習教材' in boolean mode);
+2    {"a":3, "b":"red blue"}    {"d":"兒童中文"}
+select * from src where match(json1) against('中文學習教材' in natural language mode);
 id    json1    json2
 1    {"a":2, "b":"中文學習教材"}    ["apple", "orange", "banana", "指引"]
 create fulltext index ftidx2 on src (json1, json2) with parser json;
 select * from src where match(json1, json2) against('+red +winter' in boolean mode);
 id    json1    json2
 0    {"a":1, "b":"red"}    {"d": "happy birthday", "f":"winter"}
-select * from src where match(json1, json2) against('中文學習教材' in boolean mode);
+select * from src where match(json1, json2) against('中文學習教材' in natural language mode);
 id    json1    json2
 1    {"a":2, "b":"中文學習教材"}    ["apple", "orange", "banana", "指引"]
+update src set json1='{"c":"update json"}' where id=0;
+select * from src where match(json1, json2) against('"update json"' in boolean mode);
+id    json1    json2
+0    {"c":"update json"}    {"d": "happy birthday", "f":"winter"}
+desc src;
+Field    Type    Null    Key    Default    Extra    Comment
+id    BIGINT(64)    NO    PRI    null        
+json1    TEXT(0)    YES    MUL    null        
+json2    VARCHAR(65535)    YES        null        
+show create table src;
+Table    Create Table
+src    CREATE TABLE `src` (\n  `id` bigint NOT NULL,\n  `json1` text DEFAULT NULL,\n  `json2` varchar(65535) DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT(`json1`) WITH PARSER json,\n FULLTEXT(`json1`,`json2`) WITH PARSER json\n)
 drop table src;
+drop table if exists t1;
+create table t1(a int primary key, b varchar(200));
+insert into t1 select result, "test create big fulltext index" from generate_series(3840001) g;
+create fulltext index ftidx on t1 (b);
+select count(*) from t1 where match(b) against ('test create' in natural language mode);
+count(*)
+3840001
+drop table t1;
+CREATE TABLE IF NOT EXISTS nation (
+`n_nationkey`  INT,
+`n_name`       CHAR(25),
+`n_regionkey`  INT,
+`n_comment`    VARCHAR(152),
+`n_dummy`      VARCHAR(10),
+PRIMARY KEY (`n_nationkey`));
+insert into nation values (0, 'china', 1, 'china beijing', 'dummy'), (1, 'korea', 2, 'korea noodle', 'dummmy');
+create fulltext index ftidx on nation(n_comment);
+select * from nation where match(n_comment) against('china');
+n_nationkey    n_name    n_regionkey    n_comment    n_dummy
+0    china    1    china beijing    dummy
+delete from nation where n_nationkey = 0;
+select * from nation where match(n_comment) against('china');
+n_nationkey    n_name    n_regionkey    n_comment    n_dummy
+drop table nation;
+drop table if exists t1;
+create table t1(a int primary key, b varchar(200));
+insert into t1 select result, "pushdown limit is fast" from generate_series(30001) g;
+create fulltext index ftidx on t1 (b);
+select count(*) from t1 where match(b) against ('+pushdown +limit' in boolean mode);
+count(*)
+30001
+select count(*) from t1 where match(b) against ('+pushdown +limit' in boolean mode) limit 1;
+count(*)
+1
+drop table t1;
+drop table if exists articles;
+create table articles (id int auto_increment not null primary key, title varchar, body text);
+create fulltext index ftidx on articles (title, body);
+alter table articles drop column title;
+drop table if exists articles;
+create table articles (id int auto_increment not null primary key, title varchar, body text);
+create fulltext index ftidx on articles (title);
+alter table articles drop column title;

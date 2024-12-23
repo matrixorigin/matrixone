@@ -22,14 +22,12 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-
-	"github.com/matrixorigin/matrixone/pkg/vm/message"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 )
 
 func describeMessage(m *plan.MsgHeader, buf *bytes.Buffer) {
@@ -41,18 +39,22 @@ func describeMessage(m *plan.MsgHeader, buf *bytes.Buffer) {
 	buf.WriteString("]")
 }
 
+func describeColRef(col *plan.ColRef, buf *bytes.Buffer) {
+	if len(col.Name) > 0 && !strings.HasPrefix(col.Name, catalog.PrefixIndexTableName) {
+		buf.WriteString(col.Name)
+	} else {
+		buf.WriteString("#[")
+		buf.WriteString(strconv.Itoa(int(col.RelPos)))
+		buf.WriteString(",")
+		buf.WriteString(strconv.Itoa(int(col.ColPos)))
+		buf.WriteString("]")
+	}
+}
+
 func describeExpr(ctx context.Context, expr *plan.Expr, options *ExplainOptions, buf *bytes.Buffer) error {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_Col:
-		if len(exprImpl.Col.Name) > 0 && !strings.HasPrefix(exprImpl.Col.Name, catalog.PrefixIndexTableName) {
-			buf.WriteString(exprImpl.Col.Name)
-		} else {
-			buf.WriteString("#[")
-			buf.WriteString(strconv.Itoa(int(exprImpl.Col.RelPos)))
-			buf.WriteString(",")
-			buf.WriteString(strconv.Itoa(int(exprImpl.Col.ColPos)))
-			buf.WriteString("]")
-		}
+		describeColRef(exprImpl.Col, buf)
 
 	case *plan.Expr_Lit:
 		if exprImpl.Lit.Isnull {
@@ -196,6 +198,21 @@ func describeExpr(ctx context.Context, expr *plan.Expr, options *ExplainOptions,
 	return nil
 }
 
+func needSpecialHandling(funcExpr *plan.Function) bool {
+	if funcExpr.Func.GetObjName() == "prefix_in" || funcExpr.Func.GetObjName() == "prefix_eq" || funcExpr.Func.GetObjName() == "prefix_between" {
+		return true
+	}
+	if len(funcExpr.Args) > 1 {
+		col := funcExpr.Args[0].GetCol()
+		if col != nil && funcExpr.Args[1].GetCol() == nil {
+			if strings.Contains(col.Name, catalog.PrefixCBColName) || strings.Contains(col.Name, catalog.PrefixPriColName) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // generator function expression(Expr_F) explain information
 func funcExprExplain(ctx context.Context, funcExpr *plan.Function, Typ *plan.Type, options *ExplainOptions, buf *bytes.Buffer) error {
 	// SysFunsAndOperatorsMap
@@ -210,7 +227,7 @@ func funcExprExplain(ctx context.Context, funcExpr *plan.Function, Typ *plan.Typ
 	switch layout {
 	case function.STANDARD_FUNCTION:
 		buf.WriteString(funcExpr.Func.GetObjName() + "(")
-		if funcExpr.Func.GetObjName() == "prefix_in" || funcExpr.Func.GetObjName() == "prefix_eq" || funcExpr.Func.GetObjName() == "prefix_between" {
+		if needSpecialHandling(funcExpr) {
 			//contains invisible character, need special handling
 			err = describeExpr(ctx, funcExpr.Args[0], options, buf)
 			if err != nil {
@@ -262,9 +279,11 @@ func funcExprExplain(ctx context.Context, funcExpr *plan.Function, Typ *plan.Typ
 			return err
 		}
 		buf.WriteString(" " + funcExpr.Func.GetObjName() + " ")
-		err = describeExpr(ctx, funcExpr.Args[1], options, buf)
-		if err != nil {
-			return err
+		if !needSpecialHandling(funcExpr) {
+			err = describeExpr(ctx, funcExpr.Args[1], options, buf)
+			if err != nil {
+				return err
+			}
 		}
 		buf.WriteString(")")
 	case function.MULTIARY_LOGICAL_OPERATOR:
@@ -349,9 +368,11 @@ func funcExprExplain(ctx context.Context, funcExpr *plan.Function, Typ *plan.Typ
 			return err
 		}
 		buf.WriteString(" " + funcExpr.Func.GetObjName() + " (")
-		err = describeExpr(ctx, funcExpr.Args[1], options, buf)
-		if err != nil {
-			return err
+		if !needSpecialHandling(funcExpr) {
+			err = describeExpr(ctx, funcExpr.Args[1], options, buf)
+			if err != nil {
+				return err
+			}
 		}
 		buf.WriteString(")")
 	case function.EXISTS_ANY_PREDICATE:

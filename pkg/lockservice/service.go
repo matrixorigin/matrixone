@@ -225,8 +225,8 @@ func (s *service) Unlock(
 		}
 	}
 
-	defer logUnlockTxn(s.logger, s.serviceID, txn)()
-	txn.close(s.serviceID, txnID, commitTS, s.getLockTable, s.logger, mutations...)
+	defer logUnlockTxn(s.logger, txn)()
+	txn.close(txnID, commitTS, s.getLockTable, s.logger, mutations...)
 	// The deadlock detector will hold the deadlocked transaction that is aborted
 	// to avoid the situation where the deadlock detection is interfered with by
 	// the abort transaction. When a transaction is unlocked, the deadlock detector
@@ -251,6 +251,27 @@ func (s *service) IsOrphanTxn(
 	defer releaseResponse(resp)
 
 	return resp.CheckOrphan.Orphan, nil
+}
+
+func (s *service) Resume() error {
+	ctx, cancel := context.WithTimeoutCause(
+		context.Background(),
+		defaultRPCTimeout,
+		moerr.NewInfoNoCtx("lockservice.resume"),
+	)
+	defer cancel()
+
+	req := acquireRequest()
+	req.Method = pb.Method_ResumeInvalidCN
+	req.ResumeInvalidCN.ServiceID = s.serviceID
+
+	resp, err := s.remote.client.Send(ctx, req)
+	if err != nil {
+		return err
+	}
+	defer releaseResponse(resp)
+
+	return err
 }
 
 func (s *service) reduceCanMoveGroupTables(txn *activeTxn) {
@@ -442,7 +463,6 @@ func (s *service) fetchTxnWaitingList(txn pb.WaitTxn, waiters *waiters) (bool, e
 		return activeTxn.fetchWhoWaitingMe(
 			s.serviceID,
 			txnID,
-			s.activeTxnHolder,
 			waiters.add,
 			s.getLockTable), nil
 	}
@@ -468,7 +488,7 @@ func (s *service) abortDeadlockTxn(wait pb.WaitTxn, err error) {
 	if activeTxn == nil {
 		return
 	}
-	activeTxn.abort(s.serviceID, wait, err, s.logger)
+	activeTxn.abort(wait, err, s.logger)
 }
 
 func (s *service) getLockTable(

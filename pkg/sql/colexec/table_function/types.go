@@ -35,6 +35,7 @@ type TableFunction struct {
 	Attrs    []string
 	Params   []byte
 	FuncName string
+	Limit    *plan.Expr
 
 	vm.OperatorBase
 }
@@ -109,6 +110,10 @@ func (tableFunction *TableFunction) Reset(proc *process.Process, pipelineFailed 
 func (tableFunction *TableFunction) Free(proc *process.Process, pipelineFailed bool, err error) {
 	tableFunction.ctr.cleanExecutors()
 	tableFunction.ctr.state.free(tableFunction, proc, pipelineFailed, err)
+}
+
+func (tableFunction *TableFunction) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
+	return input, nil
 }
 
 func (ctr *container) cleanExecutors() {

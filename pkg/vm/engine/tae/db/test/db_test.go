@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"math/rand"
 	"reflect"
 	"sort"
@@ -28,13 +29,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"
-
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -45,7 +43,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -58,6 +58,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
@@ -68,16 +69,127 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 const (
-	ModuleName               = "TAEDB"
-	smallCheckpointBlockRows = 10
-	smallCheckpointSize      = 1024
+	ModuleName                     = "TAEDB"
+	smallCheckpointBlockRows       = 10
+	smallCheckpointSize            = 1024
+	defaultGlobalCheckpointTimeout = 10 * time.Second
 )
+
+func TestCancelableJob(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+
+	var v1 atomic.Int32
+	jobName := "job"
+	job := tasks.NewCancelableJob(
+		jobName,
+		func(ctx context.Context) {
+			time.Sleep(time.Millisecond * 2)
+			v1.Store(int32(10))
+		},
+		1,
+	)
+	assert.True(t, strings.Contains(job.Name(), jobName))
+	job.Start()
+	job.Stop()
+	assert.Equal(t, int32(10), v1.Load())
+
+	v1.Store(0)
+
+	job = tasks.NewCancelableCronJob(
+		jobName,
+		time.Millisecond*1,
+		func(ctx context.Context) {
+			if v := v1.Add(1); v == 3 {
+				panic("panic-test")
+			}
+		},
+		true,
+		1,
+	)
+	job.Start()
+
+	testutils.WaitExpect(5000, func() bool {
+		return v1.Load() > 5
+	})
+	assert.Truef(t, v1.Load() > 5, "v1=%d", v1.Load())
+	job.Stop()
+
+	jobs := tasks.NewCancelableJobs()
+
+	err := jobs.AddJob(
+		"job1",
+		time.Millisecond*1,
+		func(ctx context.Context) {
+		},
+		1,
+	)
+	assert.NoError(t, err)
+
+	v1.Store(0)
+	var v2 atomic.Int32
+	err = jobs.AddJob(
+		"job1",
+		time.Millisecond*1,
+		func(ctx context.Context) {
+			if v := v1.Add(1); v == 3 {
+				panic("panic-job1-test")
+			}
+		},
+		1,
+	)
+	assert.Equal(t, tasks.DuplicateJobErr, err)
+	err = jobs.AddJob(
+		"job2",
+		time.Millisecond*1,
+		func(ctx context.Context) {
+			if v := v2.Add(1); v == 3 {
+				panic("panic-job2-test")
+			}
+		},
+		1,
+	)
+	assert.NoError(t, err)
+	assert.Equal(t, 2, jobs.JobCount())
+
+	testutils.WaitExpect(5000, func() bool {
+		return v1.Load() > 5 && v2.Load() > 5
+	})
+
+	jobs.Reset()
+	assert.Equal(t, 0, jobs.JobCount())
+	vv1, vv2 := v1.Load(), v2.Load()
+	time.Sleep(time.Millisecond * 5)
+	assert.Equal(t, vv1, v1.Load())
+	assert.Equal(t, vv2, v2.Load())
+}
+
+func TestPrintVector(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+
+	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+	assert.NoError(t, err)
+	vec1 := vector.NewVec(types.T_uint32.ToType())
+	defer vec1.Free(mp)
+	for i := 0; i < 10; i++ {
+		err = vector.AppendFixed[uint32](vec1, math.MaxUint32, false, mp)
+		assert.NoError(t, err)
+	}
+
+	vec1.Reset(types.T_varchar.ToType())
+	err = vector.AppendBytes(vec1, nil, true, mp)
+	require.NoError(t, err)
+	s := common.MoVectorToString(vec1, 10)
+	t.Log(s)
+}
 
 func TestAppend1(t *testing.T) {
 	defer testutils.AfterTest(t)()
@@ -2285,7 +2397,7 @@ func TestSnapshotIsolation1(t *testing.T) {
 	// Step 4
 	err = rel1.UpdateByFilter(context.Background(), filter, 3, int64(1111), false)
 	t.Log(err)
-	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict))
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrNotFound))
 	_ = txn1.Rollback(context.Background())
 
 	// Step 5
@@ -2511,7 +2623,7 @@ func (c *dummyCpkGetter) CollectCheckpointsInRange(ctx context.Context, start, e
 	return "", types.TS{}, nil
 }
 
-func (c *dummyCpkGetter) FlushTable(ctx context.Context, dbID, tableID uint64, ts types.TS) error {
+func (c *dummyCpkGetter) FlushTable(ctx context.Context, accoutID uint32, dbID, tableID uint64, ts types.TS) error {
 	return nil
 }
 
@@ -2561,8 +2673,7 @@ func TestSegDelLogtail(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, 2, len(resp.Commands)) // data object + tombstone object
 
-	assert.Equal(t, api.Entry_Insert, resp.Commands[0].EntryType)
-	assert.True(t, strings.HasSuffix(resp.Commands[0].TableName, "data_meta"))
+	assert.Equal(t, api.Entry_DataObject, resp.Commands[0].EntryType)
 	assert.Equal(t, uint32(9), resp.Commands[0].Bat.Vecs[0].Len) /* 5 create + 4 delete */
 	// start ts should not be empty
 	startTSVec := resp.Commands[0].Bat.Vecs[9]
@@ -2573,8 +2684,7 @@ func TestSegDelLogtail(t *testing.T) {
 		assert.False(t, ts.IsEmpty())
 	}
 
-	assert.Equal(t, api.Entry_Insert, resp.Commands[1].EntryType)
-	assert.True(t, strings.HasSuffix(resp.Commands[1].TableName, "tombstone_meta"))
+	assert.Equal(t, api.Entry_TombstoneObject, resp.Commands[1].EntryType)
 	assert.Equal(t, uint32(4), resp.Commands[1].Bat.Vecs[0].Len) /* 2 create + 2 delete */
 	// start ts should not be empty
 	startTSVec = resp.Commands[1].Bat.Vecs[9]
@@ -3446,10 +3556,10 @@ func TestImmutableIndexInAblk(t *testing.T) {
 		rowIDs.Append(nil, true)
 	}
 	err = meta.GetObjectData().GetDuplicatedRows(
-		context.Background(), txn, bat.Vecs[1], nil, false, true, false, rowIDs, common.DefaultAllocator,
+		context.Background(), txn, bat.Vecs[1], nil, types.TS{}, types.MaxTs(), rowIDs, common.DefaultAllocator,
 	)
 	assert.NoError(t, err)
-	err = meta.GetObjectData().Contains(context.Background(), txn, false, rowIDs, nil, common.DebugAllocator)
+	err = meta.GetObjectData().Contains(context.Background(), txn, rowIDs, nil, common.DebugAllocator)
 	assert.NoError(t, err)
 	duplicate := false
 	rowIDs.Foreach(func(v any, isNull bool, row int) error {
@@ -4421,8 +4531,7 @@ func TestFlushTable(t *testing.T) {
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 
-	tae.BGCheckpointRunner.DebugUpdateOptions(
-		checkpoint.WithForceFlushCheckInterval(time.Millisecond * 5))
+	tae.BGFlusher.ChangeForceCheckInterval(time.Millisecond * 5)
 
 	schema := catalog.MockSchemaAll(3, 1)
 	schema.Extra.BlockMaxRows = 10
@@ -4508,11 +4617,11 @@ func TestReadCheckpoint(t *testing.T) {
 	now = time.Now()
 	assert.Equal(t, uint64(0), tae.Wal.GetPenddingCnt())
 	testutils.WaitExpect(10000, func() bool {
-		tae.BGCheckpointRunner.ExistPendingEntryToGC()
-		return !tae.BGCheckpointRunner.ExistPendingEntryToGC()
+		tae.BGCheckpointRunner.GCNeeded()
+		return !tae.BGCheckpointRunner.GCNeeded()
 	})
 	t.Log(time.Since(now))
-	assert.False(t, tae.BGCheckpointRunner.ExistPendingEntryToGC())
+	assert.False(t, tae.BGCheckpointRunner.GCNeeded())
 	entries := tae.BGCheckpointRunner.GetAllGlobalCheckpoints()
 	for _, entry := range entries {
 		t.Log(entry.String())
@@ -5549,8 +5658,10 @@ func TestGCWithCheckpoint(t *testing.T) {
 			opts := config.WithQuickScanAndCKPAndGCOpts(nil)
 			tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 			defer tae.Close()
-			cleaner := gc.NewCheckpointCleaner(context.Background(), "", tae.Runtime.Fs, tae.BGCheckpointRunner)
-			manager := gc.NewDiskCleaner(cleaner)
+			cleaner := gc.NewCheckpointCleaner(
+				context.Background(), "", tae.Runtime.Fs, tae.Wal, tae.BGCheckpointRunner,
+			)
+			manager := gc.NewDiskCleaner(cleaner, true)
 			manager.Start()
 			defer manager.Stop()
 
@@ -5586,8 +5697,10 @@ func TestGCWithCheckpoint(t *testing.T) {
 			end := entries[num-1].GetEnd()
 			maxEnd := manager.GetCleaner().GetScanWaterMark().GetEnd()
 			assert.True(t, end.Equal(&maxEnd))
-			cleaner2 := gc.NewCheckpointCleaner(context.Background(), "", tae.Runtime.Fs, tae.BGCheckpointRunner)
-			manager2 := gc.NewDiskCleaner(cleaner2)
+			cleaner2 := gc.NewCheckpointCleaner(
+				context.Background(), "", tae.Runtime.Fs, tae.Wal, tae.BGCheckpointRunner,
+			)
+			manager2 := gc.NewDiskCleaner(cleaner2, true)
 			manager2.Start()
 			defer manager2.Stop()
 			testutils.WaitExpect(5000, func() bool {
@@ -5619,8 +5732,8 @@ func TestGCDropDB(t *testing.T) {
 			opts := config.WithQuickScanAndCKPAndGCOpts(nil)
 			tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 			defer tae.Close()
-			cleaner := gc.NewCheckpointCleaner(context.Background(), "", tae.Runtime.Fs, tae.BGCheckpointRunner)
-			manager := gc.NewDiskCleaner(cleaner)
+			cleaner := gc.NewCheckpointCleaner(context.Background(), "", tae.Runtime.Fs, tae.Wal, tae.BGCheckpointRunner)
+			manager := gc.NewDiskCleaner(cleaner, true)
 			manager.Start()
 			defer manager.Stop()
 			schema := catalog.MockSchemaAll(3, 1)
@@ -5659,8 +5772,10 @@ func TestGCDropDB(t *testing.T) {
 			end := entries[num-1].GetEnd()
 			maxEnd := manager.GetCleaner().GetScanWaterMark().GetEnd()
 			assert.True(t, end.Equal(&maxEnd))
-			cleaner2 := gc.NewCheckpointCleaner(context.Background(), "", tae.Runtime.Fs, tae.BGCheckpointRunner)
-			manager2 := gc.NewDiskCleaner(cleaner2)
+			cleaner2 := gc.NewCheckpointCleaner(
+				context.Background(), "", tae.Runtime.Fs, tae.Wal, tae.BGCheckpointRunner,
+			)
+			manager2 := gc.NewDiskCleaner(cleaner2, true)
 			manager2.Start()
 			defer manager2.Stop()
 			testutils.WaitExpect(5000, func() bool {
@@ -5693,8 +5808,10 @@ func TestGCDropTable(t *testing.T) {
 			opts := config.WithQuickScanAndCKPAndGCOpts(nil)
 			tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 			defer tae.Close()
-			cleaner := gc.NewCheckpointCleaner(context.Background(), "", tae.Runtime.Fs, tae.BGCheckpointRunner)
-			manager := gc.NewDiskCleaner(cleaner)
+			cleaner := gc.NewCheckpointCleaner(
+				context.Background(), "", tae.Runtime.Fs, tae.Wal, tae.BGCheckpointRunner,
+			)
+			manager := gc.NewDiskCleaner(cleaner, true)
 			manager.Start()
 			defer manager.Stop()
 			schema := catalog.MockSchemaAll(3, 1)
@@ -5748,8 +5865,10 @@ func TestGCDropTable(t *testing.T) {
 			end := entries[num-1].GetEnd()
 			maxEnd := manager.GetCleaner().GetScanWaterMark().GetEnd()
 			assert.True(t, end.Equal(&maxEnd))
-			cleaner2 := gc.NewCheckpointCleaner(context.Background(), "", tae.Runtime.Fs, tae.BGCheckpointRunner)
-			manager2 := gc.NewDiskCleaner(cleaner2)
+			cleaner2 := gc.NewCheckpointCleaner(
+				context.Background(), "", tae.Runtime.Fs, tae.Wal, tae.BGCheckpointRunner,
+			)
+			manager2 := gc.NewDiskCleaner(cleaner2, true)
 			manager2.Start()
 			defer manager2.Stop()
 			testutils.WaitExpect(5000, func() bool {
@@ -6124,10 +6243,10 @@ func TestAlterFakePk(t *testing.T) {
 	for i, cmd := range resp.Commands {
 		t.Logf("command %d, table name %v, type %d", i, cmd.TableName, cmd.EntryType)
 	}
-	assert.Equal(t, api.Entry_Insert, resp.Commands[0].EntryType) // data insert
-	assert.Equal(t, api.Entry_Insert, resp.Commands[1].EntryType) // data insert
-	assert.Equal(t, api.Entry_Insert, resp.Commands[2].EntryType) // data insert
-	assert.Equal(t, api.Entry_Delete, resp.Commands[3].EntryType) // data delete
+	assert.Equal(t, api.Entry_DataObject, resp.Commands[0].EntryType)      // data insert
+	assert.Equal(t, api.Entry_TombstoneObject, resp.Commands[1].EntryType) // data insert
+	assert.Equal(t, api.Entry_Insert, resp.Commands[2].EntryType)          // data insert
+	assert.Equal(t, api.Entry_Delete, resp.Commands[3].EntryType)          // data delete
 
 	dataObjectBat, err := batch.ProtoBatchToBatch(resp.Commands[0].Bat)
 	assert.NoError(t, err)
@@ -6359,6 +6478,9 @@ func TestAppendAndGC(t *testing.T) {
 	opts := new(options.Options)
 	opts = config.WithQuickScanAndCKPOpts(opts)
 	options.WithDisableGCCheckpoint()(opts)
+	merge.StopMerge.Store(true)
+	defer merge.StopMerge.Store(false)
+
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	db := tae.DB
@@ -6425,7 +6547,6 @@ func TestAppendAndGC2(t *testing.T) {
 	opts.CheckpointCfg.GlobalMinCount = 5
 	options.WithDisableGCCheckpoint()(opts)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
-	defer tae.Close()
 	db := tae.DB
 
 	schema1 := catalog.MockSchemaAll(13, 2)
@@ -6489,7 +6610,10 @@ func TestAppendAndGC2(t *testing.T) {
 			files[file] = struct{}{}
 		}
 	}
-	db.Wal.Replay(loadFiles)
+	dir := tae.Dir
+	tae.Close()
+	wal := wal.NewDriverWithBatchStore(opts.Ctx, dir, "wal", nil)
+	wal.Replay(loadFiles)
 	assert.NotEqual(t, 0, len(files))
 	for file := range metaFile {
 		if _, ok := files[file]; !ok {
@@ -6656,7 +6780,6 @@ func TestSnapshotGC(t *testing.T) {
 	}
 	snapWG.Wait()
 	wg.Wait()
-	db.DiskCleaner.GetCleaner().EnableGC()
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 	testutils.WaitExpect(10000, func() bool {
 		return db.Runtime.Scheduler.GetPenddingLSNCnt() == 0
@@ -6665,6 +6788,7 @@ func TestSnapshotGC(t *testing.T) {
 	testutils.WaitExpect(5000, func() bool {
 		return db.DiskCleaner.GetCleaner().GetMinMerged() != nil
 	})
+	db.DiskCleaner.GetCleaner().EnableGC()
 	minMerged := db.DiskCleaner.GetCleaner().GetMinMerged()
 	testutils.WaitExpect(5000, func() bool {
 		return db.DiskCleaner.GetCleaner().GetMinMerged() != nil
@@ -6743,6 +6867,8 @@ func TestSnapshotMeta(t *testing.T) {
 	opts := new(options.Options)
 	opts = config.WithQuickScanAndCKPOpts(opts)
 	options.WithDisableGCCheckpoint()(opts)
+	merge.StopMerge.Store(true)
+	defer merge.StopMerge.Store(false)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	db := tae.DB
@@ -7292,7 +7418,7 @@ func TestGlobalCheckpoint2(t *testing.T) {
 	txn, err := tae.StartTxn(nil)
 	assert.NoError(t, err)
 	tae.IncrementalCheckpoint(txn.GetStartTS(), false, true, true)
-	tae.GlobalCheckpoint(txn.GetStartTS(), 0, false)
+	tae.DB.ForceGlobalCheckpoint(ctx, txn.GetStartTS(), defaultGlobalCheckpointTimeout, 0)
 	assert.NoError(t, txn.Commit(context.Background()))
 
 	tae.CreateRelAndAppend2(bat, false)
@@ -7303,7 +7429,7 @@ func TestGlobalCheckpoint2(t *testing.T) {
 		return tae.Runtime.Scheduler.GetPenddingLSNCnt() == 0
 	})
 	tae.IncrementalCheckpoint(currTs, false, true, true)
-	tae.GlobalCheckpoint(currTs, time.Duration(1), false)
+	tae.DB.ForceGlobalCheckpoint(ctx, currTs, defaultGlobalCheckpointTimeout, time.Duration(1))
 
 	p := &catalog.LoopProcessor{}
 	tableExisted := false
@@ -7413,8 +7539,8 @@ func TestGlobalCheckpoint4(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 
-	err = tae.GlobalCheckpoint(txn.GetCommitTS(), globalCkpInterval, false)
-	assert.NoError(t, err)
+	err = tae.DB.ForceGlobalCheckpoint(ctx, txn.GetCommitTS(), defaultGlobalCheckpointTimeout, globalCkpInterval)
+	assert.Nil(t, err)
 
 	tae.CreateRelAndAppend(bat, true)
 
@@ -7434,7 +7560,7 @@ func TestGlobalCheckpoint4(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 
-	err = tae.GlobalCheckpoint(txn.GetCommitTS(), globalCkpInterval, false)
+	err = tae.DB.ForceGlobalCheckpoint(ctx, txn.GetCommitTS(), defaultGlobalCheckpointTimeout, globalCkpInterval)
 	assert.NoError(t, err)
 
 	tae.CreateRelAndAppend(bat, false)
@@ -7451,10 +7577,9 @@ func TestGlobalCheckpoint5(t *testing.T) {
 	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
-	opts := config.WithQuickScanAndCKPOpts(nil)
+	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
-	tae.BGCheckpointRunner.DisableCheckpoint()
 	tae.BGCheckpointRunner.CleanPenddingCheckpoint()
 	globalCkpIntervalTimeout := 10 * time.Second
 
@@ -7475,7 +7600,7 @@ func TestGlobalCheckpoint5(t *testing.T) {
 
 	txn, err = tae.StartTxn(nil)
 	assert.NoError(t, err)
-	err = tae.GlobalCheckpoint(txn.GetStartTS(), globalCkpIntervalTimeout, false)
+	err = tae.DB.ForceGlobalCheckpoint(ctx, txn.GetStartTS(), defaultGlobalCheckpointTimeout, globalCkpIntervalTimeout)
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 
@@ -7483,7 +7608,7 @@ func TestGlobalCheckpoint5(t *testing.T) {
 
 	txn, err = tae.StartTxn(nil)
 	assert.NoError(t, err)
-	err = tae.GlobalCheckpoint(txn.GetStartTS(), globalCkpIntervalTimeout, false)
+	err = tae.DB.ForceGlobalCheckpoint(ctx, txn.GetStartTS(), defaultGlobalCheckpointTimeout, globalCkpIntervalTimeout)
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 
@@ -7491,7 +7616,6 @@ func TestGlobalCheckpoint5(t *testing.T) {
 
 	t.Log(tae.Catalog.SimplePPString(3))
 	tae.Restart(ctx)
-	tae.BGCheckpointRunner.DisableCheckpoint()
 	tae.BGCheckpointRunner.CleanPenddingCheckpoint()
 	t.Log(tae.Catalog.SimplePPString(3))
 
@@ -7502,8 +7626,7 @@ func TestGlobalCheckpoint5(t *testing.T) {
 	tae.CheckRowsByScan(60, true)
 	txn, err = tae.StartTxn(nil)
 	assert.NoError(t, err)
-	err = tae.GlobalCheckpoint(txn.GetStartTS(), globalCkpIntervalTimeout, false)
-	assert.NoError(t, err)
+	err = tae.DB.ForceGlobalCheckpoint(ctx, txn.GetStartTS(), defaultGlobalCheckpointTimeout, globalCkpIntervalTimeout)
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 }
@@ -7541,7 +7664,7 @@ func TestGlobalCheckpoint6(t *testing.T) {
 		tae.DoAppend(bats[i+1])
 		txn, err = tae.StartTxn(nil)
 		assert.NoError(t, err)
-		err = tae.GlobalCheckpoint(txn.GetStartTS(), globalCkpInterval, false)
+		err = tae.DB.ForceGlobalCheckpoint(ctx, txn.GetStartTS(), defaultGlobalCheckpointTimeout, globalCkpInterval)
 		assert.NoError(t, err)
 		assert.NoError(t, txn.Commit(context.Background()))
 
@@ -7597,10 +7720,10 @@ func TestGCCheckpoint1(t *testing.T) {
 	maxGlobal := tae.BGCheckpointRunner.MaxGlobalCheckpoint()
 
 	testutils.WaitExpect(4000, func() bool {
-		tae.BGCheckpointRunner.ExistPendingEntryToGC()
-		return !tae.BGCheckpointRunner.ExistPendingEntryToGC()
+		tae.BGCheckpointRunner.GCNeeded()
+		return !tae.BGCheckpointRunner.GCNeeded()
 	})
-	assert.False(t, tae.BGCheckpointRunner.ExistPendingEntryToGC())
+	assert.False(t, tae.BGCheckpointRunner.GCNeeded())
 
 	globals := tae.BGCheckpointRunner.GetAllGlobalCheckpoints()
 	assert.Equal(t, 1, len(globals))
@@ -7889,10 +8012,10 @@ func TestForceCheckpoint(t *testing.T) {
 	ctx := context.Background()
 	fault.Enable()
 	defer fault.Disable()
-	err := fault.AddFaultPoint(ctx, objectio.FJ_FlushTimeout, ":::", "echo", 0, "mock flush timeout")
+	err := fault.AddFaultPoint(ctx, objectio.FJ_FlushTimeout, ":::", "echo", 0, "mock flush timeout", false)
 	assert.NoError(t, err)
 	defer func() {
-		err := fault.RemoveFaultPoint(ctx, objectio.FJ_FlushTimeout)
+		_, err := fault.RemoveFaultPoint(ctx, objectio.FJ_FlushTimeout)
 		assert.NoError(t, err)
 	}()
 
@@ -7908,7 +8031,7 @@ func TestForceCheckpoint(t *testing.T) {
 
 	tae.CreateRelAndAppend(bat, true)
 
-	err = tae.BGCheckpointRunner.ForceFlushWithInterval(tae.TxnMgr.Now(), context.Background(), time.Second*2, time.Millisecond*10)
+	err = tae.BGFlusher.ForceFlushWithInterval(tae.TxnMgr.Now(), context.Background(), time.Second*2, time.Millisecond*10)
 	assert.Error(t, err)
 	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.Now(), false)
 	assert.NoError(t, err)
@@ -7958,8 +8081,6 @@ func TestSnapshotLag1(t *testing.T) {
 	bats := data.Split(4)
 	tae.CreateRelAndAppend(bats[0], true)
 
-	txn1, rel1 := tae.GetRelation()
-	assert.NoError(t, rel1.Append(context.Background(), bats[1]))
 	txn2, rel2 := tae.GetRelation()
 	assert.NoError(t, rel2.Append(context.Background(), bats[1]))
 
@@ -7969,9 +8090,11 @@ func TestSnapshotLag1(t *testing.T) {
 		assert.NoError(t, txn.Commit(context.Background()))
 	}
 
-	txn1.MockStartTS(tae.TxnMgr.Now())
-	err := txn1.Commit(context.Background())
+	txn1, rel1 := tae.GetRelation()
+	err := rel1.Append(context.Background(), bats[1])
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
+	err = txn1.Commit(context.Background())
+	assert.NoError(t, err)
 	err = txn2.Commit(context.Background())
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict))
 }
@@ -9803,10 +9926,10 @@ func TestMergeBlocks4(t *testing.T) {
 		defer wg.Done()
 		fault.Enable()
 		defer fault.Disable()
-		err := fault.AddFaultPoint(ctx, objectio.FJ_TransferSlow, ":::", "echo", 0, "mock flush timeout")
+		err := fault.AddFaultPoint(ctx, objectio.FJ_TransferSlow, ":::", "echo", 0, "mock flush timeout", false)
 		assert.NoError(t, err)
 		defer func() {
-			err := fault.RemoveFaultPoint(ctx, objectio.FJ_TransferSlow)
+			_, err := fault.RemoveFaultPoint(ctx, objectio.FJ_TransferSlow)
 			assert.NoError(t, err)
 		}()
 		tae.DeleteAll(true)
@@ -9996,7 +10119,7 @@ func TestStartStopTableMerge(t *testing.T) {
 	db := testutil.InitTestDB(context.Background(), "MergeTest", t, nil)
 	defer db.Close()
 
-	scheduler := merge.NewScheduler(db.Runtime, db.CNMergeSched)
+	scheduler := merge.NewScheduler(db.Runtime, nil)
 
 	schema := catalog.MockSchema(2, 0)
 	schema.Extra.BlockMaxRows = 1000
@@ -10120,6 +10243,97 @@ func TestTransferInMerge(t *testing.T) {
 	assert.NoError(t, txn.Commit(context.Background()))
 }
 
+func TestDeleteAndMerge(t *testing.T) {
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(3, 2)
+	schema.Extra.BlockMaxRows = 5
+	schema.Extra.ObjectMaxBlocks = 256
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 10)
+	defer bat.Close()
+	tae.CreateRelAndAppend(bat, true)
+	tae.CompactBlocks(true)
+
+	txn, rel := tae.GetRelation()
+	var objs []*catalog.ObjectEntry
+	objIt := rel.MakeObjectIt(false)
+	for objIt.Next() {
+		obj := objIt.GetObject().GetMeta().(*catalog.ObjectEntry)
+		if !obj.IsAppendable() {
+			objs = append(objs, obj)
+		}
+	}
+	task, err := jobs.NewMergeObjectsTask(nil, txn, objs, tae.Runtime, 0, false)
+	assert.NoError(t, err)
+	err = task.OnExec(context.Background())
+	assert.NoError(t, err)
+	var appendTxn txnif.AsyncTxn
+	{
+		tae.DeleteAll(true)
+		appendTxn, err = tae.StartTxn(nil)
+		assert.NoError(t, err)
+	}
+	assert.NoError(t, txn.Commit(context.Background()))
+	tae.CompactBlocks(true)
+	tae.DoAppendWithTxn(bat, appendTxn, false)
+
+	assert.NoError(t, appendTxn.Commit(ctx))
+	t.Log(tae.Catalog.SimplePPString(3))
+}
+
+func TestDeleteAndMerge2(t *testing.T) {
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(3, 2)
+	schema.Extra.BlockMaxRows = 5
+	schema.Extra.ObjectMaxBlocks = 256
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 10)
+	bats := bat.Split(10)
+	defer bat.Close()
+	tae.CreateRelAndAppend(bat, true)
+	tae.CompactBlocks(true)
+
+	txn, rel := tae.GetRelation()
+	var objs []*catalog.ObjectEntry
+	objIt := rel.MakeObjectIt(false)
+	for objIt.Next() {
+		obj := objIt.GetObject().GetMeta().(*catalog.ObjectEntry)
+		if !obj.IsAppendable() {
+			objs = append(objs, obj)
+		}
+	}
+	task, err := jobs.NewMergeObjectsTask(nil, txn, objs, tae.Runtime, 0, false)
+	assert.NoError(t, err)
+	err = task.OnExec(context.Background())
+	assert.NoError(t, err)
+	var appendTxn txnif.AsyncTxn
+	{
+		deleteTxn, deleteRel := tae.GetRelation()
+		v := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(3)
+		filter := handle.NewEQFilter(v)
+		err := deleteRel.DeleteByFilter(context.Background(), filter)
+		assert.NoError(t, err)
+		err = deleteTxn.Commit(context.Background())
+		assert.NoError(t, err)
+		appendTxn, err = tae.StartTxn(nil)
+		assert.NoError(t, err)
+	}
+	assert.NoError(t, txn.Commit(context.Background()))
+	tae.CompactBlocks(true)
+	tae.DoAppendWithTxn(bats[3], appendTxn, false)
+
+	assert.NoError(t, appendTxn.Commit(ctx))
+	t.Log(tae.Catalog.SimplePPString(3))
+}
+
 func TestTransferInMerge2(t *testing.T) {
 	ctx := context.Background()
 
@@ -10147,4 +10361,254 @@ func TestTransferInMerge2(t *testing.T) {
 	assert.NoError(t, txn.Commit(context.Background()))
 	tae.CheckRowsByScan(9, true)
 	t.Log(tae.Catalog.SimplePPString(3))
+}
+
+func TestMergeAndTransfer(t *testing.T) {
+	/*
+		append, flush
+		merge1, merge2
+		delete
+	*/
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(3, 2)
+	schema.Extra.BlockMaxRows = 5
+	schema.Extra.ObjectMaxBlocks = 256
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 10)
+	defer bat.Close()
+	tae.CreateRelAndAppend(bat, true)
+	tae.CompactBlocks(true)
+	tae.MergeBlocks(true)
+
+	t.Log(tae.Catalog.SimplePPString(3))
+
+	txn, rel := tae.GetRelation()
+	id := testutil.GetOneBlockMeta(rel).AsCommonID()
+	txn.Commit(ctx)
+
+	txn, rel = tae.GetRelation()
+	err := rel.RangeDelete(id, 0, 0, handle.DT_Normal)
+	txn.SetFreezeFn(func(at txnif.AsyncTxn) error {
+		err := at.GetStore().Freeze(ctx)
+		assert.NoError(t, err)
+		tae.MergeBlocks(true)
+		tae.MergeBlocks(true)
+		return nil
+	})
+
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit(ctx))
+	t.Log(tae.Catalog.SimplePPString(3))
+
+}
+
+func TestS3TransferInMerge(t *testing.T) {
+	/*
+		merge start
+		s3 delete enqueue
+		merge exe end
+		s3 delete commit
+		merge commit
+	*/
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(3, 2)
+	schema.Extra.BlockMaxRows = 5
+	schema.Extra.ObjectMaxBlocks = 256
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 10)
+	defer bat.Close()
+	tae.CreateRelAndAppend(bat, true)
+	tae.CompactBlocks(true)
+
+	txn, rel := tae.GetRelation()
+	var objs []*catalog.ObjectEntry
+	objIt := rel.MakeObjectIt(false)
+	for objIt.Next() {
+		obj := objIt.GetObject().GetMeta().(*catalog.ObjectEntry)
+		if !obj.IsAppendable() {
+			objs = append(objs, obj)
+		}
+	}
+	var wg sync.WaitGroup
+	{
+		deleteTxn, _ := tae.StartTxn(nil)
+		v1 := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(1)
+		ok, err := tae.TryDeleteByDeltalocWithTxn([]any{v1}, deleteTxn)
+		assert.True(t, ok)
+		assert.NoError(t, err)
+		deleteTxn.SetPrepareCommitFn(func(at txnif.AsyncTxn) error {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				task, err := jobs.NewMergeObjectsTask(nil, txn, objs, tae.Runtime, 0, false)
+				assert.NoError(t, err)
+				err = task.OnExec(context.Background())
+				assert.NoError(t, err)
+			}()
+			time.Sleep(time.Millisecond * 100)
+			return at.GetStore().PrepareCommit()
+		})
+		assert.NoError(t, deleteTxn.Commit(context.Background()))
+
+	}
+	wg.Wait()
+	assert.NoError(t, txn.Commit(context.Background()))
+
+	tae.CheckRowsByScan(9, true)
+}
+
+func TestDedup5(t *testing.T) {
+	/*
+		delete start
+		insert start
+		delete end
+		aobj flush(no transfer)
+		insert end
+	*/
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(3, 2)
+	schema.Extra.BlockMaxRows = 5
+	schema.Extra.ObjectMaxBlocks = 256
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 5)
+	bats := bat.Split(5)
+	defer bat.Close()
+	tae.CreateRelAndAppend(bat, true)
+
+	txn, rel := tae.GetRelation()
+	insertTxn, _ := tae.StartTxn(nil)
+	v := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(0)
+	filter := handle.NewEQFilter(v)
+	err := rel.DeleteByFilter(context.Background(), filter)
+	assert.NoError(t, err)
+	err = txn.Commit(context.Background())
+	assert.NoError(t, err)
+
+	tae.CompactBlocks(true)
+
+	err = tae.DoAppendWithTxn(bats[0], insertTxn, true)
+	assert.Error(t, err)
+	assert.NoError(t, insertTxn.Commit(ctx))
+}
+func TestCheckpointObjectList(t *testing.T) {
+	ctx := context.Background()
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	txn, _ := tae.StartTxn(nil)
+	testutil.CreateDatabase2(ctx, txn, "db")
+	txn.Commit(ctx)
+	var wg sync.WaitGroup
+	pool, _ := ants.NewPool(80)
+	defer pool.Release()
+	var tblNameIndex atomic.Int32
+	createRelAndAppend := func() {
+		defer wg.Done()
+		schema := catalog.MockSchemaAll(3, -1)
+		schema.Name = fmt.Sprintf("tbl%d", tblNameIndex.Add(1))
+		schema.Extra.BlockMaxRows = 1
+		schema.Extra.ObjectMaxBlocks = 256
+		bat := catalog.MockBatch(schema, 1)
+		txn, _ := tae.StartTxn(nil)
+		db, _ := txn.GetDatabase("db")
+		testutil.CreateRelation2(ctx, txn, db, schema)
+		txn.Commit(ctx)
+		for i := 0; i < 10; i++ {
+			txn, rel := testutil.GetRelation(t, 0, tae.DB, "db", schema.Name)
+			rel.Append(ctx, bat)
+			txn.Commit(ctx)
+			testutil.CompactBlocks(t, 0, tae.DB, "db", schema, true)
+		}
+		bat.Close()
+	}
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		pool.Submit(createRelAndAppend)
+	}
+	wg.Wait()
+	tae.ForceCheckpoint()
+	for i := 1; i <= 10; i++ {
+		txn, rel := testutil.GetRelation(t, 0, tae.DB, "db", fmt.Sprintf("tbl%d", i))
+		testutil.CheckAllColRowsByScan(t, rel, 10, false)
+		txn.Commit(ctx)
+	}
+	tae.Restart(ctx)
+	for i := 1; i <= 10; i++ {
+		txn, rel := testutil.GetRelation(t, 0, tae.DB, "db", fmt.Sprintf("tbl%d", i))
+		testutil.CheckAllColRowsByScan(t, rel, 10, false)
+		txn.Commit(ctx)
+	}
+}
+func TestReplayDebugLog(t *testing.T) {
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(3, 2)
+	schema.Extra.BlockMaxRows = 5
+	schema.Extra.ObjectMaxBlocks = 256
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 5)
+	tae.CreateRelAndAppend(bat, true)
+
+	fault.Enable()
+	defer fault.Disable()
+	fault.AddFaultPoint(ctx, "replay debug log", ":::", "echo", 0, "debug", false)
+	defer fault.RemoveFaultPoint(ctx, "replay debug log")
+
+	tae.Restart(ctx)
+}
+
+func Test_BasicTxnModeSwitch(t *testing.T) {
+	ctx := context.Background()
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+
+	var err error
+	tae.TxnServer, err = rpc.NewTxnServer("localhost:12345", runtime.ServiceRuntime(""))
+	require.NoError(t, err)
+
+	defer tae.Close()
+
+	assert.True(t, tae.IsWriteMode())
+	err = tae.SwitchTxnMode(ctx, 1, "todo")
+	assert.NoError(t, err)
+	assert.True(t, tae.IsReplayMode())
+	assert.True(t, tae.TxnMgr.IsReplayMode())
+
+	err = tae.SwitchTxnMode(ctx, 2, "todo")
+	assert.NoError(t, err)
+	assert.True(t, tae.IsWriteMode())
+	assert.True(t, tae.TxnMgr.IsWriteMode())
+	assert.Error(t, db.CheckCronJobs(tae.DB, db.DBTxnMode_Replay))
+}
+
+func Test_OpenReplayDB1(t *testing.T) {
+	ctx := context.Background()
+	opts := config.WithLongScanAndCKPOpts(nil)
+	opts.CheckpointCfg.MetadataCheckInterval = time.Millisecond * 2
+	tae := testutil.NewReplayTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	assert.True(t, tae.IsReplayMode())
+	assert.True(t, tae.TxnMgr.IsReplayMode())
+	for name, spec := range db.CronJobs_Spec {
+		if !spec[2] {
+			assert.Error(t, db.AddCronJob(tae.DB, name, false))
+		}
+	}
+	assert.Error(t, db.AddCronJob(tae.DB, "unknown", false))
+	assert.Error(t, db.CheckCronJobs(tae.DB, db.DBTxnMode_Write))
 }

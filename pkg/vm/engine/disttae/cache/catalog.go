@@ -376,6 +376,12 @@ func (cc *CatalogCache) GetTable(tbl *TableItem) bool {
 	return find
 }
 
+func (cc *CatalogCache) GetStartTS() types.TS {
+	cc.mu.Lock()
+	defer cc.mu.Unlock()
+	return cc.mu.start
+}
+
 func (cc *CatalogCache) HasNewerVersion(qry *TableChangeQuery) bool {
 	var find bool
 
@@ -386,7 +392,7 @@ func (cc *CatalogCache) HasNewerVersion(qry *TableChangeQuery) bool {
 		Ts:         types.MaxTs().ToTimestamp(), // get the latest version
 	}
 	cc.tables.data.Ascend(key, func(item *TableItem) bool {
-		if item.Name != qry.Name {
+		if item.AccountId != qry.AccountId || item.DatabaseId != qry.DatabaseId || item.Name != qry.Name {
 			return false
 		}
 
@@ -846,5 +852,6 @@ func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) (*plan.TableDef,
 		ClusterBy:     clusterByDef,
 		Indexes:       indexes,
 		Version:       tblItem.Version,
+		DbId:          tblItem.DatabaseId,
 	}, tableDef
 }

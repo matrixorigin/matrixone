@@ -44,6 +44,7 @@ var debugInstructionNames = map[vm.OpType]string{
 	vm.Filter:                  "filter",
 	vm.Dispatch:                "dispatch",
 	vm.Shuffle:                 "shuffle",
+	vm.ShuffleV2:               "shuffleV2",
 	vm.Connector:               "connect",
 	vm.Projection:              "projection",
 	vm.Anti:                    "anti",
@@ -85,7 +86,9 @@ var debugInstructionNames = map[vm.OpType]string{
 	vm.ValueScan:               "valuescan",
 	vm.TableFunction:           "tablefunction",
 	vm.OnDuplicateKey:          "on duplicate key",
+	vm.DedupJoin:               "dedup join",
 	vm.Apply:                   "apply",
+	vm.MultiUpdate:             "multi update",
 	vm.PostDml:                 "postdml",
 }
 

@@ -17,9 +17,8 @@ package shufflebuild
 import (
 	"bytes"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/message"
-
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -44,17 +43,15 @@ func (shuffleBuild *ShuffleBuild) Prepare(proc *process.Process) (err error) {
 	if shuffleBuild.RuntimeFilterSpec == nil {
 		panic("there must be runtime filter in shuffle build!")
 	}
+	shuffleBuild.ctr.hashmapBuilder.IsDedup = shuffleBuild.IsDedup
+	shuffleBuild.ctr.hashmapBuilder.OnDuplicateAction = shuffleBuild.OnDuplicateAction
+	shuffleBuild.ctr.hashmapBuilder.DedupColName = shuffleBuild.DedupColName
+	shuffleBuild.ctr.hashmapBuilder.DedupColTypes = shuffleBuild.DedupColTypes
 	return shuffleBuild.ctr.hashmapBuilder.Prepare(shuffleBuild.Conditions, proc)
 }
 
 func (shuffleBuild *ShuffleBuild) Call(proc *process.Process) (vm.CallResult, error) {
-	if err, isCancel := vm.CancelCheck(proc); isCancel {
-		return vm.CancelResult, err
-	}
-
 	analyzer := shuffleBuild.OpAnalyzer
-	analyzer.Start()
-	defer analyzer.Stop()
 
 	result := vm.NewCallResult()
 	ap := shuffleBuild
@@ -64,18 +61,15 @@ func (shuffleBuild *ShuffleBuild) Call(proc *process.Process) (vm.CallResult, er
 		case ReceiveBatch:
 			err := ctr.collectBuildBatches(ap, proc, analyzer)
 			if err != nil {
-				analyzer.Output(result.Batch)
 				return result, err
 			}
 			if err = ctr.handleRuntimeFilter(ap, proc); err != nil {
-				analyzer.Output(result.Batch)
 				return result, err
 			}
 			ctr.state = BuildHashMap
 		case BuildHashMap:
 			err := ctr.hashmapBuilder.BuildHashmap(ap.HashOnPK, ap.NeedAllocateSels, false, proc)
 			if err != nil {
-				analyzer.Output(result.Batch)
 				return result, err
 			}
 			if !ap.NeedBatches {
@@ -98,10 +92,11 @@ func (shuffleBuild *ShuffleBuild) Call(proc *process.Process) (vm.CallResult, er
 				jm.IncRef(1)
 			}
 			message.SendMessage(message.JoinMapMsg{JoinMapPtr: jm, IsShuffle: true, ShuffleIdx: ap.ShuffleIdx, Tag: ap.JoinMapTag}, proc.GetMessageBoard())
+			ctr.state = SendSucceed
 
+		case SendSucceed:
 			result.Batch = nil
 			result.Status = vm.ExecStop
-			analyzer.Output(result.Batch)
 			return result, nil
 		}
 	}

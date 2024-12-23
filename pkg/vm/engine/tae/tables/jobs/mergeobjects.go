@@ -69,6 +69,9 @@ type mergeObjectsTask struct {
 	targetObjSize uint32
 
 	createAt time.Time
+
+	segmentID *objectio.Segmentid
+	num       uint16
 }
 
 func NewMergeObjectsTask(
@@ -94,6 +97,7 @@ func NewMergeObjectsTask(
 		blkCnt:           make([]int, len(mergedObjs)),
 		targetObjSize:    targetObjSize,
 		createAt:         time.Now(),
+		segmentID:        objectio.NewSegmentid(),
 	}
 
 	database, err := txn.GetDatabaseByID(task.did)
@@ -188,7 +192,7 @@ func (task *mergeObjectsTask) GetMPool() *mpool.MPool {
 	return task.rt.VectorPool.Transient.GetMPool()
 }
 
-func (task *mergeObjectsTask) HostHintName() string { return "DN" }
+func (task *mergeObjectsTask) HostHintName() string { return "TN" }
 
 func (task *mergeObjectsTask) LoadNextBatch(
 	ctx context.Context, objIdx uint32,
@@ -323,7 +327,9 @@ func (task *mergeObjectsTask) PrepareNewWriter() *blockio.BlockWriter {
 		sortkeyPos = task.schema.GetSingleSortKeyIdx()
 	}
 
-	return blockio.ConstructWriter(
+	writer := blockio.ConstructWriterWithSegmentID(
+		task.segmentID,
+		task.num,
 		task.schema.Version,
 		seqnums,
 		sortkeyPos,
@@ -331,6 +337,8 @@ func (task *mergeObjectsTask) PrepareNewWriter() *blockio.BlockWriter {
 		task.isTombstone,
 		task.rt.Fs.Service,
 	)
+	task.num++
+	return writer
 }
 
 func (task *mergeObjectsTask) DoTransfer() bool {
@@ -369,7 +377,7 @@ func (task *mergeObjectsTask) Execute(ctx context.Context) (err error) {
 		return moerr.NewInternalErrorNoCtxf("LockMerge give up in exec %v", task.Name())
 	}
 	phaseDesc = "1-DoMergeAndWrite"
-	if err = mergesort.DoMergeAndWrite(ctx, task.txn.String(), sortkeyPos, task, task.isTombstone); err != nil {
+	if err = mergesort.DoMergeAndWrite(ctx, task.txn.String(), sortkeyPos, task); err != nil {
 		return err
 	}
 

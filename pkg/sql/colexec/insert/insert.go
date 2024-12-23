@@ -90,17 +90,11 @@ func (insert *Insert) Prepare(proc *process.Process) error {
 // first parameter: true represents whether the current pipeline has ended
 // first parameter: false
 func (insert *Insert) Call(proc *process.Process) (vm.CallResult, error) {
-	if err, isCancel := vm.CancelCheck(proc); isCancel {
-		return vm.CancelResult, err
-	}
-
 	analyzer := insert.OpAnalyzer
-	analyzer.Start()
 
 	t := time.Now()
 	defer func() {
 		analyzer.AddInsertTime(t)
-		analyzer.Stop()
 	}()
 
 	if insert.ToWriteS3 {
@@ -198,7 +192,6 @@ func (insert *Insert) insert_s3(proc *process.Process, analyzer process.Analyzer
 			}
 		}
 		insert.ctr.state = vm.End
-		analyzer.Output(result.Batch)
 		return result, nil
 	}
 
@@ -236,13 +229,15 @@ func (insert *Insert) insert_table(proc *process.Process, analyzer process.Analy
 				return input, err
 			}
 
-			crs := new(perfcounter.CounterSet)
+			crs := analyzer.GetOpCounterSet()
 			newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
 			err = insert.ctr.partitionSources[partIdx].Write(newCtx, insert.ctr.buf)
 			if err != nil {
 				return input, err
 			}
+			analyzer.AddWrittenRows(int64(insert.ctr.buf.RowCount()))
 			analyzer.AddS3RequestCount(crs)
+			analyzer.AddFileServiceCacheInfo(crs)
 			analyzer.AddDiskIO(crs)
 		}
 	} else {
@@ -257,7 +252,7 @@ func (insert *Insert) insert_table(proc *process.Process, analyzer process.Analy
 		}
 		insert.ctr.buf.SetRowCount(input.Batch.RowCount())
 
-		crs := new(perfcounter.CounterSet)
+		crs := analyzer.GetOpCounterSet()
 		newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
 
 		// insert into table, insertBat will be deeply copied into txn's workspace.
@@ -265,7 +260,9 @@ func (insert *Insert) insert_table(proc *process.Process, analyzer process.Analy
 		if err != nil {
 			return input, err
 		}
+		analyzer.AddWrittenRows(int64(insert.ctr.buf.RowCount()))
 		analyzer.AddS3RequestCount(crs)
+		analyzer.AddFileServiceCacheInfo(crs)
 		analyzer.AddDiskIO(crs)
 	}
 
@@ -273,13 +270,12 @@ func (insert *Insert) insert_table(proc *process.Process, analyzer process.Analy
 		atomic.AddUint64(&insert.ctr.affectedRows, affectedRows)
 	}
 	// `insertBat` does not include partition expression columns
-	analyzer.Output(input.Batch)
 	return input, nil
 }
 
 func writeBatch(proc *process.Process, writer *colexec.S3Writer, bat *batch.Batch, analyzer process.Analyzer) error {
 	if writer.StashBatch(proc, bat) {
-		crs := new(perfcounter.CounterSet)
+		crs := analyzer.GetOpCounterSet()
 		newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
 
 		blockInfos, stats, err := writer.SortAndSync(newCtx, proc)
@@ -287,6 +283,7 @@ func writeBatch(proc *process.Process, writer *colexec.S3Writer, bat *batch.Batc
 			return err
 		}
 		analyzer.AddS3RequestCount(crs)
+		analyzer.AddFileServiceCacheInfo(crs)
 		analyzer.AddDiskIO(crs)
 
 		err = writer.FillBlockInfoBat(blockInfos, stats, proc.GetMPool())
@@ -298,7 +295,7 @@ func writeBatch(proc *process.Process, writer *colexec.S3Writer, bat *batch.Batc
 }
 
 func flushTailBatch(proc *process.Process, writer *colexec.S3Writer, result *vm.CallResult, analyzer process.Analyzer) error {
-	crs := new(perfcounter.CounterSet)
+	crs := analyzer.GetOpCounterSet()
 	newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
 
 	blockInfos, stats, err := writer.FlushTailBatch(newCtx, proc)
@@ -306,6 +303,7 @@ func flushTailBatch(proc *process.Process, writer *colexec.S3Writer, result *vm.
 		return err
 	}
 	analyzer.AddS3RequestCount(crs)
+	analyzer.AddFileServiceCacheInfo(crs)
 	analyzer.AddDiskIO(crs)
 
 	// if stats is not zero, then the blockInfos must not be nil

@@ -35,8 +35,8 @@ var (
 		//output: "upgrade account acc1 with retry 5",
 		//input:  "upgrade account 'acc1'",
 		//output: "upgrade account acc1",
-		input:  "show upgrade",
-		output: "show upgrade",
+		input:  "use ",
+		output: "use",
 	}
 )
 
@@ -2560,6 +2560,19 @@ var (
 			output: "alter publication pub1 account acc0 database db1 table t1, t2",
 		},
 		{
+			input: "create snapshot cluster_sp for cluster",
+		},
+		{
+			input: "create snapshot snapshot_01 for account account_01",
+		},
+		{
+			input: "create snapshot snapshot_01 for database db1",
+		},
+		{
+			input:  "create snapshot snapshot_01 for table db1 t1",
+			output: "create snapshot snapshot_01 for table db1.t1",
+		},
+		{
 			input: "restore cluster from snapshot snapshot_01",
 		},
 		{
@@ -3096,6 +3109,72 @@ var (
 		{
 			input:  "create table t1 (a int) with retention period 3 second",
 			output: "create table t1 (a int) with retention period 3 second",
+		},
+		{
+			input:  "alter user user1 unlock",
+			output: "alter user user1 unlock",
+		},
+		{
+			input:  "savepoint abc",
+			output: "savepoint abc",
+		},
+		{
+			input:  "savepoint `abc.abc`",
+			output: "savepoint abc.abc",
+		},
+		{
+			input:  "release savepoint `abc.abc`",
+			output: "release savepoint abc.abc",
+		},
+		{
+			input:  "release savepoint abc",
+			output: "release savepoint abc",
+		},
+		{
+			input:  "rollback to savepoint abc",
+			output: "rollback to savepoint abc",
+		},
+		{
+			input:  "rollback work to savepoint `abc`",
+			output: "rollback to savepoint abc",
+		},
+		{
+			input:  "rollback work to `abc`",
+			output: "rollback to savepoint abc",
+		},
+		{
+			input:  "rollback to `abc`",
+			output: "rollback to savepoint abc",
+		},
+		{
+			input:  "SELECT /*!40001 SQL_NO_CACHE HIGH_PRIORITY STRAIGHT_JOIN SQL_SMALL_RESULT SQL_BIG_RESULT SQL_BUFFER_RESULT SQL_NO_CACHE SQL_CALC_FOUND_ROWS */ * FROM `tbl_test`;",
+			output: "select high_priority straight_join sql_small_result sql_big_result sql_buffer_result sql_no_cache sql_calc_found_rows * from tbl_test",
+		},
+
+		{
+			input:  "SELECT SQL_NO_CACHE HIGH_PRIORITY STRAIGHT_JOIN SQL_SMALL_RESULT SQL_BIG_RESULT SQL_BUFFER_RESULT SQL_NO_CACHE SQL_CALC_FOUND_ROWS * FROM `tbl_test`;",
+			output: "select high_priority straight_join sql_small_result sql_big_result sql_buffer_result sql_no_cache sql_calc_found_rows * from tbl_test",
+		},
+		{
+			input:  "SELECT /*!40001 SQL_NO_CACHE HIGH_PRIORITY STRAIGHT_JOIN SQL_SMALL_RESULT SQL_BIG_RESULT SQL_BUFFER_RESULT SQL_NO_CACHE SQL_CALC_FOUND_ROWS */ abc FROM `tbl_test`;",
+			output: "select high_priority straight_join sql_small_result sql_big_result sql_buffer_result sql_no_cache sql_calc_found_rows abc from tbl_test",
+		},
+		{
+			input:  "SELECT SQL_NO_CACHE HIGH_PRIORITY STRAIGHT_JOIN SQL_SMALL_RESULT SQL_BIG_RESULT SQL_BUFFER_RESULT SQL_NO_CACHE SQL_CALC_FOUND_ROWS abc FROM `tbl_test`;",
+			output: "select high_priority straight_join sql_small_result sql_big_result sql_buffer_result sql_no_cache sql_calc_found_rows abc from tbl_test",
+		},
+
+		{
+			input:  "SELECT /*!40001 SQL_NO_CACHE HIGH_PRIORITY STRAIGHT_JOIN SQL_SMALL_RESULT SQL_BIG_RESULT SQL_BUFFER_RESULT SQL_NO_CACHE SQL_CALC_FOUND_ROWS */ abc, tbl_test.* FROM `tbl_test`;",
+			output: "select high_priority straight_join sql_small_result sql_big_result sql_buffer_result sql_no_cache sql_calc_found_rows abc, tbl_test.* from tbl_test",
+		},
+		{
+			input:  "SELECT SQL_NO_CACHE HIGH_PRIORITY STRAIGHT_JOIN SQL_SMALL_RESULT SQL_BIG_RESULT SQL_BUFFER_RESULT SQL_NO_CACHE SQL_CALC_FOUND_ROWS abc, tbl_test.* FROM `tbl_test`;",
+			output: "select high_priority straight_join sql_small_result sql_big_result sql_buffer_result sql_no_cache sql_calc_found_rows abc, tbl_test.* from tbl_test",
+		},
+		{
+			input:  "use ",
+			output: "use",
 		},
 	}
 )

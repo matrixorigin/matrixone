@@ -1,3 +1,4 @@
+set experimental_fulltext_index=1;
 drop account if exists acc01;
 create account acc01 admin_name = 'test_account' identified by '111';
 drop database if exists acc_test01;
@@ -23,7 +24,7 @@ drop snapshot if exists sp01;
 create snapshot sp01 for account acc01;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp01    2024-05-13 04:06:14.071828    account    acc01
+sp01    2024-12-16 10:05:37.108041    account    acc01        
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
 insert into s3t values (300001, 34, 23, 1);
@@ -322,8 +323,8 @@ drop snapshot if exists sp08;
 create snapshot sp08 for account acc01;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp08    2024-05-13 04:06:43.063866    account    acc01
-sp07    2024-05-13 04:06:42.939465    account    acc01
+sp08    2024-12-16 10:05:42.780808    account    acc01        
+sp07    2024-12-16 10:05:42.691639    account    acc01        
 use test01;
 create table table03 (col1 int);
 insert into table03 values (1),(2);
@@ -425,6 +426,39 @@ restore account acc01 from snapshot sp03 to account sys;
 internal error: non-sys account's snapshot can't restore to sys account
 drop snapshot sp03;
 drop database test01;
+drop database if exists fulltext_acc01;
+create database fulltext_acc01;
+use fulltext_acc01;
+drop table if exists src;
+create table src (id bigint primary key, json1 text, json2 varchar, fulltext(json1) with parser json);
+insert into src values  (0, '{"a":1, "b":"red"}', '{"d": "happy birthday", "f":"winter"}'),
+(1, '{"a":2, "b":"中文學習教材"}', '["apple", "orange", "banana", "指引"]'),
+(2, '{"a":3, "b":"red blue"}', '{"d":"兒童中文"}');
+drop snapshot if exists full_sp_acc01;
+create snapshot full_sp_acc01 for account acc01;
+drop database fulltext_acc01;
+restore account acc01 from snapshot full_sp_acc01;
+show databases;
+Database
+acc_test02
+acc_test04
+fulltext_acc01
+information_schema
+mo_catalog
+mysql
+system
+system_metrics
+use fulltext_acc01;
+show create table src;
+Table    Create Table
+src    CREATE TABLE `src` (\n  `id` bigint NOT NULL,\n  `json1` text DEFAULT NULL,\n  `json2` varchar(65535) DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT(`json1`) WITH PARSER json\n)
+select * from src;
+id    json1    json2
+0    {"a":1, "b":"red"}    {"d": "happy birthday", "f":"winter"}
+1    {"a":2, "b":"中文學習教材"}    ["apple", "orange", "banana", "指引"]
+2    {"a":3, "b":"red blue"}    {"d":"兒童中文"}
+drop database fulltext_acc01;
+drop snapshot full_sp_acc01;
 drop account acc01;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME

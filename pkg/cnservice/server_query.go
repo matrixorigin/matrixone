@@ -16,19 +16,18 @@ package cnservice
 
 import (
 	"context"
-	"runtime"
 	"runtime/debug"
 	"strings"
 
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	pblock "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/status"
@@ -39,6 +38,9 @@ import (
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
+	"go.uber.org/zap"
 )
 
 func (s *service) initQueryService() error {
@@ -90,8 +92,13 @@ func (s *service) initQueryCommandHandler() {
 	s.queryService.AddHandleFunc(query.CmdMethod_ResetSession, s.handleResetSession, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_GOMAXPROCS, s.handleGoMaxProcs, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_GOMEMLIMIT, s.handleGoMemLimit, false)
+	s.queryService.AddHandleFunc(query.CmdMethod_GOGCPercent, s.handleGoGCPercent, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_FileServiceCache, s.handleFileServiceCacheRequest, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_FileServiceCacheEvict, s.handleFileServiceCacheEvictRequest, false)
+	s.queryService.AddHandleFunc(query.CmdMethod_MetadataCache, s.handleMetadataCacheRequest, false)
+	s.queryService.AddHandleFunc(query.CmdMethod_FaultInject, s.handleFaultInjection, false)
+	s.queryService.AddHandleFunc(query.CmdMethod_CtlMoTableStats, s.handleMoTableStats, false)
+	s.queryService.AddHandleFunc(query.CmdMethod_WorkspaceThreshold, s.handleWorkspaceThresholdRequest, false)
 }
 
 func (s *service) handleKillConn(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
@@ -139,6 +146,23 @@ func (s *service) handleTraceSpan(ctx context.Context, req *query.Request, resp 
 	resp.TraceSpanResponse = new(query.TraceSpanResponse)
 	resp.TraceSpanResponse.Resp = ctl.UpdateCurrentCNTraceSpan(
 		req.TraceSpanRequest.Cmd, req.TraceSpanRequest.Spans, req.TraceSpanRequest.Threshold)
+	return nil
+}
+
+func (s *service) handleFaultInjection(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
+	resp.FaultInjectResponse = new(query.FaultInjectResponse)
+	resp.FaultInjectResponse.Resp = fault.HandleFaultInject(
+		ctx, req.FaultInjectRequest.Method, req.FaultInjectRequest.Parameters,
+	)
+	return nil
+}
+
+func (s *service) handleMoTableStats(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
+	e := s.storeEngine.(*disttae.Engine)
+	ret := e.HandleMoTableStatsCtl(req.CtlMoTableStatsRequest.Cmd)
+	resp.CtlMoTableStatsResponse = query.CtlMoTableStatsResponse{
+		Resp: ret,
+	}
 	return nil
 }
 
@@ -510,7 +534,7 @@ func (s *service) handleResetSession(
 func (s *service) handleGoMaxProcs(
 	ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer,
 ) error {
-	resp.GoMaxProcsResponse.MaxProcs = int32(runtime.GOMAXPROCS(int(req.GoMaxProcsRequest.MaxProcs)))
+	resp.GoMaxProcsResponse.MaxProcs = int32(system.SetGoMaxProcs(int(req.GoMaxProcsRequest.MaxProcs)))
 	logutil.Info("QueryService::GoMaxProcs",
 		zap.String("op", "set"),
 		zap.Int32("in", req.GoMaxProcsRequest.MaxProcs),
@@ -527,6 +551,17 @@ func (s *service) handleGoMemLimit(
 		zap.String("op", "set"),
 		zap.Int64("in", req.GoMemLimitRequest.MemLimitBytes),
 		zap.Int64("out", resp.GoMemLimitResponse.MemLimitBytes),
+	)
+	return nil
+}
+
+func (s *service) handleGoGCPercent(
+	ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer,
+) error {
+	resp.GoGCPercentResponse.Percent = int32(debug.SetGCPercent(int(req.GoGCPercentRequest.Percent)))
+	logutil.Info("QueryService::GOGCPercent",
+		zap.Int32("in", req.GoGCPercentRequest.Percent),
+		zap.Int32("out", resp.GoGCPercentResponse.Percent),
 	)
 	return nil
 }
@@ -555,19 +590,67 @@ func (s *service) handleFileServiceCacheEvictRequest(
 	ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer,
 ) error {
 
+	logutil.Info("file service cache evict",
+		zap.String("type", req.FileServiceCacheEvictRequest.Type.String()))
+
 	var ret map[string]int64
 	switch req.FileServiceCacheEvictRequest.Type {
 	case query.FileServiceCacheType_Disk:
-		ret = fileservice.EvictDiskCaches()
+		ret = fileservice.EvictDiskCaches(ctx)
 	case query.FileServiceCacheType_Memory:
-		ret = fileservice.EvictMemoryCaches()
+		ret = fileservice.EvictMemoryCaches(ctx)
 	}
 
-	for _, target := range ret {
+	for name, target := range ret {
+		logutil.Info("file service cache evict",
+			zap.String("type", req.FileServiceCacheEvictRequest.Type.String()),
+			zap.Int64("size", target),
+			zap.String("name", name),
+		)
 		resp.FileServiceCacheEvictResponse.CacheSize = target
 		resp.FileServiceCacheEvictResponse.CacheCapacity = target
 		// usually one instance
 		break
+	}
+
+	return nil
+}
+
+func (s *service) handleMetadataCacheRequest(
+	ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer,
+) error {
+
+	logutil.Info("metadata cache", zap.Int64("size", req.MetadataCacheRequest.CacheSize))
+
+	// set capacity hint
+	objectio.GlobalCacheCapacityHint.Store(req.MetadataCacheRequest.CacheSize)
+	// evict
+	target := objectio.EvictCache(ctx)
+	// response
+	resp.MetadataCacheResponse.CacheCapacity = target
+
+	return nil
+}
+
+func (s *service) handleWorkspaceThresholdRequest(
+	ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer,
+) error {
+
+	logutil.Info(
+		"WORKSPACE-THRESHOLD-CHANGED",
+		zap.Uint64("commit-threshold", req.WorkspaceThresholdRequest.CommitThreshold),
+		zap.Uint64("write-threshold", req.WorkspaceThresholdRequest.WriteThreshold),
+	)
+
+	e := s.storeEngine.(*disttae.Engine)
+	commit, write := e.SetWorkspaceThreshold(
+		req.WorkspaceThresholdRequest.CommitThreshold,
+		req.WorkspaceThresholdRequest.WriteThreshold,
+	)
+
+	resp.WorkspaceThresholdResponse = &query.WorkspaceThresholdResponse{
+		CommitThreshold: commit,
+		WriteThreshold:  write,
 	}
 
 	return nil

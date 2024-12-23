@@ -251,7 +251,7 @@ Table    Create Table
 user    CREATE TABLE `user` (\n  `Host` char(255) NOT NULL DEFAULT '',\n  `User` char(32) NOT NULL DEFAULT '',\n  `Select_priv` varchar(10) NOT NULL DEFAULT 'N',\n  `Insert_priv` varchar(10) NOT NULL DEFAULT 'N',\n  `Update_priv` varchar(10) NOT NULL DEFAULT 'N',\n  `Delete_priv` varchar(10) NOT NULL DEFAULT 'N',\n  `Create_priv` varchar(10) NOT NULL DEFAULT 'N',\n  `Drop_priv` varchar(10) NOT NULL DEFAULT 'N',\n  `Reload_priv` varchar(10) NOT NULL DEFAULT 'N',\n  `Shutdown_priv` varchar(10) NOT NULL DEFAULT 'N',\n  `Process_priv` varchar(10) NOT NULL DEFAULT 'N',\n  `File_priv` varchar(10) NOT NULL DEFAULT 'N',\n  `Grant_priv` varchar(10) NOT NULL DEFAULT 'N',\n  `References_priv` varchar(10) NOT NULL DEFAULT 'N',\n  `Index_priv` varchar(10) NOT NULL DEFAULT 'N',\n  `Alter_priv` varchar(10) NOT NULL DEFAULT 'N',\n  `Show_db_priv` varchar(10) NOT NULL DEFAULT 'N',\n  `Super_priv` varchar(10) NOT NULL DEFAULT 'N',\n  `Create_tmp_table_priv` varchar(10) NOT NULL DEFAULT 'N',\n  `Lock_tables_priv` varchar(10) NOT NULL DEFAULT 'N',\n  `Execute_priv` varchar(10) NOT NULL DEFAULT 'N',\n  `Repl_slave_priv` varchar(10) NOT NULL DEFAULT 'N',\n  `Repl_client_priv` varchar(10) NOT NULL DEFAULT 'N',\n  `Create_view_priv` varchar(10) NOT NULL DEFAULT 'N',\n  `Show_view_priv` varchar(10) NOT NULL DEFAULT 'N',\n  `Create_routine_priv` varchar(10) NOT NULL DEFAULT 'N',\n  `Alter_routine_priv` varchar(10) NOT NULL DEFAULT 'N',\n  `Create_user_priv` varchar(10) NOT NULL DEFAULT 'N',\n  `Event_priv` varchar(10) NOT NULL DEFAULT 'N',\n  `Trigger_priv` varchar(10) NOT NULL DEFAULT 'N',\n  `Create_tablespace_priv` varchar(10) NOT NULL DEFAULT 'N',\n  `ssl_type` varchar(10) NOT NULL DEFAULT '',\n  `ssl_cipher` blob NOT NULL,\n  `x509_issuer` blob NOT NULL,\n  `x509_subject` blob NOT NULL,\n  `max_questions` int unsigned NOT NULL DEFAULT '0',\n  `max_updates` int unsigned NOT NULL DEFAULT '0',\n  `max_connections` int unsigned NOT NULL DEFAULT '0',\n  `max_user_connections` int unsigned NOT NULL DEFAULT '0',\n  `plugin` char(64) NOT NULL DEFAULT 'caching_sha2_password',\n  `authentication_string` text DEFAULT NULL,\n  `password_expired` varchar(10) NOT NULL DEFAULT 'N',\n  `password_last_changed` timestamp NULL DEFAULT NULL,\n  `password_lifetime` smallint unsigned DEFAULT NULL,\n  `account_locked` varchar(10) NOT NULL DEFAULT 'N',\n  `Create_role_priv` varchar(10) NOT NULL DEFAULT 'N',\n  `Drop_role_priv` varchar(10) NOT NULL DEFAULT 'N',\n  `Password_reuse_history` smallint unsigned DEFAULT NULL,\n  `Password_reuse_time` smallint unsigned DEFAULT NULL,\n  `Password_require_current` varchar(10) DEFAULT NULL,\n  `User_attributes` json DEFAULT NULL,\n  PRIMARY KEY (`Host`,`User`)\n)
 SHOW CREATE TABLE system_metrics.metric;
 Table    Create Table
-metric    CREATE TABLE `metric` (\n  `metric_name` varchar(1024) DEFAULT 'sys' COMMENT 'metric name, like: sql_statement_total, server_connections, process_cpu_percent, sys_memory_used, ...',\n  `collecttime` datetime(6) NOT NULL COMMENT 'metric data collect time',\n  `value` double DEFAULT '0.0' COMMENT 'metric value',\n  `node` varchar(1024) DEFAULT 'monolithic' COMMENT 'mo node uuid',\n  `role` varchar(1024) DEFAULT 'monolithic' COMMENT 'mo node role, like: CN, DN, LOG',\n  `account` varchar(1024) DEFAULT 'sys' COMMENT 'account name',\n  `type` varchar(1024) NOT NULL COMMENT 'sql type, like: insert, select, ...'\n) COMMENT='metric data[mo_no_del_hint]' CLUSTER BY (`account`, `metric_name`, `collecttime`)
+metric    CREATE TABLE `metric` (\n  `metric_name` varchar(1024) DEFAULT 'sys' COMMENT 'metric name, like: sql_statement_total, server_connections, process_cpu_percent, sys_memory_used, ...',\n  `collecttime` datetime(6) NOT NULL COMMENT 'metric data collect time',\n  `value` double DEFAULT '0.0' COMMENT 'metric value',\n  `node` varchar(1024) DEFAULT 'monolithic' COMMENT 'mo node uuid',\n  `role` varchar(1024) DEFAULT 'monolithic' COMMENT 'mo node role, like: CN, DN, LOG',\n  `account` varchar(1024) DEFAULT 'sys' COMMENT 'account name',\n  `type` varchar(1024) NOT NULL COMMENT 'sql type, like: insert, select, ...'\n) COMMENT='metric data' CLUSTER BY (`account`, `metric_name`, `collecttime`)
 SHOW CREATE TABLE system_metrics.server_connections;
 View    Create View    character_set_client    collation_connection
 server_connections    CREATE VIEW IF NOT EXISTS `system_metrics`.`server_connections` as select `collecttime`, `value`, `node`, `role`, `account` from `system_metrics`.`metric` where `metric_name` = "server_connections"    utf8mb4    utf8mb4_general_ci
@@ -590,7 +590,7 @@ count(*)
 SELECT datname AS name, IF (table_cnt IS NULL, 0, table_cnt) AS tables, role_name AS owner FROM (SELECT dat_id, datname, mo_database.created_time, IF(role_name IS NULL, '-', role_name) AS role_name FROM mo_catalog.mo_database LEFT JOIN mo_catalog.mo_role ON mo_database.owner = role_id) AS x LEFT JOIN(SELECT count(*) AS table_cnt, reldatabase_id FROM mo_catalog.mo_tables WHERE relkind IN ('r','v','e','cluster') GROUP BY reldatabase_id) AS y ON x.dat_id = y.reldatabase_id order by name;
 name    tables    owner
 information_schema    24    accountadmin
-mo_catalog    24    -
+mo_catalog    23    -
 mo_mo    0    accountadmin
 mysql    6    accountadmin
 system    1    accountadmin
@@ -631,7 +631,6 @@ mo_catalog    mo_increment_columns        accountadmin
 mo_catalog    mo_indexes    r    accountadmin
 mo_catalog    mo_locks    v    accountadmin
 mo_catalog    mo_mysql_compatibility_mode    r    accountadmin
-mo_catalog    mo_pubs    r    accountadmin
 mo_catalog    mo_retention    r    accountadmin
 mo_catalog    mo_role    r    accountadmin
 mo_catalog    mo_role_grant    r    accountadmin
@@ -692,6 +691,7 @@ server_connections    accountadmin
 server_storage_usage    accountadmin
 server_object_count    accountadmin
 server_snapshot_usage    accountadmin
+set mo_table_stats.use_old_impl = yes;
 SELECT relname AS `name`, mo_table_rows(reldatabase, relname) AS `rows`, mo_table_size(reldatabase, relname) AS `size`, if (role_name IS NULL, '-', role_name) AS `owner` FROM mo_catalog.mo_tables LEFT JOIN mo_catalog.mo_role ON mo_catalog.mo_tables.owner=role_id WHERE relkind IN ('r','e','cluster') AND reldatabase='information_schema';
 name    rows    size    owner
 triggers    0    0    accountadmin
@@ -727,6 +727,7 @@ SELECT relname AS `name`, mo_table_rows(reldatabase, relname) AS `rows`, mo_tabl
 name    rows    size    owner
 metric    0    0    accountadmin
 sql_statement_cu    0    0    accountadmin
+set mo_table_stats.use_old_impl = no;
 SELECT count(*) FROM `system`.`statement_info` WHERE status != 'Running' and account != 'sys' and account != 'ob' ORDER BY response_at asc LIMIT 1;
 SQL syntax error: column "statement_info.response_at" must appear in the GROUP BY clause or be used in an aggregate function
 SELECT role_name AS owner FROM (SELECT dat_id, datname, mo_database.created_time, IF(role_name IS NULL, '-', role_name) AS role_name FROM mo_catalog.mo_database LEFT JOIN mo_catalog.mo_role ON mo_database.owner = role_id) AS x WHERE datname='information_schema';

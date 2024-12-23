@@ -135,14 +135,6 @@ func printFunctionExpressionExecutor(buffer *bytes.Buffer, expr *FunctionExpress
 
 	buffer.WriteString(fmt.Sprintf("%s    needFoldingCheck: %v\n", prefix, expr.folded.needFoldingCheck))
 	buffer.WriteString(fmt.Sprintf("%s    canFold: %v\n", prefix, expr.folded.canFold))
-	if expr.folded.foldVector != nil {
-		if expr.folded.foldVector.GetType() != nil {
-			buffer.WriteString(fmt.Sprintf("%s    foldVector.typ: %s\n", prefix, expr.folded.foldVector.GetType().String()))
-		}
-		buffer.WriteString(fmt.Sprintf("%s    foldVector.value: %s\n", prefix, expr.folded.foldVector.String()))
-	} else {
-		buffer.WriteString(fmt.Sprintf("%s    foldVector is nil\n", prefix))
-	}
 
 	// selectList1, selectList2
 	buffer.WriteString(fmt.Sprintf("%s  selectList1: %v\n", prefix, expr.selectList1))

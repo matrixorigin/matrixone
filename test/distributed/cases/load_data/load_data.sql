@@ -13,6 +13,10 @@ col8 bigint unsigned
 );
 
 -- load data
+load data infile '$resources/load_data/integer_numbers_4.csv' into table t1 fields terminated by ',';
+select * from t1;
+delete from t1;
+
 load data infile '$resources/load_data/integer_numbers_1.csv' into table t1 fields terminated by ',';
 select * from t1;
 
@@ -154,8 +158,6 @@ col3 int
 );
 
 insert into t5 values (1,1,1);
--- echo duplicate
-load data infile '$resources/load_data/auto_increment_1.csv' into table t5 fields terminated by ',';
 select * from t5;
 
 drop table t5;
@@ -183,11 +185,7 @@ col3 int
 );
 load data infile '$resources/load_data/auto_increment_2.csv' into table t7 fields terminated by ',' parallel 'true';
 select * from t7 order by col1;
-
 drop table t7;
-
-create table t8(a int, b int);
-load data infile '$resources/load_data/auto_increment_20.csv' into table t7 fields terminated by ',' set col2=nullif(col2, '1');
 
 create table t9(a varchar, b varchar, c varchar, d varchar);
 load data infile {"filepath"="$resources/load_data/parallel.txt.gz", "compression"="gzip"} into table t9 FIELDS TERMINATED BY '|' OPTIONALLY ENCLOSED BY '"' LINES TERMINATED BY '\n';
@@ -298,6 +296,9 @@ create table test06(col1 varchar(20), col2 varchar(20));
 load data infile '$resources/load_data/test_enclosed_by01.csv' into table test06 fields terminated by ',' enclosed by '"' escaped by '\\' lines terminated by '\n';
 select * from test06;
 load data local infile '$resources_local/load_data/test_enclosed_by01.csv' into table test06 fields terminated by ',' enclosed by '"' escaped by '\\' lines terminated by '\n';
+select * from test06;
+delete from test06;
+load data local infile {"filepath"="$resources_local/load_data/test_enclosed_by01.csv", "compression"='', "format"='csv'}  into table test06 fields terminated by ',' enclosed by '"' escaped by '\\' lines terminated by '\n';
 select * from test06;
 drop table test06;
 

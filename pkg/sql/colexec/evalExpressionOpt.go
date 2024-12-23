@@ -100,7 +100,6 @@ func modifyResultOwnerToOuter(executor ExpressionExecutor) (succeed bool) {
 	// function expression.
 	if f, ok := executor.(*FunctionExpressionExecutor); ok {
 		f.resultVector = nil
-		f.folded.foldVector = nil
 		return true
 	}
 

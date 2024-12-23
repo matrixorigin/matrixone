@@ -102,8 +102,8 @@ func (o *objectStorageSemaphore) Stat(ctx context.Context, key string) (size int
 	return o.upstream.Stat(ctx, key)
 }
 
-func (o *objectStorageSemaphore) Write(ctx context.Context, key string, r io.Reader, size int64, expire *time.Time) (err error) {
+func (o *objectStorageSemaphore) Write(ctx context.Context, key string, r io.Reader, sizeHint *int64, expire *time.Time) (err error) {
 	o.acquire()
 	defer o.release()
-	return o.upstream.Write(ctx, key, r, size, expire)
+	return o.upstream.Write(ctx, key, r, sizeHint, expire)
 }

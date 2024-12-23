@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -51,9 +52,7 @@ const (
 
 	// push client related constants.
 	// maxSubscribeRequestPerSecond : max number of subscribe request we allowed per second.
-	// defaultRequestDeadline : default deadline for every request (subscribe and unsubscribe).
 	maxSubscribeRequestPerSecond = 10000
-	defaultRequestDeadline       = 2 * time.Minute
 
 	// subscribe related constants.
 	// periodToCheckTableSubscribeSucceed : check table subscribe status period after push client send a subscribe request.
@@ -68,18 +67,18 @@ const (
 
 	// unsubscribe process related constants.
 	// unsubscribe process scan the table every 20 minutes, and unsubscribe table which was unused for 1 hour.
-	unsubscribeProcessTicker = 20 * time.Minute
-	unsubscribeTimer         = 1 * time.Hour
+	unsubscribeTimer = 1 * time.Hour
 
 	// gc blocks and BlockIndexByTSEntry in partition state
-	gcPartitionStateTicker = 20 * time.Minute
-	gcPartitionStateTimer  = 1 * time.Hour
+	gcPartitionStateTimer = 1 * time.Hour
 
 	// log tail consumer related constants.
 	// if buffer is almost full (percent > consumerWarningPercent, we will send a message to log.
 	consumerNumber         = 4
 	consumerBufferLength   = 8192
 	consumerWarningPercent = 0.9
+
+	defaultRPCReadTimeout = time.Minute * 2
 
 	logTag = "[logtail-consumer]"
 )
@@ -97,6 +96,16 @@ const (
 	FakeLogtailServerAddress = "fake address for ut"
 )
 
+var (
+	unsubscribeProcessTicker = 20 * time.Minute
+	gcPartitionStateTicker   = 20 * time.Minute
+
+	defaultGetLogTailAddrTimeoutDuration = time.Minute * 10
+	defaultServerTimeout                 = time.Minute * 10
+	defaultDialServerTimeout             = time.Second * 3
+	defaultDialServerInterval            = time.Second
+)
+
 // PushClient is a structure responsible for all operations related to the log tail push model.
 // It provides the following methods:
 //
@@ -111,6 +120,7 @@ const (
 //		 1. if we want to lock both subscriber and subscribed, we should lock subscriber first.
 //		-----------------------------------------------------------------------------------------------------
 type PushClient struct {
+	ctx       context.Context
 	serviceID string
 	// Responsible for sending subscription / unsubscription requests to the service
 	// and receiving the log tail from service.
@@ -146,6 +156,8 @@ type PushClient struct {
 	eng         *Engine
 
 	LogtailRPCClientFactory func(string, string, morpc.RPCClient) (morpc.RPCClient, morpc.Stream, error)
+
+	reconnectHandler func()
 }
 
 type delayedCacheApply struct {
@@ -220,7 +232,7 @@ func (c *PushClient) SetSubscribeState(dbId, tblId uint64, state SubscribeState)
 }
 
 func (c *PushClient) IsSubscriberReady() bool {
-	return c.subscriber.ready.Load()
+	return c.subscriber.ready()
 }
 
 func (c *PushClient) IsSubscribed(tblId uint64) bool {
@@ -242,7 +254,7 @@ type connector struct {
 
 func newConnector(c *PushClient, e *Engine) *connector {
 	co := &connector{
-		signal: make(chan struct{}),
+		signal: make(chan struct{}, 10),
 		client: c,
 		engine: e,
 	}
@@ -272,7 +284,7 @@ func (c *PushClient) init(
 	c.serviceID = e.GetService()
 	c.timestampWaiter = timestampWaiter
 	if c.subscriber == nil {
-		c.subscriber = new(logTailSubscriber)
+		c.subscriber = newLogTailSubscriber()
 	}
 
 	// lock all.
@@ -299,7 +311,16 @@ func (c *PushClient) init(
 	}
 	c.initialized = true
 
-	return c.subscriber.init(e.GetService(), serviceAddr, c.LogtailRPCClientFactory)
+	return c.subscriber.init(
+		c.ctx,
+		e.GetService(),
+		serviceAddr,
+		c.LogtailRPCClientFactory,
+	)
+}
+
+func (c *PushClient) SetReconnectHandler(handler func()) {
+	c.reconnectHandler = handler
 }
 
 func (c *PushClient) validLogTailMustApplied(snapshotTS timestamp.Timestamp) {
@@ -605,7 +626,12 @@ func (c *PushClient) receiveLogtails(ctx context.Context, e *Engine) {
 			}
 
 			// Wait for resuming logtail receiver.
-			<-c.resumeC
+			select {
+			case <-ctx.Done():
+				return
+
+			case <-c.resumeC:
+			}
 			logutil.Infof("%s logtail receiver resumed", logTag)
 
 		default:
@@ -637,11 +663,15 @@ func (c *PushClient) sendConnectSig() {
 		return
 	}
 
-	select {
-	case c.connector.signal <- struct{}{}:
-		logutil.Infof("%s reconnect signal is received", logTag)
-	default:
-		logutil.Infof("%s connecting is in progress", logTag)
+	for {
+		select {
+		case c.connector.signal <- struct{}{}:
+			logutil.Infof("%s reconnect signal is received", logTag)
+			return
+		default:
+			logutil.Infof("%s reconnect chan is full", logTag)
+			time.Sleep(time.Second)
+		}
 	}
 }
 
@@ -661,6 +691,7 @@ func (c *PushClient) run(ctx context.Context, e *Engine) {
 			c.pause(!c.connector.first.Load())
 
 		case <-ctx.Done():
+			_ = c.subscriber.rpcClient.Close()
 			logutil.Infof("%s logtail consumer stopped", logTag)
 			return
 		}
@@ -795,10 +826,14 @@ func (c *PushClient) connect(ctx context.Context, e *Engine) {
 		for {
 			err := c.subSysTables(ctx)
 			if err != nil {
+				if errors.Is(err, context.Canceled) {
+					logutil.Errorf("%s connect failed as context canceled: %v", logTag, ctx.Err())
+					return
+				}
 				c.pause(false)
 				time.Sleep(time.Second)
 
-				tnLogTailServerBackend := e.GetTNServices()[0].LogTailServiceAddress
+				tnLogTailServerBackend := e.getLogTailServiceAddr()
 				if err := c.init(tnLogTailServerBackend, c.timestampWaiter, e); err != nil {
 					logutil.Errorf("%s init push client failed: %v", logTag, err)
 					continue
@@ -810,7 +845,9 @@ func (c *PushClient) connect(ctx context.Context, e *Engine) {
 			c.waitTimestamp()
 
 			if err := c.replayCatalogCache(ctx, e); err != nil {
-				panic(err)
+				c.pause(false)
+				logutil.Errorf("%s replay catalog cache failed, err %v", logTag, err)
+				continue
 			}
 
 			e.setPushClientStatus(true)
@@ -830,7 +867,7 @@ func (c *PushClient) connect(ctx context.Context, e *Engine) {
 			return
 		}
 
-		tnLogTailServerBackend := e.GetTNServices()[0].LogTailServiceAddress
+		tnLogTailServerBackend := e.getLogTailServiceAddr()
 		if err := c.init(tnLogTailServerBackend, c.timestampWaiter, e); err != nil {
 			logutil.Errorf("%s rebuild the cn log tail client failed, reason: %s", logTag, err)
 			time.Sleep(retryReconnect)
@@ -838,9 +875,10 @@ func (c *PushClient) connect(ctx context.Context, e *Engine) {
 		}
 		logutil.Infof("%s %s: client init finished", logTag, c.serviceID)
 
-		// set all the running transaction to be aborted.
-		e.abortAllRunningTxn()
-		logutil.Infof("%s %s: abort all running transactions finished", logTag, c.serviceID)
+		// This is only for test.
+		if c.reconnectHandler != nil {
+			c.reconnectHandler()
+		}
 
 		// clean memory table.
 		err := e.init(ctx)
@@ -866,7 +904,9 @@ func (c *PushClient) connect(ctx context.Context, e *Engine) {
 		c.waitTimestamp()
 
 		if err := c.replayCatalogCache(ctx, e); err != nil {
-			panic(err)
+			c.pause(false)
+			logutil.Errorf("%s replay catalog cache failed, err %v", logTag, err)
+			continue
 		}
 
 		e.setPushClientStatus(true)
@@ -881,7 +921,7 @@ func (c *PushClient) UnsubscribeTable(ctx context.Context, dbID, tbID uint64) er
 	if c.subscriber == nil {
 		return moerr.NewInternalErrorf(ctx, "%s cannot unsubscribe table %d-%d as subscriber not initialized", logTag, dbID, tbID)
 	}
-	if !c.subscriber.ready.Load() {
+	if !c.subscriber.ready() {
 		return moerr.NewInternalErrorf(ctx, "%s cannot unsubscribe table %d-%d as logtail subscriber is not ready", logTag, dbID, tbID)
 	}
 	if !c.receivedLogTailTime.ready.Load() {
@@ -914,103 +954,106 @@ func (c *PushClient) UnsubscribeTable(ctx context.Context, dbID, tbID uint64) er
 	return nil
 }
 
-func (c *PushClient) unusedTableGCTicker(ctx context.Context) {
-	go func() {
-		ticker := time.NewTicker(unsubscribeProcessTicker)
-		for {
-			select {
-			case <-ctx.Done():
-				logutil.Infof("%s unsubscribe process exit.", logTag)
-				ticker.Stop()
-				return
+func (c *PushClient) doGCUnusedTable(ctx context.Context) {
+	shouldClean := time.Now().Add(-unsubscribeTimer)
 
-			case <-ticker.C:
-				if !c.subscriber.ready.Load() {
-					continue
-				}
-				if c.subscriber == nil {
-					continue
-				}
-			}
-			shouldClean := time.Now().Add(-unsubscribeTimer)
-
-			// lock the subscribed map.
-			c.subscribed.mutex.Lock()
-			func() {
-				defer func() {
-					c.subscribed.mutex.Unlock()
-				}()
-
-				var err error
-				for k, v := range c.subscribed.m {
-					if ifShouldNotDistribute(v.DBID, k) {
-						// never unsubscribe the mo_databases, mo_tables, mo_columns.
-						continue
-					}
-					if !v.LatestTime.After(shouldClean) {
-						if v.SubState != Subscribed {
-							continue
-						}
-						c.subscribed.m[k] = SubTableStatus{
-							SubState:   Unsubscribing,
-							LatestTime: v.LatestTime,
-						}
-						if err = c.subscriber.sendUnSubscribe(
-							ctx,
-							api.TableID{DbId: v.DBID, TbId: k}); err == nil {
-							logutil.Infof("%s send unsubscribe tbl[db: %d, tbl: %d] request succeed",
-								logTag,
-								v.DBID,
-								k)
-							continue
-						}
-						logutil.Errorf("%s send unsubsribe tbl[dbId: %d, tblId: %d] request failed, err : %s",
-							logTag,
-							v.DBID,
-							k,
-							err.Error())
-						break
-					}
-				}
-			}()
-
-			logutil.Infof("%s unsubscribe unused table finished.", logTag)
+	// lock the subscribed map.
+	c.subscribed.mutex.Lock()
+	defer c.subscribed.mutex.Unlock()
+	var err error
+	for k, v := range c.subscribed.m {
+		if ifShouldNotDistribute(v.DBID, k) {
+			// never unsubscribe the mo_databases, mo_tables, mo_columns.
+			continue
 		}
-	}()
+		if !c.eng.safeToUnsubscribe(k) {
+			logutil.Infof("%s table [%d-%d] is not safe to unsubscribe", logTag, v.DBID, k)
+			continue
+		}
+		if !v.LatestTime.After(shouldClean) {
+			if v.SubState != Subscribed {
+				continue
+			}
+			c.subscribed.m[k] = SubTableStatus{
+				SubState:   Unsubscribing,
+				LatestTime: v.LatestTime,
+			}
+			if err = c.subscriber.sendUnSubscribe(
+				ctx,
+				api.TableID{DbId: v.DBID, TbId: k}); err == nil {
+				logutil.Infof("%s send unsubscribe tbl[db: %d, tbl: %d] request succeed",
+					logTag,
+					v.DBID,
+					k)
+				continue
+			}
+			logutil.Errorf("%s send unsubsribe tbl[dbId: %d, tblId: %d] request failed, err : %s",
+				logTag,
+				v.DBID,
+				k,
+				err.Error())
+			break
+		}
+	}
+}
+
+func (c *PushClient) unusedTableGCTicker(ctx context.Context) {
+	ticker := time.NewTicker(unsubscribeProcessTicker)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			logutil.Infof("%s unsubscribe process exit.", logTag)
+			return
+
+		case <-ticker.C:
+			if c.subscriber == nil {
+				continue
+			}
+			if !c.subscriber.ready() {
+				continue
+			}
+		}
+
+		c.doGCUnusedTable(ctx)
+	}
+}
+
+func (c *PushClient) doGCPartitionState(ctx context.Context, e *Engine) {
+	parts := make(map[[2]uint64]*logtailreplay.Partition)
+	e.Lock()
+	for ids, part := range e.partitions {
+		parts[ids] = part
+	}
+	e.Unlock()
+	ts := types.BuildTS(time.Now().UTC().UnixNano()-gcPartitionStateTimer.Nanoseconds()*5, 0)
+	logutil.Infof("%s GC partition_state %v", logTag, ts.ToString())
+	for ids, part := range parts {
+		part.Truncate(ctx, ids, ts)
+	}
+	e.catalog.GC(ts.ToTimestamp())
 }
 
 func (c *PushClient) partitionStateGCTicker(ctx context.Context, e *Engine) {
-	go func() {
-		ticker := time.NewTicker(gcPartitionStateTicker)
-		for {
-			select {
-			case <-ctx.Done():
-				logutil.Infof("%s GC partition_state process exit.", logTag)
-				ticker.Stop()
-				return
+	ticker := time.NewTicker(gcPartitionStateTicker)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			logutil.Infof("%s GC partition_state process exit.", logTag)
+			return
 
-			case <-ticker.C:
-				if !c.receivedLogTailTime.ready.Load() {
-					continue
-				}
-				if c.subscriber == nil {
-					continue
-				}
+		case <-ticker.C:
+			if c.subscriber == nil {
+				continue
 			}
-			parts := make(map[[2]uint64]*logtailreplay.Partition)
-			e.Lock()
-			for ids, part := range e.partitions {
-				parts[ids] = part
+			if !c.receivedLogTailTime.ready.Load() {
+				continue
 			}
-			e.Unlock()
-			ts := types.BuildTS(time.Now().UTC().UnixNano()-gcPartitionStateTimer.Nanoseconds()*5, 0)
-			logutil.Infof("%s GC partition_state %v", logTag, ts.ToString())
-			for ids, part := range parts {
-				part.Truncate(ctx, ids, ts)
-			}
-			e.catalog.GC(ts.ToTimestamp())
 		}
-	}()
+
+		c.doGCPartitionState(ctx, e)
+	}
 }
 
 // subscribedTable used to record table subscribed status.
@@ -1052,8 +1095,17 @@ func (c *PushClient) toSubIfUnsubscribed(ctx context.Context, dbId, tblId uint64
 	defer c.subscribed.mutex.Unlock()
 	_, ok := c.subscribed.m[tblId]
 	if !ok {
-		if !c.subscriber.ready.Load() {
-			return Unsubscribed, moerr.NewInternalError(ctx, "log tail subscriber is not ready")
+		if !c.subscriber.ready() {
+			if err := func() error {
+				c.subscribed.mutex.Unlock()
+				defer c.subscribed.mutex.Lock()
+				if err := c.subscriber.waitReady(ctx); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return InvalidSubState, err
+			}
 		}
 		c.subscribed.m[tblId] = SubTableStatus{
 			DBID:     dbId,
@@ -1111,7 +1163,7 @@ func (c *PushClient) loadAndConsumeLatestCkp(
 	}
 	//if unsubscribed, need to subscribe table.
 	if !exist {
-		if !c.subscriber.ready.Load() {
+		if !c.subscriber.ready() {
 			return Unsubscribed, nil, moerr.NewInternalError(ctx, "log tail subscriber is not ready")
 		}
 		c.subscribed.m[tableId] = SubTableStatus{
@@ -1186,7 +1238,7 @@ func (c *PushClient) isNotSubscribing(ctx context.Context, dbId, tblId uint64) (
 		return true, v.SubState, nil
 	}
 	//table is unsubscribed
-	if !c.subscriber.ready.Load() {
+	if !c.subscriber.ready() {
 		return true, Unsubscribed, moerr.NewInternalError(ctx, "log tail subscriber is not ready")
 	}
 	c.subscribed.m[tblId] = SubTableStatus{
@@ -1214,7 +1266,7 @@ func (c *PushClient) isNotUnsubscribing(ctx context.Context, dbId, tblId uint64)
 		}
 	}
 	//table is unsubscribed
-	if !c.subscriber.ready.Load() {
+	if !c.subscriber.ready() {
 		return true, Unsubscribed, moerr.NewInternalError(ctx, "log tail subscriber is not ready")
 	}
 	c.subscribed.m[tblId] = SubTableStatus{
@@ -1227,6 +1279,12 @@ func (c *PushClient) isNotUnsubscribing(ctx context.Context, dbId, tblId uint64)
 		return true, Unsubscribed, err
 	}
 	return true, Subscribing, nil
+}
+
+func (c *PushClient) Disconnect() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.subscriber.logTailClient.Close()
 }
 
 func (s *subscribedTable) setTableSubscribed(dbId, tblId uint64) {
@@ -1328,10 +1386,20 @@ type logTailSubscriber struct {
 	rpcStream     morpc.Stream
 	logTailClient *service.LogtailClient
 
-	ready atomic.Bool
+	mu struct {
+		sync.RWMutex
+		cond  *sync.Cond
+		ready bool
+	}
 
 	sendSubscribe   func(context.Context, api.TableID) error
 	sendUnSubscribe func(context.Context, api.TableID) error
+}
+
+func newLogTailSubscriber() *logTailSubscriber {
+	l := &logTailSubscriber{}
+	l.mu.cond = sync.NewCond(&l.mu)
+	return l
 }
 
 func clientIsPreparing(context.Context, api.TableID) error {
@@ -1363,6 +1431,7 @@ func DefaultNewRpcStreamToTnLogTailService(
 				goetty.WithSessionRWBUfferSize(1<<20, 1<<20),
 			),
 			morpc.WithBackendLogger(logger),
+			morpc.WithBackendReadTimeout(defaultRPCReadTimeout),
 		)
 
 		c, err := morpc.NewClient(
@@ -1385,6 +1454,7 @@ func DefaultNewRpcStreamToTnLogTailService(
 }
 
 func (s *logTailSubscriber) init(
+	ctx context.Context,
 	sid string,
 	serviceAddr string,
 	rpcStreamFactory func(string, string, morpc.RPCClient) (morpc.RPCClient, morpc.Stream, error)) (err error) {
@@ -1414,39 +1484,55 @@ func (s *logTailSubscriber) init(
 	s.rpcStream = rpcStream
 
 	// new the log tail client.
-	s.logTailClient, err = service.NewLogtailClient(s.rpcStream, service.WithClientRequestPerSecond(maxSubscribeRequestPerSecond))
+	s.logTailClient, err = service.NewLogtailClient(
+		ctx,
+		s.rpcStream,
+		service.WithClientRequestPerSecond(maxSubscribeRequestPerSecond),
+	)
 	if err != nil {
 		return err
 	}
 
 	s.sendSubscribe = s.subscribeTable
 	s.sendUnSubscribe = s.unSubscribeTable
-	s.ready.Store(false)
+	s.setReady()
 	return nil
 }
 
 func (s *logTailSubscriber) setReady() {
-	if !s.ready.Load() {
-		s.ready.Store(true)
-	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.mu.ready = true
+	s.mu.cond.Broadcast()
 }
 
 func (s *logTailSubscriber) setNotReady() {
-	if s.ready.Load() {
-		s.ready.Store(false)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.mu.ready = false
+}
+
+func (s *logTailSubscriber) ready() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.mu.ready
+}
+
+func (s *logTailSubscriber) waitReady(ctx context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for !s.mu.ready {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		s.mu.cond.Wait()
 	}
+	return nil
 }
 
 // can't call this method directly.
 func (s *logTailSubscriber) subscribeTable(
 	ctx context.Context, tblId api.TableID) error {
-	// set a default deadline for ctx if it doesn't have.
-	if _, ok := ctx.Deadline(); !ok {
-		newCtx, cancel := context.WithTimeoutCause(ctx, defaultRequestDeadline, moerr.CauseSubscribeTable)
-		_ = cancel
-		err := s.logTailClient.Subscribe(newCtx, tblId)
-		return moerr.AttachCause(ctx, err)
-	}
 	err := s.logTailClient.Subscribe(ctx, tblId)
 	return moerr.AttachCause(ctx, err)
 }
@@ -1454,13 +1540,6 @@ func (s *logTailSubscriber) subscribeTable(
 // can't call this method directly.
 func (s *logTailSubscriber) unSubscribeTable(
 	ctx context.Context, tblId api.TableID) error {
-	// set a default deadline for ctx if it doesn't have.
-	if _, ok := ctx.Deadline(); !ok {
-		newCtx, cancel := context.WithTimeoutCause(ctx, defaultRequestDeadline, moerr.CauseUnSubscribeTable)
-		_ = cancel
-		err := s.logTailClient.Unsubscribe(newCtx, tblId)
-		return moerr.AttachCause(ctx, err)
-	}
 	err := s.logTailClient.Unsubscribe(ctx, tblId)
 	return moerr.AttachCause(ctx, err)
 }
@@ -1475,56 +1554,79 @@ func (s *logTailSubscriber) receiveResponse(deadlineCtx context.Context) logTail
 }
 
 func waitServerReady(addr string) {
-	dialTimeout := time.Second * 2
+	network := "tcp"
+	if strings.HasSuffix(addr, ".sock") {
+		network = "unix"
+		addr = strings.TrimPrefix(addr, "unix://")
+	}
 	// If the logtail server is ready, just return and do not wait.
-	if address.RemoteAddressAvail(addr, dialTimeout) || addr == FakeLogtailServerAddress {
+	if address.RemoteAddressAvail(network, addr, defaultDialServerTimeout) || addr == FakeLogtailServerAddress {
 		return
 	}
 
 	// If we still cannot connect to logtail server for serverTimeout, we consider
 	// it has something wrong happened and panic immediately.
-	serverTimeout := time.Minute * 10
-	serverFatal := time.NewTimer(serverTimeout)
+	serverFatal := time.NewTimer(defaultServerTimeout)
 	defer serverFatal.Stop()
 
-	timer := time.NewTimer(time.Second)
-	defer timer.Stop()
-
-	var resetTimout time.Duration
-	started := time.Now()
-
+	ticker := time.NewTicker(defaultDialServerInterval)
+	defer ticker.Stop()
 	for {
-		current := time.Now()
-		// Calculation the proper reset timeout duration.
-		if current.Sub(started) < time.Minute {
-			resetTimout = time.Second
-		} else if current.Sub(started) < time.Minute*3 {
-			resetTimout = time.Second * 10
-		} else {
-			resetTimout = time.Second * 30
-		}
-
 		select {
-		case <-timer.C:
-			if address.RemoteAddressAvail(addr, dialTimeout) {
+		case <-ticker.C:
+			if address.RemoteAddressAvail(network, addr, defaultDialServerTimeout) {
 				return
 			}
-			timer.Reset(resetTimout)
-			logutil.Warnf("%s logtail server is not ready yet", logTag)
+			logutil.Warnf("%s logtail server %s is not ready yet", logTag, addr)
 
 		case <-serverFatal.C:
-			panic(fmt.Sprintf("could not connect to logtail server for %s", serverTimeout))
+			panic(fmt.Sprintf("could not connect to logtail server for %s", defaultServerTimeout))
+		}
+	}
+}
+
+func (e *Engine) getLogTailServiceAddr() string {
+	getFn := func() string {
+		tnServices := e.GetTNServices()
+		if len(tnServices) != 0 {
+			return tnServices[0].LogTailServiceAddress
+		}
+		return ""
+	}
+
+	var addr string
+	logutil.Infof("%s try to get logtail service address", logTag)
+	addr = getFn()
+	if len(addr) > 0 {
+		logutil.Infof("%s got logtail service address: %s",
+			logTag, addr)
+		return addr
+	}
+	logutil.Warnf("%s cannot get logtail service address", logTag)
+
+	timeout := time.NewTimer(defaultGetLogTailAddrTimeoutDuration)
+	defer timeout.Stop()
+	ticker := time.NewTicker(time.Millisecond * 20)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-timeout.C:
+			panic(fmt.Sprintf("cannot get logtail service address, timeout %s",
+				defaultGetLogTailAddrTimeoutDuration))
+
+		case <-ticker.C:
+			addr = getFn()
+			logutil.Infof("%s got logtail service address: %s",
+				logTag, addr)
+			if len(addr) > 0 {
+				return addr
+			}
 		}
 	}
 }
 
 func (e *Engine) InitLogTailPushModel(ctx context.Context, timestampWaiter client.TimestampWaiter) error {
-	tnStores := e.GetTNServices()
-	if len(tnStores) == 0 {
-		return moerr.NewInternalError(ctx, "no TN store found")
-	}
-
-	logTailServerAddr := tnStores[0].LogTailServiceAddress
+	logTailServerAddr := e.getLogTailServiceAddr()
 
 	// Wait for logtail server is ready.
 	waitServerReady(logTailServerAddr)
@@ -1551,8 +1653,8 @@ func (e *Engine) InitLogTailPushModel(ctx context.Context, timestampWaiter clien
 	// Start a goroutine that never stops to receive logtail from TN logtail server.
 	go e.pClient.run(ctx, e)
 
-	e.pClient.unusedTableGCTicker(ctx)
-	e.pClient.partitionStateGCTicker(ctx, e)
+	go e.pClient.unusedTableGCTicker(ctx)
+	go e.pClient.partitionStateGCTicker(ctx, e)
 	return nil
 }
 
@@ -1735,6 +1837,9 @@ func (c *PushClient) createRoutineToConsumeLogTails(
 		errHappen := false
 		for {
 			select {
+			case <-ctx.Done():
+				return
+
 			case cmd := <-receiver.signalChan:
 				if errHappen {
 					continue
@@ -1891,8 +1996,6 @@ func updatePartitionOfPush(
 		if len(tl.CkpLocation) > 0 {
 			t0 = time.Now()
 			ckpStart, ckpEnd = parseCkpDuration(tl)
-			state.CacheCkpDuration(ckpStart, partition)
-			state.AppendCheckpoint(tl.CkpLocation, partition)
 			v2.LogtailUpdatePartitonHandleCheckpointDurationHistogram.Observe(time.Since(t0).Seconds())
 		}
 
@@ -1925,20 +2028,26 @@ func updatePartitionOfPush(
 	}
 
 	//After consume checkpoints finished ,then update the start and end of
-	//the mo system table's partition and catalog.
-	if !lazyLoad {
+	//the table's partition and catalog cache.
+	if isSub {
 		if len(tl.CkpLocation) != 0 {
 			if !ckpStart.IsEmpty() || !ckpEnd.IsEmpty() {
 				t0 = time.Now()
 				state.UpdateDuration(ckpStart, types.MaxTs())
-				//Notice that the checkpoint duration is same among all mo system tables,
-				//such as mo_databases, mo_tables, mo_columns.
-				e.GetLatestCatalogCache().UpdateDuration(ckpStart, types.MaxTs())
+				if lazyLoad {
+					state.AppendCheckpoint(tl.CkpLocation, partition)
+				} else {
+					//Notice that the checkpoint duration is same among all mo system tables,
+					//such as mo_databases, mo_tables, mo_columns.
+					e.GetLatestCatalogCache().UpdateDuration(ckpStart, types.MaxTs())
+				}
 				v2.LogtailUpdatePartitonUpdateTimestampsDurationHistogram.Observe(time.Since(t0).Seconds())
 			}
 		} else {
 			state.UpdateDuration(types.TS{}, types.MaxTs())
-			e.GetLatestCatalogCache().UpdateDuration(types.TS{}, types.MaxTs())
+			if !lazyLoad {
+				e.GetLatestCatalogCache().UpdateDuration(types.TS{}, types.MaxTs())
+			}
 		}
 	}
 
@@ -2009,8 +2118,8 @@ func consumeCkpsAndLogTail(
 		ctx,
 		engine.service,
 		lt.CkpLocation,
-		tableId, "",
-		databaseId, "", engine.mp, engine.fs); err != nil {
+		tableId, lt.Table.TbName,
+		databaseId, lt.Table.DbName, engine.mp, engine.fs); err != nil {
 		return
 	}
 	defer func() {

@@ -8,23 +8,25 @@ require (
 	github.com/DATA-DOG/go-sqlmock v1.5.0
 	github.com/FastFilter/xorfilter v0.1.4
 	github.com/K-Phoen/grabana v0.21.19
+	github.com/K-Phoen/sdk v0.12.3
 	github.com/KimMachineGun/automemlimit v0.6.0
 	github.com/RoaringBitmap/roaring v1.2.3
 	github.com/aliyun/alibaba-cloud-sdk-go v1.63.34
 	github.com/aliyun/aliyun-oss-go-sdk v3.0.2+incompatible
 	github.com/aliyun/credentials-go v1.3.10
-	github.com/aws/aws-sdk-go-v2 v1.32.2
-	github.com/aws/aws-sdk-go-v2/config v1.27.43
-	github.com/aws/aws-sdk-go-v2/credentials v1.17.41
-	github.com/aws/aws-sdk-go-v2/service/s3 v1.65.2
-	github.com/aws/aws-sdk-go-v2/service/sts v1.32.2
-	github.com/aws/smithy-go v1.22.0
+	github.com/aws/aws-sdk-go-v2 v1.32.5
+	github.com/aws/aws-sdk-go-v2/config v1.28.5
+	github.com/aws/aws-sdk-go-v2/credentials v1.17.46
+	github.com/aws/aws-sdk-go-v2/service/s3 v1.68.0
+	github.com/aws/aws-sdk-go-v2/service/sts v1.33.1
+	github.com/aws/smithy-go v1.22.1
 	github.com/axiomhq/hyperloglog v0.0.0-20230201085229-3ddf4bad03dc
 	github.com/cakturk/go-netstat v0.0.0-20200220111822-e5b49efee7a5
-	github.com/cespare/xxhash/v2 v2.2.0
+	github.com/cespare/xxhash/v2 v2.3.0
 	github.com/cockroachdb/errors v1.9.1
 	github.com/confluentinc/confluent-kafka-go/v2 v2.4.0
 	github.com/containerd/cgroups/v3 v3.0.1
+	github.com/cpegeric/pdftotext-go v0.0.0-20241112123704-49cb86a3790e
 	github.com/docker/go-units v0.5.0
 	github.com/dolthub/maphash v0.1.0
 	github.com/dslipak/pdf v0.0.2
@@ -51,13 +53,14 @@ require (
 	github.com/lni/dragonboat/v4 v4.0.0-20220815145555-6f622e8bcbef
 	github.com/lni/goutils v1.3.1-0.20220604063047-388d67b4dbc4
 	github.com/lni/vfs v0.2.1-0.20220616104132-8852fd867376
-	github.com/matrixorigin/monlp v0.0.0-20240825091235-be436dc30e78
+	github.com/matrixorigin/mysql v1.8.2-0.20241106110439-6ac9ee94770d
 	github.com/matrixorigin/simdcsv v0.0.0-20230210060146-09b8e45209dd
 	github.com/minio/minio-go/v7 v7.0.78
 	github.com/mohae/deepcopy v0.0.0-20170929034955-c48cc78d4826
 	github.com/ncruces/go-dns v1.2.5
 	github.com/panjf2000/ants/v2 v2.7.4
 	github.com/parquet-go/parquet-go v0.23.0
+	github.com/petermattis/goid v0.0.0-20241025130422-66cb2e6d7274
 	github.com/pierrec/lz4/v4 v4.1.21
 	github.com/pkg/errors v0.9.1
 	github.com/plar/go-adaptive-radix-tree v1.0.5
@@ -84,14 +87,14 @@ require (
 	golang.org/x/sync v0.8.0
 	golang.org/x/sys v0.26.0
 	gonum.org/v1/gonum v0.14.0
-	google.golang.org/grpc v1.62.1
-	google.golang.org/protobuf v1.34.2
+	google.golang.org/grpc v1.65.0
+	google.golang.org/protobuf v1.36.0
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1
 )
 
 require (
 	filippo.io/edwards25519 v1.1.0 // indirect
-	github.com/K-Phoen/sdk v0.12.3 // indirect
+	github.com/Masterminds/semver/v3 v3.2.1 // indirect
 	github.com/andybalholm/brotli v1.1.0 // indirect
 	github.com/cespare/xxhash v1.1.0 // indirect
 	github.com/cilium/ebpf v0.9.1 // indirect
@@ -141,18 +144,18 @@ require (
 	github.com/andres-erbsen/clock v0.0.0-20160526145045-9e14626cd129 // indirect
 	github.com/armon/go-metrics v0.0.0-20180917152333-f0300d1749da // indirect
 	github.com/aws/aws-sdk-go v1.55.5
-	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.6.6 // indirect
-	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.16.17 // indirect
-	github.com/aws/aws-sdk-go-v2/internal/configsources v1.3.21 // indirect
-	github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.6.21 // indirect
+	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.6.7 // indirect
+	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.16.20 // indirect
+	github.com/aws/aws-sdk-go-v2/internal/configsources v1.3.24 // indirect
+	github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.6.24 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/ini v1.8.1 // indirect
-	github.com/aws/aws-sdk-go-v2/internal/v4a v1.3.21 // indirect
-	github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding v1.12.0 // indirect
-	github.com/aws/aws-sdk-go-v2/service/internal/checksum v1.4.2 // indirect
-	github.com/aws/aws-sdk-go-v2/service/internal/presigned-url v1.12.2 // indirect
-	github.com/aws/aws-sdk-go-v2/service/internal/s3shared v1.18.2 // indirect
-	github.com/aws/aws-sdk-go-v2/service/sso v1.24.2 // indirect
-	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.28.2 // indirect
+	github.com/aws/aws-sdk-go-v2/internal/v4a v1.3.24 // indirect
+	github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding v1.12.1 // indirect
+	github.com/aws/aws-sdk-go-v2/service/internal/checksum v1.4.5 // indirect
+	github.com/aws/aws-sdk-go-v2/service/internal/presigned-url v1.12.5 // indirect
+	github.com/aws/aws-sdk-go-v2/service/internal/s3shared v1.18.5 // indirect
+	github.com/aws/aws-sdk-go-v2/service/sso v1.24.6 // indirect
+	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.28.5 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/bits-and-blooms/bitset v1.8.0 // indirect
 	github.com/bufbuild/protocompile v0.6.0 // indirect
@@ -201,7 +204,7 @@ require (
 	go.uber.org/multierr v1.11.0 // indirect
 	golang.org/x/mod v0.21.0 // indirect
 	golang.org/x/tools v0.26.0 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20240318140521-94a12d6c2237 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20240604185151-ef581f913117 // indirect
 	gopkg.in/ini.v1 v1.67.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 
@@ -212,7 +215,7 @@ require (
 replace github.com/hashicorp/memberlist => github.com/matrixorigin/memberlist v0.5.1-0.20230322082342-95015c95ee76
 
 replace (
-	github.com/elastic/gosigar v0.14.2 => github.com/matrixorigin/gosigar v0.14.3-0.20240721074812-0d5bde0e9f91
+	github.com/elastic/gosigar v0.14.2 => github.com/matrixorigin/gosigar v0.14.3-0.20241204071856-40aab500bfac
 	github.com/fagongzi/goetty/v2 v2.0.3-0.20230628075727-26c9a2fd5fb8 => github.com/matrixorigin/goetty/v2 v2.0.0-20240611082008-a4de209fff3d
 	github.com/lni/dragonboat/v4 v4.0.0-20220815145555-6f622e8bcbef => github.com/matrixorigin/dragonboat/v4 v4.0.0-20241019050137-1c6138e9cf8b
 	github.com/lni/goutils v1.3.1-0.20220604063047-388d67b4dbc4 => github.com/matrixorigin/goutils v1.3.1-0.20220604063047-388d67b4dbc4

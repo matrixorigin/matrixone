@@ -41,11 +41,12 @@ import (
 type Nodes []Node
 
 type Node struct {
-	Mcpu             int
-	Id               string `json:"id"`
-	Addr             string `json:"address"`
-	Data             RelData
-	NeedExpandRanges bool
+	Mcpu  int
+	Id    string `json:"id"`
+	Addr  string `json:"address"`
+	Data  RelData
+	CNCNT int32 // number of all cns
+	CNIDX int32 // cn index , starts from 0
 }
 
 // Attribute is a column
@@ -583,6 +584,14 @@ const (
 	TombstoneData
 )
 
+type DataCollectPolicy uint64
+
+const (
+	Policy_CollectCommittedData = 1 << iota
+	Policy_CollectUncommittedData
+	Policy_CollectAllData = Policy_CollectCommittedData | Policy_CollectUncommittedData
+)
+
 type TombstoneCollectPolicy uint64
 
 const (
@@ -693,6 +702,7 @@ type RelData interface {
 	GetBlockInfo(i int) objectio.BlockInfo
 	SetBlockInfo(i int, blk *objectio.BlockInfo)
 	AppendBlockInfo(blk *objectio.BlockInfo)
+	AppendBlockInfoSlice(objectio.BlockInfoSlice)
 }
 
 // ForRangeShardID [begin, end)
@@ -716,6 +726,9 @@ func ForRangeBlockInfo(
 	begin, end int,
 	relData RelData,
 	onBlock func(blk *objectio.BlockInfo) (bool, error)) error {
+	if begin >= relData.DataCnt() {
+		return nil
+	}
 	slice := relData.GetBlockInfoSlice()
 	slice = slice.Slice(begin, end)
 	sliceLen := slice.Len()
@@ -751,6 +764,7 @@ type DataSource interface {
 		cols []string,
 		types []types.Type,
 		seqNums []uint16,
+		pkSeqNum int32,
 		memFilter any,
 		mp *mpool.MPool,
 		bat *batch.Batch,
@@ -774,6 +788,7 @@ type DataSource interface {
 	SetFilterZM(zm objectio.ZoneMap)
 
 	Close()
+	String() string
 }
 
 type Ranges interface {
@@ -807,14 +822,36 @@ type ChangesHandle interface {
 	Close() error
 }
 
+type RangesShuffleParam struct {
+	// these are for shuffle objects
+	Node               *plan.Node
+	CNCNT              int32 // number of all cns
+	CNIDX              int32 // cn index , starts from 0
+	IsLocalCN          bool
+	ShuffleRangeUint64 []uint64
+	ShuffleRangeInt64  []int64
+	Init               bool
+}
+
+type RangesParam struct {
+	BlockFilters   []*plan.Expr //Slice of expressions used to filter zonemap
+	PreAllocBlocks int          //estimated count of blocks
+	TxnOffset      int          //Transaction offset used to specify the starting position for reading data.
+	Policy         DataCollectPolicy
+	Rsp            *RangesShuffleParam
+}
+
+var DefaultRangesParam RangesParam = RangesParam{
+	BlockFilters:   nil,
+	PreAllocBlocks: 2,
+	TxnOffset:      0,
+	Policy:         Policy_CollectAllData,
+}
+
 type Relation interface {
 	Statistics
 
-	// Ranges Parameters:
-	// first parameter: Context
-	// second parameter: Slice of expressions used to filter the data.
-	// third parameter: Transaction offset used to specify the starting position for reading data.
-	Ranges(context.Context, []*plan.Expr, int, int) (RelData, error)
+	Ranges(context.Context, RangesParam) (RelData, error)
 
 	CollectTombstones(ctx context.Context, txnOffset int, policy TombstoneCollectPolicy) (Tombstoner, error)
 
@@ -866,6 +903,7 @@ type Relation interface {
 		txnOffset int,
 		orderBy bool,
 		policy TombstoneApplyPolicy,
+		filterHint FilterHint,
 	) ([]Reader, error)
 
 	BuildShardingReaders(
@@ -896,6 +934,8 @@ type Relation interface {
 	// Initially added for implementing locking rows by primary keys
 	PrimaryKeysMayBeModified(ctx context.Context, from types.TS, to types.TS, keyVector *vector.Vector) (bool, error)
 
+	PrimaryKeysMayBeUpserted(ctx context.Context, from types.TS, to types.TS, keyVector *vector.Vector) (bool, error)
+
 	ApproxObjectsNum(ctx context.Context) int
 	MergeObjects(ctx context.Context, objstats []objectio.ObjectStats, targetObjSize uint32) (*api.MergeCommitEntry, error)
 	GetNonAppendableObjectStats(ctx context.Context) ([]objectio.ObjectStats, error)
@@ -917,6 +957,7 @@ type Reader interface {
 type Database interface {
 	Relations(context.Context) ([]string, error)
 	Relation(context.Context, string, any) (Relation, error)
+	RelationExists(context.Context, string, any) (bool, error)
 
 	Delete(context.Context, string) error
 	Create(context.Context, string, []TableDef) error // Create Table - (name, table define)
@@ -984,6 +1025,9 @@ type Engine interface {
 	// just return nil if the current stats info has not been initialized.
 	Stats(ctx context.Context, key pb.StatsInfoKey, sync bool) *pb.StatsInfo
 
+	// true if the prefetch is received, false if the prefetch is rejected
+	PrefetchTableMeta(ctx context.Context, key pb.StatsInfoKey) bool
+
 	GetMessageCenter() any
 
 	GetService() string
@@ -1049,6 +1093,10 @@ func (rd *EmptyRelationData) SetBlockInfo(i int, blk *objectio.BlockInfo) {
 }
 
 func (rd *EmptyRelationData) AppendBlockInfo(blk *objectio.BlockInfo) {
+	panic("not supported")
+}
+
+func (rd *EmptyRelationData) AppendBlockInfoSlice(objectio.BlockInfoSlice) {
 	panic("not supported")
 }
 
@@ -1170,4 +1218,8 @@ func GetForceShuffleReader() (bool, []uint64, int) {
 	defer forceShuffleReader.Unlock()
 
 	return forceShuffleReader.force, forceShuffleReader.tblIds, forceShuffleReader.blkCnt
+}
+
+type FilterHint struct {
+	Must bool
 }

@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
@@ -77,7 +78,7 @@ func TestHandleInspectPolicy(t *testing.T) {
 		Operation:  "policy",
 	}, resp)
 	require.NoError(t, err)
-	require.Equal(t, "(*) maxMergeObjN: 16, maxOsizeObj: 128MB, minOsizeQualified: 110MB, offloadToCnSize: 80000MB, hints: [Auto]", resp.Message)
+	require.Equal(t, "(*) maxMergeObjN: 16, maxOsizeObj: 128MB, minOsizeQualified: 90MB, offloadToCnSize: 80000MB, hints: [Auto]", resp.Message)
 
 	_, err = handle.HandleInspectTN(context.Background(), txn.TxnMeta{}, &cmd_util.InspectTN{
 		AccessInfo: cmd_util.AccessInfo{},
@@ -91,7 +92,7 @@ func TestHandleInspectPolicy(t *testing.T) {
 		Operation:  "policy -t db1.test1 -s true",
 	}, resp)
 	require.NoError(t, err)
-	require.Equal(t, "(1000-test1) maxMergeObjN: 16, maxOsizeObj: 128MB, minOsizeQualified: 110MB, offloadToCnSize: 80000MB, hints: [Auto]", resp.Message)
+	require.Equal(t, "(1000-test1) maxMergeObjN: 16, maxOsizeObj: 128MB, minOsizeQualified: 90MB, offloadToCnSize: 80000MB, hints: [Auto]", resp.Message)
 
 	_, err = handle.HandleInspectTN(context.Background(), txn.TxnMeta{}, &cmd_util.InspectTN{
 		AccessInfo: cmd_util.AccessInfo{},
@@ -105,5 +106,25 @@ func TestHandleInspectPolicy(t *testing.T) {
 		Operation:  "policy -t db1.test1",
 	}, resp)
 	require.NoError(t, err)
-	require.Equal(t, "(1000-test1) maxMergeObjN: 16, maxOsizeObj: 128MB, minOsizeQualified: 110MB, offloadToCnSize: 80000MB, hints: [Auto]", resp.Message)
+	require.Equal(t, "(1000-test1) maxMergeObjN: 16, maxOsizeObj: 128MB, minOsizeQualified: 90MB, offloadToCnSize: 80000MB, hints: [Auto]", resp.Message)
+}
+
+func TestHandlePrecommitWriteError(t *testing.T) {
+	h := mockTAEHandle(context.Background(), t, &options.Options{})
+
+	list := []*apipb.Entry{
+		{
+			EntryType: apipb.Entry_Insert,
+			Bat:       &apipb.Batch{Vecs: []apipb.Vector{{Type: types.NewProtoType(types.T_char)}}},
+		},
+		{
+			EntryType:  apipb.Entry_Insert,
+			DatabaseId: 1,
+			TableId:    3,
+			Bat:        &apipb.Batch{Vecs: []apipb.Vector{{Type: types.NewProtoType(types.T_char)}}},
+		},
+	}
+
+	err := h.HandlePreCommitWrite(context.Background(), txn.TxnMeta{}, &apipb.PrecommitWriteCmd{EntryList: list}, &apipb.TNStringResponse{})
+	require.Error(t, err)
 }

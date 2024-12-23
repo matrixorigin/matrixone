@@ -191,11 +191,12 @@ func (h *CheckpointChangesHandle) initReader(ctx context.Context) (err error) {
 		ctx,
 		h.end.ToTimestamp(),
 		tblDef,
-		nil,
+		engine.DefaultRangesParam,
 		part,
 		nil,
 		nil,
 		&blockList,
+		h.table.PrefetchAllMeta,
 		h.fs,
 	); err != nil {
 		return
@@ -215,6 +216,7 @@ func (h *CheckpointChangesHandle) initReader(ctx context.Context) (err error) {
 		0,
 		false,
 		engine.Policy_CheckCommittedOnly,
+		engine.FilterHint{},
 	)
 	if err != nil {
 		return

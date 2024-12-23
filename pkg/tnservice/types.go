@@ -15,6 +15,7 @@
 package tnservice
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 )
@@ -49,4 +50,6 @@ type Service interface {
 
 	// GetTaskService returns taskservice
 	GetTaskService() (taskservice.TaskService, bool)
+	// GetLockTableAllocator returns lock table allocator
+	GetLockTableAllocator() lockservice.LockTableAllocator
 }

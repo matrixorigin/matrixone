@@ -108,18 +108,25 @@ func GetTombstonesByBlockId(
 		skipObjectCnt      int
 		totalBlkCnt        int
 	)
+
 	if tombstoneObjectCnt, skipObjectCnt, totalBlkCnt, err = CheckTombstoneFile(
 		ctx, blockId[:], getTombstoneFileFn, onBlockSelectedFn, fs,
 	); err != nil {
 		return
 	}
 
-	v2.TxnReaderEachBLKLoadedTombstoneHistogram.Observe(float64(loadedBlkCnt))
-	v2.TxnReaderScannedTotalTombstoneHistogram.Observe(float64(tombstoneObjectCnt))
+	if loadedBlkCnt > 0 {
+		v2.TxnReaderEachBLKLoadedTombstoneHistogram.Observe(float64(loadedBlkCnt))
+	}
+
 	if tombstoneObjectCnt > 0 {
+		v2.TxnReaderScannedTotalTombstoneHistogram.Observe(float64(tombstoneObjectCnt))
+	}
+
+	if tombstoneObjectCnt > 0 && skipObjectCnt > 0 {
 		v2.TxnReaderTombstoneZMSelectivityHistogram.Observe(float64(skipObjectCnt) / float64(tombstoneObjectCnt))
 	}
-	if totalBlkCnt > 0 {
+	if totalBlkCnt > 0 && loadedBlkCnt > 0 {
 		v2.TxnReaderTombstoneBLSelectivityHistogram.Observe(float64(loadedBlkCnt) / float64(totalBlkCnt))
 	}
 
@@ -217,16 +224,14 @@ func CheckTombstoneFile(
 			columnZonemap := blkMeta.MustGetColumn(0).ZoneMap()
 			// block id is the prefixPattern of the rowid and zonemap is min-max of rowid
 			// !PrefixEq means there is no rowid of this block in this zonemap, so skip
-			if !columnZonemap.RowidPrefixEq(prefixPattern) {
-				if columnZonemap.RowidPrefixGT(prefixPattern) {
-					// all zone maps are sorted by the rowid
-					// if the block id is less than the prefixPattern of the min rowid, skip the rest blocks
+			if columnZonemap.RowidPrefixEq(prefixPattern) {
+				var goOn bool
+				if goOn, err = onBlockSelectedFn(tombstoneObject, pos); err != nil || !goOn {
 					break
 				}
-				continue
-			}
-			var goOn bool
-			if goOn, err = onBlockSelectedFn(tombstoneObject, pos); err != nil || !goOn {
+			} else if columnZonemap.RowidPrefixGT(prefixPattern) {
+				// all zone maps are sorted by the rowid
+				// if the block id is less than the prefixPattern of the min rowid, skip the rest blocks
 				break
 			}
 		}

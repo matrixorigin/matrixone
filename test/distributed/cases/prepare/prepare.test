@@ -207,6 +207,7 @@ drop table if exists t1;
 create table t1( a int unique key,  b int,  c int );
 prepare stmt1 from 'INSERT INTO t1 values(1, 2, 3)';
 execute stmt1;
+-- @pattern
 execute stmt1;
 select * from t1;
 
@@ -426,3 +427,42 @@ deallocate prepare s_pre;
 drop table prepare_test_t1;
 
 drop database if exists db1;
+
+create database db1;
+use db1;
+create table prepare_t1(col1 int, col2 int);
+prepare s_pre from select * from prepare_t1;
+execute s_pre;
+drop database db1;
+execute s_pre;
+create database db1;
+use db1;
+execute s_pre;
+drop database db1;
+
+create database db1;
+drop database if exists db2;
+create database db2;
+use db1;
+create table prepare_t1(col1 int, col2 int);
+insert into prepare_t1 values(1, 2);
+prepare s_pre from select * from prepare_t1;
+execute s_pre;
+use db2;
+execute s_pre;
+drop database db1;
+drop database db2;
+
+
+drop account if exists prepare_acc01;
+create account prepare_acc01 admin_name = 'test_prepare_account' identified by '111';
+
+-- @session:id=2&user=prepare_acc01:test_prepare_account&password=111
+create database db1;
+use db1;
+prepare stmt1x from 'select count(*) from system.statement_info limit 0';
+execute stmt1x;
+
+-- @session
+
+drop account prepare_acc01;

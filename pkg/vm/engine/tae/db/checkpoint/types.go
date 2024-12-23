@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 )
 
 type State int8
@@ -41,26 +40,21 @@ const (
 	ET_Compacted
 )
 
-type Runner interface {
-	TestRunner
-	RunnerReader
-	Start()
-	Stop()
-	String() string
-	EnqueueWait(any) error
-	Replay(catalog.DataFactory) *CkpReplayer
-
-	FlushTable(ctx context.Context, dbID, tableID uint64, ts types.TS) error
-	GCByTS(ctx context.Context, ts types.TS) error
-
-	// for test, delete in next phase
-	DebugUpdateOptions(opts ...Option)
-	GetAllCheckpoints() []*CheckpointEntry
+type CheckpointScheduler interface {
+	TryScheduleCheckpoint(types.TS)
 }
 
-type DirtyCtx struct {
-	force bool
-	tree  *logtail.DirtyTreeEntry
+type Runner interface {
+	CheckpointScheduler
+	TestRunner
+	RunnerWriter
+	RunnerReader
+
+	Start()
+	Stop()
+
+	Replay(catalog.DataFactory) *CkpReplayer
+	GCByTS(ctx context.Context, ts types.TS) error
 }
 
 type Observer interface {

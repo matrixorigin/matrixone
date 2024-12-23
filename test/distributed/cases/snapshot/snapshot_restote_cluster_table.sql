@@ -1,4 +1,3 @@
-
 use mo_catalog;
 drop table if exists cluster_table_1;
 create cluster table cluster_table_1(a int, b int);

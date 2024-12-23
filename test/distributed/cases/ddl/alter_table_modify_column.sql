@@ -992,4 +992,19 @@ show create table t1;
 select * from t1;
 drop table t1;
 
+
+DROP TABLE IF EXISTS president;
+CREATE TABLE president (
+    name VARCHAR(100) NOT NULL,
+    nth INT NOT NULL,
+    impeached BOOL
+);
+show create table president;
+
+ALTER TABLE president MODIFY impeached INTEGER;
+show create table president;
+ALTER TABLE president MODIFY nth JSON;
+show create table president;
+DROP TABLE president;
+
 drop database test;

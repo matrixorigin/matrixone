@@ -67,7 +67,8 @@ func (expr AggFuncExecExpression) GetExtraConfig() []byte {
 // AggFuncExec is an interface to do execution for aggregation.
 type AggFuncExec interface {
 	marshal() ([]byte, error)
-	unmarshal(mp *mpool.MPool, result []byte, groups [][]byte) error
+	unmarshal(mp *mpool.MPool, result, empties, groups [][]byte) error
+	GetOptResult() SplitResult
 
 	AggID() int64
 	IsDistinct() bool
@@ -75,25 +76,28 @@ type AggFuncExec interface {
 	// TypesInfo return the argument types and return type of the function.
 	TypesInfo() ([]types.Type, types.Type)
 
-	// GroupGrow is used to increase the aggregation's group size.
+	// GroupGrow increases the number of groups in the aggregation.
 	GroupGrow(more int) error
-	// PreAllocateGroups is used to pre-extend the agg memory to reduce gc cost.
+	// PreAllocateGroups pre-allocates more additional groups to reduce garbage collection overhead.
 	PreAllocateGroups(more int) error
 
 	// Fill BulkFill and BatchFill add the value to the aggregation.
+	// Fill : add one row to the aggregation for a specific group.
+	// BulkFill : add values to the aggregation for a group in bulk.
+	// BatchFill : add values to the aggregation for multiple groups at once.
 	Fill(groupIndex int, row int, vectors []*vector.Vector) error
 	BulkFill(groupIndex int, vectors []*vector.Vector) error
 	BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error
 
-	// Merge merges the aggregation result of two groups.
+	// Merge combines the result of a self group and a group from another aggregation.
 	Merge(next AggFuncExec, groupIdx1, groupIdx2 int) error
-	// BatchMerge merges the aggregation result of multiple groups.
-	// merge work starts from the offset group of the next agg, end at the (offset + len(groups) - 1) group.
-	// merges the (offset + i)th group with the (groups[i]-1) group of the current agg.
+	// BatchMerge combines the aggregation result of multiple couples.
+	// next: offset + i
+	// self: groups[i] - 1
 	BatchMerge(next AggFuncExec, offset int, groups []uint64) error
 
-	// SetExtraInformation add an additional information to agg executor.
-	// in most cases, it is used to set the partial result of the aggregation to speed up.
+	// SetExtraInformation sets additional information for the aggregation executor,
+	// such as partial results.
 	//
 	// but for the 'group_concat', it was a bad hack to use the method to set the separator.
 	// and for the 'cluster_centers', it was used to set the fields of this agg.
@@ -103,7 +107,7 @@ type AggFuncExec interface {
 	SetExtraInformation(partialResult any, groupIndex int) (err error)
 
 	// Flush return the aggregation result.
-	Flush() (*vector.Vector, error)
+	Flush() ([]*vector.Vector, error)
 
 	// Free clean the resource and reuse the aggregation if possible.
 	Free()
@@ -111,13 +115,10 @@ type AggFuncExec interface {
 
 // indicate who implements the AggFuncExec interface.
 var (
-	_ AggFuncExec = (*singleAggFuncExecNew1[int32, int64])(nil)
-	_ AggFuncExec = (*singleAggFuncExecNew2[int32])(nil)
-	_ AggFuncExec = (*singleAggFuncExecNew3[int64])(nil)
-	_ AggFuncExec = (*singleAggFuncExecNew4)(nil)
-
-	_ AggFuncExec = (*multiAggFuncExec1[int8])(nil)
-	_ AggFuncExec = (*multiAggFuncExec2)(nil)
+	_ AggFuncExec = (*aggregatorFromFixedToFixed[int32, int64])(nil)
+	_ AggFuncExec = (*aggregatorFromFixedToBytes[int32])(nil)
+	_ AggFuncExec = (*aggregatorFromBytesToFixed[int64])(nil)
+	_ AggFuncExec = (*aggregatorFromBytesToBytes)(nil)
 	_ AggFuncExec = &groupConcatExec{}
 )
 
@@ -161,10 +162,16 @@ func MakeAgg(
 	if _, ok = singleAgg[aggID]; ok && len(param) == 1 {
 		return makeSingleAgg(mg, aggID, isDistinct, param[0])
 	}
-	if _, ok = multiAgg[aggID]; ok && len(param) > 0 {
-		return makeMultiAgg(mg, aggID, isDistinct, param)
-	}
 	panic(fmt.Sprintf("unexpected aggID %d and param types %v.", aggID, param))
+}
+
+func MakeInitialAggListFromList(mg AggMemoryManager, list []AggFuncExec) []AggFuncExec {
+	result := make([]AggFuncExec, 0, len(list))
+	for _, v := range list {
+		param, _ := v.TypesInfo()
+		result = append(result, MakeAgg(mg, v.AggID(), v.IsDistinct(), param...))
+	}
+	return result
 }
 
 // makeSingleAgg supports to create an aggregation function executor for single column.
@@ -188,46 +195,17 @@ func makeSingleAgg(
 
 	pIsVarLen, rIsVarLen := param.IsVarlen(), result.IsVarlen()
 	if pIsVarLen && rIsVarLen {
-		return newSingleAggFuncExec4NewVersion(mg, info, agg)
+		return newAggregatorFromBytesToBytes(mg, info, agg)
 	}
 
 	if !pIsVarLen && rIsVarLen {
-		return newSingleAggFuncExec2NewVersion(mg, info, agg)
+		return newAggregatorFromFixedToBytes(mg, info, agg)
 	}
 
 	if pIsVarLen {
-		return newSingleAggFuncExec3NewVersion(mg, info, agg)
+		return newAggregatorFromBytesToFixed(mg, info, agg)
 	}
 	return newSingleAggFuncExec1NewVersion(mg, info, agg)
-}
-
-// makeMultiAgg supports creating an aggregation function executor for multiple columns.
-func makeMultiAgg(
-	mg AggMemoryManager,
-	aggID int64, isDistinct bool,
-	param []types.Type) AggFuncExec {
-	if isDistinct {
-		panic("multi-column agg do not support `distinct`")
-	}
-
-	agg, err := getMultiArgAggImplByInfo(aggID, param)
-	if err != nil {
-		panic(err)
-	}
-	result := agg.ret(param)
-
-	info := multiAggInfo{
-		aggID:     aggID,
-		distinct:  false,
-		argTypes:  param,
-		retType:   result,
-		emptyNull: agg.setNullForEmptyGroup,
-	}
-
-	if info.retType.IsVarlen() {
-		return newMultiAggFuncExecRetVar(mg, info, agg)
-	}
-	return newMultiAggFuncExecRetFixed(mg, info, agg)
 }
 
 func makeSpecialAggExec(

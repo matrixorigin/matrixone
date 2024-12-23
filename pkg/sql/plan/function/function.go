@@ -225,14 +225,8 @@ func RunFunctionDirectly(proc *process.Process, overloadID int64, inputs []*vect
 
 	vec := result.GetResultVector()
 	if fold {
-		// ToConst is a confused method. it just returns a new pointer to the same memory.
-		// so we need to duplicate it.
-		cvec, er := vec.ToConst(0, length, mp).Dup(mp)
-		result.Free()
-		if er != nil {
-			return nil, er
-		}
-		return cvec, nil
+		vec.ToConst()
+		vec.SetLength(length)
 	}
 	return vec, nil
 }
@@ -516,3 +510,6 @@ func (selectList *FunctionSelectList) Contains(row uint64) bool {
 	}
 	return !selectList.SelectList[row]
 }
+
+var EncodeOverloadID = encodeOverloadID
+var GetFunctionIdByName = getFunctionIdByName

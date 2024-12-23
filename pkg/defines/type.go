@@ -227,6 +227,8 @@ type IsMoLogger struct{}
 
 type SourceScanResKey struct{}
 
+type IgnoreForeignKey struct{}
+
 // Determine if now is a bg sql.
 type BgKey struct{}
 
@@ -244,6 +246,8 @@ type StartTS struct{}
 
 // DisableFkCheck is used to disable foreign key check.
 type DisableFkCheck struct{}
+
+type ReaderSummaryKey struct{}
 
 /*
 The autoIncrCacheManager is initialized with a starting CN.

@@ -16,9 +16,9 @@ package shufflebuild
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
-	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashmap_util"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -30,6 +30,7 @@ const (
 	ReceiveBatch = iota
 	BuildHashMap
 	SendJoinMap
+	SendSucceed
 )
 
 type container struct {
@@ -43,9 +44,15 @@ type ShuffleBuild struct {
 	NeedBatches       bool
 	NeedAllocateSels  bool
 	Conditions        []*plan.Expr
-	RuntimeFilterSpec *pbplan.RuntimeFilterSpec
+	RuntimeFilterSpec *plan.RuntimeFilterSpec
 	JoinMapTag        int32
 	ShuffleIdx        int32
+
+	IsDedup           bool
+	OnDuplicateAction plan.Node_OnDuplicateAction
+	DedupColName      string
+	DedupColTypes     []plan.Type
+
 	vm.OperatorBase
 }
 
@@ -81,22 +88,19 @@ func (shuffleBuild *ShuffleBuild) Release() {
 }
 
 func (shuffleBuild *ShuffleBuild) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	shuffleBuild.ctr.state = ReceiveBatch
-	message.FinalizeRuntimeFilter(shuffleBuild.RuntimeFilterSpec, pipelineFailed, err, proc.GetMessageBoard())
-	message.FinalizeJoinMapMessage(proc.GetMessageBoard(), shuffleBuild.JoinMapTag, true, shuffleBuild.ShuffleIdx, pipelineFailed, err)
+	runtimeSucceed := shuffleBuild.ctr.state > ReceiveBatch
+	mapSucceed := shuffleBuild.ctr.state == SendSucceed
 
-	if pipelineFailed || err != nil {
-		shuffleBuild.ctr.hashmapBuilder.FreeWithError(proc)
-	} else {
-		shuffleBuild.ctr.hashmapBuilder.Reset(proc)
-	}
+	shuffleBuild.ctr.hashmapBuilder.Reset(proc, !mapSucceed)
+	shuffleBuild.ctr.state = ReceiveBatch
+	message.FinalizeRuntimeFilter(shuffleBuild.RuntimeFilterSpec, runtimeSucceed, proc.GetMessageBoard())
+	message.FinalizeJoinMapMessage(proc.GetMessageBoard(), shuffleBuild.JoinMapTag, true, shuffleBuild.ShuffleIdx, mapSucceed)
 }
 
 func (shuffleBuild *ShuffleBuild) Free(proc *process.Process, pipelineFailed bool, err error) {
+	shuffleBuild.ctr.hashmapBuilder.Free(proc)
+}
 
-	if pipelineFailed || err != nil {
-		shuffleBuild.ctr.hashmapBuilder.FreeWithError(proc)
-	} else {
-		shuffleBuild.ctr.hashmapBuilder.Free(proc)
-	}
+func (shuffleBuild *ShuffleBuild) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
+	return input, nil
 }

@@ -122,6 +122,10 @@ func (relData *BlockListRelData) AppendBlockInfo(blk *objectio.BlockInfo) {
 	relData.blklist.AppendBlockInfo(blk)
 }
 
+func (relData *BlockListRelData) AppendBlockInfoSlice(slice objectio.BlockInfoSlice) {
+	relData.blklist = append(relData.blklist, slice...)
+}
+
 func (relData *BlockListRelData) UnmarshalBinary(data []byte) (err error) {
 	typ := engine.RelDataType(types.DecodeUint8(data))
 	if typ != engine.RelDataBlockList {

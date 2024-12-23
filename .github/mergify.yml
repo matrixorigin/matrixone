@@ -19,6 +19,16 @@ queue_rules:
         {{ body.split("___\n\n### **PR Type**")[0] | trim | get_section("## What this PR does / why we need it:") }}
 
         Approved by: @{{ approved_reviews_by | join(', @') }}
+  - name: release-2.0
+    merge_conditions: []
+    checks_timeout: 4h
+    merge_method: squash
+    commit_message_template: |
+      {{ title }} (#{{ number }})
+      
+      {{ body.split("___\n\n### **PR Type**")[0] | trim | get_section("## What this PR does / why we need it:") }}
+      
+      Approved by: @{{ approved_reviews_by | join(', @') }}
 
 pull_request_rules:
   - name: Automatic queue on approval for main
@@ -40,6 +50,16 @@ pull_request_rules:
       queue:
         name: release-1.2
 
+  - name: Automatic queue on approval for release-2.0
+    conditions:
+      - "#changes-requested-reviews-by<=0"
+      - label!=do-not-merge/wip
+      - base=2.0-dev
+      - approved-reviews-by=sukki37
+    actions:
+      queue:
+        name: release-2.0
+
 
   - name: Auto update branch
     conditions:
@@ -47,7 +67,7 @@ pull_request_rules:
     actions:
       update: 
 
-  - name: Auto Request Reviewer For 1.2-dev
+  - name: Auto Request Reviewer For Non Main Branch
     conditions:
       - base!=main
     actions:

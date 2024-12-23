@@ -40,7 +40,7 @@ type container struct {
 	itr hashmap.Iterator
 
 	batchRowCount int64
-	lastrow       int
+	lastRow       int
 	inbat         *batch.Batch
 	rbat          *batch.Batch
 
@@ -126,7 +126,7 @@ func (innerJoin *InnerJoin) Reset(proc *process.Process, pipelineFailed bool, er
 	ctr.resetExprExecutor()
 	ctr.cleanHashMap()
 	ctr.inbat = nil
-	ctr.lastrow = 0
+	ctr.lastRow = 0
 	ctr.state = Build
 	ctr.batchRowCount = 0
 
@@ -153,7 +153,15 @@ func (innerJoin *InnerJoin) Free(proc *process.Process, pipelineFailed bool, err
 	ctr.cleanBatch(proc)
 
 	innerJoin.FreeProjection(proc)
+}
 
+func (innerJoin *InnerJoin) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
+	batch := input
+	var err error
+	if innerJoin.ProjectList != nil {
+		batch, err = innerJoin.EvalProjection(input, proc)
+	}
+	return batch, err
 }
 
 func (ctr *container) resetExprExecutor() {

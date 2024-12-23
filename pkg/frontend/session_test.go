@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -335,6 +336,7 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 		txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
 		txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
 		txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
+		txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
 		eng := mock_frontend.NewMockEngine(ctrl)
@@ -347,7 +349,7 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 		db.EXPECT().Relations(gomock.Any()).Return(nil, nil).AnyTimes()
 
 		table := mock_frontend.NewMockRelation(ctrl)
-		table.EXPECT().Ranges(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
+		table.EXPECT().Ranges(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
 		table.EXPECT().TableDefs(gomock.Any()).Return(nil, nil).AnyTimes()
 		table.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{}).AnyTimes()
 		table.EXPECT().CopyTableDef(gomock.Any()).Return(&plan.TableDef{}).AnyTimes()
@@ -366,6 +368,7 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 		setPu("", pu)
 		setSessionAlloc("", NewLeakCheckAllocator())
 		ses := genSession(ctrl, pu)
+		ses.GetTxnHandler().txnOp = txnOperator
 
 		var ts *timestamp.Timestamp
 		tcc := ses.GetTxnCompileCtx()
@@ -378,6 +381,16 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 
 		object, tableRef := tcc.Resolve("abc", "t1", &plan2.Snapshot{TS: ts})
+		convey.So(object, convey.ShouldNotBeNil)
+		convey.So(tableRef, convey.ShouldNotBeNil)
+
+		ref := &plan.ObjectRef{
+			SchemaName: "schema",
+			PubInfo: &plan.PubInfo{
+				TenantId: 0,
+			},
+		}
+		object, tableRef = tcc.ResolveIndexTableByRef(ref, "indexTable", &plan2.Snapshot{TS: ts})
 		convey.So(object, convey.ShouldNotBeNil)
 		convey.So(tableRef, convey.ShouldNotBeNil)
 
@@ -582,4 +595,183 @@ func Test_connectionid(t *testing.T) {
 	s.SetConnectionID(10)
 	x := s.GetConnectionID()
 	assert.Equal(t, uint32(10), x)
+}
+
+func TestCheckPasswordExpired(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	bh := &backgroundExecTest{}
+	bh.init()
+
+	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+	defer bhStub.Reset()
+
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+	pu.SV.SetDefaultValues()
+	pu.SV.KillRountinesInterval = 0
+	setPu("", pu)
+	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+	rm, _ := NewRoutineManager(ctx, "")
+	ses.rm = rm
+
+	tenant := &TenantInfo{
+		Tenant:        sysAccountName,
+		User:          rootName,
+		DefaultRole:   moAdminRoleName,
+		TenantID:      sysAccountID,
+		UserID:        rootID,
+		DefaultRoleID: moAdminRoleID,
+	}
+	ses.SetTenantInfo(tenant)
+
+	// password never expires
+	expired, err := checkPasswordExpired(0, "2022-01-01 00:00:00")
+	assert.NoError(t, err)
+	assert.False(t, expired)
+
+	// password not expires
+	ses.gSysVars.Set(DefaultPasswordLifetime, int64(30))
+	expired, err = checkPasswordExpired(30, time.Now().AddDate(0, 0, -10).Format("2006-01-02 15:04:05"))
+	assert.NoError(t, err)
+	assert.False(t, expired)
+
+	// password not expires
+	expired, err = checkPasswordExpired(30, time.Now().AddDate(0, 0, -31).Format("2006-01-02 15:04:05"))
+	assert.NoError(t, err)
+	assert.True(t, expired)
+
+	// exexpir can not execute stmt
+	ses.setRoutine(&Routine{})
+	ses.getRoutine().setExpired(true)
+	sql := "select 1"
+	rp, err := mysql.Parse(ctx, sql, 1)
+	defer rp[0].Free()
+	assert.NoError(t, err)
+	err = authenticateUserCanExecuteStatement(ctx, ses, rp[0])
+	assert.Error(t, err)
+
+	// exexpir can execute stmt
+	sql = "alter user dump identified by '123456'"
+	rp, err = mysql.Parse(ctx, sql, 1)
+	defer rp[0].Free()
+	assert.NoError(t, err)
+	err = authenticateUserCanExecuteStatement(ctx, ses, rp[0])
+	assert.Error(t, err)
+
+	// getPasswordLifetime error
+	ses.gSysVars.Set(DefaultPasswordLifetime, int64(-1))
+	_, err = checkPasswordExpired(1, "1")
+	assert.Error(t, err)
+	assert.True(t, expired)
+}
+
+func Test_CheckLockTimeExpired(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	bh := &backgroundExecTest{}
+	bh.init()
+
+	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+	defer bhStub.Reset()
+
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+	pu.SV.SetDefaultValues()
+	pu.SV.KillRountinesInterval = 0
+	setPu("", pu)
+	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+	rm, _ := NewRoutineManager(ctx, "")
+	ses.rm = rm
+
+	tenant := &TenantInfo{
+		Tenant:        sysAccountName,
+		User:          rootName,
+		DefaultRole:   moAdminRoleName,
+		TenantID:      sysAccountID,
+		UserID:        rootID,
+		DefaultRoleID: moAdminRoleID,
+	}
+	ses.SetTenantInfo(tenant)
+
+	// lock time expires
+	ses.gSysVars.Set(ConnectionControlMaxConnectionDelay, int64(30000000))
+	_, err := checkLockTimeExpired(ctx, ses, time.Now().Add(time.Hour*-3).Format("2006-01-02 15:04:05"))
+	assert.NoError(t, err)
+
+	// lock time not expires
+	_, err = checkLockTimeExpired(ctx, ses, time.Now().Add(time.Second*-20).Format("2006-01-02 15:04:05"))
+	assert.NoError(t, err)
+
+	// lock time parse error
+	_, err = checkLockTimeExpired(ctx, ses, "1")
+	assert.Error(t, err)
+}
+
+func Test_OperatorLock(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	bh := &backgroundExecTest{}
+	bh.init()
+
+	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+	defer bhStub.Reset()
+
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+	pu.SV.SetDefaultValues()
+	pu.SV.KillRountinesInterval = 0
+	setPu("", pu)
+	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+	rm, _ := NewRoutineManager(ctx, "")
+	ses.rm = rm
+
+	tenant := &TenantInfo{
+		Tenant:        sysAccountName,
+		User:          rootName,
+		DefaultRole:   moAdminRoleName,
+		TenantID:      sysAccountID,
+		UserID:        rootID,
+		DefaultRoleID: moAdminRoleID,
+	}
+	ses.SetTenantInfo(tenant)
+
+	// lock
+	err := setUserUnlock(ctx, "user1", bh)
+	assert.NoError(t, err)
+
+	// increaseLoginAttempts
+	err = increaseLoginAttempts(ctx, "user1", bh)
+	assert.NoError(t, err)
+
+	// updateLockTime
+	err = updateLockTime(ctx, "user1", bh)
+	assert.NoError(t, err)
+
+	// unlock
+	err = setUserLock(ctx, "user1", bh)
+	assert.NoError(t, err)
+}
+
+func TestReserveConnAndClose(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	rm, _ := NewRoutineManager(context.Background(), "")
+	ses.rm = rm
+	rm = ses.getRoutineManager()
+	rm.sessionManager.AddSession(ses)
+
+	ses.ReserveConnAndClose()
+	assert.Equal(t, 0, len(rm.sessionManager.GetAllSessions()))
 }

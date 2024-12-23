@@ -33,7 +33,7 @@ var _ vm.Operator = new(RightSemi)
 const (
 	Build = iota
 	Probe
-	SendLast
+	Finalize
 	End
 )
 
@@ -45,7 +45,7 @@ type evalVector struct {
 type container struct {
 	state   int
 	itr     hashmap.Iterator
-	lastpos int
+	lastPos int
 
 	batches       []*batch.Batch
 	batchRowCount int64
@@ -144,7 +144,7 @@ func (rightSemi *RightSemi) Reset(proc *process.Process, pipelineFailed bool, er
 	ctr.matched = nil
 	ctr.handledLast = false
 	ctr.state = Build
-	ctr.lastpos = 0
+	ctr.lastPos = 0
 }
 
 func (rightSemi *RightSemi) Free(proc *process.Process, pipelineFailed bool, err error) {
@@ -154,7 +154,10 @@ func (rightSemi *RightSemi) Free(proc *process.Process, pipelineFailed bool, err
 	ctr.cleanExprExecutor()
 
 	ctr.tmpBatches = nil
+}
 
+func (rightSemi *RightSemi) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
+	return input, nil
 }
 
 func (ctr *container) resetExprExecutor() {

@@ -132,6 +132,7 @@ message CNTxnSnapshot {
     bool                      Disable1PCOpt    = 4;
     repeated lock.LockTable   LockTables       = 5 [(gogoproto.nullable) = false];
     TxnOptions                Options          = 6 [(gogoproto.nullable) = false];
+    uint32                    Flag             = 7;
 }
 
 // CNOpRequest cn read/write request, CN -> TN. If data is written to more than one TN (>1) in a 

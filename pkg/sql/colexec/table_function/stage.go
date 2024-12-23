@@ -20,12 +20,12 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/stage"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/stage/stageutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -38,9 +38,6 @@ func stageListPrepare(proc *process.Process, tableFunction *TableFunction) (tvfS
 	var err error
 	tableFunction.ctr.executorsForArgs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, tableFunction.Args)
 	tableFunction.ctr.argVecs = make([]*vector.Vector, len(tableFunction.Args))
-	for i := range tableFunction.Attrs {
-		tableFunction.Attrs[i] = strings.ToUpper(tableFunction.Attrs[i])
-	}
 	return &stagelistState{}, err
 }
 
@@ -82,7 +79,7 @@ func stageList(proc *process.Process, tableFunction *TableFunction, filepath str
 		return nil
 	}
 
-	s, err := stage.UrlToStageDef(string(filepath), proc)
+	s, err := stageutil.UrlToStageDef(string(filepath), proc)
 	if err != nil {
 		return err
 	}
@@ -105,7 +102,7 @@ func stageList(proc *process.Process, tableFunction *TableFunction, filepath str
 
 	pattern = path.Clean("/" + pattern)
 
-	fileList, err := stage.StageListWithPattern(service, pattern, proc)
+	fileList, err := stageutil.StageListWithPattern(service, pattern, proc)
 	if err != nil {
 		return err
 	}

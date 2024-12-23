@@ -20,7 +20,6 @@ import (
 	"math/rand"
 	"strconv"
 	"time"
-	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -32,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -46,9 +46,15 @@ func WithMPool(pool *mpool.MPool) ProcOptions {
 func WithFileService(fs fileservice.FileService) ProcOptions {
 	return func(proc *process.Process) {
 		if proc.GetFileService() != nil {
-			proc.GetFileService().Close()
+			proc.GetFileService().Close(proc.Ctx)
 		}
 		proc.SetFileService(fs)
+	}
+}
+
+func WithQueryClient(queryClient client.QueryClient) ProcOptions {
+	return func(proc *process.Process) {
+		proc.Base.QueryClient = queryClient
 	}
 }
 
@@ -351,7 +357,7 @@ func NewRowidVector(n int, typ types.Type, m *mpool.MPool, _ bool, vs []types.Ro
 	for i := 0; i < n; i++ {
 		var rowId types.Rowid
 		binary.LittleEndian.PutUint64(
-			unsafe.Slice(&rowId[types.RowidSize/2], 8),
+			rowId[types.RowidSize/2:types.RowidSize/2+8],
 			uint64(i),
 		)
 		if err := vector.AppendFixed(vec, rowId, false, m); err != nil {
@@ -376,7 +382,7 @@ func NewBlockidVector(n int, typ types.Type, m *mpool.MPool, _ bool, vs []types.
 	for i := 0; i < n; i++ {
 		var blockId types.Blockid
 		binary.LittleEndian.PutUint64(
-			unsafe.Slice(&blockId[types.BlockidSize/2], 8),
+			blockId[types.BlockidSize/2:types.BlockidSize/2+8],
 			uint64(i),
 		)
 		if err := vector.AppendFixed(vec, blockId, false, m); err != nil {

@@ -28,6 +28,12 @@ func (opts Options) WithDisableIncrStatement() Options {
 	return opts
 }
 
+// WithDisableIncrStatement disable incr statement
+func (opts StatementOption) WithIgnoreForeignKey() StatementOption {
+	opts.ignoreForeignKey = true
+	return opts
+}
+
 // WithTxn exec sql in a exists txn
 func (opts Options) WithTxn(txnOp client.TxnOperator) Options {
 	opts.txnOp = txnOp
@@ -163,6 +169,32 @@ func (opts StatementOption) HasAccountID() bool {
 	return opts.accountId > 0
 }
 
+func (opts StatementOption) WithRoleID(roleID uint32) StatementOption {
+	opts.roleId = roleID
+	return opts
+}
+
+func (opts StatementOption) RoleID() uint32 {
+	return opts.roleId
+}
+
+func (opts StatementOption) HasRoleID() bool {
+	return opts.roleId > 0
+}
+
+func (opts StatementOption) WithUserID(userID uint32) StatementOption {
+	opts.userId = userID
+	return opts
+}
+
+func (opts StatementOption) UserID() uint32 {
+	return opts.userId
+}
+
+func (opts StatementOption) HasUserID() bool {
+	return opts.userId > 0
+}
+
 func (opts StatementOption) WithDisableLog() StatementOption {
 	opts.disableLog = true
 	return opts
@@ -172,6 +204,10 @@ func (opts StatementOption) DisableLog() bool {
 	return opts.disableLog
 }
 
+func (opts StatementOption) IgnoreForeignKey() bool {
+	return opts.ignoreForeignKey
+}
+
 func (opts Options) WithDisableTrace() Options {
 	opts.txnOpts = append(opts.txnOpts, client.WithDisableTrace(true))
 	return opts
@@ -179,6 +215,11 @@ func (opts Options) WithDisableTrace() Options {
 
 func (opts Options) WithDisableWaitPaused() Options {
 	opts.txnOpts = append(opts.txnOpts, client.WithDisableWaitPaused())
+	return opts
+}
+
+func (opts Options) WithUserTxn() Options {
+	opts.txnOpts = append(opts.txnOpts, client.WithUserTxn())
 	return opts
 }
 
@@ -205,4 +246,15 @@ func (opts Options) LowerCaseTableNames() int64 {
 		return *opts.lower
 	}
 	return 1
+}
+
+func (opts Options) WithStreaming(stream_chan chan Result, error_chan chan error) Options {
+	opts.stream_chan = stream_chan
+	opts.error_chan = error_chan
+	opts.streaming = true
+	return opts
+}
+
+func (opts Options) Streaming() (chan Result, chan error, bool) {
+	return opts.stream_chan, opts.error_chan, opts.streaming
 }

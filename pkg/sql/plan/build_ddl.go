@@ -43,12 +43,12 @@ func genDynamicTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef,
 	var err error
 	switch s := stmt.Select.(type) {
 	case *tree.ParenSelect:
-		stmtPlan, err = runBuildSelectByBinder(plan.Query_SELECT, ctx, s.Select, false, true)
+		stmtPlan, err = bindAndOptimizeSelectQuery(plan.Query_SELECT, ctx, s.Select, false, true)
 		if err != nil {
 			return nil, err
 		}
 	default:
-		stmtPlan, err = runBuildSelectByBinder(plan.Query_SELECT, ctx, stmt, false, true)
+		stmtPlan, err = bindAndOptimizeSelectQuery(plan.Query_SELECT, ctx, stmt, false, true)
 		if err != nil {
 			return nil, err
 		}
@@ -105,12 +105,12 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, er
 	var err error
 	switch s := stmt.Select.(type) {
 	case *tree.ParenSelect:
-		stmtPlan, err = runBuildSelectByBinder(plan.Query_SELECT, ctx, s.Select, false, true)
+		stmtPlan, err = bindAndOptimizeSelectQuery(plan.Query_SELECT, ctx, s.Select, false, true)
 		if err != nil {
 			return nil, err
 		}
 	default:
-		stmtPlan, err = runBuildSelectByBinder(plan.Query_SELECT, ctx, stmt, false, true)
+		stmtPlan, err = bindAndOptimizeSelectQuery(plan.Query_SELECT, ctx, stmt, false, true)
 		if err != nil {
 			return nil, err
 		}
@@ -134,6 +134,8 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, er
 
 	// Check alter and change the viewsql.
 	viewSql := ctx.GetRootSql()
+	// remove sql hint
+	viewSql = cleanHint(viewSql)
 	if len(viewSql) != 0 {
 		if viewSql[0] == 'A' {
 			viewSql = strings.Replace(viewSql, "ALTER", "CREATE", 1)
@@ -193,7 +195,7 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select) ([]*ColDef, error) 
 	if s, ok := stmt.Select.(*tree.ParenSelect); ok {
 		stmt = s.Select
 	}
-	if rootId, err = builder.buildSelect(stmt, bindCtx, true); err != nil {
+	if rootId, err = builder.bindSelect(stmt, bindCtx, true); err != nil {
 		return nil, err
 	}
 	rootNode := builder.qry.Nodes[rootId]
@@ -1600,6 +1602,7 @@ func getRefAction(typ tree.ReferenceOptionType) plan.ForeignKeyDef_RefAction {
 	}
 }
 
+// buildFullTextIndexTable create a secondary table with schema (doc_id, word, pos) cluster by (word)
 func buildFullTextIndexTable(createTable *plan.CreateTable, indexInfos []*tree.FullTextIndex, colMap map[string]*ColDef, pkeyName string, ctx CompilerContext) error {
 	if pkeyName == "" || pkeyName == catalog.FakePrimaryKeyColName {
 		return moerr.NewInternalErrorNoCtx("primary key cannot be empty for fulltext index")
@@ -1625,7 +1628,7 @@ func buildFullTextIndexTable(createTable *plan.CreateTable, indexInfos []*tree.F
 		if indexInfo.IndexOption != nil && indexInfo.IndexOption.ParserName != "" {
 			// set parser ngram
 			parsername = strings.ToLower(indexInfo.IndexOption.ParserName)
-			if parsername != "ngram" && parsername != "default" && parsername != "json" {
+			if parsername != "ngram" && parsername != "default" && parsername != "json" && parsername != "json_value" {
 				return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("Fulltext parser %s not supported", parsername))
 			}
 		}
@@ -1751,6 +1754,23 @@ func buildFullTextIndexTable(createTable *plan.CreateTable, indexInfos []*tree.F
 			PkeyColName: keyName,
 		}
 
+		tableDef.ClusterBy = &ClusterByDef{
+			Name: "word",
+		}
+
+		properties := []*plan.Property{
+			{
+				Key:   catalog.SystemRelAttr_Kind,
+				Value: catalog.SystemIndexRel,
+			},
+		}
+		tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
+			Def: &plan.TableDef_DefType_Properties{
+				Properties: &plan.PropertiesDef{
+					Properties: properties,
+				},
+			}})
+
 		// append to createTable.IndexTables and createTable.TableDef
 		createTable.IndexTables = append(createTable.IndexTables, tableDef)
 		createTable.TableDef.Indexes = append(createTable.TableDef.Indexes, indexDef)
@@ -1861,6 +1881,19 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 			}
 			tableDef.Cols = append(tableDef.Cols, colDef)
 		}
+
+		properties := []*plan.Property{
+			{
+				Key:   catalog.SystemRelAttr_Kind,
+				Value: catalog.SystemIndexRel,
+			},
+		}
+		tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
+			Def: &plan.TableDef_DefType_Properties{
+				Properties: &plan.PropertiesDef{
+					Properties: properties,
+				},
+			}})
 
 		//indexDef.IndexName = indexInfo.Name
 		indexDef.IndexName = indexInfo.GetIndexName()
@@ -1980,6 +2013,20 @@ func buildMasterSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, co
 		}
 		tableDef.Cols = append(tableDef.Cols, pkColDef)
 	}
+
+	properties := []*plan.Property{
+		{
+			Key:   catalog.SystemRelAttr_Kind,
+			Value: catalog.SystemIndexRel,
+		},
+	}
+	tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
+		Def: &plan.TableDef_DefType_Properties{
+			Properties: &plan.PropertiesDef{
+				Properties: properties,
+			},
+		}})
+
 	if indexInfo.Name == "" {
 		firstPart := indexInfo.KeyParts[0].ColName.ColName()
 		nameCount[firstPart]++
@@ -2129,6 +2176,19 @@ func buildRegularSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 		tableDef.Cols = append(tableDef.Cols, colDef)
 	}
 
+	properties := []*plan.Property{
+		{
+			Key:   catalog.SystemRelAttr_Kind,
+			Value: catalog.SystemIndexRel,
+		},
+	}
+	tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
+		Def: &plan.TableDef_DefType_Properties{
+			Properties: &plan.PropertiesDef{
+				Properties: properties,
+			},
+		}})
+
 	if indexInfo.Name == "" {
 		firstPart := indexInfo.KeyParts[0].ColName.ColName()
 		nameCount[firstPart]++
@@ -2249,6 +2309,19 @@ func buildIvfFlatSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 			Names:       []string{catalog.SystemSI_IVFFLAT_TblCol_Metadata_key},
 			PkeyColName: catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
 		}
+
+		properties := []*plan.Property{
+			{
+				Key:   catalog.SystemRelAttr_Kind,
+				Value: catalog.SystemSI_IVFFLAT_TblType_Metadata,
+			},
+		}
+		tableDefs[0].Defs = append(tableDefs[0].Defs, &plan.TableDef_DefType{
+			Def: &plan.TableDef_DefType_Properties{
+				Properties: &plan.PropertiesDef{
+					Properties: properties,
+				},
+			}})
 	}
 
 	// 2. create ivf-flat `centroids` table
@@ -2327,6 +2400,19 @@ func buildIvfFlatSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 			PkeyColName: catalog.CPrimaryKeyColName,
 			CompPkeyCol: tableDefs[1].Cols[3],
 		}
+
+		properties := []*plan.Property{
+			{
+				Key:   catalog.SystemRelAttr_Kind,
+				Value: catalog.SystemSI_IVFFLAT_TblType_Centroids,
+			},
+		}
+		tableDefs[1].Defs = append(tableDefs[1].Defs, &plan.TableDef_DefType{
+			Def: &plan.TableDef_DefType_Properties{
+				Properties: &plan.PropertiesDef{
+					Properties: properties,
+				},
+			}})
 	}
 
 	// 3. create ivf-flat `entries` table
@@ -2424,6 +2510,19 @@ func buildIvfFlatSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 			PkeyColName: catalog.CPrimaryKeyColName,
 			CompPkeyCol: tableDefs[2].Cols[4],
 		}
+
+		properties := []*plan.Property{
+			{
+				Key:   catalog.SystemRelAttr_Kind,
+				Value: catalog.SystemSI_IVFFLAT_TblType_Entries,
+			},
+		}
+		tableDefs[2].Defs = append(tableDefs[2].Defs, &plan.TableDef_DefType{
+			Def: &plan.TableDef_DefType_Properties{
+				Properties: &plan.PropertiesDef{
+					Properties: properties,
+				},
+			}})
 	}
 
 	return indexDefs, tableDefs, nil
@@ -2656,8 +2755,14 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 			return nil, moerr.NewInternalError(ctx.GetContext(), "only the sys account can drop the cluster table")
 		}
 
+		ignore := false
+		val := ctx.GetContext().Value(defines.IgnoreForeignKey{})
+		if val != nil {
+			ignore = val.(bool)
+		}
+
 		dropTable.TableId = tableDef.TblId
-		if tableDef.Fkeys != nil {
+		if tableDef.Fkeys != nil && !ignore {
 			for _, fk := range tableDef.Fkeys {
 				if fk.ForeignTbl == 0 {
 					continue
@@ -2668,7 +2773,7 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 
 		// collect child tables that needs remove fk relationships
 		// with the table
-		if tableDef.RefChildTbls != nil {
+		if tableDef.RefChildTbls != nil && !ignore {
 			for _, childTbl := range tableDef.RefChildTbls {
 				if childTbl == 0 {
 					continue
@@ -2830,6 +2935,7 @@ func buildDropDatabase(stmt *tree.DropDatabase, ctx CompilerContext) (*Plan, err
 	}, nil
 }
 
+// In MySQL, the CREATE INDEX syntax can only create one index instance at a time
 func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error) {
 	createIndex := &plan.CreateIndex{}
 	if len(stmt.Table.SchemaName) == 0 {

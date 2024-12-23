@@ -18,38 +18,25 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
-
-	"github.com/matrixorigin/matrixone/pkg/vm/message"
-
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/apply"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeblock"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/postdml"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/productl2"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unionall"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
-
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shufflebuild"
-
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
-
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/indexbuild"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/indexjoin"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffleV2"
 
 	"github.com/google/uuid"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/apply"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dedupjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
@@ -58,6 +45,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/fuzzyfilter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/indexbuild"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/indexjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersect"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
@@ -67,20 +56,24 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeblock"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergecte"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergegroup"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeorder"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/onduplicatekey"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/partition"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/postdml"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertsecondaryindex"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertunique"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/product"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/productl2"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/right"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightanti"
@@ -88,17 +81,23 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/semi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shufflebuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/source"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/timewin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unionall"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/window"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -393,14 +392,13 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 				ExParamConst: external.ExParamConst{
 					Attrs:           t.Es.Attrs,
 					Cols:            t.Es.Cols,
+					ColumnListLen:   t.Es.ColumnListLen,
 					Idx:             index,
-					Name2ColIndex:   t.Es.Name2ColIndex,
 					CreateSql:       t.Es.CreateSql,
 					FileList:        t.Es.FileList,
 					FileSize:        t.Es.FileSize,
 					FileOffsetTotal: t.Es.FileOffsetTotal,
 					Extern:          t.Es.Extern,
-					TbColToDataCol:  t.Es.TbColToDataCol,
 					StrictSqlMode:   t.Es.StrictSqlMode,
 				},
 				ExParam: external.ExParam{
@@ -433,6 +431,23 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 	case vm.Connector:
 		op := connector.NewArgument()
 		op.Reg = sourceOp.(*connector.Connector).Reg
+		op.SetInfo(&info)
+		return op
+	case vm.ShuffleV2:
+		sourceArg := sourceOp.(*shuffleV2.ShuffleV2)
+		if sourceArg.GetShufflePool() == nil {
+			sourceArg.SetShufflePool(shuffleV2.NewShufflePool(sourceArg.BucketNum, int32(maxParallel)))
+		}
+		op := shuffleV2.NewArgument()
+		op.SetShufflePool(sourceArg.GetShufflePool())
+		op.ShuffleType = sourceArg.ShuffleType
+		op.ShuffleColIdx = sourceArg.ShuffleColIdx
+		op.ShuffleColMax = sourceArg.ShuffleColMax
+		op.ShuffleColMin = sourceArg.ShuffleColMin
+		op.BucketNum = sourceArg.BucketNum
+		op.ShuffleRangeInt64 = sourceArg.ShuffleRangeInt64
+		op.ShuffleRangeUint64 = sourceArg.ShuffleRangeUint64
+		op.CurrentShuffleIdx = int32(index)
 		op.SetInfo(&info)
 		return op
 	case vm.Shuffle:
@@ -525,7 +540,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		return op
 	case vm.ValueScan:
 		t := sourceOp.(*value_scan.ValueScan)
-		op := value_scan.NewValueScanFromProcess()
+		op := value_scan.NewArgument()
 		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
 		return op
@@ -535,7 +550,6 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.ApplyType = t.ApplyType
 		op.Result = t.Result
 		op.Typs = t.Typs
-		op.ProjectList = t.ProjectList
 		op.TableFunction = table_function.NewArgument()
 		op.TableFunction.FuncName = t.TableFunction.FuncName
 		op.TableFunction.Args = t.TableFunction.Args
@@ -544,6 +558,39 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.TableFunction.Params = t.TableFunction.Params
 		op.TableFunction.SetInfo(&info)
 		op.SetInfo(&info)
+		return op
+	case vm.MultiUpdate:
+		t := sourceOp.(*multi_update.MultiUpdate)
+		op := multi_update.NewArgument()
+		op.MultiUpdateCtx = t.MultiUpdateCtx
+		op.Action = t.Action
+		op.IsOnduplicateKeyUpdate = t.IsOnduplicateKeyUpdate
+		op.Engine = t.Engine
+		op.SetInfo(&info)
+		return op
+	case vm.DedupJoin:
+		t := sourceOp.(*dedupjoin.DedupJoin)
+		op := dedupjoin.NewArgument()
+		if t.Channel == nil {
+			t.Channel = make(chan *bitmap.Bitmap, maxParallel)
+		}
+		op.Channel = t.Channel
+		op.NumCPU = uint64(maxParallel)
+		op.IsMerger = (index == 0)
+		op.Result = t.Result
+		op.LeftTypes = t.LeftTypes
+		op.RightTypes = t.RightTypes
+		op.Conditions = t.Conditions
+		op.IsShuffle = t.IsShuffle
+		op.ShuffleIdx = t.ShuffleIdx
+		op.RuntimeFilterSpecs = t.RuntimeFilterSpecs
+		op.JoinMapTag = t.JoinMapTag
+		op.OnDuplicateAction = t.OnDuplicateAction
+		op.DedupColName = t.DedupColName
+		op.DedupColTypes = t.DedupColTypes
+		op.UpdateColIdxList = t.UpdateColIdxList
+		op.UpdateColExprList = t.UpdateColExprList
+
 		return op
 	case vm.PostDml:
 		t := sourceOp.(*postdml.PostDml)
@@ -555,7 +602,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 	panic(fmt.Sprintf("unexpected instruction type '%d' to dup", sourceOp.OpType()))
 }
 
-func constructRestrict(n *plan.Node, filterExpr *plan2.Expr) *filter.Filter {
+func constructRestrict(n *plan.Node, filterExpr *plan.Expr) *filter.Filter {
 	op := filter.NewArgument()
 	op.E = filterExpr
 	op.IsEnd = n.IsEnd
@@ -723,9 +770,9 @@ func constructLockOp(n *plan.Node, eng engine.Engine) (*lockop.LockOp, error) {
 	for _, target := range n.LockTargets {
 		typ := plan2.MakeTypeByPlan2Type(target.PrimaryColTyp)
 		if target.IsPartitionTable {
-			arg.AddLockTargetWithPartition(target.GetPartitionTableIds(), target.GetPrimaryColIdxInBat(), typ, target.GetRefreshTsIdxInBat(), target.GetFilterColIdxInBat())
+			arg.AddLockTargetWithPartition(target.GetPartitionTableIds(), target.GetPrimaryColIdxInBat(), typ, target.GetRefreshTsIdxInBat(), target.GetLockRows(), target.GetLockTableAtTheEnd(), target.GetFilterColIdxInBat())
 		} else {
-			arg.AddLockTarget(target.GetTableId(), target.GetPrimaryColIdxInBat(), typ, target.GetRefreshTsIdxInBat())
+			arg.AddLockTarget(target.GetTableId(), target.GetPrimaryColIdxInBat(), typ, target.GetRefreshTsIdxInBat(), target.GetLockRows(), target.GetLockTableAtTheEnd())
 		}
 
 	}
@@ -741,6 +788,37 @@ func constructLockOp(n *plan.Node, eng engine.Engine) (*lockop.LockOp, error) {
 		}
 	}
 	return arg, nil
+}
+
+func constructMultiUpdate(n *plan.Node, eg engine.Engine) *multi_update.MultiUpdate {
+	arg := multi_update.NewArgument()
+	arg.Engine = eg
+
+	arg.MultiUpdateCtx = make([]*multi_update.MultiUpdateCtx, len(n.UpdateCtxList))
+	for i, updateCtx := range n.UpdateCtxList {
+		insertCols := make([]int, len(updateCtx.InsertCols))
+		for j, col := range updateCtx.InsertCols {
+			insertCols[j] = int(col.ColPos)
+		}
+
+		deleteCols := make([]int, len(updateCtx.DeleteCols))
+		for j, col := range updateCtx.DeleteCols {
+			deleteCols[j] = int(col.ColPos)
+		}
+
+		arg.MultiUpdateCtx[i] = &multi_update.MultiUpdateCtx{
+			ObjRef:              updateCtx.ObjRef,
+			TableDef:            updateCtx.TableDef,
+			InsertCols:          insertCols,
+			DeleteCols:          deleteCols,
+			PartitionTableIDs:   updateCtx.PartitionTableIds,
+			PartitionTableNames: updateCtx.PartitionTableNames,
+			OldPartitionIdx:     int(updateCtx.OldPartitionIdx),
+			NewPartitionIdx:     int(updateCtx.NewPartitionIdx),
+		}
+	}
+
+	return arg
 }
 
 func constructInsert(n *plan.Node, eg engine.Engine) *insert.Insert {
@@ -773,11 +851,14 @@ func constructProjection(n *plan.Node) *projection.Projection {
 }
 
 func constructExternal(n *plan.Node, param *tree.ExternParam, ctx context.Context, fileList []string, FileSize []int64, fileOffset []*pipeline.FileOffset, strictSqlMode bool) *external.External {
-	var attrs []string
+	var attrs []plan.ExternAttr
 
-	for _, col := range n.TableDef.Cols {
+	for i, col := range n.TableDef.Cols {
 		if !col.Hidden {
-			attrs = append(attrs, col.GetOriginCaseName())
+			attr := plan.ExternAttr{ColName: col.Name,
+				ColIndex:      int32(i),
+				ColFieldIndex: n.ExternScan.TbColToDataCol[col.Name]}
+			attrs = append(attrs, attr)
 		}
 	}
 
@@ -786,9 +867,8 @@ func constructExternal(n *plan.Node, param *tree.ExternParam, ctx context.Contex
 			ExParamConst: external.ExParamConst{
 				Attrs:           attrs,
 				Cols:            n.TableDef.Cols,
+				ColumnListLen:   int32(len(n.ExternScan.TbColToDataCol)),
 				Extern:          param,
-				Name2ColIndex:   n.TableDef.Name2ColIndex,
-				TbColToDataCol:  n.ExternScan.TbColToDataCol,
 				FileOffsetTotal: fileOffset,
 				CreateSql:       n.TableDef.Createsql,
 				Ctx:             ctx,
@@ -826,6 +906,7 @@ func constructTableFunction(n *plan.Node) *table_function.TableFunction {
 	arg.Args = n.TblFuncExprList
 	arg.FuncName = n.TableDef.TblFunc.Name
 	arg.Params = n.TableDef.TblFunc.Param
+	arg.Limit = n.Limit
 	return arg
 }
 
@@ -1007,6 +1088,40 @@ func constructSingle(n *plan.Node, typs []types.Type, proc *process.Process) *si
 	arg.Conditions = constructJoinConditions(conds, proc)
 	arg.RuntimeFilterSpecs = n.RuntimeFilterBuildList
 	arg.HashOnPK = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK
+	for i := range n.SendMsgList {
+		if n.SendMsgList[i].MsgType == int32(message.MsgJoinMap) {
+			arg.JoinMapTag = n.SendMsgList[i].MsgTag
+		}
+	}
+	if arg.JoinMapTag <= 0 {
+		panic("wrong joinmap tag!")
+	}
+	return arg
+}
+
+func constructDedupJoin(n *plan.Node, leftTypes, rightTypes []types.Type, proc *process.Process) *dedupjoin.DedupJoin {
+	result := make([]colexec.ResultPos, len(n.ProjectList))
+	for i, expr := range n.ProjectList {
+		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
+	}
+	cond, conds := extraJoinConditions(n.OnList)
+	if cond != nil {
+		panic("dedupjoin should not have non-equi join condition")
+	}
+	arg := dedupjoin.NewArgument()
+	arg.LeftTypes = leftTypes
+	arg.RightTypes = rightTypes
+	arg.Result = result
+	arg.Conditions = constructJoinConditions(conds, proc)
+	arg.RuntimeFilterSpecs = n.RuntimeFilterBuildList
+	arg.OnDuplicateAction = n.OnDuplicateAction
+	arg.DedupColName = n.DedupColName
+	arg.DedupColTypes = n.DedupColTypes
+	if n.DedupJoinCtx != nil {
+		arg.UpdateColIdxList = n.DedupJoinCtx.UpdateColIdxList
+		arg.UpdateColExprList = n.DedupJoinCtx.UpdateColExprList
+	}
+	arg.IsShuffle = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle
 	for i := range n.SendMsgList {
 		if n.SendMsgList[i].MsgType == int32(message.MsgJoinMap) {
 			arg.JoinMapTag = n.SendMsgList[i].MsgTag
@@ -1382,6 +1497,23 @@ func constructShuffleOperatorForJoin(bucketNum int32, node *plan.Node, left bool
 	return arg
 }
 
+func constructShuffleArgForGroupV2(node *plan.Node, dop int32) *shuffleV2.ShuffleV2 {
+	arg := shuffleV2.NewArgument()
+	hashCol, typ := plan2.GetHashColumn(node.GroupBy[node.Stats.HashmapStats.ShuffleColIdx])
+	arg.ShuffleColIdx = hashCol.ColPos
+	arg.ShuffleType = int32(node.Stats.HashmapStats.ShuffleType)
+	arg.ShuffleColMin = node.Stats.HashmapStats.ShuffleColMin
+	arg.ShuffleColMax = node.Stats.HashmapStats.ShuffleColMax
+	arg.BucketNum = dop
+	switch types.T(typ) {
+	case types.T_int64, types.T_int32, types.T_int16:
+		arg.ShuffleRangeInt64 = plan2.ShuffleRangeReEvalSigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
+	case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text, types.T_bit, types.T_datalink:
+		arg.ShuffleRangeUint64 = plan2.ShuffleRangeReEvalUnsigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
+	}
+	return arg
+}
+
 func constructShuffleArgForGroup(ss []*Scope, node *plan.Node) *shuffle.Shuffle {
 	arg := shuffle.NewArgument()
 	hashCol, typ := plan2.GetHashColumn(node.GroupBy[node.Stats.HashmapStats.ShuffleColIdx])
@@ -1423,9 +1555,8 @@ func constructDispatch(idx int, target []*Scope, source *Scope, node *plan.Node,
 	return arg
 }
 
-func constructMergeGroup(needEval bool) *mergegroup.MergeGroup {
+func constructMergeGroup() *mergegroup.MergeGroup {
 	arg := mergegroup.NewArgument()
-	arg.NeedEval = needEval
 	return arg
 }
 
@@ -1687,6 +1818,22 @@ func constructHashBuild(op vm.Operator, proc *process.Process, mcpu int32) *hash
 		ret.NeedBatches = true
 		ret.NeedAllocateSels = true
 		ret.JoinMapTag = arg.JoinMapTag
+
+	case vm.DedupJoin:
+		arg := op.(*dedupjoin.DedupJoin)
+		ret.NeedHashMap = true
+		ret.Conditions = arg.Conditions[1]
+		ret.NeedBatches = true
+		ret.NeedAllocateSels = arg.OnDuplicateAction == plan.Node_UPDATE
+		ret.IsDedup = true
+		ret.OnDuplicateAction = arg.OnDuplicateAction
+		ret.DedupColName = arg.DedupColName
+		ret.DedupColTypes = arg.DedupColTypes
+		if len(arg.RuntimeFilterSpecs) > 0 {
+			ret.RuntimeFilterSpec = arg.RuntimeFilterSpecs[0]
+		}
+		ret.JoinMapTag = arg.JoinMapTag
+
 	default:
 		ret.Release()
 		panic(moerr.NewInternalErrorf(proc.Ctx, "unsupport join type '%v'", op.OpType()))
@@ -1805,6 +1952,21 @@ func constructShuffleBuild(op vm.Operator, proc *process.Process) *shufflebuild.
 		ret.JoinMapTag = arg.JoinMapTag
 		ret.ShuffleIdx = arg.ShuffleIdx
 
+	case vm.DedupJoin:
+		arg := op.(*dedupjoin.DedupJoin)
+		ret.Conditions = arg.Conditions[1]
+		ret.NeedBatches = true
+		ret.NeedAllocateSels = arg.OnDuplicateAction == plan.Node_UPDATE
+		ret.IsDedup = true
+		ret.OnDuplicateAction = arg.OnDuplicateAction
+		ret.DedupColName = arg.DedupColName
+		ret.DedupColTypes = arg.DedupColTypes
+		if len(arg.RuntimeFilterSpecs) > 0 {
+			ret.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(arg.RuntimeFilterSpecs[0])
+		}
+		ret.JoinMapTag = arg.JoinMapTag
+		ret.ShuffleIdx = arg.ShuffleIdx
+
 	default:
 		ret.Release()
 		panic(moerr.NewInternalErrorf(proc.Ctx, "unsupported type for shuffle join: '%v'", op.OpType()))
@@ -1883,8 +2045,45 @@ func constructTableScan(n *plan.Node) *table_scan.TableScan {
 	return table_scan.NewArgument().WithTypes(types)
 }
 
-func constructValueScan() *value_scan.ValueScan {
-	return value_scan.NewValueScanFromProcess()
+func constructValueScan(proc *process.Process, n *plan.Node) (*value_scan.ValueScan, error) {
+	op := value_scan.NewArgument()
+	if n == nil {
+		return op, nil
+	}
+	op.NodeType = n.NodeType
+	if n.RowsetData == nil {
+		return op, nil
+	}
+
+	op.ColCount = len(n.TableDef.Cols)
+	op.Batchs = make([]*batch.Batch, 2)
+	op.Batchs[0] = batch.NewWithSize(len(n.RowsetData.Cols))
+	op.Batchs[0].SetRowCount(len(n.RowsetData.Cols[0].Data))
+	rowsetData := &plan.RowsetData{
+		Cols: make([]*plan.ColData, op.ColCount),
+	}
+	for i := 0; i < op.ColCount; i++ {
+		rowsetData.Cols[i] = new(plan.ColData)
+	}
+
+	for i, col := range n.RowsetData.Cols {
+		vec := vector.NewVec(plan2.MakeTypeByPlan2Type(n.TableDef.Cols[i].Typ))
+		op.Batchs[0].Vecs[i] = vec
+		for j, rowsetExpr := range col.Data {
+			get, err := rule.GetConstantValue2(proc, rowsetExpr.Expr, vec)
+			if err != nil {
+				op.Batchs[0].Clean(proc.Mp())
+				return nil, err
+			}
+			if !get {
+				rowsetExpr.RowPos = int32(j)
+				rowsetData.Cols[i].Data = append(rowsetData.Cols[i].Data, rowsetExpr)
+			}
+		}
+	}
+	op.RowsetData = rowsetData
+
+	return op, nil
 }
 
 func extraJoinConditions(exprs []*plan.Expr) (*plan.Expr, []*plan.Expr) {

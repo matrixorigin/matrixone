@@ -15,7 +15,6 @@
 package frontend
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -23,7 +22,6 @@ import (
 	"math"
 	"math/rand"
 	"os"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -33,6 +31,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/google/uuid"
+	"github.com/petermattis/goid"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/cdc"
@@ -103,20 +102,16 @@ func Max(a int, b int) int {
 }
 
 const (
-	invalidGoroutineId = math.MaxUint64
+	invalidGoroutineId = math.MaxInt64
 )
 
 // GetRoutineId gets the routine id
 func GetRoutineId() uint64 {
-	data := make([]byte, 64)
-	data = data[:runtime.Stack(data, false)]
-	data = bytes.TrimPrefix(data, []byte("goroutine "))
-	data = data[:bytes.IndexByte(data, ' ')]
-	id, _ := strconv.ParseUint(string(data), 10, 64)
+	id := goid.Get()
 	if id == 0 {
 		id = invalidGoroutineId
 	}
-	return id
+	return uint64(id)
 }
 
 type Timeout struct {
@@ -489,19 +484,27 @@ func (s statementStatus) String() string {
 
 // logStatementStatus prints the status of the statement into the log.
 func logStatementStatus(ctx context.Context, ses FeSession, stmt tree.Statement, status statementStatus, err error) {
-	var stmtStr string
-	stm := ses.GetStmtInfo()
-	if stm == nil {
-		stmtStr = ses.GetSqlOfStmt()
-	} else {
-		stmtStr = stm.Statement
-	}
-	logStatementStringStatus(ctx, ses, stmtStr, status, err)
+	logStatementStringStatus(ctx, ses, "", status, err)
 }
 
+// logStatementStringStatus
+// if stmtStr == "", get the query statement from FeSession or motrace.StatementInfo (which migrate from logStatementStatus).
+// This op is aim to avoid string copy in 'status == success' case.
 func logStatementStringStatus(ctx context.Context, ses FeSession, stmtStr string, status statementStatus, err error) {
-	str := SubStringFromBegin(stmtStr, int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))
 	var outBytes, outPacket int64
+	var getFormatedSqlStr = func() string {
+		var str = stmtStr
+		if len(stmtStr) == 0 {
+			if stm := ses.GetStmtInfo(); stm == nil {
+				str = ses.GetSqlOfStmt()
+			} else {
+				// case `execute __prepared_stmt_id__;`: this value holds the raw prepare statement and raw args.
+				str = stm.CopyStatementInfo()
+			}
+		}
+		str = SubStringFromBegin(str, int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))
+		return str
+	}
 	switch resper := ses.GetResponser().(type) {
 	case *MysqlResp:
 		outBytes, outPacket = resper.mysqlRrWr.CalculateOutTrafficBytes(true)
@@ -509,9 +512,13 @@ func logStatementStringStatus(ctx context.Context, ses FeSession, stmtStr string
 	}
 
 	if status == success {
-		ses.Debug(ctx, "query trace status", logutil.StatementField(str), logutil.StatusField(status.String()))
+		if ses.LogDebug() {
+			str := getFormatedSqlStr()
+			ses.Debug(ctx, "query trace status", logutil.StatementField(str), logutil.StatusField(status.String()))
+		}
 		err = nil // make sure: it is nil for EndStatement
 	} else {
+		str := getFormatedSqlStr()
 		ses.Error(
 			ctx,
 			"query trace status",
@@ -706,28 +713,37 @@ const (
 // execute.... // prepare stmt1 from .... ; set var1 = val1 ; set var2 = val2 ;
 // Format 2: COM_STMT_EXECUTE
 // execute.... // prepare stmt1 from .... ; param0 ; param1 ...
-func makeExecuteSql(ctx context.Context, ses *Session, stmt tree.Statement) string {
+func makeExecuteSql(ctx context.Context, ses *Session, stmt tree.Statement, binExec bool, prepareName string) string {
 	if ses == nil || stmt == nil {
 		return ""
+	}
+	isExec := false
+	name := ""
+	var Variables []*tree.VarExpr
+	if binExec {
+		isExec = true
+		name = prepareName
+	} else if t, ok := stmt.(*tree.Execute); ok {
+		isExec = true
+		name = string(t.Name)
+		Variables = t.Variables
 	}
 	preSql := ""
 	bb := &strings.Builder{}
 	//fill prepare parameters
-	switch t := stmt.(type) {
-	case *tree.Execute:
-		name := string(t.Name)
+	if isExec {
 		prepareStmt, err := ses.GetPrepareStmt(ctx, name)
 		if err != nil || prepareStmt == nil {
-			break
+			return ""
 		}
 		preSql = strings.TrimSpace(prepareStmt.Sql)
 		bb.WriteString(preSql)
 		bb.WriteString(" ; ")
-		if len(t.Variables) != 0 {
+		if len(Variables) != 0 {
 			//for EXECUTE ... USING statement. append variables if there is.
 			//get SET VAR sql
-			setVarSqls := make([]string, len(t.Variables))
-			for i, v := range t.Variables {
+			setVarSqls := make([]string, len(Variables))
+			for i, v := range Variables {
 				userVal, err := ses.GetUserDefinedVar(v.Name)
 				if err == nil && userVal != nil && len(userVal.Sql) != 0 {
 					setVarSqls[i] = userVal.Sql
@@ -750,8 +766,6 @@ func makeExecuteSql(ctx context.Context, ses *Session, stmt tree.Statement) stri
 			}
 			bb.WriteString(strings.Join(paramValues, " ; "))
 		}
-	default:
-		return ""
 	}
 	return bb.String()
 }
@@ -1146,10 +1160,15 @@ type UserInput struct {
 	sqlSourceType       []string
 	isRestore           bool
 	isBinaryProtExecute bool
+	// isInternalInput mark this UserInput is come from mo internal.
+	// replace old logic: (stmt != nil)
+	// cc isInternal()
+	isInternalInput bool
 	// operator account, the account executes restoration
 	// e.g. sys takes a snapshot sn1 for acc1, then restores acc1 from snapshot sn1. In this scenario, sys is the operator account
-	opAccount uint32
-	toAccount uint32
+	isRestoreByTs bool
+	opAccount     uint32
+	toAccount     uint32
 }
 
 func (ui *UserInput) getSql() string {
@@ -1181,13 +1200,13 @@ func (ui *UserInput) getSqlSourceTypes() []string {
 // it means the statement is not from any client.
 // currently, we use it to handle the 'set_var' statement.
 func (ui *UserInput) isInternal() bool {
-	return ui.getStmt() != nil
+	return ui.isInternalInput
 }
 
 func (ui *UserInput) genSqlSourceType(ses FeSession) {
 	sql := ui.getSql()
 	ui.sqlSourceType = nil
-	if ui.getStmt() != nil {
+	if ui.isInternal() {
 		ui.sqlSourceType = append(ui.sqlSourceType, constant.InternalSql)
 		return
 	}
@@ -1540,10 +1559,14 @@ rule:
 	it means all most all string can be legal.
 */
 func dbNameIsLegal(name string) bool {
+	name = strings.TrimSpace(name)
 	if hasSpecialChars(name) {
 		return false
 	}
-	name = strings.TrimSpace(name)
+	if name == cdc.MatchAll {
+		return true
+	}
+
 	createDBSqls := []string{
 		"create database " + name,
 		"create database `" + name + "`",
@@ -1561,10 +1584,14 @@ rule:
 	it means all most all string can be legal.
 */
 func tableNameIsLegal(name string) bool {
+	name = strings.TrimSpace(name)
 	if hasSpecialChars(name) {
 		return false
 	}
-	name = strings.TrimSpace(name)
+	if name == cdc.MatchAll {
+		return true
+	}
+
 	createTableSqls := []string{
 		"create table " + name + "(a int)",
 		"create table `" + name + "`(a int)",
@@ -1669,7 +1696,7 @@ func extractUriInfo(ctx context.Context, uri string, uriPrefix string) (string, 
 }
 
 func buildTableDefFromMoColumns(ctx context.Context, accountId uint64, dbName, table string, ses FeSession) (*plan.TableDef, error) {
-	bh := ses.GetShareTxnBackgroundExec(ctx, false)
+	bh := NewShareTxnBackgroundExec(ctx, ses, false)
 	defer bh.Close()
 	var (
 		sql     string
@@ -1823,8 +1850,4 @@ func (lca *LeakCheckAllocator) CheckBalance() bool {
 	lca.Lock()
 	defer lca.Unlock()
 	return lca.allocated == lca.freed && len(lca.records) == 0
-}
-
-func Slice(s string) []byte {
-	return unsafe.Slice(unsafe.StringData(s), len(s))
 }

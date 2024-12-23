@@ -21,12 +21,10 @@ import (
 	"sort"
 	"strconv"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/message"
-
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 )
 
 var _ NodeDescribe = &NodeDescribeImpl{}
@@ -46,6 +44,7 @@ func NewNodeDescriptionImpl(node *plan.Node) *NodeDescribeImpl {
 }
 
 const TableScan = "Table Scan"
+const IndexTableScan = "Index Table Scan"
 const ExternalScan = "External Scan"
 
 func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *ExplainOptions) (string, error) {
@@ -60,6 +59,9 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 		pname = "Values Scan"
 	case plan.Node_TABLE_SCAN:
 		pname = TableScan
+		if ndesc.Node.IndexScanInfo.IsIndexScan {
+			pname = IndexTableScan
+		}
 	case plan.Node_EXTERNAL_SCAN:
 		pname = ExternalScan
 	case plan.Node_SOURCE_SCAN:
@@ -144,10 +146,10 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 		pname = "Lock"
 	case plan.Node_APPLY:
 		pname = "CROSS APPLY"
+	case plan.Node_MULTI_UPDATE:
+		pname = "Multi Update"
 	case plan.Node_POSTDML:
 		pname = "Post DML"
-	//case plan.Node_MULTI_UPDATE:
-	//	pname = "Multi Update"
 	default:
 		panic("error node type")
 	}
@@ -166,20 +168,10 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 		case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_MATERIAL_SCAN, plan.Node_INSERT, plan.Node_SOURCE_SCAN:
 			buf.WriteString(" on ")
 			if ndesc.Node.ObjRef != nil {
-				if ndesc.Node.ParentObjRef == nil || options.CmpContext == nil { // original table
+				if ndesc.Node.IndexScanInfo.IsIndexScan {
+					buf.WriteString(ndesc.Node.IndexScanInfo.BelongToTable + "." + ndesc.Node.IndexScanInfo.IndexName)
+				} else {
 					buf.WriteString(ndesc.Node.ObjRef.GetSchemaName() + "." + ndesc.Node.ObjRef.GetObjName())
-				} else { // index table, need to get index table name
-					scanSnapshot := ndesc.Node.ScanSnapshot
-					if scanSnapshot == nil {
-						scanSnapshot = &plan.Snapshot{}
-					}
-					_, origTableDef := options.CmpContext.Resolve(ndesc.Node.ParentObjRef.GetSchemaName(), ndesc.Node.ParentObjRef.GetObjName(), scanSnapshot)
-					for i := range origTableDef.Indexes {
-						if origTableDef.Indexes[i].IndexTableName == ndesc.Node.ObjRef.GetObjName() {
-							buf.WriteString(ndesc.Node.ObjRef.GetSchemaName() + "." + origTableDef.Indexes[i].IndexName + "(index)")
-							break
-						}
-					}
 				}
 			} else if ndesc.Node.TableDef != nil {
 				buf.WriteString(ndesc.Node.TableDef.GetName())
@@ -449,7 +441,25 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(ctx context.Context, options *Explai
 			lines = append(lines, msgInfo)
 		}
 	}
+
+	if ndesc.Node.NodeType == plan.Node_FUNCTION_SCAN {
+		msg, err := ndesc.GetFullTextSql(ctx, options)
+		if err != nil {
+			return nil, err
+		}
+		if len(msg) > 0 {
+			lines = append(lines, msg)
+		}
+	}
 	return lines, nil
+}
+
+func (ndesc *NodeDescribeImpl) GetFullTextSql(ctx context.Context, options *ExplainOptions) (string, error) {
+	if options.Verbose && len(ndesc.Node.GetStats().Sql) > 0 {
+		result := "Sql: " + ndesc.Node.GetStats().Sql
+		return result, nil
+	}
+	return "", nil
 }
 
 func (ndesc *NodeDescribeImpl) GetProjectListInfo(ctx context.Context, options *ExplainOptions) (string, error) {
@@ -469,6 +479,9 @@ func (ndesc *NodeDescribeImpl) GetJoinTypeInfo(ctx context.Context, options *Exp
 		if ndesc.Node.JoinType == plan.Node_SEMI || ndesc.Node.JoinType == plan.Node_ANTI {
 			result = "Join Type: RIGHT " + ndesc.Node.JoinType.String()
 		}
+	}
+	if ndesc.Node.JoinType == plan.Node_DEDUP {
+		result += " (" + ndesc.Node.OnDuplicateAction.String() + ")"
 	}
 	if ndesc.Node.Stats.HashmapStats != nil && ndesc.Node.Stats.HashmapStats.HashOnPK {
 		result += "   hashOnPK"
@@ -546,6 +559,87 @@ func (ndesc *NodeDescribeImpl) GetPartitionPruneInfo(ctx context.Context, option
 	return buf.String(), nil
 }
 
+func (ndesc *NodeDescribeImpl) GetUpdateCtxInfo(ctx context.Context, options *ExplainOptions) ([]string, error) {
+	var lines []string
+	if options.Format == EXPLAIN_FORMAT_TEXT {
+		for _, updateCtx := range ndesc.Node.UpdateCtxList {
+			buf := bytes.NewBuffer(make([]byte, 0, 512))
+			buf.WriteString("Table: " + updateCtx.TableDef.Name)
+			if len(updateCtx.InsertCols) > 0 {
+				buf.WriteString(" Insert Columns: ")
+				first := true
+				for i := range updateCtx.InsertCols {
+					if !first {
+						buf.WriteString(", ")
+					}
+					first = false
+					describeColRef(&updateCtx.InsertCols[i], buf)
+				}
+			}
+			if len(updateCtx.DeleteCols) > 0 {
+				buf.WriteString(" Delete Columns: ")
+				first := true
+				for i := range updateCtx.DeleteCols {
+					if !first {
+						buf.WriteString(", ")
+					}
+					first = false
+					describeColRef(&updateCtx.DeleteCols[i], buf)
+				}
+			}
+			lines = append(lines, buf.String())
+		}
+	} else if options.Format == EXPLAIN_FORMAT_JSON {
+		return nil, moerr.NewNYI(ctx, "explain format json")
+	} else if options.Format == EXPLAIN_FORMAT_DOT {
+		return nil, moerr.NewNYI(ctx, "explain format dot")
+	}
+	return lines, nil
+}
+
+func (ndesc *NodeDescribeImpl) GetDedupJoinCtxInfo(ctx context.Context, options *ExplainOptions) ([]string, error) {
+	var lines []string
+	if options.Format == EXPLAIN_FORMAT_TEXT {
+		dedupJoinCtx := ndesc.Node.DedupJoinCtx
+		buf := bytes.NewBuffer(make([]byte, 0, 512))
+		buf.WriteString("Old columns: ")
+		first := true
+		for i := range dedupJoinCtx.OldColList {
+			if !first {
+				buf.WriteString(", ")
+			}
+			first = false
+			describeColRef(&dedupJoinCtx.OldColList[i], buf)
+		}
+
+		buf.WriteString(" Update index list: ")
+		first = true
+		for i := range dedupJoinCtx.UpdateColIdxList {
+			if !first {
+				buf.WriteString(", ")
+			}
+			first = false
+			buf.WriteString(strconv.Itoa(int(dedupJoinCtx.UpdateColIdxList[i])))
+		}
+
+		buf.WriteString(" Update expr list: ")
+		first = true
+		for i := range dedupJoinCtx.UpdateColIdxList {
+			if !first {
+				buf.WriteString(", ")
+			}
+			first = false
+			describeExpr(ctx, dedupJoinCtx.UpdateColExprList[i], options, buf)
+		}
+
+		lines = append(lines, buf.String())
+	} else if options.Format == EXPLAIN_FORMAT_JSON {
+		return nil, moerr.NewNYI(ctx, "explain format json")
+	} else if options.Format == EXPLAIN_FORMAT_DOT {
+		return nil, moerr.NewNYI(ctx, "explain format dot")
+	}
+	return lines, nil
+}
 func (ndesc *NodeDescribeImpl) GetFilterConditionInfo(ctx context.Context, options *ExplainOptions) (string, error) {
 	buf := bytes.NewBuffer(make([]byte, 0, 512))
 	buf.WriteString("Filter Cond: ")

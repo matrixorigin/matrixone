@@ -22,6 +22,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/models"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -638,7 +639,7 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 		})
 	case plan.Node_MATERIAL:
 		labels = append(labels, models.Label{
-			Name:  Label_Meterial,
+			Name:  Label_Material,
 			Value: []string{},
 		})
 	case plan.Node_APPLY:
@@ -724,6 +725,14 @@ const S3Put = "S3 Put Count"
 const S3Get = "S3 Get Count"
 const S3Delete = "S3 Delete Count"
 const S3DeleteMul = "S3 DeleteMul Count"
+const FSCacheRead = "FileService Cache Read"
+const FSCacheHit = "FileService Cache Hit"
+const FSCacheMemoryRead = "FileService Cache Memory Read"
+const FSCacheMemoryHit = "FileService Cache Memory Hit"
+const FSCacheDiskRead = "FileService Cache Disk Read"
+const FSCacheDiskHit = "FileService Cache Disk Hit"
+const FSCacheRemoteRead = "FileService Cache Remote Read"
+const FSCacheRemoteHit = "FileService Cache Remote Hit"
 
 func GetStatistic4Trace(ctx context.Context, node *plan.Node, options *ExplainOptions) (s statistic.StatsArray) {
 	s.Reset()
@@ -732,7 +741,7 @@ func GetStatistic4Trace(ctx context.Context, node *plan.Node, options *ExplainOp
 		s.WithTimeConsumed(float64(analyzeInfo.TimeConsumed)).
 			WithMemorySize(float64(analyzeInfo.MemorySize)).
 			// cc https://github.com/matrixorigin/MO-Cloud/issues/4175#issuecomment-2375813480
-			WithS3IOInputCount(float64(analyzeInfo.S3Put)).
+			WithS3IOInputCount(float64(analyzeInfo.S3Put) + objectio.EstimateS3Input(analyzeInfo.WrittenRows) + objectio.EstimateS3Input(analyzeInfo.DeletedRows)).
 			WithS3IOOutputCount(float64(analyzeInfo.S3Head + analyzeInfo.S3Get)).
 			WithS3IOListCount(float64(analyzeInfo.S3List)).
 			WithS3IODeleteCount(float64(analyzeInfo.S3Delete + analyzeInfo.S3DeleteMul))
@@ -857,6 +866,48 @@ func (m MarshalNodeImpl) GetStatistics(ctx context.Context, options *ExplainOpti
 				Value: analyzeInfo.S3DeleteMul,
 				Unit:  Statistic_Unit_count, //"count",
 			},
+			//--------------------------------------------------------------------------------------
+			{
+				Name:  FSCacheRead,
+				Value: analyzeInfo.CacheRead,
+				Unit:  Statistic_Unit_count, //"count",
+			},
+			{
+				Name:  FSCacheHit,
+				Value: analyzeInfo.CacheHit,
+				Unit:  Statistic_Unit_count, //"count",
+			},
+			{
+				Name:  FSCacheMemoryRead,
+				Value: analyzeInfo.CacheMemoryRead,
+				Unit:  Statistic_Unit_count, //"count",
+			},
+			{
+				Name:  FSCacheMemoryHit,
+				Value: analyzeInfo.CacheMemoryHit,
+				Unit:  Statistic_Unit_count, //"count",
+			},
+			{
+				Name:  FSCacheDiskRead,
+				Value: analyzeInfo.CacheDiskRead,
+				Unit:  Statistic_Unit_count, //"count",
+			},
+			{
+				Name:  FSCacheDiskHit,
+				Value: analyzeInfo.CacheDiskHit,
+				Unit:  Statistic_Unit_count, //"count",
+			},
+			{
+				Name:  FSCacheRemoteRead,
+				Value: analyzeInfo.CacheRemoteRead,
+				Unit:  Statistic_Unit_count, //"count",
+			},
+			{
+				Name:  FSCacheRemoteHit,
+				Value: analyzeInfo.CacheRemoteHit,
+				Unit:  Statistic_Unit_count, //"count",
+			},
+			//--------------------------------------------------------------------------------------
 		}
 
 		nw := []models.StatisticValue{

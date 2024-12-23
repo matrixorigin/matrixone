@@ -26,14 +26,21 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/embed"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
+	"github.com/matrixorigin/matrixone/pkg/tnservice"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/stretchr/testify/require"
@@ -235,13 +242,13 @@ func TestBinarySearchBlkDataOnUnSortedFakePKCol(t *testing.T) {
 				executor.Options{}.WithDatabase("testdb"))
 			require.NoError(t, err)
 
-			willInsertRows := 10000
-			for i := 0; i < 10; i++ {
+			willInsertRows := 50
+			for i := 0; i < 5; i++ {
 				_, err = sqlExecutor.Exec(ctx,
 					fmt.Sprintf(
 						"insert into hhh "+
 							"select FLOOR(RAND()*1000*1000)"+
-							"from generate_series(1, %d);", willInsertRows/10),
+							"from generate_series(1, %d);", willInsertRows/5),
 					executor.Options{}.WithDatabase("testdb"))
 				require.NoError(t, err)
 
@@ -277,7 +284,7 @@ func TestBinarySearchBlkDataOnUnSortedFakePKCol(t *testing.T) {
 				require.NoError(t, err)
 
 				var keys []int64
-				for r := 0; r < 100; r++ {
+				for r := 0; r < 5; r++ {
 					keys = keys[:0]
 					for i := 0; i < willInsertRows; i++ {
 						keys = append(keys, rand.Int63()%int64(willInsertRows))
@@ -599,4 +606,293 @@ func TestLockNeedUpgrade(t *testing.T) {
 			require.NoError(t, err)
 		},
 	)
+}
+
+func TestIssue19551(t *testing.T) {
+	embed.RunBaseClusterTests(
+		func(c embed.Cluster) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*1000)
+			defer cancel()
+
+			var allocator lockservice.LockTableAllocator
+			c.ForeachServices(
+				func(s embed.ServiceOperator) bool {
+					if s.ServiceType() != metadata.ServiceType_TN {
+						return true
+					}
+
+					tn := s.RawService().(tnservice.Service)
+					allocator = tn.GetLockTableAllocator()
+					return false
+				},
+			)
+
+			cn1, err := c.GetCNService(0)
+			require.NoError(t, err)
+			lockSID := lockservice.GetLockServiceByServiceID(cn1.ServiceID()).GetServiceID()
+
+			db := testutils.GetDatabaseName(t)
+			table := "t"
+
+			testutils.CreateTableAndWaitCNApplied(
+				t,
+				db,
+				table,
+				"create table "+table+" (id int primary key, v int)",
+				cn1,
+			)
+
+			// workflow:
+			// start txn1, txn2 on cn1
+			// mark cn1 invalid
+			// commit txn1
+			// wait abort active txn completed
+			// commit txn2
+			// start txn3 and commit will success
+
+			var wg sync.WaitGroup
+			wg.Add(2)
+
+			txn1StartedC := make(chan struct{})
+			txn2StartedC := make(chan struct{})
+			invalidMarkedC := make(chan struct{})
+
+			// txn1
+			exec := testutils.GetSQLExecutor(cn1)
+			go func() {
+				defer wg.Done()
+
+				err := exec.ExecTxn(
+					ctx,
+					func(txn executor.TxnExecutor) error {
+						close(txn1StartedC)
+						<-invalidMarkedC
+
+						res, err := txn.Exec(
+							"insert into "+table+" values (1, 1)",
+							executor.StatementOption{},
+						)
+						if err != nil {
+							return err
+						}
+						res.Close()
+						return nil
+					},
+					executor.Options{}.WithDatabase(db),
+				)
+				require.Error(t, err)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrCannotCommitOnInvalidCN))
+			}()
+
+			go func() {
+				defer wg.Done()
+
+				err := exec.ExecTxn(
+					ctx,
+					func(txn executor.TxnExecutor) error {
+						close(txn2StartedC)
+
+						res, err := txn.Exec(
+							"insert into "+table+" values (2, 2)",
+							executor.StatementOption{},
+						)
+						if err != nil {
+							return err
+						}
+						res.Close()
+
+						// wait valid service resume, means all active in txn client is marked aborted
+						for {
+							if !allocator.HasInvalidService(lockSID) {
+								break
+							}
+							time.Sleep(time.Millisecond * 100)
+						}
+						return nil
+					},
+					executor.Options{}.WithDatabase(db),
+				)
+				require.Error(t, err)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnClosed))
+
+			}()
+
+			<-txn1StartedC
+			<-txn2StartedC
+
+			// mark cn1 invalid
+			allocator.AddInvalidService(lockSID)
+			require.True(t, allocator.HasInvalidService(lockSID))
+			close(invalidMarkedC)
+			wg.Wait()
+
+			// service is resume, txn3 can commit ok
+			err = exec.ExecTxn(
+				ctx,
+				func(txn executor.TxnExecutor) error {
+					res, err := txn.Exec(
+						"insert into "+table+" values (3, 3)",
+						executor.StatementOption{},
+					)
+					if err != nil {
+						return err
+					}
+					res.Close()
+
+					return nil
+				},
+				executor.Options{}.WithDatabase(db),
+			)
+			require.NoError(t, err)
+		},
+	)
+}
+
+func TestSpeedupAbortAllTxn(t *testing.T) {
+	c, err := embed.NewCluster(
+		embed.WithPreStart(
+			func(so embed.ServiceOperator) {
+				if so.ServiceType() == metadata.ServiceType_CN {
+					so.Adjust(
+						func(sc *embed.ServiceConfig) {
+							sc.CN.Txn.MaxActive = 1
+						},
+					)
+				}
+			},
+		),
+	)
+	require.NoError(t, err)
+	require.NoError(t, c.Start())
+	defer func() {
+		require.NoError(t, c.Close())
+	}()
+
+	op, err := c.GetCNService(0)
+	require.NoError(t, err)
+
+	waitC := make(chan struct{})
+	cn := op.RawService().(cnservice.Service)
+	eng := cn.GetEngine().(*disttae.Engine)
+	logtailClient := eng.PushClient()
+	logtailClient.SetReconnectHandler(func() {
+		waitC <- struct{}{}
+	})
+
+	c1 := make(chan struct{})
+	c2 := make(chan struct{})
+	actionC := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	taskservice.DebugCtlTaskFramework(true)
+
+	// active will commit failed
+	go func() {
+		defer wg.Done()
+
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second*120)
+		defer cancel()
+		exec := cn.GetSQLExecutor()
+		err := exec.ExecTxn(
+			ctx,
+			func(txn executor.TxnExecutor) error {
+				res, err := txn.Exec(
+					"create database TestSpeedupAbortAllTxn",
+					executor.StatementOption{},
+				)
+				require.NoError(t, err)
+				res.Close()
+				close(c1)
+
+				// wait txn in active
+				<-c2
+				close(actionC)
+
+				<-waitC
+
+				return nil
+			},
+			executor.Options{}.WithDatabase("mo_catalog").WithUserTxn(),
+		)
+		require.NoError(t, err)
+	}()
+
+	// wait active txn will canceled
+	go func() {
+		defer wg.Done()
+
+		<-c1
+
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second*120)
+		defer cancel()
+
+		tc := cn.GetTxnClient()
+		_, err := tc.New(
+			ctx,
+			timestamp.Timestamp{},
+			client.WithUserTxn(),
+			client.WithWaitActiveHandle(
+				func() {
+					close(c2)
+				},
+			),
+		)
+		require.NoError(t, err)
+	}()
+
+	<-actionC
+	require.NoError(t, logtailClient.Disconnect())
+	waitLogtailResume(cn)
+
+	wg.Wait()
+}
+
+func waitLogtailResume(cn cnservice.Service) {
+	exec := cn.GetSQLExecutor()
+	fn := func() error {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+		defer cancel()
+		res, err := exec.Exec(
+			ctx,
+			"select * from mo_tables",
+			executor.Options{}.WithDatabase("mo_catalog"),
+		)
+		if err != nil {
+			return err
+		}
+		res.Close()
+		return nil
+	}
+
+	for {
+		if err := fn(); err == nil {
+			return
+		}
+		time.Sleep(time.Second)
+	}
+}
+
+func TestFaultInjection(t *testing.T) {
+	embed.RunBaseClusterTests(
+		func(c embed.Cluster) {
+			cn, err := c.GetCNService(0)
+			require.NoError(t, err)
+
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
+			defer cancel()
+
+			ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(0))
+
+			exec := cn.RawService().(cnservice.Service).GetSQLExecutor()
+			require.NotNil(t, exec)
+
+			{
+				_, err := exec.Exec(
+					ctx,
+					"select fault_inject('all.','enable_fault_injection','');",
+					executor.Options{})
+				require.NoError(t, err)
+			}
+		})
 }

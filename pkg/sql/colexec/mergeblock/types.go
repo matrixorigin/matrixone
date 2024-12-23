@@ -121,6 +121,10 @@ func (mergeBlock *MergeBlock) Free(proc *process.Process, pipelineFailed bool, e
 	mergeBlock.cleanMp(proc)
 }
 
+func (mergeBlock *MergeBlock) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
+	return input, nil
+}
+
 func (mergeBlock *MergeBlock) GetMetaLocBat(src *batch.Batch, proc *process.Process) {
 	if len(mergeBlock.container.mp) > 0 {
 		for _, bat := range mergeBlock.container.mp {
@@ -199,7 +203,7 @@ func splitObjectStats(mergeBlock *MergeBlock, proc *process.Process,
 		destVec := mergeBlock.container.mp[int(tblIdx[idx])].Vecs[1]
 
 		if needLoad {
-			crs := new(perfcounter.CounterSet)
+			crs := analyzer.GetOpCounterSet()
 			newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
 
 			// comes from old version cn
@@ -290,6 +294,6 @@ func (mergeBlock *MergeBlock) cleanMp(proc *process.Process) {
 	mergeBlock.container.mp2 = nil
 }
 
-func (mergeBlock *MergeBlock) AffectedRows() uint64 {
+func (mergeBlock *MergeBlock) GetAffectedRows() uint64 {
 	return mergeBlock.container.affectedRows
 }

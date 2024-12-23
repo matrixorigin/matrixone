@@ -19,6 +19,7 @@ import (
 	"errors"
 	"hash/crc32"
 	"hash/crc64"
+	"os"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -443,6 +444,8 @@ func TestRangeLockWithConflict(t *testing.T) {
 					ctx context.Context,
 					s *service,
 					lt *localLockTable) {
+					err := os.Setenv("mo_reuse_enable_checker", "true")
+					require.NoError(t, err)
 					option := newTestRangeExclusiveOptions()
 					rows := newTestRows(1, 2)
 					txn1 := newTestTxnID(1)
@@ -454,7 +457,7 @@ func TestRangeLockWithConflict(t *testing.T) {
 					}
 
 					// txn1 hold the lock
-					_, err := s.Lock(ctx, table, rows, txn1, option)
+					_, err = s.Lock(ctx, table, rows, txn1, option)
 					require.NoError(t, err)
 
 					// txn2 blocked by txn1
@@ -1464,7 +1467,7 @@ func TestIssue3693(t *testing.T) {
 				time.Second*10)
 			defer cancel()
 
-			alloc.registerService(l.serviceID, 0)
+			alloc.registerService(l.serviceID)
 
 			alloc.setRestartService("s1")
 			for {
@@ -3006,6 +3009,22 @@ func TestCannotCommit(t *testing.T) {
 	)
 }
 
+func TestResumeInvalidService(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(alloc *lockTableAllocator, s []*service) {
+			alloc.inactiveService.Store(s[0].serviceID, time.Now())
+			_, err := alloc.Valid(s[0].serviceID, []byte("testTxn"), nil)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrCannotCommitOnInvalidCN))
+
+			require.NoError(t, s[0].Resume())
+			_, err = alloc.Valid(s[0].serviceID, []byte("testTxn"), nil)
+			require.NoError(t, err)
+		},
+	)
+}
+
 func TestRetryLockSuccInRollingRestartCN(t *testing.T) {
 	runLockServiceTests(
 		t,
@@ -3449,6 +3468,82 @@ func TestLockResultWithConflictAndTxnAborted(t *testing.T) {
 	)
 }
 
+func TestIssue19913(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(alloc *lockTableAllocator, s []*service) {
+			err := os.Setenv("mo_reuse_enable_checker", "true")
+			require.NoError(t, err)
+			l1 := s[0]
+
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				time.Second*10)
+			defer cancel()
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			_, err = l1.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn1"),
+				option)
+			require.NoError(t, err)
+
+			_, err = l1.Lock(
+				ctx,
+				0,
+				[][]byte{{2}},
+				[]byte("txn2"),
+				option)
+			require.NoError(t, err)
+
+			var wg sync.WaitGroup
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				// blocked by txn1
+				_, err := l1.Lock(
+					ctx,
+					0,
+					newTestRows(1, 2),
+					[]byte("txn3"),
+					option)
+				require.NoError(t, err)
+			}()
+
+			waitWaiters(t, l1, 0, []byte{1}, 1)
+
+			w := l1.activeTxnHolder.getActiveTxn([]byte("txn3"), false, "").blockedWaiters[0]
+
+			require.NoError(t, l1.Unlock(
+				ctx,
+				[]byte("txn1"),
+				timestamp.Timestamp{}))
+
+			waitWaiters(t, l1, 0, []byte{2}, 1)
+
+			require.NoError(t, l1.Unlock(
+				ctx,
+				[]byte("txn2"),
+				timestamp.Timestamp{}))
+			wg.Wait()
+
+			require.NoError(t, l1.Unlock(
+				ctx,
+				[]byte("txn3"),
+				timestamp.Timestamp{}))
+
+			require.Less(t, w.refCount.Load(), int32(2))
+		},
+	)
+}
+
 func TestRowLockWithConflictAndUnlock(t *testing.T) {
 	table := uint64(0)
 	getRunner(false)(
@@ -3857,7 +3952,7 @@ func TestIssue14008(t *testing.T) {
 					r1 *pb.Request,
 					r2 *pb.Response,
 					cs morpc.ClientSession) {
-					writeResponse(ctx, getLogger(s1.GetConfig().ServiceID), cf, r2, ErrTxnNotFound, cs)
+					writeResponse(getLogger(s1.GetConfig().ServiceID), cf, r2, ErrTxnNotFound, cs)
 				})
 			var wg sync.WaitGroup
 			for i := 0; i < 20; i++ {

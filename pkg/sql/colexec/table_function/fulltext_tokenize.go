@@ -16,19 +16,18 @@ package table_function
 
 import (
 	"encoding/json"
-	"strings"
 
-	"github.com/matrixorigin/matrixone/pkg/common/datalink"
-	"github.com/matrixorigin/matrixone/pkg/common/fulltext"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/datalink"
+	"github.com/matrixorigin/matrixone/pkg/fulltext"
+	"github.com/matrixorigin/matrixone/pkg/monlp/tokenizer"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/matrixorigin/monlp/tokenizer"
 )
 
 type FullTextEntry struct {
@@ -43,8 +42,9 @@ type Document struct {
 
 type tokenizeState struct {
 	inited bool
-	called bool
 	param  fulltext.FullTextParserParam
+	doc    Document
+	offset int
 	// holding one call batch, tokenizedState owns it.
 	batch *batch.Batch
 }
@@ -53,17 +53,33 @@ func (u *tokenizeState) reset(tf *TableFunction, proc *process.Process) {
 	if u.batch != nil {
 		u.batch.CleanOnlyData()
 	}
-	u.called = false
 }
 
 func (u *tokenizeState) call(tf *TableFunction, proc *process.Process) (vm.CallResult, error) {
-	var res vm.CallResult
-	if u.called {
-		return res, nil
+
+	u.batch.CleanOnlyData()
+
+	// write the batch
+	n := 0
+	for i := u.offset; i < len(u.doc.Words) && n < 8192; i++ {
+		// type of id follow primary key column
+		vector.AppendAny(u.batch.Vecs[0], u.doc.Words[i].DocId, false, proc.Mp())
+		// pos
+		vector.AppendFixed[int32](u.batch.Vecs[1], u.doc.Words[i].Pos, false, proc.Mp())
+		// word
+		vector.AppendBytes(u.batch.Vecs[2], []byte(u.doc.Words[i].Word), false, proc.Mp())
+
+		n++
 	}
-	res.Batch = u.batch
-	u.called = true
-	return res, nil
+
+	u.offset += n
+	u.batch.SetRowCount(n)
+
+	if u.batch.RowCount() == 0 {
+		return vm.CancelResult, nil
+	}
+
+	return vm.CallResult{Status: vm.ExecNext, Batch: u.batch}, nil
 }
 
 func (u *tokenizeState) free(tf *TableFunction, proc *process.Process, pipelineFailed bool, err error) {
@@ -75,12 +91,10 @@ func (u *tokenizeState) free(tf *TableFunction, proc *process.Process, pipelineF
 func fulltextIndexTokenizePrepare(proc *process.Process, arg *TableFunction) (tvfState, error) {
 	var err error
 	st := &tokenizeState{}
+
 	arg.ctr.executorsForArgs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, arg.Args)
 	arg.ctr.argVecs = make([]*vector.Vector, len(arg.Args))
 
-	for i := range arg.Attrs {
-		arg.Attrs[i] = strings.ToUpper(arg.Attrs[i])
-	}
 	return st, err
 
 }
@@ -98,10 +112,14 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 		}
 
 		u.batch = tf.createResultBatch()
+		u.doc = Document{Words: make([]FullTextEntry, 0, 512)}
 		u.inited = true
 	}
 
-	u.called = false
+	// reset slice
+	u.doc.Words = u.doc.Words[:0]
+	u.offset = 0
+
 	// cleanup the batch
 	u.batch.CleanOnlyData()
 
@@ -117,11 +135,8 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 	}
 
 	if isnull {
-		u.batch.SetRowCount(0)
 		return nil
 	}
-
-	var doc Document
 
 	switch u.param.Parser {
 	case "", "ngram", "default":
@@ -132,7 +147,11 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 				c += "\n"
 			}
 			data := tf.ctr.argVecs[i].GetStringAt(nthRow)
-			if tf.ctr.argVecs[i].GetType().Oid == types.T_datalink {
+
+			// fix issue #19948 return vector type is not datalink even the input argurment type is datalink
+			// so we have to check the input argument instead of vector
+			//if tf.ctr.argVecs[i].GetType().Oid == types.T_datalink {
+			if types.T(tf.Args[i].Typ.Id) == types.T_datalink {
 				// datalink
 				dl, err := datalink.NewDatalink(data, proc)
 				if err != nil {
@@ -155,14 +174,16 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 			slen := t.TokenBytes[0]
 			word := string(t.TokenBytes[1 : slen+1])
 
-			doc.Words = append(doc.Words, FullTextEntry{DocId: id, Word: word, Pos: t.BytePos})
+			u.doc.Words = append(u.doc.Words, FullTextEntry{DocId: id, Word: word, Pos: t.BytePos})
 		}
 	case "json":
+		joffset := int32(0)
 		for i := 1; i < vlen; i++ {
 			c := tf.ctr.argVecs[i].GetRawBytesAt(nthRow)
 
 			var bj bytejson.ByteJson
-			if tf.ctr.argVecs[i].GetType().Oid == types.T_json {
+			//if tf.ctr.argVecs[i].GetType().Oid == types.T_json {
+			if types.T(tf.Args[i].Typ.Id) == types.T_json {
 				if err := bj.Unmarshal(c); err != nil {
 					return err
 				}
@@ -173,26 +194,53 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 				}
 			}
 
+			voffset := int32(0)
 			for t := range bj.TokenizeValue(false) {
-				slen := t.TokenBytes[0]
-				word := string(t.TokenBytes[1 : slen+1])
-				doc.Words = append(doc.Words, FullTextEntry{DocId: id, Word: word, Pos: t.TokenPos})
+				jslen := t.TokenBytes[0]
+				value := string(t.TokenBytes[1 : jslen+1])
+				// tokenize the value
+				tok, _ := tokenizer.NewSimpleTokenizer([]byte(value))
+				for tt := range tok.Tokenize() {
+					tslen := tt.TokenBytes[0]
+					word := string(tt.TokenBytes[1 : tslen+1])
+					u.doc.Words = append(u.doc.Words, FullTextEntry{DocId: id, Word: word, Pos: joffset + voffset + tt.BytePos})
+				}
+				voffset += int32(jslen)
 			}
+
+			joffset += int32(len(c))
+		}
+	case "json_value":
+		joffset := int32(0)
+		for i := 1; i < vlen; i++ {
+			c := tf.ctr.argVecs[i].GetRawBytesAt(nthRow)
+
+			var bj bytejson.ByteJson
+			//if tf.ctr.argVecs[i].GetType().Oid == types.T_json {
+			if types.T(tf.Args[i].Typ.Id) == types.T_json {
+				if err := bj.Unmarshal(c); err != nil {
+					return err
+				}
+			} else {
+
+				if err := json.Unmarshal(c, &bj); err != nil {
+					return err
+				}
+			}
+
+			voffset := int32(0)
+			for t := range bj.TokenizeValue(false) {
+				jslen := t.TokenBytes[0]
+				value := string(t.TokenBytes[1 : jslen+1])
+				u.doc.Words = append(u.doc.Words, FullTextEntry{DocId: id, Word: value, Pos: joffset + voffset})
+				voffset += int32(jslen)
+			}
+
+			joffset += int32(len(c))
 		}
 	default:
 		return moerr.NewInternalError(proc.Ctx, "Invalid fulltext parser")
 	}
 
-	// write the batch
-	for i := range doc.Words {
-		// type of id follow primary key column
-		vector.AppendAny(u.batch.Vecs[0], doc.Words[i].DocId, false, proc.Mp())
-		// pos
-		vector.AppendFixed[int32](u.batch.Vecs[1], doc.Words[i].Pos, false, proc.Mp())
-		// word
-		vector.AppendBytes(u.batch.Vecs[2], []byte(doc.Words[i].Word), false, proc.Mp())
-	}
-
-	u.batch.SetRowCount(len(doc.Words))
 	return nil
 }

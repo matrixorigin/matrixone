@@ -28,8 +28,7 @@ import (
 )
 
 var (
-	_                  policy = (*basic)(nil)
-	defaultBasicConfig        = &BasicPolicyConfig{
+	defaultBasicConfig = &BasicPolicyConfig{
 		MergeMaxOneRun:    common.DefaultMaxMergeObjN,
 		MaxOsizeMergedObj: common.DefaultMaxOsizeObjMB * common.Const1MBytes,
 		ObjectMinOsize:    common.DefaultMinOsizeQualifiedMB * common.Const1MBytes,

@@ -198,9 +198,7 @@ func (obj *aobject) GetDuplicatedRows(
 	txn txnif.TxnReader,
 	keys containers.Vector,
 	keysZM index.ZM,
-	precommit bool,
-	checkWWConflict bool,
-	skipCommittedBeforeTxnForAblk bool,
+	from, to types.TS,
 	rowIDs containers.Vector,
 	mp *mpool.MPool,
 ) (err error) {
@@ -211,64 +209,72 @@ func (obj *aobject) GetDuplicatedRows(
 	}()
 	node := obj.PinNode()
 	defer node.Unref()
-	maxRow := uint32(math.MaxUint32)
-	if !precommit {
-		maxRow, err = obj.GetMaxRowByTS(txn.GetStartTS())
-	}
 	if !node.IsPersisted() {
+		fn := func() (minv, maxv int32, err error) {
+			obj.RUnlock()
+			defer obj.RLock()
+			if maxv, err = obj.GetMaxRowByTS(to); err != nil {
+				return
+			}
+			minv, err = obj.GetMaxRowByTS(from)
+			return
+		}
 		return node.GetDuplicatedRows(
 			ctx,
 			txn,
-			maxRow,
+			fn,
 			keys,
 			keysZM,
 			rowIDs,
-			precommit,
-			checkWWConflict,
-			skipCommittedBeforeTxnForAblk,
 			mp,
 		)
 	} else {
 		return obj.persistedGetDuplicatedRows(
 			ctx,
 			txn,
-			skipCommittedBeforeTxnForAblk,
+			from, to,
 			keys,
 			keysZM,
 			rowIDs,
 			true,
-			maxRow,
 			mp,
 		)
 	}
 }
 
-func (obj *aobject) GetMaxRowByTS(ts types.TS) (uint32, error) {
+func (obj *aobject) GetMaxRowByTS(ts types.TS) (int32, error) {
+	if ts.IsEmpty() {
+		return -1, nil
+	}
+	maxTS := types.MaxTs()
+	if ts.EQ(&maxTS) {
+		return math.MaxInt32, nil
+	}
 	node := obj.PinNode()
 	defer node.Unref()
 	if !node.IsPersisted() {
 		obj.RLock()
 		defer obj.RUnlock()
-		return obj.appendMVCC.GetMaxRowByTSLocked(ts), nil
+		return int32(obj.appendMVCC.GetMaxRowByTSLocked(ts)), nil
 	} else {
 		vec, err := obj.LoadPersistedCommitTS(0)
 		if err != nil {
 			return 0, err
 		}
 		defer vec.Close()
-		tsVec := vector.MustFixedColNoTypeCheck[types.TS](vec.GetDownstreamVector())
+		tsVec := vector.MustFixedColNoTypeCheck[types.TS](
+			vec.GetDownstreamVector())
 		for i := range tsVec {
 			if tsVec[i].GT(&ts) {
-				return uint32(i), nil
+				return int32(i), nil
 			}
 		}
-		return uint32(vec.Length()), nil
+		return int32(vec.Length()), nil
 	}
 }
 func (obj *aobject) Contains(
 	ctx context.Context,
 	txn txnif.TxnReader,
-	precommit bool,
 	keys containers.Vector,
 	keysZM index.ZM,
 	mp *mpool.MPool,
@@ -286,14 +292,12 @@ func (obj *aobject) Contains(
 			keys,
 			keysZM,
 			txn,
-			precommit,
 			mp,
 		)
 	} else {
 		return obj.persistedContains(
 			ctx,
 			txn,
-			precommit,
 			keys,
 			keysZM,
 			true,

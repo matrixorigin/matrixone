@@ -11,6 +11,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/models"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 
 	gomock "github.com/golang/mock/gomock"
 	batch "github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -80,6 +81,21 @@ func NewMockComputationWrapper(ctrl *gomock.Controller) *MockComputationWrapper 
 // EXPECT returns an object that allows the caller to indicate expected use.
 func (m *MockComputationWrapper) EXPECT() *MockComputationWrapperMockRecorder {
 	return m.recorder
+}
+
+// BinaryExecute mocks base method.
+func (m *MockComputationWrapper) BinaryExecute() (bool, string) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "BinaryExecute")
+	ret0, _ := ret[0].(bool)
+	ret1, _ := ret[1].(string)
+	return ret0, ret1
+}
+
+// BinaryExecute indicates an expected call of BinaryExecute.
+func (mr *MockComputationWrapperMockRecorder) BinaryExecute() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BinaryExecute", reflect.TypeOf((*MockComputationWrapper)(nil).BinaryExecute))
 }
 
 // Clear mocks base method.
@@ -234,6 +250,20 @@ func (mr *MockComputationWrapperMockRecorder) Plan() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Plan", reflect.TypeOf((*MockComputationWrapper)(nil).Plan))
 }
 
+// RecordCompoundStmt mocks base method.
+func (m *MockComputationWrapper) RecordCompoundStmt(ctx context.Context, statsBytes statistic.StatsArray) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "RecordCompoundStmt", ctx, statsBytes)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// RecordCompoundStmt indicates an expected call of RecordCompoundStmt.
+func (mr *MockComputationWrapperMockRecorder) RecordCompoundStmt(ctx, statsBytes interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RecordCompoundStmt", reflect.TypeOf((*MockComputationWrapper)(nil).RecordCompoundStmt), ctx, statsBytes)
+}
+
 // RecordExecPlan mocks base method.
 func (m *MockComputationWrapper) RecordExecPlan(ctx context.Context, phyPlan *models.PhyPlan) error {
 	m.ctrl.T.Helper()
@@ -246,18 +276,6 @@ func (m *MockComputationWrapper) RecordExecPlan(ctx context.Context, phyPlan *mo
 func (mr *MockComputationWrapperMockRecorder) RecordExecPlan(ctx, phyPlan interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RecordExecPlan", reflect.TypeOf((*MockComputationWrapper)(nil).RecordExecPlan), ctx, phyPlan)
-}
-
-// SetExplainBuffer mocks base method.
-func (m *MockComputationWrapper) SetExplainBuffer(buf *bytes.Buffer) {
-	m.ctrl.T.Helper()
-	m.ctrl.Call(m, "SetExplainBuffer", buf)
-}
-
-// SetExplainBuffer indicates an expected call of SetExplainBuffer.
-func (mr *MockComputationWrapperMockRecorder) SetExplainBuffer(buf interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetExplainBuffer", reflect.TypeOf((*MockComputationWrapper)(nil).SetExplainBuffer), buf)
 }
 
 // ResetPlanAndStmt mocks base method.
@@ -285,6 +303,32 @@ func (m *MockComputationWrapper) Run(ts uint64) (*util.RunResult, error) {
 func (mr *MockComputationWrapperMockRecorder) Run(ts interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Run", reflect.TypeOf((*MockComputationWrapper)(nil).Run), ts)
+}
+
+// SetExplainBuffer mocks base method.
+func (m *MockComputationWrapper) SetExplainBuffer(buf *bytes.Buffer) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "SetExplainBuffer", buf)
+}
+
+// SetExplainBuffer indicates an expected call of SetExplainBuffer.
+func (mr *MockComputationWrapperMockRecorder) SetExplainBuffer(buf interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetExplainBuffer", reflect.TypeOf((*MockComputationWrapper)(nil).SetExplainBuffer), buf)
+}
+
+// StatsCompositeSubStmtResource mocks base method.
+func (m *MockComputationWrapper) StatsCompositeSubStmtResource(ctx context.Context) statistic.StatsArray {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "StatsCompositeSubStmtResource", ctx)
+	ret0, _ := ret[0].(statistic.StatsArray)
+	return ret0
+}
+
+// StatsCompositeSubStmtResource indicates an expected call of StatsCompositeSubStmtResource.
+func (mr *MockComputationWrapperMockRecorder) StatsCompositeSubStmtResource(ctx interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "StatsCompositeSubStmtResource", reflect.TypeOf((*MockComputationWrapper)(nil).StatsCompositeSubStmtResource), ctx)
 }
 
 // MockColumnInfo is a mock of ColumnInfo interface.
@@ -611,6 +655,20 @@ func (mr *MockBackgroundExecMockRecorder) GetExecResultSet() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetExecResultSet", reflect.TypeOf((*MockBackgroundExec)(nil).GetExecResultSet))
 }
 
+// GetExecStatsArray mocks base method.
+func (m *MockBackgroundExec) GetExecStatsArray() statistic.StatsArray {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetExecStatsArray")
+	ret0, _ := ret[0].(statistic.StatsArray)
+	return ret0
+}
+
+// GetExecStatsArray indicates an expected call of GetExecStatsArray.
+func (mr *MockBackgroundExecMockRecorder) GetExecStatsArray() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetExecStatsArray", reflect.TypeOf((*MockBackgroundExec)(nil).GetExecStatsArray))
+}
+
 // Service mocks base method.
 func (m *MockBackgroundExec) Service() string {
 	m.ctrl.T.Helper()
@@ -623,4 +681,16 @@ func (m *MockBackgroundExec) Service() string {
 func (mr *MockBackgroundExecMockRecorder) Service() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Service", reflect.TypeOf((*MockBackgroundExec)(nil).Service))
+}
+
+// SetRestore mocks base method.
+func (m *MockBackgroundExec) SetRestore(b bool) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "SetRestore", b)
+}
+
+// SetRestore indicates an expected call of SetRestore.
+func (mr *MockBackgroundExecMockRecorder) SetRestore(b interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetRestore", reflect.TypeOf((*MockBackgroundExec)(nil).SetRestore), b)
 }

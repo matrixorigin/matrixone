@@ -45,7 +45,7 @@ func TestRPCSend(t *testing.T) {
 					req *lock.Request,
 					resp *lock.Response,
 					cs morpc.ClientSession) {
-					writeResponse(ctx, getLogger(""), cancel, resp, nil, cs)
+					writeResponse(getLogger(""), cancel, resp, nil, cs)
 				})
 
 			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
@@ -74,7 +74,7 @@ func TestSetRestartServiceRPCSend(t *testing.T) {
 					resp *lock.Response,
 					cs morpc.ClientSession) {
 					resp.SetRestartService.OK = true
-					writeResponse(ctx, getLogger(""), cancel, resp, nil, cs)
+					writeResponse(getLogger(""), cancel, resp, nil, cs)
 				})
 
 			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
@@ -104,7 +104,7 @@ func TestCanRestartServiceRPCSend(t *testing.T) {
 					resp *lock.Response,
 					cs morpc.ClientSession) {
 					resp.CanRestartService.OK = true
-					writeResponse(ctx, getLogger(""), cancel, resp, nil, cs)
+					writeResponse(getLogger(""), cancel, resp, nil, cs)
 				})
 
 			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
@@ -134,7 +134,7 @@ func TestRemainTxnServiceRPCSend(t *testing.T) {
 					resp *lock.Response,
 					cs morpc.ClientSession) {
 					resp.RemainTxnInService.RemainTxn = -1
-					writeResponse(ctx, getLogger(""), cancel, resp, nil, cs)
+					writeResponse(getLogger(""), cancel, resp, nil, cs)
 				})
 
 			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
@@ -163,7 +163,7 @@ func TestRPCSendErrBackendCannotConnect(t *testing.T) {
 					req *lock.Request,
 					resp *lock.Response,
 					cs morpc.ClientSession) {
-					writeResponse(ctx, getLogger(""), cancel, resp, nil, cs)
+					writeResponse(getLogger(""), cancel, resp, nil, cs)
 				})
 
 			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
@@ -207,7 +207,7 @@ func TestMOErrorCanHandled(t *testing.T) {
 					req *lock.Request,
 					resp *lock.Response,
 					cs morpc.ClientSession) {
-					writeResponse(ctx, getLogger(""), cancel, resp, moerr.NewDeadLockDetectedNoCtx(), cs)
+					writeResponse(getLogger(""), cancel, resp, moerr.NewDeadLockDetectedNoCtx(), cs)
 				})
 
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
@@ -234,7 +234,7 @@ func TestRequestCanBeFilter(t *testing.T) {
 					req *lock.Request,
 					resp *lock.Response,
 					cs morpc.ClientSession) {
-					writeResponse(ctx, getLogger(""), cancel, resp, nil, cs)
+					writeResponse(getLogger(""), cancel, resp, nil, cs)
 				})
 
 			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
@@ -262,7 +262,7 @@ func TestRetryValidateService(t *testing.T) {
 					req *lock.Request,
 					resp *lock.Response,
 					cs morpc.ClientSession) {
-					writeResponse(ctx, getLogger(""), cancel, resp, nil, cs)
+					writeResponse(getLogger(""), cancel, resp, nil, cs)
 				})
 
 			_, err := validateService(time.Millisecond*100, "s1", c, getLogger(""))
@@ -285,7 +285,7 @@ func TestValidateService(t *testing.T) {
 					resp *lock.Response,
 					cs morpc.ClientSession) {
 					resp.ValidateService.OK = true
-					writeResponse(ctx, getLogger(""), cancel, resp, nil, cs)
+					writeResponse(getLogger(""), cancel, resp, nil, cs)
 				})
 
 			valid, err := validateService(time.Millisecond*100, "UNKNOWN", c, getLogger(""))
@@ -312,7 +312,7 @@ func TestLockTableBindChanged(t *testing.T) {
 					resp *lock.Response,
 					cs morpc.ClientSession) {
 					resp.NewBind = &lock.LockTable{ServiceID: "s1"}
-					writeResponse(ctx, getLogger(""), cancel, resp, nil, cs)
+					writeResponse(getLogger(""), cancel, resp, nil, cs)
 				})
 
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)

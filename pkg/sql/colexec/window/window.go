@@ -72,13 +72,7 @@ func (window *Window) Prepare(proc *process.Process) (err error) {
 }
 
 func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
-	if err, isCancel := vm.CancelCheck(proc); isCancel {
-		return vm.CancelResult, err
-	}
-
 	analyzer := window.OpAnalyzer
-	analyzer.Start()
-	defer analyzer.Stop()
 
 	var err error
 	ctr := &window.ctr
@@ -92,7 +86,11 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 					return result, err
 				}
 				if result.Batch == nil {
-					ctr.status = eval
+					if ctr.bat != nil {
+						ctr.status = eval
+					} else {
+						ctr.status = done
+					}
 					break
 				}
 				ctr.bat, err = ctr.bat.AppendWithCopy(proc.Ctx, proc.Mp(), result.Batch)
@@ -174,7 +172,6 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 				result.Batch = ctr.makeResultBatch(ctr.bat, ctr.vec)
 			}
 			result.Status = vm.ExecNext
-			analyzer.Output(result.Batch)
 			return result, nil
 		case done:
 			result := vm.NewCallResult()
@@ -293,10 +290,18 @@ func (ctr *container) processFunc(idx int, ap *Window, proc *process.Process, an
 	if ctr.vec != nil {
 		ctr.vec.Free(proc.Mp())
 	}
-	ctr.vec, err = ctr.bat.Aggs[idx].Flush()
+	vecs, err := ctr.bat.Aggs[idx].Flush()
 	if err != nil {
 		return err
 	}
+	if len(vecs) > 1 {
+		for _, vec := range vecs {
+			vec.Free(proc.Mp())
+		}
+		return moerr.NewInternalErrorNoCtx("the Window operator currently does not support sending split result of window function.")
+	}
+
+	ctr.vec = vecs[0]
 	if isWinOrder {
 		ctr.vec.SetNulls(nil)
 	}

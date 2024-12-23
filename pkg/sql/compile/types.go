@@ -19,7 +19,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/message"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 
 	"github.com/google/uuid"
 
@@ -35,6 +35,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
+	pipeline2 "github.com/matrixorigin/matrixone/pkg/vm/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -180,54 +182,37 @@ type Scope struct {
 
 	RemoteReceivRegInfos []RemoteReceivRegInfo
 
-	PartialResults     []any
-	PartialResultTypes []types.T
+	HasPartialResults bool
 }
 
-func canScopeOpRemote(rootOp vm.Operator) bool {
-	if rootOp == nil {
+// ipAddrMatch return true if the node-addr of the scope matches to local address.
+//
+// once node-addr is just empty, it means local.
+func (s *Scope) ipAddrMatch(local string) bool {
+	if len(s.NodeInfo.Addr) == 0 {
 		return true
 	}
-	if vm.CannotRemote(rootOp) {
-		return false
-	}
-	numChildren := rootOp.GetOperatorBase().NumChildren()
-	for idx := 0; idx < numChildren; idx++ {
-		res := canScopeOpRemote(rootOp.GetOperatorBase().GetChildren(idx))
-		if !res {
-			return false
-		}
-	}
-	return true
+	return isSameCN(s.NodeInfo.Addr, local)
 }
 
-// canRemote checks whether the current scope can be executed remotely.
-func (s *Scope) canRemote(c *Compile, checkAddr bool) bool {
-	// check the remote address.
-	// if it was empty or equal to the current address, return false.
-	if checkAddr {
-		if len(s.NodeInfo.Addr) == 0 || len(c.addr) == 0 {
-			return false
-		}
-		if isSameCN(c.addr, s.NodeInfo.Addr) {
-			return false
-		}
-	}
-
-	// some operators cannot be remote.
-	// todo: it is not a good way to check the operator type here.
-	//  cannot generate this remote pipeline if the operator type is not supported.
-
-	if !canScopeOpRemote(s.RootOp) {
-		return false
+// holdAnyCannotRemoteOperator returns error message
+// if this pipeline holds any operator that cannot send to a remote node for running.
+//
+// For now,
+// we are only not support to run recursiveCTE on remote node.
+// so we do a quick check here.
+// If more operators need to be rejected in the future, please use recursion honestly to check each operator.
+func (s *Scope) holdAnyCannotRemoteOperator() error {
+	if _, isCTE := pipeline2.IsCtePipelineAtLoop(s.RootOp); isCTE {
+		return moerr.NewInternalErrorNoCtx("remote running of cyclic CTE is not supported.")
 	}
 
 	for _, pre := range s.PreScopes {
-		if !pre.canRemote(c, false) {
-			return false
+		if err := pre.holdAnyCannotRemoteOperator(); err != nil {
+			return err
 		}
 	}
-	return true
+	return nil
 }
 
 // scopeContext contextual information to assist in the generation of pipeline.Pipeline.
@@ -267,9 +252,6 @@ type Compile struct {
 	sql       string
 	originSQL string
 
-	// queryStatus is a structure to record query has done.
-	queryStatus queryDoneWaiter
-
 	retryTimes int
 	anal       *AnalyzeModule
 	// e db engine instance.
@@ -303,7 +285,7 @@ type Compile struct {
 
 	needLockMeta bool
 	needBlock    bool
-	metaTables   map[string]struct{}
+	lockMeta     *LockMeta
 	lockTables   map[uint64]*plan.LockTarget
 	disableRetry bool
 
@@ -312,6 +294,9 @@ type Compile struct {
 	isPrepare bool
 
 	hasMergeOp bool
+
+	// ncpu set as system.GoRoutines() while NewCompile, instead of global static value.
+	ncpu int
 }
 
 type RemoteReceivRegInfo struct {

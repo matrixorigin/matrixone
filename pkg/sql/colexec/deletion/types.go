@@ -209,7 +209,11 @@ func (deletion *Deletion) Free(proc *process.Process, pipelineFailed bool, err e
 	ctr.source = nil
 }
 
-func (deletion *Deletion) AffectedRows() uint64 {
+func (deletion *Deletion) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
+	return input, nil
+}
+
+func (deletion *Deletion) GetAffectedRows() uint64 {
 	return deletion.ctr.affectedRows
 }
 
@@ -276,13 +280,14 @@ func (ctr *container) flush(proc *process.Process, analyzer process.Analyzer) (u
 			delete(blockId_rowIdBatch, blkid)
 		}
 
-		crs := new(perfcounter.CounterSet)
+		crs := analyzer.GetOpCounterSet()
 		newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
 		_, stats, err := s3writer.SortAndSync(newCtx, proc)
 		if err != nil {
 			return 0, err
 		}
 		analyzer.AddS3RequestCount(crs)
+		analyzer.AddFileServiceCacheInfo(crs)
 		analyzer.AddDiskIO(crs)
 
 		bat := batch.New([]string{catalog.ObjectMeta_ObjectStats})

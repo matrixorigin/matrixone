@@ -39,6 +39,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
+const (
+	IndexScaleZero        = 0
+	IndexScaleOne         = 1
+	IndexScaleTiny        = 10
+	MuchGreaterThanFactor = 100
+)
+
 type PartitionState struct {
 	service string
 
@@ -68,6 +75,8 @@ type PartitionState struct {
 	// for primary key dedup, reading data is not required
 	noData bool
 
+	lastFlushTimestamp types.TS
+
 	// some data need to be shared between all states
 	// should have been in the Partition structure, but doing that requires much more codes changes
 	// so just put it here.
@@ -85,6 +94,10 @@ func (p *PartitionState) LogEntry(entry *api.Entry, msg string) {
 	)
 }
 
+func (p *PartitionState) Desc() string {
+	return fmt.Sprintf("PartitionState(tid:%d) objLen %v, rowsLen %v", p.tid, p.dataObjectsNameIndex.Len(), p.rows.Len())
+}
+
 func (p *PartitionState) HandleLogtailEntry(
 	ctx context.Context,
 	fs fileservice.FileService,
@@ -97,28 +110,37 @@ func (p *PartitionState) HandleLogtailEntry(
 	switch entry.EntryType {
 	case api.Entry_Insert:
 		if IsDataObjectList(entry.TableName) {
-			if objectio.PartitionStateInjected(entry.TableName) {
+			if ok, _ := objectio.PartitionStateInjected(entry.DatabaseName, entry.TableName); ok {
 				p.LogEntry(entry, "INJECT-TRACE-PS-OBJ-INS")
 			}
 			p.HandleDataObjectList(ctx, entry, fs, pool)
 		} else if IsTombstoneObjectList(entry.TableName) {
-			if objectio.PartitionStateInjected(entry.TableName) {
+			if ok, _ := objectio.PartitionStateInjected(entry.DatabaseName, entry.TableName); ok {
 				p.LogEntry(entry, "INJECT-TRACE-PS-OBJ-DEL")
 			}
 			p.HandleTombstoneObjectList(ctx, entry, fs, pool)
 		} else {
-			if objectio.PartitionStateInjected(entry.TableName) {
+			if ok, _ := objectio.PartitionStateInjected(entry.DatabaseName, entry.TableName); ok {
 				p.LogEntry(entry, "INJECT-TRACE-PS-MEM-INS")
 			}
 			p.HandleRowsInsert(ctx, entry.Bat, primarySeqnum, packer, pool)
 		}
 
 	case api.Entry_Delete:
-		if objectio.PartitionStateInjected(entry.TableName) {
+		if ok, _ := objectio.PartitionStateInjected(entry.DatabaseName, entry.TableName); ok {
 			p.LogEntry(entry, "INJECT-TRACE-PS-MEM-DEL")
 		}
 		p.HandleRowsDelete(ctx, entry.Bat, packer, pool)
-
+	case api.Entry_DataObject:
+		if ok, _ := objectio.PartitionStateInjected(entry.DatabaseName, entry.TableName); ok {
+			p.LogEntry(entry, "INJECT-TRACE-PS-OBJ-INS")
+		}
+		p.HandleDataObjectList(ctx, entry, fs, pool)
+	case api.Entry_TombstoneObject:
+		if ok, _ := objectio.PartitionStateInjected(entry.DatabaseName, entry.TableName); ok {
+			p.LogEntry(entry, "INJECT-TRACE-PS-OBJ-DEL")
+		}
+		p.HandleTombstoneObjectList(ctx, entry, fs, pool)
 	default:
 		logutil.Panicf("unsupported logtail entry type: %s", entry.String())
 	}
@@ -152,11 +174,9 @@ func (p *PartitionState) HandleDataObjectList(
 	commitTSCol := vector.MustFixedColWithTypeCheck[types.TS](vec)
 
 	for idx := 0; idx < statsVec.Length(); idx++ {
-		p.shared.Lock()
-		if t := commitTSCol[idx]; t.GT(&p.shared.lastFlushTimestamp) {
-			p.shared.lastFlushTimestamp = t
+		if t := commitTSCol[idx]; t.GT(&p.lastFlushTimestamp) {
+			p.lastFlushTimestamp = t
 		}
-		p.shared.Unlock()
 		var objEntry ObjectEntry
 
 		objEntry.ObjectStats = objectio.ObjectStats(statsVec.GetBytesAt(idx))
@@ -240,6 +260,7 @@ func (p *PartitionState) HandleDataObjectList(
 							p.rowPrimaryKeyIndex.Delete(&PrimaryIndexEntry{
 								Bytes:      entry.PrimaryIndexBytes,
 								RowEntryID: entry.ID,
+								Time:       entry.Time,
 							})
 						}
 						numDeleted++
@@ -304,11 +325,9 @@ func (p *PartitionState) HandleTombstoneObjectList(
 	defer tbIter.Release()
 
 	for idx := 0; idx < statsVec.Length(); idx++ {
-		p.shared.Lock()
-		if t := commitTSCol[idx]; t.GT(&p.shared.lastFlushTimestamp) {
-			p.shared.lastFlushTimestamp = t
+		if t := commitTSCol[idx]; t.GT(&p.lastFlushTimestamp) {
+			p.lastFlushTimestamp = t
 		}
-		p.shared.Unlock()
 		var objEntry ObjectEntry
 
 		objEntry.ObjectStats = objectio.ObjectStats(statsVec.GetBytesAt(idx))
@@ -354,6 +373,7 @@ func (p *PartitionState) HandleTombstoneObjectList(
 
 		for ok := tbIter.Seek(&PrimaryIndexEntry{
 			Bytes: objEntry.ObjectName().ObjectId()[:],
+			Time:  types.MaxTs(),
 		}); ok; ok = tbIter.Next() {
 			if truncatePoint.LT(&tbIter.Item().Time) {
 				continue
@@ -379,6 +399,7 @@ func (p *PartitionState) HandleTombstoneObjectList(
 				p.rowPrimaryKeyIndex.Delete(&PrimaryIndexEntry{
 					Bytes:      deletedRow.PrimaryIndexBytes,
 					RowEntryID: deletedRow.ID,
+					Time:       deletedRow.Time,
 				})
 			}
 		}
@@ -460,6 +481,7 @@ func (p *PartitionState) HandleRowsDelete(
 				BlockID:    blockID,
 				RowID:      rowID,
 				Time:       entry.Time,
+				Deleted:    entry.Deleted,
 			}
 			p.rowPrimaryKeyIndex.Set(pe)
 		}
@@ -471,6 +493,7 @@ func (p *PartitionState) HandleRowsDelete(
 			RowID:      entry.RowID,
 			Time:       entry.Time,
 			RowEntryID: entry.ID,
+			Deleted:    entry.Deleted,
 		}
 
 		p.inMemTombstoneRowIdIndex.Set(&index)
@@ -535,14 +558,15 @@ func (p *PartitionState) HandleRowsInsert(
 		p.rows.Set(entry)
 
 		{
-			entry := &PrimaryIndexEntry{
+			pe := &PrimaryIndexEntry{
 				Bytes:      primaryKeys[i],
 				RowEntryID: entry.ID,
 				BlockID:    blockID,
 				RowID:      rowID,
 				Time:       entry.Time,
+				Deleted:    entry.Deleted,
 			}
-			p.rowPrimaryKeyIndex.Set(entry)
+			p.rowPrimaryKeyIndex.Set(pe)
 		}
 	}
 
@@ -563,16 +587,15 @@ func (p *PartitionState) Copy() *PartitionState {
 		rows:                      p.rows.Copy(),
 		dataObjectsNameIndex:      p.dataObjectsNameIndex.Copy(),
 		tombstoneObjectsNameIndex: p.tombstoneObjectsNameIndex.Copy(),
-		//blockDeltas:     p.blockDeltas.Copy(),
-		rowPrimaryKeyIndex:       p.rowPrimaryKeyIndex.Copy(),
-		inMemTombstoneRowIdIndex: p.inMemTombstoneRowIdIndex.Copy(),
-		noData:                   p.noData,
-		//dirtyBlocks:     p.dirtyBlocks.Copy(),
-		dataObjectTSIndex:       p.dataObjectTSIndex.Copy(),
-		tombstoneObjectDTSIndex: p.tombstoneObjectDTSIndex.Copy(),
-		shared:                  p.shared,
-		start:                   p.start,
-		end:                     p.end,
+		rowPrimaryKeyIndex:        p.rowPrimaryKeyIndex.Copy(),
+		inMemTombstoneRowIdIndex:  p.inMemTombstoneRowIdIndex.Copy(),
+		noData:                    p.noData,
+		dataObjectTSIndex:         p.dataObjectTSIndex.Copy(),
+		tombstoneObjectDTSIndex:   p.tombstoneObjectDTSIndex.Copy(),
+		shared:                    p.shared,
+		lastFlushTimestamp:        p.lastFlushTimestamp,
+		start:                     p.start,
+		end:                       p.end,
 	}
 	if len(p.checkpoints) > 0 {
 		state.checkpoints = make([]string, len(p.checkpoints))
@@ -617,9 +640,10 @@ func NewPartitionState(
 	tid uint64,
 ) *PartitionState {
 	opts := btree.Options{
-		Degree: 64,
+		Degree:  32, // may good for heap alloc
+		NoLocks: true,
 	}
-	return &PartitionState{
+	ps := &PartitionState{
 		service:                   service,
 		tid:                       tid,
 		noData:                    noData,
@@ -633,6 +657,13 @@ func NewPartitionState(
 		shared:                    new(sharedStates),
 		start:                     types.MaxTs(),
 	}
+	logutil.Info(
+		"PS-CREATED",
+		zap.Uint64("table-id", tid),
+		zap.String("service", service),
+		zap.String("addr", fmt.Sprintf("%p", ps)),
+	)
+	return ps
 }
 
 func (p *PartitionState) truncateTombstoneObjects(
@@ -763,7 +794,7 @@ func (p *PartitionState) PKExistInMemBetween(
 	to types.TS,
 	keys [][]byte,
 ) (bool, bool) {
-	iter := p.rowPrimaryKeyIndex.Copy().Iter()
+	iter := p.rowPrimaryKeyIndex.Iter()
 	pivot := RowEntry{
 		Time: types.BuildTS(math.MaxInt64, math.MaxUint32),
 	}
@@ -773,6 +804,7 @@ func (p *PartitionState) PKExistInMemBetween(
 	for _, key := range keys {
 
 		idxEntry.Bytes = key
+		idxEntry.Time = types.MaxTs()
 
 		for ok := iter.Seek(idxEntry); ok; ok = iter.Next() {
 
@@ -821,10 +853,7 @@ func (p *PartitionState) PKExistInMemBetween(
 		iter.First()
 	}
 
-	p.shared.Lock()
-	lastFlushTimestamp := p.shared.lastFlushTimestamp
-	p.shared.Unlock()
-	if lastFlushTimestamp.LE(&from) {
+	if p.lastFlushTimestamp.LE(&from) {
 		return false, false
 	}
 	return false, true
@@ -884,4 +913,58 @@ func (p *PartitionState) IsValid() bool {
 
 func (p *PartitionState) IsEmpty() bool {
 	return p.start == types.MaxTs()
+}
+
+func (p *PartitionState) LogAllRowEntry() string {
+	var buf bytes.Buffer
+	_ = p.ScanRows(false, func(entry RowEntry) (bool, error) {
+		buf.WriteString(entry.String())
+		buf.WriteString("\n")
+		return true, nil
+	})
+	return buf.String()
+}
+
+func (p *PartitionState) ScanRows(
+	reverse bool,
+	onItem func(entry RowEntry) (bool, error),
+) (err error) {
+	var ok bool
+
+	if !reverse {
+		p.rows.Scan(func(item RowEntry) bool {
+			if ok, err = onItem(item); err != nil || !ok {
+				return false
+			}
+			return true
+		})
+	} else {
+		p.rows.Reverse(func(item RowEntry) bool {
+			if ok, err = onItem(item); err != nil || !ok {
+				return false
+			}
+			return true
+		})
+	}
+
+	return
+}
+
+func (p *PartitionState) CheckRowIdDeletedInMem(ts types.TS, rowId types.Rowid) bool {
+	iter := p.rows.Iter()
+	defer iter.Release()
+
+	if !iter.Seek(RowEntry{
+		Time:    ts,
+		BlockID: rowId.CloneBlockID(),
+		RowID:   rowId,
+	}) {
+		return false
+	}
+
+	item := iter.Item()
+	if !item.Deleted {
+		return false
+	}
+	return item.RowID.EQ(&rowId)
 }

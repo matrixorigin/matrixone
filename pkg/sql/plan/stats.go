@@ -19,13 +19,15 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"runtime"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -33,7 +35,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -41,14 +42,12 @@ import (
 
 const DefaultBlockMaxRows = 8192
 const blockThresholdForTpQuery = 32
+const BlockThresholdForOneCN = 512
+const costThresholdForOneCN = 160000
 const costThresholdForTpQuery = 240000
 const highNDVcolumnThreshHold = 0.95
 const statsCacheInitSize = 128
 const statsCacheMaxSize = 8192
-
-var ncpu = runtime.GOMAXPROCS(0)
-var BlockThresholdForOneCN = ncpu * blockThresholdForTpQuery
-var costThresholdForOneCN = ncpu * costThresholdForTpQuery
 
 type ExecType int
 
@@ -718,6 +717,12 @@ func estimateExprSelectivity(expr *plan.Expr, builder *QueryBuilder, s *pb.Stats
 }
 
 func estimateFilterWeight(expr *plan.Expr, w float64) float64 {
+	if expr == nil || expr.GetF() == nil {
+		return 0 //something error
+	}
+	if expr.GetF().Func.ObjName == "prefix_in" || expr.GetF().Func.ObjName == "prefix_eq" {
+		return 0 //make prefix_in and prefix_eq always the first filter
+	}
 	switch expr.Typ.Id {
 	case int32(types.T_decimal64):
 		w += 8
@@ -786,11 +791,11 @@ func estimateFilterBlockSelectivity(ctx context.Context, expr *plan.Expr, tableD
 	return 1
 }
 
-func rewriteFilterListByStats(ctx context.Context, nodeID int32, builder *QueryBuilder) {
+func sortFilterListByStats(ctx context.Context, nodeID int32, builder *QueryBuilder) {
 	node := builder.qry.Nodes[nodeID]
 	if len(node.Children) > 0 {
 		for _, child := range node.Children {
-			rewriteFilterListByStats(ctx, child, builder)
+			sortFilterListByStats(ctx, child, builder)
 		}
 	}
 	switch node.NodeType {
@@ -800,11 +805,6 @@ func rewriteFilterListByStats(ctx context.Context, nodeID int32, builder *QueryB
 				cost1 := estimateFilterWeight(node.FilterList[i], 0) * node.FilterList[i].Selectivity
 				cost2 := estimateFilterWeight(node.FilterList[j], 0) * node.FilterList[j].Selectivity
 				return cost1 <= cost2
-			})
-			sort.Slice(node.BlockFilterList, func(i, j int) bool {
-				blockSel1 := node.BlockFilterList[i].Selectivity
-				blockSel2 := node.BlockFilterList[j].Selectivity
-				return blockSel1 <= blockSel2
 			})
 		}
 	}
@@ -873,44 +873,64 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			node.Stats.Cost = leftStats.Cost + rightStats.Cost
 			node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
 			node.Stats.Selectivity = selectivity_out
+			node.Stats.BlockNum = leftStats.BlockNum
 
 		case plan.Node_LEFT:
 			node.Stats.Outcnt = leftStats.Outcnt
 			node.Stats.Cost = leftStats.Cost + rightStats.Cost
 			node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
 			node.Stats.Selectivity = selectivity_out
+			node.Stats.BlockNum = leftStats.BlockNum
 
 		case plan.Node_RIGHT:
 			node.Stats.Outcnt = rightStats.Outcnt
 			node.Stats.Cost = leftStats.Cost + rightStats.Cost
 			node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
-			node.Stats.Selectivity = selectivity_out
+			node.Stats.Selectivity = selectivity
+			node.Stats.BlockNum = leftStats.BlockNum
+
+		case plan.Node_DEDUP:
+			node.Stats.Outcnt = rightStats.Outcnt
+			node.Stats.Cost = leftStats.Cost + rightStats.Cost
+			node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
+			node.Stats.Selectivity = selectivity
+			node.Stats.BlockNum = leftStats.BlockNum
 
 		case plan.Node_OUTER:
 			node.Stats.Outcnt = leftStats.Outcnt + rightStats.Outcnt
 			node.Stats.Cost = leftStats.Cost + rightStats.Cost
 			node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
 			node.Stats.Selectivity = selectivity_out
+			node.Stats.BlockNum = leftStats.BlockNum
 
 		case plan.Node_SEMI, plan.Node_INDEX:
 			node.Stats.Outcnt = leftStats.Outcnt * selectivity
 			node.Stats.Cost = leftStats.Cost + rightStats.Cost
 			node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
 			node.Stats.Selectivity = selectivity_out
+			node.Stats.BlockNum = leftStats.BlockNum
 
 		case plan.Node_ANTI:
 			node.Stats.Outcnt = leftStats.Outcnt * (1 - rightStats.Selectivity) * 0.5
 			node.Stats.Cost = leftStats.Cost + rightStats.Cost
 			node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
 			node.Stats.Selectivity = selectivity_out
+			node.Stats.BlockNum = leftStats.BlockNum
 
 		case plan.Node_SINGLE, plan.Node_MARK:
 			node.Stats.Outcnt = leftStats.Outcnt
 			node.Stats.Cost = leftStats.Cost + rightStats.Cost
 			node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
 			node.Stats.Selectivity = selectivity_out
+			node.Stats.BlockNum = leftStats.BlockNum
+
+		case plan.Node_L2: //L2 join is very time-consuming, increase the cost to get more dop
+			node.Stats.Outcnt = leftStats.Outcnt
+			node.Stats.Cost = (leftStats.Cost + rightStats.Cost) * 8
+			node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
+			node.Stats.Selectivity = selectivity_out
+			node.Stats.BlockNum = leftStats.BlockNum * 8
 		}
-		node.Stats.BlockNum = leftStats.BlockNum
 
 	case plan.Node_AGG:
 		if needResetHashMapStats {
@@ -1111,7 +1131,9 @@ func computeFunctionScan(name string, exprs []*Expr, nodeStat *Stats) bool {
 	}
 	var cost float64
 	var canGetCost bool
-	if len(exprs) == 2 {
+	if len(exprs) == 1 {
+		cost, canGetCost = getCost(nil, exprs[0], nil)
+	} else if len(exprs) == 2 {
 		if exprs[0].Typ.Id != exprs[1].Typ.Id {
 			return false
 		}
@@ -1154,9 +1176,13 @@ func getCost(start *Expr, end *Expr, step *Expr) (float64, bool) {
 		return 0, false
 	}
 
-	switch start.Typ.Id {
+	switch end.Typ.Id {
 	case int32(types.T_int32):
-		startNum, flag1 = getInt32Val(start)
+		if start == nil {
+			startNum, flag1 = 0, true
+		} else {
+			startNum, flag1 = getInt32Val(start)
+		}
 		endNum, flag2 = getInt32Val(end)
 		flag3 = true
 		if step != nil {
@@ -1166,7 +1192,11 @@ func getCost(start *Expr, end *Expr, step *Expr) (float64, bool) {
 			return 0, false
 		}
 	case int32(types.T_int64):
-		startNum, flag1 = getInt64Val(start)
+		if start == nil {
+			startNum, flag1 = 0, true
+		} else {
+			startNum, flag1 = getInt64Val(start)
+		}
 		endNum, flag2 = getInt64Val(end)
 		flag3 = true
 		if step != nil {
@@ -1213,7 +1243,7 @@ func recalcStatsByRuntimeFilter(scanNode *plan.Node, joinNode *plan.Node, builde
 		return
 	}
 
-	if joinNode.JoinType == plan.Node_INDEX || joinNode.NodeType == plan.Node_FUZZY_FILTER {
+	if joinNode.JoinType == plan.Node_INDEX || joinNode.JoinType == plan.Node_DEDUP || joinNode.NodeType == plan.Node_FUZZY_FILTER {
 		scanNode.Stats.Outcnt = builder.qry.Nodes[joinNode.Children[1]].Stats.Outcnt
 		if scanNode.Stats.Outcnt > scanNode.Stats.TableCnt {
 			scanNode.Stats.Outcnt = scanNode.Stats.TableCnt
@@ -1295,16 +1325,20 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 				node.BlockFilterList = nil
 			} else {
 				if currentBlockSel < 1 || strings.HasPrefix(node.TableDef.Name, catalog.IndexTableNamePrefix) {
-					copyOfExpr := DeepCopyExpr(node.FilterList[i])
-					copyOfExpr.Selectivity = currentBlockSel
-					blockExprList = append(blockExprList, copyOfExpr)
+					if ExprIsZonemappable(builder.GetContext(), node.FilterList[i]) {
+						copyOfExpr := DeepCopyExpr(node.FilterList[i])
+						copyOfExpr.Selectivity = currentBlockSel
+						blockExprList = append(blockExprList, copyOfExpr)
+					}
 				}
 			}
 		} else {
 			if currentBlockSel < 1 || strings.HasPrefix(node.TableDef.Name, catalog.IndexTableNamePrefix) {
-				copyOfExpr := DeepCopyExpr(node.FilterList[i])
-				copyOfExpr.Selectivity = currentBlockSel
-				blockExprList = append(blockExprList, copyOfExpr)
+				if ExprIsZonemappable(builder.GetContext(), node.FilterList[i]) {
+					copyOfExpr := DeepCopyExpr(node.FilterList[i])
+					copyOfExpr.Selectivity = currentBlockSel
+					blockExprList = append(blockExprList, copyOfExpr)
+				}
 			}
 		}
 		blockSel = andSelectivity(blockSel, currentBlockSel)
@@ -1314,8 +1348,21 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 	stats.Outcnt = stats.Selectivity * stats.TableCnt
 	stats.Cost = stats.TableCnt * blockSel
 	stats.BlockNum = int32(float64(s.BlockNumber)*blockSel) + 1
-
 	return stats
+}
+
+func forceScanNodeStatsTP(nodeID int32, builder *QueryBuilder) {
+	stats := builder.qry.Nodes[nodeID].Stats
+	if stats.Outcnt > 1000 {
+		stats.Outcnt = 1000
+	}
+	if stats.Cost > 1000 {
+		stats.Cost = 1000
+	}
+	if stats.BlockNum > 16 {
+		stats.BlockNum = 16
+	}
+	stats.Selectivity = stats.Outcnt / stats.TableCnt
 }
 
 func shouldReturnMinimalStats(node *plan.Node) bool {
@@ -1351,10 +1398,10 @@ func DefaultHugeStats() *plan.Stats {
 func DefaultBigStats() *plan.Stats {
 	stats := new(Stats)
 	stats.TableCnt = 10000000
-	stats.Cost = float64(costThresholdForOneCN)
-	stats.Outcnt = float64(costThresholdForOneCN)
+	stats.Cost = float64(costThresholdForOneCN + 1)
+	stats.Outcnt = float64(costThresholdForOneCN + 1)
 	stats.Selectivity = 1
-	stats.BlockNum = int32(BlockThresholdForOneCN)
+	stats.BlockNum = int32(BlockThresholdForOneCN + 1)
 	stats.Rowsize = 1000
 	stats.HashmapStats = &plan.HashMapStats{}
 	return stats
@@ -1510,7 +1557,7 @@ func HasShuffleInPlan(qry *plan.Query) bool {
 	return false
 }
 
-func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
+func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool, ncpu int) ExecType {
 	ret := ExecTypeTP
 	for _, node := range qry.GetNodes() {
 		switch node.NodeType {
@@ -1518,7 +1565,7 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 			ret = ExecTypeAP_ONECN
 		}
 		stats := node.Stats
-		if stats == nil || stats.BlockNum > int32(BlockThresholdForOneCN) || stats.Cost > float64(costThresholdForOneCN) {
+		if stats == nil || stats.BlockNum > int32(BlockThresholdForOneCN) && stats.Cost > float64(costThresholdForOneCN) {
 			if txnHaveDDL {
 				return ExecTypeAP_ONECN
 			} else {
@@ -1542,7 +1589,8 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 }
 
 func GetPlanTitle(qry *plan.Query, txnHaveDDL bool) string {
-	switch GetExecType(qry, txnHaveDDL, false) {
+	ncpu := system.GoMaxProcs()
+	switch GetExecType(qry, txnHaveDDL, false, ncpu) {
 	case ExecTypeTP:
 		return "TP QUERY PLAN"
 	case ExecTypeAP_ONECN:
@@ -1554,7 +1602,8 @@ func GetPlanTitle(qry *plan.Query, txnHaveDDL bool) string {
 }
 
 func GetPhyPlanTitle(qry *plan.Query, txnHaveDDL bool) string {
-	switch GetExecType(qry, txnHaveDDL, false) {
+	ncpu := system.GoMaxProcs()
+	switch GetExecType(qry, txnHaveDDL, false, ncpu) {
 	case ExecTypeTP:
 		return "TP QUERY PHYPLAN"
 	case ExecTypeAP_ONECN:
@@ -1623,7 +1672,7 @@ func calcBlockSelectivityUsingShuffleRange(s *pb.StatsInfo, colname string, expr
 		return sel
 	}
 	overlap := getOverlap(s, colname)
-	if overlap < overlapThreshold/2 {
+	if overlap < overlapThreshold/3 {
 		//very good overlap
 		return sel
 	}

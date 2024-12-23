@@ -178,6 +178,14 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 	var ret_filter_node_ids = make([]int32, len(filterids))
 	var ret_proj_node_ids = make([]int32, len(projids))
 
+	var limit *plan.Expr
+
+	if scanNode.Limit != nil {
+		limit = scanNode.Limit
+	} else if projNode.Limit != nil {
+		limit = projNode.Limit
+	}
+
 	indexDefs := make([]*plan.IndexDef, 0)
 	// copy filters and then delete the fulltext_match from scanNode.FilterList
 	ft_filters := make([]*plan.Expr, 0)
@@ -228,8 +236,10 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 
 		fulltext_func := tree.NewCStr(fulltext_index_scan_func_name, 1)
 		alias_name := fmt.Sprintf("mo_fulltext_alias_%d", i)
+		params := idxdef.IndexAlgoParams
 
 		var exprs tree.Exprs
+		exprs = append(exprs, tree.NewNumVal[string](params, params, false, tree.P_char))
 		exprs = append(exprs, tree.NewNumVal[string](srctblname, srctblname, false, tree.P_char))
 		exprs = append(exprs, tree.NewNumVal[string](idxtblname, idxtblname, false, tree.P_char))
 		exprs = append(exprs, tree.NewNumVal[string](pattern, pattern, false, tree.P_char))
@@ -287,6 +297,11 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 					ColPos: 0,               // idxTbl.pk
 				},
 			},
+		}
+
+		// pushdown limit
+		if limit != nil {
+			curr_ftnode.Limit = DeepCopyExpr(limit)
 		}
 
 		// change doc_id type to the primary type here

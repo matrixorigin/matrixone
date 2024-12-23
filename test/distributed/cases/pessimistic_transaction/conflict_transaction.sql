@@ -98,8 +98,21 @@ create table ct_07(a int,b varchar(25),c date, d double,primary key(a,c));
 insert into ct_07 values (1,'901','2011-09-29',0.01),(2,'187','2011-09-29',1.31),(3,'90','2111-02-09',10.01);
 begin;
 insert into ct_07 values (3,'90','2111-02-09',10.01);
--- @pattern
 insert into ct_07 values (4,'11','2011-09-29',7.00),(2,'567','2011-09-29',1.31),(4,'90','2011-09-29',89.3);
 select * from ct_07;
 commit;
 select * from ct_07;
+
+drop table if exists t1;
+create table t1 (a int primary key, b int);
+begin;
+delete from t1 where a = 1;
+insert into t1 values (1, 1);
+-- @session:id=1{
+begin;
+-- @wait:0:commit
+delete from t1 where a = 1;
+insert into t1 values (1, 1);
+commit;
+-- @session}
+commit;

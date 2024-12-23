@@ -15,7 +15,9 @@
 package engine_util
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 	"slices"
 	"strings"
 	"time"
@@ -27,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -38,6 +41,7 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
@@ -98,6 +102,7 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
 	mixin.columns.colTypes = make([]types.Type, len(cols))
 	// mixin.columns.colNulls = make([]bool, len(cols))
 	mixin.columns.indexOfFirstSortedColumn = -1
+	mixin.filterState.pkSeqNum = -1
 
 	pkPos := -1
 
@@ -138,6 +143,12 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
 		// if the primary key is not found, it returns empty slice
 		mixin.filterState.seqnums = []uint16{mixin.columns.seqnums[pkPos]}
 		mixin.filterState.colTypes = mixin.columns.colTypes[pkPos : pkPos+1]
+	}
+
+	if mixin.tableDef.Pkey != nil {
+		colIdx := mixin.tableDef.Name2ColIndex[mixin.tableDef.Pkey.PkeyColName]
+		colDef := mixin.tableDef.Cols[colIdx]
+		mixin.filterState.pkSeqNum = int32(colDef.Seqnum)
 	}
 }
 
@@ -216,6 +227,7 @@ type withFilterMixin struct {
 		filter    objectio.BlockReadFilter
 		memFilter MemPKFilter
 		seqnums   []uint16 // seqnums of the columns in the filter
+		pkSeqNum  int32
 		colTypes  []types.Type
 	}
 }
@@ -317,6 +329,7 @@ func NewReader(
 	//orderedScan bool, // it should be included in filter or expr.
 	source engine.DataSource,
 	threshHold uint64,
+	filterHint engine.FilterHint,
 ) (*reader, error) {
 
 	baseFilter, err := ConstructBasePKFilter(
@@ -333,6 +346,7 @@ func NewReader(
 		ts,
 		packerPool,
 		baseFilter,
+		filterHint,
 	)
 	if err != nil {
 		return nil, err
@@ -395,6 +409,7 @@ func (r *reader) Read(
 	outBatch.CleanOnlyData()
 
 	var dataState engine.DataState
+	var blkInfo *objectio.BlockInfo
 
 	start := time.Now()
 	defer func() {
@@ -402,6 +417,67 @@ func (r *reader) Read(
 		if err != nil || dataState == engine.End {
 			r.Close()
 		}
+		if injected, logLevel := objectio.LogReaderInjected("", r.name); injected || err != nil {
+			if err != nil {
+				logutil.Error(
+					"LOGREADER-ERROR",
+					zap.String("name", r.name),
+					zap.Error(err),
+				)
+				return
+			}
+			if isEnd {
+				return
+			}
+			blkStr := "nil"
+			if blkInfo != nil {
+				blkStr = blkInfo.String()
+			}
+			if logLevel == 0 {
+				logutil.Info(
+					"DEBUG-SLOW-TXN-READER",
+					zap.String("name", r.name),
+					zap.String("ts", r.ts.DebugString()),
+					zap.Int("data-len", outBatch.RowCount()),
+					zap.Duration("duration", time.Since(start)),
+					zap.String("blk", blkStr),
+					zap.Error(err),
+				)
+			} else {
+				maxLogCnt := 10
+				if logLevel > 1 {
+					maxLogCnt = outBatch.RowCount()
+				}
+				logutil.Info(
+					"LOGREADER-INJECTED-1",
+					zap.String("name", r.name),
+					zap.String("ts", r.ts.DebugString()),
+					zap.Duration("duration", time.Since(start)),
+					zap.Error(err),
+					zap.String("data", common.MoBatchToString(outBatch, maxLogCnt)),
+					zap.String("blk", blkStr),
+				)
+			}
+		}
+
+		if v := ctx.Value(defines.ReaderSummaryKey{}); v != nil {
+			buf := v.(*bytes.Buffer)
+			switch dataState {
+			case engine.InMem:
+				buf.WriteString(fmt.Sprintf("[InMem] Source %v || Data %v",
+					r.source.String(),
+					common.MoBatchToString(outBatch, 5),
+				),
+				)
+			case engine.Persisted:
+				if outBatch.RowCount() > 0 {
+					buf.WriteString(fmt.Sprintf("[Blk] Info %v || Data %v",
+						blkInfo.String(), common.MoBatchToString(outBatch, 5)),
+					)
+				}
+			}
+		}
+
 	}()
 
 	r.tryUpdateColumns(cols)
@@ -411,7 +487,8 @@ func (r *reader) Read(
 		cols,
 		r.columns.colTypes,
 		r.columns.seqnums,
-		r.filterState.memFilter,
+		r.filterState.pkSeqNum,
+		&r.filterState.memFilter,
 		mp,
 		outBatch)
 
@@ -467,6 +544,11 @@ func (r *reader) Read(
 	)
 	if err != nil {
 		return false, err
+	}
+
+	if outBatch.RowCount() == 1 {
+		// found one row in this blk for the pk equal, record it
+		r.withFilterMixin.filterState.memFilter.RecordExactHit()
 	}
 
 	if filter.Valid {

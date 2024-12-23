@@ -783,7 +783,9 @@ func Test_transfer(t *testing.T) {
 	logger := rt.Logger()
 	tun := newTunnel(ctx, logger, newCounterSet())
 
+	tun.mu.Lock()
 	tun.mu.started = true
+	tun.mu.Unlock()
 
 	p1 := &pipe{}
 	p1.src = &MySQLConn{
@@ -792,7 +794,9 @@ func Test_transfer(t *testing.T) {
 	p1.mu.cond = sync.NewCond(&p1.mu)
 	p1.mu.started = true
 
+	tun.mu.Lock()
 	tun.mu.scp = p1
+	tun.mu.Unlock()
 
 	p2 := &pipe{}
 	p2.src = &MySQLConn{
@@ -801,26 +805,38 @@ func Test_transfer(t *testing.T) {
 	p2.mu.cond = sync.NewCond(&p2.mu)
 	p2.mu.started = true
 
+	tun.mu.Lock()
 	tun.mu.csp = p2
+	tun.mu.Unlock()
 
 	///test 1
 	err := tun.transfer(ctx)
 	assert.Error(t, err)
 
 	///test 2
+	p2.mu.Lock()
 	p2.mu.started = false
+	p2.mu.Unlock()
 	err = tun.transfer(ctx)
 	assert.Error(t, err)
 
 	///test 3
+	p2.mu.Lock()
 	p2.mu.started = false
+	p2.mu.Unlock()
+	p1.mu.Lock()
 	p1.mu.started = false
+	p1.mu.Unlock()
 	err = tun.transfer(ctx)
 	assert.NoError(t, err)
 
 	///test 4
+	p2.mu.Lock()
 	p2.mu.started = false
+	p2.mu.Unlock()
+	p1.mu.Lock()
 	p1.mu.started = false
+	p1.mu.Unlock()
 	err = tun.transferSync(ctx)
 	assert.Error(t, err)
 

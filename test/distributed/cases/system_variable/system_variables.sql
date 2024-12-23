@@ -201,3 +201,28 @@ create database test_for_navicat;
 SELECT SCHEMA_NAME, DEFAULT_CHARACTER_SET_NAME, DEFAULT_COLLATION_NAME FROM information_schema.SCHEMATA where SCHEMA_NAME = 'test_for_navicat';
 drop database test_for_navicat;
 drop account acc_idx;
+
+select @@profiling;
+select @@global.profiling;
+show variables like 'profiling';
+
+select @@profiling_history_size;
+select @@global.profiling_history_size;
+show variables like 'profiling_history_size';
+SET profiling_history_size = 0;
+select @@profiling_history_size;
+select @@global.profiling_history_size;
+show variables like 'profiling_history_size';
+SET profiling_history_size = 15;
+select @@profiling_history_size;
+select @@global.profiling_history_size;
+show variables like 'profiling_history_size';
+SET profiling_history_size = default;
+
+select @@optimizer_switch;
+select @@global.optimizer_switch;
+show variables like 'optimizer_switch';
+set optimizer_switch='semijoin=off';
+select @@optimizer_switch;
+show variables like 'optimizer_switch';
+SET profiling_history_size = default;

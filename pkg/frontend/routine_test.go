@@ -134,10 +134,12 @@ var newMockWrapper = func(ctrl *gomock.Controller, ses *Session,
 	mcw.EXPECT().Compile(gomock.Any(), gomock.Any()).Return(runner, nil).AnyTimes()
 	mcw.EXPECT().GetUUID().Return(uuid[:]).AnyTimes()
 	mcw.EXPECT().RecordExecPlan(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+	mcw.EXPECT().RecordCompoundStmt(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 	mcw.EXPECT().GetLoadTag().Return(false).AnyTimes()
 	mcw.EXPECT().Clear().AnyTimes()
 	mcw.EXPECT().Free().AnyTimes()
 	mcw.EXPECT().Plan().Return(&plan2.Plan{}).AnyTimes()
+	mcw.EXPECT().BinaryExecute().Return(false, "").AnyTimes()
 	return mcw
 }
 
@@ -163,6 +165,7 @@ func Test_ConnectionCount(t *testing.T) {
 	pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
 	require.NoError(t, err)
 	pu.SV.SkipCheckUser = true
+	pu.SV.KillRountinesInterval = 0
 	setSessionAlloc("", NewLeakCheckAllocator())
 	setPu("", pu)
 

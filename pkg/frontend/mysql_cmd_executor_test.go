@@ -51,7 +51,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/explain"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -233,6 +235,7 @@ func Test_mce(t *testing.T) {
 			select_2.EXPECT().GetLoadTag().Return(false).AnyTimes()
 			select_2.EXPECT().GetColumns(gomock.Any()).Return(self_handle_sql_columns[i], nil).AnyTimes()
 			select_2.EXPECT().RecordExecPlan(ctx, nil).Return(nil).AnyTimes()
+			select_2.EXPECT().RecordCompoundStmt(ctx, statistic.StatsArray{}).Return(nil).AnyTimes()
 			select_2.EXPECT().Clear().AnyTimes()
 			select_2.EXPECT().Free().AnyTimes()
 			select_2.EXPECT().Plan().Return(&plan.Plan{}).AnyTimes()
@@ -261,7 +264,7 @@ func Test_mce(t *testing.T) {
 
 		sysVarStubs := gostub.StubFunc(&ExeSqlInBgSes, nil, nil)
 		defer sysVarStubs.Reset()
-		_ = ses.InitSystemVariables(ctx)
+		_ = ses.InitSystemVariables(ctx, nil)
 
 		ctx = context.WithValue(ctx, config.ParameterUnitKey, pu)
 
@@ -435,7 +438,7 @@ func Test_mce_selfhandle(t *testing.T) {
 		})
 		sysVarStubs := gostub.StubFunc(&ExeSqlInBgSes, nil, nil)
 		defer sysVarStubs.Reset()
-		_ = ses.InitSystemVariables(ctx)
+		_ = ses.InitSystemVariables(ctx, nil)
 
 		err = handleCmdFieldList(ses, ec, cflStmt)
 		convey.So(err, convey.ShouldBeNil)
@@ -744,7 +747,7 @@ func Test_handleShowVariables(t *testing.T) {
 
 		sysVarStubs := gostub.StubFunc(&ExeSqlInBgSes, nil, nil)
 		defer sysVarStubs.Reset()
-		_ = ses.InitSystemVariables(ctx)
+		_ = ses.InitSystemVariables(ctx, nil)
 
 		proto.SetSession(ses)
 		ec := newTestExecCtx(ctx, ctrl)
@@ -1004,7 +1007,7 @@ func TestSerializePlanToJson(t *testing.T) {
 			t.Fatalf("%+v", err)
 		}
 		uid, _ := uuid.NewV7()
-		stm := &motrace.StatementInfo{StatementID: uid, Statement: sql, RequestAt: time.Now()}
+		stm := &motrace.StatementInfo{StatementID: uid, Statement: []byte(sql), RequestAt: time.Now()}
 		h := NewMarshalPlanHandler(mock.CurrentContext().GetContext(), stm, plan, nil)
 		json := h.Marshal(mock.CurrentContext().GetContext())
 		_, stats := h.Stats(mock.CurrentContext().GetContext(), nil)
@@ -1280,6 +1283,52 @@ func TestMysqlCmdExecutor_HandleShowBackendServers(t *testing.T) {
 				require.Equal(t, "s1", row[0])
 				require.Equal(t, "addr1", row[1])
 			})
+
+			convey.Convey("filter label sys account", t, func() {
+				ses.mrs = &MysqlResultSet{}
+				cluster := clusterservice.NewMOCluster(
+					sid,
+					nil,
+					0,
+					clusterservice.WithDisableRefresh(),
+					clusterservice.WithServices(
+						[]metadata.CNService{
+							{
+								ServiceID:  "s1",
+								SQLAddress: "addr1",
+								Labels: map[string]metadata.LabelList{
+									"account": {Labels: []string{"t1"}},
+								},
+								WorkState: metadata.WorkState_Working,
+							},
+							{
+								ServiceID:  "s2",
+								SQLAddress: "addr2",
+								Labels: map[string]metadata.LabelList{
+									"account": {Labels: []string{"t2"}},
+								},
+								WorkState: metadata.WorkState_Working,
+							},
+							{
+								ServiceID:  "s3",
+								SQLAddress: "addr3",
+								WorkState:  metadata.WorkState_Working,
+							},
+						},
+						nil,
+					),
+				)
+				runtime.ServiceRuntime(sid).SetGlobalVariables(runtime.ClusterService, cluster)
+				ses.SetTenantInfo(&TenantInfo{Tenant: "sys", User: "dump"})
+				proto.connectAttrs = map[string]string{}
+				ec := newTestExecCtx(ctx, ctrl)
+
+				err = handleShowBackendServers(ses, ec)
+				require.NoError(t, err)
+				rs := ses.GetMysqlResultSet()
+				require.Equal(t, uint64(4), rs.GetColumnCount())
+				require.Equal(t, uint64(3), rs.GetRowCount())
+			})
 		},
 	)
 
@@ -1507,5 +1556,120 @@ func Benchmark_RecordStatement_IsTrue(b *testing.B) {
 				cnt++
 			}
 		}
+	})
+}
+
+func Test_panic(t *testing.T) {
+	fault.Enable()
+	defer fault.Disable()
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	runPanic := func(panicChoice int64) {
+		fault.AddFaultPoint(context.Background(), "exec_request_panic", ":::", "panic", panicChoice, "has panic", false)
+		defer fault.RemoveFaultPoint(context.Background(), "exec_request_panic")
+
+		ses := newTestSession(t, ctrl)
+		execCtx := &ExecCtx{
+			ses: ses,
+		}
+		req := &Request{
+			cmd:  COM_SET_OPTION,
+			data: []byte("123"),
+		}
+
+		_, err := ExecRequest(ses, execCtx, req)
+		assert.NotNil(t, err)
+	}
+
+	runPanic(fault.PanicUseMoErr)
+	runPanic(fault.PanicUseNonMoErr)
+}
+
+func Test_run_panic(t *testing.T) {
+	fault.Enable()
+	defer fault.Disable()
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	runPanic := func(panicChoice int64) {
+		fault.AddFaultPoint(context.Background(), "executeStmtWithWorkspace_panic", ":::", "panic", panicChoice, "has panic", false)
+		defer fault.RemoveFaultPoint(context.Background(), "executeStmtWithWorkspace_panic")
+
+		ses := newTestSession(t, ctrl)
+		execCtx := &ExecCtx{
+			ses: ses,
+		}
+
+		err := executeStmtWithWorkspace(ses, nil, execCtx)
+		assert.NotNil(t, err)
+	}
+
+	runPanic(fault.PanicUseMoErr)
+	runPanic(fault.PanicUseNonMoErr)
+}
+
+func Test_handleShowTableStatus(t *testing.T) {
+	ctx := defines.AttachAccountId(context.TODO(), 1)
+	convey.Convey("handleShowTableStatus succ", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		relation := mock_frontend.NewMockRelation(ctrl)
+		relation.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{TableType: catalog.SystemViewRel}).AnyTimes()
+
+		database := mock_frontend.NewMockDatabase(ctrl)
+		database.EXPECT().IsSubscription(gomock.Any()).Return(false).AnyTimes()
+		database.EXPECT().Relation(gomock.Any(), gomock.Any(), nil).Return(relation, nil).AnyTimes()
+
+		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		eng.EXPECT().Database(gomock.Any(), gomock.Any(), nil).Return(database, nil).AnyTimes()
+
+		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
+		txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
+		txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
+		txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
+		txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
+
+		txnClient := mock_frontend.NewMockTxnClient(ctrl)
+		txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
+
+		sv, err := getSystemVariables("test/system_vars_config.toml")
+		if err != nil {
+			t.Error(err)
+		}
+		pu := config.NewParameterUnit(sv, eng, txnClient, nil)
+		pu.SV.SkipCheckUser = true
+		setPu("", pu)
+		setSessionAlloc("", NewLeakCheckAllocator())
+		ioses, err := NewIOSession(&testConn{}, pu, "")
+		convey.So(err, convey.ShouldBeNil)
+		pu.StorageEngine = eng
+		pu.TxnClient = txnClient
+		proto := NewMysqlClientProtocol("", 0, ioses, 1024, pu.SV)
+
+		ses := NewSession(ctx, "", proto, nil)
+		tenant := &TenantInfo{
+			Tenant:   "sys",
+			TenantID: 0,
+			User:     DefaultTenantMoAdmin,
+		}
+		ses.SetTenantInfo(tenant)
+		ses.mrs = &MysqlResultSet{}
+		ses.SetDatabaseName("t")
+		ses.data = [][]interface{}{{[]byte("t"), nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, uint32(0), nil}}
+
+		proto.SetSession(ses)
+
+		ec := newTestExecCtx(ctx, ctrl)
+		shv := &tree.ShowTableStatus{}
+		convey.So(handleShowTableStatus(ses, ec, shv), convey.ShouldBeNil)
+
+		ec = newTestExecCtx(context.Background(), ctrl)
+		convey.So(handleShowTableStatus(ses, ec, shv), convey.ShouldNotBeNil)
 	})
 }

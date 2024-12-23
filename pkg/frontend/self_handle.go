@@ -16,9 +16,10 @@ package frontend
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 )
 
-func execInFrontend(ses *Session, execCtx *ExecCtx) (err error) {
+func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray, err error) {
 	ses.EnterRunSql()
 	defer ses.ExitRunSql()
 	ses.EnterFPrint(FPExecInFrontEnd)
@@ -31,6 +32,7 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (err error) {
 		RecordStatementTxnID(execCtx.reqCtx, ses)
 	case *tree.CommitTransaction:
 	case *tree.RollbackTransaction:
+	case *tree.SavePoint, *tree.ReleaseSavePoint, *tree.RollbackToSavePoint:
 	case *tree.SetRole:
 		ses.EnterFPrint(FPSetRole)
 		defer ses.ExitFPrint(FPSetRole)
@@ -45,7 +47,10 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (err error) {
 		defer ses.ExitFPrint(FPUse)
 		dbName := st.Name.Compare()
 		//use database
-		return handleChangeDB(ses, execCtx, dbName)
+		err = handleChangeDB(ses, execCtx, dbName)
+		if err != nil {
+			return
+		}
 	case *tree.MoDump:
 
 		//dump
@@ -292,7 +297,7 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (err error) {
 		ses.EnterFPrint(FPCreateFunction)
 		defer ses.ExitFPrint(FPCreateFunction)
 		if err = st.Valid(); err != nil {
-			return err
+			return
 		}
 		if err = handleCreateFunction(ses, execCtx, st); err != nil {
 			return
@@ -411,7 +416,8 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (err error) {
 		ses.EnterFPrint(FPRestoreSnapShot)
 		defer ses.ExitFPrint(FPRestoreSnapShot)
 		//TODO: invalidate privilege cache
-		if err = handleRestoreSnapshot(ses, execCtx, st); err != nil {
+		stats, err = handleRestoreSnapshot(ses, execCtx, st)
+		if err != nil {
 			return
 		}
 	case *tree.UpgradeStatement:
@@ -446,7 +452,8 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (err error) {
 		ses.EnterFPrint(FPRestorePitr)
 		defer ses.ExitFPrint(FPRestorePitr)
 		//TODO: invalidate privilege cache
-		if err = handleRestorePitr(ses, execCtx, st); err != nil {
+		stats, err = handleRestorePitr(ses, execCtx, st)
+		if err != nil {
 			return
 		}
 	case *tree.SetConnectionID:

@@ -57,6 +57,18 @@ select * from src where match(body, title) against('+red +(<blue >is)' in boolea
 
 select * from src where match(body, title) against('"is not red"' in boolean mode);
 
+select * from src where match(body, title) against('"red"' in boolean mode);
+
+-- boolean mode in Chinese
+select * from src where match(body, title) against('+教學指引 +短篇小說' in boolean mode);
+select * from src where match(body, title) against('+教學指引 -短篇小說' in boolean mode);
+
+-- phrase exact match.  double space cannot be matched and empty result
+select * from src where match(body, title) against('"is  not red"' in boolean mode);
+
+-- phrase exact match. all words match but not exact match
+select * from src where match(body, title) against('"blue is red"' in boolean mode);
+
 -- match in projection
 select src.*, match(body, title) against('blue') from src;
 
@@ -134,6 +146,9 @@ select count(*) from src where match(title, body) against('red');
 -- @separator:table
 explain select match(body, title) against('red') from src where match(body, title) against('red');
 
+desc src;
+show create table src;
+
 drop table src;
 
 -- composite primary key
@@ -157,6 +172,9 @@ insert into src2 values ('id4', 4, 'light brown', 't5');
 
 select * from src2 where match(body, title) against('t5');
 
+desc src;
+show create table src;
+
 drop table src2;
 
 -- bytejson parser
@@ -169,12 +187,15 @@ create fulltext index ftidx on src (json1) with parser json;
 
 select * from src where match(json1) against('red' in boolean mode);
 
-select * from src where match(json1) against('中文學習教材' in boolean mode);
+select * from src where match(json1) against('中文學習教材' in natural language mode);
 
 create fulltext index ftidx2 on src (json1, json2) with parser json;
 select * from src where match(json1, json2) against('+red +winter' in boolean mode);
 
-select * from src where match(json1, json2) against('中文學習教材' in boolean mode);
+select * from src where match(json1, json2) against('中文學習教材' in natural language mode);
+
+desc src;
+show create table src;
 
 drop table src;
 
@@ -188,12 +209,15 @@ create fulltext index ftidx on src (json1) with parser json;
 
 select * from src where match(json1) against('red' in boolean mode);
 
-select * from src where match(json1) against('中文學習教材' in boolean mode);
+select * from src where match(json1) against('中文學習教材' in natural language  mode);
 
 create fulltext index ftidx2 on src (json1, json2) with parser json;
 select * from src where match(json1, json2) against('+red +winter' in boolean mode);
 
-select * from src where match(json1, json2) against('中文學習教材' in boolean mode);
+select * from src where match(json1, json2) against('中文學習教材' in natural language mode);
+
+desc src;
+show create table src;
 
 drop table src;
 
@@ -276,6 +300,9 @@ select * from src where match(body, title) against('brown');
 delete from src;
 select count(*) from src;
 
+desc src;
+show create table src;
+
 -- drop table
 drop table src;
 
@@ -285,6 +312,9 @@ insert into src2 values ('id0', 0, 'red', 't1'), ('id1', 1, 'yellow', 't2'), ('i
 
 select * from src2 where match(body, title) against('red');
 select src2.*, match(body, title) against('blue') from src2;
+
+desc src2;
+show create table src2;
 
 drop table src2;
 
@@ -296,12 +326,17 @@ insert into src values  (0, '{"a":1, "b":"red"}', '{"d": "happy birthday", "f":"
 
 select * from src where match(json1) against('red' in boolean mode);
 
-select * from src where match(json1) against('中文學習教材' in boolean mode);
+select * from src where match(json1) against('中文學習教材' in natural language mode);
 
 create fulltext index ftidx2 on src (json1, json2) with parser json;
 select * from src where match(json1, json2) against('+red +winter' in boolean mode);
 
-select * from src where match(json1, json2) against('中文學習教材' in boolean mode);
+select * from src where match(json1, json2) against('中文學習教材' in natural language mode);
+
+update src set json1='{"c":"update json"}' where id=0;
+
+desc src;
+show create table src;
 
 drop table src;
 
@@ -313,14 +348,71 @@ insert into src values  (0, '{"a":1, "b":"red"}', '{"d": "happy birthday", "f":"
 
 select * from src where match(json1) against('red' in boolean mode);
 
-select * from src where match(json1) against('中文學習教材' in boolean mode);
+select * from src where match(json1) against('中文學習教材' in natural language mode);
 
 create fulltext index ftidx2 on src (json1, json2) with parser json;
 select * from src where match(json1, json2) against('+red +winter' in boolean mode);
 
-select * from src where match(json1, json2) against('中文學習教材' in boolean mode);
+select * from src where match(json1, json2) against('中文學習教材' in natural language mode);
+
+update src set json1='{"c":"update json"}' where id=0;
+
+select * from src where match(json1, json2) against('"update json"' in boolean mode);
+
+desc src;
+show create table src;
 
 drop table src;
 
+drop table if exists t1;
+create table t1(a int primary key, b varchar(200));
+insert into t1 select result, "test create big fulltext index" from generate_series(3840001) g;
+create fulltext index ftidx on t1 (b);
+select count(*) from t1 where match(b) against ('test create' in natural language mode);
+drop table t1;
+
+-- #20149
+CREATE TABLE IF NOT EXISTS nation (
+  `n_nationkey`  INT,
+  `n_name`       CHAR(25),
+  `n_regionkey`  INT,
+  `n_comment`    VARCHAR(152),
+  `n_dummy`      VARCHAR(10),
+  PRIMARY KEY (`n_nationkey`));
+
+insert into nation values (0, 'china', 1, 'china beijing', 'dummy'), (1, 'korea', 2, 'korea noodle', 'dummmy');
+
+create fulltext index ftidx on nation(n_comment);
+
+select * from nation where match(n_comment) against('china');
+
+delete from nation where n_nationkey = 0;
+
+select * from nation where match(n_comment) against('china');
+
+drop table nation;
 
 
+-- pushdown limit
+drop table if exists t1;
+create table t1(a int primary key, b varchar(200));
+insert into t1 select result, "pushdown limit is fast" from generate_series(30001) g;
+create fulltext index ftidx on t1 (b);
+-- no pushdown limit
+select count(*) from t1 where match(b) against ('+pushdown +limit' in boolean mode);
+-- pushdown limit
+select count(*) from t1 where match(b) against ('+pushdown +limit' in boolean mode) limit 1;
+
+drop table t1;
+
+-- error drop column with multiple index parts
+drop table if exists articles;
+create table articles (id int auto_increment not null primary key, title varchar, body text);
+create fulltext index ftidx on articles (title, body);
+alter table articles drop column title;
+
+-- drop column success
+drop table if exists articles;
+create table articles (id int auto_increment not null primary key, title varchar, body text);
+create fulltext index ftidx on articles (title);
+alter table articles drop column title;

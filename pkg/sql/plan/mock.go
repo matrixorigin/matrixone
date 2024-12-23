@@ -71,6 +71,10 @@ func (m *MockCompilerContext) CheckSubscriptionValid(subName, accName string, pu
 	panic("implement me")
 }
 
+func (m *MockCompilerContext) ResolveIndexTableByRef(ref *ObjectRef, tblName string, snapshot *Snapshot) (*ObjectRef, *TableDef) {
+	return m.Resolve(DbNameOfObjRef(ref), tblName, snapshot)
+}
+
 func (m *MockCompilerContext) ResolveSubscriptionTableById(tableId uint64, pubmeta *SubscriptionMeta) (*ObjectRef, *TableDef) {
 	return nil, nil
 }
@@ -601,6 +605,16 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 				tableExist: true,
 				unique:     true,
 			},
+			{
+				indexName: "",
+				tableName: catalog.UniqueIndexTableNamePrefix + "35fd5c5f-ab54-4873-85e4-3d5ab0ae20a2",
+				parts:     []string{"loc", "dname"},
+				cols: []col{
+					{catalog.IndexTableIndexColName, types.T_varchar, true, 255, 0},
+				},
+				tableExist: true,
+				unique:     false,
+			},
 		},
 		outcnt: 4,
 	}
@@ -610,6 +624,15 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 		cols: []col{
 			{catalog.IndexTableIndexColName, types.T_varchar, true, 15, 0},
 			{catalog.IndexTablePrimaryColName, types.T_uint32, true, 32, 0},
+			{catalog.Row_ID, types.T_Rowid, true, 0, 0},
+		},
+		pks:    []int{0},
+		outcnt: 4,
+	}
+	constraintTestSchema[catalog.UniqueIndexTableNamePrefix+"35fd5c5f-ab54-4873-85e4-3d5ab0ae20a2"] = &Schema{
+		cols: []col{
+			{catalog.IndexTableIndexColName, types.T_varchar, false, 255, 0},
+			{catalog.IndexTablePrimaryColName, types.T_uint32, false, 32, 0},
 			{catalog.Row_ID, types.T_Rowid, true, 0, 0},
 		},
 		pks:    []int{0},

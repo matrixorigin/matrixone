@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/matrixorigin/matrixone/pkg/common/datalink"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
@@ -27,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/datalink"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -136,7 +136,8 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 		return ce, nil
 
 	case *plan.Expr_P:
-		return NewParamExpressionExecutor(proc.Mp(), int(t.P.Pos), types.T_text.ToType()), nil
+		typ := types.New(types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale)
+		return NewParamExpressionExecutor(proc.Mp(), int(t.P.Pos), typ), nil
 
 	case *plan.Expr_V:
 		typ := types.New(types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale)
@@ -271,6 +272,12 @@ type ParamExpressionExecutor struct {
 }
 
 func (expr *ParamExpressionExecutor) Eval(proc *process.Process, _ []*batch.Batch, _ []bool) (*vector.Vector, error) {
+	if expr.vec != nil {
+		return expr.vec, nil
+	}
+	if expr.null != nil {
+		return expr.null, nil
+	}
 	val, err := proc.GetPrepareParamsAt(expr.pos)
 	if err != nil {
 		return nil, err
@@ -493,8 +500,10 @@ func (expr *FunctionExpressionExecutor) EvalIff(proc *process.Process, batches [
 		expr.selectList1 = make([]bool, rowCount)
 		expr.selectList2 = make([]bool, rowCount)
 	}
+
+	bs := vector.GenerateFunctionFixedTypeParameter[bool](expr.parameterResults[0])
 	for i := 0; i < rowCount; i++ {
-		b, null := vector.GenerateFunctionFixedTypeParameter[bool](expr.parameterResults[0]).GetValue(uint64(i))
+		b, null := bs.GetValue(uint64(i))
 		if selectList != nil {
 			expr.selectList1[i] = selectList[i]
 			expr.selectList2[i] = selectList[i]
@@ -535,8 +544,10 @@ func (expr *FunctionExpressionExecutor) EvalCase(proc *process.Process, batches 
 			return err
 		}
 		if i != len(expr.parameterExecutor)-1 {
+			bs := vector.GenerateFunctionFixedTypeParameter[bool](expr.parameterResults[i])
+
 			for j := 0; j < rowCount; j++ {
-				b, null := vector.GenerateFunctionFixedTypeParameter[bool](expr.parameterResults[i]).GetValue(uint64(j))
+				b, null := bs.GetValue(uint64(j))
 				if !null && b {
 					expr.selectList1[j] = false
 					expr.selectList2[j] = true
@@ -640,7 +651,6 @@ func (expr *FunctionExpressionExecutor) Free() {
 		expr.resultVector.Free()
 		expr.resultVector = nil
 	}
-	expr.folded.reset(expr.m)
 
 	for _, p := range expr.parameterExecutor {
 		if p != nil {
@@ -667,11 +677,6 @@ func (expr *ColumnExpressionExecutor) Eval(_ *process.Process, batches []*batch.
 	// XXX it's a bad hack here. root cause is pipeline set a wrong relation index here.
 	if len(batches) == 1 {
 		relIndex = 0
-	}
-
-	// [hack-#002] our `select * from external table` is `select * from EmptyForConstFoldBatch`.
-	if batches[relIndex] == batch.EmptyForConstFoldBatch {
-		return expr.getConstNullVec(expr.typ, 1), nil
 	}
 
 	vec := batches[relIndex].Vecs[expr.colIndex]

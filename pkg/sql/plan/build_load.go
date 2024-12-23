@@ -388,13 +388,10 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 }
 
 func checkFileExist(param *tree.ExternParam, ctx CompilerContext) (string, error) {
-	if param.Local {
-		return "", nil
-	}
 	if param.ScanType == tree.INLINE {
 		return "", nil
 	}
-	param.Ctx = ctx.GetContext()
+
 	if param.ScanType == tree.S3 {
 		if err := InitS3Param(param); err != nil {
 			return "", err
@@ -404,9 +401,14 @@ func checkFileExist(param *tree.ExternParam, ctx CompilerContext) (string, error
 			return "", err
 		}
 	}
+	if param.Local {
+		return param.Filepath, nil
+	}
 	if len(param.Filepath) == 0 {
 		return "", nil
 	}
+
+	param.Ctx = ctx.GetContext()
 	if err := StatFile(param); err != nil {
 		if moerror, ok := err.(*moerr.Error); ok {
 			if moerror.ErrorCode() == moerr.ErrFileNotFound {
@@ -490,7 +492,7 @@ func InitNullMap(param *tree.ExternParam, ctx CompilerContext) error {
 			if col != expr3.ColName() {
 				return moerr.NewInvalidInput(ctx.GetContext(), "the nullif func first param must equal to colName")
 			}
-			param.NullMap[col] = append(param.NullMap[col], strings.ToLower(expr4.String()))
+			param.NullMap[col] = append(param.NullMap[col], expr4.String())
 		}
 		param.Tail.Assignments[i].Expr = nil
 	}

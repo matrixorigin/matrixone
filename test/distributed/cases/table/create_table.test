@@ -219,6 +219,19 @@ show create table test04.employees;
 show create table test04.employee_view;
 show create table test05.employee_with_department_view;
 
+CREATE TEMPORARY TABLE temp_employees (
+    id INT,
+    name VARCHAR(100),
+    salary DECIMAL(10, 2)
+);
+
+CREATE TABLE IF NOT EXISTS temp_employees (
+    id INT,
+    name VARCHAR(100),
+    salary DECIMAL(10, 2)
+);
+
+
 drop database test04;
 drop database test03;
 drop database test05;

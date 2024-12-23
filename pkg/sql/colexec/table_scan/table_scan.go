@@ -80,10 +80,7 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 		nil)
 
 	analyzer := tableScan.OpAnalyzer
-	analyzer.Start()
 	defer func() {
-		analyzer.Stop()
-
 		cost := time.Since(start)
 
 		trace.GetService(proc.GetService()).AddTxnDurationAction(
@@ -117,7 +114,7 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 		// read data from storage engine
 		tableScan.ctr.buf.CleanOnlyData()
 
-		crs := new(perfcounter.CounterSet)
+		crs := analyzer.GetOpCounterSet()
 		newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
 		isEnd, err := tableScan.Reader.Read(newCtx, tableScan.Attrs, nil, proc.Mp(), tableScan.ctr.buf)
 		if err != nil {
@@ -125,6 +122,7 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 			return vm.CancelResult, err
 		}
 		analyzer.AddS3RequestCount(crs)
+		analyzer.AddFileServiceCacheInfo(crs)
 		analyzer.AddDiskIO(crs)
 
 		if isEnd {
@@ -151,13 +149,7 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 
 	analyzer.Input(tableScan.ctr.buf)
+	retBatch := tableScan.ctr.buf
 
-	retBatch, err := tableScan.EvalProjection(tableScan.ctr.buf, proc)
-	if err != nil {
-		e = err
-		return vm.CancelResult, err
-	}
-	analyzer.Output(retBatch)
 	return vm.CallResult{Batch: retBatch, Status: vm.ExecNext}, nil
-
 }

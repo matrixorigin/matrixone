@@ -66,6 +66,14 @@ type BlocksIter interface {
 	Entry() types.Blockid
 }
 
+func (p *PartitionState) ApproxInMemTombstones() int {
+	return p.inMemTombstoneRowIdIndex.Len()
+}
+
+func (p *PartitionState) ApproxInMemRows() int {
+	return p.rows.Len()
+}
+
 // ApproxDataObjectsNum not accurate!  only used by stats
 func (p *PartitionState) ApproxDataObjectsNum() int {
 	return p.dataObjectsNameIndex.Len()
@@ -79,7 +87,7 @@ func (p *PartitionState) newTombstoneObjectsIter(
 	snapshot types.TS,
 	onlyVisible bool) (ObjectsIter, error) {
 
-	iter := p.tombstoneObjectDTSIndex.Copy().Iter()
+	iter := p.tombstoneObjectDTSIndex.Iter()
 	if onlyVisible {
 		pivot := ObjectEntry{
 			ObjectInfo{
@@ -91,7 +99,7 @@ func (p *PartitionState) newTombstoneObjectsIter(
 		if !iter.Prev() && p.tombstoneObjectDTSIndex.Len() > 0 {
 			// reset iter only when seeked to the first item
 			iter.Release()
-			iter = p.tombstoneObjectDTSIndex.Copy().Iter()
+			iter = p.tombstoneObjectDTSIndex.Iter()
 		}
 	}
 
@@ -107,7 +115,7 @@ func (p *PartitionState) newDataObjectIter(
 	snapshot types.TS,
 	onlyVisible bool) (ObjectsIter, error) {
 
-	iter := p.dataObjectsNameIndex.Copy().Iter()
+	iter := p.dataObjectsNameIndex.Iter()
 	ret := &objectsIter{
 		onlyVisible: onlyVisible,
 		ts:          snapshot,
@@ -141,6 +149,40 @@ func (p *PartitionState) NewDirtyBlocksIter() BlocksIter {
 	return nil
 }
 
+// In concurrent delete scenario, the following case may happen:
+//
+// / txn1   cn: write s3 tombstone      dn: commit s3 tombstone
+// /	    |                              |
+// /	----+---------------------+--------+-----------+---------->
+// /	                          |                    |
+// / txn2           cn: delete mem row(blocked)        cn: query PrimaryKeysMayBeModified and it returns false, which is wrong
+//
+// what PrimaryKeysMayBeModified does:
+//  1. no mem rows in partition state
+//  2. lastFlushTimestamp > from
+//  3. it boils down to PKPersistedBetween, where dataobjects are empty and tombstones are ignored
+func (p *PartitionState) HasTombstoneChanged(from, to types.TS) (exist bool) {
+	if p.tombstoneObjectDTSIndex.Len() == 0 {
+		return false
+	}
+	iter := p.tombstoneObjectDTSIndex.Iter()
+	defer iter.Release()
+
+	// Created after from
+	if iter.Seek(ObjectEntry{ObjectInfo{CreateTime: from}}) {
+		return true
+	}
+
+	iter.First()
+	// Deleted after from
+	ok := iter.Seek(ObjectEntry{ObjectInfo{DeleteTime: from}})
+	if ok {
+		item := iter.Item()
+		return !item.DeleteTime.IsEmpty()
+	}
+	return false
+}
+
 // GetChangedObjsBetween get changed objects between [begin, end],
 // notice that if an object is created after begin and deleted before end, it will be ignored.
 func (p *PartitionState) GetChangedObjsBetween(
@@ -153,7 +195,7 @@ func (p *PartitionState) GetChangedObjsBetween(
 	inserted = make(map[objectio.ObjectNameShort]struct{})
 	deleted = make(map[objectio.ObjectNameShort]struct{})
 
-	iter := p.dataObjectTSIndex.Copy().Iter()
+	iter := p.dataObjectTSIndex.Iter()
 	defer iter.Release()
 
 	for ok := iter.Seek(ObjectIndexByTSEntry{
@@ -181,7 +223,7 @@ func (p *PartitionState) GetChangedObjsBetween(
 }
 
 func (p *PartitionState) BlockPersisted(blockID *types.Blockid) bool {
-	iter := p.dataObjectsNameIndex.Copy().Iter()
+	iter := p.dataObjectsNameIndex.Iter()
 	defer iter.Release()
 
 	pivot := ObjectEntry{}
@@ -199,7 +241,7 @@ func (p *PartitionState) CollectObjectsBetween(
 	start, end types.TS,
 ) (insertList, deletedList []objectio.ObjectStats) {
 
-	iter := p.dataObjectTSIndex.Copy().Iter()
+	iter := p.dataObjectTSIndex.Iter()
 	defer iter.Release()
 
 	if !iter.Seek(ObjectIndexByTSEntry{
@@ -208,7 +250,7 @@ func (p *PartitionState) CollectObjectsBetween(
 		return
 	}
 
-	nameIdx := p.dataObjectsNameIndex.Copy()
+	nameIdx := p.dataObjectsNameIndex
 
 	for ok := true; ok; ok = iter.Next() {
 		entry := iter.Item()
@@ -261,9 +303,9 @@ func (p *PartitionState) CheckIfObjectDeletedBeforeTS(
 
 	var tree *btree.BTreeG[ObjectEntry]
 	if isTombstone {
-		tree = p.tombstoneObjectsNameIndex.Copy()
+		tree = p.tombstoneObjectsNameIndex
 	} else {
-		tree = p.dataObjectsNameIndex.Copy()
+		tree = p.dataObjectsNameIndex
 	}
 
 	var stats objectio.ObjectStats
@@ -282,7 +324,7 @@ func (p *PartitionState) CheckIfObjectDeletedBeforeTS(
 }
 
 func (p *PartitionState) GetObject(name objectio.ObjectNameShort) (ObjectInfo, bool) {
-	iter := p.dataObjectsNameIndex.Copy().Iter()
+	iter := p.dataObjectsNameIndex.Iter()
 	defer iter.Release()
 
 	pivot := ObjectEntry{}

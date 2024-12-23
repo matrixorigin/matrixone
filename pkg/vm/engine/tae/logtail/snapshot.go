@@ -325,7 +325,7 @@ func (sm *SnapshotMeta) copyTablesLocked() map[uint32]map[uint64]*tableInfo {
 	return tables
 }
 
-func isMoTable(tid uint64) bool {
+func IsMoTable(tid uint64) bool {
 	return tid == catalog2.MO_TABLES_ID
 }
 
@@ -353,7 +353,7 @@ func (sm *SnapshotMeta) updateTableInfo(
 		stats objectio.ObjectStats,
 		createTS types.TS, deleteTS types.TS,
 	) {
-		if !isMoTable(tid) {
+		if !IsMoTable(tid) {
 			return
 		}
 		if !stats.GetAppendable() {
@@ -546,7 +546,10 @@ func (sm *SnapshotMeta) updateTableInfo(
 
 	for pk, tables := range sm.tablePKIndex {
 		if len(tables) > 1 {
-			panic(fmt.Sprintf("table %v has more than one entry, tables len %d", pk, len(tables)))
+			logutil.Warn("UpdateSnapTable-Error",
+				zap.String("table", pk),
+				zap.Int("len", len(tables)),
+			)
 		}
 		if len(tables) == 0 {
 			continue
@@ -626,24 +629,24 @@ func (sm *SnapshotMeta) Update(
 	}
 
 	collector := func(
-		objects *map[uint64]map[objectio.Segmentid]*objectInfo,
+		objects1 *map[uint64]map[objectio.Segmentid]*objectInfo,
 		objects2 *map[objectio.Segmentid]*objectInfo,
 		tid uint64,
 		stats objectio.ObjectStats,
 		createTS types.TS, deleteTS types.TS,
 	) {
 		mapFun := func(
-			objects map[objectio.Segmentid]*objectInfo,
+			objects1 map[objectio.Segmentid]*objectInfo,
 		) {
-			if objects == nil {
-				objects = make(map[objectio.Segmentid]*objectInfo)
+			if objects1 == nil {
+				objects1 = make(map[objectio.Segmentid]*objectInfo)
 			}
 			id := stats.ObjectName().SegmentId()
-			if objects[id] == nil {
+			if objects1[id] == nil {
 				if !deleteTS.IsEmpty() {
 					return
 				}
-				objects[id] = &objectInfo{
+				objects1[id] = &objectInfo{
 					stats:    stats,
 					createAt: createTS,
 				}
@@ -658,7 +661,17 @@ func (sm *SnapshotMeta) Update(
 				return
 			}
 			if deleteTS.IsEmpty() {
-				panic(any("deleteTS is empty"))
+				// Compatible with the cluster restored by backup
+				logutil.Warn(
+					"GC-SnapshotMeta-Update-Collector-Skip",
+					zap.Uint64("table-id", tid),
+					zap.String("object-name", stats.ObjectName().String()),
+					zap.String("create-at", createTS.ToString()),
+					zap.String("task", taskName),
+					zap.String("start", startts.ToString()),
+					zap.String("end", endts.ToString()),
+				)
+				return
 			}
 			logutil.Info(
 				"GC-SnapshotMeta-Update-Collector",
@@ -667,7 +680,7 @@ func (sm *SnapshotMeta) Update(
 				zap.String("delete-at", deleteTS.ToString()),
 			)
 
-			delete(objects, id)
+			delete(objects1, id)
 		}
 		if tid == sm.pitr.tid {
 			mapFun(*objects2)
@@ -675,10 +688,10 @@ func (sm *SnapshotMeta) Update(
 		if _, ok := sm.snapshotTableIDs[tid]; !ok {
 			return
 		}
-		if (*objects)[tid] == nil {
-			(*objects)[tid] = make(map[objectio.Segmentid]*objectInfo)
+		if (*objects1)[tid] == nil {
+			(*objects1)[tid] = make(map[objectio.Segmentid]*objectInfo)
 		}
-		mapFun((*objects)[tid])
+		mapFun((*objects1)[tid])
 	}
 	collectObjects(
 		&sm.objects,
@@ -746,6 +759,11 @@ func (sm *SnapshotMeta) GetSnapshot(
 		snapshotSchemaTypes[ColObjId],
 	}
 	for tid, objectMap := range objects {
+		select {
+		case <-ctx.Done():
+			return nil, context.Cause(ctx)
+		default:
+		}
 		tombstonesStats := make([]objectio.ObjectStats, 0)
 		for ttid, tombstoneMap := range tombstones {
 			if ttid != tid {
@@ -860,6 +878,11 @@ func (sm *SnapshotMeta) GetPITR(
 		tables:   make(map[uint64]types.TS),
 	}
 	for _, object := range sm.pitr.objects {
+		select {
+		case <-ctx.Done():
+			return nil, context.Cause(ctx)
+		default:
+		}
 		location := object.stats.ObjectLocation()
 		name := object.stats.ObjectName()
 		for i := uint32(0); i < object.stats.BlkCnt(); i++ {
@@ -1130,7 +1153,9 @@ func (sm *SnapshotMeta) RebuildTableInfo(ins *containers.Batch) {
 			continue
 		}
 		if len(sm.tablePKIndex[pk]) > 0 {
-			panic(fmt.Sprintf("pk %s already exists, table: %d", pk, tid))
+			logutil.Warn("RebuildTableInfo-PK-Exists",
+				zap.String("pk", pk),
+				zap.Uint64("table", tid))
 		}
 		sm.tablePKIndex[pk] = make([]*tableInfo, 1)
 		sm.tablePKIndex[pk][0] = table
@@ -1187,7 +1212,7 @@ func (sm *SnapshotMeta) RebuildAObjectDel(ins *containers.Batch) {
 	for i := 0; i < ins.Length(); i++ {
 		commitTs := commitTsVec[i]
 		if _, ok := sm.aobjDelTsMap[commitTs]; ok {
-			panic(fmt.Sprintf("commitTs %v already exists", commitTs.ToString()))
+			logutil.Warn("RebuildAObjectDel-Exists", zap.Any("commitTs", commitTs))
 		}
 		sm.aobjDelTsMap[commitTs] = struct{}{}
 	}
@@ -1250,6 +1275,12 @@ func (sm *SnapshotMeta) Rebuild(
 }
 
 func (sm *SnapshotMeta) ReadMeta(ctx context.Context, name string, fs fileservice.FileService) error {
+	select {
+	case <-ctx.Done():
+		return context.Cause(ctx)
+	default:
+	}
+
 	reader, err := blockio.NewFileReaderNoCache(fs, name)
 	if err != nil {
 		return err

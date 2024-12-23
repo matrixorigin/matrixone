@@ -86,6 +86,7 @@ const (
 	ErrWrongDatetimeSpec    uint16 = 20310
 	ErrUpgrateError         uint16 = 20311
 	ErrInvalidTz            uint16 = 20312
+	ErrUnsupportedDML       uint16 = 20313
 
 	// Group 4: unexpected state and io errors
 	ErrInvalidState                             uint16 = 20400
@@ -219,11 +220,12 @@ const (
 	ErrTxnCannotRetry             uint16 = 20630
 	ErrTxnNeedRetryWithDefChanged uint16 = 20631
 	ErrTxnStale                   uint16 = 20632
-	ErrWaiterPaused               uint16 = 20633
-	ErrRetryForCNRollingRestart   uint16 = 20634
-	ErrNewTxnInCNRollingRestart   uint16 = 20635
-	ErrPrevCheckpointNotFinished  uint16 = 20636
-	ErrCantDelGCChecker           uint16 = 20637
+	ErrRetryForCNRollingRestart   uint16 = 20633
+	ErrNewTxnInCNRollingRestart   uint16 = 20634
+	ErrPrevCheckpointNotFinished  uint16 = 20635
+	ErrCantDelGCChecker           uint16 = 20636
+	ErrTxnUnknown                 uint16 = 20637
+	ErrTxnControl                 uint16 = 20638
 
 	// Group 7: lock service
 	// ErrDeadLockDetected lockservice has detected a deadlock and should abort the transaction if it receives this error
@@ -240,6 +242,8 @@ const (
 	ErrLockConflict uint16 = 20706
 	// ErrLockNeedUpgrade row level lock is too large that need upgrade to table level lock
 	ErrLockNeedUpgrade uint16 = 20707
+	// ErrCannotCommitOnInvalidCN cannot commit transaction on invalid CN
+	ErrCannotCommitOnInvalidCN uint16 = 20708
 
 	// Group 8: partition
 	ErrPartitionFunctionIsNotAllowed       uint16 = 20801
@@ -287,7 +291,8 @@ const (
 	ErrTooLargeObjectSize uint16 = 22001
 
 	// Group 13: CDC
-	ErrStaleRead uint16 = 22101
+	ErrStaleRead        uint16 = 22101
+	ErrNoWatermarkFound uint16 = 22102
 
 	// ErrEnd, the max value of MOErrorCode
 	ErrEnd uint16 = 65535
@@ -339,6 +344,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrBadFieldError:        {ER_BAD_FIELD_ERROR, []string{MySQLDefaultSqlState}, "Unknown column '%s' in '%s'"},
 	ErrWrongDatetimeSpec:    {ER_WRONG_DATETIME_SPEC, []string{MySQLDefaultSqlState}, "wrong date/time format specifier: %s"},
 	ErrUpgrateError:         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "CN upgrade table or view '%s.%s' under tenant '%s:%d' reports error: %s"},
+	ErrUnsupportedDML:       {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "unsupported DML: %s"},
 
 	// Group 4: unexpected state or file io error
 	ErrInvalidState:                             {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid state %s"},
@@ -458,21 +464,23 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrTxnCannotRetry:             {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn s3 writes can not retry in rc mode"},
 	ErrTxnNeedRetryWithDefChanged: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn need retry in rc mode, def changed"},
 	ErrTxnStale:                   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn is stale: timestamp is too small"},
-	ErrWaiterPaused:               {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "waiter is paused"},
 	ErrRetryForCNRollingRestart:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "retry for CN rolling restart"},
 	ErrNewTxnInCNRollingRestart:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "new txn in CN rolling restart"},
 	ErrPrevCheckpointNotFinished:  {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "prev checkpoint not finished"},
 	ErrCantCompileForPrepare:      {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "can not compile for prepare"},
 	ErrCantDelGCChecker:           {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "can't delete gc checker"},
+	ErrTxnUnknown:                 {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn commit status is unknown: %s"},
+	ErrTxnControl:                 {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn control error: %s"},
 
 	// Group 7: lock service
-	ErrDeadLockDetected:     {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "deadlock detected"},
-	ErrLockTableBindChanged: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "lock table bind changed"},
-	ErrLockTableNotFound:    {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "lock table not found on remote lock service"},
-	ErrDeadlockCheckBusy:    {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "deadlock check is busy"},
-	ErrCannotCommitOrphan:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "cannot commit a orphan transaction"},
-	ErrLockConflict:         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "lock options conflict, wait policy is fast fail"},
-	ErrLockNeedUpgrade:      {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "row level lock is too large that need upgrade to table level lock"},
+	ErrDeadLockDetected:        {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "deadlock detected"},
+	ErrLockTableBindChanged:    {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "lock table bind changed"},
+	ErrLockTableNotFound:       {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "lock table not found on remote lock service"},
+	ErrDeadlockCheckBusy:       {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "deadlock check is busy"},
+	ErrCannotCommitOrphan:      {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "cannot commit a orphan transaction"},
+	ErrLockConflict:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "lock options conflict, wait policy is fast fail"},
+	ErrLockNeedUpgrade:         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "row level lock is too large that need upgrade to table level lock"},
+	ErrCannotCommitOnInvalidCN: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "cannot commit a orphan transaction on invalid cn"},
 
 	// Group 8: partition
 	ErrPartitionFunctionIsNotAllowed:       {ER_PARTITION_FUNCTION_IS_NOT_ALLOWED, []string{MySQLDefaultSqlState}, "This partition function is not allowed"},
@@ -520,7 +528,9 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrTooLargeObjectSize: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "objectio: too large object size %d"},
 
 	// Group 13: CDC
-	ErrStaleRead: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "CDC handle: stale read, min TS is %v, receive %v"},
+	ErrStaleRead:        {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "CDC handle: stale read, min TS is %v, receive %v"},
+	ErrNoWatermarkFound: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "CDC task: no watermark found of table %s.%s"},
+
 	// Group End: max value of MOErrorCode
 	ErrEnd: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "internal error: end of errcode code"},
 }
@@ -849,6 +859,11 @@ func NewConstraintViolationf(ctx context.Context, format string, args ...any) *E
 
 func NewConstraintViolation(ctx context.Context, msg string) *Error {
 	return newError(ctx, ErrConstraintViolation, msg)
+}
+
+func NewUnsupportedDML(ctx context.Context, msg string, args ...any) *Error {
+	xmsg := fmt.Sprintf(msg, args...)
+	return newError(ctx, ErrUnsupportedDML, xmsg)
 }
 
 func NewEmptyVector(ctx context.Context) *Error {
@@ -1266,6 +1281,10 @@ func NewCannotCommitOrphan(ctx context.Context) *Error {
 	return newError(ctx, ErrCannotCommitOrphan)
 }
 
+func NewCannotCommitOnInvalidCN(ctx context.Context) *Error {
+	return newError(ctx, ErrCannotCommitOnInvalidCN)
+}
+
 func NewLockTableBindChanged(ctx context.Context) *Error {
 	return newError(ctx, ErrLockTableBindChanged)
 }
@@ -1510,6 +1529,10 @@ func NewCantCompileForPrepare(ctx context.Context) *Error {
 
 func NewTableMustHaveVisibleColumn(ctx context.Context) *Error {
 	return newError(ctx, ErrTableMustHaveAVisibleColumn)
+}
+
+func NewTxnUnknown(ctx context.Context, txnID string) *Error {
+	return newError(ctx, ErrTxnUnknown, txnID)
 }
 
 var contextFunc atomic.Value

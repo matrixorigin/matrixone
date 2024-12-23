@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -197,17 +198,24 @@ func Test_Call(t *testing.T) {
 				},
 			}
 			param.FileSize = []int64{1}
-			end, err := tcs.arg.Call(tcs.proc)
+			err := tcs.arg.Prepare(tcs.proc)
+			convey.So(err, convey.ShouldBeNil)
+			end, err := vm.Exec(tcs.arg, tcs.proc)
 			convey.So(err, convey.ShouldNotBeNil)
 			convey.So(end.Status == vm.ExecStop, convey.ShouldBeFalse)
 
+			err = tcs.arg.Prepare(tcs.proc)
+			convey.So(err, convey.ShouldBeNil)
 			param.Fileparam.End = false
-			end, err = tcs.arg.Call(tcs.proc)
+
+			end, err = vm.Exec(tcs.arg, tcs.proc)
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(end.Status == vm.ExecStop, convey.ShouldBeTrue)
 
+			err = tcs.arg.Prepare(tcs.proc)
+			convey.So(err, convey.ShouldBeNil)
 			param.Fileparam.End = true
-			end, err = tcs.arg.Call(tcs.proc)
+			end, err = vm.Exec(tcs.arg, tcs.proc)
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(end.Status == vm.ExecStop, convey.ShouldBeTrue)
 		}
@@ -239,7 +247,7 @@ func Test_Call2(t *testing.T) {
 				},
 			}
 			param.Extern = extern
-			attrs := []string{"col1", "col2", "col3"}
+			attrs := []plan.ExternAttr{{ColName: "col1", ColIndex: 0, ColFieldIndex: 0}, {ColName: "col2", ColIndex: 1, ColFieldIndex: 1}, {ColName: "col3", ColIndex: 2, ColFieldIndex: 2}}
 			param.Attrs = attrs
 
 			cols := []*plan.ColDef{
@@ -272,14 +280,14 @@ func Test_Call2(t *testing.T) {
 			var err error
 			err = tcs.arg.Prepare(tcs.proc)
 			convey.So(err, convey.ShouldBeNil)
-			end, err := tcs.arg.Call(tcs.proc)
+			end, err := vm.Exec(tcs.arg, tcs.proc)
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(end.Status == vm.ExecStop, convey.ShouldBeFalse)
 			tcs.arg.Reset(tcs.proc, false, nil)
 
 			err = tcs.arg.Prepare(tcs.proc)
 			convey.So(err, convey.ShouldBeNil)
-			end, err = tcs.arg.Call(tcs.proc)
+			end, err = vm.Exec(tcs.arg, tcs.proc)
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(end.Status == vm.ExecStop, convey.ShouldBeTrue)
 			tcs.arg.Free(tcs.proc, false, nil)
@@ -315,7 +323,7 @@ func Test_CALL3(t *testing.T) {
 			},
 		}
 		param.Extern = extern
-		attrs := []string{"col1", "col2", "col3"}
+		attrs := []plan.ExternAttr{{ColName: "col1", ColIndex: 0, ColFieldIndex: 0}, {ColName: "col2", ColIndex: 1, ColFieldIndex: 1}, {ColName: "col3", ColIndex: 2, ColFieldIndex: 2}}
 		param.Attrs = attrs
 
 		cols := []*plan.ColDef{
@@ -346,14 +354,6 @@ func Test_CALL3(t *testing.T) {
 		param.FileSize = []int64{1}
 
 		// line := []string{"1", "2", "3"}
-		param.Name2ColIndex = make(map[string]int32)
-		for i := 0; i < len(attrs); i++ {
-			param.Name2ColIndex[attrs[i]] = int32(i)
-		}
-		param.TbColToDataCol = make(map[string]int32)
-		for i := 0; i < len(attrs); i++ {
-			param.TbColToDataCol[attrs[i]] = int32(i)
-		}
 
 		param.Extern.Data = "1,2,3"
 		var err error
@@ -362,7 +362,7 @@ func Test_CALL3(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 		param.plh, err = getMOCSVReader(param, tcs.proc)
 		require.NoError(t, err)
-		end, err := tcs.arg.Call(tcs.proc)
+		end, err := vm.Exec(tcs.arg, tcs.proc)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(end.Status == vm.ExecStop, convey.ShouldBeFalse)
 		tcs.arg.Reset(tcs.proc, false, nil)
@@ -372,7 +372,7 @@ func Test_CALL3(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 		param.plh, err = getMOCSVReader(param, tcs.proc)
 		require.NoError(t, err)
-		end, err = tcs.arg.Call(tcs.proc)
+		end, err = vm.Exec(tcs.arg, tcs.proc)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(end.Status == vm.ExecStop, convey.ShouldBeFalse)
 		tcs.arg.Free(tcs.proc, false, nil)
@@ -716,4 +716,35 @@ func Test_fliterByAccountAndFilename(t *testing.T) {
 			require.Equal(t, tt.want1, got1)
 		})
 	}
+}
+
+// test load data local infile with a compress file which not exists
+// getUnCompressReader will return EOF err in that case, and getMOCSVReader should handle EOF, and return nil err
+func Test_getMOCSVReader(t *testing.T) {
+	case1 := newTestCase(tree.CSV, "")
+	param := case1.arg.Es
+	extern := &tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			Filepath: "",
+			Tail: &tree.TailParameter{
+				IgnoredLines: 0,
+			},
+			Format:   case1.format,
+			ScanType: tree.INFILE,
+		},
+		ExParam: tree.ExParam{
+			FileService: case1.proc.Base.FileService,
+			JsonData:    case1.jsondata,
+			Ctx:         context.Background(),
+			Local:       true,
+		},
+	}
+	var writer *io.PipeWriter
+	case1.proc.Base.LoadLocalReader, writer = io.Pipe()
+	_ = writer.Close()
+
+	param.Extern = extern
+	param.Fileparam.Filepath = "/noexistsfile.gz"
+	_, err := getMOCSVReader(param, case1.proc)
+	require.Equal(t, nil, err)
 }

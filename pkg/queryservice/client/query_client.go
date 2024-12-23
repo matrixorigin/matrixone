@@ -53,6 +53,11 @@ var methodVersions = map[pb.CmdMethod]int64{
 	pb.CmdMethod_GOMEMLIMIT:               defines.MORPCVersion3,
 	pb.CmdMethod_FileServiceCache:         defines.MORPCVersion3,
 	pb.CmdMethod_FileServiceCacheEvict:    defines.MORPCVersion3,
+	pb.CmdMethod_MetadataCache:            defines.MORPCVersion4,
+	pb.CmdMethod_GOGCPercent:              defines.MORPCVersion4,
+	pb.CmdMethod_FaultInject:              defines.MORPCVersion4,
+	pb.CmdMethod_CtlMoTableStats:          defines.MORPCVersion4,
+	pb.CmdMethod_WorkspaceThreshold:       defines.MORPCVersion4,
 }
 
 type queryClient struct {

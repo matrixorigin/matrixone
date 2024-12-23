@@ -387,7 +387,7 @@ func (r *taskRunner) doFetch() ([]task.AsyncTask, error) {
 }
 
 func (r *taskRunner) addToWait(ctx context.Context, task task.AsyncTask) bool {
-	ctx2, cancel := context.WithCancel(ctx)
+	ctx2, cancel := context.WithCancelCause(ctx)
 	rt := runningTask{
 		task:   task,
 		ctx:    ctx2,
@@ -623,7 +623,7 @@ func (r *taskRunner) doHeartbeat(ctx context.Context) {
 		if err := r.service.Heartbeat(ctx, rt.task); err != nil {
 			if moerr.IsMoErrCode(err, moerr.ErrInvalidTask) {
 				r.removeRunningTask(rt.task.ID)
-				rt.cancel()
+				rt.cancel(err)
 			}
 			r.logger.Error("task heartbeat failed",
 				zap.String("task", rt.task.DebugString()),
@@ -653,7 +653,7 @@ func (r *taskRunner) getExecutor(code task.TaskCode) (TaskExecutor, error) {
 type runningTask struct {
 	task       task.AsyncTask
 	ctx        context.Context
-	cancel     context.CancelFunc
+	cancel     context.CancelCauseFunc
 	retryTimes uint32
 	retryAt    time.Time
 }

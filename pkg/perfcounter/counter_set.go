@@ -38,42 +38,32 @@ type FileServiceCounterSet struct {
 	}
 
 	Cache struct {
-		Read   stats.Counter
-		Hit    stats.Counter
+		Read   stats.Counter // CacheRead
+		Hit    stats.Counter // CacheHit
 		Memory struct {
-			Read stats.Counter
-			Hit  stats.Counter
+			Read stats.Counter // CacheMemoryRead
+			Hit  stats.Counter // CacheMemoryHit
 		}
 		Disk struct {
-			Read             stats.Counter
-			Hit              stats.Counter
-			GetFileContent   stats.Counter
-			SetFileContent   stats.Counter
-			OpenIOEntryFile  stats.Counter
-			OpenFullFile     stats.Counter
-			CreateFile       stats.Counter
-			StatFile         stats.Counter
-			WriteFile        stats.Counter
-			Error            stats.Counter
-			Evict            stats.Counter
-			EvictPending     stats.Counter
-			EvictImmediately stats.Counter
+			Read            stats.Counter // CacheDiskRead
+			Hit             stats.Counter // CacheDiskHit
+			OpenIOEntryFile stats.Counter
+			OpenFullFile    stats.Counter
+			CreateFile      stats.Counter
+			StatFile        stats.Counter
+			WriteFile       stats.Counter
+			Error           stats.Counter
+			Evict           stats.Counter
 		}
 		Remote struct {
-			Read stats.Counter
-			Hit  stats.Counter
-		}
-		LRU struct {
-			Evict             stats.Counter
-			EvictWithZeroRead stats.Counter
+			Read stats.Counter // CacheRemoteRead
+			Hit  stats.Counter // CacheRemoteHit
 		}
 	}
 
 	FileWithChecksum struct {
-		Read            stats.Counter // logical read, unit：bytes
-		Write           stats.Counter // logical write, unit：bytes
-		UnderlyingRead  stats.Counter // physical read, unit：bytes
-		UnderlyingWrite stats.Counter // physical write, unit：bytes
+		Read  stats.Counter // logical read, unit：bytes
+		Write stats.Counter // logical write, unit：bytes
 	}
 }
 

@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"go.uber.org/zap"
@@ -78,6 +79,10 @@ func NewBackupDeltaLocDataSource(
 	}
 }
 
+func (d *BackupDeltaLocDataSource) String() string {
+	return "BackupDeltaLocDataSource"
+}
+
 func (d *BackupDeltaLocDataSource) SetTS(
 	ts types.TS,
 ) {
@@ -89,6 +94,7 @@ func (d *BackupDeltaLocDataSource) Next(
 	_ []string,
 	_ []types.Type,
 	_ []uint16,
+	_ int32,
 	_ any,
 	_ *mpool.MPool,
 	_ *batch.Batch,
@@ -269,6 +275,12 @@ func GetCheckpointData(
 	location objectio.Location,
 	version uint32,
 ) (*CheckpointData, error) {
+	select {
+	case <-ctx.Done():
+		return nil, context.Cause(ctx)
+	default:
+	}
+
 	data := NewCheckpointData(sid, common.CheckpointAllocator)
 	reader, err := blockio.NewObjectReader(sid, fs, location)
 	if err != nil {
@@ -725,6 +737,13 @@ func ReWriteCheckpointAndBlockFromKey(
 						objectio.WithSorted()(insertObjData[i].stats)
 						newMeta.GetVectorByName(ObjectAttr_ObjectStats).Update(row, insertObjData[i].stats[:], false)
 						newMeta.GetVectorByName(EntryNode_DeleteAt).Update(row, types.TS{}, false)
+						_, sarg, _ := fault.TriggerFault("back up UT")
+						if sarg == "" {
+							createTS := newMeta.GetVectorByName(EntryNode_CreateAt).Get(i).(types.TS)
+							newMeta.GetVectorByName(txnbase.SnapshotAttr_CommitTS).Update(row, createTS, false)
+							newMeta.GetVectorByName(txnbase.SnapshotAttr_PrepareTS).Update(row, createTS, false)
+							newMeta.GetVectorByName(txnbase.SnapshotAttr_StartTS).Update(row, createTS.Prev(), false)
+						}
 					}
 				}
 			}

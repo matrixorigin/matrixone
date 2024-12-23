@@ -52,6 +52,7 @@ const (
 	Mark
 	IndexJoin
 	IndexBuild
+	DedupJoin
 
 	Merge
 	MergeTop
@@ -102,6 +103,7 @@ const (
 	LockOp
 
 	Shuffle
+	ShuffleV2
 
 	Sample
 	ProductL2
@@ -383,6 +385,7 @@ type Operator interface {
 	AppendChild(child Operator)
 
 	GetOperatorBase() *OperatorBase
+	ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error)
 }
 
 type OperatorBase struct {
@@ -493,9 +496,25 @@ func CancelCheck(proc *process.Process) (error, bool) {
 	}
 }
 
+func Exec(op Operator, proc *process.Process) (CallResult, error) {
+	if err, isCancel := CancelCheck(proc); isCancel {
+		return CancelResult, err
+	}
+	analyzer := op.GetOperatorBase().OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
+	result, err := op.Call(proc)
+	if err != nil {
+		return result, err
+	}
+	result.Batch, err = op.ExecProjection(proc, result.Batch)
+	analyzer.Output(result.Batch)
+	return result, err
+}
+
 func ChildrenCall(op Operator, proc *process.Process, anal process.Analyzer) (CallResult, error) {
 	beforeChildrenCall := time.Now()
-	result, err := op.Call(proc)
+	result, err := Exec(op, proc)
 	anal.ChildrenCallStop(beforeChildrenCall)
 	if err == nil {
 		anal.Input(result.Batch)
@@ -549,13 +568,8 @@ func (info OperatorInfo) GetAddress() message.MessageAddress {
 	}
 }
 
-func CannotRemote(op Operator) bool {
-	// todo: I think we should add more operators here.
-	return op.OpType() == LockOp || op.OpType() == MergeRecursive || op.OpType() == MergeCTE
-}
-
 type ModificationArgument interface {
-	AffectedRows() uint64
+	GetAffectedRows() uint64
 }
 
 // doHandleAllOp function uses post traversal to recursively process nodes in the operand tree.

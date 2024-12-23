@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -29,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -59,7 +61,9 @@ func reCheckifNeedLockWholeTable(builder *QueryBuilder) {
 			if reCheckIfNeed {
 				logutil.Infof("Row lock upgraded to table lock for SQL : %s", builder.compCtx.GetRootSql())
 				logutil.Infof("the outcnt stats is %f", n.Stats.Outcnt)
-				n.LockTargets[0].LockTable = reCheckIfNeed
+				for _, target := range n.LockTargets {
+					target.LockTable = reCheckIfNeed
+				}
 			}
 		}
 	}
@@ -475,7 +479,33 @@ func getDefaultExpr(ctx context.Context, d *plan.ColDef) (*Expr, error) {
 			},
 		}, nil
 	}
-	return d.Default.Expr, nil
+	newDefExpr := DeepCopyExpr(d.Default.Expr)
+	err := replaceFuncId(ctx, newDefExpr)
+	return newDefExpr, err
+}
+
+func replaceFuncId(ctx context.Context, expr *Expr) error {
+	switch fun := expr.Expr.(type) {
+	case *plan.Expr_F:
+		for _, arg := range fun.F.Args {
+			err := replaceFuncId(ctx, arg)
+			if err != nil {
+				return err
+			}
+		}
+
+		fnName := fun.F.Func.ObjName
+		newFID, err := function.GetFunctionIdByName(ctx, fnName)
+		if err != nil {
+			return err
+		}
+		oldFID, oldIdx := function.DecodeOverloadID(fun.F.Func.Obj)
+		if oldFID != newFID {
+			fun.F.Func.Obj = function.EncodeOverloadID(newFID, oldIdx)
+		}
+	default:
+	}
+	return nil
 }
 
 func judgeUnixTimestampReturnType(timestr string) types.T {
@@ -660,4 +690,90 @@ func genSqlsForCheckFKSelfRefer(ctx context.Context,
 		ret = append(ret, sql)
 	}
 	return ret, nil
+}
+
+func getPartitionInfos(ctx CompilerContext, objRef *ObjectRef, tableDef *TableDef) ([]uint64, []string) {
+	partTableIds := make([]uint64, tableDef.Partition.PartitionNum)
+	partTableNames := make([]string, tableDef.Partition.PartitionNum)
+	for i, partition := range tableDef.Partition.Partitions {
+		_, partTableDef := ctx.Resolve(DbNameOfObjRef(objRef), partition.PartitionTableName, nil)
+		partTableIds[i] = partTableDef.TblId
+		partTableNames[i] = partition.PartitionTableName
+	}
+	return partTableIds, partTableNames
+}
+
+func getRemapParitionExpr(tableDef *TableDef, relPos int32, colPosMap map[string]int32, containTableName bool) (retExpr *Expr, err error) {
+	retExpr = DeepCopyExpr(tableDef.Partition.PartitionExpression)
+	err = remapPartitionExprColRef(retExpr, tableDef.Name, relPos, colPosMap, containTableName)
+	return
+}
+
+func remapPartitionExprColRef(expr *Expr, tableName string, relPos int32, colPosMap map[string]int32, containTableName bool) (err error) {
+	switch ne := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		colName := ne.Col.Name
+		if containTableName {
+			colName = tableName + "." + colName
+		}
+		if colPos, ok := colPosMap[colName]; ok {
+			ne.Col.RelPos = relPos
+			ne.Col.ColPos = colPos
+		} else {
+			err = moerr.NewInternalErrorNoCtx("can not find col by name in partition expr")
+			return
+		}
+
+	case *plan.Expr_F:
+		for _, arg := range ne.F.GetArgs() {
+			if err = remapPartitionExprColRef(arg, tableName, relPos, colPosMap, containTableName); err != nil {
+				return
+			}
+		}
+
+	case *plan.Expr_W:
+		if err = remapPartitionExprColRef(ne.W.WindowFunc, tableName, relPos, colPosMap, containTableName); err != nil {
+			return
+		}
+
+		for _, arg := range ne.W.PartitionBy {
+			if err = remapPartitionExprColRef(arg, tableName, relPos, colPosMap, containTableName); err != nil {
+				return
+			}
+		}
+		for _, order := range ne.W.OrderBy {
+			if err = remapPartitionExprColRef(order.Expr, tableName, relPos, colPosMap, containTableName); err != nil {
+				return
+			}
+		}
+	}
+	return
+}
+
+func getPartColsFromExpr(expr *Expr, colNameMap map[string]bool) {
+	switch ne := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		colNameMap[ne.Col.Name] = true
+
+	case *plan.Expr_F:
+		for _, arg := range ne.F.GetArgs() {
+			getPartColsFromExpr(arg, colNameMap)
+		}
+
+	case *plan.Expr_W:
+		getPartColsFromExpr(ne.W.WindowFunc, colNameMap)
+
+		for _, arg := range ne.W.PartitionBy {
+			getPartColsFromExpr(arg, colNameMap)
+		}
+		for _, order := range ne.W.OrderBy {
+			getPartColsFromExpr(order.Expr, colNameMap)
+		}
+	}
+}
+
+func cleanHint(originSql string) string {
+	re := regexp.MustCompile(`/\*[^!].*?\*/`)
+	cleanSQL := re.ReplaceAllString(originSql, "")
+	return cleanSQL
 }

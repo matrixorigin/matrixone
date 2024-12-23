@@ -74,6 +74,7 @@ type IndexDef = plan.IndexDef
 type SubscriptionMeta = plan.SubscriptionMeta
 type Snapshot = plan.Snapshot
 type SnapshotTenant = plan.SnapshotTenant
+type ExternAttr = plan.ExternAttr
 
 type CompilerContext interface {
 	// Default database/schema in context
@@ -82,6 +83,8 @@ type CompilerContext interface {
 	DatabaseExists(name string, snapshot *Snapshot) bool
 	// get table definition by database/schema
 	Resolve(schemaName string, tableName string, snapshot *Snapshot) (*ObjectRef, *TableDef)
+	// get index table definition by an ObjectRef, will skip unnecessary subscription check
+	ResolveIndexTableByRef(ref *ObjectRef, tblName string, snapshot *Snapshot) (*ObjectRef, *TableDef)
 	// get table definition by table id
 	ResolveById(tableId uint64, snapshot *Snapshot) (*ObjectRef, *TableDef)
 	// get the value of variable
@@ -169,7 +172,8 @@ type QueryBuilder struct {
 	ctxByNode    []*BindContext
 	nameByColRef map[[2]int32]string
 
-	tag2Table map[int32]*TableDef
+	tag2Table  map[int32]*TableDef
+	tag2NodeID map[int32]int32
 
 	nextTag    int32
 	nextMsgTag int32
@@ -179,10 +183,12 @@ type QueryBuilder struct {
 	haveOnDuplicateKey    bool // if it's a plan contain onduplicate key node, we can not use some optmize rule
 	isForUpdate           bool // if it's a query plan for update
 	isRestore             bool
+	isRestoreByTs         bool
 	isSkipResolveTableDef bool
+	skipStats             bool
 
-	deleteNode     map[uint64]int32 //delete node in this query. key is tableId, value is the nodeId of sinkScan node in the delete plan
-	skipStats      bool
+	deleteNode map[uint64]int32 //delete node in this query. key is tableId, value is the nodeId of sinkScan node in the delete plan
+
 	optimizerHints *OptimizerHints
 }
 
@@ -207,6 +213,7 @@ type OptimizerHints struct {
 	execType                   int
 	disableRightJoin           int
 	printShuffle               int
+	skipDedup                  int
 }
 
 type CTERef struct {
@@ -232,9 +239,14 @@ type BindContext struct {
 	recSelect              bool
 	finalSelect            bool
 	unionSelect            bool
-	recRecursiveScanNodeId int32
 	isTryBindingCTE        bool
 	sliding                bool
+	isDistinct             bool
+	isCorrelated           bool
+	hasSingleRow           bool
+	forceWindows           bool
+	isGroupingSet          bool
+	recRecursiveScanNodeId int32
 
 	cteName  string
 	headings []string
@@ -262,9 +274,12 @@ type BindContext struct {
 	projectByExpr  map[string]int32
 	timeByAst      map[string]int32
 
+	projectByAst []SelectField
+
 	timeAsts []tree.Expr
 
-	aliasMap map[string]*aliasItem
+	aliasMap       map[string]*aliasItem
+	aliasFrequency map[string]int
 
 	bindings       []*Binding
 	bindingByTag   map[int32]*Binding //rel_pos
@@ -274,17 +289,11 @@ type BindContext struct {
 	// for join tables
 	bindingTree *BindingTreeNode
 
-	isDistinct   bool
-	isCorrelated bool
-	hasSingleRow bool
-
 	parent     *BindContext
 	leftChild  *BindContext
 	rightChild *BindContext
 
 	defaultDatabase string
-
-	forceWindows bool
 
 	// sample function related.
 	sampleFunc SampleFuncCtx
@@ -298,8 +307,14 @@ type BindContext struct {
 	// lower is sys var lower_case_table_names
 	lower int64
 
-	isGroupingSet bool
-	groupingFlag  []bool
+	groupingFlag []bool
+}
+
+type SelectField struct {
+	ast tree.Expr
+	// AsName is alias name for Expr
+	aliasName string
+	pos       int32
 }
 
 type NameTuple struct {
@@ -343,6 +358,13 @@ type DefaultBinder struct {
 type UpdateBinder struct {
 	baseBinder
 	cols []*ColDef
+}
+
+type OndupUpdateBinder struct {
+	baseBinder
+	scanTag   int32
+	selectTag int32
+	tableDef  *plan.TableDef
 }
 
 type TableBinder struct {
@@ -394,6 +416,7 @@ var _ Binder = (*ProjectionBinder)(nil)
 var _ Binder = (*LimitBinder)(nil)
 var _ Binder = (*PartitionBinder)(nil)
 var _ Binder = (*UpdateBinder)(nil)
+var _ Binder = (*OndupUpdateBinder)(nil)
 
 var Sequence_cols_name = []string{"last_seq_num", "min_value", "max_value", "start_value", "increment_value", "cycle", "is_called"}
 

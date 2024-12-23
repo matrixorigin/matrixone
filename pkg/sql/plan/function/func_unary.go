@@ -24,6 +24,8 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"hash"
+	"hash/crc32"
 	"io"
 	"math"
 	"runtime"
@@ -33,8 +35,8 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/matrixorigin/matrixone/pkg/common/datalink"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
+	"github.com/matrixorigin/matrixone/pkg/datalink"
 
 	"github.com/RoaringBitmap/roaring"
 	"golang.org/x/exp/constraints"
@@ -561,7 +563,8 @@ func LoadFile(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 	if err != nil {
 		return err
 	}
-	if len(ctx) > 65536 /*blob size*/ {
+
+	if len(ctx) > types.MaxBlobLen /*blob size*/ {
 		return moerr.NewInternalError(proc.Ctx, "Data too long for blob")
 	}
 	if len(ctx) == 0 {
@@ -1056,6 +1059,29 @@ func Md5(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc 
 
 }
 
+type crc32ExecContext struct {
+	hah hash.Hash32
+}
+
+func newCrc32ExecContext() *crc32ExecContext {
+	return &crc32ExecContext{
+		hah: crc32.NewIEEE(),
+	}
+}
+
+func (content *crc32ExecContext) builtInCrc32(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryBytesToFixedWithErrorCheck[uint32](
+		parameters,
+		result, proc, length, func(v []byte) (uint32, error) {
+			content.hah.Reset()
+			_, err := content.hah.Write(v)
+			if err != nil {
+				return 0, err
+			}
+			return content.hah.Sum32(), nil
+		}, selectList)
+}
+
 func ToBase64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(data []byte) ([]byte, error) {
 		buf := make([]byte, base64.StdEncoding.EncodedLen(len(functionUtil.QuickBytesToStr(data))))
@@ -1477,7 +1503,7 @@ func RemoveFaultPoint(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 	}
 
 	return opUnaryStrToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v string) (bool, error) {
-		err = fault.RemoveFaultPoint(proc.Ctx, v)
+		_, err = fault.RemoveFaultPoint(proc.Ctx, v)
 		return true, err
 	}, selectList)
 }

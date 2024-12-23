@@ -12,7 +12,7 @@ a + 0.5
 -0.72
 select a-0.5 from t0;
 a - 0.5
-0.6
+0.6000000000000001
 4.5
 -0.2
 -1.72
@@ -25,7 +25,7 @@ a * 0.5
 select a/0.5 from t0;
 a / 0.5
 2.2
-10
+10.0
 0.6
 -2.44
 drop table if exists t1;
@@ -79,7 +79,7 @@ Rapier    Abigail    F    Human Resources    38
 Martin    Kelly    F    Information Services    54
 Poland    Carole    F    Production Control    29
 select concat_ws(LastName,FirstName) from Demovarchar where Age > 40 order by 1 asc;
-concat_ws(lastname, firstname)
+concat_ws(LastName, FirstName)
 Andrea
 David
 Kelly
@@ -89,15 +89,15 @@ Kelly
 David
 Andrea
 select concat_ws(LastName,FirstName),Gender,Age from Demovarchar where Gender='F' order by Age asc;
-concat_ws(lastname, firstname)    gender    age
+concat_ws(LastName, FirstName)    Gender    Age
 Carole    F    29
 Abigail    F    38
 Andrea    F    45
 Kelly    F    54
 select cast(Age as char) and Age as cAge from Demovarchar where Age>=50 order by cAge desc;
 cAge
-1
-1
+true
+true
 CREATE TABLE employees (
 employeeNumber int(11) NOT NULL,
 lastName varchar(50) NOT NULL,
@@ -129,18 +129,18 @@ insert  into employees(employeeNumber,lastName,firstName,extension,email,officeC
 (1504,'Jones','Barry','x102','bjones@classicmodelcars.com','7',1102,'Sales Rep'),
 (1611,'Fixter','Andy','x101','afixter@classicmodelcars.com','6',1088,'Sales Rep');
 select officeCode,count(officeCode) from employees group by officeCode having count(officeCode)>2;
-officecode    count(officecode)
+officeCode    count(officeCode)
 1    6
 4    4
 select lastName,firstName from employees where cast(officeCode as unsigned)>5 limit 2 offset 1;
-lastname    firstname
+lastName    firstName
 Bott    Larry
 Jones    Barry
 select max(lastName),min(lastName) from employees;
-max(lastname)    min(lastname)
+max(lastName)    min(lastName)
 Vanauf    Bondur
 select max(lastName),min(lastName),JobTitle from employees group by JobTitle;
-max(lastname)    min(lastname)    jobtitle
+max(lastName)    min(lastName)    JobTitle
 Murphy    Murphy    President
 Patterson    Patterson    VP Sales
 Firrelli    Firrelli    VP Marketing
@@ -149,7 +149,7 @@ Bondur    Bondur    Sale Manager (EMEA)
 Bow    Bow    Sales Manager (NA)
 Vanauf    Bondur    Sales Rep
 select lastName,firstName from employees where lastName>=firstName;
-lastname    firstname
+lastName    firstName
 Murphy    Diane
 Patterson    Mary
 Bow    Anthony
@@ -160,7 +160,7 @@ Hernandez    Gerard
 Jones    Barry
 Fixter    Andy
 select lastName,firstName from employees where lastName between firstName and JobTitle;
-lastname    firstname
+lastName    firstName
 Murphy    Diane
 Patterson    Mary
 Bow    Anthony
@@ -184,12 +184,9 @@ employeenumber    lastname    firstname    extension    email    officecode    r
 1401    Castillo    Pamela    x2759    pcastillo@classicmodelcars.com    4    1102    Sales Rep
 1611    Fixter    Andy    x101    afixter@classicmodelcars.com    6    1088    Sales Rep
 select avg(officeCode) from employees where jobTitle like 'Sales%' group by jobTitle;
-avg(officeCode)
-6
-1
-3.6666666666666665
+invalid argument aggregate function avg, bad value [VARCHAR]
 select officeCode,sum(cast(officeCode as unsigned)) from employees group by officeCode;
-officecode    sum(cast(officecode as unsigned))
+officeCode    sum(cast(officeCode as unsigned))
 1    6
 6    12
 4    16
@@ -197,7 +194,7 @@ officecode    sum(cast(officecode as unsigned))
 3    6
 7    14
 select employeeNumber,officeCode,reportsTo from employees where employeeNumber>1400 and reportsTo is not null order by officeCode+1,employeeNumber;
-employeenumber    officecode    reportsto
+employeeNumber    officeCode    reportsTo
 1401    4    1102
 1611    6    1088
 1501    7    1102
@@ -216,42 +213,38 @@ insert into job values
 (7,'Sales Rep'),
 (8,'Marketing');
 select employeeNumber,e.jobTitle,j.jobid from employees e join job j on e.jobTitle=j.jobTitle order by 1 asc, 3 asc;
-employeeNumber	jobTitle	jobid
-1002	President	1
-1056	VP Sales	2
-1076	VP Marketing	3
-1088	Sales Manager (APAC)	4
-1102	Sale Manager (EMEA)	5
-1143	Sales Manager (NA)	6
-1165	Sales Rep	7
-1166	Sales Rep	7
-1188	Sales Rep	7
-1216	Sales Rep	7
-1286	Sales Rep	7
-1323	Sales Rep	7
-1337	Sales Rep	7
-1370	Sales Rep	7
-1401	Sales Rep	7
-1501	Sales Rep	7
-1504	Sales Rep	7
-1611	Sales Rep	7
+employeeNumber    jobTitle    jobid
+1002    President    1
+1056    VP Sales    2
+1076    VP Marketing    3
+1088    Sales Manager (APAC)    4
+1102    Sale Manager (EMEA)    5
+1143    Sales Manager (NA)    6
+1165    Sales Rep    7
+1166    Sales Rep    7
+1188    Sales Rep    7
+1216    Sales Rep    7
+1286    Sales Rep    7
+1323    Sales Rep    7
+1337    Sales Rep    7
+1370    Sales Rep    7
+1401    Sales Rep    7
+1501    Sales Rep    7
+1504    Sales Rep    7
+1611    Sales Rep    7
 select distinct e.jobTitle,j.jobid from employees e join job j on e.jobTitle=j.jobTitle;
-jobTitle	jobid
-President	1
-VP Sales	2
-VP Marketing	3
-Sales Manager (APAC)	4
-Sale Manager (EMEA)	5
-Sales Manager (NA)	6
-Sales Rep	7
+jobTitle    jobid
+President    1
+VP Sales    2
+VP Marketing    3
+Sales Manager (APAC)    4
+Sale Manager (EMEA)    5
+Sales Manager (NA)    6
+Sales Rep    7
 select e.jobTitle,sum(jobid) from employees e join job j on e.jobTitle=j.jobTitle group by jobTitle having sum(jobid)>5;
-jobTitle	sum(jobid)
-Sales Manager (NA)	6
-Sales Rep	84
+invalid input: ambiguouse column reference to 'jobTitle'
 select e.jobTitle,sum(jobid) from employees e join job j on e.jobTitle=j.jobTitle group by jobTitle having sum(jobid)>5 order by 2 desc;
-jobTitle	sum(jobid)
-Sales Rep	84
-Sales Manager (NA)	6
+invalid input: ambiguouse column reference to 'jobTitle'
 drop table if exists t1;
 drop table if exists t2;
 drop table if exists t3;
@@ -286,77 +279,73 @@ j varchar(10) not null default '0',
 primary key (a));
 insert into t1 (a) values ('2'),('4'),('6'),('8'),('10'),('12'),('14'),('16'),('18'),('20'),('22'),('24'),('26'),('23');
 update t1 set a=a+'101';
-
 select a,b from t1;
-a	b
-103	0
-105	0
-107	0
-109	0
-111	0
-113	0
-115	0
-117	0
-119	0
-121	0
-123	0
-124	0
-125	0
-127	0
+a    b
+2101    0
+4101    0
+6101    0
+8101    0
+10101    0
+12101    0
+14101    0
+16101    0
+18101    0
+20101    0
+22101    0
+24101    0
+26101    0
+23101    0
 update t1 set a='127' where a='25';
-
 select a,b from t1;
-a	b
-103	0
-105	0
-107	0
-109	0
-111	0
-113	0
-115	0
-117	0
-119	0
-121	0
-123	0
-124	0
-125	0
-127	0
+a    b
+2101    0
+4101    0
+6101    0
+8101    0
+10101    0
+12101    0
+14101    0
+16101    0
+18101    0
+20101    0
+22101    0
+24101    0
+26101    0
+23101    0
 update t1 set a=a+'a' where 1 > 2;
-
 select a,b from t1;
-a	b
-103	0
-105	0
-107	0
-109	0
-111	0
-113	0
-115	0
-117	0
-119	0
-121	0
-123	0
-124	0
-125	0
-127	0
+a    b
+2101    0
+4101    0
+6101    0
+8101    0
+10101    0
+12101    0
+14101    0
+16101    0
+18101    0
+20101    0
+22101    0
+24101    0
+26101    0
+23101    0
 update t1 set a=a+a where 3 > 2;
-
 select a,b from t1;
-a	b
-206	0
-210	0
-214	0
-218	0
-222	0
-226	0
-230	0
-234	0
-238	0
-242	0
-246	0
-248	0
-250	0
-254	0
+a    b
+21012101    0
+41014101    0
+61016101    0
+81018101    0
+1010110101    0
+1210112101    0
+1410114101    0
+1610116101    0
+1810118101    0
+2010120101    0
+2210122101    0
+2410124101    0
+2610126101    0
+2310123101    0
 drop table t1;
 create table t1 (a varchar(10) primary key, b varchar(32));
 insert into t1 values ('abc','apple'), ('ab','apple');

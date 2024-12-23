@@ -90,7 +90,6 @@ func TestClose(t *testing.T) {
 		})
 
 		txn.close(
-			"s1",
 			txn.txnID,
 			timestamp.Timestamp{},
 			func(group uint32, table uint64) (lockTable, error) {

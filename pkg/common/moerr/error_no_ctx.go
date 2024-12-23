@@ -318,10 +318,6 @@ func NewTxnStaleNoCtx(msg string) *Error {
 	return newError(Context(), ErrTxnStale, msg)
 }
 
-func NewWaiterPausedNoCtx() *Error {
-	return newError(Context(), ErrWaiterPaused)
-}
-
 func NewRetryForCNRollingRestart() *Error {
 	return newError(Context(), ErrRetryForCNRollingRestart)
 }
@@ -336,6 +332,10 @@ func NewPrevCheckpointNotFinished() *Error {
 
 func NewCantDelGCCheckerNoCtx() *Error {
 	return newError(Context(), ErrCantDelGCChecker)
+}
+
+func NewTxnControlErrorNoCtxf(format string, args ...any) *Error {
+	return newError(Context(), ErrTxnControl, fmt.Sprintf(format, args...))
 }
 
 func NewNotFoundNoCtx() *Error {
@@ -380,6 +380,10 @@ func NewDeadlockCheckBusyNoCtx() *Error {
 
 func NewCannotCommitOrphanNoCtx() *Error {
 	return NewCannotCommitOrphan(Context())
+}
+
+func NewCannotCommitOnInvalidCNNoCtx() *Error {
+	return NewCannotCommitOnInvalidCN(Context())
 }
 
 func NewLockTableBindChangedNoCtx() *Error {
@@ -436,6 +440,10 @@ func NewErrTooLargeObjectSizeNoCtx(option uint64) *Error {
 
 func NewErrStaleReadNoCtx(minTS, start string) *Error {
 	return newError(Context(), ErrStaleRead, minTS, start)
+}
+
+func NewErrNoWatermarkFoundNoCtx(dbName, tblName string) *Error {
+	return newError(Context(), ErrNoWatermarkFound, dbName, tblName)
 }
 
 func NewArenaFullNoCtx() *Error {

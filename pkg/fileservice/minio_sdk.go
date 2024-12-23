@@ -15,13 +15,16 @@
 package fileservice
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"iter"
 	"net/http"
 	"net/url"
+	"os"
 	gotrace "runtime/trace"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -54,49 +57,69 @@ func NewMinioSDK(
 
 	options := new(minio.Options)
 
-	// credentials
-	var credentialProviders []credentials.Provider
+	// credential arguments
+	keyID := args.KeyID
+	keySecret := args.KeySecret
+	sessionToken := args.SessionToken
 	if args.shouldLoadDefaultCredentials() {
-		credentialProviders = append(credentialProviders,
-			// aws env
-			new(credentials.EnvAWS),
-			// minio env
-			new(credentials.EnvMinio),
+		keyID = firstNonZero(
+			args.KeyID,
+			os.Getenv("AWS_ACCESS_KEY_ID"),
+			os.Getenv("AWS_ACCESS_KEY"),
+			os.Getenv("MINIO_ROOT_USER"),
+			os.Getenv("MINIO_ACCESS_KEY"),
+		)
+		keySecret = firstNonZero(
+			args.KeySecret,
+			os.Getenv("AWS_SECRET_ACCESS_KEY"),
+			os.Getenv("AWS_SECRET_KEY"),
+			os.Getenv("MINIO_ROOT_PASSWORD"),
+			os.Getenv("MINIO_SECRET_KEY"),
+		)
+		sessionToken = firstNonZero(
+			args.SessionToken,
+			os.Getenv("AWS_SESSION_TOKEN"),
 		)
 	}
-	if args.KeyID != "" && args.KeySecret != "" {
+
+	// credentials providers
+	var credentialProviders []credentials.Provider
+
+	if keyID != "" && keySecret != "" {
 		// static
 		credentialProviders = append(credentialProviders, &credentials.Static{
 			Value: credentials.Value{
-				AccessKeyID:     args.KeyID,
-				SecretAccessKey: args.KeySecret,
-				SessionToken:    args.SessionToken,
+				AccessKeyID:     keyID,
+				SecretAccessKey: keySecret,
+				SessionToken:    sessionToken,
 				SignerType:      credentials.SignatureV2,
 			},
 		})
 		credentialProviders = append(credentialProviders, &credentials.Static{
 			Value: credentials.Value{
-				AccessKeyID:     args.KeyID,
-				SecretAccessKey: args.KeySecret,
-				SessionToken:    args.SessionToken,
+				AccessKeyID:     keyID,
+				SecretAccessKey: keySecret,
+				SessionToken:    sessionToken,
 				SignerType:      credentials.SignatureV4,
 			},
 		})
 		credentialProviders = append(credentialProviders, &credentials.Static{
 			Value: credentials.Value{
-				AccessKeyID:     args.KeyID,
-				SecretAccessKey: args.KeySecret,
-				SessionToken:    args.SessionToken,
+				AccessKeyID:     keyID,
+				SecretAccessKey: keySecret,
+				SessionToken:    sessionToken,
 				SignerType:      credentials.SignatureDefault,
 			},
 		})
+
 	}
+
 	if args.RoleARN != "" {
 		// assume role
 		credentialProviders = append(credentialProviders, &credentials.STSAssumeRole{
 			Options: credentials.STSAssumeRoleOptions{
-				AccessKey:       args.KeyID,
-				SecretKey:       args.KeySecret,
+				AccessKey:       keyID,
+				SecretKey:       keySecret,
 				RoleARN:         args.RoleARN,
 				RoleSessionName: args.ExternalID,
 			},
@@ -105,23 +128,23 @@ func NewMinioSDK(
 
 	// special treatments for 天翼云
 	if strings.Contains(args.Endpoint, "ctyunapi.cn") {
-		if args.KeyID == "" {
+		if keyID == "" {
 			// try to fetch one
 			creds := credentials.NewChainCredentials(credentialProviders)
 			value, err := creds.Get()
 			if err != nil {
 				return nil, err
 			}
-			args.KeyID = value.AccessKeyID
-			args.KeySecret = value.SecretAccessKey
-			args.SessionToken = value.SessionToken
+			keyID = value.AccessKeyID
+			keySecret = value.SecretAccessKey
+			sessionToken = value.SessionToken
 		}
 		credentialProviders = []credentials.Provider{
 			&credentials.Static{
 				Value: credentials.Value{
-					AccessKeyID:     args.KeyID,
-					SecretAccessKey: args.KeySecret,
-					SessionToken:    args.SessionToken,
+					AccessKeyID:     keyID,
+					SecretAccessKey: keySecret,
+					SessionToken:    sessionToken,
 					SignerType:      credentials.SignatureV2,
 				},
 			},
@@ -299,21 +322,54 @@ func (a *MinioSDK) Write(
 	ctx context.Context,
 	key string,
 	r io.Reader,
-	size int64,
+	sizeHint *int64,
 	expire *time.Time,
 ) (
 	err error,
 ) {
+	defer wrapSizeMismatchErr(&err)
 
-	_, err = a.putObject(
-		ctx,
-		key,
-		r,
-		size,
-		expire,
-	)
-	if err != nil {
-		return err
+	var n atomic.Int64
+	if sizeHint != nil {
+		r = &countingReader{
+			R: r,
+			C: &n,
+		}
+	}
+
+	if sizeHint != nil && *sizeHint < smallObjectThreshold {
+		data, err := io.ReadAll(r)
+		if err != nil {
+			return err
+		}
+		_, err = DoWithRetry("write", func() (minio.UploadInfo, error) {
+			return a.putObject(
+				ctx,
+				key,
+				bytes.NewReader(data),
+				sizeHint,
+				expire,
+			)
+		}, maxRetryAttemps, IsRetryableError)
+		if err != nil {
+			return err
+		}
+
+	} else {
+		_, err = a.putObject(
+			ctx,
+			key,
+			r,
+			sizeHint,
+			expire,
+		)
+		if err != nil {
+			return err
+		}
+	}
+
+	if sizeHint != nil && n.Load() != *sizeHint {
+		return moerr.NewSizeNotMatchNoCtx(key)
 	}
 
 	return
@@ -417,12 +473,12 @@ func (a *MinioSDK) deleteSingle(ctx context.Context, key string) error {
 func (a *MinioSDK) listObjects(ctx context.Context, prefix string, marker string) (minio.ListBucketResult, error) {
 	ctx, task := gotrace.NewTask(ctx, "MinioSDK.listObjects")
 	defer task.End()
-	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
-		counter.FileService.S3.List.Add(1)
-	}, a.perfCounterSets...)
 	return DoWithRetry(
 		"s3 list objects",
 		func() (minio.ListBucketResult, error) {
+			perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
+				counter.FileService.S3.List.Add(1)
+			}, a.perfCounterSets...)
 			return a.core.ListObjects(
 				a.bucket,
 				prefix,
@@ -439,12 +495,12 @@ func (a *MinioSDK) listObjects(ctx context.Context, prefix string, marker string
 func (a *MinioSDK) statObject(ctx context.Context, key string) (minio.ObjectInfo, error) {
 	ctx, task := gotrace.NewTask(ctx, "MinioSDK.statObject")
 	defer task.End()
-	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
-		counter.FileService.S3.Head.Add(1)
-	}, a.perfCounterSets...)
 	return DoWithRetry(
 		"s3 head object",
 		func() (minio.ObjectInfo, error) {
+			perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
+				counter.FileService.S3.Head.Add(1)
+			}, a.perfCounterSets...)
 			return a.client.StatObject(
 				ctx,
 				a.bucket,
@@ -461,16 +517,20 @@ func (a *MinioSDK) putObject(
 	ctx context.Context,
 	key string,
 	r io.Reader,
-	size int64,
+	sizeHint *int64,
 	expire *time.Time,
 ) (minio.UploadInfo, error) {
 	ctx, task := gotrace.NewTask(ctx, "MinioSDK.putObject")
 	defer task.End()
+	// not retryable because Reader may be half consumed
+	//TODO set expire
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.FileService.S3.Put.Add(1)
 	}, a.perfCounterSets...)
-	// not retryable because Reader may be half consumed
-	//TODO set expire
+	size := int64(-1)
+	if sizeHint != nil {
+		size = *sizeHint
+	}
 	return a.client.PutObject(
 		ctx,
 		a.bucket,
@@ -484,9 +544,6 @@ func (a *MinioSDK) putObject(
 func (a *MinioSDK) getObject(ctx context.Context, key string, min *int64, max *int64) (io.ReadCloser, error) {
 	ctx, task := gotrace.NewTask(ctx, "MinioSDK.getObject")
 	defer task.End()
-	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
-		counter.FileService.S3.Get.Add(1)
-	}, a.perfCounterSets...)
 	if min == nil {
 		min = ptrTo[int64](0)
 	}
@@ -495,6 +552,9 @@ func (a *MinioSDK) getObject(ctx context.Context, key string, min *int64, max *i
 			obj, err := DoWithRetry(
 				"s3 get object",
 				func() (obj *minio.Object, err error) {
+					perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
+						counter.FileService.S3.Get.Add(1)
+					}, a.perfCounterSets...)
 					return a.client.GetObject(ctx, a.bucket, key, minio.GetObjectOptions{})
 				},
 				maxRetryAttemps,
@@ -508,7 +568,14 @@ func (a *MinioSDK) getObject(ctx context.Context, key string, min *int64, max *i
 					return nil, err
 				}
 			}
-			return obj, nil
+			return &readCloser{
+				r: obj,
+				closeFunc: func() error {
+					// drain
+					io.Copy(io.Discard, obj)
+					return obj.Close()
+				},
+			}, nil
 		},
 		*min,
 		IsRetryableError,
@@ -522,12 +589,12 @@ func (a *MinioSDK) getObject(ctx context.Context, key string, min *int64, max *i
 func (a *MinioSDK) deleteObject(ctx context.Context, key string) (any, error) {
 	ctx, task := gotrace.NewTask(ctx, "MinioSDK.deleteObject")
 	defer task.End()
-	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
-		counter.FileService.S3.Delete.Add(1)
-	}, a.perfCounterSets...)
 	return DoWithRetry(
 		"s3 delete object",
 		func() (any, error) {
+			perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
+				counter.FileService.S3.Delete.Add(1)
+			}, a.perfCounterSets...)
 			if err := a.client.RemoveObject(ctx, a.bucket, key, minio.RemoveObjectOptions{}); err != nil {
 				return nil, err
 			}
@@ -541,12 +608,12 @@ func (a *MinioSDK) deleteObject(ctx context.Context, key string) (any, error) {
 func (a *MinioSDK) deleteObjects(ctx context.Context, keys ...string) (any, error) {
 	ctx, task := gotrace.NewTask(ctx, "MinioSDK.deleteObjects")
 	defer task.End()
-	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
-		counter.FileService.S3.DeleteMulti.Add(1)
-	}, a.perfCounterSets...)
 	return DoWithRetry(
 		"s3 delete objects",
 		func() (any, error) {
+			perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
+				counter.FileService.S3.DeleteMulti.Add(1)
+			}, a.perfCounterSets...)
 			objsCh := make(chan minio.ObjectInfo)
 			errCh := a.client.RemoveObjects(ctx, a.bucket, objsCh, minio.RemoveObjectsOptions{})
 			for _, key := range keys {

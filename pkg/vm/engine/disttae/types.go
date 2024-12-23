@@ -25,9 +25,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/panjf2000/ants/v2"
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -47,6 +44,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/udf"
+	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
@@ -54,6 +52,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/panjf2000/ants/v2"
+	"go.uber.org/zap"
 )
 
 const (
@@ -132,7 +132,9 @@ const (
 )
 
 const (
-	WorkspaceThreshold             uint64 = 1 * mpool.MB
+	CommitWorkspaceThreshold       uint64 = 1 * mpool.MB
+	WriteWorkspaceThreshold        uint64 = 5 * mpool.MB
+	ExtraWorkspaceThreshold        uint64 = 500 * mpool.MB
 	InsertEntryThreshold                  = 5000
 	GCBatchOfFileCount             int    = 1000
 	GCPoolSize                     int    = 5
@@ -155,9 +157,21 @@ type IDGenerator interface {
 
 type EngineOptions func(*Engine)
 
-func WithWorkspaceThreshold(th uint64) EngineOptions {
+func WithCommitWorkspaceThreshold(th uint64) EngineOptions {
 	return func(e *Engine) {
-		e.config.workspaceThreshold = th
+		e.config.commitWorkspaceThreshold = th
+	}
+}
+
+func WithWriteWorkspaceThreshold(th uint64) EngineOptions {
+	return func(e *Engine) {
+		e.config.writeWorkspaceThreshold = th
+	}
+}
+
+func WithExtraWorkspaceThresholdQuota(quota uint64) EngineOptions {
+	return func(e *Engine) {
+		e.config.quota.Store(quota)
 	}
 }
 
@@ -170,6 +184,24 @@ func WithInsertEntryMaxCount(th int) EngineOptions {
 func WithCNTransferTxnLifespanThreshold(th time.Duration) EngineOptions {
 	return func(e *Engine) {
 		e.config.cnTransferTxnLifespanThreshold = th
+	}
+}
+
+func WithSQLExecFunc(f func() ie.InternalExecutor) EngineOptions {
+	return func(e *Engine) {
+		e.config.ieFactory = f
+	}
+}
+
+func WithMoTableStatsConf(conf MoTableStatsConfig) EngineOptions {
+	return func(e *Engine) {
+		e.config.statsConf = conf
+	}
+}
+
+func WithMoServerStateChecker(checker func() bool) EngineOptions {
+	return func(e *Engine) {
+		e.config.moServerStateChecker = checker
 	}
 }
 
@@ -187,19 +219,21 @@ type Engine struct {
 	tnID     string
 
 	config struct {
-		workspaceThreshold  uint64
-		insertEntryMaxCount int
+		insertEntryMaxCount      int
+		commitWorkspaceThreshold uint64
+		writeWorkspaceThreshold  uint64
+		extraWorkspaceThreshold  uint64
+		quota                    atomic.Uint64
 
 		cnTransferTxnLifespanThreshold time.Duration
+
+		ieFactory            func() ie.InternalExecutor
+		statsConf            MoTableStatsConfig
+		moServerStateChecker func() bool
 	}
 
 	//latest catalog will be loaded from TN when engine is initialized.
 	catalog *cache.CatalogCache
-	//snapshot catalog will be loaded from TN When snapshot read is needed.
-	snapCatalog *struct {
-		sync.Mutex
-		snaps []*cache.CatalogCache
-	}
 	//latest partitions which be protected by e.Lock().
 	partitions map[[2]uint64]*logtailreplay.Partition
 	//snapshot partitions
@@ -230,6 +264,10 @@ type Engine struct {
 	moDatabaseCreatedTime *vector.Vector
 	moTablesCreatedTime   *vector.Vector
 	moColumnsCreatedTime  *vector.Vector
+
+	dynamicCtx
+	// for test only.
+	skipConsume bool
 }
 
 func (e *Engine) SetService(svr string) {
@@ -256,11 +294,13 @@ type Transaction struct {
 
 	// writes cache stores any writes done by txn
 	writes []Entry
-	// txn workspace size
+	// txn workspace size, includes in memory entries and persisted entries.
 	workspaceSize uint64
-	// the total row count for insert entries when txn commits.
-	insertCount int
-	// the approximation of total row count for delete entries when txn commits.
+	// the approximation of total size for insert entries
+	approximateInMemInsertSize uint64
+	// the approximation of total row count for insert entries
+	approximateInMemInsertCnt int
+	// the approximation of total row count for delete entries
 	approximateInMemDeleteCnt int
 	// the last snapshot write offset
 	snapshotWriteOffset int
@@ -296,13 +336,13 @@ type Transaction struct {
 	// notice that it's guarded by txn.Lock() and has the same lifecycle as transaction.
 	cnBlkId_Pos map[types.Blockid]Pos
 	// committed block belongs to txn's snapshot data -> delta locations for committed block's deletes.
-	cn_flushed_s3_tombstone_object_stats_list struct {
-		sync.RWMutex
-		data []objectio.ObjectStats
-	}
+	cn_flushed_s3_tombstone_object_stats_list *sync.Map
+	//cn_flushed_s3_tombstone_object_stats_list struct {
+	//	sync.RWMutex
+	//	data []objectio.ObjectStats
+	//}
 	//select list for raw batch comes from txn.writes.batch.
 	batchSelectList map[*batch.Batch][]int64
-	toFreeBatches   map[tableKey][]*batch.Batch
 
 	rollbackCount int
 	//current statement id
@@ -332,6 +372,10 @@ type Transaction struct {
 	adjustCount int
 
 	haveDDL atomic.Bool
+
+	writeWorkspaceThreshold      uint64
+	commitWorkspaceThreshold     uint64
+	extraWriteWorkspaceThreshold uint64 // acquired from engine quota
 }
 
 type Pos struct {
@@ -413,8 +457,11 @@ func NewTxnWorkSpace(eng *Engine, proc *process.Process) *Transaction {
 		},
 		cnBlkId_Pos:          map[types.Blockid]Pos{},
 		batchSelectList:      make(map[*batch.Batch][]int64),
-		toFreeBatches:        make(map[tableKey][]*batch.Batch),
 		syncCommittedTSCount: eng.cli.GetSyncLatestCommitTSTimes(),
+		cn_flushed_s3_tombstone_object_stats_list: new(sync.Map),
+
+		commitWorkspaceThreshold: eng.config.commitWorkspaceThreshold,
+		writeWorkspaceThreshold:  eng.config.writeWorkspaceThreshold,
 	}
 
 	//txn.transfer.workerPool, _ = ants.NewPool(min(runtime.NumCPU(), 4))
@@ -430,11 +477,7 @@ func (txn *Transaction) PutCnBlockDeletes(blockId *types.Blockid, offsets []int6
 }
 
 func (txn *Transaction) StashFlushedTombstones(stats objectio.ObjectStats) {
-	txn.cn_flushed_s3_tombstone_object_stats_list.Lock()
-	defer txn.cn_flushed_s3_tombstone_object_stats_list.Unlock()
-
-	txn.cn_flushed_s3_tombstone_object_stats_list.data =
-		append(txn.cn_flushed_s3_tombstone_object_stats_list.data, stats)
+	txn.cn_flushed_s3_tombstone_object_stats_list.Store(stats, nil)
 }
 
 func (txn *Transaction) Readonly() bool {
@@ -467,7 +510,7 @@ func (txn *Transaction) PPString() string {
 		return buf.String()
 	}
 
-	return fmt.Sprintf("Transaction{writes: %v, batchSelectList: %v, tableOps:%v, tablesInVain: %v,  tableCache: %v,  toFreeBatches: %v, insertCount: %v, snapshotWriteOffset: %v, rollbackCount: %v, statementID: %v, offsets: %v, timestamps: %v}",
+	return fmt.Sprintf("Transaction{writes: %v, batchSelectList: %v, tableOps:%v, tablesInVain: %v,  tableCache: %v, insertCount: %v, snapshotWriteOffset: %v, rollbackCount: %v, statementID: %v, offsets: %v, timestamps: %v}",
 		writesString,
 		stringifyMap(txn.batchSelectList, func(k, v any) string {
 			return fmt.Sprintf("%p:%v", k, len(v.([]int64)))
@@ -477,8 +520,7 @@ func (txn *Transaction) PPString() string {
 			return fmt.Sprintf("%v:%v", k.(uint64), v.(int))
 		}),
 		stringifySyncMap(txn.tableCache),
-		len(txn.toFreeBatches),
-		txn.insertCount,
+		txn.approximateInMemInsertCnt,
 		txn.snapshotWriteOffset,
 		txn.rollbackCount,
 		txn.statementID,
@@ -518,8 +560,6 @@ func (txn *Transaction) IncrStatementID(ctx context.Context, commit bool) error 
 
 	txn.Lock()
 	defer txn.Unlock()
-	//free batches
-	txn.CleanToFreeBatches()
 	//merge writes for the last statement
 	if err := txn.mergeTxnWorkspaceLocked(ctx); err != nil {
 		return err
@@ -659,6 +699,9 @@ func (txn *Transaction) gcObjs(start int) error {
 
 			for j := range vec.Length() {
 				ss := objectio.ObjectStats(vec.GetBytesAt(j))
+				if txn.writes[i].typ == DELETE {
+					txn.cn_flushed_s3_tombstone_object_stats_list.Delete(ss)
+				}
 				objsName = append(objsName, ss.ObjectName().String())
 			}
 		}
@@ -739,6 +782,7 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 			if txn.writes[i].bat == nil {
 				continue
 			}
+			txn.workspaceSize -= uint64(txn.writes[i].bat.Size())
 			txn.writes[i].bat.Clean(txn.proc.Mp())
 		}
 		txn.writes = txn.writes[:end]
@@ -762,8 +806,6 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 	}
 
 	afterEntries = len(txn.writes)
-
-	txn.CleanToFreeBatches()
 
 	for i := len(txn.restoreTxnTableFunc) - 1; i >= 0; i-- {
 		txn.restoreTxnTableFunc[i]()

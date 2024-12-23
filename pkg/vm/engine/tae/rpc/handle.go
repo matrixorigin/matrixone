@@ -48,12 +48,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/gc"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/rpchandle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 
 	"go.uber.org/zap"
 )
@@ -64,9 +64,9 @@ const (
 )
 
 type Handle struct {
-	db        *db.DB
-	txnCtxs   *common.Map[string, *txnContext]
-	GCManager *gc.Manager
+	db      *db.DB
+	txnCtxs *common.Map[string, *txnContext]
+	GCJob   *tasks.CancelableJob
 
 	interceptMatchRegexp atomic.Pointer[regexp.Regexp]
 }
@@ -121,17 +121,17 @@ func NewTAEHandle(ctx context.Context, path string, opt *options.Options) *Handl
 		db: tae,
 	}
 	h.txnCtxs = common.NewMap[string, *txnContext](runtime.GOMAXPROCS(0))
-
-	h.GCManager = gc.NewManager(
-		gc.WithCronJob(
-			"clean-txn-cache",
-			MAX_TXN_COMMIT_LATENCY,
-			func(ctx context.Context) error {
-				return h.GCCache(time.Now())
-			},
-		),
+	h.interceptMatchRegexp.Store(regexp.MustCompile(`.*bmsql_stock.*`))
+	h.GCJob = tasks.NewCancelableCronJob(
+		"clean-txn-cache",
+		MAX_TXN_COMMIT_LATENCY,
+		func(ctx context.Context) {
+			h.GCCache(time.Now())
+		},
+		true,
+		1,
 	)
-	h.GCManager.Start()
+	h.GCJob.Start()
 
 	return h
 }
@@ -353,6 +353,11 @@ func (h *Handle) HandlePreCommitWrite(
 	for len(es) > 0 {
 		e, es, err = pkgcatalog.ParseEntryList(es)
 		if err != nil {
+			reqsStr := "emtpy"
+			if txnCtx, ok := h.txnCtxs.Load(util.UnsafeBytesToString(meta.GetID())); ok {
+				reqsStr = pkgcatalog.ShowReqs(txnCtx.reqs)
+			}
+			logutil.Errorf("ParseEntryList failed. error:%v, cached reqs:%v", err, reqsStr)
 			return err
 		}
 		switch cmds := e.(type) {
@@ -519,7 +524,7 @@ func (h *Handle) HandleGetLogTail(
 	resp *api.SyncLogTailResp) (closeCB func(), err error) {
 	res, closeCB, err := logtail.HandleSyncLogTailReq(
 		ctx,
-		h.db.BGCheckpointRunner,
+		h.db,
 		h.db.LogtailMgr,
 		h.db.Catalog,
 		*req,
@@ -551,8 +556,8 @@ func (h *Handle) HandleRollback(
 
 func (h *Handle) HandleClose(ctx context.Context) (err error) {
 	//FIXME::should wait txn request's job done?
-	if h.GCManager != nil {
-		h.GCManager.Stop()
+	if h.GCJob != nil {
+		h.GCJob.Stop()
 	}
 	return h.db.Close()
 }
@@ -573,13 +578,6 @@ func (h *Handle) HandleCreateDatabase(
 	_, span := trace.Start(ctx, "HandleCreateDatabase")
 	defer span.End()
 
-	defer func() {
-		common.DoIfDebugEnabled(func() {
-			logutil.Debugf("[precommit] create database end txn: %s", txn.String())
-		})
-	}()
-
-	// modify memory structure
 	for i, c := range req.Cmds {
 		common.DoIfInfoEnabled(func() {
 			logutil.Info(
@@ -612,12 +610,8 @@ func (h *Handle) HandleCreateDatabase(
 func (h *Handle) HandleDropDatabase(
 	ctx context.Context,
 	txn txnif.AsyncTxn,
-	req *pkgcatalog.DropDatabaseReq) (err error) {
-	defer func() {
-		common.DoIfDebugEnabled(func() {
-			logutil.Debugf("[precommit] drop database end: %s", txn.String())
-		})
-	}()
+	req *pkgcatalog.DropDatabaseReq,
+) (err error) {
 	for i, c := range req.Cmds {
 		common.DoIfInfoEnabled(func() {
 			logutil.Info(
@@ -647,13 +641,8 @@ func (h *Handle) HandleDropDatabase(
 func (h *Handle) HandleCreateRelation(
 	ctx context.Context,
 	txn txnif.AsyncTxn,
-	req *pkgcatalog.CreateTableReq) error {
-	defer func() {
-		common.DoIfDebugEnabled(func() {
-			logutil.Debugf("[precommit] create relation end txn: %s", txn.String())
-		})
-	}()
-
+	req *pkgcatalog.CreateTableReq,
+) error {
 	for i, c := range req.Cmds {
 		common.DoIfInfoEnabled(func() {
 			logutil.Info(
@@ -664,7 +653,8 @@ func (h *Handle) HandleCreateRelation(
 			)
 		})
 		ctx = defines.AttachAccount(ctx, c.AccountId, c.Creator, c.Owner)
-		dbH, err := txn.GetDatabaseWithCtx(ctx, c.DatabaseName)
+		txn.BindAccessInfo(c.AccountId, c.Creator, c.Owner)
+		dbH, err := txn.GetDatabaseByID(c.DatabaseId)
 		if err != nil {
 			return err
 		}
@@ -692,13 +682,8 @@ func (h *Handle) HandleCreateRelation(
 func (h *Handle) HandleDropRelation(
 	ctx context.Context,
 	txn txnif.AsyncTxn,
-	req *pkgcatalog.DropTableReq) error {
-	defer func() {
-		common.DoIfDebugEnabled(func() {
-			logutil.Debugf("[precommit] drop/truncate relation end txn: %s", txn.String())
-		})
-	}()
-
+	req *pkgcatalog.DropTableReq,
+) error {
 	for i, c := range req.Cmds {
 		common.DoIfInfoEnabled(func() {
 			logutil.Info(

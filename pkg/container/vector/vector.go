@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"time"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
@@ -91,11 +92,9 @@ func ToSliceNoTypeCheck[T any](vec *Vector, ret *[]T) {
 }
 
 func ToSlice[T any](vec *Vector, ret *[]T) {
-	//if (uintptr(unsafe.Pointer(vec))^uintptr(unsafe.Pointer(ret)))&0xffff == 0 {
 	if !typeCompatible[T](vec.typ) {
 		panic(fmt.Sprintf("type mismatch: %T %v", []T{}, vec.typ.String()))
 	}
-	//}
 	*ret = unsafe.Slice((*T)(vec.col.Ptr), vec.col.Cap)
 }
 
@@ -778,26 +777,11 @@ func (v *Vector) UnmarshalBinaryWithCopy(data []byte, mp *mpool.MPool) error {
 	return nil
 }
 
-func (v *Vector) ToConst(row, length int, mp *mpool.MPool) *Vector {
-	w := NewConstNull(v.typ, length, mp)
-	if v.IsConstNull() || v.nsp.Contains(uint64(row)) {
-		return w
+func (v *Vector) ToConst() {
+	if v.nsp.Contains(0) {
+		v.data = v.data[:0]
 	}
-
-	if v.IsConst() {
-		row = 0
-	}
-
-	sz := v.typ.TypeSize()
-	w.data = v.data[row*sz : (row+1)*sz]
-	w.setupFromData()
-	if v.typ.IsVarlen() {
-		w.area = v.area
-	}
-	w.cantFreeData = true
-	w.cantFreeArea = true
-
-	return w
+	v.class = CONSTANT
 }
 
 // PreExtend use to expand the capacity of the vector
@@ -950,7 +934,7 @@ func (v *Vector) Shrink(sels []int64, negate bool) {
 	}
 }
 
-func (v *Vector) ShrinkByMask(sels bitmap.Mask, negate bool) {
+func (v *Vector) ShrinkByMask(sels bitmap.Mask, negate bool, offset uint64) {
 	if v.IsConst() {
 		if negate {
 			v.length -= sels.Count()
@@ -962,57 +946,57 @@ func (v *Vector) ShrinkByMask(sels bitmap.Mask, negate bool) {
 
 	switch v.typ.Oid {
 	case types.T_bool:
-		shrinkFixedByMask[bool](v, sels, negate)
+		shrinkFixedByMask[bool](v, sels, negate, offset)
 	case types.T_bit:
-		shrinkFixedByMask[uint64](v, sels, negate)
+		shrinkFixedByMask[uint64](v, sels, negate, offset)
 	case types.T_int8:
-		shrinkFixedByMask[int8](v, sels, negate)
+		shrinkFixedByMask[int8](v, sels, negate, offset)
 	case types.T_int16:
-		shrinkFixedByMask[int16](v, sels, negate)
+		shrinkFixedByMask[int16](v, sels, negate, offset)
 	case types.T_int32:
-		shrinkFixedByMask[int32](v, sels, negate)
+		shrinkFixedByMask[int32](v, sels, negate, offset)
 	case types.T_int64:
-		shrinkFixedByMask[int64](v, sels, negate)
+		shrinkFixedByMask[int64](v, sels, negate, offset)
 	case types.T_uint8:
-		shrinkFixedByMask[uint8](v, sels, negate)
+		shrinkFixedByMask[uint8](v, sels, negate, offset)
 	case types.T_uint16:
-		shrinkFixedByMask[uint16](v, sels, negate)
+		shrinkFixedByMask[uint16](v, sels, negate, offset)
 	case types.T_uint32:
-		shrinkFixedByMask[uint32](v, sels, negate)
+		shrinkFixedByMask[uint32](v, sels, negate, offset)
 	case types.T_uint64:
-		shrinkFixedByMask[uint64](v, sels, negate)
+		shrinkFixedByMask[uint64](v, sels, negate, offset)
 	case types.T_float32:
-		shrinkFixedByMask[float32](v, sels, negate)
+		shrinkFixedByMask[float32](v, sels, negate, offset)
 	case types.T_float64:
-		shrinkFixedByMask[float64](v, sels, negate)
+		shrinkFixedByMask[float64](v, sels, negate, offset)
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
 		types.T_array_float32, types.T_array_float64, types.T_datalink:
 		// XXX shrink varlena, but did not shrink area.  For our vector, this
 		// may well be the right thing.  If want to shrink area as well, we
 		// have to copy each varlena value and swizzle pointer.
-		shrinkFixedByMask[types.Varlena](v, sels, negate)
+		shrinkFixedByMask[types.Varlena](v, sels, negate, offset)
 	case types.T_date:
-		shrinkFixedByMask[types.Date](v, sels, negate)
+		shrinkFixedByMask[types.Date](v, sels, negate, offset)
 	case types.T_datetime:
-		shrinkFixedByMask[types.Datetime](v, sels, negate)
+		shrinkFixedByMask[types.Datetime](v, sels, negate, offset)
 	case types.T_time:
-		shrinkFixedByMask[types.Time](v, sels, negate)
+		shrinkFixedByMask[types.Time](v, sels, negate, offset)
 	case types.T_timestamp:
-		shrinkFixedByMask[types.Timestamp](v, sels, negate)
+		shrinkFixedByMask[types.Timestamp](v, sels, negate, offset)
 	case types.T_enum:
-		shrinkFixedByMask[types.Enum](v, sels, negate)
+		shrinkFixedByMask[types.Enum](v, sels, negate, offset)
 	case types.T_decimal64:
-		shrinkFixedByMask[types.Decimal64](v, sels, negate)
+		shrinkFixedByMask[types.Decimal64](v, sels, negate, offset)
 	case types.T_decimal128:
-		shrinkFixedByMask[types.Decimal128](v, sels, negate)
+		shrinkFixedByMask[types.Decimal128](v, sels, negate, offset)
 	case types.T_uuid:
-		shrinkFixedByMask[types.Uuid](v, sels, negate)
+		shrinkFixedByMask[types.Uuid](v, sels, negate, offset)
 	case types.T_TS:
-		shrinkFixedByMask[types.TS](v, sels, negate)
+		shrinkFixedByMask[types.TS](v, sels, negate, offset)
 	case types.T_Rowid:
-		shrinkFixedByMask[types.Rowid](v, sels, negate)
+		shrinkFixedByMask[types.Rowid](v, sels, negate, offset)
 	case types.T_Blockid:
-		shrinkFixedByMask[types.Blockid](v, sels, negate)
+		shrinkFixedByMask[types.Blockid](v, sels, negate, offset)
 	default:
 		panic(fmt.Sprintf("unexpect type %s for function vector.Shrink", v.typ))
 	}
@@ -2668,6 +2652,174 @@ func (v *Vector) String() string {
 	}
 }
 
+func implFixedRowToString[T types.FixedSizeT](v *Vector, idx int) string {
+	if v.IsConstNull() {
+		return "null"
+	}
+
+	if v.IsConst() {
+		if nulls.Contains(&v.nsp, 0) {
+			return "null"
+		} else {
+			return fmt.Sprintf("%v", GetFixedAtNoTypeCheck[T](v, 0))
+		}
+	}
+	if v.nsp.Contains(uint64(idx)) {
+		return "null"
+	} else {
+		return fmt.Sprintf("%v", GetFixedAtNoTypeCheck[T](v, idx))
+	}
+}
+
+func implTimestampRowToString(v *Vector, idx int) string {
+	if v.IsConstNull() {
+		return "null"
+	}
+
+	loc := time.Local
+	if v.IsConst() {
+		if nulls.Contains(&v.nsp, 0) {
+			return "null"
+		} else {
+			return GetFixedAtNoTypeCheck[types.Timestamp](v, 0).String2(loc, v.typ.Scale)
+		}
+	}
+	if v.nsp.Contains(uint64(idx)) {
+		return "null"
+	} else {
+		return GetFixedAtNoTypeCheck[types.Timestamp](v, idx).String2(loc, v.typ.Scale)
+	}
+}
+
+func implDatetimeRowToString(v *Vector, idx int) string {
+	if v.IsConstNull() {
+		return "null"
+	}
+
+	if v.IsConst() {
+		if nulls.Contains(&v.nsp, 0) {
+			return "null"
+		} else {
+			return GetFixedAtNoTypeCheck[types.Datetime](v, 0).String2(v.typ.Scale)
+		}
+	}
+	if v.nsp.Contains(uint64(idx)) {
+		return "null"
+	} else {
+		return GetFixedAtNoTypeCheck[types.Datetime](v, idx).String2(v.typ.Scale)
+	}
+}
+
+func implDecimalRowToString[T types.DecimalWithFormat](v *Vector, idx int) string {
+	if v.IsConstNull() {
+		return "null"
+	}
+
+	if v.IsConst() {
+		if nulls.Contains(&v.nsp, 0) {
+			return "null"
+		} else {
+			return GetFixedAtNoTypeCheck[T](v, 0).Format(v.typ.Scale)
+		}
+	}
+	if v.nsp.Contains(uint64(idx)) {
+		return "null"
+	} else {
+		return GetFixedAtNoTypeCheck[T](v, idx).Format(v.typ.Scale)
+	}
+}
+
+func implArrayRowToString[T types.RealNumbers](v *Vector, idx int) string {
+	if v.IsConstNull() {
+		return "null"
+	}
+
+	if v.IsConst() {
+		if nulls.Contains(&v.nsp, 0) {
+			return "null"
+		} else {
+			return types.ArrayToString(GetArrayAt[T](v, 0))
+		}
+	}
+	if v.nsp.Contains(uint64(idx)) {
+		return "null"
+	} else {
+		return types.ArrayToString(GetArrayAt[T](v, idx))
+	}
+}
+
+func (v *Vector) RowToString(idx int) string {
+	switch v.typ.Oid {
+	case types.T_bool:
+		return implFixedRowToString[bool](v, idx)
+	case types.T_bit:
+		return implFixedRowToString[uint64](v, idx)
+	case types.T_int8:
+		return implFixedRowToString[int8](v, idx)
+	case types.T_int16:
+		return implFixedRowToString[int16](v, idx)
+	case types.T_int32:
+		return implFixedRowToString[int32](v, idx)
+	case types.T_int64:
+		return implFixedRowToString[int64](v, idx)
+	case types.T_uint8:
+		return implFixedRowToString[uint8](v, idx)
+	case types.T_uint16:
+		return implFixedRowToString[uint16](v, idx)
+	case types.T_uint32:
+		return implFixedRowToString[uint32](v, idx)
+	case types.T_uint64:
+		return implFixedRowToString[uint64](v, idx)
+	case types.T_float32:
+		return implFixedRowToString[float32](v, idx)
+	case types.T_float64:
+		return implFixedRowToString[float64](v, idx)
+	case types.T_date:
+		return implFixedRowToString[types.Date](v, idx)
+	case types.T_datetime:
+		return implDatetimeRowToString(v, idx)
+	case types.T_time:
+		return implFixedRowToString[types.Time](v, idx)
+	case types.T_timestamp:
+		return implTimestampRowToString(v, idx)
+	case types.T_enum:
+		return implFixedRowToString[types.Enum](v, idx)
+	case types.T_decimal64:
+		return implDecimalRowToString[types.Decimal64](v, idx)
+	case types.T_decimal128:
+		return implDecimalRowToString[types.Decimal128](v, idx)
+	case types.T_uuid:
+		return implFixedRowToString[types.Uuid](v, idx)
+	case types.T_TS:
+		return implFixedRowToString[types.TS](v, idx)
+	case types.T_Rowid:
+		return implFixedRowToString[types.Rowid](v, idx)
+	case types.T_Blockid:
+		return implFixedRowToString[types.Blockid](v, idx)
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text, types.T_datalink:
+		col := MustFixedColNoTypeCheck[types.Varlena](v)
+		if len(col) == 1 {
+			if nulls.Contains(&v.nsp, 0) {
+				return "null"
+			} else {
+				return col[0].UnsafeGetString(v.area)
+			}
+		}
+		if v.nsp.Contains(uint64(idx)) {
+			return "null"
+		} else {
+			return col[idx].UnsafeGetString(v.area)
+		}
+		//return fmt.Sprintf("%v-%s", col, v.nsp.GetBitmap().String())
+	case types.T_array_float32:
+		return implArrayRowToString[float32](v, idx)
+	case types.T_array_float64:
+		return implArrayRowToString[float64](v, idx)
+	default:
+		panic("vec to string unknown types.")
+	}
+}
+
 func SetConstNull(vec *Vector, length int, mp *mpool.MPool) error {
 	if len(vec.data) > 0 {
 		vec.data = vec.data[:0]
@@ -3155,21 +3307,21 @@ func shrinkFixed[T types.FixedSizeT](v *Vector, sels []int64, negate bool) {
 	}
 }
 
-func shrinkFixedByMask[T types.FixedSizeT](v *Vector, sels bitmap.Mask, negate bool) {
+func shrinkFixedByMask[T types.FixedSizeT](v *Vector, sels bitmap.Mask, negate bool, offset uint64) {
 	vs := MustFixedColNoTypeCheck[T](v)
 	length := sels.Count()
 	itr := sels.Iterator()
 	if !negate {
 		idx := 0
 		for itr.HasNext() {
-			vs[idx] = vs[itr.Next()]
+			vs[idx] = vs[itr.Next()+offset]
 			idx++
 		}
 		nulls.FilterByMask(&v.gsp, sels, false)
 		nulls.FilterByMask(&v.nsp, sels, false)
 		v.length = length
 	} else if length > 0 {
-		sel := itr.Next()
+		sel := itr.Next() + offset
 		for oldIdx, newIdx := 0, 0; oldIdx < v.length; oldIdx++ {
 			if oldIdx != int(sel) {
 				vs[newIdx] = vs[oldIdx]
@@ -3182,7 +3334,7 @@ func shrinkFixedByMask[T types.FixedSizeT](v *Vector, sels bitmap.Mask, negate b
 					}
 					break
 				}
-				sel = itr.Next()
+				sel = itr.Next() + offset
 			}
 		}
 		nulls.FilterByMask(&v.gsp, sels, true)
@@ -4366,52 +4518,36 @@ func Intersection2VectorOrdered[T types.OrderedT | types.Decimal128](
 	mp *mpool.MPool,
 	cmp func(x, y T) int) (err error) {
 
-	var long, short []T
-	if len(a) < len(b) {
-		long = b
-		short = a
-	} else {
-		long = a
-		short = b
-	}
-	var lenLong, lenShort = len(long), len(short)
+	var preVal T
+	var idxA, idxB int
 
-	if err = ret.PreExtend(lenLong+lenShort, mp); err != nil {
+	if err = ret.PreExtend(len(a)+len(b), mp); err != nil {
 		return err
 	}
 
-	for i := range short {
-		idx := sort.Search(lenLong, func(j int) bool {
-			return cmp(long[j], short[i]) >= 0
-		})
+	for idxA < len(a) && idxB < len(b) {
+		var cmpRet int
 
-		if idx >= lenLong {
-			break
+		if cmpRet = cmp(a[idxA], b[idxB]); cmpRet == 0 {
+			if ret.Length() == 0 || cmp(preVal, a[idxA]) != 0 {
+				if err = AppendFixed(ret, a[idxA], false, mp); err != nil {
+					return err
+				}
+
+				preVal = a[idxA]
+			}
+
+			idxA++
+			idxB++
+
+		} else if cmpRet < 0 {
+			idxA++
+
+		} else {
+			idxB++
 		}
-
-		j := idx
-		if cmp(short[i], long[idx]) == 0 {
-			if err = AppendFixed(ret, short[i], false, mp); err != nil {
-				return err
-			}
-
-			j++
-
-			// skip the same item
-			for j < lenLong && cmp(long[j], long[j-1]) == 0 {
-				j++
-			}
-
-			if j >= lenLong {
-				break
-			}
-		}
-
-		idx = j
-
-		long = long[idx:]
-		lenLong = len(long)
 	}
+
 	return nil
 }
 
@@ -4478,63 +4614,42 @@ func Intersection2VectorVarlen(
 	ret *Vector,
 	mp *mpool.MPool) (err error) {
 
-	var shortCol, longCol []types.Varlena
-	var shortArea, longArea []byte
+	var preVal []byte
+	var idxA, idxB int
 
 	cola, areaa := MustVarlenaRawData(va)
 	colb, areab := MustVarlenaRawData(vb)
 
-	if len(cola) <= len(colb) {
-		shortCol = cola
-		shortArea = areaa
-		longCol = colb
-		longArea = areab
-	} else {
-		shortCol = colb
-		shortArea = areab
-		longCol = cola
-		longArea = areaa
-	}
-
-	var lenLong, lenShort = len(longCol), len(shortCol)
-
-	if err = ret.PreExtend(lenLong+lenShort, mp); err != nil {
+	if err = ret.PreExtend(len(cola)+len(colb), mp); err != nil {
 		return err
 	}
 
-	for i := range shortCol {
-		shortBytes := shortCol[i].GetByteSlice(shortArea)
-		idx := sort.Search(lenLong, func(j int) bool {
-			return bytes.Compare(longCol[j].GetByteSlice(longArea), shortBytes) >= 0
-		})
+	for idxA < len(cola) && idxB < len(colb) {
+		var cmpRet int
 
-		if idx >= lenLong {
-			break
+		bytesA := cola[idxA].GetByteSlice(areaa)
+		bytesB := colb[idxB].GetByteSlice(areab)
+
+		if cmpRet = bytes.Compare(bytesA, bytesB); cmpRet == 0 {
+			if ret.Length() == 0 || !bytes.Equal(preVal, bytesA) {
+				if err = AppendBytes(ret, bytesA, false, mp); err != nil {
+					return err
+				}
+
+				preVal = bytesA
+			}
+
+			idxA++
+			idxB++
+
+		} else if cmpRet < 0 {
+			idxA++
+
+		} else {
+			idxB++
 		}
-
-		j := idx
-		if bytes.Equal(shortBytes, longCol[idx].GetByteSlice(longArea)) {
-			if err = AppendBytes(ret, shortBytes, false, mp); err != nil {
-				return err
-			}
-
-			// skip the same item
-			j++
-			for j < lenLong && bytes.Equal(
-				longCol[j].GetByteSlice(longArea), longCol[j-1].GetByteSlice(longArea)) {
-				j++
-			}
-
-			if j >= lenLong {
-				break
-			}
-		}
-
-		idx = j
-
-		longCol = longCol[idx:]
-		lenLong = len(longCol)
 	}
+
 	return nil
 }
 

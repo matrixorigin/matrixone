@@ -15,6 +15,7 @@
 package fileservice
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -22,6 +23,7 @@ import (
 	"iter"
 	"net/http"
 	"net/url"
+	"os"
 	gotrace "runtime/trace"
 	"strconv"
 	"time"
@@ -63,12 +65,36 @@ func NewQCloudSDK(
 		return nil, err
 	}
 
+	// credential arguments
+	keyID := args.KeyID
+	keySecret := args.KeySecret
+	sessionToken := args.SessionToken
+	if args.shouldLoadDefaultCredentials() {
+		keyID = firstNonZero(
+			args.KeyID,
+			os.Getenv("AWS_ACCESS_KEY_ID"),
+			os.Getenv("AWS_ACCESS_KEY"),
+			os.Getenv("TENCENTCLOUD_SECRETID"),
+		)
+		keySecret = firstNonZero(
+			args.KeySecret,
+			os.Getenv("AWS_SECRET_ACCESS_KEY"),
+			os.Getenv("AWS_SECRET_KEY"),
+			os.Getenv("TENCENTCLOUD_SECRETKEY"),
+		)
+		sessionToken = firstNonZero(
+			args.SessionToken,
+			os.Getenv("AWS_SESSION_TOKEN"),
+			os.Getenv("TENCENTCLOUD_SESSIONTOKEN"),
+		)
+	}
+
 	// http client
 	httpClient := newHTTPClient(args)
 	httpClient.Transport = &cos.AuthorizationTransport{
-		SecretID:     args.KeyID,
-		SecretKey:    args.KeySecret,
-		SessionToken: args.SessionToken,
+		SecretID:     keyID,
+		SecretKey:    keySecret,
+		SessionToken: sessionToken,
 		Transport:    httpClient.Transport,
 	}
 
@@ -213,21 +239,42 @@ func (a *QCloudSDK) Write(
 	ctx context.Context,
 	key string,
 	r io.Reader,
-	size int64,
+	sizeHint *int64,
 	expire *time.Time,
 ) (
 	err error,
 ) {
+	defer wrapSizeMismatchErr(&err)
 
-	err = a.putObject(
-		ctx,
-		key,
-		r,
-		size,
-		expire,
-	)
-	if err != nil {
-		return err
+	if sizeHint != nil && *sizeHint < smallObjectThreshold {
+		data, err := io.ReadAll(r)
+		if err != nil {
+			return err
+		}
+		_, err = DoWithRetry("write", func() (int, error) {
+			return 0, a.putObject(
+				ctx,
+				key,
+				bytes.NewReader(data),
+				sizeHint,
+				expire,
+			)
+		}, maxRetryAttemps, IsRetryableError)
+		if err != nil {
+			return err
+		}
+
+	} else {
+		err = a.putObject(
+			ctx,
+			key,
+			r,
+			sizeHint,
+			expire,
+		)
+		if err != nil {
+			return err
+		}
 	}
 
 	return
@@ -327,9 +374,6 @@ func (a *QCloudSDK) deleteSingle(ctx context.Context, key string) error {
 func (a *QCloudSDK) listObjects(ctx context.Context, prefix string, marker string) (*cos.BucketGetResult, error) {
 	ctx, task := gotrace.NewTask(ctx, "QCloudSDK.listObjects")
 	defer task.End()
-	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
-		counter.FileService.S3.List.Add(1)
-	}, a.perfCounterSets...)
 
 	opts := &cos.BucketGetOptions{
 		Delimiter: "/",
@@ -347,6 +391,9 @@ func (a *QCloudSDK) listObjects(ctx context.Context, prefix string, marker strin
 	return DoWithRetry(
 		"s3 list objects",
 		func() (*cos.BucketGetResult, error) {
+			perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
+				counter.FileService.S3.List.Add(1)
+			}, a.perfCounterSets...)
 			result, _, err := a.client.Bucket.Get(ctx, opts)
 			if err != nil {
 				return nil, err
@@ -361,13 +408,13 @@ func (a *QCloudSDK) listObjects(ctx context.Context, prefix string, marker strin
 func (a *QCloudSDK) statObject(ctx context.Context, key string) (http.Header, error) {
 	ctx, task := gotrace.NewTask(ctx, "QCloudSDK.statObject")
 	defer task.End()
-	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
-		counter.FileService.S3.Head.Add(1)
-	}, a.perfCounterSets...)
 
 	return DoWithRetry(
 		"s3 head object",
 		func() (http.Header, error) {
+			perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
+				counter.FileService.S3.Head.Add(1)
+			}, a.perfCounterSets...)
 			resp, err := a.client.Object.Head(ctx, key, &cos.ObjectHeadOptions{})
 			if err != nil {
 				return nil, err
@@ -383,17 +430,24 @@ func (a *QCloudSDK) putObject(
 	ctx context.Context,
 	key string,
 	r io.Reader,
-	size int64,
+	sizeHint *int64,
 	expire *time.Time,
 ) (err error) {
 	ctx, task := gotrace.NewTask(ctx, "QCloudSDK.putObject")
 	defer task.End()
+
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.FileService.S3.Put.Add(1)
 	}, a.perfCounterSets...)
 
 	// not retryable because Reader may be half consumed
-	_, err = a.client.Object.Put(ctx, key, r, &cos.ObjectPutOptions{})
+	opts := &cos.ObjectPutOptions{}
+	if sizeHint != nil {
+		opts.ObjectPutHeaderOptions = &cos.ObjectPutHeaderOptions{
+			ContentLength: *sizeHint,
+		}
+	}
+	_, err = a.client.Object.Put(ctx, key, r, opts)
 	if err != nil {
 		return err
 	}
@@ -403,9 +457,6 @@ func (a *QCloudSDK) putObject(
 func (a *QCloudSDK) getObject(ctx context.Context, key string, min *int64, max *int64) (io.ReadCloser, error) {
 	ctx, task := gotrace.NewTask(ctx, "QCloudSDK.getObject")
 	defer task.End()
-	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
-		counter.FileService.S3.Get.Add(1)
-	}, a.perfCounterSets...)
 
 	if min == nil {
 		min = ptrTo[int64](0)
@@ -426,11 +477,21 @@ func (a *QCloudSDK) getObject(ctx context.Context, key string, min *int64, max *
 			return DoWithRetry(
 				"s3 get object",
 				func() (io.ReadCloser, error) {
+					perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
+						counter.FileService.S3.Get.Add(1)
+					}, a.perfCounterSets...)
 					resp, err := a.client.Object.Get(ctx, key, opts)
 					if err != nil {
 						return nil, err
 					}
-					return resp.Body, nil
+					return &readCloser{
+						r: resp.Body,
+						closeFunc: func() error {
+							// drain
+							io.Copy(io.Discard, resp.Body)
+							return resp.Body.Close()
+						},
+					}, nil
 				},
 				maxRetryAttemps,
 				IsRetryableError,
@@ -445,12 +506,12 @@ func (a *QCloudSDK) getObject(ctx context.Context, key string, min *int64, max *
 func (a *QCloudSDK) deleteObject(ctx context.Context, key string) (bool, error) {
 	ctx, task := gotrace.NewTask(ctx, "QCloudSDK.deleteObject")
 	defer task.End()
-	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
-		counter.FileService.S3.Delete.Add(1)
-	}, a.perfCounterSets...)
 	return DoWithRetry(
 		"s3 delete object",
 		func() (bool, error) {
+			perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
+				counter.FileService.S3.Delete.Add(1)
+			}, a.perfCounterSets...)
 			if _, err := a.client.Object.Delete(ctx, key); err != nil {
 				return false, err
 			}
@@ -464,9 +525,6 @@ func (a *QCloudSDK) deleteObject(ctx context.Context, key string) (bool, error) 
 func (a *QCloudSDK) deleteObjects(ctx context.Context, keys ...string) (bool, error) {
 	ctx, task := gotrace.NewTask(ctx, "QCloudSDK.deleteObjects")
 	defer task.End()
-	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
-		counter.FileService.S3.DeleteMulti.Add(1)
-	}, a.perfCounterSets...)
 	return DoWithRetry(
 		"s3 delete objects",
 		func() (bool, error) {
@@ -476,6 +534,9 @@ func (a *QCloudSDK) deleteObjects(ctx context.Context, keys ...string) (bool, er
 					Key: key,
 				})
 			}
+			perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
+				counter.FileService.S3.DeleteMulti.Add(1)
+			}, a.perfCounterSets...)
 			_, _, err := a.client.Object.DeleteMulti(ctx, &cos.ObjectDeleteMultiOptions{
 				Quiet:   true,
 				Objects: objects,

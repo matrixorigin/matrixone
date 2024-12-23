@@ -165,6 +165,15 @@ message SubscriptionMeta{
 	string tables = 6; // pubTables (separated by ',')
 }
 
+message IndexScanInfo {
+	bool is_index_scan = 1;
+	string index_name   = 2;
+	string belong_to_table = 3;
+	repeated string parts  = 4;
+	bool is_unique		    = 5;
+	string index_table_name  = 6;
+}
+
 message Function {
 	// Function flags
 	enum FuncFlag {
@@ -472,6 +481,7 @@ message TableDef {
 	bool is_dynamic = 31;
 
 	string db_name = 32;
+	uint64 db_id = 33;
 }
 
 message TableFunction{
@@ -531,12 +541,12 @@ message Stats {
 	bool forceOneCN = 7;
 
 	HashMapStats hashmapStats = 8;
+        string sql = 9;
 }
 
 message RowsetExpr {
 	int32 row_pos = 1;
-	int32 pos = 2;
-	Expr expr = 3;
+	Expr expr = 2;
 }
 
 message ColData {
@@ -612,14 +622,23 @@ message OnDuplicateKeyCtx {
 	uint32 table_version			= 10;
 }
 
+message DedupJoinCtx {
+	repeated ColRef old_col_list = 1 [(gogoproto.nullable) = false];
+	repeated int32 update_col_idx_list = 2;
+	repeated Expr update_col_expr_list = 3;
+}
+
 message UpdateCtx {
-	ObjectRef obj_ref		= 1;
-	TableDef table_def		= 2;
-	repeated Expr insert_cols		= 3;
-	repeated Expr delete_cols		= 4;
-	repeated uint64 partition_table_ids = 5;
-	repeated string partition_table_names = 6;
-	int32 partition_idx = 7;
+	ObjectRef obj_ref	= 1;
+	TableDef table_def	= 2;
+
+	repeated uint64 partition_table_ids		= 3;
+	repeated string partition_table_names	= 4;
+	int32 old_partition_idx					= 5;
+	int32 new_partition_idx					= 6;
+
+	repeated ColRef insert_cols	= 7 [(gogoproto.nullable) = false];
+	repeated ColRef delete_cols	= 8 [(gogoproto.nullable) = false];
 }
 
 message InsertCtx {
@@ -669,6 +688,20 @@ message AnalyzeInfo {
 	int64 s3_get = 20;
 	int64 s3_delete = 21;
 	int64 s3_delete_mul = 22;
+
+	int64 cache_read = 23;
+	int64 cache_hit = 24;
+	int64 cache_memory_read = 25;
+	int64 cache_memory_hit = 26;
+	int64 cache_disk_read = 27;
+	int64 cache_disk_hit = 28;
+	int64 cache_remote_read	= 29;
+	int64 cache_remote_hit = 30;
+
+	// written_rows used to estimate S3input
+	int64 written_rows = 31;
+	// deleted_rows used to estimate S3input
+	int64 deleted_rows = 32;
 }
 
 message PartitionPrune {
@@ -684,7 +717,7 @@ message OriginTableMessageForFuzzy {
 message Node {
 	enum NodeType {
 		UNKNOWN = 0;
-		// Node Types
+		ASSERT = 100;
 
 		// Scans
 		VALUE_SCAN = 1;
@@ -693,66 +726,54 @@ message Node {
 		EXTERNAL_SCAN = 4;
 		MATERIAL_SCAN = 5;
 		SOURCE_SCAN = 6;
-
-		// Proj, for convenience
-		PROJECT = 10;
-		// External function call (UDF)
-		EXTERNAL_FUNCTION = 11;
-
-		// Material, CTE, etc.
-		MATERIAL = 20;
-		RECURSIVE_CTE = 21;
-		SINK = 22;
-		SINK_SCAN = 23;
-		RECURSIVE_SCAN = 24;
+		EXTERNAL_FUNCTION = 7;
 
 		// Proper Relational Operators
-		AGG = 30;
-		DISTINCT = 31;
-		FILTER = 32;
-		JOIN = 33;
-		SAMPLE = 34;
-		SORT = 35;
-		UNION = 36;
-		UNION_ALL = 37;
-		UNIQUE = 38;
-		WINDOW = 39;
+		PROJECT = 10;
+		AGG = 11;
+		DISTINCT = 12;
+		FILTER = 13;
+		JOIN = 14;
+		SAMPLE = 15;
+		SORT = 16;
+		WINDOW = 17;
+		UNION = 18;
+		UNION_ALL = 19;
+		UNIQUE = 20;
+		INTERSECT = 21;
+		INTERSECT_ALL = 22;
+		MINUS = 23;
+		MINUS_ALL = 24;
 
-		// Physical tuple mover
-		BROADCAST = 40;
-		SPLIT = 41;
-		GATHER = 42;
-
-		// Misc
-		ASSERT = 50;
-
-		//
-		INSERT = 51;
-		DELETE = 52;
-		REPLACE = 53;
-		ON_DUPLICATE_KEY = 54;
-		PRE_INSERT = 55;
-		PRE_DELETE = 56;
+		// DML
+		INSERT = 30;
+		DELETE = 31;
+		REPLACE = 32;
+		LOCK_OP = 33;
+		ON_DUPLICATE_KEY = 34;
+		PRE_INSERT = 35;
+		PRE_DELETE = 36;
+		FUZZY_FILTER = 37;
 		// the node which build insert batch for hidden table(unique key)
-		PRE_INSERT_UK = 57;
-		PRE_INSERT_SK = 58;
-		MULTI_UPDATE = 59;
+		PRE_INSERT_UK = 38;
+		PRE_INSERT_SK = 39;
 
-		LOCK_OP = 60;
-		//
-		INTERSECT = 61;
-		INTERSECT_ALL = 62;
-		MINUS = 63;
-		MINUS_ALL = 64;
+		// Material, CTE, etc.
+		MATERIAL = 40;
+		RECURSIVE_CTE = 41;
+		SINK = 42;
+		SINK_SCAN = 43;
+		RECURSIVE_SCAN = 44;
+		BROADCAST = 45;
+		SPLIT = 46;
+		GATHER = 47;
 
-		//
-		//
-		TIME_WINDOW = 65;
-		FILL = 66;
-		PARTITION = 67;
-		FUZZY_FILTER = 68;
-		APPLY = 69;
-		POSTDML = 70;
+		TIME_WINDOW = 50;
+		FILL = 51;
+		PARTITION = 52;
+		APPLY = 53;
+		MULTI_UPDATE = 54;
+		POSTDML = 55;
 	}
 
 	enum JoinType {
@@ -764,8 +785,9 @@ message Node {
 		ANTI	= 5;
 		SINGLE	= 6;
 		MARK	= 7;
-		INDEX = 8;
-		L2 = 9;
+		INDEX	= 8;
+		L2		= 9;
+		DEDUP	= 10;
 	}
 
 	enum AggMode {
@@ -781,6 +803,12 @@ message Node {
 		NULL = 3;
 		VALUE = 4;
 		LINEAR = 5;
+	}
+
+	enum OnDuplicateAction {
+		FAIL = 0;
+		IGNORE = 1;
+		UPDATE = 2;
 	}
 
 	enum ApplyType {
@@ -823,6 +851,8 @@ message Node {
 	ObjectRef obj_ref = 18;
 	ObjectRef parent_obj_ref = 19;
 	RowsetData rowset_data = 20;
+
+	IndexScanInfo index_scan_info = 21 [(gogoproto.nullable) = false];
 
 	string extra_options = 22;
 	DeleteCtx delete_ctx = 23;
@@ -880,6 +910,8 @@ message Node {
 	//for message
 	repeated msgHeader send_msg_list = 58;
 	repeated msgHeader recv_msg_list = 59;
+
+	DedupJoinCtx dedup_join_ctx = 60;
 	
 	repeated UpdateCtx update_ctx_list = 61;
 	Snapshot scan_snapshot = 62;
@@ -887,6 +919,9 @@ message Node {
 	ApplyType apply_type = 64;
 	PostDmlCtx post_dml_ctx = 65;
 
+	OnDuplicateAction on_duplicate_action = 66;
+	string dedup_col_name = 67;
+	repeated Type dedup_col_types = 68 [(gogoproto.nullable) = false];
 }
 
 // Snapshot Represents a snapshot of the database
@@ -923,6 +958,12 @@ message ExternScan {
     map<string, int32> TbColToDataCol = 10;
 }
 
+message ExternAttr {
+	string col_name = 1;
+	int32  col_index = 2;
+	int32  col_field_index = 3; 
+}
+
 message LockTarget {
 	uint64 table_id           	= 1;
 	int32 primary_col_idx_in_bat  = 2;
@@ -934,6 +975,10 @@ message LockTarget {
 	repeated uint64 partition_table_ids = 8;
 	bool                block   = 9;
 	lock.LockMode Mode  = 10;
+	int32 primary_col_rel_pos  = 11;
+	int32 filter_col_rel_pos  = 12;
+	Expr lock_rows = 13;
+    bool lock_table_at_the_end = 14;
 }
 
 message PreInsertUkCtx {

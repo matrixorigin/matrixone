@@ -106,7 +106,9 @@ func (ps *PipelineSpool) ReceiveBatch(idx int) (data *batch.Batch, info error) {
 
 	next := ps.rs[idx].popNextIndex()
 	if ps.shardPool[next].dataContent == nil {
-		ps.csDoneSignal <- struct{}{}
+		defer func() {
+			ps.csDoneSignal <- struct{}{}
+		}()
 	}
 	return ps.shardPool[next].dataContent, ps.shardPool[next].errContent
 }

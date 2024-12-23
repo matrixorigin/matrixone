@@ -96,11 +96,11 @@ func (b *BlockInfo) String() string {
 	}
 
 	return fmt.Sprintf(
-		"[%s]ID-%s, MetaLoc: %s, PartitionNum: %d",
+		"[%s]ID-%s(%s)",
 		flag,
 		b.BlockID.ShortStringEx(),
-		b.MetaLocation().String(),
-		b.PartitionNum)
+		b.MetaLocation().Extent().String(),
+	)
 }
 
 func (b *BlockInfo) MarshalWithBuf(w *bytes.Buffer) (uint32, error) {
@@ -225,8 +225,8 @@ func MakeBlockInfoSlice(cnt int) BlockInfoSlice {
 	return make([]byte, cnt*BlockInfoSize)
 }
 
-func PreAllocBlockInfoSlice(cnt int, preAllocSize int) BlockInfoSlice {
-	return make([]byte, cnt*BlockInfoSize, preAllocSize*BlockInfoSize)
+func PreAllocBlockInfoSlice(preAllocBlocks int) BlockInfoSlice {
+	return make([]byte, 0, preAllocBlocks*BlockInfoSize)
 }
 
 func MultiObjectStatsToBlockInfoSlice(objs []ObjectStats, withFirstEmpty bool) BlockInfoSlice {

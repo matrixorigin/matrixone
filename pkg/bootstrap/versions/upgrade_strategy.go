@@ -26,6 +26,16 @@ import (
 )
 
 const (
+	// system tenant default role ID and user ID
+	sysAdminRoleID = 0
+	sysRootID      = 0
+
+	// general tenant default role ID and user ID
+	accountAdminRoleID = 2
+	accountAdminUserID = 2
+)
+
+const (
 	T_any           = "ANY"
 	T_bool          = "BOOL"
 	T_bit           = "BIT"
@@ -85,6 +95,7 @@ const (
 	DROP_PRIMARY_KEY
 	DROP_FOREIGN_KEY
 	CREATE_NEW_TABLE
+	DROP_TABLE
 
 	// alter view definition
 	MODIFY_VIEW
@@ -130,6 +141,13 @@ type UpgradeEntry struct {
 
 // Upgrade entity execution upgrade entrance
 func (u *UpgradeEntry) Upgrade(txn executor.TxnExecutor, accountId uint32) error {
+	userId := uint32(sysRootID)
+	roleId := uint32(sysAdminRoleID)
+	if accountId != catalog.System_Account {
+		userId = accountAdminUserID
+		roleId = accountAdminRoleID
+	}
+
 	exist, err := u.CheckFunc(txn, accountId)
 	if err != nil {
 		getLogger(txn.Txn().TxnOptions().CN).Error("execute upgrade entry check error", zap.Error(err), zap.String("upgrade entry", u.String()))
@@ -141,7 +159,7 @@ func (u *UpgradeEntry) Upgrade(txn executor.TxnExecutor, accountId uint32) error
 	} else {
 		// 1. First, judge whether there is prefix sql
 		if u.PreSql != "" {
-			res, err := txn.Exec(u.PreSql, executor.StatementOption{}.WithAccountID(accountId))
+			res, err := txn.Exec(u.PreSql, executor.StatementOption{}.WithAccountID(accountId).WithUserID(userId).WithRoleID(roleId))
 			if err != nil {
 				getLogger(txn.Txn().TxnOptions().CN).Error("execute upgrade entry pre-sql error", zap.Error(err), zap.String("upgrade entry", u.String()))
 				return err
@@ -150,7 +168,7 @@ func (u *UpgradeEntry) Upgrade(txn executor.TxnExecutor, accountId uint32) error
 		}
 
 		// 2. Second, Execute upgrade sql
-		res, err := txn.Exec(u.UpgSql, executor.StatementOption{}.WithAccountID(accountId))
+		res, err := txn.Exec(u.UpgSql, executor.StatementOption{}.WithAccountID(accountId).WithUserID(userId).WithRoleID(roleId))
 		if err != nil {
 			getLogger(txn.Txn().TxnOptions().CN).Error("execute upgrade entry sql error", zap.Error(err), zap.String("upgrade entry", u.String()))
 			return err
@@ -159,7 +177,7 @@ func (u *UpgradeEntry) Upgrade(txn executor.TxnExecutor, accountId uint32) error
 
 		// 2. Third, after the upgrade is completed, judge whether there is post-sql
 		if u.PostSql != "" {
-			res, err = txn.Exec(u.PostSql, executor.StatementOption{}.WithAccountID(accountId))
+			res, err = txn.Exec(u.PostSql, executor.StatementOption{}.WithAccountID(accountId).WithUserID(userId).WithRoleID(roleId))
 			if err != nil {
 				getLogger(txn.Txn().TxnOptions().CN).Error("execute upgrade entry post-sql error", zap.Error(err), zap.String("upgrade entry", u.String()))
 				return err
@@ -298,7 +316,7 @@ func CheckViewDefinition(txn executor.TxnExecutor, accountId uint32, schema stri
 
 // CheckTableDefinition is used to check if the specified table definition exists in the specified database. If it exists,
 // return true; otherwise, return false.
-func CheckTableDefinition(txn executor.TxnExecutor, accountId uint32, schema string, tableName string) (bool, error) {
+var CheckTableDefinition = func(txn executor.TxnExecutor, accountId uint32, schema string, tableName string) (bool, error) {
 	if schema == "" || tableName == "" {
 		return false, moerr.NewInternalErrorNoCtx("schema name or table name is empty")
 	}

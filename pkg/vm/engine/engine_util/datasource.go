@@ -52,11 +52,16 @@ type RemoteDataSource struct {
 	data                engine.RelData
 }
 
+func (rs *RemoteDataSource) String() string {
+	return "RemoteDataSource"
+}
+
 func (rs *RemoteDataSource) Next(
 	_ context.Context,
 	_ []string,
 	_ []types.Type,
 	seqNums []uint16,
+	_ int32,
 	_ any,
 	_ *mpool.MPool,
 	_ *batch.Batch,

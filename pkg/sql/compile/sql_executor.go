@@ -18,13 +18,12 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
-	"strings"
 	"time"
 
 	"go.uber.org/zap"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -110,7 +109,7 @@ func (s *sqlExecutor) Exec(
 	sql string,
 	opts executor.Options,
 ) (executor.Result, error) {
-	ctx = perfcounter.AttachInternalExecutorKey(ctx)
+	ctx = perfcounter.AttachTxnExecutorKey(ctx)
 	var res executor.Result
 	err := s.ExecTxn(
 		ctx,
@@ -131,7 +130,7 @@ func (s *sqlExecutor) ExecTxn(
 	execFunc func(executor.TxnExecutor) error,
 	opts executor.Options,
 ) error {
-	ctx = perfcounter.AttachInternalExecutorKey(ctx)
+	ctx = perfcounter.AttachTxnExecutorKey(ctx)
 	exec, err := newTxnExecutor(ctx, s, opts)
 	if err != nil {
 		return err
@@ -220,7 +219,7 @@ func newTxnExecutor(
 	s *sqlExecutor,
 	opts executor.Options,
 ) (*txnExecutor, error) {
-	ctx = perfcounter.AttachInternalExecutorKey(ctx)
+	ctx = perfcounter.AttachTxnExecutorKey(ctx)
 	ctx, opts, err := s.adjustOptions(ctx, opts)
 	if err != nil {
 		return nil, err
@@ -241,27 +240,31 @@ func (exec *txnExecutor) Exec(
 	sql string,
 	statementOption executor.StatementOption,
 ) (executor.Result, error) {
-
-	//-----------------------------------------------------------------------------------------
 	// NOTE: This code is to restore tenantID information in the Context when temporarily switching tenants
 	// so that it can be restored to its original state after completing the task.
-	recoverAccount := func(exec *txnExecutor, accId uint32) {
-		exec.ctx = context.WithValue(exec.ctx, defines.TenantIDKey{}, accId)
-	}
-
+	var originCtx context.Context
 	if statementOption.HasAccountID() {
-		originAccountID := catalog.System_Account
-		if v := exec.ctx.Value(defines.TenantIDKey{}); v != nil {
-			originAccountID = v.(uint32)
+		// save the current context
+		originCtx = exec.ctx
+		// switch tenantID
+		exec.ctx = context.WithValue(exec.ctx, defines.TenantIDKey{}, statementOption.AccountID())
+		if statementOption.HasUserID() {
+			exec.ctx = context.WithValue(exec.ctx, defines.UserIDKey{}, statementOption.UserID())
 		}
-
-		exec.ctx = context.WithValue(exec.ctx,
-			defines.TenantIDKey{},
-			statementOption.AccountID())
-		// NOTE: Restore AccountID information in context.Context
-		defer recoverAccount(exec, originAccountID)
+		if statementOption.HasRoleID() {
+			exec.ctx = context.WithValue(exec.ctx, defines.RoleIDKey{}, statementOption.RoleID())
+		}
+		defer func() {
+			// restore context at the end of the function
+			exec.ctx = originCtx
+		}()
 	}
-	//-----------------------------------------------------------------------------------------
+	//------------------------------------------------------------------------------------------------------------------
+	if statementOption.IgnoreForeignKey() {
+		exec.ctx = context.WithValue(exec.ctx,
+			defines.IgnoreForeignKey{},
+			true)
+	}
 
 	receiveAt := time.Now()
 	lower := exec.opts.LowerCaseTableNames()
@@ -330,6 +333,12 @@ func (exec *txnExecutor) Exec(
 	})
 
 	result := executor.NewResult(exec.s.mp)
+
+	stream_chan, err_chan, streaming := exec.opts.Streaming()
+	if streaming {
+		defer close(stream_chan)
+	}
+
 	var batches []*batch.Batch
 	err = c.Compile(
 		exec.ctx,
@@ -343,16 +352,38 @@ func (exec *txnExecutor) Exec(
 				if err != nil {
 					return err
 				}
-				batches = append(batches, rows)
+				if streaming {
+					stream_result := executor.NewResult(exec.s.mp)
+					for len(stream_chan) == cap(stream_chan) {
+						select {
+						case <-proc.Ctx.Done():
+							err_chan <- moerr.NewInternalError(proc.Ctx, "context cancelled")
+							return moerr.NewInternalError(proc.Ctx, "context cancelled")
+						default:
+							time.Sleep(1 * time.Millisecond)
+						}
+					}
+					stream_result.Batches = []*batch.Batch{rows}
+					stream_chan <- stream_result
+				} else {
+					batches = append(batches, rows)
+				}
 			}
 			return nil
+
 		})
 	if err != nil {
+		if streaming {
+			err_chan <- err
+		}
 		return executor.Result{}, err
 	}
 	var runResult *util.RunResult
 	runResult, err = c.Run(0)
 	if err != nil {
+		if streaming {
+			err_chan <- err
+		}
 		for _, bat := range batches {
 			if bat != nil {
 				bat.Clean(exec.s.mp)
@@ -370,9 +401,6 @@ func (exec *txnExecutor) Exec(
 			zap.Int("retry-times", c.retryTimes),
 			zap.Uint64("AffectedRows", runResult.AffectRows),
 		)
-		if len(batches) == 0 && strings.HasPrefix(sql, "select offset, step from") {
-			logutil.Info("Empty incr query", zap.String("ws", exec.opts.Txn().GetWorkspace().PPString()))
-		}
 	}
 
 	result.LastInsertID = proc.GetLastInsertID()

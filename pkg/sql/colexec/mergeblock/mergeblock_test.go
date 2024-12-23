@@ -127,7 +127,7 @@ func TestMergeBlock(t *testing.T) {
 
 	// argument1.Prepare(proc)
 	argument1.OpAnalyzer = process.NewAnalyzer(0, false, false, "mergeblock")
-	_, err := argument1.Call(proc)
+	_, err := vm.Exec(&argument1, proc)
 	require.NoError(t, err)
 	require.Equal(t, uint64(15*3), argument1.container.affectedRows)
 	// Check Tbl

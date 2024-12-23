@@ -145,7 +145,12 @@ func rewriteUpdateQueryLastNode(builder *QueryBuilder, planCtxs []*dmlPlanCtx, l
 			} else {
 				pos := idx + colIdx
 				if col.OnUpdate != nil && col.OnUpdate.Expr != nil {
-					lastNode.ProjectList[pos] = col.OnUpdate.Expr
+					newDefExpr := DeepCopyExpr(col.OnUpdate.Expr)
+					err = replaceFuncId(builder.GetContext(), newDefExpr)
+					if err != nil {
+						return err
+					}
+					lastNode.ProjectList[pos] = newDefExpr
 				}
 
 				if col != nil && col.Typ.Id == int32(types.T_enum) {
@@ -291,7 +296,7 @@ func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.
 	//selectAst.Format(ftCtx)
 	//sql := ftCtx.String()
 	//fmt.Print(sql)
-	lastNodeId, err := builder.buildSelect(selectAst, bindCtx, false)
+	lastNodeId, err := builder.bindSelect(selectAst, bindCtx, false)
 	if err != nil {
 		return -1, nil, err
 	}

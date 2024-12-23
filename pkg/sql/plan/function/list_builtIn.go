@@ -16,6 +16,7 @@ package function
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/fault"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -817,6 +818,67 @@ var supportedStringBuiltIns = []FuncNew{
 		},
 	},
 
+	//function `json_set`
+	{
+		functionId: JSON_SET,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    jsonSetCheckFn,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_json, types.T_varchar, types.T_any},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_json.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpBuiltInJsonSet().buildJsonSet
+				},
+			},
+		},
+	},
+
+	// function `json_insert`
+	{
+		functionId: JSON_INSERT,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    jsonSetCheckFn,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_json, types.T_varchar, types.T_any},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_json.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpBuiltInJsonSet().buildJsonInsert
+				},
+			},
+		},
+	},
+
+	// function `json_replace`
+	{
+		functionId: JSON_REPLACE,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    jsonSetCheckFn,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_json, types.T_varchar, types.T_any},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_json.ToType()
+
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpBuiltInJsonSet().buildJsonReplace
+				},
+			},
+		},
+	},
+
 	// function `left`
 	{
 		functionId: LEFT,
@@ -1368,7 +1430,7 @@ var supportedStringBuiltIns = []FuncNew{
 	// function `serial`
 	{
 		functionId: SERIAL,
-		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
+		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) > 0 {
@@ -1394,7 +1456,7 @@ var supportedStringBuiltIns = []FuncNew{
 	// function `serial_full`
 	{
 		functionId: SERIAL_FULL,
-		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
+		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) > 0 {
@@ -1420,7 +1482,7 @@ var supportedStringBuiltIns = []FuncNew{
 	// function `serial_extract`
 	{
 		functionId: SERIAL_EXTRACT,
-		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
+		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 3 {
@@ -2759,6 +2821,32 @@ var supportedMathBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `crc32`
+	{
+		functionId: CRC32,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			if len(inputs) == 1 && (inputs[0].IsVarlen() || inputs[0].Oid == types.T_any) {
+				return newCheckResultWithSuccess(0)
+			}
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint32.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newCrc32ExecContext().builtInCrc32
+				},
+			},
+		},
+	},
+
 	// function `exp`
 	{
 		functionId: EXP,
@@ -3538,7 +3626,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 	// function `current_timestamp`, `now`
 	{
 		functionId: CURRENT_TIMESTAMP,
-		class:      plan.Function_STRICT,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 0 {
@@ -3774,7 +3862,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 	// function `date_sub`
 	{
 		functionId: DATE_SUB,
-		class:      plan.Function_STRICT,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatch,
 
@@ -4837,6 +4925,29 @@ var supportedControlBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return EnableFaultInjection
+				},
+			},
+		},
+	},
+
+	// function `fault_inject`
+	{
+		functionId: FAULT_INJECT,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId:      0,
+				args:            []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return FaultInject
 				},
 			},
 		},
@@ -6360,38 +6471,6 @@ var supportedOthersBuiltIns = []FuncNew{
 		},
 	},
 
-	// function `mo_check_level`
-	{
-		functionId: MO_CHECH_LEVEL,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
-
-		Overloads: []overload{
-			{
-				overloadId: 0,
-				args:       []types.T{types.T_bool},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_bool.ToType()
-				},
-				newOp: func() executeLogicOfOverload {
-					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ *FunctionSelectList) error {
-						vs := vector.GenerateFunctionFixedTypeParameter[bool](parameters[0])
-						res := vector.MustFunctionResult[bool](result)
-						for i := uint64(0); i < uint64(length); i++ {
-							flag, isNull := vs.GetValue(i)
-							if isNull || !flag {
-								return moerr.NewCheckRecursiveLevel(proc.Ctx)
-							}
-							res.AppendMustValue(true)
-						}
-						return nil
-					}
-				},
-			},
-		},
-	},
-
 	// function `assert`
 	{
 		functionId: ASSERT,
@@ -6828,4 +6907,8 @@ func fulltext_expand_overload(rettyp types.T) []overload {
 
 func MoCtl(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ *FunctionSelectList) (err error) {
 	return ctl.MoCtl(ivecs, result, proc, length)
+}
+
+func FaultInject(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ *FunctionSelectList) (err error) {
+	return fj.FaultInject(ivecs, result, proc, length)
 }

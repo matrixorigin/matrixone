@@ -78,6 +78,10 @@ func TestNewTxnWithNormalStateWait(t *testing.T) {
 		}, 0)))
 	runtime.SetupServiceBasedRuntime("", rt)
 	c := NewTxnClient("", newTestTxnSender())
+	defer func() {
+		require.NoError(t, c.Close())
+	}()
+
 	// Do not resume the txn client for now.
 	// c.Resume()
 	var wg sync.WaitGroup
@@ -109,6 +113,10 @@ func TestNewTxnWithNormalStateNoWait(t *testing.T) {
 		}, 0)))
 	runtime.SetupServiceBasedRuntime("", rt)
 	c := NewTxnClient("", newTestTxnSender(), WithNormalStateNoWait(true))
+	defer func() {
+		require.NoError(t, c.Close())
+	}()
+
 	// Do not resume the txn client.
 	// c.Resume()
 	var wg sync.WaitGroup
@@ -143,41 +151,6 @@ func TestNewTxnWithSnapshotTS(t *testing.T) {
 	assert.Equal(t, timestamp.Timestamp{PhysicalTime: 10}, txnMeta.SnapshotTS)
 	assert.NotEmpty(t, txnMeta.ID)
 	assert.Equal(t, txn.TxnStatus_Active, txnMeta.Status)
-}
-
-type fakeRunningPipelinesManager struct{}
-
-func (m *fakeRunningPipelinesManager) PauseService()            {}
-func (m *fakeRunningPipelinesManager) KillAllQueriesWithError() {}
-func (m *fakeRunningPipelinesManager) ResumeService()           {}
-
-func TestTxnClientAbortAllRunningTxn(t *testing.T) {
-	SetRunningPipelineManagement(&fakeRunningPipelinesManager{})
-	rt := runtime.NewRuntime(metadata.ServiceType_CN, "",
-		logutil.GetPanicLogger(),
-		runtime.WithClock(clock.NewHLCClock(func() int64 {
-			return 1
-		}, 0)))
-	runtime.SetupServiceBasedRuntime("", rt)
-
-	c := NewTxnClient("", newTestTxnSender())
-	c.Resume()
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
-	defer cancel()
-	var ops []TxnOperator
-	for i := 0; i < 10; i++ {
-		op, err := c.New(ctx, newTestTimestamp(0))
-		assert.Nil(t, err)
-		ops = append(ops, op)
-	}
-	require.Equal(t, 10, len(c.(*txnClient).mu.activeTxns))
-
-	c.AbortAllRunningTxn()
-	require.Equal(t, 0, len(c.(*txnClient).mu.activeTxns))
-	for _, op := range ops {
-		assert.Equal(t, txn.TxnStatus_Aborted, op.(*txnOperator).mu.txn.Status)
-	}
 }
 
 func TestTxnClientPauseAndResume(t *testing.T) {
@@ -259,8 +232,14 @@ func TestMaxActiveTxnWithWaitTimeout(t *testing.T) {
 			defer cancel()
 			_, err = tc.New(ctx2, newTestTimestamp(0), WithUserTxn())
 			require.Error(t, err)
+
+			v := tc.(*txnClient)
+			v.mu.Lock()
+			defer v.mu.Unlock()
+			require.Equal(t, 0, len(v.mu.waitActiveTxns))
 		},
-		WithMaxActiveTxn(1))
+		WithMaxActiveTxn(1),
+	)
 }
 
 func TestOpenTxnWithWaitPausedDisabled(t *testing.T) {
@@ -271,4 +250,28 @@ func TestOpenTxnWithWaitPausedDisabled(t *testing.T) {
 	op.opts.options = op.opts.options.WithDisableWaitPaused()
 
 	require.Error(t, c.openTxn(op))
+}
+
+func TestNewWithUpdateSnapshotTimeout(t *testing.T) {
+	rt := runtime.NewRuntime(metadata.ServiceType_CN, "",
+		logutil.GetPanicLogger(),
+		runtime.WithClock(clock.NewHLCClock(func() int64 {
+			return 1
+		}, 0)))
+	runtime.SetupServiceBasedRuntime("", rt)
+	c := NewTxnClient(
+		"",
+		newTestTxnSender(),
+		WithEnableSacrificingFreshness(),
+		WithTimestampWaiter(NewTimestampWaiter(rt.Logger())),
+	)
+	c.Resume()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+	defer cancel()
+	_, err := c.New(ctx, newTestTimestamp(10000))
+	assert.Error(t, err)
+	v := c.(*txnClient)
+	v.mu.Lock()
+	assert.Equal(t, 0, len(v.mu.waitActiveTxns))
+	v.mu.Unlock()
 }

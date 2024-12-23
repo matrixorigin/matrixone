@@ -259,15 +259,33 @@ func MoVectorToString(v *vector.Vector, printN int, opts ...TypePrintOpt) string
 		return vec2Str(vector.MustFixedColWithTypeCheck[types.Blockid](v)[:printN], v)
 	}
 	if v.GetType().IsVarlen() {
-		return vec2Str(vector.InefficientMustBytesCol(v)[:printN], v, opts...)
+		if !v.HasNull() {
+			return vec2Str(vector.InefficientMustBytesCol(v)[:printN], v, opts...)
+		}
+		vs := make([][]byte, 0, printN)
+		for i := 0; i < printN; i++ {
+			if v.GetNulls().Contains(uint64(i)) {
+				vs = append(vs, nil)
+			} else {
+				vs = append(vs, v.GetBytesAt(i))
+			}
+		}
+		return vec2Str(vs, v, opts...)
 	}
 	return fmt.Sprintf("unkown type vec... %v", *v.GetType())
 }
 
 func MoBatchToString(moBat *batch.Batch, printN int) string {
+	if moBat == nil {
+		return "empty batch"
+	}
 	n := 0
 	buf := new(bytes.Buffer)
 	for i, vec := range moBat.Vecs {
+		if vec == nil {
+			fmt.Fprintf(buf, "[col%v] = nil\n", i)
+			continue
+		}
 		if n = vec.Length(); n < printN {
 			printN = n
 		}

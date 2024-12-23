@@ -109,6 +109,9 @@ func (b *BindedEngine) UnsubscribeTable(ctx context.Context, dbID, tbID uint64) 
 	return b.engine.UnsubscribeTable(ctx, dbID, tbID)
 }
 
+func (b *BindedEngine) PrefetchTableMeta(ctx context.Context, key pb.StatsInfoKey) bool {
+	return b.engine.PrefetchTableMeta(ctx, key)
+}
 func (b *BindedEngine) Stats(ctx context.Context, key pb.StatsInfoKey, sync bool) *pb.StatsInfo {
 	return b.engine.Stats(ctx, key, sync)
 }

@@ -53,6 +53,9 @@ type container struct {
 	subStatus int
 	idx       int
 	buf       *batch.Batch
+	i         int
+	doneIdx   []int
+	endBatch  []bool
 
 	// linear
 	nullIdx int
@@ -135,6 +138,15 @@ func (fill *Fill) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr.freeVectors(proc.Mp())
 
 	fill.FreeProjection(proc)
+}
+
+func (fill *Fill) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
+	batch := input
+	var err error
+	if fill.ProjectList != nil {
+		batch, err = fill.EvalProjection(input, proc)
+	}
+	return batch, err
 }
 
 func (ctr *container) freeBatch(mp *mpool.MPool) {

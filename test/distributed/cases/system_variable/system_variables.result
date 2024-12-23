@@ -114,7 +114,7 @@ primary key(a)
 );
 show indexes from t;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    NULL
+t    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    a
 create account acc_idx ADMIN_NAME 'root' IDENTIFIED BY '123456';
 create database db1;
 use db1;
@@ -127,7 +127,7 @@ primary key(a)
 );
 show indexes from t;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    NULL
+t    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    a
 drop database db1;
 drop account acc_idx;
 use information_schema;
@@ -459,3 +459,59 @@ SCHEMA_NAME    DEFAULT_CHARACTER_SET_NAME    DEFAULT_COLLATION_NAME
 test_for_navicat    utf8mb4    utf8mb4_0900_ai_ci
 drop database test_for_navicat;
 drop account acc_idx;
+select @@profiling;
+@@profiling
+0
+select @@global.profiling;
+@@profiling
+0
+show variables like 'profiling';
+Variable_name    Value
+profiling    0
+select @@profiling_history_size;
+@@profiling_history_size
+15
+select @@global.profiling_history_size;
+@@profiling_history_size
+15
+show variables like 'profiling_history_size';
+Variable_name    Value
+profiling_history_size    15
+SET profiling_history_size = 0;
+select @@profiling_history_size;
+@@profiling_history_size
+0
+select @@global.profiling_history_size;
+@@profiling_history_size
+15
+show variables like 'profiling_history_size';
+Variable_name    Value
+profiling_history_size    0
+SET profiling_history_size = 15;
+select @@profiling_history_size;
+@@profiling_history_size
+15
+select @@global.profiling_history_size;
+@@profiling_history_size
+15
+show variables like 'profiling_history_size';
+Variable_name    Value
+profiling_history_size    15
+SET profiling_history_size = default;
+select @@optimizer_switch;
+@@optimizer_switch
+index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,hash_set_operations=on
+select @@global.optimizer_switch;
+@@optimizer_switch
+index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,hash_set_operations=on
+show variables like 'optimizer_switch';
+Variable_name    Value
+optimizer_switch    index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,hash_set_operations=on
+set optimizer_switch='semijoin=off';
+select @@optimizer_switch;
+@@optimizer_switch
+semijoin=off
+show variables like 'optimizer_switch';
+Variable_name    Value
+optimizer_switch    semijoin=off
+SET profiling_history_size = default;
