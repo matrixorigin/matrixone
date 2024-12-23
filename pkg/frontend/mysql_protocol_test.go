@@ -3153,27 +3153,6 @@ func Test_appendResultSetBinaryRow_error(t *testing.T) {
 	})
 }
 
-func newMrsAndBatchForAllTypes() (*MysqlResultSet, *batch.Batch) {
-	mrs := &MysqlResultSet{}
-
-	col1 := &MysqlColumn{}
-	col1.SetName("bool")
-	col1.SetColumnType(defines.MYSQL_TYPE_DATE)
-
-	mrs.AddColumn(col1)
-
-	dt, _ := types.ParseDateCast("2024-12-18")
-	rows := [][]any{
-		{dt},
-	}
-
-	for _, row := range rows {
-		mrs.AddRow(row)
-	}
-
-	return mrs, nil
-}
-
 type kase struct {
 	sql string
 	mrs *MysqlResultSet
