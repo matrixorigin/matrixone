@@ -232,7 +232,7 @@ func incBuffer() {
 }
 
 func descBuffer(_ *bytes.Buffer) {
-	v2.TraceCollectorContentQueueLength.Desc()
+	v2.TraceCollectorContentQueueLength.Dec()
 	bufferCount.Add(-1)
 }
 
