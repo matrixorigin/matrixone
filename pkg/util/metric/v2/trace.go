@@ -163,6 +163,7 @@ var (
 	TraceMOLoggerBufferContentAlloc     = traceMOLoggerBufferActionCounter.WithLabelValues("content_alloc")
 	TraceMOLoggerBufferMetricFree       = traceMOLoggerBufferActionCounter.WithLabelValues("metric_free")
 	TraceMOLoggerBufferNoCallback       = traceMOLoggerBufferActionCounter.WithLabelValues("no_callback")
+	TraceMOLoggerBufferCallback         = traceMOLoggerBufferActionCounter.WithLabelValues("callback")
 	TraceMOLoggerBufferSetCallBack      = traceMOLoggerBufferActionCounter.WithLabelValues("set_callback")
 	TraceMOLoggerBufferSetCallBackNil   = traceMOLoggerBufferActionCounter.WithLabelValues("set_callback_nil")
 	TraceMOLoggerBufferLoopWriteSQL     = traceMOLoggerBufferActionCounter.WithLabelValues("loop_write_sql")
