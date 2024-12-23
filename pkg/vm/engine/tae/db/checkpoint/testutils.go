@@ -167,7 +167,7 @@ func (r *runner) ForceIncrementalCheckpoint(ts types.TS) (err error) {
 		)
 	}()
 
-	r.incrementalCheckpointQueue.Enqueue(struct{}{})
+	r.TryTriggerExecuteICKP()
 
 	select {
 	case <-r.ctx.Done():
