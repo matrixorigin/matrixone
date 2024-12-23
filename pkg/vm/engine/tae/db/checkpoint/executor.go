@@ -38,16 +38,19 @@ func (job *checkpointJob) RunICKP(ctx context.Context) (err error) {
 	default:
 	}
 
-	now := time.Now()
 	entry, rollback := job.runner.store.TakeICKPIntent()
+	if entry == nil {
+		return
+	}
+
 	var (
 		errPhase      string
 		lsnToTruncate uint64
 		lsn           uint64
 		fatal         bool
 		fields        []zap.Field
+		now           = time.Now()
 	)
-	now = time.Now()
 
 	logutil.Info(
 		"ICKP-Execute-Start",
@@ -160,9 +163,14 @@ type checkpointExecutor struct {
 func newCheckpointExecutor(
 	runner *runner,
 ) *checkpointExecutor {
-	return &checkpointExecutor{
+	ctx, cancel := context.WithCancelCause(context.Background())
+	e := &checkpointExecutor{
 		runner: runner,
+		ctx:    ctx,
+		cancel: cancel,
 	}
+	e.active.Store(true)
+	return e
 }
 
 func (e *checkpointExecutor) Stop() {
