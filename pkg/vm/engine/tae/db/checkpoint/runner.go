@@ -22,6 +22,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"
 
 	"go.uber.org/zap"
@@ -354,6 +355,9 @@ func (r *runner) onIncrementalCheckpointEntries(items ...any) {
 }
 
 func (r *runner) saveCheckpoint(start, end types.TS, ckpLSN, truncateLSN uint64) (name string, err error) {
+	if injectErrMsg, injected := objectio.CheckpointSaveInjected(); injected {
+		return "", moerr.NewInternalErrorNoCtxf(injectErrMsg)
+	}
 	bat := r.collectCheckpointMetadata(start, end, ckpLSN, truncateLSN)
 	defer bat.Close()
 	name = blockio.EncodeCheckpointMetadataFileName(CheckpointDir, PrefixMetadata, start, end)

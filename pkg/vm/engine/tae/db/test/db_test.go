@@ -7744,6 +7744,78 @@ func TestGCCheckpoint1(t *testing.T) {
 	}
 }
 
+// 1. make some transactions
+// 2. fault injection to save checkpoint
+// 3. force checkpoint -> expect error
+// 4. check the intent -> expect not nil, all checked, running
+// 5. check the incremental checkpoints -> expect 0
+// 6. remove the fault injection
+// 7. force checkpoint -> expect no error
+// 8. check the incremental checkpoints -> expect 1, finished
+// 9. check the intent -> expect nil
+func Test_CheckpointChaos1(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+	opts := config.WithLongScanAndCKPOpts(nil)
+
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	i := 0
+	nextDBName := func() string {
+		i++
+		return fmt.Sprintf("db_%d", i)
+	}
+
+	commitOneTxn := func() {
+		txn, _ := tae.StartTxn(nil)
+		_, err := txn.CreateDatabase(nextDBName(), "", "")
+		assert.Nil(t, err)
+	}
+
+	for i := 0; i < 2; i++ {
+		commitOneTxn()
+	}
+
+	fault.Enable()
+	defer fault.Disable()
+	msg := "checkpoint-chaos"
+	rmFn, err := objectio.InjectCheckpointSave(msg)
+	assert.NoError(t, err)
+
+	now := tae.TxnMgr.Now()
+	err = tae.DB.ForceCheckpoint(ctx, now, time.Minute)
+	assert.Error(t, err)
+
+	intent := tae.BGCheckpointRunner.GetICKPIntentOnlyForTest()
+	t.Logf("intent: %v", intent)
+	assert.NotNil(t, intent)
+	assert.True(t, intent.AllChecked())
+	assert.True(t, intent.IsRunning())
+
+	entries := tae.BGCheckpointRunner.GetAllIncrementalCheckpoints()
+	assert.Equal(t, 0, len(entries))
+	for i, entry := range entries {
+		t.Logf("checkpoint %d: %s", i, entry.String())
+	}
+
+	rmFn()
+	err = tae.DB.ForceCheckpoint(ctx, now, time.Minute)
+	assert.NoError(t, err)
+
+	entries = tae.BGCheckpointRunner.GetAllIncrementalCheckpoints()
+	assert.Equal(t, 1, len(entries))
+	assert.True(t, entries[0].IsFinished())
+
+	intent = tae.BGCheckpointRunner.GetICKPIntentOnlyForTest()
+	t.Logf("intent: %v", intent)
+	assert.Nil(t, intent)
+}
+
+func Test_CheckpointChaos2(t *testing.T) {
+	// TODO
+}
+
 func TestGCCatalog1(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	ctx := context.Background()

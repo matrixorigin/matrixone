@@ -37,7 +37,13 @@ type TestRunner interface {
 	ForceIncrementalCheckpoint(end types.TS) error
 	MaxLSNInRange(end types.TS) uint64
 
+	GetICKPIntentOnlyForTest() *CheckpointEntry
+
 	GCNeeded() bool
+}
+
+func (r *runner) GetICKPIntentOnlyForTest() *CheckpointEntry {
+	return r.store.GetICKPIntent()
 }
 
 // DisableCheckpoint stops generating checkpoint
