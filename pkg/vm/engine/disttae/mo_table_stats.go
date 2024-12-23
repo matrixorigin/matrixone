@@ -1990,7 +1990,7 @@ func (d *dynamicCtx) gamaTask(
 	}
 
 	const baseFactory = 30
-	tickerA := time.NewTicker(baseFactory)
+	tickerA := time.NewTicker(randDuration(baseFactory))
 	tickerB := time.NewTicker(randDuration(baseFactory))
 	tickerC := time.NewTicker(time.Minute)
 
@@ -2006,7 +2006,7 @@ func (d *dynamicCtx) gamaTask(
 			d.gama.taskPool.Submit(func() {
 				d.gamaUpdateForgotten(ctx, service, de, gamaLimit)
 			})
-			tickerA.Reset(baseFactory)
+			tickerA.Reset(randDuration(baseFactory))
 
 		case <-d.updateForgottenQueue:
 			d.gama.taskPool.Submit(func() {
