@@ -382,15 +382,18 @@ func (mp *MysqlProtocolImpl) Write(execCtx *ExecCtx, crs *perfcounter.CounterSet
 	}
 
 	colSlices := &ColumnSlices{
+		ctx:             execCtx.reqCtx,
 		colIdx2SliceIdx: make([]int, len(bat.Vecs)),
 		dataSet:         bat,
 	}
+	defer colSlices.Close()
 	err := convertBatchToSlices(execCtx.reqCtx, execCtx.ses, bat, colSlices)
 	if err != nil {
 		return err
 	}
 	ses := execCtx.ses.(*Session)
 	isShowTableStatus := ses.GetShowStmtType() == ShowTableStatus
+	colSlices.safeRefSlice = !isShowTableStatus
 	if isShowTableStatus {
 		for j := 0; j < n; j++ { //row index
 			err = extractRowFromEveryVector2(execCtx.reqCtx, execCtx.ses, bat, j, mrs.Data[0], !isShowTableStatus, colSlices)
@@ -402,7 +405,6 @@ func (mp *MysqlProtocolImpl) Write(execCtx *ExecCtx, crs *perfcounter.CounterSet
 			ses.AppendData(row2)
 		}
 	} else {
-		colSlices.safeRefSlice = true
 		if err = mp.WriteResultSetRow2(&mrs, colSlices, uint64(n)); err != nil {
 			execCtx.ses.Error(execCtx.reqCtx,
 				"Flush error",
@@ -2792,44 +2794,78 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow2(mrs *MysqlResultSet, colS
 
 		switch mysqlColumn.ColumnType() {
 		case defines.MYSQL_TYPE_BOOL:
-			b := colSlices.GetBool(rowIdx, i)
+			b, err := colSlices.GetBool(rowIdx, i)
+			if err != nil {
+				return err
+			}
 			err = AppendCountOfBytesLenEnc(mp, getBoolSlice(b))
 			if err != nil {
 				return err
 			}
+		case defines.MYSQL_TYPE_BIT:
+			value, err := colSlices.GetUint64(rowIdx, i)
+			if err != nil {
+				return err
+			}
+			bitLength := mysqlColumn.ColumnImpl.Length()
+			byteLength := (bitLength + 7) / 8
+			b := types.EncodeUint64(&value)[:byteLength]
+			slices.Reverse(b)
+			err = AppendCountOfBytesLenEnc(mp, b)
+			if err != nil {
+				return err
+			}
 		case defines.MYSQL_TYPE_TINY:
-			value := colSlices.GetInt64(rowIdx, i)
+			value, err := colSlices.GetInt64(rowIdx, i)
+			if err != nil {
+				return err
+			}
 			err = mp.appendUint8(uint8(value))
 			if err != nil {
 				return err
 			}
 		case defines.MYSQL_TYPE_SHORT, defines.MYSQL_TYPE_YEAR:
-			value := colSlices.GetInt64(rowIdx, i)
+			value, err := colSlices.GetInt64(rowIdx, i)
+			if err != nil {
+				return err
+			}
 			err = mp.appendUint16(uint16(value))
 			if err != nil {
 				return err
 			}
 		case defines.MYSQL_TYPE_INT24, defines.MYSQL_TYPE_LONG:
-			value := colSlices.GetInt64(rowIdx, i)
+			value, err := colSlices.GetInt64(rowIdx, i)
+			if err != nil {
+				return err
+			}
 			err = mp.appendUint32(uint32(value))
 			if err != nil {
 				return err
 			}
 		case defines.MYSQL_TYPE_LONGLONG:
-			value := colSlices.GetUint64(rowIdx, i)
+			value, err := colSlices.GetUint64(rowIdx, i)
+			if err != nil {
+				return err
+			}
 			err = mp.appendUint64(value)
 			if err != nil {
 				return err
 			}
 		case defines.MYSQL_TYPE_FLOAT:
-			v := colSlices.GetFloat32(rowIdx, i)
-			err = mp.appendUint32(math.Float32bits(v))
+			value, err := colSlices.GetFloat32(rowIdx, i)
+			if err != nil {
+				return err
+			}
+			err = mp.appendUint32(math.Float32bits(value))
 			if err != nil {
 				return err
 			}
 		case defines.MYSQL_TYPE_DOUBLE:
-			v := colSlices.GetFloat64(rowIdx, i)
-			err = mp.appendUint64(math.Float64bits(v))
+			value, err := colSlices.GetFloat64(rowIdx, i)
+			if err != nil {
+				return err
+			}
+			err = mp.appendUint64(math.Float64bits(value))
 			if err != nil {
 				return err
 			}
@@ -2838,13 +2874,19 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow2(mrs *MysqlResultSet, colS
 			typ := colSlices.GetType(i)
 			switch typ.Oid {
 			case types.T_binary, types.T_varbinary:
-				value := colSlices.GetBytesBased(rowIdx, i)
+				value, err := colSlices.GetBytesBased(rowIdx, i)
+				if err != nil {
+					return err
+				}
 				err = AppendCountOfBytesLenEnc(mp, value)
 				if err != nil {
 					return err
 				}
 			default:
-				value := colSlices.GetStringBased(rowIdx, i)
+				value, err := colSlices.GetStringBased(rowIdx, i)
+				if err != nil {
+					return err
+				}
 				err = AppendStringLenEnc(mp, value)
 				if err != nil {
 					return err
@@ -2854,58 +2896,66 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow2(mrs *MysqlResultSet, colS
 			typ := colSlices.GetType(i)
 			switch typ.Oid {
 			case types.T_datetime:
-				value := colSlices.GetDatetime(rowIdx, i)
+				value, err := colSlices.GetDatetime(rowIdx, i)
+				if err != nil {
+					return err
+				}
 				err = mp.appendStringLenEnc(value)
 				if err != nil {
 					return err
 				}
 			default:
-				value := colSlices.GetBytesBased(rowIdx, i)
+				value, err := colSlices.GetBytesBased(rowIdx, i)
+				if err != nil {
+					return err
+				}
 				err = AppendCountOfBytesLenEnc(mp, value)
 				if err != nil {
 					return err
 				}
 			}
-		case defines.MYSQL_TYPE_STRING:
-			value := colSlices.GetBytesBased(rowIdx, i)
+		case defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TEXT:
+			value, err := colSlices.GetBytesBased(rowIdx, i)
+			if err != nil {
+				return err
+			}
 			err = AppendCountOfBytesLenEnc(mp, value)
 			if err != nil {
 				return err
 			}
-		case defines.MYSQL_TYPE_BLOB:
-			value := colSlices.GetBytesBased(rowIdx, i)
-			err = AppendCountOfBytesLenEnc(mp, value)
+		case defines.MYSQL_TYPE_JSON, defines.MYSQL_TYPE_ENUM:
+			value, err := colSlices.GetStringBased(rowIdx, i)
 			if err != nil {
 				return err
 			}
-		case defines.MYSQL_TYPE_TEXT:
-			value := colSlices.GetBytesBased(rowIdx, i)
-			err = AppendCountOfBytesLenEnc(mp, value)
-			if err != nil {
-				return err
-			}
-
-		case defines.MYSQL_TYPE_JSON:
-			value := colSlices.GetStringBased(rowIdx, i)
 			err = AppendStringLenEnc(mp, value)
 			if err != nil {
 				return err
 			}
 		// TODO: some type, we use string now. someday need fix it
 		case defines.MYSQL_TYPE_DECIMAL:
-			value := colSlices.GetDecimal(rowIdx, i)
+			value, err := colSlices.GetDecimal(rowIdx, i)
+			if err != nil {
+				return err
+			}
 			err = mp.appendStringLenEnc(value)
 			if err != nil {
 				return err
 			}
 		case defines.MYSQL_TYPE_UUID:
-			value := colSlices.GetUUID(rowIdx, i)
+			value, err := colSlices.GetUUID(rowIdx, i)
+			if err != nil {
+				return err
+			}
 			err = mp.appendStringLenEnc(value)
 			if err != nil {
 				return err
 			}
 		case defines.MYSQL_TYPE_DATE:
-			value := colSlices.GetDate(rowIdx, i)
+			value, err := colSlices.GetDate(rowIdx, i)
+			if err != nil {
+				return err
+			}
 			err = mp.appendDate(value)
 			if err != nil {
 				return err
@@ -2913,7 +2963,10 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow2(mrs *MysqlResultSet, colS
 		case defines.MYSQL_TYPE_TIME:
 			var t types.Time
 			var err error
-			value := colSlices.GetTime(rowIdx, i)
+			value, err := colSlices.GetTime(rowIdx, i)
+			if err != nil {
+				return err
+			}
 			idx := strings.Index(value, ".")
 			if idx == -1 {
 				t, err = types.ParseTime(value, 0)
@@ -2937,9 +2990,15 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow2(mrs *MysqlResultSet, colS
 			typ := colSlices.GetType(i)
 			switch typ.Oid {
 			case types.T_datetime:
-				value = colSlices.GetDatetime(rowIdx, i)
+				value, err = colSlices.GetDatetime(rowIdx, i)
+				if err != nil {
+					return err
+				}
 			case types.T_timestamp:
-				value = colSlices.GetTimestamp(rowIdx, i, mp.ses.GetTimeZone())
+				value, err = colSlices.GetTimestamp(rowIdx, i, mp.ses.GetTimeZone())
+				if err != nil {
+					return err
+				}
 			default:
 				return moerr.NewInternalErrorf(mp.ctx, "unknown type %s in datetime or timestamp", typ.Oid)
 			}
@@ -2999,35 +3058,50 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow2(mrs *MysqlResultSet, colSli
 
 		switch mysqlColumn.ColumnType() {
 		case defines.MYSQL_TYPE_BOOL:
-			b := colSlices.GetBool(r, i)
+			b, err := colSlices.GetBool(r, i)
+			if err != nil {
+				return err
+			}
 			err = AppendCountOfBytesLenEnc(mp, getBoolSlice(b))
 			if err != nil {
 				return err
 			}
 		case defines.MYSQL_TYPE_BIT:
-			value := colSlices.GetUint64(r, i)
+			value, err := colSlices.GetUint64(r, i)
+			if err != nil {
+				return err
+			}
 			bitLength := mysqlColumn.ColumnImpl.Length()
 			byteLength := (bitLength + 7) / 8
 			b := types.EncodeUint64(&value)[:byteLength]
 			slices.Reverse(b)
-			err = mp.appendStringLenEnc(string(b))
+			err = AppendCountOfBytesLenEnc(mp, b)
 			if err != nil {
 				return err
 			}
 		case defines.MYSQL_TYPE_DECIMAL:
-			value := colSlices.GetDecimal(r, i)
+			value, err := colSlices.GetDecimal(r, i)
+			if err != nil {
+				return err
+			}
 			err = mp.appendStringLenEnc(value)
 			if err != nil {
 				return err
 			}
 		case defines.MYSQL_TYPE_UUID:
-			value := colSlices.GetUUID(r, i)
+			value, err := colSlices.GetUUID(r, i)
+			if err != nil {
+				return err
+			}
 			err = mp.appendStringLenEnc(value)
 			if err != nil {
 				return err
 			}
 		case defines.MYSQL_TYPE_TINY, defines.MYSQL_TYPE_SHORT, defines.MYSQL_TYPE_INT24, defines.MYSQL_TYPE_LONG, defines.MYSQL_TYPE_YEAR:
-			value := colSlices.GetInt64(r, i)
+			value, err := colSlices.GetInt64(r, i)
+			if err != nil {
+				return err
+			}
 			if mysqlColumn.ColumnType() == defines.MYSQL_TYPE_YEAR {
 				if value == 0 {
 					err = mp.appendStringLenEnc("0000")
@@ -3047,26 +3121,38 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow2(mrs *MysqlResultSet, colSli
 				}
 			}
 		case defines.MYSQL_TYPE_FLOAT:
-			v := colSlices.GetFloat32(r, i)
-			err = mp.appendStringLenEncOfFloat64(float64(v), 32)
+			value, err := colSlices.GetFloat32(r, i)
+			if err != nil {
+				return err
+			}
+			err = mp.appendStringLenEncOfFloat64(float64(value), 32)
 			if err != nil {
 				return err
 			}
 		case defines.MYSQL_TYPE_DOUBLE:
-			v := colSlices.GetFloat64(r, i)
-			err = mp.appendStringLenEncOfFloat64(v, 64)
+			value, err := colSlices.GetFloat64(r, i)
+			if err != nil {
+				return err
+			}
+			err = mp.appendStringLenEncOfFloat64(value, 64)
 			if err != nil {
 				return err
 			}
 		case defines.MYSQL_TYPE_LONGLONG:
 			if uint32(mysqlColumn.Flag())&defines.UNSIGNED_FLAG != 0 {
-				value := colSlices.GetUint64(r, i)
+				value, err := colSlices.GetUint64(r, i)
+				if err != nil {
+					return err
+				}
 				err = mp.appendStringLenEncOfUint64(value)
 				if err != nil {
 					return err
 				}
 			} else {
-				value := colSlices.GetInt64(r, i)
+				value, err := colSlices.GetInt64(r, i)
+				if err != nil {
+					return err
+				}
 				err = mp.appendStringLenEncOfInt64(value)
 				if err != nil {
 					return err
@@ -3077,13 +3163,19 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow2(mrs *MysqlResultSet, colSli
 			typ := colSlices.GetType(i)
 			switch typ.Oid {
 			case types.T_binary, types.T_varbinary:
-				value := colSlices.GetBytesBased(r, i)
+				value, err := colSlices.GetBytesBased(r, i)
+				if err != nil {
+					return err
+				}
 				err = AppendCountOfBytesLenEnc(mp, value)
 				if err != nil {
 					return err
 				}
 			default:
-				value := colSlices.GetStringBased(r, i)
+				value, err := colSlices.GetStringBased(r, i)
+				if err != nil {
+					return err
+				}
 				err = AppendStringLenEnc(mp, value)
 				if err != nil {
 					return err
@@ -3093,57 +3185,57 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow2(mrs *MysqlResultSet, colSli
 			typ := colSlices.GetType(i)
 			switch typ.Oid {
 			case types.T_datetime:
-				value := colSlices.GetDatetime(r, i)
+				value, err := colSlices.GetDatetime(r, i)
+				if err != nil {
+					return err
+				}
 				err = mp.appendStringLenEnc(value)
 				if err != nil {
 					return err
 				}
 			default:
-				value := colSlices.GetBytesBased(r, i)
+				value, err := colSlices.GetBytesBased(r, i)
+				if err != nil {
+					return err
+				}
 				err = AppendCountOfBytesLenEnc(mp, value)
 				if err != nil {
 					return err
 				}
 			}
-		case defines.MYSQL_TYPE_STRING:
-			value := colSlices.GetBytesBased(r, i)
-			err = AppendCountOfBytesLenEnc(mp, value)
+		case defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TEXT:
+			value, err := colSlices.GetBytesBased(r, i)
 			if err != nil {
 				return err
 			}
-		case defines.MYSQL_TYPE_BLOB:
-			value := colSlices.GetBytesBased(r, i)
 			err = AppendCountOfBytesLenEnc(mp, value)
-			if err != nil {
-				return err
-			}
-		case defines.MYSQL_TYPE_TEXT:
-			value := colSlices.GetBytesBased(r, i)
-			err = AppendCountOfBytesLenEnc(mp, value)
-			if err != nil {
-				return err
-			}
-		case defines.MYSQL_TYPE_JSON:
-			value := colSlices.GetStringBased(r, i)
-			err = AppendStringLenEnc(mp, value)
 			if err != nil {
 				return err
 			}
 		case defines.MYSQL_TYPE_DATE:
-			value := colSlices.GetDate(r, i)
+			value, err := colSlices.GetDate(r, i)
+			if err != nil {
+				return err
+			}
 			mp.dateEncBuffer = value.ToBytes(mp.dateEncBuffer[:0])
 			err = mp.appendCountOfBytesLenEnc(mp.dateEncBuffer[:types.DateToBytesLength])
 			if err != nil {
 				return err
 			}
 		case defines.MYSQL_TYPE_DATETIME:
-			value := colSlices.GetDatetime(r, i)
+			value, err := colSlices.GetDatetime(r, i)
+			if err != nil {
+				return err
+			}
 			err = mp.appendStringLenEnc(value)
 			if err != nil {
 				return err
 			}
 		case defines.MYSQL_TYPE_TIME:
-			value := colSlices.GetTime(r, i)
+			value, err := colSlices.GetTime(r, i)
+			if err != nil {
+				return err
+			}
 			err = mp.appendStringLenEnc(value)
 			if err != nil {
 				return err
@@ -3152,21 +3244,30 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow2(mrs *MysqlResultSet, colSli
 			typ := colSlices.GetType(i)
 			switch typ.Oid {
 			case types.T_datetime:
-				value := colSlices.GetDatetime(r, i)
+				value, err := colSlices.GetDatetime(r, i)
+				if err != nil {
+					return err
+				}
 				err = mp.appendStringLenEnc(value)
 				if err != nil {
 					return err
 				}
 			default:
-				value := colSlices.GetTimestamp(r, i, mp.ses.GetTimeZone())
+				value, err := colSlices.GetTimestamp(r, i, mp.ses.GetTimeZone())
+				if err != nil {
+					return err
+				}
 				err = mp.appendStringLenEnc(value)
 				if err != nil {
 					return err
 				}
 			}
-		case defines.MYSQL_TYPE_ENUM:
-			value := colSlices.GetStringBased(r, i)
-			err = mp.appendStringLenEnc(value)
+		case defines.MYSQL_TYPE_ENUM, defines.MYSQL_TYPE_JSON:
+			value, err := colSlices.GetStringBased(r, i)
+			if err != nil {
+				return err
+			}
+			err = AppendStringLenEnc(mp, value)
 			if err != nil {
 				return err
 			}

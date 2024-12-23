@@ -239,12 +239,13 @@ func extractRowFromVector2(ctx context.Context, ses FeSession, vec *vector.Vecto
 		ses.Error(ctx,
 			"Failed to extract row from vector, unsupported type",
 			zap.Int("typeID", int(vec.GetType().Oid)))
-		return moerr.NewInternalErrorf(ctx, "extractRowFromVector : unsupported type %d", vec.GetType().Oid)
+		return moerr.NewInternalErrorf(ctx, "extractRowFromVector2 : unsupported type %d", vec.GetType().Oid)
 	}
 	return nil
 }
 
 type ColumnSlices struct {
+	ctx             context.Context
 	dataSet         *batch.Batch
 	colIdx2SliceIdx []int
 	arrVarlena      [][]types.Varlena
@@ -273,12 +274,49 @@ type ColumnSlices struct {
 	safeRefSlice    bool
 }
 
+func (slices *ColumnSlices) Close() {
+	if slices == nil {
+		return
+	}
+	slices.ctx = nil
+	slices.dataSet = nil
+	slices.colIdx2SliceIdx = nil
+	slices.arrVarlena = nil
+	slices.arrBool = nil
+	slices.arrInt8 = nil
+	slices.arrInt16 = nil
+	slices.arrInt32 = nil
+	slices.arrInt64 = nil
+	slices.arrUint8 = nil
+	slices.arrUint16 = nil
+	slices.arrUint32 = nil
+	slices.arrUint64 = nil
+	slices.arrFloat32 = nil
+	slices.arrFloat64 = nil
+	slices.arrDate = nil
+	slices.arrDatetime = nil
+	slices.arrTime = nil
+	slices.arrTimestamp = nil
+	slices.arrDecimal64 = nil
+	slices.arrDecimal128 = nil
+	slices.arrUuid = nil
+	slices.arrRowid = nil
+	slices.arrBlockid = nil
+	slices.arrTS = nil
+	slices.arrEnum = nil
+	slices.safeRefSlice = false
+}
+
 func (slices *ColumnSlices) GetType(colIdx uint64) *types.Type {
 	return slices.dataSet.Vecs[colIdx].GetType()
 }
 
+func (slices *ColumnSlices) GetVector(colIdx uint64) *vector.Vector {
+	return slices.dataSet.Vecs[colIdx]
+}
+
 func (slices *ColumnSlices) ColumnCount() int {
-	return len(slices.colIdx2SliceIdx)
+	return len(slices.dataSet.Vecs)
 }
 
 func (slices *ColumnSlices) GetSliceIdx(colIdx uint64) int {
@@ -294,99 +332,149 @@ func (slices *ColumnSlices) IsConst(colIdx uint64) bool {
 	return slices.dataSet.Vecs[colIdx].IsConst()
 }
 
-func (slices *ColumnSlices) GetBool(rowIdx uint64, colIdx uint64) bool {
+func (slices *ColumnSlices) GetBool(rowIdx uint64, colIdx uint64) (bool, error) {
 	if slices.IsConst(colIdx) {
 		rowIdx = 0
 	}
 	sliceIdx := slices.GetSliceIdx(colIdx)
-	return slices.arrBool[sliceIdx][rowIdx]
+	typ := slices.GetType(colIdx)
+	switch typ.Oid {
+	case types.T_bool:
+		return slices.arrBool[sliceIdx][rowIdx], nil
+	default:
+		return false, moerr.NewInternalError(slices.ctx, "invalid bool slice")
+	}
 }
 
-func (slices *ColumnSlices) GetUint64(r uint64, i uint64) uint64 {
+func (slices *ColumnSlices) GetUint64(r uint64, i uint64) (uint64, error) {
 	if slices.IsConst(i) {
 		r = 0
 	}
 	sliceIdx := slices.GetSliceIdx(i)
-	return slices.arrUint64[sliceIdx][r]
+	typ := slices.GetType(i)
+	switch typ.Oid {
+	case types.T_int8:
+		return uint64(slices.arrInt8[sliceIdx][r]), nil
+	case types.T_uint8:
+		return uint64(slices.arrUint8[sliceIdx][r]), nil
+	case types.T_int16:
+		return uint64(slices.arrInt16[sliceIdx][r]), nil
+	case types.T_uint16:
+		return uint64(slices.arrUint16[sliceIdx][r]), nil
+	case types.T_int32:
+		return uint64(slices.arrInt32[sliceIdx][r]), nil
+	case types.T_uint32:
+		return uint64(slices.arrUint32[sliceIdx][r]), nil
+	case types.T_int64:
+		return uint64(slices.arrInt64[sliceIdx][r]), nil
+	case types.T_uint64:
+		return uint64(slices.arrUint64[sliceIdx][r]), nil
+	default:
+		return 0, moerr.NewInternalError(slices.ctx, "invalid uint64 slice")
+	}
 }
 
-func (slices *ColumnSlices) GetDecimal(r uint64, i uint64) string {
+func (slices *ColumnSlices) GetInt64(r uint64, i uint64) (int64, error) {
 	if slices.IsConst(i) {
 		r = 0
 	}
 	sliceIdx := slices.GetSliceIdx(i)
-	vec := slices.dataSet.Vecs[i]
+	typ := slices.GetType(i)
+	switch typ.Oid {
+	case types.T_int8:
+		return int64(slices.arrInt8[sliceIdx][r]), nil
+	case types.T_uint8:
+		return int64(slices.arrUint8[sliceIdx][r]), nil
+	case types.T_int16:
+		return int64(slices.arrInt16[sliceIdx][r]), nil
+	case types.T_uint16:
+		return int64(slices.arrUint16[sliceIdx][r]), nil
+	case types.T_int32:
+		return int64(slices.arrInt32[sliceIdx][r]), nil
+	case types.T_uint32:
+		return int64(slices.arrUint32[sliceIdx][r]), nil
+	case types.T_int64:
+		return slices.arrInt64[sliceIdx][r], nil
+	case types.T_uint64:
+		return int64(slices.arrUint64[sliceIdx][r]), nil
+	default:
+		return 0, moerr.NewInternalError(slices.ctx, "invalid int64 slice")
+	}
+}
+
+func (slices *ColumnSlices) GetDecimal(r uint64, i uint64) (string, error) {
+	if slices.IsConst(i) {
+		r = 0
+	}
+	sliceIdx := slices.GetSliceIdx(i)
+	vec := slices.GetVector(i)
 	switch vec.GetType().Oid {
 	case types.T_decimal64:
 		scale := vec.GetType().Scale
-		return slices.arrDecimal64[sliceIdx][r].Format(scale)
+		return slices.arrDecimal64[sliceIdx][r].Format(scale), nil
 	case types.T_decimal128:
 		scale := vec.GetType().Scale
-		return slices.arrDecimal128[sliceIdx][r].Format(scale)
+		return slices.arrDecimal128[sliceIdx][r].Format(scale), nil
 	default:
-		return "unknown decimal"
+		return "", moerr.NewInternalError(slices.ctx, "invalid decimal slice")
 	}
 }
 
-func (slices *ColumnSlices) GetUUID(r uint64, i uint64) string {
+func (slices *ColumnSlices) GetUUID(r uint64, i uint64) (string, error) {
 	if slices.IsConst(i) {
 		r = 0
 	}
 	sliceIdx := slices.GetSliceIdx(i)
-	return slices.arrUuid[sliceIdx][r].String()
-}
-
-func (slices *ColumnSlices) GetInt64(r uint64, i uint64) int64 {
-	if slices.IsConst(i) {
-		r = 0
-	}
-	sliceIdx := slices.GetSliceIdx(i)
-	vec := slices.dataSet.Vecs[i]
-	switch vec.GetType().Oid {
-	case types.T_int8:
-		return int64(slices.arrInt8[sliceIdx][r])
-	case types.T_uint8:
-		return int64(slices.arrUint8[sliceIdx][r])
-	case types.T_int16:
-		return int64(slices.arrInt16[sliceIdx][r])
-	case types.T_uint16:
-		return int64(slices.arrUint16[sliceIdx][r])
-	case types.T_int32:
-		return int64(slices.arrInt32[sliceIdx][r])
-	case types.T_uint32:
-		return int64(slices.arrUint32[sliceIdx][r])
-	case types.T_int64:
-		return slices.arrInt64[sliceIdx][r]
+	typ := slices.GetType(i)
+	switch typ.Oid {
+	case types.T_uuid:
+		return slices.arrUuid[sliceIdx][r].String(), nil
 	default:
-		panic("unknown integer")
+		return "", moerr.NewInternalError(slices.ctx, "invalid uuid slice")
 	}
 }
 
-func (slices *ColumnSlices) GetFloat32(r uint64, i uint64) float32 {
+func (slices *ColumnSlices) GetFloat32(r uint64, i uint64) (float32, error) {
 	if slices.IsConst(i) {
 		r = 0
 	}
 	sliceIdx := slices.GetSliceIdx(i)
-	return slices.arrFloat32[sliceIdx][r]
+	typ := slices.GetType(i)
+	switch typ.Oid {
+	case types.T_float32:
+		return slices.arrFloat32[sliceIdx][r], nil
+	case types.T_float64:
+		return float32(slices.arrFloat64[sliceIdx][r]), nil
+	default:
+		return 0, moerr.NewInternalError(slices.ctx, "invalid float32 slice")
+	}
 }
 
-func (slices *ColumnSlices) GetFloat64(r uint64, i uint64) float64 {
+func (slices *ColumnSlices) GetFloat64(r uint64, i uint64) (float64, error) {
 	if slices.IsConst(i) {
 		r = 0
 	}
 	sliceIdx := slices.GetSliceIdx(i)
-	return slices.arrFloat64[sliceIdx][r]
+	typ := slices.GetType(i)
+	switch typ.Oid {
+	case types.T_float32:
+		return float64(slices.arrFloat32[sliceIdx][r]), nil
+	case types.T_float64:
+		return slices.arrFloat64[sliceIdx][r], nil
+	default:
+		return 0, moerr.NewInternalError(slices.ctx, "invalid float64 slice")
+	}
 }
 
-func (slices *ColumnSlices) GetStringBased(r uint64, i uint64) string {
+func (slices *ColumnSlices) GetStringBased(r uint64, i uint64) (string, error) {
 	if slices.IsConst(i) {
 		r = 0
 	}
 	sliceIdx := slices.GetSliceIdx(i)
-	vec := slices.dataSet.Vecs[i]
+	vec := slices.GetVector(i)
 	switch vec.GetType().Oid { //get col
 	case types.T_json:
-		return types.DecodeJson(copyBytes(vec.GetBytesAt2(slices.arrVarlena[sliceIdx], int(r)), !slices.safeRefSlice)).String()
+		return types.DecodeJson(copyBytes(vec.GetBytesAt2(slices.arrVarlena[sliceIdx], int(r)), !slices.safeRefSlice)).String(), nil
 	case types.T_array_float32:
 		// NOTE: Don't merge it with T_varchar. You will get raw binary in the SQL output
 		//+------------------------------+
@@ -394,23 +482,23 @@ func (slices *ColumnSlices) GetStringBased(r uint64, i uint64) string {
 		//+------------------------------+
 		//|   �?   @  @@                  |
 		//+------------------------------+
-		return types.ArrayToString[float32](vector.GetArrayAt2[float32](vec, slices.arrVarlena[sliceIdx], int(r)))
+		return types.ArrayToString[float32](vector.GetArrayAt2[float32](vec, slices.arrVarlena[sliceIdx], int(r))), nil
 	case types.T_array_float64:
-		return types.ArrayToString[float64](vector.GetArrayAt2[float64](vec, slices.arrVarlena[sliceIdx], int(r)))
+		return types.ArrayToString[float64](vector.GetArrayAt2[float64](vec, slices.arrVarlena[sliceIdx], int(r))), nil
 	case types.T_Rowid:
-		return slices.arrRowid[sliceIdx][r].String()
+		return slices.arrRowid[sliceIdx][r].String(), nil
 	case types.T_Blockid:
-		return slices.arrBlockid[sliceIdx][r].String()
+		return slices.arrBlockid[sliceIdx][r].String(), nil
 	case types.T_TS:
-		return slices.arrTS[sliceIdx][r].ToString()
+		return slices.arrTS[sliceIdx][r].ToString(), nil
 	case types.T_enum:
-		return strconv.FormatUint(uint64(slices.arrEnum[sliceIdx][r]), 10)
+		return strconv.FormatUint(uint64(slices.arrEnum[sliceIdx][r]), 10), nil
 	default:
-		panic("unknown string based type")
+		return "", moerr.NewInternalError(slices.ctx, "invalid string based slice")
 	}
 }
 
-func (slices *ColumnSlices) GetBytesBased(r uint64, i uint64) []byte {
+func (slices *ColumnSlices) GetBytesBased(r uint64, i uint64) ([]byte, error) {
 	if slices.IsConst(i) {
 		r = 0
 	}
@@ -418,49 +506,70 @@ func (slices *ColumnSlices) GetBytesBased(r uint64, i uint64) []byte {
 	vec := slices.dataSet.Vecs[i]
 	switch vec.GetType().Oid { //get col
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink:
-		return copyBytes(vec.GetBytesAt2(slices.arrVarlena[sliceIdx], int(r)), !slices.safeRefSlice)
+		return copyBytes(vec.GetBytesAt2(slices.arrVarlena[sliceIdx], int(r)), !slices.safeRefSlice), nil
 	default:
-		panic("unknown bytes based type")
+		return nil, moerr.NewInternalError(slices.ctx, "invalid bytes based slice")
 	}
-
 }
 
-func (slices *ColumnSlices) GetDate(r uint64, i uint64) types.Date {
+func (slices *ColumnSlices) GetDate(r uint64, i uint64) (types.Date, error) {
 	if slices.IsConst(i) {
 		r = 0
 	}
 	sliceIdx := slices.GetSliceIdx(i)
-	return slices.arrDate[sliceIdx][r]
-}
-
-func (slices *ColumnSlices) GetDatetime(r uint64, i uint64) string {
-	if slices.IsConst(i) {
-		r = 0
+	typ := slices.GetType(i)
+	switch typ.Oid {
+	case types.T_date:
+		return slices.arrDate[sliceIdx][r], nil
+	default:
+		var d types.Date
+		return d, moerr.NewInternalError(slices.ctx, "invalid date slice")
 	}
-	sliceIdx := slices.GetSliceIdx(i)
-	vec := slices.dataSet.Vecs[i]
-	scale := vec.GetType().Scale
-	return slices.arrDatetime[sliceIdx][r].String2(scale)
 }
 
-func (slices *ColumnSlices) GetTime(r uint64, i uint64) string {
-	if slices.IsConst(i) {
-		r = 0
-	}
-	sliceIdx := slices.GetSliceIdx(i)
-	vec := slices.dataSet.Vecs[i]
-	scale := vec.GetType().Scale
-	return slices.arrTime[sliceIdx][r].String2(scale)
-}
-
-func (slices *ColumnSlices) GetTimestamp(r uint64, i uint64, timeZone *time.Location) string {
+func (slices *ColumnSlices) GetDatetime(r uint64, i uint64) (string, error) {
 	if slices.IsConst(i) {
 		r = 0
 	}
 	sliceIdx := slices.GetSliceIdx(i)
 	vec := slices.dataSet.Vecs[i]
-	scale := vec.GetType().Scale
-	return slices.arrTimestamp[sliceIdx][r].String2(timeZone, scale)
+	switch vec.GetType().Oid {
+	case types.T_datetime:
+		scale := vec.GetType().Scale
+		return slices.arrDatetime[sliceIdx][r].String2(scale), nil
+	default:
+		return "", moerr.NewInternalError(slices.ctx, "invalid datetime slice")
+	}
+}
+
+func (slices *ColumnSlices) GetTime(r uint64, i uint64) (string, error) {
+	if slices.IsConst(i) {
+		r = 0
+	}
+	sliceIdx := slices.GetSliceIdx(i)
+	vec := slices.dataSet.Vecs[i]
+	switch vec.GetType().Oid {
+	case types.T_time:
+		scale := vec.GetType().Scale
+		return slices.arrTime[sliceIdx][r].String2(scale), nil
+	default:
+		return "", moerr.NewInternalError(slices.ctx, "invalid time slice")
+	}
+}
+
+func (slices *ColumnSlices) GetTimestamp(r uint64, i uint64, timeZone *time.Location) (string, error) {
+	if slices.IsConst(i) {
+		r = 0
+	}
+	sliceIdx := slices.GetSliceIdx(i)
+	vec := slices.dataSet.Vecs[i]
+	switch vec.GetType().Oid {
+	case types.T_timestamp:
+		scale := vec.GetType().Scale
+		return slices.arrTimestamp[sliceIdx][r].String2(timeZone, scale), nil
+	default:
+		return "", moerr.NewInternalError(slices.ctx, "invalid timestamp slice")
+	}
 }
 
 var (
