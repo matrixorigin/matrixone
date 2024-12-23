@@ -700,13 +700,21 @@ func (r *runner) softScheduleCheckpoint(ts *types.TS) (ret *CheckpointEntry, err
 
 	if intent.end.LT(ts) {
 		err = ErrPendingCheckpoint
-		r.incrementalCheckpointQueue.Enqueue(struct{}{})
+		r.TryTriggerExecuteICKP()
 		return
 	}
 
 	if intent.AllChecked() {
-		r.incrementalCheckpointQueue.Enqueue(struct{}{})
+		r.TryTriggerExecuteICKP()
 	}
+	return
+}
+
+func (r *runner) TryTriggerExecuteICKP() (err error) {
+	if r.disabled.Load() {
+		return
+	}
+	_, err = r.incrementalCheckpointQueue.Enqueue(struct{}{})
 	return
 }
 
@@ -745,7 +753,7 @@ func (r *runner) TryScheduleCheckpoint(
 		)
 	}()
 
-	r.incrementalCheckpointQueue.Enqueue(struct{}{})
+	r.TryTriggerExecuteICKP()
 
 	if intent.end.LT(&ts) {
 		err = ErrPendingCheckpoint
