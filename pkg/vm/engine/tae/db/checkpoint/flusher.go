@@ -371,8 +371,8 @@ func (flusher *flushImpl) triggerJob(ctx context.Context) {
 		request.tree = entry
 		flusher.flushRequestQ.Enqueue(request)
 	}
-	_, endTS := entry.GetTimeRange()
-	flusher.checkpointSchduler.TryScheduleCheckpoint(endTS)
+	_, ts := entry.GetTimeRange()
+	flusher.checkpointSchduler.TryScheduleCheckpoint(ts, false)
 }
 
 func (flusher *flushImpl) onFlushRequest(items ...any) {
