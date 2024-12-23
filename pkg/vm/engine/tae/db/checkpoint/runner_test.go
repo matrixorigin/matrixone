@@ -671,4 +671,5 @@ func Test_Executor1(t *testing.T) {
 	assert.False(t, executor.active.Load())
 	err := executor.RunICKP()
 	assert.Equal(t, err, ErrCheckpointDisabled)
+	executor.StopWithCause(nil)
 }
