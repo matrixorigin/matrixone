@@ -255,8 +255,7 @@ type internalProtocol struct {
 }
 
 func (ip *internalProtocol) WriteResultSetRow2(mrs *MysqlResultSet, colSlices *ColumnSlices, count uint64) error {
-	//TODO implement me
-	panic("implement me")
+	return nil
 }
 
 func (ip *internalProtocol) FreeLoadLocal() {

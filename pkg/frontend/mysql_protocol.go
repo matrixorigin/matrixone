@@ -2900,7 +2900,7 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow2(mrs *MysqlResultSet, colS
 				if err != nil {
 					return err
 				}
-				err = mp.appendStringLenEnc(value)
+				err = AppendStringLenEnc(mp, value)
 				if err != nil {
 					return err
 				}
@@ -2938,7 +2938,7 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow2(mrs *MysqlResultSet, colS
 			if err != nil {
 				return err
 			}
-			err = mp.appendStringLenEnc(value)
+			err = AppendStringLenEnc(mp, value)
 			if err != nil {
 				return err
 			}
@@ -2947,7 +2947,7 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow2(mrs *MysqlResultSet, colS
 			if err != nil {
 				return err
 			}
-			err = mp.appendStringLenEnc(value)
+			err = AppendStringLenEnc(mp, value)
 			if err != nil {
 				return err
 			}
@@ -3084,7 +3084,7 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow2(mrs *MysqlResultSet, colSli
 			if err != nil {
 				return err
 			}
-			err = mp.appendStringLenEnc(value)
+			err = AppendStringLenEnc(mp, value)
 			if err != nil {
 				return err
 			}
@@ -3093,7 +3093,7 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow2(mrs *MysqlResultSet, colSli
 			if err != nil {
 				return err
 			}
-			err = mp.appendStringLenEnc(value)
+			err = AppendStringLenEnc(mp, value)
 			if err != nil {
 				return err
 			}
@@ -3104,7 +3104,7 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow2(mrs *MysqlResultSet, colSli
 			}
 			if mysqlColumn.ColumnType() == defines.MYSQL_TYPE_YEAR {
 				if value == 0 {
-					err = mp.appendStringLenEnc("0000")
+					err = AppendStringLenEnc(mp, "0000")
 					if err != nil {
 						return err
 					}
@@ -3189,7 +3189,7 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow2(mrs *MysqlResultSet, colSli
 				if err != nil {
 					return err
 				}
-				err = mp.appendStringLenEnc(value)
+				err = AppendStringLenEnc(mp, value)
 				if err != nil {
 					return err
 				}
@@ -3227,7 +3227,7 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow2(mrs *MysqlResultSet, colSli
 			if err != nil {
 				return err
 			}
-			err = mp.appendStringLenEnc(value)
+			err = AppendStringLenEnc(mp, value)
 			if err != nil {
 				return err
 			}
@@ -3236,7 +3236,7 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow2(mrs *MysqlResultSet, colSli
 			if err != nil {
 				return err
 			}
-			err = mp.appendStringLenEnc(value)
+			err = AppendStringLenEnc(mp, value)
 			if err != nil {
 				return err
 			}
@@ -3248,7 +3248,7 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow2(mrs *MysqlResultSet, colSli
 				if err != nil {
 					return err
 				}
-				err = mp.appendStringLenEnc(value)
+				err = AppendStringLenEnc(mp, value)
 				if err != nil {
 					return err
 				}
@@ -3257,7 +3257,7 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow2(mrs *MysqlResultSet, colSli
 				if err != nil {
 					return err
 				}
-				err = mp.appendStringLenEnc(value)
+				err = AppendStringLenEnc(mp, value)
 				if err != nil {
 					return err
 				}

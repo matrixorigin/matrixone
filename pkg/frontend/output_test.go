@@ -18,10 +18,12 @@ import (
 	"context"
 	"testing"
 
+	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 )
@@ -81,4 +83,46 @@ func BenchmarkName2(b *testing.B) {
 			_ = extractRowFromVector2(context.TODO(), nil, vec, 0, row, j, false, colSlices)
 		}
 	}
+}
+
+func Test_extractRowFromVector2(t *testing.T) {
+	ctx := context.TODO()
+	convey.Convey("append result set", t, func() {
+		sv, err := getSystemVariables("test/system_vars_config.toml")
+		if err != nil {
+			t.Error(err)
+		}
+		pu := config.NewParameterUnit(sv, nil, nil, nil)
+		pu.SV.SkipCheckUser = true
+		pu.SV.KillRountinesInterval = 0
+		setSessionAlloc("", NewLeakCheckAllocator())
+		setPu("", pu)
+		ioses, err := NewIOSession(&testConn{}, pu, "")
+		convey.ShouldBeNil(err)
+		proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
+
+		ses := NewSession(ctx, "", proto, nil)
+		proto.ses = ses
+
+		kases := makeKases()
+		for _, kse := range kases {
+			bat := kse.bat
+			row := make([]any, len(bat.Vecs))
+
+			fun := func() {
+				colSlices := &ColumnSlices{
+					ctx:             context.TODO(),
+					colIdx2SliceIdx: make([]int, len(bat.Vecs)),
+					dataSet:         bat,
+				}
+				defer colSlices.Close()
+				err = convertBatchToSlices(context.TODO(), ses, bat, colSlices)
+				convey.So(err, convey.ShouldBeNil)
+
+				err = extractRowFromEveryVector2(context.TODO(), ses, bat, 0, row, false, colSlices)
+				convey.So(err, convey.ShouldBeNil)
+			}
+			fun()
+		}
+	})
 }

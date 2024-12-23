@@ -38,6 +38,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
@@ -3148,6 +3149,308 @@ func Test_appendResultSetBinaryRow_error(t *testing.T) {
 		}
 		for i := 0; i < int(mrs2.GetColumnCount()); i++ {
 			testFun2(i)
+		}
+	})
+}
+
+func newMrsAndBatchForAllTypes() (*MysqlResultSet, *batch.Batch) {
+	mrs := &MysqlResultSet{}
+
+	col1 := &MysqlColumn{}
+	col1.SetName("bool")
+	col1.SetColumnType(defines.MYSQL_TYPE_DATE)
+
+	mrs.AddColumn(col1)
+
+	dt, _ := types.ParseDateCast("2024-12-18")
+	rows := [][]any{
+		{dt},
+	}
+
+	for _, row := range rows {
+		mrs.AddRow(row)
+	}
+
+	return mrs, nil
+}
+
+type kase struct {
+	sql string
+	mrs *MysqlResultSet
+	bat *batch.Batch
+}
+
+func makeKases() []kase {
+	var kases []kase
+
+	kases1 := []kase{
+		{
+			sql: "select tiny",
+			mrs: makeMysqlTinyIntResultSet(false),
+		},
+		{
+			sql: "select tinyu",
+			mrs: makeMysqlTinyIntResultSet(true),
+		},
+		{
+			sql: "select short",
+			mrs: makeMysqlShortResultSet(false),
+		},
+		{
+			sql: "select shortu",
+			mrs: makeMysqlShortResultSet(true),
+		},
+		{
+			sql: "select long",
+			mrs: makeMysqlLongResultSet(false),
+		},
+		{
+			sql: "select longu",
+			mrs: makeMysqlLongResultSet(true),
+		},
+		{
+			sql: "select longlong",
+			mrs: makeMysqlLongLongResultSet(false),
+		},
+		{
+			sql: "select longlongu",
+			mrs: makeMysqlLongLongResultSet(true),
+		},
+		{
+			sql: "select int24",
+			mrs: makeMysqlInt24ResultSet(false),
+		},
+		{
+			sql: "select int24u",
+			mrs: makeMysqlInt24ResultSet(true),
+		},
+
+		{
+			sql: "select varchar",
+			mrs: makeMysqlVarcharResultSet(),
+		},
+		{
+			sql: "select varstring",
+			mrs: makeMysqlVarStringResultSet(),
+		},
+		{
+			sql: "select string",
+			mrs: makeMysqlStringResultSet(),
+		},
+		{
+			sql: "select date",
+			mrs: makeMysqlDateResultSet(),
+		},
+		{
+			sql: "select time",
+			mrs: makeMysqlTimeResultSet(),
+		},
+		{
+			sql: "select datetime",
+			mrs: makeMysqlDatetimeResultSet(),
+		},
+		{
+			sql: "select 16mbrow",
+			mrs: make16MBRowResultSet(),
+		},
+	}
+	kases2 := []kase{
+		{
+			sql: "select year",
+			mrs: makeMysqlYearResultSet(false),
+		},
+		{
+			sql: "select yearu",
+			mrs: makeMysqlYearResultSet(true),
+		},
+		{
+			sql: "select float",
+			mrs: makeMysqlFloatResultSet(),
+		},
+		{
+			sql: "select double",
+			mrs: makeMysqlDoubleResultSet(),
+		},
+		{
+			sql: "select 9columns",
+			mrs: make9ColumnsResultSet(),
+		},
+		{
+			sql: "select 16mb",
+			mrs: makeMoreThan16MBResultSet(),
+		},
+	}
+
+	kases = append(kases, kases1...)
+	kases = append(kases, kases2...)
+	mp := mpool.MustNewZero()
+	for i := 0; i < len(kases); i++ {
+		mrs := kases[i].mrs
+		bat := batch.NewWithSize(int(mrs.GetColumnCount()))
+		for colIdx := uint64(0); colIdx < mrs.GetColumnCount(); colIdx++ {
+			col, err := mrs.GetColumn(context.TODO(), colIdx)
+			convey.So(err, convey.ShouldBeNil)
+			switch col.ColumnType() {
+			case defines.MYSQL_TYPE_TINY:
+				switch mrs.Data[0][colIdx].(type) {
+				case int8:
+					vecData := make([]int8, 0)
+					for i := 0; i < len(mrs.Data); i++ {
+						vecData = append(vecData, mrs.Data[i][colIdx].(int8))
+					}
+					bat.Vecs[colIdx] = testutil.NewInt8Vector(len(mrs.Data), types.T_int8.ToType(), mp, false, vecData)
+				case uint8:
+					vecData := make([]uint8, 0)
+					for i := 0; i < len(mrs.Data); i++ {
+						vecData = append(vecData, mrs.Data[i][colIdx].(uint8))
+					}
+					bat.Vecs[colIdx] = testutil.NewUInt8Vector(len(mrs.Data), types.T_uint8.ToType(), mp, false, vecData)
+				}
+			case defines.MYSQL_TYPE_SHORT, defines.MYSQL_TYPE_YEAR:
+				switch mrs.Data[0][colIdx].(type) {
+				case int16:
+					vecData := make([]int16, 0)
+					for i := 0; i < len(mrs.Data); i++ {
+						vecData = append(vecData, mrs.Data[i][colIdx].(int16))
+					}
+					bat.Vecs[colIdx] = testutil.NewInt16Vector(len(mrs.Data), types.T_int16.ToType(), mp, false, vecData)
+				case uint16:
+					vecData := make([]uint16, 0)
+					for i := 0; i < len(mrs.Data); i++ {
+						vecData = append(vecData, mrs.Data[i][colIdx].(uint16))
+					}
+					bat.Vecs[colIdx] = testutil.NewUInt16Vector(len(mrs.Data), types.T_uint16.ToType(), mp, false, vecData)
+				}
+			case defines.MYSQL_TYPE_LONG, defines.MYSQL_TYPE_INT24:
+				switch mrs.Data[0][colIdx].(type) {
+				case int32:
+					vecData := make([]int32, 0)
+
+					for i := 0; i < len(mrs.Data); i++ {
+						vecData = append(vecData, mrs.Data[i][colIdx].(int32))
+					}
+					bat.Vecs[colIdx] = testutil.NewInt32Vector(len(mrs.Data), types.T_int32.ToType(), mp, false, vecData)
+				case uint32:
+					vecData := make([]uint32, 0)
+					for i := 0; i < len(mrs.Data); i++ {
+						vecData = append(vecData, mrs.Data[i][colIdx].(uint32))
+					}
+					bat.Vecs[colIdx] = testutil.NewUInt32Vector(len(mrs.Data), types.T_uint32.ToType(), mp, false, vecData)
+				}
+
+			case defines.MYSQL_TYPE_LONGLONG:
+				switch mrs.Data[0][colIdx].(type) {
+				case int64:
+					vecData := make([]int64, 0)
+					for i := 0; i < len(mrs.Data); i++ {
+						vecData = append(vecData, mrs.Data[i][colIdx].(int64))
+					}
+					bat.Vecs[colIdx] = testutil.NewInt64Vector(len(mrs.Data), types.T_int64.ToType(), mp, false, vecData)
+				case uint64:
+					vecData := make([]uint64, 0)
+					for i := 0; i < len(mrs.Data); i++ {
+						vecData = append(vecData, mrs.Data[i][colIdx].(uint64))
+					}
+					bat.Vecs[colIdx] = testutil.NewUInt64Vector(len(mrs.Data), types.T_uint64.ToType(), mp, false, vecData)
+				}
+			case defines.MYSQL_TYPE_VARCHAR:
+				vecData := make([]string, 0)
+				for i := 0; i < len(mrs.Data); i++ {
+					vecData = append(vecData, string(mrs.Data[i][colIdx].([]uint8)))
+				}
+				bat.Vecs[colIdx] = testutil.NewStringVector(len(mrs.Data), types.T_binary.ToType(), mp, false, vecData)
+
+			case defines.MYSQL_TYPE_VAR_STRING:
+				vecData := make([]string, 0)
+				for i := 0; i < len(mrs.Data); i++ {
+					vecData = append(vecData, string(mrs.Data[i][colIdx].([]uint8)))
+				}
+				bat.Vecs[colIdx] = testutil.NewStringVector(len(mrs.Data), types.T_varchar.ToType(), mp, false, vecData)
+			case defines.MYSQL_TYPE_STRING:
+				vecData := make([]string, 0)
+				for i := 0; i < len(mrs.Data); i++ {
+					vecData = append(vecData, string(mrs.Data[i][colIdx].([]uint8)))
+				}
+				bat.Vecs[colIdx] = testutil.NewStringVector(len(mrs.Data), types.T_char.ToType(), mp, false, vecData)
+			case defines.MYSQL_TYPE_DATE:
+				vecData := make([]string, 0)
+				for i := 0; i < len(mrs.Data); i++ {
+					vecData = append(vecData, mrs.Data[i][colIdx].(types.Date).String())
+				}
+				bat.Vecs[colIdx] = testutil.NewDateVector(len(mrs.Data), types.T_date.ToType(), mp, false, vecData)
+			case defines.MYSQL_TYPE_TIME:
+				vecData := make([]string, 0)
+				for i := 0; i < len(mrs.Data); i++ {
+					vecData = append(vecData, mrs.Data[i][colIdx].(types.Time).String())
+				}
+				bat.Vecs[colIdx] = testutil.NewTimeVector(len(mrs.Data), types.T_time.ToType(), mp, false, vecData)
+
+			case defines.MYSQL_TYPE_DATETIME:
+				vecData := make([]string, 0)
+				for i := 0; i < len(mrs.Data); i++ {
+					vecData = append(vecData, mrs.Data[i][colIdx].(types.Datetime).String())
+				}
+				bat.Vecs[colIdx] = testutil.NewDatetimeVector(len(mrs.Data), types.T_datetime.ToType(), mp, false, vecData)
+			case defines.MYSQL_TYPE_FLOAT:
+				vecData := make([]float32, 0)
+				for i := 0; i < len(mrs.Data); i++ {
+					vecData = append(vecData, mrs.Data[i][colIdx].(float32))
+				}
+				bat.Vecs[colIdx] = testutil.NewFloat32Vector(len(mrs.Data), types.T_float32.ToType(), mp, false, vecData)
+
+			case defines.MYSQL_TYPE_DOUBLE:
+				vecData := make([]float64, 0)
+				for i := 0; i < len(mrs.Data); i++ {
+					vecData = append(vecData, mrs.Data[i][colIdx].(float64))
+				}
+				bat.Vecs[colIdx] = testutil.NewFloat64Vector(len(mrs.Data), types.T_float64.ToType(), mp, false, vecData)
+			default:
+				panic(fmt.Sprintf("usp %v", col.ColumnType()))
+			}
+		}
+		kases[i].bat = bat
+	}
+	return kases
+}
+
+func Test_appendResultSet2(t *testing.T) {
+	ctx := context.TODO()
+	convey.Convey("append result set", t, func() {
+		sv, err := getSystemVariables("test/system_vars_config.toml")
+		if err != nil {
+			t.Error(err)
+		}
+		pu := config.NewParameterUnit(sv, nil, nil, nil)
+		pu.SV.SkipCheckUser = true
+		pu.SV.KillRountinesInterval = 0
+		setSessionAlloc("", NewLeakCheckAllocator())
+		setPu("", pu)
+		ioses, err := NewIOSession(&testConn{}, pu, "")
+		convey.ShouldBeNil(err)
+		proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
+
+		ses := NewSession(ctx, "", proto, nil)
+		proto.ses = ses
+
+		kases := makeKases()
+		for _, kse := range kases {
+			mrs := kse.mrs
+			bat := kse.bat
+
+			fun := func() {
+				colSlices := &ColumnSlices{
+					ctx:             context.TODO(),
+					colIdx2SliceIdx: make([]int, len(bat.Vecs)),
+					dataSet:         bat,
+				}
+				defer colSlices.Close()
+				err = convertBatchToSlices(context.TODO(), ses, bat, colSlices)
+				convey.So(err, convey.ShouldBeNil)
+
+				err = proto.appendResultSetBinaryRow2(mrs, colSlices, 0)
+				convey.So(err, convey.ShouldBeNil)
+			}
+			fun()
 		}
 	})
 }
