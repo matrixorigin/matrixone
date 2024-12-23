@@ -22,6 +22,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/embed"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
@@ -29,7 +30,7 @@ import (
 func TestDeleteAndSelect(t *testing.T) {
 	embed.RunBaseClusterTests(
 		func(c embed.Cluster) {
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second*600)
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*120)
 			defer cancel()
 
 			cn1, err := c.GetCNService(0)
@@ -56,15 +57,17 @@ func TestDeleteAndSelect(t *testing.T) {
 			require.NoError(t, err)
 			res.Close()
 
-			//insert 513 blocks into t;
+			//insert 3 blocks into t;
 			res, err = exec.Exec(
 				ctx,
-				"insert into "+table+" select *, * from generate_series(1,4202496)g",
+				"insert into "+table+" select *, * from generate_series(1,24576)g",
 				executor.Options{}.WithDatabase(db),
 			)
 			require.NoError(t, err)
 			res.Close()
 
+			plan.SetForceScanOnMultiCN(true)
+			defer plan.SetForceScanOnMultiCN(false)
 			res, err = exec.Exec(
 				ctx,
 				"delete from "+table+" where a > 3",
@@ -88,5 +91,4 @@ func TestDeleteAndSelect(t *testing.T) {
 			res.Close()
 		},
 	)
-
 }

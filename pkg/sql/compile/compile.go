@@ -4152,6 +4152,21 @@ func (c *Compile) handleDbRelContext(node *plan.Node, onRemoteCN bool) (engine.R
 	return rel, db, ctx, nil
 }
 
+func shouldScanOnCurrentCN(c *Compile, n *plan.Node, forceSingle bool) bool {
+	if len(c.cnList) == 1 ||
+		n.Stats.ForceOneCN ||
+		forceSingle {
+		return true
+	}
+
+	if !plan2.GetForceScanOnMultiCN() &&
+		n.Stats.BlockNum <= int32(plan2.BlockThresholdForOneCN) {
+		return true
+	}
+
+	return false
+}
+
 func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 	rel, _, _, err := c.handleDbRelContext(n, false)
 	if err != nil {
@@ -4171,7 +4186,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 
 	var nodes engine.Nodes
 	// scan on current CN
-	if len(c.cnList) == 1 || n.Stats.ForceOneCN || forceSingle || n.Stats.BlockNum <= int32(plan2.BlockThresholdForOneCN) {
+	if shouldScanOnCurrentCN(c, n, forceSingle) {
 		mcpu := c.generateCPUNumber(c.ncpu, int(n.Stats.BlockNum))
 		if forceSingle {
 			mcpu = 1
