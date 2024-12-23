@@ -80,23 +80,11 @@ func (c *DashboardCreator) initTraceMoLoggerExportDataRow() dashboard.Option {
 		3,
 		[]string{
 			`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", "") + `[$interval:1m]))`,
-			`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", `type="success"`) + `[$interval:1m]))`,
-			`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", `type="exist"`) + `[$interval:1m]))`,
-			`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", `type="open_failed"`) + `[$interval:1m]))`,
-			`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", `type="read_failed"`) + `[$interval:1m]))`,
-			`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", `type="parse_failed"`) + `[$interval:1m]))`,
-			`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", `type="write_failed"`) + `[$interval:1m]))`,
-			`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", `type="delete_failed"`) + `[$interval:1m]))`,
+			`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", `type=~".+"`) + `[$interval:1m])) by (type)`,
 		},
 		[]string{
 			"total",
-			"success",
-			"exist",
-			"open",
-			"read",
-			"parse",
-			"write",
-			"delete",
+			"{{ type }}",
 		}),
 	)
 

@@ -114,6 +114,7 @@ var (
 			Name:      "etl_merge_total",
 			Help:      "Count of background task ETLMerge",
 		}, []string{"type"})
+	TraceETLMergeJobCounter     = traceETLMergeCounter.WithLabelValues("job")
 	TraceETLMergeSuccessCounter = traceETLMergeCounter.WithLabelValues("success")
 	// TraceETLMergeExistCounter record already exist, against delete failed.
 	TraceETLMergeExistCounter        = traceETLMergeCounter.WithLabelValues("exist")
