@@ -424,6 +424,7 @@ func Test_RunnerStore2(t *testing.T) {
 	assert.False(t, intent.IsFlushChecked())
 	assert.True(t, intent.IsPendding())
 	assert.False(t, intent.AllChecked())
+	bornTime := intent.bornTime
 
 	intent, updated = store.UpdateICKPIntent(&t1, true, true)
 	assert.True(t, updated)
@@ -432,6 +433,7 @@ func Test_RunnerStore2(t *testing.T) {
 	assert.True(t, intent.IsPendding())
 	assert.True(t, intent.AllChecked())
 	assert.True(t, intent.end.EQ(&t1))
+	assert.True(t, bornTime.Equal(intent.bornTime))
 
 	t2 := types.NextGlobalTsForTest()
 	intent2, updated := store.UpdateICKPIntent(&t2, true, false)
@@ -638,5 +640,6 @@ func Test_RunnerStore5(t *testing.T) {
 	assert.True(t, intent2.start.IsEmpty())
 	assert.True(t, intent2.IsPendding())
 	assert.True(t, intent2.AllChecked())
+	assert.True(t, intent2.bornTime.After(intent.bornTime))
 	t.Log(intent2.String())
 }
