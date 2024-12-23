@@ -25,6 +25,7 @@ import (
 )
 
 var ErrPendingCheckpoint = moerr.NewPrevCheckpointNotFinished()
+var ErrCheckpointDisabled = moerr.NewInternalErrorNoCtxf("checkpoint disabled")
 
 type State int8
 

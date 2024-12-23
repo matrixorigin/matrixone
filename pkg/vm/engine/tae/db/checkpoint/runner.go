@@ -22,8 +22,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"
 
 	"go.uber.org/zap"
@@ -197,6 +195,8 @@ type runner struct {
 	incrementalPolicy *timeBasedPolicy
 	globalPolicy      *countBasedPolicy
 
+	executor atomic.Pointer[checkpointExecutor]
+
 	incrementalCheckpointQueue sm.Queue
 	globalCheckpointQueue      sm.Queue
 	postCheckpointQueue        sm.Queue
@@ -241,8 +241,31 @@ func NewRunner(
 	r.gcCheckpointQueue = sm.NewSafeQueue(100, 100, r.onGCCheckpointEntries)
 	r.postCheckpointQueue = sm.NewSafeQueue(1000, 1, r.onPostCheckpointEntries)
 	r.checkpointMetaFiles.files = make(map[string]struct{})
+	r.StartExecutor()
 
 	return r
+}
+
+func (r *runner) StopExecutor() {
+	executor := r.executor.Load()
+	if executor == nil {
+		return
+	}
+	executor.Stop()
+	r.executor.CompareAndSwap(executor, nil)
+}
+
+func (r *runner) StartExecutor() {
+	for {
+		executor := r.executor.Load()
+		if executor != nil {
+			executor.Stop()
+		}
+		newExecutor := newCheckpointExecutor(r)
+		if r.executor.CompareAndSwap(executor, newExecutor) {
+			break
+		}
+	}
 }
 
 func (r *runner) String() string {
@@ -321,108 +344,30 @@ func (r *runner) onGCCheckpointEntries(items ...any) {
 }
 
 func (r *runner) onIncrementalCheckpointEntries(items ...any) {
-	now := time.Now()
-	entry, rollback := r.store.TakeICKPIntent()
-	if entry == nil {
-		return
-	}
 	var (
-		err           error
-		errPhase      string
-		lsnToTruncate uint64
-		lsn           uint64
-		fatal         bool
-		fields        []zap.Field
+		err error
+		now = time.Now()
 	)
-	now = time.Now()
-
-	logutil.Info(
-		"ICKP-Execute-Start",
-		zap.String("entry", entry.String()),
-	)
-
+	executor := r.executor.Load()
+	if executor == nil {
+		err = ErrCheckpointDisabled
+	}
 	defer func() {
+		logger := logutil.Info
 		if err != nil {
-			var logger func(msg string, fields ...zap.Field)
-			if fatal {
-				logger = logutil.Fatal
-			} else {
-				logger = logutil.Error
-			}
+			logger = logutil.Error
+		}
+		if err != nil || time.Since(now) > time.Second*10 {
 			logger(
-				"ICKP-Execute-Error",
-				zap.String("entry", entry.String()),
-				zap.Error(err),
-				zap.String("phase", errPhase),
+				"ICKP-Execute-Runner-End",
 				zap.Duration("cost", time.Since(now)),
-			)
-		} else {
-			fields = append(fields, zap.Duration("cost", time.Since(now)))
-			fields = append(fields, zap.Uint64("truncate", lsnToTruncate))
-			fields = append(fields, zap.Uint64("lsn", lsn))
-			fields = append(fields, zap.Uint64("reserve", r.options.reservedWALEntryCount))
-			fields = append(fields, zap.String("entry", entry.String()))
-			fields = append(fields, zap.Duration("age", entry.Age()))
-			logutil.Info(
-				"ICKP-Execute-End",
-				fields...,
+				zap.Error(err),
 			)
 		}
 	}()
 
-	var files []string
-	var file string
-	if fields, files, err = r.doIncrementalCheckpoint(entry); err != nil {
-		errPhase = "do-ckp"
-		rollback()
-		return
-	}
-
-	lsn = r.source.GetMaxLSN(entry.start, entry.end)
-	if lsn > r.options.reservedWALEntryCount {
-		lsnToTruncate = lsn - r.options.reservedWALEntryCount
-	}
-
-	entry.SetLSN(lsn, lsnToTruncate)
-	if !r.store.CommitICKPIntent(entry, false) {
-		errPhase = "commit"
-		rollback()
-		err = moerr.NewInternalErrorNoCtxf("cannot commit ickp")
-		return
-	}
-	v2.TaskCkpEntryPendingDurationHistogram.Observe(entry.Age().Seconds())
-	defer entry.Done()
-
-	if file, err = r.saveCheckpoint(
-		entry.start, entry.end, lsn, lsnToTruncate,
-	); err != nil {
-		errPhase = "save-ckp"
-		rollback()
-		return
-	}
-
-	files = append(files, file)
-
-	// PXU TODO: if crash here, the checkpoint log entry will be lost
-	var logEntry wal.LogEntry
-	if logEntry, err = r.wal.RangeCheckpoint(1, lsnToTruncate, files...); err != nil {
-		errPhase = "wal-ckp"
-		fatal = true
-		return
-	}
-	if err = logEntry.WaitDone(); err != nil {
-		errPhase = "wait-wal-ckp-done"
-		fatal = true
-		return
-	}
-
-	r.postCheckpointQueue.Enqueue(entry)
-	r.globalCheckpointQueue.Enqueue(&globalCheckpointContext{
-		end:         entry.end,
-		interval:    r.options.globalVersionInterval,
-		ckpLSN:      lsn,
-		truncateLSN: lsnToTruncate,
-	})
+	err = executor.RunICKPJob()
+	return
 }
 
 func (r *runner) saveCheckpoint(start, end types.TS, ckpLSN, truncateLSN uint64) (name string, err error) {
@@ -447,6 +392,7 @@ func (r *runner) saveCheckpoint(start, end types.TS, ckpLSN, truncateLSN uint64)
 	return
 }
 
+// TODO: using ctx
 func (r *runner) doIncrementalCheckpoint(entry *CheckpointEntry) (fields []zap.Field, files []string, err error) {
 	factory := logtail.IncrementalCheckpointDataFactory(r.rt.SID(), entry.start, entry.end, true)
 	data, err := factory(r.catalog)
