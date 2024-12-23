@@ -31,6 +31,7 @@ func initTraceMetrics() {
 	registry.MustRegister(traceCheckStorageUsageCounter)
 	registry.MustRegister(traceMOLoggerErrorCounter)
 	registry.MustRegister(traceMOLoggerBufferActionCounter)
+	registry.MustRegister(traceMOLoggerAggrCounter)
 	registry.MustRegister(traceMOLoggerLogToLongCounter)
 }
 
@@ -176,6 +177,14 @@ var (
 	TraceMOLoggerBufferReactWrite       = traceMOLoggerBufferActionCounter.WithLabelValues("react_write")
 	TraceMOLoggerBufferReactWriteFailed = traceMOLoggerBufferActionCounter.WithLabelValues("react_write_failed")
 
+	traceMOLoggerAggrCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "trace",
+			Name:      "mologger_aggr_total",
+			Help:      "Count of mologger aggr records.",
+		}, []string{"type"})
+
 	// need alert
 	traceMOLoggerLogToLongCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -217,4 +226,8 @@ func GetTraceCollectorCollectHungCounter(typ string) prometheus.Counter {
 
 func GetTraceCollectorMOLoggerQueueLength() prometheus.Gauge {
 	return TraceCollectorMoLoggerQueueLength
+}
+
+func GetTraceMOLoggerAggrCounter(typ string) prometheus.Counter {
+	return traceMOLoggerAggrCounter.WithLabelValues(typ)
 }

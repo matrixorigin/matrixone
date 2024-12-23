@@ -108,7 +108,6 @@ func newBufferHolder(ctx context.Context, name batchpipe.HasName, impl motrace.P
 	defer b.mux.Unlock()
 	b.trigger = time.AfterFunc(time.Hour, func() {})
 	b.aggr = impl.NewAggregator(ctx, b.name)
-
 	return b
 }
 
@@ -161,7 +160,7 @@ func (b *bufferHolder) discardBuffer(buffer motrace.Buffer) {
 }
 
 // Add call buffer.Add(), while bufferHolder is NOT readonly
-func (b *bufferHolder) Add(item batchpipe.HasName) {
+func (b *bufferHolder) Add(item batchpipe.HasName, needAggr bool) {
 	b.mux.Lock()
 	if b.stopped {
 		b.mux.Unlock()
@@ -171,7 +170,7 @@ func (b *bufferHolder) Add(item batchpipe.HasName) {
 		b.buffer = b.getBuffer()
 	}
 
-	if b.aggr != nil {
+	if b.aggr != nil && needAggr {
 		if i, ok := item.(table.Item); ok {
 			_, err := b.aggr.AddItem(i)
 			if err == nil {
@@ -200,17 +199,21 @@ func (b *bufferHolder) loopAggr() {
 		logger.Warn("no aggregator available, just quit this loop")
 		return
 	}
+	counter := v2.GetTraceMOLoggerAggrCounter(b.name)
+	logger.Info("start")
 mainL:
 	for {
 		select {
 		case <-time.After(interval):
 			// handle aggr
+			counter.Inc()
 			end := time.Now().Truncate(b.aggr.GetWindow())
 			results := b.aggr.PopResultsBeforeWindow(end)
 			for _, item := range results {
 				// tips: Add() will free the {item} obj.
-				b.Add(item)
+				b.Add(item, false)
 			}
+			logger.Info("handle aggr", zap.Int("records", len(results)), zap.Time("end", end))
 			// END> handle aggr
 
 		case <-b.ctx.Done():
@@ -616,13 +619,13 @@ loop:
 					} else {
 						buf = newBufferHolder(ctx, i, impl, awakeBufferFactory(c), c)
 						c.buffers[i.GetName()] = buf
-						buf.Add(i)
+						buf.Add(i, true)
 						buf.Start()
 					}
 				}
 				c.mux.Unlock()
 			} else {
-				buf.Add(i)
+				buf.Add(i, true)
 				c.mux.RUnlock()
 			}
 			v2.TraceCollectorConsumeDurationHistogram.Observe(time.Since(start).Seconds())
