@@ -202,11 +202,6 @@ type runner struct {
 	postCheckpointQueue        sm.Queue
 	gcCheckpointQueue          sm.Queue
 
-	checkpointMetaFiles struct {
-		sync.RWMutex
-		files map[string]struct{}
-	}
-
 	onceStart sync.Once
 	onceStop  sync.Once
 }
@@ -240,7 +235,6 @@ func NewRunner(
 	r.globalCheckpointQueue = sm.NewSafeQueue(r.options.checkpointQueueSize, 100, r.onGlobalCheckpointEntries)
 	r.gcCheckpointQueue = sm.NewSafeQueue(100, 100, r.onGCCheckpointEntries)
 	r.postCheckpointQueue = sm.NewSafeQueue(1000, 1, r.onPostCheckpointEntries)
-	r.checkpointMetaFiles.files = make(map[string]struct{})
 	r.StartExecutor()
 
 	return r
@@ -285,25 +279,15 @@ func (r *runner) String() string {
 }
 
 func (r *runner) AddCheckpointMetaFile(name string) {
-	r.checkpointMetaFiles.Lock()
-	defer r.checkpointMetaFiles.Unlock()
-	r.checkpointMetaFiles.files[name] = struct{}{}
+	r.store.AddMetaFile(name)
 }
 
 func (r *runner) RemoveCheckpointMetaFile(name string) {
-	r.checkpointMetaFiles.Lock()
-	defer r.checkpointMetaFiles.Unlock()
-	delete(r.checkpointMetaFiles.files, name)
+	r.store.RemoveMetaFile(name)
 }
 
 func (r *runner) GetCheckpointMetaFiles() map[string]struct{} {
-	r.checkpointMetaFiles.RLock()
-	defer r.checkpointMetaFiles.RUnlock()
-	files := make(map[string]struct{})
-	for k, v := range r.checkpointMetaFiles.files {
-		files[k] = v
-	}
-	return files
+	return r.store.GetMetaFiles()
 }
 
 func (r *runner) onGlobalCheckpointEntries(items ...any) {

@@ -53,6 +53,7 @@ func newRunnerStore(
 			NoLocks: true,
 		},
 	)
+	s.metaFiles = make(map[string]struct{})
 	return s
 }
 
@@ -68,7 +69,7 @@ type runnerStore struct {
 	incrementals *btree.BTreeG[*CheckpointEntry]
 	globals      *btree.BTreeG[*CheckpointEntry]
 	compacted    atomic.Pointer[CheckpointEntry]
-	// metaFiles    map[string]struct{}
+	metaFiles    map[string]struct{}
 
 	gcIntent    types.TS
 	gcCount     int
@@ -313,6 +314,28 @@ func (s *runnerStore) CommitICKPIntent(intent *CheckpointEntry, done bool) (comm
 	s.incrementals.Set(intent)
 	committed = true
 	return
+}
+
+func (s *runnerStore) AddMetaFile(name string) {
+	s.Lock()
+	defer s.Unlock()
+	s.metaFiles[name] = struct{}{}
+}
+
+func (s *runnerStore) RemoveMetaFile(name string) {
+	s.Lock()
+	defer s.Unlock()
+	delete(s.metaFiles, name)
+}
+
+func (s *runnerStore) GetMetaFiles() map[string]struct{} {
+	s.RLock()
+	defer s.RUnlock()
+	files := make(map[string]struct{})
+	for k, v := range s.metaFiles {
+		files[k] = v
+	}
+	return files
 }
 
 func (s *runnerStore) ExportStatsLocked() []zap.Field {
