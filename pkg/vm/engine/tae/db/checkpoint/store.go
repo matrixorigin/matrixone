@@ -233,12 +233,9 @@ func (s *runnerStore) TakeICKPIntent() (taken *CheckpointEntry, rollback func())
 		)
 		if s.incrementalIntent.CompareAndSwap(old, taken) {
 			rollback = func() {
-				// rollback the intent
-				putBack := InheritCheckpointEntry(
-					taken,
-					WithStateEntryOption(ST_Pending),
-				)
-				s.incrementalIntent.Store(putBack)
+				// clear the intent and notify the intent is done
+				s.incrementalIntent.Store(nil)
+				taken.Done()
 			}
 			break
 		}
@@ -248,72 +245,59 @@ func (s *runnerStore) TakeICKPIntent() (taken *CheckpointEntry, rollback func())
 	return
 }
 
-// intent must be in Running state
-func (s *runnerStore) CommitICKPIntent(intent *CheckpointEntry, done bool) (committed bool) {
-	defer func() {
-		if done && committed {
-			intent.Done()
-		}
-	}()
-	old := s.incrementalIntent.Load()
+func (s *runnerStore) PrepareCommitICKPIntent(
+	intent *CheckpointEntry,
+) (ok bool) {
+	expect := s.incrementalIntent.Load()
 	// should not happen
-	if old != intent {
+	if intent != expect || !intent.IsRunning() {
 		logutil.Error(
-			"CommitICKPIntent-Error",
-			zap.String("intent", intent.String()),
-			zap.String("expected", old.String()),
+			"ICKP-PrepareCommit",
+			zap.Any("expected", expect),
+			zap.Any("actual", intent),
 		)
 		return
 	}
 	s.Lock()
 	defer s.Unlock()
-	maxICKP, _ := s.incrementals.Max()
-	maxGCKP, _ := s.globals.Max()
-	var (
-		maxICKPEndNext types.TS
-		maxGCKPEnd     types.TS
-	)
-	if maxICKP != nil {
-		maxICKPEndNext = maxICKP.end.Next()
+	s.incrementals.Set(intent)
+	ok = true
+	return
+}
+
+func (s *runnerStore) RollbackICKPIntent(
+	intent *CheckpointEntry,
+) {
+	expect := s.incrementalIntent.Load()
+	// should not happen
+	if intent != expect || !intent.IsRunning() {
+		logutil.Fatal(
+			"ICKP-Rollback",
+			zap.Any("expected", expect),
+			zap.Any("actual", intent),
+		)
 	}
-	if maxGCKP != nil {
-		maxGCKPEnd = maxGCKP.end
-	}
-	if maxICKP == nil && maxGCKP == nil {
-		if !intent.start.IsEmpty() {
-			logutil.Error(
-				"CommitICKPIntent-Error",
-				zap.String("intent", intent.String()),
-				zap.String("max-i", "nil"),
-				zap.String("max-g", "nil"),
-			)
-			// PXU TODO: err = xxx
-			return
-		}
-	} else if (maxICKP == nil && !maxGCKPEnd.EQ(&intent.start)) ||
-		(maxICKP != nil && !maxICKPEndNext.EQ(&intent.start)) {
-		maxi := "nil"
-		maxg := "nil"
-		if maxICKP != nil {
-			maxi = maxICKP.String()
-		}
-		if maxGCKP != nil {
-			maxg = maxGCKP.String()
-		}
-		logutil.Error(
+	s.Lock()
+	s.Unlock()
+	s.incrementals.Delete(intent)
+}
+
+// intent must be in Running state
+func (s *runnerStore) CommitICKPIntent(
+	intent *CheckpointEntry,
+) {
+	defer intent.Done()
+	old := s.incrementalIntent.Load()
+	// should not happen
+	if old != intent {
+		logutil.Fatal(
 			"CommitICKPIntent-Error",
 			zap.String("intent", intent.String()),
-			zap.String("max-i", maxi),
-			zap.String("max-g", maxg),
+			zap.String("expected", old.String()),
 		)
-		// PXU TODO: err = xxx
-		return
 	}
-	s.incrementalIntent.Store(nil)
 	intent.SetState(ST_Finished)
-	s.incrementals.Set(intent)
-	committed = true
-	return
+	s.incrementalIntent.Store(nil)
 }
 
 func (s *runnerStore) AddMetaFile(name string) {

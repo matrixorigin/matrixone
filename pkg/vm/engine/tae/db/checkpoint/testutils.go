@@ -184,6 +184,7 @@ func (r *runner) ForceIncrementalCheckpoint(ts types.TS) (err error) {
 		return
 	case <-intent.Wait():
 		checkpointed := r.store.GetCheckpointed()
+		// if checkpointed < ts, something wrong may be happend and the previous intent was rollbacked
 		if checkpointed.LT(&ts) {
 			err = ErrPendingCheckpoint
 		}

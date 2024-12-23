@@ -7784,22 +7784,19 @@ func Test_CheckpointChaos1(t *testing.T) {
 	assert.NoError(t, err)
 
 	now := tae.TxnMgr.Now()
+	ctx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
 	err = tae.DB.ForceCheckpoint(ctx, now, time.Minute)
 	assert.Error(t, err)
 
 	intent := tae.BGCheckpointRunner.GetICKPIntentOnlyForTest()
-	t.Logf("intent: %v", intent)
-	assert.NotNil(t, intent)
-	assert.True(t, intent.AllChecked())
-	assert.True(t, intent.IsRunning())
+	assert.Nil(t, intent)
 
 	entries := tae.BGCheckpointRunner.GetAllIncrementalCheckpoints()
 	assert.Equal(t, 0, len(entries))
-	for i, entry := range entries {
-		t.Logf("checkpoint %d: %s", i, entry.String())
-	}
 
 	rmFn()
+	ctx = context.Background()
 	err = tae.DB.ForceCheckpoint(ctx, now, time.Minute)
 	assert.NoError(t, err)
 
@@ -7808,12 +7805,7 @@ func Test_CheckpointChaos1(t *testing.T) {
 	assert.True(t, entries[0].IsFinished())
 
 	intent = tae.BGCheckpointRunner.GetICKPIntentOnlyForTest()
-	t.Logf("intent: %v", intent)
 	assert.Nil(t, intent)
-}
-
-func Test_CheckpointChaos2(t *testing.T) {
-	// TODO
 }
 
 func TestGCCatalog1(t *testing.T) {
