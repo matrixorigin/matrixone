@@ -108,6 +108,7 @@ func newBufferHolder(ctx context.Context, name batchpipe.HasName, impl motrace.P
 	defer b.mux.Unlock()
 	b.trigger = time.AfterFunc(time.Hour, func() {})
 	b.aggr = impl.NewAggregator(ctx, b.name)
+
 	return b
 }
 
@@ -123,6 +124,9 @@ func (b *bufferHolder) Start() {
 		}
 		b.signal(b)
 	})
+	if b.aggr != nil {
+		go b.loopAggr()
+	}
 }
 
 func (b *bufferHolder) getBuffer() motrace.Buffer {
@@ -189,6 +193,36 @@ func (b *bufferHolder) Add(item batchpipe.HasName) {
 	}
 }
 
+func (b *bufferHolder) loopAggr() {
+	logger := b.c.logger.With(zap.String("name", b.name)).Named("bufferHolder")
+	interval := 500 * time.Millisecond
+	if b.aggr == nil {
+		logger.Warn("no aggregator available, just quit this loop")
+		return
+	}
+mainL:
+	for {
+		select {
+		case <-time.After(interval):
+			// handle aggr
+			end := time.Now().Truncate(b.aggr.GetWindow())
+			results := b.aggr.PopResultsBeforeWindow(end)
+			for _, item := range results {
+				// tips: Add() will free the {item} obj.
+				b.Add(item)
+			}
+			// END> handle aggr
+
+		case <-b.ctx.Done():
+			logger.Info("exiting loopAggr", zap.String("cause", "ctx.Done"))
+			// todo: save all record in aggr.
+			break mainL
+		}
+	}
+	logger.Info("exit loopAggr")
+	return
+}
+
 var _ generateReq = (*bufferGenerateReq)(nil)
 
 type bufferGenerateReq struct {
@@ -253,17 +287,6 @@ func (b *bufferHolder) getGenerateReq() (req generateReq) {
 	if b.buffer == nil || b.buffer.IsEmpty() {
 		return nil
 	}
-
-	// handle aggr
-	// fixme: handle now ? or run regular
-	if b.aggr != nil {
-		end := time.Now().Truncate(b.aggr.GetWindow())
-		results := b.aggr.PopResultsBeforeWindow(end)
-		for _, item := range results {
-			b.buffer.Add(item) // tips: Add() will free the {item} obj.
-		}
-	}
-	// END> handle aggr
 
 	req = &bufferGenerateReq{
 		buffer: b.buffer,

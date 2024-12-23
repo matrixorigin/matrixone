@@ -452,8 +452,8 @@ func initTraceMetric(ctx context.Context, st metadata.ServiceType, cfg *Config, 
 	if !SV.DisableTrace || !SV.DisableMetric {
 		writerFactory = export.GetWriterFactory(fs, UUID, nodeRole, !SV.DisableSqlWriter)
 		initWG.Add(1)
-		collector := export.NewMOCollector(ctx, cfg.mustGetServiceUUID(), export.WithOBCollectorConfig(&SV.OBCollectorConfig))
 		stopper.RunNamedTask("trace", func(ctx context.Context) {
+			collector := export.NewMOCollector(ctx, cfg.mustGetServiceUUID(), export.WithOBCollectorConfig(&SV.OBCollectorConfig))
 			err, act := motrace.InitWithConfig(ctx,
 				&SV,
 				motrace.WithService(cfg.mustGetServiceUUID()),
