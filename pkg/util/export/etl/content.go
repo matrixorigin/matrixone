@@ -110,10 +110,10 @@ func (c *ContentWriter) FlushAndClose() (n int, err error) {
 	if c.formatter != nil {
 		c.formatter.Flush()
 	}
-	if c.bufCallback != nil {
-		// release the buf.
-		defer c.bufCallback(c.buf)
-	}
+	/*
+		if c.bufCallback != nil {
+			defer c.bufCallback(c.buf)
+		}*/
 
 	// main flow
 	// Step 1/2: do sql flush.
@@ -144,6 +144,10 @@ func (c *ContentWriter) FlushAndClose() (n int, err error) {
 	// nil all
 	if c.bufCallback == nil {
 		v2.TraceMOLoggerBufferNoCallback.Inc()
+	} else {
+		v2.TraceMOLoggerBufferCallback.Inc()
+		// release the buf normally
+		c.bufCallback(c.buf)
 	}
 	c.sqlFlusher = nil
 	c.csvFlusher = nil
