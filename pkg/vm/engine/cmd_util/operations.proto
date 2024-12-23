@@ -172,7 +172,7 @@ message CheckpointEntryResp {
 }
 
 enum ChangedListType  {
-    GetChanged = 0;
+    CollectChanged = 0;
     CheckChanged = 1;
 }
 

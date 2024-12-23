@@ -17,9 +17,6 @@ package frontend
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
-	"go.uber.org/zap"
 	"math"
 	"strconv"
 	"strings"
@@ -30,14 +27,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 )
 
 const (
@@ -341,11 +341,22 @@ func tryGetSizeFromMTS(
 		}
 	}
 
+	// if len(account id) == 1 and is not sys account
+	//
+	// case 1:
+	//   show accounts for new account
+	//
+	// case 2:
+	//	show accounts like "xxx"
+	forceUpdate := false
+	if len(accs) == 1 && accs[0] != uint64(sysAccountID) {
+		forceUpdate = true
+	}
 	vals, accs, err, ok = getPu(serviceID).StorageEngine.QueryTableStatsByAccounts(
 		ctx,
 		[]int{disttae.TableStatsTableSize},
 		accs,
-		false,
+		forceUpdate,
 		false,
 	)
 
