@@ -351,7 +351,6 @@ func (r *runner) onIncrementalCheckpointEntries(items ...any) {
 	}()
 
 	err = executor.RunICKP()
-	return
 }
 
 func (r *runner) saveCheckpoint(start, end types.TS, ckpLSN, truncateLSN uint64) (name string, err error) {
