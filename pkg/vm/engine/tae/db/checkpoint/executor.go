@@ -104,6 +104,14 @@ func (job *checkpointJob) RunICKP(ctx context.Context) (err error) {
 		lsnToTruncate = lsn - job.runner.options.reservedWALEntryCount
 	}
 
+	if file, err = job.runner.saveCheckpoint(
+		entry.start, entry.end,
+	); err != nil {
+		errPhase = "save-ckp"
+		rollback()
+		return
+	}
+
 	entry.SetLSN(lsn, lsnToTruncate)
 	if !job.runner.store.CommitICKPIntent(entry, false) {
 		errPhase = "commit"
@@ -111,16 +119,9 @@ func (job *checkpointJob) RunICKP(ctx context.Context) (err error) {
 		err = moerr.NewInternalErrorNoCtxf("cannot commit ickp")
 		return
 	}
+
 	v2.TaskCkpEntryPendingDurationHistogram.Observe(entry.Age().Seconds())
 	defer entry.Done()
-
-	if file, err = job.runner.saveCheckpoint(
-		entry.start, entry.end, lsn, lsnToTruncate,
-	); err != nil {
-		errPhase = "save-ckp"
-		rollback()
-		return
-	}
 
 	files = append(files, file)
 

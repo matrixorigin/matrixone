@@ -183,6 +183,10 @@ func (r *runner) ForceIncrementalCheckpoint(ts types.TS) (err error) {
 		err = moerr.NewInternalErrorNoCtx("timeout")
 		return
 	case <-intent.Wait():
+		checkpointed := r.store.GetCheckpointed()
+		if checkpointed.LT(&ts) {
+			err = ErrPendingCheckpoint
+		}
 	}
 	return
 }
@@ -216,7 +220,7 @@ func (r *runner) ForceCheckpointForBackup(end types.TS) (location string, err er
 	entry.ckpLSN = lsn
 	entry.truncateLSN = lsnToTruncate
 	var file string
-	if file, err = r.saveCheckpoint(entry.start, entry.end, lsn, lsnToTruncate); err != nil {
+	if file, err = r.saveCheckpoint(entry.start, entry.end); err != nil {
 		return
 	}
 	files = append(files, file)

@@ -354,11 +354,13 @@ func (r *runner) onIncrementalCheckpointEntries(items ...any) {
 	err = executor.RunICKP()
 }
 
-func (r *runner) saveCheckpoint(start, end types.TS, ckpLSN, truncateLSN uint64) (name string, err error) {
+func (r *runner) saveCheckpoint(
+	start, end types.TS,
+) (name string, err error) {
 	if injectErrMsg, injected := objectio.CheckpointSaveInjected(); injected {
 		return "", moerr.NewInternalErrorNoCtxf(injectErrMsg)
 	}
-	bat := r.collectCheckpointMetadata(start, end, ckpLSN, truncateLSN)
+	bat := r.collectCheckpointMetadata(start, end)
 	defer bat.Close()
 	name = blockio.EncodeCheckpointMetadataFileName(CheckpointDir, PrefixMetadata, start, end)
 	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterCheckpoint, name, r.rt.Fs.Service)
@@ -481,7 +483,7 @@ func (r *runner) doGlobalCheckpoint(
 	r.store.TryAddNewGlobalCheckpointEntry(entry)
 	entry.SetState(ST_Finished)
 	var name string
-	if name, err = r.saveCheckpoint(entry.start, entry.end, 0, 0); err != nil {
+	if name, err = r.saveCheckpoint(entry.start, entry.end); err != nil {
 		errPhase = "save"
 		return
 	}
