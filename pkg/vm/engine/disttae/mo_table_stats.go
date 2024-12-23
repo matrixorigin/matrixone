@@ -1287,6 +1287,12 @@ func (d *dynamicCtx) tableStatsExecutor(
 	eng engine.Engine,
 ) (err error) {
 
+	defer func() {
+		logutil.Info(logHeader,
+			zap.String("source", "table stats top executor"),
+			zap.String("exit by", fmt.Sprintf("%v", err)))
+	}()
+
 	newCtx := turn2SysCtx(ctx)
 
 	tickerDur := time.Second
@@ -1295,10 +1301,8 @@ func (d *dynamicCtx) tableStatsExecutor(
 	for {
 		select {
 		case <-newCtx.Done():
-			logutil.Info(logHeader,
-				zap.String("source", "table stats top executor"),
-				zap.String("exit by ctx done", fmt.Sprintf("%v", newCtx.Err())))
-			return newCtx.Err()
+			err = newCtx.Err()
+			return
 
 		case <-executeTicker.C:
 			if d.checkMoveOnTask() {
@@ -1381,10 +1385,6 @@ func (d *dynamicCtx) alphaTask(
 	caller string,
 ) (err error) {
 
-	if len(tbls) == 0 {
-		return
-	}
-
 	// maybe the task exited, need to launch a new one
 	d.launchTask(betaTaskName)
 
@@ -1417,6 +1417,10 @@ func (d *dynamicCtx) alphaTask(
 		v2.AlphaTaskDurationHistogram.Observe(dur.Seconds())
 		v2.AlphaTaskCountingHistogram.Observe(float64(processed))
 	}()
+
+	if len(tbls) == 0 {
+		return
+	}
 
 	wg := sync.WaitGroup{}
 
