@@ -46,7 +46,7 @@ const (
 	taskHostDN
 
 	constMaxMemCap         = 12 * common.Const1GBytes // max original memory for an object
-	estimateMemUsagePerRow = 30
+	estimateMemUsagePerRow = 60
 )
 
 func score(objs []*catalog.ObjectEntry) float64 {
