@@ -364,6 +364,16 @@ func (h *Handle) HandleGetChangedTableList(
 		from types.TS
 	)
 
+	defer func() {
+		tt := to.ToTimestamp()
+		resp.Newest = &tt
+	}()
+
+	if len(req.TableIds) == 0 && len(req.TS) == 0 {
+		to = types.BuildTS(time.Now().UnixNano(), 0)
+		return nil, nil
+	}
+
 	if req.Type == cmd_util.CheckChanged {
 		to = types.BuildTS(time.Now().UnixNano(), 0)
 		minFrom := slices.MinFunc(req.TS, func(a, b *timestamp.Timestamp) int {
@@ -401,7 +411,7 @@ func (h *Handle) HandleGetChangedTableList(
 
 			return true
 
-		} else if req.Type == cmd_util.GetChanged {
+		} else if req.Type == cmd_util.CollectChanged {
 			// collecting changed list
 			skip := types.MaxTs().Prev()
 			if !commit.Equal(&skip) && (commit.LT(&from) || commit.GT(&to)) {
@@ -432,10 +442,6 @@ func (h *Handle) HandleGetChangedTableList(
 	resp.AccIds = append(resp.AccIds, accIds...)
 	resp.DatabaseIds = append(resp.DatabaseIds, dbIds...)
 
-	tt := to.ToTimestamp()
-	resp.Newest = &tt
-
-	fmt.Println("handle get changed table list", len(resp.TableIds))
 	return nil, nil
 }
 
