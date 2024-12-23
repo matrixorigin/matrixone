@@ -228,7 +228,7 @@ func (c *resourceController) setMemLimit(total uint64) {
 
 func (c *resourceController) refresh() {
 	if c.limit == 0 {
-		c.setMemLimit(totalMem())
+		c.setMemLimit(objectio.TotalMem())
 	}
 
 	if c.proc == nil {

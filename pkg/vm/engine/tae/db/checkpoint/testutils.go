@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 	"go.uber.org/zap"
 )
 
@@ -35,7 +34,7 @@ type TestRunner interface {
 	ForceGlobalCheckpoint(end types.TS, versionInterval time.Duration) error
 	ForceGlobalCheckpointSynchronously(ctx context.Context, end types.TS, versionInterval time.Duration) error
 	ForceCheckpointForBackup(end types.TS) (string, error)
-	ForceIncrementalCheckpoint(end types.TS, truncate bool) error
+	ForceIncrementalCheckpoint(end types.TS) error
 	MaxLSNInRange(end types.TS) uint64
 
 	GCNeeded() bool
@@ -59,36 +58,46 @@ func (r *runner) ForceGlobalCheckpoint(end types.TS, interval time.Duration) err
 		interval = r.options.globalVersionInterval
 	}
 	if r.GetPenddingIncrementalCount() != 0 {
-		end = r.MaxIncrementalCheckpoint().GetEnd()
-		r.globalCheckpointQueue.Enqueue(&globalCheckpointContext{
-			force:    true,
-			end:      end,
-			interval: interval,
-		})
-		return nil
-	}
-	retryTime := 0
-	timeout := time.After(interval)
-	var err error
-	defer func() {
-		if err != nil || retryTime > 0 {
-			logutil.Error("ForceGlobalCheckpoint-End",
-				zap.Error(err),
-				zap.Uint64("retryTime", uint64(retryTime)))
-			return
+		end2 := r.MaxIncrementalCheckpoint().GetEnd()
+		if end2.GE(&end) {
+			r.globalCheckpointQueue.Enqueue(&globalCheckpointContext{
+				force:    true,
+				end:      end2,
+				interval: interval,
+			})
+			return nil
 		}
+	}
+	var (
+		retryTime int
+		now       = time.Now()
+		err       error
+	)
+	defer func() {
+		logger := logutil.Info
+		if err != nil {
+			logger = logutil.Error
+		}
+		logger(
+			"ForceGlobalCheckpoint-End",
+			zap.Int("retry-time", retryTime),
+			zap.Duration("cost", time.Since(now)),
+			zap.String("ts", end.ToString()),
+			zap.Error(err),
+		)
 	}()
+
+	timeout := time.After(interval)
 	for {
 		select {
 		case <-timeout:
 			return moerr.NewInternalError(r.ctx, "timeout")
 		default:
-			err = r.ForceIncrementalCheckpoint(end, false)
+			err = r.ForceIncrementalCheckpoint(end)
 			if err != nil {
-				if dbutils.IsRetrieableCheckpoint(err) {
+				if dbutils.IsCheckpointRetryableErr(err) {
 					retryTime++
-					interval := interval.Milliseconds() / 400
-					time.Sleep(time.Duration(interval))
+					time.Sleep(interval / 20)
 					break
 				}
 				return err
@@ -104,12 +113,6 @@ func (r *runner) ForceGlobalCheckpoint(end types.TS, interval time.Duration) err
 }
 
 func (r *runner) ForceGlobalCheckpointSynchronously(ctx context.Context, end types.TS, versionInterval time.Duration) error {
-	prevGlobalEnd := types.TS{}
-	global := r.store.MaxGlobalCheckpoint()
-	if global != nil {
-		prevGlobalEnd = global.end
-	}
-
 	r.ForceGlobalCheckpoint(end, versionInterval)
 
 	op := func() (ok bool, err error) {
@@ -117,7 +120,8 @@ func (r *runner) ForceGlobalCheckpointSynchronously(ctx context.Context, end typ
 		if global == nil {
 			return false, nil
 		}
-		return global.end.GT(&prevGlobalEnd), nil
+		ok = global.end.GE(&end)
+		return
 	}
 	err := common.RetryWithIntervalAndTimeout(
 		op,
@@ -131,104 +135,50 @@ func (r *runner) ForceGlobalCheckpointSynchronously(ctx context.Context, end typ
 	return nil
 }
 
-func (r *runner) ForceIncrementalCheckpoint(end types.TS, truncate bool) error {
+func (r *runner) ForceIncrementalCheckpoint(ts types.TS) (err error) {
+	var intent Intent
+	if intent, err = r.TryScheduleCheckpoint(ts, true); err != nil {
+		return
+	}
+	if intent == nil {
+		return
+	}
+
+	entry := intent.(*CheckpointEntry)
+
+	if entry.end.LT(&ts) || !entry.AllChecked() {
+		err = ErrPendingCheckpoint
+		return
+	}
+
+	// TODO: use context
+	timeout := time.After(time.Minute * 2)
 	now := time.Now()
-	prev := r.MaxIncrementalCheckpoint()
-	if prev != nil && !prev.IsFinished() {
-		return moerr.NewPrevCheckpointNotFinished()
-	}
-
-	if prev != nil && end.LE(&prev.end) {
-		return nil
-	}
-	var (
-		err      error
-		errPhase string
-		start    types.TS
-		fatal    bool
-		fields   []zap.Field
-	)
-
-	if prev == nil {
-		global := r.MaxGlobalCheckpoint()
-		if global != nil {
-			start = global.end
-		}
-	} else {
-		start = prev.end.Next()
-	}
-
-	entry := NewCheckpointEntry(r.rt.SID(), start, end, ET_Incremental)
-	logutil.Info(
-		"Checkpoint-Start-Force",
-		zap.String("entry", entry.String()),
-	)
-
 	defer func() {
+		logger := logutil.Info
 		if err != nil {
-			logger := logutil.Error
-			if fatal {
-				logger = logutil.Fatal
-			}
-			logger(
-				"Checkpoint-Error-Force",
-				zap.String("entry", entry.String()),
-				zap.String("phase", errPhase),
-				zap.Error(err),
-				zap.Duration("cost", time.Since(now)),
-			)
-		} else {
-			fields = append(fields, zap.Duration("cost", time.Since(now)))
-			fields = append(fields, zap.String("entry", entry.String()))
-			logutil.Info(
-				"Checkpoint-End-Force",
-				fields...,
-			)
+			logger = logutil.Error
 		}
+		logger(
+			"ICKP-Schedule-Force-Wait-End",
+			zap.String("entry", intent.String()),
+			zap.Duration("cost", time.Since(now)),
+			zap.Error(err),
+		)
 	}()
 
-	// TODO: change me
-	r.store.AddNewIncrementalEntry(entry)
+	r.incrementalCheckpointQueue.Enqueue(struct{}{})
 
-	var files []string
-	if fields, files, err = r.doIncrementalCheckpoint(entry); err != nil {
-		errPhase = "do-ckp"
-		return err
+	select {
+	case <-r.ctx.Done():
+		err = context.Cause(r.ctx)
+		return
+	case <-timeout:
+		err = moerr.NewInternalErrorNoCtx("timeout")
+		return
+	case <-intent.Wait():
 	}
-
-	var lsn, lsnToTruncate uint64
-	if truncate {
-		lsn = r.source.GetMaxLSN(entry.start, entry.end)
-		if lsn > r.options.reservedWALEntryCount {
-			lsnToTruncate = lsn - r.options.reservedWALEntryCount
-		}
-		entry.ckpLSN = lsn
-		entry.truncateLSN = lsnToTruncate
-	}
-
-	var file string
-	if file, err = r.saveCheckpoint(
-		entry.start, entry.end, lsn, lsnToTruncate,
-	); err != nil {
-		errPhase = "save-ckp"
-		return err
-	}
-	files = append(files, file)
-	entry.SetState(ST_Finished)
-	if truncate {
-		var e wal.LogEntry
-		if e, err = r.wal.RangeCheckpoint(1, lsnToTruncate, files...); err != nil {
-			errPhase = "wal-ckp"
-			fatal = true
-			return err
-		}
-		if err = e.WaitDone(); err != nil {
-			errPhase = "wait-wal-ckp"
-			fatal = true
-			return err
-		}
-	}
-	return nil
+	return
 }
 
 func (r *runner) ForceCheckpointForBackup(end types.TS) (location string, err error) {

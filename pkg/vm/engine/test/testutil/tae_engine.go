@@ -70,7 +70,6 @@ func (ts *TestTxnStorage) Close(destroy bool) error {
 			firstErr = err
 		}
 	}
-	ts.txnHandler.GCJob.Stop()
 	blockio.Stop("")
 	return firstErr
 }
@@ -98,20 +97,9 @@ func (ts *TestTxnStorage) Commit(ctx context.Context, request *txn.TxnRequest, r
 		resp.Txn = &req.Txn
 	}
 
-	if request.CommitRequest != nil {
-		for _, req := range request.CommitRequest.Payload {
-			//response is shared by all requests
-			prepareResponse(req, response)
-			err := ts.Write(ctx, req, response)
-			if err != nil {
-				return err
-			}
-		}
-	}
-
 	prepareResponse(request, response)
 
-	cts, err := ts.txnHandler.HandleCommit(ctx, request.Txn)
+	cts, err := ts.txnHandler.HandleCommit(ctx, request.Txn, response, request.CommitRequest)
 	if err == nil {
 		response.Txn.Status = txn.TxnStatus_Committed
 		response.Txn.CommitTS = cts

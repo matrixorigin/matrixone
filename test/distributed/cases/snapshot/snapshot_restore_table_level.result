@@ -298,6 +298,8 @@ select count(*) from snapshot_read.users;
 count(*)
 0
 restore account test_account database snapshot_read table users from snapshot sp_01;
+internal error: can't restore table from other account's snapshot
+restore account test_account from snapshot sp_01;
 select count(*) from snapshot_read.users;
 count(*)
 11

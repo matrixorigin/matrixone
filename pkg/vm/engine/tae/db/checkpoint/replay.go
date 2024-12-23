@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -30,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
@@ -41,6 +43,10 @@ const (
 	PrefetchMetaIdx
 	ReadMetaIdx
 	ReadData
+)
+
+const (
+	DefaultObjectReplayWorkerCount = 10
 )
 
 type CkpReplayer struct {
@@ -55,11 +61,23 @@ type CkpReplayer struct {
 
 	readDuration, applyDuration       time.Duration
 	readCount, applyCount, totalCount int
+
+	objectReplayWorker []sm.Queue
+	wg                 sync.WaitGroup
+	objectCountMap     map[uint64]int
 }
 
 func (c *CkpReplayer) Close() {
 	for _, close := range c.closes {
 		close()
+	}
+	for _, worker := range c.objectReplayWorker {
+		worker.Stop()
+	}
+	for _, data := range c.ckpdatas {
+		if data != nil {
+			data.Close()
+		}
 	}
 }
 
@@ -187,7 +205,7 @@ func (c *CkpReplayer) ReadCkpFiles() (err error) {
 
 	closecbs := make([]func(), 0)
 	c.totalCount = len(entries)
-	readfn := func(i int, readType uint16) {
+	readfn := func(i int, readType uint16) (err error) {
 		checkpointEntry := entries[i]
 		checkpointEntry.sid = r.rt.SID()
 		if checkpointEntry.end.LT(&maxGlobalEnd) {
@@ -218,6 +236,7 @@ func (c *CkpReplayer) ReadCkpFiles() (err error) {
 				closecbs = append(closecbs, func() { datas[i].CloseWhenLoadFromCache(checkpointEntry.version) })
 			}
 		}
+		return nil
 	}
 	c.closes = append(c.closes, closecbs...)
 	t0 = time.Now()
@@ -229,16 +248,24 @@ func (c *CkpReplayer) ReadCkpFiles() (err error) {
 		}
 	}
 	for i := 0; i < bat.Length(); i++ {
-		readfn(i, PrefetchMetaIdx)
+		if err = readfn(i, PrefetchMetaIdx); err != nil {
+			return
+		}
 	}
 	for i := 0; i < bat.Length(); i++ {
-		readfn(i, ReadMetaIdx)
+		if err = readfn(i, ReadMetaIdx); err != nil {
+			return
+		}
 	}
 	for i := 0; i < bat.Length(); i++ {
-		readfn(i, PrefetchData)
+		if err = readfn(i, PrefetchData); err != nil {
+			return
+		}
 	}
 	for i := 0; i < bat.Length(); i++ {
-		readfn(i, ReadData)
+		if err = readfn(i, ReadData); err != nil {
+			return
+		}
 	}
 	c.ckpdatas = datas
 	c.readDuration += time.Since(t0)
@@ -286,7 +313,7 @@ func (c *CkpReplayer) ReplayThreeTablesObjectlist(phase string) (
 	dataFactory := c.dataF
 	maxGlobal := r.MaxGlobalCheckpoint()
 	if maxGlobal != nil {
-		err = datas[c.globalCkpIdx].ApplyReplayTo(r.catalog, dataFactory, true)
+		err = datas[c.globalCkpIdx].ApplyReplayTo(c, r.catalog, dataFactory, true)
 		c.applyCount++
 		logger := logutil.Info
 		if err != nil {
@@ -332,7 +359,7 @@ func (c *CkpReplayer) ReplayThreeTablesObjectlist(phase string) (
 			continue
 		}
 		start := time.Now()
-		if err = datas[i].ApplyReplayTo(r.catalog, dataFactory, true); err != nil {
+		if err = datas[i].ApplyReplayTo(c, r.catalog, dataFactory, true); err != nil {
 			logger = logutil.Error
 		}
 		logger(
@@ -363,6 +390,7 @@ func (c *CkpReplayer) ReplayThreeTablesObjectlist(phase string) (
 			isLSNValid = false
 		}
 	}
+	c.wg.Wait()
 	return
 }
 
@@ -419,7 +447,7 @@ func (c *CkpReplayer) ReplayObjectlist(phase string) (err error) {
 	var ckpVers []uint32
 	var ckpDatas []*logtail.CheckpointData
 	if maxGlobal := r.MaxGlobalCheckpoint(); maxGlobal != nil {
-		err = datas[c.globalCkpIdx].ApplyReplayTo(r.catalog, dataFactory, false)
+		err = datas[c.globalCkpIdx].ApplyReplayTo(c, r.catalog, dataFactory, false)
 		if err != nil {
 			return
 		}
@@ -436,6 +464,7 @@ func (c *CkpReplayer) ReplayObjectlist(phase string) (err error) {
 			continue
 		}
 		err = datas[i].ApplyReplayTo(
+			c,
 			r.catalog,
 			dataFactory,
 			false)
@@ -448,12 +477,22 @@ func (c *CkpReplayer) ReplayObjectlist(phase string) (err error) {
 		ckpVers = append(ckpVers, checkpointEntry.version)
 		ckpDatas = append(ckpDatas, datas[i])
 	}
+	c.wg.Wait()
 	c.applyDuration += time.Since(t0)
 	r.catalog.GetUsageMemo().(*logtail.TNUsageMemo).PrepareReplay(ckpDatas, ckpVers)
 	r.source.Init(maxTs)
+	maxTableID, maxObjectCount := uint64(0), 0
+	for tid, count := range c.objectCountMap {
+		if count > maxObjectCount {
+			maxTableID = tid
+			maxObjectCount = count
+		}
+	}
 	logutil.Info(
 		"Replay-Checkpoints",
 		zap.String("phase", phase),
+		zap.Uint64("max table tid", maxTableID),
+		zap.Int("object count (create count + delete count)", maxObjectCount),
 		zap.Duration("apply-cost", c.applyDuration),
 		zap.Duration("read-cost", c.readDuration),
 		zap.Int("apply-count", c.applyCount),
@@ -463,11 +502,32 @@ func (c *CkpReplayer) ReplayObjectlist(phase string) (err error) {
 	return
 }
 
+func (c *CkpReplayer) Submit(tid uint64, replayFn func()) {
+	c.wg.Add(1)
+	workerOffset := tid % uint64(len(c.objectReplayWorker))
+	c.objectCountMap[tid] = c.objectCountMap[tid] + 1
+	c.objectReplayWorker[workerOffset].Enqueue(replayFn)
+}
+
 func (r *runner) Replay(dataFactory catalog.DataFactory) *CkpReplayer {
-	return &CkpReplayer{
-		r:     r,
-		dataF: dataFactory,
+	replayer := &CkpReplayer{
+		r:              r,
+		dataF:          dataFactory,
+		objectCountMap: make(map[uint64]int),
 	}
+	objectWorker := make([]sm.Queue, DefaultObjectReplayWorkerCount)
+	for i := 0; i < DefaultObjectReplayWorkerCount; i++ {
+		objectWorker[i] = sm.NewSafeQueue(10000, 100, func(items ...any) {
+			for _, item := range items {
+				fn := item.(func())
+				fn()
+				replayer.wg.Done()
+			}
+		})
+		objectWorker[i].Start()
+	}
+	replayer.objectReplayWorker = objectWorker
+	return replayer
 }
 
 func MergeCkpMeta(

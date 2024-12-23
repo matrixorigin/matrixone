@@ -17,7 +17,9 @@ package checkpoint
 import (
 	"context"
 	"fmt"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -370,4 +372,274 @@ func TestICKPSeekLT(t *testing.T) {
 		t.Log(e.String())
 	}
 	assert.Equal(t, 0, len(ckps))
+}
+
+func Test_RunnerStore1(t *testing.T) {
+	store := newRunnerStore("", time.Second, time.Second*1000)
+	_ = types.NextGlobalTsForTest()
+	_ = types.NextGlobalTsForTest()
+	t3 := types.NextGlobalTsForTest()
+	intent, updated := store.UpdateICKPIntent(&t3, true, true)
+	assert.True(t, updated)
+	assert.True(t, intent.IsPolicyChecked())
+	assert.True(t, intent.IsFlushChecked())
+	assert.True(t, intent.IsPendding())
+	assert.True(t, intent.AllChecked())
+	assert.True(t, intent.end.EQ(&t3))
+
+	taken, rollback := store.TakeICKPIntent()
+	assert.NotNil(t, taken)
+	assert.NotNil(t, rollback)
+	assert.True(t, taken.IsRunning())
+	assert.True(t, taken.end.EQ(&t3))
+
+	committed := store.CommitICKPIntent(taken, true)
+	assert.True(t, committed)
+
+	intent, updated = store.UpdateICKPIntent(&t3, true, true)
+	assert.False(t, updated)
+	assert.Nilf(t, intent, intent.String())
+}
+
+func Test_RunnerStore2(t *testing.T) {
+	store := newRunnerStore("", time.Second, time.Second*1000)
+	t1 := types.NextGlobalTsForTest()
+	intent, updated := store.UpdateICKPIntent(&t1, false, false)
+	assert.True(t, updated)
+	assert.True(t, intent.start.IsEmpty())
+	assert.True(t, intent.end.EQ(&t1))
+	assert.True(t, intent.IsPendding())
+	assert.False(t, intent.AllChecked())
+
+	intent, updated = store.UpdateICKPIntent(&t1, true, false)
+	assert.True(t, updated)
+	assert.True(t, intent.IsPolicyChecked())
+	assert.False(t, intent.IsFlushChecked())
+	assert.True(t, intent.IsPendding())
+	assert.False(t, intent.AllChecked())
+
+	intent, updated = store.UpdateICKPIntent(&t1, false, true)
+	assert.False(t, updated)
+	assert.True(t, intent.IsPolicyChecked())
+	assert.False(t, intent.IsFlushChecked())
+	assert.True(t, intent.IsPendding())
+	assert.False(t, intent.AllChecked())
+	bornTime := intent.bornTime
+
+	intent, updated = store.UpdateICKPIntent(&t1, true, true)
+	assert.True(t, updated)
+	assert.True(t, intent.IsPolicyChecked())
+	assert.True(t, intent.IsFlushChecked())
+	assert.True(t, intent.IsPendding())
+	assert.True(t, intent.AllChecked())
+	assert.True(t, intent.end.EQ(&t1))
+	assert.True(t, bornTime.Equal(intent.bornTime))
+
+	t2 := types.NextGlobalTsForTest()
+	intent2, updated := store.UpdateICKPIntent(&t2, true, false)
+	assert.False(t, updated)
+	assert.Equal(t, intent, intent2)
+	intent2, updated = store.UpdateICKPIntent(&t2, false, true)
+	assert.False(t, updated)
+	assert.Equal(t, intent, intent2)
+
+	intent2, updated = store.UpdateICKPIntent(&t2, true, true)
+	assert.True(t, updated)
+	assert.True(t, intent2.IsPolicyChecked())
+	assert.True(t, intent2.IsFlushChecked())
+	assert.True(t, intent2.IsPendding())
+	assert.True(t, intent2.AllChecked())
+	assert.True(t, intent2.end.EQ(&t2))
+}
+
+func Test_RunnerStore3(t *testing.T) {
+	store := newRunnerStore("", time.Second, time.Second*1000)
+
+	t1 := types.NextGlobalTsForTest()
+	intent, updated := store.UpdateICKPIntent(&t1, false, false)
+	assert.True(t, updated)
+	assert.True(t, intent.start.IsEmpty())
+	assert.True(t, intent.end.EQ(&t1))
+	assert.True(t, intent.IsPendding())
+
+	intent2 := store.incrementalIntent.Load()
+	assert.Equal(t, intent, intent2)
+
+	t2 := types.NextGlobalTsForTest()
+	intent3, updated := store.UpdateICKPIntent(&t2, true, true)
+	assert.True(t, updated)
+	assert.True(t, intent3.start.IsEmpty())
+	assert.True(t, intent3.end.EQ(&t2))
+	assert.True(t, intent3.IsPendding())
+	intent4 := store.incrementalIntent.Load()
+	assert.Equal(t, intent3, intent4)
+
+	ii, updated := store.UpdateICKPIntent(&t1, true, true)
+	assert.False(t, updated)
+	assert.Equal(t, ii, intent4)
+
+	taken, rollback := store.TakeICKPIntent()
+	assert.NotNil(t, taken)
+	assert.NotNil(t, rollback)
+	assert.True(t, taken.IsRunning())
+	intent5 := store.incrementalIntent.Load()
+	assert.Equal(t, intent5, taken)
+
+	taken2, rollback2 := store.TakeICKPIntent()
+	assert.Nil(t, taken2)
+	assert.Nil(t, rollback2)
+
+	t3 := types.NextGlobalTsForTest()
+	ii2, updated := store.UpdateICKPIntent(&t3, true, true)
+	assert.False(t, updated)
+	assert.Equal(t, ii2, intent5)
+
+	rollback()
+	intent6 := store.incrementalIntent.Load()
+	assert.True(t, intent6.IsPendding())
+	assert.True(t, intent6.end.EQ(&t2))
+	assert.True(t, intent6.start.IsEmpty())
+	assert.Equal(t, intent6.bornTime, intent5.bornTime)
+	assert.Equal(t, intent6.refreshCnt, intent5.refreshCnt)
+	assert.Equal(t, intent6.policyChecked, intent5.policyChecked)
+	assert.Equal(t, intent6.flushChecked, intent5.flushChecked)
+
+	ii2, updated = store.UpdateICKPIntent(&t3, true, true)
+	assert.True(t, updated)
+	assert.True(t, ii2.IsPendding())
+	assert.True(t, ii2.end.EQ(&t3))
+	assert.True(t, ii2.start.IsEmpty())
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		<-ii2.Wait()
+	}()
+
+	taken, rollback = store.TakeICKPIntent()
+	assert.NotNil(t, taken)
+	assert.NotNil(t, rollback)
+	assert.True(t, taken.IsRunning())
+	intent7 := store.incrementalIntent.Load()
+	assert.Equal(t, intent7, taken)
+
+	maxEntry := store.MaxIncrementalCheckpoint()
+	assert.Nil(t, maxEntry)
+
+	committed := store.CommitICKPIntent(taken, true)
+	assert.True(t, committed)
+	assert.True(t, taken.IsFinished())
+
+	wg.Wait()
+
+	maxEntry = store.MaxIncrementalCheckpoint()
+	assert.Equal(t, maxEntry, taken)
+
+	intent8 := store.incrementalIntent.Load()
+	assert.Nil(t, intent8)
+
+	// UpdateICKPIntent with a smaller ts than the finished one
+	intent9, updated := store.UpdateICKPIntent(&t3, true, true)
+	assert.False(t, updated)
+	assert.Nil(t, intent9)
+
+	t4 := types.NextGlobalTsForTest()
+	t4 = t4.Next()
+
+	// UpdateICKPIntent with a larger ts than the finished one
+	// check if the intent is updated
+	// check if the start ts is equal to the last end ts
+	intent10, updated := store.UpdateICKPIntent(&t4, true, true)
+	assert.True(t, updated)
+	assert.True(t, intent10.IsPendding())
+	assert.True(t, intent10.end.EQ(&t4))
+	prev := intent10.start.Prev()
+	assert.True(t, prev.EQ(&t3))
+
+	taken2, rollback2 = store.TakeICKPIntent()
+	assert.NotNil(t, taken2)
+	assert.NotNil(t, rollback2)
+	assert.True(t, taken2.IsRunning())
+	intent11 := store.incrementalIntent.Load()
+	assert.Equal(t, intent11, taken2)
+
+	// cannot commit a different intent with the incremental intent
+	t5 := types.NextGlobalTsForTest()
+	taken2_1 := InheritCheckpointEntry(taken2, WithEndEntryOption(t5))
+	committed = store.CommitICKPIntent(taken2_1, true)
+	assert.False(t, committed)
+
+	taken2.start = taken2.start.Next()
+	committed = store.CommitICKPIntent(taken2, true)
+	assert.False(t, committed)
+
+	taken2.start = taken2.start.Prev()
+	committed = store.CommitICKPIntent(taken2, true)
+	assert.True(t, committed)
+	assert.True(t, taken2.IsFinished())
+
+	timer := time.After(time.Second * 10)
+	select {
+	case <-intent10.Wait():
+	case <-timer:
+		assert.Equal(t, 1, 0)
+	}
+}
+
+func Test_RunnerStore4(t *testing.T) {
+	store := newRunnerStore("", time.Second, time.Second*1000)
+
+	t1 := types.NextGlobalTsForTest()
+	intent, updated := store.UpdateICKPIntent(&t1, true, false)
+	assert.True(t, updated)
+	assert.True(t, intent.start.IsEmpty())
+	assert.True(t, intent.end.EQ(&t1))
+	assert.True(t, intent.IsPendding())
+
+	t2 := types.NextGlobalTsForTest()
+	intent2, updated := store.UpdateICKPIntent(&t2, true, true)
+	assert.True(t, updated)
+	assert.True(t, intent2.start.IsEmpty())
+	assert.True(t, intent2.end.EQ(&t2))
+	assert.True(t, intent2.IsPendding())
+	assert.True(t, intent2.AllChecked())
+
+	taken, rollback := store.TakeICKPIntent()
+	assert.NotNil(t, taken)
+	assert.NotNil(t, rollback)
+
+	t3 := types.NextGlobalTsForTest()
+	intent3, updated := store.UpdateICKPIntent(&t3, true, true)
+	assert.False(t, updated)
+	assert.True(t, intent3.IsRunning())
+	assert.True(t, intent3.end.EQ(&t2))
+
+	rollback()
+	intent4 := store.incrementalIntent.Load()
+	assert.True(t, intent4.IsPendding())
+	assert.True(t, intent4.end.EQ(&t2))
+	assert.True(t, intent4.start.IsEmpty())
+	assert.True(t, intent4.AllChecked())
+}
+
+func Test_RunnerStore5(t *testing.T) {
+	store := newRunnerStore("", time.Second, time.Second*1000)
+
+	t1 := types.NextGlobalTsForTest()
+	t2 := types.NextGlobalTsForTest()
+	intent, updated := store.UpdateICKPIntent(&t2, true, false)
+	assert.True(t, updated)
+	assert.True(t, intent.start.IsEmpty())
+	assert.True(t, intent.end.EQ(&t2))
+	t.Log(intent.String())
+
+	intent2, updated := store.UpdateICKPIntent(&t1, true, true)
+	assert.True(t, updated)
+	assert.True(t, intent2.end.EQ(&t1))
+	assert.True(t, intent2.start.IsEmpty())
+	assert.True(t, intent2.IsPendding())
+	assert.True(t, intent2.AllChecked())
+	assert.True(t, intent2.bornTime.After(intent.bornTime))
+	t.Log(intent2.String())
 }

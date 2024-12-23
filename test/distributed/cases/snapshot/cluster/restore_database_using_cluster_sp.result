@@ -128,7 +128,7 @@ SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME   
 create snapshot cluster_sp for cluster;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-cluster_sp    2024-06-24 08:47:05.296059    cluster            
+cluster_sp    2024-12-23 03:02:41.03828    cluster            
 drop database if exists snapshot_read;
 drop database if exists test_snapshot_restore;
 restore account acc01 database snapshot_read from snapshot cluster_sp;
@@ -478,7 +478,7 @@ SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME   
 create snapshot cluster_sp for cluster;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-cluster_sp    2024-10-21 06:37:13.526895    cluster            
+cluster_sp    2024-12-23 03:02:42.498253    cluster            
 drop database if exists Payroll;
 drop database if exists Projects;
 drop database if exists Company;
@@ -928,13 +928,16 @@ SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME   
 create snapshot account_sp for account acc01;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-account_sp    2024-10-21 06:37:16.701327    account    acc01        
+account_sp    2024-12-23 03:02:44.173044    account    acc01        
 drop database if exists Payroll;
 drop database if exists Projects;
 drop database if exists Company;
 restore account acc01 database Company from snapshot account_sp;
+internal error: can't restore database from other account's snapshot
 restore account acc01 database Projects from snapshot account_sp;
+internal error: can't restore database from other account's snapshot
 restore account acc01 database Payroll from snapshot account_sp;
+internal error: can't restore database from other account's snapshot
 restore account acc01 from snapshot account_sp;
 select * from Company.Departments;
 departmentid    name    managerid
@@ -1293,10 +1296,10 @@ Dr. Charlie    Computer Science    Introduction to Computer Science    Fall 2024
 Dr. Delta    Mathematics    Advanced Mathematics    Spring 2024
 select * from StudentOverallPerformance;
 studentname    studentgrade    averagegrade
-Eve    null    3.50000000
-Frank    null    3.60000000
 Alice Smith    3.50    3.60000000
 Bob Johnson    3.70    3.60000000
+Eve    null    3.50000000
+Frank    null    3.60000000
 drop snapshot if exists cluster_sp;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
@@ -1379,11 +1382,11 @@ Eve    3.50000000
 Frank    3.60000000
 select * from EducationSystem.ComprehensiveStudentCourseInfo;
 studentname    studentgrade    coursetitle    coursegrade
-Eve    null    Introduction to Computer Science    3.50
-Frank    null    Advanced Mathematics    3.60
 Alice Smith    3.50    Calculus    3.50
 Bob Johnson    3.70    Calculus    3.60
 Alice Smith    3.50    Physics    3.70
+Eve    null    Introduction to Computer Science    3.50
+Frank    null    Advanced Mathematics    3.60
 select * from EducationSystem.ComprehensiveEducatorInfo;
 professorname    departmentname    coursetitle    semester
 Dr. Charlie    Computer Science    Introduction to Computer Science    Fall 2024
