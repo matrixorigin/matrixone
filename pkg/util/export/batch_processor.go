@@ -194,7 +194,7 @@ func (b *bufferHolder) Add(item batchpipe.HasName, needAggr bool) {
 
 func (b *bufferHolder) loopAggr() {
 	logger := b.c.logger.With(zap.String("name", b.name)).Named("bufferHolder")
-	interval := 500 * time.Millisecond
+	interval := time.Second
 	if b.aggr == nil {
 		logger.Warn("no aggregator available, just quit this loop")
 		return
