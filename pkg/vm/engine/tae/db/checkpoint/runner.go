@@ -618,7 +618,7 @@ func (r *runner) softScheduleCheckpoint(ts *types.TS) (ret *CheckpointEntry, err
 		if intent != nil {
 			intentInfo = intent.String()
 		}
-		if err != nil || intent.TooOld() {
+		if (err != nil && err != ErrPendingCheckpoint) || intent.TooOld() {
 			logger(
 				"ICKP-Schedule-Soft",
 				zap.String("intent", intentInfo),
