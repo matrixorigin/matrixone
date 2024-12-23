@@ -740,8 +740,8 @@ func (r *runner) TryScheduleCheckpoint(
 			zap.String("intent", intent.String()),
 			zap.String("ts", ts.ToString()),
 			zap.Bool("updated", updated),
+			zap.Duration("cost", time.Since(now)),
 			zap.Error(err),
-			zap.Duration("cost", time.Since(err)),
 		)
 	}()
 
