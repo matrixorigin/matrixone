@@ -337,7 +337,7 @@ func (r *runner) onIncrementalCheckpointEntries(items ...any) {
 	now = time.Now()
 
 	logutil.Info(
-		"Checkpoint-Start",
+		"ICKP-Execute-Start",
 		zap.String("entry", entry.String()),
 	)
 
@@ -350,7 +350,7 @@ func (r *runner) onIncrementalCheckpointEntries(items ...any) {
 				logger = logutil.Error
 			}
 			logger(
-				"Checkpoint-Error",
+				"ICKP-Execute-Error",
 				zap.String("entry", entry.String()),
 				zap.Error(err),
 				zap.String("phase", errPhase),
@@ -364,7 +364,7 @@ func (r *runner) onIncrementalCheckpointEntries(items ...any) {
 			fields = append(fields, zap.String("entry", entry.String()))
 			fields = append(fields, zap.Duration("age", entry.Age()))
 			logutil.Info(
-				"Checkpoint-End",
+				"ICKP-Execute-End",
 				fields...,
 			)
 		}
@@ -618,13 +618,15 @@ func (r *runner) softScheduleCheckpoint(ts *types.TS) (ret *CheckpointEntry, err
 		if intent != nil {
 			intentInfo = intent.String()
 		}
-		logger(
-			"ScheduleCheckpoint",
-			zap.String("intent", intentInfo),
-			zap.Error(err),
-			zap.String("ts", ts.ToString()),
-			zap.Duration("cost", time.Since(now)),
-		)
+		if err != nil || intent.TooOld() {
+			logger(
+				"ICKP-Schedule-Soft",
+				zap.String("intent", intentInfo),
+				zap.String("ts", ts.ToString()),
+				zap.Duration("cost", time.Since(now)),
+				zap.Error(err),
+			)
+		}
 	}()
 
 	if intent == nil {
@@ -642,10 +644,9 @@ func (r *runner) softScheduleCheckpoint(ts *types.TS) (ret *CheckpointEntry, err
 		intent, updated = r.store.UpdateICKPIntent(ts, true, false)
 		if updated {
 			logutil.Info(
-				"Checkpoint-Incremental-Updated",
+				"ICKP-Schedule-Soft-Updated",
 				zap.String("intent", intent.String()),
 				zap.String("ts", ts.ToString()),
-				zap.Bool("updated", updated),
 			)
 		}
 	}
@@ -685,7 +686,7 @@ func (r *runner) softScheduleCheckpoint(ts *types.TS) (ret *CheckpointEntry, err
 
 		if updated {
 			logutil.Info(
-				"Checkpoint-Incremental-Updated",
+				"ICKP-Schedule-Soft-Updated",
 				zap.String("intent", intent.String()),
 				zap.String("endTS", ts.ToString()),
 			)
@@ -727,12 +728,22 @@ func (r *runner) TryScheduleCheckpoint(
 		return
 	}
 
-	logutil.Info(
-		"ForceScheduleCheckpoint",
-		zap.String("intent", intent.String()),
-		zap.String("ts", ts.ToString()),
-		zap.Bool("updated", updated),
-	)
+	now := time.Now()
+	defer func() {
+		logger := logutil.Info
+		if err != nil {
+			logger = logutil.Error
+		}
+
+		logger(
+			"ICKP-Schedule-Force",
+			zap.String("intent", intent.String()),
+			zap.String("ts", ts.ToString()),
+			zap.Bool("updated", updated),
+			zap.Error(err),
+			zap.Duration("cost", time.Since(err)),
+		)
+	}()
 
 	r.incrementalCheckpointQueue.Enqueue(struct{}{})
 

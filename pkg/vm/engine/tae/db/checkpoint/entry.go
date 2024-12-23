@@ -197,7 +197,7 @@ func (e *CheckpointEntry) ResetAge() {
 func (e *CheckpointEntry) TooOld() bool {
 	e.RLock()
 	defer e.RUnlock()
-	return time.Since(e.bornTime) > time.Minute*4*time.Duration(e.refreshCnt+1)
+	return time.Since(e.bornTime) > time.Minute*3*time.Duration(e.refreshCnt+1)
 }
 func (e *CheckpointEntry) LSNString() string {
 	e.RLock()

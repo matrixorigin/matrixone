@@ -160,7 +160,7 @@ func (r *runner) ForceIncrementalCheckpoint(ts types.TS) (err error) {
 			logger = logutil.Error
 		}
 		logger(
-			"ForceIncrementalCheckpoint-End",
+			"ICKP-Schedule-Force-Wait-End",
 			zap.String("entry", intent.String()),
 			zap.Duration("cost", time.Since(now)),
 			zap.Error(err),
