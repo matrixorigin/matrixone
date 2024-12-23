@@ -31,6 +31,7 @@ func initTraceMetrics() {
 	registry.MustRegister(traceCheckStorageUsageCounter)
 	registry.MustRegister(traceMOLoggerErrorCounter)
 	registry.MustRegister(traceMOLoggerBufferActionCounter)
+	registry.MustRegister(traceMOLoggerLogToLongCounter)
 }
 
 var (
@@ -173,6 +174,17 @@ var (
 	TraceMOLoggerBufferWriteFailed      = traceMOLoggerBufferActionCounter.WithLabelValues("write_failed")
 	TraceMOLoggerBufferReactWrite       = traceMOLoggerBufferActionCounter.WithLabelValues("react_write")
 	TraceMOLoggerBufferReactWriteFailed = traceMOLoggerBufferActionCounter.WithLabelValues("react_write_failed")
+
+	// need alert
+	traceMOLoggerLogToLongCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "trace",
+			Name:      "mologger_log_too_long_total",
+			Help:      "Count of mologger catch log too long",
+		}, []string{"type"})
+	TraceMOLoggerLogMessageTooLong = traceMOLoggerLogToLongCounter.WithLabelValues("message")
+	TraceMOLoggerLogExtraTooLong   = traceMOLoggerLogToLongCounter.WithLabelValues("extra")
 )
 
 func GetTraceNegativeCUCounter(typ string) prometheus.Counter {

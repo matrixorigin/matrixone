@@ -35,6 +35,7 @@ func (c *DashboardCreator) initTraceDashboard() error {
 			c.initTraceMoLoggerExportDataRow(),
 			c.initCronTaskRow(),
 			c.initCUStatusRow(),
+			c.initLogMessageRow(),
 		)...)
 	if err != nil {
 		return err
@@ -264,7 +265,7 @@ func (c *DashboardCreator) initTraceCollectorOverviewRow() dashboard.Option {
 			"Collector Buffer Action",
 			6,
 			[]string{
-				`sum(delta(` + c.getMetricWithFilter("mo_trace_mologger_buffer_action_total", ``) + `[$interval:1m])) by (type)`,
+				`sum(delta(` + c.getMetricWithFilter("mo_trace_mologger_buffer_action_total", ``) + `[$interval])) by (type)`,
 			},
 			[]string{
 				"{{ type }}",
@@ -301,13 +302,38 @@ func (c *DashboardCreator) initCronTaskRow() dashboard.Option {
 				"check_new",
 			}),
 		c.withMultiGraph(
-			"New Account",
+			"New Account Count",
 			3,
 			[]string{
 				`sum(delta(` + c.getMetricWithFilter("mo_trace_check_storage_usage_total", `type="inc"`) + `[$interval:1m])) by (type)`,
 			},
 			[]string{
 				"new_inc",
+			}),
+	)
+}
+
+func (c *DashboardCreator) initLogMessageRow() dashboard.Option {
+	return dashboard.Row(
+		"Log Status",
+		c.withMultiGraph(
+			"Row Count (rate)",
+			6,
+			[]string{
+				`sum(rate(` + c.getMetricWithFilter("mo_log_message_count", ``) + `[$interval])) by (pod, type)`,
+			},
+			[]string{
+				"{{ pod }} / {{type}}",
+				"check_new",
+			}),
+		c.withMultiGraph(
+			"Too Long (count)",
+			6,
+			[]string{
+				`sum(delta(` + c.getMetricWithFilter("mo_trace_mologger_log_too_long_total", ``) + `[$interval])) by (type)`,
+			},
+			[]string{
+				"{{ type }}",
 			}),
 	)
 }
