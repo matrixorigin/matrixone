@@ -240,12 +240,12 @@ func NewRunner(
 	return r
 }
 
-func (r *runner) StopExecutor() {
+func (r *runner) StopExecutor(err error) {
 	executor := r.executor.Load()
 	if executor == nil {
 		return
 	}
-	executor.Stop()
+	executor.StopWithCause(err)
 	r.executor.CompareAndSwap(executor, nil)
 }
 
@@ -253,7 +253,7 @@ func (r *runner) StartExecutor() {
 	for {
 		executor := r.executor.Load()
 		if executor != nil {
-			executor.Stop()
+			executor.StopWithCause(ErrExecutorRestarted)
 		}
 		newExecutor := newCheckpointExecutor(r)
 		if r.executor.CompareAndSwap(executor, newExecutor) {
@@ -350,7 +350,7 @@ func (r *runner) onIncrementalCheckpointEntries(items ...any) {
 		}
 	}()
 
-	err = executor.RunICKPJob()
+	err = executor.RunICKP()
 	return
 }
 

@@ -643,3 +643,32 @@ func Test_RunnerStore5(t *testing.T) {
 	assert.True(t, intent2.bornTime.After(intent.bornTime))
 	t.Log(intent2.String())
 }
+
+func Test_Executor1(t *testing.T) {
+	executor := newCheckpointExecutor(nil)
+	assert.True(t, executor.active.Load())
+
+	done := make(chan struct{})
+	running := make(chan struct{})
+	mockRunICKP := func(ctx context.Context, _ *runner) (err error) {
+		close(running)
+		<-ctx.Done()
+		close(done)
+		err = context.Cause(ctx)
+		return
+	}
+	executor.runICKPFunc = mockRunICKP
+	go func() {
+		err := executor.RunICKP()
+		assert.Equal(t, err, ErrPendingCheckpoint)
+	}()
+	// wait running
+	<-running
+	// stop executor
+	executor.StopWithCause(ErrPendingCheckpoint)
+	<-done
+
+	assert.False(t, executor.active.Load())
+	err := executor.RunICKP()
+	assert.Equal(t, err, ErrCheckpointDisabled)
+}

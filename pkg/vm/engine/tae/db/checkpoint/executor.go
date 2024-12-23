@@ -179,9 +179,12 @@ func newCheckpointExecutor(
 	return e
 }
 
-func (e *checkpointExecutor) Stop() {
+func (e *checkpointExecutor) StopWithCause(cause error) {
 	e.active.Store(false)
-	e.cancel(ErrCheckpointDisabled)
+	if cause == nil {
+		cause = ErrCheckpointDisabled
+	}
+	e.cancel(cause)
 	job := e.running.Load()
 	if job != nil {
 		<-job.WaitC()
@@ -190,7 +193,7 @@ func (e *checkpointExecutor) Stop() {
 	e.runner = nil
 }
 
-func (e *checkpointExecutor) RunICKPJob() (err error) {
+func (e *checkpointExecutor) RunICKP() (err error) {
 	if !e.active.Load() {
 		err = ErrCheckpointDisabled
 		return
