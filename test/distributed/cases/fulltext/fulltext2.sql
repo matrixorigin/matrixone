@@ -324,14 +324,14 @@ against ('Tutorial' in natural language mode) as score
 from articles;
 -- fulltext index query match multi and calculate score
 select id, body, match (title, body)
-against ('Security implications of running MO as root' in natural language mode) as score
+against ('MO tutorial DBMS stands for' in natural language mode) as score
 from articles;
 -- filter with where clause and select
 select id, body, match (title, body)
-against ('Security implications of running MO as root' in natural language mode) as score
+against ('MO tutorial DBMS stands for' in natural language mode) as score
 from articles
 where match (title, body)
-against ('Security implications of running MO as root' in natural language mode);
+against ('MO tutorial DBMS stands for' in natural language mode);
 drop table articles;
 
 
@@ -362,10 +362,10 @@ against ('DataBase' in natural language mode) as score
 from article;
 -- filter with where clause and select
 select id, body, match (body)
-against ('Security implications of running MO as root' in natural language mode) as score
+against ('DBMS stands for Database' in natural language mode) as score
 from article
 where match (body)
-against ('Security implications of running MO as root' in natural language mode);
+against ('DBMS stands for Database' in natural language mode);
 drop table article;
 
 
