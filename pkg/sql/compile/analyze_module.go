@@ -552,6 +552,15 @@ func explainResourceOverview(queryResult *util.RunResult, statsInfo *statistic.S
 				buffer.WriteString(fmt.Sprintf("\t\t- Logic2 In Phase3 Duration: %dns \n", statsInfo.PlanStage.Logic2InPhase3Duration))
 				buffer.WriteString(fmt.Sprintf("\t\t- Logic3 In Phase3 Duration: %dns \n", statsInfo.PlanStage.Logic3InPhase3Duration))
 
+				buffer.WriteString(fmt.Sprintf("\t\t- Call Stats S3List:%d, S3Head:%d, S3Put:%d, S3Get:%d, S3Delete:%d, S3DeleteMul:%d\n",
+					statsInfo.PlanStage.BuildPlanStatsS3.List,
+					statsInfo.PlanStage.BuildPlanStatsS3.Head,
+					statsInfo.PlanStage.BuildPlanStatsS3.Put,
+					statsInfo.PlanStage.BuildPlanStatsS3.Get,
+					statsInfo.PlanStage.BuildPlanStatsS3.Delete,
+					statsInfo.PlanStage.BuildPlanStatsS3.DeleteMul,
+				))
+
 				//-------------------------------------------------------------------------------------------------------
 				buffer.WriteString("\tQuery Compile Stage:\n")
 				buffer.WriteString(fmt.Sprintf("\t\t- CPU Time: %dns \n", statsInfo.CompileStage.CompileDuration))

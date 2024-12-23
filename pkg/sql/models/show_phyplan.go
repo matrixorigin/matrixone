@@ -125,6 +125,14 @@ func explainResourceOverview(phy *PhyPlan, statsInfo *statistic.StatsInfo, optio
 				buffer.WriteString(fmt.Sprintf("\t\t- Calc StatsPhase4 Duration: %dns \n", statsInfo.PlanStage.StatsCalcPhase4Duration))
 				buffer.WriteString(fmt.Sprintf("\t\t- Calc StatsPhase5 Duration: %dns \n", statsInfo.PlanStage.StatsCalcPhase5Duration))
 				buffer.WriteString(fmt.Sprintf("\t\t- Calc StatsPhase6 Duration: %dns \n", statsInfo.PlanStage.StatsCalcPhase6Duration))
+				buffer.WriteString(fmt.Sprintf("\t\t- Call Stats S3List:%d, S3Head:%d, S3Put:%d, S3Get:%d, S3Delete:%d, S3DeleteMul:%d\n",
+					statsInfo.PlanStage.BuildPlanStatsS3.List,
+					statsInfo.PlanStage.BuildPlanStatsS3.Head,
+					statsInfo.PlanStage.BuildPlanStatsS3.Put,
+					statsInfo.PlanStage.BuildPlanStatsS3.Get,
+					statsInfo.PlanStage.BuildPlanStatsS3.Delete,
+					statsInfo.PlanStage.BuildPlanStatsS3.DeleteMul,
+				))
 
 				//-------------------------------------------------------------------------------------------------------
 				buffer.WriteString("\tQuery Compile Stage:\n")

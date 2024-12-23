@@ -1989,10 +1989,12 @@ func buildPlan(reqCtx context.Context, ses FeSession, ctx plan2.CompilerContext,
 		v2.TxnStatementBuildPlanDurationHistogram.Observe(cost.Seconds())
 	}()
 
-	stats := statistic.StatsInfoFromContext(reqCtx)
+	planContext := ctx.GetContext()
+	stats := statistic.StatsInfoFromContext(planContext)
 	stats.PlanStart()
 	crs := new(perfcounter.CounterSet)
-	reqCtx = perfcounter.AttachBuildPlanMarkKey(reqCtx, crs)
+	planContext = perfcounter.AttachBuildPlanMarkKey(planContext, crs)
+	ctx.SetContext(planContext)
 	defer func() {
 		stats.AddBuildPlanS3Request(statistic.S3Request{
 			List:      crs.FileService.S3.List.Load(),
