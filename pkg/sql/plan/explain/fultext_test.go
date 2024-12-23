@@ -1,4 +1,4 @@
-// Copyright 2024 Matrix Origin
+// Copyright 2021 - 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,22 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package merge
+package explain
 
 import (
-	"syscall"
-	"unsafe"
+	"context"
+	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/stretchr/testify/require"
 )
 
-func totalMem() uint64 {
-	s, err := syscall.Sysctl("hw.memsize")
-	if err != nil {
-		return 0
+func TestFullTextSql(t *testing.T) {
+	node := &plan.Node{
+		NodeType: plan.Node_FUNCTION_SCAN,
+		Stats:    &plan.Stats{Sql: "SELECT * FROM TABLE"},
 	}
-	// hack because the string conversion above drops a \0
-	b := []byte(s)
-	if len(b) < 8 {
-		b = append(b, 0)
-	}
-	return *(*uint64)(unsafe.Pointer(&b[0]))
+	nodedesc := &NodeDescribeImpl{Node: node}
+	lines, err := nodedesc.GetExtraInfo(context.TODO(), &ExplainOptions{Verbose: true})
+	require.Nil(t, err)
+	require.Equal(t, 1, len(lines))
+	require.Equal(t, "Sql: SELECT * FROM TABLE", lines[0])
 }
