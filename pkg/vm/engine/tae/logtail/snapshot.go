@@ -384,8 +384,9 @@ func (sm *SnapshotMeta) updateTableInfo(
 
 	for _, info := range orderedInfos {
 		if info.stats.BlkCnt() != 1 {
-			panic(fmt.Sprintf("mo_table object %v blk cnt %v",
-				info.stats.ObjectName(), info.stats.BlkCnt()))
+			logutil.Warn("[GC-WARNING-PANIC] mo_table aObject blk cnt not 1",
+				zap.String("object", info.stats.ObjectName().String()),
+				zap.Uint32("blkCnt", info.stats.BlkCnt()))
 		}
 		if !info.deleteAt.IsEmpty() {
 			sm.aobjDelTsMap[info.deleteAt] = struct{}{}
@@ -435,7 +436,7 @@ func (sm *SnapshotMeta) updateTableInfo(
 			}
 			if name == catalog2.MO_PITR {
 				if sm.pitr.tid > 0 && sm.pitr.tid != tid {
-					panic(fmt.Sprintf("pitr table %v is not unique", tid))
+					logutil.Warn("[GC-WARNING-PANIC]pitr table is not unique", zap.Uint64("tid", tid))
 				}
 				sm.pitr.tid = tid
 			}
@@ -445,8 +446,12 @@ func (sm *SnapshotMeta) updateTableInfo(
 			table := sm.tables[account][tid]
 			if table != nil {
 				if table.createAt.GT(&createAt) {
-					panic(fmt.Sprintf("table %v %v create at %v is greater than %v",
-						tid, tuple.ErrString(nil), table.createAt.ToString(), createAt.ToString()))
+					logutil.Warn("[GC-WARNING-PANIC]table create at is greater than",
+						zap.Uint64("tid", tid),
+						zap.String("name", tuple.ErrString(nil)),
+						zap.String("old-create-at", table.createAt.ToString()),
+						zap.String("new-create-at", createAt.ToString()))
+					table.createAt = createAt
 				}
 				if table.pk == pk {
 					sm.tablePKIndex[pk] = append(sm.tablePKIndex[pk], table)
@@ -473,8 +478,9 @@ func (sm *SnapshotMeta) updateTableInfo(
 	deleteRows := make([]tombstone, 0)
 	for _, info := range tTombstones {
 		if info.stats.BlkCnt() != 1 {
-			panic(fmt.Sprintf("mo_table tombstone %v blk cnt %v",
-				info.stats.ObjectName(), info.stats.BlkCnt()))
+			logutil.Warn("[GC-WARNING-PANIC] tombstone blk cnt is not 1",
+				zap.String("object", info.stats.ObjectName().String()),
+				zap.Uint32("blk-cnt", info.stats.BlkCnt()))
 		}
 		objectBat, _, err := blockio.LoadOneBlock(
 			ctx,
@@ -516,13 +522,16 @@ func (sm *SnapshotMeta) updateTableInfo(
 			continue
 		}
 		if len(sm.tablePKIndex[pk]) == 0 {
-			logutil.Warnf("[UpdateTableInfoWarn] delete table %v not found @ rowid %v, commit %v, start is %v, end is %v",
+			logutil.Warnf("[GC-WARNING-PANIC] delete table %v not found @ rowid %v, commit %v, start is %v, end is %v",
 				del.pk.ErrString(nil), del.rowid.String(), del.ts.ToString(), startts.ToString(), endts.ToString())
 			continue
 		}
 		table := sm.tablePKIndex[pk][0]
 		if !table.deleteAt.IsEmpty() && table.deleteAt.GT(&del.ts) {
-			panic(fmt.Sprintf("table %v delete at %v is greater than %v", table.tid, table.deleteAt, del.ts))
+			logutil.Warn("[GC-WARNING-PANIC] table delete at is greater than",
+				zap.Uint64("tid", table.tid),
+				zap.String("old-delete-at", table.deleteAt.ToString()),
+				zap.String("new-delete-at", del.ts.ToString()))
 		}
 		table.deleteAt = del.ts
 		sm.tablePKIndex[pk] = sm.tablePKIndex[pk][1:]
@@ -546,7 +555,7 @@ func (sm *SnapshotMeta) updateTableInfo(
 
 	for pk, tables := range sm.tablePKIndex {
 		if len(tables) > 1 {
-			logutil.Warn("UpdateSnapTable-Error",
+			logutil.Warn("[GC-WARNING-PANIC]",
 				zap.String("table", pk),
 				zap.Int("len", len(tables)),
 			)
@@ -663,7 +672,7 @@ func (sm *SnapshotMeta) Update(
 			if deleteTS.IsEmpty() {
 				// Compatible with the cluster restored by backup
 				logutil.Warn(
-					"GC-SnapshotMeta-Update-Collector-Skip",
+					"[GC-WARNING-PANIC]GC-SnapshotMeta-Update-Collector-Skip",
 					zap.Uint64("table-id", tid),
 					zap.String("object-name", stats.ObjectName().String()),
 					zap.String("create-at", createTS.ToString()),
@@ -919,7 +928,14 @@ func (sm *SnapshotMeta) GetPITR(
 				level := bat.Vecs[0].GetStringAt(r)
 				if level == PitrLevelCluster {
 					if !pitr.cluster.IsEmpty() {
-						panic("cluster duplicate pitr ")
+						logutil.Warn("[GC-WARNING-PANIC]Dup PITR",
+							zap.String("level", "cluster"),
+							zap.String("old", pitr.cluster.ToString()),
+							zap.String("new", pitrTs.ToString()),
+						)
+						if pitr.cluster.LT(&pitrTs) {
+							continue
+						}
 					}
 					pitr.cluster = pitrTs
 
@@ -934,14 +950,30 @@ func (sm *SnapshotMeta) GetPITR(
 					id := uint64(account)
 					p := pitr.database[id]
 					if !p.IsEmpty() {
-						panic("db duplicate pitr ")
+						logutil.Warn("[GC-WARNING-PANIC]Dup PITR",
+							zap.String("level", "database"),
+							zap.Uint64("id", id),
+							zap.String("old", p.ToString()),
+							zap.String("new", pitrTs.ToString()),
+						)
+						if p.LT(&pitrTs) {
+							continue
+						}
 					}
 					pitr.database[id] = pitrTs
 				} else if level == PitrLevelTable {
 					id := uint64(account)
 					p := pitr.tables[id]
 					if !p.IsEmpty() {
-						panic("table duplicate pitr ")
+						logutil.Warn("[GC-WARNING-PANIC]Dup PITR",
+							zap.String("level", "table"),
+							zap.Uint64("id", id),
+							zap.String("old", p.ToString()),
+							zap.String("new", pitrTs.ToString()),
+						)
+						if p.LT(&pitrTs) {
+							continue
+						}
 					}
 					pitr.tables[id] = pitrTs
 				}
@@ -1152,7 +1184,7 @@ func (sm *SnapshotMeta) RebuildTableInfo(ins *containers.Batch) {
 			continue
 		}
 		if len(sm.tablePKIndex[pk]) > 0 {
-			logutil.Warn("RebuildTableInfo-PK-Exists",
+			logutil.Warn("[GC-WARNING-PANIC]RebuildTableInfo-PK-Exists",
 				zap.String("pk", pk),
 				zap.Uint64("table", tid))
 		}
