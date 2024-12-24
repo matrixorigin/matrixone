@@ -18,9 +18,12 @@ import (
 	"context"
 	"testing"
 
+	"github.com/smartystreets/goconvey/convey"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 )
@@ -38,4 +41,88 @@ func TestExtractRowFromVector(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, row[columnIdx].(uint64), values[rowIdx])
 	}
+}
+
+func BenchmarkName(b *testing.B) {
+
+	mp := mpool.MustNewZero()
+	values := []int32{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
+	rowCount := len(values)
+	vec := testutil.NewVector(rowCount, types.New(types.T_int32, 10, 0), mp, false, values)
+
+	colSlices := &ColumnSlices{
+		colIdx2SliceIdx: make([]int, 1),
+	}
+	err := convertVectorToSlice(context.TODO(), nil, vec, 0, colSlices)
+	assert.NoError(b, err)
+	row := make([]any, 1)
+
+	for i := 0; i < b.N; i++ {
+		for j := 0; j < rowCount; j++ {
+			_ = extractRowFromVector2(context.TODO(), nil, vec, 0, row, j, false, colSlices)
+		}
+	}
+}
+
+func BenchmarkName2(b *testing.B) {
+
+	mp := mpool.MustNewZero()
+	values := []string{"1", "2", "3", "4", "5", "6", "7", "8", "9", "10"}
+	rowCount := len(values)
+	vec := testutil.NewVector(rowCount, types.New(types.T_varchar, 10, 0), mp, false, values)
+
+	colSlices := &ColumnSlices{
+		colIdx2SliceIdx: make([]int, 1),
+	}
+	err := convertVectorToSlice(context.TODO(), nil, vec, 0, colSlices)
+	assert.NoError(b, err)
+	row := make([]any, 1)
+
+	for i := 0; i < b.N; i++ {
+		for j := 0; j < rowCount; j++ {
+			_ = extractRowFromVector2(context.TODO(), nil, vec, 0, row, j, false, colSlices)
+		}
+	}
+}
+
+func Test_extractRowFromVector2(t *testing.T) {
+	ctx := context.TODO()
+	convey.Convey("append result set", t, func() {
+		sv, err := getSystemVariables("test/system_vars_config.toml")
+		if err != nil {
+			t.Error(err)
+		}
+		pu := config.NewParameterUnit(sv, nil, nil, nil)
+		pu.SV.SkipCheckUser = true
+		pu.SV.KillRountinesInterval = 0
+		setSessionAlloc("", NewLeakCheckAllocator())
+		setPu("", pu)
+		ioses, err := NewIOSession(&testConn{}, pu, "")
+		convey.ShouldBeNil(err)
+		proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
+
+		ses := NewSession(ctx, "", proto, nil)
+		proto.ses = ses
+
+		kases := makeKases()
+		for _, kse := range kases {
+			bat := kse.bat
+			row := make([]any, len(bat.Vecs))
+
+			fun := func() {
+				colSlices := &ColumnSlices{
+					ctx:             context.TODO(),
+					colIdx2SliceIdx: make([]int, len(bat.Vecs)),
+					dataSet:         bat,
+				}
+				defer colSlices.Close()
+				err = convertBatchToSlices(context.TODO(), ses, bat, colSlices)
+				convey.So(err, convey.ShouldBeNil)
+
+				err = extractRowFromEveryVector2(context.TODO(), ses, bat, 0, row, false, colSlices)
+				convey.So(err, convey.ShouldBeNil)
+			}
+			fun()
+		}
+	})
 }
