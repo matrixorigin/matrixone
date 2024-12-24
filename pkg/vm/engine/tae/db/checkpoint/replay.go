@@ -170,7 +170,7 @@ func (c *CkpReplayer) ReadCkpFiles() (err error) {
 			entry, _, closeCB, err := replayEntries(file.name, compacted)
 			if err != nil {
 				logutil.Errorf("replay compacted checkpoint file %s failed: %v", file.name, err.Error())
-				return
+				return err
 			}
 			if len(entry) != 1 {
 				for _, e := range entry {
