@@ -921,7 +921,7 @@ Scope 1 (Magic: Merge, mcpu: 1, Receiver: [0])
 	S3List:0, S3Head:0, S3Put:0, S3Get:0, S3Delete:0, S3DeleteMul:0, S3InputEstByRows((0+0)/8192):0.0000 
 	CPU Usage: 
 		- Total CPU Time: 91033157ns 
-		- CPU Time Detail: Parse(162026)+BuildPlan(649910)+Compile(299370)+PhyExec(304651393)+PrepareRun(178265)-PreRunWaitLock(0)-IOAccess(214917833)-IOMerge(0)
+		- CPU Time Detail: Parse(162026)+BuildPlan(649910)+Compile(299370)+PhyExec(304651393)+PrepareRun(178265)-PreRunWaitLock(0)-PlanStatsIO(0)-IOAccess(214917833)-IOMerge(0)
 Physical Plan Deployment:
 LOCAL SCOPES:
 Scope 1 (Magic: Merge, mcpu: 1, Receiver: [0])
@@ -978,11 +978,14 @@ Scope 1 (Magic: Merge, mcpu: 1, Receiver: [0])
 	S3List:0, S3Head:0, S3Put:0, S3Get:0, S3Delete:0, S3DeleteMul:0, S3InputEstByRows((0+0)/8192):0.0000 
 	CPU Usage: 
 		- Total CPU Time: 91033157ns 
-		- CPU Time Detail: Parse(162026)+BuildPlan(649910)+Compile(299370)+PhyExec(304651393)+PrepareRun(178265)-PreRunWaitLock(0)-IOAccess(214917833)-IOMerge(0)
+		- CPU Time Detail: Parse(162026)+BuildPlan(649910)+Compile(299370)+PhyExec(304651393)+PrepareRun(178265)-PreRunWaitLock(0)-PlanStatsIO(0)-IOAccess(214917833)-IOMerge(0)
 	Query Build Plan Stage:
 		- CPU Time: 649910ns 
 		- S3List:0, S3Head:0, S3Put:0, S3Get:0, S3Delete:0, S3DeleteMul:0
+		- Build Plan Duration: 649910ns 
 		- Call Stats Duration: 3457758ns 
+		- Call Stats IO Consumption: 0ns 
+		- Call Stats S3List:0, S3Head:0, S3Put:0, S3Get:0, S3Delete:0, S3DeleteMul:0
 	Query Compile Stage:
 		- CPU Time: 299370ns 
 		- S3List:0, S3Head:0, S3Put:0, S3Get:0, S3Delete:0, S3DeleteMul:0
