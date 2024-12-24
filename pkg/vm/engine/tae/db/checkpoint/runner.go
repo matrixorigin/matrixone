@@ -550,8 +550,10 @@ func (r *runner) softScheduleCheckpoint(ts *types.TS) (ret *CheckpointEntry, err
 			ret = intent
 		}
 		intentInfo := "nil"
+		ageStr := ""
 		if intent != nil {
 			intentInfo = intent.String()
+			ageStr = intent.Age().String()
 		}
 		if (err != nil && err != ErrPendingCheckpoint) || (intent != nil && intent.TooOld()) {
 			logger(
@@ -559,6 +561,7 @@ func (r *runner) softScheduleCheckpoint(ts *types.TS) (ret *CheckpointEntry, err
 				zap.String("intent", intentInfo),
 				zap.String("ts", ts.ToString()),
 				zap.Duration("cost", time.Since(now)),
+				zap.String("age", ageStr),
 				zap.Error(err),
 			)
 		}
