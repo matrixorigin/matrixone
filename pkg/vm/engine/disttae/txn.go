@@ -723,12 +723,12 @@ func (txn *Transaction) dumpDeleteBatchLocked(ctx context.Context, offset int, s
 			deleteCnt += bat.RowCount()
 			*size += uint64(bat.Size())
 
-			newBat := batch.NewWithSize(len(bat.Vecs))
-			newBat.SetAttributes(bat.Attrs)
-			newBat.Vecs = bat.Vecs
-			newBat.SetRowCount(bat.Vecs[0].Length())
+			newBatch := batch.NewWithSize(len(bat.Vecs))
+			newBatch.SetAttributes(bat.Attrs)
+			newBatch.Vecs = bat.Vecs
+			newBatch.SetRowCount(bat.Vecs[0].Length())
 
-			mp[tbKey] = append(mp[tbKey], newBat)
+			mp[tbKey] = append(mp[tbKey], newBatch)
 			defer bat.Clean(txn.proc.GetMPool())
 
 			keepElement = false
