@@ -182,15 +182,15 @@ const (
 
 	getNextCheckBatchSQL = `
 				select 
-					account_id, database_id, table_id
+					account_id, database_id, table_id 
 				from 
-				    %s.%s
+				    %s.%s 
 				where
-				    table_id > %d and database_id != %d
+				    table_id > %d and database_id != %d 
+				group by
+				    account_id, database_id, table_id 
 				order by 
 				    table_id asc
-				group by
-				    account_id, database_id, table_id
 				limit
 					%d;`
 
@@ -878,9 +878,7 @@ func (d *dynamicCtx) forceUpdateQuery(
 	}
 
 	if err = d.callAlphaWithRetry(
-		ctx, d.de.service, pairs,
-		fmt.Sprintf("force update query(%s, reset update: %v)", caller, resetUpdateTime),
-		2); err != nil {
+		ctx, d.de.service, pairs, caller, 2); err != nil {
 		return nil, err
 	}
 
@@ -1409,6 +1407,16 @@ func (d *dynamicCtx) callAlphaWithRetry(
 		timeout bool
 	)
 
+	defer func() {
+		if round > 1 || round >= retryTimes || timeout {
+			logutil.Warn(logHeader,
+				zap.String("source", caller),
+				zap.Int("alpha tried", round),
+				zap.Int("specified retry times", retryTimes),
+				zap.Bool("final round timeout", timeout))
+		}
+	}()
+
 	for {
 		if timeout, err = d.alphaTask(
 			ctx, d.de.service, tbls,
@@ -1420,10 +1428,6 @@ func (d *dynamicCtx) callAlphaWithRetry(
 		if !timeout || round >= retryTimes {
 			break
 		}
-
-		logutil.Warn(logHeader,
-			zap.String("source", caller),
-			zap.String("event", fmt.Sprintf("alpha timeout, tried: %d", round)))
 
 		time.Sleep(time.Second)
 	}
@@ -1631,9 +1635,6 @@ func (d *dynamicCtx) betaTask(
 			return
 
 		case tbl := <-d.tblQueue:
-			if rand.Intn(10)%3 == 0 {
-				continue
-			}
 
 			if !tbl.valid {
 				// an alpha batch transmit done
