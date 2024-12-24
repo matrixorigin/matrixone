@@ -33,6 +33,7 @@ func initTraceMetrics() {
 	registry.MustRegister(traceMOLoggerBufferActionCounter)
 	registry.MustRegister(traceMOLoggerAggrCounter)
 	registry.MustRegister(traceMOLoggerLogToLongCounter)
+	registry.MustRegister(traceCollectorContentQueueLength)
 }
 
 var (
@@ -99,6 +100,17 @@ var (
 	TraceCollectorMoLoggerQueueLength = traceCollectorQueueLength.WithLabelValues("mologger")
 	TraceCollectorMetricQueueLength   = traceCollectorQueueLength.WithLabelValues("metric")
 	TraceCollectorContentQueueLength  = traceCollectorQueueLength.WithLabelValues("content")
+	TraceCollectorExportQueueLength   = traceCollectorQueueLength.WithLabelValues("export")
+	TraceCollectorWritingQueueLength  = traceCollectorQueueLength.WithLabelValues("writing")
+
+	traceCollectorContentQueueLength = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "trace",
+			Name:      "collector_content_queue_length",
+			Help:      "Count of mologger collector consume 'content' instance",
+		}, []string{"type"})
+	TraceCollectorContentQueueLengthMetric = traceCollectorContentQueueLength.WithLabelValues("metric")
 
 	traceNegativeCUCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -131,7 +143,7 @@ var (
 			Subsystem: "trace",
 			Name:      "mologger_export_data_bytes",
 			Help:      "Bucketed histogram of mo_logger exec sql bytes, or write bytes.",
-			Buckets:   prometheus.ExponentialBuckets(128, 2.0, 20),
+			Buckets:   prometheus.ExponentialBuckets(1<<20, 1.35, 20),
 		}, []string{"type"})
 	TraceMOLoggerExportSqlHistogram = traceMOLoggerExportDataHistogram.WithLabelValues("sql")
 	TraceMOLoggerExportCsvHistogram = traceMOLoggerExportDataHistogram.WithLabelValues("csv")
@@ -169,6 +181,8 @@ var (
 	TraceMOLoggerBufferCallback         = traceMOLoggerBufferActionCounter.WithLabelValues("callback")
 	TraceMOLoggerBufferSetCallBack      = traceMOLoggerBufferActionCounter.WithLabelValues("set_callback")
 	TraceMOLoggerBufferSetCallBackNil   = traceMOLoggerBufferActionCounter.WithLabelValues("set_callback_nil")
+	TraceMOLoggerBufferCallbackSet      = traceMOLoggerBufferActionCounter.WithLabelValues("callback_set")
+	TraceMOLoggerBufferCallbackSetNil   = traceMOLoggerBufferActionCounter.WithLabelValues("callback_set_nil")
 	TraceMOLoggerBufferLoopWriteSQL     = traceMOLoggerBufferActionCounter.WithLabelValues("loop_write_sql")
 	TraceMOLoggerBufferLoopBackOff      = traceMOLoggerBufferActionCounter.WithLabelValues("loop_backoff")
 	TraceMOLoggerBufferWriteSQL         = traceMOLoggerBufferActionCounter.WithLabelValues("write_sql")
@@ -230,4 +244,8 @@ func GetTraceCollectorMOLoggerQueueLength() prometheus.Gauge {
 
 func GetTraceMOLoggerAggrCounter(typ string) prometheus.Counter {
 	return traceMOLoggerAggrCounter.WithLabelValues(typ)
+}
+
+func GetTraceCollectorContentQueueLength(typ string) prometheus.Counter {
+	return traceCollectorContentQueueLength.WithLabelValues(typ)
 }
