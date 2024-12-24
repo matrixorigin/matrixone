@@ -21,7 +21,10 @@ import (
 	"golang.org/x/exp/constraints"
 )
 
-type StatsInfoKeyV2 struct {
+// StatsInfoKeyWithContext associates a statistics key with a context.
+// This struct is used to tie a statistics key (Key) with the context (Ctx) during an operation,
+// allowing context-related actions and management while handling statistics information.
+type StatsInfoKeyWithContext struct {
 	Ctx context.Context
 	Key StatsInfoKey
 }

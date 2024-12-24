@@ -176,7 +176,7 @@ type GlobalStats struct {
 	// TODO(volgariver6): add metrics of the chan length.
 	tailC chan *logtail.TableLogtail
 
-	updateC chan pb.StatsInfoKeyV2
+	updateC chan pb.StatsInfoKeyWithContext
 
 	updatingMu struct {
 		sync.Mutex
@@ -228,7 +228,7 @@ func NewGlobalStats(
 		ctx:                 ctx,
 		engine:              e,
 		tailC:               make(chan *logtail.TableLogtail, 10000),
-		updateC:             make(chan pb.StatsInfoKeyV2, 3000),
+		updateC:             make(chan pb.StatsInfoKeyWithContext, 3000),
 		logtailUpdate:       newLogtailUpdate(),
 		tableLogtailCounter: make(map[pb.StatsInfoKey]int64),
 		KeyRouter:           keyRouter,
@@ -270,7 +270,7 @@ func (gs *GlobalStats) checkTriggerCond(key pb.StatsInfoKey, entryNum int64) boo
 }
 
 func (gs *GlobalStats) PrefetchTableMeta(ctx context.Context, key pb.StatsInfoKey) bool {
-	wrapkey := pb.StatsInfoKeyV2{
+	wrapkey := pb.StatsInfoKeyWithContext{
 		Ctx: ctx,
 		Key: key,
 	}
@@ -281,7 +281,7 @@ func (gs *GlobalStats) Get(ctx context.Context, key pb.StatsInfoKey, sync bool) 
 	gs.mu.Lock()
 	defer gs.mu.Unlock()
 
-	wrapkey := pb.StatsInfoKeyV2{
+	wrapkey := pb.StatsInfoKeyWithContext{
 		Ctx: ctx,
 		Key: key,
 	}
@@ -416,7 +416,7 @@ func (gs *GlobalStats) updateWorker(ctx context.Context) {
 	}
 }
 
-func (gs *GlobalStats) triggerUpdate(key pb.StatsInfoKeyV2, force bool) bool {
+func (gs *GlobalStats) triggerUpdate(key pb.StatsInfoKeyWithContext, force bool) bool {
 	if force {
 		gs.updateC <- key
 		v2.StatsTriggerForcedCounter.Add(1)
@@ -439,7 +439,7 @@ func (gs *GlobalStats) consumeLogtail(ctx context.Context, tail *logtail.TableLo
 		TableID:    tail.Table.TbId,
 	}
 
-	wrapkey := pb.StatsInfoKeyV2{
+	wrapkey := pb.StatsInfoKeyWithContext{
 		Ctx: ctx,
 		Key: key,
 	}
@@ -626,25 +626,25 @@ func (gs *GlobalStats) broadcastStats(key pb.StatsInfoKey) {
 	})
 }
 
-func (gs *GlobalStats) updateTableStats(key pb.StatsInfoKeyV2) {
-	statser := statistic.StatsInfoFromContext(key.Ctx)
+func (gs *GlobalStats) updateTableStats(warpKey pb.StatsInfoKeyWithContext) {
+	statser := statistic.StatsInfoFromContext(warpKey.Ctx)
 	crs := new(perfcounter.CounterSet)
 
-	if !gs.shouldUpdate(key.Key) {
+	if !gs.shouldUpdate(warpKey.Key) {
 		return
 	}
 
 	// wait until the table's logtail has been updated.
-	gs.waitLogtailUpdated(key.Key.TableID)
+	gs.waitLogtailUpdated(warpKey.Key.TableID)
 
 	// updated is used to mark that the stats info is updated.
 	var updated bool
 
 	stats := plan2.NewStatsInfo()
 
-	newCtx := perfcounter.AttachS3RequestKey(key.Ctx, crs)
+	newCtx := perfcounter.AttachS3RequestKey(warpKey.Ctx, crs)
 	if gs.statsUpdater != nil {
-		updated = gs.statsUpdater(newCtx, key.Key, stats)
+		updated = gs.statsUpdater(newCtx, warpKey.Key, stats)
 	}
 	statser.AddBuildPlanStatsS3Request(statistic.S3Request{
 		List:      crs.FileService.S3.List.Load(),
@@ -658,16 +658,16 @@ func (gs *GlobalStats) updateTableStats(key pb.StatsInfoKeyV2) {
 	gs.mu.Lock()
 	defer gs.mu.Unlock()
 	if updated {
-		gs.mu.statsInfoMap[key.Key] = stats
-		gs.broadcastStats(key.Key)
-	} else if _, ok := gs.mu.statsInfoMap[key.Key]; !ok {
-		gs.mu.statsInfoMap[key.Key] = nil
+		gs.mu.statsInfoMap[warpKey.Key] = stats
+		gs.broadcastStats(warpKey.Key)
+	} else if _, ok := gs.mu.statsInfoMap[warpKey.Key]; !ok {
+		gs.mu.statsInfoMap[warpKey.Key] = nil
 	}
 
 	// Notify all the waiters to read the new stats info.
 	gs.mu.cond.Broadcast()
 
-	gs.doneUpdate(key.Key, updated)
+	gs.doneUpdate(warpKey.Key, updated)
 }
 
 func (gs *GlobalStats) doUpdate(ctx context.Context, key pb.StatsInfoKey, stats *pb.StatsInfo) bool {

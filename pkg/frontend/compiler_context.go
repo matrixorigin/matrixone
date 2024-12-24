@@ -901,15 +901,12 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, snapshot *plan2.Snaps
 	var statsInfo *pb.StatsInfo
 	// This is a partition table.
 	if partitionInfo != nil {
-		//crs := new(perfcounter.CounterSet)
 		statsInfo = plan2.NewStatsInfo()
 		for _, partitionTable := range partitionInfo.PartitionTableNames {
 			parCtx, parTable, err := tcc.getRelation(dbName, partitionTable, sub, snapshot)
 			if err != nil {
 				return cached, err
 			}
-			//newParCtx := perfcounter.AttachS3RequestKey(parCtx, crs)
-			//newParCtx = perfcounter.AttachCalcTableStatsKey(newParCtx)
 
 			newParCtx := perfcounter.AttachCalcTableStatsKey(parCtx)
 			parStats, err := parTable.Stats(newParCtx, true)
@@ -918,35 +915,12 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, snapshot *plan2.Snaps
 			}
 			statsInfo.Merge(parStats)
 		}
-
-		//stats.AddBuildPlanStatsS3Request(statistic.S3Request{
-		//	List:      crs.FileService.S3.List.Load(),
-		//	Head:      crs.FileService.S3.Head.Load(),
-		//	Put:       crs.FileService.S3.Put.Load(),
-		//	Get:       crs.FileService.S3.Get.Load(),
-		//	Delete:    crs.FileService.S3.Delete.Load(),
-		//	DeleteMul: crs.FileService.S3.DeleteMulti.Load(),
-		//})
-
 	} else {
-		//crs := new(perfcounter.CounterSet)
-		//newCtx := perfcounter.AttachS3RequestKey(ctx, crs)
-		//newCtx = perfcounter.AttachCalcTableStatsKey(newCtx)
-
 		newCtx := perfcounter.AttachCalcTableStatsKey(ctx)
 		statsInfo, err = table.Stats(newCtx, true)
 		if err != nil {
 			return cached, err
 		}
-
-		//stats.AddBuildPlanStatsS3Request(statistic.S3Request{
-		//	List:      crs.FileService.S3.List.Load(),
-		//	Head:      crs.FileService.S3.Head.Load(),
-		//	Put:       crs.FileService.S3.Put.Load(),
-		//	Get:       crs.FileService.S3.Get.Load(),
-		//	Delete:    crs.FileService.S3.Delete.Load(),
-		//	DeleteMul: crs.FileService.S3.DeleteMulti.Load(),
-		//})
 	}
 
 	if statsInfo != nil {
