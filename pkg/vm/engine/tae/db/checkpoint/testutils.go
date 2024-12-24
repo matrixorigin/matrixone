@@ -37,7 +37,13 @@ type TestRunner interface {
 	ForceIncrementalCheckpoint(end types.TS) error
 	MaxLSNInRange(end types.TS) uint64
 
+	GetICKPIntentOnlyForTest() *CheckpointEntry
+
 	GCNeeded() bool
+}
+
+func (r *runner) GetICKPIntentOnlyForTest() *CheckpointEntry {
+	return r.store.GetICKPIntent()
 }
 
 // DisableCheckpoint stops generating checkpoint
@@ -167,7 +173,7 @@ func (r *runner) ForceIncrementalCheckpoint(ts types.TS) (err error) {
 		)
 	}()
 
-	r.incrementalCheckpointQueue.Enqueue(struct{}{})
+	r.TryTriggerExecuteICKP()
 
 	select {
 	case <-r.ctx.Done():
@@ -177,6 +183,11 @@ func (r *runner) ForceIncrementalCheckpoint(ts types.TS) (err error) {
 		err = moerr.NewInternalErrorNoCtx("timeout")
 		return
 	case <-intent.Wait():
+		checkpointed := r.store.GetCheckpointed()
+		// if checkpointed < ts, something wrong may be happend and the previous intent was rollbacked
+		if checkpointed.LT(&ts) {
+			err = ErrPendingCheckpoint
+		}
 	}
 	return
 }
@@ -210,7 +221,7 @@ func (r *runner) ForceCheckpointForBackup(end types.TS) (location string, err er
 	entry.ckpLSN = lsn
 	entry.truncateLSN = lsnToTruncate
 	var file string
-	if file, err = r.saveCheckpoint(entry.start, entry.end, lsn, lsnToTruncate); err != nil {
+	if file, err = r.saveCheckpoint(entry.start, entry.end); err != nil {
 		return
 	}
 	files = append(files, file)

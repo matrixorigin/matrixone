@@ -17,6 +17,7 @@ insert into t01 values (1);
 -- @session
 
 -- @session:id=2&user=acc02:test_account&password=1111
+DROP DATABASE IF EXISTS Company;
 CREATE DATABASE Company;
 USE Company;
 
@@ -159,6 +160,7 @@ select * from PerformanceReviews;
 -- @session
 
 -- @session:id=3&user=acc03:test_account&password=11111
+DROP DATABASE IF EXISTS Company;
 CREATE DATABASE Company;
 USE Company;
 
