@@ -223,39 +223,44 @@ func (d *BackupDeltaLocDataSource) GetTombstones(
 				}
 				name := tombstone.ObjectName()
 				logutil.Infof("[GetSnapshot] tombstone object %v", name.String())
-				bat, _, err := blockio.LoadOneBlock(ctx, d.fs, tombstone.ObjectLocation(), objectio.SchemaData)
-				if err != nil {
-					logutil.Error("load tombstone failed, tombstone is %v", zap.Error(err), zap.String("name", name.String()))
-					return false, err
-				}
-				if !tombstone.GetCNCreated() {
-					deleteRow := make([]int64, 0)
-					for v := 0; v < bat.Vecs[0].Length(); v++ {
-						var commitTs types.TS
-						err = commitTs.Unmarshal(bat.Vecs[len(bat.Vecs)-1].GetRawBytesAt(v))
-						if err != nil {
-							logutil.Error("unmarshal commitTs failed", zap.Error(err))
-							return false, err
+				for id := uint32(0); id < tombstone.BlkCnt(); id++ {
+					tombstone.ObjectLocation().SetID(uint16(id))
+					bat, _, err := blockio.LoadOneBlock(ctx, d.fs, tombstone.ObjectLocation(), objectio.SchemaData)
+					if err != nil {
+						logutil.Error("load tombstone failed, tombstone is %v", zap.Error(err), zap.String("name", name.String()))
+						return false, err
+					}
+					if !tombstone.GetCNCreated() {
+						deleteRow := make([]int64, 0)
+						for v := 0; v < bat.Vecs[0].Length(); v++ {
+							var commitTs types.TS
+							err = commitTs.Unmarshal(bat.Vecs[len(bat.Vecs)-1].GetRawBytesAt(v))
+							if err != nil {
+								logutil.Error("unmarshal commitTs failed", zap.Error(err))
+								return false, err
+							}
+							if commitTs.GT(&d.ts) {
+								logutil.Infof("delete row %v, commitTs %v, location %v",
+									v, commitTs.ToString(), name.String())
+							} else {
+								deleteRow = append(deleteRow, int64(v))
+							}
 						}
-						if commitTs.GT(&d.ts) {
-							logutil.Infof("delete row %v, commitTs %v, location %v",
-								v, commitTs.ToString(), name.String())
-						} else {
-							deleteRow = append(deleteRow, int64(v))
+						if len(deleteRow) != bat.Vecs[0].Length() {
+							bat.Shrink(deleteRow, false)
 						}
 					}
-					if len(deleteRow) != bat.Vecs[0].Length() {
-						bat.Shrink(deleteRow, false)
+					if d.ds[name.String()] == nil {
+						d.ds[name.String()] = &objData{
+							stats:      &tombstone,
+							dataType:   objectio.SchemaData,
+							sortKey:    uint16(math.MaxUint16),
+							data:       make([]*batch.Batch, 0),
+							appendable: true,
+						}
 					}
+					d.ds[name.String()].data = append(d.ds[name.String()].data, bat)
 				}
-				d.ds[name.String()] = &objData{
-					stats:      &tombstone,
-					dataType:   objectio.SchemaData,
-					sortKey:    uint16(math.MaxUint16),
-					data:       make([]*batch.Batch, 0),
-					appendable: true,
-				}
-				d.ds[name.String()].data = append(d.ds[name.String()].data, bat)
 				return true, nil
 			},
 			d.tombstones,
