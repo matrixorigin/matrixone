@@ -129,7 +129,7 @@ func (checker *warChecker) Insert(obj *catalog.ObjectEntry) {
 	checker.readSet[*obj.ID()] = obj
 }
 
-func (checker *warChecker) checkOne(id *common.ID, ts types.TS) (err error) {
+func (checker *warChecker) checkOne(id *common.ID, ts types.TS, inqueue bool) (err error) {
 	// defer func() {
 	// 	logutil.Infof("checkOne blk=%s ts=%s err=%v", id.BlockString(), ts.ToString(), err)
 	// }()
@@ -141,7 +141,7 @@ func (checker *warChecker) checkOne(id *common.ID, ts types.TS) (err error) {
 	if entry == nil {
 		return
 	}
-	return readWriteConfilictCheck(entry, ts, false)
+	return readWriteConfilictCheck(entry, ts, inqueue)
 }
 
 func (checker *warChecker) checkAll(ts types.TS) (err error) {
