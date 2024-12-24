@@ -206,12 +206,12 @@ mainL:
 		select {
 		case <-time.After(interval):
 			// handle aggr
-			counter.Inc()
 			end := time.Now().Truncate(b.aggr.GetWindow())
 			results := b.aggr.PopResultsBeforeWindow(end)
 			for _, item := range results {
 				// tips: Add() will free the {item} obj.
 				b.Add(item, false)
+				counter.Inc()
 			}
 			logger.Info("handle aggr", zap.Int("records", len(results)), zap.Time("end", end))
 			// END> handle aggr
@@ -693,12 +693,15 @@ loop:
 	for {
 		select {
 		case req := <-c.awakeGenerate:
+			v2.TraceCollectorExportQueueLength.Inc()
 			start := time.Now()
 			if req == nil {
 				c.logger.Warn("generate req is nil")
+				v2.TraceCollectorExportQueueLength.Dec()
 			} else if exportReq, err := req.handle(buf); err != nil {
 				req.callback(err)
 				v2.TraceCollectorGenerateDurationHistogram.Observe(time.Since(start).Seconds())
+				v2.TraceCollectorExportQueueLength.Dec()
 			} else {
 				startDelay := time.Now()
 				select {
@@ -709,6 +712,7 @@ loop:
 					v2.TraceCollectorGenerateDiscardDurationHistogram.Observe(time.Since(start).Seconds())
 					// fixme: do csv output, should NO discard case
 					v2.GetTraceCollectorDiscardCounter(req.typ()).Inc()
+					v2.TraceCollectorExportQueueLength.Dec()
 				}
 				end := time.Now()
 				v2.TraceCollectorGenerateDelayDurationHistogram.Observe(end.Sub(startDelay).Seconds())
@@ -729,6 +733,7 @@ loop:
 	for {
 		select {
 		case req := <-c.awakeBatch:
+			v2.TraceCollectorExportQueueLength.Dec()
 			start := time.Now()
 			if req == nil {
 				c.logger.Warn("export req is nil")

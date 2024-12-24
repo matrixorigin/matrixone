@@ -251,9 +251,23 @@ func (c *DashboardCreator) initTraceCollectorOverviewRow() dashboard.Option {
 
 		c.withMultiGraph(
 			"Collector Buffer Action",
-			6,
+			9,
 			[]string{
 				`sum(delta(` + c.getMetricWithFilter("mo_trace_mologger_buffer_action_total", ``) + `[$interval])) by (type)`,
+				`sum(delta(` + c.getMetricWithFilter("mo_trace_collector_content_queue_length", ``) + `[$interval])) by (type)`,
+				`sum(delta(` + c.getMetricWithFilter("mo_trace_collector_queue_length", `type="content"`) + `[$interval])) by (type)`,
+			},
+			[]string{
+				"{{ type }}",
+				"release / {{ type }}",
+				"alloc / {{ type }}",
+			},
+		),
+		c.withMultiGraph(
+			"Generate Aggregated Records (count)",
+			3,
+			[]string{
+				`sum(delta(` + c.getMetricWithFilter("mo_trace_mologger_aggr_total", ``) + `[$interval])) by (type)`,
 			},
 			[]string{
 				"{{ type }}",
