@@ -100,6 +100,10 @@ func (s *parallelJobScheduler) Stop() {
 func (s *parallelJobScheduler) Schedule(job *Job) (err error) {
 	s.RLock()
 	defer s.RUnlock()
+	if s.pool == nil {
+		// job is stopped
+		return nil
+	}
 	err = s.pool.Submit(job.Run)
 	return
 }
