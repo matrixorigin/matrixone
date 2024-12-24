@@ -222,7 +222,7 @@ func (d *BackupDeltaLocDataSource) GetTombstones(
 					}
 				}
 				name := tombstone.ObjectName()
-				logutil.Infof("[GetSnapshot] tombstone object %v", name.String())
+				logutil.Infof("[GetSnapshot] tombstone object %v tombstone.BlkCnt() is %d", name.String(), tombstone.BlkCnt())
 				for id := uint32(0); id < tombstone.BlkCnt(); id++ {
 					tombstone.ObjectLocation().SetID(uint16(id))
 					bat, _, err := blockio.LoadOneBlock(ctx, d.fs, tombstone.ObjectLocation(), objectio.SchemaData)
@@ -250,7 +250,7 @@ func (d *BackupDeltaLocDataSource) GetTombstones(
 							bat.Shrink(deleteRow, false)
 						}
 					}
-					if d.ds[name.String()] == nil {
+					if id == 0 {
 						d.ds[name.String()] = &objData{
 							stats:      &tombstone,
 							dataType:   objectio.SchemaData,
