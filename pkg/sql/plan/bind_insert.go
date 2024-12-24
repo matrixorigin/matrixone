@@ -614,6 +614,9 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	if tableDef.Partition != nil {
 		partitionTableIDs, partitionTableNames := getPartitionInfos(builder.compCtx, objRef, tableDef)
 		updateCtx.NewPartitionIdx = partitionExprIdx
+		if onDupAction == plan.Node_UPDATE {
+			updateCtx.OldPartitionIdx = partitionExprIdx
+		}
 		updateCtx.PartitionTableIds = partitionTableIDs
 		updateCtx.PartitionTableNames = partitionTableNames
 		dmlNode.BindingTags = append(dmlNode.BindingTags, selectTag)
