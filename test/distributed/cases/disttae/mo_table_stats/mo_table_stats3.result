@@ -37,3 +37,12 @@ mo_user_defined_function    Tae    Dynamic    0    0    0    0    0    NULL    0
 mo_user_grant    Tae    Dynamic    4    0    1037    0    0    NULL    0    2024-12-23 17:45:06    NULL    NULL    utf8mb4_bin    NULL            0    moadmin
 mo_variables    null    null    null    null    null    null    null    null    null    2024-12-23 17:45:06    null    null    null    null    null    VIEW    0    moadmin
 mo_version    Tae    Dynamic    1    0    1074    0    0    NULL    0    2024-12-23 17:45:06    NULL    NULL    utf8mb4_bin    NULL            0    moadmin
+drop database if exists testdb;
+create database testdb;
+use testdb;
+create table t1 (a int);
+insert into t1 select * from generate_series(1, 100*1000)g;
+show table status;
+Name    Engine    Row_format    Rows    Avg_row_length    Data_length    Max_data_length    Index_length    Data_free    Auto_increment    Create_time    Update_time    Check_time    Collation    Checksum    Create_options    Comment    Role_id    Role_name
+t1    Tae    Dynamic    100000    0    804690    0    0    NULL    0    2024-12-24 19:03:52    NULL    NULL    utf8mb4_bin    NULL            0    moadmin
+drop database testdb;
