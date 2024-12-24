@@ -56,6 +56,7 @@ type service struct {
 	stopOnce             sync.Once
 	fetchWhoWaitingListC chan who
 	logger               *log.MOLogger
+	tnVersion            uint64
 
 	remote struct {
 		client Client
@@ -96,6 +97,7 @@ func NewLockService(
 			stopper.WithLogger(getLogger(cfg.ServiceID).RawLogger())),
 		fetchWhoWaitingListC: make(chan who, 10240),
 		logger:               getLogger(cfg.ServiceID),
+		tnVersion:            0,
 	}
 
 	for _, opt := range opts {
