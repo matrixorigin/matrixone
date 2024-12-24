@@ -2145,20 +2145,14 @@ func (d *dynamicCtx) getChangedTableList(
 	)
 
 	var resp *cmd_util.GetChangedTableListResp
-	if len(req.AccIds) != 0 {
-		handler := ctl.GetTNHandlerFunc(api.OpCode_OpGetChangedTableList, whichTN, payload, responseUnmarshaler)
-		ret, err := handler(proc, "DN", "", ctl.MoCtlTNCmdSender)
-		if err != nil {
-			return err
-		}
-
-		resp = ret.Data.([]any)[0].(*cmd_util.GetChangedTableListResp)
-	} else {
-		now := types.BuildTS(time.Now().UnixNano(), 0).ToTimestamp()
-		resp = &cmd_util.GetChangedTableListResp{
-			Newest: &now,
-		}
+	
+	handler := ctl.GetTNHandlerFunc(api.OpCode_OpGetChangedTableList, whichTN, payload, responseUnmarshaler)
+	ret, err := handler(proc, "DN", "", ctl.MoCtlTNCmdSender)
+	if err != nil {
+		return err
 	}
+
+	resp = ret.Data.([]any)[0].(*cmd_util.GetChangedTableListResp)
 
 	*to = types.TimestampToTS(*resp.Newest)
 
