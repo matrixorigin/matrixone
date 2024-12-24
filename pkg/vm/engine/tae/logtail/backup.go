@@ -412,61 +412,48 @@ func LoadCheckpointEntriesFromKey(
 			NeedCopy: true,
 		})
 	}
-	for i := 0; i < data.bats[ObjectInfoIDX].Length(); i++ {
-		var objectStats objectio.ObjectStats
-		buf := data.bats[ObjectInfoIDX].GetVectorByName(ObjectAttr_ObjectStats).Get(i).([]byte)
-		objectStats.UnMarshal(buf)
-		deletedAt := data.bats[ObjectInfoIDX].GetVectorByName(EntryNode_DeleteAt).Get(i).(types.TS)
-		createAt := data.bats[ObjectInfoIDX].GetVectorByName(EntryNode_CreateAt).Get(i).(types.TS)
-		commitAt := data.bats[ObjectInfoIDX].GetVectorByName(txnbase.SnapshotAttr_CommitTS).Get(i).(types.TS)
-		isAblk := objectStats.GetAppendable()
-		if objectStats.Extent().End() == 0 {
-			// tn obj is in the batch too
-			continue
-		}
 
-		if deletedAt.IsEmpty() && isAblk {
-			// no flush, no need to copy
-			continue
-		}
+	collectObject := func(bat *containers.Batch) {
+		for i := 0; i < bat.Length(); i++ {
+			var objectStats objectio.ObjectStats
+			buf := bat.GetVectorByName(ObjectAttr_ObjectStats).Get(i).([]byte)
+			objectStats.UnMarshal(buf)
+			deletedAt := bat.GetVectorByName(EntryNode_DeleteAt).Get(i).(types.TS)
+			createAt := bat.GetVectorByName(EntryNode_CreateAt).Get(i).(types.TS)
+			commitAt := bat.GetVectorByName(txnbase.SnapshotAttr_CommitTS).Get(i).(types.TS)
+			isAblk := objectStats.GetAppendable()
+			if objectStats.Extent().End() == 0 {
+				// tn obj is in the batch too
+				continue
+			}
 
-		bo := &objectio.BackupObject{
-			Location: objectStats.ObjectLocation(),
-			CrateTS:  createAt,
-			DropTS:   deletedAt,
-		}
-		if baseTS.IsEmpty() || (!baseTS.IsEmpty() &&
-			(createAt.GE(baseTS) || commitAt.GE(baseTS))) {
-			bo.NeedCopy = true
-		}
-		locations = append(locations, bo)
-		if !deletedAt.IsEmpty() {
-			if softDeletes != nil {
-				if !(*softDeletes)[objectStats.ObjectName().String()] {
-					(*softDeletes)[objectStats.ObjectName().String()] = true
+			if deletedAt.IsEmpty() && isAblk {
+				// no flush, no need to copy
+				continue
+			}
+
+			bo := &objectio.BackupObject{
+				Location: objectStats.ObjectLocation(),
+				CrateTS:  createAt,
+				DropTS:   deletedAt,
+			}
+			if baseTS.IsEmpty() || (!baseTS.IsEmpty() &&
+				(createAt.GE(baseTS) || commitAt.GE(baseTS))) {
+				bo.NeedCopy = true
+			}
+			locations = append(locations, bo)
+			if !deletedAt.IsEmpty() {
+				if softDeletes != nil {
+					if !(*softDeletes)[objectStats.ObjectName().String()] {
+						(*softDeletes)[objectStats.ObjectName().String()] = true
+					}
 				}
 			}
 		}
 	}
 
-	for i := 0; i < data.bats[TombstoneObjectInfoIDX].Length(); i++ {
-		var objectStats objectio.ObjectStats
-		buf := data.bats[TombstoneObjectInfoIDX].GetVectorByName(ObjectAttr_ObjectStats).Get(i).([]byte)
-		objectStats.UnMarshal(buf)
-		commitTS := data.bats[TombstoneObjectInfoIDX].GetVectorByName(txnbase.SnapshotAttr_CommitTS).Get(i).(types.TS)
-		if objectStats.ObjectLocation().IsEmpty() {
-			continue
-		}
-		bo := &objectio.BackupObject{
-			Location: objectStats.ObjectLocation(),
-			CrateTS:  commitTS,
-		}
-		if baseTS.IsEmpty() ||
-			(!baseTS.IsEmpty() && commitTS.GE(baseTS)) {
-			bo.NeedCopy = true
-		}
-		locations = append(locations, bo)
-	}
+	collectObject(data.bats[ObjectInfoIDX])
+	collectObject(data.bats[TombstoneObjectInfoIDX])
 	return locations, data, nil
 }
 
