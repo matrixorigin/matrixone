@@ -278,7 +278,7 @@ func (s *runnerStore) RollbackICKPIntent(
 		)
 	}
 	s.Lock()
-	s.Unlock()
+	defer s.Unlock()
 	s.incrementals.Delete(intent)
 }
 

@@ -358,7 +358,7 @@ func (r *runner) saveCheckpoint(
 	start, end types.TS,
 ) (name string, err error) {
 	if injectErrMsg, injected := objectio.CheckpointSaveInjected(); injected {
-		return "", moerr.NewInternalErrorNoCtxf(injectErrMsg)
+		return "", moerr.NewInternalErrorNoCtx(injectErrMsg)
 	}
 	bat := r.collectCheckpointMetadata(start, end)
 	defer bat.Close()
