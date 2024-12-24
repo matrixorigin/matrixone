@@ -184,6 +184,7 @@ func (k *lockTableKeeper) doKeepLockTableBind(ctx context.Context) {
 	req.Method = pb.Method_KeepLockTableBind
 	req.KeepLockTableBind.ServiceID = k.serviceID
 	req.KeepLockTableBind.Status = k.service.getStatus()
+	req.KeepLockTableBind.Version = k.service.tnVersion
 	if !k.service.isStatus(pb.Status_ServiceLockEnable) {
 		req.KeepLockTableBind.LockTables = k.service.topGroupTables()
 		req.KeepLockTableBind.TxnIDs = k.service.activeTxnHolder.getAllTxnID()
@@ -200,6 +201,7 @@ func (k *lockTableKeeper) doKeepLockTableBind(ctx context.Context) {
 	defer releaseResponse(resp)
 
 	if resp.KeepLockTableBind.OK {
+		k.service.tnVersion = resp.KeepLockTableBind.Version
 		switch resp.KeepLockTableBind.Status {
 		case pb.Status_ServiceLockEnable:
 			if !k.service.isStatus(pb.Status_ServiceLockEnable) {

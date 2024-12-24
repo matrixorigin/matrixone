@@ -201,7 +201,9 @@ func TestKeepaliveBind(t *testing.T) {
 				time.Sleep(time.Millisecond * 20)
 			}
 
-			assert.True(t, a.KeepLockTableBind("s1"))
+			assert.True(t, a.KeepLockTableBind("s1", 0))
+
+			assert.False(t, a.KeepLockTableBind("s1", 1))
 		})
 }
 
