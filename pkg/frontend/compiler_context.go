@@ -845,10 +845,12 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, snapshot *plan2.Snaps
 	stats := statistic.StatsInfoFromContext(tcc.execCtx.reqCtx)
 	start := time.Now()
 	defer func() {
-		v2.TxnStatementStatsDurationHistogram.Observe(time.Since(start).Seconds())
 		stats.AddBuildPlanStatsConsumption(time.Since(start))
+		v2.TxnStatementStatsDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 
+	//------------------------------------------------------------------------------------------------------------------
+	start1 := time.Now()
 	dbName := obj.GetSchemaName()
 	tableName := obj.GetObjName()
 	checkSub := true
@@ -868,17 +870,26 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, snapshot *plan2.Snaps
 			DbName:    dbName,
 		}
 	}
+	stats.AddStatsCalcPhase1Duration(time.Since(start1))
+	//------------------------------------------------------------------------------------------------------------------
+	start2 := time.Now()
 	ctx, table, err := tcc.getRelation(dbName, tableName, sub, snapshot)
 	if err != nil {
 		return nil, err
 	}
+	stats.AddStatsCalcPhase2Duration(time.Since(start2))
+	//------------------------------------------------------------------------------------------------------------------
+
+	start3 := time.Now()
 	cached, needUpdate := tcc.statsInCache(ctx, dbName, table, snapshot)
+	stats.AddStatsCalcPhase3Duration(time.Since(start3))
 	if cached == nil {
 		return nil, nil
 	}
 	if !needUpdate {
 		return cached, nil
 	}
+	start4 := time.Now()
 	tableDefs, err := table.TableDefs(ctx)
 	if err != nil {
 		return nil, err
@@ -897,18 +908,23 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, snapshot *plan2.Snaps
 			break
 		}
 	}
+	stats.AddStatsCalcPhase4Duration(time.Since(start4))
 
+	start5 := time.Now()
 	var statsInfo *pb.StatsInfo
 	// This is a partition table.
 	if partitionInfo != nil {
-		crs := new(perfcounter.CounterSet)
+		//crs := new(perfcounter.CounterSet)
 		statsInfo = plan2.NewStatsInfo()
 		for _, partitionTable := range partitionInfo.PartitionTableNames {
 			parCtx, parTable, err := tcc.getRelation(dbName, partitionTable, sub, snapshot)
 			if err != nil {
 				return cached, err
 			}
-			newParCtx := perfcounter.AttachS3RequestKey(parCtx, crs)
+			//newParCtx := perfcounter.AttachS3RequestKey(parCtx, crs)
+			//newParCtx = perfcounter.AttachCalcTableStatsKey(newParCtx)
+
+			newParCtx := perfcounter.AttachCalcTableStatsKey(parCtx)
 			parStats, err := parTable.Stats(newParCtx, true)
 			if err != nil {
 				return cached, err
@@ -916,36 +932,41 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, snapshot *plan2.Snaps
 			statsInfo.Merge(parStats)
 		}
 
-		stats.AddBuildPlanStatsS3Request(statistic.S3Request{
-			List:      crs.FileService.S3.List.Load(),
-			Head:      crs.FileService.S3.Head.Load(),
-			Put:       crs.FileService.S3.Put.Load(),
-			Get:       crs.FileService.S3.Get.Load(),
-			Delete:    crs.FileService.S3.Delete.Load(),
-			DeleteMul: crs.FileService.S3.DeleteMulti.Load(),
-		})
+		//stats.AddBuildPlanStatsS3Request(statistic.S3Request{
+		//	List:      crs.FileService.S3.List.Load(),
+		//	Head:      crs.FileService.S3.Head.Load(),
+		//	Put:       crs.FileService.S3.Put.Load(),
+		//	Get:       crs.FileService.S3.Get.Load(),
+		//	Delete:    crs.FileService.S3.Delete.Load(),
+		//	DeleteMul: crs.FileService.S3.DeleteMulti.Load(),
+		//})
 
 	} else {
-		crs := new(perfcounter.CounterSet)
-		newCtx := perfcounter.AttachS3RequestKey(ctx, crs)
+		//crs := new(perfcounter.CounterSet)
+		//newCtx := perfcounter.AttachS3RequestKey(ctx, crs)
+		//newCtx = perfcounter.AttachCalcTableStatsKey(newCtx)
 
+		newCtx := perfcounter.AttachCalcTableStatsKey(ctx)
 		statsInfo, err = table.Stats(newCtx, true)
 		if err != nil {
 			return cached, err
 		}
 
-		stats.AddBuildPlanStatsS3Request(statistic.S3Request{
-			List:      crs.FileService.S3.List.Load(),
-			Head:      crs.FileService.S3.Head.Load(),
-			Put:       crs.FileService.S3.Put.Load(),
-			Get:       crs.FileService.S3.Get.Load(),
-			Delete:    crs.FileService.S3.Delete.Load(),
-			DeleteMul: crs.FileService.S3.DeleteMulti.Load(),
-		})
+		//stats.AddBuildPlanStatsS3Request(statistic.S3Request{
+		//	List:      crs.FileService.S3.List.Load(),
+		//	Head:      crs.FileService.S3.Head.Load(),
+		//	Put:       crs.FileService.S3.Put.Load(),
+		//	Get:       crs.FileService.S3.Get.Load(),
+		//	Delete:    crs.FileService.S3.Delete.Load(),
+		//	DeleteMul: crs.FileService.S3.DeleteMulti.Load(),
+		//})
 	}
+	stats.AddStatsCalcPhase5Duration(time.Since(start5))
 
 	if statsInfo != nil {
+		start6 := time.Now()
 		tcc.UpdateStatsInCache(table.GetTableID(ctx), statsInfo)
+		stats.AddStatsCalcPhase6Duration(time.Since(start6))
 		return statsInfo, nil
 	}
 	return cached, nil
@@ -958,11 +979,15 @@ func (tcc *TxnCompilerContext) UpdateStatsInCache(tid uint64, s *pb.StatsInfo) {
 // statsInCache get the *pb.StatsInfo from session cache. If the info is nil, just return nil and false,
 // else, check if the info needs to be updated.
 func (tcc *TxnCompilerContext) statsInCache(ctx context.Context, dbName string, table engine.Relation, snapshot *plan2.Snapshot) (*pb.StatsInfo, bool) {
+	start1 := time.Now()
+	stats := statistic.StatsInfoFromContext(tcc.execCtx.reqCtx)
 	s := tcc.GetStatsCache().GetStatsInfo(table.GetTableID(ctx), true)
 	if s == nil {
 		return nil, false
 	}
+	stats.AddLogic1InPhase3Duration(time.Since(start1))
 
+	start2 := time.Now()
 	var partitionInfo *plan2.PartitionByDef
 	engineDefs, err := table.TableDefs(ctx)
 	if err != nil {
@@ -980,6 +1005,7 @@ func (tcc *TxnCompilerContext) statsInCache(ctx context.Context, dbName string, 
 			}
 		}
 	}
+	stats.AddLogic2InPhase3Duration(time.Since(start2))
 
 	second := time.Now().Unix()
 	var diff int64 = 3
@@ -992,6 +1018,7 @@ func (tcc *TxnCompilerContext) statsInCache(ctx context.Context, dbName string, 
 	}
 	s.TimeSecond = second
 
+	start3 := time.Now()
 	approxNumObjects := 0
 	if partitionInfo != nil {
 		for _, PartitionTableName := range partitionInfo.PartitionTableNames {
@@ -1004,6 +1031,7 @@ func (tcc *TxnCompilerContext) statsInCache(ctx context.Context, dbName string, 
 	} else {
 		approxNumObjects = table.ApproxObjectsNum(ctx)
 	}
+	stats.AddLogic3InPhase3Duration(time.Since(start3))
 	if approxNumObjects == 0 {
 		return nil, false
 	}

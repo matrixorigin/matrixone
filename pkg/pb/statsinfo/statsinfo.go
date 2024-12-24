@@ -15,10 +15,16 @@
 package statsinfo
 
 import (
+	"context"
 	"math"
 
 	"golang.org/x/exp/constraints"
 )
+
+type StatsInfoKeyV2 struct {
+	Ctx context.Context
+	Key StatsInfoKey
+}
 
 func (sc *StatsInfo) NeedUpdate(currentApproxObjNum int64) bool {
 	if sc.ApproxObjectNumber == 0 || sc.AccurateObjectNumber == 0 {
