@@ -165,44 +165,6 @@ func (c *DashboardCreator) initTraceCollectorOverviewRow() dashboard.Option {
 
 		// ------------- next row ------------
 		c.withMultiGraph(
-			"Discard Count",
-			3,
-			[]string{
-				`sum(rate(` + c.getMetricWithFilter("mo_trace_collector_discard_total", `type="statement_info"`) + `[$interval]))`,
-				`sum(rate(` + c.getMetricWithFilter("mo_trace_collector_discard_total", `type="rawlog"`) + `[$interval]))`,
-				`sum(rate(` + c.getMetricWithFilter("mo_trace_collector_discard_total", `type="metric"`) + `[$interval]))`,
-			},
-			[]string{
-				"statement_info",
-				"rawlog",
-				"metric",
-			}),
-
-		c.withMultiGraph(
-			"Discard item Total",
-			3,
-			[]string{
-				`sum(delta(` + c.getMetricWithFilter("mo_trace_collector_discard_item_total", "") + `[$interval:1m])) by (type)`,
-			},
-			[]string{"{{ type }}"}),
-		c.withMultiGraph(
-			"Collect hung",
-			3,
-			// try interval: 1ms, need 'val / 1000'
-			[]string{
-				`sum(delta(` + c.getMetricWithFilter("mo_trace_collector_collect_hung_total", "") + `[$interval:1m])) by (type) / 1000`,
-			},
-			[]string{"{{ type }}"}),
-		c.withMultiGraph(
-			"MOLogger error count",
-			3,
-			[]string{
-				`sum(delta(` + c.getMetricWithFilter("mo_trace_mologger_error_total", "") + `[$interval:1m])) by (type)`,
-			},
-			[]string{"{{ type }}"}),
-
-		// ------------- next row ------------
-		c.withMultiGraph(
 			"MoLogger Consume - Rate",
 			3,
 			[]string{
@@ -211,17 +173,6 @@ func (c *DashboardCreator) initTraceCollectorOverviewRow() dashboard.Option {
 			[]string{
 				"comsume",
 			}),
-
-		c.withMultiGraph(
-			"MoLogger Consume - Check error",
-			3,
-			[]string{
-				`sum(rate(` + c.getMetricWithFilter("mo_trace_collector_status_total", "") + `[$interval:1m])) by(type)`,
-			},
-			[]string{
-				"{{ type }}",
-			}),
-
 		c.withMultiGraph(
 			"MoLogger Consume - Check Cost (avg)",
 			3,
@@ -235,12 +186,57 @@ func (c *DashboardCreator) initTraceCollectorOverviewRow() dashboard.Option {
 			},
 			axis.Unit("s"),
 		),
-
 		c.withMultiGraph(
-			"Collector Queue Length",
+			"MoLogger Consume - Check result",
 			3,
 			[]string{
-				`sum(` + c.getMetricWithFilter("mo_trace_collector_queue_length", ``) + `) by (type)`,
+				`sum(rate(` + c.getMetricWithFilter("mo_trace_collector_status_total", "") + `[$interval:1m])) by(type)`,
+			},
+			[]string{
+				"{{ type }}",
+			}),
+		c.withMultiGraph(
+			"MOLogger error count",
+			3,
+			[]string{
+				`sum(delta(` + c.getMetricWithFilter("mo_trace_mologger_error_total", "") + `[$interval:1m])) by (type)`,
+			},
+			[]string{"{{ type }}"}),
+
+		// ------------- next row ------------
+		c.withMultiGraph(
+			"Collect hung",
+			3,
+			// try interval: 1ms, need 'val / 1000'
+			[]string{
+				`sum(delta(` + c.getMetricWithFilter("mo_trace_collector_collect_hung_total", "") + `[$interval:1m])) by (type) / 1000`,
+			},
+			[]string{"{{ type }}"}),
+		c.withMultiGraph(
+			"Discard Count",
+			3,
+			[]string{
+				`sum(rate(` + c.getMetricWithFilter("mo_trace_collector_discard_total", `type="statement_info"`) + `[$interval]))`,
+				`sum(rate(` + c.getMetricWithFilter("mo_trace_collector_discard_total", `type="rawlog"`) + `[$interval]))`,
+				`sum(rate(` + c.getMetricWithFilter("mo_trace_collector_discard_total", `type="metric"`) + `[$interval]))`,
+			},
+			[]string{
+				"statement_info",
+				"rawlog",
+				"metric",
+			}),
+		c.withMultiGraph(
+			"Discard item Total",
+			3,
+			[]string{
+				`sum(delta(` + c.getMetricWithFilter("mo_trace_collector_discard_item_total", "") + `[$interval:1m])) by (type)`,
+			},
+			[]string{"{{ type }}"}),
+		c.withMultiGraph(
+			"Generate Aggregated Records (count)",
+			3,
+			[]string{
+				`sum(delta(` + c.getMetricWithFilter("mo_trace_mologger_aggr_total", ``) + `[$interval])) by (type)`,
 			},
 			[]string{
 				"{{ type }}",
@@ -248,7 +244,6 @@ func (c *DashboardCreator) initTraceCollectorOverviewRow() dashboard.Option {
 		),
 
 		// ------------- next row ------------
-
 		c.withMultiGraph(
 			"Collector Buffer Action",
 			9,
@@ -264,15 +259,17 @@ func (c *DashboardCreator) initTraceCollectorOverviewRow() dashboard.Option {
 			},
 		),
 		c.withMultiGraph(
-			"Generate Aggregated Records (count)",
+			"Collector Queue Length",
 			3,
 			[]string{
-				`sum(delta(` + c.getMetricWithFilter("mo_trace_mologger_aggr_total", ``) + `[$interval])) by (type)`,
+				`sum(` + c.getMetricWithFilter("mo_trace_collector_queue_length", ``) + `) by (type)`,
 			},
 			[]string{
 				"{{ type }}",
 			},
 		),
+
+		// ------------- next row ------------
 	)
 }
 
