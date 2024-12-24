@@ -16,6 +16,24 @@ package v2_0_2
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
-var clusterUpgEntries = []versions.UpgradeEntry{}
+var clusterUpgEntries = []versions.UpgradeEntry{
+	upg_mo_cdc_watermark,
+}
+
+var upg_mo_cdc_watermark = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: catalog.MO_CDC_WATERMARK,
+	UpgType:   versions.DROP_COLUMN,
+	UpgSql:    "alter table mo_catalog.mo_cdc_watermark drop column table_id, drop primary key, add primary key(account_id,task_id,db_name,table_name)",
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		colInfo, err := versions.CheckTableColumn(txn, accountId, catalog.MO_CATALOG, catalog.MO_CDC_WATERMARK, "table_id")
+		if err != nil {
+			return false, err
+		}
+		return !colInfo.IsExits, nil
+	},
+}
