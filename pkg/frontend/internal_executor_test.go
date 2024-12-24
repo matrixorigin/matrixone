@@ -134,3 +134,9 @@ func TestIeResult(t *testing.T) {
 	require.NoError(t, e)
 	require.Equal(t, 42, v.(int))
 }
+
+func Test_WriteResultSetRow2(t *testing.T) {
+	ip := &internalProtocol{}
+	err := ip.WriteResultSetRow2(nil, nil, 1)
+	assert.NoError(t, err)
+}
