@@ -154,12 +154,9 @@ const (
 				where 
 					account_id in (%v) and
 				    database_id in (%v) and
-				    table_id in (%v);`
-
-	insertNewTablesSQL = `
-				insert ignore into 
-				    %s.%s (account_id, database_id, table_id, database_name, table_name, table_stats, update_time, takes)
-					values %s;`
+				    table_id in (%v)
+				group by 
+				    account_id, database_id, table_id, update_time;`
 
 	findNewTableSQL = `
 				select 
@@ -189,9 +186,11 @@ const (
 				from 
 				    %s.%s
 				where
-				    table_id > %d
+				    table_id > %d and database_id != %d
 				order by 
 				    table_id asc
+				group by
+				    account_id, database_id, table_id
 				limit
 					%d;`
 
@@ -811,6 +810,7 @@ func (d *dynamicCtx) forceUpdateQuery(
 	wantedStatsIdxes []int,
 	accs, dbs, tbls []uint64,
 	resetUpdateTime bool,
+	caller string,
 ) (statsVals [][]any, err error) {
 
 	if len(tbls) == 0 {
@@ -877,8 +877,10 @@ func (d *dynamicCtx) forceUpdateQuery(
 		}
 	}
 
-	if err = d.alphaTask(ctx, d.de.service, pairs,
-		fmt.Sprintf("forceUpdateQuery(reset_update=%v)", resetUpdateTime)); err != nil {
+	if err = d.callAlphaWithRetry(
+		ctx, d.de.service, pairs,
+		fmt.Sprintf("force update query(%s, reset update: %v)", caller, resetUpdateTime),
+		2); err != nil {
 		return nil, err
 	}
 
@@ -1073,7 +1075,8 @@ func (d *dynamicCtx) QueryTableStats(
 		statsVals, err = d.forceUpdateQuery(
 			newCtx, wantedStatsIdxes,
 			accs, dbs, tbls,
-			resetUpdateTime)
+			resetUpdateTime,
+			"query table stats")
 		return statsVals, err, true
 	}
 
@@ -1141,7 +1144,7 @@ func (d *dynamicCtx) MTSTableRows(
 type tablePair struct {
 	valid bool
 
-	errChan chan error
+	errChan chan alphaError
 
 	relKind    string
 	pkSequence int
@@ -1153,6 +1156,13 @@ type tablePair struct {
 
 	snapshot types.TS
 	pState   *logtailreplay.PartitionState
+
+	alphaOrder int
+}
+
+type alphaError struct {
+	order int
+	err   error
 }
 
 func buildTablePairFromCache(
@@ -1194,7 +1204,10 @@ func (tp *tablePair) String() string {
 
 func (tp *tablePair) Done(err error) {
 	if tp.errChan != nil {
-		tp.errChan <- err
+		tp.errChan <- alphaError{
+			err:   err,
+			order: tp.alphaOrder,
+		}
 		tp.errChan = nil
 	}
 }
@@ -1293,10 +1306,13 @@ func (d *dynamicCtx) tableStatsExecutor(
 			zap.String("exit by", fmt.Sprintf("%v", err)))
 	}()
 
-	newCtx := turn2SysCtx(ctx)
+	var (
+		timeout bool
+		newCtx  = turn2SysCtx(ctx)
 
-	tickerDur := time.Second
-	executeTicker := time.NewTicker(tickerDur)
+		tickerDur     = time.Second
+		executeTicker = time.NewTicker(tickerDur)
+	)
 
 	for {
 		select {
@@ -1317,7 +1333,7 @@ func (d *dynamicCtx) tableStatsExecutor(
 			tbls := d.tableStock.tbls[:]
 			d.Unlock()
 
-			if err = d.alphaTask(
+			if timeout, err = d.alphaTask(
 				newCtx, service,
 				tbls,
 				"main routine",
@@ -1330,7 +1346,9 @@ func (d *dynamicCtx) tableStatsExecutor(
 
 			d.Lock()
 
-			if len(d.tableStock.tbls) > 0 {
+			if len(d.tableStock.tbls) > 0 && !timeout {
+				// if alpha timeout, this round should mark as failed,
+				// skip the update of the special stats start.
 				if _, err = d.updateSpecialStatsStart(
 					ctx, service, eng, d.tableStock.specialTo, d.tableStock.specialFrom); err != nil {
 					d.Unlock()
@@ -1378,12 +1396,47 @@ func (d *dynamicCtx) prepare(
 	return err
 }
 
+func (d *dynamicCtx) callAlphaWithRetry(
+	ctx context.Context,
+	service string,
+	tbls []tablePair,
+	caller string,
+	retryTimes int,
+) (err error) {
+
+	var (
+		round   int
+		timeout bool
+	)
+
+	for {
+		if timeout, err = d.alphaTask(
+			ctx, d.de.service, tbls,
+			caller); err != nil {
+			return err
+		}
+
+		round++
+		if !timeout || round >= retryTimes {
+			break
+		}
+
+		logutil.Warn(logHeader,
+			zap.String("source", caller),
+			zap.String("event", fmt.Sprintf("alpha timeout, tried: %d", round)))
+
+		time.Sleep(time.Second)
+	}
+
+	return nil
+}
+
 func (d *dynamicCtx) alphaTask(
 	ctx context.Context,
 	service string,
 	tbls []tablePair,
 	caller string,
-) (err error) {
+) (timeout bool, err error) {
 
 	// maybe the task exited, need to launch a new one
 	d.launchTask(betaTaskName)
@@ -1396,6 +1449,11 @@ func (d *dynamicCtx) alphaTask(
 
 		enterWait  bool
 		waitErrDur time.Duration
+
+		tblBackup    = tbls[:]
+		orderCounter int
+
+		timeoutBuf = bytes.Buffer{}
 	)
 
 	// batCnt -> [200, 500]
@@ -1412,7 +1470,8 @@ func (d *dynamicCtx) alphaTask(
 			zap.Int("batch count", batCnt),
 			zap.Duration("takes", dur),
 			zap.Duration("wait err", waitErrDur),
-			zap.String("caller", caller))
+			zap.String("caller", caller),
+			zap.String("timeout tbl", timeoutBuf.String()))
 
 		v2.AlphaTaskDurationHistogram.Observe(dur.Seconds())
 		v2.AlphaTaskCountingHistogram.Observe(float64(processed))
@@ -1422,29 +1481,36 @@ func (d *dynamicCtx) alphaTask(
 		return
 	}
 
+	for i := range tbls {
+		tbls[i].alphaOrder = orderCounter
+		orderCounter++
+	}
+
 	wg := sync.WaitGroup{}
 
-	errQueue := make(chan error, len(tbls)*2)
+	errQueue := make(chan alphaError, len(tbls)*2)
 	ticker = time.NewTicker(time.Millisecond * 10)
 
 	for {
 		select {
 		case <-ctx.Done():
 			err = ctx.Err()
-			return err
+			return
 
-		case err = <-errQueue:
-			if err != nil {
+		case ae := <-errQueue:
+			if ae.err != nil {
 				logutil.Error(logHeader,
 					zap.String("source", "alpha task received err"),
-					zap.Error(err))
+					zap.Error(ae.err))
 			}
+
+			tblBackup[ae.order].valid = false
 
 			errWaitToReceive--
 			if errWaitToReceive <= 0 {
 				// all processed
 				close(errQueue)
-				return nil
+				return
 			}
 
 		case <-ticker.C:
@@ -1459,15 +1525,23 @@ func (d *dynamicCtx) alphaTask(
 					enterWait = true
 				}
 
-				if waitErrDur > time.Minute*5 {
+				if waitErrDur >= time.Minute*5 {
 					// waiting reached the limit
-					return nil
+					for i := range tblBackup {
+						if !tblBackup[i].valid {
+							continue
+						}
+						timeoutBuf.WriteString(fmt.Sprintf("%d-%d(%v)-%d(%v); ",
+							tblBackup[i].acc, tblBackup[i].db, tblBackup[i].dbName,
+							tblBackup[i].tbl, tblBackup[i].tblName))
+					}
+					return true, nil
 				}
 
-				if waitErrDur > 0 && waitErrDur%(time.Second*10) == 0 {
+				if waitErrDur > 0 && waitErrDur%(time.Second*30) == 0 {
 					logutil.Warn(logHeader,
 						zap.String("source", "alpha task"),
-						zap.String("event", "waited err another 10s"),
+						zap.String("event", "waited err another 30s"),
 						zap.String("caller", caller),
 						zap.Int("total", processed),
 						zap.Int("left", errWaitToReceive))
@@ -1557,6 +1631,10 @@ func (d *dynamicCtx) betaTask(
 			return
 
 		case tbl := <-d.tblQueue:
+			if rand.Intn(10)%3 == 0 {
+				continue
+			}
+
 			if !tbl.valid {
 				// an alpha batch transmit done
 				d.bulkUpdateTableOnlyTS(ctx, service, onlyTSBat)
@@ -1681,9 +1759,7 @@ func (d *dynamicCtx) gamaInsertNewTables(
 		}
 	}
 
-	if err = d.alphaTask(ctx, service, pairs, "gama insert new tables"); err != nil {
-		return
-	}
+	err = d.callAlphaWithRetry(ctx, service, pairs, "gama insert new tables", 2)
 }
 
 func decodeIdsFromMoTableStatsSqlRet(
@@ -1738,13 +1814,15 @@ func (d *dynamicCtx) gamaUpdateForgotten(
 		err error
 		now = time.Now()
 
-		nullStatsCnt int
+		nullStatsCnt       int
+		missUpdateCheckCnt int
 	)
 
 	defer func() {
 		logutil.Info(logHeader,
 			zap.String("source", "gama task"),
-			zap.Int("update forgotten", nullStatsCnt),
+			zap.Int("null stats cnt", nullStatsCnt),
+			zap.Int("miss update check cnt", missUpdateCheckCnt),
 			zap.Duration("takes", time.Since(now)),
 			zap.Error(err))
 	}()
@@ -1806,10 +1884,7 @@ func (d *dynamicCtx) gamaUpdateForgotten(
 
 		nullStatsCnt = len(tbls)
 
-		if err = d.alphaTask(
-			ctx, service, tbls, "gama update null stats"); err != nil {
-			return err
-		}
+		err = d.callAlphaWithRetry(ctx, service, tbls, "gama update null stats", 2)
 
 		v2.GamaTaskCountingHistogram.Observe(float64(nullStatsCnt))
 		v2.GamaTaskDurationHistogram.Observe(time.Since(now).Seconds())
@@ -1838,15 +1913,17 @@ func (d *dynamicCtx) gamaUpdateForgotten(
 		}
 
 		sql = fmt.Sprintf(getNextCheckBatchSQL,
-			catalog.MO_CATALOG, catalog.MO_TABLE_STATS, minimalChecked, limit*2)
+			catalog.MO_CATALOG, catalog.MO_TABLE_STATS, minimalChecked, specialDatabaseId, limit*2)
 
 		if accIds, dbIds, tblIds, err = retrieveIds(sql); err != nil {
 			return err
 		}
 
+		missUpdateCheckCnt = len(tblIds)
 		if len(tblIds) > 0 {
 			if _, err = d.forceUpdateQuery(
-				ctx, nil, accIds, dbIds, tblIds, false); err != nil {
+				ctx, nil, accIds, dbIds, tblIds, false,
+				"gama update forgotten"); err != nil {
 				return err
 			}
 
