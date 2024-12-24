@@ -1726,6 +1726,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableIntType("delayed_queue_size", 1, math.MaxInt64, false),
 		Default:           int64(1000),
 	},
+	"delete_opt_to_truncate": {
+		Name:              "delete_opt_to_truncate",
+		Scope:             ScopeSession,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableBoolType("delete_opt_to_truncate"),
+		Default:           int64(1),
+	},
 	"disabled_storage_engines": {
 		Name:              "disabled_storage_engines",
 		Scope:             ScopeGlobal,
