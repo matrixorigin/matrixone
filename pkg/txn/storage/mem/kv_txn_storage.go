@@ -330,7 +330,12 @@ func (kv *KVTxnStorage) Committing(ctx context.Context, txnMeta txn.TxnMeta) err
 	return nil
 }
 
-func (kv *KVTxnStorage) Commit(ctx context.Context, txnMeta txn.TxnMeta) (timestamp.Timestamp, error) {
+func (kv *KVTxnStorage) Commit(
+	ctx context.Context,
+	txnMeta txn.TxnMeta,
+	response *txn.TxnResponse,
+	commitRequests *txn.TxnCommitRequest,
+) (timestamp.Timestamp, error) {
 	kv.Lock()
 	defer kv.Unlock()
 
