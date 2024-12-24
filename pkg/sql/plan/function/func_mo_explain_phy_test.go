@@ -984,6 +984,7 @@ Scope 1 (Magic: Merge, mcpu: 1, Receiver: [0])
 		- S3List:0, S3Head:0, S3Put:0, S3Get:0, S3Delete:0, S3DeleteMul:0
 		- Build Plan Duration: 649910ns 
 		- Call Stats Duration: 3457758ns 
+		- Call StatsInCache Duration: 0ns 
 		- Call Stats IO Consumption: 0ns 
 		- Call Stats S3List:0, S3Head:0, S3Put:0, S3Get:0, S3Delete:0, S3DeleteMul:0
 	Query Compile Stage:
