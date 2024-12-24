@@ -479,7 +479,6 @@ func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
 				size += uint64(txn.writes[i].bat.Size())
 			}
 		}
-		logutil.Infof("asdf %d %d %d", size, txn.workspaceSize, txn.writeWorkspaceThreshold)
 		if size < txn.writeWorkspaceThreshold {
 			return nil
 		}
