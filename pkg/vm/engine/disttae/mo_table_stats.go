@@ -2145,7 +2145,6 @@ func (d *dynamicCtx) getChangedTableList(
 	)
 
 	var resp *cmd_util.GetChangedTableListResp
-	
 	handler := ctl.GetTNHandlerFunc(api.OpCode_OpGetChangedTableList, whichTN, payload, responseUnmarshaler)
 	ret, err := handler(proc, "DN", "", ctl.MoCtlTNCmdSender)
 	if err != nil {
