@@ -461,14 +461,14 @@ func (ctr *container) probe(bat *batch.Batch, ap *DedupJoin, proc *process.Proce
 					if rp.Rel == 1 {
 						//if last index is row_id, meams need fetch right child's partition column
 						//@FIXME should have better way to get right child's partition column
+						var srcVec *vector.Vector
 						if ctr.joinBat1.Vecs[rp.Pos].GetType().Oid == types.T_Rowid {
-							if err := ctr.rbat.Vecs[j].UnionOne(ctr.joinBat2.Vecs[rp.Pos], 0, proc.Mp()); err != nil {
-								return err
-							}
+							srcVec = ctr.joinBat2.Vecs[rp.Pos]
 						} else {
-							if err := ctr.rbat.Vecs[j].UnionOne(ctr.joinBat1.Vecs[rp.Pos], 0, proc.Mp()); err != nil {
-								return err
-							}
+							srcVec = ctr.joinBat1.Vecs[rp.Pos]
+						}
+						if err := ctr.rbat.Vecs[j].UnionOne(srcVec, 0, proc.Mp()); err != nil {
+							return err
 						}
 					} else {
 						if err := ctr.rbat.Vecs[j].UnionOne(bat.Vecs[rp.Pos], int64(i+k), proc.Mp()); err != nil {
