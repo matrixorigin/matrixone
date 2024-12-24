@@ -1216,7 +1216,7 @@ func isPrimaryKey(tableDef *TableDef, colNames []string) bool {
 	if uniqueKeyCount == 1 {
 		for _, col := range tableDef.Cols {
 			for _, colName := range colNames {
-				if col.Name == colName {
+				if col.Name == catalog.ResolveAlias(colName) {
 					if col.Default.NullAbility {
 						return false
 					}

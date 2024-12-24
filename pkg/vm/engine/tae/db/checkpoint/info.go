@@ -55,7 +55,7 @@ type RunnerReader interface {
 	GetDirtyCollector() logtail.Collector
 }
 
-func (r *runner) collectCheckpointMetadata(start, end types.TS, ckpLSN, truncateLSN uint64) *containers.Batch {
+func (r *runner) collectCheckpointMetadata(start, end types.TS) *containers.Batch {
 	bat := makeRespBatchFromSchema(CheckpointSchema)
 	entries := r.GetAllIncrementalCheckpoints()
 	for _, entry := range entries {

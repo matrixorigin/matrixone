@@ -684,7 +684,7 @@ func fillResultSet(ctx context.Context, dataSet *batch.Batch, ses FeSession, mrs
 	n := dataSet.RowCount()
 	for j := 0; j < n; j++ { //row index
 		row := make([]any, mrs.GetColumnCount())
-		err := extractRowFromEveryVector(ctx, ses, dataSet, j, row)
+		err := extractRowFromEveryVector(ctx, ses, dataSet, j, row, false)
 		if err != nil {
 			return err
 		}
