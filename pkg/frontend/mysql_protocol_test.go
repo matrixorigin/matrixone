@@ -3920,3 +3920,295 @@ func Test_appendResultSet3(t *testing.T) {
 		}
 	})
 }
+
+func Test_appendResultSet4(t *testing.T) {
+	ctx := context.TODO()
+	convey.Convey("append result set", t, func() {
+		sv, err := getSystemVariables("test/system_vars_config.toml")
+		if err != nil {
+			t.Error(err)
+		}
+		pu := config.NewParameterUnit(sv, nil, nil, nil)
+		pu.SV.SkipCheckUser = true
+		pu.SV.KillRountinesInterval = 0
+		setSessionAlloc("", NewLeakCheckAllocator())
+		setPu("", pu)
+		ioses, err := NewIOSession(&testConn{}, pu, "")
+		convey.ShouldBeNil(err)
+		proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
+
+		ses := NewSession(ctx, "", proto, nil)
+		proto.ses = ses
+
+		kases := makeKases()
+		for _, kse := range kases {
+			mrs := kse.mrs
+			bat := kse.bat
+
+			if mrs.GetColumnCount() > 1 {
+				continue
+			}
+
+			fun := func() {
+				colSlices := &ColumnSlices{
+					ctx:             context.TODO(),
+					colIdx2SliceIdx: make([]int, len(bat.Vecs)),
+					dataSet:         bat,
+				}
+				defer colSlices.Close()
+				err = convertBatchToSlices(context.TODO(), ses, bat, colSlices)
+				convey.So(err, convey.ShouldBeNil)
+
+				col, _ := mrs.GetColumn(context.TODO(), 0)
+
+				switch col.ColumnType() {
+				case defines.MYSQL_TYPE_BOOL:
+					bhStub := gostub.Stub(&GetBool, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64) (bool, error) {
+						return false, moerr.NewInternalError(context.TODO(), "invalid bool slice")
+					})
+					defer bhStub.Reset()
+				case defines.MYSQL_TYPE_BIT:
+					bhStub := gostub.Stub(&GetUint64, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64) (uint64, error) {
+						return 0, moerr.NewInternalError(context.TODO(), "invalid uint64 slice")
+					})
+					defer bhStub.Reset()
+				case defines.MYSQL_TYPE_VARCHAR,
+					defines.MYSQL_TYPE_JSON:
+					bhStub := gostub.Stub(&GetBytesBased, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64) ([]byte, error) {
+						return nil, moerr.NewInternalError(context.TODO(), "invalid []byte slice")
+					})
+					defer bhStub.Reset()
+					bhStub2 := gostub.Stub(&GetStringBased, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64) (string, error) {
+						return "", moerr.NewInternalError(context.TODO(), "invalid []byte slice")
+					})
+					defer bhStub2.Reset()
+				case defines.MYSQL_TYPE_DECIMAL:
+					bhStub := gostub.Stub(&GetDecimal, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64) (string, error) {
+						return "", moerr.NewInternalError(context.TODO(), "invalid decimal slice")
+					})
+					defer bhStub.Reset()
+				case defines.MYSQL_TYPE_UUID:
+					bhStub := gostub.Stub(&GetUUID, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64) (string, error) {
+						return "", moerr.NewInternalError(context.TODO(), "invalid uuid slice")
+					})
+					defer bhStub.Reset()
+				case defines.MYSQL_TYPE_TINY,
+					defines.MYSQL_TYPE_SHORT,
+					defines.MYSQL_TYPE_INT24,
+					defines.MYSQL_TYPE_LONG,
+					defines.MYSQL_TYPE_YEAR,
+					defines.MYSQL_TYPE_LONGLONG:
+					bhStub := gostub.Stub(&GetInt64, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64) (int64, error) {
+						return 0, moerr.NewInternalError(context.TODO(), "invalid int64 slice")
+					})
+					defer bhStub.Reset()
+					bhStub2 := gostub.Stub(&GetUint64, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64) (uint64, error) {
+						return 0, moerr.NewInternalError(context.TODO(), "invalid uint64 slice")
+					})
+					defer bhStub2.Reset()
+				case defines.MYSQL_TYPE_VAR_STRING:
+					bhStub := gostub.Stub(&GetBytesBased, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64) ([]byte, error) {
+						return nil, moerr.NewInternalError(context.TODO(), "invalid []byte slice")
+					})
+					defer bhStub.Reset()
+					bhStub2 := gostub.Stub(&GetDatetime, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64) (string, error) {
+						return "", moerr.NewInternalError(context.TODO(), "invalid string slice")
+					})
+					defer bhStub2.Reset()
+				case defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TEXT:
+					bhStub := gostub.Stub(&GetBytesBased, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64) ([]byte, error) {
+						return nil, moerr.NewInternalError(context.TODO(), "invalid []byte slice")
+					})
+					defer bhStub.Reset()
+				case defines.MYSQL_TYPE_DATE:
+					bhStub := gostub.Stub(&GetDate, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64) (types.Date, error) {
+						return types.Date(0), moerr.NewInternalError(context.TODO(), "invalid date slice")
+					})
+					defer bhStub.Reset()
+				case defines.MYSQL_TYPE_TIME:
+					bhStub2 := gostub.Stub(&GetTime, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64) (string, error) {
+						return "", moerr.NewInternalError(context.TODO(), "invalid string slice")
+					})
+					defer bhStub2.Reset()
+				case defines.MYSQL_TYPE_DATETIME:
+					bhStub2 := gostub.Stub(&GetDatetime, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64) (string, error) {
+						return "", moerr.NewInternalError(context.TODO(), "invalid string slice")
+					})
+					defer bhStub2.Reset()
+
+				case defines.MYSQL_TYPE_TIMESTAMP:
+					bhStub2 := gostub.Stub(&GetTimestamp, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64, timeZone *time.Location) (string, error) {
+						return "", moerr.NewInternalError(context.TODO(), "invalid string slice")
+					})
+					defer bhStub2.Reset()
+					bhStub3 := gostub.Stub(&GetDatetime, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64) (string, error) {
+						return "", moerr.NewInternalError(context.TODO(), "invalid string slice")
+					})
+					defer bhStub3.Reset()
+				case defines.MYSQL_TYPE_FLOAT:
+					bhStub := gostub.Stub(&GetFloat32, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64) (float32, error) {
+						return 0, moerr.NewInternalError(context.TODO(), "invalid float32 slice")
+					})
+					defer bhStub.Reset()
+				case defines.MYSQL_TYPE_DOUBLE:
+					bhStub := gostub.Stub(&GetFloat64, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64) (float64, error) {
+						return 0, moerr.NewInternalError(context.TODO(), "invalid float64 slice")
+					})
+					defer bhStub.Reset()
+				default:
+					panic(fmt.Sprintf("usp %v %v", col.Name(), col.ColumnType()))
+				}
+
+				err = proto.appendResultSetTextRow2(mrs, colSlices, 0)
+				convey.So(err, convey.ShouldNotBeNil)
+			}
+			fun()
+		}
+	})
+}
+
+func Test_appendResultSet5(t *testing.T) {
+	ctx := context.TODO()
+	convey.Convey("append result set", t, func() {
+		sv, err := getSystemVariables("test/system_vars_config.toml")
+		if err != nil {
+			t.Error(err)
+		}
+		pu := config.NewParameterUnit(sv, nil, nil, nil)
+		pu.SV.SkipCheckUser = true
+		pu.SV.KillRountinesInterval = 0
+		setSessionAlloc("", NewLeakCheckAllocator())
+		setPu("", pu)
+		ioses, err := NewIOSession(&testConn{}, pu, "")
+		convey.ShouldBeNil(err)
+		proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
+
+		ses := NewSession(ctx, "", proto, nil)
+		proto.ses = ses
+
+		kases := makeKases()
+		for _, kse := range kases {
+			mrs := kse.mrs
+			bat := kse.bat
+
+			if mrs.GetColumnCount() > 1 {
+				continue
+			}
+
+			fun := func() {
+				colSlices := &ColumnSlices{
+					ctx:             context.TODO(),
+					colIdx2SliceIdx: make([]int, len(bat.Vecs)),
+					dataSet:         bat,
+				}
+				defer colSlices.Close()
+				err = convertBatchToSlices(context.TODO(), ses, bat, colSlices)
+				convey.So(err, convey.ShouldBeNil)
+
+				col, _ := mrs.GetColumn(context.TODO(), 0)
+
+				switch col.ColumnType() {
+				case defines.MYSQL_TYPE_BOOL:
+					bhStub := gostub.Stub(&GetBool, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64) (bool, error) {
+						return false, moerr.NewInternalError(context.TODO(), "invalid bool slice")
+					})
+					defer bhStub.Reset()
+				case defines.MYSQL_TYPE_BIT:
+					bhStub := gostub.Stub(&GetUint64, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64) (uint64, error) {
+						return 0, moerr.NewInternalError(context.TODO(), "invalid uint64 slice")
+					})
+					defer bhStub.Reset()
+				case defines.MYSQL_TYPE_VARCHAR,
+					defines.MYSQL_TYPE_JSON:
+					bhStub := gostub.Stub(&GetBytesBased, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64) ([]byte, error) {
+						return nil, moerr.NewInternalError(context.TODO(), "invalid []byte slice")
+					})
+					defer bhStub.Reset()
+					bhStub2 := gostub.Stub(&GetStringBased, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64) (string, error) {
+						return "", moerr.NewInternalError(context.TODO(), "invalid []byte slice")
+					})
+					defer bhStub2.Reset()
+				case defines.MYSQL_TYPE_DECIMAL:
+					bhStub := gostub.Stub(&GetDecimal, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64) (string, error) {
+						return "", moerr.NewInternalError(context.TODO(), "invalid decimal slice")
+					})
+					defer bhStub.Reset()
+				case defines.MYSQL_TYPE_UUID:
+					bhStub := gostub.Stub(&GetUUID, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64) (string, error) {
+						return "", moerr.NewInternalError(context.TODO(), "invalid uuid slice")
+					})
+					defer bhStub.Reset()
+				case defines.MYSQL_TYPE_TINY,
+					defines.MYSQL_TYPE_SHORT,
+					defines.MYSQL_TYPE_INT24,
+					defines.MYSQL_TYPE_LONG,
+					defines.MYSQL_TYPE_YEAR,
+					defines.MYSQL_TYPE_LONGLONG:
+					bhStub := gostub.Stub(&GetInt64, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64) (int64, error) {
+						return 0, moerr.NewInternalError(context.TODO(), "invalid int64 slice")
+					})
+					defer bhStub.Reset()
+					bhStub2 := gostub.Stub(&GetUint64, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64) (uint64, error) {
+						return 0, moerr.NewInternalError(context.TODO(), "invalid uint64 slice")
+					})
+					defer bhStub2.Reset()
+				case defines.MYSQL_TYPE_VAR_STRING:
+					bhStub := gostub.Stub(&GetBytesBased, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64) ([]byte, error) {
+						return nil, moerr.NewInternalError(context.TODO(), "invalid []byte slice")
+					})
+					defer bhStub.Reset()
+					bhStub2 := gostub.Stub(&GetDatetime, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64) (string, error) {
+						return "", moerr.NewInternalError(context.TODO(), "invalid string slice")
+					})
+					defer bhStub2.Reset()
+				case defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TEXT:
+					bhStub := gostub.Stub(&GetBytesBased, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64) ([]byte, error) {
+						return nil, moerr.NewInternalError(context.TODO(), "invalid []byte slice")
+					})
+					defer bhStub.Reset()
+				case defines.MYSQL_TYPE_DATE:
+					bhStub := gostub.Stub(&GetDate, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64) (types.Date, error) {
+						return types.Date(0), moerr.NewInternalError(context.TODO(), "invalid date slice")
+					})
+					defer bhStub.Reset()
+				case defines.MYSQL_TYPE_TIME:
+					bhStub2 := gostub.Stub(&GetTime, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64) (string, error) {
+						return "", moerr.NewInternalError(context.TODO(), "invalid string slice")
+					})
+					defer bhStub2.Reset()
+				case defines.MYSQL_TYPE_DATETIME:
+					bhStub2 := gostub.Stub(&GetDatetime, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64) (string, error) {
+						return "", moerr.NewInternalError(context.TODO(), "invalid string slice")
+					})
+					defer bhStub2.Reset()
+
+				case defines.MYSQL_TYPE_TIMESTAMP:
+					bhStub2 := gostub.Stub(&GetTimestamp, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64, timeZone *time.Location) (string, error) {
+						return "", moerr.NewInternalError(context.TODO(), "invalid string slice")
+					})
+					defer bhStub2.Reset()
+					bhStub3 := gostub.Stub(&GetDatetime, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64) (string, error) {
+						return "", moerr.NewInternalError(context.TODO(), "invalid string slice")
+					})
+					defer bhStub3.Reset()
+				case defines.MYSQL_TYPE_FLOAT:
+					bhStub := gostub.Stub(&GetFloat32, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64) (float32, error) {
+						return 0, moerr.NewInternalError(context.TODO(), "invalid float32 slice")
+					})
+					defer bhStub.Reset()
+				case defines.MYSQL_TYPE_DOUBLE:
+					bhStub := gostub.Stub(&GetFloat64, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64) (float64, error) {
+						return 0, moerr.NewInternalError(context.TODO(), "invalid float64 slice")
+					})
+					defer bhStub.Reset()
+				default:
+					panic(fmt.Sprintf("usp %v %v", col.Name(), col.ColumnType()))
+				}
+
+				err = proto.appendResultSetBinaryRow2(mrs, colSlices, 0)
+				convey.So(err, convey.ShouldNotBeNil)
+			}
+			fun()
+		}
+	})
+}

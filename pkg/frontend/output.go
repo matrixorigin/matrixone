@@ -323,6 +323,10 @@ func (slices *ColumnSlices) GetSliceIdx(colIdx uint64) int {
 	return slices.colIdx2SliceIdx[colIdx]
 }
 
+var IsNull = func(slices *ColumnSlices, rowIdx int, colIdx int) bool {
+	return slices.IsNull(rowIdx, colIdx)
+}
+
 func (slices *ColumnSlices) IsNull(rowIdx int, colIdx int) bool {
 	vec := slices.dataSet.Vecs[colIdx]
 	return vec.IsConstNull() || vec.GetNulls().Contains(uint64(rowIdx))
@@ -330,6 +334,10 @@ func (slices *ColumnSlices) IsNull(rowIdx int, colIdx int) bool {
 
 func (slices *ColumnSlices) IsConst(colIdx uint64) bool {
 	return slices.dataSet.Vecs[colIdx].IsConst()
+}
+
+var GetBool = func(slices *ColumnSlices, rowIdx uint64, colIdx uint64) (bool, error) {
+	return slices.GetBool(rowIdx, colIdx)
 }
 
 func (slices *ColumnSlices) GetBool(rowIdx uint64, colIdx uint64) (bool, error) {
@@ -344,6 +352,10 @@ func (slices *ColumnSlices) GetBool(rowIdx uint64, colIdx uint64) (bool, error) 
 	default:
 		return false, moerr.NewInternalError(slices.ctx, "invalid bool slice")
 	}
+}
+
+var GetUint64 = func(slices *ColumnSlices, r uint64, i uint64) (uint64, error) {
+	return slices.GetUint64(r, i)
 }
 
 func (slices *ColumnSlices) GetUint64(r uint64, i uint64) (uint64, error) {
@@ -374,6 +386,10 @@ func (slices *ColumnSlices) GetUint64(r uint64, i uint64) (uint64, error) {
 	}
 }
 
+var GetInt64 = func(slices *ColumnSlices, r uint64, i uint64) (int64, error) {
+	return slices.GetInt64(r, i)
+}
+
 func (slices *ColumnSlices) GetInt64(r uint64, i uint64) (int64, error) {
 	if slices.IsConst(i) {
 		r = 0
@@ -402,6 +418,10 @@ func (slices *ColumnSlices) GetInt64(r uint64, i uint64) (int64, error) {
 	}
 }
 
+var GetDecimal = func(slices *ColumnSlices, r uint64, i uint64) (string, error) {
+	return slices.GetDecimal(r, i)
+}
+
 func (slices *ColumnSlices) GetDecimal(r uint64, i uint64) (string, error) {
 	if slices.IsConst(i) {
 		r = 0
@@ -420,6 +440,10 @@ func (slices *ColumnSlices) GetDecimal(r uint64, i uint64) (string, error) {
 	}
 }
 
+var GetUUID = func(slices *ColumnSlices, r uint64, i uint64) (string, error) {
+	return slices.GetUUID(r, i)
+}
+
 func (slices *ColumnSlices) GetUUID(r uint64, i uint64) (string, error) {
 	if slices.IsConst(i) {
 		r = 0
@@ -432,6 +456,10 @@ func (slices *ColumnSlices) GetUUID(r uint64, i uint64) (string, error) {
 	default:
 		return "", moerr.NewInternalError(slices.ctx, "invalid uuid slice")
 	}
+}
+
+var GetFloat32 = func(slices *ColumnSlices, r uint64, i uint64) (float32, error) {
+	return slices.GetFloat32(r, i)
 }
 
 func (slices *ColumnSlices) GetFloat32(r uint64, i uint64) (float32, error) {
@@ -450,6 +478,10 @@ func (slices *ColumnSlices) GetFloat32(r uint64, i uint64) (float32, error) {
 	}
 }
 
+var GetFloat64 = func(slices *ColumnSlices, r uint64, i uint64) (float64, error) {
+	return slices.GetFloat64(r, i)
+}
+
 func (slices *ColumnSlices) GetFloat64(r uint64, i uint64) (float64, error) {
 	if slices.IsConst(i) {
 		r = 0
@@ -464,6 +496,10 @@ func (slices *ColumnSlices) GetFloat64(r uint64, i uint64) (float64, error) {
 	default:
 		return 0, moerr.NewInternalError(slices.ctx, "invalid float64 slice")
 	}
+}
+
+var GetStringBased = func(slices *ColumnSlices, r uint64, i uint64) (string, error) {
+	return slices.GetStringBased(r, i)
 }
 
 func (slices *ColumnSlices) GetStringBased(r uint64, i uint64) (string, error) {
@@ -498,6 +534,10 @@ func (slices *ColumnSlices) GetStringBased(r uint64, i uint64) (string, error) {
 	}
 }
 
+var GetBytesBased = func(slices *ColumnSlices, r uint64, i uint64) ([]byte, error) {
+	return slices.GetBytesBased(r, i)
+}
+
 func (slices *ColumnSlices) GetBytesBased(r uint64, i uint64) ([]byte, error) {
 	if slices.IsConst(i) {
 		r = 0
@@ -510,6 +550,10 @@ func (slices *ColumnSlices) GetBytesBased(r uint64, i uint64) ([]byte, error) {
 	default:
 		return nil, moerr.NewInternalError(slices.ctx, "invalid bytes based slice")
 	}
+}
+
+var GetDate = func(slices *ColumnSlices, r uint64, i uint64) (types.Date, error) {
+	return slices.GetDate(r, i)
 }
 
 func (slices *ColumnSlices) GetDate(r uint64, i uint64) (types.Date, error) {
@@ -527,6 +571,10 @@ func (slices *ColumnSlices) GetDate(r uint64, i uint64) (types.Date, error) {
 	}
 }
 
+var GetDatetime = func(slices *ColumnSlices, r uint64, i uint64) (string, error) {
+	return slices.GetDatetime(r, i)
+}
+
 func (slices *ColumnSlices) GetDatetime(r uint64, i uint64) (string, error) {
 	if slices.IsConst(i) {
 		r = 0
@@ -542,6 +590,10 @@ func (slices *ColumnSlices) GetDatetime(r uint64, i uint64) (string, error) {
 	}
 }
 
+var GetTime = func(slices *ColumnSlices, r uint64, i uint64) (string, error) {
+	return slices.GetTime(r, i)
+}
+
 func (slices *ColumnSlices) GetTime(r uint64, i uint64) (string, error) {
 	if slices.IsConst(i) {
 		r = 0
@@ -555,6 +607,10 @@ func (slices *ColumnSlices) GetTime(r uint64, i uint64) (string, error) {
 	default:
 		return "", moerr.NewInternalError(slices.ctx, "invalid time slice")
 	}
+}
+
+var GetTimestamp = func(slices *ColumnSlices, r uint64, i uint64, timeZone *time.Location) (string, error) {
+	return slices.GetTimestamp(r, i, timeZone)
 }
 
 func (slices *ColumnSlices) GetTimestamp(r uint64, i uint64, timeZone *time.Location) (string, error) {

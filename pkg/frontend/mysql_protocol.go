@@ -2794,7 +2794,7 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow2(mrs *MysqlResultSet, colS
 
 		switch mysqlColumn.ColumnType() {
 		case defines.MYSQL_TYPE_BOOL:
-			b, err := colSlices.GetBool(rowIdx, i)
+			b, err := GetBool(colSlices, rowIdx, i)
 			if err != nil {
 				return err
 			}
@@ -2803,7 +2803,7 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow2(mrs *MysqlResultSet, colS
 				return err
 			}
 		case defines.MYSQL_TYPE_BIT:
-			value, err := colSlices.GetUint64(rowIdx, i)
+			value, err := GetUint64(colSlices, rowIdx, i)
 			if err != nil {
 				return err
 			}
@@ -2816,7 +2816,7 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow2(mrs *MysqlResultSet, colS
 				return err
 			}
 		case defines.MYSQL_TYPE_TINY:
-			value, err := colSlices.GetInt64(rowIdx, i)
+			value, err := GetInt64(colSlices, rowIdx, i)
 			if err != nil {
 				return err
 			}
@@ -2825,7 +2825,7 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow2(mrs *MysqlResultSet, colS
 				return err
 			}
 		case defines.MYSQL_TYPE_SHORT, defines.MYSQL_TYPE_YEAR:
-			value, err := colSlices.GetInt64(rowIdx, i)
+			value, err := GetInt64(colSlices, rowIdx, i)
 			if err != nil {
 				return err
 			}
@@ -2834,7 +2834,7 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow2(mrs *MysqlResultSet, colS
 				return err
 			}
 		case defines.MYSQL_TYPE_INT24, defines.MYSQL_TYPE_LONG:
-			value, err := colSlices.GetInt64(rowIdx, i)
+			value, err := GetInt64(colSlices, rowIdx, i)
 			if err != nil {
 				return err
 			}
@@ -2843,7 +2843,7 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow2(mrs *MysqlResultSet, colS
 				return err
 			}
 		case defines.MYSQL_TYPE_LONGLONG:
-			value, err := colSlices.GetUint64(rowIdx, i)
+			value, err := GetUint64(colSlices, rowIdx, i)
 			if err != nil {
 				return err
 			}
@@ -2852,7 +2852,7 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow2(mrs *MysqlResultSet, colS
 				return err
 			}
 		case defines.MYSQL_TYPE_FLOAT:
-			value, err := colSlices.GetFloat32(rowIdx, i)
+			value, err := GetFloat32(colSlices, rowIdx, i)
 			if err != nil {
 				return err
 			}
@@ -2861,7 +2861,7 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow2(mrs *MysqlResultSet, colS
 				return err
 			}
 		case defines.MYSQL_TYPE_DOUBLE:
-			value, err := colSlices.GetFloat64(rowIdx, i)
+			value, err := GetFloat64(colSlices, rowIdx, i)
 			if err != nil {
 				return err
 			}
@@ -2874,7 +2874,7 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow2(mrs *MysqlResultSet, colS
 			typ := colSlices.GetType(i)
 			switch typ.Oid {
 			case types.T_binary, types.T_varbinary:
-				value, err := colSlices.GetBytesBased(rowIdx, i)
+				value, err := GetBytesBased(colSlices, rowIdx, i)
 				if err != nil {
 					return err
 				}
@@ -2883,7 +2883,7 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow2(mrs *MysqlResultSet, colS
 					return err
 				}
 			default:
-				value, err := colSlices.GetStringBased(rowIdx, i)
+				value, err := GetStringBased(colSlices, rowIdx, i)
 				if err != nil {
 					return err
 				}
@@ -2896,7 +2896,7 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow2(mrs *MysqlResultSet, colS
 			typ := colSlices.GetType(i)
 			switch typ.Oid {
 			case types.T_datetime:
-				value, err := colSlices.GetDatetime(rowIdx, i)
+				value, err := GetDatetime(colSlices, rowIdx, i)
 				if err != nil {
 					return err
 				}
@@ -2905,7 +2905,7 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow2(mrs *MysqlResultSet, colS
 					return err
 				}
 			default:
-				value, err := colSlices.GetBytesBased(rowIdx, i)
+				value, err := GetBytesBased(colSlices, rowIdx, i)
 				if err != nil {
 					return err
 				}
@@ -2915,7 +2915,7 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow2(mrs *MysqlResultSet, colS
 				}
 			}
 		case defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TEXT:
-			value, err := colSlices.GetBytesBased(rowIdx, i)
+			value, err := GetBytesBased(colSlices, rowIdx, i)
 			if err != nil {
 				return err
 			}
@@ -2924,7 +2924,7 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow2(mrs *MysqlResultSet, colS
 				return err
 			}
 		case defines.MYSQL_TYPE_JSON, defines.MYSQL_TYPE_ENUM:
-			value, err := colSlices.GetStringBased(rowIdx, i)
+			value, err := GetStringBased(colSlices, rowIdx, i)
 			if err != nil {
 				return err
 			}
@@ -2934,7 +2934,7 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow2(mrs *MysqlResultSet, colS
 			}
 		// TODO: some type, we use string now. someday need fix it
 		case defines.MYSQL_TYPE_DECIMAL:
-			value, err := colSlices.GetDecimal(rowIdx, i)
+			value, err := GetDecimal(colSlices, rowIdx, i)
 			if err != nil {
 				return err
 			}
@@ -2943,7 +2943,7 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow2(mrs *MysqlResultSet, colS
 				return err
 			}
 		case defines.MYSQL_TYPE_UUID:
-			value, err := colSlices.GetUUID(rowIdx, i)
+			value, err := GetUUID(colSlices, rowIdx, i)
 			if err != nil {
 				return err
 			}
@@ -2952,7 +2952,7 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow2(mrs *MysqlResultSet, colS
 				return err
 			}
 		case defines.MYSQL_TYPE_DATE:
-			value, err := colSlices.GetDate(rowIdx, i)
+			value, err := GetDate(colSlices, rowIdx, i)
 			if err != nil {
 				return err
 			}
@@ -2963,7 +2963,7 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow2(mrs *MysqlResultSet, colS
 		case defines.MYSQL_TYPE_TIME:
 			var t types.Time
 			var err error
-			value, err := colSlices.GetTime(rowIdx, i)
+			value, err := GetTime(colSlices, rowIdx, i)
 			if err != nil {
 				return err
 			}
@@ -2990,12 +2990,12 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow2(mrs *MysqlResultSet, colS
 			typ := colSlices.GetType(i)
 			switch typ.Oid {
 			case types.T_datetime:
-				value, err = colSlices.GetDatetime(rowIdx, i)
+				value, err = GetDatetime(colSlices, rowIdx, i)
 				if err != nil {
 					return err
 				}
 			case types.T_timestamp:
-				value, err = colSlices.GetTimestamp(rowIdx, i, mp.ses.GetTimeZone())
+				value, err = GetTimestamp(colSlices, rowIdx, i, mp.ses.GetTimeZone())
 				if err != nil {
 					return err
 				}
@@ -3047,7 +3047,7 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow2(mrs *MysqlResultSet, colSli
 			return moerr.NewInternalError(mp.ctx, "sendColumn need MysqlColumn")
 		}
 
-		if colSlices.IsNull(int(r), int(i)) {
+		if IsNull(colSlices, int(r), int(i)) {
 			//NULL is sent as 0xfb
 			err = mp.appendUint8(0xFB)
 			if err != nil {
@@ -3058,7 +3058,7 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow2(mrs *MysqlResultSet, colSli
 
 		switch mysqlColumn.ColumnType() {
 		case defines.MYSQL_TYPE_BOOL:
-			b, err := colSlices.GetBool(r, i)
+			b, err := GetBool(colSlices, r, i)
 			if err != nil {
 				return err
 			}
@@ -3067,7 +3067,7 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow2(mrs *MysqlResultSet, colSli
 				return err
 			}
 		case defines.MYSQL_TYPE_BIT:
-			value, err := colSlices.GetUint64(r, i)
+			value, err := GetUint64(colSlices, r, i)
 			if err != nil {
 				return err
 			}
@@ -3080,7 +3080,7 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow2(mrs *MysqlResultSet, colSli
 				return err
 			}
 		case defines.MYSQL_TYPE_DECIMAL:
-			value, err := colSlices.GetDecimal(r, i)
+			value, err := GetDecimal(colSlices, r, i)
 			if err != nil {
 				return err
 			}
@@ -3089,7 +3089,7 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow2(mrs *MysqlResultSet, colSli
 				return err
 			}
 		case defines.MYSQL_TYPE_UUID:
-			value, err := colSlices.GetUUID(r, i)
+			value, err := GetUUID(colSlices, r, i)
 			if err != nil {
 				return err
 			}
@@ -3098,7 +3098,7 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow2(mrs *MysqlResultSet, colSli
 				return err
 			}
 		case defines.MYSQL_TYPE_TINY, defines.MYSQL_TYPE_SHORT, defines.MYSQL_TYPE_INT24, defines.MYSQL_TYPE_LONG, defines.MYSQL_TYPE_YEAR:
-			value, err := colSlices.GetInt64(r, i)
+			value, err := GetInt64(colSlices, r, i)
 			if err != nil {
 				return err
 			}
@@ -3121,7 +3121,7 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow2(mrs *MysqlResultSet, colSli
 				}
 			}
 		case defines.MYSQL_TYPE_FLOAT:
-			value, err := colSlices.GetFloat32(r, i)
+			value, err := GetFloat32(colSlices, r, i)
 			if err != nil {
 				return err
 			}
@@ -3130,7 +3130,7 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow2(mrs *MysqlResultSet, colSli
 				return err
 			}
 		case defines.MYSQL_TYPE_DOUBLE:
-			value, err := colSlices.GetFloat64(r, i)
+			value, err := GetFloat64(colSlices, r, i)
 			if err != nil {
 				return err
 			}
@@ -3140,7 +3140,7 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow2(mrs *MysqlResultSet, colSli
 			}
 		case defines.MYSQL_TYPE_LONGLONG:
 			if uint32(mysqlColumn.Flag())&defines.UNSIGNED_FLAG != 0 {
-				value, err := colSlices.GetUint64(r, i)
+				value, err := GetUint64(colSlices, r, i)
 				if err != nil {
 					return err
 				}
@@ -3149,7 +3149,7 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow2(mrs *MysqlResultSet, colSli
 					return err
 				}
 			} else {
-				value, err := colSlices.GetInt64(r, i)
+				value, err := GetInt64(colSlices, r, i)
 				if err != nil {
 					return err
 				}
@@ -3163,7 +3163,7 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow2(mrs *MysqlResultSet, colSli
 			typ := colSlices.GetType(i)
 			switch typ.Oid {
 			case types.T_binary, types.T_varbinary:
-				value, err := colSlices.GetBytesBased(r, i)
+				value, err := GetBytesBased(colSlices, r, i)
 				if err != nil {
 					return err
 				}
@@ -3172,7 +3172,7 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow2(mrs *MysqlResultSet, colSli
 					return err
 				}
 			default:
-				value, err := colSlices.GetStringBased(r, i)
+				value, err := GetStringBased(colSlices, r, i)
 				if err != nil {
 					return err
 				}
@@ -3185,7 +3185,7 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow2(mrs *MysqlResultSet, colSli
 			typ := colSlices.GetType(i)
 			switch typ.Oid {
 			case types.T_datetime:
-				value, err := colSlices.GetDatetime(r, i)
+				value, err := GetDatetime(colSlices, r, i)
 				if err != nil {
 					return err
 				}
@@ -3194,7 +3194,7 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow2(mrs *MysqlResultSet, colSli
 					return err
 				}
 			default:
-				value, err := colSlices.GetBytesBased(r, i)
+				value, err := GetBytesBased(colSlices, r, i)
 				if err != nil {
 					return err
 				}
@@ -3204,7 +3204,7 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow2(mrs *MysqlResultSet, colSli
 				}
 			}
 		case defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TEXT:
-			value, err := colSlices.GetBytesBased(r, i)
+			value, err := GetBytesBased(colSlices, r, i)
 			if err != nil {
 				return err
 			}
@@ -3213,7 +3213,7 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow2(mrs *MysqlResultSet, colSli
 				return err
 			}
 		case defines.MYSQL_TYPE_DATE:
-			value, err := colSlices.GetDate(r, i)
+			value, err := GetDate(colSlices, r, i)
 			if err != nil {
 				return err
 			}
@@ -3223,7 +3223,7 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow2(mrs *MysqlResultSet, colSli
 				return err
 			}
 		case defines.MYSQL_TYPE_DATETIME:
-			value, err := colSlices.GetDatetime(r, i)
+			value, err := GetDatetime(colSlices, r, i)
 			if err != nil {
 				return err
 			}
@@ -3232,7 +3232,7 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow2(mrs *MysqlResultSet, colSli
 				return err
 			}
 		case defines.MYSQL_TYPE_TIME:
-			value, err := colSlices.GetTime(r, i)
+			value, err := GetTime(colSlices, r, i)
 			if err != nil {
 				return err
 			}
@@ -3244,7 +3244,7 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow2(mrs *MysqlResultSet, colSli
 			typ := colSlices.GetType(i)
 			switch typ.Oid {
 			case types.T_datetime:
-				value, err := colSlices.GetDatetime(r, i)
+				value, err := GetDatetime(colSlices, r, i)
 				if err != nil {
 					return err
 				}
@@ -3253,7 +3253,7 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow2(mrs *MysqlResultSet, colSli
 					return err
 				}
 			default:
-				value, err := colSlices.GetTimestamp(r, i, mp.ses.GetTimeZone())
+				value, err := GetTimestamp(colSlices, r, i, mp.ses.GetTimeZone())
 				if err != nil {
 					return err
 				}
@@ -3263,7 +3263,7 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow2(mrs *MysqlResultSet, colSli
 				}
 			}
 		case defines.MYSQL_TYPE_ENUM, defines.MYSQL_TYPE_JSON:
-			value, err := colSlices.GetStringBased(r, i)
+			value, err := GetStringBased(colSlices, r, i)
 			if err != nil {
 				return err
 			}
