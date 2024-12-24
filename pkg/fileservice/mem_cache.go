@@ -48,36 +48,68 @@ func NewMemCache(
 	}
 
 	postSetFn := func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64) {
-		inuseBytes.Add(float64(size))
-		capacityBytes.Set(float64(capacityFunc()))
+		// events
+		LogEvent(ctx, str_memory_cache_post_set_begin)
+		defer LogEvent(ctx, str_memory_cache_post_set_end)
+
+		// retain
 		value.Retain()
 
+		// metrics
+		LogEvent(ctx, str_update_metrics_begin)
+		inuseBytes.Add(float64(size))
+		capacityBytes.Set(float64(capacityFunc()))
+		LogEvent(ctx, str_update_metrics_end)
+
+		// callbacks
 		if callbacks != nil {
+			LogEvent(ctx, str_memory_cache_callbacks_begin)
 			for _, fn := range callbacks.PostSet {
 				fn(key, value)
 			}
+			LogEvent(ctx, str_memory_cache_callbacks_end)
 		}
 	}
 
 	postGetFn := func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64) {
+		// events
+		LogEvent(ctx, str_memory_cache_post_get_begin)
+		defer LogEvent(ctx, str_memory_cache_post_get_end)
+
+		// retain
 		value.Retain()
 
+		// callbacks
 		if callbacks != nil {
+			LogEvent(ctx, str_memory_cache_callbacks_begin)
 			for _, fn := range callbacks.PostGet {
 				fn(key, value)
 			}
+			LogEvent(ctx, str_memory_cache_callbacks_end)
 		}
 	}
 
 	postEvictFn := func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64) {
-		inuseBytes.Add(float64(-size))
-		capacityBytes.Set(float64(capacityFunc()))
+		// events
+		LogEvent(ctx, str_memory_cache_post_evict_begin)
+		defer LogEvent(ctx, str_memory_cache_post_evict_end)
+
+		// relaese
 		value.Release()
 
+		// metrics
+		LogEvent(ctx, str_update_metrics_begin)
+		inuseBytes.Add(float64(-size))
+		capacityBytes.Set(float64(capacityFunc()))
+		LogEvent(ctx, str_update_metrics_end)
+
+		// callbacks
 		if callbacks != nil {
+			LogEvent(ctx, str_memory_cache_callbacks_begin)
 			for _, fn := range callbacks.PostEvict {
 				fn(key, value)
 			}
+			LogEvent(ctx, str_memory_cache_callbacks_end)
 		}
 	}
 
@@ -176,7 +208,9 @@ func (m *MemCache) Update(
 			Sz:     entry.Size,
 		}
 
+		LogEvent(ctx, str_set_memory_cache_entry_begin)
 		m.cache.Set(ctx, key, entry.CachedData)
+		LogEvent(ctx, str_set_memory_cache_entry_end)
 	}
 	return nil
 }
