@@ -493,6 +493,7 @@ func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
 					"WORKSPACE-QUOTA-ACQUIRE",
 					zap.Uint64("quota", quota),
 					zap.Uint64("remaining", remaining),
+					zap.String("txn", txn.op.Txn().DebugString()),
 				)
 				txn.writeWorkspaceThreshold += quota
 				txn.extraWriteWorkspaceThreshold += quota
@@ -513,8 +514,10 @@ func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
 			"WORKSPACE-QUOTA-RELEASE",
 			zap.Uint64("quota", txn.extraWriteWorkspaceThreshold),
 			zap.Uint64("remaining", remaining),
+			zap.String("txn", txn.op.Txn().DebugString()),
 		)
 		txn.extraWriteWorkspaceThreshold = 0
+		txn.writeWorkspaceThreshold = txn.engine.config.writeWorkspaceThreshold
 	}
 
 	if dumpAll {
@@ -573,7 +576,7 @@ func (txn *Transaction) dumpInsertBatchLocked(ctx context.Context, offset int, s
 		if tbCount[k] >= txn.engine.config.insertEntryMaxCount {
 			continue
 		}
-		if uint64(sum+tbSize[k]) >= txn.writeWorkspaceThreshold {
+		if uint64(sum+tbSize[k]) >= txn.commitWorkspaceThreshold {
 			break
 		}
 		sum += tbSize[k]
@@ -1309,6 +1312,22 @@ func (txn *Transaction) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
 		return nil, nil
 	}
 
+	if err := txn.IncrStatementID(ctx, true); err != nil {
+		return nil, err
+	}
+
+	if err := txn.transferTombstonesByCommit(ctx); err != nil {
+		return nil, err
+	}
+
+	if err := txn.mergeTxnWorkspaceLocked(ctx); err != nil {
+		return nil, err
+	}
+	if err := txn.dumpBatchLocked(ctx, -1); err != nil {
+		return nil, err
+	}
+	txn.traceWorkspaceLocked(true)
+
 	if txn.workspaceSize > 10*mpool.MB {
 		logutil.Info(
 			"BIG-TXN",
@@ -1332,23 +1351,6 @@ func (txn *Transaction) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
 			zap.String("txn", txn.op.Txn().DebugString()),
 		)
 	}
-
-	if err := txn.IncrStatementID(ctx, true); err != nil {
-		return nil, err
-	}
-
-	if err := txn.transferTombstonesByCommit(ctx); err != nil {
-		return nil, err
-	}
-
-	if err := txn.mergeTxnWorkspaceLocked(ctx); err != nil {
-		return nil, err
-	}
-	if err := txn.dumpBatchLocked(ctx, -1); err != nil {
-		return nil, err
-	}
-
-	txn.traceWorkspaceLocked(true)
 
 	if !txn.hasS3Op.Load() &&
 		txn.op.TxnOptions().CheckDupEnabled() {
