@@ -70,7 +70,7 @@ func (h *mockHandle) HandleCommit(ctx context.Context, meta *txn.TxnMeta) (times
 	if len(meta.TNShards) > 1 && meta.CommitTS.IsEmpty() {
 		meta.CommitTS = meta.PreparedTS.Next()
 	}
-	return h.Handle.HandleCommit(ctx, *meta)
+	return h.Handle.HandleCommit(ctx, *meta, nil, nil)
 }
 
 func (h *mockHandle) HandleCommitting(ctx context.Context, meta *txn.TxnMeta) error {

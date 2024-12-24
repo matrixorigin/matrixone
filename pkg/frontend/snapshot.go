@@ -669,6 +669,9 @@ func checkRestorePriv(ctx context.Context, ses *Session, snapshot *snapshotRecor
 				return moerr.NewInternalError(ctx, "non-sys account's snapshot can't restore to sys account")
 			}
 		}
+		if snapshot.level == tree.RESTORELEVELDATABASE.String() || snapshot.level == tree.RESTORELEVELTABLE.String() {
+			return moerr.NewInternalError(ctx, "can't restore account from db or table level snapshot")
+		}
 	case tree.RESTORELEVELDATABASE:
 		dbname := string(stmt.DatabaseName)
 		if len(dbname) > 0 && needSkipDb(dbname) {
@@ -678,6 +681,15 @@ func checkRestorePriv(ctx context.Context, ses *Session, snapshot *snapshotRecor
 		if snapshot.level == tree.RESTORELEVELCLUSTER.String() {
 			return moerr.NewInternalError(ctx, "can't restore db from cluster level snapshot")
 		}
+		if snapshot.level == tree.RESTORELEVELTABLE.String() {
+			return moerr.NewInternalError(ctx, "can't restore db from table level snapshot")
+		}
+		if string(stmt.AccountName) != ses.GetTenantInfo().GetTenant() {
+			return moerr.NewInternalError(ctx, "can't restore database from other account's snapshot")
+		}
+		if snapshot.level == tree.RESTORELEVELDATABASE.String() && snapshot.databaseName != string(stmt.DatabaseName) {
+			return moerr.NewInternalErrorf(ctx, "databaseName(%v) does not match snapshot.databaseName(%v)", string(stmt.DatabaseName), snapshot.databaseName)
+		}
 	case tree.RESTORELEVELTABLE:
 		dbname := string(stmt.DatabaseName)
 		if len(dbname) > 0 && needSkipDb(dbname) {
@@ -685,6 +697,14 @@ func checkRestorePriv(ctx context.Context, ses *Session, snapshot *snapshotRecor
 		}
 		if snapshot.level == tree.RESTORELEVELCLUSTER.String() {
 			return moerr.NewInternalError(ctx, "can't restore db from cluster level snapshot")
+		}
+		if string(stmt.AccountName) != ses.GetTenantInfo().GetTenant() {
+			return moerr.NewInternalError(ctx, "can't restore table from other account's snapshot")
+		}
+		if snapshot.level == tree.RESTORELEVELTABLE.String() {
+			if snapshot.databaseName != string(stmt.DatabaseName) || snapshot.tableName != string(stmt.TableName) {
+				return moerr.NewInternalErrorf(ctx, "tableName(%v) does not match snapshot.tableName(%v)", string(stmt.TableName), snapshot.tableName)
+			}
 		}
 	default:
 		return moerr.NewInternalErrorf(ctx, "unknown restore level: %v", restoreLevel)
@@ -1473,7 +1493,14 @@ func doResolveSnapshotWithSnapshotName(ctx context.Context, ses FeSession, snaps
 	var accountId uint32
 	// cluster level record has no accountName, so accountId is 0
 	if len(record.accountName) != 0 {
-		accountId = uint32(record.objId)
+		if record.level == tree.RESTORELEVELACCOUNT.String() {
+			accountId = uint32(record.objId)
+		} else {
+			accountId, err = defines.GetAccountId(ctx)
+			if err != nil {
+				return
+			}
+		}
 	}
 
 	return &pbplan.Snapshot{
