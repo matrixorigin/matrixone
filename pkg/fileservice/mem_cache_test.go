@@ -168,22 +168,27 @@ func BenchmarkMemoryCacheUpdate(b *testing.B) {
 	)
 	defer cache.Flush(ctx)
 
-	for i := range b.N {
-		vec := &IOVector{
-			FilePath: fmt.Sprintf("%d", i),
-			Entries: []IOEntry{
-				{
-					Data:       []byte("a"),
-					Size:       1,
-					CachedData: DefaultCacheDataAllocator().AllocateCacheData(ctx, 1),
+	b.ResetTimer()
+
+	b.RunParallel(func(pb *testing.PB) {
+		for i := 0; pb.Next(); i++ {
+			vec := &IOVector{
+				FilePath: fmt.Sprintf("%d", i),
+				Entries: []IOEntry{
+					{
+						Data:       []byte("a"),
+						Size:       1,
+						CachedData: DefaultCacheDataAllocator().AllocateCacheData(ctx, 1),
+					},
 				},
-			},
+			}
+			if err := cache.Update(ctx, vec, false); err != nil {
+				b.Fatal(err)
+			}
+			vec.Release()
 		}
-		if err := cache.Update(ctx, vec, false); err != nil {
-			b.Fatal(err)
-		}
-		vec.Release()
-	}
+	})
+
 }
 
 func BenchmarkMemoryCacheRead(b *testing.B) {
@@ -212,21 +217,26 @@ func BenchmarkMemoryCacheRead(b *testing.B) {
 	}
 	vec.Release()
 
-	for range b.N {
-		vec := &IOVector{
-			FilePath: "foo",
-			Entries: []IOEntry{
-				{
-					Size:        1,
-					ToCacheData: CacheOriginalData,
+	b.ResetTimer()
+
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			vec := &IOVector{
+				FilePath: "foo",
+				Entries: []IOEntry{
+					{
+						Size:        1,
+						ToCacheData: CacheOriginalData,
+					},
 				},
-			},
+			}
+			if err := cache.Read(ctx, vec); err != nil {
+				b.Fatal(err)
+			}
+			vec.Release()
 		}
-		if err := cache.Read(ctx, vec); err != nil {
-			b.Fatal(err)
-		}
-		vec.Release()
-	}
+	})
+
 }
 
 func TestMemoryCacheGlobalSizeHint(t *testing.T) {
