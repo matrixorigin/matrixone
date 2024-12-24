@@ -583,23 +583,23 @@ func (txn *Transaction) dumpInsertBatchLocked(ctx context.Context, offset int, s
 		skipTable[k] = true
 	}
 
-	lastWritesIndex := offset
+	lastWriteIndex := offset
 	writes := txn.writes
 	mp := make(map[tableKey][]*batch.Batch)
 	for i := offset; i < len(txn.writes); i++ {
 		if skipTable[txn.writes[i].tableId] {
-			writes[lastWritesIndex] = writes[i]
-			lastWritesIndex++
+			writes[lastWriteIndex] = writes[i]
+			lastWriteIndex++
 			continue
 		}
 		if txn.writes[i].isCatalog() {
-			writes[lastWritesIndex] = writes[i]
-			lastWritesIndex++
+			writes[lastWriteIndex] = writes[i]
+			lastWriteIndex++
 			continue
 		}
 		if txn.writes[i].bat == nil || txn.writes[i].bat.RowCount() == 0 {
-			writes[lastWritesIndex] = writes[i]
-			lastWritesIndex++
+			writes[lastWriteIndex] = writes[i]
+			lastWriteIndex++
 			continue
 		}
 
@@ -615,23 +615,23 @@ func (txn *Transaction) dumpInsertBatchLocked(ctx context.Context, offset int, s
 			*size += uint64(bat.Size())
 			*pkCount += bat.RowCount()
 			// skip rowid
-			newBatch := batch.NewWithSize(len(bat.Vecs) - 1)
-			newBatch.SetAttributes(bat.Attrs[1:])
-			newBatch.Vecs = bat.Vecs[1:]
-			newBatch.SetRowCount(bat.Vecs[0].Length())
-			mp[tbKey] = append(mp[tbKey], newBatch)
+			newBat := batch.NewWithSize(len(bat.Vecs) - 1)
+			newBat.SetAttributes(bat.Attrs[1:])
+			newBat.Vecs = bat.Vecs[1:]
+			newBat.SetRowCount(bat.Vecs[0].Length())
+			mp[tbKey] = append(mp[tbKey], newBat)
 			defer bat.Clean(txn.proc.GetMPool())
 
 			keepElement = false
 		}
 
 		if keepElement {
-			writes[lastWritesIndex] = writes[i]
-			lastWritesIndex++
+			writes[lastWriteIndex] = writes[i]
+			lastWriteIndex++
 		}
 	}
 
-	txn.writes = writes[:lastWritesIndex]
+	txn.writes = writes[:lastWriteIndex]
 
 	for tbKey := range mp {
 		// scenario 2 for cn write s3, more info in the comment of S3Writer
@@ -696,18 +696,18 @@ func (txn *Transaction) dumpInsertBatchLocked(ctx context.Context, offset int, s
 
 func (txn *Transaction) dumpDeleteBatchLocked(ctx context.Context, offset int, size *uint64) error {
 	deleteCnt := 0
-	lastWritesIndex := offset
+	lastWriteIndex := offset
 	writes := txn.writes
 	mp := make(map[tableKey][]*batch.Batch)
 	for i := offset; i < len(txn.writes); i++ {
 		if txn.writes[i].isCatalog() {
-			writes[lastWritesIndex] = writes[i]
-			lastWritesIndex++
+			writes[lastWriteIndex] = writes[i]
+			lastWriteIndex++
 			continue
 		}
 		if txn.writes[i].bat == nil || txn.writes[i].bat.RowCount() == 0 {
-			writes[lastWritesIndex] = writes[i]
-			lastWritesIndex++
+			writes[lastWriteIndex] = writes[i]
+			lastWriteIndex++
 			continue
 		}
 
@@ -723,24 +723,24 @@ func (txn *Transaction) dumpDeleteBatchLocked(ctx context.Context, offset int, s
 			deleteCnt += bat.RowCount()
 			*size += uint64(bat.Size())
 
-			newBat := batch.NewWithSize(len(bat.Vecs))
-			newBat.SetAttributes(bat.Attrs)
-			newBat.Vecs = bat.Vecs
-			newBat.SetRowCount(bat.Vecs[0].Length())
+			newBatch := batch.NewWithSize(len(bat.Vecs))
+			newBatch.SetAttributes(bat.Attrs)
+			newBatch.Vecs = bat.Vecs
+			newBatch.SetRowCount(bat.Vecs[0].Length())
 
-			mp[tbKey] = append(mp[tbKey], newBat)
+			mp[tbKey] = append(mp[tbKey], newBatch)
 			defer bat.Clean(txn.proc.GetMPool())
 
 			keepElement = false
 		}
 
 		if keepElement {
-			writes[lastWritesIndex] = writes[i]
-			lastWritesIndex++
+			writes[lastWriteIndex] = writes[i]
+			lastWriteIndex++
 		}
 	}
 
-	txn.writes = writes[:lastWritesIndex]
+	txn.writes = writes[:lastWriteIndex]
 
 	for tbKey := range mp {
 		// scenario 2 for cn write s3, more info in the comment of S3Writer
