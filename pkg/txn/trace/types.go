@@ -74,7 +74,7 @@ var (
 	TraceTableFilterTableSQL = fmt.Sprintf(`create table %s.%s(
 		id                    bigint UNSIGNED primary key auto_increment,
 		table_id			  bigint UNSIGNED not null,
-		table_name            varchar(100)     not null,
+		table_name            varchar(150)     not null,
 		columns               varchar(200)
 	)`, DebugDB, TraceTableFilterTable)
 

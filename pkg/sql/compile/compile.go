@@ -1518,10 +1518,11 @@ func (c *Compile) compileExternScan(n *plan.Node) ([]*Scope, error) {
 		return nil, err
 	}
 
-	err, strictSqlMode := StrictSqlMode(c.proc)
-	if err != nil {
-		return nil, err
-	}
+	strictSqlMode := false
+	//err, strictSqlMode := StrictSqlMode(c.proc)
+	//if err != nil {
+	//	return nil, err
+	//}
 	if param.ScanType == tree.INLINE {
 		return c.compileExternValueScan(n, param, strictSqlMode)
 	}
