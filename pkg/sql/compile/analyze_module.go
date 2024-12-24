@@ -541,6 +541,7 @@ func explainResourceOverview(queryResult *util.RunResult, statsInfo *statistic.S
 				))
 				buffer.WriteString(fmt.Sprintf("\t\t- Build Plan Duration: %dns \n", int64(statsInfo.PlanStage.PlanDuration)))
 				buffer.WriteString(fmt.Sprintf("\t\t- Call Stats Duration: %dns \n", statsInfo.PlanStage.BuildPlanStatsDuration))
+				buffer.WriteString(fmt.Sprintf("\t\t- Call StatsInCache Duration: %dns \n", statsInfo.PlanStage.BuildPlanStatsInCacheDuration))
 				buffer.WriteString(fmt.Sprintf("\t\t- Call Stats IO Consumption: %dns \n", statsInfo.PlanStage.BuildPlanStatsIOConsumption))
 				buffer.WriteString(fmt.Sprintf("\t\t- Call Stats S3List:%d, S3Head:%d, S3Put:%d, S3Get:%d, S3Delete:%d, S3DeleteMul:%d\n",
 					statsInfo.PlanStage.BuildPlanStatsS3.List,

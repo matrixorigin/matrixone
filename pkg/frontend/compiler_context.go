@@ -842,11 +842,11 @@ func (tcc *TxnCompilerContext) GetPrimaryKeyDef(dbName string, tableName string,
 }
 
 func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, snapshot *plan2.Snapshot) (*pb.StatsInfo, error) {
-	stats := statistic.StatsInfoFromContext(tcc.execCtx.reqCtx)
+	statser := statistic.StatsInfoFromContext(tcc.execCtx.reqCtx)
 	start := time.Now()
 	defer func() {
 		v2.TxnStatementStatsDurationHistogram.Observe(time.Since(start).Seconds())
-		stats.AddBuildPlanStatsConsumption(time.Since(start))
+		statser.AddBuildPlanStatsConsumption(time.Since(start))
 	}()
 
 	dbName := obj.GetSchemaName()
@@ -937,6 +937,12 @@ func (tcc *TxnCompilerContext) UpdateStatsInCache(tid uint64, s *pb.StatsInfo) {
 // statsInCache get the *pb.StatsInfo from session cache. If the info is nil, just return nil and false,
 // else, check if the info needs to be updated.
 func (tcc *TxnCompilerContext) statsInCache(ctx context.Context, dbName string, table engine.Relation, snapshot *plan2.Snapshot) (*pb.StatsInfo, bool) {
+	statser := statistic.StatsInfoFromContext(tcc.execCtx.reqCtx)
+	start := time.Now()
+	defer func() {
+		statser.AddStatsStatsInCacheDuration(time.Since(start))
+	}()
+
 	s := tcc.GetStatsCache().GetStatsInfo(table.GetTableID(ctx), true)
 	if s == nil {
 		return nil, false

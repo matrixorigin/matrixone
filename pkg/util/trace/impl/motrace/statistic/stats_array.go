@@ -290,14 +290,15 @@ type StatsInfo struct {
 
 	// Planning Phase Statistics
 	PlanStage struct {
-		PlanDuration       time.Duration `json:"PlanDuration"`
-		PlanStartTime      time.Time     `json:"PlanStartTime"`
-		BuildPlanS3Request S3Request     `json:"BuildPlanS3Request"`
-		BuildPlanStatsS3   S3Request     `json:"BuildPlanStatsS3"`
+		PlanDuration                time.Duration `json:"PlanDuration"`
+		PlanStartTime               time.Time     `json:"PlanStartTime"`
+		BuildPlanS3Request          S3Request     `json:"BuildPlanS3Request"`
+		BuildPlanStatsIOConsumption int64         `json:"BuildPlanStatsIOConsumption"` // unit: ns
 		// The following attributes belong to independent statistics during the `buildPlan` stage, only for analysis reference.
-		BuildPlanStatsDuration      int64 `json:"BuildPlanStatsDuration"`      // unit: ns
-		BuildPlanStatsIOConsumption int64 `json:"BuildPlanStatsIOConsumption"` // unit: ns
-		BuildPlanResolveVarDuration int64 `json:"BuildPlanResolveVarDuration"` // unit: ns
+		BuildPlanStatsS3              S3Request `json:"BuildPlanStatsS3"`
+		BuildPlanStatsDuration        int64     `json:"BuildPlanStatsDuration"`        // unit: ns
+		BuildPlanStatsInCacheDuration int64     `json:"BuildPlanStatsInCacheDuration"` // unit: ns
+		BuildPlanResolveVarDuration   int64     `json:"BuildPlanResolveVarDuration"`   // unit: ns
 	}
 
 	// Compile phase statistics
@@ -520,6 +521,13 @@ func (stats *StatsInfo) AddBuildPlanStatsIOConsumption(d time.Duration) {
 		return
 	}
 	atomic.AddInt64(&stats.PlanStage.BuildPlanStatsIOConsumption, int64(d))
+}
+
+func (stats *StatsInfo) AddStatsStatsInCacheDuration(d time.Duration) {
+	if stats == nil {
+		return
+	}
+	atomic.AddInt64(&stats.PlanStage.BuildPlanStatsInCacheDuration, int64(d))
 }
 
 func (stats *StatsInfo) AddBuildPlanResolveVarConsumption(d time.Duration) {
