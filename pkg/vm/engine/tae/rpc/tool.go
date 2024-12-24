@@ -17,6 +17,7 @@ package rpc
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -1276,6 +1277,153 @@ func (c *ckpListArg) getTableList(ctx context.Context) (res string, err error) {
 		return
 	}
 	res = string(jsonData)
+
+	return
+}
+
+type GCArg struct {
+}
+
+func (c *GCArg) PrepareCommand() *cobra.Command {
+	gcCmd := &cobra.Command{
+		Use:   "gc",
+		Short: "gc",
+		Long:  "Display information about a given gc",
+		Run:   RunFactory(c),
+	}
+
+	gcCmd.SetUsageTemplate(c.Usage())
+
+	dump := gcDumpArg{}
+	gcCmd.AddCommand(dump.PrepareCommand())
+
+	return gcCmd
+}
+
+func (c *GCArg) FromCommand(cmd *cobra.Command) (err error) {
+	return nil
+}
+
+func (c *GCArg) String() string {
+	return "gc"
+}
+
+func (c *GCArg) Usage() (res string) {
+	res += "Available Commands:\n"
+	res += fmt.Sprintf("  %-5v show gc information\n", "stat")
+
+	res += "\n"
+	res += "Usage:\n"
+	res += "inspect table [flags] [options]\n"
+
+	res += "\n"
+	res += "Use \"mo-tool inspect table <command> --help\" for more information about a given command.\n"
+
+	return
+}
+
+func (c *GCArg) Run() error {
+	return nil
+}
+
+type gcDumpArg struct {
+	ctx  *inspectContext
+	file string
+	res  string
+}
+
+func (c *gcDumpArg) PrepareCommand() *cobra.Command {
+	gcDumpCmd := &cobra.Command{
+		Use:   "dump",
+		Short: "gc dump",
+		Long:  "Display information about a given gc",
+		Run:   RunFactory(c),
+	}
+
+	gcDumpCmd.SetUsageTemplate(c.Usage())
+
+	gcDumpCmd.Flags().StringP("file", "f", "", "file to dump")
+
+	return gcDumpCmd
+}
+
+func (c *gcDumpArg) FromCommand(cmd *cobra.Command) (err error) {
+	if cmd.Flag("ictx") != nil {
+		c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
+	}
+	c.file, _ = cmd.Flags().GetString("file")
+	return nil
+}
+
+func (c *gcDumpArg) String() string {
+	return c.res
+}
+
+func (c *gcDumpArg) Usage() (res string) {
+	res += "Examples:\n"
+	res += "  # Display all gc information\n"
+	res += "  inspect gc dump\n"
+
+	res += "\n"
+	res += "Options:\n"
+	return
+}
+
+func (c *gcDumpArg) Run() (err error) {
+	if c.ctx == nil {
+		return moerr.NewInfoNoCtx("it is an online command")
+	}
+	ctx := context.Background()
+
+	err = os.MkdirAll(filepath.Dir(c.file), 0755)
+	if err != nil {
+		err = moerr.NewInternalErrorNoCtx(fmt.Sprintf("Error creating directory: %v", err))
+		return
+	}
+	file, err := os.OpenFile(c.file, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		err = moerr.NewInternalErrorNoCtx(fmt.Sprintf("Error opening file: %v", err))
+		return
+	}
+
+	pinnedObjects := make(map[string]bool)
+	dbIt := c.ctx.db.Catalog.MakeDBIt(false)
+	for dbIt.Valid() {
+		db := dbIt.Get().GetPayload()
+		tableIt := db.MakeTableIt(false)
+		for tableIt.Valid() {
+			table := tableIt.Get().GetPayload()
+			objIt := table.MakeObjectIt(true)
+			for objIt.Next() {
+				obj := objIt.Item()
+				pinnedObjects[obj.ObjectName().String()] = true
+			}
+			tableIt.Next()
+		}
+		dbIt.Next()
+	}
+
+	entries := c.ctx.db.BGCheckpointRunner.GetAllCheckpoints()
+	for _, entry := range entries {
+		data, _ := getCkpData(ctx, entry, c.ctx.db.Runtime.Fs)
+		bat := data.GetObjectBatchs()
+		vec := bat.GetVectorByName(logtail.ObjectAttr_ObjectStats)
+		for i := 0; i < vec.Length(); i++ {
+			v := vec.Get(i).([]byte)
+			obj := objectio.ObjectStats(v)
+			pinnedObjects[obj.ObjectName().String()] = true
+		}
+	}
+
+	for obj := range pinnedObjects {
+		_, err = file.WriteString(obj + "\n")
+		if err != nil {
+			err = moerr.NewInternalErrorNoCtx(fmt.Sprintf("Error writing to file: %v", err))
+			return
+		}
+	}
+
+	c.res = fmt.Sprintf("Dumped pinned objects to file, file count %v", len(pinnedObjects))
 
 	return
 }
