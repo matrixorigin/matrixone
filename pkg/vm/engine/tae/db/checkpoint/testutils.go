@@ -64,7 +64,7 @@ func (r *runner) ForceGlobalCheckpoint(end types.TS, interval time.Duration) err
 		interval = r.options.globalVersionInterval
 	}
 	if r.GetPenddingIncrementalCount() != 0 {
-		end2 := r.MaxIncrementalCheckpoint().GetEnd()
+		end2 := r.store.MaxICKPFinished().GetEnd()
 		if end2.GE(&end) {
 			r.globalCheckpointQueue.Enqueue(&globalCheckpointContext{
 				force:    true,
@@ -108,9 +108,10 @@ func (r *runner) ForceGlobalCheckpoint(end types.TS, interval time.Duration) err
 				}
 				return err
 			}
+			end2 := r.store.MaxICKPFinished().GetEnd()
 			r.globalCheckpointQueue.Enqueue(&globalCheckpointContext{
 				force:    true,
-				end:      end,
+				end:      end2,
 				interval: interval,
 			})
 			return nil
