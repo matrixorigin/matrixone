@@ -17,11 +17,14 @@ package checkpoint
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
+
+var ErrPendingCheckpoint = moerr.NewPrevCheckpointNotFinished()
 
 type State int8
 
@@ -41,23 +44,20 @@ const (
 )
 
 type CheckpointScheduler interface {
-	TryScheduleCheckpoint(types.TS)
+	TryScheduleCheckpoint(types.TS, bool) (Intent, error)
 }
 
 type Runner interface {
 	CheckpointScheduler
 	TestRunner
+	RunnerWriter
 	RunnerReader
+
 	Start()
 	Stop()
-	String() string
+
 	Replay(catalog.DataFactory) *CkpReplayer
-
 	GCByTS(ctx context.Context, ts types.TS) error
-
-	// for test, delete in next phase
-	GetAllCheckpoints() []*CheckpointEntry
-	GetAllCheckpointsForBackup(compact *CheckpointEntry) []*CheckpointEntry
 }
 
 type Observer interface {

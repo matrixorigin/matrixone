@@ -170,10 +170,6 @@ func (db *DB) ForceCheckpoint(
 	ts types.TS,
 	flushDuration time.Duration,
 ) (err error) {
-	// FIXME: cannot disable with a running job
-	db.BGCheckpointRunner.DisableCheckpoint()
-	defer db.BGCheckpointRunner.EnableCheckpoint()
-	db.BGCheckpointRunner.CleanPenddingCheckpoint()
 	if flushDuration == 0 {
 		flushDuration = time.Minute * 3 / 2
 	}
@@ -187,7 +183,7 @@ func (db *DB) ForceCheckpoint(
 			logger = logutil.Error
 		}
 		logger(
-			"Control-Force-Checkpoint",
+			"ICKP-Control-Force-End",
 			zap.Error(err),
 			zap.Duration("total-cost", time.Since(t0)),
 			zap.String("ts", ts.ToString()),
@@ -212,11 +208,10 @@ func (db *DB) ForceCheckpoint(
 			err = moerr.NewInternalError(ctx, "force checkpoint timeout")
 			return
 		default:
-			err = db.BGCheckpointRunner.ForceIncrementalCheckpoint(ts, true)
-			if dbutils.IsRetrieableCheckpoint(err) {
+			err = db.BGCheckpointRunner.ForceIncrementalCheckpoint(ts)
+			if dbutils.IsCheckpointRetryableErr(err) {
 				db.BGCheckpointRunner.CleanPenddingCheckpoint()
-				interval := flushDuration.Milliseconds() / 400
-				time.Sleep(time.Duration(interval))
+				time.Sleep(flushDuration / 20)
 				break
 			}
 			return

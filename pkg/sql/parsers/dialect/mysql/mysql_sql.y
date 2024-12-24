@@ -1112,6 +1112,26 @@ snapshot_object_opt:
             ObjName: tree.Identifier($2.Compare()),
         }
     }
+|   DATABASE ident
+    {
+        spLevel := tree.SnapshotLevelType{
+            Level: tree.SNAPSHOTLEVELDATABASE,
+        }
+        $$ = tree.ObjectInfo{
+            SLevel: spLevel,
+            ObjName: tree.Identifier($2.Compare()),
+        }
+    }
+|   TABLE ident ident
+    {
+        spLevel := tree.SnapshotLevelType{
+            Level: tree.SNAPSHOTLEVELTABLE,
+        }
+        $$ = tree.ObjectInfo{
+            SLevel: spLevel,
+            ObjName: tree.Identifier($2.Compare() + "." + $3.Compare()),
+        }
+    }
 
 create_pitr_stmt:
     CREATE PITR not_exists_opt ident RANGE pitr_value STRING

@@ -22,7 +22,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	taskpb "github.com/matrixorigin/matrixone/pkg/pb/task"
@@ -54,23 +53,13 @@ func (s *CNMergeScheduler) sendMergeTask(ctx context.Context, task *api.MergeTas
 	if !ok {
 		return taskservice.ErrNotReady
 	}
-	taskIDPrefix := "Merge:" + strconv.Itoa(int(task.TblId))
-	asyncTask, err := ts.QueryAsyncTask(ctx,
-		taskservice.WithTaskMetadataId(taskservice.LIKE, taskIDPrefix+"%"),
-		taskservice.WithTaskStatusCond(taskpb.TaskStatus_Created, taskpb.TaskStatus_Running))
-	if err != nil {
-		return err
-	}
-	if len(asyncTask) != 0 {
-		return moerr.NewInternalError(ctx, fmt.Sprintf("table %q is merging", task.TableName))
-	}
 	b, err := task.Marshal()
 	if err != nil {
 		return err
 	}
 	return ts.CreateAsyncTask(ctx,
 		taskpb.TaskMetadata{
-			ID:       taskIDPrefix + ":" + strconv.FormatInt(time.Now().Unix(), 10),
+			ID:       "Merge:" + strconv.Itoa(int(task.TblId)) + ":" + strconv.FormatInt(time.Now().Unix(), 10),
 			Executor: taskpb.TaskCode_MergeObject,
 			Context:  b,
 			Options:  taskpb.TaskOptions{Resource: &taskpb.Resource{Memory: task.EstimatedMemUsage}},
