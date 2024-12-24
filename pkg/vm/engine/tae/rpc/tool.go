@@ -17,6 +17,8 @@ package rpc
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -1380,39 +1382,18 @@ func (c *gcDumpArg) Run() (err error) {
 		err = moerr.NewInternalErrorNoCtx(fmt.Sprintf("Error creating directory: %v", err))
 		return
 	}
-	file, err := os.OpenFile(c.file, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	file, err := os.OpenFile(c.file, os.O_CREATE|os.O_WRONLY|os.O_APPEND|os.O_TRUNC, 0644)
+	defer file.Close()
 	if err != nil {
 		err = moerr.NewInternalErrorNoCtx(fmt.Sprintf("Error opening file: %v", err))
 		return
 	}
 
 	pinnedObjects := make(map[string]bool)
-	dbIt := c.ctx.db.Catalog.MakeDBIt(false)
-	for dbIt.Valid() {
-		db := dbIt.Get().GetPayload()
-		tableIt := db.MakeTableIt(false)
-		for tableIt.Valid() {
-			table := tableIt.Get().GetPayload()
-			objIt := table.MakeObjectIt(true)
-			for objIt.Next() {
-				obj := objIt.Item()
-				pinnedObjects[obj.ObjectName().String()] = true
-			}
-			tableIt.Next()
-		}
-		dbIt.Next()
-	}
 
-	entries := c.ctx.db.BGCheckpointRunner.GetAllCheckpoints()
-	for _, entry := range entries {
-		data, _ := getCkpData(ctx, entry, c.ctx.db.Runtime.Fs)
-		bat := data.GetObjectBatchs()
-		vec := bat.GetVectorByName(logtail.ObjectAttr_ObjectStats)
-		for i := 0; i < vec.Length(); i++ {
-			v := vec.Get(i).([]byte)
-			obj := objectio.ObjectStats(v)
-			pinnedObjects[obj.ObjectName().String()] = true
-		}
+	c.getInMemObjects(pinnedObjects)
+	if err = c.getCheckpointObject(ctx, pinnedObjects); err != nil {
+		return
 	}
 
 	for obj := range pinnedObjects {
@@ -1425,5 +1406,79 @@ func (c *gcDumpArg) Run() (err error) {
 
 	c.res = fmt.Sprintf("Dumped pinned objects to file, file count %v", len(pinnedObjects))
 
+	return
+}
+
+func (c *gcDumpArg) getInMemObjects(pinnedObjects map[string]bool) {
+	dbIt := c.ctx.db.Catalog.MakeDBIt(false)
+	for dbIt.Valid() {
+		db := dbIt.Get().GetPayload()
+		tableIt := db.MakeTableIt(false)
+		for tableIt.Valid() {
+			table := tableIt.Get().GetPayload()
+			lp := new(catalog.LoopProcessor)
+			lp.TombstoneFn = func(be *catalog.ObjectEntry) error {
+				if _, ok := pinnedObjects[be.ObjectName().String()]; !ok {
+					logutil.Infof("asdf mem tombstone: %v", be.ObjectName().String())
+				}
+				pinnedObjects[be.ObjectName().String()] = true
+				return nil
+			}
+			lp.ObjectFn = func(be *catalog.ObjectEntry) error {
+				if _, ok := pinnedObjects[be.ObjectName().String()]; !ok {
+					logutil.Infof("asdf mem object: %v", be.ObjectName().String())
+				}
+				pinnedObjects[be.ObjectName().String()] = true
+				return nil
+			}
+			table.RecurLoop(lp)
+			tableIt.Next()
+		}
+		dbIt.Next()
+	}
+}
+
+func (c *gcDumpArg) getCheckpointObject(ctx context.Context, pinnedObjects map[string]bool) (err error) {
+	entries := c.ctx.db.BGCheckpointRunner.GetAllCheckpoints()
+	for _, entry := range entries {
+		cnLoc := entry.GetLocation()
+		cnObj := cnLoc.ObjectId()
+		if _, ok := pinnedObjects[cnObj.String()]; !ok {
+			logutil.Infof("asdf ckp cn location: %v", cnObj.String())
+			pinnedObjects[cnObj.String()] = true
+		}
+		tnLoc := entry.GetTNLocation()
+		tnObj := tnLoc.ObjectId()
+		if _, ok := pinnedObjects[tnObj.String()]; !ok {
+			logutil.Infof("asdf ckp tn location: %v", tnObj.String())
+			pinnedObjects[tnObj.String()] = true
+		}
+
+		data, err := getCkpData(ctx, entry, c.ctx.db.Runtime.Fs)
+		if err != nil {
+			return moerr.NewInfoNoCtx(fmt.Sprintf("failed to get checkpoint data %v, %v", entry.LSN(), err))
+		}
+		bat := data.GetObjectBatchs()
+		vec := bat.GetVectorByName(logtail.ObjectAttr_ObjectStats)
+		for i := 0; i < vec.Length(); i++ {
+			v := vec.Get(i).([]byte)
+			obj := objectio.ObjectStats(v)
+			if _, ok := pinnedObjects[obj.ObjectName().String()]; !ok {
+				logutil.Infof("asdf ckp object: %v", obj.ObjectName().String())
+			}
+			pinnedObjects[obj.ObjectName().String()] = true
+		}
+
+		bat = data.GetTombstoneObjectBatchs()
+		vec = bat.GetVectorByName(logtail.ObjectAttr_ObjectStats)
+		for i := 0; i < vec.Length(); i++ {
+			v := vec.Get(i).([]byte)
+			obj := objectio.ObjectStats(v)
+			if _, ok := pinnedObjects[obj.ObjectName().String()]; !ok {
+				logutil.Infof("asdf ckp tombstone object: %v", obj.ObjectName().String())
+			}
+			pinnedObjects[obj.ObjectName().String()] = true
+		}
+	}
 	return
 }
