@@ -53,12 +53,10 @@ func HybridScanByBlock(
 	if *bat == nil {
 		return nil
 	}
-	it := tableEntry.MakeTombstoneObjectIt()
+	it := tableEntry.MakeTombstoneVisibleObjectIt(txn)
+	defer it.Release()
 	for it.Next() {
 		tombstone := it.Item()
-		if !tombstone.IsVisible(txn) {
-			continue
-		}
 		err := tombstone.GetObjectData().FillBlockTombstones(ctx, txn, blkID, &(*bat).Deletes, uint64(deleteStartOffset), mp)
 		if err != nil {
 			(*bat).Close()
@@ -74,6 +72,15 @@ func HybridScanByBlock(
 	return err
 }
 
+/*
+TombstoneRangeScanByObject scans the an object's tombstones committed in the range [start, end] and returns a batch of data.
+
+Since the returned batch must have accruate ts for each row, we need collect the data from appendable objects.
+
+Targets:
+1. CNCreated entries where start <= CreatedAt <= end
+2. Appendable entries where x <= CreatedAt <= end, where x is the first appendable entry with CreatedAt < start
+*/
 func TombstoneRangeScanByObject(
 	ctx context.Context,
 	tableEntry *catalog.TableEntry,
@@ -82,34 +89,38 @@ func TombstoneRangeScanByObject(
 	mp *mpool.MPool,
 	vpool *containers.VectorPool,
 ) (bat *containers.Batch, err error) {
+	tableEntry.WaitTombstoneObjectCommitted(end)
 	it := tableEntry.MakeTombstoneObjectIt()
-	for it.Next() {
-		tombstone := it.Item()
-		if tombstone.IsAppendable() || tombstone.ObjectStats.GetCNCreated() {
-			needWait, txnToWait := tombstone.CreateNode.NeedWaitCommitting(end)
-			if needWait {
-				txnToWait.GetTxnState(true)
-			}
+	earlybreak := false
+	for ok := it.Last(); ok; ok = it.Prev() {
+		if earlybreak {
+			break
 		}
-	}
-	it = tableEntry.MakeTombstoneObjectIt()
-	for it.Next() {
+
 		tombstone := it.Item()
-		if tombstone.IsCreatingOrAborted() {
+		// we only check the created version of the object.
+		if tombstone.HasDropIntent() {
 			continue
 		}
+
 		if tombstone.IsAppendable() {
-			if !tombstone.DeletedAt.IsEmpty() && tombstone.DeletedAt.LT(&start) {
+			if tombstone.CreatedAt.GT(&end) {
+				// committing create object is excluded here
 				continue
 			}
-			if tombstone.CreatedAt.GT(&end) {
-				continue
+			// first committed appendable object with CreatedAt < start, stop at next round
+			if tombstone.CreatedAt.LT(&start) {
+				earlybreak = true
 			}
 		} else {
 			if !tombstone.ObjectStats.GetCNCreated() {
 				continue
 			}
+			if tombstone.CreatedAt.GT(&end) || tombstone.CreatedAt.LT(&start) {
+				continue
+			}
 		}
+
 		if tombstone.HasCommittedPersistedData() {
 			zm := tombstone.SortKeyZoneMap()
 			if !zm.RowidPrefixEq(objectID[:]) {
@@ -142,7 +153,7 @@ func ReadSysTableBatch(ctx context.Context, entry *catalog.TableEntry, readTxn t
 		panic(fmt.Sprintf("unsupported sys table id %v", entry))
 	}
 	schema := entry.GetLastestSchema(false)
-	it := entry.MakeObjectIt(false)
+	it := entry.MakeDataVisibleObjectIt(readTxn)
 	defer it.Release()
 	colIdxes := make([]int, 0, len(schema.ColDefs))
 	for _, col := range schema.ColDefs {
@@ -155,9 +166,6 @@ func ReadSysTableBatch(ctx context.Context, entry *catalog.TableEntry, readTxn t
 	prevLen := 0
 	for it.Next() {
 		obj := it.Item()
-		if !obj.IsVisible(readTxn) {
-			continue
-		}
 		for blkOffset := range obj.BlockCnt() {
 			blkid := objectio.NewBlockidWithObjectID(obj.ID(), uint16(blkOffset))
 			err := HybridScanByBlock(ctx, entry, readTxn, &bat, schema, colIdxes, blkid, common.CheckpointAllocator)

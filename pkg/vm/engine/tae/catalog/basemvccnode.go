@@ -64,6 +64,10 @@ func (un EntryMVCCNode) IsCreating() bool {
 	return un.CreatedAt.Equal(&txnif.UncommitTS)
 }
 
+func (un EntryMVCCNode) IsDropping() bool {
+	return un.DeletedAt.Equal(&txnif.UncommitTS)
+}
+
 func (un EntryMVCCNode) Clone() *EntryMVCCNode {
 	return &EntryMVCCNode{
 		CreatedAt: un.CreatedAt,
@@ -199,7 +203,8 @@ type BaseNode[T any] interface {
 type MVCCNode[T BaseNode[T]] struct {
 	*EntryMVCCNode
 	*txnbase.TxnMVCCNode
-	BaseNode T
+	BaseNode         T
+	CommitSideEffect func(commitTs types.TS) // used for object replay, no need to persist
 }
 
 func NewEmptyMVCCNodeFactory[T BaseNode[T]](factory func() T) func() *MVCCNode[T] {
@@ -260,6 +265,9 @@ func (e *MVCCNode[T]) ApplyCommit(id string) (err error) {
 		return
 	}
 	err = e.EntryMVCCNode.ApplyCommit(commitTS)
+	if e.CommitSideEffect != nil {
+		e.CommitSideEffect(commitTS)
+	}
 	return err
 }
 func (e *MVCCNode[T]) PrepareRollback() (err error) {
