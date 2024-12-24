@@ -154,15 +154,16 @@ func (c *compilerContext) Stats(obj *plan.ObjectRef, snapshot *plan.Snapshot) (*
 	var statsInfo *pb.StatsInfo
 	// This is a partition table.
 	if partitionInfo != nil {
-		crs := new(perfcounter.CounterSet)
+		//crs := new(perfcounter.CounterSet)
 		statsInfo = plan.NewStatsInfo()
 		for _, partitionTable := range partitionInfo.PartitionTableNames {
 			parCtx, parTable, err := c.getRelation(dbName, partitionTable, snapshot)
 			if err != nil {
 				return nil, err
 			}
-			newParCtx := perfcounter.AttachS3RequestKey(parCtx, crs)
-			newParCtx = perfcounter.AttachCalcTableStatsKey(newParCtx)
+			//newParCtx := perfcounter.AttachS3RequestKey(parCtx, crs)
+			//newParCtx = perfcounter.AttachCalcTableStatsKey(newParCtx)
+			newParCtx := perfcounter.AttachCalcTableStatsKey(parCtx)
 			parStats, err := parTable.Stats(newParCtx, true)
 			if err != nil {
 				return nil, err
@@ -170,32 +171,33 @@ func (c *compilerContext) Stats(obj *plan.ObjectRef, snapshot *plan.Snapshot) (*
 			statsInfo.Merge(parStats)
 		}
 
-		stats.AddBuildPlanStatsS3Request(statistic.S3Request{
-			List:      crs.FileService.S3.List.Load(),
-			Head:      crs.FileService.S3.Head.Load(),
-			Put:       crs.FileService.S3.Put.Load(),
-			Get:       crs.FileService.S3.Get.Load(),
-			Delete:    crs.FileService.S3.Delete.Load(),
-			DeleteMul: crs.FileService.S3.DeleteMulti.Load(),
-		})
+		//stats.AddBuildPlanStatsS3Request(statistic.S3Request{
+		//	List:      crs.FileService.S3.List.Load(),
+		//	Head:      crs.FileService.S3.Head.Load(),
+		//	Put:       crs.FileService.S3.Put.Load(),
+		//	Get:       crs.FileService.S3.Get.Load(),
+		//	Delete:    crs.FileService.S3.Delete.Load(),
+		//	DeleteMul: crs.FileService.S3.DeleteMulti.Load(),
+		//})
 	} else {
-		crs := new(perfcounter.CounterSet)
-		newCtx := perfcounter.AttachS3RequestKey(ctx, crs)
-		newCtx = perfcounter.AttachCalcTableStatsKey(newCtx)
+		//crs := new(perfcounter.CounterSet)
+		//newCtx := perfcounter.AttachS3RequestKey(ctx, crs)
+		//newCtx = perfcounter.AttachCalcTableStatsKey(newCtx)
 
+		newCtx := perfcounter.AttachCalcTableStatsKey(ctx)
 		statsInfo, err = table.Stats(newCtx, true)
 		if err != nil {
 			return nil, err
 		}
 
-		stats.AddBuildPlanStatsS3Request(statistic.S3Request{
-			List:      crs.FileService.S3.List.Load(),
-			Head:      crs.FileService.S3.Head.Load(),
-			Put:       crs.FileService.S3.Put.Load(),
-			Get:       crs.FileService.S3.Get.Load(),
-			Delete:    crs.FileService.S3.Delete.Load(),
-			DeleteMul: crs.FileService.S3.DeleteMulti.Load(),
-		})
+		//stats.AddBuildPlanStatsS3Request(statistic.S3Request{
+		//	List:      crs.FileService.S3.List.Load(),
+		//	Head:      crs.FileService.S3.Head.Load(),
+		//	Put:       crs.FileService.S3.Put.Load(),
+		//	Get:       crs.FileService.S3.Get.Load(),
+		//	Delete:    crs.FileService.S3.Delete.Load(),
+		//	DeleteMul: crs.FileService.S3.DeleteMulti.Load(),
+		//})
 	}
 	return statsInfo, nil
 }
