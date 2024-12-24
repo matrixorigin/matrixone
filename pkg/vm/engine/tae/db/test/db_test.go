@@ -10646,3 +10646,72 @@ func Test_OpenReplayDB1(t *testing.T) {
 	assert.Error(t, db.AddCronJob(tae.DB, "unknown", false))
 	assert.Error(t, db.CheckCronJobs(tae.DB, db.DBTxnMode_Write))
 }
+
+func TestRW3(t *testing.T) {
+	ctx := context.Background()
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+
+	objCount := 100
+	schema := catalog.MockSchemaAll(1, -1)
+	schema.Extra.BlockMaxRows = 1
+	schema.Extra.ObjectMaxBlocks = 4
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, objCount)
+	defer bat.Close()
+	tae.CreateRelAndAppend(bat, true)
+
+	objs := make([]*catalog.ObjectEntry, 0)
+	txn, rel := tae.GetRelation()
+	iter := rel.MakeObjectIt(false)
+	for iter.Next() {
+		obj := iter.GetObject().GetMeta().(*catalog.ObjectEntry)
+		objs = append(objs, obj)
+	}
+	assert.Equal(t, objCount, len(objs))
+	err := txn.Commit(ctx)
+	assert.NoError(t, err)
+
+	var wg sync.WaitGroup
+
+	txn, rel = tae.GetRelation()
+	pkVec := containers.MakeVector(types.T_uint64.ToType(), common.DefaultAllocator)
+	defer pkVec.Close()
+	rowIDVec := containers.MakeVector(types.T_Rowid.ToType(), common.DefaultAllocator)
+	defer rowIDVec.Close()
+	for i, obj := range objs {
+		rowID := objectio.NewRowIDWithObjectIDBlkNumAndRowID(*obj.ID(), 0, 0)
+		rowIDVec.Append(rowID, false)
+		pkVec.Append(uint64(i), false)
+	}
+	err = rel.DeleteByPhyAddrKeys(rowIDVec, pkVec, handle.DT_Normal)
+	assert.NoError(t, err)
+	{
+		deleteObjectFn := func(offset int) func() {
+			return func() {
+				defer wg.Done()
+				txn, err := tae.StartTxn(nil)
+				assert.NoError(t, err)
+				obj := objs[offset]
+				task, err := jobs.NewFlushTableTailTask(nil, txn, []*catalog.ObjectEntry{obj}, nil, tae.Runtime)
+				assert.NoError(t, err)
+				err = task.OnExec(context.Background())
+				assert.NoError(t, err)
+				err = txn.Commit(ctx)
+				assert.NoError(t, err)
+			}
+		}
+		workers, err := ants.NewPool(50)
+		assert.NoError(t, err)
+		for i := 0; i < objCount; i++ {
+			wg.Add(1)
+			workers.Submit(deleteObjectFn(i))
+		}
+	}
+	err = txn.Commit(ctx)
+	assert.NoError(t, err)
+	wg.Wait()
+
+	tae.CheckRowsByScan(0, true)
+
+}
