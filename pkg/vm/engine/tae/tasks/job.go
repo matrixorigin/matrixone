@@ -76,6 +76,7 @@ func (s *simpleJobScheduler) Schedule(job *Job) (err error) {
 }
 
 type parallelJobScheduler struct {
+	sync.RWMutex
 	pool *ants.Pool
 }
 
@@ -90,11 +91,15 @@ func NewParallelJobScheduler(parallism int) *parallelJobScheduler {
 }
 
 func (s *parallelJobScheduler) Stop() {
+	s.Lock()
+	defer s.Unlock()
 	s.pool.Release()
 	s.pool = nil
 }
 
 func (s *parallelJobScheduler) Schedule(job *Job) (err error) {
+	s.RLock()
+	defer s.RUnlock()
 	err = s.pool.Submit(job.Run)
 	return
 }
