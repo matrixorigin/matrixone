@@ -144,7 +144,7 @@ const (
 				delete from 
 				    %s.%s
 				where 
-					%s in (%v);`
+					%s;`
 
 	getUpdateTSSQL = `
 				select
@@ -169,6 +169,52 @@ const (
 					A.account_id = B.account_id and A.reldatabase_id = B.database_id and A.rel_id = B.table_id
 				where
 				    B.table_id is NULL;`
+
+	findDeletedAccountSQL = `
+				select 
+					distinct(A.account_id)
+				from 
+				    %s.%s as A 
+				left join 
+					%s.%s as B
+				on
+					A.account_id = B.account_id
+				where
+				    B.account_id is NULL;`
+
+	findDeletedDatabaseSQL = `
+				select 
+					A.account_id, A.database_id
+				from 
+				    %s.%s as A 
+				left join 
+					%s.%s as B
+				on
+					A.account_id = B.account_id and A.database_name = B.datname and A.database_id = B.dat_id
+				where
+				    B.datname is NULL and A.database_id != %d 
+				group by 
+					A.account_id, A.database_id;
+				`
+
+	findDeletedTableSQL = `
+				select 
+					A.account_id, A.database_id, A.table_id
+				from 
+				    %s.%s as A 
+				left join 
+					%s.%s as B
+				on
+					A.account_id = B.account_id and 
+				    A.database_name = B.reldatabase and 
+				    A.table_name = B.relname and 
+				    A.database_id = B.reldatabase_id and 
+				    A.table_id = B.rel_id 
+				where
+				    B.relname is NULL and A.database_id != %d 
+				group by
+					A.account_id, A.database_id, A.table_id;
+				`
 
 	getNullStatsSQL = `
 				select 
@@ -805,6 +851,46 @@ func intsJoin(items []uint64, delimiter string) string {
 	return builder.String()
 }
 
+func joinAccountDatabase(accIds []uint64, dbIds []uint64) string {
+	var builder strings.Builder
+	builder.Grow(mpool.B * 50 * len(accIds) * 2)
+	for i := range accIds {
+		builder.WriteString("(account_id = ")
+		builder.WriteString(strconv.FormatUint(accIds[i], 10))
+		builder.WriteString(" AND database_id = ")
+		builder.WriteString(strconv.FormatUint(dbIds[i], 10))
+		builder.WriteString(")")
+
+		if i < len(accIds)-1 {
+			builder.WriteString(" OR ")
+		}
+	}
+
+	return builder.String()
+}
+
+func joinAccountDatabaseTable(
+	accIds []uint64, dbIds []uint64, tblIds []uint64) string {
+
+	var builder strings.Builder
+	builder.Grow(mpool.B * 70 * len(accIds) * 2)
+	for i := range accIds {
+		builder.WriteString("(account_id = ")
+		builder.WriteString(strconv.FormatUint(accIds[i], 10))
+		builder.WriteString(" AND database_id = ")
+		builder.WriteString(strconv.FormatUint(dbIds[i], 10))
+		builder.WriteString(" AND table_id = ")
+		builder.WriteString(strconv.FormatUint(tblIds[i], 10))
+		builder.WriteString(")")
+
+		if i < len(accIds)-1 {
+			builder.WriteString(" OR ")
+		}
+	}
+
+	return builder.String()
+}
+
 func (d *dynamicCtx) forceUpdateQuery(
 	ctx context.Context,
 	wantedStatsIdxes []int,
@@ -1064,12 +1150,6 @@ func (d *dynamicCtx) QueryTableStats(
 	newCtx := turn2SysCtx(ctx)
 
 	if forceUpdate || resetUpdateTime {
-		if len(tbls) >= defaultGetTableListLimit {
-			logutil.Warn(logHeader,
-				zap.String("source", "query with force update"),
-				zap.Int("tbl-list-length", len(tbls)))
-		}
-
 		statsVals, err = d.forceUpdateQuery(
 			newCtx, wantedStatsIdxes,
 			accs, dbs, tbls,
@@ -1961,94 +2041,117 @@ func (d *dynamicCtx) gamaCleanDeletes(
 	ctx context.Context,
 	de *Engine,
 ) {
-	//mo_account, mo_database, mo_tables col name
-	colName1 := []string{
-		"account_id", "dat_id", "rel_id",
-	}
-	// mo_table_stats col name
-	colName2 := []string{
-		"account_id", "database_id", "table_id",
-	}
 
-	tblName := []string{
-		catalog.MOAccountTable, catalog.MO_DATABASE, catalog.MO_TABLES,
-	}
+	var (
+		sql    string
+		sqlRet ie.InternalExecResult
 
-	deleteByStep := func(step int) {
-		var (
-			err error
-			now = time.Now()
+		accIds, dbIds, tblIds []uint64
+	)
 
-			ids []uint64
-		)
+	cleanAccounts := func() (cnt int, err error) {
+		sql = fmt.Sprintf(findDeletedAccountSQL,
+			catalog.MO_CATALOG, catalog.MO_TABLE_STATS, catalog.MO_CATALOG, catalog.MOAccountTable)
 
-		defer func() {
-			logutil.Info(logHeader,
-				zap.String("source", "gama task"),
-				zap.Int(fmt.Sprintf("deleted %s", colName2[step]), len(ids)),
-				zap.Duration("takes", time.Since(now)),
-				zap.String("detail", intsJoin(ids, ",")))
-		}()
-
-		sql := fmt.Sprintf(getNextCheckAliveListSQL,
-			colName2[step], colName2[step], catalog.MO_CATALOG, catalog.MO_TABLE_STATS,
-			colName2[step], options.DefaultBlockMaxRows)
-
-		sqlRet := d.executeSQL(ctx, sql, fmt.Sprintf("gama task-%d-0", step))
-		if sqlRet.Error() != nil {
-			return
-		}
-
-		ids, _, _, err = decodeIdsFromMoTableStatsSqlRet(ctx, sqlRet)
-		if len(ids) == 0 || err != nil {
-			return
-		}
-
-		sql = fmt.Sprintf(getCheckAliveSQL,
-			colName1[step], catalog.MO_CATALOG, tblName[step],
-			colName1[step], intsJoin(ids, ","))
-		sqlRet = d.executeSQL(ctx, sql, fmt.Sprintf("gama task-%d-1", step))
+		sqlRet = d.executeSQL(ctx, sql, "clean accounts: find deleted account")
 		if err = sqlRet.Error(); err != nil {
 			return
 		}
 
-		var val any
-		for i := range sqlRet.RowCount() {
-			if val, err = sqlRet.Value(ctx, i, 0); err != nil {
-				continue
-			}
-
-			// remove alive id from slice
-			var aliveId uint64
-			if _, ok := val.(int32); ok {
-				aliveId = uint64(val.(int32))
-			} else {
-				aliveId = val.(uint64)
-			}
-
-			idx := slices.Index(ids, aliveId)
-			ids = append(ids[:idx], ids[idx+1:]...)
+		if accIds, _, _, err = decodeIdsFromMoTableStatsSqlRet(ctx, sqlRet); err != nil {
+			return
 		}
 
-		if len(ids) != 0 {
-			sql = fmt.Sprintf(getDeleteFromStatsSQL, catalog.MO_CATALOG, catalog.MO_TABLE_STATS,
-				colName2[step], intsJoin(ids, ","))
-			sqlRet = d.executeSQL(ctx, sql, fmt.Sprintf("gama task-%d-2", step))
-			if err = sqlRet.Error(); err != nil {
-				return
-			}
+		if len(accIds) == 0 {
+			return
 		}
+
+		where := fmt.Sprintf("account_id in (%v)", intsJoin(accIds, ","))
+
+		sql = fmt.Sprintf(getDeleteFromStatsSQL, catalog.MO_CATALOG, catalog.MO_TABLE_STATS, where)
+		sqlRet = d.executeSQL(ctx, sql, "clean accounts: clean deleted account")
+		return len(accIds), sqlRet.Error()
 	}
 
-	// clear deleted tbl, db, account
+	cleanDatabase := func() (cnt int, err error) {
+		sql = fmt.Sprintf(findDeletedDatabaseSQL,
+			catalog.MO_CATALOG, catalog.MO_TABLE_STATS, catalog.MO_CATALOG, catalog.MO_DATABASE, specialDatabaseId)
 
-	// the stats belong to any deleted accounts/databases/tables have unchanged update time
-	// since they have been deleted.
-	// so opB collects tables ascending their update time and then check if they deleted.
+		sqlRet = d.executeSQL(ctx, sql, "clean database: find deleted database")
+		if err = sqlRet.Error(); err != nil {
+			return
+		}
 
-	deleteByStep(0) // clean account
-	deleteByStep(1) // clean database
-	deleteByStep(2) // clean tables
+		if accIds, dbIds, _, err = decodeIdsFromMoTableStatsSqlRet(ctx, sqlRet); err != nil {
+			return
+		}
+
+		if len(accIds) == 0 {
+			return
+		}
+
+		where := joinAccountDatabase(accIds, dbIds)
+
+		sql = fmt.Sprintf(getDeleteFromStatsSQL, catalog.MO_CATALOG, catalog.MO_TABLE_STATS, where)
+		sqlRet = d.executeSQL(ctx, sql, "clean database: clean deleted database")
+		return len(accIds), sqlRet.Error()
+	}
+
+	cleanTable := func() (cnt int, err error) {
+		sql = fmt.Sprintf(findDeletedTableSQL,
+			catalog.MO_CATALOG, catalog.MO_TABLE_STATS, catalog.MO_CATALOG, catalog.MO_TABLES, specialDatabaseId)
+
+		sqlRet = d.executeSQL(ctx, sql, "clean table: find deleted table")
+		if err = sqlRet.Error(); err != nil {
+			return
+		}
+
+		if accIds, dbIds, tblIds, err = decodeIdsFromMoTableStatsSqlRet(ctx, sqlRet); err != nil {
+			return
+		}
+
+		if len(accIds) == 0 {
+			return
+		}
+
+		where := joinAccountDatabaseTable(accIds, dbIds, tblIds)
+
+		sql = fmt.Sprintf(getDeleteFromStatsSQL, catalog.MO_CATALOG, catalog.MO_TABLE_STATS, where)
+		sqlRet = d.executeSQL(ctx, sql, "clean table: clean deleted table")
+		return len(accIds), sqlRet.Error()
+	}
+
+	var (
+		err error
+
+		now = time.Now()
+
+		delAccCnt   int
+		delDBCnt    int
+		delTableCnt int
+	)
+
+	defer func() {
+		logutil.Info(logHeader,
+			zap.String("source", "gama clean deletes"),
+			zap.Int("clean accounts", delAccCnt),
+			zap.Int("clean database", delDBCnt),
+			zap.Int("clean table", delTableCnt),
+			zap.Duration("takes", time.Since(now)),
+			zap.Error(err))
+	}()
+
+	if delAccCnt, err = cleanAccounts(); err != nil {
+		return
+	}
+
+	if delDBCnt, err = cleanDatabase(); err != nil {
+		return
+	}
+
+	if delTableCnt, err = cleanTable(); err != nil {
+		return
+	}
 }
 
 func (d *dynamicCtx) gamaTask(
@@ -2071,10 +2174,10 @@ func (d *dynamicCtx) gamaTask(
 		return gamaDur + time.Duration(rnd.Intn(1*n))*time.Minute
 	}
 
-	const baseFactory = 30
+	const baseFactory = 3
 	tickerA := time.NewTicker(randDuration(baseFactory))
 	tickerB := time.NewTicker(randDuration(baseFactory))
-	tickerC := time.NewTicker(time.Minute)
+	tickerC := time.NewTicker(randDuration(baseFactory))
 
 	for {
 		select {
@@ -2113,8 +2216,7 @@ func (d *dynamicCtx) gamaTask(
 			d.gama.taskPool.Submit(func() {
 				d.gamaInsertNewTables(ctx, service, de)
 			})
-			// try insert table at [1, 10] min
-			tickerC.Reset(randDuration(10))
+			tickerC.Reset(randDuration(baseFactory))
 		}
 	}
 }
