@@ -118,6 +118,10 @@ func (s *runnerStore) UpdateICKPIntent(
 		if old != nil && !old.AllChecked() && policyChecked && flushChecked {
 			checkpointed := s.GetCheckpointed()
 			// no need to do checkpoint
+			if checkpointed.GT(&old.end) {
+				s.incrementalIntent.CompareAndSwap(old, nil)
+				continue
+			}
 			if checkpointed.GE(ts) {
 				intent = nil
 				return
