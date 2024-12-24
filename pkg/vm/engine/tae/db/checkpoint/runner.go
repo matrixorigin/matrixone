@@ -302,8 +302,9 @@ func (r *runner) onGlobalCheckpointEntries(items ...any) {
 		}
 		if ctx.end.LE(&maxEnd) {
 			logutil.Warn(
-				"OnGlobalCheckpointEntries-Skip",
-				zap.String("checkpoint", ctx.end.ToString()))
+				"GCKP-Execute-Skip",
+				zap.String("checkpoint", ctx.end.ToString()),
+			)
 			continue
 		}
 		if ctx.force {
@@ -437,7 +438,7 @@ func (r *runner) doGlobalCheckpoint(
 	entry.truncateLSN = truncateLSN
 
 	logutil.Info(
-		"GCKP-Start",
+		"GCKP-Execute-Start",
 		zap.String("entry", entry.String()),
 		zap.String("ts", end.ToString()),
 	)
@@ -445,7 +446,7 @@ func (r *runner) doGlobalCheckpoint(
 	defer func() {
 		if err != nil {
 			logutil.Error(
-				"GCKP-Error",
+				"GCKP-Execute-Error",
 				zap.String("entry", entry.String()),
 				zap.String("phase", errPhase),
 				zap.Error(err),
@@ -455,7 +456,7 @@ func (r *runner) doGlobalCheckpoint(
 			fields = append(fields, zap.Duration("cost", time.Since(now)))
 			fields = append(fields, zap.String("entry", entry.String()))
 			logutil.Info(
-				"GCKP-End",
+				"GCKP-Execute-End",
 				fields...,
 			)
 		}
@@ -531,7 +532,7 @@ func (r *runner) softScheduleCheckpoint(ts *types.TS) (ret *CheckpointEntry, err
 		tree.GetTree().Compact()
 		if !tree.IsEmpty() && intent.TooOld() {
 			logutil.Warn(
-				"CheckPoint-Wait-TooOld",
+				"ICKP-Schedule-Wait-TooOld",
 				zap.String("entry", intent.String()),
 				zap.Duration("age", intent.Age()),
 			)

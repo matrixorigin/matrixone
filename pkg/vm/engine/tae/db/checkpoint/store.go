@@ -664,6 +664,25 @@ func (s *runnerStore) MaxIncrementalCheckpoint() *CheckpointEntry {
 	return entry
 }
 
+func (s *runnerStore) MaxICKPFinished() *CheckpointEntry {
+	s.RLock()
+	entry, _ := s.incrementals.Max()
+	s.RUnlock()
+	if entry == nil || entry.IsFinished() {
+		return entry
+	}
+
+	// slow path
+	entries := s.GetAllIncrementalCheckpoints()
+
+	for i := len(entries) - 1; i >= 0; i-- {
+		if entries[i].IsFinished() {
+			return entries[i]
+		}
+	}
+	return nil
+}
+
 func (s *runnerStore) IsStale(ts *types.TS) bool {
 	waterMark := s.gcWatermark.Load()
 	if waterMark == nil {
