@@ -531,9 +531,9 @@ read_memory_cache:
 				return
 			}
 			t0 := time.Now()
-			LogEvent(ctx, str_update_memory_cache_Caches_begin)
+			LogEvent(ctx, str_update_memory_cache_begin)
 			err = s.memCache.Update(ctx, vector, s.asyncUpdate)
-			LogEvent(ctx, str_update_memory_cache_Caches_end)
+			LogEvent(ctx, str_update_memory_cache_end)
 			metric.FSReadDurationUpdateMemoryCache.Observe(time.Since(t0).Seconds())
 		}()
 	}
