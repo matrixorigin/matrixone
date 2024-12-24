@@ -10572,6 +10572,40 @@ func TestReplayDebugLog(t *testing.T) {
 	tae.Restart(ctx)
 }
 
+func TestRW2(t *testing.T) {
+	ctx := context.Background()
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+
+	schema := catalog.MockSchemaAll(1, -1)
+	schema.Extra.BlockMaxRows = 2
+	schema.Extra.ObjectMaxBlocks = 4
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 1)
+	defer bat.Close()
+	/*
+		create obj
+		txn1 delete row/warchecker.add
+		txn2 drop obj(mock delete)
+
+		txn2 commit
+		txn1 commit
+	*/
+	tae.CreateRelAndAppend(bat, true)
+
+	txn, rel := tae.GetRelation()
+	obj := testutil.GetOneBlockMeta(rel)
+	rel.Append(ctx, bat)
+	{
+		tbl := obj.GetTable()
+		txn2, _ := tae.StartTxn(nil)
+		tbl.DropObjectEntry(obj.ID(), txn2, false)
+		txn2.ToPreparingLocked(tae.TxnMgr.Now())
+	}
+	err := txn.Commit(ctx)
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnRWConflict))
+}
+
 func Test_BasicTxnModeSwitch(t *testing.T) {
 	ctx := context.Background()
 	opts := config.WithLongScanAndCKPOpts(nil)
