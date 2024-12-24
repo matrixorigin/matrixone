@@ -450,7 +450,7 @@ func (builder *QueryBuilder) applyExtraFiltersOnIndex(idxDef *IndexDef, node *pl
 			continue
 		}
 		for k := range idxDef.Parts {
-			colIdx := node.TableDef.Name2ColIndex[idxDef.Parts[k]]
+			colIdx := node.TableDef.Name2ColIndex[catalog.ResolveAlias(idxDef.Parts[k])]
 			if colIdx != col.ColPos {
 				continue
 			}
