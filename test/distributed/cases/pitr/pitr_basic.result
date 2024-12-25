@@ -11,20 +11,20 @@ create pitr pitr04 for account range 1 'y';
 internal error: account `sys` already has a pitr
 show pitr;
 PITR_NAME    CREATED_TIME    MODIFIED_TIME    PITR_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME    PITR_LENGTH    PITR_UNIT
-pitr01    2024-12-25 15:59:57    2024-12-25 15:59:57    account    sys    *    *    1    h
+pitr01    2024-12-25 16:34:55    2024-12-25 16:34:55    account    sys    *    *    1    h
 drop pitr if exists pitr05;
 create pitr pitr05 for cluster range 1 'h';
 show pitr;
 PITR_NAME    CREATED_TIME    MODIFIED_TIME    PITR_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME    PITR_LENGTH    PITR_UNIT
-pitr01    2024-12-25 15:59:57    2024-12-25 15:59:57    account    sys    *    *    1    h
-pitr05    2024-12-25 15:59:57    2024-12-25 15:59:57    cluster    *    *    *    1    h
+pitr01    2024-12-25 16:34:55    2024-12-25 16:34:55    account    sys    *    *    1    h
+pitr05    2024-12-25 16:34:55    2024-12-25 16:34:55    cluster    *    *    *    1    h
 create pitr pitr01 for account range 1 'h';
 internal error: pitr pitr01 already exists
 create pitr if not exists pitr01 for account range 1 'h';
 create pitr pitr07 for account acc01 database mo_catalog range 1 'h';
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 45 near " database mo_catalog range 1 'h';";
-create pitr pitr08 for account acc01 database mo_catalog table mo_table range 1 'h';
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 45 near " database mo_catalog table mo_table range 1 'h';";
+create pitr pitr08 for account acc01 table mo_catalog  mo_table range 1 'h';
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 42 near " table mo_catalog  mo_table range 1 'h';";
 create pitr pitr09 for account range 1 'yy';
 internal error: invalid pitr unit yy
 create pitr pitr09 for account range -1 'h';
@@ -33,8 +33,8 @@ create pitr pitr09 for account range 2000 'h';
 internal error: invalid pitr value 2000
 show pitr;
 PITR_NAME    CREATED_TIME    MODIFIED_TIME    PITR_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME    PITR_LENGTH    PITR_UNIT
-pitr01    2024-12-25 15:59:57    2024-12-25 15:59:57    account    sys    *    *    1    h
-pitr05    2024-12-25 15:59:57    2024-12-25 15:59:57    cluster    *    *    *    1    h
+pitr01    2024-12-25 16:34:55    2024-12-25 16:34:55    account    sys    *    *    1    h
+pitr05    2024-12-25 16:34:55    2024-12-25 16:34:55    cluster    *    *    *    1    h
 create database db01;
 drop pitr if exists pitr10;
 create pitr pitr10 for database db01 range 1 'h';
@@ -42,20 +42,20 @@ create pitr pitr11 for database db02 range 1 'h';
 internal error: database db02 does not exist
 show pitr;
 PITR_NAME    CREATED_TIME    MODIFIED_TIME    PITR_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME    PITR_LENGTH    PITR_UNIT
-pitr01    2024-12-25 15:59:57    2024-12-25 15:59:57    account    sys    *    *    1    h
-pitr05    2024-12-25 15:59:57    2024-12-25 15:59:57    cluster    *    *    *    1    h
-pitr10    2024-12-25 15:59:57    2024-12-25 15:59:57    database    sys    db01    *    1    h
+pitr01    2024-12-25 16:34:55    2024-12-25 16:34:55    account    sys    *    *    1    h
+pitr05    2024-12-25 16:34:55    2024-12-25 16:34:55    cluster    *    *    *    1    h
+pitr10    2024-12-25 16:34:55    2024-12-25 16:34:55    database    sys    db01    *    1    h
 create table db01.table01 (col1 int);
 drop pitr if exists pitr12;
-create pitr pitr12 for database db01 table table01 range 1 'h';
-create pitr pitr13 for database db01 table table02 range 1 'h';
+create pitr pitr12 for table db01 table01 range 1 'h';
+create pitr pitr13 for table db01 table02 range 1 'h';
 internal error: table db01.table02 does not exist
 show pitr;
 PITR_NAME    CREATED_TIME    MODIFIED_TIME    PITR_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME    PITR_LENGTH    PITR_UNIT
-pitr01    2024-12-25 15:59:57    2024-12-25 15:59:57    account    sys    *    *    1    h
-pitr05    2024-12-25 15:59:57    2024-12-25 15:59:57    cluster    *    *    *    1    h
-pitr10    2024-12-25 15:59:57    2024-12-25 15:59:57    database    sys    db01    *    1    h
-pitr12    2024-12-25 15:59:57    2024-12-25 15:59:57    table    sys    db01    table01    1    h
+pitr01    2024-12-25 16:34:55    2024-12-25 16:34:55    account    sys    *    *    1    h
+pitr05    2024-12-25 16:34:55    2024-12-25 16:34:55    cluster    *    *    *    1    h
+pitr10    2024-12-25 16:34:55    2024-12-25 16:34:55    database    sys    db01    *    1    h
+pitr12    2024-12-25 16:34:55    2024-12-25 16:34:55    table    sys    db01    table01    1    h
 drop account if exists acc01;
 create account acc01 admin_name = 'test_account' identified by '111';
 drop pitr if exists pitr14;
@@ -64,16 +64,16 @@ create pitr pitr15 for account acc02 range 1 'h';
 internal error: account acc02 does not exist
 show pitr;
 PITR_NAME    CREATED_TIME    MODIFIED_TIME    PITR_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME    PITR_LENGTH    PITR_UNIT
-pitr14    2024-12-25 15:59:58    2024-12-25 15:59:58    account    acc01    *    *    1    h
-pitr01    2024-12-25 15:59:57    2024-12-25 15:59:57    account    sys    *    *    1    h
-pitr05    2024-12-25 15:59:57    2024-12-25 15:59:57    cluster    *    *    *    1    h
-pitr10    2024-12-25 15:59:57    2024-12-25 15:59:57    database    sys    db01    *    1    h
-pitr12    2024-12-25 15:59:57    2024-12-25 15:59:57    table    sys    db01    table01    1    h
+pitr01    2024-12-25 16:34:55    2024-12-25 16:34:55    account    sys    *    *    1    h
+pitr05    2024-12-25 16:34:55    2024-12-25 16:34:55    cluster    *    *    *    1    h
+pitr10    2024-12-25 16:34:55    2024-12-25 16:34:55    database    sys    db01    *    1    h
+pitr12    2024-12-25 16:34:55    2024-12-25 16:34:55    table    sys    db01    table01    1    h
+pitr14    2024-12-25 16:34:55    2024-12-25 16:34:55    account    acc01    *    *    1    h
 drop pitr if exists pitr16;
 create pitr pitr16 for account range 1 'h';
 show pitr;
 PITR_NAME    CREATED_TIME    MODIFIED_TIME    PITR_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME    PITR_LENGTH    PITR_UNIT
-pitr16    2024-12-25 15:59:58    2024-12-25 15:59:58    account    acc01    *    *    1    h
+pitr16    2024-12-25 16:34:55    2024-12-25 16:34:55    account    acc01    *    *    1    h
 create pitr pitr16 for account range 1 'h';
 internal error: pitr pitr16 already exists
 create pitr pitr16 if not exists range 1 'h';
@@ -84,7 +84,7 @@ create pitr pitr18 for account acc01 range 1 'h';
 internal error: only sys tenant can create tenant level pitr for other tenant
 show pitr;
 PITR_NAME    CREATED_TIME    MODIFIED_TIME    PITR_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME    PITR_LENGTH    PITR_UNIT
-pitr16    2024-12-25 15:59:58    2024-12-25 15:59:58    account    acc01    *    *    1    h
+pitr16    2024-12-25 16:34:55    2024-12-25 16:34:55    account    acc01    *    *    1    h
 create database db01;
 drop pitr if exists pitr19;
 create pitr pitr19 for database db01 range 1 'h';
@@ -92,18 +92,18 @@ create pitr pitr20 for database db02 range 1 'h';
 internal error: database db02 does not exist
 show pitr;
 PITR_NAME    CREATED_TIME    MODIFIED_TIME    PITR_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME    PITR_LENGTH    PITR_UNIT
-pitr16    2024-12-25 15:59:58    2024-12-25 15:59:58    account    acc01    *    *    1    h
-pitr19    2024-12-25 15:59:58    2024-12-25 15:59:58    database    acc01    db01    *    1    h
+pitr16    2024-12-25 16:34:55    2024-12-25 16:34:55    account    acc01    *    *    1    h
+pitr19    2024-12-25 16:34:55    2024-12-25 16:34:55    database    acc01    db01    *    1    h
 create table db01.table01 (col1 int);
 drop pitr if exists pitr21;
-create pitr pitr21 for database db01 table table01 range 1 'h';
-create pitr pitr22 for database db01 table table02 range 1 'h';
+create pitr pitr21 for table db01 table01 range 1 'h';
+create pitr pitr22 for table db01 table02 range 1 'h';
 internal error: table db01.table02 does not exist
 show pitr;
 PITR_NAME    CREATED_TIME    MODIFIED_TIME    PITR_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME    PITR_LENGTH    PITR_UNIT
-pitr16    2024-12-25 15:59:58    2024-12-25 15:59:58    account    acc01    *    *    1    h
-pitr19    2024-12-25 15:59:58    2024-12-25 15:59:58    database    acc01    db01    *    1    h
-pitr21    2024-12-25 15:59:58    2024-12-25 15:59:58    table    acc01    db01    table01    1    h
+pitr16    2024-12-25 16:34:55    2024-12-25 16:34:55    account    acc01    *    *    1    h
+pitr19    2024-12-25 16:34:55    2024-12-25 16:34:55    database    acc01    db01    *    1    h
+pitr21    2024-12-25 16:34:55    2024-12-25 16:34:55    table    acc01    db01    table01    1    h
 alter pitr pitr01 range 1 'd';
 alter pitr pitr100 range 1 'd';
 internal error: pitr pitr100 does not exist
@@ -116,21 +116,21 @@ alter pitr pitr01 range 2000 'd';
 internal error: invalid pitr value 2000
 show pitr;
 PITR_NAME    CREATED_TIME    MODIFIED_TIME    PITR_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME    PITR_LENGTH    PITR_UNIT
-pitr14    2024-12-25 15:59:58    2024-12-25 15:59:58    account    acc01    *    *    1    h
-pitr05    2024-12-25 15:59:57    2024-12-25 15:59:57    cluster    *    *    *    1    h
-pitr10    2024-12-25 15:59:57    2024-12-25 15:59:57    database    sys    db01    *    1    h
-pitr12    2024-12-25 15:59:57    2024-12-25 15:59:57    table    sys    db01    table01    1    h
-pitr01    2024-12-25 15:59:57    2024-12-25 15:59:58    account    sys    *    *    1    d
+pitr05    2024-12-25 16:34:55    2024-12-25 16:34:55    cluster    *    *    *    1    h
+pitr10    2024-12-25 16:34:55    2024-12-25 16:34:55    database    sys    db01    *    1    h
+pitr12    2024-12-25 16:34:55    2024-12-25 16:34:55    table    sys    db01    table01    1    h
+pitr14    2024-12-25 16:34:55    2024-12-25 16:34:55    account    acc01    *    *    1    h
+pitr01    2024-12-25 16:34:55    2024-12-25 16:34:55    account    sys    *    *    1    d
 drop pitr pitr01;
 drop pitr pitr100;
 internal error: pitr pitr100 does not exist
 drop pitr if exists pitr100;
 show pitr;
 PITR_NAME    CREATED_TIME    MODIFIED_TIME    PITR_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME    PITR_LENGTH    PITR_UNIT
-pitr14    2024-12-25 15:59:58    2024-12-25 15:59:58    account    acc01    *    *    1    h
-pitr05    2024-12-25 15:59:57    2024-12-25 15:59:57    cluster    *    *    *    1    h
-pitr10    2024-12-25 15:59:57    2024-12-25 15:59:57    database    sys    db01    *    1    h
-pitr12    2024-12-25 15:59:57    2024-12-25 15:59:57    table    sys    db01    table01    1    h
+pitr05    2024-12-25 16:34:55    2024-12-25 16:34:55    cluster    *    *    *    1    h
+pitr10    2024-12-25 16:34:55    2024-12-25 16:34:55    database    sys    db01    *    1    h
+pitr12    2024-12-25 16:34:55    2024-12-25 16:34:55    table    sys    db01    table01    1    h
+pitr14    2024-12-25 16:34:55    2024-12-25 16:34:55    account    acc01    *    *    1    h
 alter pitr pitr16 range 1 'd';
 alter pitr pitr100 range 1 'd';
 internal error: pitr pitr100 does not exist
@@ -143,39 +143,39 @@ alter pitr pitr16 range 2000 'd';
 internal error: invalid pitr value 2000
 show pitr;
 PITR_NAME    CREATED_TIME    MODIFIED_TIME    PITR_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME    PITR_LENGTH    PITR_UNIT
-pitr19    2024-12-25 15:59:58    2024-12-25 15:59:58    database    acc01    db01    *    1    h
-pitr21    2024-12-25 15:59:58    2024-12-25 15:59:58    table    acc01    db01    table01    1    h
-pitr16    2024-12-25 15:59:58    2024-12-25 15:59:58    account    acc01    *    *    1    d
+pitr19    2024-12-25 16:34:55    2024-12-25 16:34:55    database    acc01    db01    *    1    h
+pitr21    2024-12-25 16:34:55    2024-12-25 16:34:55    table    acc01    db01    table01    1    h
+pitr16    2024-12-25 16:34:55    2024-12-25 16:34:55    account    acc01    *    *    1    d
 drop pitr pitr16;
 drop pitr pitr100;
 internal error: pitr pitr100 does not exist
 drop pitr if exists pitr100;
 show pitr;
 PITR_NAME    CREATED_TIME    MODIFIED_TIME    PITR_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME    PITR_LENGTH    PITR_UNIT
-pitr19    2024-12-25 15:59:58    2024-12-25 15:59:58    database    acc01    db01    *    1    h
-pitr21    2024-12-25 15:59:58    2024-12-25 15:59:58    table    acc01    db01    table01    1    h
+pitr19    2024-12-25 16:34:55    2024-12-25 16:34:55    database    acc01    db01    *    1    h
+pitr21    2024-12-25 16:34:55    2024-12-25 16:34:55    table    acc01    db01    table01    1    h
 drop pitr if exists pitr19;
 drop pitr if exists pitr21;
 select * from mo_catalog.mo_pitr Where pitr_name != 'sys_mo_catalog_pitr';
 pitr_id    pitr_name    create_account    create_time    modified_time    level    account_id    account_name    database_name    table_name    obj_id    pitr_length    pitr_unit
-0193fcd4-6331-79b0-bfa9-06cc02d21b64    pitr05    0    2024-12-25 07:59:57    2024-12-25 07:59:57    cluster    0                18446744073709551615    1    h
-0193fcd4-6348-78f4-8da7-539bd55d0d89    pitr10    0    2024-12-25 07:59:57    2024-12-25 07:59:57    database    0    sys    db01        306181    1    h
-0193fcd4-6362-7ac9-ab1a-a0d3681be08c    pitr12    0    2024-12-25 07:59:57    2024-12-25 07:59:57    table    0    sys    db01    table01    306182    1    h
-0193fcd4-6462-77ef-94d5-c8046dc7641a    pitr14    0    2024-12-25 07:59:58    2024-12-25 07:59:58    account    20031    acc01            20031    1    h
+0193fcf4-63d4-77d7-96f1-d95052aab623    pitr05    0    2024-12-25 08:34:55    2024-12-25 08:34:55    cluster    0                18446744073709551615    1    h
+0193fcf4-63f2-7be2-8ddd-e8282428a82d    pitr10    0    2024-12-25 08:34:55    2024-12-25 08:34:55    database    0    sys    db01        316946    1    h
+0193fcf4-6418-7631-82ab-1712a55199b3    pitr12    0    2024-12-25 08:34:55    2024-12-25 08:34:55    table    0    sys    db01    table01    316947    1    h
+0193fcf4-64fe-7781-b9ff-0682df39be3f    pitr14    0    2024-12-25 08:34:55    2024-12-25 08:34:55    account    30001    acc01            30001    1    h
 drop account if exists acc01;
 select * from mo_catalog.mo_pitr Where pitr_name != 'sys_mo_catalog_pitr';
 pitr_id    pitr_name    create_account    create_time    modified_time    level    account_id    account_name    database_name    table_name    obj_id    pitr_length    pitr_unit
-0193fcd4-6331-79b0-bfa9-06cc02d21b64    pitr05    0    2024-12-25 07:59:57    2024-12-25 07:59:57    cluster    0                18446744073709551615    1    h
-0193fcd4-6348-78f4-8da7-539bd55d0d89    pitr10    0    2024-12-25 07:59:57    2024-12-25 07:59:57    database    0    sys    db01        306181    1    h
-0193fcd4-6362-7ac9-ab1a-a0d3681be08c    pitr12    0    2024-12-25 07:59:57    2024-12-25 07:59:57    table    0    sys    db01    table01    306182    1    h
-0193fcd4-6462-77ef-94d5-c8046dc7641a    pitr14    0    2024-12-25 07:59:58    2024-12-25 07:59:58    account    20031    acc01            20031    1    h
+0193fcf4-63d4-77d7-96f1-d95052aab623    pitr05    0    2024-12-25 08:34:55    2024-12-25 08:34:55    cluster    0                18446744073709551615    1    h
+0193fcf4-63f2-7be2-8ddd-e8282428a82d    pitr10    0    2024-12-25 08:34:55    2024-12-25 08:34:55    database    0    sys    db01        316946    1    h
+0193fcf4-6418-7631-82ab-1712a55199b3    pitr12    0    2024-12-25 08:34:55    2024-12-25 08:34:55    table    0    sys    db01    table01    316947    1    h
+0193fcf4-64fe-7781-b9ff-0682df39be3f    pitr14    0    2024-12-25 08:34:55    2024-12-25 08:34:55    account    30001    acc01            30001    1    h
 drop database if exists db01;
 select * from mo_catalog.mo_pitr Where pitr_name != 'sys_mo_catalog_pitr';
 pitr_id    pitr_name    create_account    create_time    modified_time    level    account_id    account_name    database_name    table_name    obj_id    pitr_length    pitr_unit
-0193fcd4-6331-79b0-bfa9-06cc02d21b64    pitr05    0    2024-12-25 07:59:57    2024-12-25 07:59:57    cluster    0                18446744073709551615    1    h
-0193fcd4-6348-78f4-8da7-539bd55d0d89    pitr10    0    2024-12-25 07:59:57    2024-12-25 07:59:57    database    0    sys    db01        306181    1    h
-0193fcd4-6362-7ac9-ab1a-a0d3681be08c    pitr12    0    2024-12-25 07:59:57    2024-12-25 07:59:57    table    0    sys    db01    table01    306182    1    h
-0193fcd4-6462-77ef-94d5-c8046dc7641a    pitr14    0    2024-12-25 07:59:58    2024-12-25 07:59:58    account    20031    acc01            20031    1    h
+0193fcf4-63d4-77d7-96f1-d95052aab623    pitr05    0    2024-12-25 08:34:55    2024-12-25 08:34:55    cluster    0                18446744073709551615    1    h
+0193fcf4-63f2-7be2-8ddd-e8282428a82d    pitr10    0    2024-12-25 08:34:55    2024-12-25 08:34:55    database    0    sys    db01        316946    1    h
+0193fcf4-6418-7631-82ab-1712a55199b3    pitr12    0    2024-12-25 08:34:55    2024-12-25 08:34:55    table    0    sys    db01    table01    316947    1    h
+0193fcf4-64fe-7781-b9ff-0682df39be3f    pitr14    0    2024-12-25 08:34:55    2024-12-25 08:34:55    account    30001    acc01            30001    1    h
 drop pitr if exists pitr01;
 drop pitr if exists pitr02;
 drop pitr if exists pitr03;
@@ -193,17 +193,17 @@ create account acc02 admin_name = 'test_account' identified by '111';
 create pitr pitr01 for account range 1 'h';
 show pitr;
 PITR_NAME    CREATED_TIME    MODIFIED_TIME    PITR_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME    PITR_LENGTH    PITR_UNIT
-pitr01    2024-12-25 15:59:59    2024-12-25 15:59:59    account    acc02    *    *    1    h
+pitr01    2024-12-25 16:34:56    2024-12-25 16:34:56    account    acc02    *    *    1    h
 select sleep(1);
 sleep(1)
 0
 alter pitr pitr01 range 1 'd';
 show pitr;
 PITR_NAME    CREATED_TIME    MODIFIED_TIME    PITR_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME    PITR_LENGTH    PITR_UNIT
-pitr01    2024-12-25 15:59:59    2024-12-25 16:00:00    account    acc02    *    *    1    d
+pitr01    2024-12-25 16:34:56    2024-12-25 16:34:57    account    acc02    *    *    1    d
 select * from mo_catalog.mo_pitr Where pitr_name != 'sys_mo_catalog_pitr';
 pitr_id    pitr_name    create_account    create_time    modified_time    level    account_id    account_name    database_name    table_name    obj_id    pitr_length    pitr_unit
-0193fcd4-685c-73d4-bc58-e61ff7126be8    pitr01    20032    2024-12-25 07:59:59    2024-12-25 08:00:00    account    20032    acc02            20032    1    d
+0193fcf4-67e2-71ad-9b82-dc69bd36f851    pitr01    30002    2024-12-25 08:34:56    2024-12-25 08:34:57    account    30002    acc02            30002    1    d
 drop account if exists acc02;
 select * from mo_catalog.mo_pitr Where pitr_name != 'sys_mo_catalog_pitr';
 pitr_id    pitr_name    create_account    create_time    modified_time    level    account_id    account_name    database_name    table_name    obj_id    pitr_length    pitr_unit
@@ -220,10 +220,10 @@ create pitr pitr04 for account range 1 'y';
 internal error: account `sys` already has a pitr
 show pitr;
 PITR_NAME    CREATED_TIME    MODIFIED_TIME    PITR_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME    PITR_LENGTH    PITR_UNIT
-pitr01    2024-12-25 16:00:00    2024-12-25 16:00:00    account    sys    *    *    1    h
+pitr01    2024-12-25 16:34:57    2024-12-25 16:34:57    account    sys    *    *    1    h
 show pitr where ACCOUNT_NAME = 'sys';
 pitr_name    created_time    modified_time    pitr_level    account_name    database_name    table_name    pitr_length    pitr_unit
-pitr01    2024-12-25 16:00:00    2024-12-25 16:00:00    account    sys    *    *    1    h
+pitr01    2024-12-25 16:34:57    2024-12-25 16:34:57    account    sys    *    *    1    h
 show pitr where ACCOUNT_NAME = 'sys' AND CAST_RANGE_VALUE_UNIT(PITR_LENGTH, PITR_UNIT) > CAST_RANGE_VALUE_UNIT(1, 'h');
 pitr_name    created_time    modified_time    pitr_level    account_name    database_name    table_name    pitr_length    pitr_unit
 show pitr where CAST_RANGE_VALUE_UNIT(PITR_LENGTH, PITR_UNIT) > 1;
@@ -257,9 +257,9 @@ create pitr pitr11 for database db01 range 1 'd';
 internal error: database `db01` already has a pitr
 create table db01.table01 (col1 int);
 drop pitr if exists pitr12;
-create pitr pitr12 for database db01 table table01 range 1 'h';
+create pitr pitr12 for table db01 table01 range 1 'h';
 drop pitr if exists pitr13;
-create pitr pitr13 for database db01 table table01 range 1 'd';
+create pitr pitr13 for table db01 table01 range 1 'd';
 internal error: database `db01` table `table01` already has a pitr
 drop account if exists acc01;
 create account acc01 admin_name = 'test_account' identified by '111';
@@ -295,9 +295,9 @@ create pitr pitr11 for database db01 range 1 'd';
 internal error: database `db01` already has a pitr
 create table db01.table01 (col1 int);
 drop pitr if exists pitr12;
-create pitr pitr12 for database db01 table table01 range 1 'h';
+create pitr pitr12 for table db01 table01 range 1 'h';
 drop pitr if exists pitr13;
-create pitr pitr13 for database db01 table table01 range 1 'd';
+create pitr pitr13 for table db01 table01 range 1 'd';
 internal error: database `db01` table `table01` already has a pitr
 drop pitr if exists pitr01;
 drop pitr if exists pitr02;
@@ -338,29 +338,29 @@ drop pitr if exists pitr01;
 create pitr pitr01 for account range 1 'h';
 select * from mo_catalog.mo_pitr Where pitr_name != 'sys_mo_catalog_pitr';
 pitr_id    pitr_name    create_account    create_time    modified_time    level    account_id    account_name    database_name    table_name    obj_id    pitr_length    pitr_unit
-0193fcd4-72b8-74c2-a9b5-023053f49d53    pitr01    0    2024-12-25 08:00:01    2024-12-25 08:00:01    account    0    sys            0    1    h
+0193fcf4-7237-7363-8427-cb7957be626c    pitr01    0    2024-12-25 08:34:58    2024-12-25 08:34:58    account    0    sys            0    1    h
 show pitr;
 PITR_NAME    CREATED_TIME    MODIFIED_TIME    PITR_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME    PITR_LENGTH    PITR_UNIT
-pitr01    2024-12-25 16:00:01    2024-12-25 16:00:01    account    sys    *    *    1    h
+pitr01    2024-12-25 16:34:58    2024-12-25 16:34:58    account    sys    *    *    1    h
 drop pitr if exists pitr01;
 drop pitr if exists pitr02;
 create pitr pitr02 for account range 1 'd';
 select * from mo_catalog.mo_pitr Where pitr_name != 'sys_mo_catalog_pitr';
 pitr_id    pitr_name    create_account    create_time    modified_time    level    account_id    account_name    database_name    table_name    obj_id    pitr_length    pitr_unit
-0193fcd4-72c7-7a0e-b849-6a9c6bb44012    pitr02    0    2024-12-25 08:00:01    2024-12-25 08:00:01    account    0    sys            0    1    d
+0193fcf4-7247-7436-ae78-07192b79ba46    pitr02    0    2024-12-25 08:34:58    2024-12-25 08:34:58    account    0    sys            0    1    d
 show pitr;
 PITR_NAME    CREATED_TIME    MODIFIED_TIME    PITR_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME    PITR_LENGTH    PITR_UNIT
-pitr02    2024-12-25 16:00:01    2024-12-25 16:00:01    account    sys    *    *    1    d
+pitr02    2024-12-25 16:34:58    2024-12-25 16:34:58    account    sys    *    *    1    d
 drop pitr if exists pitr02;
 drop account if exists acc01;
 create account acc01 admin_name = 'test_account' identified by '111';
 create pitr pitr01 for account range 1 'mo';
 show pitr;
 PITR_NAME    CREATED_TIME    MODIFIED_TIME    PITR_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME    PITR_LENGTH    PITR_UNIT
-pitr01    2024-12-25 16:00:02    2024-12-25 16:00:02    account    acc01    *    *    1    mo
+pitr01    2024-12-25 16:34:59    2024-12-25 16:34:59    account    acc01    *    *    1    mo
 select * from mo_catalog.mo_pitr Where pitr_name != 'sys_mo_catalog_pitr';
 pitr_id    pitr_name    create_account    create_time    modified_time    level    account_id    account_name    database_name    table_name    obj_id    pitr_length    pitr_unit
-0193fcd4-73f6-7451-9b05-3bf4cbef2c39    pitr01    20035    2024-12-25 08:00:02    2024-12-25 08:00:02    account    20035    acc01            20035    1    mo
+0193fcf4-7352-7251-a537-78f5f2939857    pitr01    30005    2024-12-25 08:34:59    2024-12-25 08:34:59    account    30005    acc01            30005    1    mo
 drop account if exists acc01;
 drop database if exists db01;
 create database db01;
@@ -368,10 +368,10 @@ drop pitr if exists pitr10;
 create pitr pitr10 for database db01 range 1 'y';
 select * from mo_catalog.mo_pitr Where pitr_name != 'sys_mo_catalog_pitr';
 pitr_id    pitr_name    create_account    create_time    modified_time    level    account_id    account_name    database_name    table_name    obj_id    pitr_length    pitr_unit
-0193fcd4-74f4-7459-a5d8-6c04df309ee6    pitr10    0    2024-12-25 08:00:02    2024-12-25 08:00:02    database    0    sys    db01        306575    1    y
+0193fcf4-747e-72ab-8b45-48aa5dce3e23    pitr10    0    2024-12-25 08:34:59    2024-12-25 08:34:59    database    0    sys    db01        317339    1    y
 show pitr;
 PITR_NAME    CREATED_TIME    MODIFIED_TIME    PITR_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME    PITR_LENGTH    PITR_UNIT
-pitr10    2024-12-25 16:00:02    2024-12-25 16:00:02    database    sys    db01    *    1    y
+pitr10    2024-12-25 16:34:59    2024-12-25 16:34:59    database    sys    db01    *    1    y
 drop pitr if exists pitr10;
 select * from mo_catalog.mo_pitr Where pitr_name != 'sys_mo_catalog_pitr';
 pitr_id    pitr_name    create_account    create_time    modified_time    level    account_id    account_name    database_name    table_name    obj_id    pitr_length    pitr_unit

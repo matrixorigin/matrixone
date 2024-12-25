@@ -139,9 +139,9 @@ func (node *CreatePitr) Format(ctx *FmtCtx) {
 		ctx.WriteString("database ")
 		node.DatabaseName.Format(ctx)
 	case PITRLEVELTABLE:
-		ctx.WriteString("database ")
+		ctx.WriteString("table ")
 		node.DatabaseName.Format(ctx)
-		ctx.WriteString(" table ")
+		ctx.WriteString(" ")
 		node.TableName.Format(ctx)
 	}
 

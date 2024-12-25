@@ -19,7 +19,7 @@ show pitr;
 create pitr pitr01 for account range 1 'h';
 create pitr if not exists pitr01 for account range 1 'h';
 create pitr pitr07 for account acc01 database mo_catalog range 1 'h';
-create pitr pitr08 for account acc01 database mo_catalog table mo_table range 1 'h';
+create pitr pitr08 for account acc01 table mo_catalog  mo_table range 1 'h';
 create pitr pitr09 for account range 1 'yy';
 create pitr pitr09 for account range -1 'h';
 create pitr pitr09 for account range 2000 'h';
@@ -39,9 +39,9 @@ show pitr;
 --table level success
 create table db01.table01 (col1 int);
 drop pitr if exists pitr12;
-create pitr pitr12 for database db01 table table01 range 1 'h';
+create pitr pitr12 for table db01 table01 range 1 'h';
 --table level failed
-create pitr pitr13 for database db01 table table02 range 1 'h';
+create pitr pitr13 for table db01 table02 range 1 'h';
 -- @ignore:1,2
 show pitr;
 
@@ -83,9 +83,9 @@ show pitr;
 --table level success
 create table db01.table01 (col1 int);
 drop pitr if exists pitr21;
-create pitr pitr21 for database db01 table table01 range 1 'h';
+create pitr pitr21 for table db01 table01 range 1 'h';
 --table level failed
-create pitr pitr22 for database db01 table table02 range 1 'h';
+create pitr pitr22 for table db01 table02 range 1 'h';
 -- @ignore:1,2
 show pitr;
 -- @session
@@ -221,9 +221,9 @@ create pitr pitr11 for database db01 range 1 'd';
 
 create table db01.table01 (col1 int);
 drop pitr if exists pitr12;
-create pitr pitr12 for database db01 table table01 range 1 'h';
+create pitr pitr12 for table db01 table01 range 1 'h';
 drop pitr if exists pitr13;
-create pitr pitr13 for database db01 table table01 range 1 'd';
+create pitr pitr13 for table db01 table01 range 1 'd';
 
 drop account if exists acc01;
 create account acc01 admin_name = 'test_account' identified by '111';
@@ -261,9 +261,9 @@ create pitr pitr11 for database db01 range 1 'd';
 
 create table db01.table01 (col1 int);
 drop pitr if exists pitr12;
-create pitr pitr12 for database db01 table table01 range 1 'h';
+create pitr pitr12 for table db01 table01 range 1 'h';
 drop pitr if exists pitr13;
-create pitr pitr13 for database db01 table table01 range 1 'd';
+create pitr pitr13 for table db01 table01 range 1 'd';
 
 drop pitr if exists pitr01;
 drop pitr if exists pitr02;
