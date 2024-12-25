@@ -158,7 +158,7 @@ func (job *checkpointJob) RunICKP(ctx context.Context) (err error) {
 	}
 
 	job.runner.postCheckpointQueue.Enqueue(entry)
-	job.runner.globalCheckpointQueue.Enqueue(&globalCheckpointContext{
+	job.runner.TryTriggerExecuteGCKP(&globalCheckpointContext{
 		end:         entry.end,
 		interval:    job.runner.options.globalVersionInterval,
 		ckpLSN:      lsn,

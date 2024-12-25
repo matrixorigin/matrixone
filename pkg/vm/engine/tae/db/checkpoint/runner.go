@@ -721,6 +721,14 @@ func (r *runner) softScheduleCheckpoint(ts *types.TS) (ret *CheckpointEntry, err
 	return
 }
 
+func (r *runner) TryTriggerExecuteGCKP(ctx *globalCheckpointContext) (err error) {
+	if r.disabled.Load() {
+		return
+	}
+	_, err = r.globalCheckpointQueue.Enqueue(ctx)
+	return
+}
+
 func (r *runner) TryTriggerExecuteICKP() (err error) {
 	if r.disabled.Load() {
 		return

@@ -97,11 +97,13 @@ func (r *runner) ForceGCKP(
 		return
 	}
 
-	_, err = r.globalCheckpointQueue.Enqueue(&globalCheckpointContext{
+	if err = r.TryTriggerExecuteGCKP(&globalCheckpointContext{
 		force:    true,
 		end:      maxEntry.end,
 		interval: interval,
-	})
+	}); err != nil {
+		return
+	}
 
 	// TODO: wait with done channel later
 	op := func() (ok bool, err error) {
