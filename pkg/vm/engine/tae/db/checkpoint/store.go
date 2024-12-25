@@ -87,7 +87,7 @@ func (s *runnerStore) GetCheckpointed() types.TS {
 	return s.GetCheckpointedLocked()
 }
 
-func (s *runnerStore) GetMaxFinishedICKP() *CheckpointEntry {
+func (s *runnerStore) MaxIncrementalCheckpoint() *CheckpointEntry {
 	s.RLock()
 	maxEntry, _ := s.incrementals.Max()
 	s.RUnlock()
@@ -681,13 +681,6 @@ func (s *runnerStore) MaxGlobalCheckpoint() *CheckpointEntry {
 	defer s.RUnlock()
 	global, _ := s.globals.Max()
 	return global
-}
-
-func (s *runnerStore) MaxIncrementalCheckpoint() *CheckpointEntry {
-	s.RLock()
-	defer s.RUnlock()
-	entry, _ := s.incrementals.Max()
-	return entry
 }
 
 func (s *runnerStore) IsStale(ts *types.TS) bool {
