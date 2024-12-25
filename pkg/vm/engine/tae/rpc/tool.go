@@ -146,6 +146,9 @@ func (c *MoInspectArg) PrepareCommand() *cobra.Command {
 	ckp := CheckpointArg{}
 	moInspectCmd.AddCommand(ckp.PrepareCommand())
 
+	gc := gcRemoveArg{}
+	moInspectCmd.AddCommand(gc.PrepareCommand())
+
 	return moInspectCmd
 }
 
@@ -1300,6 +1303,9 @@ func (c *GCArg) PrepareCommand() *cobra.Command {
 	dump := gcDumpArg{}
 	gcCmd.AddCommand(dump.PrepareCommand())
 
+	remove := gcRemoveArg{}
+	gcCmd.AddCommand(remove.PrepareCommand())
+
 	return gcCmd
 }
 
@@ -1439,48 +1445,97 @@ func (c *gcDumpArg) getInMemObjects(pinnedObjects map[string]bool) {
 	}
 }
 
-func (c *gcDumpArg) getCheckpointObject(ctx context.Context, pinnedObjects map[string]bool) (err error) {
+func (c *gcDumpArg) getCheckpointObject(ctx context.Context, pinned map[string]bool) (err error) {
 	entries := c.ctx.db.BGCheckpointRunner.GetAllCheckpoints()
 	for _, entry := range entries {
 		cnLoc := entry.GetLocation()
-		cnObj := cnLoc.ObjectId()
-		if _, ok := pinnedObjects[cnObj.String()]; !ok {
-			logutil.Infof("asdf ckp cn location: %v", cnObj.String())
-			pinnedObjects[cnObj.String()] = true
+		cnObj := cnLoc.Name().String()
+		if _, ok := pinned[cnObj]; !ok {
+			logutil.Infof("asdf ckp cn location: %v", cnObj)
+			pinned[cnObj] = true
 		}
 		tnLoc := entry.GetTNLocation()
-		tnObj := tnLoc.ObjectId()
-		if _, ok := pinnedObjects[tnObj.String()]; !ok {
-			logutil.Infof("asdf ckp tn location: %v", tnObj.String())
-			pinnedObjects[tnObj.String()] = true
+		tnObj := tnLoc.Name().String()
+		if _, ok := pinned[tnObj]; !ok {
+			logutil.Infof("asdf ckp tn location: %v", tnObj)
+			pinned[tnObj] = true
 		}
 
 		data, err := getCkpData(ctx, entry, c.ctx.db.Runtime.Fs)
 		if err != nil {
 			return moerr.NewInfoNoCtx(fmt.Sprintf("failed to get checkpoint data %v, %v", entry.LSN(), err))
 		}
-		bat := data.GetObjectBatchs()
-		vec := bat.GetVectorByName(logtail.ObjectAttr_ObjectStats)
-		for i := 0; i < vec.Length(); i++ {
-			v := vec.Get(i).([]byte)
-			obj := objectio.ObjectStats(v)
-			if _, ok := pinnedObjects[obj.ObjectName().String()]; !ok {
-				logutil.Infof("asdf ckp object: %v", obj.ObjectName().String())
-			}
-			pinnedObjects[obj.ObjectName().String()] = true
-		}
+		getObjectsFromCkpMeta(data, pinned)
+		getObjectsFromCkpData(data, pinned)
+	}
+	return
+}
 
-		bat = data.GetTombstoneObjectBatchs()
-		vec = bat.GetVectorByName(logtail.ObjectAttr_ObjectStats)
+func getObjectsFromCkpMeta(data *logtail.CheckpointData, pinned map[string]bool) {
+	bats := data.GetBatches()
+
+	metaBat := bats[logtail.MetaIDX]
+	metaAttr := logtail.MetaSchemaAttr
+	for _, attr := range metaAttr {
+		if attr == logtail.SnapshotAttr_TID {
+			continue
+		}
+		vec := metaBat.GetVectorByName(attr)
 		for i := 0; i < vec.Length(); i++ {
 			v := vec.Get(i).([]byte)
-			obj := objectio.ObjectStats(v)
-			if _, ok := pinnedObjects[obj.ObjectName().String()]; !ok {
-				logutil.Infof("asdf ckp tombstone object: %v", obj.ObjectName().String())
+			if len(v) == 0 {
+				continue
 			}
-			pinnedObjects[obj.ObjectName().String()] = true
+			loc := objectio.Location(v)
+			obj := loc.Name().String()
+			if _, ok := pinned[obj]; !ok {
+				logutil.Infof("asdf ckp meta: %v", obj)
+			}
+			pinned[obj] = true
 		}
 	}
+
+	tnBat := bats[logtail.TNMetaIDX]
+	vec := tnBat.GetVectorByName(logtail.CheckpointMetaAttr_BlockLocation)
+	for i := 0; i < vec.Length(); i++ {
+		v := vec.Get(i).([]byte)
+		if len(v) == 0 {
+			continue
+		}
+		loc := objectio.Location(v)
+		obj := loc.Name().String()
+		if _, ok := pinned[obj]; !ok {
+			logutil.Infof("asdf ckp tn meta: %v", obj)
+		}
+		pinned[obj] = true
+	}
+
+	return
+}
+
+func getObjectsFromCkpData(data *logtail.CheckpointData, pinned map[string]bool) {
+	bat := data.GetObjectBatchs()
+	vec := bat.GetVectorByName(logtail.ObjectAttr_ObjectStats)
+	for i := 0; i < vec.Length(); i++ {
+		v := vec.Get(i).([]byte)
+		obj := objectio.ObjectStats(v)
+		if _, ok := pinned[obj.ObjectName().String()]; !ok {
+			logutil.Infof("asdf ckp object: %v", obj.ObjectName().String())
+		}
+		pinned[obj.ObjectName().String()] = true
+	}
+
+	bat = data.GetTombstoneObjectBatchs()
+	vec = bat.GetVectorByName(logtail.ObjectAttr_ObjectStats)
+	for i := 0; i < vec.Length(); i++ {
+		v := vec.Get(i).([]byte)
+		obj := objectio.ObjectStats(v)
+		if _, ok := pinned[obj.ObjectName().String()]; !ok {
+			logutil.Infof("asdf ckp tombstone: %v", obj.ObjectName().String())
+		}
+		pinned[obj.ObjectName().String()] = true
+	}
+
 	return
 }
 
@@ -1540,13 +1595,46 @@ func (c *gcRemoveArg) Run() (err error) {
 	}
 	defer file.Close()
 
+	pinned := make(map[string]bool)
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		obj := scanner.Text()
-		oriPath := filepath.Join(c.oriDir, obj)
-		tarPath := filepath.Join(c.tarDir, obj)
-		if err = os.Rename(oriPath, tarPath); err != nil {
-			return moerr.NewInfoNoCtx(fmt.Sprintf("failed to rename %v to %v, %v", oriPath, tarPath, err))
+		pinned[obj] = true
+	}
+
+	files, err := os.ReadDir(c.oriDir)
+	if err != nil {
+		return moerr.NewInfoNoCtx(fmt.Sprintf("failed to read directory %v, %v", c.oriDir, err))
+	}
+
+	err = os.MkdirAll(c.tarDir, 0755)
+	if err != nil {
+		err = moerr.NewInternalErrorNoCtx(fmt.Sprintf("Error creating directory: %v", err))
+		return
+	}
+
+	toMove := make([]string, 0)
+	for _, obj := range files {
+		if obj.IsDir() || pinned[obj.Name()] {
+			continue
+		}
+		info, err := obj.Info()
+		if err != nil {
+			return moerr.NewInfoNoCtx(fmt.Sprintf("failed to get file info %v, %v", obj.Name(), err))
+		}
+		modTime := info.ModTime()
+		if time.Since(modTime).Hours() < 24*7 {
+			continue
+		}
+		toMove = append(toMove, obj.Name())
+	}
+
+	for _, obj := range toMove {
+		src := filepath.Join(c.oriDir, obj)
+		dst := filepath.Join(c.tarDir, obj)
+		err = os.Rename(src, dst)
+		if err != nil {
+			return moerr.NewInfoNoCtx(fmt.Sprintf("failed to move file %v to %v, %v", src, dst, err))
 		}
 	}
 
