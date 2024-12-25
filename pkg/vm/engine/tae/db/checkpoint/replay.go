@@ -96,9 +96,8 @@ func (c *CkpReplayer) ReadCkpFiles() (err error) {
 	}
 	metaFiles := make([]*MetaFile, 0)
 	compactedFiles := make([]*MetaFile, 0)
-	r.checkpointMetaFiles.Lock()
 	for i, dir := range dirs {
-		r.checkpointMetaFiles.files[dir.Name] = struct{}{}
+		r.store.AddMetaFile(dir.Name)
 		start, end, ext := blockio.DecodeCheckpointMetadataFileName(dir.Name)
 		metaFile := &MetaFile{
 			start: start,
@@ -112,7 +111,6 @@ func (c *CkpReplayer) ReadCkpFiles() (err error) {
 		}
 		metaFiles = append(metaFiles, metaFile)
 	}
-	r.checkpointMetaFiles.Unlock()
 	sort.Slice(metaFiles, func(i, j int) bool {
 		return metaFiles[i].end.LT(&metaFiles[j].end)
 	})

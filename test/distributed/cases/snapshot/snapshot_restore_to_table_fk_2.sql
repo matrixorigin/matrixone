@@ -1,3 +1,4 @@
+DROP DATABASE IF EXISTS Company;
 CREATE DATABASE Company;
 USE Company;
 
@@ -138,6 +139,7 @@ select * from Benefits;
 select * from TimeOff;
 select * from PerformanceReviews;
 
+DROP DATABASE IF EXISTS Projects;
 CREATE DATABASE Projects;
 USE Projects;
 
@@ -193,6 +195,7 @@ select * from Projects;
 select * from ProjectMembers;
 select * from ProjectManagers;
 
+DROP DATABASE IF EXISTS Payroll;
 CREATE DATABASE Payroll;
 USE Payroll;
 
@@ -281,7 +284,7 @@ drop database if exists Projects;
 drop database if exists Company;
 drop snapshot snapshot_01;
 
-
+DROP DATABASE IF EXISTS Company;
 CREATE DATABASE Company;
 USE Company;
 
@@ -422,6 +425,7 @@ select * from Benefits;
 select * from TimeOff;
 select * from PerformanceReviews;
 
+DROP DATABASE IF EXISTS Projects;
 CREATE DATABASE Projects;
 USE Projects;
 
@@ -477,6 +481,7 @@ select * from Projects;
 select * from ProjectMembers;
 select * from ProjectManagers;
 
+DROP DATABASE IF EXISTS Payroll;
 CREATE DATABASE Payroll;
 USE Payroll;
 
@@ -612,6 +617,7 @@ drop snapshot if exists snapshot_01;
 show snapshots;
 create snapshot snapshot_01 for account sys;
 
+DROP DATABASE IF EXISTS Company;
 CREATE DATABASE Company;
 USE Company;
 
@@ -752,6 +758,7 @@ select * from Benefits;
 select * from TimeOff;
 select * from PerformanceReviews;
 
+DROP DATABASE IF EXISTS Projects;
 CREATE DATABASE Projects;
 USE Projects;
 
@@ -807,6 +814,7 @@ select * from Projects;
 select * from ProjectMembers;
 select * from ProjectManagers;
 
+DROP DATABASE IF EXISTS Payroll;
 CREATE DATABASE Payroll;
 USE Payroll;
 
