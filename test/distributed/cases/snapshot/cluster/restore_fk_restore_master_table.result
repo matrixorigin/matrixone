@@ -1,3 +1,4 @@
+DROP DATABASE IF EXISTS Company;
 CREATE DATABASE Company;
 USE Company;
 drop table if exists Departments;

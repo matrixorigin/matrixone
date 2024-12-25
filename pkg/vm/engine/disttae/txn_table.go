@@ -640,7 +640,7 @@ func (tbl *txnTable) doRanges(ctx context.Context, rangesParam engine.RangesPara
 				zap.String("exprs", plan2.FormatExprs(rangesParam.BlockFilters)),
 				zap.Uint64("tbl-id", tbl.tableId),
 				zap.String("txn", tbl.db.op.Txn().DebugString()),
-				zap.String("blocks", blocks.String()),
+				zap.Int("blocks", blocks.Len()),
 				zap.String("ps", fmt.Sprintf("%p", part)),
 				zap.Duration("cost", cost),
 				zap.Error(err),

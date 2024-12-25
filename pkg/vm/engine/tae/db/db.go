@@ -204,6 +204,9 @@ func (db *DB) ForceCheckpoint(
 	timeout := time.After(wait)
 	for {
 		select {
+		case <-ctx.Done():
+			err = context.Cause(ctx)
+			return
 		case <-timeout:
 			err = moerr.NewInternalError(ctx, "force checkpoint timeout")
 			return
