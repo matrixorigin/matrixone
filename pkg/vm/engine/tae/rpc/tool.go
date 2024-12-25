@@ -15,6 +15,7 @@
 package rpc
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -1480,5 +1481,76 @@ func (c *gcDumpArg) getCheckpointObject(ctx context.Context, pinnedObjects map[s
 			pinnedObjects[obj.ObjectName().String()] = true
 		}
 	}
+	return
+}
+
+type gcRemoveArg struct {
+	file   string
+	oriDir string
+	tarDir string
+	res    string
+}
+
+func (c *gcRemoveArg) PrepareCommand() *cobra.Command {
+	gcRemoveCmd := &cobra.Command{
+		Use:   "remove",
+		Short: "gc remove",
+		Long:  "Remove objects from the given file",
+		Run:   RunFactory(c),
+	}
+
+	gcRemoveCmd.SetUsageTemplate(c.Usage())
+
+	gcRemoveCmd.Flags().StringP("file", "f", "", "file to remove")
+	gcRemoveCmd.Flags().StringP("ori", "o", "", "original directory")
+	gcRemoveCmd.Flags().StringP("tar", "t", "", "target directory")
+
+	return gcRemoveCmd
+}
+
+func (c *gcRemoveArg) FromCommand(cmd *cobra.Command) (err error) {
+	c.file, _ = cmd.Flags().GetString("file")
+	c.oriDir, _ = cmd.Flags().GetString("ori")
+	c.tarDir, _ = cmd.Flags().GetString("tar")
+	return nil
+}
+
+func (c *gcRemoveArg) String() string {
+	return c.res
+}
+
+func (c *gcRemoveArg) Usage() (res string) {
+	res += "Examples:\n"
+	res += "  # Remove objects from the given file\n"
+	res += "  inspect gc remove -f file -o ori -t tar\n"
+
+	res += "\n"
+	res += "Options:\n"
+	return
+}
+
+func (c *gcRemoveArg) Run() (err error) {
+	if c.file == "" || c.oriDir == "" || c.tarDir == "" {
+		return moerr.NewInfoNoCtx("invalid inputs")
+	}
+
+	file, err := os.Open(c.file)
+	if err != nil {
+		return moerr.NewInfoNoCtx(fmt.Sprintf("failed to open file %v, %v", c.file, err))
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		obj := scanner.Text()
+		oriPath := filepath.Join(c.oriDir, obj)
+		tarPath := filepath.Join(c.tarDir, obj)
+		if err = os.Rename(oriPath, tarPath); err != nil {
+			return moerr.NewInfoNoCtx(fmt.Sprintf("failed to rename %v to %v, %v", oriPath, tarPath, err))
+		}
+	}
+
+	c.res = fmt.Sprintf("Moved objects from %v to %v", c.oriDir, c.tarDir)
+
 	return
 }
