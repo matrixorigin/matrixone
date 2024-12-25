@@ -162,24 +162,21 @@ func (e *TestEngine) CheckRowsByScan(exp int, applyDelete bool) {
 	assert.NoError(e.T, txn.Commit(context.Background()))
 }
 func (e *TestEngine) ForceCheckpoint() {
-	err := e.BGFlusher.ForceFlushWithInterval(e.TxnMgr.Now(), context.Background(), time.Second*2, time.Millisecond*10)
-	assert.NoError(e.T, err)
-	err = e.BGCheckpointRunner.ForceIncrementalCheckpoint(e.TxnMgr.Now())
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+	defer cancel()
+	err := e.DB.ForceCheckpoint(ctx, e.TxnMgr.Now(), 0)
 	assert.NoError(e.T, err)
 }
 
 func (e *TestEngine) ForceLongCheckpoint() {
-	err := e.BGFlusher.ForceFlush(e.TxnMgr.Now(), context.Background(), 20*time.Second)
-	assert.NoError(e.T, err)
-	err = e.BGCheckpointRunner.ForceIncrementalCheckpoint(e.TxnMgr.Now())
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*20)
+	defer cancel()
+	err := e.DB.ForceCheckpoint(ctx, e.TxnMgr.Now(), 0)
 	assert.NoError(e.T, err)
 }
 
 func (e *TestEngine) ForceLongCheckpointTruncate() {
-	err := e.BGFlusher.ForceFlush(e.TxnMgr.Now(), context.Background(), 20*time.Second)
-	assert.NoError(e.T, err)
-	err = e.BGCheckpointRunner.ForceIncrementalCheckpoint(e.TxnMgr.Now())
-	assert.NoError(e.T, err)
+	e.ForceLongCheckpoint()
 }
 
 func (e *TestEngine) DropRelation(t *testing.T) {

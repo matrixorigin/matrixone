@@ -29,13 +29,14 @@ type TestRunner interface {
 	EnableCheckpoint()
 	DisableCheckpoint()
 
+	// TODO: remove the below apis
 	CleanPenddingCheckpoint()
-	ForceGlobalCheckpoint(context.Context, types.TS, time.Duration) error
 	ForceCheckpointForBackup(end types.TS) (string, error)
+
+	ForceGlobalCheckpoint(context.Context, types.TS, time.Duration) error
 	ForceIncrementalCheckpoint(end types.TS) error
 	ForceICKP(context.Context, *types.TS) error
 	MaxLSNInRange(end types.TS) uint64
-
 	GetICKPIntentOnlyForTest() *CheckpointEntry
 
 	GCNeeded() bool
