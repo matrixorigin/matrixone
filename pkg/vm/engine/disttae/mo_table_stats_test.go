@@ -20,25 +20,40 @@ import (
 	"math/rand"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 )
 
 func Test_intsJoin(t *testing.T) {
-	item := make([]uint64, 10)
+	wg := sync.WaitGroup{}
 
-	for range 10 {
-		for i := range item {
-			item[i] = rand.Uint64() % 10
-		}
+	for range 100 {
+		wg.Add(1)
+		go func() {
+			defer func() {
+				wg.Done()
+			}()
 
-		ret := intsJoin(item, ",")
-		split := strings.Split(ret, ",")
+			item := make([]uint64, max(rand.Int()%5, 1))
+			for i := range item {
+				item[i] = rand.Uint64() % 10
+			}
 
-		fmt.Println(ret)
-		for j, s := range split {
-			require.Equal(t, strconv.FormatUint(item[j], 10), s)
-		}
+			ret, release := intsJoin(item, ",")
+			defer func() {
+				release()
+			}()
+
+			split := strings.Split(ret, ",")
+
+			//fmt.Println(item, ret)
+			for j, s := range split {
+				require.Equal(t, strconv.FormatUint(item[j], 10), s, fmt.Sprintf("%v(%d) %v", item, j, ret))
+			}
+		}()
 	}
+
+	wg.Wait()
 }
 
 func Test_joinAccountDatabase(t *testing.T) {
@@ -51,8 +66,9 @@ func Test_joinAccountDatabase(t *testing.T) {
 			db[i] = rand.Uint64() % 10
 		}
 
-		ret := joinAccountDatabase(acc, db)
+		ret, release := joinAccountDatabase(acc, db)
 		fmt.Println(ret)
+		release()
 	}
 }
 
@@ -68,8 +84,9 @@ func Test_joinAccountDatabaseTable(t *testing.T) {
 			tbl[i] = rand.Uint64() % 10
 		}
 
-		ret := joinAccountDatabaseTable(acc, db, tbl)
+		ret, release := joinAccountDatabaseTable(acc, db, tbl)
 		fmt.Println(ret)
+		release()
 	}
 }
 
@@ -111,6 +128,5 @@ func Benchmark_joinAccountDatabaseTable(b *testing.B) {
 
 	for range b.N {
 		joinAccountDatabaseTable(acc, db, tbl)
-
 	}
 }

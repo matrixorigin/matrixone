@@ -817,7 +817,7 @@ var builderPool = sync.Pool{
 	},
 }
 
-func intsJoin(items []uint64, delimiter string) string {
+func intsJoin(items []uint64, delimiter string) (string, func()) {
 	bb := builderPool.Get().(*builder)
 	for i, item := range items {
 		bb.writeString(strconv.FormatUint(item, 10))
@@ -826,15 +826,13 @@ func intsJoin(items []uint64, delimiter string) string {
 		}
 	}
 
-	ret := bb.string()
-
-	bb.reset()
-	builderPool.Put(bb)
-
-	return ret
+	return bb.string(), func() {
+		bb.reset()
+		builderPool.Put(bb)
+	}
 }
 
-func joinAccountDatabase(accIds []uint64, dbIds []uint64) string {
+func joinAccountDatabase(accIds []uint64, dbIds []uint64) (string, func()) {
 	bb := builderPool.Get().(*builder)
 	for i := range accIds {
 		bb.writeString("(account_id = ")
@@ -848,17 +846,15 @@ func joinAccountDatabase(accIds []uint64, dbIds []uint64) string {
 		}
 	}
 
-	ret := bb.string()
-
-	bb.reset()
-	builderPool.Put(bb)
-
-	return ret
+	return bb.string(), func() {
+		bb.reset()
+		builderPool.Put(bb)
+	}
 }
 
 func joinAccountDatabaseTable(
 	accIds []uint64, dbIds []uint64, tblIds []uint64,
-) string {
+) (string, func()) {
 
 	bb := builderPool.Get().(*builder)
 	for i := range accIds {
@@ -875,12 +871,10 @@ func joinAccountDatabaseTable(
 		}
 	}
 
-	ret := bb.string()
-
-	bb.reset()
-	builderPool.Put(bb)
-
-	return ret
+	return bb.string(), func() {
+		bb.reset()
+		builderPool.Put(bb)
+	}
 }
 
 func (d *dynamicCtx) executeSQL(ctx context.Context, sql string, hint string) ie.InternalExecResult {
@@ -932,11 +926,17 @@ func (d *dynamicCtx) forceUpdateQuery(
 
 	if !resetUpdateTime {
 
-		sql := fmt.Sprintf(getUpdateTSSQL,
-			catalog.MO_CATALOG, catalog.MO_TABLE_STATS,
-			intsJoin(accs, ","),
-			intsJoin(dbs, ","),
-			intsJoin(tbls, ","))
+		accStr, release1 := intsJoin(accs, ",")
+		dbStr, release2 := intsJoin(dbs, ",")
+		tblStr, release3 := intsJoin(tbls, ",")
+
+		defer func() {
+			release1()
+			release2()
+			release3()
+		}()
+
+		sql := fmt.Sprintf(getUpdateTSSQL, catalog.MO_CATALOG, catalog.MO_TABLE_STATS, accStr, dbStr, tblStr)
 
 		sqlRet := d.executeSQL(ctx, sql, "force update query")
 		if sqlRet.Error() != nil {
@@ -1006,12 +1006,17 @@ func (d *dynamicCtx) normalQuery(
 		return
 	}
 
-	sql := fmt.Sprintf(getTableStatsSQL,
-		catalog.MO_CATALOG,
-		catalog.MO_TABLE_STATS,
-		intsJoin(accs, ","),
-		intsJoin(dbs, ","),
-		intsJoin(tbls, ","))
+	accStr, release1 := intsJoin(accs, ",")
+	dbStr, release2 := intsJoin(dbs, ",")
+	tblStr, release3 := intsJoin(tbls, ",")
+
+	defer func() {
+		release1()
+		release2()
+		release3()
+	}()
+
+	sql := fmt.Sprintf(getTableStatsSQL, catalog.MO_CATALOG, catalog.MO_TABLE_STATS, accStr, dbStr, tblStr)
 
 	sqlRet := d.executeSQL(ctx, sql, "normal query")
 	if sqlRet.Error() != nil {
@@ -1088,8 +1093,9 @@ func (d *dynamicCtx) QueryTableStatsByAccounts(
 
 	newCtx := turn2SysCtx(ctx)
 
-	sql := fmt.Sprintf(accumulateIdsByAccSQL,
-		catalog.MO_CATALOG, catalog.MO_TABLES, intsJoin(accs, ","))
+	accStr, release := intsJoin(accs, ",")
+	sql := fmt.Sprintf(accumulateIdsByAccSQL, catalog.MO_CATALOG, catalog.MO_TABLES, accStr)
+	release()
 
 	sqlRet := d.executeSQL(newCtx, sql, "query table stats by accounts")
 	if err = sqlRet.Error(); err != nil {
@@ -2085,7 +2091,12 @@ func (d *dynamicCtx) gamaCleanDeletes(
 			return
 		}
 
-		where := fmt.Sprintf("account_id in (%v)", intsJoin(accIds, ","))
+		accStr, release := intsJoin(accIds, ",")
+		defer func() {
+			release()
+		}()
+
+		where := fmt.Sprintf("account_id in (%v)", accStr)
 
 		sql = fmt.Sprintf(getDeleteFromStatsSQL, catalog.MO_CATALOG, catalog.MO_TABLE_STATS, where)
 		sqlRet = d.executeSQL(ctx, sql, "clean accounts: clean deleted account")
@@ -2093,9 +2104,11 @@ func (d *dynamicCtx) gamaCleanDeletes(
 	}
 
 	cleanDatabase := func() (deleted []uint64, err error) {
-		sql = fmt.Sprintf(findDeletedDatabaseSQL,
-			catalog.MO_CATALOG, catalog.MO_TABLE_STATS, catalog.MO_CATALOG, catalog.MO_DATABASE,
-			intsJoin([]uint64{specialDatabaseId, catalog.MO_CATALOG_ID}, ","))
+		tmpStr, release := intsJoin([]uint64{specialDatabaseId, catalog.MO_CATALOG_ID}, ",")
+
+		sql = fmt.Sprintf(findDeletedDatabaseSQL, catalog.MO_CATALOG,
+			catalog.MO_TABLE_STATS, catalog.MO_CATALOG, catalog.MO_DATABASE, tmpStr)
+		release()
 
 		sqlRet = d.executeSQL(ctx, sql, "clean database: find deleted database")
 		if err = sqlRet.Error(); err != nil {
@@ -2110,9 +2123,10 @@ func (d *dynamicCtx) gamaCleanDeletes(
 			return
 		}
 
-		where := joinAccountDatabase(accIds, dbIds)
-
+		where, release := joinAccountDatabase(accIds, dbIds)
 		sql = fmt.Sprintf(getDeleteFromStatsSQL, catalog.MO_CATALOG, catalog.MO_TABLE_STATS, where)
+		release()
+
 		sqlRet = d.executeSQL(ctx, sql, "clean database: clean deleted database")
 		return dbIds, sqlRet.Error()
 	}
@@ -2134,9 +2148,10 @@ func (d *dynamicCtx) gamaCleanDeletes(
 			return
 		}
 
-		where := joinAccountDatabaseTable(accIds, dbIds, tblIds)
-
+		where, release := joinAccountDatabaseTable(accIds, dbIds, tblIds)
 		sql = fmt.Sprintf(getDeleteFromStatsSQL, catalog.MO_CATALOG, catalog.MO_TABLE_STATS, where)
+		release()
+
 		sqlRet = d.executeSQL(ctx, sql, "clean table: clean deleted table")
 		return tblIds, sqlRet.Error()
 	}
@@ -2456,7 +2471,10 @@ func correctAccountForCatalogTables(
 	}
 
 	if len(mm) > 0 {
-		sql := fmt.Sprintf(findAccountByTable, catalog.MO_CATALOG, catalog.MO_TABLE_STATS, intsJoin(mm, ","))
+		tmpStr, release := intsJoin(mm, ",")
+		sql := fmt.Sprintf(findAccountByTable, catalog.MO_CATALOG, catalog.MO_TABLE_STATS, tmpStr)
+		release()
+
 		sqlRet := eng.executeSQL(ctx, sql, "correct account for catalog tables")
 		if err = sqlRet.Error(); err != nil {
 			return
