@@ -276,10 +276,6 @@ const (
 	specialTableId    = 1
 )
 
-var specialStatsName = []string{
-	specialStart,
-}
-
 var TableStatsName = [TableStatsCnt]string{
 	"table_size",
 	"table_rows",
@@ -2441,14 +2437,14 @@ func correctAccountForCatalogTables(
 				return
 			}
 
-			tid := val.(uint64)
+			tid := uint64(val.(int64))
 			idx := slices.Index(resp.TableIds, tid)
 
 			if val, err = sqlRet.Value(ctx, i, 0); err != nil {
 				return
 			}
 
-			aid := val.(uint64)
+			aid := uint64(val.(int64))
 			resp.AccIds[idx] = aid
 		}
 	}
