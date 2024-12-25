@@ -46,3 +46,21 @@ show table status;
 Name    Engine    Row_format    Rows    Avg_row_length    Data_length    Max_data_length    Index_length    Data_free    Auto_increment    Create_time    Update_time    Check_time    Collation    Checksum    Create_options    Comment    Role_id    Role_name
 t1    Tae    Dynamic    100000    0    804690    0    0    NULL    0    2024-12-24 19:03:52    NULL    NULL    utf8mb4_bin    NULL            0    moadmin
 drop database testdb;
+select mo_ctl("cn", "MoTableStats", "recomputing:acc.0");
+mo_ctl(cn, MoTableStats, recomputing:acc.0)
+{\n  "method": "MOTABLESTATS",\n  "result": {\n    "dd1dccb4-4d3c-41f8-b482-5251dc7a41bf": "success"\n  }\n}\n
+select mo_ctl("cn", "MoTableStats", "recomputing:db.1");
+mo_ctl(cn, MoTableStats, recomputing:gama.db.1)
+{\n  "method": "MOTABLESTATS",\n  "result": {\n    "dd1dccb4-4d3c-41f8-b482-5251dc7a41bf": "success"\n  }\n}\n
+select mo_ctl("cn", "MoTableStats", "recomputing:tbl.1,2,3");
+mo_ctl(cn, MoTableStats, recomputing:tbl.1,2,3)
+{\n  "method": "MOTABLESTATS",\n  "result": {\n    "dd1dccb4-4d3c-41f8-b482-5251dc7a41bf": "success"\n  }\n}\n
+select mo_ctl("cn", "MoTableStats", "recomputing:gama.forgotten");
+mo_ctl(cn, MoTableStats, recomputing:gama.forgotten)
+{\n  "method": "MOTABLESTATS",\n  "result": {\n    "dd1dccb4-4d3c-41f8-b482-5251dc7a41bf": "success"\n  }\n}\n
+select mo_ctl("cn", "MoTableStats", "recomputing:gama.clean");
+mo_ctl(cn, MoTableStats, recomputing:gama.clean)
+{\n  "method": "MOTABLESTATS",\n  "result": {\n    "dd1dccb4-4d3c-41f8-b482-5251dc7a41bf": "success"\n  }\n}\n
+select mo_ctl("cn", "MoTableStats", "recomputing:gama.new");
+mo_ctl(cn, MoTableStats, recomputing:gama.new)
+{\n  "method": "MOTABLESTATS",\n  "result": {\n    "dd1dccb4-4d3c-41f8-b482-5251dc7a41bf": "success"\n  }\n}\n
