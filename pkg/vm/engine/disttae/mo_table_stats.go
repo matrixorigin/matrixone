@@ -117,29 +117,6 @@ const (
                   	table_id in (%v) 
 			  	order by table_id asc;`
 
-	getNextCheckAliveListSQL = `
-				select
-					%s
-				from (
-					select
-						%s, min(update_time) as min_update
-					from
-						%s.%s
-					group by
-						%s
-				) sub
-				order by
-				    min_update asc
-				limit %d;`
-
-	getCheckAliveSQL = `
-				select 
-					distinct(%s)
-				from 
-					%s.%s
-				where
-				    %s in (%v);`
-
 	getDeleteFromStatsSQL = `
 				delete from 
 				    %s.%s
@@ -192,7 +169,7 @@ const (
 				on
 					A.account_id = B.account_id and A.database_name = B.datname and A.database_id = B.dat_id
 				where
-				    B.datname is NULL and A.database_id != %d 
+				    B.datname is NULL and A.database_id not in (%v)  
 				group by 
 					A.account_id, A.database_id;
 				`
@@ -2049,7 +2026,7 @@ func (d *dynamicCtx) gamaCleanDeletes(
 		accIds, dbIds, tblIds []uint64
 	)
 
-	cleanAccounts := func() (cnt int, err error) {
+	cleanAccounts := func() (deleted []uint64, err error) {
 		sql = fmt.Sprintf(findDeletedAccountSQL,
 			catalog.MO_CATALOG, catalog.MO_TABLE_STATS, catalog.MO_CATALOG, catalog.MOAccountTable)
 
@@ -2070,12 +2047,13 @@ func (d *dynamicCtx) gamaCleanDeletes(
 
 		sql = fmt.Sprintf(getDeleteFromStatsSQL, catalog.MO_CATALOG, catalog.MO_TABLE_STATS, where)
 		sqlRet = d.executeSQL(ctx, sql, "clean accounts: clean deleted account")
-		return len(accIds), sqlRet.Error()
+		return accIds, sqlRet.Error()
 	}
 
-	cleanDatabase := func() (cnt int, err error) {
+	cleanDatabase := func() (deleted []uint64, err error) {
 		sql = fmt.Sprintf(findDeletedDatabaseSQL,
-			catalog.MO_CATALOG, catalog.MO_TABLE_STATS, catalog.MO_CATALOG, catalog.MO_DATABASE, specialDatabaseId)
+			catalog.MO_CATALOG, catalog.MO_TABLE_STATS, catalog.MO_CATALOG, catalog.MO_DATABASE,
+			intsJoin([]uint64{specialDatabaseId, catalog.MO_CATALOG_ID}, ","))
 
 		sqlRet = d.executeSQL(ctx, sql, "clean database: find deleted database")
 		if err = sqlRet.Error(); err != nil {
@@ -2094,10 +2072,10 @@ func (d *dynamicCtx) gamaCleanDeletes(
 
 		sql = fmt.Sprintf(getDeleteFromStatsSQL, catalog.MO_CATALOG, catalog.MO_TABLE_STATS, where)
 		sqlRet = d.executeSQL(ctx, sql, "clean database: clean deleted database")
-		return len(accIds), sqlRet.Error()
+		return dbIds, sqlRet.Error()
 	}
 
-	cleanTable := func() (cnt int, err error) {
+	cleanTable := func() (deleted []uint64, err error) {
 		sql = fmt.Sprintf(findDeletedTableSQL,
 			catalog.MO_CATALOG, catalog.MO_TABLE_STATS, catalog.MO_CATALOG, catalog.MO_TABLES, specialDatabaseId)
 
@@ -2118,7 +2096,7 @@ func (d *dynamicCtx) gamaCleanDeletes(
 
 		sql = fmt.Sprintf(getDeleteFromStatsSQL, catalog.MO_CATALOG, catalog.MO_TABLE_STATS, where)
 		sqlRet = d.executeSQL(ctx, sql, "clean table: clean deleted table")
-		return len(accIds), sqlRet.Error()
+		return tblIds, sqlRet.Error()
 	}
 
 	var (
@@ -2126,30 +2104,30 @@ func (d *dynamicCtx) gamaCleanDeletes(
 
 		now = time.Now()
 
-		delAccCnt   int
-		delDBCnt    int
-		delTableCnt int
+		delAcc   []uint64
+		delDB    []uint64
+		delTable []uint64
 	)
 
 	defer func() {
 		logutil.Info(logHeader,
 			zap.String("source", "gama clean deletes"),
-			zap.Int("clean accounts", delAccCnt),
-			zap.Int("clean database", delDBCnt),
-			zap.Int("clean table", delTableCnt),
 			zap.Duration("takes", time.Since(now)),
-			zap.Error(err))
+			zap.Error(err),
+			zap.Any("clean accounts", delAcc),
+			zap.Any("clean database", delDB),
+			zap.Any("clean table", delTable))
 	}()
 
-	if delAccCnt, err = cleanAccounts(); err != nil {
+	if delAcc, err = cleanAccounts(); err != nil {
 		return
 	}
 
-	if delDBCnt, err = cleanDatabase(); err != nil {
+	if delDB, err = cleanDatabase(); err != nil {
 		return
 	}
 
-	if delTableCnt, err = cleanTable(); err != nil {
+	if delTable, err = cleanTable(); err != nil {
 		return
 	}
 }
@@ -2174,7 +2152,7 @@ func (d *dynamicCtx) gamaTask(
 		return gamaDur + time.Duration(rnd.Intn(1*n))*time.Minute
 	}
 
-	const baseFactory = 3
+	const baseFactory = 60
 	tickerA := time.NewTicker(randDuration(baseFactory))
 	tickerB := time.NewTicker(randDuration(baseFactory))
 	tickerC := time.NewTicker(randDuration(baseFactory))
