@@ -96,6 +96,7 @@ func (m *MockCompilerContext) ResolveVariable(varName string, isSystemVar, isGlo
 	dec, _ := types.ParseDecimal128("200.001", 38, 3)
 	vars["decimal_var"] = dec
 	vars["null_var"] = nil
+	vars["delete_opt_to_truncate"] = int64(1)
 
 	if m.mysqlCompatible {
 		vars["sql_mode"] = ""

@@ -4873,6 +4873,13 @@ func (builder *QueryBuilder) resolveTsHint(tsExpr *tree.AtTimeStamp) (snapshot *
 			}
 
 			snapshot = &Snapshot{TS: &ts, Tenant: tenant}
+		} else if tsExpr.Type == tree.ASOFTIMESTAMP {
+			var ts int64
+			if ts, err = doResolveTimeStamp(lit.Sval); err != nil {
+				return
+			}
+			tStamp := &timestamp.Timestamp{PhysicalTime: ts}
+			snapshot = &Snapshot{TS: tStamp, Tenant: tenant}
 		} else {
 			err = moerr.NewInvalidArg(builder.GetContext(), "invalid timestamp hint type", tsExpr.Type.String())
 			return
