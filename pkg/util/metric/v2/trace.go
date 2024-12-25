@@ -43,7 +43,7 @@ var (
 			Subsystem: "trace",
 			Name:      "collector_duration_seconds",
 			Help:      "Bucketed histogram of trace collector duration.",
-			Buckets:   prometheus.ExponentialBuckets(0.0001, 2.0, 20),
+			Buckets:   []float64{0.001, 0.05, 0.5, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 20, 40, 60, 80},
 		}, []string{"type"})
 	TraceCollectorCollectDurationHistogram              = traceCollectorDurationHistogram.WithLabelValues("collect")
 	TraceCollectorConsumeDurationHistogram              = traceCollectorDurationHistogram.WithLabelValues("consume")
@@ -69,7 +69,7 @@ var (
 			Subsystem: "trace",
 			Name:      "collector_collect_hung_total",
 			Help:      "Count of trace collector hung collect total",
-		}, []string{"type"})
+		}, []string{"type", "reason"})
 
 	traceCollectorDiscardItemCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -234,8 +234,8 @@ func GetTraceCollectorDiscardItemCounter(typ string) prometheus.Counter {
 	return traceCollectorDiscardItemCounter.WithLabelValues(typ)
 }
 
-func GetTraceCollectorCollectHungCounter(typ string) prometheus.Counter {
-	return traceCollectorCollectHungCounter.WithLabelValues(typ)
+func GetTraceCollectorCollectHungCounter(typ string, reason string) prometheus.Counter {
+	return traceCollectorCollectHungCounter.WithLabelValues(typ, reason)
 }
 
 func GetTraceCollectorMOLoggerQueueLength() prometheus.Gauge {

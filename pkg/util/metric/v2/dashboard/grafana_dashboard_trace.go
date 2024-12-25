@@ -64,10 +64,10 @@ func (c *DashboardCreator) initTraceMoLoggerExportDataRow() dashboard.Option {
 
 	// export files count
 	panels = append(panels, c.withMultiGraph(
-		"files",
+		"files (per minute)",
 		3,
 		[]string{
-			`sum(delta(` + c.getMetricWithFilter("mo_trace_mologger_export_data_bytes_count", "") + `[$interval:1m])) by (type)`,
+			`60 * sum(rate(` + c.getMetricWithFilter("mo_trace_mologger_export_data_bytes_count", "") + `[$__rate_interval])) by (type)`,
 		},
 		[]string{
 			"{{type}}",
@@ -76,11 +76,11 @@ func (c *DashboardCreator) initTraceMoLoggerExportDataRow() dashboard.Option {
 
 	// ETLMerge files count
 	panels = append(panels, c.withMultiGraph(
-		"ETLMerge files",
+		"ETLMerge files (per minute)",
 		3,
 		[]string{
-			`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", "") + `[$interval:1m]))`,
-			`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", `type=~".+"`) + `[$interval:1m])) by (type)`,
+			`60 * sum(rate(` + c.getMetricWithFilter("mo_trace_etl_merge_total", "") + `[$interval:1m]))`,
+			`60 * sum(rate(` + c.getMetricWithFilter("mo_trace_etl_merge_total", `type=~".+"`) + `[$interval])) by (type)`,
 		},
 		[]string{
 			"total",
@@ -205,13 +205,15 @@ func (c *DashboardCreator) initTraceCollectorOverviewRow() dashboard.Option {
 
 		// ------------- next row ------------
 		c.withMultiGraph(
-			"Collect hung",
+			"Collect hung (1ms/op)",
 			3,
-			// try interval: 1ms, need 'val / 1000'
+			// try interval: 1ms
 			[]string{
-				`sum(delta(` + c.getMetricWithFilter("mo_trace_collector_collect_hung_total", "") + `[$interval:1m])) by (type) / 1000`,
+				`sum(delta(` + c.getMetricWithFilter("mo_trace_collector_collect_hung_total", "") + `[$interval:1m])) by (type, reason)`,
 			},
-			[]string{"{{ type }}"}),
+			[]string{"{{ type }} / {{reason}}"},
+			axis.Unit("ms"),
+		),
 		c.withMultiGraph(
 			"Discard Count",
 			3,
