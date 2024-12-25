@@ -21,8 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"go.uber.org/zap"
 )
 
@@ -31,8 +29,7 @@ type TestRunner interface {
 	DisableCheckpoint()
 
 	CleanPenddingCheckpoint()
-	ForceGlobalCheckpoint(end types.TS, versionInterval time.Duration) error
-	ForceGlobalCheckpointSynchronously(ctx context.Context, end types.TS, versionInterval time.Duration) error
+	ForceGlobalCheckpoint(context.Context, types.TS, time.Duration) error
 	ForceCheckpointForBackup(end types.TS) (string, error)
 	ForceIncrementalCheckpoint(end types.TS) error
 	ForceICKP(context.Context, *types.TS) error
@@ -60,86 +57,52 @@ func (r *runner) CleanPenddingCheckpoint() {
 	r.store.CleanPenddingCheckpoint()
 }
 
-func (r *runner) ForceGlobalCheckpoint(end types.TS, interval time.Duration) error {
-	if interval == 0 {
-		interval = r.options.globalVersionInterval
-	}
-	if r.GetPenddingIncrementalCount() != 0 {
-		end2 := r.MaxIncrementalCheckpoint().GetEnd()
-		if end2.GE(&end) {
-			r.globalCheckpointQueue.Enqueue(&globalCheckpointContext{
-				force:    true,
-				end:      end2,
-				interval: interval,
-			})
-			return nil
-		}
-	}
+func (r *runner) ForceGlobalCheckpoint(
+	ctx context.Context, end types.TS, interval time.Duration,
+) (err error) {
 	var (
-		retryTime int
-		now       = time.Now()
-		err       error
+		maxEntry *CheckpointEntry
+		now      = time.Now()
 	)
 	defer func() {
 		logger := logutil.Info
 		if err != nil {
 			logger = logutil.Error
 		}
+		var entryStr string
+		if maxEntry != nil {
+			entryStr = maxEntry.String()
+		}
 		logger(
 			"ForceGlobalCheckpoint-End",
-			zap.Int("retry-time", retryTime),
 			zap.Duration("cost", time.Since(now)),
 			zap.String("ts", end.ToString()),
+			zap.String("entry", entryStr),
 			zap.Error(err),
 		)
 	}()
-
-	timeout := time.After(interval)
-	for {
-		select {
-		case <-timeout:
-			return moerr.NewInternalError(r.ctx, "timeout")
-		default:
-			err = r.ForceIncrementalCheckpoint(end)
-			if err != nil {
-				if dbutils.IsCheckpointRetryableErr(err) {
-					retryTime++
-					time.Sleep(interval / 20)
-					break
-				}
-				return err
-			}
-			r.globalCheckpointQueue.Enqueue(&globalCheckpointContext{
-				force:    true,
-				end:      end,
-				interval: interval,
-			})
-			return nil
-		}
+	if interval == 0 {
+		interval = r.options.globalVersionInterval
 	}
-}
 
-func (r *runner) ForceGlobalCheckpointSynchronously(ctx context.Context, end types.TS, versionInterval time.Duration) error {
-	r.ForceGlobalCheckpoint(end, versionInterval)
-
-	op := func() (ok bool, err error) {
-		global := r.store.MaxGlobalCheckpoint()
-		if global == nil {
-			return false, nil
-		}
-		ok = global.end.GE(&end)
+	if err = r.ForceICKP(ctx, &end); err != nil {
 		return
 	}
-	err := common.RetryWithIntervalAndTimeout(
-		op,
-		time.Minute,
-		time.Millisecond*400,
-		false,
-	)
-	if err != nil {
-		return moerr.NewInternalErrorf(ctx, "force global checkpoint failed: %v", err)
+
+	maxEntry = r.store.MaxIncrementalCheckpoint()
+
+	// should not happend
+	if maxEntry == nil || maxEntry.end.LT(&end) {
+		err = ErrPendingCheckpoint
+		return
 	}
-	return nil
+
+	_, err = r.globalCheckpointQueue.Enqueue(&globalCheckpointContext{
+		force:    true,
+		end:      maxEntry.end,
+		interval: interval,
+	})
+	return
 }
 
 func (r *runner) ForceICKP(ctx context.Context, ts *types.TS) (err error) {

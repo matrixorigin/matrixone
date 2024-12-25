@@ -290,6 +290,15 @@ func (e *TestEngine) Truncate() {
 	assert.NoError(e.T, txn.Commit(context.Background()))
 }
 
+func (e *TestEngine) AllFlushExpected(ts types.TS, timeoutMS int) {
+	testutils.WaitExpect(timeoutMS, func() bool {
+		flushed := e.DB.BGFlusher.IsAllChangesFlushed(types.TS{}, ts, false)
+		return flushed
+	})
+	flushed := e.DB.BGFlusher.IsAllChangesFlushed(types.TS{}, ts, true)
+	require.True(e.T, flushed)
+}
+
 func (e *TestEngine) IncrementalCheckpoint(
 	end types.TS,
 	enableAndCleanBGCheckpoint bool,

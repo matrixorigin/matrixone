@@ -217,10 +217,6 @@ func (db *DB) ForceGlobalCheckpoint(
 	ts types.TS,
 	flushDuration, versionInterval time.Duration,
 ) (err error) {
-	// FIXME: cannot disable with a running job
-	db.BGCheckpointRunner.DisableCheckpoint()
-	defer db.BGCheckpointRunner.EnableCheckpoint()
-	db.BGCheckpointRunner.CleanPenddingCheckpoint()
 	t0 := time.Now()
 	err = db.BGFlusher.ForceFlush(ts, ctx, flushDuration)
 	forceFlushCost := time.Since(t0)
@@ -243,7 +239,7 @@ func (db *DB) ForceGlobalCheckpoint(
 		return
 	}
 
-	err = db.BGCheckpointRunner.ForceGlobalCheckpointSynchronously(
+	err = db.BGCheckpointRunner.ForceGlobalCheckpoint(
 		ctx, ts, versionInterval,
 	)
 	return err
