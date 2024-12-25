@@ -80,7 +80,9 @@ type AtTimeStamp struct {
 func (node *AtTimeStamp) Format(ctx *FmtCtx) {
 	ctx.WriteString("{")
 	ctx.WriteString(node.Type.String())
-	ctx.WriteString(" = ")
+	if node.Type != ASOFTIMESTAMP {
+		ctx.WriteString(" = ")
+	}
 	node.Expr.Format(ctx)
 	ctx.WriteString("}")
 }
