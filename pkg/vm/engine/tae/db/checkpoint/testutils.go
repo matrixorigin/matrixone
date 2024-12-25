@@ -141,6 +141,62 @@ func (r *runner) ForceGlobalCheckpointSynchronously(ctx context.Context, end typ
 	return nil
 }
 
+func (r *runner) ForceICKP(ctx context.Context, ts *types.TS) (err error) {
+	var (
+		intent Intent
+		now    = time.Now()
+	)
+	defer func() {
+		logger := logutil.Info
+		if err != nil {
+			logger = logutil.Error
+		}
+		var intentStr string
+		if intent != nil {
+			intentStr = intent.String()
+		}
+		logger(
+			"ICKP-Schedule-Force-End",
+			zap.String("ts", ts.ToString()),
+			zap.Duration("cost", time.Since(now)),
+			zap.String("intent", intentStr),
+			zap.Error(err),
+		)
+	}()
+
+	ctx, cancel := context.WithTimeout(ctx, time.Minute*2)
+	defer cancel()
+
+	for {
+		if intent, err = r.TryScheduleCheckpoint(*ts, true); err != nil {
+			// for retryable error, we should retry
+			if err == ErrPendingCheckpoint {
+				err = nil
+				time.Sleep(time.Millisecond * 100)
+				continue
+			}
+			return
+		}
+		if intent == nil {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			err = context.Cause(ctx)
+			return
+		case <-r.ctx.Done():
+			err = context.Cause(r.ctx)
+			return
+		case <-intent.Wait():
+			checkpointed := r.store.GetCheckpointed()
+			if checkpointed.LT(ts) {
+				continue
+			}
+			return
+		}
+	}
+}
+
 func (r *runner) ForceIncrementalCheckpoint(ts types.TS) (err error) {
 	var intent Intent
 	if intent, err = r.TryScheduleCheckpoint(ts, true); err != nil {
