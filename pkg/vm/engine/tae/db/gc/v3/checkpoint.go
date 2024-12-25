@@ -665,7 +665,8 @@ func (c *checkpointCleaner) getEntriesToMerge(ts *types.TS) (
 		start = *gcWaterMark
 	}
 	if !ts.GE(&start) {
-		logutil.Warn("[GC-WARNING-PANIC] getEntriesToMerge end < start.",
+		logutil.Warn("GC-PANIC-MERGE-CKP",
+			zap.String("task", c.TaskNameLocked()),
 			zap.String("start", start.ToString()),
 			zap.String("end", ts.ToString()),
 		)
@@ -767,7 +768,8 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 
 	checkpointMaxEnd = toMergeEntries[len(toMergeEntries)-1].GetEnd()
 	if checkpointMaxEnd.GT(checkpointLowWaterMark) {
-		logutil.Warn("[GC-WARNING-PANIC] checkpointMaxEnd > checkpointLowWaterMark",
+		logutil.Warn("GC-PANIC-MERGE-FILES",
+			zap.String("task", c.TaskNameLocked()),
 			zap.String("checkpointMaxEnd", checkpointMaxEnd.ToString()),
 			zap.String("checkpointLowWaterMark", checkpointLowWaterMark.ToString()),
 		)
@@ -787,7 +789,7 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 	// get the scanned window, it should not be nil
 	window := c.GetScannedWindowLocked()
 	if checkpointMaxEnd.GT(&window.tsRange.end) {
-		logutil.Warn("[GC-WARNING-PANIC] checkpointMaxEnd > window end",
+		logutil.Warn("GC-PANIC-MERGE-FILES",
 			zap.String("checkpointMaxEnd", checkpointMaxEnd.ToString()),
 			zap.String("window-end", window.tsRange.end.ToString()),
 		)
@@ -826,7 +828,8 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 		pitrs,
 		gcFileCount)
 	if newCheckpoint == nil {
-		logutil.Warn("[GC-WARNING-PANIC] new checkpoint is nil")
+		logutil.Warn("GC-PANIC-NEW-CHECKPOINT-EMPTY",
+			zap.String("task", c.TaskNameLocked()))
 		return
 	}
 	newFiles := tmpNewFiles
@@ -1050,7 +1053,9 @@ func (c *checkpointCleaner) tryGCAgainstGCKPLocked(
 	}
 	scanMark := c.GetScanWaterMark().GetEnd()
 	if scanMark.IsEmpty() {
-		logutil.Warn("[GC-WARNING-PANIC]scanMark is empty")
+		logutil.Warn("GC-PANIC-SCANMARK-EMPTY",
+			zap.String("task", c.TaskNameLocked()),
+			zap.String("mergeMark", mergeMark.ToString()))
 		return nil
 	}
 	if waterMark.GT(&scanMark) {

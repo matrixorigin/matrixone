@@ -320,7 +320,7 @@ func MakeSnapshotAndPitrFineFilter(
 				continue
 			}
 			if dropTS.IsEmpty() {
-				logutil.Warn("[GC-WARNING-PANIC]dropTS is empty",
+				logutil.Warn("GC-PANIC-TS-EMPTY",
 					zap.String("name", name),
 					zap.String("createTS", createTS.ToString()))
 				continue
