@@ -173,9 +173,11 @@ func (db *DB) ForceCheckpoint(
 	if flushDuration == 0 {
 		flushDuration = time.Minute * 3 / 2
 	}
-	t0 := time.Now()
-	err = db.BGFlusher.ForceFlush(ts, ctx, flushDuration)
-	forceFlushCost := time.Since(t0)
+
+	var (
+		t0        = time.Now()
+		flushCost time.Duration
+	)
 
 	defer func() {
 		logger := logutil.Info
@@ -188,12 +190,14 @@ func (db *DB) ForceCheckpoint(
 			zap.Duration("total-cost", time.Since(t0)),
 			zap.String("ts", ts.ToString()),
 			zap.Duration("flush-duration", flushDuration),
-			zap.Duration("force-flush-cost", forceFlushCost),
+			zap.Duration("flush-cost", flushCost),
 		)
 	}()
 
+	err = db.BGFlusher.ForceFlush(ts, ctx, flushDuration)
+	flushCost = time.Since(t0)
 	if err != nil {
-		return err
+		return
 	}
 
 	wait := flushDuration - time.Since(t0)
@@ -201,25 +205,11 @@ func (db *DB) ForceCheckpoint(
 		wait = time.Minute
 	}
 
-	timeout := time.After(wait)
-	for {
-		select {
-		case <-ctx.Done():
-			err = context.Cause(ctx)
-			return
-		case <-timeout:
-			err = moerr.NewInternalError(ctx, "force checkpoint timeout")
-			return
-		default:
-			err = db.BGCheckpointRunner.ForceIncrementalCheckpoint(ts)
-			if dbutils.IsCheckpointRetryableErr(err) {
-				db.BGCheckpointRunner.CleanPenddingCheckpoint()
-				time.Sleep(flushDuration / 20)
-				break
-			}
-			return
-		}
-	}
+	ctx, cancel := context.WithTimeout(ctx, wait)
+	defer cancel()
+
+	err = db.BGCheckpointRunner.ForceICKP(ctx, &ts)
+	return
 }
 
 func (db *DB) ForceGlobalCheckpoint(
@@ -227,10 +217,6 @@ func (db *DB) ForceGlobalCheckpoint(
 	ts types.TS,
 	flushDuration, versionInterval time.Duration,
 ) (err error) {
-	// FIXME: cannot disable with a running job
-	db.BGCheckpointRunner.DisableCheckpoint()
-	defer db.BGCheckpointRunner.EnableCheckpoint()
-	db.BGCheckpointRunner.CleanPenddingCheckpoint()
 	t0 := time.Now()
 	err = db.BGFlusher.ForceFlush(ts, ctx, flushDuration)
 	forceFlushCost := time.Since(t0)
@@ -253,7 +239,7 @@ func (db *DB) ForceGlobalCheckpoint(
 		return
 	}
 
-	err = db.BGCheckpointRunner.ForceGlobalCheckpointSynchronously(
+	err = db.BGCheckpointRunner.ForceGCKP(
 		ctx, ts, versionInterval,
 	)
 	return err

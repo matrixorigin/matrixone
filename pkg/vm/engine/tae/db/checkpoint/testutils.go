@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"go.uber.org/zap"
 )
 
@@ -30,13 +29,12 @@ type TestRunner interface {
 	EnableCheckpoint()
 	DisableCheckpoint()
 
+	// TODO: remove the below apis
 	CleanPenddingCheckpoint()
-	ForceGlobalCheckpoint(end types.TS, versionInterval time.Duration) error
-	ForceGlobalCheckpointSynchronously(ctx context.Context, end types.TS, versionInterval time.Duration) error
 	ForceCheckpointForBackup(end types.TS) (string, error)
-	ForceIncrementalCheckpoint(end types.TS) error
+	ForceGCKP(context.Context, types.TS, time.Duration) error
+	ForceICKP(context.Context, *types.TS) error
 	MaxLSNInRange(end types.TS) uint64
-
 	GetICKPIntentOnlyForTest() *CheckpointEntry
 
 	GCNeeded() bool
@@ -59,69 +57,63 @@ func (r *runner) CleanPenddingCheckpoint() {
 	r.store.CleanPenddingCheckpoint()
 }
 
-func (r *runner) ForceGlobalCheckpoint(end types.TS, interval time.Duration) error {
-	if interval == 0 {
-		interval = r.options.globalVersionInterval
-	}
-	if r.GetPenddingIncrementalCount() != 0 {
-		end2 := r.MaxIncrementalCheckpoint().GetEnd()
-		if end2.GE(&end) {
-			r.globalCheckpointQueue.Enqueue(&globalCheckpointContext{
-				force:    true,
-				end:      end2,
-				interval: interval,
-			})
-			return nil
-		}
-	}
+func (r *runner) ForceGCKP(
+	ctx context.Context, end types.TS, interval time.Duration,
+) (err error) {
 	var (
-		retryTime int
-		now       = time.Now()
-		err       error
+		maxEntry *CheckpointEntry
+		now      = time.Now()
 	)
 	defer func() {
 		logger := logutil.Info
 		if err != nil {
 			logger = logutil.Error
 		}
+		var entryStr string
+		if maxEntry != nil {
+			entryStr = maxEntry.String()
+		}
 		logger(
-			"ForceGlobalCheckpoint-End",
-			zap.Int("retry-time", retryTime),
+			"Force-GCKP-End",
 			zap.Duration("cost", time.Since(now)),
 			zap.String("ts", end.ToString()),
+			zap.String("entry", entryStr),
 			zap.Error(err),
 		)
 	}()
-
-	timeout := time.After(interval)
-	for {
-		select {
-		case <-timeout:
-			return moerr.NewInternalError(r.ctx, "timeout")
-		default:
-			err = r.ForceIncrementalCheckpoint(end)
-			if err != nil {
-				if dbutils.IsCheckpointRetryableErr(err) {
-					retryTime++
-					time.Sleep(interval / 20)
-					break
-				}
-				return err
-			}
-			r.globalCheckpointQueue.Enqueue(&globalCheckpointContext{
-				force:    true,
-				end:      end,
-				interval: interval,
-			})
-			return nil
-		}
+	if interval == 0 {
+		interval = r.options.globalVersionInterval
 	}
-}
 
-func (r *runner) ForceGlobalCheckpointSynchronously(ctx context.Context, end types.TS, versionInterval time.Duration) error {
-	r.ForceGlobalCheckpoint(end, versionInterval)
+	if err = r.ForceICKP(ctx, &end); err != nil {
+		return
+	}
 
+	maxEntry = r.store.MaxIncrementalCheckpoint()
+
+	// should not happend
+	if maxEntry == nil || maxEntry.end.LT(&end) {
+		err = ErrPendingCheckpoint
+		return
+	}
+
+	_, err = r.globalCheckpointQueue.Enqueue(&globalCheckpointContext{
+		force:    true,
+		end:      maxEntry.end,
+		interval: interval,
+	})
+
+	// TODO: wait with done channel later
 	op := func() (ok bool, err error) {
+		select {
+		case <-r.ctx.Done():
+			err = context.Cause(r.ctx)
+			return
+		case <-ctx.Done():
+			err = context.Cause(ctx)
+			return
+		default:
+		}
 		global := r.store.MaxGlobalCheckpoint()
 		if global == nil {
 			return false, nil
@@ -129,67 +121,72 @@ func (r *runner) ForceGlobalCheckpointSynchronously(ctx context.Context, end typ
 		ok = global.end.GE(&end)
 		return
 	}
-	err := common.RetryWithIntervalAndTimeout(
+
+	waitTime := time.Minute
+	err = common.RetryWithIntervalAndTimeout(
 		op,
-		time.Minute,
-		time.Millisecond*400,
+		waitTime,
+		waitTime/20,
 		false,
 	)
-	if err != nil {
-		return moerr.NewInternalErrorf(ctx, "force global checkpoint failed: %v", err)
-	}
-	return nil
+	return
 }
 
-func (r *runner) ForceIncrementalCheckpoint(ts types.TS) (err error) {
-	var intent Intent
-	if intent, err = r.TryScheduleCheckpoint(ts, true); err != nil {
-		return
-	}
-	if intent == nil {
-		return
-	}
-
-	entry := intent.(*CheckpointEntry)
-
-	if entry.end.LT(&ts) || !entry.AllChecked() {
-		err = ErrPendingCheckpoint
-		return
-	}
-
-	// TODO: use context
-	timeout := time.After(time.Minute * 2)
-	now := time.Now()
+func (r *runner) ForceICKP(ctx context.Context, ts *types.TS) (err error) {
+	var (
+		intent Intent
+		now    = time.Now()
+	)
 	defer func() {
 		logger := logutil.Info
 		if err != nil {
 			logger = logutil.Error
 		}
+		var intentStr string
+		if intent != nil {
+			intentStr = intent.String()
+		}
 		logger(
-			"ICKP-Schedule-Force-Wait-End",
-			zap.String("entry", intent.String()),
+			"ICKP-Schedule-Force-End",
+			zap.String("ts", ts.ToString()),
 			zap.Duration("cost", time.Since(now)),
+			zap.String("intent", intentStr),
 			zap.Error(err),
 		)
 	}()
 
-	r.TryTriggerExecuteICKP()
+	ctx, cancel := context.WithTimeout(ctx, time.Minute*2)
+	defer cancel()
 
-	select {
-	case <-r.ctx.Done():
-		err = context.Cause(r.ctx)
-		return
-	case <-timeout:
-		err = moerr.NewInternalErrorNoCtx("timeout")
-		return
-	case <-intent.Wait():
-		checkpointed := r.store.GetCheckpointed()
-		// if checkpointed < ts, something wrong may be happend and the previous intent was rollbacked
-		if checkpointed.LT(&ts) {
-			err = ErrPendingCheckpoint
+	for {
+		if intent, err = r.TryScheduleCheckpoint(*ts, true); err != nil {
+			// for retryable error, we should retry
+			if err == ErrPendingCheckpoint {
+				err = nil
+				time.Sleep(time.Millisecond * 100)
+				continue
+			}
+			return
+		}
+		if intent == nil {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			err = context.Cause(ctx)
+			return
+		case <-r.ctx.Done():
+			err = context.Cause(r.ctx)
+			return
+		case <-intent.Wait():
+			checkpointed := r.store.MaxIncrementalCheckpoint()
+			if checkpointed == nil || checkpointed.end.LT(ts) {
+				continue
+			}
+			intent = checkpointed
+			return
 		}
 	}
-	return
 }
 
 func (r *runner) ForceCheckpointForBackup(end types.TS) (location string, err error) {
