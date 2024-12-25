@@ -711,7 +711,7 @@ func (d *dynamicCtx) recomputing(para string) string {
 
 	recomputingAccount := func(str string) string {
 		ids := idsByCmd(str)
-		_, _, ok, err = d.QueryTableStatsByAccounts(
+		_, _, err, ok = d.QueryTableStatsByAccounts(
 			context.Background(), nil, ids, false, true)
 
 		if ok {
@@ -1178,7 +1178,7 @@ func (d *dynamicCtx) QueryTableStatsByAccounts(
 	accs []uint64,
 	forceUpdate bool,
 	resetUpdateTime bool,
-) (statsVals [][]any, retAcc []uint64, ok bool, err error) {
+) (statsVals [][]any, retAcc []uint64, err error, ok bool) {
 
 	if len(accs) == 0 {
 		return
@@ -1208,7 +1208,7 @@ func (d *dynamicCtx) QueryTableStatsByAccounts(
 		zap.Bool("ok", ok),
 		zap.Error(err))
 
-	return statsVals, retAcc, ok, err
+	return statsVals, retAcc, err, ok
 }
 
 func (d *dynamicCtx) QueryTableStatsByDatabase(
