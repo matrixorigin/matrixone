@@ -7491,7 +7491,7 @@ func TestGlobalCheckpoint5(t *testing.T) {
 
 	txn, err := tae.StartTxn(nil)
 	assert.NoError(t, err)
-	err = tae.IncrementalCheckpoint(txn.GetStartTS(), false, true, true)
+	err = tae.DB.ForceCheckpoint(ctx, txn.GetStartTS(), 0)
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 

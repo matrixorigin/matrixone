@@ -296,39 +296,6 @@ func (e *TestEngine) AllFlushExpected(ts types.TS, timeoutMS int) {
 	require.True(e.T, flushed)
 }
 
-func (e *TestEngine) IncrementalCheckpoint(
-	end types.TS,
-	enableAndCleanBGCheckpoint bool,
-	waitFlush bool,
-	truncate bool,
-) error {
-	if enableAndCleanBGCheckpoint {
-		e.DB.BGCheckpointRunner.DisableCheckpoint()
-		defer e.DB.BGCheckpointRunner.EnableCheckpoint()
-		e.DB.BGCheckpointRunner.CleanPenddingCheckpoint()
-	}
-	if waitFlush {
-		testutils.WaitExpect(4000, func() bool {
-			flushed := e.DB.BGFlusher.IsAllChangesFlushed(types.TS{}, end, false)
-			return flushed
-		})
-		flushed := e.DB.BGFlusher.IsAllChangesFlushed(types.TS{}, end, true)
-		require.True(e.T, flushed)
-	}
-	err := e.DB.BGCheckpointRunner.ForceIncrementalCheckpoint(end)
-	require.NoError(e.T, err)
-	if truncate {
-		lsn := e.DB.BGCheckpointRunner.MaxLSNInRange(end)
-		entry, err := e.DB.Wal.RangeCheckpoint(1, lsn)
-		require.NoError(e.T, err)
-		require.NoError(e.T, entry.WaitDone())
-		testutils.WaitExpect(1000, func() bool {
-			return e.Runtime.Scheduler.GetPenddingLSNCnt() == 0
-		})
-	}
-	return nil
-}
-
 func (e *TestEngine) TryDeleteByDeltaloc(vals []any) (ok bool, err error) {
 	txn, err := e.StartTxn(nil)
 	assert.NoError(e.T, err)
