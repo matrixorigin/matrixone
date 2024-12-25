@@ -31,7 +31,7 @@ var (
 		metadata: versions.Version{
 			Version:           "2.0.2",
 			MinUpgradeVersion: "2.0.1",
-			UpgradeCluster:    versions.No,
+			UpgradeCluster:    versions.Yes,
 			UpgradeTenant:     versions.No,
 			VersionOffset:     uint32(len(clusterUpgEntries) + len(tenantUpgEntries)),
 		},
