@@ -133,12 +133,11 @@ func (r *runner) ForceGCKP(
 		}
 
 		global := r.store.MaxGlobalCheckpoint()
-		// wait for the right global checkpoint
-		// if the global checkpoint is not the right one, we should wait
-		if global == nil || global.end.LT(&end) {
-			wait()
-			continue
+		// if the max global contains the end, quick return
+		if global != nil && global.IsFinished() && global.end.GE(&end) {
+			return
 		}
+
 		if job, err = r.getRunningGCKPJob(); err != nil {
 			return
 		}
@@ -146,9 +145,6 @@ func (r *runner) ForceGCKP(
 		// if there is no running job or the running job is not the right one
 		// try to trigger the global checkpoint and wait for the next round
 		if job == nil || job.gckpCtx.end.LT(&end) {
-			if err = r.TryTriggerExecuteGCKP(request); err != nil {
-				return
-			}
 			wait()
 			continue
 		}
