@@ -28,9 +28,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -793,6 +793,96 @@ func (d *dynamicCtx) setForceUpdate(newVal bool) string {
 	return ret
 }
 
+type builder struct {
+	buf []byte
+}
+
+func (b *builder) writeString(s string) {
+	b.buf = append(b.buf, s...)
+}
+
+func (b *builder) string() string {
+	return unsafe.String(unsafe.SliceData(b.buf), len(b.buf))
+}
+
+func (b *builder) reset() {
+	b.buf = b.buf[:0]
+}
+
+var builderPool = sync.Pool{
+	New: func() any {
+		return &builder{
+			buf: make([]byte, 0, 8192),
+		}
+	},
+}
+
+func intsJoin(items []uint64, delimiter string) string {
+	bb := builderPool.Get().(*builder)
+	for i, item := range items {
+		bb.writeString(strconv.FormatUint(item, 10))
+		if i < len(items)-1 {
+			bb.writeString(delimiter)
+		}
+	}
+
+	ret := bb.string()
+
+	bb.reset()
+	builderPool.Put(bb)
+
+	return ret
+}
+
+func joinAccountDatabase(accIds []uint64, dbIds []uint64) string {
+	bb := builderPool.Get().(*builder)
+	for i := range accIds {
+		bb.writeString("(account_id = ")
+		bb.writeString(strconv.FormatUint(accIds[i], 10))
+		bb.writeString(" AND database_id = ")
+		bb.writeString(strconv.FormatUint(dbIds[i], 10))
+		bb.writeString(")")
+
+		if i < len(accIds)-1 {
+			bb.writeString(" OR ")
+		}
+	}
+
+	ret := bb.string()
+
+	bb.reset()
+	builderPool.Put(bb)
+
+	return ret
+}
+
+func joinAccountDatabaseTable(
+	accIds []uint64, dbIds []uint64, tblIds []uint64,
+) string {
+
+	bb := builderPool.Get().(*builder)
+	for i := range accIds {
+		bb.writeString("(account_id = ")
+		bb.writeString(strconv.FormatUint(accIds[i], 10))
+		bb.writeString(" AND database_id = ")
+		bb.writeString(strconv.FormatUint(dbIds[i], 10))
+		bb.writeString(" AND table_id = ")
+		bb.writeString(strconv.FormatUint(tblIds[i], 10))
+		bb.writeString(")")
+
+		if i < len(accIds)-1 {
+			bb.writeString(" OR ")
+		}
+	}
+
+	ret := bb.string()
+
+	bb.reset()
+	builderPool.Put(bb)
+
+	return ret
+}
+
 func (d *dynamicCtx) executeSQL(ctx context.Context, sql string, hint string) ie.InternalExecResult {
 	exec := d.executorPool.Get()
 	defer d.executorPool.Put(exec)
@@ -818,58 +908,6 @@ func (d *dynamicCtx) executeSQL(ctx context.Context, sql string, hint string) ie
 	}
 
 	return ret
-}
-
-func intsJoin(items []uint64, delimiter string) string {
-	var builder strings.Builder
-	builder.Grow(mpool.MB)
-	for i, item := range items {
-		builder.WriteString(strconv.FormatUint(item, 10))
-		if i < len(items)-1 {
-			builder.WriteString(delimiter)
-		}
-	}
-	return builder.String()
-}
-
-func joinAccountDatabase(accIds []uint64, dbIds []uint64) string {
-	var builder strings.Builder
-	builder.Grow(mpool.B * 50 * len(accIds) * 2)
-	for i := range accIds {
-		builder.WriteString("(account_id = ")
-		builder.WriteString(strconv.FormatUint(accIds[i], 10))
-		builder.WriteString(" AND database_id = ")
-		builder.WriteString(strconv.FormatUint(dbIds[i], 10))
-		builder.WriteString(")")
-
-		if i < len(accIds)-1 {
-			builder.WriteString(" OR ")
-		}
-	}
-
-	return builder.String()
-}
-
-func joinAccountDatabaseTable(
-	accIds []uint64, dbIds []uint64, tblIds []uint64) string {
-
-	var builder strings.Builder
-	builder.Grow(mpool.B * 70 * len(accIds) * 2)
-	for i := range accIds {
-		builder.WriteString("(account_id = ")
-		builder.WriteString(strconv.FormatUint(accIds[i], 10))
-		builder.WriteString(" AND database_id = ")
-		builder.WriteString(strconv.FormatUint(dbIds[i], 10))
-		builder.WriteString(" AND table_id = ")
-		builder.WriteString(strconv.FormatUint(tblIds[i], 10))
-		builder.WriteString(")")
-
-		if i < len(accIds)-1 {
-			builder.WriteString(" OR ")
-		}
-	}
-
-	return builder.String()
 }
 
 func (d *dynamicCtx) forceUpdateQuery(
@@ -2104,7 +2142,9 @@ func (d *dynamicCtx) gamaCleanDeletes(
 	}
 
 	var (
-		err error
+		err1 error
+		err2 error
+		err3 error
 
 		now = time.Now()
 
@@ -2117,23 +2157,17 @@ func (d *dynamicCtx) gamaCleanDeletes(
 		logutil.Info(logHeader,
 			zap.String("source", "gama clean deletes"),
 			zap.Duration("takes", time.Since(now)),
-			zap.Error(err),
-			zap.Any("clean accounts", delAcc),
-			zap.Any("clean database", delDB),
-			zap.Any("clean table", delTable))
+			zap.Any("clean account err", err1),
+			zap.Any("clean database err", err2),
+			zap.Any("clean table err", err3),
+			zap.Any("clean accounts detail", delAcc),
+			zap.Any("clean database detail", delDB),
+			zap.Any("clean table detail", delTable))
 	}()
 
-	if delAcc, err = cleanAccounts(); err != nil {
-		return
-	}
-
-	if delDB, err = cleanDatabase(); err != nil {
-		return
-	}
-
-	if delTable, err = cleanTable(); err != nil {
-		return
-	}
+	delAcc, err1 = cleanAccounts()
+	delDB, err2 = cleanDatabase()
+	delTable, err3 = cleanTable()
 }
 
 func (d *dynamicCtx) gamaTask(
