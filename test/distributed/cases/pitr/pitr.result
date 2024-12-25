@@ -4,17 +4,17 @@ drop pitr if exists pitr01;
 create pitr pitr01 for cluster range 1 'h';
 show pitr;
 PITR_NAME    CREATED_TIME    MODIFIED_TIME    PITR_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME    PITR_LENGTH    PITR_UNIT
-pitr01    2024-12-25 16:35:43    2024-12-25 16:35:43    cluster    *    *    *    1    h
+pitr01    2024-12-25 17:22:15    2024-12-25 17:22:15    cluster    *    *    *    1    h
 select * from mo_catalog.mo_pitr Where pitr_name != 'sys_mo_catalog_pitr';
 pitr_id    pitr_name    create_account    create_time    modified_time    level    account_id    account_name    database_name    table_name    obj_id    pitr_length    pitr_unit
-0193fcf5-1fc9-78d1-8edd-bfb5559541ae    pitr01    0    2024-12-25 08:35:43    2024-12-25 08:35:43    cluster    0                18446744073709551615    1    h
+0193fd1f-bc8a-7c50-82c7-9702538eaf9d    pitr01    0    2024-12-25 09:22:15    2024-12-25 09:22:15    cluster    0                18446744073709551615    1    h
 alter pitr pitr01 range 10 'd';
 show pitr;
 PITR_NAME    CREATED_TIME    MODIFIED_TIME    PITR_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME    PITR_LENGTH    PITR_UNIT
-pitr01    2024-12-25 16:35:43    2024-12-25 16:35:43    cluster    *    *    *    10    d
+pitr01    2024-12-25 17:22:15    2024-12-25 17:22:15    cluster    *    *    *    10    d
 select * from mo_catalog.mo_pitr Where pitr_name != 'sys_mo_catalog_pitr';
 pitr_id    pitr_name    create_account    create_time    modified_time    level    account_id    account_name    database_name    table_name    obj_id    pitr_length    pitr_unit
-0193fcf5-1fc9-78d1-8edd-bfb5559541ae    pitr01    0    2024-12-25 08:35:43    2024-12-25 08:35:43    cluster    0                18446744073709551615    10    d
+0193fd1f-bc8a-7c50-82c7-9702538eaf9d    pitr01    0    2024-12-25 09:22:15    2024-12-25 09:22:15    cluster    0                18446744073709551615    10    d
 drop pitr pitr01;
 show pitr;
 PITR_NAME    CREATED_TIME    MODIFIED_TIME    PITR_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME    PITR_LENGTH    PITR_UNIT
@@ -24,17 +24,17 @@ drop pitr if exists p02;
 create pitr p02 for account acc01 range 1 'd';
 show pitr;
 PITR_NAME    CREATED_TIME    MODIFIED_TIME    PITR_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME    PITR_LENGTH    PITR_UNIT
-p02    2024-12-25 16:35:43    2024-12-25 16:35:43    account    acc01    *    *    1    d
+p02    2024-12-25 17:22:15    2024-12-25 17:22:15    account    acc01    *    *    1    d
 select * from mo_catalog.mo_pitr Where pitr_name != 'sys_mo_catalog_pitr';
 pitr_id    pitr_name    create_account    create_time    modified_time    level    account_id    account_name    database_name    table_name    obj_id    pitr_length    pitr_unit
-0193fcf5-1fee-74f1-a31b-5abb8e5fadf4    p02    0    2024-12-25 08:35:43    2024-12-25 08:35:43    account    30009    acc01            30009    1    d
+0193fd1f-bcb6-7246-9d91-875413dfc702    p02    0    2024-12-25 09:22:15    2024-12-25 09:22:15    account    30010    acc01            30010    1    d
 alter pitr p02 range 100 'd';
 show pitr;
 PITR_NAME    CREATED_TIME    MODIFIED_TIME    PITR_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME    PITR_LENGTH    PITR_UNIT
-p02    2024-12-25 16:35:43    2024-12-25 16:35:43    account    acc01    *    *    100    d
+p02    2024-12-25 17:22:15    2024-12-25 17:22:15    account    acc01    *    *    100    d
 select * from mo_catalog.mo_pitr Where pitr_name != 'sys_mo_catalog_pitr';
 pitr_id    pitr_name    create_account    create_time    modified_time    level    account_id    account_name    database_name    table_name    obj_id    pitr_length    pitr_unit
-0193fcf5-1fee-74f1-a31b-5abb8e5fadf4    p02    0    2024-12-25 08:35:43    2024-12-25 08:35:43    account    30009    acc01            30009    100    d
+0193fd1f-bcb6-7246-9d91-875413dfc702    p02    0    2024-12-25 09:22:15    2024-12-25 09:22:15    account    30010    acc01            30010    100    d
 drop pitr p02;
 show pitr;
 PITR_NAME    CREATED_TIME    MODIFIED_TIME    PITR_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME    PITR_LENGTH    PITR_UNIT
@@ -44,17 +44,17 @@ drop pitr if exists `select`;
 create pitr `select` for account range 10 'd';
 show pitr;
 PITR_NAME    CREATED_TIME    MODIFIED_TIME    PITR_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME    PITR_LENGTH    PITR_UNIT
-select    2024-12-25 16:35:43    2024-12-25 16:35:43    account    acc01    *    *    10    d
+select    2024-12-25 17:22:15    2024-12-25 17:22:15    account    acc01    *    *    10    d
 select * from mo_catalog.mo_pitr Where pitr_name != 'sys_mo_catalog_pitr';
 pitr_id    pitr_name    create_account    create_time    modified_time    level    account_id    account_name    database_name    table_name    obj_id    pitr_length    pitr_unit
-0193fcf5-201e-7693-9c92-5e25f4e73c75    select    30009    2024-12-25 08:35:43    2024-12-25 08:35:43    account    30009    acc01            30009    10    d
+0193fd1f-bce9-705d-bca9-7a795f93de07    select    30010    2024-12-25 09:22:15    2024-12-25 09:22:15    account    30010    acc01            30010    10    d
 alter pitr `select` range 30 'd';
 show pitr;
 PITR_NAME    CREATED_TIME    MODIFIED_TIME    PITR_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME    PITR_LENGTH    PITR_UNIT
-select    2024-12-25 16:35:43    2024-12-25 16:35:43    account    acc01    *    *    30    d
+select    2024-12-25 17:22:15    2024-12-25 17:22:15    account    acc01    *    *    30    d
 select * from mo_catalog.mo_pitr Where pitr_name != 'sys_mo_catalog_pitr';
 pitr_id    pitr_name    create_account    create_time    modified_time    level    account_id    account_name    database_name    table_name    obj_id    pitr_length    pitr_unit
-0193fcf5-201e-7693-9c92-5e25f4e73c75    select    30009    2024-12-25 08:35:43    2024-12-25 08:35:43    account    30009    acc01            30009    30    d
+0193fd1f-bce9-705d-bca9-7a795f93de07    select    30010    2024-12-25 09:22:15    2024-12-25 09:22:15    account    30010    acc01            30010    30    d
 drop pitr `select`;
 select * from mo_catalog.mo_pitr Where pitr_name != 'sys_mo_catalog_pitr';
 pitr_id    pitr_name    create_account    create_time    modified_time    level    account_id    account_name    database_name    table_name    obj_id    pitr_length    pitr_unit
@@ -64,17 +64,17 @@ drop pitr if exists account;
 create pitr account for database test01 range 1 'mo';
 show pitr;
 PITR_NAME    CREATED_TIME    MODIFIED_TIME    PITR_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME    PITR_LENGTH    PITR_UNIT
-account    2024-12-25 16:35:43    2024-12-25 16:35:43    database    sys    test01    *    1    mo
+account    2024-12-25 17:22:15    2024-12-25 17:22:15    database    sys    test01    *    1    mo
 select * from mo_catalog.mo_pitr Where pitr_name != 'sys_mo_catalog_pitr';
 pitr_id    pitr_name    create_account    create_time    modified_time    level    account_id    account_name    database_name    table_name    obj_id    pitr_length    pitr_unit
-0193fcf5-203f-7416-8028-1a9923cbe60a    account    0    2024-12-25 08:35:43    2024-12-25 08:35:43    database    0    sys    test01        317660    1    mo
+0193fd1f-bd11-76d6-ae30-218792e1f7e9    account    0    2024-12-25 09:22:15    2024-12-25 09:22:15    database    0    sys    test01        317750    1    mo
 alter pitr account range 4 'mo';
 show pitr;
 PITR_NAME    CREATED_TIME    MODIFIED_TIME    PITR_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME    PITR_LENGTH    PITR_UNIT
-account    2024-12-25 16:35:43    2024-12-25 16:35:43    database    sys    test01    *    4    mo
+account    2024-12-25 17:22:15    2024-12-25 17:22:15    database    sys    test01    *    4    mo
 select * from mo_catalog.mo_pitr Where pitr_name != 'sys_mo_catalog_pitr';
 pitr_id    pitr_name    create_account    create_time    modified_time    level    account_id    account_name    database_name    table_name    obj_id    pitr_length    pitr_unit
-0193fcf5-203f-7416-8028-1a9923cbe60a    account    0    2024-12-25 08:35:43    2024-12-25 08:35:43    database    0    sys    test01        317660    4    mo
+0193fd1f-bd11-76d6-ae30-218792e1f7e9    account    0    2024-12-25 09:22:15    2024-12-25 09:22:15    database    0    sys    test01        317750    4    mo
 drop pitr account;
 show pitr;
 PITR_NAME    CREATED_TIME    MODIFIED_TIME    PITR_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME    PITR_LENGTH    PITR_UNIT
@@ -96,10 +96,10 @@ t1    CREATE TABLE `t1` (\n  `col1` int DEFAULT NULL,\n  `col2` decimal(38,0) DE
 truncate t1;
 show pitr;
 PITR_NAME    CREATED_TIME    MODIFIED_TIME    PITR_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME    PITR_LENGTH    PITR_UNIT
-$%^#    2024-12-25 16:35:43    2024-12-25 16:35:43    table    sys    test01    t1    1    y
+$%^#    2024-12-25 17:22:15    2024-12-25 17:22:15    table    sys    test01    t1    1    y
 select * from mo_catalog.mo_pitr Where pitr_name != 'sys_mo_catalog_pitr';
 pitr_id    pitr_name    create_account    create_time    modified_time    level    account_id    account_name    database_name    table_name    obj_id    pitr_length    pitr_unit
-0193fcf5-206d-7a6f-b67e-119365099beb    $%^#    0    2024-12-25 08:35:43    2024-12-25 08:35:43    table    0    sys    test01    t1    317661    1    y
+0193fd1f-bd3c-70fa-ae01-a0699c57a124    $%^#    0    2024-12-25 09:22:15    2024-12-25 09:22:15    table    0    sys    test01    t1    317751    1    y
 alter pitr `$%^#` range 2 'mo';
 drop pitr `$%^#`;
 show pitr;
@@ -130,10 +130,10 @@ sum(a)
 450015000
 show pitr;
 PITR_NAME    CREATED_TIME    MODIFIED_TIME    PITR_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME    PITR_LENGTH    PITR_UNIT
-p03    2024-12-25 16:35:43    2024-12-25 16:35:43    table    sys    test    s3t    2    h
+p03    2024-12-25 17:22:16    2024-12-25 17:22:16    table    sys    test    s3t    2    h
 select * from mo_catalog.mo_pitr Where pitr_name != 'sys_mo_catalog_pitr';
 pitr_id    pitr_name    create_account    create_time    modified_time    level    account_id    account_name    database_name    table_name    obj_id    pitr_length    pitr_unit
-0193fcf5-2170-7290-a91f-159ae29d2a46    p03    0    2024-12-25 08:35:43    2024-12-25 08:35:43    table    0    sys    test    s3t    317664    2    h
+0193fd1f-bf0c-7b65-a849-dc6e020fa8d6    p03    0    2024-12-25 09:22:16    2024-12-25 09:22:16    table    0    sys    test    s3t    317754    2    h
 drop pitr p03;
 drop database test;
 drop pitr if exists p04;
@@ -152,8 +152,8 @@ create pitr p07 for account range 102 'd';
 internal error: invalid pitr value 102
 create pitr p07 for account range 200 'h';
 internal error: invalid pitr value 200
-create pitr p07 for accoount range 300 'y';
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 28 near " accoount range 300 'y';";
+create pitr p07 for account range 300 'y';
+internal error: invalid pitr value 300
 create pitr p07 for account range 500 'mo';
 internal error: invalid pitr value 500
 create pitr p07 for account range -1 'd';
@@ -235,13 +235,13 @@ drop pitr if exists p12;
 create pitr p12 for account range 1 'd';
 show pitr;
 PITR_NAME    CREATED_TIME    MODIFIED_TIME    PITR_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME    PITR_LENGTH    PITR_UNIT
-pitr01    2024-12-25 16:35:43    2024-12-25 16:35:43    account    acc01    *    *    11    mo
-p12    2024-12-25 16:35:43    2024-12-25 16:35:43    account    sys    *    *    1    d
+pitr01    2024-12-25 17:22:16    2024-12-25 17:22:16    account    acc01    *    *    11    mo
+p12    2024-12-25 17:22:16    2024-12-25 17:22:16    account    sys    *    *    1    d
 select * from mo_catalog.mo_pitr Where pitr_name != 'sys_mo_catalog_pitr';
 pitr_id    pitr_name    create_account    create_time    modified_time    level    account_id    account_name    database_name    table_name    obj_id    pitr_length    pitr_unit
-0193fcf5-2221-760e-9afc-bd95a64425bb    pitr01    0    2024-12-25 08:35:43    2024-12-25 08:35:43    account    30009    acc01            30009    11    mo
-0193fcf5-2295-7524-87c6-430de3355be2    p11    30009    2024-12-25 08:35:43    2024-12-25 08:35:43    account    30009    acc01            30009    1    d
-0193fcf5-229d-7079-90e9-ad506c9c5d81    p12    0    2024-12-25 08:35:43    2024-12-25 08:35:43    account    0    sys            0    1    d
+0193fd1f-c063-7c38-a759-278113df2442    pitr01    0    2024-12-25 09:22:16    2024-12-25 09:22:16    account    30010    acc01            30010    11    mo
+0193fd1f-c0f9-7343-9a0c-a8aefb514339    p11    30010    2024-12-25 09:22:16    2024-12-25 09:22:16    account    30010    acc01            30010    1    d
+0193fd1f-c101-7320-96a1-76136f50fd9d    p12    0    2024-12-25 09:22:16    2024-12-25 09:22:16    account    0    sys            0    1    d
 alter pitr p11 range 11 'mo';
 internal error: pitr p11 does not exist
 drop pitr p10;
@@ -253,7 +253,7 @@ drop pitr if exists p12;
 create pitr p12 for account range 1 'd';
 show pitr;
 PITR_NAME    CREATED_TIME    MODIFIED_TIME    PITR_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME    PITR_LENGTH    PITR_UNIT
-p11    2024-12-25 16:35:43    2024-12-25 16:35:43    account    acc01    *    *    1    d
+p11    2024-12-25 17:22:16    2024-12-25 17:22:16    account    acc01    *    *    1    d
 alter pitr p12 range 10 'mo';
 internal error: pitr p12 does not exist
 drop pitr p11;

@@ -149,7 +149,7 @@ drop database test01;
 -- abnormal test: time beyond the time range when creating pitr
 create pitr p07 for account range 102 'd';
 create pitr p07 for account range 200 'h';
-create pitr p07 for accoount range 300 'y';
+create pitr p07 for account range 300 'y';
 create pitr p07 for account range 500 'mo';
 create pitr p07 for account range -1 'd';
 create pitr p07 for account range -2 'h';
