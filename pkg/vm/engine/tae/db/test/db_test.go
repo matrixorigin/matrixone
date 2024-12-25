@@ -7658,6 +7658,141 @@ func Test_CheckpointChaos1(t *testing.T) {
 	assert.Nil(t, intent)
 }
 
+// 1. make some transactions
+// 2. make ickp
+// 3. make some transactions
+// 4. make ickp
+// 5. make some transactions
+// 6. fault inject save mata files
+// 7. force gckp -> expect error
+// 8. check max gckp -> nil
+// 9. rm injection
+// 10. force gckp -> expect no error
+// 11. check max gckp -> not nil and contains the ts
+// 12. restart
+// 13. check ickp and gckp
+// 14. check all data
+func Test_CheckpointChaos2(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	opts := config.WithLongScanAndCKPOpts(nil)
+
+	ctx := context.Background()
+
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	idx := 0
+	currDBName := func() string {
+		return fmt.Sprintf("db_%d", idx)
+	}
+	nextDBName := func() string {
+		idx++
+		return currDBName()
+	}
+
+	commitOneTxn := func() {
+		txn, _ := tae.StartTxn(nil)
+		_, err := txn.CreateDatabase(nextDBName(), "", "")
+		assert.Nil(t, err)
+		assert.Nil(t, txn.Commit(context.Background()))
+	}
+
+	for i := 0; i < 2; i++ {
+		commitOneTxn()
+	}
+
+	err := tae.DB.ForceCheckpoint(ctx, tae.TxnMgr.Now(), time.Minute)
+	assert.NoError(t, err)
+
+	for i := 0; i < 2; i++ {
+		commitOneTxn()
+	}
+	err = tae.DB.ForceCheckpoint(ctx, tae.TxnMgr.Now(), time.Minute)
+	assert.NoError(t, err)
+
+	fault.Enable()
+	defer fault.Disable()
+	rmFn, err := objectio.InjectCheckpointSave("checkpoint-chaos")
+	assert.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*2)
+	defer cancel()
+	maxICKP := tae.DB.BGCheckpointRunner.MaxIncrementalCheckpoint()
+	err = tae.DB.ForceGlobalCheckpoint(ctx, maxICKP.GetEnd(), 0, 0)
+	assert.Error(t, err)
+	maxGCKP := tae.DB.BGCheckpointRunner.MaxGlobalCheckpoint()
+	assert.Nilf(t, maxGCKP, maxGCKP.String())
+	rmFn()
+	ctx, cancel = context.WithTimeout(context.Background(), time.Second*20)
+	defer cancel()
+	err = tae.DB.ForceGlobalCheckpoint(ctx, maxICKP.GetEnd(), 0, 0)
+	assert.NoError(t, err)
+	maxGCKP = tae.DB.BGCheckpointRunner.MaxGlobalCheckpoint()
+	assert.NotNil(t, maxGCKP)
+	iend := maxICKP.GetEnd()
+	gend := maxGCKP.GetEnd()
+	assert.Equal(t, iend.Next(), gend)
+
+	tae.Restart(ctx)
+	{
+		txn, _ := tae.StartTxn(nil)
+		names := txn.DatabaseNames()
+		t.Logf("names: %v", names)
+		// FIXME:
+		// db, err := txn.GetDatabase(currDBName())
+		// assert.NoError(t, err)
+		// assert.NotNil(t, db)
+		assert.NoError(t, txn.Commit(ctx))
+	}
+
+	maxICKP2 := tae.DB.BGCheckpointRunner.MaxIncrementalCheckpoint()
+	maxGCKP2 := tae.DB.BGCheckpointRunner.MaxGlobalCheckpoint()
+	assert.Equal(t, maxICKP.GetEnd(), maxICKP2.GetEnd())
+	assert.Equal(t, maxGCKP.GetEnd(), maxGCKP2.GetEnd())
+}
+
+func Test_RestartCheck(t *testing.T) {
+	t.Skip("enable this test when the bug is fixed")
+	defer testutils.AfterTest(t)()
+	opts := config.WithLongScanAndCKPOpts(nil)
+	ctx := context.Background()
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	idx := 0
+	currDBName := func() string {
+		return fmt.Sprintf("db_%d", idx)
+	}
+	nextDBName := func() string {
+		idx++
+		return currDBName()
+	}
+	commitOneTxn := func() {
+		txn, _ := tae.StartTxn(nil)
+		_, err := txn.CreateDatabase(nextDBName(), "", "")
+		assert.Nil(t, err)
+		assert.Nil(t, txn.Commit(context.Background()))
+	}
+	for i := 0; i < 2; i++ {
+		commitOneTxn()
+	}
+	err := tae.DB.ForceCheckpoint(ctx, tae.TxnMgr.Now(), time.Minute)
+	assert.NoError(t, err)
+	for i := 0; i < 2; i++ {
+		commitOneTxn()
+	}
+	tae.Restart(ctx)
+	{
+		txn, _ := tae.StartTxn(nil)
+		names := txn.DatabaseNames()
+		t.Logf("names: %v", names)
+		assert.Equal(t, 5, len(names))
+		db, err := txn.GetDatabase(currDBName())
+		assert.NoError(t, err)
+		assert.NotNil(t, db)
+		assert.NoError(t, txn.Commit(ctx))
+	}
+}
+
 func TestGCCatalog1(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	ctx := context.Background()
@@ -9225,6 +9360,7 @@ func TestGlobalCheckpoint7(t *testing.T) {
 	testutils.WaitExpect(10000, func() bool {
 		return tae.Wal.GetPenddingCnt() == 0
 	})
+	assert.Equal(t, uint64(0), tae.Wal.GetPenddingCnt())
 
 	entries := tae.BGCheckpointRunner.GetAllCheckpoints()
 	for _, e := range entries {
@@ -9243,6 +9379,7 @@ func TestGlobalCheckpoint7(t *testing.T) {
 	testutils.WaitExpect(10000, func() bool {
 		return tae.Wal.GetPenddingCnt() == 0
 	})
+	assert.Equal(t, uint64(0), tae.Wal.GetPenddingCnt())
 
 	entries = tae.BGCheckpointRunner.GetAllCheckpoints()
 	for _, e := range entries {
@@ -9261,9 +9398,14 @@ func TestGlobalCheckpoint7(t *testing.T) {
 	testutils.WaitExpect(10000, func() bool {
 		return tae.Wal.GetPenddingCnt() == 0
 	})
+	assert.Equal(t, uint64(0), tae.Wal.GetPenddingCnt())
 
 	testutils.WaitExpect(10000, func() bool {
-		return len(tae.BGCheckpointRunner.GetAllGlobalCheckpoints()) == 1
+		maxGCKP := tae.BGCheckpointRunner.MaxGlobalCheckpoint()
+		if maxGCKP != nil && maxGCKP.IsFinished() {
+			return true
+		}
+		return false
 	})
 
 	entries = tae.BGCheckpointRunner.GetAllCheckpoints()
