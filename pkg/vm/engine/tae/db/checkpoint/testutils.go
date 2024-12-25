@@ -35,6 +35,7 @@ type TestRunner interface {
 	ForceGlobalCheckpointSynchronously(ctx context.Context, end types.TS, versionInterval time.Duration) error
 	ForceCheckpointForBackup(end types.TS) (string, error)
 	ForceIncrementalCheckpoint(end types.TS) error
+	ForceICKP(context.Context, *types.TS) error
 	MaxLSNInRange(end types.TS) uint64
 
 	GetICKPIntentOnlyForTest() *CheckpointEntry
