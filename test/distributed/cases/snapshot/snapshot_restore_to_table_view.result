@@ -295,6 +295,7 @@ Engineering    2000.00    2000.00
 Human Resources    1000.00    0.00
 drop database if exists test01;
 drop snapshot if exists sp06;
+drop database if exists School;
 CREATE DATABASE School;
 USE School;
 drop table if exists Students;
@@ -367,6 +368,7 @@ select * from CourseAverageGrades;
 courseid    title    averagegrade
 101    Calculus    3.55000000
 102    Physics    3.70000000
+drop database if exists University;
 CREATE DATABASE University;
 USE University;
 drop table if exists Departments;
@@ -490,6 +492,7 @@ select * from TopStudents;
 name    averagegrade
 Eve    3.50000000
 Frank    3.60000000
+drop database if exists EducationSystem;
 CREATE DATABASE EducationSystem;
 USE EducationSystem;
 CREATE VIEW ComprehensiveStudentCourseInfo AS

@@ -3,6 +3,7 @@ create account acc01 admin_name = 'test_account' identified by '111';
 drop account if exists acc02;
 create account acc02 admin_name = 'test_account' identified by '111';
 
+DROP DATABASE IF EXISTS Company;
 CREATE DATABASE Company;
 USE Company;
 
@@ -143,6 +144,7 @@ select * from Benefits;
 select * from TimeOff;
 select * from PerformanceReviews;
 
+DROP DATABASE IF EXISTS Projects;
 CREATE DATABASE Projects;
 USE Projects;
 
@@ -198,6 +200,7 @@ select * from Projects;
 select * from ProjectMembers;
 select * from ProjectManagers;
 
+DROP DATABASE IF EXISTS Payroll;
 CREATE DATABASE Payroll;
 USE Payroll;
 
@@ -253,6 +256,7 @@ select * from ProjectBonuses;
 select * from DepartmentBudgets;
 
 -- @session:id=1&user=acc01:test_account&password=111
+DROP DATABASE IF EXISTS Company;
 CREATE DATABASE Company;
 USE Company;
 
@@ -393,6 +397,7 @@ select * from Benefits;
 select * from TimeOff;
 select * from PerformanceReviews;
 
+DROP DATABASE IF EXISTS Projects;
 CREATE DATABASE Projects;
 USE Projects;
 
@@ -448,6 +453,7 @@ select * from Projects;
 select * from ProjectMembers;
 select * from ProjectManagers;
 
+DROP DATABASE IF EXISTS Payroll;
 CREATE DATABASE Payroll;
 USE Payroll;
 
@@ -505,6 +511,7 @@ select * from DepartmentBudgets;
 
 
 -- @session:id=2&user=acc02:test_account&password=111
+DROP DATABASE IF EXISTS Company;
 CREATE DATABASE Company;
 USE Company;
 
@@ -645,6 +652,7 @@ select * from Benefits;
 select * from TimeOff;
 select * from PerformanceReviews;
 
+DROP DATABASE IF EXISTS Projects;
 CREATE DATABASE Projects;
 USE Projects;
 
@@ -700,6 +708,7 @@ select * from Projects;
 select * from ProjectMembers;
 select * from ProjectManagers;
 
+DROP DATABASE IF EXISTS Payroll;
 CREATE DATABASE Payroll;
 USE Payroll;
 

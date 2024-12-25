@@ -216,6 +216,7 @@ drop snapshot if exists sp06;
 
 -- multi view
 -- database School
+drop database if exists School;
 CREATE DATABASE School;
 USE School;
 
@@ -281,6 +282,7 @@ select * from HighGradeStudents;
 select * from CourseAverageGrades;
 
 -- database University
+drop database if exists University;
 CREATE DATABASE University;
 USE University;
 
@@ -392,6 +394,7 @@ select * from ProfessorCourses;
 select * from DepartmentAverageGrade;
 select * from TopStudents;
 
+drop database if exists EducationSystem;
 CREATE DATABASE EducationSystem;
 USE EducationSystem;
 
