@@ -180,7 +180,7 @@ func GetTombstonesByBlockId(
 					zap.Uint64("tid", oData.tid),
 					zap.String("name", obj.ObjectName().String()),
 					zap.String("stats", obj.String()))
-				break
+				return true, nil
 			}
 			rowids := vector.MustFixedColWithTypeCheck[types.Rowid](oData.data[idx].Vecs[0])
 			start, end := blockio.FindStartEndOfBlockFromSortedRowids(rowids, bid)
@@ -222,12 +222,12 @@ func (d *BackupDeltaLocDataSource) GetTombstones(
 					}
 				}
 				name := tombstone.ObjectName()
-				logutil.Infof("[GetSnapshot] tombstone object %v tombstone.BlkCnt() is %d", name.String(), tombstone.BlkCnt())
+				logutil.Infof("[GetSnapshot] tombstone object: %v, block count: %d", name.String(), tombstone.BlkCnt())
 				for id := uint32(0); id < tombstone.BlkCnt(); id++ {
-					tombstone.ObjectLocation().SetID(uint16(id))
-					bat, _, err := blockio.LoadOneBlock(ctx, d.fs, tombstone.ObjectLocation(), objectio.SchemaData)
+					location := tombstone.ObjectLocation()
+					location.SetID(uint16(id))
+					bat, _, err := blockio.LoadOneBlock(ctx, d.fs, location, objectio.SchemaData)
 					if err != nil {
-						logutil.Error("load tombstone failed, tombstone is %v", zap.Error(err), zap.String("name", name.String()))
 						return false, err
 					}
 					if !tombstone.GetCNCreated() {
@@ -236,12 +236,14 @@ func (d *BackupDeltaLocDataSource) GetTombstones(
 							var commitTs types.TS
 							err = commitTs.Unmarshal(bat.Vecs[len(bat.Vecs)-1].GetRawBytesAt(v))
 							if err != nil {
-								logutil.Error("unmarshal commitTs failed", zap.Error(err))
 								return false, err
 							}
 							if commitTs.GT(&d.ts) {
-								logutil.Infof("delete row %v, commitTs %v, location %v",
-									v, commitTs.ToString(), name.String())
+
+								logutil.Debug("[GetSnapshot]",
+									zap.Int("row", v),
+									zap.String("commitTs", commitTs.ToString()),
+									zap.String("location", location.String()))
 							} else {
 								deleteRow = append(deleteRow, int64(v))
 							}
