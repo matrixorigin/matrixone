@@ -276,7 +276,7 @@ func (c *CkpReplayer) ReadCkpFiles() (err error) {
 		}
 		if checkpointEntry.GetType() == ET_Global {
 			c.globalCkpIdx = i
-			r.store.TryAddNewGlobalCheckpointEntry(checkpointEntry)
+			r.store.AddGCKPEntry(checkpointEntry)
 		} else if checkpointEntry.GetType() == ET_Incremental {
 			r.store.TryAddNewIncrementalCheckpointEntry(checkpointEntry)
 		} else if checkpointEntry.GetType() == ET_Backup {

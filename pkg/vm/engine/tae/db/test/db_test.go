@@ -7718,6 +7718,8 @@ func Test_CheckpointChaos2(t *testing.T) {
 	err = tae.DB.ForceGlobalCheckpoint(ctx, maxICKP.GetEnd(), 0, 0)
 	t.Logf("force global checkpoint error: %v", err)
 	assert.Error(t, err)
+	maxGCKP := tae.DB.BGCheckpointRunner.MaxGlobalCheckpoint()
+	assert.Nilf(t, maxGCKP, maxGCKP.String())
 
 	rmFn()
 }

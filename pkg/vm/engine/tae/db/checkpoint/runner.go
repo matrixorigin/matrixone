@@ -505,20 +505,19 @@ func (r *runner) doGlobalCheckpoint(
 	)
 	now := time.Now()
 
-	entry = NewCheckpointEntry(r.rt.SID(), types.TS{}, end.Next(), ET_Global)
+	entry = NewCheckpointEntry(
+		r.rt.SID(),
+		types.TS{},
+		end.Next(),
+		ET_Global,
+	)
 	entry.ckpLSN = ckpLSN
 	entry.truncateLSN = truncateLSN
-
-	logutil.Info(
-		"GCKP-Start",
-		zap.String("entry", entry.String()),
-		zap.String("ts", end.ToString()),
-	)
 
 	defer func() {
 		if err != nil {
 			logutil.Error(
-				"GCKP-Error",
+				"GCKP-Execute-Error",
 				zap.String("entry", entry.String()),
 				zap.String("phase", errPhase),
 				zap.Error(err),
@@ -528,38 +527,51 @@ func (r *runner) doGlobalCheckpoint(
 			fields = append(fields, zap.Duration("cost", time.Since(now)))
 			fields = append(fields, zap.String("entry", entry.String()))
 			logutil.Info(
-				"GCKP-End",
+				"GCKP-Execute-End",
 				fields...,
 			)
 		}
 	}()
 
+	if ok := r.store.AddGCKPIntent(entry); !ok {
+		err = ErrBadIntent
+		return
+	}
+
+	var data *logtail.CheckpointData
 	factory := logtail.GlobalCheckpointDataFactory(r.rt.SID(), entry.end, interval)
-	data, err := factory(r.catalog)
-	if err != nil {
+
+	if data, err = factory(r.catalog); err != nil {
+		r.store.RemoveGCKPIntent()
 		errPhase = "collect"
 		return
 	}
-	fields = data.ExportStats("")
 	defer data.Close()
+
+	fields = data.ExportStats("")
 
 	cnLocation, tnLocation, files, err := data.WriteTo(
 		r.rt.Fs.Service, r.options.checkpointBlockRows, r.options.checkpointSize,
 	)
 	if err != nil {
+		r.store.RemoveGCKPIntent()
 		errPhase = "flush"
 		return
 	}
 
 	entry.SetLocation(cnLocation, tnLocation)
+
 	files = append(files, cnLocation.Name().String())
-	r.store.TryAddNewGlobalCheckpointEntry(entry)
-	entry.SetState(ST_Finished)
 	var name string
 	if name, err = r.saveCheckpoint(entry.start, entry.end); err != nil {
+		r.store.RemoveGCKPIntent()
 		errPhase = "save"
 		return
 	}
+	defer func() {
+		entry.SetState(ST_Finished)
+	}()
+
 	files = append(files, name)
 
 	fileEntry, err := store.BuildFilesEntry(files)
