@@ -7415,19 +7415,17 @@ func TestGlobalCheckpoint2(t *testing.T) {
 	assert.NoError(t, err)
 	tae.AllFlushExpected(tae.TxnMgr.Now(), 4000)
 
-	tae.DB.ForceCheckpoint(ctx, txn.GetStartTS(), 0)
-	// FIXME
-	// testutils.WaitExpect(2000, func() bool {
-	// 	return tae.Runtime.Scheduler.GetPenddingLSNCnt() == 0
-	// })
-	// assert.Equal(t, uint64(0), tae.Runtime.Scheduler.GetPenddingLSNCnt())
+	tae.DB.ForceCheckpoint(ctx, tae.TxnMgr.Now(), 0)
+	testutils.WaitExpect(2000, func() bool {
+		return tae.Runtime.Scheduler.GetPenddingLSNCnt() == 0
+	})
+	assert.Equal(t, uint64(0), tae.Runtime.Scheduler.GetPenddingLSNCnt())
 
 	tae.DB.ForceGlobalCheckpoint(ctx, txn.GetStartTS(), 5*time.Second, 0)
-	// FIXME
-	// testutils.WaitExpect(1000, func() bool {
-	// 	return tae.Runtime.Scheduler.GetPenddingLSNCnt() == 0
-	// })
-	// assert.Equal(t, uint64(0), tae.Runtime.Scheduler.GetPenddingLSNCnt())
+	testutils.WaitExpect(1000, func() bool {
+		return tae.Runtime.Scheduler.GetPenddingLSNCnt() == 0
+	})
+	assert.Equal(t, uint64(0), tae.Runtime.Scheduler.GetPenddingLSNCnt())
 
 	assert.NoError(t, txn.Commit(context.Background()))
 
@@ -7439,13 +7437,12 @@ func TestGlobalCheckpoint2(t *testing.T) {
 	// 	return tae.Runtime.Scheduler.GetPenddingLSNCnt() == 0
 	// })
 	tae.AllFlushExpected(currTs, 4000)
-	err = tae.DB.ForceGlobalCheckpoint(ctx, currTs, defaultGlobalCheckpointTimeout, time.Duration(1))
+	err = tae.DB.ForceGlobalCheckpoint(ctx, tae.TxnMgr.Now(), defaultGlobalCheckpointTimeout, time.Duration(1))
 	assert.NoError(t, err)
-	// FIXME
-	// testutils.WaitExpect(1000, func() bool {
-	// 	return tae.Runtime.Scheduler.GetPenddingLSNCnt() == 0
-	// })
-	// assert.Equal(t, uint64(0), tae.Runtime.Scheduler.GetPenddingLSNCnt())
+	testutils.WaitExpect(1000, func() bool {
+		return tae.Runtime.Scheduler.GetPenddingLSNCnt() == 0
+	})
+	assert.Equal(t, uint64(0), tae.Runtime.Scheduler.GetPenddingLSNCnt())
 
 	maxEntry := tae.DB.BGCheckpointRunner.MaxGlobalCheckpoint()
 	assert.NotNil(t, maxEntry)
@@ -7472,126 +7469,6 @@ func TestGlobalCheckpoint2(t *testing.T) {
 	tableExisted = false
 	assert.NoError(t, tae.Catalog.RecurLoop(p))
 	assert.False(t, tableExisted)
-}
-
-func TestGlobalCheckpoint3(t *testing.T) {
-	t.Skip("This case crashes occasionally, is being fixed, skip it for now")
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
-	ctx := context.Background()
-
-	opts := config.WithQuickScanAndCKPOpts(nil)
-	options.WithCheckpointGlobalMinCount(1)(opts)
-	options.WithGlobalVersionInterval(time.Nanosecond * 1)(opts)
-	options.WithDisableGCCatalog()(opts)
-	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
-	defer tae.Close()
-	schema := catalog.MockSchemaAll(10, 2)
-	schema.Extra.BlockMaxRows = 10
-	schema.Extra.ObjectMaxBlocks = 2
-	tae.BindSchema(schema)
-	bat := catalog.MockBatch(schema, 40)
-
-	tae.CreateRelAndAppend(bat, true)
-	_, rel := tae.GetRelation()
-	testutils.WaitExpect(1000, func() bool {
-		return tae.Wal.GetPenddingCnt() == 0
-	})
-
-	tae.DropRelation(t)
-	testutils.WaitExpect(1000, func() bool {
-		return tae.Wal.GetPenddingCnt() == 0
-	})
-
-	tae.CreateRelAndAppend(bat, false)
-	testutils.WaitExpect(1000, func() bool {
-		return tae.Wal.GetPenddingCnt() == 0
-	})
-
-	p := &catalog.LoopProcessor{}
-	tableExisted := false
-	p.TableFn = func(te *catalog.TableEntry) error {
-		if te.ID == rel.ID() {
-			tableExisted = true
-		}
-		return nil
-	}
-
-	assert.NoError(t, tae.Catalog.RecurLoop(p))
-	assert.True(t, tableExisted)
-
-	tae.Restart(ctx)
-
-	tableExisted = false
-	assert.NoError(t, tae.Catalog.RecurLoop(p))
-	assert.False(t, tableExisted)
-}
-
-func TestGlobalCheckpoint4(t *testing.T) {
-	t.Skip("This case crashes occasionally, is being fixed, skip it for now")
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
-	ctx := context.Background()
-
-	opts := config.WithQuickScanAndCKPOpts(nil)
-	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
-	defer tae.Close()
-	tae.BGCheckpointRunner.DisableCheckpoint()
-	tae.BGCheckpointRunner.CleanPenddingCheckpoint()
-	globalCkpInterval := time.Second
-
-	schema := catalog.MockSchemaAll(18, 2)
-	schema.Extra.BlockMaxRows = 10
-	schema.Extra.ObjectMaxBlocks = 2
-	tae.BindSchema(schema)
-	bat := catalog.MockBatch(schema, 40)
-
-	txn, err := tae.StartTxn(nil)
-	assert.NoError(t, err)
-	_, err = txn.CreateDatabase("db", "", "")
-	assert.NoError(t, err)
-	assert.NoError(t, txn.Commit(context.Background()))
-
-	err = tae.IncrementalCheckpoint(txn.GetCommitTS(), false, true, true)
-	assert.NoError(t, err)
-
-	txn, err = tae.StartTxn(nil)
-	assert.NoError(t, err)
-	_, err = txn.DropDatabase("db")
-	assert.NoError(t, err)
-	assert.NoError(t, txn.Commit(context.Background()))
-
-	err = tae.DB.ForceGlobalCheckpoint(ctx, txn.GetCommitTS(), defaultGlobalCheckpointTimeout, globalCkpInterval)
-	assert.Nil(t, err)
-
-	tae.CreateRelAndAppend(bat, true)
-
-	t.Log(tae.Catalog.SimplePPString(3))
-	tae.Restart(ctx)
-	tae.BGCheckpointRunner.DisableCheckpoint()
-	tae.BGCheckpointRunner.CleanPenddingCheckpoint()
-	t.Log(tae.Catalog.SimplePPString(3))
-
-	// tae.CreateRelAndAppend(bat, false)
-
-	txn, err = tae.StartTxn(nil)
-	assert.NoError(t, err)
-	db, err := txn.GetDatabase("db")
-	assert.NoError(t, err)
-	_, err = db.DropRelationByName(schema.Name)
-	assert.NoError(t, err)
-	assert.NoError(t, txn.Commit(context.Background()))
-
-	err = tae.DB.ForceGlobalCheckpoint(ctx, txn.GetCommitTS(), defaultGlobalCheckpointTimeout, globalCkpInterval)
-	assert.NoError(t, err)
-
-	tae.CreateRelAndAppend(bat, false)
-
-	t.Log(tae.Catalog.SimplePPString(3))
-	tae.Restart(ctx)
-	tae.BGCheckpointRunner.DisableCheckpoint()
-	tae.BGCheckpointRunner.CleanPenddingCheckpoint()
-	t.Log(tae.Catalog.SimplePPString(3))
 }
 
 func TestGlobalCheckpoint5(t *testing.T) {
@@ -7651,54 +7528,6 @@ func TestGlobalCheckpoint5(t *testing.T) {
 	err = tae.DB.ForceGlobalCheckpoint(ctx, txn.GetStartTS(), defaultGlobalCheckpointTimeout, globalCkpIntervalTimeout)
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
-}
-
-func TestGlobalCheckpoint6(t *testing.T) {
-	t.Skip("This case crashes occasionally, is being fixed, skip it for now")
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
-	ctx := context.Background()
-
-	opts := config.WithQuickScanAndCKPOpts(nil)
-	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
-	defer tae.Close()
-	tae.BGCheckpointRunner.DisableCheckpoint()
-	tae.BGCheckpointRunner.CleanPenddingCheckpoint()
-	globalCkpInterval := time.Duration(0)
-	restartCnt := 10
-	batchsize := 10
-
-	schema := catalog.MockSchemaAll(18, 2)
-	schema.Extra.BlockMaxRows = 5
-	schema.Extra.ObjectMaxBlocks = 2
-	tae.BindSchema(schema)
-	bat := catalog.MockBatch(schema, batchsize*(restartCnt+1))
-	bats := bat.Split(restartCnt + 1)
-
-	tae.CreateRelAndAppend2(bats[0], true)
-	txn, err := tae.StartTxn(nil)
-	assert.NoError(t, err)
-	err = tae.IncrementalCheckpoint(txn.GetStartTS(), false, true, true)
-	assert.NoError(t, err)
-	assert.NoError(t, txn.Commit(context.Background()))
-
-	for i := 0; i < restartCnt; i++ {
-		tae.DoAppend(bats[i+1])
-		txn, err = tae.StartTxn(nil)
-		assert.NoError(t, err)
-		err = tae.DB.ForceGlobalCheckpoint(ctx, txn.GetStartTS(), defaultGlobalCheckpointTimeout, globalCkpInterval)
-		assert.NoError(t, err)
-		assert.NoError(t, txn.Commit(context.Background()))
-
-		rows := (i + 2) * batchsize
-		tae.CheckRowsByScan(rows, true)
-		t.Log(tae.Catalog.SimplePPString(3))
-		tae.Restart(ctx)
-		tae.BGCheckpointRunner.DisableCheckpoint()
-		tae.BGCheckpointRunner.CleanPenddingCheckpoint()
-		t.Log(tae.Catalog.SimplePPString(3))
-		tae.CheckRowsByScan(rows, true)
-	}
 }
 
 func TestGCCheckpoint1(t *testing.T) {
