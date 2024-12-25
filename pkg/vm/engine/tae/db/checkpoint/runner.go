@@ -782,6 +782,16 @@ func (r *runner) TryScheduleCheckpoint(
 	return intent, nil
 }
 
+func (r *runner) getRunningGCKPJob() (job *checkpointJob, err error) {
+	executor := r.executor.Load()
+	if executor == nil {
+		err = ErrExecutorClosed
+		return
+	}
+	job = executor.RunningGCKPJob()
+	return
+}
+
 func (r *runner) fillDefaults() {
 	if r.options.collectInterval <= 0 {
 		// TODO: define default value

@@ -676,11 +676,23 @@ func (s *runnerStore) ICKPSeekLT(ts types.TS, cnt int) []*CheckpointEntry {
 	return incrementals
 }
 
+// return the max finished global checkpoint
 func (s *runnerStore) MaxGlobalCheckpoint() *CheckpointEntry {
 	s.RLock()
-	defer s.RUnlock()
 	global, _ := s.globals.Max()
-	return global
+	s.RUnlock()
+	if global == nil || global.IsFinished() {
+		return global
+	}
+	s.Lock()
+	items := s.globals.Items()
+	s.Unlock()
+	for i := len(items) - 1; i >= 0; i-- {
+		if items[i].IsFinished() {
+			return items[i]
+		}
+	}
+	return nil
 }
 
 func (s *runnerStore) IsStale(ts *types.TS) bool {
