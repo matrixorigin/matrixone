@@ -34,6 +34,8 @@ type checkpointJob struct {
 
 	gckpCtx     *globalCheckpointContext
 	runGCKPFunc func(context.Context, *globalCheckpointContext, *runner) error
+
+	err error
 }
 
 func (job *checkpointJob) RunGCKP(ctx context.Context) (err error) {
@@ -172,7 +174,13 @@ func (job *checkpointJob) WaitC() <-chan struct{} {
 	return job.doneCh
 }
 
-func (job *checkpointJob) Done() {
+// should be called after WaitC
+func (job *checkpointJob) Err() error {
+	return job.err
+}
+
+func (job *checkpointJob) Done(err error) {
+	job.err = err
 	close(job.doneCh)
 }
 
@@ -243,7 +251,7 @@ func (e *checkpointExecutor) RunGCKP(gckpCtx *globalCheckpointContext) (err erro
 		return
 	}
 	defer func() {
-		job.Done()
+		job.Done(err)
 		e.runningGCKP.Store(nil)
 	}()
 	err = job.RunGCKP(e.ctx)
@@ -268,7 +276,7 @@ func (e *checkpointExecutor) RunICKP() (err error) {
 		return
 	}
 	defer func() {
-		job.Done()
+		job.Done(err)
 		e.runningICKP.Store(nil)
 	}()
 	err = job.RunICKP(e.ctx)

@@ -159,6 +159,7 @@ func (r *runner) ForceGCKP(
 			err = context.Cause(r.ctx)
 			return
 		case <-job.WaitC():
+			err = job.Err()
 			return
 		}
 	}
