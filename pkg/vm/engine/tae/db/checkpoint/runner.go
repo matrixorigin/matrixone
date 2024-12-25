@@ -67,6 +67,34 @@ type globalCheckpointContext struct {
 	ckpLSN      uint64
 }
 
+func (g globalCheckpointContext) String() string {
+	return fmt.Sprintf(
+		"GCTX[%v][%s][%d,%d][%s]",
+		g.force,
+		g.end.ToString(),
+		g.truncateLSN,
+		g.ckpLSN,
+		g.interval.String(),
+	)
+}
+
+func (g *globalCheckpointContext) Merge(other *globalCheckpointContext) {
+	if other == nil {
+		return
+	}
+	if other.force {
+		g.force = true
+	}
+	if other.end.LE(&g.end) {
+		return
+	}
+	g.end = other.end
+	g.interval = other.interval
+	g.truncateLSN = other.truncateLSN
+	g.ckpLSN = other.ckpLSN
+	return
+}
+
 type tableAndSize struct {
 	tbl   *catalog.TableEntry
 	asize int
@@ -292,36 +320,81 @@ func (r *runner) GetCheckpointMetaFiles() map[string]struct{} {
 }
 
 func (r *runner) onGlobalCheckpointEntries(items ...any) {
-	maxEnd := types.TS{}
-	for _, item := range items {
-		ctx := item.(*globalCheckpointContext)
-		doCheckpoint := false
-		maxCkp := r.MaxGlobalCheckpoint()
-		if maxCkp != nil {
-			maxEnd = maxCkp.end
-		}
-		if ctx.end.LE(&maxEnd) {
-			logutil.Warn(
-				"OnGlobalCheckpointEntries-Skip",
-				zap.String("checkpoint", ctx.end.ToString()))
-			continue
-		}
-		if ctx.force {
-			doCheckpoint = true
+	var (
+		err              error
+		mergedCtx        *globalCheckpointContext
+		fromCheckpointed types.TS
+		toCheckpointed   types.TS
+		now              = time.Now()
+	)
+	executor := r.executor.Load()
+	if executor == nil {
+		err = ErrCheckpointDisabled
+	}
+	defer func() {
+		var createdEntry string
+		logger := logutil.Info
+		if err != nil {
+			logger = logutil.Error
 		} else {
-			entriesCount := r.GetPenddingIncrementalCount()
-			if r.globalPolicy.Check(entriesCount) {
-				doCheckpoint = true
+			toEntry := r.store.MaxGlobalCheckpoint()
+			if toEntry != nil {
+				toCheckpointed = toEntry.GetEnd()
+				createdEntry = toEntry.String()
 			}
 		}
-		if doCheckpoint {
-			if _, err := r.doGlobalCheckpoint(
-				ctx.end, ctx.ckpLSN, ctx.truncateLSN, ctx.interval,
-			); err != nil {
-				continue
-			}
+
+		if err != nil || time.Since(now) > time.Second*10 || toCheckpointed.GT(&fromCheckpointed) {
+			logger(
+				"GCKP-Execute-End",
+				zap.Duration("cost", time.Since(now)),
+				zap.String("ctx", mergedCtx.String()),
+				zap.String("created", createdEntry),
+				zap.Error(err),
+			)
+		}
+	}()
+
+	for _, item := range items {
+		oneCtx := item.(*globalCheckpointContext)
+		if mergedCtx == nil {
+			mergedCtx = oneCtx
+		} else {
+			mergedCtx.Merge(oneCtx)
 		}
 	}
+	if mergedCtx == nil {
+		return
+	}
+
+	fromEntry := r.store.MaxGlobalCheckpoint()
+	if fromEntry != nil {
+		fromCheckpointed = fromEntry.GetEnd()
+	}
+
+	if mergedCtx.end.LE(&fromCheckpointed) {
+		logutil.Info(
+			"GCKP-Execute-Skip",
+			zap.String("have", fromCheckpointed.ToString()),
+			zap.String("want", mergedCtx.end.ToString()),
+		)
+		return
+	}
+
+	// [force==false and ickpCount < count policy]
+	if !mergedCtx.force {
+		ickpCount := r.store.GetPenddingIncrementalCount()
+		if !r.globalPolicy.Check(ickpCount) {
+			logutil.Debug(
+				"GCKP-Execute-Skip",
+				zap.Int("pending-ickp", ickpCount),
+				zap.String("want", mergedCtx.end.ToString()),
+			)
+			return
+		}
+	}
+
+	err = executor.RunGCKP(mergedCtx)
 }
 
 func (r *runner) onGCCheckpointEntries(items ...any) {

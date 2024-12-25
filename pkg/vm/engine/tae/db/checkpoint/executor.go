@@ -31,6 +31,24 @@ type checkpointJob struct {
 	runner *runner
 
 	runICKPFunc func(context.Context, *runner) error
+
+	gckpCtx     *globalCheckpointContext
+	runGCKPFunc func(context.Context, *globalCheckpointContext, *runner) error
+}
+
+func (job *checkpointJob) RunGCKP(ctx context.Context) (err error) {
+	if job.runGCKPFunc != nil {
+		return job.runGCKPFunc(ctx, job.gckpCtx, job.runner)
+	}
+
+	_, err = job.runner.doGlobalCheckpoint(
+		job.gckpCtx.end,
+		job.gckpCtx.ckpLSN,
+		job.gckpCtx.truncateLSN,
+		job.gckpCtx.interval,
+	)
+
+	return
 }
 
 func (job *checkpointJob) RunICKP(ctx context.Context) (err error) {
@@ -159,13 +177,15 @@ func (job *checkpointJob) Done() {
 }
 
 type checkpointExecutor struct {
-	ctx     context.Context
-	cancel  context.CancelCauseFunc
-	active  atomic.Bool
-	running atomic.Pointer[checkpointJob]
+	ctx         context.Context
+	cancel      context.CancelCauseFunc
+	active      atomic.Bool
+	runningICKP atomic.Pointer[checkpointJob]
+	runningGCKP atomic.Pointer[checkpointJob]
 
 	runner      *runner
 	runICKPFunc func(context.Context, *runner) error
+	runGCKPFunc func(context.Context, *globalCheckpointContext, *runner) error
 }
 
 func newCheckpointExecutor(
@@ -187,12 +207,43 @@ func (e *checkpointExecutor) StopWithCause(cause error) {
 		cause = ErrCheckpointDisabled
 	}
 	e.cancel(cause)
-	job := e.running.Load()
+	job := e.runningGCKP.Load()
 	if job != nil {
 		<-job.WaitC()
 	}
-	e.running.Store(nil)
+	e.runningGCKP.Store(nil)
+	job = e.runningICKP.Load()
+	if job != nil {
+		<-job.WaitC()
+	}
+	e.runningICKP.Store(nil)
 	e.runner = nil
+}
+
+func (e *checkpointExecutor) RunGCKP(gckpCtx *globalCheckpointContext) (err error) {
+	if !e.active.Load() {
+		err = ErrCheckpointDisabled
+		return
+	}
+	if e.runningGCKP.Load() != nil {
+		err = ErrPendingCheckpoint
+	}
+	job := &checkpointJob{
+		doneCh:      make(chan struct{}),
+		runner:      e.runner,
+		gckpCtx:     gckpCtx,
+		runGCKPFunc: e.runGCKPFunc,
+	}
+	if !e.runningGCKP.CompareAndSwap(nil, job) {
+		err = ErrPendingCheckpoint
+		return
+	}
+	defer func() {
+		job.Done()
+		e.runningGCKP.Store(nil)
+	}()
+	err = job.RunGCKP(e.ctx)
+	return
 }
 
 func (e *checkpointExecutor) RunICKP() (err error) {
@@ -200,7 +251,7 @@ func (e *checkpointExecutor) RunICKP() (err error) {
 		err = ErrCheckpointDisabled
 		return
 	}
-	if e.running.Load() != nil {
+	if e.runningICKP.Load() != nil {
 		err = ErrPendingCheckpoint
 	}
 	job := &checkpointJob{
@@ -208,13 +259,13 @@ func (e *checkpointExecutor) RunICKP() (err error) {
 		runner:      e.runner,
 		runICKPFunc: e.runICKPFunc,
 	}
-	if !e.running.CompareAndSwap(nil, job) {
+	if !e.runningICKP.CompareAndSwap(nil, job) {
 		err = ErrPendingCheckpoint
 		return
 	}
 	defer func() {
 		job.Done()
-		e.running.Store(nil)
+		e.runningICKP.Store(nil)
 	}()
 	err = job.RunICKP(e.ctx)
 	return
