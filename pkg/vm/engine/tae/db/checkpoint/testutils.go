@@ -32,9 +32,7 @@ type TestRunner interface {
 	// TODO: remove the below apis
 	CleanPenddingCheckpoint()
 	ForceCheckpointForBackup(end types.TS) (string, error)
-
 	ForceGlobalCheckpoint(context.Context, types.TS, time.Duration) error
-	ForceIncrementalCheckpoint(end types.TS) error
 	ForceICKP(context.Context, *types.TS) error
 	MaxLSNInRange(end types.TS) uint64
 	GetICKPIntentOnlyForTest() *CheckpointEntry
@@ -189,57 +187,6 @@ func (r *runner) ForceICKP(ctx context.Context, ts *types.TS) (err error) {
 			return
 		}
 	}
-}
-
-func (r *runner) ForceIncrementalCheckpoint(ts types.TS) (err error) {
-	var intent Intent
-	if intent, err = r.TryScheduleCheckpoint(ts, true); err != nil {
-		return
-	}
-	if intent == nil {
-		return
-	}
-
-	entry := intent.(*CheckpointEntry)
-
-	if entry.end.LT(&ts) || !entry.AllChecked() {
-		err = ErrPendingCheckpoint
-		return
-	}
-
-	// TODO: use context
-	timeout := time.After(time.Minute * 2)
-	now := time.Now()
-	defer func() {
-		logger := logutil.Info
-		if err != nil {
-			logger = logutil.Error
-		}
-		logger(
-			"ICKP-Schedule-Force-Wait-End",
-			zap.String("entry", intent.String()),
-			zap.Duration("cost", time.Since(now)),
-			zap.Error(err),
-		)
-	}()
-
-	r.TryTriggerExecuteICKP()
-
-	select {
-	case <-r.ctx.Done():
-		err = context.Cause(r.ctx)
-		return
-	case <-timeout:
-		err = moerr.NewInternalErrorNoCtx("timeout")
-		return
-	case <-intent.Wait():
-		checkpointed := r.store.GetCheckpointed()
-		// if checkpointed < ts, something wrong may be happend and the previous intent was rollbacked
-		if checkpointed.LT(&ts) {
-			err = ErrPendingCheckpoint
-		}
-	}
-	return
 }
 
 func (r *runner) ForceCheckpointForBackup(end types.TS) (location string, err error) {
