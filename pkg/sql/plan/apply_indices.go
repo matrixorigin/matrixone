@@ -450,7 +450,7 @@ func (builder *QueryBuilder) applyExtraFiltersOnIndex(idxDef *IndexDef, node *pl
 			continue
 		}
 		for k := range idxDef.Parts {
-			colIdx := node.TableDef.Name2ColIndex[idxDef.Parts[k]]
+			colIdx := node.TableDef.Name2ColIndex[catalog.ResolveAlias(idxDef.Parts[k])]
 			if colIdx != col.ColPos {
 				continue
 			}
@@ -497,7 +497,7 @@ func tryMatchMoreLeadingFilters(idxDef *IndexDef, node *plan.Node, pos int32) []
 		if i == 0 {
 			continue //already hit
 		}
-		currentPos, ok := node.TableDef.Name2ColIndex[idxDef.Parts[i]]
+		currentPos, ok := node.TableDef.Name2ColIndex[catalog.ResolveAlias(idxDef.Parts[i])]
 		if !ok {
 			break
 		}
@@ -714,7 +714,7 @@ func (builder *QueryBuilder) tryIndexOnlyScan(idxDef *IndexDef, node *plan.Node,
 		idxColMap[[2]int32{node.BindingTags[0], colIdx}] = leadingColExpr
 	} else {
 		for i := 0; i < numKeyParts; i++ {
-			colIdx := node.TableDef.Name2ColIndex[idxDef.Parts[i]]
+			colIdx := node.TableDef.Name2ColIndex[catalog.ResolveAlias(idxDef.Parts[i])]
 			origType := node.TableDef.Cols[colIdx].Typ
 			mappedExpr, _ := MakeSerialExtractExpr(builder.GetContext(), DeepCopyExpr(leadingColExpr), origType, int64(i))
 			idxColMap[[2]int32{node.BindingTags[0], colIdx}] = mappedExpr
@@ -877,7 +877,7 @@ func (builder *QueryBuilder) getMostSelectiveIndexForPointSelect(indexes []*Inde
 
 		filterIdx = filterIdx[:0]
 		for j := 0; j < numKeyParts; j++ {
-			colIdx := node.TableDef.Name2ColIndex[idxDef.Parts[j]]
+			colIdx := node.TableDef.Name2ColIndex[catalog.ResolveAlias(idxDef.Parts[j])]
 			idx, ok := col2filter[colIdx]
 			if !ok {
 				break
@@ -994,7 +994,7 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 
 		condIdx = condIdx[:0]
 		for i := 0; i < numKeyParts; i++ {
-			colIdx := leftChild.TableDef.Name2ColIndex[idxDef.Parts[i]]
+			colIdx := leftChild.TableDef.Name2ColIndex[catalog.ResolveAlias(idxDef.Parts[i])]
 			idx, ok := col2Cond[colIdx]
 			if !ok {
 				break
