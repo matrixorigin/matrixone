@@ -82,6 +82,8 @@ func (node *AtTimeStamp) Format(ctx *FmtCtx) {
 	ctx.WriteString(node.Type.String())
 	if node.Type != ASOFTIMESTAMP {
 		ctx.WriteString(" = ")
+	} else {
+		ctx.WriteString(" ")
 	}
 	node.Expr.Format(ctx)
 	ctx.WriteString("}")
