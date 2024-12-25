@@ -32,7 +32,7 @@ type TestRunner interface {
 	// TODO: remove the below apis
 	CleanPenddingCheckpoint()
 	ForceCheckpointForBackup(end types.TS) (string, error)
-	ForceGlobalCheckpoint(context.Context, types.TS, time.Duration) error
+	ForceGCKP(context.Context, types.TS, time.Duration) error
 	ForceICKP(context.Context, *types.TS) error
 	MaxLSNInRange(end types.TS) uint64
 	GetICKPIntentOnlyForTest() *CheckpointEntry
@@ -57,7 +57,7 @@ func (r *runner) CleanPenddingCheckpoint() {
 	r.store.CleanPenddingCheckpoint()
 }
 
-func (r *runner) ForceGlobalCheckpoint(
+func (r *runner) ForceGCKP(
 	ctx context.Context, end types.TS, interval time.Duration,
 ) (err error) {
 	var (
@@ -74,7 +74,7 @@ func (r *runner) ForceGlobalCheckpoint(
 			entryStr = maxEntry.String()
 		}
 		logger(
-			"ForceGlobalCheckpoint-End",
+			"Force-GCKP-End",
 			zap.Duration("cost", time.Since(now)),
 			zap.String("ts", end.ToString()),
 			zap.String("entry", entryStr),

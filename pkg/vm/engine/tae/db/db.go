@@ -239,7 +239,7 @@ func (db *DB) ForceGlobalCheckpoint(
 		return
 	}
 
-	err = db.BGCheckpointRunner.ForceGlobalCheckpoint(
+	err = db.BGCheckpointRunner.ForceGCKP(
 		ctx, ts, versionInterval,
 	)
 	return err
