@@ -233,6 +233,14 @@ const (
 				where 
 				    account_id = %d and database_id = %d and table_id = %d 
 				for update;`
+
+	findAccountByTable = `
+				select 
+					account_id, table_id
+				from 
+				    %s.%s
+				where 
+				    table_id in (%v);`
 )
 
 const (
@@ -2402,6 +2410,52 @@ func (d *dynamicCtx) getBetweenForChangedList(
 	return
 }
 
+func correctAccountForCatalogTables(
+	ctx context.Context,
+	eng *Engine,
+	resp *cmd_util.GetChangedTableListResp,
+) (err error) {
+
+	// the TN cannot distinguish the account id if
+	// a table belongs to the mo_catalog. here, correct the account id miss-matched.
+	var mm []uint64
+	for i := range resp.TableIds {
+		if resp.DatabaseIds[i] == catalog.MO_CATALOG_ID {
+			mm = append(mm, resp.TableIds[i])
+		}
+	}
+
+	if len(mm) > 0 {
+		sql := fmt.Sprintf(findAccountByTable, catalog.MO_CATALOG, catalog.MO_TABLE_STATS, intsJoin(mm, ","))
+		sqlRet := eng.executeSQL(ctx, sql, "correct account for catalog tables")
+		if err = sqlRet.Error(); err != nil {
+			return
+		}
+
+		var (
+			val any
+		)
+
+		for i := range sqlRet.RowCount() {
+			if val, err = sqlRet.Value(ctx, i, 1); err != nil {
+				return
+			}
+
+			tid := val.(uint64)
+			idx := slices.Index(resp.TableIds, tid)
+
+			if val, err = sqlRet.Value(ctx, i, 0); err != nil {
+				return
+			}
+
+			aid := val.(uint64)
+			resp.AccIds[idx] = aid
+		}
+	}
+
+	return nil
+}
+
 func getChangedTableList(
 	ctx context.Context,
 	service string,
@@ -2500,24 +2554,14 @@ func getChangedTableList(
 		*to = types.TimestampToTS(*resp.Newest)
 	}
 
+	if err = correctAccountForCatalogTables(ctx, eng.(*Engine), resp); err != nil {
+		return
+	}
+
 	var (
 		tp tablePair
 		ok bool
 	)
-
-	cc := eng.(*Engine).GetLatestCatalogCache()
-	// the TN cannot distinguish the account id if
-	// a table belongs to the mo_catalog. here, correct the account id miss-match.
-	for i := range resp.TableIds {
-		if resp.DatabaseIds[i] == catalog.MO_CATALOG_ID {
-			item := cc.GetTableByNoAccId(resp.DatabaseIds[i], resp.TableIds[i])
-			if item == nil {
-				continue
-			}
-
-			resp.AccIds[i] = uint64(item.AccountId)
-		}
-	}
 
 	for i := range nullTSAcc {
 		if tp, ok = buildTablePairFromCache(de,
