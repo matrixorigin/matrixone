@@ -87,6 +87,22 @@ func (s *runnerStore) GetCheckpointed() types.TS {
 	return s.GetCheckpointedLocked()
 }
 
+func (s *runnerStore) GetMaxFinishedICKP() *CheckpointEntry {
+	s.RLock()
+	maxEntry, _ := s.incrementals.Max()
+	s.RUnlock()
+	if maxEntry == nil || maxEntry.IsFinished() {
+		return maxEntry
+	}
+	entries := s.GetAllIncrementalCheckpoints()
+	for i := len(entries) - 1; i >= 0; i-- {
+		if entries[i].IsFinished() {
+			return entries[i]
+		}
+	}
+	return nil
+}
+
 func (s *runnerStore) GetCheckpointedLocked() types.TS {
 	var ret types.TS
 	maxICKP, _ := s.incrementals.Max()

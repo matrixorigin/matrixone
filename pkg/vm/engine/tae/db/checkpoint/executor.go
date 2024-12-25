@@ -121,7 +121,7 @@ func (job *checkpointJob) RunICKP(ctx context.Context) (err error) {
 		return
 	}
 
-	job.runner.store.CommitICKPIntent(entry)
+	defer job.runner.store.CommitICKPIntent(entry)
 	v2.TaskCkpEntryPendingDurationHistogram.Observe(entry.Age().Seconds())
 
 	files = append(files, file)

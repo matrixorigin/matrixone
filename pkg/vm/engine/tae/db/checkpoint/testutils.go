@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"go.uber.org/zap"
 )
 
@@ -89,7 +90,7 @@ func (r *runner) ForceGlobalCheckpoint(
 		return
 	}
 
-	maxEntry = r.store.MaxIncrementalCheckpoint()
+	maxEntry = r.store.GetMaxFinishedICKP()
 
 	// should not happend
 	if maxEntry == nil || maxEntry.end.LT(&end) {
@@ -102,6 +103,33 @@ func (r *runner) ForceGlobalCheckpoint(
 		end:      maxEntry.end,
 		interval: interval,
 	})
+
+	// TODO: wait with done channel later
+	op := func() (ok bool, err error) {
+		select {
+		case <-r.ctx.Done():
+			err = context.Cause(r.ctx)
+			return
+		case <-ctx.Done():
+			err = context.Cause(ctx)
+			return
+		default:
+		}
+		global := r.store.MaxGlobalCheckpoint()
+		if global == nil {
+			return false, nil
+		}
+		ok = global.end.GE(&end)
+		return
+	}
+
+	waitTime := time.Minute
+	err = common.RetryWithIntervalAndTimeout(
+		op,
+		waitTime,
+		waitTime/20,
+		false,
+	)
 	return
 }
 
@@ -152,10 +180,11 @@ func (r *runner) ForceICKP(ctx context.Context, ts *types.TS) (err error) {
 			err = context.Cause(r.ctx)
 			return
 		case <-intent.Wait():
-			checkpointed := r.store.GetCheckpointed()
-			if checkpointed.LT(ts) {
+			checkpointed := r.store.GetMaxFinishedICKP()
+			if checkpointed == nil || checkpointed.end.LT(ts) {
 				continue
 			}
+			intent = checkpointed
 			return
 		}
 	}
