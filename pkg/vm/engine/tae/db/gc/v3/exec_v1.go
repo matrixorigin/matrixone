@@ -16,13 +16,14 @@ package gc
 
 import (
 	"context"
-	"fmt"
+	"go.uber.org/zap"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
@@ -326,7 +327,10 @@ func MakeSnapshotAndPitrFineFilter(
 				continue
 			}
 			if dropTS.IsEmpty() {
-				panic(fmt.Sprintf("dropTS is empty, name: %s, createTS: %s", name, createTS.ToString()))
+				logutil.Warn("GC-PANIC-TS-EMPTY",
+					zap.String("name", name),
+					zap.String("createTS", createTS.ToString()))
+				continue
 			}
 			if !logtail.ObjectIsSnapshotRefers(
 				&stats, pitr, &createTS, &dropTS, snapshots,
