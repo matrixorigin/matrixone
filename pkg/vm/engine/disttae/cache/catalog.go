@@ -341,27 +341,6 @@ func (cc *CatalogCache) scanThrough(aid uint32, did uint64, f func(*TableItem) b
 	return
 }
 
-func (cc *CatalogCache) GetTableByNoAccId(databaseId, tblId uint64) (ret *TableItem) {
-	key := &TableItem{
-		AccountId:  0,
-		DatabaseId: databaseId,
-	}
-
-	cc.tables.data.Ascend(key, func(item *TableItem) bool {
-		if item.DatabaseId != databaseId {
-			return false
-		}
-		// delete entry has incomplete information for tableitem
-		if !item.deleted && tblId == item.Id {
-			ret = item
-			return false
-		}
-		return true
-	})
-
-	return
-}
-
 // GetTableById's complexicity is O(n), where n is the number of all items of the database.
 func (cc *CatalogCache) GetTableById(aid uint32, databaseId, tblId uint64) *TableItem {
 	return cc.scanThrough(aid, databaseId, func(item *TableItem) bool {
