@@ -225,6 +225,26 @@ const (
 				where
 				    account_id in (%s);`
 
+	accumulateIdsByDatabaseSQL = `
+				select 
+					account_id, reldatabase_id, rel_id
+				from
+					%s.%s 
+				where
+				    reldatabase_id in (%v)
+				group by
+				    account_id, reldatabase_id, rel_id;`
+
+	accumulateIdsByTableSQL = `
+				select 
+					account_id, reldatabase_id, rel_id
+				from
+					%s.%s 
+				where
+				    rel_id in (%v)
+				group by
+				    account_id, reldatabase_id, rel_id;`
+
 	getSingleTableStatsForUpdateSQL = `
 				select 
 					table_stats
@@ -359,6 +379,7 @@ func initMoTableStatsConfig(
 
 		eng.dynamicCtx.cleanDeletesQueue = make(chan struct{})
 		eng.dynamicCtx.updateForgottenQueue = make(chan struct{})
+		eng.dynamicCtx.insertNewTableQueue = make(chan struct{})
 
 		// registerMoTableSizeRows
 		{
@@ -537,9 +558,11 @@ type dynamicCtx struct {
 	defaultConf MoTableStatsConfig
 	conf        MoTableStatsConfig
 
-	tblQueue             chan tablePair
+	tblQueue chan tablePair
+
 	cleanDeletesQueue    chan struct{}
 	updateForgottenQueue chan struct{}
+	insertNewTableQueue  chan struct{}
 
 	de         *Engine
 	objIdsPool sync.Pool
@@ -651,6 +674,10 @@ func (d *dynamicCtx) HandleMoTableStatsCtl(cmd string) string {
 	}
 }
 
+// acc.x,y,z
+// db.a,b,c
+// tbl.r,s,t
+// gama.forgotten|clean|new
 func (d *dynamicCtx) recomputing(para string) string {
 	{
 		d.Lock()
@@ -662,43 +689,87 @@ func (d *dynamicCtx) recomputing(para string) string {
 	}
 
 	var (
-		err    error
-		ok     bool
-		id     uint64
-		buf    bytes.Buffer
-		retAcc []uint64
+		err error
+		ok  bool
+		id  uint64
 	)
 
-	ids := strings.Split(para, ",")
+	idsByCmd := func(str string) []uint64 {
+		idStrs := strings.Split(str, ",")
 
-	accIds := make([]uint64, 0, len(ids))
+		ids := make([]uint64, 0, len(idStrs))
 
-	for i := range ids {
-		id, err = strconv.ParseUint(ids[i], 10, 64)
-		if err == nil {
-			accIds = append(accIds, id)
+		for i := range idStrs {
+			id, err = strconv.ParseUint(idStrs[i], 10, 64)
+			if err == nil {
+				ids = append(ids, id)
+			}
+		}
+
+		return ids
+	}
+
+	recomputingAccount := func(str string) string {
+		ids := idsByCmd(str)
+		_, _, ok, err = d.QueryTableStatsByAccounts(
+			context.Background(), nil, ids, false, true)
+
+		if ok {
+			return "success"
+		} else {
+			return fmt.Sprintf("failed, err: %v", err)
 		}
 	}
 
-	_, retAcc, err, ok = d.QueryTableStatsByAccounts(
-		context.Background(), nil, accIds, false, true)
-
-	if ok {
-		uniqueAcc := make(map[uint64]struct{})
-		for i := range retAcc {
-			uniqueAcc[retAcc[i]] = struct{}{}
+	recomputingDatabase := func(str string) string {
+		ids := idsByCmd(str)
+		_, _, ok, err = d.QueryTableStatsByDatabase(
+			context.Background(), nil, ids, false, true)
+		if ok {
+			return "success"
+		} else {
+			return fmt.Sprintf("failed, err: %v", err)
 		}
-
-		for k := range uniqueAcc {
-			buf.WriteString(fmt.Sprintf("%d ", k))
-		}
-
-		buf.WriteString("succeed")
-	} else {
-		buf.WriteString(fmt.Sprintf("failed, err: %v", err))
 	}
 
-	return buf.String()
+	recomputingTable := func(str string) string {
+		ids := idsByCmd(str)
+		_, _, ok, err = d.QueryTableStatsByTable(
+			context.Background(), nil, ids, false, true)
+		if ok {
+			return "success"
+		} else {
+			return fmt.Sprintf("failed, err: %v", err)
+		}
+	}
+
+	strs := strings.Split(para, ".")
+	if len(strs) != 2 {
+		return "invalid command"
+	}
+
+	switch strs[0] {
+	case "acc":
+		return recomputingAccount(strs[1])
+	case "db":
+		return recomputingDatabase(strs[1])
+	case "tbl":
+		return recomputingTable(strs[1])
+	case "gama":
+		switch strs[1] {
+		case "forgotten":
+			d.NotifyUpdateForgotten()
+		case "clean":
+			d.NotifyCleanDeletes()
+		case "new":
+			d.NotifyInsertNewTable()
+		default:
+			return "invalid command"
+		}
+		return "success"
+	default:
+		return "invalid command"
+	}
 }
 
 func (d *dynamicCtx) checkMoveOnTask() bool {
@@ -1077,13 +1148,37 @@ func (d *dynamicCtx) normalQuery(
 	return statsVals, nil
 }
 
+func (d *dynamicCtx) queryTableStatsByXXX(
+	ctx context.Context,
+	sql string,
+	hint string,
+	wantedStatsIdxes []int,
+	forceUpdate bool,
+	resetUpdateTime bool,
+) (statsVals [][]any, accs, dbs, tbls []uint64, ok bool, err error) {
+
+	sqlRet := d.executeSQL(ctx, sql, hint)
+	if err = sqlRet.Error(); err != nil {
+		return
+	}
+
+	if accs, dbs, tbls, err = decodeIdsFromMOTablesSqlRet(ctx, sqlRet); err != nil {
+		return
+	}
+
+	statsVals, err, ok = d.QueryTableStats(
+		ctx, wantedStatsIdxes, accs, dbs, tbls, forceUpdate, resetUpdateTime)
+
+	return
+}
+
 func (d *dynamicCtx) QueryTableStatsByAccounts(
 	ctx context.Context,
 	wantedStatsIdxes []int,
 	accs []uint64,
 	forceUpdate bool,
 	resetUpdateTime bool,
-) (statsVals [][]any, retAcc []uint64, err error, ok bool) {
+) (statsVals [][]any, retAcc []uint64, ok bool, err error) {
 
 	if len(accs) == 0 {
 		return
@@ -1091,44 +1186,17 @@ func (d *dynamicCtx) QueryTableStatsByAccounts(
 
 	now := time.Now()
 
-	newCtx := turn2SysCtx(ctx)
-
 	accStr, release := intsJoin(accs, ",")
 	sql := fmt.Sprintf(accumulateIdsByAccSQL, catalog.MO_CATALOG, catalog.MO_TABLES, accStr)
 	release()
 
-	sqlRet := d.executeSQL(newCtx, sql, "query table stats by accounts")
-	if err = sqlRet.Error(); err != nil {
-		return
-	}
-
 	var (
-		val any
-
-		accs2 = make([]uint64, 0, sqlRet.RowCount())
-		dbs   = make([]uint64, 0, sqlRet.RowCount())
-		tbls  = make([]uint64, 0, sqlRet.RowCount())
+		tbls []uint64
 	)
 
-	for i := range sqlRet.RowCount() {
-		if val, err = sqlRet.Value(newCtx, i, 0); err != nil {
-			return
-		}
-		accs2 = append(accs2, uint64(val.(uint32)))
-
-		if val, err = sqlRet.Value(newCtx, i, 1); err != nil {
-			return
-		}
-		dbs = append(dbs, val.(uint64))
-
-		if val, err = sqlRet.Value(newCtx, i, 2); err != nil {
-			return
-		}
-		tbls = append(tbls, val.(uint64))
-	}
-
-	statsVals, err, ok = d.QueryTableStats(
-		newCtx, wantedStatsIdxes, accs2, dbs, tbls, forceUpdate, resetUpdateTime)
+	statsVals, retAcc, _, tbls, ok, err = d.queryTableStatsByXXX(
+		ctx, sql, "query table stats by account",
+		wantedStatsIdxes, forceUpdate, resetUpdateTime)
 
 	logutil.Info(logHeader,
 		zap.String("source", "QueryTableStatsByAccounts"),
@@ -1140,7 +1208,76 @@ func (d *dynamicCtx) QueryTableStatsByAccounts(
 		zap.Bool("ok", ok),
 		zap.Error(err))
 
-	return statsVals, accs2, err, ok
+	return statsVals, retAcc, ok, err
+}
+
+func (d *dynamicCtx) QueryTableStatsByDatabase(
+	ctx context.Context,
+	wantedStatsIdxes []int,
+	dbIds []uint64,
+	forceUpdate bool,
+	resetUpdateTime bool,
+) (statsVals [][]any, retDb []uint64, ok bool, err error) {
+
+	if len(dbIds) == 0 {
+		return
+	}
+
+	now := time.Now()
+
+	dbIdStr, release := intsJoin(dbIds, ",")
+	sql := fmt.Sprintf(accumulateIdsByDatabaseSQL, catalog.MO_CATALOG, catalog.MO_TABLES, dbIdStr)
+	release()
+
+	var tbls []uint64
+
+	statsVals, _, retDb, tbls, ok, err = d.queryTableStatsByXXX(
+		ctx, sql, "query table stats by database", wantedStatsIdxes, forceUpdate, resetUpdateTime)
+
+	logutil.Info(logHeader,
+		zap.String("source", "QueryTableStatsByDatabase"),
+		zap.Int("db cnt", len(dbIds)),
+		zap.Int("tbl cnt", len(tbls)),
+		zap.Bool("forceUpdate", forceUpdate),
+		zap.Bool("resetUpdateTime", resetUpdateTime),
+		zap.Duration("takes", time.Since(now)),
+		zap.Bool("ok", ok),
+		zap.Error(err))
+
+	return statsVals, retDb, ok, err
+}
+
+func (d *dynamicCtx) QueryTableStatsByTable(
+	ctx context.Context,
+	wantedStatsIdxes []int,
+	tblIds []uint64,
+	forceUpdate bool,
+	resetUpdateTime bool,
+) (statsVals [][]any, retTbls []uint64, ok bool, err error) {
+
+	if len(tblIds) == 0 {
+		return
+	}
+
+	now := time.Now()
+
+	tblStr, release := intsJoin(tblIds, ",")
+	sql := fmt.Sprintf(accumulateIdsByTableSQL, catalog.MO_CATALOG, catalog.MO_TABLES, tblStr)
+	release()
+
+	statsVals, _, _, retTbls, ok, err = d.queryTableStatsByXXX(
+		ctx, sql, "query table stats by table", wantedStatsIdxes, forceUpdate, resetUpdateTime)
+
+	logutil.Info(logHeader,
+		zap.String("source", "QueryTableStatsByTable"),
+		zap.Int("tbl cnt", len(tblIds)),
+		zap.Bool("forceUpdate", forceUpdate),
+		zap.Bool("resetUpdateTime", resetUpdateTime),
+		zap.Duration("takes", time.Since(now)),
+		zap.Bool("ok", ok),
+		zap.Error(err))
+
+	return statsVals, retTbls, ok, err
 }
 
 func (d *dynamicCtx) QueryTableStats(
@@ -1789,6 +1926,10 @@ func (d *dynamicCtx) NotifyUpdateForgotten() {
 	d.updateForgottenQueue <- struct{}{}
 }
 
+func (d *dynamicCtx) NotifyInsertNewTable() {
+	d.insertNewTableQueue <- struct{}{}
+}
+
 func (d *dynamicCtx) gamaInsertNewTables(
 	ctx context.Context,
 	service string,
@@ -1866,6 +2007,41 @@ func (d *dynamicCtx) gamaInsertNewTables(
 	}
 
 	err = d.callAlphaWithRetry(ctx, service, pairs, "gama insert new tables", 2)
+}
+
+func decodeIdsFromMOTablesSqlRet(
+	ctx context.Context,
+	sqlRet ie.InternalExecResult,
+) (ids1, ids2, ids3 []uint64, err error) {
+
+	var val any
+
+	for i := range sqlRet.RowCount() {
+		if val, err = sqlRet.Value(ctx, i, 0); err != nil {
+			return
+		}
+		ids1 = append(ids1, uint64(val.(uint32)))
+
+		if sqlRet.ColumnCount() == 1 {
+			continue
+		}
+
+		if val, err = sqlRet.Value(ctx, i, 1); err != nil {
+			return
+		}
+		ids2 = append(ids2, val.(uint64))
+
+		if sqlRet.ColumnCount() == 2 {
+			continue
+		}
+
+		if val, err = sqlRet.Value(ctx, i, 2); err != nil {
+			return
+		}
+		ids3 = append(ids3, val.(uint64))
+	}
+
+	return ids1, ids2, ids3, nil
 }
 
 func decodeIdsFromMoTableStatsSqlRet(
@@ -2175,9 +2351,9 @@ func (d *dynamicCtx) gamaCleanDeletes(
 			zap.Any("clean account err", err1),
 			zap.Any("clean database err", err2),
 			zap.Any("clean table err", err3),
-			zap.Any("clean accounts detail", delAcc),
-			zap.Any("clean database detail", delDB),
-			zap.Any("clean table detail", delTable))
+			zap.Any("clean accounts cnt", len(delAcc)),
+			zap.Any("clean database cnt", len(delDB)),
+			zap.Any("clean table cnt", len(delTable)))
 	}()
 
 	delAcc, err1 = cleanAccounts()
@@ -2244,6 +2420,12 @@ func (d *dynamicCtx) gamaTask(
 			tickerB.Reset(randDuration(baseFactory))
 
 		case <-tickerC.C:
+			d.gama.taskPool.Submit(func() {
+				d.gamaInsertNewTables(ctx, service, de)
+			})
+			tickerC.Reset(randDuration(baseFactory))
+
+		case <-d.insertNewTableQueue:
 			d.gama.taskPool.Submit(func() {
 				d.gamaInsertNewTables(ctx, service, de)
 			})

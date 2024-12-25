@@ -362,7 +362,7 @@ func tryGetSizeFromMTS(
 		forceUpdate = true
 	}
 
-	vals, accs, err, ok = de.QueryTableStatsByAccounts(
+	vals, accs, ok, err = de.QueryTableStatsByAccounts(
 		ctx,
 		[]int{disttae.TableStatsTableSize},
 		accs,
