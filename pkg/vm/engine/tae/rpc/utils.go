@@ -16,6 +16,7 @@ package rpc
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 
 	"github.com/matrixorigin/matrixone/pkg/common/util"
@@ -27,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"go.uber.org/zap"
 	"golang.org/x/exp/slices"
 )
@@ -223,7 +225,7 @@ func traverseCatalogForNewAccounts(c *catalog.Catalog, memo *logtail.TNUsageMemo
 				continue
 			}
 
-			objIt := tblEntry.MakeTombstoneObjectIt()
+			objIt := tblEntry.MakeTombstoneVisibleObjectIt(txnbase.MockTxnReaderWithNow())
 			for objIt.Next() {
 				objEntry := objIt.Item()
 				// PXU TODO

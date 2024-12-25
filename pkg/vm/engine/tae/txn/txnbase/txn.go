@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"runtime/trace"
 	"sync/atomic"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 
@@ -107,6 +108,10 @@ func MockTxnReaderWithStartTS(startTS types.TS) *Txn {
 			StartTS: startTS,
 		},
 	}
+}
+
+func MockTxnReaderWithNow() *Txn {
+	return MockTxnReaderWithStartTS(types.BuildTS(time.Now().UTC().UnixNano(), 0))
 }
 
 func NewPersistedTxn(
