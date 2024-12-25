@@ -1276,6 +1276,7 @@ type MysqlWriter interface {
 	WriteTextRow() error
 	WriteBinaryRow() error
 	WriteResultSetRow(mrs *MysqlResultSet, count uint64) error
+	WriteResultSetRow2(mrs *MysqlResultSet, colSlices *ColumnSlices, count uint64) error
 	WriteResponse(context.Context, *Response) error
 	WritePrepareResponse(ctx context.Context, stmt *PrepareStmt) error
 	WriteLocalInfileRequest(filepath string) error
