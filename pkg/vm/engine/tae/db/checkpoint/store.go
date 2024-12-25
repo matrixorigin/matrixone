@@ -115,7 +115,17 @@ func (s *runnerStore) GetCheckpointedLocked() types.TS {
 			ret = maxGCKP.end
 		}
 	} else {
-		ret = maxICKP.end.Next()
+		if maxICKP.IsFinished() {
+			ret = maxICKP.end.Next()
+		} else {
+			entries := s.incrementals.Items()
+			for i := len(entries) - 1; i >= 0; i-- {
+				if entries[i].IsFinished() {
+					ret = entries[i].end.Next()
+					break
+				}
+			}
+		}
 	}
 	return ret
 }
