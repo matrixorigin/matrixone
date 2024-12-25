@@ -9360,6 +9360,7 @@ func TestGlobalCheckpoint7(t *testing.T) {
 	testutils.WaitExpect(10000, func() bool {
 		return tae.Wal.GetPenddingCnt() == 0
 	})
+	assert.Equal(t, uint64(0), tae.Wal.GetPenddingCnt())
 
 	entries := tae.BGCheckpointRunner.GetAllCheckpoints()
 	for _, e := range entries {
@@ -9378,6 +9379,7 @@ func TestGlobalCheckpoint7(t *testing.T) {
 	testutils.WaitExpect(10000, func() bool {
 		return tae.Wal.GetPenddingCnt() == 0
 	})
+	assert.Equal(t, uint64(0), tae.Wal.GetPenddingCnt())
 
 	entries = tae.BGCheckpointRunner.GetAllCheckpoints()
 	for _, e := range entries {
@@ -9396,9 +9398,14 @@ func TestGlobalCheckpoint7(t *testing.T) {
 	testutils.WaitExpect(10000, func() bool {
 		return tae.Wal.GetPenddingCnt() == 0
 	})
+	assert.Equal(t, uint64(0), tae.Wal.GetPenddingCnt())
 
 	testutils.WaitExpect(10000, func() bool {
-		return len(tae.BGCheckpointRunner.GetAllGlobalCheckpoints()) == 1
+		maxGCKP := tae.BGCheckpointRunner.MaxGlobalCheckpoint()
+		if maxGCKP != nil && maxGCKP.IsFinished() {
+			return true
+		}
+		return false
 	})
 
 	entries = tae.BGCheckpointRunner.GetAllCheckpoints()

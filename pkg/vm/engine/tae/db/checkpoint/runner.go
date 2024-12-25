@@ -92,7 +92,6 @@ func (g *globalCheckpointContext) Merge(other *globalCheckpointContext) {
 	g.interval = other.interval
 	g.truncateLSN = other.truncateLSN
 	g.ckpLSN = other.ckpLSN
-	return
 }
 
 type tableAndSize struct {
@@ -333,7 +332,7 @@ func (r *runner) onGlobalCheckpointEntries(items ...any) {
 	}
 	defer func() {
 		var createdEntry string
-		logger := logutil.Info
+		logger := logutil.Debug
 		if err != nil {
 			logger = logutil.Error
 		} else {
@@ -513,6 +512,11 @@ func (r *runner) doGlobalCheckpoint(
 	)
 	entry.ckpLSN = ckpLSN
 	entry.truncateLSN = truncateLSN
+
+	logutil.Info(
+		"GCKP-Execute-Start",
+		zap.String("entry", entry.String()),
+	)
 
 	defer func() {
 		if err != nil {
