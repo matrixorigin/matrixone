@@ -495,13 +495,17 @@ func (c *MOCollector) Collect(ctx context.Context, item batchpipe.HasName) error
 			ctx = errutil.ContextWithNoReport(ctx, true)
 			return moerr.NewInternalError(ctx, "MOCollector stopped")
 		default:
-			ok, _ := c.awakeQueue.Offer(item)
+			ok, err := c.awakeQueue.Offer(item)
 			if ok {
 				v2.TraceCollectorCollectDurationHistogram.Observe(time.Since(start).Seconds())
 				return nil
 			}
+			if err != nil {
+				v2.GetTraceCollectorCollectHungCounter(item.GetName(), err.Error()).Inc()
+			} else {
+				v2.GetTraceCollectorCollectHungCounter(item.GetName(), "retry").Inc()
+			}
 			time.Sleep(time.Millisecond)
-			v2.GetTraceCollectorCollectHungCounter(item.GetName()).Inc()
 		}
 	}
 }
