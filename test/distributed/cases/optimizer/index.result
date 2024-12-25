@@ -230,5 +230,10 @@ insert into t1 select *,1111,* from generate_series(100001,150000) g;
 update t1 set c1=c1+1000000, c2=1,c3=c3-1000000 where c2=1;
 delete from t1;
 drop table t1;
+create table t1 (a timestamp, b varchar(10), key(b));
+insert into t1 select "2024-01-01 10:10:10", "a"||result from generate_series(1,200000)g;
+select * from t1 where a >= "2020-01-01 10:10:10" and a <= "2034-01-01 10:10:10" and b in ("a1");
+a    b
+2024-01-01 10:10:10    a1
 drop database d1;
 set session optimizer_hints="";
