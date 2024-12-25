@@ -16,6 +16,8 @@ package lockservice
 
 import (
 	"context"
+	"github.com/stretchr/testify/require"
+	"io"
 	"testing"
 	"time"
 
@@ -54,6 +56,39 @@ func TestLockRemote(t *testing.T) {
 			defer txn.Unlock()
 			l.lock(ctx, txn, [][]byte{{1}}, LockOptions{}, func(r pb.Result, err error) {
 				assert.NoError(t, err)
+			})
+			reuse.Free(txn, nil)
+		},
+		func(lt pb.LockTable) {},
+	)
+}
+
+func TestIssue20747(t *testing.T) {
+	runRemoteLockTableTests(
+		t,
+		pb.LockTable{ServiceID: "s1"},
+		func(s Server) {
+			s.RegisterMethodHandler(
+				pb.Method_Lock,
+				func(
+					ctx context.Context,
+					cancel context.CancelFunc,
+					req *pb.Request,
+					resp *pb.Response,
+					cs morpc.ClientSession) {
+					writeResponse(getLogger(""), cancel, resp, io.EOF, cs)
+				},
+			)
+		},
+		func(l *remoteLockTable, s Server) {
+			txnID := []byte("txn1")
+			txn := newActiveTxn(txnID, string(txnID), newFixedSlicePool(32), "")
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+			txn.Lock()
+			defer txn.Unlock()
+			l.lock(ctx, txn, [][]byte{{1}}, LockOptions{}, func(r pb.Result, err error) {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect))
 			})
 			reuse.Free(txn, nil)
 		},
