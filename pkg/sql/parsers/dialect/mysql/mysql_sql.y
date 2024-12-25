@@ -1144,14 +1144,14 @@ snapshot_object_opt:
     }
 
 create_pitr_stmt:
-    CREATE PITR not_exists_opt ident RANGE pitr_value STRING
+    CREATE PITR not_exists_opt ident FOR ACCOUNT RANGE pitr_value STRING
     {
         $$ = &tree.CreatePitr{
             IfNotExists: $3,
             Name: tree.Identifier($4.Compare()),
             Level: tree.PITRLEVELACCOUNT,
-            PitrValue: $6,
-            PitrUnit: $7,
+            PitrValue: $8,
+            PitrUnit: $9,
         }
     }
 |   CREATE PITR not_exists_opt ident FOR CLUSTER RANGE pitr_value STRING

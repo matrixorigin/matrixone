@@ -1,11 +1,11 @@
 drop pitr if exists pitr01;
-create pitr pitr01 range 1 'h';
+create pitr pitr01 for account range 1 'h';
 drop pitr if exists pitr02;
-create pitr pitr02 range 1 'd';
+create pitr pitr02 for account range 1 'd';
 drop pitr if exists pitr03;
-create pitr pitr03 range 1 'mo';
+create pitr pitr03 for account range 1 'mo';
 drop pitr if exists pitr04;
-create pitr pitr04 range 1 'y';
+create pitr pitr04 for account range 1 'y';
 -- @ignore:1,2
 show pitr;
 
@@ -16,13 +16,13 @@ create pitr pitr05 for cluster range 1 'h';
 show pitr;
 
 -- failed
-create pitr pitr01 range 1 'h';
-create pitr if not exists pitr01 range 1 'h';
+create pitr pitr01 for account range 1 'h';
+create pitr if not exists pitr01 for account range 1 'h';
 create pitr pitr07 for account acc01 database mo_catalog range 1 'h';
 create pitr pitr08 for account acc01 database mo_catalog table mo_table range 1 'h';
-create pitr pitr09 range 1 'yy';
-create pitr pitr09 range -1 'h';
-create pitr pitr09 range 2000 'h';
+create pitr pitr09 for account range 1 'yy';
+create pitr pitr09 for account range -1 'h';
+create pitr pitr09 for account range 2000 'h';
 -- @ignore:1,2
 show pitr;
 
@@ -59,12 +59,12 @@ show pitr;
 -- normal account level success
 -- @session:id=1&user=acc01:test_account&password=111
 drop pitr if exists pitr16;
-create pitr pitr16 range 1 'h';
+create pitr pitr16 for account range 1 'h';
 -- @ignore:1,2
 show pitr;
 
 -- normal account level failed
-create pitr pitr16 range 1 'h';
+create pitr pitr16 for account range 1 'h';
 create pitr pitr16 if not exists range 1 'h';
 create pitr pitr17 for cluster range 1 'h';
 create pitr pitr18 for account acc01 range 1 'h';
@@ -159,7 +159,7 @@ select * from mo_catalog.mo_pitr Where pitr_name != 'sys_mo_catalog_pitr';
 drop account if exists acc02;
 create account acc02 admin_name = 'test_account' identified by '111';
 -- @session:id=2&user=acc02:test_account&password=111
-create pitr pitr01 range 1 'h';
+create pitr pitr01 for account range 1 'h';
 -- @ignore:1,2
 show pitr;
 select sleep(1);
@@ -175,13 +175,13 @@ select * from mo_catalog.mo_pitr Where pitr_name != 'sys_mo_catalog_pitr';
 
 
 drop pitr if exists pitr01;
-create pitr pitr01 range 1 'h';
+create pitr pitr01 for account range 1 'h';
 drop pitr if exists pitr02;
-create pitr pitr02 range 1 'd';
+create pitr pitr02 for account range 1 'd';
 drop pitr if exists pitr03;
-create pitr pitr03 range 1 'mo';
+create pitr pitr03 for account range 1 'mo';
 drop pitr if exists pitr04;
-create pitr pitr04 range 1 'y';
+create pitr pitr04 for account range 1 'y';
 -- @ignore:1,2
 show pitr;
 -- @ignore:1,2
@@ -249,9 +249,9 @@ drop account if exists acc01;
 create account acc01 admin_name = 'test_account' identified by '111';
 -- @session:id=3&user=acc01:test_account&password=111
 drop pitr if exists pitr01;
-create pitr pitr01 range 1 'h';
+create pitr pitr01 for account range 1 'h';
 drop pitr if exists pitr02;
-create pitr pitr02 range 1 'd';
+create pitr pitr02 for account range 1 'd';
 
 create database db01;
 drop pitr if exists pitr10;
@@ -277,9 +277,9 @@ drop database if exists db01;
 drop account if exists acc01;
 
 drop pitr if exists pitr111;
-create pitr pitr111 range 1 'h';
+create pitr pitr111 for account range 1 'h';
 drop pitr if exists pitr122;
-create pitr pitr122 range 1 'd';
+create pitr pitr122 for account range 1 'd';
 drop pitr if exists pitr111;
 drop pitr if exists pitr122;
 
@@ -299,17 +299,17 @@ drop database if exists db01;
 
 -- @ignore:1,2
 show pitr;
-create pitr sys_mo_catalog_pitr range 1 'h';
+create pitr sys_mo_catalog_pitr for account range 1 'h';
 drop pitr if exists sys_mo_catalog_pitr;
 drop pitr if exists pitr01;
-create pitr pitr01 range 1 'h';
+create pitr pitr01 for account range 1 'h';
 -- @ignore:0,2,3,4,6,7,10
 select * from mo_catalog.mo_pitr Where pitr_name != 'sys_mo_catalog_pitr';
 -- @ignore:1,2
 show pitr;
 drop pitr if exists pitr01;
 drop pitr if exists pitr02;
-create pitr pitr02 range 1 'd';
+create pitr pitr02 for account range 1 'd';
 -- @ignore:0,2,3,4,6,7,10
 select * from mo_catalog.mo_pitr Where pitr_name != 'sys_mo_catalog_pitr';
 -- @ignore:1,2
@@ -318,7 +318,7 @@ drop pitr if exists pitr02;
 drop account if exists acc01;
 create account acc01 admin_name = 'test_account' identified by '111';
 -- @session:id=4&user=acc01:test_account&password=111
-create pitr pitr01 range 1 'mo';
+create pitr pitr01 for account range 1 'mo';
 -- @ignore:1,2
 show pitr;
 -- @session
