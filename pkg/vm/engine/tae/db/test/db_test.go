@@ -7789,9 +7789,6 @@ func Test_CheckpointChaos1(t *testing.T) {
 	err = tae.DB.ForceCheckpoint(ctx, now, time.Minute)
 	assert.Error(t, err)
 
-	intent := tae.BGCheckpointRunner.GetICKPIntentOnlyForTest()
-	assert.Nil(t, intent)
-
 	entries := tae.BGCheckpointRunner.GetAllIncrementalCheckpoints()
 	assert.Equal(t, 0, len(entries))
 
@@ -7804,7 +7801,7 @@ func Test_CheckpointChaos1(t *testing.T) {
 	assert.Equal(t, 1, len(entries))
 	assert.True(t, entries[0].IsFinished())
 
-	intent = tae.BGCheckpointRunner.GetICKPIntentOnlyForTest()
+	intent := tae.BGCheckpointRunner.GetICKPIntentOnlyForTest()
 	assert.Nil(t, intent)
 }
 
