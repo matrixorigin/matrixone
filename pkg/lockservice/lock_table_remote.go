@@ -17,6 +17,8 @@ package lockservice
 import (
 	"bytes"
 	"context"
+	"errors"
+	"io"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
@@ -116,7 +118,9 @@ func (l *remoteLockTable) lock(
 	// encounter any error, we need try to check bind is valid.
 	// And use origin error to return, because once handlerError
 	// swallows the error, the transaction will not be abort.
-	_ = l.handleError(err, true)
+	if e := l.handleError(err, true); e != nil {
+		err = e
+	}
 	cb(pb.Result{}, err)
 }
 
@@ -248,6 +252,11 @@ func (l *remoteLockTable) handleError(
 	err error,
 	mustHandleLockBindChangedErr bool,
 ) error {
+	if errors.Is(err, io.EOF) ||
+		errors.Is(err, io.ErrUnexpectedEOF) ||
+		moerr.IsMoErrCode(err, moerr.ErrUnexpectedEOF) {
+		err = moerr.NewBackendCannotConnectNoCtx(err.Error())
+	}
 	oldError := err
 	// ErrLockTableBindChanged error must already handled. Skip
 	if !mustHandleLockBindChangedErr && moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) {
