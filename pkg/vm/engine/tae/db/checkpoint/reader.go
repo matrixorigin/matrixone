@@ -38,6 +38,27 @@ func MakeMetadataBatch() *batch.Batch {
 	)
 }
 
+func MakeMetafilesReaderFromDir(
+	ctx context.Context,
+	sid string,
+	dir string,
+	fs fileservice.FileService,
+) (*MetafilesReader, error) {
+	var (
+		entries []fileservice.DirEntry
+		err     error
+	)
+	if entries, err = fileservice.SortedList(fs.List(ctx, dir)); err != nil {
+		return nil, err
+	}
+	if len(entries) == 0 {
+		return nil, nil
+	}
+	return MakeMetafilesReaderFromSortedDirEntries(
+		sid, dir, entries, fs,
+	), nil
+}
+
 func MakeMetafilesReaderFromSortedDirEntries(
 	sid string,
 	dir string,
