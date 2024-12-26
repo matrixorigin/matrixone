@@ -401,7 +401,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 
 	if catalog.IsFakePkName(node.TableDef.Pkey.PkeyColName) {
 		// for cluster by table, make it less prone to go index
-		if node.Stats.Selectivity > 0.0001 || node.Stats.Outcnt > 1000 {
+		if node.Stats.Selectivity >= 0.1 || node.Stats.Outcnt >= 1000 {
 			return nodeID
 		}
 	}
