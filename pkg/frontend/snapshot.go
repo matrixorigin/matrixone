@@ -240,6 +240,9 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 		}
 	case tree.SNAPSHOTLEVELACCOUNT:
 		snapshotForAccount = string(stmt.Object.ObjName)
+		if len(snapshotForAccount) == 0 {
+			snapshotForAccount = currentAccount
+		}
 		// check account exists or not and get accountId
 		getAccountIdFunc := func(accountName string) (accountId uint64, rtnErr error) {
 			var erArray []ExecResult
