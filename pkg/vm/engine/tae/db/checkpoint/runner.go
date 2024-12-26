@@ -67,6 +67,33 @@ type globalCheckpointContext struct {
 	ckpLSN      uint64
 }
 
+func (g globalCheckpointContext) String() string {
+	return fmt.Sprintf(
+		"GCTX[%v][%s][%d,%d][%s]",
+		g.force,
+		g.end.ToString(),
+		g.truncateLSN,
+		g.ckpLSN,
+		g.interval.String(),
+	)
+}
+
+func (g *globalCheckpointContext) Merge(other *globalCheckpointContext) {
+	if other == nil {
+		return
+	}
+	if other.force {
+		g.force = true
+	}
+	if other.end.LE(&g.end) {
+		return
+	}
+	g.end = other.end
+	g.interval = other.interval
+	g.truncateLSN = other.truncateLSN
+	g.ckpLSN = other.ckpLSN
+}
+
 type tableAndSize struct {
 	tbl   *catalog.TableEntry
 	asize int
@@ -292,36 +319,81 @@ func (r *runner) GetCheckpointMetaFiles() map[string]struct{} {
 }
 
 func (r *runner) onGlobalCheckpointEntries(items ...any) {
-	maxEnd := types.TS{}
-	for _, item := range items {
-		ctx := item.(*globalCheckpointContext)
-		doCheckpoint := false
-		maxCkp := r.MaxGlobalCheckpoint()
-		if maxCkp != nil {
-			maxEnd = maxCkp.end
-		}
-		if ctx.end.LE(&maxEnd) {
-			logutil.Warn(
-				"OnGlobalCheckpointEntries-Skip",
-				zap.String("checkpoint", ctx.end.ToString()))
-			continue
-		}
-		if ctx.force {
-			doCheckpoint = true
+	var (
+		err              error
+		mergedCtx        *globalCheckpointContext
+		fromCheckpointed types.TS
+		toCheckpointed   types.TS
+		now              = time.Now()
+	)
+	executor := r.executor.Load()
+	if executor == nil {
+		err = ErrCheckpointDisabled
+	}
+	defer func() {
+		var createdEntry string
+		logger := logutil.Debug
+		if err != nil {
+			logger = logutil.Error
 		} else {
-			entriesCount := r.GetPenddingIncrementalCount()
-			if r.globalPolicy.Check(entriesCount) {
-				doCheckpoint = true
+			toEntry := r.store.MaxGlobalCheckpoint()
+			if toEntry != nil {
+				toCheckpointed = toEntry.GetEnd()
+				createdEntry = toEntry.String()
 			}
 		}
-		if doCheckpoint {
-			if _, err := r.doGlobalCheckpoint(
-				ctx.end, ctx.ckpLSN, ctx.truncateLSN, ctx.interval,
-			); err != nil {
-				continue
-			}
+
+		if err != nil || time.Since(now) > time.Second*10 || toCheckpointed.GT(&fromCheckpointed) {
+			logger(
+				"GCKP-Execute-End",
+				zap.Duration("cost", time.Since(now)),
+				zap.String("ctx", mergedCtx.String()),
+				zap.String("created", createdEntry),
+				zap.Error(err),
+			)
+		}
+	}()
+
+	for _, item := range items {
+		oneCtx := item.(*globalCheckpointContext)
+		if mergedCtx == nil {
+			mergedCtx = oneCtx
+		} else {
+			mergedCtx.Merge(oneCtx)
 		}
 	}
+	if mergedCtx == nil {
+		return
+	}
+
+	fromEntry := r.store.MaxGlobalCheckpoint()
+	if fromEntry != nil {
+		fromCheckpointed = fromEntry.GetEnd()
+	}
+
+	if mergedCtx.end.LE(&fromCheckpointed) {
+		logutil.Info(
+			"GCKP-Execute-Skip",
+			zap.String("have", fromCheckpointed.ToString()),
+			zap.String("want", mergedCtx.end.ToString()),
+		)
+		return
+	}
+
+	// [force==false and ickpCount < count policy]
+	if !mergedCtx.force {
+		ickpCount := r.store.GetPenddingIncrementalCount()
+		if !r.globalPolicy.Check(ickpCount) {
+			logutil.Debug(
+				"GCKP-Execute-Skip",
+				zap.Int("pending-ickp", ickpCount),
+				zap.String("want", mergedCtx.end.ToString()),
+			)
+			return
+		}
+	}
+
+	err = executor.RunGCKP(mergedCtx)
 }
 
 func (r *runner) onGCCheckpointEntries(items ...any) {
@@ -432,20 +504,24 @@ func (r *runner) doGlobalCheckpoint(
 	)
 	now := time.Now()
 
-	entry = NewCheckpointEntry(r.rt.SID(), types.TS{}, end.Next(), ET_Global)
+	entry = NewCheckpointEntry(
+		r.rt.SID(),
+		types.TS{},
+		end.Next(),
+		ET_Global,
+	)
 	entry.ckpLSN = ckpLSN
 	entry.truncateLSN = truncateLSN
 
 	logutil.Info(
-		"GCKP-Start",
+		"GCKP-Execute-Start",
 		zap.String("entry", entry.String()),
-		zap.String("ts", end.ToString()),
 	)
 
 	defer func() {
 		if err != nil {
 			logutil.Error(
-				"GCKP-Error",
+				"GCKP-Execute-Error",
 				zap.String("entry", entry.String()),
 				zap.String("phase", errPhase),
 				zap.Error(err),
@@ -455,38 +531,51 @@ func (r *runner) doGlobalCheckpoint(
 			fields = append(fields, zap.Duration("cost", time.Since(now)))
 			fields = append(fields, zap.String("entry", entry.String()))
 			logutil.Info(
-				"GCKP-End",
+				"GCKP-Execute-End",
 				fields...,
 			)
 		}
 	}()
 
+	if ok := r.store.AddGCKPIntent(entry); !ok {
+		err = ErrBadIntent
+		return
+	}
+
+	var data *logtail.CheckpointData
 	factory := logtail.GlobalCheckpointDataFactory(r.rt.SID(), entry.end, interval)
-	data, err := factory(r.catalog)
-	if err != nil {
+
+	if data, err = factory(r.catalog); err != nil {
+		r.store.RemoveGCKPIntent()
 		errPhase = "collect"
 		return
 	}
-	fields = data.ExportStats("")
 	defer data.Close()
+
+	fields = data.ExportStats("")
 
 	cnLocation, tnLocation, files, err := data.WriteTo(
 		r.rt.Fs.Service, r.options.checkpointBlockRows, r.options.checkpointSize,
 	)
 	if err != nil {
+		r.store.RemoveGCKPIntent()
 		errPhase = "flush"
 		return
 	}
 
 	entry.SetLocation(cnLocation, tnLocation)
+
 	files = append(files, cnLocation.Name().String())
-	r.store.TryAddNewGlobalCheckpointEntry(entry)
-	entry.SetState(ST_Finished)
 	var name string
 	if name, err = r.saveCheckpoint(entry.start, entry.end); err != nil {
+		r.store.RemoveGCKPIntent()
 		errPhase = "save"
 		return
 	}
+	defer func() {
+		entry.SetState(ST_Finished)
+	}()
+
 	files = append(files, name)
 
 	fileEntry, err := store.BuildFilesEntry(files)
@@ -648,6 +737,14 @@ func (r *runner) softScheduleCheckpoint(ts *types.TS) (ret *CheckpointEntry, err
 	return
 }
 
+func (r *runner) TryTriggerExecuteGCKP(ctx *globalCheckpointContext) (err error) {
+	if r.disabled.Load() {
+		return
+	}
+	_, err = r.globalCheckpointQueue.Enqueue(ctx)
+	return
+}
+
 func (r *runner) TryTriggerExecuteICKP() (err error) {
 	if r.disabled.Load() {
 		return
@@ -699,6 +796,16 @@ func (r *runner) TryScheduleCheckpoint(
 	}
 
 	return intent, nil
+}
+
+func (r *runner) getRunningGCKPJob() (job *checkpointJob, err error) {
+	executor := r.executor.Load()
+	if executor == nil {
+		err = ErrExecutorClosed
+		return
+	}
+	job = executor.RunningGCKPJob()
+	return
 }
 
 func (r *runner) fillDefaults() {

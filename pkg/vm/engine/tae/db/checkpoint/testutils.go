@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"go.uber.org/zap"
 )
 
@@ -97,39 +96,73 @@ func (r *runner) ForceGCKP(
 		return
 	}
 
-	_, err = r.globalCheckpointQueue.Enqueue(&globalCheckpointContext{
+	request := &globalCheckpointContext{
 		force:    true,
 		end:      maxEntry.end,
 		interval: interval,
-	})
+	}
 
-	// TODO: wait with done channel later
-	op := func() (ok bool, err error) {
-		select {
-		case <-r.ctx.Done():
-			err = context.Cause(r.ctx)
-			return
-		case <-ctx.Done():
-			err = context.Cause(ctx)
-			return
-		default:
-		}
-		global := r.store.MaxGlobalCheckpoint()
-		if global == nil {
-			return false, nil
-		}
-		ok = global.end.GE(&end)
+	if err = r.TryTriggerExecuteGCKP(request); err != nil {
 		return
 	}
 
-	waitTime := time.Minute
-	err = common.RetryWithIntervalAndTimeout(
-		op,
-		waitTime,
-		waitTime/20,
-		false,
-	)
-	return
+	var job *checkpointJob
+
+	var retryTimes int
+
+	wait := func() {
+		interval := time.Millisecond * 10 * time.Duration(retryTimes+1)
+		time.Sleep(interval)
+		if retryTimes < 10 {
+			retryTimes++
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, time.Minute*2)
+	defer cancel()
+
+	for {
+		select {
+		case <-ctx.Done():
+			err = context.Cause(ctx)
+			return
+		case <-r.ctx.Done():
+			err = context.Cause(r.ctx)
+			return
+		default:
+		}
+
+		global := r.store.MaxGlobalCheckpoint()
+		// if the max global contains the end, quick return
+		if global != nil && global.IsFinished() && global.end.GE(&end) {
+			return
+		}
+
+		if job, err = r.getRunningGCKPJob(); err != nil {
+			return
+		}
+
+		// if there is no running job or the running job is not the right one
+		// try to trigger the global checkpoint and wait for the next round
+		if job == nil || job.gckpCtx.end.LT(&end) {
+			wait()
+			continue
+		}
+
+		// [job != nil && job.gckpCtx.end >= end]
+		// wait for the job to finish
+		select {
+		case <-ctx.Done():
+			err = context.Cause(ctx)
+			return
+		case <-r.ctx.Done():
+			err = context.Cause(r.ctx)
+			return
+		case <-job.WaitC():
+			err = job.Err()
+			return
+		}
+	}
 }
 
 func (r *runner) ForceICKP(ctx context.Context, ts *types.TS) (err error) {
