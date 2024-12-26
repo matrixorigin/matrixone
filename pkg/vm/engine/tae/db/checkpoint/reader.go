@@ -70,11 +70,9 @@ func MakeMetafilesReaderFromSortedDirEntries(
 ) *MetafilesReader {
 	files := make([]string, 0, len(sortedDirEntries))
 	for _, entry := range sortedDirEntries {
-		if entry.IsDir {
-			continue
+		if !entry.IsDir && IsMetadataFile(entry.Name) {
+			files = append(files, entry.Name)
 		}
-		// FIXME: check file name is valid
-		files = append(files, entry.Name)
 	}
 	return NewMetafilesReader(sid, dir, files, verbose, fs)
 }
