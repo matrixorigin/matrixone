@@ -18,6 +18,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -38,15 +39,16 @@ func MakeMetadataBatch() *batch.Batch {
 	)
 }
 
-func MakeMetafilesReaderFromDir(
+func MakeMetafilesReader(
 	ctx context.Context,
 	sid string,
-	dir string,
+	verbose int,
 	fs fileservice.FileService,
 ) (*MetafilesReader, error) {
 	var (
 		entries []fileservice.DirEntry
 		err     error
+		dir     = CheckpointDir
 	)
 	if entries, err = fileservice.SortedList(fs.List(ctx, dir)); err != nil {
 		return nil, err
@@ -55,7 +57,7 @@ func MakeMetafilesReaderFromDir(
 		return nil, nil
 	}
 	return MakeMetafilesReaderFromSortedDirEntries(
-		sid, dir, entries, fs,
+		sid, dir, entries, verbose, fs,
 	), nil
 }
 
@@ -63,6 +65,7 @@ func MakeMetafilesReaderFromSortedDirEntries(
 	sid string,
 	dir string,
 	sortedDirEntries []fileservice.DirEntry,
+	verbose int,
 	fs fileservice.FileService,
 ) *MetafilesReader {
 	files := make([]string, 0, len(sortedDirEntries))
@@ -73,37 +76,40 @@ func MakeMetafilesReaderFromSortedDirEntries(
 		// FIXME: check file name is valid
 		files = append(files, entry.Name)
 	}
-	return NewMetafilesReader(sid, dir, files, fs)
+	return NewMetafilesReader(sid, dir, files, verbose, fs)
 }
 
 func NewMetafilesReader(
 	sid string,
 	dir string,
 	files []string,
+	verbose int,
 	fs fileservice.FileService,
 ) *MetafilesReader {
 	return &MetafilesReader{
-		sid:   sid,
-		dir:   dir,
-		files: files,
-		fs:    fs,
+		sid:     sid,
+		dir:     dir,
+		files:   files,
+		verbose: verbose,
+		fs:      fs,
 	}
 }
 
 type MetafilesReader struct {
-	sid   string
-	dir   string
-	files []string
-	idx   int
-	fs    fileservice.FileService
+	sid     string
+	dir     string
+	files   []string
+	idx     int
+	verbose int
+	fs      fileservice.FileService
 }
 
-func (r *MetafilesReader) Read(
+func (r *MetafilesReader) Next(
 	ctx context.Context,
 	mp *mpool.MPool,
-) (bats []*batch.Batch, release func(), isEnd bool, err error) {
+) (bats []*batch.Batch, release func(), err error) {
 	if r.idx >= len(r.files) {
-		isEnd = true
+		err = moerr.GetOkStopCurrRecur()
 		return
 	}
 	var (
@@ -157,4 +163,10 @@ func (r *MetafilesReader) Read(
 		ctx, nil, mp,
 	)
 	return
+}
+
+func (r *MetafilesReader) Close() {
+	r.fs = nil
+	r.files = nil
+	r.idx = 0
 }

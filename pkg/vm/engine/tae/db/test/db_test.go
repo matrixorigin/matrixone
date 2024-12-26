@@ -7748,6 +7748,35 @@ func Test_CheckpointChaos2(t *testing.T) {
 	maxGCKP2 := tae.DB.BGCheckpointRunner.MaxGlobalCheckpoint()
 	assert.Equal(t, maxICKP.GetEnd(), maxICKP2.GetEnd())
 	assert.Equal(t, maxGCKP.GetEnd(), maxGCKP2.GetEnd())
+
+	reader, err := checkpoint.MakeMetafilesReader(
+		ctx,
+		tae.DB.Opts.SID,
+		0,
+		tae.DB.Runtime.Fs.Service,
+	)
+	assert.NoError(t, err)
+	assert.NotNil(t, reader)
+	defer reader.Close()
+
+	cnt := 0
+	releaseCnt := 0
+
+	for {
+		_, release, err := reader.Next(ctx, common.DebugAllocator)
+		if err != nil && moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
+			break
+		}
+		assert.NoError(t, err)
+		cnt++
+		if release != nil {
+			release()
+			releaseCnt++
+		}
+	}
+	assert.Equal(t, cnt, releaseCnt)
+	assert.Equal(t, 3, cnt)
+
 }
 
 func TestGCCatalog1(t *testing.T) {
