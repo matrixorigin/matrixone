@@ -15,9 +15,8 @@
 package queryservice
 
 import (
-	"sync"
-
 	"github.com/matrixorigin/matrixone/pkg/pb/status"
+	"sync"
 )
 
 // Session is an interface which should have the following methods.
