@@ -82,6 +82,64 @@ func (c *CkpReplayer) Close() {
 	}
 }
 
+func (c *CkpReplayer) DoReplay() (err error) {
+	var (
+		// now   = time.Now()
+		files []fileservice.DirEntry
+	)
+	if files, err = fileservice.SortedList(c.r.rt.Fs.ListDir(c.dir)); err != nil {
+		return
+	}
+	if len(files) == 0 {
+		return
+	}
+
+	var (
+		metaEntries      = make([]MetaFile, 0)
+		compactedEntries = make([]MetaFile, 0)
+	)
+	// classify the files into metaEntries and compactedEntries
+	for _, file := range files {
+		c.r.store.AddMetaFile(file.Name)
+		start, end, ext := blockio.DecodeCheckpointMetadataFileName(file.Name)
+		entry := MetaFile{
+			start: start,
+			end:   end,
+			name:  file.Name,
+		}
+		if ext == blockio.CompactedExt {
+			compactedEntries = append(compactedEntries, entry)
+		} else if IsMetadataFile(file.Name) {
+			metaEntries = append(metaEntries, entry)
+		}
+	}
+
+	sort.Slice(metaEntries, func(i, j int) bool {
+		return metaEntries[i].end.LT(&metaEntries[j].end)
+	})
+	sort.Slice(compactedEntries, func(i, j int) bool {
+		return compactedEntries[i].end.LT(&compactedEntries[j].end)
+	})
+
+	// replay the compactedEntries
+
+	// replay the metaEntries
+	if len(metaEntries) > 0 {
+		reader := NewMetafilesReader(
+			c.r.rt.SID(),
+			c.dir,
+			[]string{metaEntries[len(metaEntries)-1].name},
+			0,
+			c.r.rt.Fs.Service,
+		)
+		getter := MetadataEntryGetter{
+			reader: reader,
+		}
+		getter.NextBatch(c.r.ctx, nil, common.CheckpointAllocator)
+	}
+	return
+}
+
 func (c *CkpReplayer) ReadCkpFiles() (err error) {
 	r := c.r
 	ctx := r.ctx
