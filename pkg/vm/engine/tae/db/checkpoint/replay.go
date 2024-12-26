@@ -100,7 +100,7 @@ func (c *CkpReplayer) DoReplay() (err error) {
 	)
 	// classify the files into metaEntries and compactedEntries
 	for _, file := range files {
-		c.r.store.AddMetaFile(file.Name)
+		// c.r.store.AddMetaFile(file.Name)
 		start, end, ext := blockio.DecodeCheckpointMetadataFileName(file.Name)
 		entry := MetaFile{
 			start: start,
@@ -135,12 +135,24 @@ func (c *CkpReplayer) DoReplay() (err error) {
 		getter := MetadataEntryGetter{
 			reader: reader,
 		}
-		getter.NextBatch(c.r.ctx, nil, common.CheckpointAllocator)
+		var entries []*CheckpointEntry
+		if entries, err = getter.NextBatch(
+			c.r.ctx, nil, common.CheckpointAllocator,
+		); err != nil {
+			return
+		}
+		for _, entry := range entries {
+			logutil.Info(
+				"DEBUG-REPLAY",
+				zap.String("entry", entry.String()),
+			)
+		}
 	}
 	return
 }
 
 func (c *CkpReplayer) ReadCkpFiles() (err error) {
+	// c.DoReplay()
 	r := c.r
 	ctx := r.ctx
 

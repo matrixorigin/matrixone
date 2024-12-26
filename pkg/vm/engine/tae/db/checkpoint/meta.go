@@ -85,7 +85,7 @@ func (getter *MetadataEntryGetter) processOneBatch(
 	versionCol := vector.MustFixedColWithTypeCheck[uint32](bat.Vecs[CheckpointAttr_VersionIdx])
 	lsnCol := vector.MustFixedColWithTypeCheck[uint64](bat.Vecs[CheckpointAttr_CheckpointLSNIdx])
 	trancateLsnCol := vector.MustFixedColWithTypeCheck[uint64](bat.Vecs[CheckpointAttr_TruncateLSNIdx])
-	typeCol := vector.MustFixedColWithTypeCheck[uint8](bat.Vecs[CheckpointAttr_TypeIdx])
+	typeCol := vector.MustFixedColWithTypeCheck[int8](bat.Vecs[CheckpointAttr_TypeIdx])
 	for i, length := 0, bat.RowCount(); i < length; i++ {
 		start := startCol[i]
 		end := endCol[i]
