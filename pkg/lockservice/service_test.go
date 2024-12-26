@@ -1486,6 +1486,53 @@ func TestIssue3693(t *testing.T) {
 
 }
 
+func TestKeepTnVersion(t *testing.T) {
+	runLockServiceTestsWithLevel(
+		t,
+		zapcore.DebugLevel,
+		[]string{"s1"},
+		time.Millisecond*200,
+		func(alloc *lockTableAllocator, s []*service) {
+			l := s[0]
+
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				time.Second*10)
+			defer cancel()
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			_, err := l.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn1"),
+				option)
+			require.NoError(t, err)
+			require.NoError(t, l.Unlock(ctx, []byte("txn1"), timestamp.Timestamp{}))
+
+			b := alloc.getServiceBindsWithoutPrefix("s1")
+			b.disable()
+
+			for {
+				if l.tnVersion == alloc.version {
+					break
+				}
+				select {
+				case <-ctx.Done():
+					panic("timeout bug")
+				default:
+				}
+			}
+		},
+		nil,
+	)
+
+}
+
 func TestReLockSuccWithLockTableBindChanged(t *testing.T) {
 	runLockServiceTestsWithLevel(
 		t,

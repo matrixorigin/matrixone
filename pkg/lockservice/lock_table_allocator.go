@@ -842,12 +842,12 @@ func (l *lockTableAllocator) handleKeepLockTableBind(
 		req.KeepLockTableBind.ServiceID,
 		req.KeepLockTableBind.Version,
 	)
+	resp.KeepLockTableBind.Version = l.version
 	if !resp.KeepLockTableBind.OK {
 		// resp.KeepLockTableBind.Status = pb.Status_ServiceCanRestart
 		writeResponse(l.logger, cancel, resp, nil, cs)
 		return
 	}
-	resp.KeepLockTableBind.Version = l.version
 	b := l.getServiceBinds(req.KeepLockTableBind.ServiceID)
 	if b.isStatus(pb.Status_ServiceLockEnable) {
 		if req.KeepLockTableBind.Status != pb.Status_ServiceLockEnable {
