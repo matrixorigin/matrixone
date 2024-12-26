@@ -113,4 +113,11 @@ drop table t1;
 create table t1 (a timestamp, b varchar(10), key(b));
 insert into t1 select "2024-01-01 10:10:10", "a"||result from generate_series(1,200000)g;
 select * from t1 where a >= "2020-01-01 10:10:10" and a <= "2034-01-01 10:10:10" and b in ("a1");
+drop table if exists t14;
+CREATE TABLE t14 (`pseudo` char(35) NOT NULL default '',`pseudo1` char(35) NOT NULL default '',
+`same` tinyint(1) unsigned NOT NULL default '1',PRIMARY KEY  (`pseudo1`),KEY `pseudo` (`pseudo`));
+INSERT INTO t14 (pseudo,pseudo1,same) VALUES ('joce', 'testtt', 1),('joce', 'tsestset', 1),('dekad', 'joce', 1);
+-- @separator:table
+explain SELECT pseudo1 FROM t14 WHERE pseudo='joce';
+SELECT pseudo1 FROM t14 WHERE pseudo='joce';
 drop database d1;

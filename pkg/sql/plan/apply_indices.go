@@ -652,7 +652,7 @@ func (builder *QueryBuilder) tryIndexOnlyScan(idxDef *IndexDef, node *plan.Node,
 			colName := node.TableDef.Cols[i].Name
 			found := false
 			for j := range idxDef.Parts {
-				if idxDef.Parts[j] == colName {
+				if catalog.ResolveAlias(idxDef.Parts[j]) == colName {
 					found = true
 					break
 				}
@@ -713,7 +713,7 @@ func (builder *QueryBuilder) tryIndexOnlyScan(idxDef *IndexDef, node *plan.Node,
 		colIdx := node.TableDef.Name2ColIndex[idxDef.Parts[0]]
 		idxColMap[[2]int32{node.BindingTags[0], colIdx}] = leadingColExpr
 	} else {
-		for i := 0; i < numKeyParts; i++ {
+		for i := 0; i < numParts; i++ {
 			colIdx := node.TableDef.Name2ColIndex[catalog.ResolveAlias(idxDef.Parts[i])]
 			origType := node.TableDef.Cols[colIdx].Typ
 			mappedExpr, _ := MakeSerialExtractExpr(builder.GetContext(), DeepCopyExpr(leadingColExpr), origType, int64(i))
