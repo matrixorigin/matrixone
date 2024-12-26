@@ -7725,6 +7725,7 @@ func Test_CheckpointChaos2(t *testing.T) {
 	rmFn()
 	ctx, cancel = context.WithTimeout(context.Background(), time.Second*20)
 	defer cancel()
+	assert.NoError(t, tae.DB.BGCheckpointRunner.WaitRunningICKPDoneForTest(ctx))
 	err = tae.DB.ForceGlobalCheckpoint(ctx, maxICKP.GetEnd(), 0, 0)
 	assert.NoError(t, err)
 	maxGCKP = tae.DB.BGCheckpointRunner.MaxGlobalCheckpoint()

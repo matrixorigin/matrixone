@@ -54,7 +54,6 @@ func ReadEntriesFromMeta(
 			entries = append(entries, batchEntries...)
 		}
 	}
-	return
 }
 
 type MetadataEntryGetter struct {
