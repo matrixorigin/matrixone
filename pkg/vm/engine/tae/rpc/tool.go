@@ -1383,6 +1383,7 @@ func (c *gcDumpArg) Run() (err error) {
 		return moerr.NewInfoNoCtx("it is an online command")
 	}
 	ctx := context.Background()
+	now := time.Now().Unix()
 
 	err = os.MkdirAll(filepath.Dir(c.file), 0755)
 	if err != nil {
@@ -1411,7 +1412,7 @@ func (c *gcDumpArg) Run() (err error) {
 		}
 	}
 
-	c.res = fmt.Sprintf("Dumped pinned objects to file, file count %v", len(pinnedObjects))
+	c.res = fmt.Sprintf("Dumped pinned objects to file, file count %v, start tmie %v", len(pinnedObjects), now)
 
 	return
 }
@@ -1450,16 +1451,12 @@ func (c *gcDumpArg) getCheckpointObject(ctx context.Context, pinned map[string]b
 	for _, entry := range entries {
 		cnLoc := entry.GetLocation()
 		cnObj := cnLoc.Name().String()
-		if _, ok := pinned[cnObj]; !ok {
-			logutil.Infof("asdf ckp cn location: %v", cnObj)
-			pinned[cnObj] = true
-		}
+		logutil.Infof("asdf ckp cn location: %v", cnObj)
+		pinned[cnObj] = true
+
 		tnLoc := entry.GetTNLocation()
 		tnObj := tnLoc.Name().String()
-		if _, ok := pinned[tnObj]; !ok {
-			logutil.Infof("asdf ckp tn location: %v", tnObj)
-			pinned[tnObj] = true
-		}
+		pinned[tnObj] = true
 
 		data, err := getCkpData(ctx, entry, c.ctx.db.Runtime.Fs)
 		if err != nil {
@@ -1488,9 +1485,6 @@ func getObjectsFromCkpMeta(data *logtail.CheckpointData, pinned map[string]bool)
 			}
 			loc := objectio.Location(v)
 			obj := loc.Name().String()
-			if _, ok := pinned[obj]; !ok {
-				logutil.Infof("asdf ckp meta: %v", obj)
-			}
 			pinned[obj] = true
 		}
 	}
@@ -1504,9 +1498,6 @@ func getObjectsFromCkpMeta(data *logtail.CheckpointData, pinned map[string]bool)
 		}
 		loc := objectio.Location(v)
 		obj := loc.Name().String()
-		if _, ok := pinned[obj]; !ok {
-			logutil.Infof("asdf ckp tn meta: %v", obj)
-		}
 		pinned[obj] = true
 	}
 
@@ -1519,9 +1510,6 @@ func getObjectsFromCkpData(data *logtail.CheckpointData, pinned map[string]bool)
 	for i := 0; i < vec.Length(); i++ {
 		v := vec.Get(i).([]byte)
 		obj := objectio.ObjectStats(v)
-		if _, ok := pinned[obj.ObjectName().String()]; !ok {
-			logutil.Infof("asdf ckp object: %v", obj.ObjectName().String())
-		}
 		pinned[obj.ObjectName().String()] = true
 	}
 
@@ -1530,9 +1518,6 @@ func getObjectsFromCkpData(data *logtail.CheckpointData, pinned map[string]bool)
 	for i := 0; i < vec.Length(); i++ {
 		v := vec.Get(i).([]byte)
 		obj := objectio.ObjectStats(v)
-		if _, ok := pinned[obj.ObjectName().String()]; !ok {
-			logutil.Infof("asdf ckp tombstone: %v", obj.ObjectName().String())
-		}
 		pinned[obj.ObjectName().String()] = true
 	}
 
@@ -1540,10 +1525,11 @@ func getObjectsFromCkpData(data *logtail.CheckpointData, pinned map[string]bool)
 }
 
 type gcRemoveArg struct {
-	file   string
-	oriDir string
-	tarDir string
-	res    string
+	file    string
+	oriDir  string
+	tarDir  string
+	modTime int64
+	res     string
 }
 
 func (c *gcRemoveArg) PrepareCommand() *cobra.Command {
@@ -1559,6 +1545,7 @@ func (c *gcRemoveArg) PrepareCommand() *cobra.Command {
 	gcRemoveCmd.Flags().StringP("file", "f", "", "file to remove")
 	gcRemoveCmd.Flags().StringP("ori", "o", "", "original directory")
 	gcRemoveCmd.Flags().StringP("tar", "t", "", "target directory")
+	gcRemoveCmd.Flags().Int64P("mod", "m", 0, "modified time")
 
 	return gcRemoveCmd
 }
@@ -1567,6 +1554,7 @@ func (c *gcRemoveArg) FromCommand(cmd *cobra.Command) (err error) {
 	c.file, _ = cmd.Flags().GetString("file")
 	c.oriDir, _ = cmd.Flags().GetString("ori")
 	c.tarDir, _ = cmd.Flags().GetString("tar")
+	c.modTime, _ = cmd.Flags().GetInt64("mod")
 	return nil
 }
 
@@ -1622,9 +1610,12 @@ func (c *gcRemoveArg) Run() (err error) {
 		if err != nil {
 			return moerr.NewInfoNoCtx(fmt.Sprintf("failed to get file info %v, %v", obj.Name(), err))
 		}
-		modTime := info.ModTime()
-		if time.Since(modTime).Hours() < 24*7 {
-			continue
+		modTime := info.ModTime().Unix()
+		if c.modTime != 0 {
+			logutil.Infof("asdf obj %v mod time: %v, dump time: %v after: %v", obj.Name(), modTime, c.modTime, modTime > c.modTime)
+			if modTime > c.modTime {
+				continue
+			}
 		}
 		toMove = append(toMove, obj.Name())
 	}

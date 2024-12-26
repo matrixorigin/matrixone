@@ -1028,7 +1028,7 @@ func (data *CheckpointData) WriteTo(
 		var bat *containers.Batch
 		var size int
 		var blks []objectio.BlockObject
-		if objectSize > checkpointSize {
+		if objectSize > 200*1024 {
 			fileNum++
 			blks, _, err = writer.Sync(context.Background())
 			if err != nil {
