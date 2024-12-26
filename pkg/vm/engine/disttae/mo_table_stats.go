@@ -256,11 +256,11 @@ const (
 
 	findAccountByTable = `
 				select 
-					account_id, table_id
+					account_id, rel_id
 				from 
 				    %s.%s
 				where 
-				    table_id in (%v);`
+				    rel_id in (%v);`
 )
 
 const (
@@ -2654,7 +2654,7 @@ func correctAccountForCatalogTables(
 
 	if len(mm) > 0 {
 		tmpStr, release := intsJoin(mm, ",")
-		sql := fmt.Sprintf(findAccountByTable, catalog.MO_CATALOG, catalog.MO_TABLE_STATS, tmpStr)
+		sql := fmt.Sprintf(findAccountByTable, catalog.MO_CATALOG, catalog.MO_TABLES, tmpStr)
 		release()
 
 		sqlRet := eng.executeSQL(ctx, sql, "correct account for catalog tables")
@@ -2671,14 +2671,15 @@ func correctAccountForCatalogTables(
 				return
 			}
 
-			tid := uint64(val.(int64))
+			tid := val.(uint64)
 			idx := slices.Index(resp.TableIds, tid)
 
 			if val, err = sqlRet.Value(ctx, i, 0); err != nil {
 				return
 			}
 
-			aid := uint64(val.(int64))
+			aid := uint64(val.(uint32))
+
 			resp.AccIds[idx] = aid
 		}
 	}
