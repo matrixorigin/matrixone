@@ -452,8 +452,8 @@ func initTraceMetric(ctx context.Context, st metadata.ServiceType, cfg *Config, 
 	if !SV.DisableTrace || !SV.DisableMetric {
 		writerFactory = export.GetWriterFactory(fs, UUID, nodeRole, !SV.DisableSqlWriter)
 		initWG.Add(1)
+		collector := export.NewMOCollector(ctx, cfg.mustGetServiceUUID(), export.WithOBCollectorConfig(&SV.OBCollectorConfig))
 		stopper.RunNamedTask("trace", func(ctx context.Context) {
-			collector := export.NewMOCollector(ctx, cfg.mustGetServiceUUID(), export.WithOBCollectorConfig(&SV.OBCollectorConfig))
 			err, act := motrace.InitWithConfig(ctx,
 				&SV,
 				motrace.WithService(cfg.mustGetServiceUUID()),
@@ -472,11 +472,11 @@ func initTraceMetric(ctx context.Context, st metadata.ServiceType, cfg *Config, 
 			<-ctx.Done()
 			logutil.Info("motrace receive shutdown signal, wait other services shutdown complete.")
 			serviceWG.Wait()
-			logutil.Info("Shutdown service complete.")
 			// flush trace/log/error framework
 			if err = motrace.Shutdown(ctx); err != nil {
 				logutil.Warn("Shutdown trace", logutil.ErrorField(err), logutil.NoReportFiled())
 			}
+			logutil.Info("Shutdown motrace complete.")
 		})
 		initWG.Wait()
 	}
@@ -490,6 +490,7 @@ func initTraceMetric(ctx context.Context, st metadata.ServiceType, cfg *Config, 
 			}
 			<-ctx.Done()
 			mometric.StopMetricSync()
+			logutil.Info("Shutdown mometric complete.")
 		})
 	}
 	if err = export.InitMerge(ctx, &SV); err != nil {

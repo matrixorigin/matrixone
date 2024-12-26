@@ -63,6 +63,9 @@ const discardCollectRetry = time.Millisecond / 10
 type bufferHolder struct {
 	c   *MOCollector
 	ctx context.Context
+	// background loop
+	bgCtx    context.Context
+	bgCancel context.CancelFunc
 	// name like a type
 	name string
 	// buffer is instance of batchpipe.ItemBuffer with its own elimination algorithm(like LRU, LFU)
@@ -97,6 +100,7 @@ func newBufferHolder(ctx context.Context, name batchpipe.HasName, impl motrace.P
 		signal: signal,
 		impl:   impl,
 	}
+	b.bgCtx, b.bgCancel = context.WithCancel(b.ctx)
 	b.bufferPool = &sync.Pool{}
 	b.bufferCnt.Swap(0)
 	b.bufferPool.New = func() interface{} {
@@ -161,11 +165,19 @@ func (b *bufferHolder) discardBuffer(buffer motrace.Buffer) {
 
 // Add call buffer.Add(), while bufferHolder is NOT readonly
 func (b *bufferHolder) Add(item batchpipe.HasName, needAggr bool) {
+	locked := true
 	b.mux.Lock()
+	unlock := func() {
+		if locked {
+			locked = false
+			b.mux.Unlock()
+		}
+	}
+	defer unlock()
 	if b.stopped {
-		b.mux.Unlock()
 		return
 	}
+
 	if b.buffer == nil {
 		b.buffer = b.getBuffer()
 	}
@@ -176,7 +188,6 @@ func (b *bufferHolder) Add(item batchpipe.HasName, needAggr bool) {
 			if err == nil {
 				// aggred, then return
 				i.Free()
-				b.mux.Unlock()
 				return
 			}
 		}
@@ -184,7 +195,7 @@ func (b *bufferHolder) Add(item batchpipe.HasName, needAggr bool) {
 
 	buf := b.buffer
 	buf.Add(item)
-	b.mux.Unlock()
+	unlock()
 	if buf.ShouldFlush() {
 		b.signal(b)
 	} else if checker, is := item.(table.NeedSyncWrite); is && checker.NeedSyncWrite() {
@@ -216,6 +227,10 @@ mainL:
 			logger.Info("handle aggr", zap.Int("records", len(results)), zap.Time("end", end))
 			// END> handle aggr
 
+		case <-b.bgCtx.Done():
+			// trigger by b.bgCancel
+			logger.Info("exiting loopAggr", zap.String("cause", "bgCtx.Done"))
+			break mainL
 		case <-b.ctx.Done():
 			logger.Info("exiting loopAggr", zap.String("cause", "ctx.Done"))
 			// todo: save all record in aggr.
@@ -308,9 +323,22 @@ func (b *bufferHolder) resetTrigger() {
 	b.trigger.Reset(b.reminder.RemindNextAfter())
 }
 
+// Stop all internal job, the loopAggr goroutine
+// consume all aggr-ed result.
 func (b *bufferHolder) Stop() {
-	b.mux.Lock()
+	b.bgCancel() // stop loopAggr goroutine
+	if b.aggr != nil {
+		aggrResults := b.aggr.GetResults()
+		b.c.logger.Info("handle last aggr stmt",
+			zap.Int("records", len(aggrResults)),
+			zap.String("name", b.name))
+		for _, result := range aggrResults {
+			b.Add(result, false)
+		}
+	}
+	b.mux.Lock() // lock against b.Add(...)
 	defer b.mux.Unlock()
+	// mark stop
 	b.stopped = true
 	b.trigger.Stop()
 }
