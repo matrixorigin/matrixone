@@ -87,6 +87,22 @@ func (s *runnerStore) GetCheckpointed() types.TS {
 	return s.GetCheckpointedLocked()
 }
 
+func (s *runnerStore) MaxIncrementalCheckpoint() *CheckpointEntry {
+	s.RLock()
+	maxEntry, _ := s.incrementals.Max()
+	s.RUnlock()
+	if maxEntry == nil || maxEntry.IsFinished() {
+		return maxEntry
+	}
+	entries := s.GetAllIncrementalCheckpoints()
+	for i := len(entries) - 1; i >= 0; i-- {
+		if entries[i].IsFinished() {
+			return entries[i]
+		}
+	}
+	return nil
+}
+
 func (s *runnerStore) GetCheckpointedLocked() types.TS {
 	var ret types.TS
 	maxICKP, _ := s.incrementals.Max()
@@ -99,7 +115,17 @@ func (s *runnerStore) GetCheckpointedLocked() types.TS {
 			ret = maxGCKP.end
 		}
 	} else {
-		ret = maxICKP.end.Next()
+		if maxICKP.IsFinished() {
+			ret = maxICKP.end.Next()
+		} else {
+			entries := s.incrementals.Items()
+			for i := len(entries) - 1; i >= 0; i-- {
+				if entries[i].IsFinished() {
+					ret = entries[i].end.Next()
+					break
+				}
+			}
+		}
 	}
 	return ret
 }
@@ -441,7 +467,37 @@ func (s *runnerStore) TryAddNewBackupCheckpointEntry(entry *CheckpointEntry) (su
 	return
 }
 
-func (s *runnerStore) TryAddNewGlobalCheckpointEntry(
+func (s *runnerStore) AddGCKPIntent(
+	intent *CheckpointEntry,
+) (success bool) {
+	if intent == nil || intent.entryType != ET_Global || intent.IsFinished() {
+		return false
+	}
+
+	s.Lock()
+	defer s.Unlock()
+
+	maxEntry, _ := s.globals.Max()
+	if maxEntry != nil && (maxEntry.end.GE(&intent.end) || !maxEntry.IsFinished()) {
+		return false
+	}
+
+	s.globals.Set(intent)
+	return true
+}
+
+func (s *runnerStore) RemoveGCKPIntent() (ok bool) {
+	s.Lock()
+	defer s.Unlock()
+	intent, _ := s.globals.Max()
+	if intent == nil || intent.IsFinished() {
+		return false
+	}
+	s.globals.Delete(intent)
+	return true
+}
+
+func (s *runnerStore) AddGCKPEntry(
 	entry *CheckpointEntry,
 ) (success bool) {
 	s.Lock()
@@ -650,18 +706,23 @@ func (s *runnerStore) ICKPSeekLT(ts types.TS, cnt int) []*CheckpointEntry {
 	return incrementals
 }
 
+// return the max finished global checkpoint
 func (s *runnerStore) MaxGlobalCheckpoint() *CheckpointEntry {
 	s.RLock()
-	defer s.RUnlock()
 	global, _ := s.globals.Max()
-	return global
-}
-
-func (s *runnerStore) MaxIncrementalCheckpoint() *CheckpointEntry {
-	s.RLock()
-	defer s.RUnlock()
-	entry, _ := s.incrementals.Max()
-	return entry
+	s.RUnlock()
+	if global == nil || global.IsFinished() {
+		return global
+	}
+	s.Lock()
+	items := s.globals.Items()
+	s.Unlock()
+	for i := len(items) - 1; i >= 0; i-- {
+		if items[i].IsFinished() {
+			return items[i]
+		}
+	}
+	return nil
 }
 
 func (s *runnerStore) IsStale(ts *types.TS) bool {

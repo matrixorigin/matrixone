@@ -27,6 +27,8 @@ import (
 var ErrPendingCheckpoint = moerr.NewPrevCheckpointNotFinished()
 var ErrCheckpointDisabled = moerr.NewInternalErrorNoCtxf("checkpoint disabled")
 var ErrExecutorRestarted = moerr.NewInternalErrorNoCtxf("executor restarted")
+var ErrExecutorClosed = moerr.NewInternalErrorNoCtxf("executor closed")
+var ErrBadIntent = moerr.NewInternalErrorNoCtxf("bad intent")
 
 type State int8
 
