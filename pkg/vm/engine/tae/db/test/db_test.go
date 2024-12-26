@@ -7632,7 +7632,7 @@ func Test_CheckpointChaos1(t *testing.T) {
 
 	fault.Enable()
 	defer fault.Disable()
-	msg := "checkpoint-chaos"
+	msg := fmt.Sprintf("%s-checkpoint-chaos", t.Name())
 	rmFn, err := objectio.InjectCheckpointSave(msg)
 	assert.NoError(t, err)
 
@@ -7645,7 +7645,10 @@ func Test_CheckpointChaos1(t *testing.T) {
 	entries := tae.BGCheckpointRunner.GetAllIncrementalCheckpoints()
 	assert.Equal(t, 0, len(entries))
 
-	rmFn()
+	ok, err := rmFn()
+	require.True(t, ok)
+	require.NoError(t, err)
+
 	ctx = context.Background()
 	err = tae.DB.ForceCheckpoint(ctx, now, time.Minute)
 	assert.NoError(t, err)
@@ -7712,7 +7715,8 @@ func Test_CheckpointChaos2(t *testing.T) {
 
 	fault.Enable()
 	defer fault.Disable()
-	rmFn, err := objectio.InjectCheckpointSave("checkpoint-chaos")
+	msg := fmt.Sprintf("%s-checkpoint-chaos", t.Name())
+	rmFn, err := objectio.InjectCheckpointSave(msg)
 	assert.NoError(t, err)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*2)
@@ -7722,7 +7726,11 @@ func Test_CheckpointChaos2(t *testing.T) {
 	assert.Error(t, err)
 	maxGCKP := tae.DB.BGCheckpointRunner.MaxGlobalCheckpoint()
 	assert.Nilf(t, maxGCKP, maxGCKP.String())
-	rmFn()
+
+	ok, err := rmFn()
+	require.True(t, ok)
+	require.NoError(t, err)
+
 	ctx, cancel = context.WithTimeout(context.Background(), time.Second*20)
 	defer cancel()
 	assert.NoError(t, tae.DB.BGCheckpointRunner.WaitRunningGCKPDoneForTest(ctx))
