@@ -27,6 +27,7 @@ import (
 )
 
 func ReadEntriesFromMeta(
+	ctx context.Context,
 	sid string,
 	dir string,
 	name string,
@@ -40,7 +41,7 @@ func ReadEntriesFromMeta(
 	var batchEntries []*CheckpointEntry
 	for {
 		if batchEntries, err = getter.NextBatch(
-			context.Background(), onEachEntry, mp,
+			ctx, onEachEntry, mp,
 		); err != nil {
 			if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
 				err = nil

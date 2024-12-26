@@ -142,6 +142,7 @@ func (c *CkpReplayer) readCheckpointEntries() (
 		maxEntry := compactedEntries[len(compactedEntries)-1]
 		var entries []*CheckpointEntry
 		if entries, err = ReadEntriesFromMeta(
+			c.r.ctx,
 			c.r.rt.SID(),
 			c.dir,
 			maxEntry.name,
@@ -176,6 +177,7 @@ func (c *CkpReplayer) readCheckpointEntries() (
 			}
 		}
 		if allEntries, err = ReadEntriesFromMeta(
+			c.r.ctx,
 			c.r.rt.SID(),
 			c.dir,
 			maxEntry.name,
