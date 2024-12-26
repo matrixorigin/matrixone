@@ -46,12 +46,11 @@ func (r *runner) WaitRunningGCKPDoneForTest(ctx context.Context) (err error) {
 	for {
 		job, err := r.getRunningGCKPJob()
 		if err != nil || job == nil {
-			return
+			return err
 		}
 		select {
 		case <-ctx.Done():
-			err = context.Cause(ctx)
-			return
+			return context.Cause(ctx)
 		case <-job.WaitC():
 		}
 		time.Sleep(time.Millisecond * 10)
