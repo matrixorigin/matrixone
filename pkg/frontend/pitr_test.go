@@ -3037,32 +3037,3 @@ func Test_restoreViewsWithPitr(t *testing.T) {
 		assert.NoError(t, err)
 	})
 }
-
-func Test_getPitrLengthAndUnit(t *testing.T) {
-	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
-
-	bh := &backgroundExecTest{}
-	bh.init()
-
-	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
-	defer bhStub.Reset()
-
-	sql := getSqlForGetLengthAndUnitFmt(0, "account", "acc1", "", "")
-	bh.sql2result[sql] = newMrsForPitrRecord([][]interface{}{
-		{1, "h"},
-	})
-	length, unit, ok, err := getPitrLengthAndUnit(ctx, bh, "account", "acc1", "", "")
-	assert.NoError(t, err)
-	assert.Equal(t, int64(1), length)
-	assert.Equal(t, "h", unit)
-	assert.True(t, ok)
-
-	sql = getSqlForGetLengthAndUnitFmt(0, "database", "", "db", "")
-	bh.sql2result[sql] = newMrsForPitrRecord([][]interface{}{})
-	_, _, ok, err = getPitrLengthAndUnit(ctx, bh, "database", "", "db", "")
-	assert.NoError(t, err)
-	assert.False(t, ok)
-
-	_, _, _, err = getPitrLengthAndUnit(ctx, bh, "table", "", "", "tbl")
-	assert.Error(t, err)
-}

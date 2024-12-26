@@ -79,6 +79,11 @@ func WithDisttaeEngineWriteWorkspaceThreshold(v uint64) TestDisttaeEngineOptions
 		e.writeWorkspaceThreshold = v
 	}
 }
+func WithDisttaeEngineQuota(v uint64) TestDisttaeEngineOptions {
+	return func(e *TestDisttaeEngine) {
+		e.quota = v
+	}
+}
 
 func CreateEngines(
 	ctx context.Context,

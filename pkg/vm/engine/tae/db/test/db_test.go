@@ -4348,6 +4348,157 @@ func TestBlockRead(t *testing.T) {
 	)
 }
 
+func TestBlockRead2(t *testing.T) {
+	blockio.RunPipelineTest(
+		func() {
+			defer testutils.AfterTest(t)()
+			ctx := context.Background()
+
+			opts := config.WithLongScanAndCKPOpts(nil)
+			tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+			tsAlloc := types.NewTsAlloctor(opts.Clock)
+			defer tae.Close()
+			schema := catalog.MockSchemaAll(2, 1)
+			schema.Extra.BlockMaxRows = 20
+			schema.Extra.ObjectMaxBlocks = 2
+			tae.BindSchema(schema)
+			bat := catalog.MockBatch(schema, 40)
+
+			tae.CreateRelAndAppend(bat, true)
+			tae.CompactBlocks(false)
+
+			_, rel := tae.GetRelation()
+			blkEntry := testutil.GetOneObject(rel).GetMeta().(*catalog.ObjectEntry)
+
+			beforeDel := tsAlloc.Alloc()
+			txn1, rel := tae.GetRelation()
+			for i := 0; i < blkEntry.GetNonAppendableBlockCnt(); i++ {
+				commonID := blkEntry.AsCommonID()
+				commonID.SetBlockOffset(uint16(i))
+				assert.NoError(t, rel.RangeDelete(commonID, 0, 12, handle.DT_Normal))
+			}
+			assert.NoError(t, txn1.Commit(context.Background()))
+
+			afterFirstDel := tsAlloc.Alloc()
+			txn2, rel := tae.GetRelation()
+			for i := 0; i < blkEntry.GetNonAppendableBlockCnt(); i++ {
+				commonID := blkEntry.AsCommonID()
+				commonID.SetBlockOffset(uint16(i))
+				assert.NoError(t, rel.RangeDelete(commonID, 13, 15, handle.DT_Normal))
+			}
+			assert.NoError(t, txn2.Commit(context.Background()))
+
+			afterSecondDel := tsAlloc.Alloc()
+
+			tae.CompactBlocks(false)
+			_, rel = tae.GetRelation()
+			tombstoneObjectEntry := testutil.GetOneTombstoneMeta(rel)
+			objectEntry := testutil.GetOneBlockMeta(rel)
+			objStats := tombstoneObjectEntry.ObjectMVCCNode
+			ds := logtail.NewSnapshotDataSource(ctx, tae.DB.Runtime.Fs.Service, beforeDel, []objectio.ObjectStats{objStats.ObjectStats})
+			bid, _ := blkEntry.ID(), blkEntry.ID()
+
+			info := &objectio.BlockInfo{
+				BlockID: *objectio.NewBlockidWithObjectID(bid, 0),
+			}
+			metaloc := objectEntry.ObjectLocation()
+			metaloc.SetRows(schema.Extra.BlockMaxRows)
+			info.SetMetaLocation(metaloc)
+
+			columns := make([]string, 0)
+			colIdxs := make([]uint16, 0)
+			colTyps := make([]types.Type, 0)
+			defs := schema.ColDefs[:]
+			rand.Shuffle(len(defs), func(i, j int) { defs[i], defs[j] = defs[j], defs[i] })
+			for _, col := range defs {
+				columns = append(columns, col.Name)
+				colIdxs = append(colIdxs, uint16(col.Idx))
+				colTyps = append(colTyps, col.Type)
+			}
+			t.Log("read columns: ", columns)
+			fs := tae.DB.Runtime.Fs.Service
+			pool, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+			assert.NoError(t, err)
+			infos := make([]*objectio.BlockInfo, 0)
+			infos = append(infos, info)
+			err = blockio.Prefetch("", fs, infos[0].MetaLocation())
+			assert.NoError(t, err)
+			buildBatch := func(typs []types.Type) *batch.Batch {
+				bat := batch.NewWithSize(len(typs))
+				//bat.Attrs = append(bat.Attrs, cols...)
+
+				for i := 0; i < len(typs); i++ {
+					bat.Vecs[i] = vector.NewVec(typs[i])
+				}
+				return bat
+			}
+			for i := 0; i < 2; i++ {
+				info.MetaLocation().SetID(uint16(i))
+				b1 := buildBatch(colTyps)
+				phyAddrColumnPos := -1
+				cacheVectors := containers.NewVectors(len(colIdxs) + 1)
+				ds.SetTS(beforeDel)
+				err = blockio.BlockDataReadInner(
+					context.Background(), info, ds, colIdxs, colTyps, phyAddrColumnPos,
+					beforeDel, nil, fileservice.Policy(0), b1, cacheVectors, pool, fs,
+				)
+				assert.NoError(t, err)
+				assert.Equal(t, len(columns), len(b1.Vecs))
+				assert.Equal(t, 20, b1.Vecs[0].Length())
+
+				ds.SetTS(afterFirstDel)
+
+				b2 := buildBatch(colTyps)
+				logutil.Infof("meta location: %v", info.MetaLocation().String())
+				err = blockio.BlockDataReadInner(
+					context.Background(), info, ds, colIdxs, colTyps, phyAddrColumnPos,
+					afterFirstDel, nil, fileservice.Policy(0), b2, cacheVectors, pool, fs,
+				)
+				assert.NoError(t, err)
+				assert.Equal(t, 7, b2.Vecs[0].Length())
+
+				ds.SetTS(afterSecondDel)
+
+				b3 := buildBatch(colTyps)
+				err = blockio.BlockDataReadInner(
+					context.Background(), info, ds, colIdxs, colTyps, phyAddrColumnPos,
+					afterSecondDel, nil, fileservice.Policy(0), b3, cacheVectors, pool, fs,
+				)
+				assert.NoError(t, err)
+				assert.Equal(t, len(columns), len(b2.Vecs))
+				assert.Equal(t, 4, b3.Vecs[0].Length())
+				// read rowid column only
+				b4 := buildBatch([]types.Type{types.T_Rowid.ToType()})
+				err = blockio.BlockDataReadInner(
+					context.Background(), info,
+					ds,
+					[]uint16{2},
+					[]types.Type{types.T_Rowid.ToType()},
+					0,
+					afterSecondDel, nil, fileservice.Policy(0), b4, cacheVectors, pool, fs,
+				)
+				assert.NoError(t, err)
+				assert.Equal(t, 1, len(b4.Vecs))
+				assert.Equal(t, 4, b4.Vecs[0].Length())
+
+				// read rowid column only
+				//info.Appendable = false
+				b5 := buildBatch([]types.Type{types.T_Rowid.ToType()})
+				err = blockio.BlockDataReadInner(
+					context.Background(), info,
+					ds, []uint16{2},
+					[]types.Type{types.T_Rowid.ToType()},
+					0,
+					afterSecondDel, nil, fileservice.Policy(0), b5, cacheVectors, pool, fs,
+				)
+				assert.NoError(t, err)
+				assert.Equal(t, 1, len(b5.Vecs))
+				assert.Equal(t, 4, b5.Vecs[0].Length())
+			}
+		},
+	)
+}
+
 func TestCompactDeltaBlk(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
@@ -10408,7 +10559,55 @@ func TestDedup5(t *testing.T) {
 	assert.Error(t, err)
 	assert.NoError(t, insertTxn.Commit(ctx))
 }
-
+func TestCheckpointObjectList(t *testing.T) {
+	ctx := context.Background()
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	txn, _ := tae.StartTxn(nil)
+	testutil.CreateDatabase2(ctx, txn, "db")
+	txn.Commit(ctx)
+	var wg sync.WaitGroup
+	pool, _ := ants.NewPool(80)
+	defer pool.Release()
+	var tblNameIndex atomic.Int32
+	createRelAndAppend := func() {
+		defer wg.Done()
+		schema := catalog.MockSchemaAll(3, -1)
+		schema.Name = fmt.Sprintf("tbl%d", tblNameIndex.Add(1))
+		schema.Extra.BlockMaxRows = 1
+		schema.Extra.ObjectMaxBlocks = 256
+		bat := catalog.MockBatch(schema, 1)
+		txn, _ := tae.StartTxn(nil)
+		db, _ := txn.GetDatabase("db")
+		testutil.CreateRelation2(ctx, txn, db, schema)
+		txn.Commit(ctx)
+		for i := 0; i < 10; i++ {
+			txn, rel := testutil.GetRelation(t, 0, tae.DB, "db", schema.Name)
+			rel.Append(ctx, bat)
+			txn.Commit(ctx)
+			testutil.CompactBlocks(t, 0, tae.DB, "db", schema, true)
+		}
+		bat.Close()
+	}
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		pool.Submit(createRelAndAppend)
+	}
+	wg.Wait()
+	tae.ForceCheckpoint()
+	for i := 1; i <= 10; i++ {
+		txn, rel := testutil.GetRelation(t, 0, tae.DB, "db", fmt.Sprintf("tbl%d", i))
+		testutil.CheckAllColRowsByScan(t, rel, 10, false)
+		txn.Commit(ctx)
+	}
+	tae.Restart(ctx)
+	for i := 1; i <= 10; i++ {
+		txn, rel := testutil.GetRelation(t, 0, tae.DB, "db", fmt.Sprintf("tbl%d", i))
+		testutil.CheckAllColRowsByScan(t, rel, 10, false)
+		txn.Commit(ctx)
+	}
+}
 func TestReplayDebugLog(t *testing.T) {
 	ctx := context.Background()
 

@@ -74,16 +74,14 @@ func (m *objOverlapPolicy) revise(rc *resourceController) []reviseResult {
 				continue
 			}
 			result := reviseResult{objs: objs, kind: taskHostDN}
-			if result.kind == taskHostDN {
-				if rc.cpuPercent > 80 {
-					continue
-				}
+			if rc.cpuPercent > 80 {
+				continue
+			}
 
-				if rc.resourceAvailable(result.objs) {
-					rc.reserveResources(result.objs)
-				} else {
-					result.kind = taskHostCN
-				}
+			if rc.resourceAvailable(result.objs) {
+				rc.reserveResources(result.objs)
+			} else {
+				result.kind = taskHostCN
 			}
 			reviseResults = append(reviseResults, result)
 		}
