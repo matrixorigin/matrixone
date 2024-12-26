@@ -172,8 +172,8 @@ message CheckpointEntryResp {
 }
 
 enum ChangedListType  {
-    CollectChanged = 0;
-    CheckChanged = 1;
+    CheckChanged = 0;
+    CollectChanged = 1;
 }
 
 message GetChangedTableListReq {
