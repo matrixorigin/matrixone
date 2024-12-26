@@ -15,6 +15,7 @@
 package cache
 
 import (
+	"math"
 	"sort"
 	"strings"
 	"sync"
@@ -293,7 +294,7 @@ func (cc *CatalogCache) GetTableByIdAndTime(accountID uint32, databaseId, tblId 
 			return false
 		}
 		if item.DatabaseId != prevDbId {
-			if databaseId > 0 {
+			if databaseId < math.MaxUint64 {
 				return false
 			} else {
 				// new database, reset table name check
