@@ -174,6 +174,16 @@ func (b *bufferHolder) Add(item batchpipe.HasName, needAggr bool) {
 		}
 	}
 	defer unlock()
+	defer func() {
+		if err := recover(); err != nil {
+			_ = moerr.ConvertPanicError(b.ctx, err)
+			logutil.Error("catch panic #19755")
+			if b.buffer != nil {
+				b.putBuffer(b.buffer)
+			}
+			b.buffer = nil
+		}
+	}()
 	if b.stopped {
 		return
 	}
@@ -233,12 +243,10 @@ mainL:
 			break mainL
 		case <-b.ctx.Done():
 			logger.Info("exiting loopAggr", zap.String("cause", "ctx.Done"))
-			// todo: save all record in aggr.
 			break mainL
 		}
 	}
 	logger.Info("exit loopAggr")
-	return
 }
 
 var _ generateReq = (*bufferGenerateReq)(nil)

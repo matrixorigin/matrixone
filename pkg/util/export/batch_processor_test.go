@@ -540,6 +540,109 @@ func Test_bufferHolder_getGenerateReq(t *testing.T) {
 			wantReqNil:    true,
 			wantBufferCnt: 0,
 		},
+		// panic case check in  Test_bufferHolder_Add_panic
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := &bufferHolder{
+				c:          tt.fields.c,
+				ctx:        tt.fields.ctx,
+				name:       tt.fields.name,
+				buffer:     tt.fields.buffer,
+				bufferPool: tt.fields.bufferPool,
+				reminder:   tt.fields.reminder,
+				signal:     tt.fields.signal,
+				impl:       tt.fields.impl,
+				trigger:    tt.fields.trigger,
+				aggr:       tt.fields.aggr,
+				stopped:    tt.fields.stopped,
+			}
+			got := b.getGenerateReq()
+			if tt.wantReqNil {
+				require.Nil(t, got)
+			} else {
+				require.NotNil(t, got)
+			}
+			require.Equal(t, tt.wantBufferCnt, b.bufferCnt.Load())
+		})
+	}
+}
+
+func Test_bufferHolder_Add_panic(t *testing.T) {
+	c := &MOCollector{}
+	c.bufferCond = sync.NewCond(&c.bufferMux)
+	c.logger = runtime.GetLogger("dummy_id")
+
+	ctx := context.TODO()
+	ctrl := gomock.NewController(t)
+	impl := NewMockPipeImpl(ctrl)
+	aggr := NewMockAggregator(ctrl)
+	impl.EXPECT().NewAggregator(gomock.Any(), gomock.Any()).Return(aggr).AnyTimes()
+	//impl.EXPECT().NewItemBuffer(gomock.Any()).Return().AnyTimes()
+
+	reminder := NewMockReminder(ctrl)
+	reminder.EXPECT().RemindNextAfter().Return(5 * time.Second).AnyTimes()
+	aggr.EXPECT().AddItem(gomock.Any()).DoAndReturn(func() (table.Item, any) {
+		panic("Aggregator::AddItem panic")
+	}).AnyTimes()
+	aggr.EXPECT().GetWindow().Return(5 * time.Second).AnyTimes()
+	aggr.EXPECT().PopResultsBeforeWindow(gomock.Any()).Return([]table.Item{nil}).AnyTimes()
+
+	// panic case.
+	bufferMock := NewMockBuffer(ctrl)
+	bufferMock.EXPECT().IsEmpty().Return(false).AnyTimes()
+	bufferMock.EXPECT().Reset().Return().AnyTimes()
+	bufferMock.EXPECT().Add(gomock.Any()).DoAndReturn(func(any) {
+		panic("Buffer::Add panic")
+	}).AnyTimes()
+	// empty buffer case.
+	emtpyBufferMock := NewMockBuffer(ctrl)
+	emtpyBufferMock.EXPECT().IsEmpty().Return(true).AnyTimes()
+	emtpyBufferMock.EXPECT().Add(gomock.Any()).AnyTimes()
+	emtpyBufferMock.EXPECT().ShouldFlush().Return(false).AnyTimes()
+
+	dummyBufferPool := &sync.Pool{
+		New: func() any { return bufferMock },
+	}
+	type fields struct {
+		c          *MOCollector
+		ctx        context.Context
+		name       string
+		buffer     motrace.Buffer
+		bufferPool *sync.Pool
+		reminder   batchpipe.Reminder
+		signal     bufferSignalFunc
+		impl       motrace.PipeImpl
+		trigger    *time.Timer
+		aggr       table.Aggregator
+		stopped    bool
+	}
+	tests := []struct {
+		name          string
+		fields        fields
+		wantReqNil    bool
+		wantBufferCnt int32
+	}{
+		{
+			name: "nil",
+			fields: fields{
+				c:          c,
+				ctx:        ctx,
+				name:       "dummy",
+				buffer:     emtpyBufferMock,
+				bufferPool: dummyBufferPool,
+				//bufferCnt:  atomic.Int32{},
+				//discardCnt: atomic.Int32{},
+				reminder: reminder,
+				signal:   nil,
+				impl:     impl,
+				trigger:  time.NewTimer(time.Hour),
+				aggr:     aggr,
+				stopped:  false,
+			},
+			wantReqNil:    false,
+			wantBufferCnt: 0,
+		},
 		{
 			name: "panic",
 			fields: fields{
@@ -576,11 +679,11 @@ func Test_bufferHolder_getGenerateReq(t *testing.T) {
 				aggr:       tt.fields.aggr,
 				stopped:    tt.fields.stopped,
 			}
-			got := b.getGenerateReq()
+			b.Add(newDummy(1), false)
 			if tt.wantReqNil {
-				require.Nil(t, got)
+				require.Nil(t, b.buffer)
 			} else {
-				require.NotNil(t, got)
+				require.NotNil(t, b.buffer)
 			}
 			require.Equal(t, tt.wantBufferCnt, b.bufferCnt.Load())
 		})
