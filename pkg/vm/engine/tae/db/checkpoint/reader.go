@@ -129,7 +129,7 @@ func (r *MetafilesReader) Next(
 			allocated += bat.Allocated()
 		}
 		logger(
-			"Read-CKP-MF-File",
+			"Read-CKP-MF",
 			zap.Error(err),
 			zap.Int("bat-cnt", len(bats)),
 			zap.Int("rows", rows),
