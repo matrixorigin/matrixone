@@ -153,6 +153,30 @@ func testObjectStorage[T ObjectStorage](
 				t.Fatal()
 			}
 
+			// list root
+			n = 0
+			for _, err := range storage.List(ctx, "") {
+				if err != nil {
+					t.Fatal(err)
+				}
+				n++
+			}
+			if n != 2 {
+				t.Fatal()
+			}
+
+			// list root
+			n = 0
+			for _, err := range storage.List(ctx, "/") {
+				if err != nil {
+					t.Fatal(err)
+				}
+				n++
+			}
+			if n != 2 {
+				t.Fatal()
+			}
+
 		})
 
 		t.Run("invalid write length", func(t *testing.T) {
@@ -206,6 +230,16 @@ func TestObjectStorages(t *testing.T) {
 		t.Run(args.Name, func(t *testing.T) {
 
 			switch {
+
+			case strings.HasPrefix(strings.ToLower(args.Endpoint), "hdfs"):
+				// HDFS
+				testObjectStorage(t, "hdfs", func(t *testing.T) *HDFS {
+					storage, err := NewHDFS(context.Background(), args, nil)
+					if err != nil {
+						t.Fatal(err)
+					}
+					return storage
+				})
 
 			case args.Endpoint == "disk":
 				// disk
