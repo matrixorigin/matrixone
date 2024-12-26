@@ -44,6 +44,9 @@ func testObjectStorage[T ObjectStorage](
 
 			// write
 			err := storage.Write(ctx, name, bytes.NewReader([]byte("foo")), ptrTo[int64](3), nil)
+			if err != nil {
+				t.Fatal(err.Error())
+			}
 			assert.Nil(t, err)
 
 			// list
@@ -206,6 +209,16 @@ func TestObjectStorages(t *testing.T) {
 		t.Run(args.Name, func(t *testing.T) {
 
 			switch {
+
+			case strings.HasPrefix(strings.ToLower(args.Endpoint), "hdfs"):
+				// HDFS
+				testObjectStorage(t, "hdfs", func(t *testing.T) *HDFS {
+					storage, err := NewHDFS(context.Background(), args, nil)
+					if err != nil {
+						t.Fatal(err)
+					}
+					return storage
+				})
 
 			case args.Endpoint == "disk":
 				// disk
