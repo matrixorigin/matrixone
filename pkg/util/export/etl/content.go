@@ -74,7 +74,6 @@ func (c *ContentWriter) SetBuffer(buf *bytes.Buffer, callback func(buffer *bytes
 		v2.TraceMOLoggerBufferCallbackSet.Inc()
 	} else {
 		v2.TraceMOLoggerBufferCallbackSetNil.Inc()
-		logutil.Info("callback set nil", zap.String("content", buf.String()[:100]), zap.Stack("stack"))
 	}
 }
 
