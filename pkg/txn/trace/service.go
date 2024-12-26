@@ -93,6 +93,7 @@ func WithLoadToS3(
 	writeToS3 bool,
 	fs fileservice.FileService,
 ) Option {
+	writeToS3 = false
 	return func(s *service) {
 		if writeToS3 {
 			s.options.writeFunc = s.writeToS3

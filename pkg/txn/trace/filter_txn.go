@@ -38,6 +38,7 @@ func (f *txnFilters) isEmpty() bool {
 // 1. all filter skipped
 // 2. filters is empty
 func (f *txnFilters) filter(op client.TxnOperator) bool {
+	return false
 	if f.isEmpty() {
 		return true
 	}
