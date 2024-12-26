@@ -36,23 +36,25 @@ type TestRunner interface {
 	MaxLSNInRange(end types.TS) uint64
 	GetICKPIntentOnlyForTest() *CheckpointEntry
 
-	WaitRunningICKPDoneForTest(ctx context.Context) error
+	WaitRunningGCKPDoneForTest(ctx context.Context) error
 
 	GCNeeded() bool
 }
 
 // only for UT
-func (r *runner) WaitRunningICKPDoneForTest(ctx context.Context) (err error) {
-	job, err := r.getRunningGCKPJob()
-	if err != nil || job == nil {
-		return
-	}
-	select {
-	case <-ctx.Done():
-		err = context.Cause(ctx)
-		return
-	case <-job.WaitC():
-		return
+func (r *runner) WaitRunningGCKPDoneForTest(ctx context.Context) (err error) {
+	for {
+		job, err := r.getRunningGCKPJob()
+		if err != nil || job == nil {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			err = context.Cause(ctx)
+			return
+		case <-job.WaitC():
+		}
+		time.Sleep(time.Millisecond * 10)
 	}
 }
 
