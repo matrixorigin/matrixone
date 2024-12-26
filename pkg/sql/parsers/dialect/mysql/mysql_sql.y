@@ -1112,6 +1112,16 @@ snapshot_object_opt:
             ObjName: tree.Identifier($2.Compare()),
         }
     }
+|   ACCOUNT
+    {
+        spLevel := tree.SnapshotLevelType{
+            Level: tree.SNAPSHOTLEVELACCOUNT,
+        }
+        $$ = tree.ObjectInfo{
+            SLevel: spLevel,
+            ObjName: tree.Identifier(""),
+        }
+    }
 |   DATABASE ident
     {
         spLevel := tree.SnapshotLevelType{
