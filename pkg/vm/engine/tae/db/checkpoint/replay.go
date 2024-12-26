@@ -50,6 +50,7 @@ const (
 )
 
 type CkpReplayer struct {
+	dir        string
 	r          *runner
 	dataF      catalog.DataFactory
 	ckpEntries []*CheckpointEntry
@@ -87,7 +88,7 @@ func (c *CkpReplayer) ReadCkpFiles() (err error) {
 
 	// step1. read checkpoint meta data, output is the ckpEntries
 	t0 := time.Now()
-	dirs, err := fileservice.SortedList(r.rt.Fs.ListDir(CheckpointDir))
+	dirs, err := fileservice.SortedList(r.rt.Fs.ListDir(c.dir))
 	if err != nil {
 		return
 	}
@@ -117,7 +118,9 @@ func (c *CkpReplayer) ReadCkpFiles() (err error) {
 	targetIdx := metaFiles[len(metaFiles)-1].index
 	dir := dirs[targetIdx]
 	replayEntries := func(name string, ckpBat *containers.Batch) (entries []*CheckpointEntry, maxGlobalEnd types.TS, release func(), err error) {
-		reader, err := blockio.NewFileReader(r.rt.SID(), r.rt.Fs.Service, CheckpointDir+name)
+		reader, err := blockio.NewFileReader(
+			r.rt.SID(), r.rt.Fs.Service, MakeMetafileFullName(c.dir, name),
+		)
 		if err != nil {
 			return
 		}
@@ -507,9 +510,13 @@ func (c *CkpReplayer) Submit(tid uint64, replayFn func()) {
 	c.objectReplayWorker[workerOffset].Enqueue(replayFn)
 }
 
-func (r *runner) Replay(dataFactory catalog.DataFactory) *CkpReplayer {
+func (r *runner) BuildReplayer(
+	dir string,
+	dataFactory catalog.DataFactory,
+) *CkpReplayer {
 	replayer := &CkpReplayer{
 		r:              r,
+		dir:            dir,
 		dataF:          dataFactory,
 		objectCountMap: make(map[uint64]int),
 	}
