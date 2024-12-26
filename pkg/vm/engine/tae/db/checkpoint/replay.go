@@ -84,9 +84,22 @@ func (c *CkpReplayer) Close() {
 
 func (c *CkpReplayer) DoReplay() (err error) {
 	var (
-		// now   = time.Now()
+		now   = time.Now()
 		files []fileservice.DirEntry
 	)
+
+	defer func() {
+		logger := logutil.Info
+		if err != nil {
+			logger = logutil.Error
+		}
+		logger(
+			"Replay-CKP-Files",
+			zap.String("cost", time.Since(now).String()),
+			zap.Error(err),
+		)
+	}()
+
 	if files, err = fileservice.SortedList(c.r.rt.Fs.ListDir(c.dir)); err != nil {
 		return
 	}
@@ -100,6 +113,7 @@ func (c *CkpReplayer) DoReplay() (err error) {
 	)
 	// classify the files into metaEntries and compactedEntries
 	for _, file := range files {
+		// TODO
 		// c.r.store.AddMetaFile(file.Name)
 		start, end, ext := blockio.DecodeCheckpointMetadataFileName(file.Name)
 		entry := MetaFile{
@@ -122,26 +136,59 @@ func (c *CkpReplayer) DoReplay() (err error) {
 	})
 
 	// replay the compactedEntries
-
-	// replay the metaEntries
-	if len(metaEntries) > 0 {
-		reader := NewMetafilesReader(
+	if len(compactedEntries) > 0 {
+		maxEntry := compactedEntries[len(compactedEntries)-1]
+		var allEntries []*CheckpointEntry
+		if allEntries, err = ReadEntriesFromMeta(
 			c.r.rt.SID(),
 			c.dir,
-			[]string{metaEntries[len(metaEntries)-1].name},
+			maxEntry.name,
 			0,
+			nil,
+			common.CheckpointAllocator,
 			c.r.rt.Fs.Service,
-		)
-		getter := MetadataEntryGetter{
-			reader: reader,
-		}
-		var entries []*CheckpointEntry
-		if entries, err = getter.NextBatch(
-			c.r.ctx, nil, common.CheckpointAllocator,
 		); err != nil {
 			return
 		}
-		for _, entry := range entries {
+		for _, entry := range allEntries {
+			logutil.Info(
+				"Read-CKP-COMPACT",
+				zap.String("entry", entry.String()),
+			)
+		}
+		if len(allEntries) != 1 {
+			panic(fmt.Sprintf("invalid compacted checkpoint file %s", maxEntry.name))
+		}
+		c.r.store.TryAddNewCompactedCheckpointEntry(allEntries[0])
+	}
+
+	// always replay from the max metaEntry
+	var (
+		maxGlobalTS    types.TS
+		allCheckpoints []*CheckpointEntry
+	)
+	if len(metaEntries) > 0 {
+		maxEntry := metaEntries[len(metaEntries)-1]
+		updateGlobal := func(entry *CheckpointEntry) {
+			if entry.GetType() == ET_Global {
+				thisEnd := entry.GetEnd()
+				if thisEnd.GT(&maxGlobalTS) {
+					maxGlobalTS = thisEnd
+				}
+			}
+		}
+		if allCheckpoints, err = ReadEntriesFromMeta(
+			c.r.rt.SID(),
+			c.dir,
+			maxEntry.name,
+			0,
+			updateGlobal,
+			common.CheckpointAllocator,
+			c.r.rt.Fs.Service,
+		); err != nil {
+			return
+		}
+		for _, entry := range allCheckpoints {
 			logutil.Info(
 				"DEBUG-REPLAY",
 				zap.String("entry", entry.String()),
@@ -152,7 +199,7 @@ func (c *CkpReplayer) DoReplay() (err error) {
 }
 
 func (c *CkpReplayer) ReadCkpFiles() (err error) {
-	// c.DoReplay()
+	c.DoReplay()
 	r := c.r
 	ctx := r.ctx
 

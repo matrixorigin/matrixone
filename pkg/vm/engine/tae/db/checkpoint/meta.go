@@ -17,12 +17,44 @@ package checkpoint
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 )
+
+func ReadEntriesFromMeta(
+	sid string,
+	dir string,
+	name string,
+	verbose int,
+	onEachEntry func(entry *CheckpointEntry),
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+) (entries []*CheckpointEntry, err error) {
+	reader := NewMetafilesReader(sid, dir, []string{name}, verbose, fs)
+	getter := MetadataEntryGetter{reader: reader}
+	var batchEntries []*CheckpointEntry
+	for {
+		if batchEntries, err = getter.NextBatch(
+			context.Background(), onEachEntry, mp,
+		); err != nil {
+			if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
+				err = nil
+			}
+			return
+		}
+		if len(entries) == 0 {
+			entries = batchEntries
+		} else {
+			entries = append(entries, batchEntries...)
+		}
+	}
+	return
+}
 
 type MetadataEntryGetter struct {
 	reader *MetafilesReader
@@ -42,15 +74,6 @@ func (getter *MetadataEntryGetter) NextBatch(
 	if release != nil {
 		defer release()
 	}
-	// var maxGlobal types.TS
-	// onEachEntry := func(entry *CheckpointEntry) {
-	// 	if !entry.IsIncremental() {
-	// 		thsEnd := entry.GetEnd()
-	// 		if thisEnd.GT(maxGlobal) {
-	// 			maxGlobal = thisEnd
-	// 		}
-	// 	}
-	// }
 	rows := 0
 	for _, bat := range bats {
 		rows += bat.RowCount()
