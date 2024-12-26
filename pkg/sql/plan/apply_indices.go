@@ -714,10 +714,15 @@ func (builder *QueryBuilder) tryIndexOnlyScan(idxDef *IndexDef, node *plan.Node,
 		idxColMap[[2]int32{node.BindingTags[0], colIdx}] = leadingColExpr
 	} else {
 		for i := 0; i < numParts; i++ {
-			colIdx := node.TableDef.Name2ColIndex[catalog.ResolveAlias(idxDef.Parts[i])]
-			origType := node.TableDef.Cols[colIdx].Typ
-			mappedExpr, _ := MakeSerialExtractExpr(builder.GetContext(), DeepCopyExpr(leadingColExpr), origType, int64(i))
-			idxColMap[[2]int32{node.BindingTags[0], colIdx}] = mappedExpr
+			colName := catalog.ResolveAlias(idxDef.Parts[i])
+			colIdx := node.TableDef.Name2ColIndex[colName]
+			if colName == node.TableDef.Pkey.PkeyColName {
+				idxColMap[[2]int32{node.BindingTags[0], colIdx}] = GetColExpr(idxTableDef.Cols[1].Typ, idxTag, 1)
+			} else {
+				origType := node.TableDef.Cols[colIdx].Typ
+				mappedExpr, _ := MakeSerialExtractExpr(builder.GetContext(), DeepCopyExpr(leadingColExpr), origType, int64(i))
+				idxColMap[[2]int32{node.BindingTags[0], colIdx}] = mappedExpr
+			}
 		}
 	}
 
