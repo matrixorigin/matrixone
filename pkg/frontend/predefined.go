@@ -295,6 +295,10 @@ var (
     			takes bigint unsigned,
     			primary key(account_id, database_id, table_id)
 			)`, catalog.MO_TABLE_STATS)
+
+	MoCatalogMoAccountLockDDL = fmt.Sprintf(`create table mo_catalog.%s(
+    			account_name varchar(300) primary key
+				)`, catalog.MO_ACCOUNT_LOCK)
 )
 
 // `mo_catalog` database system tables

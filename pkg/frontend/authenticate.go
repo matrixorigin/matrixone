@@ -1006,6 +1006,7 @@ var (
 		MoCatalogMoCdcWatermarkDDL,
 		MoCatalogMoDataKeyDDL,
 		MoCatalogMoTableStatsDDL,
+		MoCatalogMoAccountLockDDL,
 	}
 
 	//drop tables for the tenant
@@ -1184,6 +1185,8 @@ const (
 	updateStatusAndVersionOfAccountFormat = `update mo_catalog.mo_account set status = "%s",version = %d,suspended_time = default where account_name = "%s";`
 
 	deleteAccountFromMoAccountFormat = `delete from mo_catalog.mo_account where account_name = "%s" order by account_id;`
+
+	lockMoAccountNameFormat = `select * from mo_catalog.__mo_account_lock where account_name = "%s" for update;`
 
 	deletePitrFromMoPitrFormat = `delete from mo_catalog.mo_pitr where create_account = %d;`
 
@@ -1634,6 +1637,14 @@ func getSqlForDeleteAccountFromMoAccount(ctx context.Context, account string) (s
 		return "", err
 	}
 	return fmt.Sprintf(deleteAccountFromMoAccountFormat, account), nil
+}
+
+func getSqlForLockMoAccountNameFormat(ctx context.Context, account string) (string, error) {
+	err := inputNameIsInvalid(ctx, account)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(lockMoAccountNameFormat, account), nil
 }
 
 func getSqlForDeletePitrFromMoPitr(accountId uint64) string {
@@ -2949,6 +2960,17 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *alterAccount) (err er
 			return rtnErr
 		}
 
+		//step 0: lock account name first
+		sql, rtnErr = getSqlForLockMoAccountNameFormat(ctx, aa.Name)
+		if rtnErr != nil {
+			return rtnErr
+		}
+		bh.ClearExecResultSet()
+		rtnErr = bh.Exec(ctx, sql)
+		if rtnErr != nil {
+			return rtnErr
+		}
+
 		//step 1: check account exists or not
 		//get accountID
 		sql, rtnErr = getSqlForCheckTenant(ctx, aa.Name)
@@ -3623,6 +3645,19 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 		if rtnErr != nil {
 			return rtnErr
 		}
+
+		//step 0: lock account name first
+		sql, rtnErr = getSqlForLockMoAccountNameFormat(ctx, da.Name)
+		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, sql)
+		if rtnErr != nil {
+			return rtnErr
+		}
+		bh.ClearExecResultSet()
+		rtnErr = bh.Exec(ctx, sql)
+		if rtnErr != nil {
+			return rtnErr
+		}
+
 		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, getAccountIdNamesSql)
 		_, nameInfoMap, rtnErr := getAccounts(ctx, bh, true)
 		if rtnErr != nil {
@@ -7305,6 +7340,7 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *createAccount) (er
 	var newTenant *TenantInfo
 	var newTenantCtx context.Context
 	var mp *mpool.MPool
+	var sql string
 	ctx, span := trace.Debug(ctx, "InitGeneralTenant")
 	defer span.End()
 	tenant := ses.GetTenantInfo()
@@ -7354,6 +7390,17 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *createAccount) (er
 		defer func() {
 			rtnErr = finishTxn(ctx, bh, rtnErr)
 		}()
+		if rtnErr != nil {
+			return rtnErr
+		}
+
+		//step 0: lock account name first
+		sql, rtnErr = getSqlForLockMoAccountNameFormat(ctx, ca.Name)
+		if rtnErr != nil {
+			return rtnErr
+		}
+		bh.ClearExecResultSet()
+		rtnErr = bh.Exec(ctx, sql)
 		if rtnErr != nil {
 			return rtnErr
 		}
@@ -7576,6 +7623,9 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *createAccoun
 			return true
 		}
 		if strings.HasPrefix(sql, fmt.Sprintf("create table mo_catalog.%s", catalog.MO_TABLE_STATS)) {
+			return true
+		}
+		if strings.HasPrefix(sql, fmt.Sprintf("create table mo_catalog.%s", catalog.MO_ACCOUNT_LOCK)) {
 			return true
 		}
 		return false
