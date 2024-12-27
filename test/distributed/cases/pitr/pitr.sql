@@ -42,7 +42,7 @@ select * from mo_catalog.mo_pitr Where pitr_name != 'sys_mo_catalog_pitr';
 -- nonsys creates pitr for current account
 -- @session:id=1&user=acc01:test_account&password=111
 drop pitr if exists `select`;
-create pitr `select` range 10 'd';
+create pitr `select` for account range 10 'd';
 -- @ignore:1,2
 show pitr;
 -- @session
@@ -87,7 +87,7 @@ create table t1 (col1 int, col2 decimal);
 insert into t1 values (1,2);
 insert into t1 values (2,3);
 drop pitr if exists `$%^#`;
-create pitr `$%^#` for database test01 table t1 range 1 'y';
+create pitr `$%^#` for table test01  t1 range 1 'y';
 select * from t1;
 show create table t1;
 truncate t1;
@@ -116,7 +116,7 @@ insert into s3t select result, 2, 12 from generate_series(1, 30000, 1) g;
 select count(*) from s3t;
 select sum(a) from s3t;
 drop pitr if exists p03;
-create pitr p03 for database test table s3t range 2 'h';
+create pitr p03 for table test s3t range 2 'h';
 select count(*) from s3t;
 select sum(a) from s3t;
 -- @ignore:1,2
@@ -147,18 +147,18 @@ drop database test01;
 
 
 -- abnormal test: time beyond the time range when creating pitr
-create pitr p07 range 102 'd';
-create pitr p07 range 200 'h';
-create pitr p07 range 300 'y';
-create pitr p07 range 500 'mo';
-create pitr p07 range -1 'd';
-create pitr p07 range -2 'h';
-create pitr p07 range -3 'y';
-create pitr p07 range 0 'mo';
-create pitr p07 range 1 'day';
-create pitr p07 range 2 'hour';
-create pitr p07 range 3 'year';
-create pitr p07 range 20 'month';
+create pitr p07 for account range 102 'd';
+create pitr p07 for account range 200 'h';
+create pitr p07 for account range 300 'y';
+create pitr p07 for account range 500 'mo';
+create pitr p07 for account range -1 'd';
+create pitr p07 for account range -2 'h';
+create pitr p07 for account range -3 'y';
+create pitr p07 for account range 0 'mo';
+create pitr p07 for account range 1 'day';
+create pitr p07 for account range 2 'hour';
+create pitr p07 for account range 3 'year';
+create pitr p07 for account range 20 'month';
 
 
 -- abnormal test: sys create duplicate pitr for sys (object: account)
@@ -192,8 +192,8 @@ use test;
 create table t1(col int, col2 decimal);
 insert into t1 values(1,1);
 drop pitr if exists p10;
-create pitr p10 for database test table t1 range 10 'y';
-create pitr p11 for database test table t1 range 11 'd';
+create pitr p10 for table test  t1 range 10 'y';
+create pitr p11 for table test  t1 range 11 'd';
 drop pitr p10;
 drop database test;
 
@@ -207,8 +207,8 @@ create pitr pitr02 for account acc01 range 11 'mo';
 -- abnormal test: nonsys create duplicate pitr for sys (object: account)
 -- @session:id=1&user=acc01:test_account&password=111
 drop pitr if exists p10;
-create pitr p10 range 1 'd';
-create pitr p11 range 10 'h';
+create pitr p10 for account range 1 'd';
+create pitr p11 for account range 10 'h';
 drop pitr p10;
 
 
@@ -229,8 +229,8 @@ use test;
 create table t1(col int, col2 decimal);
 insert into t1 values(1,1);
 drop pitr if exists p10;
-create pitr p10 for database test table t1 range 10 'y';
-create pitr p11 for database test table t1 range 11 'd';
+create pitr p10 for table test t1 range 10 'y';
+create pitr p11 for table test t1 range 11 'd';
 drop pitr p10;
 drop database test;
 -- @session
@@ -239,10 +239,10 @@ drop database test;
 -- authority: sys creates pitr, verify sys only can view and manage their own pitr
 -- @session:id=1&user=acc01:test_account&password=111
 drop pitr if exists p11;
-create pitr p11 range 1 'd';
+create pitr p11 for account range 1 'd';
 -- @session
 drop pitr if exists p12;
-create pitr p12 range 1 'd';
+create pitr p12 for account range 1 'd';
 -- @ignore:1,2
 show pitr;
 -- @ignore:0,2,3,4,6,7,10
@@ -257,10 +257,10 @@ drop pitr p11;
 -- authority: nonsys creates pitr, verify nonsys only can view and manage own pitr
 -- @session:id=1&user=acc01:test_account&password=111
 drop pitr if exists p11;
-create pitr p11 range 1 'd';
+create pitr p11 for account range 1 'd';
 -- @session
 drop pitr if exists p12;
-create pitr p12 range 1 'd';
+create pitr p12 for account range 1 'd';
 -- @session:id=1&user=acc01:test_account&password=111
 -- @ignore:1,2
 show pitr;
@@ -276,7 +276,7 @@ drop user if exists user01;
 create user user01 identified by '111';
 -- @session
 -- @session:id=2&user=acc01:user01&password=111
-create pitr p20 range 10 'd';
+create pitr p20 for account range 10 'd';
 -- @session
 -- @session:id=1&user=acc01:test_account&password=111
 drop user user01;

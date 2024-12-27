@@ -130,20 +130,18 @@ func (node *CreatePitr) Format(ctx *FmtCtx) {
 	case PITRLEVELCLUSTER:
 		ctx.WriteString("cluster")
 	case PITRLEVELACCOUNT:
+		ctx.WriteString("account")
 		if len(node.AccountName) != 0 {
-			ctx.WriteString("account ")
+			ctx.WriteString(" ")
 			node.AccountName.Format(ctx)
-		} else {
-			ctx.WriteString("self account")
-
 		}
 	case PITRLEVELDATABASE:
 		ctx.WriteString("database ")
 		node.DatabaseName.Format(ctx)
 	case PITRLEVELTABLE:
-		ctx.WriteString("database ")
+		ctx.WriteString("table ")
 		node.DatabaseName.Format(ctx)
-		ctx.WriteString(" table ")
+		ctx.WriteString(" ")
 		node.TableName.Format(ctx)
 	}
 
