@@ -468,11 +468,11 @@ func initTraceMetric(ctx context.Context, st metadata.ServiceType, cfg *Config, 
 			<-ctx.Done()
 			logutil.Info("motrace receive shutdown signal, wait other services shutdown complete.")
 			serviceWG.Wait()
-			logutil.Info("Shutdown service complete.")
 			// flush trace/log/error framework
 			if err = motrace.Shutdown(ctx); err != nil {
 				logutil.Warn("Shutdown trace", logutil.ErrorField(err), logutil.NoReportFiled())
 			}
+			logutil.Info("Shutdown motrace complete.")
 		})
 		initWG.Wait()
 	}
@@ -486,6 +486,7 @@ func initTraceMetric(ctx context.Context, st metadata.ServiceType, cfg *Config, 
 			}
 			<-ctx.Done()
 			mometric.StopMetricSync()
+			logutil.Info("Shutdown mometric complete.")
 		})
 	}
 	if err = export.InitMerge(ctx, &SV); err != nil {
