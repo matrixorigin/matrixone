@@ -103,7 +103,6 @@ type IWatermarkUpdater interface {
 	UpdateMem(dbName, tblName string, watermark types.TS)
 	DeleteFromMem(dbName, tblName string)
 	DeleteFromDb(dbName, tblName string) error
-	DeleteAllFromDb() error
 	SaveErrMsg(dbName, tblName string, errMsg string) error
 }
 
@@ -195,6 +194,18 @@ func (info DbTableInfo) String() string {
 		info.SinkDbName,
 		info.SinkTblName,
 	)
+}
+
+func (info DbTableInfo) Clone() *DbTableInfo {
+	return &DbTableInfo{
+		SourceDbId:      info.SourceDbId,
+		SourceDbName:    info.SourceDbName,
+		SourceTblId:     info.SourceTblId,
+		SourceTblName:   info.SourceTblName,
+		SourceCreateSql: info.SourceCreateSql,
+		SinkDbName:      info.SinkDbName,
+		SinkTblName:     info.SinkTblName,
+	}
 }
 
 // AtomicBatch holds batches from [Tail_wip,...,Tail_done] or [Tail_done].
