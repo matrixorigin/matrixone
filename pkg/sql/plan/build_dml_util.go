@@ -265,6 +265,25 @@ func getStepByNodeId(builder *QueryBuilder, nodeId int32) int {
 	return -1
 }
 
+func checkDeleteOptToTruncate(ctx CompilerContext) (bool, error) {
+	value, err := ctx.ResolveVariable("delete_opt_to_truncate", true, false)
+	if err != nil {
+		return false, err
+	}
+
+	if value == nil {
+		return true, nil
+	}
+
+	if v, ok := value.(int64); ok {
+		return v == 1, nil
+	} else if v1, ok := value.(int8); ok {
+		return v1 == 1, nil
+	} else {
+		return false, moerr.NewInternalErrorf(ctx.GetContext(), "invalid  %v ", value)
+	}
+}
+
 // buildDeletePlans  build preinsert plan.
 /*
 [o1]sink_scan -> join[u1] -> sink
@@ -334,10 +353,15 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 		return err
 	}
 
+	deleteOptToTruncate, err := checkDeleteOptToTruncate(ctx)
+	if err != nil {
+		return err
+	}
+
 	if enabled && len(delCtx.tableDef.RefChildTbls) > 0 ||
 		delCtx.tableDef.ViewSql != nil ||
 		(util.TableIsClusterTable(delCtx.tableDef.GetTableType()) && accountId != catalog.System_Account) ||
-		delCtx.objRef.PubInfo != nil {
+		delCtx.objRef.PubInfo != nil || !deleteOptToTruncate {
 		canTruncate = false
 	}
 

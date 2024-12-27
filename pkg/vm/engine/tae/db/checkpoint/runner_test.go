@@ -659,6 +659,23 @@ func Test_RunnerStore5(t *testing.T) {
 	assert.True(t, intent2.AllChecked())
 	assert.True(t, intent2.bornTime.After(intent.bornTime))
 	t.Log(intent2.String())
+
+	// sid string, start, end types.TS, typ EntryType, opts ...EntryOption,
+	intent3 := NewCheckpointEntry(
+		"", types.TS{}, types.NextGlobalTsForTest(), ET_Global,
+	)
+	assert.False(t, store.AddGCKPIntent(intent2))
+	assert.False(t, store.AddGCKPIntent(nil))
+	intent3.SetState(ST_Finished)
+	assert.False(t, store.AddGCKPIntent(intent3))
+	intent3.state = ST_Pending
+	assert.True(t, store.AddGCKPIntent(intent3))
+	assert.False(t, store.AddGCKPIntent(intent3))
+	intent3.state = ST_Finished
+	assert.False(t, store.RemoveGCKPIntent())
+	intent3.state = ST_Pending
+	assert.True(t, store.RemoveGCKPIntent())
+
 }
 
 func Test_Executor1(t *testing.T) {

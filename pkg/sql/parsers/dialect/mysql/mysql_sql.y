@@ -1112,6 +1112,16 @@ snapshot_object_opt:
             ObjName: tree.Identifier($2.Compare()),
         }
     }
+|   ACCOUNT
+    {
+        spLevel := tree.SnapshotLevelType{
+            Level: tree.SNAPSHOTLEVELACCOUNT,
+        }
+        $$ = tree.ObjectInfo{
+            SLevel: spLevel,
+            ObjName: tree.Identifier(""),
+        }
+    }
 |   DATABASE ident
     {
         spLevel := tree.SnapshotLevelType{
@@ -1134,14 +1144,14 @@ snapshot_object_opt:
     }
 
 create_pitr_stmt:
-    CREATE PITR not_exists_opt ident RANGE pitr_value STRING
+    CREATE PITR not_exists_opt ident FOR ACCOUNT RANGE pitr_value STRING
     {
         $$ = &tree.CreatePitr{
             IfNotExists: $3,
             Name: tree.Identifier($4.Compare()),
             Level: tree.PITRLEVELACCOUNT,
-            PitrValue: $6,
-            PitrUnit: $7,
+            PitrValue: $8,
+            PitrUnit: $9,
         }
     }
 |   CREATE PITR not_exists_opt ident FOR CLUSTER RANGE pitr_value STRING
@@ -1176,16 +1186,16 @@ create_pitr_stmt:
             PitrUnit: $10,
         }
     }
-|   CREATE PITR not_exists_opt ident FOR DATABASE ident TABLE ident RANGE pitr_value STRING
+|   CREATE PITR not_exists_opt ident FOR TABLE ident ident RANGE pitr_value STRING
     {
         $$ = &tree.CreatePitr{
             IfNotExists: $3,
             Name: tree.Identifier($4.Compare()),
             Level: tree.PITRLEVELTABLE,
             DatabaseName: tree.Identifier($7.Compare()),
-            TableName: tree.Identifier($9.Compare()),
-            PitrValue: $11,
-            PitrUnit: $12,
+            TableName: tree.Identifier($8.Compare()),
+            PitrValue: $10,
+            PitrUnit: $11,
         }
     }
 
