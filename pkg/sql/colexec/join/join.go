@@ -61,7 +61,6 @@ func (innerJoin *InnerJoin) Prepare(proc *process.Process) (err error) {
 				return err
 			}
 		}
-		return innerJoin.PrepareProjection(proc)
 	}
 	return err
 }
