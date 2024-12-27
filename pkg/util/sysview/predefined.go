@@ -195,8 +195,8 @@ var (
 		"if(true, NULL, 0) as SRS_ID "+
 		"from mo_catalog.mo_columns mc join mo_catalog.mo_tables mt ON mc.account_id = mt.account_id AND mc.att_database = mt.reldatabase AND mc.att_relname = mt.relname "+
 		"where mc.account_id = current_account_id() "+
-		"and mc.att_relname!='%s' and mc.att_relname not like '%s' and mc.attname != '%s' and mc.att_relname not like '%s' and mc.att_relname not like '%s'",
-		catalog.MOAutoIncrTable, catalog.PrefixPriColName+"%", catalog.Row_ID, catalog.PartitionSubTableWildcard, catalog.HiddenTableNamePrefix+"%")
+		"and mc.att_relname!='%s' and mc.att_relname not like '%s' and mc.attname != '%s' and mc.att_relname not like '%s' and mc.att_relname != '%s'",
+		catalog.MOAutoIncrTable, catalog.PrefixPriColName+"%", catalog.Row_ID, catalog.PartitionSubTableWildcard, catalog.MO_ACCOUNT_LOCK)
 
 	InformationSchemaProfilingDDL = "CREATE TABLE information_schema.PROFILING (" +
 		"QUERY_ID int NOT NULL DEFAULT '0'," +
@@ -300,7 +300,8 @@ var (
 		"if(relkind = 'v', NULL, if(partitioned = 0, '', cast('partitioned' as varchar(256)))) AS CREATE_OPTIONS,"+
 		"cast(rel_comment as text) AS TABLE_COMMENT "+
 		"FROM mo_catalog.mo_tables tbl "+
-		"WHERE tbl.account_id = current_account_id() and tbl.relname not like '%s' and tbl.relname not like '%s' and tbl.relkind != '%s'", catalog.IndexTableNamePrefix+"%", catalog.HiddenTableNamePrefix+"%", catalog.SystemPartitionRel)
+		"WHERE tbl.account_id = current_account_id() and tbl.relname not like '%s' and tbl.relname != '%s' and tbl.relkind != '%s'",
+		catalog.IndexTableNamePrefix+"%", catalog.MO_ACCOUNT_LOCK, catalog.SystemPartitionRel)
 
 	InformationSchemaPartitionsDDL = "CREATE VIEW information_schema.`PARTITIONS` AS " +
 		"SELECT " +
