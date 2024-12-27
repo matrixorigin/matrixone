@@ -94,6 +94,11 @@ func (s *service) doCheckUpgrade(ctx context.Context) error {
 		func(txn executor.TxnExecutor) error {
 			final := s.getFinalVersionHandle().Metadata()
 
+			s.logger.Info("start doCheckUpgrade",
+				zap.String("final-version", final.Version),
+				zap.String("txn-id", hex.EncodeToString(txn.Txn().Txn().ID)),
+			)
+
 			// Deploy mo first time without 1.2.0, init framework first.
 			// And upgrade to current version.
 			created, err := versions.IsFrameworkTablesCreated(txn)
