@@ -233,8 +233,8 @@ func (e *CheckpointEntry) LessEq(ts *types.TS) bool {
 func (e *CheckpointEntry) SetLocation(cn, tn objectio.Location) {
 	e.Lock()
 	defer e.Unlock()
-	e.cnLocation = cn
-	e.tnLocation = tn
+	e.cnLocation = cn.Clone()
+	e.tnLocation = tn.Clone()
 }
 
 func (e *CheckpointEntry) GetLocation() objectio.Location {
