@@ -326,6 +326,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			if col.Name == tableDef.Pkey.PkeyColName {
 				lockTarget := &plan.LockTarget{
 					TableId:            tableDef.TblId,
+					ObjRef:             DeepCopyObjectRef(dmlCtx.objRefs[i]),
 					PrimaryColIdxInBat: int32(finalColIdx),
 					PrimaryColRelPos:   finalProjTag,
 					PrimaryColTyp:      col.Typ,
@@ -337,6 +338,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 					// need lock oldPk by old partition idx, lock new pk by new partition idx
 					lockTarget := &plan.LockTarget{
 						TableId:            tableDef.TblId,
+						ObjRef:             DeepCopyObjectRef(dmlCtx.objRefs[i]),
 						PrimaryColIdxInBat: int32(finalColIdx),
 						PrimaryColRelPos:   finalProjTag,
 						PrimaryColTyp:      col.Typ,
