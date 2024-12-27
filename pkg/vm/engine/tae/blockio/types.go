@@ -19,7 +19,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -43,20 +42,6 @@ const (
 	TmpExt       = "tmp"
 	CompactedExt = "cpt"
 )
-
-func EncodeGCMetadataFileName(prefix string, start, end types.TS) string {
-	return fmt.Sprintf(
-		"%s_%s_%s.%s",
-		prefix,
-		start.ToString(),
-		end.ToString(),
-		ioutil.CheckpointExt,
-	)
-}
-
-func EncodeCompactedMetadataFileName(dir, prefix string, start, end types.TS) string {
-	return fmt.Sprintf("%s/%s_%s_%s.%s", dir, prefix, start.ToString(), end.ToString(), CompactedExt)
-}
 
 func EncodeSnapshotMetadataFileName(prefix string, start, end types.TS) string {
 	return fmt.Sprintf("%s_%s_%s.%s", prefix, start.ToString(), end.ToString(), SnapshotExt)

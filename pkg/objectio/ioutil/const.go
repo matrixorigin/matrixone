@@ -15,12 +15,25 @@
 package ioutil
 
 const defaultCheckpointDir = "ckp/"
+
 const (
+	// checkpint related
 	CheckpointExt = "ckp"
 	CompactedExt  = "cpt"
 
+	// gc related
+	GCFullExt   = "fgc"
+	SnapshotExt = "snap"
+	AcctExt     = "acct"
+	TmpExt      = "tmp"
+	GCMetaExt   = CheckpointExt
+
 	PrefixMetadata = "meta"
 	SuffixMetadata = ".ckp"
+
+	PrefixGCMeta   = "gc"
+	PrefixSnapMeta = "snap"
+	PrefixAcctMeta = "acct"
 )
 
 func GetCheckpointDir() string {
@@ -29,4 +42,8 @@ func GetCheckpointDir() string {
 
 func IsCKPExt(ext string) bool {
 	return ext == CheckpointExt
+}
+
+func IsGCMetaExt(ext string) bool {
+	return ext == GCMetaExt
 }

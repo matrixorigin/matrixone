@@ -57,3 +57,28 @@ func DecodeCKPMetaName(name string) (meta TSRangeFile) {
 	meta.name = name
 	return
 }
+
+func EncodeCompactCKPMetadataFullName(
+	start, end types.TS,
+) string {
+	return fmt.Sprintf(
+		"%s/%s_%s_%s.%s",
+		GetCheckpointDir(),
+		PrefixMetadata,
+		start.ToString(),
+		end.ToString(),
+		CompactedExt,
+	)
+}
+
+/*GC-Related*/
+
+func EncodeGCMetadataName(start, end types.TS) string {
+	return fmt.Sprintf(
+		"%s_%s_%s.%s",
+		PrefixGCMeta,
+		start.ToString(),
+		end.ToString(),
+		GCMetaExt,
+	)
+}
