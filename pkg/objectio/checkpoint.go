@@ -35,12 +35,20 @@ func GetCheckpointDir() string {
 	return defaultCheckpointDir
 }
 
+func IsCKPExt(ext string) bool {
+	return ext == CheckpointExt
+}
+
 type CKPMeta struct {
 	start types.TS
 	end   types.TS
 	name  string
 	idx   int
 	ext   string
+}
+
+func (m CKPMeta) IsCKPFile() bool {
+	return IsCKPExt(m.ext)
 }
 
 func (m *CKPMeta) GetStart() *types.TS {

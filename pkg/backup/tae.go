@@ -466,7 +466,7 @@ func copyFileAndGetMetaFiles(
 			})
 		}
 
-		if copy || ext == blockio.CheckpointExt || ext == blockio.GCFullExt {
+		if copy || objectio.IsCKPExt(ext) || ext == blockio.GCFullExt {
 			metaFile := checkpoint.NewMetaFile(i, start, end, file.Name)
 			metaFiles = append(metaFiles, metaFile)
 		}

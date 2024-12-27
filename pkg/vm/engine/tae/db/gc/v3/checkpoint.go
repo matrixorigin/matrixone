@@ -638,7 +638,7 @@ func (c *checkpointCleaner) deleteStaleCKPMetaFileLocked() (err error) {
 	metaFiles := c.CloneMetaFilesLocked()
 	filesToDelete := make([]string, 0)
 	for _, metaFile := range metaFiles {
-		if (metaFile.Ext() != blockio.CheckpointExt) ||
+		if !objectio.IsCKPExt(metaFile.Ext()) ||
 			(metaFile.EqualRange(&window.tsRange.start, &window.tsRange.end)) {
 			logutil.Info(
 				"GC-TRACE-DELETE-CKP-FILE-SKIP",
@@ -1162,7 +1162,7 @@ func (c *checkpointCleaner) doGCAgainstGlobalCheckpointLocked(
 		name:  metafile,
 		start: scannedWindow.tsRange.start,
 		end:   scannedWindow.tsRange.end,
-		ext:   blockio.CheckpointExt,
+		ext:   objectio.CheckpointExt,
 	})
 	softCost = time.Since(now)
 
@@ -1701,7 +1701,7 @@ func (c *checkpointCleaner) scanCheckpointsLocked(
 			name:  gcMetaFile,
 			start: gcWindow.tsRange.start,
 			end:   gcWindow.tsRange.end,
-			ext:   blockio.CheckpointExt,
+			ext:   objectio.CheckpointExt,
 		})
 	return
 }

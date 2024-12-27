@@ -36,16 +36,21 @@ func init() {
 }
 
 const (
-	CheckpointExt = "ckp"
-	GCFullExt     = "fgc"
-	SnapshotExt   = "snap"
-	AcctExt       = "acct"
-	TmpExt        = "tmp"
-	CompactedExt  = "cpt"
+	GCFullExt    = "fgc"
+	SnapshotExt  = "snap"
+	AcctExt      = "acct"
+	TmpExt       = "tmp"
+	CompactedExt = "cpt"
 )
 
 func EncodeGCMetadataFileName(prefix string, start, end types.TS) string {
-	return fmt.Sprintf("%s_%s_%s.%s", prefix, start.ToString(), end.ToString(), CheckpointExt)
+	return fmt.Sprintf(
+		"%s_%s_%s.%s",
+		prefix,
+		start.ToString(),
+		end.ToString(),
+		objectio.CheckpointExt,
+	)
 }
 
 func EncodeCompactedMetadataFileName(dir, prefix string, start, end types.TS) string {
