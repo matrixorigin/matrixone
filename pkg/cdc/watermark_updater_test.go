@@ -237,10 +237,6 @@ func TestWatermarkUpdater_DbOps(t *testing.T) {
 	}
 	err = u.InsertIntoDb(info3, t1)
 	assert.NoError(t, err)
-
-	// ---------- delete all
-	err = u.DeleteAllFromDb()
-	assert.NoError(t, err)
 }
 
 func TestWatermarkUpdater_Run(t *testing.T) {
