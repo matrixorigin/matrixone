@@ -22,7 +22,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
@@ -414,19 +413,6 @@ func (e *CheckpointEntry) GetTableByID(
 	}
 	ins, del, dataObject, tombstoneObject, err = data.GetTableDataFromBats(tid, bats)
 	return
-}
-
-func (e *CheckpointEntry) GCMetadata(fs *objectio.ObjectFS) error {
-	name := blockio.EncodeCheckpointMetadataFileName(CheckpointDir, PrefixMetadata, e.start, e.end)
-	err := fs.Delete(name)
-	logutil.Infof("GC checkpoint metadata %v, err %v", e.String(), err)
-	return err
-}
-
-func (e *CheckpointEntry) GCEntry(fs *objectio.ObjectFS) error {
-	err := fs.Delete(e.cnLocation.Name().String())
-	defer logutil.Infof("GC checkpoint entry %v, err %v", e.String(), err)
-	return err
 }
 
 type MetaFile struct {
