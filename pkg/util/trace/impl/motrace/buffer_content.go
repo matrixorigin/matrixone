@@ -197,12 +197,18 @@ func (b *ContentBuffer) GetBatch(ctx context.Context, _ *bytes.Buffer) any {
 		setter.SetupBackOff(ContentBufferBackOff{})
 	}
 
+	gauge := v2.GetTraceCollectorContentQueueLength(b.bufferType)
+	callback := func(buffer *bytes.Buffer) {
+		gauge.Inc()
+		descBuffer(buffer)
+	}
+
 	incBuffer()
 	return &contentWriteRequest{
 		buffer: b.buf,
 		writer: w,
 		// add callback to release buffer
-		callback: descBuffer,
+		callback: callback,
 	}
 }
 
@@ -232,7 +238,7 @@ func incBuffer() {
 }
 
 func descBuffer(_ *bytes.Buffer) {
-	v2.TraceCollectorContentQueueLength.Desc()
+	v2.TraceCollectorContentQueueLength.Dec()
 	bufferCount.Add(-1)
 }
 

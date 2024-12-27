@@ -70,6 +70,11 @@ func NewContentWriter(ctx context.Context, tbl *table.Table, fileFlusher table.F
 func (c *ContentWriter) SetBuffer(buf *bytes.Buffer, callback func(buffer *bytes.Buffer)) {
 	c.buf = buf
 	c.bufCallback = callback
+	if callback != nil {
+		v2.TraceMOLoggerBufferCallbackSet.Inc()
+	} else {
+		v2.TraceMOLoggerBufferCallbackSetNil.Inc()
+	}
 }
 
 // NeedBuffer implements table.BufferSettable
@@ -106,14 +111,30 @@ func (c *ContentWriter) FlushAndClose() (n int, err error) {
 	if c.buf == nil {
 		return 0, nil
 	}
+
+	v2.TraceCollectorWritingQueueLength.Inc()
 	// mode 1 of table.BufferSettable
 	if c.formatter != nil {
 		c.formatter.Flush()
 	}
-	if c.bufCallback != nil {
-		// release the buf.
-		defer c.bufCallback(c.buf)
-	}
+
+	// release op
+	defer func() {
+		v2.TraceCollectorWritingQueueLength.Dec()
+		if c.bufCallback == nil {
+			v2.TraceMOLoggerBufferNoCallback.Inc()
+		} else {
+			v2.TraceMOLoggerBufferCallback.Inc()
+			// release the buf normally
+			c.bufCallback(c.buf)
+		}
+		// nil all
+		c.sqlFlusher = nil
+		c.csvFlusher = nil
+		c.formatter = nil
+		c.bufCallback = nil
+		c.buf = nil
+	}()
 
 	// main flow
 	// Step 1/2: do sql flush.
@@ -141,15 +162,6 @@ func (c *ContentWriter) FlushAndClose() (n int, err error) {
 		v2.TraceMOLoggerBufferWriteSQL.Inc()
 	}
 
-	// nil all
-	if c.bufCallback == nil {
-		v2.TraceMOLoggerBufferNoCallback.Inc()
-	}
-	c.sqlFlusher = nil
-	c.csvFlusher = nil
-	c.formatter = nil
-	c.bufCallback = nil
-	c.buf = nil
 	return n, nil
 }
 

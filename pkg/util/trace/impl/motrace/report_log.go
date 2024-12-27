@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 
 	"go.uber.org/zap"
@@ -113,11 +114,17 @@ func (m *MOZapLog) FillRow(ctx context.Context, row *table.Row) {
 	row.SetColumnVal(levelCol, table.StringField(m.Level.String()))
 	row.SetColumnVal(callerCol, table.StringField(m.Caller))
 	if maxVal := GetTracerProvider().MaxLogMessageSize; maxVal > 0 && len(m.Message) > maxVal {
+		v2.TraceMOLoggerLogMessageTooLong.Inc()
 		row.SetColumnVal(messageCol, table.StringField(m.Message[:maxVal]))
 	} else {
 		row.SetColumnVal(messageCol, table.StringField(m.Message))
 	}
-	row.SetColumnVal(extraCol, table.StringField(m.Extra))
+	if maxVal := GetTracerProvider().MaxLogMessageSize; maxVal > 0 && len(m.Extra) > maxVal {
+		v2.TraceMOLoggerLogExtraTooLong.Inc()
+		row.SetColumnVal(extraCol, table.StringField(m.Extra[:maxVal]))
+	} else {
+		row.SetColumnVal(extraCol, table.StringField(m.Extra))
+	}
 	row.SetColumnVal(stackCol, table.StringField(m.Stack))
 	if m.SessionID != "" {
 		row.SetColumnVal(sessionIDCol, table.StringField(m.SessionID))
