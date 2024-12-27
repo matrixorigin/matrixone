@@ -125,6 +125,7 @@ func (b *bufferHolder) Start() {
 		if b.mux.TryLock() {
 			b.mux.Unlock()
 		}
+		v2.GetTraceCollectorSignalTotal(b.name, "trigger").Inc()
 		b.signal(b)
 	})
 	if b.aggr != nil {
@@ -207,8 +208,10 @@ func (b *bufferHolder) Add(item batchpipe.HasName, needAggr bool) {
 	buf.Add(item)
 	unlock()
 	if buf.ShouldFlush() {
+		v2.GetTraceCollectorSignalTotal(b.name, "flush").Inc()
 		b.signal(b)
 	} else if checker, is := item.(table.NeedSyncWrite); is && checker.NeedSyncWrite() {
+		v2.GetTraceCollectorSignalTotal(b.name, "sync").Inc()
 		b.signal(b)
 	}
 }
@@ -695,6 +698,7 @@ var awakeBufferFactory = func(c *MOCollector) func(holder *bufferHolder) {
 		defer func() {
 			v2.TraceCollectorGenerateAwareDurationHistogram.Observe(time.Since(start).Seconds())
 		}()
+		v2.GetTraceCollectorSignalTotal(holder.name, "main").Inc()
 		req := holder.getGenerateReq()
 		if req == nil {
 			return
