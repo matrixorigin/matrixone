@@ -269,6 +269,7 @@ func (builder *QueryBuilder) bindDelete(stmt *tree.Delete, bindCtx *BindContext)
 			if col.Name == tableDef.Pkey.PkeyColName {
 				lockTarget := &plan.LockTarget{
 					TableId:            tableDef.TblId,
+					ObjRef:             DeepCopyObjectRef(dmlCtx.objRefs[i]),
 					PrimaryColIdxInBat: int32(pkPos),
 					PrimaryColRelPos:   selectNodeTag,
 					PrimaryColTyp:      col.Typ,
@@ -310,6 +311,7 @@ func (builder *QueryBuilder) bindDelete(stmt *tree.Delete, bindCtx *BindContext)
 					if col.Name == idxNode.TableDef.Pkey.PkeyColName {
 						lockTargets = append(lockTargets, &plan.LockTarget{
 							TableId:            idxNode.TableDef.TblId,
+							ObjRef:             DeepCopyObjectRef(idxNode.ObjRef),
 							PrimaryColIdxInBat: int32(pkPos),
 							PrimaryColRelPos:   idxNode.BindingTags[0],
 							PrimaryColTyp:      col.Typ,

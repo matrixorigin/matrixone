@@ -188,6 +188,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		if col.Name == pkName && pkName != catalog.FakePrimaryKeyColName {
 			lockTarget := &plan.LockTarget{
 				TableId:            tableDef.TblId,
+				ObjRef:             DeepCopyObjectRef(objRef),
 				PrimaryColIdxInBat: int32(colName2Idx[tableDef.Name+"."+col.Name]),
 				PrimaryColRelPos:   selectTag,
 				PrimaryColTyp:      col.Typ,
@@ -218,6 +219,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		}
 		lockTarget := &plan.LockTarget{
 			TableId:            idxTableDef.TblId,
+			ObjRef:             DeepCopyObjectRef(dmlCtx.objRefs[0]),
 			PrimaryColIdxInBat: pkIdxInBat,
 			PrimaryColRelPos:   selectTag,
 			PrimaryColTyp:      selectNode.ProjectList[int(pkIdxInBat)].Typ,

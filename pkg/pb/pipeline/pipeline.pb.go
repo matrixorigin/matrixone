@@ -1579,19 +1579,20 @@ func (m *PostDml) GetFullText() *plan.PostDmlFullTextCtx {
 }
 
 type LockTarget struct {
-	TableId              uint64        `protobuf:"varint,1,opt,name=table_id,json=tableId,proto3" json:"table_id,omitempty"`
-	PrimaryColIdxInBat   int32         `protobuf:"varint,2,opt,name=primary_col_idx_in_bat,json=primaryColIdxInBat,proto3" json:"primary_col_idx_in_bat,omitempty"`
-	PrimaryColTyp        plan.Type     `protobuf:"bytes,3,opt,name=primary_col_typ,json=primaryColTyp,proto3" json:"primary_col_typ"`
-	RefreshTsIdxInBat    int32         `protobuf:"varint,4,opt,name=refresh_ts_idx_in_bat,json=refreshTsIdxInBat,proto3" json:"refresh_ts_idx_in_bat,omitempty"`
-	FilterColIdxInBat    int32         `protobuf:"varint,5,opt,name=filter_col_idx_in_bat,json=filterColIdxInBat,proto3" json:"filter_col_idx_in_bat,omitempty"`
-	LockTable            bool          `protobuf:"varint,6,opt,name=lock_table,json=lockTable,proto3" json:"lock_table,omitempty"`
-	ChangeDef            bool          `protobuf:"varint,7,opt,name=ChangeDef,proto3" json:"ChangeDef,omitempty"`
-	Mode                 lock.LockMode `protobuf:"varint,8,opt,name=Mode,proto3,enum=lock.LockMode" json:"Mode,omitempty"`
-	LockRows             *plan.Expr    `protobuf:"bytes,9,opt,name=lock_rows,json=lockRows,proto3" json:"lock_rows,omitempty"`
-	LockTableAtTheEnd    bool          `protobuf:"varint,10,opt,name=lock_table_at_the_end,json=lockTableAtTheEnd,proto3" json:"lock_table_at_the_end,omitempty"`
-	XXX_NoUnkeyedLiteral struct{}      `json:"-"`
-	XXX_unrecognized     []byte        `json:"-"`
-	XXX_sizecache        int32         `json:"-"`
+	TableId              uint64          `protobuf:"varint,1,opt,name=table_id,json=tableId,proto3" json:"table_id,omitempty"`
+	PrimaryColIdxInBat   int32           `protobuf:"varint,2,opt,name=primary_col_idx_in_bat,json=primaryColIdxInBat,proto3" json:"primary_col_idx_in_bat,omitempty"`
+	PrimaryColTyp        plan.Type       `protobuf:"bytes,3,opt,name=primary_col_typ,json=primaryColTyp,proto3" json:"primary_col_typ"`
+	RefreshTsIdxInBat    int32           `protobuf:"varint,4,opt,name=refresh_ts_idx_in_bat,json=refreshTsIdxInBat,proto3" json:"refresh_ts_idx_in_bat,omitempty"`
+	FilterColIdxInBat    int32           `protobuf:"varint,5,opt,name=filter_col_idx_in_bat,json=filterColIdxInBat,proto3" json:"filter_col_idx_in_bat,omitempty"`
+	LockTable            bool            `protobuf:"varint,6,opt,name=lock_table,json=lockTable,proto3" json:"lock_table,omitempty"`
+	ChangeDef            bool            `protobuf:"varint,7,opt,name=ChangeDef,proto3" json:"ChangeDef,omitempty"`
+	Mode                 lock.LockMode   `protobuf:"varint,8,opt,name=Mode,proto3,enum=lock.LockMode" json:"Mode,omitempty"`
+	LockRows             *plan.Expr      `protobuf:"bytes,9,opt,name=lock_rows,json=lockRows,proto3" json:"lock_rows,omitempty"`
+	LockTableAtTheEnd    bool            `protobuf:"varint,10,opt,name=lock_table_at_the_end,json=lockTableAtTheEnd,proto3" json:"lock_table_at_the_end,omitempty"`
+	ObjRef               *plan.ObjectRef `protobuf:"bytes,11,opt,name=obj_ref,json=objRef,proto3" json:"obj_ref,omitempty"`
+	XXX_NoUnkeyedLiteral struct{}        `json:"-"`
+	XXX_unrecognized     []byte          `json:"-"`
+	XXX_sizecache        int32           `json:"-"`
 }
 
 func (m *LockTarget) Reset()         { *m = LockTarget{} }
@@ -1695,6 +1696,13 @@ func (m *LockTarget) GetLockTableAtTheEnd() bool {
 		return m.LockTableAtTheEnd
 	}
 	return false
+}
+
+func (m *LockTarget) GetObjRef() *plan.ObjectRef {
+	if m != nil {
+		return m.ObjRef
+	}
+	return nil
 }
 
 type LockOp struct {
@@ -7664,6 +7672,18 @@ func (m *LockTarget) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		i -= len(m.XXX_unrecognized)
 		copy(dAtA[i:], m.XXX_unrecognized)
 	}
+	if m.ObjRef != nil {
+		{
+			size, err := m.ObjRef.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintPipeline(dAtA, i, uint64(size))
+		}
+		i--
+		dAtA[i] = 0x5a
+	}
 	if m.LockTableAtTheEnd {
 		i--
 		if m.LockTableAtTheEnd {
@@ -7924,21 +7944,21 @@ func (m *OnDuplicateKey) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		}
 	}
 	if len(m.OnDuplicateIdx) > 0 {
-		dAtA34 := make([]byte, len(m.OnDuplicateIdx)*10)
-		var j33 int
+		dAtA35 := make([]byte, len(m.OnDuplicateIdx)*10)
+		var j34 int
 		for _, num1 := range m.OnDuplicateIdx {
 			num := uint64(num1)
 			for num >= 1<<7 {
-				dAtA34[j33] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA35[j34] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j33++
+				j34++
 			}
-			dAtA34[j33] = uint8(num)
-			j33++
+			dAtA35[j34] = uint8(num)
+			j34++
 		}
-		i -= j33
-		copy(dAtA[i:], dAtA34[:j33])
-		i = encodeVarintPipeline(dAtA, i, uint64(j33))
+		i -= j34
+		copy(dAtA[i:], dAtA35[:j34])
+		i = encodeVarintPipeline(dAtA, i, uint64(j34))
 		i--
 		dAtA[i] = 0x2a
 	}
@@ -8175,40 +8195,40 @@ func (m *Join) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		dAtA[i] = 0x1a
 	}
 	if len(m.ColList) > 0 {
-		dAtA38 := make([]byte, len(m.ColList)*10)
-		var j37 int
+		dAtA39 := make([]byte, len(m.ColList)*10)
+		var j38 int
 		for _, num1 := range m.ColList {
 			num := uint64(num1)
 			for num >= 1<<7 {
-				dAtA38[j37] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA39[j38] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j37++
+				j38++
 			}
-			dAtA38[j37] = uint8(num)
-			j37++
+			dAtA39[j38] = uint8(num)
+			j38++
 		}
-		i -= j37
-		copy(dAtA[i:], dAtA38[:j37])
-		i = encodeVarintPipeline(dAtA, i, uint64(j37))
+		i -= j38
+		copy(dAtA[i:], dAtA39[:j38])
+		i = encodeVarintPipeline(dAtA, i, uint64(j38))
 		i--
 		dAtA[i] = 0x12
 	}
 	if len(m.RelList) > 0 {
-		dAtA40 := make([]byte, len(m.RelList)*10)
-		var j39 int
+		dAtA41 := make([]byte, len(m.RelList)*10)
+		var j40 int
 		for _, num1 := range m.RelList {
 			num := uint64(num1)
 			for num >= 1<<7 {
-				dAtA40[j39] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA41[j40] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j39++
+				j40++
 			}
-			dAtA40[j39] = uint8(num)
-			j39++
+			dAtA41[j40] = uint8(num)
+			j40++
 		}
-		i -= j39
-		copy(dAtA[i:], dAtA40[:j39])
-		i = encodeVarintPipeline(dAtA, i, uint64(j39))
+		i -= j40
+		copy(dAtA[i:], dAtA41[:j40])
+		i = encodeVarintPipeline(dAtA, i, uint64(j40))
 		i--
 		dAtA[i] = 0xa
 	}
@@ -8324,21 +8344,21 @@ func (m *AntiJoin) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		dAtA[i] = 0x12
 	}
 	if len(m.Result) > 0 {
-		dAtA43 := make([]byte, len(m.Result)*10)
-		var j42 int
+		dAtA44 := make([]byte, len(m.Result)*10)
+		var j43 int
 		for _, num1 := range m.Result {
 			num := uint64(num1)
 			for num >= 1<<7 {
-				dAtA43[j42] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA44[j43] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j42++
+				j43++
 			}
-			dAtA43[j42] = uint8(num)
-			j42++
+			dAtA44[j43] = uint8(num)
+			j43++
 		}
-		i -= j42
-		copy(dAtA[i:], dAtA43[:j42])
-		i = encodeVarintPipeline(dAtA, i, uint64(j42))
+		i -= j43
+		copy(dAtA[i:], dAtA44[:j43])
+		i = encodeVarintPipeline(dAtA, i, uint64(j43))
 		i--
 		dAtA[i] = 0xa
 	}
@@ -8468,40 +8488,40 @@ func (m *LeftJoin) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		dAtA[i] = 0x1a
 	}
 	if len(m.ColList) > 0 {
-		dAtA46 := make([]byte, len(m.ColList)*10)
-		var j45 int
+		dAtA47 := make([]byte, len(m.ColList)*10)
+		var j46 int
 		for _, num1 := range m.ColList {
 			num := uint64(num1)
 			for num >= 1<<7 {
-				dAtA46[j45] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA47[j46] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j45++
+				j46++
 			}
-			dAtA46[j45] = uint8(num)
-			j45++
+			dAtA47[j46] = uint8(num)
+			j46++
 		}
-		i -= j45
-		copy(dAtA[i:], dAtA46[:j45])
-		i = encodeVarintPipeline(dAtA, i, uint64(j45))
+		i -= j46
+		copy(dAtA[i:], dAtA47[:j46])
+		i = encodeVarintPipeline(dAtA, i, uint64(j46))
 		i--
 		dAtA[i] = 0x12
 	}
 	if len(m.RelList) > 0 {
-		dAtA48 := make([]byte, len(m.RelList)*10)
-		var j47 int
+		dAtA49 := make([]byte, len(m.RelList)*10)
+		var j48 int
 		for _, num1 := range m.RelList {
 			num := uint64(num1)
 			for num >= 1<<7 {
-				dAtA48[j47] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA49[j48] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j47++
+				j48++
 			}
-			dAtA48[j47] = uint8(num)
-			j47++
+			dAtA49[j48] = uint8(num)
+			j48++
 		}
-		i -= j47
-		copy(dAtA[i:], dAtA48[:j47])
-		i = encodeVarintPipeline(dAtA, i, uint64(j47))
+		i -= j48
+		copy(dAtA[i:], dAtA49[:j48])
+		i = encodeVarintPipeline(dAtA, i, uint64(j48))
 		i--
 		dAtA[i] = 0xa
 	}
@@ -8645,40 +8665,40 @@ func (m *RightJoin) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		dAtA[i] = 0x1a
 	}
 	if len(m.ColList) > 0 {
-		dAtA51 := make([]byte, len(m.ColList)*10)
-		var j50 int
+		dAtA52 := make([]byte, len(m.ColList)*10)
+		var j51 int
 		for _, num1 := range m.ColList {
 			num := uint64(num1)
 			for num >= 1<<7 {
-				dAtA51[j50] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA52[j51] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j50++
+				j51++
 			}
-			dAtA51[j50] = uint8(num)
-			j50++
+			dAtA52[j51] = uint8(num)
+			j51++
 		}
-		i -= j50
-		copy(dAtA[i:], dAtA51[:j50])
-		i = encodeVarintPipeline(dAtA, i, uint64(j50))
+		i -= j51
+		copy(dAtA[i:], dAtA52[:j51])
+		i = encodeVarintPipeline(dAtA, i, uint64(j51))
 		i--
 		dAtA[i] = 0x12
 	}
 	if len(m.RelList) > 0 {
-		dAtA53 := make([]byte, len(m.RelList)*10)
-		var j52 int
+		dAtA54 := make([]byte, len(m.RelList)*10)
+		var j53 int
 		for _, num1 := range m.RelList {
 			num := uint64(num1)
 			for num >= 1<<7 {
-				dAtA53[j52] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA54[j53] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j52++
+				j53++
 			}
-			dAtA53[j52] = uint8(num)
-			j52++
+			dAtA54[j53] = uint8(num)
+			j53++
 		}
-		i -= j52
-		copy(dAtA[i:], dAtA53[:j52])
-		i = encodeVarintPipeline(dAtA, i, uint64(j52))
+		i -= j53
+		copy(dAtA[i:], dAtA54[:j53])
+		i = encodeVarintPipeline(dAtA, i, uint64(j53))
 		i--
 		dAtA[i] = 0xa
 	}
@@ -8808,21 +8828,21 @@ func (m *RightSemiJoin) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		dAtA[i] = 0x12
 	}
 	if len(m.Result) > 0 {
-		dAtA56 := make([]byte, len(m.Result)*10)
-		var j55 int
+		dAtA57 := make([]byte, len(m.Result)*10)
+		var j56 int
 		for _, num1 := range m.Result {
 			num := uint64(num1)
 			for num >= 1<<7 {
-				dAtA56[j55] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA57[j56] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j55++
+				j56++
 			}
-			dAtA56[j55] = uint8(num)
-			j55++
+			dAtA57[j56] = uint8(num)
+			j56++
 		}
-		i -= j55
-		copy(dAtA[i:], dAtA56[:j55])
-		i = encodeVarintPipeline(dAtA, i, uint64(j55))
+		i -= j56
+		copy(dAtA[i:], dAtA57[:j56])
+		i = encodeVarintPipeline(dAtA, i, uint64(j56))
 		i--
 		dAtA[i] = 0xa
 	}
@@ -8952,21 +8972,21 @@ func (m *RightAntiJoin) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		dAtA[i] = 0x12
 	}
 	if len(m.Result) > 0 {
-		dAtA59 := make([]byte, len(m.Result)*10)
-		var j58 int
+		dAtA60 := make([]byte, len(m.Result)*10)
+		var j59 int
 		for _, num1 := range m.Result {
 			num := uint64(num1)
 			for num >= 1<<7 {
-				dAtA59[j58] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA60[j59] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j58++
+				j59++
 			}
-			dAtA59[j58] = uint8(num)
-			j58++
+			dAtA60[j59] = uint8(num)
+			j59++
 		}
-		i -= j58
-		copy(dAtA[i:], dAtA59[:j58])
-		i = encodeVarintPipeline(dAtA, i, uint64(j58))
+		i -= j59
+		copy(dAtA[i:], dAtA60[:j59])
+		i = encodeVarintPipeline(dAtA, i, uint64(j59))
 		i--
 		dAtA[i] = 0xa
 	}
@@ -9082,21 +9102,21 @@ func (m *SemiJoin) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		dAtA[i] = 0x12
 	}
 	if len(m.Result) > 0 {
-		dAtA62 := make([]byte, len(m.Result)*10)
-		var j61 int
+		dAtA63 := make([]byte, len(m.Result)*10)
+		var j62 int
 		for _, num1 := range m.Result {
 			num := uint64(num1)
 			for num >= 1<<7 {
-				dAtA62[j61] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA63[j62] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j61++
+				j62++
 			}
-			dAtA62[j61] = uint8(num)
-			j61++
+			dAtA63[j62] = uint8(num)
+			j62++
 		}
-		i -= j61
-		copy(dAtA[i:], dAtA62[:j61])
-		i = encodeVarintPipeline(dAtA, i, uint64(j61))
+		i -= j62
+		copy(dAtA[i:], dAtA63[:j62])
+		i = encodeVarintPipeline(dAtA, i, uint64(j62))
 		i--
 		dAtA[i] = 0xa
 	}
@@ -9226,40 +9246,40 @@ func (m *SingleJoin) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		dAtA[i] = 0x1a
 	}
 	if len(m.ColList) > 0 {
-		dAtA65 := make([]byte, len(m.ColList)*10)
-		var j64 int
+		dAtA66 := make([]byte, len(m.ColList)*10)
+		var j65 int
 		for _, num1 := range m.ColList {
 			num := uint64(num1)
 			for num >= 1<<7 {
-				dAtA65[j64] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA66[j65] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j64++
+				j65++
 			}
-			dAtA65[j64] = uint8(num)
-			j64++
+			dAtA66[j65] = uint8(num)
+			j65++
 		}
-		i -= j64
-		copy(dAtA[i:], dAtA65[:j64])
-		i = encodeVarintPipeline(dAtA, i, uint64(j64))
+		i -= j65
+		copy(dAtA[i:], dAtA66[:j65])
+		i = encodeVarintPipeline(dAtA, i, uint64(j65))
 		i--
 		dAtA[i] = 0x12
 	}
 	if len(m.RelList) > 0 {
-		dAtA67 := make([]byte, len(m.RelList)*10)
-		var j66 int
+		dAtA68 := make([]byte, len(m.RelList)*10)
+		var j67 int
 		for _, num1 := range m.RelList {
 			num := uint64(num1)
 			for num >= 1<<7 {
-				dAtA67[j66] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA68[j67] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j66++
+				j67++
 			}
-			dAtA67[j66] = uint8(num)
-			j66++
+			dAtA68[j67] = uint8(num)
+			j67++
 		}
-		i -= j66
-		copy(dAtA[i:], dAtA67[:j66])
-		i = encodeVarintPipeline(dAtA, i, uint64(j66))
+		i -= j67
+		copy(dAtA[i:], dAtA68[:j67])
+		i = encodeVarintPipeline(dAtA, i, uint64(j67))
 		i--
 		dAtA[i] = 0xa
 	}
@@ -9375,21 +9395,21 @@ func (m *MarkJoin) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		dAtA[i] = 0x12
 	}
 	if len(m.Result) > 0 {
-		dAtA70 := make([]byte, len(m.Result)*10)
-		var j69 int
+		dAtA71 := make([]byte, len(m.Result)*10)
+		var j70 int
 		for _, num1 := range m.Result {
 			num := uint64(num1)
 			for num >= 1<<7 {
-				dAtA70[j69] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA71[j70] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j69++
+				j70++
 			}
-			dAtA70[j69] = uint8(num)
-			j69++
+			dAtA71[j70] = uint8(num)
+			j70++
 		}
-		i -= j69
-		copy(dAtA[i:], dAtA70[:j69])
-		i = encodeVarintPipeline(dAtA, i, uint64(j69))
+		i -= j70
+		copy(dAtA[i:], dAtA71[:j70])
+		i = encodeVarintPipeline(dAtA, i, uint64(j70))
 		i--
 		dAtA[i] = 0xa
 	}
@@ -9435,21 +9455,21 @@ func (m *DedupJoin) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		}
 	}
 	if len(m.UpdateColIdxList) > 0 {
-		dAtA72 := make([]byte, len(m.UpdateColIdxList)*10)
-		var j71 int
+		dAtA73 := make([]byte, len(m.UpdateColIdxList)*10)
+		var j72 int
 		for _, num1 := range m.UpdateColIdxList {
 			num := uint64(num1)
 			for num >= 1<<7 {
-				dAtA72[j71] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA73[j72] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j71++
+				j72++
 			}
-			dAtA72[j71] = uint8(num)
-			j71++
+			dAtA73[j72] = uint8(num)
+			j72++
 		}
-		i -= j71
-		copy(dAtA[i:], dAtA72[:j71])
-		i = encodeVarintPipeline(dAtA, i, uint64(j71))
+		i -= j72
+		copy(dAtA[i:], dAtA73[:j72])
+		i = encodeVarintPipeline(dAtA, i, uint64(j72))
 		i--
 		dAtA[i] = 0x72
 	}
@@ -9570,40 +9590,40 @@ func (m *DedupJoin) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		}
 	}
 	if len(m.ColList) > 0 {
-		dAtA74 := make([]byte, len(m.ColList)*10)
-		var j73 int
+		dAtA75 := make([]byte, len(m.ColList)*10)
+		var j74 int
 		for _, num1 := range m.ColList {
 			num := uint64(num1)
 			for num >= 1<<7 {
-				dAtA74[j73] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA75[j74] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j73++
+				j74++
 			}
-			dAtA74[j73] = uint8(num)
-			j73++
+			dAtA75[j74] = uint8(num)
+			j74++
 		}
-		i -= j73
-		copy(dAtA[i:], dAtA74[:j73])
-		i = encodeVarintPipeline(dAtA, i, uint64(j73))
+		i -= j74
+		copy(dAtA[i:], dAtA75[:j74])
+		i = encodeVarintPipeline(dAtA, i, uint64(j74))
 		i--
 		dAtA[i] = 0x12
 	}
 	if len(m.RelList) > 0 {
-		dAtA76 := make([]byte, len(m.RelList)*10)
-		var j75 int
+		dAtA77 := make([]byte, len(m.RelList)*10)
+		var j76 int
 		for _, num1 := range m.RelList {
 			num := uint64(num1)
 			for num >= 1<<7 {
-				dAtA76[j75] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA77[j76] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j75++
+				j76++
 			}
-			dAtA76[j75] = uint8(num)
-			j75++
+			dAtA77[j76] = uint8(num)
+			j76++
 		}
-		i -= j75
-		copy(dAtA[i:], dAtA76[:j75])
-		i = encodeVarintPipeline(dAtA, i, uint64(j75))
+		i -= j76
+		copy(dAtA[i:], dAtA77[:j76])
+		i = encodeVarintPipeline(dAtA, i, uint64(j76))
 		i--
 		dAtA[i] = 0xa
 	}
@@ -9650,40 +9670,40 @@ func (m *Product) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		dAtA[i] = 0x18
 	}
 	if len(m.ColList) > 0 {
-		dAtA78 := make([]byte, len(m.ColList)*10)
-		var j77 int
+		dAtA79 := make([]byte, len(m.ColList)*10)
+		var j78 int
 		for _, num1 := range m.ColList {
 			num := uint64(num1)
 			for num >= 1<<7 {
-				dAtA78[j77] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA79[j78] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j77++
+				j78++
 			}
-			dAtA78[j77] = uint8(num)
-			j77++
+			dAtA79[j78] = uint8(num)
+			j78++
 		}
-		i -= j77
-		copy(dAtA[i:], dAtA78[:j77])
-		i = encodeVarintPipeline(dAtA, i, uint64(j77))
+		i -= j78
+		copy(dAtA[i:], dAtA79[:j78])
+		i = encodeVarintPipeline(dAtA, i, uint64(j78))
 		i--
 		dAtA[i] = 0x12
 	}
 	if len(m.RelList) > 0 {
-		dAtA80 := make([]byte, len(m.RelList)*10)
-		var j79 int
+		dAtA81 := make([]byte, len(m.RelList)*10)
+		var j80 int
 		for _, num1 := range m.RelList {
 			num := uint64(num1)
 			for num >= 1<<7 {
-				dAtA80[j79] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA81[j80] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j79++
+				j80++
 			}
-			dAtA80[j79] = uint8(num)
-			j79++
+			dAtA81[j80] = uint8(num)
+			j80++
 		}
-		i -= j79
-		copy(dAtA[i:], dAtA80[:j79])
-		i = encodeVarintPipeline(dAtA, i, uint64(j79))
+		i -= j80
+		copy(dAtA[i:], dAtA81[:j80])
+		i = encodeVarintPipeline(dAtA, i, uint64(j80))
 		i--
 		dAtA[i] = 0xa
 	}
@@ -9732,40 +9752,40 @@ func (m *ProductL2) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		dAtA[i] = 0x1a
 	}
 	if len(m.ColList) > 0 {
-		dAtA83 := make([]byte, len(m.ColList)*10)
-		var j82 int
+		dAtA84 := make([]byte, len(m.ColList)*10)
+		var j83 int
 		for _, num1 := range m.ColList {
 			num := uint64(num1)
 			for num >= 1<<7 {
-				dAtA83[j82] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA84[j83] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j82++
+				j83++
 			}
-			dAtA83[j82] = uint8(num)
-			j82++
+			dAtA84[j83] = uint8(num)
+			j83++
 		}
-		i -= j82
-		copy(dAtA[i:], dAtA83[:j82])
-		i = encodeVarintPipeline(dAtA, i, uint64(j82))
+		i -= j83
+		copy(dAtA[i:], dAtA84[:j83])
+		i = encodeVarintPipeline(dAtA, i, uint64(j83))
 		i--
 		dAtA[i] = 0x12
 	}
 	if len(m.RelList) > 0 {
-		dAtA85 := make([]byte, len(m.RelList)*10)
-		var j84 int
+		dAtA86 := make([]byte, len(m.RelList)*10)
+		var j85 int
 		for _, num1 := range m.RelList {
 			num := uint64(num1)
 			for num >= 1<<7 {
-				dAtA85[j84] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA86[j85] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j84++
+				j85++
 			}
-			dAtA85[j84] = uint8(num)
-			j84++
+			dAtA86[j85] = uint8(num)
+			j85++
 		}
-		i -= j84
-		copy(dAtA[i:], dAtA85[:j84])
-		i = encodeVarintPipeline(dAtA, i, uint64(j84))
+		i -= j85
+		copy(dAtA[i:], dAtA86[:j85])
+		i = encodeVarintPipeline(dAtA, i, uint64(j85))
 		i--
 		dAtA[i] = 0xa
 	}
@@ -9811,21 +9831,21 @@ func (m *IndexJoin) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		}
 	}
 	if len(m.Result) > 0 {
-		dAtA87 := make([]byte, len(m.Result)*10)
-		var j86 int
+		dAtA88 := make([]byte, len(m.Result)*10)
+		var j87 int
 		for _, num1 := range m.Result {
 			num := uint64(num1)
 			for num >= 1<<7 {
-				dAtA87[j86] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA88[j87] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j86++
+				j87++
 			}
-			dAtA87[j86] = uint8(num)
-			j86++
+			dAtA88[j87] = uint8(num)
+			j87++
 		}
-		i -= j86
-		copy(dAtA[i:], dAtA87[:j86])
-		i = encodeVarintPipeline(dAtA, i, uint64(j86))
+		i -= j87
+		copy(dAtA[i:], dAtA88[:j87])
+		i = encodeVarintPipeline(dAtA, i, uint64(j87))
 		i--
 		dAtA[i] = 0xa
 	}
@@ -9974,21 +9994,21 @@ func (m *FileOffset) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		copy(dAtA[i:], m.XXX_unrecognized)
 	}
 	if len(m.Offset) > 0 {
-		dAtA89 := make([]byte, len(m.Offset)*10)
-		var j88 int
+		dAtA90 := make([]byte, len(m.Offset)*10)
+		var j89 int
 		for _, num1 := range m.Offset {
 			num := uint64(num1)
 			for num >= 1<<7 {
-				dAtA89[j88] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA90[j89] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j88++
+				j89++
 			}
-			dAtA89[j88] = uint8(num)
-			j88++
+			dAtA90[j89] = uint8(num)
+			j89++
 		}
-		i -= j88
-		copy(dAtA[i:], dAtA89[:j88])
-		i = encodeVarintPipeline(dAtA, i, uint64(j88))
+		i -= j89
+		copy(dAtA[i:], dAtA90[:j89])
+		i = encodeVarintPipeline(dAtA, i, uint64(j89))
 		i--
 		dAtA[i] = 0xa
 	}
@@ -10131,21 +10151,21 @@ func (m *ExternalScan) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		}
 	}
 	if len(m.FileSize) > 0 {
-		dAtA92 := make([]byte, len(m.FileSize)*10)
-		var j91 int
+		dAtA93 := make([]byte, len(m.FileSize)*10)
+		var j92 int
 		for _, num1 := range m.FileSize {
 			num := uint64(num1)
 			for num >= 1<<7 {
-				dAtA92[j91] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA93[j92] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j91++
+				j92++
 			}
-			dAtA92[j91] = uint8(num)
-			j91++
+			dAtA93[j92] = uint8(num)
+			j92++
 		}
-		i -= j91
-		copy(dAtA[i:], dAtA92[:j91])
-		i = encodeVarintPipeline(dAtA, i, uint64(j91))
+		i -= j92
+		copy(dAtA[i:], dAtA93[:j92])
+		i = encodeVarintPipeline(dAtA, i, uint64(j92))
 		i--
 		dAtA[i] = 0x12
 	}
@@ -12929,6 +12949,10 @@ func (m *LockTarget) ProtoSize() (n int) {
 	}
 	if m.LockTableAtTheEnd {
 		n += 2
+	}
+	if m.ObjRef != nil {
+		l = m.ObjRef.ProtoSize()
+		n += 1 + l + sovPipeline(uint64(l))
 	}
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
@@ -19018,6 +19042,42 @@ func (m *LockTarget) Unmarshal(dAtA []byte) error {
 				}
 			}
 			m.LockTableAtTheEnd = bool(v != 0)
+		case 11:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field ObjRef", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPipeline
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthPipeline
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthPipeline
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if m.ObjRef == nil {
+				m.ObjRef = &plan.ObjectRef{}
+			}
+			if err := m.ObjRef.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
 		default:
 			iNdEx = preIndex
 			skippy, err := skipPipeline(dAtA[iNdEx:])

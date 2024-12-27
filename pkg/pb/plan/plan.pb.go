@@ -7397,6 +7397,7 @@ type LockTarget struct {
 	FilterColRelPos      int32         `protobuf:"varint,12,opt,name=filter_col_rel_pos,json=filterColRelPos,proto3" json:"filter_col_rel_pos,omitempty"`
 	LockRows             *Expr         `protobuf:"bytes,13,opt,name=lock_rows,json=lockRows,proto3" json:"lock_rows,omitempty"`
 	LockTableAtTheEnd    bool          `protobuf:"varint,14,opt,name=lock_table_at_the_end,json=lockTableAtTheEnd,proto3" json:"lock_table_at_the_end,omitempty"`
+	ObjRef               *ObjectRef    `protobuf:"bytes,15,opt,name=obj_ref,json=objRef,proto3" json:"obj_ref,omitempty"`
 	XXX_NoUnkeyedLiteral struct{}      `json:"-"`
 	XXX_unrecognized     []byte        `json:"-"`
 	XXX_sizecache        int32         `json:"-"`
@@ -7531,6 +7532,13 @@ func (m *LockTarget) GetLockTableAtTheEnd() bool {
 		return m.LockTableAtTheEnd
 	}
 	return false
+}
+
+func (m *LockTarget) GetObjRef() *ObjectRef {
+	if m != nil {
+		return m.ObjRef
+	}
+	return nil
 }
 
 type PreInsertUkCtx struct {
@@ -19366,6 +19374,18 @@ func (m *LockTarget) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		i -= len(m.XXX_unrecognized)
 		copy(dAtA[i:], m.XXX_unrecognized)
 	}
+	if m.ObjRef != nil {
+		{
+			size, err := m.ObjRef.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintPlan(dAtA, i, uint64(size))
+		}
+		i--
+		dAtA[i] = 0x7a
+	}
 	if m.LockTableAtTheEnd {
 		i--
 		if m.LockTableAtTheEnd {
@@ -19414,20 +19434,20 @@ func (m *LockTarget) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		dAtA[i] = 0x48
 	}
 	if len(m.PartitionTableIds) > 0 {
-		dAtA119 := make([]byte, len(m.PartitionTableIds)*10)
-		var j118 int
+		dAtA120 := make([]byte, len(m.PartitionTableIds)*10)
+		var j119 int
 		for _, num := range m.PartitionTableIds {
 			for num >= 1<<7 {
-				dAtA119[j118] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA120[j119] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j118++
+				j119++
 			}
-			dAtA119[j118] = uint8(num)
-			j118++
+			dAtA120[j119] = uint8(num)
+			j119++
 		}
-		i -= j118
-		copy(dAtA[i:], dAtA119[:j118])
-		i = encodeVarintPlan(dAtA, i, uint64(j118))
+		i -= j119
+		copy(dAtA[i:], dAtA120[:j119])
+		i = encodeVarintPlan(dAtA, i, uint64(j119))
 		i--
 		dAtA[i] = 0x42
 	}
@@ -19534,21 +19554,21 @@ func (m *PreInsertUkCtx) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		dAtA[i] = 0x10
 	}
 	if len(m.Columns) > 0 {
-		dAtA124 := make([]byte, len(m.Columns)*10)
-		var j123 int
+		dAtA125 := make([]byte, len(m.Columns)*10)
+		var j124 int
 		for _, num1 := range m.Columns {
 			num := uint64(num1)
 			for num >= 1<<7 {
-				dAtA124[j123] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA125[j124] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j123++
+				j124++
 			}
-			dAtA124[j123] = uint8(num)
-			j123++
+			dAtA125[j124] = uint8(num)
+			j124++
 		}
-		i -= j123
-		copy(dAtA[i:], dAtA124[:j123])
-		i = encodeVarintPlan(dAtA, i, uint64(j123))
+		i -= j124
+		copy(dAtA[i:], dAtA125[:j124])
+		i = encodeVarintPlan(dAtA, i, uint64(j124))
 		i--
 		dAtA[i] = 0xa
 	}
@@ -19580,21 +19600,21 @@ func (m *PreDeleteCtx) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		copy(dAtA[i:], m.XXX_unrecognized)
 	}
 	if len(m.Idx) > 0 {
-		dAtA126 := make([]byte, len(m.Idx)*10)
-		var j125 int
+		dAtA127 := make([]byte, len(m.Idx)*10)
+		var j126 int
 		for _, num1 := range m.Idx {
 			num := uint64(num1)
 			for num >= 1<<7 {
-				dAtA126[j125] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA127[j126] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j125++
+				j126++
 			}
-			dAtA126[j125] = uint8(num)
-			j125++
+			dAtA127[j126] = uint8(num)
+			j126++
 		}
-		i -= j125
-		copy(dAtA[i:], dAtA126[:j125])
-		i = encodeVarintPlan(dAtA, i, uint64(j125))
+		i -= j126
+		copy(dAtA[i:], dAtA127[:j126])
+		i = encodeVarintPlan(dAtA, i, uint64(j126))
 		i--
 		dAtA[i] = 0xa
 	}
@@ -19780,21 +19800,21 @@ func (m *IdList) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		copy(dAtA[i:], m.XXX_unrecognized)
 	}
 	if len(m.List) > 0 {
-		dAtA133 := make([]byte, len(m.List)*10)
-		var j132 int
+		dAtA134 := make([]byte, len(m.List)*10)
+		var j133 int
 		for _, num1 := range m.List {
 			num := uint64(num1)
 			for num >= 1<<7 {
-				dAtA133[j132] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA134[j133] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j132++
+				j133++
 			}
-			dAtA133[j132] = uint8(num)
-			j132++
+			dAtA134[j133] = uint8(num)
+			j133++
 		}
-		i -= j132
-		copy(dAtA[i:], dAtA133[:j132])
-		i = encodeVarintPlan(dAtA, i, uint64(j132))
+		i -= j133
+		copy(dAtA[i:], dAtA134[:j133])
+		i = encodeVarintPlan(dAtA, i, uint64(j133))
 		i--
 		dAtA[i] = 0xa
 	}
@@ -19913,20 +19933,20 @@ func (m *DeleteCtx) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		}
 	}
 	if len(m.PartitionTableIds) > 0 {
-		dAtA137 := make([]byte, len(m.PartitionTableIds)*10)
-		var j136 int
+		dAtA138 := make([]byte, len(m.PartitionTableIds)*10)
+		var j137 int
 		for _, num := range m.PartitionTableIds {
 			for num >= 1<<7 {
-				dAtA137[j136] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA138[j137] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j136++
+				j137++
 			}
-			dAtA137[j136] = uint8(num)
-			j136++
+			dAtA138[j137] = uint8(num)
+			j137++
 		}
-		i -= j136
-		copy(dAtA[i:], dAtA137[:j136])
-		i = encodeVarintPlan(dAtA, i, uint64(j136))
+		i -= j137
+		copy(dAtA[i:], dAtA138[:j137])
+		i = encodeVarintPlan(dAtA, i, uint64(j137))
 		i--
 		dAtA[i] = 0x32
 	}
@@ -20231,21 +20251,21 @@ func (m *Query) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		}
 	}
 	if len(m.Steps) > 0 {
-		dAtA142 := make([]byte, len(m.Steps)*10)
-		var j141 int
+		dAtA143 := make([]byte, len(m.Steps)*10)
+		var j142 int
 		for _, num1 := range m.Steps {
 			num := uint64(num1)
 			for num >= 1<<7 {
-				dAtA142[j141] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA143[j142] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j141++
+				j142++
 			}
-			dAtA142[j141] = uint8(num)
-			j141++
+			dAtA143[j142] = uint8(num)
+			j142++
 		}
-		i -= j141
-		copy(dAtA[i:], dAtA142[:j141])
-		i = encodeVarintPlan(dAtA, i, uint64(j141))
+		i -= j142
+		copy(dAtA[i:], dAtA143[:j142])
+		i = encodeVarintPlan(dAtA, i, uint64(j142))
 		i--
 		dAtA[i] = 0x12
 	}
@@ -22772,20 +22792,20 @@ func (m *DropTable) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		copy(dAtA[i:], m.XXX_unrecognized)
 	}
 	if len(m.FkChildTblsReferToMe) > 0 {
-		dAtA198 := make([]byte, len(m.FkChildTblsReferToMe)*10)
-		var j197 int
+		dAtA199 := make([]byte, len(m.FkChildTblsReferToMe)*10)
+		var j198 int
 		for _, num := range m.FkChildTblsReferToMe {
 			for num >= 1<<7 {
-				dAtA198[j197] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA199[j198] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j197++
+				j198++
 			}
-			dAtA198[j197] = uint8(num)
-			j197++
+			dAtA199[j198] = uint8(num)
+			j198++
 		}
-		i -= j197
-		copy(dAtA[i:], dAtA198[:j197])
-		i = encodeVarintPlan(dAtA, i, uint64(j197))
+		i -= j198
+		copy(dAtA[i:], dAtA199[:j198])
+		i = encodeVarintPlan(dAtA, i, uint64(j198))
 		i--
 		dAtA[i] = 0x62
 	}
@@ -22830,20 +22850,20 @@ func (m *DropTable) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		}
 	}
 	if len(m.ForeignTbl) > 0 {
-		dAtA201 := make([]byte, len(m.ForeignTbl)*10)
-		var j200 int
+		dAtA202 := make([]byte, len(m.ForeignTbl)*10)
+		var j201 int
 		for _, num := range m.ForeignTbl {
 			for num >= 1<<7 {
-				dAtA201[j200] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA202[j201] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j200++
+				j201++
 			}
-			dAtA201[j200] = uint8(num)
-			j200++
+			dAtA202[j201] = uint8(num)
+			j201++
 		}
-		i -= j200
-		copy(dAtA[i:], dAtA201[:j200])
-		i = encodeVarintPlan(dAtA, i, uint64(j200))
+		i -= j201
+		copy(dAtA[i:], dAtA202[:j201])
+		i = encodeVarintPlan(dAtA, i, uint64(j201))
 		i--
 		dAtA[i] = 0x3a
 	}
@@ -23396,20 +23416,20 @@ func (m *TruncateTable) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		dAtA[i] = 0x40
 	}
 	if len(m.ForeignTbl) > 0 {
-		dAtA210 := make([]byte, len(m.ForeignTbl)*10)
-		var j209 int
+		dAtA211 := make([]byte, len(m.ForeignTbl)*10)
+		var j210 int
 		for _, num := range m.ForeignTbl {
 			for num >= 1<<7 {
-				dAtA210[j209] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA211[j210] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j209++
+				j210++
 			}
-			dAtA210[j209] = uint8(num)
-			j209++
+			dAtA211[j210] = uint8(num)
+			j210++
 		}
-		i -= j209
-		copy(dAtA[i:], dAtA210[:j209])
-		i = encodeVarintPlan(dAtA, i, uint64(j209))
+		i -= j210
+		copy(dAtA[i:], dAtA211[:j210])
+		i = encodeVarintPlan(dAtA, i, uint64(j210))
 		i--
 		dAtA[i] = 0x3a
 	}
@@ -23495,20 +23515,20 @@ func (m *ClusterTable) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		dAtA[i] = 0x18
 	}
 	if len(m.AccountIDs) > 0 {
-		dAtA213 := make([]byte, len(m.AccountIDs)*10)
-		var j212 int
+		dAtA214 := make([]byte, len(m.AccountIDs)*10)
+		var j213 int
 		for _, num := range m.AccountIDs {
 			for num >= 1<<7 {
-				dAtA213[j212] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA214[j213] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j212++
+				j213++
 			}
-			dAtA213[j212] = uint8(num)
-			j212++
+			dAtA214[j213] = uint8(num)
+			j213++
 		}
-		i -= j212
-		copy(dAtA[i:], dAtA213[:j212])
-		i = encodeVarintPlan(dAtA, i, uint64(j212))
+		i -= j213
+		copy(dAtA[i:], dAtA214[:j213])
+		i = encodeVarintPlan(dAtA, i, uint64(j213))
 		i--
 		dAtA[i] = 0x12
 	}
@@ -23720,21 +23740,21 @@ func (m *Prepare) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		copy(dAtA[i:], m.XXX_unrecognized)
 	}
 	if len(m.ParamTypes) > 0 {
-		dAtA217 := make([]byte, len(m.ParamTypes)*10)
-		var j216 int
+		dAtA218 := make([]byte, len(m.ParamTypes)*10)
+		var j217 int
 		for _, num1 := range m.ParamTypes {
 			num := uint64(num1)
 			for num >= 1<<7 {
-				dAtA217[j216] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA218[j217] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j216++
+				j217++
 			}
-			dAtA217[j216] = uint8(num)
-			j216++
+			dAtA218[j217] = uint8(num)
+			j217++
 		}
-		i -= j216
-		copy(dAtA[i:], dAtA217[:j216])
-		i = encodeVarintPlan(dAtA, i, uint64(j216))
+		i -= j217
+		copy(dAtA[i:], dAtA218[:j217])
+		i = encodeVarintPlan(dAtA, i, uint64(j217))
 		i--
 		dAtA[i] = 0x22
 	}
@@ -23881,21 +23901,21 @@ func (m *OtherDCL) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		copy(dAtA[i:], m.XXX_unrecognized)
 	}
 	if len(m.ParamTypes) > 0 {
-		dAtA220 := make([]byte, len(m.ParamTypes)*10)
-		var j219 int
+		dAtA221 := make([]byte, len(m.ParamTypes)*10)
+		var j220 int
 		for _, num1 := range m.ParamTypes {
 			num := uint64(num1)
 			for num >= 1<<7 {
-				dAtA220[j219] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA221[j220] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j219++
+				j220++
 			}
-			dAtA220[j219] = uint8(num)
-			j219++
+			dAtA221[j220] = uint8(num)
+			j220++
 		}
-		i -= j219
-		copy(dAtA[i:], dAtA220[:j219])
-		i = encodeVarintPlan(dAtA, i, uint64(j219))
+		i -= j220
+		copy(dAtA[i:], dAtA221[:j220])
+		i = encodeVarintPlan(dAtA, i, uint64(j220))
 		i--
 		dAtA[i] = 0xa
 	}
@@ -26892,6 +26912,10 @@ func (m *LockTarget) ProtoSize() (n int) {
 	}
 	if m.LockTableAtTheEnd {
 		n += 2
+	}
+	if m.ObjRef != nil {
+		l = m.ObjRef.ProtoSize()
+		n += 1 + l + sovPlan(uint64(l))
 	}
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
@@ -45006,6 +45030,42 @@ func (m *LockTarget) Unmarshal(dAtA []byte) error {
 				}
 			}
 			m.LockTableAtTheEnd = bool(v != 0)
+		case 15:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field ObjRef", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPlan
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthPlan
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthPlan
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if m.ObjRef == nil {
+				m.ObjRef = &ObjectRef{}
+			}
+			if err := m.ObjRef.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
 		default:
 			iNdEx = preIndex
 			skippy, err := skipPlan(dAtA[iNdEx:])

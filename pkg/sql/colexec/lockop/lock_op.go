@@ -87,6 +87,18 @@ func (lockOp *LockOp) Prepare(proc *process.Process) error {
 				GetFetchRowsFunc(lockOp.targets[idx].primaryColumnType))
 		}
 	}
+	if len(lockOp.ctr.relations) == 0 {
+		lockOp.ctr.relations = make([]engine.Relation, len(lockOp.targets))
+		for i, target := range lockOp.targets {
+			if target.objRef != nil {
+				rel, _, err := colexec.GetRelAndPartitionRelsByObjRef(proc.Ctx, proc, lockOp.engine, target.objRef, nil)
+				if err != nil {
+					return err
+				}
+				lockOp.ctr.relations[i] = rel
+			}
+		}
+	}
 	lockOp.ctr.parker = types.NewPacker()
 	return nil
 }
@@ -184,7 +196,7 @@ func performLock(
 			proc.Ctx,
 			lockOp.engine,
 			analyzer,
-			nil,
+			lockOp.ctr.relations[idx],
 			target.tableID,
 			proc,
 			priVec,
@@ -780,6 +792,7 @@ func (lockOp *LockOp) CopyToPipelineTarget() []*pipeline.LockTarget {
 			Mode:               target.mode,
 			LockRows:           plan.DeepCopyExpr(target.lockRows),
 			LockTableAtTheEnd:  target.lockTableAtTheEnd,
+			ObjRef:             plan.DeepCopyObjectRef(target.objRef),
 		}
 	}
 	return targets
@@ -788,6 +801,7 @@ func (lockOp *LockOp) CopyToPipelineTarget() []*pipeline.LockTarget {
 // AddLockTarget add lock target, LockMode_Exclusive will used
 func (lockOp *LockOp) AddLockTarget(
 	tableID uint64,
+	objRef *plan.ObjectRef,
 	primaryColumnIndexInBatch int32,
 	primaryColumnType types.Type,
 	refreshTimestampIndexInBatch int32,
@@ -795,6 +809,7 @@ func (lockOp *LockOp) AddLockTarget(
 	lockTableAtTheEnd bool) *LockOp {
 	return lockOp.AddLockTargetWithMode(
 		tableID,
+		objRef,
 		lock.LockMode_Exclusive,
 		primaryColumnIndexInBatch,
 		primaryColumnType,
@@ -806,6 +821,7 @@ func (lockOp *LockOp) AddLockTarget(
 // AddLockTargetWithMode add lock target with lock mode
 func (lockOp *LockOp) AddLockTargetWithMode(
 	tableID uint64,
+	objRef *plan.ObjectRef,
 	mode lock.LockMode,
 	primaryColumnIndexInBatch int32,
 	primaryColumnType types.Type,
@@ -814,6 +830,7 @@ func (lockOp *LockOp) AddLockTargetWithMode(
 	lockTableAtTheEnd bool) *LockOp {
 	lockOp.targets = append(lockOp.targets, lockTarget{
 		tableID:                      tableID,
+		objRef:                       objRef,
 		primaryColumnIndexInBatch:    primaryColumnIndexInBatch,
 		primaryColumnType:            primaryColumnType,
 		refreshTimestampIndexInBatch: refreshTimestampIndexInBatch,
@@ -897,6 +914,7 @@ func (lockOp *LockOp) AddLockTargetWithPartitionAndMode(
 	// only one partition table, process as normal table
 	if len(tableIDs) == 1 {
 		return lockOp.AddLockTarget(tableIDs[0],
+			nil,
 			primaryColumnIndexInBatch,
 			primaryColumnType,
 			refreshTimestampIndexInBatch,
@@ -925,6 +943,7 @@ func (lockOp *LockOp) Reset(proc *process.Process, pipelineFailed bool, err erro
 	lockOp.resetParker()
 	lockOp.ctr.retryError = nil
 	lockOp.ctr.defChanged = false
+	lockOp.ctr.relations = nil
 }
 
 // Free free mem
