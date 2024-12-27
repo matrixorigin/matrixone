@@ -61,7 +61,6 @@ func (leftJoin *LeftJoin) Prepare(proc *process.Process) (err error) {
 				return err
 			}
 		}
-		return leftJoin.PrepareProjection(proc)
 	}
 	return err
 }
@@ -137,10 +136,7 @@ func (leftJoin *LeftJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, moerr.NewInternalErrorNoCtx("left join hanging")
 			}
 
-			result.Batch, err = leftJoin.EvalProjection(probeResult.Batch, proc)
-			if err != nil {
-				return result, err
-			}
+			result.Batch = probeResult.Batch
 			return result, nil
 
 		default:
