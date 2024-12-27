@@ -212,10 +212,10 @@ func tableItemLess(a, b *TableItem) bool {
 	if a.AccountId > b.AccountId {
 		return false
 	}
-	if a.DatabaseId < b.DatabaseId {
+	if a.DatabaseId > b.DatabaseId {
 		return true
 	}
-	if a.DatabaseId > b.DatabaseId {
+	if a.DatabaseId < b.DatabaseId {
 		return false
 	}
 	if a.Name < b.Name {
