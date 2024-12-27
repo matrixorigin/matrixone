@@ -438,10 +438,6 @@ func NewErrStaleReadNoCtx(minTS, start string) *Error {
 	return newError(Context(), ErrStaleRead, minTS, start)
 }
 
-func NewErrNoWatermarkFoundNoCtx(dbName, tblName string) *Error {
-	return newError(Context(), ErrNoWatermarkFound, dbName, tblName)
-}
-
 func NewArenaFullNoCtx() *Error {
 	return newError(Context(), ErrArenaFull)
 }
