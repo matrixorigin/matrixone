@@ -73,6 +73,10 @@ func EncodeCompactCKPMetadataFullName(
 
 /*GC-Related*/
 
+func MakeGCFullName(name string) string {
+	return GetGCDir() + name
+}
+
 func EncodeGCMetadataName(start, end types.TS) string {
 	return fmt.Sprintf(
 		"%s_%s_%s.%s",
@@ -81,4 +85,48 @@ func EncodeGCMetadataName(start, end types.TS) string {
 		end.ToString(),
 		GCMetaExt,
 	)
+}
+
+func DecodeGCMetadataName(name string) (ret TSRangeFile) {
+	fileName := strings.Split(name, ".")
+	info := strings.Split(fileName[0], "_")
+	ret.start = types.StringToTS(info[1])
+	ret.end = types.StringToTS(info[2])
+	ret.ext = fileName[1]
+	ret.name = name
+	return
+}
+
+func InheritGCMetadataName(name string, start, end *types.TS) string {
+	fileName := strings.Split(name, ".")
+	info := strings.Split(fileName[0], "_")
+	prefix := info[0]
+	ext := fileName[1]
+	return fmt.Sprintf("%s_%s_%s.%s", prefix, start.ToString(), end.ToString(), ext)
+}
+
+func EncodeSnapshotMetadataName(start, end types.TS) string {
+	return fmt.Sprintf(
+		"%s_%s_%s.%s",
+		PrefixSnapMeta,
+		start.ToString(),
+		end.ToString(),
+		SnapshotExt,
+	)
+}
+
+func EncodeAcctMetadataName(start, end types.TS) string {
+	return fmt.Sprintf(
+		"%s_%s_%s.%s",
+		PrefixAcctMeta,
+		start.ToString(),
+		end.ToString(),
+		AcctExt,
+	)
+}
+
+/*Others*/
+
+func EncodeTmpFileName(dir, prefix string, ts int64) string {
+	return fmt.Sprintf("%s/%s_%d.%s", dir, prefix, ts, TmpExt)
 }

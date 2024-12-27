@@ -484,9 +484,9 @@ func (w *GCWindow) ReadTable(ctx context.Context, name string, fs fileservice.Fi
 			release1()
 		}
 	}()
-	start, end, _ := blockio.DecodeGCMetadataFileName(name)
-	w.tsRange.start = start
-	w.tsRange.end = end
+	meta := ioutil.DecodeGCMetadataName(name)
+	w.tsRange.start = *meta.GetStart()
+	w.tsRange.end = *meta.GetEnd()
 	reader, err := blockio.NewFileReaderNoCache(fs, name)
 	if err != nil {
 		return err

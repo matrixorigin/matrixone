@@ -113,7 +113,7 @@ type checkpointCleaner struct {
 			startTime time.Time
 		}
 		scanned      *GCWindow
-		metaFiles    map[string]GCMetaFile
+		metaFiles    map[string]ioutil.TSRangeFile
 		snapshotMeta *logtail.SnapshotMeta
 		replayDone   bool
 	}
@@ -188,7 +188,7 @@ func NewCheckpointCleaner(
 	cleaner.options.gcEnabled.Store(true)
 	cleaner.mp = common.CheckpointAllocator
 	cleaner.checker.extras = make(map[string]func(item any) bool)
-	cleaner.mutation.metaFiles = make(map[string]GCMetaFile)
+	cleaner.mutation.metaFiles = make(map[string]ioutil.TSRangeFile)
 	cleaner.mutation.snapshotMeta = logtail.NewSnapshotMeta()
 	return cleaner
 }
@@ -316,38 +316,36 @@ func (c *checkpointCleaner) Replay(inputCtx context.Context) (err error) {
 		return
 	}
 
-	maxConsumedStart := types.TS{}
-	maxConsumedEnd := types.TS{}
-	maxSnapEnd := types.TS{}
-	maxAcctEnd := types.TS{}
+	var (
+		maxConsumedStart types.TS
+		maxConsumedEnd   types.TS
+		maxSnapEnd       types.TS
+		maxAcctEnd       types.TS
+	)
+
 	// Get effective minMerged
 	var snapFile, acctFile string
 	for _, dir := range dirs {
-		start, end, ext := blockio.DecodeGCMetadataFileName(dir.Name)
-		if ext == blockio.SnapshotExt && maxSnapEnd.LT(&end) {
-			maxSnapEnd = end
+		meta := ioutil.DecodeGCMetadataName(dir.Name)
+		if meta.IsSnapshotExt() && maxSnapEnd.LT(meta.GetEnd()) {
+			maxSnapEnd = *meta.GetEnd()
 			snapFile = dir.Name
 		}
-		if ext == blockio.AcctExt && maxAcctEnd.LT(&end) {
-			maxAcctEnd = end
+		if meta.IsAcctExt() && maxAcctEnd.LT(meta.GetEnd()) {
+			maxAcctEnd = *meta.GetEnd()
 			acctFile = dir.Name
 		}
-		c.mutation.metaFiles[dir.Name] = GCMetaFile{
-			name:  dir.Name,
-			start: start,
-			end:   end,
-			ext:   ext,
-		}
+		c.mutation.metaFiles[dir.Name] = meta
 	}
 	gcMetaDirs := make([]fileservice.DirEntry, 0)
 	for _, dir := range dirs {
-		start, end, ext := blockio.DecodeGCMetadataFileName(dir.Name)
-		if ext == blockio.SnapshotExt || ext == blockio.AcctExt {
+		meta := ioutil.DecodeGCMetadataName(dir.Name)
+		if meta.IsSnapshotExt() || meta.IsAcctExt() {
 			continue
 		}
-		if maxConsumedStart.IsEmpty() || maxConsumedStart.LT(&end) {
-			maxConsumedStart = start
-			maxConsumedEnd = end
+		if maxConsumedStart.IsEmpty() || maxConsumedStart.LT(meta.GetEnd()) {
+			maxConsumedStart = *meta.GetStart()
+			maxConsumedEnd = *meta.GetEnd()
 			gcMetaDirs = append(gcMetaDirs, dir)
 		}
 	}
@@ -356,7 +354,9 @@ func (c *checkpointCleaner) Replay(inputCtx context.Context) (err error) {
 	// but when upgrading from 1.2 to 1.3, there may be such a situation, so you need to replay table info first
 	if acctFile != "" {
 		if err = c.mutation.snapshotMeta.ReadTableInfo(
-			c.ctx, GCMetaDir+acctFile, c.fs.Service,
+			c.ctx,
+			ioutil.MakeGCFullName(acctFile),
+			c.fs.Service,
 		); err != nil {
 			return
 		}
@@ -368,8 +368,11 @@ func (c *checkpointCleaner) Replay(inputCtx context.Context) (err error) {
 	for _, dir := range gcMetaDirs {
 		start := time.Now()
 		window := NewGCWindow(c.mp, c.fs.Service)
-		err = window.ReadTable(ctx, GCMetaDir+dir.Name, c.fs.Service)
-		if err != nil {
+		if err = window.ReadTable(
+			ctx,
+			ioutil.MakeGCFullName(dir.Name),
+			c.fs.Service,
+		); err != nil {
 			logger = logutil.Error
 		}
 		logger(
@@ -385,7 +388,9 @@ func (c *checkpointCleaner) Replay(inputCtx context.Context) (err error) {
 	}
 	if snapFile != "" {
 		if err = c.mutation.snapshotMeta.ReadMeta(
-			ctx, GCMetaDir+snapFile, c.fs.Service,
+			ctx,
+			ioutil.MakeGCFullName(snapFile),
+			c.fs.Service,
 		); err != nil {
 			return
 		}
@@ -500,8 +505,8 @@ func (c *checkpointCleaner) GetScannedWindowLocked() *GCWindow {
 	return c.mutation.scanned
 }
 
-func (c *checkpointCleaner) CloneMetaFilesLocked() map[string]GCMetaFile {
-	metaFiles := make(map[string]GCMetaFile, len(c.mutation.metaFiles))
+func (c *checkpointCleaner) CloneMetaFilesLocked() map[string]ioutil.TSRangeFile {
+	metaFiles := make(map[string]ioutil.TSRangeFile, len(c.mutation.metaFiles))
 	for k, v := range c.mutation.metaFiles {
 		metaFiles[k] = v
 	}
@@ -590,16 +595,16 @@ func (c *checkpointCleaner) deleteStaleSnapshotFilesLocked() error {
 	}
 
 	for _, metaFile := range metaFiles {
-		switch metaFile.Ext() {
-		case blockio.SnapshotExt:
+		switch metaFile.GetExt() {
+		case ioutil.SnapshotExt:
 			if maxSnapFile, maxSnapEnd, err = doDeleteFileFn(
-				metaFile.Name(), metaFile.End(), maxSnapFile, &maxSnapEnd,
+				metaFile.GetName(), metaFile.GetEnd(), maxSnapFile, &maxSnapEnd,
 			); err != nil {
 				return err
 			}
-		case blockio.AcctExt:
+		case ioutil.AcctExt:
 			if maxAcctFile, maxAcctEnd, err = doDeleteFileFn(
-				metaFile.Name(), metaFile.End(), maxAcctFile, &maxAcctEnd,
+				metaFile.GetName(), metaFile.GetEnd(), maxAcctFile, &maxAcctEnd,
 			); err != nil {
 				return err
 			}
@@ -608,7 +613,7 @@ func (c *checkpointCleaner) deleteStaleSnapshotFilesLocked() error {
 	if len(metaFiles) != prevNum {
 		var w bytes.Buffer
 		for _, v := range metaFiles {
-			w.WriteString(fmt.Sprintf("%s,", v.String()))
+			w.WriteString(fmt.Sprintf("%s,", v.AsString("GCFile")))
 		}
 		logutil.Info(
 			"GC-TRACE-DELETE-SNAPSHOT-FILES",
@@ -639,22 +644,26 @@ func (c *checkpointCleaner) deleteStaleCKPMetaFileLocked() (err error) {
 	metaFiles := c.CloneMetaFilesLocked()
 	filesToDelete := make([]string, 0)
 	for _, metaFile := range metaFiles {
-		if !ioutil.IsCKPExt(metaFile.Ext()) ||
-			(metaFile.EqualRange(&window.tsRange.start, &window.tsRange.end)) {
+		if !metaFile.IsCKPFile() ||
+			(metaFile.RangeEqual(&window.tsRange.start, &window.tsRange.end)) {
 			logutil.Info(
 				"GC-TRACE-DELETE-CKP-FILE-SKIP",
 				zap.String("task", c.TaskNameLocked()),
-				zap.String("skip-file", metaFile.Name()),
+				zap.String("skip-file", metaFile.GetName()),
 			)
 			continue
 		}
 		gcWindow := NewGCWindow(c.mp, c.fs.Service)
 		defer gcWindow.Close()
-		if err = gcWindow.ReadTable(c.ctx, GCMetaDir+metaFile.Name(), c.fs.Service); err != nil {
+		if err = gcWindow.ReadTable(
+			c.ctx,
+			ioutil.MakeGCFullName(metaFile.GetName()),
+			c.fs.Service,
+		); err != nil {
 			logutil.Error(
 				"GC-WINDOW-READ-ERROR",
 				zap.Error(err),
-				zap.String("file", GCMetaDir+metaFile.Name()),
+				zap.String("file", ioutil.MakeGCFullName(metaFile.GetName())),
 				zap.String("task", c.TaskNameLocked()),
 			)
 			return
@@ -662,8 +671,8 @@ func (c *checkpointCleaner) deleteStaleCKPMetaFileLocked() (err error) {
 		for _, file := range gcWindow.files {
 			filesToDelete = append(filesToDelete, file.ObjectName().String())
 		}
-		filesToDelete = append(filesToDelete, GCMetaDir+metaFile.Name())
-		delete(metaFiles, metaFile.Name())
+		filesToDelete = append(filesToDelete, ioutil.MakeGCFullName(metaFile.GetName()))
+		delete(metaFiles, metaFile.GetName())
 	}
 
 	// TODO: if file is not found, it should be ignored
@@ -1159,12 +1168,12 @@ func (c *checkpointCleaner) doGCAgainstGlobalCheckpointLocked(
 			zap.Error(err))
 		return nil, err
 	}
-	c.mutAddMetaFileLocked(metafile, GCMetaFile{
-		name:  metafile,
-		start: scannedWindow.tsRange.start,
-		end:   scannedWindow.tsRange.end,
-		ext:   ioutil.CheckpointExt,
-	})
+	c.mutAddMetaFileLocked(metafile, ioutil.NewTSRangeFile(
+		metafile,
+		ioutil.CheckpointExt,
+		scannedWindow.tsRange.start,
+		scannedWindow.tsRange.end,
+	))
 	softCost = time.Since(now)
 
 	// update gc watermark and refresh snapshot meta with the latest gc result
@@ -1538,7 +1547,7 @@ func (c *checkpointCleaner) tryScanLocked(
 }
 
 func (c *checkpointCleaner) mutSetNewMetaFilesLocked(
-	metaFiles map[string]GCMetaFile,
+	metaFiles map[string]ioutil.TSRangeFile,
 ) error {
 	c.mutation.metaFiles = metaFiles
 	return nil
@@ -1546,7 +1555,7 @@ func (c *checkpointCleaner) mutSetNewMetaFilesLocked(
 
 func (c *checkpointCleaner) mutAddMetaFileLocked(
 	key string,
-	metaFile GCMetaFile,
+	metaFile ioutil.TSRangeFile,
 ) error {
 	c.mutation.metaFiles[key] = metaFile
 	return nil
@@ -1624,7 +1633,7 @@ func (c *checkpointCleaner) scanCheckpointsLocked(
 			zap.String("snapshot-detail", c.mutation.snapshotMeta.String()))
 	}()
 
-	var snapshotFile, accountFile GCMetaFile
+	var snapshotFile, accountFile ioutil.TSRangeFile
 	newFiles = make([]string, 0, 3)
 	saveSnapshot := func() (err2 error) {
 		select {
@@ -1633,13 +1642,12 @@ func (c *checkpointCleaner) scanCheckpointsLocked(
 			return
 		default:
 		}
-		name := blockio.EncodeSnapshotMetadataFileName(
-			PrefixSnapMeta,
-			ckps[0].GetStart(),
-			ckps[len(ckps)-1].GetEnd(),
+		name := ioutil.EncodeSnapshotMetadataName(
+			ckps[0].GetStart(), ckps[len(ckps)-1].GetEnd(),
 		)
 		if snapSize, err2 = c.mutation.snapshotMeta.SaveMeta(
-			GCMetaDir+name, c.fs.Service,
+			ioutil.MakeGCFullName(name),
+			c.fs.Service,
 		); err2 != nil {
 			logutil.Error(
 				"GC-SAVE-SNAPSHOT-META-ERROR",
@@ -1648,20 +1656,19 @@ func (c *checkpointCleaner) scanCheckpointsLocked(
 			)
 			return
 		}
-		newFiles = append(newFiles, GCMetaDir+name)
-		snapshotFile = GCMetaFile{
-			name:  name,
-			start: ckps[0].GetStart(),
-			end:   ckps[len(ckps)-1].GetEnd(),
-			ext:   blockio.SnapshotExt,
-		}
-		name = blockio.EncodeTableMetadataFileName(
-			PrefixAcctMeta,
+		newFiles = append(newFiles, ioutil.MakeGCFullName(name))
+		snapshotFile = ioutil.NewTSRangeFile(
+			name,
+			blockio.SnapshotExt,
 			ckps[0].GetStart(),
 			ckps[len(ckps)-1].GetEnd(),
 		)
+		name = ioutil.EncodeAcctMetadataName(
+			ckps[0].GetStart(), ckps[len(ckps)-1].GetEnd(),
+		)
 		if tableSize, err2 = c.mutation.snapshotMeta.SaveTableInfo(
-			GCMetaDir+name, c.fs.Service,
+			ioutil.MakeGCFullName(name),
+			c.fs.Service,
 		); err2 != nil {
 			logutil.Error(
 				"GC-SAVE-TABLE-META-ERROR",
@@ -1669,13 +1676,13 @@ func (c *checkpointCleaner) scanCheckpointsLocked(
 				zap.Error(err2),
 			)
 		}
-		newFiles = append(newFiles, GCMetaDir+name)
-		accountFile = GCMetaFile{
-			name:  name,
-			start: ckps[0].GetStart(),
-			end:   ckps[len(ckps)-1].GetEnd(),
-			ext:   blockio.AcctExt,
-		}
+		newFiles = append(newFiles, ioutil.MakeGCFullName(name))
+		accountFile = ioutil.NewTSRangeFile(
+			name,
+			blockio.AcctExt,
+			ckps[0].GetStart(),
+			ckps[len(ckps)-1].GetEnd(),
+		)
 		return
 	}
 
@@ -1694,16 +1701,17 @@ func (c *checkpointCleaner) scanCheckpointsLocked(
 		return
 	}
 	newFiles = append(newFiles, gcWindow.metaDir+gcMetaFile)
-	c.mutAddMetaFileLocked(snapshotFile.name, snapshotFile)
-	c.mutAddMetaFileLocked(accountFile.name, accountFile)
+	c.mutAddMetaFileLocked(snapshotFile.GetName(), snapshotFile)
+	c.mutAddMetaFileLocked(accountFile.GetName(), accountFile)
 	c.mutAddMetaFileLocked(
 		gcMetaFile,
-		GCMetaFile{
-			name:  gcMetaFile,
-			start: gcWindow.tsRange.start,
-			end:   gcWindow.tsRange.end,
-			ext:   ioutil.CheckpointExt,
-		})
+		ioutil.NewTSRangeFile(
+			gcMetaFile,
+			ioutil.CheckpointExt,
+			gcWindow.tsRange.start,
+			gcWindow.tsRange.end,
+		),
+	)
 	return
 }
 

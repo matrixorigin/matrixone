@@ -15,6 +15,7 @@
 package ioutil
 
 const defaultCheckpointDir = "ckp/"
+const defaultGCDir = "gc/"
 
 const (
 	// checkpint related
@@ -38,6 +39,10 @@ const (
 
 func GetCheckpointDir() string {
 	return defaultCheckpointDir
+}
+
+func GetGCDir() string {
+	return defaultGCDir
 }
 
 func IsCKPExt(ext string) bool {

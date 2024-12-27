@@ -14,7 +14,11 @@
 
 package ioutil
 
-import "github.com/matrixorigin/matrixone/pkg/container/types"
+import (
+	"fmt"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+)
 
 type TSRangeFile struct {
 	start types.TS
@@ -24,8 +28,29 @@ type TSRangeFile struct {
 	ext   string
 }
 
+func NewTSRangeFile(name, ext string, start, end types.TS) TSRangeFile {
+	return TSRangeFile{
+		start: start,
+		end:   end,
+		name:  name,
+		ext:   ext,
+	}
+}
+
 func (m TSRangeFile) IsCKPFile() bool {
 	return IsCKPExt(m.ext)
+}
+
+func (m TSRangeFile) IsSnapshotExt() bool {
+	return m.ext == SnapshotExt
+}
+
+func (m TSRangeFile) IsFullGCExt() bool {
+	return m.ext == GCFullExt
+}
+
+func (m TSRangeFile) IsAcctExt() bool {
+	return m.ext == AcctExt
 }
 
 func (m *TSRangeFile) GetStart() *types.TS {
@@ -54,4 +79,23 @@ func (m *TSRangeFile) GetIdx() int {
 
 func (m *TSRangeFile) SetIdx(idx int) {
 	m.idx = idx
+}
+
+func (m *TSRangeFile) SetExt(ext string) {
+	m.ext = ext
+}
+
+func (m *TSRangeFile) RangeEqual(start, end *types.TS) bool {
+	return m.start.EQ(start) && m.end.EQ(end)
+}
+
+func (m *TSRangeFile) AsString(prefix string) string {
+	return fmt.Sprintf(
+		"%s[%s-%s-%s-%s]",
+		prefix,
+		m.name,
+		m.ext,
+		m.start.ToString(),
+		m.end.ToString(),
+	)
 }

@@ -428,32 +428,34 @@ func execBackup(
 
 // CopyCheckpointDir copy checkpoint dir from srcFs to dstFs
 // return taeFile list
-// copy: if copy is true,it means not to check the suffix name and copy all files.
+// doCopy: if doCopy is true,it means not to check the suffix name and doCopy all files.
 func copyFileAndGetMetaFiles(
 	ctx context.Context,
 	srcFs, dstFs fileservice.FileService,
 	dir string,
 	backup types.TS,
-	decodeFunc func(string) (types.TS, types.TS, string),
-	copy bool,
-) ([]*taeFile, []*checkpoint.MetaFile, []fileservice.DirEntry, error) {
+	decoder func(string) ioutil.TSRangeFile,
+	doCopy bool,
+) ([]*taeFile, []ioutil.TSRangeFile, []fileservice.DirEntry, error) {
 	files, err := fileservice.SortedList(srcFs.List(ctx, dir))
 	if err != nil {
 		return nil, nil, nil, err
 	}
 	taeFileList := make([]*taeFile, 0, len(files))
-	metaFiles := make([]*checkpoint.MetaFile, 0)
+	metaFiles := make([]ioutil.TSRangeFile, 0)
 	var checksum []byte
 	for i, file := range files {
 		if file.IsDir {
 			panic("not support dir")
 		}
-		start, end, ext := decodeFunc(file.Name)
-		if !backup.IsEmpty() && start.GE(&backup) {
+		meta := decoder(file.Name)
+		meta.SetIdx(i)
+
+		if !backup.IsEmpty() && meta.GetStart().GE(&backup) {
 			logutil.Infof("[Backup] skip file %v", file.Name)
 			continue
 		}
-		if copy || ext == blockio.AcctExt || ext == blockio.SnapshotExt {
+		if doCopy || meta.IsAcctExt() || meta.IsSnapshotExt() {
 			checksum, err = CopyFileWithRetry(ctx, srcFs, dstFs, file.Name, dir)
 			if err != nil {
 				return nil, nil, nil, err
@@ -467,9 +469,8 @@ func copyFileAndGetMetaFiles(
 			})
 		}
 
-		if copy || ioutil.IsCKPExt(ext) || ext == blockio.GCFullExt {
-			metaFile := checkpoint.NewMetaFile(i, start, end, file.Name)
-			metaFiles = append(metaFiles, metaFile)
+		if doCopy || meta.IsCKPFile() || meta.IsFullGCExt() {
+			metaFiles = append(metaFiles, meta)
 		}
 	}
 
@@ -477,9 +478,7 @@ func copyFileAndGetMetaFiles(
 		return taeFileList, metaFiles, files, nil
 	}
 	sort.Slice(metaFiles, func(i, j int) bool {
-		end1 := metaFiles[i].GetEnd()
-		end2 := metaFiles[j].GetEnd()
-		return end1.LT(&end2)
+		return metaFiles[i].GetEnd().LT(metaFiles[j].GetEnd())
 	})
 
 	return taeFileList, metaFiles, files, nil
@@ -494,12 +493,13 @@ func CopyGCDir(
 	var checksum []byte
 
 	taeFileList, metaFiles, files, err := copyFileAndGetMetaFiles(
-		ctx, srcFs, dstFs, dir, backup, blockio.DecodeGCMetadataFileName, false)
+		ctx, srcFs, dstFs, dir, backup, ioutil.DecodeGCMetadataName, false,
+	)
 	if err != nil {
 		return nil, err
 	}
 
-	copyFiles := make([]*checkpoint.MetaFile, 0)
+	copyFiles := make([]ioutil.TSRangeFile, 0)
 
 	for _, metaFile := range metaFiles {
 		name := metaFile.GetName()
@@ -521,7 +521,7 @@ func CopyGCDir(
 			}
 			filesList = append(filesList, &taeFile{
 				path:     object.ObjectName().String(),
-				size:     files[metaFile.GetIndex()].Size,
+				size:     files[metaFile.GetIdx()].Size,
 				checksum: checksum,
 				needCopy: true,
 				ts:       backup,
@@ -536,13 +536,12 @@ func CopyGCDir(
 	for i, metaFile := range copyFiles {
 		name := metaFile.GetName()
 		if i == len(metaFiles)-1 {
-			end := metaFile.GetEnd()
-			if !min.IsEmpty() && end.LT(&min) {
+			if !min.IsEmpty() && metaFile.GetEnd().LT(&min) {
 				// It means that the gc consumption is too slow, and the gc water level needs to be raised.
 				// Otherwise, the gc will not work after the cluster is restored because it cannot find the checkpoint.
 				// The gc water level is determined by the name of the meta,
 				// so the name of the last gc meta needs to be modified.
-				name = blockio.UpdateGCMetadataFileName(name, end, min)
+				name = ioutil.InheritGCMetadataName(name, metaFile.GetEnd(), &min)
 			}
 		}
 		checksum, err = CopyFileWithRetry(ctx, srcFs, dstFs, metaFile.GetName(), dir, name)
@@ -551,7 +550,7 @@ func CopyGCDir(
 		}
 		taeFileList = append(taeFileList, &taeFile{
 			path:     dir + string(os.PathSeparator) + name,
-			size:     files[metaFile.GetIndex()].Size,
+			size:     files[metaFile.GetIdx()].Size,
 			checksum: checksum,
 			needCopy: true,
 			ts:       backup,
@@ -565,11 +564,14 @@ func CopyCheckpointDir(
 	srcFs, dstFs fileservice.FileService,
 	dir string, backup types.TS,
 ) ([]*taeFile, types.TS, error) {
-	decodeFunc := func(name string) (types.TS, types.TS, string) {
+	decoder := func(name string) ioutil.TSRangeFile {
 		meta := ioutil.DecodeCKPMetaName(name)
-		return *meta.GetStart(), *meta.GetEnd(), ""
+		meta.SetExt("")
+		return meta
 	}
-	taeFileList, metaFiles, _, err := copyFileAndGetMetaFiles(ctx, srcFs, dstFs, dir, backup, decodeFunc, true)
+	taeFileList, metaFiles, _, err := copyFileAndGetMetaFiles(
+		ctx, srcFs, dstFs, dir, backup, decoder, true,
+	)
 	if err != nil {
 		return nil, types.TS{}, err
 	}
@@ -579,7 +581,7 @@ func CopyCheckpointDir(
 	for i := len(metaFiles) - 1; i >= 0; i-- {
 		ckpStart := metaFiles[i].GetStart()
 		if ckpStart.IsEmpty() {
-			minTs = metaFiles[i].GetEnd()
+			minTs = *metaFiles[i].GetEnd()
 			break
 		}
 	}
