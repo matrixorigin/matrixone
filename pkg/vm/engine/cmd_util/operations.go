@@ -385,11 +385,12 @@ func (s *SnapshotReadResp) UnmarshalBinary(data []byte) error {
 }
 
 type GetChangedTableListReq struct {
-	From        []*timestamp.Timestamp
+	TS          []*timestamp.Timestamp
 	AccIds      []uint64
 	DatabaseIds []uint64
 	TableIds    []uint64
 	Extra       []byte
+	Type        ChangedListType
 }
 
 type GetChangedTableListResp struct {
