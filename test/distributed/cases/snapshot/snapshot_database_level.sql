@@ -90,3 +90,9 @@ create snapshot sn1 for database mo_catalog;
 create snapshot sn1 for table mo_catalog mo_user;
 
 drop snapshot if exists sn1;
+
+drop snapshot if exists sn1;
+create snapshot sn1 for account;
+-- @ignore:1
+show snapshots;
+drop snapshot if exists sn1;

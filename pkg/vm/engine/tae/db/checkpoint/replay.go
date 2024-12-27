@@ -50,6 +50,7 @@ const (
 )
 
 type CkpReplayer struct {
+	dir        string
 	r          *runner
 	dataF      catalog.DataFactory
 	ckpEntries []*CheckpointEntry
@@ -81,206 +82,222 @@ func (c *CkpReplayer) Close() {
 	}
 }
 
-func (c *CkpReplayer) ReadCkpFiles() (err error) {
-	r := c.r
-	ctx := r.ctx
+func (c *CkpReplayer) readCheckpointEntries() (
+	allEntries []*CheckpointEntry, maxGlobalTS types.TS, err error,
+) {
+	var (
+		now   = time.Now()
+		files []fileservice.DirEntry
+	)
 
-	// step1. read checkpoint meta data, output is the ckpEntries
-	t0 := time.Now()
-	dirs, err := fileservice.SortedList(r.rt.Fs.ListDir(CheckpointDir))
-	if err != nil {
+	defer func() {
+		logger := logutil.Info
+		if err != nil {
+			logger = logutil.Error
+		}
+		logger(
+			"Read-CKP-From-Meta",
+			zap.String("cost", time.Since(now).String()),
+			zap.Int("count", len(allEntries)),
+			zap.Error(err),
+		)
+	}()
+
+	if files, err = fileservice.SortedList(c.r.rt.Fs.ListDir(c.dir)); err != nil {
 		return
 	}
-	if len(dirs) == 0 {
+	if len(files) == 0 {
 		return
 	}
-	metaFiles := make([]*MetaFile, 0)
-	compactedFiles := make([]*MetaFile, 0)
-	for i, dir := range dirs {
-		r.store.AddMetaFile(dir.Name)
-		start, end, ext := blockio.DecodeCheckpointMetadataFileName(dir.Name)
-		metaFile := &MetaFile{
+
+	var (
+		metaEntries      = make([]MetaFile, 0)
+		compactedEntries = make([]MetaFile, 0)
+	)
+	// classify the files into metaEntries and compactedEntries
+	for _, file := range files {
+		c.r.store.AddMetaFile(file.Name)
+		start, end, ext := blockio.DecodeCheckpointMetadataFileName(file.Name)
+		entry := MetaFile{
 			start: start,
 			end:   end,
-			index: i,
-			name:  dir.Name,
+			name:  file.Name,
 		}
 		if ext == blockio.CompactedExt {
-			compactedFiles = append(compactedFiles, metaFile)
-			continue
+			compactedEntries = append(compactedEntries, entry)
+		} else if IsMetadataFile(file.Name) {
+			metaEntries = append(metaEntries, entry)
 		}
-		metaFiles = append(metaFiles, metaFile)
 	}
-	sort.Slice(metaFiles, func(i, j int) bool {
-		return metaFiles[i].end.LT(&metaFiles[j].end)
+
+	sort.Slice(metaEntries, func(i, j int) bool {
+		return metaEntries[i].end.LT(&metaEntries[j].end)
 	})
-	targetIdx := metaFiles[len(metaFiles)-1].index
-	dir := dirs[targetIdx]
-	replayEntries := func(name string, ckpBat *containers.Batch) (entries []*CheckpointEntry, maxGlobalEnd types.TS, release func(), err error) {
-		reader, err := blockio.NewFileReader(r.rt.SID(), r.rt.Fs.Service, CheckpointDir+name)
-		if err != nil {
+	sort.Slice(compactedEntries, func(i, j int) bool {
+		return compactedEntries[i].end.LT(&compactedEntries[j].end)
+	})
+
+	// replay the compactedEntries
+	if len(compactedEntries) > 0 {
+		maxEntry := compactedEntries[len(compactedEntries)-1]
+		var entries []*CheckpointEntry
+		if entries, err = ReadEntriesFromMeta(
+			c.r.ctx,
+			c.r.rt.SID(),
+			c.dir,
+			maxEntry.name,
+			0,
+			nil,
+			common.CheckpointAllocator,
+			c.r.rt.Fs.Service,
+		); err != nil {
 			return
 		}
-		bats, closeCB, err := reader.LoadAllColumns(ctx, nil, common.CheckpointAllocator)
-		if err != nil {
-			return
+		for _, entry := range entries {
+			logutil.Info(
+				"Read-CKP-COMPACT",
+				zap.String("entry", entry.String()),
+			)
 		}
-		if len(bats) == 0 {
-			return
+		if len(entries) != 1 {
+			panic(fmt.Sprintf("invalid compacted checkpoint file %s", maxEntry.name))
 		}
-		release = func() {
-			if closeCB != nil {
-				closeCB()
-			}
-		}
-		colNames := CheckpointSchema.Attrs()
-		colTypes := CheckpointSchema.Types()
-		var checkpointVersion int
-		// in version 1, checkpoint metadata doesn't contain 'version'.
-		vecLen := len(bats[0].Vecs)
-		logutil.Info(
-			"Replay-Checkpoint",
-			zap.Int("col-cnt", vecLen),
-			zap.Duration("load-cost", time.Since(t0)),
-		)
-		if vecLen < CheckpointSchemaColumnCountV1 {
-			checkpointVersion = 1
-		} else if vecLen < CheckpointSchemaColumnCountV2 {
-			checkpointVersion = 2
-		} else {
-			checkpointVersion = 3
-		}
-		for i := range bats[0].Vecs {
-			var vec containers.Vector
-			if bats[0].Vecs[i].Length() == 0 {
-				vec = containers.MakeVector(colTypes[i], common.CheckpointAllocator)
-			} else {
-				vec = containers.ToTNVector(bats[0].Vecs[i], common.CheckpointAllocator)
-			}
-			ckpBat.AddVector(colNames[i], vec)
-		}
-		c.readDuration += time.Since(t0)
-		entries, maxGlobalEnd = ReplayCheckpointEntries(ckpBat, checkpointVersion)
-		return
+		c.r.store.TryAddNewCompactedCheckpointEntry(entries[0])
 	}
 
-	{
-		// replay compacted tree
-		for _, file := range compactedFiles {
-			compacted := containers.NewBatch()
-			defer compacted.Close()
-			entry, _, closeCB, err := replayEntries(file.name, compacted)
-			if err != nil {
-				logutil.Errorf("replay compacted checkpoint file %s failed: %v", file.name, err.Error())
-			}
-			if len(entry) != 1 {
-				for _, e := range entry {
-					logutil.Infof("compacted checkpoint entry: %v", e.String())
+	// always replay from the max metaEntry
+	if len(metaEntries) > 0 {
+		maxEntry := metaEntries[len(metaEntries)-1]
+		updateGlobal := func(entry *CheckpointEntry) {
+			if entry.GetType() == ET_Global {
+				thisEnd := entry.GetEnd()
+				if thisEnd.GT(&maxGlobalTS) {
+					maxGlobalTS = thisEnd
 				}
-				panic("invalid compacted checkpoint file")
 			}
-			r.store.TryAddNewCompactedCheckpointEntry(entry[0])
-			closeCB()
+		}
+		if allEntries, err = ReadEntriesFromMeta(
+			c.r.ctx,
+			c.r.rt.SID(),
+			c.dir,
+			maxEntry.name,
+			0,
+			updateGlobal,
+			common.CheckpointAllocator,
+			c.r.rt.Fs.Service,
+		); err != nil {
+			return
+		}
+		for _, entry := range allEntries {
+			logutil.Debug(
+				"Read-CKP-META",
+				zap.String("entry", entry.String()),
+			)
 		}
 	}
+	return
+}
 
-	bat := containers.NewBatch()
-	defer bat.Close()
-	entries, maxGlobalEnd, closeCB, err := replayEntries(dir.Name, bat)
-	if err != nil {
-		logutil.Infof("replay checkpoint file %s failed: %v", dir.Name, err.Error())
+func (c *CkpReplayer) ReadCkpFiles() (err error) {
+	var (
+		t0           = time.Now()
+		r            = c.r
+		ctx          = r.ctx
+		maxGlobalEnd types.TS
+	)
+
+	if c.ckpEntries, maxGlobalEnd, err = c.readCheckpointEntries(); err != nil {
 		return
 	}
-	defer func() {
-		if closeCB != nil {
-			closeCB()
-		}
-	}()
-	c.ckpEntries = entries
+	c.totalCount = len(c.ckpEntries)
 
 	// step2. read checkpoint data, output is the ckpdatas
-	datas := make([]*logtail.CheckpointData, bat.Length())
 
-	closecbs := make([]func(), 0)
-	c.totalCount = len(entries)
+	c.ckpdatas = make([]*logtail.CheckpointData, len(c.ckpEntries))
+
 	readfn := func(i int, readType uint16) (err error) {
-		checkpointEntry := entries[i]
+		checkpointEntry := c.ckpEntries[i]
 		checkpointEntry.sid = r.rt.SID()
 		if checkpointEntry.end.LT(&maxGlobalEnd) {
 			return
 		}
 		var err2 error
 		if readType == PrefetchData {
-			if err2 = checkpointEntry.Prefetch(ctx, r.rt.Fs, datas[i]); err2 != nil {
+			if err2 = checkpointEntry.Prefetch(ctx, r.rt.Fs, c.ckpdatas[i]); err2 != nil {
 				logutil.Warnf("read %v failed: %v", checkpointEntry.String(), err2)
 			}
 		} else if readType == PrefetchMetaIdx {
 			c.readCount++
-			datas[i], err = checkpointEntry.PrefetchMetaIdx(ctx, r.rt.Fs)
+			c.ckpdatas[i], err = checkpointEntry.PrefetchMetaIdx(ctx, r.rt.Fs)
 			if err != nil {
 				return
 			}
 		} else if readType == ReadMetaIdx {
-			err = checkpointEntry.ReadMetaIdx(ctx, r.rt.Fs, datas[i])
+			err = checkpointEntry.ReadMetaIdx(ctx, r.rt.Fs, c.ckpdatas[i])
 			if err != nil {
 				return
 			}
 		} else {
-			if err2 = checkpointEntry.Read(ctx, r.rt.Fs, datas[i]); err2 != nil {
+			if err2 = checkpointEntry.Read(ctx, r.rt.Fs, c.ckpdatas[i]); err2 != nil {
 				logutil.Warnf("read %v failed: %v", checkpointEntry.String(), err2)
 				c.emptyFile = append(c.emptyFile, checkpointEntry)
-			} else {
-				entries[i] = checkpointEntry
-				closecbs = append(closecbs, func() { datas[i].CloseWhenLoadFromCache(checkpointEntry.version) })
 			}
 		}
 		return nil
 	}
-	c.closes = append(c.closes, closecbs...)
-	t0 = time.Now()
-	for i := 0; i < bat.Length(); i++ {
-		metaLoc := objectio.Location(bat.GetVectorByName(CheckpointAttr_MetaLocation).Get(i).([]byte))
-		err = blockio.PrefetchMeta(r.rt.SID(), r.rt.Fs.Service, metaLoc)
-		if err != nil {
+
+	for _, entry := range c.ckpEntries {
+		if err = blockio.PrefetchMeta(
+			r.rt.SID(), r.rt.Fs.Service, entry.GetLocation(),
+		); err != nil {
 			return
 		}
 	}
-	for i := 0; i < bat.Length(); i++ {
+
+	for i := 0; i < len(c.ckpEntries); i++ {
 		if err = readfn(i, PrefetchMetaIdx); err != nil {
 			return
 		}
 	}
-	for i := 0; i < bat.Length(); i++ {
+
+	for i := 0; i < len(c.ckpEntries); i++ {
 		if err = readfn(i, ReadMetaIdx); err != nil {
 			return
 		}
 	}
-	for i := 0; i < bat.Length(); i++ {
+
+	for i := 0; i < len(c.ckpEntries); i++ {
+		if err = readfn(i, ReadMetaIdx); err != nil {
+			return
+		}
+	}
+
+	for i := 0; i < len(c.ckpEntries); i++ {
 		if err = readfn(i, PrefetchData); err != nil {
 			return
 		}
 	}
-	for i := 0; i < bat.Length(); i++ {
+
+	for i := 0; i < len(c.ckpEntries); i++ {
 		if err = readfn(i, ReadData); err != nil {
 			return
 		}
 	}
-	c.ckpdatas = datas
+
 	c.readDuration += time.Since(t0)
 
 	// step3. Add entries to the runner
-	for i := 0; i < bat.Length(); i++ {
-		checkpointEntry := entries[i]
-		if checkpointEntry == nil {
+	for i, entry := range c.ckpEntries {
+		if entry == nil {
 			continue
 		}
-		if checkpointEntry.GetType() == ET_Global {
+		if entry.GetType() == ET_Global {
 			c.globalCkpIdx = i
-			r.store.AddGCKPEntry(checkpointEntry)
-		} else if checkpointEntry.GetType() == ET_Incremental {
-			r.store.TryAddNewIncrementalCheckpointEntry(checkpointEntry)
-		} else if checkpointEntry.GetType() == ET_Backup {
-			r.store.TryAddNewBackupCheckpointEntry(checkpointEntry)
+			r.store.AddGCKPReplayEntry(entry)
+		} else if entry.GetType() == ET_Incremental {
+			r.store.TryAddNewIncrementalCheckpointEntry(entry)
+		} else if entry.GetType() == ET_Backup {
+			r.store.TryAddNewBackupCheckpointEntry(entry)
 		}
 	}
 	return nil
@@ -507,9 +524,13 @@ func (c *CkpReplayer) Submit(tid uint64, replayFn func()) {
 	c.objectReplayWorker[workerOffset].Enqueue(replayFn)
 }
 
-func (r *runner) Replay(dataFactory catalog.DataFactory) *CkpReplayer {
+func (r *runner) BuildReplayer(
+	dir string,
+	dataFactory catalog.DataFactory,
+) *CkpReplayer {
 	replayer := &CkpReplayer{
 		r:              r,
+		dir:            dir,
 		dataF:          dataFactory,
 		objectCountMap: make(map[uint64]int),
 	}

@@ -7692,7 +7692,7 @@ func Test_CheckpointChaos2(t *testing.T) {
 
 	commitOneTxn := func() {
 		txn, _ := tae.StartTxn(nil)
-		_, err := txn.CreateDatabase(nextDBName(), "", "")
+		_, err := testutil.CreateDatabase2(ctx, txn, nextDBName())
 		assert.Nil(t, err)
 		assert.Nil(t, txn.Commit(context.Background()))
 	}
@@ -7725,6 +7725,7 @@ func Test_CheckpointChaos2(t *testing.T) {
 	rmFn()
 	ctx, cancel = context.WithTimeout(context.Background(), time.Second*20)
 	defer cancel()
+	assert.NoError(t, tae.DB.BGCheckpointRunner.WaitRunningGCKPDoneForTest(ctx))
 	err = tae.DB.ForceGlobalCheckpoint(ctx, maxICKP.GetEnd(), 0, 0)
 	assert.NoError(t, err)
 	maxGCKP = tae.DB.BGCheckpointRunner.MaxGlobalCheckpoint()
@@ -7738,10 +7739,9 @@ func Test_CheckpointChaos2(t *testing.T) {
 		txn, _ := tae.StartTxn(nil)
 		names := txn.DatabaseNames()
 		t.Logf("names: %v", names)
-		// FIXME:
-		// db, err := txn.GetDatabase(currDBName())
-		// assert.NoError(t, err)
-		// assert.NotNil(t, db)
+		db, err := txn.GetDatabase(currDBName())
+		assert.NoError(t, err)
+		assert.NotNil(t, db)
 		assert.NoError(t, txn.Commit(ctx))
 	}
 
@@ -7749,48 +7749,35 @@ func Test_CheckpointChaos2(t *testing.T) {
 	maxGCKP2 := tae.DB.BGCheckpointRunner.MaxGlobalCheckpoint()
 	assert.Equal(t, maxICKP.GetEnd(), maxICKP2.GetEnd())
 	assert.Equal(t, maxGCKP.GetEnd(), maxGCKP2.GetEnd())
-}
 
-func Test_RestartCheck(t *testing.T) {
-	t.Skip("enable this test when the bug is fixed")
-	defer testutils.AfterTest(t)()
-	opts := config.WithLongScanAndCKPOpts(nil)
-	ctx := context.Background()
-	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
-	defer tae.Close()
-	idx := 0
-	currDBName := func() string {
-		return fmt.Sprintf("db_%d", idx)
-	}
-	nextDBName := func() string {
-		idx++
-		return currDBName()
-	}
-	commitOneTxn := func() {
-		txn, _ := tae.StartTxn(nil)
-		_, err := txn.CreateDatabase(nextDBName(), "", "")
-		assert.Nil(t, err)
-		assert.Nil(t, txn.Commit(context.Background()))
-	}
-	for i := 0; i < 2; i++ {
-		commitOneTxn()
-	}
-	err := tae.DB.ForceCheckpoint(ctx, tae.TxnMgr.Now(), time.Minute)
+	reader, err := checkpoint.MakeMetafilesReader(
+		ctx,
+		tae.DB.Opts.SID,
+		0,
+		tae.DB.Runtime.Fs.Service,
+	)
 	assert.NoError(t, err)
-	for i := 0; i < 2; i++ {
-		commitOneTxn()
-	}
-	tae.Restart(ctx)
-	{
-		txn, _ := tae.StartTxn(nil)
-		names := txn.DatabaseNames()
-		t.Logf("names: %v", names)
-		assert.Equal(t, 5, len(names))
-		db, err := txn.GetDatabase(currDBName())
+	assert.NotNil(t, reader)
+	defer reader.Close()
+
+	cnt := 0
+	releaseCnt := 0
+
+	for {
+		_, release, err := reader.Next(ctx, common.DebugAllocator)
+		if err != nil && moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
+			break
+		}
 		assert.NoError(t, err)
-		assert.NotNil(t, db)
-		assert.NoError(t, txn.Commit(ctx))
+		cnt++
+		if release != nil {
+			release()
+			releaseCnt++
+		}
 	}
+	assert.Equal(t, cnt, releaseCnt)
+	assert.Equal(t, 3, cnt)
+
 }
 
 func TestGCCatalog1(t *testing.T) {

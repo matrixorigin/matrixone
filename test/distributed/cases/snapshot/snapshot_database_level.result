@@ -78,3 +78,9 @@ internal error: can not create snapshot for current database mo_catalog
 create snapshot sn1 for table mo_catalog mo_user;
 internal error: can not create pitr for current table mo_catalog.mo_user
 drop snapshot if exists sn1;
+drop snapshot if exists sn1;
+create snapshot sn1 for account;
+show snapshots;
+SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
+sn1    2024-12-25 07:36:53.495417    account    sys        
+drop snapshot if exists sn1;
