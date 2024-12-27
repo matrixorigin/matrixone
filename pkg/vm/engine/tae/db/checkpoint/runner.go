@@ -35,7 +35,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
@@ -434,7 +433,7 @@ func (r *runner) saveCheckpoint(
 	}
 	bat := r.collectCheckpointMetadata(start, end)
 	defer bat.Close()
-	name = blockio.EncodeCheckpointMetadataFileName(CheckpointDir, PrefixMetadata, start, end)
+	name = objectio.EncodeCKPMetadataFullName(start, end)
 	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterCheckpoint, name, r.rt.Fs.Service)
 	if err != nil {
 		return
@@ -448,7 +447,7 @@ func (r *runner) saveCheckpoint(
 	if err != nil {
 		return
 	}
-	fileName := blockio.EncodeCheckpointMetadataFileNameWithoutDir(PrefixMetadata, start, end)
+	fileName := objectio.EncodeCKPMetadataName(start, end)
 	r.AddCheckpointMetaFile(fileName)
 	return
 }

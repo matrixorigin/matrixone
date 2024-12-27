@@ -621,7 +621,7 @@ func MergeCkpMeta(
 	bat.GetVectorByName(CheckpointAttr_CheckpointLSN).Append(bat.GetVectorByName(CheckpointAttr_CheckpointLSN).Get(last), false)
 	bat.GetVectorByName(CheckpointAttr_TruncateLSN).Append(bat.GetVectorByName(CheckpointAttr_TruncateLSN).Get(last), false)
 	bat.GetVectorByName(CheckpointAttr_Type).Append(int8(ET_Backup), false)
-	name := blockio.EncodeCheckpointMetadataFileName(CheckpointDir, PrefixMetadata, startTs, ts)
+	name := objectio.EncodeCKPMetadataFullName(startTs, ts)
 	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterCheckpoint, name, fs)
 	if err != nil {
 		return "", err

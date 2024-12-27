@@ -867,9 +867,9 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 	for _, ckp := range gckps {
 		end := ckp.GetEnd()
 		if end.LT(&newWaterMark) {
-			nameMeta := blockio.EncodeCheckpointMetadataFileName(
-				checkpoint.CheckpointDir, checkpoint.PrefixMetadata,
-				ckp.GetStart(), ckp.GetEnd())
+			nameMeta := objectio.EncodeCKPMetadataFullName(
+				ckp.GetStart(), ckp.GetEnd(),
+			)
 			deleteFiles = append(deleteFiles, nameMeta)
 		}
 	}

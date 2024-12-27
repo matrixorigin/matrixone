@@ -44,20 +44,12 @@ const (
 	CompactedExt  = "cpt"
 )
 
-func EncodeCheckpointMetadataFileName(dir, prefix string, start, end types.TS) string {
-	return fmt.Sprintf("%s/%s_%s_%s.%s", dir, prefix, start.ToString(), end.ToString(), CheckpointExt)
-}
-
 func EncodeGCMetadataFileName(prefix string, start, end types.TS) string {
 	return fmt.Sprintf("%s_%s_%s.%s", prefix, start.ToString(), end.ToString(), CheckpointExt)
 }
 
 func EncodeCompactedMetadataFileName(dir, prefix string, start, end types.TS) string {
 	return fmt.Sprintf("%s/%s_%s_%s.%s", dir, prefix, start.ToString(), end.ToString(), CompactedExt)
-}
-
-func EncodeCheckpointMetadataFileNameWithoutDir(prefix string, start, end types.TS) string {
-	return fmt.Sprintf("%s_%s_%s.%s", prefix, start.ToString(), end.ToString(), CheckpointExt)
 }
 
 func EncodeSnapshotMetadataFileName(prefix string, start, end types.TS) string {

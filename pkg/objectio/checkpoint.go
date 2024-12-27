@@ -1,0 +1,62 @@
+// Copyright 2021 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package objectio
+
+import (
+	"fmt"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+)
+
+const defaultCheckpointDir = "ckp/"
+
+const (
+	CheckpointExt = "ckp"
+	CompactedExt  = "cpt"
+
+	PrefixMetadata = "meta"
+	SuffixMetadata = ".ckp"
+)
+
+func GetCheckpointDir() string {
+	return defaultCheckpointDir
+}
+
+// with dirname
+func EncodeCKPMetadataFullName(
+	start, end types.TS,
+) string {
+	return fmt.Sprintf(
+		"%s/%s_%s_%s.%s",
+		GetCheckpointDir(),
+		PrefixMetadata,
+		start.ToString(),
+		end.ToString(),
+		CheckpointExt,
+	)
+}
+
+// without dirname
+func EncodeCKPMetadataName(
+	start, end types.TS,
+) string {
+	return fmt.Sprintf(
+		"%s_%s_%s.%s",
+		PrefixMetadata,
+		start.ToString(),
+		end.ToString(),
+		CheckpointExt,
+	)
+}

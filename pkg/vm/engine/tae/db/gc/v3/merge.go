@@ -84,9 +84,9 @@ func MergeCheckpoint(
 				checkpoint.CheckpointDir, checkpoint.PrefixMetadata,
 				ckpEntry.GetStart(), ckpEntry.GetEnd())
 		} else {
-			nameMeta = blockio.EncodeCheckpointMetadataFileName(
-				checkpoint.CheckpointDir, checkpoint.PrefixMetadata,
-				ckpEntry.GetStart(), ckpEntry.GetEnd())
+			nameMeta = objectio.EncodeCKPMetadataFullName(
+				ckpEntry.GetStart(), ckpEntry.GetEnd(),
+			)
 		}
 
 		// add checkpoint metafile(ckp/mete_ts-ts.ckp...) to deleteFiles
