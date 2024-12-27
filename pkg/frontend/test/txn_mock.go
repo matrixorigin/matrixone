@@ -726,14 +726,6 @@ func (mr *MockTxnOperatorMockRecorder) LockSkipped(tableID, mode interface{}) *g
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "LockSkipped", reflect.TypeOf((*MockTxnOperator)(nil).LockSkipped), tableID, mode)
 }
 
-// LockTableCount mocks base method.
-func (m *MockTxnOperator) LockTableCount() int32 {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "LockTableCount")
-	ret0, _ := ret[0].(int32)
-	return ret0
-}
-
 // LockTableCount indicates an expected call of LockTableCount.
 func (mr *MockTxnOperatorMockRecorder) LockTableCount() *gomock.Call {
 	mr.mock.ctrl.T.Helper()

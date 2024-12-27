@@ -674,8 +674,7 @@ func canRetryLock(table uint64, txn client.TxnOperator, err error) bool {
 		time.Sleep(defaultWaitTimeOnRetryLock)
 		return true
 	}
-	if txn.LockTableCount() > 0 &&
-		txn.HasLockTable(table) {
+	if txn.HasLockTable(table) {
 		return false
 	}
 	if moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) ||
