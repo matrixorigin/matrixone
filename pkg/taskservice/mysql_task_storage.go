@@ -19,7 +19,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"slices"
 	"strings"
 	"time"
 
@@ -1091,19 +1090,6 @@ func (m *mysqlTaskStorage) UpdateCdcTask(ctx context.Context, targetStatus task.
 		return 0, err
 	}
 
-	allowedOpsMap := map[task.TaskStatus][]task.TaskStatus{
-		task.TaskStatus_Running: {
-			task.TaskStatus_PauseRequested,
-			task.TaskStatus_RestartRequested,
-			task.TaskStatus_CancelRequested,
-		},
-		task.TaskStatus_Paused: {
-			task.TaskStatus_PauseRequested,
-			task.TaskStatus_ResumeRequested,
-			task.TaskStatus_RestartRequested,
-			task.TaskStatus_CancelRequested,
-		},
-	}
 	updateTasks := make([]task.DaemonTask, 0)
 	for _, dTask := range daemonTasks {
 		details, ok := dTask.Details.Details.(*task.Details_CreateCdc)
@@ -1121,8 +1107,8 @@ func (m *mysqlTaskStorage) UpdateCdcTask(ctx context.Context, targetStatus task.
 			continue
 		}
 		if dTask.TaskStatus != task.TaskStatus_Canceled {
-			allowedOps := allowedOpsMap[dTask.TaskStatus]
-			if !slices.Contains(allowedOps, targetStatus) {
+			if targetStatus == task.TaskStatus_ResumeRequested && dTask.TaskStatus != task.TaskStatus_Paused ||
+				targetStatus == task.TaskStatus_PauseRequested && dTask.TaskStatus != task.TaskStatus_Running {
 				err = moerr.NewInternalErrorf(ctx,
 					"Task %s status can not be change, now it is %s",
 					dTask.Details.Details.(*task.Details_CreateCdc).CreateCdc.TaskName,
