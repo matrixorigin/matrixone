@@ -605,3 +605,40 @@ prepare stmt1x from 'select count(*) from system.statement_info limit 0';
 execute stmt1x;
 count(*)
 drop account prepare_acc01;
+create database prepare_test_2;
+use prepare_test_2;
+drop table if exists tb_delete_opt_to_truncate;
+create table tb_delete_opt_to_truncate(col1 int, col2 int);
+insert into tb_delete_opt_to_truncate values(1, 2), (2,3);
+prepare st_delete_opt_to_truncate from select * from tb_delete_opt_to_truncate order by col1;
+execute st_delete_opt_to_truncate;
+col1    col2
+1    2
+2    3
+delete from tb_delete_opt_to_truncate;
+execute st_delete_opt_to_truncate;
+internal error: table 'tb_delete_opt_to_truncate' has been changed, please reset prepare statement 'st_delete_opt_to_truncate'
+set session delete_opt_to_truncate = 0;
+insert into tb_delete_opt_to_truncate values(1, 2), (2,3);
+prepare st_delete_opt_to_truncate from select * from tb_delete_opt_to_truncate order by col1;
+execute st_delete_opt_to_truncate;
+col1    col2
+1    2
+2    3
+delete from tb_delete_opt_to_truncate;
+execute st_delete_opt_to_truncate;
+col1    col2
+set session delete_opt_to_truncate = 1;
+insert into tb_delete_opt_to_truncate values(1, 2), (2,3);
+prepare st_delete_opt_to_truncate from select * from tb_delete_opt_to_truncate order by col1;
+execute st_delete_opt_to_truncate;
+col1    col2
+1    2
+2    3
+delete from tb_delete_opt_to_truncate;
+execute st_delete_opt_to_truncate;
+internal error: table 'tb_delete_opt_to_truncate' has been changed, please reset prepare statement 'st_delete_opt_to_truncate'
+set session delete_opt_to_truncate = 123;
+internal error: convert to the system variable bool type failed
+drop table tb_delete_opt_to_truncate;
+drop database prepare_test_2;
