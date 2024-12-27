@@ -152,11 +152,6 @@ func (tTxnOp *testTxnOperator) RemoveWaitLock(key uint64) {
 	panic("implement me")
 }
 
-func (tTxnOp *testTxnOperator) LockTableCount() int32 {
-	//TODO implement me
-	panic("implement me")
-}
-
 func (tTxnOp *testTxnOperator) LockSkipped(tableID uint64, mode lock.LockMode) bool {
 	//TODO implement me
 	panic("implement me")
