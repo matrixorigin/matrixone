@@ -19,7 +19,6 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc/v3"
 	"io"
 	"os"
 	"path"
@@ -29,6 +28,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc/v3"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -564,8 +565,8 @@ func CopyCheckpointDir(
 	dir string, backup types.TS,
 ) ([]*taeFile, types.TS, error) {
 	decodeFunc := func(name string) (types.TS, types.TS, string) {
-		start, end, _ := blockio.DecodeCheckpointMetadataFileName(name)
-		return start, end, ""
+		meta := objectio.DecodeCKPMetaName(name)
+		return *meta.GetStart(), *meta.GetEnd(), ""
 	}
 	taeFileList, metaFiles, _, err := copyFileAndGetMetaFiles(ctx, srcFs, dstFs, dir, backup, decodeFunc, true)
 	if err != nil {

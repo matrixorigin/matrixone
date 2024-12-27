@@ -16,6 +16,7 @@ package objectio
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
@@ -32,6 +33,42 @@ const (
 
 func GetCheckpointDir() string {
 	return defaultCheckpointDir
+}
+
+type CKPMeta struct {
+	start types.TS
+	end   types.TS
+	name  string
+	idx   int
+	ext   string
+}
+
+func (m *CKPMeta) GetStart() *types.TS {
+	return &m.start
+}
+
+func (m *CKPMeta) GetEnd() *types.TS {
+	return &m.end
+}
+
+func (m *CKPMeta) GetExt() string {
+	return m.ext
+}
+
+func (m *CKPMeta) GetName() string {
+	return m.name
+}
+
+func (m *CKPMeta) GetFullName() string {
+	return GetCheckpointDir() + m.name
+}
+
+func (m *CKPMeta) GetIdx() int {
+	return m.idx
+}
+
+func (m *CKPMeta) SetIdx(idx int) {
+	m.idx = idx
 }
 
 // with dirname
@@ -59,4 +96,14 @@ func EncodeCKPMetadataName(
 		end.ToString(),
 		CheckpointExt,
 	)
+}
+
+func DecodeCKPMetaName(name string) (meta CKPMeta) {
+	fileName := strings.Split(name, ".")
+	info := strings.Split(fileName[0], "_")
+	meta.start = types.StringToTS(info[1])
+	meta.end = types.StringToTS(info[2])
+	meta.ext = fileName[1]
+	meta.name = name
+	return
 }

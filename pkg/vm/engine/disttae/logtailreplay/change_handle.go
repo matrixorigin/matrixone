@@ -1126,10 +1126,11 @@ func getGCTS(ctx context.Context, fs fileservice.FileService) (maxGCTS types.TS,
 		if err != nil {
 			return
 		}
-		_, end, ext := blockio.DecodeCheckpointMetadataFileName(dir.Name)
-		if ext == blockio.CompactedExt {
+		meta := objectio.DecodeCKPMetaName(dir.Name)
+		if meta.GetExt() == objectio.CompactedExt {
+			end := meta.GetEnd()
 			if end.GT(&maxGCTS) {
-				maxGCTS = end
+				maxGCTS = *end
 			}
 		}
 	}

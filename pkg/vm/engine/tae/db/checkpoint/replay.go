@@ -111,19 +111,14 @@ func (c *CkpReplayer) readCheckpointEntries() (
 	}
 
 	var (
-		metaEntries      = make([]MetaFile, 0)
-		compactedEntries = make([]MetaFile, 0)
+		metaEntries      = make([]objectio.CKPMeta, 0)
+		compactedEntries = make([]objectio.CKPMeta, 0)
 	)
 	// classify the files into metaEntries and compactedEntries
 	for _, file := range files {
 		c.r.store.AddMetaFile(file.Name)
-		start, end, ext := blockio.DecodeCheckpointMetadataFileName(file.Name)
-		entry := MetaFile{
-			start: start,
-			end:   end,
-			name:  file.Name,
-		}
-		if ext == blockio.CompactedExt {
+		entry := objectio.DecodeCKPMetaName(file.Name)
+		if entry.GetExt() == blockio.CompactedExt {
 			compactedEntries = append(compactedEntries, entry)
 		} else if IsMetadataFile(file.Name) {
 			metaEntries = append(metaEntries, entry)
@@ -131,10 +126,10 @@ func (c *CkpReplayer) readCheckpointEntries() (
 	}
 
 	sort.Slice(metaEntries, func(i, j int) bool {
-		return metaEntries[i].end.LT(&metaEntries[j].end)
+		return metaEntries[i].GetEnd().LT(metaEntries[j].GetEnd())
 	})
 	sort.Slice(compactedEntries, func(i, j int) bool {
-		return compactedEntries[i].end.LT(&compactedEntries[j].end)
+		return compactedEntries[i].GetEnd().LT(compactedEntries[j].GetEnd())
 	})
 
 	// replay the compactedEntries
@@ -145,7 +140,7 @@ func (c *CkpReplayer) readCheckpointEntries() (
 			c.r.ctx,
 			c.r.rt.SID(),
 			c.dir,
-			maxEntry.name,
+			maxEntry.GetName(),
 			0,
 			nil,
 			common.CheckpointAllocator,
@@ -160,7 +155,7 @@ func (c *CkpReplayer) readCheckpointEntries() (
 			)
 		}
 		if len(entries) != 1 {
-			panic(fmt.Sprintf("invalid compacted checkpoint file %s", maxEntry.name))
+			panic(fmt.Sprintf("invalid compacted checkpoint file %s", maxEntry.GetName()))
 		}
 		c.r.store.TryAddNewCompactedCheckpointEntry(entries[0])
 	}
@@ -180,7 +175,7 @@ func (c *CkpReplayer) readCheckpointEntries() (
 			c.r.ctx,
 			c.r.rt.SID(),
 			c.dir,
-			maxEntry.name,
+			maxEntry.GetName(),
 			0,
 			updateGlobal,
 			common.CheckpointAllocator,
@@ -563,19 +558,16 @@ func MergeCkpMeta(
 	if len(dirs) == 0 {
 		return "", nil
 	}
-	metaFiles := make([]*MetaFile, 0)
+	metaFiles := make([]objectio.CKPMeta, 0, len(dirs))
 	for i, dir := range dirs {
-		start, end, _ := blockio.DecodeCheckpointMetadataFileName(dir.Name)
-		metaFiles = append(metaFiles, &MetaFile{
-			start: start,
-			end:   end,
-			index: i,
-		})
+		meta := objectio.DecodeCKPMetaName(dir.Name)
+		meta.SetIdx(i)
+		metaFiles = append(metaFiles, meta)
 	}
 	sort.Slice(metaFiles, func(i, j int) bool {
-		return metaFiles[i].end.LT(&metaFiles[j].end)
+		return metaFiles[i].GetEnd().LT(metaFiles[j].GetEnd())
 	})
-	targetIdx := metaFiles[len(metaFiles)-1].index
+	targetIdx := metaFiles[len(metaFiles)-1].GetIdx()
 	dir := dirs[targetIdx]
 	reader, err := blockio.NewFileReader(sid, fs, CheckpointDir+dir.Name)
 	if err != nil {
