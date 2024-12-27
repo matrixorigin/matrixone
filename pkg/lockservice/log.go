@@ -495,22 +495,6 @@ func logKeepBindFailed(
 	)
 }
 
-func logTnVersionChanged(
-	logger *log.MOLogger,
-	v1, v2 uint64,
-) {
-	if logger == nil {
-		return
-	}
-
-	logger.Log(
-		"failed to keep lock table bind",
-		getLogOptions(zap.InfoLevel),
-		zap.Uint64("version in service", v1),
-		zap.Uint64("version in allocate", v2),
-	)
-}
-
 func logKeepRemoteLocksFailed(
 	logger *log.MOLogger,
 	bind pb.LockTable,

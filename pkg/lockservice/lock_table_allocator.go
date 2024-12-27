@@ -117,15 +117,12 @@ func (l *lockTableAllocator) Get(
 	return l.registerBind(binds, group, tableID, originTableID, sharding)
 }
 
-func (l *lockTableAllocator) KeepLockTableBind(
-	serviceID string,
-	version uint64,
-) bool {
+func (l *lockTableAllocator) KeepLockTableBind(serviceID string) bool {
 	b := l.getServiceBinds(serviceID)
 	if b == nil {
 		return false
 	}
-	return b.active() && (version == 0 || version == l.version)
+	return b.active()
 }
 
 func (l *lockTableAllocator) AddCannotCommit(values []pb.OrphanTxn) [][]byte {
@@ -838,11 +835,7 @@ func (l *lockTableAllocator) handleKeepLockTableBind(
 	req *pb.Request,
 	resp *pb.Response,
 	cs morpc.ClientSession) {
-	resp.KeepLockTableBind.OK = l.KeepLockTableBind(
-		req.KeepLockTableBind.ServiceID,
-		req.KeepLockTableBind.Version,
-	)
-	resp.KeepLockTableBind.Version = l.version
+	resp.KeepLockTableBind.OK = l.KeepLockTableBind(req.KeepLockTableBind.ServiceID)
 	if !resp.KeepLockTableBind.OK {
 		// resp.KeepLockTableBind.Status = pb.Status_ServiceCanRestart
 		writeResponse(l.logger, cancel, resp, nil, cs)
