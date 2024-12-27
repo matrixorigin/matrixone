@@ -20,6 +20,7 @@ import "github.com/prometheus/client_golang/prometheus"
 
 func initTraceMetrics() {
 	registry.MustRegister(traceCollectorDurationHistogram)
+	registry.MustRegister(traceCollectorSignalTotal)
 	registry.MustRegister(traceCollectorDiscardCounter)
 	registry.MustRegister(traceCollectorCollectHungCounter)
 	registry.MustRegister(traceCollectorDiscardItemCounter)
@@ -54,6 +55,14 @@ var (
 	TraceCollectorGenerateDurationHistogram             = traceCollectorDurationHistogram.WithLabelValues("generate")
 	TraceCollectorGenerateDiscardDurationHistogram      = traceCollectorDurationHistogram.WithLabelValues("generate_discard")
 	TraceCollectorExportDurationHistogram               = traceCollectorDurationHistogram.WithLabelValues("export")
+
+	traceCollectorSignalTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "trace",
+			Name:      "collector_signal_total",
+			Help:      "Count of collector act signal",
+		}, []string{"type", "reason"})
 
 	traceCollectorDiscardCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -210,6 +219,10 @@ var (
 	TraceMOLoggerLogMessageTooLong = traceMOLoggerLogToLongCounter.WithLabelValues("message")
 	TraceMOLoggerLogExtraTooLong   = traceMOLoggerLogToLongCounter.WithLabelValues("extra")
 )
+
+func GetTraceCollectorSignalTotal(typ, reason string) prometheus.Counter {
+	return traceCollectorSignalTotal.WithLabelValues(typ, reason)
+}
 
 func GetTraceNegativeCUCounter(typ string) prometheus.Counter {
 	return traceNegativeCUCounter.WithLabelValues(typ)
