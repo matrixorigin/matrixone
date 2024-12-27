@@ -37,6 +37,14 @@ func NewTSRangeFile(name, ext string, start, end types.TS) TSRangeFile {
 	}
 }
 
+func (m TSRangeFile) IsMetadataFile() bool {
+	return IsMetadataName(m.name)
+}
+
+func (m TSRangeFile) IsCompactExt() bool {
+	return m.ext == CompactExt
+}
+
 func (m TSRangeFile) IsCKPFile() bool {
 	return IsCKPExt(m.ext)
 }

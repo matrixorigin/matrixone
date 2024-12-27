@@ -67,7 +67,7 @@ func EncodeCompactCKPMetadataFullName(
 		PrefixMetadata,
 		start.ToString(),
 		end.ToString(),
-		CompactedExt,
+		CompactExt,
 	)
 }
 

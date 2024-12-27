@@ -136,7 +136,7 @@ func ListSnapshotCheckpoint(
 	compactedFiles := make([]ioutil.TSRangeFile, 0)
 	for name := range files {
 		meta := ioutil.DecodeCKPMetaName(name)
-		if meta.GetExt() == blockio.CompactedExt {
+		if meta.IsCompactExt() {
 			compactedFiles = append(compactedFiles, meta)
 		} else {
 			metaFiles = append(metaFiles, meta)

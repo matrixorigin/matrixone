@@ -1679,7 +1679,7 @@ func (c *checkpointCleaner) scanCheckpointsLocked(
 		newFiles = append(newFiles, ioutil.MakeGCFullName(name))
 		accountFile = ioutil.NewTSRangeFile(
 			name,
-			blockio.AcctExt,
+			ioutil.AcctExt,
 			ckps[0].GetStart(),
 			ckps[len(ckps)-1].GetEnd(),
 		)

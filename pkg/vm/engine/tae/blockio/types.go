@@ -36,20 +36,9 @@ func init() {
 }
 
 const (
-	GCFullExt    = "fgc"
-	SnapshotExt  = "snap"
-	AcctExt      = "acct"
-	CompactedExt = "cpt"
+	GCFullExt   = "fgc"
+	SnapshotExt = "snap"
 )
-
-func DecodeGCMetadataFileName(name string) (start, end types.TS, ext string) {
-	fileName := strings.Split(name, ".")
-	info := strings.Split(fileName[0], "_")
-	start = types.StringToTS(info[1])
-	end = types.StringToTS(info[2])
-	ext = fileName[1]
-	return
-}
 
 func GetObjectSizeWithBlocks(blocks []objectio.BlockObject) (uint32, error) {
 	objectSize := uint32(0)

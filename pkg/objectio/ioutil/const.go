@@ -14,13 +14,15 @@
 
 package ioutil
 
+import "strings"
+
 const defaultCheckpointDir = "ckp/"
 const defaultGCDir = "gc/"
 
 const (
 	// checkpint related
 	CheckpointExt = "ckp"
-	CompactedExt  = "cpt"
+	CompactExt    = "cpt"
 
 	// gc related
 	GCFullExt   = "fgc"
@@ -51,4 +53,8 @@ func IsCKPExt(ext string) bool {
 
 func IsGCMetaExt(ext string) bool {
 	return ext == GCMetaExt
+}
+
+func IsMetadataName(name string) bool {
+	return strings.HasPrefix(name, PrefixMetadata) && strings.HasSuffix(name, SuffixMetadata)
 }

@@ -1128,10 +1128,9 @@ func getGCTS(ctx context.Context, fs fileservice.FileService) (maxGCTS types.TS,
 			return
 		}
 		meta := ioutil.DecodeCKPMetaName(dir.Name)
-		if meta.GetExt() == ioutil.CompactedExt {
-			end := meta.GetEnd()
-			if end.GT(&maxGCTS) {
-				maxGCTS = *end
+		if meta.IsCompactExt() {
+			if meta.GetEnd().GT(&maxGCTS) {
+				maxGCTS = *meta.GetEnd()
 			}
 		}
 	}

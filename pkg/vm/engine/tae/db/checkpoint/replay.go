@@ -119,9 +119,9 @@ func (c *CkpReplayer) readCheckpointEntries() (
 	for _, file := range files {
 		c.r.store.AddMetaFile(file.Name)
 		entry := ioutil.DecodeCKPMetaName(file.Name)
-		if entry.GetExt() == blockio.CompactedExt {
+		if entry.IsCompactExt() {
 			compactedEntries = append(compactedEntries, entry)
-		} else if IsMetadataFile(file.Name) {
+		} else if entry.IsMetadataFile() {
 			metaEntries = append(metaEntries, entry)
 		}
 	}
