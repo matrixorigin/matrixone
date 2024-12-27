@@ -652,7 +652,7 @@ func (builder *QueryBuilder) tryIndexOnlyScan(idxDef *IndexDef, node *plan.Node,
 			colName := node.TableDef.Cols[i].Name
 			found := false
 			for j := range idxDef.Parts {
-				if idxDef.Parts[j] == colName {
+				if catalog.ResolveAlias(idxDef.Parts[j]) == colName {
 					found = true
 					break
 				}
@@ -713,11 +713,16 @@ func (builder *QueryBuilder) tryIndexOnlyScan(idxDef *IndexDef, node *plan.Node,
 		colIdx := node.TableDef.Name2ColIndex[idxDef.Parts[0]]
 		idxColMap[[2]int32{node.BindingTags[0], colIdx}] = leadingColExpr
 	} else {
-		for i := 0; i < numKeyParts; i++ {
-			colIdx := node.TableDef.Name2ColIndex[catalog.ResolveAlias(idxDef.Parts[i])]
-			origType := node.TableDef.Cols[colIdx].Typ
-			mappedExpr, _ := MakeSerialExtractExpr(builder.GetContext(), DeepCopyExpr(leadingColExpr), origType, int64(i))
-			idxColMap[[2]int32{node.BindingTags[0], colIdx}] = mappedExpr
+		for i := 0; i < numParts; i++ {
+			colName := catalog.ResolveAlias(idxDef.Parts[i])
+			colIdx := node.TableDef.Name2ColIndex[colName]
+			if colName == node.TableDef.Pkey.PkeyColName {
+				idxColMap[[2]int32{node.BindingTags[0], colIdx}] = GetColExpr(idxTableDef.Cols[1].Typ, idxTag, 1)
+			} else {
+				origType := node.TableDef.Cols[colIdx].Typ
+				mappedExpr, _ := MakeSerialExtractExpr(builder.GetContext(), DeepCopyExpr(leadingColExpr), origType, int64(i))
+				idxColMap[[2]int32{node.BindingTags[0], colIdx}] = mappedExpr
+			}
 		}
 	}
 

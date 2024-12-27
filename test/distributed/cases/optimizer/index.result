@@ -18,6 +18,29 @@ mo_ctl(dn, flush, d1.t2)
 select Sleep(1);
 Sleep(1)
 0
+explain select * from t1,t2 where t1.c1=t2.c0 and t1.c3=11;
+TP QUERY PLAN
+Project
+  ->  Join
+        Join Type: INNER   hashOnPK
+        Join Cond: (t2.c0 = t1.c1)
+        Runtime Filter Build: serial(#[-1,0])
+        ->  Table Scan on d1.t2
+              Runtime Filter Probe: t2.__mo_cpkey_col Match Prefix
+        ->  Join
+              Join Type: INDEX
+              Join Cond: (t1.c1 = #[1,0])
+              Runtime Filter Build: #[-1,0]
+              ->  Table Scan on d1.t1 [ForceOneCN]
+                    Filter Cond: (t1.c3 = 11)
+                    Block Filter Cond: (t1.c3 = 11)
+                    Runtime Filter Probe: t1.c1
+              ->  Index Table Scan on t1.id1 [ForceOneCN]
+                    Filter Cond: (#[0,0] = 11)
+                    Block Filter Cond: (#[0,0] = 11)
+select * from t1,t2 where t1.c1=t2.c0 and t1.c3=11;
+c1    c2    c3    c0    c1    c2    c3
+11    11    11    11    11    11    11
 select * from t1 where c2=1;
 c1    c2    c3
 1    1    1
@@ -198,7 +221,6 @@ select count(*) from t1 where c3<2000;
 count(*)
 1999
 drop table if exists t1;
-set session optimizer_hints="execType=3";
 drop database if exists d1;
 create database d1;
 use d1;
@@ -209,7 +231,6 @@ update t1 set c1=c1+1000000, c2=1,c3=c3-1000000 where c2=1;
 delete from t1;
 drop table t1;
 drop database d1;
-set session optimizer_hints="execType=2";
 drop database if exists d1;
 create database d1;
 use d1;
@@ -220,7 +241,6 @@ update t1 set c1=c1+1000000, c2=1,c3=c3-1000000 where c2=1;
 delete from t1;
 drop table t1;
 drop database d1;
-set session optimizer_hints="execType=1";
 drop database if exists d1;
 create database d1;
 use d1;
@@ -235,5 +255,21 @@ insert into t1 select "2024-01-01 10:10:10", "a"||result from generate_series(1,
 select * from t1 where a >= "2020-01-01 10:10:10" and a <= "2034-01-01 10:10:10" and b in ("a1");
 a    b
 2024-01-01 10:10:10    a1
+drop table if exists t14;
+CREATE TABLE t14 (`pseudo` char(35) NOT NULL default '',`pseudo1` char(35) NOT NULL default '',
+`same` tinyint(1) unsigned NOT NULL default '1',PRIMARY KEY  (`pseudo1`),KEY `pseudo` (`pseudo`));
+INSERT INTO t14 (pseudo,pseudo1,same) VALUES ('joce', 'testtt', 1),('joce', 'tsestset', 1),('dekad', 'joce', 1);
+explain SELECT pseudo1 FROM t14 WHERE pseudo='joce';
+TP QUERY PLAN
+Project
+  ->  Index Table Scan on t14.pseudo
+        Filter Cond: prefix_eq(#[0,0])
+SELECT pseudo1 FROM t14 WHERE pseudo='joce';
+pseudo1
+testtt
+tsestset
+drop table t1;
+create table t1(a bigint, b bigint default null, c int, primary key(a), key(b));
+insert into t1(a,b,c) select result,result%10, result from generate_series(1,3000000)g;
+delete from t1 where b = 1;
 drop database d1;
-set session optimizer_hints="";

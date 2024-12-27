@@ -200,8 +200,14 @@ func (k *lockTableKeeper) doKeepLockTableBind(ctx context.Context) {
 	}
 	defer releaseResponse(resp)
 
-	if resp.KeepLockTableBind.OK {
+	if resp.KeepLockTableBind.Version > 0 &&
+		k.service.tnVersion != resp.KeepLockTableBind.Version {
+		logTnVersionChanged(k.service.logger,
+			k.service.tnVersion,
+			resp.KeepLockTableBind.Version)
 		k.service.tnVersion = resp.KeepLockTableBind.Version
+	}
+	if resp.KeepLockTableBind.OK {
 		switch resp.KeepLockTableBind.Status {
 		case pb.Status_ServiceLockEnable:
 			if !k.service.isStatus(pb.Status_ServiceLockEnable) {
