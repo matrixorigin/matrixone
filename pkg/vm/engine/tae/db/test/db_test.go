@@ -7565,7 +7565,15 @@ func TestGCCheckpoint1(t *testing.T) {
 	})
 	assert.True(t, tae.BGCheckpointRunner.MaxGlobalCheckpoint().IsFinished())
 
-	tae.BGCheckpointRunner.DisableCheckpoint()
+	{
+		tae.BGCheckpointRunner.DisableCheckpoint()
+
+		err := tae.BGCheckpointRunner.WaitRunningCKPDoneForTest(ctx, true)
+		assert.NoError(t, err)
+
+		err = tae.BGCheckpointRunner.WaitRunningCKPDoneForTest(ctx, false)
+		assert.NoError(t, err)
+	}
 
 	gcTS := types.BuildTS(time.Now().UTC().UnixNano(), 0)
 	t.Log(gcTS.ToString())
@@ -7733,7 +7741,7 @@ func Test_CheckpointChaos2(t *testing.T) {
 
 	ctx, cancel = context.WithTimeout(context.Background(), time.Second*20)
 	defer cancel()
-	assert.NoError(t, tae.DB.BGCheckpointRunner.WaitRunningGCKPDoneForTest(ctx))
+	assert.NoError(t, tae.DB.BGCheckpointRunner.WaitRunningCKPDoneForTest(ctx, true))
 	err = tae.DB.ForceGlobalCheckpoint(ctx, maxICKP.GetEnd(), 0, 0)
 	assert.NoError(t, err)
 	maxGCKP = tae.DB.BGCheckpointRunner.MaxGlobalCheckpoint()
