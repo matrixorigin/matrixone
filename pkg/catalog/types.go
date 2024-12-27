@@ -317,6 +317,7 @@ const (
 	UniqueIndexTableNamePrefix    = PrefixIndexTableName + UniqueIndexSuffix
 	SecondaryIndexTableNamePrefix = PrefixIndexTableName + SecondaryIndexSuffix
 	FullTextIndexTableNamePrefix  = PrefixIndexTableName + FullTextIndexSuffix
+	HiddenTableNamePrefix         = "__mo_"
 
 	/************ 0. Regular Secondary Index ************/
 
