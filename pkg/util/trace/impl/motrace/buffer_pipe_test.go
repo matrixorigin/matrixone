@@ -344,6 +344,7 @@ var genFactory = func() table.WriterFactory {
 }
 
 var message66bytes = "123456789-223456789-323456789-423456789-523456789-623456789-123456"
+var extra66bytes = `{"task":"gc-process-4","duration":0.048722765,"soft-gc":27.155712495,"merge-table":0.048722236,"files-to-gc":["0192b0d8-5371-701d-a511-453f42a650fb_00000","0192b0df-2a31-7d20-a8bc-c0444f9da0c5_00000",....]}'`
 
 // Test_genCsvData_long_log ut for https://github.com/matrixorigin/MO-Cloud/issues/4235
 func Test_genCsvData_long_log(t *testing.T) {
@@ -372,12 +373,12 @@ func Test_genCsvData_long_log(t *testing.T) {
 						Timestamp:   dummyBaseTime,
 						Caller:      "trace/buffer_pipe_sql_test.go:912",
 						Message:     message66bytes,
-						Extra:       "{}",
+						Extra:       extra66bytes,
 					},
 				},
 				buf: buf,
 			},
-			want: `log_info,node_uuid,Standalone,0000000000000001,00000000-0000-0000-0000-000000000001,,1970-01-01 00:00:00.000000,info,trace/buffer_pipe_sql_test.go:912,123456789-223456789-323456789-423456789-523456789-623456789-1234,{},0,,,,0,0001-01-01 00:00:00.000000,0001-01-01 00:00:00.000000,0,{},internal,,
+			want: `log_info,node_uuid,Standalone,0000000000000001,00000000-0000-0000-0000-000000000001,,1970-01-01 00:00:00.000000,info,trace/buffer_pipe_sql_test.go:912,123456789-223456789-323456789-423456789-523456789-623456789-1234,"{""task"":""gc-process-4"",""duration"":0.048722765,""soft-gc"":27.15571",0,,,,0,0001-01-01 00:00:00.000000,0001-01-01 00:00:00.000000,0,{},internal,,
 `,
 		},
 	}
