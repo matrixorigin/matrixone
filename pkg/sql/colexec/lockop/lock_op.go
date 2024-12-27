@@ -415,7 +415,7 @@ func doLock(
 	// update t1 set b = b+1 where a = 1;
 	//    here MO will use 't1 left join hidden_tbl' to fetch the PK in hidden table to lock,
 	//    but the result will be ConstNull vector
-	if vec != nil && vec.IsConstNull() {
+	if vec != nil && vec.AllNull() {
 		return false, false, timestamp.Timestamp{}, nil
 	}
 
