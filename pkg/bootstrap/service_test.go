@@ -16,6 +16,7 @@ package bootstrap
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -27,6 +28,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
@@ -314,6 +317,7 @@ func (l *memLocker) Get(
 	return l.ids[key] == 1, nil
 }
 
+// tolerance test
 func TestDoCheckUpgrade(t *testing.T) {
 	sid := ""
 	runtime.RunTest(
@@ -493,6 +497,53 @@ func TestDoUpgrade(t *testing.T) {
 
 			_, err := b.doUpgrade(ctx, versionUpg, txnExecutor)
 			assert.NoError(t, err)
+		},
+	)
+}
+
+// tolerance test
+func TestUpgradeTenant(t *testing.T) {
+	sid := ""
+	runtime.RunTest(
+		sid,
+		func(rt runtime.Runtime) {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Errorf("Expected no panic")
+				}
+			}()
+
+			txnOp := &testTxnOperator{}
+			sqlExecutor := executor.NewMemExecutor2(func(sql string) (executor.Result, error) {
+				target := fmt.Sprintf(`select version, version_offset, state from %s order by create_at desc limit 1`, catalog.MOVersionTable)
+				if sql == target {
+					return executor.Result{}, moerr.NewInternalErrorNoCtx("test err")
+				}
+				return executor.Result{}, nil
+			}, txnOp)
+
+			b := newServiceForTest(
+				sid,
+				&memLocker{},
+				clock.NewHLCClock(func() int64 { return 0 }, 0),
+				nil,
+				sqlExecutor,
+				func(s *service) {
+					h1 := newTestVersionHandler("1.2.0", "1.1.0", versions.Yes, versions.No, 10)
+					h2 := newTestVersionHandler("2.0.0", "1.2.0", versions.Yes, versions.No, 2)
+					s.handles = append(s.handles, h1)
+					s.handles = append(s.handles, h2)
+				},
+			)
+
+			txnOperator := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
+			txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{CN: sid}).AnyTimes()
+
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+
+			_, err := b.UpgradeTenant(ctx, "sys", 0, true)
+			assert.Error(t, err)
 		},
 	)
 }
