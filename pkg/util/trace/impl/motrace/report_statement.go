@@ -244,12 +244,12 @@ type StatementInfo struct {
 }
 
 type Key struct {
-	SessionID     [16]byte
-	StatementType string
-	Window        time.Time
-	Status        StatementInfoStatus
-	SqlSourceType string
-	Error         string
+	SessionID     [16]byte            `json:"session_id"`
+	StatementType string              `json:"statement_type"`
+	Window        time.Time           `json:"window"`
+	Status        StatementInfoStatus `json:"status"`
+	SqlSourceType string              `json:"sql_source_type"`
+	Error         string              `json:"error"`
 }
 
 func (k Key) Before(end time.Time) bool {
@@ -284,6 +284,7 @@ func getErrorString(err error) string {
 	return err.Error()
 }
 
+// Key implements table.Item
 func (s *StatementInfo) Key(duration time.Duration) table.WindowKey {
 	return Key{
 		SessionID:     s.SessionID,
@@ -294,6 +295,9 @@ func (s *StatementInfo) Key(duration time.Duration) table.WindowKey {
 		Error:         getErrorString(s.Error),
 	}
 }
+
+// Aggred implements table.Item
+func (s *StatementInfo) Aggred() int64 { return s.AggrCount }
 
 func (s *StatementInfo) GetName() string {
 	return SingleStatementTable.GetName()
