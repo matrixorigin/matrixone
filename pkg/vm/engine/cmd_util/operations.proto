@@ -171,13 +171,19 @@ message CheckpointEntryResp {
     uint32 Version                  = 6;
 }
 
+enum ChangedListType  {
+    CheckChanged = 0;
+    CollectChanged = 1;
+}
+
 message GetChangedTableListReq {
     option (gogoproto.typedecl)     = false;
-    repeated timestamp.Timestamp From = 2;
+    repeated timestamp.Timestamp TS = 2;
     repeated uint64 AccIds = 3;
     repeated uint64 DatabaseIds = 4;
     repeated uint64 TableIds = 5;
     bytes Extra = 6;
+    ChangedListType Type = 7;
 }
 
 message GetChangedTableListResp {

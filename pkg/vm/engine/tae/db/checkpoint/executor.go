@@ -209,8 +209,11 @@ func newCheckpointExecutor(
 	return e
 }
 
-func (e *checkpointExecutor) RunningGCKPJob() *checkpointJob {
-	return e.runningGCKP.Load()
+func (e *checkpointExecutor) RunningCKPJob(gckp bool) *checkpointJob {
+	if gckp {
+		return e.runningGCKP.Load()
+	}
+	return e.runningICKP.Load()
 }
 
 func (e *checkpointExecutor) StopWithCause(cause error) {

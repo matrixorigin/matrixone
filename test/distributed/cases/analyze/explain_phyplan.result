@@ -66,8 +66,9 @@ tp query phyplan
 Scope 1 (Magic: Remote, mcpu: 1, Receiver: [])
   DataSource: db1.emp[ename deptno]
   Pipeline: └── output
-                └── left
-                    └── tablescan
+                └── projection
+                    └── left
+                        └── tablescan
   PreScopes: {
     Scope 1 (Magic: Remote, mcpu: 1, Receiver: [])
       DataSource: db1.dept[deptno dname]
