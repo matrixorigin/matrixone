@@ -26,7 +26,7 @@ import (
 
 type TestRunner interface {
 	EnableCheckpoint()
-	DisableCheckpoint()
+	DisableCheckpoint(ctx context.Context) error
 
 	// TODO: remove the below apis
 	CleanPenddingCheckpoint()
@@ -66,8 +66,20 @@ func (r *runner) GetICKPIntentOnlyForTest() *CheckpointEntry {
 }
 
 // DisableCheckpoint stops generating checkpoint
-func (r *runner) DisableCheckpoint() {
+func (r *runner) DisableCheckpoint(ctx context.Context) (err error) {
+	// waiting glob checkpoint done
+	if err = r.WaitRunningCKPDoneForTest(ctx, true); err != nil {
+		return
+	}
+
+	// waiting incremental checkpoint done
+	if err = r.WaitRunningCKPDoneForTest(ctx, false); err != nil {
+		return
+	}
+
 	r.disabled.Store(true)
+
+	return nil
 }
 
 func (r *runner) EnableCheckpoint() {

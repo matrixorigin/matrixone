@@ -7565,15 +7565,8 @@ func TestGCCheckpoint1(t *testing.T) {
 	})
 	assert.True(t, tae.BGCheckpointRunner.MaxGlobalCheckpoint().IsFinished())
 
-	{
-		tae.BGCheckpointRunner.DisableCheckpoint()
-
-		err := tae.BGCheckpointRunner.WaitRunningCKPDoneForTest(ctx, true)
-		assert.NoError(t, err)
-
-		err = tae.BGCheckpointRunner.WaitRunningCKPDoneForTest(ctx, false)
-		assert.NoError(t, err)
-	}
+	err := tae.BGCheckpointRunner.DisableCheckpoint(ctx)
+	require.NoError(t, err)
 
 	gcTS := types.BuildTS(time.Now().UTC().UnixNano(), 0)
 	t.Log(gcTS.ToString())
