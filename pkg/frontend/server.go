@@ -128,6 +128,12 @@ func GetsockoptTCPInfo(tcpConn *net.TCPConn) (*syscall.TCPInfo, error) {
 }
 
 func isConnected() {
+	defer func() {
+		if pErr := recover(); pErr != nil {
+			err := moerr.ConvertPanicError(context.Background(), pErr)
+			logutil.Error("panic in check Connection", zap.String("error", err.Error()))
+		}
+	}()
 
 	tcpConnStatus := make(map[*net.TCPConn]uint8)
 	connMap.Range(func(key, value any) bool {
@@ -178,7 +184,7 @@ func checkConnected() {
 	for {
 		select {
 		case <-ticker:
-			logutil.Debugf("Goruntine %d is checking TCP status")
+			logutil.Debugf("Goruntine %d is checking TCP status", GetRoutineId())
 		default:
 		}
 		isConnected()
