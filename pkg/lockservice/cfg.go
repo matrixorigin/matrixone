@@ -27,7 +27,7 @@ var (
 	defaultMaxFixedSliceSize      = 1 << 20 * 10 // 10mb
 	defaultKeepRemoteLockDuration = time.Second
 	defaultKeepBindTimeout        = time.Second * 10
-	defaultRemoteLockTimeout      = time.Minute * 1
+	defaultRemoteLockTimeout      = time.Minute * 10
 )
 
 // Config lock service config

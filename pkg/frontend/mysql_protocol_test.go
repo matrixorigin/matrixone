@@ -21,6 +21,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+	"math/rand"
 	"net"
 	"reflect"
 	"strconv"
@@ -38,8 +39,10 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -651,6 +654,170 @@ func TestReadStringLenEnc(t *testing.T) {
 //	wg.Wait()
 //}
 
+func makeMysqlBoolResultSet() *MysqlResultSet {
+	var rs = &MysqlResultSet{}
+
+	name := "Bool"
+
+	mysqlCol := new(MysqlColumn)
+	mysqlCol.SetName(name)
+	mysqlCol.SetOrgName(name + "OrgName")
+	mysqlCol.SetColumnType(defines.MYSQL_TYPE_BOOL)
+	mysqlCol.SetSchema(name + "Schema")
+	mysqlCol.SetTable(name + "Table")
+	mysqlCol.SetOrgTable(name + "Table")
+	mysqlCol.SetCharset(uint16(Utf8mb4CollationID))
+
+	rs.AddColumn(mysqlCol)
+	var cases = []bool{true, false}
+	for _, v := range cases {
+		var data = make([]interface{}, 1)
+		data[0] = v
+		rs.AddRow(data)
+	}
+
+	return rs
+}
+
+func makeMysqlBitResultSet() *MysqlResultSet {
+	var rs = &MysqlResultSet{}
+
+	name := "Bit"
+
+	mysqlCol := new(MysqlColumn)
+	mysqlCol.SetName(name)
+	mysqlCol.SetOrgName(name + "OrgName")
+	mysqlCol.SetColumnType(defines.MYSQL_TYPE_BIT)
+	mysqlCol.SetSchema(name + "Schema")
+	mysqlCol.SetTable(name + "Table")
+	mysqlCol.SetOrgTable(name + "Table")
+	mysqlCol.SetCharset(uint16(Utf8mb4CollationID))
+	mysqlCol.SetLength(32)
+	rs.AddColumn(mysqlCol)
+	var cases = []uint64{0x0000FFFF, 0xFFFF0000}
+	for _, v := range cases {
+		var data = make([]interface{}, 1)
+		data[0] = v
+		rs.AddRow(data)
+	}
+
+	return rs
+}
+
+func makeMysqlRowIdResultSet() *MysqlResultSet {
+	var rs = &MysqlResultSet{}
+
+	name := "Rowid"
+
+	mysqlCol := new(MysqlColumn)
+	mysqlCol.SetName(name)
+	mysqlCol.SetOrgName(name + "OrgName")
+	mysqlCol.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	mysqlCol.SetSchema(name + "Schema")
+	mysqlCol.SetTable(name + "Table")
+	mysqlCol.SetOrgTable(name + "Table")
+	mysqlCol.SetCharset(uint16(Utf8mb4CollationID))
+	rs.AddColumn(mysqlCol)
+
+	var cases = []types.Rowid{}
+	for i := 0; i < 8; i++ {
+		rid1 := types.Rowid{}
+		rid1[i] = byte('a' + i)
+		cases = append(cases, rid1)
+	}
+	for _, v := range cases {
+		var data = make([]interface{}, 1)
+		data[0] = v
+		rs.AddRow(data)
+	}
+
+	return rs
+}
+
+func makeMysqlJsonResultSet() *MysqlResultSet {
+	var rs = &MysqlResultSet{}
+
+	name := "Json"
+
+	mysqlCol := new(MysqlColumn)
+	mysqlCol.SetName(name)
+	mysqlCol.SetOrgName(name + "OrgName")
+	mysqlCol.SetColumnType(defines.MYSQL_TYPE_JSON)
+	mysqlCol.SetSchema(name + "Schema")
+	mysqlCol.SetTable(name + "Table")
+	mysqlCol.SetOrgTable(name + "Table")
+	mysqlCol.SetCharset(uint16(Utf8mb4CollationID))
+	rs.AddColumn(mysqlCol)
+
+	var cases = []bytejson.ByteJson{}
+	for i := 0; i < 8; i++ {
+		json, _ := bytejson.CreateByteJSON("abc")
+		cases = append(cases, json)
+	}
+	for _, v := range cases {
+		var data = make([]interface{}, 1)
+		data[0] = v
+		rs.AddRow(data)
+	}
+
+	return rs
+}
+
+func makeMysqlDecimalResultSet() *MysqlResultSet {
+	var rs = &MysqlResultSet{}
+
+	name := "Decimal"
+
+	mysqlCol := new(MysqlColumn)
+	mysqlCol.SetName(name)
+	mysqlCol.SetOrgName(name + "OrgName")
+	mysqlCol.SetColumnType(defines.MYSQL_TYPE_DECIMAL)
+	mysqlCol.SetSchema(name + "Schema")
+	mysqlCol.SetTable(name + "Table")
+	mysqlCol.SetOrgTable(name + "Table")
+	mysqlCol.SetCharset(uint16(Utf8mb4CollationID))
+
+	rs.AddColumn(mysqlCol)
+	var cases = []types.Decimal64{0x0000FFFF, 0xFFFF0000}
+	for _, v := range cases {
+		var data = make([]interface{}, 1)
+		data[0] = v
+		rs.AddRow(data)
+	}
+
+	return rs
+}
+
+func makeMysqlUUIDResultSet() *MysqlResultSet {
+	var rs = &MysqlResultSet{}
+
+	name := "uuid"
+
+	mysqlCol := new(MysqlColumn)
+	mysqlCol.SetName(name)
+	mysqlCol.SetOrgName(name + "OrgName")
+	mysqlCol.SetColumnType(defines.MYSQL_TYPE_UUID)
+	mysqlCol.SetSchema(name + "Schema")
+	mysqlCol.SetTable(name + "Table")
+	mysqlCol.SetOrgTable(name + "Table")
+	mysqlCol.SetCharset(uint16(Utf8mb4CollationID))
+
+	rs.AddColumn(mysqlCol)
+	var cases = []types.Uuid{}
+	for i := 0; i < 4; i++ {
+		uid := types.Uuid{}
+		uid[i] = byte('a' + i)
+		cases = append(cases, uid)
+	}
+	for _, v := range cases {
+		var data = make([]interface{}, 1)
+		data[0] = v
+		rs.AddRow(data)
+	}
+
+	return rs
+}
+
 func makeMysqlTinyIntResultSet(unsigned bool) *MysqlResultSet {
 	var rs = &MysqlResultSet{}
 
@@ -907,7 +1074,7 @@ func makeMysqlVarcharResultSet() *MysqlResultSet {
 	var cases = []string{"abc", "abcde", "", "x-", "xx"}
 	for _, v := range cases {
 		var data = make([]interface{}, 1)
-		data[0] = v
+		data[0] = []byte(v)
 		rs.AddRow(data)
 	}
 
@@ -933,7 +1100,7 @@ func makeMysqlVarStringResultSet() *MysqlResultSet {
 	var cases = []string{"abc", "abcde", "", "x-", "xx"}
 	for _, v := range cases {
 		var data = make([]interface{}, 1)
-		data[0] = v
+		data[0] = []byte(v)
 		rs.AddRow(data)
 	}
 
@@ -959,7 +1126,7 @@ func makeMysqlStringResultSet() *MysqlResultSet {
 	var cases = []string{"abc", "abcde", "", "x-", "xx"}
 	for _, v := range cases {
 		var data = make([]interface{}, 1)
-		data[0] = v
+		data[0] = []byte(v)
 		rs.AddRow(data)
 	}
 
@@ -1082,10 +1249,43 @@ func makeMysqlTimeResultSet() *MysqlResultSet {
 	return rs
 }
 
+func makeMysqlTimeResultSet2() *MysqlResultSet {
+	var rs = &MysqlResultSet{}
+
+	name := "Time"
+
+	mysqlCol := new(MysqlColumn)
+	mysqlCol.SetName(name)
+	mysqlCol.SetOrgName(name + "OrgName")
+	mysqlCol.SetColumnType(defines.MYSQL_TYPE_TIME)
+	mysqlCol.SetSchema(name + "Schema")
+	mysqlCol.SetTable(name + "Table")
+	mysqlCol.SetOrgTable(name + "Table")
+	mysqlCol.SetCharset(uint16(Utf8mb4CollationID))
+	mysqlCol.SetLength(6)
+	rs.AddColumn(mysqlCol)
+
+	t1, _ := types.ParseTime("110:21:15", 6)
+	t2, _ := types.ParseTime("10:21:15.123", 6)
+	t3, _ := types.ParseTime("-112:12:12", 6)
+	var cases = []types.Time{
+		t1,
+		t2,
+		t3,
+	}
+	for _, v := range cases {
+		var data = make([]interface{}, 1)
+		data[0] = v
+		rs.AddRow(data)
+	}
+
+	return rs
+}
+
 func makeMysqlDatetimeResultSet() *MysqlResultSet {
 	var rs = &MysqlResultSet{}
 
-	name := "Date"
+	name := "Datetime"
 
 	mysqlCol := new(MysqlColumn)
 	mysqlCol.SetName(name)
@@ -1102,6 +1302,105 @@ func makeMysqlDatetimeResultSet() *MysqlResultSet {
 	d2, _ := types.ParseDatetime("2018-04-28 10:21:15.123", 0)
 	d3, _ := types.ParseDatetime("2015-03-03 12:12:12", 0)
 	var cases = []types.Datetime{
+		d1,
+		d2,
+		d3,
+	}
+	for _, v := range cases {
+		var data = make([]interface{}, 1)
+		data[0] = v
+		rs.AddRow(data)
+	}
+
+	return rs
+}
+
+func makeMysqlDatetimeResultSet2() *MysqlResultSet {
+	var rs = &MysqlResultSet{}
+
+	name := "Datetime"
+
+	mysqlCol := new(MysqlColumn)
+	mysqlCol.SetName(name)
+	mysqlCol.SetOrgName(name + "OrgName")
+	mysqlCol.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
+	mysqlCol.SetSchema(name + "Schema")
+	mysqlCol.SetTable(name + "Table")
+	mysqlCol.SetOrgTable(name + "Table")
+	mysqlCol.SetCharset(uint16(Utf8mb4CollationID))
+
+	rs.AddColumn(mysqlCol)
+
+	d1, _ := types.ParseDatetime("2018-04-28 10:21:15", 0)
+	d2, _ := types.ParseDatetime("2018-04-28 10:21:15.123", 0)
+	d3, _ := types.ParseDatetime("2015-03-03 12:12:12", 0)
+	var cases = []types.Datetime{
+		d1,
+		d2,
+		d3,
+	}
+	for _, v := range cases {
+		var data = make([]interface{}, 1)
+		data[0] = v
+		rs.AddRow(data)
+	}
+
+	return rs
+}
+
+func makeMysqlDatetimeResultSet3() *MysqlResultSet {
+	var rs = &MysqlResultSet{}
+
+	name := "Datetime"
+
+	mysqlCol := new(MysqlColumn)
+	mysqlCol.SetName(name)
+	mysqlCol.SetOrgName(name + "OrgName")
+	mysqlCol.SetColumnType(defines.MYSQL_TYPE_DATETIME)
+	mysqlCol.SetSchema(name + "Schema")
+	mysqlCol.SetTable(name + "Table")
+	mysqlCol.SetOrgTable(name + "Table")
+	mysqlCol.SetCharset(uint16(Utf8mb4CollationID))
+	mysqlCol.SetLength(6)
+	rs.AddColumn(mysqlCol)
+
+	d1, _ := types.ParseDatetime("2018-04-28 10:21:15", 6)
+	d2, _ := types.ParseDatetime("2018-04-28 10:21:15.123", 6)
+	d3, _ := types.ParseDatetime("2015-03-03 12:12:12", 6)
+	var cases = []types.Datetime{
+		d1,
+		d2,
+		d3,
+	}
+	for _, v := range cases {
+		var data = make([]interface{}, 1)
+		data[0] = v
+		rs.AddRow(data)
+	}
+
+	return rs
+}
+
+func makeMysqlTimestampResultSet() *MysqlResultSet {
+	var rs = &MysqlResultSet{}
+
+	name := "timestamp"
+
+	mysqlCol := new(MysqlColumn)
+	mysqlCol.SetName(name)
+	mysqlCol.SetOrgName(name + "OrgName")
+	mysqlCol.SetColumnType(defines.MYSQL_TYPE_TIMESTAMP)
+	mysqlCol.SetSchema(name + "Schema")
+	mysqlCol.SetTable(name + "Table")
+	mysqlCol.SetOrgTable(name + "Table")
+	mysqlCol.SetCharset(uint16(Utf8mb4CollationID))
+
+	rs.AddColumn(mysqlCol)
+
+	d1, _ := types.ParseTimestamp(time.UTC, "2012-01-01 11:11:11", 6)
+	d2, _ := types.ParseTimestamp(time.UTC, "2012-01-01 11:11:11", 6)
+	d3, _ := types.ParseTimestamp(time.UTC, "2012-01-01 11:11:11", 6)
+	var cases = []types.Timestamp{
 		d1,
 		d2,
 		d3,
@@ -1156,10 +1455,10 @@ func make9ColumnsResultSet() *MysqlResultSet {
 	t3, _ := types.ParseTime("2015-03-03 12:12:12", 0)
 
 	var cases = [][]interface{}{
-		{int8(-128), int16(-32768), int32(-2147483648), int64(-9223372036854775808), "abc", float32(math.MaxFloat32), d1, t1, dt1, float64(0.01)},
-		{int8(-127), int16(0), int32(0), int64(0), "abcde", float32(math.SmallestNonzeroFloat32), d2, t2, dt2, float64(0.01)},
-		{int8(127), int16(32767), int32(2147483647), int64(9223372036854775807), "", float32(-math.MaxFloat32), d1, t3, dt3, float64(0.01)},
-		{int8(126), int16(32766), int32(2147483646), int64(9223372036854775806), "x-", float32(-math.SmallestNonzeroFloat32), d2, t1, dt1, float64(0.01)},
+		{int8(-128), int16(-32768), int32(-2147483648), int64(-9223372036854775808), []byte("abc"), float32(math.MaxFloat32), d1, t1, dt1, float64(0.01)},
+		{int8(-127), int16(0), int32(0), int64(0), []byte("abcde"), float32(math.SmallestNonzeroFloat32), d2, t2, dt2, float64(0.01)},
+		{int8(127), int16(32767), int32(2147483647), int64(9223372036854775807), []byte(""), float32(-math.MaxFloat32), d1, t3, dt3, float64(0.01)},
+		{int8(126), int16(32766), int32(2147483646), int64(9223372036854775806), []byte("x-"), float32(-math.SmallestNonzeroFloat32), d2, t1, dt1, float64(0.01)},
 	}
 
 	for i, ct := range columnTypes {
@@ -1198,7 +1497,7 @@ func makeMoreThan16MBResultSet() *MysqlResultSet {
 		"Varchar",
 	}
 
-	var rowCase = []interface{}{int64(9223372036854775807), math.MaxFloat64, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+	var rowCase = []interface{}{int64(9223372036854775807), math.MaxFloat64, []byte("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")}
 
 	for i, ct := range columnTypes {
 		name := names[i]
@@ -1266,7 +1565,7 @@ func make16MBRowResultSet() *MysqlResultSet {
 		stuff[i] = 'a'
 	}
 
-	var rowCase = []interface{}{string(stuff)}
+	var rowCase = []interface{}{stuff}
 	for i := 0; i < 1; i++ {
 		rs.AddRow(rowCase)
 	}
@@ -1314,6 +1613,7 @@ func TestMysqlResultSet(t *testing.T) {
 	pu.SV.SkipCheckUser = true
 	pu.SV.KillRountinesInterval = 0
 	setPu("", pu)
+	setSessionAlloc("", NewLeakCheckAllocator())
 
 	noResultSet := make(map[string]bool)
 	resultSet := make(map[string]*result)
@@ -2192,6 +2492,7 @@ func Test_resultset(t *testing.T) {
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
 		pu.SV.KillRountinesInterval = 0
+		setSessionAlloc("", NewLeakCheckAllocator())
 		setPu("", pu)
 		ioses, err := NewIOSession(&testConn{}, pu, "")
 		convey.ShouldBeNil(err)
@@ -2658,6 +2959,11 @@ type testMysqlWriter struct {
 	mod      int
 }
 
+func (fp *testMysqlWriter) WriteResultSetRow2(mrs *MysqlResultSet, colSlices *ColumnSlices, count uint64) error {
+	//TODO implement me
+	panic("implement me")
+}
+
 func (fp *testMysqlWriter) FreeLoadLocal() {
 
 }
@@ -2872,4 +3178,1037 @@ func (fp *testMysqlWriter) Flush() error {
 
 func (fp *testMysqlWriter) MakeColumnDefData(ctx context.Context, columns []*planPb.ColDef) ([][]byte, error) {
 	return nil, nil
+}
+
+func newMrsForDate() *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+
+	col1 := &MysqlColumn{}
+	col1.SetName("a")
+	col1.SetColumnType(defines.MYSQL_TYPE_DATE)
+
+	mrs.AddColumn(col1)
+
+	dt, _ := types.ParseDateCast("2024-12-18")
+	rows := [][]any{
+		{dt},
+	}
+
+	for _, row := range rows {
+		mrs.AddRow(row)
+	}
+
+	return mrs
+}
+
+func Test_appendResultSetDate(t *testing.T) {
+	ctx := context.TODO()
+	convey.Convey("append result set date", t, func() {
+		sv, err := getSystemVariables("test/system_vars_config.toml")
+		if err != nil {
+			t.Error(err)
+		}
+		pu := config.NewParameterUnit(sv, nil, nil, nil)
+		pu.SV.SkipCheckUser = true
+		pu.SV.KillRountinesInterval = 0
+		setSessionAlloc("", NewLeakCheckAllocator())
+		setPu("", pu)
+		ioses, err := NewIOSession(&testConn{}, pu, "")
+		convey.ShouldBeNil(err)
+		proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
+
+		ses := NewSession(ctx, "", proto, nil)
+		proto.ses = ses
+
+		err = proto.appendResultSetTextRow(newMrsForDate(), 0)
+		convey.So(err, convey.ShouldBeNil)
+	})
+}
+
+func newMrsForBinary() *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+
+	col1 := &MysqlColumn{}
+	col1.SetName("a")
+	col1.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+
+	col2 := &MysqlColumn{}
+	col2.SetName("b")
+	col2.SetColumnType(defines.MYSQL_TYPE_STRING)
+
+	col3 := &MysqlColumn{}
+	col3.SetName("c")
+	col3.SetColumnType(defines.MYSQL_TYPE_JSON)
+
+	mrs.AddColumn(col1)
+	mrs.AddColumn(col2)
+	mrs.AddColumn(col3)
+
+	c3, _ := bytejson.CreateByteJSON("c1")
+
+	rows := [][]any{
+		{"a1", []byte("b1"), c3},
+	}
+
+	for _, row := range rows {
+		mrs.AddRow(row)
+	}
+
+	return mrs
+}
+
+func newMrsForBinary2() *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+
+	col3 := &MysqlColumn{}
+	col3.SetName("c")
+	col3.SetColumnType(defines.MYSQL_TYPE_JSON)
+
+	mrs.AddColumn(col3)
+
+	c3, _ := bytejson.CreateByteJSON("c1")
+
+	rows := [][]any{
+		{c3},
+	}
+
+	for _, row := range rows {
+		mrs.AddRow(row)
+	}
+
+	return mrs
+}
+
+func Test_appendResultSet(t *testing.T) {
+	ctx := context.TODO()
+	convey.Convey("append result set binary row", t, func() {
+		sv, err := getSystemVariables("test/system_vars_config.toml")
+		if err != nil {
+			t.Error(err)
+		}
+		pu := config.NewParameterUnit(sv, nil, nil, nil)
+		pu.SV.SkipCheckUser = true
+		pu.SV.KillRountinesInterval = 0
+		setSessionAlloc("", NewLeakCheckAllocator())
+		setPu("", pu)
+		ioses, err := NewIOSession(&testConn{}, pu, "")
+		convey.ShouldBeNil(err)
+		proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
+
+		ses := NewSession(ctx, "", proto, nil)
+		proto.ses = ses
+
+		err = proto.appendResultSetBinaryRow(newMrsForBinary(), 0)
+		convey.So(err, convey.ShouldBeNil)
+	})
+
+	convey.Convey("append result set text row", t, func() {
+		sv, err := getSystemVariables("test/system_vars_config.toml")
+		if err != nil {
+			t.Error(err)
+		}
+		pu := config.NewParameterUnit(sv, nil, nil, nil)
+		pu.SV.SkipCheckUser = true
+		pu.SV.KillRountinesInterval = 0
+		setSessionAlloc("", NewLeakCheckAllocator())
+		setPu("", pu)
+		ioses, err := NewIOSession(&testConn{}, pu, "")
+		convey.ShouldBeNil(err)
+		proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
+
+		ses := NewSession(ctx, "", proto, nil)
+		proto.ses = ses
+
+		err = proto.appendResultSetTextRow(newMrsForBinary(), 0)
+		convey.So(err, convey.ShouldBeNil)
+	})
+}
+
+func Test_appendResultSetBinaryRow_error(t *testing.T) {
+	ctx := context.TODO()
+	convey.Convey("append result set binary row", t, func() {
+		sv, err := getSystemVariables("test/system_vars_config.toml")
+		if err != nil {
+			t.Error(err)
+		}
+		pu := config.NewParameterUnit(sv, nil, nil, nil)
+		pu.SV.SkipCheckUser = true
+		pu.SV.KillRountinesInterval = 0
+		setSessionAlloc("", NewLeakCheckAllocator())
+		setPu("", pu)
+		ioses, err := NewIOSession(&testConn{}, pu, "")
+		convey.ShouldBeNil(err)
+		proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
+
+		ses := NewSession(ctx, "", proto, nil)
+		proto.ses = ses
+
+		mrs := newMrsForBinary()
+
+		testFun := func(col int) {
+			switch col {
+			case 0:
+				stub1 := gostub.Stub(&AppendCountOfBytesLenEnc, func(mp *MysqlProtocolImpl, value []byte) error {
+					return moerr.NewInternalError(ctx, "AppendCountOfBytesLenEnc return error")
+				})
+				defer stub1.Reset()
+			case 1, 2:
+				stub1 := gostub.Stub(&AppendStringLenEnc, func(mp *MysqlProtocolImpl, value string) error {
+					return moerr.NewInternalError(ctx, "AppendStringLenEnc return error")
+				})
+				defer stub1.Reset()
+			default:
+				panic("usp")
+			}
+
+			err = proto.appendResultSetBinaryRow(mrs, 0)
+			convey.So(err, convey.ShouldNotBeNil)
+		}
+		for i := 0; i < int(mrs.GetColumnCount()); i++ {
+			testFun(i)
+		}
+
+		mrs2 := newMrsForBinary2()
+		testFun2 := func(col int) {
+			switch col {
+			case 0:
+				stub1 := gostub.Stub(&AppendStringLenEnc, func(mp *MysqlProtocolImpl, value string) error {
+					return moerr.NewInternalError(ctx, "AppendStringLenEnc return error")
+				})
+				defer stub1.Reset()
+			default:
+				panic("usp")
+			}
+
+			err = proto.appendResultSetBinaryRow(mrs2, 0)
+			convey.So(err, convey.ShouldNotBeNil)
+		}
+		for i := 0; i < int(mrs2.GetColumnCount()); i++ {
+			testFun2(i)
+		}
+	})
+	convey.Convey("append result set binary row", t, func() {
+		sv, err := getSystemVariables("test/system_vars_config.toml")
+		if err != nil {
+			t.Error(err)
+		}
+		pu := config.NewParameterUnit(sv, nil, nil, nil)
+		pu.SV.SkipCheckUser = true
+		pu.SV.KillRountinesInterval = 0
+		setSessionAlloc("", NewLeakCheckAllocator())
+		setPu("", pu)
+		ioses, err := NewIOSession(&testConn{}, pu, "")
+		convey.ShouldBeNil(err)
+		proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
+
+		ses := NewSession(ctx, "", proto, nil)
+		proto.ses = ses
+
+		mrs := newMrsForBinary()
+
+		testFun := func(col int) {
+			switch col {
+			case 0:
+				stub1 := gostub.Stub(&AppendCountOfBytesLenEnc, func(mp *MysqlProtocolImpl, value []byte) error {
+					return moerr.NewInternalError(ctx, "AppendCountOfBytesLenEnc return error")
+				})
+				defer stub1.Reset()
+			case 1, 2:
+				stub1 := gostub.Stub(&AppendStringLenEnc, func(mp *MysqlProtocolImpl, value string) error {
+					return moerr.NewInternalError(ctx, "AppendStringLenEnc return error")
+				})
+				defer stub1.Reset()
+			default:
+				panic("usp")
+			}
+
+			err = proto.appendResultSetTextRow(mrs, 0)
+			convey.So(err, convey.ShouldNotBeNil)
+		}
+		for i := 0; i < int(mrs.GetColumnCount()); i++ {
+			testFun(i)
+		}
+
+		mrs2 := newMrsForBinary2()
+		testFun2 := func(col int) {
+			switch col {
+			case 0:
+				stub1 := gostub.Stub(&AppendStringLenEnc, func(mp *MysqlProtocolImpl, value string) error {
+					return moerr.NewInternalError(ctx, "AppendStringLenEnc return error")
+				})
+				defer stub1.Reset()
+			default:
+				panic("usp")
+			}
+
+			err = proto.appendResultSetTextRow(mrs2, 0)
+			convey.So(err, convey.ShouldNotBeNil)
+		}
+		for i := 0; i < int(mrs2.GetColumnCount()); i++ {
+			testFun2(i)
+		}
+	})
+}
+
+type kase struct {
+	sql string
+	mrs *MysqlResultSet
+	bat *batch.Batch
+}
+
+func makeKases() []kase {
+	var kases []kase
+
+	kases1 := []kase{
+		{
+			sql: "select bool",
+			mrs: makeMysqlBoolResultSet(),
+		},
+		{
+			sql: "select bit",
+			mrs: makeMysqlBitResultSet(),
+		},
+		{
+			sql: "select rowid",
+			mrs: makeMysqlRowIdResultSet(),
+		},
+		{
+			sql: "select json",
+			mrs: makeMysqlJsonResultSet(),
+		},
+		{
+			sql: "select decimal",
+			mrs: makeMysqlDecimalResultSet(),
+		},
+		{
+			sql: "select uuid",
+			mrs: makeMysqlUUIDResultSet(),
+		},
+		{
+			sql: "select tiny",
+			mrs: makeMysqlTinyIntResultSet(false),
+		},
+		{
+			sql: "select tinyu",
+			mrs: makeMysqlTinyIntResultSet(true),
+		},
+		{
+			sql: "select short",
+			mrs: makeMysqlShortResultSet(false),
+		},
+		{
+			sql: "select shortu",
+			mrs: makeMysqlShortResultSet(true),
+		},
+		{
+			sql: "select long",
+			mrs: makeMysqlLongResultSet(false),
+		},
+		{
+			sql: "select longu",
+			mrs: makeMysqlLongResultSet(true),
+		},
+		{
+			sql: "select longlong",
+			mrs: makeMysqlLongLongResultSet(false),
+		},
+		{
+			sql: "select longlongu",
+			mrs: makeMysqlLongLongResultSet(true),
+		},
+		{
+			sql: "select int24",
+			mrs: makeMysqlInt24ResultSet(false),
+		},
+		{
+			sql: "select int24u",
+			mrs: makeMysqlInt24ResultSet(true),
+		},
+
+		{
+			sql: "select varchar",
+			mrs: makeMysqlVarcharResultSet(),
+		},
+		{
+			sql: "select varstring",
+			mrs: makeMysqlVarStringResultSet(),
+		},
+		{
+			sql: "select string",
+			mrs: makeMysqlStringResultSet(),
+		},
+		{
+			sql: "select date",
+			mrs: makeMysqlDateResultSet(),
+		},
+		{
+			sql: "select time",
+			mrs: makeMysqlTimeResultSet(),
+		},
+		{
+			sql: "select time2",
+			mrs: makeMysqlTimeResultSet2(),
+		},
+		{
+			sql: "select datetime",
+			mrs: makeMysqlDatetimeResultSet2(),
+		},
+		{
+			sql: "select datetime",
+			mrs: makeMysqlDatetimeResultSet3(),
+		},
+		{
+			sql: "select timestamp",
+			mrs: makeMysqlTimestampResultSet(),
+		},
+		{
+			sql: "select 16mbrow",
+			mrs: make16MBRowResultSet(),
+		},
+	}
+	kases2 := []kase{
+		{
+			sql: "select year",
+			mrs: makeMysqlYearResultSet(false),
+		},
+		{
+			sql: "select yearu",
+			mrs: makeMysqlYearResultSet(true),
+		},
+		{
+			sql: "select float",
+			mrs: makeMysqlFloatResultSet(),
+		},
+		{
+			sql: "select double",
+			mrs: makeMysqlDoubleResultSet(),
+		},
+		{
+			sql: "select 9columns",
+			mrs: make9ColumnsResultSet(),
+		},
+		{
+			sql: "select 16mb",
+			mrs: makeMoreThan16MBResultSet(),
+		},
+	}
+
+	kases = append(kases, kases1...)
+	kases = append(kases, kases2...)
+	mp := mpool.MustNewZero()
+	for i := 0; i < len(kases); i++ {
+		mrs := kases[i].mrs
+		bat := batch.NewWithSize(int(mrs.GetColumnCount()))
+		for colIdx := uint64(0); colIdx < mrs.GetColumnCount(); colIdx++ {
+			col, err := mrs.GetColumn(context.TODO(), colIdx)
+			convey.So(err, convey.ShouldBeNil)
+			switch col.ColumnType() {
+			case defines.MYSQL_TYPE_BOOL:
+				vecData := make([]bool, 0)
+				for i := 0; i < len(mrs.Data); i++ {
+					vecData = append(vecData, mrs.Data[i][colIdx].(bool))
+				}
+				bat.Vecs[colIdx] = testutil.NewBoolVector(len(mrs.Data), types.T_bool.ToType(), mp, false, vecData)
+			case defines.MYSQL_TYPE_BIT:
+				vecData := make([]uint64, 0)
+				for i := 0; i < len(mrs.Data); i++ {
+					vecData = append(vecData, mrs.Data[i][colIdx].(uint64))
+				}
+				bat.Vecs[colIdx] = testutil.NewUInt64Vector(len(mrs.Data), types.T_bit.ToType(), mp, false, vecData)
+			case defines.MYSQL_TYPE_TINY:
+				switch mrs.Data[0][colIdx].(type) {
+				case int8:
+					vecData := make([]int8, 0)
+					for i := 0; i < len(mrs.Data); i++ {
+						vecData = append(vecData, mrs.Data[i][colIdx].(int8))
+					}
+					bat.Vecs[colIdx] = testutil.NewInt8Vector(len(mrs.Data), types.T_int8.ToType(), mp, false, vecData)
+				case uint8:
+					vecData := make([]uint8, 0)
+					for i := 0; i < len(mrs.Data); i++ {
+						vecData = append(vecData, mrs.Data[i][colIdx].(uint8))
+					}
+					bat.Vecs[colIdx] = testutil.NewUInt8Vector(len(mrs.Data), types.T_uint8.ToType(), mp, false, vecData)
+				}
+			case defines.MYSQL_TYPE_SHORT, defines.MYSQL_TYPE_YEAR:
+				switch mrs.Data[0][colIdx].(type) {
+				case int16:
+					vecData := make([]int16, 0)
+					for i := 0; i < len(mrs.Data); i++ {
+						vecData = append(vecData, mrs.Data[i][colIdx].(int16))
+					}
+					bat.Vecs[colIdx] = testutil.NewInt16Vector(len(mrs.Data), types.T_int16.ToType(), mp, false, vecData)
+				case uint16:
+					vecData := make([]uint16, 0)
+					for i := 0; i < len(mrs.Data); i++ {
+						vecData = append(vecData, mrs.Data[i][colIdx].(uint16))
+					}
+					bat.Vecs[colIdx] = testutil.NewUInt16Vector(len(mrs.Data), types.T_uint16.ToType(), mp, false, vecData)
+				}
+			case defines.MYSQL_TYPE_LONG, defines.MYSQL_TYPE_INT24:
+				switch mrs.Data[0][colIdx].(type) {
+				case int32:
+					vecData := make([]int32, 0)
+
+					for i := 0; i < len(mrs.Data); i++ {
+						vecData = append(vecData, mrs.Data[i][colIdx].(int32))
+					}
+					bat.Vecs[colIdx] = testutil.NewInt32Vector(len(mrs.Data), types.T_int32.ToType(), mp, false, vecData)
+				case uint32:
+					vecData := make([]uint32, 0)
+					for i := 0; i < len(mrs.Data); i++ {
+						vecData = append(vecData, mrs.Data[i][colIdx].(uint32))
+					}
+					bat.Vecs[colIdx] = testutil.NewUInt32Vector(len(mrs.Data), types.T_uint32.ToType(), mp, false, vecData)
+				}
+
+			case defines.MYSQL_TYPE_LONGLONG:
+				switch mrs.Data[0][colIdx].(type) {
+				case int64:
+					vecData := make([]int64, 0)
+					for i := 0; i < len(mrs.Data); i++ {
+						vecData = append(vecData, mrs.Data[i][colIdx].(int64))
+					}
+					bat.Vecs[colIdx] = testutil.NewInt64Vector(len(mrs.Data), types.T_int64.ToType(), mp, false, vecData)
+				case uint64:
+					vecData := make([]uint64, 0)
+					for i := 0; i < len(mrs.Data); i++ {
+						vecData = append(vecData, mrs.Data[i][colIdx].(uint64))
+					}
+					bat.Vecs[colIdx] = testutil.NewUInt64Vector(len(mrs.Data), types.T_uint64.ToType(), mp, false, vecData)
+				}
+			case defines.MYSQL_TYPE_VARCHAR:
+				switch mrs.Data[0][colIdx].(type) {
+				case []uint8:
+					vecData := make([]string, 0)
+					for i := 0; i < len(mrs.Data); i++ {
+						vecData = append(vecData, string(mrs.Data[i][colIdx].([]uint8)))
+					}
+					bat.Vecs[colIdx] = testutil.NewStringVector(len(mrs.Data), types.T_binary.ToType(), mp, false, vecData)
+				case types.Rowid:
+					vecData := make([]string, 0)
+					for i := 0; i < len(mrs.Data); i++ {
+						vecData = append(vecData, string(mrs.Data[i][colIdx].(types.Rowid).String()))
+					}
+					bat.Vecs[colIdx] = testutil.NewStringVector(len(mrs.Data), types.T_Rowid.ToType(), mp, false, vecData)
+				}
+			case defines.MYSQL_TYPE_VAR_STRING:
+				switch mrs.Data[0][colIdx].(type) {
+				case []uint8:
+					vecData := make([]string, 0)
+					for i := 0; i < len(mrs.Data); i++ {
+						vecData = append(vecData, string(mrs.Data[i][colIdx].([]uint8)))
+					}
+					bat.Vecs[colIdx] = testutil.NewStringVector(len(mrs.Data), types.T_varchar.ToType(), mp, false, vecData)
+				case types.Datetime:
+					vecData := make([]string, 0)
+					for i := 0; i < len(mrs.Data); i++ {
+						vecData = append(vecData, mrs.Data[i][colIdx].(types.Datetime).String())
+					}
+					bat.Vecs[colIdx] = testutil.NewDatetimeVector(len(mrs.Data), types.T_datetime.ToType(), mp, false, vecData)
+				}
+			case defines.MYSQL_TYPE_STRING:
+				vecData := make([]string, 0)
+				for i := 0; i < len(mrs.Data); i++ {
+					vecData = append(vecData, string(mrs.Data[i][colIdx].([]uint8)))
+				}
+				bat.Vecs[colIdx] = testutil.NewStringVector(len(mrs.Data), types.T_char.ToType(), mp, false, vecData)
+			case defines.MYSQL_TYPE_DATE:
+				vecData := make([]string, 0)
+				for i := 0; i < len(mrs.Data); i++ {
+					vecData = append(vecData, mrs.Data[i][colIdx].(types.Date).String())
+				}
+				bat.Vecs[colIdx] = testutil.NewDateVector(len(mrs.Data), types.T_date.ToType(), mp, false, vecData)
+			case defines.MYSQL_TYPE_TIME:
+				scale := col.Length()
+				vecData := make([]string, 0)
+				for i := 0; i < len(mrs.Data); i++ {
+					vecData = append(vecData, mrs.Data[i][colIdx].(types.Time).String2(int32(scale)))
+				}
+				typ := types.T_time.ToType()
+				typ.Scale = int32(scale)
+				bat.Vecs[colIdx] = testutil.NewTimeVector(len(mrs.Data), typ, mp, false, vecData)
+
+			case defines.MYSQL_TYPE_DATETIME:
+				scale := col.Length()
+				vecData := make([]string, 0)
+				for i := 0; i < len(mrs.Data); i++ {
+					vecData = append(vecData, mrs.Data[i][colIdx].(types.Datetime).String2(int32(scale)))
+				}
+				typ := types.T_datetime.ToType()
+				typ.Scale = int32(scale)
+				bat.Vecs[colIdx] = testutil.NewDatetimeVector(len(mrs.Data), typ, mp, false, vecData)
+			case defines.MYSQL_TYPE_FLOAT:
+				vecData := make([]float32, 0)
+				for i := 0; i < len(mrs.Data); i++ {
+					vecData = append(vecData, mrs.Data[i][colIdx].(float32))
+				}
+				bat.Vecs[colIdx] = testutil.NewFloat32Vector(len(mrs.Data), types.T_float32.ToType(), mp, false, vecData)
+
+			case defines.MYSQL_TYPE_DOUBLE:
+				vecData := make([]float64, 0)
+				for i := 0; i < len(mrs.Data); i++ {
+					vecData = append(vecData, mrs.Data[i][colIdx].(float64))
+				}
+				bat.Vecs[colIdx] = testutil.NewFloat64Vector(len(mrs.Data), types.T_float64.ToType(), mp, false, vecData)
+
+			case defines.MYSQL_TYPE_JSON:
+				bat.Vecs[colIdx] = testutil.NewJsonVector(len(mrs.Data), types.T_json.ToType(), mp, true, nil)
+			case defines.MYSQL_TYPE_DECIMAL:
+				vecData := make([]types.Decimal64, 0)
+				for i := 0; i < len(mrs.Data); i++ {
+					vecData = append(vecData, mrs.Data[i][colIdx].(types.Decimal64))
+				}
+				bat.Vecs[colIdx] = testutil.NewDecimal64Vector(len(mrs.Data), types.T_decimal64.ToType(), mp, false, vecData)
+			case defines.MYSQL_TYPE_UUID:
+				vecData := make([]types.Uuid, 0)
+				for i := 0; i < len(mrs.Data); i++ {
+					vecData = append(vecData, mrs.Data[i][colIdx].(types.Uuid))
+				}
+				bat.Vecs[colIdx] = NewUUIDVector(len(mrs.Data), types.T_uuid.ToType(), mp, false, vecData)
+			case defines.MYSQL_TYPE_TIMESTAMP:
+				vecData := make([]string, 0)
+				for i := 0; i < len(mrs.Data); i++ {
+					vecData = append(vecData, mrs.Data[i][colIdx].(types.Timestamp).String2(time.UTC, 6))
+				}
+				bat.Vecs[colIdx] = NewTimestampVector(len(mrs.Data), types.T_timestamp.ToType(), mp, false, vecData)
+
+			default:
+				panic(fmt.Sprintf("usp %v", col.ColumnType()))
+			}
+		}
+		kases[i].bat = bat
+	}
+	return kases
+}
+
+func NewTimestampVector(n int, typ types.Type, m *mpool.MPool, random bool, vs []string) *vector.Vector {
+	vec := vector.NewVec(typ)
+	if vs != nil {
+		for i := range vs {
+			d, err := types.ParseTimestamp(time.UTC, vs[i], 6)
+			if err != nil {
+				return nil
+			}
+			if err := vector.AppendFixed(vec, d, false, m); err != nil {
+				vec.Free(m)
+				return nil
+			}
+		}
+		return vec
+	}
+	for i := 0; i < n; i++ {
+		v := i
+		if random {
+			v = rand.Int()
+		}
+		if err := vector.AppendFixed(vec, types.Timestamp(v), false, m); err != nil {
+			vec.Free(m)
+			return nil
+		}
+	}
+	return vec
+}
+
+func NewUUIDVector(n int, typ types.Type, m *mpool.MPool, random bool, vs []types.Uuid) *vector.Vector {
+	vec := vector.NewVec(typ)
+	if vs != nil {
+		for i := range vs {
+			if err := vector.AppendFixed(vec, vs[i], false, m); err != nil {
+				vec.Free(m)
+				return nil
+			}
+		}
+		return vec
+	}
+	for i := 0; i < n; i++ {
+		v := byte(0)
+		if random {
+			v = byte(rand.Intn(8))
+		}
+		d := types.Uuid{}
+		d[0] = 'a' + v
+		if err := vector.AppendFixed(vec, d, false, m); err != nil {
+
+			vec.Free(m)
+			return nil
+		}
+	}
+	return vec
+}
+
+func Test_appendResultSet2(t *testing.T) {
+	ctx := context.TODO()
+	convey.Convey("append result set", t, func() {
+		sv, err := getSystemVariables("test/system_vars_config.toml")
+		if err != nil {
+			t.Error(err)
+		}
+		pu := config.NewParameterUnit(sv, nil, nil, nil)
+		pu.SV.SkipCheckUser = true
+		pu.SV.KillRountinesInterval = 0
+		setSessionAlloc("", NewLeakCheckAllocator())
+		setPu("", pu)
+		ioses, err := NewIOSession(&testConn{}, pu, "")
+		convey.ShouldBeNil(err)
+		proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
+
+		ses := NewSession(ctx, "", proto, nil)
+		proto.ses = ses
+
+		kases := makeKases()
+		for _, kse := range kases {
+			mrs := kse.mrs
+			bat := kse.bat
+
+			fun := func() {
+				colSlices := &ColumnSlices{
+					ctx:             context.TODO(),
+					colIdx2SliceIdx: make([]int, len(bat.Vecs)),
+					dataSet:         bat,
+				}
+				defer colSlices.Close()
+				err = convertBatchToSlices(context.TODO(), ses, bat, colSlices)
+				convey.So(err, convey.ShouldBeNil)
+
+				err = proto.appendResultSetBinaryRow2(mrs, colSlices, 0)
+				convey.So(err, convey.ShouldBeNil)
+			}
+			fun()
+		}
+	})
+}
+
+func Test_appendResultSet3(t *testing.T) {
+	ctx := context.TODO()
+	convey.Convey("append result set", t, func() {
+		sv, err := getSystemVariables("test/system_vars_config.toml")
+		if err != nil {
+			t.Error(err)
+		}
+		pu := config.NewParameterUnit(sv, nil, nil, nil)
+		pu.SV.SkipCheckUser = true
+		pu.SV.KillRountinesInterval = 0
+		setSessionAlloc("", NewLeakCheckAllocator())
+		setPu("", pu)
+		ioses, err := NewIOSession(&testConn{}, pu, "")
+		convey.ShouldBeNil(err)
+		proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
+
+		ses := NewSession(ctx, "", proto, nil)
+		proto.ses = ses
+
+		kases := makeKases()
+		for _, kse := range kases {
+			mrs := kse.mrs
+			bat := kse.bat
+
+			fun := func() {
+				colSlices := &ColumnSlices{
+					ctx:             context.TODO(),
+					colIdx2SliceIdx: make([]int, len(bat.Vecs)),
+					dataSet:         bat,
+				}
+				defer colSlices.Close()
+				err = convertBatchToSlices(context.TODO(), ses, bat, colSlices)
+				convey.So(err, convey.ShouldBeNil)
+
+				err = proto.appendResultSetTextRow2(mrs, colSlices, 0)
+				convey.So(err, convey.ShouldBeNil)
+			}
+			fun()
+		}
+	})
+}
+
+func Test_appendResultSet4(t *testing.T) {
+	ctx := context.TODO()
+	convey.Convey("append result set", t, func() {
+		sv, err := getSystemVariables("test/system_vars_config.toml")
+		if err != nil {
+			t.Error(err)
+		}
+		pu := config.NewParameterUnit(sv, nil, nil, nil)
+		pu.SV.SkipCheckUser = true
+		pu.SV.KillRountinesInterval = 0
+		setSessionAlloc("", NewLeakCheckAllocator())
+		setPu("", pu)
+		ioses, err := NewIOSession(&testConn{}, pu, "")
+		convey.ShouldBeNil(err)
+		proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
+
+		ses := NewSession(ctx, "", proto, nil)
+		proto.ses = ses
+
+		kases := makeKases()
+		for _, kse := range kases {
+			mrs := kse.mrs
+			bat := kse.bat
+
+			if mrs.GetColumnCount() > 1 {
+				continue
+			}
+
+			fun := func() {
+				colSlices := &ColumnSlices{
+					ctx:             context.TODO(),
+					colIdx2SliceIdx: make([]int, len(bat.Vecs)),
+					dataSet:         bat,
+				}
+				defer colSlices.Close()
+				err = convertBatchToSlices(context.TODO(), ses, bat, colSlices)
+				convey.So(err, convey.ShouldBeNil)
+
+				col, _ := mrs.GetColumn(context.TODO(), 0)
+
+				switch col.ColumnType() {
+				case defines.MYSQL_TYPE_BOOL:
+					bhStub := gostub.Stub(&GetBool, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64) (bool, error) {
+						return false, moerr.NewInternalError(context.TODO(), "invalid bool slice")
+					})
+					defer bhStub.Reset()
+				case defines.MYSQL_TYPE_BIT:
+					bhStub := gostub.Stub(&GetUint64, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64) (uint64, error) {
+						return 0, moerr.NewInternalError(context.TODO(), "invalid uint64 slice")
+					})
+					defer bhStub.Reset()
+				case defines.MYSQL_TYPE_VARCHAR,
+					defines.MYSQL_TYPE_JSON:
+					bhStub := gostub.Stub(&GetBytesBased, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64) ([]byte, error) {
+						return nil, moerr.NewInternalError(context.TODO(), "invalid []byte slice")
+					})
+					defer bhStub.Reset()
+					bhStub2 := gostub.Stub(&GetStringBased, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64) (string, error) {
+						return "", moerr.NewInternalError(context.TODO(), "invalid []byte slice")
+					})
+					defer bhStub2.Reset()
+				case defines.MYSQL_TYPE_DECIMAL:
+					bhStub := gostub.Stub(&GetDecimal, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64) (string, error) {
+						return "", moerr.NewInternalError(context.TODO(), "invalid decimal slice")
+					})
+					defer bhStub.Reset()
+				case defines.MYSQL_TYPE_UUID:
+					bhStub := gostub.Stub(&GetUUID, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64) (string, error) {
+						return "", moerr.NewInternalError(context.TODO(), "invalid uuid slice")
+					})
+					defer bhStub.Reset()
+				case defines.MYSQL_TYPE_TINY,
+					defines.MYSQL_TYPE_SHORT,
+					defines.MYSQL_TYPE_INT24,
+					defines.MYSQL_TYPE_LONG,
+					defines.MYSQL_TYPE_YEAR,
+					defines.MYSQL_TYPE_LONGLONG:
+					bhStub := gostub.Stub(&GetInt64, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64) (int64, error) {
+						return 0, moerr.NewInternalError(context.TODO(), "invalid int64 slice")
+					})
+					defer bhStub.Reset()
+					bhStub2 := gostub.Stub(&GetUint64, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64) (uint64, error) {
+						return 0, moerr.NewInternalError(context.TODO(), "invalid uint64 slice")
+					})
+					defer bhStub2.Reset()
+				case defines.MYSQL_TYPE_VAR_STRING:
+					bhStub := gostub.Stub(&GetBytesBased, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64) ([]byte, error) {
+						return nil, moerr.NewInternalError(context.TODO(), "invalid []byte slice")
+					})
+					defer bhStub.Reset()
+					bhStub2 := gostub.Stub(&GetDatetime, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64) (string, error) {
+						return "", moerr.NewInternalError(context.TODO(), "invalid string slice")
+					})
+					defer bhStub2.Reset()
+				case defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TEXT:
+					bhStub := gostub.Stub(&GetBytesBased, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64) ([]byte, error) {
+						return nil, moerr.NewInternalError(context.TODO(), "invalid []byte slice")
+					})
+					defer bhStub.Reset()
+				case defines.MYSQL_TYPE_DATE:
+					bhStub := gostub.Stub(&GetDate, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64) (types.Date, error) {
+						return types.Date(0), moerr.NewInternalError(context.TODO(), "invalid date slice")
+					})
+					defer bhStub.Reset()
+				case defines.MYSQL_TYPE_TIME:
+					bhStub2 := gostub.Stub(&GetTime, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64) (string, error) {
+						return "", moerr.NewInternalError(context.TODO(), "invalid string slice")
+					})
+					defer bhStub2.Reset()
+				case defines.MYSQL_TYPE_DATETIME:
+					bhStub2 := gostub.Stub(&GetDatetime, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64) (string, error) {
+						return "", moerr.NewInternalError(context.TODO(), "invalid string slice")
+					})
+					defer bhStub2.Reset()
+
+				case defines.MYSQL_TYPE_TIMESTAMP:
+					bhStub2 := gostub.Stub(&GetTimestamp, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64, timeZone *time.Location) (string, error) {
+						return "", moerr.NewInternalError(context.TODO(), "invalid string slice")
+					})
+					defer bhStub2.Reset()
+					bhStub3 := gostub.Stub(&GetDatetime, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64) (string, error) {
+						return "", moerr.NewInternalError(context.TODO(), "invalid string slice")
+					})
+					defer bhStub3.Reset()
+				case defines.MYSQL_TYPE_FLOAT:
+					bhStub := gostub.Stub(&GetFloat32, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64) (float32, error) {
+						return 0, moerr.NewInternalError(context.TODO(), "invalid float32 slice")
+					})
+					defer bhStub.Reset()
+				case defines.MYSQL_TYPE_DOUBLE:
+					bhStub := gostub.Stub(&GetFloat64, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64) (float64, error) {
+						return 0, moerr.NewInternalError(context.TODO(), "invalid float64 slice")
+					})
+					defer bhStub.Reset()
+				default:
+					panic(fmt.Sprintf("usp %v %v", col.Name(), col.ColumnType()))
+				}
+
+				err = proto.appendResultSetTextRow2(mrs, colSlices, 0)
+				convey.So(err, convey.ShouldNotBeNil)
+			}
+			fun()
+		}
+	})
+}
+
+func Test_appendResultSet5(t *testing.T) {
+	ctx := context.TODO()
+	convey.Convey("append result set", t, func() {
+		sv, err := getSystemVariables("test/system_vars_config.toml")
+		if err != nil {
+			t.Error(err)
+		}
+		pu := config.NewParameterUnit(sv, nil, nil, nil)
+		pu.SV.SkipCheckUser = true
+		pu.SV.KillRountinesInterval = 0
+		setSessionAlloc("", NewLeakCheckAllocator())
+		setPu("", pu)
+		ioses, err := NewIOSession(&testConn{}, pu, "")
+		convey.ShouldBeNil(err)
+		proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
+
+		ses := NewSession(ctx, "", proto, nil)
+		proto.ses = ses
+
+		kases := makeKases()
+		for _, kse := range kases {
+			mrs := kse.mrs
+			bat := kse.bat
+
+			if mrs.GetColumnCount() > 1 {
+				continue
+			}
+
+			fun := func() {
+				colSlices := &ColumnSlices{
+					ctx:             context.TODO(),
+					colIdx2SliceIdx: make([]int, len(bat.Vecs)),
+					dataSet:         bat,
+				}
+				defer colSlices.Close()
+				err = convertBatchToSlices(context.TODO(), ses, bat, colSlices)
+				convey.So(err, convey.ShouldBeNil)
+
+				col, _ := mrs.GetColumn(context.TODO(), 0)
+
+				switch col.ColumnType() {
+				case defines.MYSQL_TYPE_BOOL:
+					bhStub := gostub.Stub(&GetBool, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64) (bool, error) {
+						return false, moerr.NewInternalError(context.TODO(), "invalid bool slice")
+					})
+					defer bhStub.Reset()
+				case defines.MYSQL_TYPE_BIT:
+					bhStub := gostub.Stub(&GetUint64, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64) (uint64, error) {
+						return 0, moerr.NewInternalError(context.TODO(), "invalid uint64 slice")
+					})
+					defer bhStub.Reset()
+				case defines.MYSQL_TYPE_VARCHAR,
+					defines.MYSQL_TYPE_JSON:
+					bhStub := gostub.Stub(&GetBytesBased, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64) ([]byte, error) {
+						return nil, moerr.NewInternalError(context.TODO(), "invalid []byte slice")
+					})
+					defer bhStub.Reset()
+					bhStub2 := gostub.Stub(&GetStringBased, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64) (string, error) {
+						return "", moerr.NewInternalError(context.TODO(), "invalid []byte slice")
+					})
+					defer bhStub2.Reset()
+				case defines.MYSQL_TYPE_DECIMAL:
+					bhStub := gostub.Stub(&GetDecimal, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64) (string, error) {
+						return "", moerr.NewInternalError(context.TODO(), "invalid decimal slice")
+					})
+					defer bhStub.Reset()
+				case defines.MYSQL_TYPE_UUID:
+					bhStub := gostub.Stub(&GetUUID, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64) (string, error) {
+						return "", moerr.NewInternalError(context.TODO(), "invalid uuid slice")
+					})
+					defer bhStub.Reset()
+				case defines.MYSQL_TYPE_TINY,
+					defines.MYSQL_TYPE_SHORT,
+					defines.MYSQL_TYPE_INT24,
+					defines.MYSQL_TYPE_LONG,
+					defines.MYSQL_TYPE_YEAR,
+					defines.MYSQL_TYPE_LONGLONG:
+					bhStub := gostub.Stub(&GetInt64, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64) (int64, error) {
+						return 0, moerr.NewInternalError(context.TODO(), "invalid int64 slice")
+					})
+					defer bhStub.Reset()
+					bhStub2 := gostub.Stub(&GetUint64, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64) (uint64, error) {
+						return 0, moerr.NewInternalError(context.TODO(), "invalid uint64 slice")
+					})
+					defer bhStub2.Reset()
+				case defines.MYSQL_TYPE_VAR_STRING:
+					bhStub := gostub.Stub(&GetBytesBased, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64) ([]byte, error) {
+						return nil, moerr.NewInternalError(context.TODO(), "invalid []byte slice")
+					})
+					defer bhStub.Reset()
+					bhStub2 := gostub.Stub(&GetDatetime, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64) (string, error) {
+						return "", moerr.NewInternalError(context.TODO(), "invalid string slice")
+					})
+					defer bhStub2.Reset()
+				case defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TEXT:
+					bhStub := gostub.Stub(&GetBytesBased, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64) ([]byte, error) {
+						return nil, moerr.NewInternalError(context.TODO(), "invalid []byte slice")
+					})
+					defer bhStub.Reset()
+				case defines.MYSQL_TYPE_DATE:
+					bhStub := gostub.Stub(&GetDate, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64) (types.Date, error) {
+						return types.Date(0), moerr.NewInternalError(context.TODO(), "invalid date slice")
+					})
+					defer bhStub.Reset()
+				case defines.MYSQL_TYPE_TIME:
+					bhStub2 := gostub.Stub(&GetTime, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64) (string, error) {
+						return "", moerr.NewInternalError(context.TODO(), "invalid string slice")
+					})
+					defer bhStub2.Reset()
+				case defines.MYSQL_TYPE_DATETIME:
+					bhStub2 := gostub.Stub(&GetDatetime, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64) (string, error) {
+						return "", moerr.NewInternalError(context.TODO(), "invalid string slice")
+					})
+					defer bhStub2.Reset()
+
+				case defines.MYSQL_TYPE_TIMESTAMP:
+					bhStub2 := gostub.Stub(&GetTimestamp, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64, timeZone *time.Location) (string, error) {
+						return "", moerr.NewInternalError(context.TODO(), "invalid string slice")
+					})
+					defer bhStub2.Reset()
+					bhStub3 := gostub.Stub(&GetDatetime, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64) (string, error) {
+						return "", moerr.NewInternalError(context.TODO(), "invalid string slice")
+					})
+					defer bhStub3.Reset()
+				case defines.MYSQL_TYPE_FLOAT:
+					bhStub := gostub.Stub(&GetFloat32, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64) (float32, error) {
+						return 0, moerr.NewInternalError(context.TODO(), "invalid float32 slice")
+					})
+					defer bhStub.Reset()
+				case defines.MYSQL_TYPE_DOUBLE:
+					bhStub := gostub.Stub(&GetFloat64, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64) (float64, error) {
+						return 0, moerr.NewInternalError(context.TODO(), "invalid float64 slice")
+					})
+					defer bhStub.Reset()
+				default:
+					panic(fmt.Sprintf("usp %v %v", col.Name(), col.ColumnType()))
+				}
+
+				err = proto.appendResultSetBinaryRow2(mrs, colSlices, 0)
+				convey.So(err, convey.ShouldNotBeNil)
+			}
+			fun()
+		}
+	})
 }

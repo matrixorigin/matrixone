@@ -17,6 +17,7 @@ package tasks
 import (
 	"context"
 	"fmt"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -62,6 +63,12 @@ func (jobs *CancelableJobs) AddJob(
 	return nil
 }
 
+func (jobs *CancelableJobs) GetJob(name string) *CancelableJob {
+	jobs.RLock()
+	defer jobs.RUnlock()
+	return jobs.cronJobs[name]
+}
+
 func (jobs *CancelableJobs) RemoveJob(name string) {
 	jobs.Lock()
 	defer jobs.Unlock()
@@ -84,6 +91,16 @@ func (jobs *CancelableJobs) Reset() {
 		job.Stop()
 	}
 	jobs.cronJobs = make(map[string]*CancelableJob)
+}
+
+func (jobs *CancelableJobs) ForeachJob(fn func(string, *CancelableJob) bool) {
+	jobs.RLock()
+	defer jobs.RUnlock()
+	for name, job := range jobs.cronJobs {
+		if !fn(name, job) {
+			break
+		}
+	}
 }
 
 type CancelableFunc = func(context.Context)
@@ -170,6 +187,7 @@ func (ctl *CancelableJob) Start() {
 											"Panic-In-CronJob",
 											zap.String("name", ctl.name),
 											zap.Any("reason", r),
+											zap.String("stack", string(debug.Stack())),
 										)
 									}
 								}()

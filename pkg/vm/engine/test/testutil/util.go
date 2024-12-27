@@ -17,7 +17,6 @@ package testutil
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"os"
 	"os/user"
 	"path"
@@ -25,14 +24,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
-	"golang.org/x/exp/rand"
-
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/exp/rand"
 
 	catalog2 "github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -43,7 +40,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
@@ -72,9 +71,19 @@ func WithDisttaeEngineInsertEntryMaxCount(v int) TestDisttaeEngineOptions {
 		e.insertEntryMaxCount = v
 	}
 }
-func WithDisttaeEngineWorkspaceThreshold(v uint64) TestDisttaeEngineOptions {
+func WithDisttaeEngineCommitWorkspaceThreshold(v uint64) TestDisttaeEngineOptions {
 	return func(e *TestDisttaeEngine) {
-		e.workspaceThreshold = v
+		e.commitWorkspaceThreshold = v
+	}
+}
+func WithDisttaeEngineWriteWorkspaceThreshold(v uint64) TestDisttaeEngineOptions {
+	return func(e *TestDisttaeEngine) {
+		e.writeWorkspaceThreshold = v
+	}
+}
+func WithDisttaeEngineQuota(v uint64) TestDisttaeEngineOptions {
+	return func(e *TestDisttaeEngine) {
+		e.quota = v
 	}
 }
 
@@ -92,6 +101,11 @@ func CreateEngines(
 
 	if v := ctx.Value(defines.TenantIDKey{}); v == nil {
 		panic("cannot find account id in ctx")
+	}
+
+	_, ok := ctx.Deadline()
+	if ok {
+		panic("context should not have deadline")
 	}
 
 	var err error
@@ -252,26 +266,27 @@ type EnginePack struct {
 }
 
 func InitEnginePack(opts TestOptions, t *testing.T) *EnginePack {
-	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, uint32(0))
+	ctx, cancel := context.WithCancel(context.Background())
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(0))
+	pack := &EnginePack{
+		t:       t,
+		cancelF: cancel,
+	}
+	pack.D, pack.T, pack.R, pack.Mp = CreateEngines(ctx, opts, t, opts.DisttaeOptions...)
 	timeout := opts.Timeout
 	if timeout == 0 {
 		timeout = 5 * time.Minute
 	}
-	ctx, cancel := context.WithTimeoutCause(ctx, timeout, moerr.CauseInitEnginePack)
-	pack := &EnginePack{
-		Ctx:     ctx,
-		t:       t,
-		cancelF: cancel,
-	}
-	pack.D, pack.T, pack.R, pack.Mp = CreateEngines(pack.Ctx, opts, t)
+	ctx, _ = context.WithTimeoutCause(ctx, timeout, moerr.CauseInitEnginePack)
+	pack.Ctx = ctx
 	return pack
 }
 
 func (p *EnginePack) Close() {
-	p.cancelF()
 	p.D.Close(p.Ctx)
 	p.T.Close(true)
 	p.R.Close()
+	p.cancelF()
 }
 
 func (p *EnginePack) StartCNTxn(opts ...client.TxnOption) client.TxnOperator {

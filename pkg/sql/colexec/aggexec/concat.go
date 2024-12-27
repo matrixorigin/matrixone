@@ -27,31 +27,36 @@ import (
 // group_concat is a special string aggregation function.
 type groupConcatExec struct {
 	multiAggInfo
-	ret aggFuncBytesResult
+	ret aggResultWithBytesType
 	distinctHash
 
 	separator []byte
 }
 
+func (exec *groupConcatExec) GetOptResult() SplitResult {
+	return &exec.ret.optSplitResult
+}
+
 func (exec *groupConcatExec) marshal() ([]byte, error) {
 	d := exec.multiAggInfo.getEncoded()
-	r, err := exec.ret.marshal()
+	r, em, err := exec.ret.marshalToBytes()
 	if err != nil {
 		return nil, err
 	}
-	encoded := &EncodedAgg{
-		Info:   d,
-		Result: r,
-		Groups: [][]byte{exec.separator},
+	encoded := EncodedAgg{
+		Info:    d,
+		Result:  r,
+		Empties: em,
+		Groups:  [][]byte{exec.separator},
 	}
 	return encoded.Marshal()
 }
 
-func (exec *groupConcatExec) unmarshal(_ *mpool.MPool, result []byte, groups [][]byte) error {
+func (exec *groupConcatExec) unmarshal(_ *mpool.MPool, result, empties, groups [][]byte) error {
 	if err := exec.SetExtraInformation(groups[0], 0); err != nil {
 		return err
 	}
-	return exec.ret.unmarshal(result)
+	return exec.ret.unmarshalFromBytes(result, empties)
 }
 
 func GroupConcatReturnType(args []types.Type) types.Type {
@@ -66,11 +71,11 @@ func GroupConcatReturnType(args []types.Type) types.Type {
 func newGroupConcatExec(mg AggMemoryManager, info multiAggInfo, separator string) AggFuncExec {
 	exec := &groupConcatExec{
 		multiAggInfo: info,
-		ret:          initBytesAggFuncResult(mg, info.retType, info.emptyNull),
+		ret:          initAggResultWithBytesTypeResult(mg, info.retType, info.emptyNull, ""),
 		separator:    []byte(separator),
 	}
 	if info.distinct {
-		exec.distinctHash = newDistinctHash(mg.Mp(), false)
+		exec.distinctHash = newDistinctHash()
 	}
 	return exec
 }
@@ -92,7 +97,7 @@ func (exec *groupConcatExec) GroupGrow(more int) error {
 }
 
 func (exec *groupConcatExec) PreAllocateGroups(more int) error {
-	return exec.ret.preAllocate(more)
+	return exec.ret.preExtend(more)
 }
 
 func (exec *groupConcatExec) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
@@ -110,9 +115,9 @@ func (exec *groupConcatExec) Fill(groupIndex int, row int, vectors []*vector.Vec
 		}
 	}
 
-	exec.ret.groupToSet = groupIndex
-	exec.ret.setGroupNotEmpty(groupIndex)
-	r := exec.ret.aggGet()
+	x, y := exec.ret.updateNextAccessIdx(groupIndex)
+	exec.ret.setGroupNotEmpty(x, y)
+	r := exec.ret.get()
 	if len(r) > 0 {
 		r = append(r, exec.separator...)
 	}
@@ -123,11 +128,10 @@ func (exec *groupConcatExec) Fill(groupIndex int, row int, vectors []*vector.Vec
 			return err
 		}
 	}
-	return exec.ret.aggSet(r)
+	return exec.ret.set(r)
 }
 
 func (exec *groupConcatExec) BulkFill(groupIndex int, vectors []*vector.Vector) error {
-	exec.ret.groupToSet = groupIndex
 	for row, end := 0, vectors[0].Length(); row < end; row++ {
 		if err := exec.Fill(groupIndex, row, vectors); err != nil {
 			return err
@@ -155,25 +159,25 @@ func (exec *groupConcatExec) SetExtraInformation(partialResult any, _ int) error
 }
 
 func (exec *groupConcatExec) merge(other *groupConcatExec, idx1, idx2 int) error {
-	exec.ret.groupToSet = idx1
-	other.ret.groupToSet = idx2
+	x1, y1 := exec.ret.updateNextAccessIdx(idx1)
+	x2, y2 := other.ret.updateNextAccessIdx(idx2)
 	if err := exec.distinctHash.merge(&other.distinctHash); err != nil {
 		return err
 	}
-	empty1, empty2 := exec.ret.groupIsEmpty(idx1), other.ret.groupIsEmpty(idx2)
+	empty1, empty2 := exec.ret.isGroupEmpty(x1, y1), other.ret.isGroupEmpty(x2, y2)
 
 	if empty2 {
 		return nil
 	}
-	exec.ret.mergeEmpty(other.ret.basicResult, idx1, idx2)
-	v2 := other.ret.aggGet()
+	exec.ret.MergeAnotherEmpty(x1, y1, empty2)
+	v2 := other.ret.get()
 	if empty1 {
-		return exec.ret.aggSet(v2)
+		return exec.ret.set(v2)
 	}
-	v1 := exec.ret.aggGet()
+	v1 := exec.ret.get()
 	v1 = append(v1, exec.separator...)
 	v1 = append(v1, v2...)
-	return exec.ret.aggSet(v1)
+	return exec.ret.set(v1)
 }
 
 func (exec *groupConcatExec) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) error {
@@ -193,8 +197,8 @@ func (exec *groupConcatExec) BatchMerge(next AggFuncExec, offset int, groups []u
 	return nil
 }
 
-func (exec *groupConcatExec) Flush() (*vector.Vector, error) {
-	return exec.ret.flush(), nil
+func (exec *groupConcatExec) Flush() ([]*vector.Vector, error) {
+	return exec.ret.flushAll(), nil
 }
 
 func (exec *groupConcatExec) Free() {

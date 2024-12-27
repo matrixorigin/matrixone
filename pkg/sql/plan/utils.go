@@ -2721,3 +2721,23 @@ func offsetToString(offset int) string {
 // }
 // return !strings.HasPrefix(tableDef.Name, catalog.IndexTableNamePrefix)
 // }
+
+// DbNameOfObjRef return subscription name of ObjectRef if exists, to avoid the mismatching of account id and db name
+func DbNameOfObjRef(objRef *ObjectRef) string {
+	if objRef.SubscriptionName == "" {
+		return objRef.SchemaName
+	}
+	return objRef.SubscriptionName
+}
+func doResolveTimeStamp(timeStamp string) (ts int64, err error) {
+	loc, err := time.LoadLocation("Local")
+	if err != nil {
+		return 0, err
+	}
+	t, err := time.ParseInLocation("2006-01-02 15:04:05", timeStamp, loc)
+	if err != nil {
+		return 0, err
+	}
+	ts = t.UTC().UnixNano()
+	return ts, nil
+}

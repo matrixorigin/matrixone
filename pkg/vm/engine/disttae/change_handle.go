@@ -196,6 +196,7 @@ func (h *CheckpointChangesHandle) initReader(ctx context.Context) (err error) {
 		nil,
 		nil,
 		&blockList,
+		h.table.PrefetchAllMeta,
 		h.fs,
 	); err != nil {
 		return

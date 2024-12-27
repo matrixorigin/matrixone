@@ -19,6 +19,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math"
+	"sort"
 	"sync"
 	"time"
 
@@ -450,13 +451,13 @@ func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
 
 	//offset < 0 indicates commit.
 	if offset < 0 {
-		if txn.approximateInMemInsertSize < txn.engine.config.workspaceThreshold &&
+		if txn.approximateInMemInsertSize < txn.commitWorkspaceThreshold &&
 			txn.approximateInMemInsertCnt < txn.engine.config.insertEntryMaxCount &&
 			txn.approximateInMemDeleteCnt < txn.engine.config.insertEntryMaxCount {
 			return nil
 		}
 	} else {
-		if txn.approximateInMemInsertSize < txn.engine.config.workspaceThreshold {
+		if txn.approximateInMemInsertSize < txn.writeWorkspaceThreshold {
 			return nil
 		}
 	}
@@ -468,9 +469,7 @@ func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
 
 	if !dumpAll {
 		for i := offset; i < len(txn.writes); i++ {
-			if txn.writes[i].tableId == catalog.MO_DATABASE_ID ||
-				txn.writes[i].tableId == catalog.MO_TABLES_ID ||
-				txn.writes[i].tableId == catalog.MO_COLUMNS_ID {
+			if txn.writes[i].isCatalog() {
 				continue
 			}
 			if txn.writes[i].bat == nil || txn.writes[i].bat.RowCount() == 0 {
@@ -480,8 +479,26 @@ func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
 				size += uint64(txn.writes[i].bat.Size())
 			}
 		}
-		if size < txn.engine.config.workspaceThreshold {
+		if size < txn.writeWorkspaceThreshold {
 			return nil
+		}
+
+		if size < txn.engine.config.extraWorkspaceThreshold {
+			// try to increase the write threshold from quota, if failed, then dump all
+			// acquire 5M more than we need
+			quota := size - txn.writeWorkspaceThreshold + txn.engine.config.writeWorkspaceThreshold
+			remaining, acquired := txn.engine.AcquireQuota(quota)
+			if acquired {
+				logutil.Info(
+					"WORKSPACE-QUOTA-ACQUIRE",
+					zap.Uint64("quota", quota),
+					zap.Uint64("remaining", remaining),
+					zap.String("txn", txn.op.Txn().DebugString()),
+				)
+				txn.writeWorkspaceThreshold += quota
+				txn.extraWriteWorkspaceThreshold += quota
+				return nil
+			}
 		}
 		size = 0
 	}
@@ -489,6 +506,18 @@ func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
 
 	if err := txn.dumpInsertBatchLocked(ctx, offset, &size, &pkCount); err != nil {
 		return err
+	}
+	// release the extra quota
+	if txn.extraWriteWorkspaceThreshold > 0 {
+		remaining := txn.engine.ReleaseQuota(txn.extraWriteWorkspaceThreshold)
+		logutil.Info(
+			"WORKSPACE-QUOTA-RELEASE",
+			zap.Uint64("quota", txn.extraWriteWorkspaceThreshold),
+			zap.Uint64("remaining", remaining),
+			zap.String("txn", txn.op.Txn().DebugString()),
+		)
+		txn.extraWriteWorkspaceThreshold = 0
+		txn.writeWorkspaceThreshold = txn.engine.config.writeWorkspaceThreshold
 	}
 
 	if dumpAll {
@@ -518,18 +547,59 @@ func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
 }
 
 func (txn *Transaction) dumpInsertBatchLocked(ctx context.Context, offset int, size *uint64, pkCount *int) error {
-	mp := make(map[tableKey][]*batch.Batch)
-	lastWritesIndex := offset
-	writes := txn.writes
+	tbSize := make(map[uint64]int)
+	tbCount := make(map[uint64]int)
+	skipTable := make(map[uint64]bool)
+
 	for i := offset; i < len(txn.writes); i++ {
 		if txn.writes[i].isCatalog() {
-			writes[lastWritesIndex] = writes[i]
-			lastWritesIndex++
 			continue
 		}
 		if txn.writes[i].bat == nil || txn.writes[i].bat.RowCount() == 0 {
-			writes[lastWritesIndex] = writes[i]
-			lastWritesIndex++
+			continue
+		}
+		if txn.writes[i].typ == INSERT && txn.writes[i].fileName == "" {
+			tbSize[txn.writes[i].tableId] += txn.writes[i].bat.Size()
+			tbCount[txn.writes[i].tableId] += txn.writes[i].bat.RowCount()
+		}
+	}
+
+	keys := make([]uint64, 0, len(tbSize))
+	for k := range tbSize {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		return tbSize[keys[i]] < tbSize[keys[j]]
+	})
+	sum := 0
+	for _, k := range keys {
+		if tbCount[k] >= txn.engine.config.insertEntryMaxCount {
+			continue
+		}
+		if uint64(sum+tbSize[k]) >= txn.commitWorkspaceThreshold {
+			break
+		}
+		sum += tbSize[k]
+		skipTable[k] = true
+	}
+
+	lastWriteIndex := offset
+	writes := txn.writes
+	mp := make(map[tableKey][]*batch.Batch)
+	for i := offset; i < len(txn.writes); i++ {
+		if skipTable[txn.writes[i].tableId] {
+			writes[lastWriteIndex] = writes[i]
+			lastWriteIndex++
+			continue
+		}
+		if txn.writes[i].isCatalog() {
+			writes[lastWriteIndex] = writes[i]
+			lastWriteIndex++
+			continue
+		}
+		if txn.writes[i].bat == nil || txn.writes[i].bat.RowCount() == 0 {
+			writes[lastWriteIndex] = writes[i]
+			lastWriteIndex++
 			continue
 		}
 
@@ -550,18 +620,18 @@ func (txn *Transaction) dumpInsertBatchLocked(ctx context.Context, offset int, s
 			newBat.Vecs = bat.Vecs[1:]
 			newBat.SetRowCount(bat.Vecs[0].Length())
 			mp[tbKey] = append(mp[tbKey], newBat)
-			txn.toFreeBatches[tbKey] = append(txn.toFreeBatches[tbKey], bat)
+			defer bat.Clean(txn.proc.GetMPool())
 
 			keepElement = false
 		}
 
 		if keepElement {
-			writes[lastWritesIndex] = writes[i]
-			lastWritesIndex++
+			writes[lastWriteIndex] = writes[i]
+			lastWriteIndex++
 		}
 	}
 
-	txn.writes = writes[:lastWritesIndex]
+	txn.writes = writes[:lastWriteIndex]
 
 	for tbKey := range mp {
 		// scenario 2 for cn write s3, more info in the comment of S3Writer
@@ -626,18 +696,18 @@ func (txn *Transaction) dumpInsertBatchLocked(ctx context.Context, offset int, s
 
 func (txn *Transaction) dumpDeleteBatchLocked(ctx context.Context, offset int, size *uint64) error {
 	deleteCnt := 0
-	mp := make(map[tableKey][]*batch.Batch)
-	lastWritesIndex := offset
+	lastWriteIndex := offset
 	writes := txn.writes
+	mp := make(map[tableKey][]*batch.Batch)
 	for i := offset; i < len(txn.writes); i++ {
 		if txn.writes[i].isCatalog() {
-			writes[lastWritesIndex] = writes[i]
-			lastWritesIndex++
+			writes[lastWriteIndex] = writes[i]
+			lastWriteIndex++
 			continue
 		}
 		if txn.writes[i].bat == nil || txn.writes[i].bat.RowCount() == 0 {
-			writes[lastWritesIndex] = writes[i]
-			lastWritesIndex++
+			writes[lastWriteIndex] = writes[i]
+			lastWriteIndex++
 			continue
 		}
 
@@ -653,28 +723,24 @@ func (txn *Transaction) dumpDeleteBatchLocked(ctx context.Context, offset int, s
 			deleteCnt += bat.RowCount()
 			*size += uint64(bat.Size())
 
-			newBat := batch.NewWithSize(len(bat.Vecs))
-			newBat.SetAttributes(bat.Attrs)
-			newBat.Vecs = bat.Vecs
-			newBat.SetRowCount(bat.Vecs[0].Length())
+			newBatch := batch.NewWithSize(len(bat.Vecs))
+			newBatch.SetAttributes(bat.Attrs)
+			newBatch.Vecs = bat.Vecs
+			newBatch.SetRowCount(bat.Vecs[0].Length())
 
-			mp[tbKey] = append(mp[tbKey], newBat)
-			txn.toFreeBatches[tbKey] = append(txn.toFreeBatches[tbKey], bat)
+			mp[tbKey] = append(mp[tbKey], newBatch)
+			defer bat.Clean(txn.proc.GetMPool())
 
 			keepElement = false
 		}
 
 		if keepElement {
-			writes[lastWritesIndex] = writes[i]
-			lastWritesIndex++
+			writes[lastWriteIndex] = writes[i]
+			lastWriteIndex++
 		}
 	}
 
-	if deleteCnt < txn.engine.config.insertEntryMaxCount {
-		return nil
-	}
-
-	txn.writes = writes[:lastWritesIndex]
+	txn.writes = writes[:lastWriteIndex]
 
 	for tbKey := range mp {
 		// scenario 2 for cn write s3, more info in the comment of S3Writer
@@ -1246,6 +1312,22 @@ func (txn *Transaction) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
 		return nil, nil
 	}
 
+	if err := txn.IncrStatementID(ctx, true); err != nil {
+		return nil, err
+	}
+
+	if err := txn.transferTombstonesByCommit(ctx); err != nil {
+		return nil, err
+	}
+
+	if err := txn.mergeTxnWorkspaceLocked(ctx); err != nil {
+		return nil, err
+	}
+	if err := txn.dumpBatchLocked(ctx, -1); err != nil {
+		return nil, err
+	}
+	txn.traceWorkspaceLocked(true)
+
 	if txn.workspaceSize > 10*mpool.MB {
 		logutil.Info(
 			"BIG-TXN",
@@ -1269,23 +1351,6 @@ func (txn *Transaction) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
 			zap.String("txn", txn.op.Txn().DebugString()),
 		)
 	}
-
-	if err := txn.IncrStatementID(ctx, true); err != nil {
-		return nil, err
-	}
-
-	if err := txn.transferTombstonesByCommit(ctx); err != nil {
-		return nil, err
-	}
-
-	if err := txn.mergeTxnWorkspaceLocked(ctx); err != nil {
-		return nil, err
-	}
-	if err := txn.dumpBatchLocked(ctx, -1); err != nil {
-		return nil, err
-	}
-
-	txn.traceWorkspaceLocked(true)
 
 	if !txn.hasS3Op.Load() &&
 		txn.op.TxnOptions().CheckDupEnabled() {
@@ -1402,7 +1467,6 @@ func (txn *Transaction) delTransaction() {
 		}
 		txn.writes[i].bat.Clean(txn.proc.Mp())
 	}
-	txn.CleanToFreeBatches()
 	txn.tableCache = nil
 	txn.tableOps = nil
 	txn.databaseMap = nil
@@ -1428,6 +1492,16 @@ func (txn *Transaction) delTransaction() {
 	txn.transfer.timestamps = nil
 	txn.transfer.lastTransferred = types.TS{}
 	txn.transfer.pendingTransfer = false
+
+	if txn.extraWriteWorkspaceThreshold > 0 {
+		remaining := txn.engine.ReleaseQuota(txn.extraWriteWorkspaceThreshold)
+		logutil.Info(
+			"WORKSPACE-QUOTA-RELEASE",
+			zap.Uint64("quota", txn.extraWriteWorkspaceThreshold),
+			zap.Uint64("remaining", remaining),
+		)
+		txn.extraWriteWorkspaceThreshold = 0
+	}
 }
 
 func (txn *Transaction) rollbackTableOpLocked() {
@@ -1476,8 +1550,10 @@ func (txn *Transaction) CloneSnapshotWS() client.Workspace {
 		},
 		cnBlkId_Pos:     map[types.Blockid]Pos{},
 		batchSelectList: make(map[*batch.Batch][]int64),
-		toFreeBatches:   make(map[tableKey][]*batch.Batch),
 		cn_flushed_s3_tombstone_object_stats_list: new(sync.Map),
+
+		commitWorkspaceThreshold: txn.commitWorkspaceThreshold,
+		writeWorkspaceThreshold:  txn.writeWorkspaceThreshold,
 	}
 
 	ws.readOnly.Store(true)
@@ -1495,15 +1571,6 @@ func (txn *Transaction) SetHaveDDL(haveDDL bool) {
 
 func (txn *Transaction) GetHaveDDL() bool {
 	return txn.haveDDL.Load()
-}
-
-func (txn *Transaction) CleanToFreeBatches() {
-	for key := range txn.toFreeBatches {
-		for _, bat := range txn.toFreeBatches[key] {
-			bat.Clean(txn.proc.Mp())
-		}
-		delete(txn.toFreeBatches, key)
-	}
 }
 
 func newTableOps() *tableOpsChain {

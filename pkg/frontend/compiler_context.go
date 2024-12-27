@@ -509,6 +509,48 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string, snapshot
 	return obj, tableDef
 }
 
+func (tcc *TxnCompilerContext) ResolveIndexTableByRef(
+	ref *plan.ObjectRef,
+	tblName string,
+	snapshot *plan2.Snapshot,
+) (*plan2.ObjectRef, *plan2.TableDef) {
+	start := time.Now()
+	defer func() {
+		end := time.Since(start).Seconds()
+		v2.TxnStatementResolveDurationHistogram.Observe(end)
+		v2.TotalResolveDurationHistogram.Observe(end)
+	}()
+
+	// no need to ensureDatabaseIsNotEmpty
+
+	var subMeta *plan.SubscriptionMeta
+	if ref.PubInfo != nil {
+		subMeta = &plan.SubscriptionMeta{
+			AccountId: ref.PubInfo.TenantId,
+		}
+	}
+
+	ctx, table, err := tcc.getRelation(ref.SchemaName, tblName, subMeta, snapshot)
+	if err != nil {
+		return nil, nil
+	}
+
+	obj := &plan2.ObjectRef{
+		SchemaName:       ref.SchemaName,
+		ObjName:          tblName,
+		Obj:              int64(table.GetTableID(ctx)),
+		SubscriptionName: ref.SubscriptionName,
+		PubInfo:          ref.PubInfo,
+	}
+
+	tableDef := table.CopyTableDef(ctx)
+	if tableDef.IsTemporary {
+		tableDef.Name = tblName
+	}
+
+	return obj, tableDef
+}
+
 func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (udf *function.Udf, err error) {
 	var matchNum int
 	var argstr string
@@ -800,11 +842,11 @@ func (tcc *TxnCompilerContext) GetPrimaryKeyDef(dbName string, tableName string,
 }
 
 func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, snapshot *plan2.Snapshot) (*pb.StatsInfo, error) {
-	stats := statistic.StatsInfoFromContext(tcc.execCtx.reqCtx)
+	statser := statistic.StatsInfoFromContext(tcc.execCtx.reqCtx)
 	start := time.Now()
 	defer func() {
 		v2.TxnStatementStatsDurationHistogram.Observe(time.Since(start).Seconds())
-		stats.AddBuildPlanStatsConsumption(time.Since(start))
+		statser.AddBuildPlanStatsConsumption(time.Since(start))
 	}()
 
 	dbName := obj.GetSchemaName()
@@ -859,47 +901,26 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, snapshot *plan2.Snaps
 	var statsInfo *pb.StatsInfo
 	// This is a partition table.
 	if partitionInfo != nil {
-		crs := new(perfcounter.CounterSet)
 		statsInfo = plan2.NewStatsInfo()
 		for _, partitionTable := range partitionInfo.PartitionTableNames {
 			parCtx, parTable, err := tcc.getRelation(dbName, partitionTable, sub, snapshot)
 			if err != nil {
 				return cached, err
 			}
-			newParCtx := perfcounter.AttachS3RequestKey(parCtx, crs)
+
+			newParCtx := perfcounter.AttachCalcTableStatsKey(parCtx)
 			parStats, err := parTable.Stats(newParCtx, true)
 			if err != nil {
 				return cached, err
 			}
 			statsInfo.Merge(parStats)
 		}
-
-		stats.AddBuildPlanStatsS3Request(statistic.S3Request{
-			List:      crs.FileService.S3.List.Load(),
-			Head:      crs.FileService.S3.Head.Load(),
-			Put:       crs.FileService.S3.Put.Load(),
-			Get:       crs.FileService.S3.Get.Load(),
-			Delete:    crs.FileService.S3.Delete.Load(),
-			DeleteMul: crs.FileService.S3.DeleteMulti.Load(),
-		})
-
 	} else {
-		crs := new(perfcounter.CounterSet)
-		newCtx := perfcounter.AttachS3RequestKey(ctx, crs)
-
+		newCtx := perfcounter.AttachCalcTableStatsKey(ctx)
 		statsInfo, err = table.Stats(newCtx, true)
 		if err != nil {
 			return cached, err
 		}
-
-		stats.AddBuildPlanStatsS3Request(statistic.S3Request{
-			List:      crs.FileService.S3.List.Load(),
-			Head:      crs.FileService.S3.Head.Load(),
-			Put:       crs.FileService.S3.Put.Load(),
-			Get:       crs.FileService.S3.Get.Load(),
-			Delete:    crs.FileService.S3.Delete.Load(),
-			DeleteMul: crs.FileService.S3.DeleteMulti.Load(),
-		})
 	}
 
 	if statsInfo != nil {
@@ -916,6 +937,12 @@ func (tcc *TxnCompilerContext) UpdateStatsInCache(tid uint64, s *pb.StatsInfo) {
 // statsInCache get the *pb.StatsInfo from session cache. If the info is nil, just return nil and false,
 // else, check if the info needs to be updated.
 func (tcc *TxnCompilerContext) statsInCache(ctx context.Context, dbName string, table engine.Relation, snapshot *plan2.Snapshot) (*pb.StatsInfo, bool) {
+	statser := statistic.StatsInfoFromContext(tcc.execCtx.reqCtx)
+	start := time.Now()
+	defer func() {
+		statser.AddStatsStatsInCacheDuration(time.Since(start))
+	}()
+
 	s := tcc.GetStatsCache().GetStatsInfo(table.GetTableID(ctx), true)
 	if s == nil {
 		return nil, false

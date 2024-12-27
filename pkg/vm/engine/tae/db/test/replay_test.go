@@ -87,7 +87,8 @@ func TestReplayCatalog1(t *testing.T) {
 				testutil.CompactBlocks(t, 0, tae, pkgcatalog.MO_CATALOG, catalog.SystemDBSchema, false)
 				testutil.CompactBlocks(t, 0, tae, pkgcatalog.MO_CATALOG, catalog.SystemTableSchema, false)
 				testutil.CompactBlocks(t, 0, tae, pkgcatalog.MO_CATALOG, catalog.SystemColumnSchema, false)
-				err := tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.Now(), false)
+				ts := tae.TxnMgr.Now()
+				err := tae.BGCheckpointRunner.ForceICKP(ctx, &ts)
 				assert.NoError(t, err)
 			}
 		}
@@ -186,7 +187,8 @@ func TestReplayCatalog2(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit(context.Background()))
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
-	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.Now(), false)
+	ts := tae.TxnMgr.Now()
+	err = tae.BGCheckpointRunner.ForceICKP(ctx, &ts)
 	assert.NoError(t, err)
 	tae.Close()
 
@@ -459,9 +461,10 @@ func TestReplay2(t *testing.T) {
 	assert.NotNil(t, err)
 	assert.Nil(t, txn.Commit(context.Background()))
 
-	err = tae2.BGCheckpointRunner.ForceFlush(tae2.TxnMgr.Now(), context.Background(), time.Second*10)
+	err = tae2.ForceFlush(tae2.TxnMgr.Now(), context.Background(), time.Second*10)
 	assert.NoError(t, err)
-	err = tae2.BGCheckpointRunner.ForceIncrementalCheckpoint(tae2.TxnMgr.Now(), false)
+	ts := tae2.TxnMgr.Now()
+	err = tae2.BGCheckpointRunner.ForceICKP(ctx, &ts)
 	assert.NoError(t, err)
 
 	txn, rel = testutil.GetRelation(t, 0, tae2, "db", schema.Name)
@@ -562,7 +565,8 @@ func TestReplay3(t *testing.T) {
 	assert.NoError(t, txn.Commit(context.Background()))
 
 	txn, _ = tae.GetRelation()
-	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.Now(), false)
+	ts := tae.TxnMgr.Now()
+	err = tae.BGCheckpointRunner.ForceICKP(ctx, &ts)
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 }
@@ -814,9 +818,10 @@ func TestReplay5(t *testing.T) {
 	assert.NoError(t, txn.Commit(context.Background()))
 
 	testutil.CompactBlocks(t, 0, tae, testutil.DefaultTestDB, schema, false)
-	err = tae.BGCheckpointRunner.ForceFlushWithInterval(tae.TxnMgr.Now(), context.Background(), time.Second*2, time.Millisecond*10)
+	err = tae.BGFlusher.ForceFlushWithInterval(tae.TxnMgr.Now(), context.Background(), time.Second*2, time.Millisecond*10)
 	assert.NoError(t, err)
-	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.Now(), false)
+	ts := tae.TxnMgr.Now()
+	err = tae.BGCheckpointRunner.ForceICKP(ctx, &ts)
 	assert.NoError(t, err)
 	lsn := tae.BGCheckpointRunner.MaxLSNInRange(tae.TxnMgr.Now())
 	entry, err := tae.Wal.RangeCheckpoint(1, lsn)
@@ -841,9 +846,10 @@ func TestReplay5(t *testing.T) {
 	}
 	assert.NoError(t, txn.Commit(context.Background()))
 	testutil.CompactBlocks(t, 0, tae, testutil.DefaultTestDB, schema, false)
-	err = tae.BGCheckpointRunner.ForceFlushWithInterval(tae.TxnMgr.Now(), context.Background(), time.Second*2, time.Millisecond*10)
+	err = tae.BGFlusher.ForceFlushWithInterval(tae.TxnMgr.Now(), context.Background(), time.Second*2, time.Millisecond*10)
 	assert.NoError(t, err)
-	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.Now(), false)
+	ts2 := tae.TxnMgr.Now()
+	err = tae.BGCheckpointRunner.ForceICKP(ctx, &ts2)
 	assert.NoError(t, err)
 	lsn = tae.BGCheckpointRunner.MaxLSNInRange(tae.TxnMgr.Now())
 	entry, err = tae.Wal.RangeCheckpoint(1, lsn)
@@ -878,9 +884,10 @@ func TestReplay5(t *testing.T) {
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
 	assert.NoError(t, txn.Commit(context.Background()))
 
-	err = tae.BGCheckpointRunner.ForceFlushWithInterval(tae.TxnMgr.Now(), context.Background(), time.Second*2, time.Millisecond*10)
+	err = tae.BGFlusher.ForceFlushWithInterval(tae.TxnMgr.Now(), context.Background(), time.Second*2, time.Millisecond*10)
 	assert.NoError(t, err)
-	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.Now(), false)
+	ts2 = tae.TxnMgr.Now()
+	err = tae.BGCheckpointRunner.ForceICKP(ctx, &ts2)
 	assert.NoError(t, err)
 	lsn = tae.BGCheckpointRunner.MaxLSNInRange(tae.TxnMgr.Now())
 	entry, err = tae.Wal.RangeCheckpoint(1, lsn)
@@ -939,9 +946,10 @@ func TestReplay6(t *testing.T) {
 	assert.NoError(t, txn.Commit(context.Background()))
 	testutil.CompactBlocks(t, 0, tae, testutil.DefaultTestDB, schema, false)
 	testutil.MergeBlocks(t, 0, tae, testutil.DefaultTestDB, schema, false)
-	err = tae.BGCheckpointRunner.ForceFlushWithInterval(tae.TxnMgr.Now(), context.Background(), time.Second*2, time.Millisecond*10)
+	err = tae.BGFlusher.ForceFlushWithInterval(tae.TxnMgr.Now(), context.Background(), time.Second*2, time.Millisecond*10)
 	assert.NoError(t, err)
-	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.Now(), false)
+	ts := tae.TxnMgr.Now()
+	err = tae.BGCheckpointRunner.ForceICKP(ctx, &ts)
 	assert.NoError(t, err)
 
 	_ = tae.Close()
@@ -1098,7 +1106,7 @@ func TestReplay8(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 	// t.Log(tae.Catalog.SimplePPString(common.PPL1))
-	err = tae.BGCheckpointRunner.ForceFlushWithInterval(tae.TxnMgr.Now(), context.Background(), time.Second*2, time.Millisecond*10)
+	err = tae.BGFlusher.ForceFlushWithInterval(tae.TxnMgr.Now(), context.Background(), time.Second*2, time.Millisecond*10)
 	assert.NoError(t, err)
 
 	tae.Restart(ctx)
@@ -1121,7 +1129,8 @@ func TestReplay8(t *testing.T) {
 	_ = txn.Rollback(context.Background())
 
 	tae.CompactBlocks(false)
-	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.Now(), false)
+	ts := tae.TxnMgr.Now()
+	err = tae.BGCheckpointRunner.ForceICKP(ctx, &ts)
 	assert.NoError(t, err)
 	tae.Restart(ctx)
 
@@ -1322,7 +1331,8 @@ func TestReplaySnapshots(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 
-	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.Now(), false)
+	ts := tae.TxnMgr.Now()
+	err = tae.BGCheckpointRunner.ForceICKP(ctx, &ts)
 	assert.NoError(t, err)
 
 	txn, err = tae.StartTxn(nil)
@@ -1346,7 +1356,8 @@ func TestReplaySnapshots(t *testing.T) {
 	assert.False(t, baseNode.IsEmpty())
 	assert.NoError(t, txn.Commit(context.Background()))
 
-	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.Now(), false)
+	ts2 := tae.TxnMgr.Now()
+	err = tae.BGCheckpointRunner.ForceICKP(ctx, &ts2)
 	assert.NoError(t, err)
 	t.Log(tae.Catalog.SimplePPString(3))
 
@@ -1382,7 +1393,8 @@ func TestReplayDatabaseEntry(t *testing.T) {
 	assert.Equal(t, createSqlStr, dbEntry.GetCreateSql())
 
 	testutil.CompactBlocks(t, 0, tae.DB, pkgcatalog.MO_CATALOG, catalog.SystemDBSchema, false)
-	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.Now(), false)
+	ts := tae.TxnMgr.Now()
+	err = tae.BGCheckpointRunner.ForceICKP(ctx, &ts)
 	assert.NoError(t, err)
 
 	tae.Restart(ctx)

@@ -32,8 +32,11 @@ const (
 	FJ_TransferSlow  = "fj/transfer/slow"
 	FJ_FlushTimeout  = "fj/flush/timeout"
 
+	FJ_CheckpointSave = "fj/checkpoint/save"
+
 	FJ_TraceRanges         = "fj/trace/ranges"
 	FJ_TracePartitionState = "fj/trace/partitionstate"
+	FJ_PrefetchThreshold   = "fj/prefetch/threshold"
 
 	FJ_Debug19524 = "fj/debug/19524"
 	FJ_Debug19787 = "fj/debug/19787"
@@ -153,7 +156,7 @@ func LogReaderInjected(args ...string) (bool, int) {
 	return checkLoggingArgs(int(iarg), sarg, args...)
 }
 
-func InjectPartitionStateLogging(
+func InjectLogPartitionState(
 	databaseName string,
 	tableName string,
 	level int,
@@ -261,6 +264,29 @@ func InjectLog1(
 	return
 }
 
+func CheckpointSaveInjected() (string, bool) {
+	_, sarg, injected := fault.TriggerFault(FJ_CheckpointSave)
+	return sarg, injected
+}
+
+func InjectCheckpointSave(msg string) (rmFault func(), err error) {
+	if err = fault.AddFaultPoint(
+		context.Background(),
+		FJ_CheckpointSave,
+		":::",
+		"echo",
+		0,
+		msg,
+		false,
+	); err != nil {
+		return
+	}
+	rmFault = func() {
+		fault.RemoveFaultPoint(context.Background(), FJ_CheckpointSave)
+	}
+	return
+}
+
 func Debug19524Injected() bool {
 	_, _, injected := fault.TriggerFault(FJ_Debug19524)
 	return injected
@@ -274,7 +300,35 @@ func RangesLogInjected(dbName, tableName string) (bool, int) {
 	return checkLoggingArgs(0, sarg, dbName, tableName)
 }
 
-func InjectRanges(
+func InjectPrefetchThreshold(threshold int) (rmFault func(), err error) {
+	if err = fault.AddFaultPoint(
+		context.Background(),
+		FJ_PrefetchThreshold,
+		":::",
+		"echo",
+		int64(threshold),
+		"",
+		false,
+	); err != nil {
+		return
+	}
+	rmFault = func() {
+		fault.RemoveFaultPoint(context.Background(), FJ_PrefetchThreshold)
+	}
+	return
+}
+
+// bool: injected or not
+// int: threshold. 1 means 1 millisecond
+func PrefetchMetaThresholdInjected() (bool, int) {
+	iarg, _, injected := fault.TriggerFault(FJ_PrefetchThreshold)
+	if !injected {
+		return false, 0
+	}
+	return true, int(iarg)
+}
+
+func InjectLogRanges(
 	ctx context.Context,
 	tableName string,
 ) (rmFault func(), err error) {

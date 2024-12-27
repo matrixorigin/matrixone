@@ -71,6 +71,10 @@ func (m *MockCompilerContext) CheckSubscriptionValid(subName, accName string, pu
 	panic("implement me")
 }
 
+func (m *MockCompilerContext) ResolveIndexTableByRef(ref *ObjectRef, tblName string, snapshot *Snapshot) (*ObjectRef, *TableDef) {
+	return m.Resolve(DbNameOfObjRef(ref), tblName, snapshot)
+}
+
 func (m *MockCompilerContext) ResolveSubscriptionTableById(tableId uint64, pubmeta *SubscriptionMeta) (*ObjectRef, *TableDef) {
 	return nil, nil
 }
@@ -92,6 +96,7 @@ func (m *MockCompilerContext) ResolveVariable(varName string, isSystemVar, isGlo
 	dec, _ := types.ParseDecimal128("200.001", 38, 3)
 	vars["decimal_var"] = dec
 	vars["null_var"] = nil
+	vars["delete_opt_to_truncate"] = int64(1)
 
 	if m.mysqlCompatible {
 		vars["sql_mode"] = ""

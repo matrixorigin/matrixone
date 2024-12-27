@@ -104,7 +104,6 @@ func newS3Writer(update *MultiUpdate) (*s3Writer, error) {
 	tableCount := len(update.MultiUpdateCtx)
 	writer := &s3Writer{
 		cacheBatchs:    batch.NewCompactBatchs(),
-		segmentMap:     update.SegmentMap,
 		updateCtxInfos: update.ctr.updateCtxInfos,
 		seqnums:        make([][]uint16, 0, tableCount),
 		sortIdxs:       make([]int, 0, tableCount),
@@ -188,9 +187,6 @@ func (writer *s3Writer) prepareDeleteBatchs(
 
 	for _, bat := range src {
 		rowIDVec := bat.GetVector(RowIDIdx)
-		if rowIDVec.IsConstNull() {
-			continue
-		}
 		nulls := rowIDVec.GetNulls()
 		if nulls.Count() == bat.RowCount() {
 			continue
@@ -272,7 +268,7 @@ func (writer *s3Writer) sortAndSync(proc *process.Process, analyzer process.Anal
 		if len(updateCtx.DeleteCols) > 0 {
 			var delBatchs []*batch.Batch
 			if parititionCount == 0 {
-				bats, err = fetchSomeVecFromCompactBatchs(proc, writer.cacheBatchs, updateCtx.DeleteCols, DeleteBatchAttrs)
+				bats, err = fetchSomeVecFromCompactBatchs(writer.cacheBatchs, updateCtx.DeleteCols, DeleteBatchAttrs)
 				if err != nil {
 					return
 				}
@@ -341,7 +337,7 @@ func (writer *s3Writer) sortAndSync(proc *process.Process, analyzer process.Anal
 							}
 						}
 					}
-					bats, err = fetchSomeVecFromCompactBatchs(proc, writer.cacheBatchs, updateCtx.InsertCols, insertAttrs)
+					bats, err = fetchSomeVecFromCompactBatchs(writer.cacheBatchs, updateCtx.InsertCols, insertAttrs)
 					needSortBatch = false
 					needCleanBatch = false
 				}

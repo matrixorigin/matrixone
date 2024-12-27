@@ -1,0 +1,63 @@
+drop database if exists d1;
+create database d1;
+use d1;
+drop table if exists t1;
+drop table if exists t2;
+create table t1(c2 int, c1 int, c3 int) cluster by (c1,c2);
+create table t2(c1 int, c2 int, c3 int, primary key(c1,c2));
+insert into t1 select result%100,result%10000, result from generate_series(100000) g;
+insert into t2 select result%100,*,* from generate_series(1000000) g;
+-- @separator:table
+select mo_ctl('dn', 'flush', 'd1.t1');
+-- @separator:table
+select mo_ctl('dn', 'flush', 'd1.t2');
+select Sleep(1);
+-- @separator:table
+explain select count(*) from t1 where c1 = 1;
+select count(*) from t1 where c1 = 1;
+-- @separator:table
+explain select count(*) from t1 where c1 > 10;
+select count(*) from t1 where c1 > 10;
+-- @separator:table
+explain select count(*) from t1 where c1 in (1,2,3);
+select count(*) from t1 where c1 in (1,2,3);
+-- @separator:table
+explain select count(*) from t1 where c1 between 1 and 5;
+select count(*) from t1 where c1 between 1 and 5;
+-- @separator:table
+explain select count(*) from t1 where c1 = 2 and c2 = 10;
+select count(*) from t1 where c1 = 2 and c2 = 10;
+-- @separator:table
+explain select count(*) from t1 where c1 = 5 and c2 > 10;
+select count(*) from t1 where c1 = 5 and c2 > 10;
+-- @separator:table
+explain select count(*) from t1 where c1 = 3 and c2 in (1,2,3);
+select count(*) from t1 where c1 = 3 and c2 in (1,2,3);
+-- @separator:table
+explain select count(*) from t1 where c1=4 and c2 between 1 and 5;
+select count(*) from t1 where c1=4 and c2 between 1 and 5;
+-- @separator:table
+explain select count(*) from t2 where c1 = 1;
+select count(*) from t2 where c1 = 1;
+-- @separator:table
+explain select count(*) from t2 where c1 > 10;
+select count(*) from t2 where c1 > 10;
+-- @separator:table
+explain select count(*) from t2 where c1 in (1,2,3);
+select count(*) from t2 where c1 in (1,2,3);
+-- @separator:table
+explain select count(*) from t2 where c1 between 1 and 5;
+select count(*) from t2 where c1 between 1 and 5;
+-- @separator:table
+explain select count(*) from t2 where c1 = 2 and c2 = 10;
+select count(*) from t2 where c1 = 2 and c2 = 10;
+-- @separator:table
+explain select count(*) from t2 where c1 = 5 and c2 > 10;
+select count(*) from t2 where c1 = 5 and c2 > 10;
+-- @separator:table
+explain select count(*) from t2 where c1 = 3 and c2 in (1,2,3);
+select count(*) from t2 where c1 = 3 and c2 in (1,2,3);
+-- @separator:table
+explain select count(*) from t2 where c1=4 and c2 between 1 and 5;
+select count(*) from t2 where c1=4 and c2 between 1 and 5;
+drop database if exists d1;
