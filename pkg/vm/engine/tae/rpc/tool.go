@@ -1529,6 +1529,7 @@ type gcRemoveArg struct {
 	oriDir  string
 	tarDir  string
 	modTime int64
+	dry     bool
 	res     string
 }
 
@@ -1546,6 +1547,7 @@ func (c *gcRemoveArg) PrepareCommand() *cobra.Command {
 	gcRemoveCmd.Flags().StringP("ori", "o", "", "original directory")
 	gcRemoveCmd.Flags().StringP("tar", "t", "", "target directory")
 	gcRemoveCmd.Flags().Int64P("mod", "m", 0, "modified time")
+	gcRemoveCmd.Flags().BoolP("dry", "", false, "dry run")
 
 	return gcRemoveCmd
 }
@@ -1555,6 +1557,7 @@ func (c *gcRemoveArg) FromCommand(cmd *cobra.Command) (err error) {
 	c.oriDir, _ = cmd.Flags().GetString("ori")
 	c.tarDir, _ = cmd.Flags().GetString("tar")
 	c.modTime, _ = cmd.Flags().GetInt64("mod")
+	c.dry, _ = cmd.Flags().GetBool("dry")
 	return nil
 }
 
@@ -1610,14 +1613,20 @@ func (c *gcRemoveArg) Run() (err error) {
 		if err != nil {
 			return moerr.NewInfoNoCtx(fmt.Sprintf("failed to get file info %v, %v", obj.Name(), err))
 		}
-		modTime := info.ModTime().Unix()
+		modTime := info.ModTime()
 		if c.modTime != 0 {
-			logutil.Infof("asdf obj %v mod time: %v, dump time: %v after: %v", obj.Name(), modTime, c.modTime, modTime > c.modTime)
-			if modTime > c.modTime {
+			if modTime.Unix() > c.modTime {
 				continue
 			}
+		} else if time.Since(modTime).Hours() < 5*24 {
+			continue
 		}
 		toMove = append(toMove, obj.Name())
+	}
+
+	if c.dry {
+		c.res = fmt.Sprintf("Dry run, to remove objects %v", len(toMove))
+		return
 	}
 
 	for _, obj := range toMove {
@@ -1629,7 +1638,7 @@ func (c *gcRemoveArg) Run() (err error) {
 		}
 	}
 
-	c.res = fmt.Sprintf("Moved objects from %v to %v", c.oriDir, c.tarDir)
+	c.res = fmt.Sprintf("Moved objects from %v to %v, objects count %v", c.oriDir, c.tarDir, len(toMove))
 
 	return
 }
