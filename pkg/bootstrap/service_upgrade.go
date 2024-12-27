@@ -16,6 +16,7 @@ package bootstrap
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"time"
 
@@ -137,12 +138,14 @@ func (s *service) doCheckUpgrade(ctx context.Context) error {
 			if err := txn.LockTable(catalog.MOVersionTable); err != nil {
 				s.logger.Error("failed to lock table",
 					zap.String("table", catalog.MOVersionTable),
+					zap.String("txn-id", hex.EncodeToString(txn.Txn().Txn().ID)),
 					zap.Duration("lock_duration", time.Since(startTime)),
 					zap.Error(err))
 				return err
 			}
 			s.logger.Info("lock table successfully",
 				zap.String("table", catalog.MOVersionTable),
+				zap.String("txn-id", hex.EncodeToString(txn.Txn().Txn().ID)),
 				zap.Duration("lock_duration", time.Since(startTime)))
 
 			v, err := versions.GetLatestVersion(txn)
