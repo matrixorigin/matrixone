@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/sort"
 	"go.uber.org/zap"
 
@@ -1126,8 +1127,8 @@ func getGCTS(ctx context.Context, fs fileservice.FileService) (maxGCTS types.TS,
 		if err != nil {
 			return
 		}
-		meta := objectio.DecodeCKPMetaName(dir.Name)
-		if meta.GetExt() == objectio.CompactedExt {
+		meta := ioutil.DecodeCKPMetaName(dir.Name)
+		if meta.GetExt() == ioutil.CompactedExt {
 			end := meta.GetEnd()
 			if end.GT(&maxGCTS) {
 				maxGCTS = *end

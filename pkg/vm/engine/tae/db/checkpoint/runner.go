@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"
 
 	"go.uber.org/zap"
@@ -433,7 +434,7 @@ func (r *runner) saveCheckpoint(
 	}
 	bat := r.collectCheckpointMetadata(start, end)
 	defer bat.Close()
-	name = objectio.EncodeCKPMetadataFullName(start, end)
+	name = ioutil.EncodeCKPMetadataFullName(start, end)
 	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterCheckpoint, name, r.rt.Fs.Service)
 	if err != nil {
 		return
@@ -447,7 +448,7 @@ func (r *runner) saveCheckpoint(
 	if err != nil {
 		return
 	}
-	fileName := objectio.EncodeCKPMetadataName(start, end)
+	fileName := ioutil.EncodeCKPMetadataName(start, end)
 	r.AddCheckpointMetaFile(fileName)
 	return
 }

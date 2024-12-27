@@ -29,6 +29,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc/v3"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -466,7 +467,7 @@ func copyFileAndGetMetaFiles(
 			})
 		}
 
-		if copy || objectio.IsCKPExt(ext) || ext == blockio.GCFullExt {
+		if copy || ioutil.IsCKPExt(ext) || ext == blockio.GCFullExt {
 			metaFile := checkpoint.NewMetaFile(i, start, end, file.Name)
 			metaFiles = append(metaFiles, metaFile)
 		}
@@ -565,7 +566,7 @@ func CopyCheckpointDir(
 	dir string, backup types.TS,
 ) ([]*taeFile, types.TS, error) {
 	decodeFunc := func(name string) (types.TS, types.TS, string) {
-		meta := objectio.DecodeCKPMetaName(name)
+		meta := ioutil.DecodeCKPMetaName(name)
 		return *meta.GetStart(), *meta.GetEnd(), ""
 	}
 	taeFileList, metaFiles, _, err := copyFileAndGetMetaFiles(ctx, srcFs, dstFs, dir, backup, decodeFunc, true)

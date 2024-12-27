@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -111,13 +112,13 @@ func (c *CkpReplayer) readCheckpointEntries() (
 	}
 
 	var (
-		metaEntries      = make([]objectio.CKPMeta, 0)
-		compactedEntries = make([]objectio.CKPMeta, 0)
+		metaEntries      = make([]ioutil.TSRangeFile, 0)
+		compactedEntries = make([]ioutil.TSRangeFile, 0)
 	)
 	// classify the files into metaEntries and compactedEntries
 	for _, file := range files {
 		c.r.store.AddMetaFile(file.Name)
-		entry := objectio.DecodeCKPMetaName(file.Name)
+		entry := ioutil.DecodeCKPMetaName(file.Name)
 		if entry.GetExt() == blockio.CompactedExt {
 			compactedEntries = append(compactedEntries, entry)
 		} else if IsMetadataFile(file.Name) {
@@ -558,9 +559,9 @@ func MergeCkpMeta(
 	if len(dirs) == 0 {
 		return "", nil
 	}
-	metaFiles := make([]objectio.CKPMeta, 0, len(dirs))
+	metaFiles := make([]ioutil.TSRangeFile, 0, len(dirs))
 	for i, dir := range dirs {
-		meta := objectio.DecodeCKPMetaName(dir.Name)
+		meta := ioutil.DecodeCKPMetaName(dir.Name)
 		meta.SetIdx(i)
 		metaFiles = append(metaFiles, meta)
 	}
@@ -613,7 +614,7 @@ func MergeCkpMeta(
 	bat.GetVectorByName(CheckpointAttr_CheckpointLSN).Append(bat.GetVectorByName(CheckpointAttr_CheckpointLSN).Get(last), false)
 	bat.GetVectorByName(CheckpointAttr_TruncateLSN).Append(bat.GetVectorByName(CheckpointAttr_TruncateLSN).Get(last), false)
 	bat.GetVectorByName(CheckpointAttr_Type).Append(int8(ET_Backup), false)
-	name := objectio.EncodeCKPMetadataFullName(startTs, ts)
+	name := ioutil.EncodeCKPMetadataFullName(startTs, ts)
 	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterCheckpoint, name, fs)
 	if err != nil {
 		return "", err

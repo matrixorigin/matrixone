@@ -21,7 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -51,8 +51,8 @@ import (
 
 func FilterSortedMetaFilesByTimestamp(
 	ts *types.TS,
-	files []objectio.CKPMeta,
-) []objectio.CKPMeta {
+	files []ioutil.TSRangeFile,
+) []ioutil.TSRangeFile {
 	if len(files) == 0 {
 		return nil
 	}
@@ -81,9 +81,9 @@ func FilterSortedMetaFilesByTimestamp(
 }
 
 func getSnapshotMetaFiles(
-	metaFiles, compactedFiles []objectio.CKPMeta,
+	metaFiles, compactedFiles []ioutil.TSRangeFile,
 	snapshot *types.TS,
-) []objectio.CKPMeta {
+) []ioutil.TSRangeFile {
 	sort.Slice(compactedFiles, func(i, j int) bool {
 		return compactedFiles[i].GetEnd().LT(compactedFiles[j].GetEnd())
 	})
@@ -92,7 +92,7 @@ func getSnapshotMetaFiles(
 		return metaFiles[i].GetEnd().LT(metaFiles[j].GetEnd())
 	})
 
-	retFiles := make([]objectio.CKPMeta, 0)
+	retFiles := make([]ioutil.TSRangeFile, 0)
 	if len(compactedFiles) > 0 {
 		file := compactedFiles[len(compactedFiles)-1]
 		retFiles = append(retFiles, file)
@@ -132,10 +132,10 @@ func ListSnapshotCheckpoint(
 	if len(files) == 0 {
 		return nil, nil
 	}
-	metaFiles := make([]objectio.CKPMeta, 0)
-	compactedFiles := make([]objectio.CKPMeta, 0)
+	metaFiles := make([]ioutil.TSRangeFile, 0)
+	compactedFiles := make([]ioutil.TSRangeFile, 0)
 	for name := range files {
-		meta := objectio.DecodeCKPMetaName(name)
+		meta := ioutil.DecodeCKPMetaName(name)
 		if meta.GetExt() == blockio.CompactedExt {
 			compactedFiles = append(compactedFiles, meta)
 		} else {
@@ -150,7 +150,7 @@ func ListSnapshotCheckpoint(
 func loadCheckpointMeta(
 	ctx context.Context,
 	sid string,
-	metaFiles []objectio.CKPMeta,
+	metaFiles []ioutil.TSRangeFile,
 	fs fileservice.FileService,
 ) (entries []*CheckpointEntry, err error) {
 	colNames := CheckpointSchema.Attrs()
@@ -159,7 +159,7 @@ func loadCheckpointMeta(
 	var (
 		tmpBat *batch.Batch
 	)
-	loader := func(meta *objectio.CKPMeta) (err error) {
+	loader := func(meta *ioutil.TSRangeFile) (err error) {
 		var reader *blockio.BlockReader
 		var bats []*batch.Batch
 		var closeCB func()

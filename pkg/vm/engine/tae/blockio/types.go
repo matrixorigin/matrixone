@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -49,7 +50,7 @@ func EncodeGCMetadataFileName(prefix string, start, end types.TS) string {
 		prefix,
 		start.ToString(),
 		end.ToString(),
-		objectio.CheckpointExt,
+		ioutil.CheckpointExt,
 	)
 }
 

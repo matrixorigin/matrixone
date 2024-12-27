@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -638,7 +639,7 @@ func (c *checkpointCleaner) deleteStaleCKPMetaFileLocked() (err error) {
 	metaFiles := c.CloneMetaFilesLocked()
 	filesToDelete := make([]string, 0)
 	for _, metaFile := range metaFiles {
-		if !objectio.IsCKPExt(metaFile.Ext()) ||
+		if !ioutil.IsCKPExt(metaFile.Ext()) ||
 			(metaFile.EqualRange(&window.tsRange.start, &window.tsRange.end)) {
 			logutil.Info(
 				"GC-TRACE-DELETE-CKP-FILE-SKIP",
@@ -867,7 +868,7 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 	for _, ckp := range gckps {
 		end := ckp.GetEnd()
 		if end.LT(&newWaterMark) {
-			nameMeta := objectio.EncodeCKPMetadataFullName(
+			nameMeta := ioutil.EncodeCKPMetadataFullName(
 				ckp.GetStart(), ckp.GetEnd(),
 			)
 			deleteFiles = append(deleteFiles, nameMeta)
@@ -1162,7 +1163,7 @@ func (c *checkpointCleaner) doGCAgainstGlobalCheckpointLocked(
 		name:  metafile,
 		start: scannedWindow.tsRange.start,
 		end:   scannedWindow.tsRange.end,
-		ext:   objectio.CheckpointExt,
+		ext:   ioutil.CheckpointExt,
 	})
 	softCost = time.Since(now)
 
@@ -1701,7 +1702,7 @@ func (c *checkpointCleaner) scanCheckpointsLocked(
 			name:  gcMetaFile,
 			start: gcWindow.tsRange.start,
 			end:   gcWindow.tsRange.end,
-			ext:   objectio.CheckpointExt,
+			ext:   ioutil.CheckpointExt,
 		})
 	return
 }

@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"go.uber.org/zap"
 
@@ -84,7 +85,7 @@ func MergeCheckpoint(
 				checkpoint.CheckpointDir, checkpoint.PrefixMetadata,
 				ckpEntry.GetStart(), ckpEntry.GetEnd())
 		} else {
-			nameMeta = objectio.EncodeCKPMetadataFullName(
+			nameMeta = ioutil.EncodeCKPMetadataFullName(
 				ckpEntry.GetStart(), ckpEntry.GetEnd(),
 			)
 		}
