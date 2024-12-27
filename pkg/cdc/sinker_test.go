@@ -40,7 +40,7 @@ func TestNewSinker(t *testing.T) {
 	type args struct {
 		sinkUri          UriInfo
 		dbTblInfo        *DbTableInfo
-		watermarkUpdater IWatermarkUpdater
+		watermarkUpdater *WatermarkUpdater
 		tableDef         *plan.TableDef
 		retryTimes       int
 		retryDuration    time.Duration
@@ -75,42 +75,23 @@ func TestNewSinker(t *testing.T) {
 				sinkUri: UriInfo{
 					SinkTyp: MysqlSink,
 				},
-				dbTblInfo: &DbTableInfo{
-					SourceCreateSql: "create table t1 (a int, b int, c int)",
-				},
+				dbTblInfo:        &DbTableInfo{},
 				watermarkUpdater: nil,
 				tableDef:         nil,
 				retryTimes:       0,
 				retryDuration:    0,
-				ar:               NewCdcActiveRoutine(),
 			},
 			want:    nil,
 			wantErr: assert.NoError,
 		},
 	}
 
-	db, mock, err := sqlmock.New()
-	assert.NoError(t, err)
-	mock.ExpectExec(fakeSql).WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectExec(fakeSql).WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectExec(fakeSql).WillReturnResult(sqlmock.NewResult(1, 1))
-
-	sink := &mysqlSink{
-		user:          "root",
-		password:      "123456",
-		ip:            "127.0.0.1",
-		port:          3306,
-		retryTimes:    DefaultRetryTimes,
-		retryDuration: DefaultRetryDuration,
-		conn:          db,
-	}
-
 	sinkStub := gostub.Stub(&NewMysqlSink, func(_, _, _ string, _, _ int, _ time.Duration, _ string) (Sink, error) {
-		return sink, nil
+		return nil, nil
 	})
 	defer sinkStub.Reset()
 
-	sinkerStub := gostub.Stub(&NewMysqlSinker, func(Sink, *DbTableInfo, IWatermarkUpdater, *plan.TableDef, *ActiveRoutine, uint64) Sinker {
+	sinkerStub := gostub.Stub(&NewMysqlSinker, func(_ Sink, _ *DbTableInfo, _ *WatermarkUpdater, _ *plan.TableDef, _ *ActiveRoutine, _ uint64) Sinker {
 		return nil
 	})
 	defer sinkerStub.Reset()
@@ -129,7 +110,7 @@ func TestNewSinker(t *testing.T) {
 func TestNewConsoleSinker(t *testing.T) {
 	type args struct {
 		dbTblInfo        *DbTableInfo
-		watermarkUpdater IWatermarkUpdater
+		watermarkUpdater *WatermarkUpdater
 	}
 	tests := []struct {
 		name string
@@ -389,11 +370,11 @@ func Test_mysqlSinker_appendSqlBuf(t *testing.T) {
 	s.sqlBuf = append(s.sqlBuf[:sqlBufReserved], s.tsInsertPrefix...)
 	s.rowBuf = []byte("insert")
 	// not exceed cap
-	err = s.appendSqlBuf(InsertRow)
+	err = s.appendSqlBuf(ctx, InsertRow)
 	assert.NoError(t, err)
 	assert.Equal(t, []byte(prefix+tsInsertPrefix+"insert"), s.sqlBuf)
 	// exceed cap
-	err = s.appendSqlBuf(InsertRow)
+	err = s.appendSqlBuf(ctx, InsertRow)
 	assert.NoError(t, err)
 	assert.Equal(t, []byte(prefix+tsInsertPrefix+"insert"), s.sqlBuf)
 
@@ -401,11 +382,11 @@ func Test_mysqlSinker_appendSqlBuf(t *testing.T) {
 	s.sqlBuf = append(s.sqlBuf[:sqlBufReserved], s.tsDeletePrefix...)
 	s.rowBuf = []byte("delete")
 	// not exceed cap
-	err = s.appendSqlBuf(DeleteRow)
+	err = s.appendSqlBuf(ctx, DeleteRow)
 	assert.NoError(t, err)
 	assert.Equal(t, []byte(prefix+tsDeletePrefix+"delete"), s.sqlBuf)
 	// exceed cap
-	err = s.appendSqlBuf(DeleteRow)
+	err = s.appendSqlBuf(ctx, DeleteRow)
 	assert.NoError(t, err)
 	assert.Equal(t, []byte(prefix+tsDeletePrefix+"delete"), s.sqlBuf)
 }
@@ -492,7 +473,7 @@ func Test_mysqlSinker_Sink(t *testing.T) {
 	watermarkUpdater := &WatermarkUpdater{
 		watermarkMap: &sync.Map{},
 	}
-	watermarkUpdater.UpdateMem("db1", "t1", t0)
+	watermarkUpdater.UpdateMem("1_0", t0)
 
 	tableDef := &plan.TableDef{
 		Cols: []*plan.ColDef{
@@ -611,14 +592,13 @@ func Test_mysqlSinker_Sink_NoMoreData(t *testing.T) {
 	mock.ExpectExec(".*").WillReturnError(moerr.NewInternalErrorNoCtx(""))
 
 	dbTblInfo := &DbTableInfo{
-		SourceDbName:  "db1",
-		SourceTblName: "t1",
+		SourceTblIdStr: "1_0",
 	}
 
 	watermarkUpdater := &WatermarkUpdater{
 		watermarkMap: &sync.Map{},
 	}
-	watermarkUpdater.UpdateMem("db1", "t1", types.BuildTS(0, 1))
+	watermarkUpdater.UpdateMem("1_0", types.BuildTS(0, 1))
 
 	ar := NewCdcActiveRoutine()
 
@@ -793,16 +773,14 @@ func Test_mysqlsink(t *testing.T) {
 	sink := &mysqlSinker{
 		watermarkUpdater: wmark,
 		dbTblInfo: &DbTableInfo{
-			SourceTblId:   0,
-			SourceTblName: "t1",
-			SourceDbName:  "db1",
+			SourceTblId: 0,
 		},
 	}
 	tts := timestamp.Timestamp{
 		PhysicalTime: 100,
 		LogicalTime:  100,
 	}
-	sink.watermarkUpdater.UpdateMem("db1", "t1", types.TimestampToTS(tts))
+	sink.watermarkUpdater.watermarkMap.Store(uint64(0), types.TimestampToTS(tts))
 	sink.Sink(context.Background(), &DecoderOutput{})
 }
 
