@@ -197,6 +197,10 @@ func (mgr *Manager) GetReader(from, to types.TS) *Reader {
 	}
 }
 
+func (mgr *Manager) GetTruncateTS() types.TS {
+	return mgr.truncated
+}
+
 func (mgr *Manager) GCByTS(ctx context.Context, ts types.TS) {
 	if ts.Equal(&mgr.truncated) {
 		return

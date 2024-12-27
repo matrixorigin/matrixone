@@ -26,7 +26,7 @@ import (
 
 type TestRunner interface {
 	EnableCheckpoint()
-	DisableCheckpoint()
+	DisableCheckpoint(ctx context.Context) error
 
 	// TODO: remove the below apis
 	CleanPenddingCheckpoint()
@@ -36,15 +36,19 @@ type TestRunner interface {
 	MaxLSNInRange(end types.TS) uint64
 	GetICKPIntentOnlyForTest() *CheckpointEntry
 
-	WaitRunningGCKPDoneForTest(ctx context.Context) error
+	WaitRunningCKPDoneForTest(ctx context.Context, gckp bool) error
 
 	GCNeeded() bool
 }
 
 // only for UT
-func (r *runner) WaitRunningGCKPDoneForTest(ctx context.Context) (err error) {
+func (r *runner) WaitRunningCKPDoneForTest(
+	ctx context.Context,
+	gckp bool,
+) (err error) {
+
 	for {
-		job, err := r.getRunningGCKPJob()
+		job, err := r.getRunningCKPJob(gckp)
 		if err != nil || job == nil {
 			return err
 		}
@@ -62,8 +66,20 @@ func (r *runner) GetICKPIntentOnlyForTest() *CheckpointEntry {
 }
 
 // DisableCheckpoint stops generating checkpoint
-func (r *runner) DisableCheckpoint() {
+func (r *runner) DisableCheckpoint(ctx context.Context) (err error) {
+	// waiting glob checkpoint done
+	if err = r.WaitRunningCKPDoneForTest(ctx, true); err != nil {
+		return
+	}
+
+	// waiting incremental checkpoint done
+	if err = r.WaitRunningCKPDoneForTest(ctx, false); err != nil {
+		return
+	}
+
 	r.disabled.Store(true)
+
+	return nil
 }
 
 func (r *runner) EnableCheckpoint() {
@@ -156,7 +172,7 @@ func (r *runner) ForceGCKP(
 			return
 		}
 
-		if job, err = r.getRunningGCKPJob(); err != nil {
+		if job, err = r.getRunningCKPJob(true); err != nil {
 			return
 		}
 
