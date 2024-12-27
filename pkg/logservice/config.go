@@ -48,7 +48,7 @@ const (
 	defaultMaxExportedSnapshot = 20
 	defaultMaxMessageSize      = 1024 * 1024 * 100
 	// The default value for HAKeeper truncate interval.
-	defaultHAKeeperTruncateInterval = 24 * time.Hour
+	defaultHAKeeperTruncateInterval = 2 * time.Hour
 
 	DefaultListenHost     = "0.0.0.0"
 	DefaultServiceHost    = "127.0.0.1"
