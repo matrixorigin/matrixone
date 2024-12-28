@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -51,9 +52,9 @@ func TestMergeBlock(t *testing.T) {
 	name1 := objectio.BuildObjectName(segmentid, 0)
 	name2 := objectio.BuildObjectName(segmentid, 1)
 	name3 := objectio.BuildObjectName(segmentid, 2)
-	loc1 := objectio.BuildLocation(name1, objectio.Extent{}, 15, 0)
-	loc2 := objectio.BuildLocation(name2, objectio.Extent{}, 15, 0)
-	loc3 := objectio.BuildLocation(name3, objectio.Extent{}, 15, 0)
+	loc1 := blockio.EncodeLocation(name1, objectio.Extent{}, 15, 0)
+	loc2 := blockio.EncodeLocation(name2, objectio.Extent{}, 15, 0)
+	loc3 := blockio.EncodeLocation(name3, objectio.Extent{}, 15, 0)
 
 	sid1 := loc1.Name().SegmentId()
 	blkInfo1 := objectio.BlockInfo{
