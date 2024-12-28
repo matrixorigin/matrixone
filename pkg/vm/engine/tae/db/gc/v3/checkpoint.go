@@ -1157,7 +1157,9 @@ func (c *checkpointCleaner) doGCAgainstGlobalCheckpointLocked(
 		return nil, err
 	}
 
-	if err = c.appendFilesToWAL(scannedWindow.dir + metafile); err != nil {
+	if err = c.appendFilesToWAL(
+		ioutil.MakeFullName(scannedWindow.dir, metafile),
+	); err != nil {
 		logutil.Error(
 			"GC-TRACE-APPEND-FILES-TO-WAL-FAILED",
 			zap.String("task", c.TaskNameLocked()),
@@ -1697,7 +1699,7 @@ func (c *checkpointCleaner) scanCheckpointsLocked(
 		gcWindow = nil
 		return
 	}
-	newFiles = append(newFiles, gcWindow.dir+gcMetaFile)
+	newFiles = append(newFiles, ioutil.MakeFullName(gcWindow.dir, gcMetaFile))
 	c.mutAddMetaFileLocked(snapshotFile.GetName(), snapshotFile)
 	c.mutAddMetaFileLocked(accountFile.GetName(), accountFile)
 	c.mutAddMetaFileLocked(

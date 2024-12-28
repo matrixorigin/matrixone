@@ -21,6 +21,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
+// it is very special for history reason <@_@>!
+// here the dir should be like : ckp/ or gc/ or debug/
 func MakeFullName(dir, name string) string {
 	return dir + name
 }

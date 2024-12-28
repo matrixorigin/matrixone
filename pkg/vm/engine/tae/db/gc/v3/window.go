@@ -288,7 +288,11 @@ func (w *GCWindow) writeMetaForRemainings(
 			return "", err
 		}
 	}
-	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterGC, w.dir+name, w.fs)
+	writer, err := objectio.NewObjectWriterSpecial(
+		objectio.WriterGC,
+		ioutil.MakeFullName(w.dir, name),
+		w.fs,
+	)
 	if err != nil {
 		return "", err
 	}
