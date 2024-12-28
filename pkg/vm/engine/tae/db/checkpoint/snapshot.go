@@ -135,10 +135,11 @@ func ListSnapshotCheckpoint(
 	metaFiles := make([]ioutil.TSRangeFile, 0)
 	compactedFiles := make([]ioutil.TSRangeFile, 0)
 	for name := range files {
-		meta := ioutil.DecodeCKPMetaName(name)
+		meta := ioutil.DecodeTSRangeFile(name)
 		if meta.IsCompactExt() {
 			compactedFiles = append(compactedFiles, meta)
 		} else {
+			// PXU FIXME: we should filter out the unexpected meta files
 			metaFiles = append(metaFiles, meta)
 		}
 	}

@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ckputil"
-	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/sort"
 	"go.uber.org/zap"
 
@@ -40,7 +39,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
@@ -1131,20 +1129,4 @@ func updateCNDataBatch(bat *batch.Batch, commitTS types.TS, mp *mpool.MPool) {
 		return
 	}
 	bat.Vecs = append(bat.Vecs, commitTSVec)
-}
-
-func getGCTS(ctx context.Context, fs fileservice.FileService) (maxGCTS types.TS, err error) {
-	var dir *fileservice.DirEntry
-	for dir, err = range fs.List(ctx, checkpoint.CheckpointDir) {
-		if err != nil {
-			return
-		}
-		meta := ioutil.DecodeCKPMetaName(dir.Name)
-		if meta.IsCompactExt() {
-			if meta.GetEnd().GT(&maxGCTS) {
-				maxGCTS = *meta.GetEnd()
-			}
-		}
-	}
-	return
 }
