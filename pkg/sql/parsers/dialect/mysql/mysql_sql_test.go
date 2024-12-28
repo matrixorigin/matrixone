@@ -2574,11 +2574,11 @@ var (
 		},
 		{
 			input:  "select * from t1 {as of timestamp '2019-01-01 00:00:00'}",
-			output: "select * from t1{as of timestamp = 2019-01-01 00:00:00}",
+			output: "select * from t1{as of timestamp 2019-01-01 00:00:00}",
 		},
 		{
 			input:  "create table t1 as select * from t2 {as of timestamp '2019-01-01 00:00:00'}",
-			output: "create table t1 as select * from t2{as of timestamp = 2019-01-01 00:00:00}",
+			output: "create table t1 as select * from t2{as of timestamp 2019-01-01 00:00:00}",
 		},
 		{
 			input: "restore cluster from snapshot snapshot_01",
@@ -3008,16 +3008,16 @@ var (
 			output: "create pitr pitr2 for account acc01 range 1  d",
 		},
 		{
-			input:  "create pitr `pitr3` range 1 'h'",
-			output: "create pitr pitr3 for self account range 1  h",
+			input:  "create pitr `pitr3` for account range 1 'h'",
+			output: "create pitr pitr3 for account range 1  h",
 		},
 		{
 			input:  "create pitr `pitr4` for database db01 range 1 'h'",
 			output: "create pitr pitr4 for database db01 range 1  h",
 		},
 		{
-			input:  "create pitr `pitr5` for database db01 table t01 range 1 'h'",
-			output: "create pitr pitr5 for database db01 table t01 range 1  h",
+			input:  "create pitr `pitr5` for table db01 t01 range 1 'h'",
+			output: "create pitr pitr5 for table db01 t01 range 1  h",
 		},
 		{
 			input: "show pitr",

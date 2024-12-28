@@ -15,10 +15,19 @@
 package statsinfo
 
 import (
+	"context"
 	"math"
 
 	"golang.org/x/exp/constraints"
 )
+
+// StatsInfoKeyWithContext associates a statistics key with a context.
+// This struct is used to tie a statistics key (Key) with the context (Ctx) during an operation,
+// allowing context-related actions and management while handling statistics information.
+type StatsInfoKeyWithContext struct {
+	Ctx context.Context
+	Key StatsInfoKey
+}
 
 func (sc *StatsInfo) NeedUpdate(currentApproxObjNum int64) bool {
 	if sc.ApproxObjectNumber == 0 || sc.AccurateObjectNumber == 0 {

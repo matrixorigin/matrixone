@@ -516,7 +516,7 @@ func (c *PushClient) subscribeTable(
 		if err != nil {
 			return err
 		}
-		logutil.Debugf("%s send subscribe tbl[db: %d, tbl: %d] request succeed", logTag, tblId.DbId, tblId.TbId)
+		logutil.Infof("%s send subscribe tbl[db: %d, tbl: %d] request succeed", logTag, tblId.DbId, tblId.TbId)
 		return nil
 	}
 }
@@ -1107,6 +1107,10 @@ func (c *PushClient) toSubIfUnsubscribed(ctx context.Context, dbId, tblId uint64
 				return InvalidSubState, err
 			}
 		}
+		v, exist := c.subscribed.m[tblId]
+		if exist && v.SubState == Subscribed {
+			return Subscribed, nil
+		}
 		c.subscribed.m[tblId] = SubTableStatus{
 			DBID:     dbId,
 			SubState: Subscribing,
@@ -1495,7 +1499,6 @@ func (s *logTailSubscriber) init(
 
 	s.sendSubscribe = s.subscribeTable
 	s.sendUnSubscribe = s.unSubscribeTable
-	s.setReady()
 	return nil
 }
 

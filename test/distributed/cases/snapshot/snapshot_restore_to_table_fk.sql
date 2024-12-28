@@ -92,6 +92,7 @@ select db_name, table_name, refer_db_name, refer_table_name from mo_catalog.mo_f
 drop account acc01;
 drop snapshot snapshot_01;
 
+DROP DATABASE IF EXISTS Company;
 CREATE DATABASE Company;
 USE Company;
 
@@ -232,6 +233,7 @@ select * from Benefits;
 select * from TimeOff;
 select * from PerformanceReviews;
 
+DROP DATABASE IF EXISTS Projects;
 CREATE DATABASE Projects;
 USE Projects;
 
@@ -287,6 +289,7 @@ select * from Projects;
 select * from ProjectMembers;
 select * from ProjectManagers;
 
+DROP DATABASE IF EXISTS Payroll;
 CREATE DATABASE Payroll;
 USE Payroll;
 

@@ -95,6 +95,7 @@ db_name    table_name    refer_db_name    refer_table_name
 acc_test02    aff01    acc_test02    pri01
 drop account acc01;
 drop snapshot snapshot_01;
+DROP DATABASE IF EXISTS Company;
 CREATE DATABASE Company;
 USE Company;
 drop table if exists Departments;
@@ -272,6 +273,7 @@ performancereviewid    employeeid    reviewdate    reviewerid
 4    4    2020-04-04    5
 5    5    2020-05-05    6
 6    6    2020-06-06    1
+DROP DATABASE IF EXISTS Projects;
 CREATE DATABASE Projects;
 USE Projects;
 drop table if exists Projects;
@@ -340,6 +342,7 @@ projectid    employeeid
 4    4
 5    5
 6    6
+DROP DATABASE IF EXISTS Payroll;
 CREATE DATABASE Payroll;
 USE Payroll;
 drop table if exists Salaries;

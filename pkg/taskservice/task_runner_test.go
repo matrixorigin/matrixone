@@ -171,7 +171,7 @@ func TestCancelRunningTask(t *testing.T) {
 		r.RegisterExecutor(0, func(ctx context.Context, task task.Task) error {
 			select {
 			case <-ctx.Done():
-			case cancelC <- struct{}{}:
+			case <-cancelC:
 			}
 			return nil
 		})
@@ -182,7 +182,7 @@ func TestCancelRunningTask(t *testing.T) {
 		v = mustGetTestAsyncTask(t, store, 1)[0]
 		v.Epoch++
 		mustUpdateTestAsyncTask(t, store, 1, []task.AsyncTask{v})
-		<-cancelC
+		close(cancelC)
 		for v := mustGetTestAsyncTask(t, store, 1)[0]; v.Status != task.TaskStatus_Completed; v = mustGetTestAsyncTask(t, store, 1)[0] {
 			time.Sleep(10 * time.Millisecond)
 		}

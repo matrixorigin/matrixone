@@ -493,6 +493,7 @@ func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
 					"WORKSPACE-QUOTA-ACQUIRE",
 					zap.Uint64("quota", quota),
 					zap.Uint64("remaining", remaining),
+					zap.String("txn", txn.op.Txn().DebugString()),
 				)
 				txn.writeWorkspaceThreshold += quota
 				txn.extraWriteWorkspaceThreshold += quota
@@ -513,8 +514,10 @@ func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
 			"WORKSPACE-QUOTA-RELEASE",
 			zap.Uint64("quota", txn.extraWriteWorkspaceThreshold),
 			zap.Uint64("remaining", remaining),
+			zap.String("txn", txn.op.Txn().DebugString()),
 		)
 		txn.extraWriteWorkspaceThreshold = 0
+		txn.writeWorkspaceThreshold = txn.engine.config.writeWorkspaceThreshold
 	}
 
 	if dumpAll {
@@ -573,30 +576,30 @@ func (txn *Transaction) dumpInsertBatchLocked(ctx context.Context, offset int, s
 		if tbCount[k] >= txn.engine.config.insertEntryMaxCount {
 			continue
 		}
-		if uint64(sum+tbSize[k]) >= txn.writeWorkspaceThreshold {
+		if uint64(sum+tbSize[k]) >= txn.commitWorkspaceThreshold {
 			break
 		}
 		sum += tbSize[k]
 		skipTable[k] = true
 	}
 
-	lastWritesIndex := offset
+	lastWriteIndex := offset
 	writes := txn.writes
 	mp := make(map[tableKey][]*batch.Batch)
 	for i := offset; i < len(txn.writes); i++ {
 		if skipTable[txn.writes[i].tableId] {
-			writes[lastWritesIndex] = writes[i]
-			lastWritesIndex++
+			writes[lastWriteIndex] = writes[i]
+			lastWriteIndex++
 			continue
 		}
 		if txn.writes[i].isCatalog() {
-			writes[lastWritesIndex] = writes[i]
-			lastWritesIndex++
+			writes[lastWriteIndex] = writes[i]
+			lastWriteIndex++
 			continue
 		}
 		if txn.writes[i].bat == nil || txn.writes[i].bat.RowCount() == 0 {
-			writes[lastWritesIndex] = writes[i]
-			lastWritesIndex++
+			writes[lastWriteIndex] = writes[i]
+			lastWriteIndex++
 			continue
 		}
 
@@ -612,23 +615,23 @@ func (txn *Transaction) dumpInsertBatchLocked(ctx context.Context, offset int, s
 			*size += uint64(bat.Size())
 			*pkCount += bat.RowCount()
 			// skip rowid
-			newBatch := batch.NewWithSize(len(bat.Vecs) - 1)
-			newBatch.SetAttributes(bat.Attrs[1:])
-			newBatch.Vecs = bat.Vecs[1:]
-			newBatch.SetRowCount(bat.Vecs[0].Length())
-			mp[tbKey] = append(mp[tbKey], newBatch)
+			newBat := batch.NewWithSize(len(bat.Vecs) - 1)
+			newBat.SetAttributes(bat.Attrs[1:])
+			newBat.Vecs = bat.Vecs[1:]
+			newBat.SetRowCount(bat.Vecs[0].Length())
+			mp[tbKey] = append(mp[tbKey], newBat)
 			defer bat.Clean(txn.proc.GetMPool())
 
 			keepElement = false
 		}
 
 		if keepElement {
-			writes[lastWritesIndex] = writes[i]
-			lastWritesIndex++
+			writes[lastWriteIndex] = writes[i]
+			lastWriteIndex++
 		}
 	}
 
-	txn.writes = writes[:lastWritesIndex]
+	txn.writes = writes[:lastWriteIndex]
 
 	for tbKey := range mp {
 		// scenario 2 for cn write s3, more info in the comment of S3Writer
@@ -693,18 +696,18 @@ func (txn *Transaction) dumpInsertBatchLocked(ctx context.Context, offset int, s
 
 func (txn *Transaction) dumpDeleteBatchLocked(ctx context.Context, offset int, size *uint64) error {
 	deleteCnt := 0
-	lastWritesIndex := offset
+	lastWriteIndex := offset
 	writes := txn.writes
 	mp := make(map[tableKey][]*batch.Batch)
 	for i := offset; i < len(txn.writes); i++ {
 		if txn.writes[i].isCatalog() {
-			writes[lastWritesIndex] = writes[i]
-			lastWritesIndex++
+			writes[lastWriteIndex] = writes[i]
+			lastWriteIndex++
 			continue
 		}
 		if txn.writes[i].bat == nil || txn.writes[i].bat.RowCount() == 0 {
-			writes[lastWritesIndex] = writes[i]
-			lastWritesIndex++
+			writes[lastWriteIndex] = writes[i]
+			lastWriteIndex++
 			continue
 		}
 
@@ -720,24 +723,24 @@ func (txn *Transaction) dumpDeleteBatchLocked(ctx context.Context, offset int, s
 			deleteCnt += bat.RowCount()
 			*size += uint64(bat.Size())
 
-			newBat := batch.NewWithSize(len(bat.Vecs))
-			newBat.SetAttributes(bat.Attrs)
-			newBat.Vecs = bat.Vecs
-			newBat.SetRowCount(bat.Vecs[0].Length())
+			newBatch := batch.NewWithSize(len(bat.Vecs))
+			newBatch.SetAttributes(bat.Attrs)
+			newBatch.Vecs = bat.Vecs
+			newBatch.SetRowCount(bat.Vecs[0].Length())
 
-			mp[tbKey] = append(mp[tbKey], newBat)
+			mp[tbKey] = append(mp[tbKey], newBatch)
 			defer bat.Clean(txn.proc.GetMPool())
 
 			keepElement = false
 		}
 
 		if keepElement {
-			writes[lastWritesIndex] = writes[i]
-			lastWritesIndex++
+			writes[lastWriteIndex] = writes[i]
+			lastWriteIndex++
 		}
 	}
 
-	txn.writes = writes[:lastWritesIndex]
+	txn.writes = writes[:lastWriteIndex]
 
 	for tbKey := range mp {
 		// scenario 2 for cn write s3, more info in the comment of S3Writer
@@ -1309,6 +1312,22 @@ func (txn *Transaction) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
 		return nil, nil
 	}
 
+	if err := txn.IncrStatementID(ctx, true); err != nil {
+		return nil, err
+	}
+
+	if err := txn.transferTombstonesByCommit(ctx); err != nil {
+		return nil, err
+	}
+
+	if err := txn.mergeTxnWorkspaceLocked(ctx); err != nil {
+		return nil, err
+	}
+	if err := txn.dumpBatchLocked(ctx, -1); err != nil {
+		return nil, err
+	}
+	txn.traceWorkspaceLocked(true)
+
 	if txn.workspaceSize > 10*mpool.MB {
 		logutil.Info(
 			"BIG-TXN",
@@ -1332,23 +1351,6 @@ func (txn *Transaction) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
 			zap.String("txn", txn.op.Txn().DebugString()),
 		)
 	}
-
-	if err := txn.IncrStatementID(ctx, true); err != nil {
-		return nil, err
-	}
-
-	if err := txn.transferTombstonesByCommit(ctx); err != nil {
-		return nil, err
-	}
-
-	if err := txn.mergeTxnWorkspaceLocked(ctx); err != nil {
-		return nil, err
-	}
-	if err := txn.dumpBatchLocked(ctx, -1); err != nil {
-		return nil, err
-	}
-
-	txn.traceWorkspaceLocked(true)
 
 	if !txn.hasS3Op.Load() &&
 		txn.op.TxnOptions().CheckDupEnabled() {

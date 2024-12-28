@@ -1312,6 +1312,7 @@ func TestWorkspaceQuota2(t *testing.T) {
 		ctx,
 		testutil.TestOptions{},
 		t,
+		testutil.WithDisttaeEngineCommitWorkspaceThreshold(1),
 		testutil.WithDisttaeEngineWriteWorkspaceThreshold(1),
 		testutil.WithDisttaeEngineQuota(800),
 	)
