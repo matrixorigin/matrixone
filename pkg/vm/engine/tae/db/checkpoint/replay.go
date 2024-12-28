@@ -266,12 +266,6 @@ func (c *CkpReplayer) ReadCkpFiles() (err error) {
 	}
 
 	for i := 0; i < len(c.ckpEntries); i++ {
-		if err = readfn(i, ReadMetaIdx); err != nil {
-			return
-		}
-	}
-
-	for i := 0; i < len(c.ckpEntries); i++ {
 		if err = readfn(i, PrefetchData); err != nil {
 			return
 		}
