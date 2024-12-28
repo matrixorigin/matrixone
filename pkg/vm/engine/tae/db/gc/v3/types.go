@@ -29,11 +29,7 @@ import (
 )
 
 const (
-	PrefixGCMeta   = "gc"
-	PrefixSnapMeta = "snap"
-	PrefixAcctMeta = "acct"
-	GCMetaDir      = "gc/"
-	CKPMetaDir     = "ckp/"
+	GCMetaDir = "gc/"
 )
 
 type BatchType int8
