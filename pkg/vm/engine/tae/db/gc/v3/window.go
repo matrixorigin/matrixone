@@ -53,9 +53,9 @@ type ObjectEntry struct {
 
 type WindowOption func(*GCWindow)
 
-func WithMetaPrefix(prefix string) WindowOption {
+func WithWindowDir(dir string) WindowOption {
 	return func(table *GCWindow) {
-		table.metaDir = prefix
+		table.dir = dir
 	}
 }
 
@@ -71,16 +71,16 @@ func NewGCWindow(
 	for _, opt := range opts {
 		opt(&window)
 	}
-	if window.metaDir == "" {
-		window.metaDir = GCMetaDir
+	if window.dir == "" {
+		window.dir = ioutil.GetGCDir()
 	}
 	return &window
 }
 
 type GCWindow struct {
-	metaDir string
-	mp      *mpool.MPool
-	fs      fileservice.FileService
+	dir string
+	mp  *mpool.MPool
+	fs  fileservice.FileService
 
 	files []objectio.ObjectStats
 
@@ -288,7 +288,7 @@ func (w *GCWindow) writeMetaForRemainings(
 			return "", err
 		}
 	}
-	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterGC, w.metaDir+name, w.fs)
+	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterGC, w.dir+name, w.fs)
 	if err != nil {
 		return "", err
 	}
