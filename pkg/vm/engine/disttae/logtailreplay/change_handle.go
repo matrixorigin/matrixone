@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ckputil"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/sort"
 	"go.uber.org/zap"
@@ -800,7 +801,7 @@ func (p *ChangeHandler) Next(ctx context.Context, mp *mpool.MPool) (data, tombst
 		p.lastPrint = time.Now()
 		if p.dataLength != 0 || p.tombstoneLength != 0 {
 			// use the max compact checkpoint end ts as the gc ts
-			gcTS, err := ioutil.GetMaxTSOfCompactCKP(ctx, p.fs)
+			gcTS, err := ckputil.GetMaxTSOfCompactCKP(ctx, p.fs)
 			if err != nil {
 				logutil.Warnf("ChangesHandle-Slow, get GC TS failed: %v", err)
 			}

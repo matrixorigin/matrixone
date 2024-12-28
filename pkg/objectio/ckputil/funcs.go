@@ -12,13 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package ioutil
+package ckputil
 
 import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 )
 
 // GetMaxTSOfCompactCKP returns the max ts of the compact checkpoint
@@ -27,14 +28,14 @@ func GetMaxTSOfCompactCKP(
 	fs fileservice.FileService,
 ) (ts types.TS, err error) {
 	var dirEntry *fileservice.DirEntry
-	for dirEntry, err = range fs.List(ctx, GetCheckpointDir()) {
+	for dirEntry, err = range fs.List(ctx, ioutil.GetCheckpointDir()) {
 		if err != nil {
 			return
 		}
 		if dirEntry.IsDir {
 			continue
 		}
-		if meta := DecodeCKPMetaName(dirEntry.Name); meta.IsCompactExt() {
+		if meta := ioutil.DecodeCKPMetaName(dirEntry.Name); meta.IsCompactExt() {
 			if ts.LT(meta.GetEnd()) {
 				ts = *meta.GetEnd()
 			}
