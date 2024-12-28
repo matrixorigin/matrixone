@@ -40,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -6755,13 +6756,12 @@ func TestAppendAndGC2(t *testing.T) {
 		}
 		for i := 0; i < vec.Length(); i++ {
 			file := vec.GetStringAt(i)
-			if strings.Contains(file, checkpoint.PrefixMetadata) {
-				fileInfo := strings.Split(file, checkpoint.CheckpointDir+"/")
-				name := fileInfo[1]
-				files[name] = struct{}{}
-				continue
+			_, decodedFile := ioutil.TryDecodeTSRangeFile(file)
+			if decodedFile.IsMetadataFile() {
+				files[decodedFile.GetName()] = struct{}{}
+			} else {
+				files[file] = struct{}{}
 			}
-			files[file] = struct{}{}
 		}
 	}
 	dir := tae.Dir

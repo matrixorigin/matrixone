@@ -37,6 +37,14 @@ func NewTSRangeFile(name, ext string, start, end types.TS) TSRangeFile {
 	}
 }
 
+func (m *TSRangeFile) SetInvalid() {
+	m.ext = InvalidExt
+}
+
+func (m TSRangeFile) IsValid() bool {
+	return m.ext != InvalidExt
+}
+
 func (m TSRangeFile) IsMetadataFile() bool {
 	return IsMetadataName(m.name)
 }
@@ -98,8 +106,11 @@ func (m *TSRangeFile) RangeEqual(start, end *types.TS) bool {
 }
 
 func (m *TSRangeFile) AsString(prefix string) string {
+	if !m.IsValid() {
+		return "[Invalid]"
+	}
 	return fmt.Sprintf(
-		"%s[%s-%s-%s-%s]",
+		"%s[%s|%s|%s|%s]",
 		prefix,
 		m.name,
 		m.ext,

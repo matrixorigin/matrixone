@@ -25,6 +25,58 @@ func MakeFullName(dir, name string) string {
 	return dir + name
 }
 
+func IsFullName(name string) bool {
+	return strings.Contains(name, "/")
+}
+
+func DecodeTSRangeFile(name string) (meta TSRangeFile) {
+	fileName := strings.Split(name, ".")
+	if len(fileName) != 2 {
+		meta.ext = InvalidExt
+		return
+	}
+	info := strings.Split(fileName[0], "_")
+	if len(info) != 3 {
+		meta.ext = InvalidExt
+		return
+	}
+	meta.start = types.StringToTS(info[1])
+	meta.end = types.StringToTS(info[2])
+	meta.name = name
+	meta.ext = fileName[1]
+	return
+}
+
+// name may contain dir name
+// name is expected to be a encoded from TSRangeFile
+func TryDecodeTSRangeFile(name string) (dir string, ret TSRangeFile) {
+	fname := name
+	if IsFullName(name) {
+		if strings.HasPrefix(name, GetCheckpointDir()) {
+			names := strings.Split(name, GetCheckpointDir()+"/")
+			if len(names) != 2 {
+				ret.SetInvalid()
+				return
+			}
+			dir = GetCheckpointDir()
+			fname = names[1]
+		} else if strings.HasPrefix(name, GetGCDir()) {
+			names := strings.Split(name, GetGCDir())
+			if len(names) != 2 {
+				ret.SetInvalid()
+				return
+			}
+			dir = GetGCDir()
+			fname = names[1]
+		} else {
+			ret.SetInvalid()
+			return
+		}
+	}
+	ret = DecodeTSRangeFile(fname)
+	return
+}
+
 // with dirname
 func EncodeCKPMetadataFullName(
 	start, end types.TS,
@@ -53,13 +105,7 @@ func EncodeCKPMetadataName(
 }
 
 func DecodeCKPMetaName(name string) (meta TSRangeFile) {
-	fileName := strings.Split(name, ".")
-	info := strings.Split(fileName[0], "_")
-	meta.start = types.StringToTS(info[1])
-	meta.end = types.StringToTS(info[2])
-	meta.ext = fileName[1]
-	meta.name = name
-	return
+	return DecodeTSRangeFile(name)
 }
 
 func EncodeCompactCKPMetadataFullName(
@@ -92,13 +138,7 @@ func EncodeGCMetadataName(start, end types.TS) string {
 }
 
 func DecodeGCMetadataName(name string) (ret TSRangeFile) {
-	fileName := strings.Split(name, ".")
-	info := strings.Split(fileName[0], "_")
-	ret.start = types.StringToTS(info[1])
-	ret.end = types.StringToTS(info[2])
-	ret.ext = fileName[1]
-	ret.name = name
-	return
+	return DecodeTSRangeFile(name)
 }
 
 func InheritGCMetadataName(name string, start, end *types.TS) string {

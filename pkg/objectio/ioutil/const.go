@@ -31,6 +31,9 @@ const (
 	TmpExt      = "tmp"
 	GCMetaExt   = CheckpointExt
 
+	// invalid ext
+	InvalidExt = "%$%#"
+
 	PrefixMetadata = "meta"
 	SuffixMetadata = ".ckp"
 
