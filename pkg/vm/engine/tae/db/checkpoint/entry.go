@@ -22,7 +22,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
@@ -414,54 +413,4 @@ func (e *CheckpointEntry) GetTableByID(
 	}
 	ins, del, dataObject, tombstoneObject, err = data.GetTableDataFromBats(tid, bats)
 	return
-}
-
-func (e *CheckpointEntry) GCMetadata(fs *objectio.ObjectFS) error {
-	name := blockio.EncodeCheckpointMetadataFileName(CheckpointDir, PrefixMetadata, e.start, e.end)
-	err := fs.Delete(name)
-	logutil.Infof("GC checkpoint metadata %v, err %v", e.String(), err)
-	return err
-}
-
-func (e *CheckpointEntry) GCEntry(fs *objectio.ObjectFS) error {
-	err := fs.Delete(e.cnLocation.Name().String())
-	defer logutil.Infof("GC checkpoint entry %v, err %v", e.String(), err)
-	return err
-}
-
-type MetaFile struct {
-	index int
-	start types.TS
-	end   types.TS
-	name  string
-}
-
-func (m *MetaFile) String() string {
-	return fmt.Sprintf("MetaFile[%d][%s->%s][%s]", m.index, m.start.ToString(), m.end.ToString(), m.name)
-}
-
-func (m *MetaFile) GetIndex() int {
-	return m.index
-}
-
-func (m *MetaFile) GetStart() types.TS {
-	return m.start
-}
-
-func (m *MetaFile) GetEnd() types.TS {
-	return m.end
-}
-
-func (m *MetaFile) GetName() string {
-	return m.name
-}
-
-func NewMetaFile(index int, start, end types.TS, name string) *MetaFile {
-	return &MetaFile{
-		index: index,
-		start: start,
-		end:   end,
-		name:  name,
-	}
-
 }
