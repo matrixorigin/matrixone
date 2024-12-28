@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -890,15 +889,14 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 	}
 
 	for _, file := range deleteFiles {
-		if strings.Contains(file, checkpoint.PrefixMetadata) {
-			info := strings.Split(file, checkpoint.CheckpointDir+"/")
-			name := info[1]
+		_, decodedFile := ioutil.TryDecodeTSRangeFile(file)
+		if decodedFile.IsMetadataFile() {
 			logutil.Info(
 				"GC-TRACE-DELETE-CHECKPOINT-FILE",
 				zap.String("task", c.TaskNameLocked()),
-				zap.String("file", name),
+				zap.String("file", file),
 			)
-			c.checkpointCli.RemoveCheckpointMetaFile(name)
+			c.checkpointCli.RemoveCheckpointMetaFile(decodedFile.GetName())
 		}
 	}
 	return nil

@@ -83,8 +83,7 @@ func (os *observers) OnNewCheckpoint(ts types.TS) {
 }
 
 const (
-	PrefixMetadata = "meta"
-	CheckpointDir  = "ckp/"
+	CheckpointDir = "ckp/"
 )
 
 const (
