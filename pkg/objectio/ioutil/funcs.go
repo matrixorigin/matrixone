@@ -42,3 +42,25 @@ func ListTSRangeFiles(
 	}
 	return
 }
+
+func ListTSRangeFilesInGCDir(
+	ctx context.Context,
+	fs fileservice.FileService,
+) (files []TSRangeFile, err error) {
+	var (
+		entries []fileservice.DirEntry
+	)
+	if entries, err = fileservice.SortedList(
+		fs.List(ctx, GetGCDir()),
+	); err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if !entry.IsDir {
+			if file := DecodeTSRangeFile(entry.Name); file.IsValid() {
+				files = append(files, file)
+			}
+		}
+	}
+	return
+}

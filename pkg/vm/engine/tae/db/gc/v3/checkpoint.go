@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
@@ -306,11 +305,12 @@ func (c *checkpointCleaner) Replay(inputCtx context.Context) (err error) {
 		)
 	}()
 
-	var dirs []fileservice.DirEntry
-	if dirs, err = fileservice.SortedList(c.fs.ListDir(GCMetaDir)); err != nil {
-		return
-	}
-	if len(dirs) == 0 {
+	var (
+		tsFiles []ioutil.TSRangeFile
+	)
+	if tsFiles, err = ioutil.ListTSRangeFilesInGCDir(
+		ctx, c.fs.Service,
+	); err != nil || len(tsFiles) == 0 {
 		return
 	}
 
@@ -323,32 +323,31 @@ func (c *checkpointCleaner) Replay(inputCtx context.Context) (err error) {
 
 	// Get effective minMerged
 	var snapFile, acctFile string
-	for _, dir := range dirs {
-		meta := ioutil.DecodeGCMetadataName(dir.Name)
+	for _, meta := range tsFiles {
 		if meta.IsSnapshotExt() && maxSnapEnd.LT(meta.GetEnd()) {
 			maxSnapEnd = *meta.GetEnd()
-			snapFile = dir.Name
+			snapFile = meta.GetName()
 		}
 		if meta.IsAcctExt() && maxAcctEnd.LT(meta.GetEnd()) {
 			maxAcctEnd = *meta.GetEnd()
-			acctFile = dir.Name
+			acctFile = meta.GetName()
 		}
-		c.mutation.metaFiles[dir.Name] = meta
+		c.mutation.metaFiles[meta.GetName()] = meta
 	}
-	gcMetaDirs := make([]fileservice.DirEntry, 0)
-	for _, dir := range dirs {
-		meta := ioutil.DecodeGCMetadataName(dir.Name)
+
+	gcFiles := make([]string, 0)
+	for _, meta := range tsFiles {
 		if meta.IsSnapshotExt() || meta.IsAcctExt() {
 			continue
 		}
 		if maxConsumedStart.IsEmpty() || maxConsumedStart.LT(meta.GetEnd()) {
 			maxConsumedStart = *meta.GetStart()
 			maxConsumedEnd = *meta.GetEnd()
-			gcMetaDirs = append(gcMetaDirs, dir)
+			gcFiles = append(gcFiles, meta.GetName())
 		}
 	}
 
-	// In the normal process, gcMetaDirs is empty, and it is impossible to have snapFile and acctFile,
+	// In the normal process, gcFiles is empty, and it is impossible to have snapFile and acctFile,
 	// but when upgrading from 1.2 to 1.3, there may be such a situation, so you need to replay table info first
 	if acctFile != "" {
 		if err = c.mutation.snapshotMeta.ReadTableInfo(
@@ -359,23 +358,23 @@ func (c *checkpointCleaner) Replay(inputCtx context.Context) (err error) {
 			return
 		}
 	}
-	if len(gcMetaDirs) == 0 {
+	if len(gcFiles) == 0 {
 		return
 	}
 	logger := logutil.Info
-	for _, dir := range gcMetaDirs {
+	for _, name := range gcFiles {
 		start := time.Now()
 		window := NewGCWindow(c.mp, c.fs.Service)
 		if err = window.ReadTable(
 			ctx,
-			ioutil.MakeGCFullName(dir.Name),
+			ioutil.MakeGCFullName(name),
 			c.fs.Service,
 		); err != nil {
 			logger = logutil.Error
 		}
 		logger(
 			"GC-REPLAY-READ-TABLE",
-			zap.String("name", dir.Name),
+			zap.String("name", name),
 			zap.Duration("duration", time.Since(start)),
 			zap.Error(err),
 		)
