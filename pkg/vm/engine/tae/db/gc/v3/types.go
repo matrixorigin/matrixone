@@ -28,10 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 )
 
-const (
-	GCMetaDir = "gc/"
-)
-
 type BatchType int8
 
 const CurrentVersion = uint16(3)

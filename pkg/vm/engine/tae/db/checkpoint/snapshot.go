@@ -164,7 +164,7 @@ func loadCheckpointMeta(
 		var reader *blockio.BlockReader
 		var bats []*batch.Batch
 		var closeCB func()
-		reader, err = blockio.NewFileReader(sid, fs, meta.GetFullName())
+		reader, err = blockio.NewFileReader(sid, fs, meta.GetCKPFullName())
 		if err != nil {
 			return err
 		}

@@ -85,8 +85,12 @@ func (m *TSRangeFile) GetName() string {
 	return m.name
 }
 
-func (m *TSRangeFile) GetFullName() string {
+func (m *TSRangeFile) GetCKPFullName() string {
 	return MakeFullName(GetCheckpointDir(), m.name)
+}
+
+func (m *TSRangeFile) GetGCFullName() string {
+	return MakeFullName(GetGCDir(), m.name)
 }
 
 func (m *TSRangeFile) GetIdx() int {

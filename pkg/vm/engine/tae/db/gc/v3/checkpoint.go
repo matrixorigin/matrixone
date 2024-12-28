@@ -547,7 +547,7 @@ func (c *checkpointCleaner) deleteStaleSnapshotFilesLocked() error {
 		if maxTS.LT(thisTS) {
 			newMaxFile = thisFile
 			newMaxTS = *thisTS
-			if err = c.fs.Delete(GCMetaDir + maxFile); err != nil {
+			if err = c.fs.Delete(ioutil.MakeGCFullName(maxFile)); err != nil {
 				logutil.Error(
 					"GC-DELETE-SNAPSHOT-FILE-ERROR",
 					zap.String("task", c.TaskNameLocked()),
@@ -570,11 +570,11 @@ func (c *checkpointCleaner) deleteStaleSnapshotFilesLocked() error {
 		}
 
 		// thisTS <= maxTS: this file is expired and should be deleted
-		if err = c.fs.Delete(GCMetaDir + thisFile); err != nil {
+		if err = c.fs.Delete(ioutil.MakeGCFullName(thisFile)); err != nil {
 			logutil.Error(
 				"GC-DELETE-SNAPSHOT-FILE-ERROR",
 				zap.String("task", c.TaskNameLocked()),
-				zap.String("file", GCMetaDir+thisFile),
+				zap.String("file", ioutil.MakeGCFullName(thisFile)),
 				zap.Error(err),
 				zap.String("max-file", maxFile),
 				zap.String("max-ts", maxTS.ToString()),
@@ -654,13 +654,13 @@ func (c *checkpointCleaner) deleteStaleCKPMetaFileLocked() (err error) {
 		defer gcWindow.Close()
 		if err = gcWindow.ReadTable(
 			c.ctx,
-			ioutil.MakeGCFullName(metaFile.GetName()),
+			metaFile.GetGCFullName(),
 			c.fs.Service,
 		); err != nil {
 			logutil.Error(
 				"GC-WINDOW-READ-ERROR",
 				zap.Error(err),
-				zap.String("file", ioutil.MakeGCFullName(metaFile.GetName())),
+				zap.String("file", metaFile.GetGCFullName()),
 				zap.String("task", c.TaskNameLocked()),
 			)
 			return
@@ -668,7 +668,7 @@ func (c *checkpointCleaner) deleteStaleCKPMetaFileLocked() (err error) {
 		for _, file := range gcWindow.files {
 			filesToDelete = append(filesToDelete, file.ObjectName().String())
 		}
-		filesToDelete = append(filesToDelete, ioutil.MakeGCFullName(metaFile.GetName()))
+		filesToDelete = append(filesToDelete, metaFile.GetGCFullName())
 		delete(metaFiles, metaFile.GetName())
 	}
 

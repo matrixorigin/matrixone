@@ -501,9 +501,8 @@ func CopyGCDir(
 	copyFiles := make([]ioutil.TSRangeFile, 0)
 
 	for _, metaFile := range metaFiles {
-		name := metaFile.GetName()
 		window := gc.NewGCWindow(common.DebugAllocator, srcFs)
-		err = window.ReadTable(ctx, gc.GCMetaDir+name, srcFs)
+		err = window.ReadTable(ctx, metaFile.GetGCFullName(), srcFs)
 		if err != nil {
 			return nil, err
 		}

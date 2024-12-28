@@ -575,7 +575,7 @@ func MergeCkpMeta(
 
 	maxFile := metaFiles[len(metaFiles)-1]
 
-	reader, err := blockio.NewFileReader(sid, fs, maxFile.GetFullName())
+	reader, err := blockio.NewFileReader(sid, fs, maxFile.GetCKPFullName())
 	if err != nil {
 		return "", err
 	}
