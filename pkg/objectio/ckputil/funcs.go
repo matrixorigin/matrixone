@@ -61,3 +61,22 @@ func ListCKPMetaNames(
 	}
 	return
 }
+
+// ListCKPMetaFiles returns all checkpoint meta files
+func ListCKPMetaFiles(
+	ctx context.Context,
+	fs fileservice.FileService,
+) (files []ioutil.TSRangeFile, err error) {
+	var tsFiles []ioutil.TSRangeFile
+	if tsFiles, err = ioutil.ListTSRangeFiles(
+		ctx, ioutil.GetCheckpointDir(), fs,
+	); err != nil {
+		return
+	}
+	for _, tsFile := range tsFiles {
+		if tsFile.IsMetadataFile() {
+			files = append(files, tsFile)
+		}
+	}
+	return
+}

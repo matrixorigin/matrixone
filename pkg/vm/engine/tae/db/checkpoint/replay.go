@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ckputil"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -554,25 +555,41 @@ func MergeCkpMeta(
 	cnLocation, tnLocation objectio.Location,
 	startTs, ts types.TS,
 ) (string, error) {
-	dirs, err := fileservice.SortedList(fs.List(ctx, CheckpointDir))
-	if err != nil {
+	// dirs, err := fileservice.SortedList(fs.List(ctx, CheckpointDir))
+	// if err != nil {
+	// 	return "", err
+	// }
+	// if len(dirs) == 0 {
+	// 	return "", nil
+	// }
+	// metaFiles := make([]ioutil.TSRangeFile, 0, len(dirs))
+	// for i, dir := range dirs {
+	// 	meta := ioutil.DecodeCKPMetaName(dir.Name)
+	// 	meta.SetIdx(i)
+	// 	metaFiles = append(metaFiles, meta)
+	// }
+
+	var (
+		metaFiles []ioutil.TSRangeFile
+		err       error
+	)
+	if metaFiles, err = ckputil.ListCKPMetaFiles(
+		ctx, fs,
+	); err != nil {
 		return "", err
 	}
-	if len(dirs) == 0 {
+
+	if len(metaFiles) == 0 {
 		return "", nil
 	}
-	metaFiles := make([]ioutil.TSRangeFile, 0, len(dirs))
-	for i, dir := range dirs {
-		meta := ioutil.DecodeCKPMetaName(dir.Name)
-		meta.SetIdx(i)
-		metaFiles = append(metaFiles, meta)
-	}
+
 	sort.Slice(metaFiles, func(i, j int) bool {
 		return metaFiles[i].GetEnd().LT(metaFiles[j].GetEnd())
 	})
-	targetIdx := metaFiles[len(metaFiles)-1].GetIdx()
-	dir := dirs[targetIdx]
-	reader, err := blockio.NewFileReader(sid, fs, CheckpointDir+dir.Name)
+
+	maxFile := metaFiles[len(metaFiles)-1]
+
+	reader, err := blockio.NewFileReader(sid, fs, maxFile.GetFullName())
 	if err != nil {
 		return "", err
 	}
