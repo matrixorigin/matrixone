@@ -36,7 +36,7 @@ func ReadEntriesFromMeta(
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 ) (entries []*CheckpointEntry, err error) {
-	reader := NewMetafilesReader(sid, dir, []string{name}, verbose, fs)
+	reader := NewCKPMetaReader(sid, dir, []string{name}, verbose, fs)
 	getter := MetadataEntryGetter{reader: reader}
 	var batchEntries []*CheckpointEntry
 	for {
@@ -57,7 +57,7 @@ func ReadEntriesFromMeta(
 }
 
 type MetadataEntryGetter struct {
-	reader *MetafilesReader
+	reader *CKPMetaReader
 }
 
 func (getter *MetadataEntryGetter) NextBatch(

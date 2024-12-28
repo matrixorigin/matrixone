@@ -78,7 +78,7 @@ func (m *TSRangeFile) GetName() string {
 }
 
 func (m *TSRangeFile) GetFullName() string {
-	return GetCheckpointDir() + m.name
+	return MakeFullName(GetCheckpointDir(), m.name)
 }
 
 func (m *TSRangeFile) GetIdx() int {

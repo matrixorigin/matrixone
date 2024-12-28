@@ -43,3 +43,22 @@ func GetMaxTSOfCompactCKP(
 	}
 	return
 }
+
+// ListCKPMetaNames returns the names of all checkpoint meta files
+func ListCKPMetaNames(
+	ctx context.Context,
+	fs fileservice.FileService,
+) (files []string, err error) {
+	var (
+		entries []fileservice.DirEntry
+	)
+	if entries, err = fileservice.SortedList(fs.List(ctx, ioutil.GetCheckpointDir())); err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if !entry.IsDir && ioutil.IsMetadataName(entry.Name) {
+			files = append(files, entry.Name)
+		}
+	}
+	return
+}

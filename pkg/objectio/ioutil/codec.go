@@ -21,6 +21,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
+func MakeFullName(dir, name string) string {
+	return dir + name
+}
+
 // with dirname
 func EncodeCKPMetadataFullName(
 	start, end types.TS,
@@ -74,7 +78,7 @@ func EncodeCompactCKPMetadataFullName(
 /*GC-Related*/
 
 func MakeGCFullName(name string) string {
-	return GetGCDir() + name
+	return MakeFullName(GetGCDir(), name)
 }
 
 func EncodeGCMetadataName(start, end types.TS) string {

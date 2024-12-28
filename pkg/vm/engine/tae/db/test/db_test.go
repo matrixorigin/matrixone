@@ -7910,7 +7910,7 @@ func Test_CheckpointChaos2(t *testing.T) {
 	assert.Equal(t, maxICKP.GetEnd(), maxICKP2.GetEnd())
 	assert.Equal(t, maxGCKP.GetEnd(), maxGCKP2.GetEnd())
 
-	reader, err := checkpoint.MakeMetafilesReader(
+	reader, err := checkpoint.MakeCKPMetaDirReader(
 		ctx,
 		tae.DB.Opts.SID,
 		0,
