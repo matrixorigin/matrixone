@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ckputil"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -88,7 +89,7 @@ func (c *CkpReplayer) readCheckpointEntries() (
 ) {
 	var (
 		now   = time.Now()
-		files []fileservice.DirEntry
+		files []ioutil.TSRangeFile
 	)
 
 	defer func() {
@@ -104,34 +105,36 @@ func (c *CkpReplayer) readCheckpointEntries() (
 		)
 	}()
 
-	if files, err = fileservice.SortedList(c.r.rt.Fs.ListDir(c.dir)); err != nil {
+	if files, err = ckputil.ListTSRangeFiles(
+		c.r.ctx,
+		c.dir,
+		c.r.rt.Fs.Service,
+	); err != nil {
 		return
 	}
+
 	if len(files) == 0 {
 		return
 	}
+
+	sort.Slice(files, func(i, j int) bool {
+		return files[i].GetEnd().LT(files[j].GetEnd())
+	})
 
 	var (
 		metaEntries      = make([]ioutil.TSRangeFile, 0)
 		compactedEntries = make([]ioutil.TSRangeFile, 0)
 	)
+
 	// classify the files into metaEntries and compactedEntries
 	for _, file := range files {
-		c.r.store.AddMetaFile(file.Name)
-		entry := ioutil.DecodeCKPMetaName(file.Name)
-		if entry.IsCompactExt() {
-			compactedEntries = append(compactedEntries, entry)
-		} else if entry.IsMetadataFile() {
-			metaEntries = append(metaEntries, entry)
+		c.r.store.AddMetaFile(file.GetName())
+		if file.IsCompactExt() {
+			compactedEntries = append(compactedEntries, file)
+		} else if file.IsMetadataFile() {
+			metaEntries = append(metaEntries, file)
 		}
 	}
-
-	sort.Slice(metaEntries, func(i, j int) bool {
-		return metaEntries[i].GetEnd().LT(metaEntries[j].GetEnd())
-	})
-	sort.Slice(compactedEntries, func(i, j int) bool {
-		return compactedEntries[i].GetEnd().LT(compactedEntries[j].GetEnd())
-	})
 
 	// replay the compactedEntries
 	if len(compactedEntries) > 0 {

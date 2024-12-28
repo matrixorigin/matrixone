@@ -62,3 +62,26 @@ func ListCKPMetaNames(
 	}
 	return
 }
+
+func ListTSRangeFiles(
+	ctx context.Context,
+	dir string,
+	fs fileservice.FileService,
+) (files []ioutil.TSRangeFile, err error) {
+	var (
+		entries []fileservice.DirEntry
+	)
+	if entries, err = fileservice.SortedList(
+		fs.List(ctx, dir),
+	); err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if !entry.IsDir {
+			if file := ioutil.DecodeTSRangeFile(entry.Name); file.IsValid() {
+				files = append(files, file)
+			}
+		}
+	}
+	return
+}
