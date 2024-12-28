@@ -555,20 +555,6 @@ func MergeCkpMeta(
 	cnLocation, tnLocation objectio.Location,
 	startTs, ts types.TS,
 ) (string, error) {
-	// dirs, err := fileservice.SortedList(fs.List(ctx, CheckpointDir))
-	// if err != nil {
-	// 	return "", err
-	// }
-	// if len(dirs) == 0 {
-	// 	return "", nil
-	// }
-	// metaFiles := make([]ioutil.TSRangeFile, 0, len(dirs))
-	// for i, dir := range dirs {
-	// 	meta := ioutil.DecodeCKPMetaName(dir.Name)
-	// 	meta.SetIdx(i)
-	// 	metaFiles = append(metaFiles, meta)
-	// }
-
 	var (
 		metaFiles []ioutil.TSRangeFile
 		err       error

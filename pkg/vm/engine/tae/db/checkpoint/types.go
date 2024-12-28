@@ -83,10 +83,6 @@ func (os *observers) OnNewCheckpoint(ts types.TS) {
 }
 
 const (
-	CheckpointDir = "ckp/"
-)
-
-const (
 	CheckpointAttr_StartTS       = "start_ts"
 	CheckpointAttr_EndTS         = "end_ts"
 	CheckpointAttr_MetaLocation  = "meta_location"

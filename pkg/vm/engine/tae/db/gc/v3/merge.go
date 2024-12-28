@@ -16,7 +16,6 @@ package gc
 
 import (
 	"context"
-	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -225,8 +224,8 @@ func MergeCheckpoint(
 	if err != nil {
 		return
 	}
-	info := strings.Split(name, checkpoint.CheckpointDir+"/")
-	client.AddCheckpointMetaFile(info[1])
+	_, tsFile := ioutil.TryDecodeTSRangeFile(name)
+	client.AddCheckpointMetaFile(tsFile.GetName())
 	checkpointEntry = checkpoint.NewCheckpointEntry("", ckpEntries[0].GetStart(), *end, checkpoint.ET_Compacted)
 	checkpointEntry.SetLocation(cnLocation, tnLocation)
 	checkpointEntry.SetLSN(ckpEntries[len(ckpEntries)-1].LSN(), ckpEntries[len(ckpEntries)-1].GetTruncateLsn())
