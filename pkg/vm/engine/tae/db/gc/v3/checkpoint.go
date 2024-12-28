@@ -30,7 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
@@ -1659,7 +1658,7 @@ func (c *checkpointCleaner) scanCheckpointsLocked(
 		newFiles = append(newFiles, ioutil.MakeGCFullName(name))
 		snapshotFile = ioutil.NewTSRangeFile(
 			name,
-			blockio.SnapshotExt,
+			ioutil.SnapshotExt,
 			ckps[0].GetStart(),
 			ckps[len(ckps)-1].GetEnd(),
 		)

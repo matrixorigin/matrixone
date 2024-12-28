@@ -35,24 +35,6 @@ func init() {
 	tasks.RegisterJobType(JTFlush, "FlushJob")
 }
 
-const (
-	GCFullExt   = "fgc"
-	SnapshotExt = "snap"
-)
-
-func GetObjectSizeWithBlocks(blocks []objectio.BlockObject) (uint32, error) {
-	objectSize := uint32(0)
-	for _, block := range blocks {
-		meta := block.GetMeta()
-		count := meta.BlockHeader().MetaColumnCount()
-		for i := 0; i < int(count); i++ {
-			col := block.MustGetColumn(uint16(i))
-			objectSize += col.Location().Length()
-		}
-	}
-	return objectSize, nil
-}
-
 // EncodeLocationFromString Generate a metaloc from an info string
 func EncodeLocationFromString(info string) (objectio.Location, error) {
 	location := strings.Split(info, "_")
@@ -94,13 +76,4 @@ func EncodeLocationFromString(info string) (objectio.Location, error) {
 	}
 	name := objectio.BuildObjectName(&uid, uint16(num))
 	return objectio.BuildLocation(name, extent, uint32(rows), uint16(id)), nil
-}
-
-// EncodeLocation Generate a metaloc
-func EncodeLocation(
-	name objectio.ObjectName,
-	extent objectio.Extent,
-	rows uint32,
-	id uint16) objectio.Location {
-	return objectio.BuildLocation(name, extent, rows, id)
 }

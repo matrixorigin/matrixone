@@ -159,3 +159,16 @@ func (bm BlockObject) GenerateBlockInfo(objName ObjectName, sorted bool) BlockIn
 
 	return blkInfo
 }
+
+func SumSizeOfBlocks(blocks []BlockObject) (size, osize uint32) {
+	for _, block := range blocks {
+		meta := block.GetMeta()
+		count := meta.BlockHeader().MetaColumnCount()
+		for i := 0; i < int(count); i++ {
+			col := block.MustGetColumn(uint16(i))
+			size += col.Location().Length()
+			osize += col.Location().OriginSize()
+		}
+	}
+	return
+}
