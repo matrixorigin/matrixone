@@ -15,14 +15,7 @@
 package blockio
 
 import (
-	"fmt"
-	"strconv"
-	"strings"
-
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
-
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 )
 
 const (
@@ -33,47 +26,4 @@ const (
 func init() {
 	tasks.RegisterJobType(JTLoad, "LoadJob")
 	tasks.RegisterJobType(JTFlush, "FlushJob")
-}
-
-// EncodeLocationFromString Generate a metaloc from an info string
-func EncodeLocationFromString(info string) (objectio.Location, error) {
-	location := strings.Split(info, "_")
-	if len(location) < 8 {
-		panic(fmt.Sprintf("wrong location format: %v", info))
-	}
-	num, err := strconv.ParseUint(location[1], 10, 32)
-	if err != nil {
-		return nil, err
-	}
-	alg, err := strconv.ParseUint(location[2], 10, 32)
-	if err != nil {
-		return nil, err
-	}
-	offset, err := strconv.ParseUint(location[3], 10, 32)
-	if err != nil {
-		return nil, err
-	}
-	size, err := strconv.ParseUint(location[4], 10, 32)
-	if err != nil {
-		return nil, err
-	}
-	osize, err := strconv.ParseUint(location[5], 10, 32)
-	if err != nil {
-		return nil, err
-	}
-	rows, err := strconv.ParseUint(location[6], 10, 32)
-	if err != nil {
-		return nil, err
-	}
-	id, err := strconv.ParseUint(location[7], 10, 32)
-	if err != nil {
-		return nil, err
-	}
-	extent := objectio.NewExtent(uint8(alg), uint32(offset), uint32(size), uint32(osize))
-	uid, err := types.ParseUuid(location[0])
-	if err != nil {
-		return nil, err
-	}
-	name := objectio.BuildObjectName(&uid, uint16(num))
-	return objectio.BuildLocation(name, extent, uint32(rows), uint16(id)), nil
 }

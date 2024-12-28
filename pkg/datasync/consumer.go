@@ -30,7 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"go.uber.org/zap"
@@ -512,7 +512,7 @@ func (c *consumer) parseCheckpointLocations(ctx context.Context, locationStr str
 		if err != nil {
 			return nil, err
 		}
-		ckpLocation, err := blockio.EncodeLocationFromString(parts[0])
+		ckpLocation, err := objectio.StringToLocation(parts[0])
 		if err != nil {
 			return nil, err
 		}
@@ -558,7 +558,7 @@ func (c *consumer) copyFiles(ctx context.Context, locations []string, dstDir str
 			func(ctx context.Context) *tasks.JobResult {
 				var locStr string
 				if len(strings.Split(location, "_")) == 8 {
-					loc, err := blockio.EncodeLocationFromString(location)
+					loc, err := objectio.StringToLocation(location)
 					if err != nil {
 						c.log.Error("failed to encode location",
 							zap.String("meta loc", location),

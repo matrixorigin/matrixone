@@ -41,7 +41,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
@@ -307,7 +306,7 @@ func execBackup(
 		if err != nil {
 			return err
 		}
-		key, err := blockio.EncodeLocationFromString(metaLoc)
+		key, err := objectio.StringToLocation(metaLoc)
 		if err != nil {
 			return err
 		}
@@ -374,7 +373,7 @@ func execBackup(
 	taeFileList = append(taeFileList, sizeList...)
 	now = time.Now()
 	if trimInfo != "" {
-		cnLocation, err := blockio.EncodeLocationFromString(cnLoc)
+		cnLocation, err := objectio.StringToLocation(cnLoc)
 		if err != nil {
 			return err
 		}
