@@ -27,17 +27,16 @@ func GetMaxTSOfCompactCKP(
 	ctx context.Context,
 	fs fileservice.FileService,
 ) (ts types.TS, err error) {
-	var dirEntry *fileservice.DirEntry
-	for dirEntry, err = range fs.List(ctx, ioutil.GetCheckpointDir()) {
-		if err != nil {
-			return
-		}
-		if dirEntry.IsDir {
-			continue
-		}
-		if meta := ioutil.DecodeCKPMetaName(dirEntry.Name); meta.IsCompactExt() {
-			if ts.LT(meta.GetEnd()) {
-				ts = *meta.GetEnd()
+	var files []ioutil.TSRangeFile
+	if files, err = ioutil.ListTSRangeFiles(
+		ctx, ioutil.GetCheckpointDir(), fs,
+	); err != nil {
+		return
+	}
+	for _, file := range files {
+		if file.IsCompactExt() {
+			if ts.LT(file.GetEnd()) {
+				ts = *file.GetEnd()
 			}
 		}
 	}
@@ -49,38 +48,15 @@ func ListCKPMetaNames(
 	ctx context.Context,
 	fs fileservice.FileService,
 ) (files []string, err error) {
-	var (
-		entries []fileservice.DirEntry
-	)
-	if entries, err = fileservice.SortedList(fs.List(ctx, ioutil.GetCheckpointDir())); err != nil {
-		return
-	}
-	for _, entry := range entries {
-		if !entry.IsDir && ioutil.IsMetadataName(entry.Name) {
-			files = append(files, entry.Name)
-		}
-	}
-	return
-}
-
-func ListTSRangeFiles(
-	ctx context.Context,
-	dir string,
-	fs fileservice.FileService,
-) (files []ioutil.TSRangeFile, err error) {
-	var (
-		entries []fileservice.DirEntry
-	)
-	if entries, err = fileservice.SortedList(
-		fs.List(ctx, dir),
+	var tsFiles []ioutil.TSRangeFile
+	if tsFiles, err = ioutil.ListTSRangeFiles(
+		ctx, ioutil.GetCheckpointDir(), fs,
 	); err != nil {
 		return
 	}
-	for _, entry := range entries {
-		if !entry.IsDir {
-			if file := ioutil.DecodeTSRangeFile(entry.Name); file.IsValid() {
-				files = append(files, file)
-			}
+	for _, tsFile := range tsFiles {
+		if tsFile.IsMetadataFile() {
+			files = append(files, tsFile.GetName())
 		}
 	}
 	return

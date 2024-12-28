@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/objectio/ckputil"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -105,7 +104,7 @@ func (c *CkpReplayer) readCheckpointEntries() (
 		)
 	}()
 
-	if files, err = ckputil.ListTSRangeFiles(
+	if files, err = ioutil.ListTSRangeFiles(
 		c.r.ctx,
 		c.dir,
 		c.r.rt.Fs.Service,
