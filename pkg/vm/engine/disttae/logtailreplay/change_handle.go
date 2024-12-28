@@ -799,12 +799,23 @@ func (p *ChangeHandler) Next(ctx context.Context, mp *mpool.MPool) (data, tombst
 	if time.Since(p.lastPrint) > p.LogThreshold {
 		p.lastPrint = time.Now()
 		if p.dataLength != 0 || p.tombstoneLength != 0 {
-			gcTS, err := getGCTS(ctx, p.fs)
+			// use the max compact checkpoint end ts as the gc ts
+			gcTS, err := ioutil.GetMaxTSOfCompactCKP(ctx, p.fs)
 			if err != nil {
 				logutil.Warnf("ChangesHandle-Slow, get GC TS failed: %v", err)
 			}
-			logutil.Infof("ChangesHandle-Slow, %d/%d, read %v, copy %v, update %v, total %v, start %v, minTS %v, gcTS %v",
-				p.dataLength, p.tombstoneLength, p.readDuration, p.copyDuration, p.updateDuration, p.totalDuration, p.start.ToString(), p.minTS.ToString(), gcTS.ToString())
+			logutil.Warn(
+				"SLOW-LOG-ChangeHandle",
+				zap.String("start", p.start.ToString()),
+				zap.String("min-ts", p.minTS.ToString()),
+				zap.String("gc-ts", gcTS.ToString()),
+				zap.Int("data-length", p.dataLength),
+				zap.Int("tombstone-length", p.tombstoneLength),
+				zap.Duration("read-duration", p.readDuration),
+				zap.Duration("copy-duration", p.copyDuration),
+				zap.Duration("update-duration", p.updateDuration),
+				zap.Duration("total-duration", p.totalDuration),
+			)
 		}
 	}
 	hint = engine.ChangesHandle_Tail_done
