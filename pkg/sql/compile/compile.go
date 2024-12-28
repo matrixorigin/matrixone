@@ -3386,16 +3386,19 @@ func (c *Compile) compileLock(n *plan.Node, ss []*Scope) ([]*Scope, error) {
 	}
 
 	currentFirstFlag := c.anal.isFirst
-	for i := range ss {
-		var err error
-		var lockOpArg *lockop.LockOp
-		lockOpArg, err = constructLockOp(n, c.e)
-		if err != nil {
-			return nil, err
-		}
-		lockOpArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-		ss[i].doSetRootOperator(lockOpArg)
+	// lock op do not support multi CN
+	if len(ss) > 0 {
+		rs := c.newMergeScope(ss)
+		ss = []*Scope{rs}
 	}
+	var err error
+	var lockOpArg *lockop.LockOp
+	lockOpArg, err = constructLockOp(n, c.e)
+	if err != nil {
+		return nil, err
+	}
+	lockOpArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+	ss[0].doSetRootOperator(lockOpArg)
 	c.anal.isFirst = false
 	return ss, nil
 }
