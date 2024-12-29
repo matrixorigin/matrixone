@@ -67,6 +67,8 @@ func (r *runner) GetICKPIntentOnlyForTest() *CheckpointEntry {
 
 // DisableCheckpoint stops generating checkpoint
 func (r *runner) DisableCheckpoint(ctx context.Context) (err error) {
+	r.disabled.Store(true)
+
 	// waiting glob checkpoint done
 	if err = r.WaitRunningCKPDoneForTest(ctx, true); err != nil {
 		return
@@ -77,9 +79,7 @@ func (r *runner) DisableCheckpoint(ctx context.Context) (err error) {
 		return
 	}
 
-	r.disabled.Store(true)
-
-	return nil
+	return
 }
 
 func (r *runner) EnableCheckpoint() {
