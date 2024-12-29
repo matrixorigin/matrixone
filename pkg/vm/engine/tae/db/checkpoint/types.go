@@ -15,7 +15,6 @@
 package checkpoint
 
 import (
-	"bytes"
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -31,50 +30,6 @@ var ErrExecutorRestarted = moerr.NewInternalErrorNoCtxf("executor restarted")
 var ErrExecutorClosed = moerr.NewInternalErrorNoCtxf("executor closed")
 var ErrBadIntent = moerr.NewInternalErrorNoCtxf("bad intent")
 var ErrStopRunner = moerr.NewInternalErrorNoCtxf("runner stopped")
-
-type ControlFlags uint32
-
-const (
-	ControlFlags_SkipReplay ControlFlags = 1 << iota
-	ControlFlags_SkipWrite
-)
-
-const (
-	ControlFlags_All     = 0
-	ControlFlags_SkipAll = ControlFlags_SkipReplay | ControlFlags_SkipWrite
-)
-
-func (f ControlFlags) SkipReplay() bool {
-	return f&ControlFlags_SkipReplay != 0
-}
-
-func (f ControlFlags) SkipWrite() bool {
-	return f&ControlFlags_SkipWrite != 0
-}
-
-func (f ControlFlags) All() bool {
-	return f&ControlFlags_SkipAll == 0
-}
-
-func (f ControlFlags) SkipAll() bool {
-	return f&ControlFlags_SkipAll == ControlFlags_SkipAll
-}
-
-func (f ControlFlags) String() string {
-	var (
-		w bytes.Buffer
-	)
-	if f.All() {
-		w.WriteString("Flag[R|W]")
-	} else if f.SkipAll() {
-		w.WriteString("Flag[]")
-	} else if !f.SkipReplay() {
-		w.WriteString("Flag[R]")
-	} else if !f.SkipWrite() {
-		w.WriteString("Flag[W]")
-	}
-	return w.String()
-}
 
 type State int8
 

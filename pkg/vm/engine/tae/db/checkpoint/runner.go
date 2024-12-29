@@ -243,13 +243,19 @@ func (r *runner) GetCfg() *CheckpointCfg {
 	return executor.GetCfg()
 }
 
-func (r *runner) StopExecutor(err error) {
-	executor := r.executor.Load()
-	if executor == nil {
-		return
+func (r *runner) StopExecutor(err error) (cfg *CheckpointCfg) {
+	for {
+		running := r.executor.Load()
+		if running == nil {
+			return
+		}
+		running.StopWithCause(err)
+		if stopped := r.executor.CompareAndSwap(running, nil); stopped {
+			cfg = running.GetCfg()
+			break
+		}
 	}
-	executor.StopWithCause(err)
-	r.executor.CompareAndSwap(executor, nil)
+	return
 }
 
 func (r *runner) StartExecutor(cfg *CheckpointCfg) {
@@ -287,15 +293,7 @@ func (r *runner) GetCheckpointMetaFiles() map[string]struct{} {
 	return r.store.GetMetaFiles()
 }
 
-func (r *runner) skipWrite() bool {
-	flags := ControlFlags(r.controlFlags.Load())
-	return flags.SkipWrite()
-}
-
 func (r *runner) TryTriggerExecuteGCKP(ctx *globalCheckpointContext) (err error) {
-	if r.skipWrite() {
-		return
-	}
 	executor := r.executor.Load()
 	if executor == nil {
 		err = ErrExecutorClosed
@@ -305,9 +303,6 @@ func (r *runner) TryTriggerExecuteGCKP(ctx *globalCheckpointContext) (err error)
 }
 
 func (r *runner) TryTriggerExecuteICKP() (err error) {
-	if r.skipWrite() {
-		return
-	}
 	executor := r.executor.Load()
 	if executor == nil {
 		err = ErrExecutorClosed
@@ -323,9 +318,6 @@ func (r *runner) TryTriggerExecuteICKP() (err error) {
 func (r *runner) TryScheduleCheckpoint(
 	ts types.TS, force bool,
 ) (ret Intent, err error) {
-	if r.skipWrite() {
-		return
-	}
 	executor := r.executor.Load()
 	if executor == nil {
 		err = ErrExecutorClosed

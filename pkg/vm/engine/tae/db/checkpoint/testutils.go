@@ -25,8 +25,8 @@ import (
 )
 
 type TestRunner interface {
-	EnableCheckpoint()
-	DisableCheckpoint(ctx context.Context) error
+	EnableCheckpoint(*CheckpointCfg)
+	DisableCheckpoint(ctx context.Context) (*CheckpointCfg, error)
 
 	// TODO: remove the below apis
 	CleanPenddingCheckpoint()
@@ -66,40 +66,13 @@ func (r *runner) GetICKPIntentOnlyForTest() *CheckpointEntry {
 }
 
 // DisableCheckpoint stops generating checkpoint
-func (r *runner) DisableCheckpoint(ctx context.Context) (err error) {
-	for {
-		old := ControlFlags(r.controlFlags.Load())
-		if old.SkipAll() {
-			return
-		}
-		if r.controlFlags.CompareAndSwap(uint32(old), uint32(ControlFlags_SkipAll)) {
-			break
-		}
-	}
-
-	// waiting glob checkpoint done
-	if err = r.WaitRunningCKPDoneForTest(ctx, true); err != nil {
-		return
-	}
-
-	// waiting incremental checkpoint done
-	if err = r.WaitRunningCKPDoneForTest(ctx, false); err != nil {
-		return
-	}
-
+func (r *runner) DisableCheckpoint(ctx context.Context) (cfg *CheckpointCfg, err error) {
+	cfg = r.StopExecutor(ErrCheckpointDisabled)
 	return
 }
 
-func (r *runner) EnableCheckpoint() {
-	for {
-		old := ControlFlags(r.controlFlags.Load())
-		if old.All() {
-			return
-		}
-		if r.controlFlags.CompareAndSwap(uint32(old), uint32(ControlFlags_All)) {
-			return
-		}
-	}
+func (r *runner) EnableCheckpoint(cfg *CheckpointCfg) {
+	r.StartExecutor(cfg)
 }
 
 func (r *runner) CleanPenddingCheckpoint() {
