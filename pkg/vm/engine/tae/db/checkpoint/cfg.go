@@ -1,6 +1,10 @@
 package checkpoint
 
-import "time"
+import (
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
+)
 
 type CheckpointCfg struct {
 	/* incremental checkpoint configurations */
@@ -24,4 +28,32 @@ type CheckpointCfg struct {
 
 	// history duration to keep for a global checkpoint
 	GlobalHistoryDuration time.Duration
+
+	/* for test */
+	BlockMaxRowsHint int
+	SizeHint         int
+}
+
+func (cfg *CheckpointCfg) FillDefaults() {
+	if cfg.IncrementalInterval <= 0 {
+		cfg.IncrementalInterval = time.Minute
+	}
+	if cfg.IncrementalReservedWALCount < 0 {
+		cfg.IncrementalReservedWALCount = 0
+	}
+	if cfg.MinCount <= 0 {
+		cfg.MinCount = 10000
+	}
+	if cfg.GlobalMinCount <= 0 {
+		cfg.GlobalMinCount = 40
+	}
+	if cfg.GlobalHistoryDuration < 0 {
+		cfg.GlobalHistoryDuration = 0
+	}
+	if cfg.BlockMaxRowsHint <= 0 {
+		cfg.BlockMaxRowsHint = logtail.DefaultCheckpointBlockRows
+	}
+	if cfg.SizeHint <= 0 {
+		cfg.SizeHint = logtail.DefaultCheckpointSize
+	}
 }
