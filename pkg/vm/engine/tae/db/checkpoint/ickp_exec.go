@@ -17,9 +17,182 @@ package checkpoint
 import (
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"go.uber.org/zap"
 )
+
+func (executor *checkpointExecutor) TryScheduleCheckpoint(
+	ts types.TS, force bool,
+) (ret Intent, err error) {
+	if !force {
+		return executor.softScheduleCheckpoint(&ts)
+	}
+
+	intent, updated := executor.runner.store.UpdateICKPIntent(&ts, true, true)
+	if intent == nil {
+		return
+	}
+
+	now := time.Now()
+	defer func() {
+		logger := logutil.Info
+		if err != nil {
+			logger = logutil.Error
+		}
+
+		logger(
+			"ICKP-Schedule-Force",
+			zap.String("intent", intent.String()),
+			zap.String("ts", ts.ToString()),
+			zap.Bool("updated", updated),
+			zap.Duration("cost", time.Since(now)),
+			zap.Error(err),
+		)
+	}()
+
+	executor.TriggerExecutingICKP()
+
+	if intent.end.LT(&ts) {
+		err = ErrPendingCheckpoint
+		return
+	}
+
+	return intent, nil
+}
+
+func (executor *checkpointExecutor) softScheduleCheckpoint(
+	ts *types.TS,
+) (ret *CheckpointEntry, err error) {
+	var (
+		updated bool
+	)
+	intent := executor.runner.store.GetICKPIntent()
+
+	check := func() (done bool) {
+		if !executor.runner.source.IsCommitted(intent.GetStart(), intent.GetEnd()) {
+			return false
+		}
+		tree := executor.runner.source.ScanInRangePruned(intent.GetStart(), intent.GetEnd())
+		tree.GetTree().Compact()
+		if !tree.IsEmpty() && intent.TooOld() {
+			logutil.Warn(
+				"CheckPoint-Wait-TooOld",
+				zap.String("entry", intent.String()),
+				zap.Duration("age", intent.Age()),
+			)
+			intent.DeferRetirement()
+		}
+		return tree.IsEmpty()
+	}
+
+	now := time.Now()
+
+	defer func() {
+		logger := logutil.Info
+		if err != nil {
+			logger = logutil.Error
+		} else {
+			ret = intent
+		}
+		intentInfo := "nil"
+		ageStr := ""
+		if intent != nil {
+			intentInfo = intent.String()
+			ageStr = intent.Age().String()
+		}
+		if (err != nil && err != ErrPendingCheckpoint) || (intent != nil && intent.TooOld()) {
+			logger(
+				"ICKP-Schedule-Soft",
+				zap.String("intent", intentInfo),
+				zap.String("ts", ts.ToString()),
+				zap.Duration("cost", time.Since(now)),
+				zap.String("age", ageStr),
+				zap.Error(err),
+			)
+		}
+	}()
+
+	if intent == nil {
+		start := executor.runner.store.GetCheckpointed()
+		if ts.LT(&start) {
+			return
+		}
+		if !executor.runner.incrementalPolicy.Check(start) {
+			return
+		}
+		_, count := executor.runner.source.ScanInRange(start, *ts)
+		if count < executor.runner.options.minCount {
+			return
+		}
+		intent, updated = executor.runner.store.UpdateICKPIntent(ts, true, false)
+		if updated {
+			logutil.Info(
+				"ICKP-Schedule-Soft-Updated",
+				zap.String("intent", intent.String()),
+				zap.String("ts", ts.ToString()),
+			)
+		}
+	}
+
+	// [intent == nil]
+	// if intent is nil, it means no need to do checkpoint
+	if intent == nil {
+		return
+	}
+
+	// [intent != nil]
+
+	var (
+		policyChecked  bool
+		flushedChecked bool
+	)
+	policyChecked = intent.IsPolicyChecked()
+	if !policyChecked {
+		if !executor.runner.incrementalPolicy.Check(intent.GetStart()) {
+			return
+		}
+		_, count := executor.runner.source.ScanInRange(intent.GetStart(), intent.GetEnd())
+		if count < executor.runner.options.minCount {
+			return
+		}
+		policyChecked = true
+	}
+
+	flushedChecked = intent.IsFlushChecked()
+	if !flushedChecked && check() {
+		flushedChecked = true
+	}
+
+	if policyChecked != intent.IsPolicyChecked() || flushedChecked != intent.IsFlushChecked() {
+		endTS := intent.GetEnd()
+		intent, updated = executor.runner.store.UpdateICKPIntent(&endTS, policyChecked, flushedChecked)
+
+		if updated {
+			logutil.Info(
+				"ICKP-Schedule-Soft-Updated",
+				zap.String("intent", intent.String()),
+				zap.String("endTS", ts.ToString()),
+			)
+		}
+	}
+
+	// no need to do checkpoint
+	if intent == nil {
+		return
+	}
+
+	if intent.end.LT(ts) {
+		err = ErrPendingCheckpoint
+		executor.TriggerExecutingICKP()
+		return
+	}
+
+	if intent.AllChecked() {
+		executor.TriggerExecutingICKP()
+	}
+	return
+}
 
 func (e *checkpointExecutor) TriggerExecutingICKP() (err error) {
 	if !e.active.Load() {

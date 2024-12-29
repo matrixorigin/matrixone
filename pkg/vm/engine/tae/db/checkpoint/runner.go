@@ -347,40 +347,12 @@ func (r *runner) TryScheduleCheckpoint(
 	if r.skipWrite() {
 		return
 	}
-	if !force {
-		return r.softScheduleCheckpoint(&ts)
-	}
-
-	intent, updated := r.store.UpdateICKPIntent(&ts, true, true)
-	if intent == nil {
+	executor := r.executor.Load()
+	if executor == nil {
+		err = ErrExecutorClosed
 		return
 	}
-
-	now := time.Now()
-	defer func() {
-		logger := logutil.Info
-		if err != nil {
-			logger = logutil.Error
-		}
-
-		logger(
-			"ICKP-Schedule-Force",
-			zap.String("intent", intent.String()),
-			zap.String("ts", ts.ToString()),
-			zap.Bool("updated", updated),
-			zap.Duration("cost", time.Since(now)),
-			zap.Error(err),
-		)
-	}()
-
-	r.TryTriggerExecuteICKP()
-
-	if intent.end.LT(&ts) {
-		err = ErrPendingCheckpoint
-		return
-	}
-
-	return intent, nil
+	return executor.TryScheduleCheckpoint(ts, force)
 }
 
 func (r *runner) Start() {
@@ -439,137 +411,6 @@ func (r *runner) getRunningCKPJob(gckp bool) (job *checkpointJob, err error) {
 		return
 	}
 	job = executor.RunningCKPJob(gckp)
-	return
-}
-
-func (r *runner) softScheduleCheckpoint(ts *types.TS) (ret *CheckpointEntry, err error) {
-	var (
-		updated bool
-	)
-	intent := r.store.GetICKPIntent()
-
-	check := func() (done bool) {
-		if !r.source.IsCommitted(intent.GetStart(), intent.GetEnd()) {
-			return false
-		}
-		tree := r.source.ScanInRangePruned(intent.GetStart(), intent.GetEnd())
-		tree.GetTree().Compact()
-		if !tree.IsEmpty() && intent.TooOld() {
-			logutil.Warn(
-				"CheckPoint-Wait-TooOld",
-				zap.String("entry", intent.String()),
-				zap.Duration("age", intent.Age()),
-			)
-			intent.DeferRetirement()
-		}
-		return tree.IsEmpty()
-	}
-
-	now := time.Now()
-
-	defer func() {
-		logger := logutil.Info
-		if err != nil {
-			logger = logutil.Error
-		} else {
-			ret = intent
-		}
-		intentInfo := "nil"
-		ageStr := ""
-		if intent != nil {
-			intentInfo = intent.String()
-			ageStr = intent.Age().String()
-		}
-		if (err != nil && err != ErrPendingCheckpoint) || (intent != nil && intent.TooOld()) {
-			logger(
-				"ICKP-Schedule-Soft",
-				zap.String("intent", intentInfo),
-				zap.String("ts", ts.ToString()),
-				zap.Duration("cost", time.Since(now)),
-				zap.String("age", ageStr),
-				zap.Error(err),
-			)
-		}
-	}()
-
-	if intent == nil {
-		start := r.store.GetCheckpointed()
-		if ts.LT(&start) {
-			return
-		}
-		if !r.incrementalPolicy.Check(start) {
-			return
-		}
-		_, count := r.source.ScanInRange(start, *ts)
-		if count < r.options.minCount {
-			return
-		}
-		intent, updated = r.store.UpdateICKPIntent(ts, true, false)
-		if updated {
-			logutil.Info(
-				"ICKP-Schedule-Soft-Updated",
-				zap.String("intent", intent.String()),
-				zap.String("ts", ts.ToString()),
-			)
-		}
-	}
-
-	// [intent == nil]
-	// if intent is nil, it means no need to do checkpoint
-	if intent == nil {
-		return
-	}
-
-	// [intent != nil]
-
-	var (
-		policyChecked  bool
-		flushedChecked bool
-	)
-	policyChecked = intent.IsPolicyChecked()
-	if !policyChecked {
-		if !r.incrementalPolicy.Check(intent.GetStart()) {
-			return
-		}
-		_, count := r.source.ScanInRange(intent.GetStart(), intent.GetEnd())
-		if count < r.options.minCount {
-			return
-		}
-		policyChecked = true
-	}
-
-	flushedChecked = intent.IsFlushChecked()
-	if !flushedChecked && check() {
-		flushedChecked = true
-	}
-
-	if policyChecked != intent.IsPolicyChecked() || flushedChecked != intent.IsFlushChecked() {
-		endTS := intent.GetEnd()
-		intent, updated = r.store.UpdateICKPIntent(&endTS, policyChecked, flushedChecked)
-
-		if updated {
-			logutil.Info(
-				"ICKP-Schedule-Soft-Updated",
-				zap.String("intent", intent.String()),
-				zap.String("endTS", ts.ToString()),
-			)
-		}
-	}
-
-	// no need to do checkpoint
-	if intent == nil {
-		return
-	}
-
-	if intent.end.LT(ts) {
-		err = ErrPendingCheckpoint
-		r.TryTriggerExecuteICKP()
-		return
-	}
-
-	if intent.AllChecked() {
-		r.TryTriggerExecuteICKP()
-	}
 	return
 }
 
