@@ -403,6 +403,7 @@ func (r *runner) Start() {
 func (r *runner) Stop() {
 	r.onceStop.Do(func() {
 		r.replayQueue.Stop()
+		r.StopExecutor(ErrStopRunner)
 		r.incrementalCheckpointQueue.Stop()
 		r.globalCheckpointQueue.Stop()
 		r.gcCheckpointQueue.Stop()

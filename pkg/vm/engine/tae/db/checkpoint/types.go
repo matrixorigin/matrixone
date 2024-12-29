@@ -30,6 +30,7 @@ var ErrCheckpointDisabled = moerr.NewInternalErrorNoCtxf("checkpoint disabled")
 var ErrExecutorRestarted = moerr.NewInternalErrorNoCtxf("executor restarted")
 var ErrExecutorClosed = moerr.NewInternalErrorNoCtxf("executor closed")
 var ErrBadIntent = moerr.NewInternalErrorNoCtxf("bad intent")
+var ErrStopRunner = moerr.NewInternalErrorNoCtxf("runner stopped")
 
 type ControlFlags uint32
 
