@@ -147,6 +147,12 @@ func (e *CheckpointEntry) HasOverlap(from, to types.TS) bool {
 	return true
 }
 
+// true: o.start == e.end + 1
+func (e *CheckpointEntry) IsYoungNeighbor(o *CheckpointEntry) bool {
+	next := e.end.Next()
+	return o.start.Equal(&next)
+}
+
 //===============================================================
 // execution related
 //===============================================================

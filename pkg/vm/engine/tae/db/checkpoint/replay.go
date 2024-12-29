@@ -288,7 +288,7 @@ func (c *CkpReplayer) ReadCkpFiles() (err error) {
 			c.globalCkpIdx = i
 			r.store.AddGCKPReplayEntry(entry)
 		} else if entry.GetType() == ET_Incremental {
-			r.store.TryAddNewIncrementalCheckpointEntry(entry)
+			r.store.TrySafeAddICKPEntry(entry)
 		} else if entry.GetType() == ET_Backup {
 			r.store.TryAddNewBackupCheckpointEntry(entry)
 		}

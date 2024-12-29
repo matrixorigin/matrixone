@@ -415,7 +415,7 @@ func (s *runnerStore) TryAddNewCompactedCheckpointEntry(entry *CheckpointEntry) 
 	return true
 }
 
-func (s *runnerStore) TryAddNewIncrementalCheckpointEntry(entry *CheckpointEntry) (success bool) {
+func (s *runnerStore) TrySafeAddICKPEntry(entry *CheckpointEntry) (success bool) {
 	s.Lock()
 	defer s.Unlock()
 	maxEntry, _ := s.incrementals.Max()
@@ -429,10 +429,7 @@ func (s *runnerStore) TryAddNewIncrementalCheckpointEntry(entry *CheckpointEntry
 
 	// if it is not the right candidate, skip this request
 	// [startTs, endTs] --> [endTs+1, ?]
-	endTS := maxEntry.GetEnd()
-	startTS := entry.GetStart()
-	nextTS := endTS.Next()
-	if !nextTS.Equal(&startTS) {
+	if !maxEntry.IsYoungNeighbor(entry) {
 		success = false
 		return
 	}
@@ -452,7 +449,7 @@ func (s *runnerStore) TryAddNewIncrementalCheckpointEntry(entry *CheckpointEntry
 // Since there is no wal after recovery, the checkpoint lsn before backup must be set to 0.
 func (s *runnerStore) TryAddNewBackupCheckpointEntry(entry *CheckpointEntry) (success bool) {
 	entry.entryType = ET_Incremental
-	success = s.TryAddNewIncrementalCheckpointEntry(entry)
+	success = s.TrySafeAddICKPEntry(entry)
 	if !success {
 		return
 	}
