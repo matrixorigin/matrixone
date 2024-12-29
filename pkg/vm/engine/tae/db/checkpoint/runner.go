@@ -325,13 +325,13 @@ func (r *runner) GetCheckpointMetaFiles() map[string]struct{} {
 	return r.store.GetMetaFiles()
 }
 
-func (r *runner) canWrite() bool {
+func (r *runner) skipWrite() bool {
 	flags := ControlFlags(r.controlFlags.Load())
-	return flags.CanWrite()
+	return flags.SkipWrite()
 }
 
 func (r *runner) TryTriggerExecuteGCKP(ctx *globalCheckpointContext) (err error) {
-	if !r.canWrite() {
+	if r.skipWrite() {
 		return
 	}
 	// if r.disabled.Load() {
@@ -342,7 +342,7 @@ func (r *runner) TryTriggerExecuteGCKP(ctx *globalCheckpointContext) (err error)
 }
 
 func (r *runner) TryTriggerExecuteICKP() (err error) {
-	if !r.canWrite() {
+	if r.skipWrite() {
 		return
 	}
 	// if r.disabled.Load() {
@@ -358,7 +358,7 @@ func (r *runner) TryTriggerExecuteICKP() (err error) {
 func (r *runner) TryScheduleCheckpoint(
 	ts types.TS, force bool,
 ) (ret Intent, err error) {
-	if !r.canWrite() {
+	if r.skipWrite() {
 		return
 	}
 	// if r.disabled.Load() {

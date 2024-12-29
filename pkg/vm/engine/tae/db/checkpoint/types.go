@@ -34,53 +34,44 @@ var ErrBadIntent = moerr.NewInternalErrorNoCtxf("bad intent")
 type ControlFlags uint32
 
 const (
-	ControlFlags_Replay ControlFlags = 1 << iota
-	ControlFlags_Write
+	ControlFlags_SkipReplay ControlFlags = 1 << iota
+	ControlFlags_SkipWrite
 )
 
 const (
-	ControlFlags_All  = ControlFlags_Replay | ControlFlags_Write
-	ControlFlags_None = 0
+	ControlFlags_All     = 0
+	ControlFlags_SkipAll = ControlFlags_SkipReplay | ControlFlags_SkipWrite
 )
 
-func (f ControlFlags) CanReplay() bool {
-	return f&ControlFlags_Replay != 0
+func (f ControlFlags) SkipReplay() bool {
+	return f&ControlFlags_SkipReplay != 0
 }
 
-func (f ControlFlags) CanWrite() bool {
-	return f&ControlFlags_Write != 0
+func (f ControlFlags) SkipWrite() bool {
+	return f&ControlFlags_SkipWrite != 0
 }
 
-func (f ControlFlags) AllEnabled() bool {
-	return f == ControlFlags_All
+func (f ControlFlags) All() bool {
+	return f&ControlFlags_SkipAll == 0
 }
 
-func (f ControlFlags) AllDisabled() bool {
-	// f does not contain ControlFlags_Replay and ControlFlags_Write
-	if f&ControlFlags_All != 0 {
-		return false
-	}
-	return true
+func (f ControlFlags) SkipAll() bool {
+	return f&ControlFlags_SkipAll == ControlFlags_SkipAll
 }
 
 func (f ControlFlags) String() string {
 	var (
-		first = true
-		w     bytes.Buffer
+		w bytes.Buffer
 	)
-
-	w.WriteString("Flag[")
-	if f&ControlFlags_Replay == ControlFlags_Replay {
-		w.WriteByte('R')
+	if f.All() {
+		w.WriteString("Flag[R|W]")
+	} else if f.SkipAll() {
+		w.WriteString("Flag[]")
+	} else if !f.SkipReplay() {
+		w.WriteString("Flag[R]")
+	} else if !f.SkipWrite() {
+		w.WriteString("Flag[W]")
 	}
-	if f&ControlFlags_Write == ControlFlags_Write {
-		if first {
-			first = false
-			w.WriteByte('|')
-		}
-		w.WriteByte('W')
-	}
-	w.WriteByte(']')
 	return w.String()
 }
 

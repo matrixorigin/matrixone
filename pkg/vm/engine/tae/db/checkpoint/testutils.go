@@ -70,10 +70,10 @@ func (r *runner) DisableCheckpoint(ctx context.Context) (err error) {
 	// r.disabled.Store(true)
 	for {
 		old := ControlFlags(r.controlFlags.Load())
-		if old.AllDisabled() {
+		if old.SkipAll() {
 			return
 		}
-		if r.controlFlags.CompareAndSwap(uint32(old), ControlFlags_None) {
+		if r.controlFlags.CompareAndSwap(uint32(old), uint32(ControlFlags_SkipAll)) {
 			break
 		}
 	}
@@ -94,7 +94,7 @@ func (r *runner) DisableCheckpoint(ctx context.Context) (err error) {
 func (r *runner) EnableCheckpoint() {
 	for {
 		old := ControlFlags(r.controlFlags.Load())
-		if old.AllEnabled() {
+		if old.All() {
 			return
 		}
 		if r.controlFlags.CompareAndSwap(uint32(old), uint32(ControlFlags_All)) {
