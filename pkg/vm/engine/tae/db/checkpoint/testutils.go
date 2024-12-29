@@ -67,7 +67,16 @@ func (r *runner) GetICKPIntentOnlyForTest() *CheckpointEntry {
 
 // DisableCheckpoint stops generating checkpoint
 func (r *runner) DisableCheckpoint(ctx context.Context) (err error) {
-	r.disabled.Store(true)
+	// r.disabled.Store(true)
+	for {
+		old := ControlFlags(r.controlFlags.Load())
+		if old.AllDisabled() {
+			return
+		}
+		if r.controlFlags.CompareAndSwap(uint32(old), ControlFlags_None) {
+			break
+		}
+	}
 
 	// waiting glob checkpoint done
 	if err = r.WaitRunningCKPDoneForTest(ctx, true); err != nil {
@@ -83,7 +92,16 @@ func (r *runner) DisableCheckpoint(ctx context.Context) (err error) {
 }
 
 func (r *runner) EnableCheckpoint() {
-	r.disabled.Store(false)
+	for {
+		old := ControlFlags(r.controlFlags.Load())
+		if old.AllEnabled() {
+			return
+		}
+		if r.controlFlags.CompareAndSwap(uint32(old), uint32(ControlFlags_All)) {
+			return
+		}
+	}
+	// r.disabled.Store(false)
 }
 
 func (r *runner) CleanPenddingCheckpoint() {

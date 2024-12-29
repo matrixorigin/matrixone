@@ -15,6 +15,7 @@
 package checkpoint
 
 import (
+	"bytes"
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -29,6 +30,59 @@ var ErrCheckpointDisabled = moerr.NewInternalErrorNoCtxf("checkpoint disabled")
 var ErrExecutorRestarted = moerr.NewInternalErrorNoCtxf("executor restarted")
 var ErrExecutorClosed = moerr.NewInternalErrorNoCtxf("executor closed")
 var ErrBadIntent = moerr.NewInternalErrorNoCtxf("bad intent")
+
+type ControlFlags uint32
+
+const (
+	ControlFlags_Replay ControlFlags = 1 << iota
+	ControlFlags_Write
+)
+
+const (
+	ControlFlags_All  = ControlFlags_Replay | ControlFlags_Write
+	ControlFlags_None = 0
+)
+
+func (f ControlFlags) CanReplay() bool {
+	return f&ControlFlags_Replay != 0
+}
+
+func (f ControlFlags) CanWrite() bool {
+	return f&ControlFlags_Write != 0
+}
+
+func (f ControlFlags) AllEnabled() bool {
+	return f == ControlFlags_All
+}
+
+func (f ControlFlags) AllDisabled() bool {
+	// f does not contain ControlFlags_Replay and ControlFlags_Write
+	if f&ControlFlags_All != 0 {
+		return false
+	}
+	return true
+}
+
+func (f ControlFlags) String() string {
+	var (
+		first = true
+		w     bytes.Buffer
+	)
+
+	w.WriteString("Flag[")
+	if f&ControlFlags_Replay == ControlFlags_Replay {
+		w.WriteByte('R')
+	}
+	if f&ControlFlags_Write == ControlFlags_Write {
+		if first {
+			first = false
+			w.WriteByte('|')
+		}
+		w.WriteByte('W')
+	}
+	w.WriteByte(']')
+	return w.String()
+}
 
 type State int8
 

@@ -213,7 +213,8 @@ type runner struct {
 	rt        *dbutils.Runtime
 	observers *observers
 	wal       wal.Driver
-	disabled  atomic.Bool
+	// disabled     atomic.Bool
+	controlFlags atomic.Uint32
 
 	// memory storage of the checkpoint entries
 	store *runnerStore
@@ -324,18 +325,29 @@ func (r *runner) GetCheckpointMetaFiles() map[string]struct{} {
 	return r.store.GetMetaFiles()
 }
 
+func (r *runner) canWrite() bool {
+	flags := ControlFlags(r.controlFlags.Load())
+	return flags.CanWrite()
+}
+
 func (r *runner) TryTriggerExecuteGCKP(ctx *globalCheckpointContext) (err error) {
-	if r.disabled.Load() {
+	if !r.canWrite() {
 		return
 	}
+	// if r.disabled.Load() {
+	// 	return
+	// }
 	_, err = r.globalCheckpointQueue.Enqueue(ctx)
 	return
 }
 
 func (r *runner) TryTriggerExecuteICKP() (err error) {
-	if r.disabled.Load() {
+	if !r.canWrite() {
 		return
 	}
+	// if r.disabled.Load() {
+	// 	return
+	// }
 	_, err = r.incrementalCheckpointQueue.Enqueue(struct{}{})
 	return
 }
@@ -346,9 +358,12 @@ func (r *runner) TryTriggerExecuteICKP() (err error) {
 func (r *runner) TryScheduleCheckpoint(
 	ts types.TS, force bool,
 ) (ret Intent, err error) {
-	if r.disabled.Load() {
+	if !r.canWrite() {
 		return
 	}
+	// if r.disabled.Load() {
+	// 	return
+	// }
 	if !force {
 		return r.softScheduleCheckpoint(&ts)
 	}
