@@ -239,6 +239,18 @@ func (e *CheckpointEntry) IsIncremental() bool {
 	return e.entryType == ET_Incremental
 }
 
+func (e *CheckpointEntry) IsGlobal() bool {
+	return e.entryType == ET_Global
+}
+
+func (e *CheckpointEntry) IsBackup() bool {
+	return e.entryType == ET_Backup
+}
+
+func (e *CheckpointEntry) IsCompact() bool {
+	return e.entryType == ET_Compacted
+}
+
 func (e *CheckpointEntry) GetType() EntryType {
 	return e.entryType
 }

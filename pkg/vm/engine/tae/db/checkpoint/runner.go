@@ -229,6 +229,7 @@ type runner struct {
 	globalCheckpointQueue      sm.Queue
 	postCheckpointQueue        sm.Queue
 	gcCheckpointQueue          sm.Queue
+	replayQueue                sm.Queue
 
 	onceStart sync.Once
 	onceStop  sync.Once
@@ -263,6 +264,7 @@ func NewRunner(
 	r.globalCheckpointQueue = sm.NewSafeQueue(r.options.checkpointQueueSize, 100, r.onGlobalCheckpointEntries)
 	r.gcCheckpointQueue = sm.NewSafeQueue(100, 100, r.onGCCheckpointEntries)
 	r.postCheckpointQueue = sm.NewSafeQueue(1000, 1, r.onPostCheckpointEntries)
+	r.replayQueue = sm.NewSafeQueue(100, 10, r.onReplayCheckpoint)
 	r.StartExecutor()
 
 	return r
@@ -603,6 +605,51 @@ func (r *runner) onPostCheckpointEntries(entries ...any) {
 		// 2. remove previous checkpoint
 
 		logutil.Debugf("Post %s", entry.String())
+	}
+}
+
+func (r *runner) onReplayCheckpoint(entries ...any) {
+	for _, e := range entries {
+		entry := e.(*CheckpointEntry)
+		if !entry.IsFinished() {
+			logutil.Warn(
+				"Replay-CKP-NoFinished",
+				zap.String("entry", entry.String()),
+			)
+			continue
+		}
+
+		if entry.IsGlobal() {
+			if ok := r.store.AddGCKPReplayEntry(entry); !ok {
+				logutil.Warn(
+					"Replay-GCKP-AddFailed",
+					zap.String("entry", entry.String()),
+				)
+			}
+		} else if entry.IsIncremental() {
+			if ok := r.store.TrySafeAddICKPEntry(entry); !ok {
+				// ickp entry is not the youngest neighbor of
+				// the max ickp entry
+				logutil.Warn(
+					"Replay-ICKP-AddFailed",
+					zap.String("entry", entry.String()),
+				)
+			}
+		} else if entry.IsBackup() {
+			if ok := r.store.TryAddNewBackupCheckpointEntry(entry); !ok {
+				logutil.Warn(
+					"Replay-Backup-AddFailed",
+					zap.String("entry", entry.String()),
+				)
+			}
+		} else if entry.IsCompact() {
+			if ok := r.store.TryAddNewCompactedCheckpointEntry(entry); !ok {
+				logutil.Warn(
+					"Replay-Compact-AddFailed",
+					zap.String("entry", entry.String()),
+				)
+			}
+		}
 	}
 }
 
