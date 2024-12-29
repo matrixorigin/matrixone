@@ -60,7 +60,6 @@ func (antiJoin *AntiJoin) Prepare(proc *process.Process) (err error) {
 			}
 		}
 
-		return antiJoin.PrepareProjection(proc)
 	}
 	return nil
 }

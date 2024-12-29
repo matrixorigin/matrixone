@@ -67,7 +67,6 @@ type SingleJoin struct {
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
 	JoinMapTag         int32
 	vm.OperatorBase
-	colexec.Projection
 }
 
 func (singleJoin *SingleJoin) GetOperatorBase() *vm.OperatorBase {
@@ -109,18 +108,10 @@ func (singleJoin *SingleJoin) Reset(proc *process.Process, pipelineFailed bool, 
 	ctr.cleanHashMap()
 	ctr.state = Build
 
-	if singleJoin.ProjectList != nil {
-		if singleJoin.OpAnalyzer != nil {
-			singleJoin.OpAnalyzer.Alloc(singleJoin.ProjectAllocSize + singleJoin.ctr.maxAllocSize)
-		}
-		singleJoin.ctr.maxAllocSize = 0
-		singleJoin.ResetProjection(proc)
-	} else {
-		if singleJoin.OpAnalyzer != nil {
-			singleJoin.OpAnalyzer.Alloc(singleJoin.ctr.maxAllocSize)
-		}
-		singleJoin.ctr.maxAllocSize = 0
+	if singleJoin.OpAnalyzer != nil {
+		singleJoin.OpAnalyzer.Alloc(singleJoin.ctr.maxAllocSize)
 	}
+	singleJoin.ctr.maxAllocSize = 0
 }
 
 func (singleJoin *SingleJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
@@ -130,16 +121,10 @@ func (singleJoin *SingleJoin) Free(proc *process.Process, pipelineFailed bool, e
 	ctr.cleanExprExecutor()
 	ctr.cleanBatch(proc)
 
-	singleJoin.FreeProjection(proc)
 }
 
 func (singleJoin *SingleJoin) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
-	var err error
-	batch := input
-	if singleJoin.ProjectList != nil {
-		batch, err = singleJoin.EvalProjection(input, proc)
-	}
-	return batch, err
+	return input, nil
 }
 
 func (ctr *container) resetExprExecutor() {

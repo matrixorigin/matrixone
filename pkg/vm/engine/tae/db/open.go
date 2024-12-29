@@ -22,6 +22,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"go.uber.org/zap"
 
@@ -220,7 +221,8 @@ func Open(
 	)
 
 	now := time.Now()
-	ckpReplayer := db.BGCheckpointRunner.Replay(dataFactory)
+	// TODO: checkpoint dir should be configurable
+	ckpReplayer := db.BGCheckpointRunner.BuildReplayer(ioutil.GetCheckpointDir(), dataFactory)
 	defer ckpReplayer.Close()
 	if err = ckpReplayer.ReadCkpFiles(); err != nil {
 		panic(err)

@@ -393,8 +393,10 @@ func Test_RunnerStore1(t *testing.T) {
 	assert.True(t, taken.IsRunning())
 	assert.True(t, taken.end.EQ(&t3))
 
-	committed := store.CommitICKPIntent(taken, true)
-	assert.True(t, committed)
+	prepared := store.PrepareCommitICKPIntent(taken)
+	assert.True(t, prepared)
+
+	store.CommitICKPIntent(taken)
 
 	intent, updated = store.UpdateICKPIntent(&t3, true, true)
 	assert.False(t, updated)
@@ -496,13 +498,14 @@ func Test_RunnerStore3(t *testing.T) {
 
 	rollback()
 	intent6 := store.incrementalIntent.Load()
-	assert.True(t, intent6.IsPendding())
-	assert.True(t, intent6.end.EQ(&t2))
-	assert.True(t, intent6.start.IsEmpty())
-	assert.Equal(t, intent6.bornTime, intent5.bornTime)
-	assert.Equal(t, intent6.refreshCnt, intent5.refreshCnt)
-	assert.Equal(t, intent6.policyChecked, intent5.policyChecked)
-	assert.Equal(t, intent6.flushChecked, intent5.flushChecked)
+	assert.Nil(t, intent6)
+	// assert.True(t, intent6.IsPendding())
+	// assert.True(t, intent6.end.EQ(&t2))
+	// assert.True(t, intent6.start.IsEmpty())
+	// assert.Equal(t, intent6.bornTime, intent5.bornTime)
+	// assert.Equal(t, intent6.refreshCnt, intent5.refreshCnt)
+	// assert.Equal(t, intent6.policyChecked, intent5.policyChecked)
+	// assert.Equal(t, intent6.flushChecked, intent5.flushChecked)
 
 	ii2, updated = store.UpdateICKPIntent(&t3, true, true)
 	assert.True(t, updated)
@@ -527,8 +530,9 @@ func Test_RunnerStore3(t *testing.T) {
 	maxEntry := store.MaxIncrementalCheckpoint()
 	assert.Nil(t, maxEntry)
 
-	committed := store.CommitICKPIntent(taken, true)
-	assert.True(t, committed)
+	prepared := store.PrepareCommitICKPIntent(taken)
+	assert.True(t, prepared)
+	store.CommitICKPIntent(taken)
 	assert.True(t, taken.IsFinished())
 
 	wg.Wait()
@@ -563,21 +567,36 @@ func Test_RunnerStore3(t *testing.T) {
 	assert.True(t, taken2.IsRunning())
 	intent11 := store.incrementalIntent.Load()
 	assert.Equal(t, intent11, taken2)
+	t.Logf("taken2: %s", taken2.String())
+	entries := store.incrementals.Items()
+	for i, entry := range entries {
+		t.Logf("entry[%d]: %s", i, entry.String())
+	}
 
 	// cannot commit a different intent with the incremental intent
 	t5 := types.NextGlobalTsForTest()
 	taken2_1 := InheritCheckpointEntry(taken2, WithEndEntryOption(t5))
-	committed = store.CommitICKPIntent(taken2_1, true)
-	assert.False(t, committed)
+	prepared = store.PrepareCommitICKPIntent(taken2_1)
+	assert.False(t, prepared)
 
-	taken2.start = taken2.start.Next()
-	committed = store.CommitICKPIntent(taken2, true)
-	assert.False(t, committed)
+	prepared = store.PrepareCommitICKPIntent(taken2)
+	assert.True(t, prepared)
 
-	taken2.start = taken2.start.Prev()
-	committed = store.CommitICKPIntent(taken2, true)
-	assert.True(t, committed)
+	store.CommitICKPIntent(taken2)
 	assert.True(t, taken2.IsFinished())
+	entries = store.incrementals.Items()
+	assert.Equal(t, 2, len(entries))
+	for _, entry := range entries {
+		assert.True(t, entry.IsFinished())
+	}
+	assert.Equalf(
+		t,
+		taken2.end.Next(),
+		store.GetCheckpointed(),
+		"%s:%s",
+		taken2.end.ToString(),
+		store.GetCheckpointed().ToString(),
+	)
 
 	timer := time.After(time.Second * 10)
 	select {
@@ -617,10 +636,8 @@ func Test_RunnerStore4(t *testing.T) {
 
 	rollback()
 	intent4 := store.incrementalIntent.Load()
-	assert.True(t, intent4.IsPendding())
-	assert.True(t, intent4.end.EQ(&t2))
-	assert.True(t, intent4.start.IsEmpty())
-	assert.True(t, intent4.AllChecked())
+	assert.Nil(t, intent4)
+	<-taken.Wait()
 }
 
 func Test_RunnerStore5(t *testing.T) {
@@ -642,4 +659,51 @@ func Test_RunnerStore5(t *testing.T) {
 	assert.True(t, intent2.AllChecked())
 	assert.True(t, intent2.bornTime.After(intent.bornTime))
 	t.Log(intent2.String())
+
+	// sid string, start, end types.TS, typ EntryType, opts ...EntryOption,
+	intent3 := NewCheckpointEntry(
+		"", types.TS{}, types.NextGlobalTsForTest(), ET_Global,
+	)
+	assert.False(t, store.AddGCKPIntent(intent2))
+	assert.False(t, store.AddGCKPIntent(nil))
+	intent3.SetState(ST_Finished)
+	assert.False(t, store.AddGCKPIntent(intent3))
+	intent3.state = ST_Pending
+	assert.True(t, store.AddGCKPIntent(intent3))
+	assert.False(t, store.AddGCKPIntent(intent3))
+	intent3.state = ST_Finished
+	assert.False(t, store.RemoveGCKPIntent())
+	intent3.state = ST_Pending
+	assert.True(t, store.RemoveGCKPIntent())
+
+}
+
+func Test_Executor1(t *testing.T) {
+	executor := newCheckpointExecutor(nil)
+	assert.True(t, executor.active.Load())
+
+	done := make(chan struct{})
+	running := make(chan struct{})
+	mockRunICKP := func(ctx context.Context, _ *runner) (err error) {
+		close(running)
+		<-ctx.Done()
+		close(done)
+		err = context.Cause(ctx)
+		return
+	}
+	executor.runICKPFunc = mockRunICKP
+	go func() {
+		err := executor.RunICKP()
+		assert.Equal(t, err, ErrPendingCheckpoint)
+	}()
+	// wait running
+	<-running
+	// stop executor
+	executor.StopWithCause(ErrPendingCheckpoint)
+	<-done
+
+	assert.False(t, executor.active.Load())
+	err := executor.RunICKP()
+	assert.Equal(t, err, ErrCheckpointDisabled)
+	executor.StopWithCause(nil)
 }

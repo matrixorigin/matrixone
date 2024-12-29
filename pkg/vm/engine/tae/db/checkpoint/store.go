@@ -53,6 +53,7 @@ func newRunnerStore(
 			NoLocks: true,
 		},
 	)
+	s.metaFiles = make(map[string]struct{})
 	return s
 }
 
@@ -68,7 +69,7 @@ type runnerStore struct {
 	incrementals *btree.BTreeG[*CheckpointEntry]
 	globals      *btree.BTreeG[*CheckpointEntry]
 	compacted    atomic.Pointer[CheckpointEntry]
-	// metaFiles    map[string]struct{}
+	metaFiles    map[string]struct{}
 
 	gcIntent    types.TS
 	gcCount     int
@@ -86,6 +87,22 @@ func (s *runnerStore) GetCheckpointed() types.TS {
 	return s.GetCheckpointedLocked()
 }
 
+func (s *runnerStore) MaxIncrementalCheckpoint() *CheckpointEntry {
+	s.RLock()
+	maxEntry, _ := s.incrementals.Max()
+	s.RUnlock()
+	if maxEntry == nil || maxEntry.IsFinished() {
+		return maxEntry
+	}
+	entries := s.GetAllIncrementalCheckpoints()
+	for i := len(entries) - 1; i >= 0; i-- {
+		if entries[i].IsFinished() {
+			return entries[i]
+		}
+	}
+	return nil
+}
+
 func (s *runnerStore) GetCheckpointedLocked() types.TS {
 	var ret types.TS
 	maxICKP, _ := s.incrementals.Max()
@@ -98,7 +115,17 @@ func (s *runnerStore) GetCheckpointedLocked() types.TS {
 			ret = maxGCKP.end
 		}
 	} else {
-		ret = maxICKP.end.Next()
+		if maxICKP.IsFinished() {
+			ret = maxICKP.end.Next()
+		} else {
+			entries := s.incrementals.Items()
+			for i := len(entries) - 1; i >= 0; i-- {
+				if entries[i].IsFinished() {
+					ret = entries[i].end.Next()
+					break
+				}
+			}
+		}
 	}
 	return ret
 }
@@ -117,6 +144,10 @@ func (s *runnerStore) UpdateICKPIntent(
 		if old != nil && !old.AllChecked() && policyChecked && flushChecked {
 			checkpointed := s.GetCheckpointed()
 			// no need to do checkpoint
+			if checkpointed.GT(&old.end) {
+				s.incrementalIntent.CompareAndSwap(old, nil)
+				continue
+			}
 			if checkpointed.GE(ts) {
 				intent = nil
 				return
@@ -232,12 +263,9 @@ func (s *runnerStore) TakeICKPIntent() (taken *CheckpointEntry, rollback func())
 		)
 		if s.incrementalIntent.CompareAndSwap(old, taken) {
 			rollback = func() {
-				// rollback the intent
-				putBack := InheritCheckpointEntry(
-					taken,
-					WithStateEntryOption(ST_Pending),
-				)
-				s.incrementalIntent.Store(putBack)
+				// clear the intent and notify the intent is done
+				s.incrementalIntent.Store(nil)
+				taken.Done()
 			}
 			break
 		}
@@ -247,72 +275,81 @@ func (s *runnerStore) TakeICKPIntent() (taken *CheckpointEntry, rollback func())
 	return
 }
 
-// intent must be in Running state
-func (s *runnerStore) CommitICKPIntent(intent *CheckpointEntry, done bool) (committed bool) {
-	defer func() {
-		if done && committed {
-			intent.Done()
-		}
-	}()
-	old := s.incrementalIntent.Load()
+func (s *runnerStore) PrepareCommitICKPIntent(
+	intent *CheckpointEntry,
+) (ok bool) {
+	expect := s.incrementalIntent.Load()
 	// should not happen
-	if old != intent {
+	if intent != expect || !intent.IsRunning() {
 		logutil.Error(
-			"CommitICKPIntent-Error",
-			zap.String("intent", intent.String()),
-			zap.String("expected", old.String()),
+			"ICKP-PrepareCommit",
+			zap.Any("expected", expect),
+			zap.Any("actual", intent),
 		)
 		return
 	}
 	s.Lock()
 	defer s.Unlock()
-	maxICKP, _ := s.incrementals.Max()
-	maxGCKP, _ := s.globals.Max()
-	var (
-		maxICKPEndNext types.TS
-		maxGCKPEnd     types.TS
-	)
-	if maxICKP != nil {
-		maxICKPEndNext = maxICKP.end.Next()
+	s.incrementals.Set(intent)
+	ok = true
+	return
+}
+
+func (s *runnerStore) RollbackICKPIntent(
+	intent *CheckpointEntry,
+) {
+	expect := s.incrementalIntent.Load()
+	// should not happen
+	if intent != expect || !intent.IsRunning() {
+		logutil.Fatal(
+			"ICKP-Rollback",
+			zap.Any("expected", expect),
+			zap.Any("actual", intent),
+		)
 	}
-	if maxGCKP != nil {
-		maxGCKPEnd = maxGCKP.end
-	}
-	if maxICKP == nil && maxGCKP == nil {
-		if !intent.start.IsEmpty() {
-			logutil.Error(
-				"CommitICKPIntent-Error",
-				zap.String("intent", intent.String()),
-				zap.String("max-i", "nil"),
-				zap.String("max-g", "nil"),
-			)
-			// PXU TODO: err = xxx
-			return
-		}
-	} else if (maxICKP == nil && !maxGCKPEnd.EQ(&intent.start)) ||
-		(maxICKP != nil && !maxICKPEndNext.EQ(&intent.start)) {
-		maxi := "nil"
-		maxg := "nil"
-		if maxICKP != nil {
-			maxi = maxICKP.String()
-		}
-		if maxGCKP != nil {
-			maxg = maxGCKP.String()
-		}
-		logutil.Error(
+	s.Lock()
+	defer s.Unlock()
+	s.incrementals.Delete(intent)
+}
+
+// intent must be in Running state
+func (s *runnerStore) CommitICKPIntent(
+	intent *CheckpointEntry,
+) {
+	defer intent.Done()
+	old := s.incrementalIntent.Load()
+	// should not happen
+	if old != intent {
+		logutil.Fatal(
 			"CommitICKPIntent-Error",
 			zap.String("intent", intent.String()),
-			zap.String("max-i", maxi),
-			zap.String("max-g", maxg),
+			zap.String("expected", old.String()),
 		)
-		// PXU TODO: err = xxx
-		return
 	}
-	s.incrementalIntent.Store(nil)
 	intent.SetState(ST_Finished)
-	s.incrementals.Set(intent)
-	committed = true
-	return
+	s.incrementalIntent.Store(nil)
+}
+
+func (s *runnerStore) AddMetaFile(name string) {
+	s.Lock()
+	defer s.Unlock()
+	s.metaFiles[name] = struct{}{}
+}
+
+func (s *runnerStore) RemoveMetaFile(name string) {
+	s.Lock()
+	defer s.Unlock()
+	delete(s.metaFiles, name)
+}
+
+func (s *runnerStore) GetMetaFiles() map[string]struct{} {
+	s.RLock()
+	defer s.RUnlock()
+	files := make(map[string]struct{})
+	for k, v := range s.metaFiles {
+		files[k] = v
+	}
+	return files
 }
 
 func (s *runnerStore) ExportStatsLocked() []zap.Field {
@@ -430,7 +467,37 @@ func (s *runnerStore) TryAddNewBackupCheckpointEntry(entry *CheckpointEntry) (su
 	return
 }
 
-func (s *runnerStore) TryAddNewGlobalCheckpointEntry(
+func (s *runnerStore) AddGCKPIntent(
+	intent *CheckpointEntry,
+) (success bool) {
+	if intent == nil || intent.entryType != ET_Global || intent.IsFinished() {
+		return false
+	}
+
+	s.Lock()
+	defer s.Unlock()
+
+	maxEntry, _ := s.globals.Max()
+	if maxEntry != nil && (maxEntry.end.GE(&intent.end) || !maxEntry.IsFinished()) {
+		return false
+	}
+
+	s.globals.Set(intent)
+	return true
+}
+
+func (s *runnerStore) RemoveGCKPIntent() (ok bool) {
+	s.Lock()
+	defer s.Unlock()
+	intent, _ := s.globals.Max()
+	if intent == nil || intent.IsFinished() {
+		return false
+	}
+	s.globals.Delete(intent)
+	return true
+}
+
+func (s *runnerStore) AddGCKPReplayEntry(
 	entry *CheckpointEntry,
 ) (success bool) {
 	s.Lock()
@@ -639,18 +706,23 @@ func (s *runnerStore) ICKPSeekLT(ts types.TS, cnt int) []*CheckpointEntry {
 	return incrementals
 }
 
+// return the max finished global checkpoint
 func (s *runnerStore) MaxGlobalCheckpoint() *CheckpointEntry {
 	s.RLock()
-	defer s.RUnlock()
 	global, _ := s.globals.Max()
-	return global
-}
-
-func (s *runnerStore) MaxIncrementalCheckpoint() *CheckpointEntry {
-	s.RLock()
-	defer s.RUnlock()
-	entry, _ := s.incrementals.Max()
-	return entry
+	s.RUnlock()
+	if global == nil || global.IsFinished() {
+		return global
+	}
+	s.Lock()
+	items := s.globals.Items()
+	s.Unlock()
+	for i := len(items) - 1; i >= 0; i-- {
+		if items[i].IsFinished() {
+			return items[i]
+		}
+	}
+	return nil
 }
 
 func (s *runnerStore) IsStale(ts *types.TS) bool {

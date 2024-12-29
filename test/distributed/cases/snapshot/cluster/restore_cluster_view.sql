@@ -3,6 +3,7 @@ create account acc01 admin_name = 'test_account' identified by '111';
 drop account if exists acc02;
 create account acc02 admin_name = 'test_account' identified by '111';
 
+DROP DATABASE IF EXISTS School;
 CREATE DATABASE School;
 USE School;
 
@@ -68,6 +69,7 @@ select * from HighGradeStudents;
 select * from CourseAverageGrades;
 
 -- database University
+DROP DATABASE IF EXISTS University;
 CREATE DATABASE University;
 USE University;
 
@@ -179,6 +181,7 @@ select * from ProfessorCourses;
 select * from DepartmentAverageGrade;
 select * from TopStudents;
 
+DROP DATABASE IF EXISTS EducationSystem;
 CREATE DATABASE EducationSystem;
 USE EducationSystem;
 
@@ -217,6 +220,7 @@ select * from ComprehensiveEducatorInfo;
 select * from StudentOverallPerformance;
 
 -- @session:id=1&user=acc01:test_account&password=111
+DROP DATABASE IF EXISTS School;
 CREATE DATABASE School;
 USE School;
 
@@ -282,6 +286,7 @@ select * from HighGradeStudents;
 select * from CourseAverageGrades;
 
 -- database University
+DROP DATABASE IF EXISTS University;
 CREATE DATABASE University;
 USE University;
 
@@ -393,6 +398,7 @@ select * from ProfessorCourses;
 select * from DepartmentAverageGrade;
 select * from TopStudents;
 
+DROP DATABASE IF EXISTS EducationSystem;
 CREATE DATABASE EducationSystem;
 USE EducationSystem;
 
@@ -432,6 +438,7 @@ select * from StudentOverallPerformance;
 -- @session
 
 -- @session:id=2&user=acc02:test_account&password=111
+DROP DATABASE IF EXISTS School;
 CREATE DATABASE School;
 USE School;
 
@@ -497,6 +504,7 @@ select * from HighGradeStudents;
 select * from CourseAverageGrades;
 
 -- database University
+DROP DATABASE IF EXISTS University;
 CREATE DATABASE University;
 USE University;
 
@@ -608,6 +616,7 @@ select * from ProfessorCourses;
 select * from DepartmentAverageGrade;
 select * from TopStudents;
 
+DROP DATABASE IF EXISTS EducationSystem;
 CREATE DATABASE EducationSystem;
 USE EducationSystem;
 

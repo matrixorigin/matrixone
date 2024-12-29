@@ -44,9 +44,6 @@ func (product *Product) Prepare(proc *process.Process) error {
 		product.OpAnalyzer.Reset()
 	}
 
-	if product.ProjectList != nil {
-		return product.PrepareProjection(proc)
-	}
 	return nil
 }
 

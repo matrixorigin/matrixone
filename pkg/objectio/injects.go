@@ -32,6 +32,8 @@ const (
 	FJ_TransferSlow  = "fj/transfer/slow"
 	FJ_FlushTimeout  = "fj/flush/timeout"
 
+	FJ_CheckpointSave = "fj/checkpoint/save"
+
 	FJ_TraceRanges         = "fj/trace/ranges"
 	FJ_TracePartitionState = "fj/trace/partitionstate"
 	FJ_PrefetchThreshold   = "fj/prefetch/threshold"
@@ -258,6 +260,29 @@ func InjectLog1(
 		fault.RemoveFaultPoint(context.Background(), FJ_LogWorkspace)
 		fault.RemoveFaultPoint(context.Background(), FJ_TracePartitionState)
 		fault.RemoveFaultPoint(context.Background(), FJ_LogReader)
+	}
+	return
+}
+
+func CheckpointSaveInjected() (string, bool) {
+	_, sarg, injected := fault.TriggerFault(FJ_CheckpointSave)
+	return sarg, injected
+}
+
+func InjectCheckpointSave(msg string) (rmFault func() (bool, error), err error) {
+	if err = fault.AddFaultPoint(
+		context.Background(),
+		FJ_CheckpointSave,
+		":::",
+		"echo",
+		0,
+		msg,
+		false,
+	); err != nil {
+		return
+	}
+	rmFault = func() (ok bool, err error) {
+		return fault.RemoveFaultPoint(context.Background(), FJ_CheckpointSave)
 	}
 	return
 }

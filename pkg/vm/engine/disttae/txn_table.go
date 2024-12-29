@@ -39,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
@@ -640,7 +641,7 @@ func (tbl *txnTable) doRanges(ctx context.Context, rangesParam engine.RangesPara
 				zap.String("exprs", plan2.FormatExprs(rangesParam.BlockFilters)),
 				zap.Uint64("tbl-id", tbl.tableId),
 				zap.String("txn", tbl.db.op.Txn().DebugString()),
-				zap.String("blocks", blocks.String()),
+				zap.Int("blocks", blocks.Len()),
 				zap.String("ps", fmt.Sprintf("%p", part)),
 				zap.Duration("cost", cost),
 				zap.Error(err),
@@ -2369,7 +2370,7 @@ func writeTransferMapsToS3(ctx context.Context, taskHost *cnMergeTask) (err erro
 			objRowCnt++
 
 			if objRowCnt*len(columns)*int(unsafe.Sizeof(int32(0))) > 200*mpool.MB {
-				filename := blockio.EncodeTmpFileName("tmp", "merge_"+uuid.NewString(), time.Now().UTC().Unix())
+				filename := ioutil.EncodeTmpFileName("tmp", "merge_"+uuid.NewString(), time.Now().UTC().Unix())
 				writer, err := objectio.NewObjectWriterSpecial(objectio.WriterTmp, filename, taskHost.fs)
 				if err != nil {
 					return err
@@ -2393,7 +2394,7 @@ func writeTransferMapsToS3(ctx context.Context, taskHost *cnMergeTask) (err erro
 
 	// write remaining data
 	if buffer.RowCount() != 0 {
-		filename := blockio.EncodeTmpFileName("tmp", "merge_"+uuid.NewString(), time.Now().UTC().Unix())
+		filename := ioutil.EncodeTmpFileName("tmp", "merge_"+uuid.NewString(), time.Now().UTC().Unix())
 		writer, err := objectio.NewObjectWriterSpecial(objectio.WriterTmp, filename, taskHost.fs)
 		if err != nil {
 			return err

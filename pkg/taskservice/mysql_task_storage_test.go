@@ -145,6 +145,18 @@ var (
 	}
 )
 
+func TestPingContext(t *testing.T) {
+	storage, mock := newMockStorage(t)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	DebugCtlTaskFramework(true)
+	assert.NoError(t, storage.PingContext(ctx))
+	DebugCtlTaskFramework(false)
+	assert.NoError(t, storage.PingContext(ctx))
+	mock.ExpectClose()
+	require.NoError(t, storage.Close())
+}
+
 func TestAsyncTaskInSqlMock(t *testing.T) {
 	storage, mock := newMockStorage(t)
 	mock.ExpectExec(insertAsyncTask+"(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").

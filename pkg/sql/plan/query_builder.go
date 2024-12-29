@@ -1845,6 +1845,31 @@ func (builder *QueryBuilder) rewriteStarApproxCount(nodeID int32) {
 	}
 }
 
+func (builder *QueryBuilder) removeUnnecessaryProjections(nodeID int32) int32 {
+	node := builder.qry.Nodes[nodeID]
+	if len(node.Children) == 0 {
+		return nodeID
+	}
+
+	for i, childID := range node.Children {
+		node.Children[i] = builder.removeUnnecessaryProjections(childID)
+	}
+
+	if node.NodeType != plan.Node_PROJECT {
+		return nodeID
+	}
+	childNodeID := node.Children[0]
+	childNode := builder.qry.Nodes[childNodeID]
+	if len(childNode.ProjectList) != 0 {
+		return nodeID
+	}
+	if childNode.NodeType == plan.Node_JOIN {
+		return nodeID
+	}
+	childNode.ProjectList = node.ProjectList
+	return childNodeID
+}
+
 func (builder *QueryBuilder) createQuery() (*Query, error) {
 	colRefBool := make(map[[2]int32]bool)
 	sinkColRef := make(map[[2]int32]int)
@@ -1948,6 +1973,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		if err != nil {
 			return nil, err
 		}
+		builder.qry.Steps[i] = builder.removeUnnecessaryProjections(rootID)
 	}
 
 	err := builder.lockTableIfLockNoRowsAtTheEndForDelAndUpdate()
@@ -4873,6 +4899,13 @@ func (builder *QueryBuilder) resolveTsHint(tsExpr *tree.AtTimeStamp) (snapshot *
 			}
 
 			snapshot = &Snapshot{TS: &ts, Tenant: tenant}
+		} else if tsExpr.Type == tree.ASOFTIMESTAMP {
+			var ts int64
+			if ts, err = doResolveTimeStamp(lit.Sval); err != nil {
+				return
+			}
+			tStamp := &timestamp.Timestamp{PhysicalTime: ts}
+			snapshot = &Snapshot{TS: tStamp, Tenant: tenant}
 		} else {
 			err = moerr.NewInvalidArg(builder.GetContext(), "invalid timestamp hint type", tsExpr.Type.String())
 			return

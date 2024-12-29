@@ -907,7 +907,7 @@ func (l *lockTableAllocator) getLockTablesLocked(group uint32) map[uint64]pb.Loc
 	if ok {
 		return m
 	}
-	m = make(map[uint64]pb.LockTable, 10240)
+	m = make(map[uint64]pb.LockTable, 128)
 	l.mu.lockTables[group] = m
 	return m
 }
