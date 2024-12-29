@@ -118,11 +118,11 @@ func (executor *checkpointExecutor) softScheduleCheckpoint(
 		if ts.LT(&start) {
 			return
 		}
-		if !executor.runner.incrementalPolicy.Check(start) {
+		if !executor.incrementalPolicy.Check(start) {
 			return
 		}
 		_, count := executor.runner.source.ScanInRange(start, *ts)
-		if count < executor.runner.options.minCount {
+		if count < int(executor.cfg.MinCount) {
 			return
 		}
 		intent, updated = executor.runner.store.UpdateICKPIntent(ts, true, false)
@@ -149,11 +149,11 @@ func (executor *checkpointExecutor) softScheduleCheckpoint(
 	)
 	policyChecked = intent.IsPolicyChecked()
 	if !policyChecked {
-		if !executor.runner.incrementalPolicy.Check(intent.GetStart()) {
+		if !executor.incrementalPolicy.Check(intent.GetStart()) {
 			return
 		}
 		_, count := executor.runner.source.ScanInRange(intent.GetStart(), intent.GetEnd())
-		if count < executor.runner.options.minCount {
+		if count < int(executor.cfg.MinCount) {
 			return
 		}
 		policyChecked = true

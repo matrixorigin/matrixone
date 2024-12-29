@@ -36,7 +36,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
@@ -179,23 +178,6 @@ type tableAndSize struct {
 //	3. Apply the incremental checkpoint start from the version right after the global checkpoint to the
 //	   latest version.
 type runner struct {
-	options struct {
-		// minimum incremental checkpoint interval duration
-		minIncrementalInterval time.Duration
-
-		// minimum global checkpoint interval duration
-		globalMinCount        int
-		globalVersionInterval time.Duration
-
-		// minimum count of uncheckpointed transactions allowed before the next checkpoint
-		minCount int
-
-		checkpointBlockRows int
-		checkpointSize      int
-
-		reservedWALEntryCount uint64
-	}
-
 	ctx context.Context
 
 	// logtail source
@@ -211,10 +193,6 @@ type runner struct {
 
 	executor atomic.Pointer[checkpointExecutor]
 
-	// checkpoint policy
-	incrementalPolicy *timeBasedPolicy
-	globalPolicy      *countBasedPolicy
-
 	postCheckpointQueue sm.Queue
 	gcCheckpointQueue   sm.Queue
 	replayQueue         sm.Queue
@@ -229,6 +207,7 @@ func NewRunner(
 	catalog *catalog.Catalog,
 	source logtail.Collector,
 	wal wal.Driver,
+	cfg *CheckpointCfg,
 	opts ...Option,
 ) *runner {
 	r := &runner{
@@ -243,17 +222,25 @@ func NewRunner(
 		opt(r)
 	}
 	r.fillDefaults()
+	r.StartExecutor(cfg)
+	cfg = r.GetCfg()
 
-	r.store = newRunnerStore(r.rt.SID(), r.options.globalVersionInterval, time.Minute*2)
+	// Note: we can't change the global history interval in runtime
+	r.store = newRunnerStore(r.rt.SID(), cfg.GlobalHistoryDuration, time.Minute*2)
 
-	r.incrementalPolicy = &timeBasedPolicy{interval: r.options.minIncrementalInterval}
-	r.globalPolicy = &countBasedPolicy{minCount: r.options.globalMinCount}
 	r.gcCheckpointQueue = sm.NewSafeQueue(100, 100, r.onGCCheckpointEntries)
 	r.postCheckpointQueue = sm.NewSafeQueue(1000, 1, r.onPostCheckpointEntries)
 	r.replayQueue = sm.NewSafeQueue(100, 10, r.onReplayCheckpoint)
-	r.StartExecutor()
 
 	return r
+}
+
+func (r *runner) GetCfg() *CheckpointCfg {
+	executor := r.executor.Load()
+	if executor == nil {
+		return nil
+	}
+	return executor.GetCfg()
 }
 
 func (r *runner) StopExecutor(err error) {
@@ -265,13 +252,13 @@ func (r *runner) StopExecutor(err error) {
 	r.executor.CompareAndSwap(executor, nil)
 }
 
-func (r *runner) StartExecutor() {
+func (r *runner) StartExecutor(cfg *CheckpointCfg) {
 	for {
 		executor := r.executor.Load()
 		if executor != nil {
 			executor.StopWithCause(ErrExecutorRestarted)
 		}
-		newExecutor := newCheckpointExecutor(r)
+		newExecutor := newCheckpointExecutor(r, cfg)
 		if r.executor.CompareAndSwap(executor, newExecutor) {
 			break
 		}
@@ -280,14 +267,6 @@ func (r *runner) StartExecutor() {
 
 func (r *runner) String() string {
 	var buf bytes.Buffer
-	_, _ = fmt.Fprintf(&buf, "CheckpointRunner<")
-	_, _ = fmt.Fprintf(&buf, "minIncrementalInterval=%v, ", r.options.minIncrementalInterval)
-	_, _ = fmt.Fprintf(&buf, "globalMinCount=%v, ", r.options.globalMinCount)
-	_, _ = fmt.Fprintf(&buf, "globalVersionInterval=%v, ", r.options.globalVersionInterval)
-	_, _ = fmt.Fprintf(&buf, "minCount=%v, ", r.options.minCount)
-	_, _ = fmt.Fprintf(&buf, "checkpointBlockRows=%v, ", r.options.checkpointBlockRows)
-	_, _ = fmt.Fprintf(&buf, "checkpointSize=%v, ", r.options.checkpointSize)
-	_, _ = fmt.Fprintf(&buf, ">")
 	return buf.String()
 }
 
@@ -386,23 +365,7 @@ func (r *runner) CollectCheckpointsInRange(
 // internal implmementations
 //=============================================================================
 
-func (r *runner) fillDefaults() {
-	if r.options.minIncrementalInterval <= 0 {
-		r.options.minIncrementalInterval = time.Minute
-	}
-	if r.options.globalMinCount <= 0 {
-		r.options.globalMinCount = 10
-	}
-	if r.options.minCount <= 0 {
-		r.options.minCount = 10000
-	}
-	if r.options.checkpointBlockRows <= 0 {
-		r.options.checkpointBlockRows = logtail.DefaultCheckpointBlockRows
-	}
-	if r.options.checkpointSize <= 0 {
-		r.options.checkpointSize = logtail.DefaultCheckpointSize
-	}
-}
+func (r *runner) fillDefaults() {}
 
 func (r *runner) getRunningCKPJob(gckp bool) (job *checkpointJob, err error) {
 	executor := r.executor.Load()
@@ -414,111 +377,22 @@ func (r *runner) getRunningCKPJob(gckp bool) (job *checkpointJob, err error) {
 	return
 }
 
-func (r *runner) doGlobalCheckpoint(
-	end types.TS, ckpLSN, truncateLSN uint64, interval time.Duration,
-) (entry *CheckpointEntry, err error) {
-	var (
-		errPhase string
-		fields   []zap.Field
-	)
-	now := time.Now()
-
-	entry = NewCheckpointEntry(
-		r.rt.SID(),
-		types.TS{},
-		end.Next(),
-		ET_Global,
-	)
-	entry.ckpLSN = ckpLSN
-	entry.truncateLSN = truncateLSN
-
-	logutil.Info(
-		"GCKP-Execute-Start",
-		zap.String("entry", entry.String()),
-	)
-
-	defer func() {
-		if err != nil {
-			logutil.Error(
-				"GCKP-Execute-Error",
-				zap.String("entry", entry.String()),
-				zap.String("phase", errPhase),
-				zap.Error(err),
-				zap.Duration("cost", time.Since(now)),
-			)
-		} else {
-			fields = append(fields, zap.Duration("cost", time.Since(now)))
-			fields = append(fields, zap.String("entry", entry.String()))
-			logutil.Info(
-				"GCKP-Execute-End",
-				fields...,
-			)
-		}
-	}()
-
-	if ok := r.store.AddGCKPIntent(entry); !ok {
-		err = ErrBadIntent
-		return
-	}
-
-	var data *logtail.CheckpointData
-	factory := logtail.GlobalCheckpointDataFactory(r.rt.SID(), entry.end, interval)
-
-	if data, err = factory(r.catalog); err != nil {
-		r.store.RemoveGCKPIntent()
-		errPhase = "collect"
-		return
-	}
-	defer data.Close()
-
-	fields = data.ExportStats("")
-
-	cnLocation, tnLocation, files, err := data.WriteTo(
-		r.rt.Fs.Service, r.options.checkpointBlockRows, r.options.checkpointSize,
-	)
-	if err != nil {
-		r.store.RemoveGCKPIntent()
-		errPhase = "flush"
-		return
-	}
-
-	entry.SetLocation(cnLocation, tnLocation)
-
-	files = append(files, cnLocation.Name().String())
-	var name string
-	if name, err = r.saveCheckpoint(entry.start, entry.end); err != nil {
-		r.store.RemoveGCKPIntent()
-		errPhase = "save"
-		return
-	}
-	defer func() {
-		entry.SetState(ST_Finished)
-	}()
-
-	files = append(files, name)
-
-	fileEntry, err := store.BuildFilesEntry(files)
-	if err != nil {
-		return
-	}
-	_, err = r.wal.AppendEntry(store.GroupFiles, fileEntry)
-	if err != nil {
-		return
-	}
-	perfcounter.Update(r.ctx, func(counter *perfcounter.CounterSet) {
-		counter.TAE.CheckPoint.DoGlobalCheckPoint.Add(1)
-	})
-	return
-}
-
+// TODO: doCheckpointForBackup in the executor
 func (r *runner) doCheckpointForBackup(entry *CheckpointEntry) (location string, err error) {
+	cfg := r.GetCfg()
+	if cfg == nil {
+		err = ErrExecutorClosed
+		return
+	}
 	factory := logtail.BackupCheckpointDataFactory(r.rt.SID(), entry.start, entry.end)
 	data, err := factory(r.catalog)
 	if err != nil {
 		return
 	}
 	defer data.Close()
-	cnLocation, tnLocation, _, err := data.WriteTo(r.rt.Fs.Service, r.options.checkpointBlockRows, r.options.checkpointSize)
+	cnLocation, tnLocation, _, err := data.WriteTo(
+		r.rt.Fs.Service, cfg.BlockMaxRowsHint, cfg.SizeHint,
+	)
 	if err != nil {
 		return
 	}
@@ -580,8 +454,11 @@ func (r *runner) onReplayCheckpoint(entries ...any) {
 	}
 }
 
-// TODO: using ctx
-func (r *runner) doIncrementalCheckpoint(entry *CheckpointEntry) (fields []zap.Field, files []string, err error) {
+// TODO: call this always in the executor
+func (r *runner) doIncrementalCheckpoint(
+	cfg *CheckpointCfg,
+	entry *CheckpointEntry,
+) (fields []zap.Field, files []string, err error) {
 	factory := logtail.IncrementalCheckpointDataFactory(r.rt.SID(), entry.start, entry.end, true)
 	data, err := factory(r.catalog)
 	if err != nil {
@@ -590,7 +467,9 @@ func (r *runner) doIncrementalCheckpoint(entry *CheckpointEntry) (fields []zap.F
 	fields = data.ExportStats("")
 	defer data.Close()
 	var cnLocation, tnLocation objectio.Location
-	cnLocation, tnLocation, files, err = data.WriteTo(r.rt.Fs.Service, r.options.checkpointBlockRows, r.options.checkpointSize)
+	cnLocation, tnLocation, files, err = data.WriteTo(
+		r.rt.Fs.Service, cfg.BlockMaxRowsHint, cfg.SizeHint,
+	)
 	if err != nil {
 		return
 	}

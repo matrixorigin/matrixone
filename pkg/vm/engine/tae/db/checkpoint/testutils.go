@@ -130,9 +130,6 @@ func (r *runner) ForceGCKP(
 			zap.Error(err),
 		)
 	}()
-	if interval == 0 {
-		interval = r.options.globalVersionInterval
-	}
 
 	if err = r.ForceICKP(ctx, &end); err != nil {
 		return
@@ -290,13 +287,19 @@ func (r *runner) ForceCheckpointForBackup(end types.TS) (location string, err er
 	r.store.AddNewIncrementalEntry(entry)
 	now := time.Now()
 	var files []string
-	if _, files, err = r.doIncrementalCheckpoint(entry); err != nil {
+	// TODO: change me
+	cfg := r.GetCfg()
+	if cfg == nil {
+		err = ErrExecutorClosed
+		return
+	}
+	if _, files, err = r.doIncrementalCheckpoint(cfg, entry); err != nil {
 		return
 	}
 	var lsn, lsnToTruncate uint64
 	lsn = r.source.GetMaxLSN(entry.start, entry.end)
-	if lsn > r.options.reservedWALEntryCount {
-		lsnToTruncate = lsn - r.options.reservedWALEntryCount
+	if lsn > cfg.IncrementalReservedWALCount {
+		lsnToTruncate = lsn - cfg.IncrementalReservedWALCount
 	}
 	entry.ckpLSN = lsn
 	entry.truncateLSN = lsnToTruncate

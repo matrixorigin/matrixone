@@ -219,13 +219,15 @@ func Open(
 		db.Catalog,
 		logtail.NewDirtyCollector(db.LogtailMgr, db.Opts.Clock, db.Catalog, new(catalog.LoopProcessor)),
 		db.Wal,
-		checkpoint.WithMinCount(int(opts.CheckpointCfg.MinCount)),
-		checkpoint.WithCheckpointBlockRows(opts.CheckpointCfg.BlockRows),
-		checkpoint.WithCheckpointSize(opts.CheckpointCfg.Size),
-		checkpoint.WithMinIncrementalInterval(opts.CheckpointCfg.IncrementalInterval),
-		checkpoint.WithGlobalMinCount(int(opts.CheckpointCfg.GlobalMinCount)),
-		checkpoint.WithGlobalVersionInterval(opts.CheckpointCfg.GlobalVersionInterval),
-		checkpoint.WithReserveWALEntryCount(opts.CheckpointCfg.ReservedWALEntryCount),
+		&checkpoint.CheckpointCfg{
+			MinCount:                    opts.CheckpointCfg.MinCount,
+			IncrementalReservedWALCount: opts.CheckpointCfg.ReservedWALEntryCount,
+			IncrementalInterval:         opts.CheckpointCfg.IncrementalInterval,
+			GlobalMinCount:              opts.CheckpointCfg.GlobalMinCount,
+			GlobalHistoryDuration:       opts.CheckpointCfg.GlobalVersionInterval,
+			SizeHint:                    opts.CheckpointCfg.Size,
+			BlockMaxRowsHint:            opts.CheckpointCfg.BlockRows,
+		},
 	)
 	db.BGCheckpointRunner.Start()
 	onErrorCalls = append(onErrorCalls, func() {

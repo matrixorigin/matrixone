@@ -101,6 +101,10 @@ func (executor *checkpointExecutor) onGCKPEntries(items ...any) {
 		return
 	}
 
+	if mergedCtx.interval == 0 {
+		mergedCtx.interval = executor.cfg.GlobalHistoryDuration
+	}
+
 	fromEntry := executor.runner.store.MaxGlobalCheckpoint()
 	if fromEntry != nil {
 		fromCheckpointed = fromEntry.GetEnd()
@@ -118,7 +122,7 @@ func (executor *checkpointExecutor) onGCKPEntries(items ...any) {
 	// [force==false and ickpCount < count policy]
 	if !mergedCtx.force {
 		ickpCount := executor.runner.store.GetPenddingIncrementalCount()
-		if !executor.runner.globalPolicy.Check(ickpCount) {
+		if !executor.globalPolicy.Check(ickpCount) {
 			logutil.Debug(
 				"GCKP-Execute-Skip",
 				zap.Int("pending-ickp", ickpCount),
