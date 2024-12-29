@@ -712,14 +712,14 @@ func (r *runner) replayOneEntry(entry *CheckpointEntry) {
 	}
 
 	if entry.IsGlobal() {
-		if ok := r.store.AddGCKPReplayEntry(entry); !ok {
+		if ok := r.store.AddGCKPFinishedEntry(entry); !ok {
 			logutil.Warn(
 				"Replay-GCKP-AddFailed",
 				zap.String("entry", entry.String()),
 			)
 		}
 	} else if entry.IsIncremental() {
-		if ok := r.store.TrySafeAddICKPEntry(entry); !ok {
+		if ok := r.store.AddICKPFinishedEntry(entry); !ok {
 			// ickp entry is not the youngest neighbor of
 			// the max ickp entry
 			logutil.Warn(
@@ -728,14 +728,14 @@ func (r *runner) replayOneEntry(entry *CheckpointEntry) {
 			)
 		}
 	} else if entry.IsBackup() {
-		if ok := r.store.TryAddNewBackupCheckpointEntry(entry); !ok {
+		if ok := r.store.AddBackupCKPEntry(entry); !ok {
 			logutil.Warn(
 				"Replay-Backup-AddFailed",
 				zap.String("entry", entry.String()),
 			)
 		}
 	} else if entry.IsCompact() {
-		if ok := r.store.TryAddNewCompactedCheckpointEntry(entry); !ok {
+		if ok := r.store.UpdateCompacted(entry); !ok {
 			logutil.Warn(
 				"Replay-Compact-AddFailed",
 				zap.String("entry", entry.String()),
