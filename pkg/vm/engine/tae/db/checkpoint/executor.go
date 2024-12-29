@@ -226,7 +226,9 @@ func (e *checkpointExecutor) RunningCKPJob(gckp bool) *checkpointJob {
 }
 
 func (e *checkpointExecutor) StopWithCause(cause error) {
-	e.active.Store(false)
+	if updated := e.active.CompareAndSwap(true, false); !updated {
+		return
+	}
 	if cause == nil {
 		cause = ErrCheckpointDisabled
 	}
