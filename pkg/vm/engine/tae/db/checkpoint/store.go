@@ -969,14 +969,14 @@ func (s *runnerStore) doGC(ts *types.TS) (gdeleted, ideleted int) {
 	}
 	gloabls := s.globals.Items()
 	for _, e := range gloabls {
-		if e.LessEq(ts) {
+		if e.LEByTS(ts) {
 			s.globals.Delete(e)
 			gdeleted++
 		}
 	}
 	incrementals := s.incrementals.Items()
 	for _, e := range incrementals {
-		if e.LessEq(ts) {
+		if e.LEByTS(ts) {
 			s.incrementals.Delete(e)
 			ideleted++
 		}
