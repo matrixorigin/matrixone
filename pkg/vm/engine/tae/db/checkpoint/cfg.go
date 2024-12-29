@@ -1,6 +1,7 @@
 package checkpoint
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
@@ -32,6 +33,11 @@ type CheckpointCfg struct {
 	/* for test */
 	BlockMaxRowsHint int
 	SizeHint         int
+}
+
+func (cfg CheckpointCfg) String() string {
+	b, _ := json.Marshal(&cfg)
+	return string(b)
 }
 
 func (cfg *CheckpointCfg) FillDefaults() {

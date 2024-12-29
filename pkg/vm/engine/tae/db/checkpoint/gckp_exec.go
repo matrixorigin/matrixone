@@ -22,7 +22,7 @@ import (
 	"go.uber.org/zap"
 )
 
-func (e *checkpointExecutor) TriggerExecutingGCKP(ctx *globalCheckpointContext) (err error) {
+func (e *checkpointExecutor) TriggerExecutingGCKP(ctx *gckpContext) (err error) {
 	if !e.active.Load() {
 		err = ErrExecutorClosed
 		return
@@ -31,7 +31,7 @@ func (e *checkpointExecutor) TriggerExecutingGCKP(ctx *globalCheckpointContext) 
 	return
 }
 
-func (e *checkpointExecutor) RunGCKP(gckpCtx *globalCheckpointContext) (err error) {
+func (e *checkpointExecutor) RunGCKP(gckpCtx *gckpContext) (err error) {
 	if !e.active.Load() {
 		err = ErrCheckpointDisabled
 		return
@@ -60,7 +60,7 @@ func (e *checkpointExecutor) RunGCKP(gckpCtx *globalCheckpointContext) (err erro
 func (executor *checkpointExecutor) onGCKPEntries(items ...any) {
 	var (
 		err              error
-		mergedCtx        *globalCheckpointContext
+		mergedCtx        *gckpContext
 		fromCheckpointed types.TS
 		toCheckpointed   types.TS
 		now              = time.Now()
@@ -90,7 +90,7 @@ func (executor *checkpointExecutor) onGCKPEntries(items ...any) {
 	}()
 
 	for _, item := range items {
-		oneCtx := item.(*globalCheckpointContext)
+		oneCtx := item.(*gckpContext)
 		if mergedCtx == nil {
 			mergedCtx = oneCtx
 		} else {

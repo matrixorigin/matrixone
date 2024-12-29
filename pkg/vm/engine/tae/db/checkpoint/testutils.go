@@ -116,7 +116,7 @@ func (r *runner) ForceGCKP(
 		return
 	}
 
-	request := &globalCheckpointContext{
+	request := &gckpContext{
 		force:    true,
 		end:      maxEntry.end,
 		interval: interval,

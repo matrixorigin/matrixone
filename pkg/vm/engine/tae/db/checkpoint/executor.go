@@ -37,8 +37,8 @@ type checkpointJob struct {
 
 	runICKPFunc func(context.Context, *runner) error
 
-	gckpCtx     *globalCheckpointContext
-	runGCKPFunc func(context.Context, *globalCheckpointContext, *runner) error
+	gckpCtx     *gckpContext
+	runGCKPFunc func(context.Context, *gckpContext, *runner) error
 
 	err error
 }
@@ -267,7 +267,7 @@ func (job *checkpointJob) RunICKP(ctx context.Context) (err error) {
 	}
 
 	runner.postCheckpointQueue.Enqueue(entry)
-	runner.TryTriggerExecuteGCKP(&globalCheckpointContext{
+	runner.TryTriggerExecuteGCKP(&gckpContext{
 		end:         entry.end,
 		interval:    job.executor.cfg.GlobalHistoryDuration,
 		ckpLSN:      lsn,
@@ -306,7 +306,7 @@ type checkpointExecutor struct {
 
 	runner      *runner
 	runICKPFunc func(context.Context, *runner) error
-	runGCKPFunc func(context.Context, *globalCheckpointContext, *runner) error
+	runGCKPFunc func(context.Context, *gckpContext, *runner) error
 
 	ickpQueue sm.Queue
 	gckpQueue sm.Queue
@@ -341,6 +341,10 @@ func newCheckpointExecutor(
 	e.gckpQueue.Start()
 
 	e.active.Store(true)
+	logutil.Info(
+		"CKP-Executor-Started",
+		zap.String("cfg", e.cfg.String()),
+	)
 	return e
 }
 
@@ -380,4 +384,9 @@ func (e *checkpointExecutor) StopWithCause(cause error) {
 	e.ickpQueue.Stop()
 	e.gckpQueue.Stop()
 	e.runner = nil
+	logutil.Info(
+		"CKP-Executor-Stopped",
+		zap.Error(cause),
+		zap.String("cfg", e.cfg.String()),
+	)
 }

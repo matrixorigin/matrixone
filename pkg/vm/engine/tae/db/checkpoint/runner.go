@@ -15,7 +15,6 @@
 package checkpoint
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"sync"
@@ -57,7 +56,7 @@ func (p *countBasedPolicy) Check(current int) bool {
 	return current >= p.minCount
 }
 
-type globalCheckpointContext struct {
+type gckpContext struct {
 	force       bool
 	end         types.TS
 	interval    time.Duration
@@ -65,7 +64,7 @@ type globalCheckpointContext struct {
 	ckpLSN      uint64
 }
 
-func (g globalCheckpointContext) String() string {
+func (g gckpContext) String() string {
 	return fmt.Sprintf(
 		"GCTX[%v][%s][%d,%d][%s]",
 		g.force,
@@ -76,7 +75,7 @@ func (g globalCheckpointContext) String() string {
 	)
 }
 
-func (g *globalCheckpointContext) Merge(other *globalCheckpointContext) {
+func (g *gckpContext) Merge(other *gckpContext) {
 	if other == nil {
 		return
 	}
@@ -181,12 +180,11 @@ type runner struct {
 	ctx context.Context
 
 	// logtail source
-	source       logtail.Collector
-	catalog      *catalog.Catalog
-	rt           *dbutils.Runtime
-	observers    *observers
-	wal          wal.Driver
-	controlFlags atomic.Uint32
+	source    logtail.Collector
+	catalog   *catalog.Catalog
+	rt        *dbutils.Runtime
+	observers *observers
+	wal       wal.Driver
 
 	// memory storage of the checkpoint entries
 	store *runnerStore
@@ -272,8 +270,19 @@ func (r *runner) StartExecutor(cfg *CheckpointCfg) {
 }
 
 func (r *runner) String() string {
-	var buf bytes.Buffer
-	return buf.String()
+	cfg := r.GetCfg()
+	if cfg == nil {
+		return fmt.Sprintf("<RO-CKPRunner>")
+	}
+	return fmt.Sprintf("<RW-CKPRunner[%s]>", cfg.String())
+}
+
+func (r *runner) ModeString() string {
+	cfg := r.GetCfg()
+	if cfg == nil {
+		return "<RO>"
+	}
+	return "<RW>"
 }
 
 func (r *runner) ReplayCKPEntry(entry *CheckpointEntry) (err error) {
@@ -293,7 +302,7 @@ func (r *runner) GetCheckpointMetaFiles() map[string]struct{} {
 	return r.store.GetMetaFiles()
 }
 
-func (r *runner) TryTriggerExecuteGCKP(ctx *globalCheckpointContext) (err error) {
+func (r *runner) TryTriggerExecuteGCKP(ctx *gckpContext) (err error) {
 	executor := r.executor.Load()
 	if executor == nil {
 		err = ErrExecutorClosed
@@ -331,15 +340,24 @@ func (r *runner) Start() {
 		r.postCheckpointQueue.Start()
 		r.gcCheckpointQueue.Start()
 		r.replayQueue.Start()
+		logutil.Info(
+			"CKPRunner-Started",
+			zap.String("mode", r.ModeString()),
+		)
 	})
 }
 
 func (r *runner) Stop() {
 	r.onceStop.Do(func() {
+		mode := r.ModeString()
 		r.replayQueue.Stop()
 		r.StopExecutor(ErrStopRunner)
 		r.gcCheckpointQueue.Stop()
 		r.postCheckpointQueue.Stop()
+		logutil.Info(
+			"CKPRunner-Stopped",
+			zap.String("mode", mode),
+		)
 	})
 }
 
