@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 	"go.uber.org/zap"
 )
@@ -194,6 +195,9 @@ type checkpointExecutor struct {
 	runner      *runner
 	runICKPFunc func(context.Context, *runner) error
 	runGCKPFunc func(context.Context, *globalCheckpointContext, *runner) error
+
+	ickpQueue sm.Queue
+	gckpQueue sm.Queue
 }
 
 func newCheckpointExecutor(
@@ -205,6 +209,11 @@ func newCheckpointExecutor(
 		ctx:    ctx,
 		cancel: cancel,
 	}
+	e.ickpQueue = sm.NewSafeQueue(1000, 100, e.onICKPEntries)
+	// e.gckpQueue = sm.NewSafeQueue(1000, 100, e.onGCKPEntries)
+	e.ickpQueue.Start()
+	// e.gckpQueue.Start()
+
 	e.active.Store(true)
 	return e
 }
@@ -232,56 +241,7 @@ func (e *checkpointExecutor) StopWithCause(cause error) {
 		<-job.WaitC()
 	}
 	e.runningICKP.Store(nil)
+	e.ickpQueue.Stop()
+	// e.gckpQueue.Stop()
 	e.runner = nil
-}
-
-func (e *checkpointExecutor) RunGCKP(gckpCtx *globalCheckpointContext) (err error) {
-	if !e.active.Load() {
-		err = ErrCheckpointDisabled
-		return
-	}
-	if e.runningGCKP.Load() != nil {
-		err = ErrPendingCheckpoint
-	}
-	job := &checkpointJob{
-		doneCh:      make(chan struct{}),
-		runner:      e.runner,
-		gckpCtx:     gckpCtx,
-		runGCKPFunc: e.runGCKPFunc,
-	}
-	if !e.runningGCKP.CompareAndSwap(nil, job) {
-		err = ErrPendingCheckpoint
-		return
-	}
-	defer func() {
-		job.Done(err)
-		e.runningGCKP.Store(nil)
-	}()
-	err = job.RunGCKP(e.ctx)
-	return
-}
-
-func (e *checkpointExecutor) RunICKP() (err error) {
-	if !e.active.Load() {
-		err = ErrCheckpointDisabled
-		return
-	}
-	if e.runningICKP.Load() != nil {
-		err = ErrPendingCheckpoint
-	}
-	job := &checkpointJob{
-		doneCh:      make(chan struct{}),
-		runner:      e.runner,
-		runICKPFunc: e.runICKPFunc,
-	}
-	if !e.runningICKP.CompareAndSwap(nil, job) {
-		err = ErrPendingCheckpoint
-		return
-	}
-	defer func() {
-		job.Done(err)
-		e.runningICKP.Store(nil)
-	}()
-	err = job.RunICKP(e.ctx)
-	return
 }
