@@ -180,9 +180,6 @@ type tableAndSize struct {
 //	   latest version.
 type runner struct {
 	options struct {
-		// checkpoint scanner interval duration
-		collectInterval time.Duration
-
 		// maximum dirty block flush interval duration
 		maxFlushInterval time.Duration
 
@@ -218,11 +215,11 @@ type runner struct {
 	// memory storage of the checkpoint entries
 	store *runnerStore
 
+	executor atomic.Pointer[checkpointExecutor]
+
 	// checkpoint policy
 	incrementalPolicy *timeBasedPolicy
 	globalPolicy      *countBasedPolicy
-
-	executor atomic.Pointer[checkpointExecutor]
 
 	postCheckpointQueue sm.Queue
 	gcCheckpointQueue   sm.Queue
@@ -290,7 +287,6 @@ func (r *runner) StartExecutor() {
 func (r *runner) String() string {
 	var buf bytes.Buffer
 	_, _ = fmt.Fprintf(&buf, "CheckpointRunner<")
-	_, _ = fmt.Fprintf(&buf, "collectInterval=%v, ", r.options.collectInterval)
 	_, _ = fmt.Fprintf(&buf, "maxFlushInterval=%v, ", r.options.maxFlushInterval)
 	_, _ = fmt.Fprintf(&buf, "minIncrementalInterval=%v, ", r.options.minIncrementalInterval)
 	_, _ = fmt.Fprintf(&buf, "globalMinCount=%v, ", r.options.globalMinCount)
@@ -427,10 +423,6 @@ func (r *runner) CollectCheckpointsInRange(
 //=============================================================================
 
 func (r *runner) fillDefaults() {
-	if r.options.collectInterval <= 0 {
-		// TODO: define default value
-		r.options.collectInterval = time.Second * 5
-	}
 	if r.options.checkpointQueueSize <= 1000 {
 		r.options.checkpointQueueSize = 1000
 	}

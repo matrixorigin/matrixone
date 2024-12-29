@@ -24,12 +24,6 @@ func WithObserver(o Observer) Option {
 	}
 }
 
-func WithCollectInterval(interval time.Duration) Option {
-	return func(r *runner) {
-		r.options.collectInterval = interval
-	}
-}
-
 func WithFlushInterval(interval time.Duration) Option {
 	return func(r *runner) {
 		r.options.maxFlushInterval = interval
