@@ -805,6 +805,7 @@ func (r *runner) onGlobalCheckpointEntries(items ...any) {
 	executor := r.executor.Load()
 	if executor == nil {
 		err = ErrCheckpointDisabled
+		return
 	}
 	defer func() {
 		var createdEntry string
@@ -884,6 +885,7 @@ func (r *runner) onIncrementalCheckpointEntries(items ...any) {
 	executor := r.executor.Load()
 	if executor == nil {
 		err = ErrCheckpointDisabled
+		return
 	}
 	defer func() {
 		logger := logutil.Info
