@@ -208,12 +208,11 @@ type runner struct {
 	ctx context.Context
 
 	// logtail source
-	source    logtail.Collector
-	catalog   *catalog.Catalog
-	rt        *dbutils.Runtime
-	observers *observers
-	wal       wal.Driver
-	// disabled     atomic.Bool
+	source       logtail.Collector
+	catalog      *catalog.Catalog
+	rt           *dbutils.Runtime
+	observers    *observers
+	wal          wal.Driver
 	controlFlags atomic.Uint32
 
 	// memory storage of the checkpoint entries
@@ -334,9 +333,6 @@ func (r *runner) TryTriggerExecuteGCKP(ctx *globalCheckpointContext) (err error)
 	if r.skipWrite() {
 		return
 	}
-	// if r.disabled.Load() {
-	// 	return
-	// }
 	_, err = r.globalCheckpointQueue.Enqueue(ctx)
 	return
 }
@@ -345,9 +341,6 @@ func (r *runner) TryTriggerExecuteICKP() (err error) {
 	if r.skipWrite() {
 		return
 	}
-	// if r.disabled.Load() {
-	// 	return
-	// }
 	_, err = r.incrementalCheckpointQueue.Enqueue(struct{}{})
 	return
 }
@@ -361,9 +354,6 @@ func (r *runner) TryScheduleCheckpoint(
 	if r.skipWrite() {
 		return
 	}
-	// if r.disabled.Load() {
-	// 	return
-	// }
 	if !force {
 		return r.softScheduleCheckpoint(&ts)
 	}
