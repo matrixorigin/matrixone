@@ -41,7 +41,7 @@ func (e *checkpointExecutor) RunGCKP(gckpCtx *globalCheckpointContext) (err erro
 	}
 	job := &checkpointJob{
 		doneCh:      make(chan struct{}),
-		runner:      e.runner,
+		executor:    e,
 		gckpCtx:     gckpCtx,
 		runGCKPFunc: e.runGCKPFunc,
 	}

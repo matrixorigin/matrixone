@@ -28,8 +28,8 @@ import (
 )
 
 type checkpointJob struct {
-	doneCh chan struct{}
-	runner *runner
+	doneCh   chan struct{}
+	executor *checkpointExecutor
 
 	runICKPFunc func(context.Context, *runner) error
 
@@ -41,10 +41,10 @@ type checkpointJob struct {
 
 func (job *checkpointJob) RunGCKP(ctx context.Context) (err error) {
 	if job.runGCKPFunc != nil {
-		return job.runGCKPFunc(ctx, job.gckpCtx, job.runner)
+		return job.runGCKPFunc(ctx, job.gckpCtx, job.executor.runner)
 	}
 
-	_, err = job.runner.doGlobalCheckpoint(
+	_, err = job.executor.runner.doGlobalCheckpoint(
 		job.gckpCtx.end,
 		job.gckpCtx.ckpLSN,
 		job.gckpCtx.truncateLSN,
@@ -56,7 +56,7 @@ func (job *checkpointJob) RunGCKP(ctx context.Context) (err error) {
 
 func (job *checkpointJob) RunICKP(ctx context.Context) (err error) {
 	if job.runICKPFunc != nil {
-		return job.runICKPFunc(ctx, job.runner)
+		return job.runICKPFunc(ctx, job.executor.runner)
 	}
 	select {
 	case <-ctx.Done():
@@ -64,7 +64,9 @@ func (job *checkpointJob) RunICKP(ctx context.Context) (err error) {
 	default:
 	}
 
-	entry, rollback := job.runner.store.TakeICKPIntent()
+	runner := job.executor.runner
+
+	entry, rollback := runner.store.TakeICKPIntent()
 	if entry == nil {
 		return
 	}
@@ -102,7 +104,7 @@ func (job *checkpointJob) RunICKP(ctx context.Context) (err error) {
 			fields = append(fields, zap.Duration("cost", time.Since(now)))
 			fields = append(fields, zap.Uint64("truncate", lsnToTruncate))
 			fields = append(fields, zap.Uint64("lsn", lsn))
-			fields = append(fields, zap.Uint64("reserve", job.runner.options.reservedWALEntryCount))
+			fields = append(fields, zap.Uint64("reserve", runner.options.reservedWALEntryCount))
 			fields = append(fields, zap.String("entry", entry.String()))
 			fields = append(fields, zap.Duration("age", entry.Age()))
 			logutil.Info(
@@ -114,42 +116,42 @@ func (job *checkpointJob) RunICKP(ctx context.Context) (err error) {
 
 	var files []string
 	var file string
-	if fields, files, err = job.runner.doIncrementalCheckpoint(entry); err != nil {
+	if fields, files, err = runner.doIncrementalCheckpoint(entry); err != nil {
 		errPhase = "do-ckp"
 		rollback()
 		return
 	}
 
-	lsn = job.runner.source.GetMaxLSN(entry.start, entry.end)
-	if lsn > job.runner.options.reservedWALEntryCount {
-		lsnToTruncate = lsn - job.runner.options.reservedWALEntryCount
+	lsn = runner.source.GetMaxLSN(entry.start, entry.end)
+	if lsn > runner.options.reservedWALEntryCount {
+		lsnToTruncate = lsn - runner.options.reservedWALEntryCount
 	}
 	entry.SetLSN(lsn, lsnToTruncate)
 
-	if prepared := job.runner.store.PrepareCommitICKPIntent(entry); !prepared {
+	if prepared := runner.store.PrepareCommitICKPIntent(entry); !prepared {
 		errPhase = "prepare"
 		rollback()
 		err = moerr.NewInternalErrorNoCtxf("cannot prepare ickp")
 		return
 	}
 
-	if file, err = job.runner.saveCheckpoint(
+	if file, err = runner.saveCheckpoint(
 		entry.start, entry.end,
 	); err != nil {
 		errPhase = "save-ckp"
-		job.runner.store.RollbackICKPIntent(entry)
+		runner.store.RollbackICKPIntent(entry)
 		rollback()
 		return
 	}
 
-	defer job.runner.store.CommitICKPIntent(entry)
+	defer runner.store.CommitICKPIntent(entry)
 	v2.TaskCkpEntryPendingDurationHistogram.Observe(entry.Age().Seconds())
 
 	files = append(files, file)
 
 	// PXU TODO: if crash here, the checkpoint log entry will be lost
 	var logEntry wal.LogEntry
-	if logEntry, err = job.runner.wal.RangeCheckpoint(1, lsnToTruncate, files...); err != nil {
+	if logEntry, err = runner.wal.RangeCheckpoint(1, lsnToTruncate, files...); err != nil {
 		errPhase = "wal-ckp"
 		fatal = true
 		return
@@ -160,10 +162,10 @@ func (job *checkpointJob) RunICKP(ctx context.Context) (err error) {
 		return
 	}
 
-	job.runner.postCheckpointQueue.Enqueue(entry)
-	job.runner.TryTriggerExecuteGCKP(&globalCheckpointContext{
+	runner.postCheckpointQueue.Enqueue(entry)
+	runner.TryTriggerExecuteGCKP(&globalCheckpointContext{
 		end:         entry.end,
-		interval:    job.runner.options.globalVersionInterval,
+		interval:    runner.options.globalVersionInterval,
 		ckpLSN:      lsn,
 		truncateLSN: lsnToTruncate,
 	})

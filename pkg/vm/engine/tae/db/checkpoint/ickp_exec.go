@@ -213,7 +213,7 @@ func (e *checkpointExecutor) RunICKP() (err error) {
 	}
 	job := &checkpointJob{
 		doneCh:      make(chan struct{}),
-		runner:      e.runner,
+		executor:    e,
 		runICKPFunc: e.runICKPFunc,
 	}
 	if !e.runningICKP.CompareAndSwap(nil, job) {
