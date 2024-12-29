@@ -90,9 +90,17 @@ func Open(
 	if err != nil {
 		return nil, err
 	}
+
+	var onErrorCalls []func()
+
 	defer func() {
 		if dbLocker != nil {
 			dbLocker.Close()
+		}
+		if err != nil && len(onErrorCalls) > 0 {
+			for _, call := range onErrorCalls {
+				call()
+			}
 		}
 		logutil.Info(
 			Phase_Open,
@@ -196,7 +204,15 @@ func Open(
 	db.Runtime.Now = db.TxnMgr.Now
 	db.TxnMgr.CommitListener.AddTxnCommitListener(db.LogtailMgr)
 	db.TxnMgr.Start(opts.Ctx)
+	onErrorCalls = append(onErrorCalls, func() {
+		db.TxnMgr.Stop()
+	})
+
 	db.LogtailMgr.Start()
+	onErrorCalls = append(onErrorCalls, func() {
+		db.LogtailMgr.Stop()
+	})
+
 	db.BGCheckpointRunner = checkpoint.NewRunner(
 		opts.Ctx,
 		db.Runtime,
@@ -211,6 +227,11 @@ func Open(
 		checkpoint.WithGlobalVersionInterval(opts.CheckpointCfg.GlobalVersionInterval),
 		checkpoint.WithReserveWALEntryCount(opts.CheckpointCfg.ReservedWALEntryCount),
 	)
+	db.BGCheckpointRunner.Start()
+	onErrorCalls = append(onErrorCalls, func() {
+		db.BGCheckpointRunner.Stop()
+	})
+
 	db.BGFlusher = checkpoint.NewFlusher(
 		db.Runtime,
 		db.BGCheckpointRunner,
@@ -225,13 +246,13 @@ func Open(
 	ckpReplayer := db.BGCheckpointRunner.BuildReplayer(ioutil.GetCheckpointDir(), dataFactory)
 	defer ckpReplayer.Close()
 	if err = ckpReplayer.ReadCkpFiles(); err != nil {
-		panic(err)
+		return
 	}
 
 	// 1. replay three tables objectlist
 	checkpointed, ckpLSN, valid, err := ckpReplayer.ReplayThreeTablesObjectlist(Phase_Open)
 	if err != nil {
-		panic(err)
+		return
 	}
 
 	var txn txnif.AsyncTxn
@@ -244,12 +265,12 @@ func Open(
 	}
 	// 2. replay all table Entries
 	if err = ckpReplayer.ReplayCatalog(txn, Phase_Open); err != nil {
-		panic(err)
+		return
 	}
 
 	// 3. replay other tables' objectlist
 	if err = ckpReplayer.ReplayObjectlist(Phase_Open); err != nil {
-		panic(err)
+		return
 	}
 	logutil.Info(
 		Phase_Open,
@@ -276,7 +297,6 @@ func Open(
 	db.MergeScheduler = merge.NewScheduler(db.Runtime, merge.NewTaskServiceGetter(opts.TaskServiceGetter))
 	scanner.RegisterOp(db.MergeScheduler)
 	db.Wal.Start()
-	db.BGCheckpointRunner.Start()
 	db.BGFlusher.Start()
 
 	db.BGScanner = w.NewHeartBeater(
