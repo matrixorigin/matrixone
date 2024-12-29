@@ -184,14 +184,11 @@ type runner struct {
 		minIncrementalInterval time.Duration
 
 		// minimum global checkpoint interval duration
-		globalMinCount            int
-		forceUpdateGlobalInterval bool
-		globalVersionInterval     time.Duration
+		globalMinCount        int
+		globalVersionInterval time.Duration
 
 		// minimum count of uncheckpointed transactions allowed before the next checkpoint
 		minCount int
-
-		checkpointQueueSize int
 
 		checkpointBlockRows int
 		checkpointSize      int
@@ -288,7 +285,6 @@ func (r *runner) String() string {
 	_, _ = fmt.Fprintf(&buf, "globalMinCount=%v, ", r.options.globalMinCount)
 	_, _ = fmt.Fprintf(&buf, "globalVersionInterval=%v, ", r.options.globalVersionInterval)
 	_, _ = fmt.Fprintf(&buf, "minCount=%v, ", r.options.minCount)
-	_, _ = fmt.Fprintf(&buf, "checkpointQueueSize=%v, ", r.options.checkpointQueueSize)
 	_, _ = fmt.Fprintf(&buf, "checkpointBlockRows=%v, ", r.options.checkpointBlockRows)
 	_, _ = fmt.Fprintf(&buf, "checkpointSize=%v, ", r.options.checkpointSize)
 	_, _ = fmt.Fprintf(&buf, ">")
@@ -419,9 +415,6 @@ func (r *runner) CollectCheckpointsInRange(
 //=============================================================================
 
 func (r *runner) fillDefaults() {
-	if r.options.checkpointQueueSize <= 1000 {
-		r.options.checkpointQueueSize = 1000
-	}
 	if r.options.minIncrementalInterval <= 0 {
 		r.options.minIncrementalInterval = time.Minute
 	}
