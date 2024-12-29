@@ -391,11 +391,13 @@ func (r *runner) Start() {
 		r.incrementalCheckpointQueue.Start()
 		r.globalCheckpointQueue.Start()
 		r.gcCheckpointQueue.Start()
+		r.replayQueue.Start()
 	})
 }
 
 func (r *runner) Stop() {
 	r.onceStop.Do(func() {
+		r.replayQueue.Stop()
 		r.incrementalCheckpointQueue.Stop()
 		r.globalCheckpointQueue.Stop()
 		r.gcCheckpointQueue.Stop()
