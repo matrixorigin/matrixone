@@ -224,11 +224,10 @@ type runner struct {
 
 	executor atomic.Pointer[checkpointExecutor]
 
-	incrementalCheckpointQueue sm.Queue
-	globalCheckpointQueue      sm.Queue
-	postCheckpointQueue        sm.Queue
-	gcCheckpointQueue          sm.Queue
-	replayQueue                sm.Queue
+	globalCheckpointQueue sm.Queue
+	postCheckpointQueue   sm.Queue
+	gcCheckpointQueue     sm.Queue
+	replayQueue           sm.Queue
 
 	onceStart sync.Once
 	onceStop  sync.Once
@@ -259,7 +258,6 @@ func NewRunner(
 
 	r.incrementalPolicy = &timeBasedPolicy{interval: r.options.minIncrementalInterval}
 	r.globalPolicy = &countBasedPolicy{minCount: r.options.globalMinCount}
-	r.incrementalCheckpointQueue = sm.NewSafeQueue(r.options.checkpointQueueSize, 100, r.onIncrementalCheckpointEntries)
 	r.globalCheckpointQueue = sm.NewSafeQueue(r.options.checkpointQueueSize, 100, r.onGlobalCheckpointEntries)
 	r.gcCheckpointQueue = sm.NewSafeQueue(100, 100, r.onGCCheckpointEntries)
 	r.postCheckpointQueue = sm.NewSafeQueue(1000, 1, r.onPostCheckpointEntries)
@@ -341,8 +339,13 @@ func (r *runner) TryTriggerExecuteICKP() (err error) {
 	if r.skipWrite() {
 		return
 	}
-	_, err = r.incrementalCheckpointQueue.Enqueue(struct{}{})
-	return
+	executor := r.executor.Load()
+	if executor == nil {
+		err = ErrExecutorClosed
+		return
+	}
+
+	return executor.TriggerExecutingICKP()
 }
 
 // NOTE:
@@ -393,7 +396,6 @@ func (r *runner) TryScheduleCheckpoint(
 func (r *runner) Start() {
 	r.onceStart.Do(func() {
 		r.postCheckpointQueue.Start()
-		r.incrementalCheckpointQueue.Start()
 		r.globalCheckpointQueue.Start()
 		r.gcCheckpointQueue.Start()
 		r.replayQueue.Start()
@@ -404,7 +406,6 @@ func (r *runner) Stop() {
 	r.onceStop.Do(func() {
 		r.replayQueue.Stop()
 		r.StopExecutor(ErrStopRunner)
-		r.incrementalCheckpointQueue.Stop()
 		r.globalCheckpointQueue.Stop()
 		r.gcCheckpointQueue.Stop()
 		r.postCheckpointQueue.Stop()
@@ -875,33 +876,6 @@ func (r *runner) onGlobalCheckpointEntries(items ...any) {
 
 func (r *runner) onGCCheckpointEntries(items ...any) {
 	r.store.TryGC()
-}
-
-func (r *runner) onIncrementalCheckpointEntries(items ...any) {
-	var (
-		err error
-		now = time.Now()
-	)
-	executor := r.executor.Load()
-	if executor == nil {
-		err = ErrCheckpointDisabled
-		return
-	}
-	defer func() {
-		logger := logutil.Info
-		if err != nil {
-			logger = logutil.Error
-		}
-		if err != nil || time.Since(now) > time.Second*10 {
-			logger(
-				"ICKP-Execute-Runner-End",
-				zap.Duration("cost", time.Since(now)),
-				zap.Error(err),
-			)
-		}
-	}()
-
-	err = executor.RunICKP()
 }
 
 func (r *runner) saveCheckpoint(

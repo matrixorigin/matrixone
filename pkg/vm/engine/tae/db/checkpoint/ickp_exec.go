@@ -21,6 +21,15 @@ import (
 	"go.uber.org/zap"
 )
 
+func (e *checkpointExecutor) TriggerExecutingICKP() (err error) {
+	if !e.active.Load() {
+		err = ErrExecutorClosed
+		return
+	}
+	_, err = e.ickpQueue.Enqueue(struct{}{})
+	return
+}
+
 func (e *checkpointExecutor) RunICKP() (err error) {
 	if !e.active.Load() {
 		err = ErrCheckpointDisabled
