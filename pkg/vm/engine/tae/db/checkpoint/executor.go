@@ -203,7 +203,11 @@ type checkpointExecutor struct {
 func newCheckpointExecutor(
 	runner *runner,
 ) *checkpointExecutor {
-	ctx, cancel := context.WithCancelCause(runner.ctx)
+	ctx := context.Background()
+	if runner != nil {
+		ctx = runner.ctx
+	}
+	ctx, cancel := context.WithCancelCause(ctx)
 	e := &checkpointExecutor{
 		runner: runner,
 		ctx:    ctx,
