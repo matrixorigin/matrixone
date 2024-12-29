@@ -293,6 +293,16 @@ func (c *CkpReplayer) ReadCkpFiles() (err error) {
 			return
 		}
 	}
+
+	if len(c.ckpEntries) > 0 {
+		select {
+		case <-c.r.ctx.Done():
+			err = context.Cause(c.r.ctx)
+			return
+		case <-c.ckpEntries[len(c.ckpEntries)-1].Wait():
+		}
+	}
+
 	return
 }
 
@@ -657,6 +667,7 @@ func ReplayCheckpointEntries(bat *containers.Batch, checkpointVersion int) (entr
 			version:     version,
 			ckpLSN:      ckpLSN,
 			truncateLSN: truncateLSN,
+			doneC:       make(chan struct{}),
 		}
 		entries[i] = checkpointEntry
 		if typ == ET_Global {

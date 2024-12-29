@@ -701,48 +701,53 @@ func (r *runner) doCheckpointForBackup(entry *CheckpointEntry) (location string,
 	return
 }
 
+func (r *runner) replayOneEntry(entry *CheckpointEntry) {
+	defer entry.Done()
+	if !entry.IsFinished() {
+		logutil.Warn(
+			"Replay-CKP-NoFinished",
+			zap.String("entry", entry.String()),
+		)
+		return
+	}
+
+	if entry.IsGlobal() {
+		if ok := r.store.AddGCKPReplayEntry(entry); !ok {
+			logutil.Warn(
+				"Replay-GCKP-AddFailed",
+				zap.String("entry", entry.String()),
+			)
+		}
+	} else if entry.IsIncremental() {
+		if ok := r.store.TrySafeAddICKPEntry(entry); !ok {
+			// ickp entry is not the youngest neighbor of
+			// the max ickp entry
+			logutil.Warn(
+				"Replay-ICKP-AddFailed",
+				zap.String("entry", entry.String()),
+			)
+		}
+	} else if entry.IsBackup() {
+		if ok := r.store.TryAddNewBackupCheckpointEntry(entry); !ok {
+			logutil.Warn(
+				"Replay-Backup-AddFailed",
+				zap.String("entry", entry.String()),
+			)
+		}
+	} else if entry.IsCompact() {
+		if ok := r.store.TryAddNewCompactedCheckpointEntry(entry); !ok {
+			logutil.Warn(
+				"Replay-Compact-AddFailed",
+				zap.String("entry", entry.String()),
+			)
+		}
+	}
+}
+
 func (r *runner) onReplayCheckpoint(entries ...any) {
 	for _, e := range entries {
 		entry := e.(*CheckpointEntry)
-		if !entry.IsFinished() {
-			logutil.Warn(
-				"Replay-CKP-NoFinished",
-				zap.String("entry", entry.String()),
-			)
-			continue
-		}
-
-		if entry.IsGlobal() {
-			if ok := r.store.AddGCKPReplayEntry(entry); !ok {
-				logutil.Warn(
-					"Replay-GCKP-AddFailed",
-					zap.String("entry", entry.String()),
-				)
-			}
-		} else if entry.IsIncremental() {
-			if ok := r.store.TrySafeAddICKPEntry(entry); !ok {
-				// ickp entry is not the youngest neighbor of
-				// the max ickp entry
-				logutil.Warn(
-					"Replay-ICKP-AddFailed",
-					zap.String("entry", entry.String()),
-				)
-			}
-		} else if entry.IsBackup() {
-			if ok := r.store.TryAddNewBackupCheckpointEntry(entry); !ok {
-				logutil.Warn(
-					"Replay-Backup-AddFailed",
-					zap.String("entry", entry.String()),
-				)
-			}
-		} else if entry.IsCompact() {
-			if ok := r.store.TryAddNewCompactedCheckpointEntry(entry); !ok {
-				logutil.Warn(
-					"Replay-Compact-AddFailed",
-					zap.String("entry", entry.String()),
-				)
-			}
-		}
+		r.replayOneEntry(entry)
 	}
 }
 
