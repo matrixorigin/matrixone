@@ -161,7 +161,9 @@ func (c *CkpReplayer) readCheckpointEntries() (
 		if len(entries) != 1 {
 			panic(fmt.Sprintf("invalid compacted checkpoint file %s", maxEntry.GetName()))
 		}
-		c.r.store.TryAddNewCompactedCheckpointEntry(entries[0])
+		if err = c.r.ReplayCKPEntry(entries[0]); err != nil {
+			return
+		}
 	}
 
 	// always replay from the max metaEntry
@@ -284,16 +286,14 @@ func (c *CkpReplayer) ReadCkpFiles() (err error) {
 		if entry == nil {
 			continue
 		}
-		if entry.GetType() == ET_Global {
+		if entry.IsGlobal() {
 			c.globalCkpIdx = i
-			r.store.AddGCKPReplayEntry(entry)
-		} else if entry.GetType() == ET_Incremental {
-			r.store.TrySafeAddICKPEntry(entry)
-		} else if entry.GetType() == ET_Backup {
-			r.store.TryAddNewBackupCheckpointEntry(entry)
+		}
+		if err = r.ReplayCKPEntry(entry); err != nil {
+			return
 		}
 	}
-	return nil
+	return
 }
 
 // ReplayThreeTablesObjectlist replays the object list the three tables, and check the LSN and TS.
