@@ -51,7 +51,13 @@ type CheckpointScheduler interface {
 	TryScheduleCheckpoint(types.TS, bool) (Intent, error)
 }
 
+type ReplayClient interface {
+	AddCheckpointMetaFile(string)
+	ReplayCKPEntry(*CheckpointEntry) error
+}
+
 type Runner interface {
+	ReplayClient
 	CheckpointScheduler
 	TestRunner
 	RunnerWriter

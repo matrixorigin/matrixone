@@ -919,6 +919,6 @@ func (r *runner) saveCheckpoint(
 		return
 	}
 	fileName := ioutil.EncodeCKPMetadataName(start, end)
-	r.AddCheckpointMetaFile(fileName)
+	r.store.AddMetaFile(fileName)
 	return
 }
