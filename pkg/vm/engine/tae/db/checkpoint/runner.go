@@ -180,9 +180,6 @@ type tableAndSize struct {
 //	   latest version.
 type runner struct {
 	options struct {
-		// maximum dirty block flush interval duration
-		maxFlushInterval time.Duration
-
 		// minimum incremental checkpoint interval duration
 		minIncrementalInterval time.Duration
 
@@ -287,7 +284,6 @@ func (r *runner) StartExecutor() {
 func (r *runner) String() string {
 	var buf bytes.Buffer
 	_, _ = fmt.Fprintf(&buf, "CheckpointRunner<")
-	_, _ = fmt.Fprintf(&buf, "maxFlushInterval=%v, ", r.options.maxFlushInterval)
 	_, _ = fmt.Fprintf(&buf, "minIncrementalInterval=%v, ", r.options.minIncrementalInterval)
 	_, _ = fmt.Fprintf(&buf, "globalMinCount=%v, ", r.options.globalMinCount)
 	_, _ = fmt.Fprintf(&buf, "globalVersionInterval=%v, ", r.options.globalVersionInterval)
