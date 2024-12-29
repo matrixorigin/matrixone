@@ -214,9 +214,9 @@ func newCheckpointExecutor(
 		cancel: cancel,
 	}
 	e.ickpQueue = sm.NewSafeQueue(1000, 100, e.onICKPEntries)
-	// e.gckpQueue = sm.NewSafeQueue(1000, 100, e.onGCKPEntries)
+	e.gckpQueue = sm.NewSafeQueue(1000, 100, e.onGCKPEntries)
 	e.ickpQueue.Start()
-	// e.gckpQueue.Start()
+	e.gckpQueue.Start()
 
 	e.active.Store(true)
 	return e
@@ -248,6 +248,6 @@ func (e *checkpointExecutor) StopWithCause(cause error) {
 	}
 	e.runningICKP.Store(nil)
 	e.ickpQueue.Stop()
-	// e.gckpQueue.Stop()
+	e.gckpQueue.Stop()
 	e.runner = nil
 }

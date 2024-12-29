@@ -22,6 +22,15 @@ import (
 	"go.uber.org/zap"
 )
 
+func (e *checkpointExecutor) TriggerExecutingGCKP(ctx *globalCheckpointContext) (err error) {
+	if !e.active.Load() {
+		err = ErrExecutorClosed
+		return
+	}
+	_, err = e.gckpQueue.Enqueue(ctx)
+	return
+}
+
 func (e *checkpointExecutor) RunGCKP(gckpCtx *globalCheckpointContext) (err error) {
 	if !e.active.Load() {
 		err = ErrCheckpointDisabled

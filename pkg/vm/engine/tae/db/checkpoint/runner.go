@@ -224,10 +224,9 @@ type runner struct {
 
 	executor atomic.Pointer[checkpointExecutor]
 
-	globalCheckpointQueue sm.Queue
-	postCheckpointQueue   sm.Queue
-	gcCheckpointQueue     sm.Queue
-	replayQueue           sm.Queue
+	postCheckpointQueue sm.Queue
+	gcCheckpointQueue   sm.Queue
+	replayQueue         sm.Queue
 
 	onceStart sync.Once
 	onceStop  sync.Once
@@ -258,7 +257,6 @@ func NewRunner(
 
 	r.incrementalPolicy = &timeBasedPolicy{interval: r.options.minIncrementalInterval}
 	r.globalPolicy = &countBasedPolicy{minCount: r.options.globalMinCount}
-	r.globalCheckpointQueue = sm.NewSafeQueue(r.options.checkpointQueueSize, 100, r.onGlobalCheckpointEntries)
 	r.gcCheckpointQueue = sm.NewSafeQueue(100, 100, r.onGCCheckpointEntries)
 	r.postCheckpointQueue = sm.NewSafeQueue(1000, 1, r.onPostCheckpointEntries)
 	r.replayQueue = sm.NewSafeQueue(100, 10, r.onReplayCheckpoint)
@@ -331,8 +329,12 @@ func (r *runner) TryTriggerExecuteGCKP(ctx *globalCheckpointContext) (err error)
 	if r.skipWrite() {
 		return
 	}
-	_, err = r.globalCheckpointQueue.Enqueue(ctx)
-	return
+	executor := r.executor.Load()
+	if executor == nil {
+		err = ErrExecutorClosed
+		return
+	}
+	return executor.TriggerExecutingGCKP(ctx)
 }
 
 func (r *runner) TryTriggerExecuteICKP() (err error) {
@@ -396,7 +398,6 @@ func (r *runner) TryScheduleCheckpoint(
 func (r *runner) Start() {
 	r.onceStart.Do(func() {
 		r.postCheckpointQueue.Start()
-		r.globalCheckpointQueue.Start()
 		r.gcCheckpointQueue.Start()
 		r.replayQueue.Start()
 	})
@@ -406,7 +407,6 @@ func (r *runner) Stop() {
 	r.onceStop.Do(func() {
 		r.replayQueue.Stop()
 		r.StopExecutor(ErrStopRunner)
-		r.globalCheckpointQueue.Stop()
 		r.gcCheckpointQueue.Stop()
 		r.postCheckpointQueue.Stop()
 	})
@@ -793,85 +793,6 @@ func (r *runner) onPostCheckpointEntries(entries ...any) {
 
 		logutil.Debugf("Post %s", entry.String())
 	}
-}
-
-func (r *runner) onGlobalCheckpointEntries(items ...any) {
-	var (
-		err              error
-		mergedCtx        *globalCheckpointContext
-		fromCheckpointed types.TS
-		toCheckpointed   types.TS
-		now              = time.Now()
-	)
-	executor := r.executor.Load()
-	if executor == nil {
-		err = ErrCheckpointDisabled
-		return
-	}
-	defer func() {
-		var createdEntry string
-		logger := logutil.Debug
-		if err != nil {
-			logger = logutil.Error
-		} else {
-			toEntry := r.store.MaxGlobalCheckpoint()
-			if toEntry != nil {
-				toCheckpointed = toEntry.GetEnd()
-				createdEntry = toEntry.String()
-			}
-		}
-
-		if err != nil || time.Since(now) > time.Second*10 || toCheckpointed.GT(&fromCheckpointed) {
-			logger(
-				"GCKP-Execute-End",
-				zap.Duration("cost", time.Since(now)),
-				zap.String("ctx", mergedCtx.String()),
-				zap.String("created", createdEntry),
-				zap.Error(err),
-			)
-		}
-	}()
-
-	for _, item := range items {
-		oneCtx := item.(*globalCheckpointContext)
-		if mergedCtx == nil {
-			mergedCtx = oneCtx
-		} else {
-			mergedCtx.Merge(oneCtx)
-		}
-	}
-	if mergedCtx == nil {
-		return
-	}
-
-	fromEntry := r.store.MaxGlobalCheckpoint()
-	if fromEntry != nil {
-		fromCheckpointed = fromEntry.GetEnd()
-	}
-
-	if mergedCtx.end.LE(&fromCheckpointed) {
-		logutil.Info(
-			"GCKP-Execute-Skip",
-			zap.String("have", fromCheckpointed.ToString()),
-			zap.String("want", mergedCtx.end.ToString()),
-		)
-		return
-	}
-
-	// [force==false and ickpCount < count policy]
-	if !mergedCtx.force {
-		ickpCount := r.store.GetPenddingIncrementalCount()
-		if !r.globalPolicy.Check(ickpCount) {
-			logutil.Debug(
-				"GCKP-Execute-Skip",
-				zap.Int("pending-ickp", ickpCount),
-				zap.String("want", mergedCtx.end.ToString()),
-			)
-			return
-		}
-	}
-
-	err = executor.RunGCKP(mergedCtx)
 }
 
 func (r *runner) onGCCheckpointEntries(items ...any) {
