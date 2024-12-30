@@ -63,6 +63,9 @@ const discardCollectRetry = time.Millisecond / 10
 type bufferHolder struct {
 	c   *MOCollector
 	ctx context.Context
+	// background loop
+	bgCtx    context.Context
+	bgCancel context.CancelFunc
 	// name like a type
 	name string
 	// buffer is instance of batchpipe.ItemBuffer with its own elimination algorithm(like LRU, LFU)
@@ -97,6 +100,7 @@ func newBufferHolder(ctx context.Context, name batchpipe.HasName, impl motrace.P
 		signal: signal,
 		impl:   impl,
 	}
+	b.bgCtx, b.bgCancel = context.WithCancel(b.ctx)
 	b.bufferPool = &sync.Pool{}
 	b.bufferCnt.Swap(0)
 	b.bufferPool.New = func() interface{} {
@@ -121,8 +125,12 @@ func (b *bufferHolder) Start() {
 		if b.mux.TryLock() {
 			b.mux.Unlock()
 		}
+		v2.GetTraceCollectorSignalTotal(b.name, "trigger").Inc()
 		b.signal(b)
 	})
+	if b.aggr != nil {
+		go b.loopAggr()
+	}
 }
 
 func (b *bufferHolder) getBuffer() motrace.Buffer {
@@ -157,23 +165,40 @@ func (b *bufferHolder) discardBuffer(buffer motrace.Buffer) {
 }
 
 // Add call buffer.Add(), while bufferHolder is NOT readonly
-func (b *bufferHolder) Add(item batchpipe.HasName) {
+func (b *bufferHolder) Add(item batchpipe.HasName, needAggr bool) {
+	locked := true
 	b.mux.Lock()
+	unlock := func() {
+		if locked {
+			locked = false
+			b.mux.Unlock()
+		}
+	}
+	defer unlock()
+	defer func() {
+		if err := recover(); err != nil {
+			_ = moerr.ConvertPanicError(b.ctx, err)
+			logutil.Error("catch panic #19755")
+			if b.buffer != nil {
+				b.putBuffer(b.buffer)
+			}
+			b.buffer = nil
+		}
+	}()
 	if b.stopped {
-		b.mux.Unlock()
 		return
 	}
+
 	if b.buffer == nil {
 		b.buffer = b.getBuffer()
 	}
 
-	if b.aggr != nil {
+	if b.aggr != nil && needAggr {
 		if i, ok := item.(table.Item); ok {
 			_, err := b.aggr.AddItem(i)
 			if err == nil {
 				// aggred, then return
 				i.Free()
-				b.mux.Unlock()
 				return
 			}
 		}
@@ -181,12 +206,50 @@ func (b *bufferHolder) Add(item batchpipe.HasName) {
 
 	buf := b.buffer
 	buf.Add(item)
-	b.mux.Unlock()
+	unlock()
 	if buf.ShouldFlush() {
+		v2.GetTraceCollectorSignalTotal(b.name, "flush").Inc()
 		b.signal(b)
 	} else if checker, is := item.(table.NeedSyncWrite); is && checker.NeedSyncWrite() {
+		v2.GetTraceCollectorSignalTotal(b.name, "sync").Inc()
 		b.signal(b)
 	}
+}
+
+func (b *bufferHolder) loopAggr() {
+	logger := b.c.logger.With(zap.String("name", b.name)).Named("bufferHolder")
+	interval := time.Second
+	if b.aggr == nil {
+		logger.Warn("no aggregator available, just quit this loop")
+		return
+	}
+	counter := v2.GetTraceMOLoggerAggrCounter(b.name)
+	logger.Info("start")
+mainL:
+	for {
+		select {
+		case <-time.After(interval):
+			// handle aggr
+			end := time.Now().Truncate(b.aggr.GetWindow())
+			results := b.aggr.PopResultsBeforeWindow(end)
+			for _, item := range results {
+				// tips: Add() will free the {item} obj.
+				b.Add(item, false)
+				counter.Inc()
+			}
+			logger.Info("handle aggr", zap.Int("records", len(results)), zap.Time("end", end))
+			// END> handle aggr
+
+		case <-b.bgCtx.Done():
+			// trigger by b.bgCancel
+			logger.Info("exiting loopAggr", zap.String("cause", "bgCtx.Done"))
+			break mainL
+		case <-b.ctx.Done():
+			logger.Info("exiting loopAggr", zap.String("cause", "ctx.Done"))
+			break mainL
+		}
+	}
+	logger.Info("exit loopAggr")
 }
 
 var _ generateReq = (*bufferGenerateReq)(nil)
@@ -254,17 +317,6 @@ func (b *bufferHolder) getGenerateReq() (req generateReq) {
 		return nil
 	}
 
-	// handle aggr
-	// fixme: handle now ? or run regular
-	if b.aggr != nil {
-		end := time.Now().Truncate(b.aggr.GetWindow())
-		results := b.aggr.PopResultsBeforeWindow(end)
-		for _, item := range results {
-			b.buffer.Add(item) // tips: Add() will free the {item} obj.
-		}
-	}
-	// END> handle aggr
-
 	req = &bufferGenerateReq{
 		buffer: b.buffer,
 		b:      b,
@@ -282,9 +334,22 @@ func (b *bufferHolder) resetTrigger() {
 	b.trigger.Reset(b.reminder.RemindNextAfter())
 }
 
+// Stop all internal job, the loopAggr goroutine
+// consume all aggr-ed result.
 func (b *bufferHolder) Stop() {
-	b.mux.Lock()
+	b.bgCancel() // stop loopAggr goroutine
+	if b.aggr != nil {
+		aggrResults := b.aggr.GetResults()
+		b.c.logger.Info("handle last aggr stmt",
+			zap.Int("records", len(aggrResults)),
+			zap.String("name", b.name))
+		for _, result := range aggrResults {
+			b.Add(result, false)
+		}
+	}
+	b.mux.Lock() // lock against b.Add(...)
 	defer b.mux.Unlock()
+	// mark stop
 	b.stopped = true
 	b.trigger.Stop()
 }
@@ -469,13 +534,17 @@ func (c *MOCollector) Collect(ctx context.Context, item batchpipe.HasName) error
 			ctx = errutil.ContextWithNoReport(ctx, true)
 			return moerr.NewInternalError(ctx, "MOCollector stopped")
 		default:
-			ok, _ := c.awakeQueue.Offer(item)
+			ok, err := c.awakeQueue.Offer(item)
 			if ok {
 				v2.TraceCollectorCollectDurationHistogram.Observe(time.Since(start).Seconds())
 				return nil
 			}
+			if err != nil {
+				v2.GetTraceCollectorCollectHungCounter(item.GetName(), err.Error()).Inc()
+			} else {
+				v2.GetTraceCollectorCollectHungCounter(item.GetName(), "retry").Inc()
+			}
 			time.Sleep(time.Millisecond)
-			v2.GetTraceCollectorCollectHungCounter(item.GetName()).Inc()
 		}
 	}
 }
@@ -593,13 +662,13 @@ loop:
 					} else {
 						buf = newBufferHolder(ctx, i, impl, awakeBufferFactory(c), c)
 						c.buffers[i.GetName()] = buf
-						buf.Add(i)
+						buf.Add(i, true)
 						buf.Start()
 					}
 				}
 				c.mux.Unlock()
 			} else {
-				buf.Add(i)
+				buf.Add(i, true)
 				c.mux.RUnlock()
 			}
 			v2.TraceCollectorConsumeDurationHistogram.Observe(time.Since(start).Seconds())
@@ -629,6 +698,7 @@ var awakeBufferFactory = func(c *MOCollector) func(holder *bufferHolder) {
 		defer func() {
 			v2.TraceCollectorGenerateAwareDurationHistogram.Observe(time.Since(start).Seconds())
 		}()
+		v2.GetTraceCollectorSignalTotal(holder.name, "main").Inc()
 		req := holder.getGenerateReq()
 		if req == nil {
 			return
@@ -667,12 +737,15 @@ loop:
 	for {
 		select {
 		case req := <-c.awakeGenerate:
+			v2.TraceCollectorExportQueueLength.Inc()
 			start := time.Now()
 			if req == nil {
 				c.logger.Warn("generate req is nil")
+				v2.TraceCollectorExportQueueLength.Dec()
 			} else if exportReq, err := req.handle(buf); err != nil {
 				req.callback(err)
 				v2.TraceCollectorGenerateDurationHistogram.Observe(time.Since(start).Seconds())
+				v2.TraceCollectorExportQueueLength.Dec()
 			} else {
 				startDelay := time.Now()
 				select {
@@ -683,6 +756,7 @@ loop:
 					v2.TraceCollectorGenerateDiscardDurationHistogram.Observe(time.Since(start).Seconds())
 					// fixme: do csv output, should NO discard case
 					v2.GetTraceCollectorDiscardCounter(req.typ()).Inc()
+					v2.TraceCollectorExportQueueLength.Dec()
 				}
 				end := time.Now()
 				v2.TraceCollectorGenerateDelayDurationHistogram.Observe(end.Sub(startDelay).Seconds())
@@ -703,6 +777,7 @@ loop:
 	for {
 		select {
 		case req := <-c.awakeBatch:
+			v2.TraceCollectorExportQueueLength.Dec()
 			start := time.Now()
 			if req == nil {
 				c.logger.Warn("export req is nil")
