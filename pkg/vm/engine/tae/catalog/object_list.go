@@ -15,6 +15,7 @@
 package catalog
 
 import (
+	"fmt"
 	"sync"
 	"sync/atomic"
 
@@ -38,6 +39,7 @@ type ObjectList struct {
 	isTombstone bool
 	*sync.RWMutex
 	sortHint_objectID map[objectio.ObjectId]uint64
+	objectID_sortHint map[uint64]objectio.ObjectId
 	tree              atomic.Pointer[btree.BTreeG[*ObjectEntry]]
 }
 
@@ -50,6 +52,7 @@ func NewObjectList(isTombstone bool) *ObjectList {
 	list := &ObjectList{
 		RWMutex:           &sync.RWMutex{},
 		sortHint_objectID: make(map[types.Objectid]uint64),
+		objectID_sortHint: make(map[uint64]types.Objectid),
 		isTombstone:       isTombstone,
 	}
 	list.tree.Store(tree)
@@ -75,6 +78,8 @@ func (l *ObjectList) deleteEntryLocked(sortHint uint64) error {
 	objs := l.GetAllNodes(sortHint)
 	for _, obj := range objs {
 		newTree.Delete(obj)
+		delete(l.objectID_sortHint, obj.SortHint)
+		delete(l.sortHint_objectID, *obj.ID())
 	}
 	ok := l.tree.CompareAndSwap(oldTree, newTree)
 	if !ok {
@@ -159,7 +164,13 @@ func (l *ObjectList) Set(object *ObjectEntry, registerSortHint bool) {
 				panic("logic error")
 			}
 		}
+		id, ok := l.objectID_sortHint[object.SortHint]
+		if ok {
+			panic(fmt.Sprintf("logic error, duplicate sort hint, obj %v %v, sort hint %v",
+				id.String(), object.ID().String(), object.SortHint))
+		}
 		l.sortHint_objectID[*object.ID()] = object.SortHint
+		l.objectID_sortHint[object.SortHint] = *object.ID()
 	} else {
 		sortHint, ok := l.sortHint_objectID[*object.ID()]
 		if !ok || sortHint != object.SortHint {
