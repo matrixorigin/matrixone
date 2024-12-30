@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -120,6 +121,9 @@ func BatchDataNotNullCheck(vecs []*vector.Vector, attrs []string, tableDef *plan
 }
 
 func getRelationByObjRef(ctx context.Context, proc *process.Process, eg engine.Engine, ref *plan.ObjectRef) (engine.Relation, error) {
+	if ref.ObjName == "debug" {
+		logutil.Infof("xxxx getRelationByObjRef: eg is nil:%v, ref:%v, proc is nil:%v", eg == nil, ref, proc == nil)
+	}
 	dbSource, err := eg.Database(ctx, ref.SchemaName, proc.GetTxnOperator())
 	if err != nil {
 		return nil, err

@@ -617,7 +617,13 @@ func (s *Scope) handleBlockList(c *Compile, runtimeInExprList []*plan.Expr) erro
 	}
 
 	if s.NodeInfo.CNCNT == 1 {
-		s.NodeInfo.Data, err = c.expandRanges(s.DataSource.node, rel, db, ctx, newExprList, engine.Policy_CollectAllData, nil)
+		s.NodeInfo.Data, err = c.expandRanges(
+			s.DataSource.node,
+			rel,
+			db,
+			ctx,
+			newExprList,
+			engine.Policy_CollectAllData, nil)
 		if err != nil {
 			return err
 		}
@@ -640,27 +646,77 @@ func (s *Scope) handleBlockList(c *Compile, runtimeInExprList []*plan.Expr) erro
 		rsp.IsLocalCN = true
 	}
 
-	commited, err = c.expandRanges(s.DataSource.node, rel, db, ctx, newExprList, engine.Policy_CollectCommittedPersistedData, rsp)
+	commited, err = c.expandRanges(
+		s.DataSource.node,
+		rel,
+		db,
+		ctx,
+		newExprList,
+		engine.Policy_CollectCommittedPersistedData,
+		rsp)
 	if err != nil {
 		return err
 	}
+
+	if s.DataSource.TableDef.Name == "debug" {
+		logutil.Infof("xxxx handleBlockList, table-id:%d, txn:%s, cn-ip:%s, cn-id:%s, commmitted blk cnt:%d",
+			s.DataSource.TableDef.TblId,
+			s.Proc.GetTxnOperator().Txn().DebugString(),
+			s.NodeInfo.Addr,
+			s.NodeInfo.Id,
+			commited.DataCnt())
+	}
+
 	average := float64(s.DataSource.node.Stats.BlockNum / s.NodeInfo.CNCNT)
-	if commited.DataCnt() < int(average*0.8) || commited.DataCnt() > int(average*1.2) {
+	if commited.DataCnt() < int(average*0.8) ||
+		commited.DataCnt() > int(average*1.2) {
 		logutil.Warnf("workload  table %v maybe not balanced! stats blocks %v, cncnt %v cnidx %v average %v , get %v blocks",
-			s.DataSource.TableDef.Name, s.DataSource.node.Stats.BlockNum, s.NodeInfo.CNCNT, s.NodeInfo.CNIDX, average, commited.DataCnt())
+			s.DataSource.TableDef.Name,
+			s.DataSource.node.Stats.BlockNum,
+			s.NodeInfo.CNCNT,
+			s.NodeInfo.CNIDX,
+			average,
+			commited.DataCnt())
 	}
 
 	//collect uncommited data if it's local cn
 	if !s.IsRemote {
-		s.NodeInfo.Data, err = c.expandRanges(s.DataSource.node, rel, db, ctx, newExprList, engine.Policy_CollectUncommittedData, nil)
+		s.NodeInfo.Data, err = c.expandRanges(
+			s.DataSource.node,
+			rel,
+			db,
+			ctx,
+			newExprList,
+			engine.Policy_CollectUncommittedData, nil)
 		if err != nil {
 			return err
 		}
 		s.NodeInfo.Data.AppendBlockInfoSlice(commited.GetBlockInfoSlice())
+
+		if s.DataSource.TableDef.Name == "debug" {
+			logutil.Infof("xxxx handleBlockList on local CN, table-id:%d, txn:%s, cn-ip:%s, cn-id:%s, blk cnt:%d",
+				s.DataSource.TableDef.TblId,
+				s.Proc.GetTxnOperator().Txn().DebugString(),
+				s.NodeInfo.Addr,
+				s.NodeInfo.Id,
+				s.NodeInfo.Data.DataCnt())
+		}
+
 	} else {
 		tombstones := s.NodeInfo.Data.GetTombstones()
 		commited.AttachTombstones(tombstones)
 		s.NodeInfo.Data = commited
+
+		if s.DataSource.TableDef.Name == "debug" {
+			logutil.Infof("xxxx handleBlockList on remote CN, table-id:%d, txn:%s, cn-ip:%s, cn-id:%s,blk cnt:%d",
+				s.DataSource.TableDef.TblId,
+				s.Proc.GetTxnOperator().Txn().DebugString(),
+				s.NodeInfo.Addr,
+				s.NodeInfo.Id,
+				s.NodeInfo.Data.DataCnt(),
+			)
+		}
+
 	}
 	return nil
 }

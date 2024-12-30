@@ -835,6 +835,10 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 
 	c.execType = plan2.GetExecType(c.pn.GetQuery(), c.getHaveDDL(), c.isPrepare, c.ncpu)
 
+	logutil.Infof("xxxx compileQuery, get execType:%v, txn:%s",
+		c.execType,
+		c.proc.GetTxnOperator().Txn().DebugString())
+
 	n := getEngineNode(c)
 	if c.execType == plan2.ExecTypeTP || c.execType == plan2.ExecTypeAP_ONECN {
 		c.cnList = engine.Nodes{n}
@@ -843,9 +847,17 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 		if err != nil {
 			return nil, err
 		}
+		logutil.Infof("xxxx compileQuery, befre remove unavailable cn, cnList:%v, txn:%s",
+			len(c.cnList),
+			c.proc.GetTxnOperator().Txn().DebugString())
 		c.removeUnavailableCN()
 		// sort by addr to get fixed order of CN list
 		sort.Slice(c.cnList, func(i, j int) bool { return c.cnList[i].Addr < c.cnList[j].Addr })
+
+		logutil.Infof("xxxx compileQuery, after remove unavailable cn, cnList:%v, txn:%s",
+			len(c.cnList),
+			c.proc.GetTxnOperator().Txn().DebugString())
+
 	}
 
 	if c.isPrepare && !c.IsTpQuery() {
@@ -4153,6 +4165,11 @@ func (c *Compile) handleDbRelContext(node *plan.Node, onRemoteCN bool) (engine.R
 }
 
 func shouldScanOnCurrentCN(c *Compile, n *plan.Node, forceSingle bool) bool {
+	if n.TableDef.Name == "debug" {
+		logutil.Infof("xxxx generateNodes, table-id:%d, txn:%s, execType:%d, cn cnt:%d",
+			n.TableDef.TblId,
+			c.proc.GetTxnOperator().Txn().DebugString(), c.execType, len(c.cnList))
+	}
 	if len(c.cnList) == 1 ||
 		n.Stats.ForceOneCN ||
 		forceSingle {
@@ -4217,6 +4234,12 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 			node.Data.AttachTombstones(uncommittedTombs)
 		}
 		nodes = append(nodes, node)
+		if n.TableDef.Name == "debug" {
+			logutil.Infof("xxxx generateNodes, table-id:%d, txn:%s, cn-ip:%s, cn-id:%s, cur-cn-ip:%s, cn cnt:%d",
+				n.TableDef.TblId,
+				c.proc.GetTxnOperator().Txn().DebugString(), node.Addr, node.Id, c.addr, len(c.cnList))
+		}
+
 	}
 	return nodes, nil
 }
