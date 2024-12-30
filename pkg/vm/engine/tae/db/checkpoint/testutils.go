@@ -244,8 +244,7 @@ func (r *runner) ForceICKP(ctx context.Context, ts *types.TS) (err error) {
 func (r *runner) CreateBackupFile(ctx context.Context, start, end types.TS) (string, error) {
 	now := time.Now()
 	backup := NewCheckpointEntry(r.rt.SID(), start, end, ET_Incremental)
-	cfg := r.GetCfg()
-	location, err := r.doCheckpointForBackup(ctx, cfg, backup)
+	location, err := r.doCheckpointForBackup(ctx, r.GetCfg(), backup)
 	if err != nil {
 		return "", err
 	}

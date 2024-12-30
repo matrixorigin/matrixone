@@ -276,7 +276,10 @@ func (db *DB) ForceCheckpointForBackup(
 	maxEnd := maxEntry.GetEnd()
 	start := maxEnd.Next()
 	end := db.TxnMgr.Now()
-
+	err = db.BGFlusher.ForceFlush(end, ctx, flushDuration)
+	if err != nil {
+		return
+	}
 	location, err = db.BGCheckpointRunner.CreateBackupFile(ctx, start, end)
 
 	return
