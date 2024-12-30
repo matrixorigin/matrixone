@@ -400,7 +400,8 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 	}
 
 	//default stats means this table maybe not flushed yet, then we don't skip the index
-	if !IsDefaultStats(node.Stats) {
+	ignoreStats := IsDefaultStats(node.Stats)
+	if !ignoreStats {
 		if catalog.IsFakePkName(node.TableDef.Pkey.PkeyColName) {
 			// for cluster by table, make it less prone to go index
 			if node.Stats.Selectivity >= InFilterSelectivityLimit/2 || node.Stats.Outcnt >= InFilterCardLimitNonPK {
@@ -413,7 +414,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 	}
 
 	// Apply unique/secondary indices for point select
-	idxToChoose, filterIdx := builder.getMostSelectiveIndexForPointSelect(indexes, node)
+	idxToChoose, filterIdx := builder.getMostSelectiveIndexForPointSelect(indexes, node, ignoreStats)
 	if idxToChoose != -1 {
 		retID, idxTableNodeID := builder.applyIndexJoin(indexes[idxToChoose], node, EqualIndexCondition, filterIdx, scanSnapshot)
 		builder.applyExtraFiltersOnIndex(indexes[idxToChoose], node, builder.qry.Nodes[idxTableNodeID], filterIdx)
@@ -851,7 +852,7 @@ func (builder *QueryBuilder) applyIndexJoin(idxDef *IndexDef, node *plan.Node, f
 	return joinNodeID, idxTableNodeID
 }
 
-func (builder *QueryBuilder) getMostSelectiveIndexForPointSelect(indexes []*IndexDef, node *plan.Node) (int, []int32) {
+func (builder *QueryBuilder) getMostSelectiveIndexForPointSelect(indexes []*IndexDef, node *plan.Node, ignoreStats bool) (int, []int32) {
 	currentSel := 1.0
 	currentIdx := -1
 	savedFilterIdx := make([]int32, 0)
@@ -892,7 +893,7 @@ func (builder *QueryBuilder) getMostSelectiveIndexForPointSelect(indexes []*Inde
 			}
 			filterIdx = append(filterIdx, idx)
 			filter := node.FilterList[idx]
-			if filter.Selectivity <= InFilterSelectivityLimit && node.Stats.TableCnt*filter.Selectivity <= float64(GetInFilterCardLimitOnPK(builder.compCtx.GetProcess().GetService(), node.Stats.TableCnt)) {
+			if ignoreStats || (filter.Selectivity <= InFilterSelectivityLimit && node.Stats.TableCnt*filter.Selectivity <= float64(GetInFilterCardLimitOnPK(builder.compCtx.GetProcess().GetService(), node.Stats.TableCnt))) {
 				usePartialIndex = true
 			}
 		}
