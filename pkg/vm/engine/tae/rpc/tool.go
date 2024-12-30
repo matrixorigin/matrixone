@@ -1370,11 +1370,8 @@ func (c *gcDumpArg) String() string {
 
 func (c *gcDumpArg) Usage() (res string) {
 	res += "Examples:\n"
-	res += "  # Display all gc information\n"
-	res += "  inspect gc dump\n"
-
-	res += "\n"
-	res += "Options:\n"
+	res += "  # Dump the pinned objects to the file\n"
+	res += "  inspect gc dump -f /your/path/file"
 	return
 }
 
@@ -1399,7 +1396,9 @@ func (c *gcDumpArg) Run() (err error) {
 
 	pinnedObjects := make(map[string]bool)
 
-	c.getInMemObjects(pinnedObjects)
+	if err = c.getInMemObjects(pinnedObjects); err != nil {
+		return
+	}
 	if err = c.getCheckpointObject(ctx, pinnedObjects); err != nil {
 		return
 	}
@@ -1417,7 +1416,7 @@ func (c *gcDumpArg) Run() (err error) {
 	return
 }
 
-func (c *gcDumpArg) getInMemObjects(pinnedObjects map[string]bool) {
+func (c *gcDumpArg) getInMemObjects(pinnedObjects map[string]bool) (err error) {
 	dbIt := c.ctx.db.Catalog.MakeDBIt(false)
 	for dbIt.Valid() {
 		db := dbIt.Get().GetPayload()
@@ -1439,11 +1438,14 @@ func (c *gcDumpArg) getInMemObjects(pinnedObjects map[string]bool) {
 				pinnedObjects[be.ObjectName().String()] = true
 				return nil
 			}
-			table.RecurLoop(lp)
+			if err = table.RecurLoop(lp); err != nil {
+				return
+			}
 			tableIt.Next()
 		}
 		dbIt.Next()
 	}
+	return
 }
 
 func (c *gcDumpArg) getCheckpointObject(ctx context.Context, pinned map[string]bool) (err error) {
@@ -1569,9 +1571,10 @@ func (c *gcRemoveArg) Usage() (res string) {
 	res += "Examples:\n"
 	res += "  # Remove objects from the given file\n"
 	res += "  inspect gc remove -f file -o ori -t tar\n"
-
-	res += "\n"
-	res += "Options:\n"
+	res += "  # Remove objects from the given file with modified time\n"
+	res += "  inspect gc remove -f file -o ori -t tar -m 1620000000"
+	res += "  # Dry run to remove objects from the given file\n"
+	res += "  inspect gc remove -f file -o ori -t tar -d"
 	return
 }
 
