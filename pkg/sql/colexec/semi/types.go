@@ -69,7 +69,6 @@ type SemiJoin struct {
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
 	JoinMapTag         int32
 	vm.OperatorBase
-	colexec.Projection
 }
 
 func (semiJoin *SemiJoin) GetOperatorBase() *vm.OperatorBase {
@@ -113,19 +112,10 @@ func (semiJoin *SemiJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 	ctr.state = Build
 	ctr.skipProbe = false
 
-	if semiJoin.ProjectList != nil {
-		if semiJoin.OpAnalyzer != nil {
-			semiJoin.OpAnalyzer.Alloc(semiJoin.ProjectAllocSize + semiJoin.ctr.maxAllocSize)
-		}
-
-		semiJoin.ctr.maxAllocSize = 0
-		semiJoin.ResetProjection(proc)
-	} else {
-		if semiJoin.OpAnalyzer != nil {
-			semiJoin.OpAnalyzer.Alloc(semiJoin.ctr.maxAllocSize)
-		}
-		semiJoin.ctr.maxAllocSize = 0
+	if semiJoin.OpAnalyzer != nil {
+		semiJoin.OpAnalyzer.Alloc(semiJoin.ctr.maxAllocSize)
 	}
+	semiJoin.ctr.maxAllocSize = 0
 }
 
 func (semiJoin *SemiJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
@@ -136,16 +126,10 @@ func (semiJoin *SemiJoin) Free(proc *process.Process, pipelineFailed bool, err e
 	ctr.cleanExprExecutor()
 	ctr.cleanBatch(proc)
 
-	semiJoin.FreeProjection(proc)
 }
 
 func (semiJoin *SemiJoin) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
-	batch := input
-	var err error
-	if semiJoin.ProjectList != nil {
-		batch, err = semiJoin.EvalProjection(input, proc)
-	}
-	return batch, err
+	return input, nil
 }
 
 func (ctr *container) resetExprExecutor() {

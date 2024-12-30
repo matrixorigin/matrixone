@@ -312,11 +312,9 @@ func (w *BlockWriter) GetName() objectio.ObjectName {
 }
 
 func (w *BlockWriter) String(
-	blocks []objectio.BlockObject) string {
-	size, err := GetObjectSizeWithBlocks(blocks)
-	if err != nil {
-		return fmt.Sprintf("name: %s, err: %s", w.nameStr, err.Error())
-	}
+	blocks []objectio.BlockObject,
+) string {
+	size, _ := objectio.SumSizeOfBlocks(blocks)
 	return fmt.Sprintf("name: %s, block count: %d, size: %d",
 		w.nameStr,
 		len(blocks),

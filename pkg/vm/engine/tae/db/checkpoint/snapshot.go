@@ -16,10 +16,12 @@ package checkpoint
 
 import (
 	"context"
+	"sort"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"sort"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -49,8 +51,8 @@ import (
 
 func FilterSortedMetaFilesByTimestamp(
 	ts *types.TS,
-	files []*MetaFile,
-) []*MetaFile {
+	files []ioutil.TSRangeFile,
+) []ioutil.TSRangeFile {
 	if len(files) == 0 {
 		return nil
 	}
@@ -61,7 +63,7 @@ func FilterSortedMetaFilesByTimestamp(
 	// ts.LE(&prev.end) means the ts is in the range of the checkpoint
 	// it means the ts is in the range of the global checkpoint
 	// ts is within GCKP[0, end]
-	if prev.start.IsEmpty() && ts.LE(&prev.end) {
+	if prev.GetStart().IsEmpty() && ts.LE(prev.GetEnd()) {
 		return files[:1]
 	}
 
@@ -70,7 +72,7 @@ func FilterSortedMetaFilesByTimestamp(
 		// curr.start.IsEmpty() means the file is a global checkpoint
 		// ts.LE(&curr.end) means the ts is in the range of the checkpoint
 		// ts.LT(&prev.end) means the ts is not in the range of the previous checkpoint
-		if curr.start.IsEmpty() && ts.LE(&curr.end) {
+		if curr.GetStart().IsEmpty() && ts.LE(curr.GetEnd()) {
 			return files[:i]
 		}
 	}
@@ -79,22 +81,22 @@ func FilterSortedMetaFilesByTimestamp(
 }
 
 func getSnapshotMetaFiles(
-	metaFiles, compactedFiles []*MetaFile,
+	metaFiles, compactedFiles []ioutil.TSRangeFile,
 	snapshot *types.TS,
-) []*MetaFile {
+) []ioutil.TSRangeFile {
 	sort.Slice(compactedFiles, func(i, j int) bool {
-		return compactedFiles[i].end.LT(&compactedFiles[j].end)
+		return compactedFiles[i].GetEnd().LT(compactedFiles[j].GetEnd())
 	})
 
 	sort.Slice(metaFiles, func(i, j int) bool {
-		return metaFiles[i].end.LT(&metaFiles[j].end)
+		return metaFiles[i].GetEnd().LT(metaFiles[j].GetEnd())
 	})
 
-	retFiles := make([]*MetaFile, 0)
+	retFiles := make([]ioutil.TSRangeFile, 0)
 	if len(compactedFiles) > 0 {
 		file := compactedFiles[len(compactedFiles)-1]
 		retFiles = append(retFiles, file)
-		if snapshot.LE(&compactedFiles[len(compactedFiles)-1].end) {
+		if snapshot.LE(compactedFiles[len(compactedFiles)-1].GetEnd()) {
 			// If this condition is met, you can return the compacted checkpoint + one normal checkpoint,
 			// otherwise you need to call FilterSortedMetaFilesByTimestamp to handle it normally.
 
@@ -102,7 +104,7 @@ func getSnapshotMetaFiles(
 			// order to avoid data loss, an additional checkpoint is still needed, because
 			// the object flushed by the snapshot may be in the next checkpoint
 			for _, f := range metaFiles {
-				if !f.start.IsEmpty() && f.start.GE(&file.end) {
+				if !f.GetStart().IsEmpty() && f.GetStart().GE(file.GetEnd()) {
 					retFiles = append(retFiles, f)
 					break
 				}
@@ -130,29 +132,27 @@ func ListSnapshotCheckpoint(
 	if len(files) == 0 {
 		return nil, nil
 	}
-	metaFiles := make([]*MetaFile, 0)
-	compactedFiles := make([]*MetaFile, 0)
+	metaFiles := make([]ioutil.TSRangeFile, 0)
+	compactedFiles := make([]ioutil.TSRangeFile, 0)
 	for name := range files {
-		start, end, ext := blockio.DecodeCheckpointMetadataFileName(name)
-		file := &MetaFile{
-			start: start,
-			end:   end,
-			name:  name,
-		}
-		if ext == blockio.CompactedExt {
-			compactedFiles = append(compactedFiles, file)
+		meta := ioutil.DecodeTSRangeFile(name)
+		if meta.IsCompactExt() {
+			compactedFiles = append(compactedFiles, meta)
 		} else {
-			metaFiles = append(metaFiles, file)
+			// PXU FIXME: we should filter out the unexpected meta files
+			metaFiles = append(metaFiles, meta)
 		}
 	}
-	return loadCheckpointMeta(ctx, sid, fs, getSnapshotMetaFiles(metaFiles, compactedFiles, &snapshot))
+	return loadCheckpointMeta(
+		ctx, sid, getSnapshotMetaFiles(metaFiles, compactedFiles, &snapshot), fs,
+	)
 }
 
 func loadCheckpointMeta(
 	ctx context.Context,
 	sid string,
+	metaFiles []ioutil.TSRangeFile,
 	fs fileservice.FileService,
-	metaFiles []*MetaFile,
 ) (entries []*CheckpointEntry, err error) {
 	colNames := CheckpointSchema.Attrs()
 	colTypes := CheckpointSchema.Types()
@@ -160,11 +160,11 @@ func loadCheckpointMeta(
 	var (
 		tmpBat *batch.Batch
 	)
-	loader := func(name string, start, end types.TS) (err error) {
+	loader := func(meta *ioutil.TSRangeFile) (err error) {
 		var reader *blockio.BlockReader
 		var bats []*batch.Batch
 		var closeCB func()
-		reader, err = blockio.NewFileReader(sid, fs, name)
+		reader, err = blockio.NewFileReader(sid, fs, meta.GetCKPFullName())
 		if err != nil {
 			return err
 		}
@@ -195,14 +195,13 @@ func loadCheckpointMeta(
 			// and you need to add the specified checkpoint information to tmpBat
 			// according to start and end.
 			// start is file name start, end is file name end
-			appendCheckpointToBatch(tmpBat, bats[0], start, end, common.DebugAllocator)
+			appendCheckpointToBatch(tmpBat, bats[0], meta.GetStart(), meta.GetEnd(), common.DebugAllocator)
 		}
 		return
 	}
 
 	for _, metaFile := range metaFiles {
-		err = loader(CheckpointDir+metaFile.name, metaFile.start, metaFile.end)
-		if err != nil {
+		if err = loader(&metaFile); err != nil {
 			return
 		}
 	}
@@ -250,14 +249,14 @@ func ListSnapshotCheckpointWithMeta(
 	return entries, nil
 }
 
-func appendCheckpointToBatch(dst, src *batch.Batch, start, end types.TS, mp *mpool.MPool) {
+func appendCheckpointToBatch(dst, src *batch.Batch, start, end *types.TS, mp *mpool.MPool) {
 	tSrc := containers.ToTNBatch(src, mp)
 	tDst := containers.ToTNBatch(dst, mp)
 	length := tSrc.Vecs[0].Length() - 1
 	startTs := vector.MustFixedColWithTypeCheck[types.TS](tSrc.Vecs[0].GetDownstreamVector())
 	endTs := vector.MustFixedColWithTypeCheck[types.TS](tSrc.Vecs[1].GetDownstreamVector())
 	for i := length; i >= 0; i-- {
-		if !startTs[i].EQ(&start) || !endTs[i].EQ(&end) {
+		if !startTs[i].EQ(start) || !endTs[i].EQ(end) {
 			continue
 		}
 		for v, vec := range tSrc.Vecs {

@@ -40,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -4440,6 +4441,157 @@ func TestBlockRead(t *testing.T) {
 	)
 }
 
+func TestBlockRead2(t *testing.T) {
+	blockio.RunPipelineTest(
+		func() {
+			defer testutils.AfterTest(t)()
+			ctx := context.Background()
+
+			opts := config.WithLongScanAndCKPOpts(nil)
+			tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+			tsAlloc := types.NewTsAlloctor(opts.Clock)
+			defer tae.Close()
+			schema := catalog.MockSchemaAll(2, 1)
+			schema.Extra.BlockMaxRows = 20
+			schema.Extra.ObjectMaxBlocks = 2
+			tae.BindSchema(schema)
+			bat := catalog.MockBatch(schema, 40)
+
+			tae.CreateRelAndAppend(bat, true)
+			tae.CompactBlocks(false)
+
+			_, rel := tae.GetRelation()
+			blkEntry := testutil.GetOneObject(rel).GetMeta().(*catalog.ObjectEntry)
+
+			beforeDel := tsAlloc.Alloc()
+			txn1, rel := tae.GetRelation()
+			for i := 0; i < blkEntry.GetNonAppendableBlockCnt(); i++ {
+				commonID := blkEntry.AsCommonID()
+				commonID.SetBlockOffset(uint16(i))
+				assert.NoError(t, rel.RangeDelete(commonID, 0, 12, handle.DT_Normal))
+			}
+			assert.NoError(t, txn1.Commit(context.Background()))
+
+			afterFirstDel := tsAlloc.Alloc()
+			txn2, rel := tae.GetRelation()
+			for i := 0; i < blkEntry.GetNonAppendableBlockCnt(); i++ {
+				commonID := blkEntry.AsCommonID()
+				commonID.SetBlockOffset(uint16(i))
+				assert.NoError(t, rel.RangeDelete(commonID, 13, 15, handle.DT_Normal))
+			}
+			assert.NoError(t, txn2.Commit(context.Background()))
+
+			afterSecondDel := tsAlloc.Alloc()
+
+			tae.CompactBlocks(false)
+			_, rel = tae.GetRelation()
+			tombstoneObjectEntry := testutil.GetOneTombstoneMeta(rel)
+			objectEntry := testutil.GetOneBlockMeta(rel)
+			objStats := tombstoneObjectEntry.ObjectMVCCNode
+			ds := logtail.NewSnapshotDataSource(ctx, tae.DB.Runtime.Fs.Service, beforeDel, []objectio.ObjectStats{objStats.ObjectStats})
+			bid, _ := blkEntry.ID(), blkEntry.ID()
+
+			info := &objectio.BlockInfo{
+				BlockID: *objectio.NewBlockidWithObjectID(bid, 0),
+			}
+			metaloc := objectEntry.ObjectLocation()
+			metaloc.SetRows(schema.Extra.BlockMaxRows)
+			info.SetMetaLocation(metaloc)
+
+			columns := make([]string, 0)
+			colIdxs := make([]uint16, 0)
+			colTyps := make([]types.Type, 0)
+			defs := schema.ColDefs[:]
+			rand.Shuffle(len(defs), func(i, j int) { defs[i], defs[j] = defs[j], defs[i] })
+			for _, col := range defs {
+				columns = append(columns, col.Name)
+				colIdxs = append(colIdxs, uint16(col.Idx))
+				colTyps = append(colTyps, col.Type)
+			}
+			t.Log("read columns: ", columns)
+			fs := tae.DB.Runtime.Fs.Service
+			pool, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+			assert.NoError(t, err)
+			infos := make([]*objectio.BlockInfo, 0)
+			infos = append(infos, info)
+			err = blockio.Prefetch("", fs, infos[0].MetaLocation())
+			assert.NoError(t, err)
+			buildBatch := func(typs []types.Type) *batch.Batch {
+				bat := batch.NewWithSize(len(typs))
+				//bat.Attrs = append(bat.Attrs, cols...)
+
+				for i := 0; i < len(typs); i++ {
+					bat.Vecs[i] = vector.NewVec(typs[i])
+				}
+				return bat
+			}
+			for i := 0; i < 2; i++ {
+				info.MetaLocation().SetID(uint16(i))
+				b1 := buildBatch(colTyps)
+				phyAddrColumnPos := -1
+				cacheVectors := containers.NewVectors(len(colIdxs) + 1)
+				ds.SetTS(beforeDel)
+				err = blockio.BlockDataReadInner(
+					context.Background(), info, ds, colIdxs, colTyps, phyAddrColumnPos,
+					beforeDel, nil, fileservice.Policy(0), b1, cacheVectors, pool, fs,
+				)
+				assert.NoError(t, err)
+				assert.Equal(t, len(columns), len(b1.Vecs))
+				assert.Equal(t, 20, b1.Vecs[0].Length())
+
+				ds.SetTS(afterFirstDel)
+
+				b2 := buildBatch(colTyps)
+				logutil.Infof("meta location: %v", info.MetaLocation().String())
+				err = blockio.BlockDataReadInner(
+					context.Background(), info, ds, colIdxs, colTyps, phyAddrColumnPos,
+					afterFirstDel, nil, fileservice.Policy(0), b2, cacheVectors, pool, fs,
+				)
+				assert.NoError(t, err)
+				assert.Equal(t, 7, b2.Vecs[0].Length())
+
+				ds.SetTS(afterSecondDel)
+
+				b3 := buildBatch(colTyps)
+				err = blockio.BlockDataReadInner(
+					context.Background(), info, ds, colIdxs, colTyps, phyAddrColumnPos,
+					afterSecondDel, nil, fileservice.Policy(0), b3, cacheVectors, pool, fs,
+				)
+				assert.NoError(t, err)
+				assert.Equal(t, len(columns), len(b2.Vecs))
+				assert.Equal(t, 4, b3.Vecs[0].Length())
+				// read rowid column only
+				b4 := buildBatch([]types.Type{types.T_Rowid.ToType()})
+				err = blockio.BlockDataReadInner(
+					context.Background(), info,
+					ds,
+					[]uint16{2},
+					[]types.Type{types.T_Rowid.ToType()},
+					0,
+					afterSecondDel, nil, fileservice.Policy(0), b4, cacheVectors, pool, fs,
+				)
+				assert.NoError(t, err)
+				assert.Equal(t, 1, len(b4.Vecs))
+				assert.Equal(t, 4, b4.Vecs[0].Length())
+
+				// read rowid column only
+				//info.Appendable = false
+				b5 := buildBatch([]types.Type{types.T_Rowid.ToType()})
+				err = blockio.BlockDataReadInner(
+					context.Background(), info,
+					ds, []uint16{2},
+					[]types.Type{types.T_Rowid.ToType()},
+					0,
+					afterSecondDel, nil, fileservice.Policy(0), b5, cacheVectors, pool, fs,
+				)
+				assert.NoError(t, err)
+				assert.Equal(t, 1, len(b5.Vecs))
+				assert.Equal(t, 4, b5.Vecs[0].Length())
+			}
+		},
+	)
+}
+
 func TestCompactDeltaBlk(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
@@ -6604,13 +6756,12 @@ func TestAppendAndGC2(t *testing.T) {
 		}
 		for i := 0; i < vec.Length(); i++ {
 			file := vec.GetStringAt(i)
-			if strings.Contains(file, checkpoint.PrefixMetadata) {
-				fileInfo := strings.Split(file, checkpoint.CheckpointDir+"/")
-				name := fileInfo[1]
-				files[name] = struct{}{}
-				continue
+			_, decodedFile := ioutil.TryDecodeTSRangeFile(file)
+			if decodedFile.IsMetadataFile() {
+				files[decodedFile.GetName()] = struct{}{}
+			} else {
+				files[file] = struct{}{}
 			}
-			files[file] = struct{}{}
 		}
 	}
 	dir := tae.Dir
@@ -7565,7 +7716,8 @@ func TestGCCheckpoint1(t *testing.T) {
 	})
 	assert.True(t, tae.BGCheckpointRunner.MaxGlobalCheckpoint().IsFinished())
 
-	tae.BGCheckpointRunner.DisableCheckpoint()
+	err := tae.BGCheckpointRunner.DisableCheckpoint(ctx)
+	require.NoError(t, err)
 
 	gcTS := types.BuildTS(time.Now().UTC().UnixNano(), 0)
 	t.Log(gcTS.ToString())
@@ -7632,7 +7784,7 @@ func Test_CheckpointChaos1(t *testing.T) {
 
 	fault.Enable()
 	defer fault.Disable()
-	msg := "checkpoint-chaos"
+	msg := fmt.Sprintf("%s-checkpoint-chaos", t.Name())
 	rmFn, err := objectio.InjectCheckpointSave(msg)
 	assert.NoError(t, err)
 
@@ -7645,7 +7797,10 @@ func Test_CheckpointChaos1(t *testing.T) {
 	entries := tae.BGCheckpointRunner.GetAllIncrementalCheckpoints()
 	assert.Equal(t, 0, len(entries))
 
-	rmFn()
+	ok, err := rmFn()
+	require.True(t, ok)
+	require.NoError(t, err)
+
 	ctx = context.Background()
 	err = tae.DB.ForceCheckpoint(ctx, now, time.Minute)
 	assert.NoError(t, err)
@@ -7712,7 +7867,8 @@ func Test_CheckpointChaos2(t *testing.T) {
 
 	fault.Enable()
 	defer fault.Disable()
-	rmFn, err := objectio.InjectCheckpointSave("checkpoint-chaos")
+	msg := fmt.Sprintf("%s-checkpoint-chaos", t.Name())
+	rmFn, err := objectio.InjectCheckpointSave(msg)
 	assert.NoError(t, err)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*2)
@@ -7722,10 +7878,14 @@ func Test_CheckpointChaos2(t *testing.T) {
 	assert.Error(t, err)
 	maxGCKP := tae.DB.BGCheckpointRunner.MaxGlobalCheckpoint()
 	assert.Nilf(t, maxGCKP, maxGCKP.String())
-	rmFn()
+
+	ok, err := rmFn()
+	require.True(t, ok)
+	require.NoError(t, err)
+
 	ctx, cancel = context.WithTimeout(context.Background(), time.Second*20)
 	defer cancel()
-	assert.NoError(t, tae.DB.BGCheckpointRunner.WaitRunningGCKPDoneForTest(ctx))
+	assert.NoError(t, tae.DB.BGCheckpointRunner.WaitRunningCKPDoneForTest(ctx, true))
 	err = tae.DB.ForceGlobalCheckpoint(ctx, maxICKP.GetEnd(), 0, 0)
 	assert.NoError(t, err)
 	maxGCKP = tae.DB.BGCheckpointRunner.MaxGlobalCheckpoint()
@@ -7750,7 +7910,7 @@ func Test_CheckpointChaos2(t *testing.T) {
 	assert.Equal(t, maxICKP.GetEnd(), maxICKP2.GetEnd())
 	assert.Equal(t, maxGCKP.GetEnd(), maxGCKP2.GetEnd())
 
-	reader, err := checkpoint.MakeMetafilesReader(
+	reader, err := checkpoint.MakeCKPMetaDirReader(
 		ctx,
 		tae.DB.Opts.SID,
 		0,
@@ -10617,6 +10777,40 @@ func TestReplayDebugLog(t *testing.T) {
 	tae.Restart(ctx)
 }
 
+func TestRW2(t *testing.T) {
+	ctx := context.Background()
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+
+	schema := catalog.MockSchemaAll(1, -1)
+	schema.Extra.BlockMaxRows = 2
+	schema.Extra.ObjectMaxBlocks = 4
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 1)
+	defer bat.Close()
+	/*
+		create obj
+		txn1 delete row/warchecker.add
+		txn2 drop obj(mock delete)
+
+		txn2 commit
+		txn1 commit
+	*/
+	tae.CreateRelAndAppend(bat, true)
+
+	txn, rel := tae.GetRelation()
+	obj := testutil.GetOneBlockMeta(rel)
+	rel.Append(ctx, bat)
+	{
+		tbl := obj.GetTable()
+		txn2, _ := tae.StartTxn(nil)
+		tbl.DropObjectEntry(obj.ID(), txn2, false)
+		txn2.ToPreparingLocked(tae.TxnMgr.Now())
+	}
+	err := txn.Commit(ctx)
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnRWConflict))
+}
+
 func Test_BasicTxnModeSwitch(t *testing.T) {
 	ctx := context.Background()
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -10674,4 +10868,72 @@ func TestObjectList(t *testing.T) {
 
 	tae.Catalog.GCByTS(ctx, tae.TxnMgr.Now())
 	t.Log(tae.Catalog.SimplePPString(3))
+}
+func TestRW3(t *testing.T) {
+	ctx := context.Background()
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+
+	objCount := 100
+	schema := catalog.MockSchemaAll(1, -1)
+	schema.Extra.BlockMaxRows = 1
+	schema.Extra.ObjectMaxBlocks = 4
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, objCount)
+	defer bat.Close()
+	tae.CreateRelAndAppend(bat, true)
+
+	objs := make([]*catalog.ObjectEntry, 0)
+	txn, rel := tae.GetRelation()
+	iter := rel.MakeObjectIt(false)
+	for iter.Next() {
+		obj := iter.GetObject().GetMeta().(*catalog.ObjectEntry)
+		objs = append(objs, obj)
+	}
+	assert.Equal(t, objCount, len(objs))
+	err := txn.Commit(ctx)
+	assert.NoError(t, err)
+
+	var wg sync.WaitGroup
+
+	txn, rel = tae.GetRelation()
+	pkVec := containers.MakeVector(types.T_uint64.ToType(), common.DefaultAllocator)
+	defer pkVec.Close()
+	rowIDVec := containers.MakeVector(types.T_Rowid.ToType(), common.DefaultAllocator)
+	defer rowIDVec.Close()
+	for i, obj := range objs {
+		rowID := objectio.NewRowIDWithObjectIDBlkNumAndRowID(*obj.ID(), 0, 0)
+		rowIDVec.Append(rowID, false)
+		pkVec.Append(uint64(i), false)
+	}
+	err = rel.DeleteByPhyAddrKeys(rowIDVec, pkVec, handle.DT_Normal)
+	assert.NoError(t, err)
+	{
+		deleteObjectFn := func(offset int) func() {
+			return func() {
+				defer wg.Done()
+				txn, err := tae.StartTxn(nil)
+				assert.NoError(t, err)
+				obj := objs[offset]
+				task, err := jobs.NewFlushTableTailTask(nil, txn, []*catalog.ObjectEntry{obj}, nil, tae.Runtime)
+				assert.NoError(t, err)
+				err = task.OnExec(context.Background())
+				assert.NoError(t, err)
+				err = txn.Commit(ctx)
+				assert.NoError(t, err)
+			}
+		}
+		workers, err := ants.NewPool(50)
+		assert.NoError(t, err)
+		for i := 0; i < objCount; i++ {
+			wg.Add(1)
+			workers.Submit(deleteObjectFn(i))
+		}
+	}
+	err = txn.Commit(ctx)
+	assert.NoError(t, err)
+	wg.Wait()
+
+	tae.CheckRowsByScan(0, true)
+
 }
