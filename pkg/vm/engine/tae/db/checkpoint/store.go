@@ -398,24 +398,10 @@ func (s *runnerStore) CleanPenddingCheckpoint() {
 	}
 }
 
-func (s *runnerStore) TryAddNewCompactedCheckpointEntry(entry *CheckpointEntry) (success bool) {
-	if entry.entryType != ET_Compacted {
-		panic("TryAddNewCompactedCheckpointEntry entry type is error")
+func (s *runnerStore) AddICKPFinishedEntry(entry *CheckpointEntry) (success bool) {
+	if !entry.IsFinished() {
+		return false
 	}
-	s.Lock()
-	defer s.Unlock()
-	old := s.compacted.Load()
-	if old != nil {
-		end := old.end
-		if entry.end.LT(&end) {
-			return true
-		}
-	}
-	s.compacted.Store(entry)
-	return true
-}
-
-func (s *runnerStore) TryAddNewIncrementalCheckpointEntry(entry *CheckpointEntry) (success bool) {
 	s.Lock()
 	defer s.Unlock()
 	maxEntry, _ := s.incrementals.Max()
@@ -429,10 +415,7 @@ func (s *runnerStore) TryAddNewIncrementalCheckpointEntry(entry *CheckpointEntry
 
 	// if it is not the right candidate, skip this request
 	// [startTs, endTs] --> [endTs+1, ?]
-	endTS := maxEntry.GetEnd()
-	startTS := entry.GetStart()
-	nextTS := endTS.Next()
-	if !nextTS.Equal(&startTS) {
+	if !maxEntry.IsYoungNeighbor(entry) {
 		success = false
 		return
 	}
@@ -450,9 +433,9 @@ func (s *runnerStore) TryAddNewIncrementalCheckpointEntry(entry *CheckpointEntry
 }
 
 // Since there is no wal after recovery, the checkpoint lsn before backup must be set to 0.
-func (s *runnerStore) TryAddNewBackupCheckpointEntry(entry *CheckpointEntry) (success bool) {
+func (s *runnerStore) AddBackupCKPEntry(entry *CheckpointEntry) (success bool) {
 	entry.entryType = ET_Incremental
-	success = s.TryAddNewIncrementalCheckpointEntry(entry)
+	success = s.AddICKPFinishedEntry(entry)
 	if !success {
 		return
 	}
@@ -497,7 +480,7 @@ func (s *runnerStore) RemoveGCKPIntent() (ok bool) {
 	return true
 }
 
-func (s *runnerStore) AddGCKPReplayEntry(
+func (s *runnerStore) AddGCKPFinishedEntry(
 	entry *CheckpointEntry,
 ) (success bool) {
 	s.Lock()
@@ -648,8 +631,21 @@ func (s *runnerStore) GetCompacted() *CheckpointEntry {
 	return s.compacted.Load()
 }
 
-func (s *runnerStore) UpdateCompacted(entry *CheckpointEntry) {
-	s.compacted.Store(entry)
+func (s *runnerStore) UpdateCompacted(entry *CheckpointEntry) (updated bool) {
+	for {
+		old := s.compacted.Load()
+		if old != nil {
+			newEnd := entry.GetEnd()
+			oldEnd := old.GetEnd()
+			if newEnd.LE(&oldEnd) {
+				return
+			}
+		}
+		if s.compacted.CompareAndSwap(old, entry) {
+			updated = true
+			return
+		}
+	}
 }
 
 func (s *runnerStore) ICKPRange(
@@ -969,14 +965,14 @@ func (s *runnerStore) doGC(ts *types.TS) (gdeleted, ideleted int) {
 	}
 	gloabls := s.globals.Items()
 	for _, e := range gloabls {
-		if e.LessEq(ts) {
+		if e.LEByTS(ts) {
 			s.globals.Delete(e)
 			gdeleted++
 		}
 	}
 	incrementals := s.incrementals.Items()
 	for _, e := range incrementals {
-		if e.LessEq(ts) {
+		if e.LEByTS(ts) {
 			s.incrementals.Delete(e)
 			ideleted++
 		}
