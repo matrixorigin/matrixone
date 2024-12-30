@@ -229,24 +229,5 @@ func (e *checkpointExecutor) RunICKP() (err error) {
 }
 
 func (executor *checkpointExecutor) onICKPEntries(items ...any) {
-	var (
-		err error
-		now = time.Now()
-	)
-	defer func() {
-		logger := logutil.Info
-		if err != nil {
-			logger = logutil.Error
-		}
-		// if err != nil || time.Since(now) > e.slowThreshold {
-		if err != nil || time.Since(now) > time.Second {
-			logger(
-				"ICKP-Execute-End",
-				zap.Duration("cost", time.Since(now)),
-				zap.Error(err),
-			)
-		}
-	}()
-
-	err = executor.RunICKP()
+	executor.RunICKP()
 }
