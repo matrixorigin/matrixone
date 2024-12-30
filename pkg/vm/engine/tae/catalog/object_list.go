@@ -158,12 +158,6 @@ func (l *ObjectList) Set(object *ObjectEntry, registerSortHint bool) {
 	l.Lock()
 	defer l.Unlock()
 	if registerSortHint {
-		// todo remove it
-		for _, sortHint := range l.sortHint_objectID {
-			if sortHint == object.SortHint {
-				panic("logic error")
-			}
-		}
 		id, ok := l.objectID_sortHint[object.SortHint]
 		if ok {
 			panic(fmt.Sprintf("logic error, duplicate sort hint, obj %v %v, sort hint %v",
