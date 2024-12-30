@@ -283,7 +283,7 @@ func (db *DB) ForceCheckpointForBackup(
 		return
 	}
 
-	location, err = db.BGCheckpointRunner.ForceCheckpointForBackup(ts)
+	location, err = db.BGCheckpointRunner.ForceCheckpointForBackup(cfg, ts)
 
 	return
 }

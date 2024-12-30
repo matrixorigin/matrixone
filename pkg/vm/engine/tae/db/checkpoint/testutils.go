@@ -30,7 +30,7 @@ type TestRunner interface {
 
 	// TODO: remove the below apis
 	CleanPenddingCheckpoint()
-	ForceCheckpointForBackup(end types.TS) (string, error)
+	ForceCheckpointForBackup(*CheckpointCfg, types.TS) (string, error)
 	ForceGCKP(context.Context, types.TS, time.Duration) error
 	ForceICKP(context.Context, *types.TS) error
 	MaxLSNInRange(end types.TS) uint64
@@ -242,7 +242,7 @@ func (r *runner) ForceICKP(ctx context.Context, ts *types.TS) (err error) {
 	}
 }
 
-func (r *runner) ForceCheckpointForBackup(end types.TS) (location string, err error) {
+func (r *runner) ForceCheckpointForBackup(cfg *CheckpointCfg, end types.TS) (location string, err error) {
 	prev := r.MaxIncrementalCheckpoint()
 	if prev != nil && !prev.IsFinished() {
 		return "", moerr.NewInternalError(r.ctx, "prev checkpoint not finished")
@@ -260,11 +260,9 @@ func (r *runner) ForceCheckpointForBackup(end types.TS) (location string, err er
 	r.store.AddNewIncrementalEntry(entry)
 	now := time.Now()
 	var files []string
-	// TODO: change me
-	cfg := r.GetCfg()
 	if cfg == nil {
-		err = ErrExecutorClosed
-		return
+		cfg = new(CheckpointCfg)
+		cfg.FillDefaults()
 	}
 	if _, files, err = r.doIncrementalCheckpoint(cfg, entry); err != nil {
 		return
