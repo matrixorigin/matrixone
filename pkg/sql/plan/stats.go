@@ -1407,6 +1407,10 @@ func DefaultBigStats() *plan.Stats {
 	return stats
 }
 
+func IsDefaultStats(stats *plan.Stats) bool {
+	return stats.Cost == 1000 && stats.TableCnt == 1000 && stats.Outcnt == 1000 && stats.Selectivity == 1 && stats.BlockNum == 1 && stats.Rowsize == 100
+}
+
 func DefaultStats() *plan.Stats {
 	stats := new(Stats)
 	stats.TableCnt = 1000
