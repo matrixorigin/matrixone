@@ -339,6 +339,8 @@ type StatsInfo struct {
 		TxnIncrStatementS3 S3Request `json:"TxnIncrStatementS3"`
 	}
 
+	PermissionAuth StatsArray
+
 	// FileService(S3 or localFS) Read Data time Consumption
 	IOAccessTimeConsumption int64
 	// S3 FileService Prefetch File IOMerge time Consumption
@@ -369,6 +371,12 @@ func (s S3Request) CountLIST() int64   { return s.List }
 func (s S3Request) CountPUT() int64    { return s.Put }
 func (s S3Request) CountGET() int64    { return s.Head + s.Get }
 func (s S3Request) CountDELETE() int64 { return s.Delete + s.DeleteMul }
+
+func NewStatsInfo() *StatsInfo {
+	s := new(StatsInfo)
+	s.PermissionAuth.Reset()
+	return s
+}
 
 func (stats *StatsInfo) CompileStart() {
 	if stats == nil {

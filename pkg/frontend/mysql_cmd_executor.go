@@ -2056,10 +2056,11 @@ func buildPlan(reqCtx context.Context, ses FeSession, ctx plan2.CompilerContext,
 	if ret != nil {
 		ret.IsPrepare = isPrepareStmt
 		if ses != nil && ses.GetTenantInfo() != nil && !ses.IsBackgroundSession() {
-			err = authenticateCanExecuteStatementAndPlan(reqCtx, ses.(*Session), stmt, ret)
+			authStats, err := authenticateCanExecuteStatementAndPlan(reqCtx, ses.(*Session), stmt, ret)
 			if err != nil {
 				return nil, err
 			}
+			stats.PermissionAuth.Add(&authStats)
 		}
 		return ret, err
 	}
@@ -2085,10 +2086,11 @@ func buildPlan(reqCtx context.Context, ses FeSession, ctx plan2.CompilerContext,
 	if ret != nil {
 		ret.IsPrepare = isPrepareStmt
 		if ses != nil && ses.GetTenantInfo() != nil && !ses.IsBackgroundSession() {
-			err = authenticateCanExecuteStatementAndPlan(reqCtx, ses.(*Session), stmt, ret)
+			authStats, err := authenticateCanExecuteStatementAndPlan(reqCtx, ses.(*Session), stmt, ret)
 			if err != nil {
 				return nil, err
 			}
+			stats.PermissionAuth.Add(&authStats)
 		}
 	}
 	return ret, err
@@ -2225,91 +2227,107 @@ func incStatementErrorsCounter(tenant string, stmt tree.Statement) {
 }
 
 // authenticateUserCanExecuteStatement checks the user can execute the statement
-func authenticateUserCanExecuteStatement(reqCtx context.Context, ses *Session, stmt tree.Statement) error {
+func authenticateUserCanExecuteStatement(reqCtx context.Context, ses *Session, stmt tree.Statement) (statistic.StatsArray, error) {
+	var stats statistic.StatsArray
+	stats.Reset()
+
 	reqCtx, span := trace.Debug(reqCtx, "authenticateUserCanExecuteStatement")
 	defer span.End()
 	if getPu(ses.GetService()).SV.SkipCheckPrivilege {
-		return nil
+		return stats, nil
 	}
 
 	if ses.skipAuthForSpecialUser() {
-		return nil
+		return stats, nil
 	}
-	var havePrivilege bool
-	var err error
+	//var havePrivilege bool
+	//var err error
 	if ses.GetTenantInfo() != nil {
 		ses.SetPrivilege(determinePrivilegeSetOfStatement(stmt))
 
 		// can or not execute in retricted status
 		if ses.getRoutine() != nil && ses.getRoutine().isRestricted() && !ses.GetPrivilege().canExecInRestricted {
-			return moerr.NewInternalError(reqCtx, "do not have enough storage to execute the statement")
+			return stats, moerr.NewInternalError(reqCtx, "do not have enough storage to execute the statement")
 		}
 
 		// can or not execute in password expired status
 		if ses.getRoutine() != nil && ses.getRoutine().isExpired() && !ses.GetPrivilege().canExecInPasswordExpired {
-			return moerr.NewInternalError(reqCtx, "password has expired, please change the password")
+			return stats, moerr.NewInternalError(reqCtx, "password has expired, please change the password")
 		}
 
-		havePrivilege, err = authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(reqCtx, ses, stmt)
+		havePrivilege, delta, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(reqCtx, ses, stmt)
 		if err != nil {
-			return err
+			return stats, err
 		}
+		stats.Add(&delta)
 
 		if !havePrivilege {
 			err = moerr.NewInternalError(reqCtx, "do not have privilege to execute the statement")
-			return err
+			return stats, err
 		}
 
-		havePrivilege, err = authenticateUserCanExecuteStatementWithObjectTypeNone(reqCtx, ses, stmt)
+		havePrivilege, delta, err = authenticateUserCanExecuteStatementWithObjectTypeNone(reqCtx, ses, stmt)
 		if err != nil {
-			return err
+			return stats, err
 		}
+		stats.Add(&delta)
 
 		if !havePrivilege {
 			err = moerr.NewInternalError(reqCtx, "do not have privilege to execute the statement")
-			return err
+			return stats, err
 		}
 	}
-	return err
+	return stats, nil
 }
 
 // authenticateCanExecuteStatementAndPlan checks the user can execute the statement and its plan
-func authenticateCanExecuteStatementAndPlan(reqCtx context.Context, ses *Session, stmt tree.Statement, p *plan.Plan) error {
+func authenticateCanExecuteStatementAndPlan(reqCtx context.Context, ses *Session, stmt tree.Statement, p *plan.Plan) (statistic.StatsArray, error) {
+	var stats statistic.StatsArray
+	stats.Reset()
+
 	_, task := gotrace.NewTask(reqCtx, "frontend.authenticateCanExecuteStatementAndPlan")
 	defer task.End()
 	if getPu(ses.GetService()).SV.SkipCheckPrivilege {
-		return nil
+		return stats, nil
 	}
 
 	if ses.skipAuthForSpecialUser() {
-		return nil
+		return stats, nil
 	}
-	yes, err := authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(reqCtx, ses, stmt, p)
+	yes, delta, err := authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(reqCtx, ses, stmt, p)
 	if err != nil {
-		return err
+		return stats, err
 	}
+	stats.Add(&delta)
+
 	if !yes {
-		return moerr.NewInternalError(reqCtx, "do not have privilege to execute the statement")
+		return stats, moerr.NewInternalError(reqCtx, "do not have privilege to execute the statement")
 	}
-	return nil
+	return stats, nil
 }
 
 // authenticatePrivilegeOfPrepareAndExecute checks the user can execute the Prepare or Execute statement
-func authenticateUserCanExecutePrepareOrExecute(reqCtx context.Context, ses *Session, stmt tree.Statement, p *plan.Plan) error {
+func authenticateUserCanExecutePrepareOrExecute(reqCtx context.Context, ses *Session, stmt tree.Statement, p *plan.Plan) (statistic.StatsArray, error) {
+	var stats statistic.StatsArray
+	stats.Reset()
+
 	_, task := gotrace.NewTask(reqCtx, "frontend.authenticateUserCanExecutePrepareOrExecute")
 	defer task.End()
 	if getPu(ses.GetService()).SV.SkipCheckPrivilege {
-		return nil
+		return stats, nil
 	}
-	err := authenticateUserCanExecuteStatement(reqCtx, ses, stmt)
+	delta, err := authenticateUserCanExecuteStatement(reqCtx, ses, stmt)
 	if err != nil {
-		return err
+		return stats, err
 	}
-	err = authenticateCanExecuteStatementAndPlan(reqCtx, ses, stmt, p)
+	stats.Add(&delta)
+
+	delta, err = authenticateCanExecuteStatementAndPlan(reqCtx, ses, stmt, p)
 	if err != nil {
-		return err
+		return stats, err
 	}
-	return err
+	stats.Add(&delta)
+	return stats, err
 }
 
 // canExecuteStatementInUncommittedTxn checks the user can execute the statement in an uncommitted transaction
@@ -3107,11 +3125,12 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		tenant := ses.GetTenantNameWithStmt(stmt)
 		//skip PREPARE statement here
 		if ses.GetTenantInfo() != nil && !IsPrepareStatement(stmt) {
-			err = authenticateUserCanExecuteStatement(execCtx.reqCtx, ses, stmt)
+			authStats, err := authenticateUserCanExecuteStatement(execCtx.reqCtx, ses, stmt)
 			if err != nil {
 				logStatementStatus(execCtx.reqCtx, ses, stmt, fail, err)
 				return err
 			}
+			statsInfo.PermissionAuth.Add(&authStats)
 		}
 
 		/*
