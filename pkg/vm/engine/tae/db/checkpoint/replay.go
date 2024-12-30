@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
@@ -212,6 +213,21 @@ func (c *CkpReplayer) readCheckpointEntries() (
 				allEntries = append(allEntries, loopEntries...)
 			}
 		}
+		allEntries = compute.SortAndDedup(
+			allEntries,
+			func(lh, rh **CheckpointEntry) bool {
+				lhEnd, rhEnd := (*lh).GetEnd(), (*rh).GetEnd()
+				return lhEnd.LT(&rhEnd)
+			},
+			func(lh, rh **CheckpointEntry) bool {
+				lhStart, rhStart := (*lh).GetStart(), (*rh).GetStart()
+				if !lhStart.EQ(&rhStart) {
+					return false
+				}
+				lhEnd, rhEnd := (*lh).GetEnd(), (*rh).GetEnd()
+				return lhEnd.EQ(&rhEnd)
+			},
+		)
 		for _, entry := range allEntries {
 			logutil.Info(
 				"Read-CKP-META",
