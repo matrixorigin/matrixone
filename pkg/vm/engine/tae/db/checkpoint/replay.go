@@ -26,6 +26,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ckputil"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -87,7 +89,7 @@ func (c *CkpReplayer) readCheckpointEntries() (
 ) {
 	var (
 		now   = time.Now()
-		files []fileservice.DirEntry
+		files []ioutil.TSRangeFile
 	)
 
 	defer func() {
@@ -103,39 +105,36 @@ func (c *CkpReplayer) readCheckpointEntries() (
 		)
 	}()
 
-	if files, err = fileservice.SortedList(c.r.rt.Fs.ListDir(c.dir)); err != nil {
+	if files, err = ioutil.ListTSRangeFiles(
+		c.r.ctx,
+		c.dir,
+		c.r.rt.Fs.Service,
+	); err != nil {
 		return
 	}
+
 	if len(files) == 0 {
 		return
 	}
 
+	sort.Slice(files, func(i, j int) bool {
+		return files[i].GetEnd().LT(files[j].GetEnd())
+	})
+
 	var (
-		metaEntries      = make([]MetaFile, 0)
-		compactedEntries = make([]MetaFile, 0)
+		metaEntries      = make([]ioutil.TSRangeFile, 0)
+		compactedEntries = make([]ioutil.TSRangeFile, 0)
 	)
+
 	// classify the files into metaEntries and compactedEntries
 	for _, file := range files {
-		c.r.store.AddMetaFile(file.Name)
-		start, end, ext := blockio.DecodeCheckpointMetadataFileName(file.Name)
-		entry := MetaFile{
-			start: start,
-			end:   end,
-			name:  file.Name,
-		}
-		if ext == blockio.CompactedExt {
-			compactedEntries = append(compactedEntries, entry)
-		} else if IsMetadataFile(file.Name) {
-			metaEntries = append(metaEntries, entry)
+		c.r.store.AddMetaFile(file.GetName())
+		if file.IsCompactExt() {
+			compactedEntries = append(compactedEntries, file)
+		} else if file.IsMetadataFile() {
+			metaEntries = append(metaEntries, file)
 		}
 	}
-
-	sort.Slice(metaEntries, func(i, j int) bool {
-		return metaEntries[i].end.LT(&metaEntries[j].end)
-	})
-	sort.Slice(compactedEntries, func(i, j int) bool {
-		return compactedEntries[i].end.LT(&compactedEntries[j].end)
-	})
 
 	// replay the compactedEntries
 	if len(compactedEntries) > 0 {
@@ -145,7 +144,7 @@ func (c *CkpReplayer) readCheckpointEntries() (
 			c.r.ctx,
 			c.r.rt.SID(),
 			c.dir,
-			maxEntry.name,
+			maxEntry.GetName(),
 			0,
 			nil,
 			common.CheckpointAllocator,
@@ -160,7 +159,7 @@ func (c *CkpReplayer) readCheckpointEntries() (
 			)
 		}
 		if len(entries) != 1 {
-			panic(fmt.Sprintf("invalid compacted checkpoint file %s", maxEntry.name))
+			panic(fmt.Sprintf("invalid compacted checkpoint file %s", maxEntry.GetName()))
 		}
 		c.r.store.TryAddNewCompactedCheckpointEntry(entries[0])
 	}
@@ -180,7 +179,7 @@ func (c *CkpReplayer) readCheckpointEntries() (
 			c.r.ctx,
 			c.r.rt.SID(),
 			c.dir,
-			maxEntry.name,
+			maxEntry.GetName(),
 			0,
 			updateGlobal,
 			common.CheckpointAllocator,
@@ -256,12 +255,6 @@ func (c *CkpReplayer) ReadCkpFiles() (err error) {
 
 	for i := 0; i < len(c.ckpEntries); i++ {
 		if err = readfn(i, PrefetchMetaIdx); err != nil {
-			return
-		}
-	}
-
-	for i := 0; i < len(c.ckpEntries); i++ {
-		if err = readfn(i, ReadMetaIdx); err != nil {
 			return
 		}
 	}
@@ -556,28 +549,27 @@ func MergeCkpMeta(
 	cnLocation, tnLocation objectio.Location,
 	startTs, ts types.TS,
 ) (string, error) {
-	dirs, err := fileservice.SortedList(fs.List(ctx, CheckpointDir))
-	if err != nil {
+	var (
+		metaFiles []ioutil.TSRangeFile
+		err       error
+	)
+	if metaFiles, err = ckputil.ListCKPMetaFiles(
+		ctx, fs,
+	); err != nil {
 		return "", err
 	}
-	if len(dirs) == 0 {
+
+	if len(metaFiles) == 0 {
 		return "", nil
 	}
-	metaFiles := make([]*MetaFile, 0)
-	for i, dir := range dirs {
-		start, end, _ := blockio.DecodeCheckpointMetadataFileName(dir.Name)
-		metaFiles = append(metaFiles, &MetaFile{
-			start: start,
-			end:   end,
-			index: i,
-		})
-	}
+
 	sort.Slice(metaFiles, func(i, j int) bool {
-		return metaFiles[i].end.LT(&metaFiles[j].end)
+		return metaFiles[i].GetEnd().LT(metaFiles[j].GetEnd())
 	})
-	targetIdx := metaFiles[len(metaFiles)-1].index
-	dir := dirs[targetIdx]
-	reader, err := blockio.NewFileReader(sid, fs, CheckpointDir+dir.Name)
+
+	maxFile := metaFiles[len(metaFiles)-1]
+
+	reader, err := blockio.NewFileReader(sid, fs, maxFile.GetCKPFullName())
 	if err != nil {
 		return "", err
 	}
@@ -621,7 +613,7 @@ func MergeCkpMeta(
 	bat.GetVectorByName(CheckpointAttr_CheckpointLSN).Append(bat.GetVectorByName(CheckpointAttr_CheckpointLSN).Get(last), false)
 	bat.GetVectorByName(CheckpointAttr_TruncateLSN).Append(bat.GetVectorByName(CheckpointAttr_TruncateLSN).Get(last), false)
 	bat.GetVectorByName(CheckpointAttr_Type).Append(int8(ET_Backup), false)
-	name := blockio.EncodeCheckpointMetadataFileName(CheckpointDir, PrefixMetadata, startTs, ts)
+	name := ioutil.EncodeCKPMetadataFullName(startTs, ts)
 	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterCheckpoint, name, fs)
 	if err != nil {
 		return "", err

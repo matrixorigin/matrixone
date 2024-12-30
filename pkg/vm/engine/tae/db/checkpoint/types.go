@@ -16,7 +16,6 @@ package checkpoint
 
 import (
 	"context"
-	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -84,14 +83,6 @@ func (os *observers) OnNewCheckpoint(ts types.TS) {
 }
 
 const (
-	PrefixIncremental = "incremental"
-	PrefixGlobal      = "global"
-	PrefixMetadata    = "meta"
-	SuffixMetadata    = ".ckp"
-	CheckpointDir     = "ckp/"
-)
-
-const (
 	CheckpointAttr_StartTS       = "start_ts"
 	CheckpointAttr_EndTS         = "end_ts"
 	CheckpointAttr_MetaLocation  = "meta_location"
@@ -153,10 +144,6 @@ func init() {
 			panic(err)
 		}
 	}
-}
-
-func IsMetadataFile(filename string) bool {
-	return strings.HasPrefix(filename, PrefixMetadata) && strings.HasSuffix(filename, SuffixMetadata)
 }
 
 func makeRespBatchFromSchema(schema *catalog.Schema) *containers.Batch {

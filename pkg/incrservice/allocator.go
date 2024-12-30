@@ -29,6 +29,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
 
+const (
+	defaultAllocateTimeout = time.Minute * 3
+)
+
 type allocator struct {
 	logger  *log.MOLogger
 	store   IncrValueStore
@@ -169,7 +173,7 @@ func (a *allocator) run(ctx context.Context) {
 
 func (a *allocator) doAllocate(act action) {
 	ctx := defines.AttachAccountId(context.Background(), act.accountID)
-	ctx, cancel := context.WithTimeoutCause(ctx, time.Second*10, moerr.CauseDoAllocate)
+	ctx, cancel := context.WithTimeoutCause(ctx, defaultAllocateTimeout, moerr.CauseDoAllocate)
 	defer cancel()
 
 	from, to, lastAllocateAt, err := a.store.Allocate(
