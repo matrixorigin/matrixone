@@ -423,14 +423,14 @@ func GetMetaIdxesByVersion(ver uint32) []uint16 {
 func LoadCheckpointEntries(
 	ctx context.Context,
 	sid string,
-	metLoc string,
+	metaLoc string,
 	tableID uint64,
 	tableName string,
 	dbID uint64,
 	dbName string,
 	mp *mpool.MPool,
 	fs fileservice.FileService) ([]*api.Entry, []func(), error) {
-	if metLoc == "" {
+	if metaLoc == "" {
 		return nil, nil, nil
 	}
 	v2.LogtailLoadCheckpointCounter.Inc()
@@ -438,7 +438,7 @@ func LoadCheckpointEntries(
 	defer func() {
 		v2.LogTailLoadCheckpointDurationHistogram.Observe(time.Since(now).Seconds())
 	}()
-	locationsAndVersions := strings.Split(metLoc, ";")
+	locationsAndVersions := strings.Split(metaLoc, ";")
 
 	datas := make([]*CNCheckpointData, len(locationsAndVersions)/2)
 
@@ -454,6 +454,12 @@ func LoadCheckpointEntries(
 		}
 		location, err := objectio.StringToLocation(key)
 		if err != nil {
+			logutil.Error(
+				"Parse-CKP-Name-Error",
+				zap.String("loc", metaLoc),
+				zap.Int("i", i),
+				zap.Error(err),
+			)
 			return nil, nil, err
 		}
 		locations[i/2] = location
