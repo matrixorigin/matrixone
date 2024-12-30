@@ -27,6 +27,7 @@ type WindowKey interface {
 type Item interface {
 	batchpipe.HasName
 	Key(duration time.Duration) WindowKey
+	Aggred() int64
 	Free()
 }
 

@@ -418,6 +418,7 @@ func (s *mfsetETL) putBuffer(b *bytes.Buffer) {
 	b.Reset()
 	s.bufferPool.Put(b)
 	v2.TraceMOLoggerBufferMetricFree.Inc()
+	v2.TraceCollectorContentQueueLengthMetric.Inc()
 	s.bufferCount.Add(-1)
 }
 
