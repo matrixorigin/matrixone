@@ -305,10 +305,7 @@ func (entry *ObjectEntry) GetObjectStats() (stats *objectio.ObjectStats) {
 }
 
 func (entry *ObjectEntry) Less(b *ObjectEntry) bool {
-	if entry.SortHint != b.SortHint {
-		return entry.SortHint < b.SortHint
-	}
-	return entry.ObjectState < b.ObjectState
+	return entry.SortHint < b.SortHint
 }
 
 func (entry *ObjectEntry) UpdateObjectInfo(txn txnif.TxnReader, stats *objectio.ObjectStats) (isNewNode bool, err error) {

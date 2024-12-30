@@ -10629,3 +10629,21 @@ func TestReplayDebugLog(t *testing.T) {
 	tae.Restart(ctx)
 
 }
+
+func TestObjectList(t *testing.T) {
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(3, 2)
+	schema.Extra.BlockMaxRows = 5
+	schema.Extra.ObjectMaxBlocks = 256
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 1)
+	tae.CreateRelAndAppend(bat, true)
+	tae.CompactBlocks(false)
+
+	tae.Catalog.GCByTS(ctx, tae.TxnMgr.Now())
+	t.Log(tae.Catalog.SimplePPString(3))
+}
