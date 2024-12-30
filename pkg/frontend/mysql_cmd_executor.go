@@ -3040,7 +3040,8 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	proc.Base.SessionInfo.User = userNameOnly
 	proc.Base.SessionInfo.QueryId = ses.getQueryId(input.isInternal())
 
-	statsInfo := new(statistic.StatsInfo)
+	//statsInfo := new(statistic.StatsInfo)
+	statsInfo := statistic.NewStatsInfo()
 	statsInfo.ParseStage.ParseStartTime = beginInstant
 
 	execCtx.reqCtx = statistic.ContextWithStatsInfo(execCtx.reqCtx, statsInfo)
