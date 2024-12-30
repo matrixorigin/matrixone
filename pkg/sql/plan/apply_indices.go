@@ -399,8 +399,8 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 		}
 	}
 
-	//default stats means this table maybe not flushed yet, then we don't skip the index
-	ignoreStats := IsDefaultStats(node.Stats)
+	//small table means this table maybe not flushed yet, or it's not worse to go index
+	ignoreStats := node.Stats.TableCnt < 50000
 	if !ignoreStats {
 		if catalog.IsFakePkName(node.TableDef.Pkey.PkeyColName) {
 			// for cluster by table, make it less prone to go index
