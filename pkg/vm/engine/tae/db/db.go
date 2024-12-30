@@ -251,7 +251,10 @@ func (db *DB) ForceCheckpointForBackup(
 	flushDuration time.Duration,
 ) (location string, err error) {
 	// FIXME: cannot disable with a running job
-	db.BGCheckpointRunner.DisableCheckpoint()
+	if err = db.BGCheckpointRunner.DisableCheckpoint(ctx); err != nil {
+		return
+	}
+
 	defer db.BGCheckpointRunner.EnableCheckpoint()
 	db.BGCheckpointRunner.CleanPenddingCheckpoint()
 	t0 := time.Now()

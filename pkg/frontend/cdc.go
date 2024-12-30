@@ -709,6 +709,8 @@ func RegisterCdcExecutor(
 }
 
 type CdcTask struct {
+	sync.Mutex
+
 	logger *zap.Logger
 	ie     ie.InternalExecutor
 
@@ -865,12 +867,14 @@ func (cdc *CdcTask) Restart() (err error) {
 		}
 	}()
 
-	// delete previous records
-	if err = cdc.watermarkUpdater.DeleteAllFromDb(); err != nil {
-		return
+	if cdc.isRunning {
+		cdc.activeRoutine.CloseCancel()
+		cdc.isRunning = false
+		// let Start() go
+		cdc.holdCh <- 1
 	}
+
 	go func() {
-		// closed in Pause, need renew
 		cdc.activeRoutine = cdc2.NewCdcActiveRoutine()
 		_ = cdc.startFunc(context.Background())
 	}()
@@ -887,9 +891,9 @@ func (cdc *CdcTask) Pause() error {
 	if cdc.isRunning {
 		cdc.activeRoutine.ClosePause()
 		cdc.isRunning = false
+		// let Start() go
+		cdc.holdCh <- 1
 	}
-	// let Start() go
-	cdc.holdCh <- 1
 	return nil
 }
 
@@ -907,12 +911,9 @@ func (cdc *CdcTask) Cancel() (err error) {
 	if cdc.isRunning {
 		cdc.activeRoutine.CloseCancel()
 		cdc.isRunning = false
+		// let Start() go
+		cdc.holdCh <- 1
 	}
-	if err = cdc.watermarkUpdater.DeleteAllFromDb(); err != nil {
-		return err
-	}
-	// let Start() go
-	cdc.holdCh <- 1
 	return
 }
 
@@ -971,18 +972,24 @@ func (cdc *CdcTask) updateErrMsg(ctx context.Context, errMsg string) (err error)
 }
 
 func (cdc *CdcTask) handleNewTables(allAccountTbls map[uint32]cdc2.TblMap) {
+	// lock to avoid create pipelines for the same table
+	cdc.Lock()
+	defer cdc.Unlock()
+
 	accountId := uint32(cdc.cdcTask.Accounts[0].GetId())
 	ctx := defines.AttachAccountId(context.Background(), accountId)
 
 	txnOp, err := cdc2.GetTxnOp(ctx, cdc.cnEngine, cdc.cnTxnClient, "cdc-handleNewTables")
 	if err != nil {
 		logutil.Errorf("cdc task %s get txn op failed, err: %v", cdc.cdcTask.TaskName, err)
+		return
 	}
 	defer func() {
 		cdc2.FinishTxnOp(ctx, err, txnOp, cdc.cnEngine)
 	}()
 	if err = cdc.cnEngine.New(ctx, txnOp); err != nil {
 		logutil.Errorf("cdc task %s new engine failed, err: %v", cdc.cdcTask.TaskName, err)
+		return
 	}
 
 	for key, info := range allAccountTbls[accountId] {
@@ -991,16 +998,17 @@ func (cdc *CdcTask) handleNewTables(allAccountTbls map[uint32]cdc2.TblMap) {
 			continue
 		}
 
-		if !cdc.matchAnyPattern(key, info) {
-			continue
-		}
-
 		if cdc.exclude != nil && cdc.exclude.MatchString(key) {
 			continue
 		}
 
-		logutil.Infof("cdc task find new table: %s", info)
-		if err = cdc.addExecPipelineForTable(ctx, info, txnOp); err != nil {
+		newTableInfo := info.Clone()
+		if !cdc.matchAnyPattern(key, newTableInfo) {
+			continue
+		}
+
+		logutil.Infof("cdc task find new table: %s", newTableInfo)
+		if err = cdc.addExecPipelineForTable(ctx, newTableInfo, txnOp); err != nil {
 			logutil.Errorf("cdc task %s add exec pipeline for table %s failed, err: %v", cdc.cdcTask.TaskName, key, err)
 		} else {
 			logutil.Infof("cdc task %s add exec pipeline for table %s successfully", cdc.cdcTask.TaskName, key)
@@ -1045,7 +1053,6 @@ func (cdc *CdcTask) addExecPipelineForTable(ctx context.Context, info *cdc2.DbTa
 		if cdc.noFull {
 			watermark = types.TimestampToTS(txnOp.SnapshotTS())
 		}
-
 		if err = cdc.watermarkUpdater.InsertIntoDb(info, watermark); err != nil {
 			return
 		}
@@ -1201,7 +1208,6 @@ func handleDropCdc(ses *Session, execCtx *ExecCtx, st *tree.DropCDC) error {
 }
 
 func handlePauseCdc(ses *Session, execCtx *ExecCtx, st *tree.PauseCDC) error {
-	ses.GetResponser()
 	return updateCdc(execCtx.reqCtx, ses, st)
 }
 
