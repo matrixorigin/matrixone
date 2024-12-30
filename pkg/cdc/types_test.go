@@ -205,15 +205,12 @@ func Test_atomicBatchRowIter(t *testing.T) {
 
 func TestDbTableInfo_String(t *testing.T) {
 	type fields struct {
-		SourceAccountName string
-		SourceDbName      string
-		SourceTblName     string
-		SourceAccountId   uint64
-		SourceDbId        uint64
-		SourceTblId       uint64
-		SinkAccountName   string
-		SinkDbName        string
-		SinkTblName       string
+		SourceDbName  string
+		SourceTblName string
+		SourceDbId    uint64
+		SourceTblId   uint64
+		SinkDbName    string
+		SinkTblName   string
 	}
 	tests := []struct {
 		name   string
@@ -235,17 +232,66 @@ func TestDbTableInfo_String(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			info := DbTableInfo{
-				SourceAccountName: tt.fields.SourceAccountName,
-				SourceDbName:      tt.fields.SourceDbName,
-				SourceTblName:     tt.fields.SourceTblName,
-				SourceAccountId:   tt.fields.SourceAccountId,
-				SourceDbId:        tt.fields.SourceDbId,
-				SourceTblId:       tt.fields.SourceTblId,
-				SinkAccountName:   tt.fields.SinkAccountName,
-				SinkDbName:        tt.fields.SinkDbName,
-				SinkTblName:       tt.fields.SinkTblName,
+				SourceDbName:  tt.fields.SourceDbName,
+				SourceTblName: tt.fields.SourceTblName,
+				SourceDbId:    tt.fields.SourceDbId,
+				SourceTblId:   tt.fields.SourceTblId,
+				SinkDbName:    tt.fields.SinkDbName,
+				SinkTblName:   tt.fields.SinkTblName,
 			}
 			assert.Equalf(t, tt.want, info.String(), "String()")
+		})
+	}
+}
+
+func TestDbTableInfo_Clone(t *testing.T) {
+	type fields struct {
+		SourceDbId      uint64
+		SourceDbName    string
+		SourceTblId     uint64
+		SourceTblName   string
+		SourceCreateSql string
+		SinkDbName      string
+		SinkTblName     string
+	}
+	tests := []struct {
+		name   string
+		fields fields
+		want   *DbTableInfo
+	}{
+		{
+			fields: fields{
+				SourceDbId:      1,
+				SourceDbName:    "source_db",
+				SourceTblId:     1,
+				SourceTblName:   "source_tbl",
+				SourceCreateSql: "create table source_db.source_tbl (id int)",
+				SinkDbName:      "sink_db",
+				SinkTblName:     "sink_tbl",
+			},
+			want: &DbTableInfo{
+				SourceDbId:      1,
+				SourceDbName:    "source_db",
+				SourceTblId:     1,
+				SourceTblName:   "source_tbl",
+				SourceCreateSql: "create table source_db.source_tbl (id int)",
+				SinkDbName:      "sink_db",
+				SinkTblName:     "sink_tbl",
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			info := DbTableInfo{
+				SourceDbId:      tt.fields.SourceDbId,
+				SourceDbName:    tt.fields.SourceDbName,
+				SourceTblId:     tt.fields.SourceTblId,
+				SourceTblName:   tt.fields.SourceTblName,
+				SourceCreateSql: tt.fields.SourceCreateSql,
+				SinkDbName:      tt.fields.SinkDbName,
+				SinkTblName:     tt.fields.SinkTblName,
+			}
+			assert.Equalf(t, tt.want, info.Clone(), "Clone()")
 		})
 	}
 }
@@ -331,12 +377,9 @@ func TestOutputType_String(t *testing.T) {
 
 func TestPatternTable_String(t *testing.T) {
 	type fields struct {
-		AccountId     uint64
-		Account       string
-		Database      string
-		Table         string
-		TableIsRegexp bool
-		Reserved      bool
+		Database string
+		Table    string
+		Reserved bool
 	}
 	tests := []struct {
 		name   string
@@ -345,23 +388,17 @@ func TestPatternTable_String(t *testing.T) {
 	}{
 		{
 			fields: fields{
-				AccountId: 123,
-				Account:   "account",
-				Database:  "database",
-				Table:     "table",
+				Database: "database",
+				Table:    "table",
 			},
-			want: "(account,123,database,table)",
+			want: "database.table",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			table := PatternTable{
-				AccountId:     tt.fields.AccountId,
-				Account:       tt.fields.Account,
-				Database:      tt.fields.Database,
-				Table:         tt.fields.Table,
-				TableIsRegexp: tt.fields.TableIsRegexp,
-				Reserved:      tt.fields.Reserved,
+				Database: tt.fields.Database,
+				Table:    tt.fields.Table,
 			}
 			assert.Equalf(t, tt.want, table.String(), "String()")
 		})
@@ -383,19 +420,15 @@ func TestPatternTuple_String(t *testing.T) {
 		{
 			fields: fields{
 				Source: PatternTable{
-					AccountId: 123,
-					Account:   "account1",
-					Database:  "database1",
-					Table:     "table1",
+					Database: "database1",
+					Table:    "table1",
 				},
 				Sink: PatternTable{
-					AccountId: 456,
-					Account:   "account2",
-					Database:  "database2",
-					Table:     "table2",
+					Database: "database2",
+					Table:    "table2",
 				},
 			},
-			want: "(account1,123,database1,table1),(account2,456,database2,table2)",
+			want: "database1.table1,database2.table2",
 		},
 	}
 	for _, tt := range tests {
@@ -434,10 +467,8 @@ func TestPatternTuples_Append(t *testing.T) {
 			args: args{
 				pt: &PatternTuple{
 					Source: PatternTable{
-						AccountId: 123,
-						Account:   "account1",
-						Database:  "database1",
-						Table:     "table1",
+						Database: "database1",
+						Table:    "table1",
 					},
 				},
 			},
@@ -475,21 +506,17 @@ func TestPatternTuples_String(t *testing.T) {
 				Pts: []*PatternTuple{
 					{
 						Source: PatternTable{
-							AccountId: 123,
-							Account:   "account1",
-							Database:  "database1",
-							Table:     "table1",
+							Database: "database1",
+							Table:    "table1",
 						},
 						Sink: PatternTable{
-							AccountId: 456,
-							Account:   "account2",
-							Database:  "database2",
-							Table:     "table2",
+							Database: "database2",
+							Table:    "table2",
 						},
 					},
 				},
 			},
-			want: "(account1,123,database1,table1),(account2,456,database2,table2)",
+			want: "database1.table1,database2.table2",
 		},
 	}
 	for _, tt := range tests {

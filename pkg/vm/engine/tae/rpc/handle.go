@@ -48,13 +48,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/gc"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/rpchandle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
-
 	"go.uber.org/zap"
 )
 
@@ -64,9 +62,10 @@ const (
 )
 
 type Handle struct {
-	db        *db.DB
-	txnCtxs   *common.Map[string, *txnContext]
-	GCManager *gc.Manager
+	db *db.DB
+	// only used for UT
+	txnCtxs *common.Map[string, *txnContext]
+	//GCJob   *tasks.CancelableJob
 
 	interceptMatchRegexp atomic.Pointer[regexp.Regexp]
 }
@@ -120,18 +119,9 @@ func NewTAEHandle(ctx context.Context, path string, opt *options.Options) *Handl
 	h := &Handle{
 		db: tae,
 	}
+
 	h.txnCtxs = common.NewMap[string, *txnContext](runtime.GOMAXPROCS(0))
 	h.interceptMatchRegexp.Store(regexp.MustCompile(`.*bmsql_stock.*`))
-	h.GCManager = gc.NewManager(
-		gc.WithCronJob(
-			"clean-txn-cache",
-			MAX_TXN_COMMIT_LATENCY,
-			func(ctx context.Context) error {
-				return h.GCCache(time.Now())
-			},
-		),
-	)
-	h.GCManager.Start()
 
 	return h
 }
@@ -162,29 +152,6 @@ func (h *Handle) UpdateInterceptMatchRegexp(name string) {
 		return
 	}
 	h.interceptMatchRegexp.Store(regexp.MustCompile(fmt.Sprintf(`.*%s.*`, name)))
-}
-
-// TODO: vast items within h.mu.txnCtxs would incur performance penality.
-func (h *Handle) GCCache(now time.Time) error {
-
-	var (
-		cnt, deleteCnt int
-	)
-
-	h.txnCtxs.DeleteIf(func(k string, v *txnContext) bool {
-		cnt++
-		ok := v.deadline.Before(now)
-		if ok {
-			deleteCnt++
-		}
-		return ok
-	})
-	logutil.Info(
-		"GC-RPC-Cache",
-		zap.Int("total", cnt),
-		zap.Int("deleted", deleteCnt),
-	)
-	return nil
 }
 
 func (h *Handle) CacheTxnRequest(
@@ -274,23 +241,114 @@ func (h *Handle) tryLockMergeForBulkDelete(reqs []any, txn txnif.AsyncTxn) (rele
 	return
 }
 
+type txnCommitRequestsIter struct {
+	cursor         int
+	curNorReq      *api.PrecommitWriteCmd
+	commitRequests *txn.TxnCommitRequest
+
+	// cache requests only used in ut
+	cached []any
+}
+
+func (h *Handle) newTxnCommitRequestsIter(
+	cr *txn.TxnCommitRequest,
+	meta txn.TxnMeta,
+) *txnCommitRequestsIter {
+
+	// in the normal commit processes, the new logic won't cache the write requests anymore.
+	// however, there exist massive ut code that verified the preCommit-commit 2PC logic,
+	// which cached the write requests in the preCommit call.
+	// to keep that, there also leave the commiting code of the cached requests un-changed, but only for ut.
+	if cr == nil {
+		// for now, only test will into this logic
+		key := util.UnsafeBytesToString(meta.GetID())
+		txnCtx, ok := h.txnCtxs.Load(key)
+		if !ok {
+			// no requests
+			return nil
+		}
+
+		defer h.txnCtxs.Delete(key)
+
+		return &txnCommitRequestsIter{
+			cursor:         0,
+			cached:         txnCtx.reqs,
+			commitRequests: nil,
+		}
+
+	} else {
+		return &txnCommitRequestsIter{
+			cursor:         0,
+			cached:         nil,
+			commitRequests: cr,
+		}
+	}
+}
+
+func (cri *txnCommitRequestsIter) Next() bool {
+	if cri.commitRequests == nil {
+		return cri.cursor < len(cri.cached)
+	}
+	return cri.cursor < len(cri.commitRequests.Payload)
+}
+
+func (cri *txnCommitRequestsIter) Entry() (entry any, err error) {
+
+	if cri.commitRequests == nil {
+		entry = cri.cached[cri.cursor]
+		cri.cursor++
+		return
+	}
+
+	cnReq := cri.commitRequests.Payload[cri.cursor].CNRequest
+
+	if cri.curNorReq == nil {
+		cri.curNorReq = new(api.PrecommitWriteCmd)
+	}
+
+	if len(cri.curNorReq.EntryList) == 0 {
+		if err = cri.curNorReq.UnmarshalBinary(cnReq.Payload); err != nil {
+			return
+		}
+	}
+
+	entry, cri.curNorReq.EntryList, err = pkgcatalog.ParseEntryList(cri.curNorReq.EntryList)
+	if len(cri.curNorReq.EntryList) == 0 {
+		cri.cursor++
+	}
+
+	return
+}
+
 func (h *Handle) handleRequests(
 	ctx context.Context,
 	txn txnif.AsyncTxn,
-	txnCtx *txnContext,
+	commitRequests *txn.TxnCommitRequest,
+	response *txn.TxnResponse,
+	txnMeta txn.TxnMeta,
 ) (releaseF []func(), hasDDL bool, err error) {
+
 	var (
+		entry any
+
+		iter *txnCommitRequestsIter
+
 		inMemoryInsertRows        int
 		persistedMemoryInsertRows int
 		inMemoryTombstoneRows     int
 		persistedTombstoneRows    int
 	)
-	releaseF, err = h.tryLockMergeForBulkDelete(txnCtx.reqs, txn)
-	if err != nil {
-		logutil.Warn("failed to lock merging", zap.Error(err))
+
+	if iter = h.newTxnCommitRequestsIter(commitRequests, txnMeta); iter == nil {
+		return
 	}
-	for _, e := range txnCtx.reqs {
-		switch req := e.(type) {
+
+	for iter.Next() {
+		if entry, err = iter.Entry(); err != nil {
+			return
+		}
+
+		switch req := entry.(type) {
 		case *pkgcatalog.CreateDatabaseReq:
 			hasDDL = true
 			err = h.HandleCreateDatabase(ctx, txn, req)
@@ -306,18 +364,45 @@ func (h *Handle) handleRequests(
 		case *api.AlterTableReq:
 			hasDDL = true
 			err = h.HandleAlterTable(ctx, txn, req)
-		case *cmd_util.WriteReq:
+		case []*api.AlterTableReq:
+			hasDDL = true
+			for _, r := range req {
+				if err = h.HandleAlterTable(ctx, txn, r); err != nil {
+					return
+				}
+			}
+
+		case *cmd_util.WriteReq, *api.Entry:
+			var wr *cmd_util.WriteReq
+			if ae, ok := req.(*api.Entry); ok {
+				wr = h.apiEntryToWriteEntry(ctx, txnMeta, ae, true)
+			} else {
+				wr = req.(*cmd_util.WriteReq)
+			}
+
+			if wr.Type == cmd_util.EntryDelete {
+				var f []func()
+				if f, err = h.tryLockMergeForBulkDelete([]any{req}, txn); err != nil {
+					logutil.Warn("failed to lock merging", zap.Error(err))
+					return
+				}
+
+				releaseF = append(releaseF, f...)
+			}
+
 			var r1, r2, r3, r4 int
-			r1, r2, r3, r4, err = h.HandleWrite(ctx, txn, req)
+			r1, r2, r3, r4, err = h.HandleWrite(ctx, txn, wr)
 			if err == nil {
 				inMemoryInsertRows += r1
 				persistedMemoryInsertRows += r2
 				inMemoryTombstoneRows += r3
 				persistedTombstoneRows += r4
 			}
+
 		default:
 			err = moerr.NewNotSupportedf(ctx, "unknown txn request type: %T", req)
 		}
+
 		//Need to roll back the txn.
 		if err != nil {
 			txn.Rollback(ctx)
@@ -342,7 +427,57 @@ func (h *Handle) handleRequests(
 //#region Impl TxnStorage interface
 //order by call frequency
 
+func (h *Handle) apiEntryToWriteEntry(
+	ctx context.Context,
+	meta txn.TxnMeta,
+	pe *api.Entry,
+	prefetch bool,
+) *cmd_util.WriteReq {
+
+	moBat, err := batch.ProtoBatchToBatch(pe.GetBat())
+	if err != nil {
+		panic(err)
+	}
+	req := &cmd_util.WriteReq{
+		Type:         cmd_util.EntryType(pe.EntryType),
+		DatabaseId:   pe.GetDatabaseId(),
+		TableID:      pe.GetTableId(),
+		DatabaseName: pe.GetDatabaseName(),
+		TableName:    pe.GetTableName(),
+		FileName:     pe.GetFileName(),
+		Batch:        moBat,
+		PkCheck:      cmd_util.PKCheckType(pe.GetPkCheckByTn()),
+	}
+
+	if req.FileName != "" {
+		col := req.Batch.Vecs[0]
+		for i := 0; i < req.Batch.RowCount(); i++ {
+			stats := objectio.ObjectStats(col.GetBytesAt(i))
+			if req.Type == cmd_util.EntryInsert {
+				req.DataObjectStats = append(req.DataObjectStats, stats)
+			} else {
+				req.TombstoneStats = append(req.TombstoneStats, stats)
+			}
+		}
+	}
+
+	if prefetch {
+		if req.Type == cmd_util.EntryDelete {
+			if err = h.prefetchDeleteRowID(ctx, req, &meta); err != nil {
+				return nil
+			}
+		} else {
+			if err = h.prefetchMetadata(ctx, req, &meta); err != nil {
+				return nil
+			}
+		}
+	}
+
+	return req
+}
+
 // HandlePreCommitWrite impls TxnStorage:Write
+// only ut call this
 func (h *Handle) HandlePreCommitWrite(
 	ctx context.Context,
 	meta txn.TxnMeta,
@@ -369,34 +504,8 @@ func (h *Handle) HandlePreCommitWrite(
 			}
 		case *api.Entry:
 			//Handle DML
-			pe := e.(*api.Entry)
-			moBat, err := batch.ProtoBatchToBatch(pe.GetBat())
-			if err != nil {
-				panic(err)
-			}
-			req := &cmd_util.WriteReq{
-				Type:         cmd_util.EntryType(pe.EntryType),
-				DatabaseId:   pe.GetDatabaseId(),
-				TableID:      pe.GetTableId(),
-				DatabaseName: pe.GetDatabaseName(),
-				TableName:    pe.GetTableName(),
-				FileName:     pe.GetFileName(),
-				Batch:        moBat,
-				PkCheck:      cmd_util.PKCheckType(pe.GetPkCheckByTn()),
-			}
-
-			if req.FileName != "" {
-				col := req.Batch.Vecs[0]
-				for i := 0; i < req.Batch.RowCount(); i++ {
-					stats := objectio.ObjectStats(col.GetBytesAt(i))
-					if req.Type == cmd_util.EntryInsert {
-						req.DataObjectStats = append(req.DataObjectStats, stats)
-					} else {
-						req.TombstoneStats = append(req.TombstoneStats, stats)
-					}
-				}
-			}
-			if err = h.CacheTxnRequest(ctx, meta, req); err != nil {
+			wr := h.apiEntryToWriteEntry(ctx, meta, e.(*api.Entry), false)
+			if err = h.CacheTxnRequest(ctx, meta, wr); err != nil {
 				return err
 			}
 		default:
@@ -411,9 +520,11 @@ func (h *Handle) HandlePreCommitWrite(
 func (h *Handle) HandleCommit(
 	ctx context.Context,
 	meta txn.TxnMeta,
+	response *txn.TxnResponse,
+	commitRequests *txn.TxnCommitRequest,
 ) (cts timestamp.Timestamp, err error) {
 	start := time.Now()
-	txnCtx, ok := h.txnCtxs.Load(util.UnsafeBytesToString(meta.GetID()))
+
 	var (
 		txn      txnif.AsyncTxn
 		releaseF []func()
@@ -423,10 +534,7 @@ func (h *Handle) HandleCommit(
 		for _, f := range releaseF {
 			f()
 		}
-		if ok {
-			//delete the txn's context.
-			h.txnCtxs.Delete(util.UnsafeBytesToString(meta.GetID()))
-		}
+
 		common.DoIfInfoEnabled(func() {
 			_, _, injected := fault.TriggerFault(objectio.FJ_CommitSlowLog)
 			if time.Since(start) > MAX_ALLOWED_TXN_LATENCY || err != nil || hasDDL || injected {
@@ -453,18 +561,17 @@ func (h *Handle) HandleCommit(
 			}
 		})
 	}()
-	if ok {
-		//Handle precommit-write command for 1PC
-		txn, err = h.db.GetOrCreateTxnWithMeta(nil, meta.GetID(),
-			types.TimestampToTS(meta.GetSnapshotTS()))
-		if err != nil {
-			return
-		}
-		releaseF, hasDDL, err = h.handleRequests(ctx, txn, txnCtx)
-		if err != nil {
-			return
-		}
+
+	if txn, err = h.db.GetOrCreateTxnWithMeta(
+		nil, meta.GetID(), types.TimestampToTS(meta.GetSnapshotTS())); err != nil {
+		return
 	}
+
+	if releaseF, hasDDL, err = h.handleRequests(
+		ctx, txn, commitRequests, response, meta); err != nil {
+		return
+	}
+
 	txn, err = h.db.GetTxnByID(meta.GetID())
 	if err != nil {
 		return
@@ -498,7 +605,7 @@ func (h *Handle) HandleCommit(
 				zap.String("new-txn", txn.GetID()),
 			)
 			//Handle precommit-write command for 1PC
-			releaseF, hasDDL, err = h.handleRequests(ctx, txn, txnCtx)
+			releaseF, hasDDL, err = h.handleRequests(ctx, txn, commitRequests, response, meta)
 			if err != nil && !moerr.IsMoErrCode(err, moerr.ErrTAENeedRetry) {
 				break
 			}
@@ -524,7 +631,7 @@ func (h *Handle) HandleGetLogTail(
 	resp *api.SyncLogTailResp) (closeCB func(), err error) {
 	res, closeCB, err := logtail.HandleSyncLogTailReq(
 		ctx,
-		h.db.BGCheckpointRunner,
+		h.db,
 		h.db.LogtailMgr,
 		h.db.Catalog,
 		*req,
@@ -556,9 +663,9 @@ func (h *Handle) HandleRollback(
 
 func (h *Handle) HandleClose(ctx context.Context) (err error) {
 	//FIXME::should wait txn request's job done?
-	if h.GCManager != nil {
-		h.GCManager.Stop()
-	}
+	//if h.GCJob != nil {
+	//	h.GCJob.Stop()
+	//}
 	return h.db.Close()
 }
 
@@ -578,13 +685,6 @@ func (h *Handle) HandleCreateDatabase(
 	_, span := trace.Start(ctx, "HandleCreateDatabase")
 	defer span.End()
 
-	defer func() {
-		common.DoIfDebugEnabled(func() {
-			logutil.Debugf("[precommit] create database end txn: %s", txn.String())
-		})
-	}()
-
-	// modify memory structure
 	for i, c := range req.Cmds {
 		common.DoIfInfoEnabled(func() {
 			logutil.Info(
@@ -617,12 +717,8 @@ func (h *Handle) HandleCreateDatabase(
 func (h *Handle) HandleDropDatabase(
 	ctx context.Context,
 	txn txnif.AsyncTxn,
-	req *pkgcatalog.DropDatabaseReq) (err error) {
-	defer func() {
-		common.DoIfDebugEnabled(func() {
-			logutil.Debugf("[precommit] drop database end: %s", txn.String())
-		})
-	}()
+	req *pkgcatalog.DropDatabaseReq,
+) (err error) {
 	for i, c := range req.Cmds {
 		common.DoIfInfoEnabled(func() {
 			logutil.Info(
@@ -652,13 +748,8 @@ func (h *Handle) HandleDropDatabase(
 func (h *Handle) HandleCreateRelation(
 	ctx context.Context,
 	txn txnif.AsyncTxn,
-	req *pkgcatalog.CreateTableReq) error {
-	defer func() {
-		common.DoIfDebugEnabled(func() {
-			logutil.Debugf("[precommit] create relation end txn: %s", txn.String())
-		})
-	}()
-
+	req *pkgcatalog.CreateTableReq,
+) error {
 	for i, c := range req.Cmds {
 		common.DoIfInfoEnabled(func() {
 			logutil.Info(
@@ -669,7 +760,8 @@ func (h *Handle) HandleCreateRelation(
 			)
 		})
 		ctx = defines.AttachAccount(ctx, c.AccountId, c.Creator, c.Owner)
-		dbH, err := txn.GetDatabaseWithCtx(ctx, c.DatabaseName)
+		txn.BindAccessInfo(c.AccountId, c.Creator, c.Owner)
+		dbH, err := txn.GetDatabaseByID(c.DatabaseId)
 		if err != nil {
 			return err
 		}
@@ -697,13 +789,8 @@ func (h *Handle) HandleCreateRelation(
 func (h *Handle) HandleDropRelation(
 	ctx context.Context,
 	txn txnif.AsyncTxn,
-	req *pkgcatalog.DropTableReq) error {
-	defer func() {
-		common.DoIfDebugEnabled(func() {
-			logutil.Debugf("[precommit] drop/truncate relation end txn: %s", txn.String())
-		})
-	}()
-
+	req *pkgcatalog.DropTableReq,
+) error {
 	for i, c := range req.Cmds {
 		common.DoIfInfoEnabled(func() {
 			logutil.Info(

@@ -185,6 +185,9 @@ func (m *mysqlTaskStorage) Close() error {
 }
 
 func (m *mysqlTaskStorage) PingContext(ctx context.Context) error {
+	if taskFrameworkDisabled() {
+		return nil
+	}
 	return m.db.PingContext(ctx)
 }
 
@@ -1086,6 +1089,7 @@ func (m *mysqlTaskStorage) UpdateCdcTask(ctx context.Context, targetStatus task.
 	if err != nil {
 		return 0, err
 	}
+
 	updateTasks := make([]task.DaemonTask, 0)
 	for _, dTask := range daemonTasks {
 		details, ok := dTask.Details.Details.(*task.Details_CreateCdc)
@@ -1103,7 +1107,7 @@ func (m *mysqlTaskStorage) UpdateCdcTask(ctx context.Context, targetStatus task.
 			continue
 		}
 		if dTask.TaskStatus != task.TaskStatus_Canceled {
-			if (targetStatus == task.TaskStatus_ResumeRequested || targetStatus == task.TaskStatus_RestartRequested) && dTask.TaskStatus != task.TaskStatus_Paused ||
+			if targetStatus == task.TaskStatus_ResumeRequested && dTask.TaskStatus != task.TaskStatus_Paused ||
 				targetStatus == task.TaskStatus_PauseRequested && dTask.TaskStatus != task.TaskStatus_Running {
 				err = moerr.NewInternalErrorf(ctx,
 					"Task %s status can not be change, now it is %s",

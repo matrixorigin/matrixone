@@ -64,9 +64,6 @@ func (singleJoin *SingleJoin) Prepare(proc *process.Process) (err error) {
 			}
 		}
 
-		if singleJoin.ProjectList != nil {
-			err = singleJoin.PrepareProjection(proc)
-		}
 	}
 	return err
 }

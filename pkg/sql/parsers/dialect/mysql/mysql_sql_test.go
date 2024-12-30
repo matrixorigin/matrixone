@@ -35,8 +35,8 @@ var (
 		//output: "upgrade account acc1 with retry 5",
 		//input:  "upgrade account 'acc1'",
 		//output: "upgrade account acc1",
-		input:  "show upgrade",
-		output: "show upgrade",
+		input:  "use ",
+		output: "use",
 	}
 )
 
@@ -2560,6 +2560,27 @@ var (
 			output: "alter publication pub1 account acc0 database db1 table t1, t2",
 		},
 		{
+			input: "create snapshot cluster_sp for cluster",
+		},
+		{
+			input: "create snapshot snapshot_01 for account account_01",
+		},
+		{
+			input: "create snapshot snapshot_01 for database db1",
+		},
+		{
+			input:  "create snapshot snapshot_01 for table db1 t1",
+			output: "create snapshot snapshot_01 for table db1.t1",
+		},
+		{
+			input:  "select * from t1 {as of timestamp '2019-01-01 00:00:00'}",
+			output: "select * from t1{as of timestamp 2019-01-01 00:00:00}",
+		},
+		{
+			input:  "create table t1 as select * from t2 {as of timestamp '2019-01-01 00:00:00'}",
+			output: "create table t1 as select * from t2{as of timestamp 2019-01-01 00:00:00}",
+		},
+		{
 			input: "restore cluster from snapshot snapshot_01",
 		},
 		{
@@ -2987,16 +3008,16 @@ var (
 			output: "create pitr pitr2 for account acc01 range 1  d",
 		},
 		{
-			input:  "create pitr `pitr3` range 1 'h'",
-			output: "create pitr pitr3 for self account range 1  h",
+			input:  "create pitr `pitr3` for account range 1 'h'",
+			output: "create pitr pitr3 for account range 1  h",
 		},
 		{
 			input:  "create pitr `pitr4` for database db01 range 1 'h'",
 			output: "create pitr pitr4 for database db01 range 1  h",
 		},
 		{
-			input:  "create pitr `pitr5` for database db01 table t01 range 1 'h'",
-			output: "create pitr pitr5 for database db01 table t01 range 1  h",
+			input:  "create pitr `pitr5` for table db01 t01 range 1 'h'",
+			output: "create pitr pitr5 for table db01 t01 range 1  h",
 		},
 		{
 			input: "show pitr",
@@ -3158,6 +3179,10 @@ var (
 		{
 			input:  "SELECT SQL_NO_CACHE HIGH_PRIORITY STRAIGHT_JOIN SQL_SMALL_RESULT SQL_BIG_RESULT SQL_BUFFER_RESULT SQL_NO_CACHE SQL_CALC_FOUND_ROWS abc, tbl_test.* FROM `tbl_test`;",
 			output: "select high_priority straight_join sql_small_result sql_big_result sql_buffer_result sql_no_cache sql_calc_found_rows abc, tbl_test.* from tbl_test",
+		},
+		{
+			input:  "use ",
+			output: "use",
 		},
 	}
 )

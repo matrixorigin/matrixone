@@ -260,12 +260,11 @@ var (
 	MoCatalogMoCdcWatermarkDDL = `create table mo_catalog.mo_cdc_watermark (
     			account_id bigint unsigned,			
     			task_id uuid,
-    			table_id varchar(64),			
 				db_name varchar(256),
 				table_name varchar(256),
     			watermark varchar(128),			
 				err_msg varchar(256),
-    			primary key(account_id,task_id,table_id)
+    			primary key(account_id,task_id,db_name,table_name)
 			)`
 
 	MoCatalogMoSessionsDDL       = `CREATE VIEW mo_catalog.mo_sessions AS SELECT node_id, conn_id, session_id, account, user, host, db, session_start, command, info, txn_id, statement_id, statement_type, query_type, sql_source_type, query_start, client_host, role, proxy_host FROM mo_sessions() AS mo_sessions_tmp`
@@ -283,6 +282,18 @@ var (
 				update_time timestamp not null default current_timestamp on update current_timestamp,
     			primary key(account_id, key_id)
 			)`
+
+	MoCatalogMoTableStatsDDL = fmt.Sprintf(`create table mo_catalog.%s (
+    			account_id bigint signed,
+    			database_id bigint signed,
+    			table_id bigint signed,
+    			database_name varchar(255),
+    			table_name varchar(255),
+    			table_stats json,
+    			update_time datetime(6) not null,
+    			takes bigint unsigned,
+    			primary key(account_id, database_id, table_id)
+			)`, catalog.MO_TABLE_STATS)
 )
 
 // `mo_catalog` database system tables

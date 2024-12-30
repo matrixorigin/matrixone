@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ckputil"
 	"github.com/matrixorigin/matrixone/pkg/sort"
 	"go.uber.org/zap"
 
@@ -38,7 +39,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
@@ -513,17 +513,17 @@ func NewBaseHandler(state *PartitionState, changesHandle *ChangeHandler, start, 
 	}
 	var iter btree.IterG[ObjectEntry]
 	if tombstone {
-		iter = state.tombstoneObjectsNameIndex.Copy().Iter()
+		iter = state.tombstoneObjectsNameIndex.Iter()
 	} else {
-		iter = state.dataObjectsNameIndex.Copy().Iter()
+		iter = state.dataObjectsNameIndex.Iter()
 	}
 	defer iter.Release()
 	if tombstone {
-		dataIter := state.dataObjectsNameIndex.Copy().Iter()
+		dataIter := state.dataObjectsNameIndex.Iter()
 		p.fillInSkipTS(dataIter, start, end)
 		dataIter.Release()
 	}
-	rowIter := state.rows.Copy().Iter()
+	rowIter := state.rows.Iter()
 	defer rowIter.Release()
 	p.inMemoryHandle = p.newBatchHandleWithRowIterator(ctx, rowIter, start, end, tombstone, mp)
 	aobj, cnObj := p.getObjectEntries(iter, start, end)
@@ -798,12 +798,23 @@ func (p *ChangeHandler) Next(ctx context.Context, mp *mpool.MPool) (data, tombst
 	if time.Since(p.lastPrint) > p.LogThreshold {
 		p.lastPrint = time.Now()
 		if p.dataLength != 0 || p.tombstoneLength != 0 {
-			gcTS, err := getGCTS(ctx, p.fs)
+			// use the max compact checkpoint end ts as the gc ts
+			gcTS, err := ckputil.GetMaxTSOfCompactCKP(ctx, p.fs)
 			if err != nil {
 				logutil.Warnf("ChangesHandle-Slow, get GC TS failed: %v", err)
 			}
-			logutil.Infof("ChangesHandle-Slow, %d/%d, read %v, copy %v, update %v, total %v, start %v, minTS %v, gcTS %v",
-				p.dataLength, p.tombstoneLength, p.readDuration, p.copyDuration, p.updateDuration, p.totalDuration, p.start.ToString(), p.minTS.ToString(), gcTS.ToString())
+			logutil.Warn(
+				"SLOW-LOG-ChangeHandle",
+				zap.String("start", p.start.ToString()),
+				zap.String("min-ts", p.minTS.ToString()),
+				zap.String("gc-ts", gcTS.ToString()),
+				zap.Int("data-length", p.dataLength),
+				zap.Int("tombstone-length", p.tombstoneLength),
+				zap.Duration("read-duration", p.readDuration),
+				zap.Duration("copy-duration", p.copyDuration),
+				zap.Duration("update-duration", p.updateDuration),
+				zap.Duration("total-duration", p.totalDuration),
+			)
 		}
 	}
 	hint = engine.ChangesHandle_Tail_done
@@ -1118,20 +1129,4 @@ func updateCNDataBatch(bat *batch.Batch, commitTS types.TS, mp *mpool.MPool) {
 		return
 	}
 	bat.Vecs = append(bat.Vecs, commitTSVec)
-}
-
-func getGCTS(ctx context.Context, fs fileservice.FileService) (maxGCTS types.TS, err error) {
-	var dir *fileservice.DirEntry
-	for dir, err = range fs.List(ctx, checkpoint.CheckpointDir) {
-		if err != nil {
-			return
-		}
-		_, end, ext := blockio.DecodeCheckpointMetadataFileName(dir.Name)
-		if ext == blockio.CompactedExt {
-			if end.GT(&maxGCTS) {
-				maxGCTS = end
-			}
-		}
-	}
-	return
 }

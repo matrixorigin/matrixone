@@ -211,7 +211,7 @@ func (mgr *TxnManager) ToWriteMode() {
 	mgr.ResetHeartbeat()
 }
 
-func (mgr *TxnManager) IsRelayMode() bool {
+func (mgr *TxnManager) IsReplayMode() bool {
 	skipFlags := mgr.GetTxnSkipFlags()
 	if skipFlags&TxnFlag_Replay == 0 && skipFlags&TxnFlag_Normal != 0 && skipFlags&TxnFlag_Heartbeat != 0 {
 		return true
@@ -260,9 +260,11 @@ func (mgr *TxnManager) GetTxnSkipFlags() TxnSkipFlag {
 }
 
 func (mgr *TxnManager) Init(prevTs types.TS) error {
-	logutil.Infof("init ts to %v", prevTs.ToString())
+	logutil.Info(
+		"TxnManager-Init",
+		zap.String("prev-ts", prevTs.ToString()),
+	)
 	mgr.ts.allocator.SetStart(prevTs)
-	logutil.Debug("[INIT]", TxnMgrField(mgr))
 	return nil
 }
 
@@ -801,33 +803,22 @@ func (mgr *TxnManager) ResetHeartbeat() {
 	if old != nil {
 		old.Stop()
 	}
-	newJob := tasks.NewCancelableJob(func(ctx context.Context) {
-		prevReportTime := time.Now()
-		ticker := time.NewTicker(time.Millisecond * 2)
-		defer ticker.Stop()
-		logutil.Info(
-			"TxnManager-HB-Start",
-			zap.Duration("interval", time.Millisecond*2),
-		)
-		for {
-			select {
-			case <-ctx.Done():
-				logutil.Info("TxnManager-HB-Exit")
-				return
-			case <-ticker.C:
-				op := mgr.newHeartbeatOpTxn(ctx)
-				op.Txn.(*Txn).Add(1)
-				if err := mgr.OnOpTxn(op); err != nil {
-					if time.Since(prevReportTime) > time.Second*10 {
-						logutil.Warn(
-							"TxnManager-HB-Error",
-							zap.Error(err),
-						)
-					}
-				}
+	newJob := tasks.NewCancelableCronJob(
+		"TxnManager-HB",
+		time.Millisecond*2,
+		func(ctx context.Context) {
+			op := mgr.newHeartbeatOpTxn(ctx)
+			op.Txn.(*Txn).Add(1)
+			if err := mgr.OnOpTxn(op); err != nil {
+				logutil.Error(
+					"TxnManager-HB-Error",
+					zap.Error(err),
+				)
 			}
-		}
-	})
+		},
+		true,
+		1,
+	)
 	for swapped := mgr.heartbeatJob.CompareAndSwap(old, newJob); !swapped; {
 		if old = mgr.heartbeatJob.Load(); old != nil {
 			old.Stop()
@@ -837,16 +828,29 @@ func (mgr *TxnManager) ResetHeartbeat() {
 }
 
 func (mgr *TxnManager) Start(ctx context.Context) {
+	isReplayMode := mgr.IsReplayMode()
+	isWriteMode := mgr.IsWriteMode()
 	mgr.FlushQueue.Start()
 	mgr.PreparingSM.Start()
 	mgr.ResetHeartbeat()
+	logutil.Info(
+		"TxnManager-Started",
+		zap.Bool("is-replay-mode", isReplayMode),
+		zap.Bool("is-write-mode", isWriteMode),
+	)
 }
 
 func (mgr *TxnManager) Stop() {
+	isReplayMode := mgr.IsReplayMode()
+	isWriteMode := mgr.IsWriteMode()
 	mgr.StopHeartbeat()
 	mgr.PreparingSM.Stop()
 	mgr.FlushQueue.Stop()
 	mgr.OnException(sm.ErrClose)
 	mgr.workers.Release()
-	logutil.Info("[Stop]", TxnMgrField(mgr))
+	logutil.Info(
+		"TxnManager-Stopped",
+		zap.Bool("is-replay-mode", isReplayMode),
+		zap.Bool("is-write-mode", isWriteMode),
+	)
 }

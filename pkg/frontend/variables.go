@@ -1040,7 +1040,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Scope:             ScopeBoth,
 		Dynamic:           true,
 		SetVarHintApplies: false,
-		Type:              InitSystemVariableIntType("max_allowed_packet", 1024, 67108864, false),
+		Type:              InitSystemVariableIntType("max_allowed_packet", 1024, 1073741824, false),
 		Default:           int64(67108864),
 	},
 	"version_comment": {
@@ -1725,6 +1725,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("delayed_queue_size", 1, math.MaxInt64, false),
 		Default:           int64(1000),
+	},
+	"delete_opt_to_truncate": {
+		Name:              "delete_opt_to_truncate",
+		Scope:             ScopeSession,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableBoolType("delete_opt_to_truncate"),
+		Default:           int64(1),
 	},
 	"disabled_storage_engines": {
 		Name:              "disabled_storage_engines",
@@ -3645,6 +3653,30 @@ var gSysVarsDefs = map[string]SystemVariable{
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableStringType("optimizer_switch"),
 		Default:           "index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=on,index_condition_pushdown=on,mrr=on,mrr_cost_based=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=on,duplicateweedout=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,use_invisible_indexes=off,skip_scan=on,hash_join=on,subquery_to_derived=off,prefer_ordering_index=on,hypergraph_optimizer=off,derived_condition_pushdown=on,hash_set_operations=on",
+	},
+	"mo_table_stats.force_update": {
+		Name:              "mo_table_stats.force_update",
+		Scope:             ScopeSession,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableStringType("mo_table_stats.force_update"),
+		Default:           "",
+	},
+	"mo_table_stats.use_old_impl": {
+		Name:              "mo_table_stats.use_old_impl",
+		Scope:             ScopeSession,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableStringType("mo_table_stats.use_old_impl"),
+		Default:           "",
+	},
+	"mo_table_stats.reset_update_time": {
+		Name:              "mo_table_stats.reset_update_time",
+		Scope:             ScopeSession,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableStringType("mo_table_stats.reset_update_time"),
+		Default:           "",
 	},
 }
 

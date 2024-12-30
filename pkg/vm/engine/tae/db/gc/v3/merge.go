@@ -16,19 +16,19 @@ package gc
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"go.uber.org/zap"
-	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -48,32 +48,44 @@ func MergeCheckpoint(
 	ckpEntries []*checkpoint.CheckpointEntry,
 	bf *bloomfilter.BloomFilter,
 	end *types.TS,
-	client checkpoint.RunnerReader,
+	client checkpoint.Runner,
 	pool *mpool.MPool,
 ) (deleteFiles, newFiles []string, checkpointEntry *checkpoint.CheckpointEntry, ckpData *logtail.CheckpointData, err error) {
 	ckpData = logtail.NewCheckpointData(sid, pool)
 	datas := make([]*logtail.CheckpointData, 0)
 	deleteFiles = make([]string, 0)
 	for _, ckpEntry := range ckpEntries {
+		select {
+		case <-ctx.Done():
+			err = context.Cause(ctx)
+			return
+		default:
+		}
 		logutil.Info("[MergeCheckpoint]",
 			zap.String("checkpoint", ckpEntry.String()))
 		var data *logtail.CheckpointData
 		var locations map[string]objectio.Location
-		_, data, err = logtail.LoadCheckpointEntriesFromKey(context.Background(), sid, fs,
-			ckpEntry.GetLocation(), ckpEntry.GetVersion(), nil, &types.TS{})
-		if err != nil {
+		if _, data, err = logtail.LoadCheckpointEntriesFromKey(
+			ctx,
+			sid,
+			fs,
+			ckpEntry.GetLocation(),
+			ckpEntry.GetVersion(),
+			nil,
+			&types.TS{},
+		); err != nil {
 			return
 		}
 		datas = append(datas, data)
 		var nameMeta string
 		if ckpEntry.GetType() == checkpoint.ET_Compacted {
-			nameMeta = blockio.EncodeCompactedMetadataFileName(
-				checkpoint.CheckpointDir, checkpoint.PrefixMetadata,
-				ckpEntry.GetStart(), ckpEntry.GetEnd())
+			nameMeta = ioutil.EncodeCKPMetadataFullName(
+				ckpEntry.GetStart(), ckpEntry.GetEnd(),
+			)
 		} else {
-			nameMeta = blockio.EncodeCheckpointMetadataFileName(
-				checkpoint.CheckpointDir, checkpoint.PrefixMetadata,
-				ckpEntry.GetStart(), ckpEntry.GetEnd())
+			nameMeta = ioutil.EncodeCKPMetadataFullName(
+				ckpEntry.GetStart(), ckpEntry.GetEnd(),
+			)
 		}
 
 		// add checkpoint metafile(ckp/mete_ts-ts.ckp...) to deleteFiles
@@ -81,7 +93,8 @@ func MergeCheckpoint(
 		// add checkpoint idx file to deleteFiles
 		deleteFiles = append(deleteFiles, ckpEntry.GetLocation().Name().String())
 		locations, err = logtail.LoadCheckpointLocations(
-			ctx, sid, ckpEntry.GetTNLocation(), ckpEntry.GetVersion(), fs)
+			ctx, sid, ckpEntry.GetTNLocation(), ckpEntry.GetVersion(), fs,
+		)
 		if err != nil {
 			if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
 				deleteFiles = append(deleteFiles, nameMeta)
@@ -107,6 +120,12 @@ func MergeCheckpoint(
 
 	// merge objects referenced by sansphot and pitr
 	for _, data := range datas {
+		select {
+		case <-ctx.Done():
+			err = context.Cause(ctx)
+			return
+		default:
+		}
 		ins := data.GetObjectBatchs()
 		tombstone := data.GetTombstoneObjectBatchs()
 		bf.Test(ins.GetVectorByName(catalog.ObjectAttr_ObjectStats).GetDownstreamVector(),
@@ -191,7 +210,7 @@ func MergeCheckpoint(
 	bat.GetVectorByName(checkpoint.CheckpointAttr_TruncateLSN).Append(uint64(0), false)
 	bat.GetVectorByName(checkpoint.CheckpointAttr_Type).Append(int8(checkpoint.ET_Compacted), false)
 	defer bat.Close()
-	name := blockio.EncodeCompactedMetadataFileName(checkpoint.CheckpointDir, checkpoint.PrefixMetadata, ckpEntries[0].GetStart(), *end)
+	name := ioutil.EncodeCompactCKPMetadataFullName(ckpEntries[0].GetStart(), *end)
 	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterCheckpoint, name, fs)
 	if err != nil {
 		return
@@ -205,8 +224,8 @@ func MergeCheckpoint(
 	if err != nil {
 		return
 	}
-	info := strings.Split(name, checkpoint.CheckpointDir+"/")
-	client.AddCheckpointMetaFile(info[1])
+	_, tsFile := ioutil.TryDecodeTSRangeFile(name)
+	client.AddCheckpointMetaFile(tsFile.GetName())
 	checkpointEntry = checkpoint.NewCheckpointEntry("", ckpEntries[0].GetStart(), *end, checkpoint.ET_Compacted)
 	checkpointEntry.SetLocation(cnLocation, tnLocation)
 	checkpointEntry.SetLSN(ckpEntries[len(ckpEntries)-1].LSN(), ckpEntries[len(ckpEntries)-1].GetTruncateLsn())

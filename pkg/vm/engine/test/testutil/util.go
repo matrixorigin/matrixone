@@ -19,18 +19,17 @@ import (
 	"fmt"
 	"os"
 	"os/user"
+	"path"
 	"path/filepath"
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
-	"golang.org/x/exp/rand"
-
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/exp/rand"
 
 	catalog2 "github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -41,7 +40,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
@@ -58,16 +59,6 @@ func MakeDefaultTestPath(module string, t *testing.T) string {
 	return path
 }
 
-func RemoveDefaultTestPath(module string, t *testing.T) {
-	path := GetDefaultTestPath(module, t)
-	os.RemoveAll(path)
-}
-
-func InitTestEnv(module string, t *testing.T) string {
-	RemoveDefaultTestPath(module, t)
-	return MakeDefaultTestPath(module, t)
-}
-
 type TestDisttaeEngineOptions func(*TestDisttaeEngine)
 
 func WithDisttaeEngineMPool(mp *mpool.MPool) TestDisttaeEngineOptions {
@@ -80,9 +71,19 @@ func WithDisttaeEngineInsertEntryMaxCount(v int) TestDisttaeEngineOptions {
 		e.insertEntryMaxCount = v
 	}
 }
-func WithDisttaeEngineWorkspaceThreshold(v uint64) TestDisttaeEngineOptions {
+func WithDisttaeEngineCommitWorkspaceThreshold(v uint64) TestDisttaeEngineOptions {
 	return func(e *TestDisttaeEngine) {
-		e.workspaceThreshold = v
+		e.commitWorkspaceThreshold = v
+	}
+}
+func WithDisttaeEngineWriteWorkspaceThreshold(v uint64) TestDisttaeEngineOptions {
+	return func(e *TestDisttaeEngine) {
+		e.writeWorkspaceThreshold = v
+	}
+}
+func WithDisttaeEngineQuota(v uint64) TestDisttaeEngineOptions {
+	return func(e *TestDisttaeEngine) {
+		e.quota = v
 	}
 }
 
@@ -90,7 +91,7 @@ func CreateEngines(
 	ctx context.Context,
 	opts TestOptions,
 	t *testing.T,
-	options ...TestDisttaeEngineOptions,
+	funcOpts ...TestDisttaeEngineOptions,
 ) (
 	disttaeEngine *TestDisttaeEngine,
 	taeEngine *TestTxnStorage,
@@ -102,17 +103,36 @@ func CreateEngines(
 		panic("cannot find account id in ctx")
 	}
 
+	_, ok := ctx.Deadline()
+	if ok {
+		panic("context should not have deadline")
+	}
+
 	var err error
 
 	rpcAgent = NewMockLogtailAgent()
 
-	taeEngine, err = NewTestTAEEngine(ctx, "partition_state", t, rpcAgent, opts.TaeEngineOptions)
+	rootDir := GetDefaultTestPath("engine_test", t)
+
+	s3Op, err := getS3SharedFileServiceOption(ctx, rootDir)
+	require.NoError(t, err)
+
+	if opts.TaeEngineOptions == nil {
+		opts.TaeEngineOptions = &options.Options{}
+	}
+
+	opts.TaeEngineOptions.Fs = s3Op.Fs
+
+	taeDir := path.Join(rootDir, "tae")
+
+	taeEngine, err = NewTestTAEEngine(ctx, taeDir, t, rpcAgent, opts.TaeEngineOptions)
 	require.Nil(t, err)
 
-	disttaeEngine, err = NewTestDisttaeEngine(ctx, taeEngine.GetDB().Runtime.Fs.Service, rpcAgent, taeEngine, options...)
+	disttaeEngine, err = NewTestDisttaeEngine(ctx, taeEngine.GetDB().Runtime.Fs.Service, rpcAgent, taeEngine, funcOpts...)
 	require.Nil(t, err)
 
 	mp = disttaeEngine.mp
+	disttaeEngine.rootDir = rootDir
 
 	return
 }
@@ -246,26 +266,27 @@ type EnginePack struct {
 }
 
 func InitEnginePack(opts TestOptions, t *testing.T) *EnginePack {
-	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, uint32(0))
+	ctx, cancel := context.WithCancel(context.Background())
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(0))
+	pack := &EnginePack{
+		t:       t,
+		cancelF: cancel,
+	}
+	pack.D, pack.T, pack.R, pack.Mp = CreateEngines(ctx, opts, t, opts.DisttaeOptions...)
 	timeout := opts.Timeout
 	if timeout == 0 {
 		timeout = 5 * time.Minute
 	}
-	ctx, cancel := context.WithTimeoutCause(ctx, timeout, moerr.CauseInitEnginePack)
-	pack := &EnginePack{
-		Ctx:     ctx,
-		t:       t,
-		cancelF: cancel,
-	}
-	pack.D, pack.T, pack.R, pack.Mp = CreateEngines(pack.Ctx, opts, t)
+	ctx, _ = context.WithTimeoutCause(ctx, timeout, moerr.CauseInitEnginePack)
+	pack.Ctx = ctx
 	return pack
 }
 
 func (p *EnginePack) Close() {
-	p.cancelF()
 	p.D.Close(p.Ctx)
 	p.T.Close(true)
 	p.R.Close()
+	p.cancelF()
 }
 
 func (p *EnginePack) StartCNTxn(opts ...client.TxnOption) client.TxnOperator {
@@ -451,20 +472,17 @@ func MakeTxnHeartbeatMonkeyJob(
 	opInterval time.Duration,
 ) *tasks.CancelableJob {
 	taeDB := e.GetDB()
-	return tasks.NewCancelableJob(func(ctx context.Context) {
-		ticker := time.NewTicker(opInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				if v := rand.Intn(100); v > 50 {
-					taeDB.StopTxnHeartbeat()
-				} else {
-					taeDB.ResetTxnHeartbeat()
-				}
+	return tasks.NewCancelableCronJob(
+		"txn-heartbeat-monkey",
+		opInterval,
+		func(ctx context.Context) {
+			if v := rand.Intn(100); v > 50 {
+				taeDB.StopTxnHeartbeat()
+			} else {
+				taeDB.ResetTxnHeartbeat()
 			}
-		}
-	})
+		},
+		false,
+		1,
+	)
 }

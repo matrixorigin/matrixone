@@ -39,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
@@ -75,6 +76,23 @@ func (tbl *txnTable) getEngine() engine.Engine {
 
 func (tbl *txnTable) getTxn() *Transaction {
 	return tbl.db.getTxn()
+}
+
+// true if the prefetch is received
+// false if the prefetch is rejected
+func (tbl *txnTable) PrefetchAllMeta(ctx context.Context) bool {
+	// TODO: remove this check
+	if !tbl.db.op.IsSnapOp() {
+		return tbl.eng.PrefetchTableMeta(
+			ctx,
+			pb.StatsInfoKey{
+				AccId:      tbl.accountId,
+				DatabaseID: tbl.db.databaseId,
+				TableID:    tbl.tableId,
+			},
+		)
+	}
+	return true
 }
 
 func (tbl *txnTable) Stats(ctx context.Context, sync bool) (*pb.StatsInfo, error) {
@@ -613,26 +631,19 @@ func (tbl *txnTable) doRanges(ctx context.Context, rangesParam engine.RangesPara
 			tbl.enableLogFilterExpr.Store(true)
 		}
 
-		if tbl.enableLogFilterExpr.Load() {
+		if ok, _ := objectio.RangesLogInjected(tbl.db.databaseName, tbl.tableDef.Name); ok ||
+			err != nil ||
+			tbl.enableLogFilterExpr.Load() ||
+			cost > 5*time.Second {
 			logutil.Info(
 				"TXN-FILTER-RANGE-LOG",
 				zap.String("name", tbl.tableDef.Name),
 				zap.String("exprs", plan2.FormatExprs(rangesParam.BlockFilters)),
-				zap.Int("ranges-len", blocks.Len()),
 				zap.Uint64("tbl-id", tbl.tableId),
 				zap.String("txn", tbl.db.op.Txn().DebugString()),
-			)
-		}
-
-		if ok, _ := objectio.RangesLogInjected(tbl.db.databaseName, tbl.tableDef.Name); ok {
-			logutil.Info(
-				"INJECT-TRACE-RANGES",
-				zap.String("name", tbl.tableDef.Name),
-				zap.String("exprs", plan2.FormatExprs(rangesParam.BlockFilters)),
-				zap.Uint64("tbl-id", tbl.tableId),
-				zap.String("txn", tbl.db.op.Txn().DebugString()),
-				zap.String("blocks", blocks.String()),
+				zap.Int("blocks", blocks.Len()),
 				zap.String("ps", fmt.Sprintf("%p", part)),
+				zap.Duration("cost", cost),
 				zap.Error(err),
 			)
 		}
@@ -729,6 +740,7 @@ func (tbl *txnTable) rangesOnePart(
 		nil,
 		uncommittedObjects,
 		outBlocks,
+		tbl.PrefetchAllMeta,
 		tbl.getTxn().engine.fs,
 	); err != nil {
 		return err
@@ -2358,7 +2370,7 @@ func writeTransferMapsToS3(ctx context.Context, taskHost *cnMergeTask) (err erro
 			objRowCnt++
 
 			if objRowCnt*len(columns)*int(unsafe.Sizeof(int32(0))) > 200*mpool.MB {
-				filename := blockio.EncodeTmpFileName("tmp", "merge_"+uuid.NewString(), time.Now().UTC().Unix())
+				filename := ioutil.EncodeTmpFileName("tmp", "merge_"+uuid.NewString(), time.Now().UTC().Unix())
 				writer, err := objectio.NewObjectWriterSpecial(objectio.WriterTmp, filename, taskHost.fs)
 				if err != nil {
 					return err
@@ -2382,7 +2394,7 @@ func writeTransferMapsToS3(ctx context.Context, taskHost *cnMergeTask) (err erro
 
 	// write remaining data
 	if buffer.RowCount() != 0 {
-		filename := blockio.EncodeTmpFileName("tmp", "merge_"+uuid.NewString(), time.Now().UTC().Unix())
+		filename := ioutil.EncodeTmpFileName("tmp", "merge_"+uuid.NewString(), time.Now().UTC().Unix())
 		writer, err := objectio.NewObjectWriterSpecial(objectio.WriterTmp, filename, taskHost.fs)
 		if err != nil {
 			return err

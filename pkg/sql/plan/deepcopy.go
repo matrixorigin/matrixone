@@ -178,6 +178,7 @@ func DeepCopyLockTarget(target *plan.LockTarget) *plan.LockTarget {
 	}
 	return &plan.LockTarget{
 		TableId:            target.TableId,
+		ObjRef:             DeepCopyObjectRef(target.ObjRef),
 		PrimaryColIdxInBat: target.PrimaryColIdxInBat,
 		PrimaryColTyp:      target.PrimaryColTyp,
 		RefreshTsIdxInBat:  target.RefreshTsIdxInBat,
@@ -258,6 +259,15 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 
 	newNode.ObjRef = DeepCopyObjectRef(node.ObjRef)
 	newNode.ParentObjRef = DeepCopyObjectRef(node.ParentObjRef)
+
+	newNode.IndexScanInfo = plan.IndexScanInfo{
+		IsIndexScan:    node.IndexScanInfo.IsIndexScan,
+		IndexName:      node.IndexScanInfo.IndexName,
+		BelongToTable:  node.IndexScanInfo.BelongToTable,
+		Parts:          slices.Clone(node.IndexScanInfo.Parts),
+		IsUnique:       node.IndexScanInfo.IsUnique,
+		IndexTableName: node.IndexScanInfo.IndexTableName,
+	}
 
 	if node.WinSpecList != nil {
 		newNode.WinSpecList = make([]*Expr, len(node.WinSpecList))

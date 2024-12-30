@@ -269,6 +269,7 @@ func (ls *LocalDisttaeDataSource) Next(
 	cols []string,
 	types []types.Type,
 	seqNums []uint16,
+	pkSeqNum int32,
 	filter any,
 	mp *mpool.MPool,
 	outBatch *batch.Batch,
@@ -334,7 +335,7 @@ func (ls *LocalDisttaeDataSource) Next(
 		case engine.InMem:
 			outBatch.CleanOnlyData()
 			if err = ls.iterateInMemData(
-				ctx, cols, types, seqNums, outBatch, mp,
+				ctx, cols, types, seqNums, pkSeqNum, outBatch, mp,
 			); err != nil {
 				state = engine.InMem
 				return
@@ -408,6 +409,7 @@ func (ls *LocalDisttaeDataSource) iterateInMemData(
 	cols []string,
 	colTypes []types.Type,
 	seqNums []uint16,
+	pkSeqNums int32,
 	outBatch *batch.Batch,
 	mp *mpool.MPool,
 ) (err error) {
@@ -415,7 +417,7 @@ func (ls *LocalDisttaeDataSource) iterateInMemData(
 	outBatch.SetRowCount(0)
 
 	if ls.category != engine.ShardingRemoteDataSource {
-		if err = ls.filterInMemUnCommittedInserts(ctx, seqNums, mp, outBatch); err != nil {
+		if err = ls.filterInMemUnCommittedInserts(ctx, seqNums, pkSeqNums, mp, outBatch); err != nil {
 			return err
 		}
 	}
@@ -467,6 +469,7 @@ func checkWorkspaceEntryType(
 func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 	_ context.Context,
 	seqNums []uint16,
+	pkSeqNums int32,
 	mp *mpool.MPool,
 	outBatch *batch.Batch,
 ) error {
@@ -487,7 +490,20 @@ func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 		return nil
 	}
 
-	var retainedRowIds []objectio.Rowid
+	var (
+		skipMask objectio.Bitmap
+		packer   *types.Packer
+
+		enableFilter bool
+
+		retainedRowIds []objectio.Rowid
+	)
+
+	if ls.memPKFilter.SpecFactory != nil && ls.wsCursor < ls.txnOffset {
+		enableFilter = true
+		// __mo_rowid is the first
+		pkSeqNums++
+	}
 
 	for ; ls.wsCursor < ls.txnOffset; ls.wsCursor++ {
 		if writes[ls.wsCursor].bat == nil {
@@ -502,8 +518,22 @@ func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 
 		retainedRowIds = vector.MustFixedColWithTypeCheck[objectio.Rowid](entry.bat.Vecs[0])
 		// Note: this implementation depends on that the offsets from rowids is a 0-based consecutive seq.
-		// Refter to genBlock and genRowid method.
-		offsets := engine_util.RowIdsToOffset(retainedRowIds, int64(0)).([]int64)
+		// Refer to genBlock and genRowid method.
+
+		// apply pk filter on workspace entries
+		if enableFilter {
+			skipMask = objectio.GetReusableBitmap()
+			put := ls.table.db.getEng().packerPool.Get(&packer)
+			ls.memPKFilter.FilterVector(entry.bat.Vecs[pkSeqNums], packer, &skipMask)
+			put.Put()
+		}
+
+		offsets := engine_util.RowIdsToOffset(retainedRowIds, int64(0), skipMask).([]int64)
+		skipMask.Release()
+
+		if len(offsets) == 0 {
+			continue
+		}
 
 		b := retainedRowIds[0].BorrowBlockID()
 		sels, err := ls.ApplyTombstones(

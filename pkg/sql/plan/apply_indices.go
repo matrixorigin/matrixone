@@ -16,6 +16,7 @@ package plan
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -400,7 +401,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 
 	if catalog.IsFakePkName(node.TableDef.Pkey.PkeyColName) {
 		// for cluster by table, make it less prone to go index
-		if node.Stats.Selectivity > 0.0001 || node.Stats.Outcnt > 1000 {
+		if node.Stats.Selectivity >= InFilterSelectivityLimit/2 || node.Stats.Outcnt >= InFilterCardLimitNonPK {
 			return nodeID
 		}
 	}
@@ -449,7 +450,7 @@ func (builder *QueryBuilder) applyExtraFiltersOnIndex(idxDef *IndexDef, node *pl
 			continue
 		}
 		for k := range idxDef.Parts {
-			colIdx := node.TableDef.Name2ColIndex[idxDef.Parts[k]]
+			colIdx := node.TableDef.Name2ColIndex[catalog.ResolveAlias(idxDef.Parts[k])]
 			if colIdx != col.ColPos {
 				continue
 			}
@@ -496,7 +497,7 @@ func tryMatchMoreLeadingFilters(idxDef *IndexDef, node *plan.Node, pos int32) []
 		if i == 0 {
 			continue //already hit
 		}
-		currentPos, ok := node.TableDef.Name2ColIndex[idxDef.Parts[i]]
+		currentPos, ok := node.TableDef.Name2ColIndex[catalog.ResolveAlias(idxDef.Parts[i])]
 		if !ok {
 			break
 		}
@@ -651,7 +652,7 @@ func (builder *QueryBuilder) tryIndexOnlyScan(idxDef *IndexDef, node *plan.Node,
 			colName := node.TableDef.Cols[i].Name
 			found := false
 			for j := range idxDef.Parts {
-				if idxDef.Parts[j] == colName {
+				if catalog.ResolveAlias(idxDef.Parts[j]) == colName {
 					found = true
 					break
 				}
@@ -704,7 +705,7 @@ func (builder *QueryBuilder) tryIndexOnlyScan(idxDef *IndexDef, node *plan.Node,
 	}
 
 	idxTag := builder.genNewTag()
-	idxObjRef, idxTableDef := builder.compCtx.Resolve(node.ObjRef.SchemaName, idxDef.IndexTableName, scanSnapshot)
+	idxObjRef, idxTableDef := builder.compCtx.ResolveIndexTableByRef(node.ObjRef, idxDef.IndexTableName, scanSnapshot)
 	builder.addNameByColRef(idxTag, idxTableDef)
 	leadingColExpr := GetColExpr(idxTableDef.Cols[0].Typ, idxTag, 0)
 
@@ -712,11 +713,16 @@ func (builder *QueryBuilder) tryIndexOnlyScan(idxDef *IndexDef, node *plan.Node,
 		colIdx := node.TableDef.Name2ColIndex[idxDef.Parts[0]]
 		idxColMap[[2]int32{node.BindingTags[0], colIdx}] = leadingColExpr
 	} else {
-		for i := 0; i < numKeyParts; i++ {
-			colIdx := node.TableDef.Name2ColIndex[idxDef.Parts[i]]
-			origType := node.TableDef.Cols[colIdx].Typ
-			mappedExpr, _ := MakeSerialExtractExpr(builder.GetContext(), DeepCopyExpr(leadingColExpr), origType, int64(i))
-			idxColMap[[2]int32{node.BindingTags[0], colIdx}] = mappedExpr
+		for i := 0; i < numParts; i++ {
+			colName := catalog.ResolveAlias(idxDef.Parts[i])
+			colIdx := node.TableDef.Name2ColIndex[colName]
+			if colName == node.TableDef.Pkey.PkeyColName {
+				idxColMap[[2]int32{node.BindingTags[0], colIdx}] = GetColExpr(idxTableDef.Cols[1].Typ, idxTag, 1)
+			} else {
+				origType := node.TableDef.Cols[colIdx].Typ
+				mappedExpr, _ := MakeSerialExtractExpr(builder.GetContext(), DeepCopyExpr(leadingColExpr), origType, int64(i))
+				idxColMap[[2]int32{node.BindingTags[0], colIdx}] = mappedExpr
+			}
 		}
 	}
 
@@ -727,16 +733,27 @@ func (builder *QueryBuilder) tryIndexOnlyScan(idxDef *IndexDef, node *plan.Node,
 		newFilterList = append(newFilterList, replaceColumnsForExpr(node.FilterList[idx], idxColMap))
 	}
 
+	// recod index table scan info
+	idxScanInfo := plan.IndexScanInfo{
+		IsIndexScan:    true,
+		IndexName:      idxDef.IndexName,
+		BelongToTable:  node.ObjRef.ObjName,
+		Parts:          slices.Clone(idxDef.Parts),
+		IsUnique:       idxDef.Unique,
+		IndexTableName: idxDef.IndexTableName,
+	}
+
 	idxTableNodeID := builder.appendNode(&plan.Node{
-		NodeType:     plan.Node_TABLE_SCAN,
-		TableDef:     idxTableDef,
-		ObjRef:       idxObjRef,
-		ParentObjRef: node.ObjRef,
-		FilterList:   newFilterList,
-		Limit:        node.Limit,
-		Offset:       node.Offset,
-		BindingTags:  []int32{idxTag},
-		ScanSnapshot: node.ScanSnapshot,
+		NodeType:      plan.Node_TABLE_SCAN,
+		TableDef:      idxTableDef,
+		IndexScanInfo: idxScanInfo,
+		ObjRef:        idxObjRef,
+		ParentObjRef:  node.ObjRef,
+		FilterList:    newFilterList,
+		Limit:         node.Limit,
+		Offset:        node.Offset,
+		BindingTags:   []int32{idxTag},
+		ScanSnapshot:  node.ScanSnapshot,
 	}, builder.ctxByNode[node.NodeId])
 
 	forceScanNodeStatsTP(idxTableNodeID, builder)
@@ -772,7 +789,7 @@ func (builder *QueryBuilder) getIndexForNonEquiCond(indexes []*IndexDef, node *p
 
 func (builder *QueryBuilder) applyIndexJoin(idxDef *IndexDef, node *plan.Node, filterType int, filterIdx []int32, scanSnapshot *Snapshot) (int32, int32) {
 	idxTag := builder.genNewTag()
-	idxObjRef, idxTableDef := builder.compCtx.Resolve(node.ObjRef.SchemaName, idxDef.IndexTableName, scanSnapshot)
+	idxObjRef, idxTableDef := builder.compCtx.ResolveIndexTableByRef(node.ObjRef, idxDef.IndexTableName, scanSnapshot)
 	builder.addNameByColRef(idxTag, idxTableDef)
 
 	numParts := len(idxDef.Parts)
@@ -783,14 +800,25 @@ func (builder *QueryBuilder) applyIndexJoin(idxDef *IndexDef, node *plan.Node, f
 		idxFilter = builder.replaceNonEqualCondition(node.FilterList[filterIdx[0]], idxTag, idxTableDef, numParts)
 	}
 
+	// recod index table scan info
+	idxScanInfo := plan.IndexScanInfo{
+		IsIndexScan:    true,
+		IndexName:      idxDef.IndexName,
+		BelongToTable:  node.ObjRef.ObjName,
+		Parts:          slices.Clone(idxDef.Parts),
+		IsUnique:       idxDef.Unique,
+		IndexTableName: idxDef.IndexTableName,
+	}
+
 	idxTableNode := &plan.Node{
-		NodeType:     plan.Node_TABLE_SCAN,
-		TableDef:     idxTableDef,
-		ObjRef:       idxObjRef,
-		ParentObjRef: DeepCopyObjectRef(node.ObjRef),
-		FilterList:   []*plan.Expr{idxFilter},
-		BindingTags:  []int32{idxTag},
-		ScanSnapshot: node.ScanSnapshot,
+		NodeType:      plan.Node_TABLE_SCAN,
+		TableDef:      idxTableDef,
+		ObjRef:        idxObjRef,
+		IndexScanInfo: idxScanInfo,
+		ParentObjRef:  DeepCopyObjectRef(node.ObjRef),
+		FilterList:    []*plan.Expr{idxFilter},
+		BindingTags:   []int32{idxTag},
+		ScanSnapshot:  node.ScanSnapshot,
 	}
 	idxTableNodeID := builder.appendNode(idxTableNode, builder.ctxByNode[node.NodeId])
 	forceScanNodeStatsTP(idxTableNodeID, builder)
@@ -854,7 +882,7 @@ func (builder *QueryBuilder) getMostSelectiveIndexForPointSelect(indexes []*Inde
 
 		filterIdx = filterIdx[:0]
 		for j := 0; j < numKeyParts; j++ {
-			colIdx := node.TableDef.Name2ColIndex[idxDef.Parts[j]]
+			colIdx := node.TableDef.Name2ColIndex[catalog.ResolveAlias(idxDef.Parts[j])]
 			idx, ok := col2filter[colIdx]
 			if !ok {
 				break
@@ -971,7 +999,7 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 
 		condIdx = condIdx[:0]
 		for i := 0; i < numKeyParts; i++ {
-			colIdx := leftChild.TableDef.Name2ColIndex[idxDef.Parts[i]]
+			colIdx := leftChild.TableDef.Name2ColIndex[catalog.ResolveAlias(idxDef.Parts[i])]
 			idx, ok := col2Cond[colIdx]
 			if !ok {
 				break
@@ -985,8 +1013,7 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 		}
 
 		idxTag := builder.genNewTag()
-		//idxObjRef, idxTableDef := builder.compCtx.Resolve(leftChild.ObjRef.SchemaName, idxDef.IndexTableName, *ts)
-		idxObjRef, idxTableDef := builder.compCtx.Resolve(leftChild.ObjRef.SchemaName, idxDef.IndexTableName, scanSnapshot)
+		idxObjRef, idxTableDef := builder.compCtx.ResolveIndexTableByRef(leftChild.ObjRef, idxDef.IndexTableName, scanSnapshot)
 		builder.addNameByColRef(idxTag, idxTableDef)
 
 		rfTag := builder.genNewMsgTag()
@@ -1027,10 +1054,22 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 				},
 			},
 		}
+
+		// recod index table scan info
+		idxScanInfo := plan.IndexScanInfo{
+			IsIndexScan:    true,
+			IndexName:      idxDef.IndexName,
+			BelongToTable:  leftChild.ObjRef.ObjName,
+			Parts:          slices.Clone(idxDef.Parts),
+			IsUnique:       idxDef.Unique,
+			IndexTableName: idxDef.IndexTableName,
+		}
+
 		idxTableNodeID := builder.appendNode(&plan.Node{
 			NodeType:               plan.Node_TABLE_SCAN,
 			TableDef:               idxTableDef,
 			ObjRef:                 idxObjRef,
+			IndexScanInfo:          idxScanInfo,
 			ParentObjRef:           DeepCopyObjectRef(leftChild.ObjRef),
 			BindingTags:            []int32{idxTag},
 			ScanSnapshot:           leftChild.ScanSnapshot,

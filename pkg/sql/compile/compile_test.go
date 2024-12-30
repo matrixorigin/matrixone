@@ -209,7 +209,7 @@ func TestCompileWithFaults(t *testing.T) {
 		require.NoError(t, pc.Close())
 	}()
 
-	fault.AddFaultPoint(ctx, "panic_in_batch_append", ":::", "panic", 0, "")
+	fault.AddFaultPoint(ctx, "panic_in_batch_append", ":::", "panic", 0, "", false)
 	tc := newTestCase("select * from R join S on R.uid = S.uid", t)
 	ctrl := gomock.NewController(t)
 	txnCli, txnOp := newTestTxnClientAndOp(ctrl)
@@ -230,6 +230,25 @@ func newTestTxnClientAndOp(ctrl *gomock.Controller) (client.TxnClient, client.Tx
 	txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 	txnOperator.EXPECT().GetWorkspace().Return(&Ws{}).AnyTimes()
 	txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+	txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
+	txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
+	txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
+	txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
+	txnOperator.EXPECT().Snapshot().Return(txn.CNTxnSnapshot{}, nil).AnyTimes()
+	txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
+	txnClient := mock_frontend.NewMockTxnClient(ctrl)
+	txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
+	return txnClient, txnOperator
+}
+
+func newTestTxnClientAndOpWithPessimistic(ctrl *gomock.Controller) (client.TxnClient, client.TxnOperator) {
+	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
+	txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
+	txnOperator.EXPECT().GetWorkspace().Return(&Ws{}).AnyTimes()
+	txnOperator.EXPECT().Txn().Return(txn.TxnMeta{
+		Mode: txn.TxnMode_Pessimistic,
+	}).AnyTimes()
 	txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
 	txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
 	txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()

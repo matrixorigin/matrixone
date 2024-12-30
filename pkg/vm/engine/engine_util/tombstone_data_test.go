@@ -17,6 +17,7 @@ package engine_util
 import (
 	"bytes"
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"testing"
 	"time"
 
@@ -35,9 +36,11 @@ import (
 func TestTombstoneData1(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
 	defer cancel()
-
-	blockio.Start("")
-	defer blockio.Stop("")
+	rt := runtime.DefaultRuntime()
+	name := t.Name()
+	runtime.SetupServiceBasedRuntime(name, rt)
+	blockio.Start(name)
+	defer blockio.Stop(name)
 
 	proc := testutil.NewProc()
 
@@ -102,7 +105,7 @@ func TestTombstoneData1(t *testing.T) {
 
 	deleteMask := objectio.GetReusableBitmap()
 	defer deleteMask.Release()
-	tombstones1.PrefetchTombstones("", fs, nil)
+	tombstones1.PrefetchTombstones(name, fs, nil)
 	for i := range tombstoneRowIds {
 		sIdx := i / int(stats1.Rows())
 		if sIdx == 2 {
@@ -228,4 +231,36 @@ func TestTombstoneData1(t *testing.T) {
 	require.True(t, deleted.Contains(2))
 	require.True(t, deleted.Contains(4))
 	require.Equal(t, 4, deleted.Count())
+}
+
+func TestRowIdsToOffset(t *testing.T) {
+
+	objId := types.NewObjectid()
+	blkId := types.NewBlockidWithObjectID(objId, 1)
+
+	rowIds := make([]types.Rowid, 0, 10)
+	for i := 0; i < 10; i++ {
+		row := types.NewRowid(blkId, uint32(i))
+		rowIds = append(rowIds, *row)
+	}
+
+	skipMask := objectio.GetReusableBitmap()
+	skipMask.Add(1)
+	skipMask.Add(3)
+
+	left1 := RowIdsToOffset(rowIds, int32(0), skipMask).([]int32)
+	left2 := RowIdsToOffset(rowIds, uint32(0), skipMask).([]uint32)
+	left3 := RowIdsToOffset(rowIds, uint64(0), skipMask).([]uint64)
+
+	expect := []int{0, 2, 4, 5, 6, 7, 8, 9}
+
+	require.Equal(t, len(expect), len(left1))
+	require.Equal(t, len(expect), len(left2))
+	require.Equal(t, len(expect), len(left3))
+
+	for i := 0; i < len(expect); i++ {
+		require.Equal(t, expect[i], int(left1[i]))
+		require.Equal(t, expect[i], int(left2[i]))
+		require.Equal(t, expect[i], int(left3[i]))
+	}
 }

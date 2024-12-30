@@ -22,7 +22,6 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -241,27 +240,26 @@ func (exec *txnExecutor) Exec(
 	sql string,
 	statementOption executor.StatementOption,
 ) (executor.Result, error) {
-
-	//-----------------------------------------------------------------------------------------
 	// NOTE: This code is to restore tenantID information in the Context when temporarily switching tenants
 	// so that it can be restored to its original state after completing the task.
-	recoverAccount := func(exec *txnExecutor, accId uint32) {
-		exec.ctx = context.WithValue(exec.ctx, defines.TenantIDKey{}, accId)
-	}
-
+	var originCtx context.Context
 	if statementOption.HasAccountID() {
-		originAccountID := catalog.System_Account
-		if v := exec.ctx.Value(defines.TenantIDKey{}); v != nil {
-			originAccountID = v.(uint32)
+		// save the current context
+		originCtx = exec.ctx
+		// switch tenantID
+		exec.ctx = context.WithValue(exec.ctx, defines.TenantIDKey{}, statementOption.AccountID())
+		if statementOption.HasUserID() {
+			exec.ctx = context.WithValue(exec.ctx, defines.UserIDKey{}, statementOption.UserID())
 		}
-
-		exec.ctx = context.WithValue(exec.ctx,
-			defines.TenantIDKey{},
-			statementOption.AccountID())
-		// NOTE: Restore AccountID information in context.Context
-		defer recoverAccount(exec, originAccountID)
+		if statementOption.HasRoleID() {
+			exec.ctx = context.WithValue(exec.ctx, defines.RoleIDKey{}, statementOption.RoleID())
+		}
+		defer func() {
+			// restore context at the end of the function
+			exec.ctx = originCtx
+		}()
 	}
-	//-----------------------------------------------------------------------------------------
+	//------------------------------------------------------------------------------------------------------------------
 	if statementOption.IgnoreForeignKey() {
 		exec.ctx = context.WithValue(exec.ctx,
 			defines.IgnoreForeignKey{},
@@ -336,7 +334,7 @@ func (exec *txnExecutor) Exec(
 
 	result := executor.NewResult(exec.s.mp)
 
-	stream_chan, streaming := exec.opts.Streaming()
+	stream_chan, err_chan, streaming := exec.opts.Streaming()
 	if streaming {
 		defer close(stream_chan)
 	}
@@ -359,6 +357,7 @@ func (exec *txnExecutor) Exec(
 					for len(stream_chan) == cap(stream_chan) {
 						select {
 						case <-proc.Ctx.Done():
+							err_chan <- moerr.NewInternalError(proc.Ctx, "context cancelled")
 							return moerr.NewInternalError(proc.Ctx, "context cancelled")
 						default:
 							time.Sleep(1 * time.Millisecond)
@@ -374,11 +373,17 @@ func (exec *txnExecutor) Exec(
 
 		})
 	if err != nil {
+		if streaming {
+			err_chan <- err
+		}
 		return executor.Result{}, err
 	}
 	var runResult *util.RunResult
 	runResult, err = c.Run(0)
 	if err != nil {
+		if streaming {
+			err_chan <- err
+		}
 		for _, bat := range batches {
 			if bat != nil {
 				bat.Clean(exec.s.mp)

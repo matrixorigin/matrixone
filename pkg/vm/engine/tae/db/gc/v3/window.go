@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 
@@ -52,9 +53,9 @@ type ObjectEntry struct {
 
 type WindowOption func(*GCWindow)
 
-func WithMetaPrefix(prefix string) WindowOption {
+func WithWindowDir(dir string) WindowOption {
 	return func(table *GCWindow) {
-		table.metaDir = prefix
+		table.dir = dir
 	}
 }
 
@@ -70,16 +71,16 @@ func NewGCWindow(
 	for _, opt := range opts {
 		opt(&window)
 	}
-	if window.metaDir == "" {
-		window.metaDir = GCMetaDir
+	if window.dir == "" {
+		window.dir = ioutil.GetGCDir()
 	}
 	return &window
 }
 
 type GCWindow struct {
-	metaDir string
-	mp      *mpool.MPool
-	fs      fileservice.FileService
+	dir string
+	mp  *mpool.MPool
+	fs  fileservice.FileService
 
 	files []objectio.ObjectStats
 
@@ -174,7 +175,7 @@ func (w *GCWindow) ExecuteGlobalCheckpointBasedGC(
 func (w *GCWindow) ScanCheckpoints(
 	ctx context.Context,
 	checkpointEntries []*checkpoint.CheckpointEntry,
-	collectCkpData func(*checkpoint.CheckpointEntry) (*logtail.CheckpointData, error),
+	collectCkpData func(context.Context, *checkpoint.CheckpointEntry) (*logtail.CheckpointData, error),
 	processCkpData func(*checkpoint.CheckpointEntry, *logtail.CheckpointData) error,
 	onScanDone func() error,
 	buffer *containers.OneSchemaBatchBuffer,
@@ -185,10 +186,15 @@ func (w *GCWindow) ScanCheckpoints(
 	start := checkpointEntries[0].GetStart()
 	end := checkpointEntries[len(checkpointEntries)-1].GetEnd()
 	getOneBatch := func(cxt context.Context, bat *batch.Batch, mp *mpool.MPool) (bool, error) {
+		select {
+		case <-cxt.Done():
+			return false, context.Cause(cxt)
+		default:
+		}
 		if len(checkpointEntries) == 0 {
 			return true, nil
 		}
-		data, err := collectCkpData(checkpointEntries[0])
+		data, err := collectCkpData(ctx, checkpointEntries[0])
 		if err != nil {
 			return false, err
 		}
@@ -265,7 +271,12 @@ func (w *GCWindow) writeMetaForRemainings(
 	ctx context.Context,
 	stats []objectio.ObjectStats,
 ) (string, error) {
-	name := blockio.EncodeGCMetadataFileName(PrefixGCMeta, w.tsRange.start, w.tsRange.end)
+	select {
+	case <-ctx.Done():
+		return "", context.Cause(ctx)
+	default:
+	}
+	name := ioutil.EncodeGCMetadataName(w.tsRange.start, w.tsRange.end)
 	ret := batch.NewWithSchema(
 		false, ObjectTableMetaAttrs, ObjectTableMetaTypes,
 	)
@@ -277,7 +288,11 @@ func (w *GCWindow) writeMetaForRemainings(
 			return "", err
 		}
 	}
-	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterGC, w.metaDir+name, w.fs)
+	writer, err := objectio.NewObjectWriterSpecial(
+		objectio.WriterGC,
+		ioutil.MakeFullName(w.dir, name),
+		w.fs,
+	)
 	if err != nil {
 		return "", err
 	}
@@ -460,6 +475,12 @@ func (w *GCWindow) replayData(
 
 // ReadTable reads an s3 file and replays a GCWindow in memory
 func (w *GCWindow) ReadTable(ctx context.Context, name string, fs fileservice.FileService) error {
+	select {
+	case <-ctx.Done():
+		return context.Cause(ctx)
+	default:
+	}
+
 	var release1 func()
 	var buffer *batch.Batch
 	defer func() {
@@ -467,9 +488,9 @@ func (w *GCWindow) ReadTable(ctx context.Context, name string, fs fileservice.Fi
 			release1()
 		}
 	}()
-	start, end, _ := blockio.DecodeGCMetadataFileName(name)
-	w.tsRange.start = start
-	w.tsRange.end = end
+	meta := ioutil.DecodeGCMetadataName(name)
+	w.tsRange.start = *meta.GetStart()
+	w.tsRange.end = *meta.GetEnd()
 	reader, err := blockio.NewFileReaderNoCache(fs, name)
 	if err != nil {
 		return err

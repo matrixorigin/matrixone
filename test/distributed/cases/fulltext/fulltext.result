@@ -20,10 +20,7 @@ id    body    title
 3    blue is not red    colorful
 select *, match(body, title) against('is red' in natural language mode) as score from src;
 id    body    title    score
-0    color is red    t1    0.74115014
-3    blue is not red    colorful    0.74115014
-1    car is yellow    crazy car    0.19301322
-2    sky is blue    no limit    0.19301322
+0    color is red    t1    2.1689975
 select * from src where match(body, title) against('教學指引');
 id    body    title
 6    各個單元主題內容涵蓋中華文化及生活應用的介紹。本套教材含課本、教學指引、生字卡、學生作業本與CD，中英對照，精美大字版。本系列有繁體字及簡體字兩種版本印行。    中文短篇小說
@@ -39,11 +36,11 @@ id    body    title
 4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文
 select *, match(body, title) against('遠東兒童中文' in natural language mode) as score from src;
 id    body    title    score
-4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    5.4813685
+4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    6.577643
 5    每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。    遠東兒童中文    3.2888215
 select *, match(body) against('遠東兒童中文' in natural language mode) as score from src;
 id    body    title    score
-4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    4.337995
+4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    6.506993
 select * from src where match(body, title) against('+red blue' in boolean mode);
 id    body    title
 3    blue is not red    colorful
@@ -75,6 +72,11 @@ select * from src where match(body, title) against('"red"' in boolean mode);
 id    body    title
 0    color is red    t1
 3    blue is not red    colorful
+select * from src where match(body, title) against('+教學指引 +短篇小說' in boolean mode);
+id    body    title
+6    各個單元主題內容涵蓋中華文化及生活應用的介紹。本套教材含課本、教學指引、生字卡、學生作業本與CD，中英對照，精美大字版。本系列有繁體字及簡體字兩種版本印行。    中文短篇小說
+select * from src where match(body, title) against('+教學指引 -短篇小說' in boolean mode);
+id    body    title
 select * from src where match(body, title) against('"is  not red"' in boolean mode);
 id    body    title
 select * from src where match(body, title) against('"blue is red"' in boolean mode);
@@ -124,10 +126,7 @@ id    body    title
 3    blue is not red    colorful
 select *, match(body, title) against('is red' in natural language mode) as score from src;
 id    body    title    score
-0    color is red    t1    0.74115014
-3    blue is not red    colorful    0.74115014
-1    car is yellow    crazy car    0.19301322
-2    sky is blue    no limit    0.19301322
+0    color is red    t1    2.1689975
 select * from src where match(body, title) against('教學指引');
 id    body    title
 6    各個單元主題內容涵蓋中華文化及生活應用的介紹。本套教材含課本、教學指引、生字卡、學生作業本與CD，中英對照，精美大字版。本系列有繁體字及簡體字兩種版本印行。    中文短>篇小說
@@ -143,11 +142,11 @@ id    body    title
 4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文
 select *, match(body, title) against('遠東兒童中文' in natural language mode) as score from src;
 id    body    title    score
-4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    5.4813685
+4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    6.577643
 5    每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。    遠東兒童中文    3.2888215
 select *, match(body) against('遠東兒童中文' in natural language mode) as score from src;
 id    body    title    score
-4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    4.337995
+4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    6.506993
 select * from src where match(body, title) against('+red blue' in boolean mode);
 id    body    title
 3    blue is not red    colorful
@@ -303,10 +302,7 @@ id    body    title
 3    blue is not red    colorful
 select *, match(body, title) against('is red' in natural language mode) as score from src;
 id    body    title    score
-0    color is red    t1    0.74115014
-3    blue is not red    colorful    0.74115014
-1    car is yellow    crazy car    0.19301322
-2    sky is blue    no limit    0.19301322
+0    color is red    t1    2.1689975
 select * from src where match(body, title) against('教學指引');
 id    body    title
 6    各個單元主題內容涵蓋中華文化及生活應用的介紹。本套教材含課本、教學指引、生字卡、學生作業本與CD，中英對照，精美大字版。本系列有繁體字及簡體字兩種版本印行。    中文短篇小說\n
@@ -322,7 +318,7 @@ id    body    title
 4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文
 select *, match(body, title) against('遠東兒童中文' in natural language mode) as score from src;
 id    body    title    score
-4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    5.4813685
+4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    6.577643
 5    每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。    遠東兒童中文    3.2888215
 select * from src where match(body, title) against('+red blue' in boolean mode);
 id    body    title

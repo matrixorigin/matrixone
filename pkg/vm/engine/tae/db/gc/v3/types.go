@@ -15,7 +15,7 @@
 package gc
 
 import (
-	"fmt"
+	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -26,14 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
-)
-
-const (
-	PrefixGCMeta   = "gc"
-	PrefixSnapMeta = "snap"
-	PrefixAcctMeta = "acct"
-	GCMetaDir      = "gc/"
-	CKPMetaDir     = "ckp/"
 )
 
 type BatchType int8
@@ -140,9 +132,9 @@ var (
 )
 
 type Cleaner interface {
-	Replay() error
-	Process()
-	TryGC() error
+	Replay(context.Context) error
+	Process(context.Context) error
+	TryGC(context.Context) error
 	AddChecker(checker func(item any) bool, key string) int
 	RemoveChecker(key string) error
 	GetScanWaterMark() *checkpoint.CheckpointEntry
@@ -176,42 +168,6 @@ const ObjectTableVersion = 0
 const (
 	DefaultInMemoryStagedSize = mpool.MB * 32
 )
-
-type GCMetaFile struct {
-	name       string
-	start, end types.TS
-	ext        string
-}
-
-func (f *GCMetaFile) String() string {
-	return fmt.Sprintf(
-		"GCFile[%s-%s-%s-%s]",
-		f.name,
-		f.ext,
-		f.start.ToString(),
-		f.end.ToString(),
-	)
-}
-
-func (f *GCMetaFile) FullName(dir string) string {
-	return dir + f.name
-}
-
-func (f *GCMetaFile) Start() *types.TS {
-	return &f.start
-}
-func (f *GCMetaFile) End() *types.TS {
-	return &f.end
-}
-func (f *GCMetaFile) Ext() string {
-	return f.ext
-}
-func (f *GCMetaFile) Name() string {
-	return f.name
-}
-func (f *GCMetaFile) EqualRange(start, end *types.TS) bool {
-	return f.start == *start && f.end == *end
-}
 
 func init() {
 	ObjectTableAttrs = []string{

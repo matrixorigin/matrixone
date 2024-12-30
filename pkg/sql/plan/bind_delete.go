@@ -149,7 +149,7 @@ func (builder *QueryBuilder) bindDelete(stmt *tree.Delete, bindCtx *BindContext)
 				return 0, moerr.NewUnsupportedDML(builder.GetContext(), "have vector index table")
 			}
 
-			idxObjRef, idxTableDef := builder.compCtx.Resolve(dmlCtx.objRefs[0].SchemaName, idxDef.IndexTableName, bindCtx.snapshot)
+			idxObjRef, idxTableDef := builder.compCtx.ResolveIndexTableByRef(dmlCtx.objRefs[0], idxDef.IndexTableName, bindCtx.snapshot)
 			if len(idxTableDef.Name2ColIndex) == 0 {
 				idxTableDef.Name2ColIndex = make(map[string]int32)
 				for colIdx, col := range idxTableDef.Cols {
@@ -269,6 +269,7 @@ func (builder *QueryBuilder) bindDelete(stmt *tree.Delete, bindCtx *BindContext)
 			if col.Name == tableDef.Pkey.PkeyColName {
 				lockTarget := &plan.LockTarget{
 					TableId:            tableDef.TblId,
+					ObjRef:             DeepCopyObjectRef(dmlCtx.objRefs[i]),
 					PrimaryColIdxInBat: int32(pkPos),
 					PrimaryColRelPos:   selectNodeTag,
 					PrimaryColTyp:      col.Typ,
@@ -310,6 +311,7 @@ func (builder *QueryBuilder) bindDelete(stmt *tree.Delete, bindCtx *BindContext)
 					if col.Name == idxNode.TableDef.Pkey.PkeyColName {
 						lockTargets = append(lockTargets, &plan.LockTarget{
 							TableId:            idxNode.TableDef.TblId,
+							ObjRef:             DeepCopyObjectRef(idxNode.ObjRef),
 							PrimaryColIdxInBat: int32(pkPos),
 							PrimaryColRelPos:   idxNode.BindingTags[0],
 							PrimaryColTyp:      col.Typ,

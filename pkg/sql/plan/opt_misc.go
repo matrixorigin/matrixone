@@ -395,20 +395,45 @@ func (builder *QueryBuilder) remapHavingClause(expr *plan.Expr, groupTag, aggreg
 	}
 }
 
-func (builder *QueryBuilder) remapWindowClause(expr *plan.Expr, windowTag int32, projectionSize int32) {
+func (builder *QueryBuilder) remapWindowClause(
+	expr *plan.Expr,
+	windowTag int32,
+	projectionSize int32,
+	colMap map[[2]int32][2]int32,
+	remapInfo *RemapInfo,
+) error {
+	// For window functions,
+	// a specific weight is required mapping
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_Col:
+		// In the window function node,
+		// the filtering conditions also need to be remapped
 		if exprImpl.Col.RelPos == windowTag {
 			exprImpl.Col.Name = builder.nameByColRef[[2]int32{windowTag, exprImpl.Col.ColPos}]
 			exprImpl.Col.RelPos = -1
 			exprImpl.Col.ColPos += projectionSize
+		} else {
+			// normal remap for other columns
+			// for example,
+			// where abs(sum(a) - avg(sum(a) over(partition by b))
+			// sum(a) need remap
+			err := builder.remapSingleColRef(exprImpl.Col, colMap, remapInfo)
+			if err != nil {
+				return err
+			}
 		}
 
 	case *plan.Expr_F:
+		// loop function parameters
 		for _, arg := range exprImpl.F.Args {
-			builder.remapWindowClause(arg, windowTag, projectionSize)
+			err := builder.remapWindowClause(arg, windowTag, projectionSize, colMap, remapInfo)
+			if err != nil {
+				return err
+			}
 		}
 	}
+	// return nil
+	return nil
 }
 
 // if join cond is a=b and a=c, we can remove a=c to improve join performance
@@ -1124,6 +1149,7 @@ func (builder *QueryBuilder) parseOptimizeHints() {
 func (builder *QueryBuilder) optimizeFilters(rootID int32) int32 {
 	rootID, _ = builder.pushdownFilters(rootID, nil, false)
 	foldTableScanFilters(builder.compCtx.GetProcess(), builder.qry, rootID, false)
+	ReCalcNodeStats(rootID, builder, true, true, true)
 	builder.mergeFiltersOnCompositeKey(rootID)
 	foldTableScanFilters(builder.compCtx.GetProcess(), builder.qry, rootID, true)
 	builder.optimizeDateFormatExpr(rootID)
@@ -1160,7 +1186,7 @@ func (builder *QueryBuilder) lockTableIfLockNoRowsAtTheEndForDelAndUpdate() (err
 	tableIDs[tableDef.TblId] = true
 	for _, idx := range tableDef.Indexes {
 		if idx.TableExist {
-			_, idxTableDef := builder.compCtx.Resolve(objRef.SchemaName, idx.IndexTableName, nil)
+			_, idxTableDef := builder.compCtx.ResolveIndexTableByRef(objRef, idx.IndexTableName, nil)
 			if idxTableDef == nil {
 				return
 			}

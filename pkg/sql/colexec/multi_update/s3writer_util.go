@@ -245,11 +245,9 @@ func cloneSomeVecFromCompactBatchs(
 // fetchSomeVecFromCompactBatchs fetch some vectors from CompactBatchs
 // do not clean these batchs
 func fetchSomeVecFromCompactBatchs(
-	proc *process.Process,
 	src *batch.CompactBatchs,
 	cols []int,
 	attrs []string) ([]*batch.Batch, error) {
-	mp := proc.GetMPool()
 	var newBat *batch.Batch
 	retBats := make([]*batch.Batch, src.Length())
 	for i := 0; i < src.Length(); i++ {
@@ -258,18 +256,7 @@ func fetchSomeVecFromCompactBatchs(
 		newBat.Attrs = attrs
 		for j, idx := range cols {
 			oldVec := oldBat.Vecs[idx]
-			//expand constant vector
-			if oldVec.IsConst() {
-				newVec := vector.NewVec(*oldVec.GetType())
-				err := vector.GetUnionAllFunction(*oldVec.GetType(), mp)(newVec, oldVec)
-				if err != nil {
-					return nil, err
-				}
-				oldBat.ReplaceVector(oldVec, newVec, 0)
-				newBat.Vecs[j] = newVec
-			} else {
-				newBat.Vecs[j] = oldVec
-			}
+			newBat.Vecs[j] = oldVec
 		}
 		newBat.SetRowCount(newBat.Vecs[0].Length())
 		retBats[i] = newBat

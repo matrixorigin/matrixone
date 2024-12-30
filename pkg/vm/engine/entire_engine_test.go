@@ -330,6 +330,10 @@ func (e *testEngine) UnsubscribeTable(ctx context.Context, dbID, tbID uint64) er
 	return nil
 }
 
+func (e *testEngine) PrefetchTableMeta(ctx context.Context, key pb.StatsInfoKey) bool {
+	return true
+}
+
 func (e *testEngine) Stats(ctx context.Context, key pb.StatsInfoKey, sync bool) *pb.StatsInfo {
 	return nil
 }
@@ -466,10 +470,6 @@ func (o *testOperator) AddWaitLock(tableID uint64, rows [][]byte, opt lock.LockO
 }
 
 func (o *testOperator) RemoveWaitLock(key uint64) {
-	panic("should not call")
-}
-
-func (o *testOperator) LockTableCount() int32 {
 	panic("should not call")
 }
 

@@ -31,9 +31,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
@@ -42,6 +44,10 @@ var (
 	// MinUpdateInterval is the minimal interval to update stats info as it
 	// is necessary to update stats every time.
 	MinUpdateInterval = time.Second * 15
+
+	initCheckInterval = time.Millisecond * 10
+	maxCheckInterval  = time.Second * 5
+	checkTimeout      = time.Minute
 )
 
 // waitKeeper is used to mark the table has finished waited,
@@ -137,6 +143,20 @@ func WithUpdateWorkerFactor(f int) GlobalStatsOption {
 	}
 }
 
+// WithStatsUpdater set the update function to update stats info.
+func WithStatsUpdater(f func(context.Context, pb.StatsInfoKey, *pb.StatsInfo) bool) GlobalStatsOption {
+	return func(s *GlobalStats) {
+		s.statsUpdater = f
+	}
+}
+
+// WithApproxObjectNumUpdater set the update function to update approx object num.
+func WithApproxObjectNumUpdater(f func() int64) GlobalStatsOption {
+	return func(s *GlobalStats) {
+		s.approxObjectNumUpdater = f
+	}
+}
+
 // updateRecord records the update status of a key.
 type updateRecord struct {
 	// inProgress indicates if the stats of a table is being updated.
@@ -156,7 +176,7 @@ type GlobalStats struct {
 	// TODO(volgariver6): add metrics of the chan length.
 	tailC chan *logtail.TableLogtail
 
-	updateC chan pb.StatsInfoKey
+	updateC chan pb.StatsInfoKeyWithContext
 
 	updatingMu struct {
 		sync.Mutex
@@ -193,6 +213,12 @@ type GlobalStats struct {
 	KeyRouter client.KeyRouter[pb.StatsInfoKey]
 
 	concurrentExecutor ConcurrentExecutor
+
+	// statsUpdate is the function which updates the stats info.
+	// If it is nil, set it to doUpdate.
+	statsUpdater func(context.Context, pb.StatsInfoKey, *pb.StatsInfo) bool
+	// for test only currently.
+	approxObjectNumUpdater func() int64
 }
 
 func NewGlobalStats(
@@ -202,7 +228,7 @@ func NewGlobalStats(
 		ctx:                 ctx,
 		engine:              e,
 		tailC:               make(chan *logtail.TableLogtail, 10000),
-		updateC:             make(chan pb.StatsInfoKey, 3000),
+		updateC:             make(chan pb.StatsInfoKeyWithContext, 3000),
 		logtailUpdate:       newLogtailUpdate(),
 		tableLogtailCounter: make(map[pb.StatsInfoKey]int64),
 		KeyRouter:           keyRouter,
@@ -213,6 +239,9 @@ func NewGlobalStats(
 	s.mu.cond = sync.NewCond(&s.mu)
 	for _, opt := range opts {
 		opt(s)
+	}
+	if s.statsUpdater == nil {
+		s.statsUpdater = s.doUpdate
 	}
 	s.concurrentExecutor = newConcurrentExecutor(runtime.GOMAXPROCS(0) * s.updateWorkerFactor * 4)
 	s.concurrentExecutor.Run(ctx)
@@ -240,12 +269,34 @@ func (gs *GlobalStats) checkTriggerCond(key pb.StatsInfoKey, entryNum int64) boo
 	return true
 }
 
+func (gs *GlobalStats) PrefetchTableMeta(ctx context.Context, key pb.StatsInfoKey) bool {
+	wrapkey := pb.StatsInfoKeyWithContext{
+		Ctx: ctx,
+		Key: key,
+	}
+	return gs.triggerUpdate(wrapkey, false)
+}
+
 func (gs *GlobalStats) Get(ctx context.Context, key pb.StatsInfoKey, sync bool) *pb.StatsInfo {
 	gs.mu.Lock()
 	defer gs.mu.Unlock()
+
+	wrapkey := pb.StatsInfoKeyWithContext{
+		Ctx: ctx,
+		Key: key,
+	}
+
 	info, ok := gs.mu.statsInfoMap[key]
 	if ok && info != nil {
 		return info
+	}
+
+	if _, ok = ctx.Value(perfcounter.CalcTableStatsKey{}).(bool); ok {
+		stats := statistic.StatsInfoFromContext(ctx)
+		start := time.Now()
+		defer func() {
+			stats.AddBuildPlanStatsIOConsumption(time.Since(start))
+		}()
 	}
 
 	// Get stats info from remote node.
@@ -283,7 +334,7 @@ func (gs *GlobalStats) Get(ctx context.Context, key pb.StatsInfoKey, sync bool) 
 				// If the trigger condition is not satisfied, the stats will not be updated
 				// for long time. So we trigger the update here to get the stats info as soon
 				// as possible.
-				gs.triggerUpdate(key, true)
+				gs.triggerUpdate(wrapkey, true)
 			}()
 
 			info, ok = gs.mu.statsInfoMap[key]
@@ -344,7 +395,7 @@ func (gs *GlobalStats) consumeWorker(ctx context.Context) {
 			return
 
 		case tail := <-gs.tailC:
-			gs.consumeLogtail(tail)
+			gs.consumeLogtail(ctx, tail)
 		}
 	}
 }
@@ -365,29 +416,37 @@ func (gs *GlobalStats) updateWorker(ctx context.Context) {
 	}
 }
 
-func (gs *GlobalStats) triggerUpdate(key pb.StatsInfoKey, force bool) {
+func (gs *GlobalStats) triggerUpdate(key pb.StatsInfoKeyWithContext, force bool) bool {
 	if force {
 		gs.updateC <- key
 		v2.StatsTriggerForcedCounter.Add(1)
-		return
+		return true
 	}
 
 	select {
 	case gs.updateC <- key:
 		v2.StatsTriggerUnforcedCounter.Add(1)
+		return true
 	default:
+		return false
 	}
 }
 
-func (gs *GlobalStats) consumeLogtail(tail *logtail.TableLogtail) {
+func (gs *GlobalStats) consumeLogtail(ctx context.Context, tail *logtail.TableLogtail) {
 	key := pb.StatsInfoKey{
 		AccId:      tail.Table.AccId,
 		DatabaseID: tail.Table.DbId,
 		TableID:    tail.Table.TbId,
 	}
+
+	wrapkey := pb.StatsInfoKeyWithContext{
+		Ctx: ctx,
+		Key: key,
+	}
+
 	if len(tail.CkpLocation) > 0 {
 		if gs.shouldTrigger(key) {
-			gs.triggerUpdate(key, false)
+			gs.triggerUpdate(wrapkey, false)
 		}
 	} else if tail.Table != nil {
 		var triggered bool
@@ -395,7 +454,7 @@ func (gs *GlobalStats) consumeLogtail(tail *logtail.TableLogtail) {
 			if logtailreplay.IsMetaEntry(cmd.TableName) {
 				triggered = true
 				if gs.shouldTrigger(key) {
-					gs.triggerUpdate(key, false)
+					gs.triggerUpdate(wrapkey, false)
 				}
 				break
 			}
@@ -408,7 +467,7 @@ func (gs *GlobalStats) consumeLogtail(tail *logtail.TableLogtail) {
 		if !triggered && gs.checkTriggerCond(key, gs.tableLogtailCounter[key]) {
 			gs.tableLogtailCounter[key] = 0
 			if gs.shouldTrigger(key) {
-				gs.triggerUpdate(key, false)
+				gs.triggerUpdate(wrapkey, false)
 			}
 		}
 	}
@@ -456,11 +515,11 @@ func (gs *GlobalStats) waitLogtailUpdated(tid uint64) {
 	//   1. context done
 	//   2. interval checking, whose init interval is 10ms and max interval is 5s
 	//   3. logtail update notify, to check if it is the required table.
-	initCheckInterval := time.Millisecond * 10
-	maxCheckInterval := time.Second * 5
 	checkInterval := initCheckInterval
 	timer := time.NewTimer(checkInterval)
 	defer timer.Stop()
+	timeout := time.NewTimer(checkTimeout)
+	defer timeout.Stop()
 
 	var done bool
 	for {
@@ -473,6 +532,10 @@ func (gs *GlobalStats) waitLogtailUpdated(tid uint64) {
 		select {
 		case <-gs.ctx.Done():
 			return
+
+		case <-timeout.C:
+			logutil.Warnf("wait logtail updated timeout, table ID: %d", tid)
+			timeout.Reset(checkTimeout)
 
 		case <-timer.C:
 			if checkUpdated() {
@@ -563,47 +626,63 @@ func (gs *GlobalStats) broadcastStats(key pb.StatsInfoKey) {
 	})
 }
 
-func (gs *GlobalStats) updateTableStats(key pb.StatsInfoKey) {
-	if !gs.shouldUpdate(key) {
+func (gs *GlobalStats) updateTableStats(warpKey pb.StatsInfoKeyWithContext) {
+	statser := statistic.StatsInfoFromContext(warpKey.Ctx)
+	crs := new(perfcounter.CounterSet)
+
+	if !gs.shouldUpdate(warpKey.Key) {
 		return
 	}
 
 	// wait until the table's logtail has been updated.
-	gs.waitLogtailUpdated(key.TableID)
+	gs.waitLogtailUpdated(warpKey.Key.TableID)
 
 	// updated is used to mark that the stats info is updated.
 	var updated bool
 
 	stats := plan2.NewStatsInfo()
-	defer func() {
-		gs.mu.Lock()
-		defer gs.mu.Unlock()
 
-		if updated {
-			gs.mu.statsInfoMap[key] = stats
-			gs.broadcastStats(key)
-		} else if _, ok := gs.mu.statsInfoMap[key]; !ok {
-			gs.mu.statsInfoMap[key] = nil
-		}
+	newCtx := perfcounter.AttachS3RequestKey(warpKey.Ctx, crs)
+	if gs.statsUpdater != nil {
+		updated = gs.statsUpdater(newCtx, warpKey.Key, stats)
+	}
+	statser.AddBuildPlanStatsS3Request(statistic.S3Request{
+		List:      crs.FileService.S3.List.Load(),
+		Head:      crs.FileService.S3.Head.Load(),
+		Put:       crs.FileService.S3.Put.Load(),
+		Get:       crs.FileService.S3.Get.Load(),
+		Delete:    crs.FileService.S3.Delete.Load(),
+		DeleteMul: crs.FileService.S3.DeleteMulti.Load(),
+	})
 
-		// Notify all the waiters to read the new stats info.
-		gs.mu.cond.Broadcast()
+	gs.mu.Lock()
+	defer gs.mu.Unlock()
+	if updated {
+		gs.mu.statsInfoMap[warpKey.Key] = stats
+		gs.broadcastStats(warpKey.Key)
+	} else if _, ok := gs.mu.statsInfoMap[warpKey.Key]; !ok {
+		gs.mu.statsInfoMap[warpKey.Key] = nil
+	}
 
-		gs.doneUpdate(key, updated)
-	}()
+	// Notify all the waiters to read the new stats info.
+	gs.mu.cond.Broadcast()
 
+	gs.doneUpdate(warpKey.Key, updated)
+}
+
+func (gs *GlobalStats) doUpdate(ctx context.Context, key pb.StatsInfoKey, stats *pb.StatsInfo) bool {
 	table := gs.engine.GetLatestCatalogCache().GetTableById(key.AccId, key.DatabaseID, key.TableID)
 	// table or its definition is nil, means that the table is created but not committed yet.
 	if table == nil || table.TableDef == nil {
 		logutil.Errorf("cannot get table by ID %v", key)
-		return
+		return false
 	}
 
 	partitionState := gs.engine.GetOrCreateLatestPart(key.DatabaseID, key.TableID).Snapshot()
 	approxObjectNum := int64(partitionState.ApproxDataObjectsNum())
-	if approxObjectNum == 0 {
+	if gs.approxObjectNumUpdater == nil && approxObjectNum == 0 {
 		// There are no objects flushed yet.
-		return
+		return false
 	}
 
 	// the time used to init stats info is not need to be too precise.
@@ -616,12 +695,12 @@ func (gs *GlobalStats) updateTableStats(key pb.StatsInfoKey) {
 		approxObjectNum,
 		stats,
 	)
-	if err := UpdateStats(gs.ctx, req, gs.concurrentExecutor); err != nil {
+	if err := UpdateStats(ctx, req, gs.concurrentExecutor); err != nil {
 		logutil.Errorf("failed to init stats info for table %v, err: %v", key, err)
-		return
+		return false
 	}
 	v2.StatsUpdateBlockCounter.Add(float64(stats.BlockNumber))
-	updated = true
+	return true
 }
 
 func getMinMaxValueByFloat64(typ types.Type, buf []byte) float64 {

@@ -25,7 +25,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	jsoniter "github.com/json-iterator/go"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"go.uber.org/zap"
 )
 
 const (
@@ -34,6 +37,7 @@ const (
 	ADD
 	REMOVE
 	TRIGGER
+	LIST
 )
 
 const (
@@ -48,6 +52,13 @@ const (
 	ECHO
 )
 
+const (
+	// PANIC with non-moerr
+	PanicUseNonMoErr = 0
+	// PANIC with moerr.NewXXXErr
+	PanicUseMoErr = 1
+)
+
 // faultEntry describes how we shall fail
 type faultEntry struct {
 	cmd              int     // command
@@ -58,6 +69,7 @@ type faultEntry struct {
 	action           int
 	iarg             int64  // int arg
 	sarg             string // string arg
+	constant         bool
 
 	nWaiters int
 	mutex    sync.Mutex
@@ -79,13 +91,18 @@ func (fm *faultMap) run() {
 		case STOP:
 			return
 		case ADD:
-			if _, ok := fm.faultPoints[e.name]; ok {
+			if v, ok := fm.faultPoints[e.name]; ok && (v.constant || e.constant) {
 				fm.chOut <- nil
 			} else {
 				fm.faultPoints[e.name] = e
 				fm.chOut <- e
 			}
 		case REMOVE:
+			if e.name == "all" {
+				fm.faultPoints = make(map[string]*faultEntry)
+				fm.chOut <- e
+				continue
+			}
 			if v, ok := fm.faultPoints[e.name]; ok {
 				delete(fm.faultPoints, e.name)
 				fm.chOut <- v
@@ -105,6 +122,11 @@ func (fm *faultMap) run() {
 			fm.chOut <- out
 		case LOOKUP:
 			fm.chOut <- fm.faultPoints[e.sarg]
+		case LIST:
+			for _, v := range fm.faultPoints {
+				fm.chOut <- v
+			}
+			fm.chOut <- nil
 		default:
 			fm.chOut <- nil
 		}
@@ -142,7 +164,12 @@ func (e *faultEntry) do() (int64, string) {
 			ee.cond.Broadcast()
 		}
 	case PANIC:
-		panic(e.sarg)
+		switch e.iarg {
+		case PanicUseMoErr:
+			panic(moerr.NewInternalError(context.Background(), e.sarg))
+		default:
+			panic(e.sarg)
+		}
 	case ECHO:
 		return e.iarg, e.sarg
 	}
@@ -184,12 +211,30 @@ func stopFaultMap() bool {
 
 // Enable fault injection
 func Enable() bool {
-	return startFaultMap()
+	changeStatus := startFaultMap()
+	status := "enabled"
+	if changeStatus {
+		status = "disabled"
+	}
+	logutil.Info(
+		"FAULT-INJECTION-ENABLED",
+		zap.String("previous-status", status),
+	)
+	return changeStatus
 }
 
 // Disable fault injection
 func Disable() bool {
-	return stopFaultMap()
+	changeStatus := stopFaultMap()
+	status := "enabled"
+	if !changeStatus {
+		status = "disabled"
+	}
+	logutil.Info(
+		"FAULT-INJECTION-DISABLED",
+		zap.String("previous-status", status),
+	)
+	return changeStatus
 }
 
 func Status() bool {
@@ -216,7 +261,7 @@ func TriggerFault(name string) (iret int64, sret string, exist bool) {
 	return
 }
 
-func AddFaultPoint(ctx context.Context, name string, freq string, action string, iarg int64, sarg string) error {
+func AddFaultPoint(ctx context.Context, name string, freq string, action string, iarg int64, sarg string, constant bool) error {
 	fm := enabled.Load()
 	if fm == nil {
 		return moerr.NewInternalError(ctx, "add fault point not enabled")
@@ -294,6 +339,7 @@ func AddFaultPoint(ctx context.Context, name string, freq string, action string,
 
 	msg.iarg = iarg
 	msg.sarg = sarg
+	msg.constant = constant
 
 	if msg.action == WAIT {
 		msg.cond = sync.NewCond(&msg.mutex)
@@ -302,15 +348,18 @@ func AddFaultPoint(ctx context.Context, name string, freq string, action string,
 	fm.chIn <- &msg
 	out := <-fm.chOut
 	if out == nil {
-		return moerr.NewInternalError(ctx, "add fault injection point failed.")
+		return moerr.NewInternalError(
+			ctx,
+			"failed to add fault point; it may already exist and be constant.",
+		)
 	}
 	return nil
 }
 
-func RemoveFaultPoint(ctx context.Context, name string) error {
+func RemoveFaultPoint(ctx context.Context, name string) (bool, error) {
 	fm := enabled.Load()
 	if fm == nil {
-		return moerr.NewInternalError(ctx, "add fault injection point not enabled.")
+		return false, moerr.NewInternalError(ctx, "fault injection not enabled.")
 	}
 
 	var msg faultEntry
@@ -319,9 +368,9 @@ func RemoveFaultPoint(ctx context.Context, name string) error {
 	fm.chIn <- &msg
 	out := <-fm.chOut
 	if out == nil {
-		return moerr.NewInvalidInputf(ctx, "invalid injection point %s", name)
+		return false, nil
 	}
-	return nil
+	return true, nil
 }
 
 func lookup(name string) *faultEntry {
@@ -336,4 +385,41 @@ func lookup(name string) *faultEntry {
 	fm.chIn <- &msg
 	out := <-fm.chOut
 	return out
+}
+
+type Point struct {
+	Name string `json:"name"`
+	Iarg int64  `json:"iarg"`
+	Sarg string `json:"sarg"`
+
+	Constant bool `json:"constant"`
+}
+
+func ListAllFaultPoints() string {
+	fm := enabled.Load()
+	if fm == nil {
+		return "list fault points not enabled"
+	}
+
+	points := make([]Point, 0)
+
+	var msg faultEntry
+	msg.cmd = LIST
+	fm.chIn <- &msg
+	for {
+		out := <-fm.chOut
+		if out == nil {
+			break
+		}
+		points = append(points, Point{
+			Name:     out.name,
+			Iarg:     out.iarg,
+			Sarg:     out.sarg,
+			Constant: out.constant,
+		})
+	}
+
+	data, _ := jsoniter.Marshal(points)
+
+	return string(data)
 }

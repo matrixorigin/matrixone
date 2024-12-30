@@ -7126,7 +7126,7 @@ func Test_doDropAccount(t *testing.T) {
 		bh.sql2result["commit;"] = nil
 		bh.sql2result["rollback;"] = nil
 
-		sql := getAccountIdNamesSql
+		sql := getAccountIdNamesSql + " for update"
 		mrs := newMrsForGetAllAccounts([][]interface{}{
 			{uint64(0), "sys", "open", uint64(1), nil},
 			{uint64(1), "acc", "open", uint64(1), nil},
@@ -7187,7 +7187,7 @@ func Test_doDropAccount(t *testing.T) {
 		bh.sql2result["commit;"] = nil
 		bh.sql2result["rollback;"] = nil
 
-		sql := getAccountIdNamesSql
+		sql := getAccountIdNamesSql + " for update"
 		bh.sql2result[sql] = newMrsForGetAllAccounts([][]interface{}{})
 
 		sql, _ = getSqlForDeleteAccountFromMoAccount(context.TODO(), mustUnboxExprStr(stmt.Name))
@@ -7234,7 +7234,7 @@ func Test_doDropAccount(t *testing.T) {
 		bh.sql2result["commit;"] = nil
 		bh.sql2result["rollback;"] = nil
 
-		sql := getAccountIdNamesSql
+		sql := getAccountIdNamesSql + " for update"
 		bh.sql2result[sql] = newMrsForGetAllAccounts([][]interface{}{})
 
 		sql, _ = getSqlForDeleteAccountFromMoAccount(context.TODO(), mustUnboxExprStr(stmt.Name))
@@ -10988,53 +10988,6 @@ func TestDoCreateSnapshot(t *testing.T) {
 		bh.sql2result[sql2] = mrs2
 
 		err := doCreateSnapshot(ctx, ses, cs)
-		convey.So(err, convey.ShouldNotBeNil)
-	})
-}
-
-func TestDoResolveSnapshotTsWithSnapShotName(t *testing.T) {
-	convey.Convey("doResolveSnapshotWithSnapshotName success", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-
-		ses := newTestSession(t, ctrl)
-		defer ses.Close()
-
-		bh := &backgroundExecTest{}
-		bh.init()
-
-		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
-		defer bhStub.Reset()
-
-		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
-		pu.SV.SetDefaultValues()
-		pu.SV.KillRountinesInterval = 0
-		setPu("", pu)
-		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx, "")
-		ses.rm = rm
-
-		tenant := &TenantInfo{
-			Tenant:        sysAccountName,
-			User:          rootName,
-			DefaultRole:   moAdminRoleName,
-			TenantID:      sysAccountID,
-			UserID:        rootID,
-			DefaultRoleID: moAdminRoleID,
-		}
-		ses.SetTenantInfo(tenant)
-		ses.GetTxnHandler().txnOp = newTestTxnOp()
-
-		//no result set
-		bh.sql2result["begin;"] = nil
-		bh.sql2result["commit;"] = nil
-		bh.sql2result["rollback;"] = nil
-
-		sql, _ := getSqlForGetSnapshotTsWithSnapshotName(ctx, "test_sp")
-		mrs := newMrsForPasswordOfUser([][]interface{}{})
-		bh.sql2result[sql] = mrs
-
-		_, err := doResolveSnapshotWithSnapshotName(ctx, ses, "test_sp")
 		convey.So(err, convey.ShouldNotBeNil)
 	})
 }

@@ -117,11 +117,12 @@ const (
 )
 
 type FaultPoint struct {
-	Name   string
-	Freq   string
-	Action string
-	Iarg   int64
-	Sarg   string
+	Name     string
+	Freq     string
+	Action   string
+	Iarg     int64
+	Sarg     string
+	Constant bool
 }
 
 func (m *FaultPoint) MarshalBinary() ([]byte, error) {
@@ -381,4 +382,44 @@ func (s *SnapshotReadResp) MarshalBinary() ([]byte, error) {
 
 func (s *SnapshotReadResp) UnmarshalBinary(data []byte) error {
 	return s.Unmarshal(data)
+}
+
+type GetChangedTableListReq struct {
+	TS          []*timestamp.Timestamp
+	AccIds      []uint64
+	DatabaseIds []uint64
+	TableIds    []uint64
+	Extra       []byte
+	Type        ChangedListType
+}
+
+type GetChangedTableListResp struct {
+	Newest      *timestamp.Timestamp
+	AccIds      []uint64
+	DatabaseIds []uint64
+	TableIds    []uint64
+	Extra       []byte
+}
+
+func (tlreq *GetChangedTableListReq) MarshalBinary() ([]byte, error) { return tlreq.Marshal() }
+func (tlreq *GetChangedTableListReq) UnmarshalBinary(data []byte) error {
+	return tlreq.Unmarshal(data)
+}
+
+func (tlresp *GetChangedTableListResp) MarshalBinary() ([]byte, error) { return tlresp.Marshal() }
+func (tlresp *GetChangedTableListResp) UnmarshalBinary(data []byte) error {
+	return tlresp.Unmarshal(data)
+}
+
+type FaultInjectReq struct {
+	Method    string
+	Parameter string
+}
+
+func (f *FaultInjectReq) MarshalBinary() ([]byte, error) {
+	return f.Marshal()
+}
+
+func (f *FaultInjectReq) UnmarshalBinary(data []byte) error {
+	return f.Unmarshal(data)
 }

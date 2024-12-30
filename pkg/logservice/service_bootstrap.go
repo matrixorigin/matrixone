@@ -100,13 +100,17 @@ func (s *Service) BootstrapHAKeeper(ctx context.Context, cfg Config) error {
 				return err
 			}
 		}
+	} else {
+		s.runtime.SubLogger(runtime.SystemInit).Info("backup is nil")
 	}
 	for i := 0; i < checkBootstrapCycles; i++ {
 		select {
 		case <-ctx.Done():
+			s.runtime.SubLogger(runtime.SystemInit).Error("context error", zap.Error(ctx.Err()))
 			return nil
 		default:
 		}
+		s.runtime.SubLogger(runtime.SystemInit).Info("before initial cluster info")
 		if err := s.store.setInitialClusterInfo(
 			numOfLogShards,
 			numOfTNShards,
