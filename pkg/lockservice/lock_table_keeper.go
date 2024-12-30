@@ -82,8 +82,10 @@ func (k *lockTableKeeper) keepLockTableBind(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-timer.C:
+			k.service.logger.Info("keep lock table heartbeat")
 			k.doKeepLockTableBind(ctx)
 			timer.Reset(k.keepLockTableBindInterval)
+			k.service.logger.Info("keep lock table heartbeat end")
 		}
 	}
 }
@@ -102,12 +104,14 @@ func (k *lockTableKeeper) keepRemoteLock(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-timer.C:
+			k.service.logger.Info("keep remote lock heartbeat")
 			futures, binds = k.doKeepRemoteLock(
 				ctx,
 				futures,
 				services,
 				binds)
 			timer.Reset(k.keepRemoteLockInterval)
+			k.service.logger.Info("keep remote lock heartbeat end")
 		}
 	}
 }
