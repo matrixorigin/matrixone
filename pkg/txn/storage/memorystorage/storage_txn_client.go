@@ -366,10 +366,6 @@ func (s *StorageTxnOperator) RemoveWaitLock(key uint64) {
 	panic("should not call")
 }
 
-func (s *StorageTxnOperator) LockTableCount() int32 {
-	panic("should not call")
-}
-
 func (s *StorageTxnOperator) GetOverview() client.TxnOverview {
 	panic("should not call")
 }

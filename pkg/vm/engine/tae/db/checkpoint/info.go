@@ -18,7 +18,9 @@ import (
 	"context"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -28,7 +30,7 @@ import (
 type RunnerWriter interface {
 	RemoveCheckpointMetaFile(string)
 	AddCheckpointMetaFile(string)
-	UpdateCompacted(entry *CheckpointEntry)
+	UpdateCompacted(entry *CheckpointEntry) bool
 }
 
 type RunnerReader interface {
@@ -130,8 +132,15 @@ func (r *runner) GetCompacted() *CheckpointEntry {
 	return r.store.GetCompacted()
 }
 
-func (r *runner) UpdateCompacted(entry *CheckpointEntry) {
-	r.store.UpdateCompacted(entry)
+func (r *runner) UpdateCompacted(entry *CheckpointEntry) (updated bool) {
+	if !entry.IsCompact() {
+		logutil.Error(
+			"Update-CKP-Compact-Error",
+			zap.String("entry", entry.String()),
+		)
+		return false
+	}
+	return r.store.UpdateCompacted(entry)
 }
 
 // this API returns the min ts of all checkpoints

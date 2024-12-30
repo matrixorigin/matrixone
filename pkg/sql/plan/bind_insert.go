@@ -212,7 +212,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		if !idxDef.TableExist || skipUniqueIdx[j] || !idxDef.Unique {
 			continue
 		}
-		_, idxTableDef := builder.compCtx.ResolveIndexTableByRef(dmlCtx.objRefs[0], idxDef.IndexTableName, bindCtx.snapshot)
+		idxObjRef, idxTableDef := builder.compCtx.ResolveIndexTableByRef(dmlCtx.objRefs[0], idxDef.IndexTableName, bindCtx.snapshot)
 		var pkIdxInBat int32
 
 		if len(idxDef.Parts) == 1 {
@@ -222,7 +222,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		}
 		lockTarget := &plan.LockTarget{
 			TableId:            idxTableDef.TblId,
-			ObjRef:             DeepCopyObjectRef(dmlCtx.objRefs[0]),
+			ObjRef:             idxObjRef,
 			PrimaryColIdxInBat: pkIdxInBat,
 			PrimaryColRelPos:   selectTag,
 			PrimaryColTyp:      selectNode.ProjectList[int(pkIdxInBat)].Typ,

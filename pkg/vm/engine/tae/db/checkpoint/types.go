@@ -16,7 +16,6 @@ package checkpoint
 
 import (
 	"context"
-	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -30,6 +29,7 @@ var ErrCheckpointDisabled = moerr.NewInternalErrorNoCtxf("checkpoint disabled")
 var ErrExecutorRestarted = moerr.NewInternalErrorNoCtxf("executor restarted")
 var ErrExecutorClosed = moerr.NewInternalErrorNoCtxf("executor closed")
 var ErrBadIntent = moerr.NewInternalErrorNoCtxf("bad intent")
+var ErrStopRunner = moerr.NewInternalErrorNoCtxf("runner stopped")
 
 type State int8
 
@@ -52,7 +52,13 @@ type CheckpointScheduler interface {
 	TryScheduleCheckpoint(types.TS, bool) (Intent, error)
 }
 
+type ReplayClient interface {
+	AddCheckpointMetaFile(string)
+	ReplayCKPEntry(*CheckpointEntry) error
+}
+
 type Runner interface {
+	ReplayClient
 	CheckpointScheduler
 	TestRunner
 	RunnerWriter
@@ -82,14 +88,6 @@ func (os *observers) OnNewCheckpoint(ts types.TS) {
 		o.OnNewCheckpoint(ts)
 	}
 }
-
-const (
-	PrefixIncremental = "incremental"
-	PrefixGlobal      = "global"
-	PrefixMetadata    = "meta"
-	SuffixMetadata    = ".ckp"
-	CheckpointDir     = "ckp/"
-)
 
 const (
 	CheckpointAttr_StartTS       = "start_ts"
@@ -153,10 +151,6 @@ func init() {
 			panic(err)
 		}
 	}
-}
-
-func IsMetadataFile(filename string) bool {
-	return strings.HasPrefix(filename, PrefixMetadata) && strings.HasSuffix(filename, SuffixMetadata)
 }
 
 func makeRespBatchFromSchema(schema *catalog.Schema) *containers.Batch {

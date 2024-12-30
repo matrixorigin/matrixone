@@ -27,14 +27,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	testutil2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
@@ -850,7 +849,9 @@ func TestChangesHandleStaleFiles1(t *testing.T) {
 	err = fs.DelFiles(ctx, []string{string(deleteFileName)})
 	assert.NoError(t, err)
 	gcTS := taeHandler.GetDB().TxnMgr.Now()
-	gcTSFileName := blockio.EncodeCompactedMetadataFileName(checkpoint.CheckpointDir, checkpoint.PrefixMetadata, types.TS{}, gcTS)
+	gcTSFileName := ioutil.EncodeCompactCKPMetadataFullName(
+		types.TS{}, gcTS,
+	)
 	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterCheckpoint, gcTSFileName, fs.Service)
 	assert.NoError(t, err)
 	_, err = writer.Write(containers.ToCNBatch(bat))
@@ -954,7 +955,9 @@ func TestChangesHandleStaleFiles2(t *testing.T) {
 				assert.NoError(t, err)
 			}
 			gcTS := taeEngine.GetDB().TxnMgr.Now()
-			gcTSFileName := blockio.EncodeCompactedMetadataFileName(checkpoint.CheckpointDir, checkpoint.PrefixMetadata, types.TS{}, gcTS)
+			gcTSFileName := ioutil.EncodeCompactCKPMetadataFullName(
+				types.TS{}, gcTS,
+			)
 			writer, err := objectio.NewObjectWriterSpecial(objectio.WriterCheckpoint, gcTSFileName, fs.Service)
 			assert.NoError(t, err)
 			_, err = writer.Write(containers.ToCNBatch(bat))

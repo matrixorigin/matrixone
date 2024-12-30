@@ -15,6 +15,7 @@
 package catalog
 
 import (
+	"fmt"
 	"sync"
 	"sync/atomic"
 
@@ -75,6 +76,7 @@ func (l *ObjectList) deleteEntryLocked(sortHint uint64) error {
 	objs := l.GetAllNodes(sortHint)
 	for _, obj := range objs {
 		newTree.Delete(obj)
+		delete(l.sortHint_objectID, *obj.ID())
 	}
 	ok := l.tree.CompareAndSwap(oldTree, newTree)
 	if !ok {
@@ -152,12 +154,14 @@ func (l *ObjectList) Set(object *ObjectEntry, registerSortHint bool) {
 	}
 	l.Lock()
 	defer l.Unlock()
+	oldTree := l.tree.Load()
 	if registerSortHint {
-		// todo remove it
-		for _, sortHint := range l.sortHint_objectID {
-			if sortHint == object.SortHint {
-				panic("logic error")
-			}
+		obj, ok := oldTree.Get(&ObjectEntry{
+			ObjectNode: ObjectNode{SortHint: object.SortHint},
+		})
+		if ok {
+			panic(fmt.Sprintf("logic error, duplicate sort hint, obj %v %v, sort hint %v",
+				obj.ID().String(), object.ID().String(), object.SortHint))
 		}
 		l.sortHint_objectID[*object.ID()] = object.SortHint
 	} else {
@@ -166,7 +170,6 @@ func (l *ObjectList) Set(object *ObjectEntry, registerSortHint bool) {
 			panic("logic error")
 		}
 	}
-	oldTree := l.tree.Load()
 	newTree := oldTree.Copy()
 	newTree.Set(object)
 	ok := l.tree.CompareAndSwap(oldTree, newTree)
