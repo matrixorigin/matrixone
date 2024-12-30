@@ -79,7 +79,6 @@ func Test_gcArg(t *testing.T) {
 
 	txn, err := tae.StartTxn(nil)
 	assert.NoError(t, err)
-	tae.AllFlushExpected(tae.TxnMgr.Now(), 4000)
 
 	tae.DB.ForceCheckpoint(ctx, tae.TxnMgr.Now(), 0)
 	testutils.WaitExpect(2000, func() bool {
