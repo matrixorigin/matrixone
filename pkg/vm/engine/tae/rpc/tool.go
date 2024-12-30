@@ -18,8 +18,6 @@ import (
 	"bufio"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -36,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 )
@@ -1424,16 +1423,10 @@ func (c *gcDumpArg) getInMemObjects(pinnedObjects map[string]bool) (err error) {
 			table := tableIt.Get().GetPayload()
 			lp := new(catalog.LoopProcessor)
 			lp.TombstoneFn = func(be *catalog.ObjectEntry) error {
-				if _, ok := pinnedObjects[be.ObjectName().String()]; !ok {
-					logutil.Infof("asdf mem tombstone: %v", be.ObjectName().String())
-				}
 				pinnedObjects[be.ObjectName().String()] = true
 				return nil
 			}
 			lp.ObjectFn = func(be *catalog.ObjectEntry) error {
-				if _, ok := pinnedObjects[be.ObjectName().String()]; !ok {
-					logutil.Infof("asdf mem object: %v", be.ObjectName().String())
-				}
 				pinnedObjects[be.ObjectName().String()] = true
 				return nil
 			}
@@ -1452,7 +1445,6 @@ func (c *gcDumpArg) getCheckpointObject(ctx context.Context, pinned map[string]b
 	for _, entry := range entries {
 		cnLoc := entry.GetLocation()
 		cnObj := cnLoc.Name().String()
-		logutil.Infof("asdf ckp cn location: %v", cnObj)
 		pinned[cnObj] = true
 
 		tnLoc := entry.GetTNLocation()
