@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
@@ -47,6 +48,12 @@ func (job *checkpointJob) RunGCKP(ctx context.Context) (err error) {
 	if job.runGCKPFunc != nil {
 		return job.runGCKPFunc(ctx, job.gckpCtx, job.executor.runner)
 	}
+
+	// two for chaos test
+	// one to ensure it has entered `RunGCKP`
+	objectio.WaitInjected(objectio.FJ_GCKPWait1)
+	// two to block the execution till being notified
+	objectio.WaitInjected(objectio.FJ_GCKPWait1)
 
 	_, err = job.doGlobalCheckpoint(
 		job.gckpCtx.end,

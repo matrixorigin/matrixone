@@ -7940,6 +7940,72 @@ func Test_CheckpointChaos2(t *testing.T) {
 
 }
 
+func Test_CheckpointChaos3(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	opts := config.WithLongScanAndCKPOpts(nil)
+	ctx := context.Background()
+
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	idx := 0
+	currDBName := func() string {
+		return fmt.Sprintf("db_%d", idx)
+	}
+	nextDBName := func() string {
+		idx++
+		return currDBName()
+	}
+
+	commitOneTxn := func() {
+		txn, _ := tae.StartTxn(nil)
+		_, err := testutil.CreateDatabase2(ctx, txn, nextDBName())
+		assert.Nil(t, err)
+		assert.Nil(t, txn.Commit(context.Background()))
+	}
+
+	commitOneTxn()
+
+	err := tae.DB.ForceCheckpoint(ctx, tae.TxnMgr.Now(), time.Minute)
+	assert.NoError(t, err)
+
+	commitOneTxn()
+
+	err = tae.DB.ForceCheckpoint(ctx, tae.TxnMgr.Now(), time.Minute)
+	assert.NoError(t, err)
+
+	fault.Enable()
+	defer fault.Disable()
+
+	rmFn1, err := objectio.InjectWait(objectio.FJ_GCKPWait1)
+	assert.NoError(t, err)
+	rmFn2, err := objectio.InjectNotify(t.Name(), objectio.FJ_GCKPWait1)
+	assert.NoError(t, err)
+
+	doneC := make(chan struct{})
+	go func() {
+		err := tae.DB.ForceGlobalCheckpoint(ctx, tae.TxnMgr.Now(), 0, 0)
+		close(doneC)
+		assert.NoError(t, err)
+	}()
+
+	objectio.NotifyInjected(t.Name())
+
+	commitOneTxn()
+	err = tae.DB.ForceCheckpoint(ctx, tae.TxnMgr.Now(), time.Minute)
+	assert.NoError(t, err)
+
+	objectio.NotifyInjected(t.Name())
+	rmFn1()
+	rmFn2()
+
+	select {
+	case <-doneC:
+	}
+
+	tae.Restart(ctx)
+}
+
 func TestGCCatalog1(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	ctx := context.Background()
