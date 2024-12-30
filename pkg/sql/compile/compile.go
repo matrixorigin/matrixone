@@ -46,7 +46,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/apply"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
@@ -55,11 +54,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/fill"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/indexjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersect"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/join"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/left"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
@@ -71,11 +67,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/product"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/productl2"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/semi"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/source"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
@@ -2039,61 +2031,6 @@ func (c *Compile) compileProjection(n *plan.Node, ss []*Scope) []*Scope {
 			} else {
 				c.setProjection(n, ss[i])
 			}
-		case *anti.AntiJoin:
-			if op.ProjectList == nil {
-				op.ProjectList = n.ProjectList
-			} else {
-				c.setProjection(n, ss[i])
-			}
-		case *indexjoin.IndexJoin:
-			if op.ProjectList == nil {
-				op.ProjectList = n.ProjectList
-			} else {
-				c.setProjection(n, ss[i])
-			}
-		case *join.InnerJoin:
-			if op.ProjectList == nil {
-				op.ProjectList = n.ProjectList
-			} else {
-				c.setProjection(n, ss[i])
-			}
-		case *left.LeftJoin:
-			if op.ProjectList == nil {
-				op.ProjectList = n.ProjectList
-			} else {
-				c.setProjection(n, ss[i])
-			}
-		case *loopjoin.LoopJoin:
-			if op.ProjectList == nil {
-				op.ProjectList = n.ProjectList
-			} else {
-				c.setProjection(n, ss[i])
-			}
-		case *product.Product:
-			if op.ProjectList == nil {
-				op.ProjectList = n.ProjectList
-			} else {
-				c.setProjection(n, ss[i])
-			}
-		case *productl2.Productl2:
-			if op.ProjectList == nil {
-				op.ProjectList = n.ProjectList
-			} else {
-				c.setProjection(n, ss[i])
-			}
-		case *semi.SemiJoin:
-			if op.ProjectList == nil {
-				op.ProjectList = n.ProjectList
-			} else {
-				c.setProjection(n, ss[i])
-			}
-		case *single.SingleJoin:
-			if op.ProjectList == nil {
-				op.ProjectList = n.ProjectList
-			} else {
-				c.setProjection(n, ss[i])
-			}
-
 		default:
 			c.setProjection(n, ss[i])
 		}
@@ -3305,12 +3242,14 @@ func (c *Compile) compileMultiUpdate(_ []*plan.Node, n *plan.Node, ss []*Scope) 
 		rs.setRootOperator(multiUpdateArg)
 		ss = []*Scope{rs}
 	} else {
-		for i := range ss {
-			multiUpdateArg := constructMultiUpdate(n, c.e)
-			multiUpdateArg.Action = multi_update.UpdateWriteTable
-			multiUpdateArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-			ss[i].setRootOperator(multiUpdateArg)
+		if len(ss) > 0 {
+			rs := c.newMergeScope(ss)
+			ss = []*Scope{rs}
 		}
+		multiUpdateArg := constructMultiUpdate(n, c.e)
+		multiUpdateArg.Action = multi_update.UpdateWriteTable
+		multiUpdateArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+		ss[0].setRootOperator(multiUpdateArg)
 	}
 	c.anal.isFirst = false
 	return ss, nil
@@ -3406,16 +3345,18 @@ func (c *Compile) compileLock(n *plan.Node, ss []*Scope) ([]*Scope, error) {
 	}
 
 	currentFirstFlag := c.anal.isFirst
-	for i := range ss {
-		var err error
-		var lockOpArg *lockop.LockOp
-		lockOpArg, err = constructLockOp(n, c.e)
-		if err != nil {
-			return nil, err
-		}
-		lockOpArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-		ss[i].doSetRootOperator(lockOpArg)
+	if len(ss) > 0 {
+		rs := c.newMergeScope(ss)
+		ss = []*Scope{rs}
 	}
+	var err error
+	var lockOpArg *lockop.LockOp
+	lockOpArg, err = constructLockOp(n, c.e)
+	if err != nil {
+		return nil, err
+	}
+	lockOpArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+	ss[0].doSetRootOperator(lockOpArg)
 	c.anal.isFirst = false
 	return ss, nil
 }

@@ -254,14 +254,12 @@ message KeepLockTableBindRequest {
   Status Status = 2;
   repeated bytes TxnIDs = 3;
   repeated LockTable LockTables = 4 [(gogoproto.nullable) = false];
-  uint64 Version = 5;
 }
 
 // KeepLockTableBindResponse keep lock table bind response. TN -> CN
 message KeepLockTableBindResponse {
   bool OK = 1;
   Status Status = 2;
-  uint64 Version = 3;
 }
 
 // SetRestartServiceRequest set restart lock service request from allocator request. operator -> TN
