@@ -7716,7 +7716,7 @@ func TestGCCheckpoint1(t *testing.T) {
 	})
 	assert.True(t, tae.BGCheckpointRunner.MaxGlobalCheckpoint().IsFinished())
 
-	err := tae.BGCheckpointRunner.DisableCheckpoint(ctx)
+	_, err := tae.BGCheckpointRunner.DisableCheckpoint(ctx)
 	require.NoError(t, err)
 
 	gcTS := types.BuildTS(time.Now().UTC().UnixNano(), 0)
@@ -10852,6 +10852,23 @@ func Test_OpenReplayDB1(t *testing.T) {
 	assert.Error(t, db.CheckCronJobs(tae.DB, db.DBTxnMode_Write))
 }
 
+func TestObjectList(t *testing.T) {
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(3, 2)
+	schema.Extra.BlockMaxRows = 5
+	schema.Extra.ObjectMaxBlocks = 256
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 1)
+	tae.CreateRelAndAppend(bat, true)
+	tae.CompactBlocks(false)
+
+	tae.Catalog.GCByTS(ctx, tae.TxnMgr.Now())
+	t.Log(tae.Catalog.SimplePPString(3))
+}
 func TestRW3(t *testing.T) {
 	ctx := context.Background()
 	opts := config.WithLongScanAndCKPOpts(nil)

@@ -24,8 +24,8 @@ import (
 )
 
 type TestRunner interface {
-	EnableCheckpoint()
-	DisableCheckpoint(ctx context.Context) error
+	EnableCheckpoint(*CheckpointCfg)
+	DisableCheckpoint(ctx context.Context) (*CheckpointCfg, error)
 
 	// TODO: remove the below apis
 	CleanPenddingCheckpoint()
@@ -65,24 +65,13 @@ func (r *runner) GetICKPIntentOnlyForTest() *CheckpointEntry {
 }
 
 // DisableCheckpoint stops generating checkpoint
-func (r *runner) DisableCheckpoint(ctx context.Context) (err error) {
-	// waiting glob checkpoint done
-	if err = r.WaitRunningCKPDoneForTest(ctx, true); err != nil {
-		return
-	}
-
-	// waiting incremental checkpoint done
-	if err = r.WaitRunningCKPDoneForTest(ctx, false); err != nil {
-		return
-	}
-
-	r.disabled.Store(true)
-
-	return nil
+func (r *runner) DisableCheckpoint(ctx context.Context) (cfg *CheckpointCfg, err error) {
+	cfg = r.StopExecutor(ErrCheckpointDisabled)
+	return
 }
 
-func (r *runner) EnableCheckpoint() {
-	r.disabled.Store(false)
+func (r *runner) EnableCheckpoint(cfg *CheckpointCfg) {
+	r.StartExecutor(cfg)
 }
 
 func (r *runner) CleanPenddingCheckpoint() {
@@ -113,9 +102,6 @@ func (r *runner) ForceGCKP(
 			zap.Error(err),
 		)
 	}()
-	if interval == 0 {
-		interval = r.options.globalVersionInterval
-	}
 
 	if err = r.ForceICKP(ctx, &end); err != nil {
 		return
@@ -129,7 +115,7 @@ func (r *runner) ForceGCKP(
 		return
 	}
 
-	request := &globalCheckpointContext{
+	request := &gckpContext{
 		force:    true,
 		end:      maxEntry.end,
 		interval: interval,
@@ -258,7 +244,8 @@ func (r *runner) ForceICKP(ctx context.Context, ts *types.TS) (err error) {
 func (r *runner) CreateBackupFile(ctx context.Context, start, end types.TS) (string, error) {
 	now := time.Now()
 	backup := NewCheckpointEntry(r.rt.SID(), start, end, ET_Incremental)
-	location, err := r.doCheckpointForBackup(ctx, backup)
+	cfg := r.GetCfg()
+	location, err := r.doCheckpointForBackup(ctx, cfg, backup)
 	if err != nil {
 		return "", err
 	}
