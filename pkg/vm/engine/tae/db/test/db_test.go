@@ -7942,7 +7942,7 @@ func Test_CheckpointChaos2(t *testing.T) {
 
 func Test_CheckpointChaos3(t *testing.T) {
 	defer testutils.AfterTest(t)()
-	opts := config.WithLongScanAndCKPOpts(nil)
+	opts := config.WithLongScanAndCKPOptsAndQuickGC(nil)
 	ctx := context.Background()
 
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
@@ -8006,6 +8006,11 @@ func Test_CheckpointChaos3(t *testing.T) {
 	maxGCKP := tae.DB.BGCheckpointRunner.MaxGlobalCheckpoint()
 	assert.NotNil(t, maxGCKP)
 	t.Logf("maxGCKP: %s", maxGCKP.String())
+
+	tae.DB.DiskCleaner.GC(ctx)
+	testutils.WaitExpect(4000, func() bool {
+		return tae.DB.DiskCleaner.GetCleaner().GetScanWaterMark() != nil
+	})
 
 	tae.Restart(ctx)
 	maxGCKP2 := tae.DB.BGCheckpointRunner.MaxGlobalCheckpoint()
