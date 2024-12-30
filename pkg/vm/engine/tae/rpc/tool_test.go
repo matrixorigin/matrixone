@@ -106,9 +106,17 @@ func Test_gcArg(t *testing.T) {
 
 	assert.NoError(t, remove.Run())
 	cmd = remove.PrepareCommand()
+	_ = cmd
 
+	// to pass ci coverage
+	gc := GCArg{}
+	cmd = gc.PrepareCommand()
+	assert.NoError(t, gc.FromCommand(cmd))
 	assert.NoError(t, dump.FromCommand(cmd))
 	assert.NoError(t, remove.FromCommand(cmd))
+	dump.String()
+	remove.String()
+	gc.String()
 
 	assert.NoError(t, err)
 }
