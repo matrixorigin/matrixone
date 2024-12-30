@@ -45,7 +45,7 @@ insert into aff01 values (7499,'ALLEN','SALESMAN',7698,'1981-02-20',1600,300,30)
 create snapshot spsp01 for database sp_test;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-spsp01    2024-12-30 08:31:47.314937    database    sys    sp_test    
+spsp01    2024-12-30 09:08:57.984168    database    sys    sp_test    
 drop database sp_test;
 restore account sys database sp_test from snapshot spsp01;
 show databases;
@@ -140,7 +140,7 @@ drop snapshot if exists spsp02;
 create snapshot spsp02 for database sp_test01;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-spsp02    2024-12-30 08:31:47.988888    database    sys    sp_test01    
+spsp02    2024-12-30 09:08:58.518045    database    sys    sp_test01    
 delete from partition01 where birth_date = '1980-12-17';
 select * from partition01;
 emp_no    birth_date    first_name    last_name    gender    hire_date
@@ -166,7 +166,7 @@ drop snapshot if exists `SELECT`;
 create snapshot `SELECT` for database sp_test02;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-select    2024-12-30 08:31:48.545404    database    sys    sp_test02    
+select    2024-12-30 09:08:59.159408    database    sys    sp_test02    
 select sname, level, account_name, database_name, table_name from mo_catalog.mo_snapshots;
 sname    level    account_name    database_name    table_name
 select    database    sys    sp_test02    
@@ -180,7 +180,7 @@ drop snapshot if exists AUTO_INCREMENT;
 create snapshot AUTO_INCREMENT for database sp_test03;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-auto_increment    2024-12-30 08:31:49.086486    database    sys    sp_test03    
+auto_increment    2024-12-30 09:08:59.409431    database    sys    sp_test03    
 select sname, level, account_name, database_name, table_name from mo_catalog.mo_snapshots;
 sname    level    account_name    database_name    table_name
 auto_increment    database    sys    sp_test03    
@@ -236,8 +236,8 @@ create snapshot spsp02 for database db02;
 create snapshot spsp03 for table db02 table01;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-spsp03    2024-12-30 08:31:49.956562    table    sys    db02    table01
-spsp02    2024-12-30 08:31:49.916398    database    sys    db02    
+spsp03    2024-12-30 09:09:00.460849    table    sys    db02    table01
+spsp02    2024-12-30 09:09:00.424832    database    sys    db02    
 select sname, level, account_name, database_name, table_name from mo_catalog.mo_snapshots where level = 'database';
 sname    level    account_name    database_name    table_name
 spsp02    database    sys    db02    
@@ -246,6 +246,7 @@ sname    level    account_name    database_name    table_name
 spsp03    table    sys    db02    table01
 drop snapshot spsp02;
 drop snapshot spsp03;
+drop database db02;
 drop database if exists db03;
 create database db03;
 use db03;
@@ -390,7 +391,6 @@ drop database db07;
 restore account sys database db07 from snapshot spsp08;
 show databases;
 Database
-db02
 db07
 information_schema
 mo_catalog

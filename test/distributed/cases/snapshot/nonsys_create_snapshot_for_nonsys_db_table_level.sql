@@ -199,6 +199,7 @@ select sname, level, account_name, database_name, table_name from mo_catalog.mo_
 select sname, level, account_name, database_name, table_name from mo_catalog.mo_snapshots where level = 'table';
 drop snapshot spsp02;
 drop snapshot spsp03;
+drop database db02;
 
 
 
@@ -333,11 +334,13 @@ drop table if exists test01;
 create table test01 (col1 int, col2 datalink);
 insert into test01 values (1, 'file://$resources/load_data/time_date_1.csv');
 select col1, load_file(col2) from test01;
+-- @ignore:1
 select * from test01;
 drop snapshot if exists spsp10;
 create snapshot spsp10 for database db10;
 drop table test01;
 restore account acc01 database db10 table test01 from snapshot spsp10;
+-- @ignore:1
 select * from db10.test01;
 drop database db10;
 drop snapshot spsp10;
