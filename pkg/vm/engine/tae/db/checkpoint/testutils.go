@@ -282,7 +282,7 @@ func (r *runner) ForceCheckpointForBackup(cfg *CheckpointCfg, end types.TS) (loc
 	backupTime := time.Now().UTC()
 	currTs := types.BuildTS(backupTime.UnixNano(), 0)
 	backup := NewCheckpointEntry(r.rt.SID(), end.Next(), currTs, ET_Incremental)
-	location, err = r.doCheckpointForBackup(backup)
+	location, err = r.doCheckpointForBackup(cfg, backup)
 	if err != nil {
 		return
 	}

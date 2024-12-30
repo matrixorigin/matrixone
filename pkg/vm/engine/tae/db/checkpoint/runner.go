@@ -388,12 +388,7 @@ func (r *runner) getRunningCKPJob(gckp bool) (job *checkpointJob, err error) {
 }
 
 // TODO: doCheckpointForBackup in the executor
-func (r *runner) doCheckpointForBackup(entry *CheckpointEntry) (location string, err error) {
-	cfg := r.GetCfg()
-	if cfg == nil {
-		err = ErrExecutorClosed
-		return
-	}
+func (r *runner) doCheckpointForBackup(cfg *CheckpointCfg, entry *CheckpointEntry) (location string, err error) {
 	factory := logtail.BackupCheckpointDataFactory(r.rt.SID(), entry.start, entry.end)
 	data, err := factory(r.catalog)
 	if err != nil {
