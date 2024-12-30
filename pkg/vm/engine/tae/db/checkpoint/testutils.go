@@ -18,7 +18,6 @@ import (
 	"context"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"go.uber.org/zap"
@@ -30,7 +29,7 @@ type TestRunner interface {
 
 	// TODO: remove the below apis
 	CleanPenddingCheckpoint()
-	ForceCheckpointForBackup(end types.TS) (string, error)
+	CreateBackupFile(ctx context.Context, start, end types.TS) (string, error)
 	ForceGCKP(context.Context, types.TS, time.Duration) error
 	ForceICKP(context.Context, *types.TS) error
 	MaxLSNInRange(end types.TS) uint64
@@ -256,54 +255,13 @@ func (r *runner) ForceICKP(ctx context.Context, ts *types.TS) (err error) {
 	}
 }
 
-func (r *runner) ForceCheckpointForBackup(end types.TS) (location string, err error) {
-	prev := r.MaxIncrementalCheckpoint()
-	if prev != nil && !prev.IsFinished() {
-		return "", moerr.NewInternalError(r.ctx, "prev checkpoint not finished")
-	}
-	// ut causes all Ickp to be gc too fast, leaving a Gckp
-	if prev == nil {
-		prev = r.MaxGlobalCheckpoint()
-	}
-	start := types.TS{}
-	if prev != nil {
-		start = prev.end.Next()
-	}
-	entry := NewCheckpointEntry(r.rt.SID(), start, end, ET_Incremental)
-	// TODO: change me
-	r.store.AddNewIncrementalEntry(entry)
+func (r *runner) CreateBackupFile(ctx context.Context, start, end types.TS) (string, error) {
 	now := time.Now()
-	var files []string
-	if _, files, err = r.doIncrementalCheckpoint(entry); err != nil {
-		return
-	}
-	var lsn, lsnToTruncate uint64
-	lsn = r.source.GetMaxLSN(entry.start, entry.end)
-	if lsn > r.options.reservedWALEntryCount {
-		lsnToTruncate = lsn - r.options.reservedWALEntryCount
-	}
-	entry.ckpLSN = lsn
-	entry.truncateLSN = lsnToTruncate
-	var file string
-	if file, err = r.saveCheckpoint(entry.start, entry.end); err != nil {
-		return
-	}
-	files = append(files, file)
-	backupTime := time.Now().UTC()
-	currTs := types.BuildTS(backupTime.UnixNano(), 0)
-	backup := NewCheckpointEntry(r.rt.SID(), end.Next(), currTs, ET_Incremental)
-	location, err = r.doCheckpointForBackup(backup)
+	backup := NewCheckpointEntry(r.rt.SID(), start, end, ET_Incremental)
+	location, err := r.doCheckpointForBackup(ctx, backup)
 	if err != nil {
-		return
+		return "", err
 	}
-	entry.SetState(ST_Finished)
-	e, err := r.wal.RangeCheckpoint(1, lsnToTruncate, files...)
-	if err != nil {
-		panic(err)
-	}
-	if err = e.WaitDone(); err != nil {
-		panic(err)
-	}
-	logutil.Infof("checkpoint for backup %s, takes %s", entry.String(), time.Since(now))
+	logutil.Infof("checkpoint for backup %s, takes %s", backup.String(), time.Since(now))
 	return location, nil
 }

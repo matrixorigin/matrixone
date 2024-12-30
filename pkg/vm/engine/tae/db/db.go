@@ -250,15 +250,8 @@ func (db *DB) ForceCheckpointForBackup(
 	ts types.TS,
 	flushDuration time.Duration,
 ) (location string, err error) {
-	// FIXME: cannot disable with a running job
-	if err = db.BGCheckpointRunner.DisableCheckpoint(ctx); err != nil {
-		return
-	}
-
-	defer db.BGCheckpointRunner.EnableCheckpoint()
-	db.BGCheckpointRunner.CleanPenddingCheckpoint()
 	t0 := time.Now()
-	err = db.BGFlusher.ForceFlush(ts, ctx, flushDuration)
+	err = db.ForceCheckpoint(ctx, ts, flushDuration)
 	forceFlushCost := time.Since(t0)
 
 	defer func() {
@@ -279,8 +272,12 @@ func (db *DB) ForceCheckpointForBackup(
 	if err != nil {
 		return
 	}
+	maxEntry := db.BGCheckpointRunner.MaxIncrementalCheckpoint()
+	maxEnd := maxEntry.GetEnd()
+	start := maxEnd.Next()
+	end := db.TxnMgr.Now()
 
-	location, err = db.BGCheckpointRunner.ForceCheckpointForBackup(ts)
+	location, err = db.BGCheckpointRunner.CreateBackupFile(ctx, start, end)
 
 	return
 }

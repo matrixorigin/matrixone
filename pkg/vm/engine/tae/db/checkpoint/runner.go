@@ -476,7 +476,7 @@ func (r *runner) doIncrementalCheckpoint(entry *CheckpointEntry) (fields []zap.F
 	return
 }
 
-func (r *runner) doCheckpointForBackup(entry *CheckpointEntry) (location string, err error) {
+func (r *runner) doCheckpointForBackup(_ context.Context, entry *CheckpointEntry) (location string, err error) {
 	factory := logtail.BackupCheckpointDataFactory(r.rt.SID(), entry.start, entry.end)
 	data, err := factory(r.catalog)
 	if err != nil {
