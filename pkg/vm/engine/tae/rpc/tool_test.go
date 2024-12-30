@@ -60,6 +60,7 @@ func Test_gcArg(t *testing.T) {
 		file: path.Join(dir, "test"),
 	}
 	cmd := dump.PrepareCommand()
+	_ = cmd
 
 	schema := catalog.MockSchemaAll(10, 2)
 	schema.Extra.BlockMaxRows = 10
