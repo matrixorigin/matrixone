@@ -58,9 +58,6 @@ func (cfg *CheckpointCfg) FillDefaults() {
 	if cfg.IncrementalInterval <= 0 {
 		cfg.IncrementalInterval = time.Minute
 	}
-	if cfg.IncrementalReservedWALCount < 0 {
-		cfg.IncrementalReservedWALCount = 0
-	}
 	if cfg.MinCount <= 0 {
 		cfg.MinCount = 10000
 	}

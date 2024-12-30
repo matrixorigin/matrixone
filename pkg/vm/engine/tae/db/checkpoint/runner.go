@@ -272,7 +272,7 @@ func (r *runner) StartExecutor(cfg *CheckpointCfg) {
 func (r *runner) String() string {
 	cfg := r.GetCfg()
 	if cfg == nil {
-		return fmt.Sprintf("<RO-CKPRunner>")
+		return "<RO-CKPRunner>"
 	}
 	return fmt.Sprintf("<RW-CKPRunner[%s]>", cfg.String())
 }

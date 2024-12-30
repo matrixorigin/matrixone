@@ -348,45 +348,45 @@ func newCheckpointExecutor(
 	return e
 }
 
-func (e *checkpointExecutor) GetCfg() *CheckpointCfg {
-	return &e.cfg
+func (executor *checkpointExecutor) GetCfg() *CheckpointCfg {
+	return &executor.cfg
 }
 
-func (e *checkpointExecutor) fillDefaults() {
-	e.cfg.FillDefaults()
+func (executor *checkpointExecutor) fillDefaults() {
+	executor.cfg.FillDefaults()
 }
 
-func (e *checkpointExecutor) RunningCKPJob(gckp bool) *checkpointJob {
+func (executor *checkpointExecutor) RunningCKPJob(gckp bool) *checkpointJob {
 	if gckp {
-		return e.runningGCKP.Load()
+		return executor.runningGCKP.Load()
 	}
-	return e.runningICKP.Load()
+	return executor.runningICKP.Load()
 }
 
-func (e *checkpointExecutor) StopWithCause(cause error) {
-	if updated := e.active.CompareAndSwap(true, false); !updated {
+func (executor *checkpointExecutor) StopWithCause(cause error) {
+	if updated := executor.active.CompareAndSwap(true, false); !updated {
 		return
 	}
 	if cause == nil {
 		cause = ErrCheckpointDisabled
 	}
-	e.cancel(cause)
-	job := e.runningGCKP.Load()
+	executor.cancel(cause)
+	job := executor.runningGCKP.Load()
 	if job != nil {
 		<-job.WaitC()
 	}
-	e.runningGCKP.Store(nil)
-	job = e.runningICKP.Load()
+	executor.runningGCKP.Store(nil)
+	job = executor.runningICKP.Load()
 	if job != nil {
 		<-job.WaitC()
 	}
-	e.runningICKP.Store(nil)
-	e.ickpQueue.Stop()
-	e.gckpQueue.Stop()
-	e.runner = nil
+	executor.runningICKP.Store(nil)
+	executor.ickpQueue.Stop()
+	executor.gckpQueue.Stop()
+	executor.runner = nil
 	logutil.Info(
 		"CKP-Executor-Stopped",
 		zap.Error(cause),
-		zap.String("cfg", e.cfg.String()),
+		zap.String("cfg", executor.cfg.String()),
 	)
 }

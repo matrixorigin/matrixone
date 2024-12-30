@@ -22,38 +22,38 @@ import (
 	"go.uber.org/zap"
 )
 
-func (e *checkpointExecutor) TriggerExecutingGCKP(ctx *gckpContext) (err error) {
-	if !e.active.Load() {
+func (executor *checkpointExecutor) TriggerExecutingGCKP(ctx *gckpContext) (err error) {
+	if !executor.active.Load() {
 		err = ErrExecutorClosed
 		return
 	}
-	_, err = e.gckpQueue.Enqueue(ctx)
+	_, err = executor.gckpQueue.Enqueue(ctx)
 	return
 }
 
-func (e *checkpointExecutor) RunGCKP(gckpCtx *gckpContext) (err error) {
-	if !e.active.Load() {
+func (executor *checkpointExecutor) RunGCKP(gckpCtx *gckpContext) (err error) {
+	if !executor.active.Load() {
 		err = ErrCheckpointDisabled
 		return
 	}
-	if e.runningGCKP.Load() != nil {
+	if executor.runningGCKP.Load() != nil {
 		err = ErrPendingCheckpoint
 	}
 	job := &checkpointJob{
 		doneCh:      make(chan struct{}),
-		executor:    e,
+		executor:    executor,
 		gckpCtx:     gckpCtx,
-		runGCKPFunc: e.runGCKPFunc,
+		runGCKPFunc: executor.runGCKPFunc,
 	}
-	if !e.runningGCKP.CompareAndSwap(nil, job) {
+	if !executor.runningGCKP.CompareAndSwap(nil, job) {
 		err = ErrPendingCheckpoint
 		return
 	}
 	defer func() {
 		job.Done(err)
-		e.runningGCKP.Store(nil)
+		executor.runningGCKP.Store(nil)
 	}()
-	err = job.RunGCKP(e.ctx)
+	err = job.RunGCKP(executor.ctx)
 	return
 }
 

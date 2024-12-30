@@ -194,37 +194,37 @@ func (executor *checkpointExecutor) softScheduleCheckpoint(
 	return
 }
 
-func (e *checkpointExecutor) TriggerExecutingICKP() (err error) {
-	if !e.active.Load() {
+func (executor *checkpointExecutor) TriggerExecutingICKP() (err error) {
+	if !executor.active.Load() {
 		err = ErrExecutorClosed
 		return
 	}
-	_, err = e.ickpQueue.Enqueue(struct{}{})
+	_, err = executor.ickpQueue.Enqueue(struct{}{})
 	return
 }
 
-func (e *checkpointExecutor) RunICKP() (err error) {
-	if !e.active.Load() {
+func (executor *checkpointExecutor) RunICKP() (err error) {
+	if !executor.active.Load() {
 		err = ErrCheckpointDisabled
 		return
 	}
-	if e.runningICKP.Load() != nil {
+	if executor.runningICKP.Load() != nil {
 		err = ErrPendingCheckpoint
 	}
 	job := &checkpointJob{
 		doneCh:      make(chan struct{}),
-		executor:    e,
-		runICKPFunc: e.runICKPFunc,
+		executor:    executor,
+		runICKPFunc: executor.runICKPFunc,
 	}
-	if !e.runningICKP.CompareAndSwap(nil, job) {
+	if !executor.runningICKP.CompareAndSwap(nil, job) {
 		err = ErrPendingCheckpoint
 		return
 	}
 	defer func() {
 		job.Done(err)
-		e.runningICKP.Store(nil)
+		executor.runningICKP.Store(nil)
 	}()
-	err = job.RunICKP(e.ctx)
+	err = job.RunICKP(executor.ctx)
 	return
 }
 
