@@ -244,10 +244,8 @@ func (r *runner) ForceICKP(ctx context.Context, ts *types.TS) (err error) {
 func (r *runner) CreateBackupFile(ctx context.Context, start, end types.TS) (string, error) {
 	now := time.Now()
 	backup := NewCheckpointEntry(r.rt.SID(), start, end, ET_Incremental)
-	location, err := r.doCheckpointForBackup(ctx, r.GetCfg(), backup)
-	if err != nil {
-		return "", err
-	}
-	logutil.Infof("checkpoint for backup %s, takes %s", backup.String(), time.Since(now))
-	return location, nil
+	defer func() {
+		logutil.Infof("checkpoint for backup %s, takes %s", backup.String(), time.Since(now))
+	}()
+	return r.doCheckpointForBackup(ctx, r.GetCfg(), backup)
 }
