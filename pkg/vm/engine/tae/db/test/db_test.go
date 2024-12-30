@@ -7999,9 +7999,7 @@ func Test_CheckpointChaos3(t *testing.T) {
 	rmFn1()
 	rmFn2()
 
-	select {
-	case <-doneC:
-	}
+	<-doneC
 
 	maxGCKP := tae.DB.BGCheckpointRunner.MaxGlobalCheckpoint()
 	assert.NotNil(t, maxGCKP)
