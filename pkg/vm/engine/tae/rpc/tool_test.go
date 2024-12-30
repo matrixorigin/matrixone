@@ -113,9 +113,9 @@ func Test_gcArg(t *testing.T) {
 	assert.NoError(t, gc.FromCommand(cmd))
 	assert.NoError(t, dump.FromCommand(cmd))
 	assert.NoError(t, remove.FromCommand(cmd))
-	dump.String()
-	remove.String()
-	gc.String()
+	_ = dump.String()
+	_ = remove.String()
+	_ = gc.String()
 
 	assert.NoError(t, err)
 }
