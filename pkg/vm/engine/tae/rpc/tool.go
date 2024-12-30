@@ -1388,11 +1388,10 @@ func (c *gcDumpArg) Run() (err error) {
 		return
 	}
 	file, err := os.OpenFile(c.file, os.O_CREATE|os.O_WRONLY|os.O_APPEND|os.O_TRUNC, 0644)
-	defer file.Close()
 	if err != nil {
-		err = moerr.NewInternalErrorNoCtx(fmt.Sprintf("Error opening file: %v", err))
 		return
 	}
+	defer file.Close()
 
 	pinnedObjects := make(map[string]bool)
 
@@ -1502,8 +1501,6 @@ func getObjectsFromCkpMeta(data *logtail.CheckpointData, pinned map[string]bool)
 		obj := loc.Name().String()
 		pinned[obj] = true
 	}
-
-	return
 }
 
 func getObjectsFromCkpData(data *logtail.CheckpointData, pinned map[string]bool) {
@@ -1522,8 +1519,6 @@ func getObjectsFromCkpData(data *logtail.CheckpointData, pinned map[string]bool)
 		obj := objectio.ObjectStats(v)
 		pinned[obj.ObjectName().String()] = true
 	}
-
-	return
 }
 
 type gcRemoveArg struct {
