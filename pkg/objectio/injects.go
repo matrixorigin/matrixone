@@ -37,6 +37,7 @@ const (
 	FJ_LogRanges         = "fj/log/ranges"
 	FJ_LogPartitionState = "fj/log/partitionstate"
 
+	FJ_CNRecvErr    = "fj/cn/recv/err"
 	FJ_LogReader    = "fj/log/reader"
 	FJ_LogWorkspace = "fj/log/workspace"
 )
@@ -232,6 +233,11 @@ func InjectLogging(
 		fault.RemoveFaultPoint(context.Background(), key)
 	}
 	return
+}
+
+func CNRecvErrInjected() (bool, int) {
+	p, _, injected := fault.TriggerFault(FJ_CNRecvErr)
+	return injected, int(p)
 }
 
 func RangesLogInjected(dbName, tableName string) (bool, int) {
