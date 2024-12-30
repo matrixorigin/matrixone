@@ -8003,7 +8003,15 @@ func Test_CheckpointChaos3(t *testing.T) {
 	case <-doneC:
 	}
 
+	maxGCKP := tae.DB.BGCheckpointRunner.MaxGlobalCheckpoint()
+	assert.NotNil(t, maxGCKP)
+	t.Logf("maxGCKP: %s", maxGCKP.String())
+
 	tae.Restart(ctx)
+	maxGCKP2 := tae.DB.BGCheckpointRunner.MaxGlobalCheckpoint()
+	t.Logf("maxGCKP2: %s", maxGCKP2.String())
+	assert.NotNil(t, maxGCKP2)
+	assert.Equal(t, maxGCKP.GetEnd(), maxGCKP2.GetEnd())
 }
 
 func TestGCCatalog1(t *testing.T) {
