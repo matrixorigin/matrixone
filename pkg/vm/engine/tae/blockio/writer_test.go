@@ -102,7 +102,7 @@ func TestWriter_WriteBlockAndZoneMap(t *testing.T) {
 			require.Equal(t, sum, zm.GetSum())
 
 			mp := mpool.MustNewZero()
-			metaloc := EncodeLocation(writer.GetName(), blocks[0].GetExtent(), 40000, blocks[0].GetID())
+			metaloc := objectio.BuildLocation(writer.GetName(), blocks[0].GetExtent(), 40000, blocks[0].GetID())
 			require.NoError(t, err)
 			reader, err := NewObjectReader("", service, metaloc)
 			require.NoError(t, err)
@@ -209,7 +209,7 @@ func TestWriter_WriteBlockAfterAlter(t *testing.T) {
 			require.False(t, res)
 
 			mp := mpool.MustNewZero()
-			metaloc := EncodeLocation(writer.GetName(), blocks[0].GetExtent(), 40000, blocks[0].GetID())
+			metaloc := objectio.BuildLocation(writer.GetName(), blocks[0].GetExtent(), 40000, blocks[0].GetID())
 			require.NoError(t, err)
 			reader, err := NewObjectReader("", service, metaloc)
 			require.NoError(t, err)
@@ -262,7 +262,7 @@ func TestWriter_WriteBlockAndBF(t *testing.T) {
 			assert.Equal(t, 1, len(blocks))
 
 			mp := mpool.MustNewZero()
-			metaloc := EncodeLocation(writer.GetName(), blocks[0].GetExtent(), 100, blocks[0].GetID())
+			metaloc := objectio.BuildLocation(writer.GetName(), blocks[0].GetExtent(), 100, blocks[0].GetID())
 			require.NoError(t, err)
 			reader, err := NewObjectReader("", service, metaloc)
 			require.NoError(t, err)
@@ -293,7 +293,7 @@ func TestWriter_WriteBlockAndBF(t *testing.T) {
 			assert.Nil(t, err)
 			assert.Equal(t, 1, len(blocks))
 
-			metaloc = EncodeLocation(writer2.GetName(), blocks[0].GetExtent(), 100, blocks[0].GetID())
+			metaloc = objectio.BuildLocation(writer2.GetName(), blocks[0].GetExtent(), 100, blocks[0].GetID())
 			require.NoError(t, err)
 			reader, err = NewObjectReader("", service, metaloc)
 			require.NoError(t, err)
@@ -330,7 +330,7 @@ func TestWriter_WriteBlockAndBF(t *testing.T) {
 			assert.Nil(t, err)
 			assert.Equal(t, 1, len(blocks))
 
-			metaloc = EncodeLocation(writer2.GetName(), blocks[0].GetExtent(), 100, blocks[0].GetID())
+			metaloc = objectio.BuildLocation(writer2.GetName(), blocks[0].GetExtent(), 100, blocks[0].GetID())
 			require.NoError(t, err)
 			reader, err = NewObjectReader("", service, metaloc)
 			require.NoError(t, err)

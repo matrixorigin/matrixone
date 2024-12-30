@@ -244,6 +244,58 @@ func TestDbTableInfo_String(t *testing.T) {
 	}
 }
 
+func TestDbTableInfo_Clone(t *testing.T) {
+	type fields struct {
+		SourceDbId      uint64
+		SourceDbName    string
+		SourceTblId     uint64
+		SourceTblName   string
+		SourceCreateSql string
+		SinkDbName      string
+		SinkTblName     string
+	}
+	tests := []struct {
+		name   string
+		fields fields
+		want   *DbTableInfo
+	}{
+		{
+			fields: fields{
+				SourceDbId:      1,
+				SourceDbName:    "source_db",
+				SourceTblId:     1,
+				SourceTblName:   "source_tbl",
+				SourceCreateSql: "create table source_db.source_tbl (id int)",
+				SinkDbName:      "sink_db",
+				SinkTblName:     "sink_tbl",
+			},
+			want: &DbTableInfo{
+				SourceDbId:      1,
+				SourceDbName:    "source_db",
+				SourceTblId:     1,
+				SourceTblName:   "source_tbl",
+				SourceCreateSql: "create table source_db.source_tbl (id int)",
+				SinkDbName:      "sink_db",
+				SinkTblName:     "sink_tbl",
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			info := DbTableInfo{
+				SourceDbId:      tt.fields.SourceDbId,
+				SourceDbName:    tt.fields.SourceDbName,
+				SourceTblId:     tt.fields.SourceTblId,
+				SourceTblName:   tt.fields.SourceTblName,
+				SourceCreateSql: tt.fields.SourceCreateSql,
+				SinkDbName:      tt.fields.SinkDbName,
+				SinkTblName:     tt.fields.SinkTblName,
+			}
+			assert.Equalf(t, tt.want, info.Clone(), "Clone()")
+		})
+	}
+}
+
 func TestJsonDecode(t *testing.T) {
 	// TODO
 	//type args struct {

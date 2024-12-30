@@ -23,13 +23,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ckputil"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"go.uber.org/zap"
 )
-
-func MakeMetafileFullName(dir, name string) string {
-	return dir + name
-}
 
 func MakeMetadataBatch() *batch.Batch {
 	return batch.NewWithSchema(
@@ -39,52 +37,32 @@ func MakeMetadataBatch() *batch.Batch {
 	)
 }
 
-func MakeMetafilesReader(
+func MakeCKPMetaDirReader(
 	ctx context.Context,
 	sid string,
 	verbose int,
 	fs fileservice.FileService,
-) (*MetafilesReader, error) {
+) (*CKPMetaReader, error) {
 	var (
-		entries []fileservice.DirEntry
-		err     error
-		dir     = CheckpointDir
+		names []string
+		err   error
 	)
-	if entries, err = fileservice.SortedList(fs.List(ctx, dir)); err != nil {
+	if names, err = ckputil.ListCKPMetaNames(ctx, fs); err != nil {
 		return nil, err
 	}
-	if len(entries) == 0 {
-		return nil, nil
-	}
-	return MakeMetafilesReaderFromSortedDirEntries(
-		sid, dir, entries, verbose, fs,
+	return NewCKPMetaReader(
+		sid, ioutil.GetCheckpointDir(), names, verbose, fs,
 	), nil
 }
 
-func MakeMetafilesReaderFromSortedDirEntries(
-	sid string,
-	dir string,
-	sortedDirEntries []fileservice.DirEntry,
-	verbose int,
-	fs fileservice.FileService,
-) *MetafilesReader {
-	files := make([]string, 0, len(sortedDirEntries))
-	for _, entry := range sortedDirEntries {
-		if !entry.IsDir && IsMetadataFile(entry.Name) {
-			files = append(files, entry.Name)
-		}
-	}
-	return NewMetafilesReader(sid, dir, files, verbose, fs)
-}
-
-func NewMetafilesReader(
+func NewCKPMetaReader(
 	sid string,
 	dir string,
 	files []string,
 	verbose int,
 	fs fileservice.FileService,
-) *MetafilesReader {
-	return &MetafilesReader{
+) *CKPMetaReader {
+	return &CKPMetaReader{
 		sid:     sid,
 		dir:     dir,
 		files:   files,
@@ -93,7 +71,7 @@ func NewMetafilesReader(
 	}
 }
 
-type MetafilesReader struct {
+type CKPMetaReader struct {
 	sid     string
 	dir     string
 	files   []string
@@ -102,7 +80,7 @@ type MetafilesReader struct {
 	fs      fileservice.FileService
 }
 
-func (r *MetafilesReader) Next(
+func (r *CKPMetaReader) Next(
 	ctx context.Context,
 	mp *mpool.MPool,
 ) (bats []*batch.Batch, release func(), err error) {
@@ -146,7 +124,7 @@ func (r *MetafilesReader) Next(
 	default:
 	}
 
-	fname := MakeMetafileFullName(r.dir, name)
+	fname := ioutil.MakeFullName(r.dir, name)
 
 	var reader *blockio.BlockReader
 	if reader, err = blockio.NewFileReader(
@@ -163,7 +141,7 @@ func (r *MetafilesReader) Next(
 	return
 }
 
-func (r *MetafilesReader) Close() {
+func (r *CKPMetaReader) Close() {
 	r.fs = nil
 	r.files = nil
 	r.idx = 0

@@ -20,6 +20,7 @@ import "github.com/prometheus/client_golang/prometheus"
 
 func initTraceMetrics() {
 	registry.MustRegister(traceCollectorDurationHistogram)
+	registry.MustRegister(traceCollectorSignalTotal)
 	registry.MustRegister(traceCollectorDiscardCounter)
 	registry.MustRegister(traceCollectorCollectHungCounter)
 	registry.MustRegister(traceCollectorDiscardItemCounter)
@@ -31,6 +32,9 @@ func initTraceMetrics() {
 	registry.MustRegister(traceCheckStorageUsageCounter)
 	registry.MustRegister(traceMOLoggerErrorCounter)
 	registry.MustRegister(traceMOLoggerBufferActionCounter)
+	registry.MustRegister(traceMOLoggerAggrCounter)
+	registry.MustRegister(traceMOLoggerLogToLongCounter)
+	registry.MustRegister(traceCollectorContentQueueLength)
 }
 
 var (
@@ -40,7 +44,7 @@ var (
 			Subsystem: "trace",
 			Name:      "collector_duration_seconds",
 			Help:      "Bucketed histogram of trace collector duration.",
-			Buckets:   prometheus.ExponentialBuckets(0.0001, 2.0, 20),
+			Buckets:   []float64{0.001, 0.05, 0.5, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 20, 40, 60, 80},
 		}, []string{"type"})
 	TraceCollectorCollectDurationHistogram              = traceCollectorDurationHistogram.WithLabelValues("collect")
 	TraceCollectorConsumeDurationHistogram              = traceCollectorDurationHistogram.WithLabelValues("consume")
@@ -51,6 +55,14 @@ var (
 	TraceCollectorGenerateDurationHistogram             = traceCollectorDurationHistogram.WithLabelValues("generate")
 	TraceCollectorGenerateDiscardDurationHistogram      = traceCollectorDurationHistogram.WithLabelValues("generate_discard")
 	TraceCollectorExportDurationHistogram               = traceCollectorDurationHistogram.WithLabelValues("export")
+
+	traceCollectorSignalTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "trace",
+			Name:      "collector_signal_total",
+			Help:      "Count of collector act signal",
+		}, []string{"type", "reason"})
 
 	traceCollectorDiscardCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -66,7 +78,7 @@ var (
 			Subsystem: "trace",
 			Name:      "collector_collect_hung_total",
 			Help:      "Count of trace collector hung collect total",
-		}, []string{"type"})
+		}, []string{"type", "reason"})
 
 	traceCollectorDiscardItemCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -97,6 +109,17 @@ var (
 	TraceCollectorMoLoggerQueueLength = traceCollectorQueueLength.WithLabelValues("mologger")
 	TraceCollectorMetricQueueLength   = traceCollectorQueueLength.WithLabelValues("metric")
 	TraceCollectorContentQueueLength  = traceCollectorQueueLength.WithLabelValues("content")
+	TraceCollectorExportQueueLength   = traceCollectorQueueLength.WithLabelValues("export")
+	TraceCollectorWritingQueueLength  = traceCollectorQueueLength.WithLabelValues("writing")
+
+	traceCollectorContentQueueLength = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "trace",
+			Name:      "collector_content_queue_length",
+			Help:      "Count of mologger collector consume 'content' instance",
+		}, []string{"type"})
+	TraceCollectorContentQueueLengthMetric = traceCollectorContentQueueLength.WithLabelValues("metric")
 
 	traceNegativeCUCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -113,6 +136,7 @@ var (
 			Name:      "etl_merge_total",
 			Help:      "Count of background task ETLMerge",
 		}, []string{"type"})
+	TraceETLMergeJobCounter     = traceETLMergeCounter.WithLabelValues("job")
 	TraceETLMergeSuccessCounter = traceETLMergeCounter.WithLabelValues("success")
 	// TraceETLMergeExistCounter record already exist, against delete failed.
 	TraceETLMergeExistCounter        = traceETLMergeCounter.WithLabelValues("exist")
@@ -128,7 +152,7 @@ var (
 			Subsystem: "trace",
 			Name:      "mologger_export_data_bytes",
 			Help:      "Bucketed histogram of mo_logger exec sql bytes, or write bytes.",
-			Buckets:   prometheus.ExponentialBuckets(128, 2.0, 20),
+			Buckets:   prometheus.ExponentialBuckets(1<<20, 1.35, 20),
 		}, []string{"type"})
 	TraceMOLoggerExportSqlHistogram = traceMOLoggerExportDataHistogram.WithLabelValues("sql")
 	TraceMOLoggerExportCsvHistogram = traceMOLoggerExportDataHistogram.WithLabelValues("csv")
@@ -163,8 +187,11 @@ var (
 	TraceMOLoggerBufferContentAlloc     = traceMOLoggerBufferActionCounter.WithLabelValues("content_alloc")
 	TraceMOLoggerBufferMetricFree       = traceMOLoggerBufferActionCounter.WithLabelValues("metric_free")
 	TraceMOLoggerBufferNoCallback       = traceMOLoggerBufferActionCounter.WithLabelValues("no_callback")
+	TraceMOLoggerBufferCallback         = traceMOLoggerBufferActionCounter.WithLabelValues("callback")
 	TraceMOLoggerBufferSetCallBack      = traceMOLoggerBufferActionCounter.WithLabelValues("set_callback")
 	TraceMOLoggerBufferSetCallBackNil   = traceMOLoggerBufferActionCounter.WithLabelValues("set_callback_nil")
+	TraceMOLoggerBufferCallbackSet      = traceMOLoggerBufferActionCounter.WithLabelValues("callback_set")
+	TraceMOLoggerBufferCallbackSetNil   = traceMOLoggerBufferActionCounter.WithLabelValues("callback_set_nil")
 	TraceMOLoggerBufferLoopWriteSQL     = traceMOLoggerBufferActionCounter.WithLabelValues("loop_write_sql")
 	TraceMOLoggerBufferLoopBackOff      = traceMOLoggerBufferActionCounter.WithLabelValues("loop_backoff")
 	TraceMOLoggerBufferWriteSQL         = traceMOLoggerBufferActionCounter.WithLabelValues("write_sql")
@@ -172,7 +199,30 @@ var (
 	TraceMOLoggerBufferWriteFailed      = traceMOLoggerBufferActionCounter.WithLabelValues("write_failed")
 	TraceMOLoggerBufferReactWrite       = traceMOLoggerBufferActionCounter.WithLabelValues("react_write")
 	TraceMOLoggerBufferReactWriteFailed = traceMOLoggerBufferActionCounter.WithLabelValues("react_write_failed")
+
+	traceMOLoggerAggrCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "trace",
+			Name:      "mologger_aggr_total",
+			Help:      "Count of mologger aggr records.",
+		}, []string{"type"})
+
+	// need alert
+	traceMOLoggerLogToLongCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "trace",
+			Name:      "mologger_log_too_long_total",
+			Help:      "Count of mologger catch log too long",
+		}, []string{"type"})
+	TraceMOLoggerLogMessageTooLong = traceMOLoggerLogToLongCounter.WithLabelValues("message")
+	TraceMOLoggerLogExtraTooLong   = traceMOLoggerLogToLongCounter.WithLabelValues("extra")
 )
+
+func GetTraceCollectorSignalTotal(typ, reason string) prometheus.Counter {
+	return traceCollectorSignalTotal.WithLabelValues(typ, reason)
+}
 
 func GetTraceNegativeCUCounter(typ string) prometheus.Counter {
 	return traceNegativeCUCounter.WithLabelValues(typ)
@@ -197,10 +247,18 @@ func GetTraceCollectorDiscardItemCounter(typ string) prometheus.Counter {
 	return traceCollectorDiscardItemCounter.WithLabelValues(typ)
 }
 
-func GetTraceCollectorCollectHungCounter(typ string) prometheus.Counter {
-	return traceCollectorCollectHungCounter.WithLabelValues(typ)
+func GetTraceCollectorCollectHungCounter(typ string, reason string) prometheus.Counter {
+	return traceCollectorCollectHungCounter.WithLabelValues(typ, reason)
 }
 
 func GetTraceCollectorMOLoggerQueueLength() prometheus.Gauge {
 	return TraceCollectorMoLoggerQueueLength
+}
+
+func GetTraceMOLoggerAggrCounter(typ string) prometheus.Counter {
+	return traceMOLoggerAggrCounter.WithLabelValues(typ)
+}
+
+func GetTraceCollectorContentQueueLength(typ string) prometheus.Counter {
+	return traceCollectorContentQueueLength.WithLabelValues(typ)
 }

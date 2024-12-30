@@ -163,7 +163,7 @@ func (tbl *txnTable) TransferDeleteIntent(
 		panic(err)
 	}
 	ts := types.BuildTS(time.Now().UTC().UnixNano(), 0)
-	if err = readWriteConfilictCheck(entry, ts); err == nil {
+	if err = readWriteConfilictCheck(entry, ts, false); err == nil {
 		return
 	}
 	err = nil
@@ -420,6 +420,7 @@ func (tbl *txnTable) TransferDeletes(
 		if err = tbl.store.warChecker.checkOne(
 			id,
 			ts,
+			phase == txnif.PrePreparePhase,
 		); err == nil {
 			continue
 		}
@@ -470,6 +471,7 @@ func (tbl *txnTable) recurTransferDelete(
 	pkType *types.Type,
 	depth int,
 	ts types.TS,
+	phase string,
 ) error {
 
 	var page2 *common.PinnedItem[*model.TransferHashPage]
@@ -504,6 +506,7 @@ func (tbl *txnTable) recurTransferDelete(
 	err = readWriteConfilictCheck(
 		obj,
 		ts,
+		phase == txnif.PrePreparePhase,
 	)
 	if err == nil {
 		pkVec := tbl.store.rt.VectorPool.Small.GetVector(pkType)
@@ -554,7 +557,8 @@ func (tbl *txnTable) recurTransferDelete(
 		pk,
 		pkType,
 		depth+1,
-		ts)
+		ts,
+		phase)
 }
 
 func (tbl *txnTable) TransferDeleteRows(
@@ -610,7 +614,7 @@ func (tbl *txnTable) TransferDeleteRows(
 	page := pinned.Item()
 	depth := 0
 	if err = tbl.recurTransferDelete(
-		memo, page, id, row, pk, pkType, depth, ts); err != nil {
+		memo, page, id, row, pk, pkType, depth, ts, phase); err != nil {
 		return
 	}
 

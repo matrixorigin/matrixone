@@ -28,9 +28,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -117,44 +117,11 @@ const (
                   	table_id in (%v) 
 			  	order by table_id asc;`
 
-	getNextReadyListSQL = `
-				select
-					account_id, database_id, table_id, update_time 
-				from 
-				    %s.%s 
-				%s 
-				order by 
-				    update_time asc
-				limit %d;`
-
-	getNextCheckAliveListSQL = `
-				select
-					%s
-				from (
-					select
-						%s, min(update_time) as min_update
-					from
-						%s.%s
-					group by
-						%s
-				) sub
-				order by
-				    min_update asc
-				limit %d;`
-
-	getCheckAliveSQL = `
-				select 
-					distinct(%s)
-				from 
-					%s.%s
-				where
-				    %s in (%v);`
-
 	getDeleteFromStatsSQL = `
 				delete from 
 				    %s.%s
 				where 
-					%s in (%v);`
+					%s;`
 
 	getUpdateTSSQL = `
 				select
@@ -164,12 +131,9 @@ const (
 				where 
 					account_id in (%v) and
 				    database_id in (%v) and
-				    table_id in (%v);`
-
-	insertNewTablesSQL = `
-				insert ignore into 
-				    %s.%s (account_id, database_id, table_id, database_name, table_name, table_stats, update_time, takes)
-					values %s;`
+				    table_id in (%v)
+				group by 
+				    account_id, database_id, table_id, update_time;`
 
 	findNewTableSQL = `
 				select 
@@ -183,6 +147,52 @@ const (
 				where
 				    B.table_id is NULL;`
 
+	findDeletedAccountSQL = `
+				select 
+					distinct(A.account_id)
+				from 
+				    %s.%s as A 
+				left join 
+					%s.%s as B
+				on
+					A.account_id = B.account_id
+				where
+				    B.account_id is NULL;`
+
+	findDeletedDatabaseSQL = `
+				select 
+					A.account_id, A.database_id
+				from 
+				    %s.%s as A 
+				left join 
+					%s.%s as B
+				on
+					A.account_id = B.account_id and A.database_name = B.datname and A.database_id = B.dat_id
+				where
+				    B.datname is NULL and A.database_id not in (%v)  
+				group by 
+					A.account_id, A.database_id;
+				`
+
+	findDeletedTableSQL = `
+				select 
+					A.account_id, A.database_id, A.table_id
+				from 
+				    %s.%s as A 
+				left join 
+					%s.%s as B
+				on
+					A.account_id = B.account_id and 
+				    A.database_name = B.reldatabase and 
+				    A.table_name = B.relname and 
+				    A.database_id = B.reldatabase_id and 
+				    A.table_id = B.rel_id 
+				where
+				    B.relname is NULL and A.database_id != %d 
+				group by
+					A.account_id, A.database_id, A.table_id;
+				`
+
 	getNullStatsSQL = `
 				select 
 					account_id, database_id, table_id 
@@ -190,8 +200,20 @@ const (
 				    %s.%s
 				where 
 				    table_stats = "{}" 
-				or
-				    update_time < '%s' 
+				limit
+					%d;`
+
+	getNextCheckBatchSQL = `
+				select 
+					account_id, database_id, table_id 
+				from 
+				    %s.%s 
+				where
+				    table_id > %d and database_id != %d 
+				group by
+				    account_id, database_id, table_id 
+				order by 
+				    table_id asc
 				limit
 					%d;`
 
@@ -202,6 +224,43 @@ const (
 				    %s.%s
 				where
 				    account_id in (%s);`
+
+	accumulateIdsByDatabaseSQL = `
+				select 
+					account_id, reldatabase_id, rel_id
+				from
+					%s.%s 
+				where
+				    reldatabase_id in (%v)
+				group by
+				    account_id, reldatabase_id, rel_id;`
+
+	accumulateIdsByTableSQL = `
+				select 
+					account_id, reldatabase_id, rel_id
+				from
+					%s.%s 
+				where
+				    rel_id in (%v)
+				group by
+				    account_id, reldatabase_id, rel_id;`
+
+	getSingleTableStatsForUpdateSQL = `
+				select 
+					table_stats
+				from
+					%s.%s
+				where 
+				    account_id = %d and database_id = %d and table_id = %d 
+				for update;`
+
+	findAccountByTable = `
+				select 
+					account_id, rel_id
+				from 
+				    %s.%s
+				where 
+				    rel_id in (%v);`
 )
 
 const (
@@ -228,6 +287,13 @@ const (
 const (
 	betaTaskName = "beta"
 	gamaTaskName = "gama"
+
+	specialStart          = "start"
+	specialMinimalChecked = "minimal checked"
+
+	specialAccountId  = 0
+	specialDatabaseId = 0
+	specialTableId    = 1
 )
 
 var TableStatsName = [TableStatsCnt]string{
@@ -313,6 +379,7 @@ func initMoTableStatsConfig(
 
 		eng.dynamicCtx.cleanDeletesQueue = make(chan struct{})
 		eng.dynamicCtx.updateForgottenQueue = make(chan struct{})
+		eng.dynamicCtx.insertNewTableQueue = make(chan struct{})
 
 		// registerMoTableSizeRows
 		{
@@ -491,16 +558,20 @@ type dynamicCtx struct {
 	defaultConf MoTableStatsConfig
 	conf        MoTableStatsConfig
 
-	tblQueue             chan tablePair
+	tblQueue chan tablePair
+
 	cleanDeletesQueue    chan struct{}
 	updateForgottenQueue chan struct{}
+	insertNewTableQueue  chan struct{}
 
 	de         *Engine
 	objIdsPool sync.Pool
 
 	tableStock struct {
-		tbls   []tablePair
-		newest types.TS
+		tbls []tablePair
+
+		specialFrom types.TS
+		specialTo   types.TS
 	}
 
 	isMainRunner bool
@@ -603,6 +674,10 @@ func (d *dynamicCtx) HandleMoTableStatsCtl(cmd string) string {
 	}
 }
 
+// acc.x,y,z
+// db.a,b,c
+// tbl.r,s,t
+// gama.forgotten|clean|new
 func (d *dynamicCtx) recomputing(para string) string {
 	{
 		d.Lock()
@@ -614,43 +689,87 @@ func (d *dynamicCtx) recomputing(para string) string {
 	}
 
 	var (
-		err    error
-		ok     bool
-		id     uint64
-		buf    bytes.Buffer
-		retAcc []uint64
+		err error
+		ok  bool
+		id  uint64
 	)
 
-	ids := strings.Split(para, ",")
+	idsByCmd := func(str string) []uint64 {
+		idStrs := strings.Split(str, ",")
 
-	accIds := make([]uint64, 0, len(ids))
+		ids := make([]uint64, 0, len(idStrs))
 
-	for i := range ids {
-		id, err = strconv.ParseUint(ids[i], 10, 64)
-		if err == nil {
-			accIds = append(accIds, id)
+		for i := range idStrs {
+			id, err = strconv.ParseUint(idStrs[i], 10, 64)
+			if err == nil {
+				ids = append(ids, id)
+			}
+		}
+
+		return ids
+	}
+
+	recomputingAccount := func(str string) string {
+		ids := idsByCmd(str)
+		_, _, ok, err = d.QueryTableStatsByAccounts(
+			context.Background(), nil, ids, false, true)
+
+		if ok {
+			return "success"
+		} else {
+			return fmt.Sprintf("failed, err: %v", err)
 		}
 	}
 
-	_, retAcc, err, ok = d.QueryTableStatsByAccounts(
-		context.Background(), nil, accIds, false, true)
-
-	if ok {
-		uniqueAcc := make(map[uint64]struct{})
-		for i := range retAcc {
-			uniqueAcc[retAcc[i]] = struct{}{}
+	recomputingDatabase := func(str string) string {
+		ids := idsByCmd(str)
+		_, _, ok, err = d.QueryTableStatsByDatabase(
+			context.Background(), nil, ids, false, true)
+		if ok {
+			return "success"
+		} else {
+			return fmt.Sprintf("failed, err: %v", err)
 		}
-
-		for k := range uniqueAcc {
-			buf.WriteString(fmt.Sprintf("%d ", k))
-		}
-
-		buf.WriteString("succeed")
-	} else {
-		buf.WriteString(fmt.Sprintf("failed, err: %v", err))
 	}
 
-	return buf.String()
+	recomputingTable := func(str string) string {
+		ids := idsByCmd(str)
+		_, _, ok, err = d.QueryTableStatsByTable(
+			context.Background(), nil, ids, false, true)
+		if ok {
+			return "success"
+		} else {
+			return fmt.Sprintf("failed, err: %v", err)
+		}
+	}
+
+	strs := strings.Split(para, ".")
+	if len(strs) != 2 {
+		return "invalid command"
+	}
+
+	switch strs[0] {
+	case "acc":
+		return recomputingAccount(strs[1])
+	case "db":
+		return recomputingDatabase(strs[1])
+	case "tbl":
+		return recomputingTable(strs[1])
+	case "gama":
+		switch strs[1] {
+		case "forgotten":
+			d.NotifyUpdateForgotten()
+		case "clean":
+			d.NotifyCleanDeletes()
+		case "new":
+			d.NotifyInsertNewTable()
+		default:
+			return "invalid command"
+		}
+		return "success"
+	default:
+		return "invalid command"
+	}
 }
 
 func (d *dynamicCtx) checkMoveOnTask() bool {
@@ -745,9 +864,95 @@ func (d *dynamicCtx) setForceUpdate(newVal bool) string {
 	return ret
 }
 
+type builder struct {
+	buf []byte
+}
+
+func (b *builder) writeString(s string) {
+	b.buf = append(b.buf, s...)
+}
+
+func (b *builder) string() string {
+	return unsafe.String(unsafe.SliceData(b.buf), len(b.buf))
+}
+
+func (b *builder) reset() {
+	b.buf = b.buf[:0]
+}
+
+var builderPool = sync.Pool{
+	New: func() any {
+		return &builder{
+			buf: make([]byte, 0, 8192),
+		}
+	},
+}
+
+func intsJoin(items []uint64, delimiter string) (string, func()) {
+	bb := builderPool.Get().(*builder)
+	for i, item := range items {
+		bb.writeString(strconv.FormatUint(item, 10))
+		if i < len(items)-1 {
+			bb.writeString(delimiter)
+		}
+	}
+
+	return bb.string(), func() {
+		bb.reset()
+		builderPool.Put(bb)
+	}
+}
+
+func joinAccountDatabase(accIds []uint64, dbIds []uint64) (string, func()) {
+	bb := builderPool.Get().(*builder)
+	for i := range accIds {
+		bb.writeString("(account_id = ")
+		bb.writeString(strconv.FormatUint(accIds[i], 10))
+		bb.writeString(" AND database_id = ")
+		bb.writeString(strconv.FormatUint(dbIds[i], 10))
+		bb.writeString(")")
+
+		if i < len(accIds)-1 {
+			bb.writeString(" OR ")
+		}
+	}
+
+	return bb.string(), func() {
+		bb.reset()
+		builderPool.Put(bb)
+	}
+}
+
+func joinAccountDatabaseTable(
+	accIds []uint64, dbIds []uint64, tblIds []uint64,
+) (string, func()) {
+
+	bb := builderPool.Get().(*builder)
+	for i := range accIds {
+		bb.writeString("(account_id = ")
+		bb.writeString(strconv.FormatUint(accIds[i], 10))
+		bb.writeString(" AND database_id = ")
+		bb.writeString(strconv.FormatUint(dbIds[i], 10))
+		bb.writeString(" AND table_id = ")
+		bb.writeString(strconv.FormatUint(tblIds[i], 10))
+		bb.writeString(")")
+
+		if i < len(accIds)-1 {
+			bb.writeString(" OR ")
+		}
+	}
+
+	return bb.string(), func() {
+		bb.reset()
+		builderPool.Put(bb)
+	}
+}
+
 func (d *dynamicCtx) executeSQL(ctx context.Context, sql string, hint string) ie.InternalExecResult {
 	exec := d.executorPool.Get()
 	defer d.executorPool.Put(exec)
+
+	ctx = turn2SysCtx(ctx)
 
 	var (
 		newCtx = ctx
@@ -770,24 +975,12 @@ func (d *dynamicCtx) executeSQL(ctx context.Context, sql string, hint string) ie
 	return ret
 }
 
-func intsJoin(items []uint64, delimiter string) string {
-	var builder strings.Builder
-	builder.Grow(mpool.MB)
-	for i, item := range items {
-		builder.WriteString(strconv.FormatUint(item, 10))
-		if i < len(items)-1 {
-			builder.WriteString(delimiter)
-		}
-	}
-	return builder.String()
-}
-
 func (d *dynamicCtx) forceUpdateQuery(
 	ctx context.Context,
 	wantedStatsIdxes []int,
 	accs, dbs, tbls []uint64,
 	resetUpdateTime bool,
-	eng *Engine,
+	caller string,
 ) (statsVals [][]any, err error) {
 
 	if len(tbls) == 0 {
@@ -799,16 +992,22 @@ func (d *dynamicCtx) forceUpdateQuery(
 		val     any
 		stdTime time.Time
 		pairs   = make([]tablePair, 0, len(tbls))
-		oldTS   = make([]*timestamp.Timestamp, len(tbls))
+		oldTS   = make([]timestamp.Timestamp, len(tbls))
 	)
 
 	if !resetUpdateTime {
 
-		sql := fmt.Sprintf(getUpdateTSSQL,
-			catalog.MO_CATALOG, catalog.MO_TABLE_STATS,
-			intsJoin(accs, ","),
-			intsJoin(dbs, ","),
-			intsJoin(tbls, ","))
+		accStr, release1 := intsJoin(accs, ",")
+		dbStr, release2 := intsJoin(dbs, ",")
+		tblStr, release3 := intsJoin(tbls, ",")
+
+		defer func() {
+			release1()
+			release2()
+			release3()
+		}()
+
+		sql := fmt.Sprintf(getUpdateTSSQL, catalog.MO_CATALOG, catalog.MO_TABLE_STATS, accStr, dbStr, tblStr)
 
 		sqlRet := d.executeSQL(ctx, sql, "force update query")
 		if sqlRet.Error() != nil {
@@ -831,37 +1030,21 @@ func (d *dynamicCtx) forceUpdateQuery(
 			}
 
 			idx := slices.Index(tbls, uint64(tblId))
-			oldTS[idx] = &timestamp.Timestamp{PhysicalTime: stdTime.UnixNano()}
-		}
-
-		var notExist = make([]uint64, 0, 1)
-		for i := range oldTS {
-			if oldTS[i] == nil {
-				oldTS[i] = &timestamp.Timestamp{}
-				notExist = append(notExist, tbls[i])
-			}
+			oldTS[idx] = timestamp.Timestamp{PhysicalTime: stdTime.UnixNano()}
 		}
 
 		if err = getChangedTableList(
-			ctx, eng.service, eng, accs, dbs, tbls, oldTS, &pairs, &to); err != nil {
+			ctx, d.de.service, d.de,
+			accs, dbs, tbls,
+			oldTS, &pairs, &to, cmd_util.CheckChanged); err != nil {
 			return
-		}
-
-		// if a table not exist in mo table stats table, need update stats.
-		if len(notExist) != 0 {
-			for i := range pairs {
-				idx := slices.Index(notExist, uint64(pairs[i].tbl))
-				if idx != -1 {
-					pairs[i].onlyUpdateTS = false
-				}
-			}
 		}
 
 	} else {
 		to = types.BuildTS(time.Now().UnixNano(), 0)
 
 		for i := range tbls {
-			tbl, ok := buildTablePairFromCache(eng, accs[i], dbs[i], tbls[i], to, false)
+			tbl, ok := buildTablePairFromCache(d.de, accs[i], dbs[i], tbls[i], to, false)
 			if !ok {
 				continue
 			}
@@ -870,8 +1053,8 @@ func (d *dynamicCtx) forceUpdateQuery(
 		}
 	}
 
-	if err = d.alphaTask(ctx, eng.service, eng, pairs,
-		fmt.Sprintf("forceUpdateQuery(reset_update=%v)", resetUpdateTime)); err != nil {
+	if err = d.callAlphaWithRetry(
+		ctx, d.de.service, pairs, caller, 2); err != nil {
 		return nil, err
 	}
 
@@ -894,12 +1077,17 @@ func (d *dynamicCtx) normalQuery(
 		return
 	}
 
-	sql := fmt.Sprintf(getTableStatsSQL,
-		catalog.MO_CATALOG,
-		catalog.MO_TABLE_STATS,
-		intsJoin(accs, ","),
-		intsJoin(dbs, ","),
-		intsJoin(tbls, ","))
+	accStr, release1 := intsJoin(accs, ",")
+	dbStr, release2 := intsJoin(dbs, ",")
+	tblStr, release3 := intsJoin(tbls, ",")
+
+	defer func() {
+		release1()
+		release2()
+		release3()
+	}()
+
+	sql := fmt.Sprintf(getTableStatsSQL, catalog.MO_CATALOG, catalog.MO_TABLE_STATS, accStr, dbStr, tblStr)
 
 	sqlRet := d.executeSQL(ctx, sql, "normal query")
 	if sqlRet.Error() != nil {
@@ -960,13 +1148,37 @@ func (d *dynamicCtx) normalQuery(
 	return statsVals, nil
 }
 
+func (d *dynamicCtx) queryTableStatsByXXX(
+	ctx context.Context,
+	sql string,
+	hint string,
+	wantedStatsIdxes []int,
+	forceUpdate bool,
+	resetUpdateTime bool,
+) (statsVals [][]any, accs, dbs, tbls []uint64, ok bool, err error) {
+
+	sqlRet := d.executeSQL(ctx, sql, hint)
+	if err = sqlRet.Error(); err != nil {
+		return
+	}
+
+	if accs, dbs, tbls, err = decodeIdsFromMOTablesSqlRet(ctx, sqlRet); err != nil {
+		return
+	}
+
+	statsVals, err, ok = d.QueryTableStats(
+		ctx, wantedStatsIdxes, accs, dbs, tbls, forceUpdate, resetUpdateTime)
+
+	return
+}
+
 func (d *dynamicCtx) QueryTableStatsByAccounts(
 	ctx context.Context,
 	wantedStatsIdxes []int,
 	accs []uint64,
 	forceUpdate bool,
 	resetUpdateTime bool,
-) (statsVals [][]any, retAcc []uint64, err error, ok bool) {
+) (statsVals [][]any, retAcc []uint64, ok bool, err error) {
 
 	if len(accs) == 0 {
 		return
@@ -974,43 +1186,17 @@ func (d *dynamicCtx) QueryTableStatsByAccounts(
 
 	now := time.Now()
 
-	newCtx := turn2SysCtx(ctx)
-
-	sql := fmt.Sprintf(accumulateIdsByAccSQL,
-		catalog.MO_CATALOG, catalog.MO_TABLES, intsJoin(accs, ","))
-
-	sqlRet := d.executeSQL(newCtx, sql, "query table stats by accounts")
-	if err = sqlRet.Error(); err != nil {
-		return
-	}
+	accStr, release := intsJoin(accs, ",")
+	sql := fmt.Sprintf(accumulateIdsByAccSQL, catalog.MO_CATALOG, catalog.MO_TABLES, accStr)
+	release()
 
 	var (
-		val any
-
-		accs2 = make([]uint64, 0, sqlRet.RowCount())
-		dbs   = make([]uint64, 0, sqlRet.RowCount())
-		tbls  = make([]uint64, 0, sqlRet.RowCount())
+		tbls []uint64
 	)
 
-	for i := range sqlRet.RowCount() {
-		if val, err = sqlRet.Value(newCtx, i, 0); err != nil {
-			return
-		}
-		accs2 = append(accs2, uint64(val.(uint32)))
-
-		if val, err = sqlRet.Value(newCtx, i, 1); err != nil {
-			return
-		}
-		dbs = append(dbs, val.(uint64))
-
-		if val, err = sqlRet.Value(newCtx, i, 2); err != nil {
-			return
-		}
-		tbls = append(tbls, val.(uint64))
-	}
-
-	statsVals, err, ok = d.QueryTableStats(
-		newCtx, wantedStatsIdxes, accs2, dbs, tbls, forceUpdate, resetUpdateTime, nil)
+	statsVals, retAcc, _, tbls, ok, err = d.queryTableStatsByXXX(
+		ctx, sql, "query table stats by account",
+		wantedStatsIdxes, forceUpdate, resetUpdateTime)
 
 	logutil.Info(logHeader,
 		zap.String("source", "QueryTableStatsByAccounts"),
@@ -1022,7 +1208,76 @@ func (d *dynamicCtx) QueryTableStatsByAccounts(
 		zap.Bool("ok", ok),
 		zap.Error(err))
 
-	return statsVals, accs2, err, ok
+	return statsVals, retAcc, ok, err
+}
+
+func (d *dynamicCtx) QueryTableStatsByDatabase(
+	ctx context.Context,
+	wantedStatsIdxes []int,
+	dbIds []uint64,
+	forceUpdate bool,
+	resetUpdateTime bool,
+) (statsVals [][]any, retDb []uint64, ok bool, err error) {
+
+	if len(dbIds) == 0 {
+		return
+	}
+
+	now := time.Now()
+
+	dbIdStr, release := intsJoin(dbIds, ",")
+	sql := fmt.Sprintf(accumulateIdsByDatabaseSQL, catalog.MO_CATALOG, catalog.MO_TABLES, dbIdStr)
+	release()
+
+	var tbls []uint64
+
+	statsVals, _, retDb, tbls, ok, err = d.queryTableStatsByXXX(
+		ctx, sql, "query table stats by database", wantedStatsIdxes, forceUpdate, resetUpdateTime)
+
+	logutil.Info(logHeader,
+		zap.String("source", "QueryTableStatsByDatabase"),
+		zap.Int("db cnt", len(dbIds)),
+		zap.Int("tbl cnt", len(tbls)),
+		zap.Bool("forceUpdate", forceUpdate),
+		zap.Bool("resetUpdateTime", resetUpdateTime),
+		zap.Duration("takes", time.Since(now)),
+		zap.Bool("ok", ok),
+		zap.Error(err))
+
+	return statsVals, retDb, ok, err
+}
+
+func (d *dynamicCtx) QueryTableStatsByTable(
+	ctx context.Context,
+	wantedStatsIdxes []int,
+	tblIds []uint64,
+	forceUpdate bool,
+	resetUpdateTime bool,
+) (statsVals [][]any, retTbls []uint64, ok bool, err error) {
+
+	if len(tblIds) == 0 {
+		return
+	}
+
+	now := time.Now()
+
+	tblStr, release := intsJoin(tblIds, ",")
+	sql := fmt.Sprintf(accumulateIdsByTableSQL, catalog.MO_CATALOG, catalog.MO_TABLES, tblStr)
+	release()
+
+	statsVals, _, _, retTbls, ok, err = d.queryTableStatsByXXX(
+		ctx, sql, "query table stats by table", wantedStatsIdxes, forceUpdate, resetUpdateTime)
+
+	logutil.Info(logHeader,
+		zap.String("source", "QueryTableStatsByTable"),
+		zap.Int("tbl cnt", len(tblIds)),
+		zap.Bool("forceUpdate", forceUpdate),
+		zap.Bool("resetUpdateTime", resetUpdateTime),
+		zap.Duration("takes", time.Since(now)),
+		zap.Bool("ok", ok),
+		zap.Error(err))
+
+	return statsVals, retTbls, ok, err
 }
 
 func (d *dynamicCtx) QueryTableStats(
@@ -1031,7 +1286,6 @@ func (d *dynamicCtx) QueryTableStats(
 	accs, dbs, tbls []uint64,
 	forceUpdate bool,
 	resetUpdateTime bool,
-	eng engine.Engine,
 ) (statsVals [][]any, err error, ok bool) {
 
 	d.Lock()
@@ -1039,12 +1293,6 @@ func (d *dynamicCtx) QueryTableStats(
 	d.Unlock()
 	if useOld {
 		return
-	}
-
-	if eng == nil {
-		d.Lock()
-		eng = d.de
-		d.Unlock()
 	}
 
 	var now = time.Now()
@@ -1064,24 +1312,11 @@ func (d *dynamicCtx) QueryTableStats(
 	newCtx := turn2SysCtx(ctx)
 
 	if forceUpdate || resetUpdateTime {
-		if len(tbls) >= defaultGetTableListLimit {
-			logutil.Warn(logHeader,
-				zap.String("source", "query with force update"),
-				zap.Int("tbl-list-length", len(tbls)))
-		}
-
-		var de *Engine
-		if val, ok := eng.(*engine.EntireEngine); ok {
-			de = val.Engine.(*Engine)
-		} else {
-			de = eng.(*Engine)
-		}
-
 		statsVals, err = d.forceUpdateQuery(
 			newCtx, wantedStatsIdxes,
 			accs, dbs, tbls,
 			resetUpdateTime,
-			de)
+			"query table stats")
 		return statsVals, err, true
 	}
 
@@ -1101,7 +1336,7 @@ func (d *dynamicCtx) MTSTableSize(
 	statsVals, err, _ := d.QueryTableStats(
 		ctx, []int{TableStatsTableSize},
 		accs, dbs, tbls,
-		forceUpdate, resetUpdateTime, eng)
+		forceUpdate, resetUpdateTime)
 	if err != nil {
 		return nil, err
 	}
@@ -1128,7 +1363,7 @@ func (d *dynamicCtx) MTSTableRows(
 	statsVals, err, _ := d.QueryTableStats(
 		ctx, []int{TableStatsTableRows},
 		accs, dbs, tbls,
-		forceUpdate, resetUpdateTime, eng)
+		forceUpdate, resetUpdateTime)
 	if err != nil {
 		return nil, err
 	}
@@ -1149,7 +1384,7 @@ func (d *dynamicCtx) MTSTableRows(
 type tablePair struct {
 	valid bool
 
-	errChan chan error
+	errChan chan alphaError
 
 	relKind    string
 	pkSequence int
@@ -1161,6 +1396,13 @@ type tablePair struct {
 
 	snapshot types.TS
 	pState   *logtailreplay.PartitionState
+
+	alphaOrder int
+}
+
+type alphaError struct {
+	order int
+	err   error
 }
 
 func buildTablePairFromCache(
@@ -1202,7 +1444,10 @@ func (tp *tablePair) String() string {
 
 func (tp *tablePair) Done(err error) {
 	if tp.errChan != nil {
-		tp.errChan <- err
+		tp.errChan <- alphaError{
+			err:   err,
+			order: tp.alphaOrder,
+		}
 		tp.errChan = nil
 	}
 }
@@ -1295,18 +1540,25 @@ func (d *dynamicCtx) tableStatsExecutor(
 	eng engine.Engine,
 ) (err error) {
 
-	newCtx := turn2SysCtx(ctx)
+	defer func() {
+		logutil.Info(logHeader,
+			zap.String("source", "table stats top executor"),
+			zap.String("exit by", fmt.Sprintf("%v", err)))
+	}()
 
-	tickerDur := time.Second
-	executeTicker := time.NewTicker(tickerDur)
+	var (
+		timeout bool
+		newCtx  = turn2SysCtx(ctx)
+
+		tickerDur     = time.Second
+		executeTicker = time.NewTicker(tickerDur)
+	)
 
 	for {
 		select {
 		case <-newCtx.Done():
-			logutil.Info(logHeader,
-				zap.String("source", "table stats top executor"),
-				zap.String("exit by ctx done", fmt.Sprintf("%v", newCtx.Err())))
-			return newCtx.Err()
+			err = newCtx.Err()
+			return
 
 		case <-executeTicker.C:
 			if d.checkMoveOnTask() {
@@ -1321,8 +1573,8 @@ func (d *dynamicCtx) tableStatsExecutor(
 			tbls := d.tableStock.tbls[:]
 			d.Unlock()
 
-			if err = d.alphaTask(
-				newCtx, service, eng,
+			if timeout, err = d.alphaTask(
+				newCtx, service,
 				tbls,
 				"main routine",
 			); err != nil {
@@ -1333,6 +1585,17 @@ func (d *dynamicCtx) tableStatsExecutor(
 			}
 
 			d.Lock()
+
+			if len(d.tableStock.tbls) > 0 && !timeout {
+				// if alpha timeout, this round should mark as failed,
+				// skip the update of the special stats start.
+				if _, err = d.updateSpecialStatsStart(
+					ctx, service, eng, d.tableStock.specialTo, d.tableStock.specialFrom); err != nil {
+					d.Unlock()
+					return err
+				}
+			}
+
 			executeTicker.Reset(d.conf.UpdateDuration)
 			d.tableStock.tbls = d.tableStock.tbls[:0]
 			d.Unlock()
@@ -1352,54 +1615,74 @@ func (d *dynamicCtx) prepare(
 	d.Lock()
 	defer d.Unlock()
 
-	offsetTS := types.TS{}
-	for len(d.tableStock.tbls) == 0 {
-		accs, dbs, tbls, ts, err := d.getCandidates(ctx, service, eng, d.conf.GetTableListLimit, offsetTS)
-		if err != nil {
-			return err
-		}
+	var (
+		from types.TS
+		to   types.TS
+	)
 
-		if len(ts) == 0 {
-			break
-		}
-
-		err = getChangedTableList(
-			ctx, service, eng, accs, dbs, tbls, ts,
-			&d.tableStock.tbls,
-			&d.tableStock.newest)
-
-		if err != nil {
-			return err
-		}
-
-		// in case of all candidates have been deleted.
-		offsetTS = types.TimestampToTS(*ts[len(ts)-1])
-
-		if len(d.tableStock.tbls) == 0 && offsetTS.IsEmpty() {
-			// there exists a large number of deleted table which are new inserts
-			logutil.Info(logHeader,
-				zap.String("source", "prepare"),
-				zap.String("info", "found new inserts deletes, force clean"))
-
-			d.NotifyCleanDeletes()
-			break
-		}
+	if from, to, err = d.getBetweenForChangedList(ctx, service, eng); err != nil {
+		return
 	}
 
+	d.tableStock.specialTo = to
+	d.tableStock.specialFrom = from
+
+	err = getChangedTableList(
+		ctx, service, eng, nil, nil, nil,
+		[]timestamp.Timestamp{from.ToTimestamp(), to.ToTimestamp()},
+		&d.tableStock.tbls,
+		&d.tableStock.specialTo, cmd_util.CollectChanged)
+
 	return err
+}
+
+func (d *dynamicCtx) callAlphaWithRetry(
+	ctx context.Context,
+	service string,
+	tbls []tablePair,
+	caller string,
+	retryTimes int,
+) (err error) {
+
+	var (
+		round   int
+		timeout bool
+	)
+
+	defer func() {
+		if round > 1 || round >= retryTimes || timeout {
+			logutil.Warn(logHeader,
+				zap.String("source", caller),
+				zap.Int("alpha tried", round),
+				zap.Int("specified retry times", retryTimes),
+				zap.Bool("final round timeout", timeout))
+		}
+	}()
+
+	for {
+		if timeout, err = d.alphaTask(
+			ctx, d.de.service, tbls,
+			caller); err != nil {
+			return err
+		}
+
+		round++
+		if !timeout || round >= retryTimes {
+			break
+		}
+
+		time.Sleep(time.Second)
+	}
+
+	return nil
 }
 
 func (d *dynamicCtx) alphaTask(
 	ctx context.Context,
 	service string,
-	eng engine.Engine,
 	tbls []tablePair,
 	caller string,
-) (err error) {
-
-	if len(tbls) == 0 {
-		return
-	}
+) (timeout bool, err error) {
 
 	// maybe the task exited, need to launch a new one
 	d.launchTask(betaTaskName)
@@ -1412,6 +1695,11 @@ func (d *dynamicCtx) alphaTask(
 
 		enterWait  bool
 		waitErrDur time.Duration
+
+		tblBackup    = tbls[:]
+		orderCounter int
+
+		timeoutBuf = bytes.Buffer{}
 	)
 
 	// batCnt -> [200, 500]
@@ -1428,35 +1716,47 @@ func (d *dynamicCtx) alphaTask(
 			zap.Int("batch count", batCnt),
 			zap.Duration("takes", dur),
 			zap.Duration("wait err", waitErrDur),
-			zap.String("caller", caller))
+			zap.String("caller", caller),
+			zap.String("timeout tbl", timeoutBuf.String()))
 
 		v2.AlphaTaskDurationHistogram.Observe(dur.Seconds())
 		v2.AlphaTaskCountingHistogram.Observe(float64(processed))
 	}()
 
+	if len(tbls) == 0 {
+		return
+	}
+
+	for i := range tbls {
+		tbls[i].alphaOrder = orderCounter
+		orderCounter++
+	}
+
 	wg := sync.WaitGroup{}
 
-	errQueue := make(chan error, len(tbls)*2)
+	errQueue := make(chan alphaError, len(tbls)*2)
 	ticker = time.NewTicker(time.Millisecond * 10)
 
 	for {
 		select {
 		case <-ctx.Done():
 			err = ctx.Err()
-			return err
+			return
 
-		case err = <-errQueue:
-			if err != nil {
+		case ae := <-errQueue:
+			if ae.err != nil {
 				logutil.Error(logHeader,
 					zap.String("source", "alpha task received err"),
-					zap.Error(err))
+					zap.Error(ae.err))
 			}
+
+			tblBackup[ae.order].valid = false
 
 			errWaitToReceive--
 			if errWaitToReceive <= 0 {
 				// all processed
 				close(errQueue)
-				return nil
+				return
 			}
 
 		case <-ticker.C:
@@ -1471,15 +1771,23 @@ func (d *dynamicCtx) alphaTask(
 					enterWait = true
 				}
 
-				if waitErrDur > time.Minute*5 {
+				if waitErrDur >= time.Minute*5 {
 					// waiting reached the limit
-					return nil
+					for i := range tblBackup {
+						if !tblBackup[i].valid {
+							continue
+						}
+						timeoutBuf.WriteString(fmt.Sprintf("%d-%d(%v)-%d(%v); ",
+							tblBackup[i].acc, tblBackup[i].db, tblBackup[i].dbName,
+							tblBackup[i].tbl, tblBackup[i].tblName))
+					}
+					return true, nil
 				}
 
-				if waitErrDur > 0 && waitErrDur%(time.Second*10) == 0 {
+				if waitErrDur > 0 && waitErrDur%(time.Second*30) == 0 {
 					logutil.Warn(logHeader,
 						zap.String("source", "alpha task"),
-						zap.String("event", "waited err another 10s"),
+						zap.String("event", "waited err another 30s"),
 						zap.String("caller", caller),
 						zap.Int("total", processed),
 						zap.Int("left", errWaitToReceive))
@@ -1500,7 +1808,7 @@ func (d *dynamicCtx) alphaTask(
 					var err2 error
 					var pState *logtailreplay.PartitionState
 					if !tbls[i].onlyUpdateTS {
-						if pState, err2 = subscribeTable(ctx, service, eng, tbls[i]); err2 != nil {
+						if pState, err2 = subscribeTable(ctx, service, d.de, tbls[i]); err2 != nil {
 							logutil.Info(logHeader,
 								zap.String("source", "alpha task"),
 								zap.String("subscribe failed", err2.Error()),
@@ -1569,6 +1877,7 @@ func (d *dynamicCtx) betaTask(
 			return
 
 		case tbl := <-d.tblQueue:
+
 			if !tbl.valid {
 				// an alpha batch transmit done
 				d.bulkUpdateTableOnlyTS(ctx, service, onlyTSBat)
@@ -1617,6 +1926,10 @@ func (d *dynamicCtx) NotifyUpdateForgotten() {
 	d.updateForgottenQueue <- struct{}{}
 }
 
+func (d *dynamicCtx) NotifyInsertNewTable() {
+	d.insertNewTableQueue <- struct{}{}
+}
+
 func (d *dynamicCtx) gamaInsertNewTables(
 	ctx context.Context,
 	service string,
@@ -1642,10 +1955,12 @@ func (d *dynamicCtx) gamaInsertNewTables(
 	var (
 		val any
 
-		values = make([]string, 0, sqlRet.RowCount())
+		pairs []tablePair
 
-		dbName, tblName    string
 		accId, dbId, tblId uint64
+
+		values = make([]string, 0, sqlRet.RowCount())
+		now    = types.BuildTS(time.Now().UnixNano(), 0)
 	)
 
 	defer func() {
@@ -1655,7 +1970,9 @@ func (d *dynamicCtx) gamaInsertNewTables(
 			zap.Error(err))
 	}()
 
-	valFmt := "(%d,%d,%d,'%s','%s','{}','%s',0)"
+	if sqlRet.RowCount() == 0 {
+		return
+	}
 
 	for i := range sqlRet.RowCount() {
 		if val, err = sqlRet.Value(ctx, i, 5); err != nil {
@@ -1671,42 +1988,60 @@ func (d *dynamicCtx) gamaInsertNewTables(
 		}
 		accId = uint64(val.(uint32))
 
-		if val, err = sqlRet.Value(ctx, i, 1); err != nil {
-			return
-		}
-		dbName = string(val.([]uint8))
-
 		if val, err = sqlRet.Value(ctx, i, 2); err != nil {
 			return
 		}
 		dbId = val.(uint64)
-
-		if val, err = sqlRet.Value(ctx, i, 3); err != nil {
-			return
-		}
-		tblName = string(val.([]uint8))
 
 		if val, err = sqlRet.Value(ctx, i, 4); err != nil {
 			return
 		}
 		tblId = val.(uint64)
 
-		values = append(values, fmt.Sprintf(valFmt,
-			accId, dbId, tblId, dbName, tblName,
-			timestamp.Timestamp{}.ToStdTime().
-				Format("2006-01-02 15:04:05.000000")))
+		if tp, ok := buildTablePairFromCache(
+			eng, accId, dbId, tblId, now, false); !ok {
+			continue
+		} else {
+			pairs = append(pairs, tp)
+		}
 	}
 
-	if len(values) == 0 {
-		return
+	err = d.callAlphaWithRetry(ctx, service, pairs, "gama insert new tables", 2)
+}
+
+func decodeIdsFromMOTablesSqlRet(
+	ctx context.Context,
+	sqlRet ie.InternalExecResult,
+) (ids1, ids2, ids3 []uint64, err error) {
+
+	var val any
+
+	for i := range sqlRet.RowCount() {
+		if val, err = sqlRet.Value(ctx, i, 0); err != nil {
+			return
+		}
+		ids1 = append(ids1, uint64(val.(uint32)))
+
+		if sqlRet.ColumnCount() == 1 {
+			continue
+		}
+
+		if val, err = sqlRet.Value(ctx, i, 1); err != nil {
+			return
+		}
+		ids2 = append(ids2, val.(uint64))
+
+		if sqlRet.ColumnCount() == 2 {
+			continue
+		}
+
+		if val, err = sqlRet.Value(ctx, i, 2); err != nil {
+			return
+		}
+		ids3 = append(ids3, val.(uint64))
 	}
 
-	sql = fmt.Sprintf(insertNewTablesSQL,
-		catalog.MO_CATALOG, catalog.MO_TABLE_STATS,
-		strings.Join(values, ","))
-
-	sqlRet = d.executeSQL(ctx, sql, "insert new table-1: insert new tables")
-	err = sqlRet.Error()
+	return ids1, ids2, ids3, nil
 }
 
 func decodeIdsFromMoTableStatsSqlRet(
@@ -1756,154 +2091,274 @@ func (d *dynamicCtx) gamaUpdateForgotten(
 	// 		may leave some tables never been updated.
 	// 		this opA does such correction.
 	//
-	// case 2:
-	// 		stats update time un changed for long time. ( >= 1H?)
 
 	var (
 		err error
 		now = time.Now()
 
-		tbls   = make([]tablePair, 0, 1)
-		accIds []uint64
-		dbIds  []uint64
-		tblIds []uint64
+		nullStatsCnt       int
+		missUpdateCheckCnt int
 	)
 
 	defer func() {
 		logutil.Info(logHeader,
 			zap.String("source", "gama task"),
-			zap.Int("update forgotten", len(tbls)),
+			zap.Int("null stats cnt", nullStatsCnt),
+			zap.Int("miss update check cnt", missUpdateCheckCnt),
 			zap.Duration("takes", time.Since(now)),
 			zap.Error(err))
 	}()
 
-	staleTS := types.BuildTS(time.Now().Add(-2*time.Hour).UnixNano(), 0).ToTimestamp()
+	idsToPairs := func(accIds, dbIds, tblIds []uint64, to types.TS) []tablePair {
+		tbls := make([]tablePair, 0, 1)
 
-	sql := fmt.Sprintf(getNullStatsSQL,
-		catalog.MO_CATALOG, catalog.MO_TABLE_STATS,
-		staleTS.ToStdTime().Format("2006-01-02 15:04:05.000000"), limit)
-	sqlRet := d.executeSQL(ctx, sql, "gama task: get null stats list")
-	if err = sqlRet.Error(); err != nil {
-		return
-	}
+		for i := range tblIds {
+			tbl, ok := buildTablePairFromCache(de, accIds[i], dbIds[i], tblIds[i], to, false)
+			if !ok {
+				continue
+			}
 
-	to := types.BuildTS(time.Now().UnixNano(), 0)
-
-	accIds, dbIds, tblIds, err = decodeIdsFromMoTableStatsSqlRet(ctx, sqlRet)
-	if err != nil {
-		return
-	}
-
-	for i := range tblIds {
-		tbl, ok := buildTablePairFromCache(de, accIds[i], dbIds[i], tblIds[i], to, false)
-		if !ok {
-			continue
+			tbls = append(tbls, tbl)
 		}
 
-		tbls = append(tbls, tbl)
+		return tbls
 	}
 
-	if err = d.alphaTask(
-		ctx, service, de, tbls, "gama opA"); err != nil {
+	retrieveIds := func(sql string) ([]uint64, []uint64, []uint64, error) {
+		var (
+			accIds []uint64
+			dbIds  []uint64
+			tblIds []uint64
+		)
+
+		sqlRet := d.executeSQL(ctx, sql, "gama task: get null stats list")
+		if err = sqlRet.Error(); err != nil {
+			return accIds, dbIds, tblIds, err
+		}
+
+		accIds, dbIds, tblIds, err = decodeIdsFromMoTableStatsSqlRet(ctx, sqlRet)
+		if err != nil {
+			return accIds, dbIds, tblIds, err
+		}
+
+		return accIds, dbIds, tblIds, nil
+	}
+
+	updateNullStats := func() error {
+		var (
+			tbls []tablePair
+			sql  string
+
+			accIds []uint64
+			dbIds  []uint64
+			tblIds []uint64
+		)
+
+		to := types.BuildTS(time.Now().UnixNano(), 0)
+
+		sql = fmt.Sprintf(getNullStatsSQL, catalog.MO_CATALOG, catalog.MO_TABLE_STATS, limit)
+
+		if accIds, dbIds, tblIds, err = retrieveIds(sql); err != nil {
+			return err
+		}
+
+		tbls = idsToPairs(accIds, dbIds, tblIds, to)
+
+		nullStatsCnt = len(tbls)
+
+		err = d.callAlphaWithRetry(ctx, service, tbls, "gama update null stats", 2)
+
+		v2.GamaTaskCountingHistogram.Observe(float64(nullStatsCnt))
+		v2.GamaTaskDurationHistogram.Observe(time.Since(now).Seconds())
+
+		return nil
+	}
+
+	checkForgotten := func() error {
+		var (
+			sql string
+
+			accIds []uint64
+			dbIds  []uint64
+			tblIds []uint64
+
+			minimalChecked uint64
+			stats          map[string]any
+		)
+
+		if stats, err = d.getSpecialStats(ctx, service, d.de); err != nil {
+			return err
+		}
+
+		if stats != nil && stats[specialMinimalChecked] != nil {
+			minimalChecked = uint64(stats[specialMinimalChecked].(float64))
+		}
+
+		sql = fmt.Sprintf(getNextCheckBatchSQL,
+			catalog.MO_CATALOG, catalog.MO_TABLE_STATS, minimalChecked, specialDatabaseId, limit*2)
+
+		if accIds, dbIds, tblIds, err = retrieveIds(sql); err != nil {
+			return err
+		}
+
+		missUpdateCheckCnt = len(tblIds)
+		if len(tblIds) > 0 {
+			if _, err = d.forceUpdateQuery(
+				ctx, nil, accIds, dbIds, tblIds, false,
+				"gama update forgotten"); err != nil {
+				return err
+			}
+
+			minimalChecked = slices.Max(tblIds)
+		} else {
+			// if there has no table > minimal checked table id, means that
+			// all tables have checked in this round.
+			logutil.Info(logHeader,
+				zap.String("source", "reset minimal checked table id"),
+				zap.Uint64("last checked table id", minimalChecked))
+
+			minimalChecked = 0
+		}
+
+		if _, err = d.updateSpecialStatsMinimalChecked(
+			ctx, service, d.de, types.BuildTS(time.Now().UnixNano(), 0), minimalChecked); err != nil {
+			return err
+		}
+
+		return nil
+	}
+
+	if err = updateNullStats(); err != nil {
 		return
 	}
 
-	v2.GamaTaskCountingHistogram.Observe(float64(len(tbls)))
-	v2.GamaTaskDurationHistogram.Observe(time.Since(now).Seconds())
+	if err = checkForgotten(); err != nil {
+		return
+	}
+
 }
 
 func (d *dynamicCtx) gamaCleanDeletes(
 	ctx context.Context,
 	de *Engine,
 ) {
-	//mo_account, mo_database, mo_tables col name
-	colName1 := []string{
-		"account_id", "dat_id", "rel_id",
-	}
-	// mo_table_stats col name
-	colName2 := []string{
-		"account_id", "database_id", "table_id",
-	}
 
-	tblName := []string{
-		catalog.MOAccountTable, catalog.MO_DATABASE, catalog.MO_TABLES,
-	}
+	var (
+		sql    string
+		sqlRet ie.InternalExecResult
 
-	deleteByStep := func(step int) {
-		var (
-			err error
-			now = time.Now()
+		accIds, dbIds, tblIds []uint64
+	)
 
-			ids []uint64
-		)
+	cleanAccounts := func() (deleted []uint64, err error) {
+		sql = fmt.Sprintf(findDeletedAccountSQL,
+			catalog.MO_CATALOG, catalog.MO_TABLE_STATS, catalog.MO_CATALOG, catalog.MOAccountTable)
 
-		defer func() {
-			logutil.Info(logHeader,
-				zap.String("source", "gama task"),
-				zap.Int(fmt.Sprintf("deleted %s", colName2[step]), len(ids)),
-				zap.Duration("takes", time.Since(now)),
-				zap.String("detail", intsJoin(ids, ",")))
-		}()
-
-		sql := fmt.Sprintf(getNextCheckAliveListSQL,
-			colName2[step], colName2[step], catalog.MO_CATALOG, catalog.MO_TABLE_STATS,
-			colName2[step], options.DefaultBlockMaxRows)
-
-		sqlRet := d.executeSQL(ctx, sql, fmt.Sprintf("gama task-%d-0", step))
-		if sqlRet.Error() != nil {
-			return
-		}
-
-		ids, _, _, err = decodeIdsFromMoTableStatsSqlRet(ctx, sqlRet)
-		if len(ids) == 0 || err != nil {
-			return
-		}
-
-		sql = fmt.Sprintf(getCheckAliveSQL,
-			colName1[step], catalog.MO_CATALOG, tblName[step],
-			colName1[step], intsJoin(ids, ","))
-		sqlRet = d.executeSQL(ctx, sql, fmt.Sprintf("gama task-%d-1", step))
+		sqlRet = d.executeSQL(ctx, sql, "clean accounts: find deleted account")
 		if err = sqlRet.Error(); err != nil {
 			return
 		}
 
-		var val any
-		for i := range sqlRet.RowCount() {
-			if val, err = sqlRet.Value(ctx, i, 0); err != nil {
-				continue
-			}
-
-			// remove alive id from slice
-			var aliveId uint64
-			if _, ok := val.(int32); ok {
-				aliveId = uint64(val.(int32))
-			} else {
-				aliveId = val.(uint64)
-			}
-
-			idx := slices.Index(ids, aliveId)
-			ids = append(ids[:idx], ids[idx+1:]...)
+		if accIds, _, _, err = decodeIdsFromMoTableStatsSqlRet(ctx, sqlRet); err != nil {
+			return
 		}
 
-		if len(ids) != 0 {
-			sql = fmt.Sprintf(getDeleteFromStatsSQL, catalog.MO_CATALOG, catalog.MO_TABLE_STATS,
-				colName2[step], intsJoin(ids, ","))
-			sqlRet = d.executeSQL(ctx, sql, fmt.Sprintf("gama task-%d-2", step))
-			if err = sqlRet.Error(); err != nil {
-				return
-			}
+		if len(accIds) == 0 {
+			return
 		}
+
+		accStr, release := intsJoin(accIds, ",")
+		defer func() {
+			release()
+		}()
+
+		where := fmt.Sprintf("account_id in (%v)", accStr)
+
+		sql = fmt.Sprintf(getDeleteFromStatsSQL, catalog.MO_CATALOG, catalog.MO_TABLE_STATS, where)
+		sqlRet = d.executeSQL(ctx, sql, "clean accounts: clean deleted account")
+		return accIds, sqlRet.Error()
 	}
 
-	// clear deleted tbl, db, account
+	cleanDatabase := func() (deleted []uint64, err error) {
+		tmpStr, release := intsJoin([]uint64{specialDatabaseId, catalog.MO_CATALOG_ID}, ",")
 
-	// the stats belong to any deleted accounts/databases/tables have unchanged update time
-	// since they have been deleted.
-	// so opB collects tables ascending their update time and then check if they deleted.
+		sql = fmt.Sprintf(findDeletedDatabaseSQL, catalog.MO_CATALOG,
+			catalog.MO_TABLE_STATS, catalog.MO_CATALOG, catalog.MO_DATABASE, tmpStr)
+		release()
 
-	deleteByStep(0) // clean account
-	deleteByStep(1) // clean database
-	deleteByStep(2) // clean tables
+		sqlRet = d.executeSQL(ctx, sql, "clean database: find deleted database")
+		if err = sqlRet.Error(); err != nil {
+			return
+		}
+
+		if accIds, dbIds, _, err = decodeIdsFromMoTableStatsSqlRet(ctx, sqlRet); err != nil {
+			return
+		}
+
+		if len(accIds) == 0 {
+			return
+		}
+
+		where, release := joinAccountDatabase(accIds, dbIds)
+		sql = fmt.Sprintf(getDeleteFromStatsSQL, catalog.MO_CATALOG, catalog.MO_TABLE_STATS, where)
+		release()
+
+		sqlRet = d.executeSQL(ctx, sql, "clean database: clean deleted database")
+		return dbIds, sqlRet.Error()
+	}
+
+	cleanTable := func() (deleted []uint64, err error) {
+		sql = fmt.Sprintf(findDeletedTableSQL,
+			catalog.MO_CATALOG, catalog.MO_TABLE_STATS, catalog.MO_CATALOG, catalog.MO_TABLES, specialDatabaseId)
+
+		sqlRet = d.executeSQL(ctx, sql, "clean table: find deleted table")
+		if err = sqlRet.Error(); err != nil {
+			return
+		}
+
+		if accIds, dbIds, tblIds, err = decodeIdsFromMoTableStatsSqlRet(ctx, sqlRet); err != nil {
+			return
+		}
+
+		if len(accIds) == 0 {
+			return
+		}
+
+		where, release := joinAccountDatabaseTable(accIds, dbIds, tblIds)
+		sql = fmt.Sprintf(getDeleteFromStatsSQL, catalog.MO_CATALOG, catalog.MO_TABLE_STATS, where)
+		release()
+
+		sqlRet = d.executeSQL(ctx, sql, "clean table: clean deleted table")
+		return tblIds, sqlRet.Error()
+	}
+
+	var (
+		err1 error
+		err2 error
+		err3 error
+
+		now = time.Now()
+
+		delAcc   []uint64
+		delDB    []uint64
+		delTable []uint64
+	)
+
+	defer func() {
+		logutil.Info(logHeader,
+			zap.String("source", "gama clean deletes"),
+			zap.Duration("takes", time.Since(now)),
+			zap.Any("clean account err", err1),
+			zap.Any("clean database err", err2),
+			zap.Any("clean table err", err3),
+			zap.Any("clean accounts cnt", len(delAcc)),
+			zap.Any("clean database cnt", len(delDB)),
+			zap.Any("clean table cnt", len(delTable)))
+	}()
+
+	delAcc, err1 = cleanAccounts()
+	delDB, err2 = cleanDatabase()
+	delTable, err3 = cleanTable()
 }
 
 func (d *dynamicCtx) gamaTask(
@@ -1926,10 +2381,10 @@ func (d *dynamicCtx) gamaTask(
 		return gamaDur + time.Duration(rnd.Intn(1*n))*time.Minute
 	}
 
-	const baseFactory = 30
+	const baseFactory = 60
 	tickerA := time.NewTicker(randDuration(baseFactory))
 	tickerB := time.NewTicker(randDuration(baseFactory))
-	tickerC := time.NewTicker(time.Millisecond)
+	tickerC := time.NewTicker(randDuration(baseFactory))
 
 	for {
 		select {
@@ -1968,8 +2423,13 @@ func (d *dynamicCtx) gamaTask(
 			d.gama.taskPool.Submit(func() {
 				d.gamaInsertNewTables(ctx, service, de)
 			})
-			// try insert table at [1, 5] min
-			tickerC.Reset(randDuration(5))
+			tickerC.Reset(randDuration(baseFactory))
+
+		case <-d.insertNewTableQueue:
+			d.gama.taskPool.Submit(func() {
+				d.gamaInsertNewTables(ctx, service, de)
+			})
+			tickerC.Reset(randDuration(baseFactory))
 		}
 	}
 }
@@ -2008,66 +2468,223 @@ func (d *dynamicCtx) statsCalculateOp(
 	return sl, nil
 }
 
-func (d *dynamicCtx) getCandidates(
+func (d *dynamicCtx) getSpecialStats(
 	ctx context.Context,
 	service string,
 	eng engine.Engine,
-	limit int,
-	offsetTS types.TS,
-) (accs, dbs, tbls []uint64, ts []*timestamp.Timestamp, err error) {
+) (map[string]any, error) {
 
 	var (
+		err    error
+		val    any
 		sql    string
-		where  = ""
+		stats  map[string]any
 		sqlRet ie.InternalExecResult
 	)
 
-	if !offsetTS.IsEmpty() {
-		where = fmt.Sprintf("where update_time >= '%s'",
-			offsetTS.ToTimestamp().
-				ToStdTime().
-				Format("2006-01-02 15:04:05.000000"))
+	sql = fmt.Sprintf(getSingleTableStatsForUpdateSQL,
+		catalog.MO_CATALOG, catalog.MO_TABLE_STATS, specialAccountId, specialDatabaseId, specialTableId)
+
+	sqlRet = d.executeSQL(ctx, sql, "get special stats")
+	if err = sqlRet.Error(); err != nil {
+		return nil, err
 	}
 
-	sql = fmt.Sprintf(getNextReadyListSQL, catalog.MO_CATALOG, catalog.MO_TABLE_STATS, where, limit)
-	sqlRet = d.executeSQL(ctx, sql, "get next ready to update list")
-	if err = sqlRet.Error(); err != nil {
-		return
+	if sqlRet.RowCount() == 0 {
+		return nil, nil
+	}
+
+	if val, err = sqlRet.Value(ctx, 0, 0); err != nil {
+		return nil, err
+	}
+
+	if err = json.Unmarshal([]byte(val.(bytejson.ByteJson).String()), &stats); err != nil {
+		return nil, err
+	}
+
+	return stats, nil
+}
+
+func (d *dynamicCtx) updateSpecialStatsMinimalChecked(
+	ctx context.Context,
+	service string,
+	eng engine.Engine,
+	snapshot types.TS,
+	minimalChecked uint64,
+) (bool, error) {
+
+	var (
+		err    error
+		val    []byte
+		stats  map[string]any
+		sql    string
+		sqlRet ie.InternalExecResult
+	)
+
+	if stats, err = d.getSpecialStats(ctx, service, eng); err != nil {
+		return false, err
+	}
+
+	if stats == nil {
+		stats = make(map[string]any)
+	}
+
+	stats[specialMinimalChecked] = minimalChecked
+	if val, err = json.Marshal(stats); err != nil {
+		return false, err
+	}
+
+	record := fmt.Sprintf("(%d,%d,%d,'%s','%s','%s','%s',%d)",
+		specialAccountId, specialDatabaseId, specialTableId, "", "", string(val),
+		snapshot.ToTimestamp().ToStdTime().Format("2006-01-02 15:04:05.000000"), 0)
+
+	sql = fmt.Sprintf(bulkInsertOrUpdateStatsListSQL, catalog.MO_CATALOG, catalog.MO_TABLE_STATS, record)
+
+	sqlRet = d.executeSQL(ctx, sql, "updateSpecialStatsMinimalChecked")
+
+	return true, sqlRet.Error()
+}
+
+func (d *dynamicCtx) updateSpecialStatsStart(
+	ctx context.Context,
+	service string,
+	eng engine.Engine,
+	newStart types.TS,
+	oldStart types.TS,
+) (bool, error) {
+
+	var (
+		err    error
+		val    []byte
+		stats  map[string]any
+		sql    string
+		sqlRet ie.InternalExecResult
+	)
+
+	if stats, err = d.getSpecialStats(ctx, service, eng); err != nil {
+		return false, err
+	}
+
+	if stats != nil && stats[specialStart] != nil {
+		start := stats[specialStart].(string)
+		old := oldStart.ToTimestamp().ToStdTime().Format("2006-01-02 15:04:05.000000")
+		if old != start {
+			logutil.Info(logHeader,
+				zap.String("source", "update special stats start"),
+				zap.String("given up update", "the start changed already"),
+				zap.String("current", start),
+				zap.String("last read", old))
+
+			return false, nil
+		}
+	}
+
+	if stats == nil {
+		stats = make(map[string]any)
+	}
+
+	ns := newStart.ToTimestamp().ToStdTime().Format("2006-01-02 15:04:05.000000")
+	stats[specialStart] = ns
+	if val, err = json.Marshal(stats); err != nil {
+		return false, err
+	}
+
+	record := fmt.Sprintf("(%d,%d,%d,'%s','%s','%s','%s',%d)",
+		specialAccountId, specialDatabaseId, specialTableId, "", "", string(val), ns, 0)
+
+	sql = fmt.Sprintf(bulkInsertOrUpdateStatsListSQL, catalog.MO_CATALOG, catalog.MO_TABLE_STATS, record)
+
+	sqlRet = d.executeSQL(ctx, sql, "updateSpecialStatsStart")
+
+	return true, sqlRet.Error()
+}
+
+func (d *dynamicCtx) getBetweenForChangedList(
+	ctx context.Context,
+	service string,
+	eng engine.Engine,
+) (from, to types.TS, err error) {
+
+	defaultBetween := func() {
+		from = types.TS{}
+		to = types.BuildTS(time.Now().UnixNano(), 0)
 	}
 
 	var (
-		val any
-		tm  time.Time
+		stats map[string]any
 	)
 
-	for i := range sqlRet.RowCount() {
-		if val, err = sqlRet.Value(ctx, i, 0); err != nil {
-			return
-		}
-		accs = append(accs, uint64(val.(int64)))
+	stats, err = d.getSpecialStats(ctx, service, eng)
 
-		if val, err = sqlRet.Value(ctx, i, 1); err != nil {
-			return
-		}
-		dbs = append(dbs, uint64(val.(int64)))
-
-		if val, err = sqlRet.Value(ctx, i, 2); err != nil {
-			return
-		}
-		tbls = append(tbls, uint64(val.(int64)))
-
-		if val, err = sqlRet.Value(ctx, i, 3); err != nil {
-			return
-		}
-		if tm, err = time.Parse("2006-01-02 15:04:05.000000", val.(string)); err != nil {
-			return
-		}
-
-		tt := types.BuildTS(tm.UnixNano(), 0).ToTimestamp()
-		ts = append(ts, &tt)
+	if stats == nil || stats[specialStart] == nil {
+		defaultBetween()
+		return
 	}
 
+	start := stats[specialStart].(string)
+	if len(start) == 0 {
+		defaultBetween()
+	}
+
+	tt, err := time.Parse("2006-01-02 15:04:05.000000", start)
+	if err != nil {
+		return
+	}
+
+	from = types.BuildTS(tt.UnixNano(), 0)
+	to = types.BuildTS(time.Now().UnixNano(), 0)
+
 	return
+}
+
+func correctAccountForCatalogTables(
+	ctx context.Context,
+	eng *Engine,
+	resp *cmd_util.GetChangedTableListResp,
+) (err error) {
+
+	// the TN cannot distinguish the account id if
+	// a table belongs to the mo_catalog. here, correct the account id miss-matched.
+	var mm []uint64
+	for i := range resp.TableIds {
+		if resp.DatabaseIds[i] == catalog.MO_CATALOG_ID {
+			mm = append(mm, resp.TableIds[i])
+		}
+	}
+
+	if len(mm) > 0 {
+		tmpStr, release := intsJoin(mm, ",")
+		sql := fmt.Sprintf(findAccountByTable, catalog.MO_CATALOG, catalog.MO_TABLES, tmpStr)
+		release()
+
+		sqlRet := eng.executeSQL(ctx, sql, "correct account for catalog tables")
+		if err = sqlRet.Error(); err != nil {
+			return
+		}
+
+		var (
+			val any
+		)
+
+		for i := range sqlRet.RowCount() {
+			if val, err = sqlRet.Value(ctx, i, 1); err != nil {
+				return
+			}
+
+			tid := val.(uint64)
+			idx := slices.Index(resp.TableIds, tid)
+
+			if val, err = sqlRet.Value(ctx, i, 0); err != nil {
+				return
+			}
+
+			aid := uint64(val.(uint32))
+
+			resp.AccIds[idx] = aid
+		}
+	}
+
+	return nil
 }
 
 func getChangedTableList(
@@ -2077,35 +2694,43 @@ func getChangedTableList(
 	accs []uint64,
 	dbs []uint64,
 	tbls []uint64,
-	ts []*timestamp.Timestamp,
+	ts []timestamp.Timestamp,
 	pairs *[]tablePair,
 	to *types.TS,
+	typ cmd_util.ChangedListType,
 ) (err error) {
 
-	req := &cmd_util.GetChangedTableListReq{}
-
-	if len(tbls) == 0 {
-		return
+	req := &cmd_util.GetChangedTableListReq{
+		Type: typ,
 	}
+
+	var (
+		nullTSAcc []uint64
+		nullTSDB  []uint64
+		nullTSTbl []uint64
+	)
 
 	whichTN := func(string) ([]uint64, error) { return nil, nil }
 	payload := func(tnShardID uint64, parameter string, proc *process.Process) ([]byte, error) {
-		for i := range tbls {
-			if ts[i] == nil {
-				continue
+		if typ == cmd_util.CollectChanged {
+			req.TS = append(req.TS, &ts[0])
+			req.TS = append(req.TS, &ts[1])
+		} else {
+			for i := range tbls {
+				if ts[i].IsEmpty() {
+					// no need to query tn
+					nullTSAcc = append(nullTSAcc, accs[i])
+					nullTSDB = append(nullTSDB, dbs[i])
+					nullTSTbl = append(nullTSTbl, tbls[i])
+				} else {
+					req.AccIds = append(req.AccIds, accs[i])
+					req.DatabaseIds = append(req.DatabaseIds, dbs[i])
+					req.TableIds = append(req.TableIds, tbls[i])
+					req.TS = append(req.TS, &ts[i])
+				}
 			}
-
-			if dbs[i] == catalog.MO_CATALOG_ID {
-				// the account id will always be 0 if mo_catalog db is given on tn side,
-				// later causing account_id, db_id, tbl_id un matched ==> catalogCache returns nil.
-				continue
-			}
-
-			req.AccIds = append(req.AccIds, accs[i])
-			req.DatabaseIds = append(req.DatabaseIds, dbs[i])
-			req.TableIds = append(req.TableIds, tbls[i])
-			req.From = append(req.From, ts[i])
 		}
+
 		return req.Marshal()
 	}
 
@@ -2146,55 +2771,62 @@ func getChangedTableList(
 	)
 
 	var resp *cmd_util.GetChangedTableListResp
-	if len(req.AccIds) != 0 {
-		handler := ctl.GetTNHandlerFunc(api.OpCode_OpGetChangedTableList, whichTN, payload, responseUnmarshaler)
-		ret, err := handler(proc, "DN", "", ctl.MoCtlTNCmdSender)
-		if err != nil {
-			return err
-		}
 
-		resp = ret.Data.([]any)[0].(*cmd_util.GetChangedTableListResp)
+	handler := ctl.GetTNHandlerFunc(api.OpCode_OpGetChangedTableList, whichTN, payload, responseUnmarshaler)
+	ret, err := handler(proc, "DN", "", ctl.MoCtlTNCmdSender)
+	if err != nil {
+		return err
+	}
+
+	resp = ret.Data.([]any)[0].(*cmd_util.GetChangedTableListResp)
+	if resp.Newest == nil {
+		*to = types.BuildTS(time.Now().UnixNano(), 0)
 	} else {
-		now := types.BuildTS(time.Now().UnixNano(), 0).ToTimestamp()
-		resp = &cmd_util.GetChangedTableListResp{
-			Newest: &now,
-		}
+		*to = types.TimestampToTS(*resp.Newest)
 	}
 
-	*to = types.TimestampToTS(*resp.Newest)
+	if err = correctAccountForCatalogTables(ctx, eng.(*Engine), resp); err != nil {
+		return
+	}
 
+	var (
+		tp tablePair
+		ok bool
+	)
+
+	for i := range nullTSAcc {
+		if tp, ok = buildTablePairFromCache(de,
+			nullTSAcc[i], nullTSDB[i], nullTSTbl[i], *to, false); !ok {
+			continue
+		}
+		*pairs = append(*pairs, tp)
+	}
+
+	// a table in the response means there exists updates,
+	// need calculate the size/rows...
 	for i := range resp.AccIds {
-		tp, ok := buildTablePairFromCache(de, resp.AccIds[i],
-			resp.DatabaseIds[i], resp.TableIds[i], *to, false)
-		if !ok {
+		if tp, ok = buildTablePairFromCache(de,
+			resp.AccIds[i], resp.DatabaseIds[i], resp.TableIds[i], *to, false); !ok {
 			continue
 		}
 
 		*pairs = append(*pairs, tp)
 	}
 
-	for i := range tbls {
-		if idx := slices.Index(resp.TableIds, tbls[i]); idx != -1 {
-			// need calculate, already in it
-			continue
-		}
-
-		// 1. if the tbls belongs to mo_catalog
-		//		force update it.
-		// 2. otherwise, has no changes, only update TS
-
-		onlyUpdateTS := true
-		if dbs[i] == catalog.MO_CATALOG_ID {
-			onlyUpdateTS = false
-		}
-
-		tp, ok := buildTablePairFromCache(de,
-			accs[i], dbs[i], tbls[i], *to, onlyUpdateTS)
-		if !ok {
-			continue
-		}
-		*pairs = append(*pairs, tp)
-	}
+	// for the CheckChanged type, a table not in the response
+	// means no update yet, update it's ts only.
+	//for i := range tbls {
+	//	if idx := slices.Index(resp.TableIds, tbls[i]); idx != -1 {
+	//		// need calculate, already in it
+	//		continue
+	//	}
+	//
+	//	if tp, ok = buildTablePairFromCache(
+	//		de, accs[i], dbs[i], tbls[i], *to, true); !ok {
+	//		continue
+	//	}
+	//	*pairs = append(*pairs, tp)
+	//}
 
 	return
 }

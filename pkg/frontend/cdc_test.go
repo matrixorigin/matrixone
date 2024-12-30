@@ -2174,21 +2174,12 @@ func TestCdcTask_Resume(t *testing.T) {
 }
 
 func TestCdcTask_Restart(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	assert.NoError(t, err)
-
-	sqlx := "delete from mo_catalog.mo_cdc_watermark where account_id = .* and task_id = .*"
-	mock.ExpectExec(sqlx).WillReturnResult(sqlmock.NewResult(1, 1))
-	tie := &testIE{
-		db: db,
-	}
-
 	cdc := &CdcTask{
 		activeRoutine: cdc2.NewCdcActiveRoutine(),
 		watermarkUpdater: cdc2.NewWatermarkUpdater(
 			sysAccountID,
 			"taskID-0",
-			tie,
+			nil,
 		),
 		cdcTask: &task.CreateCdcDetails{
 			TaskName: "task1",
@@ -2197,9 +2188,10 @@ func TestCdcTask_Restart(t *testing.T) {
 		startFunc: func(_ context.Context) error {
 			return nil
 		},
+		isRunning: true,
 	}
 
-	err = cdc.Restart()
+	err := cdc.Restart()
 	assert.NoErrorf(t, err, "Restart()")
 }
 

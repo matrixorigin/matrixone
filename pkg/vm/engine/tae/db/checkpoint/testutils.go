@@ -25,26 +25,30 @@ import (
 )
 
 type TestRunner interface {
-	EnableCheckpoint()
-	DisableCheckpoint()
+	EnableCheckpoint(*CheckpointCfg)
+	DisableCheckpoint(ctx context.Context) (*CheckpointCfg, error)
 
 	// TODO: remove the below apis
 	CleanPenddingCheckpoint()
-	ForceCheckpointForBackup(end types.TS) (string, error)
+	ForceCheckpointForBackup(*CheckpointCfg, types.TS) (string, error)
 	ForceGCKP(context.Context, types.TS, time.Duration) error
 	ForceICKP(context.Context, *types.TS) error
 	MaxLSNInRange(end types.TS) uint64
 	GetICKPIntentOnlyForTest() *CheckpointEntry
 
-	WaitRunningGCKPDoneForTest(ctx context.Context) error
+	WaitRunningCKPDoneForTest(ctx context.Context, gckp bool) error
 
 	GCNeeded() bool
 }
 
 // only for UT
-func (r *runner) WaitRunningGCKPDoneForTest(ctx context.Context) (err error) {
+func (r *runner) WaitRunningCKPDoneForTest(
+	ctx context.Context,
+	gckp bool,
+) (err error) {
+
 	for {
-		job, err := r.getRunningGCKPJob()
+		job, err := r.getRunningCKPJob(gckp)
 		if err != nil || job == nil {
 			return err
 		}
@@ -62,12 +66,13 @@ func (r *runner) GetICKPIntentOnlyForTest() *CheckpointEntry {
 }
 
 // DisableCheckpoint stops generating checkpoint
-func (r *runner) DisableCheckpoint() {
-	r.disabled.Store(true)
+func (r *runner) DisableCheckpoint(ctx context.Context) (cfg *CheckpointCfg, err error) {
+	cfg = r.StopExecutor(ErrCheckpointDisabled)
+	return
 }
 
-func (r *runner) EnableCheckpoint() {
-	r.disabled.Store(false)
+func (r *runner) EnableCheckpoint(cfg *CheckpointCfg) {
+	r.StartExecutor(cfg)
 }
 
 func (r *runner) CleanPenddingCheckpoint() {
@@ -98,9 +103,6 @@ func (r *runner) ForceGCKP(
 			zap.Error(err),
 		)
 	}()
-	if interval == 0 {
-		interval = r.options.globalVersionInterval
-	}
 
 	if err = r.ForceICKP(ctx, &end); err != nil {
 		return
@@ -114,7 +116,7 @@ func (r *runner) ForceGCKP(
 		return
 	}
 
-	request := &globalCheckpointContext{
+	request := &gckpContext{
 		force:    true,
 		end:      maxEntry.end,
 		interval: interval,
@@ -156,7 +158,7 @@ func (r *runner) ForceGCKP(
 			return
 		}
 
-		if job, err = r.getRunningGCKPJob(); err != nil {
+		if job, err = r.getRunningCKPJob(true); err != nil {
 			return
 		}
 
@@ -240,7 +242,7 @@ func (r *runner) ForceICKP(ctx context.Context, ts *types.TS) (err error) {
 	}
 }
 
-func (r *runner) ForceCheckpointForBackup(end types.TS) (location string, err error) {
+func (r *runner) ForceCheckpointForBackup(cfg *CheckpointCfg, end types.TS) (location string, err error) {
 	prev := r.MaxIncrementalCheckpoint()
 	if prev != nil && !prev.IsFinished() {
 		return "", moerr.NewInternalError(r.ctx, "prev checkpoint not finished")
@@ -258,13 +260,17 @@ func (r *runner) ForceCheckpointForBackup(end types.TS) (location string, err er
 	r.store.AddNewIncrementalEntry(entry)
 	now := time.Now()
 	var files []string
-	if _, files, err = r.doIncrementalCheckpoint(entry); err != nil {
+	if cfg == nil {
+		cfg = new(CheckpointCfg)
+		cfg.FillDefaults()
+	}
+	if _, files, err = r.doIncrementalCheckpoint(cfg, entry); err != nil {
 		return
 	}
 	var lsn, lsnToTruncate uint64
 	lsn = r.source.GetMaxLSN(entry.start, entry.end)
-	if lsn > r.options.reservedWALEntryCount {
-		lsnToTruncate = lsn - r.options.reservedWALEntryCount
+	if lsn > cfg.IncrementalReservedWALCount {
+		lsnToTruncate = lsn - cfg.IncrementalReservedWALCount
 	}
 	entry.ckpLSN = lsn
 	entry.truncateLSN = lsnToTruncate
@@ -276,7 +282,7 @@ func (r *runner) ForceCheckpointForBackup(end types.TS) (location string, err er
 	backupTime := time.Now().UTC()
 	currTs := types.BuildTS(backupTime.UnixNano(), 0)
 	backup := NewCheckpointEntry(r.rt.SID(), end.Next(), currTs, ET_Incremental)
-	location, err = r.doCheckpointForBackup(backup)
+	location, err = r.doCheckpointForBackup(cfg, backup)
 	if err != nil {
 		return
 	}

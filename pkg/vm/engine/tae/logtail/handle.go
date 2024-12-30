@@ -452,7 +452,7 @@ func LoadCheckpointEntries(
 		if err != nil {
 			return nil, nil, err
 		}
-		location, err := blockio.EncodeLocationFromString(key)
+		location, err := objectio.StringToLocation(key)
 		if err != nil {
 			return nil, nil, err
 		}

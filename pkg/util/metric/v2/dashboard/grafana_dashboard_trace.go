@@ -35,6 +35,7 @@ func (c *DashboardCreator) initTraceDashboard() error {
 			c.initTraceMoLoggerExportDataRow(),
 			c.initCronTaskRow(),
 			c.initCUStatusRow(),
+			c.initLogMessageRow(),
 		)...)
 	if err != nil {
 		return err
@@ -63,10 +64,10 @@ func (c *DashboardCreator) initTraceMoLoggerExportDataRow() dashboard.Option {
 
 	// export files count
 	panels = append(panels, c.withMultiGraph(
-		"files",
+		"files (per minute)",
 		3,
 		[]string{
-			`sum(delta(` + c.getMetricWithFilter("mo_trace_mologger_export_data_bytes_count", "") + `[$interval:1m])) by (type)`,
+			`60 * sum(rate(` + c.getMetricWithFilter("mo_trace_mologger_export_data_bytes_count", "") + `[$__rate_interval])) by (type)`,
 		},
 		[]string{
 			"{{type}}",
@@ -75,27 +76,15 @@ func (c *DashboardCreator) initTraceMoLoggerExportDataRow() dashboard.Option {
 
 	// ETLMerge files count
 	panels = append(panels, c.withMultiGraph(
-		"ETLMerge files",
+		"ETLMerge files (per 15s)",
 		3,
 		[]string{
-			`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", "") + `[$interval:1m]))`,
-			`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", `type="success"`) + `[$interval:1m]))`,
-			`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", `type="exist"`) + `[$interval:1m]))`,
-			`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", `type="open_failed"`) + `[$interval:1m]))`,
-			`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", `type="read_failed"`) + `[$interval:1m]))`,
-			`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", `type="parse_failed"`) + `[$interval:1m]))`,
-			`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", `type="write_failed"`) + `[$interval:1m]))`,
-			`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", `type="delete_failed"`) + `[$interval:1m]))`,
+			`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", "") + `[$interval:15s]))`,
+			`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", `type=~".+"`) + `[$interval:15s])) by (type)`,
 		},
 		[]string{
 			"total",
-			"success",
-			"exist",
-			"open",
-			"read",
-			"parse",
-			"write",
-			"delete",
+			"{{ type }}",
 		}),
 	)
 
@@ -176,44 +165,6 @@ func (c *DashboardCreator) initTraceCollectorOverviewRow() dashboard.Option {
 
 		// ------------- next row ------------
 		c.withMultiGraph(
-			"Discard Count",
-			3,
-			[]string{
-				`sum(rate(` + c.getMetricWithFilter("mo_trace_collector_discard_total", `type="statement_info"`) + `[$interval]))`,
-				`sum(rate(` + c.getMetricWithFilter("mo_trace_collector_discard_total", `type="rawlog"`) + `[$interval]))`,
-				`sum(rate(` + c.getMetricWithFilter("mo_trace_collector_discard_total", `type="metric"`) + `[$interval]))`,
-			},
-			[]string{
-				"statement_info",
-				"rawlog",
-				"metric",
-			}),
-
-		c.withMultiGraph(
-			"Discard item Total",
-			3,
-			[]string{
-				`sum(delta(` + c.getMetricWithFilter("mo_trace_collector_discard_item_total", "") + `[$interval:1m])) by (type)`,
-			},
-			[]string{"{{ type }}"}),
-		c.withMultiGraph(
-			"Collect hung",
-			3,
-			// try interval: 1ms, need 'val / 1000'
-			[]string{
-				`sum(delta(` + c.getMetricWithFilter("mo_trace_collector_collect_hung_total", "") + `[$interval:1m])) by (type) / 1000`,
-			},
-			[]string{"{{ type }}"}),
-		c.withMultiGraph(
-			"MOLogger error count",
-			3,
-			[]string{
-				`sum(delta(` + c.getMetricWithFilter("mo_trace_mologger_error_total", "") + `[$interval:1m])) by (type)`,
-			},
-			[]string{"{{ type }}"}),
-
-		// ------------- next row ------------
-		c.withMultiGraph(
 			"MoLogger Consume - Rate",
 			3,
 			[]string{
@@ -222,17 +173,6 @@ func (c *DashboardCreator) initTraceCollectorOverviewRow() dashboard.Option {
 			[]string{
 				"comsume",
 			}),
-
-		c.withMultiGraph(
-			"MoLogger Consume - Check error",
-			3,
-			[]string{
-				`sum(rate(` + c.getMetricWithFilter("mo_trace_collector_status_total", "") + `[$interval:1m])) by(type)`,
-			},
-			[]string{
-				"{{ type }}",
-			}),
-
 		c.withMultiGraph(
 			"MoLogger Consume - Check Cost (avg)",
 			3,
@@ -246,7 +186,82 @@ func (c *DashboardCreator) initTraceCollectorOverviewRow() dashboard.Option {
 			},
 			axis.Unit("s"),
 		),
+		c.withMultiGraph(
+			"MoLogger Consume - Check result",
+			3,
+			[]string{
+				`sum(rate(` + c.getMetricWithFilter("mo_trace_collector_status_total", "") + `[$interval:1m])) by(type)`,
+			},
+			[]string{
+				"{{ type }}",
+			}),
+		c.withMultiGraph(
+			"MOLogger error count",
+			3,
+			[]string{
+				`sum(delta(` + c.getMetricWithFilter("mo_trace_mologger_error_total", "") + `[$interval:1m])) by (type)`,
+			},
+			[]string{"{{ type }}"}),
 
+		// ------------- next row ------------
+		c.withMultiGraph(
+			"Collect hung (1ms/op)",
+			3,
+			// try interval: 1ms
+			[]string{
+				`sum(delta(` + c.getMetricWithFilter("mo_trace_collector_collect_hung_total", "") + `[$interval:1m])) by (type, reason)`,
+			},
+			[]string{"{{ type }} / {{reason}}"},
+			axis.Unit("ms"),
+		),
+		c.withMultiGraph(
+			"Discard Count",
+			3,
+			[]string{
+				`sum(rate(` + c.getMetricWithFilter("mo_trace_collector_discard_total", `type="statement_info"`) + `[$interval]))`,
+				`sum(rate(` + c.getMetricWithFilter("mo_trace_collector_discard_total", `type="rawlog"`) + `[$interval]))`,
+				`sum(rate(` + c.getMetricWithFilter("mo_trace_collector_discard_total", `type="metric"`) + `[$interval]))`,
+			},
+			[]string{
+				"statement_info",
+				"rawlog",
+				"metric",
+			}),
+		c.withMultiGraph(
+			"Discard item Total",
+			3,
+			[]string{
+				`sum(delta(` + c.getMetricWithFilter("mo_trace_collector_discard_item_total", "") + `[$interval:1m])) by (type)`,
+			},
+			[]string{"{{ type }}"}),
+		c.withMultiGraph(
+			"Generate Aggregated Records (count)",
+			3,
+			[]string{
+				`sum(delta(` + c.getMetricWithFilter("mo_trace_mologger_aggr_total", ``) + `[$interval])) by (type)`,
+			},
+			[]string{
+				"{{ type }}",
+			},
+		),
+
+		// ------------- next row ------------
+		c.withMultiGraph(
+			"Collector Buffer Action (per minute)",
+			9,
+			[]string{
+				`60 * sum(rate(` + c.getMetricWithFilter("mo_trace_mologger_buffer_action_total", ``) + `[$interval])) by (type)`,
+				`60 * sum(rate(` + c.getMetricWithFilter("mo_trace_collector_content_queue_length", ``) + `[$interval])) by (type)`,
+				`60 * sum(rate(` + c.getMetricWithFilter("mo_trace_collector_queue_length", `type="content"`) + `[$interval])) by (type)`,
+				`60 * sum(rate(` + c.getMetricWithFilter("mo_trace_collector_signal_total", ``) + `[$interval])) by (type, reason)`,
+			},
+			[]string{
+				"{{ type }}",
+				"release / {{ type }}",
+				"alloc / {{ type }}",
+				"signal / {{ type }} / {{reason}}",
+			},
+		),
 		c.withMultiGraph(
 			"Collector Queue Length",
 			3,
@@ -259,17 +274,6 @@ func (c *DashboardCreator) initTraceCollectorOverviewRow() dashboard.Option {
 		),
 
 		// ------------- next row ------------
-
-		c.withMultiGraph(
-			"Collector Buffer Action",
-			6,
-			[]string{
-				`sum(delta(` + c.getMetricWithFilter("mo_trace_mologger_buffer_action_total", ``) + `[$interval:1m])) by (type)`,
-			},
-			[]string{
-				"{{ type }}",
-			},
-		),
 	)
 }
 
@@ -301,13 +305,38 @@ func (c *DashboardCreator) initCronTaskRow() dashboard.Option {
 				"check_new",
 			}),
 		c.withMultiGraph(
-			"New Account",
+			"New Account Count",
 			3,
 			[]string{
 				`sum(delta(` + c.getMetricWithFilter("mo_trace_check_storage_usage_total", `type="inc"`) + `[$interval:1m])) by (type)`,
 			},
 			[]string{
 				"new_inc",
+			}),
+	)
+}
+
+func (c *DashboardCreator) initLogMessageRow() dashboard.Option {
+	return dashboard.Row(
+		"Log Status",
+		c.withMultiGraph(
+			"Row Count (rate)",
+			6,
+			[]string{
+				`sum(rate(` + c.getMetricWithFilter("mo_log_message_count", ``) + `[$interval])) by (pod, type)`,
+			},
+			[]string{
+				"{{ pod }} / {{type}}",
+				"check_new",
+			}),
+		c.withMultiGraph(
+			"Too Long (count)",
+			6,
+			[]string{
+				`sum(delta(` + c.getMetricWithFilter("mo_trace_mologger_log_too_long_total", ``) + `[$interval])) by (type)`,
+			},
+			[]string{
+				"{{ type }}",
 			}),
 	)
 }

@@ -269,7 +269,7 @@ func CheckpointSaveInjected() (string, bool) {
 	return sarg, injected
 }
 
-func InjectCheckpointSave(msg string) (rmFault func(), err error) {
+func InjectCheckpointSave(msg string) (rmFault func() (bool, error), err error) {
 	if err = fault.AddFaultPoint(
 		context.Background(),
 		FJ_CheckpointSave,
@@ -281,8 +281,8 @@ func InjectCheckpointSave(msg string) (rmFault func(), err error) {
 	); err != nil {
 		return
 	}
-	rmFault = func() {
-		fault.RemoveFaultPoint(context.Background(), FJ_CheckpointSave)
+	rmFault = func() (ok bool, err error) {
+		return fault.RemoveFaultPoint(context.Background(), FJ_CheckpointSave)
 	}
 	return
 }
