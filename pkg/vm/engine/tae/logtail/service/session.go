@@ -183,19 +183,11 @@ func (s *morpcStream) write(
 	}
 	chunks := Split(buf[:n], s.limit)
 
-	if len(chunks) > 1 {
-		s.logger.Info("send response by segment",
-			zap.Int("chunk-number", len(chunks)),
-			zap.Int("chunk-limit", s.limit),
-			zap.Int("message-size", size),
-		)
-	} else {
-		s.logger.Debug("send response by segment",
-			zap.Int("chunk-number", len(chunks)),
-			zap.Int("chunk-limit", s.limit),
-			zap.Int("message-size", size),
-		)
-	}
+	s.logger.Debug("send response by segment",
+		zap.Int("chunk-number", len(chunks)),
+		zap.Int("chunk-limit", s.limit),
+		zap.Int("message-size", size),
+	)
 
 	for index, chunk := range chunks {
 		seg := s.segments.Acquire()

@@ -17,6 +17,7 @@ package engine_util
 import (
 	"bytes"
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"testing"
 	"time"
 
@@ -35,9 +36,11 @@ import (
 func TestTombstoneData1(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
 	defer cancel()
-
-	blockio.Start("")
-	defer blockio.Stop("")
+	rt := runtime.DefaultRuntime()
+	name := t.Name()
+	runtime.SetupServiceBasedRuntime(name, rt)
+	blockio.Start(name)
+	defer blockio.Stop(name)
 
 	proc := testutil.NewProc()
 
@@ -102,7 +105,7 @@ func TestTombstoneData1(t *testing.T) {
 
 	deleteMask := objectio.GetReusableBitmap()
 	defer deleteMask.Release()
-	tombstones1.PrefetchTombstones("", fs, nil)
+	tombstones1.PrefetchTombstones(name, fs, nil)
 	for i := range tombstoneRowIds {
 		sIdx := i / int(stats1.Rows())
 		if sIdx == 2 {

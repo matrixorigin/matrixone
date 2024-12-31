@@ -290,8 +290,7 @@ const (
 	ErrTooLargeObjectSize uint16 = 22001
 
 	// Group 13: CDC
-	ErrStaleRead        uint16 = 22101
-	ErrNoWatermarkFound uint16 = 22102
+	ErrStaleRead uint16 = 22101
 
 	// ErrEnd, the max value of MOErrorCode
 	ErrEnd uint16 = 65535
@@ -526,9 +525,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrTooLargeObjectSize: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "objectio: too large object size %d"},
 
 	// Group 13: CDC
-	ErrStaleRead:        {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "CDC handle: stale read, min TS is %v, receive %v"},
-	ErrNoWatermarkFound: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "CDC task: no watermark found of table %s.%s"},
-
+	ErrStaleRead: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "CDC handle: stale read, min TS is %v, receive %v"},
 	// Group End: max value of MOErrorCode
 	ErrEnd: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "internal error: end of errcode code"},
 }

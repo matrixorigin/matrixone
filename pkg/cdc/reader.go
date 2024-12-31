@@ -16,7 +16,6 @@ package cdc
 
 import (
 	"context"
-	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -40,29 +39,27 @@ type tableReader struct {
 	packerPool           *fileservice.Pool[*types.Packer]
 	info                 *DbTableInfo
 	sinker               Sinker
-	wMarkUpdater         IWatermarkUpdater
+	wMarkUpdater         *WatermarkUpdater
 	tick                 *time.Ticker
 	resetWatermarkFunc   func(*DbTableInfo) error
 	initSnapshotSplitTxn bool
-	runningReaders       *sync.Map
 
 	tableDef                           *plan.TableDef
 	insTsColIdx, insCompositedPkColIdx int
 	delTsColIdx, delCompositedPkColIdx int
 }
 
-var NewTableReader = func(
+func NewTableReader(
 	cnTxnClient client.TxnClient,
 	cnEngine engine.Engine,
 	mp *mpool.MPool,
 	packerPool *fileservice.Pool[*types.Packer],
 	info *DbTableInfo,
 	sinker Sinker,
-	wMarkUpdater IWatermarkUpdater,
+	wMarkUpdater *WatermarkUpdater,
 	tableDef *plan.TableDef,
 	resetWatermarkFunc func(*DbTableInfo) error,
 	initSnapshotSplitTxn bool,
-	runningReaders *sync.Map,
 ) Reader {
 	reader := &tableReader{
 		cnTxnClient:          cnTxnClient,
@@ -75,7 +72,6 @@ var NewTableReader = func(
 		tick:                 time.NewTicker(200 * time.Millisecond),
 		resetWatermarkFunc:   resetWatermarkFunc,
 		initSnapshotSplitTxn: initSnapshotSplitTxn,
-		runningReaders:       runningReaders,
 		tableDef:             tableDef,
 	}
 
@@ -102,16 +98,14 @@ func (reader *tableReader) Run(
 	logutil.Infof("cdc tableReader(%v).Run: start", reader.info)
 	defer func() {
 		if err != nil {
-			if err = reader.wMarkUpdater.SaveErrMsg(reader.info.SourceDbName, reader.info.SourceTblName, err.Error()); err != nil {
+			if err = reader.wMarkUpdater.SaveErrMsg(reader.info.SourceTblIdStr, err.Error()); err != nil {
 				logutil.Infof("cdc tableReader(%v).Run: save err msg failed, err: %v", reader.info, err)
 			}
 		}
 		reader.Close()
-		reader.runningReaders.Delete(GenDbTblKey(reader.info.SourceDbName, reader.info.SourceTblName))
 		logutil.Infof("cdc tableReader(%v).Run: end", reader.info)
 	}()
 
-	reader.runningReaders.Store(GenDbTblKey(reader.info.SourceDbName, reader.info.SourceTblName), reader)
 	for {
 		select {
 		case <-ctx.Done():
@@ -198,7 +192,7 @@ func (reader *tableReader) readTableWithTxn(
 	//step2 : define time range
 	//	from = last wmark
 	//  to = txn operator snapshot ts
-	fromTs := reader.wMarkUpdater.GetFromMem(reader.info.SourceDbName, reader.info.SourceTblName)
+	fromTs := reader.wMarkUpdater.GetFromMem(reader.info.SourceTblIdStr)
 	toTs := types.TimestampToTS(GetSnapshotTS(txnOp))
 	start := time.Now()
 	changes, err = CollectChanges(ctx, rel, fromTs, toTs, reader.mp)
@@ -270,7 +264,7 @@ func (reader *tableReader) readTableWithTxn(
 			}
 
 			if err == nil {
-				reader.wMarkUpdater.UpdateMem(reader.info.SourceDbName, reader.info.SourceTblName, toTs)
+				reader.wMarkUpdater.UpdateMem(reader.info.SourceTblIdStr, toTs)
 			}
 		} else { // has error already
 			if hasBegin {

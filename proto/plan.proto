@@ -973,6 +973,7 @@ message LockTarget {
 	int32 filter_col_rel_pos  = 12;
 	Expr lock_rows = 13;
     bool lock_table_at_the_end = 14;
+    ObjectRef obj_ref = 15;
 }
 
 message PreInsertUkCtx {

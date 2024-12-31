@@ -216,11 +216,22 @@ func (h *Handle) HandleGetChangedTableList(
 	resp *cmd_util.GetChangedTableListResp,
 ) (func(), error) {
 
+	var (
+		err     error
+		dbEntry *catalog2.DBEntry
+		data    = &logtail.CheckpointData{}
+
+		from, now types.TS
+	)
+
+	now = types.BuildTS(time.Now().UnixNano(), 0)
+
+	defer func() {
+		tt := now.ToTimestamp()
+		resp.Newest = &tt
+	}()
+
 	if len(req.TableIds) == 0 {
-		now := types.BuildTS(time.Now().UnixNano(), 0).ToTimestamp()
-		resp = &cmd_util.GetChangedTableListResp{
-			Newest: &now,
-		}
 		return nil, nil
 	}
 
@@ -246,14 +257,8 @@ func (h *Handle) HandleGetChangedTableList(
 	minFrom := slices.MinFunc(req.From, func(a, b *timestamp.Timestamp) int {
 		return a.Compare(*b)
 	})
-	from := types.TimestampToTS(*minFrom)
-	now := types.BuildTS(time.Now().UnixNano(), 0)
 
-	var (
-		err     error
-		dbEntry *catalog2.DBEntry
-		data    = &logtail.CheckpointData{}
-	)
+	from = types.TimestampToTS(*minFrom)
 
 	logErr := func(e error, hint string) {
 		logutil.Info("handle get changed table list failed",
@@ -356,9 +361,6 @@ func (h *Handle) HandleGetChangedTableList(
 		resp.DatabaseIds = append(resp.DatabaseIds, req.DatabaseIds[i])
 		resp.AccIds = append(resp.AccIds, req.AccIds[i])
 	}
-
-	tt := now.ToTimestamp()
-	resp.Newest = &tt
 
 	return nil, nil
 }

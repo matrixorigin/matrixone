@@ -185,6 +185,9 @@ func (m *mysqlTaskStorage) Close() error {
 }
 
 func (m *mysqlTaskStorage) PingContext(ctx context.Context) error {
+	if taskFrameworkDisabled() {
+		return nil
+	}
 	return m.db.PingContext(ctx)
 }
 

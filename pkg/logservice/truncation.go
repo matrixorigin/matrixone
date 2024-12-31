@@ -203,12 +203,12 @@ func (l *store) processShardTruncateLog(ctx context.Context, shardID uint64) err
 	// Do NOT process before leader is OK.
 	leaderID, err := l.leaderID(shardID)
 	if err != nil {
-		l.runtime.Logger().Debug("cannot get leader ID, skip truncate",
+		l.runtime.Logger().Warn("cannot get leader ID, skip truncate",
 			zap.Uint64("shard ID", shardID))
 		return nil
 	}
 	if leaderID == 0 {
-		l.runtime.Logger().Debug("no leader yet, skip truncate",
+		l.runtime.Logger().Warn("no leader yet, skip truncate",
 			zap.Uint64("shard ID", shardID))
 		return nil
 	}
@@ -243,6 +243,11 @@ func (l *store) processShardTruncateLog(ctx context.Context, shardID uint64) err
 				zap.Error(err))
 			return err
 		}
+		l.runtime.Logger().Info("do truncate log",
+			zap.Uint64("shard ID", shardID),
+			zap.Uint64("replica ID", replicaID),
+			zap.Uint64("lsn", lsn),
+		)
 		return nil
 	}
 

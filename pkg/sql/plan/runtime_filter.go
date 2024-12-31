@@ -26,7 +26,7 @@ const (
 	InFilterCardLimitNonPK   = 10000
 	InFilterCardLimitPK      = 1000000
 	BloomFilterCardLimit     = 100 * InFilterCardLimitNonPK
-	InFilterSelectivityLimit = 0.2
+	InFilterSelectivityLimit = 0.3
 )
 
 func GetInFilterCardLimit(sid string) int32 {
