@@ -820,7 +820,7 @@ func TestReplay5(t *testing.T) {
 	assert.NoError(t, txn.Commit(context.Background()))
 
 	testutil.CompactBlocks(t, 0, tae, testutil.DefaultTestDB, schema, false)
-	err = tae.BGFlusher.ForceFlushWithInterval(context.Background(), tae.TxnMgr.Now(), time.Second*2, time.Millisecond*10)
+	err = tae.BGFlusher.ForceFlushWithInterval(context.Background(), tae.TxnMgr.Now(), time.Millisecond*10)
 	assert.NoError(t, err)
 	ts := tae.TxnMgr.Now()
 	err = tae.BGCheckpointRunner.ForceICKP(ctx, &ts)
@@ -848,7 +848,7 @@ func TestReplay5(t *testing.T) {
 	}
 	assert.NoError(t, txn.Commit(context.Background()))
 	testutil.CompactBlocks(t, 0, tae, testutil.DefaultTestDB, schema, false)
-	err = tae.BGFlusher.ForceFlushWithInterval(context.Background(), tae.TxnMgr.Now(), time.Second*2, time.Millisecond*10)
+	err = tae.BGFlusher.ForceFlushWithInterval(context.Background(), tae.TxnMgr.Now(), time.Millisecond*10)
 	assert.NoError(t, err)
 	ts2 := tae.TxnMgr.Now()
 	err = tae.BGCheckpointRunner.ForceICKP(ctx, &ts2)
@@ -886,7 +886,7 @@ func TestReplay5(t *testing.T) {
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
 	assert.NoError(t, txn.Commit(context.Background()))
 
-	err = tae.BGFlusher.ForceFlushWithInterval(context.Background(), tae.TxnMgr.Now(), time.Second*2, time.Millisecond*10)
+	err = tae.BGFlusher.ForceFlushWithInterval(context.Background(), tae.TxnMgr.Now(), time.Millisecond*10)
 	assert.NoError(t, err)
 	ts2 = tae.TxnMgr.Now()
 	err = tae.BGCheckpointRunner.ForceICKP(ctx, &ts2)
@@ -948,7 +948,7 @@ func TestReplay6(t *testing.T) {
 	assert.NoError(t, txn.Commit(context.Background()))
 	testutil.CompactBlocks(t, 0, tae, testutil.DefaultTestDB, schema, false)
 	testutil.MergeBlocks(t, 0, tae, testutil.DefaultTestDB, schema, false)
-	err = tae.BGFlusher.ForceFlushWithInterval(context.Background(), tae.TxnMgr.Now(), time.Second*2, time.Millisecond*10)
+	err = tae.BGFlusher.ForceFlushWithInterval(context.Background(), tae.TxnMgr.Now(), time.Millisecond*10)
 	assert.NoError(t, err)
 	ts := tae.TxnMgr.Now()
 	err = tae.BGCheckpointRunner.ForceICKP(ctx, &ts)
@@ -1108,7 +1108,7 @@ func TestReplay8(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 	// t.Log(tae.Catalog.SimplePPString(common.PPL1))
-	err = tae.BGFlusher.ForceFlushWithInterval(context.Background(), tae.TxnMgr.Now(), time.Second*2, time.Millisecond*10)
+	err = tae.BGFlusher.ForceFlushWithInterval(context.Background(), tae.TxnMgr.Now(), time.Millisecond*10)
 	assert.NoError(t, err)
 
 	tae.Restart(ctx)

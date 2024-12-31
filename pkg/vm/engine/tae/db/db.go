@@ -158,7 +158,7 @@ func (db *DB) FlushTable(
 }
 
 func (db *DB) ForceFlush(
-	ctx context.Context, ts types.TS, forceDuration time.Duration,
+	ctx context.Context, ts types.TS,
 ) (err error) {
 	return db.BGFlusher.ForceFlush(
 		ctx, ts,

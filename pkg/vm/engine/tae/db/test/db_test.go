@@ -7658,7 +7658,7 @@ func TestGlobalCheckpoint2(t *testing.T) {
 	assert.NoError(t, err)
 	tae.AllFlushExpected(tae.TxnMgr.Now(), 4000)
 
-	tae.DB.ForceCheckpoint(ctx, tae.TxnMgr.Now(), 0)
+	tae.DB.ForceCheckpoint(ctx, tae.TxnMgr.Now())
 	testutils.WaitExpect(2000, func() bool {
 		return tae.Runtime.Scheduler.GetPenddingLSNCnt() == 0
 	})
@@ -7734,7 +7734,7 @@ func TestGlobalCheckpoint5(t *testing.T) {
 
 	txn, err := tae.StartTxn(nil)
 	assert.NoError(t, err)
-	err = tae.DB.ForceCheckpoint(ctx, txn.GetStartTS(), 0)
+	err = tae.DB.ForceCheckpoint(ctx, txn.GetStartTS())
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 
@@ -7768,7 +7768,7 @@ func TestGlobalCheckpoint5(t *testing.T) {
 	tae.CheckRowsByScan(60, true)
 	txn, err = tae.StartTxn(nil)
 	assert.NoError(t, err)
-	err = tae.DB.ForceGlobalCheckpoint(ctx, txn.GetStartTS(), defaultGlobalCheckpointTimeout, globalCkpIntervalTimeout)
+	err = tae.DB.ForceGlobalCheckpoint(ctx, txn.GetStartTS(), globalCkpIntervalTimeout)
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 }
@@ -7880,7 +7880,7 @@ func Test_CheckpointChaos1(t *testing.T) {
 	now := tae.TxnMgr.Now()
 	ctx, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
-	err = tae.DB.ForceCheckpoint(ctx, now, time.Minute)
+	err = tae.DB.ForceCheckpoint(ctx, now)
 	assert.Error(t, err)
 
 	entries := tae.BGCheckpointRunner.GetAllIncrementalCheckpoints()
@@ -7891,7 +7891,7 @@ func Test_CheckpointChaos1(t *testing.T) {
 	require.NoError(t, err)
 
 	ctx = context.Background()
-	err = tae.DB.ForceCheckpoint(ctx, now, time.Minute)
+	err = tae.DB.ForceCheckpoint(ctx, now)
 	assert.NoError(t, err)
 
 	entries = tae.BGCheckpointRunner.GetAllIncrementalCheckpoints()
@@ -7945,13 +7945,13 @@ func Test_CheckpointChaos2(t *testing.T) {
 		commitOneTxn()
 	}
 
-	err := tae.DB.ForceCheckpoint(ctx, tae.TxnMgr.Now(), time.Minute)
+	err := tae.DB.ForceCheckpoint(ctx, tae.TxnMgr.Now())
 	assert.NoError(t, err)
 
 	for i := 0; i < 2; i++ {
 		commitOneTxn()
 	}
-	err = tae.DB.ForceCheckpoint(ctx, tae.TxnMgr.Now(), time.Minute)
+	err = tae.DB.ForceCheckpoint(ctx, tae.TxnMgr.Now())
 	assert.NoError(t, err)
 
 	fault.Enable()
@@ -8055,12 +8055,12 @@ func Test_CheckpointChaos3(t *testing.T) {
 
 	commitOneTxn()
 
-	err := tae.DB.ForceCheckpoint(ctx, tae.TxnMgr.Now(), time.Minute)
+	err := tae.DB.ForceCheckpoint(ctx, tae.TxnMgr.Now())
 	assert.NoError(t, err)
 
 	commitOneTxn()
 
-	err = tae.DB.ForceCheckpoint(ctx, tae.TxnMgr.Now(), time.Minute)
+	err = tae.DB.ForceCheckpoint(ctx, tae.TxnMgr.Now())
 	assert.NoError(t, err)
 
 	fault.Enable()
@@ -8081,7 +8081,7 @@ func Test_CheckpointChaos3(t *testing.T) {
 	objectio.NotifyInjected(t.Name())
 
 	commitOneTxn()
-	err = tae.DB.ForceCheckpoint(ctx, tae.TxnMgr.Now(), time.Minute)
+	err = tae.DB.ForceCheckpoint(ctx, tae.TxnMgr.Now())
 	assert.NoError(t, err)
 
 	objectio.NotifyInjected(t.Name())
@@ -8392,7 +8392,7 @@ func TestForceCheckpoint(t *testing.T) {
 	bat := catalog.MockBatch(schema, 50)
 
 	tae.CreateRelAndAppend(bat, true)
-	err = tae.BGFlusher.ForceFlushWithInterval(context.Background(), tae.TxnMgr.Now(), time.Second*2, time.Millisecond*10)
+	err = tae.BGFlusher.ForceFlushWithInterval(context.Background(), tae.TxnMgr.Now(), time.Millisecond*10)
 	assert.Error(t, err)
 	ts := tae.TxnMgr.Now()
 	err = tae.BGCheckpointRunner.ForceICKP(ctx, &ts)
@@ -9376,9 +9376,9 @@ func TestSnapshotCheckpoint(t *testing.T) {
 			}
 			wg.Wait()
 			ts := types.BuildTS(time.Now().UTC().UnixNano(), 0)
-			db.ForceCheckpoint(ctx, ts, time.Minute)
+			db.ForceCheckpoint(ctx, ts)
 			snapshot := types.BuildTS(time.Now().UTC().UnixNano(), 0)
-			db.ForceCheckpoint(ctx, snapshot, time.Minute)
+			db.ForceCheckpoint(ctx, snapshot)
 			tae.ForceCheckpoint()
 			assert.Equal(t, uint64(0), db.Runtime.Scheduler.GetPenddingLSNCnt())
 			var wg2 sync.WaitGroup
