@@ -125,7 +125,7 @@ func TestBackupData(t *testing.T) {
 	currTs := types.BuildTS(backupTime.UnixNano(), 0)
 	locations := make([]string, 0)
 	locations = append(locations, backupTime.Format(time.DateTime))
-	location, err := db.ForceCheckpointForBackup(ctx, currTs, 20*time.Second)
+	location, err := db.ForceCheckpointForBackup(ctx, currTs)
 	assert.Nil(t, err)
 	_, err = db.BGCheckpointRunner.DisableCheckpoint(ctx)
 	assert.NoError(t, err)
