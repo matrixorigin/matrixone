@@ -48,7 +48,7 @@ func Test_RestartFlusher(t *testing.T) {
 	var ts types.TS
 
 	assert.Equal(t, ErrFlusherStopped, f.FlushTable(ctx, 0, 0, ts))
-	assert.Equal(t, ErrFlusherStopped, f.ForceFlush(ts, ctx, time.Millisecond))
+	assert.Equal(t, ErrFlusherStopped, f.ForceFlush(ctx, ts, time.Millisecond))
 	assert.Equal(t, ErrFlusherStopped, f.ForceFlushWithInterval(ts, ctx, time.Millisecond, time.Millisecond))
 	f.ChangeForceCheckInterval(time.Millisecond)
 	f.ChangeForceFlushTimeout(time.Millisecond)

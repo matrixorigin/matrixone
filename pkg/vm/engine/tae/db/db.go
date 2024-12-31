@@ -158,10 +158,10 @@ func (db *DB) FlushTable(
 }
 
 func (db *DB) ForceFlush(
-	ts types.TS, ctx context.Context, forceDuration time.Duration,
+	ctx context.Context, ts types.TS, forceDuration time.Duration,
 ) (err error) {
 	return db.BGFlusher.ForceFlush(
-		ts, ctx, forceDuration,
+		ctx, ts, forceDuration,
 	)
 }
 
@@ -194,7 +194,7 @@ func (db *DB) ForceCheckpoint(
 		)
 	}()
 
-	err = db.BGFlusher.ForceFlush(ts, ctx, flushDuration)
+	err = db.BGFlusher.ForceFlush(ctx, ts, flushDuration)
 	flushCost = time.Since(t0)
 	if err != nil {
 		return
@@ -218,8 +218,8 @@ func (db *DB) ForceGlobalCheckpoint(
 	flushDuration, versionInterval time.Duration,
 ) (err error) {
 	t0 := time.Now()
-	err = db.BGFlusher.ForceFlush(ts, ctx, flushDuration)
-	forceFlushCost := time.Since(t0)
+	err = db.BGFlusher.ForceFlush(ctx, ts, flushDuration)
+	forceICKPDuration := time.Since(t0)
 	defer func() {
 		logger := logutil.Info
 		if err != nil {
@@ -228,7 +228,7 @@ func (db *DB) ForceGlobalCheckpoint(
 		logger(
 			"Control-ForceGlobalCheckpoint",
 			zap.Duration("total-cost", time.Since(t0)),
-			zap.Duration("force-flush-cost", forceFlushCost),
+			zap.Duration("force-flush-cost", forceICKPDuration),
 			zap.Duration("flush-duration", flushDuration),
 			zap.Duration("version-interval", versionInterval),
 			zap.Error(err),
@@ -252,7 +252,7 @@ func (db *DB) ForceCheckpointForBackup(
 ) (location string, err error) {
 	t0 := time.Now()
 	err = db.ForceCheckpoint(ctx, ts, flushDuration)
-	forceFlushCost := time.Since(t0)
+	t1 := time.Now()
 
 	defer func() {
 		logger := logutil.Info
@@ -260,10 +260,11 @@ func (db *DB) ForceCheckpointForBackup(
 			logger = logutil.Error
 		}
 		logger(
-			"Control-ForeCheckpointForBackup",
+			"Force-Backup-CKP",
 			zap.Duration("total-cost", time.Since(t0)),
-			zap.Duration("force-flush-cost", forceFlushCost),
+			zap.Duration("force-ickp-cost", t1.Sub(t0)),
 			zap.Duration("flush-duration", flushDuration),
+			zap.Duration("create-backup-cost", time.Since(t1)),
 			zap.String("location", location),
 			zap.Error(err),
 		)
@@ -272,15 +273,18 @@ func (db *DB) ForceCheckpointForBackup(
 	if err != nil {
 		return
 	}
+
 	maxEntry := db.BGCheckpointRunner.MaxIncrementalCheckpoint()
 	maxEnd := maxEntry.GetEnd()
 	start := maxEnd.Next()
 	end := db.TxnMgr.Now()
-	err = db.BGFlusher.ForceFlush(end, ctx, flushDuration)
-	if err != nil {
+	if err = db.BGFlusher.ForceFlush(ctx, end, flushDuration); err != nil {
 		return
 	}
-	location, err = db.BGCheckpointRunner.CreateBackupFile(ctx, start, end)
+
+	location, err = db.BGCheckpointRunner.CreateSpecialCheckpointFile(
+		ctx, start, end,
+	)
 
 	return
 }

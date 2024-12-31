@@ -392,6 +392,7 @@ func InitTestDB(
 }
 
 func writeIncrementalCheckpoint(
+	ctx contex.Context,
 	t *testing.T,
 	start, end types.TS,
 	c *catalog.Catalog,
@@ -403,7 +404,7 @@ func writeIncrementalCheckpoint(
 	data, err := factory(c)
 	assert.NoError(t, err)
 	defer data.Close()
-	cnLocation, tnLocation, _, err := data.WriteTo(fs, checkpointBlockRows, checkpointSize)
+	cnLocation, tnLocation, _, err := data.WriteTo(ctx, checkpointBlockRows, checkpointSizea, fs)
 	assert.NoError(t, err)
 	return cnLocation, tnLocation
 }
@@ -588,6 +589,7 @@ func GetUserTablesInsBatch(t *testing.T, tid uint64, start, end types.TS, c *cat
 	return bats[logtail.ObjectInfoIDX], bats[logtail.TombstoneObjectInfoIDX]
 }
 
+// TODO: use ctx
 func CheckCheckpointReadWrite(
 	t *testing.T,
 	start, end types.TS,
@@ -596,10 +598,11 @@ func CheckCheckpointReadWrite(
 	checkpointSize int,
 	fs fileservice.FileService,
 ) {
-	location, _ := writeIncrementalCheckpoint(t, start, end, c, checkpointBlockRows, checkpointSize, fs)
+	ctx := context.Background()
+	location, _ := writeIncrementalCheckpoint(ctx, t, start, end, c, checkpointBlockRows, checkpointSize, fs)
 	tnData := tnReadCheckpoint(t, location, fs)
 
-	checkTNCheckpointData(context.Background(), t, tnData, start, end, c)
+	checkTNCheckpointData(ctx, tnData, start, end, c)
 	p := &catalog.LoopProcessor{}
 
 	p.TableFn = func(te *catalog.TableEntry) error {

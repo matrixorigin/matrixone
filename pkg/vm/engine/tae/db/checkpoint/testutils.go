@@ -16,10 +16,13 @@ package checkpoint
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"go.uber.org/zap"
 )
 
@@ -29,7 +32,10 @@ type TestRunner interface {
 
 	// TODO: remove the below apis
 	CleanPenddingCheckpoint()
-	CreateBackupFile(ctx context.Context, start, end types.TS) (string, error)
+
+	// special file for backup
+	CreateSpecialCheckpointFile(ctx context.Context, start, end types.TS) (string, error)
+
 	ForceGCKP(context.Context, types.TS, time.Duration) error
 	ForceICKP(context.Context, *types.TS) error
 	MaxLSNInRange(end types.TS) uint64
@@ -241,11 +247,64 @@ func (r *runner) ForceICKP(ctx context.Context, ts *types.TS) (err error) {
 	}
 }
 
-func (r *runner) CreateBackupFile(ctx context.Context, start, end types.TS) (string, error) {
+func (r *runner) CreateSpecialCheckpointFile(
+	ctx context.Context,
+	start types.TS,
+	end types.TS,
+) (location string, err error) {
 	now := time.Now()
-	backup := NewCheckpointEntry(r.rt.SID(), start, end, ET_Incremental)
 	defer func() {
-		logutil.Infof("checkpoint for backup %s, takes %s", backup.String(), time.Since(now))
+		logger := logutil.Info
+		if err != nil {
+			logger = logutil.Error
+		}
+		if err != nil || time.Since(now) > 5*time.Second {
+			logger(
+				"CKP-Create-Special-File",
+				zap.String("location", location),
+				zap.Error(err),
+				zap.Duration("duration", time.Since(now)),
+				zap.String("start", start.ToString()),
+				zap.String("end", end.ToString()),
+			)
+		}
 	}()
-	return r.doCheckpointForBackup(ctx, r.GetCfg(), backup)
+
+	select {
+	case <-ctx.Done():
+		err = context.Cause(ctx)
+		return
+	default:
+	}
+
+	factory := logtail.BackupCheckpointDataFactory(r.rt.SID(), start, end)
+	var data *logtail.CheckpointData
+	if data, err = factory(r.catalog); err != nil {
+		return
+	}
+	defer data.Close()
+
+	cfg := r.GetCfg()
+	if cfg == nil {
+		cfg = new(CheckpointCfg)
+		cfg.FillDefaults()
+	}
+	var (
+		cnLocation, tnLocation objectio.Location
+	)
+	if cnLocation, tnLocation, _, err = data.WriteTo(
+		ctx, cfg.BlockMaxRowsHint, cfg.SizeHint, r.rt.Fs.Service,
+	); err != nil {
+		return
+	}
+
+	location = fmt.Sprintf(
+		"%s:%d:%s:%s:%s",
+		cnLocation.String(),
+		logtail.CheckpointCurrentVersion,
+		end.ToString(),
+		tnLocation.String(),
+		start.ToString(),
+	)
+	return
 }

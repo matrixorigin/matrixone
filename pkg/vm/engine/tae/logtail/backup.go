@@ -796,7 +796,9 @@ func ReWriteCheckpointAndBlockFromKey(
 			data.UpdateTombstoneInsertMeta(tid, int32(table.offset), int32(table.end))
 		}
 	}
-	cnLocation, dnLocation, checkpointFiles, err := data.WriteTo(dstFs, DefaultCheckpointBlockRows, DefaultCheckpointSize)
+	cnLocation, dnLocation, checkpointFiles, err := data.WriteTo(
+		ctx, DefaultCheckpointBlockRows, DefaultCheckpointSize, dstFs,
+	)
 	if err != nil {
 		return nil, nil, nil, err
 	}
