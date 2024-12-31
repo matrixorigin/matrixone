@@ -17,6 +17,7 @@ package checkpoint
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -677,7 +678,29 @@ func Test_RunnerStore5(t *testing.T) {
 	assert.True(t, store.RemoveGCKPIntent())
 
 }
+func Test_RunnerStore6(t *testing.T) {
+	store := newRunnerStore("", time.Second, time.Second*1000)
 
+	t1 := types.NextGlobalTsForTest()
+	entry1 := NewCheckpointEntry("", types.TS{}, t1, ET_Global)
+	entry1.SetState(ST_Running)
+
+	assert.True(t, store.AddGCKPIntent(entry1))
+
+	locations, checkpointed, err := store.CollectCheckpointsInRange(
+		context.Background(), types.TS{}, types.NextGlobalTsForTest(),
+	)
+	assert.NoError(t, err)
+
+	// obj1 := objectio.MockObjectName()
+	// loc1 := objectio.BuildLocation(obj1, objectio.NewExtent(1, 1, 1, 1), 1, 1)
+	t.Log(locations)
+	assert.Equalf(t, checkpointed, types.TS{}, checkpointed.ToString())
+	words := strings.Split(locations, ";")
+	_, err = objectio.StringToLocation(words[0])
+	t.Log(err)
+
+}
 func Test_Executor1(t *testing.T) {
 	executor := newCheckpointExecutor(nil, nil)
 	assert.True(t, executor.active.Load())
