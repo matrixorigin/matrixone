@@ -90,12 +90,6 @@ func (g *gckpContext) Merge(other *gckpContext) {
 	g.ckpLSN = other.ckpLSN
 }
 
-type tableAndSize struct {
-	tbl   *catalog.TableEntry
-	asize int
-	dsize int
-}
-
 // Q: What does runner do?
 // A: A checkpoint runner organizes and manages	all checkpoint-related behaviors. It roughly
 //    does the following things:

@@ -53,6 +53,12 @@ type FlushMutableCfg struct {
 	ForceFlushCheckInterval time.Duration
 }
 
+type tableAndSize struct {
+	tbl   *catalog.TableEntry
+	asize int
+	dsize int
+}
+
 type Flusher interface {
 	IsAllChangesFlushed(start, end types.TS, doPrint bool) bool
 	FlushTable(ctx context.Context, dbID, tableID uint64, ts types.TS) error

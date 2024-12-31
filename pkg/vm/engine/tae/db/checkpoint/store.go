@@ -371,33 +371,6 @@ func (s *runnerStore) AddNewIncrementalEntry(entry *CheckpointEntry) {
 	s.incrementals.Set(entry)
 }
 
-func (s *runnerStore) CleanPenddingCheckpoint() {
-	prev := s.MaxIncrementalCheckpoint()
-	if prev == nil {
-		return
-	}
-	if !prev.IsFinished() {
-		s.Lock()
-		s.incrementals.Delete(prev)
-		s.Unlock()
-	}
-	if prev.IsRunning() {
-		logutil.Warnf("Delete a running checkpoint entry")
-	}
-	prev = s.MaxGlobalCheckpoint()
-	if prev == nil {
-		return
-	}
-	if !prev.IsFinished() {
-		s.Lock()
-		s.incrementals.Delete(prev)
-		s.Unlock()
-	}
-	if prev.IsRunning() {
-		logutil.Warnf("Delete a running checkpoint entry")
-	}
-}
-
 func (s *runnerStore) AddICKPFinishedEntry(entry *CheckpointEntry) (success bool) {
 	if !entry.IsFinished() {
 		return false

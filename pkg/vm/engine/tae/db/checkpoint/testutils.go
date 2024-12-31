@@ -30,9 +30,6 @@ type TestRunner interface {
 	EnableCheckpoint(*CheckpointCfg)
 	DisableCheckpoint(ctx context.Context) (*CheckpointCfg, error)
 
-	// TODO: remove the below apis
-	CleanPenddingCheckpoint()
-
 	// special file for backup
 	CreateSpecialCheckpointFile(ctx context.Context, start, end types.TS) (string, error)
 
@@ -78,10 +75,6 @@ func (r *runner) DisableCheckpoint(ctx context.Context) (cfg *CheckpointCfg, err
 
 func (r *runner) EnableCheckpoint(cfg *CheckpointCfg) {
 	r.StartExecutor(cfg)
-}
-
-func (r *runner) CleanPenddingCheckpoint() {
-	r.store.CleanPenddingCheckpoint()
 }
 
 func (r *runner) ForceGCKP(
