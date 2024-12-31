@@ -3831,6 +3831,8 @@ func (h *marshalPlanHandler) Stats(ctx context.Context, ses FeSession) (statsByt
 		statsByte.WithS3IOListCount(totalS3List)
 		statsByte.WithS3IODeleteCount(totalS3Delete)
 	}
+	// Additional permission authentication SQL statistics
+	statsByte.Add(&statsInfo.PermissionAuth)
 	return
 }
 
