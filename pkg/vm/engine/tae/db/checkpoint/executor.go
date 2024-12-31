@@ -126,7 +126,7 @@ func (job *checkpointJob) doGlobalCheckpoint(
 	fields = data.ExportStats("")
 
 	cnLocation, tnLocation, files, err := data.WriteTo(
-		runner.rt.Fs.Service, job.executor.cfg.BlockMaxRowsHint, job.executor.cfg.SizeHint,
+		job.executor.ctx, job.executor.cfg.BlockMaxRowsHint, job.executor.cfg.SizeHint, runner.rt.Fs.Service,
 	)
 	if err != nil {
 		runner.store.RemoveGCKPIntent()
@@ -226,7 +226,7 @@ func (job *checkpointJob) RunICKP(ctx context.Context) (err error) {
 	var files []string
 	var file string
 	if fields, files, err = runner.doIncrementalCheckpoint(
-		&job.executor.cfg, entry,
+		job.executor.ctx, &job.executor.cfg, entry,
 	); err != nil {
 		errPhase = "do-ckp"
 		rollback()
