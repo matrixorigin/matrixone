@@ -70,7 +70,6 @@ type AntiJoin struct {
 	JoinMapTag         int32
 
 	vm.OperatorBase
-	colexec.Projection
 }
 
 func (antiJoin *AntiJoin) GetOperatorBase() *vm.OperatorBase {
@@ -114,18 +113,11 @@ func (antiJoin *AntiJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 	ctr.batchRowCount = 0
 	ctr.eligible = ctr.eligible[:0]
 
-	if antiJoin.ProjectList != nil {
-		if antiJoin.OpAnalyzer != nil {
-			antiJoin.OpAnalyzer.Alloc(antiJoin.ProjectAllocSize + antiJoin.ctr.maxAllocSize)
-		}
-		antiJoin.ctr.maxAllocSize = 0
-		antiJoin.ResetProjection(proc)
-	} else {
-		if antiJoin.OpAnalyzer != nil {
-			antiJoin.OpAnalyzer.Alloc(antiJoin.ctr.maxAllocSize)
-		}
-		antiJoin.ctr.maxAllocSize = 0
+	if antiJoin.OpAnalyzer != nil {
+		antiJoin.OpAnalyzer.Alloc(antiJoin.ctr.maxAllocSize)
 	}
+	antiJoin.ctr.maxAllocSize = 0
+
 }
 
 func (antiJoin *AntiJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
@@ -136,18 +128,10 @@ func (antiJoin *AntiJoin) Free(proc *process.Process, pipelineFailed bool, err e
 	ctr.cleanExprExecutor()
 	ctr.cleanBatch(proc)
 
-	if antiJoin.ProjectList != nil {
-		antiJoin.FreeProjection(proc)
-	}
 }
 
 func (antiJoin *AntiJoin) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
-	batch := input
-	var err error
-	if antiJoin.ProjectList != nil {
-		batch, err = antiJoin.EvalProjection(input, proc)
-	}
-	return batch, err
+	return input, nil
 }
 
 func (ctr *container) resetExprExecutor() {

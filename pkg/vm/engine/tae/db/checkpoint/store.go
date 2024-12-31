@@ -398,24 +398,10 @@ func (s *runnerStore) CleanPenddingCheckpoint() {
 	}
 }
 
-func (s *runnerStore) TryAddNewCompactedCheckpointEntry(entry *CheckpointEntry) (success bool) {
-	if entry.entryType != ET_Compacted {
-		panic("TryAddNewCompactedCheckpointEntry entry type is error")
+func (s *runnerStore) AddICKPFinishedEntry(entry *CheckpointEntry) (success bool) {
+	if !entry.IsFinished() {
+		return false
 	}
-	s.Lock()
-	defer s.Unlock()
-	old := s.compacted.Load()
-	if old != nil {
-		end := old.end
-		if entry.end.LT(&end) {
-			return true
-		}
-	}
-	s.compacted.Store(entry)
-	return true
-}
-
-func (s *runnerStore) TryAddNewIncrementalCheckpointEntry(entry *CheckpointEntry) (success bool) {
 	s.Lock()
 	defer s.Unlock()
 	maxEntry, _ := s.incrementals.Max()
@@ -429,10 +415,7 @@ func (s *runnerStore) TryAddNewIncrementalCheckpointEntry(entry *CheckpointEntry
 
 	// if it is not the right candidate, skip this request
 	// [startTs, endTs] --> [endTs+1, ?]
-	endTS := maxEntry.GetEnd()
-	startTS := entry.GetStart()
-	nextTS := endTS.Next()
-	if !nextTS.Equal(&startTS) {
+	if !maxEntry.IsYoungNeighbor(entry) {
 		success = false
 		return
 	}
@@ -450,9 +433,9 @@ func (s *runnerStore) TryAddNewIncrementalCheckpointEntry(entry *CheckpointEntry
 }
 
 // Since there is no wal after recovery, the checkpoint lsn before backup must be set to 0.
-func (s *runnerStore) TryAddNewBackupCheckpointEntry(entry *CheckpointEntry) (success bool) {
+func (s *runnerStore) AddBackupCKPEntry(entry *CheckpointEntry) (success bool) {
 	entry.entryType = ET_Incremental
-	success = s.TryAddNewIncrementalCheckpointEntry(entry)
+	success = s.AddICKPFinishedEntry(entry)
 	if !success {
 		return
 	}
@@ -497,7 +480,7 @@ func (s *runnerStore) RemoveGCKPIntent() (ok bool) {
 	return true
 }
 
-func (s *runnerStore) AddGCKPReplayEntry(
+func (s *runnerStore) AddGCKPFinishedEntry(
 	entry *CheckpointEntry,
 ) (success bool) {
 	s.Lock()
@@ -648,8 +631,21 @@ func (s *runnerStore) GetCompacted() *CheckpointEntry {
 	return s.compacted.Load()
 }
 
-func (s *runnerStore) UpdateCompacted(entry *CheckpointEntry) {
-	s.compacted.Store(entry)
+func (s *runnerStore) UpdateCompacted(entry *CheckpointEntry) (updated bool) {
+	for {
+		old := s.compacted.Load()
+		if old != nil {
+			newEnd := entry.GetEnd()
+			oldEnd := old.GetEnd()
+			if newEnd.LE(&oldEnd) {
+				return
+			}
+		}
+		if s.compacted.CompareAndSwap(old, entry) {
+			updated = true
+			return
+		}
+	}
 }
 
 func (s *runnerStore) ICKPRange(
@@ -795,17 +791,52 @@ func (s *runnerStore) CollectCheckpointsInRange(
 	}
 	s.Lock()
 	tree := s.incrementals.Copy()
-	global, _ := s.globals.Max()
+	globaltree := s.globals.Copy()
 	s.Unlock()
+
 	locs := make([]string, 0)
 	ckpStart := types.MaxTs()
 	newStart := start
-	if global != nil && global.HasOverlap(start, end) {
-		locs = append(locs, global.GetLocation().String())
-		locs = append(locs, strconv.Itoa(int(global.version)))
-		newStart = global.end.Next()
-		ckpStart = global.GetEnd()
-		checkpointed = global.GetEnd()
+
+	defer func() {
+		if len(locs) == 0 {
+			return
+		}
+		duration := fmt.Sprintf("[%s_%s]",
+			ckpStart.ToString(),
+			checkpointed.ToString())
+		locs = append(locs, duration)
+		locations = strings.Join(locs, ";")
+	}()
+
+	collectEntryFn := func(entry *CheckpointEntry) {
+		locs = append(locs, entry.GetLocation().String())
+		locs = append(locs, strconv.Itoa(int(entry.version)))
+		if checkpointed.LT(&entry.end) {
+			checkpointed = entry.GetEnd()
+		}
+		if entry.IsGlobal() {
+			ckpStart = entry.end
+			newStart = entry.end.Next()
+		}
+		if entry.IsIncremental() {
+			start := entry.start
+			if start.LT(&ckpStart) {
+				ckpStart = start
+			}
+		}
+		// checkpoints = append(checkpoints, entry)
+	}
+
+	globalIter := globaltree.Iter()
+	ok := globalIter.Last()
+	for ok {
+		ckp := globalIter.Item()
+		if ckp.IsCommitted() && ckp.HasOverlap(start, end) {
+			collectEntryFn(ckp)
+			break
+		}
+		ok = globalIter.Prev()
 	}
 	pivot := NewCheckpointEntry(s.sid, newStart, newStart, ET_Incremental)
 
@@ -830,25 +861,10 @@ func (s *runnerStore) CollectCheckpointsInRange(
 		if ok = iter.Prev(); ok {
 			e := iter.Item()
 			if !e.IsCommitted() {
-				if len(locs) == 0 {
-					return
-				}
-				duration := fmt.Sprintf("[%s_%s]",
-					ckpStart.ToString(),
-					ckpStart.ToString())
-				locs = append(locs, duration)
-				locations = strings.Join(locs, ";")
 				return
 			}
 			if e.HasOverlap(newStart, end) {
-				locs = append(locs, e.GetLocation().String())
-				locs = append(locs, strconv.Itoa(int(e.version)))
-				start := e.GetStart()
-				if start.LT(&ckpStart) {
-					ckpStart = start
-				}
-				checkpointed = e.GetEnd()
-				// checkpoints = append(checkpoints, e)
+				collectEntryFn(e)
 			}
 			iter.Next()
 		}
@@ -857,14 +873,7 @@ func (s *runnerStore) CollectCheckpointsInRange(
 			if !e.IsCommitted() || !e.HasOverlap(newStart, end) {
 				break
 			}
-			locs = append(locs, e.GetLocation().String())
-			locs = append(locs, strconv.Itoa(int(e.version)))
-			start := e.GetStart()
-			if start.LT(&ckpStart) {
-				ckpStart = start
-			}
-			checkpointed = e.GetEnd()
-			// checkpoints = append(checkpoints, e)
+			collectEntryFn(e)
 			if ok = iter.Next(); !ok {
 				break
 			}
@@ -872,14 +881,6 @@ func (s *runnerStore) CollectCheckpointsInRange(
 	} else {
 		// if it is empty, quick quit
 		if ok = iter.Last(); !ok {
-			if len(locs) == 0 {
-				return
-			}
-			duration := fmt.Sprintf("[%s_%s]",
-				ckpStart.ToString(),
-				ckpStart.ToString())
-			locs = append(locs, duration)
-			locations = strings.Join(locs, ";")
 			return
 		}
 		// get last entry
@@ -896,24 +897,8 @@ func (s *runnerStore) CollectCheckpointsInRange(
 			locations = strings.Join(locs, ";")
 			return
 		}
-		locs = append(locs, e.GetLocation().String())
-		locs = append(locs, strconv.Itoa(int(e.version)))
-		start := e.GetStart()
-		if start.LT(&ckpStart) {
-			ckpStart = start
-		}
-		checkpointed = e.GetEnd()
-		// checkpoints = append(checkpoints, e)
+		collectEntryFn(e)
 	}
-
-	if len(locs) == 0 {
-		return
-	}
-	duration := fmt.Sprintf("[%s_%s]",
-		ckpStart.ToString(),
-		checkpointed.ToString())
-	locs = append(locs, duration)
-	locations = strings.Join(locs, ";")
 	return
 }
 
@@ -969,14 +954,14 @@ func (s *runnerStore) doGC(ts *types.TS) (gdeleted, ideleted int) {
 	}
 	gloabls := s.globals.Items()
 	for _, e := range gloabls {
-		if e.LessEq(ts) {
+		if e.LEByTS(ts) {
 			s.globals.Delete(e)
 			gdeleted++
 		}
 	}
 	incrementals := s.incrementals.Items()
 	for _, e := range incrementals {
-		if e.LessEq(ts) {
+		if e.LEByTS(ts) {
 			s.incrementals.Delete(e)
 			ideleted++
 		}
