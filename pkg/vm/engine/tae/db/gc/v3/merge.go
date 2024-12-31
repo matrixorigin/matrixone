@@ -192,7 +192,7 @@ func MergeCheckpoint(
 		ckpData.UpdateTombstoneInsertMeta(tid, int32(table.offset), int32(table.end))
 	}
 	cnLocation, tnLocation, files, err := ckpData.WriteTo(
-		fs, logtail.DefaultCheckpointBlockRows, logtail.DefaultCheckpointSize,
+		ctx, logtail.DefaultCheckpointBlockRows, logtail.DefaultCheckpointSize, fs,
 	)
 	if err != nil {
 		return
