@@ -137,7 +137,8 @@ func (s *sqlExecutor) ExecTxn(
 	}
 	err = execFunc(exec)
 	if err != nil {
-		logutil.Errorf("internal sql executor error: %v", err)
+		txnStr := exec.Txn().Txn().DebugString()
+		logutil.Errorf("internal sql executor txn:%s error: %v", txnStr, err)
 		return exec.rollback(err)
 	}
 	if err = exec.commit(); err != nil {
