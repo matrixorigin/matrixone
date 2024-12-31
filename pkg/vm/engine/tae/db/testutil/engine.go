@@ -469,8 +469,13 @@ func cnReadCheckpointWithVersion(t *testing.T, tid uint64, location objectio.Loc
 	return
 }
 
-func checkTNCheckpointData(ctx context.Context, t *testing.T, data *logtail.CheckpointData,
-	start, end types.TS, c *catalog.Catalog) {
+func checkTNCheckpointData(
+	ctx context.Context,
+	t *testing.T,
+	data *logtail.CheckpointData,
+	start, end types.TS,
+	c *catalog.Catalog,
+) {
 	factory := logtail.IncrementalCheckpointDataFactory("", start, end, false)
 	data2, err := factory(c)
 	assert.NoError(t, err)

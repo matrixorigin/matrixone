@@ -79,7 +79,7 @@ func MergeCheckpoint(
 		datas = append(datas, data)
 		var nameMeta string
 		if ckpEntry.GetType() == checkpoint.ET_Compacted {
-			nameMeta = ioutil.EncodeCKPMetadataFullName(
+			nameMeta = ioutil.EncodeCompactCKPMetadataFullName(
 				ckpEntry.GetStart(), ckpEntry.GetEnd(),
 			)
 		} else {
