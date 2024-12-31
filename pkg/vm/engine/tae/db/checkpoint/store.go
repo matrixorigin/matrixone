@@ -574,12 +574,6 @@ func (s *runnerStore) GetAllIncrementalCheckpoints() []*CheckpointEntry {
 	return snapshot.Items()
 }
 
-func (s *runnerStore) GetGlobalCheckpointCount() int {
-	s.RLock()
-	defer s.RUnlock()
-	return s.globals.Len()
-}
-
 func (s *runnerStore) GetLowWaterMark() types.TS {
 	s.RLock()
 	defer s.RUnlock()
