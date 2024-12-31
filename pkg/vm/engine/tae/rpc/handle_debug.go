@@ -453,21 +453,16 @@ func (h *Handle) HandleFlushTable(
 	ctx context.Context,
 	meta txn.TxnMeta,
 	req *cmd_util.FlushTable,
-	resp *api.SyncLogTailResp) (cb func(), err error) {
-
-	// We use current TS instead of transaction ts.
-	// Here, the point of this handle function is to trigger a flush
-	// via mo_ctl.  We mimic the behaviour of a real background flush
-	// currTs := types.TimestampToTS(meta.GetSnapshotTS())
-	currTs := types.BuildTS(time.Now().UTC().UnixNano(), 0)
-
+	resp *api.SyncLogTailResp,
+) (cb func(), err error) {
 	err = h.db.FlushTable(
 		ctx,
 		req.AccessInfo.AccountID,
 		req.DatabaseID,
 		req.TableID,
-		currTs)
-	return nil, err
+		h.db.TxnMgr.Now(),
+	)
+	return
 }
 
 func (h *Handle) HandleForceGlobalCheckpoint(
@@ -557,8 +552,8 @@ func (h *Handle) HandleDiskCleaner(
 	ctx context.Context,
 	meta txn.TxnMeta,
 	req *cmd_util.DiskCleaner,
-	resp *api.SyncLogTailResp) (cb func(), err error) {
-
+	resp *api.SyncLogTailResp,
+) (cb func(), err error) {
 	op := req.Op
 	key := req.Key
 	value := req.Value
