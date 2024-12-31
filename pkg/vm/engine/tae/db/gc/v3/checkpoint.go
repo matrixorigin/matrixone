@@ -863,6 +863,7 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 		return
 	}
 
+	// SJW TODO: need to handle not updated scenario
 	c.checkpointCli.UpdateCompacted(newCheckpoint)
 
 	// update checkpoint gc water mark

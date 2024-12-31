@@ -130,6 +130,7 @@ func (getter *MetadataEntryGetter) processOneBatch(
 			policyChecked: true,
 			cnLocation:    cnLoc.Clone(),
 			tnLocation:    tnLoc.Clone(),
+			doneC:         make(chan struct{}),
 		}
 		if onEachEntry != nil {
 			onEachEntry(entry)
