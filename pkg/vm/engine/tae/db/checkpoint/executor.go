@@ -59,7 +59,7 @@ func (job *checkpointJob) RunGCKP(ctx context.Context) (err error) {
 		job.gckpCtx.end,
 		job.gckpCtx.ckpLSN,
 		job.gckpCtx.truncateLSN,
-		job.gckpCtx.interval,
+		job.gckpCtx.histroyRetention,
 	)
 
 	return
@@ -275,10 +275,10 @@ func (job *checkpointJob) RunICKP(ctx context.Context) (err error) {
 
 	runner.postCheckpointQueue.Enqueue(entry)
 	runner.TryTriggerExecuteGCKP(&gckpContext{
-		end:         entry.end,
-		interval:    job.executor.cfg.GlobalHistoryDuration,
-		ckpLSN:      lsn,
-		truncateLSN: lsnToTruncate,
+		end:              entry.end,
+		histroyRetention: job.executor.cfg.GlobalHistoryDuration,
+		ckpLSN:           lsn,
+		truncateLSN:      lsnToTruncate,
 	})
 
 	return nil

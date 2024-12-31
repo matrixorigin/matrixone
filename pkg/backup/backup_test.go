@@ -338,7 +338,7 @@ func TestBackupData3(t *testing.T) {
 	testutil.CheckAllColRowsByScan(t, rel, int(totalRows), true)
 	assert.NoError(t, txn.Commit(context.Background()))
 	db.MergeBlocks(true)
-	db.ForceGlobalCheckpoint(ctx, db.TxnMgr.Now(), time.Second, time.Second)
+	db.ForceGlobalCheckpoint(ctx, db.TxnMgr.Now(), time.Second)
 	t.Log(db.Catalog.SimplePPString(3))
 	db.Restart(ctx)
 
@@ -419,7 +419,7 @@ func TestBackupData4(t *testing.T) {
 	testutil.CheckAllColRowsByScan(t, rel, int(totalRows), true)
 	assert.NoError(t, txn.Commit(context.Background()))
 	db.MergeBlocks(true)
-	db.ForceGlobalCheckpoint(ctx, db.TxnMgr.Now(), time.Second, time.Second)
+	db.ForceGlobalCheckpoint(ctx, db.TxnMgr.Now(), time.Second)
 	t.Log(db.Catalog.SimplePPString(3))
 	db.Restart(ctx)
 

@@ -57,11 +57,11 @@ func (p *countBasedPolicy) Check(current int) bool {
 }
 
 type gckpContext struct {
-	force       bool
-	end         types.TS
-	interval    time.Duration
-	truncateLSN uint64
-	ckpLSN      uint64
+	force            bool
+	end              types.TS
+	histroyRetention time.Duration
+	truncateLSN      uint64
+	ckpLSN           uint64
 }
 
 func (g gckpContext) String() string {
@@ -71,7 +71,7 @@ func (g gckpContext) String() string {
 		g.end.ToString(),
 		g.truncateLSN,
 		g.ckpLSN,
-		g.interval.String(),
+		g.histroyRetention.String(),
 	)
 }
 
@@ -86,7 +86,7 @@ func (g *gckpContext) Merge(other *gckpContext) {
 		return
 	}
 	g.end = other.end
-	g.interval = other.interval
+	g.histroyRetention = other.histroyRetention
 	g.truncateLSN = other.truncateLSN
 	g.ckpLSN = other.ckpLSN
 }

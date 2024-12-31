@@ -85,7 +85,7 @@ func (r *runner) CleanPenddingCheckpoint() {
 }
 
 func (r *runner) ForceGCKP(
-	ctx context.Context, end types.TS, interval time.Duration,
+	ctx context.Context, end types.TS, histroyRetention time.Duration,
 ) (err error) {
 	var (
 		maxEntry *CheckpointEntry
@@ -122,9 +122,9 @@ func (r *runner) ForceGCKP(
 	}
 
 	request := &gckpContext{
-		force:    true,
-		end:      maxEntry.end,
-		interval: interval,
+		force:            true,
+		end:              maxEntry.end,
+		histroyRetention: histroyRetention,
 	}
 
 	if err = r.TryTriggerExecuteGCKP(request); err != nil {
@@ -143,7 +143,7 @@ func (r *runner) ForceGCKP(
 		}
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, time.Minute*2)
+	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
 	defer cancel()
 
 	for {
