@@ -42,6 +42,7 @@ func TestCkpCheck(t *testing.T) {
 					state:      ST_Finished,
 					cnLocation: objectio.Location(fmt.Sprintf("loc-%d", i)),
 					version:    1,
+					entryType:  ET_Incremental,
 				})
 			}
 
@@ -51,6 +52,7 @@ func TestCkpCheck(t *testing.T) {
 				state:      ST_Running,
 				cnLocation: objectio.Location("loc-100"),
 				version:    1,
+				entryType:  ET_Incremental,
 			})
 
 			ctx := context.Background()
@@ -89,6 +91,7 @@ func TestGetCheckpoints1(t *testing.T) {
 			state:      ST_Finished,
 			cnLocation: objectio.Location(fmt.Sprintf("ckp%d", i)),
 			version:    1,
+			entryType:  ET_Incremental,
 		}
 		if i == 4 {
 			entry.state = ST_Pending
@@ -172,6 +175,7 @@ func TestGetCheckpoints2(t *testing.T) {
 				state:      ST_Finished,
 				cnLocation: objectio.Location(fmt.Sprintf("global%d", i)),
 				version:    100,
+				entryType:  ET_Global,
 			}
 			r.store.globals.Set(entry)
 		}
@@ -185,6 +189,7 @@ func TestGetCheckpoints2(t *testing.T) {
 			state:      ST_Finished,
 			cnLocation: objectio.Location(fmt.Sprintf("ckp%d", i)),
 			version:    uint32(i),
+			entryType:  ET_Incremental,
 		}
 		if i == 4 {
 			entry.state = ST_Pending
