@@ -1599,7 +1599,8 @@ func (c *checkpointCleaner) appendFilesToWAL(files ...string) error {
 	if err != nil {
 		return err
 	}
-	_, err = c.logDriver.AppendEntry(store.GroupFiles, entry)
+	c.logDriver.AllocateLSN(store.GroupFiles, entry)
+	err = c.logDriver.AppendEntry(entry)
 	if err != nil {
 		return err
 	}

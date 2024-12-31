@@ -17,6 +17,8 @@ package logtail
 import (
 	"context"
 	"fmt"
+	"github.com/panjf2000/ants/v2"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -80,18 +82,21 @@ type Manager struct {
 	truncated types.TS
 	nowClock  func() types.TS // nowClock is from TxnManager
 
-	previousSaveTS      types.TS
-	logtailCallback     atomic.Pointer[callback]
-	collectLogtailQueue sm.Queue
-	waitCommitQueue     sm.Queue
-	eventOnce           sync.Once
-	nextCompactTS       types.TS
+	previousSaveTS  types.TS
+	logtailCallback atomic.Pointer[callback]
+	logtailQueue    sm.Queue
+	eventOnce       sync.Once
+	nextCompactTS   types.TS
+
+	orderedList []*txnWithLogtails
+	collectWg   sync.WaitGroup
+	collectPool *ants.Pool
 }
 
 func NewManager(
 	rt *dbutils.Runtime,
 	blockSize int,
-	nowClock func() types.TS) *Manager {
+	nowClock func() types.TS) (*Manager, error) {
 
 	mgr := &Manager{
 		rt: rt,
@@ -101,10 +106,14 @@ func NewManager(
 		),
 		nowClock: nowClock,
 	}
-	mgr.collectLogtailQueue = sm.NewSafeQueue(10000, 100, mgr.onCollectTxnLogtails)
-	mgr.waitCommitQueue = sm.NewSafeQueue(10000, 100, mgr.onWaitTxnCommit)
 
-	return mgr
+	var err error
+
+	mgr.orderedList = make([]*txnWithLogtails, 1000)
+	mgr.collectPool, err = ants.NewPool(runtime.NumCPU())
+	mgr.logtailQueue = sm.NewSafeQueue(10000, 100, mgr.onTxnLogTails)
+
+	return mgr, err
 }
 
 type txnWithLogtails struct {
@@ -113,44 +122,64 @@ type txnWithLogtails struct {
 	closeCB func()
 }
 
-func (mgr *Manager) onCollectTxnLogtails(items ...any) {
-	for _, item := range items {
+func (mgr *Manager) onTxnLogTails(items ...any) {
+	if len(mgr.orderedList) < len(items) {
+		mgr.orderedList = make([]*txnWithLogtails, len(items))
+	}
+
+	for i, item := range items {
 		txn := item.(txnif.AsyncTxn)
 		if txn.IsReplay() {
 			continue
 		}
-		builder := NewTxnLogtailRespBuilder(mgr.rt)
-		entries, closeCB := builder.CollectLogtail(txn)
-		txn.GetStore().DoneWaitEvent(1)
-		txnWithLogtails := &txnWithLogtails{
-			txn:     txn,
-			tails:   entries,
-			closeCB: closeCB,
-		}
-		mgr.waitCommitQueue.Enqueue(txnWithLogtails)
-	}
-}
-func (mgr *Manager) onWaitTxnCommit(items ...any) {
-	for _, item := range items {
-		txn := item.(*txnWithLogtails)
-		state := txn.txn.GetTxnState(true)
-		if state != txnif.TxnStateCommitted {
-			if state != txnif.TxnStateRollbacked {
-				panic(fmt.Sprintf("wrong state %v", state))
+
+		mgr.collectWg.Add(1)
+
+		mgr.collectPool.Submit(func() {
+			defer func() {
+				mgr.collectWg.Done()
+			}()
+
+			txn.GetStore().WaitEvent(txnif.WalPreparing)
+
+			builder := NewTxnLogtailRespBuilder(mgr.rt)
+			entries, closeCB := builder.CollectLogtail(txn)
+
+			txn.GetStore().DoneEvent(txnif.TailCollecting)
+
+			txnTail := &txnWithLogtails{
+				txn:     txn,
+				tails:   entries,
+				closeCB: closeCB,
 			}
-			continue
+
+			mgr.orderedList[i] = txnTail
+
+			state := txn.GetTxnState(true)
+			if state != txnif.TxnStateCommitted {
+				if state != txnif.TxnStateRollbacked {
+					panic(fmt.Sprintf("wrong state %v", state))
+				}
+				return
+			}
+		})
+	}
+
+	mgr.collectWg.Wait()
+	for i := range len(items) {
+		if mgr.orderedList[i] != nil {
+			mgr.generateLogtailWithTxn(mgr.orderedList[i])
+			mgr.orderedList[i] = nil
 		}
-		mgr.generateLogtailWithTxn(txn)
 	}
 }
 
 func (mgr *Manager) Stop() {
-	mgr.collectLogtailQueue.Stop()
-	mgr.waitCommitQueue.Stop()
+	mgr.logtailQueue.Stop()
+	mgr.collectPool.Release()
 }
 func (mgr *Manager) Start() {
-	mgr.waitCommitQueue.Start()
-	mgr.collectLogtailQueue.Start()
+	mgr.logtailQueue.Start()
 }
 
 func (mgr *Manager) generateLogtailWithTxn(txn *txnWithLogtails) {
@@ -184,8 +213,8 @@ func (mgr *Manager) OnEndPrePrepare(txn txnif.AsyncTxn) {
 	mgr.table.AddTxn(txn)
 }
 func (mgr *Manager) OnEndPrepareWAL(txn txnif.AsyncTxn) {
-	txn.GetStore().AddWaitEvent(1)
-	mgr.collectLogtailQueue.Enqueue(txn)
+	txn.GetStore().AddEvent(txnif.TailCollecting)
+	mgr.logtailQueue.Enqueue(txn)
 }
 
 // GetReader get a snapshot of all txn prepared between from and to.

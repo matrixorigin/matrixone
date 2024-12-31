@@ -369,7 +369,7 @@ func TestNodeCommand(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, cmd.(*AppendCmd).Data)
 	//if entry != nil {
-	//	_ = entry.WaitDone()
+	//	_ = entry.DoneApply()
 	//	entry.Free()
 	//}
 	if cmd != nil {

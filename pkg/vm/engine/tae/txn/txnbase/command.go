@@ -140,11 +140,11 @@ type ComposedCmd struct {
 
 	// CmdBufLimit indicates max cmd buffer size. We can only send out
 	// the cmd buffer whose size is less than it.
-	CmdBufLimit int64
+	//CmdBufLimit int64
 
 	// lastPos is the position in the Cmds list, before which the cmds have
 	// been marshalled into buffer.
-	LastPos int
+	//LastPos int
 }
 
 type BaseCustomizedCmd struct {
@@ -165,9 +165,9 @@ func NewComposedCmd(maxSize uint64) *ComposedCmd {
 		maxSize = math.MaxInt64
 	}
 	return &ComposedCmd{
-		Cmds:        make([]txnif.TxnCmd, 0),
-		CmdBufLimit: int64(maxSize - CmdBufReserved),
-		LastPos:     -1, // init value.
+		Cmds: make([]txnif.TxnCmd, 0),
+		//CmdBufLimit: int64(maxSize - CmdBufReserved),
+		//LastPos:     -1, // init value.
 	}
 }
 
@@ -459,10 +459,10 @@ func (cc *ComposedCmd) MarshalBinary() (buf []byte, err error) {
 	// cmdBuf only buffers the cmds.
 	var cmdBuf bytes.Buffer
 
-	if cc.LastPos < 0 {
-		cc.LastPos = 0
-	}
-	prevLastPos := cc.LastPos
+	//if cc.LastPos < 0 {
+	//	cc.LastPos = 0
+	//}
+	//prevLastPos := cc.LastPos
 	if _, err = cc.WriteTo(&cmdBuf); err != nil {
 		return
 	}
@@ -477,12 +477,12 @@ func (cc *ComposedCmd) MarshalBinary() (buf []byte, err error) {
 	if _, err = headerBuf.Write(types.EncodeUint16(&ver)); err != nil {
 		return
 	}
-	var length uint32
-	if cc.LastPos == 0 {
-		length = uint32(len(cc.Cmds) - prevLastPos)
-	} else {
-		length = uint32(cc.LastPos - prevLastPos)
-	}
+	var length uint32 = uint32(len(cc.Cmds))
+	//if cc.LastPos == 0 {
+	//	length = uint32(len(cc.Cmds) - prevLastPos)
+	//} else {
+	//	length = uint32(cc.LastPos - prevLastPos)
+	//}
 	if _, err = headerBuf.Write(types.EncodeUint32(&length)); err != nil {
 		return
 	}
@@ -510,7 +510,7 @@ func (cc *ComposedCmd) UnmarshalBinary(buf []byte) (err error) {
 }
 
 func (cc *ComposedCmd) WriteTo(w io.Writer) (n int64, err error) {
-	for idx, cmd := range cc.Cmds[cc.LastPos:] {
+	for _, cmd := range cc.Cmds[:] {
 		var buf []byte
 		var sn int64
 		if buf, err = cmd.MarshalBinary(); err != nil {
@@ -521,16 +521,16 @@ func (cc *ComposedCmd) WriteTo(w io.Writer) (n int64, err error) {
 		// We do the check before write the cmd to writer, there must be cmds
 		// that have not been pushed into the buffer. So do NOT need to set
 		// cc.LastPos to zero.
-		if n+int64(len(buf))+4 >= cc.CmdBufLimit {
-			cc.LastPos += idx
-			return
-		}
+		//if n+int64(len(buf))+4 >= cc.CmdBufLimit {
+		//	cc.LastPos += idx
+		//	return
+		//}
 		if sn, err = objectio.WriteBytes(buf, w); err != nil {
 			return
 		}
 		n += sn
 	}
-	cc.LastPos = 0
+	//cc.LastPos = 0
 	return
 }
 
@@ -538,9 +538,9 @@ func (cc *ComposedCmd) AddCmd(cmd txnif.TxnCmd) {
 	cc.Cmds = append(cc.Cmds, cmd)
 }
 
-func (cc *ComposedCmd) MoreCmds() bool {
-	return cc.LastPos != 0
-}
+//func (cc *ComposedCmd) MoreCmds() bool {
+//	return cc.LastPos != 0
+//}
 
 func (cc *ComposedCmd) ToString(prefix string) string {
 	s := fmt.Sprintf("%sComposedCmd: Cnt=%d", prefix, len(cc.Cmds))

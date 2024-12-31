@@ -52,7 +52,7 @@ func BuildFilesEntry(files []string) (entry.Entry, error) {
 func (w *StoreImpl) RangeCheckpoint(gid uint32, start, end uint64, files ...string) (ckpEntry entry.Entry, err error) {
 	logutil.Info("TRACE-WAL-TRUNCATE-RangeCheckpoint", zap.Uint32("group", gid), zap.Uint64("lsn", end))
 	ckpEntry = w.makeRangeCheckpointEntry(gid, start, end)
-	drentry, _, err := w.doAppend(GroupCKP, ckpEntry)
+	drentry, err := w.doAppend(ckpEntry)
 	if err == sm.ErrClose {
 		return nil, err
 	}
@@ -65,7 +65,9 @@ func (w *StoreImpl) RangeCheckpoint(gid uint32, start, end uint64, files ...stri
 		if err != nil {
 			return
 		}
-		_, _, err = w.doAppend(GroupFiles, fileEntry)
+
+		w.AllocateLSN(GroupFiles, fileEntry)
+		_, err = w.doAppend(fileEntry)
 		if err != nil {
 			return
 		}
@@ -77,6 +79,28 @@ func (w *StoreImpl) RangeCheckpoint(gid uint32, start, end uint64, files ...stri
 	return
 }
 
+func (w *StoreImpl) makeInternalCheckpointEntry() (e entry.Entry) {
+	e = entry.GetBase()
+	lsn := w.GetSynced(GroupCKP)
+	e.SetType(entry.IOET_WALEntry_PostCommit)
+	buf, err := w.marshalPostCommitEntry()
+	if err != nil {
+		panic(err)
+	}
+	err = e.SetPayload(buf)
+	if err != nil {
+		panic(err)
+	}
+	info := &entry.Info{}
+	info.TargetLsn = lsn
+	info.Group = GroupInternal
+	e.SetInfo(info)
+
+	w.AllocateLSN(GroupInternal, e)
+
+	return
+}
+
 func (w *StoreImpl) makeRangeCheckpointEntry(gid uint32, start, end uint64) (ckpEntry entry.Entry) {
 	info := &entry.Info{
 		Group: entry.GTCKp,
@@ -85,9 +109,13 @@ func (w *StoreImpl) makeRangeCheckpointEntry(gid uint32, start, end uint64) (ckp
 			Ranges: common.NewClosedIntervalsByInterval(&common.ClosedInterval{Start: start, End: end}),
 		}},
 	}
+
 	ckpEntry = entry.GetBase()
 	ckpEntry.SetType(entry.IOET_WALEntry_Checkpoint)
 	ckpEntry.SetInfo(info)
+
+	w.AllocateLSN(GroupCKP, ckpEntry)
+
 	return
 }
 
@@ -114,7 +142,8 @@ func (w *StoreImpl) onCheckpoint() {
 func (w *StoreImpl) ckpCkp() {
 	t0 := time.Now()
 	e := w.makeInternalCheckpointEntry()
-	driverEntry, _, err := w.doAppend(GroupInternal, e)
+
+	driverEntry, err := w.doAppend(e)
 	if err == sm.ErrClose {
 		return
 	}

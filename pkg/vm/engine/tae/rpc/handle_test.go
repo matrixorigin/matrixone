@@ -16,6 +16,7 @@ package rpc
 
 import (
 	"context"
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -40,6 +41,7 @@ func TestHandleInspectPolicy(t *testing.T) {
 		Extra: &apipb.SchemaExtra{},
 	})
 	require.NoError(t, err)
+	fmt.Println("STEP A", asyncTxn)
 	require.NoError(t, asyncTxn.Commit(context.Background()))
 
 	resp := &cmd_util.InspectResp{}

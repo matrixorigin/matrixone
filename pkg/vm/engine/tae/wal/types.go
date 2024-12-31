@@ -34,7 +34,7 @@ type LogEntry entry.Entry
 type Driver interface {
 	GetCheckpointed() uint64
 	RangeCheckpoint(start, end uint64, files ...string) (e LogEntry, err error)
-	AppendEntry(uint32, LogEntry) (uint64, error)
+	AppendEntry(LogEntry) error
 	LoadEntry(groupID uint32, lsn uint64) (LogEntry, error)
 	GetCurrSeqNum() uint64
 	GetPenddingCnt() uint64
@@ -43,4 +43,6 @@ type Driver interface {
 	Close() error
 
 	GetTruncated() uint64
+
+	AllocateLSN(gid uint32, e LogEntry) (lsn uint64)
 }

@@ -153,7 +153,9 @@ func (job *checkpointJob) doGlobalCheckpoint(
 	if err != nil {
 		return
 	}
-	_, err = runner.wal.AppendEntry(store.GroupFiles, fileEntry)
+
+	runner.wal.AllocateLSN(store.GroupFiles, fileEntry)
+	err = runner.wal.AppendEntry(fileEntry)
 	if err != nil {
 		return
 	}

@@ -15,8 +15,6 @@
 package txnimpl
 
 import (
-	"time"
-
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"go.uber.org/zap"
 
@@ -54,50 +52,57 @@ func (mgr *commandManager) AddCmd(cmd txnif.TxnCmd) {
 	mgr.csn++
 }
 
-func (mgr *commandManager) ApplyTxnRecord(txn txnif.AsyncTxn) (logEntry entry.Entry, err error) {
+func (mgr *commandManager) ApplyTxnRecord(store *txnStore) (logEntry entry.Entry, err error) {
 	if mgr.driver == nil {
 		return
 	}
-	t1 := time.Now()
-	mgr.cmd.SetTxn(txn)
-	var buf []byte
-	if buf, err = mgr.cmd.MarshalBinary(); err != nil {
-		return
-	}
-	if len(buf) > 10*mpool.MB {
-		logutil.Info(
-			"BIG-TXN",
-			zap.Int("wal-size", len(buf)),
-			zap.Uint64("lsn", mgr.lsn),
-			zap.String("txn", txn.String()),
-		)
-	}
+
+	mgr.cmd.SetTxn(store.txn)
+
+	store.AddEvent(txnif.WalPreparing)
+
 	logEntry = entry.GetBase()
-	logEntry.SetType(IOET_WALEntry_TxnRecord)
-	if err = logEntry.SetPayload(buf); err != nil {
-		return
-	}
-	info := &entry.Info{
-		Group: wal.GroupPrepare,
-	}
+	info := &entry.Info{Group: wal.GroupPrepare}
 	logEntry.SetInfo(info)
-	t2 := time.Now()
-	mgr.lsn, err = mgr.driver.AppendEntry(wal.GroupPrepare, logEntry)
-	t3 := time.Now()
-	if t3.Sub(t1) > time.Millisecond*500 {
-		logutil.Warn(
-			"SLOW-LOG",
-			zap.String("txn", txn.String()),
-			zap.Duration("make-log-entry-duration", t3.Sub(t1)),
+
+	// the wal ordered by the lsn is needed in the replay, so
+	// this allocation cannot be done in the callback.
+	mgr.lsn = mgr.driver.AllocateLSN(wal.GroupPrepare, logEntry)
+
+	logEntry.RegisterGroupWalPreCallbacks(func() error {
+		defer func() {
+			store.DoneEvent(txnif.WalPreparing)
+		}()
+
+		var (
+			err2 error
+			buf  []byte
 		)
-	}
-	if t3.Sub(t2) > time.Millisecond*20 {
-		logutil.Warn(
-			"SLOW-LOG",
-			zap.Duration("append-log-entry-duration", t3.Sub(t1)),
-			zap.String("txn", txn.String()),
-		)
-	}
-	logutil.Debugf("ApplyTxnRecord LSN=%d, Size=%d", mgr.lsn, len(buf))
+
+		if buf, err2 = mgr.cmd.MarshalBinary(); err2 != nil {
+			return err2
+		}
+
+		if len(buf) > 10*mpool.MB {
+			logutil.Info(
+				"BIG-TXN",
+				zap.Int("wal-size", len(buf)),
+				zap.Uint64("lsn", mgr.lsn),
+				zap.String("txn", store.txn.String()),
+			)
+		}
+
+		logEntry.SetType(IOET_WALEntry_TxnRecord)
+		if err2 = logEntry.SetPayload(buf); err2 != nil {
+			return err2
+		}
+
+		logutil.Debugf("Marshal Command LSN=%d, Size=%d", mgr.lsn, len(buf))
+
+		return nil
+	})
+
+	err = mgr.driver.AppendEntry(logEntry)
+
 	return
 }

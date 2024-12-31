@@ -129,8 +129,8 @@ type TxnWriter interface {
 }
 
 type TxnAsyncer interface {
-	WaitDone(error, bool) error
-	WaitPrepared(ctx context.Context) error
+	DoneApply(error, bool) error
+	WaitWalAndTail(ctx context.Context) error
 }
 
 type TxnTest interface {
@@ -251,12 +251,17 @@ type Tracer interface {
 	EndTrace()
 }
 
+const (
+	TailCollecting = iota
+	WalPreparing
+)
+
 type TxnStore interface {
 	io.Closer
 	Tracer
 	Txn2PC
 	TxnUnsafe
-	WaitPrepared(ctx context.Context) error
+	WaitWalAndTail(ctx context.Context) error
 	BindTxn(AsyncTxn)
 	GetLSN() uint64
 	GetContext() context.Context
@@ -304,8 +309,10 @@ type TxnStore interface {
 
 	LogTxnEntry(dbId, tableId uint64, entry TxnEntry, readedObject, readedTombstone []*common.ID) error
 	LogTxnState(sync bool) (entry.Entry, error)
-	DoneWaitEvent(cnt int)
-	AddWaitEvent(cnt int)
+
+	DoneEvent(typ int)
+	AddEvent(typ int)
+	WaitEvent(typ int)
 
 	IsReadonly() bool
 	IncreateWriteCnt() int
