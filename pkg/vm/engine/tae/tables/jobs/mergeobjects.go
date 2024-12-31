@@ -78,9 +78,20 @@ func NewMergeObjectsTask(
 	rt *dbutils.Runtime,
 	targetObjSize uint32,
 	isTombstone bool) (task *mergeObjectsTask, err error) {
-	if len(mergedObjs) == 0 {
-		panic("empty mergedObjs")
+	objs := mergedObjs
+	mergedObjs = make([]*catalog.ObjectEntry, 0, len(objs))
+	for _, obj := range objs {
+		if obj.HasDropIntent() {
+			continue
+		}
+		mergedObjs = append(mergedObjs, obj)
 	}
+
+	if len(mergedObjs) == 0 {
+		logutil.Infof("[MERGE-EMPTY] no object to merge, don't worry")
+		return nil, moerr.GetOkStopCurrRecur()
+	}
+
 	task = &mergeObjectsTask{
 		txn:              txn,
 		rt:               rt,
