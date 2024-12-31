@@ -798,7 +798,7 @@ func (s *runnerStore) CollectCheckpointsInRange(
 	ckpStart := types.MaxTs()
 	newStart := start
 
-	defer func(){
+	defer func() {
 		if len(locs) == 0 {
 			return
 		}
@@ -832,7 +832,7 @@ func (s *runnerStore) CollectCheckpointsInRange(
 	ok := globalIter.Last()
 	for ok {
 		ckp := globalIter.Item()
-		if ckp.IsCommitted() && ckp.HasOverlap(start,end) {
+		if ckp.IsCommitted() && ckp.HasOverlap(start, end) {
 			collectEntryFn(ckp)
 			break
 		}
