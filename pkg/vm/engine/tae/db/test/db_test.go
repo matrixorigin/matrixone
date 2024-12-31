@@ -7940,6 +7940,83 @@ func Test_CheckpointChaos2(t *testing.T) {
 
 }
 
+func Test_CheckpointChaos3(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	opts := config.WithLongScanAndCKPOptsAndQuickGC(nil)
+	ctx := context.Background()
+
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	idx := 0
+	currDBName := func() string {
+		return fmt.Sprintf("db_%d", idx)
+	}
+	nextDBName := func() string {
+		idx++
+		return currDBName()
+	}
+
+	commitOneTxn := func() {
+		txn, _ := tae.StartTxn(nil)
+		_, err := testutil.CreateDatabase2(ctx, txn, nextDBName())
+		assert.Nil(t, err)
+		assert.Nil(t, txn.Commit(context.Background()))
+	}
+
+	commitOneTxn()
+
+	err := tae.DB.ForceCheckpoint(ctx, tae.TxnMgr.Now(), time.Minute)
+	assert.NoError(t, err)
+
+	commitOneTxn()
+
+	err = tae.DB.ForceCheckpoint(ctx, tae.TxnMgr.Now(), time.Minute)
+	assert.NoError(t, err)
+
+	fault.Enable()
+	defer fault.Disable()
+
+	rmFn1, err := objectio.InjectWait(objectio.FJ_GCKPWait1)
+	assert.NoError(t, err)
+	rmFn2, err := objectio.InjectNotify(t.Name(), objectio.FJ_GCKPWait1)
+	assert.NoError(t, err)
+
+	doneC := make(chan struct{})
+	go func() {
+		err := tae.DB.ForceGlobalCheckpoint(ctx, tae.TxnMgr.Now(), 0, 0)
+		close(doneC)
+		assert.NoError(t, err)
+	}()
+
+	objectio.NotifyInjected(t.Name())
+
+	commitOneTxn()
+	err = tae.DB.ForceCheckpoint(ctx, tae.TxnMgr.Now(), time.Minute)
+	assert.NoError(t, err)
+
+	objectio.NotifyInjected(t.Name())
+	rmFn1()
+	rmFn2()
+
+	<-doneC
+
+	maxGCKP := tae.DB.BGCheckpointRunner.MaxGlobalCheckpoint()
+	assert.NotNil(t, maxGCKP)
+	t.Logf("maxGCKP: %s", maxGCKP.String())
+
+	tae.DB.DiskCleaner.GC(ctx)
+	testutils.WaitExpect(4000, func() bool {
+		return tae.DB.DiskCleaner.GetCleaner().GetScanWaterMark() != nil
+	})
+
+	tae.Restart(ctx)
+	maxGCKP2 := tae.DB.BGCheckpointRunner.MaxGlobalCheckpoint()
+	t.Logf("maxGCKP2: %s", maxGCKP2.String())
+	assert.NotNil(t, maxGCKP2)
+	assert.Equal(t, maxGCKP.GetEnd(), maxGCKP2.GetEnd())
+}
+
 func TestGCCatalog1(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	ctx := context.Background()
