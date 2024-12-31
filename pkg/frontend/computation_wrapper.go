@@ -206,7 +206,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 
 	cacheHit := cwft.plan != nil
 	if !cacheHit {
-		cwft.plan, err = buildPlanWithAuthorizationV1(execCtx.reqCtx, cwft.ses, cwft.ses.GetTxnCompileCtx(), cwft.stmt)
+		cwft.plan, err = buildPlanWithAuthorization(execCtx.reqCtx, cwft.ses, cwft.ses.GetTxnCompileCtx(), cwft.stmt)
 		if err != nil {
 			return nil, err
 		}
@@ -538,6 +538,7 @@ func createCompile(
 	)
 	retCompile.SetIsPrepare(isPrepare)
 	retCompile.SetBuildPlanFunc(func(ctx context.Context) (*plan2.Plan, error) {
+		// No permission verification is required when retry execute buildPlan
 		plan, err := buildPlan(ctx, ses, ses.GetTxnCompileCtx(), stmt)
 		if err != nil {
 			return nil, err

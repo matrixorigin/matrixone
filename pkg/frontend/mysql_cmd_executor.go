@@ -1036,7 +1036,8 @@ func doExplainStmt(reqCtx context.Context, ses *Session, stmt *tree.ExplainStmt)
 	}
 
 	//get query optimizer and execute Optimize
-	exPlan, err := buildPlan(reqCtx, ses, ses.GetTxnCompileCtx(), stmt.Statement)
+	//exPlan, err := buildPlan(reqCtx, ses, ses.GetTxnCompileCtx(), stmt.Statement)
+	exPlan, err := buildPlanWithAuthorization(reqCtx, ses, ses.GetTxnCompileCtx(), stmt.Statement)
 	if err != nil {
 		return err
 	}
@@ -1153,7 +1154,8 @@ func createPrepareStmt(
 	stmt tree.Statement,
 	saveStmt tree.Statement) (*PrepareStmt, error) {
 
-	preparePlan, err := buildPlan(execCtx.reqCtx, ses, ses.GetTxnCompileCtx(), stmt)
+	//preparePlan, err := buildPlan(execCtx.reqCtx, ses, ses.GetTxnCompileCtx(), stmt)
+	preparePlan, err := buildPlanWithAuthorization(execCtx.reqCtx, ses, ses.GetTxnCompileCtx(), stmt)
 	if err != nil {
 		return nil, err
 	}
@@ -1200,7 +1202,8 @@ func createPrepareStmt(
 }
 
 func doDeallocate(ses *Session, execCtx *ExecCtx, st *tree.Deallocate) error {
-	deallocatePlan, err := buildPlan(execCtx.reqCtx, ses, ses.GetTxnCompileCtx(), st)
+	deallocatePlan, err := buildPlanWithAuthorization(execCtx.reqCtx, ses, ses.GetTxnCompileCtx(), st)
+	//deallocatePlan, err := buildPlan(execCtx.reqCtx, ses, ses.GetTxnCompileCtx(), st)
 	if err != nil {
 		return err
 	}
@@ -2000,7 +2003,6 @@ func buildPlan(reqCtx context.Context, ses FeSession, ctx plan2.CompilerContext,
 
 	defer func() {
 		cost := time.Since(start)
-
 		if txnOp != nil {
 			txnTrace.GetService(ses.GetService()).AddTxnDurationAction(
 				txnOp,
@@ -2017,6 +2019,7 @@ func buildPlan(reqCtx context.Context, ses FeSession, ctx plan2.CompilerContext,
 	planContext := ctx.GetContext()
 	stats := statistic.StatsInfoFromContext(planContext)
 	stats.PlanStart()
+
 	crs := new(perfcounter.CounterSet)
 	planContext = perfcounter.AttachBuildPlanMarkKey(planContext, crs)
 	ctx.SetContext(planContext)
@@ -2034,17 +2037,18 @@ func buildPlan(reqCtx context.Context, ses FeSession, ctx plan2.CompilerContext,
 
 	isPrepareStmt := false
 	if ses != nil {
-		var accId uint32
-		accId, err = defines.GetAccountId(reqCtx)
+		accId, err := defines.GetAccountId(reqCtx)
 		if err != nil {
 			return nil, err
 		}
 		ses.SetAccountId(accId)
+
 		if len(ses.GetSql()) > 8 {
 			prefix := strings.ToLower(ses.GetSql()[:8])
 			isPrepareStmt = prefix == "execute " || prefix == "prepare "
 		}
 	}
+	// Handle specific statement types
 	if s, ok := stmt.(*tree.Insert); ok {
 		if _, ok := s.Rows.Select.(*tree.ValuesClause); ok {
 			ret, err = plan2.BuildPlan(ctx, stmt, isPrepareStmt)
@@ -2053,28 +2057,25 @@ func buildPlan(reqCtx context.Context, ses FeSession, ctx plan2.CompilerContext,
 			}
 		}
 	}
+
 	if ret != nil {
 		ret.IsPrepare = isPrepareStmt
-		if ses != nil && ses.GetTenantInfo() != nil && !ses.IsBackgroundSession() {
-			authStats, err := authenticateCanExecuteStatementAndPlan(reqCtx, ses.(*Session), stmt, ret)
-			if err != nil {
-				return nil, err
-			}
-			stats.PermissionAuth.Add(&authStats)
-		}
 		return ret, err
 	}
+
+	// Default handling of various statements
 	switch stmt := stmt.(type) {
 	case *tree.Select, *tree.ParenSelect, *tree.ValuesStatement,
 		*tree.Update, *tree.Delete, *tree.Insert,
-		*tree.ShowDatabases, *tree.ShowTables, *tree.ShowSequences, *tree.ShowColumns, *tree.ShowColumnNumber, *tree.ShowTableNumber,
-		*tree.ShowCreateDatabase, *tree.ShowCreateTable, *tree.ShowIndex,
+		*tree.ShowDatabases, *tree.ShowTables, *tree.ShowSequences, *tree.ShowColumns, *tree.ShowColumnNumber,
+		*tree.ShowTableNumber, *tree.ShowCreateDatabase, *tree.ShowCreateTable, *tree.ShowIndex,
 		*tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainPhyPlan:
 		opt := plan2.NewBaseOptimizer(ctx)
 		optimized, err := opt.Optimize(stmt, isPrepareStmt)
 		if err != nil {
 			return nil, err
 		}
+
 		ret = &plan2.Plan{
 			Plan: &plan2.Plan_Query{
 				Query: optimized,
@@ -2083,17 +2084,35 @@ func buildPlan(reqCtx context.Context, ses FeSession, ctx plan2.CompilerContext,
 	default:
 		ret, err = plan2.BuildPlan(ctx, stmt, isPrepareStmt)
 	}
+
 	if ret != nil {
 		ret.IsPrepare = isPrepareStmt
-		if ses != nil && ses.GetTenantInfo() != nil && !ses.IsBackgroundSession() {
-			authStats, err := authenticateCanExecuteStatementAndPlan(reqCtx, ses.(*Session), stmt, ret)
-			if err != nil {
-				return nil, err
-			}
-			stats.PermissionAuth.Add(&authStats)
-		}
 	}
 	return ret, err
+}
+
+// buildPlanWithAuthorization wraps the buildPlan function to perform permission checks
+// after the plan has been successfully built.
+func buildPlanWithAuthorization(reqCtx context.Context, ses FeSession, ctx plan2.CompilerContext, stmt tree.Statement) (*plan2.Plan, error) {
+	planContext := ctx.GetContext()
+	stats := statistic.StatsInfoFromContext(planContext)
+
+	// Step 1: Call buildPlan to construct the execution plan
+	plan, err := buildPlan(reqCtx, ses, ctx, stmt)
+	if err != nil {
+		return nil, err
+	}
+
+	// Step 2: Perform permission check after the plan is built
+	if ses != nil && ses.GetTenantInfo() != nil && !ses.IsBackgroundSession() {
+		authStats, err := authenticateCanExecuteStatementAndPlan(reqCtx, ses.(*Session), stmt, plan)
+		if err != nil {
+			return nil, err
+		}
+		// record permission statistics.
+		stats.PermissionAuth.Add(&authStats)
+	}
+	return plan, nil
 }
 
 func checkModify(plan0 *plan.Plan, ses FeSession) bool {
