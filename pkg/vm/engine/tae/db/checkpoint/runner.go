@@ -25,7 +25,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
@@ -435,35 +434,6 @@ func (r *runner) onReplayCheckpoint(entries ...any) {
 		entry := e.(*CheckpointEntry)
 		r.replayOneEntry(entry)
 	}
-}
-
-// TODO: call this always in the executor
-func (r *runner) doIncrementalCheckpoint(
-	ctx context.Context,
-	cfg *CheckpointCfg,
-	entry *CheckpointEntry,
-) (fields []zap.Field, files []string, err error) {
-	factory := logtail.IncrementalCheckpointDataFactory(r.rt.SID(), entry.start, entry.end, true)
-	data, err := factory(r.catalog)
-	if err != nil {
-		return
-	}
-	fields = data.ExportStats("")
-	defer data.Close()
-	var cnLocation, tnLocation objectio.Location
-	cnLocation, tnLocation, files, err = data.WriteTo(
-		ctx, cfg.BlockMaxRowsHint, cfg.SizeHint, r.rt.Fs.Service,
-	)
-	if err != nil {
-		return
-	}
-	files = append(files, cnLocation.Name().String())
-	entry.SetLocation(cnLocation, tnLocation)
-
-	perfcounter.Update(r.ctx, func(counter *perfcounter.CounterSet) {
-		counter.TAE.CheckPoint.DoIncrementalCheckpoint.Add(1)
-	})
-	return
 }
 
 func (r *runner) onPostCheckpointEntries(entries ...any) {

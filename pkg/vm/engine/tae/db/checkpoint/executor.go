@@ -225,9 +225,7 @@ func (job *checkpointJob) RunICKP(ctx context.Context) (err error) {
 
 	var files []string
 	var file string
-	if fields, files, err = runner.doIncrementalCheckpoint(
-		job.executor.ctx, &job.executor.cfg, entry,
-	); err != nil {
+	if fields, files, err = job.executor.doIncrementalCheckpoint(entry); err != nil {
 		errPhase = "do-ckp"
 		rollback()
 		return

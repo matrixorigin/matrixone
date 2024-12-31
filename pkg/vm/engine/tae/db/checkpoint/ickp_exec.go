@@ -19,6 +19,9 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"go.uber.org/zap"
 )
 
@@ -230,4 +233,35 @@ func (executor *checkpointExecutor) RunICKP() (err error) {
 
 func (executor *checkpointExecutor) onICKPEntries(items ...any) {
 	executor.RunICKP()
+}
+
+func (executor *checkpointExecutor) doIncrementalCheckpoint(
+	entry *CheckpointEntry,
+) (fields []zap.Field, files []string, err error) {
+	factory := logtail.IncrementalCheckpointDataFactory(
+		executor.runner.rt.SID(), entry.start, entry.end, true,
+	)
+	data, err := factory(executor.runner.catalog)
+	if err != nil {
+		return
+	}
+	fields = data.ExportStats("")
+	defer data.Close()
+	var cnLocation, tnLocation objectio.Location
+	cnLocation, tnLocation, files, err = data.WriteTo(
+		executor.ctx,
+		executor.cfg.BlockMaxRowsHint,
+		executor.cfg.SizeHint,
+		executor.runner.rt.Fs.Service,
+	)
+	if err != nil {
+		return
+	}
+	files = append(files, cnLocation.Name().String())
+	entry.SetLocation(cnLocation, tnLocation)
+
+	perfcounter.Update(executor.ctx, func(counter *perfcounter.CounterSet) {
+		counter.TAE.CheckPoint.DoIncrementalCheckpoint.Add(1)
+	})
+	return
 }
