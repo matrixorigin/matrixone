@@ -651,7 +651,7 @@ func TestCheckPasswordExpired(t *testing.T) {
 	rp, err := mysql.Parse(ctx, sql, 1)
 	defer rp[0].Free()
 	assert.NoError(t, err)
-	err = authenticateUserCanExecuteStatement(ctx, ses, rp[0])
+	_, err = authenticateUserCanExecuteStatement(ctx, ses, rp[0])
 	assert.Error(t, err)
 
 	// exexpir can execute stmt
@@ -659,7 +659,7 @@ func TestCheckPasswordExpired(t *testing.T) {
 	rp, err = mysql.Parse(ctx, sql, 1)
 	defer rp[0].Free()
 	assert.NoError(t, err)
-	err = authenticateUserCanExecuteStatement(ctx, ses, rp[0])
+	_, err = authenticateUserCanExecuteStatement(ctx, ses, rp[0])
 	assert.Error(t, err)
 
 	// getPasswordLifetime error

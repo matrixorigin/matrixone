@@ -338,6 +338,9 @@ type StatsInfo struct {
 	OtherStage struct {
 		TxnIncrStatementS3 S3Request `json:"TxnIncrStatementS3"`
 	}
+	// stats: [5,241837539,5622976.000,0,0,149,0,1,8.4507,0,0]
+	// stats: [5,241837539,5622976.000,0,0,149,0,1,8.4507,0,0]
+	PermissionAuth StatsArray `json:"PermissionAuth"`
 
 	// FileService(S3 or localFS) Read Data time Consumption
 	IOAccessTimeConsumption int64
@@ -369,6 +372,12 @@ func (s S3Request) CountLIST() int64   { return s.List }
 func (s S3Request) CountPUT() int64    { return s.Put }
 func (s S3Request) CountGET() int64    { return s.Head + s.Get }
 func (s S3Request) CountDELETE() int64 { return s.Delete + s.DeleteMul }
+
+func NewStatsInfo() *StatsInfo {
+	s := new(StatsInfo)
+	s.PermissionAuth.Reset()
+	return s
+}
 
 func (stats *StatsInfo) CompileStart() {
 	if stats == nil {
@@ -654,6 +663,7 @@ func (stats *StatsInfo) Reset() {
 		return
 	}
 	*stats = StatsInfo{}
+	stats.PermissionAuth.Reset()
 }
 
 func ContextWithStatsInfo(requestCtx context.Context, stats *StatsInfo) context.Context {
