@@ -791,52 +791,17 @@ func (s *runnerStore) CollectCheckpointsInRange(
 	}
 	s.Lock()
 	tree := s.incrementals.Copy()
-	globaltree := s.globals.Copy()
+	global, _ := s.globals.Max()
 	s.Unlock()
-
 	locs := make([]string, 0)
 	ckpStart := types.MaxTs()
 	newStart := start
-
-	defer func() {
-		if len(locs) == 0 {
-			return
-		}
-		duration := fmt.Sprintf("[%s_%s]",
-			ckpStart.ToString(),
-			checkpointed.ToString())
-		locs = append(locs, duration)
-		locations = strings.Join(locs, ";")
-	}()
-
-	collectEntryFn := func(entry *CheckpointEntry) {
-		locs = append(locs, entry.GetLocation().String())
-		locs = append(locs, strconv.Itoa(int(entry.version)))
-		if checkpointed.LT(&entry.end) {
-			checkpointed = entry.GetEnd()
-		}
-		if entry.IsGlobal() {
-			ckpStart = entry.end
-			newStart = entry.end.Next()
-		}
-		if entry.IsIncremental() {
-			start := entry.start
-			if start.LT(&ckpStart) {
-				ckpStart = start
-			}
-		}
-		// checkpoints = append(checkpoints, entry)
-	}
-
-	globalIter := globaltree.Iter()
-	ok := globalIter.Last()
-	for ok {
-		ckp := globalIter.Item()
-		if ckp.IsCommitted() && ckp.HasOverlap(start, end) {
-			collectEntryFn(ckp)
-			break
-		}
-		ok = globalIter.Prev()
+	if global != nil && global.HasOverlap(start, end) {
+		locs = append(locs, global.GetLocation().String())
+		locs = append(locs, strconv.Itoa(int(global.version)))
+		newStart = global.end.Next()
+		ckpStart = global.GetEnd()
+		checkpointed = global.GetEnd()
 	}
 	pivot := NewCheckpointEntry(s.sid, newStart, newStart, ET_Incremental)
 
@@ -861,10 +826,25 @@ func (s *runnerStore) CollectCheckpointsInRange(
 		if ok = iter.Prev(); ok {
 			e := iter.Item()
 			if !e.IsCommitted() {
+				if len(locs) == 0 {
+					return
+				}
+				duration := fmt.Sprintf("[%s_%s]",
+					ckpStart.ToString(),
+					ckpStart.ToString())
+				locs = append(locs, duration)
+				locations = strings.Join(locs, ";")
 				return
 			}
 			if e.HasOverlap(newStart, end) {
-				collectEntryFn(e)
+				locs = append(locs, e.GetLocation().String())
+				locs = append(locs, strconv.Itoa(int(e.version)))
+				start := e.GetStart()
+				if start.LT(&ckpStart) {
+					ckpStart = start
+				}
+				checkpointed = e.GetEnd()
+				// checkpoints = append(checkpoints, e)
 			}
 			iter.Next()
 		}
@@ -873,7 +853,14 @@ func (s *runnerStore) CollectCheckpointsInRange(
 			if !e.IsCommitted() || !e.HasOverlap(newStart, end) {
 				break
 			}
-			collectEntryFn(e)
+			locs = append(locs, e.GetLocation().String())
+			locs = append(locs, strconv.Itoa(int(e.version)))
+			start := e.GetStart()
+			if start.LT(&ckpStart) {
+				ckpStart = start
+			}
+			checkpointed = e.GetEnd()
+			// checkpoints = append(checkpoints, e)
 			if ok = iter.Next(); !ok {
 				break
 			}
@@ -881,6 +868,14 @@ func (s *runnerStore) CollectCheckpointsInRange(
 	} else {
 		// if it is empty, quick quit
 		if ok = iter.Last(); !ok {
+			if len(locs) == 0 {
+				return
+			}
+			duration := fmt.Sprintf("[%s_%s]",
+				ckpStart.ToString(),
+				ckpStart.ToString())
+			locs = append(locs, duration)
+			locations = strings.Join(locs, ";")
 			return
 		}
 		// get last entry
@@ -897,8 +892,24 @@ func (s *runnerStore) CollectCheckpointsInRange(
 			locations = strings.Join(locs, ";")
 			return
 		}
-		collectEntryFn(e)
+		locs = append(locs, e.GetLocation().String())
+		locs = append(locs, strconv.Itoa(int(e.version)))
+		start := e.GetStart()
+		if start.LT(&ckpStart) {
+			ckpStart = start
+		}
+		checkpointed = e.GetEnd()
+		// checkpoints = append(checkpoints, e)
 	}
+
+	if len(locs) == 0 {
+		return
+	}
+	duration := fmt.Sprintf("[%s_%s]",
+		ckpStart.ToString(),
+		checkpointed.ToString())
+	locs = append(locs, duration)
+	locations = strings.Join(locs, ";")
 	return
 }
 

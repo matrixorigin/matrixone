@@ -17,7 +17,6 @@ package checkpoint
 import (
 	"context"
 	"fmt"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -42,7 +41,6 @@ func TestCkpCheck(t *testing.T) {
 					state:      ST_Finished,
 					cnLocation: objectio.Location(fmt.Sprintf("loc-%d", i)),
 					version:    1,
-					entryType:  ET_Incremental,
 				})
 			}
 
@@ -52,7 +50,6 @@ func TestCkpCheck(t *testing.T) {
 				state:      ST_Running,
 				cnLocation: objectio.Location("loc-100"),
 				version:    1,
-				entryType:  ET_Incremental,
 			})
 
 			ctx := context.Background()
@@ -91,7 +88,6 @@ func TestGetCheckpoints1(t *testing.T) {
 			state:      ST_Finished,
 			cnLocation: objectio.Location(fmt.Sprintf("ckp%d", i)),
 			version:    1,
-			entryType:  ET_Incremental,
 		}
 		if i == 4 {
 			entry.state = ST_Pending
@@ -175,7 +171,6 @@ func TestGetCheckpoints2(t *testing.T) {
 				state:      ST_Finished,
 				cnLocation: objectio.Location(fmt.Sprintf("global%d", i)),
 				version:    100,
-				entryType:  ET_Global,
 			}
 			r.store.globals.Set(entry)
 		}
@@ -189,7 +184,6 @@ func TestGetCheckpoints2(t *testing.T) {
 			state:      ST_Finished,
 			cnLocation: objectio.Location(fmt.Sprintf("ckp%d", i)),
 			version:    uint32(i),
-			entryType:  ET_Incremental,
 		}
 		if i == 4 {
 			entry.state = ST_Pending
@@ -683,58 +677,7 @@ func Test_RunnerStore5(t *testing.T) {
 	assert.True(t, store.RemoveGCKPIntent())
 
 }
-func Test_RunnerStore6(t *testing.T) {
-	store := newRunnerStore("", time.Second, time.Second*1000)
 
-	t1 := types.NextGlobalTsForTest()
-	entry1 := NewCheckpointEntry("", types.TS{}, t1, ET_Global)
-	entry1.SetState(ST_Running)
-
-	assert.True(t, store.AddGCKPIntent(entry1))
-
-	locations, checkpointed, err := store.CollectCheckpointsInRange(
-		context.Background(), types.TS{}, types.NextGlobalTsForTest(),
-	)
-	assert.NoError(t, err)
-
-	// obj1 := objectio.MockObjectName()
-	// loc1 := objectio.BuildLocation(obj1, objectio.NewExtent(1, 1, 1, 1), 1, 1)
-	t.Log(locations)
-	assert.Equalf(t, checkpointed, types.TS{}, checkpointed.ToString())
-	words := strings.Split(locations, ";")
-	_, err = objectio.StringToLocation(words[0])
-	t.Log(err)
-}
-
-func Test_RunnerStore7(t *testing.T) {
-	store := newRunnerStore("", time.Second, time.Second*1000)
-
-	t1 := types.NextGlobalTsForTest()
-	entry1 := NewCheckpointEntry("", types.TS{}, t1, ET_Global)
-	entry1.SetState(ST_Running)
-
-	entry2 := NewCheckpointEntry("", types.TS{}, t1, ET_Incremental)
-	entry2.SetState(ST_Finished)
-	objName := objectio.BuildObjectNameWithObjectID(objectio.NewObjectid())
-	entry2.SetLocation(objectio.MockLocation(objName), objectio.MockLocation(objName))
-
-	assert.True(t, store.AddGCKPIntent(entry1))
-	assert.True(t, store.AddICKPFinishedEntry(entry2))
-
-	locations, checkpointed, err := store.CollectCheckpointsInRange(
-		context.Background(), types.TS{}, types.NextGlobalTsForTest(),
-	)
-	assert.NoError(t, err)
-
-	// obj1 := objectio.MockObjectName()
-	// loc1 := objectio.BuildLocation(obj1, objectio.NewExtent(1, 1, 1, 1), 1, 1)
-	t.Log(locations)
-	assert.Equalf(t, checkpointed, t1, checkpointed.ToString())
-	words := strings.Split(locations, ";")
-	_, err = objectio.StringToLocation(words[0])
-	assert.NoError(t, err)
-
-}
 func Test_Executor1(t *testing.T) {
 	executor := newCheckpointExecutor(nil, nil)
 	assert.True(t, executor.active.Load())
