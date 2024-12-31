@@ -163,6 +163,7 @@ var (
 
 	MoCatalogMoPubsDDL = `create table mo_catalog.mo_pubs (
     		account_id int not null,
+    		account_name varchar(300),
     		pub_name varchar(64),
     		database_name varchar(5000),
     		database_id bigint unsigned,

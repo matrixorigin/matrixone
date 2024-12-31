@@ -1806,7 +1806,7 @@ func dropDb(ctx context.Context, bh BackgroundExec, dbName string) (err error) {
 		return err
 	}
 	for _, pubInfo := range pubInfos {
-		if err = dropPublication(ctx, bh, true, pubInfo.PubName); err != nil {
+		if err = dropPublication(ctx, bh, true, "", pubInfo.PubName); err != nil {
 			return
 		}
 	}
@@ -2037,7 +2037,7 @@ func checkPubValid(
 
 	//check the publication is already exist or not
 	newCtx = defines.AttachAccountId(ctx, uint32(accId))
-	pubInfo, err := getPubInfo(newCtx, bh, pubName)
+	pubInfo, err := getPubInfo(newCtx, bh, "", pubName)
 	if err != nil {
 		return
 	}

@@ -408,7 +408,7 @@ func Test_doDropPublication(t *testing.T) {
 		// deleteMoSubs
 		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
-		err := dropPublication(ctx, bh, true, "pub")
+		err := dropPublication(ctx, bh, true, "", "pub")
 		convey.So(err, convey.ShouldBeNil)
 	})
 }
