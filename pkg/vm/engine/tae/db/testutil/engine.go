@@ -392,7 +392,7 @@ func InitTestDB(
 }
 
 func writeIncrementalCheckpoint(
-	ctx contex.Context,
+	ctx context.Context,
 	t *testing.T,
 	start, end types.TS,
 	c *catalog.Catalog,
@@ -404,7 +404,7 @@ func writeIncrementalCheckpoint(
 	data, err := factory(c)
 	assert.NoError(t, err)
 	defer data.Close()
-	cnLocation, tnLocation, _, err := data.WriteTo(ctx, checkpointBlockRows, checkpointSizea, fs)
+	cnLocation, tnLocation, _, err := data.WriteTo(ctx, checkpointBlockRows, checkpointSize, fs)
 	assert.NoError(t, err)
 	return cnLocation, tnLocation
 }
@@ -602,7 +602,7 @@ func CheckCheckpointReadWrite(
 	location, _ := writeIncrementalCheckpoint(ctx, t, start, end, c, checkpointBlockRows, checkpointSize, fs)
 	tnData := tnReadCheckpoint(t, location, fs)
 
-	checkTNCheckpointData(ctx, tnData, start, end, c)
+	checkTNCheckpointData(ctx, t, tnData, start, end, c)
 	p := &catalog.LoopProcessor{}
 
 	p.TableFn = func(te *catalog.TableEntry) error {
