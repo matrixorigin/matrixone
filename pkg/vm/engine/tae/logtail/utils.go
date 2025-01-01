@@ -535,7 +535,7 @@ func switchCheckpointIdx(i uint16) uint16 {
 }
 
 func (data *CNCheckpointData) InitMetaIdx(
-	ctx context.Context, version uint32, reader *blockio.BlockReader,
+	ctx context.Context, version uint32, reader *ioutil.BlockReader,
 	location objectio.Location, m *mpool.MPool,
 ) error {
 	if data.bats[MetaIDX] == nil {
@@ -678,7 +678,7 @@ func (data *CNCheckpointData) ReadFromData(
 	ctx context.Context,
 	tableID uint64,
 	location objectio.Location,
-	reader *blockio.BlockReader,
+	reader *ioutil.BlockReader,
 	version uint32,
 	m *mpool.MPool,
 ) (dataBats []*batch.Batch, err error) {
@@ -698,7 +698,7 @@ func (data *CNCheckpointData) ReadFromData(
 			block := it.Next()
 			var bat, windowBat *batch.Batch
 			schema := checkpointDataReferVersions[version][uint32(idx)]
-			reader, err = blockio.NewObjectReader(data.sid, reader.GetObjectReader().GetObject().GetFs(), block.GetLocation())
+			reader, err = ioutil.NewObjectReader(reader.GetObjectReader().GetObject().GetFs(), block.GetLocation())
 			if err != nil {
 				return
 			}
@@ -1184,7 +1184,7 @@ func LoadBlkColumnsByMeta(
 	colTypes []types.Type,
 	colNames []string,
 	id uint16,
-	reader *blockio.BlockReader,
+	reader *ioutil.BlockReader,
 	mp *mpool.MPool,
 ) ([]*containers.Batch, error) {
 	idxs := make([]uint16, len(colNames))
@@ -1231,7 +1231,7 @@ func LoadCNSubBlkColumnsByMeta(
 	colTypes []types.Type,
 	colNames []string,
 	id uint16,
-	reader *blockio.BlockReader,
+	reader *ioutil.BlockReader,
 	m *mpool.MPool,
 ) ([]*batch.Batch, error) {
 	idxs := make([]uint16, len(colNames))
@@ -1271,7 +1271,7 @@ func LoadCNSubBlkColumnsByMetaWithId(
 	dataType uint16,
 	id uint16,
 	version uint32,
-	reader *blockio.BlockReader,
+	reader *ioutil.BlockReader,
 	m *mpool.MPool,
 ) (bat *batch.Batch, err error) {
 	idxs := make([]uint16, len(colNames))
@@ -1297,7 +1297,7 @@ func (data *CheckpointData) ReadTNMetaBatch(
 	ctx context.Context,
 	version uint32,
 	location objectio.Location,
-	reader *blockio.BlockReader,
+	reader *ioutil.BlockReader,
 ) (err error) {
 	if data.bats[TNMetaIDX].Length() == 0 {
 		var bats []*containers.Batch
@@ -1358,7 +1358,7 @@ func (data *CheckpointData) ReadFrom(
 	ctx context.Context,
 	version uint32,
 	location objectio.Location,
-	reader *blockio.BlockReader,
+	reader *ioutil.BlockReader,
 	fs fileservice.FileService,
 ) (err error) {
 	err = data.readMetaBatch(ctx, version, reader, data.allocator)
@@ -1389,8 +1389,8 @@ func LoadCheckpointLocations(
 	data := NewCheckpointData(sid, common.CheckpointAllocator)
 	defer data.Close()
 
-	var reader *blockio.BlockReader
-	if reader, err = blockio.NewObjectReader(sid, fs, location); err != nil {
+	var reader *ioutil.BlockReader
+	if reader, err = ioutil.NewObjectReader(fs, location); err != nil {
 		return nil, err
 	}
 
@@ -1423,8 +1423,8 @@ func LoadSpecifiedCkpBatch(
 		err = moerr.NewInvalidArgNoCtx("out of bound batchIdx", batchIdx)
 		return
 	}
-	var reader *blockio.BlockReader
-	if reader, err = blockio.NewObjectReader(sid, fs, location); err != nil {
+	var reader *ioutil.BlockReader
+	if reader, err = ioutil.NewObjectReader(fs, location); err != nil {
 		return
 	}
 
@@ -1434,7 +1434,7 @@ func LoadSpecifiedCkpBatch(
 
 	data.replayMetaBatch(version)
 	for _, val := range data.locations {
-		if reader, err = blockio.NewObjectReader(sid, fs, val); err != nil {
+		if reader, err = ioutil.NewObjectReader(fs, val); err != nil {
 			return
 		}
 		var bats []*containers.Batch
@@ -1459,7 +1459,7 @@ func LoadSpecifiedCkpBatch(
 func (data *CheckpointData) readMetaBatch(
 	ctx context.Context,
 	version uint32,
-	reader *blockio.BlockReader,
+	reader *ioutil.BlockReader,
 	_ *mpool.MPool,
 ) (err error) {
 	if data.bats[MetaIDX].Length() == 0 {
@@ -1544,8 +1544,8 @@ func (data *CheckpointData) readAll(
 	checkpointDataSize := uint64(0)
 	readDuration := time.Now()
 	for _, val := range data.locations {
-		var reader *blockio.BlockReader
-		reader, err = blockio.NewObjectReader(data.sid, service, val)
+		var reader *ioutil.BlockReader
+		reader, err = ioutil.NewObjectReader(service, val)
 		if err != nil {
 			return
 		}

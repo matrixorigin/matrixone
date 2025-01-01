@@ -31,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 )
 
 const BatchSize = 8192
@@ -309,7 +308,7 @@ type TAEReader struct {
 	typs     []types.Type
 	idxs     []uint16
 
-	blockReader *blockio.BlockReader
+	blockReader *ioutil.BlockReader
 
 	bs       []objectio.BlockObject
 	batchs   []*batch.Batch
@@ -335,7 +334,7 @@ func NewTaeReader(ctx context.Context, tbl *table.Table, filePath string, filesi
 		r.typs = append(r.typs, c.ColType.ToType())
 		r.idxs[idx] = uint16(idx)
 	}
-	r.blockReader, err = blockio.NewFileReaderNoCache(r.fs, r.filepath)
+	r.blockReader, err = ioutil.NewFileReaderNoCache(r.fs, r.filepath)
 	if err != nil {
 		return nil, err
 	}

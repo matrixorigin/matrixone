@@ -302,7 +302,7 @@ func GetCheckpointData(
 	}
 
 	data := NewCheckpointData(sid, common.CheckpointAllocator)
-	reader, err := blockio.NewObjectReader(sid, fs, location)
+	reader, err := ioutil.NewObjectReader(fs, location)
 	if err != nil {
 		return nil, err
 	}

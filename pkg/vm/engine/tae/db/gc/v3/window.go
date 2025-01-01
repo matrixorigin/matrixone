@@ -464,7 +464,7 @@ func (w *GCWindow) rebuildTable(bat *batch.Batch) {
 func (w *GCWindow) replayData(
 	ctx context.Context,
 	bs []objectio.BlockObject,
-	reader *blockio.BlockReader) (*batch.Batch, func(), error) {
+	reader *ioutil.BlockReader) (*batch.Batch, func(), error) {
 	idxes := []uint16{0}
 	bat, release, err := reader.LoadColumns(ctx, idxes, nil, bs[0].GetID(), w.mp)
 	if err != nil {
@@ -491,7 +491,7 @@ func (w *GCWindow) ReadTable(ctx context.Context, name string, fs fileservice.Fi
 	meta := ioutil.DecodeGCMetadataName(name)
 	w.tsRange.start = *meta.GetStart()
 	w.tsRange.end = *meta.GetEnd()
-	reader, err := blockio.NewFileReaderNoCache(fs, name)
+	reader, err := ioutil.NewFileReaderNoCache(fs, name)
 	if err != nil {
 		return err
 	}
