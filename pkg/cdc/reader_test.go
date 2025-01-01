@@ -296,7 +296,6 @@ func Test_tableReader_readTable(t *testing.T) {
 			SourceDbName:  "db1",
 			SourceTblName: "t1",
 		},
-		noFull: true,
 	}
 	ctx := context.Background()
 	ar := NewCdcActiveRoutine()
