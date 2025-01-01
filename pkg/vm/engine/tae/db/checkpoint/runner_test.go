@@ -736,6 +736,23 @@ func Test_RunnerStore7(t *testing.T) {
 
 }
 func Test_Executor1(t *testing.T) {
+	var (
+		gctx1, gctx2 gckpContext
+	)
+	gctx1.force = true
+	gctx1.end = types.NextGlobalTsForTest()
+	gctx1.histroyRetention = time.Duration(2)
+	gctx2.end = types.NextGlobalTsForTest()
+	gctx2.histroyRetention = time.Duration(1)
+	gctx2.ckpLSN = 100
+	gctx2.truncateLSN = 10
+	gctx1.Merge(&gctx2)
+	assert.True(t, gctx1.force)
+	assert.Equal(t, gctx2.end, gctx1.end)
+	assert.Equal(t, gctx2.histroyRetention, gctx1.histroyRetention)
+	assert.Equal(t, gctx2.ckpLSN, gctx1.ckpLSN)
+	assert.Equal(t, gctx2.truncateLSN, gctx1.truncateLSN)
+
 	executor := newCheckpointExecutor(nil, nil)
 	assert.True(t, executor.active.Load())
 
