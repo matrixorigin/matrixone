@@ -28,11 +28,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio/mergeutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sort"
 	"github.com/matrixorigin/matrixone/pkg/vm"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -54,7 +54,7 @@ type S3Writer struct {
 
 	isTombstone bool
 
-	writer *blockio.BlockWriter
+	writer *ioutil.BlockWriter
 
 	// the third vector only has several rows, not aligns with the other two vectors.
 	blockInfoBat *batch.Batch
@@ -358,7 +358,7 @@ func (w *S3Writer) generateWriter(proc *process.Process) (objectio.ObjectName, e
 	if err != nil {
 		return nil, err
 	}
-	w.writer, err = blockio.NewBlockWriterNew(
+	w.writer, err = ioutil.NewBlockWriterNew(
 		s3, obj, w.schemaVersion, w.seqnums, w.isTombstone,
 	)
 	if err != nil {

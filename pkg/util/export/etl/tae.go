@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 )
@@ -48,7 +49,7 @@ type TAEWriter struct {
 	filename     string
 	fs           fileservice.FileService
 	//writer       objectio.Writer
-	writer *blockio.BlockWriter
+	writer *ioutil.BlockWriter
 	rows   []*table.Row
 
 	flushRows int
@@ -71,7 +72,7 @@ func NewTAEWriter(ctx context.Context, tbl *table.Table, mp *mpool.MPool, filePa
 		w.columnsTypes = append(w.columnsTypes, c.ColType.ToType())
 		w.idxs[idx] = uint16(idx)
 	}
-	w.writer, _ = blockio.NewBlockWriter(fs, filePath)
+	w.writer, _ = ioutil.NewBlockWriter(fs, filePath)
 	return w
 }
 

@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio/mergeutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
@@ -78,7 +79,7 @@ type FileSinker interface {
 var _ FileSinker = new(FSinkerImpl)
 
 type FSinkerImpl struct {
-	writer *BlockWriter
+	writer *ioutil.BlockWriter
 	mp     *mpool.MPool
 	fs     fileservice.FileService
 
@@ -93,12 +94,12 @@ type FSinkerImpl struct {
 func (s *FSinkerImpl) Sink(ctx context.Context, b *batch.Batch) error {
 	if s.writer == nil {
 		if s.isTombstone {
-			s.writer = ConstructTombstoneWriter(
+			s.writer = ioutil.ConstructTombstoneWriter(
 				s.hiddenSelection,
 				s.fs,
 			)
 		} else {
-			s.writer = ConstructWriter(
+			s.writer = ioutil.ConstructWriter(
 				s.schemaVersion,
 				s.seqnums,
 				s.sortKeyPos,

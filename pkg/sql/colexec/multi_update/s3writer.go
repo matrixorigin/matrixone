@@ -26,11 +26,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio/mergeutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -381,7 +381,7 @@ func (writer *s3Writer) sortAndSyncOneTable(
 	bats []*batch.Batch,
 	needSortBatch bool,
 	needCleanBatch bool) (err error) {
-	var blockWriter *blockio.BlockWriter
+	var blockWriter *ioutil.BlockWriter
 	var blockInfos []objectio.BlockInfo
 	var objStats objectio.ObjectStats
 

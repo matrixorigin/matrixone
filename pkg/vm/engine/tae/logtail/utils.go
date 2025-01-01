@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -1008,7 +1009,7 @@ func (data *CheckpointData) WriteTo(
 	segmentid := objectio.NewSegmentid()
 	fileNum := uint16(0)
 	name := objectio.BuildObjectName(segmentid, fileNum)
-	writer, err := blockio.NewBlockWriterNew(fs, name, 0, nil, false)
+	writer, err := ioutil.NewBlockWriterNew(fs, name, 0, nil, false)
 	if err != nil {
 		return
 	}
@@ -1037,7 +1038,7 @@ func (data *CheckpointData) WriteTo(
 			}
 			checkpointFiles = append(checkpointFiles, name.String())
 			name = objectio.BuildObjectName(segmentid, fileNum)
-			writer, err = blockio.NewBlockWriterNew(fs, name, 0, nil, false)
+			writer, err = ioutil.NewBlockWriterNew(fs, name, 0, nil, false)
 			if err != nil {
 				return
 			}
@@ -1151,7 +1152,7 @@ func (data *CheckpointData) WriteTo(
 
 	segmentid2 := objectio.NewSegmentid()
 	name2 := objectio.BuildObjectName(segmentid2, 0)
-	writer2, err := blockio.NewBlockWriterNew(fs, name2, 0, nil, false)
+	writer2, err := ioutil.NewBlockWriterNew(fs, name2, 0, nil, false)
 	if err != nil {
 		return
 	}

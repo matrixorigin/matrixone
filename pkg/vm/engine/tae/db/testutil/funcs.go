@@ -23,7 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -584,7 +584,7 @@ func MockCNDeleteInS3(
 	bat.AddVector(objectio.TombstoneAttr_Rowid_Attr, rowIDVec)
 	bat.AddVector("pk", pkVec)
 	name := objectio.MockObjectName()
-	writer, err := blockio.NewBlockWriterNew(fs.Service, name, 0, nil, true)
+	writer, err := ioutil.NewBlockWriterNew(fs.Service, name, 0, nil, true)
 	writer.SetPrimaryKeyWithType(uint16(objectio.TombstonePrimaryKeyIdx), index.HBF,
 		index.ObjectPrefixFn,
 		index.BlockPrefixFn)
