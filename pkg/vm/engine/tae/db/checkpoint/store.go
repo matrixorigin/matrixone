@@ -854,14 +854,6 @@ func (s *runnerStore) CollectCheckpointsInRange(
 		e := iter.Item()
 		// if it is committed and visible, quick quit
 		if !e.IsCommitted() || !e.HasOverlap(newStart, end) {
-			if len(locs) == 0 {
-				return
-			}
-			duration := fmt.Sprintf("[%s_%s]",
-				ckpStart.ToString(),
-				ckpStart.ToString())
-			locs = append(locs, duration)
-			locations = strings.Join(locs, ";")
 			return
 		}
 		collectEntryFn(e)
