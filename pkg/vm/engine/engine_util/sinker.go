@@ -23,7 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/objectio/mergeutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
@@ -487,7 +487,7 @@ func (sinker *Sinker) trySpill(ctx context.Context) error {
 	if sinker.schema.sortKeyIdx != -1 {
 		buffer := sinker.fetchBuffer() // note the lifecycle of buffer
 		defer sinker.putBackBuffer(buffer)
-		if err := colexec.MergeSortBatches(
+		if err := mergeutil.MergeSortBatches(
 			sinker.staged.inMemory,
 			sinker.schema.sortKeyIdx,
 			buffer,
