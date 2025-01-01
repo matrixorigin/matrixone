@@ -296,6 +296,7 @@ func Test_tableReader_readTable(t *testing.T) {
 			SourceDbName:  "db1",
 			SourceTblName: "t1",
 		},
+		noFull: true,
 	}
 	ctx := context.Background()
 	ar := NewCdcActiveRoutine()
@@ -363,6 +364,7 @@ func Test_tableReader_readTableWithTxn(t *testing.T) {
 		insCompositedPkColIdx: 3,
 		sinker:                NewConsoleSinker(nil, nil),
 		runningReaders:        &sync.Map{},
+		endTs:                 types.BuildTS(50, 0),
 	}
 
 	getRelationByIdStub := gostub.Stub(&GetRelationById, func(_ context.Context, _ engine.Engine, _ client.TxnOperator, _ uint64) (string, string, engine.Relation, error) {
@@ -386,6 +388,10 @@ func Test_tableReader_readTableWithTxn(t *testing.T) {
 	defer collectChangesStub.Reset()
 
 	err := reader.readTableWithTxn(context.Background(), nil, packer, NewCdcActiveRoutine())
+	assert.NoError(t, err)
+
+	reader.wMarkUpdater.UpdateMem("", "", types.BuildTS(50, 0))
+	err = reader.readTableWithTxn(context.Background(), nil, packer, NewCdcActiveRoutine())
 	assert.NoError(t, err)
 }
 

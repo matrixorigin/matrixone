@@ -2307,8 +2307,8 @@ func TestCdcTask_retrieveCdcTask(t *testing.T) {
 		pwd,
 		tables,
 		filters,
-		"",
-		"",
+		"2006-01-02T15:04:05-07:00",
+		"2006-01-02T15:04:05-07:00",
 		true,
 		"{\"InitSnapshotSplitTxn\": false}",
 	),
@@ -2703,7 +2703,9 @@ func (m mockWatermarkUpdater) GetFromDb(dbName, tblName string) (watermark types
 	return
 }
 
-func (m mockWatermarkUpdater) UpdateMem(string, string, types.TS) {}
+func (m mockWatermarkUpdater) UpdateMem(string, string, types.TS) {
+
+}
 
 func (m mockWatermarkUpdater) DeleteFromMem(string, string) {}
 
@@ -2846,4 +2848,12 @@ func TestCdcTask_checkPitr(t *testing.T) {
 
 	err := checkPitr(context.Background(), nil, "acc1", pts)
 	assert.Error(t, err)
+}
+
+func Test_parseTimestamp(t *testing.T) {
+	_, err := parseTimestamp("2006-01-02 15:04:05", time.Local)
+	assert.NoError(t, err)
+
+	_, err = parseTimestamp("2006-01-02T15:04:05-07:00", nil)
+	assert.NoError(t, err)
 }
