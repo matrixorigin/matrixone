@@ -999,9 +999,10 @@ type blockIndexes struct {
 
 // PXU TODO: pass ctx
 func (data *CheckpointData) WriteTo(
-	fs fileservice.FileService,
+	ctx context.Context,
 	blockRows int,
 	checkpointSize int,
+	fs fileservice.FileService,
 ) (CNLocation, TNLocation objectio.Location, checkpointFiles []string, err error) {
 	checkpointNames := make([]objectio.ObjectName, 1)
 	segmentid := objectio.NewSegmentid()
