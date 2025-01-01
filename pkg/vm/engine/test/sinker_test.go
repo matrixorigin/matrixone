@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio/mergeutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	testutil3 "github.com/matrixorigin/matrixone/pkg/testutil"
@@ -41,13 +42,13 @@ func Test_Sinker(t *testing.T) {
 	fs, err := fileservice.Get[fileservice.FileService](proc.GetFileService(), defines.SharedFileServiceName)
 	require.NoError(t, err)
 
-	sinker1 := blockio.NewTombstoneSinker(
+	sinker1 := ioutil.NewTombstoneSinker(
 		objectio.HiddenColumnSelection_None,
 		pkType,
 		mp,
 		fs,
 		// engine_util.WithDedupAll(),
-		blockio.WithMemorySizeThreshold(mpool.KB*400),
+		ioutil.WithMemorySizeThreshold(mpool.KB*400),
 	)
 
 	blkCnt := 5
