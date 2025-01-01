@@ -15,9 +15,9 @@ a
 4
 5
 delete from t where a in (1, 2, 3);
-select mo_ctl('dn','checkpoint','');
+select mo_ctl('dn','globalcheckpoint','');
 mo_ctl(dn, checkpoint, )
-{\n  "method": "Checkpoint",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+{\n  "method": "GlobalCheckpoint",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
 select * from t;
 a
 4

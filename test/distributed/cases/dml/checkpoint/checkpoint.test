@@ -13,7 +13,7 @@ select * from t;
 delete from t where a in (1, 2, 3);
 -- @separator:table
 -- @bvt:issue#9578
-select mo_ctl('dn','checkpoint','');
+select mo_ctl('dn','globalcheckpoint','');
 -- @bvt:issue
 select * from t;
 
