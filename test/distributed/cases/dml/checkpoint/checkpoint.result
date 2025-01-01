@@ -16,7 +16,7 @@ a
 5
 delete from t where a in (1, 2, 3);
 select mo_ctl('dn','globalcheckpoint','');
-mo_ctl(dn, checkpoint, )
+mo_ctl(dn, GlobalCheckpoint, )
 {\n  "method": "GlobalCheckpoint",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
 select * from t;
 a
@@ -59,9 +59,9 @@ drop snapshot snapshot01;
 drop table if exists t;
 create table t (a int);
 insert into t values (1), (2), (3), (4), (5);
-select mo_ctl('dn','checkpoint','');
-mo_ctl(dn, checkpoint, )
-{\n  "method": "Checkpoint",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+select mo_ctl('dn','globalcheckpoint','');
+mo_ctl(dn, GlobalCheckpoint, )
+{\n  "method": "GlobalCheckpoint",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
 select mo_ctl('dn','checkpoint','');
 mo_ctl(dn, checkpoint, )
 {\n  "method": "Checkpoint",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
