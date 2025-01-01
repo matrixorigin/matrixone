@@ -16,18 +16,19 @@ package disttae
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/mergeutil"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"go.uber.org/zap"
 )
 
@@ -164,7 +165,7 @@ type TransferFlow struct {
 	newDataObjects    []objectio.ObjectStats
 	buffer            *containers.OneSchemaBatchBuffer
 	staged            *batch.Batch
-	sinker            *engine_util.Sinker
+	sinker            *blockio.Sinker
 	mp                *mpool.MPool
 	fs                fileservice.FileService
 
@@ -187,14 +188,14 @@ func (flow *TransferFlow) fillDefaults() {
 		)
 	}
 	if flow.sinker == nil {
-		flow.sinker = engine_util.NewTombstoneSinker(
+		flow.sinker = blockio.NewTombstoneSinker(
 			flow.hiddenSelection,
 			pkType,
 			flow.mp,
 			flow.fs,
-			engine_util.WithBuffer(flow.buffer, false),
-			engine_util.WithMemorySizeThreshold(mpool.MB*16),
-			engine_util.WithTailSizeCap(0),
+			blockio.WithBuffer(flow.buffer, false),
+			blockio.WithMemorySizeThreshold(mpool.MB*16),
+			blockio.WithTailSizeCap(0),
 			//engine_util.WithAllMergeSorted(),
 		)
 	}
@@ -286,7 +287,7 @@ func (flow *TransferFlow) transferStaged(ctx context.Context) error {
 
 	// sort staged batch by primary key
 	// TODO: do not sort if fake pk
-	if err := mergesort.SortColumnsByIndex(
+	if err := mergeutil.SortColumnsByIndex(
 		staged.Vecs,
 		1,
 		flow.mp,

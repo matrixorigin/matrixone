@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/sort"
 )
@@ -150,4 +151,22 @@ func MergeSortBatches(
 		buffer.CleanOnlyData()
 	}
 	return nil
+}
+
+func SortColumnsByIndex(
+	cols []*vector.Vector, sortIdx int, mp *mpool.MPool,
+) (err error) {
+	sortKey := cols[sortIdx]
+	sortedIdx := make([]int64, sortKey.Length())
+	for i := 0; i < len(sortedIdx); i++ {
+		sortedIdx[i] = int64(i)
+	}
+	sort.Sort(false, false, true, sortedIdx, sortKey)
+	for i := 0; i < len(cols); i++ {
+		err = cols[i].Shuffle(sortedIdx, mp)
+		if err != nil {
+			return
+		}
+	}
+	return
 }

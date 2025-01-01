@@ -20,6 +20,7 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio/mergeutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 
@@ -35,7 +36,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -254,16 +254,16 @@ func (w *GCWindow) ScanCheckpoints(
 func (w *GCWindow) getSinker(
 	tailSize int,
 	buffer *containers.OneSchemaBatchBuffer,
-) *engine_util.Sinker {
-	return engine_util.NewSinker(
+) *blockio.Sinker {
+	return blockio.NewSinker(
 		ObjectTablePrimaryKeyIdx,
 		ObjectTableAttrs,
 		ObjectTableTypes,
 		FSinkerFactory,
 		w.mp,
 		w.fs,
-		engine_util.WithTailSizeCap(tailSize),
-		engine_util.WithBuffer(buffer, false),
+		blockio.WithTailSizeCap(tailSize),
+		blockio.WithBuffer(buffer, false),
 	)
 }
 
@@ -394,7 +394,7 @@ func (w *GCWindow) sortOneBatch(
 	data *batch.Batch,
 	mp *mpool.MPool,
 ) error {
-	if err := mergesort.SortColumnsByIndex(
+	if err := mergeutil.SortColumnsByIndex(
 		data.Vecs,
 		ObjectTablePrimaryKeyIdx,
 		mp,

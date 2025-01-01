@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package engine_util
+package blockio
 
 import (
 	"context"
@@ -24,9 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/mergeutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 )
 
 const DefaultInMemoryStagedSize = mpool.MB * 16
@@ -80,7 +78,7 @@ type FileSinker interface {
 var _ FileSinker = new(FSinkerImpl)
 
 type FSinkerImpl struct {
-	writer *blockio.BlockWriter
+	writer *BlockWriter
 	mp     *mpool.MPool
 	fs     fileservice.FileService
 
@@ -95,12 +93,12 @@ type FSinkerImpl struct {
 func (s *FSinkerImpl) Sink(ctx context.Context, b *batch.Batch) error {
 	if s.writer == nil {
 		if s.isTombstone {
-			s.writer = blockio.ConstructTombstoneWriter(
+			s.writer = ConstructTombstoneWriter(
 				s.hiddenSelection,
 				s.fs,
 			)
 		} else {
-			s.writer = blockio.ConstructWriter(
+			s.writer = ConstructWriter(
 				s.schemaVersion,
 				s.seqnums,
 				s.sortKeyPos,
@@ -273,7 +271,7 @@ func NewSinker(
 	return sinker
 }
 
-type stats struct {
+type sinkerStats struct {
 	Name               string
 	HighWatermarkCnt   uint64
 	HighWatermarkBytes uint64
@@ -281,12 +279,12 @@ type stats struct {
 	CurrentBytes       uint64
 }
 
-func (s *stats) String() string {
+func (s *sinkerStats) String() string {
 	return fmt.Sprintf("%s, high cnt: %d, current cnt: %d, hight bytes: %d, current bytes: %d",
 		s.Name, s.HighWatermarkCnt, s.CurrentCnt, s.HighWatermarkBytes, s.CurrentBytes)
 }
 
-func (s *stats) updateCount(n int) {
+func (s *sinkerStats) updateCount(n int) {
 	if n > 0 {
 		s.CurrentCnt += uint64(n)
 	} else if n < 0 {
@@ -298,7 +296,7 @@ func (s *stats) updateCount(n int) {
 	}
 }
 
-func (s *stats) updateBytes(n int) {
+func (s *sinkerStats) updateBytes(n int) {
 	if n > 0 {
 		s.CurrentBytes += uint64(n)
 	} else if n < 0 {
@@ -326,7 +324,7 @@ type Sinker struct {
 		factory  FileSinkerFactory
 	}
 	staged struct {
-		inMemStats          stats
+		inMemStats          sinkerStats
 		inMemory            []*batch.Batch
 		persisted           []objectio.ObjectStats
 		inMemorySize        int
@@ -339,7 +337,7 @@ type Sinker struct {
 
 	buf struct {
 		isOwner  bool
-		bufStats stats
+		bufStats sinkerStats
 		buffers  *containers.OneSchemaBatchBuffer
 	}
 
@@ -443,7 +441,7 @@ func (sinker *Sinker) trySortInMemoryStaged(ctx context.Context) error {
 		return nil
 	}
 	for _, bat := range sinker.staged.inMemory {
-		if err := mergesort.SortColumnsByIndex(
+		if err := mergeutil.SortColumnsByIndex(
 			bat.Vecs,
 			sinker.schema.sortKeyIdx,
 			sinker.mp,
