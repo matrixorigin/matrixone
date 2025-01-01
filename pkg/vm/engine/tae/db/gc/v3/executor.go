@@ -23,11 +23,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio/mergeutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
@@ -168,12 +168,12 @@ func (exec *GCExecutor) Run(
 	finalCanGCSinker SinkerFn,
 ) (newFiles []objectio.ObjectStats, err error) {
 	cannotGCSinker := exec.getSinker(
-		blockio.WithBuffer(exec.buffer.impl, false),
+		ioutil.WithBuffer(exec.buffer.impl, false),
 	)
 
 	canGCSinker := exec.getSinker(
-		blockio.WithBuffer(exec.buffer.impl, false),
-		blockio.WithTailSizeCap(exec.config.canGCCacheSize),
+		ioutil.WithBuffer(exec.buffer.impl, false),
+		ioutil.WithTailSizeCap(exec.config.canGCCacheSize),
 	)
 	defer cannotGCSinker.Close()
 	defer canGCSinker.Close()
@@ -244,9 +244,9 @@ func (exec *GCExecutor) putBuffer(bat *batch.Batch) {
 }
 
 func (exec *GCExecutor) getSinker(
-	opts ...blockio.SinkerOption,
-) *blockio.Sinker {
-	return blockio.NewSinker(
+	opts ...ioutil.SinkerOption,
+) *ioutil.Sinker {
+	return ioutil.NewSinker(
 		ObjectTablePrimaryKeyIdx,
 		ObjectTableAttrs,
 		ObjectTableTypes,

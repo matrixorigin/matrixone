@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio/mergeutil"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -165,7 +166,7 @@ type TransferFlow struct {
 	newDataObjects    []objectio.ObjectStats
 	buffer            *containers.OneSchemaBatchBuffer
 	staged            *batch.Batch
-	sinker            *blockio.Sinker
+	sinker            *ioutil.Sinker
 	mp                *mpool.MPool
 	fs                fileservice.FileService
 
@@ -188,14 +189,14 @@ func (flow *TransferFlow) fillDefaults() {
 		)
 	}
 	if flow.sinker == nil {
-		flow.sinker = blockio.NewTombstoneSinker(
+		flow.sinker = ioutil.NewTombstoneSinker(
 			flow.hiddenSelection,
 			pkType,
 			flow.mp,
 			flow.fs,
-			blockio.WithBuffer(flow.buffer, false),
-			blockio.WithMemorySizeThreshold(mpool.MB*16),
-			blockio.WithTailSizeCap(0),
+			ioutil.WithBuffer(flow.buffer, false),
+			ioutil.WithMemorySizeThreshold(mpool.MB*16),
+			ioutil.WithTailSizeCap(0),
 			//engine_util.WithAllMergeSorted(),
 		)
 	}

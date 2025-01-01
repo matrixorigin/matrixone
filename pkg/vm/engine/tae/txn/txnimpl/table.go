@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/util"
@@ -263,7 +264,7 @@ func (tbl *txnTable) TransferDeletes(
 		v2.TxnS3TombstoneTransferGetSoftdeleteObjectsHistogram.Observe(time.Since(tGetSoftdeleteObjects).Seconds())
 		v2.TxnS3TombstoneSoftdeleteObjectCounter.Add(float64(len(softDeleteObjects)))
 		var findTombstoneDuration, readTombstoneDuration, deleteRowsDuration time.Duration
-		var sinker *blockio.Sinker
+		var sinker *ioutil.Sinker
 		defer func() {
 			if sinker != nil {
 				sinker.Close()
@@ -361,13 +362,13 @@ func (tbl *txnTable) TransferDeletes(
 			tbl.store.warChecker.Delete(id)
 			if currentTransferBatch != nil {
 				if sinker == nil {
-					sinker = blockio.NewTombstoneSinker(
+					sinker = ioutil.NewTombstoneSinker(
 						objectio.HiddenColumnSelection_None,
 						*pkType,
 						common.WorkspaceAllocator,
 						tbl.store.rt.Fs.Service,
-						blockio.WithBufferSizeCap(TransferSinkerBufferSize),
-						blockio.WithMemorySizeThreshold(TransferSinkerMemorySizeThreshold))
+						ioutil.WithBufferSizeCap(TransferSinkerBufferSize),
+						ioutil.WithMemorySizeThreshold(TransferSinkerMemorySizeThreshold))
 				}
 				sinker.Write(ctx, containers.ToCNBatch(currentTransferBatch))
 				currentTransferBatch.Close()

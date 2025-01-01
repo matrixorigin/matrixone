@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package blockio
+package ioutil
 
 import (
 	"context"
@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio/mergeutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
@@ -79,7 +78,7 @@ type FileSinker interface {
 var _ FileSinker = new(FSinkerImpl)
 
 type FSinkerImpl struct {
-	writer *ioutil.BlockWriter
+	writer *BlockWriter
 	mp     *mpool.MPool
 	fs     fileservice.FileService
 
@@ -94,12 +93,12 @@ type FSinkerImpl struct {
 func (s *FSinkerImpl) Sink(ctx context.Context, b *batch.Batch) error {
 	if s.writer == nil {
 		if s.isTombstone {
-			s.writer = ioutil.ConstructTombstoneWriter(
+			s.writer = ConstructTombstoneWriter(
 				s.hiddenSelection,
 				s.fs,
 			)
 		} else {
-			s.writer = ioutil.ConstructWriter(
+			s.writer = ConstructWriter(
 				s.schemaVersion,
 				s.seqnums,
 				s.sortKeyPos,

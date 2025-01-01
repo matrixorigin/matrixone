@@ -22,7 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
@@ -161,7 +161,7 @@ var ObjectTableSeqnums []uint16
 var ObjectTableMetaAttrs []string
 var ObjectTableMetaTypes []types.Type
 
-var FSinkerFactory blockio.FileSinkerFactory
+var FSinkerFactory ioutil.FileSinkerFactory
 
 const ObjectTablePrimaryKeyIdx = 0
 const ObjectTableVersion = 0
@@ -194,7 +194,7 @@ func init() {
 		objectio.VarcharType,
 	}
 
-	FSinkerFactory = blockio.NewFSinkerImplFactory(
+	FSinkerFactory = ioutil.NewFSinkerImplFactory(
 		ObjectTableSeqnums,
 		ObjectTablePrimaryKeyIdx,
 		true,

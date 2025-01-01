@@ -254,16 +254,16 @@ func (w *GCWindow) ScanCheckpoints(
 func (w *GCWindow) getSinker(
 	tailSize int,
 	buffer *containers.OneSchemaBatchBuffer,
-) *blockio.Sinker {
-	return blockio.NewSinker(
+) *ioutil.Sinker {
+	return ioutil.NewSinker(
 		ObjectTablePrimaryKeyIdx,
 		ObjectTableAttrs,
 		ObjectTableTypes,
 		FSinkerFactory,
 		w.mp,
 		w.fs,
-		blockio.WithTailSizeCap(tailSize),
-		blockio.WithBuffer(buffer, false),
+		ioutil.WithTailSizeCap(tailSize),
+		ioutil.WithBuffer(buffer, false),
 	)
 }
 
