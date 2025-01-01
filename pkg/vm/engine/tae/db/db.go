@@ -292,13 +292,15 @@ func (db *DB) GetTxnByID(id []byte) (txn txnif.AsyncTxn, err error) {
 func (db *DB) GetOrCreateTxnWithMeta(
 	info []byte,
 	id []byte,
-	ts types.TS) (txn txnif.AsyncTxn, err error) {
+	ts types.TS,
+) (txn txnif.AsyncTxn, err error) {
 	return db.TxnMgr.GetOrCreateTxnWithMeta(info, id, ts)
 }
 
 func (db *DB) StartTxnWithStartTSAndSnapshotTS(
 	info []byte,
-	ts types.TS) (txn txnif.AsyncTxn, err error) {
+	ts types.TS,
+) (txn txnif.AsyncTxn, err error) {
 	return db.TxnMgr.StartTxnWithStartTSAndSnapshotTS(info, ts, ts)
 }
 
