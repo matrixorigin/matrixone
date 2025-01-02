@@ -104,6 +104,9 @@ func initCommand(_ context.Context, inspectCtx *inspectContext) *cobra.Command {
 	inspect := &MoInspectArg{}
 	rootCmd.AddCommand(inspect.PrepareCommand())
 
+	gc := &GCArg{}
+	rootCmd.AddCommand(gc.PrepareCommand())
+
 	return rootCmd
 }
 
