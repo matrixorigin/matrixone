@@ -32,13 +32,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -763,7 +763,7 @@ func marshalTransferMaps(
 		req.BookingLoc = req.BookingLoc[blkCnt+1:]
 		locations := req.BookingLoc
 		for _, filepath := range locations {
-			reader, err := blockio.NewFileReader(sid, fs, filepath)
+			reader, err := ioutil.NewFileReader(fs, filepath)
 			if err != nil {
 				return nil, err
 			}

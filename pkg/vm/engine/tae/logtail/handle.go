@@ -82,6 +82,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -442,7 +443,7 @@ func LoadCheckpointEntries(
 
 	datas := make([]*CNCheckpointData, len(locationsAndVersions)/2)
 
-	readers := make([]*blockio.BlockReader, len(locationsAndVersions)/2)
+	readers := make([]*ioutil.BlockReader, len(locationsAndVersions)/2)
 	objectLocations := make([]objectio.Location, len(locationsAndVersions)/2)
 	versions := make([]uint32, len(locationsAndVersions)/2)
 	locations := make([]objectio.Location, len(locationsAndVersions)/2)
@@ -463,7 +464,7 @@ func LoadCheckpointEntries(
 			return nil, nil, err
 		}
 		locations[i/2] = location
-		reader, err := blockio.NewObjectReader(sid, fs, location)
+		reader, err := ioutil.NewObjectReader(fs, location)
 		if err != nil {
 			return nil, nil, err
 		}
