@@ -305,6 +305,16 @@ func (exec *txnExecutor) Exec(
 		exec.s.us,
 		nil,
 	)
+
+	accId, err := defines.GetAccountId(proc.Ctx)
+	if err != nil {
+		return executor.Result{}, err
+	}
+	useId := defines.GetUserId(proc.Ctx)
+	roleId := defines.GetRoleId(proc.Ctx)
+	proc.Base.SessionInfo.AccountId = accId
+	proc.Base.SessionInfo.UserId = useId
+	proc.Base.SessionInfo.RoleId = roleId
 	proc.Base.WaitPolicy = statementOption.WaitPolicy()
 	proc.Base.SessionInfo.TimeZone = exec.opts.GetTimeZone()
 	proc.Base.SessionInfo.Buf = exec.s.buf
