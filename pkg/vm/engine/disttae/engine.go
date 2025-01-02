@@ -17,7 +17,6 @@ package disttae
 import (
 	"context"
 	"fmt"
-	"math"
 	"strings"
 	"sync"
 	"time"
@@ -447,7 +446,7 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 	// not found in tableOps, try cache
 	if tableName == "" {
 		cache := e.GetLatestCatalogCache()
-		cacheItem := cache.GetTableByIdAndTime(accountId, math.MaxUint64 /*db is not specified */, tableId, txn.op.SnapshotTS())
+		cacheItem := cache.GetTableByIdAndTime(accountId, 0 /*db is not specified */, tableId, txn.op.SnapshotTS())
 		if cacheItem != nil {
 			tableName = cacheItem.Name
 			dbName = cacheItem.DatabaseName
