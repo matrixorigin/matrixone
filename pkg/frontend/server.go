@@ -53,9 +53,6 @@ const (
 // Interval for checking TCP connection status
 const checkInterval = 1
 
-// connMap is used to store TCPconn and CancelFunc
-var connMap sync.Map
-
 // RelationName counter for the new connection
 var initConnectionID uint32 = 1000
 
@@ -72,6 +69,7 @@ type MOServer struct {
 	mu          sync.RWMutex
 	wg          sync.WaitGroup
 	running     bool
+	connMap     sync.Map
 
 	pu        *config.ParameterUnit
 	listeners []net.Listener
@@ -102,10 +100,10 @@ type BaseService interface {
 	UpgradeTenant(ctx context.Context, tenantName string, retryCount uint32, isALLAccount bool) error
 }
 
-func GetsockoptTCPInfo(tcpConn *net.TCPConn) (*syscall.TCPInfo, error) {
+func GetsockoptTCPInfo(tcpConn *net.TCPConn, tcpInfo *syscall.TCPInfo) (uint8, error) {
 	file, err := tcpConn.File()
 	if err != nil {
-		return nil, err
+		return 0, err
 	}
 	defer func() {
 		err = file.Close()
@@ -116,18 +114,16 @@ func GetsockoptTCPInfo(tcpConn *net.TCPConn) (*syscall.TCPInfo, error) {
 	}()
 
 	fd := file.Fd()
-	tcpInfo := syscall.TCPInfo{}
-	size := unsafe.Sizeof(tcpInfo)
+	size := unsafe.Sizeof(*tcpInfo)
 	_, _, errno := syscall.Syscall6(syscall.SYS_GETSOCKOPT, fd, syscall.SOL_TCP, syscall.TCP_INFO,
-		uintptr(unsafe.Pointer(&tcpInfo)), uintptr(unsafe.Pointer(&size)), 0)
+		uintptr(unsafe.Pointer(tcpInfo)), uintptr(unsafe.Pointer(&size)), 0)
 	if errno != 0 {
-		return nil, fmt.Errorf("syscall failed. errno=%d", errno)
+		return 0, errno
 	}
-
-	return &tcpInfo, nil
+	return tcpInfo.State, nil
 }
 
-func isConnected() {
+func (mo *MOServer) isConnected() {
 	defer func() {
 		if pErr := recover(); pErr != nil {
 			err := moerr.ConvertPanicError(context.Background(), pErr)
@@ -136,17 +132,18 @@ func isConnected() {
 	}()
 
 	tcpConnStatus := make(map[*net.TCPConn]uint8)
-	connMap.Range(func(key, value any) bool {
+	tcpInfo := syscall.TCPInfo{}
+	mo.connMap.Range(func(key, value any) bool {
 		tcpConn := key.(*net.TCPConn)
-		tcpInfo, err := GetsockoptTCPInfo(tcpConn)
+		tcpState, err := GetsockoptTCPInfo(tcpConn, &tcpInfo)
 		if err != nil {
 			logutil.Error("Failed to get TCP info", zap.Error(err))
 			tcpConnStatus[tcpConn] = 0
 			return true
 		}
-		switch tcpInfo.State {
+		switch tcpState {
 		case TCP_LAST_ACK, TCP_CLOSE, TCP_FIN_WAIT1, TCP_FIN_WAIT2, TCP_TIME_WAIT:
-			tcpConnStatus[tcpConn] = tcpInfo.State
+			tcpConnStatus[tcpConn] = tcpState
 			return true
 		default:
 			return true
@@ -154,11 +151,11 @@ func isConnected() {
 	})
 
 	for key, value := range tcpConnStatus {
-		cancel, ok := connMap.Load(key)
+		cancel, ok := mo.connMap.Load(key)
 		if ok {
 			TCPAddr := key.RemoteAddr().String()
 			cancel.(context.CancelFunc)()
-			connMap.Delete(key)
+			mo.connMap.Delete(key)
 			switch value {
 			case TCP_LAST_ACK:
 				logutil.Infof("Connection %s is terminated by TCP_LAST_ACK", TCPAddr)
@@ -177,19 +174,28 @@ func isConnected() {
 	}
 }
 
-func checkConnected() {
+func (mo *MOServer) checkConnected(ctx context.Context) {
 
 	ticker := time.Tick(time.Minute)
 
 	for {
 		select {
-		case <-ticker:
-			logutil.Debugf("Goruntine %d is checking TCP status", GetRoutineId())
+		case <-ctx.Done():
+			break
 		default:
+			select {
+			case <-ticker:
+				logutil.Debugf("Goruntine %d is checking TCP status", GetRoutineId())
+			default:
+			}
+			mo.isConnected()
+			time.Sleep(checkInterval * time.Second)
 		}
-		isConnected()
-		time.Sleep(checkInterval * time.Second)
 	}
+}
+
+func (mo *MOServer) ClearConnMap() {
+	mo.connMap = sync.Map{}
 }
 
 func (mo *MOServer) GetRoutineManager() *RoutineManager {
@@ -228,6 +234,7 @@ func (mo *MOServer) Stop() error {
 
 	mo.rm.cancelCtx()
 	mo.rm.killNetConns()
+	mo.ClearConnMap()
 
 	logutil.Debug("application stopped")
 	return nil
@@ -255,7 +262,13 @@ func (mo *MOServer) startAccept(ctx context.Context, listener net.Listener) {
 	defer mo.wg.Done()
 
 	var tempDelay time.Duration
-	go checkConnected()
+
+	switch listener.(type) {
+	case *net.TCPListener:
+		go mo.checkConnected(ctx)
+	default:
+	}
+
 	quit := false
 	for {
 		select {
@@ -306,11 +319,11 @@ func (mo *MOServer) handleConn(ctx context.Context, conn net.Conn) {
 	if ok {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithCancel(ctx)
-		connMap.Store(tcpConn, cancel)
+		mo.connMap.Store(tcpConn, cancel)
 		defer func() {
-			_, ok = connMap.Load(tcpConn)
+			_, ok = mo.connMap.Load(tcpConn)
 			if ok {
-				connMap.Delete(tcpConn)
+				mo.connMap.Delete(tcpConn)
 			}
 		}()
 	}
