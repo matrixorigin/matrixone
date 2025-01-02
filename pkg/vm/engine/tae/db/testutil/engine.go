@@ -164,14 +164,14 @@ func (e *TestEngine) CheckRowsByScan(exp int, applyDelete bool) {
 func (e *TestEngine) ForceCheckpoint() {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 	defer cancel()
-	err := e.DB.ForceCheckpoint(ctx, e.TxnMgr.Now(), 0)
+	err := e.DB.ForceCheckpoint(ctx, e.TxnMgr.Now())
 	assert.NoError(e.T, err)
 }
 
 func (e *TestEngine) ForceLongCheckpoint() {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*20)
 	defer cancel()
-	err := e.DB.ForceCheckpoint(ctx, e.TxnMgr.Now(), 0)
+	err := e.DB.ForceCheckpoint(ctx, e.TxnMgr.Now())
 	assert.NoError(e.T, err)
 }
 
@@ -392,6 +392,7 @@ func InitTestDB(
 }
 
 func writeIncrementalCheckpoint(
+	ctx context.Context,
 	t *testing.T,
 	start, end types.TS,
 	c *catalog.Catalog,
@@ -403,7 +404,7 @@ func writeIncrementalCheckpoint(
 	data, err := factory(c)
 	assert.NoError(t, err)
 	defer data.Close()
-	cnLocation, tnLocation, _, err := data.WriteTo(fs, checkpointBlockRows, checkpointSize)
+	cnLocation, tnLocation, _, err := data.WriteTo(ctx, checkpointBlockRows, checkpointSize, fs)
 	assert.NoError(t, err)
 	return cnLocation, tnLocation
 }
@@ -469,8 +470,13 @@ func cnReadCheckpointWithVersion(t *testing.T, tid uint64, location objectio.Loc
 	return
 }
 
-func checkTNCheckpointData(ctx context.Context, t *testing.T, data *logtail.CheckpointData,
-	start, end types.TS, c *catalog.Catalog) {
+func checkTNCheckpointData(
+	ctx context.Context,
+	t *testing.T,
+	data *logtail.CheckpointData,
+	start, end types.TS,
+	c *catalog.Catalog,
+) {
 	factory := logtail.IncrementalCheckpointDataFactory("", start, end, false)
 	data2, err := factory(c)
 	assert.NoError(t, err)
@@ -583,6 +589,7 @@ func GetUserTablesInsBatch(t *testing.T, tid uint64, start, end types.TS, c *cat
 	return bats[logtail.ObjectInfoIDX], bats[logtail.TombstoneObjectInfoIDX]
 }
 
+// TODO: use ctx
 func CheckCheckpointReadWrite(
 	t *testing.T,
 	start, end types.TS,
@@ -591,10 +598,11 @@ func CheckCheckpointReadWrite(
 	checkpointSize int,
 	fs fileservice.FileService,
 ) {
-	location, _ := writeIncrementalCheckpoint(t, start, end, c, checkpointBlockRows, checkpointSize, fs)
+	ctx := context.Background()
+	location, _ := writeIncrementalCheckpoint(ctx, t, start, end, c, checkpointBlockRows, checkpointSize, fs)
 	tnData := tnReadCheckpoint(t, location, fs)
 
-	checkTNCheckpointData(context.Background(), t, tnData, start, end, c)
+	checkTNCheckpointData(ctx, t, tnData, start, end, c)
 	p := &catalog.LoopProcessor{}
 
 	p.TableFn = func(te *catalog.TableEntry) error {

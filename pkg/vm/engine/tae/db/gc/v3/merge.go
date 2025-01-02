@@ -79,7 +79,7 @@ func MergeCheckpoint(
 		datas = append(datas, data)
 		var nameMeta string
 		if ckpEntry.GetType() == checkpoint.ET_Compacted {
-			nameMeta = ioutil.EncodeCKPMetadataFullName(
+			nameMeta = ioutil.EncodeCompactCKPMetadataFullName(
 				ckpEntry.GetStart(), ckpEntry.GetEnd(),
 			)
 		} else {
@@ -192,7 +192,7 @@ func MergeCheckpoint(
 		ckpData.UpdateTombstoneInsertMeta(tid, int32(table.offset), int32(table.end))
 	}
 	cnLocation, tnLocation, files, err := ckpData.WriteTo(
-		fs, logtail.DefaultCheckpointBlockRows, logtail.DefaultCheckpointSize,
+		ctx, logtail.DefaultCheckpointBlockRows, logtail.DefaultCheckpointSize, fs,
 	)
 	if err != nil {
 		return
