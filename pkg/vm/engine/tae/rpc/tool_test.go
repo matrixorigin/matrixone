@@ -81,12 +81,12 @@ func Test_gcArg(t *testing.T) {
 	assert.NoError(t, err)
 	tae.AllFlushExpected(tae.TxnMgr.Now(), 4000)
 
-	tae.DB.ForceCheckpoint(ctx, tae.TxnMgr.Now(), 0)
+	tae.DB.ForceCheckpoint(ctx, tae.TxnMgr.Now())
 	testutils.WaitExpect(2000, func() bool {
 		return tae.Runtime.Scheduler.GetPenddingLSNCnt() == 0
 	})
 
-	tae.DB.ForceGlobalCheckpoint(ctx, txn.GetStartTS(), 5*time.Second, 0)
+	tae.DB.ForceGlobalCheckpoint(ctx, txn.GetStartTS(), 5*time.Second)
 	testutils.WaitExpect(1000, func() bool {
 		return tae.Runtime.Scheduler.GetPenddingLSNCnt() == 0
 	})
