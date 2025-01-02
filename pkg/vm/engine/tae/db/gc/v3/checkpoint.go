@@ -890,7 +890,7 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 
 	for _, file := range deleteFiles {
 		_, decodedFile := ioutil.TryDecodeTSRangeFile(file)
-		if decodedFile.IsMetadataFile() {
+		if decodedFile.IsMetadataFile() || decodedFile.IsCompactExt() {
 			logutil.Info(
 				"GC-TRACE-DELETE-CHECKPOINT-FILE",
 				zap.String("task", c.TaskNameLocked()),
@@ -1210,7 +1210,6 @@ func (c *checkpointCleaner) DoCheck() error {
 	debugCandidates := c.checkpointCli.GetAllIncrementalCheckpoints()
 	compacted := c.checkpointCli.GetCompacted()
 	gckps := c.checkpointCli.GetAllGlobalCheckpoints()
-
 	// no scan watermark, GC has not yet run
 	var scanWaterMark *checkpoint.CheckpointEntry
 	if scanWaterMark = c.GetScanWaterMark(); scanWaterMark == nil {

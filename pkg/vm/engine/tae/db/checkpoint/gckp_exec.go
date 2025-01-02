@@ -101,8 +101,8 @@ func (executor *checkpointExecutor) onGCKPEntries(items ...any) {
 		return
 	}
 
-	if mergedCtx.interval == 0 {
-		mergedCtx.interval = executor.cfg.GlobalHistoryDuration
+	if mergedCtx.histroyRetention == 0 {
+		mergedCtx.histroyRetention = executor.cfg.GlobalHistoryDuration
 	}
 
 	fromEntry := executor.runner.store.MaxGlobalCheckpoint()

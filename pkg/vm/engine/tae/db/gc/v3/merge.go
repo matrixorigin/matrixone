@@ -21,7 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
+	"github.com/matrixorigin/matrixone/pkg/objectio/mergeutil"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -79,7 +79,7 @@ func MergeCheckpoint(
 		datas = append(datas, data)
 		var nameMeta string
 		if ckpEntry.GetType() == checkpoint.ET_Compacted {
-			nameMeta = ioutil.EncodeCKPMetadataFullName(
+			nameMeta = ioutil.EncodeCompactCKPMetadataFullName(
 				ckpEntry.GetStart(), ckpEntry.GetEnd(),
 			)
 		} else {
@@ -146,13 +146,13 @@ func MergeCheckpoint(
 
 	tidColIdx := 4
 	objectBatch := containers.ToCNBatch(ckpData.GetObjectBatchs())
-	err = mergesort.SortColumnsByIndex(objectBatch.Vecs, tidColIdx, pool)
+	err = mergeutil.SortColumnsByIndex(objectBatch.Vecs, tidColIdx, pool)
 	if err != nil {
 		return
 	}
 
 	tombstoneBatch := containers.ToCNBatch(ckpData.GetTombstoneObjectBatchs())
-	err = mergesort.SortColumnsByIndex(tombstoneBatch.Vecs, tidColIdx, pool)
+	err = mergeutil.SortColumnsByIndex(tombstoneBatch.Vecs, tidColIdx, pool)
 	if err != nil {
 		return
 	}
@@ -192,7 +192,7 @@ func MergeCheckpoint(
 		ckpData.UpdateTombstoneInsertMeta(tid, int32(table.offset), int32(table.end))
 	}
 	cnLocation, tnLocation, files, err := ckpData.WriteTo(
-		fs, logtail.DefaultCheckpointBlockRows, logtail.DefaultCheckpointSize,
+		ctx, logtail.DefaultCheckpointBlockRows, logtail.DefaultCheckpointSize, fs,
 	)
 	if err != nil {
 		return

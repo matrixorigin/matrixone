@@ -17,9 +17,11 @@ package disttae
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 	"strings"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -247,8 +249,8 @@ func (t *cnMergeTask) prepareCommitEntry() *api.MergeCommitEntry {
 	return commitEntry
 }
 
-func (t *cnMergeTask) PrepareNewWriter() *blockio.BlockWriter {
-	writer := blockio.ConstructWriterWithSegmentID(
+func (t *cnMergeTask) PrepareNewWriter() *ioutil.BlockWriter {
+	writer := ioutil.ConstructWriterWithSegmentID(
 		t.segmentID,
 		t.num,
 		t.host.version,
