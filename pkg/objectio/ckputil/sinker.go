@@ -48,6 +48,7 @@ func NewSinker(
 	fs fileservice.FileService,
 	opts ...ioutil.SinkerOption,
 ) *ioutil.Sinker {
+	opts = append(opts, ioutil.WithTailSizeCap(0))
 	return ioutil.NewSinker(
 		TableObjectsAttr_Cluster_Idx,
 		TableObjectsAttrs,

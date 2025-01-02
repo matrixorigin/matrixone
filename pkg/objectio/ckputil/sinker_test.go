@@ -16,10 +16,19 @@ package ckputil
 
 import (
 	"bytes"
+	"context"
 	"sort"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -74,4 +83,91 @@ func Test_ClusterKey2(t *testing.T) {
 		require.Truef(t, curr > last, "%v,%v", curr, last)
 		last = curr
 	}
+}
+
+func Test_Sinker1(t *testing.T) {
+	proc := testutil.NewProc()
+	fs, err := fileservice.Get[fileservice.FileService](
+		proc.GetFileService(), defines.SharedFileServiceName,
+	)
+	require.NoError(t, err)
+	mp := proc.Mp()
+
+	bat := NewObjectListBatch()
+	accountId := uint32(1)
+	mapping := map[uint64][]uint64{
+		1: {41, 31, 21, 11, 1},
+		2: {42, 32, 22, 12, 2},
+		3: {43, 33, 23, 13, 3},
+	}
+	dbs := []uint64{1, 2, 3}
+
+	sinker := NewSinker(
+		mp,
+		fs,
+		ioutil.WithMemorySizeThreshold(mpool.KB),
+	)
+	defer sinker.Close()
+
+	packer := types.NewPacker()
+	defer packer.Close()
+
+	fillNext := func(data *batch.Batch, rows int) {
+		data.CleanOnlyData()
+		for i, vec := range data.Vecs {
+			if i == TableObjectsAttr_Accout_Idx {
+				for j := 0; j < rows; j++ {
+					require.NoError(t, vector.AppendMultiFixed(vec, accountId, false, rows, mp))
+				}
+			} else if i == TableObjectsAttr_DB_Idx {
+				tableVec := data.Vecs[TableObjectsAttr_Table_Idx]
+				idVec := data.Vecs[TableObjectsAttr_ID_Idx]
+				clusterVec := data.Vecs[TableObjectsAttr_Cluster_Idx]
+				for j := 0; j < rows; j++ {
+					dbid := dbs[j%len(dbs)]
+					tables := mapping[dbid]
+					tableid := tables[j%len(tables)]
+
+					var obj objectio.ObjectStats
+					objname := objectio.MockObjectName()
+					objectio.SetObjectStatsObjectName(&obj, objname)
+					packer.Reset()
+					EncodeCluser(packer, tableid, objname.ObjectId())
+
+					require.NoError(t, vector.AppendFixed(vec, dbid, false, mp))
+					require.NoError(t, vector.AppendFixed(tableVec, tableid, false, mp))
+					require.NoError(t, vector.AppendBytes(idVec, []byte(objname), false, mp))
+					require.NoError(t, vector.AppendBytes(clusterVec, packer.Bytes(), false, mp))
+				}
+			} else if i == TableObjectsAttr_CreateTS_Idx {
+				for j := 0; j < rows; j++ {
+					require.NoError(t, vector.AppendFixed(vec, types.NextGlobalTsForTest(), false, mp))
+				}
+			} else if i == TableObjectsAttr_DeleteTS_Idx {
+				for j := 0; j < rows; j++ {
+					require.NoError(t, vector.AppendFixed(vec, types.NextGlobalTsForTest(), false, mp))
+				}
+			}
+		}
+		data.SetRowCount(rows)
+	}
+
+	ctx := context.Background()
+
+	rows := 0
+	for i := 0; i < 5; i++ {
+		fillNext(bat, 100)
+		require.NoError(t, sinker.Write(ctx, bat))
+		rows += 100
+	}
+	require.NoError(t, sinker.Sync(ctx))
+	files, inMems := sinker.GetResult()
+	require.Equal(t, 0, len(inMems))
+	totalRows := 0
+	for _, file := range files {
+		t.Log(file.String())
+		totalRows += int(file.Rows())
+	}
+	require.Equal(t, 5, len(files))
+	require.Equal(t, rows, totalRows)
 }
