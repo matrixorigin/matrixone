@@ -1608,8 +1608,6 @@ func (data *CheckpointData) Close() {
 	data.allocator = nil
 }
 
-func (data *CheckpointData) CloseWhenLoadFromCache(version uint32) {
-}
 func (data *CheckpointData) GetBatches() []*containers.Batch {
 	return data.bats[:]
 }

@@ -497,7 +497,7 @@ func (s *runnerStore) RemoveGCKPIntent() (ok bool) {
 	return true
 }
 
-func (s *runnerStore) AddGCKPEntry(
+func (s *runnerStore) AddGCKPReplayEntry(
 	entry *CheckpointEntry,
 ) (success bool) {
 	s.Lock()

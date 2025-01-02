@@ -220,7 +220,8 @@ func Open(
 	)
 
 	now := time.Now()
-	ckpReplayer := db.BGCheckpointRunner.Replay(dataFactory)
+	// TODO: checkpoint dir should be configurable
+	ckpReplayer := db.BGCheckpointRunner.BuildReplayer(checkpoint.CheckpointDir, dataFactory)
 	defer ckpReplayer.Close()
 	if err = ckpReplayer.ReadCkpFiles(); err != nil {
 		panic(err)

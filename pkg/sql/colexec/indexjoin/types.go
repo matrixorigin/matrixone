@@ -18,7 +18,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -41,7 +40,6 @@ type IndexJoin struct {
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
 
 	vm.OperatorBase
-	colexec.Projection
 }
 
 func (indexJoin *IndexJoin) GetOperatorBase() *vm.OperatorBase {
@@ -80,12 +78,6 @@ func (indexJoin *IndexJoin) Reset(proc *process.Process, pipelineFailed bool, er
 	if indexJoin.ctr.buf != nil {
 		indexJoin.ctr.buf.CleanOnlyData()
 	}
-	if indexJoin.ProjectList != nil {
-		if indexJoin.OpAnalyzer != nil {
-			indexJoin.OpAnalyzer.Alloc(indexJoin.ProjectAllocSize)
-		}
-		indexJoin.ResetProjection(proc)
-	}
 }
 
 func (indexJoin *IndexJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
@@ -93,14 +85,8 @@ func (indexJoin *IndexJoin) Free(proc *process.Process, pipelineFailed bool, err
 		indexJoin.ctr.buf.Clean(proc.Mp())
 		indexJoin.ctr.buf = nil
 	}
-	indexJoin.FreeProjection(proc)
 }
 
 func (indexJoin *IndexJoin) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
-	batch := input
-	var err error
-	if indexJoin.ProjectList != nil {
-		batch, err = indexJoin.EvalProjection(input, proc)
-	}
-	return batch, err
+	return input, nil
 }

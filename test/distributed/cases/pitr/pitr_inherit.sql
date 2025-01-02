@@ -36,7 +36,7 @@ create database abc1;
 use abc1;
 create table test1(a timestamp);
 drop pitr if exists pitr03;
-create pitr pitr03 for database abc1 table test1 range 1 'h';
+create pitr pitr03 for table abc1 test1 range 1 'h';
 -- @ignore:0,2,3,4,6,7,10
 select * from mo_catalog.mo_pitr Where pitr_name != 'sys_mo_catalog_pitr';
 drop table test1;
@@ -74,7 +74,7 @@ create database abc1;
 use abc1;
 create table test1(a timestamp);
 drop pitr if exists pitr03;
-create pitr pitr03 for database abc1 table test1 range 1 'h';
+create pitr pitr03 for table abc1 test1 range 1 'h';
 -- @session
 -- @ignore:0,2,3,4,6,7,10
 select * from mo_catalog.mo_pitr Where pitr_name != 'sys_mo_catalog_pitr';
@@ -97,7 +97,7 @@ create pitr pitr_system_metrics for database system_metrics range 1 'h';
 create pitr pitr_mo_task for database mo_task range 1 'h';
 create pitr pitr_mo_debug for database mo_debug range 1 'h';
 create pitr pitr_information_schema for database information_schema range 1 'h';
-create pitr pitr_mo_catalog for database mo_catalog table mo_pitr range 1 'h';
-create pitr pitr_mo_catalog for database mo_catalog table mo_snapshots range 1 'h';
+create pitr pitr_mo_catalog for table mo_catalog  mo_pitr range 1 'h';
+create pitr pitr_mo_catalog for table mo_catalog  mo_snapshots range 1 'h';
 -- @ignore:1,2
 show pitr;

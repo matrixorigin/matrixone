@@ -73,6 +73,11 @@ func NewRandomLocation(id uint16, rows uint32) Location {
 	return BuildLocation(objName, extent, rows, id)
 }
 
+func (l Location) Clone() Location {
+	m := make([]byte, 0, len(l))
+	return append(m, l...)
+}
+
 func (l Location) Name() ObjectName {
 	return ObjectName(l[:ObjectNameLen])
 }

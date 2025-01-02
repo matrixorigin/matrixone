@@ -16,6 +16,7 @@ package checkpoint
 
 import (
 	"context"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -60,7 +61,7 @@ type Runner interface {
 	Start()
 	Stop()
 
-	Replay(catalog.DataFactory) *CkpReplayer
+	BuildReplayer(string, catalog.DataFactory) *CkpReplayer
 	GCByTS(ctx context.Context, ts types.TS) error
 }
 
@@ -86,6 +87,7 @@ const (
 	PrefixIncremental = "incremental"
 	PrefixGlobal      = "global"
 	PrefixMetadata    = "meta"
+	SuffixMetadata    = ".ckp"
 	CheckpointDir     = "ckp/"
 )
 
@@ -99,6 +101,16 @@ const (
 	CheckpointAttr_CheckpointLSN = "checkpoint_lsn"
 	CheckpointAttr_TruncateLSN   = "truncate_lsn"
 	CheckpointAttr_Type          = "type"
+
+	CheckpointAttr_StartTSIdx       = 0
+	CheckpointAttr_EndTSIdx         = 1
+	CheckpointAttr_MetaLocationIdx  = 2
+	CheckpointAttr_EntryTypeIdx     = 3
+	CheckpointAttr_VersionIdx       = 4
+	CheckpointAttr_AllLocationsIdx  = 5
+	CheckpointAttr_CheckpointLSNIdx = 6
+	CheckpointAttr_TruncateLSNIdx   = 7
+	CheckpointAttr_TypeIdx          = 8
 
 	CheckpointSchemaColumnCountV1 = 5 // start, end, loc, type, ver
 	CheckpointSchemaColumnCountV2 = 9
@@ -141,6 +153,10 @@ func init() {
 			panic(err)
 		}
 	}
+}
+
+func IsMetadataFile(filename string) bool {
+	return strings.HasPrefix(filename, PrefixMetadata) && strings.HasSuffix(filename, SuffixMetadata)
 }
 
 func makeRespBatchFromSchema(schema *catalog.Schema) *containers.Batch {

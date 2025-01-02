@@ -29,6 +29,7 @@ import (
 )
 
 func (s *service) UpgradeTenant(ctx context.Context, tenantName string, retryCount uint32, isALLAccount bool) (bool, error) {
+	s.logger.Info("start manual bootstrap upgrade")
 	// Before manually upgrade, check if there are unready upgrade tasks in system upgrade environment
 	err := s.UpgradePreCheck(ctx)
 	if err != nil {
