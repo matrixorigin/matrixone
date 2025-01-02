@@ -91,8 +91,7 @@ func Test_gcArg(t *testing.T) {
 	})
 
 	assert.NoError(t, txn.Commit(context.Background()))
-
-	time.Sleep(2 * time.Second)
+	tae.DB.BGCheckpointRunner.DisableCheckpoint()
 
 	assert.NoError(t, dump.Run())
 
