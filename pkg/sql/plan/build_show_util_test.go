@@ -120,6 +120,16 @@ func Test_buildTestShowCreateTable(t *testing.T) {
 				FULLTEXT(json1,json2) WITH PARSER json)`,
 			want: "CREATE TABLE `src` (\n  `id` bigint NOT NULL,\n  `json1` json DEFAULT NULL,\n  `json2` json DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT(`json1`) WITH PARSER json,\n FULLTEXT(`json1`,`json2`) WITH PARSER json\n)",
 		},
+		{
+			name: "test8",
+			sql: `CREATE TABLE src (id bigint NOT NULL,
+                                json1 json DEFAULT NULL,
+                                json2 json DEFAULT NULL,
+                                PRIMARY KEY (id),
+                                FULLTEXT IDX01(json1) WITH PARSER json,
+                                FULLTEXT IDX02(json1,json2) WITH PARSER json)`,
+			want: "CREATE TABLE `src` (\n  `id` bigint NOT NULL,\n  `json1` json DEFAULT NULL,\n  `json2` json DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT `IDX01`(`json1`) WITH PARSER json,\n FULLTEXT `IDX02`(`json1`,`json2`) WITH PARSER json\n)",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
