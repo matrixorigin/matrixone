@@ -19,8 +19,8 @@ import (
 	"errors"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 )
 
 func reshape(ctx context.Context, host MergeTaskHost) error {
@@ -44,7 +44,7 @@ func reshape(ctx context.Context, host MergeTaskHost) error {
 	accObjBlkCnts := host.GetAccBlkCnts()
 	transferMaps := host.GetTransferMaps()
 
-	var writer *blockio.BlockWriter
+	var writer *ioutil.BlockWriter
 	var buffer *batch.Batch
 	var releaseF func()
 	defer func() {
@@ -141,7 +141,7 @@ func reshape(ctx context.Context, host MergeTaskHost) error {
 	return nil
 }
 
-func syncObject(ctx context.Context, writer *blockio.BlockWriter, commitEntry *api.MergeCommitEntry) error {
+func syncObject(ctx context.Context, writer *ioutil.BlockWriter, commitEntry *api.MergeCommitEntry) error {
 	if _, _, err := writer.Sync(ctx); err != nil {
 		return err
 	}
