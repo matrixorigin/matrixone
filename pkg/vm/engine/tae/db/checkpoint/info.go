@@ -38,7 +38,6 @@ type RunnerReader interface {
 	GetAllIncrementalCheckpoints() []*CheckpointEntry
 	GetAllGlobalCheckpoints() []*CheckpointEntry
 	GetPenddingIncrementalCount() int
-	GetGlobalCheckpointCount() int
 	CollectCheckpointsInRange(ctx context.Context, start, end types.TS) (ckpLoc string, lastEnd types.TS, err error)
 	ICKPSeekLT(ts types.TS, cnt int) []*CheckpointEntry
 	GetLowWaterMark() types.TS
@@ -151,10 +150,6 @@ func (r *runner) GetLowWaterMark() types.TS {
 
 func (r *runner) GetPenddingIncrementalCount() int {
 	return r.store.GetPenddingIncrementalCount()
-}
-
-func (r *runner) GetGlobalCheckpointCount() int {
-	return r.store.GetGlobalCheckpointCount()
 }
 
 func (r *runner) GetAllCheckpoints() []*CheckpointEntry {
