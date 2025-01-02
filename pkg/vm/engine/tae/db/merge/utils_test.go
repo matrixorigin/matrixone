@@ -83,10 +83,11 @@ func TestScore(t *testing.T) {
 	require.Less(t, 1.1, score([]*catalog.ObjectEntry{o1, o1}))
 	require.Less(t, 1.1, score([]*catalog.ObjectEntry{o1, o2}))
 	require.Less(t, 1.1, score([]*catalog.ObjectEntry{o1, o3}))
+	require.Less(t, 1.1, score([]*catalog.ObjectEntry{o1, o5}))
+
 	// should not merge
-	require.Greater(t, 1.1, score([]*catalog.ObjectEntry{o1, o4}))
+	require.Greater(t, 1.1, score([]*catalog.ObjectEntry{o1, o3, o4}))
 	require.Greater(t, 1.1, score([]*catalog.ObjectEntry{o1, o2, o4}))
-	require.Greater(t, 1.1, score([]*catalog.ObjectEntry{o1, o5}))
 
 	o6 := newTestVarcharObjectEntry(t, "a", "z", 1)
 	o7 := newTestVarcharObjectEntry(t, "b", "y", 1)
