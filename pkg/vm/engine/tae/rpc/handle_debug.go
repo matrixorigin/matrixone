@@ -49,6 +49,10 @@ import (
 	"go.uber.org/zap"
 )
 
+const (
+	DefaultTimeout = time.Minute * 3 / 2
+)
+
 ///
 ///
 /// impls TxnStorage:Debug
@@ -449,86 +453,107 @@ func (h *Handle) HandleFlushTable(
 	ctx context.Context,
 	meta txn.TxnMeta,
 	req *cmd_util.FlushTable,
-	resp *api.SyncLogTailResp) (cb func(), err error) {
-
-	// We use current TS instead of transaction ts.
-	// Here, the point of this handle function is to trigger a flush
-	// via mo_ctl.  We mimic the behaviour of a real background flush
-	// currTs := types.TimestampToTS(meta.GetSnapshotTS())
-	currTs := types.BuildTS(time.Now().UTC().UnixNano(), 0)
-
+	resp *api.SyncLogTailResp,
+) (cb func(), err error) {
 	err = h.db.FlushTable(
 		ctx,
 		req.AccessInfo.AccountID,
 		req.DatabaseID,
 		req.TableID,
-		currTs)
-	return nil, err
+		h.db.TxnMgr.Now(),
+	)
+	return
 }
 
 func (h *Handle) HandleForceGlobalCheckpoint(
 	ctx context.Context,
 	meta txn.TxnMeta,
 	req *cmd_util.Checkpoint,
-	resp *api.SyncLogTailResp) (cb func(), err error) {
+	resp *api.SyncLogTailResp,
+) (cb func(), err error) {
+	var (
+		timeout = req.FlushDuration
+		now     = h.db.TxnMgr.Now()
+	)
 
-	timeout := req.FlushDuration
+	if timeout == 0 {
+		timeout = DefaultTimeout
+	}
 
-	currTs := types.BuildTS(time.Now().UTC().UnixNano(), 0)
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 
-	err = h.db.ForceGlobalCheckpoint(ctx, currTs, timeout, 0)
-	return nil, err
+	err = h.db.ForceGlobalCheckpoint(ctx, now, 0)
+	return
 }
 
 func (h *Handle) HandleForceCheckpoint(
 	ctx context.Context,
 	meta txn.TxnMeta,
 	req *cmd_util.Checkpoint,
-	resp *api.SyncLogTailResp) (cb func(), err error) {
+	resp *api.SyncLogTailResp,
+) (cb func(), err error) {
+	var (
+		timeout = req.FlushDuration
+		now     = h.db.TxnMgr.Now()
+	)
 
-	timeout := req.FlushDuration
+	if timeout == 0 {
+		timeout = DefaultTimeout
+	}
 
-	currTs := types.BuildTS(time.Now().UTC().UnixNano(), 0)
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 
-	err = h.db.ForceCheckpoint(ctx, currTs, timeout)
-	return nil, err
+	err = h.db.ForceCheckpoint(ctx, now)
+	return
 }
 
 func (h *Handle) HandleBackup(
 	ctx context.Context,
 	meta txn.TxnMeta,
 	req *cmd_util.Checkpoint,
-	resp *api.SyncLogTailResp) (cb func(), err error) {
+	resp *api.SyncLogTailResp,
+) (cb func(), err error) {
+	var (
+		timeout    = req.FlushDuration
+		backupTime = time.Now().UTC()
+		currTs     = types.BuildTS(backupTime.UnixNano(), 0)
+		locations  string
+		location   string
+	)
 
-	timeout := req.FlushDuration
-
-	backupTime := time.Now().UTC()
-	currTs := types.BuildTS(backupTime.UnixNano(), 0)
-	var locations string
 	locations += backupTime.Format(time.DateTime) + ";"
-	location, err := h.db.ForceCheckpointForBackup(ctx, currTs, timeout)
-	if err != nil {
-		return nil, err
+
+	if timeout == 0 {
+		timeout = DefaultTimeout
 	}
-	compact := h.db.BGCheckpointRunner.GetCompacted()
-	data := h.db.BGCheckpointRunner.GetAllCheckpointsForBackup(compact)
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	if location, err = h.db.ForceCheckpointForBackup(ctx, currTs); err != nil {
+		return
+	}
+
+	compactEntry := h.db.BGCheckpointRunner.GetCompacted()
+	entries := h.db.BGCheckpointRunner.GetAllCheckpointsForBackup(compactEntry)
 	locations += location + ";"
-	for i := range data {
-		locations += data[i].GetLocation().String()
+	for i := range entries {
+		locations += entries[i].GetLocation().String()
 		locations += ":"
-		locations += fmt.Sprintf("%d", data[i].GetVersion())
+		locations += fmt.Sprintf("%d", entries[i].GetVersion())
 		locations += ";"
 	}
 	resp.CkpLocation = locations
-	return nil, err
+	return
 }
 
 func (h *Handle) HandleDiskCleaner(
 	ctx context.Context,
 	meta txn.TxnMeta,
 	req *cmd_util.DiskCleaner,
-	resp *api.SyncLogTailResp) (cb func(), err error) {
-
+	resp *api.SyncLogTailResp,
+) (cb func(), err error) {
 	op := req.Op
 	key := req.Key
 	value := req.Value
