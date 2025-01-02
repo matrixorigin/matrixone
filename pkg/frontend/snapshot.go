@@ -72,7 +72,7 @@ var (
 
 	getCurrentExistsAccountsFmt = "select account_id, account_name from mo_catalog.mo_account;"
 
-	getSubsSqlFmt = "select sub_account_id, sub_name, sub_time, pub_account_name, pub_name, pub_database, pub_tables, pub_time, pub_comment, status from mo_catalog.mo_subs %s where 1=1"
+	getSubsSqlFmt = "select sub_account_id, sub_account_name, sub_name, sub_time, pub_account_id, pub_account_name, pub_name, pub_database, pub_tables, pub_time, pub_comment, status from mo_catalog.mo_subs %s where 1=1"
 
 	checkTableIsMasterFormat = "select db_name, table_name from mo_catalog.mo_foreign_keys where refer_db_name = '%s' and refer_table_name = '%s'"
 
@@ -2310,7 +2310,7 @@ func dropDb(ctx context.Context, bh BackgroundExec, dbName string) (err error) {
 		return err
 	}
 	for _, pubInfo := range pubInfos {
-		if err = dropPublication(ctx, bh, true, pubInfo.PubName); err != nil {
+		if err = dropPublication(ctx, bh, true, pubInfo.PubAccountName, pubInfo.PubName); err != nil {
 			return
 		}
 	}
