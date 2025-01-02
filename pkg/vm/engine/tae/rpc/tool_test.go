@@ -52,6 +52,7 @@ func Test_gcArg(t *testing.T) {
 	options.WithCheckpointGlobalMinCount(1)(opts)
 	options.WithDisableGCCatalog()(opts)
 	options.WithCheckpointIncrementaInterval(time.Hour)(opts)
+	//options.WithCheckpointGlobalMinCount(100)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	dir := path.Join(tae.Dir, "data")
@@ -94,8 +95,7 @@ func Test_gcArg(t *testing.T) {
 	})
 
 	assert.NoError(t, txn.Commit(context.Background()))
-
-	time.Sleep(2 * time.Second)
+	tae.DB.BGCheckpointRunner.DisableCheckpoint(ctx)
 
 	assert.NoError(t, dump.Run())
 
