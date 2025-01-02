@@ -25,7 +25,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
@@ -161,11 +160,10 @@ func loadCheckpointMeta(
 		tmpBat *batch.Batch
 	)
 	loader := func(meta *ioutil.TSRangeFile) (err error) {
-		var reader *blockio.BlockReader
+		var reader *ioutil.BlockReader
 		var bats []*batch.Batch
 		var closeCB func()
-		reader, err = blockio.NewFileReader(sid, fs, meta.GetCKPFullName())
-		if err != nil {
+		if reader, err = ioutil.NewFileReader(fs, meta.GetCKPFullName()); err != nil {
 			return err
 		}
 		bats, closeCB, err = reader.LoadAllColumns(ctx, nil, common.DebugAllocator)

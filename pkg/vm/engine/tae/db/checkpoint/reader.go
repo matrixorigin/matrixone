@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ckputil"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"go.uber.org/zap"
 )
 
@@ -126,9 +125,8 @@ func (r *CKPMetaReader) Next(
 
 	fname := ioutil.MakeFullName(r.dir, name)
 
-	var reader *blockio.BlockReader
-	if reader, err = blockio.NewFileReader(
-		r.sid,
+	var reader *ioutil.BlockReader
+	if reader, err = ioutil.NewFileReader(
 		r.fs,
 		fname,
 	); err != nil {
