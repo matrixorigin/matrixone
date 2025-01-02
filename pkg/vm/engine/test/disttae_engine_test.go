@@ -1510,5 +1510,8 @@ func TestCacheNotServing(t *testing.T) {
 	require.Equal(t, "db", dname)
 	require.Equal(t, "test", tname)
 
+	_, err = rel.Ranges(p.Ctx, engine.DefaultRangesParam)
+	t.Log(err)
+
 	require.NoError(t, staleTxn.Commit(p.Ctx))
 }
