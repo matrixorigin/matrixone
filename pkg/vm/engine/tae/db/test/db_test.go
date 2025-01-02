@@ -2720,6 +2720,17 @@ func TestMergeblocks2(t *testing.T) {
 			assert.Nil(t, txn2.Commit(context.Background()))
 		}
 		err = txn.Commit(context.Background())
+
+		{ // skip emtpy merge task
+			txn, rel := tae.GetRelation()
+			objHandle, err := rel.GetObject(obj.ID(), false)
+			assert.NoError(t, err)
+			objsToMerge := []*catalog.ObjectEntry{objHandle.GetMeta().(*catalog.ObjectEntry)}
+			_, err = jobs.NewMergeObjectsTask(nil, txn, objsToMerge, tae.Runtime, 0, false)
+			assert.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.OkStopCurrRecur))
+		}
+
 		assert.NoError(t, err)
 	}
 
