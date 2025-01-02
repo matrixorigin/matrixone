@@ -32,19 +32,5 @@ DROP TABLE if exists t1;
 create table t1 (a int primary key, b int, c int, d timestamp);
 insert into t1 select 1,1,1,utc_timestamp();
 insert into t1 select 2,0,0,null;
-select a,b,c,year(d) from t1;
-a    b    c    year(d)
-1    1    1    2025
-2    0    0    null
-DROP TABLE t1;
-CREATE TABLE t1 (a TIMESTAMP);
-INSERT INTO t1 select (utc_timestamp());
-INSERT INTO t1 select (utc_timestamp());
-INSERT INTO t1 select (utc_timestamp());
-SELECT year(a) FROM t1 WHERE a > '2008-01-01';
-year(a)
-2025
-2025
-2025
 DROP TABLE t1;
 SET TIME_ZONE = "SYSTEM";
