@@ -201,6 +201,12 @@ func WithSessionInfo(info string) TxnOption {
 	}
 }
 
+func WithAccountId(id uint32) TxnOption {
+	return func(tc *txnOperator) {
+		tc.mu.txn.AccountId = id
+	}
+}
+
 func WithBeginAutoCommit(begin, autocommit bool) TxnOption {
 	return func(tc *txnOperator) {
 		tc.opts.options.ByBegin = begin

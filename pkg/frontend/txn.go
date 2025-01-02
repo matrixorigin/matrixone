@@ -390,7 +390,9 @@ func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 			execCtx.ses.GetUUIDString(),
 			connectionID),
 		client.WithSessionInfo(sessionInfo),
-		client.WithBeginAutoCommit(execCtx.txnOpt.byBegin, execCtx.txnOpt.autoCommit))
+		client.WithBeginAutoCommit(execCtx.txnOpt.byBegin, execCtx.txnOpt.autoCommit),
+		client.WithAccountId(accountID),
+	)
 
 	if execCtx.ses.GetFromRealUser() {
 		opts = append(opts,

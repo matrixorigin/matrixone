@@ -730,7 +730,7 @@ func (c *PushClient) replayCatalogCache(ctx context.Context, e *Engine) (err err
 		"",
 		"replayCatalogCache",
 		0)
-	op, err = e.cli.New(ctx, timestamp.Timestamp{}, client.WithSkipPushClientReady(), client.WithSnapshotTS(ts), createByOpt)
+	op, err = e.cli.New(ctx, timestamp.Timestamp{}, client.WithSkipPushClientReady(), client.WithSnapshotTS(ts), createByOpt, client.WithAccountId(0))
 	if err != nil {
 		return err
 	}

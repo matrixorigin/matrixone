@@ -18,6 +18,8 @@ import (
 	"bytes"
 
 	"github.com/google/btree"
+
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
 type treeItem struct {
@@ -50,6 +52,7 @@ func newBtreeBasedStorage() LockStorage {
 }
 
 func (k *btreeBasedStorage) Add(key []byte, value Lock) {
+	logutil.Info("lockstore-add", bytesArrayField("rows", [][]byte{key}))
 	k.tree.ReplaceOrInsert(treeItem{
 		key:   key,
 		value: value,

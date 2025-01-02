@@ -15,8 +15,6 @@
 package frontend
 
 import (
-
-	//"bytes"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -26,6 +24,7 @@ import (
 	"math"
 	"math/bits"
 	"path"
+	//"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -3757,7 +3756,9 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 			dbs = append(dbs, db)
 		}
 
-		for db = range databases {
+		//sort.Strings(dbs)
+
+		for _, db = range dbs {
 			if db == "mo_catalog" {
 				continue
 			}
@@ -3774,11 +3775,7 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 		ses.Infof(ctx, "dropAccount %s alldatabases sql: %s", da.Name, strings.Join(dbs, ","))
 
 		//-----------------deadlock---------------------
-		var idx int
 		for _, sql = range sqlsForDropDatabases {
-			if idx > 1 {
-				break
-			}
 			ses.Infof(ctx, "dropAccount %s drop_database sql: %s", da.Name, sql)
 			rtnErr = bh.Exec(deleteCtx, sql)
 			if rtnErr != nil {
