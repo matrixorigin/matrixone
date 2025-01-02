@@ -21,6 +21,7 @@ import (
 	"unsafe"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 )
 
 /*
@@ -358,4 +359,10 @@ func (o *Objectid) LT(other *Objectid) bool {
 }
 func (o *Objectid) GT(other *Objectid) bool {
 	return o.Compare(other) > 0
+}
+
+func (o *Objectid) Copy(offset uint16) Objectid {
+	ret := *o
+	copy(ret[SegmentidSize:], util.UnsafeToBytes(&offset))
+	return ret
 }
