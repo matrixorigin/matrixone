@@ -1239,11 +1239,11 @@ func (tbl *txnTable) isCreatedInTxn(ctx context.Context) (bool, error) {
 	cacheTS := cache.GetStartTS().ToTimestamp()
 	if cacheTS.Greater(tbl.db.op.SnapshotTS()) {
 		logutil.Warn("FIND_TABLE loadNameByIdFromStorage", zap.String("name", tbl.tableName), zap.String("cacheTs", cacheTS.DebugString()), zap.String("txn", tbl.db.op.Txn().DebugString()))
-		name, _, err := loadNameByIdFromStorage(ctx, tbl.db.op, tbl.accountId, tbl.tableId)
-		if err != nil {
+		if name, _, err := loadNameByIdFromStorage(ctx, tbl.db.op, tbl.accountId, tbl.tableId); err != nil {
 			return false, err
+		} else {
+			return name != "", nil
 		}
-		return name != "", nil
 	}
 
 	idAckedbyTN := cache.GetTableByIdAndTime(

@@ -1,5 +1,5 @@
 select enable_fault_injection();
-select add_fault_point('fj/cn/recv/err', ':::', 'echo', 20, 'mo_tables');
+select add_fault_point('fj/cn/recv/err', ':::', 'echo', 5, 'mo_tables');
 create database db1;
 use db1;
 begin;
