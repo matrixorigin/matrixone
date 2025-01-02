@@ -70,6 +70,7 @@ type MultiUpdate struct {
 
 	Action                 UpdateAction
 	IsOnduplicateKeyUpdate bool
+	IsRemote               bool
 
 	Engine engine.Engine
 
@@ -107,9 +108,6 @@ type MultiUpdateCtx struct {
 	PartitionTableNames []string // Align array index with the partition number
 	OldPartitionIdx     int      // The array index position of the partition expression column for delete
 	NewPartitionIdx     int      // The array index position of the partition expression column for insert
-
-	// Source           engine.Relation
-	// PartitionSources []engine.Relation // Align array index with the partition number
 }
 
 func (update MultiUpdate) TypeName() string {

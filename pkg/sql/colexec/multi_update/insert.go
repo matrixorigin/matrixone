@@ -16,6 +16,7 @@ package multi_update
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -54,7 +55,7 @@ func (update *MultiUpdate) insert_main_table(
 	// preinsert: check not null column
 	for insertIdx, inputIdx := range updateCtx.InsertCols {
 		col := updateCtx.TableDef.Cols[insertIdx]
-		if col.Default != nil && !col.Default.NullAbility {
+		if col.Default != nil && !col.Default.NullAbility && !strings.HasPrefix(col.Name, catalog.PrefixCBColName) {
 			if inputBatch.Vecs[inputIdx].HasNull() {
 				return moerr.NewConstraintViolation(proc.Ctx, fmt.Sprintf("Column '%s' cannot be null", col.Name))
 			}
