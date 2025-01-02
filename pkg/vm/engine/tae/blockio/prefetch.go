@@ -15,6 +15,7 @@
 package blockio
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 )
@@ -40,6 +41,13 @@ func BuildPrefetchParams(service fileservice.FileService, key objectio.Location)
 	return pp, nil
 }
 
+type fetchParams struct {
+	idxes  []uint16
+	typs   []types.Type
+	blk    uint16
+	reader *objectio.ObjectReader
+}
+
 func buildPrefetchParams(service fileservice.FileService, key objectio.Location) PrefetchParams {
 	return PrefetchParams{
 		fs:  service,
@@ -53,4 +61,30 @@ func mergePrefetch(processes []PrefetchParams) map[string]PrefetchParams {
 		pc[p.key.Name().String()] = p
 	}
 	return pc
+}
+
+func Prefetch(
+	sid string,
+	service fileservice.FileService,
+	key objectio.Location,
+) error {
+	params, err := BuildPrefetchParams(service, key)
+	if err != nil {
+		return err
+	}
+	params.typ = PrefetchFileType
+	return MustGetPipeline(sid).Prefetch(params)
+}
+
+func PrefetchMeta(
+	sid string,
+	service fileservice.FileService,
+	key objectio.Location,
+) error {
+	params, err := BuildPrefetchParams(service, key)
+	if err != nil {
+		return err
+	}
+	params.typ = PrefetchMetaType
+	return MustGetPipeline(sid).Prefetch(params)
 }

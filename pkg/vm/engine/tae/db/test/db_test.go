@@ -577,7 +577,7 @@ func TestNonAppendableBlock(t *testing.T) {
 		assert.Nil(t, err)
 		dataBlk := obj.GetMeta().(*catalog.ObjectEntry).GetObjectData()
 		name := objectio.BuildObjectNameWithObjectID(obj.GetID())
-		writer, err := blockio.NewBlockWriterNew(dataBlk.GetFs().Service, name, 0, nil, false)
+		writer, err := ioutil.NewBlockWriterNew(dataBlk.GetFs().Service, name, 0, nil, false)
 		assert.Nil(t, err)
 		_, err = writer.WriteBatch(containers.ToCNBatch(bat))
 		assert.Nil(t, err)
@@ -5287,7 +5287,7 @@ func TestMergeMemsize(t *testing.T) {
 	bats := wholebat.Split(batCnt)
 	// write only one block by apply metaloc
 	objName1 := objectio.BuildObjectNameWithObjectID(objectio.NewObjectid())
-	writer, err := blockio.NewBlockWriterNew(tae.Runtime.Fs.Service, objName1, 0, nil, false)
+	writer, err := ioutil.NewBlockWriterNew(tae.Runtime.Fs.Service, objName1, 0, nil, false)
 	assert.Nil(t, err)
 	writer.SetPrimaryKey(3)
 	for _, b := range bats {
@@ -5359,7 +5359,7 @@ func TestCollectDeletesAfterCKP(t *testing.T) {
 	bat := catalog.MockBatch(schema, 400)
 	// write only one block by apply metaloc
 	objName1 := objectio.BuildObjectNameWithObjectID(objectio.NewObjectid())
-	writer, err := blockio.NewBlockWriterNew(tae.Runtime.Fs.Service, objName1, 0, nil, false)
+	writer, err := ioutil.NewBlockWriterNew(tae.Runtime.Fs.Service, objName1, 0, nil, false)
 	assert.Nil(t, err)
 	writer.SetPrimaryKey(3)
 	_, err = writer.WriteBatch(containers.ToCNBatch(bat))
@@ -5464,7 +5464,7 @@ func TestAlwaysUpdate(t *testing.T) {
 	// write only one Object
 	for i := 0; i < 1; i++ {
 		objName1 := objectio.BuildObjectNameWithObjectID(objectio.NewObjectid())
-		writer, err := blockio.NewBlockWriterNew(tae.Runtime.Fs.Service, objName1, 0, nil, false)
+		writer, err := ioutil.NewBlockWriterNew(tae.Runtime.Fs.Service, objName1, 0, nil, false)
 		assert.Nil(t, err)
 		writer.SetPrimaryKey(3)
 		for _, bat := range bats[i*25 : (i+1)*25] {
@@ -8582,7 +8582,7 @@ func TestCommitS3Blocks(t *testing.T) {
 	statsVecs := make([]containers.Vector, 0)
 	for _, bat := range datas {
 		name := objectio.BuildObjectNameWithObjectID(objectio.NewObjectid())
-		writer, err := blockio.NewBlockWriterNew(tae.Runtime.Fs.Service, name, 0, nil, false)
+		writer, err := ioutil.NewBlockWriterNew(tae.Runtime.Fs.Service, name, 0, nil, false)
 		assert.Nil(t, err)
 		writer.SetPrimaryKey(3)
 		for i := 0; i < 50; i++ {
@@ -8660,7 +8660,7 @@ func TestDedupSnapshot2(t *testing.T) {
 	testutil.CreateRelation(t, tae.DB, "db", schema, true)
 
 	name := objectio.BuildObjectNameWithObjectID(objectio.NewObjectid())
-	writer, err := blockio.NewBlockWriterNew(tae.Runtime.Fs.Service, name, 0, nil, false)
+	writer, err := ioutil.NewBlockWriterNew(tae.Runtime.Fs.Service, name, 0, nil, false)
 	assert.Nil(t, err)
 	writer.SetPrimaryKey(3)
 	_, err = writer.WriteBatch(containers.ToCNBatch(data))
@@ -8674,7 +8674,7 @@ func TestDedupSnapshot2(t *testing.T) {
 	statsVec.Append(ss[:], false)
 
 	name2 := objectio.BuildObjectNameWithObjectID(objectio.NewObjectid())
-	writer, err = blockio.NewBlockWriterNew(tae.Runtime.Fs.Service, name2, 0, nil, false)
+	writer, err = ioutil.NewBlockWriterNew(tae.Runtime.Fs.Service, name2, 0, nil, false)
 	assert.Nil(t, err)
 	writer.SetPrimaryKey(3)
 	_, err = writer.WriteBatch(containers.ToCNBatch(data))
@@ -8835,7 +8835,7 @@ func TestDeduplication(t *testing.T) {
 	})
 
 	blk1Name := objectio.BuildObjectNameWithObjectID(ObjectIDs[1])
-	writer, err := blockio.NewBlockWriterNew(tae.Runtime.Fs.Service, blk1Name, 0, nil, false)
+	writer, err := ioutil.NewBlockWriterNew(tae.Runtime.Fs.Service, blk1Name, 0, nil, false)
 	assert.NoError(t, err)
 	writer.SetPrimaryKey(3)
 	writer.WriteBatch(containers.ToCNBatch(bats[0]))

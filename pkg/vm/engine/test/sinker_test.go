@@ -25,12 +25,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio/mergeutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	testutil3 "github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"github.com/stretchr/testify/require"
 )
 
@@ -41,13 +42,13 @@ func Test_Sinker(t *testing.T) {
 	fs, err := fileservice.Get[fileservice.FileService](proc.GetFileService(), defines.SharedFileServiceName)
 	require.NoError(t, err)
 
-	sinker1 := engine_util.NewTombstoneSinker(
+	sinker1 := ioutil.NewTombstoneSinker(
 		objectio.HiddenColumnSelection_None,
 		pkType,
 		mp,
 		fs,
 		// engine_util.WithDedupAll(),
-		engine_util.WithMemorySizeThreshold(mpool.KB*400),
+		ioutil.WithMemorySizeThreshold(mpool.KB*400),
 	)
 
 	blkCnt := 5
@@ -136,13 +137,13 @@ func Test_Sinker(t *testing.T) {
 	}
 	buffer.Clean(mp)
 	require.Equal(t, bat1.RowCount(), bat2.RowCount())
-	err = mergesort.SortColumnsByIndex(
+	err = mergeutil.SortColumnsByIndex(
 		bat1.Vecs,
 		objectio.TombstonePrimaryKeyIdx,
 		mp,
 	)
 	require.NoError(t, err)
-	err = mergesort.SortColumnsByIndex(
+	err = mergeutil.SortColumnsByIndex(
 		bat2.Vecs,
 		objectio.TombstonePrimaryKeyIdx,
 		mp,

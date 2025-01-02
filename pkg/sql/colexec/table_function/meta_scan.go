@@ -18,8 +18,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -45,7 +45,7 @@ func (s *metaScanState) start(tf *TableFunction, proc *process.Process, nthRow i
 	path := catalog.BuildQueryResultMetaPath(proc.GetSessionInfo().Account, uuid.String())
 
 	// Get reader
-	reader, err := blockio.NewFileReader(proc.GetService(), proc.Base.FileService, path)
+	reader, err := ioutil.NewFileReader(proc.Base.FileService, path)
 	if err != nil {
 		return err
 	}

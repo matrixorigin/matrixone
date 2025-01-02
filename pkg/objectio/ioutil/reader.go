@@ -12,10 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package blockio
+package ioutil
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -24,28 +25,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 )
 
-const (
-	AsyncIo = 1
-	SyncIo  = 2
-)
-
-var IoModel = SyncIo
-
 type BlockReader struct {
-	reader *objectio.ObjectReader
-	aio    *IoPipeline
-}
-
-type fetchParams struct {
-	idxes  []uint16
-	typs   []types.Type
-	blk    uint16
-	pool   *mpool.MPool
 	reader *objectio.ObjectReader
 }
 
 func NewObjectReader(
-	sid string,
 	service fileservice.FileService,
 	key objectio.Location,
 	opts ...objectio.ReaderOptionFunc,
@@ -68,12 +52,10 @@ func NewObjectReader(
 	}
 	return &BlockReader{
 		reader: reader,
-		aio:    GetPipeline(sid),
 	}, nil
 }
 
 func NewFileReader(
-	sid string,
 	service fileservice.FileService,
 	name string,
 ) (*BlockReader, error) {
@@ -86,7 +68,6 @@ func NewFileReader(
 	}
 	return &BlockReader{
 		reader: reader,
-		aio:    GetPipeline(sid),
 	}, nil
 }
 
@@ -117,24 +98,9 @@ func (r *BlockReader) LoadColumns(
 		return
 	}
 	var ioVectors fileservice.IOVector
-	if IoModel == AsyncIo {
-		proc := fetchParams{
-			idxes:  cols,
-			blk:    blk,
-			typs:   typs,
-			pool:   m,
-			reader: r.reader,
-		}
-		var v any
-		if v, err = r.aio.Fetch(ctx, proc); err != nil {
-			return
-		}
-		ioVectors = v.(fileservice.IOVector)
-	} else {
-		ioVectors, err = r.reader.ReadOneBlock(ctx, cols, typs, blk, m)
-		if err != nil {
-			return
-		}
+	ioVectors, err = r.reader.ReadOneBlock(ctx, cols, typs, blk, m)
+	if err != nil {
+		return
 	}
 	release = func() {
 		objectio.ReleaseIOVector(&ioVectors)
@@ -338,30 +304,4 @@ func (r *BlockReader) GetName() string {
 
 func (r *BlockReader) GetObjectReader() *objectio.ObjectReader {
 	return r.reader
-}
-
-func Prefetch(
-	sid string,
-	service fileservice.FileService,
-	key objectio.Location,
-) error {
-	params, err := BuildPrefetchParams(service, key)
-	if err != nil {
-		return err
-	}
-	params.typ = PrefetchFileType
-	return MustGetPipeline(sid).Prefetch(params)
-}
-
-func PrefetchMeta(
-	sid string,
-	service fileservice.FileService,
-	key objectio.Location,
-) error {
-	params, err := BuildPrefetchParams(service, key)
-	if err != nil {
-		return err
-	}
-	params.typ = PrefetchMetaType
-	return MustGetPipeline(sid).Prefetch(params)
 }

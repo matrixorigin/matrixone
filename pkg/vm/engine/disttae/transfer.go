@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/mergeutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -38,7 +39,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"go.uber.org/zap"
 )
 
@@ -340,7 +340,7 @@ func batchTransferToTombstones(
 	if err = targetRowids.PreExtend(transferIntents.Length(), mp); err != nil {
 		return
 	}
-	if err = mergesort.SortColumnsByIndex(
+	if err = mergeutil.SortColumnsByIndex(
 		[]*vector.Vector{searchPKColumn, searchEntryPos, searchBatPos},
 		0,
 		mp,
@@ -362,7 +362,7 @@ func batchTransferToTombstones(
 		return
 	}
 
-	if err = mergesort.SortColumnsByIndex(
+	if err = mergeutil.SortColumnsByIndex(
 		[]*vector.Vector{readPKColumn, targetRowids},
 		0,
 		mp,

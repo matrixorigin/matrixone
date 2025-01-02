@@ -34,11 +34,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/frontend/constant"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -362,7 +362,7 @@ func checkPrivilege(sid string, uuids []string, reqCtx context.Context, ses *Ses
 	for _, id := range uuids {
 		// var size int64 = -1
 		path := catalog.BuildQueryResultMetaPath(ses.GetTenantInfo().GetTenant(), id)
-		reader, err := blockio.NewFileReader(sid, f, path)
+		reader, err := ioutil.NewFileReader(f, path)
 		if err != nil {
 			return err
 		}
@@ -553,7 +553,7 @@ type resultFileInfo struct {
 func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportParam) error {
 	var err error
 	var columnDefs *plan.ResultColDef
-	var reader *blockio.BlockReader
+	var reader *ioutil.BlockReader
 	var blocks []objectio.BlockObject
 	var files []resultFileInfo
 
@@ -690,7 +690,7 @@ func openResultMeta(ctx context.Context, ses *Session, queryId string) (*plan.Re
 	}
 	metaFile := catalog.BuildQueryResultMetaPath(account.GetTenant(), queryId)
 	// read meta's meta
-	reader, err := blockio.NewFileReader(ses.service, getPu(ses.GetService()).FileService, metaFile)
+	reader, err := ioutil.NewFileReader(getPu(ses.GetService()).FileService, metaFile)
 	if err != nil {
 		return nil, err
 	}
@@ -748,10 +748,10 @@ func getResultFiles(ctx context.Context, ses *Session, queryId string) ([]result
 }
 
 // openResultFile reads all blocks of the result file
-func openResultFile(ctx context.Context, ses *Session, fileName string, fileSize int64) (*blockio.BlockReader, []objectio.BlockObject, error) {
+func openResultFile(ctx context.Context, ses *Session, fileName string, fileSize int64) (*ioutil.BlockReader, []objectio.BlockObject, error) {
 	// read result's blocks
 	filePath := getPathOfQueryResultFile(fileName)
-	reader, err := blockio.NewFileReader(ses.GetService(), getPu(ses.GetService()).FileService, filePath)
+	reader, err := ioutil.NewFileReader(getPu(ses.GetService()).FileService, filePath)
 	if err != nil {
 		return nil, nil, err
 	}

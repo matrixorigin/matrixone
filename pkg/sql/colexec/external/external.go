@@ -48,6 +48,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -58,7 +59,6 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -898,7 +898,7 @@ func scanCsvFile(ctx context.Context, param *ExternalParam, proc *process.Proces
 }
 
 // note: getBatchFromZonemapFile will access Fileservice
-func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *process.Process, objectReader *blockio.BlockReader, bat *batch.Batch) (err error) {
+func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *process.Process, objectReader *ioutil.BlockReader, bat *batch.Batch) (err error) {
 	var tmpBat *batch.Batch
 	var vecTmp *vector.Vector
 	var release func()
@@ -1024,7 +1024,7 @@ func needRead(ctx context.Context, param *ExternalParam, proc *process.Process) 
 		notReportErrCtx, proc, expr, meta, columnMap, zms, vecs)
 }
 
-func getZonemapBatch(ctx context.Context, param *ExternalParam, proc *process.Process, objectReader *blockio.BlockReader, bat *batch.Batch) error {
+func getZonemapBatch(ctx context.Context, param *ExternalParam, proc *process.Process, objectReader *ioutil.BlockReader, bat *batch.Batch) error {
 	var err error
 	// note: LoadAllBlocks will access Fileservice,must user `ctx` as paramenter
 	param.Zoneparam.bs, err = objectReader.LoadAllBlocks(ctx, proc.GetMPool())
@@ -1046,7 +1046,7 @@ func getZonemapBatch(ctx context.Context, param *ExternalParam, proc *process.Pr
 
 func scanZonemapFile(ctx context.Context, param *ExternalParam, proc *process.Process, bat *batch.Batch, analyzer process.Analyzer) error {
 	var err error
-	param.Filter.blockReader, err = blockio.NewFileReader(proc.GetService(), param.Extern.FileService, param.Fileparam.Filepath)
+	param.Filter.blockReader, err = ioutil.NewFileReader(param.Extern.FileService, param.Fileparam.Filepath)
 	if err != nil {
 		return err
 	}
