@@ -631,7 +631,7 @@ func (db *txnDatabase) getTableItem(
 	if ok := c.GetTable(&item); !ok {
 		var tableitem *cache.TableItem
 		if !c.CanServe(types.TimestampToTS(db.op.SnapshotTS())) {
-			logutil.Info("FIND_TABLE getTableItem cache cannot serve", zap.String("table", name), zap.Uint32("accountID", accountID), zap.String("timestamp", db.op.SnapshotTS().DebugString()))
+			logutil.Info("FIND_TABLE loadTableFromStorage", zap.String("table", name), zap.Uint32("accountID", accountID), zap.String("txn", db.op.Txn().DebugString()), zap.String("cacheTS", c.GetStartTS().ToString()))
 			if tableitem, err = db.loadTableFromStorage(ctx, accountID, name); err != nil {
 				return nil, err
 			}
