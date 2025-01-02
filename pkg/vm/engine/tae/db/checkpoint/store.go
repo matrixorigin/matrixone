@@ -371,33 +371,6 @@ func (s *runnerStore) AddNewIncrementalEntry(entry *CheckpointEntry) {
 	s.incrementals.Set(entry)
 }
 
-func (s *runnerStore) CleanPenddingCheckpoint() {
-	prev := s.MaxIncrementalCheckpoint()
-	if prev == nil {
-		return
-	}
-	if !prev.IsFinished() {
-		s.Lock()
-		s.incrementals.Delete(prev)
-		s.Unlock()
-	}
-	if prev.IsRunning() {
-		logutil.Warnf("Delete a running checkpoint entry")
-	}
-	prev = s.MaxGlobalCheckpoint()
-	if prev == nil {
-		return
-	}
-	if !prev.IsFinished() {
-		s.Lock()
-		s.incrementals.Delete(prev)
-		s.Unlock()
-	}
-	if prev.IsRunning() {
-		logutil.Warnf("Delete a running checkpoint entry")
-	}
-}
-
 func (s *runnerStore) AddICKPFinishedEntry(entry *CheckpointEntry) (success bool) {
 	if !entry.IsFinished() {
 		return false
@@ -599,12 +572,6 @@ func (s *runnerStore) GetAllIncrementalCheckpoints() []*CheckpointEntry {
 	snapshot := s.incrementals.Copy()
 	s.Unlock()
 	return snapshot.Items()
-}
-
-func (s *runnerStore) GetGlobalCheckpointCount() int {
-	s.RLock()
-	defer s.RUnlock()
-	return s.globals.Len()
 }
 
 func (s *runnerStore) GetLowWaterMark() types.TS {
@@ -887,14 +854,6 @@ func (s *runnerStore) CollectCheckpointsInRange(
 		e := iter.Item()
 		// if it is committed and visible, quick quit
 		if !e.IsCommitted() || !e.HasOverlap(newStart, end) {
-			if len(locs) == 0 {
-				return
-			}
-			duration := fmt.Sprintf("[%s_%s]",
-				ckpStart.ToString(),
-				ckpStart.ToString())
-			locs = append(locs, duration)
-			locations = strings.Join(locs, ";")
 			return
 		}
 		collectEntryFn(e)
