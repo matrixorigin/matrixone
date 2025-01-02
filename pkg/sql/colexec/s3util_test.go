@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/mergeutil"
 
 	"github.com/stretchr/testify/require"
 
@@ -122,7 +123,7 @@ func TestMergeSortBatches(t *testing.T) {
 		vector.AppendFixed(bat1.Vecs[0], int32(2), false, pool)
 		vector.AppendFixed(bat2.Vecs[0], int32(1), false, pool)
 
-		err = MergeSortBatches(
+		err = mergeutil.MergeSortBatches(
 			[]*batch.Batch{bat1, bat2},
 			1,
 			buffer,
@@ -152,7 +153,7 @@ func TestMergeSortBatches(t *testing.T) {
 		vector.AppendFixed(bat1.Vecs[0], int32(2), false, pool)
 		vector.AppendFixed(bat2.Vecs[0], int32(1), false, pool)
 
-		err = MergeSortBatches(
+		err = mergeutil.MergeSortBatches(
 			[]*batch.Batch{bat1, bat2},
 			1,
 			buffer,
@@ -182,7 +183,7 @@ func TestMergeSortBatches(t *testing.T) {
 		vector.AppendFixed(bat1.Vecs[0], int32(2), false, pool)
 		vector.AppendFixed(bat2.Vecs[0], int32(1), false, pool)
 
-		err = MergeSortBatches(
+		err = mergeutil.MergeSortBatches(
 			[]*batch.Batch{bat1, bat2},
 			1,
 			buffer,
@@ -212,7 +213,7 @@ func TestMergeSortBatches(t *testing.T) {
 		vector.AppendFixed(bat1.Vecs[0], int32(2), false, pool)
 		vector.AppendFixed(bat2.Vecs[0], int32(1), false, pool)
 
-		err = MergeSortBatches(
+		err = mergeutil.MergeSortBatches(
 			[]*batch.Batch{bat1, bat2},
 			1,
 			buffer,
@@ -242,7 +243,7 @@ func TestMergeSortBatches(t *testing.T) {
 		vector.AppendFixed(bat1.Vecs[0], int32(2), false, pool)
 		vector.AppendFixed(bat2.Vecs[0], int32(1), false, pool)
 
-		err = MergeSortBatches(
+		err = mergeutil.MergeSortBatches(
 			[]*batch.Batch{bat1, bat2},
 			1,
 			buffer,
@@ -272,7 +273,7 @@ func TestMergeSortBatches(t *testing.T) {
 		vector.AppendFixed(bat1.Vecs[0], int32(2), false, pool)
 		vector.AppendFixed(bat2.Vecs[0], int32(1), false, pool)
 
-		err = MergeSortBatches(
+		err = mergeutil.MergeSortBatches(
 			[]*batch.Batch{bat1, bat2},
 			1,
 			buffer,
@@ -302,7 +303,7 @@ func TestMergeSortBatches(t *testing.T) {
 		vector.AppendFixed(bat1.Vecs[0], int32(2), false, pool)
 		vector.AppendFixed(bat2.Vecs[0], int32(1), false, pool)
 
-		err = MergeSortBatches(
+		err = mergeutil.MergeSortBatches(
 			[]*batch.Batch{bat1, bat2},
 			1,
 			buffer,
@@ -332,7 +333,7 @@ func TestMergeSortBatches(t *testing.T) {
 		vector.AppendFixed(bat1.Vecs[0], int32(2), false, pool)
 		vector.AppendFixed(bat2.Vecs[0], int32(1), false, pool)
 
-		err = MergeSortBatches(
+		err = mergeutil.MergeSortBatches(
 			[]*batch.Batch{bat1, bat2},
 			1,
 			buffer,
@@ -362,7 +363,7 @@ func TestMergeSortBatches(t *testing.T) {
 		vector.AppendFixed(bat1.Vecs[0], int32(2), false, pool)
 		vector.AppendFixed(bat2.Vecs[0], int32(1), false, pool)
 
-		err = MergeSortBatches(
+		err = mergeutil.MergeSortBatches(
 			[]*batch.Batch{bat1, bat2},
 			1,
 			buffer,
@@ -392,7 +393,7 @@ func TestMergeSortBatches(t *testing.T) {
 		vector.AppendFixed(bat1.Vecs[0], int32(2), false, pool)
 		vector.AppendFixed(bat2.Vecs[0], int32(1), false, pool)
 
-		err = MergeSortBatches(
+		err = mergeutil.MergeSortBatches(
 			[]*batch.Batch{bat1, bat2},
 			1,
 			buffer,

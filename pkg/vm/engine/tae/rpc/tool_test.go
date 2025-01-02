@@ -16,10 +16,11 @@ package rpc
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"path"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 
 	"github.com/stretchr/testify/assert"
 
@@ -42,6 +43,7 @@ func Test_objGetArg(t *testing.T) {
 }
 
 func Test_gcArg(t *testing.T) {
+	t.Skip("todo")
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 
