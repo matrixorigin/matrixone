@@ -22,12 +22,15 @@ import (
 	"sync"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
@@ -494,6 +497,7 @@ func (s *service) abortDeadlockTxn(wait pb.WaitTxn, err error) {
 func (s *service) getLockTable(
 	group uint32,
 	tableID uint64) (lockTable, error) {
+	logutil.Info("getLockTable", zap.Uint32("group", group), zap.Uint64("tableId", tableID))
 	if v := s.tableGroups.get(group, tableID); v != nil {
 		return v, nil
 	}
