@@ -41,7 +41,7 @@ create table `_binary` (`add` int, `all` bigint, `alter` smallint, `analyze` dec
 show create table `_binary`;
 
 drop snapshot if exists sp01;
-create snapshot sp01 for account sys;
+create snapshot sp01 for account;
 
 drop table `_binary`;
 restore account sys from snapshot sp01;
@@ -66,7 +66,7 @@ show create table `current_date`;
 drop table `current_date`;
 
 drop snapshot if exists `div`;
-create snapshot `div` for account sys;
+create snapshot `div` for account;
 
 drop database `column`;
 restore account sys from snapshot `div`;

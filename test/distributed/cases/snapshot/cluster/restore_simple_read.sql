@@ -10,7 +10,7 @@ drop snapshot if exists cluster_sp;
 -- @ignore:1
 show snapshots;
 create snapshot cluster_sp for cluster;
-create snapshot account_sp for account sys;
+create snapshot account_sp for account;
 -- @ignore:1
 show snapshots;
 

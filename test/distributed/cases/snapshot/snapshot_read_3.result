@@ -6,7 +6,7 @@ select count(*) from test_snapshot_read;
 count(*)
 100
 create view test_snapshot_read_view as select * from test_snapshot_read;
-create snapshot snapshot_01 for account sys;
+create snapshot snapshot_01 for account;
 show tables like'test%';
 Tables_in_snapshot_read
 test_snapshot_read
@@ -48,7 +48,7 @@ select count(*) from test_snapshot_read;
 count(*)
 100
 create view test_snapshot_read_view as select * from test_snapshot_read;
-create snapshot snapshot_01 for account sys;
+create snapshot snapshot_01 for account;
 show tables like'test%';
 Tables_in_snapshot_read
 test_snapshot_read

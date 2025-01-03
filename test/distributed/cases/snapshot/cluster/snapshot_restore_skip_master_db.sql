@@ -3,7 +3,7 @@ create database test03;
 use test03;
 
 drop snapshot if exists sp01;
-create snapshot sp01 for account sys;
+create snapshot sp01 for account;
 
 drop table if exists pri01;
 create table pri01(

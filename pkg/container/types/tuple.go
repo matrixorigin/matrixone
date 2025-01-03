@@ -37,6 +37,7 @@ import (
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
@@ -213,6 +214,7 @@ const (
 	enumCode       = 0x50 // TODO: reorder the list to put timeCode next to date type code?
 	bitCode        = 0x51
 	uuidCode       = 0x52
+	objectIdCode   = 0x53
 )
 
 var sizeLimits = []uint64{
@@ -426,6 +428,16 @@ func decodeUuid(b []byte) (Uuid, int) {
 	return ret, 17
 }
 
+func decodeObjectid(b []byte) (Objectid, int) {
+	var ret Objectid
+	segid, pos1 := decodeUuid(b)
+	offset, pos2 := decodeUint(uint16Code, b[pos1:])
+	u16 := offset.(uint16)
+	copy(ret[:], segid[:])
+	copy(ret[UuidSize:], util.UnsafeToBytes(&u16))
+	return ret, pos1 + pos2
+}
+
 var DecodeTuple = decodeTuple
 
 func decodeTuple(b []byte) (Tuple, int, []T, error) {
@@ -527,6 +539,9 @@ func decodeTuple(b []byte) (Tuple, int, []T, error) {
 			schema = append(schema, T_uuid)
 			el, off = decodeUuid(b[i:])
 			// off += 1
+		case b[i] == objectIdCode:
+			schema = append(schema, T_Objectid)
+			el, off = decodeObjectid(b[i:])
 		default:
 			return nil, i, nil, moerr.NewInternalErrorNoCtxf("unable to decode tuple element with unknown typecode %02x", b[i])
 		}

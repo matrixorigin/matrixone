@@ -7126,9 +7126,8 @@ func Test_doDropAccount(t *testing.T) {
 		bh.sql2result["commit;"] = nil
 		bh.sql2result["rollback;"] = nil
 
-		sql := getAccountIdNamesSql + " for update"
+		sql, _ := getSqlForCheckTenant(ctx, "acc")
 		mrs := newMrsForGetAllAccounts([][]interface{}{
-			{uint64(0), "sys", "open", uint64(1), nil},
 			{uint64(1), "acc", "open", uint64(1), nil},
 		})
 		bh.sql2result[sql] = mrs
@@ -7187,7 +7186,7 @@ func Test_doDropAccount(t *testing.T) {
 		bh.sql2result["commit;"] = nil
 		bh.sql2result["rollback;"] = nil
 
-		sql := getAccountIdNamesSql + " for update"
+		sql, _ := getSqlForCheckTenant(ctx, "acc")
 		bh.sql2result[sql] = newMrsForGetAllAccounts([][]interface{}{})
 
 		sql, _ = getSqlForDeleteAccountFromMoAccount(context.TODO(), mustUnboxExprStr(stmt.Name))

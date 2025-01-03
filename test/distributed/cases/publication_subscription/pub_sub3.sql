@@ -81,7 +81,7 @@ drop database if exists sub02;
 create database sub02 from acc01 publication pub01;
 -- @session
 
--- @ignore:0,2,7
+-- @ignore:0,3,4,9
 select * from mo_catalog.mo_subs;
 
 -- @session:id=2&user=acc02:test_account&password=111

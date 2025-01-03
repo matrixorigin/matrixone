@@ -81,9 +81,10 @@ const (
 	T_datalink T = 72
 
 	// Transaction TS
-	T_TS      T = 100
-	T_Rowid   T = 101
-	T_Blockid T = 102
+	T_TS       T = 100
+	T_Rowid    T = 101
+	T_Blockid  T = 102
+	T_Objectid T = 103
 
 	// system family
 	T_tuple T = 201
@@ -708,6 +709,8 @@ func (t T) String() string {
 		return "DATALINK"
 	case T_TS:
 		return "TRANSACTION TIMESTAMP"
+	case T_Objectid:
+		return "OBJECTID"
 	case T_Rowid:
 		return "ROWID"
 	case T_uuid:

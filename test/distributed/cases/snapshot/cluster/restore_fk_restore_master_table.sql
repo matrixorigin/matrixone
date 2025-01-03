@@ -142,7 +142,7 @@ select * from PerformanceReviews;
 drop snapshot if exists sys_sp;
 -- @ignore:1
 show snapshots;
-create snapshot sys_sp for account sys;
+create snapshot sys_sp for account;
 -- @ignore:1
 show snapshots;
 

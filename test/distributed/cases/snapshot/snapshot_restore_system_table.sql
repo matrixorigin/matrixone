@@ -9,14 +9,14 @@ select name, db from mo_catalog.mo_user_defined_function;
 create function db1.helloworld5 () returns int language sql as 'select id from tbl1 limit 1';
 select name, db from mo_catalog.mo_user_defined_function;
 
-create snapshot snapshot1 for account sys;
+create snapshot snapshot1 for account;
 -- @ignore:1
 show snapshots;
 
 drop function helloworld();
 select name, db from mo_catalog.mo_user_defined_function;
 
-create snapshot snapshot2 for account sys;
+create snapshot snapshot2 for account;
 -- @ignore:1
 show snapshots;
 
@@ -53,7 +53,7 @@ SELECT stage_name, stage_status from mo_catalog.mo_stages;
 CREATE STAGE my_ext_stage3 URL='s3://load/files/' CREDENTIALS={'AWS_KEY_ID'='1a2b3c' ,'AWS_SECRET_KEY'='4x5y6z'} ENABLE = TRUE;
 SELECT stage_name, stage_status from mo_catalog.mo_stages;
 
-create snapshot snapshot1 for account sys;
+create snapshot snapshot1 for account;
 -- @ignore:1
 show snapshots;
 
@@ -63,7 +63,7 @@ ALTER STAGE my_ext_stage1 SET URL='s3://load/files2/' CREDENTIALS={'AWS_KEY_ID'=
 ALTER STAGE my_ext_stage1 SET URL='s3://load/files2/';
 ALTER STAGE my_ext_stage1 SET CREDENTIALS={'AWS_KEY_ID'='1a2b3d' ,'AWS_SECRET_KEY'='4x5y6z'};
 
-create snapshot snapshot2 for account sys;
+create snapshot snapshot2 for account;
 -- @ignore:1
 show snapshots;
 
@@ -122,7 +122,7 @@ call test_if_hit_if();
 select name from mo_catalog.mo_stored_procedure;
 
 
-create snapshot snapshot1 for account sys;
+create snapshot snapshot1 for account;
 -- @ignore:1
 show snapshots;
 
@@ -135,7 +135,7 @@ create procedure test_if_hit_elseif_first_elseif() 'begin DECLARE v1 INT; SET v1
 call test_if_hit_elseif_first_elseif();
 select name from mo_catalog.mo_stored_procedure;
 
-create snapshot snapshot2 for account sys;
+create snapshot snapshot2 for account;
 -- @ignore:1
 show snapshots;
 
@@ -173,7 +173,7 @@ select user_id,user_name,authentication_string from mo_catalog.mo_user;
 -- @ignore:0,1
 select role_id,user_id from mo_catalog.mo_user_grant;
 
-create snapshot snapshot1 for account sys;
+create snapshot snapshot1 for account;
 -- @ignore:1
 show snapshots;
 drop user if exists u_a, u_b, u_d;
@@ -184,7 +184,7 @@ select user_id,user_name,authentication_string from mo_catalog.mo_user;
 -- @ignore:0,1
 select role_id,user_id from mo_catalog.mo_user_grant;
 
-create snapshot snapshot2 for account sys;
+create snapshot snapshot2 for account;
 -- @ignore:1
 show snapshots;
 
@@ -593,7 +593,7 @@ insert into cluster_table_1 values(0,0,0),(1,1,0);
 insert into cluster_table_1 values(0,0,1),(1,1,1);
 select * from cluster_table_1;
 
-create snapshot snapshot1 for account sys;
+create snapshot snapshot1 for account;
 drop table if exists cluster_table_1;
 
 create cluster table cluster_table_2(a int, b int);
@@ -601,7 +601,7 @@ insert into cluster_table_2 values(0,0,0),(1,1,0);
 insert into cluster_table_2 values(0,0,1),(1,1,1);
 select * from cluster_table_2;
 
-create snapshot snapshot2 for account sys;
+create snapshot snapshot2 for account;
 
 restore account sys from snapshot snapshot1;
 select * from mo_catalog.cluster_table_1;

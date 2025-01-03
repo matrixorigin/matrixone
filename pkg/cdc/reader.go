@@ -42,9 +42,10 @@ type tableReader struct {
 	sinker               Sinker
 	wMarkUpdater         IWatermarkUpdater
 	tick                 *time.Ticker
-	resetWatermarkFunc   func(*DbTableInfo) error
 	initSnapshotSplitTxn bool
 	runningReaders       *sync.Map
+	startTs, endTs       types.TS
+	noFull               bool
 
 	tableDef                           *plan.TableDef
 	insTsColIdx, insCompositedPkColIdx int
@@ -60,9 +61,10 @@ var NewTableReader = func(
 	sinker Sinker,
 	wMarkUpdater IWatermarkUpdater,
 	tableDef *plan.TableDef,
-	resetWatermarkFunc func(*DbTableInfo) error,
 	initSnapshotSplitTxn bool,
 	runningReaders *sync.Map,
+	startTs, endTs types.TS,
+	noFull bool,
 ) Reader {
 	reader := &tableReader{
 		cnTxnClient:          cnTxnClient,
@@ -73,9 +75,11 @@ var NewTableReader = func(
 		sinker:               sinker,
 		wMarkUpdater:         wMarkUpdater,
 		tick:                 time.NewTicker(200 * time.Millisecond),
-		resetWatermarkFunc:   resetWatermarkFunc,
 		initSnapshotSplitTxn: initSnapshotSplitTxn,
 		runningReaders:       runningReaders,
+		startTs:              startTs,
+		endTs:                endTs,
+		noFull:               noFull,
 		tableDef:             tableDef,
 	}
 
@@ -95,9 +99,7 @@ func (reader *tableReader) Close() {
 	reader.sinker.Close()
 }
 
-func (reader *tableReader) Run(
-	ctx context.Context,
-	ar *ActiveRoutine) {
+func (reader *tableReader) Run(ctx context.Context, ar *ActiveRoutine) {
 	var err error
 	logutil.Infof("cdc tableReader(%v).Run: start", reader.info)
 	defer func() {
@@ -125,33 +127,24 @@ func (reader *tableReader) Run(
 
 		if err = reader.readTable(ctx, ar); err != nil {
 			logutil.Errorf("cdc tableReader(%v) failed, err: %v", reader.info, err)
-
-			// if stale read, try to restart reader
-			if moerr.IsMoErrCode(err, moerr.ErrStaleRead) {
-				// reset sinker
-				reader.sinker.Reset()
-				// reset watermark
-				if err = reader.resetWatermarkFunc(reader.info); err != nil {
-					logutil.Errorf("cdc tableReader(%v) restart failed, err: %v", reader.info, err)
-					return
-				}
-				logutil.Errorf("cdc tableReader(%v) restart successfully", reader.info)
-				continue
-			}
-
-			logutil.Errorf("cdc tableReader(%v) err is not stale read, quit", reader.info)
 			return
 		}
 	}
 }
 
-func (reader *tableReader) readTable(
+var readTableWithTxn = func(
+	reader *tableReader,
 	ctx context.Context,
-	ar *ActiveRoutine) (err error) {
+	txnOp client.TxnOperator,
+	packer *types.Packer,
+	ar *ActiveRoutine,
+) (err error) {
+	return reader.readTableWithTxn(ctx, txnOp, packer, ar)
+}
 
-	var txnOp client.TxnOperator
+func (reader *tableReader) readTable(ctx context.Context, ar *ActiveRoutine) (err error) {
 	//step1 : create an txnOp
-	txnOp, err = GetTxnOp(ctx, reader.cnEngine, reader.cnTxnClient, "readMultipleTables")
+	txnOp, err := GetTxnOp(ctx, reader.cnEngine, reader.cnTxnClient, "readMultipleTables")
 	if err != nil {
 		return err
 	}
@@ -164,8 +157,7 @@ func (reader *tableReader) readTable(
 		ExitRunSql(txnOp)
 	}()
 
-	err = GetTxn(ctx, reader.cnEngine, txnOp)
-	if err != nil {
+	if err = GetTxn(ctx, reader.cnEngine, txnOp); err != nil {
 		return err
 	}
 
@@ -174,11 +166,25 @@ func (reader *tableReader) readTable(
 	defer put.Put()
 
 	//step2 : read table
-	err = reader.readTableWithTxn(
-		ctx,
-		txnOp,
-		packer,
-		ar)
+	err = readTableWithTxn(reader, ctx, txnOp, packer, ar)
+	// if stale read, try to reset watermark
+	if moerr.IsMoErrCode(err, moerr.ErrStaleRead) {
+		if !reader.noFull && !reader.startTs.IsEmpty() {
+			err = moerr.NewInternalErrorf(ctx, "cdc tableReader(%v) stale read, and startTs(%v) is set, end", reader.info, reader.startTs)
+			return
+		}
+
+		// reset sinker
+		reader.sinker.Reset()
+		// reset watermark to startTs, will read from the beginning at next round
+		watermark := reader.startTs
+		if reader.noFull {
+			watermark = types.TimestampToTS(txnOp.SnapshotTS())
+		}
+		reader.wMarkUpdater.UpdateMem(reader.info.SourceDbName, reader.info.SourceTblName, watermark)
+		logutil.Infof("cdc tableReader(%v) reset watermark success", reader.info)
+		err = nil
+	}
 	return
 }
 
@@ -199,7 +205,15 @@ func (reader *tableReader) readTableWithTxn(
 	//	from = last wmark
 	//  to = txn operator snapshot ts
 	fromTs := reader.wMarkUpdater.GetFromMem(reader.info.SourceDbName, reader.info.SourceTblName)
+	if !reader.endTs.IsEmpty() && fromTs.GE(&reader.endTs) {
+		logutil.Debugf("current watermark(%v) >= endTs(%v), end", fromTs, reader.endTs)
+		return
+	}
 	toTs := types.TimestampToTS(GetSnapshotTS(txnOp))
+	if !reader.endTs.IsEmpty() && toTs.GT(&reader.endTs) {
+		toTs = reader.endTs
+	}
+
 	start := time.Now()
 	changes, err = CollectChanges(ctx, rel, fromTs, toTs, reader.mp)
 	v2.CdcReadDurationHistogram.Observe(time.Since(start).Seconds())

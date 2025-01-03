@@ -4,33 +4,39 @@ drop account if exists acc02;
 create account acc02 admin_name = 'test_account' identified by '111';
 drop account if exists acc03;
 create account acc03 admin_name = 'test_account' identified by '111';
+
+-- restore a subscription db does not restore the data of the subscription data, only restore the
+-- subscription relationship, because the original data is in the publishing account
 drop database if exists test01;
 create database test01;
 use test01;
 drop table if exists pri01;
 create table pri01(
-deptno int unsigned comment '部门编号',
-dname varchar(15) comment '部门名称',
-loc varchar(50)  comment '部门所在位置',
-primary key(deptno)
+                      deptno int unsigned comment '部门编号',
+                      dname varchar(15) comment '部门名称',
+                      loc varchar(50)  comment '部门所在位置',
+                      primary key(deptno)
 ) comment='部门表';
+
 insert into pri01 values (10,'ACCOUNTING','NEW YORK');
 insert into pri01 values (20,'RESEARCH','DALLAS');
 insert into pri01 values (30,'SALES','CHICAGO');
 insert into pri01 values (40,'OPERATIONS','BOSTON');
+
 drop table if exists aff01;
 create table aff01(
-empno int unsigned auto_increment COMMENT '雇员编号',
-ename varchar(15) comment '雇员姓名',
-job varchar(10) comment '雇员职位',
-mgr int unsigned comment '雇员对应的领导的编号',
-hiredate date comment '雇员的雇佣日期',
-sal decimal(7,2) comment '雇员的基本工资',
-comm decimal(7,2) comment '奖金',
-deptno int unsigned comment '所在部门',
-primary key(empno),
-constraint `c1` foreign key (deptno) references pri01 (deptno)
+                      empno int unsigned auto_increment COMMENT '雇员编号',
+                      ename varchar(15) comment '雇员姓名',
+                      job varchar(10) comment '雇员职位',
+                      mgr int unsigned comment '雇员对应的领导的编号',
+                      hiredate date comment '雇员的雇佣日期',
+                      sal decimal(7,2) comment '雇员的基本工资',
+                      comm decimal(7,2) comment '奖金',
+                      deptno int unsigned comment '所在部门',
+                      primary key(empno),
+                      constraint `c1` foreign key (deptno) references pri01 (deptno)
 );
+
 insert into aff01 values (7369,'SMITH','CLERK',7902,'1980-12-17',800,NULL,20);
 insert into aff01 values (7499,'ALLEN','SALESMAN',7698,'1981-02-20',1600,300,30);
 insert into aff01 values (7521,'WARD','SALESMAN',7698,'1981-02-22',1250,500,30);
@@ -38,74 +44,59 @@ insert into aff01 values (7566,'JONES','MANAGER',7839,'1981-04-02',2975,NULL,20)
 insert into aff01 values (7654,'MARTIN','SALESMAN',7698,'1981-09-28',1250,1400,30);
 insert into aff01 values (7698,'BLAKE','MANAGER',7839,'1981-05-01',2850,NULL,30);
 insert into aff01 values (7782,'CLARK','MANAGER',7839,'1981-06-09',2450,NULL,10);
+
 drop PUBLICATION if exists pub01;
 create PUBLICATION pub01 database test01 account all;
+-- @ignore:5,6
 show PUBLICATIONS;
-publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-pub01    test01    *    *        2024-11-15 11:34:07    null    
+
+-- @session:id=1&user=acc01:test_account&password=111
+-- @ignore:5,7
 show subscriptions all;
-pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pub01    sys    test01    *        2024-11-15 11:34:07    null    null    0
 drop database if exists sub01;
 create database sub01 FROM sys PUBLICATION pub01;
 drop snapshot if exists sp01;
 create snapshot sp01 for account acc01;
+-- @ignore:1
 show snapshots;
-SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp01    2024-11-15 03:34:07.569057    account    acc01        
 use sub01;
 show tables;
-Tables_in_sub01
-aff01
-pri01
 select * from aff01;
-empno    ename    job    mgr    hiredate    sal    comm    deptno
-7369    SMITH    CLERK    7902    1980-12-17    800.00    null    20
-7499    ALLEN    SALESMAN    7698    1981-02-20    1600.00    300.00    30
-7521    WARD    SALESMAN    7698    1981-02-22    1250.00    500.00    30
-7566    JONES    MANAGER    7839    1981-04-02    2975.00    null    20
-7654    MARTIN    SALESMAN    7698    1981-09-28    1250.00    1400.00    30
-7698    BLAKE    MANAGER    7839    1981-05-01    2850.00    null    30
-7782    CLARK    MANAGER    7839    1981-06-09    2450.00    null    10
 select count(*) from pri01;
-count(*)
-4
+
 drop database sub01;
+-- @ignore:5,7
 show subscriptions;
-pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
 restore account acc01 from snapshot sp01;
+-- @ignore:5,7
 show subscriptions;
-pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pub01    sys    test01    *        2024-11-15 11:34:07    sub01    2024-11-15 11:34:07    0
+-- @session
+
 use test01;
 drop table aff01;
+-- @ignore:5,6
 show PUBLICATIONs;
-publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-pub01    test01    *    *    acc01    2024-11-15 11:34:07    null    
+
+-- @session:id=1&user=acc01:test_account&password=111
+-- @ignore:5,7
 show subscriptions;
-pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pub01    sys    test01    *        2024-11-15 11:34:07    sub01    2024-11-15 11:34:07    0
 show databases;
-Database
-information_schema
-mo_catalog
-mysql
-sub01
-system
-system_metrics
 use sub01;
 show tables;
-Tables_in_sub01
-pri01
 select * from aff01;
-SQL parser error: table "aff01" does not exist
 select count(*) from pri01;
-count(*)
-4
 drop database sub01;
 drop snapshot sp01;
+-- @session
+
 drop PUBLICATION pub01;
 drop database test01;
+
+
+
+
+-- restore a deleted subscribed db, and this subscribed db corresponds tp the PUBLICATION db has been deleted,
+-- do not need to restore the subscription db
 drop database if exists test02;
 create database test02;
 use test02;
@@ -119,14 +110,6 @@ insert into rs02 values (5, null);
 insert into rs02 values (6, null);
 insert into rs02 values (7, '2023-11-27 01:02:03');
 select * from rs02;
-col1    col2
-1    2020-10-13 10:10:10
-2    null
-3    2021-10-10 00:00:00
-4    2023-01-01 12:12:12
-5    null
-6    null
-7    2023-11-27 01:02:03
 drop table if exists rs03;
 create table rs03 (col1 int, col2 float, col3 decimal, col4 enum('1','2','3','4'));
 insert into rs03 values (1, 12.21, 32324.32131, 1);
@@ -134,40 +117,45 @@ insert into rs03 values (2, null, null, 2);
 insert into rs03 values (2, -12.1, 34738, null);
 insert into rs03 values (1, 90.2314, null, 4);
 insert into rs03 values (1, 43425.4325, -7483.432, 2);
+
 drop PUBLICATION if exists pub02;
 create PUBLICATION pub02 database test02 table rs02 account acc01;
+-- @ignore:5,6
 show PUBLICATIONS;
-publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-pub02    test02    rs02    acc01        2024-11-15 11:34:08    null    
+
+-- @session:id=1&user=acc01:test_account&password=111
+-- @ignore:5,7
 show subscriptions all;
-pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pub02    sys    test02    rs02        2024-11-15 11:34:08    null    null    0
 drop database if exists sub02;
 CREATE database sub02 FROM sys PUBLICATION pub02;
+-- @ignore:5,7
 show subscriptions;
-pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pub02    sys    test02    rs02        2024-11-15 11:34:08    sub02    2024-11-15 11:34:08    0
+
 drop snapshot if exists sp02;
 create snapshot sp02 for account acc01;
+-- @ignore:1
 show snapshots;
-SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp02    2024-11-15 03:34:08.377778    account    acc01        
 drop database sub02;
+-- @session
+
 drop PUBLICATION pub02;
+
+-- @session:id=1&user=acc01:test_account&password=111
+-- @ignore:5,7
 show subscriptions;
-pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
 restore account acc01 from snapshot sp02;
+-- @ignore:5,7
 show subscriptions;
-pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
 show databases;
-Database
-information_schema
-mo_catalog
-mysql
-system
-system_metrics
 drop snapshot sp02;
+-- @session
+
 drop database test02;
+
+
+
+
+-- restore data to new account, do not need to restore the subscription table
 drop database if exists test03;
 create database test03;
 use test03;
@@ -191,13 +179,15 @@ drop table if exists t3;
 create table t3 (col1 enum('red','blue','green'));
 insert into t3 values ('red'),('blue'),('green');
 insert into t3 values (null);
+
 drop PUBLICATION if exists pub03;
 create PUBLICATION pub03 database test03 account acc01;
+-- @ignore:5,6
 show PUBLICATIONS;
-publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-pub03    test03    *    acc01        2024-11-15 11:34:08    null    
+
+-- @session:id=1&user=acc01:test_account&password=111
+-- @ignore:5,7
 show subscriptions;
-pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
 drop database if exists sub03;
 CREATE DATABASE sub03 FROM sys PUBLICATION pub03;
 drop database if exists db01;
@@ -207,35 +197,37 @@ drop table if exists table01;
 create table table01(col1 varchar(50), col2 bigint);
 insert into table01 values('database',23789324);
 insert into table01 values('fhuwehwfw',3829032);
+-- @session
+
 drop snapshot if exists sp03;
 create snapshot sp03 for account acc01;
+
 restore account acc01 from snapshot sp03 to account acc02;
+
+-- @session:id=2&user=acc02:test_account&password=111
 show subscriptions;
-pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
 show databases;
-Database
-db01
-information_schema
-mo_catalog
-mysql
-system
-system_metrics
 use db01;
 show tables;
-Tables_in_db01
-table01
 select * from table01;
-col1    col2
-database    23789324
-fhuwehwfw    3829032
 drop table table01;
 drop database db01;
+-- @session
+
+-- @session:id=1&user=acc01:test_account&password=111
 drop database sub03;
+-- @session
+
 drop PUBLICATION pub03;
 drop database test03;
 drop database test04;
-Can't drop database 'test04'; database doesn't exist
 drop snapshot sp03;
+
+
+
+
+-- restore level is db or account, can not restore a subscription table
+-- @session:id=1&user=acc01:test_account&password=111
 drop database if exists test04;
 create database test04;
 use test04;
@@ -257,44 +249,43 @@ insert into t5 values (2);
 drop table if exists t6;
 create table t6 (a int, FOREIGN KEY (a) REFERENCES t4(a));
 insert into t6 values (2);
+
 drop PUBLICATION if exists pub04;
 create PUBLICATION pub04 database test04 account sys comment 'pub to sys account';
+-- @ignore:5,6
 show PUBLICATIONS;
-publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-pub04    test04    *    sys        2024-11-15 11:34:09    null    pub to sys account
+-- @session
+
 drop database if exists sub05;
 create DATABASE sub05 from acc01 PUBLICATION pub04;
+
+-- @ignore:5,7
 show subscriptions;
-pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pub04    acc01    test04    *    pub to sys account    2024-11-15 11:34:09    sub05    2024-11-15 11:34:09    0
 drop snapshot if exists sp05;
-create snapshot sp05 for account sys;
+create snapshot sp05 for account;
+
 drop database sub05;
 restore account sys database sub05 table t4 from snapshot sp05;
-internal error: can't restore to table for sub db
 restore account sys database sub05 from snapshot sp05;
 use sub05;
 show tables;
-Tables_in_sub05
-t1
-t2
-t3
-t4
-t5
-t6
 select * from t1;
-a
-1
 select count(*) from t2;
-count(*)
-1
+-- @ignore:5,7
 show subscriptions;
-pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pub04    acc01    test04    *    pub to sys account    2024-12-17 16:00:47    sub05    2024-12-17 16:00:48    0
 drop database if exists sub05;
 drop snapshot if exists sp05;
+
+-- @session:id=1&user=acc01:test_account&password=111
 drop PUBLICATION pub04;
 drop database test04;
+-- @session
+
+
+
+
+-- acc01 pub to acc02, acc01 creates snapshot, acc02 subscribe, acc01 restore, test acc02 show subscriptions: status = 2
+-- @session:id=1&user=acc01:test_account&password=111
 drop database if exists test06;
 create database test06;
 use test06;
@@ -307,112 +298,123 @@ insert into table01 values (4, 10, null);
 insert into table01 values (5, -321.321, null);
 insert into table01 values (6, -1, null);
 select count(*) from table01;
-count(*)
-6
+
 drop snapshot if exists sp06;
 create snapshot sp06 for account acc01;
+
 drop PUBLICATION if exists pub06;
 create PUBLICATION pub06 database test06 account acc02 comment 'acc01 pub to acc02';
+-- @ignore:5,6
 show PUBLICATIONS;
-publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-pub06    test06    *    acc02        2024-11-15 11:34:09    null    acc01 pub to acc02
+-- @session
+
+-- @session:id=2&user=acc02:test_account&password=111
 drop database if exists sub06;
 CREATE database sub06 FROM acc01 PUBLICATION pub06;
+-- @ignore:5,7
 show subscriptions;
-pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pub06    acc01    test06    *    acc01 pub to acc02    2024-11-15 11:34:09    sub06    2024-11-15 11:34:09    0
+-- @session
+
+-- @session:id=1&user=acc01:test_account&password=111
 restore account acc01 from snapshot sp06;
+-- @ignore:5,6
 show PUBLICATIONs;
-publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
+-- @session
+
+-- @session:id=2&user=acc02:test_account&password=111
+-- @ignore:5,7
 show subscriptions;
-pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pub06    acc01    null    null    null    null    sub06    2024-11-15 11:34:09    2
 use sub06;
-internal error: there is no publication pub06
+-- @session
+
+-- @session:id=1&user=acc01:test_account&password=111
 drop PUBLICATION if exists pub06;
 create PUBLICATION pub06 database test06 table table01 account acc02 comment 'acc01 pub to acc02';
+-- @ignore:5,6
 show PUBLICATIONS;
-publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-pub06    test06    table01    acc02    acc02    2024-11-15 11:34:10    null    acc01 pub to acc02
+-- @session
+
+-- @session:id=2&user=acc02:test_account&password=111
 show databases;
-Database
-information_schema
-mo_catalog
-mysql
-sub06
-system
-system_metrics
 use sub06;
 show tables;
-Tables_in_sub06
-table01
 select * from table01;
-col1    col2    col3
-1    null    database
-2    38291    database
-3    null    database management system
-4    10    null
-5    -321    null
-6    -1    null
 show create table table01;
-Table    Create Table
-table01    CREATE TABLE `table01` (\n  `col1` int NOT NULL AUTO_INCREMENT,\n  `col2` decimal(6,0) DEFAULT NULL,\n  `col3` varchar(30) DEFAULT NULL,\n  UNIQUE KEY `col1` (`col1`)\n)
 drop database sub06;
+-- @session
+
+-- @session:id=1&user=acc01:test_account&password=111
 drop PUBLICATION pub06;
 drop database test06;
 drop snapshot sp06;
+-- @session
+
+
+
+
+-- sys pub db to acc01, create snapshot for sys, alter pub to acc01 to acc02, restore
 drop database if exists test07;
 create database test07;
 use test07;
 create table t1 (a int primary key);
 insert into t1 values (1);
 select * from t1;
-a
-1
+
 drop database if exists test08;
 create database test08;
 use test08;
 create table t3 (a int primary key, b int, FOREIGN KEY (b) REFERENCES test07.t1(a));
 insert into t3 values (1, 1);
 select * from t3;
-a    b
-1    1
 create table t4 (a int primary key);
 insert into t4 values (1);
 select * from t4;
-a
-1
+
 use test07;
 create table t2 (a int primary key, b int, FOREIGN KEY (b) REFERENCES test08.t4(a));
 insert into t2 values (1, 1);
 select * from t2;
-a    b
-1    1
+
 drop PUBLICATION if exists pub06;
 create PUBLICATION pub06 database test07 account acc01;
+
+-- @session:id=1&user=acc01:test_account&password=111
 drop database if exists sub06;
 create database sub06 from sys PUBLICATION pub06;
+-- @ignore:5,7
 show subscriptions;
-pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pub06    sys    test07    *        2024-11-15 11:34:10    sub06    2024-11-15 11:34:10    0
+-- @session
+
 drop snapshot if exists sp06;
-create snapshot sp06 for account sys;
+create snapshot sp06 for account;
+
 alter PUBLICATION pub06 account acc02 database test07;
+
+-- @session:id=1&user=acc01:test_account&password=111
+-- @ignore:5,7
 show subscriptions;
-pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pub06    sys    null    null    null    null    sub06    2024-11-15 11:34:10    1
+-- @session
+
 restore account sys from snapshot sp06;
+
+-- @session:id=1&user=acc01:test_account&password=111
+-- @ignore:5,7
 show subscriptions;
-pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pub06    sys    null    null    null    null    sub06    2024-11-18 10:54:13    2
 drop database sub06;
+-- @session
+
 drop PUBLICATION pub06;
-internal error: publication 'pub06' does not exist
 drop table test07.t2;
 drop table test08.t3;
 drop database test07;
 drop database test08;
 drop snapshot sp06;
+
+
+
+
+-- restore account should success, if the table corresponding to the restored timestamp does not exist,
+-- do not restore the table
 drop database if exists test01;
 create database test01;
 use test01;
@@ -424,38 +426,53 @@ insert into table01 values (3, null, 'database management system');
 insert into table01 values (4, 10, null);
 insert into table01 values (1, -321.321, null);
 insert into table01 values (2, -1, null);
+
 drop PUBLICATION if exists pub10;
 create PUBLICATION pub10 database test01 table table01 account acc01;
+
 drop snapshot if exists sp10;
-create snapshot sp10 for account sys;
+create snapshot sp10 for account;
+
 drop table if exists table02;
 create table table02 (col1 int, col3 decimal);
 insert into table02 values(1, 2);
 drop PUBLICATION if exists pub11;
 create PUBLICATION pub11 database test01 table table02 account acc02;
+
+-- @session:id=1&user=acc01:test_account&password=111
 drop database if exists sub01;
 create database sub01 from sys PUBLICATION pub10;
+-- @session
+
+-- @session:id=2&user=acc02:test_account&password=111
 drop database if exists sub02;
 create database sub02 from sys PUBLICATION pub11;
+-- @session
+
 restore account sys from snapshot sp10;
+
+-- @ignore:5,6
 show PUBLICATIONs;
-publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
+
+-- @session:id=1&user=acc01:test_account&password=111
+-- @ignore:5,7
 show subscriptions;
-pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pub10    sys    null    null    null    null    sub01    2024-11-18 10:54:13    2
 drop database sub01;
+-- @session
+
+-- @session:id=2&user=acc02:test_account&password=111
+-- @ignore:5,7
 show subscriptions;
-pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pub11    sys    null    null    null    null    sub02    2024-11-15 11:34:10    2
 drop database sub02;
+-- @session
+
 drop PUBLICATION pub10;
-internal error: publication 'pub10' does not exist
 drop database test01;
 drop snapshot sp10;
 drop account acc01;
 drop account acc02;
 drop account acc03;
+-- @ignore:1
 show snapshots;
-SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
+-- @ignore:5,6
 show PUBLICATIONs;
-publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments

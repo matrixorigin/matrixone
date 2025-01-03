@@ -242,9 +242,6 @@ func (s *Service) heartbeat(ctx context.Context) {
 		s.haClient = cc
 	}
 
-	// check the logService TN replica's health on this store.
-	s.checkReplicaHealth(ctx2)
-
 	hb := s.store.getHeartbeatMessage()
 	hb.TaskServiceCreated = s.taskServiceCreated()
 	hb.ConfigData = s.config.GetData()
@@ -253,9 +250,14 @@ func (s *Service) heartbeat(ctx context.Context) {
 	if err != nil {
 		err = moerr.AttachCause(ctx2, err)
 		v2.LogHeartbeatFailureCounter.Inc()
+		v2.LogServiceReplicaHealthGauge.Set(0)
 		s.runtime.Logger().Error("failed to send log service heartbeat", zap.Error(err))
 		return
 	}
+
+	// check the logService TN replica's health on this store.
+	// NB: do the health checking after heartbeat
+	s.checkReplicaHealth(ctx2)
 
 	s.config.DecrCount()
 

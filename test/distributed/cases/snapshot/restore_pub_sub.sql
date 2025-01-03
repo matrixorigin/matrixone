@@ -267,7 +267,7 @@ create database sub05 from acc01 publication pub04;
 -- @ignore:5,7
 show subscriptions;
 drop snapshot if exists sp05;
-create snapshot sp05 for account sys;
+create snapshot sp05 for account;
 
 drop database sub05;
 restore account sys database sub05 table t4 from snapshot sp05;
@@ -392,7 +392,7 @@ show subscriptions;
 -- @session
 
 drop snapshot if exists sp06;
-create snapshot sp06 for account sys;
+create snapshot sp06 for account;
 
 alter publication pub06 account acc02 database test07;
 
@@ -437,7 +437,7 @@ drop publication if exists pub10;
 create publication pub10 database test01 table table01 account acc01;
 
 drop snapshot if exists sp10;
-create snapshot sp10 for account sys;
+create snapshot sp10 for account;
 
 drop table if exists table02;
 create table table02 (col1 int, col3 decimal);
@@ -507,7 +507,7 @@ show subscriptions;
 -- @session
 
 drop snapshot if exists sp_pub01;
-create snapshot sp_pub01 for account sys;
+create snapshot sp_pub01 for account;
 
 drop publication pub_full01;
 

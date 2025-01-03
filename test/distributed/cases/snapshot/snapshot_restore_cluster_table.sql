@@ -14,7 +14,7 @@ select * from mo_catalog.cluster_table_1;
 create snapshot snapshot1 for account acc01;
 -- @session
 
-create snapshot snapshot2 for account sys;
+create snapshot snapshot2 for account;
 
 drop table if exists cluster_table_1;
 

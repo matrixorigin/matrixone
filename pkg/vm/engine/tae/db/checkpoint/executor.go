@@ -388,7 +388,6 @@ func (executor *checkpointExecutor) StopWithCause(cause error) {
 	executor.runningICKP.Store(nil)
 	executor.ickpQueue.Stop()
 	executor.gckpQueue.Stop()
-	executor.runner = nil
 	logutil.Info(
 		"CKP-Executor-Stopped",
 		zap.Error(cause),

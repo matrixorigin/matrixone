@@ -539,7 +539,7 @@ create cluster table t1(a int);
 insert into t1 values (1,6),(2,6),(3,6);
 
 drop snapshot if exists account_level_snapshot;
-create snapshot account_level_snapshot for account sys;
+create snapshot account_level_snapshot for account;
 -- @ignore:1
 show snapshots;
 

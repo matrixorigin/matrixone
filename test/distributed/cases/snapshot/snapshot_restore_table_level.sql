@@ -4,11 +4,11 @@ use snapshot_read;
 create table test_snapshot_read (a int);
 INSERT INTO test_snapshot_read (a) VALUES(1), (2), (3), (4), (5),(6), (7), (8), (9), (10), (11), (12),(13), (14), (15), (16), (17), (18), (19), (20),(21), (22), (23), (24), (25), (26), (27), (28), (29), (30),(31), (32), (33), (34), (35), (36), (37), (38), (39), (40),(41), (42), (43), (44), (45), (46), (47), (48), (49), (50),(51), (52), (53), (54), (55), (56), (57), (58), (59), (60),(61), (62), (63), (64), (65), (66), (67), (68), (69), (70),(71), (72), (73), (74), (75), (76), (77), (78), (79), (80), (81), (82), (83), (84), (85), (86), (87), (88), (89), (90),(91), (92), (93), (94), (95), (96), (97), (98), (99), (100);
 select count(*) from snapshot_read.test_snapshot_read;
-create snapshot snapshot_01 for account sys;
+create snapshot snapshot_01 for account;
 delete from test_snapshot_read where a <= 50;
 select count(*) from snapshot_read.test_snapshot_read;
 select count(*) from snapshot_read.test_snapshot_read {snapshot = 'snapshot_01'};
-create snapshot snapshot_02 for account sys;
+create snapshot snapshot_02 for account;
 INSERT INTO test_snapshot_read (a) VALUES(1), (2), (3), (4), (5),(6), (7), (8), (9), (10), (11), (12),(13), (14), (15), (16), (17), (18), (19), (20),(21), (22), (23), (24), (25), (26), (27), (28), (29), (30),(31), (32), (33), (34), (35), (36), (37), (38), (39), (40);
 select count(*) from snapshot_read.test_snapshot_read;
 select count(*) from snapshot_read.test_snapshot_read{snapshot = 'snapshot_02'};
@@ -38,7 +38,7 @@ INSERT INTO users (username, email, password) VALUES ('emily_adams', 'emily.adam
 select id, username, email from snapshot_read.users where email = 'john@example.com';
 select id, username, email from snapshot_read.users where email = 'alice.jones@gmail.com';
 drop snapshot if exists sp_01;
-create snapshot sp_01 for account sys;
+create snapshot sp_01 for account;
 
 DELETE FROM  users where email = 'john@example.com';
 UPDATE users SET password = 'newsecurepassword123' WHERE email = 'alice.jones@gmail.com';
@@ -83,7 +83,7 @@ INSERT INTO users (username, email, password) VALUES ('emily_adams', 'emily.adam
 
 select count(*) from snapshot_read.users;
 drop snapshot if exists sp_01;
-create snapshot sp_01 for account sys;
+create snapshot sp_01 for account;
 drop table users;
 select count(*) from snapshot_read.users;
 restore account sys database snapshot_read table users from snapshot sp_01;
@@ -107,7 +107,7 @@ INSERT INTO users (username, email, password) VALUES ('emily_adams', 'emily.adam
 
 select count(*) from snapshot_read.users;
 drop snapshot if exists sp_01;
-create snapshot sp_01 for account sys;
+create snapshot sp_01 for account;
 drop database snapshot_read;
 select count(*) from snapshot_read.users;
 restore account sys database snapshot_read table users from snapshot sp_01;
@@ -297,7 +297,7 @@ INSERT INTO users (username, email, password) VALUES ('emily_adams', 'emily.adam
 
 select count(*) from snapshot_read.users;
 drop snapshot if exists sp_01;
-create snapshot sp_01 for account sys;
+create snapshot sp_01 for account;
 delete from test_snapshot_read where a <= 50;
 select count(*) from snapshot_read.test_snapshot_read;
 

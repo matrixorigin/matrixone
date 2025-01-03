@@ -60,6 +60,9 @@ const (
 
 	MaxSqlLength        = "MaxSqlLength"
 	DefaultMaxSqlLength = 4 * 1024 * 1024
+
+	StartTs = "StartTS"
+	EndTs   = "EndTS"
 )
 
 var (

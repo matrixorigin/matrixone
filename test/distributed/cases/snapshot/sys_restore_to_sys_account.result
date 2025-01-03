@@ -3,7 +3,7 @@ use mo_catalog;
 create cluster table clu01(col1 int, col2 decimal);
 insert into clu01 values(1,2,0);
 drop snapshot if exists sp01;
-create snapshot sp01 for account sys;
+create snapshot sp01 for account;
 insert into clu01 values(2,3,0);
 restore account sys from snapshot sp01;
 select * from clu01;
@@ -16,7 +16,7 @@ use test;
 create table clu01(col1 int, col2 decimal);
 insert into clu01 values(1,2);
 drop snapshot if exists sp01;
-create snapshot sp01 for account sys;
+create snapshot sp01 for account;
 insert into clu01 values(2,3);
 restore account sys from snapshot sp01;
 select * from clu01;
@@ -42,7 +42,7 @@ select count(*) from rs01;
 count(*)
 6
 drop snapshot if exists sp01;
-create snapshot sp01 for account sys;
+create snapshot sp01 for account;
 select count(*) from rs01 {snapshot = 'sp01'};
 count(*)
 6
@@ -63,7 +63,7 @@ count(*)
 1
 select * from mo_catalog.mo_database{snapshot = 'sp01'} where datname = 'test01';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-273476    test01    def    create database test01    0    1    2024-12-16 17:56:22    0    
+274235    test01    def    create database test01    0    1    2024-12-31 10:40:41    0    
 select attname from mo_catalog.mo_columns{snapshot = 'sp01'} where att_database = 'test01';
 attname
 col1
@@ -88,7 +88,7 @@ count(*)
 1
 select * from mo_catalog.mo_database{snapshot = 'sp01'} where datname = 'test01';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-273476    test01    def    create database test01    0    1    2024-12-16 17:56:22    0    
+274235    test01    def    create database test01    0    1    2024-12-31 10:40:41    0    
 select attname from mo_catalog.mo_columns{snapshot = 'sp01'} where att_database = 'test01';
 attname
 col1
@@ -136,16 +136,16 @@ insert into rs03 values (2, -12.1, 34738, null);
 insert into rs03 values (1, 90.2314, null, 4);
 insert into rs03 values (1, 43425.4325, -7483.432, 2);
 drop snapshot if exists sp02;
-create snapshot sp02 for account sys;
+create snapshot sp02 for account;
 select count(*) from mo_catalog.mo_tables{snapshot = 'sp02'} where reldatabase = 'test02';
 count(*)
 2
 select * from mo_catalog.mo_database{snapshot = 'sp02'} where datname = 'test02';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-273504    test02    def    create database test02    0    1    2024-12-16 17:56:24    0    
+274263    test02    def    create database test02    0    1    2024-12-31 10:40:42    0    
 select * from mo_catalog.mo_database{snapshot = 'sp02'} where datname = 'mo_catalog';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-1    mo_catalog    mo_catalog        0    0    2024-12-16 17:53:47    0    
+1    mo_catalog    mo_catalog        0    0    2024-12-30 10:46:53    0    
 select attname from mo_catalog.mo_columns{snapshot = 'sp02'} where att_database = 'test02';
 attname
 col1
@@ -270,10 +270,10 @@ internal error: find 0 snapshot records by name(sp04), expect only 1
 select attname from mo_catalog.mo_columns{snapshot = 'sp04'} where att_database = 'test03';
 internal error: find 0 snapshot records by name(sp04), expect only 1
 drop snapshot if exists sp04;
-create snapshot sp04 for account sys;
+create snapshot sp04 for account;
 show snapshots where snapshot_name = 'sp04';
 snapshot_name    timestamp    snapshot_level    account_name    database_name    table_name
-sp04    2024-12-16 09:56:26.988168    account    sys        
+sp04    2024-12-31 02:40:44.697756    account    sys        
 select * from aff01{snapshot = 'sp04'};
 empno    ename    job    mgr    hiredate    sal    comm    deptno
 7369    SMITH    CLERK    7902    1980-12-17    800.00    null    20
@@ -397,7 +397,7 @@ select count(*) from t3;
 count(*)
 3
 drop snapshot if exists snap01;
-create snapshot snap01 for account sys;
+create snapshot snap01 for account;
 select count(*) from test01.t1 {snapshot = 'snap01'};
 count(*)
 3
@@ -477,7 +477,7 @@ drop database test02;
 drop database test03;
 drop snapshot snap01;
 drop snapshot if exists sp05;
-create snapshot sp05 for account sys;
+create snapshot sp05 for account;
 create database db01;
 restore account sys FROM snapshot sp05;
 show databases;
@@ -502,15 +502,15 @@ drop table if exists table02;
 create table table02 (col1 int unique key, col2 varchar(20));
 insert into table02 (col1, col2) values (133, 'database');
 drop snapshot if exists sp07;
-create snapshot sp07 for account sys;
+create snapshot sp07 for account;
 drop table table01;
 insert into table02 values(134, 'database');
 drop snapshot if exists sp08;
-create snapshot sp08 for account sys;
+create snapshot sp08 for account;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp08    2024-12-16 09:56:38.090964    account    sys        
-sp07    2024-12-16 09:56:37.988555    account    sys        
+sp08    2024-12-31 02:41:02.437582    account    sys        
+sp07    2024-12-31 02:41:02.312412    account    sys        
 restore account sys from snapshot sp08;
 select * from table02;
 col1    col2
@@ -549,15 +549,15 @@ drop table if exists table02;
 create table table02 (col1 int unique key, col2 varchar(20));
 insert into table02 (col1, col2) values (133, 'database');
 drop snapshot if exists sp09;
-create snapshot sp09 for account sys;
+create snapshot sp09 for account;
 alter table table01 drop primary key;
 insert into table02 values(134, 'database');
 drop snapshot if exists sp10;
-create snapshot sp10 for account sys;
+create snapshot sp10 for account;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp10    2024-12-16 09:56:40.775367    account    sys        
-sp09    2024-12-16 09:56:40.666321    account    sys        
+sp10    2024-12-31 02:41:04.864659    account    sys        
+sp09    2024-12-31 02:41:04.741147    account    sys        
 restore account sys from snapshot sp09;
 select * from table02;
 col1    col2
@@ -617,7 +617,7 @@ show create table tm2;
 Table    Create Table
 tm2    CREATE TABLE `tm2` (\n  `a` int NOT NULL AUTO_INCREMENT,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL,\n  PRIMARY KEY (`a`)\n)
 drop snapshot if exists sp11;
-create snapshot sp11 for account sys;
+create snapshot sp11 for account;
 insert into ti1 values (1,1,1), (2,2,2);
 insert into ti2 values (1,1,1), (2,2,2);
 select * from ti1;
@@ -633,7 +633,7 @@ a    b    c
 select * from tm2;
 a    b    c
 drop snapshot if exists sp12;
-create snapshot sp12 for account sys;
+create snapshot sp12 for account;
 insert into tm1 values (1,1,1), (2,2,2);
 insert into tm2 values (1,1,1), (2,2,2);
 select * from ti1 {snapshot = 'sp12'};
@@ -653,11 +653,11 @@ a    b    c
 1    1    1
 2    2    2
 drop snapshot if exists sp13;
-create snapshot sp13 for account sys;
+create snapshot sp13 for account;
 alter table ti1 add constraint fi1 foreign key (b) references ti2(a);
 alter table tm1 add constraint fm1 foreign key (b) references tm2(a);
 drop snapshot if exists sp14;
-create snapshot sp14 for account sys;
+create snapshot sp14 for account;
 show create table ti1 {snapshot = 'sp14'};
 Table    Create Table
 ti1    CREATE TABLE `ti1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL,\n  CONSTRAINT `fi1` FOREIGN KEY (`b`) REFERENCES `ti2` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
@@ -675,7 +675,7 @@ alter table tm1 drop foreign key fm1;
 truncate ti2;
 truncate tm2;
 drop snapshot if exists sp15;
-create snapshot sp15 for account sys;
+create snapshot sp15 for account;
 show create table ti1 {snapshot = 'sp14'};
 Table    Create Table
 ti1    CREATE TABLE `ti1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL,\n  CONSTRAINT `fi1` FOREIGN KEY (`b`) REFERENCES `ti2` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
@@ -809,7 +809,7 @@ col1
 1
 2
 drop snapshot if exists sp13;
-create snapshot sp13 for account sys;
+create snapshot sp13 for account;
 insert into db04.table01 values (200);
 insert into db05.table01 values (400);
 restore account sys database db04 from snapshot sp13;
@@ -874,7 +874,7 @@ show create table db07.table02;
 Table    Create Table
 table02    CREATE TABLE `table02` (\n  `col1` int DEFAULT NULL,\n  `col2` enum('a','b','c') DEFAULT NULL\n)
 drop snapshot if exists sp14;
-create snapshot sp14 for account sys;
+create snapshot sp14 for account;
 use db07;
 drop table table01;
 alter table table02 add column newC int first;
@@ -886,7 +886,7 @@ Table    Create Table
 table02    CREATE TABLE `table02` (\n  `col1` int DEFAULT NULL,\n  `col2` enum('a','b','c') DEFAULT NULL\n)
 drop database db08;
 drop snapshot if exists sp15;
-create snapshot sp15 for account sys;
+create snapshot sp15 for account;
 restore account sys database db07 from snapshot sp15;
 restore account sys database db08 from snapshot sp15;
 Unknown database db08
@@ -914,8 +914,8 @@ select * from table01;
 SQL parser error: table "table01" does not exist
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp15    2024-12-16 09:56:59.876794    account    sys        
-sp14    2024-12-16 09:56:58.785736    account    sys        
+sp15    2024-12-31 02:41:21.678227    account    sys        
+sp14    2024-12-31 02:41:21.402114    account    sys        
 drop snapshot sp14;
 drop snapshot sp15;
 drop database db07;
@@ -927,7 +927,7 @@ use db08;
 create table db08 (col1 int);
 insert into db08 values(1), (100), (20000);
 drop snapshot if exists sp15;
-create snapshot sp15 for account sys;
+create snapshot sp15 for account;
 insert into db08 (col1) values (3000);
 restore account sys database db from snapshot sp15;
 Unknown database db
@@ -979,7 +979,7 @@ partition p04 values less than (400001)
 insert into index03 values (9001,'1980-12-17', 'SMITH', 'CLERK', 'F', '2008-12-17'),
 (9002,'1981-02-20', 'ALLEN', 'SALESMAN', 'F', '2008-02-20');
 drop snapshot if exists sp16;
-create snapshot sp16 for account sys;
+create snapshot sp16 for account;
 use db09;
 delete from index02 where col1 = 'a';
 select * from index02;
@@ -1017,7 +1017,7 @@ emp_no    birth_date    first_name    last_name    gender    hire_date
 9002    1981-02-20    ALLEN    SALESMAN    F    2008-02-20
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp16    2024-12-16 09:57:01.043206    account    sys        
+sp16    2024-12-31 02:41:22.97168    account    sys        
 drop database db09;
 drop database db10;
 drop snapshot sp16;
@@ -1033,12 +1033,12 @@ col1    col2
 1    2378
 234    -3923
 drop snapshot if exists sp17;
-create snapshot sp17 for account sys;
+create snapshot sp17 for account;
 alter table pri01 add constraint primary key(col1);
 insert into pri01 values (23423, 32432543.3242);
 insert into pri01 values (234222, -3923.2342342);
 drop snapshot if exists sp18;
-create snapshot sp18 for account sys;
+create snapshot sp18 for account;
 restore account sys database db11 table pri01 from snapshot sp18;
 show create table pri01;
 Table    Create Table
@@ -1093,7 +1093,7 @@ count(*)
 1
 select * from mo_catalog.mo_database{snapshot = 'sp18'} where datname = 'db11';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-273846    db11    def    create database db11    0    1    2024-12-16 17:57:01    0    
+274616    db11    def    create database db11    0    1    2024-12-31 10:41:23    0    
 select attname from mo_catalog.mo_columns{snapshot = 'sp18'} where att_database = 'db11';
 attname
 col1
@@ -1119,7 +1119,7 @@ comment_text text,
 foreign key (post_id) references posts(post_id)
 );
 drop snapshot if exists sp_fulltext;
-create snapshot sp_fulltext for account sys;
+create snapshot sp_fulltext for account;
 alter table posts add fulltext(content);
 insert into posts (title, content) values
 ('MO全文索引入门', 'MO全文索引是一种强大的工具，可以帮助你快速检索数据库中的文本数据。'),

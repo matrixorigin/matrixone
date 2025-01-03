@@ -199,7 +199,7 @@ drop publication if exists pub02;
 create publication pub02 database repub02 account acc02 comment 'publish before creating snapshot';
 -- @ignore:5,6
 show publications;
--- @ignore:0,3,7
+-- @ignore:0,4,8,9
 select * from mo_catalog.mo_pubs;
 
 drop database if exists procedure_test;

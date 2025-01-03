@@ -28,7 +28,7 @@ show create table `_binary`;
 Table    Create Table
 _binary    CREATE TABLE `_binary` (\n  `add` int DEFAULT NULL,\n  `all` bigint DEFAULT NULL,\n  `alter` smallint DEFAULT NULL,\n  `analyze` decimal(38,0) DEFAULT NULL,\n  `and` char(1) DEFAULT NULL,\n  `as` varchar(65535) DEFAULT NULL,\n  `asc` int DEFAULT NULL,\n  `begin` float DEFAULT NULL\n)
 drop snapshot if exists sp01;
-create snapshot sp01 for account sys;
+create snapshot sp01 for account;
 drop table `_binary`;
 restore account sys from snapshot sp01;
 show databases;
@@ -61,7 +61,7 @@ Table    Create Table
 current_date    CREATE TABLE `current_date` (\n  `current_role` int DEFAULT NULL,\n  `current_time` bigint DEFAULT NULL,\n  `current_timestamp` smallint DEFAULT NULL,\n  `current_user` decimal(38,0) DEFAULT NULL,\n  `database` char(1) DEFAULT NULL,\n  `databases` varchar(65535) DEFAULT NULL,\n  `day_hour` int DEFAULT NULL,\n  `day_microsecond` float DEFAULT NULL\n)
 drop table `current_date`;
 drop snapshot if exists `div`;
-create snapshot `div` for account sys;
+create snapshot `div` for account;
 drop database `column`;
 restore account sys from snapshot `div`;
 use `column`;
