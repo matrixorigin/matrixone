@@ -268,8 +268,6 @@ type ShowRecoveryWindow struct {
 func (node *ShowRecoveryWindow) Format(ctx *FmtCtx) {
 	ctx.WriteString("show recovery_window for ")
 	switch node.Level {
-	case RECOVERYWINDOWLEVELCLUSTER:
-		ctx.WriteString("cluster")
 	case RECOVERYWINDOWLEVELACCOUNT:
 		if len(node.AccountName) != 0 {
 			ctx.WriteString("account ")
