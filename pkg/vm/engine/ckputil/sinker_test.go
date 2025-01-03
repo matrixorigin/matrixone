@@ -102,7 +102,7 @@ func Test_Sinker1(t *testing.T) {
 	}
 	dbs := []uint64{1, 2, 3}
 
-	sinker := NewSinker(
+	sinker := NewDataSinker(
 		mp,
 		fs,
 		ioutil.WithMemorySizeThreshold(mpool.KB),
