@@ -318,17 +318,21 @@ func doCreateCdc(ctx context.Context, ses *Session, create *tree.CreateCDC) (err
 	}
 
 	var ts time.Time
-	startTs := cdcTaskOptionsMap["StartTS"]
-	if ts, err = parseTimestamp(startTs, ses.timeZone); err != nil {
-		return moerr.NewInternalErrorf(ctx, "invalid startTs: %s, supported timestamp format: `%s`, or `%s`", startTs, time.DateTime, time.RFC3339)
+	startTs := cdcTaskOptionsMap[cdc2.StartTs]
+	if startTs != "" {
+		if ts, err = parseTimestamp(startTs, ses.timeZone); err != nil {
+			return moerr.NewInternalErrorf(ctx, "invalid startTs: %s, supported timestamp format: `%s`, or `%s`", startTs, time.DateTime, time.RFC3339)
+		}
+		startTs = ts.Format(time.RFC3339)
 	}
-	startTs = ts.Format(time.RFC3339)
 
-	endTs := cdcTaskOptionsMap["EndTS"]
-	if ts, err = parseTimestamp(endTs, ses.timeZone); err != nil {
-		return moerr.NewInternalErrorf(ctx, "invalid endTs: %s, supported timestamp format: `%s`, or `%s`", endTs, time.DateTime, time.RFC3339)
+	endTs := cdcTaskOptionsMap[cdc2.EndTs]
+	if endTs != "" {
+		if ts, err = parseTimestamp(endTs, ses.timeZone); err != nil {
+			return moerr.NewInternalErrorf(ctx, "invalid endTs: %s, supported timestamp format: `%s`, or `%s`", endTs, time.DateTime, time.RFC3339)
+		}
+		endTs = ts.Format(time.RFC3339)
 	}
-	endTs = ts.Format(time.RFC3339)
 
 	//step 4: check source uri format and strip password
 	jsonSrcUri, _, err := extractUriInfo(ctx, create.SourceUri, cdc2.SourceUriPrefix)
