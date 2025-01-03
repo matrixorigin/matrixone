@@ -3620,7 +3620,7 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 
 	var sql string
 	var db string
-	// var table string
+	var table string
 	var erArray []ExecResult
 	var databases map[string]int8
 	var dbSql, prefix string
@@ -3628,9 +3628,9 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 
 	var deleteCtx context.Context
 	var accountId int64
-	// var version uint64
+	var version uint64
 	var hasAccount = true
-	// clusterTables := make(map[string]int)
+	clusterTables := make(map[string]int)
 
 	da.Name, err = normalizeName(ctx, da.Name)
 	if err != nil {
@@ -3678,7 +3678,7 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 			return
 		}
 		accountId = int64(nameInfoMap[da.Name].Id)
-		// version = nameInfoMap[da.Name].Version
+		version = nameInfoMap[da.Name].Version
 
 		//drop tables of the tenant
 		//NOTE!!!: single DDL drop statement per single transaction
@@ -3693,32 +3693,32 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 		//step 7 : drop table mo_user_defined_function
 		//step 8 : drop table mo_mysql_compatibility_mode
 		//step 9 : drop table %!%mo_increment_columns
-		// for _, sql = range getSqlForDropAccount() {
-		// 	ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, sql)
-		// 	rtnErr = bh.Exec(deleteCtx, sql)
-		// 	if rtnErr != nil {
-		// 		if isDisallowedError(rtnErr) {
-		// 			ses.Infof(ctx, "[EOF] dropAccount %s sql: %s, error: %s", da.Name, sql, rtnErr.Error())
-		// 		}
-		// 		return rtnErr
-		// 	}
-		// }
+		for _, sql = range getSqlForDropAccount() {
+			ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, sql)
+			rtnErr = bh.Exec(deleteCtx, sql)
+			if rtnErr != nil {
+				if isDisallowedError(rtnErr) {
+					ses.Infof(ctx, "[EOF] dropAccount %s sql: %s, error: %s", da.Name, sql, rtnErr.Error())
+				}
+				return rtnErr
+			}
+		}
 
-		// ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, getPubInfoSql)
-		// // unpublish all publications
-		// pubInfos, rtnErr := getPubInfos(deleteCtx, bh, "")
-		// if rtnErr != nil {
-		// 	return
-		// }
-		// for _, pubInfo := range pubInfos {
-		// 	ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, pubInfo.PubName)
-		// 	if rtnErr = dropPublication(deleteCtx, bh, true, da.Name, pubInfo.PubName); rtnErr != nil {
-		// 		if isDisallowedError(rtnErr) {
-		// 			ses.Infof(ctx, "[EOF] dropAccount %s sql: %s, error: %s", da.Name, pubInfo.PubName, rtnErr.Error())
-		// 		}
-		// 		return
-		// 	}
-		// }
+		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, getPubInfoSql)
+		// unpublish all publications
+		pubInfos, rtnErr := getPubInfos(deleteCtx, bh, "")
+		if rtnErr != nil {
+			return
+		}
+		for _, pubInfo := range pubInfos {
+			ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, pubInfo.PubName)
+			if rtnErr = dropPublication(deleteCtx, bh, true, da.Name, pubInfo.PubName); rtnErr != nil {
+				if isDisallowedError(rtnErr) {
+					ses.Infof(ctx, "[EOF] dropAccount %s sql: %s, error: %s", da.Name, pubInfo.PubName, rtnErr.Error())
+				}
+				return
+			}
+		}
 
 		//drop databases created by user
 		databases = make(map[string]int8)
@@ -3786,104 +3786,104 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 			}
 		}
 
-		// ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, getSubsSql)
-		// // alter sub_account field in mo_pubs which contains accountName
-		// subInfos, rtnErr := getSubInfosFromSub(deleteCtx, bh, "")
-		// if rtnErr != nil {
-		// 	return rtnErr
-		// }
-		// for _, subInfo := range subInfos {
-		// 	//pubAccInfo, ok := nameInfoMap[subInfo.PubAccountName]
-		// 	//if !ok {
-		// 	//	continue
-		// 	//}
+		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, getSubsSql)
+		// alter sub_account field in mo_pubs which contains accountName
+		subInfos, rtnErr := getSubInfosFromSub(deleteCtx, bh, "")
+		if rtnErr != nil {
+			return rtnErr
+		}
+		for _, subInfo := range subInfos {
+			//pubAccInfo, ok := nameInfoMap[subInfo.PubAccountName]
+			//if !ok {
+			//	continue
+			//}
 
-		// 	ses.Infof(ctx, "dropAccount %s sql: %s %s", da.Name, updatePubInfoAccountListFormat, subInfo.PubName)
-		// 	if rtnErr = dropSubAccountNameInSubAccounts(deleteCtx, bh, subInfo.PubAccountName, subInfo.PubName, da.Name); rtnErr != nil {
-		// 		if isDisallowedError(rtnErr) {
-		// 			ses.Infof(ctx, "[EOF] dropAccount %s sql: %s %s", da.Name, updatePubInfoAccountListFormat, subInfo.PubName)
-		// 		}
-		// 		return rtnErr
-		// 	}
-		// }
+			ses.Infof(ctx, "dropAccount %s sql: %s %s", da.Name, updatePubInfoAccountListFormat, subInfo.PubName)
+			if rtnErr = dropSubAccountNameInSubAccounts(deleteCtx, bh, subInfo.PubAccountName, subInfo.PubName, da.Name); rtnErr != nil {
+				if isDisallowedError(rtnErr) {
+					ses.Infof(ctx, "[EOF] dropAccount %s sql: %s %s", da.Name, updatePubInfoAccountListFormat, subInfo.PubName)
+				}
+				return rtnErr
+			}
+		}
 
-		// ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, deleteMoSubsRecordsBySubAccountIdFormat)
-		// // delete records in mo_subs
-		// if rtnErr = deleteMoSubsBySubAccountId(deleteCtx, bh); rtnErr != nil {
-		// 	if isDisallowedError(rtnErr) {
-		// 		ses.Infof(ctx, "[EOF] dropAccount %s sql: %s", da.Name, deleteMoSubsRecordsBySubAccountIdFormat)
-		// 	}
-		// 	return rtnErr
-		// }
+		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, deleteMoSubsRecordsBySubAccountIdFormat)
+		// delete records in mo_subs
+		if rtnErr = deleteMoSubsBySubAccountId(deleteCtx, bh); rtnErr != nil {
+			if isDisallowedError(rtnErr) {
+				ses.Infof(ctx, "[EOF] dropAccount %s sql: %s", da.Name, deleteMoSubsRecordsBySubAccountIdFormat)
+			}
+			return rtnErr
+		}
 
-		// ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, dropMoMysqlCompatibilityModeSql)
-		// // drop table mo_mysql_compatibility_mode
-		// rtnErr = bh.Exec(deleteCtx, dropMoMysqlCompatibilityModeSql)
-		// if rtnErr != nil {
-		// 	if isDisallowedError(rtnErr) {
-		// 		ses.Infof(ctx, "[EOF] dropAccount %s sql: %s", da.Name, dropMoMysqlCompatibilityModeSql)
-		// 	}
-		// 	return rtnErr
-		// }
+		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, dropMoMysqlCompatibilityModeSql)
+		// drop table mo_mysql_compatibility_mode
+		rtnErr = bh.Exec(deleteCtx, dropMoMysqlCompatibilityModeSql)
+		if rtnErr != nil {
+			if isDisallowedError(rtnErr) {
+				ses.Infof(ctx, "[EOF] dropAccount %s sql: %s", da.Name, dropMoMysqlCompatibilityModeSql)
+			}
+			return rtnErr
+		}
 
-		// ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, dropAutoIcrColSql)
-		// // drop autoIcr table
-		// rtnErr = bh.Exec(deleteCtx, dropAutoIcrColSql)
-		// if rtnErr != nil {
-		// 	if isDisallowedError(rtnErr) {
-		// 		ses.Infof(ctx, "[EOF] dropAccount %s sql: %s", da.Name, dropAutoIcrColSql)
-		// 	}
-		// 	return rtnErr
-		// }
+		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, dropAutoIcrColSql)
+		// drop autoIcr table
+		rtnErr = bh.Exec(deleteCtx, dropAutoIcrColSql)
+		if rtnErr != nil {
+			if isDisallowedError(rtnErr) {
+				ses.Infof(ctx, "[EOF] dropAccount %s sql: %s", da.Name, dropAutoIcrColSql)
+			}
+			return rtnErr
+		}
 
-		// ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, dropMoIndexes)
-		// // drop mo_catalog.mo_indexes under general tenant
-		// rtnErr = bh.Exec(deleteCtx, dropMoIndexes)
-		// if rtnErr != nil {
-		// 	if isDisallowedError(rtnErr) {
-		// 		ses.Infof(ctx, "[EOF] dropAccount %s sql: %s", da.Name, dropMoIndexes)
-		// 	}
-		// 	return rtnErr
-		// }
+		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, dropMoIndexes)
+		// drop mo_catalog.mo_indexes under general tenant
+		rtnErr = bh.Exec(deleteCtx, dropMoIndexes)
+		if rtnErr != nil {
+			if isDisallowedError(rtnErr) {
+				ses.Infof(ctx, "[EOF] dropAccount %s sql: %s", da.Name, dropMoIndexes)
+			}
+			return rtnErr
+		}
 
-		// ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, dropMoTablePartitions)
-		// // drop mo_catalog.mo_table_partitions under general tenant
-		// rtnErr = bh.Exec(deleteCtx, dropMoTablePartitions)
-		// if rtnErr != nil {
-		// 	if isDisallowedError(rtnErr) {
-		// 		ses.Infof(ctx, "[EOF] dropAccount %s sql: %s", da.Name, dropMoTablePartitions)
-		// 	}
-		// 	return rtnErr
-		// }
+		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, dropMoTablePartitions)
+		// drop mo_catalog.mo_table_partitions under general tenant
+		rtnErr = bh.Exec(deleteCtx, dropMoTablePartitions)
+		if rtnErr != nil {
+			if isDisallowedError(rtnErr) {
+				ses.Infof(ctx, "[EOF] dropAccount %s sql: %s", da.Name, dropMoTablePartitions)
+			}
+			return rtnErr
+		}
 
-		// ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, dropMoRetention)
-		// rtnErr = bh.Exec(deleteCtx, dropMoRetention)
-		// if rtnErr != nil {
-		// 	if isDisallowedError(rtnErr) {
-		// 		ses.Infof(ctx, "[EOF] dropAccount %s sql: %s", da.Name, dropMoRetention)
-		// 	}
-		// 	return rtnErr
-		// }
+		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, dropMoRetention)
+		rtnErr = bh.Exec(deleteCtx, dropMoRetention)
+		if rtnErr != nil {
+			if isDisallowedError(rtnErr) {
+				ses.Infof(ctx, "[EOF] dropAccount %s sql: %s", da.Name, dropMoRetention)
+			}
+			return rtnErr
+		}
 
-		// ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, dropMoForeignKeys)
-		// rtnErr = bh.Exec(deleteCtx, dropMoForeignKeys)
-		// if rtnErr != nil {
-		// 	if isDisallowedError(rtnErr) {
-		// 		ses.Infof(ctx, "[EOF] dropAccount %s sql: %s", da.Name, dropMoForeignKeys)
-		// 	}
-		// 	return rtnErr
-		// }
+		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, dropMoForeignKeys)
+		rtnErr = bh.Exec(deleteCtx, dropMoForeignKeys)
+		if rtnErr != nil {
+			if isDisallowedError(rtnErr) {
+				ses.Infof(ctx, "[EOF] dropAccount %s sql: %s", da.Name, dropMoForeignKeys)
+			}
+			return rtnErr
+		}
 
-		// // delete the pitr record in the mo_pitr created by the account which is dropped
-		// sql = getSqlForDeletePitrFromMoPitr(uint64(accountId))
-		// ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, sql)
-		// rtnErr = bh.Exec(ctx, sql)
-		// if rtnErr != nil {
-		// 	if isDisallowedError(rtnErr) {
-		// 		ses.Infof(ctx, "[EOF] dropAccount %s sql: %s", da.Name, sql)
-		// 	}
-		// 	return rtnErr
-		// }
+		// delete the pitr record in the mo_pitr created by the account which is dropped
+		sql = getSqlForDeletePitrFromMoPitr(uint64(accountId))
+		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, sql)
+		rtnErr = bh.Exec(ctx, sql)
+		if rtnErr != nil {
+			if isDisallowedError(rtnErr) {
+				ses.Infof(ctx, "[EOF] dropAccount %s sql: %s", da.Name, sql)
+			}
+			return rtnErr
+		}
 
 		// delete the account in the mo_account of the sys account
 		sql, rtnErr = getSqlForDeleteAccountFromMoAccount(ctx, da.Name)
@@ -3899,46 +3899,46 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 			return rtnErr
 		}
 
-		// get all cluster table in the mo_catalog
-		// sql = "show tables from mo_catalog;"
-		// bh.ClearExecResultSet()
-		// ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, sql)
-		// rtnErr = bh.Exec(ctx, sql)
-		// if rtnErr != nil {
-		// 	if isDisallowedError(rtnErr) {
-		// 		ses.Infof(ctx, "[EOF] dropAccount %s sql: %s", da.Name, sql)
-		// 	}
-		// 	return rtnErr
-		// }
+		//get all cluster table in the mo_catalog
+		sql = "show tables from mo_catalog;"
+		bh.ClearExecResultSet()
+		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, sql)
+		rtnErr = bh.Exec(ctx, sql)
+		if rtnErr != nil {
+			if isDisallowedError(rtnErr) {
+				ses.Infof(ctx, "[EOF] dropAccount %s sql: %s", da.Name, sql)
+			}
+			return rtnErr
+		}
 
-		// erArray, rtnErr = getResultSet(ctx, bh)
-		// if rtnErr != nil {
-		// 	return rtnErr
-		// }
+		erArray, rtnErr = getResultSet(ctx, bh)
+		if rtnErr != nil {
+			return rtnErr
+		}
 
-		// for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
-		// 	table, rtnErr = erArray[0].GetString(ctx, i, 0)
-		// 	if rtnErr != nil {
-		// 		return rtnErr
-		// 	}
-		// 	if isClusterTable("mo_catalog", table) {
-		// 		clusterTables[table] = 0
-		// 	}
-		// }
+		for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
+			table, rtnErr = erArray[0].GetString(ctx, i, 0)
+			if rtnErr != nil {
+				return rtnErr
+			}
+			if isClusterTable("mo_catalog", table) {
+				clusterTables[table] = 0
+			}
+		}
 
-		// // delete all data of the account in the cluster table
-		// for clusterTable := range clusterTables {
-		// 	sql = fmt.Sprintf("delete from mo_catalog.`%s` where account_id = %d;", clusterTable, accountId)
-		// 	bh.ClearExecResultSet()
-		// 	ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, sql)
-		// 	rtnErr = bh.Exec(ctx, sql)
-		// 	if rtnErr != nil {
-		// 		if isDisallowedError(rtnErr) {
-		// 			ses.Infof(ctx, "[EOF] dropAccount %s sql: %s", da.Name, sql)
-		// 		}
-		// 		return rtnErr
-		// 	}
-		// }
+		// delete all data of the account in the cluster table
+		for clusterTable := range clusterTables {
+			sql = fmt.Sprintf("delete from mo_catalog.`%s` where account_id = %d;", clusterTable, accountId)
+			bh.ClearExecResultSet()
+			ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, sql)
+			rtnErr = bh.Exec(ctx, sql)
+			if rtnErr != nil {
+				if isDisallowedError(rtnErr) {
+					ses.Infof(ctx, "[EOF] dropAccount %s sql: %s", da.Name, sql)
+				}
+				return rtnErr
+			}
+		}
 		return rtnErr
 	}
 
@@ -3954,15 +3954,15 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 		return err
 	}
 	// if drop the account, add the account to kill queue
-	// ses.getRoutineManager().accountRoutine.EnKillQueue(accountId, version)
+	ses.getRoutineManager().accountRoutine.EnKillQueue(accountId, version)
 
-	// if err := postDropSuspendAccount(ctx, ses, da.Name, accountId, version); err != nil {
-	// 	ses.Errorf(ctx, "post drop account error: %s", err.Error())
-	// }
+	if err := postDropSuspendAccount(ctx, ses, da.Name, accountId, version); err != nil {
+		ses.Errorf(ctx, "post drop account error: %s", err.Error())
+	}
 
-	// if err = postProcessCdc(ctx, ses, da.Name, uint64(accountId), "drop"); err != nil {
-	// 	ses.Errorf(ctx, "post drop cdc of the accound error: %s", err.Error())
-	// }
+	if err = postProcessCdc(ctx, ses, da.Name, uint64(accountId), "drop"); err != nil {
+		ses.Errorf(ctx, "post drop cdc of the accound error: %s", err.Error())
+	}
 
 	return err
 }
