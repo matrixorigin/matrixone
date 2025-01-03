@@ -1682,6 +1682,9 @@ func (c *Compile) compileExternScanParallelReadWrite(n *plan.Node, param *tree.E
 	}
 
 	parallelSize := GetExternParallelSize(fileSize[0], mcpu)
+	if parallelSize > 4 {
+		parallelSize = 4
+	}
 
 	var fileOffset [][]int64
 	for i := 0; i < len(fileList); i++ {
@@ -1697,11 +1700,17 @@ func (c *Compile) compileExternScanParallelReadWrite(n *plan.Node, param *tree.E
 	pre := 0
 	currentFirstFlag := c.anal.isFirst
 	for i := 0; i < len(c.cnList); i++ {
-		scope := c.constructScopeForExternal(c.cnList[i].Addr, param.Parallel)
+		count := min(parallelSize, ID2Addr[i])
+		var addr string
+		if i == 0 && parallelSize <= count {
+			addr = c.addr
+		} else {
+			addr = c.cnList[i].Addr
+		}
+		scope := c.constructScopeForExternal(addr, param.Parallel)
 		ss = append(ss, scope)
 		scope.IsLoad = true
-		count := min(parallelSize, ID2Addr[i])
-		scope.NodeInfo.Mcpu = count
+
 		fileOffsetTmp := make([]*pipeline.FileOffset, len(fileList))
 		for j := range fileOffsetTmp {
 			preIndex := pre
