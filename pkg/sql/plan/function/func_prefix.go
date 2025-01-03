@@ -36,7 +36,7 @@ func PrefixEq(parameters []*vector.Vector, result vector.FunctionResultWrapper, 
 	lcol, larea := vector.MustVarlenaRawData(lvec)
 	lvecHasNull := lvec.HasNull()
 
-	if lvec.GetSorted() && lvecHasNull {
+	if lvec.GetSorted() && !lvecHasNull {
 		lowerBound := sort.Search(len(lcol), func(i int) bool {
 			return bytes.Compare(rval, lcol[i].GetByteSlice(larea)) <= 0
 		})
@@ -86,7 +86,7 @@ func PrefixBetween(parameters []*vector.Vector, result vector.FunctionResultWrap
 	icol, iarea := vector.MustVarlenaRawData(ivec)
 	ivecHasNull := ivec.HasNull()
 
-	if ivec.GetSorted() && ivecHasNull {
+	if ivec.GetSorted() && !ivecHasNull {
 		lowerBound := sort.Search(len(icol), func(i int) bool {
 			return types.PrefixCompare(icol[i].GetByteSlice(iarea), lval) >= 0
 		})
