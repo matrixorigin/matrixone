@@ -3042,6 +3042,19 @@ var (
 			output: "restore cluster from pitr pitr01 timestamp = 2021-01-01 00:00:00",
 		},
 		{
+			input: "show recovery_window for account",
+		},
+		{
+			input: "show recovery_window for database db01",
+		},
+		{
+			input:  "show recovery_window for table db01 t01",
+			output: "show recovery_window for database db01 table t01",
+		},
+		{
+			input: "show recovery_window for account acc01",
+		},
+		{
 			input:  "show create table t1 {snapshot = 'sp01'}",
 			output: "show create table t1 {snapshot = sp01}",
 		},
