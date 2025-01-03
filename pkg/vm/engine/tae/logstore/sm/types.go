@@ -55,10 +55,3 @@ type Queue interface {
 	// and ErrFull will be return to notify the producer.
 	Enqueue(any) (any, error)
 }
-
-type StateMachine interface {
-	Start()
-	Stop()
-	EnqueueReceived(any) (any, error)
-	EnqueueCheckpoint(any) (any, error)
-}

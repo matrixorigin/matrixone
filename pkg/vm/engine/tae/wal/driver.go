@@ -98,9 +98,13 @@ func (driver *walDriver) LoadEntry(groupID uint32, lsn uint64) (LogEntry, error)
 	return driver.impl.Load(groupID, lsn)
 }
 
-func (driver *walDriver) AppendEntry(group uint32, e LogEntry) (uint64, error) {
-	id, err := driver.impl.Append(group, e)
-	return id, err
+func (driver *walDriver) AppendEntry(e LogEntry) error {
+	err := driver.impl.Append(e)
+	return err
+}
+
+func (driver *walDriver) AllocateLSN(gid uint32, e LogEntry) (lsn uint64) {
+	return driver.impl.AllocateLSN(gid, e)
 }
 
 func (driver *walDriver) Close() error {

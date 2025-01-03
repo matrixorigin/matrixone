@@ -52,6 +52,8 @@ type Entry interface {
 	Desc
 	GetPayload() []byte
 	SetInfo(any)
+	SetCmdApproxMemSize(int)
+	GetCmdApproxMemSize() int
 	GetInfo() any
 	GetInfoBuf() []byte
 	SetInfoBuf(buf []byte)
@@ -78,4 +80,7 @@ type Entry interface {
 	StartTime()
 	PrintTime()
 	IsPrintTime() bool
+
+	RegisterGroupWalPreCallbacks(cb func() error)
+	ExecuteGroupWalPreCallbacks() error
 }

@@ -402,11 +402,11 @@ func (txn *Txn) String() string {
 	return fmt.Sprintf("%s: %v", str, txn.GetError())
 }
 
-func (txn *Txn) WaitPrepared(ctx context.Context) error {
-	return txn.Store.WaitPrepared(ctx)
+func (txn *Txn) WaitWalAndTail(ctx context.Context) error {
+	return txn.Store.WaitWalAndTail(ctx)
 }
 
-func (txn *Txn) WaitDone(err error, isAbort bool) error {
+func (txn *Txn) DoneApply(err error, isAbort bool) error {
 	// logutil.Infof("Wait %s Done", txn.String())
 	txn.DoneWithErr(err, isAbort)
 	return txn.Err

@@ -230,6 +230,23 @@ type Base struct {
 	t0        time.Time
 	printTime bool
 	err       error
+
+	approxCmdMemSize int
+
+	preGroupWalCallback []func() error
+}
+
+func (b *Base) RegisterGroupWalPreCallbacks(cb func() error) {
+	b.preGroupWalCallback = append(b.preGroupWalCallback, cb)
+}
+
+func (b *Base) ExecuteGroupWalPreCallbacks() (err error) {
+	for _, f := range b.preGroupWalCallback {
+		if err = f(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func GetBase() *Base {
@@ -241,6 +258,7 @@ func GetBase() *Base {
 	b.wg.Add(1)
 	return b
 }
+
 func (b *Base) StartTime() {
 	b.t0 = time.Now()
 }
@@ -262,6 +280,7 @@ func (b *Base) reset() {
 	b.t0 = time.Time{}
 	b.printTime = false
 	b.err = nil
+	b.preGroupWalCallback = b.preGroupWalCallback[:0]
 }
 func (b *Base) GetInfoBuf() []byte {
 	return b.infobuf
@@ -299,6 +318,14 @@ func (b *Base) GetPayload() []byte {
 
 func (b *Base) SetInfo(info any) {
 	b.info = info
+}
+
+func (b *Base) SetCmdApproxMemSize(size int) {
+	b.approxCmdMemSize = size
+}
+
+func (b *Base) GetCmdApproxMemSize() int {
+	return b.approxCmdMemSize
 }
 
 func (b *Base) GetInfo() any {
@@ -433,14 +460,18 @@ func (b *Base) ReadAt(r *os.File, offset int) (int, error) {
 }
 
 func (b *Base) PrepareWrite() {
-	if b.info == nil {
-		return
-	}
-	buf, err := b.info.(*Info).Marshal()
-	if err != nil {
-		panic(err)
-	}
-	b.SetInfoBuf(buf)
+	b.RegisterGroupWalPreCallbacks(func() error {
+		if b.info == nil {
+			return nil
+		}
+		buf, err := b.info.(*Info).Marshal()
+		if err != nil {
+			panic(err)
+		}
+		b.SetInfoBuf(buf)
+
+		return nil
+	})
 }
 
 func (b *Base) WriteTo(w io.Writer) (int64, error) {

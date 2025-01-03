@@ -101,23 +101,13 @@ func (w *StoreImpl) Close() error {
 	}
 	return nil
 }
-func (w *StoreImpl) Append(gid uint32, e entry.Entry) (lsn uint64, err error) {
-	_, lsn, err = w.doAppend(gid, e)
+func (w *StoreImpl) Append(e entry.Entry) (err error) {
+	_, err = w.doAppend(e)
 	return
 }
 
-func (w *StoreImpl) doAppend(gid uint32, e entry.Entry) (drEntry *driverEntry.Entry, lsn uint64, err error) {
-	if w.IsClosed() {
-		return nil, 0, sm.ErrClose
-	}
-	w.appendMu.Lock()
-	defer w.appendMu.Unlock()
-	w.appendWg.Add(1)
-	if w.IsClosed() {
-		w.appendWg.Done()
-		return nil, 0, sm.ErrClose
-	}
-	lsn = w.allocateLsn(gid)
+func (w *StoreImpl) AllocateLSN(gid uint32, e entry.Entry) (lsn uint64) {
+	lsn = w.allocateLsnInner(gid)
 	v1 := e.GetInfo()
 	var info *entry.Info
 	if v1 == nil {
@@ -128,9 +118,24 @@ func (w *StoreImpl) doAppend(gid uint32, e entry.Entry) (drEntry *driverEntry.En
 	}
 	info.Group = gid
 	info.GroupLSN = lsn
+
+	return
+}
+
+func (w *StoreImpl) doAppend(e entry.Entry) (drEntry *driverEntry.Entry, err error) {
+	if w.IsClosed() {
+		return nil, sm.ErrClose
+	}
+	w.appendMu.Lock()
+	defer w.appendMu.Unlock()
+	w.appendWg.Add(1)
+	if w.IsClosed() {
+		w.appendWg.Done()
+		return nil, sm.ErrClose
+	}
+
 	drEntry = driverEntry.NewEntry(e)
-	// e.DoneWithErr(nil)
-	// return
+
 	_, err = w.driverAppendQueue.Enqueue(drEntry)
 	if err != nil {
 		panic(err)

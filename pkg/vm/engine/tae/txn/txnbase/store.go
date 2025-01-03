@@ -35,11 +35,11 @@ func (store *NoopTxnStore) StartTrace()        {}
 func (store *NoopTxnStore) TriggerTrace(uint8) {}
 func (store *NoopTxnStore) EndTrace()          {}
 
-func (store *NoopTxnStore) Freeze(_ context.Context) error               { return nil }
-func (store *NoopTxnStore) WaitPrepared(ctx context.Context) (err error) { return }
-func (store *NoopTxnStore) GetLSN() uint64                               { return 0 }
-func (store *NoopTxnStore) BindTxn(txn txnif.AsyncTxn)                   {}
-func (store *NoopTxnStore) Close() error                                 { return nil }
+func (store *NoopTxnStore) Freeze(_ context.Context) error                 { return nil }
+func (store *NoopTxnStore) WaitWalAndTail(ctx context.Context) (err error) { return }
+func (store *NoopTxnStore) GetLSN() uint64                                 { return 0 }
+func (store *NoopTxnStore) BindTxn(txn txnif.AsyncTxn)                     {}
+func (store *NoopTxnStore) Close() error                                   { return nil }
 func (store *NoopTxnStore) Append(ctx context.Context, dbId, id uint64, data *containers.Batch) error {
 	return nil
 }
@@ -61,8 +61,9 @@ func (store *NoopTxnStore) ApplyCommit() error                   { return nil }
 func (store *NoopTxnStore) Apply2PCPrepare() error               { return nil }
 func (store *NoopTxnStore) PrepareWAL() error                    { return nil }
 
-func (store *NoopTxnStore) DoneWaitEvent(cnt int)                                  {}
-func (store *NoopTxnStore) AddWaitEvent(cnt int)                                   {}
+func (store *NoopTxnStore) DoneEvent(typ int)                                      {}
+func (store *NoopTxnStore) AddEvent(typ int)                                       {}
+func (store *NoopTxnStore) WaitEvent(typ int)                                      {}
 func (store *NoopTxnStore) AddTxnEntry(t txnif.TxnEntryType, entry txnif.TxnEntry) {}
 
 func (store *NoopTxnStore) CreateRelation(dbId uint64, def any) (rel handle.Relation, err error) {
