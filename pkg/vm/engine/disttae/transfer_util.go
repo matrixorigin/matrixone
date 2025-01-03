@@ -28,7 +28,6 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"go.uber.org/zap"
 )
@@ -101,7 +100,7 @@ func ConstructCNTombstoneObjectsTransferFlow(
 
 	logs = append(logs, zap.Int("origin-tombstoneObjects", len(tombstoneObjects)))
 
-	if tombstoneObjects, err = blockio.CoarseFilterTombstoneObject(
+	if tombstoneObjects, err = ioutil.CoarseFilterTombstoneObject(
 		ctx, deletedObjectsIter, tombstoneObjects, fs); err != nil {
 		return nil, logs, err
 	} else if len(tombstoneObjects) == 0 {

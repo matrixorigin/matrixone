@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ckputil"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/sort"
 	"go.uber.org/zap"
 
@@ -38,7 +39,6 @@ import (
 	"github.com/tidwall/btree"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
@@ -1071,7 +1071,7 @@ func prefetchObjects(
 		JTCDCLoad,
 		func(ctx context.Context) (res *tasks.JobResult) {
 			loc := stats.BlockLocation(uint16(blockID), 8192)
-			bat, _, err := blockio.LoadOneBlock(
+			bat, _, err := ioutil.LoadOneBlock(
 				ctx,
 				fs,
 				loc,

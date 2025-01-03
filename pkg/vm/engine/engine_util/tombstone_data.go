@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 )
@@ -155,7 +156,7 @@ func (tomb *tombstoneData) HasBlockTombstone(
 	}
 	if len(tomb.rowids) > 0 {
 		// TODO: optimize binary search once
-		start, end := blockio.FindStartEndOfBlockFromSortedRowids(tomb.rowids, blockId)
+		start, end := ioutil.FindStartEndOfBlockFromSortedRowids(tomb.rowids, blockId)
 		if end > start {
 			return true, nil
 		}
@@ -233,7 +234,7 @@ func (tomb *tombstoneData) ApplyInMemTombstones(
 		return
 	}
 
-	start, end := blockio.FindStartEndOfBlockFromSortedRowids(tomb.rowids, bid)
+	start, end := ioutil.FindStartEndOfBlockFromSortedRowids(tomb.rowids, bid)
 
 	for i := start; i < end; i++ {
 		offset := tomb.rowids[i].GetRowOffset()
@@ -275,7 +276,7 @@ func (tomb *tombstoneData) ApplyPersistedTombstones(
 	}
 	defer release()
 
-	if err = blockio.GetTombstonesByBlockId(
+	if err = ioutil.GetTombstonesByBlockId(
 		ctx,
 		snapshot,
 		bid,

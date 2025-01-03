@@ -18,9 +18,10 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"go.uber.org/zap"
 	"slices"
 	"sort"
+
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -31,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
@@ -944,7 +946,7 @@ func (ls *LocalDisttaeDataSource) applyWorkspaceFlushedS3Deletes(
 		return &tombstones[i], nil
 	}
 
-	if err = blockio.GetTombstonesByBlockId(
+	if err = ioutil.GetTombstonesByBlockId(
 		ls.ctx,
 		&ls.snapshotTS,
 		bid,
@@ -1089,7 +1091,7 @@ func (ls *LocalDisttaeDataSource) applyPStateTombstoneObjects(
 	// PXU TODO: handle len(offsets) < 10 or 20, 30?
 	if len(offsets) == 1 {
 		rowid := objectio.NewRowid(bid, uint32(offsets[0]))
-		deleted, err := blockio.IsRowDeleted(
+		deleted, err := ioutil.IsRowDeleted(
 			ls.ctx,
 			&ls.snapshotTS,
 			rowid,
@@ -1113,7 +1115,7 @@ func (ls *LocalDisttaeDataSource) applyPStateTombstoneObjects(
 	}
 	defer release()
 
-	if err := blockio.GetTombstonesByBlockId(
+	if err := ioutil.GetTombstonesByBlockId(
 		ls.ctx,
 		&ls.snapshotTS,
 		bid,
@@ -1223,7 +1225,7 @@ func (ls *LocalDisttaeDataSource) batchApplyTombstoneObjects(
 		for idx := 0; idx < int(obj.BlkCnt()) && len(rowIds) > deletedMask.Count(); idx++ {
 			location = obj.ObjectStats.BlockLocation(uint16(idx), objectio.BlockMaxRows)
 
-			if _, release, err = blockio.ReadDeletes(
+			if _, release, err = ioutil.ReadDeletes(
 				ls.ctx, location, ls.fs, obj.GetCNCreated(), cacheVectors,
 			); err != nil {
 				return err
@@ -1238,7 +1240,7 @@ func (ls *LocalDisttaeDataSource) batchApplyTombstoneObjects(
 			}
 
 			for i := 0; i < len(rowIds); i++ {
-				s, e := blockio.FindStartEndOfBlockFromSortedRowids(
+				s, e := ioutil.FindStartEndOfBlockFromSortedRowids(
 					deletedRowIds, rowIds[i].BorrowBlockID())
 
 				for j := s; j < e; j++ {

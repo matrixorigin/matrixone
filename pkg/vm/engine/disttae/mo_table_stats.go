@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -49,7 +50,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -95,52 +95,52 @@ type MoTableStatsConfig struct {
 
 const (
 	bulkInsertOrUpdateStatsListSQL = `
-				insert into 
+				insert into
 				    %s.%s (account_id, database_id, table_id, database_name, table_name, table_stats, update_time, takes)
-					values %s 
+					values %s
 				on duplicate key update
 					table_stats = values(table_stats), update_time = values(update_time), takes = values(takes);`
 
 	bulkInsertOrUpdateOnlyTSSQL = `
-				insert into 
+				insert into
 				    %s.%s (account_id, database_id, table_id, database_name, table_name, table_stats, update_time, takes)
-					values %s 
+					values %s
 				on duplicate key update
 					update_time = values(update_time);`
 
 	getTableStatsSQL = `
-				select 
+				select
     				table_id, update_time, COALESCE(table_stats, CAST('{}' AS JSON)) from  %s.%s
-              	where 
-                	account_id in (%v) and 
-                	database_id in (%v) and 
-                  	table_id in (%v) 
+              	where
+                	account_id in (%v) and
+                	database_id in (%v) and
+                  	table_id in (%v)
 			  	order by table_id asc;`
 
 	getDeleteFromStatsSQL = `
-				delete from 
+				delete from
 				    %s.%s
-				where 
+				where
 					%s;`
 
 	getUpdateTSSQL = `
 				select
 					table_id, update_time
-				from 
+				from
 					%s.%s
-				where 
+				where
 					account_id in (%v) and
 				    database_id in (%v) and
 				    table_id in (%v)
-				group by 
+				group by
 				    account_id, database_id, table_id, update_time;`
 
 	findNewTableSQL = `
-				select 
+				select
 					A.account_id, A.reldatabase, A.reldatabase_id, A.relname, A.rel_id, A.relkind
-				from 
+				from
 				    %s.%s as A
-				left join 
+				left join
 					%s.%s as B
 				on
 					A.account_id = B.account_id and A.reldatabase_id = B.database_id and A.rel_id = B.table_id
@@ -148,11 +148,11 @@ const (
 				    B.table_id is NULL;`
 
 	findDeletedAccountSQL = `
-				select 
+				select
 					distinct(A.account_id)
-				from 
-				    %s.%s as A 
-				left join 
+				from
+				    %s.%s as A
+				left join
 					%s.%s as B
 				on
 					A.account_id = B.account_id
@@ -160,106 +160,106 @@ const (
 				    B.account_id is NULL;`
 
 	findDeletedDatabaseSQL = `
-				select 
+				select
 					A.account_id, A.database_id
-				from 
-				    %s.%s as A 
-				left join 
+				from
+				    %s.%s as A
+				left join
 					%s.%s as B
 				on
 					A.account_id = B.account_id and A.database_name = B.datname and A.database_id = B.dat_id
 				where
-				    B.datname is NULL and A.database_id not in (%v)  
-				group by 
+				    B.datname is NULL and A.database_id not in (%v)
+				group by
 					A.account_id, A.database_id;
 				`
 
 	findDeletedTableSQL = `
-				select 
+				select
 					A.account_id, A.database_id, A.table_id
-				from 
-				    %s.%s as A 
-				left join 
+				from
+				    %s.%s as A
+				left join
 					%s.%s as B
 				on
-					A.account_id = B.account_id and 
-				    A.database_name = B.reldatabase and 
-				    A.table_name = B.relname and 
-				    A.database_id = B.reldatabase_id and 
-				    A.table_id = B.rel_id 
+					A.account_id = B.account_id and
+				    A.database_name = B.reldatabase and
+				    A.table_name = B.relname and
+				    A.database_id = B.reldatabase_id and
+				    A.table_id = B.rel_id
 				where
-				    B.relname is NULL and A.database_id != %d 
+				    B.relname is NULL and A.database_id != %d
 				group by
 					A.account_id, A.database_id, A.table_id;
 				`
 
 	getNullStatsSQL = `
-				select 
-					account_id, database_id, table_id 
-				from 
+				select
+					account_id, database_id, table_id
+				from
 				    %s.%s
-				where 
-				    table_stats = "{}" 
+				where
+				    table_stats = "{}"
 				limit
 					%d;`
 
 	getNextCheckBatchSQL = `
-				select 
-					account_id, database_id, table_id 
-				from 
-				    %s.%s 
+				select
+					account_id, database_id, table_id
+				from
+				    %s.%s
 				where
-				    table_id > %d and database_id != %d 
+				    table_id > %d and database_id != %d
 				group by
-				    account_id, database_id, table_id 
-				order by 
+				    account_id, database_id, table_id
+				order by
 				    table_id asc
 				limit
 					%d;`
 
 	accumulateIdsByAccSQL = `
- 				select 
+ 				select
 					account_id, reldatabase_id, rel_id
-				from 
+				from
 				    %s.%s
 				where
 				    account_id in (%s);`
 
 	accumulateIdsByDatabaseSQL = `
-				select 
+				select
 					account_id, reldatabase_id, rel_id
 				from
-					%s.%s 
+					%s.%s
 				where
 				    reldatabase_id in (%v)
 				group by
 				    account_id, reldatabase_id, rel_id;`
 
 	accumulateIdsByTableSQL = `
-				select 
+				select
 					account_id, reldatabase_id, rel_id
 				from
-					%s.%s 
+					%s.%s
 				where
 				    rel_id in (%v)
 				group by
 				    account_id, reldatabase_id, rel_id;`
 
 	getSingleTableStatsForUpdateSQL = `
-				select 
+				select
 					table_stats
 				from
 					%s.%s
-				where 
-				    account_id = %d and database_id = %d and table_id = %d 
+				where
+				    account_id = %d and database_id = %d and table_id = %d
 				for update;`
 
 	findAccountByTable = `
-				select 
+				select
 					account_id, rel_id
-				from 
+				from
 				    %s.%s
-				where 
+				where
 				    rel_id in (%v);`
 )
 
@@ -2991,7 +2991,7 @@ func applyTombstones(
 		ForeachBlkInObjStatsList(true, nil,
 			func(blk objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
 
-				if _, release, err = blockio.ReadDeletes(
+				if _, release, err = ioutil.ReadDeletes(
 					ctx, blk.MetaLoc[:], fs, tombstone.GetCNCreated(), persistedDeletes,
 				); err != nil {
 					return false

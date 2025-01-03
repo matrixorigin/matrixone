@@ -2059,7 +2059,7 @@ func (tbl *txnTable) PKPersistedBetween(
 		v2.TxnPKChangeCheckIOCounter.Inc()
 	}
 	for _, blk := range candidateBlks {
-		release, err := blockio.LoadColumns(
+		release, err := ioutil.LoadColumns(
 			ctx,
 			[]uint16{uint16(pkSeq)},
 			[]types.Type{pkType},

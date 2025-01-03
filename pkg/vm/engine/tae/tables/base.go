@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -173,7 +174,7 @@ func (obj *baseObject) LoadPersistedCommitTS(bid uint16) (vec containers.Vector,
 	}
 	//Extend lifetime of vectors is without the function.
 	//need to copy. closeFunc will be nil.
-	vectors, _, err := blockio.LoadColumns2(
+	vectors, _, err := ioutil.LoadColumns2(
 		context.Background(),
 		[]uint16{objectio.SEQNUM_COMMITTS},
 		nil,
