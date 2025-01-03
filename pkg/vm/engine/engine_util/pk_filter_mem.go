@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -26,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 )
 
 type MemPKFilter struct {
@@ -40,8 +40,19 @@ type MemPKFilter struct {
 		hit bool
 	}
 
-	filterHint  engine.FilterHint
-	SpecFactory func(f *MemPKFilter) logtailreplay.PrimaryKeyMatchSpec
+	filterHint engine.FilterHint
+}
+
+func (f *MemPKFilter) Valid() bool {
+	return f.isValid
+}
+
+func (f *MemPKFilter) Op() int {
+	return f.op
+}
+
+func (f *MemPKFilter) Keys() [][]byte {
+	return f.packed
 }
 
 func NewMemPKFilter(
@@ -167,7 +178,7 @@ func NewMemPKFilter(
 
 	switch basePKFilter.Op {
 	case function.EQUAL, function.PREFIX_EQ:
-		packed = append(packed, logtailreplay.EncodePrimaryKey(lbVal, packer))
+		packed = append(packed, ioutil.EncodePrimaryKey(lbVal, packer))
 		if basePKFilter.Op == function.PREFIX_EQ {
 			// TODO Remove this later
 			// serial_full(secondary_index, primary_key|fake_pk) => varchar
@@ -180,7 +191,7 @@ func NewMemPKFilter(
 		filter.SetFullData(basePKFilter.Op, false, packed...)
 
 	case function.IN, function.PREFIX_IN:
-		packed = logtailreplay.EncodePrimaryKeyVector(basePKFilter.Vec, packer)
+		packed = ioutil.EncodePrimaryKeyVector(basePKFilter.Vec, packer)
 
 		if basePKFilter.Op == function.PREFIX_IN {
 			for x := range packed {
@@ -190,13 +201,13 @@ func NewMemPKFilter(
 		filter.SetFullData(basePKFilter.Op, true, packed...)
 
 	case function.LESS_THAN, function.LESS_EQUAL, function.GREAT_THAN, function.GREAT_EQUAL:
-		packed = append(packed, logtailreplay.EncodePrimaryKey(lbVal, packer))
+		packed = append(packed, ioutil.EncodePrimaryKey(lbVal, packer))
 		filter.SetFullData(basePKFilter.Op, false, packed...)
 
 	case function.PREFIX_BETWEEN, function.BETWEEN,
-		RangeLeftOpen, RangeRightOpen, RangeBothOpen:
-		packed = append(packed, logtailreplay.EncodePrimaryKey(lbVal, packer))
-		packed = append(packed, logtailreplay.EncodePrimaryKey(ubVal, packer))
+		ioutil.RangeLeftOpen, ioutil.RangeRightOpen, ioutil.RangeBothOpen:
+		packed = append(packed, ioutil.EncodePrimaryKey(lbVal, packer))
+		packed = append(packed, ioutil.EncodePrimaryKey(ubVal, packer))
 		if basePKFilter.Op == function.PREFIX_BETWEEN {
 			packed[0] = packed[0][0 : len(packed[0])-1]
 			packed[1] = packed[1][0 : len(packed[1])-1]
@@ -205,8 +216,6 @@ func NewMemPKFilter(
 	default:
 		return
 	}
-
-	filter.tryConstructPrimaryKeyIndexIter(ts, tableDef.Name)
 
 	filter.filterHint = filterHint
 
@@ -256,71 +265,6 @@ func (f *MemPKFilter) SetFullData(op int, isVec bool, val ...[]byte) {
 	f.isValid = true
 }
 
-func (f *MemPKFilter) tryConstructPrimaryKeyIndexIter(
-	ts timestamp.Timestamp,
-	tableName string,
-) {
-	if !f.isValid {
-		return
-	}
-
-	switch f.op {
-	case function.EQUAL:
-		f.SpecFactory = func(f *MemPKFilter) logtailreplay.PrimaryKeyMatchSpec {
-			return logtailreplay.Exact(f.packed[0])
-		}
-
-	case function.PREFIX_EQ:
-		//spec = logtailreplay.Prefix(f.packed[0])
-		f.SpecFactory = func(f *MemPKFilter) logtailreplay.PrimaryKeyMatchSpec {
-			return logtailreplay.Prefix(f.packed[0])
-		}
-
-	case function.IN, function.PREFIX_IN:
-		// // may be it's better to iterate rows instead.
-		// if len(f.packed) > 128 {
-		// 	return
-		// }
-		//spec = logtailreplay.InKind(f.packed, f.Op)
-		f.SpecFactory = func(f *MemPKFilter) logtailreplay.PrimaryKeyMatchSpec {
-			return logtailreplay.InKind(f.packed, f.op)
-		}
-
-	case function.LESS_EQUAL, function.LESS_THAN:
-		//spec = logtailreplay.LessKind(f.packed[0], f.Op == function.LESS_EQUAL)
-		f.SpecFactory = func(f *MemPKFilter) logtailreplay.PrimaryKeyMatchSpec {
-			return logtailreplay.LessKind(f.packed[0], f.op == function.LESS_EQUAL)
-		}
-
-	case function.GREAT_EQUAL, function.GREAT_THAN:
-		//spec = logtailreplay.GreatKind(f.packed[0], f.Op == function.GREAT_EQUAL)
-		f.SpecFactory = func(f *MemPKFilter) logtailreplay.PrimaryKeyMatchSpec {
-			return logtailreplay.GreatKind(f.packed[0], f.op == function.GREAT_EQUAL)
-		}
-
-	case function.BETWEEN, RangeLeftOpen, RangeRightOpen, RangeBothOpen, function.PREFIX_BETWEEN:
-		var kind int
-		switch f.op {
-		case function.BETWEEN:
-			kind = 0
-		case RangeLeftOpen:
-			kind = 1
-		case RangeRightOpen:
-			kind = 2
-		case RangeBothOpen:
-			kind = 3
-		case function.PREFIX_BETWEEN:
-			kind = 4
-		}
-
-		//spec = logtailreplay.BetweenKind(f.packed[0], f.packed[1], kind)
-		f.SpecFactory = func(f *MemPKFilter) logtailreplay.PrimaryKeyMatchSpec {
-			return logtailreplay.BetweenKind(f.packed[0], f.packed[1], kind)
-		}
-	}
-
-}
-
 func (f *MemPKFilter) FilterVector(
 	vec *vector.Vector,
 	packer *types.Packer,
@@ -331,7 +275,7 @@ func (f *MemPKFilter) FilterVector(
 		return
 	}
 
-	keys := logtailreplay.EncodePrimaryKeyVector(vec, packer)
+	keys := ioutil.EncodePrimaryKeyVector(vec, packer)
 
 	for i := 0; i < len(keys); i++ {
 		switch f.op {
@@ -372,17 +316,17 @@ func (f *MemPKFilter) FilterVector(
 				skipMask.Add(uint64(i))
 			}
 
-		case RangeRightOpen:
+		case ioutil.RangeRightOpen:
 			if !(bytes.Compare(keys[i], f.packed[0]) >= 0 && bytes.Compare(keys[i], f.packed[1]) < 0) {
 				skipMask.Add(uint64(i))
 			}
 
-		case RangeLeftOpen:
+		case ioutil.RangeLeftOpen:
 			if !(bytes.Compare(keys[i], f.packed[0]) > 0 && bytes.Compare(keys[i], f.packed[1]) <= 0) {
 				skipMask.Add(uint64(i))
 			}
 
-		case RangeBothOpen:
+		case ioutil.RangeBothOpen:
 			if !(bytes.Compare(keys[i], f.packed[0]) > 0 && bytes.Compare(keys[i], f.packed[1]) < 0) {
 				skipMask.Add(uint64(i))
 			}

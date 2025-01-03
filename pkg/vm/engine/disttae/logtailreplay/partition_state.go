@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"math"
 	"runtime/trace"
 	"sync/atomic"
@@ -439,7 +440,7 @@ func (p *PartitionState) HandleRowsDelete(
 	var primaryKeys [][]byte
 	if len(input.Vecs) > 2 {
 		// has primary key
-		primaryKeys = EncodePrimaryKeyVector(
+		primaryKeys = ioutil.EncodePrimaryKeyVector(
 			batch.Vecs[2],
 			packer,
 		)
@@ -530,7 +531,7 @@ func (p *PartitionState) HandleRowsInsert(
 	if err != nil {
 		panic(err)
 	}
-	primaryKeys = EncodePrimaryKeyVector(
+	primaryKeys = ioutil.EncodePrimaryKeyVector(
 		batch.Vecs[2+primarySeqnum],
 		packer,
 	)

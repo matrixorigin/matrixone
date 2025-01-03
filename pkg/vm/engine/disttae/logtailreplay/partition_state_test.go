@@ -15,6 +15,7 @@
 package logtailreplay
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"math/rand"
 	"testing"
 	"time"
@@ -140,7 +141,7 @@ func TestScanRows(t *testing.T) {
 			Time:              types.BuildTS(time.Now().UnixNano(), uint32(i)),
 			ID:                int64(i),
 			Deleted:           i%2 == 0,
-			PrimaryIndexBytes: EncodePrimaryKey(i, packer),
+			PrimaryIndexBytes: ioutil.EncodePrimaryKey(i, packer),
 		})
 	}
 

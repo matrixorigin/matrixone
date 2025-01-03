@@ -16,18 +16,13 @@ package engine_util
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
-)
-
-const (
-	RangeLeftOpen = iota + function.FUNCTION_END_NUMBER + 1
-	RangeRightOpen
-	RangeBothOpen
 )
 
 type BasePKFilter struct {
@@ -45,9 +40,9 @@ func (b *BasePKFilter) String() string {
 		function.LESS_THAN:      "less_than",
 		function.GREAT_THAN:     "great_than",
 		function.GREAT_EQUAL:    "great_eq",
-		RangeLeftOpen:           "range_left_open",
-		RangeRightOpen:          "range_right_open",
-		RangeBothOpen:           "range_both_open",
+		ioutil.RangeLeftOpen:    "range_left_open",
+		ioutil.RangeRightOpen:   "range_right_open",
+		ioutil.RangeBothOpen:    "range_both_open",
 		function.EQUAL:          "equal",
 		function.IN:             "in",
 		function.BETWEEN:        "between",

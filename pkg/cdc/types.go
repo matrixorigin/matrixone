@@ -20,6 +20,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"strings"
 	"sync"
 	"time"
@@ -30,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/tidwall/btree"
 )
 
@@ -287,7 +287,7 @@ func (bat *AtomicBatch) Append(
 		//ts columns
 		tsVec := vector.MustFixedColWithTypeCheck[types.TS](batch.Vecs[tsColIdx])
 		//composited pk columns
-		compositedPkBytes := logtailreplay.EncodePrimaryKeyVector(batch.Vecs[compositedPkColIdx], packer)
+		compositedPkBytes := ioutil.EncodePrimaryKeyVector(batch.Vecs[compositedPkColIdx], packer)
 
 		for i, pk := range compositedPkBytes {
 			// if ts is constant, then tsVec[0] is the ts for all rows

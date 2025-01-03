@@ -18,6 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 	"testing"
@@ -96,9 +97,9 @@ func TestMemPKFilter_FilterVector(t *testing.T) {
 
 	baseFilters := []BasePKFilter{
 		{Op: function.BETWEEN, Valid: true, Oid: types.T_int32, LB: types.EncodeFixed(int32(lb)), UB: types.EncodeFixed(int32(ub))},
-		{Op: RangeBothOpen, Valid: true, Oid: types.T_int32, LB: types.EncodeFixed(int32(lb)), UB: types.EncodeFixed(int32(ub))},
-		{Op: RangeLeftOpen, Valid: true, Oid: types.T_int32, LB: types.EncodeFixed(int32(lb)), UB: types.EncodeFixed(int32(ub))},
-		{Op: RangeRightOpen, Valid: true, Oid: types.T_int32, LB: types.EncodeFixed(int32(lb)), UB: types.EncodeFixed(int32(ub))},
+		{Op: ioutil.RangeBothOpen, Valid: true, Oid: types.T_int32, LB: types.EncodeFixed(int32(lb)), UB: types.EncodeFixed(int32(ub))},
+		{Op: ioutil.RangeLeftOpen, Valid: true, Oid: types.T_int32, LB: types.EncodeFixed(int32(lb)), UB: types.EncodeFixed(int32(ub))},
+		{Op: ioutil.RangeRightOpen, Valid: true, Oid: types.T_int32, LB: types.EncodeFixed(int32(lb)), UB: types.EncodeFixed(int32(ub))},
 		{Op: function.LESS_EQUAL, Valid: true, Oid: types.T_int32, LB: types.EncodeFixed(int32(ub))},
 	}
 

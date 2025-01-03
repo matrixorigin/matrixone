@@ -2136,7 +2136,7 @@ func (tbl *txnTable) primaryKeysMayBeChanged(
 	defer put.Put()
 	packer.Reset()
 
-	keys := logtailreplay.EncodePrimaryKeyVector(keysVector, packer)
+	keys := ioutil.EncodePrimaryKeyVector(keysVector, packer)
 	exist, flushed := snap.PKExistInMemBetween(from, to, keys)
 	if exist {
 		return true, nil

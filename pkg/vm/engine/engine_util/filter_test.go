@@ -15,6 +15,7 @@
 package engine_util
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"strconv"
 	"testing"
 
@@ -133,9 +134,9 @@ func Test_ConstructBasePKFilter(t *testing.T) {
 
 		// "a>=1 and a<=3",
 		{Valid: true, Op: function.BETWEEN, LB: encodeVal(1), UB: encodeVal(3)}, //13
-		{Valid: true, Op: RangeLeftOpen, LB: encodeVal(1), UB: encodeVal(3)},
-		{Valid: true, Op: RangeRightOpen, LB: encodeVal(1), UB: encodeVal(3)}, //15
-		{Valid: true, Op: RangeBothOpen, LB: encodeVal(1), UB: encodeVal(3)},
+		{Valid: true, Op: ioutil.RangeLeftOpen, LB: encodeVal(1), UB: encodeVal(3)},
+		{Valid: true, Op: ioutil.RangeRightOpen, LB: encodeVal(1), UB: encodeVal(3)}, //15
+		{Valid: true, Op: ioutil.RangeBothOpen, LB: encodeVal(1), UB: encodeVal(3)},
 
 		{Valid: false}, // 17
 		{Valid: false},

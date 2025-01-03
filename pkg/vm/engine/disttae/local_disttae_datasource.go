@@ -500,7 +500,7 @@ func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 		retainedRowIds []objectio.Rowid
 	)
 
-	if ls.memPKFilter.SpecFactory != nil && ls.wsCursor < ls.txnOffset {
+	if ls.memPKFilter.Valid() && ls.wsCursor < ls.txnOffset {
 		enableFilter = true
 		// __mo_rowid is the first
 		pkSeqNums++
@@ -591,11 +591,13 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 		summaryBuf = v.(*bytes.Buffer)
 	}
 	if ls.pStateRows.insIter == nil {
-		if ls.memPKFilter.SpecFactory == nil {
+		if !ls.memPKFilter.Valid() {
 			ls.pStateRows.insIter = ls.pState.NewRowsIter(ls.snapshotTS, nil, false)
 		} else {
 			ls.pStateRows.insIter = ls.pState.NewPrimaryKeyIter(
-				ls.memPKFilter.TS, ls.memPKFilter.SpecFactory(ls.memPKFilter))
+				ls.memPKFilter.TS,
+				ls.memPKFilter.Op(),
+				ls.memPKFilter.Keys())
 		}
 		if summaryBuf != nil {
 			summaryBuf.WriteString(fmt.Sprintf("[PScan] insIter created %v\n", ls.memPKFilter.String()))
@@ -996,7 +998,7 @@ func (ls *LocalDisttaeDataSource) getInMemDelIter(
 	}
 
 	if offsetCnt <= logtailreplay.IndexScaleTiny ||
-		ls.memPKFilter == nil || ls.memPKFilter.SpecFactory == nil {
+		ls.memPKFilter == nil || !ls.memPKFilter.Valid() {
 		return ls.pState.NewRowsIter(ls.snapshotTS, bid, true), false
 	}
 
@@ -1004,7 +1006,10 @@ func (ls *LocalDisttaeDataSource) getInMemDelIter(
 	if !ok {
 		return ls.pState.NewPrimaryKeyDelIter(
 			&ls.memPKFilter.TS,
-			ls.memPKFilter.SpecFactory(ls.memPKFilter), bid), false
+			bid,
+			ls.memPKFilter.Op(),
+			ls.memPKFilter.Keys(),
+		), false
 	}
 
 	if inValCnt == 0 {
@@ -1015,7 +1020,9 @@ func (ls *LocalDisttaeDataSource) getInMemDelIter(
 	if ls.memPKFilter.Must() || inMemTombstoneCnt/inValCnt >= logtailreplay.MuchGreaterThanFactor {
 		return ls.pState.NewPrimaryKeyDelIter(
 			&ls.memPKFilter.TS,
-			ls.memPKFilter.SpecFactory(ls.memPKFilter), bid), false
+			bid,
+			ls.memPKFilter.Op(),
+			ls.memPKFilter.Keys()), false
 	}
 
 	return ls.pState.NewRowsIter(ls.snapshotTS, bid, true), false

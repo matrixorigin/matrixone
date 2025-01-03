@@ -15,6 +15,7 @@
 package logtailreplay
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -24,7 +25,7 @@ func BenchmarkEncode(b *testing.B) {
 	packer := types.NewPacker()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		EncodePrimaryKey(int64(i), packer)
+		ioutil.EncodePrimaryKey(int64(i), packer)
 	}
 	b.StopTimer()
 	packer.Close()
