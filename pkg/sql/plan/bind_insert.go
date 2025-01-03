@@ -63,15 +63,28 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 		return 0, err
 	}
 
-	return builder.appendDedupAndMultiUpdateNodesForBindInsert(bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, stmt.OnDuplicateUpdate)
+	var onDupAction plan.Node_OnDuplicateAction
+	if len(stmt.OnDuplicateUpdate) == 0 {
+		onDupAction = plan.Node_FAIL
+	} else if len(stmt.OnDuplicateUpdate) == 1 && stmt.OnDuplicateUpdate[0] == nil {
+		onDupAction = plan.Node_IGNORE
+	} else {
+		onDupAction = plan.Node_UPDATE
+	}
+
+	return builder.appendDedupAndMultiUpdateNodesForBindInsert(bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, onDupAction, stmt.OnDuplicateUpdate)
 }
 
-func (builder *QueryBuilder) canSkipDedup(tableDef *plan.TableDef) bool {
+func (builder *QueryBuilder) canSkipDedup(tableDef *plan.TableDef, onDupAction plan.Node_OnDuplicateAction) bool {
+	if onDupAction == plan.Node_NOCHECKING {
+		return true
+	}
+
 	if builder.optimizerHints != nil && builder.optimizerHints.skipDedup == 1 {
 		return true
 	}
 
-	if builder.qry.LoadTag || builder.isRestore {
+	if builder.isRestore {
 		return true
 	}
 
@@ -88,6 +101,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	lastNodeID int32,
 	colName2Idx map[string]int32,
 	skipUniqueIdx []bool,
+	onDupAction plan.Node_OnDuplicateAction,
 	astUpdateExprs tree.UpdateExprs,
 ) (int32, error) {
 	var err error
@@ -109,20 +123,13 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		}
 	}
 
-	var onDupAction plan.Node_OnDuplicateAction
 	scanTag := builder.genNewTag()
 	updateExprs := make(map[string]*plan.Expr)
 
-	if len(astUpdateExprs) == 0 {
-		onDupAction = plan.Node_FAIL
-	} else if len(astUpdateExprs) == 1 && astUpdateExprs[0] == nil {
-		onDupAction = plan.Node_IGNORE
-	} else {
+	if onDupAction == plan.Node_UPDATE {
 		if pkName == catalog.FakePrimaryKeyColName {
 			return 0, moerr.NewUnsupportedDML(builder.compCtx.GetContext(), "update on duplicate without primary key")
 		}
-
-		onDupAction = plan.Node_UPDATE
 
 		binder := NewOndupUpdateBinder(builder.GetContext(), builder, bindCtx, scanTag, selectTag, tableDef)
 		var updateExpr *plan.Expr
@@ -241,7 +248,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	}
 
 	// handle primary/unique key confliction
-	if builder.canSkipDedup(dmlCtx.tableDefs[0]) {
+	if builder.canSkipDedup(dmlCtx.tableDefs[0], onDupAction) {
 		// load do not handle primary/unique key confliction
 		for i, idxDef := range tableDef.Indexes {
 			if !idxDef.TableExist || skipUniqueIdx[i] {
