@@ -16,10 +16,15 @@ package frontend
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+)
+
+var (
+	getTablePitrRecordsFormat = "select pitr_name, modified_time,pitr_length, pitr_unit from %s where create_account = %d and account_name = '%s' and database_name = '%s' and table_name = '%s'"
 )
 
 func doShowRecoveryWindow(ctx context.Context, ses *Session, srw *tree.ShowRecoveryWindow) (err error) {
@@ -84,6 +89,7 @@ func doShowRecoveryWindow(ctx context.Context, ses *Session, srw *tree.ShowRecov
 	case tree.RECOVERYWINDOWLEVELACCOUNT:
 	case tree.RECOVERYWINDOWLEVELDATABASE:
 	case tree.RECOVERYWINDOWLEVELTABLE:
+
 	}
 
 	rows := make([][]interface{}, 0)
@@ -91,6 +97,61 @@ func doShowRecoveryWindow(ctx context.Context, ses *Session, srw *tree.ShowRecov
 		mrs.AddRow(row)
 	}
 	return trySaveQueryResult(ctx, ses, mrs)
+}
+
+type tableRecoveryWindow struct {
+	pitrName     string
+	modifiedTime string
+	pitrValue    uint64
+	pitrUnit     string
+}
+
+func getTablePitrRecords(ctx context.Context, ses *Session, bh BackgroundExec, accountName, dbName, tblName string) ([]tableRecoveryWindow, error) {
+	var newCtx = ctx
+	curAccountId, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if curAccountId != sysAccountID {
+		newCtx = defines.AttachAccountId(newCtx, sysAccountID)
+	}
+
+	sql := fmt.Sprintf(getTablePitrRecordsFormat, curAccountId, accountName, dbName, tblName)
+	getLogger(ses.GetService()).Info(fmt.Sprintf("getTablePitrRecords sql: %s", sql))
+
+	bh.ClearExecResultSet()
+	err = bh.Exec(newCtx, sql)
+	if err != nil {
+		return nil, err
+	}
+
+	erArray, err := getResultSet(newCtx, bh)
+	if err != nil {
+		return nil, err
+	}
+
+	records := make([]tableRecoveryWindow, 0)
+	if execResultArrayHasData(erArray) {
+		for _, er := range erArray {
+			var record tableRecoveryWindow
+			for row := uint64(0); row < er.GetRowCount(); row++ {
+				if record.pitrName, err = er.GetString(ctx, row, 0); err != nil {
+					return nil, err
+				}
+				if record.modifiedTime, err = er.GetString(ctx, row, 1); err != nil {
+					return nil, err
+				}
+				if record.pitrValue, err = er.GetUint64(ctx, row, 2); err != nil {
+					return nil, err
+				}
+				if record.pitrUnit, err = er.GetString(ctx, row, 3); err != nil {
+					return nil, err
+				}
+			}
+			records = append(records, record)
+		}
+	}
+	return records, nil
 }
 
 func checkShowRecoveryWindowPrivilege(ctx context.Context, ses *Session, srw *tree.ShowRecoveryWindow) error {
