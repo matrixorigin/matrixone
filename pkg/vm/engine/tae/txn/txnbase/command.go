@@ -22,7 +22,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 )
@@ -233,6 +232,11 @@ func (c *TxnStateCmd) ReadFrom(r io.Reader) (n int64, err error) {
 	n += types.TxnTsSize
 	return
 }
+
+func (c *TxnStateCmd) ApproxMemSize() int {
+	return 16 + len(c.ID)
+}
+
 func (c *TxnStateCmd) MarshalBinary() (buf []byte, err error) {
 	var bbuf bytes.Buffer
 	if _, err = c.WriteTo(&bbuf); err != nil {
@@ -395,6 +399,16 @@ func (c *TxnCmd) ReadFromWithVersion(r io.Reader, ver uint16) (n int64, err erro
 	return
 }
 
+func (c *TxnCmd) ApproxMemSize() int {
+	size := 0
+	for _, cc := range c.Cmds {
+		size += cc.ApproxMemSize()
+	}
+
+	size = int(float64(size) * 1.5)
+	return size
+}
+
 func (c *TxnCmd) MarshalBinary() (buf []byte, err error) {
 	var bbuf bytes.Buffer
 	if _, err = c.WriteTo(&bbuf); err != nil {
@@ -453,6 +467,14 @@ func (cc *ComposedCmd) Close() {
 }
 func (cc *ComposedCmd) GetType() uint16 {
 	return IOET_WALTxnCommand_Composed
+}
+
+func (cc *ComposedCmd) ApproxMemSize() int {
+	size := 0
+	for _, c := range cc.Cmds {
+		size += c.ApproxMemSize()
+	}
+	return size
 }
 
 func (cc *ComposedCmd) MarshalBinary() (buf []byte, err error) {

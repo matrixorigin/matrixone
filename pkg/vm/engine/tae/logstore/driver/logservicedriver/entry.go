@@ -16,6 +16,7 @@ package logservicedriver
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"math"
 	"sync"
@@ -270,9 +271,10 @@ func (r *baseEntry) Unmarshal(buf []byte) error {
 // write: entries+meta -> payload -> record
 type recordEntry struct {
 	*baseEntry
-	payload     []byte
-	unmarshaled atomic.Uint32
-	mashalMu    sync.RWMutex
+	payload       []byte
+	unmarshaled   atomic.Uint32
+	mashalMu      sync.RWMutex
+	approxMemSize int
 }
 
 func newRecordEntry() *recordEntry {
@@ -310,7 +312,12 @@ func (r *recordEntry) replay(replayer *replayer) (addr *common.ClosedIntervals) 
 }
 func (r *recordEntry) append(e *entry.Entry) {
 	r.entries = append(r.entries, e)
+	r.approxMemSize += e.ApproxCmdMemSize()
 }
+
+var totalCnt atomic.Int64
+var totalBytes atomic.Int64
+var times atomic.Int64
 
 func (r *recordEntry) prepareRecord() (size int) {
 	var err error
@@ -322,6 +329,18 @@ func (r *recordEntry) prepareRecord() (size int) {
 
 		r.Meta.addr[r.entries[i].Lsn] = uint64(r.payloadSize)
 		r.payloadSize += uint64(r.entries[i].GetSize())
+	}
+
+	times.Add(1)
+	totalCnt.Add(int64(len(r.entries)))
+	totalBytes.Add(int64(r.payloadSize))
+
+	if times.Load()%1000 == 0 {
+		x := float64(times.Load())
+		y := float64(totalCnt.Load())
+		z := float64(totalBytes.Load())
+
+		fmt.Println("append wal", y/x, z/x)
 	}
 
 	r.payload, err = r.Marshal()

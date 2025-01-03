@@ -376,6 +376,11 @@ func (entry *flushTableTailEntry) IsAborted() bool { return false }
 
 type flushTableTailCmd struct{}
 
+func (cmd *flushTableTailCmd) ApproxMemSize() int {
+	size := 2 + 2
+	return size
+}
+
 func (cmd *flushTableTailCmd) GetType() uint16 { return IOET_WALTxnCommand_Compact }
 func (cmd *flushTableTailCmd) WriteTo(w io.Writer) (n int64, err error) {
 	typ := IOET_WALTxnCommand_FlushTableTail
