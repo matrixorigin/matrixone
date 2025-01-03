@@ -1560,8 +1560,8 @@ func Benchmark_RecordStatement_IsTrue(b *testing.B) {
 }
 
 func Test_panic(t *testing.T) {
-	fault.Enable()
-	defer fault.Disable()
+	fault.EnableDomain(fault.DomainFrontend)
+	defer fault.DisableDomain(fault.DomainFrontend)
 
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -1588,15 +1588,15 @@ func Test_panic(t *testing.T) {
 }
 
 func Test_run_panic(t *testing.T) {
-	fault.Enable()
-	defer fault.Disable()
+	fault.EnableDomain(fault.DomainFrontend)
+	defer fault.DisableDomain(fault.DomainFrontend)
 
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
 	runPanic := func(panicChoice int64) {
-		fault.AddFaultPoint(context.Background(), "executeStmtWithWorkspace_panic", ":::", "panic", panicChoice, "has panic", false)
-		defer fault.RemoveFaultPoint(context.Background(), "executeStmtWithWorkspace_panic")
+		fault.AddFaultPointInDomain(context.Background(), fault.DomainFrontend, "executeStmtWithWorkspace_panic", ":::", "panic", panicChoice, "has panic", false)
+		defer fault.RemoveFaultPointFromDomain(context.Background(), fault.DomainFrontend, "executeStmtWithWorkspace_panic")
 
 		ses := newTestSession(t, ctrl)
 		execCtx := &ExecCtx{
