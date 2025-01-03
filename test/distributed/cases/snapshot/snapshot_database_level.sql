@@ -80,9 +80,9 @@ drop snapshot if exists sn1;
 
 drop account if exists acc1;
 
-create snapshot sn1 for account sys;
-create snapshot sn1 for account sys;
-create snapshot if not exists sn1  for account sys;
+create snapshot sn1 for account;
+create snapshot sn1 for account;
+create snapshot if not exists sn1  for account;
 
 drop snapshot if exists sn1;
 
