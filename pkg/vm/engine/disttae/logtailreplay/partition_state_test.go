@@ -107,19 +107,17 @@ func TestHasTombstoneChanged(t *testing.T) {
 		return *objectio.NewObjectStatsWithObjectID(objectio.NewObjectid(), false, true, false)
 	}
 
-	state.tombstoneObjectDTSIndex.Set(ObjectEntry{ObjectInfo{ObjectStats: roid(), CreateTime: types.BuildTS(5, 0), DeleteTime: types.BuildTS(8, 0)}})
-	state.tombstoneObjectDTSIndex.Set(ObjectEntry{ObjectInfo{ObjectStats: roid(), CreateTime: types.BuildTS(1, 0), DeleteTime: types.BuildTS(7, 0)}})
-	state.tombstoneObjectDTSIndex.Set(ObjectEntry{ObjectInfo{ObjectStats: roid(), CreateTime: types.BuildTS(6, 0), DeleteTime: types.BuildTS(12, 0)}})
-	state.tombstoneObjectDTSIndex.Set(ObjectEntry{ObjectInfo{ObjectStats: roid(), CreateTime: types.BuildTS(6, 0), DeleteTime: types.BuildTS(24, 0)}})
+	state.tombstoneObjectDTSIndex.Set(objectio.ObjectEntry{ObjectStats: roid(), CreateTime: types.BuildTS(5, 0), DeleteTime: types.BuildTS(8, 0)})
+	state.tombstoneObjectDTSIndex.Set(objectio.ObjectEntry{ObjectStats: roid(), CreateTime: types.BuildTS(1, 0), DeleteTime: types.BuildTS(7, 0)})
+	state.tombstoneObjectDTSIndex.Set(objectio.ObjectEntry{ObjectStats: roid(), CreateTime: types.BuildTS(6, 0), DeleteTime: types.BuildTS(12, 0)})
+	state.tombstoneObjectDTSIndex.Set(objectio.ObjectEntry{ObjectStats: roid(), CreateTime: types.BuildTS(6, 0), DeleteTime: types.BuildTS(24, 0)})
 	require.True(t, state.HasTombstoneChanged(types.BuildTS(24, 0), types.BuildTS(30, 0)))
 	require.False(t, state.HasTombstoneChanged(types.BuildTS(25, 0), types.BuildTS(30, 0)))
 
 	for i := 10; i < 20; i++ {
-		state.tombstoneObjectDTSIndex.Set(ObjectEntry{
-			ObjectInfo{
-				ObjectStats: roid(),
-				CreateTime:  types.BuildTS(int64(i), 0),
-			},
+		state.tombstoneObjectDTSIndex.Set(objectio.ObjectEntry{
+			ObjectStats: roid(),
+			CreateTime:  types.BuildTS(int64(i), 0),
 		})
 	}
 
