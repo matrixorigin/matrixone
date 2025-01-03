@@ -92,8 +92,10 @@ func (pubInfo *PubInfo) GetCreateSql() string {
 
 type SubInfo struct {
 	SubAccountId   int32
+	SubAccountName string
 	SubName        string
 	SubTime        string
+	PubAccountId   int32
 	PubAccountName string
 	PubName        string
 	PubDbName      string
