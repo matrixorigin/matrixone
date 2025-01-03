@@ -46,8 +46,8 @@ func newTxnTableForTest() *txnTable {
 				packer.Close()
 			},
 		),
-		catalog: cache.NewCatalog(),
 	}
+	engine.catalog.Store(cache.NewCatalog())
 	var tnStore DNStore
 	txn := &Transaction{
 		engine:   engine,
