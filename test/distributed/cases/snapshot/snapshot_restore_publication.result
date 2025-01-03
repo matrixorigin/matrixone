@@ -7,7 +7,7 @@ create account test_tenant_1 admin_name 'test_account' identified by '111';
 create publication pubname1 database db1 account test_tenant_1 comment 'publish db1 database';
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-pubname1    db1    *    test_tenant_1        2024-08-01 17:01:13    null    publish db1 database
+pubname1    db1    *    test_tenant_1        2024-12-31 11:29:13    null    publish db1 database
 show databases like 'db1';
 Database
 db1
@@ -29,7 +29,7 @@ a
 1
 2
 3
-create snapshot snapshot2 for account sys;
+create snapshot snapshot2 for account;
 drop publication pubname1;
 drop database db1;
 show publications;
@@ -120,8 +120,8 @@ a
 3
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pubname2    sys    db2    *    publish db2 database    2024-08-01 17:01:15    sub_db2    2024-08-01 17:01:15    0
-create snapshot snapshot3 for account sys;
+pubname2    sys    db2    *    publish db2 database    2024-12-31 11:29:15    sub_db2    2024-12-31 11:29:15    0
+create snapshot snapshot3 for account;
 drop publication pubname1;
 drop publication pubname2;
 drop database db1;
@@ -204,7 +204,7 @@ show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
 show databases like 'db%';
 Database
-create snapshot snapshot4 for account sys;
+create snapshot snapshot4 for account;
 create database db1;
 use db1;
 create table t1(a int);
@@ -308,7 +308,7 @@ show databases like 'db%';
 Database
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-create snapshot snapshot5 for account sys;
+create snapshot snapshot5 for account;
 create database db1;
 use db1;
 create table t1(a int);
@@ -327,8 +327,8 @@ Tables_in_sub_db1
 t1
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pubname1    sys    db1    *    publish db1 database    2024-08-01 17:01:18    sub_db1    2024-08-01 17:01:18    0
-create snapshot snapshot6 for account sys;
+pubname1    sys    db1    *    publish db1 database    2024-12-31 11:29:29    sub_db1    2024-12-31 11:29:29    0
+create snapshot snapshot6 for account;
 drop publication pubname1;
 drop database db1;
 create database db2;

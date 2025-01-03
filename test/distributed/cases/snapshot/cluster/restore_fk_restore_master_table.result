@@ -179,10 +179,10 @@ performancereviewid    employeeid    reviewdate    reviewerid
 drop snapshot if exists sys_sp;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-create snapshot sys_sp for account sys;
+create snapshot sys_sp for account;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sys_sp    2024-08-20 03:03:00.682696    account    sys        
+sys_sp    2024-12-31 06:16:14.042907    account    sys        
 restore account sys database Company from snapshot sys_sp;
 select * from Departments;
 departmentid    name    managerid
