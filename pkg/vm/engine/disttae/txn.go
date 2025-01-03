@@ -526,6 +526,11 @@ func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
 			if err := txn.dumpDeleteBatchLocked(ctx, offset, &size); err != nil {
 				return err
 			}
+			//After flushing inserts/deletes in memory into S3, the entries in txn.writes will be unordered,
+			//should adjust the order to make sure deletes are in front of the inserts.
+			if err := txn.adjustUpdateOrderLocked(0); err != nil {
+				return err
+			}
 		}
 		txn.approximateInMemDeleteCnt = 0
 		txn.approximateInMemInsertSize = 0
@@ -1325,11 +1330,6 @@ func (txn *Transaction) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
 		return nil, err
 	}
 	if err := txn.dumpBatchLocked(ctx, -1); err != nil {
-		return nil, err
-	}
-	//After flushing inserts/deletes in memory into S3, the entries in txn.writes will be unordered,
-	//should adjust the order to make sure deletes are in fronts of the inserts.
-	if err := txn.adjustUpdateOrderLocked(0); err != nil {
 		return nil, err
 	}
 
