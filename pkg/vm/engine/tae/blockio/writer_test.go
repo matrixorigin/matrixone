@@ -21,7 +21,6 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -43,19 +42,8 @@ const (
 	ModuleName = "BlockIO"
 )
 
-func runPipelineTest(fn func()) {
-	runtime.RunTest(
-		"",
-		func(rt runtime.Runtime) {
-			Start("")
-			defer Stop("")
-			fn()
-		},
-	)
-}
-
 func TestWriter_WriteBlockAndZoneMap(t *testing.T) {
-	runPipelineTest(
+	ioutil.RunPipelineTest(
 		func() {
 			defer testutils.AfterTest(t)()
 			ctx := context.Background()
