@@ -178,6 +178,7 @@ func DeepCopyLockTarget(target *plan.LockTarget) *plan.LockTarget {
 	}
 	return &plan.LockTarget{
 		TableId:            target.TableId,
+		ObjRef:             DeepCopyObjectRef(target.ObjRef),
 		PrimaryColIdxInBat: target.PrimaryColIdxInBat,
 		PrimaryColTyp:      target.PrimaryColTyp,
 		RefreshTsIdxInBat:  target.RefreshTsIdxInBat,

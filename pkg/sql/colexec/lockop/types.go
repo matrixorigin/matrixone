@@ -104,6 +104,7 @@ func (lockOp *LockOp) Release() {
 
 type lockTarget struct {
 	tableID                      uint64
+	objRef                       *plan.ObjectRef
 	primaryColumnIndexInBatch    int32
 	refreshTimestampIndexInBatch int32
 	primaryColumnType            types.Type
@@ -133,6 +134,7 @@ type state struct {
 	retryError           error
 	defChanged           bool
 	fetchers             []FetchLockRowsFunc
+	relations            []engine.Relation
 	hasNewVersionInRange hasNewVersionInRangeFunc
 	lockCount            int64
 }

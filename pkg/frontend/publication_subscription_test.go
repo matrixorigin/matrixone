@@ -133,16 +133,17 @@ func Test_doAlterPublication(t *testing.T) {
 		er := mock_frontend.NewMockExecResult(ctrl)
 		er.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
 		er.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(0)).Return(int64(0), nil).AnyTimes()
-		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(1)).Return("pub1", nil).AnyTimes()
-		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(2)).Return("db1", nil).AnyTimes()
-		er.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(3)).Return(uint64(0), nil).AnyTimes()
-		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(4)).Return("*", nil).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(1)).Return("sys", nil).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(2)).Return("pub1", nil).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(3)).Return("db1", nil).AnyTimes()
+		er.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(4)).Return(uint64(0), nil).AnyTimes()
 		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(5)).Return("*", nil).AnyTimes()
-		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(6)).Return("", nil).AnyTimes()
-		er.EXPECT().ColumnIsNull(gomock.Any(), uint64(0), uint64(7)).Return(true, nil).AnyTimes()
-		er.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(8)).Return(uint64(0), nil).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(6)).Return("*", nil).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(7)).Return("", nil).AnyTimes()
+		er.EXPECT().ColumnIsNull(gomock.Any(), uint64(0), uint64(8)).Return(true, nil).AnyTimes()
 		er.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(9)).Return(uint64(0), nil).AnyTimes()
-		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(10)).Return("", nil).AnyTimes()
+		er.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(10)).Return(uint64(0), nil).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(11)).Return("", nil).AnyTimes()
 		return []interface{}{er}
 	}
 
@@ -166,15 +167,17 @@ func Test_doAlterPublication(t *testing.T) {
 		er := mock_frontend.NewMockExecResult(ctrl)
 		er.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
 		er.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(0)).Return(int64(1), nil).AnyTimes()
-		er.EXPECT().ColumnIsNull(gomock.Any(), uint64(0), uint64(1)).Return(true, nil).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(1)).Return("acc1", nil).AnyTimes()
 		er.EXPECT().ColumnIsNull(gomock.Any(), uint64(0), uint64(2)).Return(true, nil).AnyTimes()
-		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(3)).Return("sys", nil).AnyTimes()
-		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(4)).Return("pub1", nil).AnyTimes()
-		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(5)).Return("db1", nil).AnyTimes()
-		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(6)).Return("*", nil).AnyTimes()
-		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(7)).Return("", nil).AnyTimes()
-		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(8)).Return("", nil).AnyTimes()
-		er.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(9)).Return(int64(0), nil).AnyTimes()
+		er.EXPECT().ColumnIsNull(gomock.Any(), uint64(0), uint64(3)).Return(true, nil).AnyTimes()
+		er.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(4)).Return(int64(0), nil).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(5)).Return("sys", nil).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(6)).Return("pub1", nil).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(7)).Return("db1", nil).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(8)).Return("*", nil).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(9)).Return("", nil).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(10)).Return("", nil).AnyTimes()
+		er.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(11)).Return(int64(0), nil).AnyTimes()
 		return []interface{}{er}
 	}
 
@@ -260,16 +263,17 @@ func Test_doAlterPublication2(t *testing.T) {
 		er := mock_frontend.NewMockExecResult(ctrl)
 		er.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
 		er.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(0)).Return(int64(0), nil).AnyTimes()
-		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(1)).Return("pub1", nil).AnyTimes()
-		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(2)).Return("db1", nil).AnyTimes()
-		er.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(3)).Return(uint64(0), nil).AnyTimes()
-		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(4)).Return("*", nil).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(1)).Return("sys", nil).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(2)).Return("pub1", nil).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(3)).Return("db1", nil).AnyTimes()
+		er.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(4)).Return(uint64(0), nil).AnyTimes()
 		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(5)).Return("*", nil).AnyTimes()
-		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(6)).Return("", nil).AnyTimes()
-		er.EXPECT().ColumnIsNull(gomock.Any(), uint64(0), uint64(7)).Return(true, nil).AnyTimes()
-		er.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(8)).Return(uint64(0), nil).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(6)).Return("*", nil).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(7)).Return("", nil).AnyTimes()
+		er.EXPECT().ColumnIsNull(gomock.Any(), uint64(0), uint64(8)).Return(true, nil).AnyTimes()
 		er.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(9)).Return(uint64(0), nil).AnyTimes()
-		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(10)).Return("", nil).AnyTimes()
+		er.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(10)).Return(uint64(0), nil).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(11)).Return("", nil).AnyTimes()
 		return []interface{}{er}
 	}
 
@@ -332,37 +336,21 @@ func Test_doAlterPublication2(t *testing.T) {
 }
 
 func Test_doDropPublication(t *testing.T) {
-	mockedAccountsResults := func(ctrl *gomock.Controller) []interface{} {
-		er := mock_frontend.NewMockExecResult(ctrl)
-		er.EXPECT().GetRowCount().Return(uint64(2)).AnyTimes()
-		er.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(0)).Return(int64(0), nil).AnyTimes()
-		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(1)).Return("sys", nil).AnyTimes()
-		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(2)).Return("open", nil).AnyTimes()
-		er.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(3)).Return(uint64(1), nil).AnyTimes()
-		er.EXPECT().ColumnIsNull(gomock.Any(), uint64(0), uint64(4)).Return(true, nil).AnyTimes()
-
-		er.EXPECT().GetInt64(gomock.Any(), uint64(1), uint64(0)).Return(int64(1), nil).AnyTimes()
-		er.EXPECT().GetString(gomock.Any(), uint64(1), uint64(1)).Return("acc1", nil).AnyTimes()
-		er.EXPECT().GetString(gomock.Any(), uint64(1), uint64(2)).Return("open", nil).AnyTimes()
-		er.EXPECT().GetUint64(gomock.Any(), uint64(1), uint64(3)).Return(uint64(1), nil).AnyTimes()
-		er.EXPECT().ColumnIsNull(gomock.Any(), uint64(1), uint64(4)).Return(true, nil).AnyTimes()
-		return []interface{}{er}
-	}
-
 	mockedPubInfoResults := func(ctrl *gomock.Controller) []interface{} {
 		er := mock_frontend.NewMockExecResult(ctrl)
 		er.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
 		er.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(0)).Return(int64(0), nil).AnyTimes()
-		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(1)).Return("pub1", nil).AnyTimes()
-		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(2)).Return("db1", nil).AnyTimes()
-		er.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(3)).Return(uint64(0), nil).AnyTimes()
-		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(4)).Return("*", nil).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(1)).Return("sys", nil).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(2)).Return("pub1", nil).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(3)).Return("db1", nil).AnyTimes()
+		er.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(4)).Return(uint64(0), nil).AnyTimes()
 		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(5)).Return("*", nil).AnyTimes()
-		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(6)).Return("", nil).AnyTimes()
-		er.EXPECT().ColumnIsNull(gomock.Any(), uint64(0), uint64(7)).Return(true, nil).AnyTimes()
-		er.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(8)).Return(uint64(0), nil).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(6)).Return("*", nil).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(7)).Return("", nil).AnyTimes()
+		er.EXPECT().ColumnIsNull(gomock.Any(), uint64(0), uint64(8)).Return(true, nil).AnyTimes()
 		er.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(9)).Return(uint64(0), nil).AnyTimes()
-		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(10)).Return("", nil).AnyTimes()
+		er.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(10)).Return(uint64(0), nil).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(11)).Return("", nil).AnyTimes()
 		return []interface{}{er}
 	}
 
@@ -370,15 +358,17 @@ func Test_doDropPublication(t *testing.T) {
 		er := mock_frontend.NewMockExecResult(ctrl)
 		er.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
 		er.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(0)).Return(int64(1), nil).AnyTimes()
-		er.EXPECT().ColumnIsNull(gomock.Any(), uint64(0), uint64(1)).Return(true, nil).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(1)).Return("acc1", nil).AnyTimes()
 		er.EXPECT().ColumnIsNull(gomock.Any(), uint64(0), uint64(2)).Return(true, nil).AnyTimes()
-		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(3)).Return("sys", nil).AnyTimes()
-		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(4)).Return("pub1", nil).AnyTimes()
-		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(5)).Return("db1", nil).AnyTimes()
-		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(6)).Return("*", nil).AnyTimes()
-		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(7)).Return("", nil).AnyTimes()
-		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(8)).Return("", nil).AnyTimes()
-		er.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(9)).Return(int64(0), nil).AnyTimes()
+		er.EXPECT().ColumnIsNull(gomock.Any(), uint64(0), uint64(3)).Return(true, nil).AnyTimes()
+		er.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(4)).Return(int64(0), nil).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(5)).Return("sys", nil).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(6)).Return("pub1", nil).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(7)).Return("db1", nil).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(8)).Return("*", nil).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(9)).Return("", nil).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(10)).Return("", nil).AnyTimes()
+		er.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(11)).Return(int64(0), nil).AnyTimes()
 		return []interface{}{er}
 	}
 
@@ -396,9 +386,6 @@ func Test_doDropPublication(t *testing.T) {
 		bh := mock_frontend.NewMockBackgroundExec(ctrl)
 		bh.EXPECT().Close().Return().AnyTimes()
 		bh.EXPECT().ClearExecResultSet().Return().AnyTimes()
-		// get all accounts
-		bh.EXPECT().Exec(gomock.Any(), getAccountIdNamesSql).Return(nil).AnyTimes()
-		bh.EXPECT().GetExecResultSet().Return(mockedAccountsResults(ctrl))
 		// get pub info
 		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		bh.EXPECT().GetExecResultSet().Return(mockedPubInfoResults(ctrl))
@@ -408,7 +395,7 @@ func Test_doDropPublication(t *testing.T) {
 		// deleteMoSubs
 		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
-		err := dropPublication(ctx, bh, true, "", "pub")
+		err := dropPublication(ctx, bh, true, "acc1", "pub")
 		convey.So(err, convey.ShouldBeNil)
 	})
 }
@@ -437,7 +424,7 @@ func TestGetSqlForInsertIntoMoPubs(t *testing.T) {
 		},
 	}
 	for _, k := range kases {
-		_, err := getSqlForInsertIntoMoPubs(ctx, k.pubName, k.databaseName, 0, false, "", "", "", true)
+		_, err := getSqlForInsertIntoMoPubs(ctx, 0, "sys", k.pubName, k.databaseName, 0, false, "", "", "", true)
 		require.Equal(t, k.err, err != nil)
 	}
 }
@@ -499,15 +486,17 @@ func Test_doShowSubscriptions(t *testing.T) {
 			er := mock_frontend.NewMockExecResult(ctrl)
 			er.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
 			er.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(0)).Return(int64(1), nil).AnyTimes()
-			er.EXPECT().ColumnIsNull(gomock.Any(), uint64(0), uint64(1)).Return(true, nil).AnyTimes()
+			er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(1)).Return("acc1", nil).AnyTimes()
 			er.EXPECT().ColumnIsNull(gomock.Any(), uint64(0), uint64(2)).Return(true, nil).AnyTimes()
-			er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(3)).Return("sys", nil).AnyTimes()
-			er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(4)).Return("pub1", nil).AnyTimes()
-			er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(5)).Return("db1", nil).AnyTimes()
-			er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(6)).Return("*", nil).AnyTimes()
-			er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(7)).Return("2024-10-10 11:12:00", nil).AnyTimes()
-			er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(8)).Return("", nil).AnyTimes()
-			er.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(9)).Return(int64(0), nil).AnyTimes()
+			er.EXPECT().ColumnIsNull(gomock.Any(), uint64(0), uint64(3)).Return(true, nil).AnyTimes()
+			er.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(4)).Return(int64(0), nil).AnyTimes()
+			er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(5)).Return("sys", nil).AnyTimes()
+			er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(6)).Return("pub1", nil).AnyTimes()
+			er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(7)).Return("db1", nil).AnyTimes()
+			er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(8)).Return("*", nil).AnyTimes()
+			er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(9)).Return("2024-10-10 11:12:00", nil).AnyTimes()
+			er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(10)).Return("", nil).AnyTimes()
+			er.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(11)).Return(int64(0), nil).AnyTimes()
 			return []interface{}{er}
 		}
 

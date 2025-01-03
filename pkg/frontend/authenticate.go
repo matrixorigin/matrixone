@@ -24,7 +24,6 @@ import (
 	"math"
 	"math/bits"
 	"path"
-	//"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -3618,9 +3617,7 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 		handler.backSes.txnCompileCtx.dbName = catalog.MO_CATALOG
 	}
 
-	var sql string
-	var db string
-	var table string
+	var sql, db, table string
 	var erArray []ExecResult
 	var databases map[string]int8
 	var dbSql, prefix string
@@ -3639,6 +3636,33 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 
 	if isSysTenant(da.Name) {
 		return moerr.NewInternalErrorf(ctx, "can not delete the account %s", da.Name)
+	}
+
+	checkAccount := func(accountName string) (accountId int64, version uint64, ok bool, err error) {
+		if sql, err = getSqlForCheckTenant(ctx, accountName); err != nil {
+			return
+		}
+
+		bh.ClearExecResultSet()
+		if err = bh.Exec(ctx, sql); err != nil {
+			return
+		}
+
+		if erArray, err = getResultSet(ctx, bh); err != nil {
+			return
+		}
+
+		if execResultArrayHasData(erArray) {
+			if accountId, err = erArray[0].GetInt64(ctx, 0, 0); err != nil {
+				return
+			}
+			if version, err = erArray[0].GetUint64(ctx, 0, 3); err != nil {
+				return
+			}
+			ok = true
+		}
+
+		return
 	}
 
 	dropAccountFunc := func() (rtnErr error) {
@@ -3663,22 +3687,17 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 		}
 
 		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, getAccountIdNamesSql)
-		_, nameInfoMap, rtnErr := getAccounts(ctx, bh, da.Name, true)
-		if rtnErr != nil {
-			return rtnErr
-		}
-
-		//check the account exists or not
-		if _, ok := nameInfoMap[da.Name]; !ok {
-			//no such account
-			if !da.IfExists { //when the "IF EXISTS" is set, just skip it.
-				rtnErr = moerr.NewInternalErrorf(ctx, "there is no account %s", da.Name)
-			}
-			hasAccount = false
+		if accountId, version, hasAccount, rtnErr = checkAccount(da.Name); rtnErr != nil {
 			return
 		}
-		accountId = int64(nameInfoMap[da.Name].Id)
-		version = nameInfoMap[da.Name].Version
+		// check the account exists or not
+		if !hasAccount {
+			// when the "IF EXISTS" is set, just skip it.
+			if !da.IfExists {
+				rtnErr = moerr.NewInternalErrorf(ctx, "there is no account %s", da.Name)
+			}
+			return
+		}
 
 		//drop tables of the tenant
 		//NOTE!!!: single DDL drop statement per single transaction
@@ -3712,7 +3731,7 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 		}
 		for _, pubInfo := range pubInfos {
 			ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, pubInfo.PubName)
-			if rtnErr = dropPublication(deleteCtx, bh, true, da.Name, pubInfo.PubName); rtnErr != nil {
+			if rtnErr = dropPublication(deleteCtx, bh, true, pubInfo.PubAccountName, pubInfo.PubName); rtnErr != nil {
 				if isDisallowedError(rtnErr) {
 					ses.Infof(ctx, "[EOF] dropAccount %s sql: %s, error: %s", da.Name, pubInfo.PubName, rtnErr.Error())
 				}
@@ -3772,11 +3791,9 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 			bb.WriteString(";")
 			sqlsForDropDatabases = append(sqlsForDropDatabases, bb.String())
 		}
-		ses.Infof(ctx, "dropAccount %s alldatabases sql: %s", da.Name, strings.Join(dbs, ","))
 
-		//-----------------deadlock---------------------
 		for _, sql = range sqlsForDropDatabases {
-			ses.Infof(ctx, "dropAccount %s drop_database sql: %s", da.Name, sql)
+			ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, sql)
 			rtnErr = bh.Exec(deleteCtx, sql)
 			if rtnErr != nil {
 				if isDisallowedError(rtnErr) {
@@ -3793,13 +3810,8 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 			return rtnErr
 		}
 		for _, subInfo := range subInfos {
-			//pubAccInfo, ok := nameInfoMap[subInfo.PubAccountName]
-			//if !ok {
-			//	continue
-			//}
-
 			ses.Infof(ctx, "dropAccount %s sql: %s %s", da.Name, updatePubInfoAccountListFormat, subInfo.PubName)
-			if rtnErr = dropSubAccountNameInSubAccounts(deleteCtx, bh, subInfo.PubAccountName, subInfo.PubName, da.Name); rtnErr != nil {
+			if rtnErr = dropSubAccountNameInSubAccounts(deleteCtx, bh, subInfo.PubAccountId, subInfo.PubName, da.Name); rtnErr != nil {
 				if isDisallowedError(rtnErr) {
 					ses.Infof(ctx, "[EOF] dropAccount %s sql: %s %s", da.Name, updatePubInfoAccountListFormat, subInfo.PubName)
 				}
@@ -3899,7 +3911,7 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 			return rtnErr
 		}
 
-		//get all cluster table in the mo_catalog
+		// get all cluster table in the mo_catalog
 		sql = "show tables from mo_catalog;"
 		bh.ClearExecResultSet()
 		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, sql)
@@ -7809,7 +7821,7 @@ func createTablesInInformationSchemaOfGeneralTenant(ctx context.Context, bh Back
 // createSubscription insert records into mo_subs of To-All-Publications
 func createSubscription(ctx context.Context, bh BackgroundExec, newTenant *TenantInfo) (err error) {
 	// get all accounts
-	accIdInfoMap, accNameInfoMap, err := getAccounts(ctx, bh, "", false)
+	accIdInfoMap, accNameInfoMap, err := getAccounts(ctx, bh, false)
 	if err != nil {
 		return
 	}
@@ -7825,6 +7837,8 @@ func createSubscription(ctx context.Context, bh BackgroundExec, newTenant *Tenan
 		for _, pubInfo := range pubInfos {
 			subInfo := &pubsub.SubInfo{
 				SubAccountId:   int32(newTenant.TenantID),
+				SubAccountName: newTenant.Tenant,
+				PubAccountId:   accountId,
 				PubAccountName: accIdInfoMap[accountId].Name,
 				PubName:        pubInfo.PubName,
 				PubDbName:      pubInfo.DbName,
