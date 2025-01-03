@@ -23,6 +23,8 @@ import (
 	"sync"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -43,7 +45,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"go.uber.org/zap"
 )
 
 //func (txn *Transaction) getObjInfos(
@@ -1326,6 +1327,12 @@ func (txn *Transaction) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
 	if err := txn.dumpBatchLocked(ctx, -1); err != nil {
 		return nil, err
 	}
+	//After flushing inserts/deletes in memory into S3, the entries in txn.writes will be unordered,
+	//should adjust the order to make sure deletes are in fronts of the inserts.
+	if err := txn.adjustUpdateOrderLocked(0); err != nil {
+		return nil, err
+	}
+
 	txn.traceWorkspaceLocked(true)
 
 	if txn.workspaceSize > 10*mpool.MB {
