@@ -32,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
@@ -248,7 +247,7 @@ func TryFastFilterBlocks(
 	snapshotTS timestamp.Timestamp,
 	tableDef *plan.TableDef,
 	rangesParam engine.RangesParam,
-	snapshot *logtailreplay.PartitionState,
+	objectList objectio.ObjectList,
 	extraCommittedObjects []objectio.ObjectStats,
 	uncommittedObjects []objectio.ObjectStats,
 	outBlocks *objectio.BlockInfoSlice,
@@ -269,7 +268,7 @@ func TryFastFilterBlocks(
 		objectFilterOp,
 		blockFilterOp,
 		seekOp,
-		snapshot,
+		objectList,
 		extraCommittedObjects,
 		uncommittedObjects,
 		outBlocks,
@@ -289,7 +288,7 @@ func FilterTxnObjects(
 	objectFilterOp ObjectFilterOp,
 	blockFilterOp BlockFilterOp,
 	seekOp SeekFirstBlockOp,
-	snapshot *logtailreplay.PartitionState,
+	objectList objectio.ObjectList,
 	extraCommittedObjects []objectio.ObjectStats,
 	uncommittedObjects []objectio.ObjectStats,
 	outBlocks *objectio.BlockInfoSlice,
@@ -307,10 +306,10 @@ func FilterTxnObjects(
 
 	var getNextStats func() (objectio.ObjectStats, error)
 
-	if snapshot != nil {
+	if objectList != nil {
 		getNextStats = func() (objectio.ObjectStats, error) {
 			if iter == nil {
-				iter, err = snapshot.NewObjectsIter(
+				iter, err = objectList.NewObjectsIter(
 					types.TimestampToTS(snapshotTS),
 					true,
 					false,

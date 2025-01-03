@@ -21,6 +21,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
+type ObjectList interface {
+	NewObjectsIter(
+		ts types.TS,
+		onlyVisible bool,
+		visitTombstone bool,
+	) (ObjectIter, error)
+}
+
 type ObjectIter interface {
 	Next() bool
 	Close() error
