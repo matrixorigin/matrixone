@@ -30,7 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -224,7 +223,7 @@ func (obj *baseObject) Prefetch(blkID uint16) error {
 		if err != nil {
 			return err
 		}
-		return blockio.Prefetch(obj.rt.SID(), obj.rt.Fs.Service, key)
+		return ioutil.Prefetch(obj.rt.SID(), obj.rt.Fs.Service, key)
 	}
 }
 

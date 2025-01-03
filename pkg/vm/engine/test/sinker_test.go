@@ -30,7 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	testutil3 "github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/stretchr/testify/require"
 )
@@ -105,8 +104,8 @@ func Test_Sinker(t *testing.T) {
 			objectio.GetTombstoneTypes(pkType, hiddenSels),
 		),
 	)
-	blockio.Start("")
-	defer blockio.Stop("")
+	ioutil.Start("")
+	defer ioutil.Stop("")
 	bat2 := engine_util.NewCNTombstoneBatch(&pkType, hiddenSels)
 	buffer := engine_util.NewCNTombstoneBatch(&pkType, hiddenSels)
 	for {

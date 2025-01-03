@@ -37,7 +37,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
@@ -1157,7 +1156,7 @@ func (ls *LocalDisttaeDataSource) batchPrefetch(seqNums []uint16) {
 		preObj = *blk.BlockID.Object()
 
 		// prefetch blk data
-		err := blockio.Prefetch(
+		err := ioutil.Prefetch(
 			ls.table.proc.Load().GetService(), ls.fs, blk.MetaLocation())
 		if err != nil {
 			logutil.Errorf("pefetch block data: %s, blk:%s",

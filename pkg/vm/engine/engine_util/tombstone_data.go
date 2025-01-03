@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 )
 
 func UnmarshalTombstoneData(data []byte) (engine.Tombstoner, error) {
@@ -211,7 +210,7 @@ func (tomb *tombstoneData) PrefetchTombstones(
 		stats := tomb.files.Get(i)
 		for j := 0; j < int(stats.BlkCnt()); j++ {
 			loc := stats.BlockLocation(uint16(j), objectio.BlockMaxRows)
-			if err := blockio.Prefetch(
+			if err := ioutil.Prefetch(
 				srvId,
 				fs,
 				loc,

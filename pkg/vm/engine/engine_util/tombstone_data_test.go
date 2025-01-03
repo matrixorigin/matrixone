@@ -17,9 +17,11 @@ package engine_util
 import (
 	"bytes"
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 
 	"github.com/stretchr/testify/require"
 
@@ -30,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 )
 
 func TestTombstoneData1(t *testing.T) {
@@ -39,8 +40,8 @@ func TestTombstoneData1(t *testing.T) {
 	rt := runtime.DefaultRuntime()
 	name := t.Name()
 	runtime.SetupServiceBasedRuntime(name, rt)
-	blockio.Start(name)
-	defer blockio.Stop(name)
+	ioutil.Start(name)
+	defer ioutil.Stop(name)
 
 	proc := testutil.NewProc()
 

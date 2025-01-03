@@ -25,11 +25,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 )
 
 const DefaultLoadParallism = 20
@@ -96,7 +96,7 @@ func (h *CheckpointChangesHandle) prefetch() {
 			return
 		}
 		blk := h.blockList.Get(h.prefetchIdx)
-		err := blockio.Prefetch(h.sid, h.fs, blk.MetaLoc[:])
+		err := ioutil.Prefetch(h.sid, h.fs, blk.MetaLoc[:])
 		if err != nil {
 			logutil.Warnf("ChangesHandle: prefetch failed: %v", err)
 		}
