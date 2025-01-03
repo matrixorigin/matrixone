@@ -137,7 +137,7 @@ func isConnected(connMap *sync.Map) {
 		tcpState, err := GetsockoptTCPInfo(tcpConn, &tcpInfo)
 		if err != nil {
 			logutil.Error("Failed to get TCP info", zap.Error(err))
-			tcpConnStatus[tcpConn] = 0
+			tcpConnStatus[tcpConn] = tcpState
 			return true
 		}
 		switch tcpState {
