@@ -178,6 +178,13 @@ type delayedCacheApply struct {
 	flist    []func()
 }
 
+func (c *PushClient) dcaReset() {
+	c.dca.Lock()
+	defer c.dca.Unlock()
+	c.dca.replayed = false
+	c.dca.flist = c.dca.flist[:0]
+}
+
 func (c *PushClient) dcaTryDelay(isSub bool, f func()) (delayed bool) {
 	c.dca.Lock()
 	defer c.dca.Unlock()
@@ -730,6 +737,7 @@ func (c *PushClient) replayCatalogCache(ctx context.Context, e *Engine) (err err
 	var op client.TxnOperator
 	var result executor.Result
 	ts := c.receivedLogTailTime.getTimestamp()
+	ccache := e.catalog.Load()
 	typeTs := types.TimestampToTS(ts)
 	createByOpt := client.WithTxnCreateBy(
 		0,
@@ -771,7 +779,7 @@ func (c *PushClient) replayCatalogCache(ctx context.Context, e *Engine) (err err
 		if err = fillTsVecForSysTableQueryBatch(b, typeTs, result.Mp); err != nil {
 			return err
 		}
-		e.catalog.InsertDatabase(b)
+		ccache.InsertDatabase(b)
 	}
 
 	// read tables
@@ -786,7 +794,7 @@ func (c *PushClient) replayCatalogCache(ctx context.Context, e *Engine) (err err
 			return err
 		}
 		e.tryAdjustThreeTablesCreatedTimeWithBatch(b)
-		e.catalog.InsertTable(b)
+		ccache.InsertTable(b)
 	}
 
 	// read columns
@@ -802,7 +810,7 @@ func (c *PushClient) replayCatalogCache(ctx context.Context, e *Engine) (err err
 			if err = fillTsVecForSysTableQueryBatch(b, typeTs, result.Mp); err != nil {
 				return err
 			}
-			e.catalog.InsertColumns(b)
+			ccache.InsertColumns(b)
 		}
 	} else {
 		logutil.Info("FIND_TABLE merge mo_columns results")
@@ -816,10 +824,10 @@ func (c *PushClient) replayCatalogCache(ctx context.Context, e *Engine) (err err
 		if err = fillTsVecForSysTableQueryBatch(bat, typeTs, result.Mp); err != nil {
 			return err
 		}
-		e.catalog.InsertColumns(bat)
+		ccache.InsertColumns(bat)
 	}
 
-	e.catalog.UpdateStart(typeTs)
+	ccache.UpdateDuration(typeTs, types.MaxTs())
 	c.dcaConfirmAndApply()
 	return nil
 
@@ -830,6 +838,7 @@ func (c *PushClient) connect(ctx context.Context, e *Engine) {
 		c.startConsumers(ctx, e)
 
 		for {
+			c.dcaReset()
 			err := c.subSysTables(ctx)
 			if err != nil {
 				if errors.Is(err, context.Canceled) {
@@ -900,6 +909,7 @@ func (c *PushClient) connect(ctx context.Context, e *Engine) {
 
 		c.resume()
 
+		c.dcaReset()
 		err = c.subSysTables(ctx)
 		if err != nil {
 			c.pause(false)
@@ -1037,7 +1047,7 @@ func (c *PushClient) doGCPartitionState(ctx context.Context, e *Engine) {
 	for ids, part := range parts {
 		part.Truncate(ctx, ids, ts)
 	}
-	e.catalog.GC(ts.ToTimestamp())
+	e.catalog.Load().GC(ts.ToTimestamp())
 }
 
 func (c *PushClient) partitionStateGCTicker(ctx context.Context, e *Engine) {
@@ -2045,18 +2055,20 @@ func updatePartitionOfPush(
 				state.UpdateDuration(ckpStart, types.MaxTs())
 				if lazyLoad {
 					state.AppendCheckpoint(tl.CkpLocation, partition)
-				} else {
-					//Notice that the checkpoint duration is same among all mo system tables,
-					//such as mo_databases, mo_tables, mo_columns.
-					e.GetLatestCatalogCache().UpdateDuration(ckpStart, types.MaxTs())
 				}
+				// else {
+				//Notice that the checkpoint duration is same among all mo system tables,
+				//such as mo_databases, mo_tables, mo_columns.
+				//	e.GetLatestCatalogCache().UpdateDuration(ckpStart, types.MaxTs())
+
 				v2.LogtailUpdatePartitonUpdateTimestampsDurationHistogram.Observe(time.Since(t0).Seconds())
 			}
 		} else {
 			state.UpdateDuration(types.TS{}, types.MaxTs())
-			if !lazyLoad {
-				e.GetLatestCatalogCache().UpdateDuration(types.TS{}, types.MaxTs())
-			}
+			// leave this to replayCatalogCache
+			// if !lazyLoad {
+			// 	e.GetLatestCatalogCache().UpdateDuration(types.TS{}, types.MaxTs())
+			// }
 		}
 	}
 
