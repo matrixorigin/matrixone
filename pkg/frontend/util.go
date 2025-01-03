@@ -18,7 +18,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"io"
 	"math"
 	"math/rand"
 	"os"
@@ -1850,4 +1852,13 @@ func (lca *LeakCheckAllocator) CheckBalance() bool {
 	lca.Lock()
 	defer lca.Unlock()
 	return lca.allocated == lca.freed && len(lca.records) == 0
+}
+
+func isDisallowedError(err error) bool {
+	switch {
+	case errors.Is(err, io.EOF):
+		// io.EOF should be handled by the caller, should never be logged
+		return true
+	}
+	return false
 }
