@@ -3714,9 +3714,6 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 			ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, sql)
 			rtnErr = bh.Exec(deleteCtx, sql)
 			if rtnErr != nil {
-				if isDisallowedError(rtnErr) {
-					ses.Infof(ctx, "[EOF] dropAccount %s sql: %s, error: %s", da.Name, sql, rtnErr.Error())
-				}
 				return rtnErr
 			}
 		}
@@ -3730,9 +3727,6 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 		for _, pubInfo := range pubInfos {
 			ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, pubInfo.PubName)
 			if rtnErr = dropPublication(deleteCtx, bh, true, pubInfo.PubAccountName, pubInfo.PubName); rtnErr != nil {
-				if isDisallowedError(rtnErr) {
-					ses.Infof(ctx, "[EOF] dropAccount %s sql: %s, error: %s", da.Name, pubInfo.PubName, rtnErr.Error())
-				}
 				return
 			}
 		}
@@ -3744,9 +3738,6 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, dbSql)
 		rtnErr = bh.Exec(deleteCtx, dbSql)
 		if rtnErr != nil {
-			if isDisallowedError(rtnErr) {
-				ses.Infof(ctx, "[EOF] dropAccount %s sql: %s, error: %s", da.Name, dbSql, rtnErr.Error())
-			}
 			return rtnErr
 		}
 
@@ -3784,9 +3775,6 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 			ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, sql)
 			rtnErr = bh.Exec(deleteCtx, sql)
 			if rtnErr != nil {
-				if isDisallowedError(rtnErr) {
-					ses.Infof(ctx, "[EOF] dropAccount %s sql: %s, error: %s", da.Name, sql, rtnErr.Error())
-				}
 				return rtnErr
 			}
 		}
@@ -3800,9 +3788,6 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 		for _, subInfo := range subInfos {
 			ses.Infof(ctx, "dropAccount %s sql: %s %s", da.Name, updatePubInfoAccountListFormat, subInfo.PubName)
 			if rtnErr = dropSubAccountNameInSubAccounts(deleteCtx, bh, subInfo.PubAccountId, subInfo.PubName, da.Name); rtnErr != nil {
-				if isDisallowedError(rtnErr) {
-					ses.Infof(ctx, "[EOF] dropAccount %s sql: %s %s", da.Name, updatePubInfoAccountListFormat, subInfo.PubName)
-				}
 				return rtnErr
 			}
 		}
@@ -3810,9 +3795,6 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, deleteMoSubsRecordsBySubAccountIdFormat)
 		// delete records in mo_subs
 		if rtnErr = deleteMoSubsBySubAccountId(deleteCtx, bh); rtnErr != nil {
-			if isDisallowedError(rtnErr) {
-				ses.Infof(ctx, "[EOF] dropAccount %s sql: %s", da.Name, deleteMoSubsRecordsBySubAccountIdFormat)
-			}
 			return rtnErr
 		}
 
@@ -3820,9 +3802,6 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 		// drop table mo_mysql_compatibility_mode
 		rtnErr = bh.Exec(deleteCtx, dropMoMysqlCompatibilityModeSql)
 		if rtnErr != nil {
-			if isDisallowedError(rtnErr) {
-				ses.Infof(ctx, "[EOF] dropAccount %s sql: %s", da.Name, dropMoMysqlCompatibilityModeSql)
-			}
 			return rtnErr
 		}
 
@@ -3830,9 +3809,6 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 		// drop autoIcr table
 		rtnErr = bh.Exec(deleteCtx, dropAutoIcrColSql)
 		if rtnErr != nil {
-			if isDisallowedError(rtnErr) {
-				ses.Infof(ctx, "[EOF] dropAccount %s sql: %s", da.Name, dropAutoIcrColSql)
-			}
 			return rtnErr
 		}
 
@@ -3840,9 +3816,6 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 		// drop mo_catalog.mo_indexes under general tenant
 		rtnErr = bh.Exec(deleteCtx, dropMoIndexes)
 		if rtnErr != nil {
-			if isDisallowedError(rtnErr) {
-				ses.Infof(ctx, "[EOF] dropAccount %s sql: %s", da.Name, dropMoIndexes)
-			}
 			return rtnErr
 		}
 
@@ -3850,27 +3823,18 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 		// drop mo_catalog.mo_table_partitions under general tenant
 		rtnErr = bh.Exec(deleteCtx, dropMoTablePartitions)
 		if rtnErr != nil {
-			if isDisallowedError(rtnErr) {
-				ses.Infof(ctx, "[EOF] dropAccount %s sql: %s", da.Name, dropMoTablePartitions)
-			}
 			return rtnErr
 		}
 
 		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, dropMoRetention)
 		rtnErr = bh.Exec(deleteCtx, dropMoRetention)
 		if rtnErr != nil {
-			if isDisallowedError(rtnErr) {
-				ses.Infof(ctx, "[EOF] dropAccount %s sql: %s", da.Name, dropMoRetention)
-			}
 			return rtnErr
 		}
 
 		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, dropMoForeignKeys)
 		rtnErr = bh.Exec(deleteCtx, dropMoForeignKeys)
 		if rtnErr != nil {
-			if isDisallowedError(rtnErr) {
-				ses.Infof(ctx, "[EOF] dropAccount %s sql: %s", da.Name, dropMoForeignKeys)
-			}
 			return rtnErr
 		}
 
@@ -3879,9 +3843,6 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, sql)
 		rtnErr = bh.Exec(ctx, sql)
 		if rtnErr != nil {
-			if isDisallowedError(rtnErr) {
-				ses.Infof(ctx, "[EOF] dropAccount %s sql: %s", da.Name, sql)
-			}
 			return rtnErr
 		}
 
@@ -3893,9 +3854,6 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, sql)
 		rtnErr = bh.Exec(ctx, sql)
 		if rtnErr != nil {
-			if isDisallowedError(rtnErr) {
-				ses.Infof(ctx, "[EOF] dropAccount %s sql: %s", da.Name, sql)
-			}
 			return rtnErr
 		}
 
@@ -3905,9 +3863,6 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, sql)
 		rtnErr = bh.Exec(ctx, sql)
 		if rtnErr != nil {
-			if isDisallowedError(rtnErr) {
-				ses.Infof(ctx, "[EOF] dropAccount %s sql: %s", da.Name, sql)
-			}
 			return rtnErr
 		}
 
@@ -3933,9 +3888,6 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 			ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, sql)
 			rtnErr = bh.Exec(ctx, sql)
 			if rtnErr != nil {
-				if isDisallowedError(rtnErr) {
-					ses.Infof(ctx, "[EOF] dropAccount %s sql: %s", da.Name, sql)
-				}
 				return rtnErr
 			}
 		}
