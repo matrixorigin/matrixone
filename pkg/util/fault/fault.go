@@ -60,7 +60,7 @@ const (
 	PanicUseMoErr = 1
 )
 
-// Domain FaultScope is the business domain of injection
+// Domain is the business domain of injection
 // !!!It always less than DomainMax
 type Domain int
 
