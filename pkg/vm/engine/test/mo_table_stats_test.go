@@ -18,7 +18,6 @@ import (
 	"context"
 	"fmt"
 	"testing"
-	"time"
 
 	"github.com/lni/goutils/leaktest"
 	catalog2 "github.com/matrixorigin/matrixone/pkg/catalog"
@@ -159,7 +158,7 @@ func TestMoTableStatsMoCtl2(t *testing.T) {
 	_, err, _ := e.QueryTableStats(context.Background(),
 		[]int{disttae.TableStatsTableRows},
 		[]uint64{0}, []uint64{dbId}, []uint64{tblId},
-		false, false, nil)
+		false, false)
 	require.NotNil(t, err)
 
 	ret = e.HandleMoTableStatsCtl("use_old_impl:true")
@@ -168,7 +167,7 @@ func TestMoTableStatsMoCtl2(t *testing.T) {
 	_, err, _ = e.QueryTableStats(context.Background(),
 		[]int{disttae.TableStatsTableRows},
 		[]uint64{0}, []uint64{dbId}, []uint64{tblId},
-		false, false, nil)
+		false, false)
 	require.NoError(t, err)
 
 	ret = e.HandleMoTableStatsCtl("use_old_impl:false")
@@ -180,7 +179,7 @@ func TestMoTableStatsMoCtl2(t *testing.T) {
 	_, err, _ = e.QueryTableStats(context.Background(),
 		[]int{disttae.TableStatsTableRows},
 		[]uint64{0}, []uint64{dbId}, []uint64{tblId},
-		true, false, nil)
+		true, false)
 	require.NotNil(t, err)
 
 	ret = e.HandleMoTableStatsCtl("move_on: false")
@@ -189,7 +188,7 @@ func TestMoTableStatsMoCtl2(t *testing.T) {
 	_, err, _ = e.QueryTableStats(context.Background(),
 		[]int{disttae.TableStatsTableRows},
 		[]uint64{0}, []uint64{dbId}, []uint64{tblId},
-		false, true, nil)
+		false, true)
 	require.NotNil(t, err)
 
 	ret = e.HandleMoTableStatsCtl("echo_current_setting:false")
@@ -222,14 +221,14 @@ func TestHandleGetChangedList(t *testing.T) {
 
 	schema := catalog.MockSchemaAll(3, 2)
 
-	rowsCnt := 81920
+	rowsCnt := 8192 * 2
 
 	dbBatch := catalog.MockBatch(schema, rowsCnt)
 	defer dbBatch.Close()
 	bat := containers.ToCNBatch(dbBatch)
 
 	dbName := "db1"
-	tblNames := []string{"test1", "test2", "test3", "test4"}
+	tblNames := []string{"test1", "test2", "test3"}
 
 	txnop := p.StartCNTxn()
 	p.CreateDB(txnop, dbName)
@@ -248,26 +247,28 @@ func TestHandleGetChangedList(t *testing.T) {
 		testutil2.CompactBlocks(t, 0, p.T.GetDB(), dbName, schema, false)
 		txn, _ := p.T.StartTxn()
 		ts := txn.GetStartTS()
-		require.NoError(t, p.T.GetDB().ForceCheckpoint(p.Ctx, ts.Next(), time.Second*10))
+		require.NoError(t, p.T.GetDB().ForceCheckpoint(p.Ctx, ts.Next()))
 		require.NoError(t, txn.Commit(p.Ctx))
 
 		dbId = rel.GetDBID(p.Ctx)
 		tblIds = append(tblIds, rel.GetTableID(p.Ctx))
 	}
 
-	req := &cmd_util.GetChangedTableListReq{}
+	req := &cmd_util.GetChangedTableListReq{
+		Type: cmd_util.CheckChanged,
+	}
 	resp := &cmd_util.GetChangedTableListResp{}
 
 	for i := range tblIds {
 		ts := timestamp.Timestamp{}
-		req.From = append(req.From, &ts)
+		req.TS = append(req.TS, &ts)
 		req.AccIds = append(req.AccIds, 0)
 		req.TableIds = append(req.TableIds, tblIds[i])
 		req.DatabaseIds = append(req.DatabaseIds, dbId)
 	}
 
 	ts := types.MaxTs().ToTimestamp()
-	req.From[len(tblNames)-1] = &ts
+	req.TS[len(tblNames)-1] = &ts
 
 	_, err := p.T.GetRPCHandle().HandleGetChangedTableList(p.Ctx, txn.TxnMeta{}, req, resp)
 	require.NoError(t, err)

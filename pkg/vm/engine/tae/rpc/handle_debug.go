@@ -32,13 +32,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -47,6 +47,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
 	"go.uber.org/zap"
+)
+
+const (
+	DefaultTimeout = time.Minute * 3 / 2
 )
 
 ///
@@ -209,46 +213,21 @@ func (h *Handle) HandleStorageUsage(ctx context.Context, meta txn.TxnMeta,
 	return nil, nil
 }
 
-func (h *Handle) HandleGetChangedTableList(
+func getChangedListFromCheckpoints(
 	ctx context.Context,
-	meta txn.TxnMeta,
-	req *cmd_util.GetChangedTableListReq,
-	resp *cmd_util.GetChangedTableListResp,
-) (func(), error) {
-
-	isTheTblIWant := func(tblId uint64, commit types.TS) bool {
-		if slices.Index(resp.TableIds, tblId) != -1 {
-			// already exist
-			return false
-		}
-
-		if idx := slices.Index(req.TableIds, tblId); idx == -1 {
-			// not the tbl I want to check
-			return false
-		} else {
-			ts := types.TimestampToTS(*req.From[idx])
-			if commit.LT(&ts) {
-				return false
-			}
-		}
-
-		return true
-	}
-
-	minFrom := slices.MinFunc(req.From, func(a, b *timestamp.Timestamp) int {
-		return a.Compare(*b)
-	})
-	from := types.TimestampToTS(*minFrom)
-	now := types.BuildTS(time.Now().UnixNano(), 0)
+	from types.TS,
+	to types.TS,
+	h *Handle,
+	isTheTblIWant func(exists []uint64, tblId uint64, ts types.TS) bool,
+) (accIds, dbIds, tblIds []uint64, err error) {
 
 	var (
-		err     error
 		dbEntry *catalog2.DBEntry
 		data    = &logtail.CheckpointData{}
 	)
 
 	logErr := func(e error, hint string) {
-		logutil.Info("handle get changed table list failed",
+		logutil.Info("handle get changed table list from ckp failed",
 			zap.Error(e),
 			zap.String("hint", hint))
 	}
@@ -259,29 +238,28 @@ func (h *Handle) HandleGetChangedTableList(
 			continue
 		}
 
-		ckpEnd := ckps[i].GetEnd()
-		if ckpEnd.LT(&from) {
+		if !ckps[i].HasOverlap(from, to) {
 			continue
 		}
 
 		if data, err = ckps[i].PrefetchMetaIdx(ctx, h.GetDB().Runtime.Fs); err != nil {
 			logErr(err, ckps[i].String())
-			return nil, err
+			return
 		}
 
 		if err = ckps[i].ReadMetaIdx(ctx, h.GetDB().Runtime.Fs, data); err != nil {
 			logErr(err, ckps[i].String())
-			return nil, err
+			return
 		}
 
 		if err = ckps[i].Prefetch(ctx, h.GetDB().Runtime.Fs, data); err != nil {
 			logErr(err, ckps[i].String())
-			return nil, err
+			return
 		}
 
 		if err = ckps[i].Read(ctx, h.GetDB().Runtime.Fs, data); err != nil {
 			logErr(err, ckps[i].String())
-			return nil, err
+			return
 		}
 
 		dataObjBat := data.GetObjectBatchs()
@@ -307,50 +285,166 @@ func (h *Handle) HandleGetChangedTableList(
 					//tt := now.ToTimestamp()
 					//resp.Newest = &tt
 
-					return nil, nil
+					err = moerr.NewInternalErrorNoCtx("dbId/tblId/ts vector length not match")
+					return
 				}
 
 				dbId := dbIdVec.Get(k).(uint64)
 				tblId := tblIdVec.Get(k).(uint64)
 				commit := commitVec.Get(k).(types.TS)
 
-				if !isTheTblIWant(tblId, commit) {
+				if !isTheTblIWant(tblIds, tblId, commit) {
 					continue
 				}
 
 				dbEntry, err = h.GetDB().Catalog.GetDatabaseByID(dbId)
 				if err != nil {
 					logErr(err, fmt.Sprintf("get db entry failed: %d", dbId))
-					return nil, err
+					return
 				}
 
-				resp.TableIds = append(resp.TableIds, tblId)
-				resp.DatabaseIds = append(resp.DatabaseIds, dbId)
-				resp.AccIds = append(resp.AccIds, uint64(dbEntry.GetTenantID()))
+				tblIds = append(tblIds, tblId)
+				dbIds = append(dbIds, dbId)
+				accIds = append(accIds, uint64(dbEntry.GetTenantID()))
 			}
 		}
 	}
+	return
+}
 
-	rr := h.db.LogtailMgr.GetReader(from, now)
+func getChangedListFromDirtyTree(
+	ctx context.Context,
+	from types.TS,
+	to types.TS,
+	h *Handle,
+	isTheTblIWant func(exists []uint64, tblId uint64, ts types.TS) bool,
+) (accIds, dbIds, tblIds []uint64, err error) {
 
-	for i := range req.TableIds {
-		tree := rr.GetDirtyByTable(req.DatabaseIds[i], req.TableIds[i])
-		if tree.IsEmpty() {
+	var (
+		dbEntry  *catalog2.DBEntry
+		truncate = h.db.LogtailMgr.GetTruncateTS()
+		reader   *logtail.Reader
+	)
+
+	if truncate.GT(&from) {
+		from = truncate
+	}
+
+	reader = h.db.LogtailMgr.GetReader(from, to)
+	tree, _ := reader.GetDirty()
+
+	for _, v := range tree.Tables {
+		if v == nil || v.IsEmpty() {
 			continue
 		}
 
 		// prev() for ut
-		if !isTheTblIWant(req.TableIds[i], types.MaxTs().Prev()) {
+		if !isTheTblIWant(tblIds, v.ID, types.MaxTs().Prev()) {
 			continue
 		}
 
-		resp.TableIds = append(resp.TableIds, req.TableIds[i])
-		resp.DatabaseIds = append(resp.DatabaseIds, req.DatabaseIds[i])
-		resp.AccIds = append(resp.AccIds, req.AccIds[i])
+		dbEntry, err = h.GetDB().Catalog.GetDatabaseByID(v.DbID)
+		if err != nil {
+			return
+		}
+
+		tblIds = append(tblIds, v.ID)
+		dbIds = append(dbIds, v.DbID)
+		accIds = append(accIds, uint64(dbEntry.GetTenantID()))
 	}
 
-	tt := now.ToTimestamp()
-	resp.Newest = &tt
+	return
+}
+
+func (h *Handle) HandleGetChangedTableList(
+	ctx context.Context,
+	meta txn.TxnMeta,
+	req *cmd_util.GetChangedTableListReq,
+	resp *cmd_util.GetChangedTableListResp,
+) (func(), error) {
+
+	var (
+		to   types.TS
+		from types.TS
+	)
+
+	defer func() {
+		tt := to.ToTimestamp()
+		resp.Newest = &tt
+	}()
+
+	if len(req.TableIds) == 0 && len(req.TS) == 0 {
+		to = types.BuildTS(time.Now().UnixNano(), 0)
+		return nil, nil
+	}
+
+	if req.Type == cmd_util.CheckChanged {
+		to = types.BuildTS(time.Now().UnixNano(), 0)
+		minFrom := slices.MinFunc(req.TS, func(a, b *timestamp.Timestamp) int {
+			return a.Compare(*b)
+		})
+		from = types.TimestampToTS(*minFrom)
+	} else {
+		to = types.TimestampToTS(*req.TS[1])
+		from = types.TimestampToTS(*req.TS[0])
+	}
+
+	var (
+		err    error
+		accIds []uint64
+		dbIds  []uint64
+		tblIds []uint64
+	)
+
+	isTheTblIWant := func(innerExist []uint64, tblId uint64, commit types.TS) bool {
+		if slices.Index(tblIds, tblId) != -1 || slices.Index(innerExist, tblId) != -1 {
+			// already exist
+			return false
+		}
+
+		if req.Type == cmd_util.CheckChanged {
+			if idx := slices.Index(req.TableIds, tblId); idx == -1 {
+				// not the tbl I want to check
+				return false
+			} else {
+				ts := types.TimestampToTS(*req.TS[idx])
+				if commit.LT(&ts) {
+					return false
+				}
+			}
+
+			return true
+
+		} else if req.Type == cmd_util.CollectChanged {
+			// collecting changed list
+			skip := types.MaxTs().Prev()
+			if !commit.Equal(&skip) && (commit.LT(&from) || commit.GT(&to)) {
+				return false
+			}
+
+			return true
+		}
+
+		return false
+	}
+
+	accIds, dbIds, tblIds, err = getChangedListFromCheckpoints(ctx, from, to, h, isTheTblIWant)
+	if err != nil {
+		return nil, err
+	}
+
+	accIds2, dbIds2, tblIds2, err := getChangedListFromDirtyTree(ctx, from, to, h, isTheTblIWant)
+	if err != nil {
+		return nil, err
+	}
+
+	accIds = append(accIds, accIds2...)
+	dbIds = append(dbIds, dbIds2...)
+	tblIds = append(tblIds, tblIds2...)
+
+	resp.TableIds = append(resp.TableIds, tblIds...)
+	resp.AccIds = append(resp.AccIds, accIds...)
+	resp.DatabaseIds = append(resp.DatabaseIds, dbIds...)
 
 	return nil, nil
 }
@@ -359,86 +453,107 @@ func (h *Handle) HandleFlushTable(
 	ctx context.Context,
 	meta txn.TxnMeta,
 	req *cmd_util.FlushTable,
-	resp *api.SyncLogTailResp) (cb func(), err error) {
-
-	// We use current TS instead of transaction ts.
-	// Here, the point of this handle function is to trigger a flush
-	// via mo_ctl.  We mimic the behaviour of a real background flush
-	// currTs := types.TimestampToTS(meta.GetSnapshotTS())
-	currTs := types.BuildTS(time.Now().UTC().UnixNano(), 0)
-
+	resp *api.SyncLogTailResp,
+) (cb func(), err error) {
 	err = h.db.FlushTable(
 		ctx,
 		req.AccessInfo.AccountID,
 		req.DatabaseID,
 		req.TableID,
-		currTs)
-	return nil, err
+		h.db.TxnMgr.Now(),
+	)
+	return
 }
 
 func (h *Handle) HandleForceGlobalCheckpoint(
 	ctx context.Context,
 	meta txn.TxnMeta,
 	req *cmd_util.Checkpoint,
-	resp *api.SyncLogTailResp) (cb func(), err error) {
+	resp *api.SyncLogTailResp,
+) (cb func(), err error) {
+	var (
+		timeout = req.FlushDuration
+		now     = h.db.TxnMgr.Now()
+	)
 
-	timeout := req.FlushDuration
+	if timeout == 0 {
+		timeout = DefaultTimeout
+	}
 
-	currTs := types.BuildTS(time.Now().UTC().UnixNano(), 0)
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 
-	err = h.db.ForceGlobalCheckpoint(ctx, currTs, timeout, 0)
-	return nil, err
+	err = h.db.ForceGlobalCheckpoint(ctx, now, 0)
+	return
 }
 
 func (h *Handle) HandleForceCheckpoint(
 	ctx context.Context,
 	meta txn.TxnMeta,
 	req *cmd_util.Checkpoint,
-	resp *api.SyncLogTailResp) (cb func(), err error) {
+	resp *api.SyncLogTailResp,
+) (cb func(), err error) {
+	var (
+		timeout = req.FlushDuration
+		now     = h.db.TxnMgr.Now()
+	)
 
-	timeout := req.FlushDuration
+	if timeout == 0 {
+		timeout = DefaultTimeout
+	}
 
-	currTs := types.BuildTS(time.Now().UTC().UnixNano(), 0)
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 
-	err = h.db.ForceCheckpoint(ctx, currTs, timeout)
-	return nil, err
+	err = h.db.ForceCheckpoint(ctx, now)
+	return
 }
 
 func (h *Handle) HandleBackup(
 	ctx context.Context,
 	meta txn.TxnMeta,
 	req *cmd_util.Checkpoint,
-	resp *api.SyncLogTailResp) (cb func(), err error) {
+	resp *api.SyncLogTailResp,
+) (cb func(), err error) {
+	var (
+		timeout    = req.FlushDuration
+		backupTime = time.Now().UTC()
+		currTs     = types.BuildTS(backupTime.UnixNano(), 0)
+		locations  string
+		location   string
+	)
 
-	timeout := req.FlushDuration
-
-	backupTime := time.Now().UTC()
-	currTs := types.BuildTS(backupTime.UnixNano(), 0)
-	var locations string
 	locations += backupTime.Format(time.DateTime) + ";"
-	location, err := h.db.ForceCheckpointForBackup(ctx, currTs, timeout)
-	if err != nil {
-		return nil, err
+
+	if timeout == 0 {
+		timeout = DefaultTimeout
 	}
-	compact := h.db.BGCheckpointRunner.GetCompacted()
-	data := h.db.BGCheckpointRunner.GetAllCheckpointsForBackup(compact)
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	if location, err = h.db.ForceCheckpointForBackup(ctx, currTs); err != nil {
+		return
+	}
+
+	compactEntry := h.db.BGCheckpointRunner.GetCompacted()
+	entries := h.db.BGCheckpointRunner.GetAllCheckpointsForBackup(compactEntry)
 	locations += location + ";"
-	for i := range data {
-		locations += data[i].GetLocation().String()
+	for i := range entries {
+		locations += entries[i].GetLocation().String()
 		locations += ":"
-		locations += fmt.Sprintf("%d", data[i].GetVersion())
+		locations += fmt.Sprintf("%d", entries[i].GetVersion())
 		locations += ";"
 	}
 	resp.CkpLocation = locations
-	return nil, err
+	return
 }
 
 func (h *Handle) HandleDiskCleaner(
 	ctx context.Context,
 	meta txn.TxnMeta,
 	req *cmd_util.DiskCleaner,
-	resp *api.SyncLogTailResp) (cb func(), err error) {
-
+	resp *api.SyncLogTailResp,
+) (cb func(), err error) {
 	op := req.Op
 	key := req.Key
 	value := req.Value
@@ -648,7 +763,7 @@ func marshalTransferMaps(
 		req.BookingLoc = req.BookingLoc[blkCnt+1:]
 		locations := req.BookingLoc
 		for _, filepath := range locations {
-			reader, err := blockio.NewFileReader(sid, fs, filepath)
+			reader, err := ioutil.NewFileReader(fs, filepath)
 			if err != nil {
 				return nil, err
 			}

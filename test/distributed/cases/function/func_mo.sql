@@ -54,11 +54,10 @@ select mo_table_size(dbName, tblName) from (select * from testdb_nor.tmp order b
 
 set mo_table_stats.use_old_impl = no;
 
-drop database testdb_nor;
-drop database testdb_sub;
-
+drop database if exists testdb_nor;
+drop database if exists testdb_sub;
 -- @session
 
-drop account acc;
-drop publication pub1;
-drop database testdb;
+drop account if exists acc;
+drop publication if exists pub1;
+drop database if exists testdb;

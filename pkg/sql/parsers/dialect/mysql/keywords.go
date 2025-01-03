@@ -649,5 +649,6 @@ func init() {
 		"apply":                      APPLY,
 		"dedup":                      DEDUP,
 		"savepoint":                  SAVEPOINT,
+		"recovery_window":            RECOVERY_WINDOW,
 	}
 }
