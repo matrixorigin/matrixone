@@ -138,8 +138,9 @@ func insertTable(
 	assert.NoError(t, err)
 	_, err = fillRandomRowidAndZeroTs(bat, e.mp)
 	assert.NoError(t, err)
-	e.catalog.InsertTable(bat)
-	tableItem := e.catalog.GetTableByName(0, did, tname)
+	ccache := e.catalog.Load()
+	ccache.InsertTable(bat)
+	tableItem := ccache.GetTableByName(0, did, tname)
 	assert.NotNil(t, tableItem)
 	defs, err := catalog.GenColumnsFromDefs(
 		0,
