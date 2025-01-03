@@ -703,7 +703,6 @@ func (c *Compile) lockTable() error {
 	for _, tbl := range c.lockTables {
 		typ := plan2.MakeTypeByPlan2Type(tbl.PrimaryColTyp)
 		if len(tbl.PartitionTableIds) == 0 {
-			logutil.Infof("txn %s  tid %d", c.proc.GetTxnOperator().Txn().DebugString(), tbl.TableId)
 			return lockop.LockTable(
 				c.e,
 				c.proc,
@@ -1518,11 +1517,10 @@ func (c *Compile) compileExternScan(n *plan.Node) ([]*Scope, error) {
 		return nil, err
 	}
 
-	strictSqlMode := false
-	//err, strictSqlMode := StrictSqlMode(c.proc)
-	//if err != nil {
-	//	return nil, err
-	//}
+	err, strictSqlMode := StrictSqlMode(c.proc)
+	if err != nil {
+		return nil, err
+	}
 	if param.ScanType == tree.INLINE {
 		return c.compileExternValueScan(n, param, strictSqlMode)
 	}

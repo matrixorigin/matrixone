@@ -118,7 +118,6 @@ message TxnMeta {
     bool                      Mirror       = 10;
     // LockService lock service's service address. Empty if is not pessimistic txn.
     string                    LockService  = 11;
-    uint32 AccountId = 12;
 }
 
 // CNTxnSnapshot snapshot of the cn txn operation.

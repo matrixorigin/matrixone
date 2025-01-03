@@ -137,8 +137,7 @@ func (s *sqlExecutor) ExecTxn(
 	}
 	err = execFunc(exec)
 	if err != nil {
-		txnStr := exec.Txn().Txn().DebugString()
-		logutil.Errorf("internal sql executor txn:%s error: %v", txnStr, err)
+		logutil.Errorf("internal sql executor error: %v", err)
 		return exec.rollback(err)
 	}
 	if err = exec.commit(); err != nil {
@@ -195,9 +194,7 @@ func (s *sqlExecutor) adjustOptions(
 				"",
 				"sql-executor",
 				0),
-			client.WithDisableTrace(!opts.EnableTrace()),
-			client.WithAccountId(opts.AccountID()),
-		)
+			client.WithDisableTrace(!opts.EnableTrace()))
 		txnOp, err := s.txnClient.New(
 			ctx,
 			opts.MinCommittedTS(),

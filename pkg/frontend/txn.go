@@ -60,8 +60,7 @@ func rollbackTxnFunc(ses FeSession, execErr error, execCtx *ExecCtx) error {
 	if ses.GetTxnHandler().InMultiStmtTransactionMode() && ses.GetTxnHandler().InActiveTxn() {
 		ses.cleanCache()
 	}
-	txnInfo := ses.GetTxnHandler().GetTxn().Txn().DebugString()
-	ses.Error(execCtx.reqCtx, execErr.Error(), zap.String("txn", txnInfo))
+	ses.Error(execCtx.reqCtx, execErr.Error())
 	execCtx.txnOpt.byRollback = execCtx.txnOpt.byRollback || isErrorRollbackWholeTxn(execErr)
 	txnErr := ses.GetTxnHandler().Rollback(execCtx)
 	if txnErr != nil {
@@ -390,9 +389,7 @@ func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 			execCtx.ses.GetUUIDString(),
 			connectionID),
 		client.WithSessionInfo(sessionInfo),
-		client.WithBeginAutoCommit(execCtx.txnOpt.byBegin, execCtx.txnOpt.autoCommit),
-		client.WithAccountId(accountID),
-	)
+		client.WithBeginAutoCommit(execCtx.txnOpt.byBegin, execCtx.txnOpt.autoCommit))
 
 	if execCtx.ses.GetFromRealUser() {
 		opts = append(opts,

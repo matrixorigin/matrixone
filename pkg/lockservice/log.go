@@ -18,16 +18,13 @@ import (
 	"bytes"
 	"encoding/hex"
 	"fmt"
-
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
-
 	"github.com/matrixorigin/matrixone/pkg/common/util"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 func getLogger(sid string) *log.MOLogger {
@@ -45,10 +42,10 @@ func logLocalLock(
 		return
 	}
 
-	if logger.Enabled(zap.InfoLevel) {
+	if logger.Enabled(zap.DebugLevel) {
 		logger.Log(
 			"try to lock on local",
-			getLogOptions(zap.InfoLevel),
+			getLogOptions(zap.DebugLevel),
 			txnField(txn),
 			zap.Uint64("table", tableID),
 			bytesArrayField("rows", rows),
@@ -406,9 +403,9 @@ func logDeadLockFound(
 		return
 	}
 
-	if logger.Enabled(zap.InfoLevel) {
+	if logger.Enabled(zap.DebugLevel) {
 		logger.Log("dead lock found",
-			getLogOptions(zap.InfoLevel),
+			getLogOptions(zap.DebugLevel),
 			zap.String("txn", txn.DebugString()),
 			waitTxnArrayField("wait-txn-list", waiters.waitTxns),
 		)
@@ -603,10 +600,10 @@ func logTxnUnlockTable(
 		return
 	}
 
-	if logger.Enabled(zap.InfoLevel) {
+	if logger.Enabled(zap.DebugLevel) {
 		logger.Log(
 			"txn unlock table",
-			getLogOptions(zap.InfoLevel),
+			getLogOptions(zap.DebugLevel),
 			txnField(txn),
 			zap.Uint64("table", table),
 		)
@@ -623,12 +620,12 @@ func logTxnUnlockTableCompleted(
 		return
 	}
 
-	if logger.Enabled(zap.InfoLevel) {
+	if logger.Enabled(zap.DebugLevel) {
 		locks := cs.slice()
 		defer locks.unref()
 		logger.Log(
 			"txn unlock table completed",
-			getLogOptions(zap.InfoLevel),
+			getLogOptions(zap.DebugLevel),
 			txnField(txn),
 			zap.Uint64("table", table),
 			bytesArrayField("rows", locks.values[:locks.len()]),
@@ -645,10 +642,10 @@ func logUnlockTableOnLocal(
 		return
 	}
 
-	if logger.Enabled(zap.InfoLevel) {
+	if logger.Enabled(zap.DebugLevel) {
 		logger.Log(
 			"txn unlock table on local",
-			getLogOptions(zap.InfoLevel),
+			getLogOptions(zap.DebugLevel),
 			txnField(txn),
 			zap.String("bind", bind.DebugString()),
 		)
@@ -954,13 +951,7 @@ func bytesArrayField(name string, values [][]byte) zap.Field {
 	var buffer bytes.Buffer
 	buffer.WriteString("[")
 	for idx, row := range values {
-		unpack, err := types.Unpack(row)
-		if err != nil {
-			buffer.WriteString(fmt.Sprintf("(%x)", row))
-		} else {
-			buffer.WriteString(unpack.String())
-		}
-
+		buffer.WriteString(fmt.Sprintf("%x", row))
 		if idx != len(values)-1 {
 			buffer.WriteString(",")
 		}

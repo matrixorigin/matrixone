@@ -1187,7 +1187,7 @@ const (
 
 	deleteAccountFromMoAccountFormat = `delete from mo_catalog.mo_account where account_name = "%s" order by account_id;`
 
-	lockMoAccountNameFormat = `select * from mo_catalog.__mo_account_lock where account_name = "%s" for update;`
+	lockMoAccountNameFormat = `select account_name from mo_catalog.__mo_account_lock where account_name = "%s" for update;`
 
 	deletePitrFromMoPitrFormat = `delete from mo_catalog.mo_pitr where create_account = %d;`
 
@@ -3767,17 +3767,7 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 
 		prefix = "drop database if exists "
 
-		dbs := make([]string, 0)
 		for db = range databases {
-			if db == "mo_catalog" {
-				continue
-			}
-			dbs = append(dbs, db)
-		}
-
-		//sort.Strings(dbs)
-
-		for _, db = range dbs {
 			if db == "mo_catalog" {
 				continue
 			}

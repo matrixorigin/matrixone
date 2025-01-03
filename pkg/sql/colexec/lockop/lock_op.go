@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
@@ -169,12 +168,6 @@ func performLock(
 	targetIdx int,
 ) error {
 	needRetry := false
-	sort.Slice(lockOp.targets, func(i, j int) bool {
-		return lockOp.targets[i].tableID < lockOp.targets[j].tableID
-	})
-
-	txnInfo := proc.GetTxnOperator().Txn().DebugString()
-
 	for idx, target := range lockOp.targets {
 		if targetIdx != -1 && targetIdx != idx {
 			continue
@@ -182,8 +175,7 @@ func performLock(
 		if proc.GetTxnOperator().LockSkipped(target.tableID, target.mode) {
 			return nil
 		}
-		lockOp.logger.Info("lock",
-			zap.String("txn", txnInfo),
+		lockOp.logger.Debug("lock",
 			zap.Uint64("table", target.tableID),
 			zap.Bool("filter", target.filter != nil),
 			zap.Int32("filter-col", target.filterColIndexInBatch),
@@ -217,14 +209,11 @@ func performLock(
 				WithLockTable(target.lockTable, target.changeDef).
 				WithHasNewVersionInRangeFunc(lockOp.ctr.hasNewVersionInRange),
 		)
-		if lockOp.logger.Enabled(zap.InfoLevel) {
-			lockOp.logger.Info("lock result",
-				zap.String("txn", txnInfo),
+		if lockOp.logger.Enabled(zap.DebugLevel) {
+			lockOp.logger.Debug("lock result",
 				zap.Uint64("table", target.tableID),
-				zap.Bool("filter", target.filter != nil),
-				zap.Int32("filter-col", target.filterColIndexInBatch),
-				zap.Int32("primary-index", target.primaryColumnIndexInBatch),
 				zap.Bool("locked", locked),
+				zap.Int32("primary-index", target.primaryColumnIndexInBatch),
 				zap.String("refresh-ts", refreshTS.DebugString()),
 				zap.Error(err))
 		}
