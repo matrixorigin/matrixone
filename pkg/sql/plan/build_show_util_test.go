@@ -126,9 +126,9 @@ func Test_buildTestShowCreateTable(t *testing.T) {
                                 json1 json DEFAULT NULL,
                                 json2 json DEFAULT NULL,
                                 PRIMARY KEY (id),
-                                FULLTEXT IDX01(json1) WITH PARSER json,
-                                FULLTEXT IDX02(json1,json2) WITH PARSER json)`,
-			want: "CREATE TABLE `src` (\n  `id` bigint NOT NULL,\n  `json1` json DEFAULT NULL,\n  `json2` json DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT `IDX01`(`json1`) WITH PARSER json,\n FULLTEXT `IDX02`(`json1`,`json2`) WITH PARSER json\n)",
+                                FULLTEXT idx01(json1) WITH PARSER json,
+                                FULLTEXT idx02(json1,json2) WITH PARSER json)`,
+			want: "CREATE TABLE `src` (\n  `id` bigint NOT NULL,\n  `json1` json DEFAULT NULL,\n  `json2` json DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT `idx01`(`json1`) WITH PARSER json,\n FULLTEXT `idx02`(`json1`,`json2`) WITH PARSER json\n)",
 		},
 	}
 	for _, tt := range tests {
