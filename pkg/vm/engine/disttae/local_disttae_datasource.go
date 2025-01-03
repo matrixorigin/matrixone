@@ -1072,7 +1072,7 @@ func (ls *LocalDisttaeDataSource) applyPStateTombstoneObjects(
 		return offsets, nil
 	}
 
-	var iter logtailreplay.ObjectsIter
+	var iter objectio.ObjectIter
 	getTombstone := func() (*objectio.ObjectStats, error) {
 		var err error
 		if iter == nil {

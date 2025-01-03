@@ -298,7 +298,7 @@ func FilterTxnObjects(
 	highSelectivityHint bool,
 ) (err error) {
 
-	var iter logtailreplay.ObjectsIter
+	var iter objectio.ObjectIter
 	defer func() {
 		if iter != nil {
 			iter.Close()

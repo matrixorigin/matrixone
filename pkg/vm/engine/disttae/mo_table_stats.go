@@ -2897,7 +2897,7 @@ func collectVisibleData(
 
 	var (
 		dRowIter logtailreplay.RowsIter
-		dObjIter logtailreplay.ObjectsIter
+		dObjIter objectio.ObjectIter
 
 		estimatedOneRowSize float64
 	)
@@ -2966,7 +2966,7 @@ func applyTombstones(
 	pState *logtailreplay.PartitionState,
 ) (err error) {
 	var (
-		tObjIter logtailreplay.ObjectsIter
+		tObjIter objectio.ObjectIter
 
 		hidden  objectio.HiddenColumnSelection
 		release func()

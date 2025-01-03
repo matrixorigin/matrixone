@@ -241,7 +241,7 @@ func (tbl *txnTable) Size(ctx context.Context, columnName string) (uint64, error
 func ForeachVisibleDataObject(
 	state *logtailreplay.PartitionState,
 	ts types.TS,
-	fn func(obj logtailreplay.ObjectEntry) error,
+	fn func(obj objectio.ObjectEntry) error,
 	executor ConcurrentExecutor,
 ) (err error) {
 	iter, err := state.NewObjectsIter(ts, true, false)
@@ -305,7 +305,7 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 		return nil, nil, err
 	}
 	var updateMu sync.Mutex
-	onObjFn := func(obj logtailreplay.ObjectEntry) error {
+	onObjFn := func(obj objectio.ObjectEntry) error {
 		var err error
 		location := obj.Location()
 		if objMeta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
@@ -390,7 +390,7 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 	}
 	infoList := make([]*plan.MetadataScanInfo, 0, state.ApproxDataObjectsNum())
 	var updateMu sync.Mutex
-	onObjFn := func(obj logtailreplay.ObjectEntry) error {
+	onObjFn := func(obj objectio.ObjectEntry) error {
 		createTs, err := obj.CreateTime.Marshal()
 		if err != nil {
 			return err
@@ -796,7 +796,7 @@ func (tbl *txnTable) rangesOnePart(
 
 	if err = ForeachSnapshotObjects(
 		tbl.db.op.SnapshotTS(),
-		func(obj logtailreplay.ObjectEntry, isCommitted bool) (err2 error) {
+		func(obj objectio.ObjectEntry, isCommitted bool) (err2 error) {
 			//if need to shuffle objects
 			if plan2.ShouldSkipObjByShuffle(rangesParam.Rsp, &obj.ObjectStats) {
 				return
@@ -1948,7 +1948,7 @@ func (tbl *txnTable) PKPersistedBetween(
 	delObjs, cObjs := p.GetChangedObjsBetween(from.Next(), types.MaxTs())
 	isFakePK := tbl.GetTableDef(ctx).Pkey.PkeyColName == catalog.FakePrimaryKeyColName
 	if err := ForeachCommittedObjects(cObjs, delObjs, p,
-		func(obj logtailreplay.ObjectEntry) (err2 error) {
+		func(obj objectio.ObjectEntry) (err2 error) {
 			var zmCkecked bool
 			if !isFakePK {
 				// if the object info contains a pk zonemap, fast-check with the zonemap
@@ -2215,7 +2215,7 @@ func (tbl *txnTable) GetNonAppendableObjectStats(ctx context.Context) ([]objecti
 	sortKeyPos, _ := tbl.getSortKeyPosAndSortKeyIsPK()
 	objStats := make([]objectio.ObjectStats, 0, tbl.ApproxObjectsNum(ctx))
 
-	err = ForeachVisibleDataObject(state, snapshot, func(obj logtailreplay.ObjectEntry) error {
+	err = ForeachVisibleDataObject(state, snapshot, func(obj objectio.ObjectEntry) error {
 		if obj.GetAppendable() {
 			return nil
 		}
