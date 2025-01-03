@@ -69,7 +69,7 @@ func score(objs []*catalog.ObjectEntry) float64 {
 		totalDiff += float64(w)
 	}
 	maxDiff := diff(minMaxZM.GetMax(), minMaxZM.GetMin(), minMaxZM.GetType())
-	if maxDiff == math.MaxUint64 {
+	if maxDiff == math.MaxUint64 || len(objs) == 2 {
 		return math.MaxFloat64
 	}
 	return totalDiff / float64(maxDiff)
@@ -146,13 +146,6 @@ func removeOversize(objs []*catalog.ObjectEntry) []*catalog.ObjectEntry {
 		return cmp.Compare(a.OriginSize(), b.OriginSize())
 	})
 
-	if len(objs) == 2 {
-		if uint(objs[1].OriginSize()) < 3*uint(objs[0].OriginSize()) {
-			return objs[:2]
-		}
-		return nil
-	}
-
 	accSize := int(objs[0].OriginSize()) + int(objs[1].OriginSize())
 	i := 2
 	for i < len(objs) {
@@ -167,7 +160,7 @@ func removeOversize(objs []*catalog.ObjectEntry) []*catalog.ObjectEntry {
 		objs[j] = nil
 	}
 	if i == 2 {
-		if uint(objs[1].OriginSize()) < 3*uint(objs[0].OriginSize()) {
+		if objs[1].OriginSize() < 3*objs[0].OriginSize() || len(objs) > 20 /* do not let the first 2 objects block more merging tasks */ {
 			return objs[:2]
 		}
 		return nil
