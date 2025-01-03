@@ -83,7 +83,7 @@ func Test_newCdcSqlFormat(t *testing.T) {
 	assert.Equal(t, wantSql, sql)
 
 	sql2 := getSqlForRetrievingCdcTask(3, id)
-	wantSql2 := "select sink_uri, sink_type, sink_password, tables, filters, no_full, additional_config from mo_catalog.mo_cdc_task where account_id = 3 and task_id = \"019111fd-aed1-70c0-8760-9abadd8f0f4a\""
+	wantSql2 := "select sink_uri, sink_type, sink_password, tables, filters, start_ts, end_ts, no_full, additional_config from mo_catalog.mo_cdc_task where account_id = 3 and task_id = \"019111fd-aed1-70c0-8760-9abadd8f0f4a\""
 	assert.Equal(t, wantSql2, sql2)
 
 	sql3 := getSqlForDbIdAndTableId(10, "db", "t1")
@@ -404,6 +404,10 @@ func Test_handleCreateCdc(t *testing.T) {
 			fmt.Sprintf("%d", cdc2.DefaultMaxSqlLength),
 			cdc2.SendSqlTimeout,
 			cdc2.DefaultSendSqlTimeout,
+			cdc2.StartTs,
+			"2025-01-03 15:20:00",
+			cdc2.EndTs,
+			"2025-01-03 16:20:00",
 		},
 	}
 
@@ -447,6 +451,51 @@ func Test_handleCreateCdc(t *testing.T) {
 			tt.wantErr(t, err, fmt.Sprintf("handleCreateCdc(%v, %v, %v)", tt.args.ses, tt.args.execCtx, tt.args.create))
 		})
 	}
+}
+
+func Test_doCreateCdc_invalidStartTs(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	pu := config.ParameterUnit{}
+	pu.TaskService = &testTaskService{}
+	setPu("", &pu)
+
+	stubCheckPitr := gostub.Stub(&checkPitr, func(ctx context.Context, bh BackgroundExec, accName string, pts *cdc2.PatternTuples) error {
+		return nil
+	})
+	defer stubCheckPitr.Reset()
+
+	create := &tree.CreateCDC{
+		IfNotExists: false,
+		TaskName:    "task1",
+		SourceUri:   "mysql://root:111@127.0.0.1:6001",
+		SinkType:    cdc2.MysqlSink,
+		SinkUri:     "mysql://root:111@127.0.0.1:3306",
+		Tables:      "db1.t1:db1.t1,db1.t2",
+		Option: []string{
+			"Level",
+			cdc2.TableLevel,
+			"Account",
+			sysAccountName,
+			"Exclude",
+			"db2.t3,db2.t4",
+			cdc2.InitSnapshotSplitTxn,
+			"false",
+			cdc2.MaxSqlLength,
+			fmt.Sprintf("%d", cdc2.DefaultMaxSqlLength),
+			cdc2.SendSqlTimeout,
+			cdc2.DefaultSendSqlTimeout,
+			cdc2.StartTs,
+			"123456",
+		},
+	}
+
+	err := doCreateCdc(context.Background(), ses, create)
+	assert.Error(t, err)
 }
 
 type testTaskData struct {
@@ -618,6 +667,8 @@ func (tie *testIE) Query(ctx context.Context, s string, options ie.SessionOverri
 			sinkPwd := ""
 			tables := ""
 			filters := ""
+			startTs := ""
+			endTs := ""
 			noFull := ""
 			splitTxn := ""
 			err = rows.Scan(
@@ -626,6 +677,8 @@ func (tie *testIE) Query(ctx context.Context, s string, options ie.SessionOverri
 				&sinkPwd,
 				&tables,
 				&filters,
+				&startTs,
+				&endTs,
 				&noFull,
 				&splitTxn)
 			if err != nil {
@@ -636,6 +689,8 @@ func (tie *testIE) Query(ctx context.Context, s string, options ie.SessionOverri
 			rowValues = append(rowValues, sinkPwd)
 			rowValues = append(rowValues, tables)
 			rowValues = append(rowValues, filters)
+			rowValues = append(rowValues, startTs)
+			rowValues = append(rowValues, endTs)
 			rowValues = append(rowValues, noFull)
 			rowValues = append(rowValues, splitTxn)
 		} else if idx == mSqlIdx2 {
@@ -849,7 +904,7 @@ func TestRegisterCdcExecutor(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	assert.NoError(t, err)
 	/////////mock sql result
-	sql1 := `select sink_uri, sink_type, sink_password, tables, filters, no_full, additional_config from mo_catalog.mo_cdc_task where account_id = 0 and task_id = "00000000-0000-0000-0000-000000000000"`
+	sql1 := `select sink_uri, sink_type, sink_password, tables, filters, start_ts, end_ts, no_full, additional_config from mo_catalog.mo_cdc_task where account_id = 0 and task_id = "00000000-0000-0000-0000-000000000000"`
 	mock.ExpectQuery(sql1).WillReturnRows(sqlmock.NewRows(
 		[]string{
 			"sink_uri",
@@ -857,6 +912,8 @@ func TestRegisterCdcExecutor(t *testing.T) {
 			"sink_password",
 			"tables",
 			"filters",
+			"start_ts",
+			"end_ts",
 			"no_full",
 			"additional_config",
 		},
@@ -866,6 +923,8 @@ func TestRegisterCdcExecutor(t *testing.T) {
 		pwd,
 		tables,
 		filters,
+		"",
+		"",
 		true,
 		fmt.Sprintf("{\"%s\":%v,\"%s\":\"%s\",\"%s\":%v}",
 			cdc2.InitSnapshotSplitTxn, cdc2.DefaultInitSnapshotSplitTxn,
@@ -2139,24 +2198,6 @@ func Test_handleShowCdc(t *testing.T) {
 	}
 }
 
-func TestCdcTask_ResetWatermarkForTable(t *testing.T) {
-	cdc := &CdcTask{
-		watermarkUpdater: &mockWatermarkUpdater{},
-	}
-
-	info := &cdc2.DbTableInfo{
-		SourceDbId:      0,
-		SourceDbName:    "",
-		SourceTblId:     0,
-		SourceTblName:   "",
-		SourceCreateSql: "",
-		SinkDbName:      "",
-		SinkTblName:     "",
-	}
-
-	assert.NoError(t, cdc.resetWatermarkForTable(info))
-}
-
 func TestCdcTask_Resume(t *testing.T) {
 	cdc := &CdcTask{
 		activeRoutine: cdc2.NewCdcActiveRoutine(),
@@ -2273,7 +2314,7 @@ func TestCdcTask_retrieveCdcTask(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	assert.NoError(t, err)
 
-	sqlx := "select sink_uri, sink_type, sink_password, tables, filters, no_full, additional_config from mo_catalog.mo_cdc_task where account_id = .* and task_id =.*"
+	sqlx := "select sink_uri, sink_type, sink_password, tables, filters, start_ts, end_ts, no_full, additional_config from mo_catalog.mo_cdc_task where account_id = .* and task_id =.*"
 	sinkUri, err := cdc2.JsonEncode(&cdc2.UriInfo{
 		User: "root",
 		Ip:   "127.0.0.1",
@@ -2304,6 +2345,8 @@ func TestCdcTask_retrieveCdcTask(t *testing.T) {
 			"sink_password",
 			"tables",
 			"filters",
+			"start_ts",
+			"end_ts",
 			"no_full",
 			"additional_config",
 		},
@@ -2313,6 +2356,8 @@ func TestCdcTask_retrieveCdcTask(t *testing.T) {
 		pwd,
 		tables,
 		filters,
+		"2006-01-02T15:04:05-07:00",
+		"2006-01-02T15:04:05-07:00",
 		true,
 		"{\"InitSnapshotSplitTxn\": false}",
 	),
@@ -2707,17 +2752,14 @@ func (m mockWatermarkUpdater) GetFromDb(dbName, tblName string) (watermark types
 	return
 }
 
-func (m mockWatermarkUpdater) UpdateMem(string, string, types.TS) {}
+func (m mockWatermarkUpdater) UpdateMem(string, string, types.TS) {
+
+}
 
 func (m mockWatermarkUpdater) DeleteFromMem(string, string) {}
 
 func (m mockWatermarkUpdater) DeleteFromDb(string, string) error {
 	return nil
-}
-
-func (m mockWatermarkUpdater) DeleteAllFromDb() error {
-	//TODO implement me
-	panic("implement me")
 }
 
 func (m mockWatermarkUpdater) SaveErrMsg(string, string, string) error {
@@ -2812,8 +2854,9 @@ func TestCdcTask_addExecPipelineForTable(t *testing.T) {
 	})
 	defer stubSinker.Reset()
 
-	stubReader := gostub.Stub(&cdc2.NewTableReader, func(client.TxnClient, engine.Engine, *mpool.MPool, *fileservice.Pool[*types.Packer],
-		*cdc2.DbTableInfo, cdc2.Sinker, cdc2.IWatermarkUpdater, *plan.TableDef, func(*cdc2.DbTableInfo) error, bool, *sync.Map) cdc2.Reader {
+	stubReader := gostub.Stub(&cdc2.NewTableReader, func(client.TxnClient, engine.Engine, *mpool.MPool,
+		*fileservice.Pool[*types.Packer], *cdc2.DbTableInfo, cdc2.Sinker, cdc2.IWatermarkUpdater, *plan.TableDef, bool,
+		*sync.Map, types.TS, types.TS, bool) cdc2.Reader {
 		return &mockReader{}
 	})
 	defer stubReader.Reset()
@@ -2854,4 +2897,12 @@ func TestCdcTask_checkPitr(t *testing.T) {
 
 	err := checkPitr(context.Background(), nil, "acc1", pts)
 	assert.Error(t, err)
+}
+
+func Test_parseTimestamp(t *testing.T) {
+	_, err := parseTimestamp("2006-01-02 15:04:05", time.Local)
+	assert.NoError(t, err)
+
+	_, err = parseTimestamp("2006-01-02T15:04:05-07:00", nil)
+	assert.NoError(t, err)
 }
