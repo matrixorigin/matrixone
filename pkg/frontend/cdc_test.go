@@ -453,6 +453,51 @@ func Test_handleCreateCdc(t *testing.T) {
 	}
 }
 
+func Test_doCreateCdc_invalidStartTs(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	pu := config.ParameterUnit{}
+	pu.TaskService = &testTaskService{}
+	setPu("", &pu)
+
+	stubCheckPitr := gostub.Stub(&checkPitr, func(ctx context.Context, bh BackgroundExec, accName string, pts *cdc2.PatternTuples) error {
+		return nil
+	})
+	defer stubCheckPitr.Reset()
+
+	create := &tree.CreateCDC{
+		IfNotExists: false,
+		TaskName:    "task1",
+		SourceUri:   "mysql://root:111@127.0.0.1:6001",
+		SinkType:    cdc2.MysqlSink,
+		SinkUri:     "mysql://root:111@127.0.0.1:3306",
+		Tables:      "db1.t1:db1.t1,db1.t2",
+		Option: []string{
+			"Level",
+			cdc2.TableLevel,
+			"Account",
+			sysAccountName,
+			"Exclude",
+			"db2.t3,db2.t4",
+			cdc2.InitSnapshotSplitTxn,
+			"false",
+			cdc2.MaxSqlLength,
+			fmt.Sprintf("%d", cdc2.DefaultMaxSqlLength),
+			cdc2.SendSqlTimeout,
+			cdc2.DefaultSendSqlTimeout,
+			cdc2.StartTs,
+			"123456",
+		},
+	}
+
+	err := doCreateCdc(context.Background(), ses, create)
+	assert.Error(t, err)
+}
+
 type testTaskData struct {
 	metadata task.TaskMetadata
 	details  *task.Details
