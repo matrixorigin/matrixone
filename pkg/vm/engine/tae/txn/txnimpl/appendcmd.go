@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -320,6 +321,17 @@ func (c *AppendCmd) MarshalBinary() (buf []byte, err error) {
 	}
 	buf = bbuf.Bytes()
 	return
+}
+
+func (c *AppendCmd) ApproxMemSize() int {
+	size := 0
+	size += int(unsafe.Sizeof(AppendCmd{}))
+	size += c.Data.ApproxSize()
+	size += c.Node.data.ApproxSize()
+	for range c.Infos {
+		size += int(AppendInfoSize)
+	}
+	return size
 }
 
 func (c *AppendCmd) MarshalBinaryV2() (buf []byte, err error) {

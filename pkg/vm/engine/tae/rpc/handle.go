@@ -345,30 +345,40 @@ func (h *Handle) handleRequests(
 
 	for iter.Next() {
 		if entry, err = iter.Entry(); err != nil {
-			return
+			goto end
 		}
 
 		switch req := entry.(type) {
 		case *pkgcatalog.CreateDatabaseReq:
 			hasDDL = true
-			err = h.HandleCreateDatabase(ctx, txn, req)
+			if err = h.HandleCreateDatabase(ctx, txn, req); err != nil {
+				goto end
+			}
 		case *pkgcatalog.DropDatabaseReq:
 			hasDDL = true
-			err = h.HandleDropDatabase(ctx, txn, req)
+			if err = h.HandleDropDatabase(ctx, txn, req); err != nil {
+				goto end
+			}
 		case *pkgcatalog.CreateTableReq:
 			hasDDL = true
-			err = h.HandleCreateRelation(ctx, txn, req)
+			if err = h.HandleCreateRelation(ctx, txn, req); err != nil {
+				goto end
+			}
 		case *pkgcatalog.DropTableReq:
 			hasDDL = true
-			err = h.HandleDropRelation(ctx, txn, req)
+			if err = h.HandleDropRelation(ctx, txn, req); err != nil {
+				goto end
+			}
 		case *api.AlterTableReq:
 			hasDDL = true
-			err = h.HandleAlterTable(ctx, txn, req)
+			if err = h.HandleAlterTable(ctx, txn, req); err != nil {
+				goto end
+			}
 		case []*api.AlterTableReq:
 			hasDDL = true
 			for _, r := range req {
 				if err = h.HandleAlterTable(ctx, txn, r); err != nil {
-					return
+					goto end
 				}
 			}
 
@@ -381,13 +391,15 @@ func (h *Handle) handleRequests(
 			}
 
 			if wr.Type == cmd_util.EntryDelete {
-				var f []func()
-				if f, err = h.tryLockMergeForBulkDelete([]any{req}, txn); err != nil {
-					logutil.Warn("failed to lock merging", zap.Error(err))
-					return
+				var (
+					f    []func()
+					err2 error
+				)
+				if f, err2 = h.tryLockMergeForBulkDelete([]any{req}, txn); err2 != nil {
+					logutil.Warn("failed to lock merging", zap.Error(err2))
+				} else {
+					releaseF = append(releaseF, f...)
 				}
-
-				releaseF = append(releaseF, f...)
 			}
 
 			var r1, r2, r3, r4 int
@@ -401,14 +413,19 @@ func (h *Handle) handleRequests(
 
 		default:
 			err = moerr.NewNotSupportedf(ctx, "unknown txn request type: %T", req)
+			goto end
 		}
+	}
 
+end:
+	if err != nil {
 		//Need to roll back the txn.
 		if err != nil {
 			txn.Rollback(ctx)
 			return
 		}
 	}
+
 	if inMemoryInsertRows+inMemoryTombstoneRows+persistedTombstoneRows+persistedMemoryInsertRows > 100000 {
 		logutil.Info(
 			"BIG-COMMIT-TRACE-LOG",
@@ -417,6 +434,7 @@ func (h *Handle) handleRequests(
 			zap.Int("in-memory-tombstones", inMemoryTombstoneRows),
 			zap.Int("persisted-tombstones", persistedTombstoneRows),
 			zap.String("txn", txn.String()),
+			zap.Error(err),
 		)
 	}
 	return

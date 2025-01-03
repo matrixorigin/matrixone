@@ -188,6 +188,7 @@ func ReadEntryNodeTuple(createAt, deleteAt types.TS) (un *EntryMVCCNode) {
 }
 
 type BaseNode[T any] interface {
+	ApproxMemSize() int
 	CloneAll() T
 	CloneData() T
 	String() string
@@ -282,6 +283,14 @@ func (e *MVCCNode[T]) PrepareCommit() (err error) {
 	}
 	err = e.EntryMVCCNode.PrepareCommit()
 	return
+}
+
+func (e *MVCCNode[T]) ApproxMemSize() int {
+	size := 0
+	size += int(EntryMVCCNodeSize)
+	size += int(unsafe.Sizeof(txnbase.TxnMVCCNode{}))
+	size += e.BaseNode.ApproxMemSize()
+	return size
 }
 
 func (e *MVCCNode[T]) WriteTo(w io.Writer) (n int64, err error) {

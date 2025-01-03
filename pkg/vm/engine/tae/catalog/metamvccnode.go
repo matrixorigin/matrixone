@@ -67,6 +67,11 @@ func (e *MetadataMVCCNode) Update(un *MetadataMVCCNode) {
 		e.DeltaLoc = un.DeltaLoc
 	}
 }
+
+func (e *MetadataMVCCNode) ApproxMemSize() int {
+	return int(unsafe.Sizeof(MetadataMVCCNode{}))
+}
+
 func (e *MetadataMVCCNode) WriteTo(w io.Writer) (n int64, err error) {
 	var sn int64
 	if sn, err = objectio.WriteBytes(e.MetaLoc, w); err != nil {
@@ -124,6 +129,10 @@ func NewObjectInfoWithObjectStats(stats *objectio.ObjectStats) *ObjectMVCCNode {
 	return &ObjectMVCCNode{
 		ObjectStats: *stats.Clone(),
 	}
+}
+
+func (e *ObjectMVCCNode) ApproxMemSize() int {
+	return 0
 }
 
 func (e *ObjectMVCCNode) CloneAll() *ObjectMVCCNode {

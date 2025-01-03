@@ -643,9 +643,6 @@ func (mgr *TxnManager) preWal(op *OpTxn) bool {
 		mgr.prevPrepareTSInPreparing = op.Txn.GetPrepareTS()
 	}
 
-	store := op.Txn.GetStore()
-
-	store.TriggerTrace(txnif.TracePrepareWalWait)
 	return true
 }
 
@@ -691,68 +688,13 @@ func (mgr *TxnManager) postWal(op *OpTxn, inWal bool) {
 	}
 }
 
-func (mgr *TxnManager) onPrepareWAL(items ...any) {
-	now := time.Now()
-
-	for _, item := range items {
-		op := item.(*OpTxn)
-		store := op.Txn.GetStore()
-		store.TriggerTrace(txnif.TracePrepareWal)
-		var t1, t2, t3, t4, t5 time.Time
-		t1 = time.Now()
-		if op.Txn.GetError() == nil && op.Op == OpCommit || op.Op == OpPrepare {
-			if err := op.Txn.PrepareWAL(); err != nil {
-				panic(err)
-			}
-
-			t2 = time.Now()
-
-			if !op.Txn.IsReplay() {
-				if !mgr.prevPrepareTSInPrepareWAL.IsEmpty() {
-					prepareTS := op.Txn.GetPrepareTS()
-					if prepareTS.LT(&mgr.prevPrepareTSInPrepareWAL) {
-						panic(fmt.Sprintf("timestamp rollback current %v, previous %v", op.Txn.GetPrepareTS().ToString(), mgr.prevPrepareTSInPrepareWAL.ToString()))
-					}
-				}
-				mgr.prevPrepareTSInPrepareWAL = op.Txn.GetPrepareTS()
-			}
-
-			mgr.CommitListener.OnEndPrepareWAL(op.Txn)
-			t3 = time.Now()
-		}
-
-		t4 = time.Now()
-		store.TriggerTrace(txnif.TracePreapredWait)
-		if _, err := mgr.applyQueue.Enqueue(op); err != nil {
-			panic(err)
-		}
-		t5 = time.Now()
-
-		if t5.Sub(t1) > time.Second {
-			logutil.Warn(
-				"SLOW-LOG",
-				zap.String("txn", op.Txn.String()),
-				zap.Duration("prepare-wal-duration", t2.Sub(t1)),
-				zap.Duration("end-prepare-duration", t3.Sub(t2)),
-				zap.Duration("enqueue-flush-duration", t5.Sub(t4)),
-			)
-		}
-	}
-	common.DoIfDebugEnabled(func() {
-		logutil.Debug("[prepareWAL]",
-			common.NameSpaceField("txns"),
-			common.DurationField(time.Since(now)),
-			common.CountField(len(items)))
-	})
-}
-
 // 1PC and 2PC
 func (mgr *TxnManager) onApply(items ...any) {
 	now := time.Now()
 	for _, item := range items {
 		op := item.(*OpTxn)
 		store := op.Txn.GetStore()
-		store.TriggerTrace(txnif.TracePrepared)
+		store.TriggerTrace(txnif.TraceOnApply)
 		mgr.workers.Submit(func() {
 			//Notice that WaitWalAndTail do nothing when op is OpRollback
 			if err := op.Txn.WaitWalAndTail(op.ctx); err != nil {
@@ -792,14 +734,17 @@ func (mgr *TxnManager) onWalAndApply(items ...any) {
 	for _, item := range items {
 		op := item.(*OpTxn)
 
+		op.Txn.GetStore().TriggerTrace(txnif.TracePreWal)
 		// get things done before the writing ahead log
 		if !mgr.preWal(op) {
 			continue
 		}
 
+		op.Txn.GetStore().TriggerTrace(txnif.TraceOnWal)
 		// getting the wal ready and getting the wal flush down
 		inWal := mgr.onWal(op)
 
+		op.Txn.GetStore().TriggerTrace(txnif.TracePostWal)
 		// waiting the wal done and do some things
 		mgr.postWal(op, inWal)
 	}

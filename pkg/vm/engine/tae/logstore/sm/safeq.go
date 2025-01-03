@@ -19,6 +19,7 @@ import (
 	"runtime"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 const (
@@ -64,31 +65,51 @@ func NewNonBlockingQueue(queueSize int, batchSize int, onItem OnItemsCB) *safeQu
 func (q *safeQueue) Start() {
 	q.state.Store(Running)
 	q.wg.Add(1)
+
+	q.batchSize = 10
+
 	items := make([]any, 0, q.batchSize)
+
+	ticker := time.NewTicker(time.Millisecond)
+	batchProcess := func() {
+		if q.onItemsCB != nil {
+			cnt := len(items)
+			q.onItemsCB(items...)
+			q.pending.Add(-1 * int64(cnt))
+		}
+		items = items[:0]
+		ticker.Reset(time.Millisecond * 10)
+	}
+
 	go func() {
 		defer q.wg.Done()
 		for {
 			select {
 			case <-q.ctx.Done():
 				return
-			case item := <-q.queue:
-				if q.onItemsCB == nil {
-					continue
+			case <-ticker.C:
+				if len(items) > 0 {
+					batchProcess()
 				}
+			case item := <-q.queue:
 				items = append(items, item)
+
 			Left:
 				for i := 0; i < q.batchSize-1; i++ {
 					select {
 					case item = <-q.queue:
 						items = append(items, item)
 					default:
+						if len(items) >= q.batchSize {
+							batchProcess()
+						}
 						break Left
 					}
 				}
-				cnt := len(items)
-				q.onItemsCB(items...)
-				items = items[:0]
-				q.pending.Add(-1 * int64(cnt))
+
+				if len(items) >= q.batchSize {
+					batchProcess()
+				}
 			}
 		}
 	}()

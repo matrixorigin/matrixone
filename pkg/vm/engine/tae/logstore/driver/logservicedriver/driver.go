@@ -103,7 +103,7 @@ func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
 		appendPool:      pool,
 	}
 	d.closeCtx, d.closeCancel = context.WithCancel(context.Background())
-	d.preAppendLoop = sm.NewSafeQueue(10000, 10000, d.onPreAppend)
+	d.preAppendLoop = sm.NewSafeQueue(10000, 100, d.onPreAppend)
 	d.preAppendLoop.Start()
 	d.appendedLoop = sm.NewLoop(d.appendedQueue, d.postAppendQueue, d.onAppendedQueue, 10000)
 	d.appendedLoop.Start()

@@ -17,12 +17,11 @@ package txnentries
 import (
 	"bytes"
 	"fmt"
-	"io"
-
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
+	"io"
 )
 
 type mergeObjectsCmd struct {
@@ -63,6 +62,12 @@ func (cmd *mergeObjectsCmd) WriteTo(w io.Writer) (n int64, err error) {
 	n = 2
 	return
 }
+
+func (cmd *mergeObjectsCmd) ApproxMemSize() int {
+	size := 36*2 + 8 + 4
+	return size
+}
+
 func (cmd *mergeObjectsCmd) ReadFrom(r io.Reader) (n int64, err error) {
 	return
 }

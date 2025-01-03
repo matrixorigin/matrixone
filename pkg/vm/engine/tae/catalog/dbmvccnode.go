@@ -39,6 +39,10 @@ func (e *EmptyMVCCNode) String() string {
 	return ""
 }
 
+func (e *EmptyMVCCNode) ApproxMemSize() int {
+	return 0
+}
+
 // for create drop in one txn
 func (e *EmptyMVCCNode) Update(vun *EmptyMVCCNode) {}
 

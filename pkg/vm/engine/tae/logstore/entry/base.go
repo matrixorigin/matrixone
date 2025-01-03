@@ -231,6 +231,8 @@ type Base struct {
 	printTime bool
 	err       error
 
+	approxCmdMemSize int
+
 	preGroupWalCallback []func() error
 }
 
@@ -316,6 +318,14 @@ func (b *Base) GetPayload() []byte {
 
 func (b *Base) SetInfo(info any) {
 	b.info = info
+}
+
+func (b *Base) SetCmdApproxMemSize(size int) {
+	b.approxCmdMemSize = size
+}
+
+func (b *Base) GetCmdApproxMemSize() int {
+	return b.approxCmdMemSize
 }
 
 func (b *Base) GetInfo() any {

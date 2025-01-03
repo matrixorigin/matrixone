@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -202,6 +203,12 @@ func (c *UpdateCmd) VerboseString() string {
 }
 
 func (c *UpdateCmd) GetType() uint16 { return c.cmdType }
+
+func (c *UpdateCmd) ApproxMemSize() int {
+	size := 0
+	size += int(unsafe.Sizeof(UpdateCmd{}))
+	return size
+}
 
 func (c *UpdateCmd) WriteTo(w io.Writer) (n int64, err error) {
 	var sn int64

@@ -19,6 +19,7 @@ import (
 )
 
 type TxnCmd interface {
+	ApproxMemSize() int
 	MarshalBinary() ([]byte, error)
 	UnmarshalBinary([]byte) error
 	GetType() uint16

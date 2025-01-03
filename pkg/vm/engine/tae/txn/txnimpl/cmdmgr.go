@@ -64,6 +64,7 @@ func (mgr *commandManager) ApplyTxnRecord(store *txnStore) (logEntry entry.Entry
 	logEntry = entry.GetBase()
 	info := &entry.Info{Group: wal.GroupPrepare}
 	logEntry.SetInfo(info)
+	logEntry.SetCmdApproxMemSize(mgr.cmd.ApproxMemSize())
 
 	// the wal ordered by the lsn is needed in the replay, so
 	// this allocation cannot be done in the callback.

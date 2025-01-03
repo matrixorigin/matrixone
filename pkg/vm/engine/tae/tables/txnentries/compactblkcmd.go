@@ -17,6 +17,7 @@ package txnentries
 import (
 	"bytes"
 	"io"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -54,6 +55,12 @@ func (cmd *compactBlockCmd) WriteTo(w io.Writer) (n int64, err error) {
 	n = 2
 	return
 }
+
+func (cmd *compactBlockCmd) ApproxMemSize() int {
+	size := int(unsafe.Sizeof(compactBlockCmd{}))
+	return size
+}
+
 func (cmd *compactBlockCmd) ReadFrom(r io.Reader) (n int64, err error) {
 	return
 }
