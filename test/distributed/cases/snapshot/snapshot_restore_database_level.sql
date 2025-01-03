@@ -18,7 +18,7 @@ INSERT INTO users (username, email, password) VALUES ('emily_adams', 'emily.adam
 select count(*) from snapshot_read.test_snapshot_read;
 select count(*) from snapshot_read.users;
 drop snapshot if exists sp_01;
-create snapshot sp_01 for account sys;
+create snapshot sp_01 for account;
 delete from test_snapshot_read where a <= 50;
 DELETE FROM  users where email = 'john@example.com';
 UPDATE users SET password = 'newsecurepassword123' WHERE email = 'alice.jones@gmail.com';
@@ -53,7 +53,7 @@ INSERT INTO users (username, email, password) VALUES ('emily_adams', 'emily.adam
 select count(*) from snapshot_read.test_snapshot_read;
 select count(*) from snapshot_read.users;
 drop snapshot if exists sp_01;
-create snapshot sp_01 for account sys;
+create snapshot sp_01 for account;
 
 drop table users;
 drop table test_snapshot_read;
@@ -92,7 +92,7 @@ INSERT INTO users (username, email, password) VALUES ('emily_adams', 'emily.adam
 select count(*) from snapshot_read.test_snapshot_read;
 select count(*) from snapshot_read.users;
 drop snapshot if exists sp_01;
-create snapshot sp_01 for account sys;
+create snapshot sp_01 for account;
 
 drop database snapshot_read;
 
