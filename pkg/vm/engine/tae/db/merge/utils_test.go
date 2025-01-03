@@ -41,10 +41,11 @@ func TestScore(t *testing.T) {
 	require.Less(t, 1.1, score([]*catalog.ObjectEntry{o1, o1}))
 	require.Less(t, 1.1, score([]*catalog.ObjectEntry{o1, o2}))
 	require.Less(t, 1.1, score([]*catalog.ObjectEntry{o1, o3}))
+	require.Less(t, 1.1, score([]*catalog.ObjectEntry{o1, o5}))
+
 	// should not merge
-	require.Greater(t, 1.1, score([]*catalog.ObjectEntry{o1, o4}))
+	require.Greater(t, 1.1, score([]*catalog.ObjectEntry{o1, o3, o4}))
 	require.Greater(t, 1.1, score([]*catalog.ObjectEntry{o1, o2, o4}))
-	require.Greater(t, 1.1, score([]*catalog.ObjectEntry{o1, o5}))
 
 	o6 := newTestVarcharObjectEntry(t, "a", "z", 1)
 	o7 := newTestVarcharObjectEntry(t, "b", "y", 1)
@@ -61,6 +62,19 @@ func TestRemoveOversize(t *testing.T) {
 	require.ElementsMatch(t, []*catalog.ObjectEntry{o1, o2}, removeOversize([]*catalog.ObjectEntry{o1, o2}))
 	require.ElementsMatch(t, []*catalog.ObjectEntry{o1, o2}, removeOversize([]*catalog.ObjectEntry{o5, o1, o2}))
 	require.ElementsMatch(t, nil, removeOversize([]*catalog.ObjectEntry{o1, o3}))
+
+	os := []*catalog.ObjectEntry{}
+	sizes := []uint32{}
+	for i := 0; i < 100; i++ {
+		sizes = append(sizes, uint32(i+1000))
+	}
+	sizes[0] = 1
+	sizes[1] = 10
+	sizes[2] = 100
+	for i := 0; i < 100; i++ {
+		os = append(os, newSortedTestObjectEntry(t, 0, 0, sizes[i]))
+	}
+	require.ElementsMatch(t, []*catalog.ObjectEntry{os[0], os[1]}, removeOversize(os))
 }
 
 func TestDiff(t *testing.T) {
