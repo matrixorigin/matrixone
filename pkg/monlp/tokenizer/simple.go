@@ -141,15 +141,15 @@ func (t *SimpleTokenizer) outputLatin(pos int, yield func(Token) bool) {
 	if pos <= t.begin+MAX_TOKEN_SIZE {
 		bs = t.input[t.begin:pos]
 	} else {
-		if t.input[t.begin+MAX_TOKEN_SIZE] <= 127 {
+		if t.input[t.begin+MAX_TOKEN_SIZE-1] <= 127 {
 			// last character is ascii
 			bs = t.input[t.begin : t.begin+MAX_TOKEN_SIZE]
 		} else {
 			// find the leading byte
-			n := 2
-			for i := 1; i < 4; i++ {
+			n := 1
+			for i := 0; i < 4; i++ {
 				// leading byte must have value at least 192 (binary 11000000)
-				if t.input[t.begin+MAX_TOKEN_SIZE-i]&192 != 0 {
+				if t.input[t.begin+MAX_TOKEN_SIZE-i-1] >= 192 {
 					break
 				}
 				n++
