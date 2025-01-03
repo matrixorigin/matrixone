@@ -18,15 +18,14 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"go.uber.org/zap"
 	"io"
 	"net"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
-	"unsafe"
-
-	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -114,16 +113,16 @@ func GetsockoptTCPInfo(tcpConn *net.TCPConn, tcpInfo *syscall.TCPInfo) (uint8, e
 	}()
 
 	fd := file.Fd()
-	size := unsafe.Sizeof(*tcpInfo)
+	size := reflect.TypeOf(*tcpInfo).Size()
 	_, _, errno := syscall.Syscall6(syscall.SYS_GETSOCKOPT, fd, syscall.SOL_TCP, syscall.TCP_INFO,
-		uintptr(unsafe.Pointer(tcpInfo)), uintptr(unsafe.Pointer(&size)), 0)
+		reflect.ValueOf(tcpInfo).Pointer(), reflect.ValueOf(&size).Pointer(), 0)
 	if errno != 0 {
 		return 0, errno
 	}
 	return tcpInfo.State, nil
 }
 
-func (mo *MOServer) isConnected() {
+func isConnected(connMap *sync.Map) {
 	defer func() {
 		if pErr := recover(); pErr != nil {
 			err := moerr.ConvertPanicError(context.Background(), pErr)
@@ -133,7 +132,7 @@ func (mo *MOServer) isConnected() {
 
 	tcpConnStatus := make(map[*net.TCPConn]uint8)
 	tcpInfo := syscall.TCPInfo{}
-	mo.connMap.Range(func(key, value any) bool {
+	connMap.Range(func(key, value any) bool {
 		tcpConn := key.(*net.TCPConn)
 		tcpState, err := GetsockoptTCPInfo(tcpConn, &tcpInfo)
 		if err != nil {
@@ -151,11 +150,11 @@ func (mo *MOServer) isConnected() {
 	})
 
 	for key, value := range tcpConnStatus {
-		cancel, ok := mo.connMap.Load(key)
+		cancel, ok := connMap.Load(key)
 		if ok {
 			TCPAddr := key.RemoteAddr().String()
 			cancel.(context.CancelFunc)()
-			mo.connMap.Delete(key)
+			connMap.Delete(key)
 			switch value {
 			case TCP_LAST_ACK:
 				logutil.Infof("Connection %s is terminated by TCP_LAST_ACK", TCPAddr)
@@ -188,14 +187,17 @@ func (mo *MOServer) checkConnected(ctx context.Context) {
 				logutil.Debugf("Goruntine %d is checking TCP status", GetRoutineId())
 			default:
 			}
-			mo.isConnected()
+			isConnected(&mo.connMap)
 			time.Sleep(checkInterval * time.Second)
 		}
 	}
 }
 
 func (mo *MOServer) ClearConnMap() {
-	mo.connMap = sync.Map{}
+	mo.connMap.Range(func(key, value any) bool {
+		mo.connMap.Delete(key)
+		return true
+	})
 }
 
 func (mo *MOServer) GetRoutineManager() *RoutineManager {
