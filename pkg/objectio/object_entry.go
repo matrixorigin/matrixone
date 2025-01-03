@@ -27,6 +27,8 @@ type ObjectList interface {
 		onlyVisible bool,
 		visitTombstone bool,
 	) (ObjectIter, error)
+
+	IsNil() bool
 }
 
 type ObjectIter interface {

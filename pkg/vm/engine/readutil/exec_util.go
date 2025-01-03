@@ -306,7 +306,7 @@ func FilterTxnObjects(
 
 	var getNextStats func() (objectio.ObjectStats, error)
 
-	if objectList != nil {
+	if !objectList.IsNil() {
 		getNextStats = func() (objectio.ObjectStats, error) {
 			if iter == nil {
 				iter, err = objectList.NewObjectsIter(

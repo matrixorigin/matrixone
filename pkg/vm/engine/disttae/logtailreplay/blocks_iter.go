@@ -116,11 +116,15 @@ func (p *PartitionState) newDataObjectIter(
 	return ret, nil
 }
 
+func (p *PartitionState) IsNil() bool {
+	return p == nil
+}
+
 func (p *PartitionState) NewObjectsIter(
 	snapshot types.TS,
 	onlyVisible bool,
-	visitTombstone bool) (objectio.ObjectIter, error) {
-
+	visitTombstone bool,
+) (objectio.ObjectIter, error) {
 	if !p.IsEmpty() && snapshot.LT(&p.start) {
 		logutil.Infof("NewObjectsIter: tid:%v, ps:%p, snapshot ts:%s, minTS:%s",
 			p.tid, p, snapshot.ToString(), p.start.ToString())
