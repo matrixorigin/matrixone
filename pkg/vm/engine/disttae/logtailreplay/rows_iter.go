@@ -17,12 +17,12 @@ package logtailreplay
 import (
 	"bytes"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/tidwall/btree"
 )
 
@@ -626,17 +626,17 @@ func buildSpec(op int, keys [][]byte) PrimaryKeyMatchSpec {
 	case function.GREAT_EQUAL, function.GREAT_THAN:
 		return GreatKind(keys[0], op == function.GREAT_EQUAL)
 
-	case function.BETWEEN, ioutil.RangeLeftOpen,
-		ioutil.RangeRightOpen, ioutil.RangeBothOpen, function.PREFIX_BETWEEN:
+	case function.BETWEEN, readutil.RangeLeftOpen,
+		readutil.RangeRightOpen, readutil.RangeBothOpen, function.PREFIX_BETWEEN:
 		var kind int
 		switch op {
 		case function.BETWEEN:
 			kind = 0
-		case ioutil.RangeLeftOpen:
+		case readutil.RangeLeftOpen:
 			kind = 1
-		case ioutil.RangeRightOpen:
+		case readutil.RangeRightOpen:
 			kind = 2
-		case ioutil.RangeBothOpen:
+		case readutil.RangeBothOpen:
 			kind = 3
 		case function.PREFIX_BETWEEN:
 			kind = 4

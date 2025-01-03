@@ -12,12 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package engine_util
+package readutil
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"strconv"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"

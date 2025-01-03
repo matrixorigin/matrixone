@@ -29,7 +29,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 )
 
 const DefaultLoadParallism = 20
@@ -187,7 +187,7 @@ func (h *CheckpointChangesHandle) initReader(ctx context.Context) (err error) {
 	}
 
 	var blockList objectio.BlockInfoSlice
-	if _, err = engine_util.TryFastFilterBlocks(
+	if _, err = readutil.TryFastFilterBlocks(
 		ctx,
 		h.end.ToTimestamp(),
 		tblDef,
@@ -201,7 +201,7 @@ func (h *CheckpointChangesHandle) initReader(ctx context.Context) (err error) {
 	); err != nil {
 		return
 	}
-	relData := engine_util.NewBlockListRelationData(1)
+	relData := readutil.NewBlockListRelationData(1)
 	h.blockList = blockList
 	for i, end := 0, blockList.Len(); i < end; i++ {
 		relData.AppendBlockInfo(blockList.Get(i))

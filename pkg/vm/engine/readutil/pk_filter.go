@@ -12,11 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package engine_util
+package readutil
 
 import (
 	"bytes"
-	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -324,16 +323,16 @@ func ConstructBlockPKFilter(
 			unSortedSearchFunc = vector.OrderedSearchOffsetsByGreat(types.DecodeEnum(basePKFilter.LB), closed, false)
 		}
 
-	case function.BETWEEN, ioutil.RangeLeftOpen, ioutil.RangeRightOpen, ioutil.RangeBothOpen:
+	case function.BETWEEN, RangeLeftOpen, RangeRightOpen, RangeBothOpen:
 		var hint int
 		switch basePKFilter.Op {
 		case function.BETWEEN:
 			hint = 0
-		case ioutil.RangeLeftOpen:
+		case RangeLeftOpen:
 			hint = 1
-		case ioutil.RangeRightOpen:
+		case RangeRightOpen:
 			hint = 2
-		case ioutil.RangeBothOpen:
+		case RangeBothOpen:
 			hint = 3
 		}
 		switch basePKFilter.Oid {
@@ -696,7 +695,7 @@ func mergeFilters(
 				finalFilter.LB = left.LB
 				finalFilter.UB = right.LB
 				if right.Op == function.LESS_THAN {
-					finalFilter.Op = ioutil.RangeRightOpen
+					finalFilter.Op = RangeRightOpen
 				} else {
 					finalFilter.Op = function.BETWEEN
 				}
@@ -728,9 +727,9 @@ func mergeFilters(
 				finalFilter.LB = left.LB
 				finalFilter.UB = right.LB
 				if right.Op == function.LESS_THAN {
-					finalFilter.Op = ioutil.RangeBothOpen
+					finalFilter.Op = RangeBothOpen
 				} else {
-					finalFilter.Op = ioutil.RangeLeftOpen
+					finalFilter.Op = RangeLeftOpen
 				}
 				finalFilter.Valid = true
 
@@ -753,7 +752,7 @@ func mergeFilters(
 				if right.Op == function.GREAT_EQUAL {
 					finalFilter.Op = function.BETWEEN
 				} else {
-					finalFilter.Op = ioutil.RangeLeftOpen
+					finalFilter.Op = RangeLeftOpen
 				}
 				finalFilter.Valid = true
 
@@ -783,9 +782,9 @@ func mergeFilters(
 				finalFilter.LB = right.LB
 				finalFilter.UB = left.LB
 				if right.Op == function.GREAT_EQUAL {
-					finalFilter.Op = ioutil.RangeRightOpen
+					finalFilter.Op = RangeRightOpen
 				} else {
-					finalFilter.Op = ioutil.RangeBothOpen
+					finalFilter.Op = RangeBothOpen
 				}
 				finalFilter.Valid = true
 

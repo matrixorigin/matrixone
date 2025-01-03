@@ -12,13 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package engine_util
+package readutil
 
 import (
 	"bytes"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -178,7 +178,7 @@ func NewMemPKFilter(
 
 	switch basePKFilter.Op {
 	case function.EQUAL, function.PREFIX_EQ:
-		packed = append(packed, ioutil.EncodePrimaryKey(lbVal, packer))
+		packed = append(packed, EncodePrimaryKey(lbVal, packer))
 		if basePKFilter.Op == function.PREFIX_EQ {
 			// TODO Remove this later
 			// serial_full(secondary_index, primary_key|fake_pk) => varchar
@@ -191,7 +191,7 @@ func NewMemPKFilter(
 		filter.SetFullData(basePKFilter.Op, false, packed...)
 
 	case function.IN, function.PREFIX_IN:
-		packed = ioutil.EncodePrimaryKeyVector(basePKFilter.Vec, packer)
+		packed = EncodePrimaryKeyVector(basePKFilter.Vec, packer)
 
 		if basePKFilter.Op == function.PREFIX_IN {
 			for x := range packed {
@@ -201,13 +201,13 @@ func NewMemPKFilter(
 		filter.SetFullData(basePKFilter.Op, true, packed...)
 
 	case function.LESS_THAN, function.LESS_EQUAL, function.GREAT_THAN, function.GREAT_EQUAL:
-		packed = append(packed, ioutil.EncodePrimaryKey(lbVal, packer))
+		packed = append(packed, EncodePrimaryKey(lbVal, packer))
 		filter.SetFullData(basePKFilter.Op, false, packed...)
 
 	case function.PREFIX_BETWEEN, function.BETWEEN,
-		ioutil.RangeLeftOpen, ioutil.RangeRightOpen, ioutil.RangeBothOpen:
-		packed = append(packed, ioutil.EncodePrimaryKey(lbVal, packer))
-		packed = append(packed, ioutil.EncodePrimaryKey(ubVal, packer))
+		RangeLeftOpen, RangeRightOpen, RangeBothOpen:
+		packed = append(packed, EncodePrimaryKey(lbVal, packer))
+		packed = append(packed, EncodePrimaryKey(ubVal, packer))
 		if basePKFilter.Op == function.PREFIX_BETWEEN {
 			packed[0] = packed[0][0 : len(packed[0])-1]
 			packed[1] = packed[1][0 : len(packed[1])-1]
@@ -275,7 +275,7 @@ func (f *MemPKFilter) FilterVector(
 		return
 	}
 
-	keys := ioutil.EncodePrimaryKeyVector(vec, packer)
+	keys := EncodePrimaryKeyVector(vec, packer)
 
 	for i := 0; i < len(keys); i++ {
 		switch f.op {
@@ -316,17 +316,17 @@ func (f *MemPKFilter) FilterVector(
 				skipMask.Add(uint64(i))
 			}
 
-		case ioutil.RangeRightOpen:
+		case RangeRightOpen:
 			if !(bytes.Compare(keys[i], f.packed[0]) >= 0 && bytes.Compare(keys[i], f.packed[1]) < 0) {
 				skipMask.Add(uint64(i))
 			}
 
-		case ioutil.RangeLeftOpen:
+		case RangeLeftOpen:
 			if !(bytes.Compare(keys[i], f.packed[0]) > 0 && bytes.Compare(keys[i], f.packed[1]) <= 0) {
 				skipMask.Add(uint64(i))
 			}
 
-		case ioutil.RangeBothOpen:
+		case RangeBothOpen:
 			if !(bytes.Compare(keys[i], f.packed[0]) > 0 && bytes.Compare(keys[i], f.packed[1]) < 0) {
 				skipMask.Add(uint64(i))
 			}

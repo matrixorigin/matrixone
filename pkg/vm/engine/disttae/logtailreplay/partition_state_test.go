@@ -15,7 +15,6 @@
 package logtailreplay
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"math/rand"
 	"testing"
 	"time"
@@ -23,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -141,7 +141,7 @@ func TestScanRows(t *testing.T) {
 			Time:              types.BuildTS(time.Now().UnixNano(), uint32(i)),
 			ID:                int64(i),
 			Deleted:           i%2 == 0,
-			PrimaryIndexBytes: ioutil.EncodePrimaryKey(i, packer),
+			PrimaryIndexBytes: readutil.EncodePrimaryKey(i, packer),
 		})
 	}
 

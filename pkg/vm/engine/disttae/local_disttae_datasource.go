@@ -36,7 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
@@ -104,7 +104,7 @@ type LocalDisttaeDataSource struct {
 	rangeSlice      objectio.BlockInfoSlice
 	pState          *logtailreplay.PartitionState
 
-	memPKFilter *engine_util.MemPKFilter
+	memPKFilter *readutil.MemPKFilter
 	pStateRows  struct {
 		insIter logtailreplay.RowsIter
 	}
@@ -277,7 +277,7 @@ func (ls *LocalDisttaeDataSource) Next(
 ) (info *objectio.BlockInfo, state engine.DataState, err error) {
 
 	if ls.memPKFilter == nil {
-		ff := filter.(*engine_util.MemPKFilter)
+		ff := filter.(*readutil.MemPKFilter)
 		ls.memPKFilter = ff
 	}
 
@@ -529,7 +529,7 @@ func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 			put.Put()
 		}
 
-		offsets := engine_util.RowIdsToOffset(retainedRowIds, int64(0), skipMask).([]int64)
+		offsets := readutil.RowIdsToOffset(retainedRowIds, int64(0), skipMask).([]int64)
 		skipMask.Release()
 
 		if len(offsets) == 0 {
@@ -893,7 +893,7 @@ func (ls *LocalDisttaeDataSource) applyWorkspaceEntryDeletes(
 				continue
 			}
 
-			leftRows = engine_util.FastApplyDeletedRows(leftRows, deletedRows, o)
+			leftRows = readutil.FastApplyDeletedRows(leftRows, deletedRows, o)
 			if leftRows != nil && len(leftRows) == 0 {
 				done = true
 				break
@@ -958,7 +958,7 @@ func (ls *LocalDisttaeDataSource) applyWorkspaceFlushedS3Deletes(
 		return nil, err
 	}
 
-	offsets = engine_util.RemoveIf(offsets, func(t int64) bool {
+	offsets = readutil.RemoveIf(offsets, func(t int64) bool {
 		return deletedRows.Contains(uint64(t))
 	})
 
@@ -978,7 +978,7 @@ func (ls *LocalDisttaeDataSource) applyWorkspaceRawRowIdDeletes(
 	defer rawRowIdDeletes.RWMutex.RUnlock()
 
 	for _, o := range rawRowIdDeletes.offsets[*bid] {
-		leftRows = engine_util.FastApplyDeletedRows(leftRows, deletedRows, uint32(o))
+		leftRows = readutil.FastApplyDeletedRows(leftRows, deletedRows, uint32(o))
 		if leftRows != nil && len(leftRows) == 0 {
 			break
 		}
@@ -1052,7 +1052,7 @@ func (ls *LocalDisttaeDataSource) applyPStateInMemDeletes(
 	for delIter.Next() {
 		rowid := delIter.Entry().RowID
 		o := rowid.GetRowOffset()
-		leftRows = engine_util.FastApplyDeletedRows(leftRows, deletedRows, o)
+		leftRows = readutil.FastApplyDeletedRows(leftRows, deletedRows, o)
 		if leftRows != nil && len(leftRows) == 0 {
 			break
 		}
@@ -1132,7 +1132,7 @@ func (ls *LocalDisttaeDataSource) applyPStateTombstoneObjects(
 		return nil, err
 	}
 
-	offsets = engine_util.RemoveIf(offsets, func(t int64) bool {
+	offsets = readutil.RemoveIf(offsets, func(t int64) bool {
 		return deletedRows.Contains(uint64(t))
 	})
 
@@ -1148,7 +1148,7 @@ func (ls *LocalDisttaeDataSource) batchPrefetch(seqNums []uint16) {
 		return
 	}
 
-	batchSize := min(engine_util.BatchPrefetchSize, ls.rangeSlice.Len()-ls.rangesCursor)
+	batchSize := min(readutil.BatchPrefetchSize, ls.rangeSlice.Len()-ls.rangesCursor)
 
 	begin := ls.rangesCursor
 	end := ls.rangesCursor + batchSize

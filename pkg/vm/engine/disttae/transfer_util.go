@@ -27,7 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio/mergeutil"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"go.uber.org/zap"
 )
@@ -111,11 +111,11 @@ func ConstructCNTombstoneObjectsTransferFlow(
 
 	pkColIdx := table.tableDef.Name2ColIndex[table.tableDef.Pkey.PkeyColName]
 	pkCol := table.tableDef.Cols[pkColIdx]
-	r := engine_util.SimpleMultiObjectsReader(
+	r := readutil.SimpleMultiObjectsReader(
 		ctx, fs,
 		tombstoneObjects,
 		end.ToTimestamp(),
-		engine_util.WithColumns(
+		readutil.WithColumns(
 			[]uint16{0, 1},
 			[]types.Type{types.T_Rowid.ToType(), plan2.ExprType2Type(&pkCol.Typ)},
 		),
@@ -196,7 +196,7 @@ func (flow *TransferFlow) fillDefaults() {
 			ioutil.WithBuffer(flow.buffer, false),
 			ioutil.WithMemorySizeThreshold(mpool.MB*16),
 			ioutil.WithTailSizeCap(0),
-			//engine_util.WithAllMergeSorted(),
+			//readutil.WithAllMergeSorted(),
 		)
 	}
 

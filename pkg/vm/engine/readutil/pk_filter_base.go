@@ -12,17 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package engine_util
+package readutil
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
+	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+)
+
+const (
+	RangeLeftOpen = iota + math.MaxInt16
+	RangeRightOpen
+	RangeBothOpen
 )
 
 type BasePKFilter struct {
@@ -40,9 +46,9 @@ func (b *BasePKFilter) String() string {
 		function.LESS_THAN:      "less_than",
 		function.GREAT_THAN:     "great_than",
 		function.GREAT_EQUAL:    "great_eq",
-		ioutil.RangeLeftOpen:    "range_left_open",
-		ioutil.RangeRightOpen:   "range_right_open",
-		ioutil.RangeBothOpen:    "range_both_open",
+		RangeLeftOpen:           "range_left_open",
+		RangeRightOpen:          "range_right_open",
+		RangeBothOpen:           "range_both_open",
 		function.EQUAL:          "equal",
 		function.IN:             "in",
 		function.BETWEEN:        "between",

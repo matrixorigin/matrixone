@@ -22,8 +22,6 @@ import (
 	"runtime/trace"
 	"sync/atomic"
 
-	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
-
 	"go.uber.org/zap"
 
 	"github.com/tidwall/btree"
@@ -38,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	txnTrace "github.com/matrixorigin/matrixone/pkg/txn/trace"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
@@ -441,7 +440,7 @@ func (p *PartitionState) HandleRowsDelete(
 	var primaryKeys [][]byte
 	if len(input.Vecs) > 2 {
 		// has primary key
-		primaryKeys = ioutil.EncodePrimaryKeyVector(
+		primaryKeys = readutil.EncodePrimaryKeyVector(
 			batch.Vecs[2],
 			packer,
 		)
@@ -532,7 +531,7 @@ func (p *PartitionState) HandleRowsInsert(
 	if err != nil {
 		panic(err)
 	}
-	primaryKeys = ioutil.EncodePrimaryKeyVector(
+	primaryKeys = readutil.EncodePrimaryKeyVector(
 		batch.Vecs[2+primarySeqnum],
 		packer,
 	)

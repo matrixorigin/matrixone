@@ -43,7 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -131,8 +131,8 @@ func Test_ReaderCanReadRangesBlocksWithoutDeletes(t *testing.T) {
 	var exes []colexec.ExpressionExecutor
 	proc := testutil3.NewProcessWithMPool("", mp)
 	expr := []*plan.Expr{
-		engine_util.MakeFunctionExprForTest("=", []*plan.Expr{
-			engine_util.MakeColExprForTest(int32(primaryKeyIdx), schema.ColDefs[primaryKeyIdx].Type.Oid, schema.ColDefs[primaryKeyIdx].Name),
+		readutil.MakeFunctionExprForTest("=", []*plan.Expr{
+			readutil.MakeColExprForTest(int32(primaryKeyIdx), schema.ColDefs[primaryKeyIdx].Type.Oid, schema.ColDefs[primaryKeyIdx].Name),
 			plan2.MakePlan2Int64ConstExprWithType(bats[0].Vecs[primaryKeyIdx].Get(0).(int64)),
 		}),
 	}
@@ -234,8 +234,8 @@ func TestReaderCanReadUncommittedInMemInsertAndDeletes(t *testing.T) {
 	}
 
 	expr := []*plan.Expr{
-		engine_util.MakeFunctionExprForTest("=", []*plan.Expr{
-			engine_util.MakeColExprForTest(int32(primaryKeyIdx), schema.ColDefs[primaryKeyIdx].Type.Oid, schema.ColDefs[primaryKeyIdx].Name),
+		readutil.MakeFunctionExprForTest("=", []*plan.Expr{
+			readutil.MakeColExprForTest(int32(primaryKeyIdx), schema.ColDefs[primaryKeyIdx].Type.Oid, schema.ColDefs[primaryKeyIdx].Name),
 			plan2.MakePlan2Int64ConstExprWithType(bat1.Vecs[primaryKeyIdx].Get(9).(int64)),
 		}),
 	}
@@ -587,7 +587,7 @@ func Test_ShardingHandler(t *testing.T) {
 		)
 		require.NoError(t, err)
 
-		tombstones, err := engine_util.UnmarshalTombstoneData(res)
+		tombstones, err := readutil.UnmarshalTombstoneData(res)
 		require.NoError(t, err)
 
 		require.True(t, tombstones.HasAnyInMemoryTombstone())
@@ -1313,7 +1313,7 @@ func Test_SimpleReader(t *testing.T) {
 	mp := mpool.MustNewZeroNoFixed()
 	proc := testutil3.NewProcessWithMPool("", mp)
 	pkType := types.T_int32.ToType()
-	bat1 := engine_util.NewCNTombstoneBatch(
+	bat1 := readutil.NewCNTombstoneBatch(
 		&pkType,
 		objectio.HiddenColumnSelection_None,
 	)
@@ -1368,16 +1368,16 @@ func Test_SimpleReader(t *testing.T) {
 	fs, err := fileservice.Get[fileservice.FileService](proc.GetFileService(), defines.SharedFileServiceName)
 	require.NoError(t, err)
 
-	r := engine_util.SimpleTombstoneObjectReader(
+	r := readutil.SimpleTombstoneObjectReader(
 		context.Background(), fs, &stats, timestamp.Timestamp{},
-		engine_util.WithColumns(
+		readutil.WithColumns(
 			[]uint16{0, 1},
 			[]types.Type{objectio.RowidType, pkType},
 		),
 	)
 	ioutil.Start("")
 	defer ioutil.Stop("")
-	bat2 := engine_util.NewCNTombstoneBatch(
+	bat2 := readutil.NewCNTombstoneBatch(
 		&pkType,
 		objectio.HiddenColumnSelection_None,
 	)
@@ -1398,10 +1398,10 @@ func Test_SimpleReader(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, done)
 
-	r = engine_util.SimpleMultiObjectsReader(
+	r = readutil.SimpleMultiObjectsReader(
 		context.Background(), fs,
 		[]objectio.ObjectStats{stats, stats}, timestamp.Timestamp{},
-		engine_util.WithColumns(
+		readutil.WithColumns(
 			[]uint16{0, 1},
 			[]types.Type{objectio.RowidType, pkType},
 		),

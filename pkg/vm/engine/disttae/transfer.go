@@ -37,7 +37,7 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"go.uber.org/zap"
 )
@@ -456,7 +456,7 @@ func doTransferRowids(
 	}()
 
 	pkColumName := table.GetTableDef(ctx).Pkey.PkeyColName
-	expr := engine_util.ConstructInExpr(ctx, pkColumName, searchPKColumn)
+	expr := readutil.ConstructInExpr(ctx, pkColumName, searchPKColumn)
 	rangesParam := engine.RangesParam{
 		BlockFilters:   []*plan.Expr{expr},
 		PreAllocBlocks: 2,
@@ -465,7 +465,7 @@ func doTransferRowids(
 	}
 
 	var blockList objectio.BlockInfoSlice
-	if _, err = engine_util.TryFastFilterBlocks(
+	if _, err = readutil.TryFastFilterBlocks(
 		ctx,
 		table.db.op.SnapshotTS(),
 		table.GetTableDef(ctx),
@@ -479,7 +479,7 @@ func doTransferRowids(
 	); err != nil {
 		return
 	}
-	relData := engine_util.NewBlockListRelationData(1)
+	relData := readutil.NewBlockListRelationData(1)
 	for i, end := 0, blockList.Len(); i < end; i++ {
 		relData.AppendBlockInfo(blockList.Get(i))
 	}
