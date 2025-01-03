@@ -90,9 +90,7 @@ func (p *PartitionState) newTombstoneObjectsIter(
 	iter := p.tombstoneObjectDTSIndex.Iter()
 	if onlyVisible {
 		pivot := ObjectEntry{
-			ObjectInfo{
-				DeleteTime: snapshot,
-			},
+			DeleteTime: snapshot,
 		}
 
 		iter.Seek(pivot)
@@ -169,13 +167,13 @@ func (p *PartitionState) HasTombstoneChanged(from, to types.TS) (exist bool) {
 	defer iter.Release()
 
 	// Created after from
-	if iter.Seek(ObjectEntry{ObjectInfo{CreateTime: from}}) {
+	if iter.Seek(ObjectEntry{CreateTime: from}) {
 		return true
 	}
 
 	iter.First()
 	// Deleted after from
-	ok := iter.Seek(ObjectEntry{ObjectInfo{DeleteTime: from}})
+	ok := iter.Seek(ObjectEntry{DeleteTime: from})
 	if ok {
 		item := iter.Item()
 		return !item.DeleteTime.IsEmpty()
@@ -263,9 +261,7 @@ func (p *PartitionState) CollectObjectsBetween(
 		objectio.SetObjectStatsShortName(&ss, &entry.ShortObjName)
 
 		val, exist := nameIdx.Get(ObjectEntry{
-			ObjectInfo{
-				ObjectStats: ss,
-			},
+			ObjectStats: ss,
 		})
 
 		if !exist {
@@ -311,9 +307,7 @@ func (p *PartitionState) CheckIfObjectDeletedBeforeTS(
 	var stats objectio.ObjectStats
 	objectio.SetObjectStatsShortName(&stats, (*objectio.ObjectNameShort)(objId))
 	val, exist := tree.Get(ObjectEntry{
-		ObjectInfo{
-			ObjectStats: stats,
-		},
+		ObjectStats: stats,
 	})
 
 	if !exist {
@@ -323,7 +317,7 @@ func (p *PartitionState) CheckIfObjectDeletedBeforeTS(
 	return !val.DeleteTime.IsEmpty() && val.DeleteTime.LE(&ts)
 }
 
-func (p *PartitionState) GetObject(name objectio.ObjectNameShort) (ObjectInfo, bool) {
+func (p *PartitionState) GetObject(name objectio.ObjectNameShort) (ObjectEntry, bool) {
 	iter := p.dataObjectsNameIndex.Iter()
 	defer iter.Release()
 
@@ -332,10 +326,10 @@ func (p *PartitionState) GetObject(name objectio.ObjectNameShort) (ObjectInfo, b
 	if ok := iter.Seek(pivot); ok {
 		e := iter.Item()
 		if bytes.Equal(e.ObjectShortName()[:], name[:]) {
-			return iter.Item().ObjectInfo, true
+			return iter.Item(), true
 		}
 	}
-	return ObjectInfo{}, false
+	return ObjectEntry{}, false
 }
 
 func (p *PartitionState) CollectTombstoneObjects(

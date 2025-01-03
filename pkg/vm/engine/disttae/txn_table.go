@@ -796,7 +796,7 @@ func (tbl *txnTable) rangesOnePart(
 
 	if err = ForeachSnapshotObjects(
 		tbl.db.op.SnapshotTS(),
-		func(obj logtailreplay.ObjectInfo, isCommitted bool) (err2 error) {
+		func(obj logtailreplay.ObjectEntry, isCommitted bool) (err2 error) {
 			//if need to shuffle objects
 			if plan2.ShouldSkipObjByShuffle(rangesParam.Rsp, &obj.ObjectStats) {
 				return
@@ -1948,7 +1948,7 @@ func (tbl *txnTable) PKPersistedBetween(
 	delObjs, cObjs := p.GetChangedObjsBetween(from.Next(), types.MaxTs())
 	isFakePK := tbl.GetTableDef(ctx).Pkey.PkeyColName == catalog.FakePrimaryKeyColName
 	if err := ForeachCommittedObjects(cObjs, delObjs, p,
-		func(obj logtailreplay.ObjectInfo) (err2 error) {
+		func(obj logtailreplay.ObjectEntry) (err2 error) {
 			var zmCkecked bool
 			if !isFakePK {
 				// if the object info contains a pk zonemap, fast-check with the zonemap

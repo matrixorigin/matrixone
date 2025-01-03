@@ -494,7 +494,7 @@ func ForeachCommittedObjects(
 	createObjs map[objectio.ObjectNameShort]struct{},
 	delObjs map[objectio.ObjectNameShort]struct{},
 	p *logtailreplay.PartitionState,
-	onObj func(info logtailreplay.ObjectInfo) error) (err error) {
+	onObj func(info logtailreplay.ObjectEntry) error) (err error) {
 	for obj := range createObjs {
 		if objInfo, ok := p.GetObject(obj); ok {
 			if err = onObj(objInfo); err != nil {
@@ -536,14 +536,14 @@ func ForeachTombstoneObject(
 
 func ForeachSnapshotObjects(
 	ts timestamp.Timestamp,
-	onObject func(obj logtailreplay.ObjectInfo, isCommitted bool) error,
+	onObject func(obj logtailreplay.ObjectEntry, isCommitted bool) error,
 	tableSnapshot *logtailreplay.PartitionState,
 	extraCommitted []objectio.ObjectStats,
 	uncommitted ...objectio.ObjectStats,
 ) (err error) {
 	// process all uncommitted objects first
 	for _, obj := range uncommitted {
-		info := logtailreplay.ObjectInfo{
+		info := logtailreplay.ObjectEntry{
 			ObjectStats: obj,
 		}
 		if err = onObject(info, false); err != nil {
@@ -552,7 +552,7 @@ func ForeachSnapshotObjects(
 	}
 	// process all uncommitted objects first
 	for _, obj := range extraCommitted {
-		info := logtailreplay.ObjectInfo{
+		info := logtailreplay.ObjectEntry{
 			ObjectStats: obj,
 		}
 		if err = onObject(info, true); err != nil {
@@ -572,7 +572,7 @@ func ForeachSnapshotObjects(
 	defer iter.Close()
 	for iter.Next() {
 		obj := iter.Entry()
-		if err = onObject(obj.ObjectInfo, true); err != nil {
+		if err = onObject(obj, true); err != nil {
 			return
 		}
 	}

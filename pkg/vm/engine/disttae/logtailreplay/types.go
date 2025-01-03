@@ -24,13 +24,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 )
 
-type ObjectInfo struct {
+type ObjectEntry struct {
 	objectio.ObjectStats
 	CreateTime types.TS
 	DeleteTime types.TS
 }
 
-func (o ObjectInfo) String() string {
+func (o ObjectEntry) String() string {
 	return fmt.Sprintf(
 		"%s; appendable: %v; sorted: %v; createTS: %s; deleteTS: %s",
 		o.ObjectStats.String(),
@@ -40,12 +40,8 @@ func (o ObjectInfo) String() string {
 		o.DeleteTime.ToString())
 }
 
-func (o ObjectInfo) Location() objectio.Location {
+func (o ObjectEntry) Location() objectio.Location {
 	return o.ObjectLocation()
-}
-
-type ObjectEntry struct {
-	ObjectInfo
 }
 
 func (o ObjectEntry) ObjectNameIndexLess(than ObjectEntry) bool {
@@ -88,11 +84,7 @@ func (o ObjectEntry) Visible(ts types.TS) bool {
 		(o.DeleteTime.IsEmpty() || ts.LT(&o.DeleteTime))
 }
 
-func (o ObjectEntry) Location() objectio.Location {
-	return o.ObjectLocation()
-}
-
-func (o ObjectInfo) StatsValid() bool {
+func (o ObjectEntry) StatsValid() bool {
 	return o.ObjectStats.Rows() != 0
 }
 
