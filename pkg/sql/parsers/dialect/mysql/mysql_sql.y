@@ -485,7 +485,7 @@ import (
 %token <str> MO_TS
 
 // PITR
-%token <str> PITR
+%token <str> PITR RECOVERY_WINDOW
 
 // CDC
 %token <str> CDC
@@ -553,7 +553,7 @@ import (
 %type <statement> create_publication_stmt drop_publication_stmt alter_publication_stmt show_publications_stmt show_subscriptions_stmt
 %type <statement> create_stage_stmt drop_stage_stmt alter_stage_stmt
 %type <statement> create_snapshot_stmt drop_snapshot_stmt
-%type <statement> create_pitr_stmt drop_pitr_stmt show_pitr_stmt alter_pitr_stmt restore_pitr_stmt
+%type <statement> create_pitr_stmt drop_pitr_stmt show_pitr_stmt alter_pitr_stmt restore_pitr_stmt show_recovery_window_stmt
 %type <str> urlparams
 %type <str> comment_opt view_list_opt view_opt security_opt view_tail check_type
 %type <subscriptionOption> subscription_opt
@@ -4068,6 +4068,7 @@ show_stmt:
 |   show_connectors_stmt
 |   show_snapshots_stmt
 |   show_pitr_stmt
+|   show_recovery_window_stmt
 |   show_cdc_stmt
 |   show_logservice_replicas_stmt
 |   show_logservice_stores_stmt
@@ -4121,6 +4122,36 @@ show_pitr_stmt:
     {
         $$ = &tree.ShowPitr{
             Where: $3,
+        }
+    }
+
+show_recovery_window_stmt:
+    SHOW RECOVERY_WINDOW FOR ACCOUNT
+    {
+        $$ = &tree.ShowRecoveryWindow{
+            Level: tree.RECOVERYWINDOWLEVELACCOUNT,
+        }
+    }
+|   SHOW RECOVERY_WINDOW FOR DATABASE ident
+    {
+        $$ = &tree.ShowRecoveryWindow{
+            Level: tree.RECOVERYWINDOWLEVELDATABASE,
+            DatabaseName: tree.Identifier($5.Compare()),
+        }
+    }
+|   SHOW RECOVERY_WINDOW FOR TABLE ident ident
+    {
+        $$ = &tree.ShowRecoveryWindow{
+            Level: tree.RECOVERYWINDOWLEVELTABLE,
+            DatabaseName: tree.Identifier($5.Compare()),
+            TableName:tree.Identifier($6.Compare()),
+        }
+    }
+|   SHOW RECOVERY_WINDOW FOR ACCOUNT ident
+    {
+        $$ = &tree.ShowRecoveryWindow{
+            Level: tree.RECOVERYWINDOWLEVELACCOUNT,
+            AccountName: tree.Identifier($5.Compare()),
         }
     }
 
@@ -12533,6 +12564,7 @@ non_reserved_keyword:
 |   SMALLINT
 |   SNAPSHOT
 |   PITR
+|   RECOVERY_WINDOW
 |   SPATIAL
 |   START
 |   STATUS
