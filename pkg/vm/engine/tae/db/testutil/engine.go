@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -410,7 +411,7 @@ func writeIncrementalCheckpoint(
 }
 
 func tnReadCheckpoint(t *testing.T, location objectio.Location, fs fileservice.FileService) *logtail.CheckpointData {
-	reader, err := blockio.NewObjectReader("", fs, location)
+	reader, err := ioutil.NewObjectReader(fs, location)
 	assert.NoError(t, err)
 	data := logtail.NewCheckpointData("", common.CheckpointAllocator)
 	err = data.ReadFrom(

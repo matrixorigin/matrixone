@@ -37,8 +37,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/tidwall/btree"
@@ -1405,7 +1405,7 @@ func loadMetaBat(
 		data.PrefetchMetaIdx(ctx, versions[idx], idxes, locations[idx], fs)
 
 		// 1.2. read meta bat
-		reader, err := blockio.NewObjectReader(sid, fs, locations[idx])
+		reader, err := ioutil.NewObjectReader(fs, locations[idx])
 		if err != nil {
 			return nil, nil, nil, err
 		}
@@ -1437,7 +1437,7 @@ func loadStorageUsageBatch(
 	for it.HasNext() {
 		block := it.Next()
 		schema := checkpointDataReferVersions[version][uint32(batIdx)]
-		reader, err := blockio.NewObjectReader(sid, fs, block.GetLocation())
+		reader, err := ioutil.NewObjectReader(fs, block.GetLocation())
 		if err != nil {
 			return nil, err
 		}
