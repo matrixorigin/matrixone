@@ -28,10 +28,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio/mergeutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sort"
 	"github.com/matrixorigin/matrixone/pkg/vm"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -53,7 +54,7 @@ type S3Writer struct {
 
 	isTombstone bool
 
-	writer *blockio.BlockWriter
+	writer *ioutil.BlockWriter
 
 	// the third vector only has several rows, not aligns with the other two vectors.
 	blockInfoBat *batch.Batch
@@ -286,32 +287,6 @@ func (w *S3Writer) StashBatch(proc *process.Process, bat *batch.Batch) bool {
 	return res
 }
 
-func getFixedCols[T types.FixedSizeT](bats []*batch.Batch, idx int) (cols [][]T) {
-	cols = make([][]T, 0, len(bats))
-	for i := range bats {
-		cols = append(cols, vector.MustFixedColWithTypeCheck[T](bats[i].Vecs[idx]))
-	}
-	return
-}
-
-func getVarlenaCols(bats []*batch.Batch, idx int) (cols []struct {
-	data []types.Varlena
-	area []byte
-}) {
-	cols = make([]struct {
-		data []types.Varlena
-		area []byte
-	}, 0, len(bats))
-	for i := range bats {
-		data, area := vector.MustVarlenaRawData(bats[i].Vecs[idx])
-		cols = append(cols, struct {
-			data []types.Varlena
-			area []byte
-		}{data, area})
-	}
-	return
-}
-
 func (w *S3Writer) FlushTailBatch(ctx context.Context, proc *process.Process) ([]objectio.BlockInfo, objectio.ObjectStats, error) {
 	if w.batSize >= TagS3SizeForMOLogger {
 		return w.SortAndSync(ctx, proc)
@@ -362,7 +337,7 @@ func (w *S3Writer) SortAndSync(ctx context.Context, proc *process.Process) ([]ob
 		_, err := w.writer.WriteBatch(bat)
 		return err
 	}
-	if err := MergeSortBatches(
+	if err := mergeutil.MergeSortBatches(
 		w.batches,
 		w.sortIndex,
 		w.buffer,
@@ -383,7 +358,7 @@ func (w *S3Writer) generateWriter(proc *process.Process) (objectio.ObjectName, e
 	if err != nil {
 		return nil, err
 	}
-	w.writer, err = blockio.NewBlockWriterNew(
+	w.writer, err = ioutil.NewBlockWriterNew(
 		s3, obj, w.schemaVersion, w.seqnums, w.isTombstone,
 	)
 	if err != nil {

@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
@@ -122,17 +123,17 @@ func (c *CkpReplayer) readCheckpointEntries() (
 	})
 
 	var (
-		metaEntries      = make([]ioutil.TSRangeFile, 0)
+		metaFiles        = make([]ioutil.TSRangeFile, 0)
 		compactedEntries = make([]ioutil.TSRangeFile, 0)
 	)
 
-	// classify the files into metaEntries and compactedEntries
+	// classify the files into metaFiles and compactedEntries
 	for _, file := range files {
 		c.r.store.AddMetaFile(file.GetName())
 		if file.IsCompactExt() {
 			compactedEntries = append(compactedEntries, file)
 		} else if file.IsMetadataFile() {
-			metaEntries = append(metaEntries, file)
+			metaFiles = append(metaFiles, file)
 		}
 	}
 
@@ -167,8 +168,23 @@ func (c *CkpReplayer) readCheckpointEntries() (
 	}
 
 	// always replay from the max metaEntry
-	if len(metaEntries) > 0 {
-		maxEntry := metaEntries[len(metaEntries)-1]
+	if len(metaFiles) > 0 {
+		var maxGlobalFile ioutil.TSRangeFile
+		for i := len(metaFiles) - 1; i >= 0; i-- {
+			start := metaFiles[i].GetStart()
+			if start.IsEmpty() {
+				maxGlobalFile = metaFiles[i]
+				break
+			}
+		}
+
+		maxFile := metaFiles[len(metaFiles)-1]
+
+		toReadFiles := []ioutil.TSRangeFile{maxFile}
+		if maxGlobalFile.GetName() != maxFile.GetName() {
+			toReadFiles = append(toReadFiles, maxGlobalFile)
+		}
+
 		updateGlobal := func(entry *CheckpointEntry) {
 			if entry.GetType() == ET_Global {
 				thisEnd := entry.GetEnd()
@@ -177,20 +193,43 @@ func (c *CkpReplayer) readCheckpointEntries() (
 				}
 			}
 		}
-		if allEntries, err = ReadEntriesFromMeta(
-			c.r.ctx,
-			c.r.rt.SID(),
-			c.dir,
-			maxEntry.GetName(),
-			0,
-			updateGlobal,
-			common.CheckpointAllocator,
-			c.r.rt.Fs.Service,
-		); err != nil {
-			return
+		var loopEntries []*CheckpointEntry
+		for _, oneFile := range toReadFiles {
+			if loopEntries, err = ReadEntriesFromMeta(
+				c.r.ctx,
+				c.r.rt.SID(),
+				c.dir,
+				oneFile.GetName(),
+				0,
+				updateGlobal,
+				common.CheckpointAllocator,
+				c.r.rt.Fs.Service,
+			); err != nil {
+				return
+			}
+			if len(allEntries) == 0 {
+				allEntries = loopEntries
+			} else {
+				allEntries = append(allEntries, loopEntries...)
+			}
 		}
+		allEntries = compute.SortAndDedup(
+			allEntries,
+			func(lh, rh **CheckpointEntry) bool {
+				lhEnd, rhEnd := (*lh).GetEnd(), (*rh).GetEnd()
+				return lhEnd.LT(&rhEnd)
+			},
+			func(lh, rh **CheckpointEntry) bool {
+				lhStart, rhStart := (*lh).GetStart(), (*rh).GetStart()
+				if !lhStart.EQ(&rhStart) {
+					return false
+				}
+				lhEnd, rhEnd := (*lh).GetEnd(), (*rh).GetEnd()
+				return lhEnd.EQ(&rhEnd)
+			},
+		)
 		for _, entry := range allEntries {
-			logutil.Debug(
+			logutil.Info(
 				"Read-CKP-META",
 				zap.String("entry", entry.String()),
 			)
@@ -579,7 +618,7 @@ func MergeCkpMeta(
 
 	maxFile := metaFiles[len(metaFiles)-1]
 
-	reader, err := blockio.NewFileReader(sid, fs, maxFile.GetCKPFullName())
+	reader, err := ioutil.NewFileReader(fs, maxFile.GetCKPFullName())
 	if err != nil {
 		return "", err
 	}

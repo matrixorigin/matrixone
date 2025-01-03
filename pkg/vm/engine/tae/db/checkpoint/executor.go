@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
@@ -48,11 +49,17 @@ func (job *checkpointJob) RunGCKP(ctx context.Context) (err error) {
 		return job.runGCKPFunc(ctx, job.gckpCtx, job.executor.runner)
 	}
 
+	// two for chaos test
+	// one to ensure it has entered `RunGCKP`
+	objectio.WaitInjected(objectio.FJ_GCKPWait1)
+	// two to block the execution till being notified
+	objectio.WaitInjected(objectio.FJ_GCKPWait1)
+
 	_, err = job.doGlobalCheckpoint(
 		job.gckpCtx.end,
 		job.gckpCtx.ckpLSN,
 		job.gckpCtx.truncateLSN,
-		job.gckpCtx.interval,
+		job.gckpCtx.histroyRetention,
 	)
 
 	return
@@ -119,7 +126,7 @@ func (job *checkpointJob) doGlobalCheckpoint(
 	fields = data.ExportStats("")
 
 	cnLocation, tnLocation, files, err := data.WriteTo(
-		runner.rt.Fs.Service, job.executor.cfg.BlockMaxRowsHint, job.executor.cfg.SizeHint,
+		job.executor.ctx, job.executor.cfg.BlockMaxRowsHint, job.executor.cfg.SizeHint, runner.rt.Fs.Service,
 	)
 	if err != nil {
 		runner.store.RemoveGCKPIntent()
@@ -218,9 +225,7 @@ func (job *checkpointJob) RunICKP(ctx context.Context) (err error) {
 
 	var files []string
 	var file string
-	if fields, files, err = runner.doIncrementalCheckpoint(
-		&job.executor.cfg, entry,
-	); err != nil {
+	if fields, files, err = job.executor.doIncrementalCheckpoint(entry); err != nil {
 		errPhase = "do-ckp"
 		rollback()
 		return
@@ -268,10 +273,10 @@ func (job *checkpointJob) RunICKP(ctx context.Context) (err error) {
 
 	runner.postCheckpointQueue.Enqueue(entry)
 	runner.TryTriggerExecuteGCKP(&gckpContext{
-		end:         entry.end,
-		interval:    job.executor.cfg.GlobalHistoryDuration,
-		ckpLSN:      lsn,
-		truncateLSN: lsnToTruncate,
+		end:              entry.end,
+		histroyRetention: job.executor.cfg.GlobalHistoryDuration,
+		ckpLSN:           lsn,
+		truncateLSN:      lsnToTruncate,
 	})
 
 	return nil
@@ -383,7 +388,6 @@ func (executor *checkpointExecutor) StopWithCause(cause error) {
 	executor.runningICKP.Store(nil)
 	executor.ickpQueue.Stop()
 	executor.gckpQueue.Stop()
-	executor.runner = nil
 	logutil.Info(
 		"CKP-Executor-Stopped",
 		zap.Error(cause),
