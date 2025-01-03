@@ -47,7 +47,7 @@ func (shuffleBuild *ShuffleBuild) Prepare(proc *process.Process) (err error) {
 	shuffleBuild.ctr.hashmapBuilder.OnDuplicateAction = shuffleBuild.OnDuplicateAction
 	shuffleBuild.ctr.hashmapBuilder.DedupColName = shuffleBuild.DedupColName
 	shuffleBuild.ctr.hashmapBuilder.DedupColTypes = shuffleBuild.DedupColTypes
-	return shuffleBuild.ctr.hashmapBuilder.Prepare(shuffleBuild.Conditions, proc)
+	return shuffleBuild.ctr.hashmapBuilder.Prepare(shuffleBuild.Conditions, -1, proc)
 }
 
 func (shuffleBuild *ShuffleBuild) Call(proc *process.Process) (vm.CallResult, error) {
@@ -85,7 +85,7 @@ func (shuffleBuild *ShuffleBuild) Call(proc *process.Process) (vm.CallResult, er
 			}
 			var jm *message.JoinMap
 			if ctr.hashmapBuilder.InputBatchRowCount > 0 {
-				jm = message.NewJoinMap(ctr.hashmapBuilder.MultiSels, ctr.hashmapBuilder.IntHashMap, ctr.hashmapBuilder.StrHashMap, ctr.hashmapBuilder.Batches.Buf, proc.Mp())
+				jm = message.NewJoinMap(ctr.hashmapBuilder.MultiSels, ctr.hashmapBuilder.IntHashMap, ctr.hashmapBuilder.StrHashMap, nil, ctr.hashmapBuilder.Batches.Buf, proc.Mp())
 				if ap.NeedBatches {
 					jm.SetRowCount(int64(ctr.hashmapBuilder.InputBatchRowCount))
 				}
