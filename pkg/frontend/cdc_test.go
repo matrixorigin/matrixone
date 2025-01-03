@@ -404,6 +404,10 @@ func Test_handleCreateCdc(t *testing.T) {
 			fmt.Sprintf("%d", cdc2.DefaultMaxSqlLength),
 			cdc2.SendSqlTimeout,
 			cdc2.DefaultSendSqlTimeout,
+			cdc2.StartTs,
+			"2025-01-03 15:20:00",
+			cdc2.EndTs,
+			"2025-01-03 16:20:00",
 		},
 	}
 
