@@ -136,7 +136,7 @@ func TestWriter_WriteBlockAndZoneMap(t *testing.T) {
 }
 
 func TestWriter_WriteBlockAfterAlter(t *testing.T) {
-	runPipelineTest(
+	ioutil.RunPipelineTest(
 		func() {
 			defer testutils.AfterTest(t)()
 			ctx := context.Background()
@@ -224,7 +224,7 @@ func TestWriter_WriteBlockAfterAlter(t *testing.T) {
 }
 
 func TestWriter_WriteBlockAndBF(t *testing.T) {
-	runPipelineTest(
+	ioutil.RunPipelineTest(
 		func() {
 			defer testutils.AfterTest(t)()
 			ctx := context.Background()
