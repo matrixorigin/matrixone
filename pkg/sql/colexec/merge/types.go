@@ -84,7 +84,7 @@ func (merge *Merge) Reset(proc *process.Process, pipelineFailed bool, err error)
 	if merge.ctr.receiver == nil {
 		_ = merge.Prepare(proc)
 	}
-	merge.ctr.receiver.WaitingEnd()
+	// merge.ctr.receiver.WaitingEnd()
 }
 
 func (merge *Merge) Free(proc *process.Process, pipelineFailed bool, err error) {
