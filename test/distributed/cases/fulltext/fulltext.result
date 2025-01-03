@@ -296,6 +296,10 @@ insert into src values (0, 'color is red', 't1'), (1, 'car is yellow', 'crazy ca
 (10, NULL, NULL);
 select *, match(body) against('遠東兒童中文' in natural language mode) as score from src;
 not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+select *, match(title, body) against('+Windows +(<"Photo" >defender)' in boolean mode) as score from src;
+internal error: double operator
+select *, match(title, body) against('+CC_BY +(<-1.0 >-SA-1.0)' in boolean mode) as score from src;
+internal error: double operator
 select * from src where match(body, title) against('red');
 id    body    title
 0    color is red    t1
