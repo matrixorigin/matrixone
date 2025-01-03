@@ -292,6 +292,12 @@ func (p *Packer) EncodeUuid(e Uuid) {
 	p.putBytes(e[:])
 }
 
+func (p *Packer) EncodeObjectid(e *Objectid) {
+	p.putByte(objectIdCode)
+	p.putBytes(e[:SegmentidSize])
+	p.encodeUint(uint64(e.Offset()))
+}
+
 func (p *Packer) GetBuf() []byte {
 	return p.buffer
 }
