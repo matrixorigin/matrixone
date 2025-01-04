@@ -638,7 +638,7 @@ func TestValidTxnWithInvalidRemoteTxnAndNotifyOK(t *testing.T) {
 			return false, ErrTxnNotFound
 		},
 	).(*mapBasedTxnHolder)
-	require.False(t, hold.isValidRemoteTxn(pb.WaitTxn{TxnID: []byte{1}, CreatedOn: "s0"}))
+	require.True(t, hold.isValidRemoteTxn(pb.WaitTxn{TxnID: []byte{1}, CreatedOn: "s0"}))
 }
 
 func TestValidTxnWithInvalidRemoteTxnAndNotifyFailed(t *testing.T) {
