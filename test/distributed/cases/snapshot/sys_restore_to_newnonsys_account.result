@@ -25,7 +25,7 @@ drop snapshot if exists sp01;
 create snapshot sp01 for account acc01;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp01    2024-12-16 10:25:34.085639    account    acc01        
+sp01    2025-01-02 15:10:39.5826    account    acc01        
 use acc_test01;
 insert into s3t values (300001, 34, 23, 1);
 select count(*) from s3t;
@@ -329,8 +329,8 @@ drop snapshot if exists sp08;
 create snapshot sp08 for account acc01;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp08    2024-12-16 10:25:40.505317    account    acc01        
-sp07    2024-12-16 10:25:40.40668    account    acc01        
+sp08    2025-01-02 15:10:40.539771    account    acc01        
+sp07    2025-01-02 15:10:40.525108    account    acc01        
 restore account acc01 from snapshot sp07 to account acc02;
 restore account acc01 from snapshot sp08 to account acc02;
 use test01;
@@ -449,7 +449,7 @@ system_metrics
 use fulltext_index_acc01;
 show create table articles;
 Table    Create Table
-articles    CREATE TABLE `articles` (\n  `id` int unsigned NOT NULL AUTO_INCREMENT,\n  `title` json DEFAULT NULL,\n  `body` json DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT(`title`,`body`) WITH PARSER json\n)
+articles    CREATE TABLE `articles` (\n  `id` int unsigned NOT NULL AUTO_INCREMENT,\n  `title` json DEFAULT NULL,\n  `body` json DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT `fdx_01`(`title`,`body`) WITH PARSER json\n)
 select * from articles;
 id    title    body
 1    {"title": "MO Tutorial"}    {"body": "DBMS stands for DataBase ..."}
