@@ -889,6 +889,10 @@ func (h *mapBasedTxnHolder) isValidRemoteTxn(txn pb.WaitTxn) bool {
 	if err == nil {
 		return valid
 	}
+	logValidTxnFailed(h.logger, txn, err)
+	if isRetryError(err) {
+		return true
+	}
 
 	cannotCommit := []pb.OrphanTxn{
 		{
