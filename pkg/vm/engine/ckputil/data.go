@@ -114,6 +114,21 @@ type ObjectIter struct {
 	fs fileservice.FileService
 }
 
+func NewObjectIter(
+	ctx context.Context,
+	ranges []TableRange,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+) (iter ObjectIter) {
+	iter.ctx = ctx
+	iter.ranges = ranges
+	iter.index.rangeIdx = -1
+	iter.mp = mp
+	iter.fs = fs
+	iter.data = containers.NewVectors(len(DataScan_ObjectEntryAttrs))
+	return
+}
+
 func (iter *ObjectIter) Next() (bool, error) {
 	if iter.index.rangeIdx >= len(iter.ranges) {
 		return false, nil

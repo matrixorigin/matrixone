@@ -138,4 +138,13 @@ func Test_Reader1(t *testing.T) {
 		5: 100,
 	}
 	require.Equal(t, expectRows, tableRows)
+
+	table4Ranges := ExportToTableRanges(
+		ranges,
+		uint64(4),
+	)
+	t.Log(TableRangesString(table4Ranges))
+	require.Equal(t, 1, len(table4Ranges))
+	require.Equal(t, 10, table4Ranges[0].Rows())
+
 }

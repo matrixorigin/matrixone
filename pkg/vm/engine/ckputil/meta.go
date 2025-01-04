@@ -15,7 +15,9 @@
 package ckputil
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -48,11 +50,51 @@ var MetaSchema_TableRange_Types = []types.Type{
 	types.T_char.ToType(),
 }
 
+func TableRangesString(r []TableRange) string {
+	var buf bytes.Buffer
+	for i, rng := range r {
+		buf.WriteString(fmt.Sprintf("%d: %s\n", i, rng.String()))
+	}
+	return buf.String()
+}
+
+func TableRangesRows(r []TableRange) int {
+	rows := 0
+	for _, rng := range r {
+		rows += rng.Rows()
+	}
+	return rows
+}
+
 type TableRange struct {
 	TableID  uint64
 	Start    types.Rowid
 	End      types.Rowid
 	Location objectio.Location
+}
+
+func (r *TableRange) String() string {
+	return fmt.Sprintf(
+		"Range<%d:[%d-%d,%d-%d]:%s>",
+		r.TableID,
+		r.Start.GetBlockOffset(),
+		r.Start.GetRowOffset(),
+		r.End.GetBlockOffset(),
+		r.End.GetRowOffset(),
+		r.Location.String(),
+	)
+}
+
+func (r *TableRange) Rows() int {
+	if r.Start.GetBlockOffset() == r.End.GetBlockOffset() {
+		return int(r.End.GetRowOffset()-r.Start.GetRowOffset()) + 1
+	}
+	startBlock := r.Start.GetBlockOffset()
+	endBlock := r.End.GetBlockOffset()
+
+	return int(objectio.BlockMaxRows) - int(r.Start.GetRowOffset()) +
+		int(r.End.GetRowOffset()) + 1 +
+		int(endBlock-startBlock-1)*int(objectio.BlockMaxRows)
 }
 
 // the schema of the table entry
@@ -93,6 +135,33 @@ func MakeTableRangeBatch() *batch.Batch {
 		MetaSchema_TableRange_Attrs,
 		MetaSchema_TableRange_Types,
 	)
+}
+
+// data should be sorted by table id
+// the schema of the table entry
+func ExportToTableRanges(
+	data *batch.Batch,
+	tableId uint64,
+) (ranges []TableRange) {
+	tableIds := vector.MustFixedColNoTypeCheck[uint64](data.Vecs[0])
+	start := vector.OrderedFindFirstIndexInSortedSlice(tableId, tableIds)
+	if start == -1 {
+		return
+	}
+	startRows := vector.MustFixedColNoTypeCheck[types.Rowid](data.Vecs[1])
+	endRows := vector.MustFixedColNoTypeCheck[types.Rowid](data.Vecs[2])
+	for i, rows := start, data.RowCount(); i < rows; i++ {
+		if tableIds[i] != tableId {
+			break
+		}
+		ranges = append(ranges, TableRange{
+			TableID:  tableId,
+			Start:    startRows[i],
+			End:      endRows[i],
+			Location: data.Vecs[3].GetBytesAt(i),
+		})
+	}
+	return
 }
 
 func CollectTableRanges(
