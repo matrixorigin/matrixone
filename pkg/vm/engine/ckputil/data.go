@@ -145,7 +145,20 @@ func (iter *ObjectIter) Next() (bool, error) {
 			iter.index.blockIdx++
 			iter.index.offset = 0
 		}
-		if iter.index.blockIdx > iter.ranges[iter.index.rangeIdx].End.GetBlockOffset() {
+		if iter.index.blockIdx == iter.ranges[iter.index.rangeIdx].End.GetBlockOffset() {
+			// blockIdx == end
+			if iter.index.offset > iter.ranges[iter.index.rangeIdx].End.GetRowOffset() {
+				iter.index.rangeIdx++
+				if iter.index.rangeIdx >= len(iter.ranges) {
+					return false, nil
+				}
+
+				// move to the start of the new range
+				iter.index.blockIdx = iter.ranges[iter.index.rangeIdx].Start.GetBlockOffset()
+				iter.index.offset = iter.ranges[iter.index.rangeIdx].Start.GetRowOffset()
+				needLoad = true
+			}
+		} else if iter.index.blockIdx > iter.ranges[iter.index.rangeIdx].End.GetBlockOffset() {
 			// blockIdx > end
 
 			// move to next range
@@ -181,18 +194,28 @@ func (iter *ObjectIter) Next() (bool, error) {
 		); err != nil {
 			return false, err
 		}
+		// {
+		// 	vec := iter.data[0]
+		// 	logutil.Infof("debugxx %s", common.MoVectorToString(&vec, 2))
+		// 	vec = iter.data[1]
+		// 	logutil.Infof("debugxx %s", common.MoVectorToString(&vec, 2))
+		// 	vec = iter.data[2]
+		// 	logutil.Infof("debugxx %s", common.MoVectorToString(&vec, 2))
+		// 	vec = iter.data[3]
+		// 	logutil.Infof("debugxx %s", common.MoVectorToString(&vec, 3))
+		// }
 	}
 	return true, nil
 }
 
 func (iter *ObjectIter) Entry() (ret objectio.ObjectEntry) {
 	ret.CreateTime = vector.GetFixedAtNoTypeCheck[types.TS](
-		&iter.data[1], int(iter.index.offset),
-	)
-	ret.DeleteTime = vector.GetFixedAtNoTypeCheck[types.TS](
 		&iter.data[2], int(iter.index.offset),
 	)
-	ret.ObjectStats.UnMarshal(iter.data[0].GetBytesAt(int(iter.index.offset)))
+	ret.DeleteTime = vector.GetFixedAtNoTypeCheck[types.TS](
+		&iter.data[3], int(iter.index.offset),
+	)
+	ret.ObjectStats.UnMarshal(iter.data[1].GetBytesAt(int(iter.index.offset)))
 	return
 }
 
@@ -209,4 +232,8 @@ func (iter *ObjectIter) Reset() {
 	}
 	iter.mp = nil
 	iter.fs = nil
+}
+
+func (iter *ObjectIter) Close() {
+	iter.Reset()
 }

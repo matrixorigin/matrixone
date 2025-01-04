@@ -112,8 +112,13 @@ func mockDataBatch(
 				var obj objectio.ObjectStats
 				objname := objectio.MockObjectName()
 				objectio.SetObjectStatsObjectName(&obj, objname)
+				// Here we hard code the object size to 1000 for testing
+				objectio.SetObjectStatsSize(&obj, uint32(1000))
 				packer.Reset()
 				EncodeCluser(packer, tableid, objname.ObjectId())
+				// if tableid == uint64(4) {
+				// 	t.Logf("debug %s", obj.String())
+				// }
 
 				require.NoError(t, vector.AppendFixed(vec, dbid, false, mp))
 				require.NoError(t, vector.AppendFixed(tableVec, tableid, false, mp))

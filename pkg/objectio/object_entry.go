@@ -45,10 +45,8 @@ type ObjectEntry struct {
 
 func (o ObjectEntry) String() string {
 	return fmt.Sprintf(
-		"%s; appendable: %v; sorted: %v; createTS: %s; deleteTS: %s",
+		"%s|%s->%s",
 		o.ObjectStats.String(),
-		o.ObjectStats.GetAppendable(),
-		o.ObjectStats.GetSorted(),
 		o.CreateTime.ToString(),
 		o.DeleteTime.ToString())
 }

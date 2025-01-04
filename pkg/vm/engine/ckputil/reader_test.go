@@ -139,12 +139,36 @@ func Test_Reader1(t *testing.T) {
 	}
 	require.Equal(t, expectRows, tableRows)
 
-	table4Ranges := ExportToTableRanges(
-		ranges,
-		uint64(4),
-	)
-	t.Log(TableRangesString(table4Ranges))
-	require.Equal(t, 1, len(table4Ranges))
-	require.Equal(t, 10, table4Ranges[0].Rows())
+	// tableRanges := ExportToTableRanges(
+	// 	ranges,
+	// 	uint64(4),
+	// )
+	// t.Log(TableRangesString(tableRanges))
+	// require.Equal(t, 1, len(tableRanges))
+	// require.Equal(t, 10, TableRangesRows(tableRanges))
 
+	tableRanges := ExportToTableRanges(
+		ranges,
+		uint64(2),
+	)
+	t.Log(TableRangesString(tableRanges))
+	require.Equal(t, 2, len(tableRanges))
+
+	iter := NewObjectIter(
+		ctx,
+		tableRanges,
+		mp,
+		fs,
+	)
+	cnt := 0
+	for ok, err := iter.Next(); ok && err == nil; ok, err = iter.Next() {
+		entry := iter.Entry()
+		require.Truef(t, entry.DeleteTime.GT(&entry.CreateTime), entry.String())
+		// the size of the object is hard code to 1000 in mockDataBatch
+		require.Falsef(t, entry.ObjectStats.Size() == uint32(1000), entry.String())
+		// t.Log(entry.String())
+		cnt++
+	}
+	iter.Close()
+	require.Equal(t, 9000, cnt)
 }
