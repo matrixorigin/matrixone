@@ -52,35 +52,35 @@ func MakeDataScanTableIDBatch() *batch.Batch {
 	)
 }
 
-var DataScan_TableEntryAttrs = []string{
+var DataScan_ObjectEntryAttrs = []string{
 	TableObjectsAttr_Table,
 	TableObjectsAttr_ID,
 	TableObjectsAttr_CreateTS,
 	TableObjectsAttr_DeleteTS,
-	objectio.PhysicalAddr_Attr,
+	// objectio.PhysicalAddr_Attr,
 }
 
-var DataScan_TableEntryTypes = []types.Type{
+var DataScan_ObjectEntryTypes = []types.Type{
 	TableObjectsTypes[TableObjectsAttr_Table_Idx],
 	TableObjectsTypes[TableObjectsAttr_ID_Idx],
 	TableObjectsTypes[TableObjectsAttr_CreateTS_Idx],
 	TableObjectsTypes[TableObjectsAttr_DeleteTS_Idx],
-	objectio.RowidType,
+	// objectio.RowidType,
 }
 
-var DataScan_TableEntrySeqnums = []uint16{
+var DataScan_ObjectEntrySeqnums = []uint16{
 	TableObjectsAttr_Table_Idx,
 	TableObjectsAttr_ID_Idx,
 	TableObjectsAttr_CreateTS_Idx,
 	TableObjectsAttr_DeleteTS_Idx,
-	objectio.SEQNUM_ROWID,
+	// objectio.SEQNUM_ROWID,
 }
 
 func MakeDataScanTableEntryBatch() *batch.Batch {
 	return batch.NewWithSchema(
 		true,
-		DataScan_TableEntryAttrs,
-		DataScan_TableEntryTypes,
+		DataScan_ObjectEntryAttrs,
+		DataScan_ObjectEntryTypes,
 	)
 }
 
@@ -156,10 +156,10 @@ func (iter *ObjectIter) Next() (bool, error) {
 		var err error
 		if _, iter.release, err = ioutil.LoadColumnsData(
 			iter.ctx,
-			ObjectEntrySeqnums,
-			ObjectEntryTypes,
+			DataScan_ObjectEntrySeqnums,
+			DataScan_ObjectEntryTypes,
 			iter.fs,
-			iter.ranges[iter.index.rangeIdx].Location[:],
+			iter.ranges[iter.index.rangeIdx].Location,
 			iter.data,
 			iter.mp,
 			0,
