@@ -19,11 +19,13 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -76,5 +78,40 @@ func Test_Reader1(t *testing.T) {
 	}
 	require.Equal(t, 2, len(files))
 	require.Equal(t, allRows, totalRows)
+
+	readBat := batch.NewWithSchema(
+		true,
+		TableEntryAttrs2,
+		TableEntryTypes2,
+	)
+	defer readBat.Clean(mp)
+
+	for _, file := range files {
+		reader := NewDataReader(
+			ctx,
+			fs,
+			file,
+			readutil.WithColumns(
+				TableEntrySeqnums2,
+				TableEntryTypes2,
+			),
+		)
+		// reader.Read(
+		// 	ctx, []string, *plan.Expr, *mpool.MPool, *batch.Batch) (bool, error)
+		// 	reader.Read()
+		row := 0
+		for {
+			readBat.CleanOnlyData()
+			isEnd, err := reader.Read(
+				ctx, TableEntryAttrs2, nil, mp, readBat,
+			)
+			require.NoError(t, err)
+			if isEnd {
+				break
+			}
+			row += readBat.RowCount()
+		}
+		require.Equal(t, int(file.Rows()), row)
+	}
 
 }

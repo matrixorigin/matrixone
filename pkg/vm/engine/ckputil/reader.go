@@ -29,31 +29,40 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
+var TableEntryAttrs2 = []string{
+	TableObjectsAttr_Table,
+	TableObjectsAttr_ID,
+	TableObjectsAttr_CreateTS,
+	TableObjectsAttr_DeleteTS,
+	objectio.PhysicalAddr_Attr,
+}
+
+var TableEntryTypes2 = []types.Type{
+	TableObjectsTypes[TableObjectsAttr_Table_Idx],
+	TableObjectsTypes[TableObjectsAttr_ID_Idx],
+	TableObjectsTypes[TableObjectsAttr_CreateTS_Idx],
+	TableObjectsTypes[TableObjectsAttr_DeleteTS_Idx],
+	objectio.RowidType,
+}
+
+var TableEntrySeqnums2 = []uint16{
+	TableObjectsAttr_Table_Idx,
+	TableObjectsAttr_ID_Idx,
+	TableObjectsAttr_CreateTS_Idx,
+	TableObjectsAttr_DeleteTS_Idx,
+	objectio.SEQNUM_ROWID,
+}
+
 func NewDataReader(
 	ctx context.Context,
 	fs fileservice.FileService,
-	objs []objectio.ObjectStats,
+	obj objectio.ObjectStats,
 	opts ...readutil.ReaderOption,
 ) engine.Reader {
-	return readutil.SimpleMultiObjectsReader(
+	return readutil.SimpleObjectReader(
 		ctx,
 		fs,
-		objs,
-		timestamp.Timestamp{},
-		opts...,
-	)
-}
-
-func NewMetaReader(
-	ctx context.Context,
-	fs fileservice.FileService,
-	objs []objectio.ObjectStats,
-	opts ...readutil.ReaderOption,
-) engine.Reader {
-	return readutil.SimpleMultiObjectsReader(
-		ctx,
-		fs,
-		objs,
+		&obj,
 		timestamp.Timestamp{},
 		opts...,
 	)
