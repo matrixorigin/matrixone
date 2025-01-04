@@ -73,7 +73,19 @@ var TableObjectsTypes = []types.Type{
 	// types.T_Rowid.ToType(),
 }
 
+var ObjectEntryTypes = []types.Type{
+	TableObjectsTypes[TableObjectsAttr_ID_Idx],
+	TableObjectsTypes[TableObjectsAttr_CreateTS_Idx],
+	TableObjectsTypes[TableObjectsAttr_DeleteTS_Idx],
+}
+
 var TableObjectsSeqnums = []uint16{0, 1, 2, 3, 4, 5, 6}
+
+var ObjectEntrySeqnums = []uint16{
+	TableObjectsAttr_ID_Idx,
+	TableObjectsAttr_CreateTS_Idx,
+	TableObjectsAttr_DeleteTS_Idx,
+}
 
 const (
 	MetaAttr_Table    = "table_id"
