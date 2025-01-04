@@ -30,7 +30,29 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
-var TableEntryAttrs2 = []string{
+// used to scan data with columns: [`table_id`, `phy_addr`]
+var DataScan_TableIDAtrrs = []string{
+	TableObjectsAttr_Table,
+	objectio.PhysicalAddr_Attr,
+}
+var DataScan_TableIDTypes = []types.Type{
+	TableObjectsTypes[TableObjectsAttr_Table_Idx],
+	objectio.RowidType,
+}
+var DataScan_TableIDSeqnums = []uint16{
+	TableObjectsAttr_Table_Idx,
+	objectio.SEQNUM_ROWID,
+}
+
+func MakeDataScanTableIDBatch() *batch.Batch {
+	return batch.NewWithSchema(
+		true,
+		DataScan_TableIDAtrrs,
+		DataScan_TableIDTypes,
+	)
+}
+
+var DataScan_TableEntryAttrs = []string{
 	TableObjectsAttr_Table,
 	TableObjectsAttr_ID,
 	TableObjectsAttr_CreateTS,
@@ -38,7 +60,7 @@ var TableEntryAttrs2 = []string{
 	objectio.PhysicalAddr_Attr,
 }
 
-var TableEntryTypes2 = []types.Type{
+var DataScan_TableEntryTypes = []types.Type{
 	TableObjectsTypes[TableObjectsAttr_Table_Idx],
 	TableObjectsTypes[TableObjectsAttr_ID_Idx],
 	TableObjectsTypes[TableObjectsAttr_CreateTS_Idx],
@@ -46,12 +68,20 @@ var TableEntryTypes2 = []types.Type{
 	objectio.RowidType,
 }
 
-var TableEntrySeqnums2 = []uint16{
+var DataScan_TableEntrySeqnums = []uint16{
 	TableObjectsAttr_Table_Idx,
 	TableObjectsAttr_ID_Idx,
 	TableObjectsAttr_CreateTS_Idx,
 	TableObjectsAttr_DeleteTS_Idx,
 	objectio.SEQNUM_ROWID,
+}
+
+func MakeDataScanTableEntryBatch() *batch.Batch {
+	return batch.NewWithSchema(
+		true,
+		DataScan_TableEntryAttrs,
+		DataScan_TableEntryTypes,
+	)
 }
 
 func NewDataReader(
@@ -67,38 +97,6 @@ func NewDataReader(
 		timestamp.Timestamp{},
 		opts...,
 	)
-}
-
-// the schema of the table entry
-// 0: table id
-// 1: start rowid
-// 2: end rowid
-// 3: location
-func (r *TableRange) AppendTo(bat *batch.Batch, mp *mpool.MPool) (err error) {
-	if err = vector.AppendFixed[uint64](
-		bat.Vecs[0], r.TableID, false, mp,
-	); err != nil {
-		return
-	}
-	if err = vector.AppendFixed[types.Rowid](
-		bat.Vecs[1], r.Start, false, mp,
-	); err != nil {
-		return
-	}
-	if err = vector.AppendFixed[types.Rowid](
-		bat.Vecs[2], r.End, false, mp,
-	); err != nil {
-		return
-	}
-	if err = vector.AppendBytes(bat.Vecs[3], r.Location, false, mp); err != nil {
-		return
-	}
-	bat.AddRowCount(1)
-	return
-}
-
-func (r *TableRange) IsEmpty() bool {
-	return r.Start == types.Rowid{}
 }
 
 type ObjectIter struct {

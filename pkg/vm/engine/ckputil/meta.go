@@ -55,32 +55,43 @@ type TableRange struct {
 	Location objectio.Location
 }
 
+// the schema of the table entry
+// 0: table id
+// 1: start rowid
+// 2: end rowid
+// 3: location
+func (r *TableRange) AppendTo(bat *batch.Batch, mp *mpool.MPool) (err error) {
+	if err = vector.AppendFixed[uint64](
+		bat.Vecs[0], r.TableID, false, mp,
+	); err != nil {
+		return
+	}
+	if err = vector.AppendFixed[types.Rowid](
+		bat.Vecs[1], r.Start, false, mp,
+	); err != nil {
+		return
+	}
+	if err = vector.AppendFixed[types.Rowid](
+		bat.Vecs[2], r.End, false, mp,
+	); err != nil {
+		return
+	}
+	if err = vector.AppendBytes(bat.Vecs[3], r.Location, false, mp); err != nil {
+		return
+	}
+	bat.AddRowCount(1)
+	return
+}
+
+func (r *TableRange) IsEmpty() bool {
+	return r.Start == types.Rowid{}
+}
+
 func MakeTableRangeBatch() *batch.Batch {
 	return batch.NewWithSchema(
 		true,
 		MetaSchema_TableRange_Attrs,
 		MetaSchema_TableRange_Types,
-	)
-}
-
-var MetaScan_TableIDAtrrs = []string{
-	TableObjectsAttr_Table,
-	objectio.PhysicalAddr_Attr,
-}
-var MetaScan_TableIDTypes = []types.Type{
-	TableObjectsTypes[TableObjectsAttr_Table_Idx],
-	objectio.RowidType,
-}
-var MetaScan_TableIDSeqnums = []uint16{
-	TableObjectsAttr_Table_Idx,
-	objectio.SEQNUM_ROWID,
-}
-
-func MakeMetaScanTableIDBatch() *batch.Batch {
-	return batch.NewWithSchema(
-		true,
-		MetaScan_TableIDAtrrs,
-		MetaScan_TableIDTypes,
 	)
 }
 
@@ -94,7 +105,7 @@ func CollectTableRanges(
 	if len(objs) == 0 {
 		return
 	}
-	tmpBat := MakeMetaScanTableIDBatch()
+	tmpBat := MakeDataScanTableIDBatch()
 	defer tmpBat.Clean(mp)
 	for _, obj := range objs {
 		if err = CollectTableRangesFromFile(
@@ -130,8 +141,8 @@ func CollectTableRangesFromFile(
 		fs,
 		obj,
 		readutil.WithColumns(
-			MetaScan_TableIDSeqnums,
-			MetaScan_TableIDTypes,
+			DataScan_TableIDSeqnums,
+			DataScan_TableIDTypes,
 		),
 	)
 	var (
