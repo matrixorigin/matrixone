@@ -53,6 +53,19 @@ var TableEntrySeqnums2 = []uint16{
 	objectio.SEQNUM_ROWID,
 }
 
+var ScanTableIDAtrrs = []string{
+	TableObjectsAttr_Table,
+	objectio.PhysicalAddr_Attr,
+}
+var ScanTableIDTypes = []types.Type{
+	TableObjectsTypes[TableObjectsAttr_Table_Idx],
+	objectio.RowidType,
+}
+var ScanTableIDSeqnums = []uint16{
+	TableObjectsAttr_Table_Idx,
+	objectio.SEQNUM_ROWID,
+}
+
 func NewDataReader(
 	ctx context.Context,
 	fs fileservice.FileService,

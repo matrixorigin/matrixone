@@ -79,12 +79,12 @@ func Test_Reader1(t *testing.T) {
 	require.Equal(t, 2, len(files))
 	require.Equal(t, allRows, totalRows)
 
-	readBat := batch.NewWithSchema(
+	tableidScanBat := batch.NewWithSchema(
 		true,
-		TableEntryAttrs2,
-		TableEntryTypes2,
+		ScanTableIDAtrrs,
+		ScanTableIDTypes,
 	)
-	defer readBat.Clean(mp)
+	defer tableidScanBat.Clean(mp)
 
 	for _, file := range files {
 		reader := NewDataReader(
@@ -92,24 +92,21 @@ func Test_Reader1(t *testing.T) {
 			fs,
 			file,
 			readutil.WithColumns(
-				TableEntrySeqnums2,
-				TableEntryTypes2,
+				ScanTableIDSeqnums,
+				ScanTableIDTypes,
 			),
 		)
-		// reader.Read(
-		// 	ctx, []string, *plan.Expr, *mpool.MPool, *batch.Batch) (bool, error)
-		// 	reader.Read()
 		row := 0
 		for {
-			readBat.CleanOnlyData()
+			tableidScanBat.CleanOnlyData()
 			isEnd, err := reader.Read(
-				ctx, TableEntryAttrs2, nil, mp, readBat,
+				ctx, tableidScanBat.Attrs, nil, mp, tableidScanBat,
 			)
 			require.NoError(t, err)
 			if isEnd {
 				break
 			}
-			row += readBat.RowCount()
+			row += tableidScanBat.RowCount()
 		}
 		require.Equal(t, int(file.Rows()), row)
 	}
