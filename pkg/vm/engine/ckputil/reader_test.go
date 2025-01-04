@@ -84,8 +84,8 @@ func Test_Reader1(t *testing.T) {
 
 	tableidScanBat := batch.NewWithSchema(
 		true,
-		ScanTableIDAtrrs,
-		ScanTableIDTypes,
+		MetaScan_TableIDAtrrs,
+		MetaScan_TableIDTypes,
 	)
 	defer tableidScanBat.Clean(mp)
 
@@ -95,8 +95,8 @@ func Test_Reader1(t *testing.T) {
 			fs,
 			file,
 			readutil.WithColumns(
-				ScanTableIDSeqnums,
-				ScanTableIDTypes,
+				MetaScan_TableIDSeqnums,
+				MetaScan_TableIDTypes,
 			),
 		)
 		row := 0

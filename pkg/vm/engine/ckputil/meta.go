@@ -27,14 +27,21 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 )
 
-var TableRangeSeqnums = []uint16{0, 1, 2, 3}
-var TableRangeAttrs = []string{
+// MetaSchema
+// ['table_id', 'start_row', 'end_row', 'location']
+// [uint64, uint64, uint64, string]
+// `table_id` is the id of the table
+// `start_row` is the start rowid of the table in the object
+// `end_row` is the end rowid of the table in the object (same object as `start_row`)
+// `location` is the location of the object
+var MetaSchema_TableRange_Seqnums = []uint16{0, 1, 2, 3}
+var MetaSchema_TableRange_Attrs = []string{
 	TableObjectsAttr_Table,
 	"start_row",
 	"end_row",
 	"location",
 }
-var TableRangeTypes = []types.Type{
+var MetaSchema_TableRange_Types = []types.Type{
 	TableObjectsTypes[TableObjectsAttr_Table_Idx],
 	objectio.RowidType,
 	objectio.RowidType,
@@ -51,16 +58,29 @@ type TableRange struct {
 func MakeTableRangeBatch() *batch.Batch {
 	return batch.NewWithSchema(
 		true,
-		TableRangeAttrs,
-		TableRangeTypes,
+		MetaSchema_TableRange_Attrs,
+		MetaSchema_TableRange_Types,
 	)
 }
 
-func MakeTableidScanBatch() *batch.Batch {
+var MetaScan_TableIDAtrrs = []string{
+	TableObjectsAttr_Table,
+	objectio.PhysicalAddr_Attr,
+}
+var MetaScan_TableIDTypes = []types.Type{
+	TableObjectsTypes[TableObjectsAttr_Table_Idx],
+	objectio.RowidType,
+}
+var MetaScan_TableIDSeqnums = []uint16{
+	TableObjectsAttr_Table_Idx,
+	objectio.SEQNUM_ROWID,
+}
+
+func MakeMetaScanTableIDBatch() *batch.Batch {
 	return batch.NewWithSchema(
 		true,
-		ScanTableIDAtrrs,
-		ScanTableIDTypes,
+		MetaScan_TableIDAtrrs,
+		MetaScan_TableIDTypes,
 	)
 }
 
@@ -74,7 +94,7 @@ func CollectTableRanges(
 	if len(objs) == 0 {
 		return
 	}
-	tmpBat := MakeTableidScanBatch()
+	tmpBat := MakeMetaScanTableIDBatch()
 	defer tmpBat.Clean(mp)
 	for _, obj := range objs {
 		if err = CollectTableRangesFromFile(
@@ -110,8 +130,8 @@ func CollectTableRangesFromFile(
 		fs,
 		obj,
 		readutil.WithColumns(
-			ScanTableIDSeqnums,
-			ScanTableIDTypes,
+			MetaScan_TableIDSeqnums,
+			MetaScan_TableIDTypes,
 		),
 	)
 	var (
