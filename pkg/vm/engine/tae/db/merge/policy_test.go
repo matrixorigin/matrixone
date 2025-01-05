@@ -264,6 +264,16 @@ func TestObjOverlap(t *testing.T) {
 	}
 
 	policy.resetForTable(nil, nil)
+
+	for i := range 30 {
+		require.True(t, policy.onObject(newSortedTestObjectEntry(t, int32(i), int32(i+100), overlapSizeThreshold), defaultBasicConfig))
+	}
+
+	objs = policy.revise(rc)
+	require.Equal(t, 1, len(objs))
+	require.Equal(t, 20, len(objs[0].objs))
+
+	policy.resetForTable(nil, nil)
 }
 
 func TestPolicyCompact(t *testing.T) {
