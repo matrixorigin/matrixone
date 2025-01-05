@@ -3212,7 +3212,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 			logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, err)
 		}
 	}()
-	_, _, _ = fault.TriggerFault("exec_request_panic")
+	_, _, _ = fault.TriggerFaultInDomain(fault.DomainFrontend, "exec_request_panic")
 
 	ses.EnterFPrint(FPExecRequest)
 	defer ses.ExitFPrint(FPExecRequest)
