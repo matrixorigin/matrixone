@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 )
@@ -463,7 +462,7 @@ func (e *CheckpointEntry) GetTableByID(
 		return
 	}
 	data := logtail.NewCNCheckpointData(e.sid)
-	err = blockio.PrefetchMeta(e.sid, fs.Service, e.cnLocation)
+	err = ioutil.PrefetchMeta(e.sid, fs.Service, e.cnLocation)
 	if err != nil {
 		return
 	}

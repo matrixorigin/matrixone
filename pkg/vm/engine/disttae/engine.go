@@ -53,7 +53,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/route"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -711,7 +711,7 @@ func (e *Engine) BuildBlockReaders(
 	if blkCnt < num {
 		newNum = blkCnt
 		for i := 0; i < num-blkCnt; i++ {
-			rds = append(rds, new(engine_util.EmptyReader))
+			rds = append(rds, new(readutil.EmptyReader))
 		}
 	}
 	if blkCnt == 0 {
@@ -730,12 +730,12 @@ func (e *Engine) BuildBlockReaders(
 		} else {
 			shard = relData.DataSlice(i*divide+mod, (i+1)*divide+mod)
 		}
-		ds := engine_util.NewRemoteDataSource(
+		ds := readutil.NewRemoteDataSource(
 			ctx,
 			fs,
 			ts,
 			shard)
-		rd, err := engine_util.NewReader(
+		rd, err := readutil.NewReader(
 			ctx,
 			proc.Mp(),
 			e.packerPool,
@@ -744,7 +744,7 @@ func (e *Engine) BuildBlockReaders(
 			ts,
 			expr,
 			ds,
-			engine_util.GetThresholdForReader(newNum),
+			readutil.GetThresholdForReader(newNum),
 			engine.FilterHint{},
 		)
 		if err != nil {

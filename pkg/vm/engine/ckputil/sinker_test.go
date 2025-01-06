@@ -85,6 +85,59 @@ func Test_ClusterKey2(t *testing.T) {
 	}
 }
 
+func mockDataBatch(
+	t *testing.T,
+	data *batch.Batch,
+	rows int,
+	packer *types.Packer,
+	accountId uint32,
+	getDBID func(int) uint64,
+	getTBLID func(uint64, int) uint64,
+	mp *mpool.MPool,
+) {
+	data.CleanOnlyData()
+	for i, vec := range data.Vecs {
+		if i == TableObjectsAttr_Accout_Idx {
+			for j := 0; j < rows; j++ {
+				require.NoError(t, vector.AppendMultiFixed(vec, accountId, false, rows, mp))
+			}
+		} else if i == TableObjectsAttr_DB_Idx {
+			tableVec := data.Vecs[TableObjectsAttr_Table_Idx]
+			idVec := data.Vecs[TableObjectsAttr_ID_Idx]
+			clusterVec := data.Vecs[TableObjectsAttr_Cluster_Idx]
+			for j := 0; j < rows; j++ {
+				dbid := getDBID(j)
+				tableid := getTBLID(dbid, j)
+
+				var obj objectio.ObjectStats
+				objname := objectio.MockObjectName()
+				objectio.SetObjectStatsObjectName(&obj, objname)
+				// Here we hard code the object size to 1000 for testing
+				objectio.SetObjectStatsSize(&obj, uint32(1000))
+				packer.Reset()
+				EncodeCluser(packer, tableid, objname.ObjectId())
+				// if tableid == uint64(4) {
+				// 	t.Logf("debug %s", obj.String())
+				// }
+
+				require.NoError(t, vector.AppendFixed(vec, dbid, false, mp))
+				require.NoError(t, vector.AppendFixed(tableVec, tableid, false, mp))
+				require.NoError(t, vector.AppendBytes(idVec, []byte(objname), false, mp))
+				require.NoError(t, vector.AppendBytes(clusterVec, packer.Bytes(), false, mp))
+			}
+		} else if i == TableObjectsAttr_CreateTS_Idx {
+			for j := 0; j < rows; j++ {
+				require.NoError(t, vector.AppendFixed(vec, types.NextGlobalTsForTest(), false, mp))
+			}
+		} else if i == TableObjectsAttr_DeleteTS_Idx {
+			for j := 0; j < rows; j++ {
+				require.NoError(t, vector.AppendFixed(vec, types.NextGlobalTsForTest(), false, mp))
+			}
+		}
+	}
+	data.SetRowCount(rows)
+}
+
 func Test_Sinker1(t *testing.T) {
 	proc := testutil.NewProc()
 	fs, err := fileservice.Get[fileservice.FileService](
@@ -102,7 +155,7 @@ func Test_Sinker1(t *testing.T) {
 	}
 	dbs := []uint64{1, 2, 3}
 
-	sinker := NewSinker(
+	sinker := NewDataSinker(
 		mp,
 		fs,
 		ioutil.WithMemorySizeThreshold(mpool.KB),
@@ -111,52 +164,24 @@ func Test_Sinker1(t *testing.T) {
 
 	packer := types.NewPacker()
 	defer packer.Close()
-
-	fillNext := func(data *batch.Batch, rows int) {
-		data.CleanOnlyData()
-		for i, vec := range data.Vecs {
-			if i == TableObjectsAttr_Accout_Idx {
-				for j := 0; j < rows; j++ {
-					require.NoError(t, vector.AppendMultiFixed(vec, accountId, false, rows, mp))
-				}
-			} else if i == TableObjectsAttr_DB_Idx {
-				tableVec := data.Vecs[TableObjectsAttr_Table_Idx]
-				idVec := data.Vecs[TableObjectsAttr_ID_Idx]
-				clusterVec := data.Vecs[TableObjectsAttr_Cluster_Idx]
-				for j := 0; j < rows; j++ {
-					dbid := dbs[j%len(dbs)]
-					tables := mapping[dbid]
-					tableid := tables[j%len(tables)]
-
-					var obj objectio.ObjectStats
-					objname := objectio.MockObjectName()
-					objectio.SetObjectStatsObjectName(&obj, objname)
-					packer.Reset()
-					EncodeCluser(packer, tableid, objname.ObjectId())
-
-					require.NoError(t, vector.AppendFixed(vec, dbid, false, mp))
-					require.NoError(t, vector.AppendFixed(tableVec, tableid, false, mp))
-					require.NoError(t, vector.AppendBytes(idVec, []byte(objname), false, mp))
-					require.NoError(t, vector.AppendBytes(clusterVec, packer.Bytes(), false, mp))
-				}
-			} else if i == TableObjectsAttr_CreateTS_Idx {
-				for j := 0; j < rows; j++ {
-					require.NoError(t, vector.AppendFixed(vec, types.NextGlobalTsForTest(), false, mp))
-				}
-			} else if i == TableObjectsAttr_DeleteTS_Idx {
-				for j := 0; j < rows; j++ {
-					require.NoError(t, vector.AppendFixed(vec, types.NextGlobalTsForTest(), false, mp))
-				}
-			}
-		}
-		data.SetRowCount(rows)
+	// dbid := dbs[j%len(dbs)]
+	// tables := mapping[dbid]
+	// tableid := tables[j%len(tables)]
+	getDBID := func(i int) uint64 {
+		return dbs[i%len(dbs)]
+	}
+	getTBLID := func(dbid uint64, i int) uint64 {
+		tables := mapping[dbid]
+		return tables[i%len(tables)]
 	}
 
 	ctx := context.Background()
 
 	rows := 0
 	for i := 0; i < 5; i++ {
-		fillNext(bat, 100)
+		mockDataBatch(
+			t, bat, 100, packer, accountId, getDBID, getTBLID, mp,
+		)
 		require.NoError(t, sinker.Write(ctx, bat))
 		rows += 100
 	}
