@@ -127,7 +127,7 @@ func (replayer *Replayer) Replay() {
 		zap.Duration("apply-cost", replayer.applyDuration),
 		zap.Int("read-count", replayer.readCount),
 		zap.Int("apply-count", replayer.applyCount),
-		zap.Uint64("max LSN", replayer.maxLSN),
+		zap.Uint64("max-lsn", replayer.maxLSN),
 	)
 }
 

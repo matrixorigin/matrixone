@@ -67,7 +67,7 @@ type replayer struct {
 
 func newReplayer(h driver.ApplyHandle, readmaxsize int, d *LogServiceDriver) *replayer {
 	truncated := d.getLogserviceTruncate()
-	logutil.Info("Wal-Replay-Trace-Get-Truncated", zap.Uint64("truncated LogService LSN", truncated))
+	logutil.Info("Wal-Replay-Trace-Get-Truncated", zap.Uint64("lsLSN", truncated))
 	r := &replayer{
 		minDriverLsn:              math.MaxUint64,
 		driverLsnLogserviceLsnMap: make(map[uint64]uint64),
@@ -155,7 +155,7 @@ func (r *replayer) replayRecords() {
 				logutil.Info("Wal-Replay-Trace-Replay-End-Empty")
 			} else {
 				logutil.Info("Wal-Replay-Trace-Replay-End",
-					zap.Uint64("last driver lsn", r.lastEntry.Lsn))
+					zap.Uint64("last-drlsn", r.lastEntry.Lsn))
 			}
 			break
 		}
@@ -163,7 +163,7 @@ func (r *replayer) replayRecords() {
 		state := r.replayHandle(e)
 		if state == driver.RE_Nomal {
 			if !r.firstEntryIsFound.Load() {
-				logutil.Info("Wal-Replay-Trace-Find-First-Entry", zap.Uint64("driver lsn", e.Lsn))
+				logutil.Info("Wal-Replay-Trace-Find-First-Entry", zap.Uint64("drlsn", e.Lsn))
 			}
 			r.firstEntryIsFound.Store(true)
 		}
@@ -189,7 +189,7 @@ func (r *replayer) replayLogserviceEntry(lsn uint64) error {
 		safe := lsn <= r.safeLsn
 		if safe {
 			if !firstEntryIsFound {
-				logutil.Info("Wal-Replay-Trace-Skip-Entry", zap.Uint64("driver lsn", lsn))
+				logutil.Info("Wal-Replay-Trace-Skip-Entry", zap.Uint64("drlsn", lsn))
 				r.minDriverLsn = lsn + 1
 				r.replayedLsn++
 				return nil
@@ -229,7 +229,7 @@ func (r *replayer) AppendSkipCmd(skipMap map[uint64]uint64) {
 		panic(fmt.Sprintf("logic error, skip %d entries, client max count is %v, skip map is %v",
 			len(skipMap), r.d.config.ClientMaxCount, skipMap))
 	}
-	logutil.Info("Wal-Replay-Trace-Skip-Entries", zap.Any("driver lsn vs LogServiceLsn", skipMap))
+	logutil.Info("Wal-Replay-Trace-Skip-Entries", zap.Any("drlsn-lslsn", skipMap))
 	cmd := NewReplayCmd(skipMap)
 	recordEntry := newRecordEntry()
 	recordEntry.Meta.metaType = TReplay
