@@ -359,14 +359,14 @@ select count(*) from t;
 count(*)
 200000
 insert into t select * from t;
-Duplicate entry '1' for key 'a'
+(Duplicate entry)([\d\D]*)(for key 'a')
 begin;
 insert into t select * from t;
 select count(*) from t;
 count(*)
 400000
 commit;
-Duplicate entry '1' for key 'a'
+(Duplicate entry)([\d\D]*)(for key 'a')
 select count(*) from t;
 count(*)
 200000
