@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/golang/mock/gomock"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/prashantv/gostub"
 	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/require"
@@ -586,22 +587,67 @@ func Test_extractPubInfosFromExecResultOld(t *testing.T) {
 	mockedPubInfoResults := func(ctrl *gomock.Controller) []ExecResult {
 		er := mock_frontend.NewMockExecResult(ctrl)
 		er.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
-		er.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(0)).Return(int64(0), nil).AnyTimes()
-		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(1)).Return("pub1", nil).AnyTimes()
-		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(2)).Return("db1", nil).AnyTimes()
-		er.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(3)).Return(uint64(0), nil).AnyTimes()
-		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(4)).Return("*", nil).AnyTimes()
-		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(5)).Return("*", nil).AnyTimes()
-		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(6)).Return("", nil).AnyTimes()
-		er.EXPECT().ColumnIsNull(gomock.Any(), uint64(0), uint64(7)).Return(true, nil).AnyTimes()
-		er.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(8)).Return(uint64(0), nil).AnyTimes()
-		er.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(9)).Return(uint64(0), nil).AnyTimes()
-		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(10)).Return("", nil).AnyTimes()
+		er.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(0)).Return(int64(0), nil).Times(11)
+		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(1)).Return("pub1", nil).Times(10)
+		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(2)).Return("db1", nil).Times(9)
+		er.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(3)).Return(uint64(0), nil).Times(8)
+		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(4)).Return("*", nil).Times(7)
+		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(5)).Return("*", nil).Times(6)
+		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(6)).Return("", nil).Times(5)
+		er.EXPECT().ColumnIsNull(gomock.Any(), uint64(0), uint64(7)).Return(true, nil).Times(4)
+		er.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(8)).Return(uint64(0), nil).Times(3)
+		er.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(9)).Return(uint64(0), nil).Times(2)
+		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(10)).Return("", nil).Times(1)
 		return []ExecResult{er}
-	}
+	}(ctrl)
+	fakeErr := moerr.NewInternalErrorNoCtx("")
 
-	_, err := extractPubInfosFromExecResultOld(context.Background(), mockedPubInfoResults(ctrl))
+	_, err := extractPubInfosFromExecResultOld(context.Background(), mockedPubInfoResults)
 	require.NoError(t, err)
+
+	mockedPubInfoResults[0].(*mock_frontend.MockExecResult).EXPECT().GetString(gomock.Any(), uint64(0), uint64(10)).Return("", fakeErr)
+	_, err = extractPubInfosFromExecResultOld(context.Background(), mockedPubInfoResults)
+	require.Error(t, err)
+
+	mockedPubInfoResults[0].(*mock_frontend.MockExecResult).EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(9)).Return(uint64(0), fakeErr)
+	_, err = extractPubInfosFromExecResultOld(context.Background(), mockedPubInfoResults)
+	require.Error(t, err)
+
+	mockedPubInfoResults[0].(*mock_frontend.MockExecResult).EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(8)).Return(uint64(0), fakeErr)
+	_, err = extractPubInfosFromExecResultOld(context.Background(), mockedPubInfoResults)
+	require.Error(t, err)
+
+	mockedPubInfoResults[0].(*mock_frontend.MockExecResult).EXPECT().ColumnIsNull(gomock.Any(), uint64(0), uint64(7)).Return(true, fakeErr)
+	_, err = extractPubInfosFromExecResultOld(context.Background(), mockedPubInfoResults)
+	require.Error(t, err)
+
+	mockedPubInfoResults[0].(*mock_frontend.MockExecResult).EXPECT().GetString(gomock.Any(), uint64(0), uint64(6)).Return("", fakeErr)
+	_, err = extractPubInfosFromExecResultOld(context.Background(), mockedPubInfoResults)
+	require.Error(t, err)
+
+	mockedPubInfoResults[0].(*mock_frontend.MockExecResult).EXPECT().GetString(gomock.Any(), uint64(0), uint64(5)).Return("*", fakeErr)
+	_, err = extractPubInfosFromExecResultOld(context.Background(), mockedPubInfoResults)
+	require.Error(t, err)
+
+	mockedPubInfoResults[0].(*mock_frontend.MockExecResult).EXPECT().GetString(gomock.Any(), uint64(0), uint64(4)).Return("*", fakeErr)
+	_, err = extractPubInfosFromExecResultOld(context.Background(), mockedPubInfoResults)
+	require.Error(t, err)
+
+	mockedPubInfoResults[0].(*mock_frontend.MockExecResult).EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(3)).Return(uint64(0), fakeErr)
+	_, err = extractPubInfosFromExecResultOld(context.Background(), mockedPubInfoResults)
+	require.Error(t, err)
+
+	mockedPubInfoResults[0].(*mock_frontend.MockExecResult).EXPECT().GetString(gomock.Any(), uint64(0), uint64(2)).Return("db1", fakeErr)
+	_, err = extractPubInfosFromExecResultOld(context.Background(), mockedPubInfoResults)
+	require.Error(t, err)
+
+	mockedPubInfoResults[0].(*mock_frontend.MockExecResult).EXPECT().GetString(gomock.Any(), uint64(0), uint64(1)).Return("pub1", fakeErr)
+	_, err = extractPubInfosFromExecResultOld(context.Background(), mockedPubInfoResults)
+	require.Error(t, err)
+
+	mockedPubInfoResults[0].(*mock_frontend.MockExecResult).EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(0)).Return(int64(0), fakeErr)
+	_, err = extractPubInfosFromExecResultOld(context.Background(), mockedPubInfoResults)
+	require.Error(t, err)
 }
 
 func Test_extractSubInfosFromExecResultOld(t *testing.T) {
@@ -611,19 +657,60 @@ func Test_extractSubInfosFromExecResultOld(t *testing.T) {
 	mockedSubInfoResults := func(ctrl *gomock.Controller) []ExecResult {
 		er := mock_frontend.NewMockExecResult(ctrl)
 		er.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
-		er.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(0)).Return(int64(1), nil).AnyTimes()
-		er.EXPECT().ColumnIsNull(gomock.Any(), uint64(0), uint64(1)).Return(true, nil).AnyTimes()
-		er.EXPECT().ColumnIsNull(gomock.Any(), uint64(0), uint64(2)).Return(true, nil).AnyTimes()
-		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(3)).Return("sys", nil).AnyTimes()
-		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(4)).Return("pub1", nil).AnyTimes()
-		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(5)).Return("db1", nil).AnyTimes()
-		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(6)).Return("*", nil).AnyTimes()
-		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(7)).Return("", nil).AnyTimes()
-		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(8)).Return("", nil).AnyTimes()
-		er.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(9)).Return(int64(0), nil).AnyTimes()
+		er.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(0)).Return(int64(1), nil).Times(10)
+		er.EXPECT().ColumnIsNull(gomock.Any(), uint64(0), uint64(1)).Return(true, nil).Times(9)
+		er.EXPECT().ColumnIsNull(gomock.Any(), uint64(0), uint64(2)).Return(true, nil).Times(8)
+		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(3)).Return("sys", nil).Times(7)
+		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(4)).Return("pub1", nil).Times(6)
+		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(5)).Return("db1", nil).Times(5)
+		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(6)).Return("*", nil).Times(4)
+		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(7)).Return("", nil).Times(3)
+		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(8)).Return("", nil).Times(2)
+		er.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(9)).Return(int64(0), nil).Times(1)
 		return []ExecResult{er}
-	}
+	}(ctrl)
+	fakeErr := moerr.NewInternalErrorNoCtx("")
 
-	_, err := extractSubInfosFromExecResultOld(context.Background(), mockedSubInfoResults(ctrl))
+	_, err := extractSubInfosFromExecResultOld(context.Background(), mockedSubInfoResults)
 	require.NoError(t, err)
+
+	mockedSubInfoResults[0].(*mock_frontend.MockExecResult).EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(9)).Return(int64(0), fakeErr)
+	_, err = extractSubInfosFromExecResultOld(context.Background(), mockedSubInfoResults)
+	require.Error(t, err)
+
+	mockedSubInfoResults[0].(*mock_frontend.MockExecResult).EXPECT().GetString(gomock.Any(), uint64(0), uint64(8)).Return("", fakeErr)
+	_, err = extractSubInfosFromExecResultOld(context.Background(), mockedSubInfoResults)
+	require.Error(t, err)
+
+	mockedSubInfoResults[0].(*mock_frontend.MockExecResult).EXPECT().GetString(gomock.Any(), uint64(0), uint64(7)).Return("", fakeErr)
+	_, err = extractSubInfosFromExecResultOld(context.Background(), mockedSubInfoResults)
+	require.Error(t, err)
+
+	mockedSubInfoResults[0].(*mock_frontend.MockExecResult).EXPECT().GetString(gomock.Any(), uint64(0), uint64(6)).Return("*", fakeErr)
+	_, err = extractSubInfosFromExecResultOld(context.Background(), mockedSubInfoResults)
+	require.Error(t, err)
+
+	mockedSubInfoResults[0].(*mock_frontend.MockExecResult).EXPECT().GetString(gomock.Any(), uint64(0), uint64(5)).Return("db1", fakeErr)
+	_, err = extractSubInfosFromExecResultOld(context.Background(), mockedSubInfoResults)
+	require.Error(t, err)
+
+	mockedSubInfoResults[0].(*mock_frontend.MockExecResult).EXPECT().GetString(gomock.Any(), uint64(0), uint64(4)).Return("pub1", fakeErr)
+	_, err = extractSubInfosFromExecResultOld(context.Background(), mockedSubInfoResults)
+	require.Error(t, err)
+
+	mockedSubInfoResults[0].(*mock_frontend.MockExecResult).EXPECT().GetString(gomock.Any(), uint64(0), uint64(3)).Return("sys", fakeErr)
+	_, err = extractSubInfosFromExecResultOld(context.Background(), mockedSubInfoResults)
+	require.Error(t, err)
+
+	mockedSubInfoResults[0].(*mock_frontend.MockExecResult).EXPECT().ColumnIsNull(gomock.Any(), uint64(0), uint64(2)).Return(true, fakeErr)
+	_, err = extractSubInfosFromExecResultOld(context.Background(), mockedSubInfoResults)
+	require.Error(t, err)
+
+	mockedSubInfoResults[0].(*mock_frontend.MockExecResult).EXPECT().ColumnIsNull(gomock.Any(), uint64(0), uint64(1)).Return(true, fakeErr)
+	_, err = extractSubInfosFromExecResultOld(context.Background(), mockedSubInfoResults)
+	require.Error(t, err)
+
+	mockedSubInfoResults[0].(*mock_frontend.MockExecResult).EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(0)).Return(int64(1), fakeErr)
+	_, err = extractSubInfosFromExecResultOld(context.Background(), mockedSubInfoResults)
+	require.Error(t, err)
 }
