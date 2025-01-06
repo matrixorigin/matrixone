@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
+	"go.uber.org/zap"
 )
 
 type replayer struct {
@@ -66,7 +67,7 @@ type replayer struct {
 
 func newReplayer(h driver.ApplyHandle, readmaxsize int, d *LogServiceDriver) *replayer {
 	truncated := d.getLogserviceTruncate()
-	logutil.Infof("truncated %d", truncated)
+	logutil.Info("Wal-Replay-Trace-Get-Truncated", zap.Uint64("truncated LogService LSN", truncated))
 	r := &replayer{
 		minDriverLsn:              math.MaxUint64,
 		driverLsnLogserviceLsnMap: make(map[uint64]uint64),
@@ -156,7 +157,7 @@ func (r *replayer) replayRecords() {
 		state := r.replayHandle(e)
 		if state == driver.RE_Nomal {
 			if !r.firstEntryIsFound.Load() {
-				logutil.Infof("open-tae, first driver lsn is %d", e.Lsn)
+				logutil.Info("Wal-Replay-Trace-Find-First-Entry", zap.Uint64("driver lsn", e.Lsn))
 			}
 			r.firstEntryIsFound.Store(true)
 		}
@@ -172,7 +173,6 @@ func (r *replayer) replayLogserviceEntry(lsn uint64) error {
 		skipFn := func() {
 			if len(r.driverLsnLogserviceLsnMap) != 0 {
 				r.AppendSkipCmd(r.driverLsnLogserviceLsnMap)
-				logutil.Infof("skip lsns %v", r.driverLsnLogserviceLsnMap)
 			}
 		}
 		firstEntryIsFound := r.firstEntryIsFound.Load()
@@ -183,7 +183,7 @@ func (r *replayer) replayLogserviceEntry(lsn uint64) error {
 		safe := lsn <= r.safeLsn
 		if safe {
 			if !firstEntryIsFound {
-				logutil.Infof("drlsn %d has been truncated", lsn)
+				logutil.Info("Wal-Replay-Trace-Skip-Entry", zap.Uint64("driver lsn", lsn))
 				r.minDriverLsn = lsn + 1
 				r.replayedLsn++
 				return nil
@@ -223,7 +223,7 @@ func (r *replayer) AppendSkipCmd(skipMap map[uint64]uint64) {
 		panic(fmt.Sprintf("logic error, skip %d entries, client max count is %v, skip map is %v",
 			len(skipMap), r.d.config.ClientMaxCount, skipMap))
 	}
-	logutil.Infof("skip %v", skipMap)
+	logutil.Info("Wal-Replay-Trace-Skip-Entries", zap.Any("driver lsn vs LogServiceLsn", skipMap))
 	cmd := NewReplayCmd(skipMap)
 	recordEntry := newRecordEntry()
 	recordEntry.Meta.metaType = TReplay
