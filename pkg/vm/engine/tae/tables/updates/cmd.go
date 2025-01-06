@@ -17,15 +17,13 @@ package updates
 import (
 	"bytes"
 	"fmt"
-	"io"
-	"unsafe"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
+	"io"
 )
 
 const (
@@ -206,7 +204,7 @@ func (c *UpdateCmd) GetType() uint16 { return c.cmdType }
 
 func (c *UpdateCmd) ApproxMemSize() int {
 	size := 0
-	size += int(unsafe.Sizeof(UpdateCmd{}))
+	size += 26
 	return size
 }
 

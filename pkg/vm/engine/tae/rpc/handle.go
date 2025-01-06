@@ -409,6 +409,8 @@ func (h *Handle) handleRequests(
 				persistedMemoryInsertRows += r2
 				inMemoryTombstoneRows += r3
 				persistedTombstoneRows += r4
+			} else {
+				goto end
 			}
 
 		default:
@@ -420,10 +422,8 @@ func (h *Handle) handleRequests(
 end:
 	if err != nil {
 		//Need to roll back the txn.
-		if err != nil {
-			txn.Rollback(ctx)
-			return
-		}
+		txn.Rollback(ctx)
+		return
 	}
 
 	if inMemoryInsertRows+inMemoryTombstoneRows+persistedTombstoneRows+persistedMemoryInsertRows > 100000 {

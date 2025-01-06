@@ -215,6 +215,8 @@ func generateCkpPayload(data []byte) ([]byte, error) {
 	// prepare write, set the info buf
 	drEntry.Entry.PrepareWrite()
 
+	drEntry.Entry.ExecuteGroupWalPreCallbacks()
+
 	me := newMockEntry()
 	me.meta.SetType(logservicedriver.TNormal)
 	me.appendEntry(drEntry)
