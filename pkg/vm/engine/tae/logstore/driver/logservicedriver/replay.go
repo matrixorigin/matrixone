@@ -21,6 +21,7 @@ import (
 	"io"
 	"math"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -28,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
+	"go.uber.org/zap"
 )
 
 type replayer struct {
@@ -48,7 +50,10 @@ type replayer struct {
 	d             *LogServiceDriver
 	appended      []uint64
 
-	recordChan chan *entry.Entry
+	recordChan        chan *entry.Entry
+	lastEntry         *entry.Entry
+	firstEntryIsFound atomic.Bool
+	readEnd           bool
 
 	applyDuration time.Duration
 	readCount     int
@@ -56,12 +61,14 @@ type replayer struct {
 	applyCount    int
 
 	wg sync.WaitGroup
+
+	readFn func() bool
 }
 
 func newReplayer(h driver.ApplyHandle, readmaxsize int, d *LogServiceDriver) *replayer {
 	truncated := d.getLogserviceTruncate()
-	logutil.Infof("truncated %d", truncated)
-	return &replayer{
+	logutil.Info("Wal-Replay-Trace-Get-Truncated", zap.Uint64("lsLSN", truncated))
+	r := &replayer{
 		minDriverLsn:              math.MaxUint64,
 		driverLsnLogserviceLsnMap: make(map[uint64]uint64),
 		replayHandle:              h,
@@ -74,6 +81,8 @@ func newReplayer(h driver.ApplyHandle, readmaxsize int, d *LogServiceDriver) *re
 		wg:                        sync.WaitGroup{},
 		truncatedLogserviceLsn:    truncated,
 	}
+	r.readFn = r.readRecords
+	return r
 }
 
 func (r *replayer) replay() {
@@ -82,15 +91,16 @@ func (r *replayer) replay() {
 	go r.replayRecords()
 	for !r.readRecords() {
 		for r.replayedLsn < r.safeLsn {
-			err := r.replayLogserviceEntry(r.replayedLsn+1, true)
+			err := r.replayLogserviceEntry(r.replayedLsn + 1)
 			if err != nil {
 				panic(err)
 			}
 		}
 	}
-	err = r.replayLogserviceEntry(r.replayedLsn+1, false)
+	r.readEnd = true
+	err = r.replayLogserviceEntry(r.replayedLsn + 1)
 	for err != ErrAllRecordsRead {
-		err = r.replayLogserviceEntry(r.replayedLsn+1, false)
+		err = r.replayLogserviceEntry(r.replayedLsn + 1)
 
 	}
 	r.d.lsns = make([]uint64, 0)
@@ -118,13 +128,13 @@ func (r *replayer) readRecords() (readEnd bool) {
 			r.replayedLsn = drlsn - 1
 		}
 	})
+	if safeLsn > r.safeLsn {
+		r.safeLsn = safeLsn
+	}
 	if nextLsn == r.nextToReadLsn {
 		return true
 	}
 	r.nextToReadLsn = nextLsn
-	if safeLsn > r.safeLsn {
-		r.safeLsn = safeLsn
-	}
 	return false
 }
 func (r *replayer) removeEntries(skipMap map[uint64]uint64) {
@@ -141,30 +151,59 @@ func (r *replayer) replayRecords() {
 	for {
 		e := <-r.recordChan
 		if e.IsEnd() {
+			if r.lastEntry == nil {
+				logutil.Info("Wal-Replay-Trace-Replay-End-Empty")
+			} else {
+				logutil.Info("Wal-Replay-Trace-Replay-End",
+					zap.Uint64("last-drlsn", r.lastEntry.Lsn))
+			}
 			break
 		}
 		t0 := time.Now()
-		r.replayHandle(e)
+		state := r.replayHandle(e)
+		if state == driver.RE_Nomal {
+			if !r.firstEntryIsFound.Load() {
+				logutil.Info("Wal-Replay-Trace-Find-First-Entry", zap.Uint64("drlsn", e.Lsn))
+			}
+			r.firstEntryIsFound.Store(true)
+		}
+		e.DoneWithErr(nil)
 		e.Entry.Free()
 		r.applyDuration += time.Since(t0)
 	}
 }
 
-func (r *replayer) replayLogserviceEntry(lsn uint64, safe bool) error {
+func (r *replayer) replayLogserviceEntry(lsn uint64) error {
 	logserviceLsn, ok := r.driverLsnLogserviceLsnMap[lsn]
 	if !ok {
-		if safe {
-			logutil.Infof("drlsn %d has been truncated", lsn)
-			r.minDriverLsn = lsn + 1
-			r.replayedLsn++
-			return nil
+		skipFn := func() {
+			if len(r.driverLsnLogserviceLsnMap) != 0 {
+				r.AppendSkipCmd(r.driverLsnLogserviceLsnMap)
+			}
 		}
-		if len(r.driverLsnLogserviceLsnMap) == 0 {
+		firstEntryIsFound := r.firstEntryIsFound.Load()
+		if !firstEntryIsFound && r.lastEntry != nil {
+			r.lastEntry.WaitDone()
+			firstEntryIsFound = r.firstEntryIsFound.Load()
+		}
+		safe := lsn <= r.safeLsn
+		if safe {
+			if !firstEntryIsFound {
+				logutil.Info("Wal-Replay-Trace-Skip-Entry", zap.Uint64("drlsn", lsn))
+				r.minDriverLsn = lsn + 1
+				r.replayedLsn++
+				return nil
+			} else {
+				panic(fmt.Sprintf("logic error, lsn %d is missing, safe lsn %d, map %v",
+					lsn, r.safeLsn, r.driverLsnLogserviceLsnMap))
+			}
+		} else {
+			if !r.readEnd {
+				panic(fmt.Sprintf("logic error, safe lsn %d, lsn %d", r.safeLsn, lsn))
+			}
+			skipFn()
 			return ErrAllRecordsRead
 		}
-		r.AppendSkipCmd(r.driverLsnLogserviceLsnMap)
-		logutil.Infof("skip lsns %v", r.driverLsnLogserviceLsnMap)
-		return ErrAllRecordsRead
 	}
 	record, err := r.d.readFromCache(logserviceLsn)
 	if err == ErrAllRecordsRead {
@@ -186,7 +225,11 @@ func (r *replayer) replayLogserviceEntry(lsn uint64, safe bool) error {
 }
 
 func (r *replayer) AppendSkipCmd(skipMap map[uint64]uint64) {
-	logutil.Infof("skip %v", skipMap)
+	if len(skipMap) > r.d.config.ClientMaxCount {
+		panic(fmt.Sprintf("logic error, skip %d entries, client max count is %v, skip map is %v",
+			len(skipMap), r.d.config.ClientMaxCount, skipMap))
+	}
+	logutil.Info("Wal-Replay-Trace-Skip-Entries", zap.Any("drlsn-lslsn", skipMap))
 	cmd := NewReplayCmd(skipMap)
 	recordEntry := newRecordEntry()
 	recordEntry.Meta.metaType = TReplay
