@@ -55,6 +55,7 @@ type Replayer struct {
 	txnCmdChan    chan *txnbase.TxnCmd
 	readCount     int
 	applyCount    int
+	maxLSN        uint64
 
 	lsn            uint64
 	enableLSNCheck bool
@@ -121,11 +122,13 @@ func (replayer *Replayer) Replay() {
 	close(replayer.txnCmdChan)
 	replayer.wg.Wait()
 	replayer.postReplayWal()
-	logutil.Info("open-tae", common.OperationField("replay"),
-		common.OperandField("wal"),
-		common.AnyField("apply logentries cost", replayer.applyDuration),
-		common.AnyField("read count", replayer.readCount),
-		common.AnyField("apply count", replayer.applyCount))
+	logutil.Info(
+		"open-tae",
+		zap.Duration("apply-cost", replayer.applyDuration),
+		zap.Int("read-count", replayer.readCount),
+		zap.Int("apply-count", replayer.applyCount),
+		zap.Uint64("max LSN", replayer.maxLSN),
+	)
 }
 
 func (replayer *Replayer) OnReplayEntry(group uint32, lsn uint64, payload []byte, typ uint16, info any) driver.ReplayEntryState {
@@ -135,6 +138,9 @@ func (replayer *Replayer) OnReplayEntry(group uint32, lsn uint64, payload []byte
 	}
 	if !replayer.checkLSN(lsn) {
 		return driver.RE_Truncate
+	}
+	if lsn > replayer.maxLSN {
+		replayer.maxLSN = lsn
 	}
 	head := objectio.DecodeIOEntryHeader(payload)
 	if head.Version < txnbase.IOET_WALTxnEntry_V4 {

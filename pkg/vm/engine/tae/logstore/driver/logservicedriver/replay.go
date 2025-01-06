@@ -151,6 +151,12 @@ func (r *replayer) replayRecords() {
 	for {
 		e := <-r.recordChan
 		if e.IsEnd() {
+			if r.lastEntry == nil {
+				logutil.Info("Wal-Replay-Trace-Replay-End-Empty")
+			} else {
+				logutil.Info("Wal-Replay-Trace-Replay-End",
+					zap.Uint64("last driver lsn", r.lastEntry.Lsn))
+			}
 			break
 		}
 		t0 := time.Now()
