@@ -161,6 +161,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 	cteTestSchema := make(map[string]*Schema)
 	bvtTest1Schema := make(map[string]*Schema)
 	bvtTest2Schema := make(map[string]*Schema)
+	bvtTest3Schema := make(map[string]*Schema)
 	informationSchemaSchema := make(map[string]*Schema)
 
 	schemas := map[string]map[string]*Schema{
@@ -170,6 +171,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 		"cte_test":           cteTestSchema,
 		"bvt_test1":          bvtTest1Schema,
 		"bvt_test2":          bvtTest2Schema,
+		"bvt_test3":          bvtTest3Schema,
 		"information_schema": informationSchemaSchema,
 	}
 
@@ -806,6 +808,30 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
 		},
 		pks: []int{0},
+	}
+
+	bvtTest3Schema["myemployees"] = &Schema{
+		cols: []col{
+			{"EmployeeID", types.T_int16, false, 16, 0},
+			{"FirstName", types.T_varchar, false, 255, 0},
+			{"LastName", types.T_varchar, false, 255, 0},
+			{"Title", types.T_varchar, false, 255, 0},
+			{"DeptID", types.T_int16, false, 16, 0},
+			{"ManagerID", types.T_int16, false, 16, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks: []int{0},
+	}
+
+	bvtTest3Schema["cte_view"] = &Schema{
+		cols: []col{
+			{"a", types.T_int32, false, 50, 0},
+		},
+		isView: true,
+		viewCfg: ViewCfg{
+			sql: "create view cte_view as(\nWITH  RECURSIVE DirectReports(Name, Title, EmployeeID, EmployeeLevel)\nAS (SELECT concat(e.FirstName,\" \",e.LastName) as name,\n        e.Title,\n        e.EmployeeID,\n        1 as EmployeeLevel\n    FROM MyEmployees AS e\n    WHERE e.ManagerID IS NULL\n    UNION ALL\n    SELECT concat(e.FirstName,\" \",e.LastName) as name,\n        e.Title,\n        e.EmployeeID,\n        EmployeeLevel + 1\n    FROM MyEmployees AS e\n    JOIN DirectReports AS d ON e.ManagerID = d.EmployeeID\n    )\nSELECT EmployeeID, Name, Title, EmployeeLevel\nFROM DirectReports order by EmployeeID)",
+			db:  "bvt_test3",
+		},
 	}
 
 	informationSchemaSchema["key_column_usage"] = &Schema{
