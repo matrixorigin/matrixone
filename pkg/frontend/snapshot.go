@@ -638,7 +638,7 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 	}
 
 	if len(viewMap) > 0 {
-		if err = restoreViews(ctx, ses, bh, snapshotName, viewMap, toAccountId); err != nil {
+		if err = restoreViews(ctx, ses, bh, snapshotName, viewMap, restoreAccount, toAccountId); err != nil {
 			return
 		}
 	}
@@ -1223,6 +1223,7 @@ func restoreViews(
 	bh BackgroundExec,
 	snapshotName string,
 	viewMap map[string]*tableInfo,
+	fromAccountId uint32,
 	toAccountId uint32) error {
 	getLogger(ses.GetService()).Info("start to restore views")
 	var (
@@ -1236,6 +1237,7 @@ func restoreViews(
 	if err != nil {
 		return err
 	}
+	snapshot.Tenant.TenantID = fromAccountId
 
 	compCtx := ses.GetTxnCompileCtx()
 	oldSnapshot = compCtx.GetSnapshot()
