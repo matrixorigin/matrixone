@@ -262,13 +262,11 @@ func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator)
 	}
 
 	key := genDatabaseKey(accountId, name)
-	txn.databaseMap.Store(key, &txnDatabase{
+	txn.databaseOps.addCreateDatabase(key, txn.statementID, &txnDatabase{
 		op:           op,
 		databaseId:   databaseId,
 		databaseName: name,
 	})
-
-	txn.deletedDatabaseMap.Delete(key)
 	return nil
 }
 
@@ -351,12 +349,12 @@ func (e *Engine) Database(
 
 	// check the database is deleted or not
 	key := genDatabaseKey(accountId, name)
-	if _, exist := txn.deletedDatabaseMap.Load(key); exist {
+	if txn.databaseOps.existAndDeleted(key) {
 		return nil, moerr.NewParseErrorf(ctx, "database %q does not exist", name)
 	}
 
-	if v, ok := txn.databaseMap.Load(key); ok {
-		return v.(*txnDatabase), nil
+	if v := txn.databaseOps.existAndActive(key); v != nil {
+		return v, nil
 	}
 
 	item := &cache.DatabaseItem{
@@ -582,8 +580,7 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 
 	// adjust the state of txn cache
 	key := genDatabaseKey(accountId, name)
-	txn.databaseMap.Delete(key)
-	txn.deletedDatabaseMap.Store(key, databaseId)
+	txn.databaseOps.addDeleteDatabase(key, txn.statementID, databaseId)
 	return nil
 }
 

@@ -670,6 +670,10 @@ func (node *DropPitr) StmtKind() StmtKind {
 	return frontendStatusTyp
 }
 
+func (node *ShowRecoveryWindow) StmtKind() StmtKind {
+	return frontendStatusTyp
+}
+
 func (node *CreateCDC) StmtKind() StmtKind { return frontendStatusTyp }
 
 func (node *ShowCDC) StmtKind() StmtKind {

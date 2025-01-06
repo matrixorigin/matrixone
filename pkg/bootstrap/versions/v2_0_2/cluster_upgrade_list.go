@@ -17,6 +17,7 @@ package v2_0_2
 import (
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
@@ -25,6 +26,7 @@ var clusterUpgEntries = []versions.UpgradeEntry{
 	upg_mo_pubs_add_account_name,
 	upg_mo_subs_add_sub_account_name,
 	upg_mo_subs_add_pub_account_id,
+	upg_mo_account_lock,
 }
 
 var upg_mo_cdc_watermark = versions.UpgradeEntry{
@@ -84,4 +86,14 @@ var upg_mo_subs_add_pub_account_id = versions.UpgradeEntry{
 		return colInfo.IsExits, nil
 	},
 	PostSql: "UPDATE mo_catalog.mo_subs t1 INNER JOIN mo_catalog.mo_account t2 ON t1.pub_account_name = t2.account_name SET t1.pub_account_id = t2.account_id",
+}
+
+var upg_mo_account_lock = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: catalog.MO_ACCOUNT_LOCK,
+	UpgType:   versions.CREATE_NEW_TABLE,
+	UpgSql:    frontend.MoCatalogMoAccountLockDDL,
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		return versions.CheckTableDefinition(txn, accountId, catalog.MO_CATALOG, catalog.MO_ACCOUNT_LOCK)
+	},
 }
