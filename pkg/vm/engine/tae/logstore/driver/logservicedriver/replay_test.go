@@ -21,7 +21,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	storeDriver "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 	"github.com/stretchr/testify/assert"
@@ -92,7 +91,6 @@ func TestAppendSkipCmd2(t *testing.T) {
 		assert.NoError(t, driver.Close())
 		driver = NewLogServiceDriver(driver.config)
 		err := driver.Replay(func(e *entry.Entry) storeDriver.ReplayEntryState {
-			logutil.Infof("lalala lsn %d", e.Lsn)
 			assert.Less(t, e.Lsn, uint64(11))
 			if e.Lsn > 7 {
 				entryCount++
