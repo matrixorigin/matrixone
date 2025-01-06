@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
@@ -127,17 +128,17 @@ func (replayer *Replayer) Replay() {
 		common.AnyField("apply count", replayer.applyCount))
 }
 
-func (replayer *Replayer) OnReplayEntry(group uint32, lsn uint64, payload []byte, typ uint16, info any) {
+func (replayer *Replayer) OnReplayEntry(group uint32, lsn uint64, payload []byte, typ uint16, info any) driver.ReplayEntryState {
 	replayer.once.Do(replayer.PreReplayWal)
 	if group != wal.GroupPrepare && group != wal.GroupC {
-		return
+		return driver.RE_Internal
 	}
 	if !replayer.checkLSN(lsn) {
-		return
+		return driver.RE_Truncate
 	}
 	head := objectio.DecodeIOEntryHeader(payload)
 	if head.Version < txnbase.IOET_WALTxnEntry_V4 {
-		return
+		return driver.RE_Nomal
 	}
 	codec := objectio.GetIOEntryCodec(*head)
 	entry, err := codec.Decode(payload[4:])
@@ -147,6 +148,7 @@ func (replayer *Replayer) OnReplayEntry(group uint32, lsn uint64, payload []byte
 		panic(err)
 	}
 	replayer.txnCmdChan <- txnCmd
+	return driver.RE_Nomal
 }
 func (replayer *Replayer) applyTxnCmds() {
 	defer replayer.wg.Done()

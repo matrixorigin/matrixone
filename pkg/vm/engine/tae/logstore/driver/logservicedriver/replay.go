@@ -21,6 +21,7 @@ import (
 	"io"
 	"math"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -48,7 +49,9 @@ type replayer struct {
 	d             *LogServiceDriver
 	appended      []uint64
 
-	recordChan chan *entry.Entry
+	recordChan        chan *entry.Entry
+	lastEntry         *entry.Entry
+	firstEntryIsFound atomic.Bool
 
 	applyDuration time.Duration
 	readCount     int
@@ -82,15 +85,15 @@ func (r *replayer) replay() {
 	go r.replayRecords()
 	for !r.readRecords() {
 		for r.replayedLsn < r.safeLsn {
-			err := r.replayLogserviceEntry(r.replayedLsn+1, true)
+			err := r.replayLogserviceEntry(r.replayedLsn + 1)
 			if err != nil {
 				panic(err)
 			}
 		}
 	}
-	err = r.replayLogserviceEntry(r.replayedLsn+1, false)
+	err = r.replayLogserviceEntry(r.replayedLsn + 1)
 	for err != ErrAllRecordsRead {
-		err = r.replayLogserviceEntry(r.replayedLsn+1, false)
+		err = r.replayLogserviceEntry(r.replayedLsn + 1)
 
 	}
 	r.d.lsns = make([]uint64, 0)
@@ -144,16 +147,24 @@ func (r *replayer) replayRecords() {
 			break
 		}
 		t0 := time.Now()
-		r.replayHandle(e)
+		state := r.replayHandle(e)
+		if state == driver.RE_Nomal {
+			r.firstEntryIsFound.Store(true)
+		}
 		e.Entry.Free()
 		r.applyDuration += time.Since(t0)
 	}
 }
 
-func (r *replayer) replayLogserviceEntry(lsn uint64, safe bool) error {
+func (r *replayer) replayLogserviceEntry(lsn uint64) error {
 	logserviceLsn, ok := r.driverLsnLogserviceLsnMap[lsn]
 	if !ok {
-		if safe {
+		firstEntryIsFound := r.firstEntryIsFound.Load()
+		if !firstEntryIsFound && r.lastEntry != nil {
+			r.lastEntry.WaitDone()
+			firstEntryIsFound = r.firstEntryIsFound.Load()
+		}
+		if !firstEntryIsFound {
 			logutil.Infof("drlsn %d has been truncated", lsn)
 			r.minDriverLsn = lsn + 1
 			r.replayedLsn++
@@ -186,6 +197,10 @@ func (r *replayer) replayLogserviceEntry(lsn uint64, safe bool) error {
 }
 
 func (r *replayer) AppendSkipCmd(skipMap map[uint64]uint64) {
+	if len(skipMap) > r.d.config.ClientMaxCount {
+		panic(fmt.Sprintf("logic error, skip %d entries, client max count is %v, skip map is %v",
+			len(skipMap), r.d.config.ClientMaxCount, skipMap))
+	}
 	logutil.Infof("skip %v", skipMap)
 	cmd := NewReplayCmd(skipMap)
 	recordEntry := newRecordEntry()
