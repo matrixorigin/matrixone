@@ -335,6 +335,7 @@ drop snapshot sp06;
 drop table pub01;
 
 -- table with partition by
+-- @bvt:issue#16438
 drop table if exists pt_table;
 create table pt_table(col1 tinyint,col2 smallint,col3 int,clo4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 text)partition by key(col13)partitions 10;
 load data infile '$resources/external_table_file/pt_table_data.csv' into table  pt_table fields terminated by ',';
@@ -351,6 +352,7 @@ select * from mo_catalog.mo_database{snapshot = 'sp07'} where datname = 'test03'
 select attname from mo_catalog.mo_columns{snapshot = 'sp07'} where att_database = 'test03';
 drop snapshot sp07;
 drop table pt_table;
+-- @bvt:issue
 drop database test03;
 
 -- A database contains multiple tables at the same time, including tables of any type

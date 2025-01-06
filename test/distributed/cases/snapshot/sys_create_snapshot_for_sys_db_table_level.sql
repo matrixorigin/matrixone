@@ -79,6 +79,7 @@ show snapshots;
 drop database if exists sp_test01;
 create database sp_test01;
 use sp_test01;
+-- @bvt:issue#16438
 drop table if exists partition01;
 create table partition01 (
 emp_no      int             not null,
@@ -107,6 +108,7 @@ select * from partition01;
 drop table partition01;
 restore account sys database sp_test01 table partition01 from snapshot spsp02;
 select * from partition01;
+-- @bvt:issue
 drop database sp_test01;
 drop snapshot spsp02;
 
