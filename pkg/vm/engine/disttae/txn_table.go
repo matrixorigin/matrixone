@@ -1240,7 +1240,7 @@ func (tbl *txnTable) isCreatedInTxn(ctx context.Context) (bool, error) {
 		return tbl.createdInTxn, nil
 	}
 
-	if tbl.db.op.IsSnapOp() {
+	if tbl.db.op.IsSnapOp() || catalog.IsSystemTable(tbl.tableId) {
 		// if the operation is snapshot read, isCreatedInTxn can not be called by AlterTable
 		// So if the snapshot read want to subcribe logtail tail, let it go ahead.
 		return false, nil
