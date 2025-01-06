@@ -17,13 +17,11 @@ package txnbase
 import (
 	"bytes"
 	"fmt"
-	"io"
-	"math"
-
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
+	"io"
 )
 
 const (
@@ -160,9 +158,9 @@ func NewBaseCustomizedCmd(id uint32, impl txnif.TxnCmd) *BaseCustomizedCmd {
 }
 
 func NewComposedCmd(maxSize uint64) *ComposedCmd {
-	if maxSize < CmdBufReserved {
-		maxSize = math.MaxInt64
-	}
+	//if maxSize < CmdBufReserved {
+	//	maxSize = math.MaxInt64
+	//}
 	return &ComposedCmd{
 		Cmds: make([]txnif.TxnCmd, 0),
 		//CmdBufLimit: int64(maxSize - CmdBufReserved),
@@ -499,7 +497,7 @@ func (cc *ComposedCmd) MarshalBinary() (buf []byte, err error) {
 	if _, err = headerBuf.Write(types.EncodeUint16(&ver)); err != nil {
 		return
 	}
-	var length uint32 = uint32(len(cc.Cmds))
+	var length = uint32(len(cc.Cmds))
 	//if cc.LastPos == 0 {
 	//	length = uint32(len(cc.Cmds) - prevLastPos)
 	//} else {
