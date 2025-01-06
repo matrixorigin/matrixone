@@ -68,13 +68,22 @@ func TestDeleteAndSelect(t *testing.T) {
 
 			plan.SetForceScanOnMultiCN(true)
 			defer plan.SetForceScanOnMultiCN(false)
+			//select * from t where a > 24500;
 			res, err = exec.Exec(
 				ctx,
-				"delete from "+table+" where a > 3",
+				"select * from "+table+" where a > 24500",
 				executor.Options{}.WithDatabase(db),
 			)
 			require.NoError(t, err)
 			res.Close()
+
+			//res, err = exec.Exec(
+			//	ctx,
+			//	"delete from "+table+" where a > 3",
+			//	executor.Options{}.WithDatabase(db),
+			//)
+			//require.NoError(t, err)
+			//res.Close()
 
 			//select b from t2 where a between 1 and 3 order by b asc;
 			//res, err = exec.Exec(

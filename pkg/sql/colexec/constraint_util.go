@@ -17,7 +17,6 @@ package colexec
 import (
 	"context"
 	"fmt"
-	"runtime/debug"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -25,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -122,10 +120,13 @@ func BatchDataNotNullCheck(vecs []*vector.Vector, attrs []string, tableDef *plan
 }
 
 func getRelationByObjRef(ctx context.Context, proc *process.Process, eg engine.Engine, ref *plan.ObjectRef) (engine.Relation, error) {
-	if ref.ObjName == "debug" {
-		logutil.Infof("xxxx getRelationByObjRef: eg is nil:%v, ref:%v, proc is nil:%v, stack is %s",
-			eg == nil, ref, proc == nil, string(debug.Stack()))
-	}
+	//if ref.ObjName == "debug" {
+	//	logutil.Infof("xxxx txn:%s, getRelationByObjRef: eg is nil:%v, ref is nil:%v, stack is %s",
+	//		proc.GetTxnOperator().Txn().DebugString(),
+	//		eg == nil,
+	//		ref == nil,
+	//		string(debug.Stack()))
+	//}
 	dbSource, err := eg.Database(ctx, ref.SchemaName, proc.GetTxnOperator())
 	if err != nil {
 		return nil, err

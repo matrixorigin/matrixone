@@ -17,7 +17,6 @@ package compile
 import (
 	"context"
 	"fmt"
-	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -170,6 +169,11 @@ func (s *Scope) Run(c *Compile) (err error) {
 	}
 
 	if s.DataSource == nil {
+		logutil.Infof("xxxx call scope.Run, txn:%s, s:%p, magicType:%v, s.node:%s, s.dataSource is nil",
+			s.Proc.GetTxnOperator().Txn().DebugString(),
+			s,
+			s.Magic,
+			s.NodeInfo.Addr)
 		s.ScopeAnalyzer.Stop()
 		p = pipeline.NewMerge(s.RootOp)
 		_, err = p.Run(s.Proc)
@@ -184,6 +188,11 @@ func (s *Scope) Run(c *Compile) (err error) {
 			_, err = p.Run(s.Proc)
 		} else {
 			if s.DataSource.R == nil {
+				logutil.Infof("xxxx call scope.Run, txn:%s, s:%p, magicType:%v, s.node:%s, s.DataSource.R is nil",
+					s.Proc.GetTxnOperator().Txn().DebugString(),
+					s,
+					s.Magic,
+					s.NodeInfo.Addr)
 				s.NodeInfo.Data = engine_util.BuildEmptyRelData()
 				stats := statistic.StatsInfoFromContext(c.proc.GetTopContext())
 
@@ -202,6 +211,12 @@ func (s *Scope) Run(c *Compile) (err error) {
 			if s.DataSource.node != nil && len(s.DataSource.node.RecvMsgList) > 0 {
 				tag = s.DataSource.node.RecvMsgList[0].MsgTag
 			}
+
+			logutil.Infof("xxxx call scope.Run, txn:%s, s:%p, magicType:%v, s.node:%s, start to call runWithReader",
+				s.Proc.GetTxnOperator().Txn().DebugString(),
+				s,
+				s.Magic,
+				s.NodeInfo.Addr)
 
 			s.ScopeAnalyzer.Stop()
 			_, err = p.RunWithReader(s.DataSource.R, tag, s.Proc)
@@ -647,11 +662,11 @@ func (s *Scope) handleBlockList(c *Compile, runtimeInExprList []*plan.Expr) erro
 		rsp.IsLocalCN = true
 	}
 
-	if s.DataSource.TableDef.Name == "debug" {
-		logutil.Infof("xxxx call handleBlockList, txn:%s, stack is %s",
-			s.Proc.GetTxnOperator().Txn().DebugString(),
-			string(debug.Stack()))
-	}
+	//if s.DataSource.TableDef.Name == "debug" {
+	//	logutil.Infof("xxxx call handleBlockList, txn:%s, stack is %s",
+	//		s.Proc.GetTxnOperator().Txn().DebugString(),
+	//		string(debug.Stack()))
+	//}
 
 	commited, err = c.expandRanges(
 		s.DataSource.node,
