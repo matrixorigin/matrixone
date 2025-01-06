@@ -439,6 +439,9 @@ func doCheckCreateSnapshotPriv(ctx context.Context, ses *Session, stmt *tree.Cre
 		}
 	case tree.SNAPSHOTLEVELACCOUNT:
 		snapshotForAccount := string(stmt.Object.ObjName)
+		if len(snapshotForAccount) == 0 {
+			snapshotForAccount = currentAccount
+		}
 		if currentAccount != sysAccountName && currentAccount != snapshotForAccount {
 			return moerr.NewInternalError(ctx, "only sys tenant can create tenant level snapshot for other tenant")
 		}

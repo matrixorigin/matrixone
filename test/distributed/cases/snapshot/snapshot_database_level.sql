@@ -96,3 +96,16 @@ create snapshot sn1 for account;
 -- @ignore:1
 show snapshots;
 drop snapshot if exists sn1;
+
+
+drop account if exists acc01;
+create account acc01 admin_name = 'test_account' identified by '111';
+-- @session:id=3&user=acc01:test_account&password=111
+drop snapshot if exists sn1;
+create snapshot sn1 for account;
+-- @ignore:1
+show snapshots;
+drop snapshot if exists sn1;
+-- @session
+
+drop account if exists acc1;
