@@ -60,4 +60,8 @@ select count(*) from t2 where c1 = 3 and c2 in (1,2,3);
 -- @separator:table
 explain select count(*) from t2 where c1=4 and c2 between 1 and 5;
 select count(*) from t2 where c1=4 and c2 between 1 and 5;
+drop table if exists t1;
+create table t1 (a varchar(100) primary key, b int);
+insert into t1 select result, 2 from generate_series('2021-01-01 00:00:00','2022-01-01 00:00:00', '1 minute') g;
+select count(*) as ttl from t1 where a between "2021-02-02 20:00:00" and "2021-02-03 00:00:00";
 drop database if exists d1;
