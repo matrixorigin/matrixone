@@ -1341,7 +1341,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	}
 
 	if needCheckHost {
-		ses.Infof(tenantCtx, "check client address %s", ses.clientAddr)
+		ses.Debugf(tenantCtx, "check client address %s", ses.clientAddr)
 		err = whetherValidIpInInvitedNodes(tenantCtx, ses, ses.clientAddr)
 		if err != nil {
 			return nil, err
@@ -1473,7 +1473,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	//------------------------------------------------------------------------------------------------------------------
 	// record the id :routine pair in RoutineManager
 	ses.getRoutineManager().accountRoutine.recordRoutine(tenantID, ses.getRoutine(), accountVersion)
-	ses.Info(ctx, tenant.String())
+	ses.Debug(ctx, tenant.String())
 	ses.SetCreateVersion(createVersion)
 
 	return GetPassWord(pwd)
