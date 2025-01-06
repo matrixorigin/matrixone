@@ -65,6 +65,7 @@ type Options struct {
 	streaming               bool
 	stream_chan             chan Result
 	error_chan              chan error
+	sql                     string
 }
 
 // StatementOption statement execute option.
