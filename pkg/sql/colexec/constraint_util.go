@@ -17,6 +17,7 @@ package colexec
 import (
 	"context"
 	"fmt"
+	"runtime/debug"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -122,7 +123,8 @@ func BatchDataNotNullCheck(vecs []*vector.Vector, attrs []string, tableDef *plan
 
 func getRelationByObjRef(ctx context.Context, proc *process.Process, eg engine.Engine, ref *plan.ObjectRef) (engine.Relation, error) {
 	if ref.ObjName == "debug" {
-		logutil.Infof("xxxx getRelationByObjRef: eg is nil:%v, ref:%v, proc is nil:%v", eg == nil, ref, proc == nil)
+		logutil.Infof("xxxx getRelationByObjRef: eg is nil:%v, ref:%v, proc is nil:%v, stack is %s",
+			eg == nil, ref, proc == nil, string(debug.Stack()))
 	}
 	dbSource, err := eg.Database(ctx, ref.SchemaName, proc.GetTxnOperator())
 	if err != nil {

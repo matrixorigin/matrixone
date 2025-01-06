@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -646,6 +647,12 @@ func (s *Scope) handleBlockList(c *Compile, runtimeInExprList []*plan.Expr) erro
 		rsp.IsLocalCN = true
 	}
 
+	if s.DataSource.TableDef.Name == "debug" {
+		logutil.Infof("xxxx call handleBlockList, txn:%s, stack is %s",
+			s.Proc.GetTxnOperator().Txn().DebugString(),
+			string(debug.Stack()))
+	}
+
 	commited, err = c.expandRanges(
 		s.DataSource.node,
 		rel,
@@ -659,7 +666,7 @@ func (s *Scope) handleBlockList(c *Compile, runtimeInExprList []*plan.Expr) erro
 	}
 
 	if s.DataSource.TableDef.Name == "debug" {
-		logutil.Infof("xxxx handleBlockList, table-id:%d, txn:%s, cn-ip:%s, cn-id:%s, commmitted blk cnt:%d",
+		logutil.Infof("xxxx handleBlockList, table-id:%d, txn:%s, cn-ip:%s, cn-id:%s, collect psersisted commmitted blk cnt:%d",
 			s.DataSource.TableDef.TblId,
 			s.Proc.GetTxnOperator().Txn().DebugString(),
 			s.NodeInfo.Addr,
@@ -687,14 +694,16 @@ func (s *Scope) handleBlockList(c *Compile, runtimeInExprList []*plan.Expr) erro
 			db,
 			ctx,
 			newExprList,
-			engine.Policy_CollectUncommittedData, nil)
+			engine.Policy_CollectUncommittedData|
+				engine.Policy_CollectCommittedInmemData,
+			nil)
 		if err != nil {
 			return err
 		}
 		s.NodeInfo.Data.AppendBlockInfoSlice(commited.GetBlockInfoSlice())
 
 		if s.DataSource.TableDef.Name == "debug" {
-			logutil.Infof("xxxx handleBlockList on local CN, table-id:%d, txn:%s, cn-ip:%s, cn-id:%s, blk cnt:%d",
+			logutil.Infof("xxxx handleBlockList on local CN, table-id:%d, txn:%s, cn-ip:%s, cn-id:%s,collect all blk cnt:%d",
 				s.DataSource.TableDef.TblId,
 				s.Proc.GetTxnOperator().Txn().DebugString(),
 				s.NodeInfo.Addr,
@@ -708,7 +717,7 @@ func (s *Scope) handleBlockList(c *Compile, runtimeInExprList []*plan.Expr) erro
 		s.NodeInfo.Data = commited
 
 		if s.DataSource.TableDef.Name == "debug" {
-			logutil.Infof("xxxx handleBlockList on remote CN, table-id:%d, txn:%s, cn-ip:%s, cn-id:%s,blk cnt:%d",
+			logutil.Infof("xxxx handleBlockList on remote CN, table-id:%d, txn:%s, cn-ip:%s, cn-id:%s,collect persisted committed blk cnt:%d",
 				s.DataSource.TableDef.TblId,
 				s.Proc.GetTxnOperator().Txn().DebugString(),
 				s.NodeInfo.Addr,
