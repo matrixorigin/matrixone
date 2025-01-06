@@ -175,3 +175,31 @@ var (
 			Help:      "Total numbers of logtail subscription the tn have received.",
 		})
 )
+
+var (
+	logtailPStateGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "mo",
+			Subsystem: "logtail",
+			Name:      "partition_state_mem_used_size",
+			Help:      "gauge of the partition state mem used.",
+		}, []string{"type"})
+
+	LogTailPStateInMemDataRowsMemoryUsed        = logTailQueueSizeGauge.WithLabelValues("inmem-data-row-memory-used")
+	LogTailPStateInMemDataObjectMemoryUsed      = logTailQueueSizeGauge.WithLabelValues("inmem-data-obj-memory-used")
+	LogTailPStateInMemTombstoneRowsMemoryUsed   = logTailQueueSizeGauge.WithLabelValues("inmem-tombstone-row-memory-used")
+	LogTailPStateInMemTombstoneObjectMemoryUsed = logTailQueueSizeGauge.WithLabelValues("inmem-tombstone-obj-memory-used")
+
+	logtailPStateCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "logtail",
+			Name:      "partition_state_item_total",
+			Help:      "counter of the partition state item.",
+		}, []string{"type"})
+
+	LogTailPStateInMemDataRowsCount        = logTailQueueSizeGauge.WithLabelValues("inmem-data-row-count     ")
+	LogTailPStateInMemDataObjectCount      = logTailQueueSizeGauge.WithLabelValues("inmem-data-obj-count     ")
+	LogTailPStateInMemTombstoneRowsCount   = logTailQueueSizeGauge.WithLabelValues("inmem-tombstone-row-count")
+	LogTailPStateInMemTombstoneObjectCount = logTailQueueSizeGauge.WithLabelValues("inmem-tombstone-obj-count")
+)

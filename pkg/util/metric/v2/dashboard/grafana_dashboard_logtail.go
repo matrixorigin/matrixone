@@ -38,6 +38,7 @@ func (c *DashboardCreator) initLogTailDashboard() error {
 			c.initLogtailTransmitRow(),
 			c.initLogtailSubscriptionRow(),
 			c.initLogtailUpdatePartitionRow(),
+			c.initLogTailPStateRow(),
 		)...)
 	if err != nil {
 		return err
@@ -242,5 +243,42 @@ func (c *DashboardCreator) initLogtailTransmitRow() dashboard.Option {
 			6,
 			`sum(rate(`+c.getMetricWithFilter("mo_logtail_transmit_total", `type="client-receive"`)+`[$interval]))`,
 			""),
+	)
+}
+
+func (c *DashboardCreator) initLogTailPStateRow() dashboard.Option {
+	return dashboard.Row(
+		"Partition State Status",
+		c.withMultiGraph(
+			"Partition State Memory Used",
+			4,
+			[]string{
+				`sum(` + c.getMetricWithFilter("mo_logtail_partition_state_mem_used_size", `type="inmem-data-row-memory-used"`) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_logtail_partition_state_mem_used_size", `type="inmem-data-obj-memory-used"`) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_logtail_partition_state_mem_used_size", `type="inmem-tombstone-row-memory-used"`) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_logtail_partition_state_mem_used_size", `type="inmem-tombstone-obj-memory-used"`) + `)`,
+			},
+			[]string{
+				"{{ " + c.by + " }}: inmem-data-row-memory-used",
+				"{{ " + c.by + " }}: inmem-data-obj-memory-used",
+				"{{ " + c.by + " }}: inmem-tombstone-row-memory-used",
+				"{{ " + c.by + " }}: inmem-tombstone-obj-memory-used",
+			}),
+
+		c.withMultiGraph(
+			"Partition State Item Count",
+			4,
+			[]string{
+				`sum(` + c.getMetricWithFilter("mo_logtail_partition_state_item_total", `type="inmem-data-row-count"`) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_logtail_partition_state_item_total", `type="inmem-data-obj-count"`) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_logtail_partition_state_item_total", `type="inmem-tombstone-row-count"`) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_logtail_partition_state_item_total", `type="inmem-tombstone-obj-count"`) + `)`,
+			},
+			[]string{
+				"inmem-data-row-count",
+				"inmem-data-obj-count",
+				"inmem-tombstone-row-count",
+				"inmem-tombstone-obj-count",
+			}),
 	)
 }

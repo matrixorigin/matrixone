@@ -125,6 +125,9 @@ func initLogtailMetrics() {
 	registry.MustRegister(LogTailPullCollectionPhase2DurationHistogram)
 	registry.MustRegister(LogTailSubscriptionCounter)
 	registry.MustRegister(txnTNSideDurationHistogram)
+
+	registry.MustRegister(logtailPStateGauge)
+	registry.MustRegister(logtailPStateCounter)
 }
 
 func initTxnMetrics() {
