@@ -176,11 +176,15 @@ func isConnected(connMap *sync.Map) {
 func (mo *MOServer) checkConnected(ctx context.Context) {
 
 	ticker := time.Tick(time.Minute)
+	quit := false
 
 	for {
+		if quit {
+			break
+		}
 		select {
 		case <-ctx.Done():
-			break
+			quit = true
 		default:
 			select {
 			case <-ticker:
