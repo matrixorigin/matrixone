@@ -235,6 +235,8 @@ insert into src values (0, 'color is red', 't1'), (1, 'car is yellow', 'crazy ca
 
 -- check error
 select *, match(body) against('遠東兒童中文' in natural language mode) as score from src;
+select *, match(title, body) against('+Windows +(<"Photo" >defender)' in boolean mode) as score from src;
+select *, match(title, body) against('+CC_BY +(<-1.0 >-SA-1.0)' in boolean mode) as score from src;
 
 -- match in WHERE clause
 select * from src where match(body, title) against('red');
