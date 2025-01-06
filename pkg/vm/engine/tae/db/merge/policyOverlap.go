@@ -78,10 +78,11 @@ func (m *objOverlapPolicy) revise(rc *resourceController) []reviseResult {
 				continue
 			}
 
-			if !rc.resourceAvailable(result.objs) && len(result.objs) > 20 {
-				result.objs = result.objs[:20]
+			if rc.resourceAvailable(result.objs) {
+				rc.reserveResources(result.objs)
+			} else {
+				result.kind = taskHostCN
 			}
-			rc.reserveResources(result.objs)
 			reviseResults = append(reviseResults, result)
 		}
 	}
