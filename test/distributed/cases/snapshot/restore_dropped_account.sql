@@ -255,9 +255,9 @@ create stage stage01 url = 'file:///$resources/into_outfile/stage';
 select * from mo_catalog.mo_stages;
 -- @ignore:1
 show stages;
-select * from t1 into outfile 'stage://stage01/local_stage_table01.csv';
+select * from t1 into outfile 'stage://stage01/local_stage_table02.csv';
 truncate t1;
-load data infile 'stage://stage01/local_stage_table01.csv' into table t1 fields terminated by ',' ignore 1 lines;
+load data infile 'stage://stage01/local_stage_table02.csv' into table t1 fields terminated by ',' ignore 1 lines;
 select * from t1;
 
 drop table if exists vtab32;
