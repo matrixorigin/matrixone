@@ -89,9 +89,14 @@ func (s *Scope) CreateDatabase(c *Compile) error {
 			return err
 		}
 
+		accountId, err := defines.GetAccountId(ctx)
+		if err != nil {
+			return err
+		}
+
 		updatePitrSql := fmt.Sprintf("update `%s`.`%s` set `%s` = '%s' where `%s` = %d and `%s` = '%s'",
 			catalog.MO_CATALOG, catalog.MO_PITR, catalog.MO_PITR_OBJECT_ID, newDb.GetDatabaseId(ctx),
-			catalog.MO_PITR_ACCOUNT_ID, c.proc.GetSessionInfo().AccountId,
+			catalog.MO_PITR_ACCOUNT_ID, accountId,
 			catalog.MO_PITR_DB_NAME, dbName)
 
 		err = c.runSqlWithSystemTenant(updatePitrSql)
@@ -1537,9 +1542,15 @@ func (s *Scope) CreateTable(c *Compile) error {
 		if err != nil {
 			return err
 		}
+
+		accountId, err := defines.GetAccountId(c.proc.Ctx)
+		if err != nil {
+			return err
+		}
+
 		updatePitrSql := fmt.Sprintf("update `%s`.`%s` set `%s` = %d  where `%s` = %d and `%s` = '%s' and `%s` = '%s'",
 			catalog.MO_CATALOG, catalog.MO_PITR, catalog.MO_PITR_OBJECT_ID, newRelation.GetTableID(c.proc.Ctx),
-			catalog.MO_PITR_ACCOUNT_ID, c.proc.GetSessionInfo().AccountId,
+			catalog.MO_PITR_ACCOUNT_ID, accountId,
 			catalog.MO_PITR_DB_NAME, dbName,
 			catalog.MO_PITR_TABLE_NAME, tblName)
 
@@ -3817,7 +3828,11 @@ var lockMoDatabase = func(c *Compile, dbName string, lockMode lock.LockMode) err
 	if err != nil {
 		return err
 	}
-	accountID := c.proc.GetSessionInfo().AccountId
+
+	accountID, err := defines.GetAccountId(c.proc.Ctx)
+	if err != nil {
+		return err
+	}
 	vec, err := getLockVector(c.proc, accountID, []string{dbName})
 	if err != nil {
 		return err
@@ -3838,7 +3853,11 @@ var lockMoTable = func(
 	if err != nil {
 		return err
 	}
-	accountID := c.proc.GetSessionInfo().AccountId
+
+	accountID, err := defines.GetAccountId(c.proc.Ctx)
+	if err != nil {
+		return err
+	}
 	vec, err := getLockVector(c.proc, accountID, []string{dbName, tblName})
 	if err != nil {
 		return err
