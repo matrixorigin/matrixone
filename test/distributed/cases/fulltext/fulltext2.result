@@ -193,7 +193,7 @@ insert into articles (title, content) values
 ('ngram解析器', 'ngram解析器允许MO对中文等语言进行分词，以优化全文搜索。');
 show create table articles;
 Table    Create Table
-articles    CREATE TABLE `articles` (\n  `id` int NOT NULL AUTO_INCREMENT,\n  `title` varchar(255) DEFAULT NULL,\n  `content` text DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT(`title`,`content`) WITH PARSER ngram\n)
+articles    CREATE TABLE `articles` (\n  `id` int NOT NULL AUTO_INCREMENT,\n  `title` varchar(255) DEFAULT NULL,\n  `content` text DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT (`title`,`content`) WITH PARSER ngram\n)
 select * from articles where match(title, content) against('全文索引' IN NATURAL LANGUAGE MODE);
 id    title    content
 1    MO全文索引示例    这是一个关于MO全文索引的例子。它展示了如何使用ngram解析器进行全文搜索。
@@ -214,7 +214,7 @@ insert into products (name, details) values
 ('스마트폰', '{"brand": "Apple", "model": "iPhone 12", "price": 800}');
 show create table products;
 Table    Create Table
-products    CREATE TABLE `products` (\n  `id` int NOT NULL AUTO_INCREMENT,\n  `name` varchar(255) DEFAULT NULL,\n  `details` json DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT(`details`) WITH PARSER json\n)
+products    CREATE TABLE `products` (\n  `id` int NOT NULL AUTO_INCREMENT,\n  `name` varchar(255) DEFAULT NULL,\n  `details` json DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT (`details`) WITH PARSER json\n)
 insert into products (name, details) values('手机', '{"brand": "Apple", "model": "iPhone 12", "price": 800}');
 select * from products;
 id    name    details
