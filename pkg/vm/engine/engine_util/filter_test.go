@@ -759,7 +759,7 @@ func TestConstructBlockPKFilter(t *testing.T) {
 	ops := []int{
 		function.LESS_EQUAL, function.LESS_THAN,
 		function.GREAT_EQUAL, function.GREAT_THAN,
-		function.EQUAL, function.BETWEEN,
+		function.EQUAL, function.BETWEEN, RangeBothOpen, RangeLeftOpen, RangeRightOpen,
 	}
 
 	tys := []types.T{
@@ -844,6 +844,9 @@ func TestConstructBlockPKFilter(t *testing.T) {
 		case types.T_float64:
 			vector.AppendFixed(vec, float64(lb), false, mp)
 			vector.AppendFixed(vec, float64(ub), false, mp)
+		case types.T_varchar:
+			vector.AppendBytes(vec, []byte("1"), false, mp)
+			vector.AppendBytes(vec, []byte("2"), false, mp)
 		}
 
 		sel1 := blkPKFilter.SortedSearchFunc(vec)

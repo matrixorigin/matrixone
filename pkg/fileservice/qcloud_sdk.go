@@ -484,7 +484,14 @@ func (a *QCloudSDK) getObject(ctx context.Context, key string, min *int64, max *
 					if err != nil {
 						return nil, err
 					}
-					return resp.Body, nil
+					return &readCloser{
+						r: resp.Body,
+						closeFunc: func() error {
+							// drain
+							io.Copy(io.Discard, resp.Body)
+							return resp.Body.Close()
+						},
+					}, nil
 				},
 				maxRetryAttemps,
 				IsRetryableError,

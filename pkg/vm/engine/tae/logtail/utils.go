@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -492,14 +493,15 @@ func NewGlobalCollector(
 }
 
 func (data *CheckpointData) ApplyReplayTo(
+	objectlistReplayer catalog.ObjectListReplayer,
 	c *catalog.Catalog,
 	dataFactory catalog.DataFactory,
 	forSys bool,
 ) (err error) {
 	objectInfo := data.GetTombstoneObjectBatchs()
-	c.OnReplayObjectBatch(objectInfo, true, dataFactory, forSys)
+	c.OnReplayObjectBatch(objectlistReplayer, objectInfo, true, dataFactory, forSys)
 	objectInfo = data.GetObjectBatchs()
-	c.OnReplayObjectBatch(objectInfo, false, dataFactory, forSys)
+	c.OnReplayObjectBatch(objectlistReplayer, objectInfo, false, dataFactory, forSys)
 	return
 }
 
@@ -533,7 +535,7 @@ func switchCheckpointIdx(i uint16) uint16 {
 }
 
 func (data *CNCheckpointData) InitMetaIdx(
-	ctx context.Context, version uint32, reader *blockio.BlockReader,
+	ctx context.Context, version uint32, reader *ioutil.BlockReader,
 	location objectio.Location, m *mpool.MPool,
 ) error {
 	if data.bats[MetaIDX] == nil {
@@ -676,7 +678,7 @@ func (data *CNCheckpointData) ReadFromData(
 	ctx context.Context,
 	tableID uint64,
 	location objectio.Location,
-	reader *blockio.BlockReader,
+	reader *ioutil.BlockReader,
 	version uint32,
 	m *mpool.MPool,
 ) (dataBats []*batch.Batch, err error) {
@@ -696,7 +698,7 @@ func (data *CNCheckpointData) ReadFromData(
 			block := it.Next()
 			var bat, windowBat *batch.Batch
 			schema := checkpointDataReferVersions[version][uint32(idx)]
-			reader, err = blockio.NewObjectReader(data.sid, reader.GetObjectReader().GetObject().GetFs(), block.GetLocation())
+			reader, err = ioutil.NewObjectReader(reader.GetObjectReader().GetObject().GetFs(), block.GetLocation())
 			if err != nil {
 				return
 			}
@@ -998,15 +1000,16 @@ type blockIndexes struct {
 
 // PXU TODO: pass ctx
 func (data *CheckpointData) WriteTo(
-	fs fileservice.FileService,
+	ctx context.Context,
 	blockRows int,
 	checkpointSize int,
+	fs fileservice.FileService,
 ) (CNLocation, TNLocation objectio.Location, checkpointFiles []string, err error) {
 	checkpointNames := make([]objectio.ObjectName, 1)
 	segmentid := objectio.NewSegmentid()
 	fileNum := uint16(0)
 	name := objectio.BuildObjectName(segmentid, fileNum)
-	writer, err := blockio.NewBlockWriterNew(fs, name, 0, nil, false)
+	writer, err := ioutil.NewBlockWriterNew(fs, name, 0, nil, false)
 	if err != nil {
 		return
 	}
@@ -1029,13 +1032,13 @@ func (data *CheckpointData) WriteTo(
 		var blks []objectio.BlockObject
 		if objectSize > checkpointSize {
 			fileNum++
-			blks, _, err = writer.Sync(context.Background())
+			blks, _, err = writer.Sync(ctx)
 			if err != nil {
 				return
 			}
 			checkpointFiles = append(checkpointFiles, name.String())
 			name = objectio.BuildObjectName(segmentid, fileNum)
-			writer, err = blockio.NewBlockWriterNew(fs, name, 0, nil, false)
+			writer, err = ioutil.NewBlockWriterNew(fs, name, 0, nil, false)
 			if err != nil {
 				return
 			}
@@ -1079,7 +1082,7 @@ func (data *CheckpointData) WriteTo(
 			}
 		}
 	}
-	blks, _, err := writer.Sync(context.Background())
+	blks, _, err := writer.Sync(ctx)
 	if err != nil {
 		return
 	}
@@ -1149,27 +1152,27 @@ func (data *CheckpointData) WriteTo(
 
 	segmentid2 := objectio.NewSegmentid()
 	name2 := objectio.BuildObjectName(segmentid2, 0)
-	writer2, err := blockio.NewBlockWriterNew(fs, name2, 0, nil, false)
+	writer2, err := ioutil.NewBlockWriterNew(fs, name2, 0, nil, false)
 	if err != nil {
 		return
 	}
 	if _, _, err = writer2.WriteSubBatch(
 		containers.ToCNBatch(data.bats[MetaIDX]),
-		objectio.ConvertToSchemaType(uint16(MetaIDX))); err != nil {
-		return
-	}
-	if err != nil {
+		objectio.ConvertToSchemaType(uint16(MetaIDX)),
+	); err != nil {
 		return
 	}
 	if _, _, err = writer2.WriteSubBatch(
 		containers.ToCNBatch(data.bats[TNMetaIDX]),
-		objectio.ConvertToSchemaType(uint16(TNMetaIDX))); err != nil {
+		objectio.ConvertToSchemaType(uint16(TNMetaIDX)),
+	); err != nil {
 		return
 	}
-	if err != nil {
+
+	var blks2 []objectio.BlockObject
+	if blks2, _, err = writer2.Sync(ctx); err != nil {
 		return
 	}
-	blks2, _, err := writer2.Sync(context.Background())
 	CNLocation = objectio.BuildLocation(name2, blks2[0].GetExtent(), 0, blks2[0].GetID())
 	TNLocation = objectio.BuildLocation(name2, blks2[1].GetExtent(), 0, blks2[1].GetID())
 	return
@@ -1181,7 +1184,7 @@ func LoadBlkColumnsByMeta(
 	colTypes []types.Type,
 	colNames []string,
 	id uint16,
-	reader *blockio.BlockReader,
+	reader *ioutil.BlockReader,
 	mp *mpool.MPool,
 ) ([]*containers.Batch, error) {
 	idxs := make([]uint16, len(colNames))
@@ -1228,7 +1231,7 @@ func LoadCNSubBlkColumnsByMeta(
 	colTypes []types.Type,
 	colNames []string,
 	id uint16,
-	reader *blockio.BlockReader,
+	reader *ioutil.BlockReader,
 	m *mpool.MPool,
 ) ([]*batch.Batch, error) {
 	idxs := make([]uint16, len(colNames))
@@ -1268,7 +1271,7 @@ func LoadCNSubBlkColumnsByMetaWithId(
 	dataType uint16,
 	id uint16,
 	version uint32,
-	reader *blockio.BlockReader,
+	reader *ioutil.BlockReader,
 	m *mpool.MPool,
 ) (bat *batch.Batch, err error) {
 	idxs := make([]uint16, len(colNames))
@@ -1294,7 +1297,7 @@ func (data *CheckpointData) ReadTNMetaBatch(
 	ctx context.Context,
 	version uint32,
 	location objectio.Location,
-	reader *blockio.BlockReader,
+	reader *ioutil.BlockReader,
 ) (err error) {
 	if data.bats[TNMetaIDX].Length() == 0 {
 		var bats []*containers.Batch
@@ -1355,7 +1358,7 @@ func (data *CheckpointData) ReadFrom(
 	ctx context.Context,
 	version uint32,
 	location objectio.Location,
-	reader *blockio.BlockReader,
+	reader *ioutil.BlockReader,
 	fs fileservice.FileService,
 ) (err error) {
 	err = data.readMetaBatch(ctx, version, reader, data.allocator)
@@ -1377,12 +1380,17 @@ func LoadCheckpointLocations(
 	version uint32,
 	fs fileservice.FileService,
 ) (map[string]objectio.Location, error) {
+	select {
+	case <-ctx.Done():
+		return nil, context.Cause(ctx)
+	default:
+	}
 	var err error
 	data := NewCheckpointData(sid, common.CheckpointAllocator)
 	defer data.Close()
 
-	var reader *blockio.BlockReader
-	if reader, err = blockio.NewObjectReader(sid, fs, location); err != nil {
+	var reader *ioutil.BlockReader
+	if reader, err = ioutil.NewObjectReader(fs, location); err != nil {
 		return nil, err
 	}
 
@@ -1415,8 +1423,8 @@ func LoadSpecifiedCkpBatch(
 		err = moerr.NewInvalidArgNoCtx("out of bound batchIdx", batchIdx)
 		return
 	}
-	var reader *blockio.BlockReader
-	if reader, err = blockio.NewObjectReader(sid, fs, location); err != nil {
+	var reader *ioutil.BlockReader
+	if reader, err = ioutil.NewObjectReader(fs, location); err != nil {
 		return
 	}
 
@@ -1426,7 +1434,7 @@ func LoadSpecifiedCkpBatch(
 
 	data.replayMetaBatch(version)
 	for _, val := range data.locations {
-		if reader, err = blockio.NewObjectReader(sid, fs, val); err != nil {
+		if reader, err = ioutil.NewObjectReader(fs, val); err != nil {
 			return
 		}
 		var bats []*containers.Batch
@@ -1451,7 +1459,7 @@ func LoadSpecifiedCkpBatch(
 func (data *CheckpointData) readMetaBatch(
 	ctx context.Context,
 	version uint32,
-	reader *blockio.BlockReader,
+	reader *ioutil.BlockReader,
 	_ *mpool.MPool,
 ) (err error) {
 	if data.bats[MetaIDX].Length() == 0 {
@@ -1536,8 +1544,8 @@ func (data *CheckpointData) readAll(
 	checkpointDataSize := uint64(0)
 	readDuration := time.Now()
 	for _, val := range data.locations {
-		var reader *blockio.BlockReader
-		reader, err = blockio.NewObjectReader(data.sid, service, val)
+		var reader *ioutil.BlockReader
+		reader, err = ioutil.NewObjectReader(service, val)
 		if err != nil {
 			return
 		}
@@ -1602,8 +1610,6 @@ func (data *CheckpointData) Close() {
 	data.allocator = nil
 }
 
-func (data *CheckpointData) CloseWhenLoadFromCache(version uint32) {
-}
 func (data *CheckpointData) GetBatches() []*containers.Batch {
 	return data.bats[:]
 }

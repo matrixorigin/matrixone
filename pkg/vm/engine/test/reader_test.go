@@ -297,7 +297,7 @@ func Test_ReaderCanReadCommittedInMemInsertAndDeletes(t *testing.T) {
 			ctx,
 			testutil.TestOptions{},
 			t,
-			testutil.WithDisttaeEngineWorkspaceThreshold(mpool.MB*2),
+			testutil.WithDisttaeEngineCommitWorkspaceThreshold(mpool.MB*2),
 			testutil.WithDisttaeEngineInsertEntryMaxCount(10000),
 		)
 		defer func() {
@@ -454,7 +454,7 @@ func Test_ShardingHandler(t *testing.T) {
 			ctx,
 			testutil.TestOptions{},
 			t,
-			testutil.WithDisttaeEngineWorkspaceThreshold(mpool.MB*2),
+			testutil.WithDisttaeEngineCommitWorkspaceThreshold(mpool.MB*2),
 			testutil.WithDisttaeEngineInsertEntryMaxCount(10000),
 		)
 		defer func() {
@@ -651,7 +651,7 @@ func Test_ShardingRemoteReader(t *testing.T) {
 			ctx,
 			testutil.TestOptions{},
 			t,
-			testutil.WithDisttaeEngineWorkspaceThreshold(mpool.MB*2),
+			testutil.WithDisttaeEngineCommitWorkspaceThreshold(mpool.MB*2),
 			testutil.WithDisttaeEngineInsertEntryMaxCount(10000),
 		)
 		defer func() {
@@ -953,7 +953,7 @@ func Test_ShardingTableDelegate(t *testing.T) {
 			ctx,
 			testutil.TestOptions{},
 			t,
-			testutil.WithDisttaeEngineWorkspaceThreshold(mpool.MB*2),
+			testutil.WithDisttaeEngineCommitWorkspaceThreshold(mpool.MB*2),
 			testutil.WithDisttaeEngineInsertEntryMaxCount(10000),
 		)
 		defer func() {
@@ -1135,7 +1135,7 @@ func Test_ShardingLocalReader(t *testing.T) {
 			ctx,
 			testutil.TestOptions{},
 			t,
-			testutil.WithDisttaeEngineWorkspaceThreshold(mpool.MB*2),
+			testutil.WithDisttaeEngineCommitWorkspaceThreshold(mpool.MB*2),
 			testutil.WithDisttaeEngineInsertEntryMaxCount(10000),
 		)
 		defer func() {

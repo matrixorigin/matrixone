@@ -274,7 +274,7 @@ import (
 %nonassoc LOWER_THAN_ORDER
 %nonassoc ORDER
 %nonassoc LOWER_THAN_COMMA
-%token <str> SELECT INSERT UPDATE DELETE FROM WHERE GROUP HAVING BY LIMIT OFFSET FOR CONNECT MANAGE GRANTS OWNERSHIP REFERENCE
+%token <str> SELECT INSERT UPDATE DELETE FROM WHERE GROUP HAVING BY LIMIT OFFSET FOR OF CONNECT MANAGE GRANTS OWNERSHIP REFERENCE
 %nonassoc LOWER_THAN_SET
 %nonassoc <str> SET
 %token <str> ALL DISTINCT DISTINCTROW AS EXISTS ASC DESC INTO DUPLICATE DEFAULT LOCK KEYS NULLS FIRST LAST AFTER
@@ -485,7 +485,7 @@ import (
 %token <str> MO_TS
 
 // PITR
-%token <str> PITR
+%token <str> PITR RECOVERY_WINDOW
 
 // CDC
 %token <str> CDC
@@ -553,7 +553,7 @@ import (
 %type <statement> create_publication_stmt drop_publication_stmt alter_publication_stmt show_publications_stmt show_subscriptions_stmt
 %type <statement> create_stage_stmt drop_stage_stmt alter_stage_stmt
 %type <statement> create_snapshot_stmt drop_snapshot_stmt
-%type <statement> create_pitr_stmt drop_pitr_stmt show_pitr_stmt alter_pitr_stmt restore_pitr_stmt
+%type <statement> create_pitr_stmt drop_pitr_stmt show_pitr_stmt alter_pitr_stmt restore_pitr_stmt show_recovery_window_stmt
 %type <str> urlparams
 %type <str> comment_opt view_list_opt view_opt security_opt view_tail check_type
 %type <subscriptionOption> subscription_opt
@@ -1112,16 +1112,46 @@ snapshot_object_opt:
             ObjName: tree.Identifier($2.Compare()),
         }
     }
+|   ACCOUNT
+    {
+        spLevel := tree.SnapshotLevelType{
+            Level: tree.SNAPSHOTLEVELACCOUNT,
+        }
+        $$ = tree.ObjectInfo{
+            SLevel: spLevel,
+            ObjName: tree.Identifier(""),
+        }
+    }
+|   DATABASE ident
+    {
+        spLevel := tree.SnapshotLevelType{
+            Level: tree.SNAPSHOTLEVELDATABASE,
+        }
+        $$ = tree.ObjectInfo{
+            SLevel: spLevel,
+            ObjName: tree.Identifier($2.Compare()),
+        }
+    }
+|   TABLE ident ident
+    {
+        spLevel := tree.SnapshotLevelType{
+            Level: tree.SNAPSHOTLEVELTABLE,
+        }
+        $$ = tree.ObjectInfo{
+            SLevel: spLevel,
+            ObjName: tree.Identifier($2.Compare() + "." + $3.Compare()),
+        }
+    }
 
 create_pitr_stmt:
-    CREATE PITR not_exists_opt ident RANGE pitr_value STRING
+    CREATE PITR not_exists_opt ident FOR ACCOUNT RANGE pitr_value STRING
     {
         $$ = &tree.CreatePitr{
             IfNotExists: $3,
             Name: tree.Identifier($4.Compare()),
             Level: tree.PITRLEVELACCOUNT,
-            PitrValue: $6,
-            PitrUnit: $7,
+            PitrValue: $8,
+            PitrUnit: $9,
         }
     }
 |   CREATE PITR not_exists_opt ident FOR CLUSTER RANGE pitr_value STRING
@@ -1156,16 +1186,16 @@ create_pitr_stmt:
             PitrUnit: $10,
         }
     }
-|   CREATE PITR not_exists_opt ident FOR DATABASE ident TABLE ident RANGE pitr_value STRING
+|   CREATE PITR not_exists_opt ident FOR TABLE ident ident RANGE pitr_value STRING
     {
         $$ = &tree.CreatePitr{
             IfNotExists: $3,
             Name: tree.Identifier($4.Compare()),
             Level: tree.PITRLEVELTABLE,
             DatabaseName: tree.Identifier($7.Compare()),
-            TableName: tree.Identifier($9.Compare()),
-            PitrValue: $11,
-            PitrUnit: $12,
+            TableName: tree.Identifier($8.Compare()),
+            PitrValue: $10,
+            PitrUnit: $11,
         }
     }
 
@@ -4038,6 +4068,7 @@ show_stmt:
 |   show_connectors_stmt
 |   show_snapshots_stmt
 |   show_pitr_stmt
+|   show_recovery_window_stmt
 |   show_cdc_stmt
 |   show_logservice_replicas_stmt
 |   show_logservice_stores_stmt
@@ -4091,6 +4122,36 @@ show_pitr_stmt:
     {
         $$ = &tree.ShowPitr{
             Where: $3,
+        }
+    }
+
+show_recovery_window_stmt:
+    SHOW RECOVERY_WINDOW FOR ACCOUNT
+    {
+        $$ = &tree.ShowRecoveryWindow{
+            Level: tree.RECOVERYWINDOWLEVELACCOUNT,
+        }
+    }
+|   SHOW RECOVERY_WINDOW FOR DATABASE ident
+    {
+        $$ = &tree.ShowRecoveryWindow{
+            Level: tree.RECOVERYWINDOWLEVELDATABASE,
+            DatabaseName: tree.Identifier($5.Compare()),
+        }
+    }
+|   SHOW RECOVERY_WINDOW FOR TABLE ident ident
+    {
+        $$ = &tree.ShowRecoveryWindow{
+            Level: tree.RECOVERYWINDOWLEVELTABLE,
+            DatabaseName: tree.Identifier($5.Compare()),
+            TableName:tree.Identifier($6.Compare()),
+        }
+    }
+|   SHOW RECOVERY_WINDOW FOR ACCOUNT ident
+    {
+        $$ = &tree.ShowRecoveryWindow{
+            Level: tree.RECOVERYWINDOWLEVELACCOUNT,
+            AccountName: tree.Identifier($5.Compare()),
         }
     }
 
@@ -8805,6 +8866,13 @@ table_snapshot_opt:
             Expr: $4,
         }
     }
+|   '{' AS OF TIMESTAMP STRING '}'
+    {
+        $$ = &tree.AtTimeStamp{
+           Type: tree.ASOFTIMESTAMP,
+           Expr: tree.NewNumVal($5, $5, false, tree.P_char),
+        }
+    }
 
 table_elem_list_opt:
     {
@@ -12496,6 +12564,7 @@ non_reserved_keyword:
 |   SMALLINT
 |   SNAPSHOT
 |   PITR
+|   RECOVERY_WINDOW
 |   SPATIAL
 |   START
 |   STATUS

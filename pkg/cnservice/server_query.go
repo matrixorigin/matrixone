@@ -98,6 +98,7 @@ func (s *service) initQueryCommandHandler() {
 	s.queryService.AddHandleFunc(query.CmdMethod_MetadataCache, s.handleMetadataCacheRequest, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_FaultInject, s.handleFaultInjection, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_CtlMoTableStats, s.handleMoTableStats, false)
+	s.queryService.AddHandleFunc(query.CmdMethod_WorkspaceThreshold, s.handleWorkspaceThresholdRequest, false)
 }
 
 func (s *service) handleKillConn(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
@@ -627,6 +628,30 @@ func (s *service) handleMetadataCacheRequest(
 	target := objectio.EvictCache(ctx)
 	// response
 	resp.MetadataCacheResponse.CacheCapacity = target
+
+	return nil
+}
+
+func (s *service) handleWorkspaceThresholdRequest(
+	ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer,
+) error {
+
+	logutil.Info(
+		"WORKSPACE-THRESHOLD-CHANGED",
+		zap.Uint64("commit-threshold", req.WorkspaceThresholdRequest.CommitThreshold),
+		zap.Uint64("write-threshold", req.WorkspaceThresholdRequest.WriteThreshold),
+	)
+
+	e := s.storeEngine.(*disttae.Engine)
+	commit, write := e.SetWorkspaceThreshold(
+		req.WorkspaceThresholdRequest.CommitThreshold,
+		req.WorkspaceThresholdRequest.WriteThreshold,
+	)
+
+	resp.WorkspaceThresholdResponse = &query.WorkspaceThresholdResponse{
+		CommitThreshold: commit,
+		WriteThreshold:  write,
+	}
 
 	return nil
 }

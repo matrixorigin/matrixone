@@ -69,7 +69,7 @@ func NewMockLogtailServer(
 
 	ls := &TestLogtailServer{}
 
-	logtailer := taelogtail.NewLogtailer(ctx, tae.BGCheckpointRunner, tae.LogtailMgr, tae.Catalog)
+	logtailer := taelogtail.NewLogtailer(ctx, tae, tae.LogtailMgr, tae.Catalog)
 	server, err := service.NewLogtailServer("", cfg, logtailer, rt, rpcServerFactory)
 	if err != nil {
 		return nil, err

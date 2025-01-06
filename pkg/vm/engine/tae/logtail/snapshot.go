@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 
 	"go.uber.org/zap"
 
@@ -759,6 +760,11 @@ func (sm *SnapshotMeta) GetSnapshot(
 		snapshotSchemaTypes[ColObjId],
 	}
 	for tid, objectMap := range objects {
+		select {
+		case <-ctx.Done():
+			return nil, context.Cause(ctx)
+		default:
+		}
 		tombstonesStats := make([]objectio.ObjectStats, 0)
 		for ttid, tombstoneMap := range tombstones {
 			if ttid != tid {
@@ -873,6 +879,11 @@ func (sm *SnapshotMeta) GetPITR(
 		tables:   make(map[uint64]types.TS),
 	}
 	for _, object := range sm.pitr.objects {
+		select {
+		case <-ctx.Done():
+			return nil, context.Cause(ctx)
+		default:
+		}
 		location := object.stats.ObjectLocation()
 		name := object.stats.ObjectName()
 		for i := uint32(0); i < object.stats.BlkCnt(); i++ {
@@ -1265,7 +1276,13 @@ func (sm *SnapshotMeta) Rebuild(
 }
 
 func (sm *SnapshotMeta) ReadMeta(ctx context.Context, name string, fs fileservice.FileService) error {
-	reader, err := blockio.NewFileReaderNoCache(fs, name)
+	select {
+	case <-ctx.Done():
+		return context.Cause(ctx)
+	default:
+	}
+
+	reader, err := ioutil.NewFileReaderNoCache(fs, name)
 	if err != nil {
 		return err
 	}
@@ -1326,7 +1343,7 @@ func (sm *SnapshotMeta) ReadMeta(ctx context.Context, name string, fs fileservic
 }
 
 func (sm *SnapshotMeta) ReadTableInfo(ctx context.Context, name string, fs fileservice.FileService) error {
-	reader, err := blockio.NewFileReaderNoCache(fs, name)
+	reader, err := ioutil.NewFileReaderNoCache(fs, name)
 	if err != nil {
 		return err
 	}

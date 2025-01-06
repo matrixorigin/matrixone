@@ -5,7 +5,7 @@ use test;
 create table articles (id INT UNSIGNED AUTO_INCREMENT NOT NULL PRIMARY KEY, title VARCHAR(200), body TEXT, FULLTEXT (title,body));
 show create table articles;
 Table    Create Table
-articles    CREATE TABLE `articles` (\n  `id` int unsigned NOT NULL AUTO_INCREMENT,\n  `title` varchar(200) DEFAULT NULL,\n  `body` text DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT(`title`,`body`)\n)
+articles    CREATE TABLE `articles` (\n  `id` int unsigned NOT NULL AUTO_INCREMENT,\n  `title` varchar(200) DEFAULT NULL,\n  `body` text DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT (`title`,`body`)\n)
 drop table articles;
 create table articles (id INT UNSIGNED AUTO_INCREMENT NOT NULL PRIMARY KEY, title VARCHAR(200), body TEXT);
 create fulltext index fdx_01 on articles(title, body);
@@ -23,7 +23,7 @@ create table src (id bigint primary key, json1 json, json2 json);
 create fulltext index ftidx1 on src(json1) with parser json;
 show create table src;
 Table    Create Table
-src    CREATE TABLE `src` (\n  `id` bigint NOT NULL,\n  `json1` json DEFAULT NULL,\n  `json2` json DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT(`json1`) WITH PARSER json\n)
+src    CREATE TABLE `src` (\n  `id` bigint NOT NULL,\n  `json1` json DEFAULT NULL,\n  `json2` json DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT `ftidx1`(`json1`) WITH PARSER json\n)
 alter table src drop column json1;
 drop table src;
 create table articles (id INT UNSIGNED AUTO_INCREMENT NOT NULL PRIMARY KEY, title VARCHAR(200), body TEXT);
@@ -146,7 +146,7 @@ Project
               Filter Cond: (t1.c = 100)
               Block Filter Cond: (t1.c = 100)
               Runtime Filter Probe: t1.a
-        ->  Table Scan on test.index2(index) [ForceOneCN]
+        ->  Index Table Scan on t1.index2 [ForceOneCN]
               Filter Cond: prefix_eq(#[0,0])
               Block Filter Cond: prefix_eq(#[0,0])
 drop table t1;

@@ -26,7 +26,7 @@ const (
 	InFilterCardLimitNonPK   = 10000
 	InFilterCardLimitPK      = 1000000
 	BloomFilterCardLimit     = 100 * InFilterCardLimitNonPK
-	InFilterSelectivityLimit = 0.2
+	InFilterSelectivityLimit = 0.3
 )
 
 func GetInFilterCardLimit(sid string) int32 {
@@ -163,7 +163,11 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 		sortOrder := GetSortOrder(tableDef, probeCol.ColPos)
 		if node.JoinType != plan.Node_INDEX {
 			probeNdv := getExprNdv(probeExprs[0], builder)
-			if probeNdv == -1 || node.Stats.HashmapStats.HashmapSize/probeNdv >= 0.1 {
+			if probeNdv <= 1 {
+				//maybe not flushed yet, set at least 100 to continue calculation
+				probeNdv = 100
+			}
+			if node.Stats.HashmapStats.HashmapSize/probeNdv >= 0.1 {
 				return
 			}
 			if sortOrder != 0 {

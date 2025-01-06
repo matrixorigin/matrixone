@@ -32,6 +32,9 @@ const (
 	FJ_TransferSlow  = "fj/transfer/slow"
 	FJ_FlushTimeout  = "fj/flush/timeout"
 
+	FJ_CheckpointSave = "fj/checkpoint/save"
+	FJ_GCKPWait1      = "fj/gckp/wait1"
+
 	FJ_TraceRanges         = "fj/trace/ranges"
 	FJ_TracePartitionState = "fj/trace/partitionstate"
 	FJ_PrefetchThreshold   = "fj/prefetch/threshold"
@@ -258,6 +261,73 @@ func InjectLog1(
 		fault.RemoveFaultPoint(context.Background(), FJ_LogWorkspace)
 		fault.RemoveFaultPoint(context.Background(), FJ_TracePartitionState)
 		fault.RemoveFaultPoint(context.Background(), FJ_LogReader)
+	}
+	return
+}
+
+func CheckpointSaveInjected() (string, bool) {
+	_, sarg, injected := fault.TriggerFault(FJ_CheckpointSave)
+	return sarg, injected
+}
+
+func WaitInjected(key string) {
+	fault.TriggerFault(key)
+}
+
+func NotifyInjected(key string) {
+	fault.TriggerFault(key)
+}
+
+func InjectWait(key string) (rmFault func(), err error) {
+	if err = fault.AddFaultPoint(
+		context.Background(),
+		key,
+		":::",
+		"wait",
+		0,
+		"",
+		false,
+	); err != nil {
+		return
+	}
+	rmFault = func() {
+		fault.RemoveFaultPoint(context.Background(), key)
+	}
+	return
+}
+
+func InjectNotify(key, target string) (rmFault func(), err error) {
+	if err = fault.AddFaultPoint(
+		context.Background(),
+		key,
+		":::",
+		"notify",
+		0,
+		target,
+		false,
+	); err != nil {
+		return
+	}
+	rmFault = func() {
+		fault.RemoveFaultPoint(context.Background(), key)
+	}
+	return
+}
+
+func InjectCheckpointSave(msg string) (rmFault func() (bool, error), err error) {
+	if err = fault.AddFaultPoint(
+		context.Background(),
+		FJ_CheckpointSave,
+		":::",
+		"echo",
+		0,
+		msg,
+		false,
+	); err != nil {
+		return
+	}
+	rmFault = func() (ok bool, err error) {
+		return fault.RemoveFaultPoint(context.Background(), FJ_CheckpointSave)
 	}
 	return
 }

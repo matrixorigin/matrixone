@@ -82,6 +82,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -98,7 +99,7 @@ const Size90M = 90 * 1024 * 1024
 
 type CheckpointClient interface {
 	CollectCheckpointsInRange(ctx context.Context, start, end types.TS) (ckpLoc string, lastEnd types.TS, err error)
-	FlushTable(ctx context.Context, dbID, tableID uint64, ts types.TS) error
+	FlushTable(ctx context.Context, accoutID uint32, dbID, tableID uint64, ts types.TS) error
 }
 
 func HandleSyncLogTailReq(
@@ -165,7 +166,7 @@ func HandleSyncLogTailReq(
 	if canRetry { // check simple conditions first
 		_, name, forceFlush := fault.TriggerFault("logtail_max_size")
 		if (forceFlush && name == tableEntry.GetLastestSchemaLocked(false).Name) || resp.ProtoSize() > Size90M {
-			flushErr := ckpClient.FlushTable(ctx, did, tid, end)
+			flushErr := ckpClient.FlushTable(ctx, 0, did, tid, end)
 			// try again after flushing
 			newResp, closeCB, err := HandleSyncLogTailReq(ctx, ckpClient, mgr, c, req, false)
 			logutil.Info(
@@ -423,14 +424,14 @@ func GetMetaIdxesByVersion(ver uint32) []uint16 {
 func LoadCheckpointEntries(
 	ctx context.Context,
 	sid string,
-	metLoc string,
+	metaLoc string,
 	tableID uint64,
 	tableName string,
 	dbID uint64,
 	dbName string,
 	mp *mpool.MPool,
 	fs fileservice.FileService) ([]*api.Entry, []func(), error) {
-	if metLoc == "" {
+	if metaLoc == "" {
 		return nil, nil, nil
 	}
 	v2.LogtailLoadCheckpointCounter.Inc()
@@ -438,11 +439,11 @@ func LoadCheckpointEntries(
 	defer func() {
 		v2.LogTailLoadCheckpointDurationHistogram.Observe(time.Since(now).Seconds())
 	}()
-	locationsAndVersions := strings.Split(metLoc, ";")
+	locationsAndVersions := strings.Split(metaLoc, ";")
 
 	datas := make([]*CNCheckpointData, len(locationsAndVersions)/2)
 
-	readers := make([]*blockio.BlockReader, len(locationsAndVersions)/2)
+	readers := make([]*ioutil.BlockReader, len(locationsAndVersions)/2)
 	objectLocations := make([]objectio.Location, len(locationsAndVersions)/2)
 	versions := make([]uint32, len(locationsAndVersions)/2)
 	locations := make([]objectio.Location, len(locationsAndVersions)/2)
@@ -452,12 +453,18 @@ func LoadCheckpointEntries(
 		if err != nil {
 			return nil, nil, err
 		}
-		location, err := blockio.EncodeLocationFromString(key)
+		location, err := objectio.StringToLocation(key)
 		if err != nil {
+			logutil.Error(
+				"Parse-CKP-Name-Error",
+				zap.String("loc", metaLoc),
+				zap.Int("i", i),
+				zap.Error(err),
+			)
 			return nil, nil, err
 		}
 		locations[i/2] = location
-		reader, err := blockio.NewObjectReader(sid, fs, location)
+		reader, err := ioutil.NewObjectReader(fs, location)
 		if err != nil {
 			return nil, nil, err
 		}

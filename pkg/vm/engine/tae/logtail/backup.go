@@ -21,7 +21,9 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"go.uber.org/zap"
@@ -171,6 +173,16 @@ func GetTombstonesByBlockId(
 		}
 
 		for idx := 0; idx < int(obj.BlkCnt()); idx++ {
+			if idx >= len(oData.data) {
+				logutil.Warn("GetTombstonesByBlockId skip tombstone",
+					zap.Int("idx", idx),
+					zap.Int("len", len(oData.data)),
+					zap.Int("blkcnt ", int(obj.BlkCnt())),
+					zap.Uint64("tid", oData.tid),
+					zap.String("name", obj.ObjectName().String()),
+					zap.String("stats", obj.String()))
+				return true, nil
+			}
 			rowids := vector.MustFixedColWithTypeCheck[types.Rowid](oData.data[idx].Vecs[0])
 			start, end := blockio.FindStartEndOfBlockFromSortedRowids(rowids, bid)
 			if start == end {
@@ -211,38 +223,47 @@ func (d *BackupDeltaLocDataSource) GetTombstones(
 					}
 				}
 				name := tombstone.ObjectName()
-				logutil.Infof("[GetSnapshot] tombstone object %v", name.String())
-				bat, _, err := blockio.LoadOneBlock(ctx, d.fs, tombstone.ObjectLocation(), objectio.SchemaData)
-				if err != nil {
-					return false, err
-				}
-				if !tombstone.GetCNCreated() {
-					deleteRow := make([]int64, 0)
-					for v := 0; v < bat.Vecs[0].Length(); v++ {
-						var commitTs types.TS
-						err = commitTs.Unmarshal(bat.Vecs[len(bat.Vecs)-1].GetRawBytesAt(v))
-						if err != nil {
-							return false, err
+				logutil.Infof("[GetSnapshot] tombstone object: %v, block count: %d", name.String(), tombstone.BlkCnt())
+				for id := uint32(0); id < tombstone.BlkCnt(); id++ {
+					location := tombstone.ObjectLocation()
+					location.SetID(uint16(id))
+					bat, _, err := blockio.LoadOneBlock(ctx, d.fs, location, objectio.SchemaData)
+					if err != nil {
+						return false, err
+					}
+					if !tombstone.GetCNCreated() {
+						deleteRow := make([]int64, 0)
+						for v := 0; v < bat.Vecs[0].Length(); v++ {
+							var commitTs types.TS
+							err = commitTs.Unmarshal(bat.Vecs[len(bat.Vecs)-1].GetRawBytesAt(v))
+							if err != nil {
+								return false, err
+							}
+							if commitTs.GT(&d.ts) {
+
+								logutil.Debug("[GetSnapshot]",
+									zap.Int("row", v),
+									zap.String("commitTs", commitTs.ToString()),
+									zap.String("location", location.String()))
+							} else {
+								deleteRow = append(deleteRow, int64(v))
+							}
 						}
-						if commitTs.GT(&d.ts) {
-							logutil.Debugf("delete row %v, commitTs %v, location %v",
-								v, commitTs.ToString(), name.String())
-						} else {
-							deleteRow = append(deleteRow, int64(v))
+						if len(deleteRow) != bat.Vecs[0].Length() {
+							bat.Shrink(deleteRow, false)
 						}
 					}
-					if len(deleteRow) != bat.Vecs[0].Length() {
-						bat.Shrink(deleteRow, false)
+					if id == 0 {
+						d.ds[name.String()] = &objData{
+							stats:      &tombstone,
+							dataType:   objectio.SchemaData,
+							sortKey:    uint16(math.MaxUint16),
+							data:       make([]*batch.Batch, 0),
+							appendable: true,
+						}
 					}
+					d.ds[name.String()].data = append(d.ds[name.String()].data, bat)
 				}
-				d.ds[name.String()] = &objData{
-					stats:      &tombstone,
-					dataType:   objectio.SchemaData,
-					sortKey:    uint16(math.MaxUint16),
-					data:       make([]*batch.Batch, 0),
-					appendable: true,
-				}
-				d.ds[name.String()].data = append(d.ds[name.String()].data, bat)
 				return true, nil
 			},
 			d.tombstones,
@@ -274,8 +295,14 @@ func GetCheckpointData(
 	location objectio.Location,
 	version uint32,
 ) (*CheckpointData, error) {
+	select {
+	case <-ctx.Done():
+		return nil, context.Cause(ctx)
+	default:
+	}
+
 	data := NewCheckpointData(sid, common.CheckpointAllocator)
-	reader, err := blockio.NewObjectReader(sid, fs, location)
+	reader, err := ioutil.NewObjectReader(fs, location)
 	if err != nil {
 		return nil, err
 	}
@@ -411,61 +438,48 @@ func LoadCheckpointEntriesFromKey(
 			NeedCopy: true,
 		})
 	}
-	for i := 0; i < data.bats[ObjectInfoIDX].Length(); i++ {
-		var objectStats objectio.ObjectStats
-		buf := data.bats[ObjectInfoIDX].GetVectorByName(ObjectAttr_ObjectStats).Get(i).([]byte)
-		objectStats.UnMarshal(buf)
-		deletedAt := data.bats[ObjectInfoIDX].GetVectorByName(EntryNode_DeleteAt).Get(i).(types.TS)
-		createAt := data.bats[ObjectInfoIDX].GetVectorByName(EntryNode_CreateAt).Get(i).(types.TS)
-		commitAt := data.bats[ObjectInfoIDX].GetVectorByName(txnbase.SnapshotAttr_CommitTS).Get(i).(types.TS)
-		isAblk := objectStats.GetAppendable()
-		if objectStats.Extent().End() == 0 {
-			// tn obj is in the batch too
-			continue
-		}
 
-		if deletedAt.IsEmpty() && isAblk {
-			// no flush, no need to copy
-			continue
-		}
+	collectObject := func(bat *containers.Batch) {
+		for i := 0; i < bat.Length(); i++ {
+			var objectStats objectio.ObjectStats
+			buf := bat.GetVectorByName(ObjectAttr_ObjectStats).Get(i).([]byte)
+			objectStats.UnMarshal(buf)
+			deletedAt := bat.GetVectorByName(EntryNode_DeleteAt).Get(i).(types.TS)
+			createAt := bat.GetVectorByName(EntryNode_CreateAt).Get(i).(types.TS)
+			commitAt := bat.GetVectorByName(txnbase.SnapshotAttr_CommitTS).Get(i).(types.TS)
+			isAblk := objectStats.GetAppendable()
+			if objectStats.Extent().End() == 0 {
+				// tn obj is in the batch too
+				continue
+			}
 
-		bo := &objectio.BackupObject{
-			Location: objectStats.ObjectLocation(),
-			CrateTS:  createAt,
-			DropTS:   deletedAt,
-		}
-		if baseTS.IsEmpty() || (!baseTS.IsEmpty() &&
-			(createAt.GE(baseTS) || commitAt.GE(baseTS))) {
-			bo.NeedCopy = true
-		}
-		locations = append(locations, bo)
-		if !deletedAt.IsEmpty() {
-			if softDeletes != nil {
-				if !(*softDeletes)[objectStats.ObjectName().String()] {
-					(*softDeletes)[objectStats.ObjectName().String()] = true
+			if deletedAt.IsEmpty() && isAblk {
+				// no flush, no need to copy
+				continue
+			}
+
+			bo := &objectio.BackupObject{
+				Location: objectStats.ObjectLocation(),
+				CrateTS:  createAt,
+				DropTS:   deletedAt,
+			}
+			if baseTS.IsEmpty() || (!baseTS.IsEmpty() &&
+				(createAt.GE(baseTS) || commitAt.GE(baseTS))) {
+				bo.NeedCopy = true
+			}
+			locations = append(locations, bo)
+			if !deletedAt.IsEmpty() {
+				if softDeletes != nil {
+					if !(*softDeletes)[objectStats.ObjectName().String()] {
+						(*softDeletes)[objectStats.ObjectName().String()] = true
+					}
 				}
 			}
 		}
 	}
 
-	for i := 0; i < data.bats[TombstoneObjectInfoIDX].Length(); i++ {
-		var objectStats objectio.ObjectStats
-		buf := data.bats[TombstoneObjectInfoIDX].GetVectorByName(ObjectAttr_ObjectStats).Get(i).([]byte)
-		objectStats.UnMarshal(buf)
-		commitTS := data.bats[TombstoneObjectInfoIDX].GetVectorByName(txnbase.SnapshotAttr_CommitTS).Get(i).(types.TS)
-		if objectStats.ObjectLocation().IsEmpty() {
-			continue
-		}
-		bo := &objectio.BackupObject{
-			Location: objectStats.ObjectLocation(),
-			CrateTS:  commitTS,
-		}
-		if baseTS.IsEmpty() ||
-			(!baseTS.IsEmpty() && commitTS.GE(baseTS)) {
-			bo.NeedCopy = true
-		}
-		locations = append(locations, bo)
-	}
+	collectObject(data.bats[ObjectInfoIDX])
+	collectObject(data.bats[TombstoneObjectInfoIDX])
 	return locations, data, nil
 }
 
@@ -569,7 +583,7 @@ func ReWriteCheckpointAndBlockFromKey(
 
 	insertBatchFun := func(
 		objsData map[string]*objData,
-		initData func(*objData, *blockio.BlockWriter) (bool, error),
+		initData func(*objData, *ioutil.BlockWriter) (bool, error),
 	) error {
 		for _, objectData := range objsData {
 			if insertObjBatch[objectData.tid] == nil {
@@ -583,8 +597,8 @@ func ReWriteCheckpointAndBlockFromKey(
 			fileNum := uint16(1000) + objectName.Num()
 			segment := objectName.SegmentId()
 			name := objectio.BuildObjectName(&segment, fileNum)
-			var writer *blockio.BlockWriter
-			writer, err = blockio.NewBlockWriter(dstFs, name.String())
+			var writer *ioutil.BlockWriter
+			writer, err = ioutil.NewBlockWriter(dstFs, name.String())
 			if err != nil {
 				return err
 			}
@@ -637,7 +651,7 @@ func ReWriteCheckpointAndBlockFromKey(
 
 	err = insertBatchFun(
 		objectsData,
-		func(oData *objData, writer *blockio.BlockWriter) (bool, error) {
+		func(oData *objData, writer *ioutil.BlockWriter) (bool, error) {
 			ds := NewBackupDeltaLocDataSource(ctx, fs, ts, tombstonesData)
 			blk := oData.stats.ConstructBlockInfo(uint16(0))
 			bat, sortKey, err := blockio.BlockDataReadBackup(ctx, &blk, ds, nil, ts, fs)
@@ -671,7 +685,7 @@ func ReWriteCheckpointAndBlockFromKey(
 
 	err = insertBatchFun(
 		tombstonesData,
-		func(oData *objData, writer *blockio.BlockWriter) (bool, error) {
+		func(oData *objData, writer *ioutil.BlockWriter) (bool, error) {
 			if oData.data[0].Vecs[0].Length() == 0 {
 				logutil.Info("[Data Empty] ReWrite Checkpoint",
 					zap.String("tombstone", oData.stats.ObjectName().String()),
@@ -730,6 +744,13 @@ func ReWriteCheckpointAndBlockFromKey(
 						objectio.WithSorted()(insertObjData[i].stats)
 						newMeta.GetVectorByName(ObjectAttr_ObjectStats).Update(row, insertObjData[i].stats[:], false)
 						newMeta.GetVectorByName(EntryNode_DeleteAt).Update(row, types.TS{}, false)
+						_, sarg, _ := fault.TriggerFault("back up UT")
+						if sarg == "" {
+							createTS := newMeta.GetVectorByName(EntryNode_CreateAt).Get(i).(types.TS)
+							newMeta.GetVectorByName(txnbase.SnapshotAttr_CommitTS).Update(row, createTS, false)
+							newMeta.GetVectorByName(txnbase.SnapshotAttr_PrepareTS).Update(row, createTS, false)
+							newMeta.GetVectorByName(txnbase.SnapshotAttr_StartTS).Update(row, createTS.Prev(), false)
+						}
 					}
 				}
 			}
@@ -776,7 +797,9 @@ func ReWriteCheckpointAndBlockFromKey(
 			data.UpdateTombstoneInsertMeta(tid, int32(table.offset), int32(table.end))
 		}
 	}
-	cnLocation, dnLocation, checkpointFiles, err := data.WriteTo(dstFs, DefaultCheckpointBlockRows, DefaultCheckpointSize)
+	cnLocation, dnLocation, checkpointFiles, err := data.WriteTo(
+		ctx, DefaultCheckpointBlockRows, DefaultCheckpointSize, dstFs,
+	)
 	if err != nil {
 		return nil, nil, nil, err
 	}

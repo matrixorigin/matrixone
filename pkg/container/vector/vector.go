@@ -91,6 +91,10 @@ func ToSliceNoTypeCheck[T any](vec *Vector, ret *[]T) {
 	*ret = unsafe.Slice((*T)(vec.col.Ptr), vec.col.Cap)
 }
 
+func ToSliceNoTypeCheck2[T any](vec *Vector) []T {
+	return unsafe.Slice((*T)(vec.col.Ptr), vec.col.Cap)
+}
+
 func ToSlice[T any](vec *Vector, ret *[]T) {
 	if !typeCompatible[T](vec.typ) {
 		panic(fmt.Sprintf("type mismatch: %T %v", []T{}, vec.typ.String()))
@@ -283,6 +287,13 @@ func (v *Vector) GetBytesAt(i int) []byte {
 	return bs[i].GetByteSlice(v.area)
 }
 
+func (v *Vector) GetBytesAt2(bs []types.Varlena, i int) []byte {
+	if v.IsConst() {
+		i = 0
+	}
+	return bs[i].GetByteSlice(v.area)
+}
+
 func (v *Vector) GetRawBytesAt(i int) []byte {
 	if v.typ.IsVarlen() {
 		return v.GetBytesAt(i)
@@ -338,6 +349,13 @@ func GetArrayAt[T types.RealNumbers](v *Vector, i int) []T {
 	}
 	var bs []types.Varlena
 	ToSliceNoTypeCheck(v, &bs)
+	return types.GetArray[T](&bs[i], v.area)
+}
+
+func GetArrayAt2[T types.RealNumbers](v *Vector, bs []types.Varlena, i int) []T {
+	if v.IsConst() {
+		i = 0
+	}
 	return types.GetArray[T](&bs[i], v.area)
 }
 
@@ -4518,52 +4536,36 @@ func Intersection2VectorOrdered[T types.OrderedT | types.Decimal128](
 	mp *mpool.MPool,
 	cmp func(x, y T) int) (err error) {
 
-	var long, short []T
-	if len(a) < len(b) {
-		long = b
-		short = a
-	} else {
-		long = a
-		short = b
-	}
-	var lenLong, lenShort = len(long), len(short)
+	var preVal T
+	var idxA, idxB int
 
-	if err = ret.PreExtend(lenLong+lenShort, mp); err != nil {
+	if err = ret.PreExtend(len(a)+len(b), mp); err != nil {
 		return err
 	}
 
-	for i := range short {
-		idx := sort.Search(lenLong, func(j int) bool {
-			return cmp(long[j], short[i]) >= 0
-		})
+	for idxA < len(a) && idxB < len(b) {
+		var cmpRet int
 
-		if idx >= lenLong {
-			break
+		if cmpRet = cmp(a[idxA], b[idxB]); cmpRet == 0 {
+			if ret.Length() == 0 || cmp(preVal, a[idxA]) != 0 {
+				if err = AppendFixed(ret, a[idxA], false, mp); err != nil {
+					return err
+				}
+
+				preVal = a[idxA]
+			}
+
+			idxA++
+			idxB++
+
+		} else if cmpRet < 0 {
+			idxA++
+
+		} else {
+			idxB++
 		}
-
-		j := idx
-		if cmp(short[i], long[idx]) == 0 {
-			if err = AppendFixed(ret, short[i], false, mp); err != nil {
-				return err
-			}
-
-			j++
-
-			// skip the same item
-			for j < lenLong && cmp(long[j], long[j-1]) == 0 {
-				j++
-			}
-
-			if j >= lenLong {
-				break
-			}
-		}
-
-		idx = j
-
-		long = long[idx:]
-		lenLong = len(long)
 	}
+
 	return nil
 }
 
@@ -4630,63 +4632,42 @@ func Intersection2VectorVarlen(
 	ret *Vector,
 	mp *mpool.MPool) (err error) {
 
-	var shortCol, longCol []types.Varlena
-	var shortArea, longArea []byte
+	var preVal []byte
+	var idxA, idxB int
 
 	cola, areaa := MustVarlenaRawData(va)
 	colb, areab := MustVarlenaRawData(vb)
 
-	if len(cola) <= len(colb) {
-		shortCol = cola
-		shortArea = areaa
-		longCol = colb
-		longArea = areab
-	} else {
-		shortCol = colb
-		shortArea = areab
-		longCol = cola
-		longArea = areaa
-	}
-
-	var lenLong, lenShort = len(longCol), len(shortCol)
-
-	if err = ret.PreExtend(lenLong+lenShort, mp); err != nil {
+	if err = ret.PreExtend(len(cola)+len(colb), mp); err != nil {
 		return err
 	}
 
-	for i := range shortCol {
-		shortBytes := shortCol[i].GetByteSlice(shortArea)
-		idx := sort.Search(lenLong, func(j int) bool {
-			return bytes.Compare(longCol[j].GetByteSlice(longArea), shortBytes) >= 0
-		})
+	for idxA < len(cola) && idxB < len(colb) {
+		var cmpRet int
 
-		if idx >= lenLong {
-			break
+		bytesA := cola[idxA].GetByteSlice(areaa)
+		bytesB := colb[idxB].GetByteSlice(areab)
+
+		if cmpRet = bytes.Compare(bytesA, bytesB); cmpRet == 0 {
+			if ret.Length() == 0 || !bytes.Equal(preVal, bytesA) {
+				if err = AppendBytes(ret, bytesA, false, mp); err != nil {
+					return err
+				}
+
+				preVal = bytesA
+			}
+
+			idxA++
+			idxB++
+
+		} else if cmpRet < 0 {
+			idxA++
+
+		} else {
+			idxB++
 		}
-
-		j := idx
-		if bytes.Equal(shortBytes, longCol[idx].GetByteSlice(longArea)) {
-			if err = AppendBytes(ret, shortBytes, false, mp); err != nil {
-				return err
-			}
-
-			// skip the same item
-			j++
-			for j < lenLong && bytes.Equal(
-				longCol[j].GetByteSlice(longArea), longCol[j-1].GetByteSlice(longArea)) {
-				j++
-			}
-
-			if j >= lenLong {
-				break
-			}
-		}
-
-		idx = j
-
-		longCol = longCol[idx:]
-		lenLong = len(longCol)
 	}
+
 	return nil
 }
 

@@ -614,7 +614,7 @@ func (s *service) getTxnSender() (sender rpc.TxnSender, err error) {
 					resp.CNOpResponse = &txn.CNOpResponse{Payload: payload}
 				}
 			case txn.TxnMethod_Commit:
-				_, err = storage.Commit(ctx, req.Txn)
+				_, err = storage.Commit(ctx, req.Txn, nil, nil)
 				if err == nil {
 					resp.Txn.Status = txn.TxnStatus_Committed
 				}

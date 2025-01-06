@@ -175,4 +175,13 @@ func MakeMockBatchsWithNullVec() *batch.Batch {
 	return bat
 }
 
+func MakeMockBatchsWithNullVec1() *batch.Batch {
+	bat := batch.New([]string{"a", "b", "c", "d", "e"})
+	vecs := makeMockVecs()
+	vecs[0] = testutil.MakeInt32Vector([]int32{1, 1}, []uint64{1})
+	bat.Vecs = vecs
+	bat.SetRowCount(vecs[0].Length())
+	return bat
+}
+
 //@todo make more test batchs

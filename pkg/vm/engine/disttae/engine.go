@@ -39,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
@@ -147,7 +148,7 @@ func New(
 
 func (e *Engine) Close() error {
 	if e.gcPool != nil {
-		e.gcPool.Release()
+		_ = e.gcPool.ReleaseTimeout(time.Second * 3)
 	}
 	e.dynamicCtx.Close()
 	return nil
@@ -157,19 +158,68 @@ func (e *Engine) fillDefaults() {
 	if e.config.insertEntryMaxCount <= 0 {
 		e.config.insertEntryMaxCount = InsertEntryThreshold
 	}
-	if e.config.workspaceThreshold <= 0 {
-		e.config.workspaceThreshold = WorkspaceThreshold
+	if e.config.commitWorkspaceThreshold <= 0 {
+		e.config.commitWorkspaceThreshold = CommitWorkspaceThreshold
+	}
+	if e.config.writeWorkspaceThreshold <= 0 {
+		e.config.writeWorkspaceThreshold = WriteWorkspaceThreshold
+	}
+	if e.config.extraWorkspaceThreshold <= 0 {
+		e.config.extraWorkspaceThreshold = ExtraWorkspaceThreshold
 	}
 	if e.config.cnTransferTxnLifespanThreshold <= 0 {
 		e.config.cnTransferTxnLifespanThreshold = CNTransferTxnLifespanThreshold
+	}
+	if e.config.quota.Load() <= 0 {
+		mem := objectio.TotalMem() / 100 * 5
+		e.config.quota.Store(mem)
+		v2.TxnExtraWorkspaceQuotaGauge.Set(float64(mem))
 	}
 
 	logutil.Info(
 		"INIT-ENGINE-CONFIG",
 		zap.Int("InsertEntryMaxCount", e.config.insertEntryMaxCount),
-		zap.Uint64("WorkspaceThreshold", e.config.workspaceThreshold),
+		zap.Uint64("CommitWorkspaceThreshold", e.config.commitWorkspaceThreshold),
+		zap.Uint64("WriteWorkspaceThreshold", e.config.writeWorkspaceThreshold),
+		zap.Uint64("ExtraWorkspaceThresholdQuota", e.config.quota.Load()),
 		zap.Duration("CNTransferTxnLifespanThreshold", e.config.cnTransferTxnLifespanThreshold),
 	)
+}
+
+// SetWorkspaceThreshold updates the commit and write workspace thresholds (in MB).
+// Non-zero values override the current thresholds, while zero keeps them unchanged.
+// Returns the previous thresholds (in MB).
+func (e *Engine) SetWorkspaceThreshold(commitThreshold, writeThreshold uint64) (commit, write uint64) {
+	commit = e.config.commitWorkspaceThreshold / mpool.MB
+	write = e.config.writeWorkspaceThreshold / mpool.MB
+	if commitThreshold != 0 {
+		e.config.commitWorkspaceThreshold = commitThreshold * mpool.MB
+	}
+	if writeThreshold != 0 {
+		e.config.writeWorkspaceThreshold = writeThreshold * mpool.MB
+	}
+	return
+}
+
+func (e *Engine) AcquireQuota(v uint64) (uint64, bool) {
+	for {
+		oldRemaining := e.config.quota.Load()
+		if oldRemaining < v {
+			return 0, false
+		}
+		remaining := oldRemaining - v
+		if e.config.quota.CompareAndSwap(oldRemaining, remaining) {
+			v2.TxnExtraWorkspaceQuotaGauge.Set(float64(remaining))
+			return remaining, true
+		}
+	}
+}
+
+func (e *Engine) ReleaseQuota(quota uint64) (remaining uint64) {
+	e.config.quota.Add(quota)
+	remaining = e.config.quota.Load()
+	v2.TxnExtraWorkspaceQuotaGauge.Set(float64(remaining))
+	return
 }
 
 func (e *Engine) GetService() string {
@@ -212,13 +262,11 @@ func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator)
 	}
 
 	key := genDatabaseKey(accountId, name)
-	txn.databaseMap.Store(key, &txnDatabase{
+	txn.databaseOps.addCreateDatabase(key, txn.statementID, &txnDatabase{
 		op:           op,
 		databaseId:   databaseId,
 		databaseName: name,
 	})
-
-	txn.deletedDatabaseMap.Delete(key)
 	return nil
 }
 
@@ -301,12 +349,12 @@ func (e *Engine) Database(
 
 	// check the database is deleted or not
 	key := genDatabaseKey(accountId, name)
-	if _, exist := txn.deletedDatabaseMap.Load(key); exist {
+	if txn.databaseOps.existAndDeleted(key) {
 		return nil, moerr.NewParseErrorf(ctx, "database %q does not exist", name)
 	}
 
-	if v, ok := txn.databaseMap.Load(key); ok {
-		return v.(*txnDatabase), nil
+	if v := txn.databaseOps.existAndActive(key); v != nil {
+		return v, nil
 	}
 
 	item := &cache.DatabaseItem{
@@ -532,8 +580,7 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 
 	// adjust the state of txn cache
 	key := genDatabaseKey(accountId, name)
-	txn.databaseMap.Delete(key)
-	txn.deletedDatabaseMap.Store(key, databaseId)
+	txn.databaseOps.addDeleteDatabase(key, txn.statementID, databaseId)
 	return nil
 }
 

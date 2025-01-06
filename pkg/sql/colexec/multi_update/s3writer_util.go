@@ -29,17 +29,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func generateBlockWriter(writer *s3Writer,
 	proc *process.Process, idx int,
-	isDelete bool) (*blockio.BlockWriter, error) {
+	isDelete bool) (*ioutil.BlockWriter, error) {
 	// Use uuid as segment id
 	// TODO: multiple 64m file in one segment
 	obj := colexec.Get().GenerateObject()
@@ -53,7 +53,7 @@ func generateBlockWriter(writer *s3Writer,
 		seqnums = nil
 		sortIdx = 0
 	}
-	blockWriter, err := blockio.NewBlockWriterNew(
+	blockWriter, err := ioutil.NewBlockWriterNew(
 		s3,
 		obj,
 		writer.schemaVersions[idx],
@@ -245,11 +245,9 @@ func cloneSomeVecFromCompactBatchs(
 // fetchSomeVecFromCompactBatchs fetch some vectors from CompactBatchs
 // do not clean these batchs
 func fetchSomeVecFromCompactBatchs(
-	proc *process.Process,
 	src *batch.CompactBatchs,
 	cols []int,
 	attrs []string) ([]*batch.Batch, error) {
-	mp := proc.GetMPool()
 	var newBat *batch.Batch
 	retBats := make([]*batch.Batch, src.Length())
 	for i := 0; i < src.Length(); i++ {
@@ -258,18 +256,7 @@ func fetchSomeVecFromCompactBatchs(
 		newBat.Attrs = attrs
 		for j, idx := range cols {
 			oldVec := oldBat.Vecs[idx]
-			//expand constant vector
-			if oldVec.IsConst() {
-				newVec := vector.NewVec(*oldVec.GetType())
-				err := vector.GetUnionAllFunction(*oldVec.GetType(), mp)(newVec, oldVec)
-				if err != nil {
-					return nil, err
-				}
-				oldBat.ReplaceVector(oldVec, newVec, 0)
-				newBat.Vecs[j] = newVec
-			} else {
-				newBat.Vecs[j] = oldVec
-			}
+			newBat.Vecs[j] = oldVec
 		}
 		newBat.SetRowCount(newBat.Vecs[0].Length())
 		retBats[i] = newBat
@@ -277,7 +264,7 @@ func fetchSomeVecFromCompactBatchs(
 	return retBats, nil
 }
 
-func syncThenGetBlockInfoAndStats(ctx context.Context, blockWriter *blockio.BlockWriter, sortIdx int) ([]objectio.BlockInfo, objectio.ObjectStats, error) {
+func syncThenGetBlockInfoAndStats(ctx context.Context, blockWriter *ioutil.BlockWriter, sortIdx int) ([]objectio.BlockInfo, objectio.ObjectStats, error) {
 	blocks, _, err := blockWriter.Sync(ctx)
 	if err != nil {
 		return nil, objectio.ObjectStats{}, err

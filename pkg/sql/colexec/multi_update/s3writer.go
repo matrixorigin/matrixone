@@ -26,10 +26,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio/mergeutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -104,7 +105,6 @@ func newS3Writer(update *MultiUpdate) (*s3Writer, error) {
 	tableCount := len(update.MultiUpdateCtx)
 	writer := &s3Writer{
 		cacheBatchs:    batch.NewCompactBatchs(),
-		segmentMap:     update.SegmentMap,
 		updateCtxInfos: update.ctr.updateCtxInfos,
 		seqnums:        make([][]uint16, 0, tableCount),
 		sortIdxs:       make([]int, 0, tableCount),
@@ -188,9 +188,6 @@ func (writer *s3Writer) prepareDeleteBatchs(
 
 	for _, bat := range src {
 		rowIDVec := bat.GetVector(RowIDIdx)
-		if rowIDVec.IsConstNull() {
-			continue
-		}
 		nulls := rowIDVec.GetNulls()
 		if nulls.Count() == bat.RowCount() {
 			continue
@@ -272,7 +269,7 @@ func (writer *s3Writer) sortAndSync(proc *process.Process, analyzer process.Anal
 		if len(updateCtx.DeleteCols) > 0 {
 			var delBatchs []*batch.Batch
 			if parititionCount == 0 {
-				bats, err = fetchSomeVecFromCompactBatchs(proc, writer.cacheBatchs, updateCtx.DeleteCols, DeleteBatchAttrs)
+				bats, err = fetchSomeVecFromCompactBatchs(writer.cacheBatchs, updateCtx.DeleteCols, DeleteBatchAttrs)
 				if err != nil {
 					return
 				}
@@ -341,7 +338,7 @@ func (writer *s3Writer) sortAndSync(proc *process.Process, analyzer process.Anal
 							}
 						}
 					}
-					bats, err = fetchSomeVecFromCompactBatchs(proc, writer.cacheBatchs, updateCtx.InsertCols, insertAttrs)
+					bats, err = fetchSomeVecFromCompactBatchs(writer.cacheBatchs, updateCtx.InsertCols, insertAttrs)
 					needSortBatch = false
 					needCleanBatch = false
 				}
@@ -384,7 +381,7 @@ func (writer *s3Writer) sortAndSyncOneTable(
 	bats []*batch.Batch,
 	needSortBatch bool,
 	needCleanBatch bool) (err error) {
-	var blockWriter *blockio.BlockWriter
+	var blockWriter *ioutil.BlockWriter
 	var blockInfos []objectio.BlockInfo
 	var objStats objectio.ObjectStats
 
@@ -476,7 +473,7 @@ func (writer *s3Writer) sortAndSyncOneTable(
 		return err
 	}
 
-	err = colexec.MergeSortBatches(bats, sortIndex, buf, sinker, proc.GetMPool(), needCleanBatch)
+	err = mergeutil.MergeSortBatches(bats, sortIndex, buf, sinker, proc.GetMPool(), needCleanBatch)
 	if err != nil {
 		return
 	}

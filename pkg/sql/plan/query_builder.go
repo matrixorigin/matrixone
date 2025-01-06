@@ -1845,7 +1845,33 @@ func (builder *QueryBuilder) rewriteStarApproxCount(nodeID int32) {
 	}
 }
 
+func (builder *QueryBuilder) removeUnnecessaryProjections(nodeID int32) int32 {
+	node := builder.qry.Nodes[nodeID]
+	if len(node.Children) == 0 {
+		return nodeID
+	}
+
+	for i, childID := range node.Children {
+		node.Children[i] = builder.removeUnnecessaryProjections(childID)
+	}
+
+	if node.NodeType != plan.Node_PROJECT {
+		return nodeID
+	}
+	childNodeID := node.Children[0]
+	childNode := builder.qry.Nodes[childNodeID]
+	if len(childNode.ProjectList) != 0 {
+		return nodeID
+	}
+	if childNode.NodeType == plan.Node_JOIN {
+		return nodeID
+	}
+	childNode.ProjectList = node.ProjectList
+	return childNodeID
+}
+
 func (builder *QueryBuilder) createQuery() (*Query, error) {
+	var err error
 	colRefBool := make(map[[2]int32]bool)
 	sinkColRef := make(map[[2]int32]int)
 
@@ -1900,7 +1926,10 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		}
 		// after determine shuffle, be careful when calling ReCalcNodeStats again.
 		// needResetHashMapStats should always be false from here
-		rootID = builder.applyIndices(rootID, colRefCnt, make(map[[2]int32]*plan.Expr))
+		rootID, err = builder.applyIndices(rootID, colRefCnt, make(map[[2]int32]*plan.Expr))
+		if err != nil {
+			return nil, err
+		}
 		ReCalcNodeStats(rootID, builder, true, false, false)
 
 		builder.generateRuntimeFilters(rootID)
@@ -1944,13 +1973,14 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 				colRefCnt[[2]int32{resultTag, int32(j)}] = 1
 			}
 		}
-		_, err := builder.remapAllColRefs(rootID, int32(i), colRefCnt, colRefBool, sinkColRef)
+		_, err = builder.remapAllColRefs(rootID, int32(i), colRefCnt, colRefBool, sinkColRef)
 		if err != nil {
 			return nil, err
 		}
+		builder.qry.Steps[i] = builder.removeUnnecessaryProjections(rootID)
 	}
 
-	err := builder.lockTableIfLockNoRowsAtTheEndForDelAndUpdate()
+	err = builder.lockTableIfLockNoRowsAtTheEndForDelAndUpdate()
 	if err != nil {
 		return nil, err
 	}
@@ -4873,6 +4903,13 @@ func (builder *QueryBuilder) resolveTsHint(tsExpr *tree.AtTimeStamp) (snapshot *
 			}
 
 			snapshot = &Snapshot{TS: &ts, Tenant: tenant}
+		} else if tsExpr.Type == tree.ASOFTIMESTAMP {
+			var ts int64
+			if ts, err = doResolveTimeStamp(lit.Sval); err != nil {
+				return
+			}
+			tStamp := &timestamp.Timestamp{PhysicalTime: ts}
+			snapshot = &Snapshot{TS: tStamp, Tenant: tenant}
 		} else {
 			err = moerr.NewInvalidArg(builder.GetContext(), "invalid timestamp hint type", tsExpr.Type.String())
 			return
@@ -4888,6 +4925,12 @@ func (builder *QueryBuilder) resolveTsHint(tsExpr *tree.AtTimeStamp) (snapshot *
 			if lit.I64Val <= 0 {
 				err = moerr.NewInvalidArg(builder.GetContext(), "invalid timestamp value", lit.I64Val)
 				return
+			}
+			if bgSnapshot := builder.compCtx.GetSnapshot(); builder.isRestoreByTs {
+				tenant = &SnapshotTenant{
+					TenantName: bgSnapshot.Tenant.TenantName,
+					TenantID:   bgSnapshot.Tenant.TenantID,
+				}
 			}
 			snapshot = &Snapshot{TS: &timestamp.Timestamp{PhysicalTime: lit.I64Val}, Tenant: tenant}
 		} else {

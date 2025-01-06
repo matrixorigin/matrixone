@@ -80,7 +80,11 @@ type AtTimeStamp struct {
 func (node *AtTimeStamp) Format(ctx *FmtCtx) {
 	ctx.WriteString("{")
 	ctx.WriteString(node.Type.String())
-	ctx.WriteString(" = ")
+	if node.Type != ASOFTIMESTAMP {
+		ctx.WriteString(" = ")
+	} else {
+		ctx.WriteString(" ")
+	}
 	node.Expr.Format(ctx)
 	ctx.WriteString("}")
 }
@@ -92,6 +96,7 @@ const (
 	ATTIMESTAMPTIME
 	ATTIMESTAMPSNAPSHOT
 	ATMOTIMESTAMP
+	ASOFTIMESTAMP
 )
 
 func (a ATTimeStampType) String() string {
@@ -104,6 +109,8 @@ func (a ATTimeStampType) String() string {
 		return "snapshot"
 	case ATMOTIMESTAMP: // format: {mo-timestamp = expr}
 		return "mo-timestamp"
+	case ASOFTIMESTAMP: // format: {as of timestamp = expr}
+		return "as of timestamp"
 	}
 	return "unknown"
 }

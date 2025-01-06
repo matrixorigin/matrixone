@@ -28,7 +28,7 @@ func SingleWindowReturnType(_ []types.Type) types.Type {
 // special structure for a single column window function.
 type singleWindowExec struct {
 	singleAggInfo
-	ret aggFuncResult[int64]
+	ret aggResultWithFixedType[int64]
 
 	groups [][]int64
 }
@@ -36,7 +36,7 @@ type singleWindowExec struct {
 func makeRankDenseRankRowNumber(mg AggMemoryManager, info singleAggInfo) AggFuncExec {
 	return &singleWindowExec{
 		singleAggInfo: info,
-		ret:           initFixedAggFuncResult[int64](mg, info.retType, info.emptyNull),
+		ret:           initAggResultWithFixedTypeResult[int64](mg, info.retType, info.emptyNull, 0),
 	}
 }
 
@@ -46,7 +46,7 @@ func (exec *singleWindowExec) GroupGrow(more int) error {
 }
 
 func (exec *singleWindowExec) PreAllocateGroups(more int) error {
-	return exec.ret.preAllocate(more)
+	return exec.ret.preExtend(more)
 }
 
 func (exec *singleWindowExec) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
@@ -55,17 +55,22 @@ func (exec *singleWindowExec) Fill(groupIndex int, row int, vectors []*vector.Ve
 	return nil
 }
 
+func (exec *singleWindowExec) GetOptResult() SplitResult {
+	return &exec.ret.optSplitResult
+}
+
 func (exec *singleWindowExec) marshal() ([]byte, error) {
 	d := exec.singleAggInfo.getEncoded()
-	r, err := exec.ret.marshal()
+	r, em, err := exec.ret.marshalToBytes()
 	if err != nil {
 		return nil, err
 	}
 
-	encoded := &EncodedAgg{
-		Info:   d,
-		Result: r,
-		Groups: nil,
+	encoded := EncodedAgg{
+		Info:    d,
+		Result:  r,
+		Empties: em,
+		Groups:  nil,
 	}
 	if len(exec.groups) > 0 {
 		encoded.Groups = make([][]byte, len(exec.groups))
@@ -76,7 +81,7 @@ func (exec *singleWindowExec) marshal() ([]byte, error) {
 	return encoded.Marshal()
 }
 
-func (exec *singleWindowExec) unmarshal(mp *mpool.MPool, result []byte, groups [][]byte) error {
+func (exec *singleWindowExec) unmarshal(mp *mpool.MPool, result, empties, groups [][]byte) error {
 	if len(exec.groups) > 0 {
 		exec.groups = make([][]int64, len(groups))
 		for i := range exec.groups {
@@ -85,7 +90,7 @@ func (exec *singleWindowExec) unmarshal(mp *mpool.MPool, result []byte, groups [
 			}
 		}
 	}
-	return exec.ret.unmarshal(result)
+	return exec.ret.unmarshalFromBytes(result, empties)
 }
 
 func (exec *singleWindowExec) BulkFill(groupIndex int, vectors []*vector.Vector) error {
@@ -119,7 +124,7 @@ func (exec *singleWindowExec) SetExtraInformation(partialResult any, groupIndex 
 	panic("window function do not support the extra information")
 }
 
-func (exec *singleWindowExec) Flush() (*vector.Vector, error) {
+func (exec *singleWindowExec) Flush() ([]*vector.Vector, error) {
 	switch exec.singleAggInfo.aggID {
 	case winIdOfRank:
 		return exec.flushRank()
@@ -135,7 +140,7 @@ func (exec *singleWindowExec) Free() {
 	exec.ret.free()
 }
 
-func (exec *singleWindowExec) flushRank() (*vector.Vector, error) {
+func (exec *singleWindowExec) flushRank() ([]*vector.Vector, error) {
 	values := exec.ret.values
 
 	idx := 0
@@ -149,15 +154,17 @@ func (exec *singleWindowExec) flushRank() (*vector.Vector, error) {
 			m := int(group[i] - group[i-1])
 
 			for k := idx + m; idx < k; idx++ {
-				values[idx] = sn
+				x, y := exec.ret.updateNextAccessIdx(idx)
+
+				values[x][y] = sn
 			}
 			sn += int64(m)
 		}
 	}
-	return exec.ret.flush(), nil
+	return exec.ret.flushAll(), nil
 }
 
-func (exec *singleWindowExec) flushDenseRank() (*vector.Vector, error) {
+func (exec *singleWindowExec) flushDenseRank() ([]*vector.Vector, error) {
 	values := exec.ret.values
 
 	idx := 0
@@ -171,15 +178,17 @@ func (exec *singleWindowExec) flushDenseRank() (*vector.Vector, error) {
 			m := int(group[i] - group[i-1])
 
 			for k := idx + m; idx < k; idx++ {
-				values[idx] = sn
+				x, y := exec.ret.updateNextAccessIdx(idx)
+
+				values[x][y] = sn
 			}
 			sn++
 		}
 	}
-	return exec.ret.flush(), nil
+	return exec.ret.flushAll(), nil
 }
 
-func (exec *singleWindowExec) flushRowNumber() (*vector.Vector, error) {
+func (exec *singleWindowExec) flushRowNumber() ([]*vector.Vector, error) {
 	values := exec.ret.values
 
 	idx := 0
@@ -190,9 +199,11 @@ func (exec *singleWindowExec) flushRowNumber() (*vector.Vector, error) {
 
 		n := group[len(group)-1] - group[0]
 		for j := int64(1); j <= n; j++ {
-			values[idx] = j
+			x, y := exec.ret.updateNextAccessIdx(idx)
+
+			values[x][y] = j
 			idx++
 		}
 	}
-	return exec.ret.flush(), nil
+	return exec.ret.flushAll(), nil
 }

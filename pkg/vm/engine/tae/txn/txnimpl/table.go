@@ -32,11 +32,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -163,7 +163,7 @@ func (tbl *txnTable) TransferDeleteIntent(
 		panic(err)
 	}
 	ts := types.BuildTS(time.Now().UTC().UnixNano(), 0)
-	if err = readWriteConfilictCheck(entry, ts); err == nil {
+	if err = readWriteConfilictCheck(entry, ts, false); err == nil {
 		return
 	}
 	err = nil
@@ -264,7 +264,7 @@ func (tbl *txnTable) TransferDeletes(
 		v2.TxnS3TombstoneTransferGetSoftdeleteObjectsHistogram.Observe(time.Since(tGetSoftdeleteObjects).Seconds())
 		v2.TxnS3TombstoneSoftdeleteObjectCounter.Add(float64(len(softDeleteObjects)))
 		var findTombstoneDuration, readTombstoneDuration, deleteRowsDuration time.Duration
-		var sinker *engine_util.Sinker
+		var sinker *ioutil.Sinker
 		defer func() {
 			if sinker != nil {
 				sinker.Close()
@@ -362,13 +362,13 @@ func (tbl *txnTable) TransferDeletes(
 			tbl.store.warChecker.Delete(id)
 			if currentTransferBatch != nil {
 				if sinker == nil {
-					sinker = engine_util.NewTombstoneSinker(
+					sinker = ioutil.NewTombstoneSinker(
 						objectio.HiddenColumnSelection_None,
 						*pkType,
 						common.WorkspaceAllocator,
 						tbl.store.rt.Fs.Service,
-						engine_util.WithBufferSizeCap(TransferSinkerBufferSize),
-						engine_util.WithMemorySizeThreshold(TransferSinkerMemorySizeThreshold))
+						ioutil.WithBufferSizeCap(TransferSinkerBufferSize),
+						ioutil.WithMemorySizeThreshold(TransferSinkerMemorySizeThreshold))
 				}
 				sinker.Write(ctx, containers.ToCNBatch(currentTransferBatch))
 				currentTransferBatch.Close()
@@ -420,6 +420,7 @@ func (tbl *txnTable) TransferDeletes(
 		if err = tbl.store.warChecker.checkOne(
 			id,
 			ts,
+			phase == txnif.PrePreparePhase,
 		); err == nil {
 			continue
 		}
@@ -470,6 +471,7 @@ func (tbl *txnTable) recurTransferDelete(
 	pkType *types.Type,
 	depth int,
 	ts types.TS,
+	phase string,
 ) error {
 
 	var page2 *common.PinnedItem[*model.TransferHashPage]
@@ -504,6 +506,7 @@ func (tbl *txnTable) recurTransferDelete(
 	err = readWriteConfilictCheck(
 		obj,
 		ts,
+		phase == txnif.PrePreparePhase,
 	)
 	if err == nil {
 		pkVec := tbl.store.rt.VectorPool.Small.GetVector(pkType)
@@ -554,7 +557,8 @@ func (tbl *txnTable) recurTransferDelete(
 		pk,
 		pkType,
 		depth+1,
-		ts)
+		ts,
+		phase)
 }
 
 func (tbl *txnTable) TransferDeleteRows(
@@ -610,7 +614,7 @@ func (tbl *txnTable) TransferDeleteRows(
 	page := pinned.Item()
 	depth := 0
 	if err = tbl.recurTransferDelete(
-		memo, page, id, row, pk, pkType, depth, ts); err != nil {
+		memo, page, id, row, pk, pkType, depth, ts, phase); err != nil {
 		return
 	}
 

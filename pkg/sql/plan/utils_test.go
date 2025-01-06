@@ -124,3 +124,67 @@ func TestMakeCPKEYRuntimeFilter(t *testing.T) {
 	expr := GetColExpr(typ, 0, 0)
 	MakeCPKEYRuntimeFilter(0, 0, expr, tableDef)
 }
+
+func TestDbNameOfObjRef(t *testing.T) {
+	type args struct {
+		objRef *ObjectRef
+	}
+	tests := []struct {
+		name string
+		args args
+		want string
+	}{
+		{
+			name: "case 1",
+			args: args{
+				objRef: &ObjectRef{
+					SchemaName: "db",
+				},
+			},
+			want: "db",
+		},
+		{
+			name: "case 2",
+			args: args{
+				objRef: &ObjectRef{
+					SchemaName:       "whatever",
+					SubscriptionName: "sub",
+				},
+			},
+			want: "sub",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equalf(t, tt.want, DbNameOfObjRef(tt.args.objRef), "DbNameOfObjRef(%v)", tt.args.objRef)
+		})
+	}
+}
+
+func TestDoResolveTimeStamp(t *testing.T) {
+	tests := []struct {
+		timeStamp string
+		expected  int64
+		expectErr bool
+	}{
+		//{"2023-10-01 12:00:00", 1696132800000000000, false},
+		{"invalid-timestamp", 0, true},
+		{"2023-10-01 25:00:00", 0, true}, // Invalid hour
+	}
+
+	for _, test := range tests {
+		result, err := doResolveTimeStamp(test.timeStamp)
+		if test.expectErr {
+			if err == nil {
+				t.Errorf("expected an error for timestamp %s, got none", test.timeStamp)
+			}
+		} else {
+			if err != nil {
+				t.Errorf("did not expect an error for timestamp %s, got %v", test.timeStamp, err)
+			}
+			if result != test.expected {
+				t.Errorf("for timestamp %s, expected %d, got %d", test.timeStamp, test.expected, result)
+			}
+		}
+	}
+}

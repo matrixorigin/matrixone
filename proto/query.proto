@@ -99,6 +99,7 @@ enum CmdMethod {
   // FaultInject handle fault injection request
   FaultInject = 32;
   CtlMoTableStats = 33;
+  WorkspaceThreshold = 34;
 }
 
 // QueryRequest is the common query request. It contains the query
@@ -237,6 +238,7 @@ message Request {
   GoGCPercentRequest GoGCPercentRequest = 34 [ (gogoproto.nullable) = false ];
   FaultInjectRequest FaultInjectRequest = 35;
   CtlMoTableStatsRequest CtlMoTableStatsRequest = 36 [ (gogoproto.nullable) = false ];
+  WorkspaceThresholdRequest WorkspaceThresholdRequest = 37;
 }
 
 // ShowProcessListResponse is the response of command ShowProcessList.
@@ -299,6 +301,7 @@ message Response {
   GoGCPercentResponse GoGCPercentResponse = 34 [ (gogoproto.nullable) = false ];
   FaultInjectResponse FaultInjectResponse = 35;
   CtlMoTableStatsResponse CtlMoTableStatsResponse = 36 [ (gogoproto.nullable) = false ];
+  WorkspaceThresholdResponse WorkspaceThresholdResponse = 37;
 }
 
 // AlterAccountRequest is the "alter account restricted" query request.
@@ -638,4 +641,14 @@ message CtlMoTableStatsRequest  {
 
 message CtlMoTableStatsResponse {
   string Resp = 1;
+}
+
+message WorkspaceThresholdRequest {
+  uint64 CommitThreshold = 1;
+  uint64 WriteThreshold = 2;
+}
+
+message WorkspaceThresholdResponse {
+  uint64 CommitThreshold = 1;
+  uint64 WriteThreshold = 2;
 }

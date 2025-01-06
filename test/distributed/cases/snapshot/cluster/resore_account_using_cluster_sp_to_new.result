@@ -159,6 +159,7 @@ show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
 drop account if exists acc01;
 create account acc01 admin_name = 'test_account' identified by '111';
+DROP DATABASE IF EXISTS Company;
 CREATE DATABASE Company;
 USE Company;
 drop table if exists Departments;
@@ -336,6 +337,7 @@ performancereviewid    employeeid    reviewdate    reviewerid
 4    4    2020-04-04    5
 5    5    2020-05-05    6
 6    6    2020-06-06    1
+DROP DATABASE IF EXISTS Projects;
 CREATE DATABASE Projects;
 USE Projects;
 drop table if exists Projects;
@@ -404,6 +406,7 @@ projectid    employeeid
 4    4
 5    5
 6    6
+DROP DATABASE IF EXISTS Payroll;
 CREATE DATABASE Payroll;
 USE Payroll;
 drop table if exists Salaries;
@@ -606,6 +609,7 @@ show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
 drop account if exists acc01;
 create account acc01 admin_name = 'test_account' identified by '111';
+DROP DATABASE IF EXISTS School;
 CREATE DATABASE School;
 USE School;
 drop table if exists Students;
@@ -678,6 +682,7 @@ select * from CourseAverageGrades;
 courseid    title    averagegrade
 101    Calculus    3.55000000
 102    Physics    3.70000000
+DROP DATABASE IF EXISTS University;
 CREATE DATABASE University;
 USE University;
 drop table if exists Departments;
@@ -801,6 +806,7 @@ select * from TopStudents;
 name    averagegrade
 Eve    3.50000000
 Frank    3.60000000
+DROP DATABASE IF EXISTS EducationSystem;
 CREATE DATABASE EducationSystem;
 USE EducationSystem;
 CREATE VIEW ComprehensiveStudentCourseInfo AS

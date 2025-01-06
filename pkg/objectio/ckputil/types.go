@@ -1,0 +1,80 @@
+// Copyright 2021 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package ckputil
+
+import (
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+)
+
+// 1. All checkpoint files should be sorted by `cluster` key. And the
+//    `cluster` key is `table`+`id`.
+// 2. For a specific table, we can save the checkpoint meta like this:
+//    `table`: table id
+//    `from`: the start rowid in the checkpoint files
+//    `to`: the end rowid in the checkpoint files
+
+const (
+	TableObjectsAttr_Accout   = "account_id"
+	TableObjectsAttr_DB       = "db_id"
+	TableObjectsAttr_Table    = "table_id"
+	TableObjectsAttr_ID       = "id"
+	TableObjectsAttr_CreateTS = "create_ts"
+	TableObjectsAttr_DeleteTS = "delete_ts"
+
+	// TableObjects should be clustered by `table`+`id`
+	TableObjectsAttr_Cluster = "cluster"
+
+	// TableObjectsAttr_PhysicalAddr = objectio.PhysicalAddr_Attr
+)
+
+const (
+	TableObjectsAttr_Accout_Idx   = 0
+	TableObjectsAttr_DB_Idx       = 1
+	TableObjectsAttr_Table_Idx    = 2
+	TableObjectsAttr_ID_Idx       = 3
+	TableObjectsAttr_CreateTS_Idx = 4
+	TableObjectsAttr_DeleteTS_Idx = 5
+	TableObjectsAttr_Cluster_Idx  = 6
+	// TableObjectsAttr_PhysicalAddr_Idx = 7
+)
+
+var TableObjectsAttrs = []string{
+	TableObjectsAttr_Accout,
+	TableObjectsAttr_DB,
+	TableObjectsAttr_Table,
+	TableObjectsAttr_ID,
+	TableObjectsAttr_CreateTS,
+	TableObjectsAttr_DeleteTS,
+	TableObjectsAttr_Cluster,
+	// TableObjectsAttr_PhysicalAddr,
+}
+
+var TableObjectsTypes = []types.Type{
+	types.T_uint32.ToType(),
+	types.T_uint64.ToType(),
+	types.T_uint64.ToType(),
+	types.T_char.ToType(),
+	types.T_TS.ToType(),
+	types.T_TS.ToType(),
+	types.T_char.ToType(),
+	// types.T_Rowid.ToType(),
+}
+
+var TableObjectsSeqnums = []uint16{0, 1, 2, 3, 4, 5, 6}
+
+func NewObjectListBatch() *batch.Batch {
+	return batch.NewWithSchema(false, TableObjectsAttrs, TableObjectsTypes)
+}

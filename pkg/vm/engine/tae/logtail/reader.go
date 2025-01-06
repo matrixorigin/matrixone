@@ -23,8 +23,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -145,7 +145,7 @@ func MakeGlobalCheckpointDataReader(
 		fs:        fs,
 		version:   version,
 	}
-	reader, err := blockio.NewObjectReader(sid, fs, location)
+	reader, err := ioutil.NewObjectReader(fs, location)
 	if err != nil {
 		return nil, err
 	}
@@ -184,8 +184,7 @@ func (r *CheckpointReader) LoadBatchData(
 		return true, nil
 	}
 	key := r.locations[0]
-	var reader *blockio.BlockReader
-	reader, err := blockio.NewObjectReader(r.sid, r.fs, key)
+	reader, err := ioutil.NewObjectReader(r.fs, key)
 	if err != nil {
 		return false, err
 	}

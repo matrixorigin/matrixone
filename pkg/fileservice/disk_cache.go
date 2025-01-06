@@ -246,6 +246,8 @@ func (d *DiskCache) Read(
 
 	var numHit, numRead, numOpenIOEntry, numOpenFull, numError int64
 	defer func() {
+		LogEvent(ctx, str_update_metrics_begin)
+
 		metric.FSReadHitDiskCounter.Add(float64(numHit))
 		metric.FSReadReadDiskCounter.Add(float64(numRead))
 		perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {
@@ -257,6 +259,8 @@ func (d *DiskCache) Read(
 			c.FileService.Cache.Disk.OpenIOEntryFile.Add(numOpenIOEntry)
 			c.FileService.Cache.Disk.OpenFullFile.Add(numOpenFull)
 		}, d.perfCounterSets...)
+
+		LogEvent(ctx, str_update_metrics_end)
 	}()
 
 	path, err := ParsePath(vector.FilePath)
@@ -266,12 +270,17 @@ func (d *DiskCache) Read(
 
 	openedFiles := make(map[string]*os.File)
 	defer func() {
+		LogEvent(ctx, str_close_disk_files_begin)
 		for _, file := range openedFiles {
 			_ = file.Close()
 		}
+		LogEvent(ctx, str_close_disk_files_end)
 	}()
 
 	fillEntry := func(entry *IOEntry) error {
+		LogEvent(ctx, str_disk_cache_fill_entry_begin)
+		defer LogEvent(ctx, str_disk_cache_fill_entry_end)
+
 		if entry.done {
 			return nil
 		}
@@ -288,14 +297,18 @@ func (d *DiskCache) Read(
 		diskPath := d.pathForIOEntry(path.File, *entry)
 		if f, ok := openedFiles[diskPath]; ok {
 			// use opened file
+			LogEvent(ctx, str_disk_cache_file_seek_begin)
 			_, err = file.Seek(entry.Offset, io.SeekStart)
+			LogEvent(ctx, str_disk_cache_file_seek_end)
 			if err == nil {
 				file = f
 			}
 		} else {
 			// open file
-			d.waitUpdateComplete(diskPath)
+			d.waitUpdateComplete(ctx, diskPath)
+			LogEvent(ctx, str_disk_cache_file_open_begin)
 			diskFile, err := os.Open(diskPath)
+			LogEvent(ctx, str_disk_cache_file_open_end)
 			if err == nil {
 				file = diskFile
 				defer func() {
@@ -310,21 +323,27 @@ func (d *DiskCache) Read(
 			diskPath = d.pathForFile(path.File)
 			if f, ok := openedFiles[diskPath]; ok {
 				// use opened file
+				LogEvent(ctx, str_disk_cache_file_seek_begin)
 				_, err = f.Seek(entry.Offset, io.SeekStart)
+				LogEvent(ctx, str_disk_cache_file_seek_end)
 				if err == nil {
 					file = f
 				}
 			} else {
 				// open file
-				d.waitUpdateComplete(diskPath)
+				d.waitUpdateComplete(ctx, diskPath)
+				LogEvent(ctx, str_disk_cache_file_open_begin)
 				diskFile, err := os.Open(diskPath)
+				LogEvent(ctx, str_disk_cache_file_open_end)
 				if err == nil {
 					defer func() {
 						openedFiles[diskPath] = diskFile
 					}()
 					numOpenFull++
 					// seek
+					LogEvent(ctx, str_disk_cache_file_seek_begin)
 					_, err = diskFile.Seek(entry.Offset, io.SeekStart)
+					LogEvent(ctx, str_disk_cache_file_seek_end)
 					if err == nil {
 						file = diskFile
 					}
@@ -337,14 +356,18 @@ func (d *DiskCache) Read(
 			return nil
 		}
 
+		LogEvent(ctx, str_disk_cache_update_states_begin)
 		if _, ok := d.cache.Get(ctx, diskPath); !ok {
 			// set cache
+			LogEvent(ctx, str_disk_cache_file_stat_begin)
 			stat, err := file.Stat()
+			LogEvent(ctx, str_disk_cache_file_stat_end)
 			if err != nil {
 				return err
 			}
 			d.cache.Set(ctx, diskPath, struct{}{}, fileSize(stat))
 		}
+		LogEvent(ctx, str_disk_cache_update_states_end)
 
 		if err := entry.ReadFromOSFile(ctx, file, d.cacheDataAllocator); err != nil {
 			return err
@@ -589,7 +612,9 @@ func (d *DiskCache) decodeFilePath(diskPath string) (string, error) {
 	return fromOSPath(path), nil
 }
 
-func (d *DiskCache) waitUpdateComplete(path string) {
+func (d *DiskCache) waitUpdateComplete(ctx context.Context, path string) {
+	LogEvent(ctx, str_disk_cache_wait_update_complete_begin)
+	defer LogEvent(ctx, str_disk_cache_wait_update_complete_end)
 	d.updatingPaths.L.Lock()
 	for d.updatingPaths.m[path] {
 		d.updatingPaths.Wait()

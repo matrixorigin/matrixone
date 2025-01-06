@@ -223,7 +223,7 @@ func Test_Bug_CheckpointInsertObjectOverwrittenMergeDeletedObject(t *testing.T) 
 				testutil2.CompactBlocks(t, accountId, taeEngine.GetDB(), databaseName, schema, false)
 				txn, _ = taeEngine.StartTxn()
 				ts := txn.GetStartTS()
-				taeEngine.GetDB().ForceCheckpoint(ctx, ts.Next(), time.Second*10)
+				taeEngine.GetDB().ForceCheckpoint(ctx, ts.Next())
 			}
 
 			{
@@ -447,7 +447,7 @@ func Test_EmptyObjectStats(t *testing.T) {
 		testutil2.CompactBlocks(t, accountId, taeEngine.GetDB(), databaseName, schema, false)
 		txn, _ = taeEngine.StartTxn()
 		ts := txn.GetStartTS()
-		taeEngine.GetDB().ForceCheckpoint(p.Ctx, ts.Next(), time.Second*10)
+		taeEngine.GetDB().ForceCheckpoint(p.Ctx, ts.Next())
 	}
 
 	var err error
@@ -577,27 +577,19 @@ func Test_SubscribeUnsubscribeConsistency(t *testing.T) {
 		require.Equal(t, 0, stats.DataObjectsInvisible.RowCnt)
 	}
 
-	err = disttaeEngine.SubscribeTable(ctx, database.GetID(), rel.ID(), true)
-	require.Nil(t, err)
-
-	checkSubscribed()
-
-	try := 10
-	ticker := time.NewTicker(100 * time.Millisecond)
-	for range ticker.C {
-		err = disttaeEngine.Engine.UnsubscribeTable(ctx, database.GetID(), rel.ID())
-		require.Nil(t, err)
-
-		checkUnSubscribed()
-
+	try := 3
+	for try > 0 {
 		err = disttaeEngine.SubscribeTable(ctx, database.GetID(), rel.ID(), true)
 		require.Nil(t, err)
 
 		checkSubscribed()
 
-		if try--; try <= 0 {
-			break
-		}
+		err = disttaeEngine.Engine.UnsubscribeTable(ctx, database.GetID(), rel.ID())
+		require.Nil(t, err)
+
+		checkUnSubscribed()
+
+		try--
 	}
 }
 

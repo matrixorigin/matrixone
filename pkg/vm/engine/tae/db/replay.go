@@ -23,11 +23,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"go.uber.org/zap"
 
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -120,11 +120,12 @@ func (replayer *Replayer) Replay() {
 	close(replayer.txnCmdChan)
 	replayer.wg.Wait()
 	replayer.postReplayWal()
-	logutil.Info("open-tae", common.OperationField("replay"),
-		common.OperandField("wal"),
-		common.AnyField("apply logentries cost", replayer.applyDuration),
-		common.AnyField("read count", replayer.readCount),
-		common.AnyField("apply count", replayer.applyCount))
+	logutil.Info(
+		"Replay-Wal",
+		zap.Duration("apply-cost", replayer.applyDuration),
+		zap.Int("read-count", replayer.readCount),
+		zap.Int("apply-count", replayer.applyCount),
+	)
 }
 
 func (replayer *Replayer) OnReplayEntry(group uint32, lsn uint64, payload []byte, typ uint16, info any) {

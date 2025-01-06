@@ -73,7 +73,6 @@ type LeftJoin struct {
 	JoinMapTag         int32
 
 	vm.OperatorBase
-	colexec.Projection
 }
 
 func (leftJoin *LeftJoin) GetOperatorBase() *vm.OperatorBase {
@@ -118,18 +117,10 @@ func (leftJoin *LeftJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 	ctr.state = Build
 	ctr.batchRowCount = 0
 
-	if leftJoin.ProjectList != nil {
-		if leftJoin.OpAnalyzer != nil {
-			leftJoin.OpAnalyzer.Alloc(leftJoin.ProjectAllocSize + leftJoin.ctr.maxAllocSize)
-		}
-		leftJoin.ctr.maxAllocSize = 0
-		leftJoin.ResetProjection(proc)
-	} else {
-		if leftJoin.OpAnalyzer != nil {
-			leftJoin.OpAnalyzer.Alloc(leftJoin.ctr.maxAllocSize)
-		}
-		leftJoin.ctr.maxAllocSize = 0
+	if leftJoin.OpAnalyzer != nil {
+		leftJoin.OpAnalyzer.Alloc(leftJoin.ctr.maxAllocSize)
 	}
+	leftJoin.ctr.maxAllocSize = 0
 }
 
 func (leftJoin *LeftJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
@@ -139,7 +130,6 @@ func (leftJoin *LeftJoin) Free(proc *process.Process, pipelineFailed bool, err e
 	ctr.cleanExprExecutor()
 	ctr.cleanBatch(proc)
 
-	leftJoin.FreeProjection(proc)
 }
 
 func (leftJoin *LeftJoin) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
