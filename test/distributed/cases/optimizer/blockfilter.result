@@ -1,0 +1,10 @@
+drop database if exists d1;
+create database d1;
+use d1;
+drop table if exists t1;
+create table t1 (a varchar(100) primary key, b int);
+insert into t1 select result, 2 from generate_series('2021-01-01 00:00:00','2022-01-01 00:00:00', '1 minute') g;
+select count(*) as ttl from t1 where a between "2021-02-02 20:00:00" and "2021-02-03 00:00:00";
+ttl
+241
+drop database if exists d1;
