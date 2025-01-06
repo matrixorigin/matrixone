@@ -1253,7 +1253,7 @@ func (tbl *txnTable) isCreatedInTxn(ctx context.Context) (bool, error) {
 		if name, _, err := loadNameByIdFromStorage(ctx, tbl.db.op, tbl.accountId, tbl.tableId); err != nil {
 			return false, err
 		} else {
-			return name != "", nil
+			return name == "", nil
 		}
 	}
 
