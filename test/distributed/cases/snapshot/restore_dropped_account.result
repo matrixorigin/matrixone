@@ -4,17 +4,17 @@ drop snapshot if exists spsp01;
 create snapshot spsp01 for account acc01;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-spsp01    2025-01-06 03:59:19.329378    account    acc01        
+spsp01    2025-01-06 06:52:50.238536    account    acc01        
 show accounts;
 account_name    admin_name    created_time    status    suspended_time    db_count    tbl_count    size    snapshot_size    comments
-acc01    test_account    2025-01-06 03:59:19    open    null    5    65    0.0    0.0    
-sys    root    2025-01-06 03:49:02    open    null    8    109    3.682463    0.0    system account
+sys    root    2025-01-06 06:51:51    open    null    8    109    1.635153    0.0    system account
+acc01    test_account    2025-01-06 06:52:50    open    null    5    65    0.0    0.0    
 drop account acc01;
 restore account acc01 from snapshot spsp01;
 show accounts;
 account_name    admin_name    created_time    status    suspended_time    db_count    tbl_count    size    snapshot_size    comments
-acc01    test_account    2025-01-06 03:59:19    open    null    5    65    0.0    0.0    
-sys    root    2025-01-06 03:49:02    open    null    8    109    3.682463    0.0    system account
+sys    root    2025-01-06 06:51:51    open    null    8    109    1.635153    0.0    system account
+acc01    test_account    2025-01-06 06:52:50    open    null    5    65    0.0    0.0    
 drop account acc01;
 drop snapshot spsp01;
 drop account if exists acc02;
@@ -324,7 +324,7 @@ drop stage if exists stage01;
 create stage stage01 url = 'file:///$resources/into_outfile/stage';
 select * from mo_catalog.mo_stages;
 stage_id    stage_name    url    stage_credentials    stage_status    created_time    comment
-1    stage01    file:////Users/ariznawl/code/matrixone/test/distributed/resources/into_outfile/stage        disabled    2025-01-06 03:59:21    
+1    stage01    file:////Users/ariznawl/code/matrixone/test/distributed/resources/into_outfile/stage        disabled    2025-01-06 06:52:52    
 show stages;
 STAGE_NAME    URL    STATUS    COMMENT
 stage01    file:////Users/ariznawl/code/matrixone/test/distributed/resources/into_outfile/stage    DISABLED    
@@ -427,8 +427,8 @@ drop table if exists t2;
 create table t2 (a json,b int);
 delete from t2;
 insert into t2 values ('{"t1":"a"}',1),('{"t1":"b"}',2);
-select * from t2 into outfile '$resources/json/export_1.csv' fields enclosed by '"' force_quote(a);
-load data infile '$resources/json/export_1.csv' into table t2 fields terminated by ',' ignore 1 lines;
+select * from t2 into outfile '$resources/json/export_2.csv' fields enclosed by '"' force_quote(a);
+load data infile '$resources/json/export_2.csv' into table t2 fields terminated by ',' ignore 1 lines;
 select * from t2;
 a    b
 {"t1": "a"}    1
@@ -510,3 +510,17 @@ drop account acc04;
 drop account acc05;
 drop account acc06;
 drop snapshot spsp06;
+drop account if exists acc07;
+
+create account acc07 admin_name = 'test_account' identified by '111';
+
+drop snapshot if exists spsp07;
+
+create snapshot spsp07 for account spsp07;
+
+drop account acc07;
+
+restore account acc07 from snapshot spsp07;
+
+show snapshots;
+SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME

@@ -346,8 +346,8 @@ drop table if exists t2;
 create table t2 (a json,b int);
 delete from t2;
 insert into t2 values ('{"t1":"a"}',1),('{"t1":"b"}',2);
-select * from t2 into outfile '$resources/json/export_1.csv' fields enclosed by '"' force_quote(a);
-load data infile '$resources/json/export_1.csv' into table t2 fields terminated by ',' ignore 1 lines;
+select * from t2 into outfile '$resources/json/export_2.csv' fields enclosed by '"' force_quote(a);
+load data infile '$resources/json/export_2.csv' into table t2 fields terminated by ',' ignore 1 lines;
 select * from t2;
 
 drop table if exists t_timestamp;
@@ -392,3 +392,20 @@ drop account acc04;
 drop account acc05;
 drop account acc06;
 drop snapshot spsp06;
+
+
+
+-- @bvt:issue#21092
+-- abnormal test: nonsys restore the deleted account
+drop account if exists acc07;
+create account acc07 admin_name = 'test_account' identified by '111';
+-- @session:id=11&user=acc07:test_account&password=111
+drop snapshot if exists spsp07;
+create snapshot spsp07 for account spsp07;
+-- @session
+drop account acc07;
+-- @session:id=11&user=acc07:test_account&password=111
+restore account acc07 from snapshot spsp07;
+-- @session
+-- @bvt:issue
+show snapshots;
