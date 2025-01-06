@@ -427,8 +427,8 @@ drop table if exists t2;
 create table t2 (a json,b int);
 delete from t2;
 insert into t2 values ('{"t1":"a"}',1),('{"t1":"b"}',2);
-select * from t2 into outfile '$resources/json/export_20.csv' fields enclosed by '"' force_quote(a);
-load data infile '$resources/json/export_20.csv' into table t2 fields terminated by ',' ignore 1 lines;
+select * from t2 into outfile '$resources/json/export_200.csv' fields enclosed by '"' force_quote(a);
+load data infile '$resources/json/export_200.csv' into table t2 fields terminated by ',' ignore 1 lines;
 select * from t2;
 a    b
 {"t1": "a"}    1
