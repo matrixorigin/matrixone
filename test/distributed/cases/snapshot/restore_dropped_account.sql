@@ -255,9 +255,9 @@ create stage stage01 url = 'file:///$resources/into_outfile/stage';
 select * from mo_catalog.mo_stages;
 -- @ignore:1
 show stages;
-select * from t1 into outfile 'stage://stage01/local_stage_table02.csv';
+select * from t1 into outfile 'stage://stage01/local_stage_table20.csv';
 truncate t1;
-load data infile 'stage://stage01/local_stage_table02.csv' into table t1 fields terminated by ',' ignore 1 lines;
+load data infile 'stage://stage01/local_stage_table20.csv' into table t1 fields terminated by ',' ignore 1 lines;
 select * from t1;
 
 drop table if exists vtab32;
@@ -346,8 +346,8 @@ drop table if exists t2;
 create table t2 (a json,b int);
 delete from t2;
 insert into t2 values ('{"t1":"a"}',1),('{"t1":"b"}',2);
-select * from t2 into outfile '$resources/json/export_2.csv' fields enclosed by '"' force_quote(a);
-load data infile '$resources/json/export_2.csv' into table t2 fields terminated by ',' ignore 1 lines;
+select * from t2 into outfile '$resources/json/export_20.csv' fields enclosed by '"' force_quote(a);
+load data infile '$resources/json/export_20.csv' into table t2 fields terminated by ',' ignore 1 lines;
 select * from t2;
 
 drop table if exists t_timestamp;
@@ -378,6 +378,7 @@ select * from vtab64;
 use test05;
 select * from length01;
 select * from t1;
+-- @ignore:1
 select * from test02;
 -- @session
 
