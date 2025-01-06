@@ -18,13 +18,12 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"math"
 	"runtime/trace"
 	"sync/atomic"
 
 	"go.uber.org/zap"
-
-	"github.com/tidwall/btree"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -37,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	txnTrace "github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/tidwall/btree"
 )
 
 const (
@@ -94,6 +94,42 @@ func (p *PartitionState) LogEntry(entry *api.Entry, msg string) {
 	)
 }
 
+func (p *PartitionState) reCalculateMetrics() {
+	{
+		dataObjCnt1 := p.dataObjectsNameIndex.Len()
+		dataObjCnt2 := p.dataObjectTSIndex.Len()
+
+		v2.LogTailPStateDataObjectCount.Set(float64(dataObjCnt1 + dataObjCnt2))
+		v2.LogTailPStateDataObjectMemoryUsed.Set(
+			float64(dataObjCnt1*ObjectEntryMemSize) +
+				float64(dataObjCnt2*ObjectIndexByTSEntryMemSize))
+	}
+
+	{
+		tombstoneObjCnt1 := p.tombstoneObjectsNameIndex.Len()
+		tombstoneObjCnt2 := p.tombstoneObjectDTSIndex.Len()
+
+		v2.LogTailPStateTombstoneObjectCount.Set(float64(tombstoneObjCnt1 + tombstoneObjCnt2))
+		v2.LogTailPStateInMemTombstoneRowsMemoryUsed.Set(
+			float64(tombstoneObjCnt1*ObjectEntryMemSize) +
+				float64(tombstoneObjCnt2*ObjectEntryMemSize))
+	}
+
+	{
+		inmemTombstoneRowCnt := p.inMemTombstoneRowIdIndex.Len()
+		inmemDataRowCnt1 := p.rows.Len()
+		inmemDataRowCnt2 := p.rowPrimaryKeyIndex.Len()
+
+		v2.LogTailPStateInMemDataRowsCount.Set(float64(inmemDataRowCnt1 + inmemDataRowCnt2 - inmemTombstoneRowCnt*2))
+		v2.LogTailPStateInMemDataRowsMemoryUsed.Set(
+			float64((inmemDataRowCnt1-inmemTombstoneRowCnt)*RowEntryMemSize) +
+				float64((inmemDataRowCnt2-inmemTombstoneRowCnt)*PrimaryIndexEntryMemSize))
+
+		v2.LogTailPStateInMemTombstoneRowsCount.Set(float64(inmemTombstoneRowCnt))
+		v2.LogTailPStateInMemTombstoneRowsMemoryUsed.Set(float64(inmemTombstoneRowCnt * PrimaryIndexEntryMemSize))
+	}
+}
+
 func (p *PartitionState) Desc() string {
 	return fmt.Sprintf("PartitionState(tid:%d) objLen %v, rowsLen %v", p.tid, p.dataObjectsNameIndex.Len(), p.rows.Len())
 }
@@ -106,6 +142,10 @@ func (p *PartitionState) HandleLogtailEntry(
 	packer *types.Packer,
 	pool *mpool.MPool,
 ) {
+	defer func() {
+		p.reCalculateMetrics()
+	}()
+
 	txnTrace.GetService(p.service).ApplyLogtail(entry, 1)
 	switch entry.EntryType {
 	case api.Entry_Insert:
@@ -701,6 +741,11 @@ func (p *PartitionState) truncate(ids [2]uint64, ts types.TS) {
 		logutil.Errorf("logic error: current minTS %v, incoming ts %v", p.start.ToString(), ts.ToString())
 		return
 	}
+
+	defer func() {
+		p.reCalculateMetrics()
+	}()
+
 	p.start = ts
 
 	p.truncateTombstoneObjects(ids[0], ids[1], ts)

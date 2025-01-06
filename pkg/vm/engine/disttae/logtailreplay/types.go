@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"fmt"
 	"sync"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -185,3 +186,10 @@ func (b ObjectIndexByTSEntry) Less(than ObjectIndexByTSEntry) bool {
 }
 
 var nextRowEntryID = int64(1)
+
+const (
+	RowEntryMemSize             = int(unsafe.Sizeof(RowEntry{}))
+	ObjectEntryMemSize          = int(unsafe.Sizeof(ObjectEntry{}))
+	PrimaryIndexEntryMemSize    = int(unsafe.Sizeof(PrimaryIndexEntry{}))
+	ObjectIndexByTSEntryMemSize = int(unsafe.Sizeof(ObjectIndexByTSEntry{}))
+)

@@ -254,31 +254,31 @@ func (c *DashboardCreator) initLogTailPStateRow() dashboard.Option {
 			4,
 			[]string{
 				`sum(` + c.getMetricWithFilter("mo_logtail_partition_state_mem_used_size", `type="inmem-data-row-memory-used"`) + `)`,
-				`sum(` + c.getMetricWithFilter("mo_logtail_partition_state_mem_used_size", `type="inmem-data-obj-memory-used"`) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_logtail_partition_state_mem_used_size", `type="data-obj-memory-used"`) + `)`,
 				`sum(` + c.getMetricWithFilter("mo_logtail_partition_state_mem_used_size", `type="inmem-tombstone-row-memory-used"`) + `)`,
-				`sum(` + c.getMetricWithFilter("mo_logtail_partition_state_mem_used_size", `type="inmem-tombstone-obj-memory-used"`) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_logtail_partition_state_mem_used_size", `type="tombstone-obj-memory-used"`) + `)`,
 			},
 			[]string{
 				"{{ " + c.by + " }}: inmem-data-row-memory-used",
-				"{{ " + c.by + " }}: inmem-data-obj-memory-used",
+				"{{ " + c.by + " }}: data-obj-memory-used",
 				"{{ " + c.by + " }}: inmem-tombstone-row-memory-used",
-				"{{ " + c.by + " }}: inmem-tombstone-obj-memory-used",
+				"{{ " + c.by + " }}: tombstone-obj-memory-used",
 			}),
 
 		c.withMultiGraph(
 			"Partition State Item Count",
 			4,
 			[]string{
-				`sum(` + c.getMetricWithFilter("mo_logtail_partition_state_item_total", `type="inmem-data-row-count"`) + `)`,
-				`sum(` + c.getMetricWithFilter("mo_logtail_partition_state_item_total", `type="inmem-data-obj-count"`) + `)`,
-				`sum(` + c.getMetricWithFilter("mo_logtail_partition_state_item_total", `type="inmem-tombstone-row-count"`) + `)`,
-				`sum(` + c.getMetricWithFilter("mo_logtail_partition_state_item_total", `type="inmem-tombstone-obj-count"`) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_logtail_partition_state_item_size", `type="inmem-data-row-count"`) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_logtail_partition_state_item_size", `type="data-obj-count"`) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_logtail_partition_state_item_size", `type="inmem-tombstone-row-count"`) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_logtail_partition_state_item_size", `type="tombstone-obj-count"`) + `)`,
 			},
 			[]string{
 				"inmem-data-row-count",
-				"inmem-data-obj-count",
+				"data-obj-count",
 				"inmem-tombstone-row-count",
-				"inmem-tombstone-obj-count",
+				"tombstone-obj-count",
 			}),
 	)
 }

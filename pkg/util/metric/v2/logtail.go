@@ -185,21 +185,21 @@ var (
 			Help:      "gauge of the partition state mem used.",
 		}, []string{"type"})
 
-	LogTailPStateInMemDataRowsMemoryUsed        = logTailQueueSizeGauge.WithLabelValues("inmem-data-row-memory-used")
-	LogTailPStateInMemDataObjectMemoryUsed      = logTailQueueSizeGauge.WithLabelValues("inmem-data-obj-memory-used")
-	LogTailPStateInMemTombstoneRowsMemoryUsed   = logTailQueueSizeGauge.WithLabelValues("inmem-tombstone-row-memory-used")
-	LogTailPStateInMemTombstoneObjectMemoryUsed = logTailQueueSizeGauge.WithLabelValues("inmem-tombstone-obj-memory-used")
+	LogTailPStateInMemDataRowsMemoryUsed      = logTailQueueSizeGauge.WithLabelValues("inmem-data-row-memory-used")
+	LogTailPStateDataObjectMemoryUsed         = logTailQueueSizeGauge.WithLabelValues("data-obj-memory-used")
+	LogTailPStateInMemTombstoneRowsMemoryUsed = logTailQueueSizeGauge.WithLabelValues("inmem-tombstone-row-memory-used")
+	LogTailPStatebstoneObjectMemoryUsed       = logTailQueueSizeGauge.WithLabelValues("tombstone-obj-memory-used")
 
-	logtailPStateCounter = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
+	logtailPStateCounter = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
 			Namespace: "mo",
 			Subsystem: "logtail",
-			Name:      "partition_state_item_total",
+			Name:      "partition_state_item_size",
 			Help:      "counter of the partition state item.",
 		}, []string{"type"})
 
-	LogTailPStateInMemDataRowsCount        = logTailQueueSizeGauge.WithLabelValues("inmem-data-row-count     ")
-	LogTailPStateInMemDataObjectCount      = logTailQueueSizeGauge.WithLabelValues("inmem-data-obj-count     ")
-	LogTailPStateInMemTombstoneRowsCount   = logTailQueueSizeGauge.WithLabelValues("inmem-tombstone-row-count")
-	LogTailPStateInMemTombstoneObjectCount = logTailQueueSizeGauge.WithLabelValues("inmem-tombstone-obj-count")
+	LogTailPStateInMemDataRowsCount      = logTailQueueSizeGauge.WithLabelValues("inmem-data-row-count")
+	LogTailPStateDataObjectCount         = logTailQueueSizeGauge.WithLabelValues("data-obj-count")
+	LogTailPStateInMemTombstoneRowsCount = logTailQueueSizeGauge.WithLabelValues("inmem-tombstone-row-count")
+	LogTailPStateTombstoneObjectCount    = logTailQueueSizeGauge.WithLabelValues("tombstone-obj-count")
 )
