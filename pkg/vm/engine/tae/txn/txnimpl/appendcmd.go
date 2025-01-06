@@ -17,11 +17,9 @@ package txnimpl
 import (
 	"bytes"
 	"fmt"
-	"io"
-	"unsafe"
-
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -325,7 +323,7 @@ func (c *AppendCmd) MarshalBinary() (buf []byte, err error) {
 
 func (c *AppendCmd) ApproxMemSize() int {
 	size := 0
-	size += int(unsafe.Sizeof(AppendCmd{}))
+	size += 44
 	size += c.Data.ApproxSize()
 	size += c.Node.data.ApproxSize()
 	for range c.Infos {

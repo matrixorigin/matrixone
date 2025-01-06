@@ -49,7 +49,7 @@ func NewDefaultConfig(clientFactory LogServiceClientFactory) *Config {
 		ClientMaxCount:        100,
 		GetClientRetryTimeOut: time.Second * 3,
 
-		RecordSize:        int(mpool.MB * 10),
+		RecordSize:        int(mpool.MB * 1),
 		ReadCacheSize:     100,
 		NewClientDuration: time.Second * 3,
 		// AppendFrequency:      time.Millisecond * 5,

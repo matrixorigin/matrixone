@@ -17,7 +17,6 @@ package logtail
 import (
 	"context"
 	"fmt"
-	"github.com/panjf2000/ants/v2"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -33,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
+	"github.com/panjf2000/ants/v2"
 	"go.uber.org/zap"
 )
 

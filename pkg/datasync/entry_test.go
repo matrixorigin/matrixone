@@ -181,6 +181,8 @@ func generateCmdPayload(param parameter, loc objectio.Location) ([]byte, error) 
 		// prepare write, set the info buf
 		drEntry.Entry.PrepareWrite()
 
+		drEntry.Entry.ExecuteGroupWalPreCallbacks()
+
 		me := newMockEntry()
 		me.meta.SetType(param.metaType)
 		me.appendEntry(drEntry)

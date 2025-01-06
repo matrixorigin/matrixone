@@ -18,7 +18,6 @@ import (
 	"fmt"
 	"io"
 	"sync/atomic"
-	"unsafe"
 )
 
 type TableMVCCNode struct {
@@ -60,7 +59,7 @@ func (e *TableMVCCNode) Update(un *TableMVCCNode) {
 }
 
 func (e *TableMVCCNode) ApproxMemSize() int {
-	return int(unsafe.Sizeof(TableMVCCNode{}))
+	return 16
 }
 
 func (e *TableMVCCNode) WriteTo(w io.Writer) (n int64, err error) {
