@@ -1233,11 +1233,10 @@ func restoreViews(
 		sortedViews []string
 		oldSnapshot *plan.Snapshot
 	)
-	snapshot, err = getSnapshotPlanWithSharedBh(ctx, bh, snapshotName)
+	snapshot, err = getSnapshotPlanWithSharedBh(ctx, bh, fromAccountId, snapshotName)
 	if err != nil {
 		return err
 	}
-	snapshot.Tenant.TenantID = fromAccountId
 
 	compCtx := ses.GetTxnCompileCtx()
 	oldSnapshot = compCtx.GetSnapshot()
@@ -2279,7 +2278,7 @@ func getPastExistsAccounts(
 	return
 }
 
-func getSnapshotPlanWithSharedBh(ctx context.Context, bh BackgroundExec, snapshotName string) (snapshot *pbplan.Snapshot, err error) {
+func getSnapshotPlanWithSharedBh(ctx context.Context, bh BackgroundExec, fromAccountId uint32, snapshotName string) (snapshot *pbplan.Snapshot, err error) {
 	var record *snapshotRecord
 	if record, err = getSnapshotByName(ctx, bh, snapshotName); err != nil {
 		return
@@ -2290,19 +2289,11 @@ func getSnapshotPlanWithSharedBh(ctx context.Context, bh BackgroundExec, snapsho
 		return
 	}
 
-	var accountId uint32
-	// cluster level record has no accountName, so accountId is 0
-	if record.accountName != "" {
-		if accountId, err = getAccountId(ctx, bh, record.accountName); err != nil {
-			return
-		}
-	}
-
 	return &pbplan.Snapshot{
 		TS: &timestamp.Timestamp{PhysicalTime: record.ts},
 		Tenant: &pbplan.SnapshotTenant{
 			TenantName: record.accountName,
-			TenantID:   accountId,
+			TenantID:   fromAccountId,
 		},
 	}, nil
 }
