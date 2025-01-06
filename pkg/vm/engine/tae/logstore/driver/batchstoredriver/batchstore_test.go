@@ -56,7 +56,7 @@ func restartStore(s *baseStore, t *testing.T) *baseStore {
 	s, err = NewBaseStore(s.dir, s.name, cfg)
 	assert.NoError(t, err)
 	tempLsn := uint64(0)
-	err = s.Replay(func(e *entry.Entry) driver.ReplayEntryState{
+	err = s.Replay(func(e *entry.Entry) driver.ReplayEntryState {
 		if e.Lsn < tempLsn {
 			panic(moerr.NewInternalErrorNoCtxf("logic error %d<%d", e.Lsn, tempLsn))
 		}

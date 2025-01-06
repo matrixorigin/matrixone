@@ -60,12 +60,14 @@ type replayer struct {
 	applyCount    int
 
 	wg sync.WaitGroup
+
+	readFn func() bool
 }
 
 func newReplayer(h driver.ApplyHandle, readmaxsize int, d *LogServiceDriver) *replayer {
 	truncated := d.getLogserviceTruncate()
 	logutil.Infof("truncated %d", truncated)
-	return &replayer{
+	r := &replayer{
 		minDriverLsn:              math.MaxUint64,
 		driverLsnLogserviceLsnMap: make(map[uint64]uint64),
 		replayHandle:              h,
@@ -78,6 +80,8 @@ func newReplayer(h driver.ApplyHandle, readmaxsize int, d *LogServiceDriver) *re
 		wg:                        sync.WaitGroup{},
 		truncatedLogserviceLsn:    truncated,
 	}
+	r.readFn = r.readRecords
+	return r
 }
 
 func (r *replayer) replay() {
@@ -123,13 +127,13 @@ func (r *replayer) readRecords() (readEnd bool) {
 			r.replayedLsn = drlsn - 1
 		}
 	})
+	if safeLsn > r.safeLsn {
+		r.safeLsn = safeLsn
+	}
 	if nextLsn == r.nextToReadLsn {
 		return true
 	}
 	r.nextToReadLsn = nextLsn
-	if safeLsn > r.safeLsn {
-		r.safeLsn = safeLsn
-	}
 	return false
 }
 func (r *replayer) removeEntries(skipMap map[uint64]uint64) {
@@ -157,6 +161,7 @@ func (r *replayer) replayRecords() {
 			r.firstEntryIsFound.Store(true)
 		}
 		e.Entry.Free()
+		e.DoneWithErr(nil)
 		r.applyDuration += time.Since(t0)
 	}
 }
