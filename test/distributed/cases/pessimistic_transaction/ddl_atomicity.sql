@@ -1,3 +1,5 @@
+select enable_fault_injection();
+select add_fault_point('fj/cn/recv/err', ':::', 'echo', 5, 'mo_tables');
 create database db1;
 use db1;
 begin;
@@ -142,3 +144,5 @@ use db1;
 alter table t2 drop foreign key fk_t2_t1;
 -- @session}
 commit;
+
+select disable_fault_injection();
