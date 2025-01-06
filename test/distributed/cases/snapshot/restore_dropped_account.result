@@ -16,6 +16,7 @@ account_name    admin_name    created_time    status    suspended_time    db_cou
 acc01    test_account    2025-01-06 03:59:19    open    null    5    65    0.0    0.0    
 sys    root    2025-01-06 03:49:02    open    null    8    109    3.682463    0.0    system account
 drop account acc01;
+drop snapshot spsp01;
 drop account if exists acc02;
 [unknown result because it is related to issue#21071]
 create account acc02 admin_name = 'test_account' identified by '111';

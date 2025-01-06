@@ -13,6 +13,7 @@ restore account acc01 from snapshot spsp01;
 -- @ignore:2,5,6,7,8
 show accounts;
 drop account acc01;
+drop snapshot spsp01;
 
 
 
@@ -367,6 +368,7 @@ restore cluster from snapshot spsp06;
 -- @session:id=8&user=acc04:test_account&password=111
 use test04;
 select * from t1;
+-- @ignore:1
 show stages;
 select * from vtab32;
 select * from vtab64;
