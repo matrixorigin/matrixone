@@ -52,6 +52,7 @@ type replayer struct {
 	recordChan        chan *entry.Entry
 	lastEntry         *entry.Entry
 	firstEntryIsFound atomic.Bool
+	readEnd           bool
 
 	applyDuration time.Duration
 	readCount     int
@@ -91,6 +92,7 @@ func (r *replayer) replay() {
 			}
 		}
 	}
+	r.readEnd = true
 	err = r.replayLogserviceEntry(r.replayedLsn + 1)
 	for err != ErrAllRecordsRead {
 		err = r.replayLogserviceEntry(r.replayedLsn + 1)
@@ -149,6 +151,9 @@ func (r *replayer) replayRecords() {
 		t0 := time.Now()
 		state := r.replayHandle(e)
 		if state == driver.RE_Nomal {
+			if !r.firstEntryIsFound.Load() {
+				logutil.Infof("open-tae, first driver lsn is %d", e.Lsn)
+			}
 			r.firstEntryIsFound.Store(true)
 		}
 		e.Entry.Free()
@@ -159,23 +164,35 @@ func (r *replayer) replayRecords() {
 func (r *replayer) replayLogserviceEntry(lsn uint64) error {
 	logserviceLsn, ok := r.driverLsnLogserviceLsnMap[lsn]
 	if !ok {
+		skipFn := func() {
+			if len(r.driverLsnLogserviceLsnMap) != 0 {
+				r.AppendSkipCmd(r.driverLsnLogserviceLsnMap)
+				logutil.Infof("skip lsns %v", r.driverLsnLogserviceLsnMap)
+			}
+		}
 		firstEntryIsFound := r.firstEntryIsFound.Load()
 		if !firstEntryIsFound && r.lastEntry != nil {
 			r.lastEntry.WaitDone()
 			firstEntryIsFound = r.firstEntryIsFound.Load()
 		}
-		if !firstEntryIsFound {
-			logutil.Infof("drlsn %d has been truncated", lsn)
-			r.minDriverLsn = lsn + 1
-			r.replayedLsn++
-			return nil
-		}
-		if len(r.driverLsnLogserviceLsnMap) == 0 {
+		safe := lsn <= r.safeLsn
+		if safe {
+			if !firstEntryIsFound {
+				logutil.Infof("drlsn %d has been truncated", lsn)
+				r.minDriverLsn = lsn + 1
+				r.replayedLsn++
+				return nil
+			} else {
+				panic(fmt.Sprintf("logic error, lsn %d is missing, safe lsn %d, map %v",
+					lsn, r.safeLsn, r.driverLsnLogserviceLsnMap))
+			}
+		} else {
+			if !r.readEnd {
+				panic(fmt.Sprintf("logic error, safe lsn %d, lsn %d", r.safeLsn, lsn))
+			}
+			skipFn()
 			return ErrAllRecordsRead
 		}
-		r.AppendSkipCmd(r.driverLsnLogserviceLsnMap)
-		logutil.Infof("skip lsns %v", r.driverLsnLogserviceLsnMap)
-		return ErrAllRecordsRead
 	}
 	record, err := r.d.readFromCache(logserviceLsn)
 	if err == ErrAllRecordsRead {
