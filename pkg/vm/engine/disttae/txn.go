@@ -351,7 +351,7 @@ func (txn *Transaction) checkDup() error {
 		}
 
 		dbkey := genDatabaseKey(e.accountId, e.databaseName)
-		if _, ok := txn.deletedDatabaseMap.Load(dbkey); ok {
+		if txn.databaseOps.existAndDeleted(dbkey) {
 			continue
 		}
 
@@ -1476,8 +1476,8 @@ func (txn *Transaction) delTransaction() {
 	}
 	txn.tableCache = nil
 	txn.tableOps = nil
-	txn.databaseMap = nil
-	txn.deletedDatabaseMap = nil
+	txn.databaseOps = nil
+
 	txn.cn_flushed_s3_tombstone_object_stats_list = nil
 	txn.deletedBlocks = nil
 	txn.haveDDL.Store(false)
@@ -1512,6 +1512,7 @@ func (txn *Transaction) delTransaction() {
 }
 
 func (txn *Transaction) rollbackTableOpLocked() {
+	txn.databaseOps.rollbackLastStatement(txn.statementID)
 	txn.tableOps.rollbackLastStatement(txn.statementID)
 
 	for k, v := range txn.tablesInVain {
@@ -1547,11 +1548,10 @@ func (txn *Transaction) CloneSnapshotWS() client.Workspace {
 		tnStores: txn.tnStores,
 		idGen:    txn.idGen,
 
-		tableCache:         new(sync.Map),
-		databaseMap:        new(sync.Map),
-		deletedDatabaseMap: new(sync.Map),
-		tableOps:           newTableOps(),
-		tablesInVain:       make(map[uint64]int),
+		tableCache:   new(sync.Map),
+		databaseOps:  newDbOps(),
+		tableOps:     newTableOps(),
+		tablesInVain: make(map[uint64]int),
 		deletedBlocks: &deletedBlocks{
 			offsets: map[types.Blockid][]int64{},
 		},
@@ -1578,6 +1578,63 @@ func (txn *Transaction) SetHaveDDL(haveDDL bool) {
 
 func (txn *Transaction) GetHaveDDL() bool {
 	return txn.haveDDL.Load()
+}
+
+func newDbOps() *dbOpsChain {
+	return &dbOpsChain{
+		names: make(map[databaseKey][]dbOp),
+	}
+}
+
+func (c *dbOpsChain) addCreateDatabase(key databaseKey, statementId int, db *txnDatabase) {
+	c.Lock()
+	defer c.Unlock()
+	c.names[key] = append(c.names[key],
+		dbOp{kind: INSERT, statementId: statementId, databaseId: db.databaseId, payload: db})
+}
+
+func (c *dbOpsChain) addDeleteDatabase(key databaseKey, statementId int, did uint64) {
+	c.Lock()
+	defer c.Unlock()
+	c.names[key] = append(c.names[key],
+		dbOp{kind: DELETE, databaseId: did, statementId: statementId})
+}
+
+func (c *dbOpsChain) existAndDeleted(key databaseKey) bool {
+	c.RLock()
+	defer c.RUnlock()
+	x, exist := c.names[key]
+	if !exist {
+		return false
+	}
+	return x[len(x)-1].kind == DELETE
+}
+
+func (c *dbOpsChain) existAndActive(key databaseKey) *txnDatabase {
+	c.RLock()
+	defer c.RUnlock()
+	if x, exist := c.names[key]; exist && x[len(x)-1].kind == INSERT {
+		return x[len(x)-1].payload
+	}
+	return nil
+}
+
+func (c *dbOpsChain) rollbackLastStatement(statementId int) {
+	c.Lock()
+	defer c.Unlock()
+	for k, v := range c.names {
+		i := len(v) - 1
+		for ; i >= 0; i-- {
+			if v[i].statementId != statementId {
+				break
+			}
+		}
+		if i < 0 {
+			delete(c.names, k)
+		} else if i < len(v)-1 {
+			c.names[k] = v[:i+1]
+		}
+	}
 }
 
 func newTableOps() *tableOpsChain {
