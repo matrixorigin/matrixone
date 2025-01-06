@@ -160,8 +160,8 @@ func (r *replayer) replayRecords() {
 			}
 			r.firstEntryIsFound.Store(true)
 		}
-		e.Entry.Free()
 		e.DoneWithErr(nil)
+		e.Entry.Free()
 		r.applyDuration += time.Since(t0)
 	}
 }
