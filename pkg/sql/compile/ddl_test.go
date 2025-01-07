@@ -1158,8 +1158,8 @@ func TestScope_CreateView(t *testing.T) {
 		proc := testutil.NewProcess()
 		proc.Base.SessionInfo.Buf = buffer.New()
 
-		ctx := context.Background()
-		proc.Ctx = context.Background()
+		ctx := defines.AttachAccountId(context.Background(), sysAccountId)
+		proc.Ctx = defines.AttachAccountId(context.Background(), sysAccountId)
 		txnCli, txnOp := newTestTxnClientAndOp(ctrl)
 		proc.Base.TxnClient = txnCli
 		proc.Base.TxnOperator = txnOp
