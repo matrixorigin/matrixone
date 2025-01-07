@@ -1240,7 +1240,7 @@ func (tbl *txnTable) isCreatedInTxn(ctx context.Context) (bool, error) {
 		return tbl.createdInTxn, nil
 	}
 
-	if tbl.db.op.IsSnapOp() {
+	if tbl.db.op.IsSnapOp() || catalog.IsSystemTable(tbl.tableId) {
 		// if the operation is snapshot read, isCreatedInTxn can not be called by AlterTable
 		// So if the snapshot read want to subcribe logtail tail, let it go ahead.
 		return false, nil
@@ -1249,12 +1249,12 @@ func (tbl *txnTable) isCreatedInTxn(ctx context.Context) (bool, error) {
 	cache := tbl.db.getEng().GetLatestCatalogCache()
 	cacheTS := cache.GetStartTS().ToTimestamp()
 	if cacheTS.Greater(tbl.db.op.SnapshotTS()) {
-		if err := tbl.db.op.UpdateSnapshot(ctx, cacheTS); err != nil {
+		logutil.Warn("FIND_TABLE loadNameByIdFromStorage", zap.String("name", tbl.tableName), zap.String("cacheTs", cacheTS.DebugString()), zap.String("txn", tbl.db.op.Txn().DebugString()))
+		if name, _, err := loadNameByIdFromStorage(ctx, tbl.db.op, tbl.accountId, tbl.tableId); err != nil {
 			return false, err
+		} else {
+			return name == "", nil
 		}
-		// When logtail reconnect, this error may be thrown to client if
-		// disableRetry is true for some SQL requests.
-		return false, moerr.NewTxnNeedRetry(ctx)
 	}
 
 	idAckedbyTN := cache.GetTableByIdAndTime(
