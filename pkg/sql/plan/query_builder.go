@@ -2342,11 +2342,6 @@ func (bc *BindContext) generateForceWinSpecList() ([]*plan.Expr, error) {
 }
 
 func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isRoot bool) (int32, error) {
-	//fctx := tree.NewFmtCtx(dialect.MYSQL)
-	//stmt.Format(fctx)
-	//fmt.Println("bindSelect===>")
-	//fmt.Println(fctx.String())
-
 	// preprocess CTEs
 	if stmt.With != nil {
 		ctx.cteByName = make(map[string]*CTERef)
@@ -4244,8 +4239,6 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 				}
 
 				break
-			} else {
-				fmt.Printf("no such cte %s\n", table)
 			}
 			schema = ctx.defaultDatabase
 		}
@@ -4338,9 +4331,6 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 			if viewDefString != "" {
 				viewCtx := NewBindContext(builder, nil)
 				viewCtx.snapshot = snapshot
-				//if viewCtx.cteByName == nil {
-				//	viewCtx.cteByName = make(map[string]*CTERef)
-				//}
 
 				viewData := ViewData{}
 				err := json.Unmarshal([]byte(viewDefString), &viewData)
@@ -4371,30 +4361,6 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 					viewStmt.AsSource = alterstmt.AsSource
 				}
 
-				//viewName := viewStmt.Name.ObjectName
-				//var maskedCTEs map[string]bool
-				//if len(viewCtx.cteByName) > 0 {
-				//	maskedCTEs = make(map[string]bool)
-				//	for name := range viewCtx.cteByName {
-				//		maskedCTEs[name] = true
-				//	}
-				//}
-				//defaultDatabase := viewData.DefaultDatabase
-				//if obj.PubInfo != nil {
-				//	defaultDatabase = obj.SubscriptionName
-				//}
-				//viewCtx.cteByName[string(viewName)] = &CTERef{
-				//	ast: &tree.CTE{
-				//		Name: &tree.AliasClause{
-				//			Alias: viewName,
-				//			Cols:  viewStmt.ColNames,
-				//		},
-				//		Stmt: viewStmt.AsSource,
-				//	},
-				//	defaultDatabase: defaultDatabase,
-				//	maskedCTEs:      maskedCTEs,
-				//	snapshot:        snapshot,
-				//}
 				defaultDatabase := viewData.DefaultDatabase
 				if obj.PubInfo != nil {
 					defaultDatabase = obj.SubscriptionName
@@ -4403,15 +4369,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 
 				// consist with frontend.genKey()
 				viewCtx.views = append(viewCtx.views, schema+"#"+table)
-
-				//FIXME:
-				//newTableName := tree.NewTableName(viewName, tree.ObjectNamePrefix{
-				//	CatalogName:     tbl.CatalogName, // TODO unused now, if used in some code, that will be save in view
-				//	SchemaName:      tree.Identifier(""),
-				//	ExplicitCatalog: false,
-				//	ExplicitSchema:  false,
-				//}, nil)
-				//return builder.buildTable(newTableName, viewCtx, preNodeId, leftCtx)
+				ctx.views = append(viewCtx.views, schema+"#"+table)
 
 				viewName := string(viewStmt.Name.ObjectName)
 				if viewCtx.viewInBinding(viewName, viewStmt) {
@@ -4419,29 +4377,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 				}
 				viewCtx.cteName = viewName
 
-				//aliasSubquery := &tree.AliasedTableExpr{
-				//	Expr: viewStmt.AsSource,
-				//	As: tree.AliasClause{
-				//		Alias: viewStmt.Name.ObjectName,
-				//		Cols:  viewStmt.ColNames,
-				//	},
-				//}
-
-				//alias := tree.AliasClause{
-				//	Alias: viewStmt.Name.ObjectName,
-				//	Cols:  viewStmt.ColNames,
-				//}
-
-				//nodeID, err = builder.buildTable(aliasSubquery, ctx, preNodeId, leftCtx)
-
-				//oldSnapshot := builder.compCtx.GetSnapshot()
-				//builder.compCtx.SetSnapshot(viewCtx.snapshot)
 				nodeID, err = builder.bindSelect(viewStmt.AsSource, viewCtx, false)
-				//builder.compCtx.SetSnapshot(oldSnapshot)
-				//if err != nil {
-				//	return 0, err
-				//}
-				//err = builder.addBinding(nodeID, alias, viewCtx)
 				return nodeID, err
 			}
 		}

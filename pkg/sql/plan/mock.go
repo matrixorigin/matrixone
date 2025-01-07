@@ -163,6 +163,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 	bvtTest2Schema := make(map[string]*Schema)
 	bvtTest3Schema := make(map[string]*Schema)
 	informationSchemaSchema := make(map[string]*Schema)
+	cteTest2Schema := make(map[string]*Schema)
 
 	schemas := map[string]map[string]*Schema{
 		"tpch":               tpchSchema,
@@ -173,6 +174,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 		"bvt_test2":          bvtTest2Schema,
 		"bvt_test3":          bvtTest3Schema,
 		"information_schema": informationSchemaSchema,
+		"cte_test2":          cteTest2Schema,
 	}
 
 	dbs := make(map[string]bool)
@@ -321,6 +323,11 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 	tpchSchema["v1"] = &Schema{
 		cols: []col{
 			{"n_name", types.T_varchar, false, 50, 0},
+		},
+		isView: true,
+		viewCfg: ViewCfg{
+			sql: "select n_name from nation where n_nationkey > ?",
+			db:  "tpch",
 		},
 	}
 
@@ -922,6 +929,46 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 		},
 	}
 
+	cteTest2Schema["vt1"] = &Schema{
+		cols: []col{
+			{"a", types.T_int64, false, 0, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks: []int{0},
+	}
+
+	cteTest2Schema["vv1"] = &Schema{
+		cols: []col{
+			{"a", types.T_int32, false, 50, 0},
+		},
+		isView: true,
+		viewCfg: ViewCfg{
+			sql: "create view vv1 as\nwith \n\tc as (\n\t\tselect * from  vt1\n\t)\nselect \n\t*\nfrom\n\tc;",
+			db:  "cte_test2",
+		},
+	}
+
+	cteTest2Schema["vv2"] = &Schema{
+		cols: []col{
+			{"a", types.T_int32, false, 50, 0},
+		},
+		isView: true,
+		viewCfg: ViewCfg{
+			sql: "create view vv2 as\nwith \n\tvv2 as (\n\t\tselect a from vt1 \n\t)\nselect distinct \n\t* \nfrom \n\t(\n\t\tselect * from vv2\n\t)",
+			db:  "cte_test2",
+		},
+	}
+
+	cteTest2Schema["vv3"] = &Schema{
+		cols: []col{
+			{"a", types.T_int32, false, 50, 0},
+		},
+		isView: true,
+		viewCfg: ViewCfg{
+			sql: "create view vv3 as\nwith \n\tvv3 as (\n\t\tselect a from vt1 \n\t)\nselect distinct \n\t* \nfrom \n\tvv3\n",
+			db:  "cte_test2",
+		},
+	}
 	objects := make(map[string]*ObjectRef)
 	tables := make(map[string]*TableDef)
 	stats := make(map[string]*Stats)
@@ -1021,7 +1068,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 				}
 			}
 
-			if tableName != "v1" {
+			{
 				properties := []*plan.Property{
 					{
 						Key:   catalog.SystemRelAttr_Kind,
@@ -1052,30 +1099,6 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 					TableExist:     true,
 				}
 				tableDef.Indexes = []*plan.IndexDef{p}
-			}
-
-			if tableName == "v1" {
-				tableDef.TableType = catalog.SystemViewRel
-				viewData, _ := json.Marshal(ViewData{
-					Stmt:            "select n_name from nation where n_nationkey > ?",
-					DefaultDatabase: "tpch",
-				})
-				tableDef.ViewSql = &plan.ViewDef{
-					View: string(viewData),
-				}
-				properties := []*plan.Property{
-					{
-						Key:   catalog.SystemRelAttr_Kind,
-						Value: catalog.SystemViewRel,
-					},
-				}
-				tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
-					Def: &plan.TableDef_DefType_Properties{
-						Properties: &plan.PropertiesDef{
-							Properties: properties,
-						},
-					},
-				})
 			}
 
 			if table.isView {
