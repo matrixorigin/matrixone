@@ -90,7 +90,7 @@ func (l *ObjectList) getObjectBySortHint(sortHint uint64) (ret *ObjectEntry) {
 	pivot := ObjectEntry{
 		ObjectNode: ObjectNode{SortHint: sortHint},
 	}
-	if ok := it.Seek(key); !ok {
+	if ok := it.Seek(&pivot); !ok {
 		return
 	}
 	if ret = it.Item(); ret.SortHint != sortHint {
