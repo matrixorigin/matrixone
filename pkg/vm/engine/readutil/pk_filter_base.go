@@ -12,10 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package engine_util
+package readutil
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -25,7 +26,7 @@ import (
 )
 
 const (
-	RangeLeftOpen = iota + function.FUNCTION_END_NUMBER + 1
+	RangeLeftOpen = iota + math.MaxInt16
 	RangeRightOpen
 	RangeBothOpen
 )

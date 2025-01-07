@@ -26,9 +26,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/objectio/ckputil"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
@@ -287,7 +286,7 @@ func (c *CkpReplayer) ReadCkpFiles() (err error) {
 	}
 
 	for _, entry := range c.ckpEntries {
-		if err = blockio.PrefetchMeta(
+		if err = ioutil.PrefetchMeta(
 			r.rt.SID(), r.rt.Fs.Service, entry.GetLocation(),
 		); err != nil {
 			return

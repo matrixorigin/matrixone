@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package blockio
+package ioutil
 
 import (
 	"context"
@@ -45,6 +45,36 @@ var (
 		},
 	}
 )
+
+const (
+	JTLoad tasks.JobType = 200 + iota
+	JTFlush
+)
+
+func init() {
+	tasks.RegisterJobType(JTLoad, "LoadJob")
+	tasks.RegisterJobType(JTFlush, "FlushJob")
+}
+
+type Option func(*IoPipeline)
+
+func WithFetchParallism(num int) Option {
+	return func(p *IoPipeline) {
+		p.options.fetchParallism = num
+	}
+}
+
+func WithPrefetchParallism(num int) Option {
+	return func(p *IoPipeline) {
+		p.options.prefetchParallism = num
+	}
+}
+
+func WithJobFactory(factory IOJobFactory) Option {
+	return func(p *IoPipeline) {
+		p.jobFactory = factory
+	}
+}
 
 func getJob(
 	ctx context.Context,

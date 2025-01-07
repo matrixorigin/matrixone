@@ -15,6 +15,7 @@
 package compile
 
 import (
+	"context"
 	"fmt"
 
 	"go.uber.org/zap"
@@ -28,6 +29,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
+func convertDBEOB(ctx context.Context, e error, name string) error {
+	if moerr.IsMoErrCode(e, moerr.OkExpectedEOB) {
+		return moerr.NewBadDB(ctx, name)
+	}
+	return e
+}
+
 func (s *Scope) AlterTableCopy(c *Compile) error {
 	qry := s.Plan.GetDdl().GetAlterTable()
 	dbName := qry.Database
@@ -37,7 +45,7 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 	tblName := qry.GetTableDef().GetName()
 	dbSource, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
-		return moerr.NewBadDB(c.proc.Ctx, dbName)
+		return convertDBEOB(c.proc.Ctx, err, dbName)
 	}
 
 	originRel, err := dbSource.Relation(c.proc.Ctx, tblName, nil)

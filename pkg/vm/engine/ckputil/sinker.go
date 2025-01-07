@@ -31,19 +31,27 @@ func EncodeCluser(
 	packer.EncodeObjectid(obj)
 }
 
-var SinkerFactory ioutil.FileSinkerFactory
+var DataSinkerFactory ioutil.FileSinkerFactory
+var MetaSinkerFactory ioutil.FileSinkerFactory
 
 func init() {
-	SinkerFactory = ioutil.NewFSinkerImplFactory(
+	DataSinkerFactory = ioutil.NewFSinkerImplFactory(
 		TableObjectsSeqnums,
 		TableObjectsAttr_Cluster_Idx,
 		false,
 		false,
 		0,
 	)
+	MetaSinkerFactory = ioutil.NewFSinkerImplFactory(
+		MetaSeqnums,
+		MetaAttr_Table_Idx,
+		false,
+		false,
+		0,
+	)
 }
 
-func NewSinker(
+func NewDataSinker(
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 	opts ...ioutil.SinkerOption,
@@ -53,7 +61,24 @@ func NewSinker(
 		TableObjectsAttr_Cluster_Idx,
 		TableObjectsAttrs,
 		TableObjectsTypes,
-		SinkerFactory,
+		DataSinkerFactory,
+		mp,
+		fs,
+		opts...,
+	)
+}
+
+func NewMetaSinker(
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+	opts ...ioutil.SinkerOption,
+) *ioutil.Sinker {
+	opts = append(opts, ioutil.WithTailSizeCap(0))
+	return ioutil.NewSinker(
+		MetaAttr_Table_Idx,
+		MetaAttrs,
+		MetaTypes,
+		MetaSinkerFactory,
 		mp,
 		fs,
 		opts...,
