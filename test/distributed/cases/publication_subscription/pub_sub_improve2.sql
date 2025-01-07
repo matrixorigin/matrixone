@@ -794,12 +794,12 @@ drop database db16;
 
 
 
--- @bvt:issue#16438
 -- sys account publish db to account a, a subscribe, sys account delete publication, the publisher creates a new
 -- publication with the same name and publish to account b, then show subscriptions: status is 1
 drop database if exists db19;
 create database db19;
 use db19;
+-- @bvt:issue#16438
 drop table if exists employees;
 create table employees (
       emp_no      int             NOT NULL,
