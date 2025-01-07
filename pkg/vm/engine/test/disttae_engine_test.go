@@ -920,7 +920,7 @@ func TestObjectStats1(t *testing.T) {
 	for iter.Next() {
 		obj := iter.Entry()
 		objCount++
-		if bytes.Equal(obj.ObjectInfo.ObjectStats.ObjectName().ObjectId()[:], appendableObjectID[:]) {
+		if bytes.Equal(obj.ObjectStats.ObjectName().ObjectId()[:], appendableObjectID[:]) {
 			assert.True(t, obj.GetAppendable())
 			assert.False(t, obj.GetSorted())
 			assert.False(t, obj.ObjectStats.GetCNCreated())
@@ -1009,7 +1009,7 @@ func TestObjectStats2(t *testing.T) {
 	for iter.Next() {
 		obj := iter.Entry()
 		objCount++
-		if bytes.Equal(obj.ObjectInfo.ObjectStats.ObjectName().ObjectId()[:], appendableObjectID[:]) {
+		if bytes.Equal(obj.ObjectStats.ObjectName().ObjectId()[:], appendableObjectID[:]) {
 			assert.True(t, obj.GetAppendable())
 			assert.False(t, obj.GetSorted())
 			assert.False(t, obj.ObjectStats.GetCNCreated())

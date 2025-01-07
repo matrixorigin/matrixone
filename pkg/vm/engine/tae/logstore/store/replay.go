@@ -15,15 +15,17 @@
 package store
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 )
 
 func (w *StoreImpl) Replay(h ApplyHandle) error {
-	err := w.driver.Replay(func(e *entry.Entry) {
-		err := w.replayEntry(e, h)
+	err := w.driver.Replay(func(e *entry.Entry) driver.ReplayEntryState {
+		state, err := w.replayEntry(e, h)
 		if err != nil {
 			panic(err)
 		}
+		return state
 	})
 	if err != nil {
 		panic(err)
@@ -65,19 +67,19 @@ func (w *StoreImpl) onReplayLsn(g uint32, lsn uint64) {
 	}
 }
 
-func (w *StoreImpl) replayEntry(e *entry.Entry, h ApplyHandle) error {
+func (w *StoreImpl) replayEntry(e *entry.Entry, h ApplyHandle) (driver.ReplayEntryState, error) {
 	walEntry := e.Entry
 	info := e.Info
 	switch info.Group {
 	case GroupInternal:
 		w.unmarshalPostCommitEntry(walEntry.GetPayload())
 		w.checkpointed[GroupCKP] = info.TargetLsn
-		return nil
+		return driver.RE_Internal, nil
 	case GroupCKP:
 		w.logCheckpointInfo(info)
 	}
 	w.logDriverLsn(e)
 	w.onReplayLsn(info.Group, info.GroupLSN)
-	h(info.Group, info.GroupLSN, walEntry.GetPayload(), walEntry.GetType(), walEntry.GetInfo())
-	return nil
+	state := h(info.Group, info.GroupLSN, walEntry.GetPayload(), walEntry.GetType(), walEntry.GetInfo())
+	return state, nil
 }
