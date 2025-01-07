@@ -37,6 +37,10 @@ func consumeEntry(
 	e *api.Entry,
 	isSub bool,
 ) error {
+	defer func() {
+		engine.doMPoolMetrics()
+	}()
+
 	// for test only.
 	if engine.skipConsume {
 		return nil

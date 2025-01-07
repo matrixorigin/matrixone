@@ -257,12 +257,16 @@ func (c *DashboardCreator) initLogTailPStateRow() dashboard.Option {
 				`sum(` + c.getMetricWithFilter("mo_logtail_partition_state_mem_used_size", `type="data-obj-memory-used"`) + `)`,
 				`sum(` + c.getMetricWithFilter("mo_logtail_partition_state_mem_used_size", `type="inmem-tombstone-row-memory-used"`) + `)`,
 				`sum(` + c.getMetricWithFilter("mo_logtail_partition_state_mem_used_size", `type="tombstone-obj-memory-used"`) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_logtail_partition_state_mem_used_size", `type="engine-mpool-allocate"`) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_logtail_partition_state_mem_used_size", `type="engine-mpool-watermark"`) + `)`,
 			},
 			[]string{
 				"inmem-data-row-memory-used",
 				"data-obj-memory-used",
 				"inmem-tombstone-row-memory-used",
 				"tombstone-obj-memory-used",
+				"engine-mpool-allocate",
+				"engine-mpool-watermark",
 			}),
 
 		c.withMultiGraph(

@@ -190,6 +190,9 @@ var (
 	LogTailPStateInMemTombstoneRowsMemoryUsed = logtailPStateGauge.WithLabelValues("inmem-tombstone-row-memory-used")
 	LogTailPStateTombstoneObjectMemoryUsed    = logtailPStateGauge.WithLabelValues("tombstone-obj-memory-used")
 
+	LogTailEngineMPoolAllocateGauge  = logtailPStateGauge.WithLabelValues("engine-mpool-allocate")
+	LogTailEngineMPoolWatermarkGauge = logtailPStateGauge.WithLabelValues("engine-mpool-watermark")
+
 	logtailPStateCounter = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "mo",

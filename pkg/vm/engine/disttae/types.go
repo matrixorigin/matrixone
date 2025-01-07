@@ -274,6 +274,17 @@ func (e *Engine) SetService(svr string) {
 	e.service = svr
 }
 
+func (e *Engine) doMPoolMetrics() {
+	// engine mpool
+	{
+		currentN := e.mp.CurrNB()
+		watermark := e.mp.Stats().HighWaterMark.Load()
+
+		v2.LogTailEngineMPoolAllocateGauge.Set(float64(currentN))
+		v2.LogTailEngineMPoolWatermarkGauge.Set(float64(watermark))
+	}
+}
+
 func (txn *Transaction) String() string {
 	return fmt.Sprintf("writes %v", txn.writes)
 }
