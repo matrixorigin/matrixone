@@ -154,15 +154,15 @@ func isConnected(connMap *sync.Map) {
 			connMap.Delete(key)
 			switch value {
 			case TCP_LAST_ACK:
-				logutil.Infof("Connection %s is terminated by TCP_LAST_ACK", TCPAddr)
+				logutil.Infof("Connection %s is terminated, the status is TCP_LAST_ACK", TCPAddr)
 			case TCP_CLOSE:
-				logutil.Infof("Connection %s is terminated by TCP_CLOSE", TCPAddr)
+				logutil.Infof("Connection %s is terminated, the status is TCP_CLOSE", TCPAddr)
 			case TCP_FIN_WAIT1:
-				logutil.Infof("Connection %s is terminated by TCP_FIN_WAIT1", TCPAddr)
+				logutil.Infof("Connection %s is terminated, the status is TCP_FIN_WAIT1", TCPAddr)
 			case TCP_FIN_WAIT2:
-				logutil.Infof("Connection %s is terminated by TCP_FIN_WAIT2", TCPAddr)
+				logutil.Infof("Connection %s is terminated, the status is TCP_FIN_WAIT2", TCPAddr)
 			case TCP_TIME_WAIT:
-				logutil.Infof("Connection %s is terminated by TCP_TIME_WAIT", TCPAddr)
+				logutil.Infof("Connection %s is terminated, the status is TCP_TIME_WAIT", TCPAddr)
 			default:
 				logutil.Infof("Connection %s is terminated", TCPAddr)
 			}
