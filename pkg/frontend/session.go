@@ -1837,7 +1837,9 @@ func Migrate(ses *Session, req *query.MigrateConnToRequest) error {
 
 	dbm := newDBMigration(req.DB)
 	if err := dbm.Migrate(ctx, ses); err != nil {
-		return moerr.AttachCause(ctx, err)
+		ses.Warnf(ctx, "the database %s may have been deleted, "+
+			"so continue to mirgrate session, conn ID: %d, err: %v",
+			req.DB, req.ConnID, err)
 	}
 
 	var maxStmtID uint32
