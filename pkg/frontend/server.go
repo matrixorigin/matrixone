@@ -49,9 +49,6 @@ const (
 	TCP_LISTEN      = 10
 )
 
-// Interval for checking TCP connection status
-const checkInterval = 1
-
 // RelationName counter for the new connection
 var initConnectionID uint32 = 1000
 
@@ -192,7 +189,7 @@ func (mo *MOServer) checkConnected(ctx context.Context) {
 			default:
 			}
 			isConnected(&mo.connMap)
-			time.Sleep(checkInterval * time.Second)
+			time.Sleep(mo.pu.SV.CheckInterval * time.Second)
 		}
 	}
 }
