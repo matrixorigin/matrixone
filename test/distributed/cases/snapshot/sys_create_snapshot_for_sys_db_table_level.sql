@@ -110,9 +110,11 @@ drop table partition01;
 restore account sys database sp_test01 table partition01 from snapshot spsp02;
 select * from partition01;
 
-drop database sp_test01;
+
 drop snapshot spsp02;
 -- @bvt:issue
+
+drop database sp_test01;
 
 
 
