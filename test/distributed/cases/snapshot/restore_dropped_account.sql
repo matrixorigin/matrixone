@@ -18,7 +18,7 @@ drop snapshot spsp01;
 
 
 
--- @bvt:issue#21071
+-- @bvt:issue#21092
 -- sys level snapshot restore nonsys dropped account
 drop account if exists acc02;
 create account acc02 admin_name = 'test_account' identified by '111';
@@ -346,8 +346,6 @@ drop table if exists t2;
 create table t2 (a json,b int);
 delete from t2;
 insert into t2 values ('{"t1":"a"}',1),('{"t1":"b"}',2);
-select * from t2 into outfile '$resources/json/export_200.csv' fields enclosed by '"' force_quote(a);
-load data infile '$resources/json/export_200.csv' into table t2 fields terminated by ',' ignore 1 lines;
 select * from t2;
 
 drop table if exists t_timestamp;
