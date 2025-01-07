@@ -324,10 +324,24 @@ func execBackup(
 		oNames = append(oNames, oneNames...)
 	}
 	loadDuration += time.Since(now)
+	dstObjs, err := fileservice.SortedList(srcFs.List(ctx, ""))
+	dstHave := make(map[string]bool)
+	if err != nil {
+		return err
+	}
+	for _, obj := range dstObjs {
+		if !obj.IsDir {
+			dstHave[obj.Name] = true
+		}
+	}
 	now = time.Now()
 	for _, oName := range oNames {
-		if files[oName.Location.Name().String()] == nil {
-			files[oName.Location.Name().String()] = oName
+		objName := oName.Location.Name().String()
+		if dstHave[objName] {
+			continue
+		}
+		if files[objName] == nil {
+			files[objName] = oName
 		}
 	}
 
