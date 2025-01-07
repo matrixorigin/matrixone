@@ -303,6 +303,7 @@ func (r *recordEntry) replay(replayer *replayer) (addr *common.ClosedIntervals) 
 			panic(err)
 		}
 		offset += n
+		replayer.lastEntry = e
 		replayer.recordChan <- e
 	}
 	intervals := common.NewClosedIntervalsBySlice(lsns)

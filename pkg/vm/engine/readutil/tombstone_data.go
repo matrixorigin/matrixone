@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package engine_util
+package readutil
 
 import (
 	"bytes"
@@ -25,8 +25,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 )
 
 func UnmarshalTombstoneData(data []byte) (engine.Tombstoner, error) {
@@ -155,7 +155,7 @@ func (tomb *tombstoneData) HasBlockTombstone(
 	}
 	if len(tomb.rowids) > 0 {
 		// TODO: optimize binary search once
-		start, end := blockio.FindStartEndOfBlockFromSortedRowids(tomb.rowids, blockId)
+		start, end := ioutil.FindStartEndOfBlockFromSortedRowids(tomb.rowids, blockId)
 		if end > start {
 			return true, nil
 		}
@@ -210,7 +210,7 @@ func (tomb *tombstoneData) PrefetchTombstones(
 		stats := tomb.files.Get(i)
 		for j := 0; j < int(stats.BlkCnt()); j++ {
 			loc := stats.BlockLocation(uint16(j), objectio.BlockMaxRows)
-			if err := blockio.Prefetch(
+			if err := ioutil.Prefetch(
 				srvId,
 				fs,
 				loc,
@@ -233,7 +233,7 @@ func (tomb *tombstoneData) ApplyInMemTombstones(
 		return
 	}
 
-	start, end := blockio.FindStartEndOfBlockFromSortedRowids(tomb.rowids, bid)
+	start, end := ioutil.FindStartEndOfBlockFromSortedRowids(tomb.rowids, bid)
 
 	for i := start; i < end; i++ {
 		offset := tomb.rowids[i].GetRowOffset()
@@ -275,7 +275,7 @@ func (tomb *tombstoneData) ApplyPersistedTombstones(
 	}
 	defer release()
 
-	if err = blockio.GetTombstonesByBlockId(
+	if err = ioutil.GetTombstonesByBlockId(
 		ctx,
 		snapshot,
 		bid,

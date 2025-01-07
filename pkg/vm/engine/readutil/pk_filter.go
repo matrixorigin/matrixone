@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package engine_util
+package readutil
 
 import (
 	"bytes"
@@ -407,10 +407,11 @@ func ConstructBlockPKFilter(
 			sortedSearchFunc = vector.CollectOffsetsByBetweenFactory(lb, ub, hint)
 			unSortedSearchFunc = vector.LinearCollectOffsetsByBetweenFactory(lb, ub, hint)
 		case types.T_decimal64:
-			lb := types.DecodeDecimal64(basePKFilter.LB)
-			ub := types.DecodeDecimal64(basePKFilter.UB)
-			sortedSearchFunc = vector.CollectOffsetsByBetweenFactory(lb, ub, hint)
-			unSortedSearchFunc = vector.LinearCollectOffsetsByBetweenFactory(lb, ub, hint)
+			val1 := types.DecodeDecimal64(basePKFilter.LB)
+			val2 := types.DecodeDecimal64(basePKFilter.UB)
+
+			sortedSearchFunc = vector.CollectOffsetsByBetweenWithCompareFactory(val1, val2, types.CompareDecimal64)
+			unSortedSearchFunc = vector.FixedSizedLinearCollectOffsetsByBetweenFactory(val1, val2, types.CompareDecimal64)
 		case types.T_decimal128:
 			val1 := types.DecodeDecimal128(basePKFilter.LB)
 			val2 := types.DecodeDecimal128(basePKFilter.UB)
@@ -420,13 +421,13 @@ func ConstructBlockPKFilter(
 		case types.T_text, types.T_datalink, types.T_varchar:
 			lb := string(basePKFilter.LB)
 			ub := string(basePKFilter.UB)
-			sortedSearchFunc = vector.CollectOffsetsByBetweenFactory(lb, ub, hint)
-			unSortedSearchFunc = vector.LinearCollectOffsetsByBetweenFactory(lb, ub, hint)
+			sortedSearchFunc = vector.CollectOffsetsByBetweenString(lb, ub, hint)
+			unSortedSearchFunc = vector.LinearCollectOffsetsByBetweenString(lb, ub, hint)
 		case types.T_json:
 			lb := string(basePKFilter.LB)
 			ub := string(basePKFilter.UB)
-			sortedSearchFunc = vector.CollectOffsetsByBetweenFactory(lb, ub, hint)
-			unSortedSearchFunc = vector.LinearCollectOffsetsByBetweenFactory(lb, ub, hint)
+			sortedSearchFunc = vector.CollectOffsetsByBetweenString(lb, ub, hint)
+			unSortedSearchFunc = vector.LinearCollectOffsetsByBetweenString(lb, ub, hint)
 		case types.T_enum:
 			lb := types.DecodeEnum(basePKFilter.LB)
 			ub := types.DecodeEnum(basePKFilter.UB)

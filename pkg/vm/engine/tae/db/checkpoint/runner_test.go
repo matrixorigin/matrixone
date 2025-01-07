@@ -24,13 +24,13 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestCkpCheck(t *testing.T) {
-	blockio.RunPipelineTest(
+	ioutil.RunPipelineTest(
 		func() {
 			defer testutils.AfterTest(t)()
 			r := NewRunner(context.Background(), nil, nil, nil, nil, nil)
