@@ -114,9 +114,9 @@ func (r *replayer) readRecords() (readEnd bool) {
 		r.readCount++
 		if record.Meta.metaType == TReplay {
 			r.internalCount++
-			cmd := NewEmptyReplayCmd()
-			cmd.Unmarshal(record.payload)
-			r.removeEntries(cmd.skipLsns)
+			logutil.Info("Wal-Replay-Trace-Replay-Skip-Entry-By-CMD",
+				zap.Any("drlsn-lslsn", record.cmd.skipLsns))
+			r.removeEntries(record.cmd.skipLsns)
 			return
 		}
 		drlsn := record.GetMinLsn()
