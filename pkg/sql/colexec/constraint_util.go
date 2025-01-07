@@ -120,13 +120,6 @@ func BatchDataNotNullCheck(vecs []*vector.Vector, attrs []string, tableDef *plan
 }
 
 func getRelationByObjRef(ctx context.Context, proc *process.Process, eg engine.Engine, ref *plan.ObjectRef) (engine.Relation, error) {
-	//if ref.ObjName == "debug" {
-	//	logutil.Infof("xxxx txn:%s, getRelationByObjRef: eg is nil:%v, ref is nil:%v, stack is %s",
-	//		proc.GetTxnOperator().Txn().DebugString(),
-	//		eg == nil,
-	//		ref == nil,
-	//		string(debug.Stack()))
-	//}
 	dbSource, err := eg.Database(ctx, ref.SchemaName, proc.GetTxnOperator())
 	if err != nil {
 		return nil, err

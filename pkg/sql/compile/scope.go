@@ -183,7 +183,7 @@ func (s *Scope) Run(c *Compile) (err error) {
 			_, err = p.Run(s.Proc)
 		} else {
 			if s.DataSource.R == nil {
-				s.NodeInfo.Data = engine_util.BuildEmptyRelData()
+				s.NodeInfo.Data = readutil.BuildEmptyRelData()
 				stats := statistic.StatsInfoFromContext(c.proc.GetTopContext())
 
 				buildStart := time.Now()
