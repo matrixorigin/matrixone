@@ -251,7 +251,7 @@ func (c *DashboardCreator) initLogTailPStateRow() dashboard.Option {
 		"Partition State Status",
 		c.withMultiGraph(
 			"Partition State Memory Used",
-			4,
+			6,
 			[]string{
 				`sum(` + c.getMetricWithFilter("mo_logtail_partition_state_mem_used_size", `type="inmem-data-row-memory-used"`) + `)`,
 				`sum(` + c.getMetricWithFilter("mo_logtail_partition_state_mem_used_size", `type="data-obj-memory-used"`) + `)`,
@@ -259,15 +259,15 @@ func (c *DashboardCreator) initLogTailPStateRow() dashboard.Option {
 				`sum(` + c.getMetricWithFilter("mo_logtail_partition_state_mem_used_size", `type="tombstone-obj-memory-used"`) + `)`,
 			},
 			[]string{
-				"{{ " + c.by + " }}: inmem-data-row-memory-used",
-				"{{ " + c.by + " }}: data-obj-memory-used",
-				"{{ " + c.by + " }}: inmem-tombstone-row-memory-used",
-				"{{ " + c.by + " }}: tombstone-obj-memory-used",
+				"inmem-data-row-memory-used",
+				"data-obj-memory-used",
+				"inmem-tombstone-row-memory-used",
+				"tombstone-obj-memory-used",
 			}),
 
 		c.withMultiGraph(
 			"Partition State Item Count",
-			4,
+			6,
 			[]string{
 				`sum(` + c.getMetricWithFilter("mo_logtail_partition_state_item_size", `type="inmem-data-row-count"`) + `)`,
 				`sum(` + c.getMetricWithFilter("mo_logtail_partition_state_item_size", `type="data-obj-count"`) + `)`,

@@ -110,7 +110,7 @@ func (p *PartitionState) reCalculateMetrics() {
 		tombstoneObjCnt2 := p.tombstoneObjectDTSIndex.Len()
 
 		v2.LogTailPStateTombstoneObjectCount.Set(float64(tombstoneObjCnt1 + tombstoneObjCnt2))
-		v2.LogTailPStateInMemTombstoneRowsMemoryUsed.Set(
+		v2.LogTailPStateTombstoneObjectMemoryUsed.Set(
 			float64(tombstoneObjCnt1*ObjectEntryMemSize) +
 				float64(tombstoneObjCnt2*ObjectEntryMemSize))
 	}
