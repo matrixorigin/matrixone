@@ -280,7 +280,7 @@ func (tbl *txnTableDelegate) Ranges(ctx context.Context, rangesParam engine.Rang
 
 	var blocks objectio.BlockInfoSlice
 	var uncommitted []objectio.ObjectStats
-	if rangesParam.Policy != engine.Policy_CheckCommittedOnly {
+	if rangesParam.Policy&engine.Policy_CollectUncommittedPersistedData != 0 {
 		uncommitted, _ = tbl.origin.collectUnCommittedDataObjs(rangesParam.TxnOffset)
 	}
 	err = tbl.origin.rangesOnePart(
@@ -303,7 +303,7 @@ func (tbl *txnTableDelegate) Ranges(ctx context.Context, rangesParam engine.Rang
 		func(param *shard.ReadParam) {
 			param.RangesParam.Exprs = rangesParam.BlockFilters
 			param.RangesParam.PreAllocSize = 2
-			param.RangesParam.DataCollectPolicy = engine.Policy_CollectCommittedData
+			param.RangesParam.DataCollectPolicy = engine.Policy_CollectCommittedPersistedData
 			param.RangesParam.TxnOffset = 0
 
 		},

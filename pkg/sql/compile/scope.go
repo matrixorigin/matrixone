@@ -183,7 +183,7 @@ func (s *Scope) Run(c *Compile) (err error) {
 			_, err = p.Run(s.Proc)
 		} else {
 			if s.DataSource.R == nil {
-				s.NodeInfo.Data = engine.BuildEmptyRelData()
+				s.NodeInfo.Data = readutil.BuildEmptyRelData()
 				stats := statistic.StatsInfoFromContext(c.proc.GetTopContext())
 
 				buildStart := time.Now()
@@ -201,7 +201,6 @@ func (s *Scope) Run(c *Compile) (err error) {
 			if s.DataSource.node != nil && len(s.DataSource.node.RecvMsgList) > 0 {
 				tag = s.DataSource.node.RecvMsgList[0].MsgTag
 			}
-
 			s.ScopeAnalyzer.Stop()
 			_, err = p.RunWithReader(s.DataSource.R, tag, s.Proc)
 		}
@@ -617,7 +616,13 @@ func (s *Scope) handleBlockList(c *Compile, runtimeInExprList []*plan.Expr) erro
 	}
 
 	if s.NodeInfo.CNCNT == 1 {
-		s.NodeInfo.Data, err = c.expandRanges(s.DataSource.node, rel, db, ctx, newExprList, engine.Policy_CollectAllData, nil)
+		s.NodeInfo.Data, err = c.expandRanges(
+			s.DataSource.node,
+			rel,
+			db,
+			ctx,
+			newExprList,
+			engine.Policy_CollectAllData, nil)
 		if err != nil {
 			return err
 		}
@@ -640,30 +645,51 @@ func (s *Scope) handleBlockList(c *Compile, runtimeInExprList []*plan.Expr) erro
 		rsp.IsLocalCN = true
 	}
 
-	commited, err = c.expandRanges(s.DataSource.node, rel, db, ctx, newExprList, engine.Policy_CollectCommittedData, rsp)
+	commited, err = c.expandRanges(
+		s.DataSource.node,
+		rel,
+		db,
+		ctx,
+		newExprList,
+		engine.Policy_CollectCommittedPersistedData,
+		rsp)
 	if err != nil {
 		return err
 	}
+
 	average := float64(s.DataSource.node.Stats.BlockNum / s.NodeInfo.CNCNT)
-	if commited.DataCnt() < int(average*0.8) || commited.DataCnt() > int(average*1.2) {
+	if commited.DataCnt() < int(average*0.8) ||
+		commited.DataCnt() > int(average*1.2) {
 		logutil.Warnf("workload  table %v maybe not balanced! stats blocks %v, cncnt %v cnidx %v average %v , get %v blocks",
-			s.DataSource.TableDef.Name, s.DataSource.node.Stats.BlockNum, s.NodeInfo.CNCNT, s.NodeInfo.CNIDX, average, commited.DataCnt())
+			s.DataSource.TableDef.Name,
+			s.DataSource.node.Stats.BlockNum,
+			s.NodeInfo.CNCNT,
+			s.NodeInfo.CNIDX,
+			average,
+			commited.DataCnt())
 	}
 
 	//collect uncommited data if it's local cn
 	if !s.IsRemote {
-		s.NodeInfo.Data, err = c.expandRanges(s.DataSource.node, rel, db, ctx, newExprList, engine.Policy_CollectUncommittedData, nil)
+		s.NodeInfo.Data, err = c.expandRanges(
+			s.DataSource.node,
+			rel,
+			db,
+			ctx,
+			newExprList,
+			engine.Policy_CollectUncommittedData|
+				engine.Policy_CollectCommittedInmemData,
+			nil)
 		if err != nil {
 			return err
 		}
 		s.NodeInfo.Data.AppendBlockInfoSlice(commited.GetBlockInfoSlice())
+
 	} else {
-		tombstones, err := collectTombstones(c, s.DataSource.node, rel, engine.Policy_CollectCommittedTombstones)
-		if err != nil {
-			return err
-		}
+		tombstones := s.NodeInfo.Data.GetTombstones()
 		commited.AttachTombstones(tombstones)
 		s.NodeInfo.Data = commited
+
 	}
 	return nil
 }
