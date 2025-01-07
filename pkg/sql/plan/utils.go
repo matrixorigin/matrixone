@@ -277,9 +277,6 @@ func replaceColRefs(expr *plan.Expr, tag int32, projects []*plan.Expr) *plan.Exp
 		}
 	case *plan.Expr_W:
 		replaceColRefs(exprImpl.W.WindowFunc, tag, projects)
-		for _, arg := range exprImpl.W.PartitionBy {
-			replaceColRefs(arg, tag, projects)
-		}
 		for _, order := range exprImpl.W.OrderBy {
 			replaceColRefs(order.Expr, tag, projects)
 		}
@@ -2740,4 +2737,12 @@ func doResolveTimeStamp(timeStamp string) (ts int64, err error) {
 	}
 	ts = t.UTC().UnixNano()
 	return ts, nil
+}
+
+func onlyHasHiddenPrimaryKey(tableDef *TableDef) bool {
+	if tableDef == nil {
+		return false
+	}
+	pk := tableDef.GetPkey()
+	return pk != nil && pk.GetPkeyColName() == catalog.FakePrimaryKeyColName
 }

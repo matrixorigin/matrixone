@@ -18,16 +18,14 @@ import (
 	"bytes"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sort"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -63,11 +61,7 @@ func (window *Window) Prepare(proc *process.Process) (err error) {
 		}
 	}
 
-	w := window.WinSpecList[0].Expr.(*plan.Expr_W).W
-	if len(w.PartitionBy) == 0 {
-		ctr.status = receiveAll
-	}
-
+	ctr.status = receiveAll
 	return nil
 }
 
@@ -160,11 +154,7 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 			// we can not reuse agg func
 			ctr.freeAggFun()
 
-			if len(window.WinSpecList[0].Expr.(*plan.Expr_W).W.PartitionBy) == 0 {
-				ctr.status = done
-			} else {
-				ctr.status = receive
-			}
+			ctr.status = done
 
 			if ctr.rBat != nil {
 				result.Batch = ctr.resetResultBatch(ctr.bat, ctr.vec)
@@ -463,7 +453,7 @@ func makeArgFs(window *Window) {
 
 func makeOrderBy(expr *plan.Expr) []*plan.OrderBySpec {
 	w := expr.Expr.(*plan.Expr_W).W
-	if len(w.PartitionBy) == 0 && len(w.OrderBy) == 0 {
+	if len(w.OrderBy) == 0 {
 		return nil
 	}
 	return w.OrderBy
@@ -525,16 +515,12 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 	}
 
 	ps := make([]int64, 0, 16)
-	ds := make([]bool, len(ctr.sels))
-
-	w := ap.WinSpecList[idx].Expr.(*plan.Expr_W).W
-	n := len(w.PartitionBy)
+	n := 0
 
 	i, j := 1, len(ctr.orderVecs)
 	for ; i < j; i++ {
 		desc := ctr.desc[i]
 		nullsLast := ctr.nullsLast[i]
-		ps = partition.Partition(ctr.sels, ds, ps, ovec)
 		vec := ctr.orderVecs[i].Vec[0]
 		// skip sort for const vector
 		if !vec.IsConst() {
@@ -557,18 +543,13 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 	}
 
 	if n == i {
-		ps = partition.Partition(ctr.sels, ds, ps, ovec)
 		ctr.ps = make([]int64, len(ps))
 		copy(ctr.ps, ps)
 	} else if n == 0 {
 		ctr.ps = nil
 	}
 
-	if len(ap.WinSpecList[idx].Expr.(*plan.Expr_W).W.OrderBy) > 0 {
-		ctr.os = partition.Partition(ctr.sels, ds, ps, ovec)
-	} else {
-		ctr.os = nil
-	}
+	ctr.os = nil
 
 	if err := bat.Shuffle(ctr.sels, proc.Mp()); err != nil {
 		panic(err)

@@ -51,10 +51,6 @@ func RenameColumn(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.Al
 		return err
 	}
 
-	if isColumnWithPartition(oldColName, tableDef.Partition) {
-		return moerr.NewNotSupported(ctx.GetContext(), "unsupport alter partition part column currently")
-	}
-
 	// If you want to rename the original column name to new name, you need to first check if the new name already exists.
 	if newColName != oldColName {
 		if FindColumn(tableDef.Cols, newColName) != nil {

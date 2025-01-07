@@ -724,64 +724,6 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 	return []*Expr{filterExpr}, nil
 }
 
-// ------------------- partition relatived -------------------
-
-// remapPartitionExpr Remap partition expression column references
-func remapPartitionExpr(builder *QueryBuilder, tableDef *TableDef, pkPosInValues map[int]int) *Expr {
-	if builder.qry.Nodes[0].NodeType != plan.Node_VALUE_SCAN {
-		return nil
-	}
-
-	if tableDef.Partition == nil {
-		return nil
-	} else {
-		partitionExpr := DeepCopyExpr(tableDef.Partition.PartitionExpression)
-		if remapPartExprColRef(partitionExpr, pkPosInValues, tableDef) {
-			return partitionExpr
-		}
-		return nil
-	}
-}
-
-// remapPartExprColRef Remap partition expression column references
-func remapPartExprColRef(expr *Expr, colMap map[int]int, tableDef *TableDef) bool {
-	switch ne := expr.Expr.(type) {
-	case *plan.Expr_Col:
-		cPos := ne.Col.ColPos
-		if ids, ok := colMap[int(cPos)]; ok {
-			ne.Col.RelPos = 0
-			ne.Col.ColPos = int32(ids)
-			ne.Col.Name = tableDef.Cols[cPos].Name
-		} else {
-			return false
-		}
-
-	case *plan.Expr_F:
-		for _, arg := range ne.F.GetArgs() {
-			if res := remapPartExprColRef(arg, colMap, tableDef); !res {
-				return false
-			}
-		}
-
-	case *plan.Expr_W:
-		if res := remapPartExprColRef(ne.W.WindowFunc, colMap, tableDef); !res {
-			return false
-		}
-
-		for _, arg := range ne.W.PartitionBy {
-			if res := remapPartExprColRef(arg, colMap, tableDef); !res {
-				return false
-			}
-		}
-		for _, order := range ne.W.OrderBy {
-			if res := remapPartExprColRef(order.Expr, colMap, tableDef); !res {
-				return false
-			}
-		}
-	}
-	return true
-}
-
 func getRewriteToReplaceStmt(tableDef *TableDef, stmt *tree.Insert, info *dmlSelectInfo, isPrepareStmt bool) *tree.Replace {
 	if len(info.onDuplicateIdx) == 0 {
 		return nil

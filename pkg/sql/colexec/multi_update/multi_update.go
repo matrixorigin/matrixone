@@ -70,15 +70,11 @@ func (update *MultiUpdate) Prepare(proc *process.Process) error {
 		info := update.ctr.updateCtxInfos[updateCtx.TableDef.Name]
 		info.Sources = nil
 		if update.Action != UpdateWriteS3 {
-			rel, partitionRels, err := colexec.GetRelAndPartitionRelsByObjRef(proc.Ctx, proc, update.Engine, updateCtx.ObjRef, updateCtx.PartitionTableNames)
+			rel, err := colexec.GetRelAndPartitionRelsByObjRef(proc.Ctx, proc, update.Engine, updateCtx.ObjRef)
 			if err != nil {
 				return err
 			}
-			if len(updateCtx.PartitionTableNames) > 0 {
-				info.Sources = append(info.Sources, partitionRels...)
-			} else {
-				info.Sources = append(info.Sources, rel)
-			}
+			info.Sources = append(info.Sources, rel)
 		}
 	}
 

@@ -132,14 +132,6 @@ func (b *ProjectionBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr, 
 		return nil, err
 	}
 	w.Name = funcName
-	// partition by
-	for _, group := range ws.PartitionBy {
-		expr, err := b.BindExpr(group, depth, isRoot)
-		if err != nil {
-			return nil, err
-		}
-		w.PartitionBy = append(w.PartitionBy, expr)
-	}
 	// order by
 	if ws.OrderBy != nil {
 		w.OrderBy = make([]*plan.OrderBySpec, 0, len(ws.OrderBy))

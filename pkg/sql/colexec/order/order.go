@@ -19,7 +19,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/partition"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sort"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -72,14 +71,10 @@ func (ctr *container) sortAndSend(proc *process.Process, result *vm.CallResult) 
 		}
 
 		sels := ctr.resultOrderList
-		ovec := firstVec
 		if len(ctr.sortVectors) != 1 {
 			ps := make([]int64, 0, 16)
-			ds := make([]bool, len(sels))
 			for i, j := 1, len(ctr.sortVectors); i < j; i++ {
 				vec := ctr.sortVectors[i]
-				ps = partition.Partition(sels, ds, ps, ovec)
-
 				// skip sort for const vector
 				if !vec.IsConst() {
 					desc := ctr.desc[i]
@@ -96,7 +91,6 @@ func (ctr *container) sortAndSend(proc *process.Process, result *vm.CallResult) 
 						}
 					}
 				}
-				ovec = vec
 			}
 		}
 

@@ -114,19 +114,6 @@ func describeExpr(ctx context.Context, expr *plan.Expr, options *ExplainOptions,
 			return err
 		}
 
-		if len(w.PartitionBy) > 0 {
-			buf.WriteString("; Partition By: ")
-			for i, arg := range w.PartitionBy {
-				if i > 0 {
-					buf.WriteString(", ")
-				}
-				err = describeExpr(ctx, arg, options, buf)
-				if err != nil {
-					return err
-				}
-			}
-		}
-
 		if len(w.OrderBy) > 0 {
 			buf.WriteString("; Order By: ")
 			for i, arg := range w.OrderBy {
