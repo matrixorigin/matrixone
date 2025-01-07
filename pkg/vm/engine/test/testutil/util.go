@@ -40,7 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
@@ -241,7 +241,7 @@ func NewDefaultTableReader(
 		return nil, err
 	}
 
-	return engine_util.NewReader(
+	return readutil.NewReader(
 		ctx,
 		mp,
 		e.PackerPool(),
@@ -250,7 +250,7 @@ func NewDefaultTableReader(
 		snapshotTS,
 		expr,
 		source,
-		engine_util.GetThresholdForReader(1),
+		readutil.GetThresholdForReader(1),
 		engine.FilterHint{Must: true},
 	)
 }

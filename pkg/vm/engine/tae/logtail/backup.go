@@ -184,7 +184,7 @@ func GetTombstonesByBlockId(
 				return true, nil
 			}
 			rowids := vector.MustFixedColWithTypeCheck[types.Rowid](oData.data[idx].Vecs[0])
-			start, end := blockio.FindStartEndOfBlockFromSortedRowids(rowids, bid)
+			start, end := ioutil.FindStartEndOfBlockFromSortedRowids(rowids, bid)
 			if start == end {
 				continue
 			}
@@ -227,7 +227,7 @@ func (d *BackupDeltaLocDataSource) GetTombstones(
 				for id := uint32(0); id < tombstone.BlkCnt(); id++ {
 					location := tombstone.ObjectLocation()
 					location.SetID(uint16(id))
-					bat, _, err := blockio.LoadOneBlock(ctx, d.fs, location, objectio.SchemaData)
+					bat, _, err := ioutil.LoadOneBlock(ctx, d.fs, location, objectio.SchemaData)
 					if err != nil {
 						return false, err
 					}
@@ -359,7 +359,7 @@ func trimTombstoneData(
 		// As long as there is an aBlk to be deleted, isCkpChange must be set to true.
 		commitTs := types.TS{}
 		location.SetID(uint16(0))
-		bat, sortKey, err = blockio.LoadOneBlock(ctx, fs, location, objectio.SchemaData)
+		bat, sortKey, err = ioutil.LoadOneBlock(ctx, fs, location, objectio.SchemaData)
 		if err != nil {
 			return err
 		}
