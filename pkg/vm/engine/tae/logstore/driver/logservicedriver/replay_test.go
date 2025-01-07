@@ -138,3 +138,83 @@ func TestAppendSkipCmd3(t *testing.T) {
 
 	driver.Close()
 }
+
+func TestAppendSkipCmd4(t *testing.T) {
+	service, ccfg := initTest(t)
+	defer service.Close()
+
+	cfg := NewTestConfig("", ccfg)
+	driver := NewLogServiceDriver(cfg)
+
+	entryCount := 4
+	entries := make([]*entry.Entry, entryCount)
+
+	for i := 0; i < entryCount; i++ {
+		payload := []byte(fmt.Sprintf("payload %d", i))
+		e := entry.MockEntryWithPayload(payload)
+		entries[i] = e
+	}
+
+	// truncated: 0
+	// LSN:      1, 2, 3, 5
+	// appended: 1, 2, 3, 3
+	// replay: 1-3
+
+	lsns := []uint64{1, 2, 3, 5}
+	appended := []uint64{1, 2, 3, 3}
+
+	client, _ := driver.getClient()
+	for i := 0; i < entryCount; i++ {
+		entries[i].Lsn = lsns[i]
+
+		entry := newRecordEntry()
+		entry.appended = appended[i]
+		entry.append(entries[i])
+		size := entry.prepareRecord()
+		client.TryResize(size)
+		record := client.record
+		copy(record.Payload(), entry.payload)
+		record.ResizePayload(size)
+		ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second, moerr.CauseDriverAppender1)
+		_, err := client.c.Append(ctx, record)
+		cancel()
+		assert.NoError(t, err)
+		entries[i].Entry.Free()
+	}
+
+	{
+		entryCount := 0
+		assert.NoError(t, driver.Close())
+		driver = NewLogServiceDriver(driver.config)
+		err := driver.Replay(func(e *entry.Entry) storeDriver.ReplayEntryState {
+			assert.Less(t, e.Lsn, uint64(4))
+			if e.Lsn > 0 {
+				entryCount++
+				return storeDriver.RE_Nomal
+			} else {
+				return storeDriver.RE_Truncate
+			}
+		})
+		assert.NoError(t, err)
+		assert.Equal(t, 3, entryCount)
+	}
+
+	{
+		entryCount := 0
+		assert.NoError(t, driver.Close())
+		driver = NewLogServiceDriver(driver.config)
+		err := driver.Replay(func(e *entry.Entry) storeDriver.ReplayEntryState {
+			assert.Less(t, e.Lsn, uint64(4))
+			if e.Lsn > 0 {
+				entryCount++
+				return storeDriver.RE_Nomal
+			} else {
+				return storeDriver.RE_Truncate
+			}
+		})
+		assert.NoError(t, err)
+		assert.Equal(t, 3, entryCount)
+	}
+
+	assert.NoError(t, driver.Close())
+}
