@@ -55,9 +55,7 @@ show snapshots;
 drop database sp_test;
 
 restore account sys database sp_test from snapshot spsp01;
--- @bvt:issue#16438
 show databases;
--- @bvt:issue
 use sp_test;
 show tables;
 show create table test_sp01;
@@ -76,11 +74,11 @@ show snapshots;
 
 
 
+-- @bvt:issue#16438
 -- create snapshot for database
 drop database if exists sp_test01;
 create database sp_test01;
 use sp_test01;
--- @bvt:issue#16438
 drop table if exists partition01;
 create table partition01 (
 emp_no      int             not null,
@@ -109,13 +107,9 @@ select * from partition01;
 drop table partition01;
 restore account sys database sp_test01 table partition01 from snapshot spsp02;
 select * from partition01;
-
-
+drop database sp_test01;
 drop snapshot spsp02;
 -- @bvt:issue
-
-drop database sp_test01;
-
 
 
 
@@ -161,9 +155,7 @@ drop snapshot if exists SP01;
 create snapshot SP01 for database sp_Test03;
 drop database sp_Test03;
 restore account sys database sp_Test03 from snapshot SP01;
--- @bvt:issue#16438
 show databases;
--- @bvt:issue
 use sp_Test03;
 show tables;
 drop database sp_Test03;
@@ -349,9 +341,7 @@ drop snapshot if exists spsp08;
 create snapshot spsp08 for database db07;
 drop database db07;
 restore account sys database db07 from snapshot spsp08;
--- @bvt:issue#16438
 show databases;
--- @bvt:issue
 select * from db07.fulltext01;
 drop database db07;
 restore account sys database db07 table fulltext01 from snapshot spsp08;
