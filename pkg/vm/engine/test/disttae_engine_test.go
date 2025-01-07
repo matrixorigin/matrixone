@@ -1476,3 +1476,42 @@ func TestWorkspaceQuota3(t *testing.T) {
 	require.Equal(t, rowsCount, cnt)
 	require.NoError(t, txn.Commit(ctx))
 }
+
+func TestCacheNotServing(t *testing.T) {
+	opts := config.WithLongScanAndCKPOpts(nil)
+	p := testutil.InitEnginePack(testutil.TestOptions{TaeEngineOptions: opts}, t)
+	defer p.Close()
+	txnop := p.StartCNTxn()
+	schema := catalog2.MockSchemaAll(2, 0)
+	schema.Name = "test"
+	p.CreateDBAndTable(txnop, "db", schema)
+	require.NoError(t, txnop.Commit(p.Ctx))
+
+	staleTxn := p.StartCNTxn()
+
+	txnop = p.StartCNTxn()
+	p.D.Engine.Delete(p.Ctx, "db", txnop)
+	require.NoError(t, txnop.Commit(p.Ctx))
+
+	txnop = p.StartCNTxn()
+	p.D.Engine.GetLatestCatalogCache().GC(txnop.SnapshotTS())
+	require.NoError(t, txnop.Commit(p.Ctx))
+
+	db, err := p.D.Engine.Database(p.Ctx, "db", staleTxn)
+	require.NoError(t, err)
+
+	exist, err := db.RelationExists(p.Ctx, "test", nil)
+	require.NoError(t, err)
+	require.True(t, exist)
+	rel, err := db.Relation(p.Ctx, "test", nil)
+	require.NoError(t, err)
+
+	dname, tname, _, _ := p.D.Engine.GetRelationById(p.Ctx, staleTxn, rel.GetTableID(p.Ctx))
+	require.Equal(t, "db", dname)
+	require.Equal(t, "test", tname)
+
+	_, err = rel.Ranges(p.Ctx, nil, 2, 0)
+	t.Log(err)
+
+	require.NoError(t, staleTxn.Commit(p.Ctx))
+}

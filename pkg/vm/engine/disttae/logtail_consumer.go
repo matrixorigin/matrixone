@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -31,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -578,6 +580,10 @@ func (c *PushClient) receiveOneLogtail(ctx context.Context, e *Engine) error {
 
 	// Client receives one logtail counter.
 	defer v2.LogTailClientReceiveCounter.Add(1)
+
+	if enabled, p := objectio.CNRecvErrInjected(); enabled && rand.Intn(100000) < p {
+		return moerr.NewInternalError(ctx, "FIND_TABLE random error")
+	}
 
 	resp := c.subscriber.receiveResponse(ctx)
 	if resp.err != nil {

@@ -17,7 +17,6 @@ package disttae
 import (
 	"context"
 	"fmt"
-	"math"
 	"strings"
 	"sync"
 	"time"
@@ -368,6 +367,7 @@ func (e *Engine) Database(
 
 	if ok := catalog.GetDatabase(item); !ok {
 		if !catalog.CanServe(types.TimestampToTS(op.SnapshotTS())) {
+			logutil.Info("FIND_TABLE loadDatabaseFromStorage", zap.String("name", name), zap.String("cacheTs", catalog.GetStartTS().ToString()), zap.String("txn", op.Txn().DebugString()))
 			// read batch from storage
 			if item, err = e.loadDatabaseFromStorage(ctx, accountId, name, op); err != nil {
 				return nil, err
@@ -417,6 +417,30 @@ func (e *Engine) GetNameById(ctx context.Context, op client.TxnOperator, tableId
 	return
 }
 
+func loadNameByIdFromStorage(ctx context.Context, op client.TxnOperator, accountId uint32, tableId uint64) (dbName string, tblName string, err error) {
+	sql := fmt.Sprintf(catalog.MoTablesQueryNameById, accountId, tableId)
+	tblanmes, dbnames := []string{}, []string{}
+	result, err := execReadSql(ctx, op, sql, true)
+	if err != nil {
+		return "", "", err
+	}
+	for _, b := range result.Batches {
+		for i := 0; i < b.RowCount(); i++ {
+			tblanmes = append(tblanmes, b.Vecs[0].GetStringAt(i))
+			dbnames = append(dbnames, b.Vecs[1].GetStringAt(i))
+		}
+	}
+	if len(tblanmes) != 1 {
+		logutil.Warn("FIND_TABLE GetRelationById sql failed",
+			zap.Uint64("tableId", tableId), zap.Uint32("accountId", accountId),
+			zap.Strings("tblanmes", tblanmes), zap.Strings("dbnames", dbnames), zap.String("txn", op.Txn().DebugString()))
+	} else {
+		tblName = tblanmes[0]
+		dbName = dbnames[0]
+	}
+	return
+}
+
 func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName, tableName string, rel engine.Relation, err error) {
 	if catalog.IsSystemTable(tableId) {
 		dbName = catalog.MO_CATALOG
@@ -447,31 +471,16 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 	// not found in tableOps, try cache
 	if tableName == "" {
 		cache := e.GetLatestCatalogCache()
-		cacheItem := cache.GetTableByIdAndTime(accountId, math.MaxUint64 /*db is not specified */, tableId, txn.op.SnapshotTS())
+		cacheItem := cache.GetTableByIdAndTime(accountId, 0 /*db is not specified */, tableId, txn.op.SnapshotTS())
 		if cacheItem != nil {
 			tableName = cacheItem.Name
 			dbName = cacheItem.DatabaseName
 		} else if !cache.CanServe(types.TimestampToTS(op.SnapshotTS())) {
 			// not found in cache, try storage
-			sql := fmt.Sprintf(catalog.MoTablesQueryNameById, accountId, tableId)
-			tblanmes, dbnames := []string{}, []string{}
-			result, err := execReadSql(ctx, op, sql, true)
+			logutil.Info("FIND_TABLE loadNameByIdFromStorage", zap.String("txn", op.Txn().DebugString()), zap.Uint64("tableId", tableId))
+			dbName, tableName, err = loadNameByIdFromStorage(ctx, op, accountId, tableId)
 			if err != nil {
 				return "", "", nil, err
-			}
-			for _, b := range result.Batches {
-				for i := 0; i < b.RowCount(); i++ {
-					tblanmes = append(tblanmes, b.Vecs[0].GetStringAt(i))
-					dbnames = append(dbnames, b.Vecs[1].GetStringAt(i))
-				}
-			}
-			if len(tblanmes) != 1 {
-				logutil.Error("FIND_TABLE GetRelationById sql failed",
-					zap.Uint64("tableId", tableId), zap.Uint32("accountId", accountId),
-					zap.Strings("tblanmes", tblanmes), zap.Strings("dbnames", dbnames))
-			} else {
-				tableName = tblanmes[0]
-				dbName = dbnames[0]
 			}
 		}
 	}
