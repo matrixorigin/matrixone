@@ -171,7 +171,11 @@ partition p04 values less than (400001)
 -- @bvt:issue
 
 select table_catalog,table_schema,table_name,column_name from information_schema.columns where table_schema="ac_db" and table_name='ac_t1';
+
+-- @bvt:issue#16438
 select table_catalog,table_schema,table_name,column_name from information_schema.columns where table_schema="ac_db" and table_name='test02';
+-- @bvt:issue
+
 select table_catalog,table_schema,table_name,column_name from information_schema.columns where table_schema="sys_db1";
 select count(*),table_name, column_name  from information_schema.columns group by table_name, column_name having count(*)>1;
 select * from information_schema.schemata where schema_name='ac_db';

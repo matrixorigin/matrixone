@@ -367,7 +367,9 @@ restore account acc01 from snapshot sp05 to account acc02;
 
 -- @session:id=2&user=acc02:test_account&password=111
 use test;
+-- @bvt:issue#16438
 select * from view01;
+-- @bvt:issue
 -- @session
 
 -- @session:id=1&user=acc01:test_account&password=111

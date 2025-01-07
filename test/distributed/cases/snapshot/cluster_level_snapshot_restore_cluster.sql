@@ -7,10 +7,11 @@ create account acc03 admin_name = 'test_account' identified by '111';
 drop account if exists acc04;
 create account acc04 admin_name = 'test_account' identified by '111';
 
--- @bvt:issue#16438
+
 drop database if exists db01;
 create database db01;
 use db01;
+-- @bvt:issue#16438
 drop table if exists index03;
 create table index03 (
                          emp_no      int             not null,
