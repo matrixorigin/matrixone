@@ -229,6 +229,7 @@ CREATE TABLE mysql_ddl_test_t33 (
  PARTITION p20221214 VALUES LESS THAN (738868) ENGINE = InnoDB) */;
 show create table mysql_ddl_test_t33;
 
+-- @bvt:issue#16438
 CREATE TABLE mysql_ddl_test_t34 (
   `created_at` datetime NOT NULL COMMENT 'create time')
 PARTITION BY RANGE (TO_DAYS(created_at))
@@ -241,6 +242,7 @@ PARTITION BY RANGE (TO_DAYS(created_at))
  PARTITION p20221213 VALUES LESS THAN (738867) ENGINE = InnoDB,
  PARTITION p20221214 VALUES LESS THAN (738868) ENGINE = InnoDB);
 show create table mysql_ddl_test_t34;
+-- @bvt:issue
 
 
 create table mysql_ddl_test_t35 (id int, gender enum('male', 'female'));
