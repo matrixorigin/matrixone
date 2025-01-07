@@ -87,6 +87,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -3927,7 +3928,7 @@ func (c *Compile) expandRanges(
 	blockFilterList []*plan.Expr, policy engine.DataCollectPolicy, rsp *engine.RangesShuffleParam) (engine.RelData, error) {
 
 	preAllocBlocks := 2
-	if policy&engine.Policy_CollectCommittedData != 0 {
+	if policy&engine.Policy_CollectCommittedPersistedData != 0 {
 		if !c.IsTpQuery() {
 			if len(blockFilterList) > 0 {
 				preAllocBlocks = 64
@@ -3956,7 +3957,8 @@ func (c *Compile) expandRanges(
 
 	if n.TableDef.Partition != nil {
 		begin := 0
-		if policy&engine.Policy_CollectUncommittedData != 0 {
+		if policy&engine.Policy_CollectCommittedInmemData != 0 ||
+			policy&engine.Policy_CollectUncommittedInmemData != 0 {
 			begin = 1 //skip empty block info
 		}
 		rangesParam.PreAllocBlocks = 2
@@ -4091,8 +4093,23 @@ func (c *Compile) handleDbRelContext(node *plan.Node, onRemoteCN bool) (engine.R
 	return rel, db, ctx, nil
 }
 
+func shouldScanOnCurrentCN(c *Compile, n *plan.Node, forceSingle bool) bool {
+	if len(c.cnList) == 1 ||
+		n.Stats.ForceOneCN ||
+		forceSingle {
+		return true
+	}
+
+	if !plan2.GetForceScanOnMultiCN() &&
+		n.Stats.BlockNum <= int32(plan2.BlockThresholdForOneCN) {
+		return true
+	}
+
+	return false
+}
+
 func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
-	_, _, _, err := c.handleDbRelContext(n, false)
+	rel, _, _, err := c.handleDbRelContext(n, false)
 	if err != nil {
 		return nil, err
 	}
@@ -4110,7 +4127,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 
 	var nodes engine.Nodes
 	// scan on current CN
-	if len(c.cnList) == 1 || n.Stats.ForceOneCN || forceSingle || n.Stats.BlockNum <= int32(plan2.BlockThresholdForOneCN) {
+	if shouldScanOnCurrentCN(c, n, forceSingle) {
 		mcpu := c.generateCPUNumber(c.ncpu, int(n.Stats.BlockNum))
 		if forceSingle {
 			mcpu = 1
@@ -4125,13 +4142,22 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 
 	// scan on multi CN
 	for i := range c.cnList {
-		nodes = append(nodes, engine.Node{
+		node := engine.Node{
 			Id:    c.cnList[i].Id,
 			Addr:  c.cnList[i].Addr,
 			Mcpu:  c.cnList[i].Mcpu,
 			CNCNT: int32(len(c.cnList)),
 			CNIDX: int32(i),
-		})
+		}
+		if node.Addr != c.addr {
+			uncommittedTombs, err := collectTombstones(c, n, rel, engine.Policy_CollectAllTombstones)
+			if err != nil {
+				return nil, err
+			}
+			node.Data = readutil.BuildEmptyRelData()
+			node.Data.AttachTombstones(uncommittedTombs)
+		}
+		nodes = append(nodes, node)
 	}
 	return nodes, nil
 }
