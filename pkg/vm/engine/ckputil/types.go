@@ -72,9 +72,54 @@ var TableObjectsTypes = []types.Type{
 	types.T_char.ToType(),
 	// types.T_Rowid.ToType(),
 }
-
 var TableObjectsSeqnums = []uint16{0, 1, 2, 3, 4, 5, 6}
+
+// var ObjectEntryTypes = []types.Type{
+// 	TableObjectsTypes[TableObjectsAttr_ID_Idx],
+// 	TableObjectsTypes[TableObjectsAttr_CreateTS_Idx],
+// 	TableObjectsTypes[TableObjectsAttr_DeleteTS_Idx],
+// }
+
+// var ObjectEntrySeqnums = []uint16{
+// 	TableObjectsAttr_ID_Idx,
+// 	TableObjectsAttr_CreateTS_Idx,
+// 	TableObjectsAttr_DeleteTS_Idx,
+// }
+
+const (
+	MetaAttr_Table    = "table_id"
+	MetaAttr_Start    = "start_rowid"
+	MetaAttr_End      = "end_rowid"
+	MetaAttr_Location = "location"
+)
+
+const (
+	MetaAttr_Table_Idx    = 0
+	MetaAttr_Start_Idx    = 1
+	MetaAttr_End_Idx      = 2
+	MetaAttr_Location_Idx = 3
+)
+
+var MetaAttrs = []string{
+	MetaAttr_Table,
+	MetaAttr_Start,
+	MetaAttr_End,
+	MetaAttr_Location,
+}
+
+var MetaTypes = []types.Type{
+	types.T_uint64.ToType(),
+	types.T_Rowid.ToType(),
+	types.T_Rowid.ToType(),
+	types.T_char.ToType(),
+}
+
+var MetaSeqnums = []uint16{0, 1, 2, 3}
 
 func NewObjectListBatch() *batch.Batch {
 	return batch.NewWithSchema(false, TableObjectsAttrs, TableObjectsTypes)
+}
+
+func NewMetaBatch() *batch.Batch {
+	return batch.NewWithSchema(false, MetaAttrs, MetaTypes)
 }
