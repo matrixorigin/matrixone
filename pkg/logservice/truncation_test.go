@@ -19,12 +19,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lni/dragonboat/v4"
 	"github.com/lni/goutils/leaktest"
-	"github.com/stretchr/testify/assert"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestTruncationExportSnapshot(t *testing.T) {
@@ -313,6 +314,14 @@ func TestTruncationImportSnapshot2(t *testing.T) {
 
 	}
 	runServiceTest(t, false, true, fn)
+}
+
+func TestProcessShardTruncateLogError(t *testing.T) {
+	s := store{
+		nh:      &dragonboat.NodeHost{},
+		runtime: runtime.DefaultRuntime(),
+	}
+	assert.NoError(t, s.processShardTruncateLog(context.Background(), 100))
 }
 
 func TestHAKeeperTruncation2(t *testing.T) {

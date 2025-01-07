@@ -91,6 +91,10 @@ func ToSliceNoTypeCheck[T any](vec *Vector, ret *[]T) {
 	*ret = unsafe.Slice((*T)(vec.col.Ptr), vec.col.Cap)
 }
 
+func ToSliceNoTypeCheck2[T any](vec *Vector) []T {
+	return unsafe.Slice((*T)(vec.col.Ptr), vec.col.Cap)
+}
+
 func ToSlice[T any](vec *Vector, ret *[]T) {
 	if !typeCompatible[T](vec.typ) {
 		panic(fmt.Sprintf("type mismatch: %T %v", []T{}, vec.typ.String()))
@@ -283,6 +287,13 @@ func (v *Vector) GetBytesAt(i int) []byte {
 	return bs[i].GetByteSlice(v.area)
 }
 
+func (v *Vector) GetBytesAt2(bs []types.Varlena, i int) []byte {
+	if v.IsConst() {
+		i = 0
+	}
+	return bs[i].GetByteSlice(v.area)
+}
+
 func (v *Vector) GetRawBytesAt(i int) []byte {
 	if v.typ.IsVarlen() {
 		return v.GetBytesAt(i)
@@ -338,6 +349,13 @@ func GetArrayAt[T types.RealNumbers](v *Vector, i int) []T {
 	}
 	var bs []types.Varlena
 	ToSliceNoTypeCheck(v, &bs)
+	return types.GetArray[T](&bs[i], v.area)
+}
+
+func GetArrayAt2[T types.RealNumbers](v *Vector, bs []types.Varlena, i int) []T {
+	if v.IsConst() {
+		i = 0
+	}
 	return types.GetArray[T](&bs[i], v.area)
 }
 

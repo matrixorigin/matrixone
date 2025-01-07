@@ -72,7 +72,7 @@ var (
 
 	getCurrentExistsAccountsFmt = "select account_id, account_name from mo_catalog.mo_account;"
 
-	getSubsSqlFmt = "select sub_account_id, sub_name, sub_time, pub_account_name, pub_name, pub_database, pub_tables, pub_time, pub_comment, status from mo_catalog.mo_subs %s where 1=1"
+	getSubsSqlFmt = "select sub_account_id, sub_account_name, sub_name, sub_time, pub_account_id, pub_account_name, pub_name, pub_database, pub_tables, pub_time, pub_comment, status from mo_catalog.mo_subs %s where 1=1"
 
 	checkTableIsMasterFormat = "select db_name, table_name from mo_catalog.mo_foreign_keys where refer_db_name = '%s' and refer_table_name = '%s'"
 
@@ -240,6 +240,9 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 		}
 	case tree.SNAPSHOTLEVELACCOUNT:
 		snapshotForAccount = string(stmt.Object.ObjName)
+		if len(snapshotForAccount) == 0 {
+			snapshotForAccount = currentAccount
+		}
 		// check account exists or not and get accountId
 		getAccountIdFunc := func(accountName string) (accountId uint64, rtnErr error) {
 			var erArray []ExecResult
@@ -436,6 +439,9 @@ func doCheckCreateSnapshotPriv(ctx context.Context, ses *Session, stmt *tree.Cre
 		}
 	case tree.SNAPSHOTLEVELACCOUNT:
 		snapshotForAccount := string(stmt.Object.ObjName)
+		if len(snapshotForAccount) == 0 {
+			snapshotForAccount = currentAccount
+		}
 		if currentAccount != sysAccountName && currentAccount != snapshotForAccount {
 			return moerr.NewInternalError(ctx, "only sys tenant can create tenant level snapshot for other tenant")
 		}
@@ -632,7 +638,7 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 	}
 
 	if len(viewMap) > 0 {
-		if err = restoreViews(ctx, ses, bh, snapshotName, viewMap, toAccountId); err != nil {
+		if err = restoreViews(ctx, ses, bh, snapshotName, viewMap, restoreAccount, toAccountId); err != nil {
 			return
 		}
 	}
@@ -669,6 +675,9 @@ func checkRestorePriv(ctx context.Context, ses *Session, snapshot *snapshotRecor
 				return moerr.NewInternalError(ctx, "non-sys account's snapshot can't restore to sys account")
 			}
 		}
+		if snapshot.level == tree.RESTORELEVELDATABASE.String() || snapshot.level == tree.RESTORELEVELTABLE.String() {
+			return moerr.NewInternalError(ctx, "can't restore account from db or table level snapshot")
+		}
 	case tree.RESTORELEVELDATABASE:
 		dbname := string(stmt.DatabaseName)
 		if len(dbname) > 0 && needSkipDb(dbname) {
@@ -678,6 +687,15 @@ func checkRestorePriv(ctx context.Context, ses *Session, snapshot *snapshotRecor
 		if snapshot.level == tree.RESTORELEVELCLUSTER.String() {
 			return moerr.NewInternalError(ctx, "can't restore db from cluster level snapshot")
 		}
+		if snapshot.level == tree.RESTORELEVELTABLE.String() {
+			return moerr.NewInternalError(ctx, "can't restore db from table level snapshot")
+		}
+		if string(stmt.AccountName) != ses.GetTenantInfo().GetTenant() {
+			return moerr.NewInternalError(ctx, "can't restore database from other account's snapshot")
+		}
+		if snapshot.level == tree.RESTORELEVELDATABASE.String() && snapshot.databaseName != string(stmt.DatabaseName) {
+			return moerr.NewInternalErrorf(ctx, "databaseName(%v) does not match snapshot.databaseName(%v)", string(stmt.DatabaseName), snapshot.databaseName)
+		}
 	case tree.RESTORELEVELTABLE:
 		dbname := string(stmt.DatabaseName)
 		if len(dbname) > 0 && needSkipDb(dbname) {
@@ -685,6 +703,14 @@ func checkRestorePriv(ctx context.Context, ses *Session, snapshot *snapshotRecor
 		}
 		if snapshot.level == tree.RESTORELEVELCLUSTER.String() {
 			return moerr.NewInternalError(ctx, "can't restore db from cluster level snapshot")
+		}
+		if string(stmt.AccountName) != ses.GetTenantInfo().GetTenant() {
+			return moerr.NewInternalError(ctx, "can't restore table from other account's snapshot")
+		}
+		if snapshot.level == tree.RESTORELEVELTABLE.String() {
+			if snapshot.databaseName != string(stmt.DatabaseName) || snapshot.tableName != string(stmt.TableName) {
+				return moerr.NewInternalErrorf(ctx, "tableName(%v) does not match snapshot.tableName(%v)", string(stmt.TableName), snapshot.tableName)
+			}
 		}
 	default:
 		return moerr.NewInternalErrorf(ctx, "unknown restore level: %v", restoreLevel)
@@ -1197,6 +1223,7 @@ func restoreViews(
 	bh BackgroundExec,
 	snapshotName string,
 	viewMap map[string]*tableInfo,
+	fromAccountId uint32,
 	toAccountId uint32) error {
 	getLogger(ses.GetService()).Info("start to restore views")
 	var (
@@ -1206,7 +1233,7 @@ func restoreViews(
 		sortedViews []string
 		oldSnapshot *plan.Snapshot
 	)
-	snapshot, err = getSnapshotPlanWithSharedBh(ctx, bh, snapshotName)
+	snapshot, err = getSnapshotPlanWithSharedBh(ctx, bh, fromAccountId, snapshotName)
 	if err != nil {
 		return err
 	}
@@ -1473,7 +1500,14 @@ func doResolveSnapshotWithSnapshotName(ctx context.Context, ses FeSession, snaps
 	var accountId uint32
 	// cluster level record has no accountName, so accountId is 0
 	if len(record.accountName) != 0 {
-		accountId = uint32(record.objId)
+		if record.level == tree.RESTORELEVELACCOUNT.String() {
+			accountId = uint32(record.objId)
+		} else {
+			accountId, err = defines.GetAccountId(ctx)
+			if err != nil {
+				return
+			}
+		}
 	}
 
 	return &pbplan.Snapshot{
@@ -2244,7 +2278,7 @@ func getPastExistsAccounts(
 	return
 }
 
-func getSnapshotPlanWithSharedBh(ctx context.Context, bh BackgroundExec, snapshotName string) (snapshot *pbplan.Snapshot, err error) {
+func getSnapshotPlanWithSharedBh(ctx context.Context, bh BackgroundExec, fromAccountId uint32, snapshotName string) (snapshot *pbplan.Snapshot, err error) {
 	var record *snapshotRecord
 	if record, err = getSnapshotByName(ctx, bh, snapshotName); err != nil {
 		return
@@ -2255,19 +2289,11 @@ func getSnapshotPlanWithSharedBh(ctx context.Context, bh BackgroundExec, snapsho
 		return
 	}
 
-	var accountId uint32
-	// cluster level record has no accountName, so accountId is 0
-	if record.accountName != "" {
-		if accountId, err = getAccountId(ctx, bh, record.accountName); err != nil {
-			return
-		}
-	}
-
 	return &pbplan.Snapshot{
 		TS: &timestamp.Timestamp{PhysicalTime: record.ts},
 		Tenant: &pbplan.SnapshotTenant{
 			TenantName: record.accountName,
-			TenantID:   accountId,
+			TenantID:   fromAccountId,
 		},
 	}, nil
 }
@@ -2280,7 +2306,7 @@ func dropDb(ctx context.Context, bh BackgroundExec, dbName string) (err error) {
 		return err
 	}
 	for _, pubInfo := range pubInfos {
-		if err = dropPublication(ctx, bh, true, pubInfo.PubName); err != nil {
+		if err = dropPublication(ctx, bh, true, pubInfo.PubAccountName, pubInfo.PubName); err != nil {
 			return
 		}
 	}

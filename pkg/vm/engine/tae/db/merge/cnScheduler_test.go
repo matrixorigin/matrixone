@@ -79,7 +79,7 @@ func TestScheduler_CNActiveObjectsString(t *testing.T) {
 	meta := new(api.MergeTaskEntry)
 	require.NoError(t, meta.Unmarshal(tasks[0].Metadata.Context))
 	require.Equal(t, meta.DbName, tbl.GetDB().GetName())
-	require.Error(t, cnScheduler.sendMergeTask(context.Background(), taskEntry))
+	require.NoError(t, cnScheduler.sendMergeTask(context.Background(), taskEntry))
 }
 
 func TestExecutorCNMerge(t *testing.T) {

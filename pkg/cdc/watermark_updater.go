@@ -41,8 +41,6 @@ const (
 
 	updateWatermarkFormat = "update mo_catalog.mo_cdc_watermark set watermark='%s' where account_id = %d and task_id = '%s' and db_name = '%s' and table_name = '%s'"
 
-	deleteWatermarkFormat = "delete from mo_catalog.mo_cdc_watermark where account_id = %d and task_id = '%s'"
-
 	deleteWatermarkByTableFormat = "delete from mo_catalog.mo_cdc_watermark where account_id = %d and task_id = '%s' and db_name = '%s' and table_name = '%s'"
 
 	updateErrMsgFormat = "update mo_catalog.mo_cdc_watermark set err_msg='%s' where account_id = %d and task_id = '%s' and db_name = '%s' and table_name = '%s'"
@@ -138,12 +136,6 @@ func (u *WatermarkUpdater) DeleteFromMem(dbName, tblName string) {
 
 func (u *WatermarkUpdater) DeleteFromDb(dbName, tblName string) error {
 	sql := fmt.Sprintf(deleteWatermarkByTableFormat, u.accountId, u.taskId, dbName, tblName)
-	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
-	return u.ie.Exec(ctx, sql, ie.SessionOverrideOptions{})
-}
-
-func (u *WatermarkUpdater) DeleteAllFromDb() error {
-	sql := fmt.Sprintf(deleteWatermarkFormat, u.accountId, u.taskId)
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	return u.ie.Exec(ctx, sql, ie.SessionOverrideOptions{})
 }

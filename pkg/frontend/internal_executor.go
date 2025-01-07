@@ -176,7 +176,7 @@ func (ie *internalExecutor) Query(ctx context.Context, sql string, opts ie.Sessi
 	sess.EnterFPrint(FPInternalExecutorQuery)
 	defer sess.ExitFPrint(FPInternalExecutorQuery)
 	ie.proto.stashResult = true
-	sess.Info(ctx, "internalExecutor new session")
+	sess.Debug(ctx, "internalExecutor new session")
 	tempExecCtx := ExecCtx{
 		reqCtx: ctx,
 		ses:    sess,
@@ -252,6 +252,10 @@ type internalProtocol struct {
 	result      *internalExecResult
 	database    string
 	username    string
+}
+
+func (ip *internalProtocol) WriteResultSetRow2(mrs *MysqlResultSet, colSlices *ColumnSlices, count uint64) error {
+	return nil
 }
 
 func (ip *internalProtocol) FreeLoadLocal() {

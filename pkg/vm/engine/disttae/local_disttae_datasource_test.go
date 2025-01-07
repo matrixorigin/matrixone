@@ -34,7 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 )
 
 func TestRelationDataV2_MarshalAndUnMarshal(t *testing.T) {
@@ -42,7 +42,7 @@ func TestRelationDataV2_MarshalAndUnMarshal(t *testing.T) {
 	objID := location.ObjectId()
 	metaLoc := objectio.ObjectLocation(location)
 
-	relData := engine_util.NewBlockListRelationData(0)
+	relData := readutil.NewBlockListRelationData(0)
 	blkNum := 10
 	for i := 0; i < blkNum; i++ {
 		blkID := types.NewBlockidWithObjectID(&objID, uint16(blkNum))
@@ -55,7 +55,7 @@ func TestRelationDataV2_MarshalAndUnMarshal(t *testing.T) {
 		relData.AppendBlockInfo(&blkInfo)
 	}
 
-	tombstone := engine_util.NewEmptyTombstoneData()
+	tombstone := readutil.NewEmptyTombstoneData()
 	for i := 0; i < 3; i++ {
 		rowid := types.RandomRowid()
 		tombstone.AppendInMemory(rowid)
@@ -72,7 +72,7 @@ func TestRelationDataV2_MarshalAndUnMarshal(t *testing.T) {
 	buf, err := relData.MarshalBinary()
 	require.NoError(t, err)
 
-	newRelData, err := engine_util.UnmarshalRelationData(buf)
+	newRelData, err := readutil.UnmarshalRelationData(buf)
 	require.NoError(t, err)
 	require.Equal(t, relData.String(), newRelData.String())
 }
@@ -117,7 +117,7 @@ func TestLocalDatasource_ApplyWorkspaceFlushedS3Deletes(t *testing.T) {
 		writer, err := colexec.NewS3TombstoneWriter()
 		require.NoError(t, err)
 
-		bat := engine_util.NewCNTombstoneBatch(
+		bat := readutil.NewCNTombstoneBatch(
 			&int32Type,
 			objectio.HiddenColumnSelection_None,
 		)
@@ -200,7 +200,7 @@ func TestBigS3WorkspaceIterMissingData(t *testing.T) {
 			},
 			tableId: 23,
 		},
-		memPKFilter: &engine_util.MemPKFilter{},
+		memPKFilter: &readutil.MemPKFilter{},
 	}
 
 	outBatch := batch.NewWithSize(1)

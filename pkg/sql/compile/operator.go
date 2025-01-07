@@ -141,7 +141,6 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.IsShuffle = t.IsShuffle
 		op.RuntimeFilterSpecs = t.RuntimeFilterSpecs
 		op.JoinMapTag = t.JoinMapTag
-		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
 		return op
 	case vm.Group:
@@ -170,7 +169,6 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.JoinMapTag = t.JoinMapTag
 		op.HashOnPK = t.HashOnPK
 		op.IsShuffle = t.IsShuffle
-		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
 		return op
 	case vm.Left:
@@ -184,7 +182,6 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.JoinMapTag = t.JoinMapTag
 		op.HashOnPK = t.HashOnPK
 		op.IsShuffle = t.IsShuffle
-		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
 		return op
 	case vm.Right:
@@ -259,7 +256,6 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.Cond = t.Cond
 		op.JoinMapTag = t.JoinMapTag
 		op.JoinType = t.JoinType
-		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
 		return op
 	case vm.IndexJoin:
@@ -267,7 +263,6 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op := indexjoin.NewArgument()
 		op.Result = t.Result
 		op.RuntimeFilterSpecs = t.RuntimeFilterSpecs
-		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
 		return op
 	case vm.Offset:
@@ -288,7 +283,6 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.Result = t.Result
 		op.IsShuffle = t.IsShuffle
 		op.JoinMapTag = t.JoinMapTag
-		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
 		return op
 	case vm.ProductL2:
@@ -297,7 +291,6 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.Result = t.Result
 		op.OnExpr = t.OnExpr
 		op.JoinMapTag = t.JoinMapTag
-		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
 		return op
 	case vm.Projection:
@@ -322,7 +315,6 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.JoinMapTag = t.JoinMapTag
 		op.HashOnPK = t.HashOnPK
 		op.IsShuffle = t.IsShuffle
-		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
 		return op
 	case vm.Single:
@@ -335,7 +327,6 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.RuntimeFilterSpecs = t.RuntimeFilterSpecs
 		op.JoinMapTag = t.JoinMapTag
 		op.HashOnPK = t.HashOnPK
-		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
 		return op
 	case vm.Top:
@@ -772,7 +763,7 @@ func constructLockOp(n *plan.Node, eng engine.Engine) (*lockop.LockOp, error) {
 		if target.IsPartitionTable {
 			arg.AddLockTargetWithPartition(target.GetPartitionTableIds(), target.GetPrimaryColIdxInBat(), typ, target.GetRefreshTsIdxInBat(), target.GetLockRows(), target.GetLockTableAtTheEnd(), target.GetFilterColIdxInBat())
 		} else {
-			arg.AddLockTarget(target.GetTableId(), target.GetPrimaryColIdxInBat(), typ, target.GetRefreshTsIdxInBat(), target.GetLockRows(), target.GetLockTableAtTheEnd())
+			arg.AddLockTarget(target.GetTableId(), target.GetObjRef(), target.GetPrimaryColIdxInBat(), typ, target.GetRefreshTsIdxInBat(), target.GetLockRows(), target.GetLockTableAtTheEnd())
 		}
 
 	}

@@ -122,7 +122,7 @@ INSERT INTO factories (factory_name, address) VALUES ('Factory WWWW', '2031 Birc
 
 select count(*) from test_snapshot_restore.factories;
 
-create snapshot snapshot_01 for account sys;
+create snapshot snapshot_01 for account;
 
 
 drop database test_snapshot_restore;
@@ -616,7 +616,7 @@ drop snapshot snapshot_01;
 show snapshots;
 
 drop snapshot if exists snapshot_01;
-create snapshot snapshot_01 for account sys;
+create snapshot snapshot_01 for account;
 restore account sys database mo_catalog from snapshot snapshot_01;
 drop snapshot if exists snapshot_01;
 

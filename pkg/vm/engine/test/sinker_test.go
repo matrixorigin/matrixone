@@ -25,12 +25,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio/mergeutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	testutil3 "github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"github.com/stretchr/testify/require"
 )
 
@@ -41,13 +41,13 @@ func Test_Sinker(t *testing.T) {
 	fs, err := fileservice.Get[fileservice.FileService](proc.GetFileService(), defines.SharedFileServiceName)
 	require.NoError(t, err)
 
-	sinker1 := engine_util.NewTombstoneSinker(
+	sinker1 := ioutil.NewTombstoneSinker(
 		objectio.HiddenColumnSelection_None,
 		pkType,
 		mp,
 		fs,
-		// engine_util.WithDedupAll(),
-		engine_util.WithMemorySizeThreshold(mpool.KB*400),
+		// readutil.WithDedupAll(),
+		ioutil.WithMemorySizeThreshold(mpool.KB*400),
 	)
 
 	blkCnt := 5
@@ -61,7 +61,7 @@ func Test_Sinker(t *testing.T) {
 		blkCnt, blkRows, true, mp,
 	)
 	require.NoError(t, err)
-	bat1 := engine_util.NewCNTombstoneBatch(&pkType, objectio.HiddenColumnSelection_None)
+	bat1 := readutil.NewCNTombstoneBatch(&pkType, objectio.HiddenColumnSelection_None)
 	bat1.SetVector(0, rowIDVec)
 	bat1.SetVector(1, pkVec.GetDownstreamVector())
 	bat1.SetRowCount(rowIDVec.Length())
@@ -97,17 +97,17 @@ func Test_Sinker(t *testing.T) {
 
 	hiddenSels := objectio.HiddenColumnSelection_PhysicalAddr
 
-	r := engine_util.SimpleMultiObjectsReader(
+	r := readutil.SimpleMultiObjectsReader(
 		ctx, fs, objs, timestamp.Timestamp{},
-		engine_util.WithColumns(
+		readutil.WithColumns(
 			objectio.GetTombstoneSeqnums(hiddenSels),
 			objectio.GetTombstoneTypes(pkType, hiddenSels),
 		),
 	)
-	blockio.Start("")
-	defer blockio.Stop("")
-	bat2 := engine_util.NewCNTombstoneBatch(&pkType, hiddenSels)
-	buffer := engine_util.NewCNTombstoneBatch(&pkType, hiddenSels)
+	ioutil.Start("")
+	defer ioutil.Stop("")
+	bat2 := readutil.NewCNTombstoneBatch(&pkType, hiddenSels)
+	buffer := readutil.NewCNTombstoneBatch(&pkType, hiddenSels)
 	for {
 		done, err := r.Read(ctx, buffer.Attrs, nil, mp, buffer)
 		require.NoError(t, err)
@@ -136,13 +136,13 @@ func Test_Sinker(t *testing.T) {
 	}
 	buffer.Clean(mp)
 	require.Equal(t, bat1.RowCount(), bat2.RowCount())
-	err = mergesort.SortColumnsByIndex(
+	err = mergeutil.SortColumnsByIndex(
 		bat1.Vecs,
 		objectio.TombstonePrimaryKeyIdx,
 		mp,
 	)
 	require.NoError(t, err)
-	err = mergesort.SortColumnsByIndex(
+	err = mergeutil.SortColumnsByIndex(
 		bat2.Vecs,
 		objectio.TombstonePrimaryKeyIdx,
 		mp,

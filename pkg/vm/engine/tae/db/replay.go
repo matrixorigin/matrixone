@@ -29,6 +29,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
@@ -54,6 +55,7 @@ type Replayer struct {
 	txnCmdChan    chan *txnbase.TxnCmd
 	readCount     int
 	applyCount    int
+	maxLSN        uint64
 
 	lsn            uint64
 	enableLSNCheck bool
@@ -121,24 +123,28 @@ func (replayer *Replayer) Replay() {
 	replayer.wg.Wait()
 	replayer.postReplayWal()
 	logutil.Info(
-		"Replay-Wal",
+		"Wal-Replay-Trace-End",
 		zap.Duration("apply-cost", replayer.applyDuration),
 		zap.Int("read-count", replayer.readCount),
 		zap.Int("apply-count", replayer.applyCount),
+		zap.Uint64("max-lsn", replayer.maxLSN),
 	)
 }
 
-func (replayer *Replayer) OnReplayEntry(group uint32, lsn uint64, payload []byte, typ uint16, info any) {
+func (replayer *Replayer) OnReplayEntry(group uint32, lsn uint64, payload []byte, typ uint16, info any) driver.ReplayEntryState {
 	replayer.once.Do(replayer.PreReplayWal)
 	if group != wal.GroupPrepare && group != wal.GroupC {
-		return
+		return driver.RE_Internal
 	}
 	if !replayer.checkLSN(lsn) {
-		return
+		return driver.RE_Truncate
+	}
+	if lsn > replayer.maxLSN {
+		replayer.maxLSN = lsn
 	}
 	head := objectio.DecodeIOEntryHeader(payload)
 	if head.Version < txnbase.IOET_WALTxnEntry_V4 {
-		return
+		return driver.RE_Nomal
 	}
 	codec := objectio.GetIOEntryCodec(*head)
 	entry, err := codec.Decode(payload[4:])
@@ -148,6 +154,7 @@ func (replayer *Replayer) OnReplayEntry(group uint32, lsn uint64, payload []byte
 		panic(err)
 	}
 	replayer.txnCmdChan <- txnCmd
+	return driver.RE_Nomal
 }
 func (replayer *Replayer) applyTxnCmds() {
 	defer replayer.wg.Done()

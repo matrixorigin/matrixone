@@ -17,8 +17,11 @@ package objectio
 import (
 	"bytes"
 	"fmt"
+	"strconv"
+	"strings"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
@@ -71,6 +74,11 @@ func NewRandomLocation(id uint16, rows uint32) Location {
 	objName := BuildObjectNameWithObjectID(objID)
 	extent := NewRandomExtent()
 	return BuildLocation(objName, extent, rows, id)
+}
+
+func (l Location) Clone() Location {
+	m := make([]byte, 0, len(l))
+	return append(m, l...)
 }
 
 func (l Location) Name() ObjectName {
@@ -177,4 +185,47 @@ func (s *LocationSlice) String() string {
 		buf.WriteByte('\n')
 	}
 	return buf.String()
+}
+
+// StringToLocation Generate a metaloc from an info string
+func StringToLocation(info string) (Location, error) {
+	location := strings.Split(info, "_")
+	if len(location) < 8 {
+		return nil, moerr.NewInternalErrorNoCtxf("bad location format: %v", info)
+	}
+	num, err := strconv.ParseUint(location[1], 10, 32)
+	if err != nil {
+		return nil, err
+	}
+	alg, err := strconv.ParseUint(location[2], 10, 32)
+	if err != nil {
+		return nil, err
+	}
+	offset, err := strconv.ParseUint(location[3], 10, 32)
+	if err != nil {
+		return nil, err
+	}
+	size, err := strconv.ParseUint(location[4], 10, 32)
+	if err != nil {
+		return nil, err
+	}
+	osize, err := strconv.ParseUint(location[5], 10, 32)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := strconv.ParseUint(location[6], 10, 32)
+	if err != nil {
+		return nil, err
+	}
+	id, err := strconv.ParseUint(location[7], 10, 32)
+	if err != nil {
+		return nil, err
+	}
+	extent := NewExtent(uint8(alg), uint32(offset), uint32(size), uint32(osize))
+	uid, err := types.ParseUuid(location[0])
+	if err != nil {
+		return nil, err
+	}
+	name := BuildObjectName(&uid, uint16(num))
+	return BuildLocation(name, extent, uint32(rows), uint16(id)), nil
 }

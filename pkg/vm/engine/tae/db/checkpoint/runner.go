@@ -15,19 +15,16 @@
 package checkpoint
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"
-
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"go.uber.org/zap"
 
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
@@ -35,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
@@ -59,18 +55,39 @@ func (p *countBasedPolicy) Check(current int) bool {
 	return current >= p.minCount
 }
 
-type globalCheckpointContext struct {
-	force       bool
-	end         types.TS
-	interval    time.Duration
-	truncateLSN uint64
-	ckpLSN      uint64
+type gckpContext struct {
+	force            bool
+	end              types.TS
+	histroyRetention time.Duration
+	truncateLSN      uint64
+	ckpLSN           uint64
 }
 
-type tableAndSize struct {
-	tbl   *catalog.TableEntry
-	asize int
-	dsize int
+func (g gckpContext) String() string {
+	return fmt.Sprintf(
+		"GCTX[%v][%s][%d,%d][%s]",
+		g.force,
+		g.end.ToString(),
+		g.truncateLSN,
+		g.ckpLSN,
+		g.histroyRetention.String(),
+	)
+}
+
+func (g *gckpContext) Merge(other *gckpContext) {
+	if other == nil {
+		return
+	}
+	if other.force {
+		g.force = true
+	}
+	if other.end.LE(&g.end) {
+		return
+	}
+	g.end = other.end
+	g.histroyRetention = other.histroyRetention
+	g.truncateLSN = other.truncateLSN
+	g.ckpLSN = other.ckpLSN
 }
 
 // Q: What does runner do?
@@ -153,32 +170,6 @@ type tableAndSize struct {
 //	3. Apply the incremental checkpoint start from the version right after the global checkpoint to the
 //	   latest version.
 type runner struct {
-	options struct {
-		// checkpoint scanner interval duration
-		collectInterval time.Duration
-
-		// maximum dirty block flush interval duration
-		maxFlushInterval time.Duration
-
-		// minimum incremental checkpoint interval duration
-		minIncrementalInterval time.Duration
-
-		// minimum global checkpoint interval duration
-		globalMinCount            int
-		forceUpdateGlobalInterval bool
-		globalVersionInterval     time.Duration
-
-		// minimum count of uncheckpointed transactions allowed before the next checkpoint
-		minCount int
-
-		checkpointQueueSize int
-
-		checkpointBlockRows int
-		checkpointSize      int
-
-		reservedWALEntryCount uint64
-	}
-
 	ctx context.Context
 
 	// logtail source
@@ -187,24 +178,15 @@ type runner struct {
 	rt        *dbutils.Runtime
 	observers *observers
 	wal       wal.Driver
-	disabled  atomic.Bool
 
 	// memory storage of the checkpoint entries
 	store *runnerStore
 
-	// checkpoint policy
-	incrementalPolicy *timeBasedPolicy
-	globalPolicy      *countBasedPolicy
+	executor atomic.Pointer[checkpointExecutor]
 
-	incrementalCheckpointQueue sm.Queue
-	globalCheckpointQueue      sm.Queue
-	postCheckpointQueue        sm.Queue
-	gcCheckpointQueue          sm.Queue
-
-	checkpointMetaFiles struct {
-		sync.RWMutex
-		files map[string]struct{}
-	}
+	postCheckpointQueue sm.Queue
+	gcCheckpointQueue   sm.Queue
+	replayQueue         sm.Queue
 
 	onceStart sync.Once
 	onceStop  sync.Once
@@ -216,6 +198,7 @@ func NewRunner(
 	catalog *catalog.Catalog,
 	source logtail.Collector,
 	wal wal.Driver,
+	cfg *CheckpointCfg,
 	opts ...Option,
 ) *runner {
 	r := &runner{
@@ -230,331 +213,221 @@ func NewRunner(
 		opt(r)
 	}
 	r.fillDefaults()
+	r.StartExecutor(cfg)
+	cfg = r.GetCfg()
 
-	r.store = newRunnerStore(r.rt.SID(), r.options.globalVersionInterval)
+	// Note: we can't change the global history interval in runtime
+	r.store = newRunnerStore(r.rt.SID(), cfg.GlobalHistoryDuration, time.Minute*2)
 
-	r.incrementalPolicy = &timeBasedPolicy{interval: r.options.minIncrementalInterval}
-	r.globalPolicy = &countBasedPolicy{minCount: r.options.globalMinCount}
-	r.incrementalCheckpointQueue = sm.NewSafeQueue(r.options.checkpointQueueSize, 100, r.onIncrementalCheckpointEntries)
-	r.globalCheckpointQueue = sm.NewSafeQueue(r.options.checkpointQueueSize, 100, r.onGlobalCheckpointEntries)
 	r.gcCheckpointQueue = sm.NewSafeQueue(100, 100, r.onGCCheckpointEntries)
 	r.postCheckpointQueue = sm.NewSafeQueue(1000, 1, r.onPostCheckpointEntries)
-	r.checkpointMetaFiles.files = make(map[string]struct{})
+	r.replayQueue = sm.NewSafeQueue(100, 10, r.onReplayCheckpoint)
 
 	return r
 }
 
+func (r *runner) GetCfg() *CheckpointCfg {
+	executor := r.executor.Load()
+	if executor == nil {
+		return nil
+	}
+	return executor.GetCfg()
+}
+
+func (r *runner) StopExecutor(err error) (cfg *CheckpointCfg) {
+	for {
+		running := r.executor.Load()
+		if running == nil {
+			return
+		}
+		running.StopWithCause(err)
+		if stopped := r.executor.CompareAndSwap(running, nil); stopped {
+			cfg = running.GetCfg()
+			break
+		}
+	}
+	return
+}
+
+func (r *runner) StartExecutor(cfg *CheckpointCfg) {
+	for {
+		executor := r.executor.Load()
+		if executor != nil {
+			executor.StopWithCause(ErrExecutorRestarted)
+		}
+		newExecutor := newCheckpointExecutor(r, cfg)
+		if r.executor.CompareAndSwap(executor, newExecutor) {
+			break
+		}
+	}
+}
+
 func (r *runner) String() string {
-	var buf bytes.Buffer
-	_, _ = fmt.Fprintf(&buf, "CheckpointRunner<")
-	_, _ = fmt.Fprintf(&buf, "collectInterval=%v, ", r.options.collectInterval)
-	_, _ = fmt.Fprintf(&buf, "maxFlushInterval=%v, ", r.options.maxFlushInterval)
-	_, _ = fmt.Fprintf(&buf, "minIncrementalInterval=%v, ", r.options.minIncrementalInterval)
-	_, _ = fmt.Fprintf(&buf, "globalMinCount=%v, ", r.options.globalMinCount)
-	_, _ = fmt.Fprintf(&buf, "globalVersionInterval=%v, ", r.options.globalVersionInterval)
-	_, _ = fmt.Fprintf(&buf, "minCount=%v, ", r.options.minCount)
-	_, _ = fmt.Fprintf(&buf, "checkpointQueueSize=%v, ", r.options.checkpointQueueSize)
-	_, _ = fmt.Fprintf(&buf, "checkpointBlockRows=%v, ", r.options.checkpointBlockRows)
-	_, _ = fmt.Fprintf(&buf, "checkpointSize=%v, ", r.options.checkpointSize)
-	_, _ = fmt.Fprintf(&buf, ">")
-	return buf.String()
+	cfg := r.GetCfg()
+	if cfg == nil {
+		return "<RO-CKPRunner>"
+	}
+	return fmt.Sprintf("<RW-CKPRunner[%s]>", cfg.String())
+}
+
+func (r *runner) ModeString() string {
+	cfg := r.GetCfg()
+	if cfg == nil {
+		return "<RO>"
+	}
+	return "<RW>"
+}
+
+func (r *runner) ReplayCKPEntry(entry *CheckpointEntry) (err error) {
+	_, err = r.replayQueue.Enqueue(entry)
+	return
 }
 
 func (r *runner) AddCheckpointMetaFile(name string) {
-	r.checkpointMetaFiles.Lock()
-	defer r.checkpointMetaFiles.Unlock()
-	r.checkpointMetaFiles.files[name] = struct{}{}
+	r.store.AddMetaFile(name)
 }
 
 func (r *runner) RemoveCheckpointMetaFile(name string) {
-	r.checkpointMetaFiles.Lock()
-	defer r.checkpointMetaFiles.Unlock()
-	delete(r.checkpointMetaFiles.files, name)
+	r.store.RemoveMetaFile(name)
 }
 
 func (r *runner) GetCheckpointMetaFiles() map[string]struct{} {
-	r.checkpointMetaFiles.RLock()
-	defer r.checkpointMetaFiles.RUnlock()
-	files := make(map[string]struct{})
-	for k, v := range r.checkpointMetaFiles.files {
-		files[k] = v
-	}
-	return files
+	return r.store.GetMetaFiles()
 }
 
-func (r *runner) onGlobalCheckpointEntries(items ...any) {
-	maxEnd := types.TS{}
-	for _, item := range items {
-		ctx := item.(*globalCheckpointContext)
-		doCheckpoint := false
-		maxCkp := r.MaxGlobalCheckpoint()
-		if maxCkp != nil {
-			maxEnd = maxCkp.end
-		}
-		if ctx.end.LE(&maxEnd) {
+func (r *runner) TryTriggerExecuteGCKP(ctx *gckpContext) (err error) {
+	executor := r.executor.Load()
+	if executor == nil {
+		err = ErrExecutorClosed
+		return
+	}
+	return executor.TriggerExecutingGCKP(ctx)
+}
+
+func (r *runner) TryTriggerExecuteICKP() (err error) {
+	executor := r.executor.Load()
+	if executor == nil {
+		err = ErrExecutorClosed
+		return
+	}
+
+	return executor.TriggerExecutingICKP()
+}
+
+// NOTE:
+// when `force` is true, it must be called after force flush till the given ts
+// force: if true, not to check the validness of the checkpoint
+func (r *runner) TryScheduleCheckpoint(
+	ts types.TS, force bool,
+) (ret Intent, err error) {
+	executor := r.executor.Load()
+	if executor == nil {
+		err = ErrExecutorClosed
+		return
+	}
+	return executor.TryScheduleCheckpoint(ts, force)
+}
+
+func (r *runner) Start() {
+	r.onceStart.Do(func() {
+		r.postCheckpointQueue.Start()
+		r.gcCheckpointQueue.Start()
+		r.replayQueue.Start()
+		logutil.Info(
+			"CKPRunner-Started",
+			zap.String("mode", r.ModeString()),
+		)
+	})
+}
+
+func (r *runner) Stop() {
+	r.onceStop.Do(func() {
+		mode := r.ModeString()
+		r.replayQueue.Stop()
+		r.StopExecutor(ErrStopRunner)
+		r.gcCheckpointQueue.Stop()
+		r.postCheckpointQueue.Stop()
+		logutil.Info(
+			"CKPRunner-Stopped",
+			zap.String("mode", mode),
+		)
+	})
+}
+
+func (r *runner) GetDirtyCollector() logtail.Collector {
+	return r.source
+}
+
+func (r *runner) CollectCheckpointsInRange(
+	ctx context.Context, start, end types.TS,
+) (locations string, checkpointed types.TS, err error) {
+	return r.store.CollectCheckpointsInRange(ctx, start, end)
+}
+
+//=============================================================================
+// internal implmementations
+//=============================================================================
+
+func (r *runner) fillDefaults() {}
+
+func (r *runner) getRunningCKPJob(gckp bool) (job *checkpointJob, err error) {
+	executor := r.executor.Load()
+	if executor == nil {
+		err = ErrExecutorClosed
+		return
+	}
+	job = executor.RunningCKPJob(gckp)
+	return
+}
+
+func (r *runner) replayOneEntry(entry *CheckpointEntry) {
+	defer entry.Done()
+	if !entry.IsFinished() {
+		logutil.Warn(
+			"Replay-CKP-NoFinished",
+			zap.String("entry", entry.String()),
+		)
+		return
+	}
+
+	if entry.IsGlobal() {
+		if ok := r.store.AddGCKPFinishedEntry(entry); !ok {
 			logutil.Warn(
-				"OnGlobalCheckpointEntries-Skip",
-				zap.String("checkpoint", ctx.end.ToString()))
-			continue
-		}
-		if ctx.force {
-			doCheckpoint = true
-		} else {
-			entriesCount := r.GetPenddingIncrementalCount()
-			if r.globalPolicy.Check(entriesCount) {
-				doCheckpoint = true
-			}
-		}
-		if doCheckpoint {
-			if _, err := r.doGlobalCheckpoint(
-				ctx.end, ctx.ckpLSN, ctx.truncateLSN, ctx.interval,
-			); err != nil {
-				continue
-			}
-		}
-	}
-}
-
-func (r *runner) onGCCheckpointEntries(items ...any) {
-	r.store.TryGC()
-}
-
-func (r *runner) onIncrementalCheckpointEntries(items ...any) {
-	now := time.Now()
-	entry := r.MaxIncrementalCheckpoint()
-	// In some unit tests, ckp is managed manually, and ckp deletion (CleanPendingCheckpoint)
-	// can be called when the queue still has unexecuted task.
-	// Add `entry == nil` here as protective codes
-	if entry == nil || entry.GetState() != ST_Running {
-		return
-	}
-	var (
-		err           error
-		errPhase      string
-		lsnToTruncate uint64
-		lsn           uint64
-		fatal         bool
-		fields        []zap.Field
-	)
-	now = time.Now()
-
-	logutil.Info(
-		"Checkpoint-Start",
-		zap.String("entry", entry.String()),
-	)
-
-	defer func() {
-		if err != nil {
-			var logger func(msg string, fields ...zap.Field)
-			if fatal {
-				logger = logutil.Fatal
-			} else {
-				logger = logutil.Error
-			}
-			logger(
-				"Checkpoint-Error",
+				"Replay-GCKP-AddFailed",
 				zap.String("entry", entry.String()),
-				zap.Error(err),
-				zap.String("phase", errPhase),
-				zap.Duration("cost", time.Since(now)),
-			)
-		} else {
-			fields = append(fields, zap.Duration("cost", time.Since(now)))
-			fields = append(fields, zap.Uint64("truncate", lsnToTruncate))
-			fields = append(fields, zap.Uint64("lsn", lsn))
-			fields = append(fields, zap.Uint64("reserve", r.options.reservedWALEntryCount))
-			fields = append(fields, zap.String("entry", entry.String()))
-			logutil.Info(
-				"Checkpoint-End",
-				fields...,
 			)
 		}
-	}()
-
-	var files []string
-	var file string
-	if fields, files, err = r.doIncrementalCheckpoint(entry); err != nil {
-		errPhase = "do-ckp"
-		return
-	}
-
-	lsn = r.source.GetMaxLSN(entry.start, entry.end)
-	if lsn > r.options.reservedWALEntryCount {
-		lsnToTruncate = lsn - r.options.reservedWALEntryCount
-	}
-	entry.SetLSN(lsn, lsnToTruncate)
-	entry.SetState(ST_Finished)
-
-	if file, err = r.saveCheckpoint(
-		entry.start, entry.end, lsn, lsnToTruncate,
-	); err != nil {
-		errPhase = "save-ckp"
-		return
-	}
-	files = append(files, file)
-
-	var logEntry wal.LogEntry
-	if logEntry, err = r.wal.RangeCheckpoint(1, lsnToTruncate, files...); err != nil {
-		errPhase = "wal-ckp"
-		fatal = true
-		return
-	}
-	if err = logEntry.WaitDone(); err != nil {
-		errPhase = "wait-wal-ckp-done"
-		fatal = true
-		return
-	}
-
-	r.postCheckpointQueue.Enqueue(entry)
-	r.globalCheckpointQueue.Enqueue(&globalCheckpointContext{
-		end:         entry.end,
-		interval:    r.options.globalVersionInterval,
-		ckpLSN:      lsn,
-		truncateLSN: lsnToTruncate,
-	})
-}
-
-func (r *runner) saveCheckpoint(start, end types.TS, ckpLSN, truncateLSN uint64) (name string, err error) {
-	bat := r.collectCheckpointMetadata(start, end, ckpLSN, truncateLSN)
-	defer bat.Close()
-	name = blockio.EncodeCheckpointMetadataFileName(CheckpointDir, PrefixMetadata, start, end)
-	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterCheckpoint, name, r.rt.Fs.Service)
-	if err != nil {
-		return
-	}
-	if _, err = writer.Write(containers.ToCNBatch(bat)); err != nil {
-		return
-	}
-
-	// TODO: checkpoint entry should maintain the location
-	_, err = writer.WriteEnd(r.ctx)
-	if err != nil {
-		return
-	}
-	fileName := blockio.EncodeCheckpointMetadataFileNameWithoutDir(PrefixMetadata, start, end)
-	r.AddCheckpointMetaFile(fileName)
-	return
-}
-
-func (r *runner) doIncrementalCheckpoint(entry *CheckpointEntry) (fields []zap.Field, files []string, err error) {
-	factory := logtail.IncrementalCheckpointDataFactory(r.rt.SID(), entry.start, entry.end, true)
-	data, err := factory(r.catalog)
-	if err != nil {
-		return
-	}
-	fields = data.ExportStats("")
-	defer data.Close()
-	var cnLocation, tnLocation objectio.Location
-	cnLocation, tnLocation, files, err = data.WriteTo(r.rt.Fs.Service, r.options.checkpointBlockRows, r.options.checkpointSize)
-	if err != nil {
-		return
-	}
-	files = append(files, cnLocation.Name().String())
-	entry.SetLocation(cnLocation, tnLocation)
-
-	perfcounter.Update(r.ctx, func(counter *perfcounter.CounterSet) {
-		counter.TAE.CheckPoint.DoIncrementalCheckpoint.Add(1)
-	})
-	return
-}
-
-func (r *runner) doCheckpointForBackup(entry *CheckpointEntry) (location string, err error) {
-	factory := logtail.BackupCheckpointDataFactory(r.rt.SID(), entry.start, entry.end)
-	data, err := factory(r.catalog)
-	if err != nil {
-		return
-	}
-	defer data.Close()
-	cnLocation, tnLocation, _, err := data.WriteTo(r.rt.Fs.Service, r.options.checkpointBlockRows, r.options.checkpointSize)
-	if err != nil {
-		return
-	}
-	entry.SetLocation(cnLocation, tnLocation)
-	location = fmt.Sprintf("%s:%d:%s:%s:%s", cnLocation.String(), entry.GetVersion(), entry.end.ToString(), tnLocation.String(), entry.start.ToString())
-	perfcounter.Update(r.ctx, func(counter *perfcounter.CounterSet) {
-		counter.TAE.CheckPoint.DoIncrementalCheckpoint.Add(1)
-	})
-	return
-}
-
-func (r *runner) doGlobalCheckpoint(
-	end types.TS, ckpLSN, truncateLSN uint64, interval time.Duration,
-) (entry *CheckpointEntry, err error) {
-	var (
-		errPhase string
-		fields   []zap.Field
-	)
-	now := time.Now()
-
-	entry = NewCheckpointEntry(r.rt.SID(), types.TS{}, end.Next(), ET_Global)
-	entry.ckpLSN = ckpLSN
-	entry.truncateLSN = truncateLSN
-
-	logutil.Info(
-		"GCKP-Start",
-		zap.String("entry", entry.String()),
-		zap.String("ts", end.ToString()),
-	)
-
-	defer func() {
-		if err != nil {
-			logutil.Error(
-				"GCKP-Error",
+	} else if entry.IsIncremental() {
+		if ok := r.store.AddICKPFinishedEntry(entry); !ok {
+			// ickp entry is not the youngest neighbor of
+			// the max ickp entry
+			logutil.Warn(
+				"Replay-ICKP-AddFailed",
 				zap.String("entry", entry.String()),
-				zap.String("phase", errPhase),
-				zap.Error(err),
-				zap.Duration("cost", time.Since(now)),
-			)
-		} else {
-			fields = append(fields, zap.Duration("cost", time.Since(now)))
-			fields = append(fields, zap.String("entry", entry.String()))
-			logutil.Info(
-				"GCKP-End",
-				fields...,
 			)
 		}
-	}()
+	} else if entry.IsBackup() {
+		if ok := r.store.AddBackupCKPEntry(entry); !ok {
+			logutil.Warn(
+				"Replay-Backup-AddFailed",
+				zap.String("entry", entry.String()),
+			)
+		}
+	} else if entry.IsCompact() {
+		if ok := r.store.UpdateCompacted(entry); !ok {
+			logutil.Warn(
+				"Replay-Compact-AddFailed",
+				zap.String("entry", entry.String()),
+			)
+		}
+	}
+}
 
-	factory := logtail.GlobalCheckpointDataFactory(r.rt.SID(), entry.end, interval)
-	data, err := factory(r.catalog)
-	if err != nil {
-		errPhase = "collect"
-		return
+func (r *runner) onReplayCheckpoint(entries ...any) {
+	for _, e := range entries {
+		entry := e.(*CheckpointEntry)
+		r.replayOneEntry(entry)
 	}
-	fields = data.ExportStats("")
-	defer data.Close()
-
-	cnLocation, tnLocation, files, err := data.WriteTo(
-		r.rt.Fs.Service, r.options.checkpointBlockRows, r.options.checkpointSize,
-	)
-	if err != nil {
-		errPhase = "flush"
-		return
-	}
-
-	entry.SetLocation(cnLocation, tnLocation)
-	files = append(files, cnLocation.Name().String())
-	r.store.TryAddNewGlobalCheckpointEntry(entry)
-	entry.SetState(ST_Finished)
-	var name string
-	if name, err = r.saveCheckpoint(entry.start, entry.end, 0, 0); err != nil {
-		errPhase = "save"
-		return
-	}
-	files = append(files, name)
-
-	fileEntry, err := store.BuildFilesEntry(files)
-	if err != nil {
-		return
-	}
-	_, err = r.wal.AppendEntry(store.GroupFiles, fileEntry)
-	if err != nil {
-		return
-	}
-	perfcounter.Update(r.ctx, func(counter *perfcounter.CounterSet) {
-		counter.TAE.CheckPoint.DoGlobalCheckPoint.Add(1)
-	})
-	return
 }
 
 func (r *runner) onPostCheckpointEntries(entries ...any) {
@@ -571,121 +444,33 @@ func (r *runner) onPostCheckpointEntries(entries ...any) {
 	}
 }
 
-func (r *runner) tryScheduleIncrementalCheckpoint(start, end types.TS) {
-	// ts := types.BuildTS(time.Now().UTC().UnixNano(), 0)
-	_, count := r.source.ScanInRange(start, end)
-	if count < r.options.minCount {
-		return
-	}
-	entry := NewCheckpointEntry(r.rt.SID(), start, end, ET_Incremental)
-	r.store.TryAddNewIncrementalCheckpointEntry(entry)
+func (r *runner) onGCCheckpointEntries(items ...any) {
+	r.store.TryGC()
 }
 
-func (r *runner) TryScheduleCheckpoint(endts types.TS) {
-	if r.disabled.Load() {
+func (r *runner) saveCheckpoint(
+	start, end types.TS,
+) (name string, err error) {
+	if injectErrMsg, injected := objectio.CheckpointSaveInjected(); injected {
+		return "", moerr.NewInternalErrorNoCtx(injectErrMsg)
+	}
+	bat := r.collectCheckpointMetadata(start, end)
+	defer bat.Close()
+	name = ioutil.EncodeCKPMetadataFullName(start, end)
+	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterCheckpoint, name, r.rt.Fs.Service)
+	if err != nil {
 		return
 	}
-	entry := r.MaxIncrementalCheckpoint()
-	global := r.MaxGlobalCheckpoint()
-
-	// no prev checkpoint found. try schedule the first
-	// checkpoint
-	if entry == nil {
-		if global == nil {
-			r.tryScheduleIncrementalCheckpoint(types.TS{}, endts)
-			return
-		} else {
-			maxTS := global.end.Prev()
-			if r.incrementalPolicy.Check(maxTS) {
-				r.tryScheduleIncrementalCheckpoint(maxTS.Next(), endts)
-			}
-			return
-		}
-	}
-
-	if entry.IsPendding() {
-		check := func() (done bool) {
-			if !r.source.IsCommitted(entry.GetStart(), entry.GetEnd()) {
-				return false
-			}
-			tree := r.source.ScanInRangePruned(entry.GetStart(), entry.GetEnd())
-			tree.GetTree().Compact()
-			if !tree.IsEmpty() && entry.TooOld() {
-				logutil.Infof("waiting for dirty tree %s", tree.String())
-				entry.DeferRetirement()
-			}
-			return tree.IsEmpty()
-		}
-
-		if !check() {
-			logutil.Debugf("%s is waiting", entry.String())
-			return
-		}
-		entry.SetState(ST_Running)
-		v2.TaskCkpEntryPendingDurationHistogram.Observe(entry.Age().Seconds())
-		r.incrementalCheckpointQueue.Enqueue(struct{}{})
+	if _, err = writer.Write(containers.ToCNBatch(bat)); err != nil {
 		return
 	}
 
-	if entry.IsRunning() {
-		r.incrementalCheckpointQueue.Enqueue(struct{}{})
+	// TODO: checkpoint entry should maintain the location
+	_, err = writer.WriteEnd(r.ctx)
+	if err != nil {
 		return
 	}
-
-	if r.incrementalPolicy.Check(entry.end) {
-		r.tryScheduleIncrementalCheckpoint(entry.end.Next(), endts)
-	}
-}
-
-func (r *runner) fillDefaults() {
-	if r.options.collectInterval <= 0 {
-		// TODO: define default value
-		r.options.collectInterval = time.Second * 5
-	}
-	if r.options.checkpointQueueSize <= 1000 {
-		r.options.checkpointQueueSize = 1000
-	}
-	if r.options.minIncrementalInterval <= 0 {
-		r.options.minIncrementalInterval = time.Minute
-	}
-	if r.options.globalMinCount <= 0 {
-		r.options.globalMinCount = 10
-	}
-	if r.options.minCount <= 0 {
-		r.options.minCount = 10000
-	}
-	if r.options.checkpointBlockRows <= 0 {
-		r.options.checkpointBlockRows = logtail.DefaultCheckpointBlockRows
-	}
-	if r.options.checkpointSize <= 0 {
-		r.options.checkpointSize = logtail.DefaultCheckpointSize
-	}
-}
-
-func (r *runner) Start() {
-	r.onceStart.Do(func() {
-		r.postCheckpointQueue.Start()
-		r.incrementalCheckpointQueue.Start()
-		r.globalCheckpointQueue.Start()
-		r.gcCheckpointQueue.Start()
-	})
-}
-
-func (r *runner) Stop() {
-	r.onceStop.Do(func() {
-		r.incrementalCheckpointQueue.Stop()
-		r.globalCheckpointQueue.Stop()
-		r.gcCheckpointQueue.Stop()
-		r.postCheckpointQueue.Stop()
-	})
-}
-
-func (r *runner) GetDirtyCollector() logtail.Collector {
-	return r.source
-}
-
-func (r *runner) CollectCheckpointsInRange(
-	ctx context.Context, start, end types.TS,
-) (locations string, checkpointed types.TS, err error) {
-	return r.store.CollectCheckpointsInRange(ctx, start, end)
+	fileName := ioutil.EncodeCKPMetadataName(start, end)
+	r.store.AddMetaFile(fileName)
+	return
 }

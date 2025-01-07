@@ -30,7 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/tidwall/btree"
 )
 
@@ -60,6 +60,9 @@ const (
 
 	MaxSqlLength        = "MaxSqlLength"
 	DefaultMaxSqlLength = 4 * 1024 * 1024
+
+	StartTs = "StartTS"
+	EndTs   = "EndTS"
 )
 
 var (
@@ -103,7 +106,6 @@ type IWatermarkUpdater interface {
 	UpdateMem(dbName, tblName string, watermark types.TS)
 	DeleteFromMem(dbName, tblName string)
 	DeleteFromDb(dbName, tblName string) error
-	DeleteAllFromDb() error
 	SaveErrMsg(dbName, tblName string, errMsg string) error
 }
 
@@ -197,6 +199,18 @@ func (info DbTableInfo) String() string {
 	)
 }
 
+func (info DbTableInfo) Clone() *DbTableInfo {
+	return &DbTableInfo{
+		SourceDbId:      info.SourceDbId,
+		SourceDbName:    info.SourceDbName,
+		SourceTblId:     info.SourceTblId,
+		SourceTblName:   info.SourceTblName,
+		SourceCreateSql: info.SourceCreateSql,
+		SinkDbName:      info.SinkDbName,
+		SinkTblName:     info.SinkTblName,
+	}
+}
+
 // AtomicBatch holds batches from [Tail_wip,...,Tail_done] or [Tail_done].
 // These batches have atomicity
 type AtomicBatch struct {
@@ -273,7 +287,7 @@ func (bat *AtomicBatch) Append(
 		//ts columns
 		tsVec := vector.MustFixedColWithTypeCheck[types.TS](batch.Vecs[tsColIdx])
 		//composited pk columns
-		compositedPkBytes := logtailreplay.EncodePrimaryKeyVector(batch.Vecs[compositedPkColIdx], packer)
+		compositedPkBytes := readutil.EncodePrimaryKeyVector(batch.Vecs[compositedPkColIdx], packer)
 
 		for i, pk := range compositedPkBytes {
 			// if ts is constant, then tsVec[0] is the ts for all rows

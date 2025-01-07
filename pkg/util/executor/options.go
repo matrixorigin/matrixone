@@ -169,6 +169,32 @@ func (opts StatementOption) HasAccountID() bool {
 	return opts.accountId > 0
 }
 
+func (opts StatementOption) WithRoleID(roleID uint32) StatementOption {
+	opts.roleId = roleID
+	return opts
+}
+
+func (opts StatementOption) RoleID() uint32 {
+	return opts.roleId
+}
+
+func (opts StatementOption) HasRoleID() bool {
+	return opts.roleId > 0
+}
+
+func (opts StatementOption) WithUserID(userID uint32) StatementOption {
+	opts.userId = userID
+	return opts
+}
+
+func (opts StatementOption) UserID() uint32 {
+	return opts.userId
+}
+
+func (opts StatementOption) HasUserID() bool {
+	return opts.userId > 0
+}
+
 func (opts StatementOption) WithDisableLog() StatementOption {
 	opts.disableLog = true
 	return opts
@@ -213,6 +239,15 @@ func (opts Options) EnableTrace() bool {
 func (opts Options) WithLowerCaseTableNames(lower *int64) Options {
 	opts.lower = lower
 	return opts
+}
+
+func (opts Options) WithSQL(sql string) Options {
+	opts.sql = sql
+	return opts
+}
+
+func (opts Options) SQL() string {
+	return opts.sql
 }
 
 func (opts Options) LowerCaseTableNames() int64 {

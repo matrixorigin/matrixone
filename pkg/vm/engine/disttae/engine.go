@@ -39,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
@@ -52,7 +53,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/route"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -163,8 +164,16 @@ func (e *Engine) fillDefaults() {
 	if e.config.writeWorkspaceThreshold <= 0 {
 		e.config.writeWorkspaceThreshold = WriteWorkspaceThreshold
 	}
+	if e.config.extraWorkspaceThreshold <= 0 {
+		e.config.extraWorkspaceThreshold = ExtraWorkspaceThreshold
+	}
 	if e.config.cnTransferTxnLifespanThreshold <= 0 {
 		e.config.cnTransferTxnLifespanThreshold = CNTransferTxnLifespanThreshold
+	}
+	if e.config.quota.Load() <= 0 {
+		mem := objectio.TotalMem() / 100 * 5
+		e.config.quota.Store(mem)
+		v2.TxnExtraWorkspaceQuotaGauge.Set(float64(mem))
 	}
 
 	logutil.Info(
@@ -172,6 +181,7 @@ func (e *Engine) fillDefaults() {
 		zap.Int("InsertEntryMaxCount", e.config.insertEntryMaxCount),
 		zap.Uint64("CommitWorkspaceThreshold", e.config.commitWorkspaceThreshold),
 		zap.Uint64("WriteWorkspaceThreshold", e.config.writeWorkspaceThreshold),
+		zap.Uint64("ExtraWorkspaceThresholdQuota", e.config.quota.Load()),
 		zap.Duration("CNTransferTxnLifespanThreshold", e.config.cnTransferTxnLifespanThreshold),
 	)
 }
@@ -188,6 +198,27 @@ func (e *Engine) SetWorkspaceThreshold(commitThreshold, writeThreshold uint64) (
 	if writeThreshold != 0 {
 		e.config.writeWorkspaceThreshold = writeThreshold * mpool.MB
 	}
+	return
+}
+
+func (e *Engine) AcquireQuota(v uint64) (uint64, bool) {
+	for {
+		oldRemaining := e.config.quota.Load()
+		if oldRemaining < v {
+			return 0, false
+		}
+		remaining := oldRemaining - v
+		if e.config.quota.CompareAndSwap(oldRemaining, remaining) {
+			v2.TxnExtraWorkspaceQuotaGauge.Set(float64(remaining))
+			return remaining, true
+		}
+	}
+}
+
+func (e *Engine) ReleaseQuota(quota uint64) (remaining uint64) {
+	e.config.quota.Add(quota)
+	remaining = e.config.quota.Load()
+	v2.TxnExtraWorkspaceQuotaGauge.Set(float64(remaining))
 	return
 }
 
@@ -231,13 +262,11 @@ func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator)
 	}
 
 	key := genDatabaseKey(accountId, name)
-	txn.databaseMap.Store(key, &txnDatabase{
+	txn.databaseOps.addCreateDatabase(key, txn.statementID, &txnDatabase{
 		op:           op,
 		databaseId:   databaseId,
 		databaseName: name,
 	})
-
-	txn.deletedDatabaseMap.Delete(key)
 	return nil
 }
 
@@ -320,12 +349,12 @@ func (e *Engine) Database(
 
 	// check the database is deleted or not
 	key := genDatabaseKey(accountId, name)
-	if _, exist := txn.deletedDatabaseMap.Load(key); exist {
+	if txn.databaseOps.existAndDeleted(key) {
 		return nil, moerr.NewParseErrorf(ctx, "database %q does not exist", name)
 	}
 
-	if v, ok := txn.databaseMap.Load(key); ok {
-		return v.(*txnDatabase), nil
+	if v := txn.databaseOps.existAndActive(key); v != nil {
+		return v, nil
 	}
 
 	item := &cache.DatabaseItem{
@@ -338,6 +367,7 @@ func (e *Engine) Database(
 
 	if ok := catalog.GetDatabase(item); !ok {
 		if !catalog.CanServe(types.TimestampToTS(op.SnapshotTS())) {
+			logutil.Info("FIND_TABLE loadDatabaseFromStorage", zap.String("name", name), zap.String("cacheTs", catalog.GetStartTS().ToString()), zap.String("txn", op.Txn().DebugString()))
 			// read batch from storage
 			if item, err = e.loadDatabaseFromStorage(ctx, accountId, name, op); err != nil {
 				return nil, err
@@ -387,6 +417,30 @@ func (e *Engine) GetNameById(ctx context.Context, op client.TxnOperator, tableId
 	return
 }
 
+func loadNameByIdFromStorage(ctx context.Context, op client.TxnOperator, accountId uint32, tableId uint64) (dbName string, tblName string, err error) {
+	sql := fmt.Sprintf(catalog.MoTablesQueryNameById, accountId, tableId)
+	tblanmes, dbnames := []string{}, []string{}
+	result, err := execReadSql(ctx, op, sql, true)
+	if err != nil {
+		return "", "", err
+	}
+	for _, b := range result.Batches {
+		for i := 0; i < b.RowCount(); i++ {
+			tblanmes = append(tblanmes, b.Vecs[0].GetStringAt(i))
+			dbnames = append(dbnames, b.Vecs[1].GetStringAt(i))
+		}
+	}
+	if len(tblanmes) != 1 {
+		logutil.Warn("FIND_TABLE GetRelationById sql failed",
+			zap.Uint64("tableId", tableId), zap.Uint32("accountId", accountId),
+			zap.Strings("tblanmes", tblanmes), zap.Strings("dbnames", dbnames), zap.String("txn", op.Txn().DebugString()))
+	} else {
+		tblName = tblanmes[0]
+		dbName = dbnames[0]
+	}
+	return
+}
+
 func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName, tableName string, rel engine.Relation, err error) {
 	if catalog.IsSystemTable(tableId) {
 		dbName = catalog.MO_CATALOG
@@ -423,25 +477,10 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 			dbName = cacheItem.DatabaseName
 		} else if !cache.CanServe(types.TimestampToTS(op.SnapshotTS())) {
 			// not found in cache, try storage
-			sql := fmt.Sprintf(catalog.MoTablesQueryNameById, accountId, tableId)
-			tblanmes, dbnames := []string{}, []string{}
-			result, err := execReadSql(ctx, op, sql, true)
+			logutil.Info("FIND_TABLE loadNameByIdFromStorage", zap.String("txn", op.Txn().DebugString()), zap.Uint64("tableId", tableId))
+			dbName, tableName, err = loadNameByIdFromStorage(ctx, op, accountId, tableId)
 			if err != nil {
 				return "", "", nil, err
-			}
-			for _, b := range result.Batches {
-				for i := 0; i < b.RowCount(); i++ {
-					tblanmes = append(tblanmes, b.Vecs[0].GetStringAt(i))
-					dbnames = append(dbnames, b.Vecs[1].GetStringAt(i))
-				}
-			}
-			if len(tblanmes) != 1 {
-				logutil.Error("FIND_TABLE GetRelationById sql failed",
-					zap.Uint64("tableId", tableId), zap.Uint32("accountId", accountId),
-					zap.Strings("tblanmes", tblanmes), zap.Strings("dbnames", dbnames))
-			} else {
-				tableName = tblanmes[0]
-				dbName = dbnames[0]
 			}
 		}
 	}
@@ -551,8 +590,7 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 
 	// adjust the state of txn cache
 	key := genDatabaseKey(accountId, name)
-	txn.databaseMap.Delete(key)
-	txn.deletedDatabaseMap.Store(key, databaseId)
+	txn.databaseOps.addDeleteDatabase(key, txn.statementID, databaseId)
 	return nil
 }
 
@@ -673,7 +711,7 @@ func (e *Engine) BuildBlockReaders(
 	if blkCnt < num {
 		newNum = blkCnt
 		for i := 0; i < num-blkCnt; i++ {
-			rds = append(rds, new(engine_util.EmptyReader))
+			rds = append(rds, new(readutil.EmptyReader))
 		}
 	}
 	if blkCnt == 0 {
@@ -692,12 +730,12 @@ func (e *Engine) BuildBlockReaders(
 		} else {
 			shard = relData.DataSlice(i*divide+mod, (i+1)*divide+mod)
 		}
-		ds := engine_util.NewRemoteDataSource(
+		ds := readutil.NewRemoteDataSource(
 			ctx,
 			fs,
 			ts,
 			shard)
-		rd, err := engine_util.NewReader(
+		rd, err := readutil.NewReader(
 			ctx,
 			proc.Mp(),
 			e.packerPool,
@@ -706,7 +744,7 @@ func (e *Engine) BuildBlockReaders(
 			ts,
 			expr,
 			ds,
-			engine_util.GetThresholdForReader(newNum),
+			readutil.GetThresholdForReader(newNum),
 			engine.FilterHint{},
 		)
 		if err != nil {

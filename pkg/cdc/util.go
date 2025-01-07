@@ -68,8 +68,7 @@ func extractRowFromEveryVector(
 			rowIndex = 0
 		}
 
-		err := extractRowFromVector(ctx, vec, i, row, rowIndex)
-		if err != nil {
+		if err := extractRowFromVector(ctx, vec, i, row, rowIndex); err != nil {
 			return err
 		}
 		rowIndex = rowIndexBackup

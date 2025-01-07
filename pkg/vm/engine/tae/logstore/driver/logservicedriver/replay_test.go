@@ -15,7 +15,15 @@
 package logservicedriver
 
 import (
+	"context"
+	"fmt"
 	"testing"
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	storeDriver "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
+	"github.com/stretchr/testify/assert"
 )
 
 func Test_AppendSkipCmd(t *testing.T) {
@@ -29,4 +37,104 @@ func Test_AppendSkipCmd(t *testing.T) {
 
 	r := newReplayer(nil, ReplayReadSize, driver)
 	r.AppendSkipCmd(nil)
+}
+
+func TestAppendSkipCmd2(t *testing.T) {
+	service, ccfg := initTest(t)
+	defer service.Close()
+
+	cfg := NewTestConfig("", ccfg)
+	driver := NewLogServiceDriver(cfg)
+
+	entryCount := 10
+	entries := make([]*entry.Entry, entryCount)
+
+	for i := 0; i < entryCount; i++ {
+		payload := []byte(fmt.Sprintf("payload %d", i))
+		e := entry.MockEntryWithPayload(payload)
+		entries[i] = e
+	}
+
+	// truncated: 7
+	// LSN:      8, 1, 2, 3, 6, 9, 7, 10, 13, 12
+	// appended: 0, 1, 2, 5, 6, 6, 9, 10, 10, 10
+	// replay: 6-10
+
+	lsns := []uint64{8, 1, 2, 3, 6, 9, 7, 10, 13, 12}
+	appended := []uint64{0, 1, 2, 5, 6, 6, 9, 10, 10, 10}
+
+	client, _ := driver.getClient()
+	for i := 0; i < entryCount; i++ {
+		entries[i].Lsn = lsns[i]
+
+		entry := newRecordEntry()
+		entry.appended = appended[i]
+		entry.append(entries[i])
+		size := entry.prepareRecord()
+		client.TryResize(size)
+		record := client.record
+		copy(record.Payload(), entry.payload)
+		record.ResizePayload(size)
+		ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second, moerr.CauseDriverAppender1)
+		_, err := client.c.Append(ctx, record)
+		cancel()
+		assert.NoError(t, err)
+		entries[i].DoneWithErr(nil)
+	}
+
+	for _, e := range entries {
+		e.WaitDone()
+	}
+
+	{
+		entryCount := 0
+		assert.NoError(t, driver.Close())
+		driver = NewLogServiceDriver(driver.config)
+		err := driver.Replay(func(e *entry.Entry) storeDriver.ReplayEntryState {
+			assert.Less(t, e.Lsn, uint64(11))
+			if e.Lsn > 7 {
+				entryCount++
+				return storeDriver.RE_Nomal
+			} else {
+				return storeDriver.RE_Truncate
+			}
+		})
+		assert.NoError(t, err)
+		assert.Equal(t, 3, entryCount)
+	}
+
+	for _, e := range entries {
+		e.Entry.Free()
+	}
+
+	driver.Close()
+}
+
+func TestAppendSkipCmd3(t *testing.T) {
+	service, ccfg := initTest(t)
+	defer service.Close()
+
+	cfg := NewTestConfig("", ccfg)
+	driver := NewLogServiceDriver(cfg)
+	// truncated: 7
+	// empty log service
+
+	{
+		entryCount := 0
+		assert.NoError(t, driver.Close())
+		driver = NewLogServiceDriver(driver.config)
+		err := driver.Replay(func(e *entry.Entry) storeDriver.ReplayEntryState {
+			assert.Less(t, e.Lsn, uint64(11))
+			if e.Lsn > 7 {
+				entryCount++
+				return storeDriver.RE_Nomal
+			} else {
+				return storeDriver.RE_Truncate
+			}
+		})
+		assert.NoError(t, err)
+		assert.Equal(t, 0, entryCount)
+	}
+
+	driver.Close()
 }

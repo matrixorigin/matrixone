@@ -66,7 +66,6 @@ type LoopJoin struct {
 	MarkPos    int
 
 	vm.OperatorBase
-	colexec.Projection
 }
 
 func (loopJoin *LoopJoin) GetOperatorBase() *vm.OperatorBase {
@@ -107,13 +106,6 @@ func (loopJoin *LoopJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 	ctr.cleanHashMap()
 	ctr.state = Build
 	ctr.inbat = nil
-
-	if loopJoin.ProjectList != nil {
-		if loopJoin.OpAnalyzer != nil {
-			loopJoin.OpAnalyzer.Alloc(loopJoin.ProjectAllocSize)
-		}
-		loopJoin.ResetProjection(proc)
-	}
 }
 
 func (loopJoin *LoopJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
@@ -122,18 +114,10 @@ func (loopJoin *LoopJoin) Free(proc *process.Process, pipelineFailed bool, err e
 	ctr.cleanBatch(proc.Mp())
 	ctr.cleanExprExecutor()
 
-	if loopJoin.ProjectList != nil {
-		loopJoin.FreeProjection(proc)
-	}
 }
 
 func (loopJoin *LoopJoin) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
-	batch := input
-	var err error
-	if loopJoin.ProjectList != nil {
-		batch, err = loopJoin.EvalProjection(input, proc)
-	}
-	return batch, err
+	return input, nil
 }
 
 func (ctr *container) cleanBatch(mp *mpool.MPool) {

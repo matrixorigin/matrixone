@@ -134,6 +134,7 @@ const (
 const (
 	CommitWorkspaceThreshold       uint64 = 1 * mpool.MB
 	WriteWorkspaceThreshold        uint64 = 5 * mpool.MB
+	ExtraWorkspaceThreshold        uint64 = 500 * mpool.MB
 	InsertEntryThreshold                  = 5000
 	GCBatchOfFileCount             int    = 1000
 	GCPoolSize                     int    = 5
@@ -165,6 +166,12 @@ func WithCommitWorkspaceThreshold(th uint64) EngineOptions {
 func WithWriteWorkspaceThreshold(th uint64) EngineOptions {
 	return func(e *Engine) {
 		e.config.writeWorkspaceThreshold = th
+	}
+}
+
+func WithExtraWorkspaceThresholdQuota(quota uint64) EngineOptions {
+	return func(e *Engine) {
+		e.config.quota.Store(quota)
 	}
 }
 
@@ -215,6 +222,8 @@ type Engine struct {
 		insertEntryMaxCount      int
 		commitWorkspaceThreshold uint64
 		writeWorkspaceThreshold  uint64
+		extraWorkspaceThreshold  uint64
+		quota                    atomic.Uint64
 
 		cnTransferTxnLifespanThreshold time.Duration
 
@@ -306,13 +315,10 @@ type Transaction struct {
 	segId types.Uuid
 	// use to cache opened snapshot tables by current txn.
 	tableCache *sync.Map
-	// use to cache databases created by current txn.
-	databaseMap *sync.Map
-	// Used to record deleted databases in transactions.
-	deletedDatabaseMap *sync.Map
 
 	// used to keep updated tables in the current txn
 	tableOps            *tableOpsChain
+	databaseOps         *dbOpsChain
 	restoreTxnTableFunc []func()
 
 	// record the table dropped in the txn,
@@ -364,8 +370,9 @@ type Transaction struct {
 
 	haveDDL atomic.Bool
 
-	writeWorkspaceThreshold  uint64
-	commitWorkspaceThreshold uint64
+	writeWorkspaceThreshold      uint64
+	commitWorkspaceThreshold     uint64
+	extraWriteWorkspaceThreshold uint64 // acquired from engine quota
 }
 
 type Pos struct {
@@ -424,15 +431,14 @@ func NewTxnWorkSpace(eng *Engine, proc *process.Process) *Transaction {
 	id := objectio.NewSegmentid()
 	bytes := types.EncodeUuid(id)
 	txn := &Transaction{
-		proc:               proc,
-		engine:             eng,
-		idGen:              eng.idGen,
-		tnStores:           eng.GetTNServices(),
-		tableCache:         new(sync.Map),
-		databaseMap:        new(sync.Map),
-		deletedDatabaseMap: new(sync.Map),
-		tableOps:           newTableOps(),
-		tablesInVain:       make(map[uint64]int),
+		proc:         proc,
+		engine:       eng,
+		idGen:        eng.idGen,
+		tnStores:     eng.GetTNServices(),
+		tableCache:   new(sync.Map),
+		databaseOps:  newDbOps(),
+		tableOps:     newTableOps(),
+		tablesInVain: make(map[uint64]int),
 		rowId: [6]uint32{
 			types.DecodeUint32(bytes[0:4]),
 			types.DecodeUint32(bytes[4:8]),
@@ -944,9 +950,21 @@ type tableOpsChain struct {
 	names map[tableKey][]tableOp
 }
 
+type dbOp struct {
+	kind        int
+	databaseId  uint64
+	statementId int
+	payload     *txnDatabase
+}
+
 type databaseKey struct {
 	accountId uint32
 	name      string
+}
+
+type dbOpsChain struct {
+	sync.RWMutex
+	names map[databaseKey][]dbOp
 }
 
 // txnTable represents an opened table in a transaction

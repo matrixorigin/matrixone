@@ -192,6 +192,7 @@ func init() {
 		"float4":                     UNUSED,
 		"float8":                     UNUSED,
 		"for":                        FOR,
+		"of":                         OF,
 		"force":                      FORCE,
 		"foreign":                    FOREIGN,
 		"format":                     FORMAT,
@@ -648,5 +649,6 @@ func init() {
 		"apply":                      APPLY,
 		"dedup":                      DEDUP,
 		"savepoint":                  SAVEPOINT,
+		"recovery_window":            RECOVERY_WINDOW,
 	}
 }

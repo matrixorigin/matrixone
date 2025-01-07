@@ -66,10 +66,6 @@ func (loopJoin *LoopJoin) Prepare(proc *process.Process) error {
 			return err
 		}
 	}
-
-	if loopJoin.ProjectList != nil && loopJoin.ProjectExecutors == nil {
-		err = loopJoin.PrepareProjection(proc)
-	}
 	return err
 }
 

@@ -65,12 +65,15 @@ type Options struct {
 	streaming               bool
 	stream_chan             chan Result
 	error_chan              chan error
+	sql                     string
 }
 
 // StatementOption statement execute option.
 type StatementOption struct {
 	waitPolicy       lock.WaitPolicy
 	accountId        uint32
+	roleId           uint32
+	userId           uint32
 	disableLog       bool
 	ignoreForeignKey bool
 }

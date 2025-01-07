@@ -35,7 +35,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	testutil2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
@@ -1442,6 +1441,7 @@ func Test_DeleteUncommittedBlock(t *testing.T) {
 			testutil.WithDisttaeEngineInsertEntryMaxCount(1),
 			testutil.WithDisttaeEngineCommitWorkspaceThreshold(1),
 			testutil.WithDisttaeEngineWriteWorkspaceThreshold(1),
+			testutil.WithDisttaeEngineQuota(1),
 		)
 		defer func() {
 			disttaeEngine.Close(ctx)
@@ -1482,7 +1482,7 @@ func Test_DeleteUncommittedBlock(t *testing.T) {
 				bat2.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
 
 				locstr := string(entry.Bat().GetVector(0).GetBytesAt(0))
-				loc, _ := blockio.EncodeLocationFromString(locstr)
+				loc, _ := objectio.StringToLocation(locstr)
 				sid := loc.Name().SegmentId()
 				bid := objectio.NewBlockid(
 					&sid,

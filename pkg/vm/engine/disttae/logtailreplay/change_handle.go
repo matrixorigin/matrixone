@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/sort"
 	"go.uber.org/zap"
 
@@ -37,8 +38,7 @@ import (
 	"github.com/tidwall/btree"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
@@ -192,7 +192,7 @@ type CNObjectHandle struct {
 	isTombstone        bool
 	objectOffsetCursor int
 	blkOffsetCursor    int
-	objects            []*ObjectEntry
+	objects            []*objectio.ObjectEntry
 	fs                 fileservice.FileService
 	mp                 *mpool.MPool
 	base               *baseHandle
@@ -201,7 +201,7 @@ type CNObjectHandle struct {
 	TSs   []types.TS
 }
 
-func NewCNObjectHandle(isTombstone bool, objects []*ObjectEntry, fs fileservice.FileService, baseHandle *baseHandle, mp *mpool.MPool) *CNObjectHandle {
+func NewCNObjectHandle(isTombstone bool, objects []*objectio.ObjectEntry, fs fileservice.FileService, baseHandle *baseHandle, mp *mpool.MPool) *CNObjectHandle {
 	return &CNObjectHandle{
 		base:        baseHandle,
 		isTombstone: isTombstone,
@@ -328,7 +328,7 @@ type AObjectHandle struct {
 	rowOffsetCursor    int
 	currentBatch       *batch.Batch
 	batchLength        int
-	objects            []*ObjectEntry
+	objects            []*objectio.ObjectEntry
 	quick              bool
 	fs                 fileservice.FileService
 	mp                 *mpool.MPool
@@ -336,7 +336,7 @@ type AObjectHandle struct {
 	p                  *baseHandle
 }
 
-func NewAObjectHandle(ctx context.Context, p *baseHandle, isTombstone bool, start, end types.TS, objects []*ObjectEntry, fs fileservice.FileService, mp *mpool.MPool) *AObjectHandle {
+func NewAObjectHandle(ctx context.Context, p *baseHandle, isTombstone bool, start, end types.TS, objects []*objectio.ObjectEntry, fs fileservice.FileService, mp *mpool.MPool) *AObjectHandle {
 	handle := &AObjectHandle{
 		isTombstone: isTombstone,
 		start:       start,
@@ -511,7 +511,7 @@ func NewBaseHandler(state *PartitionState, changesHandle *ChangeHandler, start, 
 		skipTS:        make(map[types.TS]struct{}),
 		changesHandle: changesHandle,
 	}
-	var iter btree.IterG[ObjectEntry]
+	var iter btree.IterG[objectio.ObjectEntry]
 	if tombstone {
 		iter = state.tombstoneObjectsNameIndex.Iter()
 	} else {
@@ -539,7 +539,7 @@ func (p *baseHandle) init(ctx context.Context, quick bool, mp *mpool.MPool) (err
 	err = p.inMemoryHandle.init(quick, mp)
 	return
 }
-func (p *baseHandle) fillInSkipTS(iter btree.IterG[ObjectEntry], start, end types.TS) {
+func (p *baseHandle) fillInSkipTS(iter btree.IterG[objectio.ObjectEntry], start, end types.TS) {
 	for iter.Next() {
 		obj := iter.Item()
 		if !obj.DeleteTime.IsEmpty() {
@@ -662,9 +662,9 @@ func (p *baseHandle) getBatchesFromRowIterator(iter btree.IterG[RowEntry], start
 	}
 	return
 }
-func (p *baseHandle) getObjectEntries(objIter btree.IterG[ObjectEntry], start, end types.TS) (aobj, cnObj []*ObjectEntry) {
-	aobj = make([]*ObjectEntry, 0)
-	cnObj = make([]*ObjectEntry, 0)
+func (p *baseHandle) getObjectEntries(objIter btree.IterG[objectio.ObjectEntry], start, end types.TS) (aobj, cnObj []*objectio.ObjectEntry) {
+	aobj = make([]*objectio.ObjectEntry, 0)
+	cnObj = make([]*objectio.ObjectEntry, 0)
 	for objIter.Next() {
 		entry := objIter.Item()
 		if entry.GetAppendable() {
@@ -798,12 +798,23 @@ func (p *ChangeHandler) Next(ctx context.Context, mp *mpool.MPool) (data, tombst
 	if time.Since(p.lastPrint) > p.LogThreshold {
 		p.lastPrint = time.Now()
 		if p.dataLength != 0 || p.tombstoneLength != 0 {
-			gcTS, err := getGCTS(ctx, p.fs)
+			// use the max compact checkpoint end ts as the gc ts
+			gcTS, err := ckputil.GetMaxTSOfCompactCKP(ctx, p.fs)
 			if err != nil {
 				logutil.Warnf("ChangesHandle-Slow, get GC TS failed: %v", err)
 			}
-			logutil.Infof("ChangesHandle-Slow, %d/%d, read %v, copy %v, update %v, total %v, start %v, minTS %v, gcTS %v",
-				p.dataLength, p.tombstoneLength, p.readDuration, p.copyDuration, p.updateDuration, p.totalDuration, p.start.ToString(), p.minTS.ToString(), gcTS.ToString())
+			logutil.Warn(
+				"SLOW-LOG-ChangeHandle",
+				zap.String("start", p.start.ToString()),
+				zap.String("min-ts", p.minTS.ToString()),
+				zap.String("gc-ts", gcTS.ToString()),
+				zap.Int("data-length", p.dataLength),
+				zap.Int("tombstone-length", p.tombstoneLength),
+				zap.Duration("read-duration", p.readDuration),
+				zap.Duration("copy-duration", p.copyDuration),
+				zap.Duration("update-duration", p.updateDuration),
+				zap.Duration("total-duration", p.totalDuration),
+			)
 		}
 	}
 	hint = engine.ChangesHandle_Tail_done
@@ -1060,7 +1071,7 @@ func prefetchObjects(
 		JTCDCLoad,
 		func(ctx context.Context) (res *tasks.JobResult) {
 			loc := stats.BlockLocation(uint16(blockID), 8192)
-			bat, _, err := blockio.LoadOneBlock(
+			bat, _, err := ioutil.LoadOneBlock(
 				ctx,
 				fs,
 				loc,
@@ -1118,20 +1129,4 @@ func updateCNDataBatch(bat *batch.Batch, commitTS types.TS, mp *mpool.MPool) {
 		return
 	}
 	bat.Vecs = append(bat.Vecs, commitTSVec)
-}
-
-func getGCTS(ctx context.Context, fs fileservice.FileService) (maxGCTS types.TS, err error) {
-	var dir *fileservice.DirEntry
-	for dir, err = range fs.List(ctx, checkpoint.CheckpointDir) {
-		if err != nil {
-			return
-		}
-		_, end, ext := blockio.DecodeCheckpointMetadataFileName(dir.Name)
-		if ext == blockio.CompactedExt {
-			if end.GT(&maxGCTS) {
-				maxGCTS = end
-			}
-		}
-	}
-	return
 }

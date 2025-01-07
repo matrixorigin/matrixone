@@ -20,11 +20,11 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	taestorage "github.com/matrixorigin/matrixone/pkg/txn/storage/tae"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
@@ -70,8 +70,7 @@ func (ts *TestTxnStorage) Close(destroy bool) error {
 			firstErr = err
 		}
 	}
-	ts.txnHandler.GCJob.Stop()
-	blockio.Stop("")
+	ioutil.Stop("")
 	return firstErr
 }
 func (ts *TestTxnStorage) Read(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
@@ -98,20 +97,9 @@ func (ts *TestTxnStorage) Commit(ctx context.Context, request *txn.TxnRequest, r
 		resp.Txn = &req.Txn
 	}
 
-	if request.CommitRequest != nil {
-		for _, req := range request.CommitRequest.Payload {
-			//response is shared by all requests
-			prepareResponse(req, response)
-			err := ts.Write(ctx, req, response)
-			if err != nil {
-				return err
-			}
-		}
-	}
-
 	prepareResponse(request, response)
 
-	cts, err := ts.txnHandler.HandleCommit(ctx, request.Txn)
+	cts, err := ts.txnHandler.HandleCommit(ctx, request.Txn, response, request.CommitRequest)
 	if err == nil {
 		response.Txn.Status = txn.TxnStatus_Committed
 		response.Txn.CommitTS = cts
@@ -149,7 +137,7 @@ func NewTestTAEEngine(
 	ctx context.Context, taeDir string, t *testing.T,
 	rpcAgent *MockRPCAgent, opts *options.Options) (*TestTxnStorage, error) {
 
-	blockio.Start("")
+	ioutil.Start("")
 	handle := InitTxnHandle(ctx, taeDir, opts)
 	logtailServer, err := NewMockLogtailServer(
 		ctx, handle.GetDB(), defaultLogtailConfig(), runtime.DefaultRuntime(), rpcAgent.MockLogtailPRCServerFactory)
@@ -170,7 +158,7 @@ func NewTestTAEEngine(
 			DB: handle.GetDB(), T: t,
 		},
 	}
-	blockio.Start("")
+	ioutil.Start("")
 	return tc, nil
 }
 

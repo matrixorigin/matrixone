@@ -212,3 +212,90 @@ func Test_panic(t *testing.T) {
 	fun(true)
 	fun(false)
 }
+
+func TestCount2(t *testing.T) {
+	var ok bool
+	var cnt int64
+	var ctx = context.TODO()
+
+	EnableDomain(DomainTest)
+	AddFaultPointInDomain(ctx, DomainTest, "a", ":5::", "return", 0, "", false)
+	AddFaultPointInDomain(ctx, DomainTest, "aa", ":::", "getcount", 0, "a", false)
+	_, _, ok = TriggerFaultInDomain(DomainTest, "a")
+	require.Equal(t, true, ok)
+	_, _, ok = TriggerFaultInDomain(DomainTest, "a")
+	require.Equal(t, true, ok)
+	_, _, ok = TriggerFaultInDomain(DomainTest, "a")
+	require.Equal(t, true, ok)
+	cnt, _, ok = TriggerFaultInDomain(DomainTest, "aa")
+	require.Equal(t, true, ok)
+	require.Equal(t, int64(3), cnt)
+
+	_, _, ok = TriggerFaultInDomain(DomainTest, "a")
+	require.Equal(t, true, ok)
+	cnt, _, ok = TriggerFaultInDomain(DomainTest, "aa")
+	require.Equal(t, true, ok)
+	require.Equal(t, int64(4), cnt)
+
+	_, _, ok = TriggerFaultInDomain(DomainTest, "a")
+	require.Equal(t, true, ok)
+	cnt, _, ok = TriggerFaultInDomain(DomainTest, "aa")
+	require.Equal(t, true, ok)
+	require.Equal(t, int64(5), cnt)
+
+	_, _, ok = TriggerFaultInDomain(DomainTest, "a")
+	require.Equal(t, false, ok)
+	cnt, _, ok = TriggerFaultInDomain(DomainTest, "aa")
+	require.Equal(t, true, ok)
+	require.Equal(t, int64(6), cnt)
+
+	RemoveFaultPointFromDomain(ctx, DomainTest, "a")
+	RemoveFaultPointFromDomain(ctx, DomainTest, "aa")
+
+	AddFaultPointInDomain(ctx, DomainTest, "a", "3:8:2:", "return", 0, "", false)
+	AddFaultPointInDomain(ctx, DomainTest, "aa", ":::", "getcount", 0, "a", false)
+	_, _, ok = TriggerFaultInDomain(DomainTest, "a")
+	require.Equal(t, false, ok)
+	cnt, _, ok = TriggerFaultInDomain(DomainTest, "aa")
+	require.Equal(t, true, ok)
+	require.Equal(t, int64(1), cnt)
+
+	_, _, ok = TriggerFaultInDomain(DomainTest, "a")
+	require.Equal(t, false, ok)
+
+	_, _, ok = TriggerFaultInDomain(DomainTest, "a")
+	require.Equal(t, true, ok)
+	cnt, _, _ = TriggerFaultInDomain(DomainTest, "aa")
+	require.Equal(t, int64(3), cnt)
+
+	_, _, ok = TriggerFaultInDomain(DomainTest, "a")
+	require.Equal(t, false, ok)
+	cnt, _, _ = TriggerFaultInDomain(DomainTest, "aa")
+	require.Equal(t, int64(4), cnt)
+
+	// 5
+	_, _, ok = TriggerFaultInDomain(DomainTest, "a")
+	require.Equal(t, true, ok)
+
+	// 6
+	_, _, ok = TriggerFaultInDomain(DomainTest, "a")
+	require.Equal(t, false, ok)
+
+	// 7
+	_, _, ok = TriggerFaultInDomain(DomainTest, "a")
+	require.Equal(t, true, ok)
+
+	//8
+	_, _, ok = TriggerFaultInDomain(DomainTest, "a")
+	require.Equal(t, false, ok)
+
+	//9
+	_, _, ok = TriggerFaultInDomain(DomainTest, "a")
+	require.Equal(t, false, ok)
+
+	cnt, _, ok = TriggerFaultInDomain(DomainTest, "aa")
+	require.Equal(t, true, ok)
+	require.Equal(t, int64(9), cnt)
+	DisableDomain(DomainTest)
+	DisableDomain(DomainTest)
+}

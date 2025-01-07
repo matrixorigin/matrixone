@@ -33,10 +33,12 @@ import (
 func newRunnerStore(
 	sid string,
 	globalHistoryDuration time.Duration,
+	intentOldAge time.Duration,
 ) *runnerStore {
 	s := new(runnerStore)
 	s.sid = sid
 	s.globalHistoryDuration = globalHistoryDuration
+	s.intentOldAge = intentOldAge
 	s.incrementals = btree.NewBTreeGOptions(
 		func(a, b *CheckpointEntry) bool {
 			return a.end.LT(&b.end)
@@ -51,6 +53,7 @@ func newRunnerStore(
 			NoLocks: true,
 		},
 	)
+	s.metaFiles = make(map[string]struct{})
 	return s
 }
 
@@ -59,16 +62,294 @@ type runnerStore struct {
 	sid string
 
 	globalHistoryDuration time.Duration
+	intentOldAge          time.Duration
+
+	incrementalIntent atomic.Pointer[CheckpointEntry]
 
 	incrementals *btree.BTreeG[*CheckpointEntry]
 	globals      *btree.BTreeG[*CheckpointEntry]
 	compacted    atomic.Pointer[CheckpointEntry]
-	// metaFiles    map[string]struct{}
+	metaFiles    map[string]struct{}
 
 	gcIntent    types.TS
 	gcCount     int
 	gcTime      time.Time
 	gcWatermark atomic.Value
+}
+
+func (s *runnerStore) GetICKPIntent() *CheckpointEntry {
+	return s.incrementalIntent.Load()
+}
+
+func (s *runnerStore) GetCheckpointed() types.TS {
+	s.RLock()
+	defer s.RUnlock()
+	return s.GetCheckpointedLocked()
+}
+
+func (s *runnerStore) MaxIncrementalCheckpoint() *CheckpointEntry {
+	s.RLock()
+	maxEntry, _ := s.incrementals.Max()
+	s.RUnlock()
+	if maxEntry == nil || maxEntry.IsFinished() {
+		return maxEntry
+	}
+	entries := s.GetAllIncrementalCheckpoints()
+	for i := len(entries) - 1; i >= 0; i-- {
+		if entries[i].IsFinished() {
+			return entries[i]
+		}
+	}
+	return nil
+}
+
+func (s *runnerStore) GetCheckpointedLocked() types.TS {
+	var ret types.TS
+	maxICKP, _ := s.incrementals.Max()
+	maxGCKP, _ := s.globals.Max()
+	if maxICKP == nil {
+		// no ickp and no gckp, it's the first ickp
+		if maxGCKP == nil {
+			ret = types.TS{}
+		} else {
+			ret = maxGCKP.end
+		}
+	} else {
+		if maxICKP.IsFinished() {
+			ret = maxICKP.end.Next()
+		} else {
+			entries := s.incrementals.Items()
+			for i := len(entries) - 1; i >= 0; i-- {
+				if entries[i].IsFinished() {
+					ret = entries[i].end.Next()
+					break
+				}
+			}
+		}
+	}
+	return ret
+}
+
+// updated:
+// true:  updated and intent must contain the updated ts
+// false: not updated and intent is the old intent
+// policyChecked, flushChecked:
+// it cannot update the intent if the intent is checked by policy or flush
+func (s *runnerStore) UpdateICKPIntent(
+	ts *types.TS, policyChecked, flushChecked bool,
+) (intent *CheckpointEntry, updated bool) {
+	for {
+		old := s.incrementalIntent.Load()
+		// in the case we will decrease the end ts of the old intent
+		if old != nil && !old.AllChecked() && policyChecked && flushChecked {
+			checkpointed := s.GetCheckpointed()
+			// no need to do checkpoint
+			if checkpointed.GT(&old.end) {
+				s.incrementalIntent.CompareAndSwap(old, nil)
+				continue
+			}
+			if checkpointed.GE(ts) {
+				intent = nil
+				return
+			}
+			newIntent := InheritCheckpointEntry(
+				old,
+				WithEndEntryOption(*ts),
+				WithCheckedEntryOption(policyChecked, flushChecked),
+			)
+			if old.end.GT(ts) {
+				newIntent.ResetAge()
+			}
+			if s.incrementalIntent.CompareAndSwap(old, newIntent) {
+				intent = newIntent
+				updated = true
+				return
+			}
+			continue
+		}
+		// Scenario 1:
+		// there is already an intent meets one of the following conditions:
+		// 1. the range of the old intent contains the ts, no need to update
+		// 2. the intent is not pendding: Running or Finished, cannot update
+		if old != nil && (old.end.GT(ts) || !old.IsPendding() || old.Age() > s.intentOldAge) {
+			intent = old
+			return
+		}
+
+		// Here
+		// 1. old == nil
+		// 2. old.end <= ts && old.IsPendding() && old.Age() <= s.intentOldAge
+
+		if old != nil {
+			// if the old intent is checked by policy and the incoming intent is not checked by policy
+			// incoming vs old: false vs true
+			// it cannot update the intent in this case
+
+			if !policyChecked && old.IsPolicyChecked() {
+				intent = old
+				return
+			}
+			if !flushChecked && old.IsFlushChecked() {
+				intent = old
+				return
+			}
+		}
+
+		var start types.TS
+		if old != nil {
+			// Scenario 2:
+			// there is an pendding intent with smaller end ts. we need to update
+			// the intent to extend the end ts to the given ts
+			start = old.start
+		} else {
+			// Scenario 3:
+			// there is no intent, we need to create a new intent
+			// start-ts:
+			// 1. if there is no ickp and no gckp, it's the first ickp, start ts is empty
+			// 2. if there is no ickp but has gckp, start ts is the end ts of the max gckp
+			// 3. if there is ickp, start ts is the end ts of the max ickp
+			// end-ts: the given ts
+			start = s.GetCheckpointed()
+		}
+
+		if old != nil && old.end.EQ(ts) {
+			if old.IsPolicyChecked() == policyChecked && old.IsFlushChecked() == flushChecked {
+				intent = old
+				return
+			}
+		}
+
+		// if the start ts is larger equal to the given ts, no need to update
+		if start.GE(ts) {
+			intent = old
+			return
+		}
+		var newIntent *CheckpointEntry
+		if old == nil {
+			newIntent = NewCheckpointEntry(
+				s.sid,
+				start,
+				*ts,
+				ET_Incremental,
+				WithCheckedEntryOption(policyChecked, flushChecked),
+			)
+		} else {
+			// the incoming checked status can override the old status
+			// it is impossible that the old is checked and the incoming is not checked here
+			// false -> true: impossible here
+			newIntent = InheritCheckpointEntry(
+				old,
+				WithEndEntryOption(*ts),
+				WithCheckedEntryOption(policyChecked, flushChecked),
+			)
+		}
+		if s.incrementalIntent.CompareAndSwap(old, newIntent) {
+			intent = newIntent
+			updated = true
+			return
+		}
+	}
+}
+
+func (s *runnerStore) TakeICKPIntent() (taken *CheckpointEntry, rollback func()) {
+	for {
+		old := s.incrementalIntent.Load()
+		if old == nil || !old.IsPendding() || !old.AllChecked() {
+			return
+		}
+		taken = InheritCheckpointEntry(
+			old,
+			WithStateEntryOption(ST_Running),
+		)
+		if s.incrementalIntent.CompareAndSwap(old, taken) {
+			rollback = func() {
+				// clear the intent and notify the intent is done
+				s.incrementalIntent.Store(nil)
+				taken.Done()
+			}
+			break
+		}
+		taken = nil
+		rollback = nil
+	}
+	return
+}
+
+func (s *runnerStore) PrepareCommitICKPIntent(
+	intent *CheckpointEntry,
+) (ok bool) {
+	expect := s.incrementalIntent.Load()
+	// should not happen
+	if intent != expect || !intent.IsRunning() {
+		logutil.Error(
+			"ICKP-PrepareCommit",
+			zap.Any("expected", expect),
+			zap.Any("actual", intent),
+		)
+		return
+	}
+	s.Lock()
+	defer s.Unlock()
+	s.incrementals.Set(intent)
+	ok = true
+	return
+}
+
+func (s *runnerStore) RollbackICKPIntent(
+	intent *CheckpointEntry,
+) {
+	expect := s.incrementalIntent.Load()
+	// should not happen
+	if intent != expect || !intent.IsRunning() {
+		logutil.Fatal(
+			"ICKP-Rollback",
+			zap.Any("expected", expect),
+			zap.Any("actual", intent),
+		)
+	}
+	s.Lock()
+	defer s.Unlock()
+	s.incrementals.Delete(intent)
+}
+
+// intent must be in Running state
+func (s *runnerStore) CommitICKPIntent(
+	intent *CheckpointEntry,
+) {
+	defer intent.Done()
+	old := s.incrementalIntent.Load()
+	// should not happen
+	if old != intent {
+		logutil.Fatal(
+			"CommitICKPIntent-Error",
+			zap.String("intent", intent.String()),
+			zap.String("expected", old.String()),
+		)
+	}
+	intent.SetState(ST_Finished)
+	s.incrementalIntent.Store(nil)
+}
+
+func (s *runnerStore) AddMetaFile(name string) {
+	s.Lock()
+	defer s.Unlock()
+	s.metaFiles[name] = struct{}{}
+}
+
+func (s *runnerStore) RemoveMetaFile(name string) {
+	s.Lock()
+	defer s.Unlock()
+	delete(s.metaFiles, name)
+}
+
+func (s *runnerStore) GetMetaFiles() map[string]struct{} {
+	s.RLock()
+	defer s.RUnlock()
+	files := make(map[string]struct{})
+	for k, v := range s.metaFiles {
+		files[k] = v
+	}
+	return files
 }
 
 func (s *runnerStore) ExportStatsLocked() []zap.Field {
@@ -90,51 +371,10 @@ func (s *runnerStore) AddNewIncrementalEntry(entry *CheckpointEntry) {
 	s.incrementals.Set(entry)
 }
 
-func (s *runnerStore) CleanPenddingCheckpoint() {
-	prev := s.MaxIncrementalCheckpoint()
-	if prev == nil {
-		return
+func (s *runnerStore) AddICKPFinishedEntry(entry *CheckpointEntry) (success bool) {
+	if !entry.IsFinished() {
+		return false
 	}
-	if !prev.IsFinished() {
-		s.Lock()
-		s.incrementals.Delete(prev)
-		s.Unlock()
-	}
-	if prev.IsRunning() {
-		logutil.Warnf("Delete a running checkpoint entry")
-	}
-	prev = s.MaxGlobalCheckpoint()
-	if prev == nil {
-		return
-	}
-	if !prev.IsFinished() {
-		s.Lock()
-		s.incrementals.Delete(prev)
-		s.Unlock()
-	}
-	if prev.IsRunning() {
-		logutil.Warnf("Delete a running checkpoint entry")
-	}
-}
-
-func (s *runnerStore) TryAddNewCompactedCheckpointEntry(entry *CheckpointEntry) (success bool) {
-	if entry.entryType != ET_Compacted {
-		panic("TryAddNewCompactedCheckpointEntry entry type is error")
-	}
-	s.Lock()
-	defer s.Unlock()
-	old := s.compacted.Load()
-	if old != nil {
-		end := old.end
-		if entry.end.LT(&end) {
-			return true
-		}
-	}
-	s.compacted.Store(entry)
-	return true
-}
-
-func (s *runnerStore) TryAddNewIncrementalCheckpointEntry(entry *CheckpointEntry) (success bool) {
 	s.Lock()
 	defer s.Unlock()
 	maxEntry, _ := s.incrementals.Max()
@@ -148,10 +388,7 @@ func (s *runnerStore) TryAddNewIncrementalCheckpointEntry(entry *CheckpointEntry
 
 	// if it is not the right candidate, skip this request
 	// [startTs, endTs] --> [endTs+1, ?]
-	endTS := maxEntry.GetEnd()
-	startTS := entry.GetStart()
-	nextTS := endTS.Next()
-	if !nextTS.Equal(&startTS) {
+	if !maxEntry.IsYoungNeighbor(entry) {
 		success = false
 		return
 	}
@@ -169,9 +406,9 @@ func (s *runnerStore) TryAddNewIncrementalCheckpointEntry(entry *CheckpointEntry
 }
 
 // Since there is no wal after recovery, the checkpoint lsn before backup must be set to 0.
-func (s *runnerStore) TryAddNewBackupCheckpointEntry(entry *CheckpointEntry) (success bool) {
+func (s *runnerStore) AddBackupCKPEntry(entry *CheckpointEntry) (success bool) {
 	entry.entryType = ET_Incremental
-	success = s.TryAddNewIncrementalCheckpointEntry(entry)
+	success = s.AddICKPFinishedEntry(entry)
 	if !success {
 		return
 	}
@@ -186,7 +423,37 @@ func (s *runnerStore) TryAddNewBackupCheckpointEntry(entry *CheckpointEntry) (su
 	return
 }
 
-func (s *runnerStore) TryAddNewGlobalCheckpointEntry(
+func (s *runnerStore) AddGCKPIntent(
+	intent *CheckpointEntry,
+) (success bool) {
+	if intent == nil || intent.entryType != ET_Global || intent.IsFinished() {
+		return false
+	}
+
+	s.Lock()
+	defer s.Unlock()
+
+	maxEntry, _ := s.globals.Max()
+	if maxEntry != nil && (maxEntry.end.GE(&intent.end) || !maxEntry.IsFinished()) {
+		return false
+	}
+
+	s.globals.Set(intent)
+	return true
+}
+
+func (s *runnerStore) RemoveGCKPIntent() (ok bool) {
+	s.Lock()
+	defer s.Unlock()
+	intent, _ := s.globals.Max()
+	if intent == nil || intent.IsFinished() {
+		return false
+	}
+	s.globals.Delete(intent)
+	return true
+}
+
+func (s *runnerStore) AddGCKPFinishedEntry(
 	entry *CheckpointEntry,
 ) (success bool) {
 	s.Lock()
@@ -307,12 +574,6 @@ func (s *runnerStore) GetAllIncrementalCheckpoints() []*CheckpointEntry {
 	return snapshot.Items()
 }
 
-func (s *runnerStore) GetGlobalCheckpointCount() int {
-	s.RLock()
-	defer s.RUnlock()
-	return s.globals.Len()
-}
-
 func (s *runnerStore) GetLowWaterMark() types.TS {
 	s.RLock()
 	defer s.RUnlock()
@@ -337,8 +598,21 @@ func (s *runnerStore) GetCompacted() *CheckpointEntry {
 	return s.compacted.Load()
 }
 
-func (s *runnerStore) UpdateCompacted(entry *CheckpointEntry) {
-	s.compacted.Store(entry)
+func (s *runnerStore) UpdateCompacted(entry *CheckpointEntry) (updated bool) {
+	for {
+		old := s.compacted.Load()
+		if old != nil {
+			newEnd := entry.GetEnd()
+			oldEnd := old.GetEnd()
+			if newEnd.LE(&oldEnd) {
+				return
+			}
+		}
+		if s.compacted.CompareAndSwap(old, entry) {
+			updated = true
+			return
+		}
+	}
 }
 
 func (s *runnerStore) ICKPRange(
@@ -395,18 +669,23 @@ func (s *runnerStore) ICKPSeekLT(ts types.TS, cnt int) []*CheckpointEntry {
 	return incrementals
 }
 
+// return the max finished global checkpoint
 func (s *runnerStore) MaxGlobalCheckpoint() *CheckpointEntry {
 	s.RLock()
-	defer s.RUnlock()
 	global, _ := s.globals.Max()
-	return global
-}
-
-func (s *runnerStore) MaxIncrementalCheckpoint() *CheckpointEntry {
-	s.RLock()
-	defer s.RUnlock()
-	entry, _ := s.incrementals.Max()
-	return entry
+	s.RUnlock()
+	if global == nil || global.IsFinished() {
+		return global
+	}
+	s.Lock()
+	items := s.globals.Items()
+	s.Unlock()
+	for i := len(items) - 1; i >= 0; i-- {
+		if items[i].IsFinished() {
+			return items[i]
+		}
+	}
+	return nil
 }
 
 func (s *runnerStore) IsStale(ts *types.TS) bool {
@@ -479,17 +758,52 @@ func (s *runnerStore) CollectCheckpointsInRange(
 	}
 	s.Lock()
 	tree := s.incrementals.Copy()
-	global, _ := s.globals.Max()
+	globaltree := s.globals.Copy()
 	s.Unlock()
+
 	locs := make([]string, 0)
 	ckpStart := types.MaxTs()
 	newStart := start
-	if global != nil && global.HasOverlap(start, end) {
-		locs = append(locs, global.GetLocation().String())
-		locs = append(locs, strconv.Itoa(int(global.version)))
-		newStart = global.end.Next()
-		ckpStart = global.GetEnd()
-		checkpointed = global.GetEnd()
+
+	defer func() {
+		if len(locs) == 0 {
+			return
+		}
+		duration := fmt.Sprintf("[%s_%s]",
+			ckpStart.ToString(),
+			checkpointed.ToString())
+		locs = append(locs, duration)
+		locations = strings.Join(locs, ";")
+	}()
+
+	collectEntryFn := func(entry *CheckpointEntry) {
+		locs = append(locs, entry.GetLocation().String())
+		locs = append(locs, strconv.Itoa(int(entry.version)))
+		if checkpointed.LT(&entry.end) {
+			checkpointed = entry.GetEnd()
+		}
+		if entry.IsGlobal() {
+			ckpStart = entry.end
+			newStart = entry.end.Next()
+		}
+		if entry.IsIncremental() {
+			start := entry.start
+			if start.LT(&ckpStart) {
+				ckpStart = start
+			}
+		}
+		// checkpoints = append(checkpoints, entry)
+	}
+
+	globalIter := globaltree.Iter()
+	ok := globalIter.Last()
+	for ok {
+		ckp := globalIter.Item()
+		if ckp.IsCommitted() && ckp.HasOverlap(start, end) {
+			collectEntryFn(ckp)
+			break
+		}
+		ok = globalIter.Prev()
 	}
 	pivot := NewCheckpointEntry(s.sid, newStart, newStart, ET_Incremental)
 
@@ -514,25 +828,10 @@ func (s *runnerStore) CollectCheckpointsInRange(
 		if ok = iter.Prev(); ok {
 			e := iter.Item()
 			if !e.IsCommitted() {
-				if len(locs) == 0 {
-					return
-				}
-				duration := fmt.Sprintf("[%s_%s]",
-					ckpStart.ToString(),
-					ckpStart.ToString())
-				locs = append(locs, duration)
-				locations = strings.Join(locs, ";")
 				return
 			}
 			if e.HasOverlap(newStart, end) {
-				locs = append(locs, e.GetLocation().String())
-				locs = append(locs, strconv.Itoa(int(e.version)))
-				start := e.GetStart()
-				if start.LT(&ckpStart) {
-					ckpStart = start
-				}
-				checkpointed = e.GetEnd()
-				// checkpoints = append(checkpoints, e)
+				collectEntryFn(e)
 			}
 			iter.Next()
 		}
@@ -541,14 +840,7 @@ func (s *runnerStore) CollectCheckpointsInRange(
 			if !e.IsCommitted() || !e.HasOverlap(newStart, end) {
 				break
 			}
-			locs = append(locs, e.GetLocation().String())
-			locs = append(locs, strconv.Itoa(int(e.version)))
-			start := e.GetStart()
-			if start.LT(&ckpStart) {
-				ckpStart = start
-			}
-			checkpointed = e.GetEnd()
-			// checkpoints = append(checkpoints, e)
+			collectEntryFn(e)
 			if ok = iter.Next(); !ok {
 				break
 			}
@@ -556,48 +848,16 @@ func (s *runnerStore) CollectCheckpointsInRange(
 	} else {
 		// if it is empty, quick quit
 		if ok = iter.Last(); !ok {
-			if len(locs) == 0 {
-				return
-			}
-			duration := fmt.Sprintf("[%s_%s]",
-				ckpStart.ToString(),
-				ckpStart.ToString())
-			locs = append(locs, duration)
-			locations = strings.Join(locs, ";")
 			return
 		}
 		// get last entry
 		e := iter.Item()
 		// if it is committed and visible, quick quit
 		if !e.IsCommitted() || !e.HasOverlap(newStart, end) {
-			if len(locs) == 0 {
-				return
-			}
-			duration := fmt.Sprintf("[%s_%s]",
-				ckpStart.ToString(),
-				ckpStart.ToString())
-			locs = append(locs, duration)
-			locations = strings.Join(locs, ";")
 			return
 		}
-		locs = append(locs, e.GetLocation().String())
-		locs = append(locs, strconv.Itoa(int(e.version)))
-		start := e.GetStart()
-		if start.LT(&ckpStart) {
-			ckpStart = start
-		}
-		checkpointed = e.GetEnd()
-		// checkpoints = append(checkpoints, e)
+		collectEntryFn(e)
 	}
-
-	if len(locs) == 0 {
-		return
-	}
-	duration := fmt.Sprintf("[%s_%s]",
-		ckpStart.ToString(),
-		checkpointed.ToString())
-	locs = append(locs, duration)
-	locations = strings.Join(locs, ";")
 	return
 }
 
@@ -653,14 +913,14 @@ func (s *runnerStore) doGC(ts *types.TS) (gdeleted, ideleted int) {
 	}
 	gloabls := s.globals.Items()
 	for _, e := range gloabls {
-		if e.LessEq(ts) {
+		if e.LEByTS(ts) {
 			s.globals.Delete(e)
 			gdeleted++
 		}
 	}
 	incrementals := s.incrementals.Items()
 	for _, e := range incrementals {
-		if e.LessEq(ts) {
+		if e.LEByTS(ts) {
 			s.incrementals.Delete(e)
 			ideleted++
 		}

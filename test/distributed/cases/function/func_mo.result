@@ -60,8 +60,8 @@ internal error: get the subscribed tbl info empty: t4
 select mo_table_size(dbName, tblName) from (select * from testdb_nor.tmp order by dbName, tblName asc);
 internal error: get the subscribed tbl info empty: t4
 set mo_table_stats.use_old_impl = no;
-drop database testdb_nor;
-drop database testdb_sub;
-drop account acc;
-drop publication pub1;
-drop database testdb;
+drop database if exists testdb_nor;
+drop database if exists testdb_sub;
+drop account if exists acc;
+drop publication if exists pub1;
+drop database if exists testdb;

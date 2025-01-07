@@ -29,14 +29,24 @@ import (
 
 var ErrRWConflict = moerr.NewTxnRWConflictNoCtx()
 
-func readWriteConfilictCheck(entry *catalog.ObjectEntry, ts types.TS) (err error) {
+func readWriteConfilictCheck(entry *catalog.ObjectEntry, ts types.TS, inqueue bool) (err error) {
 	lastNode := entry.GetLatestNode()
+	if !lastNode.HasDropIntent() {
+		return nil
+	}
 	needWait, txnToWait := lastNode.GetLastMVCCNode().NeedWaitCommitting(ts)
 	// TODO:
 	// I don't think we need to wait here any more. `block` and `Object` are
 	// local metadata and never be involved in a 2PC txn. So a prepared `block`
 	// will never be rollbacked
 	if needWait {
+		if inqueue {
+			deleteTS := txnToWait.GetPrepareTS()
+			if deleteTS.LT(&ts) {
+				err = ErrRWConflict
+			}
+			return
+		}
 		txnToWait.GetTxnState(true)
 		lastNode = entry.GetLatestNode()
 	}
@@ -119,7 +129,7 @@ func (checker *warChecker) Insert(obj *catalog.ObjectEntry) {
 	checker.readSet[*obj.ID()] = obj
 }
 
-func (checker *warChecker) checkOne(id *common.ID, ts types.TS) (err error) {
+func (checker *warChecker) checkOne(id *common.ID, ts types.TS, inqueue bool) (err error) {
 	// defer func() {
 	// 	logutil.Infof("checkOne blk=%s ts=%s err=%v", id.BlockString(), ts.ToString(), err)
 	// }()
@@ -131,12 +141,12 @@ func (checker *warChecker) checkOne(id *common.ID, ts types.TS) (err error) {
 	if entry == nil {
 		return
 	}
-	return readWriteConfilictCheck(entry, ts)
+	return readWriteConfilictCheck(entry, ts, inqueue)
 }
 
 func (checker *warChecker) checkAll(ts types.TS) (err error) {
 	for _, obj := range checker.readSet {
-		if err = readWriteConfilictCheck(obj, ts); err != nil {
+		if err = readWriteConfilictCheck(obj, ts, true); err != nil {
 			logutil.Error(
 				"Txn-Check-All",
 				zap.Error(err),

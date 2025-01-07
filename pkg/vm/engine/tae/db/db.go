@@ -152,34 +152,28 @@ func (db *DB) FlushTable(
 	ctx context.Context,
 	tenantID uint32,
 	dbId, tableId uint64,
-	ts types.TS) (err error) {
+	ts types.TS,
+) (err error) {
 	err = db.BGFlusher.FlushTable(ctx, dbId, tableId, ts)
 	return
 }
 
 func (db *DB) ForceFlush(
-	ts types.TS, ctx context.Context, forceDuration time.Duration,
+	ctx context.Context, ts types.TS,
 ) (err error) {
 	return db.BGFlusher.ForceFlush(
-		ts, ctx, forceDuration,
+		ctx, ts,
 	)
 }
 
 func (db *DB) ForceCheckpoint(
 	ctx context.Context,
 	ts types.TS,
-	flushDuration time.Duration,
 ) (err error) {
-	// FIXME: cannot disable with a running job
-	db.BGCheckpointRunner.DisableCheckpoint()
-	defer db.BGCheckpointRunner.EnableCheckpoint()
-	db.BGCheckpointRunner.CleanPenddingCheckpoint()
-	if flushDuration == 0 {
-		flushDuration = time.Minute * 3 / 2
-	}
-	t0 := time.Now()
-	err = db.BGFlusher.ForceFlush(ts, ctx, flushDuration)
-	forceFlushCost := time.Since(t0)
+	var (
+		t0        = time.Now()
+		flushCost time.Duration
+	)
 
 	defer func() {
 		logger := logutil.Info
@@ -187,66 +181,42 @@ func (db *DB) ForceCheckpoint(
 			logger = logutil.Error
 		}
 		logger(
-			"Control-Force-Checkpoint",
+			"ICKP-Control-Force-End",
 			zap.Error(err),
 			zap.Duration("total-cost", time.Since(t0)),
 			zap.String("ts", ts.ToString()),
-			zap.Duration("flush-duration", flushDuration),
-			zap.Duration("force-flush-cost", forceFlushCost),
+			zap.Duration("flush-cost", flushCost),
 		)
 	}()
 
+	err = db.BGFlusher.ForceFlush(ctx, ts)
+	flushCost = time.Since(t0)
 	if err != nil {
-		return err
+		return
 	}
 
-	wait := flushDuration - time.Since(t0)
-	if wait < time.Minute {
-		wait = time.Minute
-	}
-
-	timeout := time.After(wait)
-	for {
-		select {
-		case <-timeout:
-			err = moerr.NewInternalError(ctx, "force checkpoint timeout")
-			return
-		default:
-			err = db.BGCheckpointRunner.ForceIncrementalCheckpoint(ts, true)
-			if dbutils.IsRetrieableCheckpoint(err) {
-				db.BGCheckpointRunner.CleanPenddingCheckpoint()
-				interval := flushDuration.Milliseconds() / 400
-				time.Sleep(time.Duration(interval))
-				break
-			}
-			return
-		}
-	}
+	err = db.BGCheckpointRunner.ForceICKP(ctx, &ts)
+	return
 }
 
 func (db *DB) ForceGlobalCheckpoint(
 	ctx context.Context,
 	ts types.TS,
-	flushDuration, versionInterval time.Duration,
+	histroyRetention time.Duration,
 ) (err error) {
-	// FIXME: cannot disable with a running job
-	db.BGCheckpointRunner.DisableCheckpoint()
-	defer db.BGCheckpointRunner.EnableCheckpoint()
-	db.BGCheckpointRunner.CleanPenddingCheckpoint()
 	t0 := time.Now()
-	err = db.BGFlusher.ForceFlush(ts, ctx, flushDuration)
-	forceFlushCost := time.Since(t0)
+	err = db.BGFlusher.ForceFlush(ctx, ts)
+	forceICKPDuration := time.Since(t0)
 	defer func() {
 		logger := logutil.Info
 		if err != nil {
 			logger = logutil.Error
 		}
 		logger(
-			"Control-ForceGlobalCheckpoint",
+			"DB-Force-ICKP",
 			zap.Duration("total-cost", time.Since(t0)),
-			zap.Duration("force-flush-cost", forceFlushCost),
-			zap.Duration("flush-duration", flushDuration),
-			zap.Duration("version-interval", versionInterval),
+			zap.Duration("force-flush-cost", forceICKPDuration),
+			zap.Duration("histroy-retention", histroyRetention),
 			zap.Error(err),
 		)
 	}()
@@ -255,8 +225,8 @@ func (db *DB) ForceGlobalCheckpoint(
 		return
 	}
 
-	err = db.BGCheckpointRunner.ForceGlobalCheckpointSynchronously(
-		ctx, ts, versionInterval,
+	err = db.BGCheckpointRunner.ForceGCKP(
+		ctx, ts, histroyRetention,
 	)
 	return err
 }
@@ -264,15 +234,10 @@ func (db *DB) ForceGlobalCheckpoint(
 func (db *DB) ForceCheckpointForBackup(
 	ctx context.Context,
 	ts types.TS,
-	flushDuration time.Duration,
 ) (location string, err error) {
-	// FIXME: cannot disable with a running job
-	db.BGCheckpointRunner.DisableCheckpoint()
-	defer db.BGCheckpointRunner.EnableCheckpoint()
-	db.BGCheckpointRunner.CleanPenddingCheckpoint()
 	t0 := time.Now()
-	err = db.BGFlusher.ForceFlush(ts, ctx, flushDuration)
-	forceFlushCost := time.Since(t0)
+	err = db.ForceCheckpoint(ctx, ts)
+	t1 := time.Now()
 
 	defer func() {
 		logger := logutil.Info
@@ -280,10 +245,10 @@ func (db *DB) ForceCheckpointForBackup(
 			logger = logutil.Error
 		}
 		logger(
-			"Control-ForeCheckpointForBackup",
+			"Force-Backup-CKP",
 			zap.Duration("total-cost", time.Since(t0)),
-			zap.Duration("force-flush-cost", forceFlushCost),
-			zap.Duration("flush-duration", flushDuration),
+			zap.Duration("force-ickp-cost", t1.Sub(t0)),
+			zap.Duration("create-backup-cost", time.Since(t1)),
 			zap.String("location", location),
 			zap.Error(err),
 		)
@@ -293,7 +258,17 @@ func (db *DB) ForceCheckpointForBackup(
 		return
 	}
 
-	location, err = db.BGCheckpointRunner.ForceCheckpointForBackup(ts)
+	maxEntry := db.BGCheckpointRunner.MaxIncrementalCheckpoint()
+	maxEnd := maxEntry.GetEnd()
+	start := maxEnd.Next()
+	end := db.TxnMgr.Now()
+	if err = db.BGFlusher.ForceFlush(ctx, end); err != nil {
+		return
+	}
+
+	location, err = db.BGCheckpointRunner.CreateSpecialCheckpointFile(
+		ctx, start, end,
+	)
 
 	return
 }
@@ -317,13 +292,15 @@ func (db *DB) GetTxnByID(id []byte) (txn txnif.AsyncTxn, err error) {
 func (db *DB) GetOrCreateTxnWithMeta(
 	info []byte,
 	id []byte,
-	ts types.TS) (txn txnif.AsyncTxn, err error) {
+	ts types.TS,
+) (txn txnif.AsyncTxn, err error) {
 	return db.TxnMgr.GetOrCreateTxnWithMeta(info, id, ts)
 }
 
 func (db *DB) StartTxnWithStartTSAndSnapshotTS(
 	info []byte,
-	ts types.TS) (txn txnif.AsyncTxn, err error) {
+	ts types.TS,
+) (txn txnif.AsyncTxn, err error) {
 	return db.TxnMgr.StartTxnWithStartTSAndSnapshotTS(info, ts, ts)
 }
 
