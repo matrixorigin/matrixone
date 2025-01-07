@@ -169,11 +169,6 @@ func (s *Scope) Run(c *Compile) (err error) {
 	}
 
 	if s.DataSource == nil {
-		logutil.Infof("xxxx call scope.Run, txn:%s, s:%p, magicType:%v, s.node:%s, s.dataSource is nil",
-			s.Proc.GetTxnOperator().Txn().DebugString(),
-			s,
-			s.Magic,
-			s.NodeInfo.Addr)
 		s.ScopeAnalyzer.Stop()
 		p = pipeline.NewMerge(s.RootOp)
 		_, err = p.Run(s.Proc)
@@ -188,11 +183,6 @@ func (s *Scope) Run(c *Compile) (err error) {
 			_, err = p.Run(s.Proc)
 		} else {
 			if s.DataSource.R == nil {
-				logutil.Infof("xxxx call scope.Run, txn:%s, s:%p, magicType:%v, s.node:%s, s.DataSource.R is nil",
-					s.Proc.GetTxnOperator().Txn().DebugString(),
-					s,
-					s.Magic,
-					s.NodeInfo.Addr)
 				s.NodeInfo.Data = engine_util.BuildEmptyRelData()
 				stats := statistic.StatsInfoFromContext(c.proc.GetTopContext())
 
@@ -211,13 +201,6 @@ func (s *Scope) Run(c *Compile) (err error) {
 			if s.DataSource.node != nil && len(s.DataSource.node.RecvMsgList) > 0 {
 				tag = s.DataSource.node.RecvMsgList[0].MsgTag
 			}
-
-			logutil.Infof("xxxx call scope.Run, txn:%s, s:%p, magicType:%v, s.node:%s, start to call runWithReader",
-				s.Proc.GetTxnOperator().Txn().DebugString(),
-				s,
-				s.Magic,
-				s.NodeInfo.Addr)
-
 			s.ScopeAnalyzer.Stop()
 			_, err = p.RunWithReader(s.DataSource.R, tag, s.Proc)
 		}
@@ -662,12 +645,6 @@ func (s *Scope) handleBlockList(c *Compile, runtimeInExprList []*plan.Expr) erro
 		rsp.IsLocalCN = true
 	}
 
-	//if s.DataSource.TableDef.Name == "debug" {
-	//	logutil.Infof("xxxx call handleBlockList, txn:%s, stack is %s",
-	//		s.Proc.GetTxnOperator().Txn().DebugString(),
-	//		string(debug.Stack()))
-	//}
-
 	commited, err = c.expandRanges(
 		s.DataSource.node,
 		rel,
@@ -678,15 +655,6 @@ func (s *Scope) handleBlockList(c *Compile, runtimeInExprList []*plan.Expr) erro
 		rsp)
 	if err != nil {
 		return err
-	}
-
-	if s.DataSource.TableDef.Name == "debug" {
-		logutil.Infof("xxxx handleBlockList, table-id:%d, txn:%s, cn-ip:%s, cn-id:%s, collect psersisted commmitted blk cnt:%d",
-			s.DataSource.TableDef.TblId,
-			s.Proc.GetTxnOperator().Txn().DebugString(),
-			s.NodeInfo.Addr,
-			s.NodeInfo.Id,
-			commited.DataCnt())
 	}
 
 	average := float64(s.DataSource.node.Stats.BlockNum / s.NodeInfo.CNCNT)
@@ -717,29 +685,10 @@ func (s *Scope) handleBlockList(c *Compile, runtimeInExprList []*plan.Expr) erro
 		}
 		s.NodeInfo.Data.AppendBlockInfoSlice(commited.GetBlockInfoSlice())
 
-		if s.DataSource.TableDef.Name == "debug" {
-			logutil.Infof("xxxx handleBlockList on local CN, table-id:%d, txn:%s, cn-ip:%s, cn-id:%s,collect all blk cnt:%d",
-				s.DataSource.TableDef.TblId,
-				s.Proc.GetTxnOperator().Txn().DebugString(),
-				s.NodeInfo.Addr,
-				s.NodeInfo.Id,
-				s.NodeInfo.Data.DataCnt())
-		}
-
 	} else {
 		tombstones := s.NodeInfo.Data.GetTombstones()
 		commited.AttachTombstones(tombstones)
 		s.NodeInfo.Data = commited
-
-		if s.DataSource.TableDef.Name == "debug" {
-			logutil.Infof("xxxx handleBlockList on remote CN, table-id:%d, txn:%s, cn-ip:%s, cn-id:%s,collect persisted committed blk cnt:%d",
-				s.DataSource.TableDef.TblId,
-				s.Proc.GetTxnOperator().Txn().DebugString(),
-				s.NodeInfo.Addr,
-				s.NodeInfo.Id,
-				s.NodeInfo.Data.DataCnt(),
-			)
-		}
 
 	}
 	return nil
