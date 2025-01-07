@@ -1084,14 +1084,11 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 		//  I kept the old codes here without any modify. I don't know if there is one `GetRelation(txn, scanNode, scheme, table)`
 		{
 			n := s.DataSource.node
-			txnOp := s.Proc.GetTxnOperator()
 			if n.ScanSnapshot != nil && n.ScanSnapshot.TS != nil {
 				if !n.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
 					n.ScanSnapshot.TS.Less(c.proc.GetTxnOperator().Txn().SnapshotTS) {
-					if c.proc.GetCloneTxnOperator() != nil {
-						txnOp = c.proc.GetCloneTxnOperator()
-					} else {
-						txnOp = c.proc.GetTxnOperator().CloneSnapshotOp(*n.ScanSnapshot.TS)
+					if c.proc.GetCloneTxnOperator() == nil {
+						txnOp := c.proc.GetTxnOperator().CloneSnapshotOp(*n.ScanSnapshot.TS)
 						c.proc.SetCloneTxnOperator(txnOp)
 					}
 

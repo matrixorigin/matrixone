@@ -1446,19 +1446,6 @@ func getHiddenColumnForPreInsert(tableDef *TableDef) ([]Type, []string) {
 	return typs, names
 }
 
-// appendPreDeleteNode  build predelete node.
-func appendPreDeleteNode(builder *QueryBuilder, bindCtx *BindContext, objRef *ObjectRef, tableDef *TableDef, lastNodeId int32) int32 {
-	projection := getProjectionByLastNode(builder, lastNodeId)
-
-	preDeleteNode := &Node{
-		NodeType:    plan.Node_PRE_DELETE,
-		ObjRef:      objRef,
-		Children:    []int32{lastNodeId},
-		ProjectList: projection,
-	}
-	return builder.appendNode(preDeleteNode, bindCtx)
-}
-
 func appendJoinNodeForParentFkCheck(builder *QueryBuilder, bindCtx *BindContext, objRef *ObjectRef, tableDef *TableDef, baseNodeId int32) (int32, error) {
 	typMap := make(map[string]plan.Type)
 	id2name := make(map[uint64]string)
@@ -2854,7 +2841,6 @@ func makePreUpdateDeletePlan(
 	//lock new pk for update statement (if update pk)
 	if delCtx.updateColLength > 0 && delCtx.updatePkCol && delCtx.tableDef.Pkey != nil {
 		newPkPos := int32(0)
-		partitionColIdx := int32(len(lastProjectList))
 
 		// for compound primary key, we need append hidden pk column to the project list
 		if delCtx.tableDef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
@@ -2890,9 +2876,6 @@ func makePreUpdateDeletePlan(
 				ProjectList: lastProjectList,
 			}
 			lastNodeId = builder.appendNode(projNode, bindCtx)
-
-			newPkPos = partitionColIdx
-			partitionColIdx += 1
 		} else {
 			// one pk col, just use update pos
 			for k, v := range delCtx.updateColPosMap {
@@ -2931,18 +2914,6 @@ func makePreUpdateDeletePlan(
 	return lastNodeId, nil
 }
 
-func resetPartitionExprPos(expr *Expr, tableDef *TableDef, updateColPos map[string]int) {
-	colPos := make(map[int32]int32)
-	for idx, col := range tableDef.Cols {
-		if newIdx, exists := updateColPos[col.Name]; exists {
-			colPos[int32(idx)] = int32(newIdx)
-		} else {
-			colPos[int32(idx)] = int32(idx)
-		}
-	}
-	resetColPos(expr, colPos)
-}
-
 // func getColPos(expr *Expr, colPos map[int32]int32) {
 // 	switch e := expr.Expr.(type) {
 // 	case *plan.Expr_Col:
@@ -2953,17 +2924,6 @@ func resetPartitionExprPos(expr *Expr, tableDef *TableDef, updateColPos map[stri
 // 		}
 // 	}
 // }
-
-func resetColPos(expr *Expr, colPos map[int32]int32) {
-	switch e := expr.Expr.(type) {
-	case *plan.Expr_Col:
-		e.Col.ColPos = colPos[e.Col.ColPos]
-	case *plan.Expr_F:
-		for _, arg := range e.F.Args {
-			resetColPos(arg, colPos)
-		}
-	}
-}
 
 func appendLockNode(
 	builder *QueryBuilder,

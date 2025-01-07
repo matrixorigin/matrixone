@@ -188,7 +188,6 @@ func prepareTestDeleteMultiUpdateCtx(hasUniqueKey bool, hasSecondaryKey bool) []
 			secondaryPkPos[0] = secondaryPkPos[0] + 2
 			secondaryPkPos[1] = secondaryPkPos[1] + 2
 		}
-		colCount += 2
 		updateCtxs = append(updateCtxs, &MultiUpdateCtx{
 			ObjRef:     secondaryIdxObjRef,
 			TableDef:   secondaryIdxTableDef,

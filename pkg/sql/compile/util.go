@@ -97,12 +97,6 @@ var (
 )
 
 var (
-	deleteMoTablePartitionsWithDatabaseIdFormat = `delete from mo_catalog.mo_table_partitions where database_id = %v;`
-	deleteMoTablePartitionsWithTableIdFormat    = `delete from mo_catalog.mo_table_partitions where table_id = %v;`
-	//deleteMoTablePartitionsWithTableIdAndIndexNameFormat = `delete from mo_catalog.mo_table_partitions where table_id = %v and name = '%s';`
-)
-
-var (
 	insertIntoFullTextIndexTableFormat = "INSERT INTO `%s`.`%s` SELECT f.* FROM `%s`.`%s` AS %s CROSS APPLY fulltext_index_tokenize('%s', %s, %s) AS f;"
 )
 

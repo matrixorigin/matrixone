@@ -1,4 +1,4 @@
--- @skip
+-- @skip:issue#16438
 drop table if exists t1;
 create table t1 (a int, b datetime);
 insert into t1 values(1, '2020-11-11'), (2, '2020-11-12'), (3, '2020-11-13');

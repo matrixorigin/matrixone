@@ -495,8 +495,6 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 		return false, nil
 	}
 
-	ovec := ctr.orderVecs[0].Vec[0]
-
 	rowCount := bat.RowCount()
 	//if ctr.sels == nil {
 	//	ctr.sels = make([]int64, rowCount)
@@ -504,14 +502,6 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 	ctr.sels = make([]int64, rowCount)
 	for i := 0; i < rowCount; i++ {
 		ctr.sels[i] = int64(i)
-	}
-
-	// skip sort for const vector
-	if !ovec.IsConst() {
-		nullCnt := ovec.GetNulls().Count()
-		if nullCnt < ovec.Length() {
-			sort.Sort(ctr.desc[0], ctr.nullsLast[0], nullCnt > 0, ctr.sels, ovec)
-		}
 	}
 
 	ps := make([]int64, 0, 16)
@@ -535,7 +525,7 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 				}
 			}
 		}
-		ovec = vec
+
 		if n == i {
 			ctr.ps = make([]int64, len(ps))
 			copy(ctr.ps, ps)

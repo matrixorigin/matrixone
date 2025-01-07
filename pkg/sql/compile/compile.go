@@ -3810,19 +3810,15 @@ func collectTombstones(
 	var err error
 	//var relData engine.RelData
 	var tombstone engine.Tombstoner
-	var txnOp client.TxnOperator
 
 	//-----------------------------------------------------------------------------------------------------
 	ctx := c.proc.GetTopContext()
-	txnOp = c.proc.GetTxnOperator()
 	if node.ScanSnapshot != nil && node.ScanSnapshot.TS != nil {
 		zeroTS := timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}
 		snapTS := c.proc.GetTxnOperator().Txn().SnapshotTS
 		if !node.ScanSnapshot.TS.Equal(zeroTS) && node.ScanSnapshot.TS.Less(snapTS) {
-			if c.proc.GetCloneTxnOperator() != nil {
-				txnOp = c.proc.GetCloneTxnOperator()
-			} else {
-				txnOp = c.proc.GetTxnOperator().CloneSnapshotOp(*node.ScanSnapshot.TS)
+			if c.proc.GetCloneTxnOperator() == nil {
+				txnOp := c.proc.GetTxnOperator().CloneSnapshotOp(*node.ScanSnapshot.TS)
 				c.proc.SetCloneTxnOperator(txnOp)
 			}
 

@@ -206,13 +206,6 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		return err
 	}
 
-	// 2.delete all partition object record under the database from mo_catalog.mo_table_partitions
-	deleteSql = fmt.Sprintf(deleteMoTablePartitionsWithDatabaseIdFormat, s.Plan.GetDdl().GetDropDatabase().GetDatabaseId())
-	err = c.runSql(deleteSql)
-	if err != nil {
-		return err
-	}
-
 	// 3. delete fks
 	err = c.runSql(s.Plan.GetDdl().GetDropDatabase().GetUpdateFkSql())
 	if err != nil {

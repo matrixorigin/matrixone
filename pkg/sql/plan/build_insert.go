@@ -508,34 +508,6 @@ type locationMap struct {
 	isUnique bool
 }
 
-// getPkOrderInValues returns a map, that
-//
-//	The key   of this map is the order(ignore non-pk cols) in which the primary key columns are inserted in INSERT VALUE SQL
-//	The value of this map is the order(ignore non-pk cols) in which the primary key columns are inserted intableDef.Pkey.Names(NOT TableDef.Cols!)
-//
-// e.g
-//
-//	create table t1 (a int, b int, c int, d int, primary key(a, c, b));
-//	insert into t1(a, b, c, d) value (1, 2, 3, 4) ;
-//	        (a, b, c) -> (a, c, b)  => pkOrderInValues[0] = 0, pkOrderInValues[1] = 2, pkOrderInValues[2] = 1
-//	insert into t1(d, a, b, c) value (4, 1, 2, 3) ;
-//	        (a, b, c) -> (a, c, b)  => pkOrderInValues[0] = 0, pkOrderInValues[1] = 2, pkOrderInValues[2] = 1
-//	insert into t1(b, d, a, c) value (2, 4, 1, 3) ;
-//			(b, a, c) -> (a, c, b)  => pkOrderInValues[0] = 2, pkOrderInValues[1] = 0, pkOrderInValues[2] = 1
-//	insert into t1(c, b, d, a) value (3, 2, 4, 1) ;
-//			(c, b, a) -> (a, c, b)  => pkOrderInValues[0] = 2, pkOrderInValues[1] = 1, pkOrderInValues[2] = 0
-func (p *locationMap) getPkOrderInValues(insertColsNameFromStmt []string) map[int]int {
-	pkOrderInValues := make(map[int]int)
-	i := 0
-	for _, name := range insertColsNameFromStmt {
-		if pkInfo, ok := p.m[name]; ok {
-			pkOrderInValues[i] = pkInfo.order
-			i++
-		}
-	}
-	return pkOrderInValues
-}
-
 // need to check if the primary key filter can be used before calling this function.
 // also need to consider both origin table and hidden table for unique key
 func newLocationMap(tableDef *TableDef, uniqueIndexDef *IndexDef) *locationMap {

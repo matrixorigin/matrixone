@@ -41,8 +41,7 @@ type container struct {
 	buf                *batch.Batch
 	affectedRows       uint64
 
-	source           engine.Relation
-	partitionSources []engine.Relation // Align array index with the partition number
+	source engine.Relation
 }
 
 type Insert struct {

@@ -326,14 +326,6 @@ func makeTestPkArray(from int64, rowCount int) []int64 {
 	return val
 }
 
-func makeTestPartitionArray(rowCount int, partitionCount int) []int32 {
-	val := make([]int32, rowCount)
-	for i := 0; i < rowCount; i++ {
-		val[i] = int32(i % partitionCount)
-	}
-	return val
-}
-
 func makeTestVarcharArray(rowCount int) []string {
 	val := make([]string, rowCount)
 	for i := 0; i < rowCount; i++ {

@@ -192,7 +192,6 @@ func prepareTestUpdateMultiUpdateCtx(hasUniqueKey bool, hasSecondaryKey bool) []
 			InsertCols: []int{7, 0}, //uk_pk & main_tbl_pk
 			DeleteCols: []int{5, 6}, //del_row_id & del_pk
 		})
-		colCount += 3
 	}
 
 	if hasSecondaryKey {
