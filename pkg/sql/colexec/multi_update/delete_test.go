@@ -166,7 +166,6 @@ func prepareTestDeleteMultiUpdateCtx(hasUniqueKey bool, hasSecondaryKey bool) []
 			TableDef:   uniqueTableDef,
 			DeleteCols: []int{2, 3}, //row_id & pk
 		})
-		colCount += 2
 	}
 
 	if hasSecondaryKey {

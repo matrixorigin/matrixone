@@ -216,7 +216,6 @@ func prepareTestUpdateMultiUpdateCtx(hasUniqueKey bool, hasSecondaryKey bool) []
 			deleteCols[1] = deleteCols[1] + 3
 			insertCols[0] = insertCols[0] + 3
 		}
-		colCount += 3
 		updateCtxs = append(updateCtxs, &MultiUpdateCtx{
 			ObjRef:     secondaryIdxObjRef,
 			TableDef:   secondaryIdxTableDef,

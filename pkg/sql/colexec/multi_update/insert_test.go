@@ -229,7 +229,6 @@ func prepareTestInsertMultiUpdateCtx(hasUniqueKey bool, hasSecondaryKey bool) []
 			TableDef:   secondaryIdxTableDef,
 			InsertCols: []int{secondaryPkPos, 0},
 		})
-		colCount += 1
 	}
 
 	return updateCtxs
