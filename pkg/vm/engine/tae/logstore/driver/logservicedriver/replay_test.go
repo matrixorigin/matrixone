@@ -217,6 +217,9 @@ func TestAppendSkipCmd4(t *testing.T) {
 
 	client, _ = driver.getClient()
 	for i := 0; i < entryCount; i++ {
+		payload := []byte(fmt.Sprintf("payload %d", i))
+		e := entry.MockEntryWithPayload(payload)
+		entries[i] = e
 		entries[i].Lsn = lsns[i]
 
 		entry := newRecordEntry()
