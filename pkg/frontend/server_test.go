@@ -34,6 +34,7 @@ func Test_handshake(t *testing.T) {
 	_, err := toml.DecodeFile("test/system_vars_config.toml", pu.SV)
 	require.NoError(t, err)
 	pu.SV.SkipCheckUser = true
+	pu.SV.KillRountinesInterval = 0
 	setSessionAlloc("", NewLeakCheckAllocator())
 	setPu("", pu)
 

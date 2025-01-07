@@ -93,7 +93,7 @@ func NewAppendCmd(id uint32, node *anode, data *containers.Batch, isTombstone bo
 	return impl
 }
 func (c *AppendCmd) Desc() string {
-	s := fmt.Sprintf("CmdName=InsertNode;ID=%d;TS=%d;Dests=[", c.ID, c.Ts)
+	s := fmt.Sprintf("CmdName=InsertNode;ID=%d;TS=%v;Dests=[", c.ID, c.Ts.ToString())
 	for _, info := range c.Infos {
 		s = fmt.Sprintf("%s %s", s, info.Desc())
 	}
@@ -104,7 +104,7 @@ func (c *AppendCmd) Desc() string {
 	return s
 }
 func (c *AppendCmd) String() string {
-	s := fmt.Sprintf("CmdName=InsertNode;ID=%d;TS=%d;Dests=[", c.ID, c.Ts)
+	s := fmt.Sprintf("CmdName=InsertNode;ID=%d;TS=%v;Dests=[", c.ID, c.Ts.ToString())
 	for _, info := range c.Infos {
 		s = fmt.Sprintf("%s%s", s, info.String())
 	}

@@ -49,7 +49,9 @@ show column_number from mo_tables;
 show column_number from mo_database;
 show column_number from mo_columns;
 show column_number from mo_indexes;
+-- @bvt:issue#16438
 show column_number from mo_table_partitions;
+-- @bvt:issue
 
 use system_metrics;
 show column_number from metric;
@@ -113,7 +115,9 @@ show table_values from t1;
 insert into t1 values(10,1.34,"你",'aa','2011-10-11',1);
 show table_values from t1;
 
+set mo_table_stats.use_old_impl = yes;
 select mo_table_rows("test_db","t1"),mo_table_size("test_db","t1");
+set mo_table_stats.use_old_impl = no;
 
 -- test primary key table
 drop table if exists t11;
@@ -139,7 +143,9 @@ show table_values from t11;
 insert into t11 values(10,1.34,"你",'aa','2011-10-11',1);
 show table_values from t11;
 
+set mo_table_stats.use_old_impl = yes;
 select mo_table_rows("test_db","t11"),mo_table_size("test_db","t11");
+set mo_table_stats.use_old_impl = no;
 
 -- test external table
 create external table external_table(
@@ -157,6 +163,7 @@ show table_number from test_db;
 
 show table_values from external_table;
 
+-- @bvt:issue#16438
 -- test partition table
 DROP TABLE IF EXISTS partition_table;
 create table partition_table(
@@ -186,7 +193,10 @@ INSERT INTO partition_table VALUES (7521,'WARD','SALESMAN',7698,'1981-02-22',125
 INSERT INTO partition_table VALUES (7566,'JONES','MANAGER',7839,'1981-04-02',2975,NULL,20);
 show table_values from partition_table;
 
+set mo_table_stats.use_old_impl = yes;
 select mo_table_rows("test_db", "partition_table"),mo_table_size("test_db", "partition_table");
+set mo_table_stats.use_old_impl = no;
+-- @bvt:issue
 
 create table t2(
     col1 json
@@ -247,7 +257,9 @@ show column_number from engines;
 show column_number from routines;
 show column_number from parameters;
 show column_number from keywords;
+-- @bvt:issue#16438
 show column_number from partitions;
+-- @bvt:issue
 
 use mysql;
 show column_number from user;
@@ -306,7 +318,9 @@ show table_values from t1;
 insert into t1 values(10,1.34,"你",'aa','2011-10-11',1);
 show table_values from t1;
 
+set mo_table_stats.use_old_impl = yes;
 select mo_table_rows("test_db","t1"),mo_table_size("test_db","t1");
+set mo_table_stats.use_old_impl = no;
 
 -- test primary key table
 drop table if exists t11;
@@ -332,7 +346,9 @@ show table_values from t11;
 insert into t11 values(10,1.34,"你",'aa','2011-10-11',1);
 show table_values from t11;
 
+set mo_table_stats.use_old_impl = yes;
 select mo_table_rows("test_db","t11"),mo_table_size("test_db","t11");
+set mo_table_stats.use_old_impl = no;
 
 -- test external table
 create external table external_table(

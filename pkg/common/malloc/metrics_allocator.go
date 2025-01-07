@@ -107,9 +107,11 @@ func (m *MetricsAllocator[U]) Allocate(size uint64, hints Hints) ([]byte, Deallo
 	), nil
 }
 
+const metricsAllocatorUpdateWindow = time.Millisecond * 100
+
 func (m *MetricsAllocator[U]) triggerUpdate() {
 	if m.updating.CompareAndSwap(false, true) {
-		time.AfterFunc(time.Second, func() {
+		time.AfterFunc(metricsAllocatorUpdateWindow, func() {
 
 			if m.allocateBytesCounter != nil {
 				var n uint64

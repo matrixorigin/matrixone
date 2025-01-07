@@ -18,6 +18,8 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
 )
@@ -36,4 +38,9 @@ func TestList(t *testing.T) {
 	assert.Equal(t, n2, n0.GetNextNode())
 	n0.ReleaseNextNode()
 	assert.Equal(t, nil, n0.GetNextNode())
+}
+
+func TestMoBatchToStringError(t *testing.T) {
+	t.Log(MoBatchToString(nil, 10))
+	t.Log(MoBatchToString(&batch.Batch{Vecs: []*vector.Vector{nil}}, 10))
 }

@@ -60,6 +60,7 @@ drop table if exists t1;
 -- @label:bvt
 create table t1 (`row` int not null, col int not null, val varchar(255) not null);
 insert into t1 values (1,1,'orange'),(1,2,'large'),(2,1,'yellow'),(2,2,'medium'),(3,1,'green'),(3,2,'small');
+select col,val, case when val="orange" then 1 when upper(val)="LARGE" then 2  else 3 end from t1;
 select max(case col when 1 then val else null end) as color from t1 group by `row`;
 drop table if exists t1;
 
@@ -165,3 +166,7 @@ insert into t1 values
                    (20, 7987, '1985-10-06');
 select id, case when id < 5 then 0 when id < 10 then 1 when id < 15 then 2 when true then 3 else -1 end as xxx from t1;
 DROP TABLE t1;
+create table t1(a varchar(100));
+insert into t1 values ("a");
+select a, case when a="a" then 1 when upper(a)="b" then 2 end from t1;
+drop table if exists t1;

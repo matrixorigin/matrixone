@@ -25,7 +25,11 @@ import (
 	"sync/atomic"
 	"time"
 
+	jsoniter "github.com/json-iterator/go"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
 const (
@@ -34,6 +38,7 @@ const (
 	ADD
 	REMOVE
 	TRIGGER
+	LIST
 )
 
 const (
@@ -48,6 +53,24 @@ const (
 	ECHO
 )
 
+const (
+	// PANIC with non-moerr
+	PanicUseNonMoErr = 0
+	// PANIC with moerr.NewXXXErr
+	PanicUseMoErr = 1
+)
+
+// Domain is the business domain of injection
+// !!!It always less than DomainMax
+type Domain int
+
+const (
+	DomainDefault  Domain = 0
+	DomainTest     Domain = 1
+	DomainFrontend Domain = 2
+	DomainMax      Domain = 4096
+)
+
 // faultEntry describes how we shall fail
 type faultEntry struct {
 	cmd              int     // command
@@ -58,19 +81,22 @@ type faultEntry struct {
 	action           int
 	iarg             int64  // int arg
 	sarg             string // string arg
+	constant         bool
 
 	nWaiters int
 	mutex    sync.Mutex
 	cond     *sync.Cond
+	scope    Domain
 }
 
 type faultMap struct {
 	faultPoints map[string]*faultEntry
 	chIn        chan *faultEntry
 	chOut       chan *faultEntry
+	domain      Domain
 }
 
-var enabled atomic.Pointer[faultMap]
+var enabled [DomainMax]atomic.Pointer[faultMap]
 
 func (fm *faultMap) run() {
 	for {
@@ -79,13 +105,18 @@ func (fm *faultMap) run() {
 		case STOP:
 			return
 		case ADD:
-			if _, ok := fm.faultPoints[e.name]; ok {
+			if v, ok := fm.faultPoints[e.name]; ok && (v.constant || e.constant) {
 				fm.chOut <- nil
 			} else {
 				fm.faultPoints[e.name] = e
 				fm.chOut <- e
 			}
 		case REMOVE:
+			if e.name == "all" {
+				fm.faultPoints = make(map[string]*faultEntry)
+				fm.chOut <- e
+				continue
+			}
 			if v, ok := fm.faultPoints[e.name]; ok {
 				delete(fm.faultPoints, e.name)
 				fm.chOut <- v
@@ -105,6 +136,11 @@ func (fm *faultMap) run() {
 			fm.chOut <- out
 		case LOOKUP:
 			fm.chOut <- fm.faultPoints[e.sarg]
+		case LIST:
+			for _, v := range fm.faultPoints {
+				fm.chOut <- v
+			}
+			fm.chOut <- nil
 		default:
 			fm.chOut <- nil
 		}
@@ -117,7 +153,7 @@ func (e *faultEntry) do() (int64, string) {
 	case SLEEP:
 		time.Sleep(time.Duration(e.iarg) * time.Second)
 	case GETCOUNT:
-		if ee := lookup(e.sarg); ee != nil {
+		if ee := lookup(e.scope, e.sarg); ee != nil {
 			return int64(ee.cnt), ""
 		}
 	case WAIT:
@@ -127,38 +163,44 @@ func (e *faultEntry) do() (int64, string) {
 		e.nWaiters -= 1
 		e.mutex.Unlock()
 	case GETWAITERS:
-		if ee := lookup(e.sarg); ee != nil {
+		if ee := lookup(e.scope, e.sarg); ee != nil {
 			ee.mutex.Lock()
 			nw := ee.nWaiters
 			ee.mutex.Unlock()
 			return int64(nw), ""
 		}
 	case NOTIFY:
-		if ee := lookup(e.sarg); ee != nil {
+		if ee := lookup(e.scope, e.sarg); ee != nil {
 			ee.cond.Signal()
 		}
 	case NOTIFYALL:
-		if ee := lookup(e.sarg); ee != nil {
+		if ee := lookup(e.scope, e.sarg); ee != nil {
 			ee.cond.Broadcast()
 		}
 	case PANIC:
-		panic(e.sarg)
+		switch e.iarg {
+		case PanicUseMoErr:
+			panic(moerr.NewInternalError(context.Background(), e.sarg))
+		default:
+			panic(e.sarg)
+		}
 	case ECHO:
 		return e.iarg, e.sarg
 	}
 	return 0, ""
 }
 
-func startFaultMap() bool {
-	if enabled.Load() != nil {
+func startFaultMap(domain Domain) bool {
+	if enabled[domain].Load() != nil {
 		return false
 	}
 	fm := new(faultMap)
 	fm.faultPoints = make(map[string]*faultEntry)
 	fm.chIn = make(chan *faultEntry)
 	fm.chOut = make(chan *faultEntry)
+	fm.domain = domain
 	go fm.run()
-	if !enabled.CompareAndSwap(nil, fm) {
+	if !enabled[domain].CompareAndSwap(nil, fm) {
 		var msg faultEntry
 		msg.cmd = STOP
 		fm.chIn <- &msg
@@ -167,12 +209,12 @@ func startFaultMap() bool {
 	return true
 }
 
-func stopFaultMap() bool {
-	fm := enabled.Load()
+func stopFaultMap(domain Domain) bool {
+	fm := enabled[domain].Load()
 	if fm == nil {
 		return false
 	}
-	if !enabled.CompareAndSwap(fm, nil) {
+	if !enabled[domain].CompareAndSwap(fm, nil) {
 		return false
 	}
 
@@ -184,21 +226,55 @@ func stopFaultMap() bool {
 
 // Enable fault injection
 func Enable() bool {
-	return startFaultMap()
+	return EnableDomain(DomainDefault)
+}
+
+func EnableDomain(domain Domain) bool {
+	changeStatus := startFaultMap(domain)
+	status := "enabled"
+	if changeStatus {
+		status = "disabled"
+	}
+	logutil.Info(
+		"FAULT-INJECTION-ENABLED",
+		zap.String("previous-status", status),
+	)
+	return changeStatus
 }
 
 // Disable fault injection
 func Disable() bool {
-	return stopFaultMap()
+	return DisableDomain(DomainDefault)
+}
+
+func DisableDomain(domain Domain) bool {
+	changeStatus := stopFaultMap(domain)
+	status := "enabled"
+	if !changeStatus {
+		status = "disabled"
+	}
+	logutil.Info(
+		"FAULT-INJECTION-DISABLED",
+		zap.String("previous-status", status),
+	)
+	return changeStatus
 }
 
 func Status() bool {
-	return enabled.Load() != nil
+	return StatusOfDomain(DomainDefault)
+}
+
+func StatusOfDomain(domain Domain) bool {
+	return enabled[domain].Load() != nil
 }
 
 // Trigger a fault point.
 func TriggerFault(name string) (iret int64, sret string, exist bool) {
-	fm := enabled.Load()
+	return TriggerFaultInDomain(DomainDefault, name)
+}
+
+func TriggerFaultInDomain(domain Domain, name string) (iret int64, sret string, exist bool) {
+	fm := enabled[domain].Load()
 	if fm == nil {
 		return
 	}
@@ -216,8 +292,12 @@ func TriggerFault(name string) (iret int64, sret string, exist bool) {
 	return
 }
 
-func AddFaultPoint(ctx context.Context, name string, freq string, action string, iarg int64, sarg string) error {
-	fm := enabled.Load()
+func AddFaultPoint(ctx context.Context, name string, freq string, action string, iarg int64, sarg string, constant bool) error {
+	return AddFaultPointInDomain(ctx, DomainDefault, name, freq, action, iarg, sarg, constant)
+}
+
+func AddFaultPointInDomain(ctx context.Context, domain Domain, name string, freq string, action string, iarg int64, sarg string, constant bool) error {
+	fm := enabled[domain].Load()
 	if fm == nil {
 		return moerr.NewInternalError(ctx, "add fault point not enabled")
 	}
@@ -228,6 +308,7 @@ func AddFaultPoint(ctx context.Context, name string, freq string, action string,
 	var msg faultEntry
 	msg.cmd = ADD
 	msg.name = name
+	msg.scope = domain
 
 	// freq is start:end:skip:prob
 	sesp := strings.Split(freq, ":")
@@ -294,6 +375,7 @@ func AddFaultPoint(ctx context.Context, name string, freq string, action string,
 
 	msg.iarg = iarg
 	msg.sarg = sarg
+	msg.constant = constant
 
 	if msg.action == WAIT {
 		msg.cond = sync.NewCond(&msg.mutex)
@@ -302,15 +384,22 @@ func AddFaultPoint(ctx context.Context, name string, freq string, action string,
 	fm.chIn <- &msg
 	out := <-fm.chOut
 	if out == nil {
-		return moerr.NewInternalError(ctx, "add fault injection point failed.")
+		return moerr.NewInternalError(
+			ctx,
+			"failed to add fault point; it may already exist and be constant.",
+		)
 	}
 	return nil
 }
 
-func RemoveFaultPoint(ctx context.Context, name string) error {
-	fm := enabled.Load()
+func RemoveFaultPoint(ctx context.Context, name string) (bool, error) {
+	return RemoveFaultPointFromDomain(ctx, DomainDefault, name)
+}
+
+func RemoveFaultPointFromDomain(ctx context.Context, domain Domain, name string) (bool, error) {
+	fm := enabled[domain].Load()
 	if fm == nil {
-		return moerr.NewInternalError(ctx, "add fault injection point not enabled.")
+		return false, moerr.NewInternalError(ctx, "fault injection not enabled.")
 	}
 
 	var msg faultEntry
@@ -319,13 +408,13 @@ func RemoveFaultPoint(ctx context.Context, name string) error {
 	fm.chIn <- &msg
 	out := <-fm.chOut
 	if out == nil {
-		return moerr.NewInvalidInputf(ctx, "invalid injection point %s", name)
+		return false, nil
 	}
-	return nil
+	return true, nil
 }
 
-func lookup(name string) *faultEntry {
-	fm := enabled.Load()
+func lookup(domain Domain, name string) *faultEntry {
+	fm := enabled[domain].Load()
 	if fm == nil {
 		return nil
 	}
@@ -336,4 +425,45 @@ func lookup(name string) *faultEntry {
 	fm.chIn <- &msg
 	out := <-fm.chOut
 	return out
+}
+
+type Point struct {
+	Name string `json:"name"`
+	Iarg int64  `json:"iarg"`
+	Sarg string `json:"sarg"`
+
+	Constant bool `json:"constant"`
+}
+
+func ListAllFaultPoints() string {
+	return ListAllFaultPointsInDomain(DomainDefault)
+}
+
+func ListAllFaultPointsInDomain(domain Domain) string {
+	fm := enabled[domain].Load()
+	if fm == nil {
+		return "list fault points not enabled"
+	}
+
+	points := make([]Point, 0)
+
+	var msg faultEntry
+	msg.cmd = LIST
+	fm.chIn <- &msg
+	for {
+		out := <-fm.chOut
+		if out == nil {
+			break
+		}
+		points = append(points, Point{
+			Name:     out.name,
+			Iarg:     out.iarg,
+			Sarg:     out.sarg,
+			Constant: out.constant,
+		})
+	}
+
+	data, _ := jsoniter.Marshal(points)
+
+	return string(data)
 }

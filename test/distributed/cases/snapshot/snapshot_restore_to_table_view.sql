@@ -26,7 +26,7 @@ from
 select * from EmployeeSalaryRanking;
 
 drop snapshot if exists sp06;
-create snapshot sp06 for account sys;
+create snapshot sp06 for account;
 
 drop database test01;
 
@@ -67,7 +67,7 @@ from
 select * from EmployeeSalaryRanking;
 
 drop snapshot if exists sp06;
-create snapshot sp06 for account sys;
+create snapshot sp06 for account;
 
 drop table EmployeeSalaries;
 drop view EmployeeSalaryRanking;
@@ -179,7 +179,7 @@ SELECT * FROM combined_sales_view;
 drop snapshot if exists sp06;
 -- @ignore:1
 show snapshots;
-create snapshot sp06 for account sys;
+create snapshot sp06 for account;
 
 drop database test01;
 
@@ -216,6 +216,7 @@ drop snapshot if exists sp06;
 
 -- multi view
 -- database School
+drop database if exists School;
 CREATE DATABASE School;
 USE School;
 
@@ -281,6 +282,7 @@ select * from HighGradeStudents;
 select * from CourseAverageGrades;
 
 -- database University
+drop database if exists University;
 CREATE DATABASE University;
 USE University;
 
@@ -392,6 +394,7 @@ select * from ProfessorCourses;
 select * from DepartmentAverageGrade;
 select * from TopStudents;
 
+drop database if exists EducationSystem;
 CREATE DATABASE EducationSystem;
 USE EducationSystem;
 
@@ -432,7 +435,7 @@ select * from StudentOverallPerformance;
 drop snapshot if exists sp06;
 -- @ignore:1
 show snapshots;
-create snapshot sp06 for account sys;
+create snapshot sp06 for account;
 
 drop database School;
 drop database University;

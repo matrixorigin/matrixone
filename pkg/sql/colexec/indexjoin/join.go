@@ -41,9 +41,6 @@ func (indexJoin *IndexJoin) Prepare(proc *process.Process) (err error) {
 		indexJoin.OpAnalyzer.Reset()
 	}
 
-	if indexJoin.ProjectList != nil {
-		err = indexJoin.PrepareProjection(proc)
-	}
 	if indexJoin.ctr.buf == nil {
 		indexJoin.ctr.buf = batch.NewWithSize(len(indexJoin.Result))
 	}

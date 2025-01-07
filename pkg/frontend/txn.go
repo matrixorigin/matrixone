@@ -425,7 +425,7 @@ func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 		return err2
 	})
 	if err != nil || hasRecovered {
-		return err
+		return moerr.AttachCause(tempCtx, err)
 	}
 	if th.txnOp == nil {
 		return moerr.NewInternalError(execCtx.reqCtx, "NewTxnOperator: txnClient new a null txn")

@@ -10,7 +10,7 @@ show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
 account_sp    2024-06-28 06:13:04.389609    account    sys        
 create snapshot cluster_sp for cluster;
-create snapshot account_sp for account sys;
+create snapshot account_sp for account;
 internal error: snapshot account_sp already exists
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME

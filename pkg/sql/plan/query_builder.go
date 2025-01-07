@@ -102,12 +102,6 @@ func (builder *QueryBuilder) remapColRefForExpr(expr *Expr, colMap map[[2]int32]
 		if err != nil {
 			return err
 		}
-		//for _, arg := range ne.W.PartitionBy {
-		//	err = builder.remapColRefForExpr(arg, colMap)
-		//	if err != nil {
-		//		return err
-		//	}
-		//}
 		for _, order := range ne.W.OrderBy {
 			err = builder.remapColRefForExpr(order.Expr, colMap, remapInfo)
 			if err != nil {
@@ -849,10 +843,6 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		timeTag := node.BindingTags[0]
 		groupTag := node.BindingTags[1]
 
-		for i, expr := range node.FilterList {
-			builder.remapWindowClause(expr, timeTag, int32(i))
-		}
-
 		// order by
 		idx := 0
 		increaseRefCnt(node.OrderBy[0].Expr, -1, colRefCnt)
@@ -971,11 +961,13 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			increaseRefCnt(expr, 1, colRefCnt)
 		}
 
+		// remap children node
 		childRemapping, err := builder.remapAllColRefs(node.Children[0], step, colRefCnt, colRefBool, sinkColRef)
 		if err != nil {
 			return nil, err
 		}
 
+		// append children projection list
 		childProjList := builder.qry.Nodes[node.Children[0]].ProjectList
 		for i, globalRef := range childRemapping.localToGlobal {
 			if colRefCnt[globalRef] == 0 {
@@ -999,10 +991,22 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		windowTag := node.BindingTags[0]
 		l := len(childProjList)
 
+		// In the window function node,
+		// the filtering conditions also need to be remapped
 		for _, expr := range node.FilterList {
-			builder.remapWindowClause(expr, windowTag, int32(l))
+			// get col pos from remap info
+			err = builder.remapWindowClause(
+				expr,
+				windowTag,
+				int32(l),
+				childRemapping.globalToLocal,
+				&remapInfo)
+			if err != nil {
+				return nil, err
+			}
 		}
 
+		// remap all window function
 		remapInfo.tip = "WinSpecList"
 		for idx, expr := range node.WinSpecList {
 			increaseRefCnt(expr, -1, colRefCnt)
@@ -1012,7 +1016,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 				return nil, err
 			}
 
-			globalRef := [2]int32{windowTag, int32(node.GetWindowIdx())}
+			globalRef := [2]int32{windowTag, node.GetWindowIdx()}
 			if colRefCnt[globalRef] == 0 {
 				continue
 			}
@@ -1841,7 +1845,33 @@ func (builder *QueryBuilder) rewriteStarApproxCount(nodeID int32) {
 	}
 }
 
+func (builder *QueryBuilder) removeUnnecessaryProjections(nodeID int32) int32 {
+	node := builder.qry.Nodes[nodeID]
+	if len(node.Children) == 0 {
+		return nodeID
+	}
+
+	for i, childID := range node.Children {
+		node.Children[i] = builder.removeUnnecessaryProjections(childID)
+	}
+
+	if node.NodeType != plan.Node_PROJECT {
+		return nodeID
+	}
+	childNodeID := node.Children[0]
+	childNode := builder.qry.Nodes[childNodeID]
+	if len(childNode.ProjectList) != 0 {
+		return nodeID
+	}
+	if childNode.NodeType == plan.Node_JOIN {
+		return nodeID
+	}
+	childNode.ProjectList = node.ProjectList
+	return childNodeID
+}
+
 func (builder *QueryBuilder) createQuery() (*Query, error) {
+	var err error
 	colRefBool := make(map[[2]int32]bool)
 	sinkColRef := make(map[[2]int32]int)
 
@@ -1896,7 +1926,10 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		}
 		// after determine shuffle, be careful when calling ReCalcNodeStats again.
 		// needResetHashMapStats should always be false from here
-		rootID = builder.applyIndices(rootID, colRefCnt, make(map[[2]int32]*plan.Expr))
+		rootID, err = builder.applyIndices(rootID, colRefCnt, make(map[[2]int32]*plan.Expr))
+		if err != nil {
+			return nil, err
+		}
 		ReCalcNodeStats(rootID, builder, true, false, false)
 
 		builder.generateRuntimeFilters(rootID)
@@ -1940,13 +1973,14 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 				colRefCnt[[2]int32{resultTag, int32(j)}] = 1
 			}
 		}
-		_, err := builder.remapAllColRefs(rootID, int32(i), colRefCnt, colRefBool, sinkColRef)
+		_, err = builder.remapAllColRefs(rootID, int32(i), colRefCnt, colRefBool, sinkColRef)
 		if err != nil {
 			return nil, err
 		}
+		builder.qry.Steps[i] = builder.removeUnnecessaryProjections(rootID)
 	}
 
-	err := builder.lockTableIfLockNoRowsAtTheEndForDelAndUpdate()
+	err = builder.lockTableIfLockNoRowsAtTheEndForDelAndUpdate()
 	if err != nil {
 		return nil, err
 	}
@@ -4189,7 +4223,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 					return 0, err
 				}
 
-				originStmts, err := mysql.Parse(builder.GetContext(), viewData.Stmt, 1)
+				originStmts, err := mysql.Parse(builder.GetContext(), viewData.Stmt, ctx.lower)
 				defer func() {
 					for _, s := range originStmts {
 						s.Free()
@@ -4871,6 +4905,13 @@ func (builder *QueryBuilder) resolveTsHint(tsExpr *tree.AtTimeStamp) (snapshot *
 			}
 
 			snapshot = &Snapshot{TS: &ts, Tenant: tenant}
+		} else if tsExpr.Type == tree.ASOFTIMESTAMP {
+			var ts int64
+			if ts, err = doResolveTimeStamp(lit.Sval); err != nil {
+				return
+			}
+			tStamp := &timestamp.Timestamp{PhysicalTime: ts}
+			snapshot = &Snapshot{TS: tStamp, Tenant: tenant}
 		} else {
 			err = moerr.NewInvalidArg(builder.GetContext(), "invalid timestamp hint type", tsExpr.Type.String())
 			return
@@ -4886,6 +4927,12 @@ func (builder *QueryBuilder) resolveTsHint(tsExpr *tree.AtTimeStamp) (snapshot *
 			if lit.I64Val <= 0 {
 				err = moerr.NewInvalidArg(builder.GetContext(), "invalid timestamp value", lit.I64Val)
 				return
+			}
+			if bgSnapshot := builder.compCtx.GetSnapshot(); builder.isRestoreByTs {
+				tenant = &SnapshotTenant{
+					TenantName: bgSnapshot.Tenant.TenantName,
+					TenantID:   bgSnapshot.Tenant.TenantID,
+				}
 			}
 			snapshot = &Snapshot{TS: &timestamp.Timestamp{PhysicalTime: lit.I64Val}, Tenant: tenant}
 		} else {

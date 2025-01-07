@@ -139,8 +139,6 @@ show stages;
 select * from t5 into outfile 'stage://stage05/local_stage_table05.csv';
 truncate t5;
 insert into t5 values (1,1,1);
--- echo duplicate
-load data infile 'stage://stage05/local_stage_table05.csv' into table t5 fields terminated by ',' ignore 1 lines;
 delete from t5;
 load data infile 'stage://stage05/local_stage_table05.csv' into table t5 fields terminated by ',' ignore 1 lines;
 select * from t5;

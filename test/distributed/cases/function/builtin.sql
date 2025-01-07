@@ -451,7 +451,9 @@ create table t1(a int, b int);
 select mo_table_rows(db_name,'t1'),mo_table_size(db_name,'t1') from (select database() as db_name);
 insert into t1 values(1, 2);
 insert into t1 values(3, 4);
+set mo_table_stats.use_old_impl = yes;
 select mo_table_rows(db_name,'t1'),mo_table_size(db_name,'t1') from (select database() as db_name);
+set mo_table_stats.use_old_impl = no;
 
 
 -- @teardown

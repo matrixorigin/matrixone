@@ -30,9 +30,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -81,9 +81,20 @@ func NewMergeObjectsTask(
 	rt *dbutils.Runtime,
 	targetObjSize uint32,
 	isTombstone bool) (task *mergeObjectsTask, err error) {
-	if len(mergedObjs) == 0 {
-		panic("empty mergedObjs")
+	objs := mergedObjs
+	mergedObjs = make([]*catalog.ObjectEntry, 0, len(objs))
+	for _, obj := range objs {
+		if obj.HasDropIntent() {
+			continue
+		}
+		mergedObjs = append(mergedObjs, obj)
 	}
+
+	if len(mergedObjs) == 0 {
+		logutil.Infof("[MERGE-EMPTY] no object to merge, don't worry")
+		return nil, moerr.GetOkStopCurrRecur()
+	}
+
 	task = &mergeObjectsTask{
 		txn:              txn,
 		rt:               rt,
@@ -306,7 +317,7 @@ func (task *mergeObjectsTask) prepareCommitEntry() *api.MergeCommitEntry {
 	return commitEntry
 }
 
-func (task *mergeObjectsTask) PrepareNewWriter() *blockio.BlockWriter {
+func (task *mergeObjectsTask) PrepareNewWriter() *ioutil.BlockWriter {
 	seqnums := make([]uint16, 0, len(task.schema.ColDefs)-1)
 	for _, def := range task.schema.ColDefs {
 		if def.IsPhyAddr() {
@@ -327,7 +338,7 @@ func (task *mergeObjectsTask) PrepareNewWriter() *blockio.BlockWriter {
 		sortkeyPos = task.schema.GetSingleSortKeyIdx()
 	}
 
-	writer := blockio.ConstructWriterWithSegmentID(
+	writer := ioutil.ConstructWriterWithSegmentID(
 		task.segmentID,
 		task.num,
 		task.schema.Version,

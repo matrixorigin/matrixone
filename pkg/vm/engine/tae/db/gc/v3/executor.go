@@ -23,11 +23,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio/mergeutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 )
 
 type GCJob = CheckpointBasedGCJob
@@ -52,6 +53,11 @@ func BuildBloomfilter(
 	var done bool
 	for {
 		bat.CleanOnlyData()
+		select {
+		case <-ctx.Done():
+			return nil, context.Cause(ctx)
+		default:
+		}
 		if done, err = sourcer(ctx, bat.Attrs, nil, mp, bat); err != nil {
 			return
 		}
@@ -110,6 +116,11 @@ func (exec *GCExecutor) doFilter(
 	for {
 		bat.CleanOnlyData()
 		canGCBat.CleanOnlyData()
+		select {
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		default:
+		}
 		// 1. get next batch from sourcer
 		done, err := sourcer(ctx, bat.Attrs, nil, exec.mp, bat)
 		if err != nil {
@@ -124,7 +135,7 @@ func (exec *GCExecutor) doFilter(
 		//    bit 0 means the row cannot be GC'ed
 		exec.bm.Clear()
 		exec.bm.TryExpandWithSize(bat.RowCount())
-		err = mergesort.SortColumnsByIndex(bat.Vecs, 2, exec.mp)
+		err = mergeutil.SortColumnsByIndex(bat.Vecs, 2, exec.mp)
 		if err != nil {
 			return err
 		}
@@ -157,12 +168,12 @@ func (exec *GCExecutor) Run(
 	finalCanGCSinker SinkerFn,
 ) (newFiles []objectio.ObjectStats, err error) {
 	cannotGCSinker := exec.getSinker(
-		engine_util.WithBuffer(exec.buffer.impl, false),
+		ioutil.WithBuffer(exec.buffer.impl, false),
 	)
 
 	canGCSinker := exec.getSinker(
-		engine_util.WithBuffer(exec.buffer.impl, false),
-		engine_util.WithTailSizeCap(exec.config.canGCCacheSize),
+		ioutil.WithBuffer(exec.buffer.impl, false),
+		ioutil.WithTailSizeCap(exec.config.canGCCacheSize),
 	)
 	defer cannotGCSinker.Close()
 	defer canGCSinker.Close()
@@ -196,7 +207,7 @@ func (exec *GCExecutor) Run(
 		canGCObjects,
 		exec.fs,
 		timestamp.Timestamp{},
-		engine_util.WithColumns(
+		readutil.WithColumns(
 			ObjectTableSeqnums,
 			ObjectTableTypes,
 		),
@@ -233,9 +244,9 @@ func (exec *GCExecutor) putBuffer(bat *batch.Batch) {
 }
 
 func (exec *GCExecutor) getSinker(
-	opts ...engine_util.SinkerOption,
-) *engine_util.Sinker {
-	return engine_util.NewSinker(
+	opts ...ioutil.SinkerOption,
+) *ioutil.Sinker {
+	return ioutil.NewSinker(
 		ObjectTablePrimaryKeyIdx,
 		ObjectTableAttrs,
 		ObjectTableTypes,

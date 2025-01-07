@@ -15,8 +15,10 @@
 package catalog
 
 import (
+	"bytes"
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -24,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
 func newAttributeDef(name string, typ types.Type, isPrimary, isHidden bool) engine.TableDef {
@@ -70,7 +73,7 @@ func ParseEntryList(es []*api.Entry) (any, []*api.Entry, error) {
 				return nil, nil, err
 			}
 			if bat.RowCount() != 1 {
-				panic("bad alter table batch size")
+				return nil, nil, moerr.NewInternalErrorNoCtxf("bad alter table batch size %s", common.MoBatchToString(bat, 10))
 			}
 			colBat, err := getColumnBatch(es[1])
 
@@ -94,12 +97,17 @@ func ParseEntryList(es []*api.Entry) (any, []*api.Entry, error) {
 		} else if e.EntryType == api.Entry_Delete {
 			return parseDeleteTable(es)
 		} else {
-			panic(fmt.Sprintf("bad mo_tables entry type %d", e.EntryType))
+			return nil, nil, moerr.NewInternalErrorNoCtxf("bad mo_tables entry type '%d'", e.EntryType)
 		}
 	}
 
 	if e.DatabaseId == MO_CATALOG_ID && e.TableId == MO_COLUMNS_ID {
-		panic("bad write format")
+		bat, _ := batch.ProtoBatchToBatch(e.Bat)
+		batstr := ""
+		if bat != nil {
+			batstr = common.MoBatchToString(bat, 5)
+		}
+		return nil, nil, moerr.NewInternalErrorNoCtxf("bad write format %q, %v, batch %s", e.EntryType, len(es), batstr)
 	}
 	if e.EntryType == api.Entry_Alter {
 		bat, err := batch.ProtoBatchToBatch(e.Bat)
@@ -159,13 +167,12 @@ func parseCreateTable(es []*api.Entry) (any, []*api.Entry, error) {
 }
 
 func getColumnBatch(e *api.Entry) (*batch.Batch, error) {
-	if e.DatabaseId != MO_CATALOG_ID || e.TableId != MO_COLUMNS_ID {
-		// return nil, moerr.NewInternalErrorNoCtx("mismatched column batch")
-		panic("mismatched column batch")
-	}
 	bat, err := batch.ProtoBatchToBatch(e.Bat)
 	if err != nil {
 		return nil, err
+	}
+	if e.DatabaseId != MO_CATALOG_ID || e.TableId != MO_COLUMNS_ID {
+		return nil, moerr.NewInternalErrorNoCtxf("mismatched column batch %v,%v, %s", e.DatabaseId, e.TableId, common.MoBatchToString(bat, 10))
 	}
 	return bat, nil
 }
@@ -178,8 +185,7 @@ func collectInsertColBatch(e *api.Entry, cmd *CreateTable) (*batch.Batch, error)
 	rows := GenRows(bat)
 	for _, row := range rows {
 		if ctid := row[MO_COLUMNS_ATT_RELNAME_ID_IDX].(uint64); ctid != cmd.TableId {
-			// return nil, moerr.NewInternalErrorNoCtx("mismatched column id %d -- %d", ctid, cmd.TableId)
-			panic(fmt.Sprintf("mismatched column id %d -- %d", ctid, cmd.TableId))
+			return nil, moerr.NewInternalErrorNoCtxf("mismatched column id %d -- %d", ctid, cmd.TableId)
 		}
 		def, err := genTableDefs(row)
 		if def.(*engine.AttributeDef).Attr.Name == Row_ID {
@@ -476,4 +482,29 @@ func GenRows(bat *batch.Batch) [][]any {
 		}
 	}
 	return rows
+}
+
+func ShowReqs(reqs []any) string {
+	b := new(bytes.Buffer)
+	for _, req := range reqs {
+		switch r := req.(type) {
+		case *CreateDatabaseReq:
+			cmd := r.Cmds[0]
+			b.WriteString(fmt.Sprintf("CreateDatabaseReq{%v,%v,%v}/%v | ", cmd.AccountId, cmd.DatabaseId, cmd.Name, len(r.Cmds)))
+		case *DropDatabaseReq:
+			cmd := r.Cmds[0]
+			b.WriteString(fmt.Sprintf("DropDatabaseReq{%v,%v}/%v | ", cmd.Id, cmd.Name, len(r.Cmds)))
+		case *CreateTableReq:
+			cmd := r.Cmds[0]
+			b.WriteString(fmt.Sprintf("CreateTableReq{%v,%v,%v,%v}/%v | ", cmd.AccountId, cmd.DatabaseId, cmd.TableId, cmd.Name, len(r.Cmds)))
+		case *DropTableReq:
+			cmd := r.Cmds[0]
+			b.WriteString(fmt.Sprintf("DropTableReq{%v,%v}/%v | ", cmd.Id, cmd.Name, len(r.Cmds)))
+		case *api.AlterTableReq:
+			b.WriteString(fmt.Sprintf("AlterTableReq{%v,%v,%v} | ", r.DbId, r.TableId, r.Kind))
+		default:
+			b.WriteString("WriteBatch | ")
+		}
+	}
+	return b.String()
 }

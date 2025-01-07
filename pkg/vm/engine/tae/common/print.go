@@ -276,9 +276,16 @@ func MoVectorToString(v *vector.Vector, printN int, opts ...TypePrintOpt) string
 }
 
 func MoBatchToString(moBat *batch.Batch, printN int) string {
+	if moBat == nil {
+		return "empty batch"
+	}
 	n := 0
 	buf := new(bytes.Buffer)
 	for i, vec := range moBat.Vecs {
+		if vec == nil {
+			fmt.Fprintf(buf, "[col%v] = nil\n", i)
+			continue
+		}
 		if n = vec.Length(); n < printN {
 			printN = n
 		}

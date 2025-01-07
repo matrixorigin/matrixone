@@ -45,7 +45,14 @@ func newStartTask(r *taskRunner, t *daemonTask) *startTask {
 
 func (t *startTask) Handle(_ context.Context) error {
 	if err := t.runner.stopper.RunTask(func(ctx context.Context) {
-		defer t.runner.removeDaemonTask(t.task.task.ID)
+		var err error
+		defer func() {
+			// if cdc task quit without error
+			if t.task.task.TaskType == task.TaskType_CreateCdc && err == nil {
+				return
+			}
+			t.runner.removeDaemonTask(t.task.task.ID)
+		}()
 
 		ok, err := t.runner.startDaemonTask(ctx, t.task)
 		if err != nil {
@@ -61,7 +68,7 @@ func (t *startTask) Handle(_ context.Context) error {
 
 		// Start the go-routine to execute the task. It hangs here until
 		// the task encounters some error or be canceled.
-		if err := t.task.executor(ctx, &t.task.task); err != nil {
+		if err = t.task.executor(ctx, &t.task.task); err != nil {
 			// set the record of this task error message.
 			t.runner.setDaemonTaskError(ctx, t.task, err)
 		}

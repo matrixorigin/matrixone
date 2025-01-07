@@ -17,6 +17,7 @@ package predefine
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -27,7 +28,7 @@ import (
 )
 
 // genInitCronTaskSQL Generate `insert` statement for creating system cron tasks, which works on the `mo_task`.`sys_cron_task` table.
-func GenInitCronTaskSQL() (string, error) {
+func GenInitCronTaskSQL(codes ...int32) (string, error) {
 	cronParser := cron.NewParser(
 		cron.Second |
 			cron.Minute |
@@ -63,7 +64,7 @@ func GenInitCronTaskSQL() (string, error) {
 	}
 	cronTasks = append(cronTasks, task1)
 
-	task2, err := createCronTask(mometric.TaskMetadata(mometric.StorageUsageCronTask, task.TaskCode_MetricStorageUsage), export.MergeTaskCronExprEvery05Min)
+	task2, err := createCronTask(mometric.TaskMetadata(mometric.StorageUsageCronTask, task.TaskCode_MetricStorageUsage), mometric.StorageUsageTaskCronExpr)
 	if err != nil {
 		return "", err
 	}
@@ -80,6 +81,18 @@ func GenInitCronTaskSQL() (string, error) {
 	}
 	cronTasks = append(cronTasks, task3)
 
+	task4, err := createCronTask(
+		task.TaskMetadata{
+			ID:       "mo_table_stats",
+			Executor: task.TaskCode_MOTableStats,
+			Options:  task.TaskOptions{Concurrency: 1},
+		}, export.MergeTaskCronExprEveryMin)
+	if err != nil {
+		return "", err
+	}
+
+	cronTasks = append(cronTasks, task4)
+
 	sql := fmt.Sprintf(`insert into %s.sys_cron_task (
                            task_metadata_id,
 						   task_metadata_executor,
@@ -92,12 +105,24 @@ func GenInitCronTaskSQL() (string, error) {
                            update_at
                     ) values `, catalog.MOTaskDB)
 
-	for i, t := range cronTasks {
+	first := true
+	for _, t := range cronTasks {
+		if len(codes) != 0 && slices.Index(codes, int32(t.Metadata.Executor)) == -1 {
+			// if the task codes specified, only process them.
+			continue
+		}
+
+		if len(codes) == 0 && t.Metadata.Executor == task.TaskCode_MOTableStats {
+			// test code to test if the init mo_table_stats task meta code works.
+			continue
+		}
+
 		j, err := json.Marshal(t.Metadata.Options)
 		if err != nil {
 			return "", err
 		}
-		if i == 0 {
+		if first {
+			first = false
 			sql += fmt.Sprintf("('%s' ,%d ,'%s' ,'%s' ,'%s' ,%d ,%d ,%d ,%d)",
 				t.Metadata.ID,
 				t.Metadata.Executor,

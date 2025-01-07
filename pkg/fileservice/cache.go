@@ -163,6 +163,7 @@ func readCache(ctx context.Context, cache IOVectorCache, vector *IOVector) error
 	if err != nil {
 
 		if errors.Is(err, context.DeadlineExceeded) {
+			LogEvent(ctx, str_read_cache_exceed_deadline)
 			err = moerr.AttachCause(ctx, err)
 			logutil.Warn("cache read exceed deadline",
 				zap.Any("err", err),

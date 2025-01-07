@@ -175,6 +175,27 @@ func (m TxnRequest) GetTargetTN() metadata.TNShard {
 	}
 }
 
+func (m *TxnRequest) ResetTargetTN(shard metadata.TNShard) {
+	switch m.Method {
+	case TxnMethod_Read, TxnMethod_Write, TxnMethod_DEBUG:
+		m.CNRequest.Target = shard
+	case TxnMethod_Commit:
+		m.Txn.TNShards[0] = shard
+	case TxnMethod_Rollback:
+		m.Txn.TNShards[0] = shard
+	case TxnMethod_Prepare:
+		m.PrepareRequest.TNShard = shard
+	case TxnMethod_GetStatus:
+		m.GetStatusRequest.TNShard = shard
+	case TxnMethod_CommitTNShard:
+		m.CommitTNShardRequest.TNShard = shard
+	case TxnMethod_RollbackTNShard:
+		m.RollbackTNShardRequest.TNShard = shard
+	default:
+		panic(fmt.Sprintf("unknown txn request method: %v, shard: %v", m.Method, shard.String()))
+	}
+}
+
 // SetID implement morpc Messgae
 func (m *TxnRequest) SetID(id uint64) {
 	m.RequestID = id

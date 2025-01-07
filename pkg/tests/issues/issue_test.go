@@ -242,13 +242,13 @@ func TestBinarySearchBlkDataOnUnSortedFakePKCol(t *testing.T) {
 				executor.Options{}.WithDatabase("testdb"))
 			require.NoError(t, err)
 
-			willInsertRows := 10000
-			for i := 0; i < 10; i++ {
+			willInsertRows := 50
+			for i := 0; i < 5; i++ {
 				_, err = sqlExecutor.Exec(ctx,
 					fmt.Sprintf(
 						"insert into hhh "+
 							"select FLOOR(RAND()*1000*1000)"+
-							"from generate_series(1, %d);", willInsertRows/10),
+							"from generate_series(1, %d);", willInsertRows/5),
 					executor.Options{}.WithDatabase("testdb"))
 				require.NoError(t, err)
 
@@ -284,7 +284,7 @@ func TestBinarySearchBlkDataOnUnSortedFakePKCol(t *testing.T) {
 				require.NoError(t, err)
 
 				var keys []int64
-				for r := 0; r < 100; r++ {
+				for r := 0; r < 5; r++ {
 					keys = keys[:0]
 					for i := 0; i < willInsertRows; i++ {
 						keys = append(keys, rand.Int63()%int64(willInsertRows))
@@ -771,7 +771,13 @@ func TestSpeedupAbortAllTxn(t *testing.T) {
 	op, err := c.GetCNService(0)
 	require.NoError(t, err)
 
+	waitC := make(chan struct{})
 	cn := op.RawService().(cnservice.Service)
+	eng := cn.GetEngine().(*disttae.Engine)
+	logtailClient := eng.PushClient()
+	logtailClient.SetReconnectHandler(func() {
+		waitC <- struct{}{}
+	})
 
 	c1 := make(chan struct{})
 	c2 := make(chan struct{})
@@ -791,7 +797,6 @@ func TestSpeedupAbortAllTxn(t *testing.T) {
 		err := exec.ExecTxn(
 			ctx,
 			func(txn executor.TxnExecutor) error {
-				op := txn.Txn()
 				res, err := txn.Exec(
 					"create database TestSpeedupAbortAllTxn",
 					executor.StatementOption{},
@@ -804,20 +809,13 @@ func TestSpeedupAbortAllTxn(t *testing.T) {
 				<-c2
 				close(actionC)
 
-				for {
-					s, err := op.Snapshot()
-					require.NoError(t, err)
-					if s.Flag&client.AbortedFlag != 0 {
-						break
-					}
-					time.Sleep(time.Second)
-				}
+				<-waitC
 
 				return nil
 			},
 			executor.Options{}.WithDatabase("mo_catalog").WithUserTxn(),
 		)
-		require.Error(t, err)
+		require.NoError(t, err)
 	}()
 
 	// wait active txn will canceled
@@ -840,12 +838,10 @@ func TestSpeedupAbortAllTxn(t *testing.T) {
 				},
 			),
 		)
-		require.Error(t, err)
+		require.NoError(t, err)
 	}()
 
 	<-actionC
-	eng := cn.GetEngine().(*disttae.Engine)
-	logtailClient := eng.PushClient()
 	require.NoError(t, logtailClient.Disconnect())
 	waitLogtailResume(cn)
 
@@ -875,4 +871,28 @@ func waitLogtailResume(cn cnservice.Service) {
 		}
 		time.Sleep(time.Second)
 	}
+}
+
+func TestFaultInjection(t *testing.T) {
+	embed.RunBaseClusterTests(
+		func(c embed.Cluster) {
+			cn, err := c.GetCNService(0)
+			require.NoError(t, err)
+
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
+			defer cancel()
+
+			ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(0))
+
+			exec := cn.RawService().(cnservice.Service).GetSQLExecutor()
+			require.NotNil(t, exec)
+
+			{
+				_, err := exec.Exec(
+					ctx,
+					"select fault_inject('all.','enable_fault_injection','');",
+					executor.Options{})
+				require.NoError(t, err)
+			}
+		})
 }

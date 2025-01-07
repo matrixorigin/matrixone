@@ -30,14 +30,6 @@ type singleAggInfo struct {
 	emptyNull bool
 }
 
-func (info singleAggInfo) eq(other singleAggInfo) bool {
-	return info.aggID == other.aggID &&
-		info.distinct == other.distinct &&
-		info.argType.Eq(other.argType) &&
-		info.retType.Eq(other.retType) &&
-		info.emptyNull == other.emptyNull
-}
-
 func (info singleAggInfo) String() string {
 	return fmt.Sprintf("{aggID: %d, argType: %s, retType: %s}", info.aggID, info.argType.String(), info.retType.String())
 }
@@ -54,8 +46,8 @@ func (info singleAggInfo) TypesInfo() ([]types.Type, types.Type) {
 	return []types.Type{info.argType}, info.retType
 }
 
-func (info singleAggInfo) getEncoded() *EncodedBasicInfo {
-	return &EncodedBasicInfo{
+func (info singleAggInfo) getEncoded() EncodedBasicInfo {
+	return EncodedBasicInfo{
 		Id:         info.aggID,
 		IsDistinct: info.distinct,
 		Args:       []types.Type{info.argType},
@@ -107,8 +99,8 @@ func (info multiAggInfo) TypesInfo() ([]types.Type, types.Type) {
 	return info.argTypes, info.retType
 }
 
-func (info multiAggInfo) getEncoded() *EncodedBasicInfo {
-	return &EncodedBasicInfo{
+func (info multiAggInfo) getEncoded() EncodedBasicInfo {
+	return EncodedBasicInfo{
 		Id:         info.aggID,
 		IsDistinct: info.distinct,
 		Args:       info.argTypes,

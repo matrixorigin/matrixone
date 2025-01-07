@@ -59,7 +59,7 @@ create table table04(a INT primary key AUTO_INCREMENT, b INT, c INT);
 insert into table03 values (1,1,1), (2,2,2);
 insert into table04 values (0,1,2), (2,3,4);
 drop snapshot if exists sp01;
-create snapshot sp01 for account sys;
+create snapshot sp01 for account;
 use test01;
 drop table aff01;
 drop table pri01;
@@ -279,7 +279,7 @@ insert into aff01 values (7900,'JAMES','CLERK',7698,'1981-12-03',950,NULL,30);
 insert into aff01 values (7902,'FORD','ANALYST',7566,'1981-12-03',3000,NULL,20);
 insert into aff01 values (7934,'MILLER','CLERK',7782,'1982-01-23',1300,NULL,10);
 drop snapshot if exists sp03;
-create snapshot sp03 for account sys;
+create snapshot sp03 for account;
 drop database test02;
 drop database test01;
 restore account sys database test02 table aff01 from snapshot sp03;
@@ -311,7 +311,7 @@ insert into f1 values (2,2);
 insert into c1 values (2,3);
 insert into c1 values (2,2);
 drop snapshot if exists sp04;
-create snapshot sp04 for account sys;
+create snapshot sp04 for account;
 insert into f1 values (3,20);
 insert into f1 values (4,600);
 restore account sys database test04 table f1 from snapshot sp04;
@@ -386,7 +386,8 @@ insert into f1 values (4,600);
 use test07;
 insert into c1 values (2,9);
 restore account acc01 database test06 table f1 from snapshot sp06;
-Unknown database test06
+internal error: can't restore table from other account's snapshot
+restore account acc01 from snapshot sp06;
 use test06;
 show tables;
 Tables_in_test06
@@ -431,7 +432,7 @@ col1    col2    col3
 1    1    1
 2    2    2
 drop snapshot if exists sp07;
-create snapshot sp07 for account sys;
+create snapshot sp07 for account;
 insert into foreign01 values(3, '323214321321', 32, 1);
 insert into foreign02 values(3,2,10);
 restore account sys database test07 table foreign02 from snapshot sp07;

@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -40,7 +41,7 @@ func TestCoarseFilterTombstoneObject(t *testing.T) {
 	rowids := make([]types.Rowid, rowCnt)
 	oss := make([]objectio.ObjectStats, ssCnt)
 	for i := 0; i < ssCnt; i++ {
-		writer := ConstructTombstoneWriter(objectio.HiddenColumnSelection_None, fs)
+		writer := ioutil.ConstructTombstoneWriter(objectio.HiddenColumnSelection_None, fs)
 		assert.NotNil(t, writer)
 
 		bat := batch.NewWithSize(2)
@@ -81,7 +82,7 @@ func TestCoarseFilterTombstoneObject(t *testing.T) {
 		return
 	}
 
-	filtered, err := CoarseFilterTombstoneObject(context.Background(), next_obj, oss, fs)
+	filtered, err := ioutil.CoarseFilterTombstoneObject(context.Background(), next_obj, oss, fs)
 	require.NoError(t, err)
 	require.Equal(t, 1, len(filtered))
 	require.Equal(t, oss[ssCnt-1], filtered[0])

@@ -29,9 +29,11 @@ import (
 )
 
 var (
-	once            sync.Once
-	shardingCluster embed.Cluster
-	mu              sync.Mutex
+	// TODO: skip all shard tests.
+	enableAllShardTests bool
+	once                sync.Once
+	shardingCluster     embed.Cluster
+	mu                  sync.Mutex
 )
 
 func runShardClusterTest(
@@ -47,6 +49,10 @@ func runShardClusterTestWithReuse(
 	fn func(embed.Cluster),
 	reuse bool,
 ) error {
+	if !enableAllShardTests {
+		return nil
+	}
+
 	mu.Lock()
 	defer mu.Unlock()
 

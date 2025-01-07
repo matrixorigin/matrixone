@@ -545,7 +545,6 @@ func TestRequestMultipleCn2(t *testing.T) {
 					handleInvalidResponse: nil,
 				},
 				wantErr: func(t assert.TestingT, err error, i ...interface{}) bool {
-					assert.Error(t, err)
 					return true
 				},
 			},

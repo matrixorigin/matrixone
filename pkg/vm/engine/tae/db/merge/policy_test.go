@@ -16,6 +16,7 @@ package merge
 
 import (
 	"context"
+	"math"
 	"math/rand/v2"
 	"testing"
 
@@ -25,9 +26,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -49,7 +50,7 @@ func newSortedDataEntryWithTableEntry(t *testing.T, tbl *catalog.TableEntry, txn
 	zm := index.NewZM(types.T_int32, 0)
 	index.UpdateZM(zm, types.EncodeInt32(&v1))
 	index.UpdateZM(zm, types.EncodeInt32(&v2))
-	stats := objectio.NewObjectStats()
+	stats := objectio.NewObjectStatsWithObjectID(objectio.NewObjectid(), false, true, false)
 	require.NoError(t, objectio.SetObjectStatsSortKeyZoneMap(stats, zm))
 	require.NoError(t, objectio.SetObjectStatsOriginSize(stats, size))
 	require.NoError(t, objectio.SetObjectStatsRowCnt(stats, 2))
@@ -74,7 +75,7 @@ func newSortedTombstoneEntryWithTableEntry(t *testing.T, tbl *catalog.TableEntry
 	return entry
 }
 
-func newSortedTestObjectEntry(t *testing.T, v1, v2 int32, size uint32) *catalog.ObjectEntry {
+func newSortedTestObjectEntry(t testing.TB, v1, v2 int32, size uint32) *catalog.ObjectEntry {
 	zm := index.NewZM(types.T_int32, 0)
 	index.UpdateZM(zm, types.EncodeInt32(&v1))
 	index.UpdateZM(zm, types.EncodeInt32(&v2))
@@ -89,14 +90,18 @@ func newSortedTestObjectEntry(t *testing.T, v1, v2 int32, size uint32) *catalog.
 	}
 }
 
-func newTestObjectEntryWithRowCnt(t *testing.T, size, rowCnt uint32, isTombstone bool) *catalog.ObjectEntry {
+func newTestVarcharObjectEntry(t testing.TB, v1, v2 string, size uint32) *catalog.ObjectEntry {
+	zm := index.NewZM(types.T_varchar, 0)
+	index.UpdateZM(zm, []byte(v1))
+	index.UpdateZM(zm, []byte(v2))
 	stats := objectio.NewObjectStats()
+	objName := objectio.BuildObjectNameWithObjectID(objectio.NewObjectid())
+	require.NoError(t, objectio.SetObjectStatsObjectName(stats, objName))
+	require.NoError(t, objectio.SetObjectStatsSortKeyZoneMap(stats, zm))
 	require.NoError(t, objectio.SetObjectStatsOriginSize(stats, size))
-	require.NoError(t, objectio.SetObjectStatsRowCnt(stats, rowCnt))
-
+	require.NoError(t, objectio.SetObjectStatsRowCnt(stats, 2))
 	return &catalog.ObjectEntry{
 		ObjectMVCCNode: catalog.ObjectMVCCNode{ObjectStats: *stats},
-		ObjectNode:     catalog.ObjectNode{IsTombstone: isTombstone},
 	}
 }
 
@@ -110,52 +115,6 @@ func newTestObjectEntry(t *testing.T, size uint32, isTombstone bool) *catalog.Ob
 	}
 }
 
-func TestPolicyBasic(t *testing.T) {
-	common.IsStandaloneBoost.Store(true)
-	p := newBasicPolicy()
-	rc := new(resourceController)
-
-	// only schedule objects whose size < cfg.objectMinOSize
-	p.resetForTable(catalog.MockStaloneTableEntry(0, &catalog.Schema{Extra: &api.SchemaExtra{BlockMaxRows: options.DefaultBlockMaxRows}}), nil)
-	cfg := testConfig(100, 3)
-	require.True(t, p.onObject(newTestObjectEntry(t, 10, false), cfg))
-	require.True(t, p.onObject(newTestObjectEntry(t, 20, false), cfg))
-	require.False(t, p.onObject(newTestObjectEntry(t, 120, false), cfg))
-	result := p.revise(rc, cfg)
-	require.Equal(t, 1, len(result))
-	require.Equal(t, 2, len(result[0].objs))
-	require.Equal(t, taskHostDN, result[0].kind)
-
-	// only schedule objects less than cfg.maxOneRun
-	p.resetForTable(catalog.MockStaloneTableEntry(1, &catalog.Schema{Extra: &api.SchemaExtra{BlockMaxRows: options.DefaultBlockMaxRows}}), nil)
-	cfg = testConfig(100, 2)
-	require.True(t, p.onObject(newTestObjectEntry(t, 10, false), cfg))
-	require.True(t, p.onObject(newTestObjectEntry(t, 20, false), cfg))
-	require.False(t, p.onObject(newTestObjectEntry(t, 30, false), cfg))
-	result = p.revise(rc, cfg)
-	require.Equal(t, 1, len(result))
-	require.Equal(t, 2, len(result[0].objs))
-	require.Equal(t, taskHostDN, result[0].kind)
-
-	// basic policy do not schedule tombstones
-	p.resetForTable(catalog.MockStaloneTableEntry(2, &catalog.Schema{Extra: &api.SchemaExtra{BlockMaxRows: options.DefaultBlockMaxRows}}), nil)
-	cfg = testConfig(100, 2)
-	require.False(t, p.onObject(newTestObjectEntry(t, 10, true), cfg))
-	require.False(t, p.onObject(newTestObjectEntry(t, 20, true), cfg))
-	result = p.revise(rc, cfg)
-	require.Equal(t, 0, len(result))
-
-	// memory limit
-	p.resetForTable(catalog.MockStaloneTableEntry(2, &catalog.Schema{Extra: &api.SchemaExtra{BlockMaxRows: options.DefaultBlockMaxRows}}), nil)
-	cfg = testConfig(100, 3)
-	require.True(t, p.onObject(newTestObjectEntryWithRowCnt(t, 10, 1, false), cfg))
-	require.True(t, p.onObject(newTestObjectEntryWithRowCnt(t, 20, 1, false), cfg))
-	require.True(t, p.onObject(newTestObjectEntryWithRowCnt(t, 20, 1, false), cfg))
-	rc.limit = 36
-	result = p.revise(rc, cfg)
-	require.Equal(t, 0, len(result))
-}
-
 func TestPolicyTombstone(t *testing.T) {
 	common.IsStandaloneBoost.Store(true)
 	p := newTombstonePolicy()
@@ -166,14 +125,14 @@ func TestPolicyTombstone(t *testing.T) {
 	cfg := testConfig(100, 2)
 	require.False(t, p.onObject(newTestObjectEntry(t, 10, false), cfg))
 	require.False(t, p.onObject(newTestObjectEntry(t, 20, false), cfg))
-	result := p.revise(rc, cfg)
+	result := p.revise(rc)
 	require.Equal(t, 0, len(result))
 
 	p.resetForTable(catalog.MockStaloneTableEntry(0, &catalog.Schema{Extra: &api.SchemaExtra{BlockMaxRows: options.DefaultBlockMaxRows}}), nil)
 	cfg = testConfig(100, 2)
 	require.True(t, p.onObject(newTestObjectEntry(t, 10, true), cfg))
 	require.True(t, p.onObject(newTestObjectEntry(t, 20, true), cfg))
-	result = p.revise(rc, cfg)
+	result = p.revise(rc)
 	require.Equal(t, 1, len(result))
 	require.Equal(t, 2, len(result[0].objs))
 	require.Equal(t, taskHostDN, result[0].kind)
@@ -184,7 +143,7 @@ func TestPolicyTombstone(t *testing.T) {
 	require.True(t, p.onObject(newTestObjectEntry(t, 10, true), cfg))
 	require.True(t, p.onObject(newTestObjectEntry(t, 20, true), cfg))
 	require.False(t, p.onObject(newTestObjectEntry(t, 30, true), cfg))
-	result = p.revise(rc, cfg)
+	result = p.revise(rc)
 	require.Equal(t, 1, len(result))
 	require.Equal(t, 2, len(result[0].objs))
 	require.Equal(t, taskHostDN, result[0].kind)
@@ -195,7 +154,7 @@ func TestPolicyTombstone(t *testing.T) {
 	require.True(t, p.onObject(newTestObjectEntry(t, 10, true), cfg))
 	require.True(t, p.onObject(newTestObjectEntry(t, 20, true), cfg))
 	require.True(t, p.onObject(newTestObjectEntry(t, 120, true), cfg))
-	result = p.revise(rc, cfg)
+	result = p.revise(rc)
 	require.Equal(t, 1, len(result))
 	require.Equal(t, 3, len(result[0].objs))
 	require.Equal(t, taskHostDN, result[0].kind)
@@ -203,7 +162,7 @@ func TestPolicyTombstone(t *testing.T) {
 
 func TestPolicyGroup(t *testing.T) {
 	common.IsStandaloneBoost.Store(true)
-	g := newPolicyGroup(newBasicPolicy(), newTombstonePolicy())
+	g := newPolicyGroup(newTombstonePolicy())
 	g.resetForTable(catalog.MockStaloneTableEntry(0, &catalog.Schema{Extra: &api.SchemaExtra{BlockMaxRows: options.DefaultBlockMaxRows}}))
 	g.config = &BasicPolicyConfig{MergeMaxOneRun: 2, ObjectMinOsize: 100}
 	rc := new(resourceController)
@@ -216,12 +175,10 @@ func TestPolicyGroup(t *testing.T) {
 	g.onObject(newTestObjectEntry(t, 30, true))
 
 	results := g.revise(rc)
-	require.Equal(t, 2, len(results))
+	require.Equal(t, 1, len(results))
 	require.Equal(t, taskHostDN, results[0].kind)
-	require.Equal(t, taskHostDN, results[1].kind)
 
 	require.Equal(t, 2, len(results[0].objs))
-	require.Equal(t, 2, len(results[1].objs))
 }
 
 const overlapSizeThreshold = common.DefaultMinOsizeQualifiedMB * common.Const1MBytes
@@ -232,7 +189,7 @@ func TestObjOverlap(t *testing.T) {
 	policy := newObjOverlapPolicy()
 	rc := new(resourceController)
 	rc.setMemLimit(estimateMemUsagePerRow * 20)
-	objs := policy.revise(rc, defaultBasicConfig)
+	objs := policy.revise(rc)
 	for _, obj := range objs {
 		require.Equal(t, 0, len(obj.objs))
 	}
@@ -244,7 +201,7 @@ func TestObjOverlap(t *testing.T) {
 	entry2 := newSortedTestObjectEntry(t, 3, 4, overlapSizeThreshold)
 	require.True(t, policy.onObject(entry1, defaultBasicConfig))
 	require.True(t, policy.onObject(entry2, defaultBasicConfig))
-	objs = policy.revise(rc, defaultBasicConfig)
+	objs = policy.revise(rc)
 	for _, obj := range objs {
 		require.Equal(t, 0, len(obj.objs))
 	}
@@ -256,7 +213,7 @@ func TestObjOverlap(t *testing.T) {
 	entry4 := newSortedTestObjectEntry(t, 2, 3, overlapSizeThreshold)
 	require.True(t, policy.onObject(entry3, defaultBasicConfig))
 	require.True(t, policy.onObject(entry4, defaultBasicConfig))
-	objs = policy.revise(rc, defaultBasicConfig)
+	objs = policy.revise(rc)
 	require.Zero(t, len(objs))
 	policy.resetForTable(nil, nil)
 
@@ -266,7 +223,7 @@ func TestObjOverlap(t *testing.T) {
 	require.False(t, policy.onObject(entry5, defaultBasicConfig))
 	require.False(t, policy.onObject(entry6, defaultBasicConfig))
 	require.Equal(t, 6, len(policy.leveledObjects))
-	objs = policy.revise(rc, defaultBasicConfig)
+	objs = policy.revise(rc)
 	for _, obj := range objs {
 		require.Equal(t, 0, len(obj.objs))
 	}
@@ -289,7 +246,7 @@ func TestObjOverlap(t *testing.T) {
 	require.True(t, policy.onObject(entry10, defaultBasicConfig))
 	require.True(t, policy.onObject(entry11, defaultBasicConfig))
 
-	objs = policy.revise(rc, defaultBasicConfig)
+	objs = policy.revise(rc)
 	require.Zero(t, len(objs))
 
 	policy.resetForTable(nil, nil)
@@ -301,7 +258,7 @@ func TestObjOverlap(t *testing.T) {
 	require.True(t, policy.onObject(entry12, defaultBasicConfig))
 	require.True(t, policy.onObject(entry13, defaultBasicConfig))
 
-	objs = policy.revise(rc, defaultBasicConfig)
+	objs = policy.revise(rc)
 	for _, obj := range objs {
 		require.Equal(t, 0, len(obj.objs))
 	}
@@ -327,10 +284,15 @@ func TestPolicyCompact(t *testing.T) {
 	tbl, err := db.CreateTableEntry(catalog.MockSchema(1, 0), txn1, nil)
 	require.NoError(t, err)
 	require.NoError(t, txn1.Commit(context.Background()))
+	obj := catalog.MockObjEntryWithTbl(tbl, math.MaxUint32, false)
+	tombstone := catalog.MockObjEntryWithTbl(tbl, math.MaxUint32, true)
+	require.NoError(t, objectio.SetObjectStatsOriginSize(tombstone.GetObjectStats(), math.MaxUint32))
+	tbl.AddEntryLocked(obj)
+	tbl.AddEntryLocked(tombstone)
+	p.resetForTable(tbl, &BasicPolicyConfig{})
+	p.onObject(obj, &BasicPolicyConfig{})
 
-	p.resetForTable(tbl, nil)
-
-	objs := p.revise(rc, defaultBasicConfig)
+	objs := p.revise(rc)
 	require.Equal(t, 0, len(objs))
 
 	txn2, _ := txnMgr.StartTxn(nil)
@@ -405,7 +367,7 @@ func TestCheckTombstone(t *testing.T) {
 	rowids := make([]types.Rowid, rowCnt)
 	metas := make([]objectio.ObjectDataMeta, ssCnt)
 	for i := 0; i < ssCnt; i++ {
-		writer := blockio.ConstructTombstoneWriter(objectio.HiddenColumnSelection_None, fs)
+		writer := ioutil.ConstructTombstoneWriter(objectio.HiddenColumnSelection_None, fs)
 		assert.NotNil(t, writer)
 
 		bat := batch.NewWithSize(2)
@@ -432,7 +394,7 @@ func TestCheckTombstone(t *testing.T) {
 
 		ss := writer.GetObjectStats()
 		require.Equal(t, rowCnt, int(ss.Rows()))
-		meta, err := loadTombstoneMeta(context.TODO(), &ss, fs)
+		meta, err := loadTombstoneMeta(&ss, fs)
 		require.NoError(t, err)
 		metas[i] = meta
 	}
@@ -450,17 +412,42 @@ func TestCheckTombstone(t *testing.T) {
 }
 
 func TestObjectsWithMaximumOverlaps(t *testing.T) {
-	o1 := newSortedTestObjectEntry(t, 0, 50, 0)
-	o2 := newSortedTestObjectEntry(t, 51, 100, 0)
-	require.Equal(t, 1, len(objectsWithMaximumOverlaps([]*catalog.ObjectEntry{o1, o2})))
-	o3 := newSortedTestObjectEntry(t, 49, 52, 0)
-	require.Equal(t, 2, len(objectsWithMaximumOverlaps([]*catalog.ObjectEntry{o1, o3})))
-	require.Equal(t, 2, len(objectsWithMaximumOverlaps([]*catalog.ObjectEntry{o2, o3})))
-	require.Equal(t, 2, len(objectsWithMaximumOverlaps([]*catalog.ObjectEntry{o1, o2, o3})))
+	o1 := newSortedTestObjectEntry(t, 0, 50, math.MaxInt32)
+	o2 := newSortedTestObjectEntry(t, 51, 100, math.MaxInt32)
+	o3 := newSortedTestObjectEntry(t, 49, 52, math.MaxInt32)
+	o4 := newSortedTestObjectEntry(t, 1, 52, math.MaxInt32)
+	o5 := newSortedTestObjectEntry(t, 50, 51, math.MaxInt32)
+	o6 := newSortedTestObjectEntry(t, 55, 60, math.MaxInt32)
 
-	o4 := newSortedTestObjectEntry(t, 0, 52, 0)
-	require.Equal(t, 3, len(objectsWithMaximumOverlaps([]*catalog.ObjectEntry{o1, o2, o3, o4})))
+	res1 := objectsWithGivenOverlaps([]*catalog.ObjectEntry{o1, o2}, 2)
+	require.Equal(t, 0, len(res1))
 
-	o5 := newSortedTestObjectEntry(t, 50, 51, 0)
-	require.Equal(t, 2, len(objectsWithMaximumOverlaps([]*catalog.ObjectEntry{o1, o5})))
+	res2 := objectsWithGivenOverlaps([]*catalog.ObjectEntry{o1, o3}, 2)
+	require.Equal(t, 1, len(res2))
+	require.ElementsMatch(t, []*catalog.ObjectEntry{o1, o3}, res2[0])
+
+	res3 := objectsWithGivenOverlaps([]*catalog.ObjectEntry{o2, o3}, 2)
+	require.Equal(t, 1, len(res3))
+	require.ElementsMatch(t, []*catalog.ObjectEntry{o2, o3}, res3[0])
+
+	res4 := objectsWithGivenOverlaps([]*catalog.ObjectEntry{o1, o2, o3}, 2)
+	require.Equal(t, 1, len(res4))
+	require.ElementsMatch(t, []*catalog.ObjectEntry{o1, o3}, res4[0])
+
+	res5 := objectsWithGivenOverlaps([]*catalog.ObjectEntry{o1, o2, o3}, 2)
+	require.Equal(t, 1, len(res5))
+	require.ElementsMatch(t, []*catalog.ObjectEntry{o1, o3}, res5[0])
+
+	res6 := objectsWithGivenOverlaps([]*catalog.ObjectEntry{o1, o2, o3, o4}, 2)
+	require.Equal(t, 1, len(res6))
+	require.ElementsMatch(t, []*catalog.ObjectEntry{o1, o3, o4}, res6[0])
+
+	res7 := objectsWithGivenOverlaps([]*catalog.ObjectEntry{o1, o5}, 2)
+	require.Equal(t, 1, len(res7))
+	require.ElementsMatch(t, []*catalog.ObjectEntry{o1, o5}, res7[0])
+
+	res8 := objectsWithGivenOverlaps([]*catalog.ObjectEntry{o1, o2, o3, o4, o5, o6}, 2)
+	require.Equal(t, 2, len(res8))
+	require.ElementsMatch(t, []*catalog.ObjectEntry{o1, o3, o4, o5}, res8[0])
+	require.ElementsMatch(t, []*catalog.ObjectEntry{o2, o6}, res8[1])
 }

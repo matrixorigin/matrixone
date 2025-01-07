@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
@@ -44,7 +45,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/address"
 	"github.com/matrixorigin/matrixone/pkg/util/status"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
@@ -163,7 +163,7 @@ func NewService(
 	}
 
 	// start I/O pipeline
-	blockio.Start(cfg.UUID)
+	ioutil.Start(cfg.UUID)
 
 	s := &store{
 		cfg:                 cfg,
@@ -200,7 +200,7 @@ func NewService(
 	if err := s.initTxnSender(); err != nil {
 		return nil, err
 	}
-	if err := s.initTxnServer(); err != nil {
+	if err := s.initTxnServer(s.sender); err != nil {
 		return nil, err
 	}
 	if err := s.initMetadata(); err != nil {
@@ -260,7 +260,7 @@ func (s *store) Close() error {
 		err = errors.Join(err, ts.Close())
 	}
 	// stop I/O pipeline
-	blockio.Stop(s.cfg.UUID)
+	ioutil.Stop(s.cfg.UUID)
 	return err
 }
 
@@ -313,7 +313,7 @@ func (s *store) createReplica(shard metadata.TNShard) error {
 			case <-ctx.Done():
 				return
 			default:
-				storage, err := s.createTxnStorage(ctx, shard)
+				storage, err := s.createTxnStorage(ctx, shard, s.server)
 				if err != nil {
 					r.logger.Error("start DNShard failed",
 						zap.Error(err))
@@ -381,14 +381,15 @@ func (s *store) initTxnSender() error {
 	return nil
 }
 
-func (s *store) initTxnServer() error {
+func (s *store) initTxnServer(sender rpc.TxnSender) error {
 	server, err := rpc.NewTxnServer(
 		s.txnServiceListenAddr(),
 		s.rt,
 		rpc.WithServerQueueBufferSize(s.cfg.RPC.ServerBufferQueueSize),
 		rpc.WithServerQueueWorkers(s.cfg.RPC.ServerWorkers),
 		rpc.WithServerMaxMessageSize(int(s.cfg.RPC.MaxMessageSize)),
-		rpc.WithServerEnableCompress(s.cfg.RPC.EnableCompress))
+		rpc.WithServerEnableCompress(s.cfg.RPC.EnableCompress),
+		rpc.WithTxnSender(sender))
 	if err != nil {
 		return err
 	}

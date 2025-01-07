@@ -21,7 +21,6 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/util"
@@ -38,7 +37,6 @@ type timestampWaiter struct {
 	latestTS  atomic.Pointer[timestamp.Timestamp]
 	mu        struct {
 		sync.Mutex
-		cancelC      chan struct{}
 		waiters      []*waiter
 		lastNotified timestamp.Timestamp
 	}
@@ -54,7 +52,6 @@ func NewTimestampWaiter(
 			stopper.WithLogger(logger.RawLogger())),
 		notifiedC: make(chan timestamp.Timestamp, maxNotifiedCount),
 	}
-	tw.mu.cancelC = make(chan struct{}, 1)
 	if err := tw.stopper.RunTask(tw.handleEvent); err != nil {
 		panic(err)
 	}
@@ -86,35 +83,6 @@ func (tw *timestampWaiter) NotifyLatestCommitTS(ts timestamp.Timestamp) {
 	tw.notifiedC <- ts
 }
 
-func (tw *timestampWaiter) Pause() {
-	tw.mu.Lock()
-	defer tw.mu.Unlock()
-	select {
-	case _, ok := <-tw.mu.cancelC:
-		if !ok {
-			// The channel is already closed.
-			return
-		}
-	default:
-	}
-	close(tw.mu.cancelC)
-	tw.mu.cancelC = nil
-	tw.removeWaitersLocked()
-	util.LogTimestampWaiterCanceled(tw.logger)
-}
-
-func (tw *timestampWaiter) Resume() {
-	tw.mu.Lock()
-	defer tw.mu.Unlock()
-	tw.mu.cancelC = make(chan struct{}, 1)
-}
-
-func (tw *timestampWaiter) CancelC() chan struct{} {
-	tw.mu.Lock()
-	defer tw.mu.Unlock()
-	return tw.mu.cancelC
-}
-
 func (tw *timestampWaiter) Close() {
 	tw.stopper.Stop()
 }
@@ -138,10 +106,7 @@ func (tw *timestampWaiter) addToWait(ts timestamp.Timestamp) (*waiter, error) {
 		return nil, nil
 	}
 
-	if tw.mu.cancelC == nil {
-		return nil, moerr.NewWaiterPausedNoCtx()
-	}
-	w := newWaiter(ts, tw.mu.cancelC)
+	w := newWaiter(ts)
 	w.ref()
 	tw.mu.waiters = append(tw.mu.waiters, w)
 	return w, nil
@@ -165,16 +130,6 @@ func (tw *timestampWaiter) notifyWaiters(ts timestamp.Timestamp) {
 
 	tw.mu.waiters = waiters
 	tw.mu.lastNotified = ts
-}
-
-func (tw *timestampWaiter) removeWaitersLocked() {
-	for idx, w := range tw.mu.waiters {
-		if w != nil {
-			w.unref()
-			tw.mu.waiters[idx] = nil
-		}
-	}
-	tw.mu.waiters = tw.mu.waiters[:0]
 }
 
 func (tw *timestampWaiter) handleEvent(ctx context.Context) {
@@ -225,20 +180,16 @@ type waiter struct {
 	waitAfter timestamp.Timestamp
 	notifyC   chan struct{}
 	refCount  atomic.Int32
-	// cancelC is the channel which is used to notify there is no
-	// need to wait anymore.
-	cancelC chan struct{}
 }
 
-func newWaiter(ts timestamp.Timestamp, c chan struct{}) *waiter {
+func newWaiter(ts timestamp.Timestamp) *waiter {
 	w := waitersPool.Get().(*waiter)
-	w.init(ts, c)
+	w.init(ts)
 	return w
 }
 
-func (w *waiter) init(ts timestamp.Timestamp, c chan struct{}) {
+func (w *waiter) init(ts timestamp.Timestamp) {
 	w.waitAfter = ts
-	w.cancelC = c
 	if w.ref() != 1 {
 		panic("BUG: waiter init must has ref count 1")
 	}
@@ -250,8 +201,6 @@ func (w *waiter) wait(ctx context.Context) error {
 		return ctx.Err()
 	case <-w.notifyC:
 		return nil
-	case <-w.cancelC:
-		return moerr.NewWaiterPausedNoCtx()
 	}
 }
 
@@ -282,10 +231,6 @@ func (w *waiter) reset() {
 	for {
 		select {
 		case <-w.notifyC:
-		case _, ok := <-w.cancelC:
-			if !ok {
-				return
-			}
 		default:
 			return
 		}

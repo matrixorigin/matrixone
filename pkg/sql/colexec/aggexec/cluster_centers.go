@@ -61,7 +61,7 @@ func ClusterCentersReturnType(argType []types.Type) types.Type {
 type clusterCentersExec struct {
 	singleAggInfo
 	arg sBytesArg
-	ret aggFuncBytesResult
+	ret aggResultWithBytesType
 
 	// groupData hold the inputting []byte.
 	// todo: there is a problem here, if the input is large, it will cause the memory overflow of one vector (memory usage > 1gb).
@@ -74,17 +74,22 @@ type clusterCentersExec struct {
 	normalize  bool
 }
 
+func (exec *clusterCentersExec) GetOptResult() SplitResult {
+	return &exec.ret.optSplitResult
+}
+
 func (exec *clusterCentersExec) marshal() ([]byte, error) {
 	d := exec.singleAggInfo.getEncoded()
-	r, err := exec.ret.marshal()
+	r, em, err := exec.ret.marshalToBytes()
 	if err != nil {
 		return nil, err
 	}
 
-	encoded := &EncodedAgg{
-		Info:   d,
-		Result: r,
-		Groups: nil,
+	encoded := EncodedAgg{
+		Info:    d,
+		Result:  r,
+		Empties: em,
+		Groups:  nil,
 	}
 
 	encoded.Groups = make([][]byte, len(exec.groupData)+1)
@@ -109,8 +114,8 @@ func (exec *clusterCentersExec) marshal() ([]byte, error) {
 	return encoded.Marshal()
 }
 
-func (exec *clusterCentersExec) unmarshal(mp *mpool.MPool, result []byte, groups [][]byte) error {
-	if err := exec.ret.unmarshal(result); err != nil {
+func (exec *clusterCentersExec) unmarshal(mp *mpool.MPool, result, empties, groups [][]byte) error {
+	if err := exec.ret.unmarshalFromBytes(result, empties); err != nil {
 		return err
 	}
 	if len(groups) > 0 {
@@ -139,7 +144,7 @@ func newClusterCentersExecutor(mg AggMemoryManager, info singleAggInfo) (AggFunc
 	}
 	return &clusterCentersExec{
 		singleAggInfo: info,
-		ret:           initBytesAggFuncResult(mg, info.retType, true),
+		ret:           initAggResultWithBytesTypeResult(mg, info.retType, true, ""),
 		clusterCnt:    defaultKmeansClusterCnt,
 		distType:      defaultKmeansDistanceType,
 		initType:      defaultKmeansInitType,
@@ -158,7 +163,7 @@ func (exec *clusterCentersExec) GroupGrow(more int) error {
 }
 
 func (exec *clusterCentersExec) PreAllocateGroups(more int) error {
-	return exec.ret.preAllocate(more)
+	return exec.ret.preExtend(more)
 }
 
 func (exec *clusterCentersExec) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
@@ -169,7 +174,8 @@ func (exec *clusterCentersExec) Fill(groupIndex int, row int, vectors []*vector.
 		row = 0
 	}
 
-	exec.ret.setGroupNotEmpty(groupIndex)
+	x, y := exec.ret.updateNextAccessIdx(groupIndex)
+	exec.ret.setGroupNotEmpty(x, y)
 	return vectorAppendBytesWildly(exec.groupData[groupIndex], exec.ret.mp, vectors[0].GetBytesAt(row))
 }
 
@@ -178,9 +184,11 @@ func (exec *clusterCentersExec) BulkFill(groupIndex int, vectors []*vector.Vecto
 		return nil
 	}
 
+	x, y := exec.ret.updateNextAccessIdx(groupIndex)
+
 	if vectors[0].IsConst() {
 		value := vectors[0].GetBytesAt(0)
-		exec.ret.setGroupNotEmpty(groupIndex)
+		exec.ret.setGroupNotEmpty(x, y)
 		for i, j := uint64(0), uint64(vectors[0].Length()); i < j; i++ {
 			if err := vectorAppendBytesWildly(exec.groupData[groupIndex], exec.ret.mp, value); err != nil {
 				return err
@@ -195,7 +203,7 @@ func (exec *clusterCentersExec) BulkFill(groupIndex int, vectors []*vector.Vecto
 		if null {
 			continue
 		}
-		exec.ret.setGroupNotEmpty(groupIndex)
+		exec.ret.setGroupNotEmpty(x, y)
 		if err := vectorAppendBytesWildly(exec.groupData[groupIndex], exec.ret.mp, v); err != nil {
 			return err
 		}
@@ -213,8 +221,9 @@ func (exec *clusterCentersExec) BatchFill(offset int, groups []uint64, vectors [
 		for i := 0; i < len(groups); i++ {
 			if groups[i] != GroupNotMatched {
 				groupIndex := int(groups[i] - 1)
+				x, y := exec.ret.updateNextAccessIdx(groupIndex)
 
-				exec.ret.setGroupNotEmpty(groupIndex)
+				exec.ret.setGroupNotEmpty(x, y)
 				if err := vectorAppendBytesWildly(
 					exec.groupData[groupIndex],
 					exec.ret.mp, value); err != nil {
@@ -231,8 +240,9 @@ func (exec *clusterCentersExec) BatchFill(offset int, groups []uint64, vectors [
 			v, null := exec.arg.w.GetStrValue(i)
 			if !null {
 				groupIndex := int(groups[idx] - 1)
+				x, y := exec.ret.updateNextAccessIdx(groupIndex)
 
-				exec.ret.setGroupNotEmpty(groupIndex)
+				exec.ret.setGroupNotEmpty(x, y)
 				if err := vectorAppendBytesWildly(
 					exec.groupData[groupIndex],
 					exec.ret.mp, v); err != nil {
@@ -262,7 +272,11 @@ func (exec *clusterCentersExec) Merge(next AggFuncExec, groupIdx1 int, groupIdx2
 		return err
 	}
 	other.groupData[groupIdx2] = nil
-	exec.ret.mergeEmpty(other.ret.basicResult, groupIdx1, groupIdx2)
+
+	x1, y1 := exec.ret.updateNextAccessIdx(groupIdx1)
+	x2, y2 := other.ret.updateNextAccessIdx(groupIdx2)
+
+	exec.ret.MergeAnotherEmpty(x1, y1, other.ret.isGroupEmpty(x2, y2))
 	return nil
 }
 
@@ -277,7 +291,7 @@ func (exec *clusterCentersExec) BatchMerge(next AggFuncExec, offset int, groups 
 	return nil
 }
 
-func (exec *clusterCentersExec) Flush() (*vector.Vector, error) {
+func (exec *clusterCentersExec) Flush() ([]*vector.Vector, error) {
 	switch exec.singleAggInfo.argType.Oid {
 	case types.T_array_float32:
 		if err := exec.flushArray32(); err != nil {
@@ -292,12 +306,12 @@ func (exec *clusterCentersExec) Flush() (*vector.Vector, error) {
 			"unsupported type '%s' for cluster_centers", exec.singleAggInfo.argType.String())
 	}
 
-	return exec.ret.flush(), nil
+	return exec.ret.flushAll(), nil
 }
 
 func (exec *clusterCentersExec) flushArray32() error {
 	for i, group := range exec.groupData {
-		exec.ret.groupToSet = i
+		exec.ret.updateNextAccessIdx(i)
 
 		if group == nil || group.Length() == 0 {
 			continue
@@ -306,11 +320,11 @@ func (exec *clusterCentersExec) flushArray32() error {
 		bts, area := vector.MustVarlenaRawData(group)
 		// todo: it's bad here this f64s is out of the memory control.
 		f64s := make([][]float64, group.Length())
-		for i := range f64s {
-			f32s := types.BytesToArray[float32](bts[i].GetByteSlice(area))
-			f64s[i] = make([]float64, len(f32s))
-			for j := range f32s {
-				f64s[i][j] = float64(f32s[j])
+		for m := range f64s {
+			f32s := types.BytesToArray[float32](bts[m].GetByteSlice(area))
+			f64s[m] = make([]float64, len(f32s))
+			for n := range f32s {
+				f64s[m][n] = float64(f32s[n])
 			}
 		}
 
@@ -322,7 +336,7 @@ func (exec *clusterCentersExec) flushArray32() error {
 		if err != nil {
 			return err
 		}
-		if err = exec.ret.aggSet(util.UnsafeStringToBytes(res)); err != nil {
+		if err = exec.ret.set(util.UnsafeStringToBytes(res)); err != nil {
 			return err
 		}
 	}
@@ -331,7 +345,7 @@ func (exec *clusterCentersExec) flushArray32() error {
 
 func (exec *clusterCentersExec) flushArray64() error {
 	for i, group := range exec.groupData {
-		exec.ret.groupToSet = i
+		exec.ret.updateNextAccessIdx(i)
 
 		if group == nil || group.Length() == 0 {
 			continue
@@ -339,8 +353,8 @@ func (exec *clusterCentersExec) flushArray64() error {
 
 		bts, area := vector.MustVarlenaRawData(group)
 		f64s := make([][]float64, group.Length())
-		for i := range f64s {
-			f64s[i] = types.BytesToArray[float64](bts[i].GetByteSlice(area))
+		for m := range f64s {
+			f64s[m] = types.BytesToArray[float64](bts[m].GetByteSlice(area))
 		}
 
 		centers, err := exec.getCentersByKmeansAlgorithm(f64s)
@@ -351,7 +365,7 @@ func (exec *clusterCentersExec) flushArray64() error {
 		if err != nil {
 			return err
 		}
-		if err = exec.ret.aggSet(util.UnsafeStringToBytes(res)); err != nil {
+		if err = exec.ret.set(util.UnsafeStringToBytes(res)); err != nil {
 			return err
 		}
 	}
@@ -406,7 +420,7 @@ func (exec *clusterCentersExec) arraysToString(centers [][]float64) (res string,
 
 func (exec *clusterCentersExec) Free() {
 	exec.ret.free()
-	if exec.ret.mg == nil {
+	if exec.ret.mp == nil {
 		return
 	}
 	for _, v := range exec.groupData {

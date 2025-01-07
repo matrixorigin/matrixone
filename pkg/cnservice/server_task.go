@@ -20,8 +20,6 @@ import (
 	"strings"
 	"time"
 
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -40,6 +38,8 @@ import (
 	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
+	"go.uber.org/zap"
 )
 
 func (s *service) adjustSQLAddress() {
@@ -277,6 +277,11 @@ func (s *service) registerExecutorsLocked() {
 			export.WithFileService(s.etlFS),
 		),
 	)
+	// init mo table stats task
+	s.task.runner.RegisterExecutor(
+		task.TaskCode_MOTableStats,
+		disttae.GetMOTableStatsExecutor(s.cfg.UUID, s.storeEngine, ieFactory))
+
 	// init metric task
 	s.task.runner.RegisterExecutor(
 		task.TaskCode_MetricStorageUsage,

@@ -35,7 +35,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	testutil2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
@@ -66,20 +65,16 @@ func Test_BasicInsertDelete(t *testing.T) {
 		disttaeEngine *testutil.TestDisttaeEngine
 	)
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
 
 	schema := catalog2.MockSchemaAll(4, primaryKeyIdx)
 	schema.Name = tableName
 
-	opt, err := testutil.GetS3SharedFileServiceOption(ctx, testutil.GetDefaultTestPath("test", t))
-	require.NoError(t, err)
-
 	disttaeEngine, taeEngine, rpcAgent, mp = testutil.CreateEngines(
 		ctx,
-		testutil.TestOptions{TaeEngineOptions: opt},
+		testutil.TestOptions{},
 		t,
 	)
 	defer func() {
@@ -88,6 +83,8 @@ func Test_BasicInsertDelete(t *testing.T) {
 		rpcAgent.Close()
 	}()
 
+	ctx, cancel = context.WithTimeout(ctx, time.Minute)
+	defer cancel()
 	_, _, err = disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
 	require.NoError(t, err)
 
@@ -156,23 +153,19 @@ func Test_BasicS3InsertDelete(t *testing.T) {
 		disttaeEngine *testutil.TestDisttaeEngine
 	)
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
 
 	schema := catalog2.MockSchemaAll(4, primaryKeyIdx)
 	schema.Name = tableName
 
-	opt, err := testutil.GetS3SharedFileServiceOption(ctx, testutil.GetDefaultTestPath("test", t))
-	require.NoError(t, err)
-
 	disttaeEngine, taeEngine, rpcAgent, mp = testutil.CreateEngines(
 		ctx,
-		testutil.TestOptions{TaeEngineOptions: opt},
+		testutil.TestOptions{},
 		t,
 		testutil.WithDisttaeEngineInsertEntryMaxCount(1),
-		testutil.WithDisttaeEngineWorkspaceThreshold(1),
+		testutil.WithDisttaeEngineCommitWorkspaceThreshold(1),
 	)
 	defer func() {
 		disttaeEngine.Close(ctx)
@@ -180,6 +173,8 @@ func Test_BasicS3InsertDelete(t *testing.T) {
 		rpcAgent.Close()
 	}()
 
+	ctx, cancel = context.WithTimeout(ctx, time.Minute)
+	defer cancel()
 	_, _, err = disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
 	require.NoError(t, err)
 
@@ -294,20 +289,16 @@ func Test_MultiTxnInsertDelete(t *testing.T) {
 		disttaeEngine *testutil.TestDisttaeEngine
 	)
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
 
 	schema := catalog2.MockSchemaAll(4, primaryKeyIdx)
 	schema.Name = tableName
 
-	opt, err := testutil.GetS3SharedFileServiceOption(ctx, testutil.GetDefaultTestPath("test", t))
-	require.NoError(t, err)
-
 	disttaeEngine, taeEngine, rpcAgent, mp = testutil.CreateEngines(
 		ctx,
-		testutil.TestOptions{TaeEngineOptions: opt},
+		testutil.TestOptions{},
 		t,
 	)
 	defer func() {
@@ -316,6 +307,8 @@ func Test_MultiTxnInsertDelete(t *testing.T) {
 		rpcAgent.Close()
 	}()
 
+	ctx, cancel = context.WithTimeout(ctx, time.Minute)
+	defer cancel()
 	_, _, err = disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
 	require.NoError(t, err)
 
@@ -452,23 +445,19 @@ func Test_MultiTxnS3InsertDelete(t *testing.T) {
 		disttaeEngine *testutil.TestDisttaeEngine
 	)
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
 
 	schema := catalog2.MockSchemaAll(4, primaryKeyIdx)
 	schema.Name = tableName
 
-	opt, err := testutil.GetS3SharedFileServiceOption(ctx, testutil.GetDefaultTestPath("test", t))
-	require.NoError(t, err)
-
 	disttaeEngine, taeEngine, rpcAgent, mp = testutil.CreateEngines(
 		ctx,
-		testutil.TestOptions{TaeEngineOptions: opt},
+		testutil.TestOptions{},
 		t,
 		testutil.WithDisttaeEngineInsertEntryMaxCount(1),
-		testutil.WithDisttaeEngineWorkspaceThreshold(1),
+		testutil.WithDisttaeEngineCommitWorkspaceThreshold(1),
 	)
 	defer func() {
 		disttaeEngine.Close(ctx)
@@ -476,6 +465,8 @@ func Test_MultiTxnS3InsertDelete(t *testing.T) {
 		rpcAgent.Close()
 	}()
 
+	ctx, cancel = context.WithTimeout(ctx, time.Minute)
+	defer cancel()
 	_, _, err = disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
 	require.NoError(t, err)
 
@@ -609,23 +600,19 @@ func Test_MultiTxnS3Tombstones(t *testing.T) {
 		disttaeEngine *testutil.TestDisttaeEngine
 	)
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
 
 	schema := catalog2.MockSchemaEnhanced(2, primaryKeyIdx, 2)
 	schema.Name = tableName
 
-	opt, err := testutil.GetS3SharedFileServiceOption(ctx, testutil.GetDefaultTestPath("test", t))
-	require.NoError(t, err)
-
 	disttaeEngine, taeEngine, rpcAgent, mp = testutil.CreateEngines(
 		ctx,
-		testutil.TestOptions{TaeEngineOptions: opt},
+		testutil.TestOptions{},
 		t,
 		testutil.WithDisttaeEngineInsertEntryMaxCount(1),
-		testutil.WithDisttaeEngineWorkspaceThreshold(1),
+		testutil.WithDisttaeEngineCommitWorkspaceThreshold(1),
 	)
 	defer func() {
 		disttaeEngine.Close(ctx)
@@ -633,6 +620,8 @@ func Test_MultiTxnS3Tombstones(t *testing.T) {
 		rpcAgent.Close()
 	}()
 
+	ctx, cancel = context.WithTimeout(ctx, time.Minute)
+	defer cancel()
 	_, _, err = disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
 	require.NoError(t, err)
 
@@ -785,20 +774,16 @@ func Test_BasicRollbackStatement(t *testing.T) {
 		disttaeEngine *testutil.TestDisttaeEngine
 	)
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
 
 	schema := catalog2.MockSchemaAll(4, primaryKeyIdx)
 	schema.Name = tableName
 
-	opt, err := testutil.GetS3SharedFileServiceOption(ctx, testutil.GetDefaultTestPath("test", t))
-	require.NoError(t, err)
-
 	disttaeEngine, taeEngine, rpcAgent, mp = testutil.CreateEngines(
 		ctx,
-		testutil.TestOptions{TaeEngineOptions: opt},
+		testutil.TestOptions{},
 		t,
 	)
 	defer func() {
@@ -807,6 +792,8 @@ func Test_BasicRollbackStatement(t *testing.T) {
 		rpcAgent.Close()
 	}()
 
+	ctx, cancel = context.WithTimeout(ctx, time.Minute)
+	defer cancel()
 	_, _, err = disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
 	require.NoError(t, err)
 
@@ -897,23 +884,19 @@ func Test_BasicRollbackStatementS3(t *testing.T) {
 		disttaeEngine *testutil.TestDisttaeEngine
 	)
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
 
 	schema := catalog2.MockSchemaAll(4, primaryKeyIdx)
 	schema.Name = tableName
 
-	opt, err := testutil.GetS3SharedFileServiceOption(ctx, testutil.GetDefaultTestPath("test", t))
-	require.NoError(t, err)
-
 	disttaeEngine, taeEngine, rpcAgent, mp = testutil.CreateEngines(
 		ctx,
-		testutil.TestOptions{TaeEngineOptions: opt},
+		testutil.TestOptions{},
 		t,
 		testutil.WithDisttaeEngineInsertEntryMaxCount(1),
-		testutil.WithDisttaeEngineWorkspaceThreshold(1),
+		testutil.WithDisttaeEngineCommitWorkspaceThreshold(1),
 	)
 	defer func() {
 		disttaeEngine.Close(ctx)
@@ -921,6 +904,8 @@ func Test_BasicRollbackStatementS3(t *testing.T) {
 		rpcAgent.Close()
 	}()
 
+	ctx, cancel = context.WithTimeout(ctx, time.Minute)
+	defer cancel()
 	_, _, err = disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
 	require.NoError(t, err)
 
@@ -1019,6 +1004,57 @@ func Test_BasicRollbackStatementS3(t *testing.T) {
 	require.NoError(t, txn.Commit(ctx))
 }
 
+// https://github.com/matrixorigin/MO-Cloud/issues/4602
+func Test_RollbackDeleteAndDrop(t *testing.T) {
+	opts := config.WithLongScanAndCKPOpts(nil)
+	p := testutil.InitEnginePack(testutil.TestOptions{
+		TaeEngineOptions: opts,
+		DisttaeOptions:   []testutil.TestDisttaeEngineOptions{testutil.WithDisttaeEngineInsertEntryMaxCount(5)}},
+		t)
+	defer p.Close()
+
+	schema := catalog2.MockSchemaAll(10, 1)
+	schema.Name = "test"
+	schema2 := catalog2.MockSchemaAll(10, 1)
+	schema2.Name = "test2"
+	schema3 := catalog2.MockSchemaAll(10, 1)
+	schema3.Name = "test3"
+	txnop := p.StartCNTxn()
+
+	bat := catalog2.MockBatch(schema, 10)
+	_, rels := p.CreateDBAndTables(txnop, "db", schema, schema2, schema3)
+	require.NoError(t, rels[2].Write(p.Ctx, containers.ToCNBatch(bat)))
+	require.NoError(t, txnop.Commit(p.Ctx))
+
+	v, ok := runtime.ServiceRuntime("").GetGlobalVariables(runtime.InternalSQLExecutor)
+	if !ok {
+		panic(fmt.Sprintf("missing sql executor in service %q", ""))
+	}
+	txnop = p.StartCNTxn()
+	exec := v.(executor.SQLExecutor)
+	execopts := executor.Options{}.WithTxn(txnop).WithDisableIncrStatement()
+	txnop.GetWorkspace().StartStatement()
+	txnop.GetWorkspace().IncrStatementID(p.Ctx, false)
+	dropTable := func() {
+		_, err := exec.Exec(p.Ctx, "delete from db.test3 where mock_1 = 0", execopts)
+		require.NoError(t, err)
+		p.DeleteTableInDB(txnop, "db", "test")
+		p.DeleteTableInDB(txnop, "db", "test2")
+		_, err = exec.Exec(p.Ctx, "delete from db.test3 where mock_1 = 2", execopts)
+		require.NoError(t, err)
+	}
+	dropTable() // approximateInMemDeleteCnt = 2
+	txnop.GetWorkspace().RollbackLastStatement(p.Ctx)
+	txnop.GetWorkspace().IncrStatementID(p.Ctx, false)
+	dropTable() // approximateInMemDeleteCnt = 4
+	txnop.GetWorkspace().RollbackLastStatement(p.Ctx)
+	txnop.GetWorkspace().IncrStatementID(p.Ctx, false)
+	dropTable() // approximateInMemDeleteCnt = 6
+	t.Log(txnop.GetWorkspace().PPString())
+	err := txnop.Commit(p.Ctx) // dumpDeleteBatchLocked messes up the writes list and get bad write format error
+	require.NoError(t, err)
+}
+
 // #endregion
 // #region multi-txn rollback test
 
@@ -1049,20 +1085,16 @@ func Test_MultiTxnRollbackStatement(t *testing.T) {
 		disttaeEngine *testutil.TestDisttaeEngine
 	)
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
 
 	schema := catalog2.MockSchemaAll(4, primaryKeyIdx)
 	schema.Name = tableName
 
-	opt, err := testutil.GetS3SharedFileServiceOption(ctx, testutil.GetDefaultTestPath("test", t))
-	require.NoError(t, err)
-
 	disttaeEngine, taeEngine, rpcAgent, mp = testutil.CreateEngines(
 		ctx,
-		testutil.TestOptions{TaeEngineOptions: opt},
+		testutil.TestOptions{},
 		t,
 	)
 	defer func() {
@@ -1071,6 +1103,8 @@ func Test_MultiTxnRollbackStatement(t *testing.T) {
 		rpcAgent.Close()
 	}()
 
+	ctx, cancel = context.WithTimeout(ctx, time.Minute)
+	defer cancel()
 	_, _, err = disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
 	require.NoError(t, err)
 
@@ -1222,23 +1256,19 @@ func Test_MultiTxnRollbackStatementS3(t *testing.T) {
 		disttaeEngine *testutil.TestDisttaeEngine
 	)
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
 
 	schema := catalog2.MockSchemaAll(4, primaryKeyIdx)
 	schema.Name = tableName
 
-	opt, err := testutil.GetS3SharedFileServiceOption(ctx, testutil.GetDefaultTestPath("test", t))
-	require.NoError(t, err)
-
 	disttaeEngine, taeEngine, rpcAgent, mp = testutil.CreateEngines(
 		ctx,
-		testutil.TestOptions{TaeEngineOptions: opt},
+		testutil.TestOptions{},
 		t,
 		testutil.WithDisttaeEngineInsertEntryMaxCount(1),
-		testutil.WithDisttaeEngineWorkspaceThreshold(1),
+		testutil.WithDisttaeEngineCommitWorkspaceThreshold(1),
 	)
 	defer func() {
 		disttaeEngine.Close(ctx)
@@ -1246,6 +1276,8 @@ func Test_MultiTxnRollbackStatementS3(t *testing.T) {
 		rpcAgent.Close()
 	}()
 
+	ctx, cancel = context.WithTimeout(ctx, time.Minute)
+	defer cancel()
 	_, _, err = disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
 	require.NoError(t, err)
 
@@ -1374,7 +1406,7 @@ func Test_MultiTxnRollbackStatementS3(t *testing.T) {
 
 func Test_DeleteUncommittedBlock(t *testing.T) {
 	var (
-		//err          error
+		err          error
 		mp           *mpool.MPool
 		accountId    = catalog.System_Account
 		tableName    = "test_reader_table"
@@ -1387,9 +1419,8 @@ func Test_DeleteUncommittedBlock(t *testing.T) {
 		disttaeEngine *testutil.TestDisttaeEngine
 	)
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
 
 	_ = colexec.NewServer(nil)
@@ -1402,15 +1433,15 @@ func Test_DeleteUncommittedBlock(t *testing.T) {
 	schema.Name = tableName
 
 	{
-		opt, err := testutil.GetS3SharedFileServiceOption(ctx, testutil.GetDefaultTestPath("test", t))
-		require.NoError(t, err)
 
 		disttaeEngine, taeEngine, rpcAgent, mp = testutil.CreateEngines(
 			ctx,
-			testutil.TestOptions{TaeEngineOptions: opt},
+			testutil.TestOptions{},
 			t,
 			testutil.WithDisttaeEngineInsertEntryMaxCount(1),
-			testutil.WithDisttaeEngineWorkspaceThreshold(1),
+			testutil.WithDisttaeEngineCommitWorkspaceThreshold(1),
+			testutil.WithDisttaeEngineWriteWorkspaceThreshold(1),
+			testutil.WithDisttaeEngineQuota(1),
 		)
 		defer func() {
 			disttaeEngine.Close(ctx)
@@ -1418,6 +1449,8 @@ func Test_DeleteUncommittedBlock(t *testing.T) {
 			rpcAgent.Close()
 		}()
 
+		ctx, cancel = context.WithTimeout(ctx, time.Minute)
+		defer cancel()
 		_, _, err = disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
 		require.NoError(t, err)
 	}
@@ -1449,7 +1482,7 @@ func Test_DeleteUncommittedBlock(t *testing.T) {
 				bat2.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
 
 				locstr := string(entry.Bat().GetVector(0).GetBytesAt(0))
-				loc, _ := blockio.EncodeLocationFromString(locstr)
+				loc, _ := objectio.StringToLocation(locstr)
 				sid := loc.Name().SegmentId()
 				bid := objectio.NewBlockid(
 					&sid,
@@ -1490,7 +1523,7 @@ func Test_DeleteUncommittedBlock(t *testing.T) {
 
 func Test_BigDeleteWriteS3(t *testing.T) {
 	var (
-		//err          error
+		err          error
 		mp           *mpool.MPool
 		accountId    = catalog.System_Account
 		tableName    = "test_reader_table"
@@ -1503,9 +1536,8 @@ func Test_BigDeleteWriteS3(t *testing.T) {
 		disttaeEngine *testutil.TestDisttaeEngine
 	)
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
 
 	// mock a schema with 4 columns and the 4th column as primary key
@@ -1516,15 +1548,12 @@ func Test_BigDeleteWriteS3(t *testing.T) {
 	schema.Name = tableName
 
 	{
-		opt, err := testutil.GetS3SharedFileServiceOption(ctx, testutil.GetDefaultTestPath("test", t))
-		require.NoError(t, err)
-
 		disttaeEngine, taeEngine, rpcAgent, mp = testutil.CreateEngines(
 			ctx,
-			testutil.TestOptions{TaeEngineOptions: opt},
+			testutil.TestOptions{},
 			t,
 			testutil.WithDisttaeEngineInsertEntryMaxCount(1),
-			testutil.WithDisttaeEngineWorkspaceThreshold(1),
+			testutil.WithDisttaeEngineCommitWorkspaceThreshold(1),
 		)
 		defer func() {
 			disttaeEngine.Close(ctx)
@@ -1532,6 +1561,8 @@ func Test_BigDeleteWriteS3(t *testing.T) {
 			rpcAgent.Close()
 		}()
 
+		ctx, cancel = context.WithTimeout(ctx, time.Minute)
+		defer cancel()
 		_, _, err = disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
 		require.NoError(t, err)
 	}
@@ -1575,22 +1606,17 @@ func Test_BigDeleteWriteS3(t *testing.T) {
 
 func Test_CNTransferTombstoneObjects(t *testing.T) {
 	var (
+		err          error
 		opts         testutil.TestOptions
 		tableName    = "test1"
 		databaseName = "db1"
 	)
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(0))
 
 	opts.TaeEngineOptions = config.WithLongScanAndCKPOpts(nil)
-
-	opt, err := testutil.GetS3SharedFileServiceOption(ctx, testutil.GetDefaultTestPath("test", t))
-	require.NoError(t, err)
-
-	opts.TaeEngineOptions.Fs = opt.Fs
 
 	p := testutil.InitEnginePack(opts, t)
 	defer p.Close()
@@ -1598,6 +1624,8 @@ func Test_CNTransferTombstoneObjects(t *testing.T) {
 	schema := catalog2.MockSchemaEnhanced(1, 0, 2)
 	schema.Name = tableName
 
+	ctx, cancel = context.WithTimeout(ctx, time.Minute)
+	defer cancel()
 	cnTxnOp := p.StartCNTxn()
 	_, rel := p.CreateDBAndTable(cnTxnOp, databaseName, schema)
 	require.NotNil(t, rel)

@@ -16,6 +16,7 @@ package mometric
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math"
 	"path"
@@ -34,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
+	"github.com/matrixorigin/matrixone/pkg/util/export/etl"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
@@ -182,6 +184,7 @@ func CalculateStorageUsage(
 	service string,
 	sqlExecutor func() ie.InternalExecutor,
 ) (err error) {
+	var restart bool
 	var account string
 	var sizeMB, snapshotSizeMB, objectCount float64
 	ctx, span := trace.Start(ctx, "MetricStorageUsage")
@@ -199,6 +202,12 @@ func CalculateStorageUsage(
 		logger.Info("finished", zap.Error(err))
 		cleanStorageUsageMetric(logger, "CalculateStorageUsage")
 	}()
+
+	restart, err = checkAndResetTaskLabels(ctx, logger, service, sqlExecutor)
+	if err != nil || restart {
+		logger.Info("checkAndResetTaskLabels", zap.Error(err), zap.Bool("need-restart", restart))
+		return err
+	}
 
 	// init metric value
 	v2.GetTraceCheckStorageUsageAllCounter().Add(0)
@@ -450,4 +459,143 @@ func checkNewAccountSize(ctx context.Context, logger *log.MOLogger, sqlExecutor 
 		next.Reset(GetStorageUsageCheckNewInterval())
 		logger.Debug("wait next round, check new account")
 	}
+}
+
+const (
+	MOMetricResetTaskLabel = "mo_metric_reset_task_labels"
+	MOMetricTaskLabel      = "mo_metric_task_labels"
+)
+
+const (
+	idxCronTaskId = iota
+	idxTaskMetadataId
+	idxTaskMetadataOption
+)
+
+func getQueryCronTaskRecord() string {
+	// like:
+	// mysql> select cron_task_id, task_metadata_id, task_metadata_option from mo_task.sys_cron_task where task_metadata_id in ('ETLMergeTask', 'StorageUsage');
+	// +--------------+------------------+----------------------+
+	// | cron_task_id | task_metadata_id | task_metadata_option |
+	// +--------------+------------------+----------------------+
+	// |            2 | StorageUsage     | {"Concurrency":1}    |
+	// |            1 | ETLMergeTask     | {"Concurrency":1}    |
+	// +--------------+------------------+----------------------+
+	return fmt.Sprintf(`select cron_task_id, task_metadata_id, task_metadata_option from mo_task.sys_cron_task where task_metadata_id in ('%s', '%s')`,
+		etl.ETLMergeTask,
+		StorageUsageCronTask,
+	)
+}
+
+func checkAndResetTaskLabels(ctx context.Context, logger *log.MOLogger, service string, sqlExecutor func() ie.InternalExecutor) (restart bool, err error) {
+
+	var reset = false
+	var labels = map[string]string{}
+
+	if s, exist := runtime.ServiceRuntime(service).GetGlobalVariables(MOMetricResetTaskLabel); exist {
+		reset = s.(bool)
+	}
+	if s, exist := runtime.ServiceRuntime(service).GetGlobalVariables(MOMetricTaskLabel); exist {
+		labels = s.(map[string]string)
+	}
+
+	if !reset {
+		logger.Info("skip reset task labels")
+		return false, nil
+	}
+
+	opts := ie.NewOptsBuilder().Database(MetricDBConst).Internal(true).Finish()
+	executor := sqlExecutor()
+	sql := getQueryCronTaskRecord()
+	logger.Info("query", zap.String("sql", sql))
+	result := executor.Query(ctx, sql, opts)
+
+	tasks := make([]task.CronTask, 0, 2)
+	dstTask := make([]task.CronTask, 0, 2)
+	cnt := result.RowCount()
+	if cnt == 0 {
+		logger.Warn("got empty sys_cron_task", zap.String("sql", sql))
+		return false, moerr.NewInternalErrorf(ctx, "ResetTaskLabels: got empty sys_cron_task")
+	}
+	logger.Debug("fetch sys_cron_task", zap.Uint64("cnt", cnt))
+
+	defer func() {
+		if err != nil {
+			logger.Error("fetch sys_cron_task failed", zap.Error(err))
+		}
+	}()
+
+	// fetch task
+	for rowIdx := uint64(0); rowIdx < cnt; rowIdx++ {
+		var t task.CronTask
+		var options string
+		t.ID, err = result.GetUint64(ctx, rowIdx, idxCronTaskId)
+		if err != nil {
+			return false, err
+		}
+
+		t.Metadata.ID, err = result.GetString(ctx, rowIdx, idxTaskMetadataId)
+		if err != nil {
+			return false, err
+		}
+
+		options, err = result.GetString(ctx, rowIdx, idxTaskMetadataOption)
+		if err != nil {
+			return false, err
+		}
+		if err = json.Unmarshal([]byte(options), &t.Metadata.Options); err != nil {
+			return false, err
+		}
+
+		tasks = append(tasks, t)
+	}
+
+	// check task labels
+checkL:
+	for _, t := range tasks {
+		if len(t.Metadata.Options.Labels) != len(labels) {
+			dstTask = append(dstTask, t)
+			continue
+		}
+		for k, v := range labels {
+			if t.Metadata.Options.Labels[k] != v {
+				dstTask = append(dstTask, t)
+				continue checkL
+			}
+		}
+	}
+
+	if len(dstTask) == 0 {
+		logger.Info("all task label ok", zap.Any("labels", labels))
+		return false, nil
+	}
+
+	// update task
+	for _, t := range dstTask {
+		var options []byte
+		logger.Info("diff task labels",
+			zap.String("task", t.Metadata.ID),
+			zap.Any("src", t.Metadata.Options.Labels),
+			zap.Any("dest", labels),
+		)
+		t.Metadata.Options.Labels = labels
+
+		options, err = json.Marshal(t.Metadata.Options)
+		if err != nil {
+			return false, err
+		}
+
+		sql = fmt.Sprintf(
+			"update mo_task.sys_cron_task set task_metadata_option='%s' where cron_task_id=%d",
+			options,
+			t.ID,
+		)
+		logger.Info("query", zap.String("sql", sql), zap.ByteString("options", options))
+		err = executor.Exec(ctx, sql, opts)
+		if err != nil {
+			return false, err
+		}
+	}
+
+	return true, nil
 }

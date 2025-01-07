@@ -22,7 +22,10 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
@@ -33,7 +36,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -41,19 +43,22 @@ import (
 
 const DefaultBlockMaxRows = 8192
 const blockThresholdForTpQuery = 32
+const BlockThresholdForOneCN = 512
+const costThresholdForOneCN = 160000
 const costThresholdForTpQuery = 240000
 const highNDVcolumnThreshHold = 0.95
 const statsCacheInitSize = 128
 const statsCacheMaxSize = 8192
 
-func BlockThresholdForOneCN(ncpu int) int {
-	if ncpu == 0 {
-		ncpu = system.GoMaxProcs()
-	}
-	return ncpu * blockThresholdForTpQuery
+// for test
+var ForceScanOnMultiCN atomic.Bool
+
+func SetForceScanOnMultiCN(v bool) {
+	ForceScanOnMultiCN.Store(v)
 }
-func costThresholdForOneCN() int {
-	return system.GoMaxProcs() * costThresholdForTpQuery
+
+func GetForceScanOnMultiCN() bool {
+	return ForceScanOnMultiCN.Load()
 }
 
 type ExecType int
@@ -1355,8 +1360,21 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 	stats.Outcnt = stats.Selectivity * stats.TableCnt
 	stats.Cost = stats.TableCnt * blockSel
 	stats.BlockNum = int32(float64(s.BlockNumber)*blockSel) + 1
-
 	return stats
+}
+
+func forceScanNodeStatsTP(nodeID int32, builder *QueryBuilder) {
+	stats := builder.qry.Nodes[nodeID].Stats
+	if stats.Outcnt > 1000 {
+		stats.Outcnt = 1000
+	}
+	if stats.Cost > 1000 {
+		stats.Cost = 1000
+	}
+	if stats.BlockNum > 16 {
+		stats.BlockNum = 16
+	}
+	stats.Selectivity = stats.Outcnt / stats.TableCnt
 }
 
 func shouldReturnMinimalStats(node *plan.Node) bool {
@@ -1392,13 +1410,17 @@ func DefaultHugeStats() *plan.Stats {
 func DefaultBigStats() *plan.Stats {
 	stats := new(Stats)
 	stats.TableCnt = 10000000
-	stats.Cost = float64(costThresholdForOneCN())
-	stats.Outcnt = float64(costThresholdForOneCN())
+	stats.Cost = float64(costThresholdForOneCN + 1)
+	stats.Outcnt = float64(costThresholdForOneCN + 1)
 	stats.Selectivity = 1
-	stats.BlockNum = int32(BlockThresholdForOneCN(0))
+	stats.BlockNum = int32(BlockThresholdForOneCN + 1)
 	stats.Rowsize = 1000
 	stats.HashmapStats = &plan.HashMapStats{}
 	return stats
+}
+
+func IsDefaultStats(stats *plan.Stats) bool {
+	return stats.Cost == 1000 && stats.TableCnt == 1000 && stats.Outcnt == 1000 && stats.Selectivity == 1 && stats.BlockNum == 1 && stats.Rowsize == 100
 }
 
 func DefaultStats() *plan.Stats {
@@ -1552,6 +1574,9 @@ func HasShuffleInPlan(qry *plan.Query) bool {
 }
 
 func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool, ncpu int) ExecType {
+	if GetForceScanOnMultiCN() {
+		return ExecTypeAP_MULTICN
+	}
 	ret := ExecTypeTP
 	for _, node := range qry.GetNodes() {
 		switch node.NodeType {
@@ -1559,7 +1584,7 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool, ncpu int) Exe
 			ret = ExecTypeAP_ONECN
 		}
 		stats := node.Stats
-		if stats == nil || stats.BlockNum > int32(BlockThresholdForOneCN(ncpu)) || stats.Cost > float64(costThresholdForOneCN()) {
+		if stats == nil || stats.BlockNum > int32(BlockThresholdForOneCN) && stats.Cost > float64(costThresholdForOneCN) {
 			if txnHaveDDL {
 				return ExecTypeAP_ONECN
 			} else {
@@ -1666,7 +1691,7 @@ func calcBlockSelectivityUsingShuffleRange(s *pb.StatsInfo, colname string, expr
 		return sel
 	}
 	overlap := getOverlap(s, colname)
-	if overlap < overlapThreshold/2 {
+	if overlap < overlapThreshold/3 {
 		//very good overlap
 		return sel
 	}

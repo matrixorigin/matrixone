@@ -72,9 +72,9 @@ select * from t1;
 a    b    c
 show index from t1;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t1    0    PRIMARY    1    c    A    0    NULL    NULL                        YES    NULL
-t1    1    idx1    1    a    A    0    NULL    NULL    YES    master                YES    NULL
-t1    1    idx1    2    b    A    0    NULL    NULL    YES    master                YES    NULL
+t1    0    PRIMARY    1    c    A    0    NULL    NULL                        YES    c
+t1    1    idx1    1    a    A    0    NULL    NULL    YES    master                YES    a
+t1    1    idx1    2    b    A    0    NULL    NULL    YES    master                YES    b
 show create table t1;
 Table    Create Table
 t1    CREATE TABLE `t1` (\n  `a` varchar(30) DEFAULT NULL,\n  `b` varchar(30) DEFAULT NULL,\n  `c` varchar(30) NOT NULL,\n  PRIMARY KEY (`c`),\n  KEY `idx1` USING master (`a`,`b`)\n)

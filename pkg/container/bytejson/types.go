@@ -73,6 +73,7 @@ const (
 	subPathKey
 	subPathRange
 )
+
 const (
 	pathFlagSingleStar pathFlag = iota + 1
 	pathFlagDoubleStar
@@ -107,6 +108,11 @@ var (
 	Null = ByteJson{Type: TpCodeLiteral, Data: []byte{LiteralNull}}
 )
 
+type field struct {
+	key string
+	val any
+}
+
 var (
 	escapedChars = map[byte]byte{
 		'"': '"',
@@ -137,7 +143,7 @@ func (bj ByteJson) TYPE() string {
 	case TpCodeArray:
 		return "ARRAY"
 	case TpCodeLiteral:
-		return "NULL"
+		return "LITERAL"
 	case TpCodeInt64:
 		return "INTEGER"
 	case TpCodeUint64:
@@ -158,8 +164,21 @@ var jsonTpOrder = map[string]int{
 	"INTEGER":          -4,
 	"UNSIGNED INTEGER": -5,
 	"DOUBLE":           -6,
-	"NULL":             -7,
+	"LITERAL":          -7,
 }
+
+type JsonModifyType byte
+
+const (
+	// JsonModifyInsert is for insert a new element into a JSON.
+	// If an old elemList exists, it would NOT replace it.
+	JsonModifyInsert JsonModifyType = 0x01
+	// JsonModifyReplace is for replace an old elemList from a JSON.
+	// If no elemList exists, it would NOT insert it.
+	JsonModifyReplace JsonModifyType = 0x02
+	// JsonModifySet = JsonModifyInsert | JsonModifyReplace
+	JsonModifySet JsonModifyType = 0x03
+)
 
 func CompareByteJson(left, right ByteJson) int {
 	order1 := jsonTpOrder[left.TYPE()]
@@ -167,7 +186,7 @@ func CompareByteJson(left, right ByteJson) int {
 
 	var cmp int
 	if order1 == order2 {
-		if order1 == jsonTpOrder["NULL"] {
+		if order1 == jsonTpOrder["LITERAL"] {
 			cmp = 0
 		}
 		switch left.Type {

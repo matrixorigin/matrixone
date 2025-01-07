@@ -236,6 +236,7 @@ type ComputationWrapper interface {
 	ResetPlanAndStmt(stmt tree.Statement)
 	Free()
 	ParamVals() []any
+	BinaryExecute() (bool, string) //binary execute for COM_STMT_EXECUTE
 }
 
 type ColumnInfo interface {
@@ -350,6 +351,7 @@ type BackgroundExec interface {
 	GetExecResultSet() []interface{}
 	ClearExecResultSet()
 	GetExecStatsArray() statistic.StatsArray
+	SetRestore(b bool)
 
 	GetExecResultBatches() []*batch.Batch
 	ClearExecResultBatches()
@@ -687,6 +689,12 @@ type feSessionImpl struct {
 	//fromRealUser distinguish the sql that the user inputs from the one
 	//that the internal or background program executes
 	fromRealUser bool
+
+	//isRestore denotes the session is used to restore the snapshot
+	isRestore bool
+
+	//isRestoreFail
+	isRestoreFail bool
 }
 
 func (ses *feSessionImpl) GetService() string {
@@ -1162,6 +1170,30 @@ func (ses *Session) GetDebugString() string {
 	return ses.debugStr
 }
 
+func (ses *Session) SetRestore(b bool) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.isRestore = b
+}
+
+func (ses *Session) IsRestore() bool {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.isRestore
+}
+
+func (ses *Session) SetRestoreFail(b bool) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.isRestoreFail = b
+}
+
+func (ses *Session) IsRestoreFail() bool {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.isRestoreFail
+}
+
 type PropertyID int
 
 const (
@@ -1244,6 +1276,7 @@ type MysqlWriter interface {
 	WriteTextRow() error
 	WriteBinaryRow() error
 	WriteResultSetRow(mrs *MysqlResultSet, count uint64) error
+	WriteResultSetRow2(mrs *MysqlResultSet, colSlices *ColumnSlices, count uint64) error
 	WriteResponse(context.Context, *Response) error
 	WritePrepareResponse(ctx context.Context, stmt *PrepareStmt) error
 	WriteLocalInfileRequest(filepath string) error

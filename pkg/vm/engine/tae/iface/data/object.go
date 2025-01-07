@@ -88,13 +88,10 @@ type Object interface {
 		txn txnif.TxnReader,
 		keys containers.Vector,
 		keysZM index.ZM,
-		precommit bool,
-		checkWWConflict bool,
-		skipCommittedBeforeTxnForAblk bool,
+		from, to types.TS,
 		rowIDs containers.Vector,
 		mp *mpool.MPool,
 	) (err error)
-	GetMaxRowByTS(ts types.TS) (uint32, error)
 	GetValue(ctx context.Context, txn txnif.AsyncTxn, readSchema any, blkID uint16, row, col int, skipCheckDelete bool, mp *mpool.MPool) (any, bool, error)
 	PPString(level common.PPLevel, depth int, prefix string, blkid int) string
 	EstimateMemSize() (int, int)
@@ -107,7 +104,6 @@ type Object interface {
 	Contains(
 		ctx context.Context,
 		txn txnif.TxnReader,
-		isCommitting bool,
 		keys containers.Vector,
 		keysZM index.ZM,
 		mp *mpool.MPool) (err error)

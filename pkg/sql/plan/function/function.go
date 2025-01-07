@@ -510,3 +510,6 @@ func (selectList *FunctionSelectList) Contains(row uint64) bool {
 	}
 	return !selectList.SelectList[row]
 }
+
+var EncodeOverloadID = encodeOverloadID
+var GetFunctionIdByName = getFunctionIdByName

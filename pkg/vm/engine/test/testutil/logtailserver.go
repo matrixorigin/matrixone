@@ -36,7 +36,12 @@ func (cs *testClientSession) SessionCtx() context.Context {
 
 func (cs *testClientSession) Close() error { return nil }
 func (cs *testClientSession) Write(ctx context.Context, response morpc.Message) error {
-	cs.tailReceiveQueue <- response
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+
+	case cs.tailReceiveQueue <- response:
+	}
 	return nil
 }
 
@@ -64,7 +69,7 @@ func NewMockLogtailServer(
 
 	ls := &TestLogtailServer{}
 
-	logtailer := taelogtail.NewLogtailer(ctx, tae.BGCheckpointRunner, tae.LogtailMgr, tae.Catalog)
+	logtailer := taelogtail.NewLogtailer(ctx, tae, tae.LogtailMgr, tae.Catalog)
 	server, err := service.NewLogtailServer("", cfg, logtailer, rt, rpcServerFactory)
 	if err != nil {
 		return nil, err

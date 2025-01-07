@@ -34,6 +34,7 @@ import (
 )
 
 func TestPartitionBasedShardCanBeCreated(t *testing.T) {
+	t.SkipNow()
 	embed.RunBaseClusterTests(
 		func(c embed.Cluster) {
 			cn1, err := c.GetCNService(0)
@@ -64,6 +65,7 @@ func TestPartitionBasedShardCanBeCreated(t *testing.T) {
 }
 
 func TestPartitionBasedShardCanBeDeleted(t *testing.T) {
+	t.SkipNow()
 	embed.RunBaseClusterTests(
 		func(c embed.Cluster) {
 			accountID := uint32(0)

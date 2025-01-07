@@ -176,7 +176,7 @@ func (ie *internalExecutor) Query(ctx context.Context, sql string, opts ie.Sessi
 	sess.EnterFPrint(FPInternalExecutorQuery)
 	defer sess.ExitFPrint(FPInternalExecutorQuery)
 	ie.proto.stashResult = true
-	sess.Info(ctx, "internalExecutor new session")
+	sess.Debug(ctx, "internalExecutor new session")
 	tempExecCtx := ExecCtx{
 		reqCtx: ctx,
 		ses:    sess,
@@ -254,6 +254,10 @@ type internalProtocol struct {
 	username    string
 }
 
+func (ip *internalProtocol) WriteResultSetRow2(mrs *MysqlResultSet, colSlices *ColumnSlices, count uint64) error {
+	return nil
+}
+
 func (ip *internalProtocol) FreeLoadLocal() {
 }
 
@@ -294,12 +298,24 @@ func (ip *internalProtocol) GetBool(PropertyID) bool {
 }
 
 func (ip *internalProtocol) Write(execCtx *ExecCtx, crs *perfcounter.CounterSet, bat *batch.Batch) error {
+	// init ip.result.resultSet
 	mrs := execCtx.ses.GetMysqlResultSet()
-	err := fillResultSet(execCtx.reqCtx, bat, execCtx.ses, mrs)
+	res := ip.result.resultSet
+	if res == nil {
+		res = &MysqlResultSet{}
+		ip.result.resultSet = res
+		for _, col := range mrs.Columns {
+			res.AddColumn(col)
+		}
+	}
+
+	// copy into result set
+	err := fillResultSet(execCtx.reqCtx, bat, execCtx.ses, res)
 	if err != nil {
 		return err
 	}
-	return ip.sendRows(mrs, uint64(bat.RowCount()))
+	ip.result.affectedRows += uint64(bat.RowCount())
+	return nil
 }
 
 func (ip *internalProtocol) WriteHandshake() error {
@@ -468,6 +484,9 @@ func (ip *internalProtocol) SetUserName(username string) {
 
 func (ip *internalProtocol) Close() {}
 
+// sendRows
+// case 1: used in WriteResponse and WriteResultSetRow, which are 'copy' op
+// case 2: used in Write, which is 'append' op. (deprecated)
 func (ip *internalProtocol) sendRows(mrs *MysqlResultSet, cnt uint64) error {
 	if ip.stashResult {
 		res := ip.result.resultSet

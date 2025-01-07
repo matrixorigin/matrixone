@@ -129,7 +129,7 @@ func handleTraceSpan(
 				Threshold: threshold,
 			}
 			// transfer query to another cn and receive its response
-			resp, _ := transferRequest2OtherCNs(proc, cns[idx], request)
+			resp, _ := TransferRequest2OtherCNs(proc, cns[idx], request)
 			if resp == nil {
 				// no such cn service
 				info[cns[idx]] = "no such cn service"
@@ -164,7 +164,7 @@ func UpdateCurrentCNTraceSpan(cmd string, spans string, threshold int64) string 
 	return fmt.Sprintf("%v %sd, %v failed", succeed, cmd, failed)
 }
 
-func transferRequest2OtherCNs(
+func TransferRequest2OtherCNs(
 	proc *process.Process,
 	uuid string,
 	request *query.Request,

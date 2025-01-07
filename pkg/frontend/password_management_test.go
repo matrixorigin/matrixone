@@ -22,11 +22,12 @@ import (
 	"time"
 
 	"github.com/golang/mock/gomock"
+	"github.com/prashantv/gostub"
+	"github.com/stretchr/testify/assert"
+
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/prashantv/gostub"
-	"github.com/stretchr/testify/assert"
 )
 
 func TestReverseBytes(t *testing.T) {
@@ -64,6 +65,7 @@ func Test_GetUserPassword(t *testing.T) {
 
 	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 	pu.SV.SetDefaultValues()
+	pu.SV.KillRountinesInterval = 0
 	setPu("", pu)
 	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 	rm, _ := NewRoutineManager(ctx, "")
@@ -102,6 +104,7 @@ func Test_CheckPasswordHistoryRule(t *testing.T) {
 
 	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 	pu.SV.SetDefaultValues()
+	pu.SV.KillRountinesInterval = 0
 	setPu("", pu)
 	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 	rm, _ := NewRoutineManager(ctx, "")
@@ -143,6 +146,7 @@ func Test_CheckPasswordIntervalRule(t *testing.T) {
 
 	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 	pu.SV.SetDefaultValues()
+	pu.SV.KillRountinesInterval = 0
 	setPu("", pu)
 	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 	rm, _ := NewRoutineManager(ctx, "")
@@ -184,6 +188,7 @@ func Test_PasswordVerification(t *testing.T) {
 
 	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 	pu.SV.SetDefaultValues()
+	pu.SV.KillRountinesInterval = 0
 	setPu("", pu)
 	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 	rm, _ := NewRoutineManager(ctx, "")
@@ -346,6 +351,7 @@ func Test_checkPasswordReusePolicy(t *testing.T) {
 
 	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 	pu.SV.SetDefaultValues()
+	pu.SV.KillRountinesInterval = 0
 	setPu("", pu)
 	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 	rm, _ := NewRoutineManager(ctx, "")

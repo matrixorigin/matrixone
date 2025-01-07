@@ -164,6 +164,10 @@ const (
 	MO_CDC_WATERMARK = "mo_cdc_watermark"
 
 	MO_DATA_KEY = "mo_data_key"
+
+	MO_TABLE_STATS = "mo_table_stats_alpha"
+
+	MO_ACCOUNT_LOCK = "__mo_account_lock"
 )
 
 func IsSystemTable(id uint64) bool {
@@ -831,3 +835,13 @@ const (
 	SAVED_ROW_COUNT_IDX = 14
 	QUERY_ROW_COUNT_IDX = 15
 )
+
+var SystemDatabases = []string{
+	"information_schema",
+	"mo_catalog",
+	"mo_debug",
+	"mo_task",
+	"mysql",
+	"system",
+	"system_metrics",
+}

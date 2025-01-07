@@ -436,6 +436,8 @@ func (m *Merge) doMergeFiles(ctx context.Context, files []*FileMeta) error {
 				m.logger.Warn("failed to delete file",
 					logutil.PathField(fp.FilePath), zap.Error(err))
 				return err
+			} else {
+				m.logger.Warn("delete file", logutil.PathField(fp.FilePath))
 			}
 		}
 		v2.TraceETLMergeSuccessCounter.Inc()
@@ -443,6 +445,7 @@ func (m *Merge) doMergeFiles(ctx context.Context, files []*FileMeta) error {
 	}
 	var err error
 
+	successCnt := 0
 	for _, fp := range files {
 		if err = uploadFile(ctx, fp); err != nil {
 			// todo: adjust the sleep settings
@@ -453,9 +456,15 @@ func (m *Merge) doMergeFiles(ctx context.Context, files []*FileMeta) error {
 				logutil.PathField(fp.FilePath),
 				zap.Error(err),
 			)
+		} else {
+			successCnt++
 		}
 	}
-	logutil.Info("upload files success", logutil.TableField(m.table.GetIdentify()), zap.Int("file count", len(files)))
+	m.logger.Error("upload files success",
+		logutil.TableField(m.table.GetIdentify()),
+		zap.Int("total", len(files)),
+		zap.Int("success", successCnt),
+	)
 
 	return err
 }
@@ -694,6 +703,7 @@ func LongRunETLMerge(
 	}
 
 	logger.Info("start LongRunETLMerge")
+	v2.TraceETLMergeJobCounter.Inc()
 	// handle today
 	for _, tbl := range tables {
 		merge.table = tbl
@@ -761,7 +771,7 @@ const ParamSeparator = " "
 // MergeTaskMetadata handle args like: "{db_tbl_name} [date, default: today]"
 func MergeTaskMetadata(id task.TaskCode, args ...string) task.TaskMetadata {
 	return task.TaskMetadata{
-		ID:       path.Join("ETLMergeTask", path.Join(args...)),
+		ID:       path.Join(etl.ETLMergeTask, path.Join(args...)),
 		Executor: id,
 		Context:  []byte(strings.Join(args, ParamSeparator)),
 		Options:  task.TaskOptions{Concurrency: 1},

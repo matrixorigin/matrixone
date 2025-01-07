@@ -39,7 +39,7 @@ col1    col2
 1    -321
 2    -1
 drop snapshot if exists sp100;
-create snapshot sp100 for account sys;
+create snapshot sp100 for account;
 delete from table01 where col1 = 1;
 select * from v01;
 col1    col2    col3
@@ -182,7 +182,7 @@ avg(sal)
 1366.66666667
 2758.33333333
 drop snapshot if exists sp02;
-create snapshot sp02 for account sys;
+create snapshot sp02 for account;
 drop view v04;
 select * from v04;
 SQL parser error: table "v04" does not exist
@@ -267,7 +267,7 @@ Alice    Johnson    Marketing
 Mark    Patterson    Sales
 David    Finley    Finance
 drop snapshot if exists sp05;
-create snapshot sp05 for account sys;
+create snapshot sp05 for account;
 drop table Employees;
 select * from EmployeeDepartmentView;
 SQL parser error: table "employees" does not exist
@@ -365,7 +365,7 @@ employee_id    first_name    last_name    department_name
 2    Jane    Smith    Engineering
 3    Bob    Johnson    HR
 drop snapshot if exists sp04;
-create snapshot sp04 for account sys;
+create snapshot sp04 for account;
 select * from employee_view {snapshot = 'sp04'};
 employee_id    first_name    last_name    department_id
 1    John    Doe    1
@@ -458,7 +458,7 @@ emp_no    birth_date    first_name    last_name    gender    hire_date
 9001    1980-12-17    SMITH    CLERK    F    2008-12-17
 9002    1981-02-20    ALLEN    SALESMAN    F    2008-02-20
 drop snapshot if exists sp05;
-create snapshot sp05 for account sys;
+create snapshot sp05 for account;
 insert into partition01 values (9003,'1999-02-20', 'BOB', 'DOCTOR', 'F', '2009-02-20');
 select * from view01;
 emp_no    birth_date    first_name    last_name    gender    hire_date
@@ -470,7 +470,7 @@ emp_no    birth_date    first_name    last_name    gender    hire_date
 9001    1980-12-17    SMITH    CLERK    F    2008-12-17
 9002    1981-02-20    ALLEN    SALESMAN    F    2008-02-20
 drop snapshot if exists sp06;
-create snapshot sp06 for account sys;
+create snapshot sp06 for account;
 restore account sys from snapshot sp05;
 select * from partition01;
 emp_no    birth_date    first_name    last_name    gender    hire_date
@@ -553,7 +553,7 @@ employeeid    employeename    salary    salaryrank
 1    Alice    70000.00    4
 4    David    65000.00    5
 drop snapshot if exists sp06;
-create snapshot sp06 for account sys;
+create snapshot sp06 for account;
 drop database test01;
 select * from test01.EmployeeSalaryRanking;
 Unknown database test01
@@ -640,7 +640,7 @@ Alice    Mathematics    Mr. Smith    2024-01-10
 Bob    Physics    Dr. Johnson    2024-01-15
 Charlie    Mathematics    Mr. Smith    2024-02-01
 drop snapshot if exists sp07;
-create snapshot sp07 for account sys;
+create snapshot sp07 for account;
 drop table Enrollments;
 drop table students;
 select * from StudentCoursesView;
@@ -727,7 +727,7 @@ select department, avg(salary) as avg_salary
 from employees
 group by department;
 drop snapshot if exists sp10;
-create snapshot sp10 for account sys;
+create snapshot sp10 for account;
 drop database test02;
 restore account sys from snapshot sp10;
 drop view if exists employees_view;
@@ -792,7 +792,7 @@ employee_id    first_name    last_name    department_name
 2    Jane    Smith    Engineering
 3    Bob    Johnson    HR
 drop snapshot if exists sp100;
-create snapshot sp100 for account sys;
+create snapshot sp100 for account;
 drop database test04;
 select * from test04.employee_view;
 Unknown database test04
@@ -817,7 +817,7 @@ employee_id    first_name    last_name    department_name
 2    Jane    Smith    Engineering
 3    Bob    Johnson    HR
 drop snapshot if exists sp101;
-create snapshot sp101 for account sys;
+create snapshot sp101 for account;
 drop database test03;
 drop database test05;
 select * from test04.employee_view;

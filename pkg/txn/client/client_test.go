@@ -232,8 +232,14 @@ func TestMaxActiveTxnWithWaitTimeout(t *testing.T) {
 			defer cancel()
 			_, err = tc.New(ctx2, newTestTimestamp(0), WithUserTxn())
 			require.Error(t, err)
+
+			v := tc.(*txnClient)
+			v.mu.Lock()
+			defer v.mu.Unlock()
+			require.Equal(t, 0, len(v.mu.waitActiveTxns))
 		},
-		WithMaxActiveTxn(1))
+		WithMaxActiveTxn(1),
+	)
 }
 
 func TestOpenTxnWithWaitPausedDisabled(t *testing.T) {
@@ -244,4 +250,28 @@ func TestOpenTxnWithWaitPausedDisabled(t *testing.T) {
 	op.opts.options = op.opts.options.WithDisableWaitPaused()
 
 	require.Error(t, c.openTxn(op))
+}
+
+func TestNewWithUpdateSnapshotTimeout(t *testing.T) {
+	rt := runtime.NewRuntime(metadata.ServiceType_CN, "",
+		logutil.GetPanicLogger(),
+		runtime.WithClock(clock.NewHLCClock(func() int64 {
+			return 1
+		}, 0)))
+	runtime.SetupServiceBasedRuntime("", rt)
+	c := NewTxnClient(
+		"",
+		newTestTxnSender(),
+		WithEnableSacrificingFreshness(),
+		WithTimestampWaiter(NewTimestampWaiter(rt.Logger())),
+	)
+	c.Resume()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+	defer cancel()
+	_, err := c.New(ctx, newTestTimestamp(10000))
+	assert.Error(t, err)
+	v := c.(*txnClient)
+	v.mu.Lock()
+	assert.Equal(t, 0, len(v.mu.waitActiveTxns))
+	v.mu.Unlock()
 }

@@ -161,6 +161,7 @@ drop account if exists acc01;
 create account acc01 admin_name = 'test_account' identified by '111';
 
 -- @session:id=2&user=acc01:test_account&password=111
+DROP DATABASE IF EXISTS Company;
 CREATE DATABASE Company;
 USE Company;
 
@@ -301,6 +302,7 @@ select * from Benefits;
 select * from TimeOff;
 select * from PerformanceReviews;
 
+DROP DATABASE IF EXISTS Projects;
 CREATE DATABASE Projects;
 USE Projects;
 
@@ -356,6 +358,7 @@ select * from Projects;
 select * from ProjectMembers;
 select * from ProjectManagers;
 
+DROP DATABASE IF EXISTS Payroll;
 CREATE DATABASE Payroll;
 USE Payroll;
 
@@ -459,6 +462,7 @@ drop account if exists acc01;
 create account acc01 admin_name = 'test_account' identified by '111';
 
 -- @session:id=3&user=acc01:test_account&password=111
+DROP DATABASE IF EXISTS School;
 CREATE DATABASE School;
 USE School;
 
@@ -524,6 +528,7 @@ select * from HighGradeStudents;
 select * from CourseAverageGrades;
 
 -- database University
+DROP DATABASE IF EXISTS University;
 CREATE DATABASE University;
 USE University;
 
@@ -635,6 +640,7 @@ select * from ProfessorCourses;
 select * from DepartmentAverageGrade;
 select * from TopStudents;
 
+DROP DATABASE IF EXISTS EducationSystem;
 CREATE DATABASE EducationSystem;
 USE EducationSystem;
 

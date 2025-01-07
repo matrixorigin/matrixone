@@ -105,21 +105,21 @@ func (h *ParquetHandler) openFile(param *ExternalParam) error {
 func (h *ParquetHandler) prepare(param *ExternalParam) error {
 	h.cols = make([]*parquet.Column, len(param.Attrs))
 	h.mappers = make([]*columnMapper, len(param.Attrs))
-	for colIdx, attr := range param.Attrs {
-		def := param.Cols[colIdx]
+	for _, attr := range param.Attrs {
+		def := param.Cols[attr.ColIndex]
 		if def.Hidden {
 			continue
 		}
 
-		col := h.file.Root().Column(attr)
+		col := h.file.Root().Column(attr.ColName)
 		if col == nil {
-			return moerr.NewInvalidInputf(param.Ctx, "column %s not found", attr)
+			return moerr.NewInvalidInputf(param.Ctx, "column %s not found", attr.ColName)
 		}
 		if !col.Leaf() {
-			return moerr.NewNYIf(param.Ctx, "load group type column %s", attr)
+			return moerr.NewNYIf(param.Ctx, "load group type column %s", attr.ColName)
 		}
 
-		h.cols[colIdx] = col
+		h.cols[attr.ColIndex] = col
 		fn := h.getMapper(col, def.Typ)
 		if fn == nil {
 			st := col.Type().String()
@@ -136,7 +136,7 @@ func (h *ParquetHandler) prepare(param *ExternalParam) error {
 			}
 			return moerr.NewNYIf(param.Ctx, "load %s to %s", st, dt)
 		}
-		h.mappers[colIdx] = fn
+		h.mappers[attr.ColIndex] = fn
 	}
 
 	return nil

@@ -15,8 +15,10 @@
 package client
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
+	"errors"
 	"math"
 	"runtime/debug"
 	"sync"
@@ -202,7 +204,8 @@ type txnClient struct {
 		// all active txns
 		activeTxns map[string]*txnOperator
 		// FIFO queue for ready to active txn
-		waitActiveTxns []*txnOperator
+		waitActiveTxns            []*txnOperator
+		waitMarkAllActiveAbortedC chan struct{}
 	}
 
 	abortC chan time.Time
@@ -336,15 +339,11 @@ func (client *txnClient) doCreateTxn(
 		cb(op)
 	}
 
-	ts, err := client.determineTxnSnapshot(minTS)
-	if err != nil {
-		_ = op.Rollback(ctx)
-		return nil, err
-	}
+	ts := client.determineTxnSnapshot(minTS)
 	if !op.opts.skipWaitPushClient {
 		if err := op.UpdateSnapshot(ctx, ts); err != nil {
 			_ = op.Rollback(ctx)
-			return nil, err
+			return nil, errors.Join(err, moerr.NewTxnError(ctx, "update txn snapshot"))
 		}
 	}
 
@@ -356,7 +355,7 @@ func (client *txnClient) doCreateTxn(
 
 	if err := op.waitActive(ctx); err != nil {
 		_ = op.Rollback(ctx)
-		return nil, err
+		return nil, errors.Join(err, moerr.NewTxnError(ctx, "wait active"))
 	}
 	return op, nil
 }
@@ -440,7 +439,7 @@ func (client *txnClient) updateLastCommitTS(event TxnEvent) {
 // determineTxnSnapshot assuming we determine the timestamp to be ts, the final timestamp
 // returned will be ts+1. This is because we need to see the submitted data for ts, and the
 // timestamp for all things is ts+1.
-func (client *txnClient) determineTxnSnapshot(minTS timestamp.Timestamp) (timestamp.Timestamp, error) {
+func (client *txnClient) determineTxnSnapshot(minTS timestamp.Timestamp) timestamp.Timestamp {
 	start := time.Now()
 	defer func() {
 		v2.TxnDetermineSnapshotDurationHistogram.Observe(time.Since(start).Seconds())
@@ -457,7 +456,7 @@ func (client *txnClient) determineTxnSnapshot(minTS timestamp.Timestamp) (timest
 		minTS = client.adjustTimestamp(minTS)
 	}
 
-	return minTS, nil
+	return minTS
 }
 
 func (client *txnClient) adjustTimestamp(ts timestamp.Timestamp) timestamp.Timestamp {
@@ -479,18 +478,11 @@ func (client *txnClient) SyncLatestCommitTS(ts timestamp.Timestamp) {
 		defer cancel()
 		for {
 			_, err := client.timestampWaiter.GetTimestamp(ctx, ts)
-			if err != nil {
-				err = moerr.AttachCause(ctx, err)
-				// If the error is moerr.ErrWaiterPaused, retry to get the timestamp,
-				// but not FATAL immediately.
-				if moerr.IsMoErrCode(err, moerr.ErrWaiterPaused) {
-					time.Sleep(time.Second)
-					continue
-				} else {
-					client.logger.Fatal("wait latest commit ts failed", zap.Error(err))
-				}
+			if err == nil {
+				break
 			}
-			break
+			err = moerr.AttachCause(ctx, err)
+			client.logger.Fatal("wait latest commit ts failed", zap.Error(err))
 		}
 	}
 	client.atomic.forceSyncCommitTimes.Add(1)
@@ -507,6 +499,8 @@ func (client *txnClient) openTxn(op *txnOperator) error {
 		v2.TxnWaitActiveQueueSizeGauge.Set(float64(len(client.mu.waitActiveTxns)))
 		client.mu.Unlock()
 	}()
+
+	client.waitMarkAllActiveAbortedLocked()
 
 	if !op.opts.skipWaitPushClient {
 		for client.mu.state == paused {
@@ -533,14 +527,7 @@ func (client *txnClient) openTxn(op *txnOperator) error {
 		client.addActiveTxnLocked(op)
 		return nil
 	}
-	var cancelC chan struct{}
-	if client.timestampWaiter != nil {
-		cancelC = client.timestampWaiter.CancelC()
-		if cancelC == nil {
-			return moerr.NewWaiterPausedNoCtx()
-		}
-	}
-	op.reset.waiter = newWaiter(timestamp.Timestamp{}, cancelC)
+	op.reset.waiter = newWaiter(timestamp.Timestamp{})
 	op.reset.waiter.ref()
 	client.mu.waitActiveTxns = append(client.mu.waitActiveTxns, op)
 	return nil
@@ -585,6 +572,8 @@ func (client *txnClient) closeTxn(event TxnEvent) {
 				op.notifyActive()
 			}
 		}
+	} else if ok = client.removeFromWaitActiveLocked(txn.ID); ok {
+		client.removeFromLeakCheck(txn.ID)
 	} else {
 		client.logger.Warn("txn closed",
 			zap.String("txn ID", hex.EncodeToString(txn.ID)),
@@ -627,31 +616,6 @@ func (client *txnClient) Resume() {
 	// Notify all waiting transactions to goon with the opening operation.
 	if !client.normalStateNoWait {
 		client.mu.cond.Broadcast()
-	}
-}
-
-func (client *txnClient) AbortAllRunningTxn() {
-	client.mu.Lock()
-	actives := make([]*txnOperator, 0, len(client.mu.activeTxns))
-	for _, op := range client.mu.activeTxns {
-		actives = append(actives, op)
-	}
-
-	if client.timestampWaiter != nil {
-		// Cancel all waiters, means that all waiters do not need to wait for
-		// the newer timestamp from logtail consumer.
-		client.timestampWaiter.Pause()
-	}
-
-	client.mu.Unlock()
-
-	for _, op := range actives {
-		op.addFlag(AbortedFlag)
-	}
-
-	if client.timestampWaiter != nil {
-		// After rollback all transactions, resume the timestamp waiter channel.
-		client.timestampWaiter.Resume()
 	}
 }
 
@@ -734,13 +698,23 @@ func (client *txnClient) handleMarkActiveTxnAborted(
 	case from := <-client.abortC:
 		fn := func() {
 			client.mu.Lock()
-			defer client.mu.Unlock()
-
+			client.mu.waitMarkAllActiveAbortedC = make(chan struct{})
+			ops := make([]*txnOperator, 0, len(client.mu.activeTxns))
 			for _, op := range client.mu.activeTxns {
 				if op.reset.createAt.Before(from) {
-					op.addFlag(AbortedFlag)
+					ops = append(ops, op)
 				}
 			}
+			client.mu.Unlock()
+
+			for _, op := range ops {
+				op.addFlag(AbortedFlag)
+			}
+
+			client.mu.Lock()
+			close(client.mu.waitMarkAllActiveAbortedC)
+			client.mu.waitMarkAllActiveAbortedC = nil
+			client.mu.Unlock()
 		}
 		fn()
 
@@ -750,5 +724,25 @@ func (client *txnClient) handleMarkActiveTxnAborted(
 				zap.Error(err),
 			)
 		}
+	}
+}
+
+func (client *txnClient) removeFromWaitActiveLocked(txnID []byte) bool {
+	var ok bool
+	values := client.mu.waitActiveTxns[:0]
+	for _, op := range client.mu.waitActiveTxns {
+		if bytes.Equal(op.reset.txnID, txnID) {
+			ok = true
+			continue
+		}
+		values = append(values, op)
+	}
+	client.mu.waitActiveTxns = values
+	return ok
+}
+
+func (client *txnClient) waitMarkAllActiveAbortedLocked() {
+	if client.mu.waitMarkAllActiveAbortedC != nil {
+		<-client.mu.waitMarkAllActiveAbortedC
 	}
 }

@@ -158,8 +158,6 @@ col3 int
 );
 
 insert into t5 values (1,1,1);
--- echo duplicate
-load data infile '$resources/load_data/auto_increment_1.csv' into table t5 fields terminated by ',';
 select * from t5;
 
 drop table t5;

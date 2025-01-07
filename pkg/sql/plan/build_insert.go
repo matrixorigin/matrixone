@@ -76,6 +76,9 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 	builder.haveOnDuplicateKey = len(stmt.OnDuplicateUpdate) > 0
 	if stmt.IsRestore {
 		builder.isRestore = true
+		if stmt.IsRestoreByTs {
+			builder.isRestoreByTs = true
+		}
 		oldSnapshot := builder.compCtx.GetSnapshot()
 		builder.compCtx.SetSnapshot(&Snapshot{
 			Tenant: &plan.SnapshotTenant{

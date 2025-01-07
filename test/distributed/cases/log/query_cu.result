@@ -45,3 +45,12 @@ val
 select CAST(mo_cu('[5,1,2,3,4,5,6,7,8,1,2]', 0, 'iodelete') AS DECIMAL(32,4)) val;
 val
 11.3097
+select CAST(mo_cu('[5,1,2,0.000122,4,5,6,7,8,1,2]', 0, 'ioin') AS DECIMAL(32,4)) val;
+val
+11.3104
+select CAST(mo_cu('[5,1,2,0.000122,4,5,6,7,8,0,0]', 0, 'ioin') AS DECIMAL(32,4)) val;
+val
+0.0007
+select CAST(mo_cu('[5,1,2,0.000244,4,5,6,7,8,0,0]', 0, 'ioin') AS DECIMAL(32,4)) val;
+val
+0.0014

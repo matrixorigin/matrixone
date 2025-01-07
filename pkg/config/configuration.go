@@ -582,6 +582,10 @@ type ObservabilityParameters struct {
 	// LabelSelector
 	LabelSelector map[string]string `toml:"label-selector"`
 
+	// TaskLabel
+	TaskLabel      map[string]string `toml:"task-label"`
+	ResetTaskLabel bool              `toml:"reset-task-label"`
+
 	// estimate tcp network packet cost
 	TCPPacket bool `toml:"tcp-packet"`
 
@@ -652,6 +656,8 @@ func NewObservabilityParameters() *ObservabilityParameters {
 		SelectAggThreshold:                 toml.Duration{},
 		EnableStmtMerge:                    false,
 		LabelSelector:                      map[string]string{}, /*default: role=logging_cn*/
+		TaskLabel:                          map[string]string{},
+		ResetTaskLabel:                     false,
 		TCPPacket:                          true,
 		MaxLogMessageSize:                  toml.ByteSize(defaultMaxLogMessageSize),
 		CU:                                 *NewOBCUConfig(),
@@ -768,9 +774,9 @@ func (op *ObservabilityParameters) resetConfigByOld() {
 		}
 	}
 	resetMapConfig := func(target map[string]string, defaultVal map[string]string, setVal map[string]string) {
-		eq := true
+		eq := len(target) == len(defaultVal)
 		// check eq
-		if len(target) == len(defaultVal) {
+		if eq {
 			for k, v := range defaultVal {
 				if target[k] != v {
 					eq = false
@@ -904,33 +910,33 @@ func (c *OBCUConfig) SetDefaultValues() {
 	if c.CUUnit <= 0 {
 		c.CUUnit = CUUnitDefault
 	}
-	if c.CpuPrice <= 0 {
+	if c.CpuPrice < 0 {
 		c.CpuPrice = CUCpuPriceDefault
 	}
-	if c.MemPrice <= 0 {
+	if c.MemPrice < 0 {
 		c.MemPrice = CUMemPriceDefault
 	}
-	if c.IoInPrice <= 0 {
+	if c.IoInPrice < 0 {
 		c.IoInPrice = CUIOInPriceDefault
 	}
-	if c.IoOutPrice <= 0 {
+	if c.IoOutPrice < 0 {
 		c.IoOutPrice = CUIOOutPriceDefault
 	}
 	// default as c.IoInPrice
-	if c.IoListPrice <= 0 {
+	if c.IoListPrice < 0 {
 		c.IoListPrice = c.IoInPrice
 	}
 	// default as c.IoInPrice, allow value: 0
 	if c.IoDeletePrice < 0 {
 		c.IoDeletePrice = c.IoInPrice
 	}
-	if c.TrafficPrice0 <= 0 {
+	if c.TrafficPrice0 < 0 {
 		c.TrafficPrice0 = CUTrafficPrice0Default
 	}
-	if c.TrafficPrice1 <= 0 {
+	if c.TrafficPrice1 < 0 {
 		c.TrafficPrice1 = CUTrafficPrice1Default
 	}
-	if c.TrafficPrice2 <= 0 {
+	if c.TrafficPrice2 < 0 {
 		c.TrafficPrice2 = CUTrafficPrice2Default
 	}
 }

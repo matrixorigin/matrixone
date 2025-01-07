@@ -23,9 +23,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/sort"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 )
 
 type Merger interface {
@@ -96,7 +96,7 @@ type merger[T comparable] struct {
 
 	host MergeTaskHost
 
-	writer *blockio.BlockWriter
+	writer *ioutil.BlockWriter
 
 	sortKeyIdx int
 

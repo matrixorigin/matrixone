@@ -464,15 +464,3 @@ func (un *TxnMVCCNode) AppendTupleWithCommitTS(bat *containers.Batch, commitTS t
 func (un *TxnMVCCNode) ReadTuple(bat *containers.Batch, offset int) {
 	// TODO
 }
-
-func ReadTuple(bat *containers.Batch, row int) (un *TxnMVCCNode) {
-	end := bat.GetVectorByName(SnapshotAttr_CommitTS).Get(row).(types.TS)
-	start := bat.GetVectorByName(SnapshotAttr_StartTS).Get(row).(types.TS)
-	prepare := bat.GetVectorByName(SnapshotAttr_PrepareTS).Get(row).(types.TS)
-	un = &TxnMVCCNode{
-		Start:   start,
-		Prepare: prepare,
-		End:     end,
-	}
-	return
-}

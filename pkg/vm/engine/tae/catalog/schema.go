@@ -318,7 +318,7 @@ func (s *Schema) getFakePrimaryKey() *ColDef {
 	idx, ok := s.NameMap[pkgcatalog.FakePrimaryKeyColName]
 	if !ok {
 		// should just call logutil.Fatal
-		panic("fake primary key not existed")
+		panic(fmt.Sprintf("fake primary key not existed: %s-%s", s.Relkind, s.Name))
 	}
 	return s.ColDefs[idx]
 }
