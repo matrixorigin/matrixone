@@ -1,0 +1,302 @@
+CREATE DATABASE IF NOT EXISTS moc4504;
+USE moc4504;
+DROP TABLE IF EXISTS users;
+CREATE TABLE users (
+id INT AUTO_INCREMENT PRIMARY KEY,
+info JSON
+);
+INSERT INTO users (info) VALUES ('{"name": "John"}');
+SELECT * FROM users;
+id    info
+1    {"name": "John"}
+UPDATE users SET info = JSON_SET(info, '$.age', 30);
+SELECT * FROM users;
+id    info
+1    {"age": 30, "name": "John"}
+UPDATE users SET info = JSON_SET(info, '$.age', 31) WHERE id = 1;
+SELECT * FROM users;
+id    info
+1    {"age": 31, "name": "John"}
+INSERT INTO users (info) VALUES ('{"person": {"name": "Alice", "address": {"city": "New York"}}}');
+SELECT * FROM users;
+id    info
+1    {"age": 31, "name": "John"}
+2    {"person": {"address": {"city": "New York"}, "name": "Alice"}}
+UPDATE users SET info = JSON_SET(info, '$.person.address.city', 'Los Angeles') WHERE id = 2;
+SELECT * FROM users;
+id    info
+1    {"age": 31, "name": "John"}
+2    {"person": {"address": {"city": "Los Angeles"}, "name": "Alice"}}
+INSERT INTO users (info) VALUES ('{"users": ["Cherry", "Davis", "Emma", "Francis"]}');
+SELECT * FROM users;
+id    info
+1    {"age": 31, "name": "John"}
+2    {"person": {"address": {"city": "Los Angeles"}, "name": "Alice"}}
+3    {"users": ["Cherry", "Davis", "Emma", "Francis"]}
+UPDATE users SET info = JSON_SET(info, '$.users[1]', 'Devin');
+SELECT * FROM users;
+id    info
+1    {"age": 31, "name": "John"}
+2    {"person": {"address": {"city": "Los Angeles"}, "name": "Alice"}}
+3    {"users": ["Cherry", "Devin", "Emma", "Francis"]}
+INSERT INTO users VALUES (5, '{"name":"Eric","age":35,"hobby":"reading"}');
+SELECT * FROM users;
+id    info
+1    {"age": 31, "name": "John"}
+2    {"person": {"address": {"city": "Los Angeles"}, "name": "Alice"}}
+3    {"users": ["Cherry", "Devin", "Emma", "Francis"]}
+5    {"age": 35, "hobby": "reading", "name": "Eric"}
+UPDATE users SET info = JSON_SET(info, '$.name', 'Bob', '$.hobby', 'writing') WHERE id = 5;
+SELECT * FROM users;
+id    info
+1    {"age": 31, "name": "John"}
+2    {"person": {"address": {"city": "Los Angeles"}, "name": "Alice"}}
+3    {"users": ["Cherry", "Devin", "Emma", "Francis"]}
+5    {"age": 35, "hobby": "writing", "name": "Bob"}
+SELECT JSON_SET(a.info, '$.age', 18) as user_id_1 FROM users as a WHERE a.id = 1;
+user_id_1
+{"age": 18, "name": "John"}
+SELECT JSON_SET(a.info, '$.gender', 'Male') as user_id_1 FROM users as a WHERE a.id = 1;
+user_id_1
+{"age": 31, "gender": "Male", "name": "John"}
+SET @json = '{"name":"Allen","age":14}';
+SELECT @json, JSON_SET(@json, '$.gender', 'Male');
+@json    JSON_SET(@json, $.gender, Male)
+{"name":"Allen","age":14}    {"age": 14, "gender": "Male", "name": "Allen"}
+SELECT @json, JSON_SET(@json, '$.age', 18);
+@json    JSON_SET(@json, $.age, 18)
+{"name":"Allen","age":14}    {"age": 18, "name": "Allen"}
+SET @json = '{"user":{"name":"Eric","age":20}}';
+SELECT @json, JSON_SET(@json, '$.user.age', 22);
+@json    JSON_SET(@json, $.user.age, 22)
+{"user":{"name":"Eric","age":20}}    {"user": {"age": 22, "name": "Eric"}}
+SET @json = '{"fruits":["apple","banana","cherry"]}';
+SELECT @json, JSON_SET(@json, '$.fruits[1]', 'pear');
+@json    JSON_SET(@json, $.fruits[1], pear)
+{"fruits":["apple","banana","cherry"]}    {"fruits": ["apple", "pear", "cherry"]}
+SET @json = '{"numbers":[1,2,3]}';
+SELECT @json, JSON_SET(@json, '$.numbers[3]', 4);
+@json    JSON_SET(@json, $.numbers[3], 4)
+{"numbers":[1,2,3]}    {"numbers": [1, 2, 3, 4]}
+SET @json = '{"name":"Henry","age":28,"city":"Beijing"}';
+SELECT @json, JSON_SET(@json, '$.age', 30, '$.city', 'Shanghai');
+@json    JSON_SET(@json, $.age, 30, $.city, Shanghai)
+{"name":"Henry","age":28,"city":"Beijing"}    {"age": 30, "city": "Shanghai", "name": "Henry"}
+SET @json = '{"a": 1,"b": [2, 3]}';
+SELECT @json, JSON_SET(@json, '$.a', 10);
+@json    JSON_SET(@json, $.a, 10)
+{"a": 1,"b": [2, 3]}    {"a": 10, "b": [2, 3]}
+SELECT @json, JSON_SET(@json, '$.c', '[true, false]');
+@json    JSON_SET(@json, $.c, [true, false])
+{"a": 1,"b": [2, 3]}    {"a": 1, "b": [2, 3], "c": [true, false]}
+SELECT @json, JSON_SET(@json, '$.b[2]', 4) ;
+@json    JSON_SET(@json, $.b[2], 4)
+{"a": 1,"b": [2, 3]}    {"a": 1, "b": [2, 3, 4]}
+DROP TABLE IF EXISTS products;
+CREATE TABLE products (
+id INT AUTO_INCREMENT PRIMARY KEY,
+details JSON
+);
+INSERT INTO products (details) VALUES ('{"name": "Laptop"}');
+SELECT * FROM products;
+id    details
+1    {"name": "Laptop"}
+UPDATE products SET details = JSON_INSERT(details, '$.price', 999.99);
+SELECT * FROM products;
+id    details
+1    {"name": "Laptop", "price": "999.99"}
+INSERT INTO products (details) VALUES ('{"product_info": {"brand": "ABC", "features": []}}');
+SELECT * FROM products;
+id    details
+1    {"name": "Laptop", "price": "999.99"}
+2    {"product_info": {"brand": "ABC", "features": []}}
+UPDATE products SET details = JSON_INSERT(details, '$.product_info.features[0]', 'High - resolution display');
+SELECT * FROM products;
+id    details
+1    {"name": "Laptop", "price": "999.99"}
+2    {"product_info": {"brand": "ABC", "features": ["High - resolution display"]}}
+DROP TABLE IF EXISTS customers;
+CREATE TABLE customers (
+id INT AUTO_INCREMENT PRIMARY KEY,
+profile JSON
+);
+INSERT INTO customers (profile) VALUES ('{"name": "Customer1"}');
+SELECT * FROM customers;
+id    profile
+1    {"name": "Customer1"}
+UPDATE customers SET profile = JSON_INSERT(profile, '$.age', 30, '$.phone', '123 - 456 - 7890');
+SELECT * FROM customers;
+id    profile
+1    {"age": 30, "name": "Customer1", "phone": "123 - 456 - 7890"}
+DROP TABLE IF EXISTS student;
+CREATE TABLE student (
+id INT AUTO_INCREMENT PRIMARY KEY,
+json_data JSON
+);
+INSERT INTO student (json_data) VALUES ('{"name": "John"}');
+SELECT * FROM student;
+id    json_data
+1    {"name": "John"}
+UPDATE student
+SET json_data = JSON_INSERT(json_data, '$.age', 30)
+WHERE id = 1;
+SELECT json_data FROM student WHERE id = 1;
+json_data
+{"age": 30, "name": "John"}
+INSERT INTO student (json_data) VALUES ('{"person": {"name": "Alice"}}');
+SELECT * FROM student;
+id    json_data
+1    {"age": 30, "name": "John"}
+2    {"person": {"name": "Alice"}}
+UPDATE student
+SET json_data = JSON_INSERT(json_data, '$.person.age', 25)
+WHERE id = 2;
+SELECT json_data FROM student WHERE id = 2;
+json_data
+{"person": {"age": 25, "name": "Alice"}}
+INSERT INTO student (json_data) VALUES ('{"book": {"title": "Book1"}}');
+SELECT * FROM student;
+id    json_data
+1    {"age": 30, "name": "John"}
+2    {"person": {"age": 25, "name": "Alice"}}
+3    {"book": {"title": "Book1"}}
+UPDATE student
+SET json_data = JSON_INSERT(json_data, '$.book.author', 'Author1', '$.book.price', 19.99)
+WHERE id = 3;
+SELECT json_data FROM student WHERE id = 3;
+json_data
+{"book": {"author": "Author1", "price": "19.99", "title": "Book1"}}
+INSERT INTO student (json_data) VALUES ('{"fruits": ["apple", "banana"]}');
+SELECT json_data FROM student;
+json_data
+{"age": 30, "name": "John"}
+{"person": {"age": 25, "name": "Alice"}}
+{"book": {"author": "Author1", "price": "19.99", "title": "Book1"}}
+{"fruits": ["apple", "banana"]}
+UPDATE student
+SET json_data = JSON_INSERT(json_data, '$.fruits[2]', 'cherry')
+WHERE id = 4;
+SELECT json_data FROM student WHERE id = 4;
+json_data
+{"fruits": ["apple", "banana", "cherry"]}
+INSERT INTO student (json_data) VALUES ('{"numbers": [1, 3]}');
+SELECT * FROM student;
+id    json_data
+1    {"age": 30, "name": "John"}
+2    {"person": {"age": 25, "name": "Alice"}}
+3    {"book": {"author": "Author1", "price": "19.99", "title": "Book1"}}
+4    {"fruits": ["apple", "banana", "cherry"]}
+5    {"numbers": [1, 3]}
+UPDATE student
+SET json_data = JSON_INSERT(json_data, '$.numbers[2]', 2)
+WHERE id = 5;
+SELECT json_data FROM student WHERE id = 5;
+json_data
+{"numbers": [1, 3, 2]}
+INSERT INTO student (json_data) VALUES ('{"store": {"products": [{"name": "product1", "price": 10}]}}');
+SELECT * FROM student;
+id    json_data
+1    {"age": 30, "name": "John"}
+2    {"person": {"age": 25, "name": "Alice"}}
+3    {"book": {"author": "Author1", "price": "19.99", "title": "Book1"}}
+4    {"fruits": ["apple", "banana", "cherry"]}
+5    {"numbers": [1, 3, 2]}
+6    {"store": {"products": [{"name": "product1", "price": 10}]}}
+UPDATE student
+SET json_data = JSON_INSERT(json_data, '$.store.products[0].quantity', 5)
+WHERE id = 6;
+SELECT json_data FROM student WHERE id = 6;
+json_data
+{"store": {"products": [{"name": "product1", "price": 10, "quantity": 5}]}}
+INSERT INTO student (json_data) VALUES ('{"user": {"name": "User1"}}');
+SELECT * FROM student;
+id    json_data
+1    {"age": 30, "name": "John"}
+2    {"person": {"age": 25, "name": "Alice"}}
+3    {"book": {"author": "Author1", "price": "19.99", "title": "Book1"}}
+4    {"fruits": ["apple", "banana", "cherry"]}
+5    {"numbers": [1, 3, 2]}
+6    {"store": {"products": [{"name": "product1", "price": 10, "quantity": 5}]}}
+7    {"user": {"name": "User1"}}
+UPDATE student
+SET json_data = JSON_INSERT(json_data, '$.user.email', NULL)
+WHERE id = 7;
+SELECT json_data FROM student WHERE id = 7;
+json_data
+{"user": {"email": null, "name": "User1"}}
+INSERT INTO student (json_data) VALUES ('{"category": "Electronics"}');
+SELECT * FROM student;
+id    json_data
+1    {"age": 30, "name": "John"}
+2    {"person": {"age": 25, "name": "Alice"}}
+3    {"book": {"author": "Author1", "price": "19.99", "title": "Book1"}}
+4    {"fruits": ["apple", "banana", "cherry"]}
+5    {"numbers": [1, 3, 2]}
+6    {"store": {"products": [{"name": "product1", "price": 10, "quantity": 5}]}}
+7    {"user": {"email": null, "name": "User1"}}
+8    {"category": "Electronics"}
+UPDATE student
+SET json_data = JSON_INSERT(json_data, '$.product_details', '{"brand": "ABC", "model": "XYZ"}')
+WHERE id = 8;
+SELECT json_data FROM student WHERE id = 8;
+json_data
+{"category": "Electronics", "product_details": {"brand": "ABC", "model": "XYZ"}}
+DROP TABLE IF EXISTS employees;
+CREATE TABLE employees (
+id INT AUTO_INCREMENT PRIMARY KEY,
+user_info JSON
+);
+INSERT INTO employees (user_info) VALUES ('{"name": "John", "age": 30}');
+SELECT * FROM employees;
+id    user_info
+1    {"age": 30, "name": "John"}
+UPDATE employees SET user_info = JSON_REPLACE(user_info, '$.age', 31) WHERE id = 1;
+SELECT * FROM employees;
+id    user_info
+1    {"age": 31, "name": "John"}
+INSERT INTO employees (user_info) VALUES ('{"person": {"name": "Alice", "address": {"city": "New York"}}}');
+SELECT * FROM employees;
+id    user_info
+1    {"age": 31, "name": "John"}
+2    {"person": {"address": {"city": "New York"}, "name": "Alice"}}
+UPDATE employees SET user_info = JSON_REPLACE(user_info, '$.person.address.city', 'Los Angeles') WHERE id = 2;
+SELECT * FROM employees;
+id    user_info
+1    {"age": 31, "name": "John"}
+2    {"person": {"address": {"city": "Los Angeles"}, "name": "Alice"}}
+DROP TABLE IF EXISTS myproducts;
+CREATE TABLE myproducts (
+id INT AUTO_INCREMENT PRIMARY KEY,
+product_details JSON
+);
+INSERT INTO myproducts (product_details) VALUES ('{"size": "small", "color": "red", "weight": "light"}');
+SELECT * FROM myproducts;
+id    product_details
+1    {"color": "red", "size": "small", "weight": "light"}
+UPDATE myproducts SET product_details = JSON_REPLACE(product_details, '$.size', "medium", '$.color', "blue") WHERE id = 1;
+SELECT * FROM myproducts;
+id    product_details
+1    {"color": "blue", "size": "medium", "weight": "light"}
+DROP TABLE IF EXISTS inventory;
+CREATE TABLE inventory (
+id INT AUTO_INCREMENT PRIMARY KEY,
+stock_items JSON
+);
+INSERT INTO inventory (stock_items) VALUES ('{"items": ["apple", "banana"]}');
+SELECT * FROM inventory;
+id    stock_items
+1    {"items": ["apple", "banana"]}
+UPDATE inventory SET stock_items = JSON_REPLACE(stock_items, '$.items[1]', "cherry") WHERE id = 1;
+SELECT * FROM inventory;
+id    stock_items
+1    {"items": ["apple", "cherry"]}
+INSERT INTO inventory (stock_items) VALUES ('{"items": ["1", "3", "5"]}');
+SELECT * FROM inventory;
+id    stock_items
+1    {"items": ["apple", "cherry"]}
+2    {"items": ["1", "3", "5"]}
+UPDATE inventory SET stock_items = JSON_REPLACE(stock_items, '$.items[0]', "2", '$.items[2]', "4") WHERE id = 2;
+SELECT * FROM inventory;
+id    stock_items
+1    {"items": ["apple", "cherry"]}
+2    {"items": [2, "3", 4]}
