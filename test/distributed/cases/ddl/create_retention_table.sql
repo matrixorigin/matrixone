@@ -40,7 +40,7 @@ drop table if exists retention02;
 
 
 
-
+-- @bvt:issue#16438
 -- create retention table, if not reach retention time, the table can be dropped
 drop table if exists retention03;
 create table retention03 (
@@ -67,7 +67,7 @@ drop table retention03;
 -- @ignore:2
 select * from mo_catalog.mo_retention;
 show tables;
-
+-- @bvt:issue
 
 
 

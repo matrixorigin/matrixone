@@ -276,7 +276,7 @@ drop table departments;
 
 
 
-
+-- @bvt:issue#16438
 -- view in partition table
 drop table if exists partition01;
 create table partition01 (
@@ -300,34 +300,45 @@ insert into partition01 values (9001,'1980-12-17', 'SMITH', 'CLERK', 'F', '2008-
 drop view if exists view01;
 create view view01 as select * from partition01;
 select * from view01;
+-- @bvt:issue
 
 drop snapshot if exists sp05;
 create snapshot sp05 for account acc01;
 
+-- @bvt:issue#16438
 insert into partition01 values (9003,'1999-02-20', 'BOB', 'DOCTOR', 'F', '2009-02-20');
 select * from view01;
 select * from view01{snapshot = 'sp05'};
+-- @bvt:issue
 
 drop snapshot if exists sp06;
 create snapshot sp06 for account acc01;
 
 restore account acc01 from snapshot sp05;
 
+-- @bvt:issue#16438
 select * from view01;
 select * from view01{snapshot = 'sp05'};
 
 drop table partition01;
 select * from view01;
 select * from view01{snapshot = 'sp05'};
+-- @bvt:issue
 
 restore account acc01 from snapshot sp06;
+-- @bvt:issue#16438
 select * from view01;
 select * from view01{snapshot = 'sp06'};
+-- @bvt:issue
 
+-- @bvt:issue#16438
 drop view view01;
+-- @bvt:issue
 drop snapshot sp06;
 drop snapshot sp05;
+-- @bvt:issue#16438
 drop table partition01;
+-- @bvt:issue
 drop database test;
 
 
