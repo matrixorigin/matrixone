@@ -16,8 +16,11 @@ package readutil
 
 import (
 	"context"
+	"fmt"
 	"math/rand"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -101,4 +104,58 @@ func TestRemoteDataSource_ApplyTombstones(t *testing.T) {
 	left, err = ds.ApplyTombstones(context.Background(), bid, []int64{int64(offset)}, engine.Policy_CheckAll)
 	require.Nil(t, err)
 	require.Equal(t, 1, len(left))
+}
+
+func TestObjListRelData(t *testing.T) { // for test coverage
+	objlistRelData := &ObjListRelData{
+		NeedFirstEmpty: true,
+		TotalBlocks:    1,
+	}
+	logutil.Infof("%v", objlistRelData.String())
+	var s objectio.BlockInfoSlice
+	s.AppendBlockInfo(&objectio.BlockInfo{BlockID: types.Blockid{1}})
+	objlistRelData.AppendBlockInfoSlice(s)
+	objlistRelData.SetBlockList(s)
+	objlistRelData.AttachTombstones(nil)
+	buf, err := objlistRelData.MarshalBinary()
+	require.NoError(t, err)
+	objlistRelData.UnmarshalBinary(buf)
+	objlistRelData.GroupByPartitionNum()
+}
+
+func TestObjListRelData1(t *testing.T) {
+	defer func() {
+		r := recover()
+		fmt.Println("panic recover", r)
+	}()
+	objlistRelData := &ObjListRelData{}
+	objlistRelData.GetShardIDList()
+}
+
+func TestObjListRelData2(t *testing.T) {
+	defer func() {
+		r := recover()
+		fmt.Println("panic recover", r)
+	}()
+	objlistRelData := &ObjListRelData{}
+	objlistRelData.GetShardID(1)
+
+}
+
+func TestObjListRelData3(t *testing.T) {
+	defer func() {
+		r := recover()
+		fmt.Println("panic recover", r)
+	}()
+	objlistRelData := &ObjListRelData{}
+	objlistRelData.SetShardID(1, 1)
+}
+
+func TestObjListRelData4(t *testing.T) {
+	defer func() {
+		r := recover()
+		fmt.Println("panic recover", r)
+	}()
+	objlistRelData := &ObjListRelData{}
+	objlistRelData.AppendShardID(1)
 }
