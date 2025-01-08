@@ -525,6 +525,7 @@ message OrderBySpec {
 
 message WindowSpec {
 	Expr window_func = 1;
+	repeated Expr partition_by = 2;
 	repeated OrderBySpec order_by = 3;
 	FrameClause frame = 4;
 	string name = 5;
