@@ -296,6 +296,9 @@ func replaceColumnsForExpr(expr *plan.Expr, projMap map[[2]int32]*plan.Expr) *pl
 
 	case *plan.Expr_W:
 		ne.W.WindowFunc = replaceColumnsForExpr(ne.W.WindowFunc, projMap)
+		for i, arg := range ne.W.PartitionBy {
+			ne.W.PartitionBy[i] = replaceColumnsForExpr(arg, projMap)
+		}
 		for i, order := range ne.W.OrderBy {
 			ne.W.OrderBy[i].Expr = replaceColumnsForExpr(order.Expr, projMap)
 		}
@@ -537,6 +540,9 @@ func increaseTagCnt(expr *plan.Expr, inc int, tagCnt map[int32]int) {
 		}
 	case *plan.Expr_W:
 		increaseTagCnt(exprImpl.W.WindowFunc, inc, tagCnt)
+		for _, arg := range exprImpl.W.PartitionBy {
+			increaseTagCnt(arg, inc, tagCnt)
+		}
 		for _, order := range exprImpl.W.OrderBy {
 			increaseTagCnt(order.Expr, inc, tagCnt)
 		}

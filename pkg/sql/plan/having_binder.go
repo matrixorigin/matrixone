@@ -230,6 +230,9 @@ func (b *HavingBinder) processForceWindows(funcName string, astExpr *tree.FuncEx
 	// window function
 	w.Name = funcName
 
+	// partition by
+	w.PartitionBy = DeepCopyExprList(b.ctx.groups)
+
 	//order by
 	w.OrderBy = make([]*plan.OrderBySpec, 0, len(astExpr.OrderBy))
 
