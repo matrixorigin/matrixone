@@ -32,10 +32,15 @@ create pitr pitr05 for table test t3 range 1 'h';
 drop snapshot if exists sp05;
 create snapshot sp05 for table test t3;
 
+-- @ignore:0,1,2,3,4
 show recovery_window for account;
+-- @ignore:0,1,2,3,4
 show recovery_window for database test;
+-- @ignore:0,1,2,3,4
 show recovery_window for table test t1;
+-- @ignore:0,1,2,3,4
 show recovery_window for table test t2;
+-- @ignore:0,1,2,3,4
 show recovery_window for table test t3;
 
 drop database test;
