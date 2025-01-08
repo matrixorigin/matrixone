@@ -154,7 +154,7 @@ type PushClient struct {
 	resumeC chan struct{}
 
 	consumeErrC chan error
-	receiver    []routineController
+	receiver    []*routineController
 	eng         *Engine
 
 	LogtailRPCClientFactory func(string, string, morpc.RPCClient) (morpc.RPCClient, morpc.Stream, error)
@@ -313,7 +313,7 @@ func (c *PushClient) init(
 
 	if !c.initialized {
 		c.connector = newConnector(c, e)
-		c.receiver = make([]routineController, consumerNumber)
+		c.receiver = make([]*routineController, consumerNumber)
 		c.consumeErrC = make(chan error, consumerNumber)
 		c.pauseC = make(chan bool, 1)
 		c.resumeC = make(chan struct{})
@@ -664,8 +664,8 @@ func (c *PushClient) startConsumers(ctx context.Context, e *Engine) {
 }
 
 func (c *PushClient) stopConsumers() {
-	for _, r := range c.receiver {
-		r.close()
+	for i := range c.receiver {
+		c.receiver[i].close()
 	}
 	logutil.Infof("%s %s: logtail consumers stopped", logTag, c.serviceID)
 }
@@ -1685,7 +1685,7 @@ func dispatchSubscribeResponse(
 	ctx context.Context,
 	e *Engine,
 	response *logtail.SubscribeResponse,
-	recRoutines []routineController,
+	recRoutines []*routineController,
 	receiveAt time.Time) error {
 	lt := response.Logtail
 	tbl := lt.GetTable()
@@ -1712,8 +1712,8 @@ func dispatchSubscribeResponse(
 	}
 	// no matter how we consume the response, should update all timestamp.
 	e.pClient.receivedLogTailTime.updateTimestamp(consumerNumber, *lt.Ts, receiveAt)
-	for _, rc := range recRoutines {
-		rc.updateTimeFromT(*lt.Ts, receiveAt)
+	for i := range recRoutines {
+		recRoutines[i].updateTimeFromT(*lt.Ts, receiveAt)
 	}
 	return nil
 }
@@ -1722,7 +1722,7 @@ func dispatchUpdateResponse(
 	ctx context.Context,
 	e *Engine,
 	response *logtail.UpdateResponse,
-	recRoutines []routineController,
+	recRoutines []*routineController,
 	receiveAt time.Time) error {
 	list := response.GetLogtailList()
 
@@ -1762,13 +1762,13 @@ func dispatchUpdateResponse(
 	}
 	// should update all the timestamp.
 	e.pClient.receivedLogTailTime.updateTimestamp(consumerNumber, *response.To, receiveAt)
-	for _, rc := range recRoutines {
-		rc.updateTimeFromT(*response.To, receiveAt)
+	for i := range recRoutines {
+		recRoutines[i].updateTimeFromT(*response.To, receiveAt)
 	}
 
 	n := 0
-	for _, c := range recRoutines {
-		n += len(c.signalChan)
+	for i := range recRoutines {
+		n += len(recRoutines[i].signalChan)
 	}
 	v2.LogTailApplyQueueSizeGauge.Set(float64(n))
 	return nil
@@ -1778,7 +1778,7 @@ func dispatchUnSubscribeResponse(
 	_ context.Context,
 	_ *Engine,
 	response *logtail.UnSubscribeResponse,
-	recRoutines []routineController,
+	recRoutines []*routineController,
 	receiveAt time.Time) error {
 	tbl := response.Table
 	notDistribute := ifShouldNotDistribute(tbl.DbId, tbl.TbId)
@@ -1860,7 +1860,7 @@ func (rc *routineController) close() {
 
 func (c *PushClient) createRoutineToConsumeLogTails(
 	ctx context.Context, routineId int, signalBufferLength int, e *Engine,
-) routineController {
+) *routineController {
 
 	singleRoutineToConsumeLogTail := func(ctx context.Context, engine *Engine, receiver *routineController, errRet chan error) {
 		errHappen := false
@@ -1886,7 +1886,7 @@ func (c *PushClient) createRoutineToConsumeLogTails(
 		}
 	}
 
-	controller := routineController{
+	controller := &routineController{
 		routineId:  routineId,
 		closeChan:  make(chan bool),
 		signalChan: make(chan routineControlCmd, signalBufferLength),
@@ -1905,7 +1905,7 @@ func (c *PushClient) createRoutineToConsumeLogTails(
 		warningBufferLen: int(float64(signalBufferLength) * consumerWarningPercent),
 	}
 
-	go singleRoutineToConsumeLogTail(ctx, e, &controller, c.consumeErrC)
+	go singleRoutineToConsumeLogTail(ctx, e, controller, c.consumeErrC)
 
 	return controller
 }
@@ -1953,7 +1953,7 @@ func (cmd *cmdToConsumeLog) action(ctx context.Context, e *Engine, ctrl *routine
 }
 
 func (cmd *cmdToUpdateTime) action(ctx context.Context, e *Engine, ctrl *routineController) error {
-	defer ctrl.cmdLogPool.Put(cmd)
+	defer ctrl.cmdTimePool.Put(cmd)
 	e.pClient.receivedLogTailTime.updateTimestamp(ctrl.routineId, cmd.time, cmd.receiveAt)
 	return nil
 }
