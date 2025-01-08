@@ -3222,6 +3222,22 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 		}
 
 		for i, w := range ctx.windows {
+			e := w.GetW()
+			if len(e.PartitionBy) > 0 {
+				partitionBy := make([]*plan.OrderBySpec, 0, len(e.PartitionBy))
+				for _, p := range e.PartitionBy {
+					partitionBy = append(partitionBy, &plan.OrderBySpec{
+						Expr: p,
+						Flag: plan.OrderBySpec_INTERNAL,
+					})
+				}
+				nodeID = builder.appendNode(&plan.Node{
+					NodeType:    plan.Node_PARTITION,
+					Children:    []int32{nodeID},
+					OrderBy:     partitionBy,
+					BindingTags: []int32{ctx.windowTag},
+				}, ctx)
+			}
 			nodeID = builder.appendNode(&plan.Node{
 				NodeType:    plan.Node_WINDOW,
 				Children:    []int32{nodeID},
@@ -3414,6 +3430,9 @@ func DeepProcessExprForGroupConcat(expr *Expr, ctx *BindContext) *Expr {
 			item.F.Args[i] = DeepProcessExprForGroupConcat(arg, ctx)
 		}
 	case *plan.Expr_W:
+		for i, p := range item.W.PartitionBy {
+			item.W.PartitionBy[i] = DeepProcessExprForGroupConcat(p, ctx)
+		}
 		for i, o := range item.W.OrderBy {
 			item.W.OrderBy[i].Expr = DeepProcessExprForGroupConcat(o.Expr, ctx)
 		}
