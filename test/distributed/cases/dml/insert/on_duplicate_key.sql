@@ -142,3 +142,12 @@ insert into t1 values (1,1,1),(2,2,2);
 insert into t1 values (1,1,1),(3,3,3) on duplicate key update c = 10;
 select * from t1 order by a;
 -- @bvt:issue
+drop table if exists t1;
+create table t1(a int primary key, b int);
+insert into t1 values (1,1),(2,2);
+prepare s1 from insert into t1 values (?,2) on duplicate key update b = 10;
+set @a=1;
+execute s1 using @a;
+execute s1 using @a;
+execute s1 using @a;
+execute s1 using @a;
