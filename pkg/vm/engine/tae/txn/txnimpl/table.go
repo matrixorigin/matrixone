@@ -32,12 +32,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
@@ -163,7 +162,7 @@ func (tbl *txnTable) TransferDeleteIntent(
 		panic(err)
 	}
 	ts := types.BuildTS(time.Now().UTC().UnixNano(), 0)
-	if err = readWriteConfilictCheck(entry, ts); err == nil {
+	if err = readWriteConfilictCheck(entry, ts, false); err == nil {
 		return
 	}
 	err = nil
@@ -264,7 +263,7 @@ func (tbl *txnTable) TransferDeletes(
 		v2.TxnS3TombstoneTransferGetSoftdeleteObjectsHistogram.Observe(time.Since(tGetSoftdeleteObjects).Seconds())
 		v2.TxnS3TombstoneSoftdeleteObjectCounter.Add(float64(len(softDeleteObjects)))
 		var findTombstoneDuration, readTombstoneDuration, deleteRowsDuration time.Duration
-		var sinker *engine_util.Sinker
+		var sinker *ioutil.Sinker
 		defer func() {
 			if sinker != nil {
 				sinker.Close()
@@ -279,7 +278,7 @@ func (tbl *txnTable) TransferDeletes(
 		for _, obj := range softDeleteObjects {
 			var currentTransferBatch *containers.Batch
 			tFindTombstone := time.Now()
-			sel, err := blockio.FindTombstonesOfObject(
+			sel, err := ioutil.FindTombstonesOfObject(
 				ctx, obj.ID(), tbl.tombstoneTable.tableSpace.stats, tbl.store.rt.Fs.Service,
 			)
 			findTombstoneDuration += time.Since(tFindTombstone)
@@ -337,7 +336,7 @@ func (tbl *txnTable) TransferDeletes(
 				for i := 0; i < int(stats.BlkCnt()); i++ {
 					tReadTombstone := time.Now()
 					loc := stats.BlockLocation(uint16(i), tbl.tombstoneTable.schema.Extra.BlockMaxRows)
-					vectors, closeFunc, err := blockio.LoadColumns2(
+					vectors, closeFunc, err := ioutil.LoadColumns2(
 						tbl.store.ctx,
 						[]uint16{0, 1},
 						nil,
@@ -362,13 +361,13 @@ func (tbl *txnTable) TransferDeletes(
 			tbl.store.warChecker.Delete(id)
 			if currentTransferBatch != nil {
 				if sinker == nil {
-					sinker = engine_util.NewTombstoneSinker(
+					sinker = ioutil.NewTombstoneSinker(
 						objectio.HiddenColumnSelection_None,
 						*pkType,
 						common.WorkspaceAllocator,
 						tbl.store.rt.Fs.Service,
-						engine_util.WithBufferSizeCap(TransferSinkerBufferSize),
-						engine_util.WithMemorySizeThreshold(TransferSinkerMemorySizeThreshold))
+						ioutil.WithBufferSizeCap(TransferSinkerBufferSize),
+						ioutil.WithMemorySizeThreshold(TransferSinkerMemorySizeThreshold))
 				}
 				sinker.Write(ctx, containers.ToCNBatch(currentTransferBatch))
 				currentTransferBatch.Close()
@@ -420,6 +419,7 @@ func (tbl *txnTable) TransferDeletes(
 		if err = tbl.store.warChecker.checkOne(
 			id,
 			ts,
+			phase == txnif.PrePreparePhase,
 		); err == nil {
 			continue
 		}
@@ -470,6 +470,7 @@ func (tbl *txnTable) recurTransferDelete(
 	pkType *types.Type,
 	depth int,
 	ts types.TS,
+	phase string,
 ) error {
 
 	var page2 *common.PinnedItem[*model.TransferHashPage]
@@ -504,6 +505,7 @@ func (tbl *txnTable) recurTransferDelete(
 	err = readWriteConfilictCheck(
 		obj,
 		ts,
+		phase == txnif.PrePreparePhase,
 	)
 	if err == nil {
 		pkVec := tbl.store.rt.VectorPool.Small.GetVector(pkType)
@@ -554,7 +556,8 @@ func (tbl *txnTable) recurTransferDelete(
 		pk,
 		pkType,
 		depth+1,
-		ts)
+		ts,
+		phase)
 }
 
 func (tbl *txnTable) TransferDeleteRows(
@@ -610,7 +613,7 @@ func (tbl *txnTable) TransferDeleteRows(
 	page := pinned.Item()
 	depth := 0
 	if err = tbl.recurTransferDelete(
-		memo, page, id, row, pk, pkType, depth, ts); err != nil {
+		memo, page, id, row, pk, pkType, depth, ts, phase); err != nil {
 		return
 	}
 
@@ -1237,7 +1240,7 @@ func (tbl *txnTable) DoPrecommitDedupByNode(ctx context.Context, stats objectio.
 	for _, loc := range metaLocs {
 		var vectors []containers.Vector
 		var closeFunc func()
-		vectors, closeFunc, err = blockio.LoadColumns2(
+		vectors, closeFunc, err = ioutil.LoadColumns2(
 			ctx,
 			[]uint16{uint16(schema.GetSingleSortKeyIdx())},
 			nil,
@@ -1663,7 +1666,7 @@ func (tbl *txnTable) contains(
 			totalRow -= blkRow
 			metaloc := objectio.BuildLocation(stats.ObjectName(), stats.Extent(), blkRow, i)
 
-			vectors, closeFunc, err := blockio.LoadColumns2(
+			vectors, closeFunc, err := ioutil.LoadColumns2(
 				tbl.store.ctx,
 				[]uint16{uint16(tbl.tombstoneTable.schema.GetSingleSortKeyIdx())},
 				nil,
@@ -1756,7 +1759,7 @@ func (tbl *txnTable) FillInWorkspaceDeletes(blkID types.Blockid, deletes **nulls
 			metaLocs = append(metaLocs, metaloc)
 		}
 		for _, loc := range metaLocs {
-			vectors, closeFunc, err := blockio.LoadColumns2(
+			vectors, closeFunc, err := ioutil.LoadColumns2(
 				tbl.store.ctx,
 				[]uint16{uint16(tbl.tombstoneTable.schema.GetSingleSortKeyIdx())},
 				nil,
@@ -1819,7 +1822,7 @@ func (tbl *txnTable) IsDeletedInWorkSpace(blkID *objectio.Blockid, row uint32) (
 			metaLocs = append(metaLocs, metaloc)
 		}
 		for _, loc := range metaLocs {
-			vectors, closeFunc, err := blockio.LoadColumns2(
+			vectors, closeFunc, err := ioutil.LoadColumns2(
 				tbl.store.ctx,
 				[]uint16{uint16(tbl.tombstoneTable.schema.GetSingleSortKeyIdx())},
 				nil,

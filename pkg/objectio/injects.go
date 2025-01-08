@@ -32,12 +32,16 @@ const (
 	FJ_TransferSlow  = "fj/transfer/slow"
 	FJ_FlushTimeout  = "fj/flush/timeout"
 
+	FJ_CheckpointSave = "fj/checkpoint/save"
+	FJ_GCKPWait1      = "fj/gckp/wait1"
+
 	FJ_TraceRanges         = "fj/trace/ranges"
 	FJ_TracePartitionState = "fj/trace/partitionstate"
 	FJ_PrefetchThreshold   = "fj/prefetch/threshold"
 
 	FJ_Debug19524 = "fj/debug/19524"
-	FJ_Debug19787 = "fj/debug/19787"
+
+	FJ_CNRecvErr = "fj/cn/recv/err"
 
 	FJ_LogReader    = "fj/log/reader"
 	FJ_LogWorkspace = "fj/log/workspace"
@@ -262,9 +266,81 @@ func InjectLog1(
 	return
 }
 
+func CheckpointSaveInjected() (string, bool) {
+	_, sarg, injected := fault.TriggerFault(FJ_CheckpointSave)
+	return sarg, injected
+}
+
+func WaitInjected(key string) {
+	fault.TriggerFault(key)
+}
+
+func NotifyInjected(key string) {
+	fault.TriggerFault(key)
+}
+
+func InjectWait(key string) (rmFault func(), err error) {
+	if err = fault.AddFaultPoint(
+		context.Background(),
+		key,
+		":::",
+		"wait",
+		0,
+		"",
+		false,
+	); err != nil {
+		return
+	}
+	rmFault = func() {
+		fault.RemoveFaultPoint(context.Background(), key)
+	}
+	return
+}
+
+func InjectNotify(key, target string) (rmFault func(), err error) {
+	if err = fault.AddFaultPoint(
+		context.Background(),
+		key,
+		":::",
+		"notify",
+		0,
+		target,
+		false,
+	); err != nil {
+		return
+	}
+	rmFault = func() {
+		fault.RemoveFaultPoint(context.Background(), key)
+	}
+	return
+}
+
+func InjectCheckpointSave(msg string) (rmFault func() (bool, error), err error) {
+	if err = fault.AddFaultPoint(
+		context.Background(),
+		FJ_CheckpointSave,
+		":::",
+		"echo",
+		0,
+		msg,
+		false,
+	); err != nil {
+		return
+	}
+	rmFault = func() (ok bool, err error) {
+		return fault.RemoveFaultPoint(context.Background(), FJ_CheckpointSave)
+	}
+	return
+}
+
 func Debug19524Injected() bool {
 	_, _, injected := fault.TriggerFault(FJ_Debug19524)
 	return injected
+}
+
+func CNRecvErrInjected() (bool, int) {
+	p, _, injected := fault.TriggerFault(FJ_CNRecvErr)
+	return injected, int(p)
 }
 
 func RangesLogInjected(dbName, tableName string) (bool, int) {

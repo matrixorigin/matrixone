@@ -66,6 +66,11 @@ func (e *executor) executeFor(entry *catalog.TableEntry, objs []*catalog.ObjectE
 		return
 	}
 
+	// prevent CN OOM
+	if len(objs) > 30 {
+		objs = objs[:30]
+	}
+
 	stats := make([][]byte, 0, len(objs))
 	cids := make([]common.ID, 0, len(objs))
 	for _, obj := range objs {

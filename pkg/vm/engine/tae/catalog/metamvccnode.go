@@ -173,8 +173,10 @@ func (e *ObjectMVCCNode) AppendTuple(sid *types.Objectid, batch *containers.Batc
 
 func ReadObjectInfoTuple(bat *containers.Batch, row int) (e *ObjectMVCCNode) {
 	buf := bat.GetVectorByName(ObjectAttr_ObjectStats).Get(row).([]byte)
+	buf2 := make([]byte, len(buf))
+	copy(buf2, buf)
 	e = &ObjectMVCCNode{
-		ObjectStats: (objectio.ObjectStats)(buf),
+		ObjectStats: (objectio.ObjectStats)(buf2),
 	}
 	return
 }

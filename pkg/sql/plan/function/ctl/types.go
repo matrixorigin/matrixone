@@ -57,6 +57,7 @@ var (
 	CtlReaderMethod          = strings.ToUpper("reader")
 	GetTableShards           = strings.ToUpper("get-table-shards")
 	MoTableStats             = strings.ToUpper("MoTableStats")
+	WorkspaceThreshold       = strings.ToUpper("WorkspaceThreshold")
 )
 
 var (
@@ -98,6 +99,7 @@ var (
 		CtlReaderMethod:          handleCtlReader,
 		GetTableShards:           handleGetTableShards,
 		MoTableStats:             handleMoTableStats,
+		WorkspaceThreshold:       handleWorkspaceThreshold,
 	}
 )
 

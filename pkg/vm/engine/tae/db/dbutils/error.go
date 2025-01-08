@@ -18,6 +18,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
-func IsRetrieableCheckpoint(err error) bool {
+func IsCheckpointRetryableErr(err error) bool {
 	return moerr.IsMoErrCode(err, moerr.ErrPrevCheckpointNotFinished)
 }

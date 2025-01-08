@@ -26,6 +26,7 @@ import (
 	"math/rand"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"go.uber.org/zap"
@@ -67,8 +68,7 @@ func extractRowFromEveryVector(
 			rowIndex = 0
 		}
 
-		err := extractRowFromVector(ctx, vec, i, row, rowIndex)
-		if err != nil {
+		if err := extractRowFromVector(ctx, vec, i, row, rowIndex); err != nil {
 			return err
 		}
 		rowIndex = rowIndexBackup
@@ -623,7 +623,7 @@ var ExitRunSql = func(txnOp client.TxnOperator) {
 	txnOp.ExitRunSql()
 }
 
-func GetTableDef(
+var GetTableDef = func(
 	ctx context.Context,
 	txnOp client.TxnOperator,
 	cnEngine engine.Engine,
@@ -671,7 +671,7 @@ func AesCFBDecode(ctx context.Context, data string) (string, error) {
 	return AesCFBDecodeWithKey(ctx, data, []byte(AesKey))
 }
 
-func AesCFBDecodeWithKey(ctx context.Context, data string, aesKey []byte) (string, error) {
+var AesCFBDecodeWithKey = func(ctx context.Context, data string, aesKey []byte) (string, error) {
 	if len(aesKey) == 0 {
 		return "", moerr.NewInternalErrorNoCtx("AesKey is not initialized")
 	}
@@ -731,4 +731,24 @@ func batchRowCount(bat *batch.Batch) int {
 		return 0
 	}
 	return bat.Vecs[0].Length()
+}
+
+// AddSingleQuotesJoin [a, b, c] -> 'a','b','c'
+func AddSingleQuotesJoin(s []string) string {
+	if len(s) == 0 {
+		return ""
+	}
+	return "'" + strings.Join(s, "','") + "'"
+}
+
+func GenDbTblKey(dbName, tblName string) string {
+	return dbName + "." + tblName
+}
+
+func SplitDbTblKey(dbTblKey string) (dbName, tblName string) {
+	s := strings.Split(dbTblKey, ".")
+	if len(s) != 2 {
+		return
+	}
+	return s[0], s[1]
 }

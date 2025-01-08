@@ -17,9 +17,11 @@ package disttae
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 	"strings"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -81,7 +83,7 @@ func newCNMergeTask(
 	targets []objectio.ObjectStats,
 	targetObjSize uint32,
 ) (*cnMergeTask, error) {
-	relData := engine_util.NewBlockListRelationData(1)
+	relData := readutil.NewBlockListRelationData(1)
 	source, err := tbl.buildLocalDataSource(
 		ctx,
 		0,
@@ -247,8 +249,8 @@ func (t *cnMergeTask) prepareCommitEntry() *api.MergeCommitEntry {
 	return commitEntry
 }
 
-func (t *cnMergeTask) PrepareNewWriter() *blockio.BlockWriter {
-	writer := blockio.ConstructWriterWithSegmentID(
+func (t *cnMergeTask) PrepareNewWriter() *ioutil.BlockWriter {
+	writer := ioutil.ConstructWriterWithSegmentID(
 		t.segmentID,
 		t.num,
 		t.host.version,

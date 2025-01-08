@@ -14,7 +14,11 @@
 
 package fileservice
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+)
 
 func TestZeroToNil(t *testing.T) {
 	if testing.AllocsPerRun(10, func() {
@@ -27,4 +31,9 @@ func TestZeroToNil(t *testing.T) {
 	}) != 0 {
 		t.Fatal()
 	}
+}
+
+func TestFirstNonZero(t *testing.T) {
+	assert.Equal(t, 42, firstNonZero(0, 42))
+	assert.Equal(t, 0, firstNonZero[int]())
 }

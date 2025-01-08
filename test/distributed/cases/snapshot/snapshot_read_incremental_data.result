@@ -34,7 +34,7 @@ insert into lineitem values
 select count(*) from lineitem;
 count(*)
 10
-create snapshot snapshot_lineitem for account sys;
+create snapshot snapshot_lineitem for account;
 create snapshot snapshot_lineitem_incremental for cluster;
 insert into lineitem values
 (11,3,30,5,4,2,1860.06,0.01,0.06,"A","F","1993-12-04","1994-01-07","1994-01-01","NONE","TRUCK","y. fluffily pending d"),
@@ -85,7 +85,7 @@ select count(*) from rs01;
 count(*)
 6
 drop snapshot if exists sp01;
-create snapshot sp01 for account sys;
+create snapshot sp01 for account;
 select count(*) from rs01 {snapshot = 'sp01'};
 count(*)
 6

@@ -22,6 +22,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"go.uber.org/zap"
 
@@ -51,6 +52,8 @@ import (
 
 const (
 	WALDir = "wal"
+
+	Phase_Open = "open-tae"
 )
 
 func fillRuntimeOptions(opts *options.Options) {
@@ -78,24 +81,32 @@ func Open(
 	dbLocker, err := createDBLock(dirname)
 
 	logutil.Info(
-		"open-tae",
-		common.OperationField("Start"),
-		common.OperandField("open"),
+		Phase_Open,
+		zap.String("db-dirname", dirname),
+		zap.Error(err),
 	)
 	totalTime := time.Now()
 
 	if err != nil {
 		return nil, err
 	}
+
+	var onErrorCalls []func()
+
 	defer func() {
 		if dbLocker != nil {
 			dbLocker.Close()
 		}
+		if err != nil && len(onErrorCalls) > 0 {
+			for _, call := range onErrorCalls {
+				call()
+			}
+		}
 		logutil.Info(
-			"open-tae", common.OperationField("End"),
-			common.OperandField("open"),
-			common.AnyField("cost", time.Since(totalTime)),
-			common.AnyField("err", err),
+			Phase_Open,
+			zap.Duration("open-tae-cost", time.Since(totalTime)),
+			zap.String("mode", db.GetTxnMode().String()),
+			zap.Error(err),
 		)
 	}()
 
@@ -105,10 +116,9 @@ func Open(
 	wbuf := &bytes.Buffer{}
 	werr := toml.NewEncoder(wbuf).Encode(opts)
 	logutil.Info(
-		"open-tae",
-		common.OperationField("Config"),
-		common.AnyField("toml", wbuf.String()),
-		common.ErrorField(werr),
+		Phase_Open,
+		zap.String("config", wbuf.String()),
+		zap.Error(werr),
 	)
 	serviceDir := path.Join(dirname, "data")
 	if opts.Fs == nil {
@@ -127,6 +137,10 @@ func Open(
 	}
 	for _, opt := range dbOpts {
 		opt(db)
+	}
+	txnMode := db.GetTxnMode()
+	if !txnMode.IsValid() {
+		panic(fmt.Sprintf("open-tae: invalid txn mode %s", txnMode))
 	}
 
 	fs := objectio.NewObjectFS(opts.Fs, serviceDir)
@@ -172,7 +186,16 @@ func Open(
 		opts.MaxMessageSize,
 	)
 	txnFactory := txnimpl.TxnFactory(db.Catalog)
-	db.TxnMgr = txnbase.NewTxnManager(txnStoreFactory, txnFactory, db.Opts.Clock)
+	var txnMgrOpts []txnbase.TxnManagerOption
+	switch txnMode {
+	case DBTxnMode_Write:
+		txnMgrOpts = append(txnMgrOpts, txnbase.WithWriteMode)
+	case DBTxnMode_Replay:
+		txnMgrOpts = append(txnMgrOpts, txnbase.WithReplayMode)
+	}
+	db.TxnMgr = txnbase.NewTxnManager(
+		txnStoreFactory, txnFactory, db.Opts.Clock, txnMgrOpts...,
+	)
 	db.LogtailMgr = logtail.NewManager(
 		db.Runtime,
 		int(db.Opts.LogtailCfg.PageSize),
@@ -181,33 +204,57 @@ func Open(
 	db.Runtime.Now = db.TxnMgr.Now
 	db.TxnMgr.CommitListener.AddTxnCommitListener(db.LogtailMgr)
 	db.TxnMgr.Start(opts.Ctx)
+	onErrorCalls = append(onErrorCalls, func() {
+		db.TxnMgr.Stop()
+	})
+
 	db.LogtailMgr.Start()
+	onErrorCalls = append(onErrorCalls, func() {
+		db.LogtailMgr.Stop()
+	})
+
 	db.BGCheckpointRunner = checkpoint.NewRunner(
 		opts.Ctx,
 		db.Runtime,
 		db.Catalog,
 		logtail.NewDirtyCollector(db.LogtailMgr, db.Opts.Clock, db.Catalog, new(catalog.LoopProcessor)),
 		db.Wal,
-		checkpoint.WithFlushInterval(opts.CheckpointCfg.FlushInterval),
-		checkpoint.WithCollectInterval(opts.CheckpointCfg.ScanInterval),
-		checkpoint.WithMinCount(int(opts.CheckpointCfg.MinCount)),
-		checkpoint.WithCheckpointBlockRows(opts.CheckpointCfg.BlockRows),
-		checkpoint.WithCheckpointSize(opts.CheckpointCfg.Size),
-		checkpoint.WithMinIncrementalInterval(opts.CheckpointCfg.IncrementalInterval),
-		checkpoint.WithGlobalMinCount(int(opts.CheckpointCfg.GlobalMinCount)),
-		checkpoint.WithGlobalVersionInterval(opts.CheckpointCfg.GlobalVersionInterval),
-		checkpoint.WithReserveWALEntryCount(opts.CheckpointCfg.ReservedWALEntryCount))
+		&checkpoint.CheckpointCfg{
+			MinCount:                    opts.CheckpointCfg.MinCount,
+			IncrementalReservedWALCount: opts.CheckpointCfg.ReservedWALEntryCount,
+			IncrementalInterval:         opts.CheckpointCfg.IncrementalInterval,
+			GlobalMinCount:              opts.CheckpointCfg.GlobalMinCount,
+			GlobalHistoryDuration:       opts.CheckpointCfg.GlobalVersionInterval,
+			SizeHint:                    opts.CheckpointCfg.Size,
+			BlockMaxRowsHint:            opts.CheckpointCfg.BlockRows,
+		},
+	)
+	db.BGCheckpointRunner.Start()
+	onErrorCalls = append(onErrorCalls, func() {
+		db.BGCheckpointRunner.Stop()
+	})
+
+	db.BGFlusher = checkpoint.NewFlusher(
+		db.Runtime,
+		db.BGCheckpointRunner,
+		db.Catalog,
+		db.BGCheckpointRunner.GetDirtyCollector(),
+		checkpoint.WithFlusherInterval(opts.CheckpointCfg.FlushInterval),
+		checkpoint.WithFlusherCronPeriod(opts.CheckpointCfg.ScanInterval),
+	)
 
 	now := time.Now()
-	ckpReplayer := db.BGCheckpointRunner.Replay(dataFactory)
+	// TODO: checkpoint dir should be configurable
+	ckpReplayer := db.BGCheckpointRunner.BuildReplayer(ioutil.GetCheckpointDir(), dataFactory)
+	defer ckpReplayer.Close()
 	if err = ckpReplayer.ReadCkpFiles(); err != nil {
-		panic(err)
+		return
 	}
 
 	// 1. replay three tables objectlist
-	checkpointed, ckpLSN, valid, err := ckpReplayer.ReplayThreeTablesObjectlist()
+	checkpointed, ckpLSN, valid, err := ckpReplayer.ReplayThreeTablesObjectlist(Phase_Open)
 	if err != nil {
-		panic(err)
+		return
 	}
 
 	var txn txnif.AsyncTxn
@@ -219,20 +266,18 @@ func Open(
 		store.BindTxn(txn)
 	}
 	// 2. replay all table Entries
-	if err = ckpReplayer.ReplayCatalog(txn); err != nil {
-		panic(err)
+	if err = ckpReplayer.ReplayCatalog(txn, Phase_Open); err != nil {
+		return
 	}
 
 	// 3. replay other tables' objectlist
-	if err = ckpReplayer.ReplayObjectlist(); err != nil {
-		panic(err)
+	if err = ckpReplayer.ReplayObjectlist(Phase_Open); err != nil {
+		return
 	}
 	logutil.Info(
-		"open-tae",
-		common.OperationField("replay"),
-		common.OperandField("checkpoints"),
-		common.AnyField("cost", time.Since(now)),
-		common.AnyField("checkpointed", checkpointed.ToString()),
+		Phase_Open,
+		zap.Duration("replay-checkpoints-cost", time.Since(now)),
+		zap.String("max-checkpoint", checkpointed.ToString()),
 	)
 
 	now = time.Now()
@@ -241,20 +286,20 @@ func Open(
 
 	// checkObjectState(db)
 	logutil.Info(
-		"open-tae",
-		common.OperationField("replay"),
-		common.OperandField("wal"),
-		common.AnyField("cost", time.Since(now)),
+		Phase_Open,
+		zap.Duration("replay-wal-cost", time.Since(now)),
 	)
 
 	db.DBLocker, dbLocker = dbLocker, nil
 
 	// Init timed scanner
 	scanner := NewDBScanner(db, nil)
+
+	// w-zr TODO: need to support replay and write mode
 	db.MergeScheduler = merge.NewScheduler(db.Runtime, merge.NewTaskServiceGetter(opts.TaskServiceGetter))
 	scanner.RegisterOp(db.MergeScheduler)
 	db.Wal.Start()
-	db.BGCheckpointRunner.Start()
+	db.BGFlusher.Start()
 
 	db.BGScanner = w.NewHeartBeater(
 		opts.CheckpointCfg.ScanInterval,
@@ -263,8 +308,14 @@ func Open(
 	// TODO: WithGCInterval requires configuration parameters
 	gc2.SetDeleteTimeout(opts.GCCfg.GCDeleteTimeout)
 	gc2.SetDeleteBatchSize(opts.GCCfg.GCDeleteBatchSize)
-	cleaner := gc2.NewCheckpointCleaner(opts.Ctx,
-		opts.SID, fs, db.BGCheckpointRunner,
+
+	// sjw TODO: cleaner need to support replay and write mode
+	cleaner := gc2.NewCheckpointCleaner(
+		opts.Ctx,
+		opts.SID,
+		fs,
+		db.Wal,
+		db.BGCheckpointRunner,
 		gc2.WithCanGCCacheSize(opts.GCCfg.CacheSize),
 		gc2.WithMaxMergeCheckpointCount(opts.GCCfg.GCMergeCount),
 		gc2.WithEstimateRows(opts.GCCfg.GCestimateRows),
@@ -278,104 +329,14 @@ func Open(
 			endTS := checkpoint.GetEnd()
 			return !endTS.GE(&ts)
 		}, cmd_util.CheckerKeyTTL)
-	db.DiskCleaner = gc2.NewDiskCleaner(cleaner)
+
+	db.DiskCleaner = gc2.NewDiskCleaner(cleaner, db.IsWriteMode())
 	db.DiskCleaner.Start()
 
 	db.CronJobs = tasks.NewCancelableJobs()
 
-	db.CronJobs.AddJob(
-		"GC-Transfer-Table",
-		opts.CheckpointCfg.TransferInterval,
-		func(ctx context.Context) {
-			db.Runtime.PoolUsageReport()
-			db.Runtime.TransferDelsMap.Prune(opts.TransferTableTTL)
-			transferTable.RunTTL()
-		},
-		1,
-	)
-	db.CronJobs.AddJob(
-		"GC-Disk",
-		opts.GCCfg.ScanGCInterval,
-		func(ctx context.Context) {
-			db.DiskCleaner.GC(ctx)
-		},
-		1,
-	)
-	db.CronJobs.AddJob(
-		"GC-Checkpoint",
-		opts.CheckpointCfg.GCCheckpointInterval,
-		func(ctx context.Context) {
-			if opts.CheckpointCfg.DisableGCCheckpoint {
-				return
-			}
-			gcWaterMark := db.DiskCleaner.GetCleaner().GetCheckpointGCWaterMark()
-			if gcWaterMark == nil {
-				return
-			}
-			if err := db.BGCheckpointRunner.GCByTS(ctx, *gcWaterMark); err != nil {
-				logutil.Error(
-					"GC-Checkpoint-Err",
-					zap.Error(err),
-				)
-			}
-		},
-		1,
-	)
-	db.CronJobs.AddJob(
-		"GC-Catalog-Cache",
-		opts.CatalogCfg.GCInterval,
-		func(ctx context.Context) {
-			if opts.CatalogCfg.DisableGC {
-				return
-			}
-			gcWaterMark := db.DiskCleaner.GetCleaner().GetScanWaterMark()
-			if gcWaterMark == nil {
-				return
-			}
-			db.Catalog.GCByTS(ctx, gcWaterMark.GetEnd())
-		},
-		1,
-	)
-	db.CronJobs.AddJob(
-		"GC-Logtail",
-		opts.CheckpointCfg.GCCheckpointInterval,
-		func(ctx context.Context) {
-			logutil.Info(db.Runtime.ExportLogtailStats())
-			ckp := db.BGCheckpointRunner.MaxIncrementalCheckpoint()
-			if ckp != nil {
-				ts := types.BuildTS(ckp.GetStart().Physical(), 0) // GetStart is previous + 1, reset it here
-				db.LogtailMgr.GCByTS(ctx, ts)
-			}
-		},
-		1,
-	)
-	db.CronJobs.AddJob(
-		"GC-LockMerge",
-		options.DefaultLockMergePruneInterval,
-		func(ctx context.Context) {
-			db.Runtime.LockMergeService.Prune()
-		},
-		1,
-	)
-
-	db.CronJobs.AddJob(
-		"REPORT-MPOOL-STATS",
-		time.Second*10,
-		func(ctx context.Context) {
-			mpoolAllocatorSubTask()
-		},
-		1,
-	)
-
-	if opts.CheckpointCfg.MetadataCheckInterval != 0 {
-		db.CronJobs.AddJob(
-			"META-CHECK",
-			opts.CheckpointCfg.MetadataCheckInterval,
-			func(ctx context.Context) {
-				db.Catalog.CheckMetadata()
-			},
-			1,
-		)
+	if err = AddCronJobs(db); err != nil {
+		return
 	}
 
 	db.Controller = NewController(db)

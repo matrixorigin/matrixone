@@ -22,6 +22,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -48,6 +49,17 @@ const costThresholdForTpQuery = 240000
 const highNDVcolumnThreshHold = 0.95
 const statsCacheInitSize = 128
 const statsCacheMaxSize = 8192
+
+// for test
+var ForceScanOnMultiCN atomic.Bool
+
+func SetForceScanOnMultiCN(v bool) {
+	ForceScanOnMultiCN.Store(v)
+}
+
+func GetForceScanOnMultiCN() bool {
+	return ForceScanOnMultiCN.Load()
+}
 
 type ExecType int
 
@@ -1407,6 +1419,10 @@ func DefaultBigStats() *plan.Stats {
 	return stats
 }
 
+func IsDefaultStats(stats *plan.Stats) bool {
+	return stats.Cost == 1000 && stats.TableCnt == 1000 && stats.Outcnt == 1000 && stats.Selectivity == 1 && stats.BlockNum == 1 && stats.Rowsize == 100
+}
+
 func DefaultStats() *plan.Stats {
 	stats := new(Stats)
 	stats.TableCnt = 1000
@@ -1558,6 +1574,9 @@ func HasShuffleInPlan(qry *plan.Query) bool {
 }
 
 func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool, ncpu int) ExecType {
+	if GetForceScanOnMultiCN() {
+		return ExecTypeAP_MULTICN
+	}
 	ret := ExecTypeTP
 	for _, node := range qry.GetNodes() {
 		switch node.NodeType {

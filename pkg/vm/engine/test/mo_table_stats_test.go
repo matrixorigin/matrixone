@@ -18,8 +18,8 @@ import (
 	"context"
 	"fmt"
 	"testing"
-	"time"
 
+	"github.com/lni/goutils/leaktest"
 	catalog2 "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -37,6 +37,7 @@ import (
 )
 
 func TestMoTableStatsMoCtl(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	var (
 		opts         testutil.TestOptions
 		tableName    = "test1"
@@ -59,13 +60,14 @@ func TestMoTableStatsMoCtl(t *testing.T) {
 
 	exec := v.(executor.SQLExecutor)
 
+	e := p.D.Engine
 	{
-		ret := disttae.HandleMoTableStatsCtl("restore_default_setting:true")
+		ret := e.HandleMoTableStatsCtl("restore_default_setting:true")
 		require.Equal(t, "move_on(true), use_old_impl(false), force_update(false)", ret)
 	}
 
 	{
-		ret := disttae.HandleMoTableStatsCtl("move_on: false")
+		ret := e.HandleMoTableStatsCtl("move_on: false")
 		require.Equal(t, "move on: true to false", ret)
 	}
 
@@ -92,7 +94,7 @@ func TestMoTableStatsMoCtl(t *testing.T) {
 	}
 
 	{
-		ret := disttae.HandleMoTableStatsCtl("force_update:true")
+		ret := e.HandleMoTableStatsCtl("force_update:true")
 		require.Equal(t, "force update: false to true", ret)
 	}
 
@@ -109,7 +111,7 @@ func TestMoTableStatsMoCtl(t *testing.T) {
 	}
 
 	{
-		ret := disttae.HandleMoTableStatsCtl("use_old_impl:true")
+		ret := e.HandleMoTableStatsCtl("use_old_impl:true")
 		require.Equal(t, "use old impl: false to true", ret)
 	}
 
@@ -125,13 +127,20 @@ func TestMoTableStatsMoCtl(t *testing.T) {
 }
 
 func TestMoTableStatsMoCtl2(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	var opts testutil.TestOptions
 	opts.TaeEngineOptions = config.WithLongScanAndCKPOpts(nil)
 	p := testutil.InitEnginePack(opts, t)
 	defer p.Close()
 
-	disttae.NotifyCleanDeletes()
-	disttae.NotifyUpdateForgotten()
+	e := p.D.Engine
+	e.LaunchMTSTasksForUT()
+
+	ret := e.HandleMoTableStatsCtl("recomputing:0")
+	fmt.Println(ret)
+
+	e.NotifyCleanDeletes()
+	e.NotifyUpdateForgotten()
 
 	schema := catalog.MockSchemaAll(3, 2)
 	schema.Name = "test1"
@@ -140,68 +149,69 @@ func TestMoTableStatsMoCtl2(t *testing.T) {
 	_, rel := p.CreateDBAndTable(txnop, "db1", schema)
 	require.NoError(t, txnop.Commit(p.Ctx))
 
-	ret := disttae.HandleMoTableStatsCtl("restore_default_setting:true")
+	ret = e.HandleMoTableStatsCtl("restore_default_setting:true")
 	require.Equal(t, "move_on(true), use_old_impl(false), force_update(false)", ret)
 
 	dbId := rel.GetDBID(p.Ctx)
 	tblId := rel.GetTableID(p.Ctx)
 
-	_, err := disttae.QueryTableStats(context.Background(),
+	_, err, _ := e.QueryTableStats(context.Background(),
 		[]int{disttae.TableStatsTableRows},
 		[]uint64{0}, []uint64{dbId}, []uint64{tblId},
-		false, false, nil)
+		false, false)
 	require.NotNil(t, err)
 
-	ret = disttae.HandleMoTableStatsCtl("use_old_impl:true")
+	ret = e.HandleMoTableStatsCtl("use_old_impl:true")
 	require.Equal(t, "use old impl: false to true", ret)
 
-	_, err = disttae.QueryTableStats(context.Background(),
+	_, err, _ = e.QueryTableStats(context.Background(),
 		[]int{disttae.TableStatsTableRows},
 		[]uint64{0}, []uint64{dbId}, []uint64{tblId},
-		false, false, nil)
+		false, false)
 	require.NoError(t, err)
 
-	ret = disttae.HandleMoTableStatsCtl("use_old_impl:false")
+	ret = e.HandleMoTableStatsCtl("use_old_impl:false")
 	require.Equal(t, "use old impl: true to false", ret)
 
-	ret = disttae.HandleMoTableStatsCtl("force_update:true")
+	ret = e.HandleMoTableStatsCtl("force_update:true")
 	require.Equal(t, "force update: false to true", ret)
 
-	_, err = disttae.QueryTableStats(context.Background(),
+	_, err, _ = e.QueryTableStats(context.Background(),
 		[]int{disttae.TableStatsTableRows},
 		[]uint64{0}, []uint64{dbId}, []uint64{tblId},
-		true, false, nil)
+		true, false)
 	require.NotNil(t, err)
 
-	ret = disttae.HandleMoTableStatsCtl("move_on: false")
+	ret = e.HandleMoTableStatsCtl("move_on: false")
 	require.Equal(t, "move on: true to false", ret)
 
-	_, err = disttae.QueryTableStats(context.Background(),
+	_, err, _ = e.QueryTableStats(context.Background(),
 		[]int{disttae.TableStatsTableRows},
 		[]uint64{0}, []uint64{dbId}, []uint64{tblId},
-		false, true, nil)
+		false, true)
 	require.NotNil(t, err)
 
-	ret = disttae.HandleMoTableStatsCtl("echo_current_setting:false")
+	ret = e.HandleMoTableStatsCtl("echo_current_setting:false")
 	require.Equal(t, "noop", ret)
 
-	ret = disttae.HandleMoTableStatsCtl("echo_current_setting:true")
+	ret = e.HandleMoTableStatsCtl("echo_current_setting:true")
 	require.Equal(t, "move_on(false), use_old_impl(false), force_update(true)", ret)
 
 	{
-		ret = disttae.HandleMoTableStatsCtl("no_such_cmd:true")
+		ret = e.HandleMoTableStatsCtl("no_such_cmd:true")
 		require.Equal(t, "failed, cmd invalid", ret)
 
-		ret = disttae.HandleMoTableStatsCtl("force_update:yes")
+		ret = e.HandleMoTableStatsCtl("force_update:yes")
 		require.Equal(t, "failed, cmd invalid", ret)
 
-		ret = disttae.HandleMoTableStatsCtl("force_update:true:false")
+		ret = e.HandleMoTableStatsCtl("force_update:true:false")
 		require.Equal(t, "invalid command", ret)
 	}
 
 }
 
 func TestHandleGetChangedList(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	var opts testutil.TestOptions
 
 	opts.TaeEngineOptions = config.WithLongScanAndCKPOpts(nil)
@@ -211,14 +221,14 @@ func TestHandleGetChangedList(t *testing.T) {
 
 	schema := catalog.MockSchemaAll(3, 2)
 
-	rowsCnt := 81920
+	rowsCnt := 8192 * 2
 
 	dbBatch := catalog.MockBatch(schema, rowsCnt)
 	defer dbBatch.Close()
 	bat := containers.ToCNBatch(dbBatch)
 
 	dbName := "db1"
-	tblNames := []string{"test1", "test2", "test3", "test4"}
+	tblNames := []string{"test1", "test2", "test3"}
 
 	txnop := p.StartCNTxn()
 	p.CreateDB(txnop, dbName)
@@ -237,26 +247,28 @@ func TestHandleGetChangedList(t *testing.T) {
 		testutil2.CompactBlocks(t, 0, p.T.GetDB(), dbName, schema, false)
 		txn, _ := p.T.StartTxn()
 		ts := txn.GetStartTS()
-		require.NoError(t, p.T.GetDB().ForceCheckpoint(p.Ctx, ts.Next(), time.Second*10))
+		require.NoError(t, p.T.GetDB().ForceCheckpoint(p.Ctx, ts.Next()))
 		require.NoError(t, txn.Commit(p.Ctx))
 
 		dbId = rel.GetDBID(p.Ctx)
 		tblIds = append(tblIds, rel.GetTableID(p.Ctx))
 	}
 
-	req := &cmd_util.GetChangedTableListReq{}
+	req := &cmd_util.GetChangedTableListReq{
+		Type: cmd_util.CheckChanged,
+	}
 	resp := &cmd_util.GetChangedTableListResp{}
 
 	for i := range tblIds {
 		ts := timestamp.Timestamp{}
-		req.From = append(req.From, &ts)
+		req.TS = append(req.TS, &ts)
 		req.AccIds = append(req.AccIds, 0)
 		req.TableIds = append(req.TableIds, tblIds[i])
 		req.DatabaseIds = append(req.DatabaseIds, dbId)
 	}
 
 	ts := types.MaxTs().ToTimestamp()
-	req.From[len(tblNames)-1] = &ts
+	req.TS[len(tblNames)-1] = &ts
 
 	_, err := p.T.GetRPCHandle().HandleGetChangedTableList(p.Ctx, txn.TxnMeta{}, req, resp)
 	require.NoError(t, err)

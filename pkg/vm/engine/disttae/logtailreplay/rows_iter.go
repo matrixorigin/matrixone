@@ -16,11 +16,13 @@ package logtailreplay
 
 import (
 	"bytes"
+	"fmt"
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/tidwall/btree"
 )
 
@@ -589,7 +591,7 @@ func (p *primaryKeyDelIter) Next() bool {
 }
 
 func (p *PartitionState) NewRowsIter(ts types.TS, blockID *types.Blockid, iterDeleted bool) *rowsIter {
-	iter := p.rows.Copy().Iter()
+	iter := p.rows.Iter()
 	ret := &rowsIter{
 		ts:          ts,
 		iter:        iter,
@@ -602,34 +604,80 @@ func (p *PartitionState) NewRowsIter(ts types.TS, blockID *types.Blockid, iterDe
 	return ret
 }
 
+func buildSpec(op int, keys [][]byte) PrimaryKeyMatchSpec {
+	switch op {
+	case function.EQUAL:
+		return Exact(keys[0])
+
+	case function.PREFIX_EQ:
+		return Prefix(keys[0])
+
+	case function.IN, function.PREFIX_IN:
+		// // may be it's better to iterate rows instead.
+		// if len(f.packed) > 128 {
+		// 	return
+		// }
+		//spec = logtailreplay.InKind(f.packed, f.Op)
+		return InKind(keys, op)
+
+	case function.LESS_EQUAL, function.LESS_THAN:
+		return LessKind(keys[0], op == function.LESS_EQUAL)
+
+	case function.GREAT_EQUAL, function.GREAT_THAN:
+		return GreatKind(keys[0], op == function.GREAT_EQUAL)
+
+	case function.BETWEEN, readutil.RangeLeftOpen,
+		readutil.RangeRightOpen, readutil.RangeBothOpen, function.PREFIX_BETWEEN:
+		var kind int
+		switch op {
+		case function.BETWEEN:
+			kind = 0
+		case readutil.RangeLeftOpen:
+			kind = 1
+		case readutil.RangeRightOpen:
+			kind = 2
+		case readutil.RangeBothOpen:
+			kind = 3
+		case function.PREFIX_BETWEEN:
+			kind = 4
+		}
+
+		return BetweenKind(keys[0], keys[1], kind)
+	}
+
+	panic(fmt.Sprintf("build spec failed, %v, %v", op, keys))
+}
+
 func (p *PartitionState) NewPrimaryKeyIter(
 	ts types.TS,
-	spec PrimaryKeyMatchSpec,
+	op int,
+	keys [][]byte,
 ) *primaryKeyIter {
-	index := p.rowPrimaryKeyIndex.Copy()
+	index := p.rowPrimaryKeyIndex
 	return &primaryKeyIter{
 		ts:           ts,
-		spec:         spec,
+		spec:         buildSpec(op, keys),
 		iter:         index.Iter(),
 		primaryIndex: index,
-		rows:         p.rows.Copy(),
+		rows:         p.rows,
 	}
 }
 
 func (p *PartitionState) NewPrimaryKeyDelIter(
 	ts *types.TS,
-	spec PrimaryKeyMatchSpec,
 	bid *types.Blockid,
+	op int,
+	keys [][]byte,
 ) *primaryKeyDelIter {
-	index := p.rowPrimaryKeyIndex.Copy()
+	index := p.rowPrimaryKeyIndex
 	delIter := &primaryKeyDelIter{
 		primaryKeyIter: primaryKeyIter{
 			ts:                *ts,
-			spec:              spec,
+			spec:              buildSpec(op, keys),
 			primaryIndex:      index,
 			iter:              index.Iter(),
-			rows:              p.rows.Copy(),
-			tombstoneRowIdIdx: p.inMemTombstoneRowIdIndex.Copy(),
+			rows:              p.rows,
+			tombstoneRowIdIdx: p.inMemTombstoneRowIdIndex,
 		},
 		bid: *bid,
 	}

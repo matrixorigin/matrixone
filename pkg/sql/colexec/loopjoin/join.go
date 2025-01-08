@@ -66,10 +66,6 @@ func (loopJoin *LoopJoin) Prepare(proc *process.Process) error {
 			return err
 		}
 	}
-
-	if loopJoin.ProjectList != nil && loopJoin.ProjectExecutors == nil {
-		err = loopJoin.PrepareProjection(proc)
-	}
 	return err
 }
 
@@ -93,7 +89,7 @@ func (loopJoin *LoopJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 		case Probe:
-			if ctr.inbat == nil {
+			if ctr.inbat == nil || ctr.inbat.IsEmpty() {
 				input, err = vm.ChildrenCall(loopJoin.GetChildren(0), proc, analyzer)
 				if err != nil {
 					return result, err

@@ -27,14 +27,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	testutil2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
@@ -53,9 +52,9 @@ func TestChangesHandle1(t *testing.T) {
 		databaseName = "db1"
 	)
 
-	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, accountId)
-	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
 
 	disttaeEngine, taeHandler, rpcAgent, _ := testutil.CreateEngines(ctx, testutil.TestOptions{}, t)
 	defer func() {
@@ -68,6 +67,8 @@ func TestChangesHandle1(t *testing.T) {
 	schema.Name = tableName
 	bat := catalog2.MockBatch(schema, 10)
 
+	ctx, cancel = context.WithTimeout(ctx, time.Minute*5)
+	defer cancel()
 	_, _, err := disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
 	require.NoError(t, err)
 	txn, rel := testutil2.GetRelation(t, accountId, taeHandler.GetDB(), databaseName, tableName)
@@ -141,9 +142,9 @@ func TestChangesHandle2(t *testing.T) {
 		databaseName = "db1"
 	)
 
-	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, accountId)
-	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
 
 	disttaeEngine, taeHandler, rpcAgent, _ := testutil.CreateEngines(ctx, testutil.TestOptions{}, t)
 	defer func() {
@@ -157,6 +158,8 @@ func TestChangesHandle2(t *testing.T) {
 	bat := catalog2.MockBatch(schema, 10)
 	mp := common.DebugAllocator
 
+	ctx, cancel = context.WithTimeout(ctx, time.Minute*5)
+	defer cancel()
 	_, _, err := disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
 	require.NoError(t, err)
 	txn, rel := testutil2.GetRelation(t, accountId, taeHandler.GetDB(), databaseName, tableName)
@@ -254,9 +257,9 @@ func TestChangesHandle3(t *testing.T) {
 		databaseName = "db1"
 	)
 
-	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, accountId)
-	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
 
 	opts := config.WithLongScanAndCKPOpts(nil)
 	disttaeEngine, taeHandler, rpcAgent, _ := testutil.CreateEngines(ctx, testutil.TestOptions{TaeEngineOptions: opts}, t)
@@ -271,6 +274,8 @@ func TestChangesHandle3(t *testing.T) {
 	bat := catalog2.MockBatch(schema, 163840)
 	mp := common.DebugAllocator
 
+	ctx, cancel = context.WithTimeout(ctx, time.Minute*5)
+	defer cancel()
 	_, _, err := disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
 	require.NoError(t, err)
 	txn, rel := testutil2.GetRelation(t, accountId, taeHandler.GetDB(), databaseName, tableName)
@@ -361,9 +366,8 @@ func TestChangesHandleForCNWrite(t *testing.T) {
 		disttaeEngine *testutil.TestDisttaeEngine
 	)
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
 
 	schema := catalog2.MockSchemaAll(4, primaryKeyIdx)
@@ -377,6 +381,8 @@ func TestChangesHandleForCNWrite(t *testing.T) {
 	}()
 	startTS := taeEngine.GetDB().TxnMgr.Now()
 
+	ctx, cancel = context.WithTimeout(ctx, time.Minute)
+	defer cancel()
 	_, _, err = disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
 	require.NoError(t, err)
 
@@ -466,9 +472,8 @@ func TestChangesHandle4(t *testing.T) {
 		disttaeEngine *testutil.TestDisttaeEngine
 	)
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
 
 	schema := catalog2.MockSchemaAll(4, primaryKeyIdx)
@@ -482,6 +487,8 @@ func TestChangesHandle4(t *testing.T) {
 	}()
 	startTS := taeEngine.GetDB().TxnMgr.Now()
 
+	ctx, cancel = context.WithTimeout(ctx, time.Minute)
+	defer cancel()
 	_, _, err = disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
 	require.NoError(t, err)
 
@@ -598,9 +605,9 @@ func TestChangesHandle5(t *testing.T) {
 		databaseName = "db1"
 	)
 
-	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, accountId)
-	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
 
 	opts := config.WithLongScanAndCKPOpts(nil)
 	disttaeEngine, taeHandler, rpcAgent, _ := testutil.CreateEngines(ctx, testutil.TestOptions{TaeEngineOptions: opts}, t)
@@ -614,6 +621,8 @@ func TestChangesHandle5(t *testing.T) {
 	schema.Name = tableName
 	bat := catalog2.MockBatch(schema, 10)
 
+	ctx, cancel = context.WithTimeout(ctx, time.Minute*5)
+	defer cancel()
 	_, _, err := disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
 	require.NoError(t, err)
 	txn, rel := testutil2.GetRelation(t, accountId, taeHandler.GetDB(), databaseName, tableName)
@@ -696,9 +705,9 @@ func TestChangesHandle6(t *testing.T) {
 		databaseName = "db1"
 	)
 
-	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, accountId)
-	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
 
 	opts := config.WithLongScanAndCKPOpts(nil)
 	disttaeEngine, taeHandler, rpcAgent, _ := testutil.CreateEngines(ctx, testutil.TestOptions{TaeEngineOptions: opts}, t)
@@ -712,6 +721,8 @@ func TestChangesHandle6(t *testing.T) {
 	schema.Name = tableName
 	bat := catalog2.MockBatch(schema, 10)
 
+	ctx, cancel = context.WithTimeout(ctx, time.Minute*5)
+	defer cancel()
 	_, _, err := disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
 	require.NoError(t, err)
 	txn, rel := testutil2.GetRelation(t, accountId, taeHandler.GetDB(), databaseName, tableName)
@@ -796,9 +807,9 @@ func TestChangesHandleStaleFiles1(t *testing.T) {
 		databaseName = "db1"
 	)
 
-	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, accountId)
-	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
 
 	opts := config.WithLongScanAndCKPOpts(nil)
 	disttaeEngine, taeHandler, rpcAgent, _ := testutil.CreateEngines(ctx, testutil.TestOptions{TaeEngineOptions: opts}, t)
@@ -812,6 +823,8 @@ func TestChangesHandleStaleFiles1(t *testing.T) {
 	schema.Name = tableName
 	bat := catalog2.MockBatch(schema, 10)
 
+	ctx, cancel = context.WithTimeout(ctx, time.Minute*5)
+	defer cancel()
 	_, _, err := disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
 	require.NoError(t, err)
 	txn, rel := testutil2.GetRelation(t, accountId, taeHandler.GetDB(), databaseName, tableName)
@@ -836,7 +849,9 @@ func TestChangesHandleStaleFiles1(t *testing.T) {
 	err = fs.DelFiles(ctx, []string{string(deleteFileName)})
 	assert.NoError(t, err)
 	gcTS := taeHandler.GetDB().TxnMgr.Now()
-	gcTSFileName := blockio.EncodeCompactedMetadataFileName(checkpoint.CheckpointDir, checkpoint.PrefixMetadata, types.TS{}, gcTS)
+	gcTSFileName := ioutil.EncodeCompactCKPMetadataFullName(
+		types.TS{}, gcTS,
+	)
 	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterCheckpoint, gcTSFileName, fs.Service)
 	assert.NoError(t, err)
 	_, err = writer.Write(containers.ToCNBatch(bat))
@@ -872,9 +887,8 @@ func TestChangesHandleStaleFiles2(t *testing.T) {
 		disttaeEngine *testutil.TestDisttaeEngine
 	)
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
 
 	schema := catalog2.MockSchemaAll(4, primaryKeyIdx)
@@ -888,6 +902,8 @@ func TestChangesHandleStaleFiles2(t *testing.T) {
 	}()
 	startTS := taeEngine.GetDB().TxnMgr.Now()
 
+	ctx, cancel = context.WithTimeout(ctx, time.Minute)
+	defer cancel()
 	_, _, err = disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
 	require.NoError(t, err)
 
@@ -939,7 +955,9 @@ func TestChangesHandleStaleFiles2(t *testing.T) {
 				assert.NoError(t, err)
 			}
 			gcTS := taeEngine.GetDB().TxnMgr.Now()
-			gcTSFileName := blockio.EncodeCompactedMetadataFileName(checkpoint.CheckpointDir, checkpoint.PrefixMetadata, types.TS{}, gcTS)
+			gcTSFileName := ioutil.EncodeCompactCKPMetadataFullName(
+				types.TS{}, gcTS,
+			)
 			writer, err := objectio.NewObjectWriterSpecial(objectio.WriterCheckpoint, gcTSFileName, fs.Service)
 			assert.NoError(t, err)
 			_, err = writer.Write(containers.ToCNBatch(bat))
@@ -963,9 +981,9 @@ func TestChangesHandleStaleFiles5(t *testing.T) {
 		databaseName = "db1"
 	)
 
-	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, accountId)
-	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
 
 	disttaeEngine, taeHandler, rpcAgent, _ := testutil.CreateEngines(ctx, testutil.TestOptions{}, t)
 	defer func() {
@@ -979,6 +997,8 @@ func TestChangesHandleStaleFiles5(t *testing.T) {
 	bat := catalog2.MockBatch(schema, 163840)
 	mp := common.DebugAllocator
 
+	ctx, cancel = context.WithTimeout(ctx, time.Minute*5)
+	defer cancel()
 	_, _, err := disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
 	require.NoError(t, err)
 	txn, rel := testutil2.GetRelation(t, accountId, taeHandler.GetDB(), databaseName, tableName)

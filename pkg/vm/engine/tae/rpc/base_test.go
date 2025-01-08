@@ -26,12 +26,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
@@ -70,7 +70,7 @@ func (h *mockHandle) HandleCommit(ctx context.Context, meta *txn.TxnMeta) (times
 	if len(meta.TNShards) > 1 && meta.CommitTS.IsEmpty() {
 		meta.CommitTS = meta.PreparedTS.Next()
 	}
-	return h.Handle.HandleCommit(ctx, *meta)
+	return h.Handle.HandleCommit(ctx, *meta, nil, nil)
 }
 
 func (h *mockHandle) HandleCommitting(ctx context.Context, meta *txn.TxnMeta) error {
@@ -149,7 +149,7 @@ func initDB(ctx context.Context, t *testing.T, opts *options.Options) *db.DB {
 }
 
 func mockTAEHandle(ctx context.Context, t *testing.T, opts *options.Options) *mockHandle {
-	blockio.Start("")
+	ioutil.Start("")
 	tae := initDB(ctx, t, opts)
 	mh := &mockHandle{
 		m: mpool.MustNewZero(),

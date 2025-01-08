@@ -32,7 +32,7 @@ insert into lineitem values
 (9,3,20,10,2,49,45080.98,0.10,0.00,"R","F","1993-11-09","1993-12-20","1993-11-24","TAKE BACK RETURN","RAIL"," unusual accounts. eve"),
 (10,3,129,8,3,27,27786.24,0.06,0.07,"A","F","1994-01-16","1993-11-22","1994-01-23","DELIVER IN PERSON","SHIP","nal foxes wake. ");
 select count(*) from lineitem;
-create snapshot snapshot_lineitem for account sys;
+create snapshot snapshot_lineitem for account;
 create snapshot snapshot_lineitem_incremental for cluster;
 insert into lineitem values
 (11,3,30,5,4,2,1860.06,0.01,0.06,"A","F","1993-12-04","1994-01-07","1994-01-01","NONE","TRUCK","y. fluffily pending d"),
@@ -75,7 +75,7 @@ insert into rs01 values (2, -1, null);
 select count(*) from rs01;
 
 drop snapshot if exists sp01;
-create snapshot sp01 for account sys;
+create snapshot sp01 for account;
 select count(*) from rs01 {snapshot = 'sp01'};
 insert into rs01 values (2, -1, null);
 insert into rs01 values (1, -321.321, null);

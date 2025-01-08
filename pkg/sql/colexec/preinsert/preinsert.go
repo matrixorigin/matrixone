@@ -276,26 +276,31 @@ func genAutoIncrCol(bat *batch.Batch, proc *proc, preInsert *PreInsert) error {
 			currentTxn.AddWorkspace(ws)
 			ws.BindTxnOp(currentTxn)
 		}
-		if _, _, rel, err := eng.GetRelationById(proc.Ctx, currentTxn, tableID); err == nil {
-			for col, idx := range needReCheck {
-				vec := bat.GetVector(int32(idx))
-				from, err := proc.GetIncrService().GetLastAllocateTS(proc.Ctx, tableID, col)
-				if err != nil {
-					return err
-				}
-				fromTs := types.TimestampToTS(from)
-				toTs := types.TimestampToTS(proc.Base.TxnOperator.SnapshotTS())
-				if mayChanged, err := rel.PrimaryKeysMayBeUpserted(proc.Ctx, fromTs, toTs, vec); err == nil {
-					if mayChanged {
-						logutil.Debugf("user may have manually specified the value to be inserted into the auto pk col before this transaction.")
-						return moerr.NewTxnNeedRetry(proc.Ctx)
-					}
-				} else {
-					return err
-				}
-			}
-		} else {
+		db, err := eng.Database(proc.Ctx, preInsert.SchemaName, currentTxn)
+		if err != nil {
 			return err
+		}
+		rel, err := db.Relation(proc.Ctx, preInsert.TableDef.Name, nil)
+		if err != nil {
+			return err
+		}
+
+		for col, idx := range needReCheck {
+			vec := bat.GetVector(int32(idx))
+			from, err := proc.GetIncrService().GetLastAllocateTS(proc.Ctx, tableID, col)
+			if err != nil {
+				return err
+			}
+			fromTs := types.TimestampToTS(from)
+			toTs := types.TimestampToTS(proc.Base.TxnOperator.SnapshotTS())
+			if mayChanged, err := rel.PrimaryKeysMayBeUpserted(proc.Ctx, fromTs, toTs, vec); err == nil {
+				if mayChanged {
+					logutil.Debugf("user may have manually specified the value to be inserted into the auto pk col before this transaction.")
+					return moerr.NewTxnNeedRetry(proc.Ctx)
+				}
+			} else {
+				return err
+			}
 		}
 	}
 

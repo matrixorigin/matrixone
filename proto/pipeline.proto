@@ -137,8 +137,7 @@ message MultiUpdate {
   uint32 Action = 2;
   uint32 IBucket = 3;
   uint32 NBucket = 4;
-  map<string,int32> SegmentMap = 5;
-  repeated plan.UpdateCtx update_ctx_list = 6;
+  repeated plan.UpdateCtx update_ctx_list = 5;
 }
 
 message Array{
@@ -202,6 +201,7 @@ message LockTarget {
   lock.LockMode Mode         = 8;
   plan.Expr lock_rows = 9;
   bool lock_table_at_the_end = 10;
+  plan.ObjectRef obj_ref = 11;
 }
 
 message LockOp {
@@ -570,8 +570,9 @@ message NodeInfo {
   int32 mcpu = 1;
   string id = 2;
   string addr = 3;
-  int32 cn_cnt = 4;
-  int32 cn_idx = 5;
+  string payload = 4;
+  int32 cn_cnt = 5;
+  int32 cn_idx = 6;
 }
 
 message ProcessLimitation {

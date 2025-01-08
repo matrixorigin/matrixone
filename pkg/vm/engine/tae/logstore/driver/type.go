@@ -26,4 +26,13 @@ type Driver interface {
 	GetCurrSeqNum() uint64
 }
 
-type ApplyHandle = func(*entry.Entry)
+type ReplayEntryState int8
+
+const (
+	RE_Truncate ReplayEntryState = iota
+	RE_Internal
+	RE_Nomal
+	RE_Invalid
+)
+
+type ApplyHandle = func(*entry.Entry) (replayEntryState ReplayEntryState)

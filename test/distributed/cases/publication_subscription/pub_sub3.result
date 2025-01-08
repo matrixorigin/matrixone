@@ -69,11 +69,11 @@ create publication pub03 database db02 table t1, t2 account acc02 comment 'publi
 drop database if exists sub02;
 create database sub02 from acc01 publication pub01;
 select * from mo_catalog.mo_subs;
-sub_account_id    sub_name    sub_time    pub_account_name    pub_name    pub_database    pub_tables    pub_time    pub_comment    status
-67    null    null    acc01    pub02    db02    *    2024-08-14 18:34:52    publish to acc01 and acc03    0
-66    null    null    acc01    pub02    db02    *    2024-08-14 18:34:52    publish to acc01 and acc03    0
-66    null    null    acc01    pub03    db02    t1,t2    2024-08-14 18:34:52    publish to acc02    0
-66    sub02    2024-08-14 18:34:52    acc01    pub01    db02    *    2024-08-14 18:34:52    publish to acc01    0
+sub_account_id    sub_account_name    sub_name    sub_time    pub_account_id    pub_account_name    pub_name    pub_database    pub_tables    pub_time    pub_comment    status
+4    acc02    null    null    3    acc01    pub02    db02    *    2024-12-31 18:14:15    publish to acc01 and acc03    0
+5    acc03    null    null    3    acc01    pub02    db02    *    2024-12-31 18:14:15    publish to acc01 and acc03    0
+4    acc02    null    null    3    acc01    pub03    db02    t1,t2    2024-12-31 18:14:15    publish to acc02    0
+4    acc02    sub02    2024-12-31 18:14:15    3    acc01    pub01    db02    *    2024-12-31 18:14:15    publish to acc01    0
 drop database sub02;
 drop publication pub01;
 drop publication pub02;

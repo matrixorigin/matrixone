@@ -17,15 +17,15 @@ package testutil
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
-	"path/filepath"
 )
 
 type PObjectStats struct {
@@ -57,10 +57,10 @@ type PartitionStateStats struct {
 		DeletedRows    []*batch.Batch
 		CheckpointLocs [2][]string
 		DataObjectList struct {
-			Visible, Invisible []logtailreplay.ObjectEntry
+			Visible, Invisible []objectio.ObjectEntry
 		}
 		TombstoneObjectList struct {
-			Visible, Invisible []logtailreplay.ObjectEntry
+			Visible, Invisible []objectio.ObjectEntry
 		}
 	}
 }
@@ -92,6 +92,7 @@ func (s *PartitionStateStats) String() string {
 type TestOptions struct {
 	TaeEngineOptions *options.Options
 	Timeout          time.Duration
+	DisttaeOptions   []TestDisttaeEngineOptions
 }
 
 func getS3SharedFileServiceOption(ctx context.Context, dir string) (*options.Options, error) {

@@ -17,6 +17,7 @@ package address
 import (
 	"fmt"
 	"net"
+	"os"
 	"testing"
 	"time"
 
@@ -121,13 +122,15 @@ func TestAddressManager(t *testing.T) {
 }
 
 func TestRemoteAddressAvail(t *testing.T) {
-	remoteAddr := "127.0.0.1:17001"
+	temp := os.TempDir()
+	remoteAddr := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
+	assert.NoError(t, os.RemoveAll(remoteAddr))
 	timeout := time.Millisecond * 500
-	assert.False(t, RemoteAddressAvail(remoteAddr, timeout))
+	assert.False(t, RemoteAddressAvail("unix", remoteAddr, timeout))
 
-	l, err := net.Listen("tcp", remoteAddr)
+	l, err := net.Listen("unix", remoteAddr)
 	assert.NoError(t, err)
 	assert.NotNil(t, l)
 	defer l.Close()
-	assert.True(t, RemoteAddressAvail(remoteAddr, timeout))
+	assert.True(t, RemoteAddressAvail("unix", remoteAddr, timeout))
 }
