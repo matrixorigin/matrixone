@@ -137,7 +137,7 @@ func (d *LogServiceDriver) Replay(h driver.ApplyHandle) error {
 	r.d.resetReadCache()
 	d.PostReplay()
 	logutil.Info(
-		"Replay-Wal-From-LogService",
+		"Wal-Replay-Trace-End",
 		zap.Duration("apply-cost", r.applyDuration),
 		zap.Duration("read-cost", d.readDuration),
 		zap.Int("read-count", r.readCount),
