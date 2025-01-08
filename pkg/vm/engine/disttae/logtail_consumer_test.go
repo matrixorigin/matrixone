@@ -624,9 +624,9 @@ func TestPushClient_DoGCPartitionState(t *testing.T) {
 	defer cancel()
 	var c PushClient
 	c.eng = &Engine{
-		catalog:    cache.NewCatalog(),
 		partitions: map[[2]uint64]*logtailreplay.Partition{},
 	}
+	c.eng.catalog.Store(cache.NewCatalog())
 	ps := logtailreplay.NewPartition("", 300)
 	state := ps.Snapshot()
 	assert.NotNil(t, state)
