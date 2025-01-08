@@ -2341,6 +2341,49 @@ func (bc *BindContext) generateForceWinSpecList() ([]*plan.Expr, error) {
 	return windowsSpecList, nil
 }
 
+func (builder *QueryBuilder) bindNoRecursiveCte(
+	ctx *BindContext,
+	s *tree.Select,
+	cteRef *CTERef,
+	table string) (nodeID int32, err error) {
+	subCtx := NewBindContext(builder, ctx)
+	subCtx.normalCTE = true
+	subCtx.maskedCTEs = cteRef.maskedCTEs
+	subCtx.cteName = table
+	subCtx.snapshot = cteRef.snapshot
+	subCtx.recordCteInBinding(table, cteRef)
+	//reset defaultDatabase
+	if len(cteRef.defaultDatabase) > 0 {
+		subCtx.defaultDatabase = cteRef.defaultDatabase
+	}
+	cteRef.isRecursive = false
+
+	oldSnapshot := builder.compCtx.GetSnapshot()
+	builder.compCtx.SetSnapshot(subCtx.snapshot)
+	nodeID, err = builder.bindSelect(s, subCtx, false)
+	builder.compCtx.SetSnapshot(oldSnapshot)
+	if err != nil {
+		return
+	}
+
+	if subCtx.hasSingleRow {
+		ctx.hasSingleRow = true
+	}
+	ctx.views = append(ctx.views, subCtx.views...)
+
+	cols := cteRef.ast.Name.Cols
+
+	if len(cols) > 0 && (len(cols) != len(builder.qry.Nodes[nodeID].ProjectList) ||
+		len(cols) != len(subCtx.headings)) {
+		return 0, moerr.NewSyntaxErrorf(builder.GetContext(), "table %q has %d columns available but %d columns specified", table, len(builder.qry.Nodes[nodeID].ProjectList), len(cteRef.ast.Name.Cols))
+	}
+
+	for i, col := range cols {
+		subCtx.headings[i] = string(col)
+	}
+	return nodeID, nil
+}
+
 func (builder *QueryBuilder) preprocessCte(stmt *tree.Select, ctx *BindContext) error {
 	// preprocess CTEs
 	if stmt.With != nil {
@@ -2415,24 +2458,10 @@ func (builder *QueryBuilder) preprocessCte(stmt *tree.Select, ctx *BindContext) 
 			if isR && !cteRef.isRecursive {
 				return moerr.NewParseErrorf(builder.GetContext(), "not declare RECURSIVE: '%v'", tree.String(stmt, dialect.MYSQL))
 			} else if !isR {
-				subCtx := NewBindContext(builder, ctx)
-				subCtx.normalCTE = true
-				subCtx.cteName = table
-				subCtx.maskedCTEs = cteRef.maskedCTEs
-				cteRef.isRecursive = false
-				subCtx.recordCteInBinding(table, cteRef)
-
-				oldSnapshot := builder.compCtx.GetSnapshot()
-				builder.compCtx.SetSnapshot(subCtx.snapshot)
-				nodeID, err := builder.bindSelect(s, subCtx, false)
-				builder.compCtx.SetSnapshot(oldSnapshot)
+				_, err = builder.bindNoRecursiveCte(ctx, s, cteRef, table)
 				if err != nil {
 					return err
 				}
-				if len(cteRef.ast.Name.Cols) > 0 && len(cteRef.ast.Name.Cols) != len(builder.qry.Nodes[nodeID].ProjectList) {
-					return moerr.NewSyntaxErrorf(builder.GetContext(), "table %q has %d columns available but %d columns specified", table, len(builder.qry.Nodes[nodeID].ProjectList), len(cteRef.ast.Name.Cols))
-				}
-				ctx.views = append(ctx.views, subCtx.views...)
 			} else {
 				initCtx := NewBindContext(builder, ctx)
 				initCtx.initSelect = true
@@ -3964,38 +3993,9 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 				if isR && !cteRef.isRecursive {
 					err = moerr.NewParseErrorf(builder.GetContext(), "not declare RECURSIVE: '%v'", tree.String(stmt, dialect.MYSQL))
 				} else if !isR {
-					subCtx := NewBindContext(builder, ctx)
-					subCtx.maskedCTEs = cteRef.maskedCTEs
-					subCtx.cteName = table
-					subCtx.snapshot = cteRef.snapshot
-					subCtx.recordCteInBinding(table, cteRef)
-					//reset defaultDatabase
-					if len(cteRef.defaultDatabase) > 0 {
-						subCtx.defaultDatabase = cteRef.defaultDatabase
-					}
-					cteRef.isRecursive = false
-
-					oldSnapshot := builder.compCtx.GetSnapshot()
-					builder.compCtx.SetSnapshot(subCtx.snapshot)
-					nodeID, err = builder.bindSelect(s, subCtx, false)
-					builder.compCtx.SetSnapshot(oldSnapshot)
+					nodeID, err = builder.bindNoRecursiveCte(ctx, s, cteRef, table)
 					if err != nil {
-						return
-					}
-
-					if subCtx.hasSingleRow {
-						ctx.hasSingleRow = true
-					}
-					ctx.views = append(ctx.views, subCtx.views...)
-
-					cols := cteRef.ast.Name.Cols
-
-					if len(cols) > len(subCtx.headings) {
-						return 0, moerr.NewSyntaxErrorf(builder.GetContext(), "table %q has %d columns available but %d columns specified", table, len(subCtx.headings), len(cols))
-					}
-
-					for i, col := range cols {
-						subCtx.headings[i] = string(col)
+						return 0, err
 					}
 				} else {
 					if len(s.OrderBy) > 0 {
