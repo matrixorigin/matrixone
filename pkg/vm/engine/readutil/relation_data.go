@@ -63,6 +63,10 @@ func (rd *EmptyRelationData) GetShardIDList() []uint64 {
 	panic("not supported")
 }
 
+func (rd *EmptyRelationData) Split(_ int) []engine.RelData {
+	panic("not supported")
+}
+
 func (rd *EmptyRelationData) GetShardID(i int) uint64 {
 	panic("not supported")
 }

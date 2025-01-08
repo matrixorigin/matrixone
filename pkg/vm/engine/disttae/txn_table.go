@@ -586,7 +586,7 @@ func (tbl *txnTable) Ranges(ctx context.Context, rangesParam engine.RangesParam)
 
 func (tbl *txnTable) getObjList(ctx context.Context, rangesParam engine.RangesParam) (data engine.RelData, err error) {
 	needUncommited := rangesParam.Policy&engine.Policy_CollectUncommittedData != 0
-	objRelData := &engine_util.ObjListRelData{
+	objRelData := &readutil.ObjListRelData{
 		NeedFirstEmpty: needUncommited,
 	}
 
@@ -608,7 +608,7 @@ func (tbl *txnTable) getObjList(ctx context.Context, rangesParam engine.RangesPa
 
 	if err = ForeachSnapshotObjects(
 		tbl.db.op.SnapshotTS(),
-		func(obj logtailreplay.ObjectInfo, isCommitted bool) (err2 error) {
+		func(obj objectio.ObjectEntry, isCommitted bool) (err2 error) {
 			//if need to shuffle objects
 			if plan2.ShouldSkipObjByShuffle(rangesParam.Rsp, &obj.ObjectStats) {
 				return
