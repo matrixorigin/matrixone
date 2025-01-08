@@ -3868,11 +3868,12 @@ func (c *Compile) expandRanges(
 	counterSet := new(perfcounter.CounterSet)
 	newCtx := perfcounter.AttachS3RequestKey(ctx, counterSet)
 	rangesParam := engine.RangesParam{
-		BlockFilters:   blockFilterList,
-		PreAllocBlocks: preAllocBlocks,
-		TxnOffset:      c.TxnOffset,
-		Policy:         policy,
-		Rsp:            rsp,
+		BlockFilters:       blockFilterList,
+		PreAllocBlocks:     preAllocBlocks,
+		TxnOffset:          c.TxnOffset,
+		Policy:             policy,
+		Rsp:                rsp,
+		DontSupportRelData: false,
 	}
 	relData, err := rel.Ranges(newCtx, rangesParam)
 	if err != nil {
