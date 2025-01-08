@@ -54,15 +54,18 @@ import (
 // +------------------------------------------------------------------------------------------+
 func (builder *QueryBuilder) applyIndicesForProjectionUsingFullTextIndex(nodeID int32, projNode *plan.Node, sortNode *plan.Node, scanNode *plan.Node,
 	filterids []int32, filterIndexDefs []*plan.IndexDef, projids []int32, projIndexDef []*plan.IndexDef,
-	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
+	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
 
 	ctx := builder.ctxByNode[nodeID]
 
 	// check equal fulltext_match func and only compute once for equal function()
 	eqmap := builder.findEqualFullTextMatchFunc(projNode, scanNode, projids, filterids)
 
-	idxID, filter_node_ids, proj_node_ids := builder.applyJoinFullTextIndices(nodeID, projNode, scanNode,
+	idxID, filter_node_ids, proj_node_ids, err := builder.applyJoinFullTextIndices(nodeID, projNode, scanNode,
 		filterids, filterIndexDefs, projids, projIndexDef, eqmap, colRefCnt, idxColMap)
+	if err != nil {
+		return -1, err
+	}
 
 	if sortNode != nil {
 		sortNode.Children[0] = idxID
@@ -131,7 +134,7 @@ func (builder *QueryBuilder) applyIndicesForProjectionUsingFullTextIndex(nodeID 
 			},
 		}
 	}
-	return nodeID
+	return nodeID, nil
 }
 
 // mysql> explain select count(*) from src where match(title, body) against('d');
@@ -150,25 +153,29 @@ func (builder *QueryBuilder) applyIndicesForProjectionUsingFullTextIndex(nodeID 
 // +----------------------------------------------------------------+
 func (builder *QueryBuilder) applyIndicesForAggUsingFullTextIndex(nodeID int32, projNode *plan.Node, aggNode *plan.Node, scanNode *plan.Node,
 	filterids []int32, filterIndexDefs []*plan.IndexDef,
-	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
+	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
+	var err error
 
 	projids := make([]int32, 0)
 	projIndexDefs := make([]*plan.IndexDef, 0)
 
 	eqmap := make(map[int32]int32)
 
-	idxID, _, _ := builder.applyJoinFullTextIndices(nodeID, projNode, scanNode,
+	idxID, _, _, err := builder.applyJoinFullTextIndices(nodeID, projNode, scanNode,
 		filterids, filterIndexDefs, projids, projIndexDefs, eqmap, colRefCnt, idxColMap)
+	if err != nil {
+		return -1, err
+	}
 
 	aggNode.Children[0] = idxID
 
-	return nodeID
+	return nodeID, nil
 }
 
 func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *plan.Node, scanNode *plan.Node,
 	filterids []int32, filter_indexDefs []*plan.IndexDef,
 	projids []int32, proj_indexDefs []*plan.IndexDef, eqmap map[int32]int32,
-	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, []int32, []int32) {
+	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, []int32, []int32, error) {
 
 	ctx := builder.ctxByNode[nodeID]
 
@@ -264,7 +271,7 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 
 		curr_ftnode_id, err := builder.buildTable(tmpTableFunc, ctx, -1, nil)
 		if err != nil {
-			panic(err.Error())
+			return -1, nil, nil, err
 		}
 
 		// save the created fulltext node to either filter or projection
@@ -283,7 +290,7 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 				ret_proj_node_ids[v] = curr_ftnode_id
 
 			} else {
-				panic(moerr.NewInternalError(builder.GetContext(), "Invalid ret_proj_node_ids_map"))
+				return -1, nil, nil, moerr.NewInternalError(builder.GetContext(), "Invalid ret_proj_node_ids_map")
 			}
 		}
 
@@ -368,7 +375,7 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 	scanNode.Limit = nil
 	scanNode.Offset = nil
 
-	return joinnodeID, ret_filter_node_ids, ret_proj_node_ids
+	return joinnodeID, ret_filter_node_ids, ret_proj_node_ids, nil
 }
 
 func (builder *QueryBuilder) equalsFullTextMatchFunc(fn1 *plan.Function, fn2 *plan.Function) bool {

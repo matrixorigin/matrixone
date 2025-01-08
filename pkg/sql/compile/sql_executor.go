@@ -118,7 +118,7 @@ func (s *sqlExecutor) Exec(
 			res = v
 			return err
 		},
-		opts)
+		opts.WithSQL(sql))
 	if err != nil {
 		return executor.Result{}, err
 	}
@@ -137,7 +137,7 @@ func (s *sqlExecutor) ExecTxn(
 	}
 	err = execFunc(exec)
 	if err != nil {
-		logutil.Errorf("internal sql executor error: %v", err)
+		logutil.Error("internal sql executor error", zap.Error(err), zap.String("sql", opts.SQL()), zap.String("txn", exec.Txn().Txn().DebugString()))
 		return exec.rollback(err)
 	}
 	if err = exec.commit(); err != nil {
@@ -305,7 +305,17 @@ func (exec *txnExecutor) Exec(
 		exec.s.us,
 		nil,
 	)
+	accId, err := defines.GetAccountId(proc.Ctx)
+	if err != nil {
+		return executor.Result{}, err
+	}
+	useId := defines.GetUserId(proc.Ctx)
+	roleId := defines.GetRoleId(proc.Ctx)
+
 	proc.Base.WaitPolicy = statementOption.WaitPolicy()
+	proc.Base.SessionInfo.AccountId = accId
+	proc.Base.SessionInfo.UserId = useId
+	proc.Base.SessionInfo.RoleId = roleId
 	proc.Base.SessionInfo.TimeZone = exec.opts.GetTimeZone()
 	proc.Base.SessionInfo.Buf = exec.s.buf
 	proc.Base.SessionInfo.StorageEngine = exec.s.eng

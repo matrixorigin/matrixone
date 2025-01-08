@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -183,7 +184,7 @@ func GetTombstonesByBlockId(
 				return true, nil
 			}
 			rowids := vector.MustFixedColWithTypeCheck[types.Rowid](oData.data[idx].Vecs[0])
-			start, end := blockio.FindStartEndOfBlockFromSortedRowids(rowids, bid)
+			start, end := ioutil.FindStartEndOfBlockFromSortedRowids(rowids, bid)
 			if start == end {
 				continue
 			}
@@ -226,7 +227,7 @@ func (d *BackupDeltaLocDataSource) GetTombstones(
 				for id := uint32(0); id < tombstone.BlkCnt(); id++ {
 					location := tombstone.ObjectLocation()
 					location.SetID(uint16(id))
-					bat, _, err := blockio.LoadOneBlock(ctx, d.fs, location, objectio.SchemaData)
+					bat, _, err := ioutil.LoadOneBlock(ctx, d.fs, location, objectio.SchemaData)
 					if err != nil {
 						return false, err
 					}
@@ -301,7 +302,7 @@ func GetCheckpointData(
 	}
 
 	data := NewCheckpointData(sid, common.CheckpointAllocator)
-	reader, err := blockio.NewObjectReader(sid, fs, location)
+	reader, err := ioutil.NewObjectReader(fs, location)
 	if err != nil {
 		return nil, err
 	}
@@ -358,7 +359,7 @@ func trimTombstoneData(
 		// As long as there is an aBlk to be deleted, isCkpChange must be set to true.
 		commitTs := types.TS{}
 		location.SetID(uint16(0))
-		bat, sortKey, err = blockio.LoadOneBlock(ctx, fs, location, objectio.SchemaData)
+		bat, sortKey, err = ioutil.LoadOneBlock(ctx, fs, location, objectio.SchemaData)
 		if err != nil {
 			return err
 		}
@@ -582,7 +583,7 @@ func ReWriteCheckpointAndBlockFromKey(
 
 	insertBatchFun := func(
 		objsData map[string]*objData,
-		initData func(*objData, *blockio.BlockWriter) (bool, error),
+		initData func(*objData, *ioutil.BlockWriter) (bool, error),
 	) error {
 		for _, objectData := range objsData {
 			if insertObjBatch[objectData.tid] == nil {
@@ -596,8 +597,8 @@ func ReWriteCheckpointAndBlockFromKey(
 			fileNum := uint16(1000) + objectName.Num()
 			segment := objectName.SegmentId()
 			name := objectio.BuildObjectName(&segment, fileNum)
-			var writer *blockio.BlockWriter
-			writer, err = blockio.NewBlockWriter(dstFs, name.String())
+			var writer *ioutil.BlockWriter
+			writer, err = ioutil.NewBlockWriter(dstFs, name.String())
 			if err != nil {
 				return err
 			}
@@ -650,7 +651,7 @@ func ReWriteCheckpointAndBlockFromKey(
 
 	err = insertBatchFun(
 		objectsData,
-		func(oData *objData, writer *blockio.BlockWriter) (bool, error) {
+		func(oData *objData, writer *ioutil.BlockWriter) (bool, error) {
 			ds := NewBackupDeltaLocDataSource(ctx, fs, ts, tombstonesData)
 			blk := oData.stats.ConstructBlockInfo(uint16(0))
 			bat, sortKey, err := blockio.BlockDataReadBackup(ctx, &blk, ds, nil, ts, fs)
@@ -684,7 +685,7 @@ func ReWriteCheckpointAndBlockFromKey(
 
 	err = insertBatchFun(
 		tombstonesData,
-		func(oData *objData, writer *blockio.BlockWriter) (bool, error) {
+		func(oData *objData, writer *ioutil.BlockWriter) (bool, error) {
 			if oData.data[0].Vecs[0].Length() == 0 {
 				logutil.Info("[Data Empty] ReWrite Checkpoint",
 					zap.String("tombstone", oData.stats.ObjectName().String()),
@@ -796,7 +797,9 @@ func ReWriteCheckpointAndBlockFromKey(
 			data.UpdateTombstoneInsertMeta(tid, int32(table.offset), int32(table.end))
 		}
 	}
-	cnLocation, dnLocation, checkpointFiles, err := data.WriteTo(dstFs, DefaultCheckpointBlockRows, DefaultCheckpointSize)
+	cnLocation, dnLocation, checkpointFiles, err := data.WriteTo(
+		ctx, DefaultCheckpointBlockRows, DefaultCheckpointSize, dstFs,
+	)
 	if err != nil {
 		return nil, nil, nil, err
 	}

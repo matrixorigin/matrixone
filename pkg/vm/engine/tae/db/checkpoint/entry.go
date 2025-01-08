@@ -23,8 +23,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 )
@@ -411,7 +411,7 @@ func (e *CheckpointEntry) Read(
 	fs *objectio.ObjectFS,
 	data *logtail.CheckpointData,
 ) (err error) {
-	reader, err := blockio.NewObjectReader(e.sid, fs.Service, e.tnLocation)
+	reader, err := ioutil.NewObjectReader(fs.Service, e.tnLocation)
 	if err != nil {
 		return
 	}
@@ -447,7 +447,7 @@ func (e *CheckpointEntry) ReadMetaIdx(
 	fs *objectio.ObjectFS,
 	data *logtail.CheckpointData,
 ) (err error) {
-	reader, err := blockio.NewObjectReader(e.sid, fs.Service, e.tnLocation)
+	reader, err := ioutil.NewObjectReader(fs.Service, e.tnLocation)
 	if err != nil {
 		return
 	}
@@ -457,12 +457,12 @@ func (e *CheckpointEntry) ReadMetaIdx(
 func (e *CheckpointEntry) GetTableByID(
 	ctx context.Context, fs *objectio.ObjectFS, tid uint64,
 ) (ins, del, dataObject, tombstoneObject *api.Batch, err error) {
-	reader, err := blockio.NewObjectReader(e.sid, fs.Service, e.cnLocation)
+	reader, err := ioutil.NewObjectReader(fs.Service, e.cnLocation)
 	if err != nil {
 		return
 	}
 	data := logtail.NewCNCheckpointData(e.sid)
-	err = blockio.PrefetchMeta(e.sid, fs.Service, e.cnLocation)
+	err = ioutil.PrefetchMeta(e.sid, fs.Service, e.cnLocation)
 	if err != nil {
 		return
 	}

@@ -18,10 +18,9 @@ import (
 	"bytes"
 	"encoding/hex"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/util"
-
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -525,6 +524,22 @@ func logPingFailed(
 		"failed to ping lock service",
 		getLogOptions(zap.ErrorLevel),
 		zap.String("serviceID", serviceID),
+		zap.Error(err))
+}
+
+func logValidTxnFailed(
+	logger *log.MOLogger,
+	txn pb.WaitTxn,
+	err error,
+) {
+	if logger == nil {
+		return
+	}
+
+	logger.Log(
+		"failed to valid txn",
+		getLogOptions(zap.ErrorLevel),
+		zap.String("wait-txn", txn.DebugString()),
 		zap.Error(err))
 }
 

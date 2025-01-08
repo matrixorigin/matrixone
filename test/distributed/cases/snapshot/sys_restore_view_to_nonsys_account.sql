@@ -297,6 +297,7 @@ drop snapshot sp04;
 -- view in partition table
 -- @session:id=1&user=acc01:test_account&password=111
 use test;
+-- @bvt:issue#16438
 drop table if exists partition01;
 create table partition01 (
                              emp_no      int             not null,
@@ -319,6 +320,7 @@ insert into partition01 values (9001,'1980-12-17', 'SMITH', 'CLERK', 'F', '2008-
 drop view if exists view01;
 create view view01 as select * from partition01;
 select * from view01;
+-- @bvt:issue
 -- @session
 
 drop snapshot if exists sp05;
@@ -326,8 +328,10 @@ create snapshot sp05 for account acc01;
 
 -- @session:id=1&user=acc01:test_account&password=111
 use test;
+-- @bvt:issue#16438
 insert into partition01 values (9003,'1999-02-20', 'BOB', 'DOCTOR', 'F', '2009-02-20');
 select * from view01;
+-- @bvt:issue
 -- @session
 
 drop snapshot if exists sp06;
@@ -337,18 +341,22 @@ restore account acc01 from snapshot sp05;
 
 -- @session:id=1&user=acc01:test_account&password=111
 use test;
+-- @bvt:issue#16438
 select * from view01;
 drop table partition01;
 select * from view01;
+-- @bvt:issue
 -- @session
 
 restore account acc01 from snapshot sp06;
 
 -- @session:id=1&user=acc01:test_account&password=111
 use test;
+-- @bvt:issue#16438
 select * from view01;
 drop view view01;
 drop table partition01;
+-- @bvt:issue
 drop database test;
 -- @session
 drop snapshot sp06;

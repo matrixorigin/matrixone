@@ -176,7 +176,7 @@ func (ie *internalExecutor) Query(ctx context.Context, sql string, opts ie.Sessi
 	sess.EnterFPrint(FPInternalExecutorQuery)
 	defer sess.ExitFPrint(FPInternalExecutorQuery)
 	ie.proto.stashResult = true
-	sess.Info(ctx, "internalExecutor new session")
+	sess.Debug(ctx, "internalExecutor new session")
 	tempExecCtx := ExecCtx{
 		reqCtx: ctx,
 		ses:    sess,

@@ -21,13 +21,13 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -42,19 +42,8 @@ const (
 	ModuleName = "BlockIO"
 )
 
-func runPipelineTest(fn func()) {
-	runtime.RunTest(
-		"",
-		func(rt runtime.Runtime) {
-			Start("")
-			defer Stop("")
-			fn()
-		},
-	)
-}
-
 func TestWriter_WriteBlockAndZoneMap(t *testing.T) {
-	runPipelineTest(
+	ioutil.RunPipelineTest(
 		func() {
 			defer testutils.AfterTest(t)()
 			ctx := context.Background()
@@ -69,7 +58,7 @@ func TestWriter_WriteBlockAndZoneMap(t *testing.T) {
 			}
 			service, err := fileservice.NewFileService(ctx, c, nil)
 			assert.Nil(t, err)
-			writer, _ := NewBlockWriterNew(service, name, 0, nil, false)
+			writer, _ := ioutil.NewBlockWriterNew(service, name, 0, nil, false)
 
 			schema := catalog.MockSchemaAll(13, 2)
 			bats := catalog.MockBatch(schema, 40000*2).Split(2)
@@ -104,7 +93,7 @@ func TestWriter_WriteBlockAndZoneMap(t *testing.T) {
 			mp := mpool.MustNewZero()
 			metaloc := objectio.BuildLocation(writer.GetName(), blocks[0].GetExtent(), 40000, blocks[0].GetID())
 			require.NoError(t, err)
-			reader, err := NewObjectReader("", service, metaloc)
+			reader, err := ioutil.NewObjectReader(service, metaloc)
 			require.NoError(t, err)
 			meta, err := reader.LoadObjectMeta(context.TODO(), mp)
 			require.NoError(t, err)
@@ -147,7 +136,7 @@ func TestWriter_WriteBlockAndZoneMap(t *testing.T) {
 }
 
 func TestWriter_WriteBlockAfterAlter(t *testing.T) {
-	runPipelineTest(
+	ioutil.RunPipelineTest(
 		func() {
 			defer testutils.AfterTest(t)()
 			ctx := context.Background()
@@ -178,7 +167,7 @@ func TestWriter_WriteBlockAfterAlter(t *testing.T) {
 				40000*2,
 				schema.GetSingleSortKey().Idx, nil).Split(2)
 
-			writer, _ := NewBlockWriterNew(service, name, 1, seqnums, false)
+			writer, _ := ioutil.NewBlockWriterNew(service, name, 1, seqnums, false)
 			_, err = writer.WriteBatch(containers.ToCNBatch(bats[0]))
 			assert.Nil(t, err)
 			_, err = writer.WriteBatch(containers.ToCNBatch(bats[1]))
@@ -211,7 +200,7 @@ func TestWriter_WriteBlockAfterAlter(t *testing.T) {
 			mp := mpool.MustNewZero()
 			metaloc := objectio.BuildLocation(writer.GetName(), blocks[0].GetExtent(), 40000, blocks[0].GetID())
 			require.NoError(t, err)
-			reader, err := NewObjectReader("", service, metaloc)
+			reader, err := ioutil.NewObjectReader(service, metaloc)
 			require.NoError(t, err)
 			meta, err := reader.LoadObjectMeta(context.TODO(), mp)
 			require.Equal(t, uint16(15), meta.BlockHeader().MetaColumnCount())
@@ -235,7 +224,7 @@ func TestWriter_WriteBlockAfterAlter(t *testing.T) {
 }
 
 func TestWriter_WriteBlockAndBF(t *testing.T) {
-	runPipelineTest(
+	ioutil.RunPipelineTest(
 		func() {
 			defer testutils.AfterTest(t)()
 			ctx := context.Background()
@@ -250,7 +239,7 @@ func TestWriter_WriteBlockAndBF(t *testing.T) {
 			}
 			service, err := fileservice.NewFileService(ctx, c, nil)
 			assert.Nil(t, err)
-			writer, _ := NewBlockWriterNew(service, name, 0, nil, false)
+			writer, _ := ioutil.NewBlockWriterNew(service, name, 0, nil, false)
 
 			schema := catalog.MockSchemaAll(4, 2)
 			bat := catalog.MockBatch(schema, 100)
@@ -264,7 +253,7 @@ func TestWriter_WriteBlockAndBF(t *testing.T) {
 			mp := mpool.MustNewZero()
 			metaloc := objectio.BuildLocation(writer.GetName(), blocks[0].GetExtent(), 100, blocks[0].GetID())
 			require.NoError(t, err)
-			reader, err := NewObjectReader("", service, metaloc)
+			reader, err := ioutil.NewObjectReader(service, metaloc)
 			require.NoError(t, err)
 			meta, err := reader.LoadObjectMeta(context.TODO(), mp)
 			require.NoError(t, err)
@@ -280,7 +269,7 @@ func TestWriter_WriteBlockAndBF(t *testing.T) {
 			require.NoError(t, err)
 			require.False(t, res)
 			name = objectio.BuildObjectName(objectio.NewSegmentid(), 1)
-			writer2, _ := NewBlockWriterNew(service, name, 0, nil, false)
+			writer2, _ := ioutil.NewBlockWriterNew(service, name, 0, nil, false)
 			writer2.SetPrimaryKeyWithType(2, 1, index.PrefixFn{
 				Id: 88,
 				Fn: func(in []byte) []byte {
@@ -295,7 +284,7 @@ func TestWriter_WriteBlockAndBF(t *testing.T) {
 
 			metaloc = objectio.BuildLocation(writer2.GetName(), blocks[0].GetExtent(), 100, blocks[0].GetID())
 			require.NoError(t, err)
-			reader, err = NewObjectReader("", service, metaloc)
+			reader, err = ioutil.NewObjectReader(service, metaloc)
 			require.NoError(t, err)
 			bf, _, err = reader.LoadOneBF(context.Background(), 0)
 			assert.Nil(t, err)
@@ -303,7 +292,7 @@ func TestWriter_WriteBlockAndBF(t *testing.T) {
 			assert.Equal(t, uint8(88), bf.PrefixFnId(1))
 
 			name = objectio.BuildObjectName(objectio.NewSegmentid(), 2)
-			writer2, _ = NewBlockWriterNew(service, name, 0, nil, false)
+			writer2, _ = ioutil.NewBlockWriterNew(service, name, 0, nil, false)
 			writer2.SetPrimaryKeyWithType(2, 2, index.PrefixFn{
 				Id: 123,
 				Fn: func(in []byte) []byte {
@@ -312,7 +301,7 @@ func TestWriter_WriteBlockAndBF(t *testing.T) {
 			})
 			_, err = writer2.WriteBatch(containers.ToCNBatch(bat))
 			assert.Equal(t, index.ErrPrefix, err)
-			writer2, _ = NewBlockWriterNew(service, name, 0, nil, false)
+			writer2, _ = ioutil.NewBlockWriterNew(service, name, 0, nil, false)
 			writer2.SetPrimaryKeyWithType(2, 2, index.PrefixFn{
 				Id: 123,
 				Fn: func(in []byte) []byte {
@@ -332,7 +321,7 @@ func TestWriter_WriteBlockAndBF(t *testing.T) {
 
 			metaloc = objectio.BuildLocation(writer2.GetName(), blocks[0].GetExtent(), 100, blocks[0].GetID())
 			require.NoError(t, err)
-			reader, err = NewObjectReader("", service, metaloc)
+			reader, err = ioutil.NewObjectReader(service, metaloc)
 			require.NoError(t, err)
 			bf, _, err = reader.LoadOneBF(context.Background(), 0)
 			assert.Nil(t, err)
@@ -347,7 +336,7 @@ func TestConstructTombstoneWriter(t *testing.T) {
 	mp := mpool.MustNewZero()
 
 	fs := testutil.NewSharedFS()
-	writer := ConstructTombstoneWriter(objectio.HiddenColumnSelection_None, fs)
+	writer := ioutil.ConstructTombstoneWriter(objectio.HiddenColumnSelection_None, fs)
 	assert.NotNil(t, writer)
 
 	bat := batch.NewWithSize(2)

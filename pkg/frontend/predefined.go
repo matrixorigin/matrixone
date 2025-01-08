@@ -163,6 +163,7 @@ var (
 
 	MoCatalogMoPubsDDL = `create table mo_catalog.mo_pubs (
     		account_id int not null,
+			account_name varchar(300),
     		pub_name varchar(64),
     		database_name varchar(5000),
     		database_id bigint unsigned,
@@ -179,8 +180,10 @@ var (
 
 	MoCatalogMoSubsDDL = `create table mo_catalog.mo_subs (
 			sub_account_id INT NOT NULL, 
+			sub_account_name VARCHAR(300) NOT NULL,
 			sub_name VARCHAR(5000) DEFAULT NULL,
 			sub_time TIMESTAMP DEFAULT NULL,
+			pub_account_id INT NOT NULL, 
 			pub_account_name VARCHAR(300) NOT NULL,
 			pub_name VARCHAR(64) NOT NULL,
 			pub_database VARCHAR(5000) NOT NULL,
@@ -294,6 +297,10 @@ var (
     			takes bigint unsigned,
     			primary key(account_id, database_id, table_id)
 			)`, catalog.MO_TABLE_STATS)
+
+	MoCatalogMoAccountLockDDL = fmt.Sprintf(`create table mo_catalog.%s(
+    			account_name varchar(300) primary key
+				)`, catalog.MO_ACCOUNT_LOCK)
 )
 
 // `mo_catalog` database system tables
