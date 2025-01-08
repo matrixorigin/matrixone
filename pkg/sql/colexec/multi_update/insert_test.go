@@ -181,7 +181,7 @@ func prepareTestInsertMultiUpdateCtx(hasUniqueKey bool, hasSecondaryKey bool) []
 		TableDef:   tableDef,
 		InsertCols: []int{0, 1, 2, 3},
 	}
-	colCount := 4
+
 	updateCtxs := []*MultiUpdateCtx{updateCtx}
 
 	if hasUniqueKey {
