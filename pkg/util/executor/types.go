@@ -64,6 +64,7 @@ type Options struct {
 	lower                   *int64
 	streaming               bool
 	stream_chan             chan Result
+	sql                     string
 }
 
 // StatementOption statement execute option.

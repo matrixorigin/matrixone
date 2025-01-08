@@ -308,7 +308,7 @@ func (s *Scope) AlterView(c *Compile) error {
 		if qry.GetIfExists() {
 			return nil
 		}
-		return moerr.NewBadDB(c.proc.Ctx, dbName)
+		return convertDBEOB(c.proc.Ctx, err, dbName)
 	}
 	if _, err = dbSource.Relation(c.proc.Ctx, tblName, nil); err != nil {
 		if qry.GetIfExists() {
@@ -387,7 +387,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 	tblName := qry.GetTableDef().GetName()
 	dbSource, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
-		return moerr.NewBadDB(c.proc.Ctx, dbName)
+		return convertDBEOB(c.proc.Ctx, err, dbName)
 	}
 	databaseId := dbSource.GetDatabaseId(c.proc.Ctx)
 
@@ -1017,7 +1017,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 		if dbName == "" {
 			return moerr.NewNoDB(c.proc.Ctx)
 		}
-		return moerr.NewBadDB(c.proc.Ctx, dbName)
+		return convertDBEOB(c.proc.Ctx, err, dbName)
 	}
 
 	exists, err := dbSource.RelationExists(c.proc.Ctx, tblName, nil)
@@ -1606,7 +1606,7 @@ func (s *Scope) CreateView(c *Compile) error {
 		if dbName == "" {
 			return moerr.NewNoDB(c.proc.Ctx)
 		}
-		return moerr.NewBadDB(c.proc.Ctx, dbName)
+		return convertDBEOB(c.proc.Ctx, err, dbName)
 	}
 
 	viewName := qry.GetTableDef().GetName()
@@ -1802,7 +1802,7 @@ func (s *Scope) CreateIndex(c *Compile) error {
 			dbName = qry.GetDatabase()
 		}
 		if err := lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
-			return err
+			return convertDBEOB(c.proc.Ctx, err, dbName)
 		}
 		tblName := qry.GetTableDef().GetName()
 		if err := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
@@ -1812,7 +1812,7 @@ func (s *Scope) CreateIndex(c *Compile) error {
 
 	dbSource, err := c.e.Database(c.proc.Ctx, qry.Database, c.proc.GetTxnOperator())
 	if err != nil {
-		return moerr.NewBadDB(c.proc.Ctx, qry.Database)
+		return convertDBEOB(c.proc.Ctx, err, qry.Database)
 	}
 	databaseId := dbSource.GetDatabaseId(c.proc.Ctx)
 
@@ -2037,7 +2037,7 @@ func (s *Scope) DropIndex(c *Compile) error {
 	}
 	d, err := c.e.Database(c.proc.Ctx, qry.Database, c.proc.GetTxnOperator())
 	if err != nil {
-		return moerr.NewBadDB(c.proc.Ctx, qry.Database)
+		return convertDBEOB(c.proc.Ctx, err, qry.Database)
 	}
 	r, err := d.Relation(c.proc.Ctx, qry.Table, nil)
 	if err != nil {
@@ -2287,7 +2287,7 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	}
 	dbSource, err = c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
-		return moerr.NewBadDB(c.proc.Ctx, dbName)
+		return convertDBEOB(c.proc.Ctx, err, dbName)
 	}
 
 	if rel, err = dbSource.Relation(c.proc.Ctx, tblName, nil); err != nil {
@@ -2530,7 +2530,7 @@ func (s *Scope) DropTable(c *Compile) error {
 		if qry.GetIfExists() {
 			return nil
 		}
-		return moerr.NewBadDB(c.proc.Ctx, dbName)
+		return convertDBEOB(c.proc.Ctx, err, dbName)
 	}
 
 	if rel, err = dbSource.Relation(c.proc.Ctx, tblName, nil); err != nil {

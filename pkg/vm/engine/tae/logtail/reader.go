@@ -34,8 +34,13 @@ import (
 // Reader is a snapshot of all txn prepared between from and to.
 // Dirty tables/objects/blocks can be queried based on those txn
 type Reader struct {
-	from, to types.TS
-	table    *TxnTable
+	from, to    types.TS
+	table       *TxnTable
+	skipTSCheck bool
+}
+
+func (r *Reader) SetSkipTSCheck(c bool) {
+	r.skipTSCheck = c
 }
 
 // Merge all dirty table/object/block into one dirty tree
@@ -49,7 +54,7 @@ func (r *Reader) GetDirty() (tree *model.Tree, count int) {
 		count++
 		return true
 	}
-	r.table.ForeachRowInBetween(r.from, r.to, nil, op)
+	r.table.ForeachRowInBetween(r.from, r.to, nil, op, r.skipTSCheck)
 	return
 }
 
@@ -67,7 +72,7 @@ func (r *Reader) HasCatalogChanges() bool {
 		summary := blk.summary.Load()
 		return summary != nil && !summary.hasCatalogChanges
 	}
-	r.table.ForeachRowInBetween(r.from, r.to, skipFn, op)
+	r.table.ForeachRowInBetween(r.from, r.to, skipFn, op, r.skipTSCheck)
 	return changed
 }
 
@@ -80,7 +85,7 @@ func (r *Reader) IsCommitted() bool {
 			return false
 		}
 		return true
-	})
+	}, r.skipTSCheck)
 	return committed
 }
 
@@ -103,7 +108,7 @@ func (r *Reader) GetDirtyByTable(
 		_, exist := summary.tids[id]
 		return !exist
 	}
-	r.table.ForeachRowInBetween(r.from, r.to, skipFn, op)
+	r.table.ForeachRowInBetween(r.from, r.to, skipFn, op, r.skipTSCheck)
 	return
 }
 
@@ -119,7 +124,7 @@ func (r *Reader) GetMaxLSN() (maxLsn uint64) {
 				maxLsn = lsn
 			}
 			return true
-		})
+		}, r.skipTSCheck)
 	return
 }
 
