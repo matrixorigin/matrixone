@@ -154,7 +154,7 @@ type PushClient struct {
 	resumeC chan struct{}
 
 	consumeErrC chan error
-	receiver    []routineController
+	receiver    []*routineController
 	eng         *Engine
 
 	LogtailRPCClientFactory func(string, string, morpc.RPCClient) (morpc.RPCClient, morpc.Stream, error)
@@ -313,7 +313,7 @@ func (c *PushClient) init(
 
 	if !c.initialized {
 		c.connector = newConnector(c, e)
-		c.receiver = make([]routineController, consumerNumber)
+		c.receiver = make([]*routineController, consumerNumber)
 		c.consumeErrC = make(chan error, consumerNumber)
 		c.pauseC = make(chan bool, 1)
 		c.resumeC = make(chan struct{})
@@ -664,8 +664,8 @@ func (c *PushClient) startConsumers(ctx context.Context, e *Engine) {
 }
 
 func (c *PushClient) stopConsumers() {
-	for _, r := range c.receiver {
-		r.close()
+	for i := range c.receiver {
+		c.receiver[i].close()
 	}
 	logutil.Infof("%s %s: logtail consumers stopped", logTag, c.serviceID)
 }
@@ -1348,7 +1348,7 @@ func (s *subscribedTable) setTableUnsubscribe(dbId, tblId uint64) {
 type syncLogTailTimestamp struct {
 	timestampWaiter        client.TimestampWaiter
 	ready                  atomic.Bool
-	tList                  []atomic.Pointer[timestamp.Timestamp]
+	tList                  []atomic.Value
 	latestAppliedLogTailTS atomic.Pointer[timestamp.Timestamp]
 	e                      *Engine
 }
@@ -1361,17 +1361,17 @@ func (r *syncLogTailTimestamp) initLogTailTimestamp(timestampWaiter client.Times
 
 	r.timestampWaiter = timestampWaiter
 	if len(r.tList) == 0 {
-		r.tList = make([]atomic.Pointer[timestamp.Timestamp], consumerNumber+1)
+		r.tList = make([]atomic.Value, consumerNumber+1)
 	}
 	for i := range r.tList {
-		r.tList[i].Store(new(timestamp.Timestamp))
+		r.tList[i].Store(timestamp.Timestamp{})
 	}
 }
 
 func (r *syncLogTailTimestamp) getTimestamp() timestamp.Timestamp {
 	var minT timestamp.Timestamp
 	for i := 0; i < len(r.tList); i++ {
-		t := *r.tList[i].Load()
+		t := r.tList[i].Load().(timestamp.Timestamp)
 		if i == 0 {
 			minT = t
 		} else {
@@ -1392,7 +1392,7 @@ func (r *syncLogTailTimestamp) updateTimestamp(
 	defer func() {
 		v2.LogTailApplyNotifyDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
-	r.tList[index].Store(&newTimestamp)
+	r.tList[index].Store(newTimestamp)
 	if r.ready.Load() {
 		ts := r.getTimestamp()
 		r.timestampWaiter.NotifyLatestCommitTS(ts)
@@ -1685,7 +1685,7 @@ func dispatchSubscribeResponse(
 	ctx context.Context,
 	e *Engine,
 	response *logtail.SubscribeResponse,
-	recRoutines []routineController,
+	recRoutines []*routineController,
 	receiveAt time.Time) error {
 	lt := response.Logtail
 	tbl := lt.GetTable()
@@ -1712,8 +1712,8 @@ func dispatchSubscribeResponse(
 	}
 	// no matter how we consume the response, should update all timestamp.
 	e.pClient.receivedLogTailTime.updateTimestamp(consumerNumber, *lt.Ts, receiveAt)
-	for _, rc := range recRoutines {
-		rc.updateTimeFromT(*lt.Ts, receiveAt)
+	for i := range recRoutines {
+		recRoutines[i].updateTimeFromT(*lt.Ts, receiveAt)
 	}
 	return nil
 }
@@ -1722,7 +1722,7 @@ func dispatchUpdateResponse(
 	ctx context.Context,
 	e *Engine,
 	response *logtail.UpdateResponse,
-	recRoutines []routineController,
+	recRoutines []*routineController,
 	receiveAt time.Time) error {
 	list := response.GetLogtailList()
 
@@ -1762,13 +1762,13 @@ func dispatchUpdateResponse(
 	}
 	// should update all the timestamp.
 	e.pClient.receivedLogTailTime.updateTimestamp(consumerNumber, *response.To, receiveAt)
-	for _, rc := range recRoutines {
-		rc.updateTimeFromT(*response.To, receiveAt)
+	for i := range recRoutines {
+		recRoutines[i].updateTimeFromT(*response.To, receiveAt)
 	}
 
 	n := 0
-	for _, c := range recRoutines {
-		n += len(c.signalChan)
+	for i := range recRoutines {
+		n += len(recRoutines[i].signalChan)
 	}
 	v2.LogTailApplyQueueSizeGauge.Set(float64(n))
 	return nil
@@ -1778,7 +1778,7 @@ func dispatchUnSubscribeResponse(
 	_ context.Context,
 	_ *Engine,
 	response *logtail.UnSubscribeResponse,
-	recRoutines []routineController,
+	recRoutines []*routineController,
 	receiveAt time.Time) error {
 	tbl := response.Table
 	notDistribute := ifShouldNotDistribute(tbl.DbId, tbl.TbId)
@@ -1798,6 +1798,10 @@ type routineController struct {
 	closeChan  chan bool
 	signalChan chan routineControlCmd
 
+	// two pools to provide cmdConsumeLog and cmdConsumeTime
+	cmdLogPool  sync.Pool
+	cmdTimePool sync.Pool
+
 	// monitor the consumption speed of logs.
 	warningBufferLen int
 }
@@ -1811,7 +1815,7 @@ func (rc *routineController) sendSubscribeResponse(
 		logutil.Infof("%s consume-routine %d signalChan len is %d, maybe consume is too slow", logTag, rc.routineId, l)
 	}
 
-	rc.signalChan <- cmdToConsumeSub{log: r, receiveAt: receiveAt}
+	rc.signalChan <- &cmdToConsumeSub{log: r, receiveAt: receiveAt}
 }
 
 func (rc *routineController) sendTableLogTail(r logtail.TableLogtail, receiveAt time.Time) {
@@ -1820,7 +1824,10 @@ func (rc *routineController) sendTableLogTail(r logtail.TableLogtail, receiveAt 
 		logutil.Infof("%s consume-routine %d signalChan len is %d, maybe consume is too slow", logTag, rc.routineId, l)
 	}
 
-	rc.signalChan <- cmdToConsumeLog{log: r, receiveAt: receiveAt}
+	log := rc.cmdLogPool.Get().(*cmdToConsumeLog)
+	log.log = r
+	log.receiveAt = receiveAt
+	rc.signalChan <- log
 }
 
 func (rc *routineController) updateTimeFromT(
@@ -1831,7 +1838,10 @@ func (rc *routineController) updateTimeFromT(
 		logutil.Infof("%s consume-routine %d signalChan len is %d, maybe consume is too slow", logTag, rc.routineId, l)
 	}
 
-	rc.signalChan <- cmdToUpdateTime{time: t, receiveAt: receiveAt}
+	updateTime := rc.cmdTimePool.Get().(*cmdToUpdateTime)
+	updateTime.time = t
+	updateTime.receiveAt = receiveAt
+	rc.signalChan <- updateTime
 }
 
 func (rc *routineController) sendUnSubscribeResponse(r *logtail.UnSubscribeResponse, receiveAt time.Time) {
@@ -1841,7 +1851,7 @@ func (rc *routineController) sendUnSubscribeResponse(r *logtail.UnSubscribeRespo
 		logutil.Infof("%s consume-routine %d signalChan len is %d, maybe consume is too slow", logTag, rc.routineId, l)
 	}
 
-	rc.signalChan <- cmdToConsumeUnSub{log: r, receiveAt: receiveAt}
+	rc.signalChan <- &cmdToConsumeUnSub{log: r, receiveAt: receiveAt}
 }
 
 func (rc *routineController) close() {
@@ -1850,7 +1860,7 @@ func (rc *routineController) close() {
 
 func (c *PushClient) createRoutineToConsumeLogTails(
 	ctx context.Context, routineId int, signalBufferLength int, e *Engine,
-) routineController {
+) *routineController {
 
 	singleRoutineToConsumeLogTail := func(ctx context.Context, engine *Engine, receiver *routineController, errRet chan error) {
 		errHappen := false
@@ -1876,16 +1886,26 @@ func (c *PushClient) createRoutineToConsumeLogTails(
 		}
 	}
 
-	controller := routineController{
+	controller := &routineController{
 		routineId:  routineId,
 		closeChan:  make(chan bool),
 		signalChan: make(chan routineControlCmd, signalBufferLength),
+		cmdLogPool: sync.Pool{
+			New: func() any {
+				return &cmdToConsumeLog{}
+			},
+		},
+		cmdTimePool: sync.Pool{
+			New: func() any {
+				return &cmdToUpdateTime{}
+			},
+		},
 
 		// Debug for issue #10138.
 		warningBufferLen: int(float64(signalBufferLength) * consumerWarningPercent),
 	}
 
-	go singleRoutineToConsumeLogTail(ctx, e, &controller, c.consumeErrC)
+	go singleRoutineToConsumeLogTail(ctx, e, controller, c.consumeErrC)
 
 	return controller
 }
@@ -1912,7 +1932,7 @@ type cmdToConsumeUnSub struct {
 	receiveAt time.Time
 }
 
-func (cmd cmdToConsumeSub) action(ctx context.Context, e *Engine, ctrl *routineController) error {
+func (cmd *cmdToConsumeSub) action(ctx context.Context, e *Engine, ctrl *routineController) error {
 	response := cmd.log
 	if err := e.consumeSubscribeResponse(ctx, response, true, cmd.receiveAt); err != nil {
 		return err
@@ -1923,7 +1943,8 @@ func (cmd cmdToConsumeSub) action(ctx context.Context, e *Engine, ctrl *routineC
 	return nil
 }
 
-func (cmd cmdToConsumeLog) action(ctx context.Context, e *Engine, ctrl *routineController) error {
+func (cmd *cmdToConsumeLog) action(ctx context.Context, e *Engine, ctrl *routineController) error {
+	defer ctrl.cmdLogPool.Put(cmd)
 	response := cmd.log
 	if err := e.consumeUpdateLogTail(ctx, response, true, cmd.receiveAt); err != nil {
 		return err
@@ -1931,12 +1952,13 @@ func (cmd cmdToConsumeLog) action(ctx context.Context, e *Engine, ctrl *routineC
 	return nil
 }
 
-func (cmd cmdToUpdateTime) action(ctx context.Context, e *Engine, ctrl *routineController) error {
+func (cmd *cmdToUpdateTime) action(ctx context.Context, e *Engine, ctrl *routineController) error {
+	defer ctrl.cmdTimePool.Put(cmd)
 	e.pClient.receivedLogTailTime.updateTimestamp(ctrl.routineId, cmd.time, cmd.receiveAt)
 	return nil
 }
 
-func (cmd cmdToConsumeUnSub) action(ctx context.Context, e *Engine, _ *routineController) error {
+func (cmd *cmdToConsumeUnSub) action(ctx context.Context, e *Engine, _ *routineController) error {
 	table := cmd.log.Table
 	//e.cleanMemoryTableWithTable(table.DbId, table.TbId)
 	e.pClient.subscribed.setTableUnsubscribe(table.DbId, table.TbId)
