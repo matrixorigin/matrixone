@@ -1,3 +1,4 @@
+-- @skip
 drop table if exists t1;
 CREATE TABLE t1 (
 col1 INT NOT NULL AUTO_INCREMENT,

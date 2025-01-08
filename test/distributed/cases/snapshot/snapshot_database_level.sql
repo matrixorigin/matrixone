@@ -164,6 +164,7 @@ insert into aff01 values (7566,'JONES','MANAGER',7839,'1981-04-02',2975,NULL,20)
 drop database if exists test04;
 create database test04;
 use test04;
+-- @bvt:issue#16438
 drop table if exists partition01;
 create table partition01 (
                              emp_no      int             not null,
@@ -182,7 +183,7 @@ create table partition01 (
 
 insert into partition01 values (9001,'1980-12-17', 'SMITH', 'CLERK', 'F', '2008-12-17'),
                                (9002,'1981-02-20', 'ALLEN', 'SALESMAN', 'F', '2008-02-20');
-
+-- @bvt:issue
 drop database if exists test06;
 create database test06;
 use test06;

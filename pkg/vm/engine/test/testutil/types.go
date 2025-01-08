@@ -23,8 +23,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 )
 
@@ -57,10 +57,10 @@ type PartitionStateStats struct {
 		DeletedRows    []*batch.Batch
 		CheckpointLocs [2][]string
 		DataObjectList struct {
-			Visible, Invisible []logtailreplay.ObjectEntry
+			Visible, Invisible []objectio.ObjectEntry
 		}
 		TombstoneObjectList struct {
-			Visible, Invisible []logtailreplay.ObjectEntry
+			Visible, Invisible []objectio.ObjectEntry
 		}
 	}
 }
