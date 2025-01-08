@@ -98,9 +98,8 @@ const (
 	// GOGCPercent calling debug.SetGCPercent()
 	CmdMethod_GOGCPercent CmdMethod = 31
 	// FaultInject handle fault injection request
-	CmdMethod_FaultInject     CmdMethod = 32
-	CmdMethod_CtlMoTableStats CmdMethod = 33
-
+	CmdMethod_FaultInject        CmdMethod = 32
+	CmdMethod_CtlMoTableStats    CmdMethod = 33
 	CmdMethod_WorkspaceThreshold CmdMethod = 34
 )
 

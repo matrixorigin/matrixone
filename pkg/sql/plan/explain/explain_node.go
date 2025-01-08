@@ -442,7 +442,24 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(ctx context.Context, options *Explai
 		}
 	}
 
+	if ndesc.Node.NodeType == plan.Node_FUNCTION_SCAN {
+		msg, err := ndesc.GetFullTextSql(ctx, options)
+		if err != nil {
+			return nil, err
+		}
+		if len(msg) > 0 {
+			lines = append(lines, msg)
+		}
+	}
 	return lines, nil
+}
+
+func (ndesc *NodeDescribeImpl) GetFullTextSql(ctx context.Context, options *ExplainOptions) (string, error) {
+	if options.Verbose && len(ndesc.Node.GetStats().Sql) > 0 {
+		result := "Sql: " + ndesc.Node.GetStats().Sql
+		return result, nil
+	}
+	return "", nil
 }
 
 func (ndesc *NodeDescribeImpl) GetProjectListInfo(ctx context.Context, options *ExplainOptions) (string, error) {

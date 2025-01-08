@@ -1,4 +1,4 @@
-// Copyright 2021 - 2023 Matrix Origin
+// Copyright 2021 - 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,27 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package util
+package explain
 
 import (
-	"unsafe"
+	"context"
+	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/stretchr/testify/require"
 )
 
-func UnsafeBytesToString(b []byte) string {
-	if len(b) == 0 {
-		return ""
+func TestFullTextSql(t *testing.T) {
+	node := &plan.Node{
+		NodeType: plan.Node_FUNCTION_SCAN,
+		Stats:    &plan.Stats{Sql: "SELECT * FROM TABLE"},
 	}
-	return unsafe.String(&b[0], len(b))
-}
-
-func UnsafeStringToBytes(s string) []byte {
-	if len(s) == 0 {
-		return nil
-	}
-	return unsafe.Slice(unsafe.StringData(s), len(s))
-}
-
-// Wrapper of unsafe.Slice
-func UnsafeToBytesWithLength[P *T, T any](p P, length int) []byte {
-	return unsafe.Slice((*byte)(unsafe.Pointer(p)), length)
+	nodedesc := &NodeDescribeImpl{Node: node}
+	lines, err := nodedesc.GetExtraInfo(context.TODO(), &ExplainOptions{Verbose: true})
+	require.Nil(t, err)
+	require.Equal(t, 1, len(lines))
+	require.Equal(t, "Sql: SELECT * FROM TABLE", lines[0])
 }
