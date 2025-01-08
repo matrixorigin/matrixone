@@ -144,7 +144,6 @@ func prepareTestDeleteMultiUpdateCtx(hasUniqueKey bool, hasSecondaryKey bool) []
 		DeleteCols: []int{0, 1}, //row_id & pk
 	}
 	updateCtxs := []*MultiUpdateCtx{updateCtx}
-	colCount := 2
 
 	if hasUniqueKey {
 		uniqueTblName, _ := util.BuildIndexTableName(context.TODO(), true)
