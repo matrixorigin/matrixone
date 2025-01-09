@@ -17,6 +17,7 @@ package checkpoint
 import (
 	"context"
 	"fmt"
+	"math/rand/v2"
 	"sort"
 	"sync"
 	"time"
@@ -478,13 +479,18 @@ func (c *CkpReplayer) ReplayCatalog(
 		_, err2 = mergesort.SortBlockColumns(cols, pkidx, c.r.rt.VectorPool.Transient)
 		return
 	}
-	c.r.catalog.RelayFromSysTableObjects(
+	closeFn := c.r.catalog.RelayFromSysTableObjects(
 		c.r.ctx,
 		readTxn,
 		c.dataF,
 		tables.ReadSysTableBatch,
 		sortFunc,
+		c,
 	)
+	c.wg.Wait()
+	for _, fn := range closeFn {
+		fn()
+	}
 	// logutil.Info(c.r.catalog.SimplePPString(common.PPL0))
 	return
 }
@@ -560,9 +566,14 @@ func (c *CkpReplayer) ReplayObjectlist(phase string) (err error) {
 
 func (c *CkpReplayer) Submit(tid uint64, replayFn func()) {
 	c.wg.Add(1)
-	workerOffset := tid % uint64(len(c.objectReplayWorker))
-	c.objectCountMap[tid] = c.objectCountMap[tid] + 1
-	c.objectReplayWorker[workerOffset].Enqueue(replayFn)
+	if tid == 0 {
+		workerOffset := rand.IntN(len(c.objectReplayWorker))
+		c.objectReplayWorker[workerOffset].Enqueue(replayFn)
+	} else {
+		workerOffset := tid % uint64(len(c.objectReplayWorker))
+		c.objectCountMap[tid] = c.objectCountMap[tid] + 1
+		c.objectReplayWorker[workerOffset].Enqueue(replayFn)
+	}
 }
 
 func (r *runner) BuildReplayer(
