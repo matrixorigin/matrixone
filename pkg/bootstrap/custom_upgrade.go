@@ -153,7 +153,7 @@ func (s *service) UpgradeOneTenant(ctx context.Context, tenantID int32) error {
 					if err := v.HandleTenantUpgrade(ctx, tenantID, txn); err != nil {
 						return err
 					}
-					if err := versions.UpgradeTenantVersion(tenantID, v.Metadata().Version, txn); err != nil {
+					if err := versions.UpgradeTenantVersion(tenantID, v.Metadata().Version, v.Metadata().VersionOffset, txn); err != nil {
 						return err
 					}
 					from = v.Metadata().Version

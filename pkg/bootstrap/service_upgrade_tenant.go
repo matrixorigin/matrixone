@@ -110,7 +110,7 @@ func (s *service) MaybeUpgradeTenant(
 					if err := v.HandleTenantUpgrade(ctx, tenantID, txn); err != nil {
 						return err
 					}
-					if err := versions.UpgradeTenantVersion(tenantID, v.Metadata().Version, txn); err != nil {
+					if err := versions.UpgradeTenantVersion(tenantID, v.Metadata().Version, v.Metadata().VersionOffset, txn); err != nil {
 						return err
 					}
 					from = v.Metadata().Version
@@ -213,7 +213,7 @@ func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
 						return err
 					}
 
-					if err = versions.UpgradeTenantVersion(id, h.Metadata().Version, txn); err != nil {
+					if err = versions.UpgradeTenantVersion(id, h.Metadata().Version, h.Metadata().VersionOffset, txn); err != nil {
 						s.logger.Error("failed to update upgrade tenant create version",
 							zap.Int32("tenant", id),
 							zap.String("upgrade", upgrade.String()),

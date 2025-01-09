@@ -7490,6 +7490,10 @@ func (m *MockBaseService) GetFinalVersion() string {
 	return "1.2.0"
 }
 
+func (m *MockBaseService) GetFinalVersionOffset() int32 {
+	return 8
+}
+
 func (s *MockBaseService) UpgradeTenant(ctx context.Context, tenantName string, retryCount uint32, isALLAccount bool) error {
 	//TODO implement me
 	panic("implement me")

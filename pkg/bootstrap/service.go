@@ -227,7 +227,7 @@ func (s *service) execBootstrap(ctx context.Context) error {
 		if err := initPreprocessSQL(ctx, txn, s.GetFinalVersion(), s.GetFinalVersionOffset()); err != nil {
 			return err
 		}
-		if err := frontend.InitSysTenant(ctx, txn, s.GetFinalVersion()); err != nil {
+		if err := frontend.InitSysTenant(ctx, txn, s.GetFinalVersion(), s.GetFinalVersionOffset()); err != nil {
 			return err
 		}
 		if err := sysview.InitSchema(ctx, txn); err != nil {

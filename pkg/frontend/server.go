@@ -77,6 +77,8 @@ type BaseService interface {
 	CheckTenantUpgrade(ctx context.Context, tenantID int64) error
 	// GetFinalVersion Get mo final version, which is based on the current code
 	GetFinalVersion() string
+	// GetFinalVersionOffset Get mo final version offset, which is based on the current code
+	GetFinalVersionOffset() int32
 	// UpgradeTenant used to upgrade tenant
 	UpgradeTenant(ctx context.Context, tenantName string, retryCount uint32, isALLAccount bool) error
 }

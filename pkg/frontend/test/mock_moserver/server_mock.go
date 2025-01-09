@@ -134,6 +134,20 @@ func (mr *MockBaseServiceMockRecorder) GetFinalVersion() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetFinalVersion", reflect.TypeOf((*MockBaseService)(nil).GetFinalVersion))
 }
 
+// GetFinalVersionOffset mocks base method.
+func (m *MockBaseService) GetFinalVersionOffset() int32 {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetFinalVersionOffset")
+	ret0, _ := ret[0].(int32)
+	return ret0
+}
+
+// GetFinalVersionOffset indicates an expected call of GetFinalVersionOffset.
+func (mr *MockBaseServiceMockRecorder) GetFinalVersionOffset() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetFinalVersionOffset", reflect.TypeOf((*MockBaseService)(nil).GetFinalVersionOffset))
+}
+
 // ID mocks base method.
 func (m *MockBaseService) ID() string {
 	m.ctrl.T.Helper()
