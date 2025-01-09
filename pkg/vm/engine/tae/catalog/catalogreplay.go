@@ -296,13 +296,13 @@ func (catalog *Catalog) ReplayMODatabase(ctx context.Context, txnNode *txnbase.T
 	createAts := vector.MustFixedColNoTypeCheck[types.Timestamp](bat.GetVectorByName(pkgcatalog.SystemDBAttr_CreateAt).GetDownstreamVector())
 	for i := 0; i < bat.Length(); i++ {
 		dbid := dbids[i]
-		name := string(bat.GetVectorByName(pkgcatalog.SystemDBAttr_Name).Get(i).([]byte))
+		name := string(copyBytes(bat.GetVectorByName(pkgcatalog.SystemDBAttr_Name).Get(i).([]byte)))
 		tenantID := tenantIDs[i]
 		userID := userIDs[i]
 		roleID := roleIDs[i]
 		createAt := createAts[i]
-		createSql := string(bat.GetVectorByName(pkgcatalog.SystemDBAttr_CreateSQL).Get(i).([]byte))
-		datType := string(bat.GetVectorByName(pkgcatalog.SystemDBAttr_Type).Get(i).([]byte))
+		createSql := string(copyBytes(bat.GetVectorByName(pkgcatalog.SystemDBAttr_CreateSQL).Get(i).([]byte)))
+		datType := string(copyBytes(bat.GetVectorByName(pkgcatalog.SystemDBAttr_Type).Get(i).([]byte)))
 		catalog.onReplayCreateDB(dbid, name, txnNode, tenantID, userID, roleID, createAt, createSql, datType)
 	}
 }
@@ -344,6 +344,12 @@ func (catalog *Catalog) onReplayCreateDB(
 	db.InsertLocked(un)
 }
 
+func copyBytes(src []byte) []byte {
+	ret := make([]byte, len(src))
+	copy(ret, src)
+	return ret
+}
+
 func (catalog *Catalog) ReplayMOTables(ctx context.Context, txnNode *txnbase.TxnMVCCNode, dataF DataFactory, tblBat, colBat *containers.Batch, replayer ObjectListReplayer) {
 	tids := vector.MustFixedColNoTypeCheck[uint64](tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_ID).GetDownstreamVector())
 	dbids := vector.MustFixedColNoTypeCheck[uint64](tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_DBID).GetDownstreamVector())
@@ -368,25 +374,25 @@ func (catalog *Catalog) ReplayMOTables(ctx context.Context, txnNode *txnbase.Txn
 		replayFn := func() {
 			tid := tids[i]
 			dbid := dbids[i]
-			name := string(tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Name).Get(i).([]byte))
+			name := string(copyBytes(tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Name).Get(i).([]byte)))
 			schema := NewEmptySchema(name)
 			schemaOffset = schema.ReadFromBatch(
 				colBat, colTids, nullables, isHiddens, clusterbys, autoIncrements, idxes, seqNums, schemaOffset, tid)
-			schema.Comment = string(tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Comment).Get(i).([]byte))
+			schema.Comment = string(copyBytes(tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Comment).Get(i).([]byte)))
 			schema.Version = versions[i]
 			schema.CatalogVersion = catalogVersions[i]
 			schema.Partitioned = partitioneds[i]
-			schema.Partition = string(tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Partition).Get(i).([]byte))
-			schema.Relkind = string(tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Kind).Get(i).([]byte))
-			schema.Createsql = string(tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_CreateSQL).Get(i).([]byte))
-			schema.View = string(tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_ViewDef).Get(i).([]byte))
-			schema.Constraint = tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Constraint).Get(i).([]byte)
+			schema.Partition = string(copyBytes(tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Partition).Get(i).([]byte)))
+			schema.Relkind = string(copyBytes(tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Kind).Get(i).([]byte)))
+			schema.Createsql = string(copyBytes(tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_CreateSQL).Get(i).([]byte)))
+			schema.View = string(copyBytes(tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_ViewDef).Get(i).([]byte)))
+			schema.Constraint = copyBytes(tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Constraint).Get(i).([]byte))
 			schema.AcInfo = accessInfo{}
 			schema.AcInfo.RoleID = roleIDs[i]
 			schema.AcInfo.UserID = userIDs[i]
 			schema.AcInfo.CreateAt = createAts[i]
 			schema.AcInfo.TenantID = tenantIDs[i]
-			extra := tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_ExtraInfo).Get(i).([]byte)
+			extra := copyBytes(tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_ExtraInfo).Get(i).([]byte))
 			schema.MustRestoreExtra(extra)
 			if err := schema.Finalize(true); err != nil {
 				panic(err)
