@@ -23,6 +23,8 @@ import (
 	"sync"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -43,7 +45,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"go.uber.org/zap"
 )
 
 //func (txn *Transaction) getObjInfos(
@@ -523,6 +524,11 @@ func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
 	if dumpAll {
 		if txn.approximateInMemDeleteCnt >= txn.engine.config.insertEntryMaxCount {
 			if err := txn.dumpDeleteBatchLocked(ctx, offset, &size); err != nil {
+				return err
+			}
+			//After flushing inserts/deletes in memory into S3, the entries in txn.writes will be unordered,
+			//should adjust the order to make sure deletes are in front of the inserts.
+			if err := txn.adjustUpdateOrderLocked(0); err != nil {
 				return err
 			}
 		}
@@ -1632,8 +1638,23 @@ func (c *dbOpsChain) rollbackLastStatement(statementId int) {
 
 func newTableOps() *tableOpsChain {
 	return &tableOpsChain{
-		names: make(map[tableKey][]tableOp),
+		names:       make(map[tableKey][]tableOp),
+		creatdInTxn: make(map[uint64]int),
 	}
+}
+
+func (c *tableOpsChain) addCreatedInTxn(tid uint64, statementid int) {
+	c.Lock()
+	defer c.Unlock()
+	c.creatdInTxn[tid] = statementid
+	// Note: we do not consider anything like table deleting or failed creating in createdInTxn map because the id is unique, and if the table is queried, it must be not deleted and created successfully.
+}
+
+func (c *tableOpsChain) existCreatedInTxn(tid uint64) bool {
+	c.RLock()
+	defer c.RUnlock()
+	_, exist := c.creatdInTxn[tid]
+	return exist
 }
 
 func (c *tableOpsChain) addCreateTable(key tableKey, statementId int, t *txnTable) {
@@ -1717,6 +1738,11 @@ func (c *tableOpsChain) rollbackLastStatement(statementId int) {
 			delete(c.names, k)
 		} else if i < len(v)-1 {
 			c.names[k] = v[:i+1]
+		}
+	}
+	for k, v := range c.creatdInTxn {
+		if v == statementId {
+			delete(c.creatdInTxn, k)
 		}
 	}
 }
