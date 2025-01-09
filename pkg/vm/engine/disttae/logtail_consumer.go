@@ -1276,7 +1276,8 @@ func (c *PushClient) isNotSubscribing(ctx context.Context, dbId, tblId uint64) (
 	}
 	//table is unsubscribed
 	if !c.subscriber.ready() {
-		return true, Unsubscribed, moerr.NewInternalError(ctx, "log tail subscriber is not ready")
+		// let wait the subscriber ready.
+		return false, Unsubscribed, nil //moerr.NewInternalError(ctx, "log tail subscriber is not ready")
 	}
 	c.subscribed.m[tblId] = SubTableStatus{
 		DBID:     dbId,
@@ -1304,7 +1305,7 @@ func (c *PushClient) isNotUnsubscribing(ctx context.Context, dbId, tblId uint64)
 	}
 	//table is unsubscribed
 	if !c.subscriber.ready() {
-		return true, Unsubscribed, moerr.NewInternalError(ctx, "log tail subscriber is not ready")
+		return false, Unsubscribed, nil //moerr.NewInternalError(ctx, "log tail subscriber is not ready")
 	}
 	c.subscribed.m[tblId] = SubTableStatus{
 		DBID:     dbId,
