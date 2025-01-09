@@ -1536,6 +1536,17 @@ func (d *dynamicCtx) LaunchMTSTasksForUT() {
 	d.launchTask(betaTaskName)
 }
 
+func (d *dynamicCtx) cleanTableStock() {
+	d.Lock()
+	defer d.Unlock()
+
+	for i := range d.tableStock.tbls {
+		// cannot pin this pState
+		d.tableStock.tbls[i].pState = nil
+	}
+	d.tableStock.tbls = d.tableStock.tbls[:0]
+}
+
 func (d *dynamicCtx) tableStatsExecutor(
 	ctx context.Context,
 	service string,
@@ -1543,6 +1554,7 @@ func (d *dynamicCtx) tableStatsExecutor(
 ) (err error) {
 
 	defer func() {
+		d.cleanTableStock()
 		logutil.Info(logHeader,
 			zap.String("source", "table stats top executor"),
 			zap.String("exit by", fmt.Sprintf("%v", err)))
@@ -1575,21 +1587,20 @@ func (d *dynamicCtx) tableStatsExecutor(
 			tbls := d.tableStock.tbls[:]
 			d.Unlock()
 
-			timeout, err = d.alphaTask(
+			if timeout, err = d.alphaTask(
 				newCtx, service,
 				tbls,
 				"main routine",
-			)
+			); err != nil {
+				logutil.Info(logHeader,
+					zap.String("source", "table stats top executor"),
+					zap.String("exit by alpha err", err.Error()))
+				return err
+			}
 
 			d.Lock()
 
 			executeTicker.Reset(d.conf.UpdateDuration)
-
-			for i := range d.tableStock.tbls {
-				d.tableStock.tbls[i].pState = nil
-			}
-			d.tableStock.tbls = d.tableStock.tbls[:0]
-
 			if len(d.tableStock.tbls) > 0 && !timeout && err == nil {
 				// if alpha timeout, this round should mark as failed,
 				// skip the update of the special stats start.
@@ -1602,12 +1613,7 @@ func (d *dynamicCtx) tableStatsExecutor(
 
 			d.Unlock()
 
-			if err != nil {
-				logutil.Info(logHeader,
-					zap.String("source", "table stats top executor"),
-					zap.String("exit by alpha err", err.Error()))
-				return err
-			}
+			d.cleanTableStock()
 		}
 	}
 }
