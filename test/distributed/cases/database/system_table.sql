@@ -20,11 +20,11 @@ show tables;
 # show columns from `user`;
 -- @ignore:0
 show columns from `db`;
--- @ignore:0
+-- @ignore:0,4
 show columns from `procs_priv`;
--- @ignore:0
+-- @ignore:0,4
 show columns from `columns_priv`;
--- @ignore:0
+-- @ignore:0,4
 show columns from `tables_priv`;
 use information_schema;
 show tables;
