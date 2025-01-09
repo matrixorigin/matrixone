@@ -603,9 +603,15 @@ func (s *Schema) Marshal() (buf []byte, err error) {
 	return
 }
 
-func (s *Schema) ReadFromBatch(bat *containers.Batch, offset int, targetTid uint64) (next int) {
+func (s *Schema) ReadFromBatch(
+	bat *containers.Batch,
+	tids []uint64,
+	nullables, isHiddens, clusterbys, autoIncrements []int8,
+	idxes []int32,
+	seqNums []uint16,
+	offset int,
+	targetTid uint64) (next int) {
 	nameVec := bat.GetVectorByName(pkgcatalog.SystemColAttr_RelName)
-	tidVec := bat.GetVectorByName(pkgcatalog.SystemColAttr_RelID)
 	defer func() {
 		slices.SortStableFunc(s.ColDefs, func(i, j *ColDef) int {
 			return i.Idx - j.Idx
@@ -616,7 +622,7 @@ func (s *Schema) ReadFromBatch(bat *containers.Batch, offset int, targetTid uint
 			break
 		}
 		name := string(nameVec.Get(offset).([]byte))
-		id := tidVec.Get(offset).(uint64)
+		id := tids[offset]
 		// every schema has 1 rowid column as last column, if have one, break
 		if name != s.Name || targetTid != id {
 			break
@@ -625,22 +631,22 @@ func (s *Schema) ReadFromBatch(bat *containers.Batch, offset int, targetTid uint
 		def.Name = string(bat.GetVectorByName((pkgcatalog.SystemColAttr_Name)).Get(offset).([]byte))
 		data := bat.GetVectorByName((pkgcatalog.SystemColAttr_Type)).Get(offset).([]byte)
 		types.Decode(data, &def.Type)
-		nullable := bat.GetVectorByName((pkgcatalog.SystemColAttr_NullAbility)).Get(offset).(int8)
+		nullable := nullables[offset]
 		def.NullAbility = !i82bool(nullable)
-		isHidden := bat.GetVectorByName((pkgcatalog.SystemColAttr_IsHidden)).Get(offset).(int8)
+		isHidden := isHiddens[offset]
 		def.Hidden = i82bool(isHidden)
-		isClusterBy := bat.GetVectorByName((pkgcatalog.SystemColAttr_IsClusterBy)).Get(offset).(int8)
+		isClusterBy := clusterbys[offset]
 		def.ClusterBy = i82bool(isClusterBy)
 		if def.ClusterBy {
 			def.SortKey = true
 		}
-		isAutoIncrement := bat.GetVectorByName((pkgcatalog.SystemColAttr_IsAutoIncrement)).Get(offset).(int8)
+		isAutoIncrement := autoIncrements[offset]
 		def.AutoIncrement = i82bool(isAutoIncrement)
 		def.Comment = string(bat.GetVectorByName((pkgcatalog.SystemColAttr_Comment)).Get(offset).([]byte))
 		def.OnUpdate = bat.GetVectorByName((pkgcatalog.SystemColAttr_Update)).Get(offset).([]byte)
 		def.Default = bat.GetVectorByName((pkgcatalog.SystemColAttr_DefaultExpr)).Get(offset).([]byte)
-		def.Idx = int(bat.GetVectorByName((pkgcatalog.SystemColAttr_Num)).Get(offset).(int32)) - 1
-		def.SeqNum = bat.GetVectorByName(pkgcatalog.SystemColAttr_Seqnum).Get(offset).(uint16)
+		def.Idx = int(idxes[offset]) - 1
+		def.SeqNum = seqNums[offset]
 		def.EnumValues = string(bat.GetVectorByName((pkgcatalog.SystemColAttr_EnumValues)).Get(offset).([]byte))
 		s.NameMap[def.Name] = def.Idx
 		s.ColDefs = append(s.ColDefs, def)
