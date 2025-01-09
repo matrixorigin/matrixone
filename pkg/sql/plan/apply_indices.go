@@ -71,24 +71,28 @@ func isRuntimeConstExpr(expr *plan.Expr) bool {
 	}
 }
 
-func (builder *QueryBuilder) applyIndices(nodeID int32, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
+func (builder *QueryBuilder) applyIndices(nodeID int32, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
+	var err error
 
 	if builder.optimizerHints != nil && builder.optimizerHints.applyIndices != 0 {
-		return nodeID
+		return nodeID, nil
 	}
 
 	node := builder.qry.Nodes[nodeID]
 	for i, childID := range node.Children {
-		node.Children[i] = builder.applyIndices(childID, colRefCnt, idxColMap)
+		node.Children[i], err = builder.applyIndices(childID, colRefCnt, idxColMap)
+		if err != nil {
+			return -1, err
+		}
 	}
 	replaceColumnsForNode(node, idxColMap)
 
 	switch node.NodeType {
 	case plan.Node_TABLE_SCAN:
-		return builder.applyIndicesForFilters(nodeID, node, colRefCnt, idxColMap)
+		return builder.applyIndicesForFilters(nodeID, node, colRefCnt, idxColMap), nil
 
 	case plan.Node_JOIN:
-		return builder.applyIndicesForJoins(nodeID, node, colRefCnt, idxColMap)
+		return builder.applyIndicesForJoins(nodeID, node, colRefCnt, idxColMap), nil
 
 	case plan.Node_PROJECT:
 		//NOTE: This is the entry point for vector index rule on SORT NODE.
@@ -96,7 +100,7 @@ func (builder *QueryBuilder) applyIndices(nodeID int32, colRefCnt map[[2]int32]i
 
 	}
 
-	return nodeID
+	return nodeID, nil
 }
 
 func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Node,
@@ -173,7 +177,7 @@ func getColSeqFromColDef(tblCol *plan.ColDef) string {
 	return fmt.Sprintf("%d", tblCol.GetSeqnum())
 }
 
-func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
+func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
 	// FullText
 	{
 		// support the followings:
@@ -261,7 +265,7 @@ func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan
 			}
 		}
 		if len(multiTableIndexes) == 0 {
-			return nodeID
+			return nodeID, nil
 		}
 
 		//1.b if sortNode has more than one order by, skip
@@ -344,7 +348,7 @@ func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan
 		projNode.Children[0] = newSortNode
 		replaceColumnsForNode(projNode, idxColMap)
 
-		return newSortNode
+		return newSortNode, nil
 	}
 END0:
 	// 2. Regular Index Check
@@ -352,7 +356,7 @@ END0:
 
 	}
 
-	return nodeID
+	return nodeID, nil
 }
 
 func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, node *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
@@ -750,8 +754,8 @@ func (builder *QueryBuilder) tryIndexOnlyScan(idxDef *IndexDef, node *plan.Node,
 	idxTableNodeID := builder.appendNode(&plan.Node{
 		NodeType:      plan.Node_TABLE_SCAN,
 		TableDef:      idxTableDef,
-		ObjRef:        idxObjRef,
 		IndexScanInfo: idxScanInfo,
+		ObjRef:        idxObjRef,
 		ParentObjRef:  node.ObjRef,
 		FilterList:    newFilterList,
 		Limit:         node.Limit,
