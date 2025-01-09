@@ -1007,6 +1007,12 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 	if err != nil {
 		return
 	}
+	for i := range s.DataSource.FilterList {
+		if plan2.IsFalseExpr(s.DataSource.FilterList[i]) {
+			emptyScan = true
+			break
+		}
+	}
 	if !emptyScan {
 		blockFilterList, err = s.handleBlockFilters(c, runtimeFilterList)
 		if err != nil {
