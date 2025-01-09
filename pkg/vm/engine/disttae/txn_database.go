@@ -354,7 +354,8 @@ func (db *txnDatabase) Truncate(ctx context.Context, name string) (uint64, error
 	if db.op.IsSnapOp() {
 		return 0, moerr.NewInternalErrorNoCtx("truncate table in snapshot transaction")
 	}
-	newId, err := db.getTxn().allocateID(ctx)
+	txn := db.getTxn()
+	newId, err := txn.allocateID(ctx)
 	if err != nil {
 		return 0, err
 	}
@@ -364,6 +365,7 @@ func (db *txnDatabase) Truncate(ctx context.Context, name string) (uint64, error
 		return 0, err
 	}
 
+	txn.tableOps.addCreatedInTxn(newId, txn.statementID)
 	if err := db.createWithID(ctx, name, newId, defs, false); err != nil {
 		return 0, err
 	}
@@ -375,10 +377,12 @@ func (db *txnDatabase) Create(ctx context.Context, name string, defs []engine.Ta
 	if db.op.IsSnapOp() {
 		return moerr.NewInternalErrorNoCtx("create table in snapshot transaction")
 	}
-	tableId, err := db.getTxn().allocateID(ctx)
+	txn := db.getTxn()
+	tableId, err := txn.allocateID(ctx)
 	if err != nil {
 		return err
 	}
+	txn.tableOps.addCreatedInTxn(tableId, txn.statementID)
 	return db.createWithID(ctx, name, tableId, defs, false)
 }
 
