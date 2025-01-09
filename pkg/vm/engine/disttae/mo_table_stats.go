@@ -1320,21 +1320,27 @@ func (d *dynamicCtx) tableStatsExecutor(
 			tbls := d.tableStock.tbls[:]
 			d.Unlock()
 
-			if err = d.alphaTask(
+			err = d.alphaTask(
 				newCtx, service, eng,
 				tbls,
 				"main routine",
-			); err != nil {
+			)
+
+			d.Lock()
+			executeTicker.Reset(d.conf.UpdateDuration)
+			for i := range d.tableStock.tbls {
+				// cannot pin this pState
+				d.tableStock.tbls[i].pState = nil
+			}
+			d.tableStock.tbls = d.tableStock.tbls[:0]
+			d.Unlock()
+
+			if err != nil {
 				logutil.Info(logHeader,
 					zap.String("source", "table stats top executor"),
 					zap.String("exit by alpha err", err.Error()))
 				return err
 			}
-
-			d.Lock()
-			executeTicker.Reset(d.conf.UpdateDuration)
-			d.tableStock.tbls = d.tableStock.tbls[:0]
-			d.Unlock()
 		}
 	}
 }
