@@ -1573,20 +1573,22 @@ func (d *dynamicCtx) tableStatsExecutor(
 			tbls := d.tableStock.tbls[:]
 			d.Unlock()
 
-			if timeout, err = d.alphaTask(
+			timeout, err = d.alphaTask(
 				newCtx, service,
 				tbls,
 				"main routine",
-			); err != nil {
-				logutil.Info(logHeader,
-					zap.String("source", "table stats top executor"),
-					zap.String("exit by alpha err", err.Error()))
-				return err
-			}
+			)
 
 			d.Lock()
 
-			if len(d.tableStock.tbls) > 0 && !timeout {
+			executeTicker.Reset(d.conf.UpdateDuration)
+
+			for i := range d.tableStock.tbls {
+				d.tableStock.tbls[i].pState = nil
+			}
+			d.tableStock.tbls = d.tableStock.tbls[:0]
+
+			if len(d.tableStock.tbls) > 0 && !timeout && err == nil {
 				// if alpha timeout, this round should mark as failed,
 				// skip the update of the special stats start.
 				if _, err = d.updateSpecialStatsStart(
@@ -1596,9 +1598,14 @@ func (d *dynamicCtx) tableStatsExecutor(
 				}
 			}
 
-			executeTicker.Reset(d.conf.UpdateDuration)
-			d.tableStock.tbls = d.tableStock.tbls[:0]
 			d.Unlock()
+
+			if err != nil {
+				logutil.Info(logHeader,
+					zap.String("source", "table stats top executor"),
+					zap.String("exit by alpha err", err.Error()))
+				return err
+			}
 		}
 	}
 }
