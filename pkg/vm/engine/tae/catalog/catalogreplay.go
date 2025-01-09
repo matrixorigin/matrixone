@@ -344,12 +344,6 @@ func (catalog *Catalog) onReplayCreateDB(
 	db.InsertLocked(un)
 }
 
-func copyBytes(src []byte) []byte {
-	ret := make([]byte, len(src))
-	copy(ret, src)
-	return ret
-}
-
 func (catalog *Catalog) ReplayMOTables(ctx context.Context, txnNode *txnbase.TxnMVCCNode, dataF DataFactory, tblBat, colBat *containers.Batch, replayer ObjectListReplayer) {
 	tids := vector.MustFixedColNoTypeCheck[uint64](tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_ID).GetDownstreamVector())
 	dbids := vector.MustFixedColNoTypeCheck[uint64](tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_DBID).GetDownstreamVector())
