@@ -235,7 +235,6 @@ type BindContext struct {
 	recSelect              bool
 	finalSelect            bool
 	unionSelect            bool
-	isTryBindingCTE        bool
 	sliding                bool
 	isDistinct             bool
 	isCorrelated           bool
