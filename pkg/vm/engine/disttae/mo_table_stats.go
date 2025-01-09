@@ -1774,6 +1774,8 @@ func (d *dynamicCtx) alphaTask(
 				if waitErrDur >= time.Minute*5 {
 					// waiting reached the limit
 					for i := range tblBackup {
+						// cannot pin this pState
+						tblBackup[i].pState = nil
 						if !tblBackup[i].valid {
 							continue
 						}
