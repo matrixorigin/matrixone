@@ -140,6 +140,7 @@ var (
 	TraceETLMergeSuccessCounter = traceETLMergeCounter.WithLabelValues("success")
 	// TraceETLMergeExistCounter record already exist, against delete failed.
 	TraceETLMergeExistCounter        = traceETLMergeCounter.WithLabelValues("exist")
+	TraceETLMergeExistFailedCounter  = traceETLMergeCounter.WithLabelValues("exist_failed")
 	TraceETLMergeOpenFailedCounter   = traceETLMergeCounter.WithLabelValues("open_failed")
 	TraceETLMergeReadFailedCounter   = traceETLMergeCounter.WithLabelValues("read_failed")
 	TraceETLMergeParseFailedCounter  = traceETLMergeCounter.WithLabelValues("parse_failed")

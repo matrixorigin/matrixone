@@ -36,6 +36,7 @@ desc pri04;
 drop table pri03;
 drop table pri04;
 
+-- @bvt:issue#16438
 -- partition by
 drop table if exists test03;
 create table test03 (
@@ -65,6 +66,7 @@ select * from test03;
 select * from test04;
 drop table test03;
 drop table test04;
+-- @bvt:issue
 
 -- unique key
 drop table if exists test07;

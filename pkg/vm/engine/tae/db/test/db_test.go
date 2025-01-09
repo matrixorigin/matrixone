@@ -59,6 +59,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
@@ -4314,7 +4315,7 @@ func TestDirtyWatchRace(t *testing.T) {
 }
 
 func TestBlockRead(t *testing.T) {
-	blockio.RunPipelineTest(
+	ioutil.RunPipelineTest(
 		func() {
 			defer testutils.AfterTest(t)()
 			ctx := context.Background()
@@ -4378,7 +4379,7 @@ func TestBlockRead(t *testing.T) {
 			assert.NoError(t, err)
 			infos := make([]*objectio.BlockInfo, 0)
 			infos = append(infos, info)
-			err = blockio.Prefetch("", fs, infos[0].MetaLocation())
+			err = ioutil.Prefetch("", fs, infos[0].MetaLocation())
 			assert.NoError(t, err)
 
 			buildBatch := func(typs []types.Type) *batch.Batch {
@@ -4453,7 +4454,7 @@ func TestBlockRead(t *testing.T) {
 }
 
 func TestBlockRead2(t *testing.T) {
-	blockio.RunPipelineTest(
+	ioutil.RunPipelineTest(
 		func() {
 			defer testutils.AfterTest(t)()
 			ctx := context.Background()
@@ -4525,7 +4526,7 @@ func TestBlockRead2(t *testing.T) {
 			assert.NoError(t, err)
 			infos := make([]*objectio.BlockInfo, 0)
 			infos = append(infos, info)
-			err = blockio.Prefetch("", fs, infos[0].MetaLocation())
+			err = ioutil.Prefetch("", fs, infos[0].MetaLocation())
 			assert.NoError(t, err)
 			buildBatch := func(typs []types.Type) *batch.Batch {
 				bat := batch.NewWithSize(len(typs))
@@ -5816,7 +5817,7 @@ func TestAppendBat(t *testing.T) {
 
 func TestGCWithCheckpoint(t *testing.T) {
 	t.Skip(any("for debug"))
-	blockio.RunPipelineTest(
+	ioutil.RunPipelineTest(
 		func() {
 			defer testutils.AfterTest(t)()
 			ctx := context.Background()
@@ -5890,7 +5891,7 @@ func TestGCWithCheckpoint(t *testing.T) {
 
 func TestGCDropDB(t *testing.T) {
 	t.Skip(any("for debug"))
-	blockio.RunPipelineTest(
+	ioutil.RunPipelineTest(
 		func() {
 			defer testutils.AfterTest(t)()
 			ctx := context.Background()
@@ -5966,7 +5967,7 @@ func TestGCDropDB(t *testing.T) {
 
 func TestGCDropTable(t *testing.T) {
 	t.Skip(any("for debug"))
-	blockio.RunPipelineTest(
+	ioutil.RunPipelineTest(
 		func() {
 			defer testutils.AfterTest(t)()
 			ctx := context.Background()
@@ -6757,13 +6758,13 @@ func TestAppendAndGC2(t *testing.T) {
 	tae.Restart(ctx)
 	db = tae.DB
 	files := make(map[string]struct{}, 0)
-	loadFiles := func(group uint32, lsn uint64, payload []byte, typ uint16, info any) {
+	loadFiles := func(group uint32, lsn uint64, payload []byte, typ uint16, info any) driver.ReplayEntryState {
 		if group != store.GroupFiles {
-			return
+			return driver.RE_Nomal
 		}
 		vec := vector.NewVec(types.Type{})
 		if err = vec.UnmarshalBinary(payload); err != nil {
-			return
+			return driver.RE_Internal
 		}
 		for i := 0; i < vec.Length(); i++ {
 			file := vec.GetStringAt(i)
@@ -6774,6 +6775,7 @@ func TestAppendAndGC2(t *testing.T) {
 				files[file] = struct{}{}
 			}
 		}
+		return driver.RE_Internal
 	}
 	dir := tae.Dir
 	tae.Close()
@@ -9336,7 +9338,7 @@ func TestCheckpointReadWrite2(t *testing.T) {
 }
 
 func TestSnapshotCheckpoint(t *testing.T) {
-	blockio.RunPipelineTest(
+	ioutil.RunPipelineTest(
 		func() {
 			defer testutils.AfterTest(t)()
 			testutils.EnsureNoLeak(t)
@@ -10007,7 +10009,7 @@ func TestGCKP(t *testing.T) {
 }
 
 func TestCKPCollectObject(t *testing.T) {
-	blockio.RunPipelineTest(
+	ioutil.RunPipelineTest(
 		func() {
 			defer testutils.AfterTest(t)()
 			testutils.EnsureNoLeak(t)
@@ -10132,7 +10134,7 @@ func TestPersistTransferTable(t *testing.T) {
 }
 
 func TestClearPersistTransferTable(t *testing.T) {
-	blockio.RunPipelineTest(
+	ioutil.RunPipelineTest(
 		func() {
 			ctx := context.Background()
 			opts := config.WithQuickScanAndCKPOpts(nil)

@@ -16,8 +16,6 @@ package blockio
 
 import (
 	"context"
-	"math"
-	"sort"
 	"time"
 
 	"go.uber.org/zap"
@@ -30,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -288,7 +287,7 @@ func BlockCompactionRead(
 ) (*batch.Batch, error) {
 	cacheVectors := containers.NewVectors(len(seqnums))
 
-	release, err := LoadColumns(
+	release, err := ioutil.LoadColumns(
 		ctx, seqnums, colTypes, fs, location, cacheVectors, mp, fileservice.Policy(0),
 	)
 	if err != nil {
@@ -345,9 +344,9 @@ func BlockDataReadBackup(
 	fs fileservice.FileService,
 ) (loaded *batch.Batch, sortKey uint16, err error) {
 	if len(idxes) == 0 {
-		loaded, sortKey, err = LoadOneBlock(ctx, fs, info.MetaLocation(), objectio.SchemaData)
+		loaded, sortKey, err = ioutil.LoadOneBlock(ctx, fs, info.MetaLocation(), objectio.SchemaData)
 	} else {
-		loaded, sortKey, err = LoadOneBlockWithIndex(ctx, fs, idxes, info.MetaLocation(), objectio.SchemaData)
+		loaded, sortKey, err = ioutil.LoadOneBlockWithIndex(ctx, fs, idxes, info.MetaLocation(), objectio.SchemaData)
 	}
 	// read block data from storage specified by meta location
 	if err != nil {
@@ -594,7 +593,7 @@ func readBlockData(
 			return
 		}
 
-		release, err2 = LoadColumns(
+		release, err2 = ioutil.LoadColumns(
 			ctx, cols, typs, fs, info.MetaLocation(), cacheVectors2, m, policy,
 		)
 		return
@@ -642,212 +641,6 @@ func readBlockData(
 		deleteMask, err = readABlkColumns(idxes, cacheVectors)
 	} else {
 		err = readColumns(idxes, cacheVectors)
-	}
-
-	return
-}
-
-func ReadDeletes(
-	ctx context.Context,
-	deltaLoc objectio.Location,
-	fs fileservice.FileService,
-	isPersistedByCN bool,
-	cacheVectors containers.Vectors,
-) (objectio.ObjectDataMeta, func(), error) {
-
-	var cols []uint16
-	var typs []types.Type
-
-	if isPersistedByCN {
-		cols = []uint16{objectio.TombstoneAttr_Rowid_SeqNum}
-		typs = []types.Type{objectio.RowidType}
-	} else {
-		cols = []uint16{objectio.TombstoneAttr_Rowid_SeqNum, objectio.TombstoneAttr_CommitTs_SeqNum}
-		typs = []types.Type{objectio.RowidType, objectio.TSType}
-	}
-	return LoadTombstoneColumns(
-		ctx, cols, typs, fs, deltaLoc, cacheVectors, nil, fileservice.Policy(0),
-	)
-}
-
-func EvalDeleteMaskFromDNCreatedTombstones(
-	deletedRows *vector.Vector,
-	commitTSVec *vector.Vector,
-	meta objectio.BlockObject,
-	ts *types.TS,
-	blockid *types.Blockid,
-) (rows objectio.Bitmap) {
-	if deletedRows == nil {
-		return
-	}
-	rowids := vector.MustFixedColWithTypeCheck[types.Rowid](deletedRows)
-	start, end := FindStartEndOfBlockFromSortedRowids(rowids, blockid)
-	if start >= end {
-		return
-	}
-
-	noTSCheck := false
-	if end-start > 10 {
-		// fast path is true if the maxTS is less than the snapshotTS
-		// this means that all the rows between start and end are visible
-		idx := objectio.GetTombstoneCommitTSAttrIdx(meta.GetMetaColumnCount())
-		noTSCheck = meta.MustGetColumn(idx).ZoneMap().FastLEValue(ts[:], 0)
-	}
-	rows = objectio.GetReusableBitmap()
-	if noTSCheck {
-		for i := end - 1; i >= start; i-- {
-			row := rowids[i].GetRowOffset()
-			rows.Add(uint64(row))
-		}
-	} else {
-		tss := vector.MustFixedColWithTypeCheck[types.TS](commitTSVec)
-		for i := end - 1; i >= start; i-- {
-			if tss[i].GT(ts) {
-				continue
-			}
-			row := rowids[i].GetRowOffset()
-			rows.Add(uint64(row))
-		}
-	}
-
-	return
-}
-
-func EvalDeleteMaskFromCNCreatedTombstones(
-	bid *types.Blockid,
-	deletedRows *vector.Vector,
-) (rows objectio.Bitmap) {
-	if deletedRows == nil {
-		return
-	}
-	rowids := vector.MustFixedColWithTypeCheck[types.Rowid](deletedRows)
-
-	start, end := FindStartEndOfBlockFromSortedRowids(rowids, bid)
-	if start < end {
-		rows = objectio.GetReusableBitmap()
-	}
-	for i := end - 1; i >= start; i-- {
-		row := rowids[i].GetRowOffset()
-		rows.Add(uint64(row))
-	}
-	return
-}
-
-func FindStartEndOfBlockFromSortedRowids(rowids []types.Rowid, id *types.Blockid) (start int, end int) {
-	lowRowid := objectio.NewRowid(id, 0)
-	highRowid := objectio.NewRowid(id, math.MaxUint32)
-	i, j := 0, len(rowids)
-	for i < j {
-		m := (i + j) / 2
-		// first value >= lowRowid
-		if !rowids[m].LT(lowRowid) {
-			j = m
-		} else {
-			i = m + 1
-		}
-	}
-	start = i
-
-	i, j = 0, len(rowids)
-	for i < j {
-		m := (i + j) / 2
-		// first value > highRowid
-		if highRowid.LT(&rowids[m]) {
-			j = m
-		} else {
-			i = m + 1
-		}
-	}
-	end = i
-	return
-}
-
-func IsRowDeletedByLocation(
-	ctx context.Context,
-	snapshotTS *types.TS,
-	row *objectio.Rowid,
-	location objectio.Location,
-	fs fileservice.FileService,
-	createdByCN bool,
-) (deleted bool, err error) {
-	var hidden objectio.HiddenColumnSelection
-	if !createdByCN {
-		hidden = hidden | objectio.HiddenColumnSelection_CommitTS
-	}
-
-	attrs := objectio.GetTombstoneAttrs(hidden)
-	data := containers.NewVectors(len(attrs))
-	_, release, err := ReadDeletes(ctx, location, fs, createdByCN, data)
-	if err != nil {
-		return
-	}
-	defer release()
-	if data.Rows() == 0 {
-		return
-	}
-	rowids := vector.MustFixedColNoTypeCheck[types.Rowid](&data[0])
-	idx := sort.Search(len(rowids), func(i int) bool {
-		return rowids[i].GE(row)
-	})
-	if createdByCN {
-		deleted = (idx < len(rowids)) && (rowids[idx].EQ(row))
-	} else {
-		tss := vector.MustFixedColNoTypeCheck[types.TS](&data[1])
-		for i := idx; i < len(rowids); i++ {
-			if !rowids[i].EQ(row) {
-				break
-			}
-			if tss[i].LE(snapshotTS) {
-				deleted = true
-				break
-			}
-		}
-	}
-	return
-}
-
-func FillBlockDeleteMask(
-	ctx context.Context,
-	snapshotTS *types.TS,
-	blockId *types.Blockid,
-	location objectio.Location,
-	fs fileservice.FileService,
-	createdByCN bool,
-) (deleteMask objectio.Bitmap, err error) {
-	if location.IsEmpty() {
-		return
-	}
-
-	var (
-		release func()
-		meta    objectio.ObjectDataMeta
-		hidden  objectio.HiddenColumnSelection
-	)
-
-	if !createdByCN {
-		hidden = hidden | objectio.HiddenColumnSelection_CommitTS
-	}
-
-	attrs := objectio.GetTombstoneAttrs(hidden)
-	persistedDeletes := containers.NewVectors(len(attrs))
-
-	if meta, release, err = ReadDeletes(
-		ctx, location, fs, createdByCN, persistedDeletes,
-	); err != nil {
-		return
-	}
-	defer release()
-
-	if createdByCN {
-		deleteMask = EvalDeleteMaskFromCNCreatedTombstones(blockId, &persistedDeletes[0])
-	} else {
-		deleteMask = EvalDeleteMaskFromDNCreatedTombstones(
-			&persistedDeletes[0],
-			&persistedDeletes[1],
-			meta.GetBlockMeta(uint32(location.ID())),
-			snapshotTS,
-			blockId,
-		)
 	}
 
 	return

@@ -16,18 +16,7 @@ package blockio
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
 var EncodeLocationFromString = objectio.StringToLocation
 var EncodeLocation = objectio.BuildLocation
-
-const (
-	JTLoad tasks.JobType = 200 + iota
-	JTFlush
-)
-
-func init() {
-	tasks.RegisterJobType(JTLoad, "LoadJob")
-	tasks.RegisterJobType(JTFlush, "FlushJob")
-}

@@ -27,7 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio/mergeutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
@@ -207,7 +207,7 @@ func (exec *GCExecutor) Run(
 		canGCObjects,
 		exec.fs,
 		timestamp.Timestamp{},
-		engine_util.WithColumns(
+		readutil.WithColumns(
 			ObjectTableSeqnums,
 			ObjectTableTypes,
 		),

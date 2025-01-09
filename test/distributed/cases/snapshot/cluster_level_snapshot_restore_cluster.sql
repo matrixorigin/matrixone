@@ -7,9 +7,11 @@ create account acc03 admin_name = 'test_account' identified by '111';
 drop account if exists acc04;
 create account acc04 admin_name = 'test_account' identified by '111';
 
+
 drop database if exists db01;
 create database db01;
 use db01;
+-- @bvt:issue#16438
 drop table if exists index03;
 create table index03 (
                          emp_no      int             not null,
@@ -30,6 +32,7 @@ insert into index03 values (9001,'1980-12-17', 'SMITH', 'CLERK', 'F', '2008-12-1
                            (9003,'1991-02-20', 'Bob', 'TEACHER', 'M', '2008-02-20'),
                            (9004,'1999-02-20', 'MARY', 'PROGRAMMER', 'M', '2008-02-20');
 select * from index03;
+-- @bvt:issue
 
 drop database if exists db02;
 create database db02;

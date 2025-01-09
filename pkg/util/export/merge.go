@@ -377,9 +377,11 @@ func (m *Merge) doMergeFiles(ctx context.Context, files []*FileMeta) error {
 			// Check if the first record already exists in the database
 			existed, err = db_holder.IsRecordExisted(ctx, firstLine, m.table, db_holder.GetOrInitDBConn)
 			if err != nil {
+				v2.TraceETLMergeExistFailedCounter.Inc()
 				m.logger.Error("error checking if the first record exists",
 					logutil.TableField(m.table.GetIdentify()),
 					logutil.PathField(fp.FilePath),
+					logutil.StatementField(firstLine[0]),
 					logutil.ErrorField(err),
 				)
 				return err

@@ -256,6 +256,14 @@ func (r *baseEntry) ReadFrom(reader io.Reader) (n int64, err error) {
 		return 0, err
 	}
 	n += n1
+	if r.metaType == TReplay {
+		r.cmd = NewEmptyReplayCmd()
+		n1, err = r.cmd.ReadFrom(reader)
+		if err != nil {
+			return 0, err
+		}
+		n += n1
+	}
 	return
 }
 
@@ -303,6 +311,7 @@ func (r *recordEntry) replay(replayer *replayer) (addr *common.ClosedIntervals) 
 			panic(err)
 		}
 		offset += n
+		replayer.lastEntry = e
 		replayer.recordChan <- e
 	}
 	intervals := common.NewClosedIntervalsBySlice(lsns)

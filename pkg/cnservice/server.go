@@ -45,6 +45,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -66,7 +67,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/status"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -276,7 +276,7 @@ func (s *service) Close() error {
 		return err
 	}
 	// stop I/O pipeline
-	blockio.Stop(s.cfg.UUID)
+	ioutil.Stop(s.cfg.UUID)
 
 	if s.gossipNode != nil {
 		if err := s.gossipNode.Leave(time.Second); err != nil {

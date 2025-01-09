@@ -30,7 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -556,7 +555,7 @@ func (data *CNCheckpointData) PrefetchMetaIdx(
 	key objectio.Location,
 	service fileservice.FileService,
 ) (err error) {
-	return blockio.Prefetch(data.sid, service, key)
+	return ioutil.Prefetch(data.sid, service, key)
 }
 
 func (data *CNCheckpointData) PrefetchMetaFrom(
@@ -585,7 +584,7 @@ func (data *CNCheckpointData) PrefetchMetaFrom(
 		}
 	}
 	for _, key := range locations {
-		err = blockio.PrefetchMeta(data.sid, service, key)
+		err = ioutil.PrefetchMeta(data.sid, service, key)
 	}
 	return err
 }
@@ -617,7 +616,7 @@ func (data *CNCheckpointData) PrefetchFrom(
 		for it.HasNext() {
 			block := it.Next()
 			location := block.GetLocation()
-			err = blockio.Prefetch(data.sid, service, location)
+			err = ioutil.Prefetch(data.sid, service, location)
 			if err != nil {
 				return err
 			}
@@ -1315,7 +1314,7 @@ func (data *CheckpointData) PrefetchMeta(
 	service fileservice.FileService,
 	key objectio.Location,
 ) (err error) {
-	return blockio.Prefetch(data.sid, service, key)
+	return ioutil.Prefetch(data.sid, service, key)
 }
 
 func (data *CheckpointData) PrefetchFrom(
@@ -1341,7 +1340,7 @@ func (data *CheckpointData) PrefetchFrom(
 			common.OperandField("checkpoint"),
 			common.AnyField("location", key.String()),
 			common.AnyField("size", checkpointSize))
-		err = blockio.Prefetch(data.sid, service, key)
+		err = ioutil.Prefetch(data.sid, service, key)
 		if err != nil {
 			logutil.Warnf("PrefetchFrom PrefetchWithMerged error %v", err)
 		}

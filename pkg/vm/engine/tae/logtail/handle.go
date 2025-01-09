@@ -86,7 +86,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -469,7 +468,7 @@ func LoadCheckpointEntries(
 			return nil, nil, err
 		}
 		readers[i/2] = reader
-		err = blockio.PrefetchMeta(sid, fs, location)
+		err = ioutil.PrefetchMeta(sid, fs, location)
 		if err != nil {
 			return nil, nil, err
 		}

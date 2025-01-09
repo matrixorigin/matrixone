@@ -236,7 +236,44 @@ func LinearCollectOffsetsByPrefixBetweenFactory(lb, ub []byte) func(*Vector) []i
 	}
 }
 
-func LinearCollectOffsetsByBetweenFactory[T types.OrderedT](lb, ub T, hint int) func(*Vector) []int64 {
+func LinearCollectOffsetsByBetweenString(lb, ub string, hint int) func(*Vector) []int64 {
+	// 0: [,]
+	// 1: (,]
+	// 2: [,)
+	// 3: (,)
+	var check func(oth string) bool
+	switch hint {
+	case 0:
+		check = func(oth string) bool { return oth >= lb && oth <= ub }
+	case 1:
+		check = func(oth string) bool { return oth > lb && oth <= ub }
+	case 2:
+		check = func(oth string) bool { return oth >= lb && oth < ub }
+	case 3:
+		check = func(oth string) bool { return oth > lb && oth < ub }
+	default:
+		panic(hint)
+	}
+	return func(vector *Vector) []int64 {
+		var sels []int64
+		vecLen := vector.Length()
+		if vecLen == 0 {
+			return sels
+		}
+		col, area := MustVarlenaRawData(vector)
+		for x := 0; x < vecLen; x++ {
+			if check(col[x].UnsafeGetString(area)) {
+				sels = append(sels, int64(x))
+			}
+			//if cols[x] >= lb && cols[x] <= ub {
+			//
+			//}
+		}
+		return sels
+	}
+}
+
+func LinearCollectOffsetsByBetweenFactory[T types.BuiltinNumber | types.Times | types.Enum](lb, ub T, hint int) func(*Vector) []int64 {
 	// 0: [,]
 	// 1: (,]
 	// 2: [,)
@@ -540,7 +577,7 @@ func CollectOffsetsByPrefixBetweenFactory(lval, rval []byte) func(*Vector) []int
 	}
 }
 
-func CollectOffsetsByBetweenWithCompareFactory[T types.Decimal128](lval, rval T, cmp func(T, T) int) func(*Vector) []int64 {
+func CollectOffsetsByBetweenWithCompareFactory[T types.Decimal](lval, rval T, cmp func(T, T) int) func(*Vector) []int64 {
 	return func(vec *Vector) []int64 {
 		vecLen := vec.Length()
 		if vecLen == 0 {
@@ -567,7 +604,7 @@ func CollectOffsetsByBetweenWithCompareFactory[T types.Decimal128](lval, rval T,
 	}
 }
 
-func CollectOffsetsByBetweenFactory[T types.OrderedT](lval, rval T, hint int) func(*Vector) []int64 {
+func CollectOffsetsByBetweenFactory[T types.BuiltinNumber | types.Times | types.Enum](lval, rval T, hint int) func(*Vector) []int64 {
 	// 0: [,]
 	// 1: (,]
 	// 2: [,)
@@ -606,6 +643,57 @@ func CollectOffsetsByBetweenFactory[T types.OrderedT](lval, rval T, hint int) fu
 		end := sort.Search(vecLen, func(i int) bool {
 			//return cols[i] > rval
 			return cmpRight(cols[i], rval)
+		})
+		if start == end {
+			return nil
+		}
+		sels := make([]int64, end-start)
+		for i := start; i < end; i++ {
+			sels[i-start] = int64(i)
+		}
+		return sels
+	}
+}
+
+func CollectOffsetsByBetweenString(lval, rval string, hint int) func(*Vector) []int64 {
+	// 0: [,]
+	// 1: (,]
+	// 2: [,)
+	// 3: (,)
+	var cmpLeft, cmpRight func(oth, val string) bool
+	switch hint {
+	case 0:
+		cmpLeft = func(oth, val string) bool { return oth >= val }
+		cmpRight = func(oth, val string) bool { return oth > val }
+	case 1:
+		cmpLeft = func(oth, val string) bool { return oth > val }
+		cmpRight = func(oth, val string) bool { return oth > val }
+	case 2:
+		cmpLeft = func(oth, val string) bool { return oth >= val }
+		cmpRight = func(oth, val string) bool { return oth >= val }
+	case 3:
+		cmpLeft = func(oth, val string) bool { return oth > val }
+		cmpRight = func(oth, val string) bool { return oth >= val }
+	default:
+		panic(hint)
+	}
+
+	return func(vec *Vector) []int64 {
+		vecLen := vec.Length()
+		if vecLen == 0 {
+			return nil
+		}
+		col, area := MustVarlenaRawData(vec)
+		start := sort.Search(vecLen, func(i int) bool {
+			//return cols[i] >= lval
+			return cmpLeft(col[i].UnsafeGetString(area), lval)
+		})
+		if start == vecLen {
+			return nil
+		}
+		end := sort.Search(vecLen, func(i int) bool {
+			//return cols[i] > rval
+			return cmpRight(col[i].UnsafeGetString(area), rval)
 		})
 		if start == end {
 			return nil

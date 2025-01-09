@@ -26,11 +26,11 @@ import (
 	"unsafe"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	// "github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -202,7 +202,7 @@ func mockDeletesAndInserts(
 }
 
 func Test_FillUsageBatOfIncremental(t *testing.T) {
-	blockio.RunPipelineTest(
+	ioutil.RunPipelineTest(
 		func() {
 			allocator := atomic.Uint64{}
 			allocator.Store(pkgcatalog.MO_RESERVED_MAX + 1)
@@ -342,7 +342,7 @@ func Test_FillUsageBatOfIncremental(t *testing.T) {
 }
 
 func Test_FillUsageBatOfGlobal(t *testing.T) {
-	blockio.RunPipelineTest(
+	ioutil.RunPipelineTest(
 		func() {
 			allocator := atomic.Uint64{}
 			allocator.Store(pkgcatalog.MO_RESERVED_MAX + 1)
@@ -487,7 +487,7 @@ func Test_EstablishFromCheckpoints(t *testing.T) {
 }
 
 func Test_RemoveStaleAccounts(t *testing.T) {
-	blockio.RunPipelineTest(
+	ioutil.RunPipelineTest(
 		func() {
 			// clear stale accounts happens in global ckp
 			allocator := atomic.Uint64{}
@@ -524,7 +524,7 @@ func Test_RemoveStaleAccounts(t *testing.T) {
 }
 
 func Test_GatherSpecialSize(t *testing.T) {
-	blockio.RunPipelineTest(
+	ioutil.RunPipelineTest(
 		func() {
 			cc := catalog.MockCatalog()
 			memo := logtail.NewTNUsageMemo(cc)

@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 	storeEntry "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
@@ -55,7 +56,7 @@ func restartStore(s *baseStore, t *testing.T) *baseStore {
 	s, err = NewBaseStore(s.dir, s.name, cfg)
 	assert.NoError(t, err)
 	tempLsn := uint64(0)
-	err = s.Replay(func(e *entry.Entry) {
+	err = s.Replay(func(e *entry.Entry) driver.ReplayEntryState {
 		if e.Lsn < tempLsn {
 			panic(moerr.NewInternalErrorNoCtxf("logic error %d<%d", e.Lsn, tempLsn))
 		}
@@ -63,6 +64,7 @@ func restartStore(s *baseStore, t *testing.T) *baseStore {
 		_, err = s.Read(e.Lsn)
 		assert.NoError(t, err)
 		// logutil.Infof("lsn is %d",e.Lsn)
+		return driver.RE_Nomal
 	})
 	assert.NoError(t, err)
 	assert.Equal(t, maxlsn, s.GetCurrSeqNum())

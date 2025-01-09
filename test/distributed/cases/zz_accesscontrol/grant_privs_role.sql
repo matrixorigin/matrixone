@@ -111,11 +111,13 @@ select user_name,role_name,obj_type,privilege_name,privilege_level from mo_catal
 -- @session:id=6&user=sys:user_grant_4:role_account_priv_3&password=123456
 use grant_db;
 show tables;
+-- @bvt:issue#16438
 create table grant_table_03 (id int,name varchar(50),num double)PARTITION BY KEY(id) PARTITIONS 4;
 show create table grant_table_03;
 create view grant_v_1 as select * from grant_table_03;
 drop table grant_table_03;
 drop view  grant_v_1;
+-- @bvt:issue
 -- @session
 
 --priv_type ：database level all权限;object_type: database；priv_level：*
@@ -130,6 +132,7 @@ select user_name,role_name,obj_type,privilege_name,privilege_level from mo_catal
 -- @session:id=7&user=sys:user_grant_5:role_account_priv_4&password=123456
 use grant_db4;
 show tables;
+-- @bvt:issue#16438
 create table grant_table_04 (id int,name varchar(50),num double)PARTITION BY KEY(id) PARTITIONS 4;
 show create table grant_table_04;
 create view grant_v_2 as select * from grant_table_04;
@@ -138,6 +141,7 @@ drop view grant_v_2;
 use grant_db5;
 show tables;
 create table grant_table_04 (id int,name varchar(50),num double)PARTITION BY KEY(id) PARTITIONS 4;
+-- @bvt:issue
 -- @session
 
 --priv_type ：database level ownership权限;object_type: database；priv_level：*，*.*,db_name(bug)
@@ -150,7 +154,9 @@ select user_name,role_name,obj_type,privilege_name,privilege_level from mo_catal
 -- @session:id=8&user=sys:user_grant_6:role_account_priv_5&password=123456
 use grant_db;
 show tables;
+-- @bvt:issue#16438
 create table grant_table_05 (id int,name varchar(50),num double)PARTITION BY KEY(id) PARTITIONS 4;
+-- @bvt:issue
 create role 'role_account_priv_10';
 grant create table,drop table on database * to role_account_priv_10;
 -- @session

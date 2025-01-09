@@ -57,10 +57,13 @@ insert ignore INTO insert_ignore_05 (id, created_at) VALUES(50, '9999-12-31 23:5
 select * from insert_ignore_05;
 -- @bvt:issue
 
+-- @bvt:issue#16438
 -- insert ignore partition table
 create table insert_ignore_06 (sale_id INT AUTO_INCREMENT,product_id INT,sale_amount DECIMAL(10, 2),sale_date DATE,PRIMARY KEY (sale_id, sale_date))PARTITION BY RANGE (year(sale_date)) (PARTITION p0 VALUES LESS THAN (1991),PARTITION p1 VALUES LESS THAN (1992),PARTITION p2 VALUES LESS THAN (1993),PARTITION p3 VALUES LESS THAN (1994));
 insert ignore into insert_ignore_06 (product_id, sale_amount, sale_date) VALUES(1, 1000.00, '1990-04-01'),(2, 1500.00, '1992-05-01'),(3, 500.00, '1995-06-01'),(1, 2000.00, '1991-07-01');
 select * from insert_ignore_06;
+-- @bvt:issue
+
 -- insert ignore select from table
 create table insert_ignore_07(c1 int primary key auto_increment, c2 int);
 insert into insert_ignore_07(c2) select result from generate_series(1,100000) g;

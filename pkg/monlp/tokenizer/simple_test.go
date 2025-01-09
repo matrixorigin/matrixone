@@ -93,6 +93,9 @@ func TestLatin(t *testing.T) {
 		makeToken("long", 5),
 		makeToken("word", 6),
 	})
+	checkTokenize(t, "Pадіоаматорів", []Token{
+		makeToken("pадіоаматор", 0),
+	})
 }
 
 func TestCJK(t *testing.T) {

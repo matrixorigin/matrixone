@@ -32,8 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"go.uber.org/zap"
@@ -105,12 +104,12 @@ func (w *GCWindow) MakeFilesReader(
 	ctx context.Context,
 	fs fileservice.FileService,
 ) engine.Reader {
-	return engine_util.SimpleMultiObjectsReader(
+	return readutil.SimpleMultiObjectsReader(
 		ctx,
 		fs,
 		w.files,
 		timestamp.Timestamp{},
-		engine_util.WithColumns(
+		readutil.WithColumns(
 			ObjectTableSeqnums,
 			ObjectTableTypes,
 		),
@@ -214,7 +213,7 @@ func (w *GCWindow) ScanCheckpoints(
 	}
 	sinker := w.getSinker(0, buffer)
 	defer sinker.Close()
-	if err = engine_util.StreamBatchProcess(
+	if err = readutil.StreamBatchProcess(
 		ctx,
 		getOneBatch,
 		w.sortOneBatch,
@@ -443,7 +442,7 @@ func loader(
 ) error {
 	for id := uint32(0); id < stats.BlkCnt(); id++ {
 		stats.ObjectLocation().SetID(uint16(id))
-		data, _, err := blockio.LoadOneBlock(cxt, fs, stats.ObjectLocation(), objectio.SchemaData)
+		data, _, err := ioutil.LoadOneBlock(cxt, fs, stats.ObjectLocation(), objectio.SchemaData)
 		if err != nil {
 			return err
 		}

@@ -92,8 +92,10 @@ create table json_table_4(j1 json);
 insert into json_table_4 values('[1, 2,');
 insert into json_table_4 values('{"key1": NULL, "": "value2"}');
 insert into json_table_4 values('');
+-- @bvt:issue#16438
 create table json_table_5(j1 json primary key,j2 json default '{"x": 17, "x": "red"}',j3 json not null );
 create table json_table_5(j1 json) partition by hash(j1);
+-- @bvt:issue
 select j1 from json_table_1 where j1>'{"": "", "123456": "中文mo"}';
 
 --update all data

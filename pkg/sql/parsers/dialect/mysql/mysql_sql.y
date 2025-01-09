@@ -1198,6 +1198,29 @@ create_pitr_stmt:
             PitrUnit: $11,
         }
     }
+|   CREATE PITR not_exists_opt ident RANGE pitr_value STRING
+    {
+        $$ = &tree.CreatePitr{
+            IfNotExists: $3,
+            Name: tree.Identifier($4.Compare()),
+            Level: tree.PITRLEVELACCOUNT,
+            PitrValue: $6,
+            PitrUnit: $7,
+        }
+    }
+|   CREATE PITR not_exists_opt ident FOR DATABASE ident TABLE ident RANGE pitr_value STRING
+    {
+         $$ = &tree.CreatePitr{
+            IfNotExists: $3,
+            Name: tree.Identifier($4.Compare()),
+            Level: tree.PITRLEVELTABLE,
+            DatabaseName: tree.Identifier($7.Compare()),
+            TableName: tree.Identifier($9.Compare()),
+            PitrValue: $11,
+            PitrUnit: $12,
+        }
+    }
+
 
 pitr_value:
     INTEGRAL

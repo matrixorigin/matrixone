@@ -233,7 +233,7 @@ type Engine struct {
 	}
 
 	//latest catalog will be loaded from TN when engine is initialized.
-	catalog *cache.CatalogCache
+	catalog atomic.Pointer[cache.CatalogCache]
 	//latest partitions which be protected by e.Lock().
 	partitions map[[2]uint64]*logtailreplay.Partition
 	//snapshot partitions
@@ -947,7 +947,8 @@ type tableOp struct {
 
 type tableOpsChain struct {
 	sync.RWMutex
-	names map[tableKey][]tableOp
+	names       map[tableKey][]tableOp
+	creatdInTxn map[uint64]int // tableId -> statementId
 }
 
 type dbOp struct {

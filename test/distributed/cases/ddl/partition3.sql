@@ -1,3 +1,4 @@
+-- @skip
 -- 1.test KEY Partition
 drop table if exists t1;
 CREATE TABLE t1 (

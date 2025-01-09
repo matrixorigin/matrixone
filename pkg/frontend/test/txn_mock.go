@@ -132,18 +132,6 @@ func (m *MockTxnAction) EXPECT() *MockTxnActionMockRecorder {
 	return m.recorder
 }
 
-// AbortAllRunningTxn mocks base method.
-func (m *MockTxnAction) AbortAllRunningTxn() {
-	m.ctrl.T.Helper()
-	m.ctrl.Call(m, "AbortAllRunningTxn")
-}
-
-// AbortAllRunningTxn indicates an expected call of AbortAllRunningTxn.
-func (mr *MockTxnActionMockRecorder) AbortAllRunningTxn() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AbortAllRunningTxn", reflect.TypeOf((*MockTxnAction)(nil).AbortAllRunningTxn))
-}
-
 // Pause mocks base method.
 func (m *MockTxnAction) Pause() {
 	m.ctrl.T.Helper()
@@ -189,18 +177,6 @@ func NewMockTxnClient(ctrl *gomock.Controller) *MockTxnClient {
 // EXPECT returns an object that allows the caller to indicate expected use.
 func (m *MockTxnClient) EXPECT() *MockTxnClientMockRecorder {
 	return m.recorder
-}
-
-// AbortAllRunningTxn mocks base method.
-func (m *MockTxnClient) AbortAllRunningTxn() {
-	m.ctrl.T.Helper()
-	m.ctrl.Call(m, "AbortAllRunningTxn")
-}
-
-// AbortAllRunningTxn indicates an expected call of AbortAllRunningTxn.
-func (mr *MockTxnClientMockRecorder) AbortAllRunningTxn() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AbortAllRunningTxn", reflect.TypeOf((*MockTxnClient)(nil).AbortAllRunningTxn))
 }
 
 // CNBasedConsistencyEnabled mocks base method.
@@ -982,20 +958,6 @@ func (m *MockTimestampWaiter) EXPECT() *MockTimestampWaiterMockRecorder {
 	return m.recorder
 }
 
-// CancelC mocks base method.
-func (m *MockTimestampWaiter) CancelC() chan struct{} {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "CancelC")
-	ret0, _ := ret[0].(chan struct{})
-	return ret0
-}
-
-// CancelC indicates an expected call of CancelC.
-func (mr *MockTimestampWaiterMockRecorder) CancelC() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CancelC", reflect.TypeOf((*MockTimestampWaiter)(nil).CancelC))
-}
-
 // Close mocks base method.
 func (m *MockTimestampWaiter) Close() {
 	m.ctrl.T.Helper()
@@ -1047,30 +1009,6 @@ func (m *MockTimestampWaiter) NotifyLatestCommitTS(appliedTS timestamp.Timestamp
 func (mr *MockTimestampWaiterMockRecorder) NotifyLatestCommitTS(appliedTS interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "NotifyLatestCommitTS", reflect.TypeOf((*MockTimestampWaiter)(nil).NotifyLatestCommitTS), appliedTS)
-}
-
-// Pause mocks base method.
-func (m *MockTimestampWaiter) Pause() {
-	m.ctrl.T.Helper()
-	m.ctrl.Call(m, "Pause")
-}
-
-// Pause indicates an expected call of Pause.
-func (mr *MockTimestampWaiterMockRecorder) Pause() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Pause", reflect.TypeOf((*MockTimestampWaiter)(nil).Pause))
-}
-
-// Resume mocks base method.
-func (m *MockTimestampWaiter) Resume() {
-	m.ctrl.T.Helper()
-	m.ctrl.Call(m, "Resume")
-}
-
-// Resume indicates an expected call of Resume.
-func (mr *MockTimestampWaiterMockRecorder) Resume() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Resume", reflect.TypeOf((*MockTimestampWaiter)(nil).Resume))
 }
 
 // MockWorkspace is a mock of Workspace interface.

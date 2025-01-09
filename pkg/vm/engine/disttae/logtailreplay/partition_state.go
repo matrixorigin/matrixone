@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	txnTrace "github.com/matrixorigin/matrixone/pkg/txn/trace"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
@@ -62,14 +63,14 @@ type PartitionState struct {
 
 	// index
 
-	dataObjectsNameIndex      *btree.BTreeG[ObjectEntry]
-	tombstoneObjectsNameIndex *btree.BTreeG[ObjectEntry]
+	dataObjectsNameIndex      *btree.BTreeG[objectio.ObjectEntry]
+	tombstoneObjectsNameIndex *btree.BTreeG[objectio.ObjectEntry]
 
 	rowPrimaryKeyIndex       *btree.BTreeG[*PrimaryIndexEntry]
 	inMemTombstoneRowIdIndex *btree.BTreeG[*PrimaryIndexEntry]
 
 	dataObjectTSIndex       *btree.BTreeG[ObjectIndexByTSEntry]
-	tombstoneObjectDTSIndex *btree.BTreeG[ObjectEntry]
+	tombstoneObjectDTSIndex *btree.BTreeG[objectio.ObjectEntry]
 
 	// noData indicates whether to retain data batch
 	// for primary key dedup, reading data is not required
@@ -177,7 +178,7 @@ func (p *PartitionState) HandleDataObjectList(
 		if t := commitTSCol[idx]; t.GT(&p.lastFlushTimestamp) {
 			p.lastFlushTimestamp = t
 		}
-		var objEntry ObjectEntry
+		var objEntry objectio.ObjectEntry
 
 		objEntry.ObjectStats = objectio.ObjectStats(statsVec.GetBytesAt(idx))
 		objEntry.CreateTime = createTSCol[idx]
@@ -328,7 +329,7 @@ func (p *PartitionState) HandleTombstoneObjectList(
 		if t := commitTSCol[idx]; t.GT(&p.lastFlushTimestamp) {
 			p.lastFlushTimestamp = t
 		}
-		var objEntry ObjectEntry
+		var objEntry objectio.ObjectEntry
 
 		objEntry.ObjectStats = objectio.ObjectStats(statsVec.GetBytesAt(idx))
 		objEntry.CreateTime = createTSCol[idx]
@@ -439,7 +440,7 @@ func (p *PartitionState) HandleRowsDelete(
 	var primaryKeys [][]byte
 	if len(input.Vecs) > 2 {
 		// has primary key
-		primaryKeys = EncodePrimaryKeyVector(
+		primaryKeys = readutil.EncodePrimaryKeyVector(
 			batch.Vecs[2],
 			packer,
 		)
@@ -530,7 +531,7 @@ func (p *PartitionState) HandleRowsInsert(
 	if err != nil {
 		panic(err)
 	}
-	primaryKeys = EncodePrimaryKeyVector(
+	primaryKeys = readutil.EncodePrimaryKeyVector(
 		batch.Vecs[2+primarySeqnum],
 		packer,
 	)
@@ -648,12 +649,12 @@ func NewPartitionState(
 		tid:                       tid,
 		noData:                    noData,
 		rows:                      btree.NewBTreeGOptions(RowEntry.Less, opts),
-		dataObjectsNameIndex:      btree.NewBTreeGOptions(ObjectEntry.ObjectNameIndexLess, opts),
-		tombstoneObjectsNameIndex: btree.NewBTreeGOptions(ObjectEntry.ObjectNameIndexLess, opts),
+		dataObjectsNameIndex:      btree.NewBTreeGOptions(objectio.ObjectEntry.ObjectNameIndexLess, opts),
+		tombstoneObjectsNameIndex: btree.NewBTreeGOptions(objectio.ObjectEntry.ObjectNameIndexLess, opts),
 		rowPrimaryKeyIndex:        btree.NewBTreeGOptions((*PrimaryIndexEntry).Less, opts),
 		inMemTombstoneRowIdIndex:  btree.NewBTreeGOptions((*PrimaryIndexEntry).Less, opts),
 		dataObjectTSIndex:         btree.NewBTreeGOptions(ObjectIndexByTSEntry.Less, opts),
-		tombstoneObjectDTSIndex:   btree.NewBTreeGOptions(ObjectEntry.ObjectDTSIndexLess, opts),
+		tombstoneObjectDTSIndex:   btree.NewBTreeGOptions(objectio.ObjectEntry.ObjectDTSIndexLess, opts),
 		shared:                    new(sharedStates),
 		start:                     types.MaxTs(),
 	}

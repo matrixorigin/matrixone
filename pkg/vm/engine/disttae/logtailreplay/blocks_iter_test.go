@@ -43,17 +43,15 @@ func TestPartitionState_CollectObjectsBetweenInProgress(t *testing.T) {
 		t5    = t4.Next()
 		t6    = t5.Next()
 
-		obj1, obj2, obj3, obj4, obj5, obj6 ObjectEntry
+		obj1, obj2, obj3, obj4, obj5, obj6 objectio.ObjectEntry
 	)
 
 	// t1: insert obj1
 	{
 		objectio.SetObjectStatsObjectName(&stats, objectio.ObjectName("obj1"))
-		obj1 = ObjectEntry{
-			ObjectInfo{
-				ObjectStats: stats,
-				CreateTime:  t1,
-			},
+		obj1 = objectio.ObjectEntry{
+			ObjectStats: stats,
+			CreateTime:  t1,
 		}
 
 		pState.dataObjectsNameIndex.Set(obj1)
@@ -67,11 +65,9 @@ func TestPartitionState_CollectObjectsBetweenInProgress(t *testing.T) {
 	// t2: insert obj2
 	{
 		objectio.SetObjectStatsObjectName(&stats, objectio.ObjectName("obj2"))
-		obj2 = ObjectEntry{
-			ObjectInfo{
-				ObjectStats: stats,
-				CreateTime:  t2,
-			},
+		obj2 = objectio.ObjectEntry{
+			ObjectStats: stats,
+			CreateTime:  t2,
 		}
 
 		pState.dataObjectsNameIndex.Set(obj2)
@@ -85,11 +81,9 @@ func TestPartitionState_CollectObjectsBetweenInProgress(t *testing.T) {
 	// t3: insert obj3
 	{
 		objectio.SetObjectStatsObjectName(&stats, objectio.ObjectName("obj3"))
-		obj3 = ObjectEntry{
-			ObjectInfo{
-				ObjectStats: stats,
-				CreateTime:  t3,
-			},
+		obj3 = objectio.ObjectEntry{
+			ObjectStats: stats,
+			CreateTime:  t3,
 		}
 
 		pState.dataObjectsNameIndex.Set(obj3)
@@ -111,11 +105,9 @@ func TestPartitionState_CollectObjectsBetweenInProgress(t *testing.T) {
 		})
 
 		objectio.SetObjectStatsObjectName(&stats, objectio.ObjectName("obj4"))
-		obj4 = ObjectEntry{
-			ObjectInfo{
-				ObjectStats: stats,
-				CreateTime:  t4,
-			},
+		obj4 = objectio.ObjectEntry{
+			ObjectStats: stats,
+			CreateTime:  t4,
 		}
 
 		pState.dataObjectsNameIndex.Set(obj4)
@@ -166,11 +158,9 @@ func TestPartitionState_CollectObjectsBetweenInProgress(t *testing.T) {
 		})
 
 		objectio.SetObjectStatsObjectName(&stats, objectio.ObjectName("obj5"))
-		obj5 = ObjectEntry{
-			ObjectInfo{
-				ObjectStats: stats,
-				CreateTime:  t5,
-			},
+		obj5 = objectio.ObjectEntry{
+			ObjectStats: stats,
+			CreateTime:  t5,
 		}
 
 		pState.dataObjectsNameIndex.Set(obj5)
@@ -192,11 +182,9 @@ func TestPartitionState_CollectObjectsBetweenInProgress(t *testing.T) {
 		})
 
 		objectio.SetObjectStatsObjectName(&stats, objectio.ObjectName("obj6"))
-		obj6 = ObjectEntry{
-			ObjectInfo{
-				ObjectStats: stats,
-				CreateTime:  t6,
-			},
+		obj6 = objectio.ObjectEntry{
+			ObjectStats: stats,
+			CreateTime:  t6,
 		}
 
 		pState.dataObjectsNameIndex.Set(obj6)

@@ -76,7 +76,7 @@ message TNStringResponse {
 
 message Vector {
     bytes data     = 1;
-    plan.Type type = 2;
+    plan.Type type = 2 [(gogoproto.nullable) = false];
     bool nullable  = 3;
     bytes nsp      = 4;
     bool is_const  = 5;

@@ -118,7 +118,17 @@ func Test_buildTestShowCreateTable(t *testing.T) {
 				PRIMARY KEY (id),
 				FULLTEXT(json1) WITH PARSER json,
 				FULLTEXT(json1,json2) WITH PARSER json)`,
-			want: "CREATE TABLE `src` (\n  `id` bigint NOT NULL,\n  `json1` json DEFAULT NULL,\n  `json2` json DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT(`json1`) WITH PARSER json,\n FULLTEXT(`json1`,`json2`) WITH PARSER json\n)",
+			want: "CREATE TABLE `src` (\n  `id` bigint NOT NULL,\n  `json1` json DEFAULT NULL,\n  `json2` json DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT (`json1`) WITH PARSER json,\n FULLTEXT (`json1`,`json2`) WITH PARSER json\n)",
+		},
+		{
+			name: "test8",
+			sql: `CREATE TABLE src (id bigint NOT NULL,
+                                json1 json DEFAULT NULL,
+                                json2 json DEFAULT NULL,
+                                PRIMARY KEY (id),
+                                FULLTEXT idx01(json1) WITH PARSER json,
+                                FULLTEXT idx02(json1,json2) WITH PARSER json)`,
+			want: "CREATE TABLE `src` (\n  `id` bigint NOT NULL,\n  `json1` json DEFAULT NULL,\n  `json2` json DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT `idx01`(`json1`) WITH PARSER json,\n FULLTEXT `idx02`(`json1`,`json2`) WITH PARSER json\n)",
 		},
 	}
 	for _, tt := range tests {

@@ -391,7 +391,7 @@ func (sm *SnapshotMeta) updateTableInfo(
 		if !info.deleteAt.IsEmpty() {
 			sm.aobjDelTsMap[info.deleteAt] = struct{}{}
 		}
-		objectBat, _, err := blockio.LoadOneBlock(
+		objectBat, _, err := ioutil.LoadOneBlock(
 			ctx,
 			fs,
 			info.stats.ObjectLocation(),
@@ -477,7 +477,7 @@ func (sm *SnapshotMeta) updateTableInfo(
 			panic(fmt.Sprintf("mo_table tombstone %v blk cnt %v",
 				info.stats.ObjectName(), info.stats.BlkCnt()))
 		}
-		objectBat, _, err := blockio.LoadOneBlock(
+		objectBat, _, err := ioutil.LoadOneBlock(
 			ctx,
 			fs,
 			info.stats.ObjectLocation(),

@@ -40,7 +40,8 @@ const (
 	FJ_PrefetchThreshold   = "fj/prefetch/threshold"
 
 	FJ_Debug19524 = "fj/debug/19524"
-	FJ_Debug19787 = "fj/debug/19787"
+
+	FJ_CNRecvErr = "fj/cn/recv/err"
 
 	FJ_LogReader    = "fj/log/reader"
 	FJ_LogWorkspace = "fj/log/workspace"
@@ -335,6 +336,11 @@ func InjectCheckpointSave(msg string) (rmFault func() (bool, error), err error) 
 func Debug19524Injected() bool {
 	_, _, injected := fault.TriggerFault(FJ_Debug19524)
 	return injected
+}
+
+func CNRecvErrInjected() (bool, int) {
+	p, _, injected := fault.TriggerFault(FJ_CNRecvErr)
+	return injected, int(p)
 }
 
 func RangesLogInjected(dbName, tableName string) (bool, int) {

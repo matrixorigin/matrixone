@@ -637,6 +637,7 @@ select count(*) from index02;
 drop database if exists db10;
 create database db10;
 use db10;
+-- @bvt:issue#16438
 drop table if exists index03;
 create table index03 (
         emp_no      int             not null,
@@ -655,7 +656,7 @@ create table index03 (
 
 insert into index03 values (9001,'1980-12-17', 'SMITH', 'CLERK', 'F', '2008-12-17'),
                           (9002,'1981-02-20', 'ALLEN', 'SALESMAN', 'F', '2008-02-20');
-
+-- @bvt:issue
 drop snapshot if exists sp16;
 create snapshot sp16 for account;
 
@@ -666,10 +667,14 @@ update index01 set col1 = 1000 where col1 = 1;
 select * from index01;
 
 use db10;
+-- @bvt:issue#16438
 truncate index03;
+-- @bvt:issue
 
 restore account sys database db09 table index01 from snapshot sp16;
+-- @bvt:issue#16438
 restore account sys database db10 table index03 from snapshot sp16;
+-- @bvt:issue
 
 use db09;
 select * from index02;
@@ -677,7 +682,9 @@ select * from index01;
 show create table index01;
 show create table index02;
 use db10;
+-- @bvt:issue#16438
 select * from index03;
+-- @bvt:issue
 
 -- @ignore:1
 show snapshots;

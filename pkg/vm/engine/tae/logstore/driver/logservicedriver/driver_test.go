@@ -25,6 +25,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 
 	"github.com/stretchr/testify/assert"
@@ -52,7 +53,7 @@ func restartDriver(t *testing.T, d *LogServiceDriver, h func(*entry.Entry)) *Log
 	t.Logf("LSTruncated %d", d.truncatedLogserviceLsn)
 	d = NewLogServiceDriver(d.config)
 	tempLsn := uint64(0)
-	err := d.Replay(func(e *entry.Entry) {
+	err := d.Replay(func(e *entry.Entry) driver.ReplayEntryState {
 		if e.Lsn <= tempLsn {
 			panic("logic err")
 		}
@@ -60,6 +61,7 @@ func restartDriver(t *testing.T, d *LogServiceDriver, h func(*entry.Entry)) *Log
 		if h != nil {
 			h(e)
 		}
+		return driver.RE_Nomal
 	})
 	assert.NoError(t, err)
 	t.Log("Addr:")

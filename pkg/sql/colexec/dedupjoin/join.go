@@ -62,11 +62,13 @@ func (dedupJoin *DedupJoin) Prepare(proc *process.Process) (err error) {
 		}
 	}
 
-	dedupJoin.ctr.exprExecs = make([]colexec.ExpressionExecutor, len(dedupJoin.UpdateColExprList))
-	for i, expr := range dedupJoin.UpdateColExprList {
-		dedupJoin.ctr.exprExecs[i], err = colexec.NewExpressionExecutor(proc, expr)
-		if err != nil {
-			return err
+	if len(dedupJoin.ctr.exprExecs) == 0 && len(dedupJoin.UpdateColExprList) > 0 {
+		dedupJoin.ctr.exprExecs = make([]colexec.ExpressionExecutor, len(dedupJoin.UpdateColExprList))
+		for i, expr := range dedupJoin.UpdateColExprList {
+			dedupJoin.ctr.exprExecs[i], err = colexec.NewExpressionExecutor(proc, expr)
+			if err != nil {
+				return err
+			}
 		}
 	}
 

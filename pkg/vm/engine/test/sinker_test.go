@@ -29,8 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio/mergeutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	testutil3 "github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/stretchr/testify/require"
 )
@@ -47,7 +46,7 @@ func Test_Sinker(t *testing.T) {
 		pkType,
 		mp,
 		fs,
-		// engine_util.WithDedupAll(),
+		// readutil.WithDedupAll(),
 		ioutil.WithMemorySizeThreshold(mpool.KB*400),
 	)
 
@@ -62,7 +61,7 @@ func Test_Sinker(t *testing.T) {
 		blkCnt, blkRows, true, mp,
 	)
 	require.NoError(t, err)
-	bat1 := engine_util.NewCNTombstoneBatch(&pkType, objectio.HiddenColumnSelection_None)
+	bat1 := readutil.NewCNTombstoneBatch(&pkType, objectio.HiddenColumnSelection_None)
 	bat1.SetVector(0, rowIDVec)
 	bat1.SetVector(1, pkVec.GetDownstreamVector())
 	bat1.SetRowCount(rowIDVec.Length())
@@ -98,17 +97,17 @@ func Test_Sinker(t *testing.T) {
 
 	hiddenSels := objectio.HiddenColumnSelection_PhysicalAddr
 
-	r := engine_util.SimpleMultiObjectsReader(
+	r := readutil.SimpleMultiObjectsReader(
 		ctx, fs, objs, timestamp.Timestamp{},
-		engine_util.WithColumns(
+		readutil.WithColumns(
 			objectio.GetTombstoneSeqnums(hiddenSels),
 			objectio.GetTombstoneTypes(pkType, hiddenSels),
 		),
 	)
-	blockio.Start("")
-	defer blockio.Stop("")
-	bat2 := engine_util.NewCNTombstoneBatch(&pkType, hiddenSels)
-	buffer := engine_util.NewCNTombstoneBatch(&pkType, hiddenSels)
+	ioutil.Start("")
+	defer ioutil.Stop("")
+	bat2 := readutil.NewCNTombstoneBatch(&pkType, hiddenSels)
+	buffer := readutil.NewCNTombstoneBatch(&pkType, hiddenSels)
 	for {
 		done, err := r.Read(ctx, buffer.Attrs, nil, mp, buffer)
 		require.NoError(t, err)

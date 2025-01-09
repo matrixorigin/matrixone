@@ -73,8 +73,7 @@ func (l *ObjectList) deleteEntryLocked(sortHint uint64) error {
 	defer l.Unlock()
 	oldTree := l.tree.Load()
 	newTree := oldTree.Copy()
-	objs := l.GetAllNodes(sortHint)
-	for _, obj := range objs {
+	if obj := l.getObjectBySortHint(sortHint); obj != nil {
 		newTree.Delete(obj)
 		delete(l.sortHint_objectID, *obj.ID())
 	}
@@ -85,38 +84,23 @@ func (l *ObjectList) deleteEntryLocked(sortHint uint64) error {
 	return nil
 }
 
-func (l *ObjectList) GetAllNodes(sortHint uint64) []*ObjectEntry {
+func (l *ObjectList) getObjectBySortHint(sortHint uint64) (ret *ObjectEntry) {
 	it := l.tree.Load().Iter()
 	defer it.Release()
-	key := &ObjectEntry{
-		ObjectNode:  ObjectNode{SortHint: sortHint},
-		ObjectState: ObjectState_Create_Active,
+	pivot := ObjectEntry{
+		ObjectNode: ObjectNode{SortHint: sortHint},
 	}
-	ok := it.Seek(key)
-	if !ok {
-		return nil
+	if ok := it.Seek(&pivot); !ok {
+		return
 	}
-	obj := it.Item()
-	if obj.SortHint != sortHint {
-		return nil
+	if ret = it.Item(); ret.SortHint != sortHint {
+		ret = nil
 	}
-	ret := []*ObjectEntry{it.Item()}
-	for it.Next() {
-		obj := it.Item()
-		if obj.SortHint != sortHint {
-			break
-		}
-		ret = append(ret, obj)
-	}
-	return ret
+	return
 }
 
 func (l *ObjectList) GetLastestNode(sortHint uint64) *ObjectEntry {
-	objs := l.GetAllNodes(sortHint)
-	if len(objs) == 0 {
-		return nil
-	}
-	return objs[len(objs)-1]
+	return l.getObjectBySortHint(sortHint)
 }
 
 func (l *ObjectList) DropObjectByID(

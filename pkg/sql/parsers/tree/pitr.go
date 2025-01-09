@@ -141,7 +141,7 @@ func (node *CreatePitr) Format(ctx *FmtCtx) {
 	case PITRLEVELTABLE:
 		ctx.WriteString("table ")
 		node.DatabaseName.Format(ctx)
-		ctx.WriteString(" ")
+		ctx.WriteString(".")
 		node.TableName.Format(ctx)
 	}
 

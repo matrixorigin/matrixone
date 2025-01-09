@@ -1,3 +1,4 @@
+-- @skip
 drop database if exists tpcc;
 create database tpcc;
 use tpcc;

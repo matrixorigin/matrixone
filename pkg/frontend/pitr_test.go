@@ -2943,7 +2943,7 @@ func Test_restoreViews(t *testing.T) {
 		bh.sql2result["rollback;"] = nil
 
 		viewMap := map[string]*tableInfo{}
-		err := restoreViews(ctx, ses, bh, "sp01", viewMap, 0)
+		err := restoreViews(ctx, ses, bh, "sp01", viewMap, 0, 0)
 		assert.Error(t, err)
 
 		sql := "select * from mo_catalog.mo_snapshots where sname = 'sp01'"
@@ -2955,7 +2955,7 @@ func Test_restoreViews(t *testing.T) {
 		mrs = newMrsForPitrRecord([][]interface{}{{uint64(0), "sys", "open", uint64(1), ""}})
 		bh.sql2result[sql] = mrs
 
-		err = restoreViews(ctx, ses, bh, "sp01", viewMap, 0)
+		err = restoreViews(ctx, ses, bh, "sp01", viewMap, 0, 0)
 		assert.NoError(t, err)
 
 		viewMap = map[string]*tableInfo{
@@ -2966,7 +2966,7 @@ func Test_restoreViews(t *testing.T) {
 				createSql: "create view view01",
 			},
 		}
-		err = restoreViews(ctx, ses, bh, "sp01", viewMap, 0)
+		err = restoreViews(ctx, ses, bh, "sp01", viewMap, 0, 0)
 		assert.Error(t, err)
 	})
 }

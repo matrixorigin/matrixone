@@ -184,11 +184,15 @@ func AddCronJob(db *DB, name string, skipMode bool) (err error) {
 			CronJobs_Name_GCLogtail,
 			db.Opts.CheckpointCfg.GCCheckpointInterval,
 			func(ctx context.Context) {
-				logutil.Info(db.Runtime.ExportLogtailStats())
 				ckp := db.BGCheckpointRunner.MaxIncrementalCheckpoint()
-				if ckp != nil {
-					ts := types.BuildTS(ckp.GetStart().Physical(), 0) // GetStart is previous + 1, reset it here
-					db.LogtailMgr.GCByTS(ctx, ts)
+				if ckp == nil {
+					return
+				}
+				endTS := ckp.GetEnd()
+				if ts := types.TSSubDuration(&endTS, time.Second*55); ts.Valid() {
+					if updated := db.LogtailMgr.GCByTS(ctx, ts); updated {
+						logutil.Info(db.Runtime.ExportLogtailStats())
+					}
 				}
 			},
 			1,

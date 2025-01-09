@@ -82,7 +82,7 @@ func TestCoarseFilterTombstoneObject(t *testing.T) {
 		return
 	}
 
-	filtered, err := CoarseFilterTombstoneObject(context.Background(), next_obj, oss, fs)
+	filtered, err := ioutil.CoarseFilterTombstoneObject(context.Background(), next_obj, oss, fs)
 	require.NoError(t, err)
 	require.Equal(t, 1, len(filtered))
 	require.Equal(t, oss[ssCnt-1], filtered[0])

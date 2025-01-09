@@ -29,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -63,7 +62,7 @@ func NewTestEngineWithDir(
 	t *testing.T,
 	opts *options.Options,
 ) *TestEngine {
-	blockio.Start("")
+	ioutil.Start("")
 	db := InitTestDBWithDir(ctx, dir, t, opts)
 	return &TestEngine{
 		DB: db,
@@ -93,7 +92,7 @@ func NewTestEngine(
 	opts *options.Options,
 	dbOpts ...db.DBOption,
 ) *TestEngine {
-	blockio.Start("")
+	ioutil.Start("")
 	db := InitTestDB(ctx, moduleName, t, opts, dbOpts...)
 	return &TestEngine{
 		DB: db,
@@ -142,7 +141,7 @@ func (e *TestEngine) RestartDisableGC(ctx context.Context) {
 }
 
 func (e *TestEngine) Close() error {
-	blockio.Stop("")
+	ioutil.Stop("")
 	err := e.DB.Close()
 	return err
 }
@@ -377,7 +376,7 @@ func InitTestDB(
 	opts *options.Options,
 	dbOpts ...db.DBOption,
 ) *db.DB {
-	blockio.Start("")
+	ioutil.Start("")
 	dir := testutils.InitTestEnv(moduleName, t)
 	db, _ := db.Open(ctx, dir, opts, dbOpts...)
 	// only ut executes this checker

@@ -21,7 +21,7 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -83,7 +83,7 @@ func newCNMergeTask(
 	targets []objectio.ObjectStats,
 	targetObjSize uint32,
 ) (*cnMergeTask, error) {
-	relData := engine_util.NewBlockListRelationData(1)
+	relData := readutil.NewBlockListRelationData(1)
 	source, err := tbl.buildLocalDataSource(
 		ctx,
 		0,

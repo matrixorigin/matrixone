@@ -112,7 +112,9 @@ drop table if exists SCHEMATA;
 drop table if exists CHARACTER_SETS;
 drop table if exists TRIGGERS;
 drop table if exists TABLES;
+-- @bvt:issue#16438
 drop table if exists PARTITIONS;
+-- @bvt:issue
 create table A(a int);
 drop table if exists INFORMATION_SCHEMA.KEY_COLUMN_USAGE;
 drop table if exists INFORMATION_SCHEMA.COLUMNS;
@@ -123,7 +125,9 @@ drop table if exists INFORMATION_SCHEMA.SCHEMATA;
 drop table if exists INFORMATION_SCHEMA.CHARACTER_SETS;
 drop table if exists INFORMATION_SCHEMA.TRIGGERS;
 drop table if exists INFORMATION_SCHEMA.TABLES;
+-- @bvt:issue#16438
 drop table if exists INFORMATION_SCHEMA.PARTITIONS;
+-- @bvt:issue
 create table INFORMATION_SCHEMA.A(a int);
 -- add update,insert,delete
 set global enable_privilege_cache = on;

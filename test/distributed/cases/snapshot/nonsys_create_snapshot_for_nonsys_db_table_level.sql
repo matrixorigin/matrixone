@@ -80,6 +80,7 @@ show snapshots;
 drop database if exists sp_test01;
 create database sp_test01;
 use sp_test01;
+-- @bvt:issue#16438
 drop table if exists partition01;
 create table partition01 (
 emp_no      int             not null,
@@ -97,10 +98,12 @@ partition p04 values less than (400001)
 );
 insert into partition01 values (9001,'1980-12-17', 'SMITH', 'CLERK', 'F', '2008-12-17'),
 (9002,'1981-02-20', 'ALLEN', 'SALESMAN', 'F', '2008-02-20');
+-- @bvt:issue
 drop snapshot if exists spsp02;
 create snapshot spsp02 for database sp_test01;
 -- @ignore:1
 show snapshots;
+-- @bvt:issue#16438
 delete from partition01 where birth_date = '1980-12-17';
 select * from partition01;
 restore account acc01 database sp_test01 from snapshot spsp02 ;
@@ -108,6 +111,7 @@ select * from partition01;
 drop table partition01;
 restore account acc01 database sp_test01 table partition01 from snapshot spsp02;
 select * from partition01;
+-- @bvt:issue
 drop database sp_test01;
 drop snapshot spsp02;
 

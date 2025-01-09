@@ -71,8 +71,9 @@ func (projection *Projection) Call(proc *process.Process) (vm.CallResult, error)
 
 	// keep shuffleIDX unchanged
 	projection.ctr.buf.ShuffleIDX = bat.ShuffleIDX
+	batches := []*batch.Batch{bat}
 	for i := range projection.ctr.projExecutors {
-		vec, err := projection.ctr.projExecutors[i].Eval(proc, []*batch.Batch{bat}, nil)
+		vec, err := projection.ctr.projExecutors[i].Eval(proc, batches, nil)
 		if err != nil {
 			return vm.CancelResult, err
 		}

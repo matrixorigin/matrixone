@@ -26,7 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
@@ -36,7 +36,7 @@ func MakeLoadFunc(
 	objects []objectio.ObjectStats,
 	fs fileservice.FileService,
 	ts timestamp.Timestamp,
-	opts ...engine_util.ReaderOption,
+	opts ...readutil.ReaderOption,
 ) (
 	SourerFn,
 	func(),
@@ -46,7 +46,7 @@ func MakeLoadFunc(
 		reader engine.Reader
 	)
 	if len(objects) > 0 {
-		reader = engine_util.SimpleMultiObjectsReader(
+		reader = readutil.SimpleMultiObjectsReader(
 			ctx, fs, objects, ts, opts...,
 		)
 	}

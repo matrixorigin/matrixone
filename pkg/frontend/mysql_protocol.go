@@ -1479,7 +1479,7 @@ func (mp *MysqlProtocolImpl) authenticateUser(ctx context.Context, authResponse 
 
 			//TO Check password
 			if len(psw) == 0 || CheckPassword(psw, mp.GetSalt(), authResponse) {
-				mp.ses.Info(ctx, "check password succeeded")
+				mp.ses.Debug(ctx, "check password succeeded")
 			} else {
 				return moerr.NewInternalError(ctx, "check password failed")
 			}
@@ -3663,7 +3663,7 @@ func (mp *MysqlProtocolImpl) receiveExtraInfo(rs *Conn) {
 	if err := i.Decode(reader); err != nil {
 		// If the error is timeout, we treat it as normal case and do not update extra info.
 		if err, ok := err.(net.Error); ok && err.Timeout() {
-			mp.ses.Info(mp.ctx, "cannot get salt, maybe not use proxy",
+			mp.ses.Error(mp.ctx, "cannot get salt, maybe not use proxy",
 				zap.Error(err))
 		} else {
 			mp.ses.Error(mp.ctx, "failed to get extra info",

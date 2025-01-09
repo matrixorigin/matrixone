@@ -280,7 +280,7 @@ func (rt *Routine) handleRequest(req *Request) error {
 	defer ses.ExitFPrint(FPHandleRequest)
 
 	if rt.needPrintSessionInfo() {
-		ses.Info(routineCtx, "mo received first request")
+		ses.Debug(routineCtx, "mo received first request")
 	}
 
 	tenant := ses.GetTenantInfo()

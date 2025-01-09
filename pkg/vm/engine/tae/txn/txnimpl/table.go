@@ -37,7 +37,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
@@ -279,7 +278,7 @@ func (tbl *txnTable) TransferDeletes(
 		for _, obj := range softDeleteObjects {
 			var currentTransferBatch *containers.Batch
 			tFindTombstone := time.Now()
-			sel, err := blockio.FindTombstonesOfObject(
+			sel, err := ioutil.FindTombstonesOfObject(
 				ctx, obj.ID(), tbl.tombstoneTable.tableSpace.stats, tbl.store.rt.Fs.Service,
 			)
 			findTombstoneDuration += time.Since(tFindTombstone)
@@ -337,7 +336,7 @@ func (tbl *txnTable) TransferDeletes(
 				for i := 0; i < int(stats.BlkCnt()); i++ {
 					tReadTombstone := time.Now()
 					loc := stats.BlockLocation(uint16(i), tbl.tombstoneTable.schema.Extra.BlockMaxRows)
-					vectors, closeFunc, err := blockio.LoadColumns2(
+					vectors, closeFunc, err := ioutil.LoadColumns2(
 						tbl.store.ctx,
 						[]uint16{0, 1},
 						nil,
@@ -1241,7 +1240,7 @@ func (tbl *txnTable) DoPrecommitDedupByNode(ctx context.Context, stats objectio.
 	for _, loc := range metaLocs {
 		var vectors []containers.Vector
 		var closeFunc func()
-		vectors, closeFunc, err = blockio.LoadColumns2(
+		vectors, closeFunc, err = ioutil.LoadColumns2(
 			ctx,
 			[]uint16{uint16(schema.GetSingleSortKeyIdx())},
 			nil,
@@ -1667,7 +1666,7 @@ func (tbl *txnTable) contains(
 			totalRow -= blkRow
 			metaloc := objectio.BuildLocation(stats.ObjectName(), stats.Extent(), blkRow, i)
 
-			vectors, closeFunc, err := blockio.LoadColumns2(
+			vectors, closeFunc, err := ioutil.LoadColumns2(
 				tbl.store.ctx,
 				[]uint16{uint16(tbl.tombstoneTable.schema.GetSingleSortKeyIdx())},
 				nil,
@@ -1760,7 +1759,7 @@ func (tbl *txnTable) FillInWorkspaceDeletes(blkID types.Blockid, deletes **nulls
 			metaLocs = append(metaLocs, metaloc)
 		}
 		for _, loc := range metaLocs {
-			vectors, closeFunc, err := blockio.LoadColumns2(
+			vectors, closeFunc, err := ioutil.LoadColumns2(
 				tbl.store.ctx,
 				[]uint16{uint16(tbl.tombstoneTable.schema.GetSingleSortKeyIdx())},
 				nil,
@@ -1823,7 +1822,7 @@ func (tbl *txnTable) IsDeletedInWorkSpace(blkID *objectio.Blockid, row uint32) (
 			metaLocs = append(metaLocs, metaloc)
 		}
 		for _, loc := range metaLocs {
-			vectors, closeFunc, err := blockio.LoadColumns2(
+			vectors, closeFunc, err := ioutil.LoadColumns2(
 				tbl.store.ctx,
 				[]uint16{uint16(tbl.tombstoneTable.schema.GetSingleSortKeyIdx())},
 				nil,

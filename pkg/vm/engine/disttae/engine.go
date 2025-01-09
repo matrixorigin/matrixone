@@ -53,7 +53,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/route"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -367,6 +367,7 @@ func (e *Engine) Database(
 
 	if ok := catalog.GetDatabase(item); !ok {
 		if !catalog.CanServe(types.TimestampToTS(op.SnapshotTS())) {
+			logutil.Info("FIND_TABLE loadDatabaseFromStorage", zap.String("name", name), zap.String("cacheTs", catalog.GetStartTS().ToString()), zap.String("txn", op.Txn().DebugString()))
 			// read batch from storage
 			if item, err = e.loadDatabaseFromStorage(ctx, accountId, name, op); err != nil {
 				return nil, err
@@ -416,6 +417,30 @@ func (e *Engine) GetNameById(ctx context.Context, op client.TxnOperator, tableId
 	return
 }
 
+func loadNameByIdFromStorage(ctx context.Context, op client.TxnOperator, accountId uint32, tableId uint64) (dbName string, tblName string, err error) {
+	sql := fmt.Sprintf(catalog.MoTablesQueryNameById, accountId, tableId)
+	tblanmes, dbnames := []string{}, []string{}
+	result, err := execReadSql(ctx, op, sql, true)
+	if err != nil {
+		return "", "", err
+	}
+	for _, b := range result.Batches {
+		for i := 0; i < b.RowCount(); i++ {
+			tblanmes = append(tblanmes, b.Vecs[0].GetStringAt(i))
+			dbnames = append(dbnames, b.Vecs[1].GetStringAt(i))
+		}
+	}
+	if len(tblanmes) != 1 {
+		logutil.Warn("FIND_TABLE GetRelationById sql failed",
+			zap.Uint64("tableId", tableId), zap.Uint32("accountId", accountId),
+			zap.Strings("tblanmes", tblanmes), zap.Strings("dbnames", dbnames), zap.String("txn", op.Txn().DebugString()))
+	} else {
+		tblName = tblanmes[0]
+		dbName = dbnames[0]
+	}
+	return
+}
+
 func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName, tableName string, rel engine.Relation, err error) {
 	if catalog.IsSystemTable(tableId) {
 		dbName = catalog.MO_CATALOG
@@ -452,25 +477,10 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 			dbName = cacheItem.DatabaseName
 		} else if !cache.CanServe(types.TimestampToTS(op.SnapshotTS())) {
 			// not found in cache, try storage
-			sql := fmt.Sprintf(catalog.MoTablesQueryNameById, accountId, tableId)
-			tblanmes, dbnames := []string{}, []string{}
-			result, err := execReadSql(ctx, op, sql, true)
+			logutil.Info("FIND_TABLE loadNameByIdFromStorage", zap.String("txn", op.Txn().DebugString()), zap.Uint64("tableId", tableId))
+			dbName, tableName, err = loadNameByIdFromStorage(ctx, op, accountId, tableId)
 			if err != nil {
 				return "", "", nil, err
-			}
-			for _, b := range result.Batches {
-				for i := 0; i < b.RowCount(); i++ {
-					tblanmes = append(tblanmes, b.Vecs[0].GetStringAt(i))
-					dbnames = append(dbnames, b.Vecs[1].GetStringAt(i))
-				}
-			}
-			if len(tblanmes) != 1 {
-				logutil.Error("FIND_TABLE GetRelationById sql failed",
-					zap.Uint64("tableId", tableId), zap.Uint32("accountId", accountId),
-					zap.Strings("tblanmes", tblanmes), zap.Strings("dbnames", dbnames))
-			} else {
-				tableName = tblanmes[0]
-				dbName = dbnames[0]
 			}
 		}
 	}
@@ -691,17 +701,14 @@ func (e *Engine) BuildBlockReaders(
 	def *plan.TableDef,
 	relData engine.RelData,
 	num int) ([]engine.Reader, error) {
-	var (
-		rds   []engine.Reader
-		shard engine.RelData
-	)
+	var rds []engine.Reader
 	proc := p.(*process.Process)
 	blkCnt := relData.DataCnt()
 	newNum := num
 	if blkCnt < num {
 		newNum = blkCnt
 		for i := 0; i < num-blkCnt; i++ {
-			rds = append(rds, new(engine_util.EmptyReader))
+			rds = append(rds, new(readutil.EmptyReader))
 		}
 	}
 	if blkCnt == 0 {
@@ -712,20 +719,10 @@ func (e *Engine) BuildBlockReaders(
 		return nil, err
 	}
 
-	mod := blkCnt % newNum
-	divide := blkCnt / newNum
+	shards := relData.Split(newNum)
 	for i := 0; i < newNum; i++ {
-		if i == 0 {
-			shard = relData.DataSlice(i*divide, (i+1)*divide+mod)
-		} else {
-			shard = relData.DataSlice(i*divide+mod, (i+1)*divide+mod)
-		}
-		ds := engine_util.NewRemoteDataSource(
-			ctx,
-			fs,
-			ts,
-			shard)
-		rd, err := engine_util.NewReader(
+		ds := readutil.NewRemoteDataSource(ctx, fs, ts, shards[i])
+		rd, err := readutil.NewReader(
 			ctx,
 			proc.Mp(),
 			e.packerPool,
@@ -734,7 +731,7 @@ func (e *Engine) BuildBlockReaders(
 			ts,
 			expr,
 			ds,
-			engine_util.GetThresholdForReader(newNum),
+			readutil.GetThresholdForReader(newNum),
 			engine.FilterHint{},
 		)
 		if err != nil {

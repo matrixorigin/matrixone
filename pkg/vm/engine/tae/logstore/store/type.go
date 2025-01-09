@@ -15,6 +15,7 @@
 package store
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 )
 
@@ -39,4 +40,4 @@ type Store interface {
 	Close() error
 }
 
-type ApplyHandle = func(group uint32, commitId uint64, payload []byte, typ uint16, info any)
+type ApplyHandle = func(group uint32, commitId uint64, payload []byte, typ uint16, info any) driver.ReplayEntryState

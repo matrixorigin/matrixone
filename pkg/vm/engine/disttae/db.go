@@ -16,25 +16,23 @@ package disttae
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/util/fault"
-
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
@@ -295,7 +293,7 @@ func (e *Engine) init(ctx context.Context) error {
 	e.Lock()
 	defer e.Unlock()
 
-	e.catalog = cache.NewCatalog()
+	newcache := cache.NewCatalog()
 	e.partitions = make(map[[2]uint64]*logtailreplay.Partition)
 
 	{
@@ -317,7 +315,7 @@ func (e *Engine) init(ctx context.Context) error {
 		&e.moTablesCreatedTime,
 		&e.moColumnsCreatedTime,
 		e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID}],
-		e.catalog,
+		newcache,
 		catalog.MO_DATABASE_ID,
 		true)
 	if err != nil {
@@ -334,7 +332,7 @@ func (e *Engine) init(ctx context.Context) error {
 		&e.moTablesCreatedTime,
 		&e.moColumnsCreatedTime,
 		e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID}],
-		e.catalog,
+		newcache,
 		catalog.MO_TABLES_ID,
 		true)
 	if err != nil {
@@ -352,13 +350,14 @@ func (e *Engine) init(ctx context.Context) error {
 		&e.moTablesCreatedTime,
 		&e.moColumnsCreatedTime,
 		e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID}],
-		e.catalog,
+		newcache,
 		catalog.MO_COLUMNS_ID,
 		true)
 	if err != nil {
 		return err
 	}
 
+	e.catalog.Store(newcache)
 	// clear all tables in global stats.
 	e.globalStats.clearTables()
 
@@ -366,7 +365,7 @@ func (e *Engine) init(ctx context.Context) error {
 }
 
 func (e *Engine) GetLatestCatalogCache() *cache.CatalogCache {
-	return e.catalog
+	return e.catalog.Load()
 }
 
 func requestSnapshotRead(ctx context.Context, tbl *txnTable, snapshot *types.TS) (resp any, err error) {

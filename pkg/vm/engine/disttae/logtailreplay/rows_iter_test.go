@@ -20,6 +20,8 @@ import (
 	"math/rand"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
+
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/btree"
 
@@ -109,8 +111,8 @@ func TestPartitionStateRowsIter(t *testing.T) {
 	// primary key iter
 	for i := 0; i < num; i++ {
 		ts := types.BuildTS(int64(i), 0)
-		bs := EncodePrimaryKey(int64(i), packer)
-		iter := state.NewPrimaryKeyIter(ts, Exact(bs))
+		bs := readutil.EncodePrimaryKey(int64(i), packer)
+		iter := state.NewPrimaryKeyIter(ts, function.EQUAL, [][]byte{bs})
 		n := 0
 		for iter.Next() {
 			n++
@@ -217,7 +219,7 @@ func TestPartitionStateRowsIter(t *testing.T) {
 		{
 			// primary key change detection
 			ts := types.BuildTS(int64(deleteAt+i), 0)
-			key := EncodePrimaryKey(int64(i), packer)
+			key := readutil.EncodePrimaryKey(int64(i), packer)
 			modified, _ := state.PKExistInMemBetween(
 				ts.Prev(),
 				ts.Next(),
@@ -228,8 +230,9 @@ func TestPartitionStateRowsIter(t *testing.T) {
 
 		{
 			// primary key iter
-			key := EncodePrimaryKey(int64(i), packer)
-			iter := state.NewPrimaryKeyIter(types.BuildTS(int64(deleteAt+i+1), 0), Exact(key))
+			key := readutil.EncodePrimaryKey(int64(i), packer)
+			iter := state.NewPrimaryKeyIter(types.BuildTS(int64(deleteAt+i+1), 0),
+				function.EQUAL, [][]byte{key})
 			n := 0
 			for iter.Next() {
 				n++
@@ -377,7 +380,7 @@ func TestInsertAndDeleteAtTheSameTimestamp(t *testing.T) {
 	// should be detectable
 	for i := 0; i < num; i++ {
 		ts := types.BuildTS(int64(i), 0)
-		key := EncodePrimaryKey(int64(i), packer)
+		key := readutil.EncodePrimaryKey(int64(i), packer)
 		modified, _ := state.PKExistInMemBetween(ts.Prev(), ts.Next(), [][]byte{key})
 		require.True(t, modified)
 	}
@@ -476,7 +479,7 @@ func TestDeleteBeforeInsertAtTheSameTime(t *testing.T) {
 	// should be detectable
 	for i := 0; i < num; i++ {
 		ts := types.BuildTS(int64(i), 0)
-		key := EncodePrimaryKey(int64(i), packer)
+		key := readutil.EncodePrimaryKey(int64(i), packer)
 		modified, _ := state.PKExistInMemBetween(ts.Prev(), ts.Next(), [][]byte{key})
 		require.True(t, modified)
 	}
@@ -525,7 +528,7 @@ func TestPrimaryKeyModifiedWithDeleteOnly(t *testing.T) {
 	// should be detectable
 	for i := 0; i < num; i++ {
 		ts := types.BuildTS(int64(i), 0)
-		key := EncodePrimaryKey(int64(i), packer)
+		key := readutil.EncodePrimaryKey(int64(i), packer)
 		modified, _ := state.PKExistInMemBetween(ts.Prev(), ts.Next(), [][]byte{key})
 		require.True(t, modified)
 	}

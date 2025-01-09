@@ -488,3 +488,36 @@ func TestParseDuration(t *testing.T) {
 		assert.Equal(t, err, c.expectedErr)
 	}
 }
+
+func Test_buildTableDefs(t *testing.T) {
+	stmt := &tree.CreateTable{
+		Temporary:          false,
+		IsClusterTable:     false,
+		IfNotExists:        false,
+		Table:              tree.TableName{},
+		Defs:               nil,
+		Options:            nil,
+		PartitionOption:    nil,
+		ClusterByOption:    nil,
+		Param:              nil,
+		AsSource:           &tree.Select{Select: &tree.SelectClause{From: &tree.From{}}},
+		IsDynamicTable:     false,
+		DTOptions:          nil,
+		IsAsSelect:         true,
+		IsAsLike:           false,
+		LikeTableName:      tree.TableName{},
+		SubscriptionOption: nil,
+	}
+
+	ctx := &MockCompilerContext{}
+
+	createTable := &plan.CreateTable{
+		Database: "db",
+		TableDef: &plan.TableDef{
+			Name: "table",
+		},
+	}
+
+	err := buildTableDefs(stmt, ctx, createTable, nil)
+	assert.Error(t, err)
+}

@@ -152,6 +152,7 @@ select count(*) from table04;
 drop database if exists acc_test04;
 create database acc_test04;
 use acc_test04;
+-- @bvt:issue#16438
 drop table if exists index03;
 create table index03 (
                          emp_no      int             not null,
@@ -170,7 +171,7 @@ create table index03 (
 
 insert into index03 values (9001,'1980-12-17', 'SMITH', 'CLERK', 'F', '2008-12-17'),
                            (9002,'1981-02-20', 'ALLEN', 'SALESMAN', 'F', '2008-02-20');
-
+-- @bvt:issue
 
 select count(*) from acc_test02.pri01;
 select count(*) from acc_test02.aff01;
@@ -185,8 +186,10 @@ show create table acc_test03.table01;
 show create table acc_test03.table02;
 show create table acc_test03.table03;
 show create table acc_test03.table04;
+-- @bvt:issue#16438
 select count(*) from acc_test04.index03;
 show create table acc_test04.index03;
+-- @bvt:issue
 -- @session
 
 drop snapshot if exists sp04;
@@ -204,7 +207,9 @@ select count(*) from acc_test02.aff01;
 select * from acc_test03.table01;
 select count(*) from acc_test03.table03;
 select * from acc_test03.table04;
+-- @bvt:issue#16438
 show create table acc_test04.index03;
+-- @bvt:issue
 -- @session
 
 restore account acc01 from snapshot sp04 to account acc02;
