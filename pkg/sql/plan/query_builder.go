@@ -4024,6 +4024,68 @@ func getSelectTree(s *tree.Select) *tree.Select {
 	}
 }
 
+func (builder *QueryBuilder) bindView(
+	ctx *BindContext,
+	tableDef *TableDef,
+	snapshot *Snapshot,
+	obj *ObjectRef,
+	schema, table string,
+) (nodeID int32, err error) {
+	viewDefString := tableDef.ViewSql.View
+	if viewDefString == "" {
+		return 0, nil
+	}
+	viewCtx := NewBindContext(builder, nil)
+	viewCtx.snapshot = snapshot
+
+	viewData := ViewData{}
+	err = json.Unmarshal([]byte(viewDefString), &viewData)
+	if err != nil {
+		return 0, err
+	}
+
+	originStmts, err := mysql.Parse(builder.GetContext(), viewData.Stmt, 1)
+	defer func() {
+		for _, s := range originStmts {
+			s.Free()
+		}
+	}()
+	if err != nil {
+		return 0, err
+	}
+	viewStmt, ok := originStmts[0].(*tree.CreateView)
+
+	// No createview stmt, check alterview stmt.
+	if !ok {
+		alterstmt, ok := originStmts[0].(*tree.AlterView)
+		viewStmt = &tree.CreateView{}
+		if !ok {
+			return 0, moerr.NewParseError(builder.GetContext(), "can not get view statement")
+		}
+		viewStmt.Name = alterstmt.Name
+		viewStmt.ColNames = alterstmt.ColNames
+		viewStmt.AsSource = alterstmt.AsSource
+	}
+
+	defaultDatabase := viewData.DefaultDatabase
+	if obj.PubInfo != nil {
+		defaultDatabase = obj.SubscriptionName
+	}
+	viewCtx.defaultDatabase = defaultDatabase
+
+	// consist with frontend.genKey()
+	viewCtx.views = append(viewCtx.views, schema+"#"+table)
+	ctx.views = append(viewCtx.views, schema+"#"+table)
+
+	viewName := string(viewStmt.Name.ObjectName)
+	if viewCtx.viewInBinding(viewName, viewStmt) {
+		return 0, moerr.NewParseErrorf(builder.GetContext(), "view %s reference itself", viewName)
+	}
+	viewCtx.cteName = viewName
+
+	return builder.bindSelect(viewStmt.AsSource, viewCtx, false)
+}
+
 func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, preNodeId int32, leftCtx *BindContext) (nodeID int32, err error) {
 	switch tbl := stmt.(type) {
 	case *tree.Select:
@@ -4181,60 +4243,13 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 					return 0, moerr.NewInternalErrorf(builder.GetContext(), "there is a recursive reference to the view %s", nameOfView)
 				}
 			}
-			// set view statment to CTE
-			viewDefString := tableDef.ViewSql.View
 
-			if viewDefString != "" {
-				viewCtx := NewBindContext(builder, nil)
-				viewCtx.snapshot = snapshot
-
-				viewData := ViewData{}
-				err := json.Unmarshal([]byte(viewDefString), &viewData)
-				if err != nil {
-					return 0, err
-				}
-
-				originStmts, err := mysql.Parse(builder.GetContext(), viewData.Stmt, 1)
-				defer func() {
-					for _, s := range originStmts {
-						s.Free()
-					}
-				}()
-				if err != nil {
-					return 0, err
-				}
-				viewStmt, ok := originStmts[0].(*tree.CreateView)
-
-				// No createview stmt, check alterview stmt.
-				if !ok {
-					alterstmt, ok := originStmts[0].(*tree.AlterView)
-					viewStmt = &tree.CreateView{}
-					if !ok {
-						return 0, moerr.NewParseError(builder.GetContext(), "can not get view statement")
-					}
-					viewStmt.Name = alterstmt.Name
-					viewStmt.ColNames = alterstmt.ColNames
-					viewStmt.AsSource = alterstmt.AsSource
-				}
-
-				defaultDatabase := viewData.DefaultDatabase
-				if obj.PubInfo != nil {
-					defaultDatabase = obj.SubscriptionName
-				}
-				viewCtx.defaultDatabase = defaultDatabase
-
-				// consist with frontend.genKey()
-				viewCtx.views = append(viewCtx.views, schema+"#"+table)
-				ctx.views = append(viewCtx.views, schema+"#"+table)
-
-				viewName := string(viewStmt.Name.ObjectName)
-				if viewCtx.viewInBinding(viewName, viewStmt) {
-					return 0, moerr.NewParseErrorf(builder.GetContext(), "view %s reference itself", viewName)
-				}
-				viewCtx.cteName = viewName
-
-				nodeID, err = builder.bindSelect(viewStmt.AsSource, viewCtx, false)
-				return nodeID, err
+			nodeID, err = builder.bindView(ctx, tableDef, snapshot, obj, schema, table)
+			if err != nil {
+				return 0, err
+			}
+			if nodeID != 0 {
+				return nodeID, nil
 			}
 		}
 
