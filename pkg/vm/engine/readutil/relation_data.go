@@ -25,6 +25,7 @@ import (
 )
 
 var _ engine.RelData = new(BlockListRelData)
+var _ engine.RelData = new(ObjListRelData)
 
 func UnmarshalRelationData(data []byte) (engine.RelData, error) {
 	typ := engine.RelDataType(data[0])
@@ -59,6 +60,10 @@ func (rd *EmptyRelationData) String() string {
 }
 
 func (rd *EmptyRelationData) GetShardIDList() []uint64 {
+	panic("not supported")
+}
+
+func (rd *EmptyRelationData) Split(_ int) []engine.RelData {
 	panic("not supported")
 }
 
@@ -205,6 +210,116 @@ func NewBlockListRelationDataOfObject(
 	}
 }
 
+type ObjListRelData struct {
+	NeedFirstEmpty   bool
+	expanded         bool
+	TotalBlocks      uint32
+	Objlist          []objectio.ObjectStats
+	blocklistRelData BlockListRelData
+}
+
+func (or *ObjListRelData) expand() {
+	if !or.expanded {
+		or.expanded = true
+		or.blocklistRelData.blklist = objectio.MultiObjectStatsToBlockInfoSlice(or.Objlist, or.NeedFirstEmpty)
+	}
+}
+
+func (or *ObjListRelData) AppendObj(obj *objectio.ObjectStats) {
+	or.Objlist = append(or.Objlist, *obj)
+	or.TotalBlocks += obj.BlkCnt()
+}
+
+func (or *ObjListRelData) GetType() engine.RelDataType {
+	return engine.RelDataObjList
+}
+
+func (or *ObjListRelData) String() string {
+	return "ObjListRelData"
+}
+
+func (or *ObjListRelData) GetShardIDList() []uint64 {
+	panic("not supported")
+}
+func (or *ObjListRelData) GetShardID(i int) uint64 {
+	panic("not supported")
+}
+func (or *ObjListRelData) SetShardID(i int, id uint64) {
+	panic("not supported")
+}
+func (or *ObjListRelData) AppendShardID(id uint64) {
+	panic("not supported")
+}
+
+func (or *ObjListRelData) Split(i int) []engine.RelData {
+	or.expand()
+	return or.blocklistRelData.Split(i)
+}
+
+func (or *ObjListRelData) GetBlockInfoSlice() objectio.BlockInfoSlice {
+	or.expand()
+	return or.blocklistRelData.GetBlockInfoSlice()
+}
+
+func (or *ObjListRelData) BuildEmptyRelData(i int) engine.RelData {
+	return or.blocklistRelData.BuildEmptyRelData(i)
+}
+
+func (or *ObjListRelData) GetBlockInfo(i int) objectio.BlockInfo {
+	panic("not supported")
+}
+
+func (or *ObjListRelData) SetBlockInfo(i int, blk *objectio.BlockInfo) {
+	panic("not supported")
+}
+
+func (or *ObjListRelData) SetBlockList(slice objectio.BlockInfoSlice) {
+	or.expand()
+	or.blocklistRelData.SetBlockList(slice)
+}
+
+func (or *ObjListRelData) AppendBlockInfo(blk *objectio.BlockInfo) {
+	panic("not supported")
+}
+
+func (or *ObjListRelData) AppendBlockInfoSlice(slice objectio.BlockInfoSlice) {
+	or.expand()
+	or.blocklistRelData.AppendBlockInfoSlice(slice)
+}
+
+func (or *ObjListRelData) UnmarshalBinary(buf []byte) error {
+	or.expanded = true
+	return or.blocklistRelData.UnmarshalBinary(buf)
+}
+
+func (or *ObjListRelData) MarshalBinary() ([]byte, error) {
+	or.expand()
+	return or.blocklistRelData.MarshalBinary()
+}
+
+func (or *ObjListRelData) AttachTombstones(tombstones engine.Tombstoner) error {
+	or.blocklistRelData.tombstones = tombstones
+	return nil
+}
+
+func (or *ObjListRelData) GetTombstones() engine.Tombstoner {
+	return or.blocklistRelData.tombstones
+}
+
+func (or *ObjListRelData) DataSlice(i, j int) engine.RelData {
+	or.expand()
+	return or.blocklistRelData.DataSlice(i, j)
+}
+
+func (or *ObjListRelData) GroupByPartitionNum() map[int16]engine.RelData {
+	or.expand()
+	return or.blocklistRelData.GroupByPartitionNum()
+}
+
+func (or *ObjListRelData) DataCnt() int {
+	return int(or.TotalBlocks)
+}
+
 type BlockListRelData struct {
 	// blkList[0] is a empty block info
 	blklist objectio.BlockInfoSlice
@@ -240,6 +355,24 @@ func (relData *BlockListRelData) SetShardID(i int, id uint64) {
 }
 func (relData *BlockListRelData) AppendShardID(id uint64) {
 	panic("not supported")
+}
+
+func (relData *BlockListRelData) Split(i int) []engine.RelData {
+	blkCnt := relData.DataCnt()
+	mod := blkCnt % i
+	divide := blkCnt / i
+	current := 0
+	shards := make([]engine.RelData, i)
+	for j := 0; j < i; j++ {
+		if j < mod {
+			shards[j] = relData.DataSlice(current, current+divide+1)
+			current = current + divide + 1
+		} else {
+			shards[j] = relData.DataSlice(current, current+divide)
+			current = current + divide
+		}
+	}
+	return shards
 }
 
 func (relData *BlockListRelData) GetBlockInfoSlice() objectio.BlockInfoSlice {
