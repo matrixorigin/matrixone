@@ -217,6 +217,7 @@ type ObjListRelData struct {
 	expanded         bool
 	TotalBlocks      uint32
 	Objlist          []objectio.ObjectStats
+	Rsp              *engine.RangesShuffleParam
 	blocklistRelData BlockListRelData
 }
 
