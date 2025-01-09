@@ -588,6 +588,7 @@ func (tbl *txnTable) getObjList(ctx context.Context, rangesParam engine.RangesPa
 	needUncommited := rangesParam.Policy&engine.Policy_CollectUncommittedData != 0
 	objRelData := &readutil.ObjListRelData{
 		NeedFirstEmpty: needUncommited,
+		Rsp:            rangesParam.Rsp,
 	}
 
 	if needUncommited {
@@ -1593,7 +1594,7 @@ func (tbl *txnTable) ensureSeqnumsAndTypesExpectRowid() {
 	for i := 0; i < len(tbl.tableDef.Cols)-1; i++ {
 		col := tbl.tableDef.Cols[i]
 		idxs = append(idxs, uint16(col.Seqnum))
-		typs = append(typs, vector.ProtoTypeToType(&col.Typ))
+		typs = append(typs, vector.ProtoTypeToType(col.Typ))
 	}
 	tbl.seqnums = idxs
 	tbl.typs = typs
@@ -1812,10 +1813,6 @@ func (tbl *txnTable) BuildReaders(
 ) ([]engine.Reader, error) {
 	var rds []engine.Reader
 	proc := p.(*process.Process)
-	//copy from NewReader.
-	if plan2.IsFalseExpr(expr) {
-		return []engine.Reader{new(readutil.EmptyReader)}, nil
-	}
 
 	if orderBy && num != 1 {
 		return nil, moerr.NewInternalErrorNoCtx("orderBy only support one reader")
