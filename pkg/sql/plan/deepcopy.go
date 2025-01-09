@@ -907,9 +907,10 @@ func DeepCopyExpr(expr *Expr) *Expr {
 		f := item.W.Frame
 		newExpr.Expr = &plan.Expr_W{
 			W: &plan.WindowSpec{
-				WindowFunc: DeepCopyExpr(item.W.WindowFunc),
-				OrderBy:    os,
-				Name:       item.W.Name,
+				WindowFunc:  DeepCopyExpr(item.W.WindowFunc),
+				PartitionBy: DeepCopyExprList(item.W.PartitionBy),
+				OrderBy:     os,
+				Name:        item.W.Name,
 				Frame: &plan.FrameClause{
 					Type: f.Type,
 					Start: &plan.FrameBound{
