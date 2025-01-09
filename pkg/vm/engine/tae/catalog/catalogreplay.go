@@ -296,13 +296,13 @@ func (catalog *Catalog) ReplayMODatabase(ctx context.Context, txnNode *txnbase.T
 	createAts := vector.MustFixedColNoTypeCheck[types.Timestamp](bat.GetVectorByName(pkgcatalog.SystemDBAttr_CreateAt).GetDownstreamVector())
 	for i := 0; i < bat.Length(); i++ {
 		dbid := dbids[i]
-		name := string(copyBytes(bat.GetVectorByName(pkgcatalog.SystemDBAttr_Name).Get(i).([]byte)))
+		name := bat.GetVectorByName(pkgcatalog.SystemDBAttr_Name).GetDownstreamVector().GetStringAt(i)
 		tenantID := tenantIDs[i]
 		userID := userIDs[i]
 		roleID := roleIDs[i]
 		createAt := createAts[i]
-		createSql := string(copyBytes(bat.GetVectorByName(pkgcatalog.SystemDBAttr_CreateSQL).Get(i).([]byte)))
-		datType := string(copyBytes(bat.GetVectorByName(pkgcatalog.SystemDBAttr_Type).Get(i).([]byte)))
+		createSql := bat.GetVectorByName(pkgcatalog.SystemDBAttr_CreateSQL).GetDownstreamVector().GetStringAt(i)
+		datType := bat.GetVectorByName(pkgcatalog.SystemDBAttr_Type).GetDownstreamVector().GetStringAt(i)
 		catalog.onReplayCreateDB(dbid, name, txnNode, tenantID, userID, roleID, createAt, createSql, datType)
 	}
 }
