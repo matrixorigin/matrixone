@@ -1204,6 +1204,7 @@ func (tp *tablePair) Done(err error) {
 		tp.errChan <- err
 		tp.errChan = nil
 	}
+	tp.pState = nil
 }
 
 type statsList struct {
@@ -1288,11 +1289,25 @@ func (d *dynamicCtx) LaunchMTSTasksForUT() {
 	d.launchTask(betaTaskName)
 }
 
+func (d *dynamicCtx) cleanTableStock() {
+	d.Lock()
+	defer d.Unlock()
+
+	for i := range d.tableStock.tbls {
+		// cannot pin this pState
+		d.tableStock.tbls[i].pState = nil
+	}
+	d.tableStock.tbls = d.tableStock.tbls[:0]
+}
+
 func (d *dynamicCtx) tableStatsExecutor(
 	ctx context.Context,
 	service string,
 	eng engine.Engine,
 ) (err error) {
+	defer func() {
+		d.cleanTableStock()
+	}()
 
 	newCtx := turn2SysCtx(ctx)
 
@@ -1333,8 +1348,9 @@ func (d *dynamicCtx) tableStatsExecutor(
 
 			d.Lock()
 			executeTicker.Reset(d.conf.UpdateDuration)
-			d.tableStock.tbls = d.tableStock.tbls[:0]
 			d.Unlock()
+
+			d.cleanTableStock()
 		}
 	}
 }
