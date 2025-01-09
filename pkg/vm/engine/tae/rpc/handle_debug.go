@@ -345,6 +345,7 @@ func (h *Handle) HandleGetChangedTableList(
 	}
 
 	rr := h.db.LogtailMgr.GetReader(from, now)
+	rr.SetSkipTSCheck(true)
 
 	for i := range req.TableIds {
 		tree := rr.GetDirtyByTable(req.DatabaseIds[i], req.TableIds[i])

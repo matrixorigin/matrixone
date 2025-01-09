@@ -322,12 +322,13 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 			"logtail-gc",
 			opts.CheckpointCfg.GCCheckpointInterval,
 			func(ctx context.Context) error {
-				logutil.Info(db.Runtime.ExportLogtailStats())
 				ckp := db.BGCheckpointRunner.MaxIncrementalCheckpoint()
 				if ckp != nil {
 					// use previous end to gc logtail
 					ts := types.BuildTS(ckp.GetStart().Physical(), 0) // GetStart is previous + 1, reset it here
-					db.LogtailMgr.GCByTS(ctx, ts)
+					if updated := db.LogtailMgr.GCByTS(ctx, ts); updated {
+						logutil.Info(db.Runtime.ExportLogtailStats())
+					}
 				}
 				return nil
 			},

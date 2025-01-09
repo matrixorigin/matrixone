@@ -1638,8 +1638,23 @@ func (c *dbOpsChain) rollbackLastStatement(statementId int) {
 
 func newTableOps() *tableOpsChain {
 	return &tableOpsChain{
-		names: make(map[tableKey][]tableOp),
+		names:       make(map[tableKey][]tableOp),
+		creatdInTxn: make(map[uint64]int),
 	}
+}
+
+func (c *tableOpsChain) addCreatedInTxn(tid uint64, statementid int) {
+	c.Lock()
+	defer c.Unlock()
+	c.creatdInTxn[tid] = statementid
+	// Note: we do not consider anything like table deleting or failed creating in createdInTxn map because the id is unique, and if the table is queried, it must be not deleted and created successfully.
+}
+
+func (c *tableOpsChain) existCreatedInTxn(tid uint64) bool {
+	c.RLock()
+	defer c.RUnlock()
+	_, exist := c.creatdInTxn[tid]
+	return exist
 }
 
 func (c *tableOpsChain) addCreateTable(key tableKey, statementId int, t *txnTable) {
@@ -1723,6 +1738,11 @@ func (c *tableOpsChain) rollbackLastStatement(statementId int) {
 			delete(c.names, k)
 		} else if i < len(v)-1 {
 			c.names[k] = v[:i+1]
+		}
+	}
+	for k, v := range c.creatdInTxn {
+		if v == statementId {
+			delete(c.creatdInTxn, k)
 		}
 	}
 }

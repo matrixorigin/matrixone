@@ -1240,30 +1240,14 @@ func (tbl *txnTable) isCreatedInTxn(ctx context.Context) (bool, error) {
 		return tbl.createdInTxn, nil
 	}
 
-	if tbl.db.op.IsSnapOp() {
+	if tbl.db.op.IsSnapOp() || catalog.IsSystemTable(tbl.tableId) {
 		// if the operation is snapshot read, isCreatedInTxn can not be called by AlterTable
 		// So if the snapshot read want to subcribe logtail tail, let it go ahead.
 		return false, nil
 	}
 
-	cache := tbl.db.getEng().GetLatestCatalogCache()
-	cacheTS := cache.GetStartTS().ToTimestamp()
-	if cacheTS.Greater(tbl.db.op.SnapshotTS()) {
-		if err := tbl.db.op.UpdateSnapshot(ctx, cacheTS); err != nil {
-			return false, err
-		}
-		// When logtail reconnect, this error may be thrown to client if
-		// disableRetry is true for some SQL requests.
-		return false, moerr.NewTxnNeedRetry(ctx)
-	}
+	return tbl.db.getTxn().tableOps.existCreatedInTxn(tbl.tableId), nil
 
-	idAckedbyTN := cache.GetTableByIdAndTime(
-		tbl.accountId,
-		tbl.db.databaseId,
-		tbl.tableId,
-		tbl.db.op.SnapshotTS(),
-	)
-	return idAckedbyTN == nil, nil
 }
 
 func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, reqs []*api.AlterTableReq) error {
