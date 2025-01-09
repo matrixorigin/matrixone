@@ -880,6 +880,25 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 	if err = s.handleRuntimeFilter(c); err != nil {
 		return
 	}
+<<<<<<< HEAD
+=======
+	for i := range s.DataSource.FilterList {
+		if plan2.IsFalseExpr(s.DataSource.FilterList[i]) {
+			emptyScan = true
+			break
+		}
+	}
+	if !emptyScan {
+		blockFilterList, err = s.handleBlockFilters(c, runtimeFilterList)
+		if err != nil {
+			return
+		}
+		err = s.getRelData(c, blockFilterList)
+		if err != nil {
+			return
+		}
+	}
+>>>>>>> 786db6e... fix
 
 	switch {
 	// If this was a remote-run pipeline. Reader should be generated from Engine.

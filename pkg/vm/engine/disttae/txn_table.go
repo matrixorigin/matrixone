@@ -1778,10 +1778,13 @@ func (tbl *txnTable) BuildReaders(
 ) ([]engine.Reader, error) {
 	var rds []engine.Reader
 	proc := p.(*process.Process)
+<<<<<<< HEAD
 	//copy from NewReader.
 	if plan2.IsFalseExpr(expr) {
 		return []engine.Reader{new(engine_util.EmptyReader)}, nil
 	}
+=======
+>>>>>>> 786db6e... fix
 
 	if orderBy && num != 1 {
 		return nil, moerr.NewInternalErrorNoCtx("orderBy only support one reader")
