@@ -552,6 +552,12 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 }
 
 func (s *Scope) handleRuntimeFilter(c *Compile) error {
+	for i := range s.DataSource.FilterList {
+		if plan2.IsFalseExpr(s.DataSource.FilterList[i]) {
+			return nil
+		}
+	}
+
 	var err error
 	var inExprList []*plan.Expr
 	exprs := make([]*plan.Expr, 0, len(s.DataSource.RuntimeFilterSpecs))
@@ -880,7 +886,6 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 	if err = s.handleRuntimeFilter(c); err != nil {
 		return
 	}
-
 	switch {
 	// If this was a remote-run pipeline. Reader should be generated from Engine.
 	case s.IsRemote:
