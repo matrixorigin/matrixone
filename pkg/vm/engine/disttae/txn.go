@@ -23,6 +23,8 @@ import (
 	"sync"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -43,7 +45,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"go.uber.org/zap"
 )
 
 //func (txn *Transaction) getObjInfos(
@@ -523,6 +524,11 @@ func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
 	if dumpAll {
 		if txn.approximateInMemDeleteCnt >= txn.engine.config.insertEntryMaxCount {
 			if err := txn.dumpDeleteBatchLocked(ctx, offset, &size); err != nil {
+				return err
+			}
+			//After flushing inserts/deletes in memory into S3, the entries in txn.writes will be unordered,
+			//should adjust the order to make sure deletes are in front of the inserts.
+			if err := txn.adjustUpdateOrderLocked(0); err != nil {
 				return err
 			}
 		}
