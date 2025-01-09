@@ -16,7 +16,9 @@ desc	mo_catalog.mo_stored_procedure        ;
 desc	mo_catalog.mo_mysql_compatibility_mode;
 desc	mo_catalog.mo_increment_columns       ;
 desc	mo_catalog.mo_indexes                 ;
+-- @bvt:issue#16438
 desc	mo_catalog.mo_table_partitions        ;
+-- @bvt:issue
 desc	mo_catalog.mo_pubs                    ;
 desc	mo_catalog.mo_stages                  ;
 desc	mo_catalog.mo_sessions                ;
@@ -44,7 +46,9 @@ show columns from	mo_catalog.mo_stored_procedure        ;
 show columns from	mo_catalog.mo_mysql_compatibility_mode;
 show columns from	mo_catalog.mo_increment_columns       ;
 show columns from	mo_catalog.mo_indexes                 ;
+-- @bvt:issue#16438
 show columns from	mo_catalog.mo_table_partitions        ;
+-- @bvt:issue
 show columns from	mo_catalog.mo_pubs                    ;
 show columns from	mo_catalog.mo_stages                  ;
 show columns from	mo_catalog.mo_sessions                ;
@@ -71,7 +75,9 @@ desc	mo_catalog.mo_stored_procedure        ;
 desc	mo_catalog.mo_mysql_compatibility_mode;
 desc	mo_catalog.mo_increment_columns       ;
 desc	mo_catalog.mo_indexes                 ;
+-- @bvt:issue#16438
 desc	mo_catalog.mo_table_partitions        ;
+-- @bvt:issue
 desc	mo_catalog.mo_pubs                    ;
 desc	mo_catalog.mo_stages                  ;
 desc	mo_catalog.mo_sessions                ;
@@ -98,7 +104,9 @@ show columns from	mo_catalog.mo_stored_procedure        ;
 show columns from	mo_catalog.mo_mysql_compatibility_mode;
 show columns from	mo_catalog.mo_increment_columns       ;
 show columns from	mo_catalog.mo_indexes                 ;
+-- @bvt:issue#16438
 show columns from	mo_catalog.mo_table_partitions        ;
+-- @bvt:issue
 show columns from	mo_catalog.mo_pubs                    ;
 show columns from	mo_catalog.mo_stages                  ;
 show columns from	mo_catalog.mo_sessions                ;
