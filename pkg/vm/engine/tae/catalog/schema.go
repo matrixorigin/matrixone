@@ -621,15 +621,15 @@ func (s *Schema) ReadFromBatch(
 		if offset >= nameVec.Length() {
 			break
 		}
-		name := string(copyBytes(nameVec.Get(offset).([]byte)))
+		name := nameVec.GetDownstreamVector().GetStringAt(offset)
 		id := tids[offset]
 		// every schema has 1 rowid column as last column, if have one, break
 		if name != s.Name || targetTid != id {
 			break
 		}
 		def := new(ColDef)
-		def.Name = string(copyBytes(bat.GetVectorByName((pkgcatalog.SystemColAttr_Name)).Get(offset).([]byte)))
-		data := copyBytes(bat.GetVectorByName((pkgcatalog.SystemColAttr_Type)).Get(offset).([]byte))
+		def.Name = bat.GetVectorByName((pkgcatalog.SystemColAttr_Name)).GetDownstreamVector().GetStringAt(offset)
+		data := bat.GetVectorByName((pkgcatalog.SystemColAttr_Type)).GetDownstreamVector().GetBytesAt(offset)
 		types.Decode(data, &def.Type)
 		nullable := nullables[offset]
 		def.NullAbility = !i82bool(nullable)
@@ -642,18 +642,18 @@ func (s *Schema) ReadFromBatch(
 		}
 		isAutoIncrement := autoIncrements[offset]
 		def.AutoIncrement = i82bool(isAutoIncrement)
-		def.Comment = string(copyBytes(bat.GetVectorByName((pkgcatalog.SystemColAttr_Comment)).Get(offset).([]byte)))
-		def.OnUpdate = copyBytes(bat.GetVectorByName((pkgcatalog.SystemColAttr_Update)).Get(offset).([]byte))
-		def.Default = copyBytes(bat.GetVectorByName((pkgcatalog.SystemColAttr_DefaultExpr)).Get(offset).([]byte))
+		def.Comment = bat.GetVectorByName((pkgcatalog.SystemColAttr_Comment)).GetDownstreamVector().GetStringAt(offset)
+		def.OnUpdate = bat.GetVectorByName((pkgcatalog.SystemColAttr_Update)).GetDownstreamVector().GetBytesAt(offset)
+		def.Default = bat.GetVectorByName((pkgcatalog.SystemColAttr_DefaultExpr)).GetDownstreamVector().GetBytesAt(offset)
 		def.Idx = int(idxes[offset]) - 1
 		def.SeqNum = seqNums[offset]
-		def.EnumValues = string(copyBytes(bat.GetVectorByName((pkgcatalog.SystemColAttr_EnumValues)).Get(offset).([]byte)))
+		def.EnumValues = bat.GetVectorByName((pkgcatalog.SystemColAttr_EnumValues)).GetDownstreamVector().GetStringAt(offset)
 		s.NameMap[def.Name] = def.Idx
 		s.ColDefs = append(s.ColDefs, def)
 		if def.Name == PhyAddrColumnName {
 			def.PhyAddr = true
 		}
-		constraint := string(copyBytes(bat.GetVectorByName(pkgcatalog.SystemColAttr_ConstraintType).Get(offset).([]byte)))
+		constraint := bat.GetVectorByName(pkgcatalog.SystemColAttr_ConstraintType).GetDownstreamVector().GetStringAt(offset)
 		if constraint == "p" {
 			def.SortKey = true
 			def.Primary = true

@@ -381,25 +381,25 @@ func (catalog *Catalog) ReplayMOTables(ctx context.Context, txnNode *txnbase.Txn
 		}
 		replayFn := func() {
 			dbid := dbids[i]
-			name := string(copyBytes(tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Name).Get(i).([]byte)))
+			name := tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Name).GetDownstreamVector().GetStringAt(i)
 			schema := NewEmptySchema(name)
 			schema.ReadFromBatch(
 				colBat, colTids, nullables, isHiddens, clusterbys, autoIncrements, idxes, seqNums, startOffset, tid)
-			schema.Comment = string(copyBytes(tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Comment).Get(i).([]byte)))
+			schema.Comment = tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Comment).GetDownstreamVector().GetStringAt(i)
 			schema.Version = versions[i]
 			schema.CatalogVersion = catalogVersions[i]
 			schema.Partitioned = partitioneds[i]
-			schema.Partition = string(copyBytes(tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Partition).Get(i).([]byte)))
-			schema.Relkind = string(copyBytes(tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Kind).Get(i).([]byte)))
-			schema.Createsql = string(copyBytes(tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_CreateSQL).Get(i).([]byte)))
-			schema.View = string(copyBytes(tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_ViewDef).Get(i).([]byte)))
-			schema.Constraint = copyBytes(tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Constraint).Get(i).([]byte))
+			schema.Partition = tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Partition).GetDownstreamVector().GetStringAt(i)
+			schema.Relkind = tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Kind).GetDownstreamVector().GetStringAt(i)
+			schema.Createsql = tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_CreateSQL).GetDownstreamVector().GetStringAt(i)
+			schema.View = tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_ViewDef).GetDownstreamVector().GetStringAt(i)
+			schema.Constraint = tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Constraint).GetDownstreamVector().GetBytesAt(i)
 			schema.AcInfo = accessInfo{}
 			schema.AcInfo.RoleID = roleIDs[i]
 			schema.AcInfo.UserID = userIDs[i]
 			schema.AcInfo.CreateAt = createAts[i]
 			schema.AcInfo.TenantID = tenantIDs[i]
-			extra := copyBytes(tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_ExtraInfo).Get(i).([]byte))
+			extra := tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_ExtraInfo).GetDownstreamVector().GetBytesAt(i)
 			schema.MustRestoreExtra(extra)
 			if err := schema.Finalize(true); err != nil {
 				panic(err)
