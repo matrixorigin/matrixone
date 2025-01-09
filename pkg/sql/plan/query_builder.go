@@ -2522,6 +2522,48 @@ func (builder *QueryBuilder) bindRecursiveCte(
 	return
 }
 
+func (builder *QueryBuilder) bindCte(
+	ctx *BindContext,
+	stmt tree.NodeFormatter,
+	cteRef *CTERef,
+	table string,
+	checkOnly bool,
+) (nodeID int32, err error) {
+	var s *tree.Select
+	switch stmt := cteRef.ast.Stmt.(type) {
+	case *tree.Select:
+		s = getSelectTree(stmt)
+	case *tree.ParenSelect:
+		s = getSelectTree(stmt.Select)
+	default:
+		err = moerr.NewParseErrorf(builder.GetContext(), "unexpected statement: '%v'", tree.String(stmt, dialect.MYSQL))
+		return
+	}
+
+	var left *tree.SelectStatement
+	var stmts []tree.SelectStatement
+	left, err = builder.splitRecursiveMember(&s.Select, table, &stmts)
+	if err != nil {
+		return 0, err
+	}
+	isR := len(stmts) > 0
+
+	if isR && !cteRef.isRecursive {
+		err = moerr.NewParseErrorf(builder.GetContext(), "not declare RECURSIVE: '%v'", tree.String(stmt, dialect.MYSQL))
+	} else if !isR {
+		nodeID, err = builder.bindNoRecursiveCte(ctx, s, cteRef, table)
+		if err != nil {
+			return 0, err
+		}
+	} else {
+		nodeID, err = builder.bindRecursiveCte(ctx, s, cteRef, table, left, stmts, checkOnly)
+		if err != nil {
+			return 0, err
+		}
+	}
+	return
+}
+
 func (builder *QueryBuilder) preprocessCte(stmt *tree.Select, ctx *BindContext) error {
 	// preprocess CTEs
 	if stmt.With != nil {
@@ -2572,39 +2614,9 @@ func (builder *QueryBuilder) preprocessCte(stmt *tree.Select, ctx *BindContext) 
 			table := string(cte.Name.Alias)
 			cteRef := ctx.cteByName[table]
 
-			var err error
-			var s *tree.Select
-			switch stmt := cte.Stmt.(type) {
-			case *tree.Select:
-				s = stmt
-
-			case *tree.ParenSelect:
-				s = stmt.Select
-
-			default:
-				return moerr.NewParseErrorf(builder.GetContext(), "unexpected statement: '%v'", tree.String(stmt, dialect.MYSQL))
-			}
-
-			var left *tree.SelectStatement
-			var stmts []tree.SelectStatement
-			left, err = builder.splitRecursiveMember(&s.Select, table, &stmts)
+			_, err := builder.bindCte(ctx, stmt, cteRef, table, true)
 			if err != nil {
 				return err
-			}
-			isR := len(stmts) > 0
-
-			if isR && !cteRef.isRecursive {
-				return moerr.NewParseErrorf(builder.GetContext(), "not declare RECURSIVE: '%v'", tree.String(stmt, dialect.MYSQL))
-			} else if !isR {
-				_, err = builder.bindNoRecursiveCte(ctx, s, cteRef, table)
-				if err != nil {
-					return err
-				}
-			} else {
-				_, err = builder.bindRecursiveCte(ctx, s, cteRef, table, left, stmts, true)
-				if err != nil {
-					return err
-				}
 			}
 		}
 	}
@@ -4077,37 +4089,9 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 					return
 				}
 
-				var s *tree.Select
-				switch stmt := cteRef.ast.Stmt.(type) {
-				case *tree.Select:
-					s = getSelectTree(stmt)
-				case *tree.ParenSelect:
-					s = getSelectTree(stmt.Select)
-				default:
-					err = moerr.NewParseErrorf(builder.GetContext(), "unexpected statement: '%v'", tree.String(stmt, dialect.MYSQL))
-					return
-				}
-
-				var left *tree.SelectStatement
-				var stmts []tree.SelectStatement
-				left, err = builder.splitRecursiveMember(&s.Select, table, &stmts)
+				nodeID, err = builder.bindCte(ctx, stmt, cteRef, table, false)
 				if err != nil {
 					return 0, err
-				}
-				isR := len(stmts) > 0
-
-				if isR && !cteRef.isRecursive {
-					err = moerr.NewParseErrorf(builder.GetContext(), "not declare RECURSIVE: '%v'", tree.String(stmt, dialect.MYSQL))
-				} else if !isR {
-					nodeID, err = builder.bindNoRecursiveCte(ctx, s, cteRef, table)
-					if err != nil {
-						return 0, err
-					}
-				} else {
-					nodeID, err = builder.bindRecursiveCte(ctx, s, cteRef, table, left, stmts, false)
-					if err != nil {
-						return 0, err
-					}
 				}
 
 				break
