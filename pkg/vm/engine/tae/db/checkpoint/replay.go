@@ -407,6 +407,7 @@ func (c *CkpReplayer) ReplayCatalog(readTxn txnif.AsyncTxn) (err error) {
 	for _, fn := range closeFn {
 		fn()
 	}
+	c.resetObjectCountMap()
 	// logutil.Info(c.r.catalog.SimplePPString(common.PPL0))
 	return
 }
@@ -482,14 +483,13 @@ func (c *CkpReplayer) ReplayObjectlist() (err error) {
 
 func (c *CkpReplayer) Submit(tid uint64, replayFn func()) {
 	c.wg.Add(1)
-	if tid == 0 {
-		workerOffset := rand.IntN(len(c.objectReplayWorker))
-		c.objectReplayWorker[workerOffset].Enqueue(replayFn)
-	} else {
-		workerOffset := tid % uint64(len(c.objectReplayWorker))
-		c.objectCountMap[tid] = c.objectCountMap[tid] + 1
-		c.objectReplayWorker[workerOffset].Enqueue(replayFn)
-	}
+	workerOffset := tid % uint64(len(c.objectReplayWorker))
+	c.objectCountMap[tid] = c.objectCountMap[tid] + 1
+	c.objectReplayWorker[workerOffset].Enqueue(replayFn)
+}
+
+func (c *CkpReplayer) resetObjectCountMap() {
+	c.objectCountMap = map[uint64]int{}
 }
 
 func (r *runner) Replay(dataFactory catalog.DataFactory) *CkpReplayer {
