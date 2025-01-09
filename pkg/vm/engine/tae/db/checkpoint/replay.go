@@ -17,7 +17,6 @@ package checkpoint
 import (
 	"context"
 	"fmt"
-	"math/rand/v2"
 	"sort"
 	"sync"
 	"time"
