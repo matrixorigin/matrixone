@@ -1450,6 +1450,8 @@ func (tp *tablePair) Done(err error) {
 		}
 		tp.errChan = nil
 	}
+
+	tp.pState = nil
 }
 
 type statsList struct {
