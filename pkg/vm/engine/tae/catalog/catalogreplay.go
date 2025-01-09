@@ -371,32 +371,42 @@ func (catalog *Catalog) ReplayMOTables(ctx context.Context, txnNode *txnbase.Txn
 
 	schemaOffset := 0
 	for i := 0; i < tblBat.Length(); i++ {
+		startOffset := schemaOffset
 		tid := tids[i]
-		dbid := dbids[i]
-		name := string(copyBytes(tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Name).Get(i).([]byte)))
-		schema := NewEmptySchema(name)
-		schemaOffset = schema.ReadFromBatch(
-			colBat, colTids, nullables, isHiddens, clusterbys, autoIncrements, idxes, seqNums, schemaOffset, tid)
-		schema.Comment = string(copyBytes(tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Comment).Get(i).([]byte)))
-		schema.Version = versions[i]
-		schema.CatalogVersion = catalogVersions[i]
-		schema.Partitioned = partitioneds[i]
-		schema.Partition = string(copyBytes(tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Partition).Get(i).([]byte)))
-		schema.Relkind = string(copyBytes(tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Kind).Get(i).([]byte)))
-		schema.Createsql = string(copyBytes(tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_CreateSQL).Get(i).([]byte)))
-		schema.View = string(copyBytes(tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_ViewDef).Get(i).([]byte)))
-		schema.Constraint = copyBytes(tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Constraint).Get(i).([]byte))
-		schema.AcInfo = accessInfo{}
-		schema.AcInfo.RoleID = roleIDs[i]
-		schema.AcInfo.UserID = userIDs[i]
-		schema.AcInfo.CreateAt = createAts[i]
-		schema.AcInfo.TenantID = tenantIDs[i]
-		extra := copyBytes(tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_ExtraInfo).Get(i).([]byte))
-		schema.MustRestoreExtra(extra)
-		if err := schema.Finalize(true); err != nil {
-			panic(err)
+		for i := startOffset; i < len(colTids); i++ {
+			if tid != colTids[i] {
+				schemaOffset = i
+				break
+			}
 		}
-		catalog.onReplayCreateTable(dbid, tid, schema, txnNode, dataF)
+		replayFn := func() {
+			dbid := dbids[i]
+			name := string(copyBytes(tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Name).Get(i).([]byte)))
+			schema := NewEmptySchema(name)
+			schema.ReadFromBatch(
+				colBat, colTids, nullables, isHiddens, clusterbys, autoIncrements, idxes, seqNums, startOffset, tid)
+			schema.Comment = string(copyBytes(tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Comment).Get(i).([]byte)))
+			schema.Version = versions[i]
+			schema.CatalogVersion = catalogVersions[i]
+			schema.Partitioned = partitioneds[i]
+			schema.Partition = string(copyBytes(tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Partition).Get(i).([]byte)))
+			schema.Relkind = string(copyBytes(tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Kind).Get(i).([]byte)))
+			schema.Createsql = string(copyBytes(tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_CreateSQL).Get(i).([]byte)))
+			schema.View = string(copyBytes(tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_ViewDef).Get(i).([]byte)))
+			schema.Constraint = copyBytes(tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Constraint).Get(i).([]byte))
+			schema.AcInfo = accessInfo{}
+			schema.AcInfo.RoleID = roleIDs[i]
+			schema.AcInfo.UserID = userIDs[i]
+			schema.AcInfo.CreateAt = createAts[i]
+			schema.AcInfo.TenantID = tenantIDs[i]
+			extra := copyBytes(tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_ExtraInfo).Get(i).([]byte))
+			schema.MustRestoreExtra(extra)
+			if err := schema.Finalize(true); err != nil {
+				panic(err)
+			}
+			catalog.onReplayCreateTable(dbid, tid, schema, txnNode, dataF)
+		}
+		replayer.Submit(dbids[i], replayFn)
 	}
 }
 
