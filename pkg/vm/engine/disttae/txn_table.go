@@ -1280,24 +1280,8 @@ func (tbl *txnTable) isCreatedInTxn(ctx context.Context) (bool, error) {
 		return false, nil
 	}
 
-	cache := tbl.db.getEng().GetLatestCatalogCache()
-	cacheTS := cache.GetStartTS().ToTimestamp()
-	if cacheTS.Greater(tbl.db.op.SnapshotTS()) {
-		logutil.Warn("FIND_TABLE loadNameByIdFromStorage", zap.String("name", tbl.tableName), zap.String("cacheTs", cacheTS.DebugString()), zap.String("txn", tbl.db.op.Txn().DebugString()))
-		if name, _, err := loadNameByIdFromStorage(ctx, tbl.db.op, tbl.accountId, tbl.tableId); err != nil {
-			return false, err
-		} else {
-			return name == "", nil
-		}
-	}
+	return tbl.db.getTxn().tableOps.existCreatedInTxn(tbl.tableId), nil
 
-	idAckedbyTN := cache.GetTableByIdAndTime(
-		tbl.accountId,
-		tbl.db.databaseId,
-		tbl.tableId,
-		tbl.db.op.SnapshotTS(),
-	)
-	return idAckedbyTN == nil, nil
 }
 
 func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, reqs []*api.AlterTableReq) error {
@@ -1609,7 +1593,7 @@ func (tbl *txnTable) ensureSeqnumsAndTypesExpectRowid() {
 	for i := 0; i < len(tbl.tableDef.Cols)-1; i++ {
 		col := tbl.tableDef.Cols[i]
 		idxs = append(idxs, uint16(col.Seqnum))
-		typs = append(typs, vector.ProtoTypeToType(&col.Typ))
+		typs = append(typs, vector.ProtoTypeToType(col.Typ))
 	}
 	tbl.seqnums = idxs
 	tbl.typs = typs

@@ -917,7 +917,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 			req = api.NewRenameTableReq(rel.GetDBID(c.proc.Ctx), rel.GetTableID(c.proc.Ctx), oldName, newName)
 		case api.AlterKind_AddColumn:
 			name := addCol[addColIdx].Name
-			typ := &addCol[addColIdx].Type
+			typ := addCol[addColIdx].Type
 			pos := addCol[addColIdx].Pos
 			addColIdx++
 			req = api.NewAddColumnReq(rel.GetDBID(c.proc.Ctx), rel.GetTableID(c.proc.Ctx), name, typ, pos)
