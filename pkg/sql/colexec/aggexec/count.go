@@ -32,34 +32,39 @@ type countColumnExec struct {
 	singleAggExecExtraInformation
 	distinctHash
 
-	ret aggFuncResult[int64]
+	ret aggResultWithFixedType[int64]
+}
+
+func (exec *countColumnExec) GetOptResult() SplitResult {
+	return &exec.ret.optSplitResult
 }
 
 func (exec *countColumnExec) marshal() ([]byte, error) {
 	d := exec.singleAggInfo.getEncoded()
-	r, err := exec.ret.marshal()
+	r, em, err := exec.ret.marshalToBytes()
 	if err != nil {
 		return nil, err
 	}
-	encoded := &EncodedAgg{
-		Info:   d,
-		Result: r,
-		Groups: nil,
+	encoded := EncodedAgg{
+		Info:    d,
+		Result:  r,
+		Empties: em,
+		Groups:  nil,
 	}
 	return encoded.Marshal()
 }
 
-func (exec *countColumnExec) unmarshal(mp *mpool.MPool, result []byte, groups [][]byte) error {
-	return exec.ret.unmarshal(result)
+func (exec *countColumnExec) unmarshal(_ *mpool.MPool, result, empties, _ [][]byte) error {
+	return exec.ret.unmarshalFromBytes(result, empties)
 }
 
 func newCountColumnExecExec(mg AggMemoryManager, info singleAggInfo) AggFuncExec {
 	exec := &countColumnExec{
 		singleAggInfo: info,
-		ret:           initFixedAggFuncResult[int64](mg, info.retType, false),
+		ret:           initAggResultWithFixedTypeResult[int64](mg, info.retType, false, 0),
 	}
 	if info.distinct {
-		exec.distinctHash = newDistinctHash(mg.Mp(), false)
+		exec.distinctHash = newDistinctHash()
 	}
 	return exec
 }
@@ -74,7 +79,7 @@ func (exec *countColumnExec) GroupGrow(more int) error {
 }
 
 func (exec *countColumnExec) PreAllocateGroups(more int) error {
-	return exec.ret.preAllocate(more)
+	return exec.ret.preExtend(more)
 }
 
 func (exec *countColumnExec) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
@@ -88,8 +93,8 @@ func (exec *countColumnExec) Fill(groupIndex int, row int, vectors []*vector.Vec
 		}
 	}
 
-	exec.ret.groupToSet = groupIndex
-	exec.ret.aggSet(exec.ret.aggGet() + 1)
+	exec.ret.updateNextAccessIdx(groupIndex)
+	exec.ret.set(exec.ret.get() + 1)
 	return nil
 }
 
@@ -97,9 +102,9 @@ func (exec *countColumnExec) BulkFill(groupIndex int, vectors []*vector.Vector) 
 	if vectors[0].IsConstNull() {
 		return nil
 	}
-	exec.ret.groupToSet = groupIndex
+	exec.ret.updateNextAccessIdx(groupIndex)
 
-	old := exec.ret.aggGet()
+	old := exec.ret.get()
 	if exec.IsDistinct() {
 		if vectors[0].IsConst() {
 			if need, err := exec.distinctHash.fill(groupIndex, vectors, 0); err != nil || !need {
@@ -123,7 +128,7 @@ func (exec *countColumnExec) BulkFill(groupIndex int, vectors []*vector.Vector) 
 	} else {
 		old += int64(vectors[0].Length() - vectors[0].GetNulls().Count())
 	}
-	exec.ret.aggSet(old)
+	exec.ret.set(old)
 	return nil
 }
 
@@ -141,7 +146,9 @@ func (exec *countColumnExec) BatchFill(offset int, groups []uint64, vectors []*v
 			}
 			for i, group := range groups {
 				if needs[i] && group != GroupNotMatched {
-					vs[group-1]++
+					x, y := exec.ret.updateNextAccessIdx(int(group - 1))
+
+					vs[x][y]++
 				}
 			}
 			return nil
@@ -149,7 +156,9 @@ func (exec *countColumnExec) BatchFill(offset int, groups []uint64, vectors []*v
 
 		for _, group := range groups {
 			if group != GroupNotMatched {
-				vs[group-1]++
+				x, y := exec.ret.updateNextAccessIdx(int(group - 1))
+
+				vs[x][y]++
 			}
 		}
 		return nil
@@ -166,14 +175,18 @@ func (exec *countColumnExec) BatchFill(offset int, groups []uint64, vectors []*v
 			u64Offset := uint64(offset)
 			for i, j := uint64(0), uint64(len(groups)); i < j; i++ {
 				if needs[i] && !nsp.Contains(i+u64Offset) && groups[i] != GroupNotMatched {
-					vs[groups[i]-1]++
+					x, y := exec.ret.updateNextAccessIdx(int(groups[i] - 1))
+
+					vs[x][y]++
 				}
 			}
 
 		} else {
 			for i, group := range groups {
 				if needs[i] && group != GroupNotMatched {
-					vs[group-1]++
+					x, y := exec.ret.updateNextAccessIdx(int(group - 1))
+
+					vs[x][y]++
 				}
 			}
 			return nil
@@ -187,7 +200,9 @@ func (exec *countColumnExec) BatchFill(offset int, groups []uint64, vectors []*v
 		for i, j := uint64(0), uint64(len(groups)); i < j; i++ {
 			if groups[i] != GroupNotMatched {
 				if !nsp.Contains(i + u64Offset) {
-					vs[groups[i]-1]++
+					x, y := exec.ret.updateNextAccessIdx(int(groups[i] - 1))
+
+					vs[x][y]++
 				}
 			}
 		}
@@ -195,7 +210,8 @@ func (exec *countColumnExec) BatchFill(offset int, groups []uint64, vectors []*v
 	} else {
 		for _, group := range groups {
 			if group != GroupNotMatched {
-				vs[group-1]++
+				x, y := exec.ret.updateNextAccessIdx(int(group - 1))
+				vs[x][y]++
 			}
 		}
 	}
@@ -205,9 +221,9 @@ func (exec *countColumnExec) BatchFill(offset int, groups []uint64, vectors []*v
 func (exec *countColumnExec) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) error {
 	other := next.(*countColumnExec)
 
-	exec.ret.groupToSet = groupIdx1
-	other.ret.groupToSet = groupIdx2
-	exec.ret.aggSet(exec.ret.aggGet() + other.ret.aggGet())
+	exec.ret.updateNextAccessIdx(groupIdx1)
+	other.ret.updateNextAccessIdx(groupIdx2)
+	exec.ret.set(exec.ret.get() + other.ret.get())
 	return exec.distinctHash.merge(&other.distinctHash)
 }
 
@@ -220,18 +236,19 @@ func (exec *countColumnExec) BatchMerge(next AggFuncExec, offset int, groups []u
 		if groups[i] == GroupNotMatched {
 			continue
 		}
-		g1, g2 := int(groups[i])-1, i+offset
-		exec.ret.mergeEmpty(other.ret.basicResult, g1, g2)
-		vs1[g1] += vs2[g2]
+		x1, y1 := exec.ret.updateNextAccessIdx(int(groups[i]) - 1)
+		x2, y2 := other.ret.updateNextAccessIdx(i + offset)
+		vs1[x1][y1] += vs2[x2][y2]
 	}
 	return exec.distinctHash.merge(&other.distinctHash)
 }
 
-func (exec *countColumnExec) Flush() (*vector.Vector, error) {
+func (exec *countColumnExec) Flush() ([]*vector.Vector, error) {
 	if exec.partialResult != nil {
-		exec.ret.values[exec.ret.groupToSet] += exec.partialResult.(int64)
+		x, y := exec.ret.updateNextAccessIdx(exec.partialGroup)
+		exec.ret.values[x][y] += exec.partialResult.(int64)
 	}
-	return exec.ret.flush(), nil
+	return exec.ret.flushAll(), nil
 }
 
 func (exec *countColumnExec) Free() {
@@ -242,32 +259,36 @@ func (exec *countColumnExec) Free() {
 type countStarExec struct {
 	singleAggInfo
 	singleAggExecExtraInformation
-	ret aggFuncResult[int64]
+	ret aggResultWithFixedType[int64]
+}
+
+func (exec *countStarExec) GetOptResult() SplitResult {
+	return &exec.ret.optSplitResult
 }
 
 func (exec *countStarExec) marshal() ([]byte, error) {
 	d := exec.singleAggInfo.getEncoded()
-	r, err := exec.ret.marshal()
+	r, em, err := exec.ret.marshalToBytes()
 	if err != nil {
 		return nil, err
 	}
-	encoded := &EncodedAgg{
-		Info:   d,
-		Result: r,
-		Groups: nil,
+	encoded := EncodedAgg{
+		Info:    d,
+		Result:  r,
+		Empties: em,
+		Groups:  nil,
 	}
 	return encoded.Marshal()
 }
 
-func (exec *countStarExec) unmarshal(mp *mpool.MPool, result []byte, groups [][]byte) error {
-	return exec.ret.unmarshal(result)
+func (exec *countStarExec) unmarshal(_ *mpool.MPool, result, empties, _ [][]byte) error {
+	return exec.ret.unmarshalFromBytes(result, empties)
 }
 
 func newCountStarExec(mg AggMemoryManager, info singleAggInfo) AggFuncExec {
-	// todo: should we check if `distinct` here ?
 	return &countStarExec{
 		singleAggInfo: info,
-		ret:           initFixedAggFuncResult[int64](mg, info.retType, false),
+		ret:           initAggResultWithFixedTypeResult[int64](mg, info.retType, false, 0),
 	}
 }
 
@@ -276,34 +297,37 @@ func (exec *countStarExec) GroupGrow(more int) error {
 }
 
 func (exec *countStarExec) PreAllocateGroups(more int) error {
-	return exec.ret.preAllocate(more)
+	return exec.ret.preExtend(more)
 }
 
-func (exec *countStarExec) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
-	exec.ret.groupToSet = groupIndex
-	exec.ret.aggSet(exec.ret.aggGet() + 1)
+func (exec *countStarExec) Fill(groupIndex int, _ int, _ []*vector.Vector) error {
+	exec.ret.updateNextAccessIdx(groupIndex)
+	exec.ret.set(exec.ret.get() + 1)
 	return nil
 }
 
 func (exec *countStarExec) BulkFill(groupIndex int, vectors []*vector.Vector) error {
-	exec.ret.groupToSet = groupIndex
-	exec.ret.aggSet(exec.ret.aggGet() + int64(vectors[0].Length()))
+	exec.ret.updateNextAccessIdx(groupIndex)
+	exec.ret.set(exec.ret.get() + int64(vectors[0].Length()))
 	return nil
 }
 
-func (exec *countStarExec) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
+func (exec *countStarExec) BatchFill(_ int, groups []uint64, _ []*vector.Vector) error {
 	vs := exec.ret.values
 	for _, group := range groups {
 		if group != GroupNotMatched {
-			vs[group-1]++
+			x, y := exec.ret.updateNextAccessIdx(int(group - 1))
+			vs[x][y]++
 		}
 	}
 	return nil
 }
 
 func (exec *countStarExec) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) error {
-	exec.ret.groupToSet = groupIdx1
-	exec.ret.aggSet(exec.ret.aggGet() + next.(*countStarExec).ret.aggGet())
+	other := next.(*countStarExec)
+	exec.ret.updateNextAccessIdx(groupIdx1)
+	other.ret.updateNextAccessIdx(groupIdx2)
+	exec.ret.set(exec.ret.get() + other.ret.get())
 	return nil
 }
 
@@ -316,18 +340,20 @@ func (exec *countStarExec) BatchMerge(next AggFuncExec, offset int, groups []uin
 		if groups[i] == GroupNotMatched {
 			continue
 		}
-		g1, g2 := int(groups[i])-1, i+offset
-		exec.ret.mergeEmpty(other.ret.basicResult, g1, g2)
-		vs1[g1] += vs2[g2]
+		x1, y1 := exec.ret.updateNextAccessIdx(int(groups[i]) - 1)
+		x2, y2 := other.ret.updateNextAccessIdx(i + offset)
+
+		vs1[x1][y1] += vs2[x2][y2]
 	}
 	return nil
 }
 
-func (exec *countStarExec) Flush() (*vector.Vector, error) {
+func (exec *countStarExec) Flush() ([]*vector.Vector, error) {
 	if exec.partialResult != nil {
-		exec.ret.values[exec.ret.groupToSet] += exec.partialResult.(int64)
+		x, y := exec.ret.updateNextAccessIdx(exec.partialGroup)
+		exec.ret.values[x][y] += exec.partialResult.(int64)
 	}
-	return exec.ret.flush(), nil
+	return exec.ret.flushAll(), nil
 }
 
 func (exec *countStarExec) Free() {

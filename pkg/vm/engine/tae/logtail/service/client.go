@@ -17,6 +17,7 @@ package service
 import (
 	"context"
 	"sync"
+	"time"
 
 	"go.uber.org/ratelimit"
 	"go.uber.org/zap"
@@ -29,6 +30,12 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
+const (
+	defaultRequestChanSize = 512
+	// defaultRequestDeadline : default deadline for every request (subscribe and unsubscribe).
+	defaultRequestDeadline = 2 * time.Minute
+)
+
 type ClientOption func(*LogtailClient)
 
 func WithClientRequestPerSecond(rps int) ClientOption {
@@ -39,6 +46,13 @@ func WithClientRequestPerSecond(rps int) ClientOption {
 
 // LogtailClient encapsulates morpc stream.
 type LogtailClient struct {
+	ctx    context.Context
+	cancel context.CancelFunc
+
+	// requestC is a chan, which receives all sub/unsub request.
+	// There is another worker send the items in the chan to stream.
+	requestC chan *LogtailRequest
+
 	stream   morpc.Stream
 	recvChan chan morpc.Message
 	broken   chan struct{} // mark morpc stream as broken when necessary
@@ -52,10 +66,14 @@ type LogtailClient struct {
 }
 
 // NewLogtailClient constructs LogtailClient.
-func NewLogtailClient(stream morpc.Stream, opts ...ClientOption) (*LogtailClient, error) {
+func NewLogtailClient(ctx context.Context, stream morpc.Stream, opts ...ClientOption) (*LogtailClient, error) {
+	ctx, cancel := context.WithCancel(ctx)
 	client := &LogtailClient{
-		stream: stream,
-		broken: make(chan struct{}),
+		ctx:      ctx,
+		cancel:   cancel,
+		requestC: make(chan *LogtailRequest, defaultRequestChanSize),
+		stream:   stream,
+		broken:   make(chan struct{}),
 	}
 
 	recvChan, err := stream.Receive()
@@ -71,6 +89,12 @@ func NewLogtailClient(stream morpc.Stream, opts ...ClientOption) (*LogtailClient
 	}
 	client.limiter = ratelimit.New(client.options.rps)
 
+	go func() {
+		if wErr := client.sendWorker(); wErr != nil {
+			logutil.Infof("logtail client send worker returned: %v", wErr)
+		}
+	}()
+
 	return client, nil
 }
 
@@ -79,6 +103,9 @@ func (c *LogtailClient) Close() error {
 	err := c.stream.Close(true)
 	if err != nil {
 		logutil.Error("logtail client: fail to close morpc stream", zap.Error(err))
+	}
+	if c.cancel != nil {
+		c.cancel()
 	}
 	return err
 }
@@ -100,13 +127,7 @@ func (c *LogtailClient) Subscribe(
 			Table: &table,
 		},
 	}
-	request.SetID(c.stream.ID())
-
-	err := c.stream.Send(ctx, request)
-	if err != nil {
-		logutil.Error("logtail client: fail to subscribe via morpc stream", zap.Error(err))
-	}
-	return err
+	return c.sendRequest(request)
 }
 
 // Unsubscribe cancel subscription for table.
@@ -126,12 +147,7 @@ func (c *LogtailClient) Unsubscribe(
 			Table: &table,
 		},
 	}
-	request.SetID(c.stream.ID())
-	err := c.stream.Send(ctx, request)
-	if err != nil {
-		logutil.Error("logtail client: fail to unsubscribe via morpc stream", zap.Error(err))
-	}
-	return err
+	return c.sendRequest(request)
 }
 
 // Receive fetches logtail response.
@@ -197,4 +213,35 @@ func (c *LogtailClient) streamBroken() bool {
 	default:
 	}
 	return false
+}
+
+func (c *LogtailClient) sendRequest(request *LogtailRequest) error {
+	select {
+	case <-c.ctx.Done():
+		return c.ctx.Err()
+
+	case c.requestC <- request:
+		return nil
+	}
+}
+
+func (c *LogtailClient) sendWorker() error {
+	sendFn := func(request *LogtailRequest) error {
+		request.SetID(c.stream.ID())
+		ctx, cancel := context.WithTimeoutCause(c.ctx, defaultRequestDeadline, moerr.CauseLogTailRequest)
+		defer cancel()
+		return c.stream.Send(ctx, request)
+	}
+
+	for {
+		select {
+		case <-c.ctx.Done():
+			return c.ctx.Err()
+
+		case request := <-c.requestC:
+			if err := sendFn(request); err != nil {
+				logutil.Error("logtail client: fail to send sub/unsub request via morpc stream", zap.Error(err))
+			}
+		}
+	}
 }

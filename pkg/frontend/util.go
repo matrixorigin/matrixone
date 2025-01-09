@@ -713,28 +713,37 @@ const (
 // execute.... // prepare stmt1 from .... ; set var1 = val1 ; set var2 = val2 ;
 // Format 2: COM_STMT_EXECUTE
 // execute.... // prepare stmt1 from .... ; param0 ; param1 ...
-func makeExecuteSql(ctx context.Context, ses *Session, stmt tree.Statement) string {
+func makeExecuteSql(ctx context.Context, ses *Session, stmt tree.Statement, binExec bool, prepareName string) string {
 	if ses == nil || stmt == nil {
 		return ""
+	}
+	isExec := false
+	name := ""
+	var Variables []*tree.VarExpr
+	if binExec {
+		isExec = true
+		name = prepareName
+	} else if t, ok := stmt.(*tree.Execute); ok {
+		isExec = true
+		name = string(t.Name)
+		Variables = t.Variables
 	}
 	preSql := ""
 	bb := &strings.Builder{}
 	//fill prepare parameters
-	switch t := stmt.(type) {
-	case *tree.Execute:
-		name := string(t.Name)
+	if isExec {
 		prepareStmt, err := ses.GetPrepareStmt(ctx, name)
 		if err != nil || prepareStmt == nil {
-			break
+			return ""
 		}
 		preSql = strings.TrimSpace(prepareStmt.Sql)
 		bb.WriteString(preSql)
 		bb.WriteString(" ; ")
-		if len(t.Variables) != 0 {
+		if len(Variables) != 0 {
 			//for EXECUTE ... USING statement. append variables if there is.
 			//get SET VAR sql
-			setVarSqls := make([]string, len(t.Variables))
-			for i, v := range t.Variables {
+			setVarSqls := make([]string, len(Variables))
+			for i, v := range Variables {
 				userVal, err := ses.GetUserDefinedVar(v.Name)
 				if err == nil && userVal != nil && len(userVal.Sql) != 0 {
 					setVarSqls[i] = userVal.Sql
@@ -757,8 +766,6 @@ func makeExecuteSql(ctx context.Context, ses *Session, stmt tree.Statement) stri
 			}
 			bb.WriteString(strings.Join(paramValues, " ; "))
 		}
-	default:
-		return ""
 	}
 	return bb.String()
 }
@@ -1159,8 +1166,9 @@ type UserInput struct {
 	isInternalInput bool
 	// operator account, the account executes restoration
 	// e.g. sys takes a snapshot sn1 for acc1, then restores acc1 from snapshot sn1. In this scenario, sys is the operator account
-	opAccount uint32
-	toAccount uint32
+	isRestoreByTs bool
+	opAccount     uint32
+	toAccount     uint32
 }
 
 func (ui *UserInput) getSql() string {
@@ -1551,10 +1559,14 @@ rule:
 	it means all most all string can be legal.
 */
 func dbNameIsLegal(name string) bool {
+	name = strings.TrimSpace(name)
 	if hasSpecialChars(name) {
 		return false
 	}
-	name = strings.TrimSpace(name)
+	if name == cdc.MatchAll {
+		return true
+	}
+
 	createDBSqls := []string{
 		"create database " + name,
 		"create database `" + name + "`",
@@ -1572,10 +1584,14 @@ rule:
 	it means all most all string can be legal.
 */
 func tableNameIsLegal(name string) bool {
+	name = strings.TrimSpace(name)
 	if hasSpecialChars(name) {
 		return false
 	}
-	name = strings.TrimSpace(name)
+	if name == cdc.MatchAll {
+		return true
+	}
+
 	createTableSqls := []string{
 		"create table " + name + "(a int)",
 		"create table `" + name + "`(a int)",

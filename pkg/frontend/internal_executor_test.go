@@ -195,3 +195,9 @@ func Test_internalProtocol_Write(t *testing.T) {
 	require.Equal(t, 3, len(ip.result.resultSet.Data))
 	require.Equal(t, [][]any{{int64(100)}, {int64(200)}, {int64(201)} /*column1, rows: 3*/}, ip.result.resultSet.Data)
 }
+
+func Test_WriteResultSetRow2(t *testing.T) {
+	ip := &internalProtocol{}
+	err := ip.WriteResultSetRow2(nil, nil, 1)
+	assert.NoError(t, err)
+}

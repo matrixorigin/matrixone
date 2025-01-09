@@ -318,7 +318,7 @@ func (s *Schema) getFakePrimaryKey() *ColDef {
 	idx, ok := s.NameMap[pkgcatalog.FakePrimaryKeyColName]
 	if !ok {
 		// should just call logutil.Fatal
-		panic("fake primary key not existed")
+		panic(fmt.Sprintf("fake primary key not existed: %s-%s", s.Relkind, s.Name))
 	}
 	return s.ColDefs[idx]
 }
@@ -738,7 +738,7 @@ func colDefFromPlan(col *plan.ColDef, idx int, seqnum uint16) *ColDef {
 		Name:   col.GetOriginCaseName(),
 		Idx:    idx,
 		SeqNum: seqnum,
-		Type:   vector.ProtoTypeToType(&col.Typ),
+		Type:   vector.ProtoTypeToType(col.Typ),
 		Hidden: col.Hidden,
 		// PhyAddr false
 		// Null  later

@@ -63,10 +63,10 @@ pub2    sys    sub2    *        2024-07-29 16:02:26    null    null    0
 pub3    sys    sub1    *        2024-07-29 16:02:26    null    null    0
 show table status;
 Name    Engine    Row_format    Rows    Avg_row_length    Data_length    Max_data_length    Index_length    Data_free    Auto_increment    Create_time    Update_time    Check_time    Collation    Checksum    Create_options    Comment    Role_id    Role_name
-t1    Tae    Dynamic    3    0    120    0    0    NULL    0    2024-07-29 16:02:26    NULL    NULL    utf8mb4_bin    NULL            0    moadmin
+t1    Tae    Dynamic    3    0    156    0    0    NULL    0    2024-12-02 16:47:42    NULL    NULL    utf8mb4_bin    NULL            0    moadmin
 show table status like 't1';
 Name    Engine    Row_format    Rows    Avg_row_length    Data_length    Max_data_length    Index_length    Data_free    Auto_increment    Create_time    Update_time    Check_time    Collation    Checksum    Create_options    Comment    Role_id    Role_name
-t1    Tae    Dynamic    3    0    120    0    0    NULL    0    2024-07-29 16:02:26    NULL    NULL    utf8mb4_bin    NULL            0    moadmin
+t1    Tae    Dynamic    3    0    156    0    0    NULL    0    2024-12-02 16:47:42    NULL    NULL    utf8mb4_bin    NULL            0    moadmin
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    YES        null        

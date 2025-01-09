@@ -63,9 +63,6 @@ func (semiJoin *SemiJoin) Prepare(proc *process.Process) (err error) {
 			}
 		}
 
-		if semiJoin.ProjectList != nil {
-			err = semiJoin.PrepareProjection(proc)
-		}
 	}
 	return err
 }

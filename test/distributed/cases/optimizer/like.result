@@ -73,10 +73,11 @@ select count(*) from t1 where c2 like '1_2%3';
 count(*)
 110
 explain select * from t1 where c2 like '123';
-QUERY PLAN
+TP QUERY PLAN
 Project
-  ->  Table Scan on d1.t1
-        Filter Cond: (t1.c2 = '123')
+  ->  Index Table Scan on t1.c2
+        Filter Cond: prefix_eq(#[0,0])
+        Block Filter Cond: prefix_eq(#[0,0])
 select * from t1 where c2 like '123';
 c1    c2    c3
 123    123    123

@@ -16,6 +16,7 @@ package cdc
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -39,27 +40,31 @@ type tableReader struct {
 	packerPool           *fileservice.Pool[*types.Packer]
 	info                 *DbTableInfo
 	sinker               Sinker
-	wMarkUpdater         *WatermarkUpdater
+	wMarkUpdater         IWatermarkUpdater
 	tick                 *time.Ticker
-	resetWatermarkFunc   func(*DbTableInfo) error
 	initSnapshotSplitTxn bool
+	runningReaders       *sync.Map
+	startTs, endTs       types.TS
+	noFull               bool
 
 	tableDef                           *plan.TableDef
 	insTsColIdx, insCompositedPkColIdx int
 	delTsColIdx, delCompositedPkColIdx int
 }
 
-func NewTableReader(
+var NewTableReader = func(
 	cnTxnClient client.TxnClient,
 	cnEngine engine.Engine,
 	mp *mpool.MPool,
 	packerPool *fileservice.Pool[*types.Packer],
 	info *DbTableInfo,
 	sinker Sinker,
-	wMarkUpdater *WatermarkUpdater,
+	wMarkUpdater IWatermarkUpdater,
 	tableDef *plan.TableDef,
-	resetWatermarkFunc func(*DbTableInfo) error,
 	initSnapshotSplitTxn bool,
+	runningReaders *sync.Map,
+	startTs, endTs types.TS,
+	noFull bool,
 ) Reader {
 	reader := &tableReader{
 		cnTxnClient:          cnTxnClient,
@@ -70,8 +75,11 @@ func NewTableReader(
 		sinker:               sinker,
 		wMarkUpdater:         wMarkUpdater,
 		tick:                 time.NewTicker(200 * time.Millisecond),
-		resetWatermarkFunc:   resetWatermarkFunc,
 		initSnapshotSplitTxn: initSnapshotSplitTxn,
+		runningReaders:       runningReaders,
+		startTs:              startTs,
+		endTs:                endTs,
+		noFull:               noFull,
 		tableDef:             tableDef,
 	}
 
@@ -91,21 +99,21 @@ func (reader *tableReader) Close() {
 	reader.sinker.Close()
 }
 
-func (reader *tableReader) Run(
-	ctx context.Context,
-	ar *ActiveRoutine) {
+func (reader *tableReader) Run(ctx context.Context, ar *ActiveRoutine) {
 	var err error
 	logutil.Infof("cdc tableReader(%v).Run: start", reader.info)
 	defer func() {
 		if err != nil {
-			if err = reader.wMarkUpdater.SaveErrMsg(reader.info.SourceTblIdStr, err.Error()); err != nil {
+			if err = reader.wMarkUpdater.SaveErrMsg(reader.info.SourceDbName, reader.info.SourceTblName, err.Error()); err != nil {
 				logutil.Infof("cdc tableReader(%v).Run: save err msg failed, err: %v", reader.info, err)
 			}
 		}
 		reader.Close()
+		reader.runningReaders.Delete(GenDbTblKey(reader.info.SourceDbName, reader.info.SourceTblName))
 		logutil.Infof("cdc tableReader(%v).Run: end", reader.info)
 	}()
 
+	reader.runningReaders.Store(GenDbTblKey(reader.info.SourceDbName, reader.info.SourceTblName), reader)
 	for {
 		select {
 		case <-ctx.Done():
@@ -119,33 +127,24 @@ func (reader *tableReader) Run(
 
 		if err = reader.readTable(ctx, ar); err != nil {
 			logutil.Errorf("cdc tableReader(%v) failed, err: %v", reader.info, err)
-
-			// if stale read, try to restart reader
-			if moerr.IsMoErrCode(err, moerr.ErrStaleRead) {
-				// reset sinker
-				reader.sinker.Reset()
-				// reset watermark
-				if err = reader.resetWatermarkFunc(reader.info); err != nil {
-					logutil.Errorf("cdc tableReader(%v) restart failed, err: %v", reader.info, err)
-					return
-				}
-				logutil.Errorf("cdc tableReader(%v) restart successfully", reader.info)
-				continue
-			}
-
-			logutil.Errorf("cdc tableReader(%v) err is not stale read, quit", reader.info)
 			return
 		}
 	}
 }
 
-func (reader *tableReader) readTable(
+var readTableWithTxn = func(
+	reader *tableReader,
 	ctx context.Context,
-	ar *ActiveRoutine) (err error) {
+	txnOp client.TxnOperator,
+	packer *types.Packer,
+	ar *ActiveRoutine,
+) (err error) {
+	return reader.readTableWithTxn(ctx, txnOp, packer, ar)
+}
 
-	var txnOp client.TxnOperator
+func (reader *tableReader) readTable(ctx context.Context, ar *ActiveRoutine) (err error) {
 	//step1 : create an txnOp
-	txnOp, err = GetTxnOp(ctx, reader.cnEngine, reader.cnTxnClient, "readMultipleTables")
+	txnOp, err := GetTxnOp(ctx, reader.cnEngine, reader.cnTxnClient, "readMultipleTables")
 	if err != nil {
 		return err
 	}
@@ -158,8 +157,7 @@ func (reader *tableReader) readTable(
 		ExitRunSql(txnOp)
 	}()
 
-	err = GetTxn(ctx, reader.cnEngine, txnOp)
-	if err != nil {
+	if err = GetTxn(ctx, reader.cnEngine, txnOp); err != nil {
 		return err
 	}
 
@@ -168,11 +166,25 @@ func (reader *tableReader) readTable(
 	defer put.Put()
 
 	//step2 : read table
-	err = reader.readTableWithTxn(
-		ctx,
-		txnOp,
-		packer,
-		ar)
+	err = readTableWithTxn(reader, ctx, txnOp, packer, ar)
+	// if stale read, try to reset watermark
+	if moerr.IsMoErrCode(err, moerr.ErrStaleRead) {
+		if !reader.noFull && !reader.startTs.IsEmpty() {
+			err = moerr.NewInternalErrorf(ctx, "cdc tableReader(%v) stale read, and startTs(%v) is set, end", reader.info, reader.startTs)
+			return
+		}
+
+		// reset sinker
+		reader.sinker.Reset()
+		// reset watermark to startTs, will read from the beginning at next round
+		watermark := reader.startTs
+		if reader.noFull {
+			watermark = types.TimestampToTS(txnOp.SnapshotTS())
+		}
+		reader.wMarkUpdater.UpdateMem(reader.info.SourceDbName, reader.info.SourceTblName, watermark)
+		logutil.Infof("cdc tableReader(%v) reset watermark success", reader.info)
+		err = nil
+	}
 	return
 }
 
@@ -192,8 +204,16 @@ func (reader *tableReader) readTableWithTxn(
 	//step2 : define time range
 	//	from = last wmark
 	//  to = txn operator snapshot ts
-	fromTs := reader.wMarkUpdater.GetFromMem(reader.info.SourceTblIdStr)
+	fromTs := reader.wMarkUpdater.GetFromMem(reader.info.SourceDbName, reader.info.SourceTblName)
+	if !reader.endTs.IsEmpty() && fromTs.GE(&reader.endTs) {
+		logutil.Debugf("current watermark(%v) >= endTs(%v), end", fromTs, reader.endTs)
+		return
+	}
 	toTs := types.TimestampToTS(GetSnapshotTS(txnOp))
+	if !reader.endTs.IsEmpty() && toTs.GT(&reader.endTs) {
+		toTs = reader.endTs
+	}
+
 	start := time.Now()
 	changes, err = CollectChanges(ctx, rel, fromTs, toTs, reader.mp)
 	v2.CdcReadDurationHistogram.Observe(time.Since(start).Seconds())
@@ -254,24 +274,22 @@ func (reader *tableReader) readTableWithTxn(
 
 	hasBegin := false
 	defer func() {
-		if hasBegin {
-			if err == nil {
-				// error may can't be caught immediately, but must be caught when next call
+		if err == nil { // execute successfully before
+			if hasBegin {
+				// error may not be caught immediately
 				reader.sinker.SendCommit()
 				// so send a dummy sql to guarantee previous commit is sent successfully
 				reader.sinker.SendDummy()
-				if reader.sinker.Error() == nil {
-					reader.wMarkUpdater.UpdateMem(reader.info.SourceTblIdStr, toTs)
-				}
-			} else {
+				err = reader.sinker.Error()
+			}
+
+			if err == nil {
+				reader.wMarkUpdater.UpdateMem(reader.info.SourceDbName, reader.info.SourceTblName, toTs)
+			}
+		} else { // has error already
+			if hasBegin {
 				reader.sinker.SendRollback()
 			}
-			return
-		}
-
-		reader.sinker.SendDummy()
-		if err == nil && reader.sinker.Error() == nil {
-			reader.wMarkUpdater.UpdateMem(reader.info.SourceTblIdStr, toTs)
 		}
 	}()
 
@@ -307,6 +325,8 @@ func (reader *tableReader) readTableWithTxn(
 				fromTs:     fromTs,
 				toTs:       toTs,
 			})
+			// send a dummy to guarantee last piece of snapshot/tail send successfully
+			reader.sinker.SendDummy()
 			err = reader.sinker.Error()
 			return
 		}
@@ -330,9 +350,6 @@ func (reader *tableReader) readTableWithTxn(
 			})
 			addSnapshotEndMetrics()
 			insertData.Clean(reader.mp)
-			if err = reader.sinker.Error(); err != nil {
-				return
-			}
 		case engine.ChangesHandle_Tail_wip:
 			insertAtmBatch = allocateAtomicBatchIfNeed(insertAtmBatch)
 			deleteAtmBatch = allocateAtomicBatchIfNeed(deleteAtmBatch)
@@ -368,10 +385,6 @@ func (reader *tableReader) readTableWithTxn(
 			addTailEndMetrics(deleteAtmBatch)
 			insertAtmBatch.Close()
 			deleteAtmBatch.Close()
-			if err = reader.sinker.Error(); err != nil {
-				return
-			}
-
 			// reset, allocate new when next wip/done
 			insertAtmBatch = nil
 			deleteAtmBatch = nil

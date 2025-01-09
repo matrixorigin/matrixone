@@ -22,10 +22,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/status"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 )
 
 func (s *service) initDistributedTAE(
@@ -54,7 +56,11 @@ func (s *service) initDistributedTAE(
 	colexec.NewServer(hakeeper)
 
 	// start I/O pipeline
-	blockio.Start(s.cfg.UUID)
+	ioutil.Start(s.cfg.UUID)
+
+	internalExecutorFactory := func() ie.InternalExecutor {
+		return frontend.NewInternalExecutor(s.cfg.UUID)
+	}
 
 	// engine
 	distributeTaeMp, err := mpool.NewMPool("distributed_tae", 0, mpool.NoFixed)
@@ -74,6 +80,11 @@ func (s *service) initDistributedTAE(
 
 		disttae.WithCNTransferTxnLifespanThreshold(
 			s.cfg.Engine.CNTransferTxnLifespanThreshold),
+		disttae.WithMoTableStatsConf(s.cfg.Engine.Stats),
+		disttae.WithSQLExecFunc(internalExecutorFactory),
+		disttae.WithMoServerStateChecker(func() bool {
+			return frontend.MoServerIsStarted(s.cfg.UUID)
+		}),
 	)
 	pu.StorageEngine = s.storeEngine
 

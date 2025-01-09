@@ -1,3 +1,4 @@
+set experimental_fulltext_index=1;
 drop account if exists acc01;
 create account acc01 admin_name = 'test_account' identified by '111';
 
@@ -145,6 +146,7 @@ insert into table04 values (0,1,2), (2,3,4);
 drop database if exists acc_test04;
 create database acc_test04;
 use acc_test04;
+-- @bvt:issue#16438
 drop table if exists index03;
 create table index03 (
                          emp_no      int             not null,
@@ -163,7 +165,7 @@ create table index03 (
 
 insert into index03 values (9001,'1980-12-17', 'SMITH', 'CLERK', 'F', '2008-12-17'),
                            (9002,'1981-02-20', 'ALLEN', 'SALESMAN', 'F', '2008-02-20');
-
+-- @bvt:issue
 
 select count(*) from acc_test02.pri01;
 select count(*) from acc_test02.aff01;
@@ -178,8 +180,10 @@ show create table acc_test03.table01;
 show create table acc_test03.table02;
 show create table acc_test03.table03;
 show create table acc_test03.table04;
+-- @bvt:issue#16438
 select count(*) from acc_test04.index03;
 show create table acc_test04.index03;
+-- @bvt:issue
 -- @session
 
 drop snapshot if exists sp04;
@@ -192,13 +196,17 @@ truncate table acc_test03.table01;
 drop table acc_test03.table02;
 delete from acc_test03.table03 where col1 = 1;
 update acc_test03.table04 set col1 = 1000;
+-- @bvt:issue#16438
 alter table acc_test04.index03 drop primary key;
+-- @bvt:issue
 select count(*) from acc_test02.pri01;
 select count(*) from acc_test02.aff01;
 select * from acc_test03.table01;
 select count(*) from acc_test03.table03;
 select * from acc_test03.table04;
+-- @bvt:issue#16438
 show create table acc_test04.index03;
+-- @bvt:issue
 -- @session
 
 restore account acc01 from snapshot sp04;
@@ -366,6 +374,38 @@ drop snapshot sp03;
 -- @session:id=1&user=acc01:test_account&password=111
 drop database test01;
 -- @session
+
+
+
+-- @session:id=1&user=acc01:test_account&password=111
+drop database if exists fulltext_acc01;
+create database fulltext_acc01;
+use fulltext_acc01;
+drop table if exists src;
+create table src (id bigint primary key, json1 text, json2 varchar, fulltext(json1) with parser json);
+insert into src values  (0, '{"a":1, "b":"red"}', '{"d": "happy birthday", "f":"winter"}'),
+(1, '{"a":2, "b":"中文學習教材"}', '["apple", "orange", "banana", "指引"]'),
+(2, '{"a":3, "b":"red blue"}', '{"d":"兒童中文"}');
+-- @session
+
+drop snapshot if exists full_sp_acc01;
+create snapshot full_sp_acc01 for account acc01;
+
+-- @session:id=1&user=acc01:test_account&password=111
+drop database fulltext_acc01;
+-- @session
+
+restore account acc01 from snapshot full_sp_acc01;
+
+-- @session:id=1&user=acc01:test_account&password=111
+show databases;
+use fulltext_acc01;
+show create table src;
+select * from src;
+drop database fulltext_acc01;
+-- @session
+
+drop snapshot full_sp_acc01;
 
 drop account acc01;
 -- @ignore:1

@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
-	"fmt"
 	"strconv"
 	"sync"
 	"time"
@@ -41,13 +40,13 @@ import (
 type Nodes []Node
 
 type Node struct {
-	Mcpu             int
-	Id               string `json:"id"`
-	Addr             string `json:"address"`
-	Data             RelData
-	NeedExpandRanges bool
-	CNCNT            int32 // number of all cns
-	CNIDX            int32 // cn index , starts from 0
+	Mcpu int
+	Id   string `json:"id"`
+	Addr string `json:"address"`
+	//TODO::change RelData to Tombstoner, since only Tombstones ned to be serialized.
+	Data  RelData
+	CNCNT int32 // number of all cns
+	CNIDX int32 // cn index , starts from 0
 }
 
 // Attribute is a column
@@ -588,9 +587,13 @@ const (
 type DataCollectPolicy uint64
 
 const (
-	Policy_CollectCommittedData = 1 << iota
-	Policy_CollectUncommittedData
-	Policy_CollectAllData = Policy_CollectCommittedData | Policy_CollectUncommittedData
+	Policy_CollectCommittedInmemData = 1 << iota
+	Policy_CollectUncommittedInmemData
+	Policy_CollectCommittedPersistedData
+	Policy_CollectUncommittedPersistedData
+	Policy_CollectCommittedData   = Policy_CollectCommittedInmemData | Policy_CollectCommittedPersistedData
+	Policy_CollectUncommittedData = Policy_CollectUncommittedInmemData | Policy_CollectUncommittedPersistedData
+	Policy_CollectAllData         = Policy_CollectCommittedData | Policy_CollectUncommittedData
 )
 
 type TombstoneCollectPolicy uint64
@@ -672,6 +675,7 @@ const (
 	RelDataEmpty RelDataType = iota
 	RelDataShardIDList
 	RelDataBlockList
+	RelDataObjList
 )
 
 type RelData interface {
@@ -699,10 +703,12 @@ type RelData interface {
 	AppendShardID(id uint64)
 
 	// for block info list
+	Split(i int) []RelData
 	GetBlockInfoSlice() objectio.BlockInfoSlice
 	GetBlockInfo(i int) objectio.BlockInfo
 	SetBlockInfo(i int, blk *objectio.BlockInfo)
 	AppendBlockInfo(blk *objectio.BlockInfo)
+	AppendBlockInfoSlice(objectio.BlockInfoSlice)
 }
 
 // ForRangeShardID [begin, end)
@@ -726,6 +732,9 @@ func ForRangeBlockInfo(
 	begin, end int,
 	relData RelData,
 	onBlock func(blk *objectio.BlockInfo) (bool, error)) error {
+	if begin >= relData.DataCnt() {
+		return nil
+	}
 	slice := relData.GetBlockInfoSlice()
 	slice = slice.Slice(begin, end)
 	sliceLen := slice.Len()
@@ -761,6 +770,7 @@ type DataSource interface {
 		cols []string,
 		types []types.Type,
 		seqNums []uint16,
+		pkSeqNum int32,
 		memFilter any,
 		mp *mpool.MPool,
 		bat *batch.Batch,
@@ -818,14 +828,38 @@ type ChangesHandle interface {
 	Close() error
 }
 
+type RangesShuffleParam struct {
+	// these are for shuffle objects
+	Node               *plan.Node
+	CNCNT              int32 // number of all cns
+	CNIDX              int32 // cn index , starts from 0
+	IsLocalCN          bool
+	ShuffleRangeUint64 []uint64
+	ShuffleRangeInt64  []int64
+	Init               bool
+}
+
+type RangesParam struct {
+	BlockFilters       []*plan.Expr //Slice of expressions used to filter zonemap
+	PreAllocBlocks     int          //estimated count of blocks
+	TxnOffset          int          //Transaction offset used to specify the starting position for reading data.
+	Policy             DataCollectPolicy
+	Rsp                *RangesShuffleParam
+	DontSupportRelData bool
+}
+
+var DefaultRangesParam RangesParam = RangesParam{
+	BlockFilters:       nil,
+	PreAllocBlocks:     2,
+	TxnOffset:          0,
+	Policy:             Policy_CollectAllData,
+	DontSupportRelData: true,
+}
+
 type Relation interface {
 	Statistics
 
-	// Ranges Parameters:
-	// first parameter: Context
-	// second parameter: Slice of expressions used to filter the data.
-	// third parameter: Transaction offset used to specify the starting position for reading data.
-	Ranges(context.Context, []*plan.Expr, int, int, DataCollectPolicy) (RelData, error)
+	Ranges(context.Context, RangesParam) (RelData, error)
 
 	CollectTombstones(ctx context.Context, txnOffset int, policy TombstoneCollectPolicy) (Tombstoner, error)
 
@@ -999,6 +1033,9 @@ type Engine interface {
 	// just return nil if the current stats info has not been initialized.
 	Stats(ctx context.Context, key pb.StatsInfoKey, sync bool) *pb.StatsInfo
 
+	// true if the prefetch is received, false if the prefetch is rejected
+	PrefetchTableMeta(ctx context.Context, key pb.StatsInfoKey) bool
+
 	GetMessageCenter() any
 
 	GetService() string
@@ -1023,100 +1060,6 @@ type EntireEngine struct {
 
 func IsMemtable(tblRange []byte) bool {
 	return bytes.Equal(tblRange, objectio.EmptyBlockInfoBytes)
-}
-
-type EmptyRelationData struct{}
-
-func BuildEmptyRelData() RelData {
-	return &EmptyRelationData{}
-}
-
-func (rd *EmptyRelationData) String() string {
-	return fmt.Sprintf("RelData[%d]", RelDataEmpty)
-}
-
-func (rd *EmptyRelationData) GetShardIDList() []uint64 {
-	panic("not supported")
-}
-
-func (rd *EmptyRelationData) GetShardID(i int) uint64 {
-	panic("not supported")
-}
-
-func (rd *EmptyRelationData) SetShardID(i int, id uint64) {
-	panic("not supported")
-}
-
-func (rd *EmptyRelationData) AppendShardID(id uint64) {
-	panic("not supported")
-}
-
-func (rd *EmptyRelationData) GetBlockInfoSlice() objectio.BlockInfoSlice {
-	panic("not supported")
-}
-
-func (rd *EmptyRelationData) GetBlockInfo(i int) objectio.BlockInfo {
-	panic("not supported")
-}
-
-func (rd *EmptyRelationData) SetBlockInfo(i int, blk *objectio.BlockInfo) {
-	panic("not supported")
-}
-
-func (rd *EmptyRelationData) AppendBlockInfo(blk *objectio.BlockInfo) {
-	panic("not supported")
-}
-
-func (rd *EmptyRelationData) GetType() RelDataType {
-	return RelDataEmpty
-}
-
-func (rd *EmptyRelationData) MarshalBinary() ([]byte, error) {
-	panic("Not Supported")
-}
-
-func (rd *EmptyRelationData) UnmarshalBinary(buf []byte) error {
-	panic("Not Supported")
-}
-
-func (rd *EmptyRelationData) AttachTombstones(tombstones Tombstoner) error {
-	panic("Not Supported")
-}
-
-func (rd *EmptyRelationData) GetTombstones() Tombstoner {
-	panic("Not Supported")
-}
-
-func (rd *EmptyRelationData) ForeachDataBlk(begin, end int, f func(blk any) error) error {
-	panic("Not Supported")
-}
-
-func (rd *EmptyRelationData) GetDataBlk(i int) any {
-	panic("Not Supported")
-}
-
-func (rd *EmptyRelationData) SetDataBlk(i int, blk any) {
-	panic("Not Supported")
-}
-
-func (rd *EmptyRelationData) DataSlice(begin, end int) RelData {
-	panic("Not Supported")
-}
-
-func (rd *EmptyRelationData) GroupByPartitionNum() map[int16]RelData {
-	panic("Not Supported")
-}
-
-func (rd *EmptyRelationData) AppendDataBlk(blk any) {
-	panic("Not Supported")
-}
-
-func (rd *EmptyRelationData) BuildEmptyRelData(i int) RelData {
-	return &EmptyRelationData{}
-}
-
-func (rd *EmptyRelationData) DataCnt() int {
-	return 0
 }
 
 type forceBuildRemoteDSConfig struct {

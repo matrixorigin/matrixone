@@ -19,6 +19,7 @@ import (
 	"unsafe"
 
 	"github.com/google/uuid"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -83,7 +84,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -187,13 +188,12 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 		}
 	}
 	p.Node = &pipeline.NodeInfo{
-		Id:               s.NodeInfo.Id,
-		Addr:             s.NodeInfo.Addr,
-		Mcpu:             int32(s.NodeInfo.Mcpu),
-		Payload:          string(data),
-		NeedExpandRanges: s.NodeInfo.NeedExpandRanges,
-		CnCnt:            s.NodeInfo.CNCNT,
-		CnIdx:            s.NodeInfo.CNIDX,
+		Id:      s.NodeInfo.Id,
+		Addr:    s.NodeInfo.Addr,
+		Mcpu:    int32(s.NodeInfo.Mcpu),
+		Payload: string(data),
+		CnCnt:   s.NodeInfo.CNCNT,
+		CnIdx:   s.NodeInfo.CNIDX,
 	}
 	ctx.pipe = p
 	ctx.scope = s
@@ -338,14 +338,13 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 		s.NodeInfo.Id = p.Node.Id
 		s.NodeInfo.Addr = p.Node.Addr
 		s.NodeInfo.Mcpu = int(p.Node.Mcpu)
-		s.NodeInfo.NeedExpandRanges = p.Node.NeedExpandRanges
 		s.NodeInfo.CNCNT = p.Node.CnCnt
 		s.NodeInfo.CNIDX = p.Node.CnIdx
 
 		bs := []byte(p.Node.Payload)
 		var relData engine.RelData
 		if len(bs) > 0 {
-			rd, err := engine_util.UnmarshalRelationData(bs)
+			rd, err := readutil.UnmarshalRelationData(bs)
 			if err != nil {
 				return nil, err
 			}
@@ -489,7 +488,6 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			RuntimeFilterBuildList: t.RuntimeFilterSpecs,
 			JoinMapTag:             t.JoinMapTag,
 		}
-		in.ProjectList = t.ProjectList
 	case *shuffle.Shuffle:
 		in.Shuffle = &pipeline.Shuffle{}
 		in.Shuffle.ShuffleColIdx = t.ShuffleColIdx
@@ -555,7 +553,6 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			ShuffleIdx:             t.ShuffleIdx,
 			JoinMapTag:             t.JoinMapTag,
 		}
-		in.ProjectList = t.ProjectList
 	case *left.LeftJoin:
 		relList, colList := getRelColList(t.Result)
 		in.LeftJoin = &pipeline.LeftJoin{
@@ -571,7 +568,6 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			ShuffleIdx:             t.ShuffleIdx,
 			JoinMapTag:             t.JoinMapTag,
 		}
-		in.ProjectList = t.ProjectList
 	case *right.RightJoin:
 		rels, poses := getRelColList(t.Result)
 		in.RightJoin = &pipeline.RightJoin{
@@ -626,7 +622,6 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			JoinMapTag: t.JoinMapTag,
 			JoinType:   int32(t.JoinType),
 		}
-		in.ProjectList = t.ProjectList
 	case *offset.Offset:
 		in.Offset = t.OffsetExpr
 	case *order.Order:
@@ -646,7 +641,6 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			ColList:    colList,
 			JoinMapTag: t.JoinMapTag,
 		}
-		in.ProjectList = t.ProjectList
 	case *projection.Projection:
 		in.ProjectList = t.ProjectList
 	case *filter.Filter:
@@ -663,13 +657,11 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			ShuffleIdx:             t.ShuffleIdx,
 			JoinMapTag:             t.JoinMapTag,
 		}
-		in.ProjectList = t.ProjectList
 	case *indexjoin.IndexJoin:
 		in.IndexJoin = &pipeline.IndexJoin{
 			Result:                 t.Result,
 			RuntimeFilterBuildList: t.RuntimeFilterSpecs,
 		}
-		in.ProjectList = t.ProjectList
 	case *single.SingleJoin:
 		relList, colList := getRelColList(t.Result)
 		in.SingleJoin = &pipeline.SingleJoin{
@@ -683,7 +675,6 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			HashOnPk:               t.HashOnPK,
 			JoinMapTag:             t.JoinMapTag,
 		}
-		in.ProjectList = t.ProjectList
 	case *top.Top:
 		in.Limit = t.Limit
 		in.OrderBy = t.Fs
@@ -703,9 +694,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		}
 	case *mergerecursive.MergeRecursive:
 	case *mergegroup.MergeGroup:
-		in.Agg = &pipeline.Group{
-			NeedEval: t.NeedEval,
-		}
+		in.Agg = &pipeline.Group{}
 		in.ProjectList = t.ProjectList
 		EncodeMergeGroup(t, in.Agg)
 	case *mergetop.MergeTop:
@@ -729,22 +718,15 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		}
 
 	case *external.External:
-		name2ColIndexSlice := make([]*pipeline.ExternalName2ColIndex, len(t.Es.Name2ColIndex))
-		i := 0
-		for k, v := range t.Es.Name2ColIndex {
-			name2ColIndexSlice[i] = &pipeline.ExternalName2ColIndex{Name: k, Index: v}
-			i++
-		}
 		in.ExternalScan = &pipeline.ExternalScan{
 			Attrs:           t.Es.Attrs,
+			ColumnListLen:   t.Es.ColumnListLen,
 			Cols:            t.Es.Cols,
 			FileSize:        t.Es.FileSize,
 			FileOffsetTotal: t.Es.FileOffsetTotal,
-			Name2ColIndex:   name2ColIndexSlice,
 			CreateSql:       t.Es.CreateSql,
 			FileList:        t.Es.FileList,
 			Filter:          t.Es.Filter.FilterExpr,
-			TbColToDataCol:  t.Es.TbColToDataCol,
 			StrictSqlMode:   t.Es.StrictSqlMode,
 		}
 		in.ProjectList = t.ProjectList
@@ -868,7 +850,6 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			AffectedRows:  t.GetAffectedRows(),
 			Action:        uint32(t.Action),
 			UpdateCtxList: updateCtxList,
-			SegmentMap:    t.SegmentMap,
 		}
 	case *postdml.PostDml:
 		in.PostDml = &pipeline.PostDml{
@@ -950,7 +931,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		lockArg := lockop.NewArgumentByEngine(eng)
 		for _, target := range t.Targets {
 			typ := plan2.MakeTypeByPlan2Type(target.PrimaryColTyp)
-			lockArg.AddLockTarget(target.GetTableId(), target.GetPrimaryColIdxInBat(), typ, target.GetRefreshTsIdxInBat(), target.GetLockRows(), target.GetLockTableAtTheEnd())
+			lockArg.AddLockTarget(target.GetTableId(), target.GetObjRef(), target.GetPrimaryColIdxInBat(), typ, target.GetRefreshTsIdxInBat(), target.GetLockRows(), target.GetLockTableAtTheEnd())
 		}
 		for _, target := range t.Targets {
 			if target.LockTable {
@@ -1000,7 +981,6 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.ShuffleIdx = t.ShuffleIdx
 		arg.RuntimeFilterSpecs = t.RuntimeFilterBuildList
 		arg.JoinMapTag = t.JoinMapTag
-		arg.ProjectList = opr.ProjectList
 		op = arg
 	case vm.Shuffle:
 		t := opr.GetShuffle()
@@ -1078,7 +1058,6 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.IsShuffle = t.IsShuffle
 		arg.ShuffleIdx = t.ShuffleIdx
 		arg.JoinMapTag = t.JoinMapTag
-		arg.ProjectList = opr.ProjectList
 		op = arg
 	case vm.Left:
 		t := opr.GetLeftJoin()
@@ -1092,7 +1071,6 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.IsShuffle = t.IsShuffle
 		arg.ShuffleIdx = t.ShuffleIdx
 		arg.JoinMapTag = t.JoinMapTag
-		arg.ProjectList = opr.ProjectList
 		op = arg
 	case vm.Right:
 		t := opr.GetRightJoin()
@@ -1144,14 +1122,12 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.Cond = t.Expr
 		arg.JoinMapTag = t.JoinMapTag
 		arg.JoinType = int(t.JoinType)
-		arg.ProjectList = opr.ProjectList
 		op = arg
 	case vm.IndexJoin:
 		t := opr.GetIndexJoin()
 		arg := indexjoin.NewArgument()
 		arg.Result = t.Result
 		arg.RuntimeFilterSpecs = t.RuntimeFilterBuildList
-		arg.ProjectList = opr.ProjectList
 		op = arg
 	case vm.Offset:
 		op = offset.NewArgument().WithOffset(opr.Offset)
@@ -1165,7 +1141,6 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.Result = convertToResultPos(t.RelList, t.ColList)
 		arg.IsShuffle = t.IsShuffle
 		arg.JoinMapTag = t.JoinMapTag
-		arg.ProjectList = opr.ProjectList
 		op = arg
 	case vm.ProductL2:
 		t := opr.GetProductL2()
@@ -1173,7 +1148,6 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.Result = convertToResultPos(t.RelList, t.ColList)
 		arg.OnExpr = t.Expr
 		arg.JoinMapTag = t.JoinMapTag
-		arg.ProjectList = opr.ProjectList
 		op = arg
 	case vm.Projection:
 		arg := projection.NewArgument()
@@ -1194,7 +1168,6 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.IsShuffle = t.IsShuffle
 		arg.ShuffleIdx = t.ShuffleIdx
 		arg.JoinMapTag = t.JoinMapTag
-		arg.ProjectList = opr.ProjectList
 		op = arg
 	case vm.Single:
 		t := opr.GetSingleJoin()
@@ -1206,7 +1179,6 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.RuntimeFilterSpecs = t.RuntimeFilterBuildList
 		arg.HashOnPK = t.HashOnPk
 		arg.JoinMapTag = t.JoinMapTag
-		arg.ProjectList = opr.ProjectList
 		op = arg
 	case vm.Top:
 		op = top.NewArgument().
@@ -1235,7 +1207,6 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		op = mergerecursive.NewArgument()
 	case vm.MergeGroup:
 		arg := mergegroup.NewArgument()
-		arg.NeedEval = opr.Agg.NeedEval
 		arg.ProjectList = opr.ProjectList
 		op = arg
 		DecodeMergeGroup(op.(*mergegroup.MergeGroup), opr.Agg)
@@ -1257,21 +1228,16 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		op = arg
 	case vm.External:
 		t := opr.GetExternalScan()
-		name2ColIndex := make(map[string]int32)
-		for _, n2i := range t.Name2ColIndex {
-			name2ColIndex[n2i.Name] = n2i.Index
-		}
 		op = external.NewArgument().WithEs(
 			&external.ExternalParam{
 				ExParamConst: external.ExParamConst{
 					Attrs:           t.Attrs,
+					ColumnListLen:   t.ColumnListLen,
 					FileSize:        t.FileSize,
 					FileOffsetTotal: t.FileOffsetTotal,
 					Cols:            t.Cols,
 					CreateSql:       t.CreateSql,
-					Name2ColIndex:   name2ColIndex,
 					FileList:        t.FileList,
-					TbColToDataCol:  t.TbColToDataCol,
 					StrictSqlMode:   t.StrictSqlMode,
 				},
 				ExParam: external.ExParam{
@@ -1376,7 +1342,6 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		t := opr.GetMultiUpdate()
 		arg.SetAffectedRows(t.AffectedRows)
 		arg.Action = multi_update.UpdateAction(t.Action)
-		arg.SegmentMap = t.SegmentMap
 
 		arg.MultiUpdateCtx = make([]*multi_update.MultiUpdateCtx, len(t.UpdateCtxList))
 		for i, muCtx := range t.UpdateCtxList {
@@ -1546,7 +1511,7 @@ func (ctx *scopeContext) findRegister(reg *process.WaitRegister) (int32, *scopeC
 }
 
 func EncodeMergeGroup(merge *mergegroup.MergeGroup, pipe *pipeline.Group) {
-	if !merge.NeedEval || merge.PartialResults == nil {
+	if merge.PartialResults == nil {
 		return
 	}
 	pipe.PartialResultTypes = make([]uint32, len(merge.PartialResultTypes))
@@ -1651,7 +1616,7 @@ func EncodeMergeGroup(merge *mergegroup.MergeGroup, pipe *pipeline.Group) {
 }
 
 func DecodeMergeGroup(merge *mergegroup.MergeGroup, pipe *pipeline.Group) {
-	if !pipe.NeedEval || pipe.PartialResults == nil {
+	if pipe.PartialResults == nil {
 		return
 	}
 	merge.PartialResultTypes = make([]types.T, len(pipe.PartialResultTypes))

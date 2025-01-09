@@ -22,7 +22,7 @@ require (
 	github.com/aws/smithy-go v1.22.1
 	github.com/axiomhq/hyperloglog v0.0.0-20230201085229-3ddf4bad03dc
 	github.com/cakturk/go-netstat v0.0.0-20200220111822-e5b49efee7a5
-	github.com/cespare/xxhash/v2 v2.2.0
+	github.com/cespare/xxhash/v2 v2.3.0
 	github.com/cockroachdb/errors v1.9.1
 	github.com/confluentinc/confluent-kafka-go/v2 v2.4.0
 	github.com/containerd/cgroups/v3 v3.0.1
@@ -87,8 +87,8 @@ require (
 	golang.org/x/sync v0.8.0
 	golang.org/x/sys v0.26.0
 	gonum.org/v1/gonum v0.14.0
-	google.golang.org/grpc v1.62.1
-	google.golang.org/protobuf v1.34.2
+	google.golang.org/grpc v1.65.0
+	google.golang.org/protobuf v1.36.0
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1
 )
 
@@ -204,7 +204,7 @@ require (
 	go.uber.org/multierr v1.11.0 // indirect
 	golang.org/x/mod v0.21.0 // indirect
 	golang.org/x/tools v0.26.0 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20240318140521-94a12d6c2237 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20240604185151-ef581f913117 // indirect
 	gopkg.in/ini.v1 v1.67.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 
@@ -215,7 +215,7 @@ require (
 replace github.com/hashicorp/memberlist => github.com/matrixorigin/memberlist v0.5.1-0.20230322082342-95015c95ee76
 
 replace (
-	github.com/elastic/gosigar v0.14.2 => github.com/matrixorigin/gosigar v0.14.3-0.20240721074812-0d5bde0e9f91
+	github.com/elastic/gosigar v0.14.2 => github.com/matrixorigin/gosigar v0.14.3-0.20241204071856-40aab500bfac
 	github.com/fagongzi/goetty/v2 v2.0.3-0.20230628075727-26c9a2fd5fb8 => github.com/matrixorigin/goetty/v2 v2.0.0-20240611082008-a4de209fff3d
 	github.com/lni/dragonboat/v4 v4.0.0-20220815145555-6f622e8bcbef => github.com/matrixorigin/dragonboat/v4 v4.0.0-20241019050137-1c6138e9cf8b
 	github.com/lni/goutils v1.3.1-0.20220604063047-388d67b4dbc4 => github.com/matrixorigin/goutils v1.3.1-0.20220604063047-388d67b4dbc4

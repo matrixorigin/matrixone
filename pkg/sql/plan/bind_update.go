@@ -70,7 +70,8 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			}
 
 			for _, colName := range idxDef.Parts {
-				pkAndUkCols[colName] = true
+				realColName := catalog.ResolveAlias(colName)
+				pkAndUkCols[realColName] = true
 			}
 		}
 
@@ -233,7 +234,8 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			}
 
 			for _, colName := range idxDef.Parts {
-				if _, ok := updateColName2Idx[alias+"."+colName]; ok {
+				realColName := catalog.ResolveAlias(colName)
+				if _, ok := updateColName2Idx[alias+"."+realColName]; ok {
 					idxNeedUpdate[i][j] = true
 					break
 				}
@@ -242,7 +244,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 				continue
 			}
 
-			idxObjRef, idxTableDef := builder.compCtx.Resolve(dmlCtx.objRefs[i].SchemaName, idxDef.IndexTableName, bindCtx.snapshot)
+			idxObjRef, idxTableDef := builder.compCtx.ResolveIndexTableByRef(dmlCtx.objRefs[i], idxDef.IndexTableName, bindCtx.snapshot)
 			idxTag := builder.genNewTag()
 			builder.addNameByColRef(idxTag, idxTableDef)
 
@@ -324,6 +326,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			if col.Name == tableDef.Pkey.PkeyColName {
 				lockTarget := &plan.LockTarget{
 					TableId:            tableDef.TblId,
+					ObjRef:             DeepCopyObjectRef(dmlCtx.objRefs[i]),
 					PrimaryColIdxInBat: int32(finalColIdx),
 					PrimaryColRelPos:   finalProjTag,
 					PrimaryColTyp:      col.Typ,
@@ -335,6 +338,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 					// need lock oldPk by old partition idx, lock new pk by new partition idx
 					lockTarget := &plan.LockTarget{
 						TableId:            tableDef.TblId,
+						ObjRef:             DeepCopyObjectRef(dmlCtx.objRefs[i]),
 						PrimaryColIdxInBat: int32(finalColIdx),
 						PrimaryColRelPos:   finalProjTag,
 						PrimaryColTyp:      col.Typ,
@@ -426,8 +430,9 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			args := make([]*plan.Expr, len(idxDef.Parts))
 
 			for k, colName := range idxDef.Parts {
-				colPos := int32(colName2Idx[alias+"."+colName])
-				if updateIdx, ok := updateColName2Idx[alias+"."+colName]; ok {
+				realColName := catalog.ResolveAlias(colName)
+				colPos := int32(colName2Idx[alias+"."+realColName])
+				if updateIdx, ok := updateColName2Idx[alias+"."+realColName]; ok {
 					colPos = int32(updateIdx)
 				}
 				args[k] = &plan.Expr{
@@ -450,10 +455,12 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			insertCols[1].ColPos = finalColName2Idx[alias+"."+tableDef.Pkey.PkeyColName]
 
 			updateCtxList = append(updateCtxList, &plan.UpdateCtx{
-				ObjRef:     idxNode.ObjRef,
-				TableDef:   idxNode.TableDef,
-				InsertCols: insertCols,
-				DeleteCols: deleteCols,
+				ObjRef:          idxNode.ObjRef,
+				TableDef:        idxNode.TableDef,
+				InsertCols:      insertCols,
+				DeleteCols:      deleteCols,
+				OldPartitionIdx: -1,
+				NewPartitionIdx: -1,
 			})
 		}
 	}

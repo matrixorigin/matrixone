@@ -130,20 +130,18 @@ func (node *CreatePitr) Format(ctx *FmtCtx) {
 	case PITRLEVELCLUSTER:
 		ctx.WriteString("cluster")
 	case PITRLEVELACCOUNT:
+		ctx.WriteString("account")
 		if len(node.AccountName) != 0 {
-			ctx.WriteString("account ")
+			ctx.WriteString(" ")
 			node.AccountName.Format(ctx)
-		} else {
-			ctx.WriteString("self account")
-
 		}
 	case PITRLEVELDATABASE:
 		ctx.WriteString("database ")
 		node.DatabaseName.Format(ctx)
 	case PITRLEVELTABLE:
-		ctx.WriteString("database ")
+		ctx.WriteString("table ")
 		node.DatabaseName.Format(ctx)
-		ctx.WriteString(" table ")
+		ctx.WriteString(".")
 		node.TableName.Format(ctx)
 	}
 
@@ -247,3 +245,47 @@ func (node *RestorePitr) Format(ctx *FmtCtx) {
 
 func (node *RestorePitr) GetStatementType() string { return "Restore PITR" }
 func (node *RestorePitr) GetQueryType() string     { return QueryTypeOth }
+
+type RecoveryWindowLevel int
+
+const (
+	RECOVERYWINDOWLEVELCLUSTER RecoveryWindowLevel = iota
+	RECOVERYWINDOWLEVELACCOUNT
+	RECOVERYWINDOWLEVELDATABASE
+	RECOVERYWINDOWLEVELTABLE
+)
+
+type ShowRecoveryWindow struct {
+	statementImpl
+
+	Level RecoveryWindowLevel // recovery window level
+
+	AccountName  Identifier
+	DatabaseName Identifier
+	TableName    Identifier
+}
+
+func (node *ShowRecoveryWindow) Format(ctx *FmtCtx) {
+	ctx.WriteString("show recovery_window for ")
+	switch node.Level {
+	case RECOVERYWINDOWLEVELACCOUNT:
+		if len(node.AccountName) != 0 {
+			ctx.WriteString("account ")
+			node.AccountName.Format(ctx)
+		} else {
+			ctx.WriteString("account")
+		}
+	case RECOVERYWINDOWLEVELDATABASE:
+		ctx.WriteString("database ")
+		node.DatabaseName.Format(ctx)
+	case RECOVERYWINDOWLEVELTABLE:
+		ctx.WriteString("database ")
+		node.DatabaseName.Format(ctx)
+		ctx.WriteString(" table ")
+		node.TableName.Format(ctx)
+	}
+}
+
+func (node *ShowRecoveryWindow) GetStatementType() string { return "Show Recovery Window" }
+
+func (node *ShowRecoveryWindow) GetQueryType() string { return QueryTypeOth }

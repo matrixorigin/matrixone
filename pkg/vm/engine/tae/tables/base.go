@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -29,7 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -173,7 +173,7 @@ func (obj *baseObject) LoadPersistedCommitTS(bid uint16) (vec containers.Vector,
 	}
 	//Extend lifetime of vectors is without the function.
 	//need to copy. closeFunc will be nil.
-	vectors, _, err := blockio.LoadColumns2(
+	vectors, _, err := ioutil.LoadColumns2(
 		context.Background(),
 		[]uint16{objectio.SEQNUM_COMMITTS},
 		nil,
@@ -223,7 +223,7 @@ func (obj *baseObject) Prefetch(blkID uint16) error {
 		if err != nil {
 			return err
 		}
-		return blockio.Prefetch(obj.rt.SID(), obj.rt.Fs.Service, key)
+		return ioutil.Prefetch(obj.rt.SID(), obj.rt.Fs.Service, key)
 	}
 }
 
@@ -248,8 +248,7 @@ func (obj *baseObject) getDuplicateRowsWithLoad(
 	rowIDs containers.Vector,
 	blkOffset uint16,
 	isAblk bool,
-	skipCommittedBeforeTxnForAblk bool,
-	maxVisibleRow uint32,
+	from, to types.TS,
 	mp *mpool.MPool,
 ) (err error) {
 	schema := obj.meta.Load().GetSchema()
@@ -272,13 +271,12 @@ func (obj *baseObject) getDuplicateRowsWithLoad(
 		dedupFn = containers.MakeForeachVectorOp(
 			keys.GetType().Oid,
 			getRowIDAlkFunctions,
-			data.Vecs[0],
+			data.Vecs[0], //
 			rowIDs,
 			blkID,
-			maxVisibleRow,
 			obj.LoadPersistedCommitTS,
 			txn,
-			skipCommittedBeforeTxnForAblk,
+			from, to,
 		)
 	} else {
 		dedupFn = containers.MakeForeachVectorOp(
@@ -307,7 +305,6 @@ func (obj *baseObject) containsWithLoad(
 	sels *nulls.Bitmap,
 	blkOffset uint16,
 	isAblk bool,
-	isCommitting bool,
 	mp *mpool.MPool,
 ) (err error) {
 	schema := obj.meta.Load().GetSchema()
@@ -380,12 +377,11 @@ func (obj *baseObject) containsWithLoad(
 func (obj *baseObject) persistedGetDuplicatedRows(
 	ctx context.Context,
 	txn txnif.TxnReader,
-	skipCommittedBeforeTxnForAblk bool,
+	from, to types.TS,
 	keys containers.Vector,
 	keysZM index.ZM,
 	rowIDs containers.Vector,
 	isAblk bool,
-	maxVisibleRow uint32,
 	mp *mpool.MPool,
 ) (err error) {
 	pkIndex, err := MakeImmuIndex(
@@ -410,7 +406,7 @@ func (obj *baseObject) persistedGetDuplicatedRows(
 			continue
 		}
 		err = obj.getDuplicateRowsWithLoad(
-			ctx, txn, keys, sels, rowIDs, uint16(i), isAblk, skipCommittedBeforeTxnForAblk, maxVisibleRow, mp)
+			ctx, txn, keys, sels, rowIDs, uint16(i), isAblk, from, to, mp)
 		if err != nil {
 			return err
 		}
@@ -421,7 +417,6 @@ func (obj *baseObject) persistedGetDuplicatedRows(
 func (obj *baseObject) persistedContains(
 	ctx context.Context,
 	txn txnif.TxnReader,
-	isCommitting bool,
 	keys containers.Vector,
 	keysZM index.ZM,
 	isAblk bool,
@@ -449,7 +444,7 @@ func (obj *baseObject) persistedContains(
 			continue
 		}
 		err = obj.containsWithLoad(
-			ctx, txn, keys, sels, uint16(i), isAblk, isCommitting, mp)
+			ctx, txn, keys, sels, uint16(i), isAblk, mp)
 		if err != nil {
 			return err
 		}

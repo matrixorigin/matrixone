@@ -241,7 +241,7 @@ func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bo
 	rmFault := func() {}
 
 	if objectio.Debug19524Injected() {
-		if rmFault, err = objectio.InjectRanges(
+		if rmFault, err = objectio.InjectLogRanges(
 			ctx,
 			catalog.MO_TABLES,
 		); err != nil {
@@ -354,7 +354,8 @@ func (db *txnDatabase) Truncate(ctx context.Context, name string) (uint64, error
 	if db.op.IsSnapOp() {
 		return 0, moerr.NewInternalErrorNoCtx("truncate table in snapshot transaction")
 	}
-	newId, err := db.getTxn().allocateID(ctx)
+	txn := db.getTxn()
+	newId, err := txn.allocateID(ctx)
 	if err != nil {
 		return 0, err
 	}
@@ -364,6 +365,7 @@ func (db *txnDatabase) Truncate(ctx context.Context, name string) (uint64, error
 		return 0, err
 	}
 
+	txn.tableOps.addCreatedInTxn(newId, txn.statementID)
 	if err := db.createWithID(ctx, name, newId, defs, false); err != nil {
 		return 0, err
 	}
@@ -375,10 +377,12 @@ func (db *txnDatabase) Create(ctx context.Context, name string, defs []engine.Ta
 	if db.op.IsSnapOp() {
 		return moerr.NewInternalErrorNoCtx("create table in snapshot transaction")
 	}
-	tableId, err := db.getTxn().allocateID(ctx)
+	txn := db.getTxn()
+	tableId, err := txn.allocateID(ctx)
 	if err != nil {
 		return err
 	}
+	txn.tableOps.addCreatedInTxn(tableId, txn.statementID)
 	return db.createWithID(ctx, name, tableId, defs, false)
 }
 
@@ -631,7 +635,7 @@ func (db *txnDatabase) getTableItem(
 	if ok := c.GetTable(&item); !ok {
 		var tableitem *cache.TableItem
 		if !c.CanServe(types.TimestampToTS(db.op.SnapshotTS())) {
-			logutil.Info("FIND_TABLE getTableItem cache cannot serve", zap.String("table", name), zap.Uint32("accountID", accountID), zap.String("timestamp", db.op.SnapshotTS().DebugString()))
+			logutil.Info("FIND_TABLE loadTableFromStorage", zap.String("table", name), zap.Uint32("accountID", accountID), zap.String("txn", db.op.Txn().DebugString()), zap.String("cacheTS", c.GetStartTS().ToString()))
 			if tableitem, err = db.loadTableFromStorage(ctx, accountID, name); err != nil {
 				return nil, err
 			}

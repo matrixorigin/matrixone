@@ -25,13 +25,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util/csvparser"
 	"github.com/matrixorigin/matrixone/pkg/vm"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -54,25 +54,23 @@ type ExParamConst struct {
 	IgnoreLineTag int
 	ParallelLoad  bool
 	StrictSqlMode bool
+	Close         byte
 	maxBatchSize  uint64
 	Idx           int
+	ColumnListLen int32 // load ...  (col1, col2 , col3), ColumnListLen is 3
 	CreateSql     string
-	Close         byte
+
 	// letter case: origin
-	Attrs           []string
+	Attrs           []plan.ExternAttr
 	Cols            []*plan.ColDef
 	FileList        []string
 	FileSize        []int64
 	FileOffset      []int64
 	FileOffsetTotal []*pipeline.FileOffset
-	// letter case: lower
-	Name2ColIndex map[string]int32
-	// letter case: lower
-	TbColToDataCol map[string]int32
-	Ctx            context.Context
-	Extern         *tree.ExternParam
-	tableDef       *plan.TableDef
-	ClusterTable   *plan.ClusterTable
+	Ctx             context.Context
+	Extern          *tree.ExternParam
+	tableDef        *plan.TableDef
+	ClusterTable    *plan.ClusterTable
 }
 
 type ExParam struct {
@@ -102,7 +100,7 @@ type FilterParam struct {
 	zonemappable bool
 	columnMap    map[int]int
 	FilterExpr   *plan.Expr
-	blockReader  *blockio.BlockReader
+	blockReader  *ioutil.BlockReader
 }
 
 type container struct {

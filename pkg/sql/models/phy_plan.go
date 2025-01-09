@@ -21,12 +21,10 @@ import (
 )
 
 type PhyPlan struct {
-	Version         string     `json:"version"`
-	RetryTime       int        `json:"retryTime,omitempty"`
-	LocalScope      []PhyScope `json:"scope,omitempty"`
-	RemoteScope     []PhyScope `json:"RemoteScope,omitempty"`
-	S3IOInputCount  int64      `json:"S3IOInputCount,omitempty"`
-	S3IOOutputCount int64      `json:"S3IOOutputCount,omitempty"`
+	Version     string     `json:"version"`
+	RetryTime   int        `json:"retryTime,omitempty"`
+	LocalScope  []PhyScope `json:"scope,omitempty"`
+	RemoteScope []PhyScope `json:"RemoteScope,omitempty"`
 }
 
 type PhyScope struct {

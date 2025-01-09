@@ -216,7 +216,7 @@ col1    col2    col3    col4    col5
 alter table t1 rename column col3 to colx;
 show index from t1;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t1    0    PRIMARY    1    col1    A    0    NULL    NULL                        YES    NULL
+t1    0    PRIMARY    1    col1    A    0    NULL    NULL                        YES    col1
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
 col1    INT(32)    NO    PRI    null        
@@ -308,7 +308,7 @@ col1    col2    col3    col4    col5
 alter table t1 change col2 colx datetime;
 show index from t1;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t1    0    PRIMARY    1    col1    A    0    NULL    NULL                        YES    NULL
+t1    0    PRIMARY    1    col1    A    0    NULL    NULL                        YES    col1
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
 col1    INT(32)    NO    PRI    null        

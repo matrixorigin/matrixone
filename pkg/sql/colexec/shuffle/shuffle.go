@@ -32,7 +32,6 @@ const opName = "shuffle"
 
 func (shuffle *Shuffle) String(buf *bytes.Buffer) {
 	buf.WriteString(opName)
-	buf.WriteString(": shuffle")
 }
 
 func (shuffle *Shuffle) OpType() vm.OpType {
@@ -41,7 +40,7 @@ func (shuffle *Shuffle) OpType() vm.OpType {
 
 func (shuffle *Shuffle) Prepare(proc *process.Process) error {
 	if shuffle.OpAnalyzer == nil {
-		shuffle.OpAnalyzer = process.NewAnalyzer(shuffle.GetIdx(), shuffle.IsFirst, shuffle.IsLast, "shuffle")
+		shuffle.OpAnalyzer = process.NewAnalyzer(shuffle.GetIdx(), shuffle.IsFirst, shuffle.IsLast, opName)
 	} else {
 		shuffle.OpAnalyzer.Reset()
 	}

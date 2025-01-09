@@ -15,8 +15,12 @@
 package merge
 
 import (
+	"slices"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 )
+
+var _ policy = (*tombstonePolicy)(nil)
 
 type tombstonePolicy struct {
 	tombstones []*catalog.ObjectEntry
@@ -33,11 +37,11 @@ func (t *tombstonePolicy) onObject(entry *catalog.ObjectEntry, config *BasicPoli
 	return true
 }
 
-func (t *tombstonePolicy) revise(resourceControl *resourceController, config *BasicPolicyConfig) []reviseResult {
+func (t *tombstonePolicy) revise(*resourceController) []reviseResult {
 	if len(t.tombstones) < 2 {
 		return nil
 	}
-	return []reviseResult{{t.tombstones, taskHostDN}}
+	return []reviseResult{{slices.Clone(t.tombstones), taskHostDN}}
 }
 
 func (t *tombstonePolicy) resetForTable(*catalog.TableEntry, *BasicPolicyConfig) {
@@ -46,6 +50,6 @@ func (t *tombstonePolicy) resetForTable(*catalog.TableEntry, *BasicPolicyConfig)
 
 func newTombstonePolicy() policy {
 	return &tombstonePolicy{
-		tombstones: make([]*catalog.ObjectEntry, 0),
+		tombstones: make([]*catalog.ObjectEntry, 0, 5),
 	}
 }

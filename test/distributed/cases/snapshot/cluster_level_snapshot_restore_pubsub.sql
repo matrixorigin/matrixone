@@ -17,13 +17,13 @@ drop publication if exists publication01;
 create publication publication01 database republication01 account acc01 comment 'publish before creating snapshot';
 -- @ignore:5,6
 show publications;
--- @ignore:0,3,7
+-- @ignore:0,4,8,9
 select * from mo_catalog.mo_pubs;
 drop publication publication01;
 drop database republication01;
 restore account sys from snapshot sp01;
 
--- @ignore:0,3,7
+-- @ignore:0,4,8,9
 select * from mo_catalog.mo_pubs;
 use republication01;
 select * from repub01;
@@ -81,7 +81,7 @@ drop publication if exists pub02;
 create publication pub02 database repub02 account acc01 comment 'publish before creating snapshot';
 -- @ignore:5,6
 show publications;
--- @ignore:0,3,7
+-- @ignore:0,4,8,9
 select * from mo_catalog.mo_pubs;
 
 -- @session:id=1&user=acc01:test_account&password=111
@@ -97,7 +97,7 @@ select * from aff01;
 restore account sys from snapshot sp02;
 -- @ignore:5,6
 show publications;
--- @ignore:0,3,7
+-- @ignore:0,4,8,9
 select * from mo_catalog.mo_pubs;
 use repub02;
 select * from pri01;
@@ -163,7 +163,7 @@ show subscriptions;
 show databases;
 -- @session
 drop snapshot sp01;
--- @ignore:0,3,7
+-- @ignore:0,4,8,9
 select * from mo_catalog.mo_pubs;
 -- @ignore:5,6
 show publications;
@@ -190,7 +190,7 @@ create snapshot sp02 for cluster;
 
 drop publication if exists pub04;
 create publication pub04 database db01 account acc01 comment 'create pub04';
--- @ignore:0,3,7
+-- @ignore:0,4,8,9
 select * from mo_catalog.mo_pubs;
 -- @ignore:5,6
 show publications;
@@ -249,6 +249,7 @@ select count(*) from index02;
 drop database if exists db10;
 create database db10;
 use db10;
+-- @bvt:issue#16438
 drop table if exists index03;
 create table index03 (
                          emp_no      int             not null,
@@ -267,6 +268,7 @@ create table index03 (
 
 insert into index03 values (9001,'1980-12-17', 'SMITH', 'CLERK', 'F', '2008-12-17'),
                            (9002,'1981-02-20', 'ALLEN', 'SALESMAN', 'F', '2008-02-20');
+-- @bvt:issue
 -- @session
 
 drop snapshot if exists sp05;
@@ -341,6 +343,7 @@ select count(*) from index02;
 drop database if exists db10;
 create database db10;
 use db10;
+-- @bvt:issue#16438
 drop table if exists index03;
 create table index03 (
                          emp_no      int             not null,
@@ -359,6 +362,7 @@ create table index03 (
 
 insert into index03 values (9001,'1980-12-17', 'SMITH', 'CLERK', 'F', '2008-12-17'),
                            (9002,'1981-02-20', 'ALLEN', 'SALESMAN', 'F', '2008-02-20');
+-- @bvt:issue
 -- @session
 
 drop snapshot if exists sp05;
@@ -419,7 +423,7 @@ create snapshot sp100 for cluster;
 
 drop publication if exists pub07;
 create publication pub07 database test01 account acc01 comment 'publish test01';
--- @ignore:0,3,7
+-- @ignore:0,4,8,9
 select * from mo_catalog.mo_pubs;
 
 drop snapshot if exists sp101;
@@ -440,7 +444,7 @@ use sub07;
 -- @session
 
 restore account sys from snapshot sp101;
--- @ignore:0,3,7
+-- @ignore:0,4,8,9
 select * from mo_catalog.mo_pubs;
 
 -- @session:id=1&user=acc01:test_account&password=111
@@ -605,7 +609,7 @@ create snapshot sp105 for cluster;
 -- @session:id=1&user=acc01:test_account&password=111
 drop publication if exists pub10;
 create publication pub10 database test04 account acc02 comment 'publish test03';
--- @ignore:0,3,7
+-- @ignore:0,4,8,9
 select * from mo_catalog.mo_pubs;
 -- @session
 

@@ -139,6 +139,7 @@ var newMockWrapper = func(ctrl *gomock.Controller, ses *Session,
 	mcw.EXPECT().Clear().AnyTimes()
 	mcw.EXPECT().Free().AnyTimes()
 	mcw.EXPECT().Plan().Return(&plan2.Plan{}).AnyTimes()
+	mcw.EXPECT().BinaryExecute().Return(false, "").AnyTimes()
 	return mcw
 }
 

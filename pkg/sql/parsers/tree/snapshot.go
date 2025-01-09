@@ -62,7 +62,10 @@ type ObjectInfo struct {
 
 func (node *ObjectInfo) Format(ctx *FmtCtx) {
 	node.SLevel.Format(ctx)
-	ctx.WriteString(" ")
+
+	if node.SLevel.Level != SNAPSHOTLEVELCLUSTER {
+		ctx.WriteString(" ")
+	}
 	node.ObjName.Format(ctx)
 }
 

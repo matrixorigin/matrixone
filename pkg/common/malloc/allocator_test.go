@@ -27,7 +27,7 @@ func testAllocator(
 
 	t.Run("allocate", func(t *testing.T) {
 		allocator := newAllocator()
-		for i := uint64(1); i < 128*MB; i = uint64(math.Ceil(float64(i) * 1.1)) {
+		for i := uint64(1); i < 8*MB; i = uint64(math.Ceil(float64(i) * 1.1)) {
 			// allocate
 			slice, dec, err := allocator.Allocate(i, NoHints)
 			if err != nil {

@@ -58,11 +58,11 @@ pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time
 pub1    sys    db1    *        2024-08-02 15:21:45    syssub1    2024-08-02 15:21:45    0
 show table status;
 Name    Engine    Row_format    Rows    Avg_row_length    Data_length    Max_data_length    Index_length    Data_free    Auto_increment    Create_time    Update_time    Check_time    Collation    Checksum    Create_options    Comment    Role_id    Role_name
-t1    Tae    Dynamic    3    0    120    0    0    NULL    0    2024-08-02 15:21:45    NULL    NULL    utf8mb4_bin    NULL            0    moadmin
-t2    Tae    Dynamic    0    0    0    0    0    NULL    0    2024-08-02 15:21:45    NULL    NULL    utf8mb4_bin    NULL            0    moadmin
+t1    Tae    Dynamic    3    0    156    0    0    NULL    0    2024-12-02 16:47:50    NULL    NULL    utf8mb4_bin    NULL            0    moadmin
+t2    Tae    Dynamic    0    0    0    0    0    NULL    0    2024-12-02 16:47:50    NULL    NULL    utf8mb4_bin    NULL            0    moadmin
 show table status like 't1';
 Name    Engine    Row_format    Rows    Avg_row_length    Data_length    Max_data_length    Index_length    Data_free    Auto_increment    Create_time    Update_time    Check_time    Collation    Checksum    Create_options    Comment    Role_id    Role_name
-t1    Tae    Dynamic    3    0    120    0    0    NULL    0    2024-08-02 15:21:45    NULL    NULL    utf8mb4_bin    NULL            0    moadmin
+t1    Tae    Dynamic    3    0    156    0    0    NULL    0    2024-12-02 16:47:50    NULL    NULL    utf8mb4_bin    NULL            0    moadmin
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    YES        null        
@@ -112,10 +112,10 @@ pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time
 pub1    sys    db2    *    this is a recreated pub    2024-08-02 15:21:45    syssub1    2024-08-02 15:21:45    0
 show table status;
 Name    Engine    Row_format    Rows    Avg_row_length    Data_length    Max_data_length    Index_length    Data_free    Auto_increment    Create_time    Update_time    Check_time    Collation    Checksum    Create_options    Comment    Role_id    Role_name
-t1    Tae    Dynamic    3    0    108    0    0    NULL    0    2024-08-02 15:21:45    NULL    NULL    utf8mb4_bin    NULL            0    moadmin
+t1    Tae    Dynamic    3    0    144    0    0    NULL    0    2024-12-02 16:47:50    NULL    NULL    utf8mb4_bin    NULL            0    moadmin
 show table status like 't1';
 Name    Engine    Row_format    Rows    Avg_row_length    Data_length    Max_data_length    Index_length    Data_free    Auto_increment    Create_time    Update_time    Check_time    Collation    Checksum    Create_options    Comment    Role_id    Role_name
-t1    Tae    Dynamic    3    0    108    0    0    NULL    0    2024-08-02 15:21:45    NULL    NULL    utf8mb4_bin    NULL            0    moadmin
+t1    Tae    Dynamic    3    0    144    0    0    NULL    0    2024-12-02 16:47:50    NULL    NULL    utf8mb4_bin    NULL            0    moadmin
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
 a    FLOAT(0)    YES        null        
@@ -181,7 +181,7 @@ Tables_in_sys_sub_part_tbls    Table_type
 t1    BASE TABLE
 show table status from sys_sub_part_tbls;
 Name    Engine    Row_format    Rows    Avg_row_length    Data_length    Max_data_length    Index_length    Data_free    Auto_increment    Create_time    Update_time    Check_time    Collation    Checksum    Create_options    Comment    Role_id    Role_name
-t1    Tae    Dynamic    3    0    120    0    0    NULL    0    2024-08-02 15:21:45    NULL    NULL    utf8mb4_bin    NULL            0    moadmin
+t1    Tae    Dynamic    3    0    156    0    0    NULL    0    2024-12-02 16:47:50    NULL    NULL    utf8mb4_bin    NULL            0    moadmin
 desc sys_sub_part_tbls.t1;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    YES        null        
@@ -206,7 +206,7 @@ Tables_in_sys_sub_part_tbls    Table_type
 t1    BASE TABLE
 show table status;
 Name    Engine    Row_format    Rows    Avg_row_length    Data_length    Max_data_length    Index_length    Data_free    Auto_increment    Create_time    Update_time    Check_time    Collation    Checksum    Create_options    Comment    Role_id    Role_name
-t1    Tae    Dynamic    3    0    120    0    0    NULL    0    2024-08-02 15:21:45    NULL    NULL    utf8mb4_bin    NULL            0    moadmin
+t1    Tae    Dynamic    3    0    156    0    0    NULL    0    2024-12-02 16:47:50    NULL    NULL    utf8mb4_bin    NULL            0    moadmin
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    YES        null        

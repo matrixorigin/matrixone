@@ -1,0 +1,120 @@
+create account a1 ADMIN_NAME 'admin1' IDENTIFIED BY 'test123';
+select @@lower_case_table_names;
+@@lower_case_table_names
+1
+set global lower_case_table_names = 0;
+select @@lower_case_table_names;
+@@lower_case_table_names
+0
+create database test;
+use test;
+create table TT (c1 int);
+insert into TT values(1);
+create table tt(a1 int);
+insert into tt values(2);
+create table Tt(b1 int);
+insert into Tt values(3);
+create table tT(d1 int);
+insert into tT values(4);
+show create table TT;
+Table    Create Table
+TT    CREATE TABLE `TT` (\n  `c1` int DEFAULT NULL\n)
+show create table tt;
+Table    Create Table
+tt    CREATE TABLE `tt` (\n  `a1` int DEFAULT NULL\n)
+show create table Tt;
+Table    Create Table
+Tt    CREATE TABLE `Tt` (\n  `b1` int DEFAULT NULL\n)
+show create table tT;
+Table    Create Table
+tT    CREATE TABLE `tT` (\n  `d1` int DEFAULT NULL\n)
+show tables;
+Tables_in_test
+TT
+Tt
+tT
+tt
+select * from TT;
+c1
+1
+select * from tt;
+a1
+2
+select * from Tt;
+b1
+3
+select * from tT;
+d1
+4
+drop snapshot if exists sp_lower_case_table_names;
+create snapshot sp_lower_case_table_names for account a1;
+drop database test;
+restore account a1 from snapshot sp_lower_case_table_names;
+use test;
+show tables;
+Tables_in_test
+TT
+Tt
+tT
+tt
+show create table TT;
+Table    Create Table
+TT    CREATE TABLE `TT` (\n  `c1` int DEFAULT NULL\n)
+show create table tt;
+Table    Create Table
+tt    CREATE TABLE `tt` (\n  `a1` int DEFAULT NULL\n)
+show create table Tt;
+Table    Create Table
+Tt    CREATE TABLE `Tt` (\n  `b1` int DEFAULT NULL\n)
+show create table tT;
+Table    Create Table
+tT    CREATE TABLE `tT` (\n  `d1` int DEFAULT NULL\n)
+select * from TT;
+c1
+1
+select * from tt;
+a1
+2
+select * from Tt;
+b1
+3
+select * from tT;
+d1
+4
+drop snapshot if exists sp_lower_case_table_a1;
+create snapshot sp_lower_case_table_a1 for account a1;
+restore account a1 from snapshot sp_lower_case_table_a1;
+use test;
+show tables;
+Tables_in_test
+TT
+Tt
+tT
+tt
+show create table TT;
+Table    Create Table
+TT    CREATE TABLE `TT` (\n  `c1` int DEFAULT NULL\n)
+show create table tt;
+Table    Create Table
+tt    CREATE TABLE `tt` (\n  `a1` int DEFAULT NULL\n)
+show create table Tt;
+Table    Create Table
+Tt    CREATE TABLE `Tt` (\n  `b1` int DEFAULT NULL\n)
+show create table tT;
+Table    Create Table
+tT    CREATE TABLE `tT` (\n  `d1` int DEFAULT NULL\n)
+select * from TT;
+c1
+1
+select * from tt;
+a1
+2
+select * from Tt;
+b1
+3
+select * from tT;
+d1
+4
+drop account if exists a1;
+drop snapshot if exists sp_lower_case_table_names;
+drop snapshot if exists sp_lower_case_table_a1;

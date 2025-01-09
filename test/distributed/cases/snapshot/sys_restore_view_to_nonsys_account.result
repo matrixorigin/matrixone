@@ -506,6 +506,8 @@ drop table students;
 select * from StudentCoursesView;
 SQL parser error: table "students" does not exist
 restore account acc01 database test02 table students from snapshot sp07;
+internal error: can't restore table from other account's snapshot
+restore account acc01 from snapshot sp07;
 use test02;
 select * from Students;
 studentid    name    grade
@@ -513,10 +515,20 @@ studentid    name    grade
 2    Bob    3.00
 3    Charlie    3.70
 select * from Enrollments;
-SQL parser error: table "enrollments" does not exist
+studentid    courseid    enrollmentdate
+1    101    2024-01-10
+2    102    2024-01-15
+1    103    2024-01-20
+3    101    2024-02-01
 select * from StudentCoursesView;
-SQL parser error: table "enrollments" does not exist
+studentname    coursetitle    teacher    enrollmentdate
+Alice    Chemistry    Ms. Lee    2024-01-20
+Alice    Mathematics    Mr. Smith    2024-01-10
+Bob    Physics    Dr. Johnson    2024-01-15
+Charlie    Mathematics    Mr. Smith    2024-02-01
 restore account acc01 database test02 table Enrollments from snapshot sp07;
+internal error: can't restore table from other account's snapshot
+restore account acc01 from snapshot sp07;
 use test02;
 select * from Enrollments;
 studentid    courseid    enrollmentdate

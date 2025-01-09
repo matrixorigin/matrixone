@@ -511,7 +511,7 @@ func genInsertMoTablePartitionsSql(databaseId string, tableId uint64, partitionB
 	return buffer.String()
 }
 
-func GetConstraintDef(ctx context.Context, rel engine.Relation) (*engine.ConstraintDef, error) {
+var GetConstraintDef = func(ctx context.Context, rel engine.Relation) (*engine.ConstraintDef, error) {
 	defs, err := rel.TableDefs(ctx)
 	if err != nil {
 		return nil, err

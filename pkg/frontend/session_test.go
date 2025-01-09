@@ -28,6 +28,7 @@ import (
 
 	catalog2 "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
@@ -349,7 +350,7 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 		db.EXPECT().Relations(gomock.Any()).Return(nil, nil).AnyTimes()
 
 		table := mock_frontend.NewMockRelation(ctrl)
-		table.EXPECT().Ranges(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
+		table.EXPECT().Ranges(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
 		table.EXPECT().TableDefs(gomock.Any()).Return(nil, nil).AnyTimes()
 		table.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{}).AnyTimes()
 		table.EXPECT().CopyTableDef(gomock.Any()).Return(&plan.TableDef{}).AnyTimes()
@@ -381,6 +382,16 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 
 		object, tableRef := tcc.Resolve("abc", "t1", &plan2.Snapshot{TS: ts})
+		convey.So(object, convey.ShouldNotBeNil)
+		convey.So(tableRef, convey.ShouldNotBeNil)
+
+		ref := &plan.ObjectRef{
+			SchemaName: "schema",
+			PubInfo: &plan.PubInfo{
+				TenantId: 0,
+			},
+		}
+		object, tableRef = tcc.ResolveIndexTableByRef(ref, "indexTable", &plan2.Snapshot{TS: ts})
 		convey.So(object, convey.ShouldNotBeNil)
 		convey.So(tableRef, convey.ShouldNotBeNil)
 
@@ -488,11 +499,13 @@ func TestSession_updateTimeZone(t *testing.T) {
 }
 
 func TestSession_Migrate(t *testing.T) {
-	genSession := func(ctrl *gomock.Controller) *Session {
-		sv, err := getSystemVariables("test/system_vars_config.toml")
-		if err != nil {
-			t.Error(err)
-		}
+	sid := "ms1"
+
+	sv, err := getSystemVariables("test/system_vars_config.toml")
+	if err != nil {
+		t.Error(err)
+	}
+	genSession := func(ctrl *gomock.Controller, dbname string, e error) *Session {
 		sv.SkipCheckPrivilege = true
 		sv.SessionTimeout = toml.Duration{Duration: 10 * time.Second}
 		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
@@ -522,7 +535,7 @@ func TestSession_Migrate(t *testing.T) {
 		db := mock_frontend.NewMockDatabase(ctrl)
 		eng.EXPECT().Hints().Return(hints).AnyTimes()
 		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(db, nil).AnyTimes()
+		eng.EXPECT().Database(gomock.Any(), dbname, gomock.Any()).Return(db, e).AnyTimes()
 		rel := mock_frontend.NewMockRelation(ctrl)
 		rel.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{}).AnyTimes()
 		rel.EXPECT().TableDefs(gomock.Any()).Return(nil, nil).AnyTimes()
@@ -530,23 +543,23 @@ func TestSession_Migrate(t *testing.T) {
 		rel.EXPECT().GetTableID(gomock.Any()).Return(tid).AnyTimes()
 		db.EXPECT().IsSubscription(gomock.Any()).Return(false).AnyTimes()
 		db.EXPECT().Relation(gomock.Any(), gomock.Any(), gomock.Any()).Return(rel, nil).AnyTimes()
-		setPu("", &config.ParameterUnit{
+		setPu(sid, &config.ParameterUnit{
 			SV:            sv,
 			TxnClient:     txnClient,
 			StorageEngine: eng,
 		})
 
 		mockBS := MockBaseService{}
-		rm, _ := NewRoutineManager(context.Background(), "")
+		rm, _ := NewRoutineManager(context.Background(), sid)
 		rm.baseService = &mockBS
-		setRtMgr("", rm)
+		setRtMgr(sid, rm)
 		ctx := defines.AttachAccountId(context.Background(), sysAccountID)
-		ioses, err := NewIOSession(&testConn{}, getPu(""), "")
+		ioses, err := NewIOSession(&testConn{}, getPu(sid), sid)
 		if err != nil {
 			panic(err)
 		}
-		proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
-		session := NewSession(ctx, "", proto, nil)
+		proto := NewMysqlClientProtocol(sid, 0, ioses, 1024, sv)
+		session := NewSession(ctx, sid, proto, nil)
 		session.tenant = &TenantInfo{
 			Tenant:   GetDefaultTenant(),
 			TenantID: GetSysTenantId(),
@@ -556,26 +569,51 @@ func TestSession_Migrate(t *testing.T) {
 		session.setRoutineManager(rm)
 		return session
 	}
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
 
-	bh := &backgroundExecTest{}
-	bh.init()
+	t.Run("ok", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
 
-	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
-	defer bhStub.Reset()
+		bh := &backgroundExecTest{}
+		bh.init()
 
-	s := genSession(ctrl)
-	err := Migrate(s, &query.MigrateConnToRequest{
-		DB: "d1",
-		PrepareStmts: []*query.PrepareStmt{
-			{Name: "p1", SQL: `select ?`},
-			{Name: "p2", SQL: `select ?`},
-		},
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		runtime.SetupServiceBasedRuntime(sid, runtime.DefaultRuntime())
+		InitServerLevelVars(sid)
+		SetSessionAlloc(sid, NewSessionAllocator(&config.ParameterUnit{SV: sv}))
+		s := genSession(ctrl, "d1", nil)
+		err := Migrate(s, &query.MigrateConnToRequest{
+			DB: "d1",
+			PrepareStmts: []*query.PrepareStmt{
+				{Name: "p1", SQL: `select ?`},
+				{Name: "p2", SQL: `select ?`},
+			},
+		})
+		assert.NoError(t, err)
+		assert.Equal(t, "d1", s.GetDatabaseName())
+		assert.Equal(t, 2, len(s.prepareStmts))
 	})
-	assert.NoError(t, err)
-	assert.Equal(t, "d1", s.GetDatabaseName())
-	assert.Equal(t, 2, len(s.prepareStmts))
+
+	t.Run("db dropped", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		runtime.SetupServiceBasedRuntime(sid, runtime.DefaultRuntime())
+		InitServerLevelVars(sid)
+		SetSessionAlloc(sid, NewSessionAllocator(&config.ParameterUnit{SV: sv}))
+		s := genSession(ctrl, "d2", context.Canceled)
+		err := Migrate(s, &query.MigrateConnToRequest{DB: "d2"})
+		assert.Equal(t, "", s.GetDatabaseName())
+		assert.NoError(t, err)
+	})
 }
 
 func Test_connectionid(t *testing.T) {

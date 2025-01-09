@@ -78,6 +78,20 @@ func WithServerDisableAutoCancelContext() ServerOption {
 	}
 }
 
+// WithServerHandler sets the server handler. It is used in tests for now.
+func WithServerHandler(
+	h func(
+		ctx context.Context,
+		request RPCMessage,
+		sequence uint64,
+		cs ClientSession,
+	) error,
+) ServerOption {
+	return func(s *server) {
+		s.handler = h
+	}
+}
+
 type server struct {
 	name        string
 	metrics     *serverMetrics

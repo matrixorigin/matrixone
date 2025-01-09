@@ -910,11 +910,6 @@ func (txnop *testTxnOp) RemoveWaitLock(key uint64) {
 	panic("implement me")
 }
 
-func (txnop *testTxnOp) LockTableCount() int32 {
-	//TODO implement me
-	panic("implement me")
-}
-
 func (txnop *testTxnOp) LockSkipped(tableID uint64, mode lock.LockMode) bool {
 	//TODO implement me
 	panic("implement me")

@@ -13,7 +13,7 @@ select addab(10, 5);
 select name, db from mo_catalog.mo_user_defined_function;
 
 drop snapshot if exists udf_dsp01;
-create snapshot udf_dsp01 for account sys;
+create snapshot udf_dsp01 for account;
 -- @ignore:0,1
 show snapshots;
 
@@ -24,7 +24,7 @@ language sql as
 select concatenate('Hello, ', 'World!');
 
 drop snapshot if exists udf_dsp02;
-create snapshot udf_dsp02 for account sys;
+create snapshot udf_dsp02 for account;
 -- @ignore:0,1
 show snapshots;
 
@@ -39,7 +39,7 @@ select subab(10, 5);
 select name, db from mo_catalog.mo_user_defined_function;
 
 drop snapshot if exists udf_dsp03;
-create snapshot udf_dsp03 for account sys;
+create snapshot udf_dsp03 for account;
 -- @ignore:0,1
 show snapshots;
 
@@ -80,7 +80,7 @@ language sql as
 select * from mo_catalog.mo_user_defined_function;
 
 drop snapshot if exists udf_sp04;
-create snapshot udf_sp04 for account sys;
+create snapshot udf_sp04 for account;
 
 drop database udf_db2;
 select * from mo_catalog.mo_user_defined_function;
@@ -121,7 +121,7 @@ call test_if_hit_if();
 select * from mo_catalog.mo_stored_procedure;
 
 drop snapshot if exists sp_sp05;
-create snapshot sp_sp05 for account sys;
+create snapshot sp_sp05 for account;
 
 drop procedure test_if_hit_elseif_first_elseif;
 drop procedure test_if_hit_if;
@@ -167,7 +167,7 @@ call test_if_hit_else();
 select * from mo_catalog.mo_stored_procedure;
 
 drop snapshot if exists sp_sp06;
-create snapshot sp_sp06 for account sys;
+create snapshot sp_sp06 for account;
 
 drop table tbh1;
 drop table tbh2;
@@ -199,7 +199,7 @@ create stage my_ext_stage1 URL='s3://load/files/' CREDENTIALS={'AWS_KEY_ID'='1a2
 select * from mo_catalog.mo_stages;
 
 drop snapshot if exists stage_sp01;
-create snapshot stage_sp01 for account sys;
+create snapshot stage_sp01 for account;
 
 alter stage my_ext_stage1 SET URL='s3://load/files2/';
 -- @ignore:0,2,3,5
@@ -226,13 +226,13 @@ create user usery identified by '222';
 select user_name, authentication_string, status, login_type, creator, owner, default_role from mo_catalog.mo_user;
 
 drop snapshot if exists user_sp01;
-create snapshot user_sp01 for account sys;
+create snapshot user_sp01 for account;
 
 drop user if exists userz;
 create user userz identified by '111';
 
 drop snapshot if exists user_sp02;
-create snapshot user_sp02 for account sys;
+create snapshot user_sp02 for account;
 
 restore account sys from snapshot user_sp01;
 select user_name, authentication_string, status, login_type, creator, owner, default_role from mo_catalog.mo_user;
@@ -255,7 +255,7 @@ create role role1;
 create role role2;
 select role_name, creator, owner from mo_catalog.mo_role;
 drop snapshot if exists role_sp01;
-create snapshot role_sp01 for account sys;
+create snapshot role_sp01 for account;
 
 drop role role1;
 drop role role2;
@@ -285,7 +285,7 @@ select role_name, creator, owner from mo_catalog.mo_role;
 select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs where role_name='test_role';
 
 drop snapshot if exists prvis_sp01;
-create snapshot prvis_sp01 for account sys;
+create snapshot prvis_sp01 for account;
 
 drop role test_role;
 select role_name, creator, owner from mo_catalog.mo_role;
@@ -317,7 +317,7 @@ select role_name, creator, owner from mo_catalog.mo_role;
 select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs where role_name='role_account_priv_1';
 
 drop snapshot if exists grant_sp01;
-create snapshot grant_sp01 for account sys;
+create snapshot grant_sp01 for account;
 
 drop user user_grant_2;
 drop role 'role_account_priv_1';
@@ -341,7 +341,7 @@ create user if not exists user_grant_3 identified by '123456';
 drop role if exists role_account_priv_3;
 create role 'role_account_priv_3';
 drop snapshot if exists grant_sp02;
-create snapshot grant_sp02 for account sys;
+create snapshot grant_sp02 for account;
 
 select user_name, authentication_string, status, login_type, creator, owner, default_role from mo_catalog.mo_user;
 select role_name, creator, owner from mo_catalog.mo_role;
@@ -377,7 +377,7 @@ select role_name, creator, owner from mo_catalog.mo_role;
 select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs where role_name in ('r1','r2','r3','r4','r5');
 
 drop snapshot if exists sp01;
-create snapshot sp01 for account sys;
+create snapshot sp01 for account;
 
 drop role r1,r2,r3,r4,r5;
 select role_name, creator, owner from mo_catalog.mo_role;
@@ -404,7 +404,7 @@ select role_name, creator, owner from mo_catalog.mo_role;
 select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs where role_name in ('r1', 'r2');
 
 drop snapshot if exists sp02;
-create snapshot sp02 for account sys;
+create snapshot sp02 for account;
 
 drop role r1, r2;
 select role_name, creator, owner from mo_catalog.mo_role;
@@ -438,7 +438,7 @@ select role_name, creator, owner from mo_catalog.mo_role;
 select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs where role_name in ('r5');
 
 drop snapshot if exists sp03;
-create snapshot sp03 for account sys;
+create snapshot sp03 for account;
 drop role r5;
 drop user user01, user02, user03;
 
@@ -475,7 +475,7 @@ select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs 
 select operation_role_id,operation_user_id from mo_catalog.mo_role_grant;
 
 drop snapshot if exists sp01;
-create snapshot sp01 for account sys;
+create snapshot sp01 for account;
 
 revoke role_r2 from role_r3;
 revoke role_r1 from role_r2;

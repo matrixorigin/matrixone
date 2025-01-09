@@ -124,7 +124,16 @@ func (entry *ObjectEntry) GetUpdateEntry(
 	dropped.DeleteNode = *txnbase.NewTxnMVCCNodeWithTxn(txn)
 	return
 }
-
+func (entry *ObjectEntry) VisibleByTS(ts types.TS) bool {
+	// visible by end
+	if entry.CreatedAt.GT(&ts) {
+		return false
+	}
+	if entry.DeleteBefore(ts) {
+		return false
+	}
+	return true
+}
 func (entry *ObjectEntry) DeleteBefore(ts types.TS) bool {
 	deleteTS := entry.GetDeleteAt()
 	if deleteTS.IsEmpty() {
@@ -305,10 +314,7 @@ func (entry *ObjectEntry) GetObjectStats() (stats *objectio.ObjectStats) {
 }
 
 func (entry *ObjectEntry) Less(b *ObjectEntry) bool {
-	if entry.SortHint != b.SortHint {
-		return entry.SortHint < b.SortHint
-	}
-	return entry.ObjectState < b.ObjectState
+	return entry.SortHint < b.SortHint
 }
 
 func (entry *ObjectEntry) UpdateObjectInfo(txn txnif.TxnReader, stats *objectio.ObjectStats) (isNewNode bool, err error) {

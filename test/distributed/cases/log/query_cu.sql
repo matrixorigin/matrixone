@@ -21,3 +21,8 @@ select mo_cu('[4,1,2,3,4,5,6,7,8]', 0, 'iolist') val;
 --    10 | delete
 select CAST(mo_cu('[5,1,2,3,4,5,6,7,8,1,2]', 0, 'iolist') AS DECIMAL(32,4)) val;
 select CAST(mo_cu('[5,1,2,3,4,5,6,7,8,1,2]', 0, 'iodelete') AS DECIMAL(32,4)) val;
+-- issue moc-4510
+-- cu_ioin = 0.000122 * 5.67e-06 / 1.002678e-06 ~= 0.0007
+select CAST(mo_cu('[5,1,2,0.000122,4,5,6,7,8,1,2]', 0, 'ioin') AS DECIMAL(32,4)) val;
+select CAST(mo_cu('[5,1,2,0.000122,4,5,6,7,8,0,0]', 0, 'ioin') AS DECIMAL(32,4)) val;
+select CAST(mo_cu('[5,1,2,0.000244,4,5,6,7,8,0,0]', 0, 'ioin') AS DECIMAL(32,4)) val;

@@ -359,6 +359,9 @@ func init() {
 func getServerLevelVars(service string) *ServerLevelVariables {
 	//always there
 	ret, _ := serverVarsMap.Load(service)
+	if ret == nil {
+		return nil
+	}
 	return ret.(*ServerLevelVariables)
 }
 
@@ -395,6 +398,10 @@ func setPu(service string, pu *config.ParameterUnit) {
 	getServerLevelVars(service).Pu.Store(pu)
 }
 
+func SetPUForExternalUT(service string, pu *config.ParameterUnit) {
+	setPu(service, pu)
+}
+
 func getPu(service string) *config.ParameterUnit {
 	return getServerLevelVars(service).Pu.Load().(*config.ParameterUnit)
 }
@@ -412,7 +419,11 @@ func getAicm(service string) *defines.AutoIncrCacheManager {
 }
 
 func MoServerIsStarted(service string) bool {
-	return getServerLevelVars(service).moServerStarted.Load()
+	vars := getServerLevelVars(service)
+	if vars == nil {
+		return false
+	}
+	return vars.moServerStarted.Load()
 }
 
 func setMoServerStarted(service string, b bool) {

@@ -20,10 +20,10 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
+	"go.uber.org/zap"
 )
 
 var (
@@ -275,11 +275,11 @@ func (bs *baseStore) Replay(h driver.ApplyHandle) error {
 		return err
 	}
 	bs.onReplay(r)
-	logutil.Info("open-tae", common.OperationField("replay"),
-		common.OperandField("wal"),
-		common.AnyField("backend", "batchstore"),
-		common.AnyField("apply cost", r.applyDuration),
-		common.AnyField("read cost", r.readDuration))
+	logutil.Info(
+		"Replay-Wal-From-LogStore",
+		zap.Duration("apply-cost", r.applyDuration),
+		zap.Duration("read-cost", r.readDuration),
+	)
 	return nil
 }
 

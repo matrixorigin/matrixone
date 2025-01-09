@@ -103,6 +103,7 @@ func (back *backExec) Exec(ctx context.Context, sql string) error {
 	if err != nil {
 		v = int64(1)
 	}
+
 	statements, err := mysql.Parse(ctx, sql, v.(int64))
 	if err != nil {
 		return err
@@ -148,7 +149,25 @@ func (back *backExec) Exec(ctx context.Context, sql string) error {
 		back.statsArray.Add(tmpStatsArray)
 	}()
 
-	return doComQueryInBack(back.backSes, tmpStatsArray, &execCtx, userInput) // statsInfo ,
+	err = doComQueryInBack(back.backSes, tmpStatsArray, &execCtx, userInput) // statsInfo ,
+	if err != nil {
+		// if is restore and stmt is create view
+		if back.backSes.GetRestore() {
+			if _, ok := statements[0].(*tree.CreateView); ok {
+				// reset restore flag
+				// redo doComQueryInBack
+				back.backSes.SetRestoreFail(true)
+				defer func() {
+					back.backSes.SetRestoreFail(false)
+				}()
+				err = doComQueryInBack(back.backSes, tmpStatsArray, &execCtx, userInput)
+				if err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return err
 }
 
 func (back *backExec) ExecRestore(ctx context.Context, sql string, opAccount uint32, toAccount uint32) error {
@@ -195,10 +214,11 @@ func (back *backExec) ExecRestore(ctx context.Context, sql string, opAccount uin
 	}
 
 	userInput := &UserInput{
-		sql:       sql,
-		isRestore: true,
-		opAccount: opAccount,
-		toAccount: toAccount,
+		sql:           sql,
+		isRestore:     true,
+		opAccount:     opAccount,
+		toAccount:     toAccount,
+		isRestoreByTs: true,
 	}
 
 	execCtx := ExecCtx{
@@ -228,6 +248,10 @@ func (back *backExec) GetExecResultSet() []interface{} {
 		ret[i] = mr
 	}
 	return ret
+}
+
+func (back *backExec) SetRestore(b bool) {
+	back.backSes.SetRestore(b)
 }
 
 func (back *backExec) ClearExecResultSet() {
@@ -380,6 +404,9 @@ func doComQueryInBack(
 		if insertStmt, ok := stmt.(*tree.Insert); ok && input.isRestore {
 			insertStmt.IsRestore = true
 			insertStmt.FromDataTenantID = input.opAccount
+			if input.isRestoreByTs {
+				insertStmt.IsRestoreByTs = true
+			}
 		}
 
 		statsInfo.Reset()
@@ -657,7 +684,7 @@ func fillResultSet(ctx context.Context, dataSet *batch.Batch, ses FeSession, mrs
 	n := dataSet.RowCount()
 	for j := 0; j < n; j++ { //row index
 		row := make([]any, mrs.GetColumnCount())
-		err := extractRowFromEveryVector(ctx, ses, dataSet, j, row)
+		err := extractRowFromEveryVector(ctx, ses, dataSet, j, row, false)
 		if err != nil {
 			return err
 		}
@@ -972,7 +999,12 @@ func (backSes *backSession) GetSessionSysVar(name string) (interface{}, error) {
 	case "autocommit":
 		return true, nil
 	case "lower_case_table_names":
+		if backSes.GetRestore() && !backSes.GetRestoreFail() {
+			return int64(0), nil
+		}
 		return int64(1), nil
+	case "mo_table_stats.force_update", "mo_table_stats.use_old_impl", "mo_table_stats.reset_update_time":
+		return backSes.upstream.GetSessionSysVar(name)
 	}
 	return nil, nil
 }
@@ -1080,6 +1112,22 @@ func (backSes *backSession) Debugf(ctx context.Context, msg string, args ...any)
 	backSes.logf(ctx, zap.DebugLevel, msg, args...)
 }
 
+func (backSes *backSession) SetRestore(b bool) {
+	backSes.isRestore = b
+}
+
+func (backSes *backSession) GetRestore() bool {
+	return backSes.isRestore
+}
+
+func (backSes *backSession) SetRestoreFail(b bool) {
+	backSes.isRestoreFail = b
+}
+
+func (backSes *backSession) GetRestoreFail() bool {
+	return backSes.isRestoreFail
+}
+
 type SqlHelper struct {
 	ses *Session
 }
@@ -1092,11 +1140,12 @@ func (sh *SqlHelper) GetSubscriptionMeta(dbName string) (*plan.SubscriptionMeta,
 	return sh.ses.txnCompileCtx.GetSubscriptionMeta(dbName, nil)
 }
 
-// Made for sequence func. nextval, setval.
-func (sh *SqlHelper) ExecSql(sql string) (ret [][]interface{}, err error) {
+func (sh *SqlHelper) execSql(
+	ctx context.Context,
+	sql string,
+) (ret [][]interface{}, err error) {
 	var erArray []ExecResult
 
-	ctx := sh.ses.txnCompileCtx.execCtx.reqCtx
 	/*
 		if we run the transaction statement (BEGIN, ect) here , it creates an independent transaction.
 		if we do not run the transaction statement (BEGIN, ect) here, it runs the sql in the share transaction
@@ -1122,4 +1171,14 @@ func (sh *SqlHelper) ExecSql(sql string) (ret [][]interface{}, err error) {
 	}
 
 	return erArray[0].(*MysqlResultSet).Data, nil
+}
+
+// Made for sequence func. nextval, setval.
+func (sh *SqlHelper) ExecSql(sql string) (ret [][]interface{}, err error) {
+	ctx := sh.ses.txnCompileCtx.execCtx.reqCtx
+	return sh.execSql(ctx, sql)
+}
+
+func (sh *SqlHelper) ExecSqlWithCtx(ctx context.Context, sql string) ([][]interface{}, error) {
+	return sh.execSql(ctx, sql)
 }

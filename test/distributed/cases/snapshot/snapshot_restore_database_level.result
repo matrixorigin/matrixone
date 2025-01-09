@@ -20,7 +20,7 @@ select count(*) from snapshot_read.users;
 count(*)
 11
 drop snapshot if exists sp_01;
-create snapshot sp_01 for account sys;
+create snapshot sp_01 for account;
 delete from test_snapshot_read where a <= 50;
 DELETE FROM  users where email = 'john@example.com';
 UPDATE users SET password = 'newsecurepassword123' WHERE email = 'alice.jones@gmail.com';
@@ -62,7 +62,7 @@ select count(*) from snapshot_read.users;
 count(*)
 11
 drop snapshot if exists sp_01;
-create snapshot sp_01 for account sys;
+create snapshot sp_01 for account;
 drop table users;
 drop table test_snapshot_read;
 select count(*) from snapshot_read.test_snapshot_read;
@@ -100,7 +100,7 @@ select count(*) from snapshot_read.users;
 count(*)
 11
 drop snapshot if exists sp_01;
-create snapshot sp_01 for account sys;
+create snapshot sp_01 for account;
 drop database snapshot_read;
 select count(*) from snapshot_read.test_snapshot_read;
 Unknown database snapshot_read
@@ -279,6 +279,8 @@ use snapshot_read;
 drop table students;
 drop table users;
 restore account test_account database snapshot_read from snapshot sp_01;
+internal error: can't restore database from other account's snapshot
+restore account test_account from snapshot sp_01;
 select count(*) from snapshot_read.students;
 count(*)
 50
@@ -287,6 +289,8 @@ count(*)
 11
 drop database snapshot_read;
 restore account test_account database snapshot_read from snapshot sp_01;
+internal error: can't restore database from other account's snapshot
+restore account test_account from snapshot sp_01;
 select count(*) from snapshot_read.students;
 count(*)
 50

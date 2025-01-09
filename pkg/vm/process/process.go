@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
@@ -233,4 +234,12 @@ func appendTraceField(fields []zap.Field, ctx context.Context) []zap.Field {
 		fields = append(fields, trace.ContextField(ctx))
 	}
 	return fields
+}
+
+func (proc *Process) GetSpillFileService() (fileservice.MutableFileService, error) {
+	local, err := fileservice.Get[fileservice.MutableFileService](proc.Base.FileService, defines.LocalFileServiceName)
+	if err != nil {
+		return nil, err
+	}
+	return fileservice.SubPath(local, defines.SpillFileServiceName).(fileservice.MutableFileService), nil
 }

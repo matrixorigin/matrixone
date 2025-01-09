@@ -20,7 +20,9 @@ import (
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -31,6 +33,10 @@ import (
 const (
 	Backup_Object_Offset uint16 = 1000
 )
+
+type ObjectListReplayer interface {
+	Submit(uint64, func())
+}
 
 //#region Replay WAL related
 
@@ -420,27 +426,35 @@ func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, tx
 	tbl.InsertLocked(un)
 }
 
-func (catalog *Catalog) OnReplayObjectBatch(objectInfo *containers.Batch, isTombstone bool, dataFactory DataFactory, forSys bool) {
-	for i := 0; i < objectInfo.Length(); i++ {
-		tid := objectInfo.GetVectorByName(SnapshotAttr_TID).Get(i).(uint64)
+func (catalog *Catalog) OnReplayObjectBatch(replayer ObjectListReplayer, objectInfo *containers.Batch, isTombstone bool, dataFactory DataFactory, forSys bool) {
+	tids := vector.MustFixedColNoTypeCheck[uint64](objectInfo.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector())
+	dbids := vector.MustFixedColNoTypeCheck[uint64](objectInfo.GetVectorByName(SnapshotAttr_DBID).GetDownstreamVector())
+	commitTSs := vector.MustFixedColNoTypeCheck[types.TS](objectInfo.GetVectorByName(txnbase.SnapshotAttr_CommitTS).GetDownstreamVector())
+	prepareTSs := vector.MustFixedColNoTypeCheck[types.TS](objectInfo.GetVectorByName(txnbase.SnapshotAttr_PrepareTS).GetDownstreamVector())
+	startTSs := vector.MustFixedColNoTypeCheck[types.TS](objectInfo.GetVectorByName(txnbase.SnapshotAttr_StartTS).GetDownstreamVector())
+	createTSs := vector.MustFixedColNoTypeCheck[types.TS](objectInfo.GetVectorByName(EntryNode_CreateAt).GetDownstreamVector())
+	deleteTSs := vector.MustFixedColNoTypeCheck[types.TS](objectInfo.GetVectorByName(EntryNode_DeleteAt).GetDownstreamVector())
+	for i, tid := range tids {
 		if forSys != pkgcatalog.IsSystemTable(tid) {
 			continue
 		}
-		dbid := objectInfo.GetVectorByName(SnapshotAttr_DBID).Get(i).(uint64)
-		objectNode := ReadObjectInfoTuple(objectInfo, i)
-		sid := objectNode.ObjectName().ObjectId()
-		txnNode := txnbase.ReadTuple(objectInfo, i)
-		entryNode := ReadEntryNodeTuple(objectInfo, i)
-		catalog.onReplayCheckpointObject(dbid, tid, sid, objectNode, entryNode, txnNode, isTombstone, dataFactory)
+		replayFn := func() {
+			dbid := dbids[i]
+			objectNode := ReadObjectInfoTuple(objectInfo, i)
+			sid := objectNode.ObjectName().ObjectId()
+			catalog.onReplayCheckpointObject(
+				dbid, tid, sid, createTSs[i], deleteTSs[i], startTSs[i], prepareTSs[i], commitTSs[i], objectNode, isTombstone, dataFactory)
+		}
+		replayer.Submit(tid, replayFn)
 	}
 }
 
 func (catalog *Catalog) onReplayCheckpointObject(
 	dbid, tbid uint64,
 	objid *types.Objectid,
+	createTS, deleteTS types.TS,
+	start, prepare, end types.TS,
 	objNode *ObjectMVCCNode,
-	entryNode *EntryMVCCNode,
-	txnNode *txnbase.TxnMVCCNode,
 	isTombstone bool,
 	dataFactory DataFactory,
 ) {
@@ -469,54 +483,79 @@ func (catalog *Catalog) onReplayCheckpointObject(
 			SortHint:    catalog.NextObject(),
 			IsTombstone: isTombstone,
 		}
-		object.EntryMVCCNode = *entryNode
+		object.EntryMVCCNode = EntryMVCCNode{
+			CreatedAt: createTS,
+			DeletedAt: deleteTS,
+		}
 		object.ObjectMVCCNode = *objNode
-		object.CreateNode = *txnNode
+		object.CreateNode = txnbase.TxnMVCCNode{
+			Start:   start,
+			Prepare: prepare,
+			End:     end,
+		}
 		object.ObjectState = ObjectState_Create_ApplyCommit
 		object.forcePNode = true // any object replayed from checkpoint is forced to be created
 		return object
 	}
 	var obj *ObjectEntry
-	if entryNode.CreatedAt.Equal(&txnNode.End) {
+	if createTS.Equal(&end) {
 		obj = newObject()
 		rel.AddEntryLocked(obj)
 	}
-	if entryNode.DeletedAt.Equal(&txnNode.End) {
+	if deleteTS.Equal(&end) {
 		obj, err = rel.GetObjectByID(objid, isTombstone)
 		if err != nil {
-			panic(fmt.Sprintf("obj %v(%v), [%v %v %v] not existed, table:\n%v", objid.String(),
-				entryNode.String(), isTombstone, objNode.String(),
-				txnNode.String(), rel.StringWithLevel(3)))
+			panic(fmt.Sprintf("obj %v(%v %v), [%v %v %v %v %v] not existed, table:\n%v", objid.String(),
+				createTS.ToString(), deleteTS.ToString(), isTombstone, objNode.String(),
+				start.ToString(), prepare.ToString(), end.ToString(), rel.StringWithLevel(3)))
 		}
-		obj.EntryMVCCNode = *entryNode
+		obj.EntryMVCCNode = EntryMVCCNode{
+			CreatedAt: createTS,
+			DeletedAt: deleteTS,
+		}
 		obj.ObjectMVCCNode = *objNode
-		obj.DeleteNode = *txnNode
+		obj.DeleteNode = txnbase.TxnMVCCNode{
+			Start:   start,
+			Prepare: prepare,
+			End:     end,
+		}
 		obj.ObjectState = ObjectState_Delete_ApplyCommit
 	}
-	if !entryNode.CreatedAt.Equal(&txnNode.End) && !entryNode.DeletedAt.Equal(&txnNode.End) {
+	if !createTS.Equal(&end) && !deleteTS.Equal(&end) {
 		// In back up, aobj is replaced with naobj and its DeleteAt is removed.
 		// Before back up, txnNode.End equals DeleteAt of naobj.
 		// After back up, DeleteAt is empty.
-		if objid.Offset() == Backup_Object_Offset && entryNode.DeletedAt.IsEmpty() {
+		if objid.Offset() == Backup_Object_Offset && deleteTS.IsEmpty() {
 			obj = newObject()
 			rel.AddEntryLocked(obj)
-			logutil.Warnf("obj %v, tbl %v-%d delete %v, create %v, end %v",
-				objid.String(), rel.fullName, rel.ID, entryNode.CreatedAt.ToString(),
-				entryNode.DeletedAt.ToString(), txnNode.End.ToString())
+			_, sarg, _ := fault.TriggerFault("back up UT")
+			if sarg == "" {
+				obj.CreateNode = *txnbase.NewTxnMVCCNodeWithTS(obj.CreatedAt)
+			}
+			logutil.Warnf("obj %v, tbl %v-%d create %v, delete %v, end %v",
+				objid.String(), rel.fullName, rel.ID, createTS.ToString(),
+				deleteTS.ToString(), end.ToString())
 		} else {
-			if !entryNode.DeletedAt.IsEmpty() {
-				panic(fmt.Sprintf("logic error: obj %v, tbl %v-%d create %v, delete %v, end %v",
-					objid.String(), rel.fullName, rel.ID, entryNode.CreatedAt.ToString(),
-					entryNode.DeletedAt.ToString(), txnNode.End.ToString()))
+			if !deleteTS.IsEmpty() {
+				logutil.Warnf("obj %v, tbl %v-%d create %v, delete %v, end %v",
+					objid.String(), rel.fullName, rel.ID, createTS.ToString(),
+					deleteTS.ToString(), end.ToString())
+				obj, _ = rel.GetObjectByID(objid, isTombstone)
+				if obj == nil {
+					obj = newObject()
+					rel.AddEntryLocked(obj)
+				}
+				obj.CreateNode = *txnbase.NewTxnMVCCNodeWithTS(createTS)
+				obj.DeleteNode = *txnbase.NewTxnMVCCNodeWithTS(deleteTS)
 			}
 		}
 	}
 	if obj == nil {
 		obj, err = rel.GetObjectByID(objid, isTombstone)
 		if err != nil {
-			panic(fmt.Sprintf("obj %v(%v), [%v %v %v] not existed, table:\n%v", objid.String(),
-				entryNode.String(), isTombstone, objNode.String(),
-				txnNode.String(), rel.StringWithLevel(3)))
+			panic(fmt.Sprintf("obj %v(%v %v), [%v %v %v %v %v] not existed, table:\n%v", objid.String(),
+				createTS.ToString(), deleteTS.ToString(), isTombstone, objNode.String(),
+				start.ToString(), prepare.ToString(), end.ToString(), rel.StringWithLevel(3)))
 		}
 	}
 	if obj.objData == nil {

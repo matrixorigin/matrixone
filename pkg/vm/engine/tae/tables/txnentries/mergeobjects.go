@@ -289,9 +289,9 @@ func (entry *mergeObjectsEntry) transferObjectDeletes(
 					_max = k
 				}
 			}
-			panic(fmt.Sprintf(
-				"%s-%d find no transfer mapping for row %d, mapping range (%d, %d)",
-				dropped.ID().String(), blkOffsetInObj, row, _min, _max))
+			err = moerr.NewInternalErrorNoCtxf("%s-%d find no transfer mapping for row %d, mapping range (%d, %d)",
+				dropped.ID().String(), blkOffsetInObj, row, _min, _max)
+			return
 		}
 		if entry.delTbls[*entry.createdObjs[destpos.ObjIdx].ID()] == nil {
 			entry.delTbls[*entry.createdObjs[destpos.ObjIdx].ID()] = make(map[uint16]struct{})

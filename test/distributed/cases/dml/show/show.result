@@ -250,6 +250,7 @@ mo_stages
 mo_stored_procedure
 mo_subs
 mo_table_partitions
+mo_table_stats_alpha
 mo_tables
 mo_transactions
 mo_upgrade
@@ -261,7 +262,7 @@ mo_variables
 mo_version
 show table_number from mo_catalog;
 Number of tables in mo_catalog
-35
+36
 show column_number from mo_database;
 Number of columns in mo_database
 9
@@ -358,8 +359,8 @@ PRIMARY KEY  (h1,u1)
 );
 show INDEX FROM show_02;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-show_02    0    PRIMARY    1    h1    A    0    NULL    NULL                        YES    NULL
-show_02    0    PRIMARY    2    u1    A    0    NULL    NULL                        YES    NULL
+show_02    0    PRIMARY    1    h1    A    0    NULL    NULL                        YES    h1
+show_02    0    PRIMARY    2    u1    A    0    NULL    NULL                        YES    u1
 DROP TABLE show_02;
 DROP TABLE IF EXISTS show_03;
 CREATE TABLE show_03(a int, b int);
@@ -369,7 +370,7 @@ Table    Create Table
 show_03    CREATE TABLE `show_03` (\n  `a` int DEFAULT NULL,\n  `b` int DEFAULT NULL,\n  UNIQUE KEY `x` (`a`) COMMENT 'x'\n)
 show INDEX FROM show_03;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-show_03    0    x    1    a    A    0    NULL    NULL    YES            x        YES    NULL
+show_03    0    x    1    a    A    0    NULL    NULL    YES            x        YES    a
 DROP TABLE show_03;
 CREATE TABLE show_04(a int, b int, unique key(a));
 show CREATE TABLE show_04;
@@ -378,8 +379,8 @@ show_04    CREATE TABLE `show_04` (\n  `a` int DEFAULT NULL,\n  `b` int DEFAULT 
 CREATE INDEX b ON show_04(b);
 show INDEX FROM show_04;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-show_04    0    a    1    a    A    0    NULL    NULL    YES                    YES    NULL
-show_04    1    b    1    b    A    0    NULL    NULL    YES                    YES    NULL
+show_04    0    a    1    a    A    0    NULL    NULL    YES                    YES    a
+show_04    1    b    1    b    A    0    NULL    NULL    YES                    YES    b
 DROP TABLE show_04;
 DROP DATABASE test;
 create database test;
@@ -423,9 +424,9 @@ INDEX (col2,col3)
 );
 show index from t1;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t1    1    col2    1    col2    A    0    NULL    NULL                        YES    NULL
-t1    1    col2    2    col3    A    0    NULL    NULL                        YES    NULL
-t1    0    PRIMARY    1    col1    A    0    NULL    NULL                        YES    NULL
+t1    1    col2    1    col2    A    0    NULL    NULL                        YES    col2
+t1    1    col2    2    col3    A    0    NULL    NULL                        YES    col3
+t1    0    PRIMARY    1    col1    A    0    NULL    NULL                        YES    col1
 drop table t1;
 drop table if exists t2;
 CREATE TABLE t2 (
@@ -436,8 +437,8 @@ col4 INT NOT NULL
 );
 show index from t2;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t2    0    col2    1    col2    A    0    NULL    NULL                        YES    NULL
-t2    0    PRIMARY    1    col1    A    0    NULL    NULL                        YES    NULL
+t2    0    col2    1    col2    A    0    NULL    NULL                        YES    col2
+t2    0    PRIMARY    1    col1    A    0    NULL    NULL                        YES    col1
 drop table t2;
 drop table if exists t3;
 CREATE TABLE t3 (
@@ -450,10 +451,10 @@ UNIQUE KEY (col1, col3)
 );
 show index from t3;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t3    0    col1    1    col1    A    0    NULL    NULL                        YES    NULL
-t3    0    col1_2    1    col1    A    0    NULL    NULL                        YES    NULL
-t3    0    col1_2    2    col3    A    0    NULL    NULL                        YES    NULL
-t3    0    PRIMARY    1    col1    A    0    NULL    NULL                        YES    NULL
+t3    0    col1    1    col1    A    0    NULL    NULL                        YES    col1
+t3    0    col1_2    1    col1    A    0    NULL    NULL                        YES    col1
+t3    0    col1_2    2    col3    A    0    NULL    NULL                        YES    col3
+t3    0    PRIMARY    1    col1    A    0    NULL    NULL                        YES    col1
 drop table t3;
 drop database test;
 drop database if exists test;
@@ -461,5 +462,5 @@ create database test;
 use test;
 SHOW CREATE TABLE information_schema.columns;
 View    Create View    character_set_client    collation_connection
-columns    CREATE VIEW information_schema.COLUMNS AS select 'def' as TABLE_CATALOG,mc.att_database as TABLE_SCHEMA,mc.att_relname AS TABLE_NAME,mc.attname AS COLUMN_NAME,mc.attnum AS ORDINAL_POSITION,mo_show_visible_bin(mc.att_default,1) as COLUMN_DEFAULT,(case when mc.attnotnull != 0 then 'NO' else 'YES' end) as IS_NULLABLE,mo_show_visible_bin(mc.atttyp,2) as DATA_TYPE,internal_char_length(mc.atttyp) AS CHARACTER_MAXIMUM_LENGTH,internal_char_size(mc.atttyp) AS CHARACTER_OCTET_LENGTH,internal_numeric_precision(mc.atttyp) AS NUMERIC_PRECISION,internal_numeric_scale(mc.atttyp) AS NUMERIC_SCALE,internal_datetime_scale(mc.atttyp) AS DATETIME_PRECISION,(case internal_column_character_set(mc.atttyp) WHEN 0 then 'utf8' WHEN 1 then 'utf8' else NULL end) AS CHARACTER_SET_NAME,(case internal_column_character_set(mc.atttyp) WHEN 0 then 'utf8_bin' WHEN 1 then 'utf8_bin' else NULL end) AS COLLATION_NAME,mo_show_visible_bin(mc.atttyp,3) as COLUMN_TYPE,case when mc.att_constraint_type = 'p' then 'PRI' when mo_show_col_unique(mt.`constraint`, mc.attname) then 'UNI' else '' end as COLUMN_KEY,case when mc.att_is_auto_increment = 1 then 'auto_increment' else '' end as EXTRA,'select,insert,update,references' as `PRIVILEGES`,mc.att_comment as COLUMN_COMMENT,cast('' as varchar(500)) as GENERATION_EXPRESSION,if(true, NULL, 0) as SRS_ID from mo_catalog.mo_columns mc join mo_catalog.mo_tables mt ON mc.account_id = mt.account_id AND mc.att_database = mt.reldatabase AND mc.att_relname = mt.relname where mc.account_id = current_account_id() and mc.att_relname!='mo_increment_columns' and mc.att_relname not like '__mo_cpkey_%' and mc.attname != '__mo_rowid' and mc.att_relname not like '\%!\%%\%!\%%'    utf8mb4    utf8mb4_general_ci
+columns    CREATE VIEW information_schema.COLUMNS AS select 'def' as TABLE_CATALOG,mc.att_database as TABLE_SCHEMA,mc.att_relname AS TABLE_NAME,mc.attname AS COLUMN_NAME,mc.attnum AS ORDINAL_POSITION,mo_show_visible_bin(mc.att_default,1) as COLUMN_DEFAULT,(case when mc.attnotnull != 0 then 'NO' else 'YES' end) as IS_NULLABLE,mo_show_visible_bin(mc.atttyp,2) as DATA_TYPE,internal_char_length(mc.atttyp) AS CHARACTER_MAXIMUM_LENGTH,internal_char_size(mc.atttyp) AS CHARACTER_OCTET_LENGTH,internal_numeric_precision(mc.atttyp) AS NUMERIC_PRECISION,internal_numeric_scale(mc.atttyp) AS NUMERIC_SCALE,internal_datetime_scale(mc.atttyp) AS DATETIME_PRECISION,(case internal_column_character_set(mc.atttyp) WHEN 0 then 'utf8' WHEN 1 then 'utf8' else NULL end) AS CHARACTER_SET_NAME,(case internal_column_character_set(mc.atttyp) WHEN 0 then 'utf8_bin' WHEN 1 then 'utf8_bin' else NULL end) AS COLLATION_NAME,mo_show_visible_bin(mc.atttyp,3) as COLUMN_TYPE,case when mc.att_constraint_type = 'p' then 'PRI' when mo_show_col_unique(mt.`constraint`, mc.attname) then 'UNI' else '' end as COLUMN_KEY,case when mc.att_is_auto_increment = 1 then 'auto_increment' else '' end as EXTRA,'select,insert,update,references' as `PRIVILEGES`,mc.att_comment as COLUMN_COMMENT,cast('' as varchar(500)) as GENERATION_EXPRESSION,if(true, NULL, 0) as SRS_ID from mo_catalog.mo_columns mc join mo_catalog.mo_tables mt ON mc.account_id = mt.account_id AND mc.att_database = mt.reldatabase AND mc.att_relname = mt.relname where mc.account_id = current_account_id() and mc.att_relname!='mo_increment_columns' and mc.att_relname not like '__mo_cpkey_%' and mc.attname != '__mo_rowid' and mc.att_relname not like '\%!\%%\%!\%%' and mc.att_relname != '__mo_account_lock'    utf8mb4    utf8mb4_general_ci
 drop database test;

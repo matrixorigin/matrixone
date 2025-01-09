@@ -198,15 +198,22 @@ func Test_Call(t *testing.T) {
 				},
 			}
 			param.FileSize = []int64{1}
+			err := tcs.arg.Prepare(tcs.proc)
+			convey.So(err, convey.ShouldBeNil)
 			end, err := vm.Exec(tcs.arg, tcs.proc)
 			convey.So(err, convey.ShouldNotBeNil)
 			convey.So(end.Status == vm.ExecStop, convey.ShouldBeFalse)
 
+			err = tcs.arg.Prepare(tcs.proc)
+			convey.So(err, convey.ShouldBeNil)
 			param.Fileparam.End = false
+
 			end, err = vm.Exec(tcs.arg, tcs.proc)
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(end.Status == vm.ExecStop, convey.ShouldBeTrue)
 
+			err = tcs.arg.Prepare(tcs.proc)
+			convey.So(err, convey.ShouldBeNil)
 			param.Fileparam.End = true
 			end, err = vm.Exec(tcs.arg, tcs.proc)
 			convey.So(err, convey.ShouldBeNil)
@@ -240,7 +247,7 @@ func Test_Call2(t *testing.T) {
 				},
 			}
 			param.Extern = extern
-			attrs := []string{"col1", "col2", "col3"}
+			attrs := []plan.ExternAttr{{ColName: "col1", ColIndex: 0, ColFieldIndex: 0}, {ColName: "col2", ColIndex: 1, ColFieldIndex: 1}, {ColName: "col3", ColIndex: 2, ColFieldIndex: 2}}
 			param.Attrs = attrs
 
 			cols := []*plan.ColDef{
@@ -316,7 +323,7 @@ func Test_CALL3(t *testing.T) {
 			},
 		}
 		param.Extern = extern
-		attrs := []string{"col1", "col2", "col3"}
+		attrs := []plan.ExternAttr{{ColName: "col1", ColIndex: 0, ColFieldIndex: 0}, {ColName: "col2", ColIndex: 1, ColFieldIndex: 1}, {ColName: "col3", ColIndex: 2, ColFieldIndex: 2}}
 		param.Attrs = attrs
 
 		cols := []*plan.ColDef{
@@ -347,14 +354,6 @@ func Test_CALL3(t *testing.T) {
 		param.FileSize = []int64{1}
 
 		// line := []string{"1", "2", "3"}
-		param.Name2ColIndex = make(map[string]int32)
-		for i := 0; i < len(attrs); i++ {
-			param.Name2ColIndex[attrs[i]] = int32(i)
-		}
-		param.TbColToDataCol = make(map[string]int32)
-		for i := 0; i < len(attrs); i++ {
-			param.TbColToDataCol[attrs[i]] = int32(i)
-		}
 
 		param.Extern.Data = "1,2,3"
 		var err error

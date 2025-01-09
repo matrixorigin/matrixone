@@ -18,7 +18,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
-	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -179,20 +178,6 @@ func (o *ObjectStorageArguments) validate() error {
 	// role session name
 	if o.RoleSessionName == "" {
 		o.RoleSessionName = "mo-service"
-	}
-
-	// 腾讯云使用 AWS 环境变量配置 key id/secret
-	if strings.Contains(o.Endpoint, "myqcloud.com") {
-		if o.KeyID == "" {
-			if value := os.Getenv("AWS_ACCESS_KEY_ID"); value != "" {
-				o.KeyID = value
-			}
-		}
-		if o.KeySecret == "" {
-			if value := os.Getenv("AWS_SECRET_ACCESS_KEY"); value != "" {
-				o.KeySecret = value
-			}
-		}
 	}
 
 	return nil

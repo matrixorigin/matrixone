@@ -52,8 +52,6 @@ type TxnTimestampAware interface {
 }
 
 type TxnAction interface {
-	// AbortAllRunningTxn rollback all running transactions. but still keep their workspace to avoid panic.
-	AbortAllRunningTxn()
 	// Pause the txn client to prevent new txn from being created.
 	Pause()
 	// Resume the txn client to allow new txn to be created.
@@ -184,8 +182,6 @@ type TxnOperator interface {
 	AddWaitLock(tableID uint64, rows [][]byte, opt lock.LockOptions) uint64
 	// RemoveWaitLock remove wait lock for current txn
 	RemoveWaitLock(key uint64)
-	// LockTableCount get quality of lock table
-	LockTableCount() int32
 	// LockSkipped return true if lock need skipped.
 	LockSkipped(tableID uint64, mode lock.LockMode) bool
 
@@ -244,16 +240,6 @@ type TimestampWaiter interface {
 	// commit ts is corresponds to an epoch. Whenever the connection of logtail of cn and tn is
 	// reset, the epoch will be reset and all the ts of the old epoch should be invalidated.
 	NotifyLatestCommitTS(appliedTS timestamp.Timestamp)
-	// Pause pauses the timestamp waiter and cancel all waiters in timestamp waiter.
-	// They will not wait for the newer timestamp anymore.
-	Pause()
-	// Resume resumes the cancel channel in the timestamp waiter after all transactions are
-	// aborted.
-	Resume()
-	// CancelC returns the cancel channel of timestamp waiter. If it is nil, means that
-	// the logtail consumer is reconnecting to logtail server and is aborting all transaction.
-	// At this time, we cannot open new transactions.
-	CancelC() chan struct{}
 	// Close close the timestamp waiter
 	Close()
 	// LatestTS returns the latest timestamp of the waiter.

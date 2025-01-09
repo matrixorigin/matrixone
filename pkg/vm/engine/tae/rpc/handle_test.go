@@ -17,44 +17,16 @@ package rpc
 import (
 	"context"
 	"testing"
-	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/stretchr/testify/require"
 )
-
-func TestHandleGCCache(t *testing.T) {
-	now := time.Now()
-	expired := now.Add(-MAX_TXN_COMMIT_LATENCY).Add(-time.Second)
-
-	handle := Handle{}
-	handle.txnCtxs = common.NewMap[string, *txnContext](10)
-	handle.txnCtxs.Store("now", &txnContext{
-		deadline: now,
-	})
-	handle.txnCtxs.Store("expired", &txnContext{
-		deadline: expired,
-	})
-	handle.GCCache(now)
-
-	cnt := 0
-	handle.txnCtxs.Range(func(key string, value *txnContext) bool {
-		cnt++
-		return true
-	})
-
-	require.Equal(t, 1, cnt)
-	_, ok := handle.txnCtxs.Load("expired")
-	require.False(t, ok)
-	_, ok = handle.txnCtxs.Load("now")
-	require.True(t, ok)
-}
 
 func TestHandleInspectPolicy(t *testing.T) {
 	handle := mockTAEHandle(context.Background(), t, &options.Options{})
@@ -106,4 +78,24 @@ func TestHandleInspectPolicy(t *testing.T) {
 	}, resp)
 	require.NoError(t, err)
 	require.Equal(t, "(1000-test1) maxMergeObjN: 16, maxOsizeObj: 128MB, minOsizeQualified: 90MB, offloadToCnSize: 80000MB, hints: [Auto]", resp.Message)
+}
+
+func TestHandlePrecommitWriteError(t *testing.T) {
+	h := mockTAEHandle(context.Background(), t, &options.Options{})
+
+	list := []*apipb.Entry{
+		{
+			EntryType: apipb.Entry_Insert,
+			Bat:       &apipb.Batch{Vecs: []apipb.Vector{{Type: types.NewProtoType(types.T_char)}}},
+		},
+		{
+			EntryType:  apipb.Entry_Insert,
+			DatabaseId: 1,
+			TableId:    3,
+			Bat:        &apipb.Batch{Vecs: []apipb.Vector{{Type: types.NewProtoType(types.T_char)}}},
+		},
+	}
+
+	err := h.HandlePreCommitWrite(context.Background(), txn.TxnMeta{}, &apipb.PrecommitWriteCmd{EntryList: list}, &apipb.TNStringResponse{})
+	require.Error(t, err)
 }

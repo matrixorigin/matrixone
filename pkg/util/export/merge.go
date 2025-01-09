@@ -377,9 +377,11 @@ func (m *Merge) doMergeFiles(ctx context.Context, files []*FileMeta) error {
 			// Check if the first record already exists in the database
 			existed, err = db_holder.IsRecordExisted(ctx, firstLine, m.table, db_holder.GetOrInitDBConn)
 			if err != nil {
+				v2.TraceETLMergeExistFailedCounter.Inc()
 				m.logger.Error("error checking if the first record exists",
 					logutil.TableField(m.table.GetIdentify()),
 					logutil.PathField(fp.FilePath),
+					logutil.StatementField(firstLine[0]),
 					logutil.ErrorField(err),
 				)
 				return err
@@ -436,6 +438,8 @@ func (m *Merge) doMergeFiles(ctx context.Context, files []*FileMeta) error {
 				m.logger.Warn("failed to delete file",
 					logutil.PathField(fp.FilePath), zap.Error(err))
 				return err
+			} else {
+				m.logger.Warn("delete file", logutil.PathField(fp.FilePath))
 			}
 		}
 		v2.TraceETLMergeSuccessCounter.Inc()
@@ -443,6 +447,7 @@ func (m *Merge) doMergeFiles(ctx context.Context, files []*FileMeta) error {
 	}
 	var err error
 
+	successCnt := 0
 	for _, fp := range files {
 		if err = uploadFile(ctx, fp); err != nil {
 			// todo: adjust the sleep settings
@@ -453,9 +458,15 @@ func (m *Merge) doMergeFiles(ctx context.Context, files []*FileMeta) error {
 				logutil.PathField(fp.FilePath),
 				zap.Error(err),
 			)
+		} else {
+			successCnt++
 		}
 	}
-	logutil.Info("upload files success", logutil.TableField(m.table.GetIdentify()), zap.Int("file count", len(files)))
+	m.logger.Error("upload files success",
+		logutil.TableField(m.table.GetIdentify()),
+		zap.Int("total", len(files)),
+		zap.Int("success", successCnt),
+	)
 
 	return err
 }
@@ -694,6 +705,7 @@ func LongRunETLMerge(
 	}
 
 	logger.Info("start LongRunETLMerge")
+	v2.TraceETLMergeJobCounter.Inc()
 	// handle today
 	for _, tbl := range tables {
 		merge.table = tbl

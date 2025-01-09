@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -48,6 +49,12 @@ func WithFileService(fs fileservice.FileService) ProcOptions {
 			proc.GetFileService().Close(proc.Ctx)
 		}
 		proc.SetFileService(fs)
+	}
+}
+
+func WithQueryClient(queryClient client.QueryClient) ProcOptions {
+	return func(proc *process.Process) {
+		proc.Base.QueryClient = queryClient
 	}
 }
 

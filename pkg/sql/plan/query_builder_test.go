@@ -19,8 +19,9 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
+
+	"github.com/golang/mock/gomock"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -199,4 +200,9 @@ func TestWrongCases(t *testing.T) {
 		_, err := runOneStmt(mock, t, kase.sql)
 		require.Error(t, err, kase.comment, kase.sql)
 	}
+}
+
+func TestDefaultBigStats(t *testing.T) {
+	stats := DefaultBigStats()
+	require.Greater(t, stats.BlockNum, int32(BlockThresholdForOneCN))
 }

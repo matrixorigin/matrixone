@@ -16,6 +16,7 @@ package plan
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -70,24 +71,28 @@ func isRuntimeConstExpr(expr *plan.Expr) bool {
 	}
 }
 
-func (builder *QueryBuilder) applyIndices(nodeID int32, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
+func (builder *QueryBuilder) applyIndices(nodeID int32, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
+	var err error
 
 	if builder.optimizerHints != nil && builder.optimizerHints.applyIndices != 0 {
-		return nodeID
+		return nodeID, nil
 	}
 
 	node := builder.qry.Nodes[nodeID]
 	for i, childID := range node.Children {
-		node.Children[i] = builder.applyIndices(childID, colRefCnt, idxColMap)
+		node.Children[i], err = builder.applyIndices(childID, colRefCnt, idxColMap)
+		if err != nil {
+			return -1, err
+		}
 	}
 	replaceColumnsForNode(node, idxColMap)
 
 	switch node.NodeType {
 	case plan.Node_TABLE_SCAN:
-		return builder.applyIndicesForFilters(nodeID, node, colRefCnt, idxColMap)
+		return builder.applyIndicesForFilters(nodeID, node, colRefCnt, idxColMap), nil
 
 	case plan.Node_JOIN:
-		return builder.applyIndicesForJoins(nodeID, node, colRefCnt, idxColMap)
+		return builder.applyIndicesForJoins(nodeID, node, colRefCnt, idxColMap), nil
 
 	case plan.Node_PROJECT:
 		//NOTE: This is the entry point for vector index rule on SORT NODE.
@@ -95,7 +100,7 @@ func (builder *QueryBuilder) applyIndices(nodeID int32, colRefCnt map[[2]int32]i
 
 	}
 
-	return nodeID
+	return nodeID, nil
 }
 
 func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Node,
@@ -172,7 +177,7 @@ func getColSeqFromColDef(tblCol *plan.ColDef) string {
 	return fmt.Sprintf("%d", tblCol.GetSeqnum())
 }
 
-func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
+func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
 	// FullText
 	{
 		// support the followings:
@@ -260,7 +265,7 @@ func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan
 			}
 		}
 		if len(multiTableIndexes) == 0 {
-			return nodeID
+			return nodeID, nil
 		}
 
 		//1.b if sortNode has more than one order by, skip
@@ -343,7 +348,7 @@ func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan
 		projNode.Children[0] = newSortNode
 		replaceColumnsForNode(projNode, idxColMap)
 
-		return newSortNode
+		return newSortNode, nil
 	}
 END0:
 	// 2. Regular Index Check
@@ -351,7 +356,7 @@ END0:
 
 	}
 
-	return nodeID
+	return nodeID, nil
 }
 
 func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, node *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
@@ -398,18 +403,22 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 		}
 	}
 
-	if catalog.IsFakePkName(node.TableDef.Pkey.PkeyColName) {
-		// for cluster by table, make it less prone to go index
-		if node.Stats.Selectivity > 0.0001 || node.Stats.Outcnt > 1000 {
+	//small table means this table maybe not flushed yet, or it's not worse to go index
+	ignoreStats := node.Stats.TableCnt < 50000
+	if !ignoreStats {
+		if catalog.IsFakePkName(node.TableDef.Pkey.PkeyColName) {
+			// for cluster by table, make it less prone to go index
+			if node.Stats.Selectivity >= InFilterSelectivityLimit/2 || node.Stats.Outcnt >= InFilterCardLimitNonPK {
+				return nodeID
+			}
+		}
+		if node.Stats.Selectivity > InFilterSelectivityLimit || node.Stats.Outcnt > float64(GetInFilterCardLimitOnPK(builder.compCtx.GetProcess().GetService(), node.Stats.TableCnt)) {
 			return nodeID
 		}
 	}
-	if node.Stats.Selectivity > InFilterSelectivityLimit || node.Stats.Outcnt > float64(GetInFilterCardLimitOnPK(builder.compCtx.GetProcess().GetService(), node.Stats.TableCnt)) {
-		return nodeID
-	}
 
 	// Apply unique/secondary indices for point select
-	idxToChoose, filterIdx := builder.getMostSelectiveIndexForPointSelect(indexes, node)
+	idxToChoose, filterIdx := builder.getMostSelectiveIndexForPointSelect(indexes, node, ignoreStats)
 	if idxToChoose != -1 {
 		retID, idxTableNodeID := builder.applyIndexJoin(indexes[idxToChoose], node, EqualIndexCondition, filterIdx, scanSnapshot)
 		builder.applyExtraFiltersOnIndex(indexes[idxToChoose], node, builder.qry.Nodes[idxTableNodeID], filterIdx)
@@ -449,7 +458,7 @@ func (builder *QueryBuilder) applyExtraFiltersOnIndex(idxDef *IndexDef, node *pl
 			continue
 		}
 		for k := range idxDef.Parts {
-			colIdx := node.TableDef.Name2ColIndex[idxDef.Parts[k]]
+			colIdx := node.TableDef.Name2ColIndex[catalog.ResolveAlias(idxDef.Parts[k])]
 			if colIdx != col.ColPos {
 				continue
 			}
@@ -496,7 +505,7 @@ func tryMatchMoreLeadingFilters(idxDef *IndexDef, node *plan.Node, pos int32) []
 		if i == 0 {
 			continue //already hit
 		}
-		currentPos, ok := node.TableDef.Name2ColIndex[idxDef.Parts[i]]
+		currentPos, ok := node.TableDef.Name2ColIndex[catalog.ResolveAlias(idxDef.Parts[i])]
 		if !ok {
 			break
 		}
@@ -541,6 +550,23 @@ func checkIndexFilter(fn *plan.Function) (int, *plan.ColRef) {
 		if col != nil {
 			return NonEqualIndexCondition, col
 		}
+
+	case "or":
+		var col *plan.ColRef
+		for i := range fn.Args {
+			typ1, col1 := checkIndexFilter(fn.Args[i].GetF())
+			if typ1 != NonEqualIndexCondition {
+				return UnsupportedIndexCondition, nil
+			}
+			if col == nil {
+				col = col1
+			} else {
+				if col.RelPos != col1.RelPos || col.ColPos != col1.ColPos {
+					return UnsupportedIndexCondition, nil
+				}
+			}
+		}
+		return NonEqualIndexCondition, col
 	}
 	return UnsupportedIndexCondition, nil
 }
@@ -593,9 +619,16 @@ func (builder *QueryBuilder) replaceEqualCondition(filterList []*plan.Expr, filt
 	return expr
 }
 
-func (builder *QueryBuilder) replaceNonEqualCondition(filterList []*plan.Expr, leadingPos []int32, idxTag int32, idxTableDef *plan.TableDef, numParts int) *plan.Expr {
-	expr := DeepCopyExpr(filterList[leadingPos[0]])
+func (builder *QueryBuilder) replaceNonEqualCondition(filter *plan.Expr, idxTag int32, idxTableDef *plan.TableDef, numParts int) *plan.Expr {
+	expr := DeepCopyExpr(filter)
 	fn := expr.GetF()
+	if fn.Func.ObjName == "or" {
+		for i := range expr.GetF().Args {
+			expr.GetF().Args[i] = builder.replaceNonEqualCondition(expr.GetF().Args[i], idxTag, idxTableDef, numParts)
+		}
+		return expr
+	}
+
 	fn.Args[0].GetCol().RelPos = idxTag
 	fn.Args[0].GetCol().ColPos = 0
 	fn.Args[0].Typ = idxTableDef.Cols[0].Typ
@@ -615,7 +648,7 @@ func (builder *QueryBuilder) replaceNonEqualCondition(filterList []*plan.Expr, l
 
 func (builder *QueryBuilder) replaceLeadingFilter(filterList []*plan.Expr, leadingPos []int32, leadingEqualCond bool, idxTag int32, idxTableDef *plan.TableDef, numParts int) *plan.Expr {
 	if !leadingEqualCond { // a IN (1, 2, 3), a BETWEEN 1 AND 2
-		return builder.replaceNonEqualCondition(filterList, leadingPos, idxTag, idxTableDef, numParts)
+		return builder.replaceNonEqualCondition(filterList[leadingPos[0]], idxTag, idxTableDef, numParts)
 	}
 	return builder.replaceEqualCondition(filterList, leadingPos, idxTag, idxTableDef, numParts)
 }
@@ -627,7 +660,7 @@ func (builder *QueryBuilder) tryIndexOnlyScan(idxDef *IndexDef, node *plan.Node,
 			colName := node.TableDef.Cols[i].Name
 			found := false
 			for j := range idxDef.Parts {
-				if idxDef.Parts[j] == colName {
+				if catalog.ResolveAlias(idxDef.Parts[j]) == colName {
 					found = true
 					break
 				}
@@ -680,7 +713,7 @@ func (builder *QueryBuilder) tryIndexOnlyScan(idxDef *IndexDef, node *plan.Node,
 	}
 
 	idxTag := builder.genNewTag()
-	idxObjRef, idxTableDef := builder.compCtx.Resolve(node.ObjRef.SchemaName, idxDef.IndexTableName, scanSnapshot)
+	idxObjRef, idxTableDef := builder.compCtx.ResolveIndexTableByRef(node.ObjRef, idxDef.IndexTableName, scanSnapshot)
 	builder.addNameByColRef(idxTag, idxTableDef)
 	leadingColExpr := GetColExpr(idxTableDef.Cols[0].Typ, idxTag, 0)
 
@@ -688,11 +721,16 @@ func (builder *QueryBuilder) tryIndexOnlyScan(idxDef *IndexDef, node *plan.Node,
 		colIdx := node.TableDef.Name2ColIndex[idxDef.Parts[0]]
 		idxColMap[[2]int32{node.BindingTags[0], colIdx}] = leadingColExpr
 	} else {
-		for i := 0; i < numKeyParts; i++ {
-			colIdx := node.TableDef.Name2ColIndex[idxDef.Parts[i]]
-			origType := node.TableDef.Cols[colIdx].Typ
-			mappedExpr, _ := MakeSerialExtractExpr(builder.GetContext(), DeepCopyExpr(leadingColExpr), origType, int64(i))
-			idxColMap[[2]int32{node.BindingTags[0], colIdx}] = mappedExpr
+		for i := 0; i < numParts; i++ {
+			colName := catalog.ResolveAlias(idxDef.Parts[i])
+			colIdx := node.TableDef.Name2ColIndex[colName]
+			if colName == node.TableDef.Pkey.PkeyColName {
+				idxColMap[[2]int32{node.BindingTags[0], colIdx}] = GetColExpr(idxTableDef.Cols[1].Typ, idxTag, 1)
+			} else {
+				origType := node.TableDef.Cols[colIdx].Typ
+				mappedExpr, _ := MakeSerialExtractExpr(builder.GetContext(), DeepCopyExpr(leadingColExpr), origType, int64(i))
+				idxColMap[[2]int32{node.BindingTags[0], colIdx}] = mappedExpr
+			}
 		}
 	}
 
@@ -703,18 +741,30 @@ func (builder *QueryBuilder) tryIndexOnlyScan(idxDef *IndexDef, node *plan.Node,
 		newFilterList = append(newFilterList, replaceColumnsForExpr(node.FilterList[idx], idxColMap))
 	}
 
+	// recod index table scan info
+	idxScanInfo := plan.IndexScanInfo{
+		IsIndexScan:    true,
+		IndexName:      idxDef.IndexName,
+		BelongToTable:  node.ObjRef.ObjName,
+		Parts:          slices.Clone(idxDef.Parts),
+		IsUnique:       idxDef.Unique,
+		IndexTableName: idxDef.IndexTableName,
+	}
+
 	idxTableNodeID := builder.appendNode(&plan.Node{
-		NodeType:     plan.Node_TABLE_SCAN,
-		TableDef:     idxTableDef,
-		ObjRef:       idxObjRef,
-		ParentObjRef: node.ObjRef,
-		FilterList:   newFilterList,
-		Limit:        node.Limit,
-		Offset:       node.Offset,
-		BindingTags:  []int32{idxTag},
-		ScanSnapshot: node.ScanSnapshot,
+		NodeType:      plan.Node_TABLE_SCAN,
+		TableDef:      idxTableDef,
+		IndexScanInfo: idxScanInfo,
+		ObjRef:        idxObjRef,
+		ParentObjRef:  node.ObjRef,
+		FilterList:    newFilterList,
+		Limit:         node.Limit,
+		Offset:        node.Offset,
+		BindingTags:   []int32{idxTag},
+		ScanSnapshot:  node.ScanSnapshot,
 	}, builder.ctxByNode[node.NodeId])
 
+	forceScanNodeStatsTP(idxTableNodeID, builder)
 	return idxTableNodeID
 }
 
@@ -747,7 +797,7 @@ func (builder *QueryBuilder) getIndexForNonEquiCond(indexes []*IndexDef, node *p
 
 func (builder *QueryBuilder) applyIndexJoin(idxDef *IndexDef, node *plan.Node, filterType int, filterIdx []int32, scanSnapshot *Snapshot) (int32, int32) {
 	idxTag := builder.genNewTag()
-	idxObjRef, idxTableDef := builder.compCtx.Resolve(node.ObjRef.SchemaName, idxDef.IndexTableName, scanSnapshot)
+	idxObjRef, idxTableDef := builder.compCtx.ResolveIndexTableByRef(node.ObjRef, idxDef.IndexTableName, scanSnapshot)
 	builder.addNameByColRef(idxTag, idxTableDef)
 
 	numParts := len(idxDef.Parts)
@@ -755,19 +805,31 @@ func (builder *QueryBuilder) applyIndexJoin(idxDef *IndexDef, node *plan.Node, f
 	if filterType == EqualIndexCondition {
 		idxFilter = builder.replaceEqualCondition(node.FilterList, filterIdx, idxTag, idxTableDef, numParts)
 	} else {
-		idxFilter = builder.replaceNonEqualCondition(node.FilterList, filterIdx, idxTag, idxTableDef, numParts)
+		idxFilter = builder.replaceNonEqualCondition(node.FilterList[filterIdx[0]], idxTag, idxTableDef, numParts)
+	}
+
+	// recod index table scan info
+	idxScanInfo := plan.IndexScanInfo{
+		IsIndexScan:    true,
+		IndexName:      idxDef.IndexName,
+		BelongToTable:  node.ObjRef.ObjName,
+		Parts:          slices.Clone(idxDef.Parts),
+		IsUnique:       idxDef.Unique,
+		IndexTableName: idxDef.IndexTableName,
 	}
 
 	idxTableNode := &plan.Node{
-		NodeType:     plan.Node_TABLE_SCAN,
-		TableDef:     idxTableDef,
-		ObjRef:       idxObjRef,
-		ParentObjRef: DeepCopyObjectRef(node.ObjRef),
-		FilterList:   []*plan.Expr{idxFilter},
-		BindingTags:  []int32{idxTag},
-		ScanSnapshot: node.ScanSnapshot,
+		NodeType:      plan.Node_TABLE_SCAN,
+		TableDef:      idxTableDef,
+		ObjRef:        idxObjRef,
+		IndexScanInfo: idxScanInfo,
+		ParentObjRef:  DeepCopyObjectRef(node.ObjRef),
+		FilterList:    []*plan.Expr{idxFilter},
+		BindingTags:   []int32{idxTag},
+		ScanSnapshot:  node.ScanSnapshot,
 	}
 	idxTableNodeID := builder.appendNode(idxTableNode, builder.ctxByNode[node.NodeId])
+	forceScanNodeStatsTP(idxTableNodeID, builder)
 
 	pkIdx := node.TableDef.Name2ColIndex[node.TableDef.Pkey.PkeyColName]
 	pkExpr := GetColExpr(node.TableDef.Cols[pkIdx].Typ, node.BindingTags[0], pkIdx)
@@ -794,7 +856,7 @@ func (builder *QueryBuilder) applyIndexJoin(idxDef *IndexDef, node *plan.Node, f
 	return joinNodeID, idxTableNodeID
 }
 
-func (builder *QueryBuilder) getMostSelectiveIndexForPointSelect(indexes []*IndexDef, node *plan.Node) (int, []int32) {
+func (builder *QueryBuilder) getMostSelectiveIndexForPointSelect(indexes []*IndexDef, node *plan.Node, ignoreStats bool) (int, []int32) {
 	currentSel := 1.0
 	currentIdx := -1
 	savedFilterIdx := make([]int32, 0)
@@ -828,14 +890,14 @@ func (builder *QueryBuilder) getMostSelectiveIndexForPointSelect(indexes []*Inde
 
 		filterIdx = filterIdx[:0]
 		for j := 0; j < numKeyParts; j++ {
-			colIdx := node.TableDef.Name2ColIndex[idxDef.Parts[j]]
+			colIdx := node.TableDef.Name2ColIndex[catalog.ResolveAlias(idxDef.Parts[j])]
 			idx, ok := col2filter[colIdx]
 			if !ok {
 				break
 			}
 			filterIdx = append(filterIdx, idx)
 			filter := node.FilterList[idx]
-			if filter.Selectivity <= InFilterSelectivityLimit && node.Stats.TableCnt*filter.Selectivity <= float64(GetInFilterCardLimitOnPK(builder.compCtx.GetProcess().GetService(), node.Stats.TableCnt)) {
+			if ignoreStats || (filter.Selectivity <= InFilterSelectivityLimit && node.Stats.TableCnt*filter.Selectivity <= float64(GetInFilterCardLimitOnPK(builder.compCtx.GetProcess().GetService(), node.Stats.TableCnt))) {
 				usePartialIndex = true
 			}
 		}
@@ -945,7 +1007,7 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 
 		condIdx = condIdx[:0]
 		for i := 0; i < numKeyParts; i++ {
-			colIdx := leftChild.TableDef.Name2ColIndex[idxDef.Parts[i]]
+			colIdx := leftChild.TableDef.Name2ColIndex[catalog.ResolveAlias(idxDef.Parts[i])]
 			idx, ok := col2Cond[colIdx]
 			if !ok {
 				break
@@ -959,8 +1021,7 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 		}
 
 		idxTag := builder.genNewTag()
-		//idxObjRef, idxTableDef := builder.compCtx.Resolve(leftChild.ObjRef.SchemaName, idxDef.IndexTableName, *ts)
-		idxObjRef, idxTableDef := builder.compCtx.Resolve(leftChild.ObjRef.SchemaName, idxDef.IndexTableName, scanSnapshot)
+		idxObjRef, idxTableDef := builder.compCtx.ResolveIndexTableByRef(leftChild.ObjRef, idxDef.IndexTableName, scanSnapshot)
 		builder.addNameByColRef(idxTag, idxTableDef)
 
 		rfTag := builder.genNewMsgTag()
@@ -1001,10 +1062,22 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 				},
 			},
 		}
+
+		// recod index table scan info
+		idxScanInfo := plan.IndexScanInfo{
+			IsIndexScan:    true,
+			IndexName:      idxDef.IndexName,
+			BelongToTable:  leftChild.ObjRef.ObjName,
+			Parts:          slices.Clone(idxDef.Parts),
+			IsUnique:       idxDef.Unique,
+			IndexTableName: idxDef.IndexTableName,
+		}
+
 		idxTableNodeID := builder.appendNode(&plan.Node{
 			NodeType:               plan.Node_TABLE_SCAN,
 			TableDef:               idxTableDef,
 			ObjRef:                 idxObjRef,
+			IndexScanInfo:          idxScanInfo,
 			ParentObjRef:           DeepCopyObjectRef(leftChild.ObjRef),
 			BindingTags:            []int32{idxTag},
 			ScanSnapshot:           leftChild.ScanSnapshot,

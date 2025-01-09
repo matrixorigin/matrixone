@@ -428,6 +428,18 @@ func (mr *MockRelDataMockRecorder) AppendBlockInfo(blk interface{}) *gomock.Call
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AppendBlockInfo", reflect.TypeOf((*MockRelData)(nil).AppendBlockInfo), blk)
 }
 
+// AppendBlockInfoSlice mocks base method.
+func (m *MockRelData) AppendBlockInfoSlice(arg0 objectio.BlockInfoSlice) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "AppendBlockInfoSlice", arg0)
+}
+
+// AppendBlockInfoSlice indicates an expected call of AppendBlockInfoSlice.
+func (mr *MockRelDataMockRecorder) AppendBlockInfoSlice(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AppendBlockInfoSlice", reflect.TypeOf((*MockRelData)(nil).AppendBlockInfoSlice), arg0)
+}
+
 // AppendShardID mocks base method.
 func (m *MockRelData) AppendShardID(id uint64) {
 	m.ctrl.T.Helper()
@@ -633,6 +645,20 @@ func (mr *MockRelDataMockRecorder) SetShardID(i, id interface{}) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetShardID", reflect.TypeOf((*MockRelData)(nil).SetShardID), i, id)
 }
 
+// Split mocks base method.
+func (m *MockRelData) Split(i int) []engine.RelData {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Split", i)
+	ret0, _ := ret[0].([]engine.RelData)
+	return ret0
+}
+
+// Split indicates an expected call of Split.
+func (mr *MockRelDataMockRecorder) Split(i interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Split", reflect.TypeOf((*MockRelData)(nil).Split), i)
+}
+
 // String mocks base method.
 func (m *MockRelData) String() string {
 	m.ctrl.T.Helper()
@@ -741,9 +767,9 @@ func (mr *MockDataSourceMockRecorder) GetTombstones(ctx, bid interface{}) *gomoc
 }
 
 // Next mocks base method.
-func (m *MockDataSource) Next(ctx context.Context, cols []string, types []types.Type, seqNums []uint16, memFilter any, mp *mpool.MPool, bat *batch.Batch) (*objectio.BlockInfo, engine.DataState, error) {
+func (m *MockDataSource) Next(ctx context.Context, cols []string, types []types.Type, seqNums []uint16, pkSeqNum int32, memFilter any, mp *mpool.MPool, bat *batch.Batch) (*objectio.BlockInfo, engine.DataState, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Next", ctx, cols, types, seqNums, memFilter, mp, bat)
+	ret := m.ctrl.Call(m, "Next", ctx, cols, types, seqNums, pkSeqNum, memFilter, mp, bat)
 	ret0, _ := ret[0].(*objectio.BlockInfo)
 	ret1, _ := ret[1].(engine.DataState)
 	ret2, _ := ret[2].(error)
@@ -751,9 +777,9 @@ func (m *MockDataSource) Next(ctx context.Context, cols []string, types []types.
 }
 
 // Next indicates an expected call of Next.
-func (mr *MockDataSourceMockRecorder) Next(ctx, cols, types, seqNums, memFilter, mp, bat interface{}) *gomock.Call {
+func (mr *MockDataSourceMockRecorder) Next(ctx, cols, types, seqNums, pkSeqNum, memFilter, mp, bat interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Next", reflect.TypeOf((*MockDataSource)(nil).Next), ctx, cols, types, seqNums, memFilter, mp, bat)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Next", reflect.TypeOf((*MockDataSource)(nil).Next), ctx, cols, types, seqNums, pkSeqNum, memFilter, mp, bat)
 }
 
 // SetFilterZM mocks base method.
@@ -1338,18 +1364,18 @@ func (mr *MockRelationMockRecorder) PrimaryKeysMayBeUpserted(ctx, from, to, keyV
 }
 
 // Ranges mocks base method.
-func (m *MockRelation) Ranges(arg0 context.Context, arg1 []*plan.Expr, arg2, arg3 int, arg4 engine.DataCollectPolicy) (engine.RelData, error) {
+func (m *MockRelation) Ranges(arg0 context.Context, arg1 engine.RangesParam) (engine.RelData, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Ranges", arg0, arg1, arg2, arg3, arg4)
+	ret := m.ctrl.Call(m, "Ranges", arg0, arg1)
 	ret0, _ := ret[0].(engine.RelData)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // Ranges indicates an expected call of Ranges.
-func (mr *MockRelationMockRecorder) Ranges(arg0, arg1, arg2, arg3, arg4 interface{}) *gomock.Call {
+func (mr *MockRelationMockRecorder) Ranges(arg0, arg1 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Ranges", reflect.TypeOf((*MockRelation)(nil).Ranges), arg0, arg1, arg2, arg3, arg4)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Ranges", reflect.TypeOf((*MockRelation)(nil).Ranges), arg0, arg1)
 }
 
 // Rows mocks base method.
@@ -2056,6 +2082,20 @@ func (m *MockEngine) Nodes(isInternal bool, tenant, username string, cnLabel map
 func (mr *MockEngineMockRecorder) Nodes(isInternal, tenant, username, cnLabel interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Nodes", reflect.TypeOf((*MockEngine)(nil).Nodes), isInternal, tenant, username, cnLabel)
+}
+
+// PrefetchTableMeta mocks base method.
+func (m *MockEngine) PrefetchTableMeta(ctx context.Context, key statsinfo.StatsInfoKey) bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "PrefetchTableMeta", ctx, key)
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// PrefetchTableMeta indicates an expected call of PrefetchTableMeta.
+func (mr *MockEngineMockRecorder) PrefetchTableMeta(ctx, key interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PrefetchTableMeta", reflect.TypeOf((*MockEngine)(nil).PrefetchTableMeta), ctx, key)
 }
 
 // Stats mocks base method.

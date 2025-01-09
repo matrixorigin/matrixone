@@ -160,9 +160,57 @@ insert into t1 (Id) values (1);
 insert into t1 (iD) values (1);
 insert into t1 (ID) values (1);
 select * from t1;
+-- @session
 
-# reset to 1
-set global lower_case_table_names = 1;
+
+-- issue 20522
+-- @session:id=9&user=a1:admin1&password=test123
+# it is 0 now
+# 确保这里的值为0（大小写敏感）
+select @@lower_case_table_names;
+drop database if exists test02;
+create database test02;
+use test02;
+drop table if exists Departments;
+drop table if exists Employees;
+create table Departments (
+    DepartmentID INT PRIMARY KEY,
+    DepartmentName VARCHAR(255) NOT NULL
+);
+
+create table Employees (
+    EmployeeID INT PRIMARY KEY,
+    FirstName VARCHAR(255) NOT NULL,
+    LastName VARCHAR(255) NOT NULL,
+    DepartmentID INT,
+    foreign key (DepartmentID) REFERENCES Departments(DepartmentID)
+);
+
+insert into Departments (DepartmentID, DepartmentName) values
+(1, 'Human Resources'),
+(2, 'Engineering'),
+(3, 'Marketing'),
+(4, 'Sales'),
+(5, 'Finance');
+
+insert into Employees (EmployeeID, FirstName, LastName, DepartmentID) values
+(101, 'John', 'Doe', 1),
+(102, 'Jane', 'Smith', 2),
+(103, 'Alice', 'Johnson', 3),
+(104, 'Mark', 'Patterson', 4),
+(105, 'David', 'Finley', 5);
+
+drop view if exists EmployeeDepartmentView;
+create view EmployeeDepartmentView as
+select
+    e.FirstName,
+    e.LastName,
+    d.DepartmentName
+from
+    Employees e
+        inner join
+    Departments d ON e.DepartmentID = d.DepartmentID;
+select * from EmployeeDepartmentView;
 -- @session
 
 drop account a1;

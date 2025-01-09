@@ -563,7 +563,8 @@ func LoadFile(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 	if err != nil {
 		return err
 	}
-	if len(ctx) > 65536 /*blob size*/ {
+
+	if len(ctx) > types.MaxBlobLen /*blob size*/ {
 		return moerr.NewInternalError(proc.Ctx, "Data too long for blob")
 	}
 	if len(ctx) == 0 {
@@ -1502,7 +1503,7 @@ func RemoveFaultPoint(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 	}
 
 	return opUnaryStrToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v string) (bool, error) {
-		err = fault.RemoveFaultPoint(proc.Ctx, v)
+		_, err = fault.RemoveFaultPoint(proc.Ctx, v)
 		return true, err
 	}, selectList)
 }

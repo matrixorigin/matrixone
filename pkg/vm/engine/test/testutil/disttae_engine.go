@@ -16,7 +16,11 @@ package testutil
 
 import (
 	"context"
-
+	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
+	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
+	"github.com/matrixorigin/matrixone/pkg/util/toml"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -53,18 +57,38 @@ import (
 )
 
 type TestDisttaeEngine struct {
-	Engine              *disttae.Engine
-	logtailReceiver     chan morpc.Message
-	broken              chan struct{}
-	wg                  sync.WaitGroup
-	ctx                 context.Context
-	cancel              context.CancelFunc
-	txnClient           client.TxnClient
-	txnOperator         client.TxnOperator
-	timestampWaiter     client.TimestampWaiter
-	mp                  *mpool.MPool
-	workspaceThreshold  uint64
-	insertEntryMaxCount int
+	Engine                   *disttae.Engine
+	logtailReceiver          chan morpc.Message
+	broken                   chan struct{}
+	wg                       sync.WaitGroup
+	ctx                      context.Context
+	cancel                   context.CancelFunc
+	txnClient                client.TxnClient
+	queryClient              qclient.QueryClient
+	txnOperator              client.TxnOperator
+	timestampWaiter          client.TimestampWaiter
+	mp                       *mpool.MPool
+	commitWorkspaceThreshold uint64
+	writeWorkspaceThreshold  uint64
+	quota                    uint64
+	insertEntryMaxCount      int
+
+	rootDir string
+}
+
+func setServerLevelParams(de *TestDisttaeEngine) {
+	frontend.SetPUForExternalUT("", &config.ParameterUnit{
+		SV: &config.FrontendParameters{
+			SessionTimeout: toml.Duration{
+				Duration: time.Hour,
+			},
+			CreateTxnOpTimeout: toml.Duration{
+				Duration: time.Minute * 5,
+			},
+		},
+		TxnClient:     de.txnClient,
+		StorageEngine: de.Engine,
+	})
 }
 
 func NewTestDisttaeEngine(
@@ -105,12 +129,33 @@ func NewTestDisttaeEngine(
 	if de.insertEntryMaxCount != 0 {
 		engineOpts = append(engineOpts, disttae.WithInsertEntryMaxCount(de.insertEntryMaxCount))
 	}
-	if de.workspaceThreshold != 0 {
-		engineOpts = append(engineOpts, disttae.WithWorkspaceThreshold(de.workspaceThreshold))
+	if de.commitWorkspaceThreshold != 0 {
+		engineOpts = append(engineOpts, disttae.WithCommitWorkspaceThreshold(de.commitWorkspaceThreshold))
+	}
+	if de.writeWorkspaceThreshold != 0 {
+		engineOpts = append(engineOpts, disttae.WithWriteWorkspaceThreshold(de.writeWorkspaceThreshold))
+	}
+	if de.quota != 0 {
+		engineOpts = append(engineOpts, disttae.WithExtraWorkspaceThresholdQuota(de.quota))
 	}
 
+	internalExecutorFactory := func() ie.InternalExecutor {
+		return frontend.NewInternalExecutor("")
+	}
+	engineOpts = append(engineOpts, disttae.WithSQLExecFunc(internalExecutorFactory))
+
+	engineOpts = append(engineOpts, disttae.WithMoServerStateChecker(func() bool { return false }))
+
 	catalog.SetupDefines("")
-	de.Engine = disttae.New(ctx, "", de.mp, fs, de.txnClient, hakeeper, nil, 1, engineOpts...)
+	de.Engine = disttae.New(de.ctx,
+		"",
+		de.mp,
+		fs,
+		de.txnClient,
+		hakeeper,
+		nil,
+		1, engineOpts...)
+
 	de.Engine.PushClient().LogtailRPCClientFactory = rpcAgent.MockLogtailRPCClientFactory
 
 	go func() {
@@ -126,7 +171,7 @@ func NewTestDisttaeEngine(
 		}
 	}()
 
-	op, err := de.txnClient.New(ctx, types.TS{}.ToTimestamp())
+	op, err := de.txnClient.New(de.ctx, types.TS{}.ToTimestamp())
 	if err != nil {
 		return nil, err
 	}
@@ -134,11 +179,12 @@ func NewTestDisttaeEngine(
 	close(wait)
 
 	de.txnOperator = op
-	if err = de.Engine.New(ctx, op); err != nil {
+	if err = de.Engine.New(de.ctx, op); err != nil {
 		return nil, err
 	}
 
 	qc, _ := qclient.NewQueryClient("", morpc.Config{})
+	de.queryClient = qc
 	sqlExecutor := compile.NewSQLExecutor(
 		"127.0.0.1:2000",
 		de.Engine,
@@ -163,8 +209,10 @@ func NewTestDisttaeEngine(
 			de.Engine,
 		))
 
+	setServerLevelParams(de)
+
 	// InitLoTailPushModel presupposes that the internal sql executor has been initialized.
-	err = de.Engine.InitLogTailPushModel(ctx, de.timestampWaiter)
+	err = de.Engine.InitLogTailPushModel(de.ctx, de.timestampWaiter)
 	//err = de.prevSubscribeSysTables(ctx, rpcAgent)
 	return de, err
 }
@@ -190,7 +238,7 @@ func (de *TestDisttaeEngine) NewTxnOperator(
 
 func (de *TestDisttaeEngine) waitLogtail(ctx context.Context) error {
 	ts := de.Now()
-	ticker := time.NewTicker(time.Second)
+	ticker := time.NewTicker(time.Millisecond * 10)
 	ctx, cancel := context.WithTimeoutCause(ctx, time.Second*60, moerr.CauseWaitLogtail)
 	defer cancel()
 
@@ -397,6 +445,12 @@ func (de *TestDisttaeEngine) Close(ctx context.Context) {
 	close(de.logtailReceiver)
 	de.cancel()
 	de.wg.Wait()
+	de.Engine.Close()
+	de.queryClient.Close()
+
+	if err := os.RemoveAll(de.rootDir); err != nil {
+		logutil.Errorf("remove root dir failed (%s): %v", de.rootDir, err)
+	}
 }
 
 func (de *TestDisttaeEngine) GetTable(
