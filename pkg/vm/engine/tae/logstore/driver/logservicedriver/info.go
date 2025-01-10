@@ -84,7 +84,7 @@ func (info *driverInfo) onReplay(r *replayer) {
 		info.truncating.Store(r.minDriverLsn - 1)
 	}
 	info.truncatedLogserviceLsn = r.truncatedLogserviceLsn
-	info.appended.TryMerge(*common.NewClosedIntervalsBySlice(r.appended))
+	info.appended.TryMerge(common.NewClosedIntervalsBySlice(r.appended))
 }
 
 func (info *driverInfo) onReplayRecordEntry(lsn uint64, driverLsns *common.ClosedIntervals) {
@@ -232,7 +232,7 @@ func (info *driverInfo) putbackWriteTokens(tokens []uint64) {
 
 	appendedArray := common.NewClosedIntervalsBySlice(tokens)
 	info.appendedMu.Lock()
-	info.appended.TryMerge(*appendedArray)
+	info.appended.TryMerge(appendedArray)
 	info.appendedMu.Unlock()
 
 	info.commitCond.L.Lock()

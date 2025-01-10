@@ -80,7 +80,7 @@ func (base *syncBase) OnEntryReceived(v *entry.Entry) error {
 		interval = common.NewClosedIntervals()
 		base.addrs[addr.Version] = interval
 	}
-	interval.TryMerge(*common.NewClosedIntervalsByInt(v.Lsn))
+	interval.TryMerge(common.NewClosedIntervalsByInt(v.Lsn))
 	return nil
 }
 

@@ -54,7 +54,7 @@ func (r *replayer) updateaddrs(version int, lsn uint64) {
 		interval = common.NewClosedIntervals()
 		r.addrs[version] = interval
 	}
-	interval.TryMerge(*common.NewClosedIntervalsByInt(lsn))
+	interval.TryMerge(common.NewClosedIntervalsByInt(lsn))
 }
 
 func (r *replayer) updateGroupLSN(lsn uint64) {
