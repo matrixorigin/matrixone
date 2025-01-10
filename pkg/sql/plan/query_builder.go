@@ -2697,16 +2697,16 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 				astLimit = selectClause.Select.Limit
 			}
 			stmt = selectClause.Select
+
+			//stmt may be replaced above.
+			//do preprocess CTEs again
+			err = builder.preprocessCte(stmt, ctx)
+			if err != nil {
+				return 0, err
+			}
 		} else {
 			break
 		}
-	}
-
-	//stmt may be replaced above.
-	//do preprocess CTEs again
-	err = builder.preprocessCte(stmt, ctx)
-	if err != nil {
-		return 0, err
 	}
 
 	if selectClause, ok := stmt.Select.(*tree.SelectClause); ok {
