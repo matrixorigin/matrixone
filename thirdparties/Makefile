@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-PWD=$(shell pwd)
+PWD=$(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
 UNAME=$(shell uname -s | tr A-Z a-z)
 USEARCH_DIR=usearch-2.16.10
 USEARCH_TAR=$(USEARCH_DIR).tar.gz
