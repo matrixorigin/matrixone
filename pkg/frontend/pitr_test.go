@@ -2541,7 +2541,7 @@ func Test_doCreatePitr(t *testing.T) {
 		mrs := newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		sql = fmt.Sprintf("select pitr_id from mo_catalog.mo_pitr where create_account = %d", sysAccountID) + fmt.Sprintf(" and account_name = '%s' and level = 'account';", sysAccountName)
+		sql = fmt.Sprintf("select pitr_id from mo_catalog.mo_pitr where create_account = %d", sysAccountID) + fmt.Sprintf(" and account_name = '%s' and level = 'account' and pitr_status = 1;", sysAccountName)
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
