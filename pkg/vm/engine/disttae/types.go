@@ -233,7 +233,7 @@ type Engine struct {
 	}
 
 	//latest catalog will be loaded from TN when engine is initialized.
-	catalog *cache.CatalogCache
+	catalog atomic.Pointer[cache.CatalogCache]
 	//latest partitions which be protected by e.Lock().
 	partitions map[[2]uint64]*logtailreplay.Partition
 	//snapshot partitions
@@ -315,13 +315,10 @@ type Transaction struct {
 	segId types.Uuid
 	// use to cache opened snapshot tables by current txn.
 	tableCache *sync.Map
-	// use to cache databases created by current txn.
-	databaseMap *sync.Map
-	// Used to record deleted databases in transactions.
-	deletedDatabaseMap *sync.Map
 
 	// used to keep updated tables in the current txn
 	tableOps            *tableOpsChain
+	databaseOps         *dbOpsChain
 	restoreTxnTableFunc []func()
 
 	// record the table dropped in the txn,
@@ -434,15 +431,14 @@ func NewTxnWorkSpace(eng *Engine, proc *process.Process) *Transaction {
 	id := objectio.NewSegmentid()
 	bytes := types.EncodeUuid(id)
 	txn := &Transaction{
-		proc:               proc,
-		engine:             eng,
-		idGen:              eng.idGen,
-		tnStores:           eng.GetTNServices(),
-		tableCache:         new(sync.Map),
-		databaseMap:        new(sync.Map),
-		deletedDatabaseMap: new(sync.Map),
-		tableOps:           newTableOps(),
-		tablesInVain:       make(map[uint64]int),
+		proc:         proc,
+		engine:       eng,
+		idGen:        eng.idGen,
+		tnStores:     eng.GetTNServices(),
+		tableCache:   new(sync.Map),
+		databaseOps:  newDbOps(),
+		tableOps:     newTableOps(),
+		tablesInVain: make(map[uint64]int),
 		rowId: [6]uint32{
 			types.DecodeUint32(bytes[0:4]),
 			types.DecodeUint32(bytes[4:8]),
@@ -951,12 +947,25 @@ type tableOp struct {
 
 type tableOpsChain struct {
 	sync.RWMutex
-	names map[tableKey][]tableOp
+	names       map[tableKey][]tableOp
+	creatdInTxn map[uint64]int // tableId -> statementId
+}
+
+type dbOp struct {
+	kind        int
+	databaseId  uint64
+	statementId int
+	payload     *txnDatabase
 }
 
 type databaseKey struct {
 	accountId uint32
 	name      string
+}
+
+type dbOpsChain struct {
+	sync.RWMutex
+	names map[databaseKey][]dbOp
 }
 
 // txnTable represents an opened table in a transaction

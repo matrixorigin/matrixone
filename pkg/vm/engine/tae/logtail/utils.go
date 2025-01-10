@@ -1030,8 +1030,7 @@ func (data *CheckpointData) WriteTo(
 		var blks []objectio.BlockObject
 		if objectSize > checkpointSize {
 			fileNum++
-			blks, _, err = writer.Sync(context.Background())
-			if err != nil {
+			if blks, _, err = writer.Sync(context.Background()); err != nil {
 				return
 			}
 			checkpointFiles = append(checkpointFiles, name.String())
@@ -1156,21 +1155,21 @@ func (data *CheckpointData) WriteTo(
 	}
 	if _, _, err = writer2.WriteSubBatch(
 		containers.ToCNBatch(data.bats[MetaIDX]),
-		objectio.ConvertToSchemaType(uint16(MetaIDX))); err != nil {
-		return
-	}
-	if err != nil {
+		objectio.ConvertToSchemaType(uint16(MetaIDX)),
+	); err != nil {
 		return
 	}
 	if _, _, err = writer2.WriteSubBatch(
 		containers.ToCNBatch(data.bats[TNMetaIDX]),
-		objectio.ConvertToSchemaType(uint16(TNMetaIDX))); err != nil {
+		objectio.ConvertToSchemaType(uint16(TNMetaIDX)),
+	); err != nil {
 		return
 	}
-	if err != nil {
+
+	var blks2 []objectio.BlockObject
+	if blks2, _, err = writer2.Sync(context.Background()); err != nil {
 		return
 	}
-	blks2, _, err := writer2.Sync(context.Background())
 	CNLocation = objectio.BuildLocation(name2, blks2[0].GetExtent(), 0, blks2[0].GetID())
 	TNLocation = objectio.BuildLocation(name2, blks2[1].GetExtent(), 0, blks2[1].GetID())
 	return

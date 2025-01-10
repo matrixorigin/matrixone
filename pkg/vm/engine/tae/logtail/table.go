@@ -328,6 +328,7 @@ func (table *TxnTable) ForeachRowInBetween(
 	from, to types.TS,
 	skipBlkOp func(blk BlockT) bool,
 	rowOp func(row RowT) (goNext bool),
+	skipTSCheck bool,
 ) (readRows int) {
 	snapshot := table.Snapshot()
 	pivot := &txnBlock{bornTS: from}
@@ -346,7 +347,10 @@ func (table *TxnTable) ForeachRowInBetween(
 			minTs = blk.bornTS
 			return false
 		})
-		logutil.Info("[logtail] fetch with too small ts", zap.String("ts", from.ToString()), zap.String("minTs", minTs.ToString()))
+
+		if !skipTSCheck {
+			logutil.Info("[logtail] fetch with too small ts", zap.String("ts", from.ToString()), zap.String("minTs", minTs.ToString()))
+		}
 	}
 	snapshot.Ascend(pivot, func(blk BlockT) bool {
 		if blk.bornTS.GT(&to) {

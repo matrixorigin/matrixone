@@ -118,7 +118,7 @@ func (s *sqlExecutor) Exec(
 			res = v
 			return err
 		},
-		opts)
+		opts.WithSQL(sql))
 	if err != nil {
 		return executor.Result{}, err
 	}
@@ -137,7 +137,7 @@ func (s *sqlExecutor) ExecTxn(
 	}
 	err = execFunc(exec)
 	if err != nil {
-		logutil.Errorf("internal sql executor error: %v", err)
+		logutil.Error("internal sql executor error", zap.Error(err), zap.String("sql", opts.SQL()), zap.String("txn", exec.Txn().Txn().DebugString()))
 		return exec.rollback(err)
 	}
 	if err = exec.commit(); err != nil {
@@ -305,7 +305,17 @@ func (exec *txnExecutor) Exec(
 		exec.s.us,
 		nil,
 	)
+	accId, err := defines.GetAccountId(proc.Ctx)
+	if err != nil {
+		return executor.Result{}, err
+	}
+	useId := defines.GetUserId(proc.Ctx)
+	roleId := defines.GetRoleId(proc.Ctx)
+
 	proc.Base.WaitPolicy = statementOption.WaitPolicy()
+	proc.Base.SessionInfo.AccountId = accId
+	proc.Base.SessionInfo.UserId = useId
+	proc.Base.SessionInfo.RoleId = roleId
 	proc.Base.SessionInfo.TimeZone = exec.opts.GetTimeZone()
 	proc.Base.SessionInfo.Buf = exec.s.buf
 	proc.Base.SessionInfo.StorageEngine = exec.s.eng
@@ -334,7 +344,7 @@ func (exec *txnExecutor) Exec(
 
 	result := executor.NewResult(exec.s.mp)
 
-	stream_chan, streaming := exec.opts.Streaming()
+	stream_chan, err_chan, streaming := exec.opts.Streaming()
 	if streaming {
 		defer close(stream_chan)
 	}
@@ -357,6 +367,7 @@ func (exec *txnExecutor) Exec(
 					for len(stream_chan) == cap(stream_chan) {
 						select {
 						case <-proc.Ctx.Done():
+							err_chan <- moerr.NewInternalError(proc.Ctx, "context cancelled")
 							return moerr.NewInternalError(proc.Ctx, "context cancelled")
 						default:
 							time.Sleep(1 * time.Millisecond)
@@ -372,11 +383,17 @@ func (exec *txnExecutor) Exec(
 
 		})
 	if err != nil {
+		if streaming {
+			err_chan <- err
+		}
 		return executor.Result{}, err
 	}
 	var runResult *util.RunResult
 	runResult, err = c.Run(0)
 	if err != nil {
+		if streaming {
+			err_chan <- err
+		}
 		for _, bat := range batches {
 			if bat != nil {
 				bat.Clean(exec.s.mp)

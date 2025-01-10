@@ -71,7 +71,7 @@ func (s *service) MaybeUpgradeTenant(
 				return err
 			}
 			if latestVersion.Version != currentCN.Version {
-				panic("BUG: current cn's version(" +
+				s.logger.Fatal("BUG: current cn's version(" +
 					currentCN.Version +
 					") must equal cluster latest version(" +
 					latestVersion.Version +

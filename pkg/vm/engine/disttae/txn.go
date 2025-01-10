@@ -23,6 +23,8 @@ import (
 	"sync"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -43,7 +45,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"go.uber.org/zap"
 )
 
 //func (txn *Transaction) getObjInfos(
@@ -350,7 +351,7 @@ func (txn *Transaction) checkDup() error {
 		}
 
 		dbkey := genDatabaseKey(e.accountId, e.databaseName)
-		if _, ok := txn.deletedDatabaseMap.Load(dbkey); ok {
+		if txn.databaseOps.existAndDeleted(dbkey) {
 			continue
 		}
 
@@ -523,6 +524,11 @@ func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
 	if dumpAll {
 		if txn.approximateInMemDeleteCnt >= txn.engine.config.insertEntryMaxCount {
 			if err := txn.dumpDeleteBatchLocked(ctx, offset, &size); err != nil {
+				return err
+			}
+			//After flushing inserts/deletes in memory into S3, the entries in txn.writes will be unordered,
+			//should adjust the order to make sure deletes are in front of the inserts.
+			if err := txn.adjustUpdateOrderLocked(0); err != nil {
 				return err
 			}
 		}
@@ -1469,8 +1475,8 @@ func (txn *Transaction) delTransaction() {
 	}
 	txn.tableCache = nil
 	txn.tableOps = nil
-	txn.databaseMap = nil
-	txn.deletedDatabaseMap = nil
+	txn.databaseOps = nil
+
 	txn.cn_flushed_s3_tombstone_object_stats_list = nil
 	txn.deletedBlocks = nil
 	txn.haveDDL.Store(false)
@@ -1505,6 +1511,7 @@ func (txn *Transaction) delTransaction() {
 }
 
 func (txn *Transaction) rollbackTableOpLocked() {
+	txn.databaseOps.rollbackLastStatement(txn.statementID)
 	txn.tableOps.rollbackLastStatement(txn.statementID)
 
 	for k, v := range txn.tablesInVain {
@@ -1540,11 +1547,10 @@ func (txn *Transaction) CloneSnapshotWS() client.Workspace {
 		tnStores: txn.tnStores,
 		idGen:    txn.idGen,
 
-		tableCache:         new(sync.Map),
-		databaseMap:        new(sync.Map),
-		deletedDatabaseMap: new(sync.Map),
-		tableOps:           newTableOps(),
-		tablesInVain:       make(map[uint64]int),
+		tableCache:   new(sync.Map),
+		databaseOps:  newDbOps(),
+		tableOps:     newTableOps(),
+		tablesInVain: make(map[uint64]int),
 		deletedBlocks: &deletedBlocks{
 			offsets: map[types.Blockid][]int64{},
 		},
@@ -1573,10 +1579,82 @@ func (txn *Transaction) GetHaveDDL() bool {
 	return txn.haveDDL.Load()
 }
 
+func newDbOps() *dbOpsChain {
+	return &dbOpsChain{
+		names: make(map[databaseKey][]dbOp),
+	}
+}
+
+func (c *dbOpsChain) addCreateDatabase(key databaseKey, statementId int, db *txnDatabase) {
+	c.Lock()
+	defer c.Unlock()
+	c.names[key] = append(c.names[key],
+		dbOp{kind: INSERT, statementId: statementId, databaseId: db.databaseId, payload: db})
+}
+
+func (c *dbOpsChain) addDeleteDatabase(key databaseKey, statementId int, did uint64) {
+	c.Lock()
+	defer c.Unlock()
+	c.names[key] = append(c.names[key],
+		dbOp{kind: DELETE, databaseId: did, statementId: statementId})
+}
+
+func (c *dbOpsChain) existAndDeleted(key databaseKey) bool {
+	c.RLock()
+	defer c.RUnlock()
+	x, exist := c.names[key]
+	if !exist {
+		return false
+	}
+	return x[len(x)-1].kind == DELETE
+}
+
+func (c *dbOpsChain) existAndActive(key databaseKey) *txnDatabase {
+	c.RLock()
+	defer c.RUnlock()
+	if x, exist := c.names[key]; exist && x[len(x)-1].kind == INSERT {
+		return x[len(x)-1].payload
+	}
+	return nil
+}
+
+func (c *dbOpsChain) rollbackLastStatement(statementId int) {
+	c.Lock()
+	defer c.Unlock()
+	for k, v := range c.names {
+		i := len(v) - 1
+		for ; i >= 0; i-- {
+			if v[i].statementId != statementId {
+				break
+			}
+		}
+		if i < 0 {
+			delete(c.names, k)
+		} else if i < len(v)-1 {
+			c.names[k] = v[:i+1]
+		}
+	}
+}
+
 func newTableOps() *tableOpsChain {
 	return &tableOpsChain{
-		names: make(map[tableKey][]tableOp),
+		names:       make(map[tableKey][]tableOp),
+		creatdInTxn: make(map[uint64]int),
 	}
+}
+
+func (c *tableOpsChain) addCreatedInTxn(tid uint64, statementid int) {
+	c.Lock()
+	defer c.Unlock()
+	c.creatdInTxn[tid] = statementid
+	// Note: we do not consider anything like table deleting or failed creating in createdInTxn map because the id is unique, and if the table is queried, it must be not deleted and created successfully.
+}
+
+func (c *tableOpsChain) existCreatedInTxn(tid uint64) bool {
+	c.RLock()
+	defer c.RUnlock()
+	_, exist := c.creatdInTxn[tid]
+	return exist
 }
 
 func (c *tableOpsChain) addCreateTable(key tableKey, statementId int, t *txnTable) {
@@ -1660,6 +1738,11 @@ func (c *tableOpsChain) rollbackLastStatement(statementId int) {
 			delete(c.names, k)
 		} else if i < len(v)-1 {
 			c.names[k] = v[:i+1]
+		}
+	}
+	for k, v := range c.creatdInTxn {
+		if v == statementId {
+			delete(c.creatdInTxn, k)
 		}
 	}
 }

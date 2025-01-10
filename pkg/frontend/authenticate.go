@@ -968,6 +968,7 @@ var (
 		"mo_cdc_task":                 0,
 		"mo_cdc_watermark":            0,
 		catalog.MO_TABLE_STATS:        0,
+		catalog.MO_ACCOUNT_LOCK:       0,
 	}
 	createDbInformationSchemaSql = "create database information_schema;"
 	createAutoTableSql           = MoCatalogMoAutoIncrTableDDL
@@ -1006,6 +1007,7 @@ var (
 		MoCatalogMoCdcWatermarkDDL,
 		MoCatalogMoDataKeyDDL,
 		MoCatalogMoTableStatsDDL,
+		MoCatalogMoAccountLockDDL,
 	}
 
 	//drop tables for the tenant
@@ -1184,6 +1186,8 @@ const (
 	updateStatusAndVersionOfAccountFormat = `update mo_catalog.mo_account set status = "%s",version = %d,suspended_time = default where account_name = "%s";`
 
 	deleteAccountFromMoAccountFormat = `delete from mo_catalog.mo_account where account_name = "%s" order by account_id;`
+
+	lockMoAccountNameFormat = `select account_name from mo_catalog.__mo_account_lock where account_name = "%s" for update;`
 
 	deletePitrFromMoPitrFormat = `delete from mo_catalog.mo_pitr where create_account = %d;`
 
@@ -1634,6 +1638,14 @@ func getSqlForDeleteAccountFromMoAccount(ctx context.Context, account string) (s
 		return "", err
 	}
 	return fmt.Sprintf(deleteAccountFromMoAccountFormat, account), nil
+}
+
+func getSqlForLockMoAccountNameFormat(ctx context.Context, account string) (string, error) {
+	err := inputNameIsInvalid(ctx, account)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(lockMoAccountNameFormat, account), nil
 }
 
 func getSqlForDeletePitrFromMoPitr(accountId uint64) string {
@@ -2949,6 +2961,17 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *alterAccount) (err er
 			return rtnErr
 		}
 
+		//step 0: lock account name first
+		sql, rtnErr = getSqlForLockMoAccountNameFormat(ctx, aa.Name)
+		if rtnErr != nil {
+			return rtnErr
+		}
+		bh.ClearExecResultSet()
+		rtnErr = bh.Exec(ctx, sql)
+		if rtnErr != nil {
+			return rtnErr
+		}
+
 		//step 1: check account exists or not
 		//get accountID
 		sql, rtnErr = getSqlForCheckTenant(ctx, aa.Name)
@@ -3615,6 +3638,33 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 		return moerr.NewInternalErrorf(ctx, "can not delete the account %s", da.Name)
 	}
 
+	checkAccount := func(accountName string) (accountId int64, version uint64, ok bool, err error) {
+		if sql, err = getSqlForCheckTenant(ctx, accountName); err != nil {
+			return
+		}
+
+		bh.ClearExecResultSet()
+		if err = bh.Exec(ctx, sql); err != nil {
+			return
+		}
+
+		if erArray, err = getResultSet(ctx, bh); err != nil {
+			return
+		}
+
+		if execResultArrayHasData(erArray) {
+			if accountId, err = erArray[0].GetInt64(ctx, 0, 0); err != nil {
+				return
+			}
+			if version, err = erArray[0].GetUint64(ctx, 0, 3); err != nil {
+				return
+			}
+			ok = true
+		}
+
+		return
+	}
+
 	dropAccountFunc := func() (rtnErr error) {
 		rtnErr = bh.Exec(ctx, "begin;")
 		defer func() {
@@ -3623,23 +3673,31 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 		if rtnErr != nil {
 			return rtnErr
 		}
-		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, getAccountIdNamesSql)
-		_, nameInfoMap, rtnErr := getAccounts(ctx, bh, true)
+
+		//step 0: lock account name first
+		sql, rtnErr = getSqlForLockMoAccountNameFormat(ctx, da.Name)
+		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, sql)
+		if rtnErr != nil {
+			return rtnErr
+		}
+		bh.ClearExecResultSet()
+		rtnErr = bh.Exec(ctx, sql)
 		if rtnErr != nil {
 			return rtnErr
 		}
 
-		//check the account exists or not
-		if _, ok := nameInfoMap[da.Name]; !ok {
-			//no such account
-			if !da.IfExists { //when the "IF EXISTS" is set, just skip it.
-				rtnErr = moerr.NewInternalErrorf(ctx, "there is no account %s", da.Name)
-			}
-			hasAccount = false
+		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, getAccountIdNamesSql)
+		if accountId, version, hasAccount, rtnErr = checkAccount(da.Name); rtnErr != nil {
 			return
 		}
-		accountId = int64(nameInfoMap[da.Name].Id)
-		version = nameInfoMap[da.Name].Version
+		// check the account exists or not
+		if !hasAccount {
+			// when the "IF EXISTS" is set, just skip it.
+			if !da.IfExists {
+				rtnErr = moerr.NewInternalErrorf(ctx, "there is no account %s", da.Name)
+			}
+			return
+		}
 
 		//drop tables of the tenant
 		//NOTE!!!: single DDL drop statement per single transaction
@@ -3673,7 +3731,7 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 		}
 		for _, pubInfo := range pubInfos {
 			ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, pubInfo.PubName)
-			if rtnErr = dropPublication(deleteCtx, bh, true, pubInfo.PubName); rtnErr != nil {
+			if rtnErr = dropPublication(deleteCtx, bh, true, pubInfo.PubAccountName, pubInfo.PubName); rtnErr != nil {
 				if isDisallowedError(rtnErr) {
 					ses.Infof(ctx, "[EOF] dropAccount %s sql: %s, error: %s", da.Name, pubInfo.PubName, rtnErr.Error())
 				}
@@ -3742,13 +3800,8 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 			return rtnErr
 		}
 		for _, subInfo := range subInfos {
-			pubAccInfo, ok := nameInfoMap[subInfo.PubAccountName]
-			if !ok {
-				continue
-			}
-
 			ses.Infof(ctx, "dropAccount %s sql: %s %s", da.Name, updatePubInfoAccountListFormat, subInfo.PubName)
-			if rtnErr = dropSubAccountNameInSubAccounts(deleteCtx, bh, pubAccInfo.Id, subInfo.PubName, da.Name); rtnErr != nil {
+			if rtnErr = dropSubAccountNameInSubAccounts(deleteCtx, bh, subInfo.PubAccountId, subInfo.PubName, da.Name); rtnErr != nil {
 				if isDisallowedError(rtnErr) {
 					ses.Infof(ctx, "[EOF] dropAccount %s sql: %s %s", da.Name, updatePubInfoAccountListFormat, subInfo.PubName)
 				}
@@ -7305,6 +7358,7 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *createAccount) (er
 	var newTenant *TenantInfo
 	var newTenantCtx context.Context
 	var mp *mpool.MPool
+	var sql string
 	ctx, span := trace.Debug(ctx, "InitGeneralTenant")
 	defer span.End()
 	tenant := ses.GetTenantInfo()
@@ -7354,6 +7408,17 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *createAccount) (er
 		defer func() {
 			rtnErr = finishTxn(ctx, bh, rtnErr)
 		}()
+		if rtnErr != nil {
+			return rtnErr
+		}
+
+		//step 0: lock account name first
+		sql, rtnErr = getSqlForLockMoAccountNameFormat(ctx, ca.Name)
+		if rtnErr != nil {
+			return rtnErr
+		}
+		bh.ClearExecResultSet()
+		rtnErr = bh.Exec(ctx, sql)
 		if rtnErr != nil {
 			return rtnErr
 		}
@@ -7578,6 +7643,9 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *createAccoun
 		if strings.HasPrefix(sql, fmt.Sprintf("create table mo_catalog.%s", catalog.MO_TABLE_STATS)) {
 			return true
 		}
+		if strings.HasPrefix(sql, fmt.Sprintf("create table mo_catalog.%s", catalog.MO_ACCOUNT_LOCK)) {
+			return true
+		}
 		return false
 	}
 
@@ -7759,6 +7827,8 @@ func createSubscription(ctx context.Context, bh BackgroundExec, newTenant *Tenan
 		for _, pubInfo := range pubInfos {
 			subInfo := &pubsub.SubInfo{
 				SubAccountId:   int32(newTenant.TenantID),
+				SubAccountName: newTenant.Tenant,
+				PubAccountId:   accountId,
 				PubAccountName: accIdInfoMap[accountId].Name,
 				PubName:        pubInfo.PubName,
 				PubDbName:      pubInfo.DbName,

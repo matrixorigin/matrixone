@@ -16,7 +16,6 @@ package table_function
 
 import (
 	"testing"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -106,7 +105,7 @@ func fake_runSql(proc *process.Process, sql string) (executor.Result, error) {
 	return executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{makeCountBatchFT(proc)}}, nil
 }
 
-func fake_runSql_streaming(proc *process.Process, sql string, ch chan executor.Result) (executor.Result, error) {
+func fake_runSql_streaming(proc *process.Process, sql string, ch chan executor.Result, err_chan chan error) (executor.Result, error) {
 
 	defer close(ch)
 	res := executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{makeTextBatchFT(proc)}}
@@ -141,7 +140,60 @@ func TestFullTextCall(t *testing.T) {
 	err = ut.arg.ctr.state.start(ut.arg, ut.proc, 0, nil)
 	require.Nil(t, err)
 
-	time.Sleep(1000 * time.Millisecond)
+	var result vm.CallResult
+
+	// first call receive data
+	for i := 0; i < 3; i++ {
+		result, err = ut.arg.ctr.state.call(ut.arg, ut.proc)
+		require.Nil(t, err)
+		require.Equal(t, result.Status, vm.ExecNext)
+		require.Equal(t, result.Batch.RowCount(), 8192)
+	}
+
+	result, err = ut.arg.ctr.state.call(ut.arg, ut.proc)
+	require.Nil(t, err)
+	require.Equal(t, result.Status, vm.ExecNext)
+	require.Equal(t, result.Batch.RowCount(), 1)
+	//fmt.Printf("ROW COUNT = %d  BATCH = %v\n", result.Batch.RowCount(), result.Batch)
+
+	// second call receive channel close
+	result, err = ut.arg.ctr.state.call(ut.arg, ut.proc)
+	require.Nil(t, err)
+	require.Equal(t, result.Status, vm.ExecStop)
+
+	// reset
+	ut.arg.ctr.state.reset(ut.arg, ut.proc)
+
+	// free
+	ut.arg.ctr.state.free(ut.arg, ut.proc, false, nil)
+}
+
+// argvec [src_tbl, index_tbl, pattern, mode int64]
+func TestFullTextCallOneAttr(t *testing.T) {
+
+	ut := newFTTestCase(mpool.MustNewZero(), ftdefaultAttrs[0:1])
+
+	inbat := makeBatchFT(ut.proc)
+
+	ut.arg.Args = makeConstInputExprsFT()
+	//fmt.Printf("%v\n", ut.arg.Args)
+
+	// Prepare
+	err := ut.arg.Prepare(ut.proc)
+	require.Nil(t, err)
+
+	for i := range ut.arg.ctr.executorsForArgs {
+		ut.arg.ctr.argVecs[i], err = ut.arg.ctr.executorsForArgs[i].Eval(ut.proc, []*batch.Batch{inbat}, nil)
+		require.Nil(t, err)
+	}
+
+	// stub runSql function
+	ft_runSql = fake_runSql
+	ft_runSql_streaming = fake_runSql_streaming
+
+	// start
+	err = ut.arg.ctr.state.start(ut.arg, ut.proc, 0, nil)
+	require.Nil(t, err)
 
 	var result vm.CallResult
 
@@ -168,6 +220,48 @@ func TestFullTextCall(t *testing.T) {
 	ut.arg.ctr.state.reset(ut.arg, ut.proc)
 
 	// free
+	ut.arg.ctr.state.free(ut.arg, ut.proc, false, nil)
+}
+
+// argvec [src_tbl, index_tbl, pattern, mode int64]
+func TestFullTextEarlyFree(t *testing.T) {
+
+	ut := newFTTestCase(mpool.MustNewZero(), ftdefaultAttrs[0:1])
+
+	inbat := makeBatchFT(ut.proc)
+
+	ut.arg.Args = makeConstInputExprsFT()
+	//fmt.Printf("%v\n", ut.arg.Args)
+
+	// Prepare
+	err := ut.arg.Prepare(ut.proc)
+	require.Nil(t, err)
+
+	for i := range ut.arg.ctr.executorsForArgs {
+		ut.arg.ctr.argVecs[i], err = ut.arg.ctr.executorsForArgs[i].Eval(ut.proc, []*batch.Batch{inbat}, nil)
+		require.Nil(t, err)
+	}
+
+	// stub runSql function
+	ft_runSql = fake_runSql
+	ft_runSql_streaming = fake_runSql_streaming
+
+	// start
+	err = ut.arg.ctr.state.start(ut.arg, ut.proc, 0, nil)
+	require.Nil(t, err)
+
+	/*
+		var result vm.CallResult
+		// first call receive data
+		for i := 0; i < 2; i++ {
+			result, err = ut.arg.ctr.state.call(ut.arg, ut.proc)
+			require.Nil(t, err)
+			require.Equal(t, result.Status, vm.ExecNext)
+			require.Equal(t, result.Batch.RowCount(), 8192)
+		}
+	*/
+
+	// early free
 	ut.arg.ctr.state.free(ut.arg, ut.proc, false, nil)
 }
 
@@ -255,23 +349,19 @@ func makeCountBatchFT(proc *process.Process) *batch.Batch {
 	return bat
 }
 
-// create (doc_id, pos, text)
+// create (doc_id, text)
 func makeTextBatchFT(proc *process.Process) *batch.Batch {
-	bat := batch.NewWithSize(3)
-	bat.Vecs[0] = vector.NewVec(types.New(types.T_int32, 4, 0))     // doc_id
-	bat.Vecs[1] = vector.NewVec(types.New(types.T_int32, 4, 0))     // pos
-	bat.Vecs[2] = vector.NewVec(types.New(types.T_varchar, 256, 0)) // text
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = vector.NewVec(types.New(types.T_int32, 4, 0)) // doc_id
+	bat.Vecs[1] = vector.NewVec(types.New(types.T_int32, 4, 0)) // word index
 
 	nitem := 8192*3 + 1
 	for i := 0; i < nitem; i++ {
 		// doc_id
 		vector.AppendFixed[int32](bat.Vecs[0], int32(i), false, proc.Mp())
 
-		// pos
-		vector.AppendFixed[int32](bat.Vecs[1], int32(i+1), false, proc.Mp())
-
-		// word
-		vector.AppendBytes(bat.Vecs[2], []byte("pattern"), false, proc.Mp())
+		// word index
+		vector.AppendFixed[int32](bat.Vecs[1], int32(0), false, proc.Mp())
 	}
 
 	bat.SetRowCount(nitem)

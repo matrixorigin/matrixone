@@ -59,6 +59,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
@@ -2720,6 +2721,17 @@ func TestMergeblocks2(t *testing.T) {
 			assert.Nil(t, txn2.Commit(context.Background()))
 		}
 		err = txn.Commit(context.Background())
+
+		{ // skip emtpy merge task
+			txn, rel := tae.GetRelation()
+			objHandle, err := rel.GetObject(obj.ID(), false)
+			assert.NoError(t, err)
+			objsToMerge := []*catalog.ObjectEntry{objHandle.GetMeta().(*catalog.ObjectEntry)}
+			_, err = jobs.NewMergeObjectsTask(nil, txn, objsToMerge, tae.Runtime, 0, false)
+			assert.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.OkStopCurrRecur))
+		}
+
 		assert.NoError(t, err)
 	}
 
@@ -6644,13 +6656,13 @@ func TestAppendAndGC2(t *testing.T) {
 	tae.Restart(ctx)
 	db = tae.DB
 	files := make(map[string]struct{}, 0)
-	loadFiles := func(group uint32, lsn uint64, payload []byte, typ uint16, info any) {
+	loadFiles := func(group uint32, lsn uint64, payload []byte, typ uint16, info any) driver.ReplayEntryState {
 		if group != store.GroupFiles {
-			return
+			return driver.RE_Nomal
 		}
 		vec := vector.NewVec(types.Type{})
 		if err = vec.UnmarshalBinary(payload); err != nil {
-			return
+			return driver.RE_Internal
 		}
 		for i := 0; i < vec.Length(); i++ {
 			file := vec.GetStringAt(i)
@@ -6662,6 +6674,7 @@ func TestAppendAndGC2(t *testing.T) {
 			}
 			files[file] = struct{}{}
 		}
+		return driver.RE_Internal
 	}
 	dir := tae.Dir
 	tae.Close()

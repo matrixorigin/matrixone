@@ -241,6 +241,15 @@ func (opts Options) WithLowerCaseTableNames(lower *int64) Options {
 	return opts
 }
 
+func (opts Options) WithSQL(sql string) Options {
+	opts.sql = sql
+	return opts
+}
+
+func (opts Options) SQL() string {
+	return opts.sql
+}
+
 func (opts Options) LowerCaseTableNames() int64 {
 	if opts.lower != nil {
 		return *opts.lower
@@ -248,12 +257,13 @@ func (opts Options) LowerCaseTableNames() int64 {
 	return 1
 }
 
-func (opts Options) WithStreaming(stream_chan chan Result) Options {
+func (opts Options) WithStreaming(stream_chan chan Result, error_chan chan error) Options {
 	opts.stream_chan = stream_chan
+	opts.error_chan = error_chan
 	opts.streaming = true
 	return opts
 }
 
-func (opts Options) Streaming() (chan Result, bool) {
-	return opts.stream_chan, opts.streaming
+func (opts Options) Streaming() (chan Result, chan error, bool) {
+	return opts.stream_chan, opts.error_chan, opts.streaming
 }
