@@ -656,7 +656,7 @@ func determineShuffleForGroupBy(n *plan.Node, builder *QueryBuilder) {
 
 }
 
-func GetShuffleDop(ncpu int, lencn int, hashmapSize float64) (dop int) {
+func getShuffleDop(ncpu int, lencn int, hashmapSize float64) (dop int) {
 	if ncpu <= 4 {
 		ncpu = 4
 	}
