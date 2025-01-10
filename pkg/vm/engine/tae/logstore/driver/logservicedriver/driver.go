@@ -34,7 +34,11 @@ const (
 )
 
 func RetryWithTimeout(timeoutDuration time.Duration, fn func() (shouldReturn bool)) error {
-	ctx, cancel := context.WithTimeoutCause(context.Background(), timeoutDuration, moerr.CauseRetryWithTimeout)
+	ctx, cancel := context.WithTimeoutCause(
+		context.Background(),
+		timeoutDuration,
+		moerr.CauseRetryWithTimeout,
+	)
 	defer cancel()
 	for {
 		select {
@@ -49,9 +53,9 @@ func RetryWithTimeout(timeoutDuration time.Duration, fn func() (shouldReturn boo
 }
 
 type LogServiceDriver struct {
-	clientPool *clientpool
-	config     *Config
-	appendable *driverAppender
+	clientPool      *clientpool
+	config          *Config
+	currentAppender *driverAppender
 	*driverInfo
 	*readCache
 
@@ -94,7 +98,7 @@ func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
 	d := &LogServiceDriver{
 		clientPool:      newClientPool(cfg.ClientMaxCount, clientpoolConfig),
 		config:          cfg,
-		appendable:      newDriverAppender(),
+		currentAppender: newDriverAppender(),
 		driverInfo:      newDriverInfo(),
 		readCache:       newReadCache(),
 		appendQueue:     make(chan any, 10000),

@@ -233,10 +233,17 @@ func (r *replayer) replayLogserviceEntry(lsn uint64) error {
 
 func (r *replayer) AppendSkipCmd(skipMap map[uint64]uint64) {
 	if len(skipMap) > r.d.config.ClientMaxCount {
-		panic(fmt.Sprintf("logic error, skip %d entries, client max count is %v, skip map is %v",
-			len(skipMap), r.d.config.ClientMaxCount, skipMap))
+		panic(fmt.Sprintf(
+			"logic error, skip %d entries, client max count is %v, skip map is %v",
+			len(skipMap),
+			r.d.config.ClientMaxCount,
+			skipMap),
+		)
 	}
-	logutil.Info("Wal-Replay-Trace-Skip-Entries", zap.Any("drlsn-psn", skipMap))
+	logutil.Info(
+		"Wal-Replay-Append-Skip-Entries",
+		zap.Any("gsn-psn-map", skipMap),
+	)
 	cmd := NewReplayCmd(skipMap)
 	recordEntry := newRecordEntry()
 	recordEntry.Meta.metaType = TReplay

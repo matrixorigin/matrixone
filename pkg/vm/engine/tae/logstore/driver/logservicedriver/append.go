@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
+	"go.uber.org/zap"
 )
 
 var ErrTooMuchPenddings = moerr.NewInternalErrorNoCtx("too much penddings")
@@ -36,17 +37,19 @@ func (d *LogServiceDriver) Append(e *entry.Entry) error {
 }
 
 func (d *LogServiceDriver) getAppender() *driverAppender {
-	if int(d.appendable.entry.payloadSize) > d.config.RecordSize {
-		d.appendAppender()
+	if int(d.currentAppender.entry.payloadSize) > d.config.RecordSize {
+		d.flushCurrentAppender()
 	}
-	return d.appendable
+	return d.currentAppender
 }
 
-func (d *LogServiceDriver) appendAppender() {
+// this function flushes the current appender to the append queue and
+// creates a new appender as the current appender
+func (d *LogServiceDriver) flushCurrentAppender() {
 	d.appendtimes++
-	d.onAppendQueue(d.appendable)
-	d.appendedQueue <- d.appendable
-	d.appendable = newDriverAppender()
+	d.enqueueAppender(d.currentAppender)
+	d.appendedQueue <- d.currentAppender
+	d.currentAppender = newDriverAppender()
 }
 
 func (d *LogServiceDriver) onPreAppend(items ...any) {
@@ -55,10 +58,10 @@ func (d *LogServiceDriver) onPreAppend(items ...any) {
 		appender := d.getAppender()
 		appender.appendEntry(e)
 	}
-	d.appendAppender()
+	d.flushCurrentAppender()
 }
 
-func (d *LogServiceDriver) onAppendQueue(appender *driverAppender) {
+func (d *LogServiceDriver) enqueueAppender(appender *driverAppender) {
 	appender.client, appender.appendlsn = d.getClient()
 	appender.entry.SetAppended(d.getSynced())
 	appender.contextDuration = d.config.NewClientDuration
@@ -68,21 +71,40 @@ func (d *LogServiceDriver) onAppendQueue(appender *driverAppender) {
 	})
 }
 
+// Node: this function is called in serial because it also allocates the global sequence number
+// the global sequence number(GSN) should be monotonically continuously increasing
 func (d *LogServiceDriver) getClient() (client *clientWithRecord, lsn uint64) {
-	lsn, err := d.retryAllocateAppendLsnWithTimeout(uint64(d.config.ClientMaxCount), time.Second)
-	if err != nil {
+	var err error
+	if lsn, err = d.allocateGlobalSequenceNum(
+		uint64(d.config.ClientMaxCount), time.Second,
+	); err != nil {
+		// should never happen
 		panic(err)
 	}
-	client, err = d.clientPool.Get()
+	if client, err = d.clientPool.Get(); err == nil {
+		return
+	}
+
+	var (
+		retryCount = 0
+		now        = time.Now()
+		logger     = logutil.Info
+	)
+	if err = RetryWithTimeout(d.config.RetryTimeout, func() (shouldReturn bool) {
+		retryCount++
+		client, err = d.clientPool.Get()
+		return err == nil
+	}); err != nil {
+		logger = logutil.Error
+	}
+	logger(
+		"Wal-Get-Client",
+		zap.Int("retry-count", retryCount),
+		zap.Error(err),
+		zap.Duration("duration", time.Since(now)),
+	)
 	if err != nil {
-		logutil.Infof("LogService Driver: retry append err is %v", err)
-		err = RetryWithTimeout(d.config.RetryTimeout, func() (shouldReturn bool) {
-			client, err = d.clientPool.Get()
-			return err == nil
-		})
-		if err != nil {
-			panic(err)
-		}
+		panic(err)
 	}
 	return
 }

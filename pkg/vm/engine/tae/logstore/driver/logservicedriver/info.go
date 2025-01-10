@@ -151,21 +151,26 @@ func (info *driverInfo) getAppended() uint64 {
 	return info.appended.Intervals[0].End
 }
 
-func (info *driverInfo) retryAllocateAppendLsnWithTimeout(maxPendding uint64, timeout time.Duration) (lsn uint64, err error) {
+func (info *driverInfo) allocateGlobalSequenceNum(
+	maxPendding uint64, timeout time.Duration,
+) (lsn uint64, err error) {
 	lsn, err = info.tryAllocate(maxPendding)
 	if err == ErrTooMuchPenddings {
-		err = RetryWithTimeout(timeout, func() (shouldReturn bool) {
-			info.commitCond.L.Lock()
-			lsn, err = info.tryAllocate(maxPendding)
-			if err != ErrTooMuchPenddings {
+		err = RetryWithTimeout(
+			timeout,
+			func() (shouldReturn bool) {
+				info.commitCond.L.Lock()
+				lsn, err = info.tryAllocate(maxPendding)
+				if err != ErrTooMuchPenddings {
+					info.commitCond.L.Unlock()
+					return true
+				}
+				info.commitCond.Wait()
 				info.commitCond.L.Unlock()
-				return true
-			}
-			info.commitCond.Wait()
-			info.commitCond.L.Unlock()
-			lsn, err = info.tryAllocate(maxPendding)
-			return err != ErrTooMuchPenddings
-		})
+				lsn, err = info.tryAllocate(maxPendding)
+				return err != ErrTooMuchPenddings
+			},
+		)
 	}
 	return
 }
@@ -181,7 +186,7 @@ func (info *driverInfo) tryAllocate(maxPendding uint64) (lsn uint64, err error) 
 
 func (info *driverInfo) logAppend(appender *driverAppender) {
 	info.addrMu.Lock()
-	array := make([]uint64, 0)
+	array := make([]uint64, 0, len(appender.entry.Meta.addr))
 	for key := range appender.entry.Meta.addr {
 		array = append(array, key)
 	}

@@ -197,11 +197,11 @@ func (m *Meta) Marshal() (buf []byte, err error) {
 }
 
 type baseEntry struct {
-	EntryType, Version uint16
 	*Meta
-	entries []*entry.Entry
-	cmd     *ReplayCmd
-	payload []byte
+	EntryType, Version uint16
+	entries            []*entry.Entry
+	cmd                *ReplayCmd
+	payload            []byte
 }
 
 func (r *baseEntry) Marshal() (buf []byte, err error) {
