@@ -81,10 +81,10 @@ func newDriverInfo() *driverInfo {
 	return d
 }
 
-func (d *LogServiceDriver) GetDSN() uint64 {
-	d.dsnmu.Lock()
-	lsn := d.dsn
-	d.dsnmu.Unlock()
+func (info *driverInfo) GetDSN() uint64 {
+	info.dsnmu.RLock()
+	lsn := info.dsn
+	info.dsnmu.RUnlock()
 	return lsn
 }
 
@@ -153,13 +153,6 @@ func (info *driverInfo) getMaxDriverLsn(logserviceLsn uint64) uint64 {
 func (info *driverInfo) allocateDSNLocked() uint64 {
 	info.dsn++
 	return info.dsn
-}
-
-func (info *driverInfo) getDSN() uint64 {
-	info.dsnmu.RLock()
-	dsn := info.dsn
-	info.dsnmu.RUnlock()
-	return dsn
 }
 
 func (info *driverInfo) getMaxFinishedToken() uint64 {
@@ -269,7 +262,7 @@ func (info *driverInfo) putbackWriteTokens(tokens []uint64) {
 func (info *driverInfo) tryGetLogServiceLsnByDriverLsn(dsn uint64) (uint64, error) {
 	lsn, err := info.getLogServiceLsnByDriverLsn(dsn)
 	if err == ErrDriverLsnNotFound {
-		if lsn <= info.getDSN() {
+		if lsn <= info.GetDSN() {
 			for i := 0; i < 10; i++ {
 				logutil.Infof("retry get logserviceLsn, driverlsn=%d", dsn)
 				info.commitCond.L.Lock()
