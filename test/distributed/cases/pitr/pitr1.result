@@ -4,17 +4,17 @@ drop pitr if exists p_01;
 create pitr p_01 range 1 'd';
 show pitr;
 PITR_NAME    CREATED_TIME    MODIFIED_TIME    PITR_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME    PITR_LENGTH    PITR_UNIT
-p_01    2025-01-08 15:07:37    2025-01-08 15:07:37    account    sys    *    *    1    d
+p_01    2025-01-10 16:27:06    2025-01-10 16:27:06    account    sys    *    *    1    d
 select * from mo_catalog.mo_pitr Where pitr_name = 'p_01';
 pitr_id    pitr_name    create_account    create_time    modified_time    level    account_id    account_name    database_name    table_name    obj_id    pitr_length    pitr_unit
-019444bd-8286-7606-a513-f4392dd546a4    p_01    0    2025-01-08 07:07:37    2025-01-08 07:07:37    account    0    sys            0    1    d
+01944f52-fe22-7b23-a468-b076b88530b6    p_01    0    2025-01-10 08:27:06    2025-01-10 08:27:06    account    0    sys            0    1    d
 alter pitr p_01 range 100 'd';
 show pitr;
 PITR_NAME    CREATED_TIME    MODIFIED_TIME    PITR_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME    PITR_LENGTH    PITR_UNIT
-p_01    2025-01-08 15:07:37    2025-01-08 15:07:38    account    sys    *    *    100    d
+p_01    2025-01-10 16:27:06    2025-01-10 16:27:06    account    sys    *    *    100    d
 select * from mo_catalog.mo_pitr Where pitr_name = 'p_01';
 pitr_id    pitr_name    create_account    create_time    modified_time    level    account_id    account_name    database_name    table_name    obj_id    pitr_length    pitr_unit
-019444bd-8286-7606-a513-f4392dd546a4    p_01    0    2025-01-08 07:07:37    2025-01-08 07:07:38    account    0    sys            0    100    d
+01944f52-fe22-7b23-a468-b076b88530b6    p_01    0    2025-01-10 08:27:06    2025-01-10 08:27:06    account    0    sys            0    100    d
 drop pitr p_01;
 show pitr;
 PITR_NAME    CREATED_TIME    MODIFIED_TIME    PITR_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME    PITR_LENGTH    PITR_UNIT
@@ -24,18 +24,20 @@ drop pitr if exists `select`;
 create pitr `select` range 10 'd';
 show pitr;
 PITR_NAME    CREATED_TIME    MODIFIED_TIME    PITR_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME    PITR_LENGTH    PITR_UNIT
-select    2025-01-08 15:07:38    2025-01-08 15:07:38    account    acc01    *    *    10    d
+select    2025-01-10 16:27:06    2025-01-10 16:27:06    account    acc01    *    *    10    d
 select * from mo_catalog.mo_pitr Where pitr_name = 'select';
 pitr_id    pitr_name    create_account    create_time    modified_time    level    account_id    account_name    database_name    table_name    obj_id    pitr_length    pitr_unit
-019444bd-82f3-73d4-9c1b-2ee6c502d5a1    select    2    2025-01-08 07:07:38    2025-01-08 07:07:38    account    2    acc01            2    10    d
+01944f52-fea7-791c-b84f-d20e7ded1775    select    1    2025-01-10 08:27:06    2025-01-10 08:27:06    account    1    acc01            1    10    d
 alter pitr `select` range 30 'd';
 show pitr;
 PITR_NAME    CREATED_TIME    MODIFIED_TIME    PITR_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME    PITR_LENGTH    PITR_UNIT
-select    2025-01-08 15:07:38    2025-01-08 15:07:38    account    acc01    *    *    30    d
+select    2025-01-10 16:27:06    2025-01-10 16:27:06    account    acc01    *    *    30    d
 select * from mo_catalog.mo_pitr Where pitr_name = 'select';
 pitr_id    pitr_name    create_account    create_time    modified_time    level    account_id    account_name    database_name    table_name    obj_id    pitr_length    pitr_unit
-019444bd-82f3-73d4-9c1b-2ee6c502d5a1    select    2    2025-01-08 07:07:38    2025-01-08 07:07:38    account    2    acc01            2    30    d
+01944f52-fea7-791c-b84f-d20e7ded1775    select    1    2025-01-10 08:27:06    2025-01-10 08:27:06    account    1    acc01            1    30    d
 drop pitr `select`;
 select * from mo_catalog.mo_pitr Where pitr_name = 'select';
 pitr_id    pitr_name    create_account    create_time    modified_time    level    account_id    account_name    database_name    table_name    obj_id    pitr_length    pitr_unit
 drop account acc01;
+show pitr;
+PITR_NAME    CREATED_TIME    MODIFIED_TIME    PITR_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME    PITR_LENGTH    PITR_UNIT

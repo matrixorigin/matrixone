@@ -290,3 +290,5 @@ create pitr for account sys range 1 'y';
 -- @session
 
 drop account acc01;
+drop pitr pitr01;
+show pitr;

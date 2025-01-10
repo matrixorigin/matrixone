@@ -43,3 +43,4 @@ drop pitr `select`;
 select * from mo_catalog.mo_pitr Where pitr_name = 'select';
 
 drop account acc01;
+show pitr;
