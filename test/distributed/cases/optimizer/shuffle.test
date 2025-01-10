@@ -12,8 +12,6 @@ select mo_ctl('dn', 'flush', 'd1.t1');
 -- @separator:table
 select mo_ctl('dn', 'flush', 'd1.t2');
 select Sleep(1);
-prepare s from select * from t1 where 1=0;
-execute s;
 -- @separator:table
 explain select count(*) from t1,t2 where t1.c1=t2.c1;
 select count(*) from t1,t2 where t1.c1=t2.c1;
@@ -90,4 +88,15 @@ explain select count(*) from (select c1 from t1 group by c1) s1, t2 where s1.c1=
 -- @bvt:issue
 select count(*) from (select c1 from t1 group by c1) s1, t2 where s1.c1=t2.c1 and t2.c2<1000000;
 drop table t3;
+create table t4(c1 int not null, c2  int unsigned) cluster by c1;
+insert into t4 select *,* from generate_series(1000000) g;
+insert into t4 select result+10000000,result+10000000 from generate_series(1000000) g;
+-- @separator:table
+select mo_ctl('dn', 'flush', 'd1.t4');
+-- @separator:table
+explain select count(*) as cnt from t4 group by c1 having cnt>1;
+select count(*) as cnt from t4 group by c1 having cnt>1;
+-- @separator:table
+explain select count(*) as cnt from t4 group by c2 having cnt>1;
+select count(*) as cnt from t4 group by c2 having cnt>1;
 drop database if exists d1;
