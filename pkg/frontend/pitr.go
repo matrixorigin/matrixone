@@ -212,14 +212,14 @@ func getSqlForCheckPitrDup(createAccount string, createAccountId uint64, stmt *t
 		return getSqlForCheckDupPitrFormat(createAccountId, math.MaxUint64)
 	case tree.PITRLEVELACCOUNT:
 		if len(stmt.AccountName) > 0 {
-			return fmt.Sprintf(sql, createAccountId) + fmt.Sprintf(" and account_name = '%s' and level = 'account';", stmt.AccountName)
+			return fmt.Sprintf(sql, createAccountId) + fmt.Sprintf(" and account_name = '%s' and level = 'account' and pitr_status != 1;", stmt.AccountName)
 		} else {
-			return fmt.Sprintf(sql, createAccountId) + fmt.Sprintf(" and account_name = '%s' and level = 'account';", createAccount)
+			return fmt.Sprintf(sql, createAccountId) + fmt.Sprintf(" and account_name = '%s' and level = 'account' and pitr_status != 1;", createAccount)
 		}
 	case tree.PITRLEVELDATABASE:
-		return fmt.Sprintf(sql, createAccountId) + fmt.Sprintf(" and database_name = '%s' and level = 'database';", stmt.DatabaseName)
+		return fmt.Sprintf(sql, createAccountId) + fmt.Sprintf(" and database_name = '%s' and level = 'database' and pitr_status != 1;", stmt.DatabaseName)
 	case tree.PITRLEVELTABLE:
-		return fmt.Sprintf(sql, createAccountId) + fmt.Sprintf(" and database_name = '%s' and table_name = '%s' and level = 'table';", stmt.DatabaseName, stmt.TableName)
+		return fmt.Sprintf(sql, createAccountId) + fmt.Sprintf(" and database_name = '%s' and table_name = '%s' and level = 'table' and pitr_status != 1;", stmt.DatabaseName, stmt.TableName)
 	}
 	return sql
 }
