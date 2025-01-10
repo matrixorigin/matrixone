@@ -28,7 +28,7 @@ var ErrTooMuchPenddings = moerr.NewInternalErrorNoCtx("too much penddings")
 func (d *LogServiceDriver) Append(e *entry.Entry) error {
 	d.driverLsnMu.Lock()
 	e.Lsn = d.allocateDriverLsn()
-	_, err := d.preAppendLoop.Enqueue(e)
+	_, err := d.doAppendLoop.Enqueue(e)
 	if err != nil {
 		panic(err)
 	}
@@ -52,7 +52,7 @@ func (d *LogServiceDriver) flushCurrentAppender() {
 	d.currentAppender = newDriverAppender()
 }
 
-func (d *LogServiceDriver) onPreAppend(items ...any) {
+func (d *LogServiceDriver) onAppendRequests(items ...any) {
 	for _, item := range items {
 		e := item.(*entry.Entry)
 		appender := d.getAppender()
@@ -109,9 +109,8 @@ func (d *LogServiceDriver) getClientForWrite() (client *clientWithRecord, token 
 	return
 }
 
-func (d *LogServiceDriver) onAppendedQueue(items []any, q chan any) {
-	appenders := make([]*driverAppender, 0)
-
+func (d *LogServiceDriver) onWaitAppendRequests(items []any, nextQueue chan any) {
+	appenders := make([]*driverAppender, 0, len(items))
 	for _, item := range items {
 		appender := item.(*driverAppender)
 		appender.waitDone()
@@ -119,14 +118,14 @@ func (d *LogServiceDriver) onAppendedQueue(items []any, q chan any) {
 		appender.freeEntries()
 		appenders = append(appenders, appender)
 	}
-	q <- appenders
+	nextQueue <- appenders
 }
 
-func (d *LogServiceDriver) onPostAppendQueue(items []any, _ chan any) {
+func (d *LogServiceDriver) onAppendDone(items []any, _ chan any) {
 	tokens := make([]uint64, 0, len(items))
 	for _, v := range items {
-		batch := v.([]*driverAppender)
-		for _, appender := range batch {
+		appenders := v.([]*driverAppender)
+		for _, appender := range appenders {
 			d.logAppend(appender)
 			tokens = append(tokens, appender.writeToken)
 		}

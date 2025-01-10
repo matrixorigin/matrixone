@@ -61,10 +61,9 @@ type LogServiceDriver struct {
 
 	closeCtx        context.Context
 	closeCancel     context.CancelFunc
-	preAppendLoop   sm.Queue
-	appendQueue     chan any
+	doAppendLoop    sm.Queue
 	appendWaitQueue chan any
-	appendedLoop    *sm.Loop
+	waitAppendLoop  *sm.Loop
 	postAppendQueue chan any
 	postAppendLoop  *sm.Loop
 
@@ -101,17 +100,16 @@ func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
 		currentAppender: newDriverAppender(),
 		driverInfo:      newDriverInfo(),
 		readCache:       newReadCache(),
-		appendQueue:     make(chan any, 10000),
 		appendWaitQueue: make(chan any, 10000),
 		postAppendQueue: make(chan any, 10000),
 		appendPool:      pool,
 	}
 	d.closeCtx, d.closeCancel = context.WithCancel(context.Background())
-	d.preAppendLoop = sm.NewSafeQueue(10000, 10000, d.onPreAppend)
-	d.preAppendLoop.Start()
-	d.appendedLoop = sm.NewLoop(d.appendWaitQueue, d.postAppendQueue, d.onAppendedQueue, 10000)
-	d.appendedLoop.Start()
-	d.postAppendLoop = sm.NewLoop(d.postAppendQueue, nil, d.onPostAppendQueue, 10000)
+	d.doAppendLoop = sm.NewSafeQueue(10000, 10000, d.onAppendRequests)
+	d.doAppendLoop.Start()
+	d.waitAppendLoop = sm.NewLoop(d.appendWaitQueue, d.postAppendQueue, d.onWaitAppendRequests, 10000)
+	d.waitAppendLoop.Start()
+	d.postAppendLoop = sm.NewLoop(d.postAppendQueue, nil, d.onAppendDone, 10000)
 	d.postAppendLoop.Start()
 	d.truncateQueue = sm.NewSafeQueue(10000, 10000, d.onTruncate)
 	d.truncateQueue.Start()
@@ -122,11 +120,10 @@ func (d *LogServiceDriver) Close() error {
 	logutil.Infof("append%d,flush%d", d.appendtimes, d.flushtimes)
 	d.clientPool.Close()
 	d.closeCancel()
-	d.preAppendLoop.Stop()
-	d.appendedLoop.Stop()
+	d.doAppendLoop.Stop()
+	d.waitAppendLoop.Stop()
 	d.postAppendLoop.Stop()
 	d.truncateQueue.Stop()
-	close(d.appendQueue)
 	close(d.appendWaitQueue)
 	close(d.postAppendQueue)
 	d.appendPool.Release()
