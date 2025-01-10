@@ -47,7 +47,7 @@ import (
 // Init Search Accum
 func NewSearchAccum(srctbl string, tblname string, pattern string, mode int64, params string) (*SearchAccum, error) {
 
-	usearch.DefaultConfig(uint(1))
+	_ = usearch.DefaultConfig(uint(1))
 	ps, err := ParsePattern(pattern, mode)
 	if err != nil {
 		return nil, err

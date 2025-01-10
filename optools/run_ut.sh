@@ -94,6 +94,7 @@ function run_tests(){
     logger "INF" "Ingore code coverage $(echo ${leave_out[@]}|tr " " "|")"
     local cover_profile='profile.raw'
     make cgo
+    make thirdparties
     THIRDPARTIES_INSTALL_DIR=${BUILD_WKSP}/thirdparties/install
     if [[ $SKIP_TESTS == 'race' ]]; then
         logger "INF" "Run UT without race check"

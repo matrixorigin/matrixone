@@ -34,6 +34,9 @@ func TestUSearch(t *testing.T) {
 
 	// Add to Index
 	err = index.Reserve(uint(vectorsCount))
+	if err != nil {
+		panic("Failed to reserve")
+	}
 	for i := 0; i < vectorsCount; i++ {
 		err = index.Add(usearch.Key(i), []float32{float32(i), float32(i + 1), float32(i + 2)})
 		if err != nil {
