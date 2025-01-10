@@ -299,7 +299,7 @@ func (bs *baseStore) Read(lsn uint64) (*entry.Entry, error) {
 func (bs *baseStore) retryGetVersionByGLSN(lsn uint64) (int, error) {
 	ver, err := bs.GetVersionByGLSN(lsn)
 	if err == ErrGroupNotExist || err == ErrLsnNotExist {
-		syncedLsn := bs.GetCurrSeqNum()
+		syncedLsn := bs.GetDSN()
 		if lsn <= syncedLsn {
 			for i := 0; i < 10; i++ {
 				bs.syncBase.commitCond.L.Lock()

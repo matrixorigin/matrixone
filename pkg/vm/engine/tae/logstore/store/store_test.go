@@ -180,7 +180,7 @@ func TestTruncate(t *testing.T) {
 	}
 
 	currLsn := wal.GetCurrSeqNum(group)
-	drcurrLsn := driver.GetCurrSeqNum()
+	drcurrLsn := driver.GetDSN()
 	ckpEntry, err := wal.RangeCheckpoint(group, 0, currLsn)
 	assert.NoError(t, err)
 	assert.NoError(t, ckpEntry.WaitDone())
@@ -208,7 +208,7 @@ func TestTruncate(t *testing.T) {
 	}
 
 	currLsn = wal.GetCurrSeqNum(group)
-	drcurrLsn = driver.GetCurrSeqNum()
+	drcurrLsn = driver.GetDSN()
 	ckpEntry, err = wal.RangeCheckpoint(group, 0, currLsn)
 	assert.NoError(t, err)
 	assert.NoError(t, ckpEntry.WaitDone())

@@ -106,7 +106,7 @@ func (base *syncBase) AllocateLsn() uint64 {
 	return base.Lsn
 }
 
-func (base *syncBase) GetCurrSeqNum() uint64 {
+func (base *syncBase) GetDSN() uint64 {
 	base.lsnmu.RLock()
 	defer base.lsnmu.RUnlock()
 	return base.Lsn

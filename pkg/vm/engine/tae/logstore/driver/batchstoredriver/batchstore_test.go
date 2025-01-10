@@ -46,7 +46,7 @@ func initEnv(t *testing.T) *baseStore {
 func restartStore(s *baseStore, t *testing.T) *baseStore {
 	err := s.Close()
 	assert.NoError(t, err)
-	maxlsn := s.GetCurrSeqNum()
+	maxlsn := s.GetDSN()
 	// for ver,lsns:=range s.addrs{
 	// 	logutil.Infof("v%d lsn%v",ver,lsns.Intervals)
 	// }
@@ -67,7 +67,7 @@ func restartStore(s *baseStore, t *testing.T) *baseStore {
 		return driver.RE_Nomal
 	})
 	assert.NoError(t, err)
-	assert.Equal(t, maxlsn, s.GetCurrSeqNum())
+	assert.Equal(t, maxlsn, s.GetDSN())
 	assert.Equal(t, maxlsn, s.synced)
 	assert.Equal(t, maxlsn, s.syncing)
 	// for ver,lsns:=range s.addrs{
@@ -92,7 +92,7 @@ func concurrentAppendReadCheckpoint(s *baseStore, t *testing.T) {
 			e := entries[i]
 			err := s.Append(e)
 			assert.NoError(t, err)
-			lsn := s.GetCurrSeqNum()
+			lsn := s.GetDSN()
 			assert.GreaterOrEqual(t, lsn, e.Lsn)
 			wg.Done()
 		}

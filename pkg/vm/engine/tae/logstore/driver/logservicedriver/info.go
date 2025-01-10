@@ -39,13 +39,13 @@ type driverInfo struct {
 	// it is monotonically continuously increasing
 	// PSN:[DSN:LSN, DSN:LSN, DSN:LSN, ...]
 	// One : Many
-	dsn uint64
+	dsn   uint64
+	dsnmu sync.RWMutex
 
 	syncing  uint64
 	synced   uint64
 	syncedMu sync.RWMutex
 
-	dsnmu                  sync.RWMutex
 	truncating             atomic.Uint64 //
 	truncatedLogserviceLsn uint64        //
 
@@ -81,12 +81,13 @@ func newDriverInfo() *driverInfo {
 	return d
 }
 
-func (d *LogServiceDriver) GetCurrSeqNum() uint64 {
+func (d *LogServiceDriver) GetDSN() uint64 {
 	d.dsnmu.Lock()
 	lsn := d.dsn
 	d.dsnmu.Unlock()
 	return lsn
 }
+
 func (info *driverInfo) PreReplay() {
 	info.inReplay = true
 }

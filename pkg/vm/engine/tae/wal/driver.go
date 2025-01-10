@@ -91,7 +91,7 @@ func (driver *walDriver) GetPenddingCnt() uint64 {
 	return driver.impl.GetPendding(GroupPrepare)
 }
 
-func (driver *walDriver) GetCurrSeqNum() uint64 {
+func (driver *walDriver) GetDSN() uint64 {
 	return driver.impl.GetCurrSeqNum(GroupPrepare)
 }
 
