@@ -95,22 +95,27 @@ pb: vendor-build generate-pb fmt
 # build mo-service
 ###############################################################################
 
+THIRDPARTIES_INSTALL_DIR=$(ROOT_DIR)/thirdparties/install
 RACE_OPT :=
 DEBUG_OPT :=
 CGO_DEBUG_OPT :=
-CGO_OPTS :=
-GOLDFLAGS=-ldflags="-X '$(GO_MODULE)/pkg/version.GoVersion=$(GO_VERSION)' -X '$(GO_MODULE)/pkg/version.BranchName=$(BRANCH_NAME)' -X '$(GO_MODULE)/pkg/version.CommitID=$(LAST_COMMIT_ID)' -X '$(GO_MODULE)/pkg/version.BuildTime=$(BUILD_TIME)' -X '$(GO_MODULE)/pkg/version.Version=$(MO_VERSION)'"
+CGO_OPTS :=CGO_CFLAGS="-I$(THIRDPARTIES_INSTALL_DIR)/include"
+GOLDFLAGS=-ldflags="-extldflags '-L$(THIRDPARTIES_INSTALL_DIR)/lib -Wl,-rpath,$(THIRDPARTIES_INSTALL_DIR)/lib' -X '$(GO_MODULE)/pkg/version.GoVersion=$(GO_VERSION)' -X '$(GO_MODULE)/pkg/version.BranchName=$(BRANCH_NAME)' -X '$(GO_MODULE)/pkg/version.CommitID=$(LAST_COMMIT_ID)' -X '$(GO_MODULE)/pkg/version.BuildTime=$(BUILD_TIME)' -X '$(GO_MODULE)/pkg/version.Version=$(MO_VERSION)'"
 TAGS :=
 
 .PHONY: cgo
 cgo:
 	@(cd cgo; ${MAKE} ${CGO_DEBUG_OPT})
 
+.PHONY: thirdparties
+thirdparties:
+	@(cd thirdparties; ${MAKE})
+
 # build mo-service binary
 .PHONY: build
-build: config
+build: config cgo thirdparties
 	$(info [Build binary])
-	$(CGO_OPTS) go build $(TAGS) $(RACE_OPT) $(GOLDFLAGS) $(DEBUG_OPT) -o $(BIN_NAME) ./cmd/mo-service
+	$(CGO_OPTS) go build $(TAGS) $(RACE_OPT) $(GOLDFLAGS) $(GOCFLAGS) $(DEBUG_OPT) -o $(BIN_NAME) ./cmd/mo-service
 
 .PHONY: musl-install
 musl-install:
@@ -224,6 +229,7 @@ clean:
 	rm -rf $(MUSL_DIR)
 	rm -rf /tmp/musl-$(MUSL_VERSION).tar.gz
 	$(MAKE) -C cgo clean
+	$(MAKE) -C thirdparties clean
 
 ###############################################################################
 # static checks

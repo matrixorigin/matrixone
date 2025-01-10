@@ -65,3 +65,5 @@ endif
 
 clean:
 	rm -rf install $(USEARCH_DIR) $(STRINGZILLA_DIR) $(SIMSIMD_DIR) $(FP16_DIR)
+
+.PHONY: usearch stringzilla fp16 simsimd init
