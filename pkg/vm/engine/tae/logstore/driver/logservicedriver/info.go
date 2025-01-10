@@ -31,14 +31,21 @@ var ErrDriverLsnNotFound = moerr.NewInternalErrorNoCtx("driver info: driver lsn 
 var ErrRetryTimeOut = moerr.NewInternalErrorNoCtx("driver info: retry time out")
 
 type driverInfo struct {
-	addr                   map[uint64]*common.ClosedIntervals //logservicelsn-driverlsn TODO drop on truncate
-	validLsn               *roaring64.Bitmap
-	addrMu                 sync.RWMutex
-	driverLsn              uint64 //
-	syncing                uint64
-	synced                 uint64
-	syncedMu               sync.RWMutex
-	driverLsnMu            sync.RWMutex
+	addr     map[uint64]*common.ClosedIntervals //logservicelsn-driverlsn TODO drop on truncate
+	validLsn *roaring64.Bitmap
+	addrMu   sync.RWMutex
+
+	// dsn: driver sequence number
+	// it is monotonically continuously increasing
+	// PSN:[DSN:LSN, DSN:LSN, DSN:LSN, ...]
+	// One : Many
+	dsn uint64
+
+	syncing  uint64
+	synced   uint64
+	syncedMu sync.RWMutex
+
+	dsnmu                  sync.RWMutex
 	truncating             atomic.Uint64 //
 	truncatedLogserviceLsn uint64        //
 
@@ -75,9 +82,9 @@ func newDriverInfo() *driverInfo {
 }
 
 func (d *LogServiceDriver) GetCurrSeqNum() uint64 {
-	d.driverLsnMu.Lock()
-	lsn := d.driverLsn
-	d.driverLsnMu.Unlock()
+	d.dsnmu.Lock()
+	lsn := d.dsn
+	d.dsnmu.Unlock()
 	return lsn
 }
 func (info *driverInfo) PreReplay() {
@@ -90,7 +97,7 @@ func (info *driverInfo) IsReplaying() bool {
 	return info.inReplay
 }
 func (info *driverInfo) onReplay(r *replayer) {
-	info.driverLsn = r.maxDriverLsn
+	info.dsn = r.maxDriverLsn
 	info.synced = r.maxDriverLsn
 	info.syncing = r.maxDriverLsn
 	if r.minDriverLsn != math.MaxUint64 {
@@ -122,12 +129,12 @@ func (info *driverInfo) getNextValidLogserviceLsn(lsn uint64) uint64 {
 	return lsn
 }
 
-func (info *driverInfo) isToTruncate(logserviceLsn, driverLsn uint64) bool {
+func (info *driverInfo) isToTruncate(logserviceLsn, dsn uint64) bool {
 	maxlsn := info.getMaxDriverLsn(logserviceLsn)
 	if maxlsn == 0 {
 		return false
 	}
-	return maxlsn <= driverLsn
+	return maxlsn <= dsn
 }
 
 func (info *driverInfo) getMaxDriverLsn(logserviceLsn uint64) uint64 {
@@ -142,17 +149,16 @@ func (info *driverInfo) getMaxDriverLsn(logserviceLsn uint64) uint64 {
 	return lsn
 }
 
-func (info *driverInfo) allocateDriverLsn() uint64 {
-	info.driverLsn++
-	lsn := info.driverLsn
-	return lsn
+func (info *driverInfo) allocateDSNLocked() uint64 {
+	info.dsn++
+	return info.dsn
 }
 
-func (info *driverInfo) getDriverLsn() uint64 {
-	info.driverLsnMu.RLock()
-	lsn := info.driverLsn
-	info.driverLsnMu.RUnlock()
-	return lsn
+func (info *driverInfo) getDSN() uint64 {
+	info.dsnmu.RLock()
+	dsn := info.dsn
+	info.dsnmu.RUnlock()
+	return dsn
 }
 
 func (info *driverInfo) getMaxFinishedToken() uint64 {
@@ -259,14 +265,14 @@ func (info *driverInfo) putbackWriteTokens(tokens []uint64) {
 	info.commitCond.L.Unlock()
 }
 
-func (info *driverInfo) tryGetLogServiceLsnByDriverLsn(driverLsn uint64) (uint64, error) {
-	lsn, err := info.getLogServiceLsnByDriverLsn(driverLsn)
+func (info *driverInfo) tryGetLogServiceLsnByDriverLsn(dsn uint64) (uint64, error) {
+	lsn, err := info.getLogServiceLsnByDriverLsn(dsn)
 	if err == ErrDriverLsnNotFound {
-		if lsn <= info.getDriverLsn() {
+		if lsn <= info.getDSN() {
 			for i := 0; i < 10; i++ {
-				logutil.Infof("retry get logserviceLsn, driverlsn=%d", driverLsn)
+				logutil.Infof("retry get logserviceLsn, driverlsn=%d", dsn)
 				info.commitCond.L.Lock()
-				lsn, err = info.getLogServiceLsnByDriverLsn(driverLsn)
+				lsn, err = info.getLogServiceLsnByDriverLsn(dsn)
 				if err == nil {
 					info.commitCond.L.Unlock()
 					break
@@ -282,11 +288,11 @@ func (info *driverInfo) tryGetLogServiceLsnByDriverLsn(driverLsn uint64) (uint64
 	return lsn, err
 }
 
-func (info *driverInfo) getLogServiceLsnByDriverLsn(driverLsn uint64) (uint64, error) {
+func (info *driverInfo) getLogServiceLsnByDriverLsn(dsn uint64) (uint64, error) {
 	info.addrMu.RLock()
 	defer info.addrMu.RUnlock()
 	for lsn, intervals := range info.addr {
-		if intervals.Contains(*common.NewClosedIntervalsByInt(driverLsn)) {
+		if intervals.Contains(*common.NewClosedIntervalsByInt(dsn)) {
 			return lsn, nil
 		}
 	}

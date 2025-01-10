@@ -48,7 +48,7 @@ func restartDriver(t *testing.T, d *LogServiceDriver, h func(*entry.Entry)) *Log
 	}
 	// preLsns:=d.validLsn
 	t.Logf("Valid lsn: %v", d.validLsn)
-	t.Logf("Driver Lsn %d, Syncing %d, Synced %d", d.driverLsn, d.syncing, d.synced)
+	t.Logf("Driver Lsn %d, Syncing %d, Synced %d", d.dsn, d.syncing, d.synced)
 	t.Logf("Truncated %d", d.truncating.Load())
 	t.Logf("LSTruncated %d", d.truncatedLogserviceLsn)
 	d = NewLogServiceDriver(d.config)
@@ -77,7 +77,7 @@ func restartDriver(t *testing.T, d *LogServiceDriver, h func(*entry.Entry)) *Log
 	// }
 	t.Logf("Valid lsn: %v", d.validLsn)
 	// assert.Equal(t,preLsns.GetCardinality(),d.validLsn.GetCardinality())
-	t.Logf("Driver Lsn %d, Syncing %d, Synced %d", d.driverLsn, d.syncing, d.synced)
+	t.Logf("Driver Lsn %d, Syncing %d, Synced %d", d.dsn, d.syncing, d.synced)
 	t.Logf("Truncated %d", d.truncating.Load())
 	t.Logf("LSTruncated %d", d.truncatedLogserviceLsn)
 	return d
