@@ -115,7 +115,7 @@ thirdparties:
 .PHONY: build
 build: config cgo thirdparties
 	$(info [Build binary])
-	$(CGO_OPTS) go build $(TAGS) $(RACE_OPT) $(GOLDFLAGS) $(GOCFLAGS) $(DEBUG_OPT) -o $(BIN_NAME) ./cmd/mo-service
+	$(CGO_OPTS) go build $(TAGS) $(RACE_OPT) $(GOLDFLAGS) $(DEBUG_OPT) -o $(BIN_NAME) ./cmd/mo-service
 
 .PHONY: musl-install
 musl-install:
