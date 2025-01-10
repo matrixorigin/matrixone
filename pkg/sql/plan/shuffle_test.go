@@ -337,7 +337,7 @@ func TestShuffleByZonemap(t *testing.T) {
 		CNIDX: 0,
 		Init:  false,
 	}
-	shuffleByZonemap(rsp, zm)
+	shuffleByZonemap(rsp, zm, 2)
 }
 
 func TestShuffleByValueExtractedFromZonemap(t *testing.T) {
@@ -362,7 +362,7 @@ func TestShuffleByValueExtractedFromZonemap(t *testing.T) {
 		CNIDX: 0,
 		Init:  false,
 	}
-	idx := shuffleByValueExtractedFromZonemap(rsp, zm)
+	idx := shuffleByValueExtractedFromZonemap(rsp, zm, 3)
 	require.Equal(t, idx, uint64(2))
 
 	node = &plan.Node{
@@ -390,6 +390,6 @@ func TestShuffleByValueExtractedFromZonemap(t *testing.T) {
 		CNIDX: 0,
 		Init:  false,
 	}
-	idx = shuffleByValueExtractedFromZonemap(rsp, zm)
+	idx = shuffleByValueExtractedFromZonemap(rsp, zm, 4)
 	require.Equal(t, idx, uint64(1))
 }
