@@ -144,9 +144,9 @@ musl:
 
 # build mo-tool
 .PHONY: mo-tool
-mo-tool: config
+mo-tool: config cgo thirdparties
 	$(info [Build mo-tool tool])
-	$(CGO_OPTS) go build -o mo-tool ./cmd/mo-tool
+	$(CGO_OPTS) go build $(GOLDFLAGS) -o mo-tool ./cmd/mo-tool
 
 # build mo-service binary for debugging with go's race detector enabled
 # produced executable is 10x slower and consumes much more memory
@@ -163,7 +163,7 @@ debug: build
 # Excluding frontend test cases temporarily
 # Argument SKIP_TEST to skip a specific go test
 .PHONY: ut
-ut: config
+ut: config cgo thirdparties
 	$(info [Unit testing])
 ifeq ($(UNAME_S),Darwin)
 	@cd optools && ./run_ut.sh UT $(SKIP_TEST)
