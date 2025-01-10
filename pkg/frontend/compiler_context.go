@@ -879,48 +879,11 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, snapshot *plan2.Snaps
 	if !needUpdate {
 		return cached, nil
 	}
-	tableDefs, err := table.TableDefs(ctx)
+
+	newCtx := perfcounter.AttachCalcTableStatsKey(ctx)
+	statsInfo, err := table.Stats(newCtx, true)
 	if err != nil {
-		return nil, err
-	}
-	var partitionInfo *plan.PartitionByDef
-	for _, def := range tableDefs {
-		if partitionDef, ok := def.(*engine.PartitionDef); ok {
-			if partitionDef.Partitioned > 0 {
-				p := &plan.PartitionByDef{}
-				err = p.UnMarshalPartitionInfo(([]byte)(partitionDef.Partition))
-				if err != nil {
-					return nil, err
-				}
-				partitionInfo = p
-			}
-			break
-		}
-	}
-
-	var statsInfo *pb.StatsInfo
-	// This is a partition table.
-	if partitionInfo != nil {
-		statsInfo = plan2.NewStatsInfo()
-		for _, partitionTable := range partitionInfo.PartitionTableNames {
-			parCtx, parTable, err := tcc.getRelation(dbName, partitionTable, sub, snapshot)
-			if err != nil {
-				return cached, err
-			}
-
-			newParCtx := perfcounter.AttachCalcTableStatsKey(parCtx)
-			parStats, err := parTable.Stats(newParCtx, true)
-			if err != nil {
-				return cached, err
-			}
-			statsInfo.Merge(parStats)
-		}
-	} else {
-		newCtx := perfcounter.AttachCalcTableStatsKey(ctx)
-		statsInfo, err = table.Stats(newCtx, true)
-		if err != nil {
-			return cached, err
-		}
+		return cached, err
 	}
 
 	if statsInfo != nil {
@@ -948,47 +911,15 @@ func (tcc *TxnCompilerContext) statsInCache(ctx context.Context, dbName string, 
 		return nil, false
 	}
 
-	var partitionInfo *plan2.PartitionByDef
-	engineDefs, err := table.TableDefs(ctx)
-	if err != nil {
-		return nil, false
-	}
-	for _, def := range engineDefs {
-		if partitionDef, ok := def.(*engine.PartitionDef); ok {
-			if partitionDef.Partitioned > 0 {
-				p := &plan2.PartitionByDef{}
-				err = p.UnMarshalPartitionInfo(([]byte)(partitionDef.Partition))
-				if err != nil {
-					return nil, false
-				}
-				partitionInfo = p
-			}
-		}
-	}
-
 	second := time.Now().Unix()
 	var diff int64 = 3
-	if partitionInfo != nil {
-		diff = 30
-	}
 	if s.ApproxObjectNumber > 0 && second-s.TimeSecond < diff {
 		// do not call ApproxObjectsNum within a short time limit
 		return s, false
 	}
 	s.TimeSecond = second
 
-	approxNumObjects := 0
-	if partitionInfo != nil {
-		for _, PartitionTableName := range partitionInfo.PartitionTableNames {
-			_, ptable, err := tcc.getRelation(dbName, PartitionTableName, nil, snapshot)
-			if err != nil {
-				return nil, false
-			}
-			approxNumObjects += ptable.ApproxObjectsNum(ctx)
-		}
-	} else {
-		approxNumObjects = table.ApproxObjectsNum(ctx)
-	}
+	approxNumObjects := table.ApproxObjectsNum(ctx)
 	if approxNumObjects == 0 {
 		return nil, false
 	}
