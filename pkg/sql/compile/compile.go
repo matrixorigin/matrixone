@@ -811,7 +811,7 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 		v2.TxnStatementCompileQueryHistogram.Observe(time.Since(start).Seconds())
 	}()
 
-	c.execType = plan2.GetExecType(c.pn.GetQuery(), c.getHaveDDL(), c.isPrepare, c.ncpu)
+	c.execType = plan2.GetExecType(c.pn.GetQuery(), c.getHaveDDL(), c.isPrepare)
 
 	n := getEngineNode(c)
 	if c.execType == plan2.ExecTypeTP || c.execType == plan2.ExecTypeAP_ONECN {
@@ -829,6 +829,8 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 	if c.isPrepare && !c.IsTpQuery() {
 		return nil, cantCompileForPrepareErr
 	}
+
+	plan2.CalcQueryDOP(c.pn, int32(c.ncpu), len(c.cnList), c.execType)
 
 	c.initAnalyzeModule(qry)
 	// deal with sink scan first.
@@ -2082,7 +2084,7 @@ func (c *Compile) compileMinusAndIntersect(n *plan.Node, left []*Scope, right []
 	if c.IsSingleScope(left) && c.IsSingleScope(right) {
 		return c.compileTpMinusAndIntersect(left, right, nodeType)
 	}
-	rs := c.newScopeListOnCurrentCN(2, int(n.Stats.BlockNum))
+	rs := c.newScopeListOnCurrentCN(2, int(n.Stats.Dop))
 	rs = c.newScopeListForMinusAndIntersect(rs, left, right, n)
 
 	c.hasMergeOp = true
@@ -2953,7 +2955,7 @@ func (c *Compile) compileShuffleGroupV2(n *plan.Node, inputSS []*Scope, nodes []
 	}
 
 	child := nodes[n.Children[0]]
-	dop := plan2.GetShuffleDop(c.ncpu, len(c.cnList), n.Stats.HashmapStats.HashmapSize)
+	dop := int(n.Stats.Dop)
 	if dop != inputSS[0].NodeInfo.Mcpu {
 		if child.NodeType == plan.Node_TABLE_SCAN {
 			inputSS[0].NodeInfo.Mcpu = dop
@@ -3005,7 +3007,7 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, inputSS []*Scope, nodes []*p
 	}
 
 	shuffleGroups := make([]*Scope, 0, len(c.cnList))
-	dop := plan2.GetShuffleDop(c.ncpu, len(c.cnList), n.Stats.HashmapStats.HashmapSize)
+	dop := int(n.Stats.Dop)
 	for _, cn := range c.cnList {
 		scopes := c.newScopeListWithNode(dop, len(inputSS), cn.Addr)
 		for _, s := range scopes {
@@ -3534,9 +3536,8 @@ func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 // newScopeListOnCurrentCN traverse the cnList and only generate Scope list for the current CN node
 // waing: newScopeListOnCurrentCN result is only used to build Scope and add one merge operator.
 // If other operators are added, please let @qingxinhome know
-func (c *Compile) newScopeListOnCurrentCN(childrenCount int, blocks int) []*Scope {
+func (c *Compile) newScopeListOnCurrentCN(childrenCount int, mcpu int) []*Scope {
 	node := getEngineNode(c)
-	mcpu := c.generateCPUNumber(node.Mcpu, blocks)
 	ss := c.newScopeListWithNode(mcpu, childrenCount, node.Addr)
 	return ss
 }
@@ -3672,11 +3673,7 @@ func (c *Compile) newShuffleJoinScopeList(probeScopes, buildScopes []*Scope, n *
 		}
 	}
 
-	dop := c.ncpu //for dedup join, limit the dop max to ncpu
-	if n.JoinType != plan.Node_DEDUP {
-		dop = plan2.GetShuffleDop(c.ncpu, len(cnlist), n.Stats.HashmapStats.HashmapSize)
-	}
-
+	dop := int(n.Stats.Dop)
 	bucketNum := len(cnlist) * dop
 	shuffleProbes := make([]*Scope, 0, bucketNum)
 	shuffleBuilds := make([]*Scope, 0, bucketNum)
@@ -3785,20 +3782,6 @@ func (c *Compile) newShuffleJoinScopeList(probeScopes, buildScopes []*Scope, n *
 	}
 
 	return shuffleProbes
-}
-
-func (c *Compile) generateCPUNumber(cpunum, blocks int) int {
-	if cpunum <= 0 || blocks <= 16 || c.IsTpQuery() {
-		return 1
-	}
-	ret := blocks/16 + 1
-	if c.isPrepare {
-		ret = blocks/64 + 1
-	}
-	if ret <= cpunum {
-		return ret
-	}
-	return cpunum
 }
 
 func collectTombstones(
@@ -4001,13 +3984,13 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 	var nodes engine.Nodes
 	// scan on current CN
 	if shouldScanOnCurrentCN(c, n, forceSingle) {
-		mcpu := c.generateCPUNumber(c.ncpu, int(n.Stats.BlockNum))
+		mcpu := n.Stats.Dop
 		if forceSingle {
 			mcpu = 1
 		}
 		nodes = append(nodes, engine.Node{
 			Addr:  c.addr,
-			Mcpu:  mcpu,
+			Mcpu:  int(mcpu),
 			CNCNT: 1,
 		})
 		return nodes, nil
