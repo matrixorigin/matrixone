@@ -64,14 +64,10 @@ func DeepCopyUpdateCtxList(updateCtxList []*plan.UpdateCtx) []*plan.UpdateCtx {
 	result := make([]*plan.UpdateCtx, len(updateCtxList))
 	for i, ctx := range updateCtxList {
 		result[i] = &plan.UpdateCtx{
-			ObjRef:              DeepCopyObjectRef(ctx.ObjRef),
-			TableDef:            DeepCopyTableDef(ctx.TableDef, true),
-			PartitionTableIds:   slices.Clone(ctx.PartitionTableIds),
-			PartitionTableNames: slices.Clone(ctx.PartitionTableNames),
-			OldPartitionIdx:     ctx.OldPartitionIdx,
-			NewPartitionIdx:     ctx.NewPartitionIdx,
-			InsertCols:          slices.Clone(ctx.InsertCols),
-			DeleteCols:          slices.Clone(ctx.DeleteCols),
+			ObjRef:     DeepCopyObjectRef(ctx.ObjRef),
+			TableDef:   DeepCopyTableDef(ctx.TableDef, true),
+			InsertCols: slices.Clone(ctx.InsertCols),
+			DeleteCols: slices.Clone(ctx.DeleteCols),
 		}
 	}
 
@@ -101,13 +97,10 @@ func DeepCopyInsertCtx(ctx *plan.InsertCtx) *plan.InsertCtx {
 		return nil
 	}
 	newCtx := &plan.InsertCtx{
-		Ref:                 DeepCopyObjectRef(ctx.Ref),
-		AddAffectedRows:     ctx.AddAffectedRows,
-		IsClusterTable:      ctx.IsClusterTable,
-		TableDef:            DeepCopyTableDef(ctx.TableDef, true),
-		PartitionTableIds:   slices.Clone(ctx.PartitionTableIds),
-		PartitionTableNames: slices.Clone(ctx.PartitionTableNames),
-		PartitionIdx:        ctx.PartitionIdx,
+		Ref:             DeepCopyObjectRef(ctx.Ref),
+		AddAffectedRows: ctx.AddAffectedRows,
+		IsClusterTable:  ctx.IsClusterTable,
+		TableDef:        DeepCopyTableDef(ctx.TableDef, true),
 	}
 
 	return newCtx
@@ -118,16 +111,13 @@ func DeepCopyDeleteCtx(ctx *plan.DeleteCtx) *plan.DeleteCtx {
 		return nil
 	}
 	newCtx := &plan.DeleteCtx{
-		CanTruncate:         ctx.CanTruncate,
-		AddAffectedRows:     ctx.AddAffectedRows,
-		RowIdIdx:            ctx.RowIdIdx,
-		Ref:                 DeepCopyObjectRef(ctx.Ref),
-		IsClusterTable:      ctx.IsClusterTable,
-		TableDef:            DeepCopyTableDef(ctx.TableDef, true),
-		PartitionTableIds:   slices.Clone(ctx.PartitionTableIds),
-		PartitionTableNames: slices.Clone(ctx.PartitionTableNames),
-		PartitionIdx:        ctx.PartitionIdx,
-		PrimaryKeyIdx:       ctx.PrimaryKeyIdx,
+		CanTruncate:     ctx.CanTruncate,
+		AddAffectedRows: ctx.AddAffectedRows,
+		RowIdIdx:        ctx.RowIdIdx,
+		Ref:             DeepCopyObjectRef(ctx.Ref),
+		IsClusterTable:  ctx.IsClusterTable,
+		TableDef:        DeepCopyTableDef(ctx.TableDef, true),
+		PrimaryKeyIdx:   ctx.PrimaryKeyIdx,
 	}
 
 	return newCtx
@@ -237,7 +227,6 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		AnalyzeInfo:     DeepCopyAnalyzeInfo(node.AnalyzeInfo),
 		IsEnd:           node.IsEnd,
 		ExternScan:      node.ExternScan,
-		PartitionPrune:  DeepCopyPartitionPrune(node.PartitionPrune),
 		SampleFunc:      DeepCopySampleFuncSpec(node.SampleFunc),
 		OnUpdateExprs:   DeepCopyExprList(node.OnUpdateExprs),
 		DedupColName:    node.DedupColName,
@@ -304,9 +293,6 @@ func DeepCopyReplaceCtx(oldCtx *plan.ReplaceCtx) *plan.ReplaceCtx {
 		IsClusterTable:            oldCtx.IsClusterTable,
 		TableDef:                  DeepCopyTableDef(oldCtx.TableDef, true),
 		DeleteCond:                oldCtx.DeleteCond,
-		PartitionTableIds:         slices.Clone(oldCtx.PartitionTableIds),
-		PartitionTableNames:       slices.Clone(oldCtx.PartitionTableNames),
-		PartitionIdx:              oldCtx.PartitionIdx,
 		RewriteFromOnDuplicateKey: oldCtx.RewriteFromOnDuplicateKey,
 	}
 	return ctx
@@ -428,28 +414,6 @@ func DeepCopyTableDefList(src []*plan.TableDef) []*plan.TableDef {
 	return ret
 }
 
-func DeepCopyPartitionPrune(partitionPrune *plan.PartitionPrune) *plan.PartitionPrune {
-	if partitionPrune == nil {
-		return nil
-	}
-	newPartitionPrune := &plan.PartitionPrune{
-		IsPruned:           partitionPrune.IsPruned,
-		SelectedPartitions: make([]*plan.PartitionItem, len(partitionPrune.SelectedPartitions)),
-	}
-	for i, e := range partitionPrune.SelectedPartitions {
-		newPartitionPrune.SelectedPartitions[i] = &plan.PartitionItem{
-			PartitionName:      e.PartitionName,
-			OrdinalPosition:    e.OrdinalPosition,
-			Description:        e.Description,
-			Comment:            e.Comment,
-			LessThan:           DeepCopyExprList(e.LessThan),
-			InValues:           DeepCopyExprList(e.InValues),
-			PartitionTableName: e.PartitionTableName,
-		}
-	}
-	return newPartitionPrune
-}
-
 func DeepCopySampleFuncSpec(source *plan.SampleFuncSpec) *plan.SampleFuncSpec {
 	if source == nil {
 		return nil
@@ -534,10 +498,6 @@ func DeepCopyTableDef(table *plan.TableDef, withCols bool) *plan.TableDef {
 		newTable.ViewSql = &plan.ViewDef{
 			View: table.ViewSql.View,
 		}
-	}
-
-	if table.Partition != nil {
-		newTable.Partition = DeepCopyPartitionByDef(table.Partition)
 	}
 
 	if table.Indexes != nil {
@@ -658,16 +618,15 @@ func DeepCopyDataDefinition(old *plan.DataDefinition) *plan.DataDefinition {
 
 	case *plan.DataDefinition_CreateTable:
 		CreateTable := &plan.CreateTable{
-			Replace:         df.CreateTable.Replace,
-			IfNotExists:     df.CreateTable.IfNotExists,
-			Temporary:       df.CreateTable.Temporary,
-			Database:        df.CreateTable.Database,
-			TableDef:        DeepCopyTableDef(df.CreateTable.TableDef, true),
-			IndexTables:     DeepCopyTableDefList(df.CreateTable.GetIndexTables()),
-			FkDbs:           slices.Clone(df.CreateTable.FkDbs),
-			FkTables:        slices.Clone(df.CreateTable.FkTables),
-			FkCols:          make([]*plan.FkColName, len(df.CreateTable.FkCols)),
-			PartitionTables: DeepCopyTableDefList(df.CreateTable.GetPartitionTables()),
+			Replace:     df.CreateTable.Replace,
+			IfNotExists: df.CreateTable.IfNotExists,
+			Temporary:   df.CreateTable.Temporary,
+			Database:    df.CreateTable.Database,
+			TableDef:    DeepCopyTableDef(df.CreateTable.TableDef, true),
+			IndexTables: DeepCopyTableDefList(df.CreateTable.GetIndexTables()),
+			FkDbs:       slices.Clone(df.CreateTable.FkDbs),
+			FkTables:    slices.Clone(df.CreateTable.FkTables),
+			FkCols:      make([]*plan.FkColName, len(df.CreateTable.FkCols)),
 		}
 		for i, val := range df.CreateTable.FkCols {
 			CreateTable.FkCols[i] = &plan.FkColName{Cols: slices.Clone(val.Cols)}
@@ -720,16 +679,15 @@ func DeepCopyDataDefinition(old *plan.DataDefinition) *plan.DataDefinition {
 	case *plan.DataDefinition_DropTable:
 		newDf.Definition = &plan.DataDefinition_DropTable{
 			DropTable: &plan.DropTable{
-				IfExists:            df.DropTable.IfExists,
-				Database:            df.DropTable.Database,
-				Table:               df.DropTable.Table,
-				IndexTableNames:     slices.Clone(df.DropTable.GetIndexTableNames()),
-				ClusterTable:        DeepCopyClusterTable(df.DropTable.GetClusterTable()),
-				TableId:             df.DropTable.GetTableId(),
-				ForeignTbl:          slices.Clone(df.DropTable.GetForeignTbl()),
-				PartitionTableNames: slices.Clone(df.DropTable.GetPartitionTableNames()),
-				IsView:              df.DropTable.IsView,
-				TableDef:            DeepCopyTableDef(df.DropTable.GetTableDef(), true),
+				IfExists:        df.DropTable.IfExists,
+				Database:        df.DropTable.Database,
+				Table:           df.DropTable.Table,
+				IndexTableNames: slices.Clone(df.DropTable.GetIndexTableNames()),
+				ClusterTable:    DeepCopyClusterTable(df.DropTable.GetClusterTable()),
+				TableId:         df.DropTable.GetTableId(),
+				ForeignTbl:      slices.Clone(df.DropTable.GetForeignTbl()),
+				IsView:          df.DropTable.IsView,
+				TableDef:        DeepCopyTableDef(df.DropTable.GetTableDef(), true),
 			},
 		}
 
@@ -1072,43 +1030,4 @@ func DeepCopyAnalyzeInfo(analyzeinfo *plan.AnalyzeInfo) *plan.AnalyzeInfo {
 		InsertTime:             analyzeinfo.GetInsertTime(),
 		WaitLockTime:           analyzeinfo.GetWaitLockTime(),
 	}
-}
-
-func DeepCopyPartitionByDef(partiiondef *PartitionByDef) *PartitionByDef {
-	partitionDef := &plan.PartitionByDef{
-		Type:                partiiondef.GetType(),
-		PartitionExpression: DeepCopyExpr(partiiondef.GetPartitionExpression()),
-		PartitionNum:        partiiondef.GetPartitionNum(),
-		Partitions:          make([]*plan.PartitionItem, len(partiiondef.Partitions)),
-		Algorithm:           partiiondef.GetAlgorithm(),
-		IsSubPartition:      partiiondef.GetIsSubPartition(),
-		PartitionMsg:        partiiondef.GetPartitionMsg(),
-		PartitionTableNames: slices.Clone(partiiondef.GetPartitionTableNames()),
-	}
-	if partiiondef.PartitionExpr != nil {
-		partitionDef.PartitionExpr = &plan.PartitionExpr{
-			Expr:    DeepCopyExpr(partiiondef.PartitionExpr.Expr),
-			ExprStr: partiiondef.PartitionExpr.GetExprStr(),
-		}
-	}
-
-	if partiiondef.PartitionColumns != nil {
-		partitionDef.PartitionColumns = &plan.PartitionColumns{
-			Columns:          DeepCopyExprList(partiiondef.PartitionColumns.Columns),
-			PartitionColumns: slices.Clone(partiiondef.PartitionColumns.PartitionColumns),
-		}
-	}
-
-	for i, e := range partiiondef.Partitions {
-		partitionDef.Partitions[i] = &plan.PartitionItem{
-			PartitionName:      e.PartitionName,
-			OrdinalPosition:    e.OrdinalPosition,
-			Description:        e.Description,
-			Comment:            e.Comment,
-			LessThan:           DeepCopyExprList(e.LessThan),
-			InValues:           DeepCopyExprList(e.InValues),
-			PartitionTableName: e.PartitionTableName,
-		}
-	}
-	return partitionDef
 }
