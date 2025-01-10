@@ -151,7 +151,7 @@ func (info *driverInfo) getAppended() uint64 {
 	return info.appended.Intervals[0].End
 }
 
-func (info *driverInfo) allocateGlobalSequenceNum(
+func (info *driverInfo) applyWriteToken(
 	maxPendding uint64, timeout time.Duration,
 ) (lsn uint64, err error) {
 	lsn, err = info.tryAllocate(maxPendding)
@@ -225,12 +225,12 @@ func (info *driverInfo) getSynced() uint64 {
 	info.syncedMu.RUnlock()
 	return lsn
 }
-func (info *driverInfo) onAppend(appended []uint64) {
+func (info *driverInfo) putbackWriteTokens(tokens []uint64) {
 	info.syncedMu.Lock()
 	info.synced = info.syncing
 	info.syncedMu.Unlock()
 
-	appendedArray := common.NewClosedIntervalsBySlice(appended)
+	appendedArray := common.NewClosedIntervalsBySlice(tokens)
 	info.appendedMu.Lock()
 	info.appended.TryMerge(*appendedArray)
 	info.appendedMu.Unlock()

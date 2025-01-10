@@ -62,7 +62,7 @@ func (d *LogServiceDriver) onPreAppend(items ...any) {
 }
 
 func (d *LogServiceDriver) enqueueAppender(appender *driverAppender) {
-	appender.client, appender.appendlsn = d.getClient()
+	appender.client, appender.writeToken = d.getClient()
 	appender.entry.SetAppended(d.getSynced())
 	appender.contextDuration = d.config.NewClientDuration
 	appender.wg.Add(1)
@@ -73,9 +73,9 @@ func (d *LogServiceDriver) enqueueAppender(appender *driverAppender) {
 
 // Node: this function is called in serial because it also allocates the global sequence number
 // the global sequence number(GSN) should be monotonically continuously increasing
-func (d *LogServiceDriver) getClient() (client *clientWithRecord, lsn uint64) {
+func (d *LogServiceDriver) getClient() (client *clientWithRecord, token uint64) {
 	var err error
-	if lsn, err = d.allocateGlobalSequenceNum(
+	if token, err = d.applyWriteToken(
 		uint64(d.config.ClientMaxCount), time.Second,
 	); err != nil {
 		// should never happen
@@ -123,13 +123,13 @@ func (d *LogServiceDriver) onAppendedQueue(items []any, q chan any) {
 }
 
 func (d *LogServiceDriver) onPostAppendQueue(items []any, _ chan any) {
-	appended := make([]uint64, 0)
+	tokens := make([]uint64, 0, len(items))
 	for _, v := range items {
 		batch := v.([]*driverAppender)
 		for _, appender := range batch {
 			d.logAppend(appender)
-			appended = append(appended, appender.appendlsn)
+			tokens = append(tokens, appender.writeToken)
 		}
 	}
-	d.onAppend(appended)
+	d.putbackWriteTokens(tokens)
 }
