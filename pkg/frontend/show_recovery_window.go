@@ -173,13 +173,13 @@ func getAccountRecoveryWindowRows(ctx context.Context, ses *Session, bh Backgrou
 	var rows [][]interface{}
 
 	// get account recovery window for pitr
-	pitrRecords := &[]tableRecoveryWindow{}
+	pitrRecords := make([]tableRecoveryWindow, 0)
 	pitrRecords, err = getAccountPitrRecords(ctx, ses, bh, accountName)
 	if err != nil {
 		return nil, err
 	}
 	// get account recovery window for snapshot
-	snapshotRecords := &[]tableRecoveryWindowForSnapshot{}
+	snapshotRecords := make([]tableRecoveryWindowForSnapshot, 0)
 	snapshotRecords, err = getAccountSnapshotRecords(ctx, ses, bh, accountName)
 	if err != nil {
 		return nil, err
@@ -188,7 +188,7 @@ func getAccountRecoveryWindowRows(ctx context.Context, ses *Session, bh Backgrou
 	for _, dbName := range dbs {
 		// get db recovery window separately
 		var windowRows [][]interface{}
-		windowRows, err = getAccountRecoveryWindow(ctx, ses, bh, accountName, dbName, pitrRecords, snapshotRecords)
+		windowRows, err = getAccountRecoveryWindow(ctx, ses, bh, accountName, dbName, &pitrRecords, &snapshotRecords)
 		if err != nil {
 			return nil, err
 		}
@@ -222,25 +222,25 @@ func getAccountRecoveryWindow(ctx context.Context, ses *Session, bh BackgroundEx
 	var rows [][]interface{}
 
 	// get db recovery window for pitr
-	pitrRecords := &[]tableRecoveryWindow{}
+	pitrRecords := make([]tableRecoveryWindow, 0)
 	pitrRecords, err = getDbPitrRecords(ctx, ses, bh, accountName, dbName)
 	if err != nil {
 		return nil, err
 	}
-	*pitrRecords = append(*pitrRecords, *accountPitrs...)
+	pitrRecords = append(pitrRecords, *accountPitrs...)
 
 	// get db recovery window for snapshot
-	snapshotRecords := &[]tableRecoveryWindowForSnapshot{}
+	snapshotRecords := make([]tableRecoveryWindowForSnapshot, 0)
 	snapshotRecords, err = getDbSnapshotsRecords(ctx, ses, bh, accountName, dbName)
 	if err != nil {
 		return nil, err
 	}
-	*snapshotRecords = append(*snapshotRecords, *accountSnapshot...)
+	snapshotRecords = append(snapshotRecords, *accountSnapshot...)
 
 	// get table recovery window separately
 	for _, tblName := range tables {
 		var windowRows [][]interface{}
-		windowRows, err = getTableRecoveryWindowRowsForDb(ctx, ses, bh, accountName, dbName, tblName, pitrRecords, snapshotRecords)
+		windowRows, err = getTableRecoveryWindowRowsForDb(ctx, ses, bh, accountName, dbName, tblName, &pitrRecords, &snapshotRecords)
 		if err != nil {
 			return nil, err
 		}
@@ -274,14 +274,14 @@ func getDbRecoveryWindowRows(ctx context.Context, ses *Session, bh BackgroundExe
 	var rows [][]interface{}
 
 	// get db recovery window for pitr
-	pitrRecords := &[]tableRecoveryWindow{}
+	pitrRecords := make([]tableRecoveryWindow, 0)
 	pitrRecords, err = getDbPitrRecords(ctx, ses, bh, accountName, dbName)
 	if err != nil {
 		return nil, err
 	}
 
 	// get db recovery window for snapshot
-	snapshotRecords := &[]tableRecoveryWindowForSnapshot{}
+	snapshotRecords := make([]tableRecoveryWindowForSnapshot, 0)
 	snapshotRecords, err = getDbSnapshotsRecords(ctx, ses, bh, accountName, dbName)
 	if err != nil {
 		return nil, err
@@ -290,7 +290,7 @@ func getDbRecoveryWindowRows(ctx context.Context, ses *Session, bh BackgroundExe
 	// get table recovery window separately
 	for _, tblName := range tables {
 		var windowRows [][]interface{}
-		windowRows, err = getTableRecoveryWindowRowsForDb(ctx, ses, bh, accountName, dbName, tblName, pitrRecords, snapshotRecords)
+		windowRows, err = getTableRecoveryWindowRowsForDb(ctx, ses, bh, accountName, dbName, tblName, &pitrRecords, &snapshotRecords)
 		if err != nil {
 			return nil, err
 		}
@@ -614,7 +614,7 @@ func getTableSnapshotRecords(ctx context.Context, ses *Session, bh BackgroundExe
 	return records, nil
 }
 
-func getDbPitrRecords(ctx context.Context, ses *Session, bh BackgroundExec, accountName, dbName string) (*[]tableRecoveryWindow, error) {
+func getDbPitrRecords(ctx context.Context, ses *Session, bh BackgroundExec, accountName, dbName string) ([]tableRecoveryWindow, error) {
 	var newCtx = ctx
 	curAccountId, err := defines.GetAccountId(ctx)
 	if err != nil {
@@ -664,10 +664,10 @@ func getDbPitrRecords(ctx context.Context, ses *Session, bh BackgroundExec, acco
 			records = append(records, record)
 		}
 	}
-	return &records, nil
+	return records, nil
 }
 
-func getDbSnapshotsRecords(ctx context.Context, ses *Session, bh BackgroundExec, accountName, dbName string) (*[]tableRecoveryWindowForSnapshot, error) {
+func getDbSnapshotsRecords(ctx context.Context, ses *Session, bh BackgroundExec, accountName, dbName string) ([]tableRecoveryWindowForSnapshot, error) {
 	var erArray []ExecResult
 	var err error
 
@@ -699,10 +699,10 @@ func getDbSnapshotsRecords(ctx context.Context, ses *Session, bh BackgroundExec,
 			records = append(records, record)
 		}
 	}
-	return &records, nil
+	return records, nil
 }
 
-func getAccountPitrRecords(ctx context.Context, ses *Session, bh BackgroundExec, accountName string) (*[]tableRecoveryWindow, error) {
+func getAccountPitrRecords(ctx context.Context, ses *Session, bh BackgroundExec, accountName string) ([]tableRecoveryWindow, error) {
 	var newCtx = ctx
 	curAccountId, err := defines.GetAccountId(ctx)
 	if err != nil {
@@ -752,10 +752,10 @@ func getAccountPitrRecords(ctx context.Context, ses *Session, bh BackgroundExec,
 			records = append(records, record)
 		}
 	}
-	return &records, nil
+	return records, nil
 }
 
-func getAccountSnapshotRecords(ctx context.Context, ses *Session, bh BackgroundExec, accountName string) (*[]tableRecoveryWindowForSnapshot, error) {
+func getAccountSnapshotRecords(ctx context.Context, ses *Session, bh BackgroundExec, accountName string) ([]tableRecoveryWindowForSnapshot, error) {
 	var erArray []ExecResult
 	var err error
 
@@ -787,7 +787,7 @@ func getAccountSnapshotRecords(ctx context.Context, ses *Session, bh BackgroundE
 			records = append(records, record)
 		}
 	}
-	return &records, nil
+	return records, nil
 }
 
 func checkShowRecoveryWindowPrivilege(ctx context.Context, ses *Session, srw *tree.ShowRecoveryWindow) error {
