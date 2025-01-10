@@ -293,7 +293,7 @@ func TestScope_AlterTableInplace(t *testing.T) {
 		})
 		defer lockMoTbl.Reset()
 
-		lockTbl := gostub.Stub(&lockTable, func(_ context.Context, _ engine.Engine, _ *process.Process, _ engine.Relation, _ string, _ []string, _ bool) error {
+		lockTbl := gostub.Stub(&lockTable, func(_ context.Context, _ engine.Engine, _ *process.Process, _ engine.Relation, _ string, _ bool) error {
 			return moerr.NewTxnNeedRetryNoCtx()
 		})
 		defer lockTbl.Reset()
@@ -348,7 +348,7 @@ func TestScope_AlterTableInplace(t *testing.T) {
 		})
 		defer lockMoTbl.Reset()
 
-		lockTbl := gostub.Stub(&lockTable, func(_ context.Context, _ engine.Engine, _ *process.Process, _ engine.Relation, _ string, _ []string, _ bool) error {
+		lockTbl := gostub.Stub(&lockTable, func(_ context.Context, _ engine.Engine, _ *process.Process, _ engine.Relation, _ string, _ bool) error {
 			return moerr.NewTxnNeedRetryNoCtx()
 		})
 		defer lockTbl.Reset()
@@ -403,7 +403,7 @@ func TestScope_AlterTableInplace(t *testing.T) {
 		})
 		defer lockMoTbl.Reset()
 
-		lockTbl := gostub.Stub(&lockTable, func(_ context.Context, _ engine.Engine, _ *process.Process, _ engine.Relation, _ string, _ []string, _ bool) error {
+		lockTbl := gostub.Stub(&lockTable, func(_ context.Context, _ engine.Engine, _ *process.Process, _ engine.Relation, _ string, _ bool) error {
 			return moerr.NewTxnNeedRetryNoCtx()
 		})
 		defer lockTbl.Reset()
@@ -709,7 +709,7 @@ func TestScope_AlterTableCopy(t *testing.T) {
 		})
 		defer lockMoTbl.Reset()
 
-		lockTbl := gostub.Stub(&lockTable, func(_ context.Context, _ engine.Engine, _ *process.Process, _ engine.Relation, _ string, _ []string, _ bool) error {
+		lockTbl := gostub.Stub(&lockTable, func(_ context.Context, _ engine.Engine, _ *process.Process, _ engine.Relation, _ string, _ bool) error {
 			return moerr.NewTxnNeedRetryNoCtx()
 		})
 		defer lockTbl.Reset()
@@ -762,7 +762,7 @@ func TestScope_AlterTableCopy(t *testing.T) {
 		})
 		defer lockMoTbl.Reset()
 
-		lockTbl := gostub.Stub(&lockTable, func(_ context.Context, _ engine.Engine, _ *process.Process, _ engine.Relation, _ string, _ []string, _ bool) error {
+		lockTbl := gostub.Stub(&lockTable, func(_ context.Context, _ engine.Engine, _ *process.Process, _ engine.Relation, _ string, _ bool) error {
 			return moerr.NewTxnNeedRetryNoCtx()
 		})
 		defer lockTbl.Reset()
