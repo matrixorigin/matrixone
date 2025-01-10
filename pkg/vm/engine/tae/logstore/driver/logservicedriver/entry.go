@@ -315,8 +315,7 @@ func (r *recordEntry) scheduleReplay(replayer *replayer) *common.ClosedIntervals
 			panic(err)
 		}
 		offset += n
-		replayer.lastEntry = e
-		replayer.recordChan <- e
+		replayer.replayOneEntry(e)
 	}
 	return common.NewClosedIntervalsBySlice(dsns)
 }

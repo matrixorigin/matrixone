@@ -53,10 +53,11 @@ type replayer struct {
 	d             *LogServiceDriver
 	writeTokens   []uint64
 
-	recordChan        chan *entry.Entry
-	lastEntry         *entry.Entry
-	firstEntryIsFound atomic.Bool
-	readEnd           bool
+	replayC   chan *entry.Entry
+	lastEntry *entry.Entry
+
+	// indicates at least one log entry is applied after replaying
+	anyApplied atomic.Bool
 
 	readDuration  time.Duration
 	applyDuration time.Duration
@@ -82,7 +83,7 @@ func newReplayer(
 		dsnWatermark:  math.MaxUint64,
 		d:             d,
 		writeTokens:   make([]uint64, 0),
-		recordChan:    make(chan *entry.Entry, 100),
+		replayC:       make(chan *entry.Entry, 100),
 		truncatedPSN:  truncatedPSN,
 	}
 	return r
@@ -93,29 +94,29 @@ func (r *replayer) replay() {
 
 	r.wg.Add(1)
 	// replay records in another goroutine
-	go r.replayRecords()
+	go r.replayLogEntries()
 
 	for !r.readNextBatch() {
 		for r.dsnWatermark < r.safeLsn {
-			err := r.replayLogserviceEntry(r.dsnWatermark + 1)
+			err := r.replayLogserviceEntry(r.dsnWatermark+1, false)
 			if err != nil {
 				panic(err)
 			}
 		}
 	}
-	r.readEnd = true
-	err = r.replayLogserviceEntry(r.dsnWatermark + 1)
-	for err != ErrAllRecordsRead {
-		err = r.replayLogserviceEntry(r.dsnWatermark + 1)
 
+	err = r.replayLogserviceEntry(r.dsnWatermark+1, true)
+	for err != ErrAllRecordsRead {
+		err = r.replayLogserviceEntry(r.dsnWatermark+1, true)
 	}
+
 	r.d.psns = r.d.psns[:0]
-	r.recordChan <- entry.NewEndEntry()
+	r.replayOneEntry(entry.NewEndEntry())
 	r.wg.Wait()
-	close(r.recordChan)
+	close(r.replayC)
 }
 
-func (r *replayer) readNextBatch() (readEnd bool) {
+func (r *replayer) readNextBatch() (readDone bool) {
 	start := time.Now()
 	defer func() {
 		r.readDuration += time.Since(start)
@@ -162,26 +163,41 @@ func (r *replayer) removeEntries(skipMap map[uint64]uint64) {
 	}
 }
 
-func (r *replayer) replayRecords() {
+func (r *replayer) replayOneEntry(e *entry.Entry) {
+	if !e.IsEnd() {
+		r.lastEntry = e
+	}
+	r.replayC <- e
+}
+
+func (r *replayer) replayLogEntries() {
 	defer r.wg.Done()
 	for {
-		e := <-r.recordChan
+		e := <-r.replayC
 		if e.IsEnd() {
 			if r.lastEntry == nil {
-				logutil.Info("Wal-Replay-Trace-Replay-End-Empty")
+				logutil.Info("Wal-Replay-End-Empty")
 			} else {
-				logutil.Info("Wal-Replay-Trace-Replay-End",
-					zap.Uint64("last-dsn", r.lastEntry.Lsn))
+				logutil.Info(
+					"Wal-Replay-End",
+					zap.Uint64("last-dsn", r.lastEntry.Lsn),
+				)
 			}
 			break
 		}
 		t0 := time.Now()
 		state := r.replayHandle(e)
+
 		if state == driver.RE_Nomal {
-			if !r.firstEntryIsFound.Load() {
-				logutil.Info("Wal-Replay-Trace-Find-First-Entry", zap.Uint64("dsn", e.Lsn))
+			if !r.anyApplied.Load() {
+				_, lsn := e.Entry.GetLsn()
+				logutil.Info(
+					"Wal-Replay-First-Entry",
+					zap.Uint64("dsn", e.Lsn),
+					zap.Uint64("lsn", lsn),
+				)
 			}
-			r.firstEntryIsFound.Store(true)
+			r.anyApplied.Store(true)
 		}
 		e.DoneWithErr(nil)
 		e.Entry.Free()
@@ -189,25 +205,34 @@ func (r *replayer) replayRecords() {
 	}
 }
 
-func (r *replayer) replayLogserviceEntry(dsn uint64) error {
+func (r *replayer) replayLogserviceEntry(
+	dsn uint64, allReaded bool,
+) error {
 	psn, ok := r.dsnToPSNMap[dsn]
+
+	// 1. if dsn is not found in the map
 	if !ok {
 		skipFn := func() {
 			if len(r.dsnToPSNMap) != 0 {
 				r.AppendSkipCmd(r.dsnToPSNMap)
 			}
 		}
-		firstEntryIsFound := r.firstEntryIsFound.Load()
-		if !firstEntryIsFound && r.lastEntry != nil {
+
+		anyApplied := r.anyApplied.Load()
+		if !anyApplied && r.lastEntry != nil {
 			r.lastEntry.WaitDone()
-			firstEntryIsFound = r.firstEntryIsFound.Load()
+			anyApplied = r.anyApplied.Load()
 		}
+
 		safe := dsn <= r.safeLsn
 		if safe {
-			if !firstEntryIsFound {
+			// [dsn not found && dsn <= safeLsn]
+
+			if !anyApplied {
 				logutil.Info(
-					"Wal-Replay-Trace-Skip-Entry",
+					"Wal-Replay-Skip-Entry",
 					zap.Uint64("dsn", dsn),
+					zap.Uint64("safe-dsn", r.safeLsn),
 				)
 				r.minDSN = dsn + 1
 				r.dsnWatermark++
@@ -219,15 +244,16 @@ func (r *replayer) replayLogserviceEntry(dsn uint64) error {
 				))
 			}
 		} else {
-			if !r.readEnd {
+			if !allReaded {
 				panic(fmt.Sprintf("logic error, safe dsn %d, dsn %d", r.safeLsn, dsn))
 			}
+			// [dsn not found && dsn > safeLsn && readDone]
 			skipFn()
 			return ErrAllRecordsRead
 		}
 	}
 	if !r.inited {
-		logutil.Info("Wal-Replay-Trace-Replay-First-Entry", zap.Uint64("dsn", dsn))
+		logutil.Info("Wal-Replay-First-Entry", zap.Uint64("dsn", dsn))
 	}
 	logRecord, err := r.d.readFromCache(psn)
 	if err == ErrAllRecordsRead {

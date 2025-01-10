@@ -27,8 +27,8 @@ import (
 type Entry struct {
 	Entry entry.Entry
 	Info  *entry.Info //for wal in post append
-	Lsn   uint64
-	Ctx   any //for addr in batchstore
+	Lsn   uint64      // here Lsn is the DSN
+	Ctx   any         //for addr in batchstore
 	err   error
 	wg    *sync.WaitGroup
 
