@@ -42,23 +42,36 @@ type driverInfo struct {
 	truncating             atomic.Uint64 //
 	truncatedLogserviceLsn uint64        //
 
-	appending  uint64
-	appended   *common.ClosedIntervals
-	appendedMu sync.RWMutex
+	// writeController is used to control the write token
+	// it controles the max write token issued and all finished write tokens
+	// to avoid too much pendding writes
+	// Example:
+	// maxIssuedToken = 100
+	// maxFinishedToken = 50
+	// maxPendding = 60
+	// then we can only issue another 10 write token to avoid too much pendding writes
+	// In the real world, the maxFinishedToken is always being updated and it is very
+	// rare to reach the maxPendding
+	writeController struct {
+		sync.RWMutex
+		// max write token issued
+		maxIssuedToken uint64
+		// all finished write tokens
+		finishedTokens *common.ClosedIntervals
+	}
+
 	commitCond sync.Cond
 	inReplay   bool
 }
 
 func newDriverInfo() *driverInfo {
-	return &driverInfo{
-		addr:        make(map[uint64]*common.ClosedIntervals),
-		validLsn:    roaring64.NewBitmap(),
-		addrMu:      sync.RWMutex{},
-		driverLsnMu: sync.RWMutex{},
-		appended:    common.NewClosedIntervals(),
-		appendedMu:  sync.RWMutex{},
-		commitCond:  *sync.NewCond(new(sync.Mutex)),
+	d := &driverInfo{
+		addr:       make(map[uint64]*common.ClosedIntervals),
+		validLsn:   roaring64.NewBitmap(),
+		commitCond: *sync.NewCond(new(sync.Mutex)),
 	}
+	d.writeController.finishedTokens = common.NewClosedIntervals()
+	return d
 }
 
 func (d *LogServiceDriver) GetCurrSeqNum() uint64 {
@@ -84,7 +97,7 @@ func (info *driverInfo) onReplay(r *replayer) {
 		info.truncating.Store(r.minDriverLsn - 1)
 	}
 	info.truncatedLogserviceLsn = r.truncatedLogserviceLsn
-	info.appended.TryMerge(common.NewClosedIntervalsBySlice(r.writeTokens))
+	info.writeController.finishedTokens.TryMerge(common.NewClosedIntervalsBySlice(r.writeTokens))
 }
 
 func (info *driverInfo) onReplayRecordEntry(lsn uint64, driverLsns *common.ClosedIntervals) {
@@ -142,13 +155,16 @@ func (info *driverInfo) getDriverLsn() uint64 {
 	return lsn
 }
 
-func (info *driverInfo) getAppended() uint64 {
-	info.appendedMu.RLock()
-	defer info.appendedMu.RUnlock()
-	if info.appended == nil || len(info.appended.Intervals) == 0 || info.appended.Intervals[0].Start != 1 {
+func (info *driverInfo) getMaxFinishedToken() uint64 {
+	info.writeController.RLock()
+	defer info.writeController.RUnlock()
+	finishedTokens := info.writeController.finishedTokens
+	if finishedTokens == nil ||
+		len(finishedTokens.Intervals) == 0 ||
+		finishedTokens.Intervals[0].Start != 1 {
 		return 0
 	}
-	return info.appended.Intervals[0].End
+	return finishedTokens.Intervals[0].End
 }
 
 func (info *driverInfo) applyWriteToken(
@@ -175,15 +191,16 @@ func (info *driverInfo) applyWriteToken(
 	return
 }
 
+// NOTE: must be called in serial
 func (info *driverInfo) tryApplyWriteToken(
 	maxPendding uint64,
 ) (token uint64, err error) {
-	appended := info.getAppended()
-	if info.appending-appended >= maxPendding {
+	maxFinishedToken := info.getMaxFinishedToken()
+	if info.writeController.maxIssuedToken-maxFinishedToken >= maxPendding {
 		return 0, ErrTooMuchPenddings
 	}
-	info.appending++
-	return info.appending, nil
+	info.writeController.maxIssuedToken++
+	return info.writeController.maxIssuedToken, nil
 }
 
 func (info *driverInfo) logAppend(appender *driverAppender) {
@@ -232,10 +249,10 @@ func (info *driverInfo) putbackWriteTokens(tokens []uint64) {
 	info.synced = info.syncing
 	info.syncedMu.Unlock()
 
-	appendedArray := common.NewClosedIntervalsBySlice(tokens)
-	info.appendedMu.Lock()
-	info.appended.TryMerge(appendedArray)
-	info.appendedMu.Unlock()
+	finishedToken := common.NewClosedIntervalsBySlice(tokens)
+	info.writeController.Lock()
+	info.writeController.finishedTokens.TryMerge(finishedToken)
+	info.writeController.Unlock()
 
 	info.commitCond.L.Lock()
 	info.commitCond.Broadcast()

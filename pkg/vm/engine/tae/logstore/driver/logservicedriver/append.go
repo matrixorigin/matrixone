@@ -71,8 +71,8 @@ func (d *LogServiceDriver) enqueueAppender(appender *driverAppender) {
 	})
 }
 
-// Node: this function is called in serial because it also allocates the global sequence number
-// the global sequence number(GSN) should be monotonically continuously increasing
+// Node:
+// this function must be called in serial due to the write token
 func (d *LogServiceDriver) getClient() (client *clientWithRecord, token uint64) {
 	var err error
 	if token, err = d.applyWriteToken(
