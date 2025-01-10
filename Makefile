@@ -117,6 +117,7 @@ build: config cgo thirdparties
 	$(info [Build binary])
 	$(CGO_OPTS) go build $(TAGS) $(RACE_OPT) $(GOLDFLAGS) $(DEBUG_OPT) -o $(BIN_NAME) ./cmd/mo-service
 
+# musl doesn't work anymore because it won't work with g++ which is required by usearch C++ code
 .PHONY: musl-install
 musl-install:
 ifeq ("$(UNAME_S)","Linux")
@@ -133,11 +134,14 @@ endif
 musl-cgo: musl-install
 	@(cd $(ROOT_DIR)/cgo; CC=$(MUSL_CC) ${MAKE} ${CGO_DEBUG_OPT})
 
+musl-thirdparties: musl-install
+	@(cd $(ROOT_DIR)/thirdparties; CC=$(MUSL_CC) CXX=g++ ${MAKE} ${CGO_DEBUG_OPT})
+	
 .PHONY: musl
 musl: override CGO_OPTS += CC=$(MUSL_CC)
-musl: override GOLDFLAGS:=-ldflags="--linkmode 'external' --extldflags '-static' -X '$(GO_MODULE)/pkg/version.GoVersion=$(GO_VERSION)' -X '$(GO_MODULE)/pkg/version.BranchName=$(BRANCH_NAME)' -X '$(GO_MODULE)/pkg/version.CommitID=$(LAST_COMMIT_ID)' -X '$(GO_MODULE)/pkg/version.BuildTime=$(BUILD_TIME)' -X '$(GO_MODULE)/pkg/version.Version=$(MO_VERSION)'"
+musl: override GOLDFLAGS:=-ldflags="--linkmode 'external' --extldflags '-L$(THIRDPARTIES_INSTALL_DIR)/lib -Wl,-rpath,$(THIRDPARTIES_INSTALL_DIR)/lib' -X '$(GO_MODULE)/pkg/version.GoVersion=$(GO_VERSION)' -X '$(GO_MODULE)/pkg/version.BranchName=$(BRANCH_NAME)' -X '$(GO_MODULE)/pkg/version.CommitID=$(LAST_COMMIT_ID)' -X '$(GO_MODULE)/pkg/version.BuildTime=$(BUILD_TIME)' -X '$(GO_MODULE)/pkg/version.Version=$(MO_VERSION)'"
 musl: override TAGS := -tags musl
-musl: musl-install musl-cgo config
+musl: musl-install musl-cgo config musl-thirdparties
 musl:
 	$(info [Build binary(musl)])
 	$(CGO_OPTS) go build $(TAGS) $(RACE_OPT) $(GOLDFLAGS) $(DEBUG_OPT) -o $(BIN_NAME) ./cmd/mo-service
