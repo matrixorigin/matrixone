@@ -78,13 +78,13 @@ func TestIsRecordExisted(t *testing.T) {
 
 	ctx := context.TODO()
 	// Assuming index 12 is for 'request_at', adding a mock value for it
-	record := []string{"12345", "", "", "", "", "", "", "", "", "", "", "", "2021-10-10 10:00:00", "", "", "active"}
+	record := []string{"12345", "", "", "sys", "", "", "", "", "", "", "", "", "2021-10-10 10:00:00", "", "", "active"}
 	table := &table.Table{Table: "statement_info"}
 
 	// Set up your mock expectations
 	mock.ExpectQuery(regexp.QuoteMeta(
-		"SELECT EXISTS(SELECT 1 FROM `system`.statement_info WHERE statement_id = ? AND status = ? AND request_at = ?)",
-	)).WithArgs(record[0], record[15], record[12]).WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+		"SELECT EXISTS(SELECT 1 FROM `system`.statement_info WHERE statement_id = ? AND status = ? AND request_at = ? AND account = ?)",
+	)).WithArgs(record[0], record[15], record[12], "sys").WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
 
 	// Define a function that returns the mocked DB connection
 	getDBConn := func(forceNewConn bool, randomCN bool) (*sql.DB, error) {

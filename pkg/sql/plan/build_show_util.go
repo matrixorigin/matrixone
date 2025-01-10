@@ -172,7 +172,12 @@ func ConstructCreateTableSQL(ctx CompilerContext, tableDef *plan.TableDef, snaps
 
 			var indexStr string
 			if !indexdef.Unique && catalog.IsFullTextIndexAlgo(indexdef.IndexAlgo) {
-				indexStr += " FULLTEXT("
+				indexStr += " FULLTEXT "
+
+				if len(indexdef.IndexName) > 0 {
+					indexStr += fmt.Sprintf("`%s`", formatStr(indexdef.IndexName))
+				}
+				indexStr += "("
 				i := 0
 				for _, part := range indexdef.Parts {
 					if catalog.IsAlias(part) {

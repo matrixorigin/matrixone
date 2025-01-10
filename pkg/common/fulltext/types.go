@@ -14,6 +14,8 @@
 
 package fulltext
 
+import "strings"
+
 /*
 The following examples demonstrate some search strings that use boolean full-text operators:
 
@@ -48,23 +50,40 @@ Find rows that contain words such as “apple”, “apples”, “applesauce”
 '"some words"'
 
 Find rows that contain the exact phrase “some words” (for example, rows that contain “some words of wisdom” but not “some noise words”). Note that the " characters that enclose the phrase are operator characters that delimit the phrase. They are not the quotation marks that enclose the search string itself.
+
+
+# Step 1
+Pattern/Plan is generated from search string.
+
+In boolean mode,
+
+search string: 'Matrix Origin' -> pattern: "(text 0 matrix) (text 1 origin)"
+search string: '"Matrix Origin"' -> pattern: "(phrase (text 0 0 matrix) (text 1 7 origin))"
+search string: '+Matrix +Origin' -> pattern: "(join 0 (+ (text 0 matrix)) (+ (text 0 origin)))"
+search string: '+读写汉字 -学中文' -> pattern: "(+ (text 0 读写汉字)) (- (text 1 学中文))"
+search string: 'Matrix +(<Origin >One)' -> pattern: "(+ (group (< (text 0 origin)) (> (text 1 one)))) (text 2 matrix)"
+
+In natural language mode,
+
+search string: '读写汉字 学中文' -> pattern: "(text 0 0 读写汉) (text 1 3 写汉字) (* 2 6 汉字*) (* 3 9 字*) (text 4 13 学中文) (* 5 16 中文*) (* 6 19 文*)"
+
+# Step 2
+
+Generate the SQL from pattern
+
+# Step 3
+
+Run the SQL and get the statistics
+
+# Step 4
+
+Run Eval() to get final answer and score
+
 */
 
 // Parser parameters
 type FullTextParserParam struct {
 	Parser string `json:"parser"`
-}
-
-// Word is associated with particular DocId (index.doc_id) and could have multiple positions
-type Word struct {
-	DocId    any
-	Position []int32
-	DocCount int32
-}
-
-// Word accumulator accumulate the same word appeared in multiple (index.doc_id).
-type WordAccum struct {
-	Words map[any]*Word
 }
 
 // Search accumulator is to parse the search string into list of pattern and each pattern will associate with WordAccum by pattern.Text
@@ -74,8 +93,8 @@ type SearchAccum struct {
 	Mode       int64
 	Pattern    []*Pattern
 	Params     string
-	WordAccums map[string]*WordAccum
 	Nrow       int64
+	Nkeywords  int
 }
 
 // Boolean mode search string parsing
@@ -91,6 +110,7 @@ var (
 	RANKLESS    = 6
 	GROUP       = 7
 	PHRASE      = 8
+	JOIN        = 9
 )
 
 func OperatorToString(op int) string {
@@ -113,6 +133,8 @@ func OperatorToString(op int) string {
 		return "group"
 	case PHRASE:
 		return "phrase"
+	case JOIN:
+		return "join"
 	default:
 		return ""
 	}
@@ -124,4 +146,41 @@ type Pattern struct {
 	Operator int
 	Children []*Pattern
 	Position int32
+	Index    int32
+}
+
+func PatternListToString(ps []*Pattern) string {
+	ss := make([]string, 0, len(ps))
+	for _, p := range ps {
+		ss = append(ss, p.String())
+	}
+
+	return strings.Join(ss, " ")
+}
+
+func PatternToString(pattern string, mode int64) (string, error) {
+	ps, err := ParsePattern(pattern, mode)
+	if err != nil {
+		return "", err
+	}
+
+	return PatternListToString(ps), nil
+}
+
+func PatternListToStringWithPosition(ps []*Pattern) string {
+	ss := make([]string, 0, len(ps))
+	for _, p := range ps {
+		ss = append(ss, p.StringWithPosition())
+	}
+
+	return strings.Join(ss, " ")
+}
+
+func PatternToStringWithPosition(pattern string, mode int64) (string, error) {
+	ps, err := ParsePattern(pattern, mode)
+	if err != nil {
+		return "", err
+	}
+
+	return PatternListToStringWithPosition(ps), nil
 }

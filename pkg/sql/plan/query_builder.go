@@ -1842,6 +1842,7 @@ func (builder *QueryBuilder) rewriteStarApproxCount(nodeID int32) {
 }
 
 func (builder *QueryBuilder) createQuery() (*Query, error) {
+	var err error
 	colRefBool := make(map[[2]int32]bool)
 	sinkColRef := make(map[[2]int32]int)
 
@@ -1896,7 +1897,10 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		}
 		// after determine shuffle, be careful when calling ReCalcNodeStats again.
 		// needResetHashMapStats should always be false from here
-		rootID = builder.applyIndices(rootID, colRefCnt, make(map[[2]int32]*plan.Expr))
+		rootID, err = builder.applyIndices(rootID, colRefCnt, make(map[[2]int32]*plan.Expr))
+		if err != nil {
+			return nil, err
+		}
 		ReCalcNodeStats(rootID, builder, true, false, false)
 
 		builder.generateRuntimeFilters(rootID)
@@ -1940,13 +1944,13 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 				colRefCnt[[2]int32{resultTag, int32(j)}] = 1
 			}
 		}
-		_, err := builder.remapAllColRefs(rootID, int32(i), colRefCnt, colRefBool, sinkColRef)
+		_, err = builder.remapAllColRefs(rootID, int32(i), colRefCnt, colRefBool, sinkColRef)
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	err := builder.lockTableIfLockNoRowsAtTheEndForDelAndUpdate()
+	err = builder.lockTableIfLockNoRowsAtTheEndForDelAndUpdate()
 	if err != nil {
 		return nil, err
 	}
