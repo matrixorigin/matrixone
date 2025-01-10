@@ -3891,6 +3891,12 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 				return rtnErr
 			}
 		}
+
+		// update pitr
+		rtnErr = updatePitrObjectId(ctx, bh, da.Name, uint64(accountId))
+		if rtnErr != nil {
+			return rtnErr
+		}
 		return rtnErr
 	}
 
@@ -7447,11 +7453,6 @@ func InitGeneralTenant(ctx context.Context, bh BackgroundExec, ses *Session, ca 
 			return rtnErr
 		}
 		rtnErr = createTablesInInformationSchemaOfGeneralTenant(newTenantCtx, bh)
-		if rtnErr != nil {
-			return rtnErr
-		}
-
-		rtnErr = updatePitrObjectId(ctx, bh, newTenant.GetTenant(), uint64(newTenant.GetTenantID()))
 		if rtnErr != nil {
 			return rtnErr
 		}
