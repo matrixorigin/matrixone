@@ -29,10 +29,11 @@ func NewStringReader(str string) io.Reader {
 	return strings.NewReader(str)
 }
 
-func newStringField(val string, isNull bool) Field {
+func newStringField(val string, isNull bool, hasStringQuote bool) Field {
 	return Field{
-		Val:    val,
-		IsNull: isNull,
+		Val:            val,
+		IsNull:         isNull,
+		HasStringQuote: hasStringQuote,
 	}
 }
 func assertPosEqual(t *testing.T, parser *CSVParser, pos int64) {
@@ -41,37 +42,37 @@ func assertPosEqual(t *testing.T, parser *CSVParser, pos int64) {
 func tpchDatums() [][]Field {
 	datums := make([][]Field, 0, 3)
 	datums = append(datums, []Field{
-		newStringField("1", false),
-		newStringField("goldenrod lavender spring chocolate lace", false),
-		newStringField("Manufacturer#1", false),
-		newStringField("Brand#13", false),
-		newStringField("PROMO BURNISHED COPPER", false),
-		newStringField("7", false),
-		newStringField("JUMBO PKG", false),
-		newStringField("901.00", false),
-		newStringField("ly. slyly ironi", false),
+		newStringField("1", false, false),
+		newStringField("goldenrod lavender spring chocolate lace", false, false),
+		newStringField("Manufacturer#1", false, false),
+		newStringField("Brand#13", false, false),
+		newStringField("PROMO BURNISHED COPPER", false, false),
+		newStringField("7", false, false),
+		newStringField("JUMBO PKG", false, false),
+		newStringField("901.00", false, false),
+		newStringField("ly. slyly ironi", false, false),
 	})
 	datums = append(datums, []Field{
-		newStringField("2", false),
-		newStringField("blush thistle blue yellow saddle", false),
-		newStringField("Manufacturer#1", false),
-		newStringField("Brand#13", false),
-		newStringField("LARGE BRUSHED BRASS", false),
-		newStringField("1", false),
-		newStringField("LG CASE", false),
-		newStringField("902.00", false),
-		newStringField("lar accounts amo", false),
+		newStringField("2", false, false),
+		newStringField("blush thistle blue yellow saddle", false, false),
+		newStringField("Manufacturer#1", false, false),
+		newStringField("Brand#13", false, false),
+		newStringField("LARGE BRUSHED BRASS", false, false),
+		newStringField("1", false, false),
+		newStringField("LG CASE", false, false),
+		newStringField("902.00", false, false),
+		newStringField("lar accounts amo", false, false),
 	})
 	datums = append(datums, []Field{
-		newStringField("3", false),
-		newStringField("spring green yellow purple cornsilk", false),
-		newStringField("Manufacturer#4", false),
-		newStringField("Brand#42", false),
-		newStringField("STANDARD POLISHED BRASS", false),
-		newStringField("21", false),
-		newStringField("WRAP CASE", false),
-		newStringField("903.00", false),
-		newStringField("egular deposits hag", false),
+		newStringField("3", false, false),
+		newStringField("spring green yellow purple cornsilk", false, false),
+		newStringField("Manufacturer#4", false, false),
+		newStringField("Brand#42", false, false),
+		newStringField("STANDARD POLISHED BRASS", false, false),
+		newStringField("21", false, false),
+		newStringField("WRAP CASE", false, false),
+		newStringField("903.00", false, false),
+		newStringField("egular deposits hag", false, false),
 	})
 
 	return datums
@@ -191,7 +192,11 @@ func TestTPCHMultiBytes(t *testing.T) {
 		for i, expectedParserPos := range allExpectedParserPos {
 			row, err := parser.Read(nil)
 			require.Nil(t, err)
-			require.Equal(t, datums[i], row)
+			require.Equal(t, len(datums[i]), len(row))
+			for j := range row {
+				require.Equal(t, datums[i][j].Val, row[j].Val)
+				require.Equal(t, datums[i][j].IsNull, row[j].IsNull)
+			}
 			assertPosEqual(t, parser, int64(expectedParserPos))
 		}
 
@@ -249,18 +254,18 @@ func TestRFC4180(t *testing.T) {
 	row, err = parser.Read(nil)
 	require.Nil(t, err)
 	require.Equal(t, []Field{
-		newStringField("aaa", false),
-		newStringField("bbb", false),
-		newStringField("ccc", false),
+		newStringField("aaa", false, false),
+		newStringField("bbb", false, false),
+		newStringField("ccc", false, false),
 	}, row)
 	assertPosEqual(t, parser, 12)
 
 	row, err = parser.Read(nil)
 	require.Nil(t, err)
 	require.Equal(t, []Field{
-		newStringField("zzz", false),
-		newStringField("yyy", false),
-		newStringField("xxx", false),
+		newStringField("zzz", false, false),
+		newStringField("yyy", false, false),
+		newStringField("xxx", false, false),
 	}, row)
 	assertPosEqual(t, parser, 24)
 
@@ -272,18 +277,18 @@ func TestRFC4180(t *testing.T) {
 	row, err = parser.Read(nil)
 	require.Nil(t, err)
 	require.Equal(t, []Field{
-		newStringField("aaa", false),
-		newStringField("bbb", false),
-		newStringField("ccc", false),
+		newStringField("aaa", false, false),
+		newStringField("bbb", false, false),
+		newStringField("ccc", false, false),
 	}, row)
 	assertPosEqual(t, parser, 12)
 
 	row, err = parser.Read(nil)
 	require.Nil(t, err)
 	require.Equal(t, []Field{
-		newStringField("zzz", false),
-		newStringField("yyy", false),
-		newStringField("xxx", false),
+		newStringField("zzz", false, false),
+		newStringField("yyy", false, false),
+		newStringField("xxx", false, false),
 	}, row)
 	assertPosEqual(t, parser, 23)
 
@@ -295,18 +300,18 @@ func TestRFC4180(t *testing.T) {
 	row, err = parser.Read(nil)
 	require.Nil(t, err)
 	require.Equal(t, []Field{
-		newStringField("aaa", false),
-		newStringField("bbb", false),
-		newStringField("ccc", false),
+		newStringField("aaa", false, true),
+		newStringField("bbb", false, true),
+		newStringField("ccc", false, true),
 	}, row)
 	assertPosEqual(t, parser, 18)
 
 	row, err = parser.Read(nil)
 	require.Nil(t, err)
 	require.Equal(t, []Field{
-		newStringField("zzz", false),
-		newStringField("yyy", false),
-		newStringField("xxx", false),
+		newStringField("zzz", false, false),
+		newStringField("yyy", false, false),
+		newStringField("xxx", false, false),
 	}, row)
 	assertPosEqual(t, parser, 29)
 
@@ -320,18 +325,18 @@ zzz,yyy,xxx`), int64(ReadBlockSize), false)
 	row, err = parser.Read(nil)
 	require.Nil(t, err)
 	require.Equal(t, []Field{
-		newStringField("aaa", false),
-		newStringField("b\nbb", false),
-		newStringField("ccc", false),
+		newStringField("aaa", false, true),
+		newStringField("b\nbb", false, true),
+		newStringField("ccc", false, true),
 	}, row)
 	assertPosEqual(t, parser, 19)
 
 	row, err = parser.Read(nil)
 	require.Nil(t, err)
 	require.Equal(t, []Field{
-		newStringField("zzz", false),
-		newStringField("yyy", false),
-		newStringField("xxx", false),
+		newStringField("zzz", false, false),
+		newStringField("yyy", false, false),
+		newStringField("xxx", false, false),
 	}, row)
 	assertPosEqual(t, parser, 30)
 
@@ -343,9 +348,9 @@ zzz,yyy,xxx`), int64(ReadBlockSize), false)
 	row, err = parser.Read(nil)
 	require.Nil(t, err)
 	require.Equal(t, []Field{
-		newStringField("aaa", false),
-		newStringField("b\"bb", false),
-		newStringField("ccc", false),
+		newStringField("aaa", false, true),
+		newStringField("b\"bb", false, true),
+		newStringField("ccc", false, true),
 	}, row)
 	assertPosEqual(t, parser, 19)
 
@@ -357,9 +362,9 @@ zzz,yyy,xxx`), int64(ReadBlockSize), false)
 	require.Nil(t, err)
 	require.Equal(t, 0, len(parser.columns))
 	require.Equal(t, []Field{
-		newStringField("zzz", false),
-		newStringField("yyy", false),
-		newStringField("xxx", false),
+		newStringField("zzz", false, false),
+		newStringField("yyy", false, false),
+		newStringField("xxx", false, false),
 	}, row)
 
 	cfg.HeaderSchemaMatch = true
@@ -370,9 +375,9 @@ zzz,yyy,xxx`), int64(ReadBlockSize), false)
 	require.Nil(t, err)
 	require.Equal(t, []string{"aaa", "bbb", "ccc"}, parser.columns)
 	require.Equal(t, []Field{
-		newStringField("zzz", false),
-		newStringField("yyy", false),
-		newStringField("xxx", false),
+		newStringField("zzz", false, false),
+		newStringField("yyy", false, false),
+		newStringField("xxx", false, false),
 	}, row)
 
 }
@@ -397,9 +402,9 @@ func TestMySQL(t *testing.T) {
 	row, err = parser.Read(nil)
 	require.NoError(t, err)
 	require.Equal(t, []Field{
-		newStringField(`"`, false),
-		newStringField(`\`, false),
-		newStringField("?", false),
+		newStringField(`"`, false, true),
+		newStringField(`\`, false, true),
+		newStringField("?", false, true),
 	}, row)
 
 	assertPosEqual(t, parser, 15)
@@ -408,9 +413,9 @@ func TestMySQL(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Equal(t, []Field{
-		newStringField("\n", false),
-		newStringField("\\N", true),
-		newStringField(`\N`, false),
+		newStringField("\n", false, true),
+		newStringField("\\N", true, false),
+		newStringField(`\N`, false, false),
 	}, row)
 
 	assertPosEqual(t, parser, 26)
@@ -424,7 +429,7 @@ func TestMySQL(t *testing.T) {
 	row, err = parser.Read(nil)
 	require.NoError(t, err)
 	require.Equal(t, []Field{
-		newStringField(string([]byte{0, '\b', '\n', '\r', '\t', 26, '\\', ' ', ' ', 'c', '\'', '"'}), false),
+		newStringField(string([]byte{0, '\b', '\n', '\r', '\t', 26, '\\', ' ', ' ', 'c', '\'', '"'}), false, true),
 	}, row)
 
 	cfg.UnescapedQuote = true
@@ -438,9 +443,9 @@ func TestMySQL(t *testing.T) {
 	row, err = parser.Read(nil)
 	require.NoError(t, err)
 	require.Equal(t, []Field{
-		newStringField("3", false),
-		newStringField(`a string containing a " quote`, false),
-		newStringField("102.20", false),
+		newStringField("3", false, false),
+		newStringField(`a string containing a " quote`, false, true),
+		newStringField("102.20", false, false),
 	}, row)
 
 	parser, err = NewCSVParser(
@@ -452,9 +457,9 @@ func TestMySQL(t *testing.T) {
 	row, err = parser.Read(nil)
 	require.NoError(t, err)
 	require.Equal(t, []Field{
-		newStringField("3", false),
-		newStringField(`a string containing a " quote`, false),
-		newStringField("102.20", false),
+		newStringField("3", false, false),
+		newStringField(`a string containing a " quote`, false, true),
+		newStringField("102.20", false, true),
 	}, row)
 
 	parser, err = NewCSVParser(
@@ -466,8 +471,8 @@ func TestMySQL(t *testing.T) {
 	row, err = parser.Read(nil)
 	require.NoError(t, err)
 	require.Equal(t, []Field{
-		newStringField(`a"b`, false),
-		newStringField(`c"d"e`, false),
+		newStringField(`a"b`, false, true),
+		newStringField(`c"d"e`, false, false),
 	}, row)
 }
 
@@ -490,18 +495,18 @@ func TestCustomEscapeChar(t *testing.T) {
 	row, err = parser.Read(nil)
 	require.Nil(t, err)
 	require.Equal(t, []Field{
-		newStringField(`"`, false),
-		newStringField(`!`, false),
-		newStringField(`\`, false),
+		newStringField(`"`, false, true),
+		newStringField(`!`, false, true),
+		newStringField(`\`, false, true),
 	}, row)
 	assertPosEqual(t, parser, 15)
 
 	row, err = parser.Read(nil)
 	require.Nil(t, err)
 	require.Equal(t, []Field{
-		newStringField("\n", false),
-		newStringField(`!N`, true),
-		newStringField(`!N`, false),
+		newStringField("\n", false, true),
+		newStringField(`!N`, true, false),
+		newStringField(`!N`, false, false),
 	}, row)
 	assertPosEqual(t, parser, 26)
 
@@ -522,6 +527,6 @@ func TestCustomEscapeChar(t *testing.T) {
 	row, err = parser.Read(nil)
 	require.Nil(t, err)
 	require.Equal(t, []Field{
-		newStringField(`{"itemRangeType":0,"itemContainType":0,"shopRangeType":1,"shopJson":"[{\"id\":\"A1234\",\"shopName\":\"AAAAAA\"}]"}`, false),
+		newStringField(`{"itemRangeType":0,"itemContainType":0,"shopRangeType":1,"shopJson":"[{\"id\":\"A1234\",\"shopName\":\"AAAAAA\"}]"}`, false, true),
 	}, row)
 }
