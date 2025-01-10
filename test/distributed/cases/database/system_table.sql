@@ -41,7 +41,9 @@ show columns from `CHARACTER_SETS`;
 -- @ignore:0
 show columns from `TRIGGERS`;
 show columns from `TABLES`;
+-- @bvt:issue#16438
 show columns from `PARTITIONS`;
+-- @bvt:issue
 
 use mo_catalog;
 # show columns from `mo_cdc_task`;
