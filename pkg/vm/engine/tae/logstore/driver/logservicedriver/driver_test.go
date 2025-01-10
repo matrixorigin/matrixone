@@ -43,11 +43,11 @@ func restartDriver(t *testing.T, d *LogServiceDriver, h func(*entry.Entry)) *Log
 	assert.NoError(t, d.Close())
 	t.Log("Addr:")
 	// preAddr:=d.addr
-	for lsn, intervals := range d.psnMap {
+	for lsn, intervals := range d.psn.dsnMap {
 		t.Logf("%d %v", lsn, intervals)
 	}
 	// preLsns:=d.validPSN
-	t.Logf("Valid lsn: %v", d.validPSN)
+	t.Logf("Valid lsn: %v", d.psn.records)
 	t.Logf("Driver Lsn %d, Syncing %d, Synced %d", d.dsn, d.syncing, d.synced)
 	t.Logf("Truncated %d", d.truncateDSNIntent.Load())
 	t.Logf("LSTruncated %d", d.truncatedPSN)
@@ -65,7 +65,7 @@ func restartDriver(t *testing.T, d *LogServiceDriver, h func(*entry.Entry)) *Log
 	})
 	assert.NoError(t, err)
 	t.Log("Addr:")
-	for lsn, intervals := range d.psnMap {
+	for lsn, intervals := range d.psn.dsnMap {
 		t.Logf("%d %v", lsn, intervals)
 	}
 	// assert.Equal(t,len(preAddr),len(d.addr))
@@ -75,7 +75,7 @@ func restartDriver(t *testing.T, d *LogServiceDriver, h func(*entry.Entry)) *Log
 	// 	assert.Equal(t,intervals.Intervals[0].Start,replayedInterval.Intervals[0].Start)
 	// 	assert.Equal(t,intervals.Intervals[0].End,replayedInterval.Intervals[0].End)
 	// }
-	t.Logf("Valid lsn: %v", d.validPSN)
+	t.Logf("Valid lsn: %v", d.psn.records)
 	// assert.Equal(t,preLsns.GetCardinality(),d.validPSN.GetCardinality())
 	t.Logf("Driver Lsn %d, Syncing %d, Synced %d", d.dsn, d.syncing, d.synced)
 	t.Logf("Truncated %d", d.truncateDSNIntent.Load())

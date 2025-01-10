@@ -56,21 +56,20 @@ func (d *LogServiceDriver) doTruncate() {
 	truncatedPSN := d.truncatedPSN
 	psnIntent := truncatedPSN
 
-	//TODO use valid lsn
-	next := d.getNextValidPSN(psnIntent)
+	nextValidPSN := d.getNextValidPSN(psnIntent)
 	loopCount := 0
-	for d.isToTruncate(next, dsnIntent) {
+	for d.isToTruncate(nextValidPSN, dsnIntent) {
 		loopCount++
-		psnIntent = next
-		next = d.getNextValidPSN(psnIntent)
-		if next <= psnIntent {
+		psnIntent = nextValidPSN
+		nextValidPSN = d.getNextValidPSN(psnIntent)
+		if nextValidPSN <= psnIntent {
 			break
 		}
 	}
-	d.psnmu.RLock()
-	minPSN := d.validPSN.Minimum()
-	maxPSN := d.validPSN.Maximum()
-	d.psnmu.RUnlock()
+	d.psn.mu.RLock()
+	minPSN := d.psn.records.Minimum()
+	maxPSN := d.psn.records.Maximum()
+	d.psn.mu.RUnlock()
 	logutil.Info(
 		"Wal-Truncate",
 		zap.Int("loop-count", loopCount),

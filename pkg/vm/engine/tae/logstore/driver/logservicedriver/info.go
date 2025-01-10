@@ -32,11 +32,13 @@ var ErrDSNNotFound = moerr.NewInternalErrorNoCtx("dsn not found")
 var ErrRetryTimeOut = moerr.NewInternalErrorNoCtx("retry time out")
 
 type driverInfo struct {
-	// PSN -> [DSN,..]
-	psnMap map[uint64]*common.ClosedIntervals //logservicelsn-driverlsn TODO drop on truncate
 	// PSN: physical sequence number. here is the lsn from logservice
-	validPSN roaring64.Bitmap
-	psnmu    sync.RWMutex
+	psn struct {
+		mu sync.RWMutex
+		// key: PSN, value: DSNs
+		dsnMap  map[uint64]*common.ClosedIntervals
+		records roaring64.Bitmap
+	}
 
 	// dsn: driver sequence number
 	// it is monotonically continuously increasing
@@ -76,9 +78,9 @@ type driverInfo struct {
 
 func newDriverInfo() *driverInfo {
 	d := &driverInfo{
-		psnMap:     make(map[uint64]*common.ClosedIntervals),
 		commitCond: *sync.NewCond(new(sync.Mutex)),
 	}
+	d.psn.dsnMap = make(map[uint64]*common.ClosedIntervals)
 	d.writeController.finishedTokens = common.NewClosedIntervals()
 	return d
 }
@@ -113,22 +115,25 @@ func (info *driverInfo) onReplay(r *replayer) {
 func (info *driverInfo) onReplayRecordEntry(
 	psn uint64, dsns *common.ClosedIntervals,
 ) {
-	info.psnMap[psn] = dsns
-	info.validPSN.Add(psn)
+	info.psn.dsnMap[psn] = dsns
+	info.psn.records.Add(psn)
 }
 
 func (info *driverInfo) getNextValidPSN(psn uint64) uint64 {
-	info.psnmu.RLock()
-	defer info.psnmu.RUnlock()
-	if info.validPSN.IsEmpty() {
+	info.psn.mu.RLock()
+	defer info.psn.mu.RUnlock()
+	if info.psn.records.IsEmpty() {
 		return 0
 	}
-	maxPSN := info.validPSN.Maximum()
+	maxPSN := info.psn.records.Maximum()
+	// [psn >= maxPSN]
 	if psn >= maxPSN {
 		return maxPSN
 	}
+	// [psn < maxPSN]
+	// PXU TODO: psn++???
 	psn++
-	for !info.validPSN.Contains(psn) {
+	for !info.psn.records.Contains(psn) {
 		psn++
 	}
 	return psn
@@ -136,21 +141,25 @@ func (info *driverInfo) getNextValidPSN(psn uint64) uint64 {
 
 func (info *driverInfo) isToTruncate(psn, dsn uint64) bool {
 	maxDSN := info.getMaxDSN(psn)
+
+	// psn cannot be found in the psn.dsnMap
 	if maxDSN == 0 {
 		return false
 	}
+
+	// the maxDSN of the psn is less equal to the dsn
 	return maxDSN <= dsn
 }
 
 func (info *driverInfo) getMaxDSN(psn uint64) uint64 {
-	info.psnmu.RLock()
-	intervals, ok := info.psnMap[psn]
+	info.psn.mu.RLock()
+	intervals, ok := info.psn.dsnMap[psn]
 	if !ok {
-		info.psnmu.RUnlock()
+		info.psn.mu.RUnlock()
 		return 0
 	}
 	lsn := intervals.GetMax()
-	info.psnmu.RUnlock()
+	info.psn.mu.RUnlock()
 	return lsn
 }
 
@@ -208,15 +217,15 @@ func (info *driverInfo) tryApplyWriteToken(
 }
 
 func (info *driverInfo) logAppend(appender *driverAppender) {
-	info.psnmu.Lock()
+	info.psn.mu.Lock()
 	array := make([]uint64, 0, len(appender.entry.Meta.addr))
 	for key := range appender.entry.Meta.addr {
 		array = append(array, key)
 	}
-	info.validPSN.Add(appender.logserviceLsn)
+	info.psn.records.Add(appender.logserviceLsn)
 	interval := common.NewClosedIntervalsBySlice(array)
-	info.psnMap[appender.logserviceLsn] = interval
-	info.psnmu.Unlock()
+	info.psn.dsnMap[appender.logserviceLsn] = interval
+	info.psn.mu.Unlock()
 	if interval.GetMin() != info.syncing+1 {
 		panic(fmt.Sprintf("logic err, expect %d, min is %d", info.syncing+1, interval.GetMin()))
 	}
@@ -228,21 +237,21 @@ func (info *driverInfo) logAppend(appender *driverAppender) {
 }
 
 func (info *driverInfo) gcPSN(psn uint64) {
-	info.psnmu.Lock()
-	defer info.psnmu.Unlock()
+	info.psn.mu.Lock()
+	defer info.psn.mu.Unlock()
 	candidates := make([]uint64, 0)
 	// collect all the PSN that is less than the given PSN
-	for sn := range info.psnMap {
+	for sn := range info.psn.dsnMap {
 		if sn < psn {
 			candidates = append(candidates, sn)
 		}
 	}
 	// remove 0 to the given PSN from the validPSN
-	info.validPSN.RemoveRange(0, psn)
+	info.psn.records.RemoveRange(0, psn)
 
 	// remove the PSN from the map
 	for _, lsn := range candidates {
-		delete(info.psnMap, lsn)
+		delete(info.psn.dsnMap, lsn)
 	}
 }
 
@@ -295,11 +304,11 @@ func (info *driverInfo) getPSNByDSNWithRetry(
 }
 
 func (info *driverInfo) getPSNByDSN(dsn uint64) (uint64, error) {
-	info.psnmu.RLock()
-	defer info.psnmu.RUnlock()
-	for lsn, intervals := range info.psnMap {
+	info.psn.mu.RLock()
+	defer info.psn.mu.RUnlock()
+	for psn, intervals := range info.psn.dsnMap {
 		if intervals.Contains(*common.NewClosedIntervalsByInt(dsn)) {
-			return lsn, nil
+			return psn, nil
 		}
 	}
 	return 0, ErrDSNNotFound
