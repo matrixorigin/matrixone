@@ -1593,7 +1593,7 @@ func CalcNodeDOP(p *plan.Plan, rootID int32, ncpu int32, lencn int) {
 	for i := range node.Children {
 		CalcNodeDOP(p, node.Children[i], ncpu, lencn)
 	}
-	if node.Stats.HashmapStats.Shuffle && node.NodeType != plan.Node_TABLE_SCAN {
+	if node.Stats.HashmapStats != nil && node.Stats.HashmapStats.Shuffle && node.NodeType != plan.Node_TABLE_SCAN {
 		if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_DEDUP {
 			node.Stats.Dop = ncpu
 		} else {
