@@ -43,7 +43,7 @@ func restartDriver(t *testing.T, d *LogServiceDriver, h func(*entry.Entry)) *Log
 	assert.NoError(t, d.Close())
 	t.Log("Addr:")
 	// preAddr:=d.addr
-	for lsn, intervals := range d.addr {
+	for lsn, intervals := range d.psnMap {
 		t.Logf("%d %v", lsn, intervals)
 	}
 	// preLsns:=d.validPSN
@@ -65,7 +65,7 @@ func restartDriver(t *testing.T, d *LogServiceDriver, h func(*entry.Entry)) *Log
 	})
 	assert.NoError(t, err)
 	t.Log("Addr:")
-	for lsn, intervals := range d.addr {
+	for lsn, intervals := range d.psnMap {
 		t.Logf("%d %v", lsn, intervals)
 	}
 	// assert.Equal(t,len(preAddr),len(d.addr))

@@ -44,30 +44,30 @@ func newReadCache() *readCache {
 	}
 }
 
-func (d *LogServiceDriver) Read(drlsn uint64) (*entry.Entry, error) {
-	lsn, err := d.tryGetLogServiceLsnByDriverLsn(drlsn)
+func (d *LogServiceDriver) Read(dsn uint64) (*entry.Entry, error) {
+	psn, err := d.getPSNByDSNWithRetry(dsn, 10)
 	if err != nil {
 		panic(err)
 	}
 	d.readMu.RLock()
-	r, err := d.readFromCache(lsn)
+	r, err := d.readFromCache(psn)
 	d.readMu.RUnlock()
 	if err != nil {
 		d.readMu.Lock()
-		r, err = d.readFromCache(lsn)
+		r, err = d.readFromCache(psn)
 		if err == nil {
 			d.readMu.Unlock()
-			return r.readEntry(drlsn), nil
+			return r.readEntry(dsn), nil
 		}
-		d.readSmallBatchFromLogService(lsn)
-		r, err = d.readFromCache(lsn)
+		d.readSmallBatchFromLogService(psn)
+		r, err = d.readFromCache(psn)
 		if err != nil {
-			logutil.Debugf("try read %d", lsn)
+			logutil.Debugf("try read %d", psn)
 			panic(err)
 		}
 		d.readMu.Unlock()
 	}
-	return r.readEntry(drlsn), nil
+	return r.readEntry(dsn), nil
 }
 
 func (d *LogServiceDriver) readFromCache(lsn uint64) (*recordEntry, error) {

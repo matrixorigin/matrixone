@@ -66,7 +66,7 @@ type replayer struct {
 }
 
 func newReplayer(h driver.ApplyHandle, readmaxsize int, d *LogServiceDriver) *replayer {
-	truncated := d.getLogserviceTruncate()
+	truncated := d.getTruncatedPSNFromRemote()
 	logutil.Info("Wal-Replay-Trace-Get-Truncated", zap.Uint64("psn", truncated))
 	r := &replayer{
 		minDriverLsn:              math.MaxUint64,

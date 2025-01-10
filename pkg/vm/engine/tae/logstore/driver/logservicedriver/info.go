@@ -25,17 +25,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"go.uber.org/zap"
 )
 
-var ErrDriverLsnNotFound = moerr.NewInternalErrorNoCtx("driver info: driver lsn not found")
-var ErrRetryTimeOut = moerr.NewInternalErrorNoCtx("driver info: retry time out")
+var ErrDSNNotFound = moerr.NewInternalErrorNoCtx("dsn not found")
+var ErrRetryTimeOut = moerr.NewInternalErrorNoCtx("retry time out")
 
 type driverInfo struct {
 	// PSN -> [DSN,..]
-	addr map[uint64]*common.ClosedIntervals //logservicelsn-driverlsn TODO drop on truncate
+	psnMap map[uint64]*common.ClosedIntervals //logservicelsn-driverlsn TODO drop on truncate
 	// PSN: physical sequence number. here is the lsn from logservice
 	validPSN roaring64.Bitmap
-	addrMu   sync.RWMutex
+	psnmu    sync.RWMutex
 
 	// dsn: driver sequence number
 	// it is monotonically continuously increasing
@@ -75,7 +76,7 @@ type driverInfo struct {
 
 func newDriverInfo() *driverInfo {
 	d := &driverInfo{
-		addr:       make(map[uint64]*common.ClosedIntervals),
+		psnMap:     make(map[uint64]*common.ClosedIntervals),
 		commitCond: *sync.NewCond(new(sync.Mutex)),
 	}
 	d.writeController.finishedTokens = common.NewClosedIntervals()
@@ -112,13 +113,13 @@ func (info *driverInfo) onReplay(r *replayer) {
 func (info *driverInfo) onReplayRecordEntry(
 	psn uint64, dsns *common.ClosedIntervals,
 ) {
-	info.addr[psn] = dsns
+	info.psnMap[psn] = dsns
 	info.validPSN.Add(psn)
 }
 
 func (info *driverInfo) getNextValidPSN(psn uint64) uint64 {
-	info.addrMu.RLock()
-	defer info.addrMu.RUnlock()
+	info.psnmu.RLock()
+	defer info.psnmu.RUnlock()
 	if info.validPSN.IsEmpty() {
 		return 0
 	}
@@ -133,23 +134,23 @@ func (info *driverInfo) getNextValidPSN(psn uint64) uint64 {
 	return psn
 }
 
-func (info *driverInfo) isToTruncate(logserviceLsn, dsn uint64) bool {
-	maxlsn := info.getMaxDriverLsn(logserviceLsn)
-	if maxlsn == 0 {
+func (info *driverInfo) isToTruncate(psn, dsn uint64) bool {
+	maxDSN := info.getMaxDSN(psn)
+	if maxDSN == 0 {
 		return false
 	}
-	return maxlsn <= dsn
+	return maxDSN <= dsn
 }
 
-func (info *driverInfo) getMaxDriverLsn(logserviceLsn uint64) uint64 {
-	info.addrMu.RLock()
-	intervals, ok := info.addr[logserviceLsn]
+func (info *driverInfo) getMaxDSN(psn uint64) uint64 {
+	info.psnmu.RLock()
+	intervals, ok := info.psnMap[psn]
 	if !ok {
-		info.addrMu.RUnlock()
+		info.psnmu.RUnlock()
 		return 0
 	}
 	lsn := intervals.GetMax()
-	info.addrMu.RUnlock()
+	info.psnmu.RUnlock()
 	return lsn
 }
 
@@ -207,15 +208,15 @@ func (info *driverInfo) tryApplyWriteToken(
 }
 
 func (info *driverInfo) logAppend(appender *driverAppender) {
-	info.addrMu.Lock()
+	info.psnmu.Lock()
 	array := make([]uint64, 0, len(appender.entry.Meta.addr))
 	for key := range appender.entry.Meta.addr {
 		array = append(array, key)
 	}
 	info.validPSN.Add(appender.logserviceLsn)
 	interval := common.NewClosedIntervalsBySlice(array)
-	info.addr[appender.logserviceLsn] = interval
-	info.addrMu.Unlock()
+	info.psnMap[appender.logserviceLsn] = interval
+	info.psnmu.Unlock()
 	if interval.GetMin() != info.syncing+1 {
 		panic(fmt.Sprintf("logic err, expect %d, min is %d", info.syncing+1, interval.GetMin()))
 	}
@@ -226,18 +227,22 @@ func (info *driverInfo) logAppend(appender *driverAppender) {
 	info.syncing = interval.GetMax()
 }
 
-func (info *driverInfo) gcAddr(logserviceLsn uint64) {
-	info.addrMu.Lock()
-	defer info.addrMu.Unlock()
-	lsnToDelete := make([]uint64, 0)
-	for serviceLsn := range info.addr {
-		if serviceLsn < logserviceLsn {
-			lsnToDelete = append(lsnToDelete, serviceLsn)
+func (info *driverInfo) gcPSN(psn uint64) {
+	info.psnmu.Lock()
+	defer info.psnmu.Unlock()
+	candidates := make([]uint64, 0)
+	// collect all the PSN that is less than the given PSN
+	for sn := range info.psnMap {
+		if sn < psn {
+			candidates = append(candidates, sn)
 		}
 	}
-	info.validPSN.RemoveRange(0, logserviceLsn)
-	for _, lsn := range lsnToDelete {
-		delete(info.addr, lsn)
+	// remove 0 to the given PSN from the validPSN
+	info.validPSN.RemoveRange(0, psn)
+
+	// remove the PSN from the map
+	for _, lsn := range candidates {
+		delete(info.psnMap, lsn)
 	}
 }
 
@@ -262,36 +267,40 @@ func (info *driverInfo) putbackWriteTokens(tokens []uint64) {
 	info.commitCond.L.Unlock()
 }
 
-func (info *driverInfo) tryGetLogServiceLsnByDriverLsn(dsn uint64) (uint64, error) {
-	lsn, err := info.getLogServiceLsnByDriverLsn(dsn)
-	if err == ErrDriverLsnNotFound {
-		if lsn <= info.GetDSN() {
-			for i := 0; i < 10; i++ {
-				logutil.Infof("retry get logserviceLsn, driverlsn=%d", dsn)
-				info.commitCond.L.Lock()
-				lsn, err = info.getLogServiceLsnByDriverLsn(dsn)
-				if err == nil {
-					info.commitCond.L.Unlock()
-					break
-				}
-				info.commitCond.Wait()
-				info.commitCond.L.Unlock()
-			}
-			if err != nil {
-				return 0, ErrRetryTimeOut
-			}
-		}
+func (info *driverInfo) getPSNByDSNWithRetry(
+	dsn uint64, maxRetry int,
+) (psn uint64, err error) {
+	if psn, err = info.getPSNByDSN(dsn); err == nil || err != ErrDSNNotFound || dsn > info.GetDSN() {
+		return
 	}
-	return lsn, err
+
+	for i := 0; i < maxRetry; i++ {
+		info.commitCond.L.Lock()
+		psn, err = info.getPSNByDSN(dsn)
+		logutil.Info(
+			"Wal-Get-DSN-By-PSN",
+			zap.Uint64("dsn", dsn),
+			zap.Uint64("psn", psn),
+			zap.Error(err),
+		)
+		if err == nil {
+			info.commitCond.L.Unlock()
+			break
+		}
+		info.commitCond.Wait()
+		info.commitCond.L.Unlock()
+	}
+
+	return
 }
 
-func (info *driverInfo) getLogServiceLsnByDriverLsn(dsn uint64) (uint64, error) {
-	info.addrMu.RLock()
-	defer info.addrMu.RUnlock()
-	for lsn, intervals := range info.addr {
+func (info *driverInfo) getPSNByDSN(dsn uint64) (uint64, error) {
+	info.psnmu.RLock()
+	defer info.psnmu.RUnlock()
+	for lsn, intervals := range info.psnMap {
 		if intervals.Contains(*common.NewClosedIntervalsByInt(dsn)) {
 			return lsn, nil
 		}
 	}
-	return 0, ErrDriverLsnNotFound
+	return 0, ErrDSNNotFound
 }
