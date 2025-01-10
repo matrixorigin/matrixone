@@ -588,6 +588,7 @@ func (tbl *txnTable) getObjList(ctx context.Context, rangesParam engine.RangesPa
 	needUncommited := rangesParam.Policy&engine.Policy_CollectUncommittedData != 0
 	objRelData := &readutil.ObjListRelData{
 		NeedFirstEmpty: needUncommited,
+		Rsp:            rangesParam.Rsp,
 	}
 
 	if needUncommited {
@@ -1093,7 +1094,6 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 		var properties []*plan.Property
 		var TableType string
 		var Createsql string
-		var partitionInfo *plan.PartitionByDef
 		var viewSql *plan.ViewDef
 		var foreignKeys []*plan.ForeignKeyDef
 		var primarykey *plan.PrimaryKeyDef
@@ -1145,16 +1145,6 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 				Key:   catalog.SystemRelAttr_Comment,
 				Value: tbl.comment,
 			})
-		}
-
-		if tbl.partitioned > 0 {
-			p := &plan.PartitionByDef{}
-			err := p.UnMarshalPartitionInfo(([]byte)(tbl.partition))
-			if err != nil {
-				//panic(fmt.Sprintf("cannot unmarshal partition metadata information: %s", err))
-				return nil
-			}
-			partitionInfo = p
 		}
 
 		if tbl.viewdef != "" {
@@ -1232,7 +1222,6 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 			Createsql:     Createsql,
 			Pkey:          primarykey,
 			ViewSql:       viewSql,
-			Partition:     partitionInfo,
 			Fkeys:         foreignKeys,
 			RefChildTbls:  refChildTbls,
 			ClusterBy:     clusterByDef,
@@ -1330,16 +1319,7 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 	for _, req := range reqs {
 		switch req.GetKind() {
 		case api.AlterKind_AddPartition:
-			tbl.partitioned = 1
-			info, err := req.GetAddPartition().GetPartitionDef().MarshalPartitionInfo()
-			if err != nil {
-				return err
-			}
-			tbl.partition = string(info)
-			appendDef = append(appendDef, &engine.PartitionDef{
-				Partitioned: 1,
-				Partition:   tbl.partition,
-			})
+			// TODO: reimplement partition
 		case api.AlterKind_UpdateComment:
 			tbl.comment = req.GetUpdateComment().Comment
 			appendDef = append(appendDef, &engine.CommentDef{Comment: tbl.comment})

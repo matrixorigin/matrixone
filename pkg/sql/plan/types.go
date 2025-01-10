@@ -63,7 +63,6 @@ type Property = plan.Property
 type TableDef_DefType_Properties = plan.TableDef_DefType_Properties
 type PropertiesDef = plan.PropertiesDef
 type ViewDef = plan.ViewDef
-type PartitionByDef = plan.PartitionByDef
 type ClusterByDef = plan.ClusterByDef
 type OrderBySpec = plan.OrderBySpec
 type FkColName = plan.FkColName
@@ -417,7 +416,6 @@ var _ Binder = (*GroupBinder)(nil)
 var _ Binder = (*HavingBinder)(nil)
 var _ Binder = (*ProjectionBinder)(nil)
 var _ Binder = (*LimitBinder)(nil)
-var _ Binder = (*PartitionBinder)(nil)
 var _ Binder = (*UpdateBinder)(nil)
 var _ Binder = (*OndupUpdateBinder)(nil)
 

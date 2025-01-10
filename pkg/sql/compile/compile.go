@@ -720,26 +720,12 @@ func (c *Compile) appendMetaTables(objRes *plan.ObjectRef) {
 func (c *Compile) lockTable() error {
 	for _, tbl := range c.lockTables {
 		typ := plan2.MakeTypeByPlan2Type(tbl.PrimaryColTyp)
-		if len(tbl.PartitionTableIds) == 0 {
-			return lockop.LockTable(
-				c.e,
-				c.proc,
-				tbl.TableId,
-				typ,
-				false)
-		}
-
-		for _, tblId := range tbl.PartitionTableIds {
-			err := lockop.LockTable(
-				c.e,
-				c.proc,
-				tblId,
-				typ,
-				false)
-			if err != nil {
-				return err
-			}
-		}
+		return lockop.LockTable(
+			c.e,
+			c.proc,
+			tbl.TableId,
+			typ,
+			false)
 
 	}
 	return nil
@@ -825,7 +811,7 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 		v2.TxnStatementCompileQueryHistogram.Observe(time.Since(start).Seconds())
 	}()
 
-	c.execType = plan2.GetExecType(c.pn.GetQuery(), c.getHaveDDL(), c.isPrepare, c.ncpu)
+	c.execType = plan2.GetExecType(c.pn.GetQuery(), c.getHaveDDL(), c.isPrepare)
 
 	n := getEngineNode(c)
 	if c.execType == plan2.ExecTypeTP || c.execType == plan2.ExecTypeAP_ONECN {
@@ -843,6 +829,8 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 	if c.isPrepare && !c.IsTpQuery() {
 		return nil, cantCompileForPrepareErr
 	}
+
+	plan2.CalcQueryDOP(c.pn, int32(c.ncpu), len(c.cnList), c.execType)
 
 	c.initAnalyzeModule(qry)
 	// deal with sink scan first.
@@ -1908,18 +1896,6 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 		tblDef = rel.GetTableDef(ctx)
 	}
 
-	// prcoess partitioned table
-	var partitionRelNames []string
-	if node.TableDef.Partition != nil {
-		if node.PartitionPrune != nil && node.PartitionPrune.IsPruned {
-			for _, partition := range node.PartitionPrune.SelectedPartitions {
-				partitionRelNames = append(partitionRelNames, partition.PartitionTableName)
-			}
-		} else {
-			partitionRelNames = append(partitionRelNames, node.TableDef.Partition.PartitionTableNames...)
-		}
-	}
-
 	if len(node.FilterList) != len(s.DataSource.FilterList) {
 		s.DataSource.FilterList = plan2.DeepCopyExprList(node.FilterList)
 		for _, e := range s.DataSource.FilterList {
@@ -1952,7 +1928,6 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	s.DataSource.TableDef = tblDef
 	s.DataSource.Rel = rel
 	s.DataSource.RelationName = node.TableDef.Name
-	s.DataSource.PartitionRelationNames = partitionRelNames
 	s.DataSource.SchemaName = node.ObjRef.SchemaName
 	s.DataSource.AccountId = node.ObjRef.GetPubInfo()
 	s.DataSource.RuntimeFilterSpecs = node.RuntimeFilterProbeList
@@ -2109,7 +2084,7 @@ func (c *Compile) compileMinusAndIntersect(n *plan.Node, left []*Scope, right []
 	if c.IsSingleScope(left) && c.IsSingleScope(right) {
 		return c.compileTpMinusAndIntersect(left, right, nodeType)
 	}
-	rs := c.newScopeListOnCurrentCN(2, int(n.Stats.BlockNum))
+	rs := c.newScopeListOnCurrentCN(2, int(n.Stats.Dop))
 	rs = c.newScopeListForMinusAndIntersect(rs, left, right, n)
 
 	c.hasMergeOp = true
@@ -2980,7 +2955,7 @@ func (c *Compile) compileShuffleGroupV2(n *plan.Node, inputSS []*Scope, nodes []
 	}
 
 	child := nodes[n.Children[0]]
-	dop := plan2.GetShuffleDop(c.ncpu, len(c.cnList), n.Stats.HashmapStats.HashmapSize)
+	dop := int(n.Stats.Dop)
 	if dop != inputSS[0].NodeInfo.Mcpu {
 		if child.NodeType == plan.Node_TABLE_SCAN {
 			inputSS[0].NodeInfo.Mcpu = dop
@@ -3032,7 +3007,7 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, inputSS []*Scope, nodes []*p
 	}
 
 	shuffleGroups := make([]*Scope, 0, len(c.cnList))
-	dop := plan2.GetShuffleDop(c.ncpu, len(c.cnList), n.Stats.HashmapStats.HashmapSize)
+	dop := int(n.Stats.Dop)
 	for _, cn := range c.cnList {
 		scopes := c.newScopeListWithNode(dop, len(inputSS), cn.Addr)
 		for _, s := range scopes {
@@ -3294,7 +3269,6 @@ func (c *Compile) compileDelete(n *plan.Node, ss []*Scope) ([]*Scope, error) {
 
 		mergeDeleteArg := mergedelete.NewArgument().
 			WithObjectRef(arg.DeleteCtx.Ref).
-			WithParitionNames(arg.DeleteCtx.PartitionTableNames).
 			WithEngine(c.e).
 			WithAddAffectedRows(arg.DeleteCtx.AddAffectedRows)
 
@@ -3562,9 +3536,8 @@ func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 // newScopeListOnCurrentCN traverse the cnList and only generate Scope list for the current CN node
 // waing: newScopeListOnCurrentCN result is only used to build Scope and add one merge operator.
 // If other operators are added, please let @qingxinhome know
-func (c *Compile) newScopeListOnCurrentCN(childrenCount int, blocks int) []*Scope {
+func (c *Compile) newScopeListOnCurrentCN(childrenCount int, mcpu int) []*Scope {
 	node := getEngineNode(c)
-	mcpu := c.generateCPUNumber(node.Mcpu, blocks)
 	ss := c.newScopeListWithNode(mcpu, childrenCount, node.Addr)
 	return ss
 }
@@ -3700,11 +3673,7 @@ func (c *Compile) newShuffleJoinScopeList(probeScopes, buildScopes []*Scope, n *
 		}
 	}
 
-	dop := c.ncpu //for dedup join, limit the dop max to ncpu
-	if n.JoinType != plan.Node_DEDUP {
-		dop = plan2.GetShuffleDop(c.ncpu, len(cnlist), n.Stats.HashmapStats.HashmapSize)
-	}
-
+	dop := int(n.Stats.Dop)
 	bucketNum := len(cnlist) * dop
 	shuffleProbes := make([]*Scope, 0, bucketNum)
 	shuffleBuilds := make([]*Scope, 0, bucketNum)
@@ -3815,20 +3784,6 @@ func (c *Compile) newShuffleJoinScopeList(probeScopes, buildScopes []*Scope, n *
 	return shuffleProbes
 }
 
-func (c *Compile) generateCPUNumber(cpunum, blocks int) int {
-	if cpunum <= 0 || blocks <= 16 || c.IsTpQuery() {
-		return 1
-	}
-	ret := blocks/16 + 1
-	if c.isPrepare {
-		ret = blocks/64 + 1
-	}
-	if ret <= cpunum {
-		return ret
-	}
-	return cpunum
-}
-
 func collectTombstones(
 	c *Compile,
 	node *plan.Node,
@@ -3836,22 +3791,17 @@ func collectTombstones(
 	policy engine.TombstoneCollectPolicy,
 ) (engine.Tombstoner, error) {
 	var err error
-	var db engine.Database
 	//var relData engine.RelData
 	var tombstone engine.Tombstoner
-	var txnOp client.TxnOperator
 
 	//-----------------------------------------------------------------------------------------------------
 	ctx := c.proc.GetTopContext()
-	txnOp = c.proc.GetTxnOperator()
 	if node.ScanSnapshot != nil && node.ScanSnapshot.TS != nil {
 		zeroTS := timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}
 		snapTS := c.proc.GetTxnOperator().Txn().SnapshotTS
 		if !node.ScanSnapshot.TS.Equal(zeroTS) && node.ScanSnapshot.TS.Less(snapTS) {
-			if c.proc.GetCloneTxnOperator() != nil {
-				txnOp = c.proc.GetCloneTxnOperator()
-			} else {
-				txnOp = c.proc.GetTxnOperator().CloneSnapshotOp(*node.ScanSnapshot.TS)
+			if c.proc.GetCloneTxnOperator() == nil {
+				txnOp := c.proc.GetTxnOperator().CloneSnapshotOp(*node.ScanSnapshot.TS)
 				c.proc.SetCloneTxnOperator(txnOp)
 			}
 
@@ -3872,54 +3822,11 @@ func collectTombstones(
 		ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 	}
 
-	db, err = c.e.Database(ctx, node.ObjRef.SchemaName, txnOp)
-	if err != nil {
-		return nil, err
-	}
 	tombstone, err = rel.CollectTombstones(ctx, c.TxnOffset, policy)
 	if err != nil {
 		return nil, err
 	}
 
-	if node.TableDef.Partition != nil {
-		if node.PartitionPrune != nil && node.PartitionPrune.IsPruned {
-			for _, partitionItem := range node.PartitionPrune.SelectedPartitions {
-				partTableName := partitionItem.PartitionTableName
-				subrelation, err := db.Relation(ctx, partTableName, c.proc)
-				if err != nil {
-					return nil, err
-				}
-				subTombstone, err := subrelation.CollectTombstones(ctx, c.TxnOffset, policy)
-				if err != nil {
-					return nil, err
-				}
-				err = tombstone.Merge(subTombstone)
-				if err != nil {
-					return nil, err
-				}
-			}
-		} else {
-			partitionInfo := node.TableDef.Partition
-			partitionNum := int(partitionInfo.PartitionNum)
-			partitionTableNames := partitionInfo.PartitionTableNames
-			for i := 0; i < partitionNum; i++ {
-				partTableName := partitionTableNames[i]
-				subrelation, err := db.Relation(ctx, partTableName, c.proc)
-				if err != nil {
-					return nil, err
-				}
-				subTombstone, err := subrelation.CollectTombstones(ctx, c.TxnOffset, policy)
-				if err != nil {
-					return nil, err
-				}
-				err = tombstone.Merge(subTombstone)
-				if err != nil {
-					return nil, err
-				}
-
-			}
-		}
-	}
 	return tombstone, nil
 }
 
@@ -3949,62 +3856,11 @@ func (c *Compile) expandRanges(
 		TxnOffset:          c.TxnOffset,
 		Policy:             policy,
 		Rsp:                rsp,
-		DontSupportRelData: n.TableDef.Partition != nil,
+		DontSupportRelData: false,
 	}
 	relData, err := rel.Ranges(newCtx, rangesParam)
 	if err != nil {
 		return nil, err
-	}
-
-	if n.TableDef.Partition != nil {
-		begin := 0
-		if policy&engine.Policy_CollectCommittedInmemData != 0 ||
-			policy&engine.Policy_CollectUncommittedInmemData != 0 {
-			begin = 1 //skip empty block info
-		}
-		rangesParam.PreAllocBlocks = 2
-		if n.PartitionPrune != nil && n.PartitionPrune.IsPruned {
-			for i, partitionItem := range n.PartitionPrune.SelectedPartitions {
-				partTableName := partitionItem.PartitionTableName
-				subrelation, err := db.Relation(newCtx, partTableName, c.proc)
-				if err != nil {
-					return nil, err
-				}
-				subRelData, err := subrelation.Ranges(newCtx, rangesParam)
-				if err != nil {
-					return nil, err
-				}
-
-				engine.ForRangeBlockInfo(begin, subRelData.DataCnt(), subRelData,
-					func(blk *objectio.BlockInfo) (bool, error) {
-						blk.PartitionNum = int16(i)
-						relData.AppendBlockInfo(blk)
-						return true, nil
-					})
-			}
-		} else {
-			partitionInfo := n.TableDef.Partition
-			partitionNum := int(partitionInfo.PartitionNum)
-			partitionTableNames := partitionInfo.PartitionTableNames
-			for i := 0; i < partitionNum; i++ {
-				partTableName := partitionTableNames[i]
-				subrelation, err := db.Relation(newCtx, partTableName, c.proc)
-				if err != nil {
-					return nil, err
-				}
-				subRelData, err := subrelation.Ranges(newCtx, rangesParam)
-				if err != nil {
-					return nil, err
-				}
-
-				engine.ForRangeBlockInfo(begin, subRelData.DataCnt(), subRelData,
-					func(blk *objectio.BlockInfo) (bool, error) {
-						blk.PartitionNum = int16(i)
-						relData.AppendBlockInfo(blk)
-						return true, nil
-					})
-			}
-		}
 	}
 
 	stats := statistic.StatsInfoFromContext(ctx)
@@ -4128,13 +3984,13 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 	var nodes engine.Nodes
 	// scan on current CN
 	if shouldScanOnCurrentCN(c, n, forceSingle) {
-		mcpu := c.generateCPUNumber(c.ncpu, int(n.Stats.BlockNum))
+		mcpu := n.Stats.Dop
 		if forceSingle {
 			mcpu = 1
 		}
 		nodes = append(nodes, engine.Node{
 			Addr:  c.addr,
-			Mcpu:  mcpu,
+			Mcpu:  int(mcpu),
 			CNCNT: 1,
 		})
 		return nodes, nil

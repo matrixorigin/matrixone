@@ -128,75 +128,32 @@ func (update *MultiUpdate) insert_table(
 	analyzer process.Analyzer,
 	updateCtx *MultiUpdateCtx,
 	inputBatch *batch.Batch,
-	insertBatch *batch.Batch) (err error) {
-	if len(updateCtx.PartitionTableIDs) > 0 {
-		partTableNulls := inputBatch.Vecs[updateCtx.NewPartitionIdx].GetNulls()
-		partTableIDs := vector.MustFixedColWithTypeCheck[int32](inputBatch.Vecs[updateCtx.NewPartitionIdx])
-
-		for partIdx := range len(updateCtx.PartitionTableIDs) {
-			insertBatch.CleanOnlyData()
-			expected := int32(partIdx)
-
-			for i, partition := range partTableIDs {
-				if !partTableNulls.Contains(uint64(i)) {
-					if partition == -1 {
-						return moerr.NewInvalidInput(proc.Ctx, "Table has no partition for value from column_list")
-					} else if partition == expected {
-						for insertIdx, inputIdx := range updateCtx.InsertCols {
-							err = insertBatch.Vecs[insertIdx].UnionOne(inputBatch.Vecs[inputIdx], int64(i), proc.Mp())
-							if err != nil {
-								return err
-							}
-						}
-					}
-				}
-			}
-
-			rowCount := insertBatch.Vecs[0].Length()
-			if rowCount > 0 {
-				insertBatch.SetRowCount(rowCount)
-				tableType := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].tableType
-				update.addInsertAffectRows(tableType, uint64(rowCount))
-				source := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].Sources[partIdx]
-
-				crs := analyzer.GetOpCounterSet()
-				newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
-				err = source.Write(newCtx, insertBatch)
-				if err != nil {
-					return err
-				}
-				analyzer.AddWrittenRows(int64(insertBatch.RowCount()))
-				analyzer.AddS3RequestCount(crs)
-				analyzer.AddFileServiceCacheInfo(crs)
-				analyzer.AddDiskIO(crs)
-			}
+	insertBatch *batch.Batch,
+) (err error) {
+	insertBatch.CleanOnlyData()
+	for insertIdx, inputIdx := range updateCtx.InsertCols {
+		err = insertBatch.Vecs[insertIdx].UnionBatch(inputBatch.Vecs[inputIdx], 0, inputBatch.Vecs[inputIdx].Length(), nil, proc.GetMPool())
+		if err != nil {
+			return err
 		}
-	} else {
-		insertBatch.CleanOnlyData()
-		for insertIdx, inputIdx := range updateCtx.InsertCols {
-			err = insertBatch.Vecs[insertIdx].UnionBatch(inputBatch.Vecs[inputIdx], 0, inputBatch.Vecs[inputIdx].Length(), nil, proc.GetMPool())
-			if err != nil {
-				return err
-			}
-		}
-		rowCount := insertBatch.Vecs[0].Length()
-		if rowCount > 0 {
-			insertBatch.SetRowCount(rowCount)
-			tableType := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].tableType
-			update.addInsertAffectRows(tableType, uint64(rowCount))
-			source := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].Sources[0]
+	}
+	rowCount := insertBatch.Vecs[0].Length()
+	if rowCount > 0 {
+		insertBatch.SetRowCount(rowCount)
+		tableType := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].tableType
+		update.addInsertAffectRows(tableType, uint64(rowCount))
+		source := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].Sources[0]
 
-			crs := analyzer.GetOpCounterSet()
-			newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
-			err = source.Write(newCtx, insertBatch)
-			if err != nil {
-				return err
-			}
-			analyzer.AddWrittenRows(int64(insertBatch.RowCount()))
-			analyzer.AddS3RequestCount(crs)
-			analyzer.AddFileServiceCacheInfo(crs)
-			analyzer.AddDiskIO(crs)
+		crs := analyzer.GetOpCounterSet()
+		newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
+		err = source.Write(newCtx, insertBatch)
+		if err != nil {
+			return err
 		}
+		analyzer.AddWrittenRows(int64(insertBatch.RowCount()))
+		analyzer.AddS3RequestCount(crs)
+		analyzer.AddFileServiceCacheInfo(crs)
+		analyzer.AddDiskIO(crs)
 	}
 	return
 }
@@ -214,89 +171,39 @@ func (update *MultiUpdate) check_null_and_insert_table(
 	mainPkVec := inputBatch.Vecs[mainPkPos]
 	idxPkNulls := inputBatch.Vecs[updateCtx.InsertCols[0]].GetNulls()
 
-	if len(updateCtx.PartitionTableIDs) > 0 {
-		partTableIDs := vector.MustFixedColWithTypeCheck[int32](inputBatch.Vecs[updateCtx.NewPartitionIdx])
-		partTableNulls := inputBatch.Vecs[updateCtx.NewPartitionIdx].GetNulls()
-
-		for partIdx := range len(updateCtx.PartitionTableIDs) {
-			insertBatch.CleanOnlyData()
-			expected := int32(partIdx)
-
-			for i, partition := range partTableIDs {
-				if !partTableNulls.Contains(uint64(i)) {
-					if partition == -1 {
-						return moerr.NewInvalidInput(proc.Ctx, "Table has no partition for value from column_list")
-					} else if partition == expected {
-						if !idxPkNulls.Contains(uint64(i)) {
-							err = insertBatch.Vecs[0].UnionOne(idxPkVec, int64(i), proc.Mp())
-							if err != nil {
-								return err
-							}
-
-							err = insertBatch.Vecs[1].UnionOne(mainPkVec, int64(i), proc.Mp())
-							if err != nil {
-								return err
-							}
-						}
-					}
-				}
-			}
-
-			newRowCount := insertBatch.Vecs[0].Length()
-			if newRowCount > 0 {
-				insertBatch.SetRowCount(newRowCount)
-				tableType := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].tableType
-				update.addInsertAffectRows(tableType, uint64(newRowCount))
-				source := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].Sources[partIdx]
-
-				crs := analyzer.GetOpCounterSet()
-				newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
-				err = source.Write(newCtx, insertBatch)
-				if err != nil {
-					return err
-				}
-				analyzer.AddWrittenRows(int64(insertBatch.RowCount()))
-				analyzer.AddS3RequestCount(crs)
-				analyzer.AddFileServiceCacheInfo(crs)
-				analyzer.AddDiskIO(crs)
-
-			}
-		}
-	} else {
-		insertBatch.CleanOnlyData()
-		rowCount := uint64(inputBatch.RowCount())
-		for i := uint64(0); i < rowCount; i++ {
-			if !idxPkNulls.Contains(i) {
-				err = insertBatch.Vecs[0].UnionOne(idxPkVec, int64(i), proc.Mp())
-				if err != nil {
-					return err
-				}
-
-				err = insertBatch.Vecs[1].UnionOne(mainPkVec, int64(i), proc.Mp())
-				if err != nil {
-					return err
-				}
-			}
-		}
-
-		newRowCount := insertBatch.Vecs[0].Length()
-		if newRowCount > 0 {
-			insertBatch.SetRowCount(newRowCount)
-			tableType := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].tableType
-			update.addInsertAffectRows(tableType, uint64(newRowCount))
-			source := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].Sources[0]
-
-			crs := analyzer.GetOpCounterSet()
-			newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
-			err = source.Write(newCtx, insertBatch)
+	insertBatch.CleanOnlyData()
+	rowCount := uint64(inputBatch.RowCount())
+	for i := uint64(0); i < rowCount; i++ {
+		if !idxPkNulls.Contains(i) {
+			err = insertBatch.Vecs[0].UnionOne(idxPkVec, int64(i), proc.Mp())
 			if err != nil {
 				return err
 			}
-			analyzer.AddWrittenRows(int64(insertBatch.RowCount()))
-			analyzer.AddS3RequestCount(crs)
-			analyzer.AddFileServiceCacheInfo(crs)
-			analyzer.AddDiskIO(crs)
+
+			err = insertBatch.Vecs[1].UnionOne(mainPkVec, int64(i), proc.Mp())
+			if err != nil {
+				return err
+			}
 		}
+	}
+
+	newRowCount := insertBatch.Vecs[0].Length()
+	if newRowCount > 0 {
+		insertBatch.SetRowCount(newRowCount)
+		tableType := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].tableType
+		update.addInsertAffectRows(tableType, uint64(newRowCount))
+		source := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].Sources[0]
+
+		crs := analyzer.GetOpCounterSet()
+		newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
+		err = source.Write(newCtx, insertBatch)
+		if err != nil {
+			return err
+		}
+		analyzer.AddWrittenRows(int64(insertBatch.RowCount()))
+		analyzer.AddS3RequestCount(crs)
+		analyzer.AddFileServiceCacheInfo(crs)
+		analyzer.AddDiskIO(crs)
 	}
 	return
 }
