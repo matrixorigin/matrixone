@@ -253,7 +253,17 @@ func (job *checkpointJob) RunICKP(ctx context.Context) (err error) {
 		return
 	}
 
-	defer runner.store.CommitICKPIntent(entry)
+	defer func() {
+		runner.store.CommitICKPIntent(entry)
+		runner.postCheckpointQueue.Enqueue(entry)
+		runner.TryTriggerExecuteGCKP(&gckpContext{
+			end:              entry.end,
+			histroyRetention: job.executor.cfg.GlobalHistoryDuration,
+			ckpLSN:           lsn,
+			truncateLSN:      lsnToTruncate,
+		})
+	}()
+
 	v2.TaskCkpEntryPendingDurationHistogram.Observe(entry.Age().Seconds())
 
 	files = append(files, file)
@@ -270,14 +280,6 @@ func (job *checkpointJob) RunICKP(ctx context.Context) (err error) {
 		fatal = true
 		return
 	}
-
-	runner.postCheckpointQueue.Enqueue(entry)
-	runner.TryTriggerExecuteGCKP(&gckpContext{
-		end:              entry.end,
-		histroyRetention: job.executor.cfg.GlobalHistoryDuration,
-		ckpLSN:           lsn,
-		truncateLSN:      lsnToTruncate,
-	})
 
 	return nil
 }
@@ -388,7 +390,6 @@ func (executor *checkpointExecutor) StopWithCause(cause error) {
 	executor.runningICKP.Store(nil)
 	executor.ickpQueue.Stop()
 	executor.gckpQueue.Stop()
-	executor.runner = nil
 	logutil.Info(
 		"CKP-Executor-Stopped",
 		zap.Error(cause),

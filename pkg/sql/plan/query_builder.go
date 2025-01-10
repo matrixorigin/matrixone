@@ -1403,23 +1403,8 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			pkExprs = append(pkExprs, pkExpr)
 			oldPkPos = append(oldPkPos, [2]int32{lockTarget.PrimaryColRelPos, lockTarget.PrimaryColIdxInBat})
 
-			if lockTarget.IsPartitionTable {
-				partExpr := &Expr{
-					// Typ: node.ProjectList[len(node.ProjectList)-1].Typ,
-					Expr: &plan.Expr_Col{
-						Col: &plan.ColRef{
-							RelPos: lockTarget.FilterColRelPos,
-							ColPos: lockTarget.FilterColIdxInBat,
-						},
-					},
-				}
-				increaseRefCnt(partExpr, 1, colRefCnt)
-				partExprs = append(partExprs, partExpr)
-				oldPartPos = append(oldPartPos, [2]int32{lockTarget.FilterColRelPos, lockTarget.FilterColIdxInBat})
-			} else {
-				partExprs = append(partExprs, nil)
-				oldPartPos = append(oldPartPos, [2]int32{-1, -1})
-			}
+			partExprs = append(partExprs, nil)
+			oldPartPos = append(oldPartPos, [2]int32{-1, -1})
 		}
 
 		childRemapping, err := builder.remapAllColRefs(node.Children[0], step, colRefCnt, colRefBool, sinkColRef)
@@ -1581,55 +1566,9 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			}
 		}
 
-		var oldPartRel, newPartRel [2]int32
-		var oldPartExpr, newPartExpr *Expr
-		mainTableCtx := node.UpdateCtxList[0]
-		if mainTableCtx.TableDef.Partition != nil {
-			if mainTableCtx.OldPartitionIdx > -1 {
-				oldPartExpr = &Expr{
-					Expr: &plan.Expr_Col{
-						Col: &plan.ColRef{
-							RelPos: node.BindingTags[1],
-							ColPos: mainTableCtx.OldPartitionIdx,
-						},
-					},
-				}
-				increaseRefCnt(oldPartExpr, 1, colRefCnt)
-				oldPartRel = [2]int32{node.BindingTags[1], mainTableCtx.OldPartitionIdx}
-			}
-
-			if mainTableCtx.NewPartitionIdx > -1 {
-				newPartExpr = &Expr{
-					Expr: &plan.Expr_Col{
-						Col: &plan.ColRef{
-							RelPos: node.BindingTags[1],
-							ColPos: mainTableCtx.NewPartitionIdx,
-						},
-					},
-				}
-				increaseRefCnt(newPartExpr, 1, colRefCnt)
-				newPartRel = [2]int32{node.BindingTags[1], mainTableCtx.NewPartitionIdx}
-			}
-		}
-
 		childRemapping, err := builder.remapAllColRefs(node.Children[0], step, colRefCnt, colRefBool, sinkColRef)
 		if err != nil {
 			return nil, err
-		}
-
-		if mainTableCtx.TableDef.Partition != nil {
-			if mainTableCtx.OldPartitionIdx > -1 {
-				if newPos, ok := childRemapping.globalToLocal[oldPartRel]; ok {
-					mainTableCtx.OldPartitionIdx = newPos[1]
-				}
-				increaseRefCnt(oldPartExpr, -1, colRefCnt)
-			}
-			if mainTableCtx.NewPartitionIdx > -1 {
-				if newPos, ok := childRemapping.globalToLocal[newPartRel]; ok {
-					mainTableCtx.NewPartitionIdx = newPos[1]
-				}
-				increaseRefCnt(newPartExpr, -1, colRefCnt)
-			}
 		}
 
 		remapInfo.tip = "UpdateCtxList"
@@ -1871,6 +1810,7 @@ func (builder *QueryBuilder) removeUnnecessaryProjections(nodeID int32) int32 {
 }
 
 func (builder *QueryBuilder) createQuery() (*Query, error) {
+	var err error
 	colRefBool := make(map[[2]int32]bool)
 	sinkColRef := make(map[[2]int32]int)
 
@@ -1915,7 +1855,6 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		// XXX: This will be removed soon, after merging implementation of all hash-join operators
 		builder.swapJoinChildren(rootID)
 		ReCalcNodeStats(rootID, builder, true, true, true)
-		builder.partitionPrune(rootID)
 
 		determineHashOnPK(rootID, builder)
 		determineShuffleMethod(rootID, builder)
@@ -1925,7 +1864,10 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		}
 		// after determine shuffle, be careful when calling ReCalcNodeStats again.
 		// needResetHashMapStats should always be false from here
-		rootID = builder.applyIndices(rootID, colRefCnt, make(map[[2]int32]*plan.Expr))
+		rootID, err = builder.applyIndices(rootID, colRefCnt, make(map[[2]int32]*plan.Expr))
+		if err != nil {
+			return nil, err
+		}
 		ReCalcNodeStats(rootID, builder, true, false, false)
 
 		builder.generateRuntimeFilters(rootID)
@@ -1969,14 +1911,14 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 				colRefCnt[[2]int32{resultTag, int32(j)}] = 1
 			}
 		}
-		_, err := builder.remapAllColRefs(rootID, int32(i), colRefCnt, colRefBool, sinkColRef)
+		_, err = builder.remapAllColRefs(rootID, int32(i), colRefCnt, colRefBool, sinkColRef)
 		if err != nil {
 			return nil, err
 		}
 		builder.qry.Steps[i] = builder.removeUnnecessaryProjections(rootID)
 	}
 
-	err := builder.lockTableIfLockNoRowsAtTheEndForDelAndUpdate()
+	err = builder.lockTableIfLockNoRowsAtTheEndForDelAndUpdate()
 	if err != nil {
 		return nil, err
 	}
@@ -2729,7 +2671,6 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 
 		if builder.isForUpdate {
 			tableDef := builder.qry.Nodes[nodeID].GetTableDef()
-			objRef := builder.qry.Nodes[nodeID].GetObjRef()
 			pkPos, pkTyp := getPkPos(tableDef, false)
 			lastTag := builder.qry.Nodes[nodeID].BindingTags[0]
 			lockTarget := &plan.LockTarget{
@@ -2739,51 +2680,6 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 				PrimaryColTyp:      pkTyp,
 				Block:              true,
 				RefreshTsIdxInBat:  -1, //unsupport now
-			}
-			if tableDef.Partition != nil {
-				partTableIDs, _ := getPartTableIdsAndNames(builder.compCtx, objRef, tableDef)
-				lockTarget.IsPartitionTable = true
-				lockTarget.PartitionTableIds = partTableIDs
-
-				colPosMap := make(map[string]int32)
-				for idx, col := range tableDef.Cols {
-					colPosMap[col.Name] = int32(idx)
-				}
-				partitionExpr, err := getRemapParitionExpr(tableDef, lastTag, colPosMap, false)
-				if err != nil {
-					return -1, err
-				}
-				projectList := make([]*Expr, 0, len(tableDef.Cols)+1)
-				for i, col := range tableDef.Cols {
-					if !col.Hidden {
-						projectList = append(projectList, &plan.Expr{
-							Typ: col.Typ,
-							Expr: &plan.Expr_Col{
-								Col: &plan.ColRef{
-									TblName: tableDef.Name,
-									Name:    col.Name,
-									RelPos:  lastTag,
-									ColPos:  int32(i),
-								},
-							},
-						})
-					}
-				}
-				lockTarget.FilterColIdxInBat = int32(len(projectList))
-				projectList = append(projectList, partitionExpr)
-				newBindingTag := builder.genNewTag()
-				lockTarget.FilterColRelPos = newBindingTag
-				if binding, ok := ctx.bindingByTable[tableDef.Name]; ok {
-					//@xxx not a good choice
-					binding.tag = newBindingTag
-				}
-				nodeID = builder.appendNode(&plan.Node{
-					NodeType:    plan.Node_PROJECT,
-					Children:    []int32{nodeID},
-					BindingTags: []int32{newBindingTag},
-					ProjectList: projectList,
-				}, ctx)
-
 			}
 
 			lockNode = &Node{

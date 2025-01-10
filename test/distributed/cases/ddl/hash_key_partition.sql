@@ -1,3 +1,4 @@
+-- @skip:issue#16438
 -- key partition: char,varchar ; pk/not pk
 create table p_table_01(col1 int,col2 varchar(25),col3 decimal(6,2))partition by key(col2)partitions 4;
 insert into p_table_01 values (1,'mod',78.9),(2,'proto',0.34),(3,'mod',6.5),(4,'mode',9.0),(5,'make',662.9),(6,'io',88.92);

@@ -76,7 +76,7 @@ message TNStringResponse {
 
 message Vector {
     bytes data     = 1;
-    plan.Type type = 2;
+    plan.Type type = 2 [(gogoproto.nullable) = false];
     bool nullable  = 3;
     bytes nsp      = 4;
     bool is_const  = 5;
@@ -327,10 +327,6 @@ message AlterTableAddColumn {
                                 // the column will be added to the last
 }
 
-message AlterTableAddPartition {
-    plan.PartitionByDef  partition_def  = 1;
-}
-
 message AlterTableDropColumn {
     uint32 logical_idx  = 1;
     uint32 sequence_num = 2;  // used to double check
@@ -348,7 +344,6 @@ message AlterTableReq {
         AlterTableComment update_comment     = 7;
         AlterTableConstraint update_cstr     = 8;
         AlterTablePolicy update_policy       = 9;
-        AlterTableAddPartition add_partition = 10;
         AlterTableRenameCol rename_col       = 11;
     }
 }
