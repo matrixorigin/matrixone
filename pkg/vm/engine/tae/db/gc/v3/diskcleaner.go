@@ -36,6 +36,7 @@ const (
 	JT_GCExecute
 	JT_GCReplay
 	JT_GCReplayAndExecute
+	JT_GCFastExecute
 )
 
 func init() {
@@ -43,6 +44,7 @@ func init() {
 	tasks.RegisterJobType(JT_GCExecute, "GCExecute")
 	tasks.RegisterJobType(JT_GCReplay, "GCReplay")
 	tasks.RegisterJobType(JT_GCReplayAndExecute, "GCReplayAndExecute")
+	tasks.RegisterJobType(JT_GCFastExecute, "GCFastExecute")
 }
 
 type StateStep = uint32
@@ -264,6 +266,36 @@ func (cleaner *DiskCleaner) doExecute(ctx context.Context) (err error) {
 		}
 	}
 	err = cleaner.cleaner.Process(ctx)
+	return
+}
+
+func (cleaner *DiskCleaner) doFastExecute(ctx context.Context) (err error) {
+	now := time.Now()
+	msg := "GC-Fast-Execute"
+	defer func() {
+		logger := logutil.Info
+		if err != nil {
+			logger = logutil.Error
+		}
+		logger(
+			msg,
+			zap.Duration("duration", time.Since(now)),
+			zap.Error(err),
+		)
+	}()
+	var ok bool
+	if replayErr := cleaner.replayError.Load(); replayErr != nil {
+		if _, ok = replayErr.(error); ok {
+			if err = cleaner.cleaner.Replay(ctx); err != nil {
+				msg = "GC-Replay"
+				cleaner.replayError.Store(err)
+				return
+			} else {
+				cleaner.replayError.Store(0)
+			}
+		}
+	}
+	err = cleaner.cleaner.FastExecute(ctx)
 	return
 }
 

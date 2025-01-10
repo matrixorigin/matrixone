@@ -1480,6 +1480,10 @@ func (c *checkpointCleaner) Process(inputCtx context.Context) (err error) {
 	return
 }
 
+func (c *checkpointCleaner) FastExecute(context.Context) error {
+	return nil
+}
+
 // tryScanLocked scans the incremental checkpoints and tries to create a new GC window
 // it will update `mutation.scanned` and `mutation.metaFiles`
 // it will update the scan watermark

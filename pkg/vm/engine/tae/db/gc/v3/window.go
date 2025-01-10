@@ -168,6 +168,52 @@ func (w *GCWindow) ExecuteGlobalCheckpointBasedGC(
 	return filesToGC, metaFile, nil
 }
 
+func (w *GCWindow) ExecuteFastBasedGC(
+	ctx context.Context,
+	accountSnapshots map[uint32][]types.TS,
+	pitrs *logtail.PitrInfo,
+	snapshotMeta *logtail.SnapshotMeta,
+	buffer *containers.OneSchemaBatchBuffer,
+	cacheSize int,
+	estimateRows int,
+	probility float64,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+) ([]string, string, error) {
+
+	sourcer := w.MakeFilesReader(ctx, fs)
+
+	job := NewCheckpointFastGCJob(
+		&types.TS{},
+		sourcer,
+		pitrs,
+		accountSnapshots,
+		snapshotMeta,
+		buffer,
+		false,
+		mp,
+		fs,
+		WithGCJobCoarseConfig(estimateRows, probility, cacheSize),
+	)
+	defer job.Close()
+
+	if err := job.Execute(ctx); err != nil {
+		return nil, "", err
+	}
+
+	filesToGC, filesNotGC := job.Result()
+	var metaFile string
+	var err error
+	if metaFile, err = w.writeMetaForRemainings(
+		ctx, filesNotGC,
+	); err != nil {
+		return nil, "", err
+	}
+
+	w.files = filesNotGC
+	return filesToGC, metaFile, nil
+}
+
 // ScanCheckpoints will load data from the `checkpointEntries` one by one and
 // update `w.tsRange` and `w.files`
 // At the end, it will save the metadata into a specified file as the finish of scan
