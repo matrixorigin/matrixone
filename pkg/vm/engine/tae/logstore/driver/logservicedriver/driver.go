@@ -111,7 +111,7 @@ func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
 	d.waitAppendLoop.Start()
 	d.postAppendLoop = sm.NewLoop(d.postAppendQueue, nil, d.onAppendDone, 10000)
 	d.postAppendLoop.Start()
-	d.truncateQueue = sm.NewSafeQueue(10000, 10000, d.onTruncate)
+	d.truncateQueue = sm.NewSafeQueue(10000, 10000, d.onTruncateRequests)
 	d.truncateQueue.Start()
 	return d
 }

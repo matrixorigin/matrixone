@@ -28,8 +28,8 @@ import (
 // driver lsn -> entry lsn
 func (d *LogServiceDriver) Truncate(lsn uint64) error {
 	logutil.Info("TRACE-WAL-TRUNCATE", zap.Uint64(" driver start truncate", lsn))
-	if lsn > d.truncating.Load() {
-		d.truncating.Store(lsn)
+	if lsn > d.truncateDSNIntent.Load() {
+		d.truncateDSNIntent.Store(lsn)
 	}
 	_, err := d.truncateQueue.Enqueue(struct{}{})
 	if err != nil {
@@ -38,30 +38,32 @@ func (d *LogServiceDriver) Truncate(lsn uint64) error {
 	return nil
 }
 
+// PXU TODO: ???
 func (d *LogServiceDriver) GetTruncated() (lsn uint64, err error) {
-	lsn = d.truncating.Load()
+	lsn = d.truncateDSNIntent.Load()
 	return
 }
 
-func (d *LogServiceDriver) onTruncate(items ...any) {
+func (d *LogServiceDriver) onTruncateRequests(items ...any) {
 	d.doTruncate()
 }
 
+// this is always called by one goroutine
 func (d *LogServiceDriver) doTruncate() {
 	t0 := time.Now()
 
-	target := d.truncating.Load()
+	dsnIntent := d.truncateDSNIntent.Load()
 	truncatedPSN := d.truncatedPSN
-	psn := truncatedPSN
+	psnIntent := truncatedPSN
 
 	//TODO use valid lsn
-	next := d.getNextValidPSN(psn)
+	next := d.getNextValidPSN(psnIntent)
 	loopCount := 0
-	for d.isToTruncate(next, target) {
+	for d.isToTruncate(next, dsnIntent) {
 		loopCount++
-		psn = next
-		next = d.getNextValidPSN(psn)
-		if next <= psn {
+		psnIntent = next
+		next = d.getNextValidPSN(psnIntent)
+		if next <= psnIntent {
 			break
 		}
 	}
@@ -73,22 +75,22 @@ func (d *LogServiceDriver) doTruncate() {
 		"Wal-Truncate",
 		zap.Int("loop-count", loopCount),
 		zap.Duration("duration", time.Since(t0)),
-		zap.Uint64("target-psn", target),
-		zap.Uint64("to-truncate-psn", psn),
+		zap.Uint64("dsn-intent", dsnIntent),
+		zap.Uint64("psn-intent", psnIntent),
 		zap.Uint64("truncated-psn", truncatedPSN),
 		zap.Uint64("valid-min-psn", minPSN),
 		zap.Uint64("valid-max-psn", maxPSN),
-		zap.Bool("do-truncate", psn != truncatedPSN),
+		zap.Bool("do-truncate", psnIntent > truncatedPSN),
 	)
-	if psn == truncatedPSN {
+	if psnIntent <= truncatedPSN {
 		return
 	}
-	d.doTruncatePSN(psn)
-	d.truncatedPSN = psn
-	d.gcPSN(psn)
+	d.truncateFromRemote(psnIntent)
+	d.truncatedPSN = psnIntent
+	d.gcPSN(psnIntent)
 }
 
-func (d *LogServiceDriver) doTruncatePSN(psn uint64) {
+func (d *LogServiceDriver) truncateFromRemote(psn uint64) {
 	var (
 		t0         = time.Now()
 		client     *clientWithRecord

@@ -49,8 +49,8 @@ type driverInfo struct {
 	synced   uint64
 	syncedMu sync.RWMutex
 
-	truncating   atomic.Uint64 //
-	truncatedPSN uint64        //
+	truncateDSNIntent atomic.Uint64 //
+	truncatedPSN      uint64        //
 
 	// writeController is used to control the write token
 	// it controles the max write token issued and all finished write tokens
@@ -104,7 +104,7 @@ func (info *driverInfo) onReplay(r *replayer) {
 	info.synced = r.maxDriverLsn
 	info.syncing = r.maxDriverLsn
 	if r.minDriverLsn != math.MaxUint64 {
-		info.truncating.Store(r.minDriverLsn - 1)
+		info.truncateDSNIntent.Store(r.minDriverLsn - 1)
 	}
 	info.truncatedPSN = r.truncatedPSN
 	info.writeController.finishedTokens.TryMerge(common.NewClosedIntervalsBySlice(r.writeTokens))
