@@ -173,14 +173,12 @@ func getAccountRecoveryWindowRows(ctx context.Context, ses *Session, bh Backgrou
 	var rows [][]interface{}
 
 	// get account recovery window for pitr
-	pitrRecords := make([]tableRecoveryWindow, 0)
-	pitrRecords, err = getAccountPitrRecords(ctx, ses, bh, accountName)
+	pitrRecords, err := getAccountPitrRecords(ctx, ses, bh, accountName)
 	if err != nil {
 		return nil, err
 	}
 	// get account recovery window for snapshot
-	snapshotRecords := make([]tableRecoveryWindowForSnapshot, 0)
-	snapshotRecords, err = getAccountSnapshotRecords(ctx, ses, bh, accountName)
+	snapshotRecords, err := getAccountSnapshotRecords(ctx, ses, bh, accountName)
 	if err != nil {
 		return nil, err
 	}
@@ -223,16 +221,14 @@ func getAccountRecoveryWindow(ctx context.Context, ses *Session, bh BackgroundEx
 	var rows [][]interface{}
 
 	// get db recovery window for pitr
-	pitrRecords := make([]tableRecoveryWindow, 0)
-	pitrRecords, err = getDbPitrRecords(ctx, ses, bh, accountName, dbName)
+	pitrRecords, err := getDbPitrRecords(ctx, ses, bh, accountName, dbName)
 	if err != nil {
 		return nil, err
 	}
 	pitrRecords = append(pitrRecords, *accountPitrs...)
 
 	// get db recovery window for snapshot
-	snapshotRecords := make([]tableRecoveryWindowForSnapshot, 0)
-	snapshotRecords, err = getDbSnapshotsRecords(ctx, ses, bh, accountName, dbName)
+	snapshotRecords, err := getDbSnapshotsRecords(ctx, ses, bh, accountName, dbName)
 	if err != nil {
 		return nil, err
 	}
@@ -276,15 +272,13 @@ func getDbRecoveryWindowRows(ctx context.Context, ses *Session, bh BackgroundExe
 	var rows [][]interface{}
 
 	// get db recovery window for pitr
-	pitrRecords := make([]tableRecoveryWindow, 0)
-	pitrRecords, err = getDbPitrRecords(ctx, ses, bh, accountName, dbName)
+	pitrRecords, err := getDbPitrRecords(ctx, ses, bh, accountName, dbName)
 	if err != nil {
 		return nil, err
 	}
 
 	// get db recovery window for snapshot
-	snapshotRecords := make([]tableRecoveryWindowForSnapshot, 0)
-	snapshotRecords, err = getDbSnapshotsRecords(ctx, ses, bh, accountName, dbName)
+	snapshotRecords, err := getDbSnapshotsRecords(ctx, ses, bh, accountName, dbName)
 	if err != nil {
 		return nil, err
 	}
