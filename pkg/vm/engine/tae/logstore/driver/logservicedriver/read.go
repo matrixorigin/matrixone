@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
+	"go.uber.org/zap"
 )
 
 var ErrRecordNotFound = moerr.NewInternalErrorNoCtx("driver read cache: lsn not found")
@@ -126,9 +127,9 @@ func (d *LogServiceDriver) resetReadCache() {
 }
 
 func (d *LogServiceDriver) readSmallBatchFromLogService(lsn uint64) {
-	_, records := d.readFromLogService(lsn, int(d.config.RecordSize))
+	_, records := d.doReadMany(lsn, int(d.config.RecordSize))
 	if len(records) == 0 {
-		_, records = d.readFromLogService(lsn, MaxReadSize)
+		_, records = d.doReadMany(lsn, MaxReadSize)
 	}
 	d.appendRecords(records, lsn, nil, 1)
 	if !d.IsReplaying() && len(d.lsns) > d.config.ReadCacheSize {
@@ -136,39 +137,86 @@ func (d *LogServiceDriver) readSmallBatchFromLogService(lsn uint64) {
 	}
 }
 
-func (d *LogServiceDriver) readFromLogServiceInReplay(lsn uint64, size int, fn func(lsn uint64, r *recordEntry)) (uint64, uint64) {
-	nextLsn, records := d.readFromLogService(lsn, size)
+func (d *LogServiceDriver) readFromLogServiceInReplay(
+	lsn uint64,
+	size int,
+	fn func(lsn uint64, r *recordEntry),
+) (uint64, uint64) {
+	nextLsn, records := d.doReadMany(lsn, size)
 	safeLsn := uint64(0)
-	d.appendRecords(records, lsn, func(lsn uint64, r *recordEntry) {
-		r.unmarshal()
-		if safeLsn < r.appended {
-			safeLsn = r.appended
-		}
-		fn(lsn, r)
-	}, 0)
+	d.appendRecords(
+		records,
+		lsn,
+		func(lsn uint64, r *recordEntry) {
+			r.unmarshal()
+			if safeLsn < r.appended {
+				safeLsn = r.appended
+			}
+			fn(lsn, r)
+		},
+		0,
+	)
 	return nextLsn, safeLsn
 }
 
-func (d *LogServiceDriver) readFromLogService(lsn uint64, size int) (nextLsn uint64, records []logservice.LogRecord) {
+func (d *LogServiceDriver) doReadMany(
+	lsn uint64, size int,
+) (nextLsn uint64, records []logservice.LogRecord) {
 	client, err := d.clientPool.Get()
 	defer d.clientPool.Put(client)
 	if err != nil {
 		panic(err)
 	}
 	t0 := time.Now()
-	ctx, cancel := context.WithTimeoutCause(context.Background(), d.config.ReadDuration, moerr.CauseReadFromLogService)
-	records, nextLsn, err = client.c.Read(ctx, lsn, uint64(size))
+	ctx, cancel := context.WithTimeoutCause(
+		context.Background(),
+		d.config.ReadDuration,
+		moerr.CauseReadFromLogService,
+	)
+
+	records, nextLsn, err = client.c.Read(
+		ctx, lsn, uint64(size),
+	)
 	err = moerr.AttachCause(ctx, err)
+
 	cancel()
+
 	if err != nil {
-		err = RetryWithTimeout(d.config.RetryTimeout, func() (shouldReturn bool) {
-			logutil.Infof("LogService Driver: retry read err is %v", err)
-			ctx, cancel := context.WithTimeoutCause(context.Background(), d.config.ReadDuration, moerr.CauseReadFromLogService2)
-			records, nextLsn, err = client.c.Read(ctx, lsn, uint64(size))
-			err = moerr.AttachCause(ctx, err)
-			cancel()
-			return err == nil
-		})
+		err = RetryWithTimeout(
+			d.config.RetryTimeout,
+			func() (shouldReturn bool) {
+				var (
+					dueErr = err
+					now    = time.Now()
+				)
+				ctx, cancel := context.WithTimeoutCause(
+					context.Background(),
+					d.config.ReadDuration,
+					moerr.CauseReadFromLogService2,
+				)
+				defer cancel()
+				if records, nextLsn, err = client.c.Read(
+					ctx, lsn, uint64(size),
+				); err != nil {
+					err = moerr.AttachCause(ctx, err)
+				}
+				logger := logutil.Info
+				if err != nil {
+					logger = logutil.Error
+				}
+				logger(
+					"Wal-Retry-Read-In-Driver",
+					zap.Any("due-error", dueErr),
+					zap.Uint64("from-lsn", lsn),
+					zap.Int("size", size),
+					zap.Int("num-records", len(records)),
+					zap.Uint64("next-lsn", nextLsn),
+					zap.Duration("duration", time.Since(now)),
+					zap.Error(err),
+				)
+				return err == nil
+			},
+		)
 		if err != nil {
 			panic(err)
 		}

@@ -110,24 +110,28 @@ func (r *replayer) replay() {
 }
 
 func (r *replayer) readRecords() (readEnd bool) {
-	nextLsn, safeLsn := r.d.readFromLogServiceInReplay(r.nextToReadLsn, r.readMaxSize, func(lsn uint64, record *recordEntry) {
-		r.readCount++
-		if record.Meta.metaType == TReplay {
-			r.internalCount++
-			logutil.Info("Wal-Replay-Trace-Replay-Skip-Entry-By-CMD",
-				zap.Any("drlsn-psn", record.cmd.skipLsns))
-			r.removeEntries(record.cmd.skipLsns)
-			return
-		}
-		drlsn := record.GetMinLsn()
-		r.driverLsnLogserviceLsnMap[drlsn] = lsn
-		if drlsn-1 < r.replayedLsn {
-			if r.inited {
-				panic("logic err")
+	nextLsn, safeLsn := r.d.readFromLogServiceInReplay(
+		r.nextToReadLsn,
+		r.readMaxSize,
+		func(lsn uint64, record *recordEntry) {
+			r.readCount++
+			if record.Meta.metaType == TReplay {
+				r.internalCount++
+				logutil.Info("Wal-Replay-Trace-Replay-Skip-Entry-By-CMD",
+					zap.Any("drlsn-psn", record.cmd.skipLsns))
+				r.removeEntries(record.cmd.skipLsns)
+				return
 			}
-			r.replayedLsn = drlsn - 1
-		}
-	})
+			drlsn := record.GetMinLsn()
+			r.driverLsnLogserviceLsnMap[drlsn] = lsn
+			if drlsn-1 < r.replayedLsn {
+				if r.inited {
+					panic("logic err")
+				}
+				r.replayedLsn = drlsn - 1
+			}
+		},
+	)
 	if safeLsn > r.safeLsn {
 		r.safeLsn = safeLsn
 	}
