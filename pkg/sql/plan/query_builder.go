@@ -4071,6 +4071,7 @@ func (builder *QueryBuilder) bindView(
 	}
 	viewCtx := NewBindContext(builder, nil)
 	viewCtx.snapshot = snapshot
+	viewCtx.lower = ctx.lower
 
 	viewData := ViewData{}
 	err = json.Unmarshal([]byte(viewDefString), &viewData)
@@ -4078,7 +4079,7 @@ func (builder *QueryBuilder) bindView(
 		return 0, err
 	}
 
-	originStmts, err := mysql.Parse(builder.GetContext(), viewData.Stmt, 1)
+	originStmts, err := mysql.Parse(builder.GetContext(), viewData.Stmt, ctx.lower)
 	defer func() {
 		for _, s := range originStmts {
 			s.Free()
