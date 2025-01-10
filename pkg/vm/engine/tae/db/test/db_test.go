@@ -7609,7 +7609,7 @@ func TestCkpLeak(t *testing.T) {
 	if db.Runtime.Scheduler.GetPenddingLSNCnt() != 0 {
 		return
 	}
-	checkLeak := func() {
+	checkLeak := func() bool {
 		ckpMetaFiles := db.BGCheckpointRunner.GetCheckpointMetaFiles()
 		var cpt *ioutil.TSRangeFile
 		for ckpMetaFile := range ckpMetaFiles {
@@ -7618,11 +7618,12 @@ func TestCkpLeak(t *testing.T) {
 				logutil.Infof("compact file %v", file.GetName())
 				if cpt != nil {
 					logutil.Errorf("dup compacted files %v %v", cpt.GetName(), file.GetName())
-					assert.Fail(t, "dup compacted files")
+					return false
 				}
 				cpt = &file
 			}
 		}
+		return true
 	}
 	testutils.WaitExpect(5000, func() bool {
 		return db.DiskCleaner.GetCleaner().GetMinMerged() != nil
@@ -7630,7 +7631,11 @@ func TestCkpLeak(t *testing.T) {
 	if db.DiskCleaner.GetCleaner().GetMinMerged() == nil {
 		return
 	}
-	checkLeak()
+	testutils.WaitExpect(5000, func() bool {
+		return checkLeak()
+	})
+	ok := checkLeak()
+	assert.True(t, ok)
 	tae.Restart(ctx)
 	assert.Equal(t, uint64(0), db.Runtime.Scheduler.GetPenddingLSNCnt())
 	testutils.WaitExpect(5000, func() bool {
@@ -7639,7 +7644,11 @@ func TestCkpLeak(t *testing.T) {
 	if db.DiskCleaner.GetCleaner().GetMinMerged() == nil {
 		return
 	}
-	checkLeak()
+	testutils.WaitExpect(5000, func() bool {
+		return checkLeak()
+	})
+	ok = checkLeak()
+	assert.True(t, ok)
 
 }
 
