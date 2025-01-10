@@ -336,3 +336,39 @@ func TestWaitKeeper(t *testing.T) {
 	assert.False(t, ok)
 	assert.False(t, gs.safeToUnsubscribe(tid))
 }
+
+func TestQueueWatcher(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	testAdjustFn := func(qw *queueWatcher) {
+		qw.checkInterval = time.Millisecond * 10
+		qw.threshold = time.Millisecond * 10
+	}
+	q := newQueueWatcher()
+	testAdjustFn(q)
+
+	t.Run("ok", func(t *testing.T) {
+		q.add(101)
+		q.add(102)
+		assert.Equal(t, 2, len(q.value))
+		q.del(101)
+		assert.Equal(t, 1, len(q.value))
+
+		time.Sleep(time.Millisecond * 20)
+		list := q.check()
+		assert.Equal(t, 1, len(list))
+		q.del(102)
+		assert.Equal(t, 0, len(q.value))
+	})
+
+	t.Run("run in background", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		go q.run(ctx)
+		q.add(101)
+		q.add(102)
+		time.Sleep(time.Millisecond * 20)
+		list := q.check()
+		assert.Equal(t, 2, len(list))
+	})
+
+}
