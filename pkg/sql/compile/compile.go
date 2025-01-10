@@ -2954,17 +2954,7 @@ func (c *Compile) compileShuffleGroupV2(n *plan.Node, inputSS []*Scope, nodes []
 		return inputSS
 	}
 
-	child := nodes[n.Children[0]]
-	dop := int(n.Stats.Dop)
-	if dop != inputSS[0].NodeInfo.Mcpu {
-		if child.NodeType == plan.Node_TABLE_SCAN {
-			inputSS[0].NodeInfo.Mcpu = dop
-		} else {
-			dop = inputSS[0].NodeInfo.Mcpu
-		}
-	}
-
-	shuffleArg := constructShuffleArgForGroupV2(n, int32(dop))
+	shuffleArg := constructShuffleArgForGroupV2(n, n.Stats.Dop)
 	shuffleArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
 	inputSS[0].setRootOperator(shuffleArg)
 
