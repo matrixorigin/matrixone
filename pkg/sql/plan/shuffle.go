@@ -115,9 +115,9 @@ func shuffleByZonemap(rsp *engine.RangesShuffleParam, zm objectio.ZoneMap, bucke
 	}
 
 	var shuffleIDX uint64
-	if rsp.ShuffleRangeUint64 != nil {
+	if len(rsp.ShuffleRangeUint64) > 0 {
 		shuffleIDX = GetRangeShuffleIndexForZMUnsignedSlice(rsp.ShuffleRangeUint64, zm)
-	} else if rsp.ShuffleRangeInt64 != nil {
+	} else if len(rsp.ShuffleRangeInt64) > 0 {
 		shuffleIDX = GetRangeShuffleIndexForZMSignedSlice(rsp.ShuffleRangeInt64, zm)
 	} else {
 		shuffleIDX = GetRangeShuffleIndexForZM(rsp.Node.Stats.HashmapStats.ShuffleColMin, rsp.Node.Stats.HashmapStats.ShuffleColMax, zm, uint64(bucketNum))
@@ -656,7 +656,7 @@ func determineShuffleForGroupBy(n *plan.Node, builder *QueryBuilder) {
 
 }
 
-func GetShuffleDop(ncpu int, lencn int, hashmapSize float64) (dop int) {
+func getShuffleDop(ncpu int, lencn int, hashmapSize float64) (dop int) {
 	if ncpu <= 4 {
 		ncpu = 4
 	}
