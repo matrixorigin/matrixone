@@ -50,22 +50,22 @@ func (d *LogServiceDriver) onTruncate(items ...any) {
 func (d *LogServiceDriver) doTruncate() {
 	t0 := time.Now()
 	target := d.truncating.Load()
-	lastServiceLsn := d.truncatedLogserviceLsn
+	lastServiceLsn := d.truncatedPSN
 	lsn := lastServiceLsn
 	//TODO use valid lsn
-	next := d.getNextValidLogserviceLsn(lsn)
+	next := d.getNextValidPSN(lsn)
 	loopCount := 0
 	for d.isToTruncate(next, target) {
 		loopCount++
 		lsn = next
-		next = d.getNextValidLogserviceLsn(lsn)
+		next = d.getNextValidPSN(lsn)
 		if next <= lsn {
 			break
 		}
 	}
 	d.addrMu.RLock()
-	min := d.validLsn.Minimum()
-	max := d.validLsn.Maximum()
+	min := d.validPSN.Minimum()
+	max := d.validPSN.Maximum()
 	d.addrMu.RUnlock()
 	logutil.Info("TRACE-WAL-TRUNCATE-Get LogService lsn",
 		zap.Int("loop count", loopCount),
@@ -78,7 +78,7 @@ func (d *LogServiceDriver) doTruncate() {
 		return
 	}
 	d.truncateLogservice(lsn)
-	d.truncatedLogserviceLsn = lsn
+	d.truncatedPSN = lsn
 	d.gcAddr(lsn)
 }
 

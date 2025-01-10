@@ -31,8 +31,10 @@ var ErrDriverLsnNotFound = moerr.NewInternalErrorNoCtx("driver info: driver lsn 
 var ErrRetryTimeOut = moerr.NewInternalErrorNoCtx("driver info: retry time out")
 
 type driverInfo struct {
-	addr     map[uint64]*common.ClosedIntervals //logservicelsn-driverlsn TODO drop on truncate
-	validLsn *roaring64.Bitmap
+	// PSN -> [DSN,..]
+	addr map[uint64]*common.ClosedIntervals //logservicelsn-driverlsn TODO drop on truncate
+	// PSN: physical sequence number. here is the lsn from logservice
+	validPSN roaring64.Bitmap
 	addrMu   sync.RWMutex
 
 	// dsn: driver sequence number
@@ -46,8 +48,8 @@ type driverInfo struct {
 	synced   uint64
 	syncedMu sync.RWMutex
 
-	truncating             atomic.Uint64 //
-	truncatedLogserviceLsn uint64        //
+	truncating   atomic.Uint64 //
+	truncatedPSN uint64        //
 
 	// writeController is used to control the write token
 	// it controles the max write token issued and all finished write tokens
@@ -74,7 +76,6 @@ type driverInfo struct {
 func newDriverInfo() *driverInfo {
 	d := &driverInfo{
 		addr:       make(map[uint64]*common.ClosedIntervals),
-		validLsn:   roaring64.NewBitmap(),
 		commitCond: *sync.NewCond(new(sync.Mutex)),
 	}
 	d.writeController.finishedTokens = common.NewClosedIntervals()
@@ -104,30 +105,32 @@ func (info *driverInfo) onReplay(r *replayer) {
 	if r.minDriverLsn != math.MaxUint64 {
 		info.truncating.Store(r.minDriverLsn - 1)
 	}
-	info.truncatedLogserviceLsn = r.truncatedLogserviceLsn
+	info.truncatedPSN = r.truncatedPSN
 	info.writeController.finishedTokens.TryMerge(common.NewClosedIntervalsBySlice(r.writeTokens))
 }
 
-func (info *driverInfo) onReplayRecordEntry(lsn uint64, driverLsns *common.ClosedIntervals) {
-	info.addr[lsn] = driverLsns
-	info.validLsn.Add(lsn)
+func (info *driverInfo) onReplayRecordEntry(
+	psn uint64, dsns *common.ClosedIntervals,
+) {
+	info.addr[psn] = dsns
+	info.validPSN.Add(psn)
 }
 
-func (info *driverInfo) getNextValidLogserviceLsn(lsn uint64) uint64 {
-	info.addrMu.Lock()
-	defer info.addrMu.Unlock()
-	if info.validLsn.IsEmpty() {
+func (info *driverInfo) getNextValidPSN(psn uint64) uint64 {
+	info.addrMu.RLock()
+	defer info.addrMu.RUnlock()
+	if info.validPSN.IsEmpty() {
 		return 0
 	}
-	max := info.validLsn.Maximum()
-	if lsn >= max {
-		return max
+	maxPSN := info.validPSN.Maximum()
+	if psn >= maxPSN {
+		return maxPSN
 	}
-	lsn++
-	for !info.validLsn.Contains(lsn) {
-		lsn++
+	psn++
+	for !info.validPSN.Contains(psn) {
+		psn++
 	}
-	return lsn
+	return psn
 }
 
 func (info *driverInfo) isToTruncate(logserviceLsn, dsn uint64) bool {
@@ -209,7 +212,7 @@ func (info *driverInfo) logAppend(appender *driverAppender) {
 	for key := range appender.entry.Meta.addr {
 		array = append(array, key)
 	}
-	info.validLsn.Add(appender.logserviceLsn)
+	info.validPSN.Add(appender.logserviceLsn)
 	interval := common.NewClosedIntervalsBySlice(array)
 	info.addr[appender.logserviceLsn] = interval
 	info.addrMu.Unlock()
@@ -232,7 +235,7 @@ func (info *driverInfo) gcAddr(logserviceLsn uint64) {
 			lsnToDelete = append(lsnToDelete, serviceLsn)
 		}
 	}
-	info.validLsn.RemoveRange(0, logserviceLsn)
+	info.validPSN.RemoveRange(0, logserviceLsn)
 	for _, lsn := range lsnToDelete {
 		delete(info.addr, lsn)
 	}

@@ -35,7 +35,7 @@ import (
 type replayer struct {
 	readMaxSize int
 
-	truncatedLogserviceLsn uint64
+	truncatedPSN uint64
 
 	minDriverLsn uint64
 	maxDriverLsn uint64
@@ -79,7 +79,7 @@ func newReplayer(h driver.ApplyHandle, readmaxsize int, d *LogServiceDriver) *re
 		writeTokens:               make([]uint64, 0),
 		recordChan:                make(chan *entry.Entry, 100),
 		wg:                        sync.WaitGroup{},
-		truncatedLogserviceLsn:    truncated,
+		truncatedPSN:              truncated,
 	}
 	r.readFn = r.readRecords
 	return r
