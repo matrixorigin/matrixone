@@ -90,7 +90,7 @@ func NewRenameTableReq(did, tid uint64, old, new string) *AlterTableReq {
 	}
 }
 
-func NewAddColumnReq(did, tid uint64, name string, typ *plan.Type, insertAt int32) *AlterTableReq {
+func NewAddColumnReq(did, tid uint64, name string, typ plan.Type, insertAt int32) *AlterTableReq {
 	return &AlterTableReq{
 		DbId:    did,
 		TableId: tid,
@@ -100,7 +100,7 @@ func NewAddColumnReq(did, tid uint64, name string, typ *plan.Type, insertAt int3
 				Column: &plan.ColDef{
 					Name:       strings.ToLower(name),
 					OriginName: name,
-					Typ:        *typ,
+					Typ:        typ,
 					Default: &plan.Default{
 						NullAbility:  true,
 						Expr:         nil,
@@ -122,19 +122,6 @@ func NewRemoveColumnReq(did, tid uint64, idx, seqnum uint32) *AlterTableReq {
 			&AlterTableDropColumn{
 				LogicalIdx:  idx,
 				SequenceNum: seqnum,
-			},
-		},
-	}
-}
-
-func NewAddPartitionReq(did, tid uint64, partitionDef *plan.PartitionByDef) *AlterTableReq {
-	return &AlterTableReq{
-		DbId:    did,
-		TableId: tid,
-		Kind:    AlterKind_AddPartition,
-		Operation: &AlterTableReq_AddPartition{
-			AddPartition: &AlterTableAddPartition{
-				PartitionDef: partitionDef,
 			},
 		},
 	}

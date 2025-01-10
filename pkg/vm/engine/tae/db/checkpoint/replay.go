@@ -478,13 +478,19 @@ func (c *CkpReplayer) ReplayCatalog(
 		_, err2 = mergesort.SortBlockColumns(cols, pkidx, c.r.rt.VectorPool.Transient)
 		return
 	}
-	c.r.catalog.RelayFromSysTableObjects(
+	closeFn := c.r.catalog.RelayFromSysTableObjects(
 		c.r.ctx,
 		readTxn,
 		c.dataF,
 		tables.ReadSysTableBatch,
 		sortFunc,
+		c,
 	)
+	c.wg.Wait()
+	for _, fn := range closeFn {
+		fn()
+	}
+	c.resetObjectCountMap()
 	// logutil.Info(c.r.catalog.SimplePPString(common.PPL0))
 	return
 }
@@ -563,6 +569,10 @@ func (c *CkpReplayer) Submit(tid uint64, replayFn func()) {
 	workerOffset := tid % uint64(len(c.objectReplayWorker))
 	c.objectCountMap[tid] = c.objectCountMap[tid] + 1
 	c.objectReplayWorker[workerOffset].Enqueue(replayFn)
+}
+
+func (c *CkpReplayer) resetObjectCountMap() {
+	c.objectCountMap = map[uint64]int{}
 }
 
 func (r *runner) BuildReplayer(
