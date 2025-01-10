@@ -1480,8 +1480,192 @@ func (c *checkpointCleaner) Process(inputCtx context.Context) (err error) {
 	return
 }
 
-func (c *checkpointCleaner) FastExecute(context.Context) error {
-	return nil
+func (c *checkpointCleaner) FastExecute(inputCtx context.Context) (err error) {
+
+	if !c.GCEnabled() {
+		return
+	}
+	now := time.Now()
+
+	c.StartMutationTask("gc-fast-execute")
+	defer c.StopMutationTask()
+
+	startScanWaterMark := c.GetScanWaterMark()
+	startGCWaterMark := c.GetGCWaterMark()
+
+	defer func() {
+		endScanWaterMark := c.GetScanWaterMark()
+		endGCWaterMark := c.GetGCWaterMark()
+		logutil.Info(
+			"GC-TRACE-PROCESS",
+			zap.String("task", c.TaskNameLocked()),
+			zap.Duration("duration", time.Since(now)),
+			zap.Error(err),
+			zap.String("start-scan-watermark", startScanWaterMark.String()),
+			zap.String("end-scan-watermark", endScanWaterMark.String()),
+			zap.String("start-gc-watermark", startGCWaterMark.String()),
+			zap.String("end-gc-watermark", endGCWaterMark.String()),
+		)
+	}()
+
+	ctx, cancel := context.WithCancelCause(inputCtx)
+	defer cancel(nil)
+	go func() {
+		select {
+		case <-ctx.Done():
+		case <-c.ctx.Done():
+			cancel(context.Cause(c.ctx))
+		case <-inputCtx.Done():
+			cancel(context.Cause(inputCtx))
+		}
+	}()
+
+	select {
+	case <-ctx.Done():
+		return context.Cause(ctx)
+	default:
+	}
+
+	memoryBuffer := MakeGCWindowBuffer(16 * mpool.MB)
+	defer memoryBuffer.Close(c.mp)
+
+	if err = c.tryScanLocked(ctx, memoryBuffer); err != nil {
+		return
+	}
+	err = c.tryGCLocked(ctx, memoryBuffer)
+
+	// get up to 10 incremental checkpoints starting from the max scanned timestamp
+	checkpoints := c.checkpointCli.ICKPSeekLT(startGCWaterMark.GetEnd(), 10)
+
+	// quick return if there is no incremental checkpoint
+	if len(checkpoints) == 0 {
+		return
+	}
+
+	candidates := make([]*checkpoint.CheckpointEntry, 0, len(checkpoints))
+	// filter out the incremental checkpoints that do not meet the requirements
+	for _, ckp := range checkpoints {
+		if !c.checkExtras(ckp) {
+			continue
+		}
+		candidates = append(candidates, ckp)
+	}
+
+	if len(candidates) == 0 {
+		return
+	}
+
+	var newWindow *GCWindow
+	if newWindow, _, err = c.scanCheckpointsLocked(
+		ctx, candidates, memoryBuffer,
+	); err != nil {
+		logutil.Error(
+			"GC-SCAN-WINDOW-ERROR",
+			zap.Error(err),
+			zap.String("checkpoint", candidates[0].String()),
+		)
+		return
+	}
+
+	var snapshots map[uint32]containers.Vector
+	var extraErrMsg string
+	defer func() {
+		logtail.CloseSnapshotList(snapshots)
+		logutil.Info(
+			"GC-TRACE-TRY-GC-AGAINST-GCKP",
+			zap.String("task", c.TaskNameLocked()),
+			zap.Duration("duration", time.Since(now)),
+			zap.Error(err),
+			zap.String("extra-err-msg", extraErrMsg),
+		)
+	}()
+	pitrs, err := c.GetPITRsLocked(ctx)
+	if err != nil {
+		extraErrMsg = "GetPITRs failed"
+		return
+	}
+	snapshots, err = c.mutation.snapshotMeta.GetSnapshot(c.ctx, c.sid, c.fs.Service, c.mp)
+	if err != nil {
+		extraErrMsg = "GetSnapshot failed"
+		return
+	}
+	accountSnapshots := TransformToTSList(snapshots)
+	filesToGC, err := c.doFastGCAgainstGlobalCheckpointLocked(
+		accountSnapshots, pitrs, memoryBuffer, newWindow,
+	)
+	if err != nil {
+		extraErrMsg = "doGCAgainstGlobalCheckpointLocked failed"
+		return
+	}
+	// Delete files after doGCAgainstGlobalCheckpointLocked
+	// TODO:Requires Physical Removal Policy
+	if err = c.deleter.DeleteMany(
+		c.ctx,
+		c.TaskNameLocked(),
+		filesToGC,
+	); err != nil {
+		extraErrMsg = fmt.Sprintf("ExecDelete %v failed", filesToGC)
+		return
+	}
+	return
+}
+
+// at least one incremental checkpoint has been scanned
+// and the GC'ed water mark less than the global checkpoint
+func (c *checkpointCleaner) doFastGCAgainstGlobalCheckpointLocked(
+	accountSnapshots map[uint32][]types.TS,
+	pitrs *logtail.PitrInfo,
+	memoryBuffer *containers.OneSchemaBatchBuffer,
+	window *GCWindow,
+) ([]string, error) {
+	now := time.Now()
+
+	var (
+		filesToGC           []string
+		metafile            string
+		err                 error
+		softCost, mergeCost time.Duration
+		extraErrMsg         string
+	)
+
+	defer func() {
+		logutil.Info(
+			"GC-TRACE-DO-GC-AGAINST-GCKP",
+			zap.String("task", c.TaskNameLocked()),
+			zap.Duration("duration", time.Since(now)),
+			zap.Duration("soft-gc", softCost),
+			zap.Duration("merge-table", mergeCost),
+			zap.Error(err),
+			zap.String("metafile", metafile),
+			zap.String("extra-err-msg", extraErrMsg),
+		)
+	}()
+
+	// do GC against the global checkpoint
+	// the result is the files that need to be deleted
+	// it will update the file list in the oneWindow
+	// Before:
+	// [t100, t400] [f1, f2, f3, f4, f5, f6, f7, f8, f9]
+	// After:
+	// [t100, t400] [f10, f11]
+	// Also, it will update the GC metadata
+	if filesToGC, metafile, err = window.ExecuteFastBasedGC(
+		c.ctx,
+		accountSnapshots,
+		pitrs,
+		c.mutation.snapshotMeta,
+		memoryBuffer,
+		c.config.canGCCacheSize,
+		c.config.estimateRows,
+		c.config.probility,
+		c.mp,
+		c.fs.Service,
+	); err != nil {
+		extraErrMsg = fmt.Sprintf("ExecuteGlobalCheckpointBasedGC %v failed", window)
+		return nil, err
+	}
+
+	return filesToGC, nil
 }
 
 // tryScanLocked scans the incremental checkpoints and tries to create a new GC window
