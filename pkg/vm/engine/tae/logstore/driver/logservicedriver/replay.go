@@ -249,7 +249,7 @@ func (r *replayer) AppendSkipCmd(skipMap map[uint64]uint64) {
 	recordEntry.Meta.metaType = TReplay
 	recordEntry.cmd = cmd
 	size := recordEntry.prepareRecord()
-	c, writeToken := r.d.getClient()
+	c, writeToken := r.d.getClientForWrite()
 	r.writeTokens = append(r.writeTokens, writeToken)
 	c.TryResize(size)
 	record := c.record

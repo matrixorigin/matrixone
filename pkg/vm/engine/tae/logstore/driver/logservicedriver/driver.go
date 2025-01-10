@@ -63,7 +63,7 @@ type LogServiceDriver struct {
 	closeCancel     context.CancelFunc
 	preAppendLoop   sm.Queue
 	appendQueue     chan any
-	appendedQueue   chan any
+	appendWaitQueue chan any
 	appendedLoop    *sm.Loop
 	postAppendQueue chan any
 	postAppendLoop  *sm.Loop
@@ -102,14 +102,14 @@ func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
 		driverInfo:      newDriverInfo(),
 		readCache:       newReadCache(),
 		appendQueue:     make(chan any, 10000),
-		appendedQueue:   make(chan any, 10000),
+		appendWaitQueue: make(chan any, 10000),
 		postAppendQueue: make(chan any, 10000),
 		appendPool:      pool,
 	}
 	d.closeCtx, d.closeCancel = context.WithCancel(context.Background())
 	d.preAppendLoop = sm.NewSafeQueue(10000, 10000, d.onPreAppend)
 	d.preAppendLoop.Start()
-	d.appendedLoop = sm.NewLoop(d.appendedQueue, d.postAppendQueue, d.onAppendedQueue, 10000)
+	d.appendedLoop = sm.NewLoop(d.appendWaitQueue, d.postAppendQueue, d.onAppendedQueue, 10000)
 	d.appendedLoop.Start()
 	d.postAppendLoop = sm.NewLoop(d.postAppendQueue, nil, d.onPostAppendQueue, 10000)
 	d.postAppendLoop.Start()
@@ -127,7 +127,7 @@ func (d *LogServiceDriver) Close() error {
 	d.postAppendLoop.Stop()
 	d.truncateQueue.Stop()
 	close(d.appendQueue)
-	close(d.appendedQueue)
+	close(d.appendWaitQueue)
 	close(d.postAppendQueue)
 	d.appendPool.Release()
 	return nil

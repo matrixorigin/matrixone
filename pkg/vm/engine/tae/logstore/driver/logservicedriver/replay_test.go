@@ -63,7 +63,7 @@ func TestAppendSkipCmd2(t *testing.T) {
 	lsns := []uint64{8, 1, 2, 3, 6, 9, 7, 10, 13, 12}
 	appended := []uint64{0, 1, 2, 5, 6, 6, 9, 10, 10, 10}
 
-	client, _ := driver.getClient()
+	client, _ := driver.getClientForWrite()
 	for i := 0; i < entryCount; i++ {
 		entries[i].Lsn = lsns[i]
 
@@ -163,7 +163,7 @@ func TestAppendSkipCmd4(t *testing.T) {
 	lsns := []uint64{1, 2, 3, 5}
 	appended := []uint64{1, 2, 3, 3}
 
-	client, _ := driver.getClient()
+	client, _ := driver.getClientForWrite()
 	for i := 0; i < entryCount; i++ {
 		entries[i].Lsn = lsns[i]
 
@@ -215,7 +215,7 @@ func TestAppendSkipCmd4(t *testing.T) {
 	lsns = []uint64{4}
 	appended = []uint64{4}
 
-	client, _ = driver.getClient()
+	client, _ = driver.getClientForWrite()
 	for i := 0; i < entryCount; i++ {
 		payload := []byte(fmt.Sprintf("payload %d", i))
 		e := entry.MockEntryWithPayload(payload)
@@ -280,7 +280,7 @@ func TestAppendSkipCmd5(t *testing.T) {
 	lsns := []uint64{10, 9, 12, 11}
 	appended := []uint64{8, 10, 10, 12}
 
-	client, _ := driver.getClient()
+	client, _ := driver.getClientForWrite()
 	for i := 0; i < entryCount; i++ {
 		entries[i].Lsn = lsns[i]
 
