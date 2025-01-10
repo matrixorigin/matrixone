@@ -560,13 +560,20 @@ func (s *Scope) getRelData(c *Compile, blockExprList []*plan.Expr) error {
 	}
 
 	if s.NodeInfo.CNCNT == 1 {
+		rsp := &engine.RangesShuffleParam{
+			Node:  s.DataSource.node,
+			CNCNT: s.NodeInfo.CNCNT,
+			CNIDX: s.NodeInfo.CNIDX,
+			Init:  false,
+		}
 		s.NodeInfo.Data, err = c.expandRanges(
 			s.DataSource.node,
 			rel,
 			db,
 			ctx,
 			blockExprList,
-			engine.Policy_CollectAllData, nil)
+			engine.Policy_CollectAllData,
+			rsp)
 		if err != nil {
 			return err
 		}
