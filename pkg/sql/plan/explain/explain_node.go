@@ -273,15 +273,6 @@ func (ndesc *NodeDescribeImpl) GetTableDef(ctx context.Context, options *Explain
 func (ndesc *NodeDescribeImpl) GetExtraInfo(ctx context.Context, options *ExplainOptions) ([]string, error) {
 	lines := make([]string, 0)
 
-	// Get partition prune information
-	if ndesc.Node.NodeType == plan.Node_TABLE_SCAN && ndesc.Node.TableDef.Partition != nil {
-		partPruneInfo, err := ndesc.GetPartitionPruneInfo(ctx, options)
-		if err != nil {
-			return nil, err
-		}
-		lines = append(lines, partPruneInfo)
-	}
-
 	// Get Sort list info
 	if len(ndesc.Node.OrderBy) > 0 {
 		orderByInfo, err := ndesc.GetOrderByInfo(ctx, options)
@@ -532,30 +523,6 @@ func (ndesc *NodeDescribeImpl) GetJoinConditionInfo(ctx context.Context, options
 		}
 	}
 
-	return buf.String(), nil
-}
-
-func (ndesc *NodeDescribeImpl) GetPartitionPruneInfo(ctx context.Context, options *ExplainOptions) (string, error) {
-	buf := bytes.NewBuffer(make([]byte, 0, 300))
-	buf.WriteString("Hit Partition: ")
-	if options.Format == EXPLAIN_FORMAT_TEXT {
-		if ndesc.Node.PartitionPrune != nil {
-			first := true
-			for _, v := range ndesc.Node.PartitionPrune.SelectedPartitions {
-				if !first {
-					buf.WriteString(", ")
-				}
-				first = false
-				buf.WriteString(v.PartitionName)
-			}
-		} else {
-			buf.WriteString("all partitions")
-		}
-	} else if options.Format == EXPLAIN_FORMAT_JSON {
-		return "", moerr.NewNYI(ctx, "explain format json")
-	} else if options.Format == EXPLAIN_FORMAT_DOT {
-		return "", moerr.NewNYI(ctx, "explain format dot")
-	}
 	return buf.String(), nil
 }
 

@@ -682,7 +682,6 @@ func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) (*plan.TableDef,
 	var properties []*plan.Property
 	var TableType string
 	var Createsql string
-	var partitionInfo *plan.PartitionByDef
 	var viewSql *plan.ViewDef
 	var foreignKeys []*plan.ForeignKeyDef
 	var primarykey *plan.PrimaryKeyDef
@@ -734,23 +733,6 @@ func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) (*plan.TableDef,
 		})
 
 		tableDef = append(tableDef, &engine.CommentDef{Comment: tblItem.Comment})
-	}
-
-	if tblItem.Partitioned > 0 {
-		p := &plan.PartitionByDef{}
-		err := p.UnMarshalPartitionInfo(([]byte)(tblItem.Partition))
-		if err != nil {
-			logutil.Errorf(
-				"catalog-cache error: unmarshal partition metadata information: %v-%v-%v, err: %v",
-				tblItem.AccountId, tblItem.Id, tblItem.Name, err)
-			return nil, nil
-		}
-		partitionInfo = p
-
-		tableDef = append(tableDef, &engine.PartitionDef{
-			Partitioned: tblItem.Partitioned,
-			Partition:   tblItem.Partition,
-		})
 	}
 
 	if tblItem.ViewDef != "" {
@@ -846,7 +828,6 @@ func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) (*plan.TableDef,
 		Createsql:     Createsql,
 		Pkey:          primarykey,
 		ViewSql:       viewSql,
-		Partition:     partitionInfo,
 		Fkeys:         foreignKeys,
 		RefChildTbls:  refChildTbls,
 		ClusterBy:     clusterByDef,
