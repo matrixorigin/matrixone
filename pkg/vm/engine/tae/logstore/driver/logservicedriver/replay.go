@@ -37,8 +37,8 @@ type replayer struct {
 
 	truncatedPSN uint64
 
-	minDriverLsn uint64
-	maxDriverLsn uint64
+	minDSN uint64
+	maxDSN uint64
 
 	driverLsnLogserviceLsnMap map[uint64]uint64 //start-lsn
 
@@ -69,7 +69,7 @@ func newReplayer(h driver.ApplyHandle, readmaxsize int, d *LogServiceDriver) *re
 	truncated := d.getTruncatedPSNFromRemote()
 	logutil.Info("Wal-Replay-Trace-Get-Truncated", zap.Uint64("psn", truncated))
 	r := &replayer{
-		minDriverLsn:              math.MaxUint64,
+		minDSN:                    math.MaxUint64,
 		driverLsnLogserviceLsnMap: make(map[uint64]uint64),
 		replayHandle:              h,
 		readMaxSize:               readmaxsize,
@@ -194,7 +194,7 @@ func (r *replayer) replayLogserviceEntry(lsn uint64) error {
 		if safe {
 			if !firstEntryIsFound {
 				logutil.Info("Wal-Replay-Trace-Skip-Entry", zap.Uint64("drlsn", lsn))
-				r.minDriverLsn = lsn + 1
+				r.minDSN = lsn + 1
 				r.replayedLsn++
 				return nil
 			} else {
@@ -222,8 +222,8 @@ func (r *replayer) replayLogserviceEntry(lsn uint64) error {
 	r.applyCount++
 	intervals := record.replay(r)
 	r.d.onReplayRecordEntry(logserviceLsn, intervals)
-	r.onReplayDriverLsn(intervals.GetMax())
-	r.onReplayDriverLsn(intervals.GetMin())
+	r.onReplayDSN(intervals.GetMax())
+	r.onReplayDSN(intervals.GetMin())
 	r.d.dropRecordByLsn(logserviceLsn)
 	r.replayedLsn = record.GetMaxLsn()
 	r.inited = true
@@ -272,15 +272,15 @@ func (r *replayer) AppendSkipCmd(skipMap map[uint64]uint64) {
 		}
 	}
 }
-func (r *replayer) onReplayDriverLsn(lsn uint64) {
-	if lsn == 0 {
+func (r *replayer) onReplayDSN(dsn uint64) {
+	if dsn == 0 {
 		return
 	}
-	if lsn < r.minDriverLsn {
-		r.minDriverLsn = lsn
+	if dsn < r.minDSN {
+		r.minDSN = dsn
 	}
-	if lsn > r.maxDriverLsn {
-		r.maxDriverLsn = lsn
+	if dsn > r.maxDSN {
+		r.maxDSN = dsn
 	}
 }
 

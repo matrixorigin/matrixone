@@ -102,11 +102,11 @@ func (info *driverInfo) IsReplaying() bool {
 	return info.inReplay
 }
 func (info *driverInfo) onReplay(r *replayer) {
-	info.dsn = r.maxDriverLsn
-	info.synced = r.maxDriverLsn
-	info.syncing = r.maxDriverLsn
-	if r.minDriverLsn != math.MaxUint64 {
-		info.truncateDSNIntent.Store(r.minDriverLsn - 1)
+	info.dsn = r.maxDSN
+	info.synced = r.maxDSN
+	info.syncing = r.maxDSN
+	if r.minDSN != math.MaxUint64 {
+		info.truncateDSNIntent.Store(r.minDSN - 1)
 	}
 	info.truncatedPSN = r.truncatedPSN
 	info.writeController.finishedTokens.TryMerge(common.NewClosedIntervalsBySlice(r.writeTokens))
