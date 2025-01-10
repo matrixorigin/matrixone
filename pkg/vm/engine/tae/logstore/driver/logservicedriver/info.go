@@ -112,7 +112,9 @@ func (info *driverInfo) onReplay(r *replayer) {
 	info.writeController.finishedTokens.TryMerge(common.NewClosedIntervalsBySlice(r.writeTokens))
 }
 
-func (info *driverInfo) onReplayRecordEntry(
+// psn: physical sequence number
+// dsns: dsns in the log entry of the psn
+func (info *driverInfo) recordPSNInfo(
 	psn uint64, dsns *common.ClosedIntervals,
 ) {
 	info.psn.dsnMap[psn] = dsns

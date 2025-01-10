@@ -297,14 +297,18 @@ func newEmptyRecordEntry(r logservice.LogRecord) *recordEntry {
 		baseEntry: &baseEntry{
 			Meta: newMeta(),
 		},
-		mashalMu: sync.RWMutex{}}
+	}
 }
 
-func (r *recordEntry) replay(replayer *replayer) (addr *common.ClosedIntervals) {
-	lsns := make([]uint64, 0)
+// one record entry may contain multiple entries, with each entry has a DSN
+// the DSNs in the record entry are monotonic continuous increasing
+// PSN: DSNS
+// 1: 1, 2, 3     2: 4, 5, 6
+func (r *recordEntry) scheduleReplay(replayer *replayer) *common.ClosedIntervals {
+	dsns := make([]uint64, 0, len(r.Meta.addr))
 	offset := int64(0)
-	for lsn := range r.Meta.addr {
-		lsns = append(lsns, lsn)
+	for dsn := range r.Meta.addr {
+		dsns = append(dsns, dsn)
 		e := entry.NewEmptyEntry()
 		n, err := e.UnmarshalBinary(r.baseEntry.payload[offset:])
 		if err != nil {
@@ -314,8 +318,7 @@ func (r *recordEntry) replay(replayer *replayer) (addr *common.ClosedIntervals) 
 		replayer.lastEntry = e
 		replayer.recordChan <- e
 	}
-	intervals := common.NewClosedIntervalsBySlice(lsns)
-	return intervals
+	return common.NewClosedIntervalsBySlice(dsns)
 }
 func (r *recordEntry) append(e *entry.Entry) {
 	r.entries = append(r.entries, e)

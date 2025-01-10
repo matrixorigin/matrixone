@@ -31,14 +31,15 @@ var ErrRecordNotFound = moerr.NewInternalErrorNoCtx("driver read cache: lsn not 
 var ErrAllRecordsRead = moerr.NewInternalErrorNoCtx("driver read cache: all records are read")
 
 type readCache struct {
-	lsns    []uint64
+	psns []uint64
+	// PSN -> Record mapping
 	records map[uint64]*recordEntry
 	readMu  sync.RWMutex
 }
 
 func newReadCache() *readCache {
 	return &readCache{
-		lsns:    make([]uint64, 0),
+		psns:    make([]uint64, 0),
 		records: make(map[uint64]*recordEntry),
 		readMu:  sync.RWMutex{},
 	}
@@ -70,54 +71,57 @@ func (d *LogServiceDriver) Read(dsn uint64) (*entry.Entry, error) {
 	return r.readEntry(dsn), nil
 }
 
-func (d *LogServiceDriver) readFromCache(lsn uint64) (*recordEntry, error) {
+func (d *LogServiceDriver) readFromCache(psn uint64) (*recordEntry, error) {
 	if len(d.records) == 0 {
 		return nil, ErrAllRecordsRead
 	}
-	record, ok := d.records[lsn]
+	record, ok := d.records[psn]
 	if !ok {
 		return nil, ErrRecordNotFound
 	}
 	return record, nil
 }
 
-func (d *LogServiceDriver) appendRecords(records []logservice.LogRecord, firstlsn uint64, fn func(uint64, *recordEntry), maxsize int) {
-	lsns := make([]uint64, 0)
+func (d *LogServiceDriver) appendRecords(
+	records []logservice.LogRecord,
+	firstPSN uint64,
+	fn func(uint64, *recordEntry),
+	maxsize int,
+) {
 	cnt := 0
 	for i, record := range records {
 		if record.GetType() != pb.UserRecord {
 			continue
 		}
-		lsn := firstlsn + uint64(i)
+		psn := firstPSN + uint64(i)
 		cnt++
 		if maxsize != 0 {
 			if cnt > maxsize {
 				break
 			}
 		}
-		_, ok := d.records[lsn]
-		if ok {
+		if _, ok := d.records[psn]; ok {
 			continue
 		}
-		d.records[lsn] = newEmptyRecordEntry(record)
-		lsns = append(lsns, lsn)
+		d.records[psn] = newEmptyRecordEntry(record)
+		d.psns = append(d.psns, psn)
 		if fn != nil {
-			fn(lsn, d.records[lsn])
+			fn(psn, d.records[psn])
 		}
 	}
-	d.lsns = append(d.lsns, lsns...)
 }
 
 func (d *LogServiceDriver) dropRecords() {
-	drop := len(d.lsns) - d.config.ReadCacheSize
-	lsns := d.lsns[:drop]
-	for _, lsn := range lsns {
-		delete(d.records, lsn)
+	dropCnt := len(d.psns) - d.config.ReadCacheSize
+	psns := d.psns[:dropCnt]
+	for _, psn := range psns {
+		delete(d.records, psn)
 	}
-	d.lsns = d.lsns[drop:]
+	d.psns = d.psns[dropCnt:]
 }
-func (d *LogServiceDriver) dropRecordByLsn(lsn uint64) {
-	delete(d.records, lsn)
+
+func (d *LogServiceDriver) dropRecordFromCache(psn uint64) {
+	delete(d.records, psn)
 }
 
 func (d *LogServiceDriver) resetReadCache() {
@@ -132,36 +136,36 @@ func (d *LogServiceDriver) readSmallBatchFromLogService(lsn uint64) {
 		_, records = d.doReadMany(lsn, MaxReadSize)
 	}
 	d.appendRecords(records, lsn, nil, 1)
-	if !d.IsReplaying() && len(d.lsns) > d.config.ReadCacheSize {
+	if !d.IsReplaying() && len(d.psns) > d.config.ReadCacheSize {
 		d.dropRecords()
 	}
 }
 
 func (d *LogServiceDriver) readFromLogServiceInReplay(
-	lsn uint64,
+	psn uint64,
 	size int,
-	fn func(lsn uint64, r *recordEntry),
+	fn func(uint64, *recordEntry),
 ) (uint64, uint64) {
-	nextLsn, records := d.doReadMany(lsn, size)
-	safeLsn := uint64(0)
+	nextPSN, records := d.doReadMany(psn, size)
+	safePSN := uint64(0)
 	d.appendRecords(
 		records,
-		lsn,
-		func(lsn uint64, r *recordEntry) {
+		psn,
+		func(psn uint64, r *recordEntry) {
 			r.unmarshal()
-			if safeLsn < r.appended {
-				safeLsn = r.appended
+			if safePSN < r.appended {
+				safePSN = r.appended
 			}
-			fn(lsn, r)
+			fn(psn, r)
 		},
 		0,
 	)
-	return nextLsn, safeLsn
+	return nextPSN, safePSN
 }
 
 func (d *LogServiceDriver) doReadMany(
 	lsn uint64, size int,
-) (nextLsn uint64, records []logservice.LogRecord) {
+) (nextPSN uint64, records []logservice.LogRecord) {
 	client, err := d.clientPool.Get()
 	defer d.clientPool.Put(client)
 	if err != nil {
@@ -174,7 +178,7 @@ func (d *LogServiceDriver) doReadMany(
 		moerr.CauseReadFromLogService,
 	)
 
-	records, nextLsn, err = client.c.Read(
+	records, nextPSN, err = client.c.Read(
 		ctx, lsn, uint64(size),
 	)
 	err = moerr.AttachCause(ctx, err)
@@ -195,7 +199,7 @@ func (d *LogServiceDriver) doReadMany(
 					moerr.CauseReadFromLogService2,
 				)
 				defer cancel()
-				if records, nextLsn, err = client.c.Read(
+				if records, nextPSN, err = client.c.Read(
 					ctx, lsn, uint64(size),
 				); err != nil {
 					err = moerr.AttachCause(ctx, err)
@@ -210,7 +214,7 @@ func (d *LogServiceDriver) doReadMany(
 					zap.Uint64("from-lsn", lsn),
 					zap.Int("size", size),
 					zap.Int("num-records", len(records)),
-					zap.Uint64("next-lsn", nextLsn),
+					zap.Uint64("next-lsn", nextPSN),
 					zap.Duration("duration", time.Since(now)),
 					zap.Error(err),
 				)
