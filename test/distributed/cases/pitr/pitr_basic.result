@@ -324,7 +324,6 @@ drop database if exists db01;
 create database db01;
 drop pitr if exists pitr12;
 create pitr pitr12 for database db01 range 1 'd';
-internal error: database `db01` already has a pitr
 drop pitr if exists pitr10;
 drop pitr if exists pitr11;
 drop pitr if exists pitr12;
