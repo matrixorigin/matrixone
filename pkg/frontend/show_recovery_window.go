@@ -199,10 +199,11 @@ func getAccountRecoveryWindowRows(ctx context.Context, ses *Session, bh Backgrou
 
 func getAccountRecoveryWindow(ctx context.Context, ses *Session, bh BackgroundExec, accountName, dbName string, accountPitrs *[]tableRecoveryWindow, accountSnapshot *[]tableRecoveryWindowForSnapshot) ([][]interface{}, error) {
 	// get tables
+	var err error
+	var erArray []ExecResult
 	bh.ClearExecResultSet()
-
 	bh.Exec(ctx, "show tables from "+dbName)
-	erArray, err := getResultSet(ctx, bh)
+	erArray, err = getResultSet(ctx, bh)
 	if err != nil {
 		return nil, err
 	}
@@ -251,10 +252,11 @@ func getAccountRecoveryWindow(ctx context.Context, ses *Session, bh BackgroundEx
 
 func getDbRecoveryWindowRows(ctx context.Context, ses *Session, bh BackgroundExec, accountName, dbName string) ([][]interface{}, error) {
 	// get tables
+	var err error
+	var erArray []ExecResult
 	bh.ClearExecResultSet()
-
 	bh.Exec(ctx, "show tables from "+dbName)
-	erArray, err := getResultSet(ctx, bh)
+	erArray, err = getResultSet(ctx, bh)
 	if err != nil {
 		return nil, err
 	}
@@ -301,10 +303,11 @@ func getDbRecoveryWindowRows(ctx context.Context, ses *Session, bh BackgroundExe
 
 func getTableRecoveryWindowRowsForDb(ctx context.Context, ses *Session, bh BackgroundExec, accountName, dbName, tblName string, dbPitrRecords *[]tableRecoveryWindow, dbSnapshotRecords *[]tableRecoveryWindowForSnapshot) ([][]interface{}, error) {
 	var rows [][]interface{}
+	var err error
 	marshelStrs := make([]string, 0)
 	// get table recovery window
 	var pitrRecords []tableRecoveryWindow
-	pitrRecords, err := getTablePitrRecords(ctx, ses, bh, accountName, dbName, tblName)
+	pitrRecords, err = getTablePitrRecords(ctx, ses, bh, accountName, dbName, tblName)
 	if err != nil {
 		return nil, err
 	}
@@ -357,10 +360,11 @@ func getTableRecoveryWindowRowsForDb(ctx context.Context, ses *Session, bh Backg
 
 func getTableRecoveryWindowRows(ctx context.Context, ses *Session, bh BackgroundExec, accountName, dbName, tblName string) ([][]interface{}, error) {
 	var rows [][]interface{}
+	var err error
 	marshelStrs := make([]string, 0)
 	// get table recovery window
 	var pitrRecords []tableRecoveryWindow
-	pitrRecords, err := getTablePitrRecords(ctx, ses, bh, accountName, dbName, tblName)
+	pitrRecords, err = getTablePitrRecords(ctx, ses, bh, accountName, dbName, tblName)
 	if err != nil {
 		return nil, err
 	}
