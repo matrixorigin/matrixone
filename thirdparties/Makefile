@@ -57,9 +57,11 @@ install/include/usearch.h:
 	(cd $(USEARCH_DIR) && mkdir build && cd build && cmake -DUSEARCH_BUILD_LIB_C=ON -DCMAKE_CXX_FLAGS=-I\ $(PWD)/install/include .. && make)
 ifeq ($(UNAME),darwin)
 	cp $(USEARCH_DIR)/build/*.dylib install/lib
+	cp $(USEARCH_DIR)/build/*.a install/lib
 endif
 ifeq ($(UNAME),linux)
 	cp $(USEARCH_DIR)/build/*.so install/lib
+	cp $(USEARCH_DIR)/build/*.a install/lib
 endif
 	cp $(USEARCH_DIR)/c/usearch.h install/include
 
