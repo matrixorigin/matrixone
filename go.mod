@@ -80,6 +80,7 @@ require (
 	github.com/ti-mo/netfilter v0.5.2
 	github.com/tidwall/btree v1.7.0
 	github.com/tidwall/pretty v1.2.1
+	github.com/unum-cloud/usearch/golang v0.0.0-20250109115700-cfb5132dfb5a
 	go.uber.org/automaxprocs v1.5.3
 	go.uber.org/ratelimit v0.2.0
 	go.uber.org/zap v1.24.0
