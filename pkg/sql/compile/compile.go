@@ -844,9 +844,7 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 		return nil, cantCompileForPrepareErr
 	}
 
-	if !c.IsTpQuery() {
-		plan2.CalcQueryDOP(c.pn, int32(c.ncpu), len(c.cnList))
-	}
+	plan2.CalcQueryDOP(c.pn, int32(c.ncpu), len(c.cnList), c.execType)
 
 	c.initAnalyzeModule(qry)
 	// deal with sink scan first.

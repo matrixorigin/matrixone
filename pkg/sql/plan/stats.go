@@ -1604,8 +1604,14 @@ func CalcNodeDOP(p *plan.Plan, rootID int32, ncpu int32, lencn int) {
 	}
 }
 
-func CalcQueryDOP(p *plan.Plan, ncpu int32, lencn int) {
+func CalcQueryDOP(p *plan.Plan, ncpu int32, lencn int, typ ExecType) {
 	qry := p.GetQuery()
+	if typ == ExecTypeTP {
+		for i := range qry.Nodes {
+			qry.Nodes[i].Stats.Dop = 1
+		}
+		return
+	}
 	for i := range qry.Steps {
 		CalcNodeDOP(p, qry.Steps[i], ncpu, lencn)
 	}
