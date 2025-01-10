@@ -58,6 +58,7 @@ type replayer struct {
 	firstEntryIsFound atomic.Bool
 	readEnd           bool
 
+	readDuration  time.Duration
 	applyDuration time.Duration
 	readCount     int
 	internalCount int
@@ -66,20 +67,23 @@ type replayer struct {
 	wg sync.WaitGroup
 }
 
-func newReplayer(h driver.ApplyHandle, readmaxsize int, d *LogServiceDriver) *replayer {
-	truncated := d.getTruncatedPSNFromRemote()
-	logutil.Info("Wal-Replay-Trace-Get-Truncated", zap.Uint64("psn", truncated))
+func newReplayer(
+	h driver.ApplyHandle,
+	d *LogServiceDriver,
+	readmaxsize int,
+) *replayer {
+	truncatedPSN := d.getTruncatedPSNFromRemote()
 	r := &replayer{
 		minDSN:        math.MaxUint64,
 		dsnToPSNMap:   make(map[uint64]uint64),
 		replayHandle:  h,
 		readMaxSize:   readmaxsize,
-		nextToReadPSN: truncated + 1,
+		nextToReadPSN: truncatedPSN + 1,
 		dsnWatermark:  math.MaxUint64,
 		d:             d,
 		writeTokens:   make([]uint64, 0),
 		recordChan:    make(chan *entry.Entry, 100),
-		truncatedPSN:  truncated,
+		truncatedPSN:  truncatedPSN,
 	}
 	return r
 }
@@ -112,6 +116,10 @@ func (r *replayer) replay() {
 }
 
 func (r *replayer) readNextBatch() (readEnd bool) {
+	start := time.Now()
+	defer func() {
+		r.readDuration += time.Since(start)
+	}()
 	nextPSN, safeLsn := r.d.readFromLogServiceInReplay(
 		r.nextToReadPSN,
 		r.readMaxSize,
@@ -119,8 +127,10 @@ func (r *replayer) readNextBatch() (readEnd bool) {
 			r.readCount++
 			if record.Meta.metaType == TReplay {
 				r.internalCount++
-				logutil.Info("Wal-Replay-Trace-Replay-Skip-Entry-By-CMD",
-					zap.Any("dsn-psn", record.cmd.skipMap))
+				logutil.Info(
+					"Wal-Replay-Skip-Entry-By-CMD",
+					zap.Any("dsn-psn", record.cmd.skipMap),
+				)
 				r.removeEntries(record.cmd.skipMap)
 				return
 			}

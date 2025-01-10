@@ -157,7 +157,7 @@ func (d *LogServiceDriver) truncateFromRemote(psn uint64) {
 		}
 	}
 }
-func (d *LogServiceDriver) getTruncatedPSNFromRemote() (lsn uint64) {
+func (d *LogServiceDriver) getTruncatedPSNFromRemote() (psn uint64) {
 	client, err := d.clientPool.Get()
 	if err == ErrClientPoolClosed {
 		return
@@ -167,14 +167,14 @@ func (d *LogServiceDriver) getTruncatedPSNFromRemote() (lsn uint64) {
 	}
 	defer d.clientPool.Put(client)
 	ctx, cancel := context.WithTimeoutCause(context.Background(), d.config.GetTruncateDuration, moerr.CauseGetLogserviceTruncate)
-	lsn, err = client.c.GetTruncatedLsn(ctx)
+	psn, err = client.c.GetTruncatedLsn(ctx)
 	err = moerr.AttachCause(ctx, err)
 	cancel()
 	if err != nil {
 		err = RetryWithTimeout(d.config.RetryTimeout, func() (shouldReturn bool) {
 			logutil.Infof("LogService Driver: retry gettruncate, err is %v", err)
 			ctx, cancel := context.WithTimeoutCause(context.Background(), d.config.GetTruncateDuration, moerr.CauseGetLogserviceTruncate2)
-			lsn, err = client.c.GetTruncatedLsn(ctx)
+			psn, err = client.c.GetTruncatedLsn(ctx)
 			err = moerr.AttachCause(ctx, err)
 			cancel()
 			return err == nil
@@ -183,6 +183,9 @@ func (d *LogServiceDriver) getTruncatedPSNFromRemote() (lsn uint64) {
 			panic(err)
 		}
 	}
-	logutil.Infof("TRACE-WAL-TRUNCATE-Get Truncate %d", lsn)
+	logutil.Info(
+		"Wal-Get-Truncate",
+		zap.Uint64("psn", psn),
+	)
 	return
 }
