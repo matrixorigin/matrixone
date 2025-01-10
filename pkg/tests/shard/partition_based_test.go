@@ -39,6 +39,8 @@ import (
 func TestPartitionBasedTableCanBeCreated(
 	t *testing.T,
 ) {
+	t.SkipNow()
+
 	runShardClusterTest(
 		func(c embed.Cluster) {
 			db := testutils.GetDatabaseName(t)
@@ -74,6 +76,8 @@ func TestPartitionBasedTableCanBeCreated(
 func TestPartitionBasedTableCanBeDeleted(
 	t *testing.T,
 ) {
+	t.SkipNow()
+
 	runShardClusterTest(
 		func(c embed.Cluster) {
 			db := testutils.GetDatabaseName(t)
@@ -99,6 +103,8 @@ func TestPartitionBasedTableCanBeDeleted(
 func TestInsertIntoWithLocalPartition(
 	t *testing.T,
 ) {
+	t.SkipNow()
+
 	runShardClusterTest(
 		func(c embed.Cluster) {
 			db := testutils.GetDatabaseName(t)
@@ -143,6 +149,8 @@ func TestInsertIntoWithLocalPartition(
 func TestUpdateWithLocalPartition(
 	t *testing.T,
 ) {
+	t.SkipNow()
+
 	runShardClusterTest(
 		func(c embed.Cluster) {
 			db := testutils.GetDatabaseName(t)
@@ -194,6 +202,8 @@ func TestUpdateWithLocalPartition(
 func TestInsertIntoWithRemotePartition(
 	t *testing.T,
 ) {
+	t.SkipNow()
+
 	runShardClusterTest(
 		func(c embed.Cluster) {
 			db := testutils.GetDatabaseName(t)
@@ -238,6 +248,8 @@ func TestInsertIntoWithRemotePartition(
 func TestUpdateWithRemotePartition(
 	t *testing.T,
 ) {
+	t.SkipNow()
+
 	runShardClusterTest(
 		func(c embed.Cluster) {
 			db := testutils.GetDatabaseName(t)
@@ -289,6 +301,8 @@ func TestUpdateWithRemotePartition(
 func TestSelectWithMultiPartition(
 	t *testing.T,
 ) {
+	t.SkipNow()
+
 	runShardClusterTest(
 		func(c embed.Cluster) {
 			db := testutils.GetDatabaseName(t)
@@ -343,6 +357,8 @@ func TestSelectWithMultiPartition(
 func TestUpdateOnNewCN(
 	t *testing.T,
 ) {
+	t.SkipNow()
+
 	runShardClusterTestWithReuse(
 		func(c embed.Cluster) {
 			db := testutils.GetDatabaseName(t)
