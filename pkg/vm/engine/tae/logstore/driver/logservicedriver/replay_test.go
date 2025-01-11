@@ -326,3 +326,34 @@ func TestAppendSkipCmd5(t *testing.T) {
 
 	driver.Close()
 }
+
+// case 1: normal
+func Test_Replayer1(t *testing.T) {
+	mockDriver := newMockDriver(
+		0,
+		// MetaType,PSN,DSN-S,DSN-E,Safe
+		[][5]uint64{
+			{uint64(TNormal), 12, 30, 31, 0},
+			{uint64(TNormal), 13, 28, 29, 1},
+			{uint64(TNormal), 14, 32, 33, 1},
+			{uint64(TNormal), 15, 36, 37, 1},
+			{uint64(TNormal), 16, 34, 35, 1},
+			{uint64(TNormal), 17, 38, 40, 1},
+			{uint64(TNormal), 18, 41, 43, 1},
+		},
+		10,
+	)
+	mockHandle := mockHandleFactory(39)
+
+	r := newReplayer2(
+		mockHandle,
+		mockDriver,
+		2,
+		WithReplayerAppendSkipCmd(noopAppendSkipCmd),
+		WithReplayerUnmarshalLogRecord(mockUnmarshalLogRecordFactor(mockDriver)),
+	)
+
+	ctx := context.Background()
+	r.Replay(ctx)
+
+}

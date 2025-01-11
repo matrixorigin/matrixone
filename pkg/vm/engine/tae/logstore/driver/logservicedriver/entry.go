@@ -318,18 +318,25 @@ func (r *recordEntry) scheduleReplay(replayer *replayer) *common.ClosedIntervals
 	return common.NewClosedIntervalsBySlice(dsns)
 }
 
-func (r *recordEntry) forEachLogEntry(fn func(uint64, *entry.Entry)) (err error) {
+func (r *recordEntry) forEachLogEntry(fn func(*entry.Entry)) (err error) {
+	if r.unmarshaled.Load() == 1 {
+		for _, e := range r.entries {
+			fn(e)
+		}
+		return
+	}
+
 	var (
 		offset int64
 		n      int64
 	)
-	for dsn := range r.Meta.addr {
+	for _ = range r.Meta.addr {
 		e := entry.NewEmptyEntry()
 		if n, err = e.UnmarshalBinary(r.baseEntry.payload[offset:]); err != nil {
 			return
 		}
 		offset += n
-		fn(dsn, e)
+		fn(e)
 	}
 	return
 }

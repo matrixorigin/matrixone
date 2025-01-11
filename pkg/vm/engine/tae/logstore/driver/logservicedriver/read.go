@@ -52,13 +52,14 @@ func (c *readCache) clear() {
 }
 
 func (c *readCache) addRecord(
-	psn uint64, r logservice.LogRecord,
-) (updated bool, e *recordEntry) {
+	// psn uint64, r logservice.LogRecord,
+	psn uint64, e *recordEntry,
+) (updated bool) {
 	if _, ok := c.records[psn]; ok {
 		return
 	}
-	e = newEmptyRecordEntry(r)
-	e.unmarshal()
+	// e = newEmptyRecordEntry(r)
+	// e.unmarshal()
 	c.records[psn] = e
 	c.psns = append(c.psns, psn)
 	updated = true

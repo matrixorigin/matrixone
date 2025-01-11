@@ -1,0 +1,143 @@
+// Copyright 2021 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package logservicedriver
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/matrixorigin/matrixone/pkg/logservice"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
+)
+
+func makeMockLogRecord(pos int) logservice.LogRecord {
+	return logservice.LogRecord{
+		Lsn: uint64(pos),
+	}
+}
+
+func noopAppendSkipCmd(_ context.Context, skipMap map[uint64]uint64) error {
+	return nil
+}
+
+func mockUnmarshalLogRecordFactor(d *mockDriver) func(r logservice.LogRecord) *recordEntry {
+	return func(r logservice.LogRecord) *recordEntry {
+		pos := int(r.Lsn)
+
+		// [MetaType,PSN,DSN-S,DSN-E,SAFE]
+		spec := d.recordSpecs[pos]
+		e := newRecordEntry()
+		e.unmarshaled.Store(1)
+		e.appended = uint64(spec[4])
+		e.metaType = MetaType(spec[0])
+		for dsn := spec[2]; dsn <= spec[3]; dsn++ {
+			e.addr[dsn] = dsn
+			le := entry.NewEmptyEntry()
+			le.Lsn = dsn
+			e.entries = append(e.entries, le)
+		}
+		return e
+	}
+}
+
+func mockHandleFactory(fromDSN uint64) func(*entry.Entry) (replayEntryState driver.ReplayEntryState) {
+	return func(e *entry.Entry) (replayEntryState driver.ReplayEntryState) {
+		if e.Lsn < fromDSN {
+			return driver.RE_Truncate
+		}
+		return driver.RE_Nomal
+	}
+}
+
+type mockDriver struct {
+	truncatedPSN uint64
+	recordSpecs  [][5]uint64
+	skipMap      map[uint64]map[uint64]uint64
+	maxClient    int
+}
+
+func newMockDriver(
+	truncatedPSN uint64,
+	recordSpecs [][5]uint64,
+	maxClient int,
+) *mockDriver {
+	return &mockDriver{
+		truncatedPSN: truncatedPSN,
+		recordSpecs:  recordSpecs,
+		skipMap:      make(map[uint64]map[uint64]uint64),
+		maxClient:    maxClient,
+	}
+}
+
+func (d *mockDriver) GetMaxClient() int {
+	return d.maxClient
+}
+
+func (d *mockDriver) addSkipMap(psn, skipDSN, skipPSN uint64) {
+	if _, ok := d.skipMap[psn]; !ok {
+		d.skipMap[psn] = make(map[uint64]uint64)
+	}
+	d.skipMap[psn][skipDSN] = skipPSN
+}
+
+func (d *mockDriver) setTruncatedPSN(psn uint64) {
+	d.truncatedPSN = psn
+}
+
+// func (d *mockDriver) setSpec(
+// 	mt MetaType,
+// 	psn, dsnS, dsnE, safe, lsnS, lsnE uint64,
+// ) {
+// 	spec := [5]uint64{uint64(mt), psn, dsnS, dsnE, safe, lsnS, lsnE}
+// 	for i := range d.recordSpecs {
+// 	}
+// }
+
+func (d *mockDriver) specString() string {
+	var s string
+	for _, spec := range d.recordSpecs {
+		s += fmt.Sprintf("%v\n", spec)
+	}
+	return s
+}
+
+func (d *mockDriver) getClientForWrite() (*clientWithRecord, uint64) {
+	return nil, 0
+}
+
+func (d *mockDriver) getTruncatedPSNFromBackend(ctx context.Context) (uint64, error) {
+	return d.truncatedPSN, nil
+}
+
+func (d *mockDriver) recordPSNInfo(_ uint64, _ *common.ClosedIntervals) {}
+
+func (d *mockDriver) readFromBackend(
+	firstPSN uint64, maxSize int,
+) (nextPSN uint64, records []logservice.LogRecord) {
+	for i, spec := range d.recordSpecs {
+		if spec[1] >= firstPSN {
+			records = append(records, makeMockLogRecord(i))
+		}
+		if len(records) >= maxSize {
+			return spec[1], records
+		}
+	}
+	if len(records) == 0 {
+		nextPSN = firstPSN
+	}
+	return
+}

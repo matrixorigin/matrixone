@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -30,11 +31,38 @@ import (
 	"go.uber.org/zap"
 )
 
+type ReplayOption func(*replayer2)
+
+func WithReplayerUnmarshalLogRecord(f func(logservice.LogRecord) *recordEntry) ReplayOption {
+	return func(r *replayer2) {
+		r.unmarshalLogRecord = f
+	}
+}
+
+func WithReplayerAppendSkipCmd(f func(ctx context.Context, skipMap map[uint64]uint64) error) ReplayOption {
+	return func(r *replayer2) {
+		r.appendSkipCmd = f
+	}
+}
+
+type replayerDriver interface {
+	readFromBackend(
+		firstPSN uint64, maxSize int,
+	) (nextPSN uint64, records []logservice.LogRecord)
+	getTruncatedPSNFromBackend(ctx context.Context) (uint64, error)
+	recordPSNInfo(psn uint64, dsnRange *common.ClosedIntervals)
+	getClientForWrite() (*clientWithRecord, uint64)
+	GetMaxClient() int
+}
+
 type replayer2 struct {
 	readBatchSize int
 
-	driver *LogServiceDriver
+	driver replayerDriver
 	handle driver.ApplyHandle
+
+	unmarshalLogRecord func(logservice.LogRecord) *recordEntry
+	appendSkipCmd      func(ctx context.Context, skipMap map[uint64]uint64) error
 
 	replayedState struct {
 		// DSN->PSN mapping
@@ -83,8 +111,9 @@ type replayer2 struct {
 
 func newReplayer2(
 	handle driver.ApplyHandle,
-	driver *LogServiceDriver,
+	driver replayerDriver,
 	readBatchSize int,
+	opts ...ReplayOption,
 ) *replayer2 {
 	r := &replayer2{
 		handle:        handle,
@@ -95,6 +124,21 @@ func newReplayer2(
 	r.replayedState.dsn2PSNMap = make(map[uint64]uint64)
 	r.waterMarks.dsnScheduled = math.MaxUint64
 	r.waterMarks.minDSN = math.MaxUint64
+	for _, opt := range opts {
+		opt(r)
+	}
+
+	if r.unmarshalLogRecord == nil {
+		r.unmarshalLogRecord = func(record logservice.LogRecord) *recordEntry {
+			e := newEmptyRecordEntry(record)
+			e.unmarshal()
+			return e
+		}
+	}
+
+	if r.appendSkipCmd == nil {
+		r.appendSkipCmd = r.AppendSkipCmd
+	}
 
 	return r
 }
@@ -287,7 +331,8 @@ func (r *replayer2) tryScheduleApply(
 
 			// [dsn not found && dsn > safeDSN]
 			if len(r.replayedState.dsn2PSNMap) != 0 {
-				r.AppendSkipCmd(ctx, r.replayedState.dsn2PSNMap)
+				// PXU TODO
+				r.appendSkipCmd(ctx, r.replayedState.dsn2PSNMap)
 			}
 		}
 	}
@@ -305,8 +350,8 @@ func (r *replayer2) tryScheduleApply(
 	}
 
 	dsns := make([]uint64, 0, len(record.Meta.addr))
-	scheduleApply := func(dsn uint64, e *entry.Entry) {
-		dsns = append(dsns, dsn)
+	scheduleApply := func(e *entry.Entry) {
+		dsns = append(dsns, e.Lsn)
 		lastScheduled = e
 		applyC <- e
 	}
@@ -418,8 +463,9 @@ func (r *replayer2) readNextBatch(
 			continue
 		}
 		psn := r.waterMarks.psnToRead + uint64(i)
-		if updated, entry := r.replayedState.readCache.addRecord(
-			psn, record,
+		entry := r.unmarshalLogRecord(record)
+		if updated := r.replayedState.readCache.addRecord(
+			psn, entry,
 		); updated {
 			// 1. update the safe DSN
 			if r.replayedState.safeDSN < entry.appended {
@@ -502,7 +548,7 @@ func (r *replayer2) AppendSkipCmd(
 	// the skip map should not be larger than the max client count
 	// FIXME: the ClientMaxCount is configurable and it may be different
 	// from the last time it writes logs
-	if len(skipMap) > r.driver.config.ClientMaxCount {
+	if len(skipMap) > r.driver.GetMaxClient() {
 		err = moerr.NewInternalErrorNoCtxf(
 			"too many skip entries, count %d", len(skipMap),
 		)

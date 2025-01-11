@@ -116,6 +116,10 @@ func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
 	return d
 }
 
+func (d *LogServiceDriver) GetMaxClient() int {
+	return d.config.ClientMaxCount
+}
+
 func (d *LogServiceDriver) Close() error {
 	logutil.Infof("append%d,flush%d", d.appendtimes, d.flushtimes)
 	d.clientPool.Close()
