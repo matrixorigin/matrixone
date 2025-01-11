@@ -44,6 +44,39 @@ func newReadCache() readCache {
 	}
 }
 
+func (c *readCache) clear() {
+	c.psns = c.psns[:0]
+	for psn := range c.records {
+		delete(c.records, psn)
+	}
+}
+
+func (c *readCache) addRecord(
+	psn uint64, r logservice.LogRecord,
+) (updated bool, e *recordEntry) {
+	if _, ok := c.records[psn]; ok {
+		return
+	}
+	e = newEmptyRecordEntry(r)
+	e.unmarshal()
+	c.records[psn] = e
+	c.psns = append(c.psns, psn)
+	updated = true
+	return
+}
+
+func (c *readCache) isEmpty() bool {
+	return len(c.records) == 0
+}
+
+func (c *readCache) getRecord(psn uint64) (r *recordEntry, err error) {
+	var ok bool
+	if r, ok = c.records[psn]; !ok {
+		err = ErrRecordNotFound
+	}
+	return
+}
+
 func (d *LogServiceDriver) Read(dsn uint64) (*entry.Entry, error) {
 	psn, err := d.getPSNByDSNWithRetry(dsn, 10)
 	if err != nil {
@@ -162,6 +195,7 @@ func (d *LogServiceDriver) readFromLogServiceInReplay(
 	return nextPSN, safePSN
 }
 
+// PXU TODO: not panic here
 func (d *LogServiceDriver) readFromBackend(
 	firstPSN uint64, maxSize int,
 ) (nextPSN uint64, records []logservice.LogRecord) {

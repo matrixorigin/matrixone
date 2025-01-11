@@ -53,9 +53,7 @@ func init() {
 			return a.(*baseEntry).Marshal()
 		},
 		func(b []byte) (any, error) {
-			record := &baseEntry{
-				Meta: &Meta{},
-			}
+			record := new(baseEntry)
 			err := record.Unmarshal(b)
 			return record, err
 		},
@@ -69,8 +67,8 @@ type Meta struct {
 	payloadSize uint64
 }
 
-func newMeta() *Meta {
-	return &Meta{addr: make(map[uint64]uint64), metaType: TNormal}
+func newMeta() Meta {
+	return Meta{addr: make(map[uint64]uint64), metaType: TNormal}
 }
 
 func (m *Meta) GetAddr() map[uint64]uint64 {
@@ -197,10 +195,10 @@ func (m *Meta) Marshal() (buf []byte, err error) {
 }
 
 type baseEntry struct {
-	*Meta
+	Meta
 	EntryType, Version uint16
 	entries            []*entry.Entry
-	cmd                *ReplayCmd
+	cmd                ReplayCmd
 	payload            []byte
 }
 
@@ -277,7 +275,7 @@ func (r *baseEntry) Unmarshal(buf []byte) error {
 // read: logrecord -> meta+payload -> entry
 // write: entries+meta -> payload -> record
 type recordEntry struct {
-	*baseEntry
+	baseEntry
 	payload     []byte
 	unmarshaled atomic.Uint32
 	mashalMu    sync.RWMutex
@@ -285,7 +283,7 @@ type recordEntry struct {
 
 func newRecordEntry() *recordEntry {
 	return &recordEntry{
-		baseEntry: &baseEntry{
+		baseEntry: baseEntry{
 			entries: make([]*entry.Entry, 0), Meta: newMeta(),
 		},
 	}
@@ -294,7 +292,7 @@ func newRecordEntry() *recordEntry {
 func newEmptyRecordEntry(r logservice.LogRecord) *recordEntry {
 	return &recordEntry{
 		payload: r.Payload(),
-		baseEntry: &baseEntry{
+		baseEntry: baseEntry{
 			Meta: newMeta(),
 		},
 	}
@@ -319,6 +317,23 @@ func (r *recordEntry) scheduleReplay(replayer *replayer) *common.ClosedIntervals
 	}
 	return common.NewClosedIntervalsBySlice(dsns)
 }
+
+func (r *recordEntry) forEachLogEntry(fn func(uint64, *entry.Entry)) (err error) {
+	var (
+		offset int64
+		n      int64
+	)
+	for dsn := range r.Meta.addr {
+		e := entry.NewEmptyEntry()
+		if n, err = e.UnmarshalBinary(r.baseEntry.payload[offset:]); err != nil {
+			return
+		}
+		offset += n
+		fn(dsn, e)
+	}
+	return
+}
+
 func (r *recordEntry) append(e *entry.Entry) {
 	r.entries = append(r.entries, e)
 	r.Meta.addr[e.Lsn] = uint64(r.payloadSize)
@@ -349,7 +364,7 @@ func (r *recordEntry) unmarshal() {
 	if err != nil {
 		panic(err)
 	}
-	r.baseEntry = entry.(*baseEntry)
+	r.baseEntry = *(entry.(*baseEntry))
 	r.payload = nil
 	r.unmarshaled.Store(1)
 }

@@ -343,13 +343,13 @@ type ReplayCmd struct {
 	skipMap map[uint64]uint64
 }
 
-func NewReplayCmd(skipMap map[uint64]uint64) *ReplayCmd {
-	return &ReplayCmd{
+func NewReplayCmd(skipMap map[uint64]uint64) ReplayCmd {
+	return ReplayCmd{
 		skipMap: skipMap,
 	}
 }
-func NewEmptyReplayCmd() *ReplayCmd {
-	return &ReplayCmd{
+func NewEmptyReplayCmd() ReplayCmd {
+	return ReplayCmd{
 		skipMap: make(map[uint64]uint64),
 	}
 }
