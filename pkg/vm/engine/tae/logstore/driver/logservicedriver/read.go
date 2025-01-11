@@ -131,9 +131,9 @@ func (d *LogServiceDriver) resetReadCache() {
 }
 
 func (d *LogServiceDriver) readSmallBatchFromLogService(lsn uint64) {
-	_, records := d.doReadMany(lsn, int(d.config.RecordSize))
+	_, records := d.readFromBackend(lsn, int(d.config.RecordSize))
 	if len(records) == 0 {
-		_, records = d.doReadMany(lsn, MaxReadSize)
+		_, records = d.readFromBackend(lsn, MaxReadSize)
 	}
 	d.appendRecords(records, lsn, nil, 1)
 	if !d.IsReplaying() && len(d.psns) > d.config.ReadCacheSize {
@@ -146,7 +146,7 @@ func (d *LogServiceDriver) readFromLogServiceInReplay(
 	size int,
 	fn func(uint64, *recordEntry),
 ) (uint64, uint64) {
-	nextPSN, records := d.doReadMany(psn, size)
+	nextPSN, records := d.readFromBackend(psn, size)
 	safePSN := uint64(0)
 	d.appendRecords(
 		records,
@@ -163,8 +163,8 @@ func (d *LogServiceDriver) readFromLogServiceInReplay(
 	return nextPSN, safePSN
 }
 
-func (d *LogServiceDriver) doReadMany(
-	lsn uint64, size int,
+func (d *LogServiceDriver) readFromBackend(
+	firstPSN uint64, maxSize int,
 ) (nextPSN uint64, records []logservice.LogRecord) {
 	client, err := d.clientPool.Get()
 	defer d.clientPool.Put(client)
@@ -179,7 +179,7 @@ func (d *LogServiceDriver) doReadMany(
 	)
 
 	records, nextPSN, err = client.c.Read(
-		ctx, lsn, uint64(size),
+		ctx, firstPSN, uint64(maxSize),
 	)
 	err = moerr.AttachCause(ctx, err)
 
@@ -200,7 +200,7 @@ func (d *LogServiceDriver) doReadMany(
 				)
 				defer cancel()
 				if records, nextPSN, err = client.c.Read(
-					ctx, lsn, uint64(size),
+					ctx, firstPSN, uint64(maxSize),
 				); err != nil {
 					err = moerr.AttachCause(ctx, err)
 				}
@@ -211,10 +211,10 @@ func (d *LogServiceDriver) doReadMany(
 				logger(
 					"Wal-Retry-Read-In-Driver",
 					zap.Any("due-error", dueErr),
-					zap.Uint64("from-lsn", lsn),
-					zap.Int("size", size),
+					zap.Uint64("from-psn", firstPSN),
+					zap.Int("max-size", maxSize),
 					zap.Int("num-records", len(records)),
-					zap.Uint64("next-lsn", nextPSN),
+					zap.Uint64("next-psn", nextPSN),
 					zap.Duration("duration", time.Since(now)),
 					zap.Error(err),
 				)
