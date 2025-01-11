@@ -143,8 +143,8 @@ func newReplayer2(
 	return r
 }
 
-func (r *replayer2) exportFields() []zap.Field {
-	return []zap.Field{
+func (r *replayer2) exportFields(level int) []zap.Field {
+	ret := []zap.Field{
 		zap.Duration("read-duration", r.stats.readDuration),
 		zap.Int("read-psn-count", r.stats.readPSNCount),
 		zap.Int64("apply-lsn-count", r.stats.appliedLSNCount.Load()),
@@ -156,6 +156,21 @@ func (r *replayer2) exportFields() []zap.Field {
 		zap.Uint64("last-apply-dsn", r.replayedState.lastAppliedDSN),
 		zap.Uint64("last-apply-lsn", r.replayedState.lastAppliedLSN),
 	}
+	if level > 0 {
+		ret = append(ret,
+			zap.Uint64("safe-dsn", r.replayedState.safeDSN),
+			zap.Uint64("min-dsn", r.waterMarks.minDSN),
+			zap.Uint64("max-dsn", r.waterMarks.maxDSN),
+			zap.Uint64("dsn-scheduled", r.waterMarks.dsnScheduled),
+		)
+	}
+	if level > 1 {
+		ret = append(ret,
+			zap.Any("dsn-psn-map", r.replayedState.dsn2PSNMap),
+			zap.Any("write-tokens", r.replayedState.writeTokens),
+		)
+	}
+	return ret
 }
 
 func (r *replayer2) initReadWatermarks(ctx context.Context) (err error) {
@@ -176,7 +191,7 @@ func (r *replayer2) Replay(ctx context.Context) (err error) {
 		errMsg        string
 	)
 	defer func() {
-		fields := r.exportFields()
+		fields := r.exportFields(0)
 		logger := logutil.Info
 		if err != nil {
 			logger = logutil.Error
@@ -352,7 +367,7 @@ func (r *replayer2) tryScheduleApply(
 	dsns := make([]uint64, 0, len(record.Meta.addr))
 	scheduleApply := func(e *entry.Entry) {
 		dsns = append(dsns, e.Lsn)
-		lastScheduled = e
+		scheduled = e
 		applyC <- e
 	}
 
@@ -366,6 +381,7 @@ func (r *replayer2) tryScheduleApply(
 	r.waterMarks.dsnScheduled = dsnRange.GetMax()
 	r.stats.schedulePSNCount++
 
+	r.replayedState.readCache.removeRecord(psn)
 	// dsn2PSNMap is produced by the readNextBatch and consumed if it is scheduled apply
 	delete(r.replayedState.dsn2PSNMap, dsn)
 

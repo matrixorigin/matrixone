@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	storeDriver "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
@@ -337,11 +338,11 @@ func Test_Replayer1(t *testing.T) {
 		[][5]uint64{
 			{uint64(TNormal), 12, 30, 31, 0},
 			{uint64(TNormal), 13, 28, 29, 1},
-			{uint64(TNormal), 14, 32, 33, 1},
-			{uint64(TNormal), 15, 36, 37, 1},
-			{uint64(TNormal), 16, 34, 35, 1},
-			{uint64(TNormal), 17, 38, 40, 1},
-			{uint64(TNormal), 18, 41, 43, 1},
+			{uint64(TNormal), 14, 32, 33, 27},
+			{uint64(TNormal), 15, 36, 37, 28},
+			{uint64(TNormal), 16, 41, 43, 32},
+			{uint64(TNormal), 17, 38, 40, 32},
+			{uint64(TNormal), 18, 34, 35, 32},
 		},
 		2,
 	)
@@ -374,6 +375,8 @@ func Test_Replayer1(t *testing.T) {
 		WithReplayerUnmarshalLogRecord(mockUnmarshalLogRecordFactor(mockDriver)),
 	)
 
-	r.Replay(ctx)
+	err = r.Replay(ctx)
+	assert.NoError(t, err)
+	logutil.Info("DEBUG", r.exportFields(2)...)
 
 }
