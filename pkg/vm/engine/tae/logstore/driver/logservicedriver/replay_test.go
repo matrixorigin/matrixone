@@ -383,3 +383,74 @@ func Test_Replayer1(t *testing.T) {
 	logutil.Info("DEBUG", r.exportFields(2)...)
 	assert.Equal(t, []uint64{39, 40, 41, 42, 43}, appliedDSNs)
 }
+
+func Test_Replayer2(t *testing.T) {
+	ctx := context.Background()
+	mockDriver := newMockDriver(
+		0,
+		// MetaType,PSN,DSN-S,DSN-E,Safe
+		[][5]uint64{
+			{uint64(TNormal), 1, 30, 31, 0},
+			{uint64(TNormal), 2, 28, 29, 0},
+			{uint64(TNormal), 3, 32, 33, 0},
+			{uint64(TNormal), 4, 36, 37, 0},
+			{uint64(TNormal), 5, 41, 43, 0},
+			{uint64(TNormal), 6, 38, 40, 0},
+			{uint64(TNormal), 7, 34, 35, 0},
+		},
+		2,
+	)
+	var appliedDSNs []uint64
+	mockHandle := mockHandleFactory(1, func(e *entry.Entry) {
+		appliedDSNs = append(appliedDSNs, e.Lsn)
+	})
+
+	r := newReplayer2(
+		mockHandle,
+		mockDriver,
+		2,
+		WithReplayerAppendSkipCmd(noopAppendSkipCmd),
+		WithReplayerUnmarshalLogRecord(mockUnmarshalLogRecordFactor(mockDriver)),
+	)
+
+	err := r.Replay(ctx)
+	assert.NoError(t, err)
+	logutil.Info("DEBUG", r.exportFields(2)...)
+	assert.Equalf(t, []uint64{28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43}, appliedDSNs, "appliedDSNs: %v", appliedDSNs)
+}
+
+func Test_Replayer3(t *testing.T) {
+	ctx := context.Background()
+	mockDriver := newMockDriver(
+		12,
+		// MetaType,PSN,DSN-S,DSN-E,Safe
+		[][5]uint64{
+			{uint64(TNormal), 11, 30, 31, 0},
+			{uint64(TNormal), 12, 28, 29, 0},
+			{uint64(TNormal), 13, 32, 33, 0},
+			{uint64(TNormal), 14, 36, 37, 0},
+			{uint64(TNormal), 15, 41, 43, 0},
+			{uint64(TNormal), 16, 38, 40, 0},
+			{uint64(TNormal), 17, 34, 35, 0},
+		},
+		20,
+	)
+	var appliedDSNs []uint64
+	mockHandle := mockHandleFactory(40, func(e *entry.Entry) {
+		appliedDSNs = append(appliedDSNs, e.Lsn)
+	})
+
+	r := newReplayer2(
+		mockHandle,
+		mockDriver,
+		20,
+		WithReplayerAppendSkipCmd(noopAppendSkipCmd),
+		WithReplayerUnmarshalLogRecord(mockUnmarshalLogRecordFactor(mockDriver)),
+	)
+
+	err := r.Replay(ctx)
+	assert.NoError(t, err)
+	logutil.Info("DEBUG", r.exportFields(2)...)
+	t.Logf("appliedDSNs: %v", appliedDSNs)
+	assert.Equal(t, []uint64{40, 41, 42, 43}, appliedDSNs)
+}
