@@ -365,7 +365,10 @@ func Test_Replayer1(t *testing.T) {
 	assert.Equal(t, uint64(19), nextPSN)
 	assert.Equal(t, 0, len(records))
 
-	mockHandle := mockHandleFactory(39)
+	var appliedDSNs []uint64
+	mockHandle := mockHandleFactory(39, func(e *entry.Entry) {
+		appliedDSNs = append(appliedDSNs, e.Lsn)
+	})
 
 	r := newReplayer2(
 		mockHandle,
@@ -378,5 +381,5 @@ func Test_Replayer1(t *testing.T) {
 	err = r.Replay(ctx)
 	assert.NoError(t, err)
 	logutil.Info("DEBUG", r.exportFields(2)...)
-
+	assert.Equal(t, []uint64{39, 40, 41, 42, 43}, appliedDSNs)
 }

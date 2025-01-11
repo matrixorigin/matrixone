@@ -56,10 +56,13 @@ func mockUnmarshalLogRecordFactor(d *mockDriver) func(r logservice.LogRecord) *r
 	}
 }
 
-func mockHandleFactory(fromDSN uint64) func(*entry.Entry) (replayEntryState driver.ReplayEntryState) {
+func mockHandleFactory(fromDSN uint64, onApplyCB func(*entry.Entry)) func(*entry.Entry) (replayEntryState driver.ReplayEntryState) {
 	return func(e *entry.Entry) (replayEntryState driver.ReplayEntryState) {
 		if e.Lsn < fromDSN {
 			return driver.RE_Truncate
+		}
+		if onApplyCB != nil {
+			onApplyCB(e)
 		}
 		return driver.RE_Nomal
 	}
