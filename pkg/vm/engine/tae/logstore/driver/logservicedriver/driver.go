@@ -54,7 +54,7 @@ func RetryWithTimeout(timeoutDuration time.Duration, fn func() (shouldReturn boo
 
 type LogServiceDriver struct {
 	*driverInfo
-	*readCache
+	readCache
 	clientPool      *clientpool
 	config          *Config
 	currentAppender *driverAppender

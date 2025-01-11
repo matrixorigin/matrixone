@@ -37,11 +37,10 @@ type readCache struct {
 	readMu  sync.RWMutex
 }
 
-func newReadCache() *readCache {
-	return &readCache{
+func newReadCache() readCache {
+	return readCache{
 		psns:    make([]uint64, 0),
 		records: make(map[uint64]*recordEntry),
-		readMu:  sync.RWMutex{},
 	}
 }
 

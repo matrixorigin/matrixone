@@ -30,6 +30,8 @@ type replayer2 struct {
 	driver *LogServiceDriver
 	handle driver.ApplyHandle
 
+	readCache readCache
+
 	stats struct {
 		readDuration time.Duration
 		readCount    int
@@ -46,6 +48,7 @@ func newReplayer2(
 		handle:        handle,
 		driver:        driver,
 		readBatchSize: readBatchSize,
+		readCache:     newReadCache(),
 	}
 }
 
@@ -118,4 +121,12 @@ func (r *replayer2) streamReplaying(
 			applyDuration += time.Since(t0)
 		}
 	}
+}
+
+func (r *replayer2) readNextBatch(
+	ctx context.Context,
+	fromPSN uint64,
+	maxSize int,
+) (done bool, err error) {
+	return
 }
