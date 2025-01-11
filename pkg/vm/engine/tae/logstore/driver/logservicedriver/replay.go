@@ -73,7 +73,10 @@ func newReplayer(
 	d *LogServiceDriver,
 	readmaxsize int,
 ) *replayer {
-	truncatedPSN := d.getTruncatedPSNFromRemote()
+	truncatedPSN, err := d.getTruncatedPSNFromBackend(context.Background())
+	if err != nil {
+		panic(err)
+	}
 	r := &replayer{
 		minDSN:        math.MaxUint64,
 		dsnToPSNMap:   make(map[uint64]uint64),
