@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	storeDriver "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 	"github.com/stretchr/testify/assert"
@@ -329,8 +330,9 @@ func TestAppendSkipCmd5(t *testing.T) {
 
 // case 1: normal
 func Test_Replayer1(t *testing.T) {
+	ctx := context.Background()
 	mockDriver := newMockDriver(
-		0,
+		13,
 		// MetaType,PSN,DSN-S,DSN-E,Safe
 		[][5]uint64{
 			{uint64(TNormal), 12, 30, 31, 0},
@@ -341,8 +343,27 @@ func Test_Replayer1(t *testing.T) {
 			{uint64(TNormal), 17, 38, 40, 1},
 			{uint64(TNormal), 18, 41, 43, 1},
 		},
-		10,
+		2,
 	)
+	psn, err := mockDriver.getTruncatedPSNFromBackend(ctx)
+	assert.NoError(t, err)
+	assert.Equal(t, uint64(13), psn)
+
+	nextPSN, records := mockDriver.readFromBackend(psn+1, 2)
+	assert.Equal(t, uint64(16), nextPSN)
+	assert.Equal(t, 2, len(records))
+	assert.Equal(t, pb.UserRecord, records[0].Type)
+	assert.Equal(t, pb.UserRecord, records[1].Type)
+	nextPSN, records = mockDriver.readFromBackend(nextPSN, 3)
+	assert.Equal(t, uint64(19), nextPSN)
+	assert.Equal(t, 3, len(records))
+	assert.Equal(t, pb.UserRecord, records[0].Type)
+	assert.Equal(t, pb.UserRecord, records[1].Type)
+	assert.Equal(t, pb.UserRecord, records[2].Type)
+	nextPSN, records = mockDriver.readFromBackend(nextPSN, 1)
+	assert.Equal(t, uint64(19), nextPSN)
+	assert.Equal(t, 0, len(records))
+
 	mockHandle := mockHandleFactory(39)
 
 	r := newReplayer2(
@@ -353,7 +374,6 @@ func Test_Replayer1(t *testing.T) {
 		WithReplayerUnmarshalLogRecord(mockUnmarshalLogRecordFactor(mockDriver)),
 	)
 
-	ctx := context.Background()
 	r.Replay(ctx)
 
 }

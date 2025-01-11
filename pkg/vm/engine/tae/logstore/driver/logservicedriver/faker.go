@@ -19,6 +19,7 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
@@ -26,7 +27,8 @@ import (
 
 func makeMockLogRecord(pos int) logservice.LogRecord {
 	return logservice.LogRecord{
-		Lsn: uint64(pos),
+		Type: pb.UserRecord,
+		Lsn:  uint64(pos),
 	}
 }
 
@@ -133,11 +135,14 @@ func (d *mockDriver) readFromBackend(
 			records = append(records, makeMockLogRecord(i))
 		}
 		if len(records) >= maxSize {
-			return spec[1], records
+			return spec[1] + 1, records
 		}
 	}
-	if len(records) == 0 {
+	if len(d.recordSpecs) == 0 {
 		nextPSN = firstPSN
+	} else {
+		nextPSN = d.recordSpecs[len(d.recordSpecs)-1][1] + 1
 	}
+
 	return
 }
