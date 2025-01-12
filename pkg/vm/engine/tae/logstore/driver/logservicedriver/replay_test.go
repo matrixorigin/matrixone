@@ -710,13 +710,17 @@ func Test_Replayer8(t *testing.T) {
 			{uint64(TNormal), 3, 3, 3, 3},
 			{uint64(TNormal), 4, 5, 5, 3},
 			{uint64(TReplay), 5, 0, 0, 0},
+			{uint64(TNormal), 6, 6, 6, 4},
+			{uint64(TNormal), 7, 4, 4, 3},
+			{uint64(TNormal), 8, 5, 5, 4},
+			// PXU TODO: add UT to test after replaying the skip, the DSN can be reused later
 		},
 		30,
 	)
 	mockDriver.addSkipMap(5, 5, 4)
 
 	var appliedDSNs []uint64
-	mockHandle := mockHandleFactory(0, func(e *entry.Entry) {
+	mockHandle := mockHandleFactory(3, func(e *entry.Entry) {
 		appliedDSNs = append(appliedDSNs, e.Lsn)
 	})
 
@@ -764,6 +768,6 @@ func Test_Replayer8(t *testing.T) {
 	t.Logf("dsnScheduled: %v", dsnScheduled)
 	t.Logf("appliedDSNs: %v", appliedDSNs)
 	t.Logf("writeSkip: %v", writeSkip)
-	assert.Equal(t, []uint64{1, 2, 3}, appliedDSNs)
+	assert.Equal(t, []uint64{3, 4, 5, 6}, appliedDSNs)
 	assert.Equal(t, 0, len(writeSkip))
 }
