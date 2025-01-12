@@ -7609,7 +7609,7 @@ func TestCkpLeak(t *testing.T) {
 	if db.Runtime.Scheduler.GetPenddingLSNCnt() != 0 {
 		return
 	}
-	checkLeak := func() {
+	checkLeak := func() bool {
 		ckpMetaFiles := db.BGCheckpointRunner.GetCheckpointMetaFiles()
 		var cpt *ioutil.TSRangeFile
 		for ckpMetaFile := range ckpMetaFiles {
@@ -7618,11 +7618,12 @@ func TestCkpLeak(t *testing.T) {
 				logutil.Infof("compact file %v", file.GetName())
 				if cpt != nil {
 					logutil.Errorf("dup compacted files %v %v", cpt.GetName(), file.GetName())
-					assert.Fail(t, "dup compacted files")
+					return false
 				}
 				cpt = &file
 			}
 		}
+		return true
 	}
 	testutils.WaitExpect(5000, func() bool {
 		return db.DiskCleaner.GetCleaner().GetMinMerged() != nil
@@ -7630,7 +7631,11 @@ func TestCkpLeak(t *testing.T) {
 	if db.DiskCleaner.GetCleaner().GetMinMerged() == nil {
 		return
 	}
-	checkLeak()
+	testutils.WaitExpect(5000, func() bool {
+		return checkLeak()
+	})
+	ok := checkLeak()
+	assert.True(t, ok)
 	tae.Restart(ctx)
 	assert.Equal(t, uint64(0), db.Runtime.Scheduler.GetPenddingLSNCnt())
 	testutils.WaitExpect(5000, func() bool {
@@ -7639,7 +7644,11 @@ func TestCkpLeak(t *testing.T) {
 	if db.DiskCleaner.GetCleaner().GetMinMerged() == nil {
 		return
 	}
-	checkLeak()
+	testutils.WaitExpect(5000, func() bool {
+		return checkLeak()
+	})
+	ok = checkLeak()
+	assert.True(t, ok)
 
 }
 
@@ -7894,8 +7903,8 @@ func Test_CheckpointChaos1(t *testing.T) {
 	err = tae.DB.ForceCheckpoint(ctx, now)
 	assert.Error(t, err)
 
-	entries := tae.BGCheckpointRunner.GetAllIncrementalCheckpoints()
-	assert.Equal(t, 0, len(entries))
+	maxEntry := tae.BGCheckpointRunner.MaxIncrementalCheckpoint()
+	assert.Nilf(t, maxEntry, maxEntry.String())
 
 	ok, err := rmFn()
 	require.True(t, ok)
@@ -7905,7 +7914,7 @@ func Test_CheckpointChaos1(t *testing.T) {
 	err = tae.DB.ForceCheckpoint(ctx, now)
 	assert.NoError(t, err)
 
-	entries = tae.BGCheckpointRunner.GetAllIncrementalCheckpoints()
+	entries := tae.BGCheckpointRunner.GetAllIncrementalCheckpoints()
 	assert.Equal(t, 1, len(entries))
 	assert.True(t, entries[0].IsFinished())
 

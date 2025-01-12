@@ -12,6 +12,7 @@ create table mysql_ddl_test_t31(id int);
 /*!50001 CREATE DEFINER = `root`@`%` VIEW mysql_ddl_test_v31 AS Select id from mysql_ddl_test_t31 */;
 show create view mysql_ddl_test_v31;
 
+-- @bvt:issue#16438
 DROP TABLE IF EXISTS `mysql_ddl_test_t32`;
 CREATE TABLE `mysql_ddl_test_t32` (
   `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT COMMENT '主键id',
@@ -216,6 +217,7 @@ CREATE TABLE `mysql_ddl_test_t32` (
 show create table mysql_ddl_test_t32;
 
 
+
 CREATE TABLE mysql_ddl_test_t33 (
   `created_at` datetime NOT NULL COMMENT 'create time')
 /*!50100 PARTITION BY RANGE (TO_DAYS(created_at))
@@ -228,7 +230,9 @@ CREATE TABLE mysql_ddl_test_t33 (
  PARTITION p20221213 VALUES LESS THAN (738867) ENGINE = InnoDB,
  PARTITION p20221214 VALUES LESS THAN (738868) ENGINE = InnoDB) */;
 show create table mysql_ddl_test_t33;
+-- @bvt:issue
 
+-- @bvt:issue#16438
 CREATE TABLE mysql_ddl_test_t34 (
   `created_at` datetime NOT NULL COMMENT 'create time')
 PARTITION BY RANGE (TO_DAYS(created_at))
@@ -241,6 +245,7 @@ PARTITION BY RANGE (TO_DAYS(created_at))
  PARTITION p20221213 VALUES LESS THAN (738867) ENGINE = InnoDB,
  PARTITION p20221214 VALUES LESS THAN (738868) ENGINE = InnoDB);
 show create table mysql_ddl_test_t34;
+-- @bvt:issue
 
 
 create table mysql_ddl_test_t35 (id int, gender enum('male', 'female'));

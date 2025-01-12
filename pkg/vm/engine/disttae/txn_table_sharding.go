@@ -34,7 +34,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/shard"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/shardservice"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
@@ -280,7 +279,7 @@ func (tbl *txnTableDelegate) Ranges(ctx context.Context, rangesParam engine.Rang
 
 	var blocks objectio.BlockInfoSlice
 	var uncommitted []objectio.ObjectStats
-	if rangesParam.Policy != engine.Policy_CheckCommittedOnly {
+	if rangesParam.Policy&engine.Policy_CollectUncommittedPersistedData != 0 {
 		uncommitted, _ = tbl.origin.collectUnCommittedDataObjs(rangesParam.TxnOffset)
 	}
 	err = tbl.origin.rangesOnePart(
@@ -303,7 +302,7 @@ func (tbl *txnTableDelegate) Ranges(ctx context.Context, rangesParam engine.Rang
 		func(param *shard.ReadParam) {
 			param.RangesParam.Exprs = rangesParam.BlockFilters
 			param.RangesParam.PreAllocSize = 2
-			param.RangesParam.DataCollectPolicy = engine.Policy_CollectCommittedData
+			param.RangesParam.DataCollectPolicy = engine.Policy_CollectCommittedPersistedData
 			param.RangesParam.TxnOffset = 0
 
 		},
@@ -640,10 +639,6 @@ func (tbl *txnTableDelegate) BuildShardingReaders(
 ) ([]engine.Reader, error) {
 	var rds []engine.Reader
 	proc := p.(*process.Process)
-
-	if plan2.IsFalseExpr(expr) {
-		return []engine.Reader{new(readutil.EmptyReader)}, nil
-	}
 
 	if orderBy && num != 1 {
 		return nil, moerr.NewInternalErrorNoCtx("orderBy only support one reader")

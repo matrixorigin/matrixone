@@ -103,37 +103,37 @@ func SimpleInt64HashToRange(i uint64, upperLimit uint64) uint64 {
 	return hashtable.Int64HashWithFixedSeed(i) % upperLimit
 }
 
-func shuffleByZonemap(rsp *engine.RangesShuffleParam, zm objectio.ZoneMap) uint64 {
+func shuffleByZonemap(rsp *engine.RangesShuffleParam, zm objectio.ZoneMap, bucketNum int) uint64 {
 	if !rsp.Init {
 		rsp.Init = true
 		switch zm.GetType() {
 		case types.T_int64, types.T_int32, types.T_int16:
-			rsp.ShuffleRangeInt64 = ShuffleRangeReEvalSigned(rsp.Node.Stats.HashmapStats.Ranges, int(rsp.CNCNT), rsp.Node.Stats.HashmapStats.Nullcnt, int64(rsp.Node.Stats.TableCnt))
+			rsp.ShuffleRangeInt64 = ShuffleRangeReEvalSigned(rsp.Node.Stats.HashmapStats.Ranges, bucketNum, rsp.Node.Stats.HashmapStats.Nullcnt, int64(rsp.Node.Stats.TableCnt))
 		case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text, types.T_bit, types.T_datalink:
-			rsp.ShuffleRangeUint64 = ShuffleRangeReEvalUnsigned(rsp.Node.Stats.HashmapStats.Ranges, int(rsp.CNCNT), rsp.Node.Stats.HashmapStats.Nullcnt, int64(rsp.Node.Stats.TableCnt))
+			rsp.ShuffleRangeUint64 = ShuffleRangeReEvalUnsigned(rsp.Node.Stats.HashmapStats.Ranges, bucketNum, rsp.Node.Stats.HashmapStats.Nullcnt, int64(rsp.Node.Stats.TableCnt))
 		}
 	}
 
 	var shuffleIDX uint64
-	if rsp.ShuffleRangeUint64 != nil {
+	if len(rsp.ShuffleRangeUint64) > 0 {
 		shuffleIDX = GetRangeShuffleIndexForZMUnsignedSlice(rsp.ShuffleRangeUint64, zm)
-	} else if rsp.ShuffleRangeInt64 != nil {
+	} else if len(rsp.ShuffleRangeInt64) > 0 {
 		shuffleIDX = GetRangeShuffleIndexForZMSignedSlice(rsp.ShuffleRangeInt64, zm)
 	} else {
-		shuffleIDX = GetRangeShuffleIndexForZM(rsp.Node.Stats.HashmapStats.ShuffleColMin, rsp.Node.Stats.HashmapStats.ShuffleColMax, zm, uint64(rsp.CNCNT))
+		shuffleIDX = GetRangeShuffleIndexForZM(rsp.Node.Stats.HashmapStats.ShuffleColMin, rsp.Node.Stats.HashmapStats.ShuffleColMax, zm, uint64(bucketNum))
 	}
 	return shuffleIDX
 }
 
-func shuffleByValueExtractedFromZonemap(rsp *engine.RangesShuffleParam, zm objectio.ZoneMap) uint64 {
+func shuffleByValueExtractedFromZonemap(rsp *engine.RangesShuffleParam, zm objectio.ZoneMap, bucketNum int) uint64 {
 	t := types.T(rsp.Node.Stats.HashmapStats.ShuffleColIdx) // actually this is specially used for sort key column type
 	if !rsp.Init {
 		rsp.Init = true
 		switch t {
 		case types.T_int64, types.T_int32, types.T_int16:
-			rsp.ShuffleRangeInt64 = ShuffleRangeReEvalSigned(rsp.Node.Stats.HashmapStats.Ranges, int(rsp.CNCNT), rsp.Node.Stats.HashmapStats.Nullcnt, int64(rsp.Node.Stats.TableCnt))
+			rsp.ShuffleRangeInt64 = ShuffleRangeReEvalSigned(rsp.Node.Stats.HashmapStats.Ranges, bucketNum, rsp.Node.Stats.HashmapStats.Nullcnt, int64(rsp.Node.Stats.TableCnt))
 		case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text, types.T_bit, types.T_datalink:
-			rsp.ShuffleRangeUint64 = ShuffleRangeReEvalUnsigned(rsp.Node.Stats.HashmapStats.Ranges, int(rsp.CNCNT), rsp.Node.Stats.HashmapStats.Nullcnt, int64(rsp.Node.Stats.TableCnt))
+			rsp.ShuffleRangeUint64 = ShuffleRangeReEvalUnsigned(rsp.Node.Stats.HashmapStats.Ranges, bucketNum, rsp.Node.Stats.HashmapStats.Nullcnt, int64(rsp.Node.Stats.TableCnt))
 		}
 	}
 
@@ -143,9 +143,22 @@ func shuffleByValueExtractedFromZonemap(rsp *engine.RangesShuffleParam, zm objec
 	} else if rsp.ShuffleRangeInt64 != nil {
 		shuffleIDX = GetRangeShuffleIndexForValuesExtractedFromZMSignedSlice(rsp.ShuffleRangeInt64, zm, t)
 	} else {
-		shuffleIDX = GetRangeShuffleIndexForExtractedZM(rsp.Node.Stats.HashmapStats.ShuffleColMin, rsp.Node.Stats.HashmapStats.ShuffleColMax, zm, uint64(rsp.CNCNT), t)
+		shuffleIDX = GetRangeShuffleIndexForExtractedZM(rsp.Node.Stats.HashmapStats.ShuffleColMin, rsp.Node.Stats.HashmapStats.ShuffleColMax, zm, uint64(bucketNum), t)
 	}
 	return shuffleIDX
+}
+
+func CalcRangeShuffleIDXForObj(rsp *engine.RangesShuffleParam, objstats *objectio.ObjectStats, bucketNum int) uint64 {
+	zm := objstats.SortKeyZoneMap()
+	if !zm.IsInited() {
+		// an object with all null will send to shuffleIDX 0
+		return 0
+	}
+	if len(rsp.Node.TableDef.Pkey.Names) == 1 {
+		return shuffleByZonemap(rsp, zm, bucketNum)
+	} else {
+		return shuffleByValueExtractedFromZonemap(rsp, zm, bucketNum)
+	}
 }
 
 func ShouldSkipObjByShuffle(rsp *engine.RangesShuffleParam, objstats *objectio.ObjectStats) bool {
@@ -157,24 +170,12 @@ func ShouldSkipObjByShuffle(rsp *engine.RangesShuffleParam, objstats *objectio.O
 		return !rsp.IsLocalCN
 	}
 	if rsp.Node.Stats.HashmapStats.ShuffleType == plan.ShuffleType_Range {
-		zm := objstats.SortKeyZoneMap()
-		if !zm.IsInited() {
-			// an object with all null will send to first CN
-			return rsp.CNIDX != 0
-		}
-		if len(rsp.Node.TableDef.Pkey.Names) == 1 {
-			shuffleIDX := shuffleByZonemap(rsp, zm)
-			return shuffleIDX != uint64(rsp.CNIDX)
-		} else {
-			shuffleIDX := shuffleByValueExtractedFromZonemap(rsp, zm)
-			return shuffleIDX != uint64(rsp.CNIDX)
-		}
+		//shuffle by range
+		return CalcRangeShuffleIDXForObj(rsp, objstats, int(rsp.CNCNT)) != uint64(rsp.CNIDX)
 	}
-
 	//shuffle by hash
 	objID := objstats.ObjectLocation().ObjectId()
-	index := SimpleCharHashToRange(objID[:], uint64(rsp.CNCNT))
-	return index != uint64(rsp.CNIDX)
+	return SimpleCharHashToRange(objID[:], uint64(rsp.CNCNT)) != uint64(rsp.CNIDX)
 }
 
 func GetCenterValueForZMSigned(zm objectio.ZoneMap) int64 {
@@ -655,7 +656,7 @@ func determineShuffleForGroupBy(n *plan.Node, builder *QueryBuilder) {
 
 }
 
-func GetShuffleDop(ncpu int, lencn int, hashmapSize float64) (dop int) {
+func getShuffleDop(ncpu int, lencn int, hashmapSize float64) (dop int) {
 	if ncpu <= 4 {
 		ncpu = 4
 	}
