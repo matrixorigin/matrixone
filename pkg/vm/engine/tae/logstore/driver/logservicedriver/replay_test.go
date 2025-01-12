@@ -485,7 +485,7 @@ func Test_Replayer4(t *testing.T) {
 		30,
 	)
 	var appliedDSNs []uint64
-	mockHandle := mockHandleFactory(37, func(e *entry.Entry) {
+	mockHandle := mockHandleFactory(38, func(e *entry.Entry) {
 		appliedDSNs = append(appliedDSNs, e.Lsn)
 	})
 
