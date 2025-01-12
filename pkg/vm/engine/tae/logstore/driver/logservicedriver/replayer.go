@@ -112,6 +112,8 @@ type replayer2 struct {
 		// psn to read for the next batch
 		psnToRead uint64
 
+		truncatedPSN uint64
+
 		// the DSN watermark has been scheduled for apply
 		dsnScheduled uint64
 
@@ -164,6 +166,15 @@ func newReplayer2(
 	return r
 }
 
+func (r *replayer2) exportDSNStats() DSNStats {
+	return DSNStats{
+		Min:       r.waterMarks.minDSN,
+		Max:       r.waterMarks.maxDSN,
+		Truncated: r.waterMarks.truncatedPSN,
+		Written:   r.replayedState.writeTokens,
+	}
+}
+
 func (r *replayer2) exportFields(level int) []zap.Field {
 	ret := []zap.Field{
 		zap.Duration("read-duration", r.stats.readDuration),
@@ -199,6 +210,7 @@ func (r *replayer2) initReadWatermarks(ctx context.Context) (err error) {
 	if psn, err = r.driver.getTruncatedPSNFromBackend(ctx); err != nil {
 		return
 	}
+	r.waterMarks.truncatedPSN = psn
 	r.waterMarks.psnToRead = psn + 1
 	return
 }
