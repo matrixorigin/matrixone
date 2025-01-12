@@ -322,7 +322,7 @@ func (r *recordEntry) forEachLogEntry(fn func(*entry.Entry)) (err error) {
 
 func (r *recordEntry) append(e *entry.Entry) {
 	r.entries = append(r.entries, e)
-	r.Meta.addr[e.Lsn] = uint64(r.payloadSize)
+	r.Meta.addr[e.DSN] = uint64(r.payloadSize)
 	r.payloadSize += uint64(e.GetSize())
 }
 

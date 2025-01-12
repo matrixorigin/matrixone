@@ -58,13 +58,13 @@ func restartStore(s *baseStore, t *testing.T) *baseStore {
 	assert.NoError(t, err)
 	tempLsn := uint64(0)
 	err = s.Replay(context.Background(), func(e *entry.Entry) driver.ReplayEntryState {
-		if e.Lsn < tempLsn {
-			panic(moerr.NewInternalErrorNoCtxf("logic error %d<%d", e.Lsn, tempLsn))
+		if e.DSN < tempLsn {
+			panic(moerr.NewInternalErrorNoCtxf("logic error %d<%d", e.DSN, tempLsn))
 		}
-		tempLsn = e.Lsn
-		_, err = s.Read(e.Lsn)
+		tempLsn = e.DSN
+		_, err = s.Read(e.DSN)
 		assert.NoError(t, err)
-		// logutil.Infof("lsn is %d",e.Lsn)
+		// logutil.Infof("lsn is %d",e.DSN)
 		return driver.RE_Nomal
 	})
 	assert.NoError(t, err)
@@ -94,7 +94,7 @@ func concurrentAppendReadCheckpoint(s *baseStore, t *testing.T) {
 			err := s.Append(e)
 			assert.NoError(t, err)
 			lsn := s.GetDSN()
-			assert.GreaterOrEqual(t, lsn, e.Lsn)
+			assert.GreaterOrEqual(t, lsn, e.DSN)
 			wg.Done()
 		}
 	}
@@ -103,7 +103,7 @@ func concurrentAppendReadCheckpoint(s *baseStore, t *testing.T) {
 		return func() {
 			e := entries[i]
 			assert.NoError(t, e.WaitDone())
-			e2, err := s.Read(e.Lsn)
+			e2, err := s.Read(e.DSN)
 			assert.NoError(t, err)
 			assert.Equal(t, e2.Entry.GetInfo().(*storeEntry.Info).GroupLSN, e.Info.GroupLSN)
 			e2.Entry.Free()
@@ -114,12 +114,12 @@ func concurrentAppendReadCheckpoint(s *baseStore, t *testing.T) {
 	truncatefn := func(i int) func() {
 		return func() {
 			e := entries[i]
-			err := s.Truncate(e.Lsn)
+			err := s.Truncate(e.DSN)
 			assert.NoError(t, err)
 			e.Entry.Free()
 			lsn, err := s.GetTruncated()
 			assert.NoError(t, err)
-			assert.GreaterOrEqual(t, lsn, e.Lsn)
+			assert.GreaterOrEqual(t, lsn, e.DSN)
 			wg.Done()
 		}
 	}

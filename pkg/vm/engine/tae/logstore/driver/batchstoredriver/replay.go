@@ -72,8 +72,8 @@ func (r *replayer) onReplayEntry(e *entry.Entry) error {
 	if info == nil {
 		return nil
 	}
-	r.updateaddrs(r.version, e.Lsn)
-	r.updateGroupLSN(e.Lsn)
+	r.updateaddrs(r.version, e.DSN)
+	r.updateGroupLSN(e.DSN)
 	return nil
 }
 
@@ -92,7 +92,7 @@ func (r *replayer) replayHandler(vfile *vFile) error {
 	if err := r.onReplayEntry(e); err != nil {
 		return err
 	}
-	vfile.onReplay(r.pos, e.Lsn)
+	vfile.onReplay(r.pos, e.DSN)
 	t0 = time.Now()
 	r.applyEntry(e)
 	r.applyDuration += time.Since(t0)

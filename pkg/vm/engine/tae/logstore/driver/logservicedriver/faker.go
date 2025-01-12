@@ -51,7 +51,7 @@ func mockUnmarshalLogRecordFactor(d *mockDriver) func(r logservice.LogRecord) *r
 			for dsn := spec[2]; dsn <= spec[3]; dsn++ {
 				e.addr[dsn] = dsn
 				le := entry.NewEmptyEntry()
-				le.Lsn = dsn
+				le.DSN = dsn
 				e.entries = append(e.entries, le)
 			}
 		case TReplay:
@@ -63,7 +63,7 @@ func mockUnmarshalLogRecordFactor(d *mockDriver) func(r logservice.LogRecord) *r
 
 func mockHandleFactory(fromDSN uint64, onApplyCB func(*entry.Entry)) func(*entry.Entry) (replayEntryState driver.ReplayEntryState) {
 	return func(e *entry.Entry) (replayEntryState driver.ReplayEntryState) {
-		if e.Lsn < fromDSN {
+		if e.DSN < fromDSN {
 			return driver.RE_Truncate
 		}
 		if onApplyCB != nil {

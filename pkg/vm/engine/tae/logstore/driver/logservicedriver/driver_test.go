@@ -49,16 +49,16 @@ func restartDriver(t *testing.T, d *LogServiceDriver, h func(*entry.Entry)) *Log
 	}
 	// preLsns:=d.validPSN
 	t.Logf("Valid lsn: %v", d.psn.records)
-	t.Logf("Driver Lsn %d, Syncing %d, Synced %d", d.dsn, d.syncing, d.synced)
+	t.Logf("Driver DSN %d, Syncing %d, Synced %d", d.dsn, d.syncing, d.synced)
 	t.Logf("Truncated %d", d.truncateDSNIntent.Load())
 	t.Logf("LSTruncated %d", d.truncatedPSN)
 	d = NewLogServiceDriver(d.config)
 	tempLsn := uint64(0)
 	err := d.Replay(context.Background(), func(e *entry.Entry) driver.ReplayEntryState {
-		if e.Lsn <= tempLsn {
+		if e.DSN <= tempLsn {
 			panic("logic err")
 		}
-		tempLsn = e.Lsn
+		tempLsn = e.DSN
 		if h != nil {
 			h(e)
 		}
@@ -78,7 +78,7 @@ func restartDriver(t *testing.T, d *LogServiceDriver, h func(*entry.Entry)) *Log
 	// }
 	t.Logf("Valid lsn: %v", d.psn.records)
 	// assert.Equal(t,preLsns.GetCardinality(),d.validPSN.GetCardinality())
-	t.Logf("Driver Lsn %d, Syncing %d, Synced %d", d.dsn, d.syncing, d.synced)
+	t.Logf("Driver DSN %d, Syncing %d, Synced %d", d.dsn, d.syncing, d.synced)
 	t.Logf("Truncated %d", d.truncateDSNIntent.Load())
 	t.Logf("LSTruncated %d", d.truncatedPSN)
 	return d
@@ -147,7 +147,7 @@ func TestReplay2(t *testing.T) {
 
 	for i, e := range entries {
 		e.WaitDone()
-		assert.Equal(t, uint64(i+1), e.Lsn)
+		assert.Equal(t, uint64(i+1), e.DSN)
 	}
 
 	truncated, err := driver.GetTruncated()

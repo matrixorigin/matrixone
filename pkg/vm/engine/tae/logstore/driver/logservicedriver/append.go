@@ -27,7 +27,7 @@ var ErrTooMuchPenddings = moerr.NewInternalErrorNoCtx("too much penddings")
 
 func (d *LogServiceDriver) Append(e *entry.Entry) error {
 	d.dsnmu.Lock()
-	e.Lsn = d.allocateDSNLocked()
+	e.DSN = d.allocateDSNLocked()
 	_, err := d.doAppendLoop.Enqueue(e)
 	if err != nil {
 		panic(err)

@@ -67,7 +67,7 @@ func TestAppendSkipCmd2(t *testing.T) {
 
 	client, _ := driver.getClientForWrite()
 	for i := 0; i < entryCount; i++ {
-		entries[i].Lsn = dsns[i]
+		entries[i].DSN = dsns[i]
 
 		entry := newRecordEntry()
 		entry.appended = appended[i]
@@ -95,11 +95,11 @@ func TestAppendSkipCmd2(t *testing.T) {
 		assert.NoError(t, driver.Close())
 		driver = NewLogServiceDriver(driver.config)
 		err := driver.Replay(context.Background(), func(e *entry.Entry) storeDriver.ReplayEntryState {
-			assert.Less(t, e.Lsn, uint64(11))
-			list1 = append(list1, e.Lsn)
-			if e.Lsn > 7 {
+			assert.Less(t, e.DSN, uint64(11))
+			list1 = append(list1, e.DSN)
+			if e.DSN > 7 {
 				entryCount++
-				list2 = append(list2, e.Lsn)
+				list2 = append(list2, e.DSN)
 				return storeDriver.RE_Nomal
 			} else {
 				return storeDriver.RE_Truncate
@@ -133,8 +133,8 @@ func TestAppendSkipCmd3(t *testing.T) {
 		assert.NoError(t, driver.Close())
 		driver = NewLogServiceDriver(driver.config)
 		err := driver.Replay(ctx, func(e *entry.Entry) storeDriver.ReplayEntryState {
-			assert.Less(t, e.Lsn, uint64(11))
-			if e.Lsn > 7 {
+			assert.Less(t, e.DSN, uint64(11))
+			if e.DSN > 7 {
 				entryCount++
 				return storeDriver.RE_Nomal
 			} else {
@@ -174,7 +174,7 @@ func TestAppendSkipCmd4(t *testing.T) {
 
 	client, _ := driver.getClientForWrite()
 	for i := 0; i < entryCount; i++ {
-		entries[i].Lsn = dsns[i]
+		entries[i].DSN = dsns[i]
 
 		entry := newRecordEntry()
 		entry.appended = appended[i]
@@ -196,8 +196,8 @@ func TestAppendSkipCmd4(t *testing.T) {
 		assert.NoError(t, driver.Close())
 		driver = NewLogServiceDriver(driver.config)
 		err := driver.Replay(context.Background(), func(e *entry.Entry) storeDriver.ReplayEntryState {
-			assert.Less(t, e.Lsn, uint64(4))
-			if e.Lsn > 0 {
+			assert.Less(t, e.DSN, uint64(4))
+			if e.DSN > 0 {
 				entryCount++
 				return storeDriver.RE_Nomal
 			} else {
@@ -229,7 +229,7 @@ func TestAppendSkipCmd4(t *testing.T) {
 		payload := []byte(fmt.Sprintf("payload %d", i))
 		e := entry.MockEntryWithPayload(payload)
 		entries[i] = e
-		entries[i].Lsn = dsns[i]
+		entries[i].DSN = dsns[i]
 
 		entry := newRecordEntry()
 		entry.appended = appended[i]
@@ -250,8 +250,8 @@ func TestAppendSkipCmd4(t *testing.T) {
 		assert.NoError(t, driver.Close())
 		driver = NewLogServiceDriver(driver.config)
 		err := driver.Replay(context.Background(), func(e *entry.Entry) storeDriver.ReplayEntryState {
-			assert.Less(t, e.Lsn, uint64(5))
-			if e.Lsn > 0 {
+			assert.Less(t, e.DSN, uint64(5))
+			if e.DSN > 0 {
 				entryCount++
 				return storeDriver.RE_Nomal
 			} else {
@@ -291,7 +291,7 @@ func TestAppendSkipCmd5(t *testing.T) {
 
 	client, _ := driver.getClientForWrite()
 	for i := 0; i < entryCount; i++ {
-		entries[i].Lsn = dsns[i]
+		entries[i].DSN = dsns[i]
 
 		entry := newRecordEntry()
 		entry.appended = appended[i]
@@ -317,8 +317,8 @@ func TestAppendSkipCmd5(t *testing.T) {
 		assert.NoError(t, driver.Close())
 		driver = NewLogServiceDriver(driver.config)
 		err := driver.Replay(context.Background(), func(e *entry.Entry) storeDriver.ReplayEntryState {
-			assert.Less(t, e.Lsn, uint64(13))
-			if e.Lsn > 8 {
+			assert.Less(t, e.DSN, uint64(13))
+			if e.DSN > 8 {
 				entryCount++
 				return storeDriver.RE_Nomal
 			} else {
@@ -374,7 +374,7 @@ func Test_Replayer1(t *testing.T) {
 
 	var appliedDSNs []uint64
 	mockHandle := mockHandleFactory(39, func(e *entry.Entry) {
-		appliedDSNs = append(appliedDSNs, e.Lsn)
+		appliedDSNs = append(appliedDSNs, e.DSN)
 	})
 
 	r := newReplayer2(
@@ -409,7 +409,7 @@ func Test_Replayer2(t *testing.T) {
 	)
 	var appliedDSNs []uint64
 	mockHandle := mockHandleFactory(1, func(e *entry.Entry) {
-		appliedDSNs = append(appliedDSNs, e.Lsn)
+		appliedDSNs = append(appliedDSNs, e.DSN)
 	})
 
 	r := newReplayer2(
@@ -444,7 +444,7 @@ func Test_Replayer3(t *testing.T) {
 	)
 	var appliedDSNs []uint64
 	mockHandle := mockHandleFactory(40, func(e *entry.Entry) {
-		appliedDSNs = append(appliedDSNs, e.Lsn)
+		appliedDSNs = append(appliedDSNs, e.DSN)
 	})
 
 	r := newReplayer2(
@@ -479,7 +479,7 @@ func Test_Replayer4(t *testing.T) {
 	)
 	var appliedDSNs []uint64
 	mockHandle := mockHandleFactory(38, func(e *entry.Entry) {
-		appliedDSNs = append(appliedDSNs, e.Lsn)
+		appliedDSNs = append(appliedDSNs, e.DSN)
 	})
 
 	r := newReplayer2(
@@ -518,7 +518,7 @@ func Test_Replayer5(t *testing.T) {
 	)
 	var appliedDSNs []uint64
 	mockHandle := mockHandleFactory(38, func(e *entry.Entry) {
-		appliedDSNs = append(appliedDSNs, e.Lsn)
+		appliedDSNs = append(appliedDSNs, e.DSN)
 	})
 
 	var psnReaded []uint64
@@ -533,9 +533,9 @@ func Test_Replayer5(t *testing.T) {
 	onScheduled := func(r *recordEntry) {
 		for _, e := range r.entries {
 			if len(dsnScheduled) > 0 {
-				assert.True(t, dsnScheduled[len(dsnScheduled)-1] < e.Lsn)
+				assert.True(t, dsnScheduled[len(dsnScheduled)-1] < e.DSN)
 			}
-			dsnScheduled = append(dsnScheduled, e.Lsn)
+			dsnScheduled = append(dsnScheduled, e.DSN)
 		}
 	}
 
@@ -577,7 +577,7 @@ func Test_Replayer6(t *testing.T) {
 	)
 	var appliedDSNs []uint64
 	mockHandle := mockHandleFactory(8, func(e *entry.Entry) {
-		appliedDSNs = append(appliedDSNs, e.Lsn)
+		appliedDSNs = append(appliedDSNs, e.DSN)
 	})
 
 	var psnReaded []uint64
@@ -592,9 +592,9 @@ func Test_Replayer6(t *testing.T) {
 	onScheduled := func(r *recordEntry) {
 		for _, e := range r.entries {
 			if len(dsnScheduled) > 0 {
-				assert.True(t, dsnScheduled[len(dsnScheduled)-1] < e.Lsn)
+				assert.True(t, dsnScheduled[len(dsnScheduled)-1] < e.DSN)
 			}
-			dsnScheduled = append(dsnScheduled, e.Lsn)
+			dsnScheduled = append(dsnScheduled, e.DSN)
 		}
 	}
 
@@ -650,7 +650,7 @@ func Test_Replayer7(t *testing.T) {
 	)
 	var appliedDSNs []uint64
 	mockHandle := mockHandleFactory(8, func(e *entry.Entry) {
-		appliedDSNs = append(appliedDSNs, e.Lsn)
+		appliedDSNs = append(appliedDSNs, e.DSN)
 	})
 
 	var psnReaded []uint64
@@ -665,9 +665,9 @@ func Test_Replayer7(t *testing.T) {
 	onScheduled := func(r *recordEntry) {
 		for _, e := range r.entries {
 			if len(dsnScheduled) > 0 {
-				assert.True(t, dsnScheduled[len(dsnScheduled)-1] < e.Lsn)
+				assert.True(t, dsnScheduled[len(dsnScheduled)-1] < e.DSN)
 			}
-			dsnScheduled = append(dsnScheduled, e.Lsn)
+			dsnScheduled = append(dsnScheduled, e.DSN)
 		}
 	}
 
@@ -721,7 +721,7 @@ func Test_Replayer8(t *testing.T) {
 
 	var appliedDSNs []uint64
 	mockHandle := mockHandleFactory(3, func(e *entry.Entry) {
-		appliedDSNs = append(appliedDSNs, e.Lsn)
+		appliedDSNs = append(appliedDSNs, e.DSN)
 	})
 
 	var psnReaded []uint64
@@ -737,10 +737,10 @@ func Test_Replayer8(t *testing.T) {
 	onScheduled := func(r *recordEntry) {
 		for _, e := range r.entries {
 			if len(dsnScheduled) > 0 {
-				assert.True(t, dsnScheduled[len(dsnScheduled)-1] < e.Lsn)
+				assert.True(t, dsnScheduled[len(dsnScheduled)-1] < e.DSN)
 			}
-			t.Logf("Scheduled DSN: %d", e.Lsn)
-			dsnScheduled = append(dsnScheduled, e.Lsn)
+			t.Logf("Scheduled DSN: %d", e.DSN)
+			dsnScheduled = append(dsnScheduled, e.DSN)
 		}
 	}
 

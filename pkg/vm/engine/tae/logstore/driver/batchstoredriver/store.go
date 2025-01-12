@@ -170,7 +170,7 @@ func (bs *baseStore) onEntries(entries ...any) {
 		// }
 		var err error
 		appender := bs.file.GetAppender()
-		e.Ctx, err = appender.Prepare(e.GetSize(), e.Lsn)
+		e.Ctx, err = appender.Prepare(e.GetSize(), e.DSN)
 		if err != nil {
 			panic(err)
 		}
@@ -254,7 +254,7 @@ func (bs *baseStore) Append(e *entry.Entry) error {
 	bs.flushWgMu.Unlock()
 	bs.mu.Lock()
 	lsn := bs.AllocateLsn()
-	e.Lsn = lsn
+	e.DSN = lsn
 	// if e.IsPrintTime() {
 	// 	logutil.Infof("append entry takes %dms", e.Duration().Milliseconds())
 	// 	e.StartTime()

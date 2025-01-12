@@ -513,7 +513,7 @@ func (r *replayer2) tryScheduleApply(
 
 	dsns := make([]uint64, 0, len(record.Meta.addr))
 	scheduleApply := func(e *entry.Entry) {
-		dsns = append(dsns, e.Lsn)
+		dsns = append(dsns, e.DSN)
 		scheduled = e
 		applyC <- e
 	}
@@ -584,7 +584,7 @@ func (r *replayer2) streamApplying(
 		case e, ok = <-sourceC:
 			if !ok {
 				if lastAppliedEntry != nil {
-					r.replayedState.lastAppliedDSN = lastAppliedEntry.Lsn
+					r.replayedState.lastAppliedDSN = lastAppliedEntry.DSN
 					_, lsn := lastAppliedEntry.Entry.GetLsn()
 					r.replayedState.lastAppliedLSN = lsn
 				}
@@ -599,7 +599,7 @@ func (r *replayer2) streamApplying(
 			if state := r.handle(e); state == driver.RE_Nomal {
 				if r.stats.appliedLSNCount.Load() == 0 {
 					_, lsn := e.Entry.GetLsn()
-					r.replayedState.firstAppliedDSN = e.Lsn
+					r.replayedState.firstAppliedDSN = e.DSN
 					r.replayedState.firstAppliedLSN = lsn
 					r.stats.appliedLSNCount.Add(1)
 				}
