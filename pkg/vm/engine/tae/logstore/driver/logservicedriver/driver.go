@@ -19,9 +19,11 @@ import (
 	"time"
 
 	"github.com/panjf2000/ants/v2"
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
@@ -53,7 +55,6 @@ func RetryWithTimeout(timeoutDuration time.Duration, fn func() (shouldReturn boo
 
 type LogServiceDriver struct {
 	*driverInfo
-	readCache
 	clientPool      *clientpool
 	config          *Config
 	currentAppender *driverAppender
@@ -99,7 +100,6 @@ func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
 		config:          cfg,
 		currentAppender: newDriverAppender(),
 		driverInfo:      newDriverInfo(),
-		readCache:       newReadCache(),
 		appendWaitQueue: make(chan any, 10000),
 		postAppendQueue: make(chan any, 10000),
 		appendPool:      pool,
@@ -140,23 +140,11 @@ func (d *LogServiceDriver) Replay(
 ) (err error) {
 	d.PreReplay()
 
-	// onRead := func(psn uint64, r *recordEntry) {
-	// 	logutil.Info(
-	// 		"DEBUG-1",
-	// 		zap.Uint64("psn", psn),
-	// 		zap.Any("dsns", r.Meta.addr),
-	// 		zap.Any("safe", r.Meta.appended),
-	// 	)
-	// }
-	// replayer := newReplayer2(
-	// 	h, d, ReplayReadSize,
-	// 	WithReplayerOnRead(onRead),
-	// )
-
-	replayer := newReplayer(h, d, ReplayReadSize)
+	replayer := newReplayer2(
+		h, d, ReplayReadSize,
+	)
 
 	defer func() {
-		d.resetReadCache()
 		d.PostReplay()
 	}()
 
@@ -166,6 +154,68 @@ func (d *LogServiceDriver) Replay(
 
 	dsnStats := replayer.ExportDSNStats()
 	d.resetDSNStats(&dsnStats)
+
+	return
+}
+
+// PXU TODO: not panic here
+func (d *LogServiceDriver) readFromBackend(
+	ctx context.Context, firstPSN uint64, maxSize int,
+) (
+	nextPSN uint64,
+	records []logservice.LogRecord,
+	err error,
+) {
+	var (
+		t0         = time.Now()
+		cancel     context.CancelFunc
+		maxRetry   = 10
+		retryTimes = 0
+	)
+
+	defer func() {
+		d.readDuration += time.Since(t0)
+		if err == nil || retryTimes == 0 {
+			return
+		}
+		logger := logutil.Info
+		if err != nil {
+			logger = logutil.Error
+		}
+		logger(
+			"Wal-Read-Backend",
+			zap.Uint64("from-psn", firstPSN),
+			zap.Int("max-size", maxSize),
+			zap.Int("num-records", len(records)),
+			zap.Uint64("next-psn", nextPSN),
+			zap.Duration("duration", time.Since(t0)),
+			zap.Error(err),
+		)
+	}()
+
+	var client *clientWithRecord
+	if client, err = d.clientPool.Get(); err != nil {
+		return
+	}
+	defer d.clientPool.Put(client)
+
+	for ; retryTimes < maxRetry; retryTimes++ {
+		ctx, cancel = context.WithTimeoutCause(
+			ctx,
+			d.config.ReadDuration,
+			moerr.CauseReadFromLogService,
+		)
+		if records, nextPSN, err = client.c.Read(
+			ctx, firstPSN, uint64(maxSize),
+		); err != nil {
+			err = moerr.AttachCause(ctx, err)
+		}
+		cancel()
+
+		if err == nil {
+			break
+		}
+	}
 
 	return
 }

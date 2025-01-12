@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 )
 
@@ -296,26 +295,6 @@ func newEmptyRecordEntry(r logservice.LogRecord) *recordEntry {
 			Meta: newMeta(),
 		},
 	}
-}
-
-// one record entry may contain multiple entries, with each entry has a DSN
-// the DSNs in the record entry are monotonic continuous increasing
-// PSN: DSNS
-// 1: 1, 2, 3     2: 4, 5, 6
-func (r *recordEntry) scheduleReplay(replayer *replayer) *common.ClosedIntervals {
-	dsns := make([]uint64, 0, len(r.Meta.addr))
-	offset := int64(0)
-	for dsn := range r.Meta.addr {
-		dsns = append(dsns, dsn)
-		e := entry.NewEmptyEntry()
-		n, err := e.UnmarshalBinary(r.baseEntry.payload[offset:])
-		if err != nil {
-			panic(err)
-		}
-		offset += n
-		replayer.replayOneEntry(e)
-	}
-	return common.NewClosedIntervalsBySlice(dsns)
 }
 
 func (r *recordEntry) forEachLogEntry(fn func(*entry.Entry)) (err error) {
