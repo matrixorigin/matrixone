@@ -62,12 +62,12 @@ func TestAppendSkipCmd2(t *testing.T) {
 	// appended: 0, 1, 2, 5, 6, 6, 9, 10, 10, 10
 	// replay: 6-10
 
-	lsns := []uint64{8, 1, 2, 3, 6, 9, 7, 10, 13, 12}
+	dsns := []uint64{8, 1, 2, 3, 6, 9, 7, 10, 13, 12}
 	appended := []uint64{0, 1, 2, 5, 6, 6, 9, 10, 10, 10}
 
 	client, _ := driver.getClientForWrite()
 	for i := 0; i < entryCount; i++ {
-		entries[i].Lsn = lsns[i]
+		entries[i].Lsn = dsns[i]
 
 		entry := newRecordEntry()
 		entry.appended = appended[i]
@@ -89,18 +89,24 @@ func TestAppendSkipCmd2(t *testing.T) {
 	}
 
 	{
+		var list1 []uint64
+		var list2 []uint64
 		entryCount := 0
 		assert.NoError(t, driver.Close())
 		driver = NewLogServiceDriver(driver.config)
 		err := driver.Replay(context.Background(), func(e *entry.Entry) storeDriver.ReplayEntryState {
 			assert.Less(t, e.Lsn, uint64(11))
+			list1 = append(list1, e.Lsn)
 			if e.Lsn > 7 {
 				entryCount++
+				list2 = append(list2, e.Lsn)
 				return storeDriver.RE_Nomal
 			} else {
 				return storeDriver.RE_Truncate
 			}
 		})
+		t.Logf("list1: %v", list1)
+		t.Logf("list2: %v", list2)
 		assert.NoError(t, err)
 		assert.Equal(t, 3, entryCount)
 	}
@@ -163,12 +169,12 @@ func TestAppendSkipCmd4(t *testing.T) {
 	// appended: 1, 2, 3, 3
 	// replay: 1-3
 
-	lsns := []uint64{1, 2, 3, 5}
+	dsns := []uint64{1, 2, 3, 5}
 	appended := []uint64{1, 2, 3, 3}
 
 	client, _ := driver.getClientForWrite()
 	for i := 0; i < entryCount; i++ {
-		entries[i].Lsn = lsns[i]
+		entries[i].Lsn = dsns[i]
 
 		entry := newRecordEntry()
 		entry.appended = appended[i]
@@ -215,7 +221,7 @@ func TestAppendSkipCmd4(t *testing.T) {
 
 	entryCount = 1
 	entries = make([]*entry.Entry, entryCount)
-	lsns = []uint64{4}
+	dsns = []uint64{4}
 	appended = []uint64{4}
 
 	client, _ = driver.getClientForWrite()
@@ -223,7 +229,7 @@ func TestAppendSkipCmd4(t *testing.T) {
 		payload := []byte(fmt.Sprintf("payload %d", i))
 		e := entry.MockEntryWithPayload(payload)
 		entries[i] = e
-		entries[i].Lsn = lsns[i]
+		entries[i].Lsn = dsns[i]
 
 		entry := newRecordEntry()
 		entry.appended = appended[i]
@@ -280,12 +286,12 @@ func TestAppendSkipCmd5(t *testing.T) {
 	// appended: 8, 10, 10, 12
 	// replay: 9-12
 
-	lsns := []uint64{10, 9, 12, 11}
+	dsns := []uint64{10, 9, 12, 11}
 	appended := []uint64{8, 10, 10, 12}
 
 	client, _ := driver.getClientForWrite()
 	for i := 0; i < entryCount; i++ {
-		entries[i].Lsn = lsns[i]
+		entries[i].Lsn = dsns[i]
 
 		entry := newRecordEntry()
 		entry.appended = appended[i]
@@ -549,4 +555,64 @@ func Test_Replayer5(t *testing.T) {
 	t.Logf("dsnScheduled: %v", dsnScheduled)
 	t.Logf("appliedDSNs: %v", appliedDSNs)
 	assert.Equal(t, []uint64{38, 39, 40, 41, 42, 43, 44, 45}, appliedDSNs)
+}
+
+func Test_Replayer6(t *testing.T) {
+	ctx := context.Background()
+	mockDriver := newMockDriver(
+		0,
+		// MetaType,PSN,DSN-S,DSN-E,Safe
+		[][5]uint64{
+			{uint64(TNormal), 1, 8, 8, 7},
+			{uint64(TNormal), 2, 1, 1, 0},
+			{uint64(TNormal), 3, 2, 2, 1},
+			{uint64(TNormal), 4, 3, 3, 2},
+			{uint64(TNormal), 5, 6, 6, 5},
+			{uint64(TNormal), 6, 9, 9, 7},
+			{uint64(TNormal), 7, 7, 7, 6},
+			{uint64(TNormal), 8, 10, 10, 8},
+			{uint64(TNormal), 9, 12, 12, 10},
+			{uint64(TNormal), 10, 11, 11, 9},
+		},
+		30,
+	)
+	var appliedDSNs []uint64
+	mockHandle := mockHandleFactory(8, func(e *entry.Entry) {
+		appliedDSNs = append(appliedDSNs, e.Lsn)
+	})
+
+	var psnReaded []uint64
+	onRead := func(psn uint64, _ *recordEntry) {
+		if len(psnReaded) > 0 {
+			assert.Equal(t, psnReaded[len(psnReaded)-1]+1, psn)
+		}
+		psnReaded = append(psnReaded, psn)
+	}
+
+	var dsnScheduled []uint64
+	onScheduled := func(r *recordEntry) {
+		for _, e := range r.entries {
+			if len(dsnScheduled) > 0 {
+				assert.True(t, dsnScheduled[len(dsnScheduled)-1] < e.Lsn)
+			}
+			dsnScheduled = append(dsnScheduled, e.Lsn)
+		}
+	}
+
+	r := newReplayer2(
+		mockHandle,
+		mockDriver,
+		30,
+		WithReplayerAppendSkipCmd(noopAppendSkipCmd),
+		WithReplayerUnmarshalLogRecord(mockUnmarshalLogRecordFactor(mockDriver)),
+		WithReplayerOnRead(onRead),
+		WithReplayerOnScheduled(onScheduled),
+	)
+
+	err := r.Replay(ctx)
+	assert.NoError(t, err)
+	t.Logf("psnReaded: %v", psnReaded)
+	t.Logf("dsnScheduled: %v", dsnScheduled)
+	t.Logf("appliedDSNs: %v", appliedDSNs)
+	assert.Equal(t, []uint64{8, 9, 10, 11, 12}, appliedDSNs)
 }
