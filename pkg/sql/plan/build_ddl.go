@@ -950,16 +950,6 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 		if err != nil {
 			return nil, err
 		}
-		partitionBinder := NewPartitionBinder(builder, bindContext)
-		err = buildPartitionByClause(ctx.GetContext(), partitionBinder, stmt, createTable.TableDef)
-		if err != nil {
-			return nil, err
-		}
-
-		err = addPartitionTableDef(ctx.GetContext(), string(stmt.Table.ObjectName), createTable)
-		if err != nil {
-			return nil, err
-		}
 	}
 
 	return &Plan{
@@ -972,77 +962,6 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 			},
 		},
 	}, nil
-}
-
-// addPartitionTableDef constructs the table def for the partition table
-func addPartitionTableDef(ctx context.Context, mainTableName string, createTable *plan.CreateTable) error {
-	//add partition table
-	//there is no index for the partition table
-	//there is no foreign key for the partition table
-	if !util.IsValidNameForPartitionTable(mainTableName) {
-		return moerr.NewInvalidInputf(ctx, "invalid main table name %s", mainTableName)
-	}
-
-	//common properties
-	partitionProps := []*plan.Property{
-		{
-			Key:   catalog.SystemRelAttr_Kind,
-			Value: catalog.SystemPartitionRel,
-		},
-		{
-			Key:   catalog.SystemRelAttr_CreateSQL,
-			Value: "",
-		},
-	}
-	partitionPropsDef := &plan.TableDef_DefType{
-		Def: &plan.TableDef_DefType_Properties{
-			Properties: &plan.PropertiesDef{
-				Properties: partitionProps,
-			},
-		}}
-
-	partitionDef := createTable.TableDef.Partition
-	partitionTableDefs := make([]*TableDef, partitionDef.PartitionNum)
-
-	partitionTableNames := make([]string, partitionDef.PartitionNum)
-	for i := 0; i < int(partitionDef.PartitionNum); i++ {
-		part := partitionDef.Partitions[i]
-		ok, partitionTableName := util.MakeNameOfPartitionTable(part.GetPartitionName(), mainTableName)
-		if !ok {
-			return moerr.NewInvalidInputf(ctx, "invalid partition table name %s", partitionTableName)
-		}
-
-		// save the table name for a partition
-		part.PartitionTableName = partitionTableName
-		partitionTableNames[i] = partitionTableName
-
-		partitionTableDefs[i] = &TableDef{
-			Name: partitionTableName,
-			Cols: createTable.TableDef.Cols, //same as the main table's column defs
-		}
-		partitionTableDefs[i].Pkey = createTable.TableDef.GetPkey()
-		partitionTableDefs[i].Defs = append(partitionTableDefs[i].Defs, partitionPropsDef)
-	}
-	partitionDef.PartitionTableNames = partitionTableNames
-	createTable.PartitionTables = partitionTableDefs
-	return nil
-}
-
-// buildPartitionByClause build partition by clause info and semantic check.
-// Currently, sub partition and partition value verification are not supported
-func buildPartitionByClause(ctx context.Context, partitionBinder *PartitionBinder, stmt *tree.CreateTable, tableDef *TableDef) (err error) {
-	var builder partitionBuilder
-	switch stmt.PartitionOption.PartBy.PType.(type) {
-	case *tree.HashType:
-		builder = &hashPartitionBuilder{}
-	case *tree.KeyType:
-		builder = &keyPartitionBuilder{}
-	case *tree.RangeType:
-		builder = &rangePartitionBuilder{}
-	case *tree.ListType:
-		builder = &listPartitionBuilder{}
-	}
-	return builder.build(ctx, partitionBinder, stmt, tableDef)
 }
 
 func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *plan.CreateTable, asSelectCols []*ColDef) error {
@@ -1293,7 +1212,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 
 		// insert into new_table select default_val1, default_val2, ..., * from (select clause);
 		var insertSqlBuilder strings.Builder
-		insertSqlBuilder.WriteString(fmt.Sprintf("insert into `%s` select ", createTable.TableDef.Name))
+		insertSqlBuilder.WriteString(fmt.Sprintf("insert into `%s`.`%s` select ", createTable.Database, createTable.TableDef.Name))
 
 		cols := createTable.TableDef.Cols
 		firstCol := true
@@ -2662,11 +2581,6 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 				}
 			}
 		}
-
-		if tableDef.Partition != nil {
-			truncateTable.PartitionTableNames = make([]string, len(tableDef.Partition.PartitionTableNames))
-			copy(truncateTable.PartitionTableNames, tableDef.Partition.PartitionTableNames)
-		}
 	}
 
 	return &Plan{
@@ -2791,10 +2705,6 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 					dropTable.IndexTableNames = append(dropTable.IndexTableNames, indexdef.IndexTableName)
 				}
 			}
-		}
-
-		if tableDef.GetPartition() != nil {
-			dropTable.PartitionTableNames = tableDef.GetPartition().GetPartitionTableNames()
 		}
 
 		dropTable.TableDef = tableDef
@@ -3769,18 +3679,10 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 
 	if stmt.PartitionOption != nil {
 		alterPartitionOption := stmt.PartitionOption
-		switch partitionOption := alterPartitionOption.(type) {
+		switch alterPartitionOption.(type) {
 		case *tree.AlterPartitionAddPartitionClause:
-			alterTableAddPartition, err := AddTablePartitions(ctx, alterTable, partitionOption)
-			if err != nil {
-				return nil, err
-			}
-
-			alterTable.Actions = append(alterTable.Actions, &plan.AlterTable_Action{
-				Action: &plan.AlterTable_Action_AddPartition{
-					AddPartition: alterTableAddPartition,
-				},
-			})
+			// TODO: reimplement partition
+			return nil, moerr.NewNotSupported(ctx.GetContext(), "alter table add partition clause")
 		case *tree.AlterPartitionDropPartitionClause:
 			return nil, moerr.NewNotSupported(ctx.GetContext(), "alter table drop partition clause")
 		case *tree.AlterPartitionTruncatePartitionClause:

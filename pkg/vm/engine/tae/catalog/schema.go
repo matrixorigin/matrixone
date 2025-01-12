@@ -267,13 +267,6 @@ func (s *Schema) ApplyAlterTable(req *apipb.AlterTableReq) error {
 		}
 		logutil.Infof("[Alter] rename table %s -> %s", s.Name, rename.NewName)
 		s.Name = rename.NewName
-	case apipb.AlterKind_AddPartition:
-		newPartitionDef := req.GetAddPartition().GetPartitionDef()
-		bytes, err := newPartitionDef.MarshalPartitionInfo()
-		if err != nil {
-			return err
-		}
-		s.Partition = string(bytes)
 	default:
 		return moerr.NewNYINoCtxf("unsupported alter kind: %v", req.Kind)
 	}
@@ -603,9 +596,15 @@ func (s *Schema) Marshal() (buf []byte, err error) {
 	return
 }
 
-func (s *Schema) ReadFromBatch(bat *containers.Batch, offset int, targetTid uint64) (next int) {
+func (s *Schema) ReadFromBatch(
+	bat *containers.Batch,
+	tids []uint64,
+	nullables, isHiddens, clusterbys, autoIncrements []int8,
+	idxes []int32,
+	seqNums []uint16,
+	offset int,
+	targetTid uint64) (next int) {
 	nameVec := bat.GetVectorByName(pkgcatalog.SystemColAttr_RelName)
-	tidVec := bat.GetVectorByName(pkgcatalog.SystemColAttr_RelID)
 	defer func() {
 		slices.SortStableFunc(s.ColDefs, func(i, j *ColDef) int {
 			return i.Idx - j.Idx
@@ -615,39 +614,39 @@ func (s *Schema) ReadFromBatch(bat *containers.Batch, offset int, targetTid uint
 		if offset >= nameVec.Length() {
 			break
 		}
-		name := string(nameVec.Get(offset).([]byte))
-		id := tidVec.Get(offset).(uint64)
+		name := nameVec.GetDownstreamVector().GetStringAt(offset)
+		id := tids[offset]
 		// every schema has 1 rowid column as last column, if have one, break
 		if name != s.Name || targetTid != id {
 			break
 		}
 		def := new(ColDef)
-		def.Name = string(bat.GetVectorByName((pkgcatalog.SystemColAttr_Name)).Get(offset).([]byte))
-		data := bat.GetVectorByName((pkgcatalog.SystemColAttr_Type)).Get(offset).([]byte)
+		def.Name = bat.GetVectorByName((pkgcatalog.SystemColAttr_Name)).GetDownstreamVector().GetStringAt(offset)
+		data := bat.GetVectorByName((pkgcatalog.SystemColAttr_Type)).GetDownstreamVector().GetBytesAt(offset)
 		types.Decode(data, &def.Type)
-		nullable := bat.GetVectorByName((pkgcatalog.SystemColAttr_NullAbility)).Get(offset).(int8)
+		nullable := nullables[offset]
 		def.NullAbility = !i82bool(nullable)
-		isHidden := bat.GetVectorByName((pkgcatalog.SystemColAttr_IsHidden)).Get(offset).(int8)
+		isHidden := isHiddens[offset]
 		def.Hidden = i82bool(isHidden)
-		isClusterBy := bat.GetVectorByName((pkgcatalog.SystemColAttr_IsClusterBy)).Get(offset).(int8)
+		isClusterBy := clusterbys[offset]
 		def.ClusterBy = i82bool(isClusterBy)
 		if def.ClusterBy {
 			def.SortKey = true
 		}
-		isAutoIncrement := bat.GetVectorByName((pkgcatalog.SystemColAttr_IsAutoIncrement)).Get(offset).(int8)
+		isAutoIncrement := autoIncrements[offset]
 		def.AutoIncrement = i82bool(isAutoIncrement)
-		def.Comment = string(bat.GetVectorByName((pkgcatalog.SystemColAttr_Comment)).Get(offset).([]byte))
-		def.OnUpdate = bat.GetVectorByName((pkgcatalog.SystemColAttr_Update)).Get(offset).([]byte)
-		def.Default = bat.GetVectorByName((pkgcatalog.SystemColAttr_DefaultExpr)).Get(offset).([]byte)
-		def.Idx = int(bat.GetVectorByName((pkgcatalog.SystemColAttr_Num)).Get(offset).(int32)) - 1
-		def.SeqNum = bat.GetVectorByName(pkgcatalog.SystemColAttr_Seqnum).Get(offset).(uint16)
-		def.EnumValues = string(bat.GetVectorByName((pkgcatalog.SystemColAttr_EnumValues)).Get(offset).([]byte))
+		def.Comment = bat.GetVectorByName((pkgcatalog.SystemColAttr_Comment)).GetDownstreamVector().GetStringAt(offset)
+		def.OnUpdate = bat.GetVectorByName((pkgcatalog.SystemColAttr_Update)).GetDownstreamVector().GetBytesAt(offset)
+		def.Default = bat.GetVectorByName((pkgcatalog.SystemColAttr_DefaultExpr)).GetDownstreamVector().GetBytesAt(offset)
+		def.Idx = int(idxes[offset]) - 1
+		def.SeqNum = seqNums[offset]
+		def.EnumValues = bat.GetVectorByName((pkgcatalog.SystemColAttr_EnumValues)).GetDownstreamVector().GetStringAt(offset)
 		s.NameMap[def.Name] = def.Idx
 		s.ColDefs = append(s.ColDefs, def)
 		if def.Name == PhyAddrColumnName {
 			def.PhyAddr = true
 		}
-		constraint := string(bat.GetVectorByName(pkgcatalog.SystemColAttr_ConstraintType).Get(offset).([]byte))
+		constraint := bat.GetVectorByName(pkgcatalog.SystemColAttr_ConstraintType).GetDownstreamVector().GetStringAt(offset)
 		if constraint == "p" {
 			def.SortKey = true
 			def.Primary = true
@@ -738,7 +737,7 @@ func colDefFromPlan(col *plan.ColDef, idx int, seqnum uint16) *ColDef {
 		Name:   col.GetOriginCaseName(),
 		Idx:    idx,
 		SeqNum: seqnum,
-		Type:   vector.ProtoTypeToType(&col.Typ),
+		Type:   vector.ProtoTypeToType(col.Typ),
 		Hidden: col.Hidden,
 		// PhyAddr false
 		// Null  later
