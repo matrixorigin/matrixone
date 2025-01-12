@@ -241,6 +241,8 @@ func (r *replayer2) Replay(ctx context.Context) (err error) {
 	}
 
 	for err == nil || err != ErrAllRecordsRead {
+		time.Sleep(time.Millisecond * 200)
+		logutil.Info("DEBUG-1", r.exportFields(2)...)
 		lastScheduled, err = r.tryScheduleApply(
 			ctx, applyC, lastScheduled, true,
 		)
@@ -289,6 +291,7 @@ func (r *replayer2) tryScheduleApply(
 
 	dsn := r.waterMarks.dsnScheduled + 1
 	psn, ok := r.replayedState.dsn2PSNMap[dsn]
+	logutil.Infof("DEBUG-2 %v %v", dsn, psn)
 
 	// Senario 1 [dsn not found]:
 	// dsn is not found in the dsn2PSNMap, which means the record
@@ -374,6 +377,7 @@ func (r *replayer2) tryScheduleApply(
 	if err = record.forEachLogEntry(scheduleApply); err != nil {
 		return
 	}
+	logutil.Infof("DEBUG-111 %v", dsns)
 
 	dsnRange := common.NewClosedIntervalsBySlice(dsns)
 	r.updateDSN(dsnRange.GetMax())

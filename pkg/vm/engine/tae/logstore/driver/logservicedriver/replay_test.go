@@ -454,3 +454,52 @@ func Test_Replayer3(t *testing.T) {
 	t.Logf("appliedDSNs: %v", appliedDSNs)
 	assert.Equal(t, []uint64{40, 41, 42, 43}, appliedDSNs)
 }
+
+func Test_Replayer4(t *testing.T) {
+	ctx := context.Background()
+	mockDriver := newMockDriver(
+		12,
+		// MetaType,PSN,DSN-S,DSN-E,Safe
+		[][5]uint64{
+			{uint64(TNormal), 11, 37, 37, 0},
+			{uint64(TNormal), 12, 35, 35, 0},
+			{uint64(TNormal), 13, 40, 40, 33},
+			{uint64(TNormal), 14, 36, 36, 34},
+			{uint64(TNormal), 15, 39, 39, 34},
+			{uint64(TNormal), 16, 38, 38, 34},
+
+			// {uint64(TNormal), 11, 37, 37, 0},
+			// {uint64(TNormal), 12, 35, 35, 0},
+			// {uint64(TNormal), 13, 60, 60, 0},
+			// {uint64(TNormal), 14, 38, 38, 0},
+			// {uint64(TNormal), 15, 36, 36, 0},
+			// {uint64(TNormal), 16, 42, 43, 0},
+			// {uint64(TNormal), 17, 39, 39, 0},
+			// {uint64(TNormal), 18, 48, 48, 0},
+			// {uint64(TNormal), 19, 41, 41, 0},
+			// {uint64(TNormal), 20, 40, 40, 0},
+			// {uint64(TNormal), 21, 46, 46, 0},
+			// {uint64(TNormal), 22, 47, 59, 0},
+			// {uint64(TNormal), 23, 44, 45, 0},
+		},
+		30,
+	)
+	var appliedDSNs []uint64
+	mockHandle := mockHandleFactory(37, func(e *entry.Entry) {
+		appliedDSNs = append(appliedDSNs, e.Lsn)
+	})
+
+	r := newReplayer2(
+		mockHandle,
+		mockDriver,
+		30,
+		WithReplayerAppendSkipCmd(noopAppendSkipCmd),
+		WithReplayerUnmarshalLogRecord(mockUnmarshalLogRecordFactor(mockDriver)),
+	)
+
+	err := r.Replay(ctx)
+	assert.NoError(t, err)
+	logutil.Info("DEBUG", r.exportFields(2)...)
+	t.Logf("appliedDSNs: %v", appliedDSNs)
+	// assert.Equal(t, []uint64{40, 41, 42, 43}, appliedDSNs)
+}
