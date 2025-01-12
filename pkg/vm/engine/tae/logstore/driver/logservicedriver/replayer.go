@@ -33,6 +33,12 @@ import (
 
 type ReplayOption func(*replayer2)
 
+func WithReplayerOnWriteSkip(f func(map[uint64]uint64)) ReplayOption {
+	return func(r *replayer2) {
+		r.onWriteSkip = f
+	}
+}
+
 func WithReplayerOnRead(f func(uint64, *recordEntry)) ReplayOption {
 	return func(r *replayer2) {
 		r.onRead = f
@@ -84,6 +90,7 @@ type replayer2 struct {
 	onRead             func(uint64, *recordEntry)
 	onScheduled        func(*recordEntry)
 	onApplied          func(*entry.Entry)
+	onWriteSkip        func(map[uint64]uint64)
 
 	replayedState struct {
 		// DSN->PSN mapping
@@ -393,16 +400,26 @@ func (r *replayer2) tryScheduleApply(
 				r.waterMarks.minDSN = dsn + 1
 				r.waterMarks.dsnScheduled = dsn
 				if len(r.replayedState.dsn2PSNMap) == 0 {
-					return nil, ErrAllRecordsRead
+					err = ErrAllRecordsRead
+					return
 				}
 				return
 			}
 
 			// [dsn not found && dsn > safeDSN]
 			if len(r.replayedState.dsn2PSNMap) != 0 {
+				if r.onWriteSkip != nil {
+					r.onWriteSkip(r.replayedState.dsn2PSNMap)
+				}
 				// PXU TODO
-				r.appendSkipCmd(ctx, r.replayedState.dsn2PSNMap)
+				if err = r.appendSkipCmd(
+					ctx, r.replayedState.dsn2PSNMap,
+				); err != nil {
+					return
+				}
 			}
+			err = ErrAllRecordsRead
+			return
 		}
 	}
 

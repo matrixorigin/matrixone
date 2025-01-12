@@ -572,7 +572,6 @@ func Test_Replayer6(t *testing.T) {
 			{uint64(TNormal), 7, 7, 7, 6},
 			{uint64(TNormal), 8, 10, 10, 8},
 			{uint64(TNormal), 9, 12, 12, 10},
-			{uint64(TNormal), 10, 11, 11, 9},
 		},
 		30,
 	)
@@ -599,10 +598,18 @@ func Test_Replayer6(t *testing.T) {
 		}
 	}
 
+	writeSkip := make(map[uint64]uint64)
+	onWriteSkip := func(m map[uint64]uint64) {
+		for k, v := range m {
+			writeSkip[k] = v
+		}
+	}
+
 	r := newReplayer2(
 		mockHandle,
 		mockDriver,
 		30,
+		WithReplayerOnWriteSkip(onWriteSkip),
 		WithReplayerAppendSkipCmd(noopAppendSkipCmd),
 		WithReplayerUnmarshalLogRecord(mockUnmarshalLogRecordFactor(mockDriver)),
 		WithReplayerOnRead(onRead),
@@ -614,5 +621,7 @@ func Test_Replayer6(t *testing.T) {
 	t.Logf("psnReaded: %v", psnReaded)
 	t.Logf("dsnScheduled: %v", dsnScheduled)
 	t.Logf("appliedDSNs: %v", appliedDSNs)
-	assert.Equal(t, []uint64{8, 9, 10, 11, 12}, appliedDSNs)
+	t.Logf("writeSkip: %v", writeSkip)
+	assert.Equal(t, []uint64{8, 9, 10}, appliedDSNs)
+	assert.Equal(t, map[uint64]uint64{12: 9}, writeSkip)
 }
