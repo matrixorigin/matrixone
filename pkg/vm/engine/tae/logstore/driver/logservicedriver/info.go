@@ -79,7 +79,6 @@ type driverInfo struct {
 	}
 
 	commitCond sync.Cond
-	inReplay   bool
 }
 
 func newDriverInfo() *driverInfo {
@@ -98,15 +97,6 @@ func (info *driverInfo) GetDSN() uint64 {
 	return lsn
 }
 
-func (info *driverInfo) PreReplay() {
-	info.inReplay = true
-}
-func (info *driverInfo) PostReplay() {
-	info.inReplay = false
-}
-func (info *driverInfo) IsReplaying() bool {
-	return info.inReplay
-}
 func (info *driverInfo) resetDSNStats(stats *DSNStats) {
 	info.dsn = stats.Max
 	info.synced = stats.Max
@@ -282,15 +272,4 @@ func (info *driverInfo) putbackWriteTokens(tokens []uint64) {
 	info.commitCond.L.Lock()
 	info.commitCond.Broadcast()
 	info.commitCond.L.Unlock()
-}
-
-func (info *driverInfo) getPSNByDSN(dsn uint64) (uint64, error) {
-	info.psn.mu.RLock()
-	defer info.psn.mu.RUnlock()
-	for psn, intervals := range info.psn.dsnMap {
-		if intervals.Contains(*common.NewClosedIntervalsByInt(dsn)) {
-			return psn, nil
-		}
-	}
-	return 0, ErrDSNNotFound
 }

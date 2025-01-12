@@ -354,13 +354,3 @@ func (r *recordEntry) unmarshal() {
 	r.payload = nil
 	r.unmarshaled.Store(1)
 }
-
-func (r *recordEntry) readEntry(lsn uint64) *entry.Entry {
-	r.unmarshal()
-	offset := r.Meta.addr[lsn]
-	bbuf := bytes.NewBuffer(r.baseEntry.payload[offset:])
-	e := entry.NewEmptyEntry()
-	e.ReadFrom(bbuf)
-	e.Lsn = lsn
-	return e
-}

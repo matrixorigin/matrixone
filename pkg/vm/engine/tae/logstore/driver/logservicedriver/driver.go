@@ -138,15 +138,9 @@ func (d *LogServiceDriver) Replay(
 	ctx context.Context,
 	h driver.ApplyHandle,
 ) (err error) {
-	d.PreReplay()
-
 	replayer := newReplayer2(
 		h, d, ReplayReadSize,
 	)
-
-	defer func() {
-		d.PostReplay()
-	}()
 
 	if err = replayer.Replay(ctx); err != nil {
 		return
