@@ -106,40 +106,40 @@ func (c *ReplayCmd) Marshal() (buf []byte, err error) {
 	return
 }
 
-type ReplayOption func(*replayer2)
+type ReplayOption func(*replayer)
 
 func WithReplayerOnWriteSkip(f func(map[uint64]uint64)) ReplayOption {
-	return func(r *replayer2) {
+	return func(r *replayer) {
 		r.onWriteSkip = f
 	}
 }
 
 func WithReplayerOnRead(f func(uint64, *recordEntry)) ReplayOption {
-	return func(r *replayer2) {
+	return func(r *replayer) {
 		r.onRead = f
 	}
 }
 
 func WithReplayerOnScheduled(f func(*recordEntry)) ReplayOption {
-	return func(r *replayer2) {
+	return func(r *replayer) {
 		r.onScheduled = f
 	}
 }
 
 func WithReplayerOnApplied(f func(*entry.Entry)) ReplayOption {
-	return func(r *replayer2) {
+	return func(r *replayer) {
 		r.onApplied = f
 	}
 }
 
 func WithReplayerUnmarshalLogRecord(f func(logservice.LogRecord) *recordEntry) ReplayOption {
-	return func(r *replayer2) {
+	return func(r *replayer) {
 		r.unmarshalLogRecord = f
 	}
 }
 
 func WithReplayerAppendSkipCmd(f func(ctx context.Context, skipMap map[uint64]uint64) error) ReplayOption {
-	return func(r *replayer2) {
+	return func(r *replayer) {
 		r.appendSkipCmd = f
 	}
 }
@@ -154,7 +154,7 @@ type replayerDriver interface {
 	GetMaxClient() int
 }
 
-type replayer2 struct {
+type replayer struct {
 	readBatchSize int
 
 	driver replayerDriver
@@ -214,13 +214,13 @@ type replayer2 struct {
 	}
 }
 
-func newReplayer2(
+func newReplayer(
 	handle driver.ApplyHandle,
 	driver replayerDriver,
 	readBatchSize int,
 	opts ...ReplayOption,
-) *replayer2 {
-	r := &replayer2{
+) *replayer {
+	r := &replayer{
 		handle:        handle,
 		driver:        driver,
 		readBatchSize: readBatchSize,
@@ -248,7 +248,7 @@ func newReplayer2(
 	return r
 }
 
-func (r *replayer2) ExportDSNStats() DSNStats {
+func (r *replayer) ExportDSNStats() DSNStats {
 	return DSNStats{
 		Min:       r.waterMarks.minDSN,
 		Max:       r.waterMarks.maxDSN,
@@ -257,7 +257,7 @@ func (r *replayer2) ExportDSNStats() DSNStats {
 	}
 }
 
-func (r *replayer2) exportFields(level int) []zap.Field {
+func (r *replayer) exportFields(level int) []zap.Field {
 	ret := []zap.Field{
 		zap.Duration("read-duration", r.stats.readDuration),
 		zap.Int("read-psn-count", r.stats.readPSNCount),
@@ -287,7 +287,7 @@ func (r *replayer2) exportFields(level int) []zap.Field {
 	return ret
 }
 
-func (r *replayer2) initReadWatermarks(ctx context.Context) (err error) {
+func (r *replayer) initReadWatermarks(ctx context.Context) (err error) {
 	var psn uint64
 	if psn, err = r.driver.getTruncatedPSNFromBackend(ctx); err != nil {
 		return
@@ -297,7 +297,7 @@ func (r *replayer2) initReadWatermarks(ctx context.Context) (err error) {
 	return
 }
 
-func (r *replayer2) Replay(ctx context.Context) (err error) {
+func (r *replayer) Replay(ctx context.Context) (err error) {
 	var (
 		readDone      bool
 		resultC       = make(chan error, 1)
@@ -388,7 +388,7 @@ func (r *replayer2) Replay(ctx context.Context) (err error) {
 	return
 }
 
-func (r *replayer2) tryScheduleApply(
+func (r *replayer) tryScheduleApply(
 	ctx context.Context,
 	applyC chan<- *entry.Entry,
 	lastScheduled *entry.Entry,
@@ -551,7 +551,7 @@ func (r *replayer2) tryScheduleApply(
 }
 
 // updateDSN updates the minDSN and maxDSN
-func (r *replayer2) updateDSN(dsn uint64) {
+func (r *replayer) updateDSN(dsn uint64) {
 	if dsn == 0 {
 		return
 	}
@@ -563,7 +563,7 @@ func (r *replayer2) updateDSN(dsn uint64) {
 	}
 }
 
-func (r *replayer2) streamApplying(
+func (r *replayer) streamApplying(
 	ctx context.Context,
 	sourceC <-chan *entry.Entry,
 	resultC chan error,
@@ -618,7 +618,7 @@ func (r *replayer2) streamApplying(
 }
 
 // this function reads the next batch of records from the backend
-func (r *replayer2) readNextBatch(
+func (r *replayer) readNextBatch(
 	ctx context.Context,
 ) (done bool, err error) {
 	t0 := time.Now()
@@ -698,7 +698,7 @@ func (r *replayer2) readNextBatch(
 }
 
 // PXU TODO: make sure there is no concurrent write
-func (r *replayer2) AppendSkipCmd(
+func (r *replayer) AppendSkipCmd(
 	ctx context.Context,
 	skipMap map[uint64]uint64,
 ) (err error) {

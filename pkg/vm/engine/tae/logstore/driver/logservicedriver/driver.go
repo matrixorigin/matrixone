@@ -138,7 +138,7 @@ func (d *LogServiceDriver) Replay(
 	ctx context.Context,
 	h driver.ApplyHandle,
 ) (err error) {
-	replayer := newReplayer2(
+	replayer := newReplayer(
 		h, d, ReplayReadSize,
 	)
 

@@ -37,7 +37,7 @@ func Test_AppendSkipCmd(t *testing.T) {
 	driver := NewLogServiceDriver(cfg)
 	defer driver.Close()
 
-	r := newReplayer2(nil, driver, ReplayReadSize)
+	r := newReplayer(nil, driver, ReplayReadSize)
 	r.AppendSkipCmd(context.Background(), nil)
 }
 
@@ -377,7 +377,7 @@ func Test_Replayer1(t *testing.T) {
 		appliedDSNs = append(appliedDSNs, e.DSN)
 	})
 
-	r := newReplayer2(
+	r := newReplayer(
 		mockHandle,
 		mockDriver,
 		2,
@@ -412,7 +412,7 @@ func Test_Replayer2(t *testing.T) {
 		appliedDSNs = append(appliedDSNs, e.DSN)
 	})
 
-	r := newReplayer2(
+	r := newReplayer(
 		mockHandle,
 		mockDriver,
 		2,
@@ -447,7 +447,7 @@ func Test_Replayer3(t *testing.T) {
 		appliedDSNs = append(appliedDSNs, e.DSN)
 	})
 
-	r := newReplayer2(
+	r := newReplayer(
 		mockHandle,
 		mockDriver,
 		20,
@@ -482,7 +482,7 @@ func Test_Replayer4(t *testing.T) {
 		appliedDSNs = append(appliedDSNs, e.DSN)
 	})
 
-	r := newReplayer2(
+	r := newReplayer(
 		mockHandle,
 		mockDriver,
 		30,
@@ -539,7 +539,7 @@ func Test_Replayer5(t *testing.T) {
 		}
 	}
 
-	r := newReplayer2(
+	r := newReplayer(
 		mockHandle,
 		mockDriver,
 		30,
@@ -605,7 +605,7 @@ func Test_Replayer6(t *testing.T) {
 		}
 	}
 
-	r := newReplayer2(
+	r := newReplayer(
 		mockHandle,
 		mockDriver,
 		30,
@@ -678,7 +678,7 @@ func Test_Replayer7(t *testing.T) {
 		}
 	}
 
-	r := newReplayer2(
+	r := newReplayer(
 		mockHandle,
 		mockDriver,
 		30,
@@ -751,7 +751,7 @@ func Test_Replayer8(t *testing.T) {
 		}
 	}
 
-	r := newReplayer2(
+	r := newReplayer(
 		mockHandle,
 		mockDriver,
 		30,
