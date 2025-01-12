@@ -65,8 +65,8 @@ func WithReplayerAppendSkipCmd(f func(ctx context.Context, skipMap map[uint64]ui
 
 type replayerDriver interface {
 	readFromBackend(
-		firstPSN uint64, maxSize int,
-	) (nextPSN uint64, records []logservice.LogRecord)
+		ctx context.Context, firstPSN uint64, maxSize int,
+	) (nextPSN uint64, records []logservice.LogRecord, err error)
 	getTruncatedPSNFromBackend(ctx context.Context) (uint64, error)
 	recordPSNInfo(psn uint64, dsnRange *common.ClosedIntervals)
 	getClientForWrite() (*clientWithRecord, uint64)
@@ -517,9 +517,12 @@ func (r *replayer2) readNextBatch(
 	ctx context.Context,
 ) (done bool, err error) {
 	t0 := time.Now()
-	nextPSN, records := r.driver.readFromBackend(
-		r.waterMarks.psnToRead, r.readBatchSize,
+	nextPSN, records, err := r.driver.readFromBackend(
+		ctx, r.waterMarks.psnToRead, r.readBatchSize,
 	)
+	if err != nil {
+		return
+	}
 	r.stats.readDuration += time.Since(t0)
 	for i, record := range records {
 		// skip non-user records

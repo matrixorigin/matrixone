@@ -82,9 +82,10 @@ func (c *readCache) getRecord(psn uint64) (r *recordEntry, err error) {
 }
 
 func (d *LogServiceDriver) Read(dsn uint64) (*entry.Entry, error) {
+	ctx := context.TODO()
 	psn, err := d.getPSNByDSNWithRetry(dsn, 10)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 	d.readMu.RLock()
 	r, err := d.readFromCache(psn)
@@ -96,11 +97,11 @@ func (d *LogServiceDriver) Read(dsn uint64) (*entry.Entry, error) {
 			d.readMu.Unlock()
 			return r.readEntry(dsn), nil
 		}
-		d.readSmallBatchFromLogService(psn)
-		r, err = d.readFromCache(psn)
-		if err != nil {
-			logutil.Debugf("try read %d", psn)
-			panic(err)
+		if err = d.readSmallBatchFromLogService(ctx, psn); err != nil {
+			return nil, err
+		}
+		if r, err = d.readFromCache(psn); err != nil {
+			return nil, err
 		}
 		d.readMu.Unlock()
 	}
@@ -166,23 +167,38 @@ func (d *LogServiceDriver) resetReadCache() {
 	}
 }
 
-func (d *LogServiceDriver) readSmallBatchFromLogService(lsn uint64) {
-	_, records := d.readFromBackend(lsn, int(d.config.RecordSize))
+func (d *LogServiceDriver) readSmallBatchFromLogService(
+	ctx context.Context,
+	lsn uint64,
+) error {
+	_, records, err := d.readFromBackend(
+		ctx, lsn, int(d.config.RecordSize),
+	)
+	if err != nil {
+		return err
+	}
 	if len(records) == 0 {
-		_, records = d.readFromBackend(lsn, MaxReadSize)
+		if _, records, err = d.readFromBackend(ctx, lsn, MaxReadSize); err != nil {
+			return err
+		}
 	}
 	d.appendRecords(records, lsn, nil, 1)
 	if !d.IsReplaying() && len(d.psns) > d.config.ReadCacheSize {
 		d.dropRecords()
 	}
+	return nil
 }
 
 func (d *LogServiceDriver) readFromLogServiceInReplay(
+	ctx context.Context,
 	psn uint64,
 	size int,
 	fn func(uint64, *recordEntry),
-) (uint64, uint64) {
-	nextPSN, records := d.readFromBackend(psn, size)
+) (uint64, uint64, error) {
+	nextPSN, records, err := d.readFromBackend(ctx, psn, size)
+	if err != nil {
+		return 0, 0, err
+	}
 	safePSN := uint64(0)
 	d.appendRecords(
 		records,
@@ -196,72 +212,67 @@ func (d *LogServiceDriver) readFromLogServiceInReplay(
 		},
 		0,
 	)
-	return nextPSN, safePSN
+	return nextPSN, safePSN, nil
 }
 
 // PXU TODO: not panic here
 func (d *LogServiceDriver) readFromBackend(
-	firstPSN uint64, maxSize int,
-) (nextPSN uint64, records []logservice.LogRecord) {
-	client, err := d.clientPool.Get()
-	defer d.clientPool.Put(client)
-	if err != nil {
-		panic(err)
-	}
-	t0 := time.Now()
-	ctx, cancel := context.WithTimeoutCause(
-		context.Background(),
-		d.config.ReadDuration,
-		moerr.CauseReadFromLogService,
+	ctx context.Context, firstPSN uint64, maxSize int,
+) (
+	nextPSN uint64,
+	records []logservice.LogRecord,
+	err error,
+) {
+	var (
+		t0         = time.Now()
+		cancel     context.CancelFunc
+		maxRetry   = 10
+		retryTimes = 0
 	)
 
-	records, nextPSN, err = client.c.Read(
-		ctx, firstPSN, uint64(maxSize),
-	)
-	err = moerr.AttachCause(ctx, err)
-
-	cancel()
-
-	if err != nil {
-		err = RetryWithTimeout(
-			d.config.RetryTimeout,
-			func() (shouldReturn bool) {
-				var (
-					dueErr = err
-					now    = time.Now()
-				)
-				ctx, cancel := context.WithTimeoutCause(
-					context.Background(),
-					d.config.ReadDuration,
-					moerr.CauseReadFromLogService2,
-				)
-				defer cancel()
-				if records, nextPSN, err = client.c.Read(
-					ctx, firstPSN, uint64(maxSize),
-				); err != nil {
-					err = moerr.AttachCause(ctx, err)
-				}
-				logger := logutil.Info
-				if err != nil {
-					logger = logutil.Error
-				}
-				logger(
-					"Wal-Retry-Read-In-Driver",
-					zap.Any("due-error", dueErr),
-					zap.Uint64("from-psn", firstPSN),
-					zap.Int("max-size", maxSize),
-					zap.Int("num-records", len(records)),
-					zap.Uint64("next-psn", nextPSN),
-					zap.Duration("duration", time.Since(now)),
-					zap.Error(err),
-				)
-				return err == nil
-			},
-		)
+	defer func() {
+		d.readDuration += time.Since(t0)
+		if err == nil || retryTimes == 0 {
+			return
+		}
+		logger := logutil.Info
 		if err != nil {
-			panic(err)
+			logger = logutil.Error
+		}
+		logger(
+			"Wal-Read-Backend",
+			zap.Uint64("from-psn", firstPSN),
+			zap.Int("max-size", maxSize),
+			zap.Int("num-records", len(records)),
+			zap.Uint64("next-psn", nextPSN),
+			zap.Duration("duration", time.Since(t0)),
+			zap.Error(err),
+		)
+	}()
+
+	var client *clientWithRecord
+	if client, err = d.clientPool.Get(); err != nil {
+		return
+	}
+	defer d.clientPool.Put(client)
+
+	for ; retryTimes < maxRetry; retryTimes++ {
+		ctx, cancel = context.WithTimeoutCause(
+			ctx,
+			d.config.ReadDuration,
+			moerr.CauseReadFromLogService,
+		)
+		if records, nextPSN, err = client.c.Read(
+			ctx, firstPSN, uint64(maxSize),
+		); err != nil {
+			err = moerr.AttachCause(ctx, err)
+		}
+		cancel()
+
+		if err == nil {
+			break
 		}
 	}
-	d.readDuration += time.Since(t0)
+
 	return
 }

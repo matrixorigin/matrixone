@@ -131,14 +131,14 @@ func (d *mockDriver) getTruncatedPSNFromBackend(ctx context.Context) (uint64, er
 func (d *mockDriver) recordPSNInfo(_ uint64, _ *common.ClosedIntervals) {}
 
 func (d *mockDriver) readFromBackend(
-	firstPSN uint64, maxSize int,
-) (nextPSN uint64, records []logservice.LogRecord) {
+	ctx context.Context, firstPSN uint64, maxSize int,
+) (nextPSN uint64, records []logservice.LogRecord, err error) {
 	for i, spec := range d.recordSpecs {
 		if spec[1] >= firstPSN {
 			records = append(records, makeMockLogRecord(i))
 		}
 		if len(records) >= maxSize {
-			return spec[1] + 1, records
+			return spec[1] + 1, records, nil
 		}
 	}
 	if len(d.recordSpecs) == 0 {

@@ -74,6 +74,7 @@ type LogServiceDriver struct {
 	flushtimes  int
 	appendtimes int
 
+	// PXU TODO: remove me
 	readDuration time.Duration
 }
 

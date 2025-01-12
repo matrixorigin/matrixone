@@ -93,13 +93,23 @@ func newReplayer(
 }
 
 func (r *replayer) replay() {
-	var err error
+	var (
+		err  error
+		done bool
+		ctx  = context.TODO()
+	)
 
 	r.wg.Add(1)
 	// replay records in another goroutine
 	go r.replayLogEntries()
 
-	for !r.readNextBatch() {
+	for {
+		if done, err = r.readNextBatch(ctx); done || err != nil {
+			if err != nil {
+				panic(err)
+			}
+			break
+		}
 		for r.dsnWatermark < r.safeLsn {
 			err := r.replayLogserviceEntry(r.dsnWatermark+1, false)
 			if err != nil {
@@ -119,12 +129,13 @@ func (r *replayer) replay() {
 	close(r.replayC)
 }
 
-func (r *replayer) readNextBatch() (readDone bool) {
+func (r *replayer) readNextBatch(ctx context.Context) (readDone bool, err error) {
 	start := time.Now()
 	defer func() {
 		r.readDuration += time.Since(start)
 	}()
-	nextPSN, safeLsn := r.d.readFromLogServiceInReplay(
+	nextPSN, safeLsn, err := r.d.readFromLogServiceInReplay(
+		ctx,
 		r.nextToReadPSN,
 		r.readMaxSize,
 		func(psn uint64, record *recordEntry) {
@@ -148,15 +159,20 @@ func (r *replayer) readNextBatch() (readDone bool) {
 			}
 		},
 	)
+	if err != nil {
+		return false, err
+	}
+
 	if safeLsn > r.safeLsn {
 		r.safeLsn = safeLsn
 	}
 	if nextPSN == r.nextToReadPSN {
-		return true
+		return true, nil
 	}
 	r.nextToReadPSN = nextPSN
-	return false
+	return false, nil
 }
+
 func (r *replayer) removeEntries(skipMap map[uint64]uint64) {
 	for lsn := range skipMap {
 		if _, ok := r.dsnToPSNMap[lsn]; !ok {
