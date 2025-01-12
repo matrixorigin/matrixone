@@ -33,6 +33,24 @@ import (
 
 type ReplayOption func(*replayer2)
 
+func WithReplayerOnRead(f func(uint64, *recordEntry)) ReplayOption {
+	return func(r *replayer2) {
+		r.onRead = f
+	}
+}
+
+func WithReplayerOnScheduled(f func(*recordEntry)) ReplayOption {
+	return func(r *replayer2) {
+		r.onScheduled = f
+	}
+}
+
+func WithReplayerOnApplied(f func(*entry.Entry)) ReplayOption {
+	return func(r *replayer2) {
+		r.onApplied = f
+	}
+}
+
 func WithReplayerUnmarshalLogRecord(f func(logservice.LogRecord) *recordEntry) ReplayOption {
 	return func(r *replayer2) {
 		r.unmarshalLogRecord = f
@@ -63,6 +81,9 @@ type replayer2 struct {
 
 	unmarshalLogRecord func(logservice.LogRecord) *recordEntry
 	appendSkipCmd      func(ctx context.Context, skipMap map[uint64]uint64) error
+	onRead             func(uint64, *recordEntry)
+	onScheduled        func(*recordEntry)
+	onApplied          func(*entry.Entry)
 
 	replayedState struct {
 		// DSN->PSN mapping
@@ -401,6 +422,9 @@ func (r *replayer2) tryScheduleApply(
 	r.updateDSN(dsnRange.GetMin())
 	r.waterMarks.dsnScheduled = dsnRange.GetMax()
 	r.stats.schedulePSNCount++
+	if r.onScheduled != nil {
+		r.onScheduled(record)
+	}
 
 	r.replayedState.readCache.removeRecord(psn)
 	// dsn2PSNMap is produced by the readNextBatch and consumed if it is scheduled apply
@@ -475,6 +499,9 @@ func (r *replayer2) streamApplying(
 					r.stats.appliedLSNCount.Add(1)
 				}
 				lastAppliedEntry = e
+				if r.onApplied != nil {
+					r.onApplied(e)
+				}
 			}
 			e.DoneWithErr(nil)
 			e.Entry.Free()
@@ -504,6 +531,9 @@ func (r *replayer2) readNextBatch(
 		if updated := r.replayedState.readCache.addRecord(
 			psn, entry,
 		); updated {
+			if r.onRead != nil {
+				r.onRead(psn, entry)
+			}
 			// 1. update the safe DSN
 			if r.replayedState.safeDSN < entry.appended {
 				r.replayedState.safeDSN = entry.appended

@@ -467,20 +467,6 @@ func Test_Replayer4(t *testing.T) {
 			{uint64(TNormal), 14, 36, 36, 34},
 			{uint64(TNormal), 15, 39, 39, 34},
 			{uint64(TNormal), 16, 38, 38, 34},
-
-			// {uint64(TNormal), 11, 37, 37, 0},
-			// {uint64(TNormal), 12, 35, 35, 0},
-			// {uint64(TNormal), 13, 60, 60, 0},
-			// {uint64(TNormal), 14, 38, 38, 0},
-			// {uint64(TNormal), 15, 36, 36, 0},
-			// {uint64(TNormal), 16, 42, 43, 0},
-			// {uint64(TNormal), 17, 39, 39, 0},
-			// {uint64(TNormal), 18, 48, 48, 0},
-			// {uint64(TNormal), 19, 41, 41, 0},
-			// {uint64(TNormal), 20, 40, 40, 0},
-			// {uint64(TNormal), 21, 46, 46, 0},
-			// {uint64(TNormal), 22, 47, 59, 0},
-			// {uint64(TNormal), 23, 44, 45, 0},
 		},
 		30,
 	)
@@ -501,4 +487,65 @@ func Test_Replayer4(t *testing.T) {
 	assert.NoError(t, err)
 	t.Logf("appliedDSNs: %v", appliedDSNs)
 	assert.Equal(t, []uint64{38, 39, 40}, appliedDSNs)
+}
+
+func Test_Replayer5(t *testing.T) {
+	ctx := context.Background()
+	mockDriver := newMockDriver(
+		12,
+		// MetaType,PSN,DSN-S,DSN-E,Safe
+		[][5]uint64{
+			{uint64(TNormal), 11, 37, 37, 0},
+			{uint64(TNormal), 12, 35, 35, 0},
+			{uint64(TNormal), 13, 40, 40, 33},
+			{uint64(TNormal), 14, 36, 36, 34},
+			{uint64(TNormal), 15, 39, 39, 34},
+			{uint64(TNormal), 16, 42, 42, 35},
+			{uint64(TNormal), 17, 38, 38, 36},
+			{uint64(TNormal), 18, 41, 41, 37},
+			{uint64(TNormal), 19, 45, 45, 38},
+			{uint64(TNormal), 20, 43, 43, 39},
+			{uint64(TNormal), 21, 44, 44, 40},
+		},
+		30,
+	)
+	var appliedDSNs []uint64
+	mockHandle := mockHandleFactory(38, func(e *entry.Entry) {
+		appliedDSNs = append(appliedDSNs, e.Lsn)
+	})
+
+	var psnReaded []uint64
+	onRead := func(psn uint64, _ *recordEntry) {
+		if len(psnReaded) > 0 {
+			assert.Equal(t, psnReaded[len(psnReaded)-1]+1, psn)
+		}
+		psnReaded = append(psnReaded, psn)
+	}
+
+	var dsnScheduled []uint64
+	onScheduled := func(r *recordEntry) {
+		for _, e := range r.entries {
+			if len(dsnScheduled) > 0 {
+				assert.True(t, dsnScheduled[len(dsnScheduled)-1] < e.Lsn)
+			}
+			dsnScheduled = append(dsnScheduled, e.Lsn)
+		}
+	}
+
+	r := newReplayer2(
+		mockHandle,
+		mockDriver,
+		30,
+		WithReplayerAppendSkipCmd(noopAppendSkipCmd),
+		WithReplayerUnmarshalLogRecord(mockUnmarshalLogRecordFactor(mockDriver)),
+		WithReplayerOnRead(onRead),
+		WithReplayerOnScheduled(onScheduled),
+	)
+
+	err := r.Replay(ctx)
+	assert.NoError(t, err)
+	t.Logf("psnReaded: %v", psnReaded)
+	t.Logf("dsnScheduled: %v", dsnScheduled)
+	t.Logf("appliedDSNs: %v", appliedDSNs)
+	assert.Equal(t, []uint64{38, 39, 40, 41, 42, 43, 44, 45}, appliedDSNs)
 }
