@@ -15,6 +15,7 @@
 package logservicedriver
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"strings"
@@ -53,7 +54,7 @@ func restartDriver(t *testing.T, d *LogServiceDriver, h func(*entry.Entry)) *Log
 	t.Logf("LSTruncated %d", d.truncatedPSN)
 	d = NewLogServiceDriver(d.config)
 	tempLsn := uint64(0)
-	err := d.Replay(func(e *entry.Entry) driver.ReplayEntryState {
+	err := d.Replay(context.Background(), func(e *entry.Entry) driver.ReplayEntryState {
 		if e.Lsn <= tempLsn {
 			panic("logic err")
 		}

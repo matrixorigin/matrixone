@@ -135,23 +135,36 @@ func (d *LogServiceDriver) Close() error {
 	return nil
 }
 
-func (d *LogServiceDriver) Replay(h driver.ApplyHandle) error {
+func (d *LogServiceDriver) Replay(
+	ctx context.Context,
+	h driver.ApplyHandle,
+) (err error) {
 	d.PreReplay()
-
 	replayer := newReplayer(h, d, ReplayReadSize)
-	replayer.replay()
+
+	defer func() {
+		d.resetReadCache()
+		d.PostReplay()
+		logger := logutil.Info
+		if err != nil {
+			logger = logutil.Error
+		}
+		logger(
+			"Wal-Replay-Driver-End",
+			zap.Duration("read-cost", d.readDuration),
+			zap.Duration("apply-cost", replayer.applyDuration),
+			zap.Int("read-count", replayer.readCount),
+			zap.Int("internal-count", replayer.internalCount),
+			zap.Int("apply-count", replayer.applyCount),
+			zap.Error(err),
+		)
+	}()
+
+	if err = replayer.replay(ctx); err != nil {
+		return
+	}
 
 	d.onReplay(replayer)
-	d.resetReadCache()
-	d.PostReplay()
-	logutil.Info(
-		"Wal-Replay-Driver-End",
-		zap.Duration("read-cost", d.readDuration),
-		zap.Duration("apply-cost", replayer.applyDuration),
-		zap.Int("read-count", replayer.readCount),
-		zap.Int("internal-count", replayer.internalCount),
-		zap.Int("apply-count", replayer.applyCount),
-	)
 
-	return nil
+	return
 }

@@ -16,6 +16,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"time"
 
@@ -121,7 +122,7 @@ func main() {
 		// fmt.Printf("%s", payload)
 		return driver.RE_Nomal
 	}
-	err = s.Replay(a)
+	err = s.Replay(context.Background(), a)
 	if err != nil {
 		panic(err)
 	}

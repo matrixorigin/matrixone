@@ -92,7 +92,7 @@ func TestAppendSkipCmd2(t *testing.T) {
 		entryCount := 0
 		assert.NoError(t, driver.Close())
 		driver = NewLogServiceDriver(driver.config)
-		err := driver.Replay(func(e *entry.Entry) storeDriver.ReplayEntryState {
+		err := driver.Replay(context.Background(), func(e *entry.Entry) storeDriver.ReplayEntryState {
 			assert.Less(t, e.Lsn, uint64(11))
 			if e.Lsn > 7 {
 				entryCount++
@@ -113,6 +113,7 @@ func TestAppendSkipCmd2(t *testing.T) {
 }
 
 func TestAppendSkipCmd3(t *testing.T) {
+	ctx := context.Background()
 	service, ccfg := initTest(t)
 	defer service.Close()
 
@@ -125,7 +126,7 @@ func TestAppendSkipCmd3(t *testing.T) {
 		entryCount := 0
 		assert.NoError(t, driver.Close())
 		driver = NewLogServiceDriver(driver.config)
-		err := driver.Replay(func(e *entry.Entry) storeDriver.ReplayEntryState {
+		err := driver.Replay(ctx, func(e *entry.Entry) storeDriver.ReplayEntryState {
 			assert.Less(t, e.Lsn, uint64(11))
 			if e.Lsn > 7 {
 				entryCount++
@@ -188,7 +189,7 @@ func TestAppendSkipCmd4(t *testing.T) {
 		entryCount := 0
 		assert.NoError(t, driver.Close())
 		driver = NewLogServiceDriver(driver.config)
-		err := driver.Replay(func(e *entry.Entry) storeDriver.ReplayEntryState {
+		err := driver.Replay(context.Background(), func(e *entry.Entry) storeDriver.ReplayEntryState {
 			assert.Less(t, e.Lsn, uint64(4))
 			if e.Lsn > 0 {
 				entryCount++
@@ -242,7 +243,7 @@ func TestAppendSkipCmd4(t *testing.T) {
 		entryCount := 0
 		assert.NoError(t, driver.Close())
 		driver = NewLogServiceDriver(driver.config)
-		err := driver.Replay(func(e *entry.Entry) storeDriver.ReplayEntryState {
+		err := driver.Replay(context.Background(), func(e *entry.Entry) storeDriver.ReplayEntryState {
 			assert.Less(t, e.Lsn, uint64(5))
 			if e.Lsn > 0 {
 				entryCount++
@@ -309,7 +310,7 @@ func TestAppendSkipCmd5(t *testing.T) {
 		entryCount := 0
 		assert.NoError(t, driver.Close())
 		driver = NewLogServiceDriver(driver.config)
-		err := driver.Replay(func(e *entry.Entry) storeDriver.ReplayEntryState {
+		err := driver.Replay(context.Background(), func(e *entry.Entry) storeDriver.ReplayEntryState {
 			assert.Less(t, e.Lsn, uint64(13))
 			if e.Lsn > 8 {
 				entryCount++

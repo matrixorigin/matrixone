@@ -92,11 +92,9 @@ func newReplayer(
 	return r
 }
 
-func (r *replayer) replay() {
+func (r *replayer) replay(ctx context.Context) (err error) {
 	var (
-		err  error
 		done bool
-		ctx  = context.TODO()
 	)
 
 	r.wg.Add(1)
@@ -122,11 +120,15 @@ func (r *replayer) replay() {
 	for err != ErrAllRecordsRead {
 		err = r.replayLogserviceEntry(r.dsnWatermark+1, true)
 	}
+	if err == ErrAllRecordsRead {
+		err = nil
+	}
 
 	r.d.psns = r.d.psns[:0]
 	r.replayOneEntry(entry.NewEndEntry())
 	r.wg.Wait()
 	close(r.replayC)
+	return
 }
 
 func (r *replayer) readNextBatch(ctx context.Context) (readDone bool, err error) {

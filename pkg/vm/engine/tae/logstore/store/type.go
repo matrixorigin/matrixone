@@ -15,6 +15,8 @@
 package store
 
 import (
+	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 )
@@ -36,7 +38,7 @@ type Store interface {
 	GetCheckpointed(gid uint32) (lsn uint64)
 	GetTruncated() uint64
 
-	Replay(h ApplyHandle) error
+	Replay(ctx context.Context, h ApplyHandle) error
 	Close() error
 }
 

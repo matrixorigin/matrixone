@@ -83,8 +83,8 @@ func (driver *walDriver) replayhandle(handle store.ApplyHandle) store.ApplyHandl
 		return handle(group, commitId, payload, typ, nil)
 	}
 }
-func (driver *walDriver) Replay(handle store.ApplyHandle) error {
-	return driver.impl.Replay(driver.replayhandle(handle))
+func (driver *walDriver) Replay(ctx context.Context, handle store.ApplyHandle) error {
+	return driver.impl.Replay(ctx, driver.replayhandle(handle))
 }
 
 func (driver *walDriver) GetPenddingCnt() uint64 {

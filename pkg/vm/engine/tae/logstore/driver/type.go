@@ -14,7 +14,11 @@
 
 package driver
 
-import "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
+import (
+	"context"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
+)
 
 type Driver interface {
 	Append(*entry.Entry) error
@@ -22,7 +26,7 @@ type Driver interface {
 	GetTruncated() (lsn uint64, err error)
 	Read(lsn uint64) (*entry.Entry, error)
 	Close() error
-	Replay(h ApplyHandle) error
+	Replay(ctx context.Context, h ApplyHandle) error
 	GetDSN() uint64
 }
 
