@@ -139,6 +139,20 @@ func (d *LogServiceDriver) Replay(
 	h driver.ApplyHandle,
 ) (err error) {
 	d.PreReplay()
+
+	// onRead := func(psn uint64, r *recordEntry) {
+	// 	logutil.Info(
+	// 		"DEBUG-1",
+	// 		zap.Uint64("psn", psn),
+	// 		zap.Any("dsns", r.Meta.addr),
+	// 		zap.Any("safe", r.Meta.appended),
+	// 	)
+	// }
+	// replayer := newReplayer2(
+	// 	h, d, ReplayReadSize,
+	// 	WithReplayerOnRead(onRead),
+	// )
+
 	replayer := newReplayer(h, d, ReplayReadSize)
 
 	defer func() {

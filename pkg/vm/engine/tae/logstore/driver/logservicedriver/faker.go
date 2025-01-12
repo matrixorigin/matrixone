@@ -46,11 +46,16 @@ func mockUnmarshalLogRecordFactor(d *mockDriver) func(r logservice.LogRecord) *r
 		e.unmarshaled.Store(1)
 		e.appended = uint64(spec[4])
 		e.metaType = MetaType(spec[0])
-		for dsn := spec[2]; dsn <= spec[3]; dsn++ {
-			e.addr[dsn] = dsn
-			le := entry.NewEmptyEntry()
-			le.Lsn = dsn
-			e.entries = append(e.entries, le)
+		switch e.metaType {
+		case TNormal:
+			for dsn := spec[2]; dsn <= spec[3]; dsn++ {
+				e.addr[dsn] = dsn
+				le := entry.NewEmptyEntry()
+				le.Lsn = dsn
+				e.entries = append(e.entries, le)
+			}
+		case TReplay:
+			e.cmd = NewReplayCmd(d.skipMap[spec[1]])
 		}
 		return e
 	}

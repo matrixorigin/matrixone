@@ -596,7 +596,7 @@ func (r *replayer2) readNextBatch(
 					delete(r.replayedState.dsn2PSNMap, dsn)
 				}
 
-				return
+				continue
 			}
 
 			// 4. update the DSN->PSN mapping
@@ -618,6 +618,7 @@ func (r *replayer2) readNextBatch(
 			}
 		}
 	}
+
 	if nextPSN <= r.waterMarks.psnToRead {
 		done = true
 	} else {
