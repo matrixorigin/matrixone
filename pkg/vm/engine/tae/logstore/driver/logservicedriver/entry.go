@@ -319,7 +319,7 @@ func (r *recordEntry) scheduleReplay(replayer *replayer) *common.ClosedIntervals
 }
 
 func (r *recordEntry) forEachLogEntry(fn func(*entry.Entry)) (err error) {
-	if r.unmarshaled.Load() == 1 {
+	if len(r.entries) > 0 {
 		for _, e := range r.entries {
 			fn(e)
 		}

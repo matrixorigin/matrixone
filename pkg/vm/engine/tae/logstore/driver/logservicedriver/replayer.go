@@ -31,6 +31,11 @@ import (
 	"go.uber.org/zap"
 )
 
+type Replayer interface {
+	Replay(ctx context.Context) error
+	ExportDSNStats() DSNStats
+}
+
 type ReplayOption func(*replayer2)
 
 func WithReplayerOnWriteSkip(f func(map[uint64]uint64)) ReplayOption {
@@ -173,7 +178,7 @@ func newReplayer2(
 	return r
 }
 
-func (r *replayer2) exportDSNStats() DSNStats {
+func (r *replayer2) ExportDSNStats() DSNStats {
 	return DSNStats{
 		Min:       r.waterMarks.minDSN,
 		Max:       r.waterMarks.maxDSN,
@@ -427,6 +432,7 @@ func (r *replayer2) tryScheduleApply(
 		logutil.Info(
 			"Wal-Replay-First-Entry",
 			zap.Uint64("dsn", dsn),
+			zap.Uint64("psn", psn),
 		)
 	}
 

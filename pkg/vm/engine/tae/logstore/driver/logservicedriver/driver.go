@@ -150,7 +150,7 @@ func (d *LogServiceDriver) Replay(
 		return
 	}
 
-	dsnStats := replayer.exportDSNStats()
+	dsnStats := replayer.ExportDSNStats()
 	d.resetDSNStats(&dsnStats)
 
 	return

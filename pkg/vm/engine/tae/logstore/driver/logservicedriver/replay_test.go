@@ -625,3 +625,76 @@ func Test_Replayer6(t *testing.T) {
 	assert.Equal(t, []uint64{8, 9, 10}, appliedDSNs)
 	assert.Equal(t, map[uint64]uint64{12: 9}, writeSkip)
 }
+
+func Test_Replayer7(t *testing.T) {
+	ctx := context.Background()
+	mockDriver := newMockDriver(
+		0,
+		// MetaType,PSN,DSN-S,DSN-E,Safe
+		[][5]uint64{
+			{uint64(TNormal), 1, 8, 8, 7},
+			{uint64(TNormal), 2, 1, 1, 0},
+			{uint64(TNormal), 3, 2, 2, 1},
+			{uint64(TNormal), 4, 3, 3, 2},
+			{uint64(TNormal), 5, 6, 6, 5},
+			{uint64(TNormal), 6, 9, 9, 7},
+			{uint64(TNormal), 7, 7, 7, 6},
+			{uint64(TNormal), 8, 10, 10, 8},
+			// here is the problem
+			// the safe DSN is 12 but there is no DSN 11 found
+			// it should not happen and the replayer should return an error
+			{uint64(TNormal), 9, 13, 13, 12},
+			{uint64(TNormal), 10, 12, 12, 10},
+		},
+		30,
+	)
+	var appliedDSNs []uint64
+	mockHandle := mockHandleFactory(8, func(e *entry.Entry) {
+		appliedDSNs = append(appliedDSNs, e.Lsn)
+	})
+
+	var psnReaded []uint64
+	onRead := func(psn uint64, _ *recordEntry) {
+		if len(psnReaded) > 0 {
+			assert.Equal(t, psnReaded[len(psnReaded)-1]+1, psn)
+		}
+		psnReaded = append(psnReaded, psn)
+	}
+
+	var dsnScheduled []uint64
+	onScheduled := func(r *recordEntry) {
+		for _, e := range r.entries {
+			if len(dsnScheduled) > 0 {
+				assert.True(t, dsnScheduled[len(dsnScheduled)-1] < e.Lsn)
+			}
+			dsnScheduled = append(dsnScheduled, e.Lsn)
+		}
+	}
+
+	writeSkip := make(map[uint64]uint64)
+	onWriteSkip := func(m map[uint64]uint64) {
+		for k, v := range m {
+			writeSkip[k] = v
+		}
+	}
+
+	r := newReplayer2(
+		mockHandle,
+		mockDriver,
+		30,
+		WithReplayerOnWriteSkip(onWriteSkip),
+		WithReplayerAppendSkipCmd(noopAppendSkipCmd),
+		WithReplayerUnmarshalLogRecord(mockUnmarshalLogRecordFactor(mockDriver)),
+		WithReplayerOnRead(onRead),
+		WithReplayerOnScheduled(onScheduled),
+	)
+
+	err := r.Replay(ctx)
+	assert.Error(t, err)
+	t.Logf("psnReaded: %v", psnReaded)
+	t.Logf("dsnScheduled: %v", dsnScheduled)
+	t.Logf("appliedDSNs: %v", appliedDSNs)
+	t.Logf("writeSkip: %v", writeSkip)
+	assert.Equal(t, []uint64{8, 9, 10}, appliedDSNs)
+	assert.Equal(t, 0, len(writeSkip))
+}

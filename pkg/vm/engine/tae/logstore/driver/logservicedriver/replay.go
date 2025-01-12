@@ -92,7 +92,7 @@ func newReplayer(
 	return r
 }
 
-func (r *replayer) exportDSNStats() DSNStats {
+func (r *replayer) ExportDSNStats() DSNStats {
 	return DSNStats{
 		Min:       r.minDSN,
 		Max:       r.maxDSN,
