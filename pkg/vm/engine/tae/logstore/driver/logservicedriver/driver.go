@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/panjf2000/ants/v2"
-	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -145,22 +144,9 @@ func (d *LogServiceDriver) Replay(
 	defer func() {
 		d.resetReadCache()
 		d.PostReplay()
-		logger := logutil.Info
-		if err != nil {
-			logger = logutil.Error
-		}
-		logger(
-			"Wal-Replay-Driver-End",
-			zap.Duration("read-cost", d.readDuration),
-			zap.Duration("apply-cost", replayer.applyDuration),
-			zap.Int("read-count", replayer.readCount),
-			zap.Int("internal-count", replayer.internalCount),
-			zap.Int("apply-count", replayer.applyCount),
-			zap.Error(err),
-		)
 	}()
 
-	if err = replayer.replay(ctx); err != nil {
+	if err = replayer.Replay(ctx); err != nil {
 		return
 	}
 

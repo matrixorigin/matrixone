@@ -101,7 +101,7 @@ func (r *replayer) exportDSNStats() DSNStats {
 	}
 }
 
-func (r *replayer) replay(ctx context.Context) (err error) {
+func (r *replayer) Replay(ctx context.Context) (err error) {
 	var (
 		done bool
 	)
