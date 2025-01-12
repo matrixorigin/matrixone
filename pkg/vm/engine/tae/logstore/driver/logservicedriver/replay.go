@@ -92,6 +92,15 @@ func newReplayer(
 	return r
 }
 
+func (r *replayer) exportDSNStats() DSNStats {
+	return DSNStats{
+		Min:       r.minDSN,
+		Max:       r.maxDSN,
+		Truncated: r.truncatedPSN,
+		Written:   r.writeTokens,
+	}
+}
+
 func (r *replayer) replay(ctx context.Context) (err error) {
 	var (
 		done bool

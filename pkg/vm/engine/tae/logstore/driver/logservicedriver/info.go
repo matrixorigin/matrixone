@@ -31,6 +31,13 @@ import (
 var ErrDSNNotFound = moerr.NewInternalErrorNoCtx("dsn not found")
 var ErrRetryTimeOut = moerr.NewInternalErrorNoCtx("retry time out")
 
+type DSNStats struct {
+	Truncated uint64
+	Min       uint64
+	Max       uint64
+	Written   []uint64
+}
+
 type driverInfo struct {
 	// PSN: physical sequence number. here is the lsn from logservice
 	psn struct {
@@ -101,15 +108,15 @@ func (info *driverInfo) PostReplay() {
 func (info *driverInfo) IsReplaying() bool {
 	return info.inReplay
 }
-func (info *driverInfo) onReplay(r *replayer) {
-	info.dsn = r.maxDSN
-	info.synced = r.maxDSN
-	info.syncing = r.maxDSN
-	if r.minDSN != math.MaxUint64 {
-		info.truncateDSNIntent.Store(r.minDSN - 1)
+func (info *driverInfo) resetDSNStats(stats *DSNStats) {
+	info.dsn = stats.Max
+	info.synced = stats.Max
+	info.syncing = stats.Max
+	if stats.Min != math.MaxUint64 {
+		info.truncateDSNIntent.Store(stats.Min - 1)
 	}
-	info.truncatedPSN = r.truncatedPSN
-	info.writeController.finishedTokens.TryMerge(common.NewClosedIntervalsBySlice(r.writeTokens))
+	info.truncatedPSN = stats.Truncated
+	info.writeController.finishedTokens = common.NewClosedIntervalsBySlice(stats.Written)
 }
 
 // psn: physical sequence number
