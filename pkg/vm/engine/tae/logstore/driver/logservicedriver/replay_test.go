@@ -499,7 +499,6 @@ func Test_Replayer4(t *testing.T) {
 
 	err := r.Replay(ctx)
 	assert.NoError(t, err)
-	logutil.Info("DEBUG", r.exportFields(2)...)
 	t.Logf("appliedDSNs: %v", appliedDSNs)
-	// assert.Equal(t, []uint64{40, 41, 42, 43}, appliedDSNs)
+	assert.Equal(t, []uint64{38, 39, 40}, appliedDSNs)
 }

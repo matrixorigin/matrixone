@@ -241,8 +241,6 @@ func (r *replayer2) Replay(ctx context.Context) (err error) {
 	}
 
 	for err == nil || err != ErrAllRecordsRead {
-		time.Sleep(time.Millisecond * 200)
-		logutil.Info("DEBUG-1", r.exportFields(2)...)
 		lastScheduled, err = r.tryScheduleApply(
 			ctx, applyC, lastScheduled, true,
 		)
@@ -291,7 +289,6 @@ func (r *replayer2) tryScheduleApply(
 
 	dsn := r.waterMarks.dsnScheduled + 1
 	psn, ok := r.replayedState.dsn2PSNMap[dsn]
-	logutil.Infof("DEBUG-2 %v %v", dsn, psn)
 
 	// Senario 1 [dsn not found]:
 	// dsn is not found in the dsn2PSNMap, which means the record
@@ -342,9 +339,30 @@ func (r *replayer2) tryScheduleApply(
 				return
 			}
 		} else {
-			// PXU TODO: check allReaded ????
+			// [dsn not found && dsn > safeDSN && allReaded]
+			// it can only get in here when allReaded. it means even all records have been read,
+			// there are some big DSNs not found in the dsn2PSNMap.
+			// Truncated: PSN 11
+			// PSN: 10,     11,     12,     13,     14,	    15
+			// DSN: [37,37],[35,35],[40,40],[36,36],[39,39],[38,38]
+			// For DSN 36, it will get in here after all records have been read
+
 			if !readDone {
 				panic(fmt.Sprintf("logic error, safe dsn %d, dsn %d", r.replayedState.safeDSN, dsn))
+			}
+
+			if appliedLSNCount == 0 {
+				logutil.Info(
+					"Wal-Replay-Skip-Entry",
+					zap.Uint64("dsn", dsn),
+					zap.Uint64("safe-dsn", r.replayedState.safeDSN),
+				)
+				r.waterMarks.minDSN = dsn + 1
+				r.waterMarks.dsnScheduled = dsn
+				if len(r.replayedState.dsn2PSNMap) == 0 {
+					return nil, ErrAllRecordsRead
+				}
+				return
 			}
 
 			// [dsn not found && dsn > safeDSN]
@@ -377,7 +395,6 @@ func (r *replayer2) tryScheduleApply(
 	if err = record.forEachLogEntry(scheduleApply); err != nil {
 		return
 	}
-	logutil.Infof("DEBUG-111 %v", dsns)
 
 	dsnRange := common.NewClosedIntervalsBySlice(dsns)
 	r.updateDSN(dsnRange.GetMax())
