@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 )
@@ -73,9 +74,6 @@ type LogServiceDriver struct {
 
 	flushtimes  int
 	appendtimes int
-
-	// PXU TODO: remove me
-	readDuration time.Duration
 }
 
 func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
@@ -139,20 +137,37 @@ func (d *LogServiceDriver) Replay(
 	h driver.ApplyHandle,
 ) (err error) {
 	replayer := newReplayer(
-		h, d, ReplayReadSize,
+		h,
+		d,
+		ReplayReadSize,
+		// driver is mangaging the psn to dsn mapping
+		// here the replayer is responsible to provide the all the existing psn to dsn
+		// info to the driver
+		// a driver is a statemachine.
+		// INITed -> REPLAYING -> REPLAYED
+		// a driver can be readonly or readwrite
+		// for readonly driver, it is always in the REPLAYING state
+		// for readwrite driver, it can only serve the write request
+		// after the REPLAYED state
+		WithReplayerOnScheduled(
+			func(psn uint64, dsnRange *common.ClosedIntervals, _ *recordEntry) {
+				d.recordPSNInfo(psn, dsnRange)
+			},
+		),
+		WithReplayerOnReplayDone(
+			func(replayErr error, dsnStats DSNStats) {
+				if replayErr != nil {
+					return
+				}
+				d.resetDSNStats(&dsnStats)
+			},
+		),
 	)
 
-	if err = replayer.Replay(ctx); err != nil {
-		return
-	}
-
-	dsnStats := replayer.ExportDSNStats()
-	d.resetDSNStats(&dsnStats)
-
+	err = replayer.Replay(ctx)
 	return
 }
 
-// PXU TODO: not panic here
 func (d *LogServiceDriver) readFromBackend(
 	ctx context.Context, firstPSN uint64, maxSize int,
 ) (
@@ -168,7 +183,6 @@ func (d *LogServiceDriver) readFromBackend(
 	)
 
 	defer func() {
-		d.readDuration += time.Since(t0)
 		if err == nil || retryTimes == 0 {
 			return
 		}

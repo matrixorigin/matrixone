@@ -202,7 +202,6 @@ func (d *LogServiceDriver) getTruncatedPSNFromBackend(
 		if err == nil {
 			break
 		}
-		retryTimes++
 	}
 	return
 }

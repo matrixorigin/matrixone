@@ -20,7 +20,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 )
@@ -132,8 +131,6 @@ func (d *mockDriver) getClientForWrite() (*clientWithRecord, uint64) {
 func (d *mockDriver) getTruncatedPSNFromBackend(ctx context.Context) (uint64, error) {
 	return d.truncatedPSN, nil
 }
-
-func (d *mockDriver) recordPSNInfo(_ uint64, _ *common.ClosedIntervals) {}
 
 func (d *mockDriver) readFromBackend(
 	ctx context.Context, firstPSN uint64, maxSize int,

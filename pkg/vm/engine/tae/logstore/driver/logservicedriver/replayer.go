@@ -110,25 +110,66 @@ type ReplayOption func(*replayer)
 
 func WithReplayerOnWriteSkip(f func(map[uint64]uint64)) ReplayOption {
 	return func(r *replayer) {
-		r.onWriteSkip = f
+		if r.onWriteSkip != nil {
+			r.onWriteSkip = func(skipMap map[uint64]uint64) {
+				f(skipMap)
+				r.onWriteSkip(skipMap)
+			}
+		} else {
+			r.onWriteSkip = f
+		}
 	}
 }
 
 func WithReplayerOnRead(f func(uint64, *recordEntry)) ReplayOption {
 	return func(r *replayer) {
-		r.onRead = f
+		if r.onRead != nil {
+			r.onRead = func(psn uint64, record *recordEntry) {
+				f(psn, record)
+				r.onRead(psn, record)
+			}
+		} else {
+			r.onRead = f
+		}
 	}
 }
 
-func WithReplayerOnScheduled(f func(*recordEntry)) ReplayOption {
+func WithReplayerOnReplayDone(f func(error, DSNStats)) ReplayOption {
 	return func(r *replayer) {
-		r.onScheduled = f
+		if r.onReplayDone != nil {
+			r.onReplayDone = func(resErr error, stats DSNStats) {
+				f(resErr, stats)
+				r.onReplayDone(resErr, stats)
+			}
+		} else {
+			r.onReplayDone = f
+		}
+	}
+}
+
+func WithReplayerOnScheduled(f func(uint64, *common.ClosedIntervals, *recordEntry)) ReplayOption {
+	return func(r *replayer) {
+		if r.onScheduled != nil {
+			r.onScheduled = func(psn uint64, dsnRange *common.ClosedIntervals, record *recordEntry) {
+				f(psn, dsnRange, record)
+				r.onScheduled(psn, dsnRange, record)
+			}
+		} else {
+			r.onScheduled = f
+		}
 	}
 }
 
 func WithReplayerOnApplied(f func(*entry.Entry)) ReplayOption {
 	return func(r *replayer) {
-		r.onApplied = f
+		if r.onApplied != nil {
+			r.onApplied = func(e *entry.Entry) {
+				f(e)
+				r.onApplied(e)
+			}
+		} else {
+			r.onApplied = f
+		}
 	}
 }
 
@@ -149,7 +190,6 @@ type replayerDriver interface {
 		ctx context.Context, firstPSN uint64, maxSize int,
 	) (nextPSN uint64, records []logservice.LogRecord, err error)
 	getTruncatedPSNFromBackend(ctx context.Context) (uint64, error)
-	recordPSNInfo(psn uint64, dsnRange *common.ClosedIntervals)
 	getClientForWrite() (*clientWithRecord, uint64)
 	GetMaxClient() int
 }
@@ -163,9 +203,10 @@ type replayer struct {
 	unmarshalLogRecord func(logservice.LogRecord) *recordEntry
 	appendSkipCmd      func(ctx context.Context, skipMap map[uint64]uint64) error
 	onRead             func(uint64, *recordEntry)
-	onScheduled        func(*recordEntry)
+	onScheduled        func(uint64, *common.ClosedIntervals, *recordEntry)
 	onApplied          func(*entry.Entry)
 	onWriteSkip        func(map[uint64]uint64)
+	onReplayDone       func(resErr error, stats DSNStats)
 
 	replayedState struct {
 		// DSN->PSN mapping
@@ -317,6 +358,9 @@ func (r *replayer) Replay(ctx context.Context) (err error) {
 			"Wal-Replay-Info",
 			fields...,
 		)
+		if r.onReplayDone != nil {
+			r.onReplayDone(err, r.ExportDSNStats())
+		}
 	}()
 
 	// init the read watermarks to use the next sequnce number of the
@@ -527,25 +571,14 @@ func (r *replayer) tryScheduleApply(
 	r.updateDSN(dsnRange.GetMin())
 	r.waterMarks.dsnScheduled = dsnRange.GetMax()
 	r.stats.schedulePSNCount++
-	if r.onScheduled != nil {
-		r.onScheduled(record)
-	}
 
 	r.replayedState.readCache.removeRecord(psn)
 	// dsn2PSNMap is produced by the readNextBatch and consumed if it is scheduled apply
 	delete(r.replayedState.dsn2PSNMap, dsn)
 
-	// driver is mangaging the psn to dsn mapping
-	// here the replayer is responsible to provide the all the existing psn to dsn
-	// info to the driver
-	// PXU TODO: not all the replayer are responsible for this
-	// a driver is a statemachine.
-	// INITed -> REPLAYING -> REPLAYED
-	// a driver can be readonly or readwrite
-	// for readonly driver, it is always in the REPLAYING state
-	// for readwrite driver, it can only serve the write request
-	// after the REPLAYED state
-	r.driver.recordPSNInfo(psn, dsnRange)
+	if r.onScheduled != nil {
+		r.onScheduled(psn, dsnRange, record)
+	}
 
 	return
 }

@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	storeDriver "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 	"github.com/stretchr/testify/assert"
@@ -530,7 +531,7 @@ func Test_Replayer5(t *testing.T) {
 	}
 
 	var dsnScheduled []uint64
-	onScheduled := func(r *recordEntry) {
+	onScheduled := func(_ uint64, _ *common.ClosedIntervals, r *recordEntry) {
 		for _, e := range r.entries {
 			if len(dsnScheduled) > 0 {
 				assert.True(t, dsnScheduled[len(dsnScheduled)-1] < e.DSN)
@@ -589,7 +590,7 @@ func Test_Replayer6(t *testing.T) {
 	}
 
 	var dsnScheduled []uint64
-	onScheduled := func(r *recordEntry) {
+	onScheduled := func(_ uint64, _ *common.ClosedIntervals, r *recordEntry) {
 		for _, e := range r.entries {
 			if len(dsnScheduled) > 0 {
 				assert.True(t, dsnScheduled[len(dsnScheduled)-1] < e.DSN)
@@ -662,7 +663,7 @@ func Test_Replayer7(t *testing.T) {
 	}
 
 	var dsnScheduled []uint64
-	onScheduled := func(r *recordEntry) {
+	onScheduled := func(_ uint64, _ *common.ClosedIntervals, r *recordEntry) {
 		for _, e := range r.entries {
 			if len(dsnScheduled) > 0 {
 				assert.True(t, dsnScheduled[len(dsnScheduled)-1] < e.DSN)
@@ -734,7 +735,7 @@ func Test_Replayer8(t *testing.T) {
 	}
 
 	var dsnScheduled []uint64
-	onScheduled := func(r *recordEntry) {
+	onScheduled := func(_ uint64, _ *common.ClosedIntervals, r *recordEntry) {
 		for _, e := range r.entries {
 			if len(dsnScheduled) > 0 {
 				assert.True(t, dsnScheduled[len(dsnScheduled)-1] < e.DSN)
