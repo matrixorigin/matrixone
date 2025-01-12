@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 	"go.uber.org/zap"
 )
 
@@ -79,33 +78,6 @@ func (c *readCache) getRecord(psn uint64) (r *recordEntry, err error) {
 		err = ErrRecordNotFound
 	}
 	return
-}
-
-func (d *LogServiceDriver) Read(dsn uint64) (*entry.Entry, error) {
-	ctx := context.TODO()
-	psn, err := d.getPSNByDSNWithRetry(dsn, 10)
-	if err != nil {
-		return nil, err
-	}
-	d.readMu.RLock()
-	r, err := d.readFromCache(psn)
-	d.readMu.RUnlock()
-	if err != nil {
-		d.readMu.Lock()
-		r, err = d.readFromCache(psn)
-		if err == nil {
-			d.readMu.Unlock()
-			return r.readEntry(dsn), nil
-		}
-		if err = d.readSmallBatchFromLogService(ctx, psn); err != nil {
-			return nil, err
-		}
-		if r, err = d.readFromCache(psn); err != nil {
-			return nil, err
-		}
-		d.readMu.Unlock()
-	}
-	return r.readEntry(dsn), nil
 }
 
 func (d *LogServiceDriver) readFromCache(psn uint64) (*recordEntry, error) {
@@ -165,28 +137,6 @@ func (d *LogServiceDriver) resetReadCache() {
 	for lsn := range d.records {
 		delete(d.records, lsn)
 	}
-}
-
-func (d *LogServiceDriver) readSmallBatchFromLogService(
-	ctx context.Context,
-	lsn uint64,
-) error {
-	_, records, err := d.readFromBackend(
-		ctx, lsn, int(d.config.RecordSize),
-	)
-	if err != nil {
-		return err
-	}
-	if len(records) == 0 {
-		if _, records, err = d.readFromBackend(ctx, lsn, MaxReadSize); err != nil {
-			return err
-		}
-	}
-	d.appendRecords(records, lsn, nil, 1)
-	if !d.IsReplaying() && len(d.psns) > d.config.ReadCacheSize {
-		d.dropRecords()
-	}
-	return nil
 }
 
 func (d *LogServiceDriver) readFromLogServiceInReplay(

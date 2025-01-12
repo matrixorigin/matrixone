@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"go.uber.org/zap"
 )
 
 var ErrDSNNotFound = moerr.NewInternalErrorNoCtx("dsn not found")
@@ -283,33 +282,6 @@ func (info *driverInfo) putbackWriteTokens(tokens []uint64) {
 	info.commitCond.L.Lock()
 	info.commitCond.Broadcast()
 	info.commitCond.L.Unlock()
-}
-
-func (info *driverInfo) getPSNByDSNWithRetry(
-	dsn uint64, maxRetry int,
-) (psn uint64, err error) {
-	if psn, err = info.getPSNByDSN(dsn); err == nil || err != ErrDSNNotFound || dsn > info.GetDSN() {
-		return
-	}
-
-	for i := 0; i < maxRetry; i++ {
-		info.commitCond.L.Lock()
-		psn, err = info.getPSNByDSN(dsn)
-		logutil.Info(
-			"Wal-Get-DSN-By-PSN",
-			zap.Uint64("dsn", dsn),
-			zap.Uint64("psn", psn),
-			zap.Error(err),
-		)
-		if err == nil {
-			info.commitCond.L.Unlock()
-			break
-		}
-		info.commitCond.Wait()
-		info.commitCond.L.Unlock()
-	}
-
-	return
 }
 
 func (info *driverInfo) getPSNByDSN(dsn uint64) (uint64, error) {
