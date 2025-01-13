@@ -1435,15 +1435,13 @@ func (s *Scope) CreateTable(c *Compile) error {
 	}
 
 	if qry.IsPartition {
-		stmt, err := parsers.ParseOne(
+		// cannot has err.
+		stmt, _ := parsers.ParseOne(
 			c.proc.Ctx,
 			dialect.MYSQL,
 			qry.RawSQL,
 			c.getLower(),
 		)
-		if err != nil {
-			return err
-		}
 
 		err = partitionservice.GetService(c.proc.GetService()).Create(
 			c.proc.Ctx,
