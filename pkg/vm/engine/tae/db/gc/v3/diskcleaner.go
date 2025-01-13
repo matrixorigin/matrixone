@@ -232,7 +232,7 @@ func (cleaner *DiskCleaner) scheduleGCJob(ctx context.Context) (err error) {
 		return
 	}
 	logutil.Info("GC-Send-Intents")
-	_, err = cleaner.processQueue.Enqueue(JT_GCExecute)
+	_, err = cleaner.processQueue.Enqueue(JT_GCFastExecute)
 	return
 }
 
