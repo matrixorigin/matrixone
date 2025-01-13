@@ -15,12 +15,14 @@
 package logtail
 
 import (
+	"context"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestTxnTable1(t *testing.T) {
@@ -107,4 +109,10 @@ func TestTxnTable1(t *testing.T) {
 
 func Less(a int, b int) bool {
 	return a < b
+}
+
+func TestLoadCheckpointError(t *testing.T) {
+	locs := "01944064-7ce8-78be-b072-767fe85ea839_00000_1_2479_1029_9541_0_0;01944064-7ce8-78be-b072-767fe85ea838_00000_1_2479_1029_9541_0_0;"
+	_, _, err := LoadCheckpointEntries(context.Background(), "", locs, 213, "t1", 214, "d2", nil, nil)
+	require.Error(t, err)
 }
