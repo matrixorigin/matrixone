@@ -354,6 +354,8 @@ func (cleaner *DiskCleaner) process(items ...any) {
 				cleaner.doReplayAndExecute(ctx.ctx)
 			case JT_GCExecute:
 				cleaner.doExecute(ctx.ctx)
+			case JT_GCFastExecute:
+				cleaner.doFastExecute(ctx.ctx)
 			default:
 				logutil.Error("GC-Unknown-JobType", zap.Any("job-type", v))
 			}
