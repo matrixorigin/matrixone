@@ -212,12 +212,6 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 	case vm.Right:
 		t := sourceOp.(*right.RightJoin)
 		op := right.NewArgument()
-		if t.Channel == nil {
-			t.Channel = make(chan *bitmap.Bitmap, maxParallel)
-		}
-		op.Channel = t.Channel
-		op.NumCPU = uint64(maxParallel)
-		op.IsMerger = (index == 0)
 		op.Cond = t.Cond
 		op.Result = t.Result
 		op.RightTypes = t.RightTypes
@@ -227,6 +221,14 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.JoinMapTag = t.JoinMapTag
 		op.HashOnPK = t.HashOnPK
 		op.IsShuffle = t.IsShuffle
+		if !t.IsShuffle {
+			if t.Channel == nil {
+				t.Channel = make(chan *bitmap.Bitmap, maxParallel)
+			}
+			op.Channel = t.Channel
+			op.NumCPU = uint64(maxParallel)
+			op.IsMerger = (index == 0)
+		}
 		if t.ShuffleIdx == -1 { // shuffleV2
 			op.ShuffleIdx = int32(index)
 		}
@@ -235,12 +237,6 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 	case vm.RightSemi:
 		t := sourceOp.(*rightsemi.RightSemi)
 		op := rightsemi.NewArgument()
-		if t.Channel == nil {
-			t.Channel = make(chan *bitmap.Bitmap, maxParallel)
-		}
-		op.Channel = t.Channel
-		op.NumCPU = uint64(maxParallel)
-		op.IsMerger = (index == 0)
 		op.Cond = t.Cond
 		op.Result = t.Result
 		op.RightTypes = t.RightTypes
@@ -249,6 +245,14 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.JoinMapTag = t.JoinMapTag
 		op.HashOnPK = t.HashOnPK
 		op.IsShuffle = t.IsShuffle
+		if !t.IsShuffle {
+			if t.Channel == nil {
+				t.Channel = make(chan *bitmap.Bitmap, maxParallel)
+			}
+			op.Channel = t.Channel
+			op.NumCPU = uint64(maxParallel)
+			op.IsMerger = (index == 0)
+		}
 		if t.ShuffleIdx == -1 { // shuffleV2
 			op.ShuffleIdx = int32(index)
 		}
@@ -257,12 +261,6 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 	case vm.RightAnti:
 		t := sourceOp.(*rightanti.RightAnti)
 		op := rightanti.NewArgument()
-		if t.Channel == nil {
-			t.Channel = make(chan *bitmap.Bitmap, maxParallel)
-		}
-		op.Channel = t.Channel
-		op.NumCPU = uint64(maxParallel)
-		op.IsMerger = (index == 0)
 		op.Cond = t.Cond
 		op.Result = t.Result
 		op.RightTypes = t.RightTypes
@@ -271,6 +269,14 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.JoinMapTag = t.JoinMapTag
 		op.HashOnPK = t.HashOnPK
 		op.IsShuffle = t.IsShuffle
+		if !t.IsShuffle {
+			if t.Channel == nil {
+				t.Channel = make(chan *bitmap.Bitmap, maxParallel)
+			}
+			op.Channel = t.Channel
+			op.NumCPU = uint64(maxParallel)
+			op.IsMerger = (index == 0)
+		}
 		if t.ShuffleIdx == -1 { // shuffleV2
 			op.ShuffleIdx = int32(index)
 		}
