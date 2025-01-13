@@ -1434,27 +1434,6 @@ func (s *Scope) CreateTable(c *Compile) error {
 		}
 	}
 
-	// update mo_pitr table
-	// if mo_pitr table contains the same dbName and tblName, then update the table_id and modified_time
-	// otherwise, skip it
-	if !needSkipDbs[dbName] {
-		newRelation, err := dbSource.Relation(c.proc.Ctx, tblName, nil)
-		if err != nil {
-			return err
-		}
-		updatePitrSql := fmt.Sprintf("update `%s`.`%s` set `%s` = %d  where `%s` = %d and `%s` = '%s' and `%s` = '%s'",
-			catalog.MO_CATALOG, catalog.MO_PITR, catalog.MO_PITR_OBJECT_ID, newRelation.GetTableID(c.proc.Ctx),
-			catalog.MO_PITR_ACCOUNT_ID, c.proc.GetSessionInfo().AccountId,
-			catalog.MO_PITR_DB_NAME, dbName,
-			catalog.MO_PITR_TABLE_NAME, tblName)
-
-		// change ctx
-		err = c.runSqlWithSystemTenant(updatePitrSql)
-		if err != nil {
-			return err
-		}
-	}
-
 	if qry.IsPartition {
 		stmt, err := parsers.ParseOne(
 			c.proc.Ctx,
@@ -2640,8 +2619,9 @@ func (s *Scope) DropTable(c *Compile) error {
 	if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
 		return nil
 	}
+
 	if err != nil {
-		return nil
+		return err
 	}
 
 	if !needSkipDbs[dbName] {

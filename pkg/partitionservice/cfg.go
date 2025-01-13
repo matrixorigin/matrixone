@@ -21,10 +21,3 @@ type Config struct {
 	// Enable enable shard service
 	Enable bool `toml:"enable"`
 }
-
-// Validate validate
-func (c *Config) Validate() {
-	if c.ServiceID == "" {
-		panic("missing service id")
-	}
-}
