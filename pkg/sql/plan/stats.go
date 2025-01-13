@@ -1594,6 +1594,9 @@ func setNodeDOP(p *plan.Plan, rootID int32, dop int32) {
 	if len(node.Children) > 0 {
 		setNodeDOP(p, node.Children[0], dop)
 	}
+	if node.NodeType == plan.Node_JOIN && node.Stats.HashmapStats.Shuffle {
+		setNodeDOP(p, node.Children[1], dop)
+	}
 	node.Stats.Dop = dop
 }
 
@@ -1609,11 +1612,10 @@ func CalcNodeDOP(p *plan.Plan, rootID int32, ncpu int32, lencn int) {
 		} else {
 			dop := int32(getShuffleDop(int(ncpu), lencn, node.Stats.HashmapStats.HashmapSize))
 			childDop := qry.Nodes[node.Children[0]].Stats.Dop
-			if dop > childDop {
-				setNodeDOP(p, rootID, dop)
-			} else {
-				node.Stats.Dop = childDop
+			if dop < childDop {
+				dop = childDop
 			}
+			setNodeDOP(p, rootID, dop)
 		}
 	} else {
 		node.Stats.Dop = calcDOP(ncpu, node.Stats.BlockNum, p.IsPrepare)
