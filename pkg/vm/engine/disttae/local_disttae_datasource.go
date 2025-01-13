@@ -478,9 +478,6 @@ func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 	mp *mpool.MPool,
 	outBatch *batch.Batch,
 ) error {
-	if ls.table.tableName == "t" {
-		logutil.Infof("xxxx")
-	}
 	if ls.wsCursor >= ls.txnOffset {
 		return nil
 	}
