@@ -106,6 +106,9 @@
 # pkg/shardservice
 /pkg/shardservice @zhangxu19830126
 
+# pkg/partitionservice
+/pkg/partitionservice @zhangxu19830126 @iamlinjunhong
+
 # pkg/logservice
 /pkg/logservice @zhangxu19830126 @volgariver6
 
