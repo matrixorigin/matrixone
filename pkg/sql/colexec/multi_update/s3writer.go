@@ -39,7 +39,7 @@ const (
 	InsertWriteS3Threshold uint64 = 128 * mpool.MB
 	DeleteWriteS3Threshold uint64 = 16 * mpool.MB
 
-	TagS3SizeForMOLogger uint64 = 100 * mpool.MB
+	TagS3SizeForMOLogger uint64 = 1 * mpool.MB
 
 	RowIDIdx = 0
 	PkIdx    = 1

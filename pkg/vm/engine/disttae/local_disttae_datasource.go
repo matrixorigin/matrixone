@@ -614,7 +614,7 @@ func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 			}
 		}
 
-		if outBatch.RowCount() == objectio.BlockMaxRows {
+		if rows+len(sels) == objectio.BlockMaxRows {
 			break
 		}
 
