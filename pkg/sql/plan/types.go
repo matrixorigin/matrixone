@@ -238,7 +238,6 @@ type BindContext struct {
 	recSelect              bool
 	finalSelect            bool
 	unionSelect            bool
-	isTryBindingCTE        bool
 	sliding                bool
 	isDistinct             bool
 	isCorrelated           bool
@@ -247,8 +246,10 @@ type BindContext struct {
 	isGroupingSet          bool
 	recRecursiveScanNodeId int32
 
-	cteName  string
-	headings []string
+	cteName string
+	//cte in binding or bound already
+	boundCtes map[string]*CTERef
+	headings  []string
 
 	groupTag     int32
 	aggregateTag int32
@@ -302,6 +303,8 @@ type BindContext struct {
 	snapshot *Snapshot
 	// all view keys(dbName#viewName)
 	views []string
+	//view in binding or already bound
+	boundViews map[string]*tree.CreateView
 
 	// lower is sys var lower_case_table_names
 	lower int64
