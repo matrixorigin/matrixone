@@ -456,6 +456,12 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 		if err != nil {
 			return
 		}
+	case *tree.ShowRecoveryWindow:
+		ses.EnterFPrint(FPShowRecoveryWindow)
+		defer ses.ExitFPrint(FPShowRecoveryWindow)
+		if err = handleShowRecoveryWindow(ses, execCtx, st); err != nil {
+			return
+		}
 	case *tree.SetConnectionID:
 		ses.EnterFPrint(FPSetConnectionID)
 		defer ses.ExitFPrint(FPSetConnectionID)
