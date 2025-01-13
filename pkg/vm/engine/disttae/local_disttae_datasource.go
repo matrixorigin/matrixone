@@ -416,12 +416,10 @@ func checkWorkspaceEntryType(
 			entry.bat.Attrs[0] == catalog.BlockMeta_MetaLoc {
 			return false
 		}
-		if left, exist := tbl.getTxn().batchSelectList[entry.bat]; exist && len(left) == 0 {
+		if deleted, exist := tbl.getTxn().batchSelectList[entry.bat]; exist &&
+			len(deleted) == entry.bat.RowCount() {
 			// all rows have deleted in this bat
 			return false
-		} else if len(left) > 0 {
-			// FIXME: if len(left) > 0, we need to exclude the deleted rows in this batch
-			logutil.Fatal("FIXME: implement later")
 		}
 		return true
 	}
@@ -510,7 +508,7 @@ func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 			break
 		}
 
-		if writes[ls.wsCursor].bat == nil {
+		if writes[ls.wsCursor].bat == nil || writes[ls.wsCursor].bat.RowCount() == 0 {
 			ls.wsCursor++
 			continue
 		}
