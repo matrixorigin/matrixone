@@ -49,7 +49,7 @@ func (s *service) getFinalVersionHandle() VersionHandle {
 // Get the original version of the upgrade framework
 func (s *service) getFounderVersionHandle() VersionHandle {
 	if len(s.handles) == 0 {
-		panic("Waring: no upgrade version handles available, please check the code")
+		s.logger.Fatal("Waring: no upgrade version handles available, please check the code")
 	}
 	return s.handles[0]
 }
@@ -69,5 +69,6 @@ func (s *service) getVersionHandle(version string) VersionHandle {
 			return h
 		}
 	}
-	panic("missing upgrade handle for version: " + version)
+	s.logger.Fatal("missing upgrade handle for version: " + version)
+	return nil
 }
