@@ -146,6 +146,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.OnDuplicateAction = t.OnDuplicateAction
 		op.DedupColTypes = t.DedupColTypes
 		op.DedupColName = t.DedupColName
+		return op
 	case vm.Anti:
 		t := sourceOp.(*anti.AntiJoin)
 		op := anti.NewArgument()
