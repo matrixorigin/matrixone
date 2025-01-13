@@ -478,6 +478,9 @@ func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 	mp *mpool.MPool,
 	outBatch *batch.Batch,
 ) error {
+	if ls.table.tableName == "t" {
+		logutil.Infof("xxxx")
+	}
 	if ls.wsCursor >= ls.txnOffset {
 		return nil
 	}
@@ -597,9 +600,9 @@ func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 		}
 
 		if rows+len(sels) >= objectio.BlockMaxRows {
-			sels = sels[:objectio.BlockMaxRows-rows]
 			ls.cachedBat = entry.bat
 			ls.sels = sels[objectio.BlockMaxRows-rows:]
+			sels = sels[:objectio.BlockMaxRows-rows]
 		}
 
 		for i, destVec := range outBatch.Vecs {
