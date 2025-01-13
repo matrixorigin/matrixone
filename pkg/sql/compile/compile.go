@@ -2138,7 +2138,15 @@ func (c *Compile) compileUnionAll(node *plan.Node, ss []*Scope, children []*Scop
 func (c *Compile) compileJoin(node, left, right *plan.Node, probeScopes, buildScopes []*Scope) []*Scope {
 	if node.Stats.HashmapStats.Shuffle {
 		if len(c.cnList) == 1 {
-			return c.compileShuffleJoinV2(node, left, right, probeScopes, buildScopes)
+			if node.NodeType == plan.Node_JOIN && node.Stats.HashmapStats.Shuffle && node.BuildOnLeft {
+				logutil.Infof("not support shuffle v2 for right join now")
+			} else if left.NodeType == plan.Node_JOIN && left.Stats.HashmapStats.Shuffle && left.BuildOnLeft {
+				logutil.Infof("not support shuffle v2 for right join now")
+			} else if right.NodeType == plan.Node_JOIN && right.Stats.HashmapStats.Shuffle && right.BuildOnLeft {
+				logutil.Infof("not support shuffle v2 for right join now")
+			} else {
+				return c.compileShuffleJoinV2(node, left, right, probeScopes, buildScopes)
+			}
 		}
 		return c.compileShuffleJoin(node, left, right, probeScopes, buildScopes)
 	}
@@ -3021,7 +3029,12 @@ func (c *Compile) compileShuffleGroupV2(n *plan.Node, inputSS []*Scope, nodes []
 
 func (c *Compile) compileShuffleGroup(n *plan.Node, inputSS []*Scope, nodes []*plan.Node) []*Scope {
 	if len(c.cnList) == 1 {
-		return c.compileShuffleGroupV2(n, inputSS, nodes)
+		child := nodes[n.Children[0]]
+		if child.NodeType == plan.Node_JOIN && child.Stats.HashmapStats.Shuffle && n.BuildOnLeft {
+			logutil.Infof("not support shuffle v2 for right join now")
+		} else {
+			return c.compileShuffleGroupV2(n, inputSS, nodes)
+		}
 	}
 
 	if n.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reuse {
