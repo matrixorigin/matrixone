@@ -162,18 +162,6 @@ func getSqlForUpdateMoPitrAccountObjectId(accountName string, objId uint64) stri
 	return fmt.Sprintf(updateMoPitrAccountObjectIdFmt, accountName, objId)
 }
 
-func getSqlForGetLengthAndUnitFmt(accountId uint32, level, accName, dbName, tblName string) string {
-	sql := fmt.Sprintf(getLengthAndUnitFmt, accountId, level)
-	if level == "account" {
-		sql += fmt.Sprintf(" and account_name = '%s'", accName)
-	} else if level == "database" {
-		sql += fmt.Sprintf(" and database_name = '%s'", dbName)
-	} else if level == "table" {
-		sql += fmt.Sprintf(" and table_name = '%s'", tblName)
-	}
-	return sql
-}
-
 func checkPitrDup(ctx context.Context, bh BackgroundExec, createAccount string, createAccountId uint64, stmt *tree.CreatePitr) (bool, error) {
 	sql := getSqlForCheckPitrDup(createAccount, createAccountId, stmt)
 
