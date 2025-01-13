@@ -2140,8 +2140,8 @@ func (c *Compile) compileUnionAll(node *plan.Node, ss []*Scope, children []*Scop
 func (c *Compile) compileJoin(node, left, right *plan.Node, probeScopes, buildScopes []*Scope) []*Scope {
 	if node.Stats.HashmapStats.Shuffle {
 		if len(c.cnList) == 1 {
-			if node.NodeType == plan.Node_JOIN && node.Stats.HashmapStats.Shuffle && node.BuildOnLeft {
-				logutil.Infof("not support shuffle v2 for right join now")
+			if node.JoinType == plan.Node_DEDUP || node.BuildOnLeft {
+				logutil.Infof("not support shuffle v2 for dedup or right join now")
 			} else if left.NodeType == plan.Node_JOIN && left.Stats.HashmapStats.Shuffle && left.BuildOnLeft {
 				logutil.Infof("not support shuffle v2 for right join now")
 			} else if right.NodeType == plan.Node_JOIN && right.Stats.HashmapStats.Shuffle && right.BuildOnLeft {
