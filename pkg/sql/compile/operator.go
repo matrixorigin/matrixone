@@ -130,6 +130,22 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		ParallelID:  srcOpBase.ParallelID,
 	}
 	switch sourceOp.OpType() {
+	case vm.ShuffleBuild:
+		t := sourceOp.(*shufflebuild.ShuffleBuild)
+		op := shufflebuild.NewArgument()
+		op.HashOnPK = t.HashOnPK
+		op.NeedBatches = t.NeedBatches
+		op.NeedAllocateSels = t.NeedAllocateSels
+		op.Conditions = t.Conditions
+		op.RuntimeFilterSpec = t.RuntimeFilterSpec
+		op.JoinMapTag = t.JoinMapTag
+		if op.ShuffleIdx == -1 { // shuffleV2
+			op.ShuffleIdx = int32(index)
+		}
+		op.IsDedup = t.IsDedup
+		op.OnDuplicateAction = t.OnDuplicateAction
+		op.DedupColTypes = t.DedupColTypes
+		op.DedupColName = t.DedupColName
 	case vm.Anti:
 		t := sourceOp.(*anti.AntiJoin)
 		op := anti.NewArgument()
@@ -138,6 +154,9 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.Result = t.Result
 		op.HashOnPK = t.HashOnPK
 		op.IsShuffle = t.IsShuffle
+		if op.ShuffleIdx == -1 { // shuffleV2
+			op.ShuffleIdx = int32(index)
+		}
 		op.RuntimeFilterSpecs = t.RuntimeFilterSpecs
 		op.JoinMapTag = t.JoinMapTag
 		op.SetInfo(&info)
@@ -168,6 +187,9 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.JoinMapTag = t.JoinMapTag
 		op.HashOnPK = t.HashOnPK
 		op.IsShuffle = t.IsShuffle
+		if op.ShuffleIdx == -1 { // shuffleV2
+			op.ShuffleIdx = int32(index)
+		}
 		op.SetInfo(&info)
 		return op
 	case vm.Left:
@@ -181,6 +203,9 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.JoinMapTag = t.JoinMapTag
 		op.HashOnPK = t.HashOnPK
 		op.IsShuffle = t.IsShuffle
+		if op.ShuffleIdx == -1 { // shuffleV2
+			op.ShuffleIdx = int32(index)
+		}
 		op.SetInfo(&info)
 		return op
 	case vm.Right:
@@ -201,6 +226,9 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.JoinMapTag = t.JoinMapTag
 		op.HashOnPK = t.HashOnPK
 		op.IsShuffle = t.IsShuffle
+		if op.ShuffleIdx == -1 { // shuffleV2
+			op.ShuffleIdx = int32(index)
+		}
 		op.SetInfo(&info)
 		return op
 	case vm.RightSemi:
@@ -220,6 +248,9 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.JoinMapTag = t.JoinMapTag
 		op.HashOnPK = t.HashOnPK
 		op.IsShuffle = t.IsShuffle
+		if op.ShuffleIdx == -1 { // shuffleV2
+			op.ShuffleIdx = int32(index)
+		}
 		op.SetInfo(&info)
 		return op
 	case vm.RightAnti:
@@ -239,6 +270,9 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.JoinMapTag = t.JoinMapTag
 		op.HashOnPK = t.HashOnPK
 		op.IsShuffle = t.IsShuffle
+		if op.ShuffleIdx == -1 { // shuffleV2
+			op.ShuffleIdx = int32(index)
+		}
 		op.SetInfo(&info)
 		return op
 	case vm.Limit:
@@ -314,6 +348,9 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.JoinMapTag = t.JoinMapTag
 		op.HashOnPK = t.HashOnPK
 		op.IsShuffle = t.IsShuffle
+		if op.ShuffleIdx == -1 { // shuffleV2
+			op.ShuffleIdx = int32(index)
+		}
 		op.SetInfo(&info)
 		return op
 	case vm.Single:
@@ -573,6 +610,9 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.Conditions = t.Conditions
 		op.IsShuffle = t.IsShuffle
 		op.ShuffleIdx = t.ShuffleIdx
+		if op.ShuffleIdx == -1 { // shuffleV2
+			op.ShuffleIdx = int32(index)
+		}
 		op.RuntimeFilterSpecs = t.RuntimeFilterSpecs
 		op.JoinMapTag = t.JoinMapTag
 		op.OnDuplicateAction = t.OnDuplicateAction
