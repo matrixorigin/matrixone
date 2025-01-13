@@ -125,6 +125,8 @@ build: config cgo thirdparties
 	$(info [Build binary])
 	$(CGO_OPTS) go build $(TAGS) $(RACE_OPT) $(GOLDFLAGS) $(DEBUG_OPT) -o $(BIN_NAME) ./cmd/mo-service
 
+# https://wiki.musl-libc.org/getting-started.html
+# https://musl.cc/
 .PHONY: musl-install
 musl-install:
 ifeq ("$(UNAME_S)","linux")
