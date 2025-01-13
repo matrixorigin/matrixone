@@ -165,7 +165,9 @@ func (d *LogServiceDriver) truncateFromRemote(
 			loopCtx, cancel = context.WithTimeoutCause(
 				ctx, d.config.GetTruncateDuration, moerr.CauseGetLogserviceTruncate,
 			)
-			if psnTruncated, err = d.getTruncatedPSNFromBackend(ctx); err != nil {
+			psnTruncated, err = d.getTruncatedPSNFromBackend(loopCtx)
+			cancel()
+			if err != nil {
 				return
 			}
 			if psnTruncated >= psnIntent {

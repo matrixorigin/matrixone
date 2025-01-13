@@ -309,7 +309,7 @@ func (r *recordEntry) forEachLogEntry(fn func(*entry.Entry)) (err error) {
 		offset int64
 		n      int64
 	)
-	for _ = range r.Meta.addr {
+	for range r.Meta.addr {
 		e := entry.NewEmptyEntry()
 		if n, err = e.UnmarshalBinary(r.baseEntry.payload[offset:]); err != nil {
 			return

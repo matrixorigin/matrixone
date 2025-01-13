@@ -16,7 +16,6 @@ package logservicedriver
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
@@ -101,27 +100,6 @@ func (d *mockDriver) addSkipMap(psn, skipDSN, skipPSN uint64) {
 		d.skipMap[psn] = make(map[uint64]uint64)
 	}
 	d.skipMap[psn][skipDSN] = skipPSN
-}
-
-func (d *mockDriver) setTruncatedPSN(psn uint64) {
-	d.truncatedPSN = psn
-}
-
-// func (d *mockDriver) setSpec(
-// 	mt MetaType,
-// 	psn, dsnS, dsnE, safe, lsnS, lsnE uint64,
-// ) {
-// 	spec := [5]uint64{uint64(mt), psn, dsnS, dsnE, safe, lsnS, lsnE}
-// 	for i := range d.recordSpecs {
-// 	}
-// }
-
-func (d *mockDriver) specString() string {
-	var s string
-	for _, spec := range d.recordSpecs {
-		s += fmt.Sprintf("%v\n", spec)
-	}
-	return s
 }
 
 func (d *mockDriver) getClientForWrite() (*wrappedClient, uint64) {

@@ -15,8 +15,6 @@
 package logservicedriver
 
 import (
-	"sync"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
@@ -27,7 +25,6 @@ type readCache struct {
 	psns []uint64
 	// PSN -> Record mapping
 	records map[uint64]*recordEntry
-	readMu  sync.RWMutex
 }
 
 func newReadCache() readCache {

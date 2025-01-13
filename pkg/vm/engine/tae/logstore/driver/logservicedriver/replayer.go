@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -369,8 +370,12 @@ func (r *replayer) Replay(ctx context.Context) (err error) {
 		return
 	}
 
+	var wg sync.WaitGroup
+
+	wg.Add(1)
 	// a dedicated goroutine to replay entries from the applyC
-	go r.streamApplying(ctx, applyC, resultC)
+	go r.streamApplying(ctx, applyC, resultC, &wg)
+	defer wg.Wait()
 
 	// read log records batch by batch and schedule the records for apply
 	for {
@@ -598,6 +603,7 @@ func (r *replayer) streamApplying(
 	ctx context.Context,
 	sourceC <-chan *entry.Entry,
 	resultC chan error,
+	wg *sync.WaitGroup,
 ) (err error) {
 	var (
 		e                *entry.Entry
@@ -606,6 +612,7 @@ func (r *replayer) streamApplying(
 	)
 	defer func() {
 		resultC <- err
+		wg.Done()
 	}()
 	for {
 		select {
@@ -645,7 +652,6 @@ func (r *replayer) streamApplying(
 			r.stats.applyDuration += time.Since(t0)
 		}
 	}
-	return
 }
 
 // this function reads the next batch of records from the backend
