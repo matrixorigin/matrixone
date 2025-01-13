@@ -32,7 +32,7 @@ import (
 const SlowAppendThreshold = 1 * time.Second
 
 type driverAppender struct {
-	client          *clientWithRecord
+	client          *wrappedClient
 	writeToken      uint64
 	logserviceLsn   uint64
 	entry           *recordEntry

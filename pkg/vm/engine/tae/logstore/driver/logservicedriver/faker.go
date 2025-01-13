@@ -124,7 +124,7 @@ func (d *mockDriver) specString() string {
 	return s
 }
 
-func (d *mockDriver) getClientForWrite() (*clientWithRecord, uint64) {
+func (d *mockDriver) getClientForWrite() (*wrappedClient, uint64) {
 	return nil, 0
 }
 

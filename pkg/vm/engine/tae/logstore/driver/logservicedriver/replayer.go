@@ -190,7 +190,7 @@ type replayerDriver interface {
 		ctx context.Context, firstPSN uint64, maxSize int,
 	) (nextPSN uint64, records []logservice.LogRecord, err error)
 	getTruncatedPSNFromBackend(ctx context.Context) (uint64, error)
-	getClientForWrite() (*clientWithRecord, uint64)
+	getClientForWrite() (*wrappedClient, uint64)
 	GetMaxClient() int
 }
 
@@ -479,7 +479,6 @@ func (r *replayer) tryScheduleApply(
 					zap.Uint64("dsn", dsn),
 					zap.Uint64("safe-dsn", r.replayedState.safeDSN),
 				)
-				// PXU TODO: ???
 				r.waterMarks.minDSN = dsn + 1
 				r.waterMarks.dsnScheduled = dsn
 				return
@@ -530,7 +529,6 @@ func (r *replayer) tryScheduleApply(
 				if r.onWriteSkip != nil {
 					r.onWriteSkip(r.replayedState.dsn2PSNMap)
 				}
-				// PXU TODO
 				if err = r.appendSkipCmd(
 					ctx, r.replayedState.dsn2PSNMap,
 				); err != nil {

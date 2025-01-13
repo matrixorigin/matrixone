@@ -46,7 +46,6 @@ func (d *LogServiceDriver) getAppender() *driverAppender {
 // this function flushes the current appender to the append queue and
 // creates a new appender as the current appender
 func (d *LogServiceDriver) flushCurrentAppender() {
-	d.appendtimes++
 	d.scheduleAppend(d.currentAppender)
 	d.appendWaitQueue <- d.currentAppender
 	d.currentAppender = newDriverAppender()
@@ -73,7 +72,7 @@ func (d *LogServiceDriver) scheduleAppend(appender *driverAppender) {
 
 // Node:
 // this function must be called in serial due to the write token
-func (d *LogServiceDriver) getClientForWrite() (client *clientWithRecord, token uint64) {
+func (d *LogServiceDriver) getClientForWrite() (client *wrappedClient, token uint64) {
 	var err error
 	if token, err = d.applyWriteToken(
 		uint64(d.config.ClientMaxCount), time.Second,

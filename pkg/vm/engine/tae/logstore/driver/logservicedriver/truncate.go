@@ -93,7 +93,7 @@ func (d *LogServiceDriver) truncateFromRemote(psn uint64) {
 	var (
 		t0           = time.Now()
 		truncatedPSN uint64
-		client       *clientWithRecord
+		client       *wrappedClient
 		retryTimes   int
 		err          error
 	)
@@ -166,7 +166,7 @@ func (d *LogServiceDriver) getTruncatedPSNFromBackend(
 	ctx context.Context,
 ) (psn uint64, err error) {
 	var (
-		client     *clientWithRecord
+		client     *wrappedClient
 		retryTimes int
 		maxRetry   = 20
 		start      = time.Now()

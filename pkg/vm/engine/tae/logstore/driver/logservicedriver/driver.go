@@ -71,9 +71,6 @@ type LogServiceDriver struct {
 	appendPool *ants.Pool
 
 	truncateQueue sm.Queue
-
-	flushtimes  int
-	appendtimes int
 }
 
 func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
@@ -119,7 +116,6 @@ func (d *LogServiceDriver) GetMaxClient() int {
 }
 
 func (d *LogServiceDriver) Close() error {
-	logutil.Infof("append%d,flush%d", d.appendtimes, d.flushtimes)
 	d.clientPool.Close()
 	d.closeCancel()
 	d.doAppendLoop.Stop()
@@ -201,7 +197,7 @@ func (d *LogServiceDriver) readFromBackend(
 		)
 	}()
 
-	var client *clientWithRecord
+	var client *wrappedClient
 	if client, err = d.clientPool.Get(); err != nil {
 		return
 	}
