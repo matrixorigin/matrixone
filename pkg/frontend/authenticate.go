@@ -3893,6 +3893,12 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 				return rtnErr
 			}
 		}
+
+		// update pitr
+		rtnErr = updatePitrObjectId(ctx, bh, da.Name, uint64(accountId))
+		if rtnErr != nil {
+			return rtnErr
+		}
 		return rtnErr
 	}
 
@@ -5507,7 +5513,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		*tree.ShowTableValues, *tree.ShowNodeList, *tree.ShowRolesStmt,
 		*tree.ShowLocks, *tree.ShowFunctionOrProcedureStatus, *tree.ShowPublications, *tree.ShowSubscriptions,
 		*tree.ShowBackendServers, *tree.ShowStages, *tree.ShowConnectors, *tree.DropConnector,
-		*tree.PauseDaemonTask, *tree.CancelDaemonTask, *tree.ResumeDaemonTask:
+		*tree.PauseDaemonTask, *tree.CancelDaemonTask, *tree.ResumeDaemonTask, *tree.ShowRecoveryWindow:
 		objType = objectTypeNone
 		kind = privilegeKindNone
 		canExecInRestricted = true
@@ -7450,11 +7456,6 @@ func InitGeneralTenant(ctx context.Context, bh BackgroundExec, ses *Session, ca 
 			return rtnErr
 		}
 		rtnErr = createTablesInInformationSchemaOfGeneralTenant(newTenantCtx, bh)
-		if rtnErr != nil {
-			return rtnErr
-		}
-
-		rtnErr = updatePitrObjectId(ctx, bh, newTenant.GetTenant(), uint64(newTenant.GetTenantID()))
 		if rtnErr != nil {
 			return rtnErr
 		}

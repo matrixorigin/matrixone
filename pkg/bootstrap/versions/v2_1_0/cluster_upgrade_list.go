@@ -1,4 +1,4 @@
-// Copyright 2024 Matrix Origin
+// Copyright 2025 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -21,7 +21,37 @@ import (
 )
 
 var clusterUpgEntries = []versions.UpgradeEntry{
+	upg_mo_pitr_add_status,
+	upg_mo_pitr_add_status_changed_time,
 	upg_mo_account_version_offset,
+}
+
+var upg_mo_pitr_add_status = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: catalog.MO_PITR,
+	UpgType:   versions.ADD_COLUMN,
+	UpgSql:    "alter table mo_catalog.mo_pitr add column pitr_status TINYINT UNSIGNED DEFAULT 1 after pitr_unit",
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		colInfo, err := versions.CheckTableColumn(txn, accountId, catalog.MO_CATALOG, catalog.MO_PITR, "pitr_status")
+		if err != nil {
+			return false, err
+		}
+		return colInfo.IsExits, nil
+	},
+}
+
+var upg_mo_pitr_add_status_changed_time = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: catalog.MO_PITR,
+	UpgType:   versions.ADD_COLUMN,
+	UpgSql:    "alter table mo_catalog.mo_pitr add column pitr_status_changed_time TIMESTAMP DEFAULT UTC_TIMESTAMP after pitr_status",
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		colInfo, err := versions.CheckTableColumn(txn, accountId, catalog.MO_CATALOG, catalog.MO_PITR, "pitr_status_changed_time")
+		if err != nil {
+			return false, err
+		}
+		return colInfo.IsExits, nil
+	},
 }
 
 var upg_mo_account_version_offset = versions.UpgradeEntry{
