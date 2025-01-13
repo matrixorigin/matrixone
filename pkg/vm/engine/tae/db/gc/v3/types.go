@@ -28,109 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 )
 
-type BatchType int8
-
-const CurrentVersion = uint16(3)
-
-const (
-	ObjectList BatchType = iota
-	TombstoneList
-)
-
-const (
-	CreateBlock BatchType = iota
-	DeleteBlock
-	DropTable
-	DropDB
-	DeleteFile
-	Tombstone
-)
-
-const (
-	GCAttrObjectName = "name"
-	GCAttrBlockId    = "block_id"
-	GCAttrTableId    = "table_id"
-	GCAttrDBId       = "db_id"
-	GCAttrCommitTS   = "commit_ts"
-	GCCreateTS       = "create_time"
-	GCDeleteTS       = "delete_time"
-	GCAttrTombstone  = "tombstone"
-	GCAttrVersion    = "version"
-)
-
-var (
-	BlockSchemaAttr = []string{
-		GCAttrObjectName,
-		GCCreateTS,
-		GCDeleteTS,
-		GCAttrCommitTS,
-		GCAttrTableId,
-	}
-	BlockSchemaTypes = []types.Type{
-		types.New(types.T_varchar, 5000, 0),
-		types.New(types.T_TS, types.MaxVarcharLen, 0),
-		types.New(types.T_TS, types.MaxVarcharLen, 0),
-		types.New(types.T_TS, types.MaxVarcharLen, 0),
-		types.New(types.T_uint64, 0, 0),
-	}
-
-	BlockSchemaAttrV1 = []string{
-		GCAttrBlockId,
-		GCAttrTableId,
-		GCAttrDBId,
-		GCAttrObjectName,
-	}
-	BlockSchemaTypesV1 = []types.Type{
-		types.New(types.T_Blockid, 0, 0),
-		types.New(types.T_uint64, 0, 0),
-		types.New(types.T_uint64, 0, 0),
-		types.New(types.T_varchar, 5000, 0),
-	}
-
-	TombstoneSchemaAttr = []string{
-		GCAttrTombstone,
-		GCAttrObjectName,
-		GCAttrCommitTS,
-	}
-
-	TombstoneSchemaTypes = []types.Type{
-		types.New(types.T_varchar, 5000, 0),
-		types.New(types.T_varchar, 5000, 0),
-		types.New(types.T_TS, types.MaxVarcharLen, 0),
-	}
-
-	VersionsSchemaAttr = []string{
-		GCAttrVersion,
-	}
-
-	VersionsSchemaTypes = []types.Type{
-		types.New(types.T_uint16, 0, 0),
-	}
-
-	DropTableSchemaAttr = []string{
-		GCAttrTableId,
-		GCAttrDBId,
-	}
-	DropTableSchemaTypes = []types.Type{
-		types.New(types.T_uint64, 0, 0),
-		types.New(types.T_uint64, 0, 0),
-	}
-
-	DropDBSchemaAtt = []string{
-		GCAttrDBId,
-	}
-	DropDBSchemaTypes = []types.Type{
-		types.New(types.T_uint64, 0, 0),
-	}
-
-	DeleteFileSchemaAtt = []string{
-		GCAttrObjectName,
-	}
-	DeleteFileSchemaTypes = []types.Type{
-		types.New(types.T_varchar, 5000, 0),
-	}
-)
-
 type Cleaner interface {
 	Replay(context.Context) error
 	Process(context.Context) error
@@ -166,9 +63,6 @@ var FSinkerFactory ioutil.FileSinkerFactory
 
 const ObjectTablePrimaryKeyIdx = 0
 const ObjectTableVersion = 0
-const (
-	DefaultInMemoryStagedSize = mpool.MB * 32
-)
 
 func init() {
 	ObjectTableAttrs = []string{
