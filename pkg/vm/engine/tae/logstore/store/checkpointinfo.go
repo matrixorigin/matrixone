@@ -44,38 +44,6 @@ func (info *checkpointInfo) UpdateWtihRanges(intervals *common.ClosedIntervals) 
 	}
 }
 
-func (info *checkpointInfo) UpdateWtihPartialCheckpoint(lsn uint64, ckps *partialCkpInfo) {
-	if info.ranges.Contains(*common.NewClosedIntervalsByInt(lsn)) {
-		return
-	}
-	partialInfo, ok := info.partial[lsn]
-	if !ok {
-		partialInfo = newPartialCkpInfo(ckps.size)
-		info.partial[lsn] = partialInfo
-	}
-	partialInfo.MergePartialCkpInfo(ckps)
-	if partialInfo.IsAllCheckpointed() {
-		info.ranges.TryMerge(common.NewClosedIntervalsByInt(lsn))
-		delete(info.partial, lsn)
-	}
-}
-
-func (info *checkpointInfo) UpdateWithCommandInfo(lsn uint64, cmds *entry.CommandInfo) {
-	if info.ranges.Contains(*common.NewClosedIntervalsByInt(lsn)) {
-		return
-	}
-	partialInfo, ok := info.partial[lsn]
-	if !ok {
-		partialInfo = newPartialCkpInfo(cmds.Size)
-		info.partial[lsn] = partialInfo
-	}
-	partialInfo.MergeCommandInfos(cmds)
-	if partialInfo.IsAllCheckpointed() {
-		info.ranges.TryMerge(common.NewClosedIntervalsByInt(lsn))
-		delete(info.partial, lsn)
-	}
-}
-
 func (info *checkpointInfo) MergeCommandMap(cmdMap map[uint64]entry.CommandInfo) {
 	ckpedLsn := make([]uint64, 0)
 	for lsn, cmds := range cmdMap {

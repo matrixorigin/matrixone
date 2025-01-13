@@ -123,9 +123,5 @@ func main() {
 		return driver.RE_Nomal
 	}
 	err = s.Replay(context.Background(), a)
-	if err != nil {
-		panic(err)
-	}
-
-	logutil.Infof("Open and replay takes %v", time.Since(t0))
+	logutil.Infof("Open and replay takes %v, err = %v", time.Since(t0), err)
 }
