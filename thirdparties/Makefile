@@ -54,15 +54,14 @@ install/include/stringzilla/stringzilla.h:
 install/include/usearch.h:
 	rm -rf $(USEARCH_DIR)
 	tar zxvf $(USEARCH_TAR)
-	(cd $(USEARCH_DIR) && mkdir build && cd build && cmake -DUSEARCH_BUILD_LIB_C=ON -DCMAKE_CXX_FLAGS=-I\ $(PWD)/install/include .. && make)
+	(cd $(USEARCH_DIR) && mkdir build && cd build && cmake -DUSEARCH_BUILD_BENCH_CPP=OFF -DUSEARCH_BUILD_TEST_C=OFF -DUSEARCH_BUILD_TEST_CPP=OFF -DUSEARCH_BUILD_LIB_C=ON -DCMAKE_CXX_FLAGS=-I$(PWD)/install/include .. && make)
 ifeq ($(UNAME),darwin)
 	cp $(USEARCH_DIR)/build/*.dylib install/lib
-	cp $(USEARCH_DIR)/build/*.a install/lib
 endif
 ifeq ($(UNAME),linux)
 	cp $(USEARCH_DIR)/build/*.so install/lib
-	cp $(USEARCH_DIR)/build/*.a install/lib
 endif
+	cp $(USEARCH_DIR)/build/libusearch_static_c.a install/lib/libusearch_c.a
 	cp $(USEARCH_DIR)/c/usearch.h install/include
 
 clean:
