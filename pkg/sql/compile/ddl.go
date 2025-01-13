@@ -1442,7 +1442,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 			c.getLower(),
 		)
 		if err != nil {
-			return nil
+			return err
 		}
 
 		err = partitionservice.GetService(c.proc.GetService()).Create(

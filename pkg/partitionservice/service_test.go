@@ -201,3 +201,7 @@ func getCreateTableStatement(
 	require.NoError(t, err)
 	return stmt.(*tree.CreateTable)
 }
+
+func TestGetService(t *testing.T) {
+	require.Nil(t, GetService(""))
+}
