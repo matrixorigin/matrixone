@@ -43,16 +43,12 @@ func doShowRecoveryWindow(ctx context.Context, ses *Session, srw *tree.ShowRecov
 	defer bh.Close()
 
 	err = bh.Exec(ctx, "begin;")
+	defer func() {
+		err = finishTxn(ctx, bh, err)
+	}()
 	if err != nil {
 		return err
 	}
-	defer func() {
-		if err != nil {
-			_ = bh.Exec(ctx, "rollback;")
-		} else {
-			err = bh.Exec(ctx, "commit;")
-		}
-	}()
 
 	// check privilege
 	err = checkShowRecoveryWindowPrivilege(ctx, ses, srw)
@@ -802,7 +798,7 @@ func checkShowRecoveryWindowPrivilege(ctx context.Context, ses *Session, srw *tr
 	case tree.RECOVERYWINDOWLEVELTABLE:
 		dbName := srw.DatabaseName.String()
 		if len(dbName) > 0 && needSkipDb(dbName) {
-			return moerr.NewInternalError(ctx, "can not show recovery window for system database")
+			return moerr.NewInternalError(ctx, "can not show recovery window for system table")
 		}
 	}
 	return nil
