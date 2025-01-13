@@ -104,7 +104,7 @@ func Open(
 		}
 		logutil.Info(
 			Phase_Open,
-			zap.Duration("open-tae-cost", time.Since(totalTime)),
+			zap.Duration("total-cost", time.Since(totalTime)),
 			zap.String("mode", db.GetTxnMode().String()),
 			zap.Error(err),
 		)

@@ -827,13 +827,14 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 
 	if tmpDelFiles, tmpNewFiles, newCheckpoint, newCheckpointData, err = MergeCheckpoint(
 		ctx,
+		c.TaskNameLocked(),
 		c.sid,
-		c.fs.Service,
 		toMergeEntries,
 		bf,
 		&checkpointMaxEnd,
 		c.checkpointCli,
 		c.mp,
+		c.fs.Service,
 	); err != nil {
 		extraErrMsg = "MergeCheckpoint failed"
 		return err
