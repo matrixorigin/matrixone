@@ -78,29 +78,7 @@ func (s *Scope) CreateDatabase(c *Compile) error {
 	}
 
 	ctx = context.WithValue(ctx, defines.DatTypKey{}, datType)
-	err := c.e.Create(ctx, dbName, c.proc.GetTxnOperator())
-	if err != nil {
-		return err
-	}
-
-	if !needSkipDbs[dbName] {
-		newDb, err := c.e.Database(ctx, dbName, c.proc.GetTxnOperator())
-		if err != nil {
-			return err
-		}
-
-		updatePitrSql := fmt.Sprintf("update `%s`.`%s` set `%s` = '%s' where `%s` = %d and `%s` = '%s'",
-			catalog.MO_CATALOG, catalog.MO_PITR, catalog.MO_PITR_OBJECT_ID, newDb.GetDatabaseId(ctx),
-			catalog.MO_PITR_ACCOUNT_ID, c.proc.GetSessionInfo().AccountId,
-			catalog.MO_PITR_DB_NAME, dbName)
-
-		err = c.runSqlWithSystemTenant(updatePitrSql)
-		if err != nil {
-			return err
-		}
-	}
-
-	return nil
+	return c.e.Create(ctx, dbName, c.proc.GetTxnOperator())
 }
 
 func (s *Scope) DropDatabase(c *Compile) error {
@@ -215,6 +193,22 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	err = c.runSql(fmt.Sprintf(deleteMoRetentionWithDatabaseNameFormat, dbName))
 	if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
 		return nil
+	}
+
+	// 5.update mo_pitr table
+	if !needSkipDbs[dbName] {
+		updatePitrSql := fmt.Sprintf("update `%s`.`%s` set `%s` = %d, `%s` = %s where `%s` = %d and `%s` = '%s' and `%s` = %d and `%s` = %s",
+			catalog.MO_CATALOG, catalog.MO_PITR, catalog.MO_PITR_STATUS, 0, catalog.MO_PITR_CHANGED_TIME, "default",
+			catalog.MO_PITR_ACCOUNT_ID, c.proc.GetSessionInfo().AccountId,
+			catalog.MO_PITR_DB_NAME, dbName,
+			catalog.MO_PITR_STATUS, 1,
+			catalog.MO_PITR_OBJECT_ID, database.GetDatabaseId(c.proc.Ctx),
+		)
+
+		err = c.runSqlWithSystemTenant(updatePitrSql)
+		if err != nil {
+			return err
+		}
 	}
 	return err
 }
@@ -1437,27 +1431,6 @@ func (s *Scope) CreateTable(c *Compile) error {
 		}
 	}
 
-	// update mo_pitr table
-	// if mo_pitr table contains the same dbName and tblName, then update the table_id and modified_time
-	// otherwise, skip it
-	if !needSkipDbs[dbName] {
-		newRelation, err := dbSource.Relation(c.proc.Ctx, tblName, nil)
-		if err != nil {
-			return err
-		}
-		updatePitrSql := fmt.Sprintf("update `%s`.`%s` set `%s` = %d  where `%s` = %d and `%s` = '%s' and `%s` = '%s'",
-			catalog.MO_CATALOG, catalog.MO_PITR, catalog.MO_PITR_OBJECT_ID, newRelation.GetTableID(c.proc.Ctx),
-			catalog.MO_PITR_ACCOUNT_ID, c.proc.GetSessionInfo().AccountId,
-			catalog.MO_PITR_DB_NAME, dbName,
-			catalog.MO_PITR_TABLE_NAME, tblName)
-
-		// change ctx
-		err = c.runSqlWithSystemTenant(updatePitrSql)
-		if err != nil {
-			return err
-		}
-	}
-
 	return shardservice.GetService(c.proc.GetService()).Create(
 		c.proc.Ctx,
 		qry.GetTableDef().TblId,
@@ -2620,6 +2593,26 @@ func (s *Scope) DropTable(c *Compile) error {
 	err = c.runSql(deleteRetentionSQL)
 	if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
 		return nil
+	}
+
+	if err != nil {
+		return err
+	}
+
+	if !needSkipDbs[dbName] {
+		updatePitrSql := fmt.Sprintf("update `%s`.`%s` set `%s` = %d, `%s` = %s where `%s` = %d and `%s` = '%s' and `%s` = '%s' and `%s` = %d and `%s` = %d",
+			catalog.MO_CATALOG, catalog.MO_PITR, catalog.MO_PITR_STATUS, 0, catalog.MO_PITR_CHANGED_TIME, "default",
+			catalog.MO_PITR_ACCOUNT_ID, c.proc.GetSessionInfo().AccountId,
+			catalog.MO_PITR_DB_NAME, dbName,
+			catalog.MO_PITR_TABLE_NAME, tblName,
+			catalog.MO_PITR_STATUS, 1,
+			catalog.MO_PITR_OBJECT_ID, tblId,
+		)
+
+		err = c.runSqlWithSystemTenant(updatePitrSql)
+		if err != nil {
+			return err
+		}
 	}
 	return err
 }
