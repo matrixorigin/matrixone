@@ -148,7 +148,7 @@
 /pkg/sql/models @qingxinhome
 /pkg/sql/parsers @iamlinjunhong
 /pkg/sql/plan @ouyuanning @aunjgr @badboynt1
-/pkg/sql/plan/function @ouyuanning @qingxinhome @aujngr
+/pkg/sql/plan/function @ouyuanning @qingxinhome @aunjgr
 /pkg/sql/plan/explain @ouyuanning @aunjgr @badboynt1 @qingxinhome
 /pkg/sql/plan/tools @daviszhen @qingxinhome
 /pkg/sql/colexec/indexjoin @aunjgr @badboynt1
