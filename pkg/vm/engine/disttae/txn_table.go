@@ -1412,13 +1412,12 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 	if err := tbl.db.createWithID(ctx, tbl.tableName, tbl.tableId, tbl.defs, !createdInTxn); err != nil {
 		return err
 	}
-
 	if createdInTxn {
 		// 3. adjust writes for the table
 		txn.Lock()
 		for i, n := 0, len(txn.writes); i < n; i++ {
 			if cur := txn.writes[i]; cur.tableId == tbl.tableId && cur.bat != nil && cur.bat.RowCount() > 0 {
-				if sels, exist := txn.batchSelectList[cur.bat]; exist && len(sels) == 0 {
+				if sels, exist := txn.batchSelectList[cur.bat]; exist && len(sels) == cur.bat.RowCount() {
 					continue
 				}
 				txn.writes = append(txn.writes, txn.writes[i]) // copy by value
@@ -1428,7 +1427,10 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 				if err != nil {
 					return err
 				}
-				txn.batchSelectList[cur.bat] = []int64{}
+				for j := 0; j < cur.bat.RowCount(); j++ {
+					txn.batchSelectList[cur.bat] = append(txn.batchSelectList[cur.bat], int64(j))
+				}
+
 			}
 		}
 		txn.Unlock()
