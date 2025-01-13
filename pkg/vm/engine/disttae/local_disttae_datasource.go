@@ -109,8 +109,12 @@ type LocalDisttaeDataSource struct {
 		insIter logtailreplay.RowsIter
 	}
 
-	table     *txnTable
+	table *txnTable
+
 	wsCursor  int
+	cachedBat *batch.Batch
+	sels      []int64
+
 	txnOffset int
 
 	// runtime config
@@ -486,7 +490,7 @@ func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 
 	rows := 0
 	writes := ls.table.getTxn().writes
-	maxRows := objectio.BlockMaxRows
+	//maxRows := objectio.BlockMaxRows
 	if len(writes) == 0 {
 		return nil
 	}
@@ -506,14 +510,57 @@ func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 		pkSeqNums++
 	}
 
-	for ; ls.wsCursor < ls.txnOffset; ls.wsCursor++ {
+	for {
+
+		for {
+			if ls.cachedBat == nil {
+				break
+			}
+
+			var sels []int64
+			if len(ls.sels) >= objectio.BlockMaxRows {
+				sels = ls.sels[:objectio.BlockMaxRows]
+				ls.sels = ls.sels[objectio.BlockMaxRows:]
+			} else {
+				sels = ls.sels
+			}
+
+			for i, destVec := range outBatch.Vecs {
+				colIdx := int(seqNums[i])
+				if colIdx != objectio.SEQNUM_ROWID {
+					colIdx++
+				} else {
+					colIdx = 0
+				}
+				if err := destVec.Union(ls.cachedBat.Vecs[colIdx], sels, mp); err != nil {
+					return err
+				}
+			}
+
+			if len(sels) == objectio.BlockMaxRows {
+				outBatch.SetRowCount(outBatch.Vecs[0].Length())
+				return nil
+			}
+
+			ls.cachedBat = nil
+			rows += len(sels)
+			ls.wsCursor++
+
+		}
+
+		if ls.wsCursor >= ls.txnOffset {
+			break
+		}
+
 		if writes[ls.wsCursor].bat == nil {
+			ls.wsCursor++
 			continue
 		}
 
 		entry := writes[ls.wsCursor]
 
 		if ok := checkWorkspaceEntryType(ls.table, entry, true); !ok {
+			ls.wsCursor++
 			continue
 		}
 
@@ -533,9 +580,10 @@ func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 		skipMask.Release()
 
 		if len(offsets) == 0 {
+			ls.wsCursor++
 			continue
 		}
-
+		//row ids in retainedRowIds come from the same block, pls ref to writeBatch().
 		b := retainedRowIds[0].BorrowBlockID()
 		sels, err := ls.ApplyTombstones(
 			ls.ctx, b, offsets, engine.Policy_CheckUnCommittedOnly)
@@ -544,14 +592,15 @@ func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 		}
 
 		if len(sels) == 0 {
+			ls.wsCursor++
 			continue
 		}
 
-		if rows+len(sels) > maxRows {
-			break
+		if rows+len(sels) >= objectio.BlockMaxRows {
+			sels = sels[:objectio.BlockMaxRows-rows]
+			ls.cachedBat = entry.bat
+			ls.sels = sels[objectio.BlockMaxRows-rows:]
 		}
-
-		rows += len(sels)
 
 		for i, destVec := range outBatch.Vecs {
 			colIdx := int(seqNums[i])
@@ -564,6 +613,14 @@ func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 				return err
 			}
 		}
+
+		if outBatch.RowCount() == objectio.BlockMaxRows {
+			break
+		}
+
+		rows += len(sels)
+		ls.wsCursor++
+
 	}
 
 	outBatch.SetRowCount(outBatch.Vecs[0].Length())
