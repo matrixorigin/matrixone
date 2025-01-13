@@ -134,3 +134,7 @@ func (e *Entry) DoneWithErr(err error) {
 func (e *Entry) GetSize() int {
 	return e.Entry.TotalSize() + 8 //LSN
 }
+
+func (e *Entry) ApproxCmdMemSize() int {
+	return e.Entry.GetCmdApproxMemSize()
+}

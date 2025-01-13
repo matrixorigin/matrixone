@@ -54,7 +54,8 @@ func main() {
 		if err != nil {
 			panic(err)
 		}
-		_, err = s.Append(10, e1)
+		s.AllocateLSN(10, e1)
+		err = s.Append(e1)
 		if err != nil {
 			panic(err)
 		}
@@ -71,7 +72,8 @@ func main() {
 		if err != nil {
 			panic(err)
 		}
-		cmtLsn, err := s.Append(11, e2)
+		cmtLsn := s.AllocateLSN(11, e2)
+		err = s.Append(e2)
 		if err != nil {
 			panic(err)
 		}
@@ -92,7 +94,8 @@ func main() {
 		e3 := entry.GetBase()
 		e3.SetType(entry.IOET_WALEntry_Checkpoint)
 		e3.SetInfo(info)
-		_, err = s.Append(entry.GTCKp, e3)
+		s.AllocateLSN(entry.GTCKp, e3)
+		err = s.Append(e3)
 		if err != nil {
 			panic(err)
 		}

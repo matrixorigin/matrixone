@@ -326,6 +326,13 @@ func (cmd *EntryCommand[T, N]) WriteTo(w io.Writer) (n int64, err error) {
 	n += sn
 	return
 }
+
+func (cmd *EntryCommand[T, N]) ApproxMemSize() int {
+	size := 0
+	size += 36
+	return size
+}
+
 func (cmd *EntryCommand[T, N]) MarshalBinary() (buf []byte, err error) {
 	var bbuf bytes.Buffer
 	if _, err = cmd.WriteTo(&bbuf); err != nil {

@@ -439,3 +439,20 @@ func TestTxnManager_GetOrCreateTxnWithMeta(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, string(txn1), meta2.GetID())
 }
+
+func TestApproxMemSize(t *testing.T) {
+	var cmd1 EntryCommand[*ObjectMVCCNode, *ObjectNode]
+	fmt.Println(cmd1.ApproxMemSize())
+
+	var cmd2 EmptyMVCCNode
+	fmt.Println(cmd2.ApproxMemSize())
+
+	var cmd3 MetadataMVCCNode
+	fmt.Println(cmd3.ApproxMemSize())
+
+	var cmd4 ObjectMVCCNode
+	fmt.Println(cmd4.ApproxMemSize())
+
+	var cmd5 TableMVCCNode
+	fmt.Println(cmd5.ApproxMemSize())
+}

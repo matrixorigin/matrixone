@@ -196,11 +196,16 @@ func Open(
 	db.TxnMgr = txnbase.NewTxnManager(
 		txnStoreFactory, txnFactory, db.Opts.Clock, txnMgrOpts...,
 	)
-	db.LogtailMgr = logtail.NewManager(
+	db.LogtailMgr, err = logtail.NewManager(
 		db.Runtime,
 		int(db.Opts.LogtailCfg.PageSize),
 		db.TxnMgr.Now,
 	)
+
+	if err != nil {
+		return
+	}
+
 	db.Runtime.Now = db.TxnMgr.Now
 	db.TxnMgr.CommitListener.AddTxnCommitListener(db.LogtailMgr)
 	db.TxnMgr.Start(opts.Ctx)
