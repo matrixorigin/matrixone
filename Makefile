@@ -58,8 +58,8 @@ endif
 MUSL_NAME=$(MUSL_TARGET)-musl-cross
 MUSL_DIR=$(ROOT_DIR)/$(MUSL_NAME)
 MUSL_TAR=$(MUSL_NAME).tgz
-MUSL_CC='$(MUSL_DIR)/bin/$(MUSL_TARGET)-musl-gcc'
-MUSL_CXX='$(MUSL_DIR)/bin/$(MUSL_TARGET)-musl-g++'
+MUSL_CC=$(MUSL_DIR)/bin/$(MUSL_TARGET)-musl-gcc
+MUSL_CXX=$(MUSL_DIR)/bin/$(MUSL_TARGET)-musl-g++
 
 # cross compilation has been disabled for now
 ifneq ($(GOARCH)$(TARGET_ARCH)$(GOOS)$(TARGET_OS),)
@@ -125,7 +125,6 @@ build: config cgo thirdparties
 	$(info [Build binary])
 	$(CGO_OPTS) go build $(TAGS) $(RACE_OPT) $(GOLDFLAGS) $(DEBUG_OPT) -o $(BIN_NAME) ./cmd/mo-service
 
-# musl doesn't work anymore because it won't work with g++ which is required by usearch C++ code
 .PHONY: musl-install
 musl-install:
 ifeq ("$(UNAME_S)","linux")
