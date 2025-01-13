@@ -31,11 +31,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
+	"github.com/matrixorigin/matrixone/pkg/partitionservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/shardservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -1458,6 +1461,28 @@ func (s *Scope) CreateTable(c *Compile) error {
 		}
 	}
 
+	if qry.IsPartition {
+		stmt, err := parsers.ParseOne(
+			c.proc.Ctx,
+			dialect.MYSQL,
+			qry.RawSQL,
+			c.getLower(),
+		)
+		if err != nil {
+			return nil
+		}
+
+		err = partitionservice.GetService(c.proc.GetService()).Create(
+			c.proc.Ctx,
+			qry.GetTableDef().TblId,
+			stmt.(*tree.CreateTable),
+			c.proc.GetTxnOperator(),
+		)
+		if err != nil {
+			return err
+		}
+	}
+
 	return shardservice.GetService(c.proc.GetService()).Create(
 		c.proc.Ctx,
 		qry.GetTableDef().TblId,
@@ -2621,7 +2646,15 @@ func (s *Scope) DropTable(c *Compile) error {
 	if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
 		return nil
 	}
-	return err
+	if err != nil {
+		return nil
+	}
+
+	return partitionservice.GetService(c.proc.GetService()).Delete(
+		c.proc.Ctx,
+		tblId,
+		c.proc.GetTxnOperator(),
+	)
 }
 
 var planDefsToExeDefs = func(tableDef *plan.TableDef) ([]engine.TableDef, error) {
