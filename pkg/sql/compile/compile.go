@@ -457,7 +457,6 @@ func (c *Compile) FreeOperator() {
 	}
 }
 
-/*
 func (c *Compile) printPipeline() {
 	if c.IsTpQuery() {
 		fmt.Println("pipeline for tp query!", "sql: ", c.originSQL)
@@ -466,7 +465,6 @@ func (c *Compile) printPipeline() {
 	}
 	fmt.Println(DebugShowScopes(c.scopes, OldLevel))
 }
-*/
 
 // prePipelineInitializer is responsible for handling some tasks that need to be done before truly launching the pipeline.
 //
@@ -493,7 +491,7 @@ func (c *Compile) prePipelineInitializer() (err error) {
 
 // run once
 func (c *Compile) runOnce() (err error) {
-	//c.printPipeline()
+	c.printPipeline()
 
 	// defer cleanup at the end of runOnce()
 	defer func() {
@@ -2140,12 +2138,8 @@ func (c *Compile) compileUnionAll(node *plan.Node, ss []*Scope, children []*Scop
 func (c *Compile) compileJoin(node, left, right *plan.Node, probeScopes, buildScopes []*Scope) []*Scope {
 	if node.Stats.HashmapStats.Shuffle {
 		if len(c.cnList) == 1 {
-			if node.JoinType == plan.Node_DEDUP || node.BuildOnLeft {
-				logutil.Infof("not support shuffle v2 for dedup or right join now")
-			} else if left.NodeType == plan.Node_JOIN && left.Stats.HashmapStats.Shuffle && left.BuildOnLeft {
-				logutil.Infof("not support shuffle v2 for right join now")
-			} else if right.NodeType == plan.Node_JOIN && right.Stats.HashmapStats.Shuffle && right.BuildOnLeft {
-				logutil.Infof("not support shuffle v2 for right join now")
+			if node.JoinType == plan.Node_DEDUP {
+				logutil.Infof("not support shuffle v2 for dedup join now")
 			} else {
 				return c.compileShuffleJoinV2(node, left, right, probeScopes, buildScopes)
 			}
@@ -3031,12 +3025,7 @@ func (c *Compile) compileShuffleGroupV2(n *plan.Node, inputSS []*Scope, nodes []
 
 func (c *Compile) compileShuffleGroup(n *plan.Node, inputSS []*Scope, nodes []*plan.Node) []*Scope {
 	if len(c.cnList) == 1 {
-		child := nodes[n.Children[0]]
-		if child.NodeType == plan.Node_JOIN && child.Stats.HashmapStats.Shuffle && n.BuildOnLeft {
-			logutil.Infof("not support shuffle v2 for right join now")
-		} else {
-			return c.compileShuffleGroupV2(n, inputSS, nodes)
-		}
+		return c.compileShuffleGroupV2(n, inputSS, nodes)
 	}
 
 	if n.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reuse {
