@@ -2157,11 +2157,11 @@ func (c *Compile) compileShuffleJoinV2(node, left, right *plan.Node, leftscopes,
 	bucketNum := len(c.cnList) * int(node.Stats.Dop)
 	for i := range leftscopes {
 		leftscopes[i].PreScopes = append(leftscopes[i].PreScopes, rightscopes[i])
-		shuffleOpForProbe := constructShuffleOperatorForJoin(int32(bucketNum), node, true)
+		shuffleOpForProbe := constructShuffleOperatorForJoinV2(int32(bucketNum), node, true)
 		shuffleOpForProbe.SetAnalyzeControl(c.anal.curNodeIdx, false)
 		leftscopes[i].setRootOperator(shuffleOpForProbe)
 
-		shuffleOpForBuild := constructShuffleOperatorForJoin(int32(bucketNum), node, false)
+		shuffleOpForBuild := constructShuffleOperatorForJoinV2(int32(bucketNum), node, false)
 		shuffleOpForBuild.SetAnalyzeControl(c.anal.curNodeIdx, false)
 		rightscopes[i].setRootOperator(shuffleOpForBuild)
 	}

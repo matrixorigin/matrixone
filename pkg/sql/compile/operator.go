@@ -139,7 +139,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.Conditions = t.Conditions
 		op.RuntimeFilterSpec = t.RuntimeFilterSpec
 		op.JoinMapTag = t.JoinMapTag
-		if op.ShuffleIdx == -1 { // shuffleV2
+		if t.ShuffleIdx == -1 { // shuffleV2
 			op.ShuffleIdx = int32(index)
 		}
 		op.IsDedup = t.IsDedup
@@ -155,7 +155,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.Result = t.Result
 		op.HashOnPK = t.HashOnPK
 		op.IsShuffle = t.IsShuffle
-		if op.ShuffleIdx == -1 { // shuffleV2
+		if t.ShuffleIdx == -1 { // shuffleV2
 			op.ShuffleIdx = int32(index)
 		}
 		op.RuntimeFilterSpecs = t.RuntimeFilterSpecs
@@ -188,7 +188,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.JoinMapTag = t.JoinMapTag
 		op.HashOnPK = t.HashOnPK
 		op.IsShuffle = t.IsShuffle
-		if op.ShuffleIdx == -1 { // shuffleV2
+		if t.ShuffleIdx == -1 { // shuffleV2
 			op.ShuffleIdx = int32(index)
 		}
 		op.SetInfo(&info)
@@ -204,7 +204,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.JoinMapTag = t.JoinMapTag
 		op.HashOnPK = t.HashOnPK
 		op.IsShuffle = t.IsShuffle
-		if op.ShuffleIdx == -1 { // shuffleV2
+		if t.ShuffleIdx == -1 { // shuffleV2
 			op.ShuffleIdx = int32(index)
 		}
 		op.SetInfo(&info)
@@ -227,7 +227,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.JoinMapTag = t.JoinMapTag
 		op.HashOnPK = t.HashOnPK
 		op.IsShuffle = t.IsShuffle
-		if op.ShuffleIdx == -1 { // shuffleV2
+		if t.ShuffleIdx == -1 { // shuffleV2
 			op.ShuffleIdx = int32(index)
 		}
 		op.SetInfo(&info)
@@ -249,7 +249,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.JoinMapTag = t.JoinMapTag
 		op.HashOnPK = t.HashOnPK
 		op.IsShuffle = t.IsShuffle
-		if op.ShuffleIdx == -1 { // shuffleV2
+		if t.ShuffleIdx == -1 { // shuffleV2
 			op.ShuffleIdx = int32(index)
 		}
 		op.SetInfo(&info)
@@ -271,7 +271,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.JoinMapTag = t.JoinMapTag
 		op.HashOnPK = t.HashOnPK
 		op.IsShuffle = t.IsShuffle
-		if op.ShuffleIdx == -1 { // shuffleV2
+		if t.ShuffleIdx == -1 { // shuffleV2
 			op.ShuffleIdx = int32(index)
 		}
 		op.SetInfo(&info)
@@ -349,7 +349,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.JoinMapTag = t.JoinMapTag
 		op.HashOnPK = t.HashOnPK
 		op.IsShuffle = t.IsShuffle
-		if op.ShuffleIdx == -1 { // shuffleV2
+		if t.ShuffleIdx == -1 { // shuffleV2
 			op.ShuffleIdx = int32(index)
 		}
 		op.SetInfo(&info)
@@ -611,7 +611,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.Conditions = t.Conditions
 		op.IsShuffle = t.IsShuffle
 		op.ShuffleIdx = t.ShuffleIdx
-		if op.ShuffleIdx == -1 { // shuffleV2
+		if t.ShuffleIdx == -1 { // shuffleV2
 			op.ShuffleIdx = int32(index)
 		}
 		op.RuntimeFilterSpecs = t.RuntimeFilterSpecs
@@ -1473,6 +1473,34 @@ func constructDispatchLocalAndRemote(idx int, target []*Scope, source *Scope) (b
 		}
 	}
 	return hasRemote, arg
+}
+
+func constructShuffleOperatorForJoinV2(bucketNum int32, node *plan.Node, left bool) *shuffleV2.ShuffleV2 {
+	arg := shuffleV2.NewArgument()
+	var expr *plan.Expr
+	cond := node.OnList[node.Stats.HashmapStats.ShuffleColIdx]
+	switch condImpl := cond.Expr.(type) {
+	case *plan.Expr_F:
+		if left {
+			expr = condImpl.F.Args[0]
+		} else {
+			expr = condImpl.F.Args[1]
+		}
+	}
+
+	hashCol, typ := plan2.GetHashColumn(expr)
+	arg.ShuffleColIdx = hashCol.ColPos
+	arg.ShuffleType = int32(node.Stats.HashmapStats.ShuffleType)
+	arg.ShuffleColMin = node.Stats.HashmapStats.ShuffleColMin
+	arg.ShuffleColMax = node.Stats.HashmapStats.ShuffleColMax
+	arg.BucketNum = bucketNum
+	switch types.T(typ) {
+	case types.T_int64, types.T_int32, types.T_int16:
+		arg.ShuffleRangeInt64 = plan2.ShuffleRangeReEvalSigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
+	case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text, types.T_bit, types.T_datalink:
+		arg.ShuffleRangeUint64 = plan2.ShuffleRangeReEvalUnsigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
+	}
+	return arg
 }
 
 func constructShuffleOperatorForJoin(bucketNum int32, node *plan.Node, left bool) *shuffle.Shuffle {
