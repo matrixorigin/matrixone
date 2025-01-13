@@ -606,9 +606,8 @@ func (r *replayer) streamApplying(
 	wg *sync.WaitGroup,
 ) (err error) {
 	var (
-		e                *entry.Entry
-		lastAppliedEntry *entry.Entry
-		ok               bool
+		e  *entry.Entry
+		ok bool
 	)
 	defer func() {
 		resultC <- err
@@ -621,11 +620,6 @@ func (r *replayer) streamApplying(
 			return
 		case e, ok = <-sourceC:
 			if !ok {
-				if lastAppliedEntry != nil {
-					r.replayedState.lastAppliedDSN = lastAppliedEntry.DSN
-					_, lsn := lastAppliedEntry.Entry.GetLsn()
-					r.replayedState.lastAppliedLSN = lsn
-				}
 				return
 			}
 			r.stats.scheduleLSNCount++
@@ -635,13 +629,18 @@ func (r *replayer) streamApplying(
 			// state == driver.RE_Nomal means the entry is applied successfully
 			// here log the first applied entry
 			if state := r.handle(e); state == driver.RE_Nomal {
-				if r.stats.appliedLSNCount.Load() == 0 {
-					_, lsn := e.Entry.GetLsn()
-					r.replayedState.firstAppliedDSN = e.DSN
-					r.replayedState.firstAppliedLSN = lsn
-					r.stats.appliedLSNCount.Add(1)
+				_, lsn := e.Entry.GetLsn()
+				dsn := e.DSN
+				if r.replayedState.lastAppliedDSN < dsn {
+					r.replayedState.lastAppliedDSN = dsn
+					r.replayedState.lastAppliedLSN = lsn
 				}
-				lastAppliedEntry = e
+
+				if r.stats.appliedLSNCount.Load() == 0 {
+					r.replayedState.firstAppliedDSN = dsn
+					r.replayedState.firstAppliedLSN = lsn
+				}
+				r.stats.appliedLSNCount.Add(1)
 				if r.onApplied != nil {
 					r.onApplied(e)
 				}
