@@ -25,11 +25,22 @@ import (
 	// "time"
 )
 
+// PXU TODO: Truncate(ctx context.Context, dsn uint64, sync bool) error
 // driver lsn -> entry lsn
-func (d *LogServiceDriver) Truncate(lsn uint64) error {
-	logutil.Info("TRACE-WAL-TRUNCATE", zap.Uint64(" driver start truncate", lsn))
-	if lsn > d.truncateDSNIntent.Load() {
-		d.truncateDSNIntent.Store(lsn)
+func (d *LogServiceDriver) Truncate(dsn uint64) error {
+	for {
+		old := d.truncateDSNIntent.Load()
+		if dsn <= old {
+			break
+		}
+		if d.truncateDSNIntent.CompareAndSwap(old, dsn) {
+			logutil.Info(
+				"Wal-Set-Truncate-Intent",
+				zap.Uint64("dsn-intent", dsn),
+				zap.Uint64("old-intent", old),
+			)
+			break
+		}
 	}
 	_, err := d.truncateQueue.Enqueue(struct{}{})
 	if err != nil {
@@ -39,9 +50,8 @@ func (d *LogServiceDriver) Truncate(lsn uint64) error {
 }
 
 // PXU TODO: ???
-func (d *LogServiceDriver) GetTruncated() (lsn uint64, err error) {
-	lsn = d.truncateDSNIntent.Load()
-	return
+func (d *LogServiceDriver) GetTruncated() (dsn uint64, err error) {
+	return d.truncateDSNIntent.Load(), nil
 }
 
 func (d *LogServiceDriver) onTruncateRequests(items ...any) {
@@ -71,7 +81,7 @@ func (d *LogServiceDriver) doTruncate() {
 	maxPSN := d.psn.records.Maximum()
 	d.psn.mu.RUnlock()
 	logutil.Info(
-		"Wal-Truncate",
+		"Wal-Truncate-Prepare",
 		zap.Int("loop-count", loopCount),
 		zap.Duration("duration", time.Since(t0)),
 		zap.Uint64("dsn-intent", dsnIntent),
@@ -84,27 +94,49 @@ func (d *LogServiceDriver) doTruncate() {
 	if psnIntent <= truncatedPSN {
 		return
 	}
-	d.truncateFromRemote(psnIntent)
-	d.truncatedPSN = psnIntent
-	d.gcPSN(psnIntent)
+	var (
+		err          error
+		psnTruncated uint64
+	)
+	if psnTruncated, err = d.truncateFromRemote(
+		context.Background(),
+		psnIntent,
+		10,
+	); err != nil {
+		// PXU TODO: metrics
+		logutil.Error(
+			"Wal-Truncate-Error",
+			zap.Uint64("psn-intent", psnIntent),
+			zap.Error(err),
+		)
+		return
+	}
+	if psnTruncated > d.truncatedPSN {
+		d.truncatedPSN = psnTruncated
+	}
+	d.gcPSN(psnTruncated)
 }
 
-func (d *LogServiceDriver) truncateFromRemote(psn uint64) {
+func (d *LogServiceDriver) truncateFromRemote(
+	ctx context.Context,
+	psnIntent uint64,
+	maxRetry int,
+) (psnTruncated uint64, err error) {
 	var (
-		t0           = time.Now()
-		truncatedPSN uint64
-		client       *wrappedClient
-		retryTimes   int
-		err          error
+		t0         = time.Now()
+		client     *wrappedClient
+		retryTimes int
 	)
+	psnTruncated = psnIntent
 	defer func() {
 		logger := logutil.Info
 		if err != nil {
 			logger = logutil.Error
 		}
 		logger(
-			"Wal-Truncate-PSN",
-			zap.Uint64("psn", psn),
+			"Wal-Truncate-Execute",
+			zap.Uint64("psn-intent", psnIntent),
+			zap.Uint64("psn-truncated", psnTruncated),
 			zap.Duration("duration", time.Since(t0)),
 			zap.Int("retry-times", retryTimes),
 			zap.Error(err),
@@ -113,55 +145,40 @@ func (d *LogServiceDriver) truncateFromRemote(psn uint64) {
 
 	if client, err = d.clientPool.Get(); err == ErrClientPoolClosed {
 		return
-	} else if err != nil {
-		panic(err)
 	}
 	defer d.clientPool.Put(client)
 
-	ctx, cancel := context.WithTimeoutCause(
-		context.Background(), d.config.TruncateDuration, moerr.CauseTruncateLogservice,
-	)
-	err = client.c.Truncate(ctx, psn)
-	err = moerr.AttachCause(ctx, err)
-	cancel()
-
-	if moerr.IsMoErrCode(err, moerr.ErrInvalidTruncateLsn) {
-		if truncatedPSN, err = d.getTruncatedPSNFromBackend(context.TODO()); err != nil {
-			panic(err)
-		}
-		if truncatedPSN == psn {
-			err = nil
-		}
-	}
-	if err != nil {
-		err = RetryWithTimeout(
-			d.config.RetryTimeout,
-			func() (shouldReturn bool) {
-				ctx, cancel := context.WithTimeoutCause(
-					context.Background(),
-					d.config.TruncateDuration,
-					moerr.CauseTruncateLogservice2,
-				)
-				err = client.c.Truncate(ctx, psn)
-				err = moerr.AttachCause(ctx, err)
-				cancel()
-				if moerr.IsMoErrCode(err, moerr.ErrInvalidTruncateLsn) {
-					if truncatedPSN, err = d.getTruncatedPSNFromBackend(context.TODO()); err != nil {
-						panic(err)
-					}
-					if truncatedPSN == psn {
-						err = nil
-					}
-				}
-				retryTimes++
-				return err == nil
-			},
+	for ; retryTimes < maxRetry+1; retryTimes++ {
+		var (
+			cancel  context.CancelFunc
+			loopCtx context.Context
 		)
-		if err != nil {
-			panic(err)
+		loopCtx, cancel = context.WithTimeoutCause(
+			ctx, d.config.TruncateDuration, moerr.CauseTruncateLogservice,
+		)
+		err = client.c.Truncate(loopCtx, psnIntent)
+		err = moerr.AttachCause(loopCtx, err)
+		cancel()
+
+		// the psnIntent is already truncated
+		if moerr.IsMoErrCode(err, moerr.ErrInvalidTruncateLsn) {
+			loopCtx, cancel = context.WithTimeoutCause(
+				ctx, d.config.GetTruncateDuration, moerr.CauseGetLogserviceTruncate,
+			)
+			if psnTruncated, err = d.getTruncatedPSNFromBackend(ctx); err != nil {
+				return
+			}
+			if psnTruncated >= psnIntent {
+				break
+			}
+		}
+		if err == nil {
+			break
 		}
 	}
+	return
 }
+
 func (d *LogServiceDriver) getTruncatedPSNFromBackend(
 	ctx context.Context,
 ) (psn uint64, err error) {
