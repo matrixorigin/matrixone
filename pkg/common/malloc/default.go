@@ -74,7 +74,7 @@ func newDefault(delta *Config) (allocator Allocator) {
 	}()
 
 	if config.Allocator == nil {
-		config.Allocator = ptrTo("mmap")
+		config.Allocator = ptrTo("c")
 	}
 
 	switch strings.ToLower(*config.Allocator) {
