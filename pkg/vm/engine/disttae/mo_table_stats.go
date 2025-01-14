@@ -375,9 +375,9 @@ func initMoTableStatsConfig(
 
 			go func() {
 				defer func() {
-					eng.dynamicCtx.Lock()
+					eng.dynamicCtx.lock.Lock()
 					task.running = false
-					eng.dynamicCtx.Unlock()
+					eng.dynamicCtx.lock.Unlock()
 				}()
 
 				// there should not have a deadline
@@ -389,8 +389,8 @@ func initMoTableStatsConfig(
 		// beta task expect to be running on every cn.
 		// gama task expect to be running only on one cn.
 		eng.dynamicCtx.launchTask = func(name string) {
-			eng.dynamicCtx.Lock()
-			defer eng.dynamicCtx.Unlock()
+			eng.dynamicCtx.lock.Lock()
+			defer eng.dynamicCtx.lock.Unlock()
 
 			switch name {
 			case gamaTaskName:
@@ -480,7 +480,7 @@ type taskState struct {
 }
 
 type dynamicCtx struct {
-	sync.RWMutex
+	lock sync.RWMutex
 
 	once sync.Once
 
@@ -512,8 +512,8 @@ type dynamicCtx struct {
 }
 
 func (d *dynamicCtx) LogDynamicCtx() string {
-	d.Lock()
-	defer d.Unlock()
+	d.lock.RLock()
+	defer d.lock.RUnlock()
 
 	buf := bytes.Buffer{}
 
@@ -604,12 +604,12 @@ func (d *dynamicCtx) HandleMoTableStatsCtl(cmd string) string {
 
 func (d *dynamicCtx) recomputing(para string) string {
 	{
-		d.Lock()
+		d.lock.RLock()
 		if !d.isMainRunner {
-			d.Unlock()
+			d.lock.RUnlock()
 			return "not main runner"
 		}
-		d.Unlock()
+		d.lock.RUnlock()
 	}
 
 	var (
@@ -653,8 +653,8 @@ func (d *dynamicCtx) recomputing(para string) string {
 }
 
 func (d *dynamicCtx) checkMoveOnTask() bool {
-	d.Lock()
-	defer d.Unlock()
+	d.lock.RLock()
+	defer d.lock.RUnlock()
 
 	disable := d.conf.DisableStatsTask
 
@@ -670,8 +670,8 @@ func (d *dynamicCtx) echoCurrentSetting(ok bool) string {
 		return "noop"
 	}
 
-	d.Lock()
-	defer d.Unlock()
+	d.lock.RLock()
+	defer d.lock.RUnlock()
 
 	return fmt.Sprintf("move_on(%v), use_old_impl(%v), force_update(%v)",
 		!d.conf.DisableStatsTask,
@@ -684,8 +684,8 @@ func (d *dynamicCtx) restoreDefaultSetting(ok bool) string {
 		return "noop"
 	}
 
-	d.Lock()
-	defer d.Unlock()
+	d.lock.Lock()
+	defer d.lock.Unlock()
 
 	d.conf = d.defaultConf
 	function.MoTableRowsSizeUseOldImpl.Store(d.conf.StatsUsingOldImpl)
@@ -698,8 +698,8 @@ func (d *dynamicCtx) restoreDefaultSetting(ok bool) string {
 }
 
 func (d *dynamicCtx) setMoveOnTask(newVal bool) string {
-	d.Lock()
-	defer d.Unlock()
+	d.lock.Lock()
+	defer d.lock.Unlock()
 
 	oldState := !d.conf.DisableStatsTask
 	d.conf.DisableStatsTask = !newVal
@@ -713,8 +713,8 @@ func (d *dynamicCtx) setMoveOnTask(newVal bool) string {
 }
 
 func (d *dynamicCtx) setUseOldImpl(newVal bool) string {
-	d.Lock()
-	defer d.Unlock()
+	d.lock.Lock()
+	defer d.lock.Unlock()
 
 	oldState := d.conf.StatsUsingOldImpl
 	function.MoTableRowsSizeUseOldImpl.Store(newVal)
@@ -729,8 +729,8 @@ func (d *dynamicCtx) setUseOldImpl(newVal bool) string {
 }
 
 func (d *dynamicCtx) setForceUpdate(newVal bool) string {
-	d.Lock()
-	defer d.Unlock()
+	d.lock.Lock()
+	defer d.lock.Unlock()
 
 	oldState := d.conf.ForceUpdate
 	function.MoTableRowsSizeForceUpdate.Store(newVal)
@@ -797,7 +797,7 @@ func (d *dynamicCtx) forceUpdateQuery(
 		to      types.TS
 		val     any
 		stdTime time.Time
-		pairs   = make([]tablePair, 0, len(tbls))
+		pairs   []tablePair
 		oldTS   = make([]*timestamp.Timestamp, len(tbls))
 	)
 
@@ -841,8 +841,8 @@ func (d *dynamicCtx) forceUpdateQuery(
 			}
 		}
 
-		if err = d.getChangedTableList(
-			ctx, eng.service, eng, accs, dbs, tbls, oldTS, &pairs, &to); err != nil {
+		if pairs, to, err = d.getChangedTableList(
+			ctx, eng.service, eng, accs, dbs, tbls, oldTS); err != nil {
 			return
 		}
 
@@ -1033,17 +1033,17 @@ func (d *dynamicCtx) QueryTableStats(
 	eng engine.Engine,
 ) (statsVals [][]any, err error, ok bool) {
 
-	d.Lock()
+	d.lock.RLock()
 	useOld := d.conf.StatsUsingOldImpl
-	d.Unlock()
+	ee := d.de
+	d.lock.RUnlock()
+
 	if useOld {
 		return
 	}
 
 	if eng == nil {
-		d.Lock()
-		eng = d.de
-		d.Unlock()
+		eng = ee
 	}
 
 	var now = time.Now()
@@ -1290,8 +1290,8 @@ func (d *dynamicCtx) LaunchMTSTasksForUT() {
 }
 
 func (d *dynamicCtx) cleanTableStock() {
-	d.Lock()
-	defer d.Unlock()
+	d.lock.Lock()
+	defer d.lock.Unlock()
 
 	for i := range d.tableStock.tbls {
 		// cannot pin this pState
@@ -1331,9 +1331,10 @@ func (d *dynamicCtx) tableStatsExecutor(
 				return err
 			}
 
-			d.Lock()
+			d.lock.RLock()
 			tbls := d.tableStock.tbls[:]
-			d.Unlock()
+			dur := d.conf.UpdateDuration
+			d.lock.RUnlock()
 
 			if err = d.alphaTask(
 				newCtx, service, eng,
@@ -1346,10 +1347,7 @@ func (d *dynamicCtx) tableStatsExecutor(
 				return err
 			}
 
-			d.Lock()
-			executeTicker.Reset(d.conf.UpdateDuration)
-			d.Unlock()
-
+			executeTicker.Reset(dur)
 			d.cleanTableStock()
 		}
 	}
@@ -1359,17 +1357,24 @@ func (d *dynamicCtx) prepare(
 	ctx context.Context,
 	service string,
 	eng engine.Engine,
-) (err error) {
+) error {
 
 	// gama task running only on a specified cn
 	d.launchTask(gamaTaskName)
 
-	d.Lock()
-	defer d.Unlock()
-
 	offsetTS := types.TS{}
-	for len(d.tableStock.tbls) == 0 {
-		accs, dbs, tbls, ts, err := d.getCandidates(ctx, service, eng, d.conf.GetTableListLimit, offsetTS)
+	for {
+
+		d.lock.RLock()
+		ll := len(d.tableStock.tbls)
+		limit := d.conf.GetTableListLimit
+		d.lock.RUnlock()
+
+		if ll != 0 {
+			break
+		}
+
+		accs, dbs, tbls, ts, err := d.getCandidates(ctx, service, eng, limit, offsetTS)
 		if err != nil {
 			return err
 		}
@@ -1378,19 +1383,23 @@ func (d *dynamicCtx) prepare(
 			break
 		}
 
-		err = d.getChangedTableList(
-			ctx, service, eng, accs, dbs, tbls, ts,
-			&d.tableStock.tbls,
-			&d.tableStock.newest)
-
+		pairs, to, err := d.getChangedTableList(ctx, service, eng, accs, dbs, tbls, ts)
 		if err != nil {
 			return err
+		}
+
+		{
+			d.lock.Lock()
+			ll = len(pairs)
+			d.tableStock.newest = to
+			d.tableStock.tbls = append(d.tableStock.tbls, pairs...)
+			d.lock.Unlock()
 		}
 
 		// in case of all candidates have been deleted.
 		offsetTS = types.TimestampToTS(*ts[len(ts)-1])
 
-		if len(d.tableStock.tbls) == 0 && offsetTS.IsEmpty() {
+		if ll == 0 && offsetTS.IsEmpty() {
 			// there exists a large number of deleted table which are new inserts
 			logutil.Info(logHeader,
 				zap.String("source", "prepare"),
@@ -1401,7 +1410,7 @@ func (d *dynamicCtx) prepare(
 		}
 	}
 
-	return err
+	return nil
 }
 
 func (d *dynamicCtx) alphaTask(
@@ -1931,10 +1940,10 @@ func (d *dynamicCtx) gamaTask(
 		de = eng.(*Engine)
 	)
 
-	d.Lock()
+	d.lock.RLock()
 	gamaDur := d.conf.CorrectionDuration
 	gamaLimit := max(d.conf.GetTableListLimit/10, 8192)
-	d.Unlock()
+	d.lock.RUnlock()
 
 	randDuration := func(n int) time.Duration {
 		rnd := rand.New(rand.NewSource(time.Now().UnixNano()))
@@ -2093,9 +2102,7 @@ func (d *dynamicCtx) getChangedTableList(
 	dbs []uint64,
 	tbls []uint64,
 	ts []*timestamp.Timestamp,
-	pairs *[]tablePair,
-	to *types.TS,
-) (err error) {
+) (pairs []tablePair, to types.TS, err error) {
 
 	req := &cmd_util.GetChangedTableListReq{}
 
@@ -2149,7 +2156,11 @@ func (d *dynamicCtx) getChangedTableList(
 	}
 
 	defer func() {
-		err = txnOperator.Commit(newCtx)
+		if err != nil {
+			txnOperator.Rollback(newCtx)
+		} else {
+			err = txnOperator.Commit(newCtx)
+		}
 	}()
 
 	proc := process.NewTopProcess(
@@ -2164,21 +2175,21 @@ func (d *dynamicCtx) getChangedTableList(
 	handler := ctl.GetTNHandlerFunc(api.OpCode_OpGetChangedTableList, whichTN, payload, responseUnmarshaler)
 	ret, err := handler(proc, "DN", "", ctl.MoCtlTNCmdSender)
 	if err != nil {
-		return err
+		return nil, types.TS{}, err
 	}
 
 	resp = ret.Data.([]any)[0].(*cmd_util.GetChangedTableListResp)
 
-	*to = types.TimestampToTS(*resp.Newest)
+	to = types.TimestampToTS(*resp.Newest)
 
 	for i := range resp.AccIds {
 		tp, ok := buildTablePairFromCache(de, resp.AccIds[i],
-			resp.DatabaseIds[i], resp.TableIds[i], *to, false)
+			resp.DatabaseIds[i], resp.TableIds[i], to, false)
 		if !ok {
 			continue
 		}
 
-		*pairs = append(*pairs, tp)
+		pairs = append(pairs, tp)
 	}
 
 	for i := range tbls {
@@ -2196,15 +2207,14 @@ func (d *dynamicCtx) getChangedTableList(
 			onlyUpdateTS = false
 		}
 
-		tp, ok := buildTablePairFromCache(de,
-			accs[i], dbs[i], tbls[i], *to, onlyUpdateTS)
+		tp, ok := buildTablePairFromCache(de, accs[i], dbs[i], tbls[i], to, onlyUpdateTS)
 		if !ok {
 			continue
 		}
-		*pairs = append(*pairs, tp)
+		pairs = append(pairs, tp)
 	}
 
-	return
+	return pairs, to, nil
 }
 
 func subscribeTable(
