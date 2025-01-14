@@ -39,7 +39,7 @@ func Test_ClusterKey1(t *testing.T) {
 	tableId := uint64(20)
 	obj := types.NewObjectid()
 
-	EncodeCluser(packer, tableId, obj)
+	EncodeCluser(packer, tableId, ObjectType_Data, obj)
 
 	buf := packer.Bytes()
 	packer.Reset()
@@ -64,7 +64,7 @@ func Test_ClusterKey2(t *testing.T) {
 	objTemplate := types.NewObjectid()
 	for i := cnt; i >= 1; i-- {
 		obj := objTemplate.Copy(uint16(i))
-		EncodeCluser(packer, 1, &obj)
+		EncodeCluser(packer, 1, ObjectType_Data, &obj)
 		clusters = append(clusters, packer.Bytes())
 		packer.Reset()
 	}
@@ -115,7 +115,7 @@ func mockDataBatch(
 				// Here we hard code the object size to 1000 for testing
 				objectio.SetObjectStatsSize(&obj, uint32(1000))
 				packer.Reset()
-				EncodeCluser(packer, tableid, objname.ObjectId())
+				EncodeCluser(packer, tableid, ObjectType_Data, objname.ObjectId())
 				// if tableid == uint64(4) {
 				// 	t.Logf("debug %s", obj.String())
 				// }
