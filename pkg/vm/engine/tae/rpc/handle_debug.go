@@ -267,6 +267,8 @@ func (h *Handle) HandleGetChangedTableList(
 	}
 
 	ckps := h.GetDB().BGCheckpointRunner.GetAllCheckpoints()
+	logutil.Info("handle get changed table list", zap.Int("got ckp", len(ckps)))
+
 	for i := 0; i < len(ckps); i++ {
 		if ckps[i] == nil {
 			continue
@@ -279,22 +281,22 @@ func (h *Handle) HandleGetChangedTableList(
 
 		if data, err = ckps[i].PrefetchMetaIdx(ctx, h.GetDB().Runtime.Fs); err != nil {
 			logErr(err, ckps[i].String())
-			return nil, err
+			continue
 		}
 
 		if err = ckps[i].ReadMetaIdx(ctx, h.GetDB().Runtime.Fs, data); err != nil {
 			logErr(err, ckps[i].String())
-			return nil, err
+			continue
 		}
 
 		if err = ckps[i].Prefetch(ctx, h.GetDB().Runtime.Fs, data); err != nil {
 			logErr(err, ckps[i].String())
-			return nil, err
+			continue
 		}
 
 		if err = ckps[i].Read(ctx, h.GetDB().Runtime.Fs, data); err != nil {
 			logErr(err, ckps[i].String())
-			return nil, err
+			continue
 		}
 
 		dataObjBat := data.GetObjectBatchs()
@@ -334,7 +336,7 @@ func (h *Handle) HandleGetChangedTableList(
 				dbEntry, err = h.GetDB().Catalog.GetDatabaseByID(dbId)
 				if err != nil {
 					logErr(err, fmt.Sprintf("get db entry failed: %d", dbId))
-					return nil, err
+					continue
 				}
 
 				resp.TableIds = append(resp.TableIds, tblId)
