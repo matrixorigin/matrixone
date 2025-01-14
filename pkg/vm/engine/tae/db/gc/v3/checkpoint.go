@@ -1881,7 +1881,7 @@ func (c *checkpointCleaner) scanCheckpointsLocked(
 		ckps,
 		c.collectCkpData,
 		c.mutUpdateSnapshotMetaLocked,
-		saveSnapshot,
+		nil,
 		memoryBuffer,
 	); err != nil {
 		gcWindow.Close()
