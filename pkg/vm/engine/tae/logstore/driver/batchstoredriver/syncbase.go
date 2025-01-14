@@ -34,7 +34,7 @@ var (
 
 type syncBase struct {
 	*sync.RWMutex
-	Lsn              uint64
+	DSN              uint64
 	lsnmu            sync.RWMutex
 	checkpointing    atomic.Uint64
 	ckpmu            *sync.RWMutex
@@ -71,7 +71,7 @@ func (base *syncBase) GetVersionByGLSN(lsn uint64) (int, error) {
 }
 
 func (base *syncBase) OnEntryReceived(v *entry.Entry) error {
-	base.syncing = v.Lsn
+	base.syncing = v.DSN
 	base.addrmu.Lock()
 	defer base.addrmu.Unlock()
 	addr := v.Ctx.(*VFileAddress)
@@ -80,7 +80,7 @@ func (base *syncBase) OnEntryReceived(v *entry.Entry) error {
 		interval = common.NewClosedIntervals()
 		base.addrs[addr.Version] = interval
 	}
-	interval.TryMerge(*common.NewClosedIntervalsByInt(v.Lsn))
+	interval.TryMerge(common.NewClosedIntervalsByInt(v.DSN))
 	return nil
 }
 
@@ -102,14 +102,14 @@ func (base *syncBase) OnCommit() {
 func (base *syncBase) AllocateLsn() uint64 {
 	base.lsnmu.Lock()
 	defer base.lsnmu.Unlock()
-	base.Lsn++
-	return base.Lsn
+	base.DSN++
+	return base.DSN
 }
 
-func (base *syncBase) GetCurrSeqNum() uint64 {
+func (base *syncBase) GetDSN() uint64 {
 	base.lsnmu.RLock()
 	defer base.lsnmu.RUnlock()
-	return base.Lsn
+	return base.DSN
 }
 
 func (base *syncBase) onTruncatedFile(id int) {
@@ -117,7 +117,7 @@ func (base *syncBase) onTruncatedFile(id int) {
 }
 
 func (base *syncBase) onReplay(r *replayer) {
-	base.Lsn = r.maxlsn
+	base.DSN = r.maxlsn
 	base.synced = r.maxlsn
 	base.syncing = r.maxlsn
 	if r.minlsn != math.MaxUint64 {

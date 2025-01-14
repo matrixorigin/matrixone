@@ -20,46 +20,48 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
+	"go.uber.org/zap"
 )
 
 var ErrTooMuchPenddings = moerr.NewInternalErrorNoCtx("too much penddings")
 
 func (d *LogServiceDriver) Append(e *entry.Entry) error {
-	d.driverLsnMu.Lock()
-	e.Lsn = d.allocateDriverLsn()
-	_, err := d.preAppendLoop.Enqueue(e)
+	d.dsnmu.Lock()
+	e.DSN = d.allocateDSNLocked()
+	_, err := d.doAppendLoop.Enqueue(e)
 	if err != nil {
 		panic(err)
 	}
-	d.driverLsnMu.Unlock()
+	d.dsnmu.Unlock()
 	return nil
 }
 
 func (d *LogServiceDriver) getAppender() *driverAppender {
-	if int(d.appendable.entry.payloadSize) > d.config.RecordSize {
-		d.appendAppender()
+	if int(d.currentAppender.entry.payloadSize) > d.config.RecordSize {
+		d.flushCurrentAppender()
 	}
-	return d.appendable
+	return d.currentAppender
 }
 
-func (d *LogServiceDriver) appendAppender() {
-	d.appendtimes++
-	d.onAppendQueue(d.appendable)
-	d.appendedQueue <- d.appendable
-	d.appendable = newDriverAppender()
+// this function flushes the current appender to the append queue and
+// creates a new appender as the current appender
+func (d *LogServiceDriver) flushCurrentAppender() {
+	d.scheduleAppend(d.currentAppender)
+	d.appendWaitQueue <- d.currentAppender
+	d.currentAppender = newDriverAppender()
 }
 
-func (d *LogServiceDriver) onPreAppend(items ...any) {
+func (d *LogServiceDriver) onAppendRequests(items ...any) {
 	for _, item := range items {
 		e := item.(*entry.Entry)
 		appender := d.getAppender()
 		appender.appendEntry(e)
 	}
-	d.appendAppender()
+	d.flushCurrentAppender()
 }
 
-func (d *LogServiceDriver) onAppendQueue(appender *driverAppender) {
-	appender.client, appender.appendlsn = d.getClient()
+func (d *LogServiceDriver) scheduleAppend(appender *driverAppender) {
+	appender.client, appender.writeToken = d.getClientForWrite()
 	appender.entry.SetAppended(d.getSynced())
 	appender.contextDuration = d.config.NewClientDuration
 	appender.wg.Add(1)
@@ -68,28 +70,46 @@ func (d *LogServiceDriver) onAppendQueue(appender *driverAppender) {
 	})
 }
 
-func (d *LogServiceDriver) getClient() (client *clientWithRecord, lsn uint64) {
-	lsn, err := d.retryAllocateAppendLsnWithTimeout(uint64(d.config.ClientMaxCount), time.Second)
-	if err != nil {
+// Node:
+// this function must be called in serial due to the write token
+func (d *LogServiceDriver) getClientForWrite() (client *wrappedClient, token uint64) {
+	var err error
+	if token, err = d.applyWriteToken(
+		uint64(d.config.ClientMaxCount), time.Second,
+	); err != nil {
+		// should never happen
 		panic(err)
 	}
-	client, err = d.clientPool.Get()
+	if client, err = d.clientPool.Get(); err == nil {
+		return
+	}
+
+	var (
+		retryCount = 0
+		now        = time.Now()
+		logger     = logutil.Info
+	)
+	if err = RetryWithTimeout(d.config.RetryTimeout, func() (shouldReturn bool) {
+		retryCount++
+		client, err = d.clientPool.Get()
+		return err == nil
+	}); err != nil {
+		logger = logutil.Error
+	}
+	logger(
+		"Wal-Get-Client",
+		zap.Int("retry-count", retryCount),
+		zap.Error(err),
+		zap.Duration("duration", time.Since(now)),
+	)
 	if err != nil {
-		logutil.Infof("LogService Driver: retry append err is %v", err)
-		err = RetryWithTimeout(d.config.RetryTimeout, func() (shouldReturn bool) {
-			client, err = d.clientPool.Get()
-			return err == nil
-		})
-		if err != nil {
-			panic(err)
-		}
+		panic(err)
 	}
 	return
 }
 
-func (d *LogServiceDriver) onAppendedQueue(items []any, q chan any) {
-	appenders := make([]*driverAppender, 0)
-
+func (d *LogServiceDriver) onWaitAppendRequests(items []any, nextQueue chan any) {
+	appenders := make([]*driverAppender, 0, len(items))
 	for _, item := range items {
 		appender := item.(*driverAppender)
 		appender.waitDone()
@@ -97,17 +117,17 @@ func (d *LogServiceDriver) onAppendedQueue(items []any, q chan any) {
 		appender.freeEntries()
 		appenders = append(appenders, appender)
 	}
-	q <- appenders
+	nextQueue <- appenders
 }
 
-func (d *LogServiceDriver) onPostAppendQueue(items []any, _ chan any) {
-	appended := make([]uint64, 0)
+func (d *LogServiceDriver) onAppendDone(items []any, _ chan any) {
+	tokens := make([]uint64, 0, len(items))
 	for _, v := range items {
-		batch := v.([]*driverAppender)
-		for _, appender := range batch {
+		appenders := v.([]*driverAppender)
+		for _, appender := range appenders {
 			d.logAppend(appender)
-			appended = append(appended, appender.appendlsn)
+			tokens = append(tokens, appender.writeToken)
 		}
 	}
-	d.onAppend(appended)
+	d.putbackWriteTokens(tokens)
 }

@@ -67,7 +67,6 @@ func LenOfBats(bats []*containers.Batch) int {
 func PrintCheckpointStats(t *testing.T, tae *db.DB) {
 	t.Logf("GetCheckpointedLSN: %d", tae.Wal.GetCheckpointed())
 	t.Logf("GetPenddingLSNCnt: %d", tae.Wal.GetPenddingCnt())
-	t.Logf("GetCurrSeqNum: %d", tae.Wal.GetCurrSeqNum())
 }
 
 func CreateDB(t *testing.T, e *db.DB, dbName string) {
