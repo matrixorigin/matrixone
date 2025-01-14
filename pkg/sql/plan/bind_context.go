@@ -40,7 +40,7 @@ func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 		lower:          1,
 		parent:         parent,
 		boundCtes:      make(map[string]*CTERef),
-		boundViews:     make(map[string]*tree.CreateView),
+		boundViews:     make(map[[2]string]*tree.CreateView),
 	}
 
 	if builder != nil {
@@ -129,23 +129,34 @@ func (bc *BindContext) cteInBinding(name string) bool {
 	return false
 }
 
-func (bc *BindContext) viewInBinding(name string, view *tree.CreateView) bool {
+func (bc *BindContext) viewInBinding(schema, name string, view *tree.CreateView) bool {
 	cur := bc
+	pair := [2]string{schema, name}
 	for cur != nil {
-		if _, ok := cur.boundViews[name]; ok {
+		if _, ok := cur.boundViews[pair]; ok {
 			return true
 		}
 		cur = cur.parent
 	}
-	bc.boundViews[name] = view
+	bc.boundViews[pair] = view
 	return false
+}
+
+func (bc *BindContext) recordViews(views []string) {
+	//go to the top BindContext
+	cur := bc
+	for cur != nil && cur.parent != nil {
+		cur = cur.parent
+	}
+	//save views to the top BindContext
+	if cur != nil {
+		cur.views = append(cur.views, views...)
+	}
 }
 
 func (bc *BindContext) mergeContexts(ctx context.Context, left, right *BindContext) error {
 	left.parent = bc
 	right.parent = bc
-	bc.leftChild = left
-	bc.rightChild = right
 
 	for _, binding := range left.bindings {
 		bc.bindings = append(bc.bindings, binding)
