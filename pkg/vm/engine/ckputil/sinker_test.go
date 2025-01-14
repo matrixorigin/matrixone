@@ -39,20 +39,22 @@ func Test_ClusterKey1(t *testing.T) {
 	tableId := uint64(20)
 	obj := types.NewObjectid()
 
-	EncodeCluser(packer, tableId, obj)
+	EncodeCluser(packer, tableId, ObjectType_Data, obj)
 
 	buf := packer.Bytes()
 	packer.Reset()
 
 	tuple, _, schemas, err := types.DecodeTuple(buf)
 	require.NoError(t, err)
-	require.Equalf(t, 2, len(schemas), "schemas: %v", schemas)
+	require.Equalf(t, 3, len(schemas), "schemas: %v", schemas)
 	require.Equalf(t, types.T_uint64, schemas[0], "schemas: %v", schemas)
-	require.Equalf(t, types.T_Objectid, schemas[1], "schemas: %v", schemas)
+	require.Equalf(t, types.T_int8, schemas[1], "schemas: %v", schemas)
+	require.Equalf(t, types.T_Objectid, schemas[2], "schemas: %v", schemas)
 
 	t.Log(tuple.SQLStrings(nil))
 	require.Equal(t, tableId, tuple[0].(uint64))
-	oid := tuple[1].(types.Objectid)
+	require.Equal(t, ObjectType_Data, tuple[1].(int8))
+	oid := tuple[2].(types.Objectid)
 	require.True(t, obj.EQ(&oid))
 }
 
@@ -64,7 +66,7 @@ func Test_ClusterKey2(t *testing.T) {
 	objTemplate := types.NewObjectid()
 	for i := cnt; i >= 1; i-- {
 		obj := objTemplate.Copy(uint16(i))
-		EncodeCluser(packer, 1, &obj)
+		EncodeCluser(packer, 1, ObjectType_Data, &obj)
 		clusters = append(clusters, packer.Bytes())
 		packer.Reset()
 	}
@@ -76,9 +78,10 @@ func Test_ClusterKey2(t *testing.T) {
 	for _, cluster := range clusters {
 		tuple, _, _, err := types.DecodeTuple(cluster)
 		require.NoError(t, err)
-		require.Equalf(t, 2, len(tuple), "%v", tuple)
+		require.Equalf(t, 3, len(tuple), "%v", tuple)
 		require.Equal(t, uint64(1), tuple[0].(uint64))
-		obj := tuple[1].(types.Objectid)
+		require.Equal(t, ObjectType_Data, tuple[1].(int8))
+		obj := tuple[2].(types.Objectid)
 		curr := obj.Offset()
 		require.Truef(t, curr > last, "%v,%v", curr, last)
 		last = curr
@@ -88,7 +91,7 @@ func Test_ClusterKey2(t *testing.T) {
 func mockDataBatch(
 	t *testing.T,
 	data *batch.Batch,
-	rows int,
+	dataRows, tombstoneRows int,
 	packer *types.Packer,
 	accountId uint32,
 	getDBID func(int) uint64,
@@ -98,14 +101,13 @@ func mockDataBatch(
 	data.CleanOnlyData()
 	for i, vec := range data.Vecs {
 		if i == TableObjectsAttr_Accout_Idx {
-			for j := 0; j < rows; j++ {
-				require.NoError(t, vector.AppendMultiFixed(vec, accountId, false, rows, mp))
-			}
+			require.NoError(t, vector.AppendMultiFixed(vec, accountId, false, dataRows+tombstoneRows, mp))
 		} else if i == TableObjectsAttr_DB_Idx {
 			tableVec := data.Vecs[TableObjectsAttr_Table_Idx]
+			objectTypeVec := data.Vecs[TableObjectsAttr_ObjectType_Idx]
 			idVec := data.Vecs[TableObjectsAttr_ID_Idx]
 			clusterVec := data.Vecs[TableObjectsAttr_Cluster_Idx]
-			for j := 0; j < rows; j++ {
+			for j := 0; j < dataRows+tombstoneRows; j++ {
 				dbid := getDBID(j)
 				tableid := getTBLID(dbid, j)
 
@@ -115,10 +117,16 @@ func mockDataBatch(
 				// Here we hard code the object size to 1000 for testing
 				objectio.SetObjectStatsSize(&obj, uint32(1000))
 				packer.Reset()
-				EncodeCluser(packer, tableid, objname.ObjectId())
+				EncodeCluser(packer, tableid, ObjectType_Data, objname.ObjectId())
 				// if tableid == uint64(4) {
 				// 	t.Logf("debug %s", obj.String())
 				// }
+
+				if j < dataRows {
+					require.NoError(t, vector.AppendFixed(objectTypeVec, ObjectType_Data, false, mp))
+				} else {
+					require.NoError(t, vector.AppendFixed(objectTypeVec, ObjectType_Tombstone, false, mp))
+				}
 
 				require.NoError(t, vector.AppendFixed(vec, dbid, false, mp))
 				require.NoError(t, vector.AppendFixed(tableVec, tableid, false, mp))
@@ -126,16 +134,16 @@ func mockDataBatch(
 				require.NoError(t, vector.AppendBytes(clusterVec, packer.Bytes(), false, mp))
 			}
 		} else if i == TableObjectsAttr_CreateTS_Idx {
-			for j := 0; j < rows; j++ {
+			for j := 0; j < dataRows+tombstoneRows; j++ {
 				require.NoError(t, vector.AppendFixed(vec, types.NextGlobalTsForTest(), false, mp))
 			}
 		} else if i == TableObjectsAttr_DeleteTS_Idx {
-			for j := 0; j < rows; j++ {
+			for j := 0; j < dataRows+tombstoneRows; j++ {
 				require.NoError(t, vector.AppendFixed(vec, types.NextGlobalTsForTest(), false, mp))
 			}
 		}
 	}
-	data.SetRowCount(rows)
+	data.SetRowCount(dataRows + tombstoneRows)
 }
 
 func Test_Sinker1(t *testing.T) {
@@ -180,7 +188,7 @@ func Test_Sinker1(t *testing.T) {
 	rows := 0
 	for i := 0; i < 5; i++ {
 		mockDataBatch(
-			t, bat, 100, packer, accountId, getDBID, getTBLID, mp,
+			t, bat, 100, 0, packer, accountId, getDBID, getTBLID, mp,
 		)
 		require.NoError(t, sinker.Write(ctx, bat))
 		rows += 100
