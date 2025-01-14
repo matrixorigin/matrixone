@@ -229,7 +229,6 @@ func (cleaner *DiskCleaner) scheduleGCJob(ctx context.Context) (err error) {
 		err = moerr.NewTxnControlErrorNoCtxf("GC-Not-Write-Mode")
 		return
 	}
-	logutil.Info("GC-Send-Intents")
 	_, err = cleaner.processQueue.Enqueue(JT_GCExecute)
 	return
 }

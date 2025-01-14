@@ -295,8 +295,9 @@ func (tbl *txnTable) TransferDeletes(
 			iter := sel.Iterator()
 			pkType := &tbl.GetLocalSchema(false).GetPrimaryKey().Type
 			transferFn := func(pkVec, rowIDVec containers.Vector) (err error) {
+				rowids := vector.MustFixedColWithTypeCheck[types.Rowid](rowIDVec.GetDownstreamVector())
 				for i := 0; i < rowIDVec.Length(); i++ {
-					rowID := rowIDVec.Get(i).(types.Rowid)
+					rowID := rowids[i]
 					blkID2, _ := rowID.Decode()
 					if !blkID2.Object().EQ(obj.ID()) {
 						continue
@@ -1623,14 +1624,16 @@ func (tbl *txnTable) contains(
 	}
 	if tbl.tombstoneTable.tableSpace.node != nil {
 		workspaceDeleteBatch := tbl.tombstoneTable.tableSpace.node.data
+		keyRowids := vector.MustFixedColWithTypeCheck[types.Rowid](keys.GetDownstreamVector())
+		workspaceRowids := vector.MustFixedColWithTypeCheck[types.Rowid](
+			workspaceDeleteBatch.GetVectorByName(objectio.TombstoneAttr_Rowid_Attr).GetDownstreamVector(),
+		)
 		for j := 0; j < keys.Length(); j++ {
 			if keys.IsNull(j) {
 				continue
 			}
-			rid := keys.Get(j).(types.Rowid)
 			for i := 0; i < workspaceDeleteBatch.Length(); i++ {
-				rowID := workspaceDeleteBatch.GetVectorByName(objectio.TombstoneAttr_Rowid_Attr).Get(i).(types.Rowid)
-				if rid == rowID {
+				if keyRowids[j] == workspaceRowids[i] {
 					containers.UpdateValue(keys.GetDownstreamVector(), uint32(j), nil, true, mp)
 				}
 			}
@@ -1795,9 +1798,11 @@ func (tbl *txnTable) IsDeletedInWorkSpace(blkID *objectio.Blockid, row uint32) (
 	}
 	if tbl.tombstoneTable.tableSpace.node != nil {
 		node := tbl.tombstoneTable.tableSpace.node
+		rowids := vector.MustFixedColWithTypeCheck[types.Rowid](
+			node.data.GetVectorByName(objectio.TombstoneAttr_Rowid_Attr).GetDownstreamVector(),
+		)
 		for i := 0; i < node.data.Length(); i++ {
-			rowID := node.data.GetVectorByName(objectio.TombstoneAttr_Rowid_Attr).Get(i).(types.Rowid)
-			blk, rowOffset := rowID.Decode()
+			blk, rowOffset := rowids[i].Decode()
 			if blk.EQ(blkID) && row == rowOffset {
 				return true, nil
 			}
@@ -1836,9 +1841,9 @@ func (tbl *txnTable) IsDeletedInWorkSpace(blkID *objectio.Blockid, row uint32) (
 				return false, err
 			}
 			defer closeFunc()
+			rowids := vector.MustFixedColWithTypeCheck[types.Rowid](vectors[0].GetDownstreamVector())
 			for i := 0; i < vectors[0].Length(); i++ {
-				rowID := vectors[0].Get(i).(types.Rowid)
-				blk, rowOffset := rowID.Decode()
+				blk, rowOffset := rowids[i].Decode()
 				if blk.EQ(blkID) && row == rowOffset {
 					return true, nil
 				}

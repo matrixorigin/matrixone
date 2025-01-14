@@ -1450,6 +1450,8 @@ func (tp *tablePair) Done(err error) {
 		}
 		tp.errChan = nil
 	}
+
+	tp.pState = nil
 }
 
 type statsList struct {
@@ -1534,6 +1536,17 @@ func (d *dynamicCtx) LaunchMTSTasksForUT() {
 	d.launchTask(betaTaskName)
 }
 
+func (d *dynamicCtx) cleanTableStock() {
+	d.Lock()
+	defer d.Unlock()
+
+	for i := range d.tableStock.tbls {
+		// cannot pin this pState
+		d.tableStock.tbls[i].pState = nil
+	}
+	d.tableStock.tbls = d.tableStock.tbls[:0]
+}
+
 func (d *dynamicCtx) tableStatsExecutor(
 	ctx context.Context,
 	service string,
@@ -1541,6 +1554,7 @@ func (d *dynamicCtx) tableStatsExecutor(
 ) (err error) {
 
 	defer func() {
+		d.cleanTableStock()
 		logutil.Info(logHeader,
 			zap.String("source", "table stats top executor"),
 			zap.String("exit by", fmt.Sprintf("%v", err)))
@@ -1586,7 +1600,8 @@ func (d *dynamicCtx) tableStatsExecutor(
 
 			d.Lock()
 
-			if len(d.tableStock.tbls) > 0 && !timeout {
+			executeTicker.Reset(d.conf.UpdateDuration)
+			if len(d.tableStock.tbls) > 0 && !timeout && err == nil {
 				// if alpha timeout, this round should mark as failed,
 				// skip the update of the special stats start.
 				if _, err = d.updateSpecialStatsStart(
@@ -1596,9 +1611,9 @@ func (d *dynamicCtx) tableStatsExecutor(
 				}
 			}
 
-			executeTicker.Reset(d.conf.UpdateDuration)
-			d.tableStock.tbls = d.tableStock.tbls[:0]
 			d.Unlock()
+
+			d.cleanTableStock()
 		}
 	}
 }
@@ -1774,6 +1789,8 @@ func (d *dynamicCtx) alphaTask(
 				if waitErrDur >= time.Minute*5 {
 					// waiting reached the limit
 					for i := range tblBackup {
+						// cannot pin this pState
+						tblBackup[i].pState = nil
 						if !tblBackup[i].valid {
 							continue
 						}

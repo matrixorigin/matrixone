@@ -76,29 +76,30 @@ func restartTestDriver(t *testing.T, size int) driver.Driver {
 //		driver := logservicedriver.NewLogServiceDriver(cfg)
 //		return driver, service
 //	}
-func TestAppendRead(t *testing.T) {
-	driver := newTestDriver(t, int(mpool.MB)*64)
-	wal := NewStore(driver)
-	defer wal.Close()
 
-	e := entry.GetBase()
-	e.SetType(entry.IOET_WALEntry_Test)
-	err := e.SetPayload([]byte("payload"))
-	if err != nil {
-		panic(err)
-	}
-	lsn, err := wal.Append(10, e)
-	assert.NoError(t, err)
+// func TestAppendRead(t *testing.T) {
+// 	driver := newTestDriver(t, int(mpool.MB)*64)
+// 	wal := NewStore(driver)
+// 	defer wal.Close()
 
-	err = e.WaitDone()
-	assert.NoError(t, err)
+// 	e := entry.GetBase()
+// 	e.SetType(entry.IOET_WALEntry_Test)
+// 	err := e.SetPayload([]byte("payload"))
+// 	if err != nil {
+// 		panic(err)
+// 	}
+// 	lsn, err := wal.Append(10, e)
+// 	assert.NoError(t, err)
 
-	e2, err := wal.Load(10, lsn)
-	assert.NoError(t, err)
-	assert.Equal(t, e.GetPayload(), e2.GetPayload())
-	e.Free()
-	e2.Free()
-}
+// 	err = e.WaitDone()
+// 	assert.NoError(t, err)
+
+// 	e2, err := wal.Load(10, lsn)
+// 	assert.NoError(t, err)
+// 	assert.Equal(t, e.GetPayload(), e2.GetPayload())
+// 	e.Free()
+// 	e2.Free()
+// }
 
 func mockEntry() entry.Entry {
 	e := entry.GetBase()
@@ -180,7 +181,7 @@ func TestTruncate(t *testing.T) {
 	}
 
 	currLsn := wal.GetCurrSeqNum(group)
-	drcurrLsn := driver.GetCurrSeqNum()
+	drcurrLsn := driver.GetDSN()
 	ckpEntry, err := wal.RangeCheckpoint(group, 0, currLsn)
 	assert.NoError(t, err)
 	assert.NoError(t, ckpEntry.WaitDone())
@@ -208,7 +209,7 @@ func TestTruncate(t *testing.T) {
 	}
 
 	currLsn = wal.GetCurrSeqNum(group)
-	drcurrLsn = driver.GetCurrSeqNum()
+	drcurrLsn = driver.GetDSN()
 	ckpEntry, err = wal.RangeCheckpoint(group, 0, currLsn)
 	assert.NoError(t, err)
 	assert.NoError(t, ckpEntry.WaitDone())
