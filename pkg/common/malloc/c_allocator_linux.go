@@ -12,14 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//go:build cgo
+
 package malloc
 
-const (
-	KB = 1 << 10
-	MB = 1 << 20
-	GB = 1 << 30
-)
+/*
+#include <stdlib.h>
+#include <malloc.h>
+*/
+import "C"
 
-func ptrTo[T any](v T) *T {
-	return &v
+func init() {
+	// malloc tunings
+	C.mallopt(C.M_TOP_PAD, 0)        // no sbrk padding
+	C.mallopt(C.M_MMAP_THRESHOLD, 0) // always use mmap
+}
+
+func returnMallocMemoryToOS() {
+	C.malloc_trim(0)
 }

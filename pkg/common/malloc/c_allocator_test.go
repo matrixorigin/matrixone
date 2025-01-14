@@ -35,3 +35,12 @@ func FuzzCAllocator(f *testing.F) {
 		return NewCAllocator()
 	})
 }
+
+func TestCAllocatorReturnToOSThreshold(t *testing.T) {
+	allocator := NewCAllocator()
+	_, dec, err := allocator.Allocate(cMallocReturnToOSThreshold*2, NoHints)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dec.Deallocate(NoHints)
+}
