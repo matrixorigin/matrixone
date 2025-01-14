@@ -1823,56 +1823,56 @@ func (c *checkpointCleaner) scanCheckpointsLocked(
 
 	var snapshotFile, accountFile ioutil.TSRangeFile
 	newFiles = make([]string, 0, 3)
-	saveSnapshot := func() (err2 error) {
-		select {
-		case <-ctx.Done():
-			err2 = context.Cause(ctx)
-			return
-		default:
-		}
-		name := ioutil.EncodeSnapshotMetadataName(
-			ckps[0].GetStart(), ckps[len(ckps)-1].GetEnd(),
-		)
-		if snapSize, err2 = c.mutation.snapshotMeta.SaveMeta(
-			ioutil.MakeGCFullName(name),
-			c.fs.Service,
-		); err2 != nil {
-			logutil.Error(
-				"GC-SAVE-SNAPSHOT-META-ERROR",
-				zap.String("task", c.TaskNameLocked()),
-				zap.Error(err2),
-			)
-			return
-		}
-		newFiles = append(newFiles, ioutil.MakeGCFullName(name))
-		snapshotFile = ioutil.NewTSRangeFile(
-			name,
-			ioutil.SnapshotExt,
-			ckps[0].GetStart(),
-			ckps[len(ckps)-1].GetEnd(),
-		)
-		name = ioutil.EncodeAcctMetadataName(
-			ckps[0].GetStart(), ckps[len(ckps)-1].GetEnd(),
-		)
-		if tableSize, err2 = c.mutation.snapshotMeta.SaveTableInfo(
-			ioutil.MakeGCFullName(name),
-			c.fs.Service,
-		); err2 != nil {
-			logutil.Error(
-				"GC-SAVE-TABLE-META-ERROR",
-				zap.String("task", c.TaskNameLocked()),
-				zap.Error(err2),
-			)
-		}
-		newFiles = append(newFiles, ioutil.MakeGCFullName(name))
-		accountFile = ioutil.NewTSRangeFile(
-			name,
-			ioutil.AcctExt,
-			ckps[0].GetStart(),
-			ckps[len(ckps)-1].GetEnd(),
-		)
-		return
-	}
+	//saveSnapshot := func() (err2 error) {
+	//	select {
+	//	case <-ctx.Done():
+	//		err2 = context.Cause(ctx)
+	//		return
+	//	default:
+	//	}
+	//	name := ioutil.EncodeSnapshotMetadataName(
+	//		ckps[0].GetStart(), ckps[len(ckps)-1].GetEnd(),
+	//	)
+	//	if snapSize, err2 = c.mutation.snapshotMeta.SaveMeta(
+	//		ioutil.MakeGCFullName(name),
+	//		c.fs.Service,
+	//	); err2 != nil {
+	//		logutil.Error(
+	//			"GC-SAVE-SNAPSHOT-META-ERROR",
+	//			zap.String("task", c.TaskNameLocked()),
+	//			zap.Error(err2),
+	//		)
+	//		return
+	//	}
+	//	newFiles = append(newFiles, ioutil.MakeGCFullName(name))
+	//	snapshotFile = ioutil.NewTSRangeFile(
+	//		name,
+	//		ioutil.SnapshotExt,
+	//		ckps[0].GetStart(),
+	//		ckps[len(ckps)-1].GetEnd(),
+	//	)
+	//	name = ioutil.EncodeAcctMetadataName(
+	//		ckps[0].GetStart(), ckps[len(ckps)-1].GetEnd(),
+	//	)
+	//	if tableSize, err2 = c.mutation.snapshotMeta.SaveTableInfo(
+	//		ioutil.MakeGCFullName(name),
+	//		c.fs.Service,
+	//	); err2 != nil {
+	//		logutil.Error(
+	//			"GC-SAVE-TABLE-META-ERROR",
+	//			zap.String("task", c.TaskNameLocked()),
+	//			zap.Error(err2),
+	//		)
+	//	}
+	//	newFiles = append(newFiles, ioutil.MakeGCFullName(name))
+	//	accountFile = ioutil.NewTSRangeFile(
+	//		name,
+	//		ioutil.AcctExt,
+	//		ckps[0].GetStart(),
+	//		ckps[len(ckps)-1].GetEnd(),
+	//	)
+	//	return
+	//}
 
 	gcWindow = NewGCWindow(c.mp, c.fs.Service)
 	var gcMetaFile string
