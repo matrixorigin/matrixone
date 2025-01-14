@@ -841,7 +841,7 @@ func (d *dynamicCtx) forceUpdateQuery(
 			}
 		}
 
-		if pairs, to, err = d.getChangedTableList(
+		if pairs, _, err = d.getChangedTableList(
 			ctx, eng.service, eng, accs, dbs, tbls, oldTS); err != nil {
 			return
 		}
