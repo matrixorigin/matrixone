@@ -39,13 +39,13 @@ type clientConfig struct {
 	retryDuration         time.Duration
 }
 
-type clientWithRecord struct {
+type wrappedClient struct {
 	c      logservice.Client
 	record logservice.LogRecord
 	id     int
 }
 
-func newClient(factory LogServiceClientFactory, recordSize int, retryDuration time.Duration) *clientWithRecord {
+func newClient(factory LogServiceClientFactory, recordSize int, retryDuration time.Duration) *wrappedClient {
 	logserviceClient, err := factory()
 	if err != nil {
 		RetryWithTimeout(retryDuration, func() (shouldReturn bool) {
@@ -56,18 +56,18 @@ func newClient(factory LogServiceClientFactory, recordSize int, retryDuration ti
 			panic(err)
 		}
 	}
-	c := &clientWithRecord{
+	c := &wrappedClient{
 		c:      logserviceClient,
 		record: logserviceClient.GetLogRecord(recordSize),
 	}
 	return c
 }
 
-func (c *clientWithRecord) Close() {
+func (c *wrappedClient) Close() {
 	c.c.Close()
 }
 
-func (c *clientWithRecord) TryResize(size int) {
+func (c *wrappedClient) TryResize(size int) {
 	if len(c.record.Payload()) < size {
 		c.record = c.c.GetLogRecord(size)
 	}
@@ -80,9 +80,9 @@ type clientpool struct {
 
 	closed atomic.Int32
 
-	freeClients   []*clientWithRecord
-	clientFactory func() *clientWithRecord
-	closefn       func(*clientWithRecord)
+	freeClients   []*wrappedClient
+	clientFactory func() *wrappedClient
+	closefn       func(*wrappedClient)
 	mu            sync.Mutex
 	cfg           *clientConfig
 }
@@ -91,11 +91,11 @@ func newClientPool(maxsize int, cfg *clientConfig) *clientpool {
 	pool := &clientpool{
 		maxCount:    maxsize,
 		getTimeout:  cfg.GetClientRetryTimeOut,
-		freeClients: make([]*clientWithRecord, maxsize),
+		freeClients: make([]*wrappedClient, maxsize),
 		mu:          sync.Mutex{},
 		cfg:         cfg,
 	}
-	pool.clientFactory = pool.newClientFactory(cfg)
+	pool.clientFactory = pool.createClientFactory(cfg)
 	pool.closefn = pool.onClose
 
 	for i := 0; i < maxsize; i++ {
@@ -104,8 +104,8 @@ func newClientPool(maxsize int, cfg *clientConfig) *clientpool {
 	return pool
 }
 
-func (c *clientpool) newClientFactory(cfg *clientConfig) func() *clientWithRecord {
-	return func() *clientWithRecord {
+func (c *clientpool) createClientFactory(cfg *clientConfig) func() *wrappedClient {
+	return func() *wrappedClient {
 		c.count++
 		client := newClient(cfg.clientFactory, cfg.recordSize, cfg.retryDuration)
 		client.id = c.count
@@ -129,11 +129,11 @@ func (c *clientpool) Close() {
 	c.mu.Unlock()
 }
 
-func (c *clientpool) onClose(client *clientWithRecord) {
+func (c *clientpool) onClose(client *wrappedClient) {
 	client.Close()
 }
 
-// func (c *clientpool) GetAndWait() (*clientWithRecord, error) {
+// func (c *clientpool) GetAndWait() (*wrappedClient, error) {
 // 	client, err := c.Get()
 // 	if err == ErrNoClientAvailable {
 // 		retryWithTimeout(c.getTimeout, func() (shouldReturn bool) {
@@ -144,7 +144,7 @@ func (c *clientpool) onClose(client *clientWithRecord) {
 // 	return client, nil
 // }
 
-func (c *clientpool) Get() (*clientWithRecord, error) {
+func (c *clientpool) Get() (*wrappedClient, error) {
 	if c.IsClosed() {
 		return nil, ErrClientPoolClosed
 	}
@@ -168,7 +168,7 @@ func (c *clientpool) IsClosed() bool {
 	return c.closed.Load() == 1
 }
 
-func (c *clientpool) Put(client *clientWithRecord) {
+func (c *clientpool) Put(client *wrappedClient) {
 	if len(client.record.Payload()) > DefaultRecordSize {
 		client.record = client.c.GetLogRecord(DefaultRecordSize)
 	}
