@@ -553,8 +553,8 @@ func (c *CkpReplayer) ReplayObjectlist(phase string) (err error) {
 	logutil.Info(
 		"Replay-Checkpoints",
 		zap.String("phase", phase),
-		zap.Uint64("max table tid", maxTableID),
-		zap.Int("object count (create count + delete count)", maxObjectCount),
+		zap.Uint64("max-table-id", maxTableID),
+		zap.Int("object-count", maxObjectCount),
 		zap.Duration("apply-cost", c.applyDuration),
 		zap.Duration("read-cost", c.readDuration),
 		zap.Int("apply-count", c.applyCount),

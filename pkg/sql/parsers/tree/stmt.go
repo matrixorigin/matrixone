@@ -671,7 +671,7 @@ func (node *DropPitr) StmtKind() StmtKind {
 }
 
 func (node *ShowRecoveryWindow) StmtKind() StmtKind {
-	return frontendStatusTyp
+	return compositeResRowType
 }
 
 func (node *CreateCDC) StmtKind() StmtKind { return frontendStatusTyp }

@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2025 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,30 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package driver
+package v2_1_0
 
-import (
-	"context"
+import "github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
-)
-
-type Driver interface {
-	Append(*entry.Entry) error
-	Truncate(lsn uint64) error
-	GetTruncated() (lsn uint64, err error)
-	Close() error
-	Replay(ctx context.Context, h ApplyHandle) error
-	GetDSN() uint64
-}
-
-type ReplayEntryState int8
-
-const (
-	RE_Truncate ReplayEntryState = iota
-	RE_Internal
-	RE_Nomal
-	RE_Invalid
-)
-
-type ApplyHandle = func(*entry.Entry) (replayEntryState ReplayEntryState)
+var tenantUpgEntries = []versions.UpgradeEntry{}
