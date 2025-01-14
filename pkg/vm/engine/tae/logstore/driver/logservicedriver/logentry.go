@@ -30,6 +30,7 @@ var clearBuffer = make([]byte, EmptyLogEntrySize)
 const (
 	TypeSize          = 2
 	VersionSize       = 2
+	CmdTypeSize       = 2
 	ReservedSize      = 32
 	EntryCountSize    = 4
 	EntryStartDSNSize = 8
@@ -39,7 +40,8 @@ const (
 
 	TypeOffset          = 0
 	VersionOffset       = TypeOffset + TypeSize
-	ReservedOffset      = VersionOffset + VersionSize
+	CmdTypeOffset       = VersionOffset + VersionSize
+	ReservedOffset      = CmdTypeOffset + CmdTypeSize
 	EntryCountOffset    = ReservedOffset + ReservedSize
 	EntryStartDSNOffset = EntryCountOffset + EntryCountSize
 	FooterOffsetOffset  = EntryStartDSNOffset + EntryStartDSNSize
@@ -57,6 +59,14 @@ func NewLogEntryWriter() *LogEntryWriter {
 		Entry:  NewLogEntry(),
 		Footer: make([]byte, 0),
 	}
+}
+
+func (w *LogEntryWriter) SetHeader(
+	typ uint16,
+	version uint16,
+	cmdType uint16,
+) {
+	w.Entry.SetHeader(typ, version, cmdType)
 }
 
 func (w *LogEntryWriter) Reset() {
@@ -92,7 +102,7 @@ func (w *LogEntryWriter) Finish(startDSN uint64) LogEntry {
 }
 
 func (w *LogEntryWriter) IsFinished() bool {
-	return w.Entry.GetFooterOffset() != 0
+	return w.Entry.GetFooterOffset() != 0 && w.Entry.GetCmdType() != uint16(TInvalid)
 }
 
 type LogEntryFooter []byte
@@ -150,6 +160,10 @@ func (e LogEntry) GetVersion() uint16 {
 	return types.DecodeUint16(e[VersionOffset:])
 }
 
+func (e LogEntry) GetCmdType() uint16 {
+	return types.DecodeUint16(e[CmdTypeOffset:])
+}
+
 func (e LogEntry) GetFooter() LogEntryFooter {
 	footerOffset := e.GetFooterOffset()
 	if footerOffset == 0 {
@@ -174,6 +188,16 @@ func (e LogEntry) GetEntryCount() uint32 {
 
 func (e LogEntry) GetStartDSN() uint64 {
 	return types.DecodeUint64(e[EntryStartDSNOffset:])
+}
+
+func (e LogEntry) SetHeader(
+	typ uint16,
+	version uint16,
+	cmdType uint16,
+) {
+	copy(e[TypeOffset:], types.EncodeUint16(&typ))
+	copy(e[VersionOffset:], types.EncodeUint16(&version))
+	copy(e[CmdTypeOffset:], types.EncodeUint16(&cmdType))
 }
 
 func (e LogEntry) SetEntryCount(count uint32) {

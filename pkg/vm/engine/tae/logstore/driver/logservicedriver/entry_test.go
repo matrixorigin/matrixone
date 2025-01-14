@@ -61,6 +61,7 @@ func Test_LogEntry1(t *testing.T) {
 	}
 	dsn = uint64(200)
 
+	writer.SetHeader(IOET_WALRecord, IOET_WALRecord_CurrVer, uint16(TNormal))
 	assert.False(t, writer.IsFinished())
 	e = writer.Finish(dsn)
 	assert.True(t, writer.IsFinished())
