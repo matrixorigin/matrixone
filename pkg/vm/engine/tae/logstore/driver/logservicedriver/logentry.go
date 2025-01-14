@@ -90,6 +90,10 @@ func (w *LogEntryWriter) Finish(startDSN uint64) LogEntry {
 	return w.Entry
 }
 
+func (w *LogEntryWriter) IsFinished() bool {
+	return w.Entry.GetFooterOffset() != 0
+}
+
 type LogEntryFooter []byte
 type LogEntry []byte
 
