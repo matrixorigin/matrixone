@@ -102,7 +102,7 @@ func (w *LogEntryWriter) Finish(startDSN uint64) LogEntry {
 }
 
 func (w *LogEntryWriter) IsFinished() bool {
-	return w.Entry.GetFooterOffset() != 0 && w.Entry.GetCmdType() != uint16(TInvalid)
+	return w.Entry.GetFooterOffset() != 0 && w.Entry.GetCmdType() != uint16(Cmd_Invalid)
 }
 
 type LogEntryFooter []byte
@@ -264,3 +264,5 @@ func (e LogEntry) ForEachEntry(
 	}
 	return
 }
+
+type SkipCmd []byte

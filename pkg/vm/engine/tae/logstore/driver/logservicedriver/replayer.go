@@ -687,7 +687,7 @@ func (r *replayer) readNextBatch(
 			r.stats.readPSNCount++
 
 			// 3. remove the skipped records if the entry is a skip entry
-			if entry.Meta.metaType == TReplay {
+			if entry.Meta.cmdType == Cmd_SkipDSN {
 				logutil.Info(
 					"Wal-Replay-Skip-Entry",
 					zap.Any("skip-map", entry.cmd.skipMap),
@@ -769,7 +769,7 @@ func (r *replayer) AppendSkipCmd(
 
 	cmd := NewReplayCmd(skipMap)
 	recordEntry := newRecordEntry()
-	recordEntry.Meta.metaType = TReplay
+	recordEntry.Meta.cmdType = Cmd_SkipDSN
 	recordEntry.cmd = cmd
 
 	client, writeToken := r.driver.getClientForWrite()

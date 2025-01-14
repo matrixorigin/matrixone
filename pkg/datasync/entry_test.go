@@ -268,7 +268,7 @@ func TestEntry_ParseLocation(t *testing.T) {
 
 	t.Run("invalid meta type", func(t *testing.T) {
 		p, err := generateCmdPayload(
-			*newParameter().withMetaType(logservicedriver.TReplay),
+			*newParameter().withMetaType(logservicedriver.Cmd_SkipDSN),
 			genLocation(uuid.New(), 0, 0, 0, 0, 0),
 		)
 		assert.NoError(t, err)

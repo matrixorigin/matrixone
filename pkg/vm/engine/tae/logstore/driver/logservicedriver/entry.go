@@ -27,12 +27,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 )
 
-type MetaType uint8
+type CmdType uint8
 
 const (
-	TInvalid MetaType = iota
-	TNormal
-	TReplay
+	Cmd_Invalid CmdType = iota
+	Cmd_Normal
+	Cmd_SkipDSN
 )
 
 const (
@@ -60,14 +60,14 @@ func init() {
 }
 
 type Meta struct {
-	metaType    MetaType
+	cmdType     CmdType
 	appended    uint64
 	addr        map[uint64]uint64
 	payloadSize uint64
 }
 
 func newMeta() Meta {
-	return Meta{addr: make(map[uint64]uint64), metaType: TNormal}
+	return Meta{addr: make(map[uint64]uint64), cmdType: Cmd_Normal}
 }
 
 func (m *Meta) GetAddr() map[uint64]uint64 {
@@ -81,11 +81,11 @@ func (m *Meta) AddAddr(l uint64, s uint64) {
 	m.addr[l] = s
 }
 
-func (m *Meta) SetType(t MetaType) {
-	m.metaType = t
+func (m *Meta) SetType(t CmdType) {
+	m.cmdType = t
 }
-func (m *Meta) GetType() MetaType {
-	return m.metaType
+func (m *Meta) GetType() CmdType {
+	return m.cmdType
 }
 func (m *Meta) SetAppended(appended uint64) {
 	m.appended = appended
@@ -110,8 +110,8 @@ func (m *Meta) GetMaxLsn() uint64 {
 	return max
 }
 func (m *Meta) WriteTo(w io.Writer) (n int64, err error) {
-	metaType := uint8(m.metaType)
-	if _, err = w.Write(types.EncodeUint8(&metaType)); err != nil {
+	cmdType := uint8(m.cmdType)
+	if _, err = w.Write(types.EncodeUint8(&cmdType)); err != nil {
 		return
 	}
 	n += 1
@@ -142,11 +142,11 @@ func (m *Meta) WriteTo(w io.Writer) (n int64, err error) {
 }
 
 func (m *Meta) ReadFrom(r io.Reader) (n int64, err error) {
-	metaType := uint8(0)
-	if _, err = r.Read(types.EncodeUint8(&metaType)); err != nil {
+	cmdType := uint8(0)
+	if _, err = r.Read(types.EncodeUint8(&cmdType)); err != nil {
 		return
 	}
-	m.metaType = MetaType(metaType)
+	m.cmdType = CmdType(cmdType)
 	n += 1
 	if _, err = r.Read(types.EncodeUint64(&m.appended)); err != nil {
 		return
@@ -226,8 +226,8 @@ func (r *baseEntry) WriteTo(w io.Writer) (n int64, err error) {
 		return n, err
 	}
 	n += n1
-	switch r.Meta.metaType {
-	case TNormal:
+	switch r.Meta.cmdType {
+	case Cmd_Normal:
 		for _, e := range r.entries {
 			n1, err = e.WriteTo(w)
 			if err != nil {
@@ -235,7 +235,7 @@ func (r *baseEntry) WriteTo(w io.Writer) (n int64, err error) {
 			}
 			n += n1
 		}
-	case TReplay:
+	case Cmd_SkipDSN:
 		n1, err = r.cmd.WriteTo(w)
 		if err != nil {
 			return
@@ -253,7 +253,7 @@ func (r *baseEntry) ReadFrom(reader io.Reader) (n int64, err error) {
 		return 0, err
 	}
 	n += n1
-	if r.metaType == TReplay {
+	if r.cmdType == Cmd_SkipDSN {
 		r.cmd = NewEmptyReplayCmd()
 		n1, err = r.cmd.ReadFrom(reader)
 		if err != nil {
