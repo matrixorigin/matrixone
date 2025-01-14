@@ -2140,12 +2140,8 @@ func (c *Compile) compileUnionAll(node *plan.Node, ss []*Scope, children []*Scop
 func (c *Compile) compileJoin(node, left, right *plan.Node, probeScopes, buildScopes []*Scope) []*Scope {
 	if node.Stats.HashmapStats.Shuffle {
 		if len(c.cnList) == 1 {
-			if node.JoinType == plan.Node_DEDUP || node.BuildOnLeft {
-				logutil.Infof("not support shuffle v2 for dedup or right join now")
-			} else if left.NodeType == plan.Node_JOIN && left.Stats.HashmapStats.Shuffle && left.BuildOnLeft {
-				logutil.Infof("not support shuffle v2 for right join now")
-			} else if right.NodeType == plan.Node_JOIN && right.Stats.HashmapStats.Shuffle && right.BuildOnLeft {
-				logutil.Infof("not support shuffle v2 for right join now")
+			if node.JoinType == plan.Node_DEDUP {
+				logutil.Infof("not support shuffle v2 for dedup join now")
 			} else {
 				return c.compileShuffleJoinV2(node, left, right, probeScopes, buildScopes)
 			}
@@ -2271,6 +2267,9 @@ func constructShuffleJoinOP(c *Compile, shuffleJoins []*Scope, node, left, right
 		for i := range shuffleJoins {
 			op := constructRight(node, leftTyps, rightTyps, c.proc)
 			op.ShuffleIdx = int32(i)
+			if shuffleV2 {
+				op.ShuffleIdx = -1
+			}
 			op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 			shuffleJoins[i].setRootOperator(op)
 		}
@@ -3031,12 +3030,7 @@ func (c *Compile) compileShuffleGroupV2(n *plan.Node, inputSS []*Scope, nodes []
 
 func (c *Compile) compileShuffleGroup(n *plan.Node, inputSS []*Scope, nodes []*plan.Node) []*Scope {
 	if len(c.cnList) == 1 {
-		child := nodes[n.Children[0]]
-		if child.NodeType == plan.Node_JOIN && child.Stats.HashmapStats.Shuffle && n.BuildOnLeft {
-			logutil.Infof("not support shuffle v2 for right join now")
-		} else {
-			return c.compileShuffleGroupV2(n, inputSS, nodes)
-		}
+		return c.compileShuffleGroupV2(n, inputSS, nodes)
 	}
 
 	if n.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reuse {
