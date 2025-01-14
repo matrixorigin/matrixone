@@ -143,9 +143,11 @@ func GetTenantCreateVersionForUpdate(
 func UpgradeTenantVersion(
 	tenantID int32,
 	version string,
+	versionOffset uint32,
 	txn executor.TxnExecutor) error {
-	sql := fmt.Sprintf("update mo_account set create_version = '%s' where account_id = %d",
+	sql := fmt.Sprintf("update mo_account set create_version = '%s', version_offset = %d where account_id = %d",
 		version,
+		versionOffset,
 		tenantID)
 	res, err := txn.Exec(sql, executor.StatementOption{})
 	if err != nil {
