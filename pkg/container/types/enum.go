@@ -36,6 +36,7 @@ func ParseEnum(enumStr string, name string) (Enum, error) {
 	elems := strings.Split(enumStr, ",")
 	enumName, _ := parseEnumName(elems, name)
 	if enumName != Enum(0) {
+		// if match name, return
 		return enumName, nil
 	}
 	// if name doesn't exist, it's maybe an integer
