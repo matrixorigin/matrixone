@@ -26,7 +26,9 @@ import (
 	"go.uber.org/zap"
 )
 
-var clearBuffer = make([]byte, EmptyLogEntrySize)
+var emptyLogEntry = make([]byte, EmptyLogEntrySize)
+var logEntryBuffer = make([]byte, EmptyLogEntrySize)
+var skipCmdBuffer = make([]byte, EmptyLogEntrySize)
 
 const (
 	TypeSize          = 2
@@ -50,40 +52,39 @@ const (
 	EmptyLogEntrySize = FooterOffsetOffset + FooterOffsetSize
 )
 
+func init() {
+	e := LogEntry(logEntryBuffer)
+	e.SetHeader(IOET_WALRecord, IOET_WALRecord_CurrVer, uint16(Cmd_Normal))
+	e = LogEntry(skipCmdBuffer)
+	e.SetHeader(IOET_WALRecord, IOET_WALRecord_CurrVer, uint16(Cmd_SkipDSN))
+}
+
 type LogEntryWriter struct {
-	Entry   LogEntry
-	Footer  LogEntryFooter
-	SkipCmd SkipCmd
+	Entry  LogEntry
+	Footer LogEntryFooter
 }
 
-func NewLogEntryWriter(skipCnt int) *LogEntryWriter {
-	return &LogEntryWriter{
-		Entry:   NewLogEntry(),
-		Footer:  make([]byte, 0),
-		SkipCmd: NewSkipCmd(skipCnt),
+func NewLogEntryWriter() *LogEntryWriter {
+	w := &LogEntryWriter{
+		Entry:  NewLogEntry(),
+		Footer: make([]byte, 0),
 	}
+	copy(w.Entry, logEntryBuffer)
+	return w
 }
 
-func (w *LogEntryWriter) SetHeader(
-	typ uint16,
-	version uint16,
-	cmdType uint16,
-) {
-	w.Entry.SetHeader(typ, version, cmdType)
-}
-
-func (w *LogEntryWriter) Reset(skipCnt int) {
+func (w *LogEntryWriter) Reset() {
 	if w.Entry.Capacity() >= int(mpool.MB)*2 {
 		w.Entry = NewLogEntry()
 	} else {
 		w.Entry.Reset()
 	}
+	copy(w.Entry, logEntryBuffer)
 	if len(w.Footer) >= int(mpool.MB)*2 {
 		w.Footer = make([]byte, 0)
 	} else {
 		w.Footer.Reset()
 	}
-	w.SkipCmd.Reset(skipCnt)
 }
 
 func (w *LogEntryWriter) Close() {
@@ -218,7 +219,7 @@ func (e LogEntry) SetFooterOffset(offset uint32) {
 
 func (e *LogEntry) Reset() {
 	*e = (*e)[:EmptyLogEntrySize]
-	copy(*e, clearBuffer)
+	copy(*e, emptyLogEntry)
 }
 
 func (e *LogEntry) Capacity() int {

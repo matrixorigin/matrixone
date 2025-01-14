@@ -55,7 +55,7 @@ func Test_LogEntry1(t *testing.T) {
 
 	var entries [][]byte
 
-	writer := NewLogEntryWriter(0)
+	writer := NewLogEntryWriter()
 
 	for i := 0; i < 10; i++ {
 		entries = append(entries, []byte(fmt.Sprintf("entry %d", i)))
@@ -74,14 +74,13 @@ func Test_LogEntry1(t *testing.T) {
 		t.Log(string(e.GetEntry(i)))
 	}
 
-	writer.Reset(0)
+	writer.Reset()
 
 	for i := 0; i < 10; i++ {
 		writer.Append(entries[i])
 	}
 	dsn = uint64(200)
 
-	writer.SetHeader(IOET_WALRecord, IOET_WALRecord_CurrVer, uint16(Cmd_Normal))
 	assert.False(t, writer.IsFinished())
 	e = writer.Finish(dsn)
 	assert.True(t, writer.IsFinished())
