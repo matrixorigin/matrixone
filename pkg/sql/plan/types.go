@@ -289,8 +289,6 @@ type BindContext struct {
 	bindingTree *BindingTreeNode
 
 	parent *BindContext
-	//leftChild  *BindContext
-	//rightChild *BindContext
 
 	defaultDatabase string
 
