@@ -62,6 +62,7 @@ func init() {
 type LogEntryWriter struct {
 	Entry  LogEntry
 	Footer LogEntryFooter
+	buf    bytes.Buffer
 }
 
 func NewLogEntryWriter() *LogEntryWriter {
@@ -85,11 +86,17 @@ func (w *LogEntryWriter) Reset() {
 	} else {
 		w.Footer.Reset()
 	}
+	if w.buf.Cap() >= int(mpool.MB)*2 {
+		w.buf = bytes.Buffer{}
+	} else {
+		w.buf.Reset()
+	}
 }
 
 func (w *LogEntryWriter) Close() {
 	w.Entry = nil
 	w.Footer = nil
+	w.buf.Reset()
 }
 
 func (w *LogEntryWriter) Capacity() int {
@@ -99,6 +106,16 @@ func (w *LogEntryWriter) Capacity() int {
 func (w *LogEntryWriter) Append(buf []byte) {
 	offset, length := w.Entry.AppendEntry(buf)
 	w.Footer.AppendEntry(offset, length)
+}
+
+func (w *LogEntryWriter) AppendEntry(entry *entry.Entry) (err error) {
+	w.buf.Reset()
+	if _, err = entry.WriteTo(&w.buf); err != nil {
+		return
+	}
+	eBuf := w.buf.Bytes()
+	w.Append(eBuf)
+	return
 }
 
 func (w *LogEntryWriter) Finish(startDSN uint64) LogEntry {
