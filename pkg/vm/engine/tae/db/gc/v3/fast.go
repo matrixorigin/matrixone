@@ -30,6 +30,7 @@ import (
 
 type CheckpointFastGCJob struct {
 	CheckpointBasedGCJob
+	filterTables *map[uint64]struct{}
 }
 
 func NewCheckpointFastGCJob(
@@ -42,6 +43,7 @@ func NewCheckpointFastGCJob(
 	isOwner bool,
 	mp *mpool.MPool,
 	fs fileservice.FileService,
+	filterTables *map[uint64]struct{},
 	opts ...GCJobExecutorOption,
 ) *CheckpointFastGCJob {
 	e := &CheckpointBasedGCJob{
@@ -58,6 +60,7 @@ func NewCheckpointFastGCJob(
 	e.GCExecutor = *NewGCExecutor(buffer, isOwner, e.config.canGCCacheSize, mp, fs)
 	return &CheckpointFastGCJob{
 		CheckpointBasedGCJob: *e,
+		filterTables:         filterTables,
 	}
 }
 
@@ -72,6 +75,7 @@ func (e *CheckpointFastGCJob) Execute(ctx context.Context) error {
 	transObjects := make(map[string]*ObjectEntry, 100)
 	coarseFilter, err := makeSoftDeleteFilterCoarseFilter(
 		&transObjects,
+		e.filterTables,
 	)
 	if err != nil {
 		return err
@@ -113,6 +117,7 @@ func (e *CheckpointFastGCJob) Execute(ctx context.Context) error {
 
 func makeSoftDeleteFilterCoarseFilter(
 	transObjects *map[string]*ObjectEntry,
+	filterTable *map[uint64]struct{},
 ) (
 	FilterFn,
 	error,
@@ -145,6 +150,9 @@ func makeSoftDeleteFilterCoarseFilter(
 				continue
 			}
 			if dropTS.IsEmpty() {
+				continue
+			}
+			if _, ok := (*filterTable)[tableIDs[i]]; !ok {
 				continue
 			}
 			bm.Add(uint64(i))

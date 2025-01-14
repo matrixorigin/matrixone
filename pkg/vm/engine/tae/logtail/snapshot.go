@@ -330,6 +330,10 @@ func IsMoTable(tid uint64) bool {
 	return tid == catalog2.MO_TABLES_ID
 }
 
+func (sm *SnapshotMeta) GetSnapshotTableIDs() *map[uint64]struct{} {
+	return &sm.snapshotTableIDs
+}
+
 type tombstone struct {
 	rowid types.Rowid
 	pk    types.Tuple
