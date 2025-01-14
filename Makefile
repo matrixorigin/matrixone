@@ -51,9 +51,11 @@ BUILD_TIME=$(shell date +%s)
 MO_VERSION=$(shell git symbolic-ref -q --short HEAD || git describe --tags --exact-match)
 GO_MODULE=$(shell go list -m)
 
-MUSL_TARGET=$(UNAME_M)-$(UNAME_S)
-ifeq ($(UNAME_M),"arm64")
-	MUSL_TARGET=aarch64-$(UNAME_S)
+# check the MUSL_TARGET from https://musl.cc
+# make MUSL_TARGET=aarch64-linux musl to cross make the aarch64 linux executable
+ifeq ($(MUSL_TARGET),)
+	MUSL_TARGET=$(UNAME_M)-$(UNAME_S)
+	#MUSL_TARGET=x86_64-linux
 endif
 MUSL_NAME=$(MUSL_TARGET)-musl-cross
 MUSL_DIR=$(ROOT_DIR)/$(MUSL_NAME)
