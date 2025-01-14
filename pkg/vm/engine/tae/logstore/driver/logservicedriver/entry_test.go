@@ -21,6 +21,26 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func Test_SkipCmd(t *testing.T) {
+	cmd := NewSkipCmd(3)
+	skipMap := map[uint64]uint64{
+		uint64(3): uint64(1),
+		uint64(2): uint64(2),
+		uint64(1): uint64(3),
+	}
+	i := 0
+	for k, v := range skipMap {
+		cmd.Set(i, k, v)
+		i++
+	}
+	cmd.Sort()
+	dsns := cmd.GetDSNSlice()
+	psns := cmd.GetPSNSlice()
+
+	assert.Equal(t, []uint64{1, 2, 3}, dsns)
+	assert.Equal(t, []uint64{3, 2, 1}, psns)
+}
+
 func Test_LogEntry1(t *testing.T) {
 	e := NewLogEntry()
 	assert.Equal(t, EmptyLogEntrySize, len(e))
@@ -35,7 +55,7 @@ func Test_LogEntry1(t *testing.T) {
 
 	var entries [][]byte
 
-	writer := NewLogEntryWriter()
+	writer := NewLogEntryWriter(0)
 
 	for i := 0; i < 10; i++ {
 		entries = append(entries, []byte(fmt.Sprintf("entry %d", i)))
@@ -54,7 +74,7 @@ func Test_LogEntry1(t *testing.T) {
 		t.Log(string(e.GetEntry(i)))
 	}
 
-	writer.Reset()
+	writer.Reset(0)
 
 	for i := 0; i < 10; i++ {
 		writer.Append(entries[i])
@@ -76,3 +96,7 @@ func Test_LogEntry1(t *testing.T) {
 	}
 	writer.Close()
 }
+
+// func Test_LogEntry2(t *testing.T) {
+// 	e := NewLogEntry()
+// }

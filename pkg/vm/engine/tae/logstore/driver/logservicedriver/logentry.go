@@ -17,6 +17,7 @@ package logservicedriver
 import (
 	"bytes"
 	"fmt"
+	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -50,14 +51,16 @@ const (
 )
 
 type LogEntryWriter struct {
-	Entry  LogEntry
-	Footer LogEntryFooter
+	Entry   LogEntry
+	Footer  LogEntryFooter
+	SkipCmd SkipCmd
 }
 
-func NewLogEntryWriter() *LogEntryWriter {
+func NewLogEntryWriter(skipCnt int) *LogEntryWriter {
 	return &LogEntryWriter{
-		Entry:  NewLogEntry(),
-		Footer: make([]byte, 0),
+		Entry:   NewLogEntry(),
+		Footer:  make([]byte, 0),
+		SkipCmd: NewSkipCmd(skipCnt),
 	}
 }
 
@@ -69,7 +72,7 @@ func (w *LogEntryWriter) SetHeader(
 	w.Entry.SetHeader(typ, version, cmdType)
 }
 
-func (w *LogEntryWriter) Reset() {
+func (w *LogEntryWriter) Reset(skipCnt int) {
 	if w.Entry.Capacity() >= int(mpool.MB)*2 {
 		w.Entry = NewLogEntry()
 	} else {
@@ -80,6 +83,7 @@ func (w *LogEntryWriter) Reset() {
 	} else {
 		w.Footer.Reset()
 	}
+	w.SkipCmd.Reset(skipCnt)
 }
 
 func (w *LogEntryWriter) Close() {
@@ -266,3 +270,57 @@ func (e LogEntry) ForEachEntry(
 }
 
 type SkipCmd []byte
+
+func NewSkipCmd(cnt int) SkipCmd {
+	return make([]byte, 16*cnt)
+}
+
+func (s SkipCmd) GetDSNBuf() []byte {
+	return s[:len(s)/2]
+}
+
+func (s SkipCmd) GetPSNBuf() []byte {
+	return s[len(s)/2:]
+}
+
+func (s SkipCmd) GetDSNSlice() []uint64 {
+	return types.DecodeSlice[uint64](s.GetDSNBuf())
+}
+
+func (s SkipCmd) GetPSNSlice() []uint64 {
+	return types.DecodeSlice[uint64](s.GetPSNBuf())
+}
+
+func (s SkipCmd) ElementCount() int {
+	return len(s) / 16
+}
+
+func (s SkipCmd) Set(i int, dsn, psn uint64) {
+	dsns := s.GetDSNSlice()
+	psns := s.GetPSNSlice()
+	dsns[i] = dsn
+	psns[i] = psn
+}
+
+func (s *SkipCmd) Reset(n int) {
+	if s.ElementCount() > 1000 || n > s.ElementCount() {
+		*s = make([]byte, 16*n)
+		return
+	}
+	for i := 0; i < s.ElementCount(); i++ {
+		s.Set(i, 0, 0)
+	}
+	*s = (*s)[:16*n]
+}
+
+func (s SkipCmd) Sort() {
+	dsns := s.GetDSNSlice()
+	psns := s.GetPSNSlice()
+	sort.Slice(dsns, func(i, j int) bool {
+		less := dsns[i] < dsns[j]
+		if less {
+			psns[i], psns[j] = psns[j], psns[i]
+		}
+		return less
+	})
+}
