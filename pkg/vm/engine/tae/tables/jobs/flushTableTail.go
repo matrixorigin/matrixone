@@ -501,7 +501,7 @@ func (task *flushTableTailTask) prepareAObjSortedData(
 	totalRowCnt := bat.Length()
 	task.aObjDeletesCnt += bat.Deletes.GetCardinality()
 
-	if isTombstone && bat.Deletes != nil {
+	if isTombstone && bat.Deletes.GetCardinality() > 0 {
 		panic(fmt.Sprintf("logic err, tombstone %v has deletes", obj.GetID().String()))
 	}
 

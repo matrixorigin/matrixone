@@ -11122,3 +11122,45 @@ func TestRW3(t *testing.T) {
 	tae.CheckRowsByScan(0, true)
 
 }
+
+func TestFlushCommitAndSchedRace(t *testing.T) {
+	ctx := context.Background()
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+
+	schema := catalog.MockSchemaAll(2, 1)
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 20)
+	defer bat.Close()
+	tae.CreateRelAndAppend(bat, true)
+
+	{
+		// prepare a tomebstone
+		txn, rel := tae.GetRelation()
+		v := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(3)
+		filter := handle.NewEQFilter(v)
+		err := rel.DeleteByFilter(context.Background(), filter)
+		require.NoError(t, err)
+		require.NoError(t, txn.Commit(ctx))
+	}
+
+	{
+		// executing and scheduling at the same time
+		txn, rel := tae.GetRelation()
+		iter := rel.MakeObjectIt(true)
+		iter.Next()
+		tombstoneEntry := iter.GetObject().GetMeta().(*catalog.ObjectEntry)
+
+		flushTask1, err := jobs.NewFlushTableTailTask(nil, txn, nil, []*catalog.ObjectEntry{tombstoneEntry}, tae.Runtime)
+		require.NoError(t, err)
+		require.NoError(t, flushTask1.Execute(ctx))
+		require.NoError(t, txn.Commit(ctx))
+
+		txn2, _ := tae.StartTxn(nil)
+		flushTask2, err := jobs.NewFlushTableTailTask(nil, txn2, nil, []*catalog.ObjectEntry{tombstoneEntry}, tae.Runtime)
+		require.NoError(t, err)
+
+		// EOB, the tombstone is already flushed
+		require.Error(t, flushTask2.Execute(ctx))
+	}
+}
