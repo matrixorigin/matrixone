@@ -21,32 +21,19 @@ import (
 	"go.uber.org/zap"
 	"io"
 	"net"
-	"reflect"
+	"runtime"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/frontend/linuxonly"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
-)
-
-const (
-	TCP_ESTABLISHED = 1
-	TCP_SYN_SENT    = 2
-	TCP_SYN_RECV    = 3
-	TCP_FIN_WAIT1   = 4
-	TCP_FIN_WAIT2   = 5
-	TCP_TIME_WAIT   = 6
-	TCP_CLOSE       = 7
-	TCP_CLOSE_WAIT  = 8
-	TCP_LAST_ACK    = 9
-	TCP_LISTEN      = 10
 )
 
 // RelationName counter for the new connection
@@ -96,80 +83,6 @@ type BaseService interface {
 	UpgradeTenant(ctx context.Context, tenantName string, retryCount uint32, isALLAccount bool) error
 }
 
-func GetsockoptTCPInfo(tcpConn *net.TCPConn, tcpInfo *syscall.TCPInfo) (uint8, error) {
-	file, err := tcpConn.File()
-	if err != nil {
-		return 0, err
-	}
-	defer func() {
-		err = file.Close()
-		if err != nil {
-			logutil.Error("TCP info file close error", zap.Error(err))
-			return
-		}
-	}()
-
-	fd := file.Fd()
-	size := reflect.TypeOf(*tcpInfo).Size()
-	_, _, errno := syscall.Syscall6(syscall.SYS_GETSOCKOPT, fd, syscall.SOL_TCP, syscall.TCP_INFO,
-		reflect.ValueOf(tcpInfo).Pointer(), reflect.ValueOf(&size).Pointer(), 0)
-	if errno != 0 {
-		return 0, errno
-	}
-	return tcpInfo.State, nil
-}
-
-func isConnected(connMap *sync.Map) {
-	defer func() {
-		if pErr := recover(); pErr != nil {
-			err := moerr.ConvertPanicError(context.Background(), pErr)
-			logutil.Error("panic in check Connection", zap.String("error", err.Error()))
-		}
-	}()
-
-	tcpConnStatus := make(map[*net.TCPConn]uint8)
-	tcpInfo := syscall.TCPInfo{}
-	connMap.Range(func(key, value any) bool {
-		tcpConn := key.(*net.TCPConn)
-		tcpState, err := GetsockoptTCPInfo(tcpConn, &tcpInfo)
-		if err != nil {
-			logutil.Error("Failed to get TCP info", zap.Error(err))
-			tcpConnStatus[tcpConn] = tcpState
-			return true
-		}
-		switch tcpState {
-		case TCP_LAST_ACK, TCP_CLOSE, TCP_FIN_WAIT1, TCP_FIN_WAIT2, TCP_TIME_WAIT:
-			tcpConnStatus[tcpConn] = tcpState
-			return true
-		default:
-			return true
-		}
-	})
-
-	for key, value := range tcpConnStatus {
-		cancel, ok := connMap.Load(key)
-		if ok {
-			TCPAddr := key.RemoteAddr().String()
-			cancel.(context.CancelFunc)()
-			connMap.Delete(key)
-			switch value {
-			case TCP_LAST_ACK:
-				logutil.Infof("Connection %s is terminated, the status is TCP_LAST_ACK", TCPAddr)
-			case TCP_CLOSE:
-				logutil.Infof("Connection %s is terminated, the status is TCP_CLOSE", TCPAddr)
-			case TCP_FIN_WAIT1:
-				logutil.Infof("Connection %s is terminated, the status is TCP_FIN_WAIT1", TCPAddr)
-			case TCP_FIN_WAIT2:
-				logutil.Infof("Connection %s is terminated, the status is TCP_FIN_WAIT2", TCPAddr)
-			case TCP_TIME_WAIT:
-				logutil.Infof("Connection %s is terminated, the status is TCP_TIME_WAIT", TCPAddr)
-			default:
-				logutil.Infof("Connection %s is terminated", TCPAddr)
-			}
-		}
-	}
-}
-
 func (mo *MOServer) checkConnected(ctx context.Context) {
 
 	ticker := time.Tick(time.Minute)
@@ -188,7 +101,7 @@ func (mo *MOServer) checkConnected(ctx context.Context) {
 				logutil.Debugf("Goruntine %d is checking TCP status", GetRoutineId())
 			default:
 			}
-			isConnected(&mo.connMap)
+			linuxonly.IsConnected(&mo.connMap)
 			time.Sleep(mo.pu.SV.CheckInterval * time.Second)
 		}
 	}
@@ -266,10 +179,12 @@ func (mo *MOServer) startAccept(ctx context.Context, listener net.Listener) {
 
 	var tempDelay time.Duration
 
-	switch listener.(type) {
-	case *net.TCPListener:
-		go mo.checkConnected(ctx)
-	default:
+	if runtime.GOOS == "linux" {
+		switch listener.(type) {
+		case *net.TCPListener:
+			go mo.checkConnected(ctx)
+		default:
+		}
 	}
 
 	quit := false
@@ -305,6 +220,7 @@ func (mo *MOServer) startAccept(ctx context.Context, listener net.Listener) {
 		go mo.handleConn(ctx, conn)
 	}
 }
+
 func (mo *MOServer) handleConn(ctx context.Context, conn net.Conn) {
 	var rs *Conn
 	var err error
@@ -318,17 +234,19 @@ func (mo *MOServer) handleConn(ctx context.Context, conn net.Conn) {
 		}
 	}()
 
-	tcpConn, ok := conn.(*net.TCPConn)
-	if ok {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithCancel(ctx)
-		mo.connMap.Store(tcpConn, cancel)
-		defer func() {
-			_, ok = mo.connMap.Load(tcpConn)
-			if ok {
-				mo.connMap.Delete(tcpConn)
-			}
-		}()
+	if runtime.GOOS == "linux" {
+		tcpConn, ok := conn.(*net.TCPConn)
+		if ok {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithCancel(ctx)
+			mo.connMap.Store(tcpConn, cancel)
+			defer func() {
+				_, ok = mo.connMap.Load(tcpConn)
+				if ok {
+					mo.connMap.Delete(tcpConn)
+				}
+			}()
+		}
 	}
 
 	rs, err = NewIOSession(conn, mo.pu, mo.service)
