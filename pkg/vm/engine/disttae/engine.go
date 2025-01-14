@@ -701,10 +701,7 @@ func (e *Engine) BuildBlockReaders(
 	def *plan.TableDef,
 	relData engine.RelData,
 	num int) ([]engine.Reader, error) {
-	var (
-		rds   []engine.Reader
-		shard engine.RelData
-	)
+	var rds []engine.Reader
 	proc := p.(*process.Process)
 	blkCnt := relData.DataCnt()
 	newNum := num
@@ -722,19 +719,9 @@ func (e *Engine) BuildBlockReaders(
 		return nil, err
 	}
 
-	mod := blkCnt % newNum
-	divide := blkCnt / newNum
+	shards := relData.Split(newNum)
 	for i := 0; i < newNum; i++ {
-		if i == 0 {
-			shard = relData.DataSlice(i*divide, (i+1)*divide+mod)
-		} else {
-			shard = relData.DataSlice(i*divide+mod, (i+1)*divide+mod)
-		}
-		ds := readutil.NewRemoteDataSource(
-			ctx,
-			fs,
-			ts,
-			shard)
+		ds := readutil.NewRemoteDataSource(ctx, fs, ts, shards[i])
 		rd, err := readutil.NewReader(
 			ctx,
 			proc.Mp(),

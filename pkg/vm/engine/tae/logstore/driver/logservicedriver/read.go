@@ -15,164 +15,58 @@
 package logservicedriver
 
 import (
-	"context"
-	"sync"
-	"time"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/logservice"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 )
 
 var ErrRecordNotFound = moerr.NewInternalErrorNoCtx("driver read cache: lsn not found")
 var ErrAllRecordsRead = moerr.NewInternalErrorNoCtx("driver read cache: all records are read")
 
 type readCache struct {
-	lsns    []uint64
+	psns []uint64
+	// PSN -> Record mapping
 	records map[uint64]*recordEntry
-	readMu  sync.RWMutex
 }
 
-func newReadCache() *readCache {
-	return &readCache{
-		lsns:    make([]uint64, 0),
+func newReadCache() readCache {
+	return readCache{
+		psns:    make([]uint64, 0),
 		records: make(map[uint64]*recordEntry),
-		readMu:  sync.RWMutex{},
 	}
 }
 
-func (d *LogServiceDriver) Read(drlsn uint64) (*entry.Entry, error) {
-	lsn, err := d.tryGetLogServiceLsnByDriverLsn(drlsn)
-	if err != nil {
-		panic(err)
-	}
-	d.readMu.RLock()
-	r, err := d.readFromCache(lsn)
-	d.readMu.RUnlock()
-	if err != nil {
-		d.readMu.Lock()
-		r, err = d.readFromCache(lsn)
-		if err == nil {
-			d.readMu.Unlock()
-			return r.readEntry(drlsn), nil
-		}
-		d.readSmallBatchFromLogService(lsn)
-		r, err = d.readFromCache(lsn)
-		if err != nil {
-			logutil.Debugf("try read %d", lsn)
-			panic(err)
-		}
-		d.readMu.Unlock()
-	}
-	return r.readEntry(drlsn), nil
-}
-
-func (d *LogServiceDriver) readFromCache(lsn uint64) (*recordEntry, error) {
-	if len(d.records) == 0 {
-		return nil, ErrAllRecordsRead
-	}
-	record, ok := d.records[lsn]
-	if !ok {
-		return nil, ErrRecordNotFound
-	}
-	return record, nil
-}
-
-func (d *LogServiceDriver) appendRecords(records []logservice.LogRecord, firstlsn uint64, fn func(uint64, *recordEntry), maxsize int) {
-	lsns := make([]uint64, 0)
-	cnt := 0
-	for i, record := range records {
-		if record.GetType() != pb.UserRecord {
-			continue
-		}
-		lsn := firstlsn + uint64(i)
-		cnt++
-		if maxsize != 0 {
-			if cnt > maxsize {
-				break
-			}
-		}
-		_, ok := d.records[lsn]
-		if ok {
-			continue
-		}
-		d.records[lsn] = newEmptyRecordEntry(record)
-		lsns = append(lsns, lsn)
-		if fn != nil {
-			fn(lsn, d.records[lsn])
-		}
-	}
-	d.lsns = append(d.lsns, lsns...)
-}
-
-func (d *LogServiceDriver) dropRecords() {
-	drop := len(d.lsns) - d.config.ReadCacheSize
-	lsns := d.lsns[:drop]
-	for _, lsn := range lsns {
-		delete(d.records, lsn)
-	}
-	d.lsns = d.lsns[drop:]
-}
-func (d *LogServiceDriver) dropRecordByLsn(lsn uint64) {
-	delete(d.records, lsn)
-}
-
-func (d *LogServiceDriver) resetReadCache() {
-	for lsn := range d.records {
-		delete(d.records, lsn)
+func (c *readCache) clear() {
+	c.psns = c.psns[:0]
+	for psn := range c.records {
+		delete(c.records, psn)
 	}
 }
 
-func (d *LogServiceDriver) readSmallBatchFromLogService(lsn uint64) {
-	_, records := d.readFromLogService(lsn, int(d.config.RecordSize))
-	if len(records) == 0 {
-		_, records = d.readFromLogService(lsn, MaxReadSize)
-	}
-	d.appendRecords(records, lsn, nil, 1)
-	if !d.IsReplaying() && len(d.lsns) > d.config.ReadCacheSize {
-		d.dropRecords()
-	}
+func (c *readCache) removeRecord(psn uint64) {
+	delete(c.records, psn)
 }
 
-func (d *LogServiceDriver) readFromLogServiceInReplay(lsn uint64, size int, fn func(lsn uint64, r *recordEntry)) (uint64, uint64) {
-	nextLsn, records := d.readFromLogService(lsn, size)
-	safeLsn := uint64(0)
-	d.appendRecords(records, lsn, func(lsn uint64, r *recordEntry) {
-		r.unmarshal()
-		if safeLsn < r.appended {
-			safeLsn = r.appended
-		}
-		fn(lsn, r)
-	}, 0)
-	return nextLsn, safeLsn
+func (c *readCache) addRecord(
+	// psn uint64, r logservice.LogRecord,
+	psn uint64, e *recordEntry,
+) (updated bool) {
+	if _, ok := c.records[psn]; ok {
+		return
+	}
+	// logutil.Infof("add record %d:%v", psn, e.addr)
+	c.records[psn] = e
+	c.psns = append(c.psns, psn)
+	updated = true
+	return
 }
 
-func (d *LogServiceDriver) readFromLogService(lsn uint64, size int) (nextLsn uint64, records []logservice.LogRecord) {
-	client, err := d.clientPool.Get()
-	defer d.clientPool.Put(client)
-	if err != nil {
-		panic(err)
+func (c *readCache) isEmpty() bool {
+	return len(c.records) == 0
+}
+
+func (c *readCache) getRecord(psn uint64) (r *recordEntry, err error) {
+	var ok bool
+	if r, ok = c.records[psn]; !ok {
+		err = ErrRecordNotFound
 	}
-	t0 := time.Now()
-	ctx, cancel := context.WithTimeoutCause(context.Background(), d.config.ReadDuration, moerr.CauseReadFromLogService)
-	records, nextLsn, err = client.c.Read(ctx, lsn, uint64(size))
-	err = moerr.AttachCause(ctx, err)
-	cancel()
-	if err != nil {
-		err = RetryWithTimeout(d.config.RetryTimeout, func() (shouldReturn bool) {
-			logutil.Infof("LogService Driver: retry read err is %v", err)
-			ctx, cancel := context.WithTimeoutCause(context.Background(), d.config.ReadDuration, moerr.CauseReadFromLogService2)
-			records, nextLsn, err = client.c.Read(ctx, lsn, uint64(size))
-			err = moerr.AttachCause(ctx, err)
-			cancel()
-			return err == nil
-		})
-		if err != nil {
-			panic(err)
-		}
-	}
-	d.readDuration += time.Since(t0)
 	return
 }

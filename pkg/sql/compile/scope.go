@@ -21,24 +21,15 @@ import (
 	"sync"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
-
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergegroup"
-
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-
-	"github.com/panjf2000/ants/v2"
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	pbpipeline "github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -46,6 +37,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergegroup"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -57,6 +50,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/panjf2000/ants/v2"
+	"go.uber.org/zap"
 )
 
 func newScope(magic magicType) *Scope {
@@ -558,71 +553,27 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 	return ms, nil
 }
 
-func (s *Scope) handleBlockList(c *Compile, runtimeInExprList []*plan.Expr) error {
-	var appendNotPkFilter []*plan.Expr
-	for i := range runtimeInExprList {
-		fn := runtimeInExprList[i].GetF()
-		col := fn.Args[0].GetCol()
-		if col == nil {
-			panic("only support col in runtime filter's left child!")
-		}
-		pkPos := s.DataSource.TableDef.Name2ColIndex[s.DataSource.TableDef.Pkey.PkeyColName]
-		if pkPos != col.ColPos {
-			appendNotPkFilter = append(appendNotPkFilter, plan2.DeepCopyExpr(runtimeInExprList[i]))
-		}
-	}
-
-	// reset filter
-	if len(appendNotPkFilter) > 0 {
-		// put expr in filter instruction
-		op := vm.GetLeafOp(s.RootOp)
-		if _, ok := op.(*table_scan.TableScan); ok {
-			op = vm.GetLeafOpParent(nil, s.RootOp)
-		}
-		arg, ok := op.(*filter.Filter)
-		if !ok {
-			panic("missing instruction for runtime filter!")
-		}
-		err := arg.SetRuntimeExpr(s.Proc, appendNotPkFilter)
-		if err != nil {
-			return err
-		}
-	}
-
-	// reset datasource
-	if len(runtimeInExprList) > 0 {
-		newExprList := plan2.DeepCopyExprList(runtimeInExprList)
-		if s.DataSource.FilterExpr != nil {
-			newExprList = append(newExprList, s.DataSource.FilterExpr)
-		}
-		s.DataSource.FilterExpr = colexec.RewriteFilterExprList(newExprList)
-	}
-
-	for _, e := range s.DataSource.BlockFilterList {
-		err := plan2.EvalFoldExpr(s.Proc, e, &c.filterExprExes)
-		if err != nil {
-			return err
-		}
-	}
-
-	newExprList := plan2.DeepCopyExprList(runtimeInExprList)
-	if len(s.DataSource.node.BlockFilterList) > 0 {
-		newExprList = append(newExprList, s.DataSource.BlockFilterList...)
-	}
-
+func (s *Scope) getRelData(c *Compile, blockExprList []*plan.Expr) error {
 	rel, db, ctx, err := c.handleDbRelContext(s.DataSource.node, s.IsRemote)
 	if err != nil {
 		return err
 	}
 
 	if s.NodeInfo.CNCNT == 1 {
+		rsp := &engine.RangesShuffleParam{
+			Node:  s.DataSource.node,
+			CNCNT: s.NodeInfo.CNCNT,
+			CNIDX: s.NodeInfo.CNIDX,
+			Init:  false,
+		}
 		s.NodeInfo.Data, err = c.expandRanges(
 			s.DataSource.node,
 			rel,
 			db,
 			ctx,
-			newExprList,
-			engine.Policy_CollectAllData, nil)
+			blockExprList,
+			engine.Policy_CollectAllData,
+			rsp)
 		if err != nil {
 			return err
 		}
@@ -650,7 +601,7 @@ func (s *Scope) handleBlockList(c *Compile, runtimeInExprList []*plan.Expr) erro
 		rel,
 		db,
 		ctx,
-		newExprList,
+		blockExprList,
 		engine.Policy_CollectCommittedPersistedData,
 		rsp)
 	if err != nil {
@@ -676,7 +627,7 @@ func (s *Scope) handleBlockList(c *Compile, runtimeInExprList []*plan.Expr) erro
 			rel,
 			db,
 			ctx,
-			newExprList,
+			blockExprList,
 			engine.Policy_CollectUncommittedData|
 				engine.Policy_CollectCommittedInmemData,
 			nil)
@@ -728,6 +679,60 @@ func (s *Scope) handleRuntimeFilter(c *Compile) ([]*plan.Expr, bool, error) {
 	}
 
 	return runtimeInExprList, false, nil
+}
+
+func (s *Scope) handleBlockFilters(c *Compile, runtimeInExprList []*plan.Expr) ([]*plan.Expr, error) {
+	var appendNotPkFilter []*plan.Expr
+	for i := range runtimeInExprList {
+		fn := runtimeInExprList[i].GetF()
+		col := fn.Args[0].GetCol()
+		if col == nil {
+			panic("only support col in runtime filter's left child!")
+		}
+		pkPos := s.DataSource.TableDef.Name2ColIndex[s.DataSource.TableDef.Pkey.PkeyColName]
+		if pkPos != col.ColPos {
+			appendNotPkFilter = append(appendNotPkFilter, plan2.DeepCopyExpr(runtimeInExprList[i]))
+		}
+	}
+
+	// reset filter
+	if len(appendNotPkFilter) > 0 {
+		// put expr in filter instruction
+		op := vm.GetLeafOp(s.RootOp)
+		if _, ok := op.(*table_scan.TableScan); ok {
+			op = vm.GetLeafOpParent(nil, s.RootOp)
+		}
+		arg, ok := op.(*filter.Filter)
+		if !ok {
+			panic("missing instruction for runtime filter!")
+		}
+		err := arg.SetRuntimeExpr(s.Proc, appendNotPkFilter)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// reset datasource
+	if len(runtimeInExprList) > 0 {
+		newExprList := plan2.DeepCopyExprList(runtimeInExprList)
+		if s.DataSource.FilterExpr != nil {
+			newExprList = append(newExprList, s.DataSource.FilterExpr)
+		}
+		s.DataSource.FilterExpr = colexec.RewriteFilterExprList(newExprList)
+	}
+
+	for _, e := range s.DataSource.BlockFilterList {
+		err := plan2.EvalFoldExpr(s.Proc, e, &c.filterExprExes)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	newExprList := plan2.DeepCopyExprList(runtimeInExprList)
+	if len(s.DataSource.node.BlockFilterList) > 0 {
+		newExprList = append(newExprList, s.DataSource.BlockFilterList...)
+	}
+	return newExprList, nil
 }
 
 func (s *Scope) isTableScan() bool {
@@ -936,8 +941,7 @@ func (s *Scope) aggOptimize(c *Compile, rel engine.Relation, ctx context.Context
 		if partialResults != nil && s.NodeInfo.Data.DataCnt() > 1 {
 			//append first empty block
 			newRelData := s.NodeInfo.Data.BuildEmptyRelData(1)
-			blk := s.NodeInfo.Data.GetBlockInfo(0)
-			newRelData.AppendBlockInfo(&blk)
+			newRelData.AppendBlockInfo(&objectio.EmptyBlockInfo)
 			//For each blockinfo in relData, if blk has no tombstones, then compute the agg result,
 			//otherwise put it into newRelData.
 			var (
@@ -1004,14 +1008,24 @@ func findMergeGroup(op vm.Operator) *mergegroup.MergeGroup {
 
 func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 	// receive runtime filter and optimize the datasource.
-	var runtimeFilterList []*plan.Expr
-	var shouldDrop bool
-	runtimeFilterList, shouldDrop, err = s.handleRuntimeFilter(c)
+	var runtimeFilterList, blockFilterList []*plan.Expr
+	var emptyScan bool
+	runtimeFilterList, emptyScan, err = s.handleRuntimeFilter(c)
 	if err != nil {
 		return
 	}
-	if !shouldDrop {
-		err = s.handleBlockList(c, runtimeFilterList)
+	for i := range s.DataSource.FilterList {
+		if plan2.IsFalseExpr(s.DataSource.FilterList[i]) {
+			emptyScan = true
+			break
+		}
+	}
+	if !emptyScan {
+		blockFilterList, err = s.handleBlockFilters(c, runtimeFilterList)
+		if err != nil {
+			return
+		}
+		err = s.getRelData(c, blockFilterList)
 		if err != nil {
 			return
 		}
@@ -1041,7 +1055,7 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 			return
 		}
 	// Reader can be generated from local relation.
-	case s.DataSource.Rel != nil && s.DataSource.TableDef.Partition == nil:
+	case s.DataSource.Rel != nil:
 		ctx := c.proc.Ctx
 		stats := statistic.StatsInfoFromContext(ctx)
 		crs := new(perfcounter.CounterSet)
@@ -1084,21 +1098,16 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 			ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 		}
 
-		var db engine.Database
-		var rel engine.Relation
 		// todo:
 		//  these following codes were very likely to `compile.go:compileTableScanDataSource `.
 		//  I kept the old codes here without any modify. I don't know if there is one `GetRelation(txn, scanNode, scheme, table)`
 		{
 			n := s.DataSource.node
-			txnOp := s.Proc.GetTxnOperator()
 			if n.ScanSnapshot != nil && n.ScanSnapshot.TS != nil {
 				if !n.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
 					n.ScanSnapshot.TS.Less(c.proc.GetTxnOperator().Txn().SnapshotTS) {
-					if c.proc.GetCloneTxnOperator() != nil {
-						txnOp = c.proc.GetCloneTxnOperator()
-					} else {
-						txnOp = c.proc.GetTxnOperator().CloneSnapshotOp(*n.ScanSnapshot.TS)
+					if c.proc.GetCloneTxnOperator() == nil {
+						txnOp := c.proc.GetTxnOperator().CloneSnapshotOp(*n.ScanSnapshot.TS)
 						c.proc.SetCloneTxnOperator(txnOp)
 					}
 
@@ -1107,88 +1116,29 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 					}
 				}
 			}
-
-			db, err = c.e.Database(ctx, s.DataSource.SchemaName, txnOp)
-			if err != nil {
-				return
-			}
-			rel, err = db.Relation(ctx, s.DataSource.RelationName, c.proc)
-			if err != nil {
-				var e error // avoid contamination of error messages
-				db, e = c.e.Database(ctx, defines.TEMPORARY_DBNAME, s.Proc.GetTxnOperator())
-				if e != nil {
-					err = e
-					return
-				}
-				rel, e = db.Relation(ctx, engine.GetTempTableName(s.DataSource.SchemaName, s.DataSource.RelationName), c.proc)
-				if e != nil {
-					err = e
-					return
-				}
-			}
 		}
 
 		var mainRds []engine.Reader
-		var subRds []engine.Reader
 
 		stats := statistic.StatsInfoFromContext(ctx)
 		crs := new(perfcounter.CounterSet)
 		newCtx := perfcounter.AttachS3RequestKey(ctx, crs)
 
-		if rel.GetEngineType() == engine.Memory || s.DataSource.PartitionRelationNames == nil {
-			mainRds, err = s.DataSource.Rel.BuildReaders(
-				newCtx,
-				c.proc,
-				s.DataSource.FilterExpr,
-				s.NodeInfo.Data,
-				s.NodeInfo.Mcpu,
-				s.TxnOffset,
-				len(s.DataSource.OrderBy) > 0,
-				engine.Policy_CheckAll,
-				engine.FilterHint{},
-			)
-			if err != nil {
-				return
-			}
-			readers = append(readers, mainRds...)
-		} else {
-			var mp map[int16]engine.RelData
-			if s.NodeInfo.Data != nil && s.NodeInfo.Data.DataCnt() > 1 {
-				mp = s.NodeInfo.Data.GroupByPartitionNum()
-			}
-			var subRel engine.Relation
-			for num, relName := range s.DataSource.PartitionRelationNames {
-				subRel, err = db.Relation(newCtx, relName, c.proc)
-				if err != nil {
-					return
-				}
-
-				var subBlkList engine.RelData
-				if s.NodeInfo.Data == nil || s.NodeInfo.Data.DataCnt() <= 1 {
-					//Even if subBlkList is nil,
-					//we still need to build reader for sub partition table to read data from memory.
-					subBlkList = nil
-				} else {
-					subBlkList = mp[int16(num)]
-				}
-
-				subRds, err = subRel.BuildReaders(
-					newCtx,
-					c.proc,
-					s.DataSource.FilterExpr,
-					subBlkList,
-					s.NodeInfo.Mcpu,
-					s.TxnOffset,
-					len(s.DataSource.OrderBy) > 0,
-					engine.Policy_CheckAll,
-					engine.FilterHint{},
-				)
-				if err != nil {
-					return
-				}
-				readers = append(readers, subRds...)
-			}
+		mainRds, err = s.DataSource.Rel.BuildReaders(
+			newCtx,
+			c.proc,
+			s.DataSource.FilterExpr,
+			s.NodeInfo.Data,
+			s.NodeInfo.Mcpu,
+			s.TxnOffset,
+			len(s.DataSource.OrderBy) > 0,
+			engine.Policy_CheckAll,
+			engine.FilterHint{},
+		)
+		if err != nil {
+			return
 		}
+		readers = append(readers, mainRds...)
 
 		stats.AddScopePrepareS3Request(statistic.S3Request{
 			List:      crs.FileService.S3.List.Load(),

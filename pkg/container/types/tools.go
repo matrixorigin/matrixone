@@ -16,9 +16,9 @@ package types
 
 import "github.com/matrixorigin/matrixone/pkg/pb/plan"
 
-func NewProtoType(oid T) *plan.Type {
+func NewProtoType(oid T) plan.Type {
 	typ := New(oid, 0, 0)
-	return &plan.Type{
+	return plan.Type{
 		Id:    int32(oid),
 		Width: typ.Width,
 		Scale: typ.Scale,

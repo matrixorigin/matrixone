@@ -3017,7 +3017,15 @@ var (
 		},
 		{
 			input:  "create pitr `pitr5` for table db01 t01 range 1 'h'",
-			output: "create pitr pitr5 for table db01 t01 range 1  h",
+			output: "create pitr pitr5 for table db01.t01 range 1  h",
+		},
+		{
+			input:  "create pitr `pitr3` range 1 'h'",
+			output: "create pitr pitr3 for account range 1  h",
+		},
+		{
+			input:  "create pitr `pitr5` for database db01 table t01 range 1 'h'",
+			output: "create pitr pitr5 for table db01.t01 range 1  h",
 		},
 		{
 			input: "show pitr",
