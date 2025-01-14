@@ -20,9 +20,10 @@ import (
 )
 
 // 1. All checkpoint files should be sorted by `cluster` key. And the
-//    `cluster` key is `table`+`id`.
+//    `cluster` key is `table`+ `object type`+ `id`.
 // 2. For a specific table, we can save the checkpoint meta like this:
 //    `table`: table id
+//    `object type`: object type [Data|Tombstone]
 //    `from`: the start rowid in the checkpoint files
 //    `to`: the end rowid in the checkpoint files
 

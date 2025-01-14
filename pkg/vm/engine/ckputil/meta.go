@@ -30,13 +30,14 @@ import (
 )
 
 // MetaSchema
-// ['table_id', 'start_row', 'end_row', 'location']
-// [uint64, uint64, uint64, string]
+// ['table_id', 'object_type', 'start_row', 'end_row', 'location']
+// [uint64, int8, row id, row id, string]
 // `table_id` is the id of the table
+// `object_type` is the type of the object [Data|Tombstone]
 // `start_row` is the start rowid of the table in the object
 // `end_row` is the end rowid of the table in the object (same object as `start_row`)
 // `location` is the location of the object
-var MetaSchema_TableRange_Seqnums = []uint16{0, 1, 2, 3}
+var MetaSchema_TableRange_Seqnums = []uint16{0, 1, 2, 3, 4}
 var MetaSchema_TableRange_Attrs = []string{
 	TableObjectsAttr_Table,
 	"object_type",
@@ -224,7 +225,7 @@ func CollectTableRanges(
 	return
 }
 
-// the data in the obj must be sorted by the table id
+// the data in the obj must be sorted by the table id and object type
 func CollectTableRangesFromFile(
 	ctx context.Context,
 	obj objectio.ObjectStats,
