@@ -158,20 +158,6 @@ func NewS3Writer(tableDef *plan.TableDef, partitionIdx int16) (*S3Writer, error)
 	return writer, nil
 }
 
-// NewPartitionS3Writer Alloc S3 writers for partitioned table.
-func NewPartitionS3Writer(tableDef *plan.TableDef) ([]*S3Writer, error) {
-	partitionNum := len(tableDef.Partition.PartitionTableNames)
-	writers := make([]*S3Writer, partitionNum)
-	for i := range writers {
-		writer, err := NewS3Writer(tableDef, int16(i))
-		if err != nil {
-			return nil, err
-		}
-		writers[i] = writer
-	}
-	return writers, nil
-}
-
 func (w *S3Writer) ResetBlockInfoBat() {
 	// A simple explanation of the two vectors held by metaLocBat
 	// vecs[0] to mark which table this metaLoc belongs to: [0] means insertTable itself, [1] means the first uniqueIndex table, [2] means the second uniqueIndex table and so on

@@ -325,7 +325,7 @@ func (s *mysqlSinker) Sink(ctx context.Context, data *DecoderOutput) {
 
 		// output the left sql
 		if s.preSqlBufLen > sqlBufReserved {
-			s.sqlBufSendCh <- s.sqlBuf
+			s.sqlBufSendCh <- s.sqlBuf[:s.preSqlBufLen]
 			s.curBufIdx ^= 1
 			s.sqlBuf = s.sqlBufs[s.curBufIdx]
 		}
@@ -568,12 +568,14 @@ func (s *mysqlSinker) appendSqlBuf(rowType RowType) (err error) {
 		// complete sql statement
 		if rowType == InsertRow {
 			s.sqlBuf = appendString(s.sqlBuf, ";")
+			s.preSqlBufLen = len(s.sqlBuf)
 		} else {
 			s.sqlBuf = appendString(s.sqlBuf, ");")
+			s.preSqlBufLen = len(s.sqlBuf)
 		}
 
 		// send it to downstream
-		s.sqlBufSendCh <- s.sqlBuf
+		s.sqlBufSendCh <- s.sqlBuf[:s.preSqlBufLen]
 		s.curBufIdx ^= 1
 		s.sqlBuf = s.sqlBufs[s.curBufIdx]
 

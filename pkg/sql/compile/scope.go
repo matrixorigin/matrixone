@@ -21,24 +21,15 @@ import (
 	"sync"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
-
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergegroup"
-
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-
-	"github.com/panjf2000/ants/v2"
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	pbpipeline "github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -46,6 +37,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergegroup"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -57,6 +50,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/panjf2000/ants/v2"
+	"go.uber.org/zap"
 )
 
 func newScope(magic magicType) *Scope {
@@ -565,13 +560,20 @@ func (s *Scope) getRelData(c *Compile, blockExprList []*plan.Expr) error {
 	}
 
 	if s.NodeInfo.CNCNT == 1 {
+		rsp := &engine.RangesShuffleParam{
+			Node:  s.DataSource.node,
+			CNCNT: s.NodeInfo.CNCNT,
+			CNIDX: s.NodeInfo.CNIDX,
+			Init:  false,
+		}
 		s.NodeInfo.Data, err = c.expandRanges(
 			s.DataSource.node,
 			rel,
 			db,
 			ctx,
 			blockExprList,
-			engine.Policy_CollectAllData, nil)
+			engine.Policy_CollectAllData,
+			rsp)
 		if err != nil {
 			return err
 		}
@@ -1012,6 +1014,12 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 	if err != nil {
 		return
 	}
+	for i := range s.DataSource.FilterList {
+		if plan2.IsFalseExpr(s.DataSource.FilterList[i]) {
+			emptyScan = true
+			break
+		}
+	}
 	if !emptyScan {
 		blockFilterList, err = s.handleBlockFilters(c, runtimeFilterList)
 		if err != nil {
@@ -1047,7 +1055,7 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 			return
 		}
 	// Reader can be generated from local relation.
-	case s.DataSource.Rel != nil && s.DataSource.TableDef.Partition == nil:
+	case s.DataSource.Rel != nil:
 		ctx := c.proc.Ctx
 		stats := statistic.StatsInfoFromContext(ctx)
 		crs := new(perfcounter.CounterSet)
@@ -1090,21 +1098,16 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 			ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 		}
 
-		var db engine.Database
-		var rel engine.Relation
 		// todo:
 		//  these following codes were very likely to `compile.go:compileTableScanDataSource `.
 		//  I kept the old codes here without any modify. I don't know if there is one `GetRelation(txn, scanNode, scheme, table)`
 		{
 			n := s.DataSource.node
-			txnOp := s.Proc.GetTxnOperator()
 			if n.ScanSnapshot != nil && n.ScanSnapshot.TS != nil {
 				if !n.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
 					n.ScanSnapshot.TS.Less(c.proc.GetTxnOperator().Txn().SnapshotTS) {
-					if c.proc.GetCloneTxnOperator() != nil {
-						txnOp = c.proc.GetCloneTxnOperator()
-					} else {
-						txnOp = c.proc.GetTxnOperator().CloneSnapshotOp(*n.ScanSnapshot.TS)
+					if c.proc.GetCloneTxnOperator() == nil {
+						txnOp := c.proc.GetTxnOperator().CloneSnapshotOp(*n.ScanSnapshot.TS)
 						c.proc.SetCloneTxnOperator(txnOp)
 					}
 
@@ -1113,88 +1116,29 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 					}
 				}
 			}
-
-			db, err = c.e.Database(ctx, s.DataSource.SchemaName, txnOp)
-			if err != nil {
-				return
-			}
-			rel, err = db.Relation(ctx, s.DataSource.RelationName, c.proc)
-			if err != nil {
-				var e error // avoid contamination of error messages
-				db, e = c.e.Database(ctx, defines.TEMPORARY_DBNAME, s.Proc.GetTxnOperator())
-				if e != nil {
-					err = e
-					return
-				}
-				rel, e = db.Relation(ctx, engine.GetTempTableName(s.DataSource.SchemaName, s.DataSource.RelationName), c.proc)
-				if e != nil {
-					err = e
-					return
-				}
-			}
 		}
 
 		var mainRds []engine.Reader
-		var subRds []engine.Reader
 
 		stats := statistic.StatsInfoFromContext(ctx)
 		crs := new(perfcounter.CounterSet)
 		newCtx := perfcounter.AttachS3RequestKey(ctx, crs)
 
-		if rel.GetEngineType() == engine.Memory || s.DataSource.PartitionRelationNames == nil {
-			mainRds, err = s.DataSource.Rel.BuildReaders(
-				newCtx,
-				c.proc,
-				s.DataSource.FilterExpr,
-				s.NodeInfo.Data,
-				s.NodeInfo.Mcpu,
-				s.TxnOffset,
-				len(s.DataSource.OrderBy) > 0,
-				engine.Policy_CheckAll,
-				engine.FilterHint{},
-			)
-			if err != nil {
-				return
-			}
-			readers = append(readers, mainRds...)
-		} else {
-			var mp map[int16]engine.RelData
-			if s.NodeInfo.Data != nil && s.NodeInfo.Data.DataCnt() > 1 {
-				mp = s.NodeInfo.Data.GroupByPartitionNum()
-			}
-			var subRel engine.Relation
-			for num, relName := range s.DataSource.PartitionRelationNames {
-				subRel, err = db.Relation(newCtx, relName, c.proc)
-				if err != nil {
-					return
-				}
-
-				var subBlkList engine.RelData
-				if s.NodeInfo.Data == nil || s.NodeInfo.Data.DataCnt() <= 1 {
-					//Even if subBlkList is nil,
-					//we still need to build reader for sub partition table to read data from memory.
-					subBlkList = nil
-				} else {
-					subBlkList = mp[int16(num)]
-				}
-
-				subRds, err = subRel.BuildReaders(
-					newCtx,
-					c.proc,
-					s.DataSource.FilterExpr,
-					subBlkList,
-					s.NodeInfo.Mcpu,
-					s.TxnOffset,
-					len(s.DataSource.OrderBy) > 0,
-					engine.Policy_CheckAll,
-					engine.FilterHint{},
-				)
-				if err != nil {
-					return
-				}
-				readers = append(readers, subRds...)
-			}
+		mainRds, err = s.DataSource.Rel.BuildReaders(
+			newCtx,
+			c.proc,
+			s.DataSource.FilterExpr,
+			s.NodeInfo.Data,
+			s.NodeInfo.Mcpu,
+			s.TxnOffset,
+			len(s.DataSource.OrderBy) > 0,
+			engine.Policy_CheckAll,
+			engine.FilterHint{},
+		)
+		if err != nil {
+			return
 		}
+		readers = append(readers, mainRds...)
 
 		stats.AddScopePrepareS3Request(statistic.S3Request{
 			List:      crs.FileService.S3.List.Load(),

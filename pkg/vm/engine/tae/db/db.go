@@ -308,20 +308,29 @@ func (db *DB) RollbackTxn(txn txnif.AsyncTxn) error {
 	return txn.Rollback(context.Background())
 }
 
-func (db *DB) Replay(dataFactory *tables.DataFactory, maxTs types.TS, lsn uint64, valid bool) {
+func (db *DB) Replay(
+	ctx context.Context,
+	dataFactory *tables.DataFactory,
+	maxTs types.TS,
+	lsn uint64,
+	valid bool,
+) (err error) {
 	if !valid {
 		logutil.Infof("checkpoint version is too small, LSN check is disable")
 	}
 	replayer := newReplayer(dataFactory, db, maxTs, lsn, valid)
 	replayer.OnTimeStamp(maxTs)
-	replayer.Replay()
-
-	err := db.TxnMgr.Init(replayer.GetMaxTS())
-
-	db.usageMemo.EstablishFromCKPs(db.Catalog)
-	if err != nil {
-		panic(err)
+	if err = replayer.Replay(ctx); err != nil {
+		return
 	}
+
+	if err = db.TxnMgr.Init(replayer.GetMaxTS()); err != nil {
+		return
+	}
+
+	// TODO: error?
+	db.usageMemo.EstablishFromCKPs(db.Catalog)
+	return
 }
 
 func (db *DB) AddFaultPoint(

@@ -20,6 +20,7 @@ import (
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
@@ -171,13 +172,10 @@ func (e *ObjectMVCCNode) AppendTuple(sid *types.Objectid, batch *containers.Batc
 	batch.GetVectorByName(ObjectAttr_ObjectStats).Append(e.ObjectStats[:], false)
 }
 
-func ReadObjectInfoTuple(bat *containers.Batch, row int) (e *ObjectMVCCNode) {
-	buf := bat.GetVectorByName(ObjectAttr_ObjectStats).Get(row).([]byte)
-	buf2 := make([]byte, len(buf))
-	copy(buf2, buf)
-	e = &ObjectMVCCNode{
-		ObjectStats: (objectio.ObjectStats)(buf2),
-	}
+func ReadObjectInfoTuple(objs *vector.Vector, row int) (e *ObjectMVCCNode) {
+	objBuf := objs.GetBytesAt(row)
+	e = new(ObjectMVCCNode)
+	e.ObjectStats.UnMarshal(objBuf)
 	return
 }
 

@@ -33,6 +33,7 @@ import (
 var _ CompilerContext = &MockCompilerContext{}
 
 type MockCompilerContext struct {
+	dbs             map[string]bool
 	objects         map[string]*ObjectRef
 	tables          map[string]*TableDef
 	pks             map[string][]int
@@ -147,6 +148,13 @@ type Schema struct {
 	clusterby *ClusterByDef
 	outcnt    float64
 	tblId     int64
+	isView    bool
+	viewCfg   ViewCfg
+}
+
+type ViewCfg struct {
+	sql string
+	db  string
 }
 
 const SF float64 = 1
@@ -155,11 +163,28 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 	tpchSchema := make(map[string]*Schema)
 	moSchema := make(map[string]*Schema)
 	constraintTestSchema := make(map[string]*Schema)
+	cteTestSchema := make(map[string]*Schema)
+	bvtTest1Schema := make(map[string]*Schema)
+	bvtTest2Schema := make(map[string]*Schema)
+	bvtTest3Schema := make(map[string]*Schema)
+	informationSchemaSchema := make(map[string]*Schema)
+	cteTest2Schema := make(map[string]*Schema)
 
 	schemas := map[string]map[string]*Schema{
-		"tpch":            tpchSchema,
-		"mo_catalog":      moSchema,
-		"constraint_test": constraintTestSchema,
+		"tpch":               tpchSchema,
+		"mo_catalog":         moSchema,
+		"constraint_test":    constraintTestSchema,
+		"cte_test":           cteTestSchema,
+		"bvt_test1":          bvtTest1Schema,
+		"bvt_test2":          bvtTest2Schema,
+		"bvt_test3":          bvtTest3Schema,
+		"information_schema": informationSchemaSchema,
+		"cte_test2":          cteTest2Schema,
+	}
+
+	dbs := make(map[string]bool)
+	for s := range schemas {
+		dbs[s] = true
 	}
 
 	tpchSchema["nation"] = &Schema{
@@ -304,6 +329,11 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 		cols: []col{
 			{"n_name", types.T_varchar, false, 50, 0},
 		},
+		isView: true,
+		viewCfg: ViewCfg{
+			sql: "select n_name from nation where n_nationkey > ?",
+			db:  "tpch",
+		},
 	}
 
 	moSchema["mo_database"] = &Schema{
@@ -318,10 +348,23 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 	moSchema["mo_tables"] = &Schema{
 		cols: []col{
 			{"rel_id", types.T_uint64, false, 64, 0},
-			{"reldatabase", types.T_varchar, false, 50, 0},
-			{"relname", types.T_varchar, false, 50, 0},
-			{"relkind", types.T_varchar, false, 50, 0},
+			{"relname", types.T_varchar, false, 5000, 0},
+			{"reldatabase", types.T_varchar, false, 5000, 0},
+			{"reldatabase_id", types.T_uint64, false, 64, 0},
+			{"relpersistence", types.T_varchar, false, 5000, 0},
+			{"relkind", types.T_varchar, false, 5000, 0},
+			{"rel_comment", types.T_varchar, false, 5000, 0},
+			{"rel_createsql", types.T_text, false, 0, 0},
+			{"created_time", types.T_timestamp, false, 0, 0},
+			{"creator", types.T_uint32, false, 0, 0},
+			{"owner", types.T_uint32, false, 0, 0},
 			{"account_id", types.T_uint32, false, 0, 0},
+			{"partitioned", types.T_int8, false, 0, 0},
+			{"partition_info", types.T_blob, false, 0, 0},
+			{"viewdef", types.T_varchar, false, 5000, 0},
+			{"constraint", types.T_varchar, false, 5000, 0},
+			{"rel_version", types.T_uint32, false, 32, 0},
+			{"catalog_version", types.T_uint32, false, 32, 0},
 			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
 		},
 		pks: []int{0, 1},
@@ -721,6 +764,216 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 		outcnt: 4,
 	}
 
+	cteTestSchema["t1"] = &Schema{
+		cols: []col{
+			{"a", types.T_int64, false, 0, 0},
+			{"b", types.T_varchar, false, 1, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks: []int{0},
+	}
+
+	cteTestSchema["c"] = &Schema{
+		cols: []col{
+			{"a", types.T_int32, false, 50, 0},
+		},
+		isView: true,
+		viewCfg: ViewCfg{
+			sql: "create view c as\nwith \n\tc as (\n\t\tselect a from t1 \n\t), \n\td as (\n\t\tselect a from c \n\t\tunion all \n\t\tselect a+1 from c where a < 2\n\t) \nselect distinct \n\ttt.* \nfrom ( \n\tSELECT * FROM c \n\tUNION ALL \n\tSELECT * FROM d\n) tt \norder by tt.a",
+			db:  "cte_test",
+		},
+	}
+
+	cteTestSchema["v2"] = &Schema{
+		cols: []col{
+			{"a", types.T_int32, false, 50, 0},
+		},
+		isView: true,
+		viewCfg: ViewCfg{
+			sql: "create view v2 as\nwith \n\tv2 as (\n\t\tselect a from t1 \n\t)\nselect distinct \n\t* \nfrom \n\t(\n\t\tselect * from v2\n\t)\n",
+			db:  "cte_test",
+		},
+	}
+
+	bvtTest1Schema["t1"] = &Schema{
+		cols: []col{
+			{"a", types.T_int64, false, 64, 0},
+			{"b", types.T_int64, false, 64, 0},
+			{"c", types.T_int64, false, 64, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks: []int{0},
+	}
+
+	bvtTest2Schema["t2"] = &Schema{
+		cols: []col{
+			{"a", types.T_int64, false, 64, 0},
+			{"b", types.T_int64, false, 64, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks: []int{0},
+	}
+
+	bvtTest2Schema["t3"] = &Schema{
+		cols: []col{
+			{"a", types.T_int64, false, 64, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks: []int{0},
+	}
+
+	bvtTest3Schema["myemployees"] = &Schema{
+		cols: []col{
+			{"EmployeeID", types.T_int16, false, 16, 0},
+			{"FirstName", types.T_varchar, false, 255, 0},
+			{"LastName", types.T_varchar, false, 255, 0},
+			{"Title", types.T_varchar, false, 255, 0},
+			{"DeptID", types.T_int16, false, 16, 0},
+			{"ManagerID", types.T_int16, false, 16, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks: []int{0},
+	}
+
+	bvtTest3Schema["cte_view"] = &Schema{
+		cols: []col{
+			{"a", types.T_int32, false, 50, 0},
+		},
+		isView: true,
+		viewCfg: ViewCfg{
+			sql: "create view cte_view as(\nWITH  RECURSIVE DirectReports(Name, Title, EmployeeID, EmployeeLevel)\nAS (SELECT concat(e.FirstName,\" \",e.LastName) as name,\n        e.Title,\n        e.EmployeeID,\n        1 as EmployeeLevel\n    FROM MyEmployees AS e\n    WHERE e.ManagerID IS NULL\n    UNION ALL\n    SELECT concat(e.FirstName,\" \",e.LastName) as name,\n        e.Title,\n        e.EmployeeID,\n        EmployeeLevel + 1\n    FROM MyEmployees AS e\n    JOIN DirectReports AS d ON e.ManagerID = d.EmployeeID\n    )\nSELECT EmployeeID, Name, Title, EmployeeLevel\nFROM DirectReports order by EmployeeID)",
+			db:  "bvt_test3",
+		},
+	}
+
+	informationSchemaSchema["key_column_usage"] = &Schema{
+		cols: []col{
+			{"CONSTRAINT_CATALOG", types.T_varchar, false, 64, 0},
+			{"CONSTRAINT_SCHEMA", types.T_varchar, false, 64, 0},
+			{"CONSTRAINT_NAME", types.T_varchar, false, 64, 0},
+			{"TABLE_CATALOG", types.T_varchar, false, 64, 0},
+			{"TABLE_SCHEMA", types.T_varchar, false, 64, 0},
+			{"TABLE_NAME", types.T_varchar, false, 64, 0},
+			{"COLUMN_NAME", types.T_varchar, false, 64, 0},
+			{"ORDINAL_POSITION", types.T_uint32, false, 32, 0},
+			{"POSITION_IN_UNIQUE_CONSTRAINT", types.T_uint32, false, 32, 0},
+			{"REFERENCED_TABLE_SCHEMA", types.T_varchar, false, 64, 0},
+			{"REFERENCED_TABLE_NAME", types.T_varchar, false, 64, 0},
+			{"REFERENCED_COLUMN_NAME", types.T_varchar, false, 64, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks: []int{0},
+	}
+
+	informationSchemaSchema["test_referential_constraints"] = &Schema{
+		cols: []col{
+			{"CONSTRAINT_CATALOG", types.T_varchar, false, 3, 0},
+			{"CONSTRAINT_SCHEMA", types.T_varchar, false, 5000, 0},
+			{"CONSTRAINT_NAME", types.T_varchar, false, 5000, 0},
+			{"unique_constraint_catalog", types.T_varchar, false, 3, 0},
+			{"unique_constraint_schema", types.T_varchar, false, 5000, 0},
+			{"unique_constraint_name", types.T_varchar, false, 11, 0},
+			{"match_option", types.T_varchar, false, 4, 0},
+			{"update_rule", types.T_varchar, false, 128, 0},
+			{"delete_rule", types.T_varchar, false, 128, 0},
+			{"table_name", types.T_varchar, false, 5000, 0},
+			{"referenced_table_name", types.T_varchar, false, 5000, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks: []int{0},
+	}
+
+	informationSchemaSchema["referential_constraints"] = &Schema{
+		cols: []col{
+			{"CONSTRAINT_CATALOG", types.T_varchar, false, 3, 0},
+			{"CONSTRAINT_SCHEMA", types.T_varchar, false, 5000, 0},
+			{"CONSTRAINT_NAME", types.T_varchar, false, 5000, 0},
+			{"unique_constraint_catalog", types.T_varchar, false, 3, 0},
+			{"unique_constraint_schema", types.T_varchar, false, 5000, 0},
+			{"unique_constraint_name", types.T_varchar, false, 11, 0},
+			{"match_option", types.T_varchar, false, 4, 0},
+			{"update_rule", types.T_varchar, false, 128, 0},
+			{"delete_rule", types.T_varchar, false, 128, 0},
+			{"table_name", types.T_varchar, false, 5000, 0},
+			{"referenced_table_name", types.T_varchar, false, 5000, 0},
+		},
+		isView: true,
+		viewCfg: ViewCfg{
+			sql: "create view referential_constraints as select * from test_referential_constraints",
+			db:  "information_schema",
+		},
+	}
+
+	informationSchemaSchema["tables"] = &Schema{
+		cols: []col{
+			{"table_catalog", types.T_varchar, false, 3, 0},
+			{"table_schema", types.T_varchar, false, 5000, 0},
+			{"table_name", types.T_varchar, false, 5000, 0},
+			{"engine", types.T_varchar, false, 3, 0},
+			{"version", types.T_int64, false, 64, 0},
+			{"row_format", types.T_varchar, false, 10, 0},
+			{"table_rows", types.T_int64, false, 64, 0},
+			{"avg_row_length", types.T_int64, false, 64, 0},
+			{"data_length", types.T_int64, false, 64, 0},
+			{"max_data_length", types.T_int64, false, 64, 0},
+			{"index_length", types.T_int64, false, 64, 0},
+			{"data_free", types.T_int64, false, 64, 0},
+			{"auto_increment", types.T_uint64, false, 64, 0},
+			{"create_time", types.T_timestamp, false, 0, 0},
+			{"update_time", types.T_timestamp, false, 0, 0},
+			{"check_time", types.T_timestamp, false, 0, 0},
+			{"table_collation", types.T_varchar, false, 18, 0},
+			{"checksum", types.T_uint64, false, 64, 0},
+			{"create_options", types.T_varchar, false, 256, 0},
+			{"table_comment", types.T_text, false, 0, 0},
+		},
+		isView: true,
+		viewCfg: ViewCfg{
+			sql: "CREATE VIEW information_schema.TABLES AS SELECT 'def' AS TABLE_CATALOG,reldatabase AS TABLE_SCHEMA,relname AS TABLE_NAME,(case when relkind = 'v' and (reldatabase='mo_catalog' or reldatabase='information_schema') then 'SYSTEM VIEW' when relkind = 'v'  then 'VIEW' when relkind = 'e' then 'EXTERNAL TABLE' when relkind = 'r' then 'BASE TABLE' else 'INTERNAL TABLE' end) AS TABLE_TYPE,if(relkind = 'r','Tae',NULL) AS ENGINE,if(relkind = 'v',NULL,10) AS VERSION,'Compressed' AS ROW_FORMAT,if(relkind = 'v', NULL, 0) AS TABLE_ROWS,if(relkind = 'v', NULL, 0) AS AVG_ROW_LENGTH,if(relkind = 'v', NULL, 0) AS DATA_LENGTH,if(relkind = 'v', NULL, 0) AS MAX_DATA_LENGTH,if(relkind = 'v', NULL, 0) AS INDEX_LENGTH,if(relkind = 'v', NULL, 0) AS DATA_FREE,if(relkind = 'v', NULL, internal_auto_increment(reldatabase, relname)) AS `AUTO_INCREMENT`,created_time AS CREATE_TIME,if(relkind = 'v', NULL, created_time) AS UPDATE_TIME,if(relkind = 'v', NULL, created_time) AS CHECK_TIME,'utf8mb4_0900_ai_ci' AS TABLE_COLLATION,if(relkind = 'v', NULL, 0) AS CHECKSUM,if(relkind = 'v', NULL, if(partitioned = 0, '', cast('partitioned' as varchar(256)))) AS CREATE_OPTIONS,cast(rel_comment as text) AS TABLE_COMMENT FROM mo_catalog.mo_tables tbl WHERE tbl.account_id = current_account_id() and tbl.relname not like '__mo_index_%' and tbl.relkind != 'partition'",
+			db:  "information_schema",
+		},
+	}
+
+	cteTest2Schema["vt1"] = &Schema{
+		cols: []col{
+			{"a", types.T_int64, false, 0, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks: []int{0},
+	}
+
+	cteTest2Schema["vv1"] = &Schema{
+		cols: []col{
+			{"a", types.T_int32, false, 50, 0},
+		},
+		isView: true,
+		viewCfg: ViewCfg{
+			sql: "create view vv1 as\nwith \n\tc as (\n\t\tselect * from  vt1\n\t)\nselect \n\t*\nfrom\n\tc;",
+			db:  "cte_test2",
+		},
+	}
+
+	cteTest2Schema["vv2"] = &Schema{
+		cols: []col{
+			{"a", types.T_int32, false, 50, 0},
+		},
+		isView: true,
+		viewCfg: ViewCfg{
+			sql: "create view vv2 as\nwith \n\tvv2 as (\n\t\tselect a from vt1 \n\t)\nselect distinct \n\t* \nfrom \n\t(\n\t\tselect * from vv2\n\t)",
+			db:  "cte_test2",
+		},
+	}
+
+	cteTest2Schema["vv3"] = &Schema{
+		cols: []col{
+			{"a", types.T_int32, false, 50, 0},
+		},
+		isView: true,
+		viewCfg: ViewCfg{
+			sql: "create view vv3 as\nwith \n\tvv3 as (\n\t\tselect a from vt1 \n\t)\nselect distinct \n\t* \nfrom \n\tvv3\n",
+			db:  "cte_test2",
+		},
+	}
 	objects := make(map[string]*ObjectRef)
 	tables := make(map[string]*TableDef)
 	stats := make(map[string]*Stats)
@@ -820,7 +1073,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 				}
 			}
 
-			if tableName != "v1" {
+			{
 				properties := []*plan.Property{
 					{
 						Key:   catalog.SystemRelAttr_Kind,
@@ -853,11 +1106,11 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 				tableDef.Indexes = []*plan.IndexDef{p}
 			}
 
-			if tableName == "v1" {
+			if table.isView {
 				tableDef.TableType = catalog.SystemViewRel
 				viewData, _ := json.Marshal(ViewData{
-					Stmt:            "select n_name from nation where n_nationkey > ?",
-					DefaultDatabase: "tpch",
+					Stmt:            table.viewCfg.sql,
+					DefaultDatabase: table.viewCfg.db,
 				})
 				tableDef.ViewSql = &plan.ViewDef{
 					View: string(viewData),
@@ -893,6 +1146,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 	}
 
 	return &MockCompilerContext{
+		dbs:     dbs,
 		isDml:   isDml,
 		objects: objects,
 		tables:  tables,
@@ -903,7 +1157,10 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 }
 
 func (m *MockCompilerContext) DatabaseExists(name string, snapshot *Snapshot) bool {
-	return strings.ToLower(name) == "tpch" || strings.ToLower(name) == "mo" || strings.ToLower(name) == "mo_catalog"
+	if _, ok := m.dbs[strings.ToLower(name)]; ok {
+		return true
+	}
+	return false
 }
 
 func (m *MockCompilerContext) GetDatabaseId(dbName string, snapshot *Snapshot) (uint64, error) {
