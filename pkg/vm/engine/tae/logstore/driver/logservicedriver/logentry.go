@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 	"go.uber.org/zap"
 )
 
@@ -222,5 +223,20 @@ func (e *LogEntry) AppendEntry(buf []byte) (offset, length uint32) {
 	offset = uint32(len(*e))
 	length = uint32(len(buf))
 	*e = append(*e, buf...)
+	return
+}
+
+// PXU TODO: codec?
+func (e LogEntry) ForEachEntry(
+	fn func(entry *entry.Entry),
+) (err error) {
+	for i, end := 0, int(e.GetEntryCount()); i < end; i++ {
+		buf := e.GetEntry(i)
+		entry := entry.NewEmptyEntry()
+		if _, err = entry.UnmarshalBinary(buf[:]); err != nil {
+			return
+		}
+		fn(entry)
+	}
 	return
 }
