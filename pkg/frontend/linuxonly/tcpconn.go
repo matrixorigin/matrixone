@@ -4,7 +4,6 @@ package linuxonly
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"go.uber.org/zap"
 	"net"
@@ -50,12 +49,6 @@ func GetsockoptTCPInfo(tcpConn *net.TCPConn, tcpInfo *syscall.TCPInfo) (uint8, e
 }
 
 func IsConnected(connMap *sync.Map) {
-	defer func() {
-		if pErr := recover(); pErr != nil {
-			err := moerr.ConvertPanicError(context.Background(), pErr)
-			logutil.Error("panic in check Connection", zap.String("error", err.Error()))
-		}
-	}()
 
 	tcpConnStatus := make(map[*net.TCPConn]uint8)
 	tcpInfo := syscall.TCPInfo{}

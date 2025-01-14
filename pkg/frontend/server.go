@@ -83,6 +83,17 @@ type BaseService interface {
 	UpgradeTenant(ctx context.Context, tenantName string, retryCount uint32, isALLAccount bool) error
 }
 
+func isConnected(connMap *sync.Map) {
+	defer func() {
+		if pErr := recover(); pErr != nil {
+			err := moerr.ConvertPanicError(context.Background(), pErr)
+			logutil.Error("panic in check Connection", zap.String("error", err.Error()))
+		}
+	}()
+
+	linuxonly.IsConnected(connMap)
+}
+
 func (mo *MOServer) checkConnected(ctx context.Context) {
 
 	ticker := time.Tick(time.Minute)
@@ -101,7 +112,7 @@ func (mo *MOServer) checkConnected(ctx context.Context) {
 				logutil.Debugf("Goruntine %d is checking TCP status", GetRoutineId())
 			default:
 			}
-			linuxonly.IsConnected(&mo.connMap)
+			isConnected(&mo.connMap)
 			time.Sleep(mo.pu.SV.CheckInterval * time.Second)
 		}
 	}
