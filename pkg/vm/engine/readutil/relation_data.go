@@ -17,6 +17,8 @@ package readutil
 import (
 	"bytes"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -25,6 +27,7 @@ import (
 )
 
 var _ engine.RelData = new(BlockListRelData)
+var _ engine.RelData = new(ObjListRelData)
 
 func UnmarshalRelationData(data []byte) (engine.RelData, error) {
 	typ := engine.RelDataType(data[0])
@@ -35,9 +38,160 @@ func UnmarshalRelationData(data []byte) (engine.RelData, error) {
 			return nil, err
 		}
 		return relData, nil
+	case engine.RelDataEmpty:
+		relData := BuildEmptyRelData()
+		if err := relData.UnmarshalBinary(data); err != nil {
+			return nil, err
+		}
+		return relData, nil
 	default:
 		return nil, moerr.NewInternalErrorNoCtx("unsupported relation data type")
 	}
+}
+
+type EmptyRelationData struct {
+	tombs engine.Tombstoner
+}
+
+func BuildEmptyRelData() engine.RelData {
+	return &EmptyRelationData{}
+}
+
+func (rd *EmptyRelationData) String() string {
+	return fmt.Sprintf("RelData[%d]", engine.RelDataEmpty)
+}
+
+func (rd *EmptyRelationData) GetShardIDList() []uint64 {
+	panic("not supported")
+}
+
+func (rd *EmptyRelationData) Split(_ int) []engine.RelData {
+	panic("not supported")
+}
+
+func (rd *EmptyRelationData) GetShardID(i int) uint64 {
+	panic("not supported")
+}
+
+func (rd *EmptyRelationData) SetShardID(i int, id uint64) {
+	panic("not supported")
+}
+
+func (rd *EmptyRelationData) AppendShardID(id uint64) {
+	panic("not supported")
+}
+
+func (rd *EmptyRelationData) GetBlockInfoSlice() objectio.BlockInfoSlice {
+	panic("not supported")
+}
+
+func (rd *EmptyRelationData) GetBlockInfo(i int) objectio.BlockInfo {
+	panic("not supported")
+}
+
+func (rd *EmptyRelationData) SetBlockInfo(i int, blk *objectio.BlockInfo) {
+	panic("not supported")
+}
+
+func (rd *EmptyRelationData) AppendBlockInfo(blk *objectio.BlockInfo) {
+	panic("not supported")
+}
+
+func (rd *EmptyRelationData) AppendBlockInfoSlice(objectio.BlockInfoSlice) {
+	panic("not supported")
+}
+
+func (rd *EmptyRelationData) GetType() engine.RelDataType {
+	return engine.RelDataEmpty
+}
+
+func (rd *EmptyRelationData) MarshalBinaryWithBuffer(w *bytes.Buffer) (err error) {
+	typ := uint8(rd.GetType())
+	if _, err = w.Write(types.EncodeUint8(&typ)); err != nil {
+		return
+	}
+
+	// marshal tombstones
+	offset := w.Len()
+	tombstoneLen := uint32(0)
+	if _, err = w.Write(types.EncodeUint32(&tombstoneLen)); err != nil {
+		return
+	}
+	if rd.tombs != nil {
+		if err = rd.tombs.MarshalBinaryWithBuffer(w); err != nil {
+			return
+		}
+		tombstoneLen = uint32(w.Len() - offset - 4)
+		buf := w.Bytes()
+		copy(buf[offset:], types.EncodeUint32(&tombstoneLen))
+	}
+	return nil
+}
+func (rd *EmptyRelationData) MarshalBinary() ([]byte, error) {
+	var w bytes.Buffer
+	if err := rd.MarshalBinaryWithBuffer(&w); err != nil {
+		return nil, err
+	}
+	buf := w.Bytes()
+	return buf, nil
+}
+
+func (rd *EmptyRelationData) UnmarshalBinary(data []byte) (err error) {
+	typ := engine.RelDataType(types.DecodeUint8(data))
+	if typ != engine.RelDataEmpty {
+		return moerr.NewInternalErrorNoCtxf("UnmarshalBinary empty rel data with type:%v", typ)
+	}
+	data = data[1:]
+
+	tombstoneLen := types.DecodeUint32(data)
+	data = data[4:]
+
+	if tombstoneLen == 0 {
+		return
+	}
+	rd.tombs, err = UnmarshalTombstoneData(data[:tombstoneLen])
+	return
+}
+
+func (rd *EmptyRelationData) AttachTombstones(tombstones engine.Tombstoner) error {
+	rd.tombs = tombstones
+	return nil
+}
+
+func (rd *EmptyRelationData) GetTombstones() engine.Tombstoner {
+	return rd.tombs
+}
+
+func (rd *EmptyRelationData) ForeachDataBlk(begin, end int, f func(blk any) error) error {
+	panic("Not Supported")
+}
+
+func (rd *EmptyRelationData) GetDataBlk(i int) any {
+	panic("Not Supported")
+}
+
+func (rd *EmptyRelationData) SetDataBlk(i int, blk any) {
+	panic("Not Supported")
+}
+
+func (rd *EmptyRelationData) DataSlice(begin, end int) engine.RelData {
+	panic("Not Supported")
+}
+
+func (rd *EmptyRelationData) GroupByPartitionNum() map[int16]engine.RelData {
+	panic("Not Supported")
+}
+
+func (rd *EmptyRelationData) AppendDataBlk(blk any) {
+	panic("Not Supported")
+}
+
+func (rd *EmptyRelationData) BuildEmptyRelData(i int) engine.RelData {
+	return &EmptyRelationData{}
+}
+
+func (rd *EmptyRelationData) DataCnt() int {
+	return 0
 }
 
 // emptyCnt is the number of empty blocks preserved
@@ -56,6 +210,168 @@ func NewBlockListRelationDataOfObject(
 	return &BlockListRelData{
 		blklist: slice,
 	}
+}
+
+type ObjListRelData struct {
+	NeedFirstEmpty   bool
+	expanded         bool
+	TotalBlocks      uint32
+	Objlist          []objectio.ObjectStats
+	Rsp              *engine.RangesShuffleParam
+	blocklistRelData BlockListRelData
+}
+
+func (or *ObjListRelData) expand() {
+	if !or.expanded {
+		or.expanded = true
+		or.blocklistRelData.blklist = objectio.MultiObjectStatsToBlockInfoSlice(or.Objlist, or.NeedFirstEmpty)
+	}
+}
+
+func (or *ObjListRelData) AppendObj(obj *objectio.ObjectStats) {
+	or.Objlist = append(or.Objlist, *obj)
+	or.TotalBlocks += obj.BlkCnt()
+}
+
+func (or *ObjListRelData) GetType() engine.RelDataType {
+	return engine.RelDataObjList
+}
+
+func (or *ObjListRelData) String() string {
+	return "ObjListRelData"
+}
+
+func (or *ObjListRelData) GetShardIDList() []uint64 {
+	panic("not supported")
+}
+func (or *ObjListRelData) GetShardID(i int) uint64 {
+	panic("not supported")
+}
+func (or *ObjListRelData) SetShardID(i int, id uint64) {
+	panic("not supported")
+}
+func (or *ObjListRelData) AppendShardID(id uint64) {
+	panic("not supported")
+}
+
+func (or *ObjListRelData) Split(cpunum int) []engine.RelData {
+	rsp := or.Rsp
+	if len(or.Objlist) < cpunum || or.TotalBlocks < 64 || rsp == nil || !rsp.Node.Stats.HashmapStats.Shuffle || rsp.Node.Stats.HashmapStats.ShuffleType != plan.ShuffleType_Range {
+		//dont need to range shuffle, just split average
+		or.expand()
+		return or.blocklistRelData.Split(cpunum)
+	}
+	//split by range shuffle
+	result := make([]engine.RelData, cpunum)
+	for i := range result {
+		result[i] = or.blocklistRelData.BuildEmptyRelData(int(or.TotalBlocks) / cpunum)
+	}
+	if or.NeedFirstEmpty {
+		result[0].AppendBlockInfo(&objectio.EmptyBlockInfo)
+	}
+	for i := range or.Objlist {
+		shuffleIDX := int(plan2.CalcRangeShuffleIDXForObj(rsp, &or.Objlist[i], int(rsp.CNCNT)*cpunum)) % cpunum
+		blks := objectio.ObjectStatsToBlockInfoSlice(&or.Objlist[i], false)
+		result[shuffleIDX].AppendBlockInfoSlice(blks)
+	}
+	//make result average
+	for {
+		maxCnt := result[0].DataCnt()
+		minCnt := result[0].DataCnt()
+		maxIdx := 0
+		minIdx := 0
+		for i := range result {
+			if result[i].DataCnt() > maxCnt {
+				maxCnt = result[i].DataCnt()
+				maxIdx = i
+			}
+			if result[i].DataCnt() < minCnt {
+				minCnt = result[i].DataCnt()
+				minIdx = i
+			}
+		}
+		if maxCnt < minCnt*2 {
+			break
+		}
+
+		diff := (maxCnt-minCnt)/3 + 1
+		cut_from := result[maxIdx].DataCnt() - diff
+		result[minIdx].AppendBlockInfoSlice(result[maxIdx].DataSlice(cut_from, maxCnt).GetBlockInfoSlice())
+		result[maxIdx] = result[maxIdx].DataSlice(0, cut_from)
+	}
+	//check total block cnt
+	totalBlocks := 0
+	for i := range result {
+		totalBlocks += result[i].DataCnt()
+	}
+	if totalBlocks != int(or.TotalBlocks) {
+		panic("wrong blocks cnt after objlist reldata split!")
+	}
+	return result
+}
+
+func (or *ObjListRelData) GetBlockInfoSlice() objectio.BlockInfoSlice {
+	or.expand()
+	return or.blocklistRelData.GetBlockInfoSlice()
+}
+
+func (or *ObjListRelData) BuildEmptyRelData(i int) engine.RelData {
+	return or.blocklistRelData.BuildEmptyRelData(i)
+}
+
+func (or *ObjListRelData) GetBlockInfo(i int) objectio.BlockInfo {
+	panic("not supported")
+}
+
+func (or *ObjListRelData) SetBlockInfo(i int, blk *objectio.BlockInfo) {
+	panic("not supported")
+}
+
+func (or *ObjListRelData) SetBlockList(slice objectio.BlockInfoSlice) {
+	or.expand()
+	or.blocklistRelData.SetBlockList(slice)
+}
+
+func (or *ObjListRelData) AppendBlockInfo(blk *objectio.BlockInfo) {
+	panic("not supported")
+}
+
+func (or *ObjListRelData) AppendBlockInfoSlice(slice objectio.BlockInfoSlice) {
+	or.expand()
+	or.blocklistRelData.AppendBlockInfoSlice(slice)
+}
+
+func (or *ObjListRelData) UnmarshalBinary(buf []byte) error {
+	or.expanded = true
+	return or.blocklistRelData.UnmarshalBinary(buf)
+}
+
+func (or *ObjListRelData) MarshalBinary() ([]byte, error) {
+	or.expand()
+	return or.blocklistRelData.MarshalBinary()
+}
+
+func (or *ObjListRelData) AttachTombstones(tombstones engine.Tombstoner) error {
+	or.blocklistRelData.tombstones = tombstones
+	return nil
+}
+
+func (or *ObjListRelData) GetTombstones() engine.Tombstoner {
+	return or.blocklistRelData.tombstones
+}
+
+func (or *ObjListRelData) DataSlice(i, j int) engine.RelData {
+	or.expand()
+	return or.blocklistRelData.DataSlice(i, j)
+}
+
+func (or *ObjListRelData) GroupByPartitionNum() map[int16]engine.RelData {
+	or.expand()
+	return or.blocklistRelData.GroupByPartitionNum()
+}
+
+func (or *ObjListRelData) DataCnt() int {
+	return int(or.TotalBlocks)
 }
 
 type BlockListRelData struct {
@@ -93,6 +409,24 @@ func (relData *BlockListRelData) SetShardID(i int, id uint64) {
 }
 func (relData *BlockListRelData) AppendShardID(id uint64) {
 	panic("not supported")
+}
+
+func (relData *BlockListRelData) Split(i int) []engine.RelData {
+	blkCnt := relData.DataCnt()
+	mod := blkCnt % i
+	divide := blkCnt / i
+	current := 0
+	shards := make([]engine.RelData, i)
+	for j := 0; j < i; j++ {
+		if j < mod {
+			shards[j] = relData.DataSlice(current, current+divide+1)
+			current = current + divide + 1
+		} else {
+			shards[j] = relData.DataSlice(current, current+divide)
+			current = current + divide
+		}
+	}
+	return shards
 }
 
 func (relData *BlockListRelData) GetBlockInfoSlice() objectio.BlockInfoSlice {
@@ -156,12 +490,12 @@ func (relData *BlockListRelData) MarshalBinaryWithBuffer(w *bytes.Buffer) (err e
 		return
 	}
 
+	// marshal blk list
 	sizeofblks := uint32(relData.blklist.Size())
 	if _, err = w.Write(types.EncodeUint32(&sizeofblks)); err != nil {
 		return
 	}
 
-	// marshal blk list
 	if _, err = w.Write(relData.blklist); err != nil {
 		return
 	}

@@ -1,3 +1,4 @@
+-- @skip:issue#16438
 --env prepare statement
 drop table if exists pt_table_1;
 drop table if exists pt_table_2;

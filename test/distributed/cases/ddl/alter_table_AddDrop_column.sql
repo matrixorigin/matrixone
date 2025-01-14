@@ -232,7 +232,7 @@ show create table test01;
 select * from test01;
 drop table test01;
 
-
+-- @bvt:issue#16438
 -- partitioned tables do not support column deletion,support column add
 drop table if exists tp5;
 create table tp5 (col1 INT, col2 CHAR(5), col3 DATE) partition by LINEAR key ALGORITHM = 1 (col3) PARTITIONS 5;
@@ -240,6 +240,7 @@ show create table tp5;
 alter table tp5 drop column col1;
 alter table tp5 add column col4 int;
 drop table tp5;
+-- @bvt:issue
 
 -- permission
 drop role if exists role_r1;

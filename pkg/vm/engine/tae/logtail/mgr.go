@@ -201,13 +201,20 @@ func (mgr *Manager) GetTruncateTS() types.TS {
 	return mgr.truncated
 }
 
-func (mgr *Manager) GCByTS(ctx context.Context, ts types.TS) {
-	if ts.Equal(&mgr.truncated) {
+func (mgr *Manager) GCByTS(ctx context.Context, ts types.TS) (updated bool) {
+	if ts.LE(&mgr.truncated) {
 		return
 	}
+	updated = true
 	mgr.truncated = ts
 	cnt := mgr.table.TruncateByTimeStamp(ts)
-	logutil.Info("[logtail] GC", zap.String("ts", ts.ToString()), zap.Int("deleted-blk", cnt), zap.Int("remaining-blk", mgr.table.BlockCount()))
+	logutil.Info(
+		"GC-Logtail-Table",
+		zap.String("ts", ts.ToString()),
+		zap.Int("deleted-blk", cnt),
+		zap.Int("remaining-blk", mgr.table.BlockCount()),
+	)
+	return
 }
 
 func (mgr *Manager) TryCompactTable() {
