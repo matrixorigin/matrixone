@@ -293,4 +293,30 @@ select count(*) from t1 where c3!=0;
 count(*)
 4000002
 drop table t3;
+create table t4(c1 int not null, c2  int unsigned) cluster by c1;
+insert into t4 select *,* from generate_series(1000000) g;
+insert into t4 select result+10000000,result+10000000 from generate_series(1000000) g;
+select mo_ctl('dn', 'flush', 'd1.t4');
+mo_ctl(dn, flush, d1.t4)
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+explain select count(*) as cnt from t4 group by c1 having cnt>1;
+AP QUERY PLAN ON MULTICN(4 core)
+Project
+  ->  Aggregate
+        Group Key: t4.c1 shuffle: range(t4.c1)
+        Aggregate Functions: starcount(1)
+        Filter Cond: (count(*) > 1)
+        ->  Table Scan on d1.t4
+select count(*) as cnt from t4 group by c1 having cnt>1;
+cnt
+explain select count(*) as cnt from t4 group by c2 having cnt>1;
+AP QUERY PLAN ON MULTICN(4 core)
+Project
+  ->  Aggregate
+        Group Key: t4.c2 shuffle: range(t4.c2)
+        Aggregate Functions: starcount(1)
+        Filter Cond: (count(*) > 1)
+        ->  Table Scan on d1.t4
+select count(*) as cnt from t4 group by c2 having cnt>1;
+cnt
 drop database if exists d1;

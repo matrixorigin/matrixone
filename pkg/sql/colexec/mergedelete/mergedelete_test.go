@@ -192,14 +192,11 @@ func TestMergeDelete(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint64(0), argument1.GetAffectedRows())
 
-	var partitionSources []engine.Relation
-	partitionSources = append(partitionSources, &mockRelation{})
 	argument2 := MergeDelete{
 		ctr: container{
-			delSource:        &mockRelation{},
-			bat:              &batch.Batch{},
-			partitionSources: partitionSources,
-			affectedRows:     0,
+			delSource:    &mockRelation{},
+			bat:          &batch.Batch{},
+			affectedRows: 0,
 		},
 		AddAffectedRows: true,
 		OperatorBase: vm.OperatorBase{
