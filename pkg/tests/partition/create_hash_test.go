@@ -40,10 +40,13 @@ func TestCreateAndDeleteHashBased(t *testing.T) {
 			db := testutils.GetDatabaseName(t)
 			testutils.CreateTestDatabase(t, db, cn)
 
-			testutils.ExecSQL(
+			testutils.ExecSQLWithReadResult(
 				t,
 				db,
 				cn,
+				func(i int, s string, r executor.Result) {
+
+				},
 				fmt.Sprintf("create table %s (c int) partition by hash(c) partitions 2", t.Name()),
 			)
 

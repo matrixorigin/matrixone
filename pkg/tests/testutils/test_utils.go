@@ -297,17 +297,6 @@ func WaitClusterAppliedTo(
 	)
 }
 
-func MustGetTableID(
-	t *testing.T,
-	db string,
-	table string,
-	txn executor.TxnExecutor,
-) uint64 {
-	id := GetTableID(t, db, table, txn)
-	require.NotEqual(t, uint64(0), id)
-	return id
-}
-
 func GetTableID(
 	t *testing.T,
 	db string,
