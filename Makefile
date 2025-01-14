@@ -107,14 +107,11 @@ pb: vendor-build generate-pb fmt
 
 THIRDPARTIES_INSTALL_DIR=$(ROOT_DIR)/thirdparties/install
 RACE_OPT :=
+DEBUG_OPT :=
 CGO_DEBUG_OPT :=
 CGO_OPTS :=CGO_CFLAGS="-I$(THIRDPARTIES_INSTALL_DIR)/include"
 GOLDFLAGS=-ldflags="-extldflags '-L$(THIRDPARTIES_INSTALL_DIR)/lib -Wl,-rpath,$(THIRDPARTIES_INSTALL_DIR)/lib' -X '$(GO_MODULE)/pkg/version.GoVersion=$(GO_VERSION)' -X '$(GO_MODULE)/pkg/version.BranchName=$(BRANCH_NAME)' -X '$(GO_MODULE)/pkg/version.CommitID=$(LAST_COMMIT_ID)' -X '$(GO_MODULE)/pkg/version.BuildTime=$(BUILD_TIME)' -X '$(GO_MODULE)/pkg/version.Version=$(MO_VERSION)'"
 TAGS :=
-
-ifeq ($(DEBUG_OPT),)
-	DEBUG_OPT :=
-endif
 
 .PHONY: cgo
 cgo:
