@@ -37,6 +37,7 @@ const (
 	ReservedSize      = 32
 	EntryCountSize    = 4
 	EntryStartDSNSize = 8
+	EntrySafeDSNSize  = 8
 	FooterOffsetSize  = 4
 
 	OneEntryFooterSize = 8
@@ -47,7 +48,8 @@ const (
 	ReservedOffset      = CmdTypeOffset + CmdTypeSize
 	EntryCountOffset    = ReservedOffset + ReservedSize
 	EntryStartDSNOffset = EntryCountOffset + EntryCountSize
-	FooterOffsetOffset  = EntryStartDSNOffset + EntryStartDSNSize
+	EntrySafeDSNOffset  = EntryStartDSNOffset + EntryStartDSNSize
+	FooterOffsetOffset  = EntrySafeDSNOffset + EntrySafeDSNSize
 
 	EmptyLogEntrySize = FooterOffsetOffset + FooterOffsetSize
 )
@@ -106,6 +108,10 @@ func (w *LogEntryWriter) Capacity() int {
 func (w *LogEntryWriter) Append(buf []byte) {
 	offset, length := w.Entry.AppendEntry(buf)
 	w.Footer.AppendEntry(offset, length)
+}
+
+func (w *LogEntryWriter) SetSafeDSN(dsn uint64) {
+	w.Entry.SetSafeDSN(dsn)
 }
 
 func (w *LogEntryWriter) AppendEntry(entry *entry.Entry) (err error) {
@@ -215,6 +221,10 @@ func (e LogEntry) GetStartDSN() uint64 {
 	return types.DecodeUint64(e[EntryStartDSNOffset:])
 }
 
+func (e LogEntry) GetSafeDSN() uint64 {
+	return types.DecodeUint64(e[EntrySafeDSNOffset:])
+}
+
 func (e LogEntry) SetHeader(
 	typ uint16,
 	version uint16,
@@ -231,6 +241,10 @@ func (e LogEntry) SetEntryCount(count uint32) {
 
 func (e LogEntry) SetStartDSN(startDSN uint64) {
 	copy(e[EntryStartDSNOffset:], types.EncodeUint64(&startDSN))
+}
+
+func (e LogEntry) SetSafeDSN(safeDSN uint64) {
+	copy(e[EntrySafeDSNOffset:], types.EncodeUint64(&safeDSN))
 }
 
 func (e LogEntry) SetFooterOffset(offset uint32) {
