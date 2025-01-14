@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"go.uber.org/zap"
@@ -123,7 +122,7 @@ func AddCronJob(db *DB, name string, skipMode bool) (err error) {
 			db.Opts.CheckpointCfg.TransferInterval,
 			func(context.Context) {
 				db.Runtime.PoolUsageReport()
-				dbutils.PrintMemStats()
+				// dbutils.PrintMemStats()
 				db.Runtime.TransferDelsMap.Prune(db.Opts.TransferTableTTL)
 				db.Runtime.TransferTable.RunTTL()
 			},
