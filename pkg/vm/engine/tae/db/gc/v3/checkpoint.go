@@ -81,6 +81,8 @@ type checkpointCleaner struct {
 		// will use this watermark as the start, and use `gcWaterMark` as the end to call `ICKPRange`,
 		// to get the ickp to perform a merge operation
 		checkpointGCWaterMark atomic.Pointer[types.TS]
+
+		fastScanWaterMark atomic.Pointer[checkpoint.CheckpointEntry]
 	}
 
 	options struct {
@@ -1529,10 +1531,6 @@ func (c *checkpointCleaner) FastExecute(inputCtx context.Context) (err error) {
 	memoryBuffer := MakeGCWindowBuffer(16 * mpool.MB)
 	defer memoryBuffer.Close(c.mp)
 
-	if err = c.tryScanLocked(ctx, memoryBuffer); err != nil {
-		return
-	}
-	err = c.tryGCLocked(ctx, memoryBuffer)
 	var maxScannedTS types.TS
 	if startGCWaterMark != nil {
 		maxScannedTS = startGCWaterMark.GetEnd()
