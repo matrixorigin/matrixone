@@ -114,6 +114,9 @@ func (w *LogEntryWriter) AppendEntry(entry *entry.Entry) (err error) {
 		return
 	}
 	eBuf := w.buf.Bytes()
+	if w.Footer.GetEntryCount() == 0 {
+		w.Entry.SetStartDSN(entry.DSN)
+	}
 	w.Append(eBuf)
 	return
 }
