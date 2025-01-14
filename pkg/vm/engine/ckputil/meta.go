@@ -165,23 +165,15 @@ func ExportToTableRanges(
 ) (ranges []TableRange) {
 	tableIds := vector.MustFixedColNoTypeCheck[uint64](data.Vecs[0])
 	objectTypes := vector.MustFixedColNoTypeCheck[int8](data.Vecs[1])
-	start := vector.OrderedFindFirstIndexInSortedSliceWithIndex(len(tableIds), func(idx int) int {
-		if tableIds[idx] < tableId {
-			return -1
-		}
-		if tableIds[idx] > tableId {
-			return 1
-		}
-		if objectTypes[idx] < objectType {
-			return -1
-		}
-		if objectTypes[idx] > objectType {
-			return 1
-		}
-		return 0
-	})
+	start := vector.OrderedFindFirstIndexInSortedSlice(tableId, tableIds)
 	if start == -1 {
 		return
+	}
+	for i := start; i < len(tableIds); i++ {
+		if objectTypes[i] == objectType {
+			break
+		}
+		start++
 	}
 	startRows := vector.MustFixedColNoTypeCheck[types.Rowid](data.Vecs[2])
 	endRows := vector.MustFixedColNoTypeCheck[types.Rowid](data.Vecs[3])
