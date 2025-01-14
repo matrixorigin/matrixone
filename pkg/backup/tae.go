@@ -324,23 +324,20 @@ func execBackup(
 		oNames = append(oNames, oneNames...)
 	}
 	loadDuration += time.Since(now)
-	dstObj, err := fileservice.SortedList(srcFs.List(ctx, ""))
+
+	dstObj, err := fileservice.SortedList(dstFs.List(ctx, ""))
 	dstHave := make(map[string]bool)
 	if err != nil {
 		return err
 	}
-	if len(dstObj) == 1 && dstObj[0].Name == fileList {
+	if len(dstObj) == 2 && dstObj[0].Name == fileList {
 		data, err := readFile(ctx, dstFs, fileList)
 		if err != nil {
 			return err
 		}
-		var dstFiles []*taeFile
-		err = json.Unmarshal(data, &dstFiles)
-		if err != nil {
-			return err
-		}
-		for _, file := range dstFiles {
-			dstHave[file.path] = true
+		objects := strings.Split(string(data), "\n")
+		for _, object := range objects {
+			dstHave[object] = true
 		}
 	}
 	now = time.Now()
