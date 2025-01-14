@@ -325,3 +325,20 @@ func (s SkipCmd) Sort() {
 		return less
 	})
 }
+
+func SkipMapToLogEntry(skipMap map[uint64]uint64) LogEntry {
+	skipCmd := NewSkipCmd(len(skipMap))
+	i := 0
+	for dsn, psn := range skipMap {
+		skipCmd.Set(i, dsn, psn)
+		i++
+	}
+	skipCmd.Sort()
+	e := NewLogEntry()
+	e.SetHeader(IOET_WALRecord, IOET_WALRecord_CurrVer, uint16(Cmd_SkipDSN))
+	var footer LogEntryFooter
+	offset, length := e.AppendEntry(skipCmd)
+	footer.AppendEntry(offset, length)
+	e.SetFooter(0, footer)
+	return e
+}

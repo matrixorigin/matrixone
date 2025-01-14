@@ -96,6 +96,21 @@ func Test_LogEntry1(t *testing.T) {
 	writer.Close()
 }
 
-// func Test_LogEntry2(t *testing.T) {
-// 	e := NewLogEntry()
-// }
+func Test_LogEntry2(t *testing.T) {
+	skipMap := map[uint64]uint64{
+		uint64(3): uint64(1),
+		uint64(2): uint64(2),
+		uint64(1): uint64(3),
+	}
+
+	e := SkipMapToLogEntry(skipMap)
+	assert.Equal(t, uint32(1), e.GetEntryCount())
+	assert.Equal(t, Cmd_SkipDSN, CmdType(e.GetCmdType()))
+	assert.Equal(t, IOET_WALRecord, e.GetType())
+	assert.Equal(t, IOET_WALRecord_CurrVer, e.GetVersion())
+
+	skipCmd := SkipCmd(e.GetEntry(0))
+	assert.Equal(t, []uint64{1, 2, 3}, skipCmd.GetDSNSlice())
+	assert.Equal(t, []uint64{3, 2, 1}, skipCmd.GetPSNSlice())
+	assert.Equal(t, 3, skipCmd.ElementCount())
+}
