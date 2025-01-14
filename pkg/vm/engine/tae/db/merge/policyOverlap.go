@@ -78,7 +78,7 @@ func (m *objOverlapPolicy) revise(rc *resourceController) []reviseResult {
 				continue
 			}
 
-			if rc.resourceAvailable(result.objs) {
+			if rc.resourceAvailable(result.objs) || len(result.objs) < 30 {
 				rc.reserveResources(result.objs)
 			} else {
 				result.kind = taskHostCN
