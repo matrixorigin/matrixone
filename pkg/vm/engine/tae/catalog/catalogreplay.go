@@ -471,13 +471,14 @@ func (catalog *Catalog) OnReplayObjectBatch(replayer ObjectListReplayer, objectI
 	startTSs := vector.MustFixedColNoTypeCheck[types.TS](objectInfo.GetVectorByName(txnbase.SnapshotAttr_StartTS).GetDownstreamVector())
 	createTSs := vector.MustFixedColNoTypeCheck[types.TS](objectInfo.GetVectorByName(EntryNode_CreateAt).GetDownstreamVector())
 	deleteTSs := vector.MustFixedColNoTypeCheck[types.TS](objectInfo.GetVectorByName(EntryNode_DeleteAt).GetDownstreamVector())
+	objs := objectInfo.GetVectorByName(ObjectAttr_ObjectStats).GetDownstreamVector()
 	for i, tid := range tids {
 		if forSys != pkgcatalog.IsSystemTable(tid) {
 			continue
 		}
 		replayFn := func() {
 			dbid := dbids[i]
-			objectNode := ReadObjectInfoTuple(objectInfo, i)
+			objectNode := ReadObjectInfoTuple(objs, i)
 			sid := objectNode.ObjectName().ObjectId()
 			catalog.onReplayCheckpointObject(
 				dbid, tid, sid, createTSs[i], deleteTSs[i], startTSs[i], prepareTSs[i], commitTSs[i], objectNode, isTombstone, dataFactory)

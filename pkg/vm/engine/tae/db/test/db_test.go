@@ -6780,7 +6780,8 @@ func TestAppendAndGC2(t *testing.T) {
 	dir := tae.Dir
 	tae.Close()
 	wal := wal.NewDriverWithBatchStore(opts.Ctx, dir, "wal", nil)
-	wal.Replay(loadFiles)
+	err = wal.Replay(opts.Ctx, loadFiles)
+	assert.Nil(t, err)
 	assert.NotEqual(t, 0, len(files))
 	for file := range metaFile {
 		if _, ok := files[file]; !ok {
@@ -7798,48 +7799,59 @@ func TestGCCheckpoint1(t *testing.T) {
 	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
-	opts := config.WithQuickScanAndCKPOpts(nil)
+	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 
-	schema := catalog.MockSchemaAll(18, 2)
-	schema.Extra.BlockMaxRows = 5
-	schema.Extra.ObjectMaxBlocks = 2
-	tae.BindSchema(schema)
-	bat := catalog.MockBatch(schema, 50)
+	i := 0
 
-	tae.CreateRelAndAppend(bat, true)
+	commitOneTxn := func() {
+		txn, _ := tae.StartTxn(nil)
+		_, err := txn.CreateDatabase(fmt.Sprintf("db_%d", i), "", "")
+		i++
+		assert.Nil(t, err)
+	}
 
-	testutils.WaitExpect(4000, func() bool {
-		return tae.Wal.GetPenddingCnt() == 0
-	})
-	assert.Equal(t, uint64(0), tae.Wal.GetPenddingCnt())
+	commitOneTxn()
+	commitOneTxn()
 
-	testutils.WaitExpect(4000, func() bool {
-		return tae.BGCheckpointRunner.GetPenddingIncrementalCount() == 0
-	})
-	assert.Equal(t, 0, tae.BGCheckpointRunner.GetPenddingIncrementalCount())
+	err := tae.ForceGlobalCheckpoint(
+		context.Background(),
+		tae.TxnMgr.Now(),
+		0,
+	)
+	assert.NoError(t, err)
 
-	testutils.WaitExpect(4000, func() bool {
-		return tae.BGCheckpointRunner.MaxGlobalCheckpoint().IsFinished()
-	})
-	assert.True(t, tae.BGCheckpointRunner.MaxGlobalCheckpoint().IsFinished())
+	commitOneTxn()
+	commitOneTxn()
 
-	_, err := tae.BGCheckpointRunner.DisableCheckpoint(ctx)
-	require.NoError(t, err)
+	tae.ForceCheckpoint()
 
-	gcTS := types.BuildTS(time.Now().UTC().UnixNano(), 0)
+	commitOneTxn()
+
+	err = tae.ForceGlobalCheckpoint(
+		context.Background(),
+		tae.TxnMgr.Now(),
+		0,
+	)
+	assert.NoError(t, err)
+
+	gcTS := tae.TxnMgr.Now()
 	t.Log(gcTS.ToString())
-	tae.BGCheckpointRunner.GCByTS(context.Background(), gcTS)
+
+	commitOneTxn()
+
+	tae.ForceCheckpoint()
+
+	err = tae.BGCheckpointRunner.GCByTS(context.Background(), gcTS)
+	assert.NoError(t, err)
 
 	maxGlobal := tae.BGCheckpointRunner.MaxGlobalCheckpoint()
 
 	testutils.WaitExpect(4000, func() bool {
-		tae.BGCheckpointRunner.GCNeeded()
-		return !tae.BGCheckpointRunner.GCNeeded()
+		ckps := tae.BGCheckpointRunner.GetAllGlobalCheckpoints()
+		return len(ckps) == 1
 	})
-	assert.False(t, tae.BGCheckpointRunner.GCNeeded())
-
 	globals := tae.BGCheckpointRunner.GetAllGlobalCheckpoints()
 	assert.Equal(t, 1, len(globals))
 	end := maxGlobal.GetEnd()
@@ -7855,8 +7867,8 @@ func TestGCCheckpoint1(t *testing.T) {
 		startTS := incremental.GetStart()
 		prevEndNextTS := prevEnd.Next()
 		assert.True(t, startTS.Equal(&prevEndNextTS))
-		t.Log(incremental.String())
 	}
+	assert.Equal(t, 1, len(incrementals))
 }
 
 // 1. make some transactions

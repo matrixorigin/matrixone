@@ -55,7 +55,7 @@ func newMockEntry() *mockEntry {
 
 func (m *mockEntry) appendEntry(e *driverEntry.Entry) {
 	m.entries = append(m.entries, e)
-	m.meta.AddAddr(e.Lsn, m.payloadSize)
+	m.meta.AddAddr(e.DSN, m.payloadSize)
 	m.payloadSize += uint64(e.GetSize())
 }
 
