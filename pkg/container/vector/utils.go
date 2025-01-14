@@ -51,6 +51,36 @@ func OrderedFindFirstIndexInSortedSlice[T types.OrderedT](v T, s []T) int {
 	return -1
 }
 
+// OrderedFindFirstIndexInSortedSliceWithIndex finds the first index of v in a sorted slice s
+// If v is not found, return -1
+func OrderedFindFirstIndexInSortedSliceWithIndex(length int, compareWithV func(idx int) int) int {
+	if length == 0 {
+		return -1
+	}
+	if length == 1 {
+		if compareWithV(0) == 0 {
+			return 0
+		}
+		return -1
+	}
+	if compareWithV(0) == 0 {
+		return 0
+	}
+	l, r := 0, length-1
+	for l < r {
+		mid := (l + r) / 2
+		if compareWithV(mid) >= 0 {
+			r = mid
+		} else {
+			l = mid + 1
+		}
+	}
+	if compareWithV(l) == 0 {
+		return l
+	}
+	return -1
+}
+
 // FindFirstIndexInSortedSlice finds the first index of v in a sorted slice s
 // If v is not found, return -1
 // compare is a function to compare two elements in s

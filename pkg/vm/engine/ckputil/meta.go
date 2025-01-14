@@ -39,12 +39,14 @@ import (
 var MetaSchema_TableRange_Seqnums = []uint16{0, 1, 2, 3}
 var MetaSchema_TableRange_Attrs = []string{
 	TableObjectsAttr_Table,
+	"object_type",
 	"start_row",
 	"end_row",
 	"location",
 }
 var MetaSchema_TableRange_Types = []types.Type{
 	TableObjectsTypes[TableObjectsAttr_Table_Idx],
+	types.T_int8.ToType(),
 	objectio.RowidType,
 	objectio.RowidType,
 	types.T_char.ToType(),
@@ -67,16 +69,27 @@ func TableRangesRows(r []TableRange) int {
 }
 
 type TableRange struct {
-	TableID  uint64
-	Start    types.Rowid
-	End      types.Rowid
-	Location objectio.Location
+	TableID    uint64
+	ObjectType int8
+	Start      types.Rowid
+	End        types.Rowid
+	Location   objectio.Location
 }
 
 func (r *TableRange) String() string {
+	objType := ""
+	switch r.ObjectType {
+	case ObjectType_Data:
+		objType = "DATA"
+	case ObjectType_Tombstone:
+		objType = "TOMBSTONE"
+	default:
+		panic(fmt.Sprintf("invalid object type %d", r.ObjectType))
+	}
 	return fmt.Sprintf(
-		"Range<%d:[%d-%d,%d-%d]:%s>",
+		"Range<%d-%v:[%d-%d,%d-%d]:%s>",
 		r.TableID,
+		objType,
 		r.Start.GetBlockOffset(),
 		r.Start.GetRowOffset(),
 		r.End.GetBlockOffset(),
@@ -99,26 +112,32 @@ func (r *TableRange) Rows() int {
 
 // the schema of the table entry
 // 0: table id
-// 1: start rowid
-// 2: end rowid
-// 3: location
+// 1: object type
+// 2: start rowid
+// 3: end rowid
+// 4: location
 func (r *TableRange) AppendTo(bat *batch.Batch, mp *mpool.MPool) (err error) {
 	if err = vector.AppendFixed[uint64](
 		bat.Vecs[0], r.TableID, false, mp,
 	); err != nil {
 		return
 	}
-	if err = vector.AppendFixed[types.Rowid](
-		bat.Vecs[1], r.Start, false, mp,
+	if err = vector.AppendFixed[int8](
+		bat.Vecs[1], r.ObjectType, false, mp,
 	); err != nil {
 		return
 	}
 	if err = vector.AppendFixed[types.Rowid](
-		bat.Vecs[2], r.End, false, mp,
+		bat.Vecs[2], r.Start, false, mp,
 	); err != nil {
 		return
 	}
-	if err = vector.AppendBytes(bat.Vecs[3], r.Location, false, mp); err != nil {
+	if err = vector.AppendFixed[types.Rowid](
+		bat.Vecs[3], r.End, false, mp,
+	); err != nil {
+		return
+	}
+	if err = vector.AppendBytes(bat.Vecs[4], r.Location, false, mp); err != nil {
 		return
 	}
 	bat.AddRowCount(1)
@@ -137,28 +156,45 @@ func MakeTableRangeBatch() *batch.Batch {
 	)
 }
 
-// data should be sorted by table id
+// data should be sorted by table id and object type
 // the schema of the table entry
 func ExportToTableRanges(
 	data *batch.Batch,
 	tableId uint64,
+	objectType int8,
 ) (ranges []TableRange) {
 	tableIds := vector.MustFixedColNoTypeCheck[uint64](data.Vecs[0])
-	start := vector.OrderedFindFirstIndexInSortedSlice(tableId, tableIds)
+	objectTypes := vector.MustFixedColNoTypeCheck[int8](data.Vecs[1])
+	start := vector.OrderedFindFirstIndexInSortedSliceWithIndex(len(tableIds), func(idx int) int {
+		if tableIds[idx] < tableId {
+			return -1
+		}
+		if tableIds[idx] > tableId {
+			return 1
+		}
+		if objectTypes[idx] < objectType {
+			return -1
+		}
+		if objectTypes[idx] > objectType {
+			return 1
+		}
+		return 0
+	})
 	if start == -1 {
 		return
 	}
-	startRows := vector.MustFixedColNoTypeCheck[types.Rowid](data.Vecs[1])
-	endRows := vector.MustFixedColNoTypeCheck[types.Rowid](data.Vecs[2])
+	startRows := vector.MustFixedColNoTypeCheck[types.Rowid](data.Vecs[2])
+	endRows := vector.MustFixedColNoTypeCheck[types.Rowid](data.Vecs[3])
 	for i, rows := start, data.RowCount(); i < rows; i++ {
-		if tableIds[i] != tableId {
+		if tableIds[i] != tableId || objectTypes[i] != objectType {
 			break
 		}
 		ranges = append(ranges, TableRange{
-			TableID:  tableId,
-			Start:    startRows[i],
-			End:      endRows[i],
-			Location: data.Vecs[3].GetBytesAt(i),
+			TableID:    tableId,
+			ObjectType: objectTypes[i],
+			Start:      startRows[i],
+			End:        endRows[i],
+			Location:   data.Vecs[4].GetBytesAt(i),
 		})
 	}
 	return
@@ -229,16 +265,18 @@ func CollectTableRangesFromFile(
 			break
 		}
 		tableIds := vector.MustFixedColNoTypeCheck[uint64](tmpBat.Vecs[0])
-		rowids := vector.MustFixedColNoTypeCheck[types.Rowid](tmpBat.Vecs[1])
+		objectTypes := vector.MustFixedColNoTypeCheck[int8](tmpBat.Vecs[1])
+		rowids := vector.MustFixedColNoTypeCheck[types.Rowid](tmpBat.Vecs[2])
 		for i, rows := 0, tmpBat.RowCount(); i < rows; i++ {
-			if activeRange.TableID != tableIds[i] {
+			if activeRange.TableID != tableIds[i] || activeRange.ObjectType != objectTypes[i] {
 				if activeRange.IsEmpty() {
-					// first table id
+					// first table id, object type
 					activeRange.TableID = tableIds[i]
+					activeRange.ObjectType = objectTypes[i]
 					activeRange.Start = rowids[i]
 					activeRange.Location = obj.ObjectLocation()
 				} else {
-					// different table id
+					// different table id, object type
 					// 1. save the active range to data
 					if err = activeRange.AppendTo(data, mp); err != nil {
 						return
@@ -246,6 +284,7 @@ func CollectTableRangesFromFile(
 
 					// 2. reset the active range
 					activeRange.TableID = tableIds[i]
+					activeRange.ObjectType = objectTypes[i]
 					activeRange.Start = rowids[i]
 					activeRange.Location = obj.ObjectLocation()
 				}

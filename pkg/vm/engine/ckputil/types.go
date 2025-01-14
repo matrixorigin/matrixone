@@ -45,10 +45,10 @@ const (
 	TableObjectsAttr_Accout_Idx     = 0
 	TableObjectsAttr_DB_Idx         = 1
 	TableObjectsAttr_Table_Idx      = 2
-	TableObjectsAttr_ID_Idx         = 3
-	TableObjectsAttr_CreateTS_Idx   = 4
-	TableObjectsAttr_DeleteTS_Idx   = 5
-	TableObjectsAttr_ObjectType_Idx = 6
+	TableObjectsAttr_ObjectType_Idx = 3
+	TableObjectsAttr_ID_Idx         = 4
+	TableObjectsAttr_CreateTS_Idx   = 5
+	TableObjectsAttr_DeleteTS_Idx   = 6
 	TableObjectsAttr_Cluster_Idx    = 7
 	// TableObjectsAttr_PhysicalAddr_Idx = 8
 )
@@ -63,10 +63,10 @@ var TableObjectsAttrs = []string{
 	TableObjectsAttr_Accout,
 	TableObjectsAttr_DB,
 	TableObjectsAttr_Table,
+	TableObjectsAttr_ObjectType,
 	TableObjectsAttr_ID,
 	TableObjectsAttr_CreateTS,
 	TableObjectsAttr_DeleteTS,
-	TableObjectsAttr_ObjectType,
 	TableObjectsAttr_Cluster,
 	// TableObjectsAttr_PhysicalAddr,
 }
@@ -75,10 +75,10 @@ var TableObjectsTypes = []types.Type{
 	types.T_uint32.ToType(),
 	types.T_uint64.ToType(),
 	types.T_uint64.ToType(),
+	types.T_int8.ToType(),
 	types.T_char.ToType(),
 	types.T_TS.ToType(),
 	types.T_TS.ToType(),
-	types.T_int8.ToType(),
 	types.T_char.ToType(),
 	// types.T_Rowid.ToType(),
 }
