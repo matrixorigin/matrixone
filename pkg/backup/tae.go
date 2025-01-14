@@ -330,7 +330,7 @@ func execBackup(
 	if err != nil {
 		return err
 	}
-	if len(dstObj) == 2 && dstObj[0].Name == fileList {
+	if len(dstObj) != 0 && dstObj[0].Name == fileList {
 		data, err := readFile(ctx, dstFs, fileList)
 		if err != nil {
 			return err
