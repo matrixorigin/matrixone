@@ -63,7 +63,6 @@ type Property = plan.Property
 type TableDef_DefType_Properties = plan.TableDef_DefType_Properties
 type PropertiesDef = plan.PropertiesDef
 type ViewDef = plan.ViewDef
-type PartitionByDef = plan.PartitionByDef
 type ClusterByDef = plan.ClusterByDef
 type OrderBySpec = plan.OrderBySpec
 type FkColName = plan.FkColName
@@ -239,7 +238,6 @@ type BindContext struct {
 	recSelect              bool
 	finalSelect            bool
 	unionSelect            bool
-	isTryBindingCTE        bool
 	sliding                bool
 	isDistinct             bool
 	isCorrelated           bool
@@ -248,8 +246,10 @@ type BindContext struct {
 	isGroupingSet          bool
 	recRecursiveScanNodeId int32
 
-	cteName  string
-	headings []string
+	cteName string
+	//cte in binding or bound already
+	boundCtes map[string]*CTERef
+	headings  []string
 
 	groupTag     int32
 	aggregateTag int32
@@ -303,6 +303,8 @@ type BindContext struct {
 	snapshot *Snapshot
 	// all view keys(dbName#viewName)
 	views []string
+	//view in binding or already bound
+	boundViews map[string]*tree.CreateView
 
 	// lower is sys var lower_case_table_names
 	lower int64
@@ -414,7 +416,6 @@ var _ Binder = (*GroupBinder)(nil)
 var _ Binder = (*HavingBinder)(nil)
 var _ Binder = (*ProjectionBinder)(nil)
 var _ Binder = (*LimitBinder)(nil)
-var _ Binder = (*PartitionBinder)(nil)
 var _ Binder = (*UpdateBinder)(nil)
 var _ Binder = (*OndupUpdateBinder)(nil)
 

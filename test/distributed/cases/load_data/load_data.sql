@@ -482,6 +482,10 @@ select count(*) from load_data_t9;
 
 drop table load_data_t9;
 
+drop table if exists load_data_type;
+create table load_data_type(col1 int);
 
-
-
+load data infile '$resources/load_data/test_int.csv' into table load_data_type fields terminated by ',';
+load data infile '$resources/load_data/test_int.csv' into table load_data_type fields terminated by ',' ignore 1 lines;
+select * from load_data_type;
+drop table load_data_type;

@@ -309,7 +309,7 @@ var CheckViewDefinition = func(txn executor.TxnExecutor, accountId uint32, schem
 	})
 
 	if loaded && n > 1 {
-		panic("BUG: Duplicate column names in table")
+		getLogger(txn.Txn().TxnOptions().CN).Fatal("BUG: Duplicate column names in table")
 	}
 	return loaded, view_def, nil
 }

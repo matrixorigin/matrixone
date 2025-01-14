@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 )
 
@@ -53,9 +52,7 @@ func init() {
 			return a.(*baseEntry).Marshal()
 		},
 		func(b []byte) (any, error) {
-			record := &baseEntry{
-				Meta: &Meta{},
-			}
+			record := new(baseEntry)
 			err := record.Unmarshal(b)
 			return record, err
 		},
@@ -69,8 +66,8 @@ type Meta struct {
 	payloadSize uint64
 }
 
-func newMeta() *Meta {
-	return &Meta{addr: make(map[uint64]uint64), metaType: TNormal}
+func newMeta() Meta {
+	return Meta{addr: make(map[uint64]uint64), metaType: TNormal}
 }
 
 func (m *Meta) GetAddr() map[uint64]uint64 {
@@ -197,11 +194,11 @@ func (m *Meta) Marshal() (buf []byte, err error) {
 }
 
 type baseEntry struct {
+	Meta
 	EntryType, Version uint16
-	*Meta
-	entries []*entry.Entry
-	cmd     *ReplayCmd
-	payload []byte
+	entries            []*entry.Entry
+	cmd                ReplayCmd
+	payload            []byte
 }
 
 func (r *baseEntry) Marshal() (buf []byte, err error) {
@@ -256,6 +253,14 @@ func (r *baseEntry) ReadFrom(reader io.Reader) (n int64, err error) {
 		return 0, err
 	}
 	n += n1
+	if r.metaType == TReplay {
+		r.cmd = NewEmptyReplayCmd()
+		n1, err = r.cmd.ReadFrom(reader)
+		if err != nil {
+			return 0, err
+		}
+		n += n1
+	}
 	return
 }
 
@@ -269,7 +274,7 @@ func (r *baseEntry) Unmarshal(buf []byte) error {
 // read: logrecord -> meta+payload -> entry
 // write: entries+meta -> payload -> record
 type recordEntry struct {
-	*baseEntry
+	baseEntry
 	payload     []byte
 	unmarshaled atomic.Uint32
 	mashalMu    sync.RWMutex
@@ -277,7 +282,7 @@ type recordEntry struct {
 
 func newRecordEntry() *recordEntry {
 	return &recordEntry{
-		baseEntry: &baseEntry{
+		baseEntry: baseEntry{
 			entries: make([]*entry.Entry, 0), Meta: newMeta(),
 		},
 	}
@@ -286,32 +291,38 @@ func newRecordEntry() *recordEntry {
 func newEmptyRecordEntry(r logservice.LogRecord) *recordEntry {
 	return &recordEntry{
 		payload: r.Payload(),
-		baseEntry: &baseEntry{
+		baseEntry: baseEntry{
 			Meta: newMeta(),
 		},
-		mashalMu: sync.RWMutex{}}
+	}
 }
 
-func (r *recordEntry) replay(replayer *replayer) (addr *common.ClosedIntervals) {
-	lsns := make([]uint64, 0)
-	offset := int64(0)
-	for lsn := range r.Meta.addr {
-		lsns = append(lsns, lsn)
+func (r *recordEntry) forEachLogEntry(fn func(*entry.Entry)) (err error) {
+	if len(r.entries) > 0 {
+		for _, e := range r.entries {
+			fn(e)
+		}
+		return
+	}
+
+	var (
+		offset int64
+		n      int64
+	)
+	for range r.Meta.addr {
 		e := entry.NewEmptyEntry()
-		n, err := e.UnmarshalBinary(r.baseEntry.payload[offset:])
-		if err != nil {
-			panic(err)
+		if n, err = e.UnmarshalBinary(r.baseEntry.payload[offset:]); err != nil {
+			return
 		}
 		offset += n
-		replayer.lastEntry = e
-		replayer.recordChan <- e
+		fn(e)
 	}
-	intervals := common.NewClosedIntervalsBySlice(lsns)
-	return intervals
+	return
 }
+
 func (r *recordEntry) append(e *entry.Entry) {
 	r.entries = append(r.entries, e)
-	r.Meta.addr[e.Lsn] = uint64(r.payloadSize)
+	r.Meta.addr[e.DSN] = uint64(r.payloadSize)
 	r.payloadSize += uint64(e.GetSize())
 }
 
@@ -339,17 +350,7 @@ func (r *recordEntry) unmarshal() {
 	if err != nil {
 		panic(err)
 	}
-	r.baseEntry = entry.(*baseEntry)
+	r.baseEntry = *(entry.(*baseEntry))
 	r.payload = nil
 	r.unmarshaled.Store(1)
-}
-
-func (r *recordEntry) readEntry(lsn uint64) *entry.Entry {
-	r.unmarshal()
-	offset := r.Meta.addr[lsn]
-	bbuf := bytes.NewBuffer(r.baseEntry.payload[offset:])
-	e := entry.NewEmptyEntry()
-	e.ReadFrom(bbuf)
-	e.Lsn = lsn
-	return e
 }

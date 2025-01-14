@@ -32,8 +32,8 @@ import (
 const SlowAppendThreshold = 1 * time.Second
 
 type driverAppender struct {
-	client          *clientWithRecord
-	appendlsn       uint64
+	client          *wrappedClient
+	writeToken      uint64
 	logserviceLsn   uint64
 	entry           *recordEntry
 	contextDuration time.Duration
@@ -68,7 +68,7 @@ func (a *driverAppender) append(retryTimout, appendTimeout time.Duration) {
 	record := a.client.record
 	copy(record.Payload(), a.entry.payload)
 	record.ResizePayload(size)
-	defer logSlowAppend(size, a.appendlsn)()
+	defer logSlowAppend(size, a.writeToken)()
 	ctx, cancel := context.WithTimeoutCause(context.Background(), appendTimeout, moerr.CauseDriverAppender1)
 
 	var timeoutSpan trace.Span
@@ -88,7 +88,7 @@ func (a *driverAppender) append(retryTimout, appendTimeout time.Duration) {
 		logutil.Error(
 			"WAL-Append-Error",
 			zap.Error(err),
-			zap.Uint64("append-lsn", a.appendlsn),
+			zap.Uint64("write-token", a.writeToken),
 			zap.Int("client-id", a.client.id),
 			zap.Int("size", size),
 		)
@@ -111,7 +111,7 @@ func (a *driverAppender) append(retryTimout, appendTimeout time.Duration) {
 				logutil.Error(
 					"WAL-Append-Error",
 					zap.Error(err),
-					zap.Uint64("append-lsn", a.appendlsn),
+					zap.Uint64("write-token", a.writeToken),
 					zap.Int("client-id", a.client.id),
 					zap.Int("size", size),
 					zap.Int("retry", retryTimes),
@@ -124,7 +124,7 @@ func (a *driverAppender) append(retryTimout, appendTimeout time.Duration) {
 		logutil.Error(
 			"WAL-Append-Error",
 			zap.Error(err),
-			zap.Uint64("append-lsn", a.appendlsn),
+			zap.Uint64("write-token", a.writeToken),
 			zap.Int("client-id", a.client.id),
 			zap.Int("size", size),
 		)
@@ -146,7 +146,7 @@ func (a *driverAppender) freeEntries() {
 
 func logSlowAppend(
 	size int,
-	appendLsn uint64,
+	writeToken uint64,
 ) func() {
 	start := time.Now()
 	return func() {
@@ -156,7 +156,7 @@ func logSlowAppend(
 				"SLOW-LOG-AppendWAL",
 				zap.Duration("latency", elapsed),
 				zap.Int("size", size),
-				zap.Uint64("append-lsn", appendLsn),
+				zap.Uint64("write-token", writeToken),
 			)
 		}
 	}
