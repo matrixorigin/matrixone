@@ -29,7 +29,7 @@ import (
 type RowsIter interface {
 	Next() bool
 	Close() error
-	Entry() RowEntry
+	Entry() *RowEntry
 }
 
 type rowsIter struct {
@@ -90,8 +90,8 @@ func (p *rowsIter) Next() bool {
 	}
 }
 
-func (p *rowsIter) Entry() RowEntry {
-	return *p.iter.Item()
+func (p *rowsIter) Entry() *RowEntry {
+	return p.iter.Item()
 }
 
 func (p *rowsIter) Close() error {
@@ -106,7 +106,7 @@ type primaryKeyIter struct {
 	rows              *btree.BTreeG[*RowEntry]
 	primaryIndex      *btree.BTreeG[*PrimaryIndexEntry]
 	tombstoneRowIdIdx *btree.BTreeG[*PrimaryIndexEntry]
-	curRow            RowEntry
+	curRow            *RowEntry
 
 	specHint struct {
 		isDelIter bool
@@ -532,7 +532,7 @@ func (p *primaryKeyIter) isPKItemValid(pkItem PrimaryIndexEntry) bool {
 		}
 
 		if row.ID == pkItem.RowEntryID {
-			p.curRow = *row
+			p.curRow = row
 			return true
 		}
 
@@ -556,7 +556,7 @@ func (p *primaryKeyIter) Next() bool {
 	}
 }
 
-func (p *primaryKeyIter) Entry() RowEntry {
+func (p *primaryKeyIter) Entry() *RowEntry {
 	return p.curRow
 }
 
