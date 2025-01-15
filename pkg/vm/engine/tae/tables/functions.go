@@ -471,7 +471,7 @@ func dedupABlkClosureFactory(
 						return
 					}
 				}
-				commitTS := tsVec.Get(row).(types.TS)
+				commitTS := vector.GetFixedAtNoTypeCheck[types.TS](tsVec.GetDownstreamVector(), row)
 				startTS := txn.GetStartTS()
 				if commitTS.GT(&startTS) {
 					logutil.Info("Dedup-WW",
