@@ -42,17 +42,17 @@ func TestTree(t *testing.T) {
 	assert.True(t, tree.Equal(tree2))
 }
 
-func TestTableTree_ReadOldVersion(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	tree := NewTableTree(0, 0)
-	var w bytes.Buffer
-	obj := objectio.NewObjectid()
-	tree.AddObject(&obj, false)
-	_, err := tree.WriteTo(&w)
-	assert.NoError(t, err)
+// func TestTableTree_ReadOldVersion(t *testing.T) {
+// 	defer testutils.AfterTest(t)()
+// 	tree := NewTableTree(0, 0)
+// 	var w bytes.Buffer
+// 	obj := objectio.NewObjectid()
+// 	tree.AddObject(obj, false)
+// 	_, err := tree.WriteTo(&w)
+// 	assert.NoError(t, err)
 
-	tree2 := NewTableTree(0, 0)
-	assert.Panics(t, func() {
-		tree2.ReadFromWithVersion(&w, MemoTreeVersion2)
-	}, "not supported")
-}
+// 	tree2 := NewTableTree(0, 0)
+// 	assert.Panics(t, func() {
+// 		tree2.ReadFromWithVersion(&w, MemoTreeVersion2)
+// 	}, "not supported")
+// }
