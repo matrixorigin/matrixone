@@ -42,7 +42,7 @@ import (
 type mockEntry struct {
 	entryType   uint16
 	version     uint16
-	meta        logservicedriver.Meta
+	meta        logservicedriver.V1Meta
 	entries     []*driverEntry.Entry
 	payloadSize uint64
 }
@@ -74,7 +74,7 @@ func (m *mockEntry) WriteTo(w io.Writer) (int64, error) {
 		return 0, err
 	}
 	n += nn
-	if m.meta.GetType() == logservicedriver.TNormal {
+	if m.meta.GetType() == logservicedriver.Cmd_Normal {
 		for _, e := range m.entries {
 			nn, err := e.WriteTo(w)
 			if err != nil {
@@ -101,13 +101,13 @@ func runWithBaseEnv(fn func(cat *catalog.Catalog, txn txnif.AsyncTxn) error) err
 }
 
 type parameter struct {
-	metaType  logservicedriver.MetaType
+	cmdType   logservicedriver.CmdType
 	groupType uint32
 }
 
 func newParameter() *parameter {
 	return &parameter{
-		metaType:  logservicedriver.TNormal,
+		cmdType:   logservicedriver.Cmd_Normal,
 		groupType: wal.GroupPrepare,
 	}
 }
@@ -117,8 +117,8 @@ func (p *parameter) withGroupType(t uint32) *parameter {
 	return p
 }
 
-func (p *parameter) withMetaType(t logservicedriver.MetaType) *parameter {
-	p.metaType = t
+func (p *parameter) withCmdType(t logservicedriver.CmdType) *parameter {
+	p.cmdType = t
 	return p
 }
 
@@ -182,7 +182,7 @@ func generateCmdPayload(param parameter, loc objectio.Location) ([]byte, error) 
 		drEntry.Entry.PrepareWrite()
 
 		me := newMockEntry()
-		me.meta.SetType(param.metaType)
+		me.meta.SetType(param.cmdType)
 		me.appendEntry(drEntry)
 		var buf bytes.Buffer
 		_, err = me.WriteTo(&buf)
@@ -214,7 +214,7 @@ func generateCkpPayload(data []byte) ([]byte, error) {
 	drEntry.Entry.PrepareWrite()
 
 	me := newMockEntry()
-	me.meta.SetType(logservicedriver.TNormal)
+	me.meta.SetType(logservicedriver.Cmd_Normal)
 	me.appendEntry(drEntry)
 	var buf bytes.Buffer
 	_, err = me.WriteTo(&buf)
@@ -268,7 +268,7 @@ func TestEntry_ParseLocation(t *testing.T) {
 
 	t.Run("invalid meta type", func(t *testing.T) {
 		p, err := generateCmdPayload(
-			*newParameter().withMetaType(logservicedriver.Cmd_SkipDSN),
+			*newParameter().withCmdType(logservicedriver.Cmd_SkipDSN),
 			genLocation(uuid.New(), 0, 0, 0, 0, 0),
 		)
 		assert.NoError(t, err)

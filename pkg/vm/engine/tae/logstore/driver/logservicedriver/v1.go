@@ -27,38 +27,38 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 )
 
-type v1Meta struct {
+type V1Meta struct {
 	cmdType     CmdType
 	appended    uint64
 	addr        map[uint64]uint64
 	payloadSize uint64
 }
 
-func newMeta() v1Meta {
-	return v1Meta{addr: make(map[uint64]uint64), cmdType: Cmd_Normal}
+func newMeta() V1Meta {
+	return V1Meta{addr: make(map[uint64]uint64), cmdType: Cmd_Normal}
 }
 
-func (m *v1Meta) GetAddr() map[uint64]uint64 {
+func (m *V1Meta) GetAddr() map[uint64]uint64 {
 	return m.addr
 }
 
-func (m *v1Meta) AddAddr(l uint64, s uint64) {
+func (m *V1Meta) AddAddr(l uint64, s uint64) {
 	if m.addr == nil {
 		m.addr = make(map[uint64]uint64)
 	}
 	m.addr[l] = s
 }
 
-func (m *v1Meta) SetType(t CmdType) {
+func (m *V1Meta) SetType(t CmdType) {
 	m.cmdType = t
 }
-func (m *v1Meta) GetType() CmdType {
+func (m *V1Meta) GetType() CmdType {
 	return m.cmdType
 }
-func (m *v1Meta) SetAppended(appended uint64) {
+func (m *V1Meta) SetAppended(appended uint64) {
 	m.appended = appended
 }
-func (m *v1Meta) GetMinDSN() uint64 {
+func (m *V1Meta) GetMinDSN() uint64 {
 	min := uint64(0)
 	min = math.MaxUint64
 	for lsn := range m.addr {
@@ -68,7 +68,7 @@ func (m *v1Meta) GetMinDSN() uint64 {
 	}
 	return min
 }
-func (m *v1Meta) GetMaxLsn() uint64 {
+func (m *V1Meta) GetMaxLsn() uint64 {
 	max := uint64(0)
 	for lsn := range m.addr {
 		if lsn > max {
@@ -77,7 +77,7 @@ func (m *v1Meta) GetMaxLsn() uint64 {
 	}
 	return max
 }
-func (m *v1Meta) WriteTo(w io.Writer) (n int64, err error) {
+func (m *V1Meta) WriteTo(w io.Writer) (n int64, err error) {
 	cmdType := uint8(m.cmdType)
 	if _, err = w.Write(types.EncodeUint8(&cmdType)); err != nil {
 		return
@@ -109,7 +109,7 @@ func (m *v1Meta) WriteTo(w io.Writer) (n int64, err error) {
 	return
 }
 
-func (m *v1Meta) ReadFrom(r io.Reader) (n int64, err error) {
+func (m *V1Meta) ReadFrom(r io.Reader) (n int64, err error) {
 	cmdType := uint8(0)
 	if _, err = r.Read(types.EncodeUint8(&cmdType)); err != nil {
 		return
@@ -146,13 +146,13 @@ func (m *v1Meta) ReadFrom(r io.Reader) (n int64, err error) {
 	return
 }
 
-func (m *v1Meta) Unmarshal(buf []byte) error {
+func (m *V1Meta) Unmarshal(buf []byte) error {
 	bbuf := bytes.NewBuffer(buf)
 	_, err := m.ReadFrom(bbuf)
 	return err
 }
 
-func (m *v1Meta) Marshal() (buf []byte, err error) {
+func (m *V1Meta) Marshal() (buf []byte, err error) {
 	var bbuf bytes.Buffer
 	if _, err = m.WriteTo(&bbuf); err != nil {
 		return
@@ -162,7 +162,7 @@ func (m *v1Meta) Marshal() (buf []byte, err error) {
 }
 
 type v1Entry struct {
-	v1Meta
+	V1Meta
 	EntryType, Version uint16
 	entries            []*entry.Entry
 	cmd                v1SkipCmd
@@ -189,12 +189,12 @@ func (r *v1Entry) WriteTo(w io.Writer) (n int64, err error) {
 		return 0, err
 	}
 	n += 2
-	n1, err := r.v1Meta.WriteTo(w)
+	n1, err := r.V1Meta.WriteTo(w)
 	if err != nil {
 		return n, err
 	}
 	n += n1
-	switch r.v1Meta.cmdType {
+	switch r.V1Meta.cmdType {
 	case Cmd_Normal:
 		for _, e := range r.entries {
 			n1, err = e.WriteTo(w)
@@ -216,7 +216,7 @@ func (r *v1Entry) WriteTo(w io.Writer) (n int64, err error) {
 }
 
 func (r *v1Entry) ReadFrom(reader io.Reader) (n int64, err error) {
-	n1, err := r.v1Meta.ReadFrom(reader)
+	n1, err := r.V1Meta.ReadFrom(reader)
 	if err != nil {
 		return 0, err
 	}
@@ -251,7 +251,7 @@ type v1Record struct {
 func newRecordEntry() *v1Record {
 	return &v1Record{
 		v1Entry: v1Entry{
-			entries: make([]*entry.Entry, 0), v1Meta: newMeta(),
+			entries: make([]*entry.Entry, 0), V1Meta: newMeta(),
 		},
 	}
 }
@@ -260,7 +260,7 @@ func newEmptyRecordEntry(r logservice.LogRecord) *v1Record {
 	return &v1Record{
 		payload: r.Payload(),
 		v1Entry: v1Entry{
-			v1Meta: newMeta(),
+			V1Meta: newMeta(),
 		},
 	}
 }
@@ -277,7 +277,7 @@ func (r *v1Record) forEachLogEntry(fn func(*entry.Entry)) (err error) {
 		offset int64
 		n      int64
 	)
-	for range r.v1Meta.addr {
+	for range r.V1Meta.addr {
 		e := entry.NewEmptyEntry()
 		if n, err = e.UnmarshalBinary(r.v1Entry.payload[offset:]); err != nil {
 			return
@@ -290,7 +290,7 @@ func (r *v1Record) forEachLogEntry(fn func(*entry.Entry)) (err error) {
 
 func (r *v1Record) append(e *entry.Entry) {
 	r.entries = append(r.entries, e)
-	r.v1Meta.addr[e.DSN] = uint64(r.payloadSize)
+	r.V1Meta.addr[e.DSN] = uint64(r.payloadSize)
 	r.payloadSize += uint64(e.GetSize())
 }
 
