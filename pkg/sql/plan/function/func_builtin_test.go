@@ -19,22 +19,25 @@ import (
 	"math"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/stretchr/testify/require"
 )
 
 func Test_BuiltIn_CurrentSessionInfo(t *testing.T) {
 	proc := testutil.NewProcess()
+	proc.Ctx = defines.AttachAccountId(proc.Ctx, 246)
+	proc.Ctx = defines.AttachRoleId(proc.Ctx, 147)
+	proc.Ctx = defines.AttachUserId(proc.Ctx, 135)
+
 	proc.Base.SessionInfo = process.SessionInfo{
-		User:      "test_user1",
-		UserId:    135,
-		Account:   "test_account2",
-		AccountId: 246,
-		Role:      "test_role3",
-		RoleId:    147,
+		User:    "test_user1",
+		Account: "test_account2",
+		Role:    "test_role3",
 	}
 
 	{

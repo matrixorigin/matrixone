@@ -21,6 +21,8 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/google/uuid"
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -84,7 +86,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/stretchr/testify/require"
 )
 
 func Test_EncodeProcessInfo(t *testing.T) {
@@ -111,9 +112,6 @@ func Test_EncodeProcessInfo(t *testing.T) {
 		Host:           "",
 		Role:           "",
 		ConnectionID:   0,
-		AccountId:      0,
-		RoleId:         0,
-		UserId:         0,
 		LastInsertID:   0,
 		Database:       "",
 		Version:        "",

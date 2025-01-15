@@ -18,6 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -38,6 +39,16 @@ func (s *currentAccountState) start(tf *TableFunction, proc *process.Process, nt
 	// we do not call startPreamble here,
 	// there are very specific way of constructing the batch, below.
 	var err error
+
+	//-------------------------------------------------------
+	accountId, err := defines.GetAccountId(proc.Ctx)
+	if err != nil {
+		return err
+	}
+	userId := defines.GetUserId(proc.Ctx)
+	roleId := defines.GetRoleId(proc.Ctx)
+	//-------------------------------------------------------
+
 	if s.batch == nil {
 		s.batch = tf.createResultBatch()
 		for i, attr := range tf.Attrs {
@@ -45,15 +56,15 @@ func (s *currentAccountState) start(tf *TableFunction, proc *process.Process, nt
 			case "account_name":
 				s.batch.Vecs[i], err = vector.NewConstBytes(types.T_varchar.ToType(), []byte(proc.GetSessionInfo().Account), 1, proc.Mp())
 			case "account_id":
-				s.batch.Vecs[i], err = vector.NewConstFixed(types.T_uint32.ToType(), proc.GetSessionInfo().AccountId, 1, proc.Mp())
+				s.batch.Vecs[i], err = vector.NewConstFixed(types.T_uint32.ToType(), accountId, 1, proc.Mp())
 			case "user_name":
 				s.batch.Vecs[i], err = vector.NewConstBytes(types.T_varchar.ToType(), []byte(proc.GetSessionInfo().User), 1, proc.Mp())
 			case "user_id":
-				s.batch.Vecs[i], err = vector.NewConstFixed(types.T_uint32.ToType(), proc.GetSessionInfo().UserId, 1, proc.Mp())
+				s.batch.Vecs[i], err = vector.NewConstFixed(types.T_uint32.ToType(), userId, 1, proc.Mp())
 			case "role_name":
 				s.batch.Vecs[i], err = vector.NewConstBytes(types.T_varchar.ToType(), []byte(proc.GetSessionInfo().Role), 1, proc.Mp())
 			case "role_id":
-				s.batch.Vecs[i], err = vector.NewConstFixed(types.T_uint32.ToType(), proc.GetSessionInfo().RoleId, 1, proc.Mp())
+				s.batch.Vecs[i], err = vector.NewConstFixed(types.T_uint32.ToType(), roleId, 1, proc.Mp())
 			default:
 				err = moerr.NewInvalidInputf(proc.Ctx, "%v is not supported by current_account()", attr)
 			}

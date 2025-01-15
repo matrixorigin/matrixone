@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -606,7 +607,12 @@ func builtInPurgeLog(parameters []*vector.Vector, result vector.FunctionResultWr
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[types.Date](parameters[1])
 
-	if proc.GetSessionInfo().AccountId != sysAccountID {
+	accountId, err := defines.GetAccountId(proc.Ctx)
+	if err != nil {
+		return err
+	}
+
+	if accountId != sysAccountID {
 		return moerr.NewNotSupported(proc.Ctx, "only support sys account")
 	}
 
@@ -732,8 +738,12 @@ func builtInCurrentRole(_ []*vector.Vector, result vector.FunctionResultWrapper,
 
 func builtInCurrentAccountID(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[uint32](result)
+	accountId, err := defines.GetAccountId(proc.Ctx)
+	if err != nil {
+		return err
+	}
 	for i := uint64(0); i < uint64(length); i++ {
-		if err := rs.Append(proc.GetSessionInfo().AccountId, false); err != nil {
+		if err := rs.Append(accountId, false); err != nil {
 			return err
 		}
 	}
@@ -752,8 +762,10 @@ func builtInCurrentAccountName(_ []*vector.Vector, result vector.FunctionResultW
 
 func builtInCurrentRoleID(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[uint32](result)
+
+	roleId := defines.GetRoleId(proc.Ctx)
 	for i := uint64(0); i < uint64(length); i++ {
-		if err := rs.Append(proc.GetSessionInfo().RoleId, false); err != nil {
+		if err := rs.Append(roleId, false); err != nil {
 			return err
 		}
 	}
@@ -772,8 +784,10 @@ func builtInCurrentRoleName(_ []*vector.Vector, result vector.FunctionResultWrap
 
 func builtInCurrentUserID(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[uint32](result)
+
+	useId := defines.GetUserId(proc.Ctx)
 	for i := uint64(0); i < uint64(length); i++ {
-		if err := rs.Append(proc.GetSessionInfo().UserId, false); err != nil {
+		if err := rs.Append(useId, false); err != nil {
 			return err
 		}
 	}
