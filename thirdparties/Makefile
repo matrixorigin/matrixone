@@ -57,6 +57,9 @@ ifeq ($(UNAME_M),x86_64)
   ifeq ($(CC),gcc)
 	USEARCH_CMAKE_FLAG += -DUSEARCH_USE_OPENMP=1 -DUSEARCH_USE_SIMSIMD=1
   endif
+  ifeq ($(CC),)
+	USEARCH_CMAKE_FLAG += -DUSEARCH_USE_OPENMP=1 -DUSEARCH_USE_SIMSIMD=1
+  endif
 endif
 
 install/include/usearch.h:
