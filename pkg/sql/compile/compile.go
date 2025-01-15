@@ -2160,12 +2160,15 @@ func (c *Compile) compileShuffleJoinV2(node, left, right *plan.Node, leftscopes,
 	if len(leftscopes) != len(rightscopes) {
 		panic("wrong scopes for shuffle join!")
 	}
+	reuse := node.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reuse
 	bucketNum := len(c.cnList) * int(node.Stats.Dop)
 	for i := range leftscopes {
 		leftscopes[i].PreScopes = append(leftscopes[i].PreScopes, rightscopes[i])
-		shuffleOpForProbe := constructShuffleOperatorForJoinV2(int32(bucketNum), node, true)
-		shuffleOpForProbe.SetAnalyzeControl(c.anal.curNodeIdx, false)
-		leftscopes[i].setRootOperator(shuffleOpForProbe)
+		if !reuse {
+			shuffleOpForProbe := constructShuffleOperatorForJoinV2(int32(bucketNum), node, true)
+			shuffleOpForProbe.SetAnalyzeControl(c.anal.curNodeIdx, false)
+			leftscopes[i].setRootOperator(shuffleOpForProbe)
+		}
 
 		shuffleOpForBuild := constructShuffleOperatorForJoinV2(int32(bucketNum), node, false)
 		shuffleOpForBuild.SetAnalyzeControl(c.anal.curNodeIdx, false)
@@ -4459,15 +4462,7 @@ func (c *Compile) runSqlWithResult(sql string, accountId int32) (executor.Result
 		panic("missing lock service")
 	}
 
-	// default 1
-	var lower int64 = 1
-	if resolveVariableFunc := c.proc.GetResolveVariableFunc(); resolveVariableFunc != nil {
-		lowerVar, err := resolveVariableFunc("lower_case_table_names", true, false)
-		if err != nil {
-			return executor.Result{}, err
-		}
-		lower = lowerVar.(int64)
-	}
+	lower := c.getLower()
 
 	exec := v.(executor.SQLExecutor)
 	opts := executor.Options{}.
@@ -4614,4 +4609,17 @@ func (c *Compile) getHaveDDL() bool {
 		return txn.GetWorkspace().GetHaveDDL()
 	}
 	return false
+}
+
+func (c *Compile) getLower() int64 {
+	// default 1
+	var lower int64 = 1
+	if resolveVariableFunc := c.proc.GetResolveVariableFunc(); resolveVariableFunc != nil {
+		lowerVar, err := resolveVariableFunc("lower_case_table_names", true, false)
+		if err != nil {
+			return 1
+		}
+		lower = lowerVar.(int64)
+	}
+	return lower
 }
