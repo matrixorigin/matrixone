@@ -16,33 +16,58 @@
 
 package malloc
 
-import "unsafe"
+import (
+	"sync/atomic"
+	"unsafe"
+)
 
 /*
 #include <stdlib.h>
+#include <malloc.h>
 */
 import "C"
 
+func init() {
+	// malloc tunings
+	C.mallopt(C.M_TOP_PAD, 0)        // no sbrk padding
+	C.mallopt(C.M_MMAP_THRESHOLD, 0) // always use mmap
+}
+
 type CAllocator struct {
 	deallocatorPool *ClosureDeallocatorPool[cDeallocatorArgs, *cDeallocatorArgs]
+	bytesFree       atomic.Uint64
 }
 
 type cDeallocatorArgs struct {
-	ptr unsafe.Pointer
+	ptr  unsafe.Pointer
+	size uint64
 }
 
 func (cDeallocatorArgs) As(Trait) bool {
 	return false
 }
 
-func NewCAllocator() *CAllocator {
-	return &CAllocator{
+const (
+	cMallocReturnToOSThreshold = 64 * MB
+)
+
+func NewCAllocator() (ret *CAllocator) {
+	ret = &CAllocator{
 		deallocatorPool: NewClosureDeallocatorPool(
 			func(hints Hints, args *cDeallocatorArgs) {
 				C.free(args.ptr)
+
+				n := ret.bytesFree.Add(args.size)
+				if n > cMallocReturnToOSThreshold {
+					ret.bytesFree.Store(0)
+					// return memory to OS
+					C.malloc_trim(0)
+				}
+
 			},
 		),
 	}
+	return
 }
 
 var _ Allocator = new(CAllocator)
