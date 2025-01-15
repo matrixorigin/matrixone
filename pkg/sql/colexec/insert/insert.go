@@ -150,22 +150,27 @@ func (insert *Insert) insert_s3(proc *process.Process, analyzer process.Analyzer
 }
 
 func (insert *Insert) insert_table(proc *process.Process, analyzer process.Analyzer) (vm.CallResult, error) {
-	input, err := vm.ChildrenCall(insert.GetChildren(0), proc, analyzer)
-	if err != nil {
-		return input, err
+	if !insert.delegated {
+		input, err := vm.ChildrenCall(insert.GetChildren(0), proc, analyzer)
+		if err != nil {
+			return input, err
+		}
+
+		if input.Batch == nil || input.Batch.IsEmpty() {
+			return input, nil
+		}
+
+		insert.input = input
 	}
 
-	if input.Batch == nil || input.Batch.IsEmpty() {
-		return input, nil
-	}
-
+	input := insert.input
 	affectedRows := uint64(input.Batch.RowCount())
 	insert.ctr.buf.CleanOnlyData()
 	for i := range insert.ctr.buf.Attrs {
 		if insert.ctr.buf.Vecs[i] == nil {
 			insert.ctr.buf.Vecs[i] = vector.NewVec(*input.Batch.Vecs[i].GetType())
 		}
-		if err = insert.ctr.buf.Vecs[i].UnionBatch(input.Batch.Vecs[i], 0, input.Batch.Vecs[i].Length(), nil, proc.GetMPool()); err != nil {
+		if err := insert.ctr.buf.Vecs[i].UnionBatch(input.Batch.Vecs[i], 0, input.Batch.Vecs[i].Length(), nil, proc.GetMPool()); err != nil {
 			return input, err
 		}
 	}
@@ -175,7 +180,7 @@ func (insert *Insert) insert_table(proc *process.Process, analyzer process.Analy
 	newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
 
 	// insert into table, insertBat will be deeply copied into txn's workspace.
-	err = insert.ctr.source.Write(newCtx, insert.ctr.buf)
+	err := insert.ctr.source.Write(newCtx, insert.ctr.buf)
 	if err != nil {
 		return input, err
 	}

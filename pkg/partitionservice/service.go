@@ -21,6 +21,7 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -153,6 +154,47 @@ func (s *service) getMetadata(
 		panic("BUG: unsupported partition method")
 	}
 
+}
+
+func (s *service) Prune(
+	ctx context.Context,
+	tableID uint64,
+	bat *batch.Batch,
+	txnOp client.TxnOperator,
+) (PruneResult, error) {
+	metadata, err := s.readMetadata(
+		ctx,
+		tableID,
+		txnOp,
+	)
+	if err != nil || metadata.IsEmpty() {
+		return PruneResult{}, err
+	}
+
+	// TODO(fagongzi): partition
+	return PruneResult{
+		batches:    []*batch.Batch{bat, bat},
+		partitions: []partition.Partition{metadata.Partitions[0]},
+	}, nil
+}
+
+func (s *service) Filter(
+	ctx context.Context,
+	tableID uint64,
+	filters []*plan.Expr,
+	txnOp client.TxnOperator,
+) ([]int, error) {
+	metadata, err := s.readMetadata(
+		ctx,
+		tableID,
+		txnOp,
+	)
+	if err != nil || metadata.IsEmpty() {
+		return nil, err
+	}
+
+	// TODO(fagongzi): partition
+	return []int{0}, nil
 }
 
 func (s *service) getMetadataByHashType(

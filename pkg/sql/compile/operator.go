@@ -527,6 +527,16 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.ToWriteS3 = t.ToWriteS3
 		op.SetInfo(&info)
 		return op
+	case vm.PartitionInsert:
+		t := sourceOp.(*insert.PartitionInsert)
+		op := insert.NewPartitionInsertFrom(t)
+		op.SetInfo(&info)
+		return op
+	case vm.PartitionDelete:
+		t := sourceOp.(*deletion.PartitionDelete)
+		op := deletion.NewPartitionDeleteFrom(t)
+		op.SetInfo(&info)
+		return op
 	case vm.PreInsert:
 		t := sourceOp.(*preinsert.PreInsert)
 		op := preinsert.NewArgument()
@@ -646,7 +656,7 @@ func constructRestrict(n *plan.Node, filterExpr *plan.Expr) *filter.Filter {
 	return op
 }
 
-func constructDeletion(n *plan.Node, eg engine.Engine) (*deletion.Deletion, error) {
+func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (vm.Operator, error) {
 	oldCtx := n.DeleteCtx
 	delCtx := &deletion.DeleteCtx{
 		Ref:             oldCtx.Ref,
@@ -659,7 +669,22 @@ func constructDeletion(n *plan.Node, eg engine.Engine) (*deletion.Deletion, erro
 
 	op := deletion.NewArgument()
 	op.DeleteCtx = delCtx
-	return op, nil
+
+	ps := proc.GetPartitionService()
+	ok, _, err := ps.Is(
+		proc.Ctx,
+		oldCtx.TableDef.TblId,
+		proc.GetTxnOperator(),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	if !ok {
+		return op, nil
+	}
+
+	return deletion.NewPartitionDelete(op, oldCtx.TableDef.TblId), nil
 }
 
 func constructOnduplicateKey(n *plan.Node, _ engine.Engine) *onduplicatekey.OnDuplicatekey {
@@ -812,7 +837,12 @@ func constructLockOp(n *plan.Node, eng engine.Engine) (*lockop.LockOp, error) {
 	return arg, nil
 }
 
-func constructMultiUpdate(n *plan.Node, eg engine.Engine) *multi_update.MultiUpdate {
+func constructMultiUpdate(
+	n *plan.Node,
+	eg engine.Engine,
+	proc *process.Process,
+	action multi_update.UpdateAction,
+) (vm.Operator, error) {
 	arg := multi_update.NewArgument()
 	arg.Engine = eg
 
@@ -835,11 +865,34 @@ func constructMultiUpdate(n *plan.Node, eg engine.Engine) *multi_update.MultiUpd
 			DeleteCols: deleteCols,
 		}
 	}
+	arg.Action = action
 
-	return arg
+	ps := proc.GetPartitionService()
+	ok, _, err := ps.Is(
+		proc.Ctx,
+		n.UpdateCtxList[0].TableDef.TblId,
+		proc.GetTxnOperator(),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	if !ok {
+		return arg, nil
+	}
+
+	return multi_update.NewPartitionMultiUpdate(
+		arg,
+		n.UpdateCtxList[0].TableDef.TblId,
+	), nil
 }
 
-func constructInsert(n *plan.Node, eg engine.Engine) *insert.Insert {
+func constructInsert(
+	proc *process.Process,
+	n *plan.Node,
+	eg engine.Engine,
+	toS3 bool,
+) (vm.Operator, error) {
 	oldCtx := n.InsertCtx
 	var attrs []string
 	for _, col := range oldCtx.TableDef.Cols {
@@ -856,7 +909,27 @@ func constructInsert(n *plan.Node, eg engine.Engine) *insert.Insert {
 	}
 	arg := insert.NewArgument()
 	arg.InsertCtx = newCtx
-	return arg
+	arg.ToWriteS3 = toS3
+
+	ps := proc.GetPartitionService()
+	if ps == nil {
+		return arg, nil
+	}
+
+	ok, _, err := ps.Is(
+		proc.Ctx,
+		oldCtx.TableDef.TblId,
+		proc.GetTxnOperator(),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	if !ok {
+		return arg, nil
+	}
+
+	return insert.NewPartitionInsert(arg, oldCtx.TableDef.TblId), nil
 }
 
 func constructProjection(n *plan.Node) *projection.Projection {

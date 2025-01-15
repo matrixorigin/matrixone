@@ -40,9 +40,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
+	"github.com/matrixorigin/matrixone/pkg/partitionservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
+	"github.com/matrixorigin/matrixone/pkg/shardservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -52,6 +54,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
@@ -69,6 +72,63 @@ var traceFilterExprInterval atomic.Uint64
 var traceFilterExprInterval2 atomic.Uint64
 
 var _ engine.Relation = new(txnTable)
+
+func newTxnTable(
+	ctx context.Context,
+	db *txnDatabase,
+	item cache.TableItem,
+) (engine.Relation, error) {
+	txn := db.getTxn()
+	process := txn.proc
+	eng := txn.engine
+
+	tbl := &txnTableDelegate{
+		origin: newTxnTableWithItem(
+			db,
+			item,
+			process,
+			eng,
+		),
+	}
+	tbl.isLocal = tbl.isLocalFunc
+
+	if db.databaseId != catalog.MO_CATALOG_ID {
+		ps := partitionservice.GetService(process.GetService())
+		is, metadata, err := ps.Is(ctx, item.Id, txn.op)
+		if err != nil {
+			return nil, err
+		}
+		if is {
+			p, err := newPartitionTxnTable(
+				tbl.origin,
+				metadata,
+				ps,
+			)
+			if err != nil {
+				return nil, err
+			}
+			tbl.partition.tbl = p
+			tbl.partition.is = true
+			tbl.partition.service = ps
+		}
+
+		tbl.shard.service = shardservice.GetService(process.GetService())
+		tbl.shard.is = false
+
+		if tbl.shard.service.Config().Enable {
+			tableID, policy, is, err := tbl.shard.service.GetShardInfo(item.Id)
+			if err != nil {
+				return nil, err
+			}
+
+			tbl.shard.is = is
+			tbl.shard.policy = policy
+			tbl.shard.tableID = tableID
+		}
+	}
+
+	return tbl, nil
+}
 
 func (tbl *txnTable) getEngine() engine.Engine {
 	return tbl.eng
@@ -2008,7 +2068,6 @@ func (tbl *txnTable) PKPersistedBetween(
 
 					blk.SetFlagByObjStats(&obj.ObjectStats)
 
-					blk.PartitionNum = -1
 					candidateBlks[blk.BlockID] = &blk
 					return true
 				}, obj.ObjectStats)
@@ -2090,8 +2149,10 @@ func (tbl *txnTable) PrimaryKeysMayBeUpserted(
 	ctx context.Context,
 	from types.TS,
 	to types.TS,
-	keysVector *vector.Vector,
+	batch *batch.Batch,
+	pkIndex int32,
 ) (bool, error) {
+	keysVector := batch.GetVector(pkIndex)
 	return tbl.primaryKeysMayBeChanged(ctx, from, to, keysVector, false)
 }
 
@@ -2099,8 +2160,10 @@ func (tbl *txnTable) PrimaryKeysMayBeModified(
 	ctx context.Context,
 	from types.TS,
 	to types.TS,
-	keysVector *vector.Vector,
+	batch *batch.Batch,
+	pkIndex int32,
 ) (bool, error) {
+	keysVector := batch.GetVector(pkIndex)
 	return tbl.primaryKeysMayBeChanged(ctx, from, to, keysVector, true)
 }
 
