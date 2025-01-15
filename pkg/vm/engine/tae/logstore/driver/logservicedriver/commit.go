@@ -28,7 +28,7 @@ var ErrTooMuchPenddings = moerr.NewInternalErrorNoCtx("too much penddings")
 func (d *LogServiceDriver) Append(e *entry.Entry) error {
 	d.dsnmu.Lock()
 	e.DSN = d.allocateDSNLocked()
-	_, err := d.doAppendLoop.Enqueue(e)
+	_, err := d.commitLoop.Enqueue(e)
 	if err != nil {
 		panic(err)
 	}
@@ -47,7 +47,7 @@ func (d *LogServiceDriver) getCommitter() *groupCommitter {
 // creates a new committer as the current committer
 func (d *LogServiceDriver) flushCurrentCommitter() {
 	d.prepareCommit(d.committer)
-	d.appendWaitQueue <- d.committer
+	d.commitWaitQueue <- d.committer
 	d.committer = newGroupCommitter()
 }
 

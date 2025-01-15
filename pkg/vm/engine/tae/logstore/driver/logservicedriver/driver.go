@@ -60,11 +60,11 @@ type LogServiceDriver struct {
 	config     Config
 	committer  *groupCommitter
 
-	doAppendLoop    sm.Queue
-	appendWaitQueue chan any
-	waitAppendLoop  *sm.Loop
-	postAppendQueue chan any
-	postAppendLoop  *sm.Loop
+	commitLoop      sm.Queue
+	commitWaitQueue chan any
+	waitCommitLoop  *sm.Loop
+	postCommitQueue chan any
+	postCommitLoop  *sm.Loop
 	truncateQueue   sm.Queue
 
 	ctx        context.Context
@@ -94,17 +94,17 @@ func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
 		config:          *cfg,
 		committer:       newGroupCommitter(),
 		driverInfo:      newDriverInfo(),
-		appendWaitQueue: make(chan any, 10000),
-		postAppendQueue: make(chan any, 10000),
+		commitWaitQueue: make(chan any, 10000),
+		postCommitQueue: make(chan any, 10000),
 		appendPool:      pool,
 	}
 	d.ctx, d.cancel = context.WithCancel(context.Background())
-	d.doAppendLoop = sm.NewSafeQueue(10000, 10000, d.onCommitIntents)
-	d.doAppendLoop.Start()
-	d.waitAppendLoop = sm.NewLoop(d.appendWaitQueue, d.postAppendQueue, d.onWaitCommitted, 10000)
-	d.waitAppendLoop.Start()
-	d.postAppendLoop = sm.NewLoop(d.postAppendQueue, nil, d.onCommitDone, 10000)
-	d.postAppendLoop.Start()
+	d.commitLoop = sm.NewSafeQueue(10000, 10000, d.onCommitIntents)
+	d.commitLoop.Start()
+	d.waitCommitLoop = sm.NewLoop(d.commitWaitQueue, d.postCommitQueue, d.onWaitCommitted, 10000)
+	d.waitCommitLoop.Start()
+	d.postCommitLoop = sm.NewLoop(d.postCommitQueue, nil, d.onCommitDone, 10000)
+	d.postCommitLoop.Start()
 	d.truncateQueue = sm.NewSafeQueue(10000, 10000, d.onTruncateRequests)
 	d.truncateQueue.Start()
 	return d
@@ -117,12 +117,12 @@ func (d *LogServiceDriver) GetMaxClient() int {
 func (d *LogServiceDriver) Close() error {
 	d.clientPool.Close()
 	d.cancel()
-	d.doAppendLoop.Stop()
-	d.waitAppendLoop.Stop()
-	d.postAppendLoop.Stop()
+	d.commitLoop.Stop()
+	d.waitCommitLoop.Stop()
+	d.postCommitLoop.Stop()
 	d.truncateQueue.Stop()
-	close(d.appendWaitQueue)
-	close(d.postAppendQueue)
+	close(d.commitWaitQueue)
+	close(d.postCommitQueue)
 	d.appendPool.Release()
 	return nil
 }
