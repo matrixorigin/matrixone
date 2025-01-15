@@ -29,6 +29,7 @@ import (
 const (
 	ivfFlatIndexFlag  = "experimental_ivf_index"
 	fulltextIndexFlag = "experimental_fulltext_index"
+	hnswIndexFlag     = "experimental_hnsw_index"
 )
 
 func (s *Scope) handleUniqueIndexTable(c *Compile, dbSource engine.Database,
