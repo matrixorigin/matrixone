@@ -175,11 +175,11 @@ func (sp *ShufflePoolV2) getEndingBatch(buf *batch.Batch, shuffleIDX int32, proc
 			sp.endingWaiters[shuffleIDX] <- true
 			bat = sp.batches[shuffleIDX]
 			sp.batches[shuffleIDX] = nil
-			if bat != nil {
-				//sp.statsLock.Lock()
-				//sp.stats.outputCNT[shuffleIDX] += int64(bat.RowCount())
-				//sp.statsLock.Unlock()
-			}
+			//if bat != nil {
+			//sp.statsLock.Lock()
+			//sp.stats.outputCNT[shuffleIDX] += int64(bat.RowCount())
+			//sp.statsLock.Unlock()
+			//}
 			return bat
 		case <-proc.Ctx.Done():
 			if buf != nil {
