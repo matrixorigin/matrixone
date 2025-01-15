@@ -46,7 +46,7 @@ func (d *LogServiceDriver) getCommitter() *groupCommitter {
 // this function flushes the current committer to the append queue and
 // creates a new committer as the current committer
 func (d *LogServiceDriver) flushCurrentCommitter() {
-	d.prepareCommit(d.committer)
+	d.asyncCommit(d.committer)
 	d.commitWaitQueue <- d.committer
 	d.committer = getCommitter()
 }
@@ -60,7 +60,7 @@ func (d *LogServiceDriver) onCommitIntents(items ...any) {
 	d.flushCurrentCommitter()
 }
 
-func (d *LogServiceDriver) prepareCommit(committer *groupCommitter) {
+func (d *LogServiceDriver) asyncCommit(committer *groupCommitter) {
 	// apply write token and bind the client for committing
 	committer.client, committer.writeToken = d.getClientForWrite()
 
