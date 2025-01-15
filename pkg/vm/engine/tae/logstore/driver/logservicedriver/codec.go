@@ -29,23 +29,6 @@ const (
 	IOET_WALRecord_CurrVer = IOET_WALRecord_V2
 )
 
-func init() {
-	objectio.RegisterIOEnrtyCodec(
-		objectio.IOEntryHeader{
-			Type:    IOET_WALRecord,
-			Version: IOET_WALRecord_V1,
-		},
-		func(a any) ([]byte, error) {
-			return a.(*v1Entry).Marshal()
-		},
-		func(b []byte) (any, error) {
-			record := new(v1Entry)
-			err := record.Unmarshal(b)
-			return record, err
-		},
-	)
-}
-
 func DecodeLogEntry(b []byte) (e LogEntry, err error) {
 	header := objectio.DecodeIOEntryHeader(b[:objectio.IOEntryHeaderSize])
 	switch header.Version {

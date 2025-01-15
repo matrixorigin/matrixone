@@ -22,8 +22,6 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/logservice"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 )
 
@@ -256,38 +254,6 @@ func newRecordEntry() *v1Record {
 	}
 }
 
-func newEmptyRecordEntry(r logservice.LogRecord) *v1Record {
-	return &v1Record{
-		payload: r.Payload(),
-		v1Entry: v1Entry{
-			V1Meta: newMeta(),
-		},
-	}
-}
-
-func (r *v1Record) forEachLogEntry(fn func(*entry.Entry)) (err error) {
-	if len(r.entries) > 0 {
-		for _, e := range r.entries {
-			fn(e)
-		}
-		return
-	}
-
-	var (
-		offset int64
-		n      int64
-	)
-	for range r.V1Meta.addr {
-		e := entry.NewEmptyEntry()
-		if n, err = e.UnmarshalBinary(r.v1Entry.payload[offset:]); err != nil {
-			return
-		}
-		offset += n
-		fn(e)
-	}
-	return
-}
-
 func (r *v1Record) append(e *entry.Entry) {
 	r.entries = append(r.entries, e)
 	r.V1Meta.addr[e.DSN] = uint64(r.payloadSize)
@@ -301,26 +267,6 @@ func (r *v1Record) prepareRecord() (size int) {
 		panic(err)
 	}
 	return len(r.payload)
-}
-
-func (r *v1Record) unmarshal() {
-	if r.unmarshaled.Load() == 1 {
-		return
-	}
-	r.mashalMu.Lock()
-	defer r.mashalMu.Unlock()
-	if r.unmarshaled.Load() == 1 {
-		return
-	}
-	head := objectio.DecodeIOEntryHeader(r.payload[:4])
-	codec := objectio.GetIOEntryCodec(*head)
-	entry, err := codec.Decode(r.payload[4:])
-	if err != nil {
-		panic(err)
-	}
-	r.v1Entry = *(entry.(*v1Entry))
-	r.payload = nil
-	r.unmarshaled.Store(1)
 }
 
 type v1SkipCmd struct {
