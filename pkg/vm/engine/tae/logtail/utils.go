@@ -1764,26 +1764,6 @@ func (data *CheckpointData) GetTableIds() []uint64 {
 	return result
 }
 
-func (collector *BaseCollector) LoadAndCollectObject(c *catalog.Catalog, visitObject func(*catalog.ObjectEntry) error) error {
-	if collector.isPrefetch {
-		collector.isPrefetch = false
-	} else {
-		return nil
-	}
-	collector.data.bats[ObjectInfoIDX] = makeRespBatchFromSchema(ObjectInfoSchema, common.CheckpointAllocator)
-	err := collector.loadObjectInfo()
-	if err != nil {
-		return err
-	}
-	p := &catalog.LoopProcessor{}
-	p.ObjectFn = visitObject
-	err = c.RecurLoop(p)
-	if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
-		err = nil
-	}
-	return err
-}
-
 func (data *CheckpointData) GetOneBatch(idx uint16) *containers.Batch {
 	return data.bats[idx]
 }
@@ -1850,53 +1830,38 @@ func (collector *GlobalCollector) VisitTable(entry *catalog.TableEntry) error {
 }
 
 func (collector *BaseCollector) visitObjectEntry(entry *catalog.ObjectEntry) error {
-	mvccNodes := entry.GetMVCCNodeInRange(collector.start, collector.end)
-	if len(mvccNodes) == 0 {
-		return nil
-	}
+	return entry.ForeachMVCCNodeInRange(collector.start, collector.end, func(node *txnbase.TxnMVCCNode) error {
+		return collector.fillObjectInfoBatch(entry, node)
+	})
+}
 
-	err := collector.fillObjectInfoBatch(entry, mvccNodes)
-	if err != nil {
-		return err
-	}
-	return nil
-}
-func (collector *BaseCollector) loadObjectInfo() error {
-	panic("not support")
-}
-func (collector *BaseCollector) fillObjectInfoBatch(entry *catalog.ObjectEntry, mvccNodes []*txnbase.TxnMVCCNode) error {
-	if len(mvccNodes) == 0 {
-		return nil
-	}
+func (collector *BaseCollector) fillObjectInfoBatch(entry *catalog.ObjectEntry, node *txnbase.TxnMVCCNode) error {
 	dataStart := collector.data.bats[ObjectInfoIDX].GetVectorByName(catalog.ObjectAttr_ObjectStats).Length()
 	tombstoneStart := collector.data.bats[TombstoneObjectInfoIDX].GetVectorByName(catalog.ObjectAttr_ObjectStats).Length()
 
-	for _, node := range mvccNodes {
-		if node.IsAborted() {
-			continue
-		}
-		create := node.End.Equal(&entry.CreatedAt)
-		if entry.IsTombstone {
-			visitObject(collector.data.bats[TombstoneObjectInfoIDX], entry, node, create, false, types.TS{})
-		} else {
-			visitObject(collector.data.bats[ObjectInfoIDX], entry, node, create, false, types.TS{})
-		}
-		objNode := node
-
-		// collect usage info
-		if !entry.DeletedAt.IsEmpty() && objNode.End.Equal(&entry.DeletedAt) {
-			// deleted and non-append, record into the usage del bat
-			if !entry.IsAppendable() && objNode.IsCommitted() {
-				collector.Usage.ObjDeletes = append(collector.Usage.ObjDeletes, entry)
-			}
-		} else {
-			// create and non-append, record into the usage ins bat
-			if !entry.IsAppendable() && objNode.IsCommitted() {
-				collector.Usage.ObjInserts = append(collector.Usage.ObjInserts, entry)
-			}
-		}
-
+	if node.IsAborted() {
+		return nil
 	}
+	create := node.End.Equal(&entry.CreatedAt)
+	if entry.IsTombstone {
+		visitObject(collector.data.bats[TombstoneObjectInfoIDX], entry, node, create, false, types.TS{})
+	} else {
+		visitObject(collector.data.bats[ObjectInfoIDX], entry, node, create, false, types.TS{})
+	}
+
+	// collect usage info
+	if !entry.DeletedAt.IsEmpty() && node.End.Equal(&entry.DeletedAt) {
+		// deleted and non-append, record into the usage del bat
+		if !entry.IsAppendable() && node.IsCommitted() {
+			collector.Usage.ObjDeletes = append(collector.Usage.ObjDeletes, entry)
+		}
+	} else {
+		// create and non-append, record into the usage ins bat
+		if !entry.IsAppendable() && node.IsCommitted() {
+			collector.Usage.ObjInserts = append(collector.Usage.ObjInserts, entry)
+		}
+	}
+
 	dataEnd := collector.data.bats[ObjectInfoIDX].GetVectorByName(catalog.ObjectAttr_ObjectStats).Length()
 	collector.data.UpdateDataObjectMeta(entry.GetTable().ID, int32(dataStart), int32(dataEnd))
 	tombstoneEnd := collector.data.bats[TombstoneObjectInfoIDX].GetVectorByName(catalog.ObjectAttr_ObjectStats).Length()
