@@ -202,8 +202,16 @@ func newReplayer(
 
 	if r.logRecordToLogEntry == nil {
 		r.logRecordToLogEntry = func(record logservice.LogRecord) LogEntry {
-			// TODO: use codec
-			return record.Payload()
+			e, err := DecodeLogEntry(record.Payload())
+			if err != nil {
+				logutil.Fatal(
+					"Wal-Replay",
+					zap.Error(err),
+					zap.Uint64("psn", record.Lsn),
+					zap.Any("type", record.Type),
+				)
+			}
+			return e
 		}
 	}
 
