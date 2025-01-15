@@ -31,6 +31,23 @@ import (
 
 const SlowAppendThreshold = 1 * time.Second
 
+var (
+	_committerPool = sync.Pool{
+		New: func() any {
+			return newGroupCommitter()
+		},
+	}
+)
+
+func getCommitter() *groupCommitter {
+	return _committerPool.Get().(*groupCommitter)
+}
+
+func putCommitter(c *groupCommitter) {
+	c.Reset()
+	_committerPool.Put(c)
+}
+
 type groupCommitter struct {
 	sync.WaitGroup
 
@@ -46,13 +63,20 @@ func newGroupCommitter() *groupCommitter {
 	}
 }
 
-func (a *groupCommitter) addEntry(e *entry.Entry) {
+func (a *groupCommitter) Reset() {
+	a.client = nil
+	a.writeToken = 0
+	a.psn = 0
+	a.writer.Reset()
+}
+
+func (a *groupCommitter) AddIntent(e *entry.Entry) {
 	if err := a.writer.AppendEntry(e); err != nil {
 		panic(err)
 	}
 }
 
-func (a *groupCommitter) commit(
+func (a *groupCommitter) Commit(
 	retryTimes int,
 	timeout time.Duration,
 ) (err error) {

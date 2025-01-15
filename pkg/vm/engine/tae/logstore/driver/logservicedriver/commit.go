@@ -48,14 +48,14 @@ func (d *LogServiceDriver) getCommitter() *groupCommitter {
 func (d *LogServiceDriver) flushCurrentCommitter() {
 	d.prepareCommit(d.committer)
 	d.commitWaitQueue <- d.committer
-	d.committer = newGroupCommitter()
+	d.committer = getCommitter()
 }
 
 func (d *LogServiceDriver) onCommitIntents(items ...any) {
 	for _, item := range items {
 		e := item.(*entry.Entry)
 		committer := d.getCommitter()
-		committer.addEntry(e)
+		committer.AddIntent(e)
 	}
 	d.flushCurrentCommitter()
 }
@@ -72,7 +72,7 @@ func (d *LogServiceDriver) prepareCommit(committer *groupCommitter) {
 	committer.Add(1)
 	d.appendPool.Submit(func() {
 		defer committer.Done()
-		if err := committer.commit(
+		if err := committer.Commit(
 			10,
 			d.config.ClientAppendDuration,
 		); err != nil {
@@ -140,9 +140,11 @@ func (d *LogServiceDriver) onCommitDone(items []any, _ chan any) {
 	// PXU TODO: why need this queue???
 	for _, v := range items {
 		committers := v.([]*groupCommitter)
-		for _, committer := range committers {
+		for i, committer := range committers {
 			d.recordCommitInfo(committer)
 			d.reuse.tokens = append(d.reuse.tokens, committer.writeToken)
+			putCommitter(committer)
+			committers[i] = nil
 		}
 	}
 

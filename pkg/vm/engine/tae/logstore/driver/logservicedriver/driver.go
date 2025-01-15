@@ -96,7 +96,7 @@ func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
 	d := &LogServiceDriver{
 		clientPool:      newClientPool(cfg.ClientMaxCount, clientpoolConfig),
 		config:          *cfg,
-		committer:       newGroupCommitter(),
+		committer:       getCommitter(),
 		driverInfo:      newDriverInfo(),
 		commitWaitQueue: make(chan any, 10000),
 		postCommitQueue: make(chan any, 10000),
