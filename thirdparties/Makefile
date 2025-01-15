@@ -13,7 +13,8 @@
 # limitations under the License.
 
 PWD=$(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
-UNAME=$(shell uname -s | tr A-Z a-z)
+UNAME_S=$(shell uname -s | tr A-Z a-z)
+UNAME_M=$(shell uname -m)
 USEARCH_DIR=usearch-2.16.10
 USEARCH_TAR=$(USEARCH_DIR).tar.gz
 STRINGZILLA_DIR=StringZilla-3.11.3
@@ -23,13 +24,13 @@ SIMSIMD_TAR=$(SIMSIMD_DIR).tar.gz
 FP16_DIR=fp16
 FP16_TAR=$(FP16_DIR).tar.gz
 
-all: init stringzilla fp16 simsimd usearch
+all: init usearch
 
 init:
 	mkdir -p install
 	mkdir -p install/include install/lib
 
-usearch: install/include/usearch.h
+usearch: stringzilla fp16 simsimd install/include/usearch.h
 
 stringzilla: install/include/stringzilla/stringzilla.h
 
@@ -51,14 +52,24 @@ install/include/stringzilla/stringzilla.h:
 	tar zxvf $(STRINGZILLA_TAR)
 	cp -r $(STRINGZILLA_DIR)/include/* install/include
 
+USEARCH_CMAKE_FLAG := -DUSEARCH_BUILD_BENCH_CPP=OFF -DUSEARCH_BUILD_TEST_C=OFF -DUSEARCH_BUILD_TEST_CPP=OFF -DUSEARCH_BUILD_LIB_C=ON -DCMAKE_CXX_FLAGS=-I$(PWD)/install/include
+ifeq ($(UNAME_M),x86_64)
+  ifeq ($(CC),gcc)
+	USEARCH_CMAKE_FLAG += -DUSEARCH_USE_OPENMP=1 -DUSEARCH_USE_SIMSIMD=1
+  endif
+endif
+
 install/include/usearch.h:
 	rm -rf $(USEARCH_DIR)
 	tar zxvf $(USEARCH_TAR)
-	(cd $(USEARCH_DIR) && mkdir build && cd build && cmake -DUSEARCH_BUILD_BENCH_CPP=OFF -DUSEARCH_BUILD_TEST_C=OFF -DUSEARCH_BUILD_TEST_CPP=OFF -DUSEARCH_BUILD_LIB_C=ON -DCMAKE_CXX_FLAGS=-I$(PWD)/install/include .. && make)
-ifeq ($(UNAME),darwin)
+	cp -r $(FP16_DIR)/* $(USEARCH_DIR)/fp16
+	cp -r $(SIMSIMD_DIR)/* $(USEARCH_DIR)/simsimd
+	cp -r $(STRINGZILLA_DIR)/* $(USEARCH_DIR)/stringzilla
+	(cd $(USEARCH_DIR) && mkdir build && cd build && cmake $(USEARCH_CMAKE_FLAG) .. && make)
+ifeq ($(UNAME_S),darwin)
 	cp $(USEARCH_DIR)/build/*.dylib install/lib
 endif
-ifeq ($(UNAME),linux)
+ifeq ($(UNAME_S),linux)
 	cp $(USEARCH_DIR)/build/*.so install/lib
 endif
 	cp $(USEARCH_DIR)/build/libusearch_static_c.a install/lib/libusearch_c.a
