@@ -121,7 +121,7 @@ type updateItem struct {
 }
 
 type logtailUpdate struct {
-	c  chan updateItem
+	c  chan *updateItem
 	mu struct {
 		sync.Mutex
 		updated map[uint64]bool
@@ -130,7 +130,7 @@ type logtailUpdate struct {
 
 func newLogtailUpdate() *logtailUpdate {
 	u := &logtailUpdate{
-		c: make(chan updateItem, 1000),
+		c: make(chan *updateItem, 1000),
 	}
 	u.mu.updated = make(map[uint64]bool)
 	return u
@@ -249,7 +249,7 @@ func NewGlobalStats(
 		queueWatcher:        newQueueWatcher(),
 		pool: sync.Pool{
 			New: func() interface{} {
-				return updateItem{}
+				return &updateItem{}
 			},
 		},
 	}
@@ -511,7 +511,7 @@ func (gs *GlobalStats) notifyLogtailUpdate(tid uint64, updated bool) {
 	}
 	gs.logtailUpdate.mu.updated[tid] = updated
 
-	item := gs.pool.Get().(updateItem)
+	item := gs.pool.Get().(*updateItem)
 	item.tableID = tid
 	item.updated = updated
 	select {
