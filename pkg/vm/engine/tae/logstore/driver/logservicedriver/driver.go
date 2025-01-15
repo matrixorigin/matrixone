@@ -60,6 +60,10 @@ type LogServiceDriver struct {
 	config     Config
 	committer  *groupCommitter
 
+	reuse struct {
+		tokens []uint64
+	}
+
 	commitLoop      sm.Queue
 	commitWaitQueue chan any
 	waitCommitLoop  *sm.Loop

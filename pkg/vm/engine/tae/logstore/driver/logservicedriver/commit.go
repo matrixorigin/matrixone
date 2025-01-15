@@ -127,23 +127,26 @@ func (d *LogServiceDriver) onWaitCommitted(items []any, nextQueue chan any) {
 	for _, item := range items {
 		committer := item.(*groupCommitter)
 		committer.Wait()
-		d.clientPool.Put(committer.client)
-		committer.notifyDone()
+		committer.PutbackClient(d.clientPool)
+		committer.NotifyCommitted()
 		committers = append(committers, committer)
 	}
+
+	// PXU TODO: enqueue one by one
 	nextQueue <- committers
 }
 
 func (d *LogServiceDriver) onCommitDone(items []any, _ chan any) {
-	tokens := make([]uint64, 0, len(items))
+	// PXU TODO: why need this queue???
 	for _, v := range items {
 		committers := v.([]*groupCommitter)
 		for _, committer := range committers {
 			d.recordCommitInfo(committer)
-			tokens = append(tokens, committer.writeToken)
+			d.reuse.tokens = append(d.reuse.tokens, committer.writeToken)
 		}
 	}
 
 	d.commitWatermark()
-	d.putbackWriteTokens(tokens)
+	d.putbackWriteTokens(d.reuse.tokens)
+	d.reuse.tokens = d.reuse.tokens[:0]
 }

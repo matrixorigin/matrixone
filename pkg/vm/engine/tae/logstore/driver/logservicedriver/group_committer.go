@@ -89,7 +89,12 @@ func (a *groupCommitter) commit(
 	return
 }
 
-func (a *groupCommitter) notifyDone() {
+func (a *groupCommitter) PutbackClient(pool *clientpool) {
+	pool.Put(a.client)
+	a.client = nil
+}
+
+func (a *groupCommitter) NotifyCommitted() {
 	a.writer.NotifyDone(nil)
 }
 
