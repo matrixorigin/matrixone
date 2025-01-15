@@ -3361,7 +3361,7 @@ func (c *Compile) compileDelete(n *plan.Node, ss []*Scope) ([]*Scope, error) {
 			rs = c.newMergeScope(ss)
 		}
 
-		rs.setRootOperator(arg)
+		rs.setRootOperator(op)
 		ss = []*Scope{rs}
 		return ss, nil
 	}
