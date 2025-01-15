@@ -450,6 +450,12 @@ func LoadCheckpointEntries(
 		key := locationsAndVersions[i]
 		version, err := strconv.ParseUint(locationsAndVersions[i+1], 10, 32)
 		if err != nil {
+			logutil.Error(
+				"Parse-CKP-Name-Error",
+				zap.String("loc", metaLoc),
+				zap.Int("i", i),
+				zap.Error(err),
+			)
 			return nil, nil, err
 		}
 		location, err := objectio.StringToLocation(key)

@@ -388,55 +388,6 @@ message PropertiesDef {
 	repeated Property properties 	= 1;
 }
 
-
-enum PartitionType {
-	KEY = 0;
-	LINEAR_KEY = 1;
-	HASH = 2;
-	LINEAR_HASH = 3;
-	RANGE = 4;
-	RANGE_COLUMNS = 5;
-	LIST = 6;
-	LIST_COLUMNS = 7;
-}
-
-message PartitionByDef {
-	PartitionType type = 1;
-	PartitionExpr partition_expr = 2;
-	Expr partition_expression = 3;
-	PartitionColumns partition_columns = 4;
-	uint64 partitionNum = 5;
-	repeated PartitionItem partitions = 6;
-	int64 algorithm = 7;
-	bool is_sub_partition = 8;
-	string partition_msg = 9;
-	repeated string partition_table_names = 10;
-}
-
-message PartitionExpr {
-	Expr expr = 1;
-	string expr_str = 2;
-	// string expr_fmt_str = 3;
-}
-
-message PartitionColumns {
-	repeated Expr columns = 1;
-	// letter case: lower ?
-	repeated string partition_columns = 2;
-	// repeated string partition_fmt_columns = 3;
-}
-
-message PartitionItem {
-	string partition_name = 1;
-	uint32 ordinal_position = 2;
-	string description = 3;
-	string comment = 4;
-	repeated Expr less_than = 5;
-	repeated Expr in_values = 6;
-	string partition_table_name = 7;// the table name of a partition
-}
-
-
 message ViewDef {
 	string view  = 1;
 }
@@ -464,7 +415,6 @@ message TableDef {
 	repeated uint64 ref_child_tbls	= 14;
 	repeated CheckDef checks		= 15;
 
-	PartitionByDef partition		= 21;
 	ClusterByDef cluster_by		= 22;
 	repeated PropertyDef props	= 23;
 	ViewDef view_sql			= 24;
@@ -539,9 +489,9 @@ message Stats {
 	//for scan, selectivity means outcnt divide total count
 	double selectivity = 6;
 	bool forceOneCN = 7;
-
-	HashMapStats hashmapStats = 8;
-        string sql = 9;
+ int32 dop = 8;
+	HashMapStats hashmapStats = 9;
+        string sql = 10;
 }
 
 message RowsetExpr {
@@ -632,11 +582,6 @@ message UpdateCtx {
 	ObjectRef obj_ref	= 1;
 	TableDef table_def	= 2;
 
-	repeated uint64 partition_table_ids		= 3;
-	repeated string partition_table_names	= 4;
-	int32 old_partition_idx					= 5;
-	int32 new_partition_idx					= 6;
-
 	repeated ColRef insert_cols	= 7 [(gogoproto.nullable) = false];
 	repeated ColRef delete_cols	= 8 [(gogoproto.nullable) = false];
 }
@@ -646,10 +591,6 @@ message InsertCtx {
 	bool add_affected_rows 	= 2;
 	bool is_cluster_table	= 3;
 	TableDef table_def		= 4;
-	// Align array index with the partition number
-	repeated uint64 partition_table_ids = 5;
-	repeated string partition_table_names = 6;
-	int32 partition_idx = 7;
 }
 
 message ReplaceCtx {
@@ -658,10 +599,6 @@ message ReplaceCtx {
 	bool is_cluster_table	= 3;
 	TableDef table_def		= 4;
 	string delete_cond    = 5;
-	// Align array index with the partition number
-	repeated uint64 partition_table_ids = 6;
-	repeated string partition_table_names = 7;
-	int32 partition_idx = 8;
 	bool rewrite_from_on_duplicate_key = 9;
 }
 
@@ -702,11 +639,6 @@ message AnalyzeInfo {
 	int64 written_rows = 31;
 	// deleted_rows used to estimate S3input
 	int64 deleted_rows = 32;
-}
-
-message PartitionPrune {
-	bool isPruned = 1;
-	repeated PartitionItem selected_partitions = 2;
 }
 
 message OriginTableMessageForFuzzy {
@@ -888,7 +820,6 @@ message Node {
 	bytes uuid = 42;
 	bool recursive_sink = 43;
 	ExternScan extern_scan = 44;
-	PartitionPrune partition_prune = 45;
 
 	PreInsertUkCtx pre_insert_sk_ctx = 46;
 	Expr interval = 47;
@@ -971,8 +902,6 @@ message LockTarget {
 	int32 refresh_ts_idx_in_bat   = 4;
 	int32 filter_col_idx_in_bat   = 5;
 	bool lock_table 				= 6;
-	bool is_partition_table = 7;
-	repeated uint64 partition_table_ids = 8;
 	bool                block   = 9;
 	lock.LockMode Mode  = 10;
 	int32 primary_col_rel_pos  = 11;
@@ -1025,10 +954,6 @@ message DeleteCtx {
 	int32 row_id_idx		= 3;
 	bool add_affected_rows 	= 4;
 	bool is_cluster_table	= 5;
-	// Align array index with the partition number
-	repeated uint64 partition_table_ids = 6;
-	repeated string partition_table_names = 7;
-	int32 partition_idx = 8;
 	int32 primary_key_idx = 9;
 	TruncateTable truncate_table = 10;
 	TableDef table_def 	= 11;
@@ -1311,7 +1236,6 @@ message CreateTable {
 	repeated string fk_tables = 8;
 	// we need column name when create table, but not in ForeignKeyDef
 	repeated FkColName fk_cols = 9;
-	repeated TableDef partition_tables = 10;// partition tables for partitions
 	string create_as_select_sql = 11;
 	// create table may insert fk records related to this table
 	// into mo_foreign_keys
@@ -1372,12 +1296,6 @@ message AlterTableAlterReIndex {
 	int64 index_algo_param_list = 4;
 }
 
-message AlterTableAddPartition {
-	repeated PartitionItem definitions = 1;
-	repeated TableDef partition_tables = 2;
-	PartitionByDef PartitionDef = 3;
-}
-
 message AlterTableComment {
 	string new_comment = 1;
 }
@@ -1421,7 +1339,6 @@ message AlterTable {
 			AlterAddColumn add_column = 7;
 			AlterDropColumn drop_column = 8;
 			AlterTableAlterReIndex alter_reindex = 9;
-			AlterTableAddPartition addPartition = 10;
 		};
 	}
 	string database			      = 1;
@@ -1448,7 +1365,6 @@ message DropTable {
 	ClusterTable cluster_table = 5;
 	uint64 table_id = 6;
 	repeated uint64 foreign_tbl = 7;
-	repeated string partition_table_names = 8;
 	bool isView = 9;
 	TableDef table_def 	= 10;
 	// drop table may delete fk records related to this table
@@ -1514,7 +1430,6 @@ message TruncateTable {
 	string database = 1;
 	string table = 2;
 	repeated string index_table_names = 3;
-	repeated string partition_table_names = 4;
 	ClusterTable cluster_table = 5;
 	uint64 table_id = 6;
 	repeated uint64 foreign_tbl = 7;

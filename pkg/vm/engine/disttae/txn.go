@@ -23,6 +23,8 @@ import (
 	"sync"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -43,7 +45,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"go.uber.org/zap"
 )
 
 //func (txn *Transaction) getObjInfos(
@@ -525,6 +526,11 @@ func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
 			if err := txn.dumpDeleteBatchLocked(ctx, offset, &size); err != nil {
 				return err
 			}
+			//After flushing inserts/deletes in memory into S3, the entries in txn.writes will be unordered,
+			//should adjust the order to make sure deletes are in front of the inserts.
+			if err := txn.adjustUpdateOrderLocked(0); err != nil {
+				return err
+			}
 		}
 		txn.approximateInMemDeleteCnt = 0
 		txn.approximateInMemInsertSize = 0
@@ -615,11 +621,11 @@ func (txn *Transaction) dumpInsertBatchLocked(ctx context.Context, offset int, s
 			*size += uint64(bat.Size())
 			*pkCount += bat.RowCount()
 			// skip rowid
-			newBat := batch.NewWithSize(len(bat.Vecs) - 1)
-			newBat.SetAttributes(bat.Attrs[1:])
-			newBat.Vecs = bat.Vecs[1:]
-			newBat.SetRowCount(bat.Vecs[0].Length())
-			mp[tbKey] = append(mp[tbKey], newBat)
+			newBatch := batch.NewWithSize(len(bat.Vecs) - 1)
+			newBatch.SetAttributes(bat.Attrs[1:])
+			newBatch.Vecs = bat.Vecs[1:]
+			newBatch.SetRowCount(bat.Vecs[0].Length())
+			mp[tbKey] = append(mp[tbKey], newBatch)
 			defer bat.Clean(txn.proc.GetMPool())
 
 			keepElement = false
@@ -723,12 +729,12 @@ func (txn *Transaction) dumpDeleteBatchLocked(ctx context.Context, offset int, s
 			deleteCnt += bat.RowCount()
 			*size += uint64(bat.Size())
 
-			newBatch := batch.NewWithSize(len(bat.Vecs))
-			newBatch.SetAttributes(bat.Attrs)
-			newBatch.Vecs = bat.Vecs
-			newBatch.SetRowCount(bat.Vecs[0].Length())
+			newBat := batch.NewWithSize(len(bat.Vecs))
+			newBat.SetAttributes(bat.Attrs)
+			newBat.Vecs = bat.Vecs
+			newBat.SetRowCount(bat.Vecs[0].Length())
 
-			mp[tbKey] = append(mp[tbKey], newBatch)
+			mp[tbKey] = append(mp[tbKey], newBat)
 			defer bat.Clean(txn.proc.GetMPool())
 
 			keepElement = false
@@ -1326,6 +1332,7 @@ func (txn *Transaction) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
 	if err := txn.dumpBatchLocked(ctx, -1); err != nil {
 		return nil, err
 	}
+
 	txn.traceWorkspaceLocked(true)
 
 	if txn.workspaceSize > 10*mpool.MB {
@@ -1632,8 +1639,23 @@ func (c *dbOpsChain) rollbackLastStatement(statementId int) {
 
 func newTableOps() *tableOpsChain {
 	return &tableOpsChain{
-		names: make(map[tableKey][]tableOp),
+		names:       make(map[tableKey][]tableOp),
+		creatdInTxn: make(map[uint64]int),
 	}
+}
+
+func (c *tableOpsChain) addCreatedInTxn(tid uint64, statementid int) {
+	c.Lock()
+	defer c.Unlock()
+	c.creatdInTxn[tid] = statementid
+	// Note: we do not consider anything like table deleting or failed creating in createdInTxn map because the id is unique, and if the table is queried, it must be not deleted and created successfully.
+}
+
+func (c *tableOpsChain) existCreatedInTxn(tid uint64) bool {
+	c.RLock()
+	defer c.RUnlock()
+	_, exist := c.creatdInTxn[tid]
+	return exist
 }
 
 func (c *tableOpsChain) addCreateTable(key tableKey, statementId int, t *txnTable) {
@@ -1717,6 +1739,11 @@ func (c *tableOpsChain) rollbackLastStatement(statementId int) {
 			delete(c.names, k)
 		} else if i < len(v)-1 {
 			c.names[k] = v[:i+1]
+		}
+	}
+	for k, v := range c.creatdInTxn {
+		if v == statementId {
+			delete(c.creatdInTxn, k)
 		}
 	}
 }

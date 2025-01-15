@@ -143,28 +143,10 @@ func GetRelAndPartitionRelsByObjRef(
 	proc *process.Process,
 	eng engine.Engine,
 	ref *plan.ObjectRef,
-	partitionTableNames []string,
-) (source engine.Relation, partitionSources []engine.Relation, err error) {
+) (source engine.Relation, err error) {
 	source, err = getRelationByObjRef(proc.Ctx, proc, eng, ref)
 	if err != nil {
 		return
-	}
-
-	if len(partitionTableNames) > 0 {
-		var dbSource engine.Database
-		var tmpRel engine.Relation
-		dbSource, err = eng.Database(proc.Ctx, ref.SchemaName, proc.GetTxnOperator())
-		if err != nil {
-			return
-		}
-		// get the relation instances for each partition sub table
-		for _, pTableName := range partitionTableNames {
-			tmpRel, err = dbSource.Relation(proc.Ctx, pTableName, proc)
-			if err != nil {
-				return
-			}
-			partitionSources = append(partitionSources, tmpRel)
-		}
 	}
 	return
 }

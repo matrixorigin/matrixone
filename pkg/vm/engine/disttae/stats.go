@@ -178,6 +178,10 @@ type GlobalStats struct {
 
 	updateC chan pb.StatsInfoKeyWithContext
 
+	// queueWatcher keeps the table id and its enqueue time.
+	// and watch the queue item in the queue.
+	queueWatcher *queueWatcher
+
 	updatingMu struct {
 		sync.Mutex
 		updating map[pb.StatsInfoKey]*updateRecord
@@ -233,6 +237,7 @@ func NewGlobalStats(
 		tableLogtailCounter: make(map[pb.StatsInfoKey]int64),
 		KeyRouter:           keyRouter,
 		waitKeeper:          newWaitKeeper(),
+		queueWatcher:        newQueueWatcher(),
 	}
 	s.updatingMu.updating = make(map[pb.StatsInfoKey]*updateRecord)
 	s.mu.statsInfoMap = make(map[pb.StatsInfoKey]*pb.StatsInfo)
@@ -247,6 +252,7 @@ func NewGlobalStats(
 	s.concurrentExecutor.Run(ctx)
 	go s.consumeWorker(ctx)
 	go s.updateWorker(ctx)
+	go s.queueWatcher.run(ctx)
 	return s
 }
 
@@ -409,6 +415,10 @@ func (gs *GlobalStats) updateWorker(ctx context.Context) {
 					return
 
 				case key := <-gs.updateC:
+					// after dequeue from the chan, remove the table ID from the queue watcher.
+					gs.queueWatcher.del(key.Key.TableID)
+
+					v2.StatsTriggerConsumeCounter.Add(1)
 					gs.updateTableStats(key)
 				}
 			}
@@ -417,14 +427,19 @@ func (gs *GlobalStats) updateWorker(ctx context.Context) {
 }
 
 func (gs *GlobalStats) triggerUpdate(key pb.StatsInfoKeyWithContext, force bool) bool {
+	defer func() {
+		v2.StatsTriggerQueueSizeGauge.Set(float64(len(gs.updateC)))
+	}()
 	if force {
 		gs.updateC <- key
+		gs.queueWatcher.add(key.Key.TableID)
 		v2.StatsTriggerForcedCounter.Add(1)
 		return true
 	}
 
 	select {
 	case gs.updateC <- key:
+		gs.queueWatcher.add(key.Key.TableID)
 		v2.StatsTriggerUnforcedCounter.Add(1)
 		return true
 	default:
@@ -695,10 +710,12 @@ func (gs *GlobalStats) doUpdate(ctx context.Context, key pb.StatsInfoKey, stats 
 		approxObjectNum,
 		stats,
 	)
+	start := time.Now()
 	if err := UpdateStats(ctx, req, gs.concurrentExecutor); err != nil {
 		logutil.Errorf("failed to init stats info for table %v, err: %v", key, err)
 		return false
 	}
+	v2.StatsUpdateDurationHistogram.Observe(time.Since(start).Seconds())
 	v2.StatsUpdateBlockCounter.Add(float64(stats.BlockNumber))
 	return true
 }
@@ -888,4 +905,66 @@ func UpdateStats(ctx context.Context, req *updateStatsRequest, executor Concurre
 			req.statsInfo.NdvMap[colName], overlap, info.MaxNDVs[i], info.MaxOBJSize, info.NDVinMaxOBJ[i], info.MinOBJSize, info.NDVinMinOBJ[i])
 	}
 	return nil
+}
+
+type enqueueItem struct {
+	tableID     uint64
+	enqueueTime time.Time
+}
+
+type queueWatcher struct {
+	sync.Mutex
+	value         map[uint64]time.Time
+	threshold     time.Duration
+	checkInterval time.Duration
+}
+
+func newQueueWatcher() *queueWatcher {
+	return &queueWatcher{
+		value:         make(map[uint64]time.Time),
+		threshold:     time.Second * 30,
+		checkInterval: time.Minute,
+	}
+}
+
+func (qw *queueWatcher) add(tid uint64) {
+	qw.Lock()
+	defer qw.Unlock()
+	qw.value[tid] = time.Now()
+}
+
+func (qw *queueWatcher) del(tid uint64) {
+	qw.Lock()
+	defer qw.Unlock()
+	delete(qw.value, tid)
+}
+
+func (qw *queueWatcher) check() []enqueueItem {
+	var timeoutList []enqueueItem
+	qw.Lock()
+	defer qw.Unlock()
+	for tid, et := range qw.value {
+		if time.Since(et) > qw.threshold {
+			timeoutList = append(timeoutList, enqueueItem{tid, et})
+		}
+	}
+	return timeoutList
+}
+
+func (qw *queueWatcher) run(ctx context.Context) {
+	ticker := time.NewTicker(qw.checkInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			logutil.Infof("stats trigger queue watcher stopped")
+			return
+
+		case <-ticker.C:
+			list := qw.check()
+			if len(list) > 0 {
+				logutil.Warnf("there are some timeout items in the queue: %v", list)
+			}
+		}
+	}
 }

@@ -78,29 +78,7 @@ func (s *Scope) CreateDatabase(c *Compile) error {
 	}
 
 	ctx = context.WithValue(ctx, defines.DatTypKey{}, datType)
-	err := c.e.Create(ctx, dbName, c.proc.GetTxnOperator())
-	if err != nil {
-		return err
-	}
-
-	if !needSkipDbs[dbName] {
-		newDb, err := c.e.Database(ctx, dbName, c.proc.GetTxnOperator())
-		if err != nil {
-			return err
-		}
-
-		updatePitrSql := fmt.Sprintf("update `%s`.`%s` set `%s` = '%s' where `%s` = %d and `%s` = '%s'",
-			catalog.MO_CATALOG, catalog.MO_PITR, catalog.MO_PITR_OBJECT_ID, newDb.GetDatabaseId(ctx),
-			catalog.MO_PITR_ACCOUNT_ID, c.proc.GetSessionInfo().AccountId,
-			catalog.MO_PITR_DB_NAME, dbName)
-
-		err = c.runSqlWithSystemTenant(updatePitrSql)
-		if err != nil {
-			return err
-		}
-	}
-
-	return nil
+	return c.e.Create(ctx, dbName, c.proc.GetTxnOperator())
 }
 
 func (s *Scope) DropDatabase(c *Compile) error {
@@ -163,20 +141,6 @@ func (s *Scope) DropDatabase(c *Compile) error {
 				}
 			}
 		}
-
-		for _, def := range defs {
-			if partitionDef, ok := def.(*engine.PartitionDef); ok {
-				if partitionDef.Partitioned > 0 {
-					p := &plan.PartitionByDef{}
-					err = p.UnMarshalPartitionInfo(([]byte)(partitionDef.Partition))
-					if err != nil {
-						return err
-					}
-					ignoreTables = append(ignoreTables, p.PartitionTableNames...)
-				}
-				break
-			}
-		}
 	}
 
 	deleteTables := make([]string, 0, len(relations)-len(ignoreTables))
@@ -220,13 +184,6 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		return err
 	}
 
-	// 2.delete all partition object record under the database from mo_catalog.mo_table_partitions
-	deleteSql = fmt.Sprintf(deleteMoTablePartitionsWithDatabaseIdFormat, s.Plan.GetDdl().GetDropDatabase().GetDatabaseId())
-	err = c.runSql(deleteSql)
-	if err != nil {
-		return err
-	}
-
 	// 3. delete fks
 	err = c.runSql(s.Plan.GetDdl().GetDropDatabase().GetUpdateFkSql())
 	if err != nil {
@@ -236,6 +193,22 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	err = c.runSql(fmt.Sprintf(deleteMoRetentionWithDatabaseNameFormat, dbName))
 	if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
 		return nil
+	}
+
+	// 5.update mo_pitr table
+	if !needSkipDbs[dbName] {
+		updatePitrSql := fmt.Sprintf("update `%s`.`%s` set `%s` = %d, `%s` = %s where `%s` = %d and `%s` = '%s' and `%s` = %d and `%s` = %s",
+			catalog.MO_CATALOG, catalog.MO_PITR, catalog.MO_PITR_STATUS, 0, catalog.MO_PITR_CHANGED_TIME, "default",
+			catalog.MO_PITR_ACCOUNT_ID, c.proc.GetSessionInfo().AccountId,
+			catalog.MO_PITR_DB_NAME, dbName,
+			catalog.MO_PITR_STATUS, 1,
+			catalog.MO_PITR_OBJECT_ID, database.GetDatabaseId(c.proc.Ctx),
+		)
+
+		err = c.runSqlWithSystemTenant(updatePitrSql)
+		if err != nil {
+			return err
+		}
 	}
 	return err
 }
@@ -441,11 +414,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 		}
 
 		// 2. lock origin table
-		var partitionTableNames []string
-		if tableDef.Partition != nil {
-			partitionTableNames = tableDef.Partition.PartitionTableNames
-		}
-		if err = lockTable(c.proc.Ctx, c.e, c.proc, rel, dbName, partitionTableNames, true); err != nil {
+		if err = lockTable(c.proc.Ctx, c.e, c.proc, rel, dbName, true); err != nil {
 			if !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
 				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
 				return err
@@ -547,7 +516,6 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 	var oldName, newName string
 	var addCol []*plan.AlterAddColumn
 	var dropCol []*plan.AlterDropColumn
-	var changePartitionDef *plan.PartitionByDef
 
 	cols := tableDef.Cols
 	// drop foreign key
@@ -816,27 +784,6 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 			}
 			act.AddColumn.Pos = pos
 			addCol = append(addCol, act.AddColumn)
-		case *plan.AlterTable_Action_AddPartition:
-			alterKinds = append(alterKinds, api.AlterKind_AddPartition)
-			changePartitionDef = act.AddPartition.PartitionDef
-			partitionTables := act.AddPartition.GetPartitionTables()
-			for _, table := range partitionTables {
-				storageCols := planColsToExeCols(table.GetCols())
-				storageDefs, err := planDefsToExeDefs(table)
-				if err != nil {
-					return err
-				}
-				err = dbSource.Create(c.proc.Ctx, table.GetName(), append(storageCols, storageDefs...))
-				if err != nil {
-					return err
-				}
-			}
-
-			insertMoTablePartitionSql := genInsertMoTablePartitionsSql(databaseId, tblId, act.AddPartition.PartitionDef, act.AddPartition.Definitions)
-			err = c.runSql(insertMoTablePartitionSql)
-			if err != nil {
-				return err
-			}
 		}
 	}
 
@@ -917,15 +864,13 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 			req = api.NewRenameTableReq(rel.GetDBID(c.proc.Ctx), rel.GetTableID(c.proc.Ctx), oldName, newName)
 		case api.AlterKind_AddColumn:
 			name := addCol[addColIdx].Name
-			typ := &addCol[addColIdx].Type
+			typ := addCol[addColIdx].Type
 			pos := addCol[addColIdx].Pos
 			addColIdx++
 			req = api.NewAddColumnReq(rel.GetDBID(c.proc.Ctx), rel.GetTableID(c.proc.Ctx), name, typ, pos)
 		case api.AlterKind_DropColumn:
 			req = api.NewRemoveColumnReq(rel.GetDBID(c.proc.Ctx), rel.GetTableID(c.proc.Ctx), dropCol[dropColIdx].Idx, dropCol[dropColIdx].Seq)
 			dropColIdx++
-		case api.AlterKind_AddPartition:
-			req = api.NewAddPartitionReq(rel.GetDBID(c.proc.Ctx), rel.GetTableID(c.proc.Ctx), changePartitionDef)
 		default:
 		}
 		reqs = append(reqs, req)
@@ -1072,29 +1017,6 @@ func (s *Scope) CreateTable(c *Compile) error {
 			zap.Error(err),
 		)
 		return err
-	}
-
-	partitionTables := qry.GetPartitionTables()
-	for _, table := range partitionTables {
-		storageCols := planColsToExeCols(table.GetCols())
-		storageDefs, err := planDefsToExeDefs(table)
-		if err != nil {
-			c.proc.Error(c.proc.Ctx, "createTable",
-				zap.String("databaseName", c.db),
-				zap.String("tableName", qry.GetTableDef().GetName()),
-				zap.Error(err),
-			)
-			return err
-		}
-		err = dbSource.Create(c.proc.Ctx, table.GetName(), append(storageCols, storageDefs...))
-		if err != nil {
-			c.proc.Error(c.proc.Ctx, "createTable",
-				zap.String("databaseName", c.db),
-				zap.String("tableName", qry.GetTableDef().GetName()),
-				zap.Error(err),
-			)
-			return err
-		}
 	}
 
 	//update mo_foreign_keys
@@ -1475,26 +1397,6 @@ func (s *Scope) CreateTable(c *Compile) error {
 			)
 			return err
 		}
-
-		insertSQL2, err := makeInsertTablePartitionsSQL(c.proc.Ctx, dbSource, newRelation)
-		if err != nil {
-			c.proc.Error(c.proc.Ctx, "createTable",
-				zap.String("databaseName", c.db),
-				zap.String("tableName", qry.GetTableDef().GetName()),
-				zap.Error(err),
-			)
-			return err
-		}
-		err = c.runSql(insertSQL2)
-		if err != nil {
-			c.proc.Error(c.proc.Ctx, "createTable",
-				zap.String("databaseName", c.db),
-				zap.String("tableName", qry.GetTableDef().GetName()),
-				zap.Error(err),
-			)
-			return err
-		}
-
 	}
 
 	err = maybeCreateAutoIncrement(
@@ -1527,31 +1429,6 @@ func (s *Scope) CreateTable(c *Compile) error {
 			)
 			return err
 		}
-	}
-
-	// update mo_pitr table
-	// if mo_pitr table contains the same dbName and tblName, then update the table_id and modified_time
-	// otherwise, skip it
-	if !needSkipDbs[dbName] {
-		newRelation, err := dbSource.Relation(c.proc.Ctx, tblName, nil)
-		if err != nil {
-			return err
-		}
-		updatePitrSql := fmt.Sprintf("update `%s`.`%s` set `%s` = %d  where `%s` = %d and `%s` = '%s' and `%s` = '%s'",
-			catalog.MO_CATALOG, catalog.MO_PITR, catalog.MO_PITR_OBJECT_ID, newRelation.GetTableID(c.proc.Ctx),
-			catalog.MO_PITR_ACCOUNT_ID, c.proc.GetSessionInfo().AccountId,
-			catalog.MO_PITR_DB_NAME, dbName,
-			catalog.MO_PITR_TABLE_NAME, tblName)
-
-		// change ctx
-		err = c.runSqlWithSystemTenant(updatePitrSql)
-		if err != nil {
-			return err
-		}
-	}
-
-	if len(partitionTables) == 0 {
-		return nil
 	}
 
 	return shardservice.GetService(c.proc.GetService()).Create(
@@ -2313,7 +2190,7 @@ func (s *Scope) TruncateTable(c *Compile) error {
 			err = e
 		}
 		// before dropping table, lock it.
-		if e := lockTable(c.proc.Ctx, c.e, c.proc, rel, dbName, tqry.PartitionTableNames, false); e != nil {
+		if e := lockTable(c.proc.Ctx, c.e, c.proc, rel, dbName, false); e != nil {
 			if !moerr.IsMoErrCode(e, moerr.ErrTxnNeedRetry) &&
 				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
 				return e
@@ -2383,19 +2260,6 @@ func (s *Scope) TruncateTable(c *Compile) error {
 			}
 		}
 
-	}
-
-	//Truncate Partition subtable if needed
-	for _, name := range tqry.PartitionTableNames {
-		var err error
-		if isTemp {
-			_, err = dbSource.Truncate(c.proc.Ctx, engine.GetTempTableName(dbName, name))
-		} else {
-			_, err = dbSource.Truncate(c.proc.Ctx, name)
-		}
-		if err != nil {
-			return err
-		}
 	}
 
 	// update tableDef of foreign key's table with new table id
@@ -2562,7 +2426,7 @@ func (s *Scope) DropTable(c *Compile) error {
 			err = e
 		}
 		// before dropping table, lock it.
-		if e := lockTable(c.proc.Ctx, c.e, c.proc, rel, dbName, qry.PartitionTableNames, false); e != nil {
+		if e := lockTable(c.proc.Ctx, c.e, c.proc, rel, dbName, false); e != nil {
 			if !moerr.IsMoErrCode(e, moerr.ErrTxnNeedRetry) &&
 				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
 				return e
@@ -2631,17 +2495,6 @@ func (s *Scope) DropTable(c *Compile) error {
 		}
 	}
 
-	// delete all partition objects record of the table in mo_catalog.mo_table_partitions
-	if !qry.IsView && qry.Database != catalog.MO_CATALOG && qry.Table != catalog.MO_TABLE_PARTITIONS {
-		if qry.TableDef.Partition != nil {
-			deleteSql := fmt.Sprintf(deleteMoTablePartitionsWithTableIdFormat, qry.GetTableDef().TblId)
-			err = c.runSql(deleteSql)
-			if err != nil {
-				return err
-			}
-		}
-	}
-
 	if isTemp {
 		if err := dbSource.Delete(c.proc.Ctx, engine.GetTempTableName(dbName, tblName)); err != nil {
 			return err
@@ -2653,13 +2506,6 @@ func (s *Scope) DropTable(c *Compile) error {
 			}
 
 			if err := dbSource.Delete(c.proc.Ctx, engine.GetTempTableName(dbName, name)); err != nil {
-				return err
-			}
-		}
-
-		//delete partition table
-		for _, name := range qry.GetPartitionTableNames() {
-			if err = dbSource.Delete(c.proc.Ctx, name); err != nil {
 				return err
 			}
 		}
@@ -2707,13 +2553,6 @@ func (s *Scope) DropTable(c *Compile) error {
 
 		}
 
-		// delete partition subtable
-		for _, name := range qry.GetPartitionTableNames() {
-			if err = dbSource.Delete(c.proc.Ctx, name); err != nil {
-				return err
-			}
-		}
-
 		if dbName != catalog.MO_CATALOG && tblName != catalog.MO_INDEXES {
 			tblDef := rel.GetTableDef(c.proc.Ctx)
 			var containAuto bool
@@ -2755,6 +2594,26 @@ func (s *Scope) DropTable(c *Compile) error {
 	if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
 		return nil
 	}
+
+	if err != nil {
+		return err
+	}
+
+	if !needSkipDbs[dbName] {
+		updatePitrSql := fmt.Sprintf("update `%s`.`%s` set `%s` = %d, `%s` = %s where `%s` = %d and `%s` = '%s' and `%s` = '%s' and `%s` = %d and `%s` = %d",
+			catalog.MO_CATALOG, catalog.MO_PITR, catalog.MO_PITR_STATUS, 0, catalog.MO_PITR_CHANGED_TIME, "default",
+			catalog.MO_PITR_ACCOUNT_ID, c.proc.GetSessionInfo().AccountId,
+			catalog.MO_PITR_DB_NAME, dbName,
+			catalog.MO_PITR_TABLE_NAME, tblName,
+			catalog.MO_PITR_STATUS, 1,
+			catalog.MO_PITR_OBJECT_ID, tblId,
+		)
+
+		err = c.runSqlWithSystemTenant(updatePitrSql)
+		if err != nil {
+			return err
+		}
+	}
 	return err
 }
 
@@ -2784,17 +2643,6 @@ var planDefsToExeDefs = func(tableDef *plan.TableDef) ([]engine.TableDef, error)
 	if tableDef.Indexes != nil {
 		c.Cts = append(c.Cts, &engine.IndexDef{
 			Indexes: tableDef.Indexes,
-		})
-	}
-
-	if tableDef.Partition != nil {
-		bytes, err := tableDef.Partition.MarshalPartitionInfo()
-		if err != nil {
-			return nil, err
-		}
-		exeDefs = append(exeDefs, &engine.PartitionDef{
-			Partitioned: 1,
-			Partition:   string(bytes),
 		})
 	}
 
@@ -3598,29 +3446,9 @@ var lockTable = func(
 	proc *process.Process,
 	rel engine.Relation,
 	dbName string,
-	partitionTableNames []string,
-	defChanged bool) error {
-
-	if len(partitionTableNames) == 0 {
-		return doLockTable(eng, proc, rel, defChanged)
-	}
-
-	dbSource, err := eng.Database(ctx, dbName, proc.GetTxnOperator())
-	if err != nil {
-		return err
-	}
-
-	for _, tableName := range partitionTableNames {
-		pRel, pErr := dbSource.Relation(ctx, tableName, nil)
-		if pErr != nil {
-			return pErr
-		}
-		err = doLockTable(eng, proc, pRel, defChanged)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
+	defChanged bool,
+) error {
+	return doLockTable(eng, proc, rel, defChanged)
 }
 
 // lockIndexTable

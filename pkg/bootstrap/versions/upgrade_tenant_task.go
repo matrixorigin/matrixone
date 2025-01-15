@@ -135,7 +135,7 @@ func GetTenantCreateVersionForUpdate(
 		return true
 	})
 	if version == "" {
-		panic(fmt.Sprintf("BUG: missing tenant: %d", tenantID))
+		getLogger(txn.Txn().TxnOptions().CN).Fatal(fmt.Sprintf("BUG: missing tenant: %d", tenantID))
 	}
 	return version, nil
 }
@@ -153,7 +153,7 @@ func UpgradeTenantVersion(
 	}
 	defer res.Close()
 	if res.AffectedRows != 1 {
-		panic(fmt.Sprintf("BUG: update tenant: %d failed with AffectedRows %d",
+		getLogger(txn.Txn().TxnOptions().CN).Fatal(fmt.Sprintf("BUG: update tenant: %d failed with AffectedRows %d",
 			tenantID, res.AffectedRows))
 	}
 	return nil
@@ -178,7 +178,7 @@ func GetTenantVersion(
 		return true
 	})
 	if version == "" {
-		panic(fmt.Sprintf("BUG: missing tenant: %d", tenantID))
+		getLogger(txn.Txn().TxnOptions().CN).Fatal(fmt.Sprintf("BUG: missing tenant: %d", tenantID))
 	}
 	return version, nil
 }

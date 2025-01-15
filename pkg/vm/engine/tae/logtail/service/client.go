@@ -53,10 +53,11 @@ type LogtailClient struct {
 	// There is another worker send the items in the chan to stream.
 	requestC chan *LogtailRequest
 
-	stream   morpc.Stream
-	recvChan chan morpc.Message
-	broken   chan struct{} // mark morpc stream as broken when necessary
-	once     sync.Once
+	stream    morpc.Stream
+	recvChan  chan morpc.Message
+	breakChan chan struct{}
+	broken    chan struct{} // mark morpc stream as broken when necessary
+	once      sync.Once
 
 	options struct {
 		rps int
@@ -69,11 +70,12 @@ type LogtailClient struct {
 func NewLogtailClient(ctx context.Context, stream morpc.Stream, opts ...ClientOption) (*LogtailClient, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	client := &LogtailClient{
-		ctx:      ctx,
-		cancel:   cancel,
-		requestC: make(chan *LogtailRequest, defaultRequestChanSize),
-		stream:   stream,
-		broken:   make(chan struct{}),
+		ctx:       ctx,
+		cancel:    cancel,
+		requestC:  make(chan *LogtailRequest, defaultRequestChanSize),
+		stream:    stream,
+		broken:    make(chan struct{}),
+		breakChan: make(chan struct{}, 10),
 	}
 
 	recvChan, err := stream.Receive()
@@ -150,6 +152,10 @@ func (c *LogtailClient) Unsubscribe(
 	return c.sendRequest(request)
 }
 
+func (c *LogtailClient) BreakoutReceive() {
+	c.breakChan <- struct{}{}
+}
+
 // Receive fetches logtail response.
 //
 // 1. response for error: *LogtailResponse.GetError() != nil
@@ -161,6 +167,9 @@ func (c *LogtailClient) Receive(ctx context.Context) (*LogtailResponse, error) {
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
+
+		case <-c.breakChan:
+			return nil, moerr.NewInternalErrorNoCtx("logtail client: reconnect breakout")
 
 		case <-c.broken:
 			return nil, moerr.NewStreamClosedNoCtx()
