@@ -1557,7 +1557,7 @@ func (c *checkpointCleaner) FastExecute(inputCtx context.Context) (err error) {
 	}
 
 	var newWindow *GCWindow
-	if newWindow, _, err = c.scanCheckpointsLocked(
+	if newWindow, _, err = c.fastScanCheckpointsLocked(
 		ctx, candidates, memoryBuffer,
 	); err != nil {
 		logutil.Error(
@@ -1823,56 +1823,108 @@ func (c *checkpointCleaner) scanCheckpointsLocked(
 
 	var snapshotFile, accountFile ioutil.TSRangeFile
 	newFiles = make([]string, 0, 3)
-	//saveSnapshot := func() (err2 error) {
-	//	select {
-	//	case <-ctx.Done():
-	//		err2 = context.Cause(ctx)
-	//		return
-	//	default:
-	//	}
-	//	name := ioutil.EncodeSnapshotMetadataName(
-	//		ckps[0].GetStart(), ckps[len(ckps)-1].GetEnd(),
-	//	)
-	//	if snapSize, err2 = c.mutation.snapshotMeta.SaveMeta(
-	//		ioutil.MakeGCFullName(name),
-	//		c.fs.Service,
-	//	); err2 != nil {
-	//		logutil.Error(
-	//			"GC-SAVE-SNAPSHOT-META-ERROR",
-	//			zap.String("task", c.TaskNameLocked()),
-	//			zap.Error(err2),
-	//		)
-	//		return
-	//	}
-	//	newFiles = append(newFiles, ioutil.MakeGCFullName(name))
-	//	snapshotFile = ioutil.NewTSRangeFile(
-	//		name,
-	//		ioutil.SnapshotExt,
-	//		ckps[0].GetStart(),
-	//		ckps[len(ckps)-1].GetEnd(),
-	//	)
-	//	name = ioutil.EncodeAcctMetadataName(
-	//		ckps[0].GetStart(), ckps[len(ckps)-1].GetEnd(),
-	//	)
-	//	if tableSize, err2 = c.mutation.snapshotMeta.SaveTableInfo(
-	//		ioutil.MakeGCFullName(name),
-	//		c.fs.Service,
-	//	); err2 != nil {
-	//		logutil.Error(
-	//			"GC-SAVE-TABLE-META-ERROR",
-	//			zap.String("task", c.TaskNameLocked()),
-	//			zap.Error(err2),
-	//		)
-	//	}
-	//	newFiles = append(newFiles, ioutil.MakeGCFullName(name))
-	//	accountFile = ioutil.NewTSRangeFile(
-	//		name,
-	//		ioutil.AcctExt,
-	//		ckps[0].GetStart(),
-	//		ckps[len(ckps)-1].GetEnd(),
-	//	)
-	//	return
-	//}
+	saveSnapshot := func() (err2 error) {
+		select {
+		case <-ctx.Done():
+			err2 = context.Cause(ctx)
+			return
+		default:
+		}
+		name := ioutil.EncodeSnapshotMetadataName(
+			ckps[0].GetStart(), ckps[len(ckps)-1].GetEnd(),
+		)
+		if snapSize, err2 = c.mutation.snapshotMeta.SaveMeta(
+			ioutil.MakeGCFullName(name),
+			c.fs.Service,
+		); err2 != nil {
+			logutil.Error(
+				"GC-SAVE-SNAPSHOT-META-ERROR",
+				zap.String("task", c.TaskNameLocked()),
+				zap.Error(err2),
+			)
+			return
+		}
+		newFiles = append(newFiles, ioutil.MakeGCFullName(name))
+		snapshotFile = ioutil.NewTSRangeFile(
+			name,
+			ioutil.SnapshotExt,
+			ckps[0].GetStart(),
+			ckps[len(ckps)-1].GetEnd(),
+		)
+		name = ioutil.EncodeAcctMetadataName(
+			ckps[0].GetStart(), ckps[len(ckps)-1].GetEnd(),
+		)
+		if tableSize, err2 = c.mutation.snapshotMeta.SaveTableInfo(
+			ioutil.MakeGCFullName(name),
+			c.fs.Service,
+		); err2 != nil {
+			logutil.Error(
+				"GC-SAVE-TABLE-META-ERROR",
+				zap.String("task", c.TaskNameLocked()),
+				zap.Error(err2),
+			)
+		}
+		newFiles = append(newFiles, ioutil.MakeGCFullName(name))
+		accountFile = ioutil.NewTSRangeFile(
+			name,
+			ioutil.AcctExt,
+			ckps[0].GetStart(),
+			ckps[len(ckps)-1].GetEnd(),
+		)
+		return
+	}
+
+	gcWindow = NewGCWindow(c.mp, c.fs.Service)
+	var gcMetaFile string
+	if gcMetaFile, err = gcWindow.ScanCheckpoints(
+		ctx,
+		ckps,
+		c.collectCkpData,
+		c.mutUpdateSnapshotMetaLocked,
+		saveSnapshot,
+		memoryBuffer,
+	); err != nil {
+		gcWindow.Close()
+		gcWindow = nil
+		return
+	}
+	newFiles = append(newFiles, ioutil.MakeFullName(gcWindow.dir, gcMetaFile))
+	c.mutAddMetaFileLocked(snapshotFile.GetName(), snapshotFile)
+	c.mutAddMetaFileLocked(accountFile.GetName(), accountFile)
+	c.mutAddMetaFileLocked(
+		gcMetaFile,
+		ioutil.NewTSRangeFile(
+			gcMetaFile,
+			ioutil.CheckpointExt,
+			gcWindow.tsRange.start,
+			gcWindow.tsRange.end,
+		),
+	)
+	return
+}
+
+func (c *checkpointCleaner) fastScanCheckpointsLocked(
+	ctx context.Context,
+	ckps []*checkpoint.CheckpointEntry,
+	memoryBuffer *containers.OneSchemaBatchBuffer,
+) (gcWindow *GCWindow, newFiles []string, err error) {
+	now := time.Now()
+
+	var (
+		snapSize, tableSize uint32
+	)
+	defer func() {
+		logutil.Info(
+			"GC-TRACE-SCAN",
+			zap.String("task", c.TaskNameLocked()),
+			zap.Int("checkpoint-count", len(ckps)),
+			zap.Duration("duration", time.Since(now)),
+			zap.Uint32("snap-meta-size :", snapSize),
+			zap.Uint32("table-meta-size :", tableSize),
+			zap.String("snapshot-detail", c.mutation.snapshotMeta.String()))
+	}()
+
+	newFiles = make([]string, 0, 3)
 
 	gcWindow = NewGCWindow(c.mp, c.fs.Service)
 	var gcMetaFile string
@@ -1889,8 +1941,6 @@ func (c *checkpointCleaner) scanCheckpointsLocked(
 		return
 	}
 	newFiles = append(newFiles, ioutil.MakeFullName(gcWindow.dir, gcMetaFile))
-	c.mutAddMetaFileLocked(snapshotFile.GetName(), snapshotFile)
-	c.mutAddMetaFileLocked(accountFile.GetName(), accountFile)
 	c.mutAddMetaFileLocked(
 		gcMetaFile,
 		ioutil.NewTSRangeFile(
