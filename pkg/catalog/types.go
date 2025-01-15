@@ -313,12 +313,14 @@ const (
 const (
 	UniqueIndexSuffix             = "unique_"
 	FullTextIndexSuffix           = "fulltext_"
+	HnswIndexSuffix               = "hnsw_"
 	SecondaryIndexSuffix          = "secondary_"
 	PrefixIndexTableName          = "__mo_index_"
 	IndexTableNamePrefix          = PrefixIndexTableName
 	UniqueIndexTableNamePrefix    = PrefixIndexTableName + UniqueIndexSuffix
 	SecondaryIndexTableNamePrefix = PrefixIndexTableName + SecondaryIndexSuffix
 	FullTextIndexTableNamePrefix  = PrefixIndexTableName + FullTextIndexSuffix
+	HnswIndexTableNamePrefix      = PrefixIndexTableName + HnswIndexSuffix
 
 	/************ 0. Regular Secondary Index ************/
 
@@ -364,6 +366,23 @@ const (
 	FullTextIndex_TabCol_Word     = "word"
 	FullTextIndex_TabCol_Id       = "doc_id"
 	FullTextIndex_TabCol_Position = "pos"
+
+	/************ 4. HNSW Index *************/
+
+	// HNSW Table Types
+	Hnsw_TblType_Metadata = "metadata"
+	Hnsw_TblType_Storage  = "storage"
+
+	// HNSW Storage - Column names
+	Hnsw_TblCol_Storage_Index_Id = "index_id"
+	Hnsw_TblCol_Storage_Chunk_Id = "chunk_id"
+	Hnsw_TblCol_Storage_Data     = "data"
+	Hnsw_TblCol_Storage_Tag      = "tag"
+
+	// HNSW Metadata - Column names
+	Hnsw_TblCol_Metadata_Index_Id  = "index_id"
+	Hnsw_TblCol_Metadata_Timestamp = "timestamp"
+	Hnsw_TblCol_Metadata_Checksum  = "checksum"
 )
 
 const (

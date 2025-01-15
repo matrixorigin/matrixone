@@ -31,6 +31,7 @@ const (
 	MoIndexIvfFlatAlgo  = tree.INDEX_TYPE_IVFFLAT  // used for IVF flat index on Vector/Array columns
 	MOIndexMasterAlgo   = tree.INDEX_TYPE_MASTER   // used for Master Index on VARCHAR columns
 	MOIndexFullTextAlgo = tree.INDEX_TYPE_FULLTEXT // used for Fulltext Index on VARCHAR columns
+	MOIndexHnswAlgo     = tree.INDEX_TYPE_HNSW     // used for HNSW Index on Vector/Array columns
 )
 
 // ToLower is used for before comparing AlgoType and IndexAlgoParamOpType. Reason why they are strings
@@ -69,6 +70,11 @@ func IsFullTextIndexAlgo(algo string) bool {
 	return _algo == MOIndexFullTextAlgo.ToString()
 }
 
+func IsHnswIndexAlgo(algo string) bool {
+	_algo := ToLower(algo)
+	return _algo == MOIndexHnswAlgo.ToString()
+}
+
 // ------------------------[START] IndexAlgoParams------------------------
 const (
 	IndexAlgoParamLists     = "lists"
@@ -76,6 +82,8 @@ const (
 	IndexAlgoParamOpType_l2 = "vector_l2_ops"
 	//IndexAlgoParamOpType_ip  = "vector_ip_ops"
 	//IndexAlgoParamOpType_cos = "vector_cosine_ops"
+	HnswM              = "m"
+	HnswEfConstruction = "ef_construction"
 )
 
 const (
@@ -117,6 +125,14 @@ func IndexParamsToStringList(indexParams string) (string, error) {
 	res := ""
 	if val, ok := result[IndexAlgoParamLists]; ok {
 		res += fmt.Sprintf(" %s = %s ", IndexAlgoParamLists, val)
+	}
+
+	if val, ok := result[HnswM]; ok {
+		res += fmt.Sprintf(" %s = %s ", HnswM, val)
+	}
+
+	if val, ok := result[HnswEfConstruction]; ok {
+		res += fmt.Sprintf(" %s = %s ", HnswEfConstruction, val)
 	}
 
 	if opType, ok := result[IndexAlgoParamOpType]; ok {
@@ -213,6 +229,32 @@ func indexParamsToMap(def interface{}) (map[string]string, error) {
 			} else {
 				return nil, moerr.NewInternalErrorNoCtx("invalid list. list must be > 0")
 			}
+
+			if len(idx.IndexOption.AlgoParamVectorOpType) > 0 {
+				opType := ToLower(idx.IndexOption.AlgoParamVectorOpType)
+				if opType != IndexAlgoParamOpType_l2 {
+					//opType != IndexAlgoParamOpType_ip &&
+					//opType != IndexAlgoParamOpType_cos &&
+
+					return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid op_type. not of type '%s'",
+						IndexAlgoParamOpType_l2))
+					//IndexAlgoParamOpType_ip, IndexAlgoParamOpType_cos,
+				}
+				res[IndexAlgoParamOpType] = idx.IndexOption.AlgoParamVectorOpType
+			} else {
+				res[IndexAlgoParamOpType] = IndexAlgoParamOpType_l2 // set l2 as default
+			}
+		case tree.INDEX_TYPE_HNSW:
+			if idx.IndexOption.HnswM < 0 {
+				return nil, moerr.NewInternalErrorNoCtx("invalid list. hnsw.M must be > 0")
+			}
+			if idx.IndexOption.HnswEfConstruction < 0 {
+				return nil, moerr.NewInternalErrorNoCtx("invalid list. hnsw.ef_construction must be > 0")
+			}
+
+			// hnswM or HnswEfConstruction == 0, use usearch default value
+			res[HnswM] = strconv.FormatInt(idx.IndexOption.HnswM, 10)
+			res[HnswEfConstruction] = strconv.FormatInt(idx.IndexOption.HnswEfConstruction, 10)
 
 			if len(idx.IndexOption.AlgoParamVectorOpType) > 0 {
 				opType := ToLower(idx.IndexOption.AlgoParamVectorOpType)
