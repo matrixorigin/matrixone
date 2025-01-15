@@ -14,7 +14,7 @@
 
 //go:build darwin
 
-package linuxonly
+package tcpconn
 
 import (
 	"sync"

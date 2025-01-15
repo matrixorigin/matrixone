@@ -14,7 +14,7 @@
 
 //go:build linux
 
-package linuxonly
+package tcpconn
 
 import (
 	"context"

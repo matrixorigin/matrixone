@@ -29,7 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/frontend/linuxonly"
+	"github.com/matrixorigin/matrixone/pkg/frontend/tcpconn"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -91,7 +91,7 @@ func isConnected(connMap *sync.Map) {
 		}
 	}()
 
-	linuxonly.IsConnected(connMap)
+	tcpconn.IsConnected(connMap)
 }
 
 func (mo *MOServer) checkConnected(ctx context.Context) {
