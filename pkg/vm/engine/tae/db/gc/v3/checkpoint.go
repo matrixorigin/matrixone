@@ -1531,8 +1531,8 @@ func (c *checkpointCleaner) FastExecute(inputCtx context.Context) (err error) {
 	defer memoryBuffer.Close(c.mp)
 
 	var maxScannedTS types.TS
-	if startGCWaterMark != nil {
-		maxScannedTS = startGCWaterMark.GetEnd()
+	if startScanWaterMark != nil {
+		maxScannedTS = startScanWaterMark.GetEnd()
 	}
 	// get up to 10 incremental checkpoints starting from the max scanned timestamp
 	checkpoints := c.checkpointCli.ICKPSeekLT(maxScannedTS, 20)
