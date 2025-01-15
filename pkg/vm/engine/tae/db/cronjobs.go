@@ -30,6 +30,7 @@ import (
 const (
 	CronJobs_Name_GCTransferTable = "GC-Transfer-Table"
 	CronJobs_Name_GCDisk          = "GC-Disk"
+	CronJobs_Name_FAST_GCDisk     = "FAST-GC-Disk"
 	CronJobs_Name_GCCheckpoint    = "GC-Checkpoint"
 	CronJobs_Name_GCCatalogCache  = "GC-Catalog-Cache"
 	CronJobs_Name_GCLogtail       = "GC-Logtail"
@@ -43,6 +44,7 @@ const (
 var CronJobs_Open_WriteMode = []string{
 	CronJobs_Name_GCTransferTable,
 	CronJobs_Name_GCDisk,
+	CronJobs_Name_FAST_GCDisk,
 	CronJobs_Name_GCCheckpoint,
 	CronJobs_Name_GCCatalogCache,
 	CronJobs_Name_GCLogtail,
@@ -64,6 +66,7 @@ var CronJobs_Open_ReplayMode = []string{
 var CronJobs_Spec = map[string][]bool{
 	CronJobs_Name_GCTransferTable: {true, true, true, true},
 	CronJobs_Name_GCDisk:          {true, true, false, false},
+	CronJobs_Name_FAST_GCDisk:     {true, true, false, false},
 	CronJobs_Name_GCCheckpoint:    {true, true, false, false},
 	CronJobs_Name_GCCatalogCache:  {true, true, true, true},
 	CronJobs_Name_GCLogtail:       {true, true, true, true},
@@ -136,6 +139,16 @@ func AddCronJob(db *DB, name string, skipMode bool) (err error) {
 			db.Opts.GCCfg.ScanGCInterval,
 			func(ctx context.Context) {
 				db.DiskCleaner.GC(ctx)
+			},
+			1,
+		)
+		return
+	case CronJobs_Name_FAST_GCDisk:
+		err = db.CronJobs.AddJob(
+			CronJobs_Name_FAST_GCDisk,
+			db.Opts.GCCfg.ScanGCInterval*2,
+			func(ctx context.Context) {
+				db.DiskCleaner.FastGC(ctx)
 			},
 			1,
 		)

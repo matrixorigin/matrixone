@@ -1527,7 +1527,6 @@ func (c *checkpointCleaner) FastExecute(inputCtx context.Context) (err error) {
 		return context.Cause(ctx)
 	default:
 	}
-
 	memoryBuffer := MakeGCWindowBuffer(16 * mpool.MB)
 	defer memoryBuffer.Close(c.mp)
 
@@ -1546,9 +1545,6 @@ func (c *checkpointCleaner) FastExecute(inputCtx context.Context) (err error) {
 	candidates := make([]*checkpoint.CheckpointEntry, 0, len(checkpoints))
 	// filter out the incremental checkpoints that do not meet the requirements
 	for _, ckp := range checkpoints {
-		if !c.checkExtras(ckp) {
-			continue
-		}
 		candidates = append(candidates, ckp)
 	}
 
@@ -1567,6 +1563,9 @@ func (c *checkpointCleaner) FastExecute(inputCtx context.Context) (err error) {
 		)
 		return
 	}
+
+	c.mutAddScannedLocked(newWindow)
+	c.updateScanWaterMark(candidates[len(candidates)-1])
 
 	var snapshots map[uint32]containers.Vector
 	var extraErrMsg string

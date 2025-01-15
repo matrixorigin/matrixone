@@ -97,6 +97,10 @@ func (cleaner *DiskCleaner) GC(ctx context.Context) (err error) {
 	return cleaner.scheduleGCJob(ctx)
 }
 
+func (cleaner *DiskCleaner) FastGC(ctx context.Context) (err error) {
+	return cleaner.forceScheduleJob(JT_GCFastExecute)
+}
+
 func (cleaner *DiskCleaner) IsWriteMode() bool {
 	return cleaner.step.Load() == StateStep_Write
 }
