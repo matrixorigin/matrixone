@@ -15,17 +15,14 @@
 package logservicedriver
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"math"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
@@ -34,78 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 	"go.uber.org/zap"
 )
-
-type ReplayCmd struct {
-	// DSN->PSN mapping
-	skipMap map[uint64]uint64
-}
-
-func NewReplayCmd(skipMap map[uint64]uint64) ReplayCmd {
-	return ReplayCmd{
-		skipMap: skipMap,
-	}
-}
-func NewEmptyReplayCmd() ReplayCmd {
-	return ReplayCmd{
-		skipMap: make(map[uint64]uint64),
-	}
-}
-
-func (c *ReplayCmd) WriteTo(w io.Writer) (n int64, err error) {
-	length := uint16(len(c.skipMap))
-	if _, err = w.Write(types.EncodeUint16(&length)); err != nil {
-		return
-	}
-	n += 2
-	for dsn, psn := range c.skipMap {
-		if _, err = w.Write(types.EncodeUint64(&dsn)); err != nil {
-			return
-		}
-		n += 8
-		if _, err = w.Write(types.EncodeUint64(&psn)); err != nil {
-			return
-		}
-		n += 8
-	}
-	return
-}
-
-func (c *ReplayCmd) ReadFrom(r io.Reader) (n int64, err error) {
-	length := uint16(0)
-	if _, err = r.Read(types.EncodeUint16(&length)); err != nil {
-		return
-	}
-	n += 2
-	for i := 0; i < int(length); i++ {
-		dsn := uint64(0)
-		lsn := uint64(0)
-		if _, err = r.Read(types.EncodeUint64(&dsn)); err != nil {
-			return
-		}
-		n += 8
-		if _, err = r.Read(types.EncodeUint64(&lsn)); err != nil {
-			return
-		}
-		n += 8
-		c.skipMap[dsn] = lsn
-	}
-	return
-}
-
-func (c *ReplayCmd) Unmarshal(buf []byte) error {
-	bbuf := bytes.NewBuffer(buf)
-	_, err := c.ReadFrom(bbuf)
-	return err
-}
-
-func (c *ReplayCmd) Marshal() (buf []byte, err error) {
-	var bbuf bytes.Buffer
-	if _, err = c.WriteTo(&bbuf); err != nil {
-		return
-	}
-	buf = bbuf.Bytes()
-	return
-}
 
 type ReplayOption func(*replayer)
 

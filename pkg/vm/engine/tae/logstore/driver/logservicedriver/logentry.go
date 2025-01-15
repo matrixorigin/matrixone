@@ -26,6 +26,14 @@ import (
 	"go.uber.org/zap"
 )
 
+type CmdType uint8
+
+const (
+	Cmd_Invalid CmdType = iota
+	Cmd_Normal
+	Cmd_SkipDSN
+)
+
 var emptyLogEntry = make([]byte, EmptyLogEntrySize)
 var logEntryBuffer = make([]byte, EmptyLogEntrySize)
 var skipCmdBuffer = make([]byte, EmptyLogEntrySize)

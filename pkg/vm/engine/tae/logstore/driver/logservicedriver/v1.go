@@ -27,70 +27,38 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 )
 
-type CmdType uint8
-
-const (
-	Cmd_Invalid CmdType = iota
-	Cmd_Normal
-	Cmd_SkipDSN
-)
-
-const (
-	IOET_WALRecord_V1 uint16 = 1
-	IOET_WALRecord    uint16 = 1000
-
-	IOET_WALRecord_CurrVer = IOET_WALRecord_V1
-)
-
-func init() {
-	objectio.RegisterIOEnrtyCodec(
-		objectio.IOEntryHeader{
-			Type:    IOET_WALRecord,
-			Version: IOET_WALRecord_V1,
-		},
-		func(a any) ([]byte, error) {
-			return a.(*baseEntry).Marshal()
-		},
-		func(b []byte) (any, error) {
-			record := new(baseEntry)
-			err := record.Unmarshal(b)
-			return record, err
-		},
-	)
-}
-
-type Meta struct {
+type v1Meta struct {
 	cmdType     CmdType
 	appended    uint64
 	addr        map[uint64]uint64
 	payloadSize uint64
 }
 
-func newMeta() Meta {
-	return Meta{addr: make(map[uint64]uint64), cmdType: Cmd_Normal}
+func newMeta() v1Meta {
+	return v1Meta{addr: make(map[uint64]uint64), cmdType: Cmd_Normal}
 }
 
-func (m *Meta) GetAddr() map[uint64]uint64 {
+func (m *v1Meta) GetAddr() map[uint64]uint64 {
 	return m.addr
 }
 
-func (m *Meta) AddAddr(l uint64, s uint64) {
+func (m *v1Meta) AddAddr(l uint64, s uint64) {
 	if m.addr == nil {
 		m.addr = make(map[uint64]uint64)
 	}
 	m.addr[l] = s
 }
 
-func (m *Meta) SetType(t CmdType) {
+func (m *v1Meta) SetType(t CmdType) {
 	m.cmdType = t
 }
-func (m *Meta) GetType() CmdType {
+func (m *v1Meta) GetType() CmdType {
 	return m.cmdType
 }
-func (m *Meta) SetAppended(appended uint64) {
+func (m *v1Meta) SetAppended(appended uint64) {
 	m.appended = appended
 }
-func (m *Meta) GetMinLsn() uint64 {
+func (m *v1Meta) GetMinDSN() uint64 {
 	min := uint64(0)
 	min = math.MaxUint64
 	for lsn := range m.addr {
@@ -100,7 +68,7 @@ func (m *Meta) GetMinLsn() uint64 {
 	}
 	return min
 }
-func (m *Meta) GetMaxLsn() uint64 {
+func (m *v1Meta) GetMaxLsn() uint64 {
 	max := uint64(0)
 	for lsn := range m.addr {
 		if lsn > max {
@@ -109,7 +77,7 @@ func (m *Meta) GetMaxLsn() uint64 {
 	}
 	return max
 }
-func (m *Meta) WriteTo(w io.Writer) (n int64, err error) {
+func (m *v1Meta) WriteTo(w io.Writer) (n int64, err error) {
 	cmdType := uint8(m.cmdType)
 	if _, err = w.Write(types.EncodeUint8(&cmdType)); err != nil {
 		return
@@ -141,7 +109,7 @@ func (m *Meta) WriteTo(w io.Writer) (n int64, err error) {
 	return
 }
 
-func (m *Meta) ReadFrom(r io.Reader) (n int64, err error) {
+func (m *v1Meta) ReadFrom(r io.Reader) (n int64, err error) {
 	cmdType := uint8(0)
 	if _, err = r.Read(types.EncodeUint8(&cmdType)); err != nil {
 		return
@@ -178,13 +146,13 @@ func (m *Meta) ReadFrom(r io.Reader) (n int64, err error) {
 	return
 }
 
-func (m *Meta) Unmarshal(buf []byte) error {
+func (m *v1Meta) Unmarshal(buf []byte) error {
 	bbuf := bytes.NewBuffer(buf)
 	_, err := m.ReadFrom(bbuf)
 	return err
 }
 
-func (m *Meta) Marshal() (buf []byte, err error) {
+func (m *v1Meta) Marshal() (buf []byte, err error) {
 	var bbuf bytes.Buffer
 	if _, err = m.WriteTo(&bbuf); err != nil {
 		return
@@ -193,15 +161,15 @@ func (m *Meta) Marshal() (buf []byte, err error) {
 	return
 }
 
-type baseEntry struct {
-	Meta
+type v1Entry struct {
+	v1Meta
 	EntryType, Version uint16
 	entries            []*entry.Entry
-	cmd                ReplayCmd
+	cmd                v1SkipCmd
 	payload            []byte
 }
 
-func (r *baseEntry) Marshal() (buf []byte, err error) {
+func (r *v1Entry) Marshal() (buf []byte, err error) {
 	var bbuf bytes.Buffer
 	if _, err = r.WriteTo(&bbuf); err != nil {
 		return
@@ -210,7 +178,7 @@ func (r *baseEntry) Marshal() (buf []byte, err error) {
 	return
 }
 
-func (r *baseEntry) WriteTo(w io.Writer) (n int64, err error) {
+func (r *v1Entry) WriteTo(w io.Writer) (n int64, err error) {
 	r.EntryType = IOET_WALRecord
 	r.Version = IOET_WALRecord_CurrVer
 	if _, err = w.Write(types.EncodeUint16(&r.EntryType)); err != nil {
@@ -221,12 +189,12 @@ func (r *baseEntry) WriteTo(w io.Writer) (n int64, err error) {
 		return 0, err
 	}
 	n += 2
-	n1, err := r.Meta.WriteTo(w)
+	n1, err := r.v1Meta.WriteTo(w)
 	if err != nil {
 		return n, err
 	}
 	n += n1
-	switch r.Meta.cmdType {
+	switch r.v1Meta.cmdType {
 	case Cmd_Normal:
 		for _, e := range r.entries {
 			n1, err = e.WriteTo(w)
@@ -247,14 +215,14 @@ func (r *baseEntry) WriteTo(w io.Writer) (n int64, err error) {
 	return
 }
 
-func (r *baseEntry) ReadFrom(reader io.Reader) (n int64, err error) {
-	n1, err := r.Meta.ReadFrom(reader)
+func (r *v1Entry) ReadFrom(reader io.Reader) (n int64, err error) {
+	n1, err := r.v1Meta.ReadFrom(reader)
 	if err != nil {
 		return 0, err
 	}
 	n += n1
 	if r.cmdType == Cmd_SkipDSN {
-		r.cmd = NewEmptyReplayCmd()
+		r.cmd = newV1SkipCmd()
 		n1, err = r.cmd.ReadFrom(reader)
 		if err != nil {
 			return 0, err
@@ -264,7 +232,7 @@ func (r *baseEntry) ReadFrom(reader io.Reader) (n int64, err error) {
 	return
 }
 
-func (r *baseEntry) Unmarshal(buf []byte) error {
+func (r *v1Entry) Unmarshal(buf []byte) error {
 	bbuf := bytes.NewBuffer(buf)
 	_, err := r.ReadFrom(bbuf)
 	r.payload = buf[len(buf)-int(r.payloadSize):]
@@ -273,31 +241,31 @@ func (r *baseEntry) Unmarshal(buf []byte) error {
 
 // read: logrecord -> meta+payload -> entry
 // write: entries+meta -> payload -> record
-type recordEntry struct {
-	baseEntry
+type v1Record struct {
+	v1Entry
 	payload     []byte
 	unmarshaled atomic.Uint32
 	mashalMu    sync.RWMutex
 }
 
-func newRecordEntry() *recordEntry {
-	return &recordEntry{
-		baseEntry: baseEntry{
-			entries: make([]*entry.Entry, 0), Meta: newMeta(),
+func newRecordEntry() *v1Record {
+	return &v1Record{
+		v1Entry: v1Entry{
+			entries: make([]*entry.Entry, 0), v1Meta: newMeta(),
 		},
 	}
 }
 
-func newEmptyRecordEntry(r logservice.LogRecord) *recordEntry {
-	return &recordEntry{
+func newEmptyRecordEntry(r logservice.LogRecord) *v1Record {
+	return &v1Record{
 		payload: r.Payload(),
-		baseEntry: baseEntry{
-			Meta: newMeta(),
+		v1Entry: v1Entry{
+			v1Meta: newMeta(),
 		},
 	}
 }
 
-func (r *recordEntry) forEachLogEntry(fn func(*entry.Entry)) (err error) {
+func (r *v1Record) forEachLogEntry(fn func(*entry.Entry)) (err error) {
 	if len(r.entries) > 0 {
 		for _, e := range r.entries {
 			fn(e)
@@ -309,9 +277,9 @@ func (r *recordEntry) forEachLogEntry(fn func(*entry.Entry)) (err error) {
 		offset int64
 		n      int64
 	)
-	for range r.Meta.addr {
+	for range r.v1Meta.addr {
 		e := entry.NewEmptyEntry()
-		if n, err = e.UnmarshalBinary(r.baseEntry.payload[offset:]); err != nil {
+		if n, err = e.UnmarshalBinary(r.v1Entry.payload[offset:]); err != nil {
 			return
 		}
 		offset += n
@@ -320,13 +288,13 @@ func (r *recordEntry) forEachLogEntry(fn func(*entry.Entry)) (err error) {
 	return
 }
 
-func (r *recordEntry) append(e *entry.Entry) {
+func (r *v1Record) append(e *entry.Entry) {
 	r.entries = append(r.entries, e)
-	r.Meta.addr[e.DSN] = uint64(r.payloadSize)
+	r.v1Meta.addr[e.DSN] = uint64(r.payloadSize)
 	r.payloadSize += uint64(e.GetSize())
 }
 
-func (r *recordEntry) prepareRecord() (size int) {
+func (r *v1Record) prepareRecord() (size int) {
 	var err error
 	r.payload, err = r.Marshal()
 	if err != nil {
@@ -335,7 +303,7 @@ func (r *recordEntry) prepareRecord() (size int) {
 	return len(r.payload)
 }
 
-func (r *recordEntry) unmarshal() {
+func (r *v1Record) unmarshal() {
 	if r.unmarshaled.Load() == 1 {
 		return
 	}
@@ -350,7 +318,74 @@ func (r *recordEntry) unmarshal() {
 	if err != nil {
 		panic(err)
 	}
-	r.baseEntry = *(entry.(*baseEntry))
+	r.v1Entry = *(entry.(*v1Entry))
 	r.payload = nil
 	r.unmarshaled.Store(1)
+}
+
+type v1SkipCmd struct {
+	// DSN->PSN mapping
+	skipMap map[uint64]uint64
+}
+
+func newV1SkipCmd() v1SkipCmd {
+	return v1SkipCmd{
+		skipMap: make(map[uint64]uint64),
+	}
+}
+
+func (c *v1SkipCmd) WriteTo(w io.Writer) (n int64, err error) {
+	length := uint16(len(c.skipMap))
+	if _, err = w.Write(types.EncodeUint16(&length)); err != nil {
+		return
+	}
+	n += 2
+	for dsn, psn := range c.skipMap {
+		if _, err = w.Write(types.EncodeUint64(&dsn)); err != nil {
+			return
+		}
+		n += 8
+		if _, err = w.Write(types.EncodeUint64(&psn)); err != nil {
+			return
+		}
+		n += 8
+	}
+	return
+}
+
+func (c *v1SkipCmd) ReadFrom(r io.Reader) (n int64, err error) {
+	length := uint16(0)
+	if _, err = r.Read(types.EncodeUint16(&length)); err != nil {
+		return
+	}
+	n += 2
+	for i := 0; i < int(length); i++ {
+		dsn := uint64(0)
+		lsn := uint64(0)
+		if _, err = r.Read(types.EncodeUint64(&dsn)); err != nil {
+			return
+		}
+		n += 8
+		if _, err = r.Read(types.EncodeUint64(&lsn)); err != nil {
+			return
+		}
+		n += 8
+		c.skipMap[dsn] = lsn
+	}
+	return
+}
+
+func (c *v1SkipCmd) Unmarshal(buf []byte) error {
+	bbuf := bytes.NewBuffer(buf)
+	_, err := c.ReadFrom(bbuf)
+	return err
+}
+
+func (c *v1SkipCmd) Marshal() (buf []byte, err error) {
+	var bbuf bytes.Buffer
+	if _, err = c.WriteTo(&bbuf); err != nil {
+		return
+	}
+	buf = bbuf.Bytes()
+	return
 }
