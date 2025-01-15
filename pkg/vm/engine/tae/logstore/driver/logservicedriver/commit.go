@@ -43,8 +43,8 @@ func (d *LogServiceDriver) getAppender() *groupCommitter {
 	return d.committer
 }
 
-// this function flushes the current appender to the append queue and
-// creates a new appender as the current appender
+// this function flushes the current committer to the append queue and
+// creates a new committer as the current committer
 func (d *LogServiceDriver) flushCurrentAppender() {
 	d.scheduleAppend(d.committer)
 	d.appendWaitQueue <- d.committer
@@ -54,19 +54,19 @@ func (d *LogServiceDriver) flushCurrentAppender() {
 func (d *LogServiceDriver) onAppendRequests(items ...any) {
 	for _, item := range items {
 		e := item.(*entry.Entry)
-		appender := d.getAppender()
-		appender.addEntry(e)
+		committer := d.getAppender()
+		committer.addEntry(e)
 	}
 	d.flushCurrentAppender()
 }
 
-func (d *LogServiceDriver) scheduleAppend(appender *groupCommitter) {
-	appender.client, appender.writeToken = d.getClientForWrite()
-	appender.writer.SetSafeDSN(d.getSynced())
-	appender.wg.Add(1)
+func (d *LogServiceDriver) scheduleAppend(committer *groupCommitter) {
+	committer.client, committer.writeToken = d.getClientForWrite()
+	committer.writer.SetSafeDSN(d.getSynced())
+	committer.Add(1)
 	d.appendPool.Submit(func() {
-		defer appender.wg.Done()
-		if err := appender.commit(
+		defer committer.Done()
+		if err := committer.commit(
 			10,
 			d.config.ClientAppendDuration,
 		); err != nil {
@@ -117,24 +117,24 @@ func (d *LogServiceDriver) getClientForWrite() (client *wrappedClient, token uin
 }
 
 func (d *LogServiceDriver) onWaitAppendRequests(items []any, nextQueue chan any) {
-	appenders := make([]*groupCommitter, 0, len(items))
+	committers := make([]*groupCommitter, 0, len(items))
 	for _, item := range items {
-		appender := item.(*groupCommitter)
-		appender.waitDone()
-		d.clientPool.Put(appender.client)
-		appender.notifyDone()
-		appenders = append(appenders, appender)
+		committer := item.(*groupCommitter)
+		committer.Wait()
+		d.clientPool.Put(committer.client)
+		committer.notifyDone()
+		committers = append(committers, committer)
 	}
-	nextQueue <- appenders
+	nextQueue <- committers
 }
 
 func (d *LogServiceDriver) onAppendDone(items []any, _ chan any) {
 	tokens := make([]uint64, 0, len(items))
 	for _, v := range items {
-		appenders := v.([]*groupCommitter)
-		for _, appender := range appenders {
-			d.logAppend(appender)
-			tokens = append(tokens, appender.writeToken)
+		committers := v.([]*groupCommitter)
+		for _, committer := range committers {
+			d.logAppend(committer)
+			tokens = append(tokens, committer.writeToken)
 		}
 	}
 	d.putbackWriteTokens(tokens)

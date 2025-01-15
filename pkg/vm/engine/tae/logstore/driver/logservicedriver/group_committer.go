@@ -32,11 +32,12 @@ import (
 const SlowAppendThreshold = 1 * time.Second
 
 type groupCommitter struct {
+	sync.WaitGroup
+
 	client     *wrappedClient
 	writeToken uint64
 	psn        uint64
 	writer     *LogEntryWriter
-	wg         sync.WaitGroup //wait client
 }
 
 func newGroupCommitter() *groupCommitter {
@@ -86,10 +87,6 @@ func (a *groupCommitter) commit(
 		ctx, entry, time.Second*10, 10, moerr.CauseDriverAppender1,
 	)
 	return
-}
-
-func (a *groupCommitter) waitDone() {
-	a.wg.Wait()
 }
 
 func (a *groupCommitter) notifyDone() {
