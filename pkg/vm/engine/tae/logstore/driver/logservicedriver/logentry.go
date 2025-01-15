@@ -62,9 +62,10 @@ func init() {
 }
 
 type LogEntryWriter struct {
-	Entry  LogEntry
-	Footer LogEntryFooter
-	buf    bytes.Buffer
+	Entry   LogEntry
+	Footer  LogEntryFooter
+	buf     bytes.Buffer
+	entries []*entry.Entry
 }
 
 func NewLogEntryWriter() *LogEntryWriter {
@@ -93,12 +94,27 @@ func (w *LogEntryWriter) Reset() {
 	} else {
 		w.buf.Reset()
 	}
+	w.NotifyDone(nil)
+}
+
+func (w *LogEntryWriter) NotifyDone(err error) {
+	for i := 0; i < len(w.entries); i++ {
+		w.entries[i].DoneWithErr(err)
+		w.entries[i] = nil
+	}
+	w.entries = w.entries[:0]
 }
 
 func (w *LogEntryWriter) Close() {
 	w.Entry = nil
 	w.Footer = nil
 	w.buf.Reset()
+	w.NotifyDone(nil)
+	w.entries = nil
+}
+
+func (w *LogEntryWriter) Size() int {
+	return w.Entry.Size() + w.Footer.Size()
 }
 
 func (w *LogEntryWriter) Capacity() int {
@@ -119,6 +135,7 @@ func (w *LogEntryWriter) AppendEntry(entry *entry.Entry) (err error) {
 	if _, err = entry.WriteTo(&w.buf); err != nil {
 		return
 	}
+	w.entries = append(w.entries, entry)
 	eBuf := w.buf.Bytes()
 	if w.Footer.GetEntryCount() == 0 {
 		w.Entry.SetStartDSN(entry.DSN)
@@ -127,8 +144,12 @@ func (w *LogEntryWriter) AppendEntry(entry *entry.Entry) (err error) {
 	return
 }
 
-func (w *LogEntryWriter) Finish(startDSN uint64) LogEntry {
-	w.Entry.SetFooter(startDSN, w.Footer)
+func (w *LogEntryWriter) SetStartDSN(dsn uint64) {
+	w.Entry.SetStartDSN(dsn)
+}
+
+func (w *LogEntryWriter) Finish() LogEntry {
+	w.Entry.SetFooter(w.Footer)
 	return w.Entry
 }
 
@@ -141,6 +162,10 @@ type LogEntry []byte
 
 func NewLogEntry() LogEntry {
 	return make([]byte, EmptyLogEntrySize)
+}
+
+func (footer LogEntryFooter) Size() int {
+	return len(footer[:])
 }
 
 func (footer LogEntryFooter) String() string {
@@ -179,8 +204,16 @@ func (footer LogEntryFooter) GetEntry(i int) (offset, length uint32) {
 }
 
 func (e LogEntry) String() string {
+	safe := e.GetSafeDSN()
 	dsn := e.GetStartDSN()
-	return fmt.Sprintf("LogEntry[%d:%d][%d][%s]", e.GetType(), e.GetVersion(), dsn, e.GetFooter().String())
+	return fmt.Sprintf(
+		"LogEntry[%d:%d][%d:%d][%s]",
+		e.GetType(),
+		e.GetVersion(),
+		safe,
+		dsn,
+		e.GetFooter().String(),
+	)
 }
 
 func (e LogEntry) GetType() uint16 {
@@ -256,30 +289,30 @@ func (e *LogEntry) Reset() {
 	copy(*e, emptyLogEntry)
 }
 
-func (e *LogEntry) Capacity() int {
-	return cap(*e)
+func (e LogEntry) Capacity() int {
+	return cap(e)
+}
+
+func (e LogEntry) Size() int {
+	return len(e)
 }
 
 func (e *LogEntry) SetFooter(
-	startDSN uint64,
 	footer LogEntryFooter,
 ) {
 	filledOffset := e.GetFooterOffset()
 	filledCount := e.GetEntryCount()
-	filledStartDSN := e.GetStartDSN()
-	if filledOffset != 0 || filledCount != 0 || filledStartDSN != 0 {
+	if filledOffset != 0 || filledCount != 0 {
 		logutil.Fatal(
 			"Wal-LogEntry",
 			zap.Uint32("filled-offset", filledOffset),
 			zap.Uint32("filled-count", filledCount),
-			zap.Uint64("filled-start-dsn", filledStartDSN),
 		)
 	}
 	offset := len(*e)
 	*e = append(*e, footer...)
 	e.SetFooterOffset(uint32(offset))
 	e.SetEntryCount(uint32(footer.GetEntryCount()))
-	e.SetStartDSN(startDSN)
 }
 
 func (e *LogEntry) AppendEntry(buf []byte) (offset, length uint32) {
@@ -373,6 +406,6 @@ func SkipMapToLogEntry(skipMap map[uint64]uint64) LogEntry {
 	var footer LogEntryFooter
 	offset, length := e.AppendEntry(skipCmd)
 	footer.AppendEntry(offset, length)
-	e.SetFooter(0, footer)
+	e.SetFooter(footer)
 	return e
 }

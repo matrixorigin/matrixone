@@ -66,23 +66,23 @@ func TestAppendSkipCmd2(t *testing.T) {
 	dsns := []uint64{8, 1, 2, 3, 6, 9, 7, 10, 13, 12}
 	appended := []uint64{0, 1, 2, 5, 6, 6, 9, 10, 10, 10}
 
+	writer := NewLogEntryWriter()
 	client, _ := driver.getClientForWrite()
 	for i := 0; i < entryCount; i++ {
 		entries[i].DSN = dsns[i]
-
-		entry := newRecordEntry()
-		entry.appended = appended[i]
-		entry.append(entries[i])
-		size := entry.prepareRecord()
-		client.TryResize(size)
-		record := client.record
-		copy(record.Payload(), entry.payload)
-		record.ResizePayload(size)
-		ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second, moerr.CauseDriverAppender1)
-		_, err := client.c.Append(ctx, record)
-		cancel()
+		err := writer.AppendEntry(entries[i])
 		assert.NoError(t, err)
-		entries[i].DoneWithErr(nil)
+		writer.SetSafeDSN(appended[i])
+		entry := writer.Finish()
+		_, err = client.Append(
+			context.Background(),
+			entry,
+			time.Second,
+			10,
+			moerr.CauseDriverAppender1,
+		)
+		assert.NoError(t, err)
+		writer.Reset()
 	}
 
 	for _, e := range entries {
@@ -173,23 +173,25 @@ func TestAppendSkipCmd4(t *testing.T) {
 	dsns := []uint64{1, 2, 3, 5}
 	appended := []uint64{1, 2, 3, 3}
 
+	writer := NewLogEntryWriter()
+
 	client, _ := driver.getClientForWrite()
 	for i := 0; i < entryCount; i++ {
 		entries[i].DSN = dsns[i]
 
-		entry := newRecordEntry()
-		entry.appended = appended[i]
-		entry.append(entries[i])
-		size := entry.prepareRecord()
-		client.TryResize(size)
-		record := client.record
-		copy(record.Payload(), entry.payload)
-		record.ResizePayload(size)
-		ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second, moerr.CauseDriverAppender1)
-		_, err := client.c.Append(ctx, record)
-		cancel()
+		writer.SetSafeDSN(appended[i])
+		err := writer.AppendEntry(entries[i])
 		assert.NoError(t, err)
-		entries[i].Entry.Free()
+		entry := writer.Finish()
+		_, err = client.Append(
+			context.Background(),
+			entry,
+			time.Second,
+			10,
+			moerr.CauseDriverAppender1,
+		)
+		assert.NoError(t, err)
+		writer.Reset()
 	}
 
 	{
@@ -225,6 +227,8 @@ func TestAppendSkipCmd4(t *testing.T) {
 	dsns = []uint64{4}
 	appended = []uint64{4}
 
+	writer = NewLogEntryWriter()
+
 	client, _ = driver.getClientForWrite()
 	for i := 0; i < entryCount; i++ {
 		payload := []byte(fmt.Sprintf("payload %d", i))
@@ -232,18 +236,19 @@ func TestAppendSkipCmd4(t *testing.T) {
 		entries[i] = e
 		entries[i].DSN = dsns[i]
 
-		entry := newRecordEntry()
-		entry.appended = appended[i]
-		entry.append(entries[i])
-		size := entry.prepareRecord()
-		client.TryResize(size)
-		record := client.record
-		copy(record.Payload(), entry.payload)
-		record.ResizePayload(size)
-		ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second, moerr.CauseDriverAppender1)
-		_, err := client.c.Append(ctx, record)
-		cancel()
+		writer.SetSafeDSN(appended[i])
+		err := writer.AppendEntry(entries[i])
 		assert.NoError(t, err)
+		entry := writer.Finish()
+		_, err = client.Append(
+			context.Background(),
+			entry,
+			time.Second,
+			10,
+			moerr.CauseDriverAppender1,
+		)
+		assert.NoError(t, err)
+		writer.Reset()
 		entries[i].Entry.Free()
 	}
 	{
@@ -289,24 +294,24 @@ func TestAppendSkipCmd5(t *testing.T) {
 
 	dsns := []uint64{10, 9, 12, 11}
 	appended := []uint64{8, 10, 10, 12}
+	writer := NewLogEntryWriter()
 
 	client, _ := driver.getClientForWrite()
 	for i := 0; i < entryCount; i++ {
 		entries[i].DSN = dsns[i]
-
-		entry := newRecordEntry()
-		entry.appended = appended[i]
-		entry.append(entries[i])
-		size := entry.prepareRecord()
-		client.TryResize(size)
-		record := client.record
-		copy(record.Payload(), entry.payload)
-		record.ResizePayload(size)
-		ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second, moerr.CauseDriverAppender1)
-		_, err := client.c.Append(ctx, record)
-		cancel()
+		writer.SetSafeDSN(appended[i])
+		err := writer.AppendEntry(entries[i])
 		assert.NoError(t, err)
-		entries[i].DoneWithErr(nil)
+		entry := writer.Finish()
+		_, err = client.Append(
+			context.Background(),
+			entry,
+			time.Second,
+			10,
+			moerr.CauseDriverAppender1,
+		)
+		assert.NoError(t, err)
+		writer.Reset()
 	}
 
 	for _, e := range entries {
@@ -523,7 +528,7 @@ func Test_Replayer5(t *testing.T) {
 	})
 
 	var psnReaded []uint64
-	onRead := func(psn uint64, _ *recordEntry) {
+	onRead := func(psn uint64, _ LogEntry) {
 		if len(psnReaded) > 0 {
 			assert.Equal(t, psnReaded[len(psnReaded)-1]+1, psn)
 		}
@@ -531,13 +536,13 @@ func Test_Replayer5(t *testing.T) {
 	}
 
 	var dsnScheduled []uint64
-	onScheduled := func(_ uint64, _ *common.ClosedIntervals, r *recordEntry) {
-		for _, e := range r.entries {
+	onScheduled := func(_ uint64, _ *common.ClosedIntervals, r LogEntry) {
+		r.ForEachEntry(func(e *entry.Entry) {
 			if len(dsnScheduled) > 0 {
 				assert.True(t, dsnScheduled[len(dsnScheduled)-1] < e.DSN)
 			}
 			dsnScheduled = append(dsnScheduled, e.DSN)
-		}
+		})
 	}
 
 	r := newReplayer(
@@ -582,7 +587,7 @@ func Test_Replayer6(t *testing.T) {
 	})
 
 	var psnReaded []uint64
-	onRead := func(psn uint64, _ *recordEntry) {
+	onRead := func(psn uint64, e LogEntry) {
 		if len(psnReaded) > 0 {
 			assert.Equal(t, psnReaded[len(psnReaded)-1]+1, psn)
 		}
@@ -590,13 +595,13 @@ func Test_Replayer6(t *testing.T) {
 	}
 
 	var dsnScheduled []uint64
-	onScheduled := func(_ uint64, _ *common.ClosedIntervals, r *recordEntry) {
-		for _, e := range r.entries {
+	onScheduled := func(_ uint64, _ *common.ClosedIntervals, r LogEntry) {
+		r.ForEachEntry(func(e *entry.Entry) {
 			if len(dsnScheduled) > 0 {
 				assert.True(t, dsnScheduled[len(dsnScheduled)-1] < e.DSN)
 			}
 			dsnScheduled = append(dsnScheduled, e.DSN)
-		}
+		})
 	}
 
 	writeSkip := make(map[uint64]uint64)
@@ -655,7 +660,7 @@ func Test_Replayer7(t *testing.T) {
 	})
 
 	var psnReaded []uint64
-	onRead := func(psn uint64, _ *recordEntry) {
+	onRead := func(psn uint64, _ LogEntry) {
 		if len(psnReaded) > 0 {
 			assert.Equal(t, psnReaded[len(psnReaded)-1]+1, psn)
 		}
@@ -663,13 +668,13 @@ func Test_Replayer7(t *testing.T) {
 	}
 
 	var dsnScheduled []uint64
-	onScheduled := func(_ uint64, _ *common.ClosedIntervals, r *recordEntry) {
-		for _, e := range r.entries {
+	onScheduled := func(_ uint64, _ *common.ClosedIntervals, r LogEntry) {
+		r.ForEachEntry(func(e *entry.Entry) {
 			if len(dsnScheduled) > 0 {
 				assert.True(t, dsnScheduled[len(dsnScheduled)-1] < e.DSN)
 			}
 			dsnScheduled = append(dsnScheduled, e.DSN)
-		}
+		})
 	}
 
 	writeSkip := make(map[uint64]uint64)
@@ -726,7 +731,7 @@ func Test_Replayer8(t *testing.T) {
 	})
 
 	var psnReaded []uint64
-	onRead := func(psn uint64, _ *recordEntry) {
+	onRead := func(psn uint64, _ LogEntry) {
 		// if len(psnReaded) > 0 {
 		// 	assert.Equal(t, psnReaded[len(psnReaded)-1]+1, psn)
 		// }
@@ -735,14 +740,14 @@ func Test_Replayer8(t *testing.T) {
 	}
 
 	var dsnScheduled []uint64
-	onScheduled := func(_ uint64, _ *common.ClosedIntervals, r *recordEntry) {
-		for _, e := range r.entries {
+	onScheduled := func(_ uint64, _ *common.ClosedIntervals, r LogEntry) {
+		r.ForEachEntry(func(e *entry.Entry) {
 			if len(dsnScheduled) > 0 {
 				assert.True(t, dsnScheduled[len(dsnScheduled)-1] < e.DSN)
 			}
 			t.Logf("Scheduled DSN: %d", e.DSN)
 			dsnScheduled = append(dsnScheduled, e.DSN)
-		}
+		})
 	}
 
 	writeSkip := make(map[uint64]uint64)

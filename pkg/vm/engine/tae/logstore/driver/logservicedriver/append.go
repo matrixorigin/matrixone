@@ -37,7 +37,7 @@ func (d *LogServiceDriver) Append(e *entry.Entry) error {
 }
 
 func (d *LogServiceDriver) getAppender() *driverAppender {
-	if int(d.currentAppender.entry.payloadSize) > d.config.RecordSize {
+	if int(d.currentAppender.writer.Size()) > d.config.RecordSize {
 		d.flushCurrentAppender()
 	}
 	return d.currentAppender
@@ -55,18 +55,27 @@ func (d *LogServiceDriver) onAppendRequests(items ...any) {
 	for _, item := range items {
 		e := item.(*entry.Entry)
 		appender := d.getAppender()
-		appender.appendEntry(e)
+		appender.addEntry(e)
 	}
 	d.flushCurrentAppender()
 }
 
 func (d *LogServiceDriver) scheduleAppend(appender *driverAppender) {
 	appender.client, appender.writeToken = d.getClientForWrite()
-	appender.entry.SetAppended(d.getSynced())
+	appender.writer.SetSafeDSN(d.getSynced())
 	appender.contextDuration = d.config.NewClientDuration
 	appender.wg.Add(1)
 	d.appendPool.Submit(func() {
-		appender.append(d.config.RetryTimeout, d.config.ClientAppendDuration)
+		defer appender.wg.Done()
+		if err := appender.commit(
+			10,
+			d.config.ClientAppendDuration,
+		); err != nil {
+			logutil.Fatal(
+				"Wal-Cannot-Append",
+				zap.Error(err),
+			)
+		}
 	})
 }
 
@@ -114,7 +123,7 @@ func (d *LogServiceDriver) onWaitAppendRequests(items []any, nextQueue chan any)
 		appender := item.(*driverAppender)
 		appender.waitDone()
 		d.clientPool.Put(appender.client)
-		appender.freeEntries()
+		appender.notifyDone()
 		appenders = append(appenders, appender)
 	}
 	nextQueue <- appenders

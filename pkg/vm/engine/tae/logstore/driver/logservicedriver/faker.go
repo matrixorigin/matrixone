@@ -34,28 +34,29 @@ func noopAppendSkipCmd(_ context.Context, skipMap map[uint64]uint64) error {
 	return nil
 }
 
-func mockUnmarshalLogRecordFactor(d *mockDriver) func(r logservice.LogRecord) *recordEntry {
-	return func(r logservice.LogRecord) *recordEntry {
+func mockUnmarshalLogRecordFactor(d *mockDriver) func(r logservice.LogRecord) LogEntry {
+	return func(r logservice.LogRecord) (ret LogEntry) {
 		pos := int(r.Lsn)
-
 		// [CmdType,PSN,DSN-S,DSN-E,SAFE]
 		spec := d.recordSpecs[pos]
-		e := newRecordEntry()
-		e.unmarshaled.Store(1)
-		e.appended = uint64(spec[4])
-		e.cmdType = CmdType(spec[0])
-		switch e.cmdType {
+		switch CmdType(spec[0]) {
 		case Cmd_Normal:
-			for dsn := spec[2]; dsn <= spec[3]; dsn++ {
-				e.addr[dsn] = dsn
-				le := entry.NewEmptyEntry()
-				le.DSN = dsn
-				e.entries = append(e.entries, le)
+			cnt := int(spec[3] - spec[2] + 1)
+			startDSN := spec[2]
+			writer := NewLogEntryWriter()
+			writer.SetSafeDSN(spec[4])
+			for i := 0; i < cnt; i++ {
+				e := entry.MockEntryWithPayload(nil)
+				e.DSN = startDSN + uint64(i)
+				if err := writer.AppendEntry(e); err != nil {
+					panic(err)
+				}
 			}
+			ret = writer.Finish()
 		case Cmd_SkipDSN:
-			e.cmd = NewReplayCmd(d.skipMap[spec[1]])
+			ret = SkipMapToLogEntry(d.skipMap[spec[1]])
 		}
-		return e
+		return
 	}
 }
 

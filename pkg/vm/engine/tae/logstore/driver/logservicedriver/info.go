@@ -216,13 +216,16 @@ func (info *driverInfo) tryApplyWriteToken(
 
 func (info *driverInfo) logAppend(appender *driverAppender) {
 	info.psn.mu.Lock()
-	array := make([]uint64, 0, len(appender.entry.Meta.addr))
-	for key := range appender.entry.Meta.addr {
-		array = append(array, key)
+	cnt := int(appender.writer.Entry.GetEntryCount())
+	startDSN := appender.writer.Entry.GetStartDSN()
+	dsns := make([]uint64, 0, cnt)
+	for i := 0; i < cnt; i++ {
+		dsn := startDSN + uint64(i)
+		dsns = append(dsns, dsn)
 	}
-	info.psn.records.Add(appender.logserviceLsn)
-	interval := common.NewClosedIntervalsBySlice(array)
-	info.psn.dsnMap[appender.logserviceLsn] = interval
+	info.psn.records.Add(appender.psn)
+	interval := common.NewClosedIntervalsBySlice(dsns)
+	info.psn.dsnMap[appender.psn] = interval
 	info.psn.mu.Unlock()
 	if interval.GetMin() != info.syncing+1 {
 		panic(fmt.Sprintf("logic err, expect %d, min is %d", info.syncing+1, interval.GetMin()))

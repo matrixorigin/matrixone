@@ -146,7 +146,7 @@ func (d *LogServiceDriver) Replay(
 		// for readwrite driver, it can only serve the write request
 		// after the REPLAYED state
 		WithReplayerOnScheduled(
-			func(psn uint64, dsnRange *common.ClosedIntervals, _ *recordEntry) {
+			func(psn uint64, dsnRange *common.ClosedIntervals, _ LogEntry) {
 				d.recordPSNInfo(psn, dsnRange)
 			},
 		),

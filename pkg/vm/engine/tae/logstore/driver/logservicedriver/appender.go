@@ -34,24 +34,28 @@ const SlowAppendThreshold = 1 * time.Second
 type driverAppender struct {
 	client          *wrappedClient
 	writeToken      uint64
-	logserviceLsn   uint64
-	entry           *recordEntry
+	psn             uint64
+	writer          *LogEntryWriter
 	contextDuration time.Duration
 	wg              sync.WaitGroup //wait client
 }
 
 func newDriverAppender() *driverAppender {
 	return &driverAppender{
-		entry: newRecordEntry(),
-		wg:    sync.WaitGroup{},
+		writer: NewLogEntryWriter(),
 	}
 }
 
-func (a *driverAppender) appendEntry(e *entry.Entry) {
-	a.entry.append(e)
+func (a *driverAppender) addEntry(e *entry.Entry) {
+	if err := a.writer.AppendEntry(e); err != nil {
+		panic(err)
+	}
 }
 
-func (a *driverAppender) append(retryTimout, appendTimeout time.Duration) {
+func (a *driverAppender) commit(
+	retryTimes int,
+	timeout time.Duration,
+) (err error) {
 	_, task := gotrace.NewTask(context.Background(), "logservice.append")
 	start := time.Now()
 	defer func() {
@@ -59,89 +63,38 @@ func (a *driverAppender) append(retryTimout, appendTimeout time.Duration) {
 		task.End()
 	}()
 
-	size := a.entry.prepareRecord()
-	// if size > int(common.K)*20 { //todo
-	// 	panic(moerr.NewInternalError("record size %d, larger than max size 20K", size))
-	// }
-	a.client.TryResize(size)
-	logutil.Debugf("Log Service Driver: append start prepare %p", a.client.record.Data)
-	record := a.client.record
-	copy(record.Payload(), a.entry.payload)
-	record.ResizePayload(size)
-	defer logSlowAppend(size, a.writeToken)()
-	ctx, cancel := context.WithTimeoutCause(context.Background(), appendTimeout, moerr.CauseDriverAppender1)
+	entry := a.writer.Finish()
 
-	var timeoutSpan trace.Span
+	v2.LogTailBytesHistogram.Observe(float64(entry.Size()))
+	defer logSlowAppend(entry.Size(), a.writeToken)()
+
+	var (
+		ctx         context.Context
+		timeoutSpan trace.Span
+	)
 	// Before issue#10467 is resolved, we skip this span,
 	// avoiding creating too many goroutines, which affects the performance.
-	ctx, timeoutSpan = trace.Debug(ctx, "appender",
+	ctx, timeoutSpan = trace.Debug(
+		context.Background(),
+		"appender",
 		trace.WithProfileGoroutine(),
 		trace.WithProfileHeap(),
-		trace.WithProfileCpuSecs(time.Second*10))
+		trace.WithProfileCpuSecs(time.Second*10),
+	)
 	defer timeoutSpan.End()
 
-	v2.LogTailBytesHistogram.Observe(float64(size))
-	logutil.Debugf("Log Service Driver: append start %p", a.client.record.Data)
-	lsn, err := a.client.c.Append(ctx, record)
-	if err != nil {
-		err = moerr.AttachCause(ctx, err)
-		logutil.Error(
-			"WAL-Append-Error",
-			zap.Error(err),
-			zap.Uint64("write-token", a.writeToken),
-			zap.Int("client-id", a.client.id),
-			zap.Int("size", size),
-		)
-	}
-	cancel()
-	if err != nil {
-		retryTimes := 0
-		err = RetryWithTimeout(retryTimout, func() (shouldReturn bool) {
-			retryTimes++
-			ctx, cancel := context.WithTimeoutCause(context.Background(), appendTimeout, moerr.CauseDriverAppender2)
-			ctx, timeoutSpan = trace.Debug(ctx, "appender retry",
-				trace.WithProfileGoroutine(),
-				trace.WithProfileHeap(),
-				trace.WithProfileCpuSecs(time.Second*10))
-			defer timeoutSpan.End()
-			lsn, err = a.client.c.Append(ctx, record)
-			err = moerr.AttachCause(ctx, err)
-			cancel()
-			if err != nil {
-				logutil.Error(
-					"WAL-Append-Error",
-					zap.Error(err),
-					zap.Uint64("write-token", a.writeToken),
-					zap.Int("client-id", a.client.id),
-					zap.Int("size", size),
-					zap.Int("retry", retryTimes),
-				)
-			}
-			return err == nil
-		})
-	}
-	if err != nil {
-		logutil.Error(
-			"WAL-Append-Error",
-			zap.Error(err),
-			zap.Uint64("write-token", a.writeToken),
-			zap.Int("client-id", a.client.id),
-			zap.Int("size", size),
-		)
-		logutil.Panic(err.Error())
-	}
-	a.logserviceLsn = lsn
-	a.wg.Done()
+	a.psn, err = a.client.Append(
+		ctx, entry, time.Second*10, 10, moerr.CauseDriverAppender1,
+	)
+	return
 }
 
 func (a *driverAppender) waitDone() {
 	a.wg.Wait()
 }
 
-func (a *driverAppender) freeEntries() {
-	for _, e := range a.entry.entries {
-		e.DoneWithErr(nil)
-	}
+func (a *driverAppender) notifyDone() {
+	a.writer.NotifyDone(nil)
 }
 
 func logSlowAppend(

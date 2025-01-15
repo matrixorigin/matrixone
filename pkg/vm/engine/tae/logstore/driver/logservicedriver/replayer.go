@@ -122,12 +122,12 @@ func WithReplayerOnWriteSkip(f func(map[uint64]uint64)) ReplayOption {
 	}
 }
 
-func WithReplayerOnRead(f func(uint64, *recordEntry)) ReplayOption {
+func WithReplayerOnRead(f func(uint64, LogEntry)) ReplayOption {
 	return func(r *replayer) {
 		if r.onRead != nil {
-			r.onRead = func(psn uint64, record *recordEntry) {
-				f(psn, record)
-				r.onRead(psn, record)
+			r.onRead = func(psn uint64, entry LogEntry) {
+				f(psn, entry)
+				r.onRead(psn, entry)
 			}
 		} else {
 			r.onRead = f
@@ -148,12 +148,12 @@ func WithReplayerOnReplayDone(f func(error, DSNStats)) ReplayOption {
 	}
 }
 
-func WithReplayerOnScheduled(f func(uint64, *common.ClosedIntervals, *recordEntry)) ReplayOption {
+func WithReplayerOnScheduled(f func(uint64, *common.ClosedIntervals, LogEntry)) ReplayOption {
 	return func(r *replayer) {
 		if r.onScheduled != nil {
-			r.onScheduled = func(psn uint64, dsnRange *common.ClosedIntervals, record *recordEntry) {
-				f(psn, dsnRange, record)
-				r.onScheduled(psn, dsnRange, record)
+			r.onScheduled = func(psn uint64, dsnRange *common.ClosedIntervals, entry LogEntry) {
+				f(psn, dsnRange, entry)
+				r.onScheduled(psn, dsnRange, entry)
 			}
 		} else {
 			r.onScheduled = f
@@ -174,9 +174,9 @@ func WithReplayerOnApplied(f func(*entry.Entry)) ReplayOption {
 	}
 }
 
-func WithReplayerUnmarshalLogRecord(f func(logservice.LogRecord) *recordEntry) ReplayOption {
+func WithReplayerUnmarshalLogRecord(f func(logservice.LogRecord) LogEntry) ReplayOption {
 	return func(r *replayer) {
-		r.unmarshalLogRecord = f
+		r.logRecordToLogEntry = f
 	}
 }
 
@@ -201,13 +201,13 @@ type replayer struct {
 	driver replayerDriver
 	handle driver.ApplyHandle
 
-	unmarshalLogRecord func(logservice.LogRecord) *recordEntry
-	appendSkipCmd      func(ctx context.Context, skipMap map[uint64]uint64) error
-	onRead             func(uint64, *recordEntry)
-	onScheduled        func(uint64, *common.ClosedIntervals, *recordEntry)
-	onApplied          func(*entry.Entry)
-	onWriteSkip        func(map[uint64]uint64)
-	onReplayDone       func(resErr error, stats DSNStats)
+	logRecordToLogEntry func(logservice.LogRecord) LogEntry
+	appendSkipCmd       func(ctx context.Context, skipMap map[uint64]uint64) error
+	onRead              func(uint64, LogEntry)
+	onScheduled         func(uint64, *common.ClosedIntervals, LogEntry)
+	onApplied           func(*entry.Entry)
+	onWriteSkip         func(map[uint64]uint64)
+	onReplayDone        func(resErr error, stats DSNStats)
 
 	replayedState struct {
 		// DSN->PSN mapping
@@ -275,11 +275,10 @@ func newReplayer(
 		opt(r)
 	}
 
-	if r.unmarshalLogRecord == nil {
-		r.unmarshalLogRecord = func(record logservice.LogRecord) *recordEntry {
-			e := newEmptyRecordEntry(record)
-			e.unmarshal()
-			return e
+	if r.logRecordToLogEntry == nil {
+		r.logRecordToLogEntry = func(record logservice.LogRecord) LogEntry {
+			// TODO: use codec
+			return record.Payload()
 		}
 	}
 
@@ -553,19 +552,19 @@ func (r *replayer) tryScheduleApply(
 		)
 	}
 
-	var record *recordEntry
+	var record LogEntry
 	if record, err = r.replayedState.readCache.getRecord(psn); err != nil {
 		return
 	}
 
-	dsns := make([]uint64, 0, len(record.Meta.addr))
+	dsns := make([]uint64, 0, record.GetEntryCount())
 	scheduleApply := func(e *entry.Entry) {
 		dsns = append(dsns, e.DSN)
 		scheduled = e
 		applyC <- e
 	}
 
-	if err = record.forEachLogEntry(scheduleApply); err != nil {
+	if err = record.ForEachEntry(scheduleApply); err != nil {
 		return
 	}
 
@@ -671,7 +670,7 @@ func (r *replayer) readNextBatch(
 			continue
 		}
 		psn := r.waterMarks.psnToRead + uint64(i)
-		entry := r.unmarshalLogRecord(record)
+		entry := r.logRecordToLogEntry(record)
 		if updated := r.replayedState.readCache.addRecord(
 			psn, entry,
 		); updated {
@@ -679,23 +678,26 @@ func (r *replayer) readNextBatch(
 				r.onRead(psn, entry)
 			}
 			// 1. update the safe DSN
-			if r.replayedState.safeDSN < entry.appended {
-				r.replayedState.safeDSN = entry.appended
+			if r.replayedState.safeDSN < entry.GetSafeDSN() {
+				r.replayedState.safeDSN = entry.GetSafeDSN()
 			}
 
 			// 2. update the stats
 			r.stats.readPSNCount++
 
 			// 3. remove the skipped records if the entry is a skip entry
-			if entry.Meta.cmdType == Cmd_SkipDSN {
+			if entry.GetCmdType() == uint16(Cmd_SkipDSN) {
+				cmd := SkipCmd(entry.GetEntry(0))
+				skipDSNs := cmd.GetDSNSlice()
 				logutil.Info(
 					"Wal-Replay-Skip-Entry",
-					zap.Any("skip-map", entry.cmd.skipMap),
+					zap.Any("skip-dsns", skipDSNs),
+					zap.Any("skip-psns", cmd.GetPSNSlice()),
 					zap.Uint64("psn", psn),
-					zap.Uint64("safe-dsn", entry.appended),
+					zap.Uint64("safe-dsn", entry.GetSafeDSN()),
 				)
 
-				for dsn := range entry.cmd.skipMap {
+				for _, dsn := range skipDSNs {
 					if _, ok := r.replayedState.dsn2PSNMap[dsn]; !ok {
 						panic(fmt.Sprintf("dsn %d not found in the dsn2PSNMap", dsn))
 					}
@@ -706,7 +708,7 @@ func (r *replayer) readNextBatch(
 			}
 
 			// 4. update the DSN->PSN mapping
-			dsn := entry.GetMinLsn()
+			dsn := entry.GetStartDSN()
 			r.replayedState.dsn2PSNMap[dsn] = psn
 
 			// 5. init the scheduled DSN watermark
@@ -740,7 +742,6 @@ func (r *replayer) AppendSkipCmd(
 ) (err error) {
 	var (
 		now        = time.Now()
-		maxRetry   = 10
 		retryTimes = 0
 	)
 	defer func() {
@@ -767,31 +768,13 @@ func (r *replayer) AppendSkipCmd(
 		return
 	}
 
-	cmd := NewReplayCmd(skipMap)
-	recordEntry := newRecordEntry()
-	recordEntry.Meta.cmdType = Cmd_SkipDSN
-	recordEntry.cmd = cmd
-
 	client, writeToken := r.driver.getClientForWrite()
 	r.replayedState.writeTokens = append(r.replayedState.writeTokens, writeToken)
 
-	size := recordEntry.prepareRecord()
-	client.TryResize(size)
-	record := client.record
-	copy(record.Payload(), recordEntry.payload)
-	record.ResizePayload(size)
+	entry := SkipMapToLogEntry(skipMap)
 
-	for ; retryTimes < maxRetry; retryTimes++ {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeoutCause(
-			ctx, time.Second*10, moerr.CauseAppendSkipCmd,
-		)
-		_, err = client.c.Append(ctx, client.record)
-		err = moerr.AttachCause(ctx, err)
-		cancel()
-		if err == nil {
-			break
-		}
-	}
+	_, err = client.Append(
+		ctx, entry, time.Second*10, 10, moerr.CauseAppendSkipCmd,
+	)
 	return
 }
