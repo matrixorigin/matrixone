@@ -18,6 +18,8 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -115,4 +117,41 @@ func Test_LogEntry2(t *testing.T) {
 	assert.Equal(t, []uint64{1, 2, 3}, skipCmd.GetDSNSlice())
 	assert.Equal(t, []uint64{3, 2, 1}, skipCmd.GetPSNSlice())
 	assert.Equal(t, 3, skipCmd.ElementCount())
+}
+
+func TestCompatibility1(t *testing.T) {
+	old := newRecordEntry()
+	for i := 0; i < 5; i++ {
+		driverEntry := entry.MockEntry()
+		driverEntry.DSN = uint64(i)
+		old.append(driverEntry)
+	}
+	old.prepareRecord()
+
+	buf := old.payload
+	t.Log(old.addr)
+	newEntry, err := DecodeLogEntry(buf)
+	assert.NoError(t, err)
+	assert.Equal(t, uint32(5), newEntry.GetEntryCount())
+	newEntry.ForEachEntry(func(entry *entry.Entry) {
+		logutil.Infof("dsn %d", entry.DSN)
+	})
+}
+
+func TestCompatibility2(t *testing.T) {
+	skipMap := map[uint64]uint64{1: 2, 2: 3, 3: 4}
+	old := newRecordEntry()
+	cmd := newV1SkipCmd()
+	cmd.skipMap = skipMap
+	old.V1Meta.cmdType = Cmd_SkipDSN
+	old.cmd = cmd
+	old.prepareRecord()
+
+	buf := old.payload
+	t.Log(old.addr)
+	newEntry, err := DecodeLogEntry(buf)
+	assert.NoError(t, err)
+	skipCmd := SkipCmd(newEntry.GetEntry(0))
+	assert.Equal(t, []uint64{1, 2, 3}, skipCmd.GetDSNSlice())
+	assert.Equal(t, []uint64{2, 3, 4}, skipCmd.GetPSNSlice())
 }
