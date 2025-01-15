@@ -1898,13 +1898,12 @@ func (tbl *txnTable) getPartitionState(
 
 func (tbl *txnTable) tryToSubscribe(ctx context.Context) (ps *logtailreplay.PartitionState, err error) {
 	eng := tbl.eng.(*Engine)
+	var createdInTxn bool
 	defer func() {
-		if err == nil {
-			eng.globalStats.notifyLogtailUpdate(tbl.tableId)
-		}
+		eng.globalStats.notifyLogtailUpdate(tbl.tableId, err == nil && !createdInTxn)
 	}()
 
-	createdInTxn, err := tbl.isCreatedInTxn(ctx)
+	createdInTxn, err = tbl.isCreatedInTxn(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1912,8 +1911,8 @@ func (tbl *txnTable) tryToSubscribe(ctx context.Context) (ps *logtailreplay.Part
 		return
 	}
 
-	return eng.PushClient().toSubscribeTable(ctx, tbl)
-
+	ps, err = eng.PushClient().toSubscribeTable(ctx, tbl)
+	return ps, err
 }
 
 func (tbl *txnTable) PKPersistedBetween(
