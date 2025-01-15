@@ -277,19 +277,19 @@ func (s *mysqlSinker) Run(ctx context.Context, ar *ActiveRoutine) {
 		if bytes.Equal(sqlBuf, dummy) {
 			// dummy sql, do nothing
 		} else if bytes.Equal(sqlBuf, begin) {
-			if err := s.mysql.SendBegin(ctx, ar); err != nil {
+			if err := s.mysql.SendBegin(ctx); err != nil {
 				logutil.Errorf("cdc mysqlSinker(%v) SendBegin, err: %v", s.dbTblInfo, err)
 				// record error
 				s.err.Store(err)
 			}
 		} else if bytes.Equal(sqlBuf, commit) {
-			if err := s.mysql.SendCommit(ctx, ar); err != nil {
+			if err := s.mysql.SendCommit(ctx); err != nil {
 				logutil.Errorf("cdc mysqlSinker(%v) SendCommit, err: %v", s.dbTblInfo, err)
 				// record error
 				s.err.Store(err)
 			}
 		} else if bytes.Equal(sqlBuf, rollback) {
-			if err := s.mysql.SendRollback(ctx, ar); err != nil {
+			if err := s.mysql.SendRollback(ctx); err != nil {
 				logutil.Errorf("cdc mysqlSinker(%v) SendRollback, err: %v", s.dbTblInfo, err)
 				// record error
 				s.err.Store(err)
@@ -709,31 +709,23 @@ func (s *mysqlSink) Send(ctx context.Context, ar *ActiveRoutine, sqlBuf []byte) 
 	})
 }
 
-func (s *mysqlSink) SendBegin(ctx context.Context, ar *ActiveRoutine) (err error) {
-	return s.retry(ctx, ar, func() (err error) {
-		s.tx, err = s.conn.BeginTx(ctx, nil)
-		return err
-	})
+func (s *mysqlSink) SendBegin(ctx context.Context) (err error) {
+	s.tx, err = s.conn.BeginTx(ctx, nil)
+	return err
 }
 
-func (s *mysqlSink) SendCommit(ctx context.Context, ar *ActiveRoutine) error {
+func (s *mysqlSink) SendCommit(_ context.Context) error {
 	defer func() {
 		s.tx = nil
 	}()
-
-	return s.retry(ctx, ar, func() error {
-		return s.tx.Commit()
-	})
+	return s.tx.Commit()
 }
 
-func (s *mysqlSink) SendRollback(ctx context.Context, ar *ActiveRoutine) error {
+func (s *mysqlSink) SendRollback(_ context.Context) error {
 	defer func() {
 		s.tx = nil
 	}()
-
-	return s.retry(ctx, ar, func() error {
-		return s.tx.Rollback()
-	})
+	return s.tx.Rollback()
 }
 
 func (s *mysqlSink) Close() {
