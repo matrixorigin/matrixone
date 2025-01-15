@@ -30,8 +30,8 @@ type shufflePoolStats struct { //for debug
 	outputCNT   []int64
 	inputTotal  int64
 	outputTotal int64
-	maxBatchCNT int   //max row of batches in shuffle pool
-	directRows  int64 //directly return by shuffle op, don't write into shuffle pool
+	//maxBatchCNT int   //max row of batches in shuffle pool
+	//directRows  int64 //directly return by shuffle op, don't write into shuffle pool
 }
 
 func (sp *ShufflePoolV2) printStats() {
