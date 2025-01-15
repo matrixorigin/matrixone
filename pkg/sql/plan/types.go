@@ -216,11 +216,10 @@ type OptimizerHints struct {
 }
 
 type CTERef struct {
-	defaultDatabase string
-	isRecursive     bool
-	ast             *tree.CTE
-	maskedCTEs      map[string]bool
-	snapshot        *Snapshot
+	isRecursive bool
+	ast         *tree.CTE
+	maskedCTEs  map[string]bool
+	snapshot    *Snapshot
 }
 
 type aliasItem struct {
@@ -238,7 +237,6 @@ type BindContext struct {
 	recSelect              bool
 	finalSelect            bool
 	unionSelect            bool
-	isTryBindingCTE        bool
 	sliding                bool
 	isDistinct             bool
 	isCorrelated           bool
@@ -247,8 +245,10 @@ type BindContext struct {
 	isGroupingSet          bool
 	recRecursiveScanNodeId int32
 
-	cteName  string
-	headings []string
+	cteName string
+	//cte in binding or bound already
+	boundCtes map[string]*CTERef
+	headings  []string
 
 	groupTag     int32
 	aggregateTag int32
@@ -288,9 +288,7 @@ type BindContext struct {
 	// for join tables
 	bindingTree *BindingTreeNode
 
-	parent     *BindContext
-	leftChild  *BindContext
-	rightChild *BindContext
+	parent *BindContext
 
 	defaultDatabase string
 
@@ -302,6 +300,8 @@ type BindContext struct {
 	snapshot *Snapshot
 	// all view keys(dbName#viewName)
 	views []string
+	//view in binding or already bound
+	boundViews map[[2]string]*tree.CreateView
 
 	// lower is sys var lower_case_table_names
 	lower int64

@@ -489,9 +489,9 @@ message Stats {
 	//for scan, selectivity means outcnt divide total count
 	double selectivity = 6;
 	bool forceOneCN = 7;
-
-	HashMapStats hashmapStats = 8;
-        string sql = 9;
+ int32 dop = 8;
+	HashMapStats hashmapStats = 9;
+        string sql = 10;
 }
 
 message RowsetExpr {
@@ -1244,6 +1244,8 @@ message CreateTable {
 	repeated ForeignKeyInfo fksReferToMe = 13;
 
 	int64 retention_deadline = 14;
+	string RawSQL            = 15;
+	bool   IsPartition       = 16;
 }
 
 message AlterTableDrop {

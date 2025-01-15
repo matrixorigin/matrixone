@@ -39,6 +39,8 @@ func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 		bindingByCol:   make(map[string]*Binding),
 		lower:          1,
 		parent:         parent,
+		boundCtes:      make(map[string]*CTERef),
+		boundViews:     make(map[[2]string]*tree.CreateView),
 	}
 
 	if builder != nil {
@@ -55,7 +57,6 @@ func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 			bc.recSelect = parent.recSelect
 			bc.finalSelect = parent.finalSelect
 			bc.recRecursiveScanNodeId = parent.recRecursiveScanNodeId
-			bc.isTryBindingCTE = parent.isTryBindingCTE
 		}
 		bc.snapshot = parent.snapshot
 	}
@@ -82,30 +83,80 @@ func (bc *BindContext) topTag() int32 {
 }
 
 func (bc *BindContext) findCTE(name string) *CTERef {
+	// the cte is masked already, we don't go further
+	if bc.maskedCTEs[name] {
+		return nil
+	}
 	if cte, ok := bc.cteByName[name]; ok {
-		return cte
+		if !bc.maskedCTEs[name] {
+			return cte
+		}
 	}
 
 	parent := bc.parent
-	for parent != nil && name != parent.cteName {
+	for parent != nil {
+		// the cte is masked already, we don't go further
+		if _, ok2 := parent.maskedCTEs[name]; ok2 {
+			break
+		}
 		if cte, ok := parent.cteByName[name]; ok {
-			if !bc.maskedCTEs[name] {
+			if !parent.maskedCTEs[name] {
 				return cte
 			}
 		}
 
-		bc = parent
-		parent = bc.parent
+		parent = parent.parent
 	}
 
 	return nil
 }
 
+func (bc *BindContext) recordCteInBinding(name string, cte *CTERef) {
+	bc.boundCtes[name] = cte
+}
+
+func (bc *BindContext) cteInBinding(name string) bool {
+	if _, ok := bc.boundCtes[name]; ok {
+		return true
+	}
+	cur := bc.parent
+	for cur != nil {
+		if _, ok := cur.boundCtes[name]; ok {
+			return true
+		}
+		cur = cur.parent
+	}
+	return false
+}
+
+func (bc *BindContext) viewInBinding(schema, name string, view *tree.CreateView) bool {
+	cur := bc
+	pair := [2]string{schema, name}
+	for cur != nil {
+		if _, ok := cur.boundViews[pair]; ok {
+			return true
+		}
+		cur = cur.parent
+	}
+	bc.boundViews[pair] = view
+	return false
+}
+
+func (bc *BindContext) recordViews(views []string) {
+	//go to the top BindContext
+	cur := bc
+	for cur != nil && cur.parent != nil {
+		cur = cur.parent
+	}
+	//save views to the top BindContext
+	if cur != nil {
+		cur.views = append(cur.views, views...)
+	}
+}
+
 func (bc *BindContext) mergeContexts(ctx context.Context, left, right *BindContext) error {
 	left.parent = bc
 	right.parent = bc
-	bc.leftChild = left
-	bc.rightChild = right
 
 	for _, binding := range left.bindings {
 		bc.bindings = append(bc.bindings, binding)

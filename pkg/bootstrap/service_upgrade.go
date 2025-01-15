@@ -193,8 +193,6 @@ func (s *service) doCheckUpgrade(ctx context.Context) error {
 			// 2: add upgrades from latest version to final version
 			checker := func() (bool, error) {
 				if v.Version == final.Version && v.VersionOffset >= final.VersionOffset {
-					// if the schema version has reached finalVersion, mark finalVersion Completed and return
-					s.upgrade.finalVersionCompleted.Store(true)
 					return true, nil
 				}
 

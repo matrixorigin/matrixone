@@ -811,7 +811,7 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 		v2.TxnStatementCompileQueryHistogram.Observe(time.Since(start).Seconds())
 	}()
 
-	c.execType = plan2.GetExecType(c.pn.GetQuery(), c.getHaveDDL(), c.isPrepare, c.ncpu)
+	c.execType = plan2.GetExecType(c.pn.GetQuery(), c.getHaveDDL(), c.isPrepare)
 
 	n := getEngineNode(c)
 	if c.execType == plan2.ExecTypeTP || c.execType == plan2.ExecTypeAP_ONECN {
@@ -829,6 +829,8 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 	if c.isPrepare && !c.IsTpQuery() {
 		return nil, cantCompileForPrepareErr
 	}
+
+	plan2.CalcQueryDOP(c.pn, int32(c.ncpu), len(c.cnList), c.execType)
 
 	c.initAnalyzeModule(qry)
 	// deal with sink scan first.
@@ -2082,7 +2084,7 @@ func (c *Compile) compileMinusAndIntersect(n *plan.Node, left []*Scope, right []
 	if c.IsSingleScope(left) && c.IsSingleScope(right) {
 		return c.compileTpMinusAndIntersect(left, right, nodeType)
 	}
-	rs := c.newScopeListOnCurrentCN(2, int(n.Stats.BlockNum))
+	rs := c.newScopeListOnCurrentCN(2, int(n.Stats.Dop))
 	rs = c.newScopeListForMinusAndIntersect(rs, left, right, n)
 
 	c.hasMergeOp = true
@@ -2137,6 +2139,13 @@ func (c *Compile) compileUnionAll(node *plan.Node, ss []*Scope, children []*Scop
 
 func (c *Compile) compileJoin(node, left, right *plan.Node, probeScopes, buildScopes []*Scope) []*Scope {
 	if node.Stats.HashmapStats.Shuffle {
+		if len(c.cnList) == 1 {
+			if node.JoinType == plan.Node_DEDUP {
+				logutil.Infof("not support shuffle v2 for dedup join now")
+			} else {
+				return c.compileShuffleJoinV2(node, left, right, probeScopes, buildScopes)
+			}
+		}
 		return c.compileShuffleJoin(node, left, right, probeScopes, buildScopes)
 	}
 
@@ -2144,11 +2153,37 @@ func (c *Compile) compileJoin(node, left, right *plan.Node, probeScopes, buildSc
 	return c.compileBuildSideForBroadcastJoin(node, rs, buildScopes)
 }
 
-func (c *Compile) compileShuffleJoin(node, left, right *plan.Node, lefts, rights []*Scope) []*Scope {
-	if !plan2.IsEquiJoin2(node.OnList) {
-		panic("shuffle join only support equal join for now!")
+func (c *Compile) compileShuffleJoinV2(node, left, right *plan.Node, leftscopes, rightscopes []*Scope) []*Scope {
+	if node.Stats.Dop != left.Stats.Dop || node.Stats.Dop != right.Stats.Dop {
+		panic("wrong dop for shuffle join!")
+	}
+	if len(leftscopes) != len(rightscopes) {
+		panic("wrong scopes for shuffle join!")
+	}
+	bucketNum := len(c.cnList) * int(node.Stats.Dop)
+	for i := range leftscopes {
+		leftscopes[i].PreScopes = append(leftscopes[i].PreScopes, rightscopes[i])
+		shuffleOpForProbe := constructShuffleOperatorForJoinV2(int32(bucketNum), node, true)
+		shuffleOpForProbe.SetAnalyzeControl(c.anal.curNodeIdx, false)
+		leftscopes[i].setRootOperator(shuffleOpForProbe)
+
+		shuffleOpForBuild := constructShuffleOperatorForJoinV2(int32(bucketNum), node, false)
+		shuffleOpForBuild.SetAnalyzeControl(c.anal.curNodeIdx, false)
+		rightscopes[i].setRootOperator(shuffleOpForBuild)
 	}
 
+	constructShuffleJoinOP(c, leftscopes, node, left, right, true)
+
+	for i := range leftscopes {
+		buildOp := constructShuffleBuild(leftscopes[i].RootOp, c.proc)
+		buildOp.SetAnalyzeControl(c.anal.curNodeIdx, false)
+		rightscopes[i].setRootOperator(buildOp)
+	}
+
+	return leftscopes
+}
+
+func constructShuffleJoinOP(c *Compile, shuffleJoins []*Scope, node, left, right *plan.Node, shuffleV2 bool) {
 	rightTyps := make([]types.Type, len(right.ProjectList))
 	for i, expr := range right.ProjectList {
 		rightTyps[i] = dupType(&expr.Typ)
@@ -2159,14 +2194,15 @@ func (c *Compile) compileShuffleJoin(node, left, right *plan.Node, lefts, rights
 		leftTyps[i] = dupType(&expr.Typ)
 	}
 
-	shuffleJoins := c.newShuffleJoinScopeList(lefts, rights, node)
-
 	currentFirstFlag := c.anal.isFirst
 	switch node.JoinType {
 	case plan.Node_INNER:
 		for i := range shuffleJoins {
 			op := constructJoin(node, rightTyps, c.proc)
 			op.ShuffleIdx = int32(i)
+			if shuffleV2 {
+				op.ShuffleIdx = -1
+			}
 			op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 			shuffleJoins[i].setRootOperator(op)
 		}
@@ -2176,6 +2212,9 @@ func (c *Compile) compileShuffleJoin(node, left, right *plan.Node, lefts, rights
 			for i := range shuffleJoins {
 				op := constructRightAnti(node, rightTyps, c.proc)
 				op.ShuffleIdx = int32(i)
+				if shuffleV2 {
+					op.ShuffleIdx = -1
+				}
 				op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 				shuffleJoins[i].setRootOperator(op)
 			}
@@ -2183,6 +2222,9 @@ func (c *Compile) compileShuffleJoin(node, left, right *plan.Node, lefts, rights
 			for i := range shuffleJoins {
 				op := constructAnti(node, rightTyps, c.proc)
 				op.ShuffleIdx = int32(i)
+				if shuffleV2 {
+					op.ShuffleIdx = -1
+				}
 				op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 				shuffleJoins[i].setRootOperator(op)
 			}
@@ -2193,6 +2235,9 @@ func (c *Compile) compileShuffleJoin(node, left, right *plan.Node, lefts, rights
 			for i := range shuffleJoins {
 				op := constructRightSemi(node, rightTyps, c.proc)
 				op.ShuffleIdx = int32(i)
+				if shuffleV2 {
+					op.ShuffleIdx = -1
+				}
 				op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 				shuffleJoins[i].setRootOperator(op)
 			}
@@ -2200,6 +2245,9 @@ func (c *Compile) compileShuffleJoin(node, left, right *plan.Node, lefts, rights
 			for i := range shuffleJoins {
 				op := constructSemi(node, rightTyps, c.proc)
 				op.ShuffleIdx = int32(i)
+				if shuffleV2 {
+					op.ShuffleIdx = -1
+				}
 				op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 				shuffleJoins[i].setRootOperator(op)
 			}
@@ -2209,6 +2257,9 @@ func (c *Compile) compileShuffleJoin(node, left, right *plan.Node, lefts, rights
 		for i := range shuffleJoins {
 			op := constructLeft(node, rightTyps, c.proc)
 			op.ShuffleIdx = int32(i)
+			if shuffleV2 {
+				op.ShuffleIdx = -1
+			}
 			op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 			shuffleJoins[i].setRootOperator(op)
 		}
@@ -2216,6 +2267,9 @@ func (c *Compile) compileShuffleJoin(node, left, right *plan.Node, lefts, rights
 		for i := range shuffleJoins {
 			op := constructRight(node, leftTyps, rightTyps, c.proc)
 			op.ShuffleIdx = int32(i)
+			if shuffleV2 {
+				op.ShuffleIdx = -1
+			}
 			op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 			shuffleJoins[i].setRootOperator(op)
 		}
@@ -2223,6 +2277,9 @@ func (c *Compile) compileShuffleJoin(node, left, right *plan.Node, lefts, rights
 		for i := range shuffleJoins {
 			op := constructDedupJoin(node, leftTyps, rightTyps, c.proc)
 			op.ShuffleIdx = int32(i)
+			if shuffleV2 {
+				op.ShuffleIdx = -1
+			}
 			op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 			shuffleJoins[i].setRootOperator(op)
 		}
@@ -2231,9 +2288,14 @@ func (c *Compile) compileShuffleJoin(node, left, right *plan.Node, lefts, rights
 		panic(moerr.NewNYI(c.proc.Ctx, fmt.Sprintf("shuffle join do not support join type '%v'", node.JoinType)))
 	}
 	c.anal.isFirst = false
+}
+
+func (c *Compile) compileShuffleJoin(node, left, right *plan.Node, lefts, rights []*Scope) []*Scope {
+	shuffleJoins := c.newShuffleJoinScopeList(lefts, rights, node)
+	constructShuffleJoinOP(c, shuffleJoins, node, left, right, false)
 
 	//construct shuffle build
-	currentFirstFlag = c.anal.isFirst
+	currentFirstFlag := c.anal.isFirst
 	for i := range shuffleJoins {
 		buildScope := shuffleJoins[i].PreScopes[0]
 		mergeOp := merge.NewArgument()
@@ -2941,6 +3003,9 @@ func (c *Compile) compileMergeGroup(n *plan.Node, ss []*Scope, ns []*plan.Node, 
 }
 
 func (c *Compile) compileShuffleGroupV2(n *plan.Node, inputSS []*Scope, nodes []*plan.Node) []*Scope {
+	if n.Stats.Dop != nodes[n.Children[0]].Stats.Dop {
+		panic("wrong shuffle dop for shuffle group!")
+	}
 	if n.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reuse {
 		currentFirstFlag := c.anal.isFirst
 		for i := range inputSS {
@@ -2952,17 +3017,7 @@ func (c *Compile) compileShuffleGroupV2(n *plan.Node, inputSS []*Scope, nodes []
 		return inputSS
 	}
 
-	child := nodes[n.Children[0]]
-	dop := plan2.GetShuffleDop(c.ncpu, len(c.cnList), n.Stats.HashmapStats.HashmapSize)
-	if dop != inputSS[0].NodeInfo.Mcpu {
-		if child.NodeType == plan.Node_TABLE_SCAN {
-			inputSS[0].NodeInfo.Mcpu = dop
-		} else {
-			dop = inputSS[0].NodeInfo.Mcpu
-		}
-	}
-
-	shuffleArg := constructShuffleArgForGroupV2(n, int32(dop))
+	shuffleArg := constructShuffleArgForGroupV2(n, n.Stats.Dop)
 	shuffleArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
 	inputSS[0].setRootOperator(shuffleArg)
 
@@ -2974,13 +3029,8 @@ func (c *Compile) compileShuffleGroupV2(n *plan.Node, inputSS []*Scope, nodes []
 }
 
 func (c *Compile) compileShuffleGroup(n *plan.Node, inputSS []*Scope, nodes []*plan.Node) []*Scope {
-	if len(c.cnList) == 1 && len(inputSS) == 1 {
-		child := nodes[n.Children[0]]
-		if child.NodeType == plan.Node_JOIN && child.Stats.HashmapStats.Shuffle {
-			logutil.Infof("not support shuffle v2 for now")
-		} else {
-			return c.compileShuffleGroupV2(n, inputSS, nodes)
-		}
+	if len(c.cnList) == 1 {
+		return c.compileShuffleGroupV2(n, inputSS, nodes)
 	}
 
 	if n.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reuse {
@@ -3005,7 +3055,7 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, inputSS []*Scope, nodes []*p
 	}
 
 	shuffleGroups := make([]*Scope, 0, len(c.cnList))
-	dop := plan2.GetShuffleDop(c.ncpu, len(c.cnList), n.Stats.HashmapStats.HashmapSize)
+	dop := int(n.Stats.Dop)
 	for _, cn := range c.cnList {
 		scopes := c.newScopeListWithNode(dop, len(inputSS), cn.Addr)
 		for _, s := range scopes {
@@ -3534,9 +3584,8 @@ func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 // newScopeListOnCurrentCN traverse the cnList and only generate Scope list for the current CN node
 // waing: newScopeListOnCurrentCN result is only used to build Scope and add one merge operator.
 // If other operators are added, please let @qingxinhome know
-func (c *Compile) newScopeListOnCurrentCN(childrenCount int, blocks int) []*Scope {
+func (c *Compile) newScopeListOnCurrentCN(childrenCount int, mcpu int) []*Scope {
 	node := getEngineNode(c)
-	mcpu := c.generateCPUNumber(node.Mcpu, blocks)
 	ss := c.newScopeListWithNode(mcpu, childrenCount, node.Addr)
 	return ss
 }
@@ -3672,11 +3721,7 @@ func (c *Compile) newShuffleJoinScopeList(probeScopes, buildScopes []*Scope, n *
 		}
 	}
 
-	dop := c.ncpu //for dedup join, limit the dop max to ncpu
-	if n.JoinType != plan.Node_DEDUP {
-		dop = plan2.GetShuffleDop(c.ncpu, len(cnlist), n.Stats.HashmapStats.HashmapSize)
-	}
-
+	dop := int(n.Stats.Dop)
 	bucketNum := len(cnlist) * dop
 	shuffleProbes := make([]*Scope, 0, bucketNum)
 	shuffleBuilds := make([]*Scope, 0, bucketNum)
@@ -3785,20 +3830,6 @@ func (c *Compile) newShuffleJoinScopeList(probeScopes, buildScopes []*Scope, n *
 	}
 
 	return shuffleProbes
-}
-
-func (c *Compile) generateCPUNumber(cpunum, blocks int) int {
-	if cpunum <= 0 || blocks <= 16 || c.IsTpQuery() {
-		return 1
-	}
-	ret := blocks/16 + 1
-	if c.isPrepare {
-		ret = blocks/64 + 1
-	}
-	if ret <= cpunum {
-		return ret
-	}
-	return cpunum
 }
 
 func collectTombstones(
@@ -4001,13 +4032,13 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 	var nodes engine.Nodes
 	// scan on current CN
 	if shouldScanOnCurrentCN(c, n, forceSingle) {
-		mcpu := c.generateCPUNumber(c.ncpu, int(n.Stats.BlockNum))
+		mcpu := n.Stats.Dop
 		if forceSingle {
 			mcpu = 1
 		}
 		nodes = append(nodes, engine.Node{
 			Addr:  c.addr,
-			Mcpu:  mcpu,
+			Mcpu:  int(mcpu),
 			CNCNT: 1,
 		})
 		return nodes, nil
@@ -4428,15 +4459,7 @@ func (c *Compile) runSqlWithResult(sql string, accountId int32) (executor.Result
 		panic("missing lock service")
 	}
 
-	// default 1
-	var lower int64 = 1
-	if resolveVariableFunc := c.proc.GetResolveVariableFunc(); resolveVariableFunc != nil {
-		lowerVar, err := resolveVariableFunc("lower_case_table_names", true, false)
-		if err != nil {
-			return executor.Result{}, err
-		}
-		lower = lowerVar.(int64)
-	}
+	lower := c.getLower()
 
 	exec := v.(executor.SQLExecutor)
 	opts := executor.Options{}.
@@ -4583,4 +4606,17 @@ func (c *Compile) getHaveDDL() bool {
 		return txn.GetWorkspace().GetHaveDDL()
 	}
 	return false
+}
+
+func (c *Compile) getLower() int64 {
+	// default 1
+	var lower int64 = 1
+	if resolveVariableFunc := c.proc.GetResolveVariableFunc(); resolveVariableFunc != nil {
+		lowerVar, err := resolveVariableFunc("lower_case_table_names", true, false)
+		if err != nil {
+			return 1
+		}
+		lower = lowerVar.(int64)
+	}
+	return lower
 }

@@ -104,7 +104,7 @@ func Open(
 		}
 		logutil.Info(
 			Phase_Open,
-			zap.Duration("open-tae-cost", time.Since(totalTime)),
+			zap.Duration("total-cost", time.Since(totalTime)),
 			zap.String("mode", db.GetTxnMode().String()),
 			zap.Error(err),
 		)
@@ -281,7 +281,9 @@ func Open(
 	)
 
 	now = time.Now()
-	db.Replay(dataFactory, checkpointed, ckpLSN, valid)
+	if err = db.Replay(ctx, dataFactory, checkpointed, ckpLSN, valid); err != nil {
+		return
+	}
 	db.Catalog.ReplayTableRows()
 
 	// checkObjectState(db)
