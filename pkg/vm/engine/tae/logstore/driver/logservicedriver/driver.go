@@ -99,11 +99,11 @@ func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
 		appendPool:      pool,
 	}
 	d.ctx, d.cancel = context.WithCancel(context.Background())
-	d.doAppendLoop = sm.NewSafeQueue(10000, 10000, d.onAppendRequests)
+	d.doAppendLoop = sm.NewSafeQueue(10000, 10000, d.onCommitIntents)
 	d.doAppendLoop.Start()
-	d.waitAppendLoop = sm.NewLoop(d.appendWaitQueue, d.postAppendQueue, d.onWaitAppendRequests, 10000)
+	d.waitAppendLoop = sm.NewLoop(d.appendWaitQueue, d.postAppendQueue, d.onWaitCommitted, 10000)
 	d.waitAppendLoop.Start()
-	d.postAppendLoop = sm.NewLoop(d.postAppendQueue, nil, d.onAppendDone, 10000)
+	d.postAppendLoop = sm.NewLoop(d.postAppendQueue, nil, d.onCommitDone, 10000)
 	d.postAppendLoop.Start()
 	d.truncateQueue = sm.NewSafeQueue(10000, 10000, d.onTruncateRequests)
 	d.truncateQueue.Start()

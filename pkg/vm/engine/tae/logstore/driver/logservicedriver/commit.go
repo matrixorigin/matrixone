@@ -36,33 +36,39 @@ func (d *LogServiceDriver) Append(e *entry.Entry) error {
 	return nil
 }
 
-func (d *LogServiceDriver) getAppender() *groupCommitter {
+func (d *LogServiceDriver) getCommitter() *groupCommitter {
 	if int(d.committer.writer.Size()) > d.config.RecordSize {
-		d.flushCurrentAppender()
+		d.flushCurrentCommitter()
 	}
 	return d.committer
 }
 
 // this function flushes the current committer to the append queue and
 // creates a new committer as the current committer
-func (d *LogServiceDriver) flushCurrentAppender() {
-	d.scheduleAppend(d.committer)
+func (d *LogServiceDriver) flushCurrentCommitter() {
+	d.prepareCommit(d.committer)
 	d.appendWaitQueue <- d.committer
 	d.committer = newGroupCommitter()
 }
 
-func (d *LogServiceDriver) onAppendRequests(items ...any) {
+func (d *LogServiceDriver) onCommitIntents(items ...any) {
 	for _, item := range items {
 		e := item.(*entry.Entry)
-		committer := d.getAppender()
+		committer := d.getCommitter()
 		committer.addEntry(e)
 	}
-	d.flushCurrentAppender()
+	d.flushCurrentCommitter()
 }
 
-func (d *LogServiceDriver) scheduleAppend(committer *groupCommitter) {
+func (d *LogServiceDriver) prepareCommit(committer *groupCommitter) {
+	// apply write token and bind the client for committing
 	committer.client, committer.writeToken = d.getClientForWrite()
-	committer.writer.SetSafeDSN(d.getSynced())
+
+	// set the safe DSN for the committer
+	// the safe DSN is the DSN of the last committed entry
+	// it is used to apply the DSN in consecutive sequence
+	committer.writer.SetSafeDSN(d.getCommittedDSNWatermark())
+
 	committer.Add(1)
 	d.appendPool.Submit(func() {
 		defer committer.Done()
@@ -116,7 +122,7 @@ func (d *LogServiceDriver) getClientForWrite() (client *wrappedClient, token uin
 	return
 }
 
-func (d *LogServiceDriver) onWaitAppendRequests(items []any, nextQueue chan any) {
+func (d *LogServiceDriver) onWaitCommitted(items []any, nextQueue chan any) {
 	committers := make([]*groupCommitter, 0, len(items))
 	for _, item := range items {
 		committer := item.(*groupCommitter)
@@ -128,14 +134,16 @@ func (d *LogServiceDriver) onWaitAppendRequests(items []any, nextQueue chan any)
 	nextQueue <- committers
 }
 
-func (d *LogServiceDriver) onAppendDone(items []any, _ chan any) {
+func (d *LogServiceDriver) onCommitDone(items []any, _ chan any) {
 	tokens := make([]uint64, 0, len(items))
 	for _, v := range items {
 		committers := v.([]*groupCommitter)
 		for _, committer := range committers {
-			d.logAppend(committer)
+			d.recordCommitInfo(committer)
 			tokens = append(tokens, committer.writeToken)
 		}
 	}
+
+	d.commitWatermark()
 	d.putbackWriteTokens(tokens)
 }

@@ -142,7 +142,7 @@ func TestReplay2(t *testing.T) {
 		entries[i] = e
 	}
 
-	synced := driver.getSynced()
+	synced := driver.getCommittedDSNWatermark()
 	driver.Truncate(synced)
 
 	for i, e := range entries {
