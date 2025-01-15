@@ -53,6 +53,9 @@ type ObjectStorageArguments struct {
 	RoleSessionName string `json:"-" toml:"role-session-name"`
 	SecurityToken   string `json:"-" toml:"security-token"`
 	SessionToken    string `json:"-" toml:"session-token"`
+
+	// HDFS
+	User string `toml:"user"`
 }
 
 func (o ObjectStorageArguments) String() string {
@@ -123,6 +126,9 @@ func (o *ObjectStorageArguments) SetFromString(arguments []string) error {
 			o.SecurityToken = value
 		case "token", "session-token":
 			o.SessionToken = value
+
+		case "user":
+			o.User = value
 
 		default:
 			return moerr.NewInvalidInputNoCtxf("invalid S3 argument: %s", pair)

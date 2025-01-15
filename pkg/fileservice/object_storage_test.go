@@ -207,6 +207,16 @@ func TestObjectStorages(t *testing.T) {
 
 			switch {
 
+			case strings.HasPrefix(strings.ToLower(args.Endpoint), "hdfs"):
+				// HDFS
+				testObjectStorage(t, "hdfs", func(t *testing.T) *HDFS {
+					storage, err := NewHDFS(context.Background(), args, nil)
+					if err != nil {
+						t.Fatal(err)
+					}
+					return storage
+				})
+
 			case args.Endpoint == "disk":
 				// disk
 				testObjectStorage(t, "disk", func(t *testing.T) *diskObjectStorage {
