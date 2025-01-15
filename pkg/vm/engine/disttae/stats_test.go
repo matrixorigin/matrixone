@@ -52,7 +52,7 @@ func TestGetStats(t *testing.T) {
 	go func() {
 		time.Sleep(time.Millisecond * 20)
 		for _, tid := range tids {
-			gs.notifyLogtailUpdate(tid)
+			gs.notifyLogtailUpdate(tid, true)
 		}
 	}()
 	var wg sync.WaitGroup
@@ -233,7 +233,7 @@ func TestWaitLogtailUpdate(t *testing.T) {
 	tid = 200
 	go func() {
 		time.Sleep(time.Millisecond * 100)
-		gs.notifyLogtailUpdate(tid)
+		gs.notifyLogtailUpdate(tid, true)
 	}()
 	gs.waitLogtailUpdated(tid)
 }
@@ -301,7 +301,7 @@ func TestGlobalStats_ClearTables(t *testing.T) {
 	defer cancel()
 	gs := NewGlobalStats(ctx, nil, nil)
 	for i := 0; i < 10; i++ {
-		gs.notifyLogtailUpdate(uint64(2000 + i))
+		gs.notifyLogtailUpdate(uint64(2000+i), true)
 	}
 	assert.Equal(t, 10, len(gs.logtailUpdate.mu.updated))
 	gs.clearTables()
