@@ -36,19 +36,19 @@ func (d *LogServiceDriver) Append(e *entry.Entry) error {
 	return nil
 }
 
-func (d *LogServiceDriver) getAppender() *driverAppender {
-	if int(d.currentAppender.writer.Size()) > d.config.RecordSize {
+func (d *LogServiceDriver) getAppender() *groupCommitter {
+	if int(d.committer.writer.Size()) > d.config.RecordSize {
 		d.flushCurrentAppender()
 	}
-	return d.currentAppender
+	return d.committer
 }
 
 // this function flushes the current appender to the append queue and
 // creates a new appender as the current appender
 func (d *LogServiceDriver) flushCurrentAppender() {
-	d.scheduleAppend(d.currentAppender)
-	d.appendWaitQueue <- d.currentAppender
-	d.currentAppender = newDriverAppender()
+	d.scheduleAppend(d.committer)
+	d.appendWaitQueue <- d.committer
+	d.committer = newGroupCommitter()
 }
 
 func (d *LogServiceDriver) onAppendRequests(items ...any) {
@@ -60,10 +60,9 @@ func (d *LogServiceDriver) onAppendRequests(items ...any) {
 	d.flushCurrentAppender()
 }
 
-func (d *LogServiceDriver) scheduleAppend(appender *driverAppender) {
+func (d *LogServiceDriver) scheduleAppend(appender *groupCommitter) {
 	appender.client, appender.writeToken = d.getClientForWrite()
 	appender.writer.SetSafeDSN(d.getSynced())
-	appender.contextDuration = d.config.NewClientDuration
 	appender.wg.Add(1)
 	d.appendPool.Submit(func() {
 		defer appender.wg.Done()
@@ -118,9 +117,9 @@ func (d *LogServiceDriver) getClientForWrite() (client *wrappedClient, token uin
 }
 
 func (d *LogServiceDriver) onWaitAppendRequests(items []any, nextQueue chan any) {
-	appenders := make([]*driverAppender, 0, len(items))
+	appenders := make([]*groupCommitter, 0, len(items))
 	for _, item := range items {
-		appender := item.(*driverAppender)
+		appender := item.(*groupCommitter)
 		appender.waitDone()
 		d.clientPool.Put(appender.client)
 		appender.notifyDone()
@@ -132,7 +131,7 @@ func (d *LogServiceDriver) onWaitAppendRequests(items []any, nextQueue chan any)
 func (d *LogServiceDriver) onAppendDone(items []any, _ chan any) {
 	tokens := make([]uint64, 0, len(items))
 	for _, v := range items {
-		appenders := v.([]*driverAppender)
+		appenders := v.([]*groupCommitter)
 		for _, appender := range appenders {
 			d.logAppend(appender)
 			tokens = append(tokens, appender.writeToken)

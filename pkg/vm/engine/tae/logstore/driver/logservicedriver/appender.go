@@ -31,28 +31,27 @@ import (
 
 const SlowAppendThreshold = 1 * time.Second
 
-type driverAppender struct {
-	client          *wrappedClient
-	writeToken      uint64
-	psn             uint64
-	writer          *LogEntryWriter
-	contextDuration time.Duration
-	wg              sync.WaitGroup //wait client
+type groupCommitter struct {
+	client     *wrappedClient
+	writeToken uint64
+	psn        uint64
+	writer     *LogEntryWriter
+	wg         sync.WaitGroup //wait client
 }
 
-func newDriverAppender() *driverAppender {
-	return &driverAppender{
+func newGroupCommitter() *groupCommitter {
+	return &groupCommitter{
 		writer: NewLogEntryWriter(),
 	}
 }
 
-func (a *driverAppender) addEntry(e *entry.Entry) {
+func (a *groupCommitter) addEntry(e *entry.Entry) {
 	if err := a.writer.AppendEntry(e); err != nil {
 		panic(err)
 	}
 }
 
-func (a *driverAppender) commit(
+func (a *groupCommitter) commit(
 	retryTimes int,
 	timeout time.Duration,
 ) (err error) {
@@ -89,11 +88,11 @@ func (a *driverAppender) commit(
 	return
 }
 
-func (a *driverAppender) waitDone() {
+func (a *groupCommitter) waitDone() {
 	a.wg.Wait()
 }
 
-func (a *driverAppender) notifyDone() {
+func (a *groupCommitter) notifyDone() {
 	a.writer.NotifyDone(nil)
 }
 

@@ -56,21 +56,20 @@ func RetryWithTimeout(timeoutDuration time.Duration, fn func() (shouldReturn boo
 
 type LogServiceDriver struct {
 	*driverInfo
-	clientPool      *clientpool
-	config          *Config
-	currentAppender *driverAppender
+	clientPool *clientpool
+	config     Config
+	committer  *groupCommitter
 
-	closeCtx        context.Context
-	closeCancel     context.CancelFunc
 	doAppendLoop    sm.Queue
 	appendWaitQueue chan any
 	waitAppendLoop  *sm.Loop
 	postAppendQueue chan any
 	postAppendLoop  *sm.Loop
+	truncateQueue   sm.Queue
 
+	ctx        context.Context
+	cancel     context.CancelFunc
 	appendPool *ants.Pool
-
-	truncateQueue sm.Queue
 }
 
 func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
@@ -92,14 +91,14 @@ func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
 
 	d := &LogServiceDriver{
 		clientPool:      newClientPool(cfg.ClientMaxCount, clientpoolConfig),
-		config:          cfg,
-		currentAppender: newDriverAppender(),
+		config:          *cfg,
+		committer:       newGroupCommitter(),
 		driverInfo:      newDriverInfo(),
 		appendWaitQueue: make(chan any, 10000),
 		postAppendQueue: make(chan any, 10000),
 		appendPool:      pool,
 	}
-	d.closeCtx, d.closeCancel = context.WithCancel(context.Background())
+	d.ctx, d.cancel = context.WithCancel(context.Background())
 	d.doAppendLoop = sm.NewSafeQueue(10000, 10000, d.onAppendRequests)
 	d.doAppendLoop.Start()
 	d.waitAppendLoop = sm.NewLoop(d.appendWaitQueue, d.postAppendQueue, d.onWaitAppendRequests, 10000)
@@ -117,7 +116,7 @@ func (d *LogServiceDriver) GetMaxClient() int {
 
 func (d *LogServiceDriver) Close() error {
 	d.clientPool.Close()
-	d.closeCancel()
+	d.cancel()
 	d.doAppendLoop.Stop()
 	d.waitAppendLoop.Stop()
 	d.postAppendLoop.Stop()

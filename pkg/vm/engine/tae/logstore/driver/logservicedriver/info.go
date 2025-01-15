@@ -214,7 +214,7 @@ func (info *driverInfo) tryApplyWriteToken(
 	return info.writeController.maxIssuedToken, nil
 }
 
-func (info *driverInfo) logAppend(appender *driverAppender) {
+func (info *driverInfo) logAppend(appender *groupCommitter) {
 	info.psn.mu.Lock()
 	cnt := int(appender.writer.Entry.GetEntryCount())
 	startDSN := appender.writer.Entry.GetStartDSN()
