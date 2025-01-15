@@ -70,6 +70,7 @@ type MultiUpdate struct {
 
 	Action                 UpdateAction
 	IsOnduplicateKeyUpdate bool
+	IsRemote               bool
 
 	Engine engine.Engine
 
