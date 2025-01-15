@@ -265,18 +265,17 @@ func (sp *ShufflePoolV2) putBatchIntoShuffledPoolsBySels(srcBatch *batch.Batch, 
 					return err
 				}
 			}
+			bat.AddRowCount(len(currentSels))
+			if bat.RowCount() >= colexec.DefaultBatchSize && len(sp.batchWaiters[i]) == 0 {
+				sp.batchWaiters[i] <- true
+			}
+			sp.batchLocks[i].Unlock()
 			sp.statsLock.Lock()
 			sp.stats.inputCNT[i] += int64(len(currentSels))
 			if bat.RowCount() > sp.stats.maxBatchCNT {
 				sp.stats.maxBatchCNT = bat.RowCount()
 			}
 			sp.statsLock.Unlock()
-			bat.AddRowCount(len(currentSels))
-			if bat.RowCount() >= colexec.DefaultBatchSize && len(sp.batchWaiters[i]) == 0 {
-				sp.batchWaiters[i] <- true
-			}
-
-			sp.batchLocks[i].Unlock()
 		}
 	}
 	return nil
