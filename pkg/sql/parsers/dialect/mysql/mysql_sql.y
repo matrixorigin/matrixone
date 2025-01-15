@@ -362,8 +362,8 @@ import (
 %token <str> PROPERTIES
 
 // Secondary Index
-%token <str> PARSER VISIBLE INVISIBLE BTREE HASH RTREE BSI IVFFLAT MASTER
-%token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS OP_TYPE REINDEX
+%token <str> PARSER VISIBLE INVISIBLE BTREE HASH RTREE BSI IVFFLAT MASTER HNSW
+%token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS OP_TYPE REINDEX EF_CONSTRUCTION M
 
 
 // Alter
@@ -3778,6 +3778,12 @@ alter_table_alter:
         var algoParamList = val
         var name = tree.Identifier($2.Compare())
         $$ = tree.NewAlterOptionAlterReIndex(name, keyType, algoParamList)
+    }
+| REINDEX ident HNSW
+    {
+        var keyType = tree.INDEX_TYPE_HNSW
+        var name = tree.Identifier($2.Compare())
+        $$ = tree.NewAlterOptionAlterReIndex(name, keyType, 0)
     }
 |   CHECK ident enforce
     {
@@ -7489,7 +7495,11 @@ index_option_list:
 	      opt1.AlgoParamList = opt2.AlgoParamList
 	    } else if len(opt2.AlgoParamVectorOpType) > 0 {
 	      opt1.AlgoParamVectorOpType = opt2.AlgoParamVectorOpType
-	    }
+	    } else if opt2.HnswM > 0 {
+	      opt1.HnswM = opt2.HnswM
+	    } else if opt2.HnswEfConstruction > 0 {
+ 	      opt1.HnswEfConstruction = opt2.HnswEfConstruction
+ 	    }
             $$ = opt1
         }
     }
@@ -7543,6 +7553,29 @@ index_option:
         io.Visible = tree.VISIBLE_TYPE_INVISIBLE
         $$ = io
     }
+|   M equal_opt INTEGRAL
+    {
+        val := int64($3.(int64))
+	if val <= 0 {
+		yylex.Error("M should be greater than 0")
+		return 1
+	}
+	io := tree.NewIndexOption()
+	io.HnswM = val
+	$$ = io
+    }
+|   EF_CONSTRUCTION equal_opt INTEGRAL
+    {
+        val := int64($3.(int64))
+	if val <= 0 {
+		yylex.Error("EF_CONSTRUCTION should be greater than 0")
+		return 1
+	}
+	io := tree.NewIndexOption()
+	io.HnswEfConstruction = val
+	$$ = io
+     }
+	
 
 index_column_list:
     index_column
@@ -7594,6 +7627,10 @@ using_opt:
 |   USING IVFFLAT
     {
 	$$ = tree.INDEX_TYPE_IVFFLAT
+    }
+|   USING HNSW
+    {
+	$$ = tree.INDEX_TYPE_HNSW
     }
 |   USING MASTER
     {
@@ -8984,6 +9021,8 @@ index_def:
                 keyTyp = tree.INDEX_TYPE_ZONEMAP
             case "bsi":
                 keyTyp = tree.INDEX_TYPE_BSI
+	    case "hnsw":
+ 	        keyTyp = tree.INDEX_TYPE_HNSW
             default:
                 yylex.Error("Invalid the type of index")
                 goto ret1
@@ -9023,6 +9062,8 @@ index_def:
 		keyTyp = tree.INDEX_TYPE_ZONEMAP
 	     case "bsi":
 		keyTyp = tree.INDEX_TYPE_BSI
+	     case "hnsw":
+	        keyTyp = tree.INDEX_TYPE_HNSW
             default:
                 yylex.Error("Invalid type of index")
                 goto ret1
@@ -9187,6 +9228,7 @@ index_type:
 |   IVFFLAT
 |   MASTER
 |   BSI
+|   HNSW
 
 insert_method_options:
     NO
@@ -12487,6 +12529,7 @@ non_reserved_keyword:
 |   DIRECTORY
 |   DUPLICATE
 |   DELAY_KEY_WRITE
+|   EF_CONSTRUCTION
 |   ENUM
 |   ENCRYPTION
 |   ENGINE
@@ -12504,6 +12547,7 @@ non_reserved_keyword:
 |   GEOMETRY
 |   GEOMETRYCOLLECTION
 |   GLOBAL
+|   HNSW
 |   PERSIST
 |   GRANT
 |   INT
@@ -12527,6 +12571,7 @@ non_reserved_keyword:
 |   LOCAL
 |   LINEAR
 |   LIST
+|   M
 |   MEDIUMBLOB
 |   MEDIUMINT
 |   MEDIUMTEXT

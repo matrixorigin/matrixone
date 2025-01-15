@@ -3205,6 +3205,14 @@ var (
 			input:  "use ",
 			output: "use",
 		},
+		{
+			input:  "create index idx using hnsw on A (a) M 4 ef_construction 100",
+			output: "create index idx using hnsw on a (a) M 4 EF_CONSTRUCTION 100 ",
+		},
+		{
+			input:  "alter table t1 alter reindex idx1 hnsw",
+			output: "alter table t1 alter reindex idx1 hnsw",
+		},
 	}
 )
 

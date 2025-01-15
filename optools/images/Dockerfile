@@ -21,8 +21,11 @@ RUN make build
 
 FROM ubuntu:22.04
 
+ENV LD_LIBRARY_PATH '/lib'
+
 COPY --from=builder /go/src/github.com/matrixorigin/matrixone/mo-service /mo-service
 COPY --from=builder /go/src/github.com/matrixorigin/matrixone/etc /etc
+COPY --from=builder /go/src/github.com/matrixorigin/matrixone/thirdparties/install/lib /lib
 
 # Install some utilities used for debugging or by startup script
 RUN apt-get update && apt-get install -y \
