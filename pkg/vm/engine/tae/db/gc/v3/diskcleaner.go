@@ -17,6 +17,7 @@ package gc
 import (
 	"context"
 	"fmt"
+	"math/rand"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -236,7 +237,11 @@ func (cleaner *DiskCleaner) scheduleGCJob(ctx context.Context) (err error) {
 		return
 	}
 	logutil.Info("GC-Send-Intents")
-	_, err = cleaner.processQueue.Enqueue(JT_GCExecute)
+	if rand.Intn(100)%2 == 0 {
+		_, err = cleaner.processQueue.Enqueue(JT_GCFastExecute)
+	} else {
+		_, err = cleaner.processQueue.Enqueue(JT_GCExecute)
+	}
 	return
 }
 
