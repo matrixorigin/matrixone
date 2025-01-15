@@ -324,10 +324,30 @@ func execBackup(
 		oNames = append(oNames, oneNames...)
 	}
 	loadDuration += time.Since(now)
+
+	dstObj, err := fileservice.SortedList(dstFs.List(ctx, ""))
+	dstHave := make(map[string]bool)
+	if err != nil {
+		return err
+	}
+	if len(dstObj) != 0 && dstObj[0].Name == fileList {
+		data, err := readFile(ctx, dstFs, fileList)
+		if err != nil {
+			return err
+		}
+		objects := strings.Split(string(data), "\n")
+		for _, object := range objects {
+			dstHave[object] = true
+		}
+	}
 	now = time.Now()
 	for _, oName := range oNames {
-		if files[oName.Location.Name().String()] == nil {
-			files[oName.Location.Name().String()] = oName
+		objName := oName.Location.Name().String()
+		if dstHave[objName] {
+			oName.NeedCopy = false
+		}
+		if files[objName] == nil {
+			files[objName] = oName
 		}
 	}
 
@@ -414,6 +434,11 @@ func execBackup(
 		})
 	}
 	reWriteDuration += time.Since(now)
+	for _, file := range taeFileList {
+		if dstHave[file.path] {
+			file.needCopy = true
+		}
+	}
 	//save tae files size
 	err = saveTaeFilesList(ctx, dstFs, taeFileList, backupTime, start.ToString(), typ)
 	if err != nil {
