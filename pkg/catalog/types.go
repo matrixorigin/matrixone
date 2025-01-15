@@ -307,6 +307,9 @@ const (
 	SystemColNoConstraint = "n"
 
 	SystemDBTypeSubscription = "subscription"
+
+	MOPartitionMetadata = "mo_partition_metadata"
+	MOPartitionTables   = "mo_partition_tables"
 )
 
 // Key/Index related constants

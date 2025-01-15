@@ -4462,15 +4462,7 @@ func (c *Compile) runSqlWithResult(sql string, accountId int32) (executor.Result
 		panic("missing lock service")
 	}
 
-	// default 1
-	var lower int64 = 1
-	if resolveVariableFunc := c.proc.GetResolveVariableFunc(); resolveVariableFunc != nil {
-		lowerVar, err := resolveVariableFunc("lower_case_table_names", true, false)
-		if err != nil {
-			return executor.Result{}, err
-		}
-		lower = lowerVar.(int64)
-	}
+	lower := c.getLower()
 
 	exec := v.(executor.SQLExecutor)
 	opts := executor.Options{}.
@@ -4617,4 +4609,17 @@ func (c *Compile) getHaveDDL() bool {
 		return txn.GetWorkspace().GetHaveDDL()
 	}
 	return false
+}
+
+func (c *Compile) getLower() int64 {
+	// default 1
+	var lower int64 = 1
+	if resolveVariableFunc := c.proc.GetResolveVariableFunc(); resolveVariableFunc != nil {
+		lowerVar, err := resolveVariableFunc("lower_case_table_names", true, false)
+		if err != nil {
+			return 1
+		}
+		lower = lowerVar.(int64)
+	}
+	return lower
 }
