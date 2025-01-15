@@ -812,6 +812,8 @@ func (cdc *CdcTask) Start(rootCtx context.Context) (err error) {
 
 	defer func() {
 		if err != nil {
+			logutil.Errorf("cdc task %s start failed, err: %v", taskName, err)
+
 			// if Start failed, there will be some dangle goroutines(watermarkUpdater, reader, sinker...)
 			// need to close them to avoid goroutine leak
 			cdc.activeRoutine.ClosePause()
@@ -821,8 +823,6 @@ func (cdc *CdcTask) Start(rootCtx context.Context) (err error) {
 				logutil.Errorf("cdc task %s update err msg failed, err: %v", taskName, updateErrMsgErr)
 			}
 		}
-
-		cdc2.GetTableScanner(cnUUID).UnRegister(taskId)
 	}()
 
 	ctx := defines.AttachAccountId(rootCtx, accountId)
@@ -847,6 +847,7 @@ func (cdc *CdcTask) Start(rootCtx context.Context) (err error) {
 	// start success, clear err msg
 	if err = cdc.updateErrMsg(ctx, ""); err != nil {
 		logutil.Errorf("cdc task %s update err msg failed, err: %v", taskName, err)
+		err = nil
 	}
 
 	// hold
@@ -861,14 +862,10 @@ func (cdc *CdcTask) Start(rootCtx context.Context) (err error) {
 }
 
 // Resume cdc task from last recorded watermark
-func (cdc *CdcTask) Resume() (err error) {
+func (cdc *CdcTask) Resume() error {
 	logutil.Infof("cdc task %s resume", cdc.cdcTask.TaskName)
 	defer func() {
-		if err == nil {
-			logutil.Infof("cdc task %s resume success", cdc.cdcTask.TaskName)
-		} else {
-			logutil.Infof("cdc task %s resume failed, err: %v", cdc.cdcTask.TaskName, err)
-		}
+		logutil.Infof("cdc task %s resume success", cdc.cdcTask.TaskName)
 	}()
 
 	go func() {
@@ -876,21 +873,18 @@ func (cdc *CdcTask) Resume() (err error) {
 		cdc.activeRoutine = cdc2.NewCdcActiveRoutine()
 		_ = cdc.startFunc(context.Background())
 	}()
-	return
+	return nil
 }
 
 // Restart cdc task from init watermark
-func (cdc *CdcTask) Restart() (err error) {
+func (cdc *CdcTask) Restart() error {
 	logutil.Infof("cdc task %s restart", cdc.cdcTask.TaskName)
 	defer func() {
-		if err == nil {
-			logutil.Infof("cdc task %s restart success", cdc.cdcTask.TaskName)
-		} else {
-			logutil.Infof("cdc task %s restart failed, err: %v", cdc.cdcTask.TaskName, err)
-		}
+		logutil.Infof("cdc task %s restart success", cdc.cdcTask.TaskName)
 	}()
 
 	if cdc.isRunning {
+		cdc2.GetTableScanner(cdc.cnUUID).UnRegister(cdc.cdcTask.TaskId)
 		cdc.activeRoutine.CloseCancel()
 		cdc.isRunning = false
 		// let Start() go
@@ -901,7 +895,7 @@ func (cdc *CdcTask) Restart() (err error) {
 		cdc.activeRoutine = cdc2.NewCdcActiveRoutine()
 		_ = cdc.startFunc(context.Background())
 	}()
-	return
+	return nil
 }
 
 // Pause cdc task
@@ -912,6 +906,7 @@ func (cdc *CdcTask) Pause() error {
 	}()
 
 	if cdc.isRunning {
+		cdc2.GetTableScanner(cdc.cnUUID).UnRegister(cdc.cdcTask.TaskId)
 		cdc.activeRoutine.ClosePause()
 		cdc.isRunning = false
 		// let Start() go
@@ -921,23 +916,20 @@ func (cdc *CdcTask) Pause() error {
 }
 
 // Cancel cdc task
-func (cdc *CdcTask) Cancel() (err error) {
+func (cdc *CdcTask) Cancel() error {
 	logutil.Infof("cdc task %s cancel", cdc.cdcTask.TaskName)
 	defer func() {
-		if err == nil {
-			logutil.Infof("cdc task %s cancel success", cdc.cdcTask.TaskName)
-		} else {
-			logutil.Infof("cdc task %s cancel failed, err: %v", cdc.cdcTask.TaskName, err)
-		}
+		logutil.Infof("cdc task %s cancel success", cdc.cdcTask.TaskName)
 	}()
 
 	if cdc.isRunning {
+		cdc2.GetTableScanner(cdc.cnUUID).UnRegister(cdc.cdcTask.TaskId)
 		cdc.activeRoutine.CloseCancel()
 		cdc.isRunning = false
 		// let Start() go
 		cdc.holdCh <- 1
 	}
-	return
+	return nil
 }
 
 func (cdc *CdcTask) initAesKeyByInternalExecutor(ctx context.Context, accountId uint32) (err error) {
