@@ -472,8 +472,8 @@ func TestBackupData5(t *testing.T) {
 		txn, rel := testutil.GetDefaultRelation(t, db.DB, schema.Name)
 		testutil.CheckAllColRowsByScan(t, rel, int(totalRows), false)
 
-		obj := testutil.GetOneObject(rel)
-		id := obj.GetMeta().(*catalog.ObjectEntry).AsCommonID()
+		obj := testutil.GetOneBlockMeta(rel)
+		id := obj.AsCommonID()
 		err := rel.RangeDelete(id, 0, 0, handle.DT_Normal)
 		require.NoError(t, err)
 		deletedRows = 1
