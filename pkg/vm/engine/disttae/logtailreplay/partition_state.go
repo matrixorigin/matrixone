@@ -789,7 +789,7 @@ func (p *PartitionState) PKExistInMemBetween(
 	keys [][]byte,
 ) (bool, bool) {
 	iter := p.rowPrimaryKeyIndex.Copy().Iter()
-	pivot := RowEntry{
+	pivot := &RowEntry{
 		Time: types.BuildTS(math.MaxInt64, math.MaxUint32),
 	}
 	idxEntry := &PrimaryIndexEntry{}
