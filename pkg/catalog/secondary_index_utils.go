@@ -31,7 +31,7 @@ const (
 	MoIndexIvfFlatAlgo  = tree.INDEX_TYPE_IVFFLAT  // used for IVF flat index on Vector/Array columns
 	MOIndexMasterAlgo   = tree.INDEX_TYPE_MASTER   // used for Master Index on VARCHAR columns
 	MOIndexFullTextAlgo = tree.INDEX_TYPE_FULLTEXT // used for Fulltext Index on VARCHAR columns
-	MOIndexHnswAlgo     = tree.INDEX_TYPE_HNSW     // used for HNSW Index on Vector/Array columns
+	MoIndexHnswAlgo     = tree.INDEX_TYPE_HNSW     // used for HNSW Index on Vector/Array columns
 )
 
 // ToLower is used for before comparing AlgoType and IndexAlgoParamOpType. Reason why they are strings
@@ -72,7 +72,7 @@ func IsFullTextIndexAlgo(algo string) bool {
 
 func IsHnswIndexAlgo(algo string) bool {
 	_algo := ToLower(algo)
-	return _algo == MOIndexHnswAlgo.ToString()
+	return _algo == MoIndexHnswAlgo.ToString()
 }
 
 // ------------------------[START] IndexAlgoParams------------------------

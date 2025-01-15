@@ -2458,6 +2458,14 @@ func buildIvfFlatSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 
 func buildHnswSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colMap map[string]*ColDef, existedIndexes []*plan.IndexDef, pkeyName string) ([]*plan.IndexDef, []*TableDef, error) {
 
+	if pkeyName == "" || pkeyName == catalog.FakePrimaryKeyColName {
+		return nil, nil, moerr.NewInternalErrorNoCtx("primary key cannot be empty for fulltext index")
+	}
+
+	if colMap[pkeyName].Typ.Id != int32(types.T_uint64) {
+		return nil, nil, moerr.NewInternalErrorNoCtx("type of primary key must be uint64")
+	}
+
 	indexParts := make([]string, 1)
 
 	// 0. Validate: We only support 1 column of either VECF32 or VECF64 type
@@ -2719,6 +2727,9 @@ func CreateIndexDef(indexInfo *tree.Index,
 			if err != nil {
 				return nil, err
 			}
+		case catalog.MoIndexHnswAlgo:
+			indexDef.Comment = ""
+			indexDef.IndexAlgoParams = ""
 		}
 
 	}
@@ -2807,6 +2818,8 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 				} else if indexdef.TableExist && catalog.IsMasterIndexAlgo(indexdef.IndexAlgo) {
 					truncateTable.IndexTableNames = append(truncateTable.IndexTableNames, indexdef.IndexTableName)
 				} else if indexdef.TableExist && catalog.IsFullTextIndexAlgo(indexdef.IndexAlgo) {
+					truncateTable.IndexTableNames = append(truncateTable.IndexTableNames, indexdef.IndexTableName)
+				} else if indexdef.TableExist && catalog.IsHnswIndexAlgo(indexdef.IndexAlgo) {
 					truncateTable.IndexTableNames = append(truncateTable.IndexTableNames, indexdef.IndexTableName)
 				}
 			}
