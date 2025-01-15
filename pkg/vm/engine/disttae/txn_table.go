@@ -40,7 +40,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
-	"github.com/matrixorigin/matrixone/pkg/partitionservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
@@ -92,8 +91,9 @@ func newTxnTable(
 	}
 	tbl.isLocal = tbl.isLocalFunc
 
-	if db.databaseId != catalog.MO_CATALOG_ID {
-		ps := partitionservice.GetService(process.GetService())
+	ps := process.GetPartitionService()
+	if ps != nil && db.databaseId != catalog.MO_CATALOG_ID {
+
 		is, metadata, err := ps.Is(ctx, item.Id, txn.op)
 		if err != nil {
 			return nil, err
