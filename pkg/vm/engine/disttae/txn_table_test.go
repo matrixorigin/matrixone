@@ -18,7 +18,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -46,8 +45,8 @@ func newTxnTableForTest() *txnTable {
 				packer.Close()
 			},
 		),
-		catalog: cache.NewCatalog(),
 	}
+	engine.catalog.Store(cache.NewCatalog())
 	var tnStore DNStore
 	txn := &Transaction{
 		engine:   engine,
@@ -72,26 +71,6 @@ func newTxnTableForTest() *txnTable {
 		eng:        engine,
 	}
 	return table
-}
-
-func TestIsCreatedInTxn(t *testing.T) {
-	ctx := context.Background()
-	tbl := newTxnTableForTest()
-	e := tbl.eng.(*Engine)
-
-	ts0 := types.BuildTS(0, 0)
-	ts1 := types.BuildTS(10, 10)
-	e.catalog.UpdateDuration(ts0, ts0)
-	assert.NoError(t, tbl.db.op.UpdateSnapshot(ctx, ts1.ToTimestamp()))
-	inTxn, err := tbl.isCreatedInTxn(ctx)
-	assert.NoError(t, err)
-	assert.True(t, inTxn)
-
-	ts2 := types.BuildTS(20, 20)
-	e.catalog.UpdateStart(ts2)
-	inTxn, err = tbl.isCreatedInTxn(ctx)
-	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry))
-	assert.False(t, inTxn)
 }
 
 func makeBatchForTest(

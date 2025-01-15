@@ -15,6 +15,9 @@
 package store
 
 import (
+	"context"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 )
 
@@ -27,7 +30,6 @@ const (
 type Store interface {
 	Append(gid uint32, entry entry.Entry) (lsn uint64, err error)
 	RangeCheckpoint(gid uint32, start, end uint64, files ...string) (ckpEntry entry.Entry, err error)
-	Load(gid uint32, lsn uint64) (entry.Entry, error)
 
 	GetCurrSeqNum(gid uint32) (lsn uint64)
 	GetSynced(gid uint32) (lsn uint64)
@@ -35,8 +37,8 @@ type Store interface {
 	GetCheckpointed(gid uint32) (lsn uint64)
 	GetTruncated() uint64
 
-	Replay(h ApplyHandle) error
+	Replay(ctx context.Context, h ApplyHandle) error
 	Close() error
 }
 
-type ApplyHandle = func(group uint32, commitId uint64, payload []byte, typ uint16, info any)
+type ApplyHandle = func(group uint32, commitId uint64, payload []byte, typ uint16, info any) driver.ReplayEntryState

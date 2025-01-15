@@ -15,6 +15,7 @@
 package db
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -29,6 +30,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
@@ -54,6 +56,7 @@ type Replayer struct {
 	txnCmdChan    chan *txnbase.TxnCmd
 	readCount     int
 	applyCount    int
+	maxLSN        uint64
 
 	lsn            uint64
 	enableLSNCheck bool
@@ -95,7 +98,7 @@ func (replayer *Replayer) PreReplayWal() {
 	}
 }
 
-func (replayer *Replayer) postReplayWal() {
+func (replayer *Replayer) postReplayWal() error {
 	processor := new(catalog.LoopProcessor)
 	processor.ObjectFn = func(entry *catalog.ObjectEntry) (err error) {
 		if skippedTbl[entry.GetTable().ID] {
@@ -106,39 +109,44 @@ func (replayer *Replayer) postReplayWal() {
 		}
 		return
 	}
-	if err := replayer.db.Catalog.RecurLoop(processor); err != nil {
-		panic(err)
-	}
+	return replayer.db.Catalog.RecurLoop(processor)
 }
-func (replayer *Replayer) Replay() {
+func (replayer *Replayer) Replay(ctx context.Context) (err error) {
 	replayer.wg.Add(1)
 	go replayer.applyTxnCmds()
-	if err := replayer.db.Wal.Replay(replayer.OnReplayEntry); err != nil {
-		panic(err)
+	if err = replayer.db.Wal.Replay(ctx, replayer.OnReplayEntry); err != nil {
+		return
 	}
 	replayer.txnCmdChan <- txnbase.NewLastTxnCmd()
 	close(replayer.txnCmdChan)
 	replayer.wg.Wait()
-	replayer.postReplayWal()
+	if err = replayer.postReplayWal(); err != nil {
+		return
+	}
 	logutil.Info(
-		"Replay-Wal",
+		"Wal-Replay-Trace-End",
 		zap.Duration("apply-cost", replayer.applyDuration),
 		zap.Int("read-count", replayer.readCount),
 		zap.Int("apply-count", replayer.applyCount),
+		zap.Uint64("max-lsn", replayer.maxLSN),
 	)
+	return
 }
 
-func (replayer *Replayer) OnReplayEntry(group uint32, lsn uint64, payload []byte, typ uint16, info any) {
+func (replayer *Replayer) OnReplayEntry(group uint32, lsn uint64, payload []byte, typ uint16, info any) driver.ReplayEntryState {
 	replayer.once.Do(replayer.PreReplayWal)
 	if group != wal.GroupPrepare && group != wal.GroupC {
-		return
+		return driver.RE_Internal
 	}
 	if !replayer.checkLSN(lsn) {
-		return
+		return driver.RE_Truncate
+	}
+	if lsn > replayer.maxLSN {
+		replayer.maxLSN = lsn
 	}
 	head := objectio.DecodeIOEntryHeader(payload)
 	if head.Version < txnbase.IOET_WALTxnEntry_V4 {
-		return
+		return driver.RE_Nomal
 	}
 	codec := objectio.GetIOEntryCodec(*head)
 	entry, err := codec.Decode(payload[4:])
@@ -148,6 +156,7 @@ func (replayer *Replayer) OnReplayEntry(group uint32, lsn uint64, payload []byte
 		panic(err)
 	}
 	replayer.txnCmdChan <- txnCmd
+	return driver.RE_Nomal
 }
 func (replayer *Replayer) applyTxnCmds() {
 	defer replayer.wg.Done()

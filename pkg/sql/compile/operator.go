@@ -18,8 +18,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffleV2"
-
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
@@ -81,6 +79,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/semi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffleV2"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shufflebuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/source"
@@ -131,6 +130,23 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		ParallelID:  srcOpBase.ParallelID,
 	}
 	switch sourceOp.OpType() {
+	case vm.ShuffleBuild:
+		t := sourceOp.(*shufflebuild.ShuffleBuild)
+		op := shufflebuild.NewArgument()
+		op.HashOnPK = t.HashOnPK
+		op.NeedBatches = t.NeedBatches
+		op.NeedAllocateSels = t.NeedAllocateSels
+		op.Conditions = t.Conditions
+		op.RuntimeFilterSpec = t.RuntimeFilterSpec
+		op.JoinMapTag = t.JoinMapTag
+		if t.ShuffleIdx == -1 { // shuffleV2
+			op.ShuffleIdx = int32(index)
+		}
+		op.IsDedup = t.IsDedup
+		op.OnDuplicateAction = t.OnDuplicateAction
+		op.DedupColTypes = t.DedupColTypes
+		op.DedupColName = t.DedupColName
+		return op
 	case vm.Anti:
 		t := sourceOp.(*anti.AntiJoin)
 		op := anti.NewArgument()
@@ -139,6 +155,9 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.Result = t.Result
 		op.HashOnPK = t.HashOnPK
 		op.IsShuffle = t.IsShuffle
+		if t.ShuffleIdx == -1 { // shuffleV2
+			op.ShuffleIdx = int32(index)
+		}
 		op.RuntimeFilterSpecs = t.RuntimeFilterSpecs
 		op.JoinMapTag = t.JoinMapTag
 		op.SetInfo(&info)
@@ -169,6 +188,9 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.JoinMapTag = t.JoinMapTag
 		op.HashOnPK = t.HashOnPK
 		op.IsShuffle = t.IsShuffle
+		if t.ShuffleIdx == -1 { // shuffleV2
+			op.ShuffleIdx = int32(index)
+		}
 		op.SetInfo(&info)
 		return op
 	case vm.Left:
@@ -182,17 +204,14 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.JoinMapTag = t.JoinMapTag
 		op.HashOnPK = t.HashOnPK
 		op.IsShuffle = t.IsShuffle
+		if t.ShuffleIdx == -1 { // shuffleV2
+			op.ShuffleIdx = int32(index)
+		}
 		op.SetInfo(&info)
 		return op
 	case vm.Right:
 		t := sourceOp.(*right.RightJoin)
 		op := right.NewArgument()
-		if t.Channel == nil {
-			t.Channel = make(chan *bitmap.Bitmap, maxParallel)
-		}
-		op.Channel = t.Channel
-		op.NumCPU = uint64(maxParallel)
-		op.IsMerger = (index == 0)
 		op.Cond = t.Cond
 		op.Result = t.Result
 		op.RightTypes = t.RightTypes
@@ -202,17 +221,22 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.JoinMapTag = t.JoinMapTag
 		op.HashOnPK = t.HashOnPK
 		op.IsShuffle = t.IsShuffle
+		if !t.IsShuffle {
+			if t.Channel == nil {
+				t.Channel = make(chan *bitmap.Bitmap, maxParallel)
+			}
+			op.Channel = t.Channel
+			op.NumCPU = uint64(maxParallel)
+			op.IsMerger = (index == 0)
+		}
+		if t.ShuffleIdx == -1 { // shuffleV2
+			op.ShuffleIdx = int32(index)
+		}
 		op.SetInfo(&info)
 		return op
 	case vm.RightSemi:
 		t := sourceOp.(*rightsemi.RightSemi)
 		op := rightsemi.NewArgument()
-		if t.Channel == nil {
-			t.Channel = make(chan *bitmap.Bitmap, maxParallel)
-		}
-		op.Channel = t.Channel
-		op.NumCPU = uint64(maxParallel)
-		op.IsMerger = (index == 0)
 		op.Cond = t.Cond
 		op.Result = t.Result
 		op.RightTypes = t.RightTypes
@@ -221,17 +245,22 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.JoinMapTag = t.JoinMapTag
 		op.HashOnPK = t.HashOnPK
 		op.IsShuffle = t.IsShuffle
+		if !t.IsShuffle {
+			if t.Channel == nil {
+				t.Channel = make(chan *bitmap.Bitmap, maxParallel)
+			}
+			op.Channel = t.Channel
+			op.NumCPU = uint64(maxParallel)
+			op.IsMerger = (index == 0)
+		}
+		if t.ShuffleIdx == -1 { // shuffleV2
+			op.ShuffleIdx = int32(index)
+		}
 		op.SetInfo(&info)
 		return op
 	case vm.RightAnti:
 		t := sourceOp.(*rightanti.RightAnti)
 		op := rightanti.NewArgument()
-		if t.Channel == nil {
-			t.Channel = make(chan *bitmap.Bitmap, maxParallel)
-		}
-		op.Channel = t.Channel
-		op.NumCPU = uint64(maxParallel)
-		op.IsMerger = (index == 0)
 		op.Cond = t.Cond
 		op.Result = t.Result
 		op.RightTypes = t.RightTypes
@@ -240,6 +269,17 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.JoinMapTag = t.JoinMapTag
 		op.HashOnPK = t.HashOnPK
 		op.IsShuffle = t.IsShuffle
+		if !t.IsShuffle {
+			if t.Channel == nil {
+				t.Channel = make(chan *bitmap.Bitmap, maxParallel)
+			}
+			op.Channel = t.Channel
+			op.NumCPU = uint64(maxParallel)
+			op.IsMerger = (index == 0)
+		}
+		if t.ShuffleIdx == -1 { // shuffleV2
+			op.ShuffleIdx = int32(index)
+		}
 		op.SetInfo(&info)
 		return op
 	case vm.Limit:
@@ -315,6 +355,9 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.JoinMapTag = t.JoinMapTag
 		op.HashOnPK = t.HashOnPK
 		op.IsShuffle = t.IsShuffle
+		if t.ShuffleIdx == -1 { // shuffleV2
+			op.ShuffleIdx = int32(index)
+		}
 		op.SetInfo(&info)
 		return op
 	case vm.Single:
@@ -574,6 +617,9 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.Conditions = t.Conditions
 		op.IsShuffle = t.IsShuffle
 		op.ShuffleIdx = t.ShuffleIdx
+		if t.ShuffleIdx == -1 { // shuffleV2
+			op.ShuffleIdx = int32(index)
+		}
 		op.RuntimeFilterSpecs = t.RuntimeFilterSpecs
 		op.JoinMapTag = t.JoinMapTag
 		op.OnDuplicateAction = t.OnDuplicateAction
@@ -603,15 +649,12 @@ func constructRestrict(n *plan.Node, filterExpr *plan.Expr) *filter.Filter {
 func constructDeletion(n *plan.Node, eg engine.Engine) (*deletion.Deletion, error) {
 	oldCtx := n.DeleteCtx
 	delCtx := &deletion.DeleteCtx{
-		Ref:                   oldCtx.Ref,
-		RowIdIdx:              int(oldCtx.RowIdIdx),
-		CanTruncate:           oldCtx.CanTruncate,
-		AddAffectedRows:       oldCtx.AddAffectedRows,
-		PartitionTableIDs:     oldCtx.PartitionTableIds,
-		PartitionTableNames:   oldCtx.PartitionTableNames,
-		PartitionIndexInBatch: int(oldCtx.PartitionIdx),
-		PrimaryKeyIdx:         int(oldCtx.PrimaryKeyIdx),
-		Engine:                eg,
+		Ref:             oldCtx.Ref,
+		RowIdIdx:        int(oldCtx.RowIdIdx),
+		CanTruncate:     oldCtx.CanTruncate,
+		AddAffectedRows: oldCtx.AddAffectedRows,
+		PrimaryKeyIdx:   int(oldCtx.PrimaryKeyIdx),
+		Engine:          eg,
 	}
 
 	op := deletion.NewArgument()
@@ -752,7 +795,6 @@ func constructMergeblock(eg engine.Engine, n *plan.Node) *mergeblock.MergeBlock 
 	return mergeblock.NewArgument().
 		WithEngine(eg).
 		WithObjectRef(n.InsertCtx.Ref).
-		WithParitionNames(n.InsertCtx.PartitionTableNames).
 		WithAddAffectedRows(n.InsertCtx.AddAffectedRows)
 }
 
@@ -760,22 +802,11 @@ func constructLockOp(n *plan.Node, eng engine.Engine) (*lockop.LockOp, error) {
 	arg := lockop.NewArgumentByEngine(eng)
 	for _, target := range n.LockTargets {
 		typ := plan2.MakeTypeByPlan2Type(target.PrimaryColTyp)
-		if target.IsPartitionTable {
-			arg.AddLockTargetWithPartition(target.GetPartitionTableIds(), target.GetPrimaryColIdxInBat(), typ, target.GetRefreshTsIdxInBat(), target.GetLockRows(), target.GetLockTableAtTheEnd(), target.GetFilterColIdxInBat())
-		} else {
-			arg.AddLockTarget(target.GetTableId(), target.GetObjRef(), target.GetPrimaryColIdxInBat(), typ, target.GetRefreshTsIdxInBat(), target.GetLockRows(), target.GetLockTableAtTheEnd())
-		}
-
+		arg.AddLockTarget(target.GetTableId(), target.GetObjRef(), target.GetPrimaryColIdxInBat(), typ, target.GetRefreshTsIdxInBat(), target.GetLockRows(), target.GetLockTableAtTheEnd())
 	}
 	for _, target := range n.LockTargets {
 		if target.LockTable {
-			if target.IsPartitionTable {
-				for _, pTblId := range target.PartitionTableIds {
-					arg.LockTable(pTblId, false)
-				}
-			} else {
-				arg.LockTable(target.TableId, false)
-			}
+			arg.LockTable(target.TableId, false)
 		}
 	}
 	return arg, nil
@@ -798,14 +829,10 @@ func constructMultiUpdate(n *plan.Node, eg engine.Engine) *multi_update.MultiUpd
 		}
 
 		arg.MultiUpdateCtx[i] = &multi_update.MultiUpdateCtx{
-			ObjRef:              updateCtx.ObjRef,
-			TableDef:            updateCtx.TableDef,
-			InsertCols:          insertCols,
-			DeleteCols:          deleteCols,
-			PartitionTableIDs:   updateCtx.PartitionTableIds,
-			PartitionTableNames: updateCtx.PartitionTableNames,
-			OldPartitionIdx:     int(updateCtx.OldPartitionIdx),
-			NewPartitionIdx:     int(updateCtx.NewPartitionIdx),
+			ObjRef:     updateCtx.ObjRef,
+			TableDef:   updateCtx.TableDef,
+			InsertCols: insertCols,
+			DeleteCols: deleteCols,
 		}
 	}
 
@@ -821,14 +848,11 @@ func constructInsert(n *plan.Node, eg engine.Engine) *insert.Insert {
 		}
 	}
 	newCtx := &insert.InsertCtx{
-		Ref:                   oldCtx.Ref,
-		AddAffectedRows:       oldCtx.AddAffectedRows,
-		Engine:                eg,
-		Attrs:                 attrs,
-		PartitionTableIDs:     oldCtx.PartitionTableIds,
-		PartitionTableNames:   oldCtx.PartitionTableNames,
-		PartitionIndexInBatch: int(oldCtx.PartitionIdx),
-		TableDef:              oldCtx.TableDef,
+		Ref:             oldCtx.Ref,
+		AddAffectedRows: oldCtx.AddAffectedRows,
+		Engine:          eg,
+		Attrs:           attrs,
+		TableDef:        oldCtx.TableDef,
 	}
 	arg := insert.NewArgument()
 	arg.InsertCtx = newCtx
@@ -1455,6 +1479,34 @@ func constructDispatchLocalAndRemote(idx int, target []*Scope, source *Scope) (b
 		}
 	}
 	return hasRemote, arg
+}
+
+func constructShuffleOperatorForJoinV2(bucketNum int32, node *plan.Node, left bool) *shuffleV2.ShuffleV2 {
+	arg := shuffleV2.NewArgument()
+	var expr *plan.Expr
+	cond := node.OnList[node.Stats.HashmapStats.ShuffleColIdx]
+	switch condImpl := cond.Expr.(type) {
+	case *plan.Expr_F:
+		if left {
+			expr = condImpl.F.Args[0]
+		} else {
+			expr = condImpl.F.Args[1]
+		}
+	}
+
+	hashCol, typ := plan2.GetHashColumn(expr)
+	arg.ShuffleColIdx = hashCol.ColPos
+	arg.ShuffleType = int32(node.Stats.HashmapStats.ShuffleType)
+	arg.ShuffleColMin = node.Stats.HashmapStats.ShuffleColMin
+	arg.ShuffleColMax = node.Stats.HashmapStats.ShuffleColMax
+	arg.BucketNum = bucketNum
+	switch types.T(typ) {
+	case types.T_int64, types.T_int32, types.T_int16:
+		arg.ShuffleRangeInt64 = plan2.ShuffleRangeReEvalSigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
+	case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text, types.T_bit, types.T_datalink:
+		arg.ShuffleRangeUint64 = plan2.ShuffleRangeReEvalUnsigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
+	}
+	return arg
 }
 
 func constructShuffleOperatorForJoin(bucketNum int32, node *plan.Node, left bool) *shuffle.Shuffle {

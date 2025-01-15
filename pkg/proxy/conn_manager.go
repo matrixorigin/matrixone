@@ -17,6 +17,8 @@ package proxy
 import (
 	"math"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
 // Tenant defines alias tenant name type of string.
@@ -198,6 +200,7 @@ func (m *connManager) connect(cn *CNServer, t *tunnel) {
 		m.cnTunnels[cn.uuid] = make(tunnelSet)
 	}
 	m.cnTunnels[cn.uuid][t] = struct{}{}
+	logutil.Infof("connect to CN server %s, the conn ID is %d", cn.uuid, cn.connID)
 }
 
 // disconnect removes a connection from connection manager.
@@ -210,6 +213,7 @@ func (m *connManager) disconnect(cn *CNServer, t *tunnel) {
 	}
 	delete(m.cnTunnels[cn.uuid], t)
 	delete(m.connIDServers, cn.connID)
+	logutil.Infof("disconnect from CN server %s, the conn ID is %d", cn.uuid, cn.connID)
 }
 
 // count returns the total connection count.

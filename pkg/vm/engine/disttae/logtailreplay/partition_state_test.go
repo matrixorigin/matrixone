@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -106,19 +107,17 @@ func TestHasTombstoneChanged(t *testing.T) {
 		return *objectio.NewObjectStatsWithObjectID(objectio.NewObjectid(), false, true, false)
 	}
 
-	state.tombstoneObjectDTSIndex.Set(ObjectEntry{ObjectInfo{ObjectStats: roid(), CreateTime: types.BuildTS(5, 0), DeleteTime: types.BuildTS(8, 0)}})
-	state.tombstoneObjectDTSIndex.Set(ObjectEntry{ObjectInfo{ObjectStats: roid(), CreateTime: types.BuildTS(1, 0), DeleteTime: types.BuildTS(7, 0)}})
-	state.tombstoneObjectDTSIndex.Set(ObjectEntry{ObjectInfo{ObjectStats: roid(), CreateTime: types.BuildTS(6, 0), DeleteTime: types.BuildTS(12, 0)}})
-	state.tombstoneObjectDTSIndex.Set(ObjectEntry{ObjectInfo{ObjectStats: roid(), CreateTime: types.BuildTS(6, 0), DeleteTime: types.BuildTS(24, 0)}})
+	state.tombstoneObjectDTSIndex.Set(objectio.ObjectEntry{ObjectStats: roid(), CreateTime: types.BuildTS(5, 0), DeleteTime: types.BuildTS(8, 0)})
+	state.tombstoneObjectDTSIndex.Set(objectio.ObjectEntry{ObjectStats: roid(), CreateTime: types.BuildTS(1, 0), DeleteTime: types.BuildTS(7, 0)})
+	state.tombstoneObjectDTSIndex.Set(objectio.ObjectEntry{ObjectStats: roid(), CreateTime: types.BuildTS(6, 0), DeleteTime: types.BuildTS(12, 0)})
+	state.tombstoneObjectDTSIndex.Set(objectio.ObjectEntry{ObjectStats: roid(), CreateTime: types.BuildTS(6, 0), DeleteTime: types.BuildTS(24, 0)})
 	require.True(t, state.HasTombstoneChanged(types.BuildTS(24, 0), types.BuildTS(30, 0)))
 	require.False(t, state.HasTombstoneChanged(types.BuildTS(25, 0), types.BuildTS(30, 0)))
 
 	for i := 10; i < 20; i++ {
-		state.tombstoneObjectDTSIndex.Set(ObjectEntry{
-			ObjectInfo{
-				ObjectStats: roid(),
-				CreateTime:  types.BuildTS(int64(i), 0),
-			},
+		state.tombstoneObjectDTSIndex.Set(objectio.ObjectEntry{
+			ObjectStats: roid(),
+			CreateTime:  types.BuildTS(int64(i), 0),
 		})
 	}
 
@@ -140,7 +139,7 @@ func TestScanRows(t *testing.T) {
 			Time:              types.BuildTS(time.Now().UnixNano(), uint32(i)),
 			ID:                int64(i),
 			Deleted:           i%2 == 0,
-			PrimaryIndexBytes: EncodePrimaryKey(i, packer),
+			PrimaryIndexBytes: readutil.EncodePrimaryKey(i, packer),
 		})
 	}
 

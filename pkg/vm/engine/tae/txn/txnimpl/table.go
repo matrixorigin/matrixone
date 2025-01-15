@@ -32,12 +32,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
@@ -264,7 +263,7 @@ func (tbl *txnTable) TransferDeletes(
 		v2.TxnS3TombstoneTransferGetSoftdeleteObjectsHistogram.Observe(time.Since(tGetSoftdeleteObjects).Seconds())
 		v2.TxnS3TombstoneSoftdeleteObjectCounter.Add(float64(len(softDeleteObjects)))
 		var findTombstoneDuration, readTombstoneDuration, deleteRowsDuration time.Duration
-		var sinker *engine_util.Sinker
+		var sinker *ioutil.Sinker
 		defer func() {
 			if sinker != nil {
 				sinker.Close()
@@ -279,7 +278,7 @@ func (tbl *txnTable) TransferDeletes(
 		for _, obj := range softDeleteObjects {
 			var currentTransferBatch *containers.Batch
 			tFindTombstone := time.Now()
-			sel, err := blockio.FindTombstonesOfObject(
+			sel, err := ioutil.FindTombstonesOfObject(
 				ctx, obj.ID(), tbl.tombstoneTable.tableSpace.stats, tbl.store.rt.Fs.Service,
 			)
 			findTombstoneDuration += time.Since(tFindTombstone)
@@ -296,8 +295,9 @@ func (tbl *txnTable) TransferDeletes(
 			iter := sel.Iterator()
 			pkType := &tbl.GetLocalSchema(false).GetPrimaryKey().Type
 			transferFn := func(pkVec, rowIDVec containers.Vector) (err error) {
+				rowids := vector.MustFixedColWithTypeCheck[types.Rowid](rowIDVec.GetDownstreamVector())
 				for i := 0; i < rowIDVec.Length(); i++ {
-					rowID := rowIDVec.Get(i).(types.Rowid)
+					rowID := rowids[i]
 					blkID2, _ := rowID.Decode()
 					if !blkID2.Object().EQ(obj.ID()) {
 						continue
@@ -337,7 +337,7 @@ func (tbl *txnTable) TransferDeletes(
 				for i := 0; i < int(stats.BlkCnt()); i++ {
 					tReadTombstone := time.Now()
 					loc := stats.BlockLocation(uint16(i), tbl.tombstoneTable.schema.Extra.BlockMaxRows)
-					vectors, closeFunc, err := blockio.LoadColumns2(
+					vectors, closeFunc, err := ioutil.LoadColumns2(
 						tbl.store.ctx,
 						[]uint16{0, 1},
 						nil,
@@ -362,13 +362,13 @@ func (tbl *txnTable) TransferDeletes(
 			tbl.store.warChecker.Delete(id)
 			if currentTransferBatch != nil {
 				if sinker == nil {
-					sinker = engine_util.NewTombstoneSinker(
+					sinker = ioutil.NewTombstoneSinker(
 						objectio.HiddenColumnSelection_None,
 						*pkType,
 						common.WorkspaceAllocator,
 						tbl.store.rt.Fs.Service,
-						engine_util.WithBufferSizeCap(TransferSinkerBufferSize),
-						engine_util.WithMemorySizeThreshold(TransferSinkerMemorySizeThreshold))
+						ioutil.WithBufferSizeCap(TransferSinkerBufferSize),
+						ioutil.WithMemorySizeThreshold(TransferSinkerMemorySizeThreshold))
 				}
 				sinker.Write(ctx, containers.ToCNBatch(currentTransferBatch))
 				currentTransferBatch.Close()
@@ -1241,7 +1241,7 @@ func (tbl *txnTable) DoPrecommitDedupByNode(ctx context.Context, stats objectio.
 	for _, loc := range metaLocs {
 		var vectors []containers.Vector
 		var closeFunc func()
-		vectors, closeFunc, err = blockio.LoadColumns2(
+		vectors, closeFunc, err = ioutil.LoadColumns2(
 			ctx,
 			[]uint16{uint16(schema.GetSingleSortKeyIdx())},
 			nil,
@@ -1624,14 +1624,16 @@ func (tbl *txnTable) contains(
 	}
 	if tbl.tombstoneTable.tableSpace.node != nil {
 		workspaceDeleteBatch := tbl.tombstoneTable.tableSpace.node.data
+		keyRowids := vector.MustFixedColWithTypeCheck[types.Rowid](keys.GetDownstreamVector())
+		workspaceRowids := vector.MustFixedColWithTypeCheck[types.Rowid](
+			workspaceDeleteBatch.GetVectorByName(objectio.TombstoneAttr_Rowid_Attr).GetDownstreamVector(),
+		)
 		for j := 0; j < keys.Length(); j++ {
 			if keys.IsNull(j) {
 				continue
 			}
-			rid := keys.Get(j).(types.Rowid)
 			for i := 0; i < workspaceDeleteBatch.Length(); i++ {
-				rowID := workspaceDeleteBatch.GetVectorByName(objectio.TombstoneAttr_Rowid_Attr).Get(i).(types.Rowid)
-				if rid == rowID {
+				if keyRowids[j] == workspaceRowids[i] {
 					containers.UpdateValue(keys.GetDownstreamVector(), uint32(j), nil, true, mp)
 				}
 			}
@@ -1667,7 +1669,7 @@ func (tbl *txnTable) contains(
 			totalRow -= blkRow
 			metaloc := objectio.BuildLocation(stats.ObjectName(), stats.Extent(), blkRow, i)
 
-			vectors, closeFunc, err := blockio.LoadColumns2(
+			vectors, closeFunc, err := ioutil.LoadColumns2(
 				tbl.store.ctx,
 				[]uint16{uint16(tbl.tombstoneTable.schema.GetSingleSortKeyIdx())},
 				nil,
@@ -1760,7 +1762,7 @@ func (tbl *txnTable) FillInWorkspaceDeletes(blkID types.Blockid, deletes **nulls
 			metaLocs = append(metaLocs, metaloc)
 		}
 		for _, loc := range metaLocs {
-			vectors, closeFunc, err := blockio.LoadColumns2(
+			vectors, closeFunc, err := ioutil.LoadColumns2(
 				tbl.store.ctx,
 				[]uint16{uint16(tbl.tombstoneTable.schema.GetSingleSortKeyIdx())},
 				nil,
@@ -1796,9 +1798,11 @@ func (tbl *txnTable) IsDeletedInWorkSpace(blkID *objectio.Blockid, row uint32) (
 	}
 	if tbl.tombstoneTable.tableSpace.node != nil {
 		node := tbl.tombstoneTable.tableSpace.node
+		rowids := vector.MustFixedColWithTypeCheck[types.Rowid](
+			node.data.GetVectorByName(objectio.TombstoneAttr_Rowid_Attr).GetDownstreamVector(),
+		)
 		for i := 0; i < node.data.Length(); i++ {
-			rowID := node.data.GetVectorByName(objectio.TombstoneAttr_Rowid_Attr).Get(i).(types.Rowid)
-			blk, rowOffset := rowID.Decode()
+			blk, rowOffset := rowids[i].Decode()
 			if blk.EQ(blkID) && row == rowOffset {
 				return true, nil
 			}
@@ -1823,7 +1827,7 @@ func (tbl *txnTable) IsDeletedInWorkSpace(blkID *objectio.Blockid, row uint32) (
 			metaLocs = append(metaLocs, metaloc)
 		}
 		for _, loc := range metaLocs {
-			vectors, closeFunc, err := blockio.LoadColumns2(
+			vectors, closeFunc, err := ioutil.LoadColumns2(
 				tbl.store.ctx,
 				[]uint16{uint16(tbl.tombstoneTable.schema.GetSingleSortKeyIdx())},
 				nil,
@@ -1837,9 +1841,9 @@ func (tbl *txnTable) IsDeletedInWorkSpace(blkID *objectio.Blockid, row uint32) (
 				return false, err
 			}
 			defer closeFunc()
+			rowids := vector.MustFixedColWithTypeCheck[types.Rowid](vectors[0].GetDownstreamVector())
 			for i := 0; i < vectors[0].Length(); i++ {
-				rowID := vectors[0].Get(i).(types.Rowid)
-				blk, rowOffset := rowID.Decode()
+				blk, rowOffset := rowids[i].Decode()
 				if blk.EQ(blkID) && row == rowOffset {
 					return true, nil
 				}

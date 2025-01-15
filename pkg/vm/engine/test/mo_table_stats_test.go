@@ -18,7 +18,6 @@ import (
 	"context"
 	"fmt"
 	"testing"
-	"time"
 
 	"github.com/lni/goutils/leaktest"
 	catalog2 "github.com/matrixorigin/matrixone/pkg/catalog"
@@ -248,7 +247,7 @@ func TestHandleGetChangedList(t *testing.T) {
 		testutil2.CompactBlocks(t, 0, p.T.GetDB(), dbName, schema, false)
 		txn, _ := p.T.StartTxn()
 		ts := txn.GetStartTS()
-		require.NoError(t, p.T.GetDB().ForceCheckpoint(p.Ctx, ts.Next(), time.Second*10))
+		require.NoError(t, p.T.GetDB().ForceCheckpoint(p.Ctx, ts.Next()))
 		require.NoError(t, txn.Commit(p.Ctx))
 
 		dbId = rel.GetDBID(p.Ctx)

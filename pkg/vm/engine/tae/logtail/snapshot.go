@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 
 	"go.uber.org/zap"
 
@@ -390,7 +391,7 @@ func (sm *SnapshotMeta) updateTableInfo(
 		if !info.deleteAt.IsEmpty() {
 			sm.aobjDelTsMap[info.deleteAt] = struct{}{}
 		}
-		objectBat, _, err := blockio.LoadOneBlock(
+		objectBat, _, err := ioutil.LoadOneBlock(
 			ctx,
 			fs,
 			info.stats.ObjectLocation(),
@@ -476,7 +477,7 @@ func (sm *SnapshotMeta) updateTableInfo(
 			panic(fmt.Sprintf("mo_table tombstone %v blk cnt %v",
 				info.stats.ObjectName(), info.stats.BlkCnt()))
 		}
-		objectBat, _, err := blockio.LoadOneBlock(
+		objectBat, _, err := ioutil.LoadOneBlock(
 			ctx,
 			fs,
 			info.stats.ObjectLocation(),
@@ -1281,7 +1282,7 @@ func (sm *SnapshotMeta) ReadMeta(ctx context.Context, name string, fs fileservic
 	default:
 	}
 
-	reader, err := blockio.NewFileReaderNoCache(fs, name)
+	reader, err := ioutil.NewFileReaderNoCache(fs, name)
 	if err != nil {
 		return err
 	}
@@ -1342,7 +1343,7 @@ func (sm *SnapshotMeta) ReadMeta(ctx context.Context, name string, fs fileservic
 }
 
 func (sm *SnapshotMeta) ReadTableInfo(ctx context.Context, name string, fs fileservice.FileService) error {
-	reader, err := blockio.NewFileReaderNoCache(fs, name)
+	reader, err := ioutil.NewFileReaderNoCache(fs, name)
 	if err != nil {
 		return err
 	}

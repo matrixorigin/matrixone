@@ -21,7 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
+	"github.com/matrixorigin/matrixone/pkg/objectio/mergeutil"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -43,13 +43,14 @@ type tableOffset struct {
 
 func MergeCheckpoint(
 	ctx context.Context,
+	taskName string,
 	sid string,
-	fs fileservice.FileService,
 	ckpEntries []*checkpoint.CheckpointEntry,
 	bf *bloomfilter.BloomFilter,
 	end *types.TS,
 	client checkpoint.Runner,
 	pool *mpool.MPool,
+	fs fileservice.FileService,
 ) (deleteFiles, newFiles []string, checkpointEntry *checkpoint.CheckpointEntry, ckpData *logtail.CheckpointData, err error) {
 	ckpData = logtail.NewCheckpointData(sid, pool)
 	datas := make([]*logtail.CheckpointData, 0)
@@ -61,8 +62,11 @@ func MergeCheckpoint(
 			return
 		default:
 		}
-		logutil.Info("[MergeCheckpoint]",
-			zap.String("checkpoint", ckpEntry.String()))
+		logutil.Info(
+			"GC-Merge-Checkpoint",
+			zap.String("task", taskName),
+			zap.String("entry", ckpEntry.String()),
+		)
 		var data *logtail.CheckpointData
 		var locations map[string]objectio.Location
 		if _, data, err = logtail.LoadCheckpointEntriesFromKey(
@@ -79,7 +83,7 @@ func MergeCheckpoint(
 		datas = append(datas, data)
 		var nameMeta string
 		if ckpEntry.GetType() == checkpoint.ET_Compacted {
-			nameMeta = ioutil.EncodeCKPMetadataFullName(
+			nameMeta = ioutil.EncodeCompactCKPMetadataFullName(
 				ckpEntry.GetStart(), ckpEntry.GetEnd(),
 			)
 		} else {
@@ -146,13 +150,13 @@ func MergeCheckpoint(
 
 	tidColIdx := 4
 	objectBatch := containers.ToCNBatch(ckpData.GetObjectBatchs())
-	err = mergesort.SortColumnsByIndex(objectBatch.Vecs, tidColIdx, pool)
+	err = mergeutil.SortColumnsByIndex(objectBatch.Vecs, tidColIdx, pool)
 	if err != nil {
 		return
 	}
 
 	tombstoneBatch := containers.ToCNBatch(ckpData.GetTombstoneObjectBatchs())
-	err = mergesort.SortColumnsByIndex(tombstoneBatch.Vecs, tidColIdx, pool)
+	err = mergeutil.SortColumnsByIndex(tombstoneBatch.Vecs, tidColIdx, pool)
 	if err != nil {
 		return
 	}
@@ -192,7 +196,7 @@ func MergeCheckpoint(
 		ckpData.UpdateTombstoneInsertMeta(tid, int32(table.offset), int32(table.end))
 	}
 	cnLocation, tnLocation, files, err := ckpData.WriteTo(
-		fs, logtail.DefaultCheckpointBlockRows, logtail.DefaultCheckpointSize,
+		ctx, logtail.DefaultCheckpointBlockRows, logtail.DefaultCheckpointSize, fs,
 	)
 	if err != nil {
 		return

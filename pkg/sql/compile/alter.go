@@ -15,9 +15,8 @@
 package compile
 
 import (
+	"context"
 	"fmt"
-
-	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -26,7 +25,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"go.uber.org/zap"
 )
+
+func convertDBEOB(ctx context.Context, e error, name string) error {
+	if moerr.IsMoErrCode(e, moerr.OkExpectedEOB) {
+		return moerr.NewBadDB(ctx, name)
+	}
+	return e
+}
 
 func (s *Scope) AlterTableCopy(c *Compile) error {
 	qry := s.Plan.GetDdl().GetAlterTable()
@@ -37,7 +44,7 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 	tblName := qry.GetTableDef().GetName()
 	dbSource, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
-		return moerr.NewBadDB(c.proc.Ctx, dbName)
+		return convertDBEOB(c.proc.Ctx, err, dbName)
 	}
 
 	originRel, err := dbSource.Relation(c.proc.Ctx, tblName, nil)
@@ -64,12 +71,7 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 		}
 
 		// 2. lock origin table
-		var partitionTableNames []string
-		tableDef := qry.GetTableDef()
-		if tableDef.Partition != nil {
-			partitionTableNames = tableDef.Partition.PartitionTableNames
-		}
-		if err = lockTable(c.proc.Ctx, c.e, c.proc, originRel, dbName, partitionTableNames, true); err != nil {
+		if err = lockTable(c.proc.Ctx, c.e, c.proc, originRel, dbName, true); err != nil {
 			if !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
 				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
 				c.proc.Error(c.proc.Ctx, "lock origin table for alter table",

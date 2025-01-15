@@ -26,11 +26,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/objectio/ckputil"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
@@ -122,17 +122,17 @@ func (c *CkpReplayer) readCheckpointEntries() (
 	})
 
 	var (
-		metaEntries      = make([]ioutil.TSRangeFile, 0)
+		metaFiles        = make([]ioutil.TSRangeFile, 0)
 		compactedEntries = make([]ioutil.TSRangeFile, 0)
 	)
 
-	// classify the files into metaEntries and compactedEntries
+	// classify the files into metaFiles and compactedEntries
 	for _, file := range files {
 		c.r.store.AddMetaFile(file.GetName())
 		if file.IsCompactExt() {
 			compactedEntries = append(compactedEntries, file)
 		} else if file.IsMetadataFile() {
-			metaEntries = append(metaEntries, file)
+			metaFiles = append(metaFiles, file)
 		}
 	}
 
@@ -161,12 +161,29 @@ func (c *CkpReplayer) readCheckpointEntries() (
 		if len(entries) != 1 {
 			panic(fmt.Sprintf("invalid compacted checkpoint file %s", maxEntry.GetName()))
 		}
-		c.r.store.TryAddNewCompactedCheckpointEntry(entries[0])
+		if err = c.r.ReplayCKPEntry(entries[0]); err != nil {
+			return
+		}
 	}
 
 	// always replay from the max metaEntry
-	if len(metaEntries) > 0 {
-		maxEntry := metaEntries[len(metaEntries)-1]
+	if len(metaFiles) > 0 {
+		var maxGlobalFile ioutil.TSRangeFile
+		for i := len(metaFiles) - 1; i >= 0; i-- {
+			start := metaFiles[i].GetStart()
+			if start.IsEmpty() {
+				maxGlobalFile = metaFiles[i]
+				break
+			}
+		}
+
+		maxFile := metaFiles[len(metaFiles)-1]
+
+		toReadFiles := []ioutil.TSRangeFile{maxFile}
+		if maxGlobalFile.GetName() != maxFile.GetName() {
+			toReadFiles = append(toReadFiles, maxGlobalFile)
+		}
+
 		updateGlobal := func(entry *CheckpointEntry) {
 			if entry.GetType() == ET_Global {
 				thisEnd := entry.GetEnd()
@@ -175,20 +192,43 @@ func (c *CkpReplayer) readCheckpointEntries() (
 				}
 			}
 		}
-		if allEntries, err = ReadEntriesFromMeta(
-			c.r.ctx,
-			c.r.rt.SID(),
-			c.dir,
-			maxEntry.GetName(),
-			0,
-			updateGlobal,
-			common.CheckpointAllocator,
-			c.r.rt.Fs.Service,
-		); err != nil {
-			return
+		var loopEntries []*CheckpointEntry
+		for _, oneFile := range toReadFiles {
+			if loopEntries, err = ReadEntriesFromMeta(
+				c.r.ctx,
+				c.r.rt.SID(),
+				c.dir,
+				oneFile.GetName(),
+				0,
+				updateGlobal,
+				common.CheckpointAllocator,
+				c.r.rt.Fs.Service,
+			); err != nil {
+				return
+			}
+			if len(allEntries) == 0 {
+				allEntries = loopEntries
+			} else {
+				allEntries = append(allEntries, loopEntries...)
+			}
 		}
+		allEntries = compute.SortAndDedup(
+			allEntries,
+			func(lh, rh **CheckpointEntry) bool {
+				lhEnd, rhEnd := (*lh).GetEnd(), (*rh).GetEnd()
+				return lhEnd.LT(&rhEnd)
+			},
+			func(lh, rh **CheckpointEntry) bool {
+				lhStart, rhStart := (*lh).GetStart(), (*rh).GetStart()
+				if !lhStart.EQ(&rhStart) {
+					return false
+				}
+				lhEnd, rhEnd := (*lh).GetEnd(), (*rh).GetEnd()
+				return lhEnd.EQ(&rhEnd)
+			},
+		)
 		for _, entry := range allEntries {
-			logutil.Debug(
+			logutil.Info(
 				"Read-CKP-META",
 				zap.String("entry", entry.String()),
 			)
@@ -246,7 +286,7 @@ func (c *CkpReplayer) ReadCkpFiles() (err error) {
 	}
 
 	for _, entry := range c.ckpEntries {
-		if err = blockio.PrefetchMeta(
+		if err = ioutil.PrefetchMeta(
 			r.rt.SID(), r.rt.Fs.Service, entry.GetLocation(),
 		); err != nil {
 			return
@@ -284,16 +324,24 @@ func (c *CkpReplayer) ReadCkpFiles() (err error) {
 		if entry == nil {
 			continue
 		}
-		if entry.GetType() == ET_Global {
+		if entry.IsGlobal() {
 			c.globalCkpIdx = i
-			r.store.AddGCKPReplayEntry(entry)
-		} else if entry.GetType() == ET_Incremental {
-			r.store.TryAddNewIncrementalCheckpointEntry(entry)
-		} else if entry.GetType() == ET_Backup {
-			r.store.TryAddNewBackupCheckpointEntry(entry)
+		}
+		if err = r.ReplayCKPEntry(entry); err != nil {
+			return
 		}
 	}
-	return nil
+
+	if len(c.ckpEntries) > 0 {
+		select {
+		case <-c.r.ctx.Done():
+			err = context.Cause(c.r.ctx)
+			return
+		case <-c.ckpEntries[len(c.ckpEntries)-1].Wait():
+		}
+	}
+
+	return
 }
 
 // ReplayThreeTablesObjectlist replays the object list the three tables, and check the LSN and TS.
@@ -430,13 +478,19 @@ func (c *CkpReplayer) ReplayCatalog(
 		_, err2 = mergesort.SortBlockColumns(cols, pkidx, c.r.rt.VectorPool.Transient)
 		return
 	}
-	c.r.catalog.RelayFromSysTableObjects(
+	closeFn := c.r.catalog.RelayFromSysTableObjects(
 		c.r.ctx,
 		readTxn,
 		c.dataF,
 		tables.ReadSysTableBatch,
 		sortFunc,
+		c,
 	)
+	c.wg.Wait()
+	for _, fn := range closeFn {
+		fn()
+	}
+	c.resetObjectCountMap()
 	// logutil.Info(c.r.catalog.SimplePPString(common.PPL0))
 	return
 }
@@ -499,8 +553,8 @@ func (c *CkpReplayer) ReplayObjectlist(phase string) (err error) {
 	logutil.Info(
 		"Replay-Checkpoints",
 		zap.String("phase", phase),
-		zap.Uint64("max table tid", maxTableID),
-		zap.Int("object count (create count + delete count)", maxObjectCount),
+		zap.Uint64("max-table-id", maxTableID),
+		zap.Int("object-count", maxObjectCount),
 		zap.Duration("apply-cost", c.applyDuration),
 		zap.Duration("read-cost", c.readDuration),
 		zap.Int("apply-count", c.applyCount),
@@ -515,6 +569,10 @@ func (c *CkpReplayer) Submit(tid uint64, replayFn func()) {
 	workerOffset := tid % uint64(len(c.objectReplayWorker))
 	c.objectCountMap[tid] = c.objectCountMap[tid] + 1
 	c.objectReplayWorker[workerOffset].Enqueue(replayFn)
+}
+
+func (c *CkpReplayer) resetObjectCountMap() {
+	c.objectCountMap = map[uint64]int{}
 }
 
 func (r *runner) BuildReplayer(
@@ -569,7 +627,7 @@ func MergeCkpMeta(
 
 	maxFile := metaFiles[len(metaFiles)-1]
 
-	reader, err := blockio.NewFileReader(sid, fs, maxFile.GetCKPFullName())
+	reader, err := ioutil.NewFileReader(fs, maxFile.GetCKPFullName())
 	if err != nil {
 		return "", err
 	}
@@ -657,6 +715,7 @@ func ReplayCheckpointEntries(bat *containers.Batch, checkpointVersion int) (entr
 			version:     version,
 			ckpLSN:      ckpLSN,
 			truncateLSN: truncateLSN,
+			doneC:       make(chan struct{}),
 		}
 		entries[i] = checkpointEntry
 		if typ == ET_Global {

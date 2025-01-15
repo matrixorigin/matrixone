@@ -30,7 +30,7 @@ employeeid    employeename    salary    salaryrank
 1    Alice    70000.00    4
 4    David    65000.00    5
 drop snapshot if exists sp06;
-create snapshot sp06 for account sys;
+create snapshot sp06 for account;
 drop database test01;
 restore account sys from snapshot sp06;
 select * from test01.EmployeeSalaries;
@@ -81,7 +81,7 @@ employeeid    employeename    salary    salaryrank
 1    Alice    70000.00    4
 4    David    65000.00    5
 drop snapshot if exists sp06;
-create snapshot sp06 for account sys;
+create snapshot sp06 for account;
 drop table EmployeeSalaries;
 drop view EmployeeSalaryRanking;
 restore account sys from snapshot sp06;
@@ -213,7 +213,7 @@ Human Resources    1000.00    0.00
 drop snapshot if exists sp06;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-create snapshot sp06 for account sys;
+create snapshot sp06 for account;
 drop database test01;
 restore account sys from snapshot sp06;
 select * from test01.employees;
@@ -541,7 +541,7 @@ Bob Johnson    3.70    3.60000000
 drop snapshot if exists sp06;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-create snapshot sp06 for account sys;
+create snapshot sp06 for account;
 drop database School;
 drop database University;
 drop database EducationSystem;

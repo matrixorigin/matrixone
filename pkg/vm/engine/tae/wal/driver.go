@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	storeDriver "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/batchstoredriver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/logservicedriver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"
@@ -78,24 +79,20 @@ func (driver *walDriver) GetCheckpointed() uint64 {
 	return driver.impl.GetCheckpointed(GroupPrepare)
 }
 func (driver *walDriver) replayhandle(handle store.ApplyHandle) store.ApplyHandle {
-	return func(group uint32, commitId uint64, payload []byte, typ uint16, info any) {
-		handle(group, commitId, payload, typ, nil)
+	return func(group uint32, commitId uint64, payload []byte, typ uint16, info any) storeDriver.ReplayEntryState {
+		return handle(group, commitId, payload, typ, nil)
 	}
 }
-func (driver *walDriver) Replay(handle store.ApplyHandle) error {
-	return driver.impl.Replay(driver.replayhandle(handle))
+func (driver *walDriver) Replay(ctx context.Context, handle store.ApplyHandle) error {
+	return driver.impl.Replay(ctx, driver.replayhandle(handle))
 }
 
 func (driver *walDriver) GetPenddingCnt() uint64 {
 	return driver.impl.GetPendding(GroupPrepare)
 }
 
-func (driver *walDriver) GetCurrSeqNum() uint64 {
+func (driver *walDriver) GetDSN() uint64 {
 	return driver.impl.GetCurrSeqNum(GroupPrepare)
-}
-
-func (driver *walDriver) LoadEntry(groupID uint32, lsn uint64) (LogEntry, error) {
-	return driver.impl.Load(groupID, lsn)
 }
 
 func (driver *walDriver) AppendEntry(group uint32, e LogEntry) (uint64, error) {

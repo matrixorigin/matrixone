@@ -3017,7 +3017,15 @@ var (
 		},
 		{
 			input:  "create pitr `pitr5` for table db01 t01 range 1 'h'",
-			output: "create pitr pitr5 for table db01 t01 range 1  h",
+			output: "create pitr pitr5 for table db01.t01 range 1  h",
+		},
+		{
+			input:  "create pitr `pitr3` range 1 'h'",
+			output: "create pitr pitr3 for account range 1  h",
+		},
+		{
+			input:  "create pitr `pitr5` for database db01 table t01 range 1 'h'",
+			output: "create pitr pitr5 for table db01.t01 range 1  h",
 		},
 		{
 			input: "show pitr",
@@ -3061,6 +3069,19 @@ var (
 		{
 			input:  "restore cluster from pitr pitr01 '2021-01-01 00:00:00'",
 			output: "restore cluster from pitr pitr01 timestamp = 2021-01-01 00:00:00",
+		},
+		{
+			input: "show recovery_window for account",
+		},
+		{
+			input: "show recovery_window for database db01",
+		},
+		{
+			input:  "show recovery_window for table db01 t01",
+			output: "show recovery_window for database db01 table t01",
+		},
+		{
+			input: "show recovery_window for account acc01",
 		},
 		{
 			input:  "show create table t1 {snapshot = 'sp01'}",

@@ -7126,9 +7126,8 @@ func Test_doDropAccount(t *testing.T) {
 		bh.sql2result["commit;"] = nil
 		bh.sql2result["rollback;"] = nil
 
-		sql := getAccountIdNamesSql + " for update"
+		sql, _ := getSqlForCheckTenant(ctx, "acc")
 		mrs := newMrsForGetAllAccounts([][]interface{}{
-			{uint64(0), "sys", "open", uint64(1), nil},
 			{uint64(1), "acc", "open", uint64(1), nil},
 		})
 		bh.sql2result[sql] = mrs
@@ -7142,6 +7141,9 @@ func Test_doDropAccount(t *testing.T) {
 
 		sql = fmt.Sprintf(getPubInfoSql, 1) + " order by update_time desc, created_time desc"
 		bh.sql2result[sql] = newMrsForSqlForGetPubs([][]interface{}{})
+
+		sql = "select 1 from mo_catalog.mo_columns where att_database = 'mo_catalog' and att_relname = 'mo_subs' and attname = 'sub_account_name'"
+		bh.sql2result[sql] = newMrsForSqlForGetSubs([][]interface{}{{1}})
 
 		sql = getSubsSql + " and sub_account_id = 1"
 		bh.sql2result[sql] = newMrsForSqlForGetSubs([][]interface{}{})
@@ -7187,7 +7189,7 @@ func Test_doDropAccount(t *testing.T) {
 		bh.sql2result["commit;"] = nil
 		bh.sql2result["rollback;"] = nil
 
-		sql := getAccountIdNamesSql + " for update"
+		sql, _ := getSqlForCheckTenant(ctx, "acc")
 		bh.sql2result[sql] = newMrsForGetAllAccounts([][]interface{}{})
 
 		sql, _ = getSqlForDeleteAccountFromMoAccount(context.TODO(), mustUnboxExprStr(stmt.Name))

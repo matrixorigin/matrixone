@@ -28,10 +28,10 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -176,7 +176,7 @@ func Test_Append(t *testing.T) {
 }
 
 func Test_Bug_CheckpointInsertObjectOverwrittenMergeDeletedObject(t *testing.T) {
-	blockio.RunPipelineTest(
+	ioutil.RunPipelineTest(
 		func() {
 			var (
 				txn          txnif.AsyncTxn
@@ -223,7 +223,7 @@ func Test_Bug_CheckpointInsertObjectOverwrittenMergeDeletedObject(t *testing.T) 
 				testutil2.CompactBlocks(t, accountId, taeEngine.GetDB(), databaseName, schema, false)
 				txn, _ = taeEngine.StartTxn()
 				ts := txn.GetStartTS()
-				taeEngine.GetDB().ForceCheckpoint(ctx, ts.Next(), time.Second*10)
+				taeEngine.GetDB().ForceCheckpoint(ctx, ts.Next())
 			}
 
 			{
@@ -447,7 +447,7 @@ func Test_EmptyObjectStats(t *testing.T) {
 		testutil2.CompactBlocks(t, accountId, taeEngine.GetDB(), databaseName, schema, false)
 		txn, _ = taeEngine.StartTxn()
 		ts := txn.GetStartTS()
-		taeEngine.GetDB().ForceCheckpoint(p.Ctx, ts.Next(), time.Second*10)
+		taeEngine.GetDB().ForceCheckpoint(p.Ctx, ts.Next())
 	}
 
 	var err error

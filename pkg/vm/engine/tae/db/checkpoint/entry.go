@@ -23,8 +23,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 )
@@ -122,35 +122,61 @@ func InheritCheckpointEntry(
 	return e
 }
 
-func (e *CheckpointEntry) Wait() <-chan struct{} {
-	return e.doneC
-}
+// ================================================================
+// ts comparison related
+// ================================================================
 
-func (e *CheckpointEntry) Done() {
-	close(e.doneC)
-}
-
+// compare with other entry
 // e.start >= o.end
 func (e *CheckpointEntry) AllGE(o *CheckpointEntry) bool {
 	return e.start.GE(&o.end)
 }
 
-func (e *CheckpointEntry) SetPolicyChecked() {
-	e.Lock()
-	defer e.Unlock()
-	e.policyChecked = true
+// e.end <= ts
+// it means that e is before ts
+func (e *CheckpointEntry) LEByTS(ts *types.TS) bool {
+	return e.end.LE(ts)
 }
+
+// false: e.start > to or e.end < from
+// true: otherwise
+func (e *CheckpointEntry) HasOverlap(from, to types.TS) bool {
+	if e.start.GT(&to) || e.end.LT(&from) {
+		return false
+	}
+	return true
+}
+
+// true: o.start == e.end + 1
+func (e *CheckpointEntry) IsYoungNeighbor(o *CheckpointEntry) bool {
+	next := e.end.Next()
+	return o.start.Equal(&next)
+}
+
+//===============================================================
+// execution related
+//===============================================================
+
+// it can be called multiple times
+// it will block until Done() is called
+func (e *CheckpointEntry) Wait() <-chan struct{} {
+	return e.doneC
+}
+
+// it can only be called at most once
+// it will unblock all Wait() calls
+func (e *CheckpointEntry) Done() {
+	close(e.doneC)
+}
+
+//===============================================================
+// getter related
+//===============================================================
 
 func (e *CheckpointEntry) IsPolicyChecked() bool {
 	e.RLock()
 	defer e.RUnlock()
 	return e.policyChecked
-}
-
-func (e *CheckpointEntry) SetFlushChecked() {
-	e.Lock()
-	defer e.Unlock()
-	e.flushChecked = true
 }
 
 func (e *CheckpointEntry) IsFlushChecked() bool {
@@ -165,46 +191,9 @@ func (e *CheckpointEntry) AllChecked() bool {
 	return e.policyChecked && e.flushChecked
 }
 
-func (e *CheckpointEntry) SetVersion(version uint32) {
-	e.Lock()
-	defer e.Unlock()
-	e.version = version
-}
-
-func (e *CheckpointEntry) SetLSN(ckpLSN, truncateLSN uint64) {
-	e.Lock()
-	defer e.Unlock()
-	e.ckpLSN = ckpLSN
-	e.truncateLSN = truncateLSN
-}
-func (e *CheckpointEntry) DeferRetirement() {
-	e.Lock()
-	defer e.Unlock()
-	e.refreshCnt++
-}
-func (e *CheckpointEntry) Age() time.Duration {
-	e.RLock()
-	defer e.RUnlock()
-	return time.Since(e.bornTime)
-}
-func (e *CheckpointEntry) ResetAge() {
-	e.Lock()
-	defer e.Unlock()
-	e.bornTime = time.Now()
-	e.refreshCnt = 0
-}
-func (e *CheckpointEntry) TooOld() bool {
-	e.RLock()
-	defer e.RUnlock()
-	return time.Since(e.bornTime) > time.Minute*3*time.Duration(e.refreshCnt+1)
-}
-func (e *CheckpointEntry) LSNString() string {
-	e.RLock()
-	defer e.RUnlock()
-	return fmt.Sprintf("%d-%d", e.ckpLSN, e.truncateLSN)
-}
-
 func (e *CheckpointEntry) LSN() uint64 {
+	e.RLock()
+	defer e.RUnlock()
 	return e.ckpLSN
 }
 
@@ -215,25 +204,11 @@ func (e *CheckpointEntry) GetState() State {
 	defer e.RUnlock()
 	return e.state
 }
+
 func (e *CheckpointEntry) IsCommitted() bool {
 	e.RLock()
 	defer e.RUnlock()
 	return e.state == ST_Finished
-}
-func (e *CheckpointEntry) HasOverlap(from, to types.TS) bool {
-	if e.start.GT(&to) || e.end.LT(&from) {
-		return false
-	}
-	return true
-}
-func (e *CheckpointEntry) LessEq(ts *types.TS) bool {
-	return e.end.LE(ts)
-}
-func (e *CheckpointEntry) SetLocation(cn, tn objectio.Location) {
-	e.Lock()
-	defer e.Unlock()
-	e.cnLocation = cn.Clone()
-	e.tnLocation = tn.Clone()
 }
 
 func (e *CheckpointEntry) GetLocation() objectio.Location {
@@ -249,11 +224,122 @@ func (e *CheckpointEntry) GetTNLocation() objectio.Location {
 }
 
 func (e *CheckpointEntry) GetVersion() uint32 {
+	e.RLock()
+	defer e.RUnlock()
 	return e.version
 }
 
 func (e *CheckpointEntry) GetTruncateLsn() uint64 {
+	e.RLock()
+	defer e.RUnlock()
 	return e.truncateLSN
+}
+
+func (e *CheckpointEntry) IsIncremental() bool {
+	return e.entryType == ET_Incremental
+}
+
+func (e *CheckpointEntry) IsGlobal() bool {
+	return e.entryType == ET_Global
+}
+
+func (e *CheckpointEntry) IsBackup() bool {
+	return e.entryType == ET_Backup
+}
+
+func (e *CheckpointEntry) IsCompact() bool {
+	return e.entryType == ET_Compacted
+}
+
+func (e *CheckpointEntry) GetType() EntryType {
+	return e.entryType
+}
+
+//===============================================================
+// setter related
+//===============================================================
+
+func (e *CheckpointEntry) SetPolicyChecked() {
+	e.Lock()
+	defer e.Unlock()
+	e.policyChecked = true
+}
+
+func (e *CheckpointEntry) SetFlushChecked() {
+	e.Lock()
+	defer e.Unlock()
+	e.flushChecked = true
+}
+
+func (e *CheckpointEntry) SetVersion(version uint32) {
+	e.Lock()
+	defer e.Unlock()
+	e.version = version
+}
+
+func (e *CheckpointEntry) SetLSN(ckpLSN, truncateLSN uint64) {
+	e.Lock()
+	defer e.Unlock()
+	e.ckpLSN = ckpLSN
+	e.truncateLSN = truncateLSN
+}
+
+func (e *CheckpointEntry) SetLocation(cn, tn objectio.Location) {
+	e.Lock()
+	defer e.Unlock()
+	e.cnLocation = cn.Clone()
+	e.tnLocation = tn.Clone()
+}
+
+//===============================================================
+// born time related
+//===============================================================
+
+func (e *CheckpointEntry) DeferRetirement() {
+	e.Lock()
+	defer e.Unlock()
+	e.refreshCnt++
+}
+
+func (e *CheckpointEntry) Age() time.Duration {
+	e.RLock()
+	defer e.RUnlock()
+	return time.Since(e.bornTime)
+}
+
+func (e *CheckpointEntry) ResetAge() {
+	e.Lock()
+	defer e.Unlock()
+	e.bornTime = time.Now()
+	e.refreshCnt = 0
+}
+
+func (e *CheckpointEntry) TooOld() bool {
+	e.RLock()
+	defer e.RUnlock()
+	return time.Since(e.bornTime) > time.Minute*3*time.Duration(e.refreshCnt+1)
+}
+
+//===============================================================
+// state related
+//===============================================================
+
+func (e *CheckpointEntry) IsRunning() bool {
+	e.RLock()
+	defer e.RUnlock()
+	return e.state == ST_Running
+}
+
+func (e *CheckpointEntry) IsPendding() bool {
+	e.RLock()
+	defer e.RUnlock()
+	return e.state == ST_Pending
+}
+
+func (e *CheckpointEntry) IsFinished() bool {
+	e.RLock()
+	defer e.RUnlock()
+	return e.state == ST_Finished
 }
 
 func (e *CheckpointEntry) SetState(state State) (ok bool) {
@@ -272,28 +358,14 @@ func (e *CheckpointEntry) SetState(state State) (ok bool) {
 	return
 }
 
-func (e *CheckpointEntry) IsRunning() bool {
-	e.RLock()
-	defer e.RUnlock()
-	return e.state == ST_Running
-}
-func (e *CheckpointEntry) IsPendding() bool {
-	e.RLock()
-	defer e.RUnlock()
-	return e.state == ST_Pending
-}
-func (e *CheckpointEntry) IsFinished() bool {
-	e.RLock()
-	defer e.RUnlock()
-	return e.state == ST_Finished
-}
+//===============================================================
+// string related
+//===============================================================
 
-func (e *CheckpointEntry) IsIncremental() bool {
-	return e.entryType == ET_Incremental
-}
-
-func (e *CheckpointEntry) GetType() EntryType {
-	return e.entryType
+func (e *CheckpointEntry) LSNString() string {
+	e.RLock()
+	defer e.RUnlock()
+	return fmt.Sprintf("%d-%d", e.ckpLSN, e.truncateLSN)
 }
 
 func (e *CheckpointEntry) String() string {
@@ -317,6 +389,10 @@ func (e *CheckpointEntry) String() string {
 	)
 }
 
+//===============================================================
+// read related
+//===============================================================
+
 func (e *CheckpointEntry) Prefetch(
 	ctx context.Context,
 	fs *objectio.ObjectFS,
@@ -335,7 +411,7 @@ func (e *CheckpointEntry) Read(
 	fs *objectio.ObjectFS,
 	data *logtail.CheckpointData,
 ) (err error) {
-	reader, err := blockio.NewObjectReader(e.sid, fs.Service, e.tnLocation)
+	reader, err := ioutil.NewObjectReader(fs.Service, e.tnLocation)
 	if err != nil {
 		return
 	}
@@ -371,7 +447,7 @@ func (e *CheckpointEntry) ReadMetaIdx(
 	fs *objectio.ObjectFS,
 	data *logtail.CheckpointData,
 ) (err error) {
-	reader, err := blockio.NewObjectReader(e.sid, fs.Service, e.tnLocation)
+	reader, err := ioutil.NewObjectReader(fs.Service, e.tnLocation)
 	if err != nil {
 		return
 	}
@@ -381,12 +457,12 @@ func (e *CheckpointEntry) ReadMetaIdx(
 func (e *CheckpointEntry) GetTableByID(
 	ctx context.Context, fs *objectio.ObjectFS, tid uint64,
 ) (ins, del, dataObject, tombstoneObject *api.Batch, err error) {
-	reader, err := blockio.NewObjectReader(e.sid, fs.Service, e.cnLocation)
+	reader, err := ioutil.NewObjectReader(fs.Service, e.cnLocation)
 	if err != nil {
 		return
 	}
 	data := logtail.NewCNCheckpointData(e.sid)
-	err = blockio.PrefetchMeta(e.sid, fs.Service, e.cnLocation)
+	err = ioutil.PrefetchMeta(e.sid, fs.Service, e.cnLocation)
 	if err != nil {
 		return
 	}

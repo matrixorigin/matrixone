@@ -16,11 +16,13 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"
 )
@@ -116,13 +118,10 @@ func main() {
 	t0 := time.Now()
 
 	s = store.NewStoreWithBatchStoreDriver(sampleDir, name, nil)
-	a := func(group uint32, commitId uint64, payload []byte, typ uint16, info any) {
+	a := func(group uint32, commitId uint64, payload []byte, typ uint16, info any) driver.ReplayEntryState {
 		// fmt.Printf("%s", payload)
+		return driver.RE_Nomal
 	}
-	err = s.Replay(a)
-	if err != nil {
-		panic(err)
-	}
-
-	logutil.Infof("Open and replay takes %v", time.Since(t0))
+	err = s.Replay(context.Background(), a)
+	logutil.Infof("Open and replay takes %v, err = %v", time.Since(t0), err)
 }

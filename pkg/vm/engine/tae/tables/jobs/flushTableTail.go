@@ -32,10 +32,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -501,7 +501,7 @@ func (task *flushTableTailTask) prepareAObjSortedData(
 	totalRowCnt := bat.Length()
 	task.aObjDeletesCnt += bat.Deletes.GetCardinality()
 
-	if isTombstone && bat.Deletes != nil {
+	if isTombstone && bat.Deletes.GetCardinality() > 0 {
 		panic(fmt.Sprintf("logic err, tombstone %v has deletes", obj.GetID().String()))
 	}
 
@@ -671,7 +671,7 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context, isTombstone bool
 	// write!
 	objID := objectio.NewObjectid()
 	name := objectio.BuildObjectNameWithObjectID(objID)
-	writer, err := blockio.NewBlockWriterNew(
+	writer, err := ioutil.NewBlockWriterNew(
 		task.rt.Fs.Service,
 		name,
 		schema.Version,

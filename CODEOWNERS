@@ -35,6 +35,8 @@
 
 /pkg/backup @daviszhen @LeftHandCold @qingxinhome
 
+/pkg/datasync @volgariver6
+
 # subdirectory of pkg
 # pkg/catalog
 /pkg/catalog @XuPeng-SH

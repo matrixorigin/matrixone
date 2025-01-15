@@ -53,11 +53,17 @@ type FlushMutableCfg struct {
 	ForceFlushCheckInterval time.Duration
 }
 
+type tableAndSize struct {
+	tbl   *catalog.TableEntry
+	asize int
+	dsize int
+}
+
 type Flusher interface {
 	IsAllChangesFlushed(start, end types.TS, doPrint bool) bool
 	FlushTable(ctx context.Context, dbID, tableID uint64, ts types.TS) error
-	ForceFlush(ts types.TS, ctx context.Context, duration time.Duration) error
-	ForceFlushWithInterval(ts types.TS, ctx context.Context, forceDuration, flushInterval time.Duration) (err error)
+	ForceFlush(ctx context.Context, ts types.TS) error
+	ForceFlushWithInterval(ctx context.Context, ts types.TS, flushInterval time.Duration) (err error)
 	ChangeForceFlushTimeout(timeout time.Duration)
 	ChangeForceCheckInterval(interval time.Duration)
 	GetCfg() FlushCfg
@@ -212,22 +218,22 @@ func (f *flusher) FlushTable(ctx context.Context, dbID, tableID uint64, ts types
 	return impl.FlushTable(ctx, dbID, tableID, ts)
 }
 
-func (f *flusher) ForceFlush(ts types.TS, ctx context.Context, duration time.Duration) error {
+func (f *flusher) ForceFlush(ctx context.Context, ts types.TS) error {
 	impl := f.impl.Load()
 	if impl == nil {
 		return ErrFlusherStopped
 	}
-	return impl.ForceFlush(ts, ctx, duration)
+	return impl.ForceFlush(ctx, ts)
 }
 
 func (f *flusher) ForceFlushWithInterval(
-	ts types.TS, ctx context.Context, forceDuration, flushInterval time.Duration,
+	ctx context.Context, ts types.TS, flushInterval time.Duration,
 ) (err error) {
 	impl := f.impl.Load()
 	if impl == nil {
 		return ErrFlusherStopped
 	}
-	return impl.ForceFlushWithInterval(ts, ctx, forceDuration, flushInterval)
+	return impl.ForceFlushWithInterval(ctx, ts, flushInterval)
 }
 
 func (f *flusher) ChangeForceFlushTimeout(timeout time.Duration) {
@@ -593,15 +599,17 @@ func (flusher *flushImpl) ChangeForceCheckInterval(interval time.Duration) {
 }
 
 func (flusher *flushImpl) ForceFlush(
-	ts types.TS, ctx context.Context, forceDuration time.Duration,
+	ctx context.Context, ts types.TS,
 ) (err error) {
 	return flusher.ForceFlushWithInterval(
-		ts, ctx, forceDuration, 0,
+		ctx, ts, 0,
 	)
 }
 
 func (flusher *flushImpl) ForceFlushWithInterval(
-	ts types.TS, ctx context.Context, forceDuration, flushInterval time.Duration,
+	ctx context.Context,
+	ts types.TS,
+	flushInterval time.Duration,
 ) (err error) {
 	makeRequest := func() *FlushRequest {
 		tree := flusher.sourcer.ScanInRangePruned(types.TS{}, ts)
@@ -629,17 +637,13 @@ func (flusher *flushImpl) ForceFlushWithInterval(
 
 	cfg := flusher.mutableCfg.Load()
 
-	if forceDuration <= 0 {
-		forceDuration = cfg.ForceFlushTimeout
-	}
 	if flushInterval <= 0 {
 		flushInterval = cfg.ForceFlushCheckInterval
 	}
-	if err = common.RetryWithIntervalAndTimeout(
+	if err = common.RetryWithInterval(
+		ctx,
 		op,
-		forceDuration,
 		flushInterval,
-		false,
 	); err != nil {
 		return moerr.NewInternalErrorf(ctx, "force flush failed: %v", err)
 	}
@@ -648,7 +652,6 @@ func (flusher *flushImpl) ForceFlushWithInterval(
 		err = moerr.NewInternalError(ctx, sarg)
 	}
 	return
-
 }
 
 func (flusher *flushImpl) GetCfg() FlushCfg {
@@ -662,7 +665,9 @@ func (flusher *flushImpl) GetCfg() FlushCfg {
 }
 
 func (flusher *flushImpl) FlushTable(
-	ctx context.Context, dbID, tableID uint64, ts types.TS,
+	ctx context.Context,
+	dbID, tableID uint64,
+	ts types.TS,
 ) (err error) {
 	iarg, sarg, flush := fault.TriggerFault("flush_table_error")
 	if flush && (iarg == 0 || rand.Int63n(iarg) == 0) {
@@ -698,16 +703,11 @@ func (flusher *flushImpl) FlushTable(
 
 	cfg := flusher.mutableCfg.Load()
 
-	err = common.RetryWithIntervalAndTimeout(
+	err = common.RetryWithInterval(
+		ctx,
 		op,
-		cfg.ForceFlushTimeout,
 		cfg.ForceFlushCheckInterval,
-		true,
 	)
-	if moerr.IsMoErrCode(err, moerr.ErrInternal) || moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
-		logutil.Warnf("Flush %d-%d :%v", dbID, tableID, err)
-		return nil
-	}
 	return
 }
 

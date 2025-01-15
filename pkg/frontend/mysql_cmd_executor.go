@@ -1578,6 +1578,15 @@ func handleShowAccounts(ses FeSession, execCtx *ExecCtx, sa *tree.ShowAccounts) 
 	return err
 }
 
+// handleShowRecoveryWindow lists the info of recovery window
+func handleShowRecoveryWindow(ses FeSession, execCtx *ExecCtx, srw *tree.ShowRecoveryWindow) error {
+	err := doShowRecoveryWindow(execCtx.reqCtx, ses.(*Session), srw)
+	if err != nil {
+		return err
+	}
+	return err
+}
+
 // handleShowCollation lists the info of collation
 func handleShowCollation(ses FeSession, execCtx *ExecCtx, sc *tree.ShowCollation) error {
 	err := doShowCollation(ses.(*Session), execCtx, execCtx.proc, sc)
@@ -3212,7 +3221,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 			logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, err)
 		}
 	}()
-	_, _, _ = fault.TriggerFault("exec_request_panic")
+	_, _, _ = fault.TriggerFaultInDomain(fault.DomainFrontend, "exec_request_panic")
 
 	ses.EnterFPrint(FPExecRequest)
 	defer ses.ExitFPrint(FPExecRequest)

@@ -34,11 +34,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/frontend/constant"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -116,13 +116,13 @@ func saveBatch(ctx context.Context, ses *Session, bat *batch.Batch) error {
 
 	s := ses.curResultSize + float64(bat.Size())/(1024*1024)
 	if s > ses.limitResultSize {
-		ses.Info(ctx, "open save query result", zap.Float64("current result size:", s))
+		ses.Debug(ctx, "open save query result", zap.Float64("current result size:", s))
 		return nil
 	}
 	fs := getPu(ses.GetService()).FileService
 	// write query result
 	path := catalog.BuildQueryResultPath(ses.GetTenantInfo().GetTenant(), uuid.UUID(ses.GetStmtId()).String(), ses.GetIncBlockIdx())
-	ses.Info(ctx, "open save query result", zap.String("statemant id is:", uuid.UUID(ses.GetStmtId()).String()), zap.String("fileservice name is:", fs.Name()), zap.String("write path is:", path), zap.Float64("current result size:", s))
+	ses.Debug(ctx, "open save query result", zap.String("statemant id is:", uuid.UUID(ses.GetStmtId()).String()), zap.String("fileservice name is:", fs.Name()), zap.String("write path is:", path), zap.Float64("current result size:", s))
 	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterQueryResult, path, fs)
 	if err != nil {
 		return err
@@ -362,7 +362,7 @@ func checkPrivilege(sid string, uuids []string, reqCtx context.Context, ses *Ses
 	for _, id := range uuids {
 		// var size int64 = -1
 		path := catalog.BuildQueryResultMetaPath(ses.GetTenantInfo().GetTenant(), id)
-		reader, err := blockio.NewFileReader(sid, f, path)
+		reader, err := ioutil.NewFileReader(f, path)
 		if err != nil {
 			return err
 		}
@@ -423,7 +423,7 @@ func simpleAstMarshal(stmt tree.Statement) ([]byte, error) {
 		*tree.ShowTableNumber, *tree.ShowColumnNumber,
 		*tree.ShowTableValues, *tree.ShowNodeList,
 		*tree.ShowLocks, *tree.ShowFunctionOrProcedureStatus, *tree.ShowConnectors,
-		*tree.ShowLogserviceReplicas, *tree.ShowLogserviceStores, *tree.ShowLogserviceSettings:
+		*tree.ShowLogserviceReplicas, *tree.ShowLogserviceStores, *tree.ShowLogserviceSettings, *tree.ShowRecoveryWindow:
 		s.Typ = int(astShowNone)
 	case *tree.ExplainFor, *tree.ExplainAnalyze, *tree.ExplainStmt:
 		s.Typ = int(astExplain)
@@ -553,7 +553,7 @@ type resultFileInfo struct {
 func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportParam) error {
 	var err error
 	var columnDefs *plan.ResultColDef
-	var reader *blockio.BlockReader
+	var reader *ioutil.BlockReader
 	var blocks []objectio.BlockObject
 	var files []resultFileInfo
 
@@ -690,7 +690,7 @@ func openResultMeta(ctx context.Context, ses *Session, queryId string) (*plan.Re
 	}
 	metaFile := catalog.BuildQueryResultMetaPath(account.GetTenant(), queryId)
 	// read meta's meta
-	reader, err := blockio.NewFileReader(ses.service, getPu(ses.GetService()).FileService, metaFile)
+	reader, err := ioutil.NewFileReader(getPu(ses.GetService()).FileService, metaFile)
 	if err != nil {
 		return nil, err
 	}
@@ -748,10 +748,10 @@ func getResultFiles(ctx context.Context, ses *Session, queryId string) ([]result
 }
 
 // openResultFile reads all blocks of the result file
-func openResultFile(ctx context.Context, ses *Session, fileName string, fileSize int64) (*blockio.BlockReader, []objectio.BlockObject, error) {
+func openResultFile(ctx context.Context, ses *Session, fileName string, fileSize int64) (*ioutil.BlockReader, []objectio.BlockObject, error) {
 	// read result's blocks
 	filePath := getPathOfQueryResultFile(fileName)
-	reader, err := blockio.NewFileReader(ses.GetService(), getPu(ses.GetService()).FileService, filePath)
+	reader, err := ioutil.NewFileReader(getPu(ses.GetService()).FileService, filePath)
 	if err != nil {
 		return nil, nil, err
 	}

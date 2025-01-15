@@ -157,6 +157,8 @@ const (
 	MO_PITR_ACCOUNT_ID    = "account_id"
 	MO_PITR_DB_NAME       = "database_name"
 	MO_PITR_TABLE_NAME    = "table_name"
+	MO_PITR_STATUS        = "pitr_status"
+	MO_PITR_CHANGED_TIME  = "pitr_status_changed_time"
 
 	MO_RETENTION = "mo_retention"
 
@@ -166,6 +168,8 @@ const (
 	MO_DATA_KEY = "mo_data_key"
 
 	MO_TABLE_STATS = "mo_table_stats_alpha"
+
+	MO_ACCOUNT_LOCK = "__mo_account_lock"
 )
 
 func IsSystemTable(id uint64) bool {

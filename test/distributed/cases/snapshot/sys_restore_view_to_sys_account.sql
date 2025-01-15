@@ -23,7 +23,7 @@ show create view v02;
 select * from v02;
 
 drop snapshot if exists sp100;
-create snapshot sp100 for account sys;
+create snapshot sp100 for account;
 
 delete from table01 where col1 = 1;
 select * from v01;
@@ -100,7 +100,7 @@ create view v05 as select * from v04;
 select * from v05;
 
 drop snapshot if exists sp02;
-create snapshot sp02 for account sys;
+create snapshot sp02 for account;
 
 drop view v04;
 select * from v04;
@@ -167,7 +167,7 @@ from
 select * from EmployeeDepartmentView;
 
 drop snapshot if exists sp05;
-create snapshot sp05 for account sys;
+create snapshot sp05 for account;
 
 drop table Employees;
 select * from EmployeeDepartmentView;
@@ -234,7 +234,7 @@ select * from department_view;
 select * from employee_with_department_view;
 
 drop snapshot if exists sp04;
-create snapshot sp04 for account sys;
+create snapshot sp04 for account;
 
 select * from employee_view {snapshot = 'sp04'};
 select * from department_view {snapshot = 'sp04'};
@@ -272,7 +272,7 @@ drop table departments;
 
 
 
-
+-- @bvt:issue#16438
 -- view in partition table
 drop table if exists partition01;
 create table partition01 (
@@ -296,19 +296,23 @@ insert into partition01 values (9001,'1980-12-17', 'SMITH', 'CLERK', 'F', '2008-
 drop view if exists view01;
 create view view01 as select * from partition01;
 select * from view01;
+-- @bvt:issue
 
 drop snapshot if exists sp05;
-create snapshot sp05 for account sys;
+create snapshot sp05 for account;
 
+-- @bvt:issue#16438
 insert into partition01 values (9003,'1999-02-20', 'BOB', 'DOCTOR', 'F', '2009-02-20');
 select * from view01;
 select * from view01{snapshot = 'sp05'};
+-- @bvt:issue
 
 drop snapshot if exists sp06;
-create snapshot sp06 for account sys;
+create snapshot sp06 for account;
 
 restore account sys from snapshot sp05;
 
+-- @bvt:issue#16438
 select * from partition01;
 select * from partition01 {snapshot = 'sp05'};
 select * from view01;
@@ -317,17 +321,24 @@ select * from view01{snapshot = 'sp05'};
 drop table partition01;
 select * from view01;
 select * from view01{snapshot = 'sp05'};
+-- @bvt:issue
 
 restore account sys from snapshot sp06;
+-- @bvt:issue#16438
 select * from view01;
 select * from partition01;
 select * from partition01 {snapshot = 'sp06'};
 select * from view01{snapshot = 'sp06'};
+-- @bvt:issue
 
+-- @bvt:issue#16438
 drop view view01;
+-- @bvt:issue
 drop snapshot sp06;
 drop snapshot sp05;
+-- @bvt:issue#16438
 drop table partition01;
+-- @bvt:issue
 drop database test;
 
 
@@ -361,7 +372,7 @@ from
 select * from EmployeeSalaryRanking;
 
 drop snapshot if exists sp06;
-create snapshot sp06 for account sys;
+create snapshot sp06 for account;
 
 drop database test01;
 select * from test01.EmployeeSalaryRanking;
@@ -436,7 +447,7 @@ order by
 select * from StudentCoursesView;
 
 drop snapshot if exists sp07;
-create snapshot sp07 for account sys;
+create snapshot sp07 for account;
 
 drop table Enrollments;
 drop table students;
@@ -497,7 +508,7 @@ from employees
 group by department;
 
 drop snapshot if exists sp10;
-create snapshot sp10 for account sys;
+create snapshot sp10 for account;
 
 drop database test02;
 
@@ -567,7 +578,7 @@ from test04.employee_view e join test03.department_view d on e.department_id = d
 select * from employee_with_department_view;
 
 drop snapshot if exists sp100;
-create snapshot sp100 for account sys;
+create snapshot sp100 for account;
 
 drop database test04;
 
@@ -579,7 +590,7 @@ select * from test03.department_view {snapshot = 'sp100'};
 select * from test05.employee_with_department_view {snapshot = 'sp100'};
 
 drop snapshot if exists sp101;
-create snapshot sp101 for account sys;
+create snapshot sp101 for account;
 
 drop database test03;
 drop database test05;
