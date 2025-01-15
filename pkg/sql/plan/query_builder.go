@@ -2001,7 +2001,6 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 		if err != nil {
 			return 0, err
 		}
-		ctx.views = append(ctx.views, subCtx.views...)
 
 		if idx == 0 {
 			projectLength = len(builder.qry.Nodes[nodeID].ProjectList)
@@ -2324,10 +2323,6 @@ func (builder *QueryBuilder) bindNoRecursiveCte(
 	subCtx.cteName = table
 	subCtx.snapshot = cteRef.snapshot
 	subCtx.recordCteInBinding(table, cteRef)
-	//reset defaultDatabase
-	if len(cteRef.defaultDatabase) > 0 {
-		subCtx.defaultDatabase = cteRef.defaultDatabase
-	}
 	cteRef.isRecursive = false
 
 	oldSnapshot := builder.compCtx.GetSnapshot()
@@ -2341,7 +2336,6 @@ func (builder *QueryBuilder) bindNoRecursiveCte(
 	if subCtx.hasSingleRow {
 		ctx.hasSingleRow = true
 	}
-	ctx.views = append(ctx.views, subCtx.views...)
 
 	cols := cteRef.ast.Name.Cols
 
@@ -2388,9 +2382,6 @@ func (builder *QueryBuilder) bindRecursiveCte(
 		subCtx := NewBindContext(builder, ctx)
 		subCtx.maskedCTEs = cteRef.maskedCTEs
 		subCtx.cteName = table
-		if len(cteRef.defaultDatabase) > 0 {
-			subCtx.defaultDatabase = cteRef.defaultDatabase
-		}
 		subCtx.recSelect = true
 		subCtx.sinkTag = initCtx.sinkTag
 		subCtx.cteByName = make(map[string]*CTERef)
@@ -4000,17 +3991,18 @@ func (builder *QueryBuilder) bindView(
 	}
 	viewCtx.defaultDatabase = defaultDatabase
 
-	// consist with frontend.genKey()
-	viewCtx.views = append(viewCtx.views, schema+"#"+table)
-	ctx.views = append(viewCtx.views, schema+"#"+table)
-
-	viewName := string(viewStmt.Name.ObjectName)
-	if viewCtx.viewInBinding(viewName, viewStmt) {
-		return 0, moerr.NewParseErrorf(builder.GetContext(), "view %s reference itself", viewName)
+	if viewCtx.viewInBinding(schema, table, viewStmt) {
+		return 0, moerr.NewParseErrorf(builder.GetContext(), "view %s reference itself", table)
 	}
-	viewCtx.cteName = viewName
+	viewCtx.cteName = table
 
-	return builder.bindSelect(viewStmt.AsSource, viewCtx, false)
+	nodeID, err = builder.bindSelect(viewStmt.AsSource, viewCtx, false)
+	if err != nil {
+		return
+	}
+	ctx.recordViews([]string{schema + "#" + table})
+	ctx.recordViews(viewCtx.views)
+	return
 }
 
 func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, preNodeId int32, leftCtx *BindContext) (nodeID int32, err error) {
@@ -4028,7 +4020,6 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 		if subCtx.hasSingleRow {
 			ctx.hasSingleRow = true
 		}
-		ctx.views = append(ctx.views, subCtx.views...)
 
 	case *tree.TableName:
 		schema := string(tbl.SchemaName)
@@ -4162,11 +4153,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 			nodeType = plan.Node_SOURCE_SCAN
 		} else if tableDef.TableType == catalog.SystemViewRel {
 			if yes, dbOfView, nameOfView := builder.compCtx.GetBuildingAlterView(); yes {
-				currentDB := schema
-				if currentDB == "" {
-					currentDB = builder.compCtx.DefaultDatabase()
-				}
-				if dbOfView == currentDB && nameOfView == table {
+				if dbOfView == schema && nameOfView == table {
 					return 0, moerr.NewInternalErrorf(builder.GetContext(), "there is a recursive reference to the view %s", nameOfView)
 				}
 			}
@@ -4499,7 +4486,6 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 	if err != nil {
 		return 0, err
 	}
-	ctx.views = append(ctx.views, leftCtx.views...)
 
 	if _, ok := tbl.Right.(*tree.TableFunction); ok {
 		return 0, moerr.NewSyntaxError(builder.GetContext(), "Every table function must have an alias")
@@ -4508,7 +4494,6 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 	if err != nil {
 		return 0, err
 	}
-	ctx.views = append(ctx.views, rightCtx.views...)
 
 	if builder.qry.Nodes[rightChildID].NodeType == plan.Node_FUNCTION_SCAN {
 		if joinType != plan.Node_INNER {
@@ -4608,14 +4593,12 @@ func (builder *QueryBuilder) buildApplyTable(tbl *tree.ApplyTableExpr, ctx *Bind
 	if err != nil {
 		return 0, err
 	}
-	ctx.views = append(ctx.views, leftCtx.views...)
 
 	rightChildID, err := builder.buildTable(tbl.Right, rightCtx, leftChildID, leftCtx)
 	if err != nil {
 		return 0, err
 	}
 	builder.qry.Nodes[rightChildID].Children = nil //ignore the child of table_function in apply
-	ctx.views = append(ctx.views, rightCtx.views...)
 
 	err = ctx.mergeContexts(builder.GetContext(), leftCtx, rightCtx)
 	if err != nil {
@@ -4683,6 +4666,8 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 		nodeId, err = builder.buildFullTextIndexTokenize(tbl, ctx, exprs, childId)
 	case "stage_list":
 		nodeId, err = builder.buildStageList(tbl, ctx, exprs, childId)
+	case "moplugin_table":
+		nodeId, err = builder.buildPluginExec(tbl, ctx, exprs, childId)
 	default:
 		err = moerr.NewNotSupportedf(builder.GetContext(), "table function '%s' not supported", id)
 	}
