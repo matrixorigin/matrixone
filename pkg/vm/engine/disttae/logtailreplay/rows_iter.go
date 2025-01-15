@@ -34,7 +34,7 @@ type RowsIter interface {
 
 type rowsIter struct {
 	ts           types.TS
-	iter         btree.IterG[RowEntry]
+	iter         btree.IterG[*RowEntry]
 	firstCalled  bool
 	lastRowID    types.Rowid
 	checkBlockID bool
@@ -48,7 +48,7 @@ func (p *rowsIter) Next() bool {
 	for {
 		if !p.firstCalled {
 			if p.checkBlockID {
-				if !p.iter.Seek(RowEntry{
+				if !p.iter.Seek(&RowEntry{
 					BlockID: p.blockID,
 				}) {
 					return false
@@ -91,7 +91,7 @@ func (p *rowsIter) Next() bool {
 }
 
 func (p *rowsIter) Entry() RowEntry {
-	return p.iter.Item()
+	return *p.iter.Item()
 }
 
 func (p *rowsIter) Close() error {
@@ -103,7 +103,7 @@ type primaryKeyIter struct {
 	ts                types.TS
 	spec              PrimaryKeyMatchSpec
 	iter              btree.IterG[*PrimaryIndexEntry]
-	rows              *btree.BTreeG[RowEntry]
+	rows              *btree.BTreeG[*RowEntry]
 	primaryIndex      *btree.BTreeG[*PrimaryIndexEntry]
 	tombstoneRowIdIdx *btree.BTreeG[*PrimaryIndexEntry]
 	curRow            RowEntry
@@ -507,7 +507,7 @@ func (p *primaryKeyIter) isPKItemValid(pkItem PrimaryIndexEntry) bool {
 	iter := p.rows.Iter()
 	defer iter.Release()
 
-	var pivot = RowEntry{
+	var pivot = &RowEntry{
 		Time:    p.ts,
 		BlockID: pkItem.BlockID,
 		RowID:   pkItem.RowID,
@@ -532,7 +532,7 @@ func (p *primaryKeyIter) isPKItemValid(pkItem PrimaryIndexEntry) bool {
 		}
 
 		if row.ID == pkItem.RowEntryID {
-			p.curRow = row
+			p.curRow = *row
 			return true
 		}
 
