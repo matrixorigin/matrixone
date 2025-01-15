@@ -180,7 +180,7 @@ func (r *v1Entry) Marshal() (buf []byte, err error) {
 
 func (r *v1Entry) WriteTo(w io.Writer) (n int64, err error) {
 	r.EntryType = IOET_WALRecord
-	r.Version = IOET_WALRecord_CurrVer
+	r.Version = IOET_WALRecord_V1
 	if _, err = w.Write(types.EncodeUint16(&r.EntryType)); err != nil {
 		return 0, err
 	}
