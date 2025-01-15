@@ -60,6 +60,9 @@ ifeq ($(UNAME_M),x86_64)
   ifeq ($(CC),)
 	USEARCH_CMAKE_FLAG += -DUSEARCH_USE_OPENMP=1 -DUSEARCH_USE_SIMSIMD=1
   endif
+  ifeq ($(CC),cc)
+	USEARCH_CMAKE_FLAG += -DUSEARCH_USE_OPENMP=1 -DUSEARCH_USE_SIMSIMD=1
+  endif
 endif
 
 install/include/usearch.h:
@@ -68,6 +71,7 @@ install/include/usearch.h:
 	cp -r $(FP16_DIR)/* $(USEARCH_DIR)/fp16
 	cp -r $(SIMSIMD_DIR)/* $(USEARCH_DIR)/simsimd
 	cp -r $(STRINGZILLA_DIR)/* $(USEARCH_DIR)/stringzilla
+	@echo $(CC)
 	(cd $(USEARCH_DIR) && mkdir build && cd build && cmake $(USEARCH_CMAKE_FLAG) .. && make)
 ifeq ($(UNAME_S),darwin)
 	cp $(USEARCH_DIR)/build/*.dylib install/lib
