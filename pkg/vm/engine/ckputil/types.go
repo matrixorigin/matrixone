@@ -31,12 +31,12 @@ const (
 	TableObjectsAttr_Accout     = "account_id"
 	TableObjectsAttr_DB         = "db_id"
 	TableObjectsAttr_Table      = "table_id"
+	TableObjectsAttr_ObjectType = "object_type"
 	TableObjectsAttr_ID         = "id"
 	TableObjectsAttr_CreateTS   = "create_ts"
 	TableObjectsAttr_DeleteTS   = "delete_ts"
-	TableObjectsAttr_ObjectType = "object_type"
 
-	// TableObjects should be clustered by `table`+`id`
+	// TableObjects should be clustered by `table`+`object_type`+`id`
 	TableObjectsAttr_Cluster = "cluster"
 
 	// TableObjectsAttr_PhysicalAddr = objectio.PhysicalAddr_Attr

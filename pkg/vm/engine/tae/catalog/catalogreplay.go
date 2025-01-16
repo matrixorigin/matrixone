@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -462,7 +463,88 @@ func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, tx
 	}
 	tbl.InsertLocked(un)
 }
-
+func (catalog *Catalog) OnReplayObjectBatch_V2(vecs containers.Vectors, isTombstone bool, dataFactory DataFactory) {
+	//TODO: use const
+	dbid := vector.GetFixedAtNoTypeCheck[uint64](
+		&vecs[1], 0,
+	)
+	db, err := catalog.GetDatabaseByID(dbid)
+	if err != nil {
+		// As replaying only the catalog view at the end time of lastest checkpoint
+		// it is normal fot deleted db or table to be missed
+		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+			return
+		}
+		logutil.Info(catalog.SimplePPString(common.PPL3))
+		panic(err)
+	}
+	tid := vector.GetFixedAtNoTypeCheck[uint64](
+		&vecs[2], 0,
+	)
+	rel, err := db.GetTableEntryByID(tid)
+	if err != nil {
+		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+			return
+		}
+		logutil.Info(catalog.SimplePPString(common.PPL3))
+		panic(err)
+	}
+	statsVec := vecs[4]
+	createTSs := vector.MustFixedColNoTypeCheck[types.TS](&vecs[5])
+	deleteTSs := vector.MustFixedColNoTypeCheck[types.TS](&vecs[6])
+	for i := 0; i < len(createTSs); i++ {
+		stats := objectio.ObjectStats(statsVec.GetBytesAt(i))
+		objID := stats.ObjectName().ObjectId()
+		obj, err := rel.GetObjectByID(objID, isTombstone)
+		if !moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+			panic(err)
+		}
+		if obj == nil {
+			if !deleteTSs[i].IsEmpty() {
+				panic("logic error")
+			}
+			obj = &ObjectEntry{
+				table: rel,
+				ObjectNode: ObjectNode{
+					SortHint:    catalog.NextObject(),
+					IsTombstone: isTombstone,
+					forcePNode:  true, // any object replayed from checkpoint is forced to be created
+				},
+				EntryMVCCNode: EntryMVCCNode{
+					CreatedAt: createTSs[i],
+				},
+				ObjectMVCCNode: ObjectMVCCNode{
+					ObjectStats: stats,
+				},
+				CreateNode: txnbase.TxnMVCCNode{
+					Start:   createTSs[i].Prev(),
+					Prepare: createTSs[i],
+					End:     createTSs[i],
+				},
+				ObjectState: ObjectState_Create_ApplyCommit,
+			}
+			rel.AddEntryLocked(obj)
+		} else {
+			if deleteTSs[i].IsEmpty() {
+				panic("logic error")
+			}
+			obj.DeletedAt = deleteTSs[i]
+			obj.DeleteNode = txnbase.TxnMVCCNode{
+				Start:   deleteTSs[i].Prev(),
+				Prepare: deleteTSs[i],
+				End:     deleteTSs[i],
+			}
+		}
+		if obj.objData == nil {
+			obj.objData = dataFactory.MakeObjectFactory()(obj)
+		} else {
+			deleteAt := obj.GetDeleteAt()
+			if !obj.IsAppendable() || (obj.IsAppendable() && !deleteAt.IsEmpty()) {
+				obj.objData.TryUpgrade()
+			}
+		}
+	}
+}
 func (catalog *Catalog) OnReplayObjectBatch(replayer ObjectListReplayer, objectInfo *containers.Batch, isTombstone bool, dataFactory DataFactory, forSys bool) {
 	tids := vector.MustFixedColNoTypeCheck[uint64](objectInfo.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector())
 	dbids := vector.MustFixedColNoTypeCheck[uint64](objectInfo.GetVectorByName(SnapshotAttr_DBID).GetDownstreamVector())
