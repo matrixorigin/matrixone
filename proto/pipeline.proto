@@ -135,9 +135,7 @@ message Insert{
 message MultiUpdate {
   uint64 affected_rows = 1;
   uint32 Action = 2;
-  uint32 IBucket = 3;
-  uint32 NBucket = 4;
-  repeated plan.UpdateCtx update_ctx_list = 5;
+  repeated plan.UpdateCtx update_ctx_list = 3;
 }
 
 message Array{
