@@ -109,7 +109,7 @@ insert into ab01 values (1,2,'da');
 insert into ab01 values (2,3,'e4r34f');
 select * from ab01;
 create fulltext index f01 on ab01 (col2);
--- @bvt:issue#20213
+-- @bvt:issue#20123
 create fulltext index f02 on ab01 (col2);
 -- @bvt:issue
 drop table ab01;
