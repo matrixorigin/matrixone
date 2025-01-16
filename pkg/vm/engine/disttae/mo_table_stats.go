@@ -413,7 +413,12 @@ func initMoTableStatsConfig(
 
 			if eng.dynamicCtx.beta.taskPool, err = ants.NewPool(
 				runtime.NumCPU(),
-				ants.WithNonblocking(false)); err != nil {
+				ants.WithNonblocking(false),
+				ants.WithPanicHandler(func(e interface{}) {
+					logutil.Error(logHeader,
+						zap.String("source", "beta task panic"),
+						zap.Any("error", e))
+				})); err != nil {
 				return
 			}
 
