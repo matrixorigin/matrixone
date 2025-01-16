@@ -133,7 +133,7 @@ func TestScanRows(t *testing.T) {
 	state := NewPartitionState("", true, 42)
 	for i := uint32(0); i < 10; i++ {
 		rid := types.BuildTestRowid(rand.Int63(), rand.Int63())
-		state.rows.Set(RowEntry{
+		state.rows.Set(&RowEntry{
 			BlockID:           rid.CloneBlockID(),
 			RowID:             rid,
 			Offset:            int64(i),
@@ -146,12 +146,12 @@ func TestScanRows(t *testing.T) {
 
 	logutil.Info(state.LogAllRowEntry())
 
-	_ = state.ScanRows(false, func(entry RowEntry) (bool, error) {
+	_ = state.ScanRows(false, func(entry *RowEntry) (bool, error) {
 		logutil.Info(entry.String())
 		return true, nil
 	})
 
-	_ = state.ScanRows(true, func(entry RowEntry) (bool, error) {
+	_ = state.ScanRows(true, func(entry *RowEntry) (bool, error) {
 		logutil.Info(entry.String())
 		return true, nil
 	})
