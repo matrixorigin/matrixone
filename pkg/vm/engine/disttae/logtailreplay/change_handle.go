@@ -634,7 +634,7 @@ func (p *baseHandle) QuickNext(ctx context.Context, bat **batch.Batch, mp *mpool
 	err = p.cnObjectHandle.QuickNext(ctx, bat, mp)
 	return
 }
-func (p *baseHandle) newBatchHandleWithRowIterator(ctx context.Context, iter btree.IterG[RowEntry], start, end types.TS, tombstone bool, mp *mpool.MPool) (h *BatchHandle) {
+func (p *baseHandle) newBatchHandleWithRowIterator(ctx context.Context, iter btree.IterG[*RowEntry], start, end types.TS, tombstone bool, mp *mpool.MPool) (h *BatchHandle) {
 	bat := p.getBatchesFromRowIterator(iter, start, end, tombstone, mp)
 	if bat == nil {
 		return nil
@@ -642,12 +642,12 @@ func (p *baseHandle) newBatchHandleWithRowIterator(ctx context.Context, iter btr
 	h = NewRowHandle(bat, mp, p, ctx)
 	return
 }
-func (p *baseHandle) getBatchesFromRowIterator(iter btree.IterG[RowEntry], start, end types.TS, tombstone bool, mp *mpool.MPool) (bat *batch.Batch) {
+func (p *baseHandle) getBatchesFromRowIterator(iter btree.IterG[*RowEntry], start, end types.TS, tombstone bool, mp *mpool.MPool) (bat *batch.Batch) {
 	for iter.Next() {
 		entry := iter.Item()
 		if checkTS(start, end, entry.Time) {
 			if !entry.Deleted && !tombstone {
-				fillInInsertBatch(&bat, &entry, mp)
+				fillInInsertBatch(&bat, entry, mp)
 			}
 			if entry.Deleted && tombstone {
 				if p.skipTS != nil {
@@ -656,7 +656,7 @@ func (p *baseHandle) getBatchesFromRowIterator(iter btree.IterG[RowEntry], start
 						continue
 					}
 				}
-				fillInDeleteBatch(&bat, &entry, mp)
+				fillInDeleteBatch(&bat, entry, mp)
 			}
 		}
 	}

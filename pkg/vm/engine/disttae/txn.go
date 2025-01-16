@@ -1040,14 +1040,13 @@ func (txn *Transaction) deleteTableWrites(
 				continue
 			}
 			for k, v := range vs {
-				if _, ok := mp[v]; !ok {
-					// if the v is not to be deleted, then add its index into the sels.
+				if _, ok := mp[v]; ok {
+					// if the v will be deleted, then add its index into the sels.
 					sels = append(sels, int64(k))
-				} else {
 					mp[v]++
 				}
 			}
-			if len(sels) != len(vs) {
+			if len(sels) > 0 {
 				txn.batchSelectList[entry.bat] = append(txn.batchSelectList[entry.bat], sels...)
 			}
 		}
@@ -1081,8 +1080,8 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 	if len(txn.batchSelectList) > 0 {
 		for _, e := range txn.writes {
 			if sels, ok := txn.batchSelectList[e.bat]; ok {
-				txn.approximateInMemInsertCnt -= e.bat.RowCount() - len(sels)
-				e.bat.Shrink(sels, false)
+				txn.approximateInMemInsertCnt -= len(sels)
+				e.bat.Shrink(sels, true)
 				delete(txn.batchSelectList, e.bat)
 			}
 		}

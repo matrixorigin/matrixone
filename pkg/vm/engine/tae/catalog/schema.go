@@ -629,6 +629,7 @@ func (s *Schema) ReadFromBatch(
 		}
 		def := new(ColDef)
 		def.Name = bat.GetVectorByName((pkgcatalog.SystemColAttr_Name)).GetDownstreamVector().GetStringAt(offset)
+		// unmarshal before releasing, no need to copy
 		data := bat.GetVectorByName((pkgcatalog.SystemColAttr_Type)).GetDownstreamVector().GetBytesAt(offset)
 		types.Decode(data, &def.Type)
 		nullable := nullables[offset]
@@ -643,8 +644,8 @@ func (s *Schema) ReadFromBatch(
 		isAutoIncrement := autoIncrements[offset]
 		def.AutoIncrement = i82bool(isAutoIncrement)
 		def.Comment = bat.GetVectorByName((pkgcatalog.SystemColAttr_Comment)).GetDownstreamVector().GetStringAt(offset)
-		def.OnUpdate = bat.GetVectorByName((pkgcatalog.SystemColAttr_Update)).GetDownstreamVector().GetBytesAt(offset)
-		def.Default = bat.GetVectorByName((pkgcatalog.SystemColAttr_DefaultExpr)).GetDownstreamVector().GetBytesAt(offset)
+		def.OnUpdate = bat.GetVectorByName((pkgcatalog.SystemColAttr_Update)).GetDownstreamVector().CloneBytesAt(offset)
+		def.Default = bat.GetVectorByName((pkgcatalog.SystemColAttr_DefaultExpr)).GetDownstreamVector().CloneBytesAt(offset)
 		def.Idx = int(idxes[offset]) - 1
 		def.SeqNum = seqNums[offset]
 		def.EnumValues = bat.GetVectorByName((pkgcatalog.SystemColAttr_EnumValues)).GetDownstreamVector().GetStringAt(offset)

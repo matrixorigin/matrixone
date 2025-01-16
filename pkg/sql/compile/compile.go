@@ -4774,9 +4774,9 @@ func shuffleBlocksByRange(c *Compile, relData engine.RelData, n *plan.Node, node
 					shuffleRangeUint64 = plan2.ShuffleRangeReEvalUnsigned(n.Stats.HashmapStats.Ranges, len(c.cnList), n.Stats.HashmapStats.Nullcnt, int64(n.Stats.TableCnt))
 				}
 			}
-			if shuffleRangeUint64 != nil {
+			if len(shuffleRangeUint64) > 0 {
 				index = plan2.GetRangeShuffleIndexForZMUnsignedSlice(shuffleRangeUint64, zm)
-			} else if shuffleRangeInt64 != nil {
+			} else if len(shuffleRangeInt64) > 0 {
 				index = plan2.GetRangeShuffleIndexForZMSignedSlice(shuffleRangeInt64, zm)
 			} else {
 				index = plan2.GetRangeShuffleIndexForZM(n.Stats.HashmapStats.ShuffleColMin, n.Stats.HashmapStats.ShuffleColMax, zm, uint64(len(c.cnList)))
