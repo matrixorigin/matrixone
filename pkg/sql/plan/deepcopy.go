@@ -128,10 +128,14 @@ func DeepCopyPreInsertCtx(ctx *plan.PreInsertCtx) *plan.PreInsertCtx {
 		return nil
 	}
 	newCtx := &plan.PreInsertCtx{
-		Ref:        DeepCopyObjectRef(ctx.Ref),
-		TableDef:   DeepCopyTableDef(ctx.TableDef, true),
-		HasAutoCol: ctx.HasAutoCol,
-		IsUpdate:   ctx.IsUpdate,
+		Ref:           DeepCopyObjectRef(ctx.Ref),
+		TableDef:      DeepCopyTableDef(ctx.TableDef, true),
+		HasAutoCol:    ctx.HasAutoCol,
+		ColOffset:     ctx.ColOffset,
+		CompPkeyExpr:  DeepCopyExpr(ctx.CompPkeyExpr),
+		ClusterByExpr: DeepCopyExpr(ctx.ClusterByExpr),
+		IsOldUpdate:   ctx.IsOldUpdate,
+		IsNewUpdate:   ctx.IsNewUpdate,
 	}
 
 	return newCtx
@@ -146,17 +150,6 @@ func DeepCopyPreInsertUkCtx(ctx *plan.PreInsertUkCtx) *plan.PreInsertUkCtx {
 		PkColumn: ctx.PkColumn,
 		PkType:   ctx.PkType,
 		UkType:   ctx.UkType,
-	}
-
-	return newCtx
-}
-
-func DeepCopyPreDeleteCtx(ctx *plan.PreDeleteCtx) *plan.PreDeleteCtx {
-	if ctx == nil {
-		return nil
-	}
-	newCtx := &plan.PreDeleteCtx{
-		Idx: slices.Clone(ctx.Idx),
 	}
 
 	return newCtx
@@ -221,7 +214,6 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		SourceStep:      node.SourceStep,
 		PreInsertCtx:    DeepCopyPreInsertCtx(node.PreInsertCtx),
 		PreInsertUkCtx:  DeepCopyPreInsertUkCtx(node.PreInsertUkCtx),
-		PreDeleteCtx:    DeepCopyPreDeleteCtx(node.PreDeleteCtx),
 		OnDuplicateKey:  DeepCopyOnDuplicateKeyCtx(node.OnDuplicateKey),
 		LockTargets:     make([]*plan.LockTarget, len(node.LockTargets)),
 		AnalyzeInfo:     DeepCopyAnalyzeInfo(node.AnalyzeInfo),
