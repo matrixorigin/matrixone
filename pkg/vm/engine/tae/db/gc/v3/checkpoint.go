@@ -640,6 +640,7 @@ func (c *checkpointCleaner) deleteStaleSnapshotFilesLocked() error {
 func (c *checkpointCleaner) deleteStaleCKPMetaFileLocked() (err error) {
 	// TODO: add log
 	window := c.GetScannedWindowLocked()
+	logutil.Infof("deleteStaleCKPMetaFileLocked window: %s-%s", window.tsRange.start.ToString(), window.tsRange.end.ToString())
 	metaFiles := c.CloneMetaFilesLocked()
 	filesToDelete := make([]string, 0)
 	for _, metaFile := range metaFiles {
@@ -668,8 +669,10 @@ func (c *checkpointCleaner) deleteStaleCKPMetaFileLocked() (err error) {
 			return
 		}
 		for _, file := range gcWindow.files {
+			logutil.Infof("filesToDelete file: %s", file.ObjectName().String())
 			filesToDelete = append(filesToDelete, file.ObjectName().String())
 		}
+		logutil.Infof("filesToDelete file: %s", metaFile.GetGCFullName())
 		filesToDelete = append(filesToDelete, metaFile.GetGCFullName())
 		delete(metaFiles, metaFile.GetName())
 	}

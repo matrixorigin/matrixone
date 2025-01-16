@@ -16,6 +16,7 @@ package gc
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -156,6 +157,11 @@ func makeSoftDeleteFilterCoarseFilter(
 			}
 			if _, ok := (*filterTable)[tableIDs[i]]; ok {
 				logutil.Infof("table %d is in filter table, skip, name is %v", tableIDs[i], name)
+				continue
+			}
+
+			if catalog.IsSystemTable(tableIDs[i]) {
+				logutil.Infof("table %d is system table, skip, name is %v", tableIDs[i], name)
 				continue
 			}
 			bm.Add(uint64(i))
