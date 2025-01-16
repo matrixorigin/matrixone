@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -153,6 +154,7 @@ func makeSoftDeleteFilterCoarseFilter(
 				continue
 			}
 			if _, ok := (*filterTable)[tableIDs[i]]; ok {
+				logutil.Infof("table %d is in filter table, skip, name is %v", tableIDs[i], stats.ObjectName().String())
 				continue
 			}
 			bm.Add(uint64(i))
