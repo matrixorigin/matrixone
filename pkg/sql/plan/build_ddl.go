@@ -2462,7 +2462,7 @@ func buildHnswSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colM
 		return nil, nil, moerr.NewInternalErrorNoCtx("primary key cannot be empty for fulltext index")
 	}
 
-	if colMap[pkeyName].Typ.Id != int32(types.T_uint64) {
+	if colMap[pkeyName].Typ.Id != int32(types.T_int64) {
 		return nil, nil, moerr.NewInternalErrorNoCtx("type of primary key must be uint64")
 	}
 
@@ -2591,7 +2591,7 @@ func buildHnswSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colM
 		tableDefs[1] = &TableDef{
 			Name:      indexTableName,
 			TableType: catalog.Hnsw_TblType_Storage,
-			Cols:      make([]*ColDef, 4),
+			Cols:      make([]*ColDef, 5),
 		}
 
 		// 1.b indexDef1 init
@@ -2634,7 +2634,7 @@ func buildHnswSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colM
 			Alg:  plan.CompressType_Lz4,
 			Typ: Type{
 				Id:    int32(types.T_blob),
-				Width: types.MaxVarcharLen,
+				Width: 65536,
 				Scale: 0,
 			},
 			Default: &plan.Default{
