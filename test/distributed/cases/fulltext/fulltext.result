@@ -9,11 +9,17 @@ insert into src values (0, 'color is red', 't1'), (1, 'car is yellow', 'crazy ca
 (9, 'NOT INCLUDED BODY', NULL),
 (10, NULL, NULL);
 create fulltext index ftidx on src (body, title);
+create fulltext index ftidx02 on src (body, title);
+not supported: Fulltext index are not allowed to use the same column
 select * from src where match(body) against('red');
 not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
 select match(body) against('red') from src;
 not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
 alter table src add fulltext index ftidx2 (body);
+create fulltext index ftidx03 on src (body);
+not supported: Fulltext index are not allowed to use the same column
+create fulltext index ftidx03 on src (body, title);
+not supported: Fulltext index are not allowed to use the same column
 select * from src where match(body, title) against('red');
 id    body    title
 0    color is red    t1
