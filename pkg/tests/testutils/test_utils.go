@@ -23,6 +23,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -113,6 +114,22 @@ func ExecSQL(
 	cn embed.ServiceOperator,
 	sql ...string,
 ) timestamp.Timestamp {
+	return ExecSQLWithReadResult(
+		t,
+		db,
+		cn,
+		nil,
+		sql...,
+	)
+}
+
+func ExecSQLWithReadResult(
+	t *testing.T,
+	db string,
+	cn embed.ServiceOperator,
+	reader func(int, string, executor.Result),
+	sql ...string,
+) timestamp.Timestamp {
 	exec := cn.RawService().(cnservice.Service).GetSQLExecutor()
 	ctx, cancel := context.WithTimeoutCause(
 		defines.AttachAccountId(context.Background(), 0),
@@ -126,10 +143,13 @@ func ExecSQL(
 		ctx,
 		func(txn executor.TxnExecutor) error {
 			txnOp = txn.Txn()
-			for _, s := range sql {
+			for idx, s := range sql {
 				res, err := txn.Exec(s, executor.StatementOption{})
 				if err != nil {
 					return err
+				}
+				if reader != nil {
+					reader(idx, s, res)
 				}
 				res.Close()
 			}
@@ -275,4 +295,32 @@ func WaitClusterAppliedTo(
 			return true
 		},
 	)
+}
+
+func GetTableID(
+	t *testing.T,
+	db string,
+	table string,
+	txn executor.TxnExecutor,
+) uint64 {
+	txn.Use(catalog.MO_CATALOG)
+	res, err := txn.Exec(
+		fmt.Sprintf("select rel_id from mo_catalog.mo_tables where relname = '%s' and reldatabase = '%s'",
+			strings.ToLower(table),
+			strings.ToLower(db),
+		),
+		executor.StatementOption{},
+	)
+	require.NoError(t, err)
+	defer res.Close()
+
+	id := uint64(0)
+	res.ReadRows(
+		func(rows int, cols []*vector.Vector) bool {
+			id = executor.GetFixedRows[uint64](cols[0])[0]
+			return false
+		},
+	)
+
+	return id
 }
