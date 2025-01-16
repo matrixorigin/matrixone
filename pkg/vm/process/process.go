@@ -110,7 +110,11 @@ func (proc *Process) GetLockService() lockservice.LockService {
 }
 
 func (proc *Process) GetPartitionService() partitionservice.PartitionService {
-	return proc.Base.PartitionService
+	ps := proc.Base.PartitionService
+	if ps == nil {
+		return partitionservice.DisabledService
+	}
+	return ps
 }
 
 func (proc *Process) GetWaitPolicy() lock.WaitPolicy {

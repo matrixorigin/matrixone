@@ -30,6 +30,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
 
+var (
+	DisabledService = NewService(Config{}, nil)
+)
+
 type service struct {
 	cfg   Config
 	store PartitionStorage
