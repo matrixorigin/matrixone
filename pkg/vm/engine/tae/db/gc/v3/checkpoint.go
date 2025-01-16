@@ -1556,8 +1556,7 @@ func (c *checkpointCleaner) FastExecute(inputCtx context.Context) (err error) {
 	}
 
 	var newWindow *GCWindow
-	var tmpNewFiles []string
-	if newWindow, tmpNewFiles, err = c.scanCheckpointsLocked(
+	if newWindow, _, err = c.scanCheckpointsLocked(
 		ctx, candidates, memoryBuffer,
 	); err != nil {
 		logutil.Error(
@@ -1569,10 +1568,6 @@ func (c *checkpointCleaner) FastExecute(inputCtx context.Context) (err error) {
 	}
 	c.mutAddScannedLocked(newWindow)
 	c.updateScanWaterMark(candidates[len(candidates)-1])
-	files := tmpNewFiles
-	for _, stats := range c.GetScannedWindowLocked().files {
-		files = append(files, stats.ObjectName().String())
-	}
 
 	var snapshots map[uint32]containers.Vector
 	var extraErrMsg string
@@ -1597,8 +1592,9 @@ func (c *checkpointCleaner) FastExecute(inputCtx context.Context) (err error) {
 		return
 	}
 	accountSnapshots := TransformToTSList(snapshots)
+	scanWindow := c.GetScannedWindow()
 	filesToGC, err := c.doFastGCAgainstGlobalCheckpointLocked(
-		accountSnapshots, pitrs, memoryBuffer, newWindow,
+		accountSnapshots, pitrs, memoryBuffer, scanWindow,
 	)
 	if err != nil {
 		extraErrMsg = "doGCAgainstGlobalCheckpointLocked failed"
@@ -1613,21 +1609,6 @@ func (c *checkpointCleaner) FastExecute(inputCtx context.Context) (err error) {
 	); err != nil {
 		extraErrMsg = fmt.Sprintf("ExecDelete %v failed", filesToGC)
 		return
-	}
-	if err = c.deleteStaleCKPMetaFileLocked(); err != nil {
-		logutil.Error(
-			"GC-TRY-DELETE-STALE-CKP-META-FILE-ERROR",
-			zap.Error(err),
-			zap.String("task", c.TaskNameLocked()),
-		)
-	}
-
-	if err = c.deleteStaleSnapshotFilesLocked(); err != nil {
-		logutil.Error(
-			"GC-TRY-DELETE-STALE-SNAPSHOT-FILES-ERROR",
-			zap.Error(err),
-			zap.String("task", c.TaskNameLocked()),
-		)
 	}
 	return
 }
