@@ -72,6 +72,10 @@ func DecodeLogEntry(b []byte, entryHandle func(en *entry.Entry)) (e LogEntry, er
 		return
 	case IOET_WALRecord_V2:
 		e = LogEntry(b)
+		if entryHandle != nil {
+			e.ForEachEntry(entryHandle)
+		}
+
 		return
 	default:
 		panic(fmt.Sprintf("unsupported version %d", header.Version))
