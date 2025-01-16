@@ -1956,7 +1956,6 @@ func (d *dynamicCtx) betaTask(
 				slBat.Clear()
 				onlyTSBat = onlyTSBat[:0]
 
-				tbl.Done(nil)
 				continue
 			}
 
