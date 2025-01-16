@@ -45,7 +45,7 @@ func NewCheckpointData_V2(allocator *mpool.MPool, fs fileservice.FileService) *C
 	}
 }
 
-func (data *CheckpointData_V2) WriteTo(ctx context.Context, fs fileservice.FileService) (CNLocation, TNLocation objectio.Location, err error) {
+func (data *CheckpointData_V2) WriteTo(ctx context.Context,_,_ int, fs fileservice.FileService) (CNLocation, TNLocation objectio.Location,ckpfiles, err error) {
 	files, inMems := data.sinker.GetResult()
 	if len(inMems) != 0 {
 		panic("logic error")
@@ -74,6 +74,10 @@ func (data *CheckpointData_V2) WriteTo(ctx context.Context, fs fileservice.FileS
 	CNLocation = objectio.BuildLocation(name, blks[0].GetExtent(), 0, blks[0].GetID())
 	TNLocation = CNLocation
 	return
+}
+func (data *CheckpointData_V2) Close() {
+	data.batch.FreeColumns(data.allocator)
+	data.sinker.Close()
 }
 
 type CheckpointReplayer struct {
@@ -198,6 +202,9 @@ func NewBaseCollector_V2(start, end types.TS, fs fileservice.FileService, mp *mp
 	}
 	collector.ObjectFn = collector.visitObject
 	return collector
+}
+func (collector *BaseCollector_V2) Close() {
+	collector.packer.Close()
 }
 func (collector *BaseCollector_V2) OrphanData() *CheckpointData_V2 {
 	data := collector.data
