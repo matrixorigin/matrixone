@@ -37,6 +37,14 @@ type CheckpointData_V2 struct {
 	allocator *mpool.MPool
 }
 
+func NewCheckpointData_V2(allocator *mpool.MPool, fs fileservice.FileService) *CheckpointData_V2 {
+	return &CheckpointData_V2{
+		batch:     ckputil.NewObjectListBatch(),
+		sinker:    ckputil.NewDataSinker(allocator, fs),
+		allocator: allocator,
+	}
+}
+
 func (data *CheckpointData_V2) WriteTo(ctx context.Context, fs fileservice.FileService) (CNLocation, TNLocation objectio.Location, err error) {
 	files, inMems := data.sinker.GetResult()
 	if len(inMems) != 0 {
@@ -68,98 +76,137 @@ func (data *CheckpointData_V2) WriteTo(ctx context.Context, fs fileservice.FileS
 	return
 }
 
-func (data *CheckpointData_V2) ReadAll(
-	ctx context.Context,
-	version uint32,
-	metaLocation objectio.Location,
-	reader *ioutil.BlockReader,
-	fs fileservice.FileService,
-) (releaseCBs []func(), err error) {
-	ranges, err := LoadBlkColumnsByMeta(version, ctx, ckputil.MetaSchema_TableRange_Types, ckputil.MetaSchema_TableRange_Attrs, 0, reader, data.allocator)
-	if err != nil {
-		return
-	}
-	locationVec := ranges[0].Vecs[ckputil.MetaAttr_Location_Idx]
-	locations := make(map[string]objectio.Location)
-	for i := 0; i < locationVec.Length(); i++ {
-		location := objectio.Location(locationVec.GetDownstreamVector().GetBytesAt(i))
-		locations[location.String()] = location
-	}
-	vecs := containers.NewVectors(len(ckputil.DataScan_ObjectEntryAttrs))
-	releaseCBs = make([]func(), 0, len(locations))
-	data.batch = batch.New(ckputil.DataScan_ObjectEntryAttrs)
-	for _, loc := range locations {
-		_, release, err := ioutil.LoadColumnsData(
-			ctx,
-			ckputil.DataScan_ObjectEntrySeqnums,
-			ckputil.DataScan_ObjectEntryTypes,
-			fs,
-			loc,
-			vecs,
-			data.allocator,
-			0,
-		)
-		if err != nil {
-			for _, fn := range releaseCBs {
-				fn()
-			}
-			return nil, err
-		}
+type CheckpointReplayer struct {
+	location objectio.Location
+	mp       *mpool.MPool
 
-		releaseCBs = append(releaseCBs, release)
-	}
-	panic("todo")
+	meta       containers.Vectors
+	locations  map[string]objectio.Location
+	objectInfo []containers.Vectors
+
+	closeCB []func()
 }
 
-func ReplayThreeTablesObjectlist(
-	ctx context.Context,
-	location objectio.Location,
-	catalog *catalog.Catalog,
-	fs fileservice.FileService,
-	dataFactory *tables.DataFactory,
-	mp *mpool.MPool) {
-	vecs := containers.NewVectors(len(ckputil.DataScan_ObjectEntryAttrs))
+func NewCheckpointReplayer(location objectio.Location, mp *mpool.MPool) *CheckpointReplayer {
+	return &CheckpointReplayer{
+		location:   location,
+		mp:         mp,
+		locations:  make(map[string]objectio.Location),
+		objectInfo: make([]containers.Vectors, 0),
+		closeCB:    make([]func(), 0),
+	}
+}
+
+func (replayer *CheckpointReplayer) PrefetchMeta(sid string, fs fileservice.FileService) {
+	ioutil.Prefetch(sid, fs, replayer.location)
+}
+
+func (replayer *CheckpointReplayer) ReadMeta(ctx context.Context, sid string, fs fileservice.FileService) (err error) {
+	replayer.meta = containers.NewVectors(len(ckputil.MetaAttrs))
 	_, release, err := ioutil.LoadColumnsData(
 		ctx,
 		ckputil.DataScan_ObjectEntrySeqnums,
 		ckputil.DataScan_ObjectEntryTypes,
 		fs,
-		location,
-		vecs,
-		mp,
+		replayer.location,
+		replayer.meta,
+		replayer.mp,
 		0,
 	)
 	if err != nil {
 		return
 	}
-	defer release()
-	tids := vector.MustFixedColNoTypeCheck[uint64](&vecs[ckputil.MetaAttr_Table_Idx])
-	locationVec := vecs[ckputil.MetaAttr_Location_Idx]
-	for i := 0; i < len(tids); i++ {
-		if !pkgcatalog.IsSystemTable(tids[i]) {
-			break
-		}
-		
+	replayer.closeCB = append(replayer.closeCB, release)
+	locationVec := replayer.meta[ckputil.MetaAttr_Location_Idx]
+	for i := 0; i < locationVec.Length(); i++ {
+		location := objectio.Location(locationVec.GetBytesAt(i))
+		replayer.locations[location.String()] = location
+	}
+	return
+}
+
+func (replayer *CheckpointReplayer) PrefetchData(sid string, fs fileservice.FileService) {
+	for _, loc := range replayer.locations {
+		ioutil.Prefetch(sid, fs, loc)
 	}
 }
 
-func PrefetchAll(location objectio.Location) { panic("todo") }
-
-func ReplayCatalog() {}
-
-/*
-replay
-read manifaster
-for locations {prefetch}
-for locations {replay catalog}
-for locations {replay objects}
-*/
+func (replayer *CheckpointReplayer) ReadData(ctx context.Context, sid string, fs fileservice.FileService) (err error) {
+	for _, loc := range replayer.locations {
+		dataVecs := containers.NewVectors(len(ckputil.DataScan_ObjectEntryAttrs))
+		var release func()
+		_, release, err = ioutil.LoadColumnsData(
+			ctx,
+			ckputil.DataScan_ObjectEntrySeqnums,
+			ckputil.DataScan_ObjectEntryTypes,
+			fs,
+			loc,
+			replayer.meta,
+			replayer.mp,
+			0,
+		)
+		if err != nil {
+			return
+		}
+		replayer.closeCB = append(replayer.closeCB, release)
+		replayer.objectInfo = append(replayer.objectInfo, dataVecs)
+	}
+	return
+}
+func (replayer *CheckpointReplayer) ReplayObjectlist(
+	ctx context.Context,
+	c *catalog.Catalog,
+	forSys bool,
+	dataFactory *tables.DataFactory) {
+	for _, vecs := range replayer.objectInfo {
+		startOffset, endOffset := 0, 0
+		tids := vector.MustFixedColNoTypeCheck[uint64](&vecs[ckputil.TableObjectsAttr_Table_Idx])
+		prevTid := tids[0]
+		for i := 0; i < len(tids); i++ {
+			if forSys && !pkgcatalog.IsSystemTable(tids[i]) {
+				break
+			}
+			if !forSys && pkgcatalog.IsSystemTable(tids[i]) {
+				continue
+			}
+			if tids[i] != prevTid {
+				endOffset = i
+				c.OnReplayObjectBatch_V2(vecs, dataFactory, startOffset, endOffset)
+				startOffset = i
+			}
+		}
+		if startOffset != len(tids) {
+			c.OnReplayObjectBatch_V2(vecs, dataFactory, startOffset, len(tids))
+		}
+	}
+}
 
 type BaseCollector_V2 struct {
 	*catalog.LoopProcessor
 	data       *CheckpointData_V2
 	start, end types.TS
 	packer     *types.Packer
+}
+
+func NewBaseCollector_V2(start, end types.TS, fs fileservice.FileService, mp *mpool.MPool) *BaseCollector_V2 {
+	collector := &BaseCollector_V2{
+		LoopProcessor: &catalog.LoopProcessor{},
+		data:          NewCheckpointData_V2(mp, fs),
+		start:         start,
+		end:           end,
+		packer:        types.NewPacker(),
+	}
+	collector.ObjectFn = collector.visitObject
+	return collector
+}
+func (collector *BaseCollector_V2) OrphanData() *CheckpointData_V2 {
+	data := collector.data
+	collector.data = nil
+	return data
+}
+func (collector *BaseCollector_V2) Collect(c *catalog.Catalog) (err error) {
+	err = c.RecurLoop(collector)
+	return
 }
 
 func (collector *BaseCollector_V2) visitObject(entry *catalog.ObjectEntry) error {

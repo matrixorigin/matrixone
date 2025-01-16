@@ -463,10 +463,10 @@ func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, tx
 	}
 	tbl.InsertLocked(un)
 }
-func (catalog *Catalog) OnReplayObjectBatch_V2(vecs containers.Vectors, isTombstone bool, dataFactory DataFactory) {
+func (catalog *Catalog) OnReplayObjectBatch_V2(vecs containers.Vectors, dataFactory DataFactory, start, end int) {
 	//TODO: use const
 	dbid := vector.GetFixedAtNoTypeCheck[uint64](
-		&vecs[1], 0,
+		&vecs[1], start,
 	)
 	db, err := catalog.GetDatabaseByID(dbid)
 	if err != nil {
@@ -479,7 +479,7 @@ func (catalog *Catalog) OnReplayObjectBatch_V2(vecs containers.Vectors, isTombst
 		panic(err)
 	}
 	tid := vector.GetFixedAtNoTypeCheck[uint64](
-		&vecs[2], 0,
+		&vecs[2], start,
 	)
 	rel, err := db.GetTableEntryByID(tid)
 	if err != nil {
@@ -490,11 +490,21 @@ func (catalog *Catalog) OnReplayObjectBatch_V2(vecs containers.Vectors, isTombst
 		panic(err)
 	}
 	statsVec := vecs[4]
+	objectTypes := vector.MustFixedColNoTypeCheck[int8](&vecs[3])
 	createTSs := vector.MustFixedColNoTypeCheck[types.TS](&vecs[5])
 	deleteTSs := vector.MustFixedColNoTypeCheck[types.TS](&vecs[6])
-	for i := 0; i < len(createTSs); i++ {
+	for i := start; i < end; i++ {
 		stats := objectio.ObjectStats(statsVec.GetBytesAt(i))
 		objID := stats.ObjectName().ObjectId()
+		var isTombstone bool
+		switch objectTypes[i] {
+		case 1:
+			isTombstone = false
+		case 2:
+			isTombstone = true
+		default:
+			panic(fmt.Sprintf("invalid object type %d", objectTypes[i]))
+		}
 		obj, err := rel.GetObjectByID(objID, isTombstone)
 		if !moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
 			panic(err)
