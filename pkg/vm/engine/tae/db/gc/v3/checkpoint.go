@@ -1553,7 +1553,8 @@ func (c *checkpointCleaner) FastExecute(inputCtx context.Context) (err error) {
 	}
 
 	var newWindow *GCWindow
-	if newWindow, _, err = c.fastScanCheckpointsLocked(
+	var tmpNewFiles []string
+	if newWindow, tmpNewFiles, err = c.scanCheckpointsLocked(
 		ctx, candidates, memoryBuffer,
 	); err != nil {
 		logutil.Error(
@@ -1563,9 +1564,12 @@ func (c *checkpointCleaner) FastExecute(inputCtx context.Context) (err error) {
 		)
 		return
 	}
-
 	c.mutAddScannedLocked(newWindow)
 	c.updateScanWaterMark(candidates[len(candidates)-1])
+	files := tmpNewFiles
+	for _, stats := range c.GetScannedWindowLocked().files {
+		files = append(files, stats.ObjectName().String())
+	}
 
 	var snapshots map[uint32]containers.Vector
 	var extraErrMsg string
