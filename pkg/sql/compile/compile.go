@@ -3253,7 +3253,7 @@ func (c *Compile) compileMultiUpdate(_ []*plan.Node, n *plan.Node, ss []*Scope) 
 		}
 
 		for i := range ss {
-			multiUpdateArg := constructMultiUpdate(n, c.e)
+			multiUpdateArg := constructMultiUpdate(n, c.e, ss[i].IsRemote)
 			multiUpdateArg.Action = multi_update.UpdateWriteS3
 			multiUpdateArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 			ss[i].setRootOperator(multiUpdateArg)
@@ -3264,7 +3264,7 @@ func (c *Compile) compileMultiUpdate(_ []*plan.Node, n *plan.Node, ss []*Scope) 
 			rs = c.newMergeScope(ss)
 		}
 
-		multiUpdateArg := constructMultiUpdate(n, c.e)
+		multiUpdateArg := constructMultiUpdate(n, c.e, rs.IsRemote)
 		multiUpdateArg.Action = multi_update.UpdateFlushS3Info
 		rs.setRootOperator(multiUpdateArg)
 		ss = []*Scope{rs}
@@ -3273,7 +3273,7 @@ func (c *Compile) compileMultiUpdate(_ []*plan.Node, n *plan.Node, ss []*Scope) 
 			rs := c.newMergeScope(ss)
 			ss = []*Scope{rs}
 		}
-		multiUpdateArg := constructMultiUpdate(n, c.e)
+		multiUpdateArg := constructMultiUpdate(n, c.e, ss[0].IsRemote)
 		multiUpdateArg.Action = multi_update.UpdateWriteTable
 		multiUpdateArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[0].setRootOperator(multiUpdateArg)
