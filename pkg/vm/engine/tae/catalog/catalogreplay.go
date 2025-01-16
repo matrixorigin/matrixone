@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -466,7 +467,7 @@ func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, tx
 }
 func (catalog *Catalog) OnReplayObjectBatch_V2(vecs containers.Vectors, dataFactory DataFactory, start, end int) {
 	dbid := vector.GetFixedAtNoTypeCheck[uint64](
-		&vecs[TableObjectsAttr_DB_Idx], start,
+		&vecs[ioutil.TableObjectsAttr_DB_Idx], start,
 	)
 	db, err := catalog.GetDatabaseByID(dbid)
 	if err != nil {
@@ -479,7 +480,7 @@ func (catalog *Catalog) OnReplayObjectBatch_V2(vecs containers.Vectors, dataFact
 		panic(err)
 	}
 	tid := vector.GetFixedAtNoTypeCheck[uint64](
-		&vecs[TableObjectsAttr_Table_Idx], start,
+		&vecs[ioutil.TableObjectsAttr_Table_Idx], start,
 	)
 	rel, err := db.GetTableEntryByID(tid)
 	if err != nil {
@@ -490,17 +491,17 @@ func (catalog *Catalog) OnReplayObjectBatch_V2(vecs containers.Vectors, dataFact
 		panic(err)
 	}
 	statsVec := vecs[4]
-	objectTypes := vector.MustFixedColNoTypeCheck[int8](&vecs[TableObjectsAttr_ObjectType_Idx])
-	createTSs := vector.MustFixedColNoTypeCheck[types.TS](&vecs[TableObjectsAttr_CreateTS_Idx])
-	deleteTSs := vector.MustFixedColNoTypeCheck[types.TS](&vecs[TableObjectsAttr_DeleteTS_Idx])
+	objectTypes := vector.MustFixedColNoTypeCheck[int8](&vecs[ioutil.TableObjectsAttr_ObjectType_Idx])
+	createTSs := vector.MustFixedColNoTypeCheck[types.TS](&vecs[ioutil.TableObjectsAttr_CreateTS_Idx])
+	deleteTSs := vector.MustFixedColNoTypeCheck[types.TS](&vecs[ioutil.TableObjectsAttr_DeleteTS_Idx])
 	for i := start; i < end; i++ {
 		stats := objectio.ObjectStats(statsVec.GetBytesAt(i))
 		objID := stats.ObjectName().ObjectId()
 		var isTombstone bool
 		switch objectTypes[i] {
-		case ObjectType_Data:
+		case ioutil.ObjectType_Data:
 			isTombstone = false
-		case ObjectType_Tombstone:
+		case ioutil.ObjectType_Tombstone:
 			isTombstone = true
 		default:
 			panic(fmt.Sprintf("invalid object type %d", objectTypes[i]))

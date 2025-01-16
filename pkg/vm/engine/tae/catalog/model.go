@@ -32,24 +32,6 @@ const (
 	TenantSysID = uint32(0)
 )
 
-const (
-	TableObjectsAttr_Accout_Idx     = 0
-	TableObjectsAttr_DB_Idx         = 1
-	TableObjectsAttr_Table_Idx      = 2
-	TableObjectsAttr_ObjectType_Idx = 3
-	TableObjectsAttr_ID_Idx         = 4
-	TableObjectsAttr_CreateTS_Idx   = 5
-	TableObjectsAttr_DeleteTS_Idx   = 6
-	TableObjectsAttr_Cluster_Idx    = 7
-	// TableObjectsAttr_PhysicalAddr_Idx = 8
-)
-
-const (
-	ObjectType_Invalid int8 = iota
-	ObjectType_Data
-	ObjectType_Tombstone
-)
-
 var SystemDBSchema *Schema
 var SystemTableSchema *Schema
 var SystemColumnSchema *Schema

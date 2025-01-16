@@ -15,9 +15,10 @@
 package ckputil
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 )
 
 // 1. All checkpoint files should be sorted by `cluster` key. And the
@@ -44,21 +45,21 @@ const (
 )
 
 const (
-	TableObjectsAttr_Accout_Idx     = catalog.TableObjectsAttr_Accout_Idx
-	TableObjectsAttr_DB_Idx         = catalog.TableObjectsAttr_DB_Idx
-	TableObjectsAttr_Table_Idx      = catalog.TableObjectsAttr_Table_Idx
-	TableObjectsAttr_ObjectType_Idx = catalog.TableObjectsAttr_ObjectType_Idx
-	TableObjectsAttr_ID_Idx         = catalog.TableObjectsAttr_ID_Idx
-	TableObjectsAttr_CreateTS_Idx   = catalog.TableObjectsAttr_CreateTS_Idx
-	TableObjectsAttr_DeleteTS_Idx   = catalog.TableObjectsAttr_DeleteTS_Idx
-	TableObjectsAttr_Cluster_Idx    = catalog.TableObjectsAttr_Cluster_Idx
+	TableObjectsAttr_Accout_Idx     = ioutil.TableObjectsAttr_Accout_Idx
+	TableObjectsAttr_DB_Idx         = ioutil.TableObjectsAttr_DB_Idx
+	TableObjectsAttr_Table_Idx      = ioutil.TableObjectsAttr_Table_Idx
+	TableObjectsAttr_ObjectType_Idx = ioutil.TableObjectsAttr_ObjectType_Idx
+	TableObjectsAttr_ID_Idx         = ioutil.TableObjectsAttr_ID_Idx
+	TableObjectsAttr_CreateTS_Idx   = ioutil.TableObjectsAttr_CreateTS_Idx
+	TableObjectsAttr_DeleteTS_Idx   = ioutil.TableObjectsAttr_DeleteTS_Idx
+	TableObjectsAttr_Cluster_Idx    = ioutil.TableObjectsAttr_Cluster_Idx
 	// TableObjectsAttr_PhysicalAddr_Idx = 8
 )
 
 const (
-	ObjectType_Invalid   = catalog.ObjectType_Invalid
-	ObjectType_Data      = catalog.ObjectType_Data
-	ObjectType_Tombstone = catalog.ObjectType_Tombstone
+	ObjectType_Invalid   = ioutil.ObjectType_Invalid
+	ObjectType_Data      = ioutil.ObjectType_Data
+	ObjectType_Tombstone = ioutil.ObjectType_Tombstone
 )
 
 var TableObjectsAttrs = []string{
