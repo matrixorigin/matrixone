@@ -22,9 +22,9 @@ import (
 )
 
 func TestQuantization(t *testing.T) {
-	q, ok := QuantizationValid("bf16")
+	q, ok := QuantizationValid("f16")
 	require.True(t, ok)
-	require.Equal(t, q, usearch.BF16)
+	require.Equal(t, q, usearch.F16)
 	q, ok = QuantizationValid("")
 	require.False(t, ok)
 }
