@@ -130,7 +130,7 @@ func TestCompatibility1(t *testing.T) {
 
 	buf := old.payload
 	t.Log(old.addr)
-	newEntry, err := DecodeLogEntry(buf)
+	newEntry, err := DecodeLogEntry(buf, nil)
 	assert.NoError(t, err)
 	assert.Equal(t, uint32(5), newEntry.GetEntryCount())
 	newEntry.ForEachEntry(func(entry *entry.Entry) {
@@ -149,7 +149,7 @@ func TestCompatibility2(t *testing.T) {
 
 	buf := old.payload
 	t.Log(old.addr)
-	newEntry, err := DecodeLogEntry(buf)
+	newEntry, err := DecodeLogEntry(buf, nil)
 	assert.NoError(t, err)
 	skipCmd := SkipCmd(newEntry.GetEntry(0))
 	assert.Equal(t, []uint64{1, 2, 3}, skipCmd.GetDSNSlice())
