@@ -24,7 +24,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -1387,8 +1386,8 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 	case plan.Node_LOCK_OP:
 		preNode := builder.qry.Nodes[node.Children[0]]
 
-		var pkExprs, partExprs []*plan.Expr
-		var oldPkPos, oldPartPos [][2]int32
+		var pkExprs []*plan.Expr
+		var oldPkPos [][2]int32
 		for _, lockTarget := range node.LockTargets {
 			pkExpr := &plan.Expr{
 				// Typ: node.LockTargets[0].GetPrimaryColTyp(),
@@ -1402,9 +1401,6 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			increaseRefCnt(pkExpr, 1, colRefCnt)
 			pkExprs = append(pkExprs, pkExpr)
 			oldPkPos = append(oldPkPos, [2]int32{lockTarget.PrimaryColRelPos, lockTarget.PrimaryColIdxInBat})
-
-			partExprs = append(partExprs, nil)
-			oldPartPos = append(oldPartPos, [2]int32{-1, -1})
 		}
 
 		childRemapping, err := builder.remapAllColRefs(node.Children[0], step, colRefCnt, colRefBool, sinkColRef)
@@ -1412,20 +1408,12 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			return nil, err
 		}
 
-		for pkIdx, pkExpr := range pkExprs {
-			if newPos, ok := childRemapping.globalToLocal[oldPkPos[pkIdx]]; ok {
-				node.LockTargets[pkIdx].PrimaryColRelPos = newPos[0]
-				node.LockTargets[pkIdx].PrimaryColIdxInBat = newPos[1]
+		for oldPkIdx, lockTarget := range node.LockTargets {
+			if newPos, ok := childRemapping.globalToLocal[oldPkPos[oldPkIdx]]; ok {
+				lockTarget.PrimaryColRelPos = newPos[0]
+				lockTarget.PrimaryColIdxInBat = newPos[1]
 			}
-			increaseRefCnt(pkExpr, -1, colRefCnt)
-
-			if partExprs[pkIdx] != nil {
-				if newPos, ok := childRemapping.globalToLocal[oldPartPos[pkIdx]]; ok {
-					node.LockTargets[pkIdx].FilterColRelPos = newPos[0]
-					node.LockTargets[pkIdx].FilterColIdxInBat = newPos[1]
-				}
-				increaseRefCnt(partExprs[pkIdx], -1, colRefCnt)
-			}
+			increaseRefCnt(pkExprs[oldPkIdx], -1, colRefCnt)
 		}
 
 		for i, globalRef := range childRemapping.localToGlobal {

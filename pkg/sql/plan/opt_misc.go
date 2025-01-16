@@ -49,14 +49,9 @@ func (builder *QueryBuilder) countColRefs(nodeID int32, colRefCnt map[[2]int32]i
 	}
 
 	if node.NodeType == plan.Node_LOCK_OP {
-		var colRefs []ColRef
 		for _, lockTarget := range node.LockTargets {
-			colRefs = append(colRefs, ColRef{
-				RelPos: lockTarget.PrimaryColRelPos,
-				ColPos: lockTarget.PrimaryColIdxInBat,
-			})
+			colRefCnt[[2]int32{lockTarget.PrimaryColRelPos, lockTarget.PrimaryColIdxInBat}] += 1
 		}
-		increaseRefCntForColRefList(colRefs, 1, colRefCnt)
 	}
 
 	for _, childID := range node.Children {
@@ -202,6 +197,17 @@ func (builder *QueryBuilder) canRemoveProject(parentType plan.Node_NodeType, nod
 	}
 	if childType == plan.Node_FUNCTION_SCAN || childType == plan.Node_EXTERNAL_FUNCTION {
 		return parentType == plan.Node_PROJECT
+	}
+	if childType == plan.Node_TABLE_SCAN {
+		if parentType == plan.Node_PROJECT {
+			return true
+		}
+
+		for _, proj := range node.ProjectList {
+			if proj.GetLit() != nil {
+				return false
+			}
+		}
 	}
 
 	return true

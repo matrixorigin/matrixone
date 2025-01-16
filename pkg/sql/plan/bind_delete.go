@@ -230,7 +230,7 @@ func (builder *QueryBuilder) bindDelete(stmt *tree.Delete, bindCtx *BindContext)
 				lockTarget := &plan.LockTarget{
 					TableId:            tableDef.TblId,
 					ObjRef:             DeepCopyObjectRef(dmlCtx.objRefs[i]),
-					PrimaryColIdxInBat: int32(pkPos),
+					PrimaryColIdxInBat: pkPos,
 					PrimaryColRelPos:   selectNodeTag,
 					PrimaryColTyp:      col.Typ,
 				}
@@ -266,7 +266,7 @@ func (builder *QueryBuilder) bindDelete(stmt *tree.Delete, bindCtx *BindContext)
 						lockTargets = append(lockTargets, &plan.LockTarget{
 							TableId:            idxNode.TableDef.TblId,
 							ObjRef:             DeepCopyObjectRef(idxNode.ObjRef),
-							PrimaryColIdxInBat: int32(pkPos),
+							PrimaryColIdxInBat: pkPos,
 							PrimaryColRelPos:   idxNode.BindingTags[0],
 							PrimaryColTyp:      col.Typ,
 						})

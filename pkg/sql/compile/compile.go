@@ -995,7 +995,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 		}
 		ss = c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss)))
 		return ss, nil
-	case plan.Node_FILTER, plan.Node_PROJECT, plan.Node_PRE_DELETE:
+	case plan.Node_FILTER, plan.Node_PROJECT:
 		ss, err = c.compilePlanScope(step, n.Children[0], ns)
 		if err != nil {
 			return nil, err

@@ -452,11 +452,13 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			SchemaName:        t.SchemaName,
 			TableDef:          t.TableDef,
 			HasAutoCol:        t.HasAutoCol,
-			IsUpdate:          t.IsUpdate,
+			IsOldUpdate:       t.IsOldUpdate,
+			IsNewUpdate:       t.IsNewUpdate,
 			Attrs:             t.Attrs,
 			EstimatedRowCount: int64(t.EstimatedRowCount),
 			CompPkeyExpr:      t.CompPkeyExpr,
 			ClusterByExpr:     t.ClusterByExpr,
+			ColOffset:         t.ColOffset,
 		}
 	case *lockop.LockOp:
 		in.LockOp = &pipeline.LockOp{
@@ -765,6 +767,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			OnDuplicateAction: t.OnDuplicateAction,
 			DedupColName:      t.DedupColName,
 			DedupColTypes:     t.DedupColTypes,
+			DelColIdx:         t.DelColIdx,
 		}
 	case *shufflebuild.ShuffleBuild:
 		in.ShuffleBuild = &pipeline.Shufflebuild{
@@ -779,6 +782,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			OnDuplicateAction: t.OnDuplicateAction,
 			DedupColName:      t.DedupColName,
 			DedupColTypes:     t.DedupColTypes,
+			DelColIdx:         t.DelColIdx,
 		}
 	case *indexbuild.IndexBuild:
 		in.IndexBuild = &pipeline.Indexbuild{
@@ -798,6 +802,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			OnDuplicateAction:      t.OnDuplicateAction,
 			DedupColName:           t.DedupColName,
 			DedupColTypes:          t.DedupColTypes,
+			DelColIdx:              t.DelColIdx,
 			LeftTypes:              convertToPlanTypes(t.LeftTypes),
 			RightTypes:             convertToPlanTypes(t.RightTypes),
 			UpdateColIdxList:       t.UpdateColIdxList,
@@ -905,10 +910,12 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.TableDef = t.GetTableDef()
 		arg.Attrs = t.GetAttrs()
 		arg.HasAutoCol = t.GetHasAutoCol()
-		arg.IsUpdate = t.GetIsUpdate()
+		arg.IsOldUpdate = t.GetIsOldUpdate()
+		arg.IsNewUpdate = t.GetIsNewUpdate()
 		arg.EstimatedRowCount = int64(t.GetEstimatedRowCount())
 		arg.CompPkeyExpr = t.CompPkeyExpr
 		arg.ClusterByExpr = t.ClusterByExpr
+		arg.ColOffset = t.ColOffset
 		op = arg
 	case vm.LockOp:
 		t := opr.GetLockOp()
@@ -1271,6 +1278,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.OnDuplicateAction = t.OnDuplicateAction
 		arg.DedupColName = t.DedupColName
 		arg.DedupColTypes = t.DedupColTypes
+		arg.DelColIdx = t.DelColIdx
 		op = arg
 	case vm.ShuffleBuild:
 		arg := shufflebuild.NewArgument()
@@ -1286,6 +1294,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.OnDuplicateAction = t.OnDuplicateAction
 		arg.DedupColName = t.DedupColName
 		arg.DedupColTypes = t.DedupColTypes
+		arg.DelColIdx = t.DelColIdx
 		op = arg
 	case vm.IndexBuild:
 		arg := indexbuild.NewArgument()
@@ -1305,6 +1314,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.OnDuplicateAction = t.OnDuplicateAction
 		arg.DedupColName = t.DedupColName
 		arg.DedupColTypes = t.DedupColTypes
+		arg.DelColIdx = t.DelColIdx
 		arg.UpdateColIdxList = t.UpdateColIdxList
 		arg.UpdateColExprList = t.UpdateColExprList
 		op = arg

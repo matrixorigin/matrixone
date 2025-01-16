@@ -190,7 +190,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			lockTarget := &plan.LockTarget{
 				TableId:            tableDef.TblId,
 				ObjRef:             DeepCopyObjectRef(objRef),
-				PrimaryColIdxInBat: int32(colName2Idx[tableDef.Name+"."+col.Name]),
+				PrimaryColIdxInBat: colName2Idx[tableDef.Name+"."+col.Name],
 				PrimaryColRelPos:   selectTag,
 				PrimaryColTyp:      col.Typ,
 			}
