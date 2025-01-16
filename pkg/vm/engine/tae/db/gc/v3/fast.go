@@ -139,7 +139,7 @@ func makeSoftDeleteFilterCoarseFilter(
 			buf := bat.Vecs[0].GetRawBytesAt(i)
 			stats := (objectio.ObjectStats)(buf)
 			name := stats.ObjectName().UnsafeString()
-			logutil.Infof("table1 %d, name is %v, createTS is %v, dropTS is %v", tableIDs[i], name, createTS, dropTS)
+			logutil.Infof("table1 %d, name is %v, createTS is %v, dropTS is %v", tableIDs[i], name, createTS.ToString(), dropTS.ToString())
 			if dropTS.IsEmpty() && (*transObjects)[name] == nil {
 				object := &ObjectEntry{
 					stats:    &stats,

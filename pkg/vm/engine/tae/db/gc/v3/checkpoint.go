@@ -1611,6 +1611,21 @@ func (c *checkpointCleaner) FastExecute(inputCtx context.Context) (err error) {
 		extraErrMsg = fmt.Sprintf("ExecDelete %v failed", filesToGC)
 		return
 	}
+	if err = c.deleteStaleCKPMetaFileLocked(); err != nil {
+		logutil.Error(
+			"GC-TRY-DELETE-STALE-CKP-META-FILE-ERROR",
+			zap.Error(err),
+			zap.String("task", c.TaskNameLocked()),
+		)
+	}
+
+	if err = c.deleteStaleSnapshotFilesLocked(); err != nil {
+		logutil.Error(
+			"GC-TRY-DELETE-STALE-SNAPSHOT-FILES-ERROR",
+			zap.Error(err),
+			zap.String("task", c.TaskNameLocked()),
+		)
+	}
 	return
 }
 
