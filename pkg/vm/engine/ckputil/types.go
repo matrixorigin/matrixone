@@ -17,6 +17,7 @@ package ckputil
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 )
 
 // 1. All checkpoint files should be sorted by `cluster` key. And the
@@ -43,21 +44,21 @@ const (
 )
 
 const (
-	TableObjectsAttr_Accout_Idx     = 0
-	TableObjectsAttr_DB_Idx         = 1
-	TableObjectsAttr_Table_Idx      = 2
-	TableObjectsAttr_ObjectType_Idx = 3
-	TableObjectsAttr_ID_Idx         = 4
-	TableObjectsAttr_CreateTS_Idx   = 5
-	TableObjectsAttr_DeleteTS_Idx   = 6
-	TableObjectsAttr_Cluster_Idx    = 7
+	TableObjectsAttr_Accout_Idx     = catalog.TableObjectsAttr_Accout_Idx
+	TableObjectsAttr_DB_Idx         = catalog.TableObjectsAttr_DB_Idx
+	TableObjectsAttr_Table_Idx      = catalog.TableObjectsAttr_Table_Idx
+	TableObjectsAttr_ObjectType_Idx = catalog.TableObjectsAttr_ObjectType_Idx
+	TableObjectsAttr_ID_Idx         = catalog.TableObjectsAttr_ID_Idx
+	TableObjectsAttr_CreateTS_Idx   = catalog.TableObjectsAttr_CreateTS_Idx
+	TableObjectsAttr_DeleteTS_Idx   = catalog.TableObjectsAttr_DeleteTS_Idx
+	TableObjectsAttr_Cluster_Idx    = catalog.TableObjectsAttr_Cluster_Idx
 	// TableObjectsAttr_PhysicalAddr_Idx = 8
 )
 
 const (
-	ObjectType_Invalid int8 = iota
-	ObjectType_Data
-	ObjectType_Tombstone
+	ObjectType_Invalid   = catalog.ObjectType_Invalid
+	ObjectType_Data      = catalog.ObjectType_Data
+	ObjectType_Tombstone = catalog.ObjectType_Tombstone
 )
 
 var TableObjectsAttrs = []string{
