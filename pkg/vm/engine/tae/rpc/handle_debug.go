@@ -244,22 +244,22 @@ func getChangedListFromCheckpoints(
 
 		if data, err = ckps[i].PrefetchMetaIdx(ctx, h.GetDB().Runtime.Fs); err != nil {
 			logErr(err, ckps[i].String())
-			return
+			continue
 		}
 
 		if err = ckps[i].ReadMetaIdx(ctx, h.GetDB().Runtime.Fs, data); err != nil {
 			logErr(err, ckps[i].String())
-			return
+			continue
 		}
 
 		if err = ckps[i].Prefetch(ctx, h.GetDB().Runtime.Fs, data); err != nil {
 			logErr(err, ckps[i].String())
-			return
+			continue
 		}
 
 		if err = ckps[i].Read(ctx, h.GetDB().Runtime.Fs, data); err != nil {
 			logErr(err, ckps[i].String())
-			return
+			continue
 		}
 
 		dataObjBat := data.GetObjectBatchs()
@@ -286,7 +286,7 @@ func getChangedListFromCheckpoints(
 					//resp.Newest = &tt
 
 					err = moerr.NewInternalErrorNoCtx("dbId/tblId/ts vector length not match")
-					return
+					continue
 				}
 
 				dbId := dbIdVec.Get(k).(uint64)
@@ -300,7 +300,7 @@ func getChangedListFromCheckpoints(
 				dbEntry, err = h.GetDB().Catalog.GetDatabaseByID(dbId)
 				if err != nil {
 					logErr(err, fmt.Sprintf("get db entry failed: %d", dbId))
-					return
+					continue
 				}
 
 				tblIds = append(tblIds, tblId)
@@ -345,7 +345,7 @@ func getChangedListFromDirtyTree(
 
 		dbEntry, err = h.GetDB().Catalog.GetDatabaseByID(v.DbID)
 		if err != nil {
-			return
+			continue
 		}
 
 		tblIds = append(tblIds, v.ID)

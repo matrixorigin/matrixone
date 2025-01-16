@@ -189,8 +189,3 @@ func Benchmark_joinAccountDatabaseTable(b *testing.B) {
 		f()
 	}
 }
-
-func TestX(t *testing.T) {
-	tp := tablePair{}
-	tp.Done(nil)
-}
