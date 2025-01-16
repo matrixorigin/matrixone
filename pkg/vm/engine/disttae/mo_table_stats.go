@@ -511,6 +511,13 @@ type dynamicCtx struct {
 	sqlOpts ie.SessionOverrideOptions
 }
 
+func (d *dynamicCtx) IsBetaRunning() bool {
+	d.lock.RLock()
+	defer d.lock.RUnlock()
+
+	return d.beta.running
+}
+
 func (d *dynamicCtx) LogDynamicCtx() string {
 	d.lock.RLock()
 	defer d.lock.RUnlock()
@@ -1170,7 +1177,7 @@ func buildTablePairFromCache(
 ) (tbl tablePair, ok bool) {
 
 	item := eng.(*Engine).GetLatestCatalogCache().GetTableById(uint32(accId), dbId, tblId)
-	if item == nil {
+	if item == nil || item.IsDeleted() {
 		// account, db, tbl may delete already
 		// the `update_time` not change anymore
 		return
@@ -1452,7 +1459,8 @@ func (d *dynamicCtx) alphaTask(
 			zap.Int("batch count", batCnt),
 			zap.Duration("takes", dur),
 			zap.Duration("wait err", waitErrDur),
-			zap.String("caller", caller))
+			zap.String("caller", caller),
+			zap.Bool("is beta running", d.IsBetaRunning()))
 
 		v2.AlphaTaskDurationHistogram.Observe(dur.Seconds())
 		v2.AlphaTaskCountingHistogram.Observe(float64(processed))
@@ -1495,7 +1503,7 @@ func (d *dynamicCtx) alphaTask(
 					enterWait = true
 				}
 
-				if waitErrDur > time.Minute*5 {
+				if !d.IsBetaRunning() || waitErrDur > time.Minute*5 {
 					// waiting reached the limit
 					return nil
 				}
@@ -2006,6 +2014,10 @@ func (d *dynamicCtx) statsCalculateOp(
 	pState *logtailreplay.PartitionState,
 ) (sl statsList, err error) {
 
+	if pState == nil {
+		return
+	}
+
 	bcs := betaCycleStash{
 		born:       time.Now(),
 		snapshot:   snapshot,
@@ -2453,6 +2465,10 @@ func (d *dynamicCtx) bulkUpdateTableStatsList(
 	bat.Range(func(key, value any) bool {
 		tbl := key.(tablePair)
 		sl := value.(statsList)
+
+		if sl.stats == nil {
+			return true
+		}
 
 		tbls = append(tbls, tbl)
 
