@@ -45,7 +45,17 @@ func NewCheckpointData_V2(allocator *mpool.MPool, fs fileservice.FileService) *C
 	}
 }
 
-func (data *CheckpointData_V2) WriteTo(ctx context.Context, fs fileservice.FileService) (CNLocation, TNLocation objectio.Location,ckpfiles, err error) {
+func (data *CheckpointData_V2) WriteTo(ctx context.Context, fs fileservice.FileService) (CNLocation, TNLocation objectio.Location, ckpfiles, err error) {
+	if data.batch.RowCount() != 0 {
+		err = data.sinker.Write(ctx, data.batch)
+		if err != nil {
+			return
+		}
+	}
+	err = data.sinker.Sync(ctx)
+	if err != nil {
+		return
+	}
 	files, inMems := data.sinker.GetResult()
 	if len(inMems) != 0 {
 		panic("logic error")
@@ -109,8 +119,8 @@ func (replayer *CheckpointReplayer) ReadMeta(ctx context.Context, sid string, fs
 	replayer.meta = containers.NewVectors(len(ckputil.MetaAttrs))
 	_, release, err := ioutil.LoadColumnsData(
 		ctx,
-		ckputil.DataScan_ObjectEntrySeqnums,
-		ckputil.DataScan_ObjectEntryTypes,
+		ckputil.MetaSeqnums,
+		ckputil.MetaTypes,
 		fs,
 		replayer.location,
 		replayer.meta,
@@ -137,15 +147,15 @@ func (replayer *CheckpointReplayer) PrefetchData(sid string, fs fileservice.File
 
 func (replayer *CheckpointReplayer) ReadData(ctx context.Context, sid string, fs fileservice.FileService) (err error) {
 	for _, loc := range replayer.locations {
-		dataVecs := containers.NewVectors(len(ckputil.DataScan_ObjectEntryAttrs))
+		dataVecs := containers.NewVectors(len(ckputil.TableObjectsAttrs))
 		var release func()
 		_, release, err = ioutil.LoadColumnsData(
 			ctx,
-			ckputil.DataScan_ObjectEntrySeqnums,
-			ckputil.DataScan_ObjectEntryTypes,
+			ckputil.TableObjectsSeqnums,
+			ckputil.TableObjectsTypes,
 			fs,
 			loc,
-			replayer.meta,
+			dataVecs,
 			replayer.mp,
 			0,
 		)
@@ -167,20 +177,19 @@ func (replayer *CheckpointReplayer) ReplayObjectlist(
 		tids := vector.MustFixedColNoTypeCheck[uint64](&vecs[ckputil.TableObjectsAttr_Table_Idx])
 		prevTid := tids[0]
 		for i := 0; i < len(tids); i++ {
-			if forSys && !pkgcatalog.IsSystemTable(tids[i]) {
-				break
-			}
-			if !forSys && pkgcatalog.IsSystemTable(tids[i]) {
-				continue
-			}
 			if tids[i] != prevTid {
 				endOffset = i
-				c.OnReplayObjectBatch_V2(vecs, dataFactory, startOffset, endOffset)
+				if forSys == pkgcatalog.IsSystemTable(prevTid) {
+					c.OnReplayObjectBatch_V2(vecs, dataFactory, startOffset, endOffset)
+				}
 				startOffset = i
+				prevTid = tids[i]
 			}
 		}
 		if startOffset != len(tids) {
-			c.OnReplayObjectBatch_V2(vecs, dataFactory, startOffset, len(tids))
+			if forSys == pkgcatalog.IsSystemTable(prevTid) {
+				c.OnReplayObjectBatch_V2(vecs, dataFactory, startOffset, len(tids))
+			}
 		}
 	}
 }
@@ -201,6 +210,7 @@ func NewBaseCollector_V2(start, end types.TS, fs fileservice.FileService, mp *mp
 		packer:        types.NewPacker(),
 	}
 	collector.ObjectFn = collector.visitObject
+	collector.TombstoneFn = collector.visitObject
 	return collector
 }
 func (collector *BaseCollector_V2) Close() {
@@ -225,7 +235,7 @@ func (collector *BaseCollector_V2) visitObject(entry *catalog.ObjectEntry) error
 		}
 		create := node.End.Equal(&entry.CreatedAt)
 		visitObject_V2(collector.data.batch, entry, create, false, types.TS{}, collector.packer, collector.data.allocator)
-		if collector.data.batch.Vecs[0].Length() >= DefaultCheckpointBlockRows {
+		if collector.data.batch.RowCount() >= DefaultCheckpointBlockRows {
 			collector.data.sinker.Write(context.Background(), collector.data.batch)
 			collector.data.batch.CleanOnlyData()
 		}
@@ -239,12 +249,12 @@ func visitObject_V2(
 	vector.AppendFixed(bat.Vecs[ckputil.TableObjectsAttr_DB_Idx], entry.GetTable().GetDB().ID, false, mp)
 	vector.AppendFixed(bat.Vecs[ckputil.TableObjectsAttr_Table_Idx], entry.GetTable().ID, false, mp)
 	vector.AppendBytes(bat.Vecs[ckputil.TableObjectsAttr_ID_Idx], entry.ObjectStats[:], false, mp)
-	vector.AppendFixed(bat.Vecs[ckputil.TableObjectsAttr_ObjectType_Idx], entry.IsTombstone, false, mp)
 	packer.Reset()
 	objType := ckputil.ObjectType_Data
 	if entry.IsTombstone {
 		objType = ckputil.ObjectType_Tombstone
 	}
+	vector.AppendFixed(bat.Vecs[ckputil.TableObjectsAttr_ObjectType_Idx], objType, false, mp)
 	ckputil.EncodeCluser(packer, entry.GetTable().ID, objType, entry.ID())
 	vector.AppendBytes(bat.Vecs[ckputil.TableObjectsAttr_Cluster_Idx], packer.Bytes(), false, mp)
 	if create {
@@ -264,4 +274,5 @@ func visitObject_V2(
 			vector.AppendFixed(bat.Vecs[ckputil.TableObjectsAttr_DeleteTS_Idx], entry.CreatedAt, false, mp)
 		}
 	}
+	bat.SetRowCount(bat.Vecs[0].Length())
 }

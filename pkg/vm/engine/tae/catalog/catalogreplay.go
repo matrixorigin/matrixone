@@ -506,7 +506,7 @@ func (catalog *Catalog) OnReplayObjectBatch_V2(vecs containers.Vectors, dataFact
 			panic(fmt.Sprintf("invalid object type %d", objectTypes[i]))
 		}
 		obj, err := rel.GetObjectByID(objID, isTombstone)
-		if !moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+		if err != nil && !moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
 			panic(err)
 		}
 		if obj == nil {

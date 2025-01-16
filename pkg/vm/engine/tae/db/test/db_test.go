@@ -11192,7 +11192,7 @@ func TestCheckpointV2(t *testing.T) {
 	require.NoError(t, err)
 	assert.NoError(t, txn.Commit(ctx))
 
-	ckpStartTS := tae.TxnMgr.Now()
+	// ckpStartTS := tae.TxnMgr.Now()
 
 	tbl := rel.GetMeta().(*catalog.TableEntry)
 	err = tae.ForceFlush(ctx, tae.TxnMgr.Now())
@@ -11206,33 +11206,20 @@ func TestCheckpointV2(t *testing.T) {
 		switch n % 2 {
 		case 1:
 			isTombstone = true
+			tombstoneCnt++
 		case 0:
 			isTombstone = false
+			dataCnt++
 		}
 		switch n % 3 {
 		case 1:
 			create = tae.TxnMgr.Now()
 			delete = tae.TxnMgr.Now()
-			if isTombstone {
-				tombstoneCnt += 2
-			} else {
-				dataCnt += 2
-			}
 		case 2:
 			create = types.BuildTS(100, 0)
 			delete = tae.TxnMgr.Now()
-			if isTombstone {
-				tombstoneCnt++
-			} else {
-				dataCnt++
-			}
 		case 0:
 			create = tae.TxnMgr.Now()
-			if isTombstone {
-				tombstoneCnt++
-			} else {
-				dataCnt++
-			}
 		}
 		obj := catalog.MockObjectEntry(tbl, tae.Catalog, isTombstone, create, delete)
 		tbl.AddEntryLocked(obj)
@@ -11242,7 +11229,7 @@ func TestCheckpointV2(t *testing.T) {
 		addobjFn(tbl)
 	}
 
-	collector := logtail.NewBaseCollector_V2(ckpStartTS, tae.TxnMgr.Now(), tae.Opts.Fs, common.DebugAllocator)
+	collector := logtail.NewBaseCollector_V2(types.TS{}, tae.TxnMgr.Now(), tae.Opts.Fs, common.DebugAllocator)
 	err = collector.Collect(tae.Catalog)
 	assert.NoError(t, err)
 	data := collector.OrphanData()
@@ -11277,8 +11264,24 @@ func TestCheckpointV2(t *testing.T) {
 	}
 	replayer.ReplayObjectlist(ctx, catalog2, false, dataFactory)
 
-	t.Log(tae.Catalog.SimplePPString(3))
-	t.Log(catalog2.SimplePPString(3))
+	var tombstoneCnt2, dataCnt2 int
+	p := &catalog.LoopProcessor{}
+	p.ObjectFn = func(oe *catalog.ObjectEntry) error {
+		if !pkgcatalog.IsSystemTable(oe.GetTable().ID) {
+			dataCnt2++
+		}
+		return nil
+	}
+	p.TombstoneFn = func(oe *catalog.ObjectEntry) error {
+		if !pkgcatalog.IsSystemTable(oe.GetTable().ID) {
+			tombstoneCnt2++
+		}
+		return nil
+	}
+	err = catalog2.RecurLoop(p)
+	assert.NoError(t, err)
+	assert.Equal(t, dataCnt, dataCnt2)
+	assert.Equal(t, tombstoneCnt, tombstoneCnt2)
 }
 
 type objlistReplayer struct{}
