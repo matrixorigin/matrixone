@@ -29,7 +29,7 @@ const (
 	IOET_WALRecord_CurrVer = IOET_WALRecord_V2
 )
 
-func DecodeLogEntry(b []byte) (e LogEntry, err error) {
+func DecodeLogEntry(b []byte, entryHandle func(en *entry.Entry)) (e LogEntry, err error) {
 	header := objectio.DecodeIOEntryHeader(b[:objectio.IOEntryHeaderSize])
 	switch header.Version {
 	case IOET_WALRecord_V1:
@@ -50,6 +50,9 @@ func DecodeLogEntry(b []byte) (e LogEntry, err error) {
 				if n, err = tmp.UnmarshalBinary(v1.payload[offset:]); err != nil {
 					return
 				}
+				if entryHandle != nil {
+					entryHandle(tmp)
+				}
 				off, length := e.AppendEntry(v1.payload[offset : offset+int(n)])
 				footer.AppendEntry(off, length)
 				offset += int(n)
@@ -57,6 +60,8 @@ func DecodeLogEntry(b []byte) (e LogEntry, err error) {
 			e.SetFooter(footer)
 		} else if v1.cmdType == Cmd_SkipDSN {
 			e = SkipMapToLogEntry(v1.cmd.skipMap)
+		} else {
+			return
 		}
 
 		e.SetHeader(header.Type, header.Version, uint16(v1.cmdType))

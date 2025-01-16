@@ -202,7 +202,7 @@ func newReplayer(
 
 	if r.logRecordToLogEntry == nil {
 		r.logRecordToLogEntry = func(record logservice.LogRecord) LogEntry {
-			e, err := DecodeLogEntry(record.Payload())
+			e, err := DecodeLogEntry(record.Payload(), nil)
 			if err != nil {
 				logutil.Fatal(
 					"Wal-Replay",

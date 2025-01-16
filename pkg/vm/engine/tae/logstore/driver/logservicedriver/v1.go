@@ -34,6 +34,14 @@ func newMeta() V1Meta {
 	return V1Meta{addr: make(map[uint64]uint64), cmdType: Cmd_Normal}
 }
 
+func (m *V1Meta) GetPayloadSize() uint64 {
+	return m.payloadSize
+}
+
+func (m *V1Meta) SetPayloadSize(s uint64) {
+	m.payloadSize = s
+}
+
 func (m *V1Meta) GetAddr() map[uint64]uint64 {
 	return m.addr
 }
