@@ -152,7 +152,7 @@ func makeSoftDeleteFilterCoarseFilter(
 			if dropTS.IsEmpty() {
 				continue
 			}
-			if _, ok := (*filterTable)[tableIDs[i]]; !ok {
+			if _, ok := (*filterTable)[tableIDs[i]]; ok {
 				continue
 			}
 			bm.Add(uint64(i))
