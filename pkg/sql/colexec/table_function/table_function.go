@@ -53,6 +53,11 @@ func (tableFunction *TableFunction) Call(proc *process.Process) (vm.CallResult, 
 
 			tableFunction.ctr.inputBatch = input.Batch
 			if input.Batch.IsDone() {
+				// End of Input
+				err := tableFunction.ctr.state.end(tableFunction, proc)
+				if err != nil {
+					return vm.CancelResult, err
+				}
 				return input, nil
 			}
 
