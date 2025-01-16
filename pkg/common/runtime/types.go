@@ -59,6 +59,9 @@ const (
 
 	// TestingContextKey is the key of context for testing
 	TestingContextKey = "testing-context"
+	
+	AccountIsFinalVersion = "account-is-final-version-"
+	ClusterIsFinalVersion = "cluster-is-final-version"
 )
 
 // Runtime contains the runtime environment for a MO service. Each CN/DN/LOG service

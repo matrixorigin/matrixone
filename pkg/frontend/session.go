@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	runtime2 "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -1113,6 +1114,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		psw                  []byte
 		accountVersion       uint64
 		createVersion        string
+		versionOffset        uint64
 		lastChangedTime      string
 		defPwdLife           int
 		userStatus           string
@@ -1140,6 +1142,15 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		if len(ses.requestLabel) == 0 {
 			ses.requestLabel = db_holder.GetLabelSelector()
 		}
+
+		//----------------------------------------------------------------------------------------
+		accKey := fmt.Sprintf(runtime2.AccountIsFinalVersion+"%d", ses.GetAccountId())
+		ss, ok := runtime2.ServiceRuntime(ses.GetService()).GetGlobalVariables(accKey)
+		if ok {
+			isFinalVersion := ss.(bool)
+			ses.GetTxnHandler().SetTxnCtxIsFinalVersionFlag(isFinalVersion)
+		}
+		//----------------------------------------------------------------------------------------
 		return GetPassWord(HashPassWordWithByte(pwdBytes))
 	}
 
@@ -1191,6 +1202,12 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 
 	// create version
 	createVersion, err = rsset[0].GetString(sysTenantCtx, 0, 5)
+	if err != nil {
+		return nil, err
+	}
+
+	// create version
+	versionOffset, err = rsset[0].GetUint64(sysTenantCtx, 0, 6)
 	if err != nil {
 		return nil, err
 	}
@@ -1476,6 +1493,16 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	ses.Debug(ctx, tenant.String())
 	ses.SetCreateVersion(createVersion)
 
+	finalVersion := ses.GetBaseService().GetFinalVersion()
+	finalVersionOffset := ses.GetBaseService().GetFinalVersionOffset()
+	if createVersion == finalVersion && int32(versionOffset) >= finalVersionOffset {
+		ses.GetTxnHandler().SetTxnCtxIsFinalVersionFlag(true)
+		runtime2.ServiceRuntime(ses.service).SetGlobalVariables(fmt.Sprintf(runtime2.AccountIsFinalVersion+"%d", tenantID), true)
+	} else {
+		runtime2.ServiceRuntime(ses.service).SetGlobalVariables(fmt.Sprintf(runtime2.AccountIsFinalVersion+"%d", tenantID), false)
+		ses.GetTxnHandler().SetTxnCtxIsFinalVersionFlag(false)
+	}
+
 	return GetPassWord(pwd)
 }
 
@@ -1493,11 +1520,22 @@ func (ses *Session) UpgradeTenant(ctx context.Context, tenantName string, retryC
 	return ses.rm.baseService.UpgradeTenant(ctx, tenantName, retryCount, isALLAccount)
 }
 
+func (ses *Session) GetBaseService() BaseService {
+	return ses.rm.baseService
+}
+
 func (ses *Session) getGlobalSysVars(ctx context.Context, bh BackgroundExec) (gSysVars map[string]interface{}, err error) {
 	var execResults []ExecResult
 
 	tenantInfo := ses.GetTenantInfo()
 	tenantCtx := defines.AttachAccount(ctx, tenantInfo.TenantID, tenantInfo.UserID, tenantInfo.DefaultRoleID)
+
+	isFinalVersion, err := defines.GetIsFinalVersion(ses.GetTxnHandler().GetTxnCtx())
+	if err != nil {
+		return
+	}
+	tenantCtx = defines.AttachIsFinalVersion(tenantCtx, isFinalVersion)
+
 	// get system variable from mo_mysql_compatibility mode
 	sqlForGetVariables := getSqlForGetSystemVariablesWithAccount(uint64(tenantInfo.GetTenantID()))
 

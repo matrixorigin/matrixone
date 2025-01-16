@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 
 	"github.com/google/uuid"
@@ -233,6 +234,13 @@ func (th *TxnHandler) GetTxnCtx() context.Context {
 	return th.txnCtx
 }
 
+func (th *TxnHandler) SetTxnCtxIsFinalVersionFlag(isFinalVersion bool) context.Context {
+	th.mu.Lock()
+	defer th.mu.Unlock()
+	th.txnCtx = defines.AttachIsFinalVersion(th.txnCtx, isFinalVersion)
+	return th.txnCtx
+}
+
 // invalidateTxnUnsafe releases the txnOp and clears the server status bit SERVER_STATUS_IN_TRANS
 func (th *TxnHandler) invalidateTxnUnsafe() {
 	th.txnOp = nil
@@ -345,6 +353,35 @@ func (th *TxnHandler) createUnsafe(execCtx *ExecCtx) error {
 		}
 	}
 	return err
+}
+
+func checkAccountVersion(ctx context.Context, ses FeSession, bh BackgroundExec) (string, int32, error) {
+	accSql := fmt.Sprintf("SELECT create_version, version_offset FROM mo_catalog.mo_account WHERE account_id = %d", ses.GetAccountId())
+	bh.ClearExecResultSet()
+
+	err := bh.Exec(ctx, accSql)
+	if err != nil {
+		return "", 0, err
+	}
+
+	erArray, err := getResultSet(ctx, bh)
+	if err != nil {
+		return "", 0, err
+	}
+
+	for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
+		createVersion, err := erArray[0].GetString(ctx, i, 0)
+		if err != nil {
+			return "", 0, err
+		}
+
+		versionOffset, err := erArray[0].GetUint64(ctx, i, 1)
+		if err != nil {
+			return "", 0, err
+		}
+		return createVersion, int32(versionOffset), nil
+	}
+	return "", 0, nil
 }
 
 // createTxnOpUnsafe creates a new txn operator using TxnClient. Should not be called outside txn

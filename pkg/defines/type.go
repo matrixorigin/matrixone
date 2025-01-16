@@ -210,6 +210,48 @@ func AttachRoleId(ctx context.Context, roleId uint32) context.Context {
 	return context.WithValue(ctx, RoleIDKey{}, roleId)
 }
 
+type VersionKey struct{}
+type VersionOffsetKey struct{}
+
+type IsFinalVersionKey struct{}
+
+func AttachIsFinalVersion(ctx context.Context, flag bool) context.Context {
+	return context.WithValue(ctx, IsFinalVersionKey{}, flag)
+}
+
+func GetIsFinalVersion(ctx context.Context) (bool, error) {
+	if v := ctx.Value(IsFinalVersionKey{}); v != nil {
+		return v.(bool), nil
+	} else {
+		return false, nil
+		//return false, moerr.NewInternalError(ctx, "no IsFinalVersionKey in context")
+	}
+}
+
+func AttachVersion(ctx context.Context, version string) context.Context {
+	return context.WithValue(ctx, VersionKey{}, version)
+}
+
+func AttachVersionOffset(ctx context.Context, versionOffset uint32) context.Context {
+	return context.WithValue(ctx, VersionOffsetKey{}, versionOffset)
+}
+
+func GetVersion(ctx context.Context) (string, error) {
+	if v := ctx.Value(VersionKey{}); v != nil {
+		return v.(string), nil
+	} else {
+		return "", moerr.NewInternalError(ctx, "no version in context")
+	}
+}
+
+func GetVersionOffset(ctx context.Context) (uint32, error) {
+	if v := ctx.Value(VersionOffsetKey{}); v != nil {
+		return v.(uint32), nil
+	} else {
+		return 0, moerr.NewInternalError(ctx, "no version in context")
+	}
+}
+
 // EngineKey use EngineKey{} to get engine from Context
 type EngineKey struct{}
 

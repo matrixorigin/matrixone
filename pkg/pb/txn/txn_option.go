@@ -90,3 +90,12 @@ func (m TxnOptions) Is1PCDisabled() bool {
 func (m TxnOptions) featureEnabled(feature uint32) bool {
 	return m.Features&feature > 0
 }
+
+func (m TxnOptions) WithIsFinalVersion(flag bool) {
+	m.IsFinalVersion = flag
+}
+
+func (m TxnOptions) WithVersion(version string, versionOffset uint32) {
+	m.Version = version
+	m.VersionOffset = versionOffset
+}

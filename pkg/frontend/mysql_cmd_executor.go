@@ -2624,10 +2624,43 @@ func executeStmtWithWorkspace(ses FeSession,
 	}
 
 	execCtx.txnOpt.autoCommit = autocommit
+
+	isNewTransaction := execCtx.txnOpt.byBegin || !ses.GetTxnHandler().inActiveTxnUnsafe()
 	err = ses.GetTxnHandler().Create(execCtx)
 	if err != nil {
 		return err
 	}
+
+	//----------------------------------------------------------------------------------------------------------
+	if isNewTransaction {
+		isFinalVersion, err := defines.GetIsFinalVersion(execCtx.reqCtx)
+		if err != nil {
+			isFinalVersion = false
+		}
+
+		ses.GetTxnHandler().txnOp.TxnOptions().WithIsFinalVersion(isFinalVersion)
+		if !isFinalVersion {
+			bh := execCtx.ses.GetShareTxnBackgroundExec(execCtx.reqCtx, false)
+			defer bh.Close()
+
+			currVersion, currOffset, err := checkAccountVersion(execCtx.reqCtx, execCtx.ses, bh)
+			if err != nil {
+				return err
+			}
+			ses.GetTxnHandler().txnOp.TxnOptions().WithVersion(currVersion, uint32(currOffset))
+
+			finalVersion := execCtx.ses.GetBaseService().GetFinalVersion()
+			finalVersionOffset := execCtx.ses.GetBaseService().GetFinalVersionOffset()
+			if currVersion == finalVersion && currOffset >= finalVersionOffset {
+				ses.GetTxnHandler().txnOp.TxnOptions().WithIsFinalVersion(true)
+				execCtx.reqCtx = defines.AttachIsFinalVersion(execCtx.reqCtx, true)
+
+				accKey := fmt.Sprintf(runtime.AccountIsFinalVersion+"%d", ses.GetAccountId())
+				runtime.ServiceRuntime(ses.GetService()).SetGlobalVariables(accKey, true)
+			}
+		}
+	}
+	//----------------------------------------------------------------------------------------------------------
 
 	//skip BEGIN stmt
 	if beginStmt {
@@ -2639,7 +2672,6 @@ func executeStmtWithWorkspace(ses FeSession,
 	}
 
 	txnOp := ses.GetTxnHandler().GetTxn()
-
 	//refresh txn id
 	ses.SetTxnId(txnOp.Txn().ID)
 	ses.SetStaticTxnInfo(makeCompactTxnInfo(txnOp))

@@ -540,6 +540,7 @@ type FeSession interface {
 	GetShareTxnBackgroundExec(ctx context.Context, newRawBatch bool) BackgroundExec
 	GetMySQLParser() *mysql.MySQLParser
 	InitBackExec(txnOp TxnOperator, db string, callBack outputCallBackFunc, opts ...*BackgroundExecOption) BackgroundExec
+	GetBaseService() BaseService
 	SessionLogger
 }
 
@@ -970,6 +971,10 @@ func (ses *feSessionImpl) getLastCommitTS() timestamp.Timestamp {
 
 func (ses *feSessionImpl) GetUpstream() FeSession {
 	return ses.upstream
+}
+
+func (ses *feSessionImpl) GetBaseService() BaseService {
+	return ses.upstream.GetBaseService()
 }
 
 // ClearResultBatches does not call Batch.Clear().
