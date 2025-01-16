@@ -30,8 +30,8 @@ type shufflePoolStats struct { //for debug
 	outputCNT   []int64
 	inputTotal  int64
 	outputTotal int64
-	maxBatchCNT int   //max row of batches in shuffle pool
-	directRows  int64 //directly return by shuffle op, don't write into shuffle pool
+	//maxBatchCNT int   //max row of batches in shuffle pool
+	//directRows  int64 //directly return by shuffle op, don't write into shuffle pool
 }
 
 func (sp *ShufflePoolV2) printStats() {
@@ -50,8 +50,8 @@ func (sp *ShufflePoolV2) printStats() {
 		}
 	}
 
-	logutil.Infof("shuffle pool stats: bucket num %v, input %v, output %v, average %v, max %v, min %v, maxBatchCnt %v, directRows %v",
-		sp.bucketNum, sp.stats.inputTotal, sp.stats.outputTotal, sp.stats.inputTotal/int64(sp.bucketNum), maxCNT, minCNT, sp.stats.maxBatchCNT, sp.stats.directRows)
+	//logutil.Infof("shuffle pool stats: bucket num %v, input %v, output %v, average %v, max %v, min %v, maxBatchCnt %v, directRows %v",
+	//	sp.bucketNum, sp.stats.inputTotal, sp.stats.outputTotal, sp.stats.inputTotal/int64(sp.bucketNum), maxCNT, minCNT, sp.stats.maxBatchCNT, sp.stats.directRows)
 }
 
 type ShufflePoolV2 struct {
@@ -175,11 +175,11 @@ func (sp *ShufflePoolV2) getEndingBatch(buf *batch.Batch, shuffleIDX int32, proc
 			sp.endingWaiters[shuffleIDX] <- true
 			bat = sp.batches[shuffleIDX]
 			sp.batches[shuffleIDX] = nil
-			if bat != nil {
-				sp.statsLock.Lock()
-				sp.stats.outputCNT[shuffleIDX] += int64(bat.RowCount())
-				sp.statsLock.Unlock()
-			}
+			//if bat != nil {
+			//sp.statsLock.Lock()
+			//sp.stats.outputCNT[shuffleIDX] += int64(bat.RowCount())
+			//sp.statsLock.Unlock()
+			//}
 			return bat
 		case <-proc.Ctx.Done():
 			if buf != nil {
@@ -204,9 +204,9 @@ func (sp *ShufflePoolV2) getFullBatch(buf *batch.Batch, shuffleIDX int32) *batch
 		buf.ShuffleIDX = bat.ShuffleIDX
 	}
 	sp.batches[shuffleIDX] = buf
-	sp.statsLock.Lock()
-	sp.stats.outputCNT[shuffleIDX] += int64(bat.RowCount())
-	sp.statsLock.Unlock()
+	//sp.statsLock.Lock()
+	//sp.stats.outputCNT[shuffleIDX] += int64(bat.RowCount())
+	//sp.statsLock.Unlock()
 	return bat
 }
 
@@ -232,12 +232,12 @@ func (sp *ShufflePoolV2) putAllBatchIntoPoolByShuffleIdx(srcBatch *batch.Batch, 
 	if err != nil {
 		return err
 	}
-	sp.statsLock.Lock()
-	if sp.batches[shuffleIDX].RowCount() > sp.stats.maxBatchCNT {
-		sp.stats.maxBatchCNT = sp.batches[shuffleIDX].RowCount()
-	}
-	sp.stats.inputCNT[shuffleIDX] += int64(srcBatch.RowCount())
-	sp.statsLock.Unlock()
+	//sp.statsLock.Lock()
+	//if sp.batches[shuffleIDX].RowCount() > sp.stats.maxBatchCNT {
+	//	sp.stats.maxBatchCNT = sp.batches[shuffleIDX].RowCount()
+	//}
+	//sp.stats.inputCNT[shuffleIDX] += int64(srcBatch.RowCount())
+	//sp.statsLock.Unlock()
 	if sp.batches[shuffleIDX].RowCount() >= colexec.DefaultBatchSize && len(sp.batchWaiters[shuffleIDX]) == 0 {
 		sp.batchWaiters[shuffleIDX] <- true
 	}
@@ -265,28 +265,27 @@ func (sp *ShufflePoolV2) putBatchIntoShuffledPoolsBySels(srcBatch *batch.Batch, 
 					return err
 				}
 			}
-			sp.statsLock.Lock()
-			sp.stats.inputCNT[i] += int64(len(currentSels))
-			if bat.RowCount() > sp.stats.maxBatchCNT {
-				sp.stats.maxBatchCNT = bat.RowCount()
-			}
-			sp.statsLock.Unlock()
 			bat.AddRowCount(len(currentSels))
 			if bat.RowCount() >= colexec.DefaultBatchSize && len(sp.batchWaiters[i]) == 0 {
 				sp.batchWaiters[i] <- true
 			}
-
 			sp.batchLocks[i].Unlock()
+			//sp.statsLock.Lock()
+			//sp.stats.inputCNT[i] += int64(len(currentSels))
+			//if bat.RowCount() > sp.stats.maxBatchCNT {
+			//	sp.stats.maxBatchCNT = bat.RowCount()
+			//}
+			//sp.statsLock.Unlock()
 		}
 	}
 	return nil
 }
 
 func (sp *ShufflePoolV2) statsDirectlySentBatch(srcBatch *batch.Batch) {
-	rows := int64(srcBatch.RowCount())
-	sp.statsLock.Lock()
-	sp.stats.inputCNT[srcBatch.ShuffleIDX] += rows
-	sp.stats.outputCNT[srcBatch.ShuffleIDX] += rows
-	sp.stats.directRows += rows
-	sp.statsLock.Unlock()
+	//rows := int64(srcBatch.RowCount())
+	//sp.statsLock.Lock()
+	//sp.stats.inputCNT[srcBatch.ShuffleIDX] += rows
+	//sp.stats.outputCNT[srcBatch.ShuffleIDX] += rows
+	//sp.stats.directRows += rows
+	//sp.statsLock.Unlock()
 }

@@ -1,0 +1,131 @@
+create stage llmstage URL='file:///$resources/plugin/';
+select * from moplugin_table('stage://llmstage/cat.wasm', 'cat', null, '[1,2,3]') as f;
+result
+1
+2
+3
+select * from moplugin_table(cast('stage://llmstage/cat.wasm' as json), 'cat', null, '[1,2,3]') as f;
+invalid input: json text stage://llmstage/cat.wasm
+select * from moplugin_table('stage://llmstage/cat.wasm"') as f;
+invalid input: Invalid number of arguments (NARGS != 4).
+select * from moplugin_table('unknown', 'cat', null, '[1,2,3]') as f;
+unsupported url scheme  is not yet implemented
+select * from moplugin_table('stage://llmstage/cat.wasm', '1') as f;
+invalid input: Invalid number of arguments (NARGS != 4).
+select * from moplugin_table('stage://llmstage/cat.wasm', 'cat', null, '[1a,2,3]') as f;
+internal error: parse json: json: expected token but found 'a': a
+select * from moplugin_table('stage://llmstage/cat.wasm', 'cat',
+cast('["header", "footer"]' as JSON), '1,2,3') as f;
+internal error: config must be a JSON object
+select * from moplugin_table(null, 'cat', null, null) as f;
+internal error: wasm URL only support varchar, char, text and datalink type
+select * from moplugin_table('stage://llmstage/cat.wasm', null, null, null) as f;
+result
+select * from moplugin_table('stage://llmstage/cat.wasm', 'cat', null, '') as f;
+result
+select * from moplugin_table('stage://llmstage/cat.wasm', 'cat',
+'{"header":"[", "footer":"]"}', '1,2,3') as f;
+result
+1
+2
+3
+select * from moplugin_table('stage://llmstage/cat.wasm', 'cat',
+cast('{"header":"[", "footer":"]"}' as JSON), '1,2,3') as f;
+result
+1
+2
+3
+select * from moplugin_table('stage://llmstage/cat.wasm', 'cat', null, '[1,2,3]') as f;
+result
+1
+2
+3
+select * from moplugin_table('stage://llmstage/cat.wasm', 'cat', null, '["1","2","3"]') as f;
+result
+"1"
+"2"
+"3"
+select * from moplugin_table(cast('stage://llmstage/cat.wasm' as datalink), 'cat', null, '["a","b","c"]') as f;
+result
+"a"
+"b"
+"c"
+select * from moplugin_table(cast('stage://llmstage/cat.wasm' as datalink), 'cat', null, '["a","b",null]') as f;
+result
+"a"
+"b"
+null
+select * from moplugin_table('stage://llmstage/cat.wasm', 'cat', null, '[false,true,null]') as f;
+result
+false
+true
+null
+select json_extract(result, "$.id") from moplugin_table('stage://llmstage/cat.wasm', 'cat', null, '[{"id":1},{"id":2},{"id":3}]') as f;
+json_extract(result, $.id)
+1
+2
+3
+select * from moplugin_table('stage://llmstage/cat.wasm', 'cat', null, cast('file:///$resources/plugin/result.json' as datalink)) as f;
+result
+{"chunk": 0, "e": "[1.1, 2.2, 3.3]", "t": "text0"}
+{"chunk": "1", "e": "[2.5, 3.5, 4.5]", "t": "text1"}
+{"chunk": "2", "e": "[9.1, 8.2, 7.3]", "t": "text2"}
+select json_extract(result, "$.chunk"), json_extract(result, "$.e") from moplugin_table('stage://llmstage/cat.wasm', 'cat', null,
+cast('file:///$resources/plugin/multistream.json?offset=0&size=155' as datalink) ) as f;
+json_extract(result, $.chunk)    json_extract(result, $.e)
+0    "[1.1, 2.2, 3.3]"
+"1"    "[2.5, 3.5, 4.5]"
+"2"    "[9.1, 8.2, 7.3]"
+select json_extract(result, "$.chunk"), json_extract(result, "$.e") from moplugin_table('stage://llmstage/cat.wasm', 'cat', null,
+cast('file:///$resources/plugin/multistream.json?offset=155&size=164' as datalink) ) as f;
+json_extract(result, $.chunk)    json_extract(result, $.e)
+3    "[10.1, 20.2, 30.3]"
+"4"    "[20.5, 30.5, 40.5]"
+"5"    "[90.1, 80.2, 70.3]"
+create table t1 (chunk int, e vecf32(3));
+insert into t1 select json_unquote(json_extract(result, "$.chunk")), json_unquote(json_extract(result, "$.e"))
+from moplugin_table('stage://llmstage/cat.wasm', 'cat', null, cast('file:///$resources/plugin/result.json' as datalink)) as f;
+select * from t1;
+chunk    e
+0    [1.1, 2.2, 3.3]
+1    [2.5, 3.5, 4.5]
+2    [9.1, 8.2, 7.3]
+truncate t1;
+insert into t1 select json_unquote(json_extract(result, "$.chunk")), json_unquote(json_extract(result, "$.e"))
+from moplugin_table('stage://llmstage/cat.wasm', 'cat', null,
+cast('file:///$resources/plugin/multistream.json?offset=0&size=155' as datalink) ) as f;
+select * from t1;
+chunk    e
+0    [1.1, 2.2, 3.3]
+1    [2.5, 3.5, 4.5]
+2    [9.1, 8.2, 7.3]
+insert into t1 select json_unquote(json_extract(result, "$.chunk")), json_unquote(json_extract(result, "$.e"))
+from moplugin_table('stage://llmstage/cat.wasm', 'cat', null, cast('file:///$resources/plugin/multistream.json?offset=155&size=164' as datalink) ) as f;
+select * from t1;
+chunk    e
+0    [1.1, 2.2, 3.3]
+1    [2.5, 3.5, 4.5]
+2    [9.1, 8.2, 7.3]
+3    [10.1, 20.2, 30.3]
+4    [20.5, 30.5, 40.5]
+5    [90.1, 80.2, 70.3]
+drop table t1;
+create table src (pkey int primary key, dlink datalink);
+create table embed (pkey int, chunk int, e vecf32(3), t varchar);
+insert into src values
+(0, 'stage://llmstage/multistream.json?offset=0&size=155'),
+(1, 'stage://llmstage/multistream.json?offset=155&size=164');
+insert into embed select src.pkey, json_unquote(json_extract(f.result, "$.chunk")),
+json_unquote(json_extract(f.result, "$.e")), json_unquote(json_extract(f.result, "$.t"))
+from src CROSS APPLY moplugin_table('stage://llmstage/cat.wasm', 'cat', null, src.dlink) as f;
+select * from embed;
+pkey    chunk    e    t
+0    0    [1.1, 2.2, 3.3]    text0
+0    1    [2.5, 3.5, 4.5]    text1
+0    2    [9.1, 8.2, 7.3]    text2
+1    3    [10.1, 20.2, 30.3]    text3
+1    4    [20.5, 30.5, 40.5]    text4
+1    5    [90.1, 80.2, 70.3]    text5
+drop stage llmstage;
+drop table src;
+drop table embed;

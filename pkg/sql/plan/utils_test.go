@@ -168,6 +168,8 @@ func TestDoResolveTimeStamp(t *testing.T) {
 		expectErr bool
 	}{
 		//{"2023-10-01 12:00:00", 1696132800000000000, false},
+		{"", 0, true},
+		{"2023-10-01", 0, true},
 		{"invalid-timestamp", 0, true},
 		{"2023-10-01 25:00:00", 0, true}, // Invalid hour
 	}

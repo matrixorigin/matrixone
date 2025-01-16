@@ -388,12 +388,13 @@ func (catalog *Catalog) ReplayMOTables(ctx context.Context, txnNode *txnbase.Txn
 			schema.Relkind = tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Kind).GetDownstreamVector().GetStringAt(i)
 			schema.Createsql = tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_CreateSQL).GetDownstreamVector().GetStringAt(i)
 			schema.View = tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_ViewDef).GetDownstreamVector().GetStringAt(i)
-			schema.Constraint = tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Constraint).GetDownstreamVector().GetBytesAt(i)
+			schema.Constraint = tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Constraint).GetDownstreamVector().CloneBytesAt(i)
 			schema.AcInfo = accessInfo{}
 			schema.AcInfo.RoleID = roleIDs[i]
 			schema.AcInfo.UserID = userIDs[i]
 			schema.AcInfo.CreateAt = createAts[i]
 			schema.AcInfo.TenantID = tenantIDs[i]
+			// unmarshal before releasing, no need to copy
 			extra := tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_ExtraInfo).GetDownstreamVector().GetBytesAt(i)
 			schema.MustRestoreExtra(extra)
 			if err := schema.Finalize(true); err != nil {
