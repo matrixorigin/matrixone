@@ -3210,6 +3210,10 @@ var (
 			output: "create index idx using hnsw on a (a) M 4 EF_CONSTRUCTION 100 QUANTIZATION BF16 OP_TYPE VECTOR_L2_OPS ",
 		},
 		{
+			input:  "CREATE TABLE `vector_index_01` ( `a` bigint NOT NULL, `b` vecf32(128) DEFAULT NULL, PRIMARY KEY (`a`), KEY `idx01` USING hnsw (`b`) m = 4  ef_construction = 100  quantization 'bf16'  op_type 'vector_l2_ops' )",
+			output: "create table vector_index_01 (a bigint not null, b vecf32(128) default null, primary key (a), index idx01 using hnsw (b)  M 4 EF_CONSTRUCTION 100 QUANTIZATION bf16 OP_TYPE vector_l2_ops )",
+		},
+		{
 			input:  "alter table t1 alter reindex idx1 hnsw",
 			output: "alter table t1 alter reindex idx1 hnsw",
 		},

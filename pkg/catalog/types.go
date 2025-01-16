@@ -373,8 +373,9 @@ const (
 	/************ 4. HNSW Index *************/
 
 	// HNSW Table Types
-	Hnsw_TblType_Metadata = "metadata"
-	Hnsw_TblType_Storage  = "storage"
+	// NOTE: avoid duplicate TblType name with IVFFLAT or other index
+	Hnsw_TblType_Metadata = "hnsw_meta"
+	Hnsw_TblType_Storage  = "hnsw_index"
 
 	// HNSW Storage - Column names
 	Hnsw_TblCol_Storage_Index_Id = "index_id"
