@@ -18,8 +18,6 @@ import (
 	"bytes"
 	"io"
 	"math"
-	"sync"
-	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
@@ -241,9 +239,7 @@ func (r *v1Entry) Unmarshal(buf []byte) error {
 // write: entries+meta -> payload -> record
 type v1Record struct {
 	v1Entry
-	payload     []byte
-	unmarshaled atomic.Uint32
-	mashalMu    sync.RWMutex
+	payload []byte
 }
 
 func newRecordEntry() *v1Record {

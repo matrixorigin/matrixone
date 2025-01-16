@@ -52,10 +52,6 @@ type driverInfo struct {
 	dsn   uint64
 	dsnmu sync.RWMutex
 
-	syncing  uint64
-	synced   uint64
-	syncedMu sync.RWMutex
-
 	watermark struct {
 		mu            sync.RWMutex
 		committingDSN uint64

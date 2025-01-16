@@ -49,7 +49,7 @@ func restartDriver(t *testing.T, d *LogServiceDriver, h func(*entry.Entry)) *Log
 	}
 	// preLsns:=d.validPSN
 	t.Logf("Valid lsn: %v", d.psn.records)
-	t.Logf("Driver DSN %d, Syncing %d, Synced %d", d.dsn, d.syncing, d.synced)
+	t.Logf("Driver DSN %d, Syncing %d, Synced %d", d.dsn, d.watermark.committingDSN, d.watermark.committedDSN)
 	t.Logf("Truncated %d", d.truncateDSNIntent.Load())
 	t.Logf("LSTruncated %d", d.truncatedPSN)
 	d = NewLogServiceDriver(&d.config)
@@ -78,7 +78,6 @@ func restartDriver(t *testing.T, d *LogServiceDriver, h func(*entry.Entry)) *Log
 	// }
 	t.Logf("Valid lsn: %v", d.psn.records)
 	// assert.Equal(t,preLsns.GetCardinality(),d.validPSN.GetCardinality())
-	t.Logf("Driver DSN %d, Syncing %d, Synced %d", d.dsn, d.syncing, d.synced)
 	t.Logf("Truncated %d", d.truncateDSNIntent.Load())
 	t.Logf("LSTruncated %d", d.truncatedPSN)
 	return d
