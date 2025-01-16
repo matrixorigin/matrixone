@@ -38,6 +38,8 @@ const (
 	ShardService = "shard-service"
 	// ProcessCodecService process codec service
 	ProcessCodecService = "process-codec-service"
+	// PartitionService partition service
+	PartitionService = "partition-service"
 
 	// TxnOptions options used to create txn
 	TxnOptions = "txn-options"

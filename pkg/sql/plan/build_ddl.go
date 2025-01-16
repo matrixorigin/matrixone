@@ -738,12 +738,19 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 		return nil, moerr.NewInternalError(ctx.GetContext(), "rewrite for create table like failed")
 	}
 
+	rawSQL := ""
+	if stmt.PartitionOption != nil {
+		rawSQL = tree.String(stmt, dialect.MYSQL)
+	}
+
 	createTable := &plan.CreateTable{
 		IfNotExists: stmt.IfNotExists,
 		Temporary:   stmt.Temporary,
 		TableDef: &TableDef{
 			Name: string(stmt.Table.ObjectName),
 		},
+		RawSQL:      rawSQL,
+		IsPartition: stmt.PartitionOption != nil,
 	}
 
 	// get database name
@@ -1394,6 +1401,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		} else {
 			clusterByColName := util.BuildCompositeClusterByColumnName(clusterByKeys)
 			colDef := MakeHiddenColDefByName(clusterByColName)
+			colDef.Default.NullAbility = true
 			createTable.TableDef.Cols = append(createTable.TableDef.Cols, colDef)
 			colMap[clusterByColName] = colDef
 

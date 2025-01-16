@@ -387,12 +387,13 @@ func (catalog *Catalog) ReplayMOTables(ctx context.Context, txnNode *txnbase.Txn
 			schema.Relkind = tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Kind).GetDownstreamVector().GetStringAt(i)
 			schema.Createsql = tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_CreateSQL).GetDownstreamVector().GetStringAt(i)
 			schema.View = tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_ViewDef).GetDownstreamVector().GetStringAt(i)
-			schema.Constraint = tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Constraint).GetDownstreamVector().GetBytesAt(i)
+			schema.Constraint = tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Constraint).GetDownstreamVector().CloneBytesAt(i)
 			schema.AcInfo = accessInfo{}
 			schema.AcInfo.RoleID = roleIDs[i]
 			schema.AcInfo.UserID = userIDs[i]
 			schema.AcInfo.CreateAt = createAts[i]
 			schema.AcInfo.TenantID = tenantIDs[i]
+			// unmarshal before releasing, no need to copy
 			extra := tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_ExtraInfo).GetDownstreamVector().GetBytesAt(i)
 			schema.MustRestoreExtra(extra)
 			if err := schema.Finalize(true); err != nil {
@@ -471,13 +472,14 @@ func (catalog *Catalog) OnReplayObjectBatch(replayer ObjectListReplayer, objectI
 	startTSs := vector.MustFixedColNoTypeCheck[types.TS](objectInfo.GetVectorByName(txnbase.SnapshotAttr_StartTS).GetDownstreamVector())
 	createTSs := vector.MustFixedColNoTypeCheck[types.TS](objectInfo.GetVectorByName(EntryNode_CreateAt).GetDownstreamVector())
 	deleteTSs := vector.MustFixedColNoTypeCheck[types.TS](objectInfo.GetVectorByName(EntryNode_DeleteAt).GetDownstreamVector())
+	objs := objectInfo.GetVectorByName(ObjectAttr_ObjectStats).GetDownstreamVector()
 	for i, tid := range tids {
 		if forSys != pkgcatalog.IsSystemTable(tid) {
 			continue
 		}
 		replayFn := func() {
 			dbid := dbids[i]
-			objectNode := ReadObjectInfoTuple(objectInfo, i)
+			objectNode := ReadObjectInfoTuple(objs, i)
 			sid := objectNode.ObjectName().ObjectId()
 			catalog.onReplayCheckpointObject(
 				dbid, tid, sid, createTSs[i], deleteTSs[i], startTSs[i], prepareTSs[i], commitTSs[i], objectNode, isTombstone, dataFactory)

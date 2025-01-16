@@ -2140,12 +2140,8 @@ func (c *Compile) compileUnionAll(node *plan.Node, ss []*Scope, children []*Scop
 func (c *Compile) compileJoin(node, left, right *plan.Node, probeScopes, buildScopes []*Scope) []*Scope {
 	if node.Stats.HashmapStats.Shuffle {
 		if len(c.cnList) == 1 {
-			if node.JoinType == plan.Node_DEDUP || node.BuildOnLeft {
-				logutil.Infof("not support shuffle v2 for dedup or right join now")
-			} else if left.NodeType == plan.Node_JOIN && left.Stats.HashmapStats.Shuffle && left.BuildOnLeft {
-				logutil.Infof("not support shuffle v2 for right join now")
-			} else if right.NodeType == plan.Node_JOIN && right.Stats.HashmapStats.Shuffle && right.BuildOnLeft {
-				logutil.Infof("not support shuffle v2 for right join now")
+			if node.JoinType == plan.Node_DEDUP {
+				logutil.Infof("not support shuffle v2 for dedup join now")
 			} else {
 				return c.compileShuffleJoinV2(node, left, right, probeScopes, buildScopes)
 			}
@@ -2164,12 +2160,15 @@ func (c *Compile) compileShuffleJoinV2(node, left, right *plan.Node, leftscopes,
 	if len(leftscopes) != len(rightscopes) {
 		panic("wrong scopes for shuffle join!")
 	}
+	reuse := node.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reuse
 	bucketNum := len(c.cnList) * int(node.Stats.Dop)
 	for i := range leftscopes {
 		leftscopes[i].PreScopes = append(leftscopes[i].PreScopes, rightscopes[i])
-		shuffleOpForProbe := constructShuffleOperatorForJoinV2(int32(bucketNum), node, true)
-		shuffleOpForProbe.SetAnalyzeControl(c.anal.curNodeIdx, false)
-		leftscopes[i].setRootOperator(shuffleOpForProbe)
+		if !reuse {
+			shuffleOpForProbe := constructShuffleOperatorForJoinV2(int32(bucketNum), node, true)
+			shuffleOpForProbe.SetAnalyzeControl(c.anal.curNodeIdx, false)
+			leftscopes[i].setRootOperator(shuffleOpForProbe)
+		}
 
 		shuffleOpForBuild := constructShuffleOperatorForJoinV2(int32(bucketNum), node, false)
 		shuffleOpForBuild.SetAnalyzeControl(c.anal.curNodeIdx, false)
@@ -2271,6 +2270,9 @@ func constructShuffleJoinOP(c *Compile, shuffleJoins []*Scope, node, left, right
 		for i := range shuffleJoins {
 			op := constructRight(node, leftTyps, rightTyps, c.proc)
 			op.ShuffleIdx = int32(i)
+			if shuffleV2 {
+				op.ShuffleIdx = -1
+			}
 			op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 			shuffleJoins[i].setRootOperator(op)
 		}
@@ -3031,12 +3033,7 @@ func (c *Compile) compileShuffleGroupV2(n *plan.Node, inputSS []*Scope, nodes []
 
 func (c *Compile) compileShuffleGroup(n *plan.Node, inputSS []*Scope, nodes []*plan.Node) []*Scope {
 	if len(c.cnList) == 1 {
-		child := nodes[n.Children[0]]
-		if child.NodeType == plan.Node_JOIN && child.Stats.HashmapStats.Shuffle && n.BuildOnLeft {
-			logutil.Infof("not support shuffle v2 for right join now")
-		} else {
-			return c.compileShuffleGroupV2(n, inputSS, nodes)
-		}
+		return c.compileShuffleGroupV2(n, inputSS, nodes)
 	}
 
 	if n.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reuse {
@@ -3256,7 +3253,7 @@ func (c *Compile) compileMultiUpdate(_ []*plan.Node, n *plan.Node, ss []*Scope) 
 		}
 
 		for i := range ss {
-			multiUpdateArg := constructMultiUpdate(n, c.e)
+			multiUpdateArg := constructMultiUpdate(n, c.e, ss[i].IsRemote)
 			multiUpdateArg.Action = multi_update.UpdateWriteS3
 			multiUpdateArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 			ss[i].setRootOperator(multiUpdateArg)
@@ -3267,7 +3264,7 @@ func (c *Compile) compileMultiUpdate(_ []*plan.Node, n *plan.Node, ss []*Scope) 
 			rs = c.newMergeScope(ss)
 		}
 
-		multiUpdateArg := constructMultiUpdate(n, c.e)
+		multiUpdateArg := constructMultiUpdate(n, c.e, rs.IsRemote)
 		multiUpdateArg.Action = multi_update.UpdateFlushS3Info
 		rs.setRootOperator(multiUpdateArg)
 		ss = []*Scope{rs}
@@ -3276,7 +3273,7 @@ func (c *Compile) compileMultiUpdate(_ []*plan.Node, n *plan.Node, ss []*Scope) 
 			rs := c.newMergeScope(ss)
 			ss = []*Scope{rs}
 		}
-		multiUpdateArg := constructMultiUpdate(n, c.e)
+		multiUpdateArg := constructMultiUpdate(n, c.e, ss[0].IsRemote)
 		multiUpdateArg.Action = multi_update.UpdateWriteTable
 		multiUpdateArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[0].setRootOperator(multiUpdateArg)
@@ -4465,15 +4462,7 @@ func (c *Compile) runSqlWithResult(sql string, accountId int32) (executor.Result
 		panic("missing lock service")
 	}
 
-	// default 1
-	var lower int64 = 1
-	if resolveVariableFunc := c.proc.GetResolveVariableFunc(); resolveVariableFunc != nil {
-		lowerVar, err := resolveVariableFunc("lower_case_table_names", true, false)
-		if err != nil {
-			return executor.Result{}, err
-		}
-		lower = lowerVar.(int64)
-	}
+	lower := c.getLower()
 
 	exec := v.(executor.SQLExecutor)
 	opts := executor.Options{}.
@@ -4620,4 +4609,17 @@ func (c *Compile) getHaveDDL() bool {
 		return txn.GetWorkspace().GetHaveDDL()
 	}
 	return false
+}
+
+func (c *Compile) getLower() int64 {
+	// default 1
+	var lower int64 = 1
+	if resolveVariableFunc := c.proc.GetResolveVariableFunc(); resolveVariableFunc != nil {
+		lowerVar, err := resolveVariableFunc("lower_case_table_names", true, false)
+		if err != nil {
+			return 1
+		}
+		lower = lowerVar.(int64)
+	}
+	return lower
 }
