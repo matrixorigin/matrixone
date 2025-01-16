@@ -56,21 +56,24 @@ func RetryWithTimeout(timeoutDuration time.Duration, fn func() (shouldReturn boo
 
 type LogServiceDriver struct {
 	*driverInfo
-	clientPool      *clientpool
-	config          *Config
-	currentAppender *driverAppender
+	clientPool *clientpool
+	config     Config
+	committer  *groupCommitter
 
-	closeCtx        context.Context
-	closeCancel     context.CancelFunc
-	doAppendLoop    sm.Queue
-	appendWaitQueue chan any
-	waitAppendLoop  *sm.Loop
-	postAppendQueue chan any
-	postAppendLoop  *sm.Loop
+	reuse struct {
+		tokens []uint64
+	}
 
+	commitLoop      sm.Queue
+	commitWaitQueue chan any
+	waitCommitLoop  *sm.Loop
+	postCommitQueue chan any
+	postCommitLoop  *sm.Loop
+	truncateQueue   sm.Queue
+
+	ctx        context.Context
+	cancel     context.CancelFunc
 	appendPool *ants.Pool
-
-	truncateQueue sm.Queue
 }
 
 func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
@@ -92,20 +95,20 @@ func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
 
 	d := &LogServiceDriver{
 		clientPool:      newClientPool(cfg.ClientMaxCount, clientpoolConfig),
-		config:          cfg,
-		currentAppender: newDriverAppender(),
+		config:          *cfg,
+		committer:       getCommitter(),
 		driverInfo:      newDriverInfo(),
-		appendWaitQueue: make(chan any, 10000),
-		postAppendQueue: make(chan any, 10000),
+		commitWaitQueue: make(chan any, 10000),
+		postCommitQueue: make(chan any, 10000),
 		appendPool:      pool,
 	}
-	d.closeCtx, d.closeCancel = context.WithCancel(context.Background())
-	d.doAppendLoop = sm.NewSafeQueue(10000, 10000, d.onAppendRequests)
-	d.doAppendLoop.Start()
-	d.waitAppendLoop = sm.NewLoop(d.appendWaitQueue, d.postAppendQueue, d.onWaitAppendRequests, 10000)
-	d.waitAppendLoop.Start()
-	d.postAppendLoop = sm.NewLoop(d.postAppendQueue, nil, d.onAppendDone, 10000)
-	d.postAppendLoop.Start()
+	d.ctx, d.cancel = context.WithCancel(context.Background())
+	d.commitLoop = sm.NewSafeQueue(10000, 10000, d.onCommitIntents)
+	d.commitLoop.Start()
+	d.waitCommitLoop = sm.NewLoop(d.commitWaitQueue, d.postCommitQueue, d.onWaitCommitted, 10000)
+	d.waitCommitLoop.Start()
+	d.postCommitLoop = sm.NewLoop(d.postCommitQueue, nil, d.onCommitDone, 10000)
+	d.postCommitLoop.Start()
 	d.truncateQueue = sm.NewSafeQueue(10000, 10000, d.onTruncateRequests)
 	d.truncateQueue.Start()
 	return d
@@ -117,13 +120,13 @@ func (d *LogServiceDriver) GetMaxClient() int {
 
 func (d *LogServiceDriver) Close() error {
 	d.clientPool.Close()
-	d.closeCancel()
-	d.doAppendLoop.Stop()
-	d.waitAppendLoop.Stop()
-	d.postAppendLoop.Stop()
+	d.cancel()
+	d.commitLoop.Stop()
+	d.waitCommitLoop.Stop()
+	d.postCommitLoop.Stop()
 	d.truncateQueue.Stop()
-	close(d.appendWaitQueue)
-	close(d.postAppendQueue)
+	close(d.commitWaitQueue)
+	close(d.postCommitQueue)
 	d.appendPool.Release()
 	return nil
 }
@@ -146,7 +149,7 @@ func (d *LogServiceDriver) Replay(
 		// for readwrite driver, it can only serve the write request
 		// after the REPLAYED state
 		WithReplayerOnScheduled(
-			func(psn uint64, dsnRange *common.ClosedIntervals, _ *recordEntry) {
+			func(psn uint64, dsnRange *common.ClosedIntervals, _ LogEntry) {
 				d.recordPSNInfo(psn, dsnRange)
 			},
 		),

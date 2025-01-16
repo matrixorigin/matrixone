@@ -52,13 +52,13 @@ func getLocations(rec logservice.LogRecord, tag string) []string {
 		return nil
 	}
 	buffer := bytes.NewBuffer(data[dataHeaderSize:])
-	m := &logservicedriver.Meta{}
+	m := &logservicedriver.V1Meta{}
 	_, err := m.ReadFrom(buffer)
 	if err != nil {
 		logutil.Errorf("failed to read data from buffer: %v", err)
 		return nil
 	}
-	if m.GetType() != logservicedriver.TNormal {
+	if m.GetType() != logservicedriver.Cmd_Normal {
 		return nil
 	}
 	var locations []string

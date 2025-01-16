@@ -15,6 +15,7 @@
 package logservicedriver
 
 import (
+	"context"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -22,6 +23,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"go.uber.org/zap"
 )
 
 const (
@@ -67,10 +70,57 @@ func (c *wrappedClient) Close() {
 	c.c.Close()
 }
 
-func (c *wrappedClient) TryResize(size int) {
+func (c *wrappedClient) tryResize(size int) {
 	if len(c.record.Payload()) < size {
 		c.record = c.c.GetLogRecord(size)
 	}
+}
+
+func (c *wrappedClient) Append(
+	ctx context.Context,
+	e LogEntry,
+	timeout time.Duration,
+	maxRetry int,
+	timeoutCause error,
+) (psn uint64, err error) {
+	c.tryResize(len(e[:]))
+	copy(c.record.Payload(), e[:])
+	c.record.ResizePayload(len(e[:]))
+
+	var (
+		retryTimes int
+		now        = time.Now()
+	)
+
+	defer func() {
+		if err != nil || retryTimes > 0 || time.Since(now) > time.Second*5 {
+			logger := logutil.Info
+			if err != nil {
+				logger = logutil.Error
+			}
+			logger(
+				"WAL-Commit-Append",
+				zap.Uint64("psn", psn),
+				zap.Int("size", len(e[:])),
+				zap.Int("retry-times", retryTimes),
+				zap.Duration("duration", time.Since(now)),
+				zap.Error(err),
+			)
+		}
+	}()
+
+	for ; retryTimes < maxRetry+1; retryTimes++ {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeoutCause(
+			ctx, timeout, moerr.CauseDriverAppender1,
+		)
+		psn, err = c.c.Append(ctx, c.record)
+		cancel()
+		if err == nil {
+			break
+		}
+	}
+	return
 }
 
 type clientpool struct {
