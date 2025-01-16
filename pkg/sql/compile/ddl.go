@@ -3492,27 +3492,34 @@ func lockRows(
 	eng engine.Engine,
 	proc *process.Process,
 	rel engine.Relation,
-	vec *vector.Vector,
+	bat *batch.Batch,
+	idx int32,
 	lockMode lock.LockMode,
 	sharding lock.Sharding,
-	group uint32) error {
+	group uint32,
+) error {
+	var vec *vector.Vector
+	if bat != nil {
+		vec = bat.GetVector(idx)
+	}
 	if vec == nil || vec.Length() == 0 {
 		panic("lock rows is empty")
 	}
 
 	id := rel.GetTableID(proc.Ctx)
 
-	err := lockop.LockRows(
+	return lockop.LockRows(
 		eng,
 		proc,
 		rel,
 		id,
-		vec,
+		bat,
+		idx,
 		*vec.GetType(),
 		lockMode,
 		sharding,
-		group)
-	return err
+		group,
+	)
 }
 
 var maybeCreateAutoIncrement = func(
@@ -3634,7 +3641,7 @@ func getRelFromMoCatalog(c *Compile, tblName string) (engine.Relation, error) {
 	return rel, nil
 }
 
-func getLockVector(proc *process.Process, accountId uint32, names []string) (*vector.Vector, error) {
+func getLockBatch(proc *process.Process, accountId uint32, names []string) (*batch.Batch, error) {
 	vecs := make([]*vector.Vector, len(names)+1)
 	defer func() {
 		for _, v := range vecs {
@@ -3665,7 +3672,9 @@ func getLockVector(proc *process.Process, accountId uint32, names []string) (*ve
 	if err != nil {
 		return nil, err
 	}
-	return vec, nil
+	bat := batch.NewWithSize(1)
+	bat.SetVector(0, vec)
+	return bat, nil
 }
 
 var lockMoDatabase = func(c *Compile, dbName string, lockMode lock.LockMode) error {
@@ -3674,12 +3683,12 @@ var lockMoDatabase = func(c *Compile, dbName string, lockMode lock.LockMode) err
 		return err
 	}
 	accountID := c.proc.GetSessionInfo().AccountId
-	vec, err := getLockVector(c.proc, accountID, []string{dbName})
+	bat, err := getLockBatch(c.proc, accountID, []string{dbName})
 	if err != nil {
 		return err
 	}
-	defer vec.Free(c.proc.Mp())
-	if err := lockRows(c.e, c.proc, dbRel, vec, lockMode, lock.Sharding_None, accountID); err != nil {
+	defer bat.GetVector(0).Free(c.proc.Mp())
+	if err := lockRows(c.e, c.proc, dbRel, bat, 0, lockMode, lock.Sharding_None, accountID); err != nil {
 		return err
 	}
 	return nil
@@ -3689,19 +3698,20 @@ var lockMoTable = func(
 	c *Compile,
 	dbName string,
 	tblName string,
-	lockMode lock.LockMode) error {
+	lockMode lock.LockMode,
+) error {
 	dbRel, err := getRelFromMoCatalog(c, catalog.MO_TABLES)
 	if err != nil {
 		return err
 	}
 	accountID := c.proc.GetSessionInfo().AccountId
-	vec, err := getLockVector(c.proc, accountID, []string{dbName, tblName})
+	bat, err := getLockBatch(c.proc, accountID, []string{dbName, tblName})
 	if err != nil {
 		return err
 	}
-	defer vec.Free(c.proc.Mp())
+	defer bat.GetVector(0).Free(c.proc.Mp())
 
-	if err := lockRows(c.e, c.proc, dbRel, vec, lockMode, lock.Sharding_None, accountID); err != nil {
+	if err := lockRows(c.e, c.proc, dbRel, bat, 0, lockMode, lock.Sharding_None, accountID); err != nil {
 		return err
 	}
 	return nil

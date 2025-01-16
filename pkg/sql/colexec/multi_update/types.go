@@ -65,6 +65,8 @@ func init() {
 }
 
 type MultiUpdate struct {
+	delegated      bool
+	input          vm.CallResult
 	ctr            container
 	MultiUpdateCtx []*MultiUpdateCtx
 

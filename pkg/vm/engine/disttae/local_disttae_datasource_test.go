@@ -47,9 +47,8 @@ func TestRelationDataV2_MarshalAndUnMarshal(t *testing.T) {
 	for i := 0; i < blkNum; i++ {
 		blkID := types.NewBlockidWithObjectID(&objID, uint16(blkNum))
 		blkInfo := objectio.BlockInfo{
-			BlockID:      *blkID,
-			MetaLoc:      metaLoc,
-			PartitionNum: int16(i),
+			BlockID: *blkID,
+			MetaLoc: metaLoc,
 		}
 		blkInfo.ObjectFlags |= objectio.ObjectFlag_Appendable
 		relData.AppendBlockInfo(&blkInfo)

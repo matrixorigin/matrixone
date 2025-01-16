@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -74,6 +75,20 @@ type PartitionService interface {
 		txnOp client.TxnOperator,
 	) error
 
+	Prune(
+		ctx context.Context,
+		tableID uint64,
+		bat *batch.Batch,
+		txnOp client.TxnOperator,
+	) (PruneResult, error)
+
+	Filter(
+		ctx context.Context,
+		tableID uint64,
+		filters []*plan.Expr,
+		txnOp client.TxnOperator,
+	) ([]int, error)
+
 	GetStorage() PartitionStorage
 }
 
@@ -113,4 +128,25 @@ func GetService(
 		return nil
 	}
 	return v.(PartitionService)
+}
+
+type PruneResult struct {
+	batches    []*batch.Batch
+	partitions []partition.Partition
+}
+
+func (res PruneResult) Iter(fn func(partition partition.Partition, bat *batch.Batch) bool) {
+	for i, p := range res.partitions {
+		if !fn(p, res.batches[i]) {
+			break
+		}
+	}
+}
+
+func (res PruneResult) Close() {
+
+}
+
+func (res PruneResult) Empty() bool {
+	return len(res.partitions) == 0
 }

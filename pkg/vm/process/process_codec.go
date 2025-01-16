@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	"github.com/matrixorigin/matrixone/pkg/partitionservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -128,6 +129,7 @@ func NewCodecService(
 	txnClient client.TxnClient,
 	fileService fileservice.FileService,
 	lockService lockservice.LockService,
+	partitionService partitionservice.PartitionService,
 	queryClient qclient.QueryClient,
 	hakeeper logservice.CNHAKeeperClient,
 	udfService udf.Service,
@@ -138,26 +140,28 @@ func NewCodecService(
 		panic(err)
 	}
 	return &codecService{
-		txnClient:   txnClient,
-		fileService: fileService,
-		lockService: lockService,
-		queryClient: queryClient,
-		hakeeper:    hakeeper,
-		udfService:  udfService,
-		engine:      engine,
-		mp:          mp,
+		txnClient:        txnClient,
+		fileService:      fileService,
+		lockService:      lockService,
+		partitionService: partitionService,
+		queryClient:      queryClient,
+		hakeeper:         hakeeper,
+		udfService:       udfService,
+		engine:           engine,
+		mp:               mp,
 	}
 }
 
 type codecService struct {
-	txnClient   client.TxnClient
-	fileService fileservice.FileService
-	lockService lockservice.LockService
-	queryClient qclient.QueryClient
-	hakeeper    logservice.CNHAKeeperClient
-	udfService  udf.Service
-	mp          *mpool.MPool
-	engine      engine.Engine
+	txnClient        client.TxnClient
+	fileService      fileservice.FileService
+	lockService      lockservice.LockService
+	partitionService partitionservice.PartitionService
+	queryClient      qclient.QueryClient
+	hakeeper         logservice.CNHAKeeperClient
+	udfService       udf.Service
+	mp               *mpool.MPool
+	engine           engine.Engine
 }
 
 func GetCodecService(service string) ProcessCodecService {
@@ -206,6 +210,7 @@ func (c *codecService) Decode(
 		nil,
 	)
 	proc.Base.LockService = c.lockService
+	proc.Base.PartitionService = c.partitionService
 	proc.Base.UnixTime = value.UnixTime
 	proc.Base.Id = value.Id
 	proc.Base.Lim = ConvertToProcessLimitation(value.Lim)

@@ -17,6 +17,7 @@ package readutil
 import (
 	"bytes"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 
@@ -175,10 +176,6 @@ func (rd *EmptyRelationData) SetDataBlk(i int, blk any) {
 }
 
 func (rd *EmptyRelationData) DataSlice(begin, end int) engine.RelData {
-	panic("Not Supported")
-}
-
-func (rd *EmptyRelationData) GroupByPartitionNum() map[int16]engine.RelData {
 	panic("Not Supported")
 }
 
@@ -365,11 +362,6 @@ func (or *ObjListRelData) DataSlice(i, j int) engine.RelData {
 	return or.blocklistRelData.DataSlice(i, j)
 }
 
-func (or *ObjListRelData) GroupByPartitionNum() map[int16]engine.RelData {
-	or.expand()
-	return or.blocklistRelData.GroupByPartitionNum()
-}
-
 func (or *ObjListRelData) DataCnt() int {
 	return int(or.TotalBlocks)
 }
@@ -545,29 +537,6 @@ func (relData *BlockListRelData) DataSlice(i, j int) engine.RelData {
 		blklist:    blist,
 		tombstones: relData.tombstones,
 	}
-}
-
-func (relData *BlockListRelData) GroupByPartitionNum() map[int16]engine.RelData {
-	ret := make(map[int16]engine.RelData)
-
-	blks := relData.GetBlockInfoSlice()
-	blksLen := blks.Len()
-	for idx := range blksLen {
-		blkInfo := blks.Get(idx)
-		if blkInfo.IsMemBlk() {
-			continue
-		}
-		partitionNum := blkInfo.PartitionNum
-		if _, ok := ret[partitionNum]; !ok {
-			ret[partitionNum] = &BlockListRelData{
-				tombstones: relData.tombstones,
-			}
-			ret[partitionNum].AppendBlockInfo(&objectio.EmptyBlockInfo)
-		}
-		ret[partitionNum].AppendBlockInfo(blkInfo)
-	}
-
-	return ret
 }
 
 func (relData *BlockListRelData) DataCnt() int {

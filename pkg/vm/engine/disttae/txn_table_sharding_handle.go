@@ -511,11 +511,14 @@ func HandleShardingReadPrimaryKeysMayBeModified(
 		return nil, err
 	}
 
+	batch := batch.NewWithSize(1)
+	batch.SetVector(0, keyVector)
 	modify, err := tbl.PrimaryKeysMayBeModified(
 		ctx,
 		from,
 		to,
-		keyVector,
+		batch,
+		0,
 	)
 	if err != nil {
 		return nil, err
@@ -561,11 +564,14 @@ func HandleShardingReadPrimaryKeysMayBeUpserted(
 		return nil, err
 	}
 
+	batch := batch.NewWithSize(1)
+	batch.SetVector(0, keyVector)
 	modify, err := tbl.PrimaryKeysMayBeUpserted(
 		ctx,
 		from,
 		to,
-		keyVector,
+		batch,
+		0,
 	)
 	if err != nil {
 		return nil, err

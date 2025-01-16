@@ -120,7 +120,6 @@ func TestObjListRelData(t *testing.T) { // for test coverage
 	buf, err := objlistRelData.MarshalBinary()
 	require.NoError(t, err)
 	objlistRelData.UnmarshalBinary(buf)
-	objlistRelData.GroupByPartitionNum()
 }
 
 func TestObjListRelData1(t *testing.T) {

@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -295,7 +296,9 @@ func TestBinarySearchBlkDataOnUnSortedFakePKCol(t *testing.T) {
 						vector.AppendFixed[int64](vec, keys[i], false, proc.GetMPool())
 					}
 
-					rel.PrimaryKeysMayBeModified(ctx, types.TS{}, types.MaxTs(), vec)
+					bat := batch.NewWithSize(1)
+					bat.SetVector(0, vec)
+					rel.PrimaryKeysMayBeModified(ctx, types.TS{}, types.MaxTs(), bat, 0)
 
 					vec.Free(proc.GetMPool())
 				}

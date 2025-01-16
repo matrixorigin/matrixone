@@ -33,7 +33,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	txn2 "github.com/matrixorigin/matrixone/pkg/pb/txn"
-	"github.com/matrixorigin/matrixone/pkg/shardservice"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
@@ -150,11 +149,9 @@ func (db *txnDatabase) relation(ctx context.Context, name string, proc any) (eng
 	}
 
 	tbl, err := newTxnTable(
+		ctx,
 		db,
 		*item,
-		p,
-		shardservice.GetService(p.GetService()),
-		txn.engine,
 	)
 	if err != nil {
 		return nil, err

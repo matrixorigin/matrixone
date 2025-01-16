@@ -20,8 +20,8 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -71,7 +71,8 @@ func LockTableWithUniqueID(
 			analyzer process.Analyzer,
 			tableID uint64,
 			eng engine.Engine,
-			vec *vector.Vector,
+			vec *batch.Batch,
+			idx int32,
 			from, to timestamp.Timestamp) (bool, error) {
 			return false, nil
 		}).
@@ -84,6 +85,7 @@ func LockTableWithUniqueID(
 		tableID,
 		proc,
 		nil,
+		0,
 		pkType,
 		opts)
 	return err

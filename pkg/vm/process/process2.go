@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	"github.com/matrixorigin/matrixone/pkg/partitionservice"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/stage"
@@ -68,16 +69,17 @@ func NewTopProcess(
 		},
 
 		// 1. fields from outer
-		mp:          mp,
-		TxnClient:   txnClient,
-		TxnOperator: txnOperator,
-		FileService: fileService,
-		IncrService: incrservice.GetAutoIncrementService(sid),
-		LockService: lockService,
-		Aicm:        autoIncrease,
-		QueryClient: queryClient,
-		Hakeeper:    HAKeeper,
-		UdfService:  udfService,
+		mp:               mp,
+		TxnClient:        txnClient,
+		TxnOperator:      txnOperator,
+		FileService:      fileService,
+		IncrService:      incrservice.GetAutoIncrementService(sid),
+		LockService:      lockService,
+		PartitionService: partitionservice.GetService(sid),
+		Aicm:             autoIncrease,
+		QueryClient:      queryClient,
+		Hakeeper:         HAKeeper,
+		UdfService:       udfService,
 
 		// 2. fields from make.
 		LastInsertID: new(uint64),

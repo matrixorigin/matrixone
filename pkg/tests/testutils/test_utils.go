@@ -94,6 +94,21 @@ func WaitTableCreated(
 	}
 }
 
+func WaitLogtailApplied(
+	t *testing.T,
+	min timestamp.Timestamp,
+	cn embed.ServiceOperator,
+) {
+	ctx, cancel := context.WithTimeout(
+		context.Background(),
+		10*time.Second,
+	)
+	defer cancel()
+	txn := cn.RawService().(cnservice.Service).GetTxnClient()
+	_, err := txn.WaitLogTailAppliedAt(ctx, min)
+	require.NoError(t, err)
+}
+
 func WaitDatabaseCreated(
 	t *testing.T,
 	name string,
@@ -159,6 +174,7 @@ func ExecSQLWithReadResult(
 	)
 
 	require.NoError(t, moerr.AttachCause(ctx, err), sql)
+	// WaitLogtailApplied(t, txnOp.Txn().CommitTS, cn)
 	return txnOp.Txn().CommitTS
 }
 

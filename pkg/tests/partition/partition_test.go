@@ -27,9 +27,9 @@ import (
 )
 
 var (
-	once            sync.Once
-	shardingCluster embed.Cluster
-	mu              sync.Mutex
+	once         sync.Once
+	shareCluster embed.Cluster
+	mu           sync.Mutex
 )
 
 func runPartitionClusterTest(
@@ -51,11 +51,9 @@ func runPartitionClusterTestWithReuse(
 	mu.Lock()
 	defer mu.Unlock()
 
-	var err error
-	var cluster embed.Cluster
 	var c embed.Cluster
-	createFunc := func() {
-		c, err = embed.NewCluster(
+	createFunc := func() embed.Cluster {
+		new, err := embed.NewCluster(
 			embed.WithCNCount(3),
 			embed.WithTesting(),
 			embed.WithPreStart(
@@ -70,28 +68,21 @@ func runPartitionClusterTestWithReuse(
 				},
 			),
 		)
-		if err != nil {
-			return
-		}
-		err = c.Start()
-		if err != nil {
-			return
-		}
-		cluster = c
-		if reuse {
-			shardingCluster = cluster
-		}
-	}
-
-	if err != nil {
-		return err
+		require.NoError(t, err)
+		require.NoError(t, new.Start())
+		return new
 	}
 
 	if reuse {
-		once.Do(createFunc)
-		cluster = shardingCluster
+		once.Do(
+			func() {
+				c = createFunc()
+				shareCluster = c
+			},
+		)
+		c = shareCluster
 	} else {
-		createFunc()
+		c = createFunc()
 	}
 
 	cn, err := c.GetCNService(0)
@@ -104,6 +95,6 @@ func runPartitionClusterTestWithReuse(
 			partitionservice.InitSQLs...,
 		)
 	}
-	fn(cluster)
+	fn(c)
 	return nil
 }

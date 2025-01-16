@@ -69,6 +69,9 @@ const (
 	External
 	Source
 	MultiUpdate
+	PartitionInsert
+	PartitionDelete
+	PartitionMultiUpdate
 
 	Minus
 	Intersect
