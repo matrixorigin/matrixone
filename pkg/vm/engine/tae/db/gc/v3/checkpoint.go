@@ -1906,56 +1906,6 @@ func (c *checkpointCleaner) scanCheckpointsLocked(
 	return
 }
 
-func (c *checkpointCleaner) fastScanCheckpointsLocked(
-	ctx context.Context,
-	ckps []*checkpoint.CheckpointEntry,
-	memoryBuffer *containers.OneSchemaBatchBuffer,
-) (gcWindow *GCWindow, newFiles []string, err error) {
-	now := time.Now()
-
-	var (
-		snapSize, tableSize uint32
-	)
-	defer func() {
-		logutil.Info(
-			"GC-TRACE-SCAN",
-			zap.String("task", c.TaskNameLocked()),
-			zap.Int("checkpoint-count", len(ckps)),
-			zap.Duration("duration", time.Since(now)),
-			zap.Uint32("snap-meta-size :", snapSize),
-			zap.Uint32("table-meta-size :", tableSize),
-			zap.String("snapshot-detail", c.mutation.snapshotMeta.String()))
-	}()
-
-	newFiles = make([]string, 0, 3)
-
-	gcWindow = NewGCWindow(c.mp, c.fs.Service)
-	var gcMetaFile string
-	if gcMetaFile, err = gcWindow.ScanCheckpoints(
-		ctx,
-		ckps,
-		c.collectCkpData,
-		c.mutUpdateSnapshotMetaLocked,
-		nil,
-		memoryBuffer,
-	); err != nil {
-		gcWindow.Close()
-		gcWindow = nil
-		return
-	}
-	newFiles = append(newFiles, ioutil.MakeFullName(gcWindow.dir, gcMetaFile))
-	c.mutAddMetaFileLocked(
-		gcMetaFile,
-		ioutil.NewTSRangeFile(
-			gcMetaFile,
-			ioutil.CheckpointExt,
-			gcWindow.tsRange.start,
-			gcWindow.tsRange.end,
-		),
-	)
-	return
-}
-
 func (c *checkpointCleaner) mutUpdateSnapshotMetaLocked(
 	ckp *checkpoint.CheckpointEntry,
 	data *logtail.CheckpointData,
