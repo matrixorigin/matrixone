@@ -265,7 +265,7 @@ func indexParamsToMap(def interface{}) (map[string]string, error) {
 			if len(idx.IndexOption.HnswQuantization) > 0 {
 				_, ok := hnsw.QuantizationValid(idx.IndexOption.HnswQuantization)
 				if !ok {
-					return nil, moerr.NewInternalErrorNoCtx("invalid quantization. hnsw.quantization must be 'BF16, F16, F32, F64, I8, B1'")
+					return nil, moerr.NewInternalErrorNoCtx("invalid hnsw quantization.")
 				}
 			}
 
