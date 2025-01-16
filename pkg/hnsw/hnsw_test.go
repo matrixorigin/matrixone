@@ -17,8 +17,17 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/stretchr/testify/require"
 	usearch "github.com/unum-cloud/usearch/golang"
 )
+
+func TestQuantization(t *testing.T) {
+	q, ok := QuantizationValid("bf16")
+	require.True(t, ok)
+	require.Equal(t, q, usearch.BF16)
+	q, ok = QuantizationValid("")
+	require.False(t, ok)
+}
 
 func TestUSearch(t *testing.T) {
 

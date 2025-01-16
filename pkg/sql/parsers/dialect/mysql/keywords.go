@@ -371,6 +371,7 @@ func init() {
 		"prev":                       PREV,
 		"plugins":                    PLUGINS,
 		"persist":                    PERSIST,
+		"quantization":               QUANTIZATION,
 		"query":                      QUERY,
 		"quarter":                    QUARTER,
 		"quick":                      QUICK,

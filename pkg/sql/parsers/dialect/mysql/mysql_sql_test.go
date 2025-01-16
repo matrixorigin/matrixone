@@ -3206,8 +3206,8 @@ var (
 			output: "use",
 		},
 		{
-			input:  "create index idx using hnsw on A (a) M 4 ef_construction 100",
-			output: "create index idx using hnsw on a (a) M 4 EF_CONSTRUCTION 100 ",
+			input:  "create index idx using hnsw on A (a) M 4 ef_construction 100 QUANTIZATION 'BF16' OP_TYPE 'VECTOR_L2_OPS'",
+			output: "create index idx using hnsw on a (a) M 4 EF_CONSTRUCTION 100 QUANTIZATION BF16 OP_TYPE VECTOR_L2_OPS ",
 		},
 		{
 			input:  "alter table t1 alter reindex idx1 hnsw",

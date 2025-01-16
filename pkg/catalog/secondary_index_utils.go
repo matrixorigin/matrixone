@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/hnsw"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
@@ -84,6 +85,7 @@ const (
 	//IndexAlgoParamOpType_cos = "vector_cosine_ops"
 	HnswM              = "m"
 	HnswEfConstruction = "ef_construction"
+	HnswQuantization   = "quantization"
 )
 
 const (
@@ -133,6 +135,15 @@ func IndexParamsToStringList(indexParams string) (string, error) {
 
 	if val, ok := result[HnswEfConstruction]; ok {
 		res += fmt.Sprintf(" %s = %s ", HnswEfConstruction, val)
+	}
+
+	if val, ok := result[HnswQuantization]; ok {
+		val = ToLower(val)
+		_, ok := hnsw.QuantizationValid(val)
+		if !ok {
+			return "", moerr.NewInternalErrorNoCtxf("invalid quantization '%s'", val)
+		}
+		res += fmt.Sprintf(" %s '%s' ", HnswQuantization, val)
 	}
 
 	if opType, ok := result[IndexAlgoParamOpType]; ok {
@@ -246,15 +257,29 @@ func indexParamsToMap(def interface{}) (map[string]string, error) {
 			}
 		case tree.INDEX_TYPE_HNSW:
 			if idx.IndexOption.HnswM < 0 {
-				return nil, moerr.NewInternalErrorNoCtx("invalid list. hnsw.M must be > 0")
+				return nil, moerr.NewInternalErrorNoCtx("invalid M. hnsw.M must be > 0")
 			}
 			if idx.IndexOption.HnswEfConstruction < 0 {
-				return nil, moerr.NewInternalErrorNoCtx("invalid list. hnsw.ef_construction must be > 0")
+				return nil, moerr.NewInternalErrorNoCtx("invalid ef_construction. hnsw.ef_construction must be > 0")
+			}
+			if len(idx.IndexOption.HnswQuantization) > 0 {
+				_, ok := hnsw.QuantizationValid(idx.IndexOption.HnswQuantization)
+				if !ok {
+					return nil, moerr.NewInternalErrorNoCtx("invalid quantization. hnsw.quantization must be 'BF16, F16, F32, F64, I8, B1'")
+				}
 			}
 
 			// hnswM or HnswEfConstruction == 0, use usearch default value
-			res[HnswM] = strconv.FormatInt(idx.IndexOption.HnswM, 10)
-			res[HnswEfConstruction] = strconv.FormatInt(idx.IndexOption.HnswEfConstruction, 10)
+			if idx.IndexOption.HnswM > 0 {
+				res[HnswM] = strconv.FormatInt(idx.IndexOption.HnswM, 10)
+			}
+			if idx.IndexOption.HnswEfConstruction > 0 {
+				res[HnswEfConstruction] = strconv.FormatInt(idx.IndexOption.HnswEfConstruction, 10)
+			}
+
+			if len(idx.IndexOption.HnswQuantization) > 0 {
+				res[HnswQuantization] = idx.IndexOption.HnswQuantization
+			}
 
 			if len(idx.IndexOption.AlgoParamVectorOpType) > 0 {
 				opType := ToLower(idx.IndexOption.AlgoParamVectorOpType)

@@ -761,6 +761,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 				case catalog.MoIndexIvfFlatAlgo.ToString():
 					err = s.handleVectorIvfFlatIndex(c, dbSource, multiTableIndex.IndexDefs, qry.Database, tableDef, nil)
 				case catalog.MoIndexHnswAlgo.ToString():
+					// TODO: ERIC we should call refresh Hnsw Index function instead of CreateHnswIndex function
 					err = s.handleVectorHnswIndex(c, dbSource, multiTableIndex.IndexDefs, qry.Database, tableDef, nil)
 				}
 

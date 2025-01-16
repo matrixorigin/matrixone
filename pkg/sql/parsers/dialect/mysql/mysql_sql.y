@@ -363,7 +363,7 @@ import (
 
 // Secondary Index
 %token <str> PARSER VISIBLE INVISIBLE BTREE HASH RTREE BSI IVFFLAT MASTER HNSW
-%token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS OP_TYPE REINDEX EF_CONSTRUCTION M
+%token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS OP_TYPE REINDEX EF_CONSTRUCTION M QUANTIZATION
 
 
 // Alter
@@ -7499,7 +7499,9 @@ index_option_list:
 	      opt1.HnswM = opt2.HnswM
 	    } else if opt2.HnswEfConstruction > 0 {
  	      opt1.HnswEfConstruction = opt2.HnswEfConstruction
- 	    }
+ 	    } else if len(opt2.HnswQuantization) > 0 {
+	      opt1.HnswQuantization = opt2.HnswQuantization
+            }
             $$ = opt1
         }
     }
@@ -7573,6 +7575,12 @@ index_option:
 	}
 	io := tree.NewIndexOption()
 	io.HnswEfConstruction = val
+	$$ = io
+     }
+|    QUANTIZATION equal_opt STRING
+     {
+	io := tree.NewIndexOption()
+	io.HnswQuantization = $3
 	$$ = io
      }
 	
@@ -12608,6 +12616,7 @@ non_reserved_keyword:
 |   QUERY
 |   PAUSE
 |   PROFILES
+|   QUANTIZATION
 |   ROLE
 |   RANGE
 |   READ
