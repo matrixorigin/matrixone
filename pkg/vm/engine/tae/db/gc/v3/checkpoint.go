@@ -1592,7 +1592,7 @@ func (c *checkpointCleaner) FastExecute(inputCtx context.Context) (err error) {
 		return
 	}
 	accountSnapshots := TransformToTSList(snapshots)
-	scanWindow := c.GetScannedWindow()
+	scanWindow := c.GetScannedWindowLocked()
 	filesToGC, err := c.doFastGCAgainstGlobalCheckpointLocked(
 		accountSnapshots, pitrs, memoryBuffer, scanWindow,
 	)
