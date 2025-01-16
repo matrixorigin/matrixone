@@ -250,12 +250,16 @@ func TestReaderCanReadUncommittedInMemInsertAndDeletes(t *testing.T) {
 
 		require.NoError(t, relation.Delete(ctx, bat2, catalog.Row_ID))
 
+		//expr := []*plan.Expr{
+		//	readutil.MakeFunctionExprForTest("=", []*plan.Expr{
+		//		readutil.MakeColExprForTest(int32(primaryKeyIdx),
+		//			schema.ColDefs[primaryKeyIdx].Type.Oid),
+		//		plan2.MakePlan2Int64ConstExprWithType(bat1.Vecs[primaryKeyIdx].Get(9).(int64)),
+		//	}),
+		//}
+		inVec := bat1.Vecs[primaryKeyIdx].Window(rowsCount/2, 1)
 		expr := []*plan.Expr{
-			readutil.MakeFunctionExprForTest("=", []*plan.Expr{
-				readutil.MakeColExprForTest(int32(primaryKeyIdx),
-					schema.ColDefs[primaryKeyIdx].Type.Oid, schema.ColDefs[primaryKeyIdx].Name),
-				plan2.MakePlan2Int64ConstExprWithType(bat1.Vecs[primaryKeyIdx].Get(9).(int64)),
-			}),
+			readutil.ConstructInExpr(ctx, schema.GetPrimaryKey().Name, inVec.GetDownstreamVector()),
 		}
 
 		//Noticed that we should merge the workspace  before read.
@@ -290,12 +294,7 @@ func TestReaderCanReadUncommittedInMemInsertAndDeletes(t *testing.T) {
 		_, relation, txn, err = disttaeEngine.GetTable(ctx, databaseName, tableName)
 		require.NoError(t, err)
 
-		require.NoError(t, relation.Write(ctx, containers.ToCNBatch(bats[0])))
-
-		require.NoError(t, relation.Write(ctx, containers.ToCNBatch(bats[1])))
-
-		txn.GetWorkspace().UpdateSnapshotWriteOffset()
-
+		// read the count of rows in the relation.
 		reader, err := testutil.GetRelationReader(
 			ctx,
 			disttaeEngine,
@@ -308,6 +307,36 @@ func TestReaderCanReadUncommittedInMemInsertAndDeletes(t *testing.T) {
 		require.NoError(t, err)
 
 		ret := testutil.EmptyBatchFromSchema(schema, primaryKeyIdx)
+		rows := 0
+		for {
+			isEnd, err := reader.Read(ctx, ret.Attrs, nil, mp, ret)
+			require.NoError(t, err)
+			if isEnd {
+				break
+			}
+			rows += ret.RowCount()
+		}
+		require.NoError(t, err)
+		reader.Close()
+
+		require.NoError(t, relation.Write(ctx, containers.ToCNBatch(bats[0])))
+
+		require.NoError(t, relation.Write(ctx, containers.ToCNBatch(bats[1])))
+
+		txn.GetWorkspace().UpdateSnapshotWriteOffset()
+
+		reader, err = testutil.GetRelationReader(
+			ctx,
+			disttaeEngine,
+			txn,
+			relation,
+			nil,
+			mp,
+			t,
+		)
+		require.NoError(t, err)
+
+		ret = testutil.EmptyBatchFromSchema(schema, primaryKeyIdx)
 		cnt := 0
 		for {
 			isEnd, err := reader.Read(ctx, ret.Attrs, nil, mp, ret)
@@ -317,7 +346,7 @@ func TestReaderCanReadUncommittedInMemInsertAndDeletes(t *testing.T) {
 			}
 			cnt += ret.RowCount()
 		}
-		require.Equal(t, rowsOfBlock*2, cnt)
+		require.Equal(t, rowsOfBlock*2+rows, cnt)
 
 		//delete rows which belongs to the same block.
 		var bat2 *batch.Batch
@@ -329,15 +358,17 @@ func TestReaderCanReadUncommittedInMemInsertAndDeletes(t *testing.T) {
 				bat2 = batch.NewWithSize(1)
 				bat2.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
 				require.NoError(t, vector.AppendFixedList[types.Rowid](bat2.Vecs[0], waitedDeletes1, nil, mp))
+				bat2.SetRowCount(len(waitedDeletes1))
 
 				waitedDeletes2 := waitedDeletes[rowsOfBlock/2 : rowsOfBlock]
 				bat3 = batch.NewWithSize(1)
 				bat3.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-				require.NoError(t, vector.AppendFixedList[types.Rowid](bat2.Vecs[0], waitedDeletes2, nil, mp))
-
+				require.NoError(t, vector.AppendFixedList[types.Rowid](bat3.Vecs[0], waitedDeletes2, nil, mp))
+				bat3.SetRowCount(len(waitedDeletes2))
 			})
 
 		require.NoError(t, relation.Delete(ctx, bat2, catalog.Row_ID))
+		require.NoError(t, relation.Delete(ctx, bat3, catalog.Row_ID))
 		//Noticed that we should merge the workspace  before read.
 		require.NoError(t, txn.GetWorkspace().(*disttae.Transaction).MergeTxnWorkspaceLocked(ctx))
 
@@ -362,9 +393,9 @@ func TestReaderCanReadUncommittedInMemInsertAndDeletes(t *testing.T) {
 			}
 			cnt += ret.RowCount()
 		}
-		require.Equal(t, rowsOfBlock, cnt)
+		require.Equal(t, rowsOfBlock+rows, cnt)
 		reader.Close()
-
+		require.NoError(t, txn.Commit(ctx))
 	}
 
 }
