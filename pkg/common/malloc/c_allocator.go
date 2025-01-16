@@ -23,15 +23,8 @@ import (
 
 /*
 #include <stdlib.h>
-#include <malloc.h>
 */
 import "C"
-
-func init() {
-	// malloc tunings
-	C.mallopt(C.M_TOP_PAD, 0)        // no sbrk padding
-	C.mallopt(C.M_MMAP_THRESHOLD, 0) // always use mmap
-}
 
 type CAllocator struct {
 	deallocatorPool *ClosureDeallocatorPool[cDeallocatorArgs, *cDeallocatorArgs]
@@ -61,7 +54,7 @@ func NewCAllocator() (ret *CAllocator) {
 				if n > cMallocReturnToOSThreshold {
 					ret.bytesFree.Store(0)
 					// return memory to OS
-					C.malloc_trim(0)
+					returnMallocMemoryToOS()
 				}
 
 			},
@@ -79,6 +72,7 @@ func (c *CAllocator) Allocate(size uint64, hints Hints) ([]byte, Deallocator, er
 	}
 	slice := unsafe.Slice((*byte)(ptr), size)
 	return slice, c.deallocatorPool.Get(cDeallocatorArgs{
-		ptr: ptr,
+		ptr:  ptr,
+		size: size,
 	}), nil
 }
