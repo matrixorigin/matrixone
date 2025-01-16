@@ -128,10 +128,14 @@ func DeepCopyPreInsertCtx(ctx *plan.PreInsertCtx) *plan.PreInsertCtx {
 		return nil
 	}
 	newCtx := &plan.PreInsertCtx{
-		Ref:        DeepCopyObjectRef(ctx.Ref),
-		TableDef:   DeepCopyTableDef(ctx.TableDef, true),
-		HasAutoCol: ctx.HasAutoCol,
-		IsUpdate:   ctx.IsUpdate,
+		Ref:           DeepCopyObjectRef(ctx.Ref),
+		TableDef:      DeepCopyTableDef(ctx.TableDef, true),
+		HasAutoCol:    ctx.HasAutoCol,
+		ColOffset:     ctx.ColOffset,
+		CompPkeyExpr:  DeepCopyExpr(ctx.CompPkeyExpr),
+		ClusterByExpr: DeepCopyExpr(ctx.ClusterByExpr),
+		IsOldUpdate:   ctx.IsOldUpdate,
+		IsNewUpdate:   ctx.IsNewUpdate,
 	}
 
 	return newCtx
@@ -151,32 +155,21 @@ func DeepCopyPreInsertUkCtx(ctx *plan.PreInsertUkCtx) *plan.PreInsertUkCtx {
 	return newCtx
 }
 
-func DeepCopyPreDeleteCtx(ctx *plan.PreDeleteCtx) *plan.PreDeleteCtx {
-	if ctx == nil {
-		return nil
-	}
-	newCtx := &plan.PreDeleteCtx{
-		Idx: slices.Clone(ctx.Idx),
-	}
-
-	return newCtx
-}
-
 func DeepCopyLockTarget(target *plan.LockTarget) *plan.LockTarget {
 	if target == nil {
 		return nil
 	}
 	return &plan.LockTarget{
-		TableId:            target.TableId,
-		ObjRef:             DeepCopyObjectRef(target.ObjRef),
-		PrimaryColIdxInBat: target.PrimaryColIdxInBat,
-		PrimaryColTyp:      target.PrimaryColTyp,
-		RefreshTsIdxInBat:  target.RefreshTsIdxInBat,
-		FilterColIdxInBat:  target.FilterColIdxInBat,
-		LockTable:          target.LockTable,
-		Block:              target.Block,
-		LockRows:           DeepCopyExpr(target.LockRows),
-		LockTableAtTheEnd:  target.LockTableAtTheEnd,
+		TableId:             target.TableId,
+		ObjRef:              DeepCopyObjectRef(target.ObjRef),
+		PrimaryColsIdxInBat: target.PrimaryColsIdxInBat,
+		PrimaryColTyp:       target.PrimaryColTyp,
+		RefreshTsIdxInBat:   target.RefreshTsIdxInBat,
+		FilterColsIdxInBat:  target.FilterColsIdxInBat,
+		LockTable:           target.LockTable,
+		Block:               target.Block,
+		LockRows:            DeepCopyExpr(target.LockRows),
+		LockTableAtTheEnd:   target.LockTableAtTheEnd,
 	}
 }
 
@@ -221,7 +214,6 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		SourceStep:      node.SourceStep,
 		PreInsertCtx:    DeepCopyPreInsertCtx(node.PreInsertCtx),
 		PreInsertUkCtx:  DeepCopyPreInsertUkCtx(node.PreInsertUkCtx),
-		PreDeleteCtx:    DeepCopyPreDeleteCtx(node.PreDeleteCtx),
 		OnDuplicateKey:  DeepCopyOnDuplicateKeyCtx(node.OnDuplicateKey),
 		LockTargets:     make([]*plan.LockTarget, len(node.LockTargets)),
 		AnalyzeInfo:     DeepCopyAnalyzeInfo(node.AnalyzeInfo),

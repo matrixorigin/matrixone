@@ -684,7 +684,7 @@ message Node {
 		LOCK_OP = 33;
 		ON_DUPLICATE_KEY = 34;
 		PRE_INSERT = 35;
-		PRE_DELETE = 36;
+
 		FUZZY_FILTER = 37;
 		// the node which build insert batch for hidden table(unique key)
 		PRE_INSERT_UK = 38;
@@ -803,7 +803,6 @@ message Node {
 	// used to connect two plans[steps]
 	repeated int32 source_step = 32;
 
-	PreDeleteCtx pre_delete_ctx = 33;
 	PreInsertCtx pre_insert_ctx = 34;
 	// build unique key batch before insert into hidden table which keep the unique key
 	PreInsertUkCtx pre_insert_uk_ctx = 35;
@@ -897,10 +896,10 @@ message ExternAttr {
 
 message LockTarget {
 	uint64 table_id           	= 1;
-	int32 primary_col_idx_in_bat  = 2;
+	repeated int32 primary_cols_idx_in_bat  = 2;
 	Type primary_col_typ          = 3 [(gogoproto.nullable) = false];
 	int32 refresh_ts_idx_in_bat   = 4;
-	int32 filter_col_idx_in_bat   = 5;
+	repeated int32 filter_cols_idx_in_bat   = 5;
 	bool lock_table 				= 6;
 	bool                block   = 9;
 	lock.LockMode Mode  = 10;
@@ -919,18 +918,15 @@ message PreInsertUkCtx {
 	Type uk_type			= 4 [(gogoproto.nullable) = false];
 }
 
-message PreDeleteCtx {
-	//the indexes of row_id&pk column in the batch
-	repeated int32 idx = 1;
-}
-
 message PreInsertCtx {
-	ObjectRef ref 			= 1;
-	TableDef table_def 		= 2;
+	ObjectRef ref			= 1;
+	TableDef table_def		= 2;
 	bool has_auto_col		= 3;
-	bool is_update			= 4;
-	Expr comp_pkey_expr     = 5;
-	Expr cluster_by_expr    = 6;
+	int32 col_offset		= 4;
+	Expr comp_pkey_expr		= 5;
+	Expr cluster_by_expr	= 6;
+	bool is_old_update		= 7;
+	bool is_new_update		= 8;
 }
 
 message RuntimeFilterSpec {

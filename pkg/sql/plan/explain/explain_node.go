@@ -136,8 +136,6 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 		pname = "PreInsert UniqueKey"
 	case plan.Node_PRE_INSERT_SK:
 		pname = "PreInsert SecondaryKey"
-	case plan.Node_PRE_DELETE:
-		pname = "PreDelete"
 	case plan.Node_ON_DUPLICATE_KEY:
 		pname = "On Duplicate Key"
 	case plan.Node_FUZZY_FILTER:
@@ -198,13 +196,6 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 				} else if ndesc.Node.PreInsertCtx.TableDef != nil {
 					buf.WriteString(ndesc.Node.TableDef.GetName())
 				}
-			}
-		case plan.Node_PRE_DELETE:
-			buf.WriteString(" on ")
-			if ndesc.Node.ObjRef != nil {
-				buf.WriteString(ndesc.Node.ObjRef.GetSchemaName() + "." + ndesc.Node.ObjRef.GetObjName())
-			} else if ndesc.Node.TableDef != nil {
-				buf.WriteString(ndesc.Node.TableDef.GetName())
 			}
 		case plan.Node_POSTDML:
 			buf.WriteString(" on ")
