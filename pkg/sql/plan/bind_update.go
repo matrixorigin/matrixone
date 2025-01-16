@@ -42,9 +42,6 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 
 		tableDef := dmlCtx.tableDefs[i]
 		useColInPartExpr := make(map[string]bool)
-		if tableDef.Partition != nil {
-			getPartColsFromExpr(tableDef.Partition.PartitionExpression, useColInPartExpr)
-		}
 
 		// append  table.* to project list
 		for _, col := range tableDef.Cols {
@@ -370,11 +367,9 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		}
 
 		updateCtxList = append(updateCtxList, &plan.UpdateCtx{
-			ObjRef:          dmlCtx.objRefs[i],
-			TableDef:        tableDef,
-			InsertCols:      insertCols,
-			OldPartitionIdx: -1,
-			NewPartitionIdx: -1,
+			ObjRef:     dmlCtx.objRefs[i],
+			TableDef:   tableDef,
+			InsertCols: insertCols,
 			DeleteCols: []plan.ColRef{
 				{
 					RelPos: finalProjTag,
@@ -455,12 +450,10 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			insertCols[1].ColPos = finalColName2Idx[alias+"."+tableDef.Pkey.PkeyColName]
 
 			updateCtxList = append(updateCtxList, &plan.UpdateCtx{
-				ObjRef:          idxNode.ObjRef,
-				TableDef:        idxNode.TableDef,
-				InsertCols:      insertCols,
-				DeleteCols:      deleteCols,
-				OldPartitionIdx: -1,
-				NewPartitionIdx: -1,
+				ObjRef:     idxNode.ObjRef,
+				TableDef:   idxNode.TableDef,
+				InsertCols: insertCols,
+				DeleteCols: deleteCols,
 			})
 		}
 	}
@@ -469,55 +462,6 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		NodeType:      plan.Node_MULTI_UPDATE,
 		BindingTags:   []int32{builder.genNewTag()},
 		UpdateCtxList: updateCtxList,
-	}
-
-	if dmlCtx.tableDefs[0].Partition != nil {
-		partitionTableIDs, partitionTableNames := getPartitionInfos(builder.compCtx, dmlCtx.objRefs[0], dmlCtx.tableDefs[0])
-		updateCtxList[0].PartitionTableIds = partitionTableIDs
-		updateCtxList[0].PartitionTableNames = partitionTableNames
-		var oldPartExpr *Expr
-		oldPartExpr, err = getRemapParitionExpr(dmlCtx.tableDefs[0], selectNodeTag, colName2Idx, true)
-		if err != nil {
-			return -1, err
-		}
-		updateCtxList[0].OldPartitionIdx = int32(len(finalProjList))
-		finalProjList = append(finalProjList, oldPartExpr)
-		lockTargets[0].IsPartitionTable = true
-		lockTargets[0].PartitionTableIds = partitionTableIDs
-		lockTargets[0].FilterColIdxInBat = updateCtxList[0].OldPartitionIdx
-		lockTargets[0].FilterColRelPos = finalProjTag
-
-		if dmlCtx.updatePartCol[0] {
-			// if update col which partition expr used,
-			// need lock oldPk by old partition idx, lock new pk by new partition idx
-			var newPartExpr *Expr
-			partName2Idx := make(map[string]int32)
-			for k, v := range colName2Idx {
-				partName2Idx[k] = v
-			}
-			for k, v := range updateColName2Idx {
-				partName2Idx[k] = v
-			}
-			newPartExpr, err = getRemapParitionExpr(dmlCtx.tableDefs[0], selectNodeTag, partName2Idx, true)
-			if err != nil {
-				return -1, err
-			}
-			updateCtxList[0].NewPartitionIdx = int32(len(finalProjList))
-			finalProjList = append(finalProjList, newPartExpr)
-
-			lockTargets[1].IsPartitionTable = true
-			lockTargets[1].PartitionTableIds = partitionTableIDs
-			lockTargets[1].FilterColIdxInBat = updateCtxList[0].NewPartitionIdx
-			lockTargets[1].FilterColRelPos = finalProjTag
-		} else {
-			// if do not update col which partition expr used,
-			// just use old partition idx.
-			// @todo if update pk, we need another lockTarget too(not support now)
-			updateCtxList[0].NewPartitionIdx = updateCtxList[0].OldPartitionIdx
-		}
-
-		dmlNode.BindingTags = append(dmlNode.BindingTags, finalProjTag)
-
 	}
 
 	lastNodeID = builder.appendNode(&plan.Node{

@@ -342,8 +342,6 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 		originTableDef,
 		true,
 		false,
-		-1,
-		nil,
 		false,
 	); ok {
 		lastNodeId = lockNodeId

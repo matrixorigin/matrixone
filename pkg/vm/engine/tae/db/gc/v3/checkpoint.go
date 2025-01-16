@@ -240,10 +240,6 @@ func (c *checkpointCleaner) StartMutationTask(name string) {
 	c.mutation.taskState.id++
 	c.mutation.taskState.name = fmt.Sprintf("%s-%d", name, c.mutation.taskState.id)
 	c.mutation.taskState.startTime = time.Now()
-	logutil.Info(
-		"GC-Task-Started",
-		zap.String("task", c.TaskNameLocked()),
-	)
 }
 
 func (c *checkpointCleaner) StopMutationTask() {
@@ -730,7 +726,11 @@ func (c *checkpointCleaner) filterCheckpoints(
 	for i = len(checkpoints) - 1; i >= 0; i-- {
 		endTS := checkpoints[i].GetEnd()
 		if endTS.LE(highWater) {
-			logutil.Infof("filterCheckpoints: endTS: %v, highWater: %v", endTS.ToString(), highWater.ToString())
+			logutil.Info(
+				"GC-Filter-CKP",
+				zap.String("end-ts", endTS.ToString()),
+				zap.String("high-water", highWater.ToString()),
+			)
 			break
 		}
 	}
@@ -827,13 +827,14 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 
 	if tmpDelFiles, tmpNewFiles, newCheckpoint, newCheckpointData, err = MergeCheckpoint(
 		ctx,
+		c.TaskNameLocked(),
 		c.sid,
-		c.fs.Service,
 		toMergeEntries,
 		bf,
 		&checkpointMaxEnd,
 		c.checkpointCli,
 		c.mp,
+		c.fs.Service,
 	); err != nil {
 		extraErrMsg = "MergeCheckpoint failed"
 		return err

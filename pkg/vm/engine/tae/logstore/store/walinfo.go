@@ -139,7 +139,7 @@ func (w *StoreInfo) logDriverLsn(driverEntry *driverEntry.Entry) {
 		lsnMap = make(map[uint64]uint64)
 		w.walDriverLsnMap[info.Group] = lsnMap
 	}
-	lsnMap[info.GroupLSN] = driverEntry.Lsn
+	lsnMap[info.GroupLSN] = driverEntry.DSN
 	w.lsnMu.Unlock()
 }
 

@@ -48,27 +48,16 @@ func TestSimpleInterface(t *testing.T) {
 func TestUpdateSingleTable(t *testing.T) {
 	hasUniqueKey := false
 	hasSecondaryKey := false
-	isPartition := false
 
-	proc, case1 := buildUpdateTestCase(t, hasUniqueKey, hasSecondaryKey, isPartition)
+	proc, case1 := buildUpdateTestCase(t, hasUniqueKey, hasSecondaryKey)
 	runTestCases(t, proc, []*testCase{case1})
 }
 
 func TestUpdateTableWithUniqueKey(t *testing.T) {
 	hasUniqueKey := true
 	hasSecondaryKey := false
-	isPartition := false
 
-	proc, case1 := buildUpdateTestCase(t, hasUniqueKey, hasSecondaryKey, isPartition)
-	runTestCases(t, proc, []*testCase{case1})
-}
-
-func TestUpdateParitionTable(t *testing.T) {
-	hasUniqueKey := false
-	hasSecondaryKey := false
-	isPartition := true
-
-	proc, case1 := buildUpdateTestCase(t, hasUniqueKey, hasSecondaryKey, isPartition)
+	proc, case1 := buildUpdateTestCase(t, hasUniqueKey, hasSecondaryKey)
 	runTestCases(t, proc, []*testCase{case1})
 }
 
@@ -76,57 +65,45 @@ func TestUpdateParitionTable(t *testing.T) {
 func TestUpdateS3SingleTable(t *testing.T) {
 	hasUniqueKey := false
 	hasSecondaryKey := false
-	isPartition := false
 
-	proc, case1 := buildUpdateS3TestCase(t, hasUniqueKey, hasSecondaryKey, isPartition)
+	proc, case1 := buildUpdateS3TestCase(t, hasUniqueKey, hasSecondaryKey)
 	runTestCases(t, proc, []*testCase{case1})
 }
 
 func TestUpdateS3TableWithUniqueKey(t *testing.T) {
 	hasUniqueKey := true
 	hasSecondaryKey := true
-	isPartition := false
 
-	proc, case1 := buildUpdateS3TestCase(t, hasUniqueKey, hasSecondaryKey, isPartition)
-	runTestCases(t, proc, []*testCase{case1})
-}
-
-func TestUpdateS3ParitionTable(t *testing.T) {
-	hasUniqueKey := false
-	hasSecondaryKey := false
-	isPartition := true
-
-	proc, case1 := buildUpdateS3TestCase(t, hasUniqueKey, hasSecondaryKey, isPartition)
+	proc, case1 := buildUpdateS3TestCase(t, hasUniqueKey, hasSecondaryKey)
 	runTestCases(t, proc, []*testCase{case1})
 }
 
 // ----- util function ----
-func buildUpdateTestCase(t *testing.T, hasUniqueKey bool, hasSecondaryKey bool, isPartition bool) (*process.Process, *testCase) {
+func buildUpdateTestCase(t *testing.T, hasUniqueKey bool, hasSecondaryKey bool) (*process.Process, *testCase) {
 	_, ctrl, proc := prepareTestCtx(t, false)
 	eng := prepareTestEng(ctrl)
 
-	batchs, affectRows := prepareUpdateTestBatchs(proc.GetMPool(), 3, hasUniqueKey, hasSecondaryKey, isPartition)
-	multiUpdateCtxs := prepareTestUpdateMultiUpdateCtx(hasUniqueKey, hasSecondaryKey, isPartition)
+	batchs, affectRows := prepareUpdateTestBatchs(proc.GetMPool(), 3, hasUniqueKey, hasSecondaryKey)
+	multiUpdateCtxs := prepareTestUpdateMultiUpdateCtx(hasUniqueKey, hasSecondaryKey)
 	action := UpdateWriteTable
 	retCase := buildTestCase(multiUpdateCtxs, eng, batchs, affectRows, action)
 	return proc, retCase
 }
 
-func buildUpdateS3TestCase(t *testing.T, hasUniqueKey bool, hasSecondaryKey bool, isPartition bool) (*process.Process, *testCase) {
+func buildUpdateS3TestCase(t *testing.T, hasUniqueKey bool, hasSecondaryKey bool) (*process.Process, *testCase) {
 	_, ctrl, proc := prepareTestCtx(t, true)
 	eng := prepareTestEng(ctrl)
 
-	batchs, _ := prepareUpdateTestBatchs(proc.GetMPool(), 10, hasUniqueKey, hasSecondaryKey, isPartition)
-	multiUpdateCtxs := prepareTestUpdateMultiUpdateCtx(hasUniqueKey, hasSecondaryKey, isPartition)
+	batchs, _ := prepareUpdateTestBatchs(proc.GetMPool(), 10, hasUniqueKey, hasSecondaryKey)
+	multiUpdateCtxs := prepareTestUpdateMultiUpdateCtx(hasUniqueKey, hasSecondaryKey)
 	action := UpdateWriteS3
 	retCase := buildTestCase(multiUpdateCtxs, eng, batchs, 0, action)
 	return proc, retCase
 }
 
-func prepareUpdateTestBatchs(mp *mpool.MPool, size int, hasUniqueKey bool, hasSecondaryKey bool, isPartition bool) ([]*batch.Batch, uint64) {
+func prepareUpdateTestBatchs(mp *mpool.MPool, size int, hasUniqueKey bool, hasSecondaryKey bool) ([]*batch.Batch, uint64) {
 	var bats = make([]*batch.Batch, size)
 	affectRows := 0
-	partitionCount := 3
 	mainObjectID := types.NewObjectid()
 	uniqueObjectID := types.NewObjectid()
 	secondaryObjectID := types.NewObjectid()
@@ -169,12 +146,6 @@ func prepareUpdateTestBatchs(mp *mpool.MPool, size int, hasUniqueKey bool, hasSe
 			bat.Attrs = append(bat.Attrs, "sk_rowid", "sk_old_pk", "sk_new_pk")
 		}
 
-		if isPartition {
-			rows := makeTestPartitionArray(rowCount, partitionCount)
-			bat.Vecs = append(bat.Vecs, testutil.MakeInt32Vector(rows, nil))
-			bat.Attrs = append(bat.Attrs, "part_idx")
-		}
-
 		bat.SetRowCount(bat.Vecs[0].Length())
 		bats[i] = bat
 		affectRows = affectRows + rowCount
@@ -183,23 +154,20 @@ func prepareUpdateTestBatchs(mp *mpool.MPool, size int, hasUniqueKey bool, hasSe
 	return bats, uint64(affectRows)
 }
 
-func prepareTestUpdateMultiUpdateCtx(hasUniqueKey bool, hasSecondaryKey bool, isPartition bool) []*MultiUpdateCtx {
+func prepareTestUpdateMultiUpdateCtx(hasUniqueKey bool, hasSecondaryKey bool) []*MultiUpdateCtx {
 	// create table t1(a big int primary key, b varchar(10) not null, c int, d int);
 
 	// only test: update t1 set c = 10
-	objRef, tableDef := getTestMainTable(isPartition)
+	objRef, tableDef := getTestMainTable()
 
 	// if only update main table, attrs = ["a","b","new_c","d","row_id"]
 	updateCtx := &MultiUpdateCtx{
-		ObjRef:          objRef,
-		TableDef:        tableDef,
-		InsertCols:      []int{0, 1, 2, 3}, //a, b, new_c, d
-		DeleteCols:      []int{4, 0},       //row_id, a
-		OldPartitionIdx: -1,
-		NewPartitionIdx: -1,
+		ObjRef:     objRef,
+		TableDef:   tableDef,
+		InsertCols: []int{0, 1, 2, 3}, //a, b, new_c, d
+		DeleteCols: []int{4, 0},       //row_id, a
 	}
 	updateCtxs := []*MultiUpdateCtx{updateCtx}
-	colCount := 5
 
 	if hasUniqueKey {
 		uniqueTblName, _ := util.BuildIndexTableName(context.TODO(), true)
@@ -214,18 +182,15 @@ func prepareTestUpdateMultiUpdateCtx(hasUniqueKey bool, hasSecondaryKey bool, is
 			Visible:        true,
 		})
 
-		uniqueObjRef, uniqueTableDef := getTestUniqueIndexTable(uniqueTblName, isPartition)
+		uniqueObjRef, uniqueTableDef := getTestUniqueIndexTable(uniqueTblName)
 
 		// if update main table with uk, attrs = ["a","b","new_c","d","row_id","uk_del_rowid","uk_del_pk","uk_new_pk"]
 		updateCtxs = append(updateCtxs, &MultiUpdateCtx{
-			ObjRef:          uniqueObjRef,
-			TableDef:        uniqueTableDef,
-			InsertCols:      []int{7, 0}, //uk_pk & main_tbl_pk
-			DeleteCols:      []int{5, 6}, //del_row_id & del_pk
-			OldPartitionIdx: -1,
-			NewPartitionIdx: -1,
+			ObjRef:     uniqueObjRef,
+			TableDef:   uniqueTableDef,
+			InsertCols: []int{7, 0}, //uk_pk & main_tbl_pk
+			DeleteCols: []int{5, 6}, //del_row_id & del_pk
 		})
-		colCount += 3
 	}
 
 	if hasSecondaryKey {
@@ -240,7 +205,7 @@ func prepareTestUpdateMultiUpdateCtx(hasUniqueKey bool, hasSecondaryKey bool, is
 			Visible:        true,
 		})
 
-		secondaryIdxObjRef, secondaryIdxTableDef := getTestSecondaryIndexTable(secondaryIdxTblName, isPartition)
+		secondaryIdxObjRef, secondaryIdxTableDef := getTestSecondaryIndexTable(secondaryIdxTblName)
 
 		// if update main table with sk, attrs = ["a","b","new_c","d","row_id","sk_del_rowid","sk_del_pk","sk_new_pk"]
 		deleteCols := []int{5, 6}
@@ -250,26 +215,12 @@ func prepareTestUpdateMultiUpdateCtx(hasUniqueKey bool, hasSecondaryKey bool, is
 			deleteCols[1] = deleteCols[1] + 3
 			insertCols[0] = insertCols[0] + 3
 		}
-		colCount += 3
 		updateCtxs = append(updateCtxs, &MultiUpdateCtx{
-			ObjRef:          secondaryIdxObjRef,
-			TableDef:        secondaryIdxTableDef,
-			InsertCols:      insertCols,
-			DeleteCols:      deleteCols,
-			OldPartitionIdx: -1,
-			NewPartitionIdx: -1,
+			ObjRef:     secondaryIdxObjRef,
+			TableDef:   secondaryIdxTableDef,
+			InsertCols: insertCols,
+			DeleteCols: deleteCols,
 		})
-	}
-
-	if isPartition {
-		partTblIDs := make([]uint64, len(tableDef.Partition.PartitionTableNames))
-		for j := range tableDef.Partition.PartitionTableNames {
-			partTblIDs[j] = uint64(1000 + j)
-		}
-		updateCtxs[0].OldPartitionIdx = colCount
-		updateCtxs[0].NewPartitionIdx = colCount
-		updateCtxs[0].PartitionTableIDs = partTblIDs
-		updateCtxs[0].PartitionTableNames = tableDef.Partition.PartitionTableNames
 	}
 
 	return updateCtxs

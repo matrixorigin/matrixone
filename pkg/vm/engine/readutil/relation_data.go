@@ -17,6 +17,8 @@ package readutil
 import (
 	"bytes"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -215,6 +217,7 @@ type ObjListRelData struct {
 	expanded         bool
 	TotalBlocks      uint32
 	Objlist          []objectio.ObjectStats
+	Rsp              *engine.RangesShuffleParam
 	blocklistRelData BlockListRelData
 }
 
@@ -251,9 +254,60 @@ func (or *ObjListRelData) AppendShardID(id uint64) {
 	panic("not supported")
 }
 
-func (or *ObjListRelData) Split(i int) []engine.RelData {
-	or.expand()
-	return or.blocklistRelData.Split(i)
+func (or *ObjListRelData) Split(cpunum int) []engine.RelData {
+	rsp := or.Rsp
+	if len(or.Objlist) < cpunum || or.TotalBlocks < 64 || rsp == nil || !rsp.Node.Stats.HashmapStats.Shuffle || rsp.Node.Stats.HashmapStats.ShuffleType != plan.ShuffleType_Range {
+		//dont need to range shuffle, just split average
+		or.expand()
+		return or.blocklistRelData.Split(cpunum)
+	}
+	//split by range shuffle
+	result := make([]engine.RelData, cpunum)
+	for i := range result {
+		result[i] = or.blocklistRelData.BuildEmptyRelData(int(or.TotalBlocks) / cpunum)
+	}
+	if or.NeedFirstEmpty {
+		result[0].AppendBlockInfo(&objectio.EmptyBlockInfo)
+	}
+	for i := range or.Objlist {
+		shuffleIDX := int(plan2.CalcRangeShuffleIDXForObj(rsp, &or.Objlist[i], int(rsp.CNCNT)*cpunum)) % cpunum
+		blks := objectio.ObjectStatsToBlockInfoSlice(&or.Objlist[i], false)
+		result[shuffleIDX].AppendBlockInfoSlice(blks)
+	}
+	//make result average
+	for {
+		maxCnt := result[0].DataCnt()
+		minCnt := result[0].DataCnt()
+		maxIdx := 0
+		minIdx := 0
+		for i := range result {
+			if result[i].DataCnt() > maxCnt {
+				maxCnt = result[i].DataCnt()
+				maxIdx = i
+			}
+			if result[i].DataCnt() < minCnt {
+				minCnt = result[i].DataCnt()
+				minIdx = i
+			}
+		}
+		if maxCnt < minCnt*2 {
+			break
+		}
+
+		diff := (maxCnt-minCnt)/3 + 1
+		cut_from := result[maxIdx].DataCnt() - diff
+		result[minIdx].AppendBlockInfoSlice(result[maxIdx].DataSlice(cut_from, maxCnt).GetBlockInfoSlice())
+		result[maxIdx] = result[maxIdx].DataSlice(0, cut_from)
+	}
+	//check total block cnt
+	totalBlocks := 0
+	for i := range result {
+		totalBlocks += result[i].DataCnt()
+	}
+	if totalBlocks != int(or.TotalBlocks) {
+		panic("wrong blocks cnt after objlist reldata split!")
+	}
+	return result
 }
 
 func (or *ObjListRelData) GetBlockInfoSlice() objectio.BlockInfoSlice {

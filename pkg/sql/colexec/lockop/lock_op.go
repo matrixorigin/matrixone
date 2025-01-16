@@ -91,7 +91,7 @@ func (lockOp *LockOp) Prepare(proc *process.Process) error {
 		lockOp.ctr.relations = make([]engine.Relation, len(lockOp.targets))
 		for i, target := range lockOp.targets {
 			if target.objRef != nil {
-				rel, _, err := colexec.GetRelAndPartitionRelsByObjRef(proc.Ctx, proc, lockOp.engine, target.objRef, nil)
+				rel, err := colexec.GetRelAndPartitionRelsByObjRef(proc.Ctx, proc, lockOp.engine, target.objRef)
 				if err != nil {
 					return err
 				}

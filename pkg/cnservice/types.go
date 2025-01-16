@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	"github.com/matrixorigin/matrixone/pkg/partitionservice"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -193,6 +194,9 @@ type Config struct {
 
 	// ShardService shard service config
 	ShardService shardservice.Config `toml:"shardservice"`
+
+	// PartitionService partition service config
+	PartitionService partitionservice.Config `toml:"partitionservice"`
 
 	// Txn txn config
 	Txn struct {
@@ -603,6 +607,11 @@ func (s *service) getShardServiceConfig() shardservice.Config {
 	return s.cfg.ShardService
 }
 
+func (s *service) getPartitionServiceConfig() partitionservice.Config {
+	s.cfg.PartitionService.ServiceID = s.cfg.UUID
+	return s.cfg.PartitionService
+}
+
 type service struct {
 	metadata       metadata.CNStore
 	cfg            *Config
@@ -642,6 +651,7 @@ type service struct {
 	moCluster              clusterservice.MOCluster
 	lockService            lockservice.LockService
 	shardService           shardservice.ShardService
+	partitionService       partitionservice.PartitionService
 	sqlExecutor            executor.SQLExecutor
 	sessionMgr             *queryservice.SessionManager
 	// queryService is used to handle query request from other CN service.

@@ -298,15 +298,7 @@ func (s *service) handleRemoteUnlock(
 	req *pb.Request,
 	resp *pb.Response,
 	cs morpc.ClientSession) {
-	l, err := s.getLocalLockTable(req, resp)
-	if err != nil ||
-		l == nil {
-		// means that the lockservice sending the lock request holds a stale lock
-		// table binding.
-		writeResponse(s.logger, cancel, resp, err, cs)
-		return
-	}
-	err = s.Unlock(ctx, req.Unlock.TxnID, req.Unlock.CommitTS, req.Unlock.Mutations...)
+	err := s.Unlock(ctx, req.Unlock.TxnID, req.Unlock.CommitTS, req.Unlock.Mutations...)
 	writeResponse(s.logger, cancel, resp, err, cs)
 }
 

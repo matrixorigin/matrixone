@@ -1,0 +1,43 @@
+select enable_fault_injection();
+enable_fault_injection()
+true
+select add_fault_point('fj/cn/recv/err', ':::', 'echo', 1000, '');
+add_fault_point(fj/cn/recv/err, :::, echo, 1000, )
+true
+select add_fault_point('fj/cn/recv/subsyserr', ':::', 'echo', 30000, '');
+add_fault_point(fj/cn/recv/subsyserr, :::, echo, 30000, )
+true
+select sleep(1);
+sleep(1)
+0
+select remove_fault_point('fj/cn/recv/subsyserr');
+remove_fault_point(fj/cn/recv/subsyserr)
+true
+select add_fault_point('fj/cn/recv/rcacheerr', ':::', 'echo', 70000, '');
+add_fault_point(fj/cn/recv/rcacheerr, :::, echo, 70000, )
+true
+select sleep(1);
+sleep(1)
+0
+select remove_fault_point('fj/cn/recv/rcacheerr');
+remove_fault_point(fj/cn/recv/rcacheerr)
+true
+select disable_fault_injection();
+disable_fault_injection()
+true
+select sleep(1);
+sleep(1)
+0
+create database logtail_reconnect;
+show databases;
+Database
+connectlogtail
+information_schema
+logtail_reconnect
+mo_catalog
+mo_debug
+mo_task
+mysql
+system
+system_metrics
+drop database logtail_reconnect;

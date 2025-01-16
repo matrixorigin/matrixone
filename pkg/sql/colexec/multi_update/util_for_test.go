@@ -191,7 +191,7 @@ func prepareTestEng(ctrl *gomock.Controller) engine.Engine {
 	return eng
 }
 
-func getTestMainTable(isPartition bool) (*plan.ObjectRef, *plan.TableDef) {
+func getTestMainTable() (*plan.ObjectRef, *plan.TableDef) {
 	objRef := &plan.ObjectRef{Schema: 1, Obj: 1, SchemaName: "test", ObjName: "t1"}
 
 	tableDef := &plan.TableDef{
@@ -223,17 +223,10 @@ func getTestMainTable(isPartition bool) (*plan.ObjectRef, *plan.TableDef) {
 	tableDef.Name2ColIndex["d"] = 3
 	tableDef.Name2ColIndex[catalog.Row_ID] = 4
 
-	if isPartition {
-		tableDef.Partition = &plan.PartitionByDef{
-			Type:                pbPlan.PartitionType_KEY,
-			PartitionTableNames: []string{"t1_part_1", "t1_part_2", "t1_part_3"},
-		}
-	}
-
 	return objRef, tableDef
 }
 
-func getTestUniqueIndexTable(uniqueTblName string, isPartition bool) (*plan.ObjectRef, *plan.TableDef) {
+func getTestUniqueIndexTable(uniqueTblName string) (*plan.ObjectRef, *plan.TableDef) {
 	uniqueObjRef := &plan.ObjectRef{Schema: 1, Obj: 2, SchemaName: "test", ObjName: uniqueTblName}
 	uniqueTableDef := &plan.TableDef{
 		TblId:  1,
@@ -262,17 +255,10 @@ func getTestUniqueIndexTable(uniqueTblName string, isPartition bool) (*plan.Obje
 	uniqueTableDef.Name2ColIndex[catalog.IndexTablePrimaryColName] = 1
 	uniqueTableDef.Name2ColIndex[catalog.Row_ID] = 2
 
-	if isPartition {
-		uniqueTableDef.Partition = &plan.PartitionByDef{
-			Type:                pbPlan.PartitionType_KEY,
-			PartitionTableNames: []string{"t1_uk_part_1", "t1_uk_part_2", "t1_uk_part_3"},
-		}
-	}
-
 	return uniqueObjRef, uniqueTableDef
 }
 
-func getTestSecondaryIndexTable(secondaryIdxTblName string, isPartition bool) (*plan.ObjectRef, *plan.TableDef) {
+func getTestSecondaryIndexTable(secondaryIdxTblName string) (*plan.ObjectRef, *plan.TableDef) {
 	secondaryIdxObjRef := &plan.ObjectRef{Schema: 1, Obj: 2, SchemaName: "test", ObjName: secondaryIdxTblName}
 	secondaryIdxTableDef := &plan.TableDef{
 		TblId:  1,
@@ -298,13 +284,6 @@ func getTestSecondaryIndexTable(secondaryIdxTblName string, isPartition bool) (*
 	secondaryIdxTableDef.Name2ColIndex[catalog.IndexTableIndexColName] = 0
 	secondaryIdxTableDef.Name2ColIndex[catalog.IndexTablePrimaryColName] = 1
 	secondaryIdxTableDef.Name2ColIndex[catalog.Row_ID] = 2
-
-	if isPartition {
-		secondaryIdxTableDef.Partition = &plan.PartitionByDef{
-			Type:                pbPlan.PartitionType_KEY,
-			PartitionTableNames: []string{"t1_sk_part_1", "t1_sk_part_2", "t1_sk_part_3"},
-		}
-	}
 
 	return secondaryIdxObjRef, secondaryIdxTableDef
 }
@@ -343,14 +322,6 @@ func makeTestPkArray(from int64, rowCount int) []int64 {
 	val := make([]int64, rowCount)
 	for i := 0; i < rowCount; i++ {
 		val[i] = from + int64(i)
-	}
-	return val
-}
-
-func makeTestPartitionArray(rowCount int, partitionCount int) []int32 {
-	val := make([]int32, rowCount)
-	for i := 0; i < rowCount; i++ {
-		val[i] = int32(i % partitionCount)
 	}
 	return val
 }

@@ -531,6 +531,9 @@ func (c *PushClient) subscribeTable(
 }
 
 func (c *PushClient) subSysTables(ctx context.Context) error {
+	if enabled, p := objectio.CNSubSysErrInjected(); enabled && rand.Intn(100000) < p {
+		return moerr.NewInternalError(ctx, "FIND_TABLE sub sys error injected")
+	}
 	// push subscription to Table `mo_database`, `mo_table`, `mo_column` of mo_catalog.
 	databaseId := uint64(catalog.MO_CATALOG_ID)
 	tableIds := []uint64{catalog.MO_DATABASE_ID, catalog.MO_TABLES_ID, catalog.MO_COLUMNS_ID}
@@ -555,6 +558,10 @@ func (c *PushClient) pause(s bool) {
 	if c.mu.paused {
 		return
 	}
+	// Note
+	// If subSysTables fails to send a successful request, receiveLogtails will receive nothing until the context is done. In this case, we attempt to stop the receiveLogtails goroutine immediately.
+	// The break signal left in the channel will interrupt the normal receiving process, but this is not an issue because reconnecting will create a new channel.
+	c.subscriber.logTailClient.BreakoutReceive()
 	select {
 	case c.pauseC <- s:
 		c.mu.paused = true
@@ -733,6 +740,9 @@ func (c *PushClient) waitTimestamp() {
 }
 
 func (c *PushClient) replayCatalogCache(ctx context.Context, e *Engine) (err error) {
+	if enabled, p := objectio.CNReplayCacheErrInjected(); enabled && rand.Intn(100000) < p {
+		return moerr.NewInternalError(ctx, "FIND_TABLE replay catalog cache error injected")
+	}
 	// replay mo_catalog cache
 	var op client.TxnOperator
 	var result executor.Result
@@ -873,6 +883,7 @@ func (c *PushClient) connect(ctx context.Context, e *Engine) {
 
 	e.setPushClientStatus(false)
 
+	// the consumer goroutine is supposed to be stopped.
 	c.stopConsumers()
 
 	logutil.Infof("%s %s: clean finished, start to reconnect to tn log tail service", logTag, c.serviceID)
@@ -912,17 +923,23 @@ func (c *PushClient) connect(ctx context.Context, e *Engine) {
 		c.dcaReset()
 		err = c.subSysTables(ctx)
 		if err != nil {
-			c.pause(false)
+			//  send on closed channel error:
+			// receive logtail error -> pause -> reconnect -------------------------> stop
+			//                   |-> forced subscribe table timeout -> continue ----> resume
+			// Any errors related to the logtail consumer should not be retried within the inner connect loop; they should be handled by the outer caller.
+			// So we break the loop here.
+
+			c.pause(true)
 			logutil.Errorf("%s subscribe system tables failed, err %v", logTag, err)
-			continue
+			break
 		}
 
 		c.waitTimestamp()
 
 		if err := c.replayCatalogCache(ctx, e); err != nil {
-			c.pause(false)
+			c.pause(true)
 			logutil.Errorf("%s replay catalog cache failed, err %v", logTag, err)
-			continue
+			break
 		}
 
 		e.setPushClientStatus(true)
@@ -1259,7 +1276,8 @@ func (c *PushClient) isNotSubscribing(ctx context.Context, dbId, tblId uint64) (
 	}
 	//table is unsubscribed
 	if !c.subscriber.ready() {
-		return true, Unsubscribed, moerr.NewInternalError(ctx, "log tail subscriber is not ready")
+		// let wait the subscriber ready.
+		return false, Unsubscribed, nil //moerr.NewInternalError(ctx, "log tail subscriber is not ready")
 	}
 	c.subscribed.m[tblId] = SubTableStatus{
 		DBID:     dbId,
@@ -1287,7 +1305,7 @@ func (c *PushClient) isNotUnsubscribing(ctx context.Context, dbId, tblId uint64)
 	}
 	//table is unsubscribed
 	if !c.subscriber.ready() {
-		return true, Unsubscribed, moerr.NewInternalError(ctx, "log tail subscriber is not ready")
+		return false, Unsubscribed, nil //moerr.NewInternalError(ctx, "log tail subscriber is not ready")
 	}
 	c.subscribed.m[tblId] = SubTableStatus{
 		DBID:     dbId,

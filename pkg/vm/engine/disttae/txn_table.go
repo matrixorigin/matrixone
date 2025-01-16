@@ -588,6 +588,7 @@ func (tbl *txnTable) getObjList(ctx context.Context, rangesParam engine.RangesPa
 	needUncommited := rangesParam.Policy&engine.Policy_CollectUncommittedData != 0
 	objRelData := &readutil.ObjListRelData{
 		NeedFirstEmpty: needUncommited,
+		Rsp:            rangesParam.Rsp,
 	}
 
 	if needUncommited {
@@ -1093,7 +1094,6 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 		var properties []*plan.Property
 		var TableType string
 		var Createsql string
-		var partitionInfo *plan.PartitionByDef
 		var viewSql *plan.ViewDef
 		var foreignKeys []*plan.ForeignKeyDef
 		var primarykey *plan.PrimaryKeyDef
@@ -1145,16 +1145,6 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 				Key:   catalog.SystemRelAttr_Comment,
 				Value: tbl.comment,
 			})
-		}
-
-		if tbl.partitioned > 0 {
-			p := &plan.PartitionByDef{}
-			err := p.UnMarshalPartitionInfo(([]byte)(tbl.partition))
-			if err != nil {
-				//panic(fmt.Sprintf("cannot unmarshal partition metadata information: %s", err))
-				return nil
-			}
-			partitionInfo = p
 		}
 
 		if tbl.viewdef != "" {
@@ -1232,7 +1222,6 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 			Createsql:     Createsql,
 			Pkey:          primarykey,
 			ViewSql:       viewSql,
-			Partition:     partitionInfo,
 			Fkeys:         foreignKeys,
 			RefChildTbls:  refChildTbls,
 			ClusterBy:     clusterByDef,
@@ -1330,16 +1319,7 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 	for _, req := range reqs {
 		switch req.GetKind() {
 		case api.AlterKind_AddPartition:
-			tbl.partitioned = 1
-			info, err := req.GetAddPartition().GetPartitionDef().MarshalPartitionInfo()
-			if err != nil {
-				return err
-			}
-			tbl.partition = string(info)
-			appendDef = append(appendDef, &engine.PartitionDef{
-				Partitioned: 1,
-				Partition:   tbl.partition,
-			})
+			// TODO: reimplement partition
 		case api.AlterKind_UpdateComment:
 			tbl.comment = req.GetUpdateComment().Comment
 			appendDef = append(appendDef, &engine.CommentDef{Comment: tbl.comment})
@@ -1412,13 +1392,12 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 	if err := tbl.db.createWithID(ctx, tbl.tableName, tbl.tableId, tbl.defs, !createdInTxn); err != nil {
 		return err
 	}
-
 	if createdInTxn {
 		// 3. adjust writes for the table
 		txn.Lock()
 		for i, n := 0, len(txn.writes); i < n; i++ {
 			if cur := txn.writes[i]; cur.tableId == tbl.tableId && cur.bat != nil && cur.bat.RowCount() > 0 {
-				if sels, exist := txn.batchSelectList[cur.bat]; exist && len(sels) == 0 {
+				if sels, exist := txn.batchSelectList[cur.bat]; exist && len(sels) == cur.bat.RowCount() {
 					continue
 				}
 				txn.writes = append(txn.writes, txn.writes[i]) // copy by value
@@ -1428,7 +1407,10 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 				if err != nil {
 					return err
 				}
-				txn.batchSelectList[cur.bat] = []int64{}
+				for j := 0; j < cur.bat.RowCount(); j++ {
+					txn.batchSelectList[cur.bat] = append(txn.batchSelectList[cur.bat], int64(j))
+				}
+
 			}
 		}
 		txn.Unlock()
@@ -1916,13 +1898,12 @@ func (tbl *txnTable) getPartitionState(
 
 func (tbl *txnTable) tryToSubscribe(ctx context.Context) (ps *logtailreplay.PartitionState, err error) {
 	eng := tbl.eng.(*Engine)
+	var createdInTxn bool
 	defer func() {
-		if err == nil {
-			eng.globalStats.notifyLogtailUpdate(tbl.tableId)
-		}
+		eng.globalStats.notifyLogtailUpdate(tbl.tableId, err == nil && !createdInTxn)
 	}()
 
-	createdInTxn, err := tbl.isCreatedInTxn(ctx)
+	createdInTxn, err = tbl.isCreatedInTxn(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1930,8 +1911,8 @@ func (tbl *txnTable) tryToSubscribe(ctx context.Context) (ps *logtailreplay.Part
 		return
 	}
 
-	return eng.PushClient().toSubscribeTable(ctx, tbl)
-
+	ps, err = eng.PushClient().toSubscribeTable(ctx, tbl)
+	return ps, err
 }
 
 func (tbl *txnTable) PKPersistedBetween(

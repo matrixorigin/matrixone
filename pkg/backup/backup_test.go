@@ -425,6 +425,135 @@ func TestBackupData4(t *testing.T) {
 
 }
 
+func TestBackupData5(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOptsAndQuickGC(nil)
+	db := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer db.Close()
+	defer opts.Fs.Close(ctx)
+
+	schema := catalog.MockSchemaAll(13, 3)
+	schema.Extra.BlockMaxRows = 10
+	schema.Extra.ObjectMaxBlocks = 10
+	db.BindSchema(schema)
+	{
+		txn, err := db.DB.StartTxn(nil)
+		require.NoError(t, err)
+		dbH, err := testutil.CreateDatabase2(ctx, txn, "db")
+		require.NoError(t, err)
+		_, err = testutil.CreateRelation2(ctx, txn, dbH, schema)
+		require.NoError(t, err)
+		require.NoError(t, txn.Commit(ctx))
+	}
+
+	totalRows := uint64(schema.Extra.BlockMaxRows * 30)
+	bat := catalog.MockBatch(schema, int(totalRows))
+	defer bat.Close()
+	bats := bat.Split(100)
+
+	var wg sync.WaitGroup
+	pool, _ := ants.NewPool(80)
+	defer pool.Release()
+
+	start := time.Now()
+	for _, data := range bats {
+		wg.Add(1)
+		err := pool.Submit(testutil.AppendClosure(t, data, schema.Name, db.DB, &wg))
+		assert.Nil(t, err)
+	}
+	wg.Wait()
+	t.Logf("Append %d rows takes: %s", totalRows, time.Since(start))
+
+	deletedRows := 0
+	{
+		txn, rel := testutil.GetDefaultRelation(t, db.DB, schema.Name)
+		testutil.CheckAllColRowsByScan(t, rel, int(totalRows), false)
+
+		obj := testutil.GetOneObject(rel)
+		id := obj.GetMeta().(*catalog.ObjectEntry).AsCommonID()
+		err := rel.RangeDelete(id, 0, 0, handle.DT_Normal)
+		require.NoError(t, err)
+		deletedRows = 1
+		testutil.CompactBlocks(t, 0, db.DB, "db", schema, false)
+
+		assert.NoError(t, txn.Commit(context.Background()))
+	}
+	t.Log(db.Catalog.SimplePPString(common.PPL1))
+
+	dir := path.Join(db.Dir, "/local")
+	c := fileservice.Config{
+		Name:    defines.LocalFileServiceName,
+		Backend: "DISK",
+		DataDir: dir,
+	}
+	service, err := fileservice.NewFileService(ctx, c, nil)
+	assert.Nil(t, err)
+	defer service.Close(ctx)
+	for _, data := range bats {
+		txn, rel := db.GetRelation()
+		v := testutil.GetSingleSortKeyValue(data, schema, 2)
+		filter := handle.NewEQFilter(v)
+		err := rel.DeleteByFilter(context.Background(), filter)
+		assert.NoError(t, err)
+		assert.NoError(t, txn.Commit(context.Background()))
+	}
+	backupTime := time.Now().UTC()
+	currTs := types.BuildTS(backupTime.UnixNano(), 0)
+	locations := make([]string, 0)
+	locations = append(locations, backupTime.Format(time.DateTime))
+	location, err := db.ForceCheckpointForBackup(ctx, currTs)
+	assert.Nil(t, err)
+	_, err = db.BGCheckpointRunner.DisableCheckpoint(ctx)
+	assert.NoError(t, err)
+	locations = append(locations, location)
+	checkpoints := db.BGCheckpointRunner.GetAllCheckpoints()
+	files := make(map[string]string, 0)
+	for _, candidate := range checkpoints {
+		if files[candidate.GetLocation().Name().String()] == "" {
+			var loc string
+			loc = candidate.GetLocation().String()
+			loc += ":"
+			loc += fmt.Sprintf("%d", candidate.GetVersion())
+			files[candidate.GetLocation().Name().String()] = loc
+		}
+	}
+	for _, location := range files {
+		locations = append(locations, location)
+	}
+	fileList := make([]*taeFile, 0)
+	dstObj, err := fileservice.SortedList(db.Opts.Fs.List(ctx, ""))
+	assert.NoError(t, err)
+	data := []byte(dstObj[0].Name)
+	data = append(data, []byte("\n")...)
+	service.Write(ctx, fileservice.IOVector{
+		FilePath: "file_list",
+		Entries: []fileservice.IOEntry{
+			{
+				Offset: 0,
+				Size:   int64(len(data)),
+				Data:   data,
+			},
+		},
+	})
+	err = execBackup(ctx, "", db.Opts.Fs, service, locations, 1, types.TS{}, "full", &fileList)
+	assert.Nil(t, err)
+	fileMap := make(map[string]struct{})
+	for _, file := range fileList {
+		_, ok := fileMap[file.path]
+		assert.True(t, !ok)
+		fileMap[file.path] = struct{}{}
+	}
+	db.Opts.Fs = service
+	db.Restart(ctx)
+	txn, rel := testutil.GetDefaultRelation(t, db.DB, schema.Name)
+	testutil.CheckAllColRowsByScan(t, rel, int(totalRows-100)-deletedRows, true)
+	assert.NoError(t, txn.Commit(context.Background()))
+
+}
+
 func Test_saveTaeFilesList(t *testing.T) {
 	type args struct {
 		ctx        context.Context

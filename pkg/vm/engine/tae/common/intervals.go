@@ -42,7 +42,7 @@ func (intervals *ClosedIntervals) GetMin() uint64 {
 	}
 	return intervals.Intervals[0].Start
 }
-func (intervals *ClosedIntervals) TryMerge(o ClosedIntervals) {
+func (intervals *ClosedIntervals) TryMerge(o *ClosedIntervals) {
 	intervals.Intervals = append(intervals.Intervals, o.Intervals...)
 	sort.Slice(intervals.Intervals, func(i, j int) bool {
 		return intervals.Intervals[i].Start < intervals.Intervals[j].Start

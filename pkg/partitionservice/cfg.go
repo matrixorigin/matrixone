@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2021-2024 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,17 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package store
+package partitionservice
 
-import (
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
-)
-
-func (w *StoreImpl) Load(gid uint32, lsn uint64) (entry.Entry, error) {
-	driverLsn, err := w.retryGetDriverLsn(gid, lsn)
-	if err != nil {
-		return nil, err
-	}
-	driverEntry, err := w.driver.Read(driverLsn)
-	return driverEntry.Entry, err
+// Config partition service
+type Config struct {
+	// ServiceID service id
+	ServiceID string `toml:"-"`
+	// Enable enable shard service
+	Enable bool `toml:"enable"`
 }

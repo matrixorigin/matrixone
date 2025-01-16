@@ -493,8 +493,18 @@ func Test_doCreateCdc_invalidStartTs(t *testing.T) {
 			"123456",
 		},
 	}
-
 	err := doCreateCdc(context.Background(), ses, create)
+	assert.Error(t, err)
+
+	create.Option = []string{
+		"Level",
+		cdc2.AccountLevel,
+		cdc2.StartTs,
+		"2025-01-03 15:20:00",
+		cdc2.EndTs,
+		"2025-01-03 14:20:00",
+	}
+	err = doCreateCdc(context.Background(), ses, create)
 	assert.Error(t, err)
 }
 

@@ -173,47 +173,42 @@ invalid input: column 'b' doesn't exist in table
 create table t1(a int, b int, primary key(b, c));
 invalid input: column 'c' doesn't exist in table
 drop table if exists t1;
-[unknown result because it is related to issue#5790]
 create table t1(a int, b varchar(20), unique key(a));
-[unknown result because it is related to issue#5790]
 insert into t1 values(1, '1');
-[unknown result because it is related to issue#5790]
 insert into t1 values(2, '2');
-[unknown result because it is related to issue#5790]
 insert into t1 values(3, '3');
-[unknown result because it is related to issue#5790]
 insert into t1 values(4, '4');
-[unknown result because it is related to issue#5790]
 select * from t1;
-[unknown result because it is related to issue#5790]
+a    b
+1    1
+2    2
+3    3
+4    4
 insert into t1 values(1, '1');
-[unknown result because it is related to issue#5790]
+Duplicate entry '1' for key '__mo_index_idx_col'
 insert into t1 values(null, '1');
-[unknown result because it is related to issue#5790]
 insert into t1 values(null, '1');
-[unknown result because it is related to issue#5790]
 drop table if exists t1;
-[unknown result because it is related to issue#5790]
 create table t1(a int, b varchar(20), unique key(a, b));
-[unknown result because it is related to issue#5790]
 insert into t1 values(1, '2');
-[unknown result because it is related to issue#5790]
 insert into t1 values(1, '3');
-[unknown result because it is related to issue#5790]
 insert into t1 values(2, '2');
-[unknown result because it is related to issue#5790]
 insert into t1 values(2, '3');
-[unknown result because it is related to issue#5790]
 select * from t1;
-[unknown result because it is related to issue#5790]
+a    b
+1    2
+1    3
+2    2
+2    3
 insert into t1 values(2, '3');
-[unknown result because it is related to issue#5790]
+Duplicate entry '3a150246013300' for key '__mo_index_idx_col'
 insert into t1 values(null, '1');
-[unknown result because it is related to issue#5790]
 insert into t1 values(null, '2');
-[unknown result because it is related to issue#5790]
 insert into t1 values(null, '2');
-[unknown result because it is related to issue#5790]
+drop table if exists t1;
+create table t1(a int, b int, c int, primary key(a,b));
+insert into t1 select result,result,result from generate_series(200000) g;
+update t1 set c= 10 where a < 6000;
 drop table if exists flush_logtail;
 create table flush_logtail(a int, b int);
 insert into flush_logtail values(1, 1);

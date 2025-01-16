@@ -57,8 +57,8 @@ func (h *poolHandler) Execute(task Task) {
 func (h *poolHandler) doHandle(op iops.IOp) {
 	closure := func(o iops.IOp, wg *sync.WaitGroup) func() {
 		return func() {
+			defer wg.Done()
 			h.opExec(o)
-			wg.Done()
 		}
 	}
 	h.wg.Add(1)

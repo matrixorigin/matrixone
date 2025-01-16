@@ -2734,10 +2734,21 @@ func doResolveTimeStamp(timeStamp string) (ts int64, err error) {
 	if err != nil {
 		return 0, err
 	}
+	if len(timeStamp) == 0 {
+		return 0, moerr.NewInvalidInputNoCtx("timestamp is empty")
+	}
 	t, err := time.ParseInLocation("2006-01-02 15:04:05", timeStamp, loc)
 	if err != nil {
-		return 0, err
+		return 0, moerr.NewInvalidInputNoCtxf("invalid timestamp format: %s", timeStamp)
 	}
 	ts = t.UTC().UnixNano()
 	return ts, nil
+}
+
+func onlyHasHiddenPrimaryKey(tableDef *TableDef) bool {
+	if tableDef == nil {
+		return false
+	}
+	pk := tableDef.GetPkey()
+	return pk != nil && pk.GetPkeyColName() == catalog.FakePrimaryKeyColName
 }

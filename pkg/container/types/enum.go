@@ -34,8 +34,9 @@ func ParseEnum(enumStr string, name string) (Enum, error) {
 		return 0, moerr.NewInternalErrorNoCtxf("convert to MySQL enum failed: enum define is empty %v", enumStr)
 	}
 	elems := strings.Split(enumStr, ",")
-	enumName, err := parseEnumName(elems, name)
-	if err == nil {
+	enumName, _ := parseEnumName(elems, name)
+	if enumName != Enum(0) {
+		// if match name, return
 		return enumName, nil
 	}
 	// if name doesn't exist, it's maybe an integer
@@ -61,7 +62,7 @@ func parseEnumName(elems []string, name string) (Enum, error) {
 			return Enum(uint16(i) + 1), nil
 		}
 	}
-	return Enum(1), moerr.NewInternalErrorNoCtxf("convert to MySQL enum failed: item %s is not in enum %v", name, elems)
+	return Enum(0), nil
 }
 
 // ParseEnumValue return item index with special number.

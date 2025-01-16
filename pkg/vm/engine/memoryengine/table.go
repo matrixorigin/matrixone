@@ -16,7 +16,6 @@ package memoryengine
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -262,7 +261,6 @@ func (t *Table) GetTableDef(ctx context.Context) *plan.TableDef {
 	var defs []*plan2.TableDefType
 	var properties []*plan2.Property
 	var TableType, Createsql string
-	var partitionInfo *plan2.PartitionByDef
 	var viewSql *plan2.ViewDef
 	var foreignKeys []*plan2.ForeignKeyDef
 	var primarykey *plan2.PrimaryKeyDef
@@ -336,15 +334,6 @@ func (t *Table) GetTableDef(ctx context.Context) *plan.TableDef {
 				Key:   catalog.SystemRelAttr_Comment,
 				Value: commnetDef.Comment,
 			})
-		} else if partitionDef, ok := def.(*engine.PartitionDef); ok {
-			if partitionDef.Partitioned > 0 {
-				p := &plan2.PartitionByDef{}
-				err = p.UnMarshalPartitionInfo(([]byte)(partitionDef.Partition))
-				if err != nil {
-					panic(fmt.Sprintf("cannot unmarshal partition metadata information: %s", err))
-				}
-				partitionInfo = p
-			}
 		} else if v, ok := def.(*engine.VersionDef); ok {
 			schemaVersion = v.Version
 		}
@@ -377,7 +366,6 @@ func (t *Table) GetTableDef(ctx context.Context) *plan.TableDef {
 		Createsql:    Createsql,
 		Pkey:         primarykey,
 		ViewSql:      viewSql,
-		Partition:    partitionInfo,
 		Fkeys:        foreignKeys,
 		RefChildTbls: refChildTbls,
 		ClusterBy:    clusterByDef,

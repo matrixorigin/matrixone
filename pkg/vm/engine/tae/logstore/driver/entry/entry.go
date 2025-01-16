@@ -27,8 +27,8 @@ import (
 type Entry struct {
 	Entry entry.Entry
 	Info  *entry.Info //for wal in post append
-	Lsn   uint64
-	Ctx   any //for addr in batchstore
+	DSN   uint64      // driver sequence number
+	Ctx   any         //for addr in batchstore
 	err   error
 	wg    *sync.WaitGroup
 
@@ -68,7 +68,7 @@ func (e *Entry) SetInfo() {
 	}
 }
 func (e *Entry) ReadFrom(r io.Reader) (n int64, err error) {
-	if _, err = r.Read(types.EncodeUint64(&e.Lsn)); err != nil {
+	if _, err = r.Read(types.EncodeUint64(&e.DSN)); err != nil {
 		return
 	}
 	_, err = e.Entry.ReadFrom(r)
@@ -80,7 +80,7 @@ func (e *Entry) ReadFrom(r io.Reader) (n int64, err error) {
 }
 
 func (e *Entry) UnmarshalBinary(buf []byte) (n int64, err error) {
-	e.Lsn = types.DecodeUint64(buf[:8])
+	e.DSN = types.DecodeUint64(buf[:8])
 	n += 8
 	n2, err := e.Entry.UnmarshalBinary(buf[n:])
 	if err != nil {
@@ -100,7 +100,7 @@ func (e *Entry) ReadAt(r *os.File, offset int) (int, error) {
 	offset += 8
 
 	bbuf := bytes.NewBuffer(lsnbuf)
-	if _, err := bbuf.Read(types.EncodeUint64(&e.Lsn)); err != nil {
+	if _, err := bbuf.Read(types.EncodeUint64(&e.DSN)); err != nil {
 		return n, err
 	}
 
@@ -109,7 +109,7 @@ func (e *Entry) ReadAt(r *os.File, offset int) (int, error) {
 }
 
 func (e *Entry) WriteTo(w io.Writer) (int64, error) {
-	if _, err := w.Write(types.EncodeUint64(&e.Lsn)); err != nil {
+	if _, err := w.Write(types.EncodeUint64(&e.DSN)); err != nil {
 		return 0, err
 	}
 	n, err := e.Entry.WriteTo(w)

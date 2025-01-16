@@ -46,7 +46,7 @@ func TestMerge1(t *testing.T) {
 			{Start: 8, End: 13},
 		},
 	}
-	i1.TryMerge(*i2)
+	i1.TryMerge(i2)
 	res := &ClosedIntervals{
 		Intervals: []*ClosedInterval{
 			{Start: 1, End: 6},
@@ -78,7 +78,7 @@ func TestMerge2(t *testing.T) {
 			{Start: 8, End: 13},
 		},
 	}
-	i1.TryMerge(*i2)
+	i1.TryMerge(i2)
 	res := &ClosedIntervals{
 		Intervals: []*ClosedInterval{
 			{Start: 2, End: 2},
@@ -107,7 +107,7 @@ func TestMerge3(t *testing.T) {
 	i2bk := &ClosedIntervals{
 		Intervals: []*ClosedInterval{},
 	}
-	i1.TryMerge(*i2)
+	i1.TryMerge(i2)
 	res := &ClosedIntervals{
 		Intervals: []*ClosedInterval{
 			{Start: 2, End: 2},

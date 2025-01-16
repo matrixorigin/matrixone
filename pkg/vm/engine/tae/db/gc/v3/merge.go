@@ -43,13 +43,14 @@ type tableOffset struct {
 
 func MergeCheckpoint(
 	ctx context.Context,
+	taskName string,
 	sid string,
-	fs fileservice.FileService,
 	ckpEntries []*checkpoint.CheckpointEntry,
 	bf *bloomfilter.BloomFilter,
 	end *types.TS,
 	client checkpoint.Runner,
 	pool *mpool.MPool,
+	fs fileservice.FileService,
 ) (deleteFiles, newFiles []string, checkpointEntry *checkpoint.CheckpointEntry, ckpData *logtail.CheckpointData, err error) {
 	ckpData = logtail.NewCheckpointData(sid, pool)
 	datas := make([]*logtail.CheckpointData, 0)
@@ -61,8 +62,11 @@ func MergeCheckpoint(
 			return
 		default:
 		}
-		logutil.Info("[MergeCheckpoint]",
-			zap.String("checkpoint", ckpEntry.String()))
+		logutil.Info(
+			"GC-Merge-Checkpoint",
+			zap.String("task", taskName),
+			zap.String("entry", ckpEntry.String()),
+		)
 		var data *logtail.CheckpointData
 		var locations map[string]objectio.Location
 		if _, data, err = logtail.LoadCheckpointEntriesFromKey(

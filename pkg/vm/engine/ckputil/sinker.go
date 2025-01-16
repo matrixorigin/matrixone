@@ -25,9 +25,11 @@ import (
 func EncodeCluser(
 	packer *types.Packer,
 	tableId uint64,
+	objectType int8,
 	obj *objectio.ObjectId,
 ) {
 	packer.EncodeUint64(tableId)
+	packer.EncodeInt8(objectType)
 	packer.EncodeObjectid(obj)
 }
 

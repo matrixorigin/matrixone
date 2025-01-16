@@ -135,13 +135,13 @@ drop pitr if exists pitr21;
 
 
 -- @ignore:0,2,3,4,6,7,10
-select * from mo_catalog.mo_pitr Where pitr_name != 'sys_mo_catalog_pitr';
+select `pitr_id`, `pitr_name`, `create_account`, `create_time`, `modified_time`, `level`, `account_id`, `account_name`, `database_name`, `table_name`, `obj_id`, `pitr_length`, `pitr_unit` from mo_catalog.mo_pitr Where pitr_name != 'sys_mo_catalog_pitr';
 drop account if exists acc01;
 -- @ignore:0,2,3,4,6,7,10
-select * from mo_catalog.mo_pitr Where pitr_name != 'sys_mo_catalog_pitr';
+select `pitr_id`, `pitr_name`, `create_account`, `create_time`, `modified_time`, `level`, `account_id`, `account_name`, `database_name`, `table_name`, `obj_id`, `pitr_length`, `pitr_unit` from mo_catalog.mo_pitr Where pitr_name != 'sys_mo_catalog_pitr';
 drop database if exists db01;
 -- @ignore:0,2,3,4,6,7,10
-select * from mo_catalog.mo_pitr Where pitr_name != 'sys_mo_catalog_pitr';
+select `pitr_id`, `pitr_name`, `create_account`, `create_time`, `modified_time`, `level`, `account_id`, `account_name`, `database_name`, `table_name`, `obj_id`, `pitr_length`, `pitr_unit` from mo_catalog.mo_pitr Where pitr_name != 'sys_mo_catalog_pitr';
 -- @ignore:1,2
 drop pitr if exists pitr01;
 drop pitr if exists pitr02;
@@ -154,7 +154,7 @@ drop pitr if exists pitr14;
 -- @ignore:1,2
 show pitr;
 -- @ignore:0,2,3,4,6,7,10
-select * from mo_catalog.mo_pitr Where pitr_name != 'sys_mo_catalog_pitr';
+select `pitr_id`, `pitr_name`, `create_account`, `create_time`, `modified_time`, `level`, `account_id`, `account_name`, `database_name`, `table_name`, `obj_id`, `pitr_length`, `pitr_unit` from mo_catalog.mo_pitr Where pitr_name != 'sys_mo_catalog_pitr';
 
 drop account if exists acc02;
 create account acc02 admin_name = 'test_account' identified by '111';
@@ -168,10 +168,10 @@ alter pitr pitr01 range 1 'd';
 show pitr;
 -- @session
 -- @ignore:0,2,3,4,6,7,10
-select * from mo_catalog.mo_pitr Where pitr_name != 'sys_mo_catalog_pitr';
+select `pitr_id`, `pitr_name`, `create_account`, `create_time`, `modified_time`, `level`, `account_id`, `account_name`, `database_name`, `table_name`, `obj_id`, `pitr_length`, `pitr_unit` from mo_catalog.mo_pitr Where pitr_name != 'sys_mo_catalog_pitr';
 drop account if exists acc02;
 -- @ignore:0,2,3,4,6,7,10
-select * from mo_catalog.mo_pitr Where pitr_name != 'sys_mo_catalog_pitr';
+select `pitr_id`, `pitr_name`, `create_account`, `create_time`, `modified_time`, `level`, `account_id`, `account_name`, `database_name`, `table_name`, `obj_id`, `pitr_length`, `pitr_unit` from mo_catalog.mo_pitr Where pitr_name != 'sys_mo_catalog_pitr';
 
 
 drop pitr if exists pitr01;
@@ -304,14 +304,14 @@ drop pitr if exists sys_mo_catalog_pitr;
 drop pitr if exists pitr01;
 create pitr pitr01 for account range 1 'h';
 -- @ignore:0,2,3,4,6,7,10
-select * from mo_catalog.mo_pitr Where pitr_name != 'sys_mo_catalog_pitr';
+select `pitr_id`, `pitr_name`, `create_account`, `create_time`, `modified_time`, `level`, `account_id`, `account_name`, `database_name`, `table_name`, `obj_id`, `pitr_length`, `pitr_unit` from mo_catalog.mo_pitr Where pitr_name != 'sys_mo_catalog_pitr';
 -- @ignore:1,2
 show pitr;
 drop pitr if exists pitr01;
 drop pitr if exists pitr02;
 create pitr pitr02 for account range 1 'd';
 -- @ignore:0,2,3,4,6,7,10
-select * from mo_catalog.mo_pitr Where pitr_name != 'sys_mo_catalog_pitr';
+select `pitr_id`, `pitr_name`, `create_account`, `create_time`, `modified_time`, `level`, `account_id`, `account_name`, `database_name`, `table_name`, `obj_id`, `pitr_length`, `pitr_unit` from mo_catalog.mo_pitr Where pitr_name != 'sys_mo_catalog_pitr';
 -- @ignore:1,2
 show pitr;
 drop pitr if exists pitr02;
@@ -323,17 +323,17 @@ create pitr pitr01 for account range 1 'mo';
 show pitr;
 -- @session
 -- @ignore:0,2,3,4,6,7,10
-select * from mo_catalog.mo_pitr Where pitr_name != 'sys_mo_catalog_pitr';
+select `pitr_id`, `pitr_name`, `create_account`, `create_time`, `modified_time`, `level`, `account_id`, `account_name`, `database_name`, `table_name`, `obj_id`, `pitr_length`, `pitr_unit` from mo_catalog.mo_pitr Where pitr_name != 'sys_mo_catalog_pitr';
 drop account if exists acc01;
 drop database if exists db01;
 create database db01;
 drop pitr if exists pitr10;
 create pitr pitr10 for database db01 range 1 'y';
 -- @ignore:0,2,3,4,6,7,10
-select * from mo_catalog.mo_pitr Where pitr_name != 'sys_mo_catalog_pitr';
+select `pitr_id`, `pitr_name`, `create_account`, `create_time`, `modified_time`, `level`, `account_id`, `account_name`, `database_name`, `table_name`, `obj_id`, `pitr_length`, `pitr_unit` from mo_catalog.mo_pitr Where pitr_name != 'sys_mo_catalog_pitr';
 -- @ignore:1,2
 show pitr;
 drop pitr if exists pitr10;
 -- @ignore:0,2,3,4,6,7,10
-select * from mo_catalog.mo_pitr Where pitr_name != 'sys_mo_catalog_pitr';
+select `pitr_id`, `pitr_name`, `create_account`, `create_time`, `modified_time`, `level`, `account_id`, `account_name`, `database_name`, `table_name`, `obj_id`, `pitr_length`, `pitr_unit` from mo_catalog.mo_pitr Where pitr_name != 'sys_mo_catalog_pitr';
 drop database if exists db01;

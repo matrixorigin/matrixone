@@ -46,6 +46,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
+	"github.com/matrixorigin/matrixone/pkg/partitionservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -799,6 +800,22 @@ func (s *service) initShardService() {
 	runtime.ServiceRuntime(s.cfg.UUID).SetGlobalVariables(
 		runtime.ShardService,
 		s.shardService,
+	)
+}
+
+func (s *service) initPartitionService() {
+	store := partitionservice.NewStorage(
+		s.cfg.UUID,
+		s.sqlExecutor,
+		s.storeEngine,
+	)
+	s.partitionService = partitionservice.NewService(
+		s.getPartitionServiceConfig(),
+		store,
+	)
+	runtime.ServiceRuntime(s.cfg.UUID).SetGlobalVariables(
+		runtime.PartitionService,
+		s.partitionService,
 	)
 }
 

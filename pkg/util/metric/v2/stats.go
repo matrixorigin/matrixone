@@ -26,6 +26,24 @@ var (
 		}, []string{"type"})
 	StatsTriggerForcedCounter   = statsTriggerCounter.WithLabelValues("forced")
 	StatsTriggerUnforcedCounter = statsTriggerCounter.WithLabelValues("unforced")
+	StatsTriggerConsumeCounter  = statsTriggerCounter.WithLabelValues("consume")
+
+	StatsTriggerQueueSizeGauge = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "mo",
+			Subsystem: "stats",
+			Name:      "trigger_queue_size",
+			Help:      "Size of stats trigger queue size.",
+		})
+
+	StatsUpdateDurationHistogram = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "stats",
+			Name:      "update_duration_seconds",
+			Help:      "Histogram of stats update duration.",
+			Buckets:   getDurationBuckets(),
+		})
 
 	StatsUpdateBlockCounter = prometheus.NewCounter(
 		prometheus.CounterOpts{

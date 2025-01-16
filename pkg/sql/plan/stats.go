@@ -1573,7 +1573,69 @@ func HasShuffleInPlan(qry *plan.Query) bool {
 	return false
 }
 
-func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool, ncpu int) ExecType {
+func calcDOP(ncpu, blocks int32, isPrepare bool) int32 {
+	if ncpu <= 0 || blocks <= 16 {
+		return 1
+	}
+	ret := blocks/16 + 1
+	if isPrepare {
+		ret = blocks/64 + 1
+	}
+	if ret <= ncpu {
+		return ret
+	}
+	return ncpu
+}
+
+// set node dop and left child recursively
+func setNodeDOP(p *plan.Plan, rootID int32, dop int32) {
+	qry := p.GetQuery()
+	node := qry.Nodes[rootID]
+	if len(node.Children) > 0 {
+		setNodeDOP(p, node.Children[0], dop)
+	}
+	if node.NodeType == plan.Node_JOIN && node.Stats.HashmapStats.Shuffle {
+		setNodeDOP(p, node.Children[1], dop)
+	}
+	node.Stats.Dop = dop
+}
+
+func CalcNodeDOP(p *plan.Plan, rootID int32, ncpu int32, lencn int) {
+	qry := p.GetQuery()
+	node := qry.Nodes[rootID]
+	for i := range node.Children {
+		CalcNodeDOP(p, node.Children[i], ncpu, lencn)
+	}
+	if node.Stats.HashmapStats != nil && node.Stats.HashmapStats.Shuffle && node.NodeType != plan.Node_TABLE_SCAN {
+		if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_DEDUP {
+			setNodeDOP(p, rootID, ncpu)
+		} else {
+			dop := int32(getShuffleDop(int(ncpu), lencn, node.Stats.HashmapStats.HashmapSize))
+			childDop := qry.Nodes[node.Children[0]].Stats.Dop
+			if dop < childDop {
+				dop = childDop
+			}
+			setNodeDOP(p, rootID, dop)
+		}
+	} else {
+		node.Stats.Dop = calcDOP(ncpu, node.Stats.BlockNum, p.IsPrepare)
+	}
+}
+
+func CalcQueryDOP(p *plan.Plan, ncpu int32, lencn int, typ ExecType) {
+	qry := p.GetQuery()
+	if typ == ExecTypeTP {
+		for i := range qry.Nodes {
+			qry.Nodes[i].Stats.Dop = 1
+		}
+		return
+	}
+	for i := range qry.Steps {
+		CalcNodeDOP(p, qry.Steps[i], ncpu, lencn)
+	}
+}
+
+func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 	if GetForceScanOnMultiCN() {
 		return ExecTypeAP_MULTICN
 	}
@@ -1609,7 +1671,7 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool, ncpu int) Exe
 
 func GetPlanTitle(qry *plan.Query, txnHaveDDL bool) string {
 	ncpu := system.GoMaxProcs()
-	switch GetExecType(qry, txnHaveDDL, false, ncpu) {
+	switch GetExecType(qry, txnHaveDDL, false) {
 	case ExecTypeTP:
 		return "TP QUERY PLAN"
 	case ExecTypeAP_ONECN:
@@ -1622,7 +1684,7 @@ func GetPlanTitle(qry *plan.Query, txnHaveDDL bool) string {
 
 func GetPhyPlanTitle(qry *plan.Query, txnHaveDDL bool) string {
 	ncpu := system.GoMaxProcs()
-	switch GetExecType(qry, txnHaveDDL, false, ncpu) {
+	switch GetExecType(qry, txnHaveDDL, false) {
 	case ExecTypeTP:
 		return "TP QUERY PHYPLAN"
 	case ExecTypeAP_ONECN:

@@ -30,17 +30,20 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
-// used to scan data with columns: [`table_id`, `phy_addr`]
+// used to scan data with columns: [`table_id`, `object_type`, `phy_addr`]
 var DataScan_TableIDAtrrs = []string{
 	TableObjectsAttr_Table,
+	TableObjectsAttr_ObjectType,
 	objectio.PhysicalAddr_Attr,
 }
 var DataScan_TableIDTypes = []types.Type{
 	TableObjectsTypes[TableObjectsAttr_Table_Idx],
+	TableObjectsTypes[TableObjectsAttr_ObjectType_Idx],
 	objectio.RowidType,
 }
 var DataScan_TableIDSeqnums = []uint16{
 	TableObjectsAttr_Table_Idx,
+	TableObjectsAttr_ObjectType_Idx,
 	objectio.SEQNUM_ROWID,
 }
 

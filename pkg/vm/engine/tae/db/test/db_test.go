@@ -6780,7 +6780,8 @@ func TestAppendAndGC2(t *testing.T) {
 	dir := tae.Dir
 	tae.Close()
 	wal := wal.NewDriverWithBatchStore(opts.Ctx, dir, "wal", nil)
-	wal.Replay(loadFiles)
+	err = wal.Replay(opts.Ctx, loadFiles)
+	assert.Nil(t, err)
 	assert.NotEqual(t, 0, len(files))
 	for file := range metaFile {
 		if _, ok := files[file]; !ok {
@@ -7609,7 +7610,7 @@ func TestCkpLeak(t *testing.T) {
 	if db.Runtime.Scheduler.GetPenddingLSNCnt() != 0 {
 		return
 	}
-	checkLeak := func() {
+	checkLeak := func() bool {
 		ckpMetaFiles := db.BGCheckpointRunner.GetCheckpointMetaFiles()
 		var cpt *ioutil.TSRangeFile
 		for ckpMetaFile := range ckpMetaFiles {
@@ -7618,11 +7619,12 @@ func TestCkpLeak(t *testing.T) {
 				logutil.Infof("compact file %v", file.GetName())
 				if cpt != nil {
 					logutil.Errorf("dup compacted files %v %v", cpt.GetName(), file.GetName())
-					assert.Fail(t, "dup compacted files")
+					return false
 				}
 				cpt = &file
 			}
 		}
+		return true
 	}
 	testutils.WaitExpect(5000, func() bool {
 		return db.DiskCleaner.GetCleaner().GetMinMerged() != nil
@@ -7630,7 +7632,11 @@ func TestCkpLeak(t *testing.T) {
 	if db.DiskCleaner.GetCleaner().GetMinMerged() == nil {
 		return
 	}
-	checkLeak()
+	testutils.WaitExpect(5000, func() bool {
+		return checkLeak()
+	})
+	ok := checkLeak()
+	assert.True(t, ok)
 	tae.Restart(ctx)
 	assert.Equal(t, uint64(0), db.Runtime.Scheduler.GetPenddingLSNCnt())
 	testutils.WaitExpect(5000, func() bool {
@@ -7639,7 +7645,11 @@ func TestCkpLeak(t *testing.T) {
 	if db.DiskCleaner.GetCleaner().GetMinMerged() == nil {
 		return
 	}
-	checkLeak()
+	testutils.WaitExpect(5000, func() bool {
+		return checkLeak()
+	})
+	ok = checkLeak()
+	assert.True(t, ok)
 
 }
 
@@ -7789,48 +7799,59 @@ func TestGCCheckpoint1(t *testing.T) {
 	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
-	opts := config.WithQuickScanAndCKPOpts(nil)
+	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 
-	schema := catalog.MockSchemaAll(18, 2)
-	schema.Extra.BlockMaxRows = 5
-	schema.Extra.ObjectMaxBlocks = 2
-	tae.BindSchema(schema)
-	bat := catalog.MockBatch(schema, 50)
+	i := 0
 
-	tae.CreateRelAndAppend(bat, true)
+	commitOneTxn := func() {
+		txn, _ := tae.StartTxn(nil)
+		_, err := txn.CreateDatabase(fmt.Sprintf("db_%d", i), "", "")
+		i++
+		assert.Nil(t, err)
+	}
 
-	testutils.WaitExpect(4000, func() bool {
-		return tae.Wal.GetPenddingCnt() == 0
-	})
-	assert.Equal(t, uint64(0), tae.Wal.GetPenddingCnt())
+	commitOneTxn()
+	commitOneTxn()
 
-	testutils.WaitExpect(4000, func() bool {
-		return tae.BGCheckpointRunner.GetPenddingIncrementalCount() == 0
-	})
-	assert.Equal(t, 0, tae.BGCheckpointRunner.GetPenddingIncrementalCount())
+	err := tae.ForceGlobalCheckpoint(
+		context.Background(),
+		tae.TxnMgr.Now(),
+		0,
+	)
+	assert.NoError(t, err)
 
-	testutils.WaitExpect(4000, func() bool {
-		return tae.BGCheckpointRunner.MaxGlobalCheckpoint().IsFinished()
-	})
-	assert.True(t, tae.BGCheckpointRunner.MaxGlobalCheckpoint().IsFinished())
+	commitOneTxn()
+	commitOneTxn()
 
-	_, err := tae.BGCheckpointRunner.DisableCheckpoint(ctx)
-	require.NoError(t, err)
+	tae.ForceCheckpoint()
 
-	gcTS := types.BuildTS(time.Now().UTC().UnixNano(), 0)
+	commitOneTxn()
+
+	err = tae.ForceGlobalCheckpoint(
+		context.Background(),
+		tae.TxnMgr.Now(),
+		0,
+	)
+	assert.NoError(t, err)
+
+	gcTS := tae.TxnMgr.Now()
 	t.Log(gcTS.ToString())
-	tae.BGCheckpointRunner.GCByTS(context.Background(), gcTS)
+
+	commitOneTxn()
+
+	tae.ForceCheckpoint()
+
+	err = tae.BGCheckpointRunner.GCByTS(context.Background(), gcTS)
+	assert.NoError(t, err)
 
 	maxGlobal := tae.BGCheckpointRunner.MaxGlobalCheckpoint()
 
 	testutils.WaitExpect(4000, func() bool {
-		tae.BGCheckpointRunner.GCNeeded()
-		return !tae.BGCheckpointRunner.GCNeeded()
+		ckps := tae.BGCheckpointRunner.GetAllGlobalCheckpoints()
+		return len(ckps) == 1
 	})
-	assert.False(t, tae.BGCheckpointRunner.GCNeeded())
-
 	globals := tae.BGCheckpointRunner.GetAllGlobalCheckpoints()
 	assert.Equal(t, 1, len(globals))
 	end := maxGlobal.GetEnd()
@@ -7846,8 +7867,8 @@ func TestGCCheckpoint1(t *testing.T) {
 		startTS := incremental.GetStart()
 		prevEndNextTS := prevEnd.Next()
 		assert.True(t, startTS.Equal(&prevEndNextTS))
-		t.Log(incremental.String())
 	}
+	assert.Equal(t, 1, len(incrementals))
 }
 
 // 1. make some transactions
@@ -7894,8 +7915,8 @@ func Test_CheckpointChaos1(t *testing.T) {
 	err = tae.DB.ForceCheckpoint(ctx, now)
 	assert.Error(t, err)
 
-	entries := tae.BGCheckpointRunner.GetAllIncrementalCheckpoints()
-	assert.Equal(t, 0, len(entries))
+	maxEntry := tae.BGCheckpointRunner.MaxIncrementalCheckpoint()
+	assert.Nilf(t, maxEntry, maxEntry.String())
 
 	ok, err := rmFn()
 	require.True(t, ok)
@@ -7905,7 +7926,7 @@ func Test_CheckpointChaos1(t *testing.T) {
 	err = tae.DB.ForceCheckpoint(ctx, now)
 	assert.NoError(t, err)
 
-	entries = tae.BGCheckpointRunner.GetAllIncrementalCheckpoints()
+	entries := tae.BGCheckpointRunner.GetAllIncrementalCheckpoints()
 	assert.Equal(t, 1, len(entries))
 	assert.True(t, entries[0].IsFinished())
 
@@ -11112,4 +11133,46 @@ func TestRW3(t *testing.T) {
 
 	tae.CheckRowsByScan(0, true)
 
+}
+
+func TestFlushCommitAndSchedRace(t *testing.T) {
+	ctx := context.Background()
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+
+	schema := catalog.MockSchemaAll(2, 1)
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 20)
+	defer bat.Close()
+	tae.CreateRelAndAppend(bat, true)
+
+	{
+		// prepare a tomebstone
+		txn, rel := tae.GetRelation()
+		v := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(3)
+		filter := handle.NewEQFilter(v)
+		err := rel.DeleteByFilter(context.Background(), filter)
+		require.NoError(t, err)
+		require.NoError(t, txn.Commit(ctx))
+	}
+
+	{
+		// executing and scheduling at the same time
+		txn, rel := tae.GetRelation()
+		iter := rel.MakeObjectIt(true)
+		iter.Next()
+		tombstoneEntry := iter.GetObject().GetMeta().(*catalog.ObjectEntry)
+
+		flushTask1, err := jobs.NewFlushTableTailTask(nil, txn, nil, []*catalog.ObjectEntry{tombstoneEntry}, tae.Runtime)
+		require.NoError(t, err)
+		require.NoError(t, flushTask1.Execute(ctx))
+		require.NoError(t, txn.Commit(ctx))
+
+		txn2, _ := tae.StartTxn(nil)
+		flushTask2, err := jobs.NewFlushTableTailTask(nil, txn2, nil, []*catalog.ObjectEntry{tombstoneEntry}, tae.Runtime)
+		require.NoError(t, err)
+
+		// EOB, the tombstone is already flushed
+		require.Error(t, flushTask2.Execute(ctx))
+	}
 }

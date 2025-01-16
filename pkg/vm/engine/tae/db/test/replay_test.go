@@ -899,7 +899,7 @@ func TestReplay5(t *testing.T) {
 		return tae.Runtime.Scheduler.GetPenddingLSNCnt() == 0
 	})
 	testutil.PrintCheckpointStats(t, tae)
-	assert.Equal(t, tae.Wal.GetCurrSeqNum(), tae.Wal.GetCheckpointed())
+	assert.Equal(t, tae.Wal.GetDSN(), tae.Wal.GetCheckpointed())
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 }
 

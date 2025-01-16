@@ -41,7 +41,9 @@ const (
 
 	FJ_Debug19524 = "fj/debug/19524"
 
-	FJ_CNRecvErr = "fj/cn/recv/err"
+	FJ_CNRecvErr        = "fj/cn/recv/err"
+	FJ_CNSubSysErr      = "fj/cn/recv/subsyserr"
+	FJ_CNReplayCacheErr = "fj/cn/recv/rcacheerr"
 
 	FJ_LogReader    = "fj/log/reader"
 	FJ_LogWorkspace = "fj/log/workspace"
@@ -340,6 +342,16 @@ func Debug19524Injected() bool {
 
 func CNRecvErrInjected() (bool, int) {
 	p, _, injected := fault.TriggerFault(FJ_CNRecvErr)
+	return injected, int(p)
+}
+
+func CNSubSysErrInjected() (bool, int) {
+	p, _, injected := fault.TriggerFault(FJ_CNSubSysErr)
+	return injected, int(p)
+}
+
+func CNReplayCacheErrInjected() (bool, int) {
+	p, _, injected := fault.TriggerFault(FJ_CNReplayCacheErr)
 	return injected, int(p)
 }
 

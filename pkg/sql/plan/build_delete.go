@@ -84,20 +84,6 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext, isPrepareStmt bool) (*P
 		delPlanCtx.lockTable = needLockTable
 		delPlanCtx.isDeleteWithoutFilters = isDeleteWithoutFilters
 
-		if tableDef.Partition != nil {
-			partTableIds := make([]uint64, tableDef.Partition.PartitionNum)
-			partTableNames := make([]string, tableDef.Partition.PartitionNum)
-			for j, partition := range tableDef.Partition.Partitions {
-				_, partTableDef := ctx.Resolve(DbNameOfObjRef(tblInfo.objRef[i]), partition.PartitionTableName, nil)
-				partTableIds[j] = partTableDef.TblId
-				partTableNames[j] = partition.PartitionTableName
-			}
-			delPlanCtx.partitionInfos[tableDef.TblId] = &partSubTableInfo{
-				partTableIDs:   partTableIds,
-				partTableNames: partTableNames,
-			}
-		}
-
 		lastNodeId = appendSinkScanNode(builder, deleteBindCtx, sourceStep)
 		lastNodeId, err = makePreUpdateDeletePlan(ctx, builder, deleteBindCtx, delPlanCtx, lastNodeId)
 		if err != nil {

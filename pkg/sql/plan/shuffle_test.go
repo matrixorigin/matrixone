@@ -204,65 +204,65 @@ func TestRangeShuffleSlice(t *testing.T) {
 }
 
 func TestGetShuffleDop(t *testing.T) {
-	n := GetShuffleDop(1, 1, 100)
+	n := getShuffleDop(1, 1, 100)
 	require.Equal(t, 4, n)
-	n = GetShuffleDop(4, 2, 100000000000)
+	n = getShuffleDop(4, 2, 100000000000)
 	require.Equal(t, 16, n)
-	n = GetShuffleDop(64, 1, 10000000000000)
+	n = getShuffleDop(64, 1, 10000000000000)
 	require.Equal(t, 64, n)
 
-	n = GetShuffleDop(16, 3, 1500000000)
+	n = getShuffleDop(16, 3, 1500000000)
 	require.Equal(t, 40, n)
-	n = GetShuffleDop(16, 3, 150000000)
+	n = getShuffleDop(16, 3, 150000000)
 	require.Equal(t, 64, n)
-	n = GetShuffleDop(16, 3, 15000000)
+	n = getShuffleDop(16, 3, 15000000)
 	require.Equal(t, 32, n)
-	n = GetShuffleDop(16, 3, 1500000)
+	n = getShuffleDop(16, 3, 1500000)
 	require.Equal(t, 16, n)
 
-	n = GetShuffleDop(16, 4, 1500000000)
+	n = getShuffleDop(16, 4, 1500000000)
 	require.Equal(t, 64, n)
-	n = GetShuffleDop(16, 4, 150000000)
+	n = getShuffleDop(16, 4, 150000000)
 	require.Equal(t, 64, n)
-	n = GetShuffleDop(16, 4, 15000000)
+	n = getShuffleDop(16, 4, 15000000)
 	require.Equal(t, 32, n)
-	n = GetShuffleDop(16, 4, 1500000)
+	n = getShuffleDop(16, 4, 1500000)
 	require.Equal(t, 16, n)
 
-	n = GetShuffleDop(16, 3, 300000000)
+	n = getShuffleDop(16, 3, 300000000)
 	require.Equal(t, 64, n)
-	n = GetShuffleDop(16, 3, 30000000)
+	n = getShuffleDop(16, 3, 30000000)
 	require.Equal(t, 48, n)
-	n = GetShuffleDop(16, 3, 3000000)
+	n = getShuffleDop(16, 3, 3000000)
 	require.Equal(t, 16, n)
-	n = GetShuffleDop(16, 3, 300000)
+	n = getShuffleDop(16, 3, 300000)
 	require.Equal(t, 16, n)
 
-	n = GetShuffleDop(16, 4, 300000000)
+	n = getShuffleDop(16, 4, 300000000)
 	require.Equal(t, 64, n)
-	n = GetShuffleDop(16, 4, 30000000)
+	n = getShuffleDop(16, 4, 30000000)
 	require.Equal(t, 32, n)
-	n = GetShuffleDop(16, 4, 3000000)
+	n = getShuffleDop(16, 4, 3000000)
 	require.Equal(t, 16, n)
-	n = GetShuffleDop(16, 4, 300000)
+	n = getShuffleDop(16, 4, 300000)
 	require.Equal(t, 16, n)
 
-	n = GetShuffleDop(64, 1, 1500000000)
+	n = getShuffleDop(64, 1, 1500000000)
 	require.Equal(t, 64, n)
-	n = GetShuffleDop(64, 1, 150000000)
+	n = getShuffleDop(64, 1, 150000000)
 	require.Equal(t, 64, n)
-	n = GetShuffleDop(64, 1, 15000000)
+	n = getShuffleDop(64, 1, 15000000)
 	require.Equal(t, 64, n)
-	n = GetShuffleDop(64, 1, 1500000)
+	n = getShuffleDop(64, 1, 1500000)
 	require.Equal(t, 64, n)
 
-	n = GetShuffleDop(16, 1, 1500000000)
+	n = getShuffleDop(16, 1, 1500000000)
 	require.Equal(t, 64, n)
-	n = GetShuffleDop(16, 1, 150000000)
+	n = getShuffleDop(16, 1, 150000000)
 	require.Equal(t, 64, n)
-	n = GetShuffleDop(16, 1, 15000000)
+	n = getShuffleDop(16, 1, 15000000)
 	require.Equal(t, 48, n)
-	n = GetShuffleDop(16, 1, 1500000)
+	n = getShuffleDop(16, 1, 1500000)
 	require.Equal(t, 16, n)
 }
 
@@ -337,7 +337,7 @@ func TestShuffleByZonemap(t *testing.T) {
 		CNIDX: 0,
 		Init:  false,
 	}
-	shuffleByZonemap(rsp, zm)
+	shuffleByZonemap(rsp, zm, 2)
 }
 
 func TestShuffleByValueExtractedFromZonemap(t *testing.T) {
@@ -362,7 +362,7 @@ func TestShuffleByValueExtractedFromZonemap(t *testing.T) {
 		CNIDX: 0,
 		Init:  false,
 	}
-	idx := shuffleByValueExtractedFromZonemap(rsp, zm)
+	idx := shuffleByValueExtractedFromZonemap(rsp, zm, 3)
 	require.Equal(t, idx, uint64(2))
 
 	node = &plan.Node{
@@ -390,6 +390,6 @@ func TestShuffleByValueExtractedFromZonemap(t *testing.T) {
 		CNIDX: 0,
 		Init:  false,
 	}
-	idx = shuffleByValueExtractedFromZonemap(rsp, zm)
+	idx = shuffleByValueExtractedFromZonemap(rsp, zm, 4)
 	require.Equal(t, idx, uint64(1))
 }

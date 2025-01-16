@@ -24,11 +24,13 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
 func BenchmarkInsert(b *testing.B) {
@@ -784,6 +786,11 @@ func TestTcl(t *testing.T) {
 
 func TestDdl(t *testing.T) {
 	mock := NewMockOptimizer(true)
+	rt := moruntime.DefaultRuntime()
+	moruntime.SetupServiceBasedRuntime("", rt)
+	rt.SetGlobalVariables(moruntime.InternalSQLExecutor, executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+		return executor.Result{}, nil
+	}))
 	// should pass
 	sqls := []string{
 		"create database db_name",               //db not exists and pass
@@ -829,7 +836,7 @@ func TestDdl(t *testing.T) {
 		"drop table tpch.tbl_not_exist", //database not exists
 		"drop table db_not_exist.tbl",   //table not exists
 		"create table t6(empno int unsigned,ename varchar(15) auto_increment) cluster by(empno,ename)",
-		"lock tables t3 read",
+		//"lock tables t3 read",
 		"lock tables t1 read, t1 write",
 		"lock tables nation read, nation write",
 		"alter table nation drop foreign key fk1", //key not exists

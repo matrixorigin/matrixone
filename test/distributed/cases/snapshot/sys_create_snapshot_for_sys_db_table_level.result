@@ -215,7 +215,7 @@ drop database sp_Test03;
 drop snapshot SP01;
 drop snapshot if exists sp_nor01;
 create snapshot sp_nor01 for database system;
-internal error: can not create snapshot for current database system
+internal error: can not create snapshot for system database system
 drop database if exists db01;
 create database db01;
 use db01;

@@ -23,6 +23,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 )
 
 func TestAlterTable1(t *testing.T) {
@@ -104,4 +105,18 @@ func Test_checkChangeTypeCompatible(t *testing.T) {
 			tt.wantErr(t, checkChangeTypeCompatible(tt.args.ctx, tt.args.origin, tt.args.to), fmt.Sprintf("checkChangeTypeCompatible(%v, %v, %v)", tt.args.ctx, tt.args.origin, tt.args.to))
 		})
 	}
+}
+
+func buildSingleStmt(opt Optimizer, t *testing.T, sql string) (*Plan, error) {
+	statements, err := mysql.Parse(opt.CurrentContext().GetContext(), sql, 1)
+	if err != nil {
+		return nil, err
+	}
+	// this sql always return single statement
+	context := opt.CurrentContext()
+	plan, err := BuildPlan(context, statements[0], false)
+	if plan != nil {
+		testDeepCopy(plan)
+	}
+	return plan, err
 }

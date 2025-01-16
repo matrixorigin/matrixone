@@ -15,6 +15,7 @@
 package db
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -97,7 +98,7 @@ func (replayer *Replayer) PreReplayWal() {
 	}
 }
 
-func (replayer *Replayer) postReplayWal() {
+func (replayer *Replayer) postReplayWal() error {
 	processor := new(catalog.LoopProcessor)
 	processor.ObjectFn = func(entry *catalog.ObjectEntry) (err error) {
 		if skippedTbl[entry.GetTable().ID] {
@@ -108,20 +109,20 @@ func (replayer *Replayer) postReplayWal() {
 		}
 		return
 	}
-	if err := replayer.db.Catalog.RecurLoop(processor); err != nil {
-		panic(err)
-	}
+	return replayer.db.Catalog.RecurLoop(processor)
 }
-func (replayer *Replayer) Replay() {
+func (replayer *Replayer) Replay(ctx context.Context) (err error) {
 	replayer.wg.Add(1)
 	go replayer.applyTxnCmds()
-	if err := replayer.db.Wal.Replay(replayer.OnReplayEntry); err != nil {
-		panic(err)
+	if err = replayer.db.Wal.Replay(ctx, replayer.OnReplayEntry); err != nil {
+		return
 	}
 	replayer.txnCmdChan <- txnbase.NewLastTxnCmd()
 	close(replayer.txnCmdChan)
 	replayer.wg.Wait()
-	replayer.postReplayWal()
+	if err = replayer.postReplayWal(); err != nil {
+		return
+	}
 	logutil.Info(
 		"Wal-Replay-Trace-End",
 		zap.Duration("apply-cost", replayer.applyDuration),
@@ -129,6 +130,7 @@ func (replayer *Replayer) Replay() {
 		zap.Int("apply-count", replayer.applyCount),
 		zap.Uint64("max-lsn", replayer.maxLSN),
 	)
+	return
 }
 
 func (replayer *Replayer) OnReplayEntry(group uint32, lsn uint64, payload []byte, typ uint16, info any) driver.ReplayEntryState {

@@ -27,14 +27,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
@@ -258,68 +256,27 @@ func handleCNMerge(
 			return Result{}, err
 		}
 
-		partitionInfo, err := getRelPartitionInfo(ctx, rel)
+		stats, err := rel.GetNonAppendableObjectStats(ctx)
 		if err != nil {
-			logutil.Errorf("mergeblocks err on cn, table %s, err %s", a.tbl, err.Error())
 			return Result{}, err
 		}
-
-		if partitionInfo == nil {
-			stats, err := rel.GetNonAppendableObjectStats(ctx)
-			if err != nil {
-				return Result{}, err
-			}
-			if a.filter != "" {
-				buffer := new(bytes.Buffer)
-				var errOut error
-				hasSuccess := false
-				round := 0
-				for {
-					round++
-					var ss []objectio.ObjectStats
-					ss, stats, err = applyMergePolicy(ctx, a.filter, getSortKeyPos(ctx, rel), stats)
-					if err != nil {
-						errOut = errors.Join(errOut, err)
-						break
-					}
-					resp, err := mergeAndWrite(rel, ss)
-					if err != nil {
-						errOut = errors.Join(errOut, err)
-						break
-					}
-					buffer.WriteString(string(resp.Responses[0].CNOpResponse.Payload))
-					buffer.WriteString("\n")
-					resp.Release()
-					hasSuccess = true
-					logutil.Info("[CN-MERGING]",
-						zap.String("table", rel.GetTableName()),
-						zap.String("policy", a.filter),
-						zap.Int("round", round),
-						zap.Int("objects length", len(ss)),
-						zap.Int("remain objects", len(stats)),
-					)
-				}
-
-				if !hasSuccess {
-					return Result{}, errOut
-				}
-				return Result{
-					Method: MergeObjectsMethod,
-					Data:   buffer.Bytes(),
-				}, nil
-			}
-
-			slicedStats := sliceStats(stats)
+		if a.filter != "" {
 			buffer := new(bytes.Buffer)
 			var errOut error
 			hasSuccess := false
-			mergedStats := 0
-			for _, ss := range slicedStats {
-				mergedStats += len(ss)
+			round := 0
+			for {
+				round++
+				var ss []objectio.ObjectStats
+				ss, stats, err = applyMergePolicy(ctx, a.filter, getSortKeyPos(ctx, rel), stats)
+				if err != nil {
+					errOut = errors.Join(errOut, err)
+					break
+				}
 				resp, err := mergeAndWrite(rel, ss)
 				if err != nil {
 					errOut = errors.Join(errOut, err)
-					continue
+					break
 				}
 				buffer.WriteString(string(resp.Responses[0].CNOpResponse.Payload))
 				buffer.WriteString("\n")
@@ -327,10 +284,13 @@ func handleCNMerge(
 				hasSuccess = true
 				logutil.Info("[CN-MERGING]",
 					zap.String("table", rel.GetTableName()),
-					zap.Int("merged objects", mergedStats),
-					zap.Int("total objects", len(stats)),
+					zap.String("policy", a.filter),
+					zap.Int("round", round),
+					zap.Int("objects length", len(ss)),
+					zap.Int("remain objects", len(stats)),
 				)
 			}
+
 			if !hasSuccess {
 				return Result{}, errOut
 			}
@@ -340,70 +300,27 @@ func handleCNMerge(
 			}, nil
 		}
 
-		// check if the current table is partitioned
-		var prel engine.Relation
-		var buffer bytes.Buffer
+		slicedStats := sliceStats(stats)
+		buffer := new(bytes.Buffer)
 		var errOut error
 		hasSuccess := false
-		// for partition table, run merge on each partition table separately.
-		for _, partitionTable := range partitionInfo.PartitionTableNames {
-			prel, err = database.Relation(ctx, partitionTable, nil)
+		mergedStats := 0
+		for _, ss := range slicedStats {
+			mergedStats += len(ss)
+			resp, err := mergeAndWrite(rel, ss)
 			if err != nil {
-				return Result{}, err
-			}
-			stats, err := prel.GetNonAppendableObjectStats(ctx)
-			if err != nil {
-				return Result{}, err
-			}
-			if a.filter != "" {
-				round := 0
-				for {
-					round++
-					var ss []objectio.ObjectStats
-					ss, stats, err = applyMergePolicy(ctx, a.filter, getSortKeyPos(ctx, rel), stats)
-					if err != nil {
-						errOut = errors.Join(errOut, err)
-						break
-					}
-					resp, err := mergeAndWrite(prel, ss)
-					if err != nil {
-						errOut = errors.Join(errOut, err)
-						break
-					}
-					buffer.WriteString(string(resp.Responses[0].CNOpResponse.Payload))
-					buffer.WriteString("\n")
-					resp.Release()
-					hasSuccess = true
-					logutil.Info("[CN-MERGING]",
-						zap.String("table", prel.GetTableName()),
-						zap.String("policy", a.filter),
-						zap.Int("round", round),
-						zap.Int("objects length", len(ss)),
-						zap.Int("remain objects", len(stats)),
-					)
-				}
+				errOut = errors.Join(errOut, err)
 				continue
 			}
-
-			slicedStats := sliceStats(stats)
-			mergedStats := 0
-			for _, ss := range slicedStats {
-				mergedStats += len(ss)
-				resp, err := mergeAndWrite(prel, ss)
-				if err != nil {
-					errOut = errors.Join(errOut, err)
-					continue
-				}
-				buffer.WriteString(string(resp.Responses[0].CNOpResponse.Payload))
-				buffer.WriteString("\n")
-				resp.Release()
-				hasSuccess = true
-				logutil.Info("[CN-MERGING]",
-					zap.String("table", rel.GetTableName()),
-					zap.Int("merged objects", mergedStats),
-					zap.Int("total objects", len(stats)),
-				)
-			}
+			buffer.WriteString(string(resp.Responses[0].CNOpResponse.Payload))
+			buffer.WriteString("\n")
+			resp.Release()
+			hasSuccess = true
+			logutil.Info("[CN-MERGING]",
+				zap.String("table", rel.GetTableName()),
+				zap.Int("merged objects", mergedStats),
+				zap.Int("total objects", len(stats)),
+			)
 		}
 		if !hasSuccess {
 			return Result{}, errOut
@@ -463,27 +380,6 @@ func sliceStats(stats []objectio.ObjectStats) [][]objectio.ObjectStats {
 		}
 	}
 	return slicedStats
-}
-
-func getRelPartitionInfo(ctx context.Context, rel engine.Relation) (*plan.PartitionByDef, error) {
-	engineDefs, err := rel.TableDefs(ctx)
-	if err != nil {
-		return nil, err
-	}
-	var partitionInfo *plan.PartitionByDef
-	for _, def := range engineDefs {
-		if partitionDef, ok := def.(*engine.PartitionDef); ok {
-			if partitionDef.Partitioned > 0 {
-				p := &plan.PartitionByDef{}
-				err = p.UnMarshalPartitionInfo(util.UnsafeStringToBytes(partitionDef.Partition))
-				if err != nil {
-					return nil, err
-				}
-				partitionInfo = p
-			}
-		}
-	}
-	return partitionInfo, nil
 }
 
 func txnWrite(ctx context.Context, target metadata.TNShard, txnOp client.TxnOperator, payload []byte) (*rpc.SendResult, error) {

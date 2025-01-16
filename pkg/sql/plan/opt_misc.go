@@ -46,23 +46,6 @@ func (builder *QueryBuilder) countColRefs(nodeID int32, colRefCnt map[[2]int32]i
 	for _, updateCtx := range node.UpdateCtxList {
 		increaseRefCntForColRefList(updateCtx.InsertCols, 2, colRefCnt)
 		increaseRefCntForColRefList(updateCtx.DeleteCols, 2, colRefCnt)
-
-		if len(updateCtx.PartitionTableIds) > 0 {
-			colRefs := make([]ColRef, 0, 2)
-			if updateCtx.OldPartitionIdx > -1 {
-				colRefs = append(colRefs, ColRef{
-					RelPos: node.BindingTags[1],
-					ColPos: updateCtx.OldPartitionIdx,
-				})
-			}
-			if updateCtx.NewPartitionIdx > -1 {
-				colRefs = append(colRefs, ColRef{
-					RelPos: node.BindingTags[1],
-					ColPos: updateCtx.NewPartitionIdx,
-				})
-			}
-			increaseRefCntForColRefList(colRefs, 1, colRefCnt)
-		}
 	}
 
 	if node.NodeType == plan.Node_LOCK_OP {
@@ -72,12 +55,6 @@ func (builder *QueryBuilder) countColRefs(nodeID int32, colRefCnt map[[2]int32]i
 				RelPos: lockTarget.PrimaryColRelPos,
 				ColPos: lockTarget.PrimaryColIdxInBat,
 			})
-			if lockTarget.IsPartitionTable {
-				colRefs = append(colRefs, ColRef{
-					RelPos: lockTarget.FilterColRelPos,
-					ColPos: lockTarget.FilterColIdxInBat,
-				})
-			}
 		}
 		increaseRefCntForColRefList(colRefs, 1, colRefCnt)
 	}
@@ -265,28 +242,6 @@ func replaceColumnsForNode(node *plan.Node, projMap map[[2]int32]*plan.Expr) {
 	for _, updateCtx := range node.UpdateCtxList {
 		replaceColumnsForColRefList(updateCtx.InsertCols, projMap)
 		replaceColumnsForColRefList(updateCtx.DeleteCols, projMap)
-
-		if len(updateCtx.PartitionTableIds) > 0 {
-			oldPartRef := [2]int32{node.BindingTags[1], updateCtx.OldPartitionIdx}
-			newPartRef := [2]int32{node.BindingTags[1], updateCtx.NewPartitionIdx}
-			if updateCtx.OldPartitionIdx > -1 {
-				if expr, ok := projMap[oldPartRef]; ok {
-					if e, ok := expr.Expr.(*plan.Expr_Col); ok {
-						node.BindingTags[1] = e.Col.RelPos
-						updateCtx.OldPartitionIdx = e.Col.ColPos
-					}
-				}
-			}
-			if updateCtx.NewPartitionIdx > -1 {
-				if expr, ok := projMap[newPartRef]; ok {
-					if e, ok := expr.Expr.(*plan.Expr_Col); ok {
-						node.BindingTags[1] = e.Col.RelPos
-						updateCtx.NewPartitionIdx = e.Col.ColPos
-					}
-				}
-			}
-		}
-
 	}
 
 	if node.NodeType == plan.Node_LOCK_OP {
@@ -296,16 +251,6 @@ func replaceColumnsForNode(node *plan.Node, projMap map[[2]int32]*plan.Expr) {
 				if e, ok := expr.Expr.(*plan.Expr_Col); ok {
 					lockTarget.PrimaryColRelPos = e.Col.RelPos
 					lockTarget.PrimaryColIdxInBat = e.Col.ColPos
-				}
-			}
-
-			if lockTarget.IsPartitionTable {
-				colRef = [2]int32{lockTarget.FilterColRelPos, lockTarget.FilterColIdxInBat}
-				if expr, ok := projMap[colRef]; ok {
-					if e, ok := expr.Expr.(*plan.Expr_Col); ok {
-						lockTarget.FilterColRelPos = e.Col.RelPos
-						lockTarget.FilterColIdxInBat = e.Col.ColPos
-					}
 				}
 			}
 		}
@@ -1203,10 +1148,6 @@ func (builder *QueryBuilder) lockTableIfLockNoRowsAtTheEndForDelAndUpdate() (err
 		}
 
 		for _, target := range node.LockTargets {
-			if target.IsPartitionTable {
-				continue
-			}
-
 			isMain, ok := tableIDs[target.TableId]
 			if !ok {
 				return //unsupport multi delete/multi update

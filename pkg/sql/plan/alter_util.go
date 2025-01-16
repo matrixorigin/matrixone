@@ -53,13 +53,6 @@ func checkAlterColumnWithForeignKey(colName string, RefChildTbls []uint64, Fkeys
 	return nil
 }
 
-func checkAlterColumnWithPartitionKeys(colName string, tblInfo *TableDef, ctx CompilerContext) error {
-	if tblInfo.Partition != nil {
-		return moerr.NewInvalidInput(ctx.GetContext(), "can't add/drop column for partition table now")
-	}
-	return nil
-}
-
 func checkDropColumnWithCluster(colName string, tblInfo *TableDef, ctx CompilerContext) error {
 	//if tblInfo.ClusterBy != nil {
 	//	// We do not support drop column that dependent foreign keys constraints
@@ -106,12 +99,6 @@ func checkIsDroppableColumn(tableDef *TableDef, colName string, ctx CompilerCont
 		return err
 	}
 
-	// We do not support drop column for partitioned table now
-	err = checkAlterColumnWithPartitionKeys(colName, tableDef, ctx)
-	if err != nil {
-		return err
-	}
-
 	// We do not support drop column for cluster table now
 	err = checkDropColumnWithCluster(colName, tableDef, ctx)
 	if err != nil {
@@ -134,12 +121,6 @@ func checkIsAddableColumn(tableDef *TableDef, colName string, colType *plan.Type
 
 	// We do not support add column that contain foreign key columns now.
 	err := checkAlterColumnWithForeignKey(colName, tableDef.RefChildTbls, tableDef.Fkeys, ctx)
-	if err != nil {
-		return err
-	}
-
-	// We do not support add column for partitioned table now
-	err = checkAlterColumnWithPartitionKeys(colName, tableDef, ctx)
 	if err != nil {
 		return err
 	}

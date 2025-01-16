@@ -142,6 +142,17 @@ func ReadSysTableBatch(ctx context.Context, entry *catalog.TableEntry, readTxn t
 		panic(fmt.Sprintf("unsupported sys table id %v", entry))
 	}
 	schema := entry.GetLastestSchema(false)
+	prefetchIt := entry.MakeObjectIt(false)
+	defer prefetchIt.Release()
+	for prefetchIt.Next() {
+		obj := prefetchIt.Item()
+		if !obj.IsVisible(readTxn) {
+			continue
+		}
+		for blkOffset := range obj.BlockCnt() {
+			obj.GetObjectData().Prefetch(uint16(blkOffset))
+		}
+	}
 	it := entry.MakeObjectIt(false)
 	defer it.Release()
 	colIdxes := make([]int, 0, len(schema.ColDefs))

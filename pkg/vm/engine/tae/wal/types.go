@@ -15,6 +15,8 @@
 package wal
 
 import (
+	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"
@@ -35,12 +37,13 @@ type Driver interface {
 	GetCheckpointed() uint64
 	RangeCheckpoint(start, end uint64, files ...string) (e LogEntry, err error)
 	AppendEntry(uint32, LogEntry) (uint64, error)
-	LoadEntry(groupID uint32, lsn uint64) (LogEntry, error)
-	GetCurrSeqNum() uint64
-	GetPenddingCnt() uint64
-	Replay(handle store.ApplyHandle) error
+
+	Replay(ctx context.Context, handle store.ApplyHandle) error
 	Start()
 	Close() error
 
 	GetTruncated() uint64
+
+	GetDSN() uint64
+	GetPenddingCnt() uint64
 }

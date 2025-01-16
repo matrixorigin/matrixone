@@ -128,7 +128,7 @@ func MustGetLatestReadyVersion(
 		return true
 	})
 	if version == "" {
-		panic("missing latest ready version")
+		getLogger(txn.Txn().TxnOptions().CN).Fatal("missing latest ready version")
 	}
 	return version, nil
 }
@@ -164,7 +164,7 @@ func GetVersionState(
 		return true
 	})
 	if loaded && n > 1 {
-		panic("BUG: missing version " + version)
+		getLogger(txn.Txn().TxnOptions().CN).Fatal("BUG: missing version " + version)
 	}
 	return state, loaded, nil
 }

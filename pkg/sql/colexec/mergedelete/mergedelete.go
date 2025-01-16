@@ -45,13 +45,11 @@ func (mergeDelete *MergeDelete) Prepare(proc *process.Process) error {
 
 	ref := mergeDelete.Ref
 	eng := mergeDelete.Engine
-	partitionNames := mergeDelete.PartitionTableNames
-	rel, partitionRels, err := colexec.GetRelAndPartitionRelsByObjRef(proc.Ctx, proc, eng, ref, partitionNames)
+	rel, err := colexec.GetRelAndPartitionRelsByObjRef(proc.Ctx, proc, eng, ref)
 	if err != nil {
 		return err
 	}
 	mergeDelete.ctr.delSource = rel
-	mergeDelete.ctr.partitionSources = partitionRels
 	mergeDelete.ctr.affectedRows = 0
 	mergeDelete.ctr.bat = batch.NewOffHeapEmpty()
 	return nil
@@ -80,7 +78,7 @@ func (mergeDelete *MergeDelete) Call(proc *process.Process) (vm.CallResult, erro
 	// |  blk_id  | batch.Marshal(int64 offset) | CNBlockOffset (CN Block )                 |  partitionIdx
 	// |  blk_id  | batch.Marshal(rowId)        | RawRowIdBatch (DN Blcok )                 |  partitionIdx
 	// |  blk_id  | batch.Marshal(int64 offset) | RawBatchOffset(RawBatch[in txn workspace])|  partitionIdx
-	blkIds, area0 := vector.MustVarlenaRawData(resBat.GetVector(0))
+	blkIds, _ := vector.MustVarlenaRawData(resBat.GetVector(0))
 	deltaLocs, area1 := vector.MustVarlenaRawData(resBat.GetVector(1))
 	typs := vector.MustFixedColWithTypeCheck[int8](resBat.GetVector(2))
 
@@ -89,34 +87,17 @@ func (mergeDelete *MergeDelete) Call(proc *process.Process) (vm.CallResult, erro
 
 	// If the target table is a partition table, Traverse partition subtables for separate processing
 
-	if len(mergeDelete.ctr.partitionSources) > 0 {
-		partitionIdxs := vector.MustFixedColWithTypeCheck[int32](resBat.GetVector(3))
-		for i := 0; i < resBat.RowCount(); i++ {
-			name = fmt.Sprintf("%s|%d", blkIds[i].UnsafeGetString(area0), typs[i])
-
-			if err := bat.UnmarshalBinary(deltaLocs[i].GetByteSlice(area1)); err != nil {
-				return input, err
-			}
-			pIndex := partitionIdxs[i]
-			err = mergeDelete.ctr.partitionSources[pIndex].Delete(proc.Ctx, bat, name)
-			if err != nil {
-				return input, err
-			}
-			bat.CleanOnlyData()
+	// If the target table is a general table
+	for i := 0; i < resBat.RowCount(); i++ {
+		name = fmt.Sprintf("%s|%d", blkIds[i], typs[i])
+		if err := bat.UnmarshalBinary(deltaLocs[i].GetByteSlice(area1)); err != nil {
+			return input, err
 		}
-	} else {
-		// If the target table is a general table
-		for i := 0; i < resBat.RowCount(); i++ {
-			name = fmt.Sprintf("%s|%d", blkIds[i], typs[i])
-			if err := bat.UnmarshalBinary(deltaLocs[i].GetByteSlice(area1)); err != nil {
-				return input, err
-			}
-			err = mergeDelete.ctr.delSource.Delete(proc.Ctx, bat, name)
-			if err != nil {
-				return input, err
-			}
-			bat.CleanOnlyData()
+		err = mergeDelete.ctr.delSource.Delete(proc.Ctx, bat, name)
+		if err != nil {
+			return input, err
 		}
+		bat.CleanOnlyData()
 	}
 	// and there are another attr used to record how many rows are deleted
 	if mergeDelete.AddAffectedRows {

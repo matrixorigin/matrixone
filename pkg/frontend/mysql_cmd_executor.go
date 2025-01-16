@@ -1578,6 +1578,15 @@ func handleShowAccounts(ses FeSession, execCtx *ExecCtx, sa *tree.ShowAccounts) 
 	return err
 }
 
+// handleShowRecoveryWindow lists the info of recovery window
+func handleShowRecoveryWindow(ses FeSession, execCtx *ExecCtx, srw *tree.ShowRecoveryWindow) error {
+	err := doShowRecoveryWindow(execCtx.reqCtx, ses.(*Session), srw)
+	if err != nil {
+		return err
+	}
+	return err
+}
+
 // handleShowCollation lists the info of collation
 func handleShowCollation(ses FeSession, execCtx *ExecCtx, sc *tree.ShowCollation) error {
 	err := doShowCollation(ses.(*Session), execCtx, execCtx.proc, sc)

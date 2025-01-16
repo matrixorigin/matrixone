@@ -54,7 +54,7 @@ func GetUpgradeVersions(
 		return nil, err
 	}
 	if len(values) == 0 && mustHave {
-		panic("BUG: missing version upgrade")
+		getLogger(txn.Txn().TxnOptions().CN).Fatal("BUG: missing version upgrade")
 	}
 	return values, nil
 }
@@ -112,7 +112,7 @@ func GetUpgradingTenantVersion(txn executor.TxnExecutor) (VersionUpgrade, bool, 
 		return VersionUpgrade{}, false, nil
 	}
 	if len(values) != 1 {
-		panic("BUG: invalid version upgrade")
+		getLogger(txn.Txn().TxnOptions().CN).Fatal("BUG: invalid version upgrade")
 	}
 	return values[0], true, nil
 }
@@ -141,7 +141,7 @@ func GetUpgradeVersionForUpdateByID(
 		return VersionUpgrade{}, err
 	}
 	if len(values) != 1 {
-		panic(fmt.Sprintf("BUG: can not get version upgrade by primary key: %d", id))
+		getLogger(txn.Txn().TxnOptions().CN).Fatal(fmt.Sprintf("BUG: can not get version upgrade by primary key: %d", id))
 	}
 	return values[0], nil
 }

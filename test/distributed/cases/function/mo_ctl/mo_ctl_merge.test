@@ -109,6 +109,7 @@ select sleep(1);
 select rows_cnt, bit_cast(`min` as int), bit_cast(`max` as int) from metadata_scan('mo_ctl_merge.t1', 'a') g;
 drop table t1;
 
+-- @bvt:issue#16438
 create table p_table_01(col1 int,col2 varchar(25),col3 decimal(6,2))partition by key(col2)partitions 4;
 insert into p_table_01 values (1,'mod',78.9),(2,'proto',0.34),(3,'mod',6.5),(4,'mode',9.0),(5,'make',662.9),(6,'io',88.92);
 -- @ignore:0
@@ -143,5 +144,6 @@ select rows_cnt from metadata_scan('mo_ctl_merge.%!%p0%!%p_table_01', 'col1') g;
 select rows_cnt from metadata_scan('mo_ctl_merge.%!%p1%!%p_table_01', 'col1') g;
 select rows_cnt from metadata_scan('mo_ctl_merge.%!%p2%!%p_table_01', 'col1') g;
 select rows_cnt from metadata_scan('mo_ctl_merge.%!%p3%!%p_table_01', 'col1') g;
+-- @bvt:issue
 
 select mo_ctl('dn', 'inspect', 'policy');

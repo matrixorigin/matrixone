@@ -327,18 +327,12 @@ func DropColumn(ctx CompilerContext, alterPlan *plan.AlterTable, colName string,
 	if err := handleDropColumnWithPrimaryKey(ctx.GetContext(), colName, tableDef); err != nil {
 		return err
 	}
-	if err := checkDropColumnWithPartition(ctx.GetContext(), tableDef, colName); err != nil {
-		return err
-	}
 	// Check the column with foreign key.
 	if err := checkDropColumnWithForeignKey(ctx, tableDef, col); err != nil {
 		return err
 	}
 	if err := checkVisibleColumnCnt(ctx.GetContext(), tableDef, 0, 1); err != nil {
 		return err
-	}
-	if isColumnWithPartition(col.Name, tableDef.Partition) {
-		return moerr.NewNotSupported(ctx.GetContext(), "unsupport alter partition part column currently")
 	}
 
 	if err := handleDropColumnPosition(ctx.GetContext(), tableDef, col); err != nil {
@@ -470,21 +464,6 @@ func checkDropColumnWithForeignKey(ctx CompilerContext, tbInfo *TableDef, target
 						return moerr.NewErrFkColumnCannotDropChild(ctx.GetContext(), colName, referredFK.Name, refTableDef.Name)
 					}
 				}
-			}
-		}
-	}
-	return nil
-}
-
-// checkDropColumnWithPartition is used to check the partition key of the drop column.
-func checkDropColumnWithPartition(ctx context.Context, tbInfo *TableDef, colName string) error {
-	if tbInfo.Partition != nil {
-		partition := tbInfo.Partition
-		// TODO Implement this method in the future to obtain the partition column in the partition expression
-		// func (m *PartitionByDef) GetPartitionColumnNames() []string
-		for _, name := range partition.GetPartitionColumns().PartitionColumns {
-			if strings.EqualFold(name, colName) {
-				return moerr.NewErrDependentByPartitionFunction(ctx, colName)
 			}
 		}
 	}

@@ -54,7 +54,7 @@ func (r RowEntry) String() string {
 		r.PrimaryIndexBytes)
 }
 
-func (r RowEntry) Less(than RowEntry) bool {
+func (r *RowEntry) Less(than *RowEntry) bool {
 	// asc
 	if cmp := r.BlockID.Compare(&than.BlockID); cmp != 0 {
 		return cmp < 0

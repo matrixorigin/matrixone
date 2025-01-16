@@ -32,9 +32,8 @@ import (
 func TestInsertSimpleTable(t *testing.T) {
 	hasUniqueKey := false
 	hasSecondaryKey := false
-	isPartition := false
 
-	proc, case1 := buildInsertTestCase(t, hasUniqueKey, hasSecondaryKey, isPartition)
+	proc, case1 := buildInsertTestCase(t, hasUniqueKey, hasSecondaryKey)
 	runTestCases(t, proc, []*testCase{case1})
 }
 
@@ -42,8 +41,8 @@ func TestInsertSpecialTable(t *testing.T) {
 	//case 1: pk has null, throw err
 	hasUniqueKey := false
 	hasSecondaryKey := false
-	isPartition := false
-	proc, case1 := buildInsertTestCase(t, hasUniqueKey, hasSecondaryKey, isPartition)
+
+	proc, case1 := buildInsertTestCase(t, hasUniqueKey, hasSecondaryKey)
 
 	oldBat := case1.inputBatchs[0]
 	bat1RowCount := oldBat.RowCount()
@@ -58,8 +57,8 @@ func TestInsertSpecialTable(t *testing.T) {
 	//case 2: unique key has null, that will be ok
 	hasUniqueKey = true
 	hasSecondaryKey = false
-	isPartition = false
-	proc, case1 = buildInsertTestCase(t, hasUniqueKey, hasSecondaryKey, isPartition)
+
+	proc, case1 = buildInsertTestCase(t, hasUniqueKey, hasSecondaryKey)
 	oldBat = case1.inputBatchs[0]
 	bat1RowCount = oldBat.RowCount()
 	pkArr := makeTestVarcharArray(bat1RowCount)
@@ -72,18 +71,8 @@ func TestInsertSpecialTable(t *testing.T) {
 func TestInsertTableWithUniqueKeyAndSecondaryKey(t *testing.T) {
 	hasUniqueKey := true
 	hasSecondaryKey := true
-	isPartition := false
 
-	proc, case1 := buildInsertTestCase(t, hasUniqueKey, hasSecondaryKey, isPartition)
-	runTestCases(t, proc, []*testCase{case1})
-}
-
-func TestInsertPartitionTable(t *testing.T) {
-	hasUniqueKey := false
-	hasSecondaryKey := false
-	isPartition := true
-
-	proc, case1 := buildInsertTestCase(t, hasUniqueKey, hasSecondaryKey, isPartition)
+	proc, case1 := buildInsertTestCase(t, hasUniqueKey, hasSecondaryKey)
 	runTestCases(t, proc, []*testCase{case1})
 }
 
@@ -91,59 +80,29 @@ func TestInsertPartitionTable(t *testing.T) {
 func TestInsertS3SimpleTable(t *testing.T) {
 	hasUniqueKey := false
 	hasSecondaryKey := false
-	isPartition := false
 
-	proc, case1 := buildInsertS3TestCase(t, hasUniqueKey, hasSecondaryKey, isPartition)
+	proc, case1 := buildInsertS3TestCase(t, hasUniqueKey, hasSecondaryKey)
 	runTestCases(t, proc, []*testCase{case1})
 }
 
 func TestInsertS3TableWithUniqueKeyAndSecondaryKey(t *testing.T) {
 	hasUniqueKey := true
 	hasSecondaryKey := true
-	isPartition := false
 
-	proc, case1 := buildInsertS3TestCase(t, hasUniqueKey, hasSecondaryKey, isPartition)
+	proc, case1 := buildInsertS3TestCase(t, hasUniqueKey, hasSecondaryKey)
 	runTestCases(t, proc, []*testCase{case1})
-}
-
-func TestInsertS3PartitionTable(t *testing.T) {
-	hasUniqueKey := false
-	hasSecondaryKey := false
-	isPartition := true
-
-	proc, case1 := buildInsertS3TestCase(t, hasUniqueKey, hasSecondaryKey, isPartition)
-	runTestCases(t, proc, []*testCase{case1})
-}
-
-func TestInsertHaveNull(t *testing.T) {
-	hasUniqueKey := false
-	hasSecondaryKey := false
-	isPartition := true
-
-	_, ctrl, proc := prepareTestCtx(t, true)
-	eng := prepareTestEng(ctrl)
-
-	batchs, _ := prepareTestInsertBatchs(proc.Mp(), 40, hasUniqueKey, hasSecondaryKey, isPartition)
-	multiUpdateCtxs := prepareTestInsertMultiUpdateCtx(hasUniqueKey, hasSecondaryKey, isPartition)
-	pkNull := batchs[0].Vecs[0].GetNulls()
-	pkNull.Set(0)
-	action := UpdateWriteS3
-	retCase := buildTestCase(multiUpdateCtxs, eng, batchs, 0, action)
-
-	runTestCases(t, proc, []*testCase{retCase})
 }
 
 func TestFlushS3Info(t *testing.T) {
 	hasUniqueKey := false
 	hasSecondaryKey := false
-	isPartition := false
 
 	_, ctrl, proc := prepareTestCtx(t, true)
 	eng := prepareTestEng(ctrl)
 
-	batchs, rowCount := buildFlushS3InfoBatch(proc.GetMPool(), hasUniqueKey, hasSecondaryKey, isPartition)
+	batchs, rowCount := buildFlushS3InfoBatch(proc.GetMPool(), hasUniqueKey, hasSecondaryKey)
 
-	multiUpdateCtxs := prepareTestInsertMultiUpdateCtx(hasUniqueKey, hasSecondaryKey, isPartition)
+	multiUpdateCtxs := prepareTestInsertMultiUpdateCtx(hasUniqueKey, hasSecondaryKey)
 	action := UpdateFlushS3Info
 	retCase := buildTestCase(multiUpdateCtxs, eng, batchs, rowCount, action)
 
@@ -151,32 +110,31 @@ func TestFlushS3Info(t *testing.T) {
 }
 
 // ----- util function ----
-func buildInsertTestCase(t *testing.T, hasUniqueKey bool, hasSecondaryKey bool, isPartition bool) (*process.Process, *testCase) {
+func buildInsertTestCase(t *testing.T, hasUniqueKey bool, hasSecondaryKey bool) (*process.Process, *testCase) {
 	_, ctrl, proc := prepareTestCtx(t, false)
 	eng := prepareTestEng(ctrl)
 
-	batchs, affectRows := prepareTestInsertBatchs(proc.GetMPool(), 2, hasUniqueKey, hasSecondaryKey, isPartition)
-	multiUpdateCtxs := prepareTestInsertMultiUpdateCtx(hasUniqueKey, hasSecondaryKey, isPartition)
+	batchs, affectRows := prepareTestInsertBatchs(proc.GetMPool(), 2, hasUniqueKey, hasSecondaryKey)
+	multiUpdateCtxs := prepareTestInsertMultiUpdateCtx(hasUniqueKey, hasSecondaryKey)
 	action := UpdateWriteTable
 	retCase := buildTestCase(multiUpdateCtxs, eng, batchs, affectRows, action)
 	return proc, retCase
 }
 
-func buildInsertS3TestCase(t *testing.T, hasUniqueKey bool, hasSecondaryKey bool, isPartition bool) (*process.Process, *testCase) {
+func buildInsertS3TestCase(t *testing.T, hasUniqueKey bool, hasSecondaryKey bool) (*process.Process, *testCase) {
 	_, ctrl, proc := prepareTestCtx(t, true)
 	eng := prepareTestEng(ctrl)
 
-	batchs, _ := prepareTestInsertBatchs(proc.GetMPool(), 10, hasUniqueKey, hasSecondaryKey, isPartition)
-	multiUpdateCtxs := prepareTestInsertMultiUpdateCtx(hasUniqueKey, hasSecondaryKey, isPartition)
+	batchs, _ := prepareTestInsertBatchs(proc.GetMPool(), 10, hasUniqueKey, hasSecondaryKey)
+	multiUpdateCtxs := prepareTestInsertMultiUpdateCtx(hasUniqueKey, hasSecondaryKey)
 	action := UpdateWriteS3
 	retCase := buildTestCase(multiUpdateCtxs, eng, batchs, 0, action)
 	return proc, retCase
 }
 
-func prepareTestInsertBatchs(mp *mpool.MPool, size int, hasUniqueKey bool, hasSecondaryKey bool, isPartition bool) ([]*batch.Batch, uint64) {
+func prepareTestInsertBatchs(mp *mpool.MPool, size int, hasUniqueKey bool, hasSecondaryKey bool) ([]*batch.Batch, uint64) {
 	var bats = make([]*batch.Batch, size)
 	affectRows := 0
-	partitionCount := 3
 	for i := 0; i < size; i++ {
 		rowCount := colexec.DefaultBatchSize
 		if i == size-1 {
@@ -204,12 +162,6 @@ func prepareTestInsertBatchs(mp *mpool.MPool, size int, hasUniqueKey bool, hasSe
 			bat.Attrs = append(bat.Attrs, "sk_pk")
 		}
 
-		if isPartition {
-			rows := makeTestPartitionArray(rowCount, partitionCount)
-			bat.Vecs = append(bat.Vecs, testutil.MakeInt32Vector(rows, nil))
-			bat.Attrs = append(bat.Attrs, "part_idx")
-		}
-
 		bat.SetRowCount(bat.Vecs[0].Length())
 		bats[i] = bat
 		affectRows = affectRows + rowCount
@@ -218,20 +170,18 @@ func prepareTestInsertBatchs(mp *mpool.MPool, size int, hasUniqueKey bool, hasSe
 	return bats, uint64(affectRows)
 }
 
-func prepareTestInsertMultiUpdateCtx(hasUniqueKey bool, hasSecondaryKey bool, isPartition bool) []*MultiUpdateCtx {
+func prepareTestInsertMultiUpdateCtx(hasUniqueKey bool, hasSecondaryKey bool) []*MultiUpdateCtx {
 	// create table t1(a big int primary key, b varchar(10) not null, c int, d int);
 	// if has uniqueKey : t1(a big int primary key, b varchar(10) not null, c int unique key, d int);
 	// if has secondaryKey : t1(a big int primary key, b varchar(10) not null, c int, d int, key(d));
-	objRef, tableDef := getTestMainTable(isPartition)
+	objRef, tableDef := getTestMainTable()
 
 	updateCtx := &MultiUpdateCtx{
-		ObjRef:          objRef,
-		TableDef:        tableDef,
-		InsertCols:      []int{0, 1, 2, 3},
-		OldPartitionIdx: -1,
-		NewPartitionIdx: -1,
+		ObjRef:     objRef,
+		TableDef:   tableDef,
+		InsertCols: []int{0, 1, 2, 3},
 	}
-	colCount := 4
+
 	updateCtxs := []*MultiUpdateCtx{updateCtx}
 
 	if hasUniqueKey {
@@ -247,16 +197,13 @@ func prepareTestInsertMultiUpdateCtx(hasUniqueKey bool, hasSecondaryKey bool, is
 			Visible:        true,
 		})
 
-		uniqueObjRef, uniqueTableDef := getTestUniqueIndexTable(uniqueTblName, isPartition)
+		uniqueObjRef, uniqueTableDef := getTestUniqueIndexTable(uniqueTblName)
 
 		updateCtxs = append(updateCtxs, &MultiUpdateCtx{
-			ObjRef:          uniqueObjRef,
-			TableDef:        uniqueTableDef,
-			InsertCols:      []int{4, 0},
-			OldPartitionIdx: -1,
-			NewPartitionIdx: -1,
+			ObjRef:     uniqueObjRef,
+			TableDef:   uniqueTableDef,
+			InsertCols: []int{4, 0},
 		})
-		colCount += 1
 	}
 
 	if hasSecondaryKey {
@@ -271,37 +218,24 @@ func prepareTestInsertMultiUpdateCtx(hasUniqueKey bool, hasSecondaryKey bool, is
 			Visible:        true,
 		})
 
-		secondaryIdxObjRef, secondaryIdxTableDef := getTestSecondaryIndexTable(secondaryIdxTblName, isPartition)
+		secondaryIdxObjRef, secondaryIdxTableDef := getTestSecondaryIndexTable(secondaryIdxTblName)
 
 		secondaryPkPos := 4
 		if hasUniqueKey {
 			secondaryPkPos += 1
 		}
 		updateCtxs = append(updateCtxs, &MultiUpdateCtx{
-			ObjRef:          secondaryIdxObjRef,
-			TableDef:        secondaryIdxTableDef,
-			InsertCols:      []int{secondaryPkPos, 0},
-			OldPartitionIdx: -1,
-			NewPartitionIdx: -1,
+			ObjRef:     secondaryIdxObjRef,
+			TableDef:   secondaryIdxTableDef,
+			InsertCols: []int{secondaryPkPos, 0},
 		})
-		colCount += 1
-	}
-
-	if isPartition {
-		partTblIDs := make([]uint64, len(tableDef.Partition.PartitionTableNames))
-		for j := range tableDef.Partition.PartitionTableNames {
-			partTblIDs[j] = uint64(1000 + j)
-		}
-		updateCtxs[0].NewPartitionIdx = colCount
-		updateCtxs[0].PartitionTableIDs = partTblIDs
-		updateCtxs[0].PartitionTableNames = tableDef.Partition.PartitionTableNames
 	}
 
 	return updateCtxs
 }
 
-func buildFlushS3InfoBatch(mp *mpool.MPool, hasUniqueKey bool, hasSecondaryKey bool, isPartition bool) ([]*batch.Batch, uint64) {
-	insertBats, _ := prepareTestInsertBatchs(mp, 5, hasUniqueKey, hasSecondaryKey, isPartition)
+func buildFlushS3InfoBatch(mp *mpool.MPool, hasUniqueKey bool, hasSecondaryKey bool) ([]*batch.Batch, uint64) {
+	insertBats, _ := prepareTestInsertBatchs(mp, 5, hasUniqueKey, hasSecondaryKey)
 	retBat := batch.NewWithSize(6)
 	action := uint8(actionInsert)
 

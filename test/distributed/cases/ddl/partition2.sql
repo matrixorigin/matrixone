@@ -1,4 +1,4 @@
--- @skip
+-- @skip:issue#16438
 drop table if exists t1;
 drop table if exists t2;
 drop table if exists t3;

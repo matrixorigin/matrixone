@@ -36,6 +36,7 @@ const (
 	taeSum       = "tae_sum"
 	hakeeperDir  = "hakeeper"
 	HakeeperFile = "hk_data"
+	fileList     = "file_list"
 )
 
 // Format :type,subtype,filename or dirname

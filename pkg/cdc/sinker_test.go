@@ -300,11 +300,11 @@ func Test_mysqlSink_Send(t *testing.T) {
 		conn:          db,
 	}
 	ar := NewCdcActiveRoutine()
-	err = sink.Send(context.Background(), ar, []byte("sql"))
+	err = sink.Send(context.Background(), ar, []byte("sql"), true)
 	assert.NoError(t, err)
 
 	close(ar.Pause)
-	err = sink.Send(context.Background(), ar, []byte("sql"))
+	err = sink.Send(context.Background(), ar, []byte("sql"), true)
 	assert.NoError(t, err)
 }
 

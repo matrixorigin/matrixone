@@ -35,6 +35,8 @@
 
 /pkg/backup @daviszhen @LeftHandCold @qingxinhome
 
+/pkg/datasync @volgariver6
+
 # subdirectory of pkg
 # pkg/catalog
 /pkg/catalog @XuPeng-SH
@@ -106,6 +108,9 @@
 # pkg/shardservice
 /pkg/shardservice @zhangxu19830126
 
+# pkg/partitionservice
+/pkg/partitionservice @zhangxu19830126 @iamlinjunhong
+
 # pkg/logservice
 /pkg/logservice @zhangxu19830126 @volgariver6
 
@@ -145,7 +150,7 @@
 /pkg/sql/models @qingxinhome
 /pkg/sql/parsers @iamlinjunhong
 /pkg/sql/plan @ouyuanning @aunjgr @badboynt1
-/pkg/sql/plan/function @ouyuanning @qingxinhome @aujngr
+/pkg/sql/plan/function @ouyuanning @qingxinhome @aunjgr
 /pkg/sql/plan/explain @ouyuanning @aunjgr @badboynt1 @qingxinhome
 /pkg/sql/plan/tools @daviszhen @qingxinhome
 /pkg/sql/colexec/indexjoin @aunjgr @badboynt1

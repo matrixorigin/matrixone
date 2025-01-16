@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v2_0_0"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v2_0_1"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v2_0_2"
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v2_1_0"
 )
 
 // initUpgrade all versions need create a upgrade handle in pkg/bootstrap/versions
@@ -37,6 +38,8 @@ func (s *service) initUpgrade() {
 	s.handles = append(s.handles, v2_0_1.Handler)
 	// TODO: When v2.0.1 release, open the commented code as follows, Enable v2.0.2 upgrade package
 	s.handles = append(s.handles, v2_0_2.Handler)
+	s.handles = append(s.handles, v2_1_0.Handler)
+
 }
 
 func (s *service) getFinalVersionHandle() VersionHandle {
@@ -46,7 +49,7 @@ func (s *service) getFinalVersionHandle() VersionHandle {
 // Get the original version of the upgrade framework
 func (s *service) getFounderVersionHandle() VersionHandle {
 	if len(s.handles) == 0 {
-		panic("Waring: no upgrade version handles available, please check the code")
+		s.logger.Fatal("Waring: no upgrade version handles available, please check the code")
 	}
 	return s.handles[0]
 }
@@ -66,5 +69,6 @@ func (s *service) getVersionHandle(version string) VersionHandle {
 			return h
 		}
 	}
-	panic("missing upgrade handle for version: " + version)
+	s.logger.Fatal("missing upgrade handle for version: " + version)
+	return nil
 }

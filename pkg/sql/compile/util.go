@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -95,12 +94,6 @@ var (
 
 var (
 	dropTableBeforeDropDatabase = "drop table if exists `%v`.`%v`;"
-)
-
-var (
-	deleteMoTablePartitionsWithDatabaseIdFormat = `delete from mo_catalog.mo_table_partitions where database_id = %v;`
-	deleteMoTablePartitionsWithTableIdFormat    = `delete from mo_catalog.mo_table_partitions where table_id = %v;`
-	//deleteMoTablePartitionsWithTableIdAndIndexNameFormat = `delete from mo_catalog.mo_table_partitions where table_id = %v and name = '%s';`
 )
 
 var (
@@ -370,31 +363,6 @@ func makeInsertSingleIndexSQL(eg engine.Engine, proc *process.Process, databaseI
 	return insertMoIndexesSql, nil
 }
 
-func makeInsertTablePartitionsSQL(ctx context.Context, dbSource engine.Database, relation engine.Relation) (string, error) {
-	if dbSource == nil || relation == nil {
-		return "", nil
-	}
-	databaseId := dbSource.GetDatabaseId(ctx)
-	tableId := relation.GetTableID(ctx)
-	tableDefs, err := relation.TableDefs(ctx)
-	if err != nil {
-		return "", err
-	}
-
-	for _, def := range tableDefs {
-		if partitionDef, ok := def.(*engine.PartitionDef); ok {
-			partitionByDef := &plan2.PartitionByDef{}
-			if err = partitionByDef.UnMarshalPartitionInfo(([]byte)(partitionDef.Partition)); err != nil {
-				return "", nil
-			}
-
-			insertMoTablePartitionSql := genInsertMoTablePartitionsSql(databaseId, tableId, partitionByDef, partitionByDef.Partitions)
-			return insertMoTablePartitionSql, nil
-		}
-	}
-	return "", nil
-}
-
 // makeInsertMultiIndexSQL :Synchronize the index metadata information of the table to the index metadata table
 func makeInsertMultiIndexSQL(eg engine.Engine, ctx context.Context, proc *process.Process, dbSource engine.Database, relation engine.Relation) (string, error) {
 	if dbSource == nil || relation == nil {
@@ -463,52 +431,6 @@ func haveSinkScanInPlan(nodes []*plan.Node, curNodeIdx int32) bool {
 		}
 	}
 	return false
-}
-
-// genInsertMoTablePartitionsSql: Generate an insert statement for insert index metadata into `mo_catalog.mo_table_partitions`
-func genInsertMoTablePartitionsSql(databaseId string, tableId uint64, partitionByDef *plan2.PartitionByDef, partitions []*plan.PartitionItem) string {
-	buffer := bytes.NewBuffer(make([]byte, 0, 2048))
-	buffer.WriteString("insert into mo_catalog.mo_table_partitions values")
-
-	isFirst := true
-	for _, partition := range partitions {
-		// 1. tableId
-		if isFirst {
-			fmt.Fprintf(buffer, "(%d, ", tableId)
-			isFirst = false
-		} else {
-			fmt.Fprintf(buffer, ", (%d, ", tableId)
-		}
-
-		// 2. database_id
-		fmt.Fprintf(buffer, "%s, ", databaseId)
-
-		// 3. partition number
-		fmt.Fprintf(buffer, "%d, ", partition.OrdinalPosition)
-
-		// 4. partition name
-		fmt.Fprintf(buffer, "'%s', ", partition.PartitionName)
-
-		// 5. partition type
-		fmt.Fprintf(buffer, "'%s', ", partitionByDef.Type.String())
-
-		// 6. partition expression
-		fmt.Fprintf(buffer, "'%s', ", partitionByDef.GenPartitionExprString())
-
-		// 7. description_utf8
-		fmt.Fprintf(buffer, "'%s', ", partition.Description)
-
-		// 8. partition item comment
-		fmt.Fprintf(buffer, "'%s', ", partition.Comment)
-
-		// 9. partition item options
-		fmt.Fprintf(buffer, "%s, ", NULL_VALUE)
-
-		// 10. partition_table_name
-		fmt.Fprintf(buffer, "'%s')", partition.PartitionTableName)
-	}
-	buffer.WriteString(";")
-	return buffer.String()
 }
 
 var GetConstraintDef = func(ctx context.Context, rel engine.Relation) (*engine.ConstraintDef, error) {

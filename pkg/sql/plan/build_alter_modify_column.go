@@ -58,10 +58,6 @@ func ModifyColumn(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.Al
 		return err
 	}
 
-	if isColumnWithPartition(col.Name, tableDef.Partition) {
-		return moerr.NewNotSupported(ctx.GetContext(), "unsupport alter partition part column currently")
-	}
-
 	if err = checkChangeTypeCompatible(ctx.GetContext(), &col.Typ, &newCol.Typ); err != nil {
 		return err
 	}
@@ -100,24 +96,6 @@ func checkModifyNewColumn(ctx context.Context, tableDef *TableDef, oldCol, newCo
 		}
 	}
 	return nil
-}
-
-// Check if the modify column is associated with the partition key
-func isColumnWithPartition(colName string, partitionDef *PartitionByDef) bool {
-	if partitionDef != nil {
-		if partitionDef.PartitionColumns != nil {
-			for _, column := range partitionDef.PartitionColumns.PartitionColumns {
-				if column == colName {
-					return true
-				}
-			}
-		} else {
-			if strings.EqualFold(partitionDef.PartitionExpr.ExprStr, colName) {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 // checkChangeTypeCompatible checks whether changes column type to another is compatible and can be changed.
