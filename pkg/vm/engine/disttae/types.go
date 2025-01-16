@@ -558,7 +558,7 @@ func (txn *Transaction) IncrStatementID(ctx context.Context, commit bool) error 
 	txn.Lock()
 	defer txn.Unlock()
 	//merge writes for the last statement
-	if err := txn.mergeTxnWorkspaceLocked(ctx); err != nil {
+	if err := txn.MergeTxnWorkspaceLocked(ctx); err != nil {
 		return err
 	}
 	// dump batch to s3, starting from 0 (begining of the workspace)
