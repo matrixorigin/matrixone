@@ -31,6 +31,7 @@ import (
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -350,6 +351,10 @@ func initMoTableStatsConfig(
 
 		eng.dynamicCtx.executorPool = sync.Pool{
 			New: func() interface{} {
+				// only test will into this logic
+				if eng.config.ieFactory == nil {
+					return nil
+				}
 				return eng.config.ieFactory()
 			},
 		}
@@ -408,12 +413,7 @@ func initMoTableStatsConfig(
 
 			if eng.dynamicCtx.beta.taskPool, err = ants.NewPool(
 				runtime.NumCPU(),
-				ants.WithNonblocking(false),
-				ants.WithPanicHandler(func(e interface{}) {
-					logutil.Error(logHeader,
-						zap.String("source", "beta task panic"),
-						zap.Any("error", e))
-				})); err != nil {
+				ants.WithNonblocking(false)); err != nil {
 				return
 			}
 
@@ -555,6 +555,16 @@ type taskState struct {
 	running     bool
 	executor    func(context.Context, string, engine.Engine)
 	launchTimes int
+
+	// for test
+	forbidden bool
+}
+
+func (ts taskState) String() string {
+	return fmt.Sprintf("running(%v)-launchTimes(%v)-forbidden(%v)",
+		ts.running,
+		ts.launchTimes,
+		ts.forbidden)
 }
 
 type dynamicCtx struct {
@@ -957,6 +967,10 @@ func joinAccountDatabaseTable(
 
 func (d *dynamicCtx) executeSQL(ctx context.Context, sql string, hint string) ie.InternalExecResult {
 	exec := d.executorPool.Get()
+	if exec == nil {
+		return nil
+	}
+
 	defer d.executorPool.Put(exec)
 
 	ctx = turn2SysCtx(ctx)
@@ -1445,8 +1459,14 @@ func buildTablePairFromCache(
 }
 
 func (tp *tablePair) String() string {
-	return fmt.Sprintf("%d-%s(%d)-%s(%d)",
-		tp.acc, tp.dbName, tp.db, tp.tblName, tp.tbl)
+	return fmt.Sprintf(
+		"%d-%s(%d)-%s(%d)-valid(%v)-kind(%v)-alphaOrder(%d)-onlyTS(%v)",
+		tp.acc, tp.dbName, tp.db,
+		tp.tblName, tp.tbl,
+		tp.valid,
+		tp.relKind,
+		tp.alphaOrder,
+		tp.onlyUpdateTS)
 }
 
 func (tp *tablePair) Done(err error) {
@@ -1796,17 +1816,6 @@ func (d *dynamicCtx) alphaTask(
 
 				betaRunning := d.isBetaRun()
 
-				if waitErrDur > 0 && waitErrDur%(time.Second*30) == 0 {
-
-					logutil.Warn(logHeader,
-						zap.String("source", "alpha task"),
-						zap.String("event", "waited err another 30s"),
-						zap.String("caller", caller),
-						zap.Int("total", processed),
-						zap.Int("left", errWaitToReceive),
-						zap.Bool("is beta running", betaRunning))
-				}
-
 				if !betaRunning || waitErrDur >= time.Minute*5 {
 					timeoutCnt := 0
 					// waiting reached the limit
@@ -1830,6 +1839,18 @@ func (d *dynamicCtx) alphaTask(
 
 					return true, nil
 				}
+
+				if d.beta.forbidden || (waitErrDur > 0 && waitErrDur%(time.Second*30) == 0) {
+
+					logutil.Warn(logHeader,
+						zap.String("source", "alpha task"),
+						zap.String("event", "waited err another 30s"),
+						zap.String("caller", caller),
+						zap.Int("total", processed),
+						zap.Int("left", errWaitToReceive),
+						zap.Bool("is beta running", betaRunning))
+				}
+
 				continue
 			}
 
@@ -1899,6 +1920,11 @@ func (d *dynamicCtx) betaTask(
 			zap.Error(err))
 	}()
 
+	if d.beta.forbidden {
+		err = moerr.NewInternalErrorNoCtx("forbidden")
+		return
+	}
+
 	var (
 		de        = eng.(*Engine)
 		slBat     sync.Map
@@ -1925,6 +1951,7 @@ func (d *dynamicCtx) betaTask(
 				slBat.Clear()
 				onlyTSBat = onlyTSBat[:0]
 
+				tbl.Done(nil)
 				continue
 			}
 
@@ -3186,7 +3213,12 @@ func (d *dynamicCtx) bulkUpdateTableOnlyTS(
 
 	ret := d.executeSQL(ctx, sql, "bulk update only ts")
 
+	var err error
+	if ret != nil {
+		err = ret.Error()
+	}
+
 	for i := range tbls {
-		tbls[i].Done(ret.Error())
+		tbls[i].Done(err)
 	}
 }
