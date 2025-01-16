@@ -659,9 +659,6 @@ func getShuffleDop(ncpu int, lencn int, hashmapSize float64) (dop int) {
 		ncpu = 4
 	}
 	maxret := ncpu * 4
-	if maxret > 64 {
-		maxret = 64 // to avoid a hang bug, fix this in the future
-	}
 	// these magic number comes from hashmap resize factor. see hashtable/common.go, in maxElemCnt function
 	ret1 := int(hashmapSize/float64(lencn)/12800000) + 1
 	if ret1 >= maxret {
