@@ -222,6 +222,13 @@ type CTERef struct {
 	snapshot    *Snapshot
 }
 
+const (
+	CteKindDisable   = 0
+	CteKindInitStmt  = 1
+	CteKindRecurStmt = 2
+	CteKindNoRecur   = 3
+)
+
 type aliasItem struct {
 	idx     int32
 	astExpr tree.Expr
@@ -230,13 +237,12 @@ type aliasItem struct {
 type BindContext struct {
 	binder Binder
 
-	cteByName              map[string]*CTERef
-	maskedCTEs             map[string]bool
-	normalCTE              bool
-	initSelect             bool
-	recSelect              bool
-	finalSelect            bool
-	unionSelect            bool
+	cteByName  map[string]*CTERef
+	maskedCTEs map[string]bool
+	//normalCTE  bool
+	cteKind int
+	//initSelect             bool
+	//recSelect              bool
 	sliding                bool
 	isDistinct             bool
 	isCorrelated           bool

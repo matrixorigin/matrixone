@@ -49,14 +49,14 @@ func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 
 	if parent != nil {
 		bc.defaultDatabase = parent.defaultDatabase
-		bc.normalCTE = parent.normalCTE
+		//bc.normalCTE = parent.normalCTE
 		bc.cteName = parent.cteName
-		if parent.recSelect || parent.initSelect || parent.finalSelect {
+		if parent.bindingCte() {
 			bc.cteByName = parent.cteByName
-			bc.initSelect = parent.initSelect
-			bc.recSelect = parent.recSelect
-			bc.finalSelect = parent.finalSelect
+			//bc.initSelect = parent.initSelect
+			//bc.recSelect = parent.recSelect
 			bc.recRecursiveScanNodeId = parent.recRecursiveScanNodeId
+			bc.cteKind = parent.cteKind
 		}
 		bc.snapshot = parent.snapshot
 	}
@@ -65,7 +65,7 @@ func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 }
 
 func (bc *BindContext) rootTag() int32 {
-	if bc.initSelect || bc.recSelect {
+	if bc.bindingRecurCte() {
 		return bc.sinkTag
 	} else if bc.resultTag > 0 {
 		return bc.resultTag
