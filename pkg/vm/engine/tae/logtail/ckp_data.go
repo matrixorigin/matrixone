@@ -45,7 +45,7 @@ func NewCheckpointData_V2(allocator *mpool.MPool, fs fileservice.FileService) *C
 	}
 }
 
-func (data *CheckpointData_V2) WriteTo(ctx context.Context,_,_ int, fs fileservice.FileService) (CNLocation, TNLocation objectio.Location,ckpfiles, err error) {
+func (data *CheckpointData_V2) WriteTo(ctx context.Context, fs fileservice.FileService) (CNLocation, TNLocation objectio.Location,ckpfiles, err error) {
 	files, inMems := data.sinker.GetResult()
 	if len(inMems) != 0 {
 		panic("logic error")

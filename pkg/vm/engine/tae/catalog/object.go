@@ -47,6 +47,45 @@ type ObjectEntry struct {
 	HasPrintedPrepareComapct atomic.Bool
 }
 
+func MockObjectEntry(
+	rel *TableEntry,
+	catalog *Catalog,
+	isTombstone bool,
+	create, delete types.TS) *ObjectEntry {
+	var obj objectio.ObjectStats
+	objname := objectio.MockObjectName()
+	objectio.SetObjectStatsObjectName(&obj, objname)
+	objectio.SetObjectStatsSize(&obj, uint32(1000))
+	object := &ObjectEntry{
+		table: rel,
+		ObjectNode: ObjectNode{
+			SortHint:    catalog.NextObject(),
+			IsTombstone: isTombstone,
+			forcePNode:  true, // any object replayed from checkpoint is forced to be created
+		},
+		EntryMVCCNode: EntryMVCCNode{
+			CreatedAt: create,
+		},
+		ObjectMVCCNode: ObjectMVCCNode{
+			ObjectStats: obj,
+		},
+		CreateNode: txnbase.TxnMVCCNode{
+			Start:   create.Prev(),
+			Prepare: create,
+			End:     create,
+		},
+		ObjectState: ObjectState_Create_ApplyCommit,
+	}
+	if !delete.IsEmpty() {
+		object.DeleteNode = txnbase.TxnMVCCNode{
+			Start:   delete.Prev(),
+			Prepare: delete,
+			End:     delete,
+		}
+	}
+	return object
+}
+
 func (entry *ObjectEntry) ID() *objectio.ObjectId {
 	return entry.ObjectStats.ObjectName().ObjectId()
 }
