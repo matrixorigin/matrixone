@@ -53,7 +53,7 @@ type PartitionState struct {
 	tid uint64
 
 	// data
-	rows *btree.BTreeG[RowEntry] // use value type to avoid locking on elements
+	rows *btree.BTreeG[*RowEntry] // use value type to avoid locking on elements
 
 	checkpoints []string
 	//current partitionState can serve snapshot read only if start <= ts <= end
@@ -232,7 +232,7 @@ func (p *PartitionState) HandleDataObjectList(
 		for i := uint32(0); i < blkCnt; i++ {
 
 			blkID := objectio.NewBlockidWithObjectID(objID, uint16(i))
-			pivot := RowEntry{
+			pivot := &RowEntry{
 				// aobj has only one blk
 				BlockID: *blkID,
 			}
@@ -369,7 +369,7 @@ func (p *PartitionState) HandleTombstoneObjectList(
 
 		truncatePoint := startTSCol[idx]
 
-		var deletedRow RowEntry
+		var deletedRow *RowEntry
 
 		for ok := tbIter.Seek(&PrimaryIndexEntry{
 			Bytes: objEntry.ObjectName().ObjectId()[:],
@@ -384,7 +384,7 @@ func (p *PartitionState) HandleTombstoneObjectList(
 				break
 			}
 
-			if deletedRow, exist = p.rows.Get(RowEntry{
+			if deletedRow, exist = p.rows.Get(&RowEntry{
 				ID:      tbIter.Item().RowEntryID,
 				BlockID: tbIter.Item().BlockID,
 				RowID:   tbIter.Item().RowID,
@@ -448,7 +448,7 @@ func (p *PartitionState) HandleRowsDelete(
 	numDeletes := int64(0)
 	for i, rowID := range rowIDVector {
 		blockID := rowID.CloneBlockID()
-		pivot := RowEntry{
+		pivot := &RowEntry{
 			BlockID: blockID,
 			RowID:   rowID,
 			Time:    timeVector[i],
@@ -538,7 +538,7 @@ func (p *PartitionState) HandleRowsInsert(
 	var numInserted int64
 	for i, rowID := range rowIDVector {
 		blockID := rowID.CloneBlockID()
-		pivot := RowEntry{
+		pivot := &RowEntry{
 			BlockID: blockID,
 			RowID:   rowID,
 			Time:    timeVector[i],
@@ -648,7 +648,7 @@ func NewPartitionState(
 		service:                   service,
 		tid:                       tid,
 		noData:                    noData,
-		rows:                      btree.NewBTreeGOptions(RowEntry.Less, opts),
+		rows:                      btree.NewBTreeGOptions((*RowEntry).Less, opts),
 		dataObjectsNameIndex:      btree.NewBTreeGOptions(ObjectEntry.ObjectNameIndexLess, opts),
 		tombstoneObjectsNameIndex: btree.NewBTreeGOptions(ObjectEntry.ObjectNameIndexLess, opts),
 		rowPrimaryKeyIndex:        btree.NewBTreeGOptions((*PrimaryIndexEntry).Less, opts),
@@ -789,7 +789,7 @@ func (p *PartitionState) PKExistInMemBetween(
 	keys [][]byte,
 ) (bool, bool) {
 	iter := p.rowPrimaryKeyIndex.Copy().Iter()
-	pivot := RowEntry{
+	pivot := &RowEntry{
 		Time: types.BuildTS(math.MaxInt64, math.MaxUint32),
 	}
 	idxEntry := &PrimaryIndexEntry{}
@@ -862,7 +862,7 @@ func (p *PartitionState) RowExists(rowID types.Rowid, ts types.TS) bool {
 	defer iter.Release()
 
 	blockID := rowID.CloneBlockID()
-	for ok := iter.Seek(RowEntry{
+	for ok := iter.Seek(&RowEntry{
 		BlockID: blockID,
 		RowID:   rowID,
 		Time:    ts,
@@ -911,7 +911,7 @@ func (p *PartitionState) IsEmpty() bool {
 
 func (p *PartitionState) LogAllRowEntry() string {
 	var buf bytes.Buffer
-	_ = p.ScanRows(false, func(entry RowEntry) (bool, error) {
+	_ = p.ScanRows(false, func(entry *RowEntry) (bool, error) {
 		buf.WriteString(entry.String())
 		buf.WriteString("\n")
 		return true, nil
@@ -921,19 +921,19 @@ func (p *PartitionState) LogAllRowEntry() string {
 
 func (p *PartitionState) ScanRows(
 	reverse bool,
-	onItem func(entry RowEntry) (bool, error),
+	onItem func(entry *RowEntry) (bool, error),
 ) (err error) {
 	var ok bool
 
 	if !reverse {
-		p.rows.Scan(func(item RowEntry) bool {
+		p.rows.Scan(func(item *RowEntry) bool {
 			if ok, err = onItem(item); err != nil || !ok {
 				return false
 			}
 			return true
 		})
 	} else {
-		p.rows.Reverse(func(item RowEntry) bool {
+		p.rows.Reverse(func(item *RowEntry) bool {
 			if ok, err = onItem(item); err != nil || !ok {
 				return false
 			}
@@ -948,7 +948,7 @@ func (p *PartitionState) CheckRowIdDeletedInMem(ts types.TS, rowId types.Rowid) 
 	iter := p.rows.Copy().Iter()
 	defer iter.Release()
 
-	if !iter.Seek(RowEntry{
+	if !iter.Seek(&RowEntry{
 		Time:    ts,
 		BlockID: rowId.CloneBlockID(),
 		RowID:   rowId,
