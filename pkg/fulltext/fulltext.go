@@ -826,6 +826,10 @@ func ParsePatternInNLMode(pattern string) ([]*Pattern, error) {
 		}
 	}
 
+	if len(list) == 0 {
+		return nil, moerr.NewInternalErrorNoCtx("Invalid input search string.  search string onverted to empty pattern")
+	}
+
 	// assign index
 	idx := int32(0)
 	for _, p := range list {

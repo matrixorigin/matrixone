@@ -195,6 +195,23 @@ func TestPatternFail(t *testing.T) {
 	}
 }
 
+func TestPatternNLFail(t *testing.T) {
+
+	tests := []TestCase{
+		{
+			pattern: "+[[[",
+		},
+		{
+			pattern: "+''",
+		},
+	}
+
+	for _, c := range tests {
+		_, err := PatternToString(c.pattern, int64(tree.FULLTEXT_NL))
+		require.NotNil(t, err)
+	}
+}
+
 func TestFullTextNL(t *testing.T) {
 
 	pattern := "apple banana"
