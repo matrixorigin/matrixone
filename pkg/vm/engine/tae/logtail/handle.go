@@ -299,7 +299,6 @@ func visitObject(batch *containers.Batch, entry *catalog.ObjectEntry, txnMVCCNod
 
 	batch.GetVectorByName(SnapshotAttr_DBID).Append(entry.GetTable().GetDB().ID, false)
 	batch.GetVectorByName(SnapshotAttr_TID).Append(entry.GetTable().ID, false)
-	logutil.Infof("[logtail] object %d-%v", entry.GetTable().ID, entry.StringWithLevel(2))
 	batch.GetVectorByName(ObjectAttr_ObjectStats).Append(entry.ObjectMVCCNode.ObjectStats[:], false)
 	txnMVCCNode.AppendTupleWithCommitTS(batch, committs) // start prepare and commit ts
 }

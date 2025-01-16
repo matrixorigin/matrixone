@@ -18,6 +18,7 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/tidwall/btree"
 )
@@ -66,11 +67,16 @@ func (c *BoundTableOperator) iterObject(from, to types.TS, isTombstone bool) err
 	}
 
 	// after seeking, the first object could be out of the range, but false positive is allowed.
+	earlybreak := false
 	for ; ok; ok = it.Prev() {
-		obj := it.Item()
-		c.recordReport(isTombstone, obj.GetAppendable())
-		if obj.CreatedAt.LT(&from) || (!obj.DeletedAt.IsEmpty() && obj.DeletedAt.LT(&from)) {
+		if earlybreak {
 			break
+		}
+		obj := it.Item()
+		logutil.Infof("iterObject: %v", obj.StringWithLevel(2))
+		c.recordReport(isTombstone, obj.GetAppendable())
+		if obj.IsAppendable() && obj.IsCEntry() && obj.CreatedAt.LT(&from) {
+			earlybreak = true
 		}
 
 		if next := obj.GetNextVersion(); obj.IsCEntry() && next != nil && next.DeletedAt.LE(&to) {
