@@ -608,6 +608,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op := multi_update.NewArgument()
 		op.MultiUpdateCtx = t.MultiUpdateCtx
 		op.Action = t.Action
+		op.IsRemote = t.IsRemote
 		op.IsOnduplicateKeyUpdate = t.IsOnduplicateKeyUpdate
 		op.Engine = t.Engine
 		op.SetInfo(&info)
@@ -842,9 +843,11 @@ func constructMultiUpdate(
 	eg engine.Engine,
 	proc *process.Process,
 	action multi_update.UpdateAction,
+	isRemote bool,
 ) (vm.Operator, error) {
 	arg := multi_update.NewArgument()
 	arg.Engine = eg
+	arg.IsRemote = isRemote
 
 	arg.MultiUpdateCtx = make([]*multi_update.MultiUpdateCtx, len(n.UpdateCtxList))
 	for i, updateCtx := range n.UpdateCtxList {

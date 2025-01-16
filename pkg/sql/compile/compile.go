@@ -3263,7 +3263,7 @@ func (c *Compile) compileMultiUpdate(_ []*plan.Node, n *plan.Node, ss []*Scope) 
 		}
 
 		for i := range ss {
-			multiUpdateArg, err := constructMultiUpdate(n, c.e, c.proc, multi_update.UpdateWriteS3)
+			multiUpdateArg, err := constructMultiUpdate(n, c.e, c.proc, multi_update.UpdateWriteS3, ss[i].IsRemote)
 			if err != nil {
 				return nil, err
 			}
@@ -3277,7 +3277,7 @@ func (c *Compile) compileMultiUpdate(_ []*plan.Node, n *plan.Node, ss []*Scope) 
 			rs = c.newMergeScope(ss)
 		}
 
-		multiUpdateArg, err := constructMultiUpdate(n, c.e, c.proc, multi_update.UpdateFlushS3Info)
+		multiUpdateArg, err := constructMultiUpdate(n, c.e, c.proc, multi_update.UpdateFlushS3Info, rs.IsRemote)
 		if err != nil {
 			return nil, err
 		}
@@ -3289,7 +3289,7 @@ func (c *Compile) compileMultiUpdate(_ []*plan.Node, n *plan.Node, ss []*Scope) 
 			rs := c.newMergeScope(ss)
 			ss = []*Scope{rs}
 		}
-		multiUpdateArg, err := constructMultiUpdate(n, c.e, c.proc, multi_update.UpdateWriteTable)
+		multiUpdateArg, err := constructMultiUpdate(n, c.e, c.proc, multi_update.UpdateWriteTable, ss[0].IsRemote)
 		if err != nil {
 			return nil, err
 		}
