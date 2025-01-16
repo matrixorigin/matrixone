@@ -717,19 +717,19 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		})
 
 		lockTargets = append(lockTargets, &plan.LockTarget{
-			TableId:             tableDef.TblId,
-			ObjRef:              dmlCtx.objRefs[i],
-			PrimaryColsIdxInBat: []int32{int32(newPkPos)},
-			PrimaryColRelPos:    finalProjTag,
-			PrimaryColTyp:       finalProjList[newPkPos].Typ,
+			TableId:            tableDef.TblId,
+			ObjRef:             dmlCtx.objRefs[i],
+			PrimaryColIdxInBat: int32(newPkPos),
+			PrimaryColRelPos:   finalProjTag,
+			PrimaryColTyp:      finalProjList[newPkPos].Typ,
 		})
 		if newPkPos != oldPkPos {
 			lockTargets = append(lockTargets, &plan.LockTarget{
-				TableId:             tableDef.TblId,
-				ObjRef:              dmlCtx.objRefs[i],
-				PrimaryColsIdxInBat: []int32{int32(oldPkPos)},
-				PrimaryColRelPos:    finalProjTag,
-				PrimaryColTyp:       finalProjList[oldPkPos].Typ,
+				TableId:            tableDef.TblId,
+				ObjRef:             dmlCtx.objRefs[i],
+				PrimaryColIdxInBat: int32(oldPkPos),
+				PrimaryColRelPos:   finalProjTag,
+				PrimaryColTyp:      finalProjList[oldPkPos].Typ,
 			})
 		}
 
@@ -840,19 +840,19 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 
 			if idxDef.Unique {
 				lockTargets = append(lockTargets, &plan.LockTarget{
-					TableId:             idxNode.TableDef.TblId,
-					ObjRef:              idxNode.ObjRef,
-					PrimaryColsIdxInBat: []int32{int32(oldIdx)},
-					PrimaryColRelPos:    finalProjTag,
-					PrimaryColTyp:       finalProjList[oldIdx].Typ,
+					TableId:            idxNode.TableDef.TblId,
+					ObjRef:             idxNode.ObjRef,
+					PrimaryColIdxInBat: int32(oldIdx),
+					PrimaryColRelPos:   finalProjTag,
+					PrimaryColTyp:      finalProjList[oldIdx].Typ,
 				})
 				if idxNeedUpdate[i][j] {
 					lockTargets = append(lockTargets, &plan.LockTarget{
-						TableId:             idxNode.TableDef.TblId,
-						ObjRef:              idxNode.ObjRef,
-						PrimaryColsIdxInBat: []int32{int32(newIdx)},
-						PrimaryColRelPos:    finalProjTag,
-						PrimaryColTyp:       finalProjList[newIdx].Typ,
+						TableId:            idxNode.TableDef.TblId,
+						ObjRef:             idxNode.ObjRef,
+						PrimaryColIdxInBat: int32(newIdx),
+						PrimaryColRelPos:   finalProjTag,
+						PrimaryColTyp:      finalProjList[newIdx].Typ,
 					})
 				}
 			}

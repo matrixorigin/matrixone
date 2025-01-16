@@ -160,16 +160,16 @@ func DeepCopyLockTarget(target *plan.LockTarget) *plan.LockTarget {
 		return nil
 	}
 	return &plan.LockTarget{
-		TableId:             target.TableId,
-		ObjRef:              DeepCopyObjectRef(target.ObjRef),
-		PrimaryColsIdxInBat: target.PrimaryColsIdxInBat,
-		PrimaryColTyp:       target.PrimaryColTyp,
-		RefreshTsIdxInBat:   target.RefreshTsIdxInBat,
-		FilterColsIdxInBat:  target.FilterColsIdxInBat,
-		LockTable:           target.LockTable,
-		Block:               target.Block,
-		LockRows:            DeepCopyExpr(target.LockRows),
-		LockTableAtTheEnd:   target.LockTableAtTheEnd,
+		TableId:            target.TableId,
+		ObjRef:             DeepCopyObjectRef(target.ObjRef),
+		PrimaryColIdxInBat: target.PrimaryColIdxInBat,
+		PrimaryColTyp:      target.PrimaryColTyp,
+		RefreshTsIdxInBat:  target.RefreshTsIdxInBat,
+		FilterColIdxInBat:  target.FilterColIdxInBat,
+		LockTable:          target.LockTable,
+		Block:              target.Block,
+		LockRows:           DeepCopyExpr(target.LockRows),
+		LockTableAtTheEnd:  target.LockTableAtTheEnd,
 	}
 }
 

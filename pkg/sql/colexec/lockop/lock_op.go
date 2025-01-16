@@ -170,13 +170,13 @@ func performLock(
 		lockOp.logger.Debug("lock",
 			zap.Uint64("table", target.tableID),
 			zap.Bool("filter", target.filter != nil),
-			zap.Int32s("filter-col", target.filterColIndexInBatch),
-			zap.Int32s("primary-index", target.primaryColumnIndexInBatch))
+			zap.Int32("filter-col", target.filterColIndexInBatch),
+			zap.Int32("primary-index", target.primaryColumnIndexInBatch))
 		var filterCols []int32
-		priVec := bat.GetVector(target.primaryColumnIndexInBatch[0])
+		priVec := bat.GetVector(target.primaryColumnIndexInBatch)
 		// For partitioned tables, filter is not nil
 		if target.filter != nil {
-			filterCols = vector.MustFixedColWithTypeCheck[int32](bat.GetVector(target.filterColIndexInBatch[0]))
+			filterCols = vector.MustFixedColWithTypeCheck[int32](bat.GetVector(target.filterColIndexInBatch))
 			for _, value := range filterCols {
 				// has Illegal Partition index
 				if value == -1 {
@@ -205,7 +205,7 @@ func performLock(
 			lockOp.logger.Debug("lock result",
 				zap.Uint64("table", target.tableID),
 				zap.Bool("locked", locked),
-				zap.Int32s("primary-index", target.primaryColumnIndexInBatch),
+				zap.Int32("primary-index", target.primaryColumnIndexInBatch),
 				zap.String("refresh-ts", refreshTS.DebugString()),
 				zap.Error(err))
 		}
@@ -773,17 +773,17 @@ func (lockOp *LockOp) CopyToPipelineTarget() []*pipeline.LockTarget {
 	targets := make([]*pipeline.LockTarget, len(lockOp.targets))
 	for i, target := range lockOp.targets {
 		targets[i] = &pipeline.LockTarget{
-			TableId:             target.tableID,
-			PrimaryColsIdxInBat: target.primaryColumnIndexInBatch,
-			PrimaryColTyp:       plan.MakePlan2Type(&target.primaryColumnType),
-			RefreshTsIdxInBat:   target.refreshTimestampIndexInBatch,
-			FilterColsIdxInBat:  target.filterColIndexInBatch,
-			LockTable:           target.lockTable,
-			ChangeDef:           target.changeDef,
-			Mode:                target.mode,
-			LockRows:            plan.DeepCopyExpr(target.lockRows),
-			LockTableAtTheEnd:   target.lockTableAtTheEnd,
-			ObjRef:              plan.DeepCopyObjectRef(target.objRef),
+			TableId:            target.tableID,
+			PrimaryColIdxInBat: target.primaryColumnIndexInBatch,
+			PrimaryColTyp:      plan.MakePlan2Type(&target.primaryColumnType),
+			RefreshTsIdxInBat:  target.refreshTimestampIndexInBatch,
+			FilterColIdxInBat:  target.filterColIndexInBatch,
+			LockTable:          target.lockTable,
+			ChangeDef:          target.changeDef,
+			Mode:               target.mode,
+			LockRows:           plan.DeepCopyExpr(target.lockRows),
+			LockTableAtTheEnd:  target.lockTableAtTheEnd,
+			ObjRef:             plan.DeepCopyObjectRef(target.objRef),
 		}
 	}
 	return targets
@@ -793,7 +793,7 @@ func (lockOp *LockOp) CopyToPipelineTarget() []*pipeline.LockTarget {
 func (lockOp *LockOp) AddLockTarget(
 	tableID uint64,
 	objRef *plan.ObjectRef,
-	primaryColumnIndexInBatch []int32,
+	primaryColumnIndexInBatch int32,
 	primaryColumnType types.Type,
 	refreshTimestampIndexInBatch int32,
 	lockRows *plan.Expr,
@@ -814,7 +814,7 @@ func (lockOp *LockOp) AddLockTargetWithMode(
 	tableID uint64,
 	objRef *plan.ObjectRef,
 	mode lock.LockMode,
-	primaryColumnIndexInBatch []int32,
+	primaryColumnIndexInBatch int32,
 	primaryColumnType types.Type,
 	refreshTimestampIndexInBatch int32,
 	lockRows *plan.Expr,
@@ -870,12 +870,12 @@ func (lockOp *LockOp) LockTableWithMode(
 // partitionTableIDMappingInBatch: the ID index of the sub-table corresponding to the data. Index of tableIDs
 func (lockOp *LockOp) AddLockTargetWithPartition(
 	tableIDs []uint64,
-	primaryColumnIndexInBatch []int32,
+	primaryColumnIndexInBatch int32,
 	primaryColumnType types.Type,
 	refreshTimestampIndexInBatch int32,
 	lockRows *plan.Expr,
 	lockTableAtTheEnd bool,
-	partitionTableIDMappingInBatch []int32) *LockOp {
+	partitionTableIDMappingInBatch int32) *LockOp {
 	return lockOp.AddLockTargetWithPartitionAndMode(
 		tableIDs,
 		lock.LockMode_Exclusive,
@@ -892,12 +892,12 @@ func (lockOp *LockOp) AddLockTargetWithPartition(
 func (lockOp *LockOp) AddLockTargetWithPartitionAndMode(
 	tableIDs []uint64,
 	mode lock.LockMode,
-	primaryColumnIndexInBatch []int32,
+	primaryColumnIndexInBatch int32,
 	primaryColumnType types.Type,
 	refreshTimestampIndexInBatch int32,
 	lockRows *plan.Expr,
 	lockTableAtTheEnd bool,
-	partitionTableIDMappingInBatch []int32) *LockOp {
+	partitionTableIDMappingInBatch int32) *LockOp {
 	if len(tableIDs) == 0 {
 		panic("invalid partition table ids")
 	}
@@ -1038,8 +1038,8 @@ func lockTalbeIfLockCountIsZero(
 				free()
 			}()
 
-			bat := batch.NewWithSize(int(target.primaryColumnIndexInBatch[0]) + 1)
-			bat.Vecs[target.primaryColumnIndexInBatch[0]] = vec
+			bat := batch.NewWithSize(int(target.primaryColumnIndexInBatch) + 1)
+			bat.Vecs[target.primaryColumnIndexInBatch] = vec
 			bat.SetRowCount(vec.Length())
 
 			anal := lockOp.OpAnalyzer

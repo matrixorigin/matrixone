@@ -50,9 +50,7 @@ func (builder *QueryBuilder) countColRefs(nodeID int32, colRefCnt map[[2]int32]i
 
 	if node.NodeType == plan.Node_LOCK_OP {
 		for _, lockTarget := range node.LockTargets {
-			for _, colIdx := range lockTarget.PrimaryColsIdxInBat {
-				colRefCnt[[2]int32{lockTarget.PrimaryColRelPos, colIdx}] += 2
-			}
+			colRefCnt[[2]int32{lockTarget.PrimaryColRelPos, lockTarget.PrimaryColIdxInBat}] += 1
 		}
 	}
 
@@ -254,13 +252,11 @@ func replaceColumnsForNode(node *plan.Node, projMap map[[2]int32]*plan.Expr) {
 
 	if node.NodeType == plan.Node_LOCK_OP {
 		for _, lockTarget := range node.LockTargets {
-			for i, col := range lockTarget.PrimaryColsIdxInBat {
-				colRef := [2]int32{lockTarget.PrimaryColRelPos, col}
-				if expr, ok := projMap[colRef]; ok {
-					if e, ok := expr.Expr.(*plan.Expr_Col); ok {
-						lockTarget.PrimaryColRelPos = e.Col.RelPos
-						lockTarget.PrimaryColsIdxInBat[i] = e.Col.ColPos
-					}
+			colRef := [2]int32{lockTarget.PrimaryColRelPos, lockTarget.PrimaryColIdxInBat}
+			if expr, ok := projMap[colRef]; ok {
+				if e, ok := expr.Expr.(*plan.Expr_Col); ok {
+					lockTarget.PrimaryColRelPos = e.Col.RelPos
+					lockTarget.PrimaryColIdxInBat = e.Col.ColPos
 				}
 			}
 		}

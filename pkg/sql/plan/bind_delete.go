@@ -228,11 +228,11 @@ func (builder *QueryBuilder) bindDelete(stmt *tree.Delete, bindCtx *BindContext)
 		for _, col := range tableDef.Cols {
 			if col.Name == tableDef.Pkey.PkeyColName {
 				lockTarget := &plan.LockTarget{
-					TableId:             tableDef.TblId,
-					ObjRef:              DeepCopyObjectRef(dmlCtx.objRefs[i]),
-					PrimaryColsIdxInBat: []int32{pkPos},
-					PrimaryColRelPos:    selectNodeTag,
-					PrimaryColTyp:       col.Typ,
+					TableId:            tableDef.TblId,
+					ObjRef:             DeepCopyObjectRef(dmlCtx.objRefs[i]),
+					PrimaryColIdxInBat: pkPos,
+					PrimaryColRelPos:   selectNodeTag,
+					PrimaryColTyp:      col.Typ,
 				}
 				lockTargets = append(lockTargets, lockTarget)
 				break
@@ -264,11 +264,11 @@ func (builder *QueryBuilder) bindDelete(stmt *tree.Delete, bindCtx *BindContext)
 				for _, col := range idxNode.TableDef.Cols {
 					if col.Name == idxNode.TableDef.Pkey.PkeyColName {
 						lockTargets = append(lockTargets, &plan.LockTarget{
-							TableId:             idxNode.TableDef.TblId,
-							ObjRef:              DeepCopyObjectRef(idxNode.ObjRef),
-							PrimaryColsIdxInBat: []int32{pkPos},
-							PrimaryColRelPos:    idxNode.BindingTags[0],
-							PrimaryColTyp:       col.Typ,
+							TableId:            idxNode.TableDef.TblId,
+							ObjRef:             DeepCopyObjectRef(idxNode.ObjRef),
+							PrimaryColIdxInBat: pkPos,
+							PrimaryColRelPos:   idxNode.BindingTags[0],
+							PrimaryColTyp:      col.Typ,
 						})
 						break
 					}

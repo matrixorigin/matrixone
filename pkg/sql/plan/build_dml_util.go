@@ -1033,10 +1033,10 @@ func makeOneDeletePlan(
 			lastNodeId = builder.appendNode(filterNode, bindCtx)
 			// append lock
 			lockTarget := &plan.LockTarget{
-				TableId:             delNodeInfo.tableDef.TblId,
-				PrimaryColsIdxInBat: []int32{int32(delNodeInfo.pkPos)},
-				PrimaryColTyp:       delNodeInfo.pkTyp,
-				RefreshTsIdxInBat:   -1, //unsupport now
+				TableId:            delNodeInfo.tableDef.TblId,
+				PrimaryColIdxInBat: int32(delNodeInfo.pkPos),
+				PrimaryColTyp:      delNodeInfo.pkTyp,
+				RefreshTsIdxInBat:  -1, //unsupport now
 				// FilterColIdxInBat:  int32(delNodeInfo.partitionIdx),
 				LockTable: delNodeInfo.lockTable,
 			}
@@ -2825,11 +2825,11 @@ func makePreUpdateDeletePlan(
 	pkPos, pkTyp := getPkPos(delCtx.tableDef, false)
 
 	lockTarget := &plan.LockTarget{
-		TableId:             delCtx.tableDef.TblId,
-		PrimaryColsIdxInBat: []int32{int32(pkPos)},
-		PrimaryColTyp:       pkTyp,
-		RefreshTsIdxInBat:   -1,
-		LockTable:           false,
+		TableId:            delCtx.tableDef.TblId,
+		PrimaryColIdxInBat: int32(pkPos),
+		PrimaryColTyp:      pkTyp,
+		RefreshTsIdxInBat:  -1,
+		LockTable:          false,
 	}
 	lockNode := &Node{
 		NodeType:    plan.Node_LOCK_OP,
@@ -2887,11 +2887,11 @@ func makePreUpdateDeletePlan(
 		}
 
 		lockTarget := &plan.LockTarget{
-			TableId:             delCtx.tableDef.TblId,
-			PrimaryColsIdxInBat: []int32{newPkPos},
-			PrimaryColTyp:       pkTyp,
-			RefreshTsIdxInBat:   -1, //unsupport now
-			LockTable:           false,
+			TableId:            delCtx.tableDef.TblId,
+			PrimaryColIdxInBat: newPkPos,
+			PrimaryColTyp:      pkTyp,
+			RefreshTsIdxInBat:  -1, //unsupport now
+			LockTable:          false,
 		}
 		lockNode := &Node{
 			NodeType:    plan.Node_LOCK_OP,
@@ -2947,12 +2947,12 @@ func appendLockNode(
 	}
 
 	lockTarget := &plan.LockTarget{
-		TableId:             tableDef.TblId,
-		PrimaryColsIdxInBat: []int32{int32(pkPos)},
-		PrimaryColTyp:       pkTyp,
-		RefreshTsIdxInBat:   -1, //unsupport now
-		LockTable:           lockTable,
-		Block:               block,
+		TableId:            tableDef.TblId,
+		PrimaryColIdxInBat: int32(pkPos),
+		PrimaryColTyp:      pkTyp,
+		RefreshTsIdxInBat:  -1, //unsupport now
+		LockTable:          lockTable,
+		Block:              block,
 	}
 
 	lockNode := &Node{

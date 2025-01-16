@@ -896,10 +896,10 @@ message ExternAttr {
 
 message LockTarget {
 	uint64 table_id           	= 1;
-	repeated int32 primary_cols_idx_in_bat  = 2;
+	int32 primary_col_idx_in_bat  = 2;
 	Type primary_col_typ          = 3 [(gogoproto.nullable) = false];
 	int32 refresh_ts_idx_in_bat   = 4;
-	repeated int32 filter_cols_idx_in_bat   = 5;
+	int32 filter_col_idx_in_bat   = 5;
 	bool lock_table 				= 6;
 	bool                block   = 9;
 	lock.LockMode Mode  = 10;

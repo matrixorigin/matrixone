@@ -1389,20 +1389,18 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		var pkExprs []*plan.Expr
 		var oldPkPos [][2]int32
 		for _, lockTarget := range node.LockTargets {
-			for _, col := range lockTarget.PrimaryColsIdxInBat {
-				pkExpr := &plan.Expr{
-					// Typ: node.LockTargets[0].GetPrimaryColTyp(),
-					Expr: &plan.Expr_Col{
-						Col: &plan.ColRef{
-							RelPos: lockTarget.PrimaryColRelPos,
-							ColPos: col,
-						},
+			pkExpr := &plan.Expr{
+				// Typ: node.LockTargets[0].GetPrimaryColTyp(),
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: lockTarget.PrimaryColRelPos,
+						ColPos: lockTarget.PrimaryColIdxInBat,
 					},
-				}
-				increaseRefCnt(pkExpr, 1, colRefCnt)
-				pkExprs = append(pkExprs, pkExpr)
-				oldPkPos = append(oldPkPos, [2]int32{lockTarget.PrimaryColRelPos, col})
+				},
 			}
+			increaseRefCnt(pkExpr, 1, colRefCnt)
+			pkExprs = append(pkExprs, pkExpr)
+			oldPkPos = append(oldPkPos, [2]int32{lockTarget.PrimaryColRelPos, lockTarget.PrimaryColIdxInBat})
 		}
 
 		childRemapping, err := builder.remapAllColRefs(node.Children[0], step, colRefCnt, colRefBool, sinkColRef)
@@ -1410,16 +1408,12 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			return nil, err
 		}
 
-		oldPkIdx := 0
-		for _, lockTarget := range node.LockTargets {
-			for j := range lockTarget.PrimaryColsIdxInBat {
-				if newPos, ok := childRemapping.globalToLocal[oldPkPos[oldPkIdx]]; ok {
-					lockTarget.PrimaryColRelPos = newPos[0]
-					lockTarget.PrimaryColsIdxInBat[j] = newPos[1]
-				}
-				increaseRefCnt(pkExprs[oldPkIdx], -1, colRefCnt)
-				oldPkIdx++
+		for oldPkIdx, lockTarget := range node.LockTargets {
+			if newPos, ok := childRemapping.globalToLocal[oldPkPos[oldPkIdx]]; ok {
+				lockTarget.PrimaryColRelPos = newPos[0]
+				lockTarget.PrimaryColIdxInBat = newPos[1]
 			}
+			increaseRefCnt(pkExprs[oldPkIdx], -1, colRefCnt)
 		}
 
 		for i, globalRef := range childRemapping.localToGlobal {
@@ -2835,12 +2829,12 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 			pkPos, pkTyp := getPkPos(tableDef, false)
 			lastTag := builder.qry.Nodes[nodeID].BindingTags[0]
 			lockTarget := &plan.LockTarget{
-				TableId:             tableDef.TblId,
-				PrimaryColsIdxInBat: []int32{int32(pkPos)},
-				PrimaryColRelPos:    lastTag,
-				PrimaryColTyp:       pkTyp,
-				Block:               true,
-				RefreshTsIdxInBat:   -1, //unsupport now
+				TableId:            tableDef.TblId,
+				PrimaryColIdxInBat: int32(pkPos),
+				PrimaryColRelPos:   lastTag,
+				PrimaryColTyp:      pkTyp,
+				Block:              true,
+				RefreshTsIdxInBat:  -1, //unsupport now
 			}
 
 			lockNode = &Node{
