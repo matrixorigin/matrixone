@@ -488,6 +488,7 @@ func ReWriteCheckpointAndBlockFromKey(
 	sid string,
 	fs, dstFs fileservice.FileService,
 	loc objectio.Location,
+	lastCkpData *CheckpointData,
 	version uint32, ts types.TS,
 ) (objectio.Location, objectio.Location, []string, error) {
 	logutil.Info("[Start]", common.OperationField("ReWrite Checkpoint"),
@@ -505,6 +506,9 @@ func ReWriteCheckpointAndBlockFromKey(
 	}()
 	objectsData := make(map[string]*objData, 0)
 	tombstonesData := make(map[string]*objData, 0)
+	// tombstonesData2 is the tombstone recorded in the last checkpoint,
+	// only used when cutting aobject, and does not need to modify itself
+	tombstonesData2 := make(map[string]*objData, 0)
 
 	defer func() {
 		for i := range objectsData {
@@ -564,13 +568,46 @@ func ReWriteCheckpointAndBlockFromKey(
 		return objInfoData
 	}
 
+	initData2 := func(
+		od *map[string]*objData,
+		idx uint16,
+		dataType objectio.DataMetaType,
+	) *containers.Batch {
+		objInfoData := lastCkpData.bats[idx]
+		objInfoStats := objInfoData.GetVectorByName(ObjectAttr_ObjectStats)
+		objInfoTid := objInfoData.GetVectorByName(SnapshotAttr_TID)
+		objInfoDelete := objInfoData.GetVectorByName(EntryNode_DeleteAt)
+
+		for i := 0; i < objInfoData.Length(); i++ {
+			stats := objectio.NewObjectStats()
+			stats.UnMarshal(objInfoStats.Get(i).([]byte))
+			appendable := stats.GetAppendable()
+			deleteAt := objInfoDelete.Get(i).(types.TS)
+			tid := objInfoTid.Get(i).(uint64)
+			if deleteAt.IsEmpty() {
+				continue
+			}
+			if !appendable {
+				continue
+			}
+			addObjectToObjectData(stats, appendable, i, tid, dataType, od)
+		}
+		return objInfoData
+	}
+
 	objInfoData := initData(&objectsData, ObjectInfoIDX, objectio.SchemaData)
 	tombstoneInfoData := initData(&tombstonesData, TombstoneObjectInfoIDX, objectio.SchemaTombstone)
+	initData2(&tombstonesData2, TombstoneObjectInfoIDX, objectio.SchemaTombstone)
 
 	phaseNumber = 3
 
 	// Trim tombstone files based on timestamp
 	err = trimTombstoneData(ctx, fs, ts, &tombstonesData)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	// Trim tombstone files based on timestamp
+	err = trimTombstoneData(ctx, fs, ts, &tombstonesData2)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -649,10 +686,17 @@ func ReWriteCheckpointAndBlockFromKey(
 		return nil
 	}
 
+	// tombstonesData2 is used to merge the source of ds
+	dsTombstone := tombstonesData2
+	for key, objectData := range tombstonesData {
+		if dsTombstone[key] == nil {
+			dsTombstone[key] = objectData
+		}
+	}
 	err = insertBatchFun(
 		objectsData,
 		func(oData *objData, writer *ioutil.BlockWriter) (bool, error) {
-			ds := NewBackupDeltaLocDataSource(ctx, fs, ts, tombstonesData)
+			ds := NewBackupDeltaLocDataSource(ctx, fs, ts, dsTombstone)
 			blk := oData.stats.ConstructBlockInfo(uint16(0))
 			bat, sortKey, err := blockio.BlockDataReadBackup(ctx, &blk, ds, nil, ts, fs)
 			if err != nil {

@@ -33,17 +33,17 @@ import (
 type ObjectDataFactory = func(meta *ObjectEntry) data.Object
 
 type ObjectEntry struct {
-	EntryMVCCNode
-	ObjectMVCCNode
+	EntryMVCCNode  // CreatedAt, DeletedAt
+	ObjectMVCCNode // ObjectStats
 
 	CreateNode txnbase.TxnMVCCNode
 	DeleteNode txnbase.TxnMVCCNode
 
-	table *TableEntry
-	ObjectNode
+	table       *TableEntry
 	objData     data.Object
 	ObjectState uint8
 
+	ObjectNode               // auxiliary info
 	HasPrintedPrepareComapct atomic.Bool
 }
 
@@ -56,6 +56,27 @@ func (entry *ObjectEntry) GetDeleteAt() types.TS {
 func (entry *ObjectEntry) GetCreatedAt() types.TS {
 	return entry.CreatedAt
 }
+
+func (entry *ObjectEntry) GetNextVersion() *ObjectEntry {
+	return entry.nextVersion
+}
+
+func (entry *ObjectEntry) GetPrevVersion() *ObjectEntry {
+	return entry.prevVersion
+}
+
+func (entry *ObjectEntry) IsCEntry() bool {
+	return entry.prevVersion == nil
+}
+
+func (entry *ObjectEntry) HasDCounterpart() bool {
+	return entry.nextVersion != nil
+}
+
+func (entry *ObjectEntry) IsDEntry() bool {
+	return entry.prevVersion != nil
+}
+
 func (entry *ObjectEntry) GetLoaded() bool {
 	return entry.Rows() != 0
 }
@@ -79,6 +100,9 @@ func (entry *ObjectEntry) Clone() *ObjectEntry {
 			IsLocal:     entry.IsLocal,
 			SortHint:    entry.SortHint,
 			IsTombstone: entry.IsTombstone,
+			forcePNode:  entry.forcePNode,
+			nextVersion: entry.nextVersion,
+			prevVersion: entry.prevVersion,
 		},
 		objData:     entry.objData,
 		ObjectState: entry.ObjectState,
@@ -94,12 +118,15 @@ func (entry *ObjectEntry) GetCommandMVCCNode() *MVCCNode[*ObjectMVCCNode] {
 }
 func (entry *ObjectEntry) GetDropEntry(
 	txn txnif.TxnReader,
-) (dropped *ObjectEntry, isNewNode bool) {
+) (dropped *ObjectEntry, updatedCEntry *ObjectEntry, isNewNode bool) {
 	dropped = entry.Clone()
 	dropped.ObjectState = ObjectState_Delete_Active
 	dropped.DeletedAt = txnif.UncommitTS
 	dropped.DeleteNode = *txnbase.NewTxnMVCCNodeWithTxn(txn)
 	dropped.GetObjectData().UpdateMeta(dropped)
+	updatedCEntry = entry.Clone()
+	updatedCEntry.nextVersion = dropped
+	dropped.prevVersion = updatedCEntry
 	if entry.CreateNode.Txn != nil && txn.GetID() == entry.CreateNode.Txn.GetID() {
 		return
 	}
@@ -111,12 +138,18 @@ func (entry *ObjectEntry) GetUpdateEntry(
 	stats *objectio.ObjectStats,
 ) (
 	dropped *ObjectEntry,
+	updatedCEntry *ObjectEntry,
 	isNewNode bool,
 ) {
 	dropped = entry.Clone()
 	node := dropped.GetLastMVCCNode()
 	objectio.SetObjectStats(&dropped.ObjectStats, stats)
 	dropped.GetObjectData().UpdateMeta(dropped)
+	if dropped.IsDEntry() { // Only in UT it can not be a D Entry
+		updatedCEntry = entry.prevVersion.Clone()
+		updatedCEntry.nextVersion = dropped
+		dropped.prevVersion = updatedCEntry
+	}
 	if node.Txn != nil && txn.GetID() == node.Txn.GetID() {
 		return
 	}
@@ -142,10 +175,11 @@ func (entry *ObjectEntry) DeleteBefore(ts types.TS) bool {
 	return deleteTS.LT(&ts)
 }
 func (entry *ObjectEntry) GetLatestNode() *ObjectEntry {
-	return entry.table.getObjectList(entry.IsTombstone).GetLastestNode(entry.SortHint)
+	return entry.table.getObjectList(entry.IsTombstone).GetLastestNode(entry.ID())
 }
+
 func (entry *ObjectEntry) ApplyCommit(tid string) error {
-	lastNode := entry.table.getObjectList(entry.IsTombstone).GetLastestNode(entry.SortHint)
+	lastNode := entry.table.getObjectList(entry.IsTombstone).GetLastestNode(entry.ID())
 	if lastNode == nil {
 		panic("logic error")
 	}
@@ -169,12 +203,20 @@ func (entry *ObjectEntry) ApplyCommit(tid string) error {
 		return err
 	}
 	entry.objData.UpdateMeta(newNode)
-	entry.table.getObjectList(entry.IsTombstone).Update(newNode, lastNode)
+	var updatedCEntry *ObjectEntry
+	if newNode.IsDEntry() {
+		// update C entry
+		updatedCEntry = newNode.prevVersion.Clone()
+		updatedCEntry.nextVersion = newNode
+		newNode.prevVersion = updatedCEntry
+	}
+	// delete prepared state, insert committed state and update C entry if needed
+	entry.table.getObjectList(entry.IsTombstone).modify(lastNode, newNode, updatedCEntry)
 	return nil
 }
-func (entry *ObjectEntry) ApplyRollback() error { panic("not support") }
+
 func (entry *ObjectEntry) PrepareCommit() error {
-	lastNode := entry.table.getObjectList(entry.IsTombstone).GetLastestNode(entry.SortHint)
+	lastNode := entry.table.getObjectList(entry.IsTombstone).GetLastestNode(entry.ID())
 	if lastNode == nil {
 		panic("logic error")
 	}
@@ -194,30 +236,44 @@ func (entry *ObjectEntry) PrepareCommit() error {
 		return err
 	}
 	entry.objData.UpdateMeta(newNode)
-	entry.table.getObjectList(entry.IsTombstone).Update(newNode, lastNode)
+	var updatedCEntry *ObjectEntry
+	if newNode.IsDEntry() {
+		// update C entry
+		updatedCEntry = newNode.prevVersion.Clone()
+		updatedCEntry.nextVersion = newNode
+		newNode.prevVersion = updatedCEntry
+	}
+	// delete active state, insert prepared state and update C entry if needed
+	entry.table.getObjectList(entry.IsTombstone).modify(lastNode, newNode, lastNode)
 	return nil
 }
 
 func (entry *ObjectEntry) PrepareRollback() (err error) {
-	lastNode := entry.table.getObjectList(entry.IsTombstone).GetLastestNode(entry.SortHint)
+	lastNode := entry.table.getObjectList(entry.IsTombstone).GetLastestNode(entry.ID())
 	if lastNode == nil {
 		panic("logic error")
 	}
 	switch lastNode.ObjectState {
 	case ObjectState_Create_Active, ObjectState_Create_PrepareCommit:
-		entry.table.getObjectList(entry.IsTombstone).Delete(lastNode)
+		// Note: CreateObject will be called in commit queue, Create_Active state is seldom seen
+		entry.table.getObjectList(entry.IsTombstone).DeleteAllEntries(lastNode.ID())
 	case ObjectState_Delete_Active, ObjectState_Delete_PrepareCommit:
 		newEntry := entry.Clone()
 		newEntry.DeleteNode.Reset()
+		newEntry.prevVersion = nil
+		newEntry.nextVersion = nil
 		newEntry.ObjectState = ObjectState_Create_ApplyCommit
 		newEntry.DeletedAt = types.TS{}
 		entry.objData.UpdateMeta(newEntry)
-		entry.table.getObjectList(entry.IsTombstone).Update(newEntry, lastNode)
+		// delete deleting state, replace with created state
+		entry.table.getObjectList(entry.IsTombstone).modify(lastNode, newEntry, nil)
 	default:
 		panic(fmt.Sprintf("invalid object state %v", lastNode.ObjectState))
 	}
 	return
 }
+
+func (entry *ObjectEntry) ApplyRollback() error { panic("not support") }
 
 func (entry *ObjectEntry) StatsString(zonemapKind common.ZonemapPrintKind) string {
 	zonemapStr := "nil"
@@ -314,7 +370,19 @@ func (entry *ObjectEntry) GetObjectStats() (stats *objectio.ObjectStats) {
 }
 
 func (entry *ObjectEntry) Less(b *ObjectEntry) bool {
-	return entry.SortHint < b.SortHint
+	t1 := entry.CreatedAt
+	if t1.LT(&entry.DeletedAt) {
+		t1 = entry.DeletedAt
+	}
+	t2 := b.CreatedAt
+	if t2.LT(&b.DeletedAt) {
+		t2 = b.DeletedAt
+	}
+	if !t1.EQ(&t2) {
+		return t1.LT(&t2)
+	}
+
+	return bytes.Compare(entry.ObjectShortName()[:], b.ObjectShortName()[:]) < 0
 }
 
 func (entry *ObjectEntry) UpdateObjectInfo(txn txnif.TxnReader, stats *objectio.ObjectStats) (isNewNode bool, err error) {
@@ -360,7 +428,7 @@ func (entry *ObjectEntry) StringWithLevel(level common.PPLevel) string {
 	s := fmt.Sprintf(
 		"%s|OS(%d)|Hint(%d)|%s|%s",
 		nameStr, entry.ObjectState, entry.ObjectNode.SortHint,
-		entry.ObjectStats.String(), entry.ObjectMVCCNode.String(),
+		entry.ObjectStats.String(), entry.EntryMVCCNode.String(),
 	)
 	if level <= common.PPL1 {
 		return s
@@ -378,10 +446,7 @@ func (entry *ObjectEntry) IsVisible(txn txnif.TxnReader) bool {
 		txnToWait.GetTxnState(true)
 		entry = entry.GetLatestNode()
 	}
-	if !entry.DeleteNode.Start.IsEmpty() && entry.DeleteNode.IsVisible(txn) {
-		return false
-	}
-	return entry.CreateNode.IsVisible(txn)
+	return entry.GetLastMVCCNode().IsVisible(txn)
 }
 func (entry *ObjectEntry) BlockCnt() int {
 	if entry.IsAppendable() {
@@ -532,17 +597,12 @@ func (entry *ObjectEntry) PrintPrepareCompactDebugLog() {
 	entry.HasPrintedPrepareComapct.Store(true)
 	s := fmt.Sprintf("prepare compact failed, obj %v", entry.PPString(3, 0, ""))
 	lastNode := entry.GetLastMVCCNode()
-	startTS := lastNode.GetStart()
 	if lastNode.Txn != nil {
 		s = fmt.Sprintf("%s txn is %x.", s, lastNode.Txn.GetID())
 	}
-	it := entry.GetTable().MakeDataObjectIt()
-	defer it.Release()
-	for it.Next() {
-		obj := it.Item()
-		if obj.CreateNode.Start.Equal(&startTS) || (!obj.DeleteNode.IsEmpty() && obj.DeleteNode.Start.Equal(&startTS)) {
-			s = fmt.Sprintf("%s %v.", s, obj.PPString(3, 0, ""))
-		}
+	objs := entry.table.dataObjects.GetAllNodes(entry.ID())
+	for _, obj := range objs {
+		s = fmt.Sprintf("%s %v.", s, obj.PPString(3, 0, ""))
 	}
 	logutil.Info(s)
 }
@@ -552,7 +612,7 @@ func MockObjEntryWithTbl(tbl *TableEntry, size uint64, isTombstone bool) *Object
 	objectio.SetObjectStatsSize(stats, uint32(size))
 	// to make sure pass the stats empty check
 	objectio.SetObjectStatsRowCnt(stats, uint32(1))
-	ts := types.BuildTS(time.Now().UnixNano(), 0)
+	ts := types.BuildTS(time.Now().UTC().UnixNano(), 0)
 	e := &ObjectEntry{
 		table:      tbl,
 		ObjectNode: ObjectNode{IsTombstone: isTombstone},

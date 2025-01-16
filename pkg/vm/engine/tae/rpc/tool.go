@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
 
 const (
@@ -56,6 +57,7 @@ type ColumnJson struct {
 	OriDataSize string `json:"original_data_size,omitempty"`
 	Zonemap     string `json:"zonemap,omitempty"`
 	Data        string `json:"data,omitempty"`
+	DataType    string `json:"data_type,omitempty"`
 }
 
 type BlockJson struct {
@@ -817,8 +819,9 @@ func (c *objGetArg) GetData(ctx context.Context) (res string, err error) {
 		}
 
 		col := ColumnJson{
-			Index: uint16(c.cols[i]),
-			Data:  vec.String(),
+			Index:    uint16(c.cols[i]),
+			Data:     vec.String(),
+			DataType: vec.GetType().DescString(),
 		}
 		cols = append(cols, col)
 	}
@@ -952,7 +955,7 @@ func (c *tableStatArg) Run() (err error) {
 		return moerr.NewInfoNoCtx(fmt.Sprintf("failed to get table %v", c.tid))
 	}
 	c.name = table.GetFullName()
-	it := table.MakeObjectIt(true)
+	it := table.MakeDataVisibleObjectIt(txnbase.MockTxnReaderWithNow())
 	defer it.Release()
 	for it.Next() {
 		entry := it.Item()

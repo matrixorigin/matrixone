@@ -133,8 +133,8 @@ func (obj *object) Contains(
 	)
 }
 
-func (obj *object) EstimateMemSize() (int, int) {
-	return 0, 0
+func (obj *object) EstimateMemSize() int {
+	return 0
 }
 
 func (obj *object) GetRowsOnReplay() uint64 {

@@ -138,6 +138,7 @@ func (h *txnRelation) SimplePPString(level common.PPLevel) string {
 		defer object.Close()
 		s = fmt.Sprintf("%s\n%s", s, object.String())
 	}
+	s = fmt.Sprintf("%s\n--Data End--\n", s)
 	it = h.MakeObjectIt(true)
 	for it.Next() {
 		object := it.GetObject()
@@ -199,7 +200,7 @@ func (h *txnRelation) SoftDeleteObject(id *types.Objectid, isTombstone bool) (er
 }
 
 func (h *txnRelation) MakeObjectItOnSnap(isTombstone bool) handle.ObjectIt {
-	return newObjectItOnSnap(h.table, isTombstone, false)
+	return newObjectItOnSnap(h.table, isTombstone)
 }
 
 func (h *txnRelation) MakeObjectIt(isTombstone bool) handle.ObjectIt {

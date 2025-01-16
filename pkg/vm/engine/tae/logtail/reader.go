@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 )
 
@@ -51,37 +50,6 @@ func (r *Reader) GetDirty() (tree *model.Tree, count int) {
 	}
 	r.table.ForeachRowInBetween(r.from, r.to, nil, op)
 	return
-}
-
-// HasCatalogChanges returns true if any txn in the reader modified the Catalog
-func (r *Reader) HasCatalogChanges() bool {
-	changed := false
-	op := func(row RowT) (moveOn bool) {
-		if row.GetMemo().HasCatalogChanges() {
-			changed = true
-			return false
-		}
-		return true
-	}
-	skipFn := func(blk BlockT) bool {
-		summary := blk.summary.Load()
-		return summary != nil && !summary.hasCatalogChanges
-	}
-	r.table.ForeachRowInBetween(r.from, r.to, skipFn, op)
-	return changed
-}
-
-func (r *Reader) IsCommitted() bool {
-	committed := true
-	r.table.ForeachRowInBetween(r.from, r.to, nil, func(row RowT) (goNext bool) {
-		state := row.GetTxnState(false)
-		if state != txnif.TxnStateCommitted && state != txnif.TxnStateRollbacked {
-			committed = false
-			return false
-		}
-		return true
-	})
-	return committed
 }
 
 // Merge all dirty table/object/block of **a table** into one tree

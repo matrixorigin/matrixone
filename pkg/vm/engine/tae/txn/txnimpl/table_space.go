@@ -21,7 +21,9 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -168,6 +170,7 @@ func (space *tableSpace) prepareApplyANode(node *anode, startOffset uint32) erro
 				return err
 			}
 			appender = space.tableHandle.SetAppender(objH.Fingerprint())
+			logutil.Info("CreateObject", zap.String("objH", appender.GetID().ObjectString()), zap.String("txn", node.GetTxn().String()))
 			objH.Close()
 		}
 		if !appender.IsSameColumns(space.table.GetLocalSchema(space.isTombstone)) {
@@ -183,6 +186,7 @@ func (space *tableSpace) prepareApplyANode(node *anode, startOffset uint32) erro
 			appender.UnlockFreeze()
 			// Unref the appender, otherwise it can't be PrepareCompact(ed) successfully
 			appender.Close()
+			logutil.Info("LockFreeze", zap.String("appender", appender.PPString()))
 			continue
 		}
 

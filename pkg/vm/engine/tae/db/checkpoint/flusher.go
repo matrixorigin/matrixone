@@ -403,40 +403,87 @@ func (flusher *flushImpl) scheduleFlush(
 	if entry.IsEmpty() {
 		return
 	}
-	pressure := flusher.collectTableMemUsage(entry)
-	flusher.checkFlushConditionAndFire(entry, force, pressure)
+	lastCkp := types.TS{}
+	if ckp := flusher.checkpointSchduler.MaxIncrementalCheckpoint(); ckp != nil {
+		if ckp.IsFinished() {
+			lastCkp = ckp.GetEnd()
+		} else if ckp.GetStart().Physical() > 0 {
+			lastCkp = ckp.GetStart().Prev()
+		}
+	}
+	pressure := flusher.collectTableMemUsage(entry, lastCkp)
+	flusher.checkFlushConditionAndFire(entry, force, pressure, lastCkp)
 }
 
-func (flusher *flushImpl) EstimateTableMemSize(
-	table *catalog.TableEntry,
-	tree *model.TableTree,
-) (asize int, dsize int) {
+func (flusher *flushImpl) EstimateTableMemSize(table *catalog.TableEntry, tree *model.TableTree) (asize int, dsize int) {
 	for _, obj := range tree.Objs {
 		object, err := table.GetObjectByID(obj.ID, false)
 		if err != nil {
 			panic(err)
 		}
-		a, _ := object.GetObjectData().EstimateMemSize()
-		asize += a
+		asize += object.GetObjectData().EstimateMemSize()
 	}
 	for _, obj := range tree.Tombstones {
 		object, err := table.GetObjectByID(obj.ID, true)
 		if err != nil {
 			panic(err)
 		}
-		a, _ := object.GetObjectData().EstimateMemSize()
-		dsize += a
+		dsize += object.GetObjectData().EstimateMemSize()
 	}
 	return
 }
 
-func (flusher *flushImpl) collectTableMemUsage(
-	entry *logtail.DirtyTreeEntry,
-) (memPressureRate float64) {
+func foreachAobjBefore(_ context.Context,
+	table *catalog.TableEntry, ts types.TS, lastCkp types.TS,
+	df func(*catalog.ObjectEntry),
+	tf func(*catalog.ObjectEntry),
+) {
+
+	// Note: no need to wait because it is ok to omit a commiting aobj
+	// 1. it will be caught by the next run.
+	// 2. the ts is lagged, lowering the possibility of missing aobj. In contrast, we have to wait when checkpoint pending checkpoint tasks
+	// table.WaitDataObjectCommitted(ts)
+	// table.WaitTombstoneObjectCommitted(ts)
+	var ok bool
+	// some entries shared the same timestamp with end, so we need to seek to the next one
+	key := &catalog.ObjectEntry{EntryMVCCNode: catalog.EntryMVCCNode{DeletedAt: ts.Next()}}
+
+	data := table.MakeDataObjectIt()
+	if ok = data.Seek(key); !ok {
+		ok = data.Last()
+	}
+	for ; ok; ok = data.Prev() {
+		item := data.Item()
+		// Any C entry created before the last checkpoint end time, break
+		if item.IsCEntry() && item.CreatedAt.LT(&lastCkp) {
+			break
+		}
+		if item.IsAppendable() && item.IsCEntry() && !item.HasDCounterpart() && item.CreatedAt.LE(&ts) {
+			df(item)
+		}
+	}
+
+	tomb := table.MakeTombstoneObjectIt()
+	if ok = tomb.Seek(key); !ok {
+		ok = tomb.Last()
+	}
+	for ; ok; ok = tomb.Prev() {
+		item := tomb.Item()
+		if item.IsCEntry() && item.CreatedAt.LT(&lastCkp) {
+			break
+		}
+		if item.IsAppendable() && item.IsCEntry() && !item.HasDCounterpart() && item.CreatedAt.LE(&ts) {
+			tf(item)
+		}
+	}
+}
+
+func (flusher *flushImpl) collectTableMemUsage(entry *logtail.DirtyTreeEntry, lastCkp types.TS) (memPressureRate float64) {
 	// reuse the list
 	flusher.objMemSizeList = flusher.objMemSizeList[:0]
 	sizevisitor := new(model.BaseTreeVisitor)
 	var totalSize int
+	_, end := entry.GetTimeRange()
 	sizevisitor.TableFn = func(did, tid uint64) error {
 		db, err := flusher.catalogCache.GetDatabaseByID(did)
 		if err != nil {
@@ -447,8 +494,14 @@ func (flusher *flushImpl) collectTableMemUsage(
 			panic(err)
 		}
 		table.Stats.Init(flusher.flushInterval)
-		dirtyTree := entry.GetTree().GetTable(tid)
-		asize, dsize := flusher.EstimateTableMemSize(table, dirtyTree)
+		var asize, dsize int
+		df := func(obj *catalog.ObjectEntry) {
+			asize += obj.GetObjectData().EstimateMemSize()
+		}
+		tf := func(obj *catalog.ObjectEntry) {
+			dsize += obj.GetObjectData().EstimateMemSize()
+		}
+		foreachAobjBefore(context.Background(), table, end, lastCkp, df, tf)
 		totalSize += asize + dsize
 		flusher.objMemSizeList = append(flusher.objMemSizeList, tableAndSize{table, asize, dsize})
 		return moerr.GetOkStopCurrRecur()
@@ -476,24 +529,21 @@ func (flusher *flushImpl) collectTableMemUsage(
 
 func (flusher *flushImpl) fireFlushTabletail(
 	table *catalog.TableEntry,
-	tree *model.TableTree,
+	end, lastCkp types.TS,
 ) error {
 	tableDesc := fmt.Sprintf("%d-%s", table.ID, table.GetLastestSchemaLocked(false).Name)
 	metas := make([]*catalog.ObjectEntry, 0, 10)
-	for _, obj := range tree.Objs {
-		object, err := table.GetObjectByID(obj.ID, false)
-		if err != nil {
-			panic(err)
-		}
-		metas = append(metas, object)
-	}
 	tombstoneMetas := make([]*catalog.ObjectEntry, 0, 10)
-	for _, obj := range tree.Tombstones {
-		object, err := table.GetObjectByID(obj.ID, true)
-		if err != nil {
-			panic(err)
-		}
-		tombstoneMetas = append(tombstoneMetas, object)
+	df := func(obj *catalog.ObjectEntry) {
+		metas = append(metas, obj)
+	}
+	tf := func(obj *catalog.ObjectEntry) {
+		tombstoneMetas = append(tombstoneMetas, obj)
+	}
+	foreachAobjBefore(context.Background(), table, end, lastCkp, df, tf)
+	if len(metas) == 0 && len(tombstoneMetas) == 0 {
+		logutil.Warn("[FlushTabletail] empty fire", zap.String("table", tableDesc), zap.String("end", end.ToString()), zap.String("lastCkp", lastCkp.ToString()))
+		return nil
 	}
 
 	// freeze all append
@@ -524,12 +574,12 @@ func (flusher *flushImpl) fireFlushTabletail(
 }
 
 func (flusher *flushImpl) checkFlushConditionAndFire(
-	entry *logtail.DirtyTreeEntry, force bool, pressure float64,
+	entry *logtail.DirtyTreeEntry, force bool, pressure float64, lastCkp types.TS,
 ) {
 	count := 0
+	_, end := entry.GetTimeRange()
 	for _, ticket := range flusher.objMemSizeList {
 		table, asize, dsize := ticket.tbl, ticket.asize, ticket.dsize
-		dirtyTree := entry.GetTree().GetTable(table.ID)
 
 		if force {
 			logutil.Info(
@@ -537,7 +587,7 @@ func (flusher *flushImpl) checkFlushConditionAndFire(
 				zap.Uint64("id", table.ID),
 				zap.String("name", table.GetLastestSchemaLocked(false).Name),
 			)
-			if err := flusher.fireFlushTabletail(table, dirtyTree); err == nil {
+			if err := flusher.fireFlushTabletail(table, end, lastCkp); err == nil {
 				table.Stats.ResetDeadline(flusher.flushInterval)
 			}
 			continue
@@ -583,7 +633,7 @@ func (flusher *flushImpl) checkFlushConditionAndFire(
 		}
 
 		if ready {
-			if err := flusher.fireFlushTabletail(table, dirtyTree); err == nil {
+			if err := flusher.fireFlushTabletail(table, end, lastCkp); err == nil {
 				table.Stats.ResetDeadline(flusher.flushInterval)
 			}
 		}
@@ -714,15 +764,7 @@ func (flusher *flushImpl) FlushTable(
 func (flusher *flushImpl) IsAllChangesFlushed(
 	start, end types.TS, doPrint bool,
 ) bool {
-	tree := flusher.sourcer.ScanInRangePruned(start, end)
-	tree.GetTree().Compact()
-	if doPrint && !tree.IsEmpty() {
-		logutil.Info(
-			"IsAllChangesFlushed",
-			zap.String("dirty-tree", tree.String()),
-		)
-	}
-	return tree.IsEmpty()
+	return IsAllDirtyFlushed(flusher.sourcer, flusher.catalogCache, start, end, doPrint)
 }
 
 func (flusher *flushImpl) Start() {

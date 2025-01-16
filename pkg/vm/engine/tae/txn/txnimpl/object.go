@@ -18,8 +18,6 @@ import (
 	"context"
 	"sync"
 
-	"github.com/tidwall/btree"
-
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -62,12 +60,10 @@ type txnObject struct {
 
 type ObjectIt struct {
 	sync.RWMutex
-	linkIt      btree.IterG[*catalog.ObjectEntry]
-	curr        *catalog.ObjectEntry
-	table       *txnTable
-	reverse     bool
-	firstCalled bool
-	err         error
+	linkIt *catalog.VisibleCommittedObjectIt
+	curr   *catalog.ObjectEntry
+	table  *txnTable
+	err    error
 }
 
 type composedObjectIt struct {
@@ -75,17 +71,23 @@ type composedObjectIt struct {
 	uncommitted *catalog.ObjectEntry
 }
 
-func newObjectItOnSnap(table *txnTable, isTombstone bool, reverse bool) handle.ObjectIt {
+func newObjectItOnSnap(table *txnTable, isTombstone bool) handle.ObjectIt {
+	var inner *catalog.VisibleCommittedObjectIt
+	if isTombstone {
+		inner = table.entry.MakeTombstoneVisibleObjectIt(table.store.txn)
+	} else {
+		inner = table.entry.MakeDataVisibleObjectIt(table.store.txn)
+	}
+
 	it := &ObjectIt{
-		linkIt:  table.entry.MakeObjectIt(isTombstone),
-		table:   table,
-		reverse: reverse,
+		linkIt: inner,
+		table:  table,
 	}
 	return it
 }
 
 func newObjectIt(table *txnTable, isTombstone bool) handle.ObjectIt {
-	it := newObjectItOnSnap(table, isTombstone, false)
+	it := newObjectItOnSnap(table, isTombstone)
 	if table.getBaseTable(isTombstone) != nil && table.getBaseTable(isTombstone).tableSpace != nil {
 		cit := &composedObjectIt{
 			ObjectIt:    it.(*ObjectIt),
@@ -104,38 +106,11 @@ func (it *ObjectIt) Close() error {
 func (it *ObjectIt) GetError() error { return it.err }
 
 func (it *ObjectIt) Next() bool {
-	if it.reverse {
-		for {
-			var ok bool
-			if !it.firstCalled {
-				ok = it.linkIt.Last()
-				it.firstCalled = true
-			} else {
-				ok = it.linkIt.Prev()
-			}
-			if !ok {
-				return false
-			}
-			entry := it.linkIt.Item()
-			valid := entry.IsVisible(it.table.store.txn)
-			if valid {
-				it.curr = entry
-				return true
-			}
-		}
+	ok := it.linkIt.Next()
+	if ok {
+		it.curr = it.linkIt.Item()
 	}
-	var valid bool
-	for {
-		if !it.linkIt.Next() {
-			return false
-		}
-		entry := it.linkIt.Item()
-		valid = entry.IsVisible(it.table.store.txn)
-		if valid {
-			it.curr = entry
-			return true
-		}
-	}
+	return ok
 }
 
 func (it *ObjectIt) GetObject() handle.Object {
