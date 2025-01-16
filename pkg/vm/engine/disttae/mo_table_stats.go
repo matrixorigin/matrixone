@@ -495,6 +495,13 @@ func initMoTableStatsConfig(
 	return err
 }
 
+func (d *dynamicCtx) isBetaRun() bool {
+	d.Lock()
+	defer d.Unlock()
+
+	return d.beta.running
+}
+
 func (d *dynamicCtx) initCronTask(
 	ctx context.Context,
 ) bool {
@@ -1054,7 +1061,7 @@ func (d *dynamicCtx) forceUpdateQuery(
 	}
 
 	if err = d.callAlphaWithRetry(
-		ctx, d.de.service, pairs, caller, 2); err != nil {
+		ctx, d.de.service, pairs, caller, 1); err != nil {
 		return nil, err
 	}
 
@@ -1413,7 +1420,7 @@ func buildTablePairFromCache(
 ) (tbl tablePair, ok bool) {
 
 	item := eng.(*Engine).GetLatestCatalogCache().GetTableById(uint32(accId), dbId, tblId)
-	if item == nil {
+	if item == nil || item.IsDeleted() {
 		// account, db, tbl may delete already
 		// the `update_time` not change anymore
 		return
@@ -1732,6 +1739,7 @@ func (d *dynamicCtx) alphaTask(
 			zap.Duration("takes", dur),
 			zap.Duration("wait err", waitErrDur),
 			zap.String("caller", caller),
+			zap.Bool("isBetaRunning", d.isBetaRun()),
 			zap.String("timeout tbl", timeoutBuf.String()))
 
 		v2.AlphaTaskDurationHistogram.Observe(dur.Seconds())
@@ -1786,7 +1794,21 @@ func (d *dynamicCtx) alphaTask(
 					enterWait = true
 				}
 
-				if waitErrDur >= time.Minute*5 {
+				betaRunning := d.isBetaRun()
+
+				if waitErrDur > 0 && waitErrDur%(time.Second*30) == 0 {
+
+					logutil.Warn(logHeader,
+						zap.String("source", "alpha task"),
+						zap.String("event", "waited err another 30s"),
+						zap.String("caller", caller),
+						zap.Int("total", processed),
+						zap.Int("left", errWaitToReceive),
+						zap.Bool("is beta running", betaRunning))
+				}
+
+				if !betaRunning || waitErrDur >= time.Minute*5 {
+					timeoutCnt := 0
 					// waiting reached the limit
 					for i := range tblBackup {
 						// cannot pin this pState
@@ -1794,22 +1816,20 @@ func (d *dynamicCtx) alphaTask(
 						if !tblBackup[i].valid {
 							continue
 						}
+
+						timeoutCnt++
 						timeoutBuf.WriteString(fmt.Sprintf("%d-%d(%v)-%d(%v); ",
 							tblBackup[i].acc, tblBackup[i].db, tblBackup[i].dbName,
 							tblBackup[i].tbl, tblBackup[i].tblName))
 					}
+
+					if timeoutCnt > 20 {
+						timeoutBuf.Reset()
+						timeoutBuf.WriteString(fmt.Sprintf("timeout count: %d", timeoutCnt))
+					}
+
 					return true, nil
 				}
-
-				if waitErrDur > 0 && waitErrDur%(time.Second*30) == 0 {
-					logutil.Warn(logHeader,
-						zap.String("source", "alpha task"),
-						zap.String("event", "waited err another 30s"),
-						zap.String("caller", caller),
-						zap.Int("total", processed),
-						zap.Int("left", errWaitToReceive))
-				}
-
 				continue
 			}
 
@@ -1908,11 +1928,15 @@ func (d *dynamicCtx) betaTask(
 				continue
 			}
 
+			// 1. view
+			// 2. no update
+			// 3. deleted table
 			if tbl.pState == nil {
-				// 1. view
-				// 2. no update
-				//err = updateTableOnlyTS(ctx, service, tbl)
-				onlyTSBat = append(onlyTSBat, tbl)
+				if tbl.onlyUpdateTS {
+					onlyTSBat = append(onlyTSBat, tbl)
+				}
+
+				tbl.Done(nil)
 				continue
 			}
 
@@ -2459,6 +2483,10 @@ func (d *dynamicCtx) statsCalculateOp(
 	pState *logtailreplay.PartitionState,
 ) (sl statsList, err error) {
 
+	if pState == nil {
+		return
+	}
+
 	bcs := betaCycleStash{
 		born:       time.Now(),
 		snapshot:   snapshot,
@@ -2776,7 +2804,11 @@ func getChangedTableList(
 	}
 
 	defer func() {
-		err = txnOperator.Commit(newCtx)
+		if err != nil {
+			txnOperator.Rollback(newCtx)
+		} else {
+			err = txnOperator.Commit(newCtx)
+		}
 	}()
 
 	proc := process.NewTopProcess(
@@ -3084,6 +3116,10 @@ func (d *dynamicCtx) bulkUpdateTableStatsList(
 	bat.Range(func(key, value any) bool {
 		tbl := key.(tablePair)
 		sl := value.(statsList)
+
+		if sl.stats == nil {
+			return true
+		}
 
 		tbls = append(tbls, tbl)
 
