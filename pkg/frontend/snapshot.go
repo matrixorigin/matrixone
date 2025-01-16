@@ -302,7 +302,7 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 	case tree.SNAPSHOTLEVELDATABASE:
 		databaseName = string(stmt.Object.ObjName)
 		if len(databaseName) > 0 && needSkipDb(databaseName) {
-			return moerr.NewInternalError(ctx, fmt.Sprintf("can not create snapshot for current database %s", databaseName))
+			return moerr.NewInternalError(ctx, fmt.Sprintf("can not create snapshot for system database %s", databaseName))
 		}
 
 		getDatabaseIdFunc := func(dbName string) (dbId uint64, rtnErr error) {
@@ -363,7 +363,10 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 		databaseName = objects[0]
 		tableName = objects[1]
 		if len(databaseName) > 0 && needSkipDb(databaseName) {
-			return moerr.NewInternalError(ctx, fmt.Sprintf("can not create pitr for current table %s.%s", databaseName, tableName))
+			if isClusterTable(databaseName, tableName) {
+				return moerr.NewInternalError(ctx, fmt.Sprintf("can not create snapshot for cluster table %s.%s", databaseName, tableName))
+			}
+			return moerr.NewInternalError(ctx, fmt.Sprintf("can not create pitr for system table %s.%s", databaseName, tableName))
 		}
 
 		getTableIdFunc := func(dbName, tblName string) (tblId uint64, rtnErr error) {
