@@ -2419,10 +2419,10 @@ func applyTombstones(
 	//
 	// here, we only collect the deletes that have not paired inserts
 	// according to its LESS function, the deletes come first
-	var lastInsert *logtailreplay.RowEntry
+	var lastInsert logtailreplay.RowEntry
 	err = pState.ScanRows(true, func(entry *logtailreplay.RowEntry) (bool, error) {
 		if !entry.Deleted {
-			lastInsert = entry
+			lastInsert = *entry
 			return true, nil
 		}
 
