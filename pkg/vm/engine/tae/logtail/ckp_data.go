@@ -258,21 +258,21 @@ func visitObject_V2(
 	ckputil.EncodeCluser(packer, entry.GetTable().ID, objType, entry.ID())
 	vector.AppendBytes(bat.Vecs[ckputil.TableObjectsAttr_Cluster_Idx], packer.Bytes(), false, mp)
 	if create {
-		if push {
-			vector.AppendFixed(bat.Vecs[ckputil.TableObjectsAttr_CreateTS_Idx], commitTS, false, mp)
-			vector.AppendFixed(bat.Vecs[ckputil.TableObjectsAttr_DeleteTS_Idx], types.TS{}, false, mp)
-		} else {
-			vector.AppendFixed(bat.Vecs[ckputil.TableObjectsAttr_CreateTS_Idx], entry.CreatedAt, false, mp)
-			vector.AppendFixed(bat.Vecs[ckputil.TableObjectsAttr_DeleteTS_Idx], types.TS{}, false, mp)
-		}
+		// if push {
+		// 	vector.AppendFixed(bat.Vecs[ckputil.TableObjectsAttr_CreateTS_Idx], commitTS, false, mp)
+		// 	vector.AppendFixed(bat.Vecs[ckputil.TableObjectsAttr_DeleteTS_Idx], types.TS{}, false, mp)
+		// } else {
+		vector.AppendFixed(bat.Vecs[ckputil.TableObjectsAttr_CreateTS_Idx], entry.CreatedAt, false, mp)
+		vector.AppendFixed(bat.Vecs[ckputil.TableObjectsAttr_DeleteTS_Idx], types.TS{}, false, mp)
+		// }
 	} else {
-		if push {
-			vector.AppendFixed(bat.Vecs[ckputil.TableObjectsAttr_CreateTS_Idx], entry.DeletedAt, false, mp)
-			vector.AppendFixed(bat.Vecs[ckputil.TableObjectsAttr_DeleteTS_Idx], commitTS, false, mp)
-		} else {
-			vector.AppendFixed(bat.Vecs[ckputil.TableObjectsAttr_CreateTS_Idx], entry.DeletedAt, false, mp)
-			vector.AppendFixed(bat.Vecs[ckputil.TableObjectsAttr_DeleteTS_Idx], entry.CreatedAt, false, mp)
-		}
+		// if push {
+		// 	vector.AppendFixed(bat.Vecs[ckputil.TableObjectsAttr_CreateTS_Idx], entry.DeletedAt, false, mp)
+		// 	vector.AppendFixed(bat.Vecs[ckputil.TableObjectsAttr_DeleteTS_Idx], commitTS, false, mp)
+		// } else {
+		vector.AppendFixed(bat.Vecs[ckputil.TableObjectsAttr_CreateTS_Idx], entry.DeletedAt, false, mp)
+		vector.AppendFixed(bat.Vecs[ckputil.TableObjectsAttr_DeleteTS_Idx], entry.CreatedAt, false, mp)
+		// }
 	}
 	bat.SetRowCount(bat.Vecs[0].Length())
 }
