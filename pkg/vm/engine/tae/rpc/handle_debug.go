@@ -433,6 +433,15 @@ func (h *Handle) HandleGetChangedTableList(
 	resp.AccIds = append(resp.AccIds, accIds...)
 	resp.DatabaseIds = append(resp.DatabaseIds, dbIds...)
 
+	common.DoIfDebugEnabled(func() {
+		buf := bytes.Buffer{}
+		for i := range resp.TableIds {
+			buf.WriteString(fmt.Sprintf("%d-%d-%d; ",
+				resp.AccIds[i], resp.DatabaseIds[i], resp.TableIds[i]))
+		}
+		logutil.Infof("handle get changed table list ret: %s", buf.String())
+	})
+
 	return nil, nil
 }
 

@@ -17,6 +17,7 @@ package test
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"testing"
 
 	"github.com/lni/goutils/leaktest"
@@ -269,6 +270,10 @@ func TestHandleGetChangedList(t *testing.T) {
 
 	ts := types.MaxTs().ToTimestamp()
 	req.TS[len(tblNames)-1] = &ts
+
+	logutil.SetupMOLogger(&logutil.LogConfig{
+		Level: "debug",
+	})
 
 	_, err := p.T.GetRPCHandle().HandleGetChangedTableList(p.Ctx, txn.TxnMeta{}, req, resp)
 	require.NoError(t, err)
