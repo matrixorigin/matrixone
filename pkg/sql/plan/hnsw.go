@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -26,7 +27,7 @@ var (
 	hnsw_refresh_func_name = "hnsw_refresh"
 	hnsw_search_func_name  = "hnsw_search"
 
-	hnswBuildIndexColdefs = []*plan.ColDef{
+	hnswBuildIndexColDefs = []*plan.ColDef{
 		{
 			Name: "status",
 			Typ: plan.Type{
@@ -57,15 +58,116 @@ var (
 	}
 )
 
-// arg list [param, source_table_name, index_table_name, search_against, mode]
+// arg list [param, hnsw.IndexTableConfig (JSON), pkid, vec]
 func (builder *QueryBuilder) buildHnswCreate(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
-	return 0, nil
+	if len(exprs) < 4 {
+		return 0, moerr.NewInvalidInput(builder.GetContext(), "Invalid number of arguments (NARGS < 4).")
+	}
+
+	colDefs := _getColDefs(hnswBuildIndexColDefs)
+	params, err := builder.getHnswParams(tbl.Func)
+	if err != nil {
+		return 0, err
+	}
+
+	scanNode := builder.qry.Nodes[children[0]]
+	if scanNode.NodeType != plan.Node_TABLE_SCAN {
+		return 0, moerr.NewNoConfig(builder.GetContext(), "child node is not a TABLE SCAN")
+	}
+
+	// remove the first argment and put the first argument to Param
+	exprs = exprs[1:]
+
+	node := &plan.Node{
+		NodeType: plan.Node_FUNCTION_SCAN,
+		Stats:    &plan.Stats{},
+		TableDef: &plan.TableDef{
+			TableType: "func_table", //test if ok
+			//Name:               tbl.String(),
+			TblFunc: &plan.TableFunction{
+				Name:  hnsw_create_func_name,
+				Param: []byte(params),
+			},
+			Cols: colDefs,
+		},
+		BindingTags:     []int32{builder.genNewTag()},
+		TblFuncExprList: exprs,
+		Children:        children,
+	}
+	return builder.appendNode(node, ctx), nil
 }
 
+// arg list [param, hnsw.IndexTableconfig (JSON)]
 func (builder *QueryBuilder) buildHnswRefresh(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
-	return 0, nil
+	if len(exprs) < 2 {
+		return 0, moerr.NewInvalidInput(builder.GetContext(), "Invalid number of arguments (NARGS < 2).")
+	}
+
+	colDefs := _getColDefs(hnswBuildIndexColDefs)
+	params, err := builder.getHnswParams(tbl.Func)
+	if err != nil {
+		return 0, err
+	}
+
+	// remove the first argment and put the first argument to Param
+	exprs = exprs[1:]
+
+	node := &plan.Node{
+		NodeType: plan.Node_FUNCTION_SCAN,
+		Stats:    &plan.Stats{},
+		TableDef: &plan.TableDef{
+			TableType: "func_table", //test if ok
+			//Name:               tbl.String(),
+			TblFunc: &plan.TableFunction{
+				Name:  hnsw_refresh_func_name,
+				Param: []byte(params),
+			},
+			Cols: colDefs,
+		},
+		BindingTags:     []int32{builder.genNewTag()},
+		TblFuncExprList: exprs,
+		Children:        children,
+	}
+	return builder.appendNode(node, ctx), nil
 }
 
+// arg list [param, hnsw.IndexTableconfig (JSON), search_vec]
 func (builder *QueryBuilder) buildHnswSearch(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
-	return 0, nil
+	if len(exprs) != 3 {
+		return 0, moerr.NewInvalidInput(builder.GetContext(), "Invalid number of arguments (NARGS != 3).")
+	}
+
+	colDefs := _getColDefs(hnswSearchColDefs)
+
+	params, err := builder.getHnswParams(tbl.Func)
+	if err != nil {
+		return 0, err
+	}
+	// remove the first argment and put the first argument to Param
+	exprs = exprs[1:]
+
+	node := &plan.Node{
+		NodeType: plan.Node_FUNCTION_SCAN,
+		Stats:    &plan.Stats{},
+		TableDef: &plan.TableDef{
+			TableType: "func_table", //test if ok
+			//Name:               tbl.String(),
+			TblFunc: &plan.TableFunction{
+				Name:  hnsw_search_func_name,
+				Param: []byte(params),
+			},
+			Cols: colDefs,
+		},
+		BindingTags:     []int32{builder.genNewTag()},
+		TblFuncExprList: exprs,
+		Children:        children,
+	}
+	return builder.appendNode(node, ctx), nil
+}
+
+func (builder *QueryBuilder) getHnswParams(fn *tree.FuncExpr) (string, error) {
+	if _, ok := fn.Exprs[0].(*tree.NumVal); ok {
+		return fn.Exprs[0].String(), nil
+	}
+	return "", moerr.NewNoConfig(builder.GetContext(), "first parameter must be string")
 }
