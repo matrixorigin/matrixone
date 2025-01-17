@@ -89,6 +89,7 @@ func TestDedupJoin(t *testing.T) {
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 		tc.barg.IsDedup = true
+		tc.barg.DelColIdx = -1
 		err = tc.barg.Prepare(tc.proc)
 		require.NoError(t, err)
 

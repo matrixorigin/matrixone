@@ -182,8 +182,6 @@ func (m MarshalNodeImpl) GetNodeTitle(ctx context.Context, options *ExplainOptio
 		return "preinsert_uk", nil
 	case plan.Node_PRE_INSERT_SK:
 		return "preinsert_sk", nil
-	case plan.Node_PRE_DELETE:
-		return "predelete", nil
 	case plan.Node_SINK:
 		return "sink", nil
 	case plan.Node_SINK_SCAN:
@@ -520,11 +518,6 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 	case plan.Node_PRE_INSERT_SK:
 		labels = append(labels, models.Label{
 			Name:  Label_Pre_InsertSk, //"pre insert sk",
-			Value: []string{},
-		})
-	case plan.Node_PRE_DELETE:
-		labels = append(labels, models.Label{
-			Name:  Label_Pre_Delete, //"pre delete",
 			Value: []string{},
 		})
 	case plan.Node_SINK:

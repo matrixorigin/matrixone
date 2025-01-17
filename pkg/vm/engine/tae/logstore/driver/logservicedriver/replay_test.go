@@ -66,23 +66,23 @@ func TestAppendSkipCmd2(t *testing.T) {
 	dsns := []uint64{8, 1, 2, 3, 6, 9, 7, 10, 13, 12}
 	appended := []uint64{0, 1, 2, 5, 6, 6, 9, 10, 10, 10}
 
+	writer := NewLogEntryWriter()
 	client, _ := driver.getClientForWrite()
 	for i := 0; i < entryCount; i++ {
 		entries[i].DSN = dsns[i]
-
-		entry := newRecordEntry()
-		entry.appended = appended[i]
-		entry.append(entries[i])
-		size := entry.prepareRecord()
-		client.TryResize(size)
-		record := client.record
-		copy(record.Payload(), entry.payload)
-		record.ResizePayload(size)
-		ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second, moerr.CauseDriverAppender1)
-		_, err := client.c.Append(ctx, record)
-		cancel()
+		err := writer.AppendEntry(entries[i])
 		assert.NoError(t, err)
-		entries[i].DoneWithErr(nil)
+		writer.SetSafeDSN(appended[i])
+		entry := writer.Finish()
+		_, err = client.Append(
+			context.Background(),
+			entry,
+			time.Second,
+			10,
+			moerr.CauseDriverAppender1,
+		)
+		assert.NoError(t, err)
+		writer.Reset()
 	}
 
 	for _, e := range entries {
@@ -94,7 +94,7 @@ func TestAppendSkipCmd2(t *testing.T) {
 		var list2 []uint64
 		entryCount := 0
 		assert.NoError(t, driver.Close())
-		driver = NewLogServiceDriver(driver.config)
+		driver = NewLogServiceDriver(&driver.config)
 		err := driver.Replay(context.Background(), func(e *entry.Entry) storeDriver.ReplayEntryState {
 			assert.Less(t, e.DSN, uint64(11))
 			list1 = append(list1, e.DSN)
@@ -132,7 +132,7 @@ func TestAppendSkipCmd3(t *testing.T) {
 	{
 		entryCount := 0
 		assert.NoError(t, driver.Close())
-		driver = NewLogServiceDriver(driver.config)
+		driver = NewLogServiceDriver(&driver.config)
 		err := driver.Replay(ctx, func(e *entry.Entry) storeDriver.ReplayEntryState {
 			assert.Less(t, e.DSN, uint64(11))
 			if e.DSN > 7 {
@@ -173,29 +173,31 @@ func TestAppendSkipCmd4(t *testing.T) {
 	dsns := []uint64{1, 2, 3, 5}
 	appended := []uint64{1, 2, 3, 3}
 
+	writer := NewLogEntryWriter()
+
 	client, _ := driver.getClientForWrite()
 	for i := 0; i < entryCount; i++ {
 		entries[i].DSN = dsns[i]
 
-		entry := newRecordEntry()
-		entry.appended = appended[i]
-		entry.append(entries[i])
-		size := entry.prepareRecord()
-		client.TryResize(size)
-		record := client.record
-		copy(record.Payload(), entry.payload)
-		record.ResizePayload(size)
-		ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second, moerr.CauseDriverAppender1)
-		_, err := client.c.Append(ctx, record)
-		cancel()
+		writer.SetSafeDSN(appended[i])
+		err := writer.AppendEntry(entries[i])
 		assert.NoError(t, err)
-		entries[i].Entry.Free()
+		entry := writer.Finish()
+		_, err = client.Append(
+			context.Background(),
+			entry,
+			time.Second,
+			10,
+			moerr.CauseDriverAppender1,
+		)
+		assert.NoError(t, err)
+		writer.Reset()
 	}
 
 	{
 		entryCount := 0
 		assert.NoError(t, driver.Close())
-		driver = NewLogServiceDriver(driver.config)
+		driver = NewLogServiceDriver(&driver.config)
 		err := driver.Replay(context.Background(), func(e *entry.Entry) storeDriver.ReplayEntryState {
 			assert.Less(t, e.DSN, uint64(4))
 			if e.DSN > 0 {
@@ -225,6 +227,8 @@ func TestAppendSkipCmd4(t *testing.T) {
 	dsns = []uint64{4}
 	appended = []uint64{4}
 
+	writer = NewLogEntryWriter()
+
 	client, _ = driver.getClientForWrite()
 	for i := 0; i < entryCount; i++ {
 		payload := []byte(fmt.Sprintf("payload %d", i))
@@ -232,24 +236,25 @@ func TestAppendSkipCmd4(t *testing.T) {
 		entries[i] = e
 		entries[i].DSN = dsns[i]
 
-		entry := newRecordEntry()
-		entry.appended = appended[i]
-		entry.append(entries[i])
-		size := entry.prepareRecord()
-		client.TryResize(size)
-		record := client.record
-		copy(record.Payload(), entry.payload)
-		record.ResizePayload(size)
-		ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second, moerr.CauseDriverAppender1)
-		_, err := client.c.Append(ctx, record)
-		cancel()
+		writer.SetSafeDSN(appended[i])
+		err := writer.AppendEntry(entries[i])
 		assert.NoError(t, err)
+		entry := writer.Finish()
+		_, err = client.Append(
+			context.Background(),
+			entry,
+			time.Second,
+			10,
+			moerr.CauseDriverAppender1,
+		)
+		assert.NoError(t, err)
+		writer.Reset()
 		entries[i].Entry.Free()
 	}
 	{
 		entryCount := 0
 		assert.NoError(t, driver.Close())
-		driver = NewLogServiceDriver(driver.config)
+		driver = NewLogServiceDriver(&driver.config)
 		err := driver.Replay(context.Background(), func(e *entry.Entry) storeDriver.ReplayEntryState {
 			assert.Less(t, e.DSN, uint64(5))
 			if e.DSN > 0 {
@@ -289,24 +294,24 @@ func TestAppendSkipCmd5(t *testing.T) {
 
 	dsns := []uint64{10, 9, 12, 11}
 	appended := []uint64{8, 10, 10, 12}
+	writer := NewLogEntryWriter()
 
 	client, _ := driver.getClientForWrite()
 	for i := 0; i < entryCount; i++ {
 		entries[i].DSN = dsns[i]
-
-		entry := newRecordEntry()
-		entry.appended = appended[i]
-		entry.append(entries[i])
-		size := entry.prepareRecord()
-		client.TryResize(size)
-		record := client.record
-		copy(record.Payload(), entry.payload)
-		record.ResizePayload(size)
-		ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second, moerr.CauseDriverAppender1)
-		_, err := client.c.Append(ctx, record)
-		cancel()
+		writer.SetSafeDSN(appended[i])
+		err := writer.AppendEntry(entries[i])
 		assert.NoError(t, err)
-		entries[i].DoneWithErr(nil)
+		entry := writer.Finish()
+		_, err = client.Append(
+			context.Background(),
+			entry,
+			time.Second,
+			10,
+			moerr.CauseDriverAppender1,
+		)
+		assert.NoError(t, err)
+		writer.Reset()
 	}
 
 	for _, e := range entries {
@@ -316,7 +321,7 @@ func TestAppendSkipCmd5(t *testing.T) {
 	{
 		entryCount := 0
 		assert.NoError(t, driver.Close())
-		driver = NewLogServiceDriver(driver.config)
+		driver = NewLogServiceDriver(&driver.config)
 		err := driver.Replay(context.Background(), func(e *entry.Entry) storeDriver.ReplayEntryState {
 			assert.Less(t, e.DSN, uint64(13))
 			if e.DSN > 8 {
@@ -344,13 +349,13 @@ func Test_Replayer1(t *testing.T) {
 		13,
 		// MetaType,PSN,DSN-S,DSN-E,Safe
 		[][5]uint64{
-			{uint64(TNormal), 12, 30, 31, 0},
-			{uint64(TNormal), 13, 28, 29, 1},
-			{uint64(TNormal), 14, 32, 33, 27},
-			{uint64(TNormal), 15, 36, 37, 28},
-			{uint64(TNormal), 16, 41, 43, 32},
-			{uint64(TNormal), 17, 38, 40, 32},
-			{uint64(TNormal), 18, 34, 35, 32},
+			{uint64(Cmd_Normal), 12, 30, 31, 0},
+			{uint64(Cmd_Normal), 13, 28, 29, 1},
+			{uint64(Cmd_Normal), 14, 32, 33, 27},
+			{uint64(Cmd_Normal), 15, 36, 37, 28},
+			{uint64(Cmd_Normal), 16, 41, 43, 32},
+			{uint64(Cmd_Normal), 17, 38, 40, 32},
+			{uint64(Cmd_Normal), 18, 34, 35, 32},
 		},
 		2,
 	)
@@ -398,13 +403,13 @@ func Test_Replayer2(t *testing.T) {
 		0,
 		// MetaType,PSN,DSN-S,DSN-E,Safe
 		[][5]uint64{
-			{uint64(TNormal), 1, 30, 31, 0},
-			{uint64(TNormal), 2, 28, 29, 0},
-			{uint64(TNormal), 3, 32, 33, 0},
-			{uint64(TNormal), 4, 36, 37, 0},
-			{uint64(TNormal), 5, 41, 43, 0},
-			{uint64(TNormal), 6, 38, 40, 0},
-			{uint64(TNormal), 7, 34, 35, 0},
+			{uint64(Cmd_Normal), 1, 30, 31, 0},
+			{uint64(Cmd_Normal), 2, 28, 29, 0},
+			{uint64(Cmd_Normal), 3, 32, 33, 0},
+			{uint64(Cmd_Normal), 4, 36, 37, 0},
+			{uint64(Cmd_Normal), 5, 41, 43, 0},
+			{uint64(Cmd_Normal), 6, 38, 40, 0},
+			{uint64(Cmd_Normal), 7, 34, 35, 0},
 		},
 		2,
 	)
@@ -433,13 +438,13 @@ func Test_Replayer3(t *testing.T) {
 		12,
 		// MetaType,PSN,DSN-S,DSN-E,Safe
 		[][5]uint64{
-			{uint64(TNormal), 11, 30, 31, 0},
-			{uint64(TNormal), 12, 28, 29, 0},
-			{uint64(TNormal), 13, 32, 33, 0},
-			{uint64(TNormal), 14, 36, 37, 0},
-			{uint64(TNormal), 15, 41, 43, 0},
-			{uint64(TNormal), 16, 38, 40, 0},
-			{uint64(TNormal), 17, 34, 35, 0},
+			{uint64(Cmd_Normal), 11, 30, 31, 0},
+			{uint64(Cmd_Normal), 12, 28, 29, 0},
+			{uint64(Cmd_Normal), 13, 32, 33, 0},
+			{uint64(Cmd_Normal), 14, 36, 37, 0},
+			{uint64(Cmd_Normal), 15, 41, 43, 0},
+			{uint64(Cmd_Normal), 16, 38, 40, 0},
+			{uint64(Cmd_Normal), 17, 34, 35, 0},
 		},
 		20,
 	)
@@ -469,12 +474,12 @@ func Test_Replayer4(t *testing.T) {
 		12,
 		// MetaType,PSN,DSN-S,DSN-E,Safe
 		[][5]uint64{
-			{uint64(TNormal), 11, 37, 37, 0},
-			{uint64(TNormal), 12, 35, 35, 0},
-			{uint64(TNormal), 13, 40, 40, 33},
-			{uint64(TNormal), 14, 36, 36, 34},
-			{uint64(TNormal), 15, 39, 39, 34},
-			{uint64(TNormal), 16, 38, 38, 34},
+			{uint64(Cmd_Normal), 11, 37, 37, 0},
+			{uint64(Cmd_Normal), 12, 35, 35, 0},
+			{uint64(Cmd_Normal), 13, 40, 40, 33},
+			{uint64(Cmd_Normal), 14, 36, 36, 34},
+			{uint64(Cmd_Normal), 15, 39, 39, 34},
+			{uint64(Cmd_Normal), 16, 38, 38, 34},
 		},
 		30,
 	)
@@ -503,17 +508,17 @@ func Test_Replayer5(t *testing.T) {
 		12,
 		// MetaType,PSN,DSN-S,DSN-E,Safe
 		[][5]uint64{
-			{uint64(TNormal), 11, 37, 37, 0},
-			{uint64(TNormal), 12, 35, 35, 0},
-			{uint64(TNormal), 13, 40, 40, 33},
-			{uint64(TNormal), 14, 36, 36, 34},
-			{uint64(TNormal), 15, 39, 39, 34},
-			{uint64(TNormal), 16, 42, 42, 35},
-			{uint64(TNormal), 17, 38, 38, 36},
-			{uint64(TNormal), 18, 41, 41, 37},
-			{uint64(TNormal), 19, 45, 45, 38},
-			{uint64(TNormal), 20, 43, 43, 39},
-			{uint64(TNormal), 21, 44, 44, 40},
+			{uint64(Cmd_Normal), 11, 37, 37, 0},
+			{uint64(Cmd_Normal), 12, 35, 35, 0},
+			{uint64(Cmd_Normal), 13, 40, 40, 33},
+			{uint64(Cmd_Normal), 14, 36, 36, 34},
+			{uint64(Cmd_Normal), 15, 39, 39, 34},
+			{uint64(Cmd_Normal), 16, 42, 42, 35},
+			{uint64(Cmd_Normal), 17, 38, 38, 36},
+			{uint64(Cmd_Normal), 18, 41, 41, 37},
+			{uint64(Cmd_Normal), 19, 45, 45, 38},
+			{uint64(Cmd_Normal), 20, 43, 43, 39},
+			{uint64(Cmd_Normal), 21, 44, 44, 40},
 		},
 		30,
 	)
@@ -523,7 +528,7 @@ func Test_Replayer5(t *testing.T) {
 	})
 
 	var psnReaded []uint64
-	onRead := func(psn uint64, _ *recordEntry) {
+	onRead := func(psn uint64, _ LogEntry) {
 		if len(psnReaded) > 0 {
 			assert.Equal(t, psnReaded[len(psnReaded)-1]+1, psn)
 		}
@@ -531,13 +536,13 @@ func Test_Replayer5(t *testing.T) {
 	}
 
 	var dsnScheduled []uint64
-	onScheduled := func(_ uint64, _ *common.ClosedIntervals, r *recordEntry) {
-		for _, e := range r.entries {
+	onScheduled := func(_ uint64, _ *common.ClosedIntervals, r LogEntry) {
+		r.ForEachEntry(func(e *entry.Entry) {
 			if len(dsnScheduled) > 0 {
 				assert.True(t, dsnScheduled[len(dsnScheduled)-1] < e.DSN)
 			}
 			dsnScheduled = append(dsnScheduled, e.DSN)
-		}
+		})
 	}
 
 	r := newReplayer(
@@ -564,15 +569,15 @@ func Test_Replayer6(t *testing.T) {
 		0,
 		// MetaType,PSN,DSN-S,DSN-E,Safe
 		[][5]uint64{
-			{uint64(TNormal), 1, 8, 8, 7},
-			{uint64(TNormal), 2, 1, 1, 0},
-			{uint64(TNormal), 3, 2, 2, 1},
-			{uint64(TNormal), 4, 3, 3, 2},
-			{uint64(TNormal), 5, 6, 6, 5},
-			{uint64(TNormal), 6, 9, 9, 7},
-			{uint64(TNormal), 7, 7, 7, 6},
-			{uint64(TNormal), 8, 10, 10, 8},
-			{uint64(TNormal), 9, 12, 12, 10},
+			{uint64(Cmd_Normal), 1, 8, 8, 7},
+			{uint64(Cmd_Normal), 2, 1, 1, 0},
+			{uint64(Cmd_Normal), 3, 2, 2, 1},
+			{uint64(Cmd_Normal), 4, 3, 3, 2},
+			{uint64(Cmd_Normal), 5, 6, 6, 5},
+			{uint64(Cmd_Normal), 6, 9, 9, 7},
+			{uint64(Cmd_Normal), 7, 7, 7, 6},
+			{uint64(Cmd_Normal), 8, 10, 10, 8},
+			{uint64(Cmd_Normal), 9, 12, 12, 10},
 		},
 		30,
 	)
@@ -582,7 +587,7 @@ func Test_Replayer6(t *testing.T) {
 	})
 
 	var psnReaded []uint64
-	onRead := func(psn uint64, _ *recordEntry) {
+	onRead := func(psn uint64, e LogEntry) {
 		if len(psnReaded) > 0 {
 			assert.Equal(t, psnReaded[len(psnReaded)-1]+1, psn)
 		}
@@ -590,13 +595,13 @@ func Test_Replayer6(t *testing.T) {
 	}
 
 	var dsnScheduled []uint64
-	onScheduled := func(_ uint64, _ *common.ClosedIntervals, r *recordEntry) {
-		for _, e := range r.entries {
+	onScheduled := func(_ uint64, _ *common.ClosedIntervals, r LogEntry) {
+		r.ForEachEntry(func(e *entry.Entry) {
 			if len(dsnScheduled) > 0 {
 				assert.True(t, dsnScheduled[len(dsnScheduled)-1] < e.DSN)
 			}
 			dsnScheduled = append(dsnScheduled, e.DSN)
-		}
+		})
 	}
 
 	writeSkip := make(map[uint64]uint64)
@@ -633,19 +638,19 @@ func Test_Replayer7(t *testing.T) {
 		0,
 		// MetaType,PSN,DSN-S,DSN-E,Safe
 		[][5]uint64{
-			{uint64(TNormal), 1, 8, 8, 7},
-			{uint64(TNormal), 2, 1, 1, 0},
-			{uint64(TNormal), 3, 2, 2, 1},
-			{uint64(TNormal), 4, 3, 3, 2},
-			{uint64(TNormal), 5, 6, 6, 5},
-			{uint64(TNormal), 6, 9, 9, 7},
-			{uint64(TNormal), 7, 7, 7, 6},
-			{uint64(TNormal), 8, 10, 10, 8},
+			{uint64(Cmd_Normal), 1, 8, 8, 7},
+			{uint64(Cmd_Normal), 2, 1, 1, 0},
+			{uint64(Cmd_Normal), 3, 2, 2, 1},
+			{uint64(Cmd_Normal), 4, 3, 3, 2},
+			{uint64(Cmd_Normal), 5, 6, 6, 5},
+			{uint64(Cmd_Normal), 6, 9, 9, 7},
+			{uint64(Cmd_Normal), 7, 7, 7, 6},
+			{uint64(Cmd_Normal), 8, 10, 10, 8},
 			// here is the problem
 			// the safe DSN is 12 but there is no DSN 11 found
 			// it should not happen and the replayer should return an error
-			{uint64(TNormal), 9, 13, 13, 12},
-			{uint64(TNormal), 10, 12, 12, 10},
+			{uint64(Cmd_Normal), 9, 13, 13, 12},
+			{uint64(Cmd_Normal), 10, 12, 12, 10},
 		},
 		30,
 	)
@@ -655,7 +660,7 @@ func Test_Replayer7(t *testing.T) {
 	})
 
 	var psnReaded []uint64
-	onRead := func(psn uint64, _ *recordEntry) {
+	onRead := func(psn uint64, _ LogEntry) {
 		if len(psnReaded) > 0 {
 			assert.Equal(t, psnReaded[len(psnReaded)-1]+1, psn)
 		}
@@ -663,13 +668,13 @@ func Test_Replayer7(t *testing.T) {
 	}
 
 	var dsnScheduled []uint64
-	onScheduled := func(_ uint64, _ *common.ClosedIntervals, r *recordEntry) {
-		for _, e := range r.entries {
+	onScheduled := func(_ uint64, _ *common.ClosedIntervals, r LogEntry) {
+		r.ForEachEntry(func(e *entry.Entry) {
 			if len(dsnScheduled) > 0 {
 				assert.True(t, dsnScheduled[len(dsnScheduled)-1] < e.DSN)
 			}
 			dsnScheduled = append(dsnScheduled, e.DSN)
-		}
+		})
 	}
 
 	writeSkip := make(map[uint64]uint64)
@@ -706,14 +711,14 @@ func Test_Replayer8(t *testing.T) {
 		0,
 		// MetaType,PSN,DSN-S,DSN-E,Safe
 		[][5]uint64{
-			{uint64(TNormal), 1, 1, 1, 1},
-			{uint64(TNormal), 2, 2, 2, 2},
-			{uint64(TNormal), 3, 3, 3, 3},
-			{uint64(TNormal), 4, 5, 5, 3},
-			{uint64(TReplay), 5, 0, 0, 0},
-			{uint64(TNormal), 6, 6, 6, 4},
-			{uint64(TNormal), 7, 4, 4, 3},
-			{uint64(TNormal), 8, 5, 5, 4},
+			{uint64(Cmd_Normal), 1, 1, 1, 1},
+			{uint64(Cmd_Normal), 2, 2, 2, 2},
+			{uint64(Cmd_Normal), 3, 3, 3, 3},
+			{uint64(Cmd_Normal), 4, 5, 5, 3},
+			{uint64(Cmd_SkipDSN), 5, 0, 0, 0},
+			{uint64(Cmd_Normal), 6, 6, 6, 4},
+			{uint64(Cmd_Normal), 7, 4, 4, 3},
+			{uint64(Cmd_Normal), 8, 5, 5, 4},
 			// PXU TODO: add UT to test after replaying the skip, the DSN can be reused later
 		},
 		30,
@@ -726,7 +731,7 @@ func Test_Replayer8(t *testing.T) {
 	})
 
 	var psnReaded []uint64
-	onRead := func(psn uint64, _ *recordEntry) {
+	onRead := func(psn uint64, _ LogEntry) {
 		// if len(psnReaded) > 0 {
 		// 	assert.Equal(t, psnReaded[len(psnReaded)-1]+1, psn)
 		// }
@@ -735,14 +740,14 @@ func Test_Replayer8(t *testing.T) {
 	}
 
 	var dsnScheduled []uint64
-	onScheduled := func(_ uint64, _ *common.ClosedIntervals, r *recordEntry) {
-		for _, e := range r.entries {
+	onScheduled := func(_ uint64, _ *common.ClosedIntervals, r LogEntry) {
+		r.ForEachEntry(func(e *entry.Entry) {
 			if len(dsnScheduled) > 0 {
 				assert.True(t, dsnScheduled[len(dsnScheduled)-1] < e.DSN)
 			}
 			t.Logf("Scheduled DSN: %d", e.DSN)
 			dsnScheduled = append(dsnScheduled, e.DSN)
-		}
+		})
 	}
 
 	writeSkip := make(map[uint64]uint64)
