@@ -297,7 +297,7 @@ func collectObjectBatch(
 	}
 	if isObjectTombstone {
 		err = vector.AppendFixed(
-			data.Vecs[ckputil.TableObjectsAttr_CreateTS_Idx], types.TS{}, false, mp)
+			data.Vecs[ckputil.TableObjectsAttr_DeleteTS_Idx], types.TS{}, false, mp)
 		if err != nil {
 			return
 		}
