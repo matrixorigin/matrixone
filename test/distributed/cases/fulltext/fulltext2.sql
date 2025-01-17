@@ -522,4 +522,20 @@ drop table posts;
 
 
 
+drop table if exists fulltext_test01;
+create table `fulltext_test01` (
+`col1` bigint default NULL,
+`col2` int not null,
+`col3` varchar(200) default NULL,
+`col4` varchar(200) default NULL,
+PRIMARY KEY (`col2`),
+FULLTEXT f01(`col3`) WITH PARSER ngram
+);
+load data infile '$resources/external_table_file/zhwiki.txt' into table fulltext_test01 fields terminated by ':' ESCAPED BY '\t' lines terminated by '\n';
+show create table fulltext_test01;
+alter table fulltext_test01 drop index f01;
+show create table fulltext_test01;
+select * from fulltext_test01;
+drop table fulltext_test01;
+
 drop database test_fulltext;

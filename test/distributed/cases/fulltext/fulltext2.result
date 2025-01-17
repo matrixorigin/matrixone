@@ -608,4 +608,28 @@ where match(comment_text) AGAINST ('全文索引' IN NATURAL LANGUAGE MODE);
 
 drop table comments;
 drop table posts;
+drop table if exists fulltext_test01;
+create table `fulltext_test01` (
+`col1` bigint default NULL,
+`col2` int not null,
+`col3` varchar(200) default NULL,
+`col4` varchar(200) default NULL,
+PRIMARY KEY (`col2`),
+FULLTEXT f01(`col3`) WITH PARSER ngram
+);
+load data infile '$resources/external_table_file/zhwiki.txt' into table fulltext_test01 fields terminated by ':' ESCAPED BY '\t' lines terminated by '\n';
+show create table fulltext_test01;
+Table    Create Table
+fulltext_test01    CREATE TABLE `fulltext_test01` (\n  `col1` bigint DEFAULT NULL,\n  `col2` int NOT NULL,\n  `col3` varchar(200) DEFAULT NULL,\n  `col4` varchar(200) DEFAULT NULL,\n  PRIMARY KEY (`col2`),\n FULLTEXT `f01`(`col3`) WITH PARSER ngram\n)
+alter table fulltext_test01 drop index f01;
+show create table fulltext_test01;
+Table    Create Table
+fulltext_test01    CREATE TABLE `fulltext_test01` (\n  `col1` bigint DEFAULT NULL,\n  `col2` int NOT NULL,\n  `col3` varchar(200) DEFAULT NULL,\n  `col4` varchar(200) DEFAULT NULL,\n  PRIMARY KEY (`col2`)\n)
+select * from fulltext_test01;
+col1    col2    col3    col4
+608    1    Wikipedia    上载纪录/存档/2002年
+608    2    Wikipedia    删除纪录/档案馆/2004年3月
+608    26    Wikipedia    繁简分歧词表
+608    31    Wikipedia    宣告/2005年
+drop table fulltext_test01;
 drop database test_fulltext;
