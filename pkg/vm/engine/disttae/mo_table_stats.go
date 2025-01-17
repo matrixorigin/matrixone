@@ -2245,10 +2245,11 @@ func subscribeTable(
 		databaseName: tbl.dbName,
 	}
 
+	txnTbl.eng = eng
 	txnTbl.relKind = tbl.relKind
 	txnTbl.primarySeqnum = tbl.pkSequence
 
-	if pState, err = eng.(*Engine).PushClient().toSubscribeTable(ctx, &txnTbl); err != nil {
+	if pState, err = txnTbl.tryToSubscribe(ctx); err != nil {
 		return nil, err
 	}
 
