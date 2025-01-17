@@ -1610,6 +1610,21 @@ func (c *checkpointCleaner) FastExecute(inputCtx context.Context) (err error) {
 		extraErrMsg = fmt.Sprintf("ExecDelete %v failed", filesToGC)
 		return
 	}
+	if err = c.deleteStaleCKPMetaFileLocked(); err != nil {
+		logutil.Error(
+			"GC-TRY-DELETE-STALE-CKP-META-FILE-ERROR",
+			zap.Error(err),
+			zap.String("task", c.TaskNameLocked()),
+		)
+	}
+
+	if err = c.deleteStaleSnapshotFilesLocked(); err != nil {
+		logutil.Error(
+			"GC-TRY-DELETE-STALE-SNAPSHOT-FILES-ERROR",
+			zap.Error(err),
+			zap.String("task", c.TaskNameLocked()),
+		)
+	}
 	return
 }
 
@@ -1674,6 +1689,11 @@ func (c *checkpointCleaner) doFastGCAgainstGlobalCheckpointLocked(
 		window.tsRange.start,
 		window.tsRange.end,
 	))
+
+	wind := c.GetScannedWindowLocked()
+	for _, file := range wind.files {
+		logutil.Infof("doFastGCAgainstGlobalCheckpointLocked after GC, file: %s, tsRange: %s-%s", file.ObjectName().String(), wind.tsRange.start.ToString(), wind.tsRange.end.ToString())
+	}
 	return filesToGC, nil
 }
 
