@@ -197,8 +197,9 @@ func (ctr *container) pickAndSend(proc *process.Process, result *vm.CallResult) 
 	hasSame := false
 	var row int64
 	var cols []*vector.Vector
+	fromRemoveBatch := false
 	for {
-		if wholeLength == 0 {
+		if wholeLength == 0 || fromRemoveBatch {
 			choice = ctr.pickFirstRow()
 		} else {
 			if choice, hasSame = ctr.pickSameRow(row, cols); !hasSame {
@@ -219,12 +220,20 @@ func (ctr *container) pickAndSend(proc *process.Process, result *vm.CallResult) 
 		wholeLength++
 
 		ctr.indexList[choice]++
+		removeHasSame := true
 		if ctr.indexList[choice] == int64(ctr.batchList[choice].RowCount()) {
+			removeHasSame = ctr.hasSameRow(row, cols, choice)
 			ctr.removeBatch(proc, choice)
+			fromRemoveBatch = true
+		} else {
+			fromRemoveBatch = false
 		}
 
 		if len(ctr.indexList) == 0 {
 			sendOver = true
+			break
+		}
+		if !removeHasSame {
 			break
 		}
 	}
@@ -276,6 +285,30 @@ func (ctr *container) pickSameRow(row int64, cols []*vector.Vector) (batIndex in
 		}
 	}
 	return j, hasSame
+}
+
+func (ctr *container) hasSameRow(row int64, cols []*vector.Vector, choice int) (hasSame bool) {
+	l := len(ctr.indexList)
+
+	for j := 0; j < l; j++ {
+		if j == choice {
+			continue
+		}
+		hasSame = true
+		for k := 0; k < len(ctr.compares); k++ {
+			ctr.compares[k].Set(0, cols[k])
+			ctr.compares[k].Set(1, ctr.orderCols[j][k])
+			result := ctr.compares[k].Compare(0, 1, row, ctr.indexList[j])
+			if result != 0 {
+				hasSame = false
+				break
+			}
+		}
+		if hasSame {
+			break
+		}
+	}
+	return hasSame
 }
 
 func (ctr *container) removeBatch(proc *process.Process, index int) {
