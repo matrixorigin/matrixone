@@ -20,6 +20,7 @@ import (
 	"strconv"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -68,22 +69,23 @@ type JoinMap struct {
 	valid            bool
 	rowCnt           int64 // for debug purpose
 	refCnt           int64
+	mpool            *mpool.MPool
 	shm              *hashmap.StrHashMap
 	ihm              *hashmap.IntHashMap
-	mpool            *mpool.MPool
 	multiSels        JoinSels
+	delRows          *bitmap.Bitmap
 	batches          []*batch.Batch
-	//ignoreRows       *bitmap.Bitmap
 }
 
-func NewJoinMap(sels JoinSels, ihm *hashmap.IntHashMap, shm *hashmap.StrHashMap, batches []*batch.Batch, m *mpool.MPool) *JoinMap {
+func NewJoinMap(sels JoinSels, ihm *hashmap.IntHashMap, shm *hashmap.StrHashMap, delRows *bitmap.Bitmap, batches []*batch.Batch, m *mpool.MPool) *JoinMap {
 	return &JoinMap{
+		valid:     true,
+		mpool:     m,
 		shm:       shm,
 		ihm:       ihm,
 		multiSels: sels,
+		delRows:   delRows,
 		batches:   batches,
-		mpool:     m,
-		valid:     true,
 	}
 }
 
@@ -157,6 +159,10 @@ func (jm *JoinMap) IncRef(cnt int32) {
 
 func (jm *JoinMap) IsValid() bool {
 	return jm.valid
+}
+
+func (jm *JoinMap) IsDeleted(row uint64) bool {
+	return jm.delRows != nil && jm.delRows.Contains(uint64(row))
 }
 
 func (jm *JoinMap) FreeMemory() {
