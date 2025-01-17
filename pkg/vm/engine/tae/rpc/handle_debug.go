@@ -226,6 +226,12 @@ func getChangedListFromCheckpoints(
 		data    = &logtail.CheckpointData{}
 	)
 
+	defer func() {
+		if data != nil {
+			data.Close()
+		}
+	}()
+
 	logErr := func(e error, hint string) {
 		logutil.Info("handle get changed table list from ckp failed",
 			zap.Error(e),
@@ -234,6 +240,10 @@ func getChangedListFromCheckpoints(
 
 	ckps := h.GetDB().BGCheckpointRunner.GetAllCheckpoints()
 	for i := 0; i < len(ckps); i++ {
+		if data != nil {
+			data.Close()
+		}
+
 		if ckps[i] == nil {
 			continue
 		}
@@ -244,22 +254,22 @@ func getChangedListFromCheckpoints(
 
 		if data, err = ckps[i].PrefetchMetaIdx(ctx, h.GetDB().Runtime.Fs); err != nil {
 			logErr(err, ckps[i].String())
-			return
+			continue
 		}
 
 		if err = ckps[i].ReadMetaIdx(ctx, h.GetDB().Runtime.Fs, data); err != nil {
 			logErr(err, ckps[i].String())
-			return
+			continue
 		}
 
 		if err = ckps[i].Prefetch(ctx, h.GetDB().Runtime.Fs, data); err != nil {
 			logErr(err, ckps[i].String())
-			return
+			continue
 		}
 
 		if err = ckps[i].Read(ctx, h.GetDB().Runtime.Fs, data); err != nil {
 			logErr(err, ckps[i].String())
-			return
+			continue
 		}
 
 		dataObjBat := data.GetObjectBatchs()
@@ -273,20 +283,7 @@ func getChangedListFromCheckpoints(
 				tblIdVec := bats[j].GetVectorByName(logtail.SnapshotAttr_TID)
 				commitVec := bats[j].GetVectorByName(objectio.DefaultCommitTS_Attr)
 				if dbIdVec.Length() <= k || tblIdVec.Length() <= k || commitVec.Length() <= k {
-					logutil.Error("dbId/tblId/commit vector length not match",
-						zap.String("dbId vector", dbIdVec.String()),
-						zap.String("tblId vector", tblIdVec.String()),
-						zap.String("commit vector", commitVec.String()))
-
-					// some wrong, return quickly?
-					//resp.AccIds = req.AccIds
-					//resp.TableIds = req.TableIds
-					//resp.DatabaseIds = req.DatabaseIds
-					//tt := now.ToTimestamp()
-					//resp.Newest = &tt
-
-					err = moerr.NewInternalErrorNoCtx("dbId/tblId/ts vector length not match")
-					return
+					continue
 				}
 
 				dbId := dbIdVec.Get(k).(uint64)
@@ -300,7 +297,7 @@ func getChangedListFromCheckpoints(
 				dbEntry, err = h.GetDB().Catalog.GetDatabaseByID(dbId)
 				if err != nil {
 					logErr(err, fmt.Sprintf("get db entry failed: %d", dbId))
-					return
+					continue
 				}
 
 				tblIds = append(tblIds, tblId)
@@ -345,7 +342,7 @@ func getChangedListFromDirtyTree(
 
 		dbEntry, err = h.GetDB().Catalog.GetDatabaseByID(v.DbID)
 		if err != nil {
-			return
+			continue
 		}
 
 		tblIds = append(tblIds, v.ID)
@@ -445,6 +442,15 @@ func (h *Handle) HandleGetChangedTableList(
 	resp.TableIds = append(resp.TableIds, tblIds...)
 	resp.AccIds = append(resp.AccIds, accIds...)
 	resp.DatabaseIds = append(resp.DatabaseIds, dbIds...)
+
+	common.DoIfDebugEnabled(func() {
+		buf := bytes.Buffer{}
+		for i := range resp.TableIds {
+			buf.WriteString(fmt.Sprintf("%d-%d-%d; ",
+				resp.AccIds[i], resp.DatabaseIds[i], resp.TableIds[i]))
+		}
+		logutil.Infof("handle get changed table list ret: %s", buf.String())
+	})
 
 	return nil, nil
 }

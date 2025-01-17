@@ -638,6 +638,40 @@ func IsMoErrCode(e error, rc uint16) bool {
 	return me.code == rc
 }
 
+func GetMoErrCode(e error) (uint16, bool) {
+	if e == nil {
+		return 0, false
+	}
+
+	me, ok := e.(*Error)
+	if !ok {
+		return 0, false
+	}
+
+	return me.code, true
+}
+
+func IsSameMoErr(a error, b error) bool {
+	if a == nil || b == nil {
+		return false
+	}
+
+	var (
+		ok     bool
+		aa, bb *Error
+	)
+
+	if aa, ok = a.(*Error); !ok {
+		return false
+	}
+
+	if bb, ok = b.(*Error); !ok {
+		return false
+	}
+
+	return aa.code == bb.code
+}
+
 func DowncastError(e error) *Error {
 	if err, ok := e.(*Error); ok {
 		return err
