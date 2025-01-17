@@ -22,9 +22,7 @@ select * from fulltext01;
 
 create fulltext index ftidx on fulltext01 (LastName, FirstName);
 alter table fulltext01 add column newcolumn decimal after LastName;
--- @bvt:issue#20613
 show create table fulltext01;
--- @bvt:issue
 select * from fulltext01;
 truncate fulltext01;
 drop table fulltext01;
@@ -51,9 +49,7 @@ insert into employees(employeeNumber,lastName,firstName,extension,email,officeCo
 select * from employees;
 create fulltext index f01 on employees (LastName, FirstName);
 alter table employees drop column LastName;
--- @bvt:issue#20613
 show create table employees;
--- @bvt:issue
 select * from employees;
 select count(*) from employees;
 truncate employees;
@@ -70,9 +66,7 @@ insert into t1 values(3, 'a_cdef');
 insert into t1 values(4, 'ab_def');
 create fulltext index f02 on t1 (col2);
 alter table t1 modify column col2 text;
--- @bvt:issue#20613
 show create table t1;
--- @bvt:issue
 select * from t1;
 drop table t1;
 
@@ -124,9 +118,7 @@ insert into char01 values ('32jhbfchjecmwd%^&^(*&)UJHFRE%^T&YUHIJKNM', null);
 select * from char01;
 alter table char01 add fulltext index f01(col1);
 alter table char01 add fulltext index f02(col2);
--- @bvt:issue#20613
 show create table char01;
--- @bvt:issue
 drop table char01;
 
 
@@ -208,9 +200,7 @@ create table prepare_fulltext (a char primary key , b varchar(20));
 insert into prepare_fulltext values (1, 11), (2, 22), (3, 33);
 prepare stmt1 from 'create fulltext index f06 on prepare_fulltext (a)';
 execute stmt1;
--- @bvt:issue#20613
 show create table prepare_fulltext;
--- @bvt:issue
 select * from prepare_fulltext;
 drop table prepare_fulltext;
 
@@ -227,9 +217,7 @@ prepare stmt4 from 'alter table pro add fulltext index pro1(details) with PARSER
 execute stmt4;
 prepare stmt3 from 'alter table pro add fulltext index pro2(name)';
 execute stmt3;
--- @bvt:issue#20613
 show create table pro;
--- @bvt:issue
 insert into pro (name, details) values('手机', '{"brand": "Apple", "model": "iPhone 12", "price": 800}');
 select * from pro;
 drop table pro;
@@ -248,9 +236,7 @@ col6 text,
 PRIMARY KEY (`col1`),
 fulltext(col5)
 );
--- @bvt:issue#20613
 show create table test_table;
--- @bvt:issue
 load data infile '$resources/load_data/test_1.csv' into table test_table fields terminated by ',' parallel 'true';
 select * from test_table;
 drop table test_table;
@@ -291,9 +277,7 @@ create table t1(
 create fulltext index f06 on t1(col9);
 load data infile {'filepath'='$resources/load_data/jsonline_object01.jl','format'='jsonline','jsondata'='object'} into table t1;
 select * from t1;
--- @bvt:issue#20613
 show create table t1;
--- @bvt:issue
 drop table t1;
 
 
