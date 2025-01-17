@@ -126,6 +126,7 @@ func makeSoftDeleteFilterCoarseFilter(
 ) {
 	filterTable := meta.GetSnapshotTableIDs()
 	tables := meta.GetTableIDs()
+	logutil.Infof("GetTableIDs count is %d", len(tables))
 	return func(
 		ctx context.Context,
 		bm *bitmap.Bitmap,
@@ -157,6 +158,10 @@ func makeSoftDeleteFilterCoarseFilter(
 			}
 			if dropTS.IsEmpty() && tables[tableIDs[i]] != nil {
 				continue
+			}
+
+			if dropTS.IsEmpty() && tables[tableIDs[i]] == nil {
+				logutil.Infof("table %d is not in tables, name is %v", tableIDs[i], name)
 			}
 			if _, ok := (*filterTable)[tableIDs[i]]; ok {
 				logutil.Infof("table %d is in filter table, skip, name is %v", tableIDs[i], name)
