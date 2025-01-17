@@ -255,12 +255,12 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 				})
 			}
 		}
-		childId := node.Children[0]
-		childNode := builder.qry.Nodes[childId]
 
-		if childNode.NodeType == plan.Node_VALUE_SCAN {
+		if len(node.Children) == 0 {
 			break
 		}
+
+		childId := node.Children[0]
 		for _, expr := range node.TblFuncExprList {
 			increaseRefCnt(expr, 1, colRefCnt)
 		}
@@ -1754,7 +1754,8 @@ func (builder *QueryBuilder) rewriteStarApproxCount(nodeID int32) {
 							NodeType: plan.Node_VALUE_SCAN,
 						}
 						childId := builder.appendNode(scanNode, nil)
-						node.Children[0] = builder.buildMetadataScan(nil, nil, exprs, childId)
+						children := []int32{childId}
+						node.Children[0] = builder.buildMetadataScan(nil, nil, exprs, children)
 						child = builder.qry.Nodes[node.Children[0]]
 						switch expr := agg.Args[0].Expr.(type) {
 						case *plan.Expr_Col:
@@ -4607,15 +4608,13 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 		nodeId  int32
 	)
 
+	var children []int32
 	if preNodeId == -1 {
-		scanNode := &plan.Node{
-			NodeType: plan.Node_VALUE_SCAN,
-		}
-		childId = builder.appendNode(scanNode, ctx)
 		ctx.binder = NewTableBinder(builder, ctx)
 	} else {
 		ctx.binder = NewTableBinder(builder, leftCtx)
 		childId = builder.copyNode(ctx, preNodeId)
+		children = []int32{childId}
 	}
 
 	exprs := make([]*plan.Expr, 0, len(tbl.Func.Exprs))
@@ -4629,33 +4628,33 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 	id := tbl.Id()
 	switch id {
 	case "unnest":
-		nodeId, err = builder.buildUnnest(tbl, ctx, exprs, childId)
+		nodeId, err = builder.buildUnnest(tbl, ctx, exprs, children)
 	case "generate_series":
-		nodeId = builder.buildGenerateSeries(tbl, ctx, exprs, childId)
+		nodeId = builder.buildGenerateSeries(tbl, ctx, exprs, children)
 	case "meta_scan":
-		nodeId, err = builder.buildMetaScan(tbl, ctx, exprs, childId)
+		nodeId, err = builder.buildMetaScan(tbl, ctx, exprs, children)
 	case "current_account":
-		nodeId, err = builder.buildCurrentAccount(tbl, ctx, exprs, childId)
+		nodeId, err = builder.buildCurrentAccount(tbl, ctx, exprs, children)
 	case "metadata_scan":
-		nodeId = builder.buildMetadataScan(tbl, ctx, exprs, childId)
+		nodeId = builder.buildMetadataScan(tbl, ctx, exprs, children)
 	case "processlist", "mo_sessions":
-		nodeId, err = builder.buildProcesslist(tbl, ctx, exprs, childId)
+		nodeId, err = builder.buildProcesslist(tbl, ctx, exprs, children)
 	case "mo_configurations":
-		nodeId, err = builder.buildMoConfigurations(tbl, ctx, exprs, childId)
+		nodeId, err = builder.buildMoConfigurations(tbl, ctx, exprs, children)
 	case "mo_locks":
-		nodeId, err = builder.buildMoLocks(tbl, ctx, exprs, childId)
+		nodeId, err = builder.buildMoLocks(tbl, ctx, exprs, children)
 	case "mo_transactions":
-		nodeId, err = builder.buildMoTransactions(tbl, ctx, exprs, childId)
+		nodeId, err = builder.buildMoTransactions(tbl, ctx, exprs, children)
 	case "mo_cache":
-		nodeId, err = builder.buildMoCache(tbl, ctx, exprs, childId)
+		nodeId, err = builder.buildMoCache(tbl, ctx, exprs, children)
 	case "fulltext_index_scan":
-		nodeId, err = builder.buildFullTextIndexScan(tbl, ctx, exprs, childId)
+		nodeId, err = builder.buildFullTextIndexScan(tbl, ctx, exprs, children)
 	case "fulltext_index_tokenize":
-		nodeId, err = builder.buildFullTextIndexTokenize(tbl, ctx, exprs, childId)
+		nodeId, err = builder.buildFullTextIndexTokenize(tbl, ctx, exprs, children)
 	case "stage_list":
-		nodeId, err = builder.buildStageList(tbl, ctx, exprs, childId)
+		nodeId, err = builder.buildStageList(tbl, ctx, exprs, children)
 	case "moplugin_table":
-		nodeId, err = builder.buildPluginExec(tbl, ctx, exprs, childId)
+		nodeId, err = builder.buildPluginExec(tbl, ctx, exprs, children)
 	default:
 		err = moerr.NewNotSupportedf(builder.GetContext(), "table function '%s' not supported", id)
 	}

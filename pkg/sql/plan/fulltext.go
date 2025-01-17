@@ -76,7 +76,7 @@ var (
 )
 
 // arg list [param, source_table_name, index_table_name, search_against, mode]
-func (builder *QueryBuilder) buildFullTextIndexScan(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, childId int32) (int32, error) {
+func (builder *QueryBuilder) buildFullTextIndexScan(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
 
 	if len(exprs) != 5 {
 		return 0, moerr.NewInvalidInput(builder.GetContext(), "Invalid number of arguments (NARGS != 5).")
@@ -111,7 +111,7 @@ func (builder *QueryBuilder) buildFullTextIndexScan(tbl *tree.TableFunction, ctx
 		},
 		BindingTags:     []int32{builder.genNewTag()},
 		TblFuncExprList: exprs,
-		Children:        []int32{childId},
+		Children:        children,
 	}
 	return builder.appendNode(node, ctx), nil
 }
@@ -154,7 +154,7 @@ func (builder *QueryBuilder) getFullTextSql(fn *tree.FuncExpr, params string) (s
 
 // select * from index_table, fulltext_index_tokenize(doc_id, concat(body, ' ', title))
 // arg list [params, doc_id, content]
-func (builder *QueryBuilder) buildFullTextIndexTokenize(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, childId int32) (int32, error) {
+func (builder *QueryBuilder) buildFullTextIndexTokenize(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
 
 	if len(exprs) < 3 {
 		return 0, moerr.NewInvalidInput(builder.GetContext(), "Invalid number of arguments (NARGS < 3).")
@@ -166,7 +166,7 @@ func (builder *QueryBuilder) buildFullTextIndexTokenize(tbl *tree.TableFunction,
 		return 0, err
 	}
 
-	scanNode := builder.qry.Nodes[childId]
+	scanNode := builder.qry.Nodes[children[0]]
 	if scanNode.NodeType != plan.Node_TABLE_SCAN {
 		return 0, moerr.NewNoConfig(builder.GetContext(), "child node is not a TABLE SCAN")
 	}
@@ -194,7 +194,7 @@ func (builder *QueryBuilder) buildFullTextIndexTokenize(tbl *tree.TableFunction,
 		},
 		BindingTags:     []int32{builder.genNewTag()},
 		TblFuncExprList: exprs,
-		Children:        []int32{childId},
+		Children:        children,
 	}
 	return builder.appendNode(node, ctx), nil
 }
