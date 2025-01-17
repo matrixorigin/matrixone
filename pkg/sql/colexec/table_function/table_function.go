@@ -150,6 +150,12 @@ func (tableFunction *TableFunction) Prepare(proc *process.Process) error {
 		tblArg.ctr.state, err = stageListPrepare(proc, tblArg)
 	case "moplugin_table":
 		tblArg.ctr.state, err = pluginPrepare(proc, tblArg)
+	case "hnsw_create":
+		tblArg.ctr.state, err = hnswCreatePrepare(proc, tblArg)
+	case "hnsw_refresh":
+		tblArg.ctr.state, err = hnswRefreshPrepare(proc, tblArg)
+	case "hnsw_search":
+		tblArg.ctr.state, err = hnswSearchPrepare(proc, tblArg)
 	default:
 		tblArg.ctr.state = nil
 		err = moerr.NewNotSupported(proc.Ctx, fmt.Sprintf("table function %s is not supported", tblArg.FuncName))
