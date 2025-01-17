@@ -105,7 +105,7 @@ func _getColDefs(colDefs []*plan.ColDef) []*plan.ColDef {
 	return ret
 }
 
-func (builder *QueryBuilder) buildUnnest(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, childId int32) (int32, error) {
+func (builder *QueryBuilder) buildUnnest(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
 	colDefs := _getColDefs(defaultColDefs)
 	colName := findColName(tbl.Func)
 	node := &plan.Node{
@@ -121,7 +121,7 @@ func (builder *QueryBuilder) buildUnnest(tbl *tree.TableFunction, ctx *BindConte
 			Cols: colDefs,
 		},
 		BindingTags:     []int32{builder.genNewTag()},
-		Children:        []int32{childId},
+		Children:        children,
 		TblFuncExprList: exprs,
 	}
 	return builder.appendNode(node, ctx), nil

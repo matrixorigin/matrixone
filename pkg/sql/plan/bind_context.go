@@ -49,14 +49,10 @@ func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 
 	if parent != nil {
 		bc.defaultDatabase = parent.defaultDatabase
-		bc.normalCTE = parent.normalCTE
 		bc.cteName = parent.cteName
-		if parent.recSelect || parent.initSelect || parent.finalSelect {
+		if parent.bindingCte() {
 			bc.cteByName = parent.cteByName
-			bc.initSelect = parent.initSelect
-			bc.recSelect = parent.recSelect
-			bc.finalSelect = parent.finalSelect
-			bc.recRecursiveScanNodeId = parent.recRecursiveScanNodeId
+			bc.cteState = parent.cteState
 		}
 		bc.snapshot = parent.snapshot
 	}
@@ -65,7 +61,7 @@ func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 }
 
 func (bc *BindContext) rootTag() int32 {
-	if bc.initSelect || bc.recSelect {
+	if bc.bindingRecurCte() {
 		return bc.sinkTag
 	} else if bc.resultTag > 0 {
 		return bc.resultTag
@@ -84,11 +80,11 @@ func (bc *BindContext) topTag() int32 {
 
 func (bc *BindContext) findCTE(name string) *CTERef {
 	// the cte is masked already, we don't go further
-	if bc.maskedCTEs[name] {
+	if bc.cteState.masked(name) {
 		return nil
 	}
 	if cte, ok := bc.cteByName[name]; ok {
-		if !bc.maskedCTEs[name] {
+		if !bc.cteState.masked(name) {
 			return cte
 		}
 	}
@@ -96,11 +92,11 @@ func (bc *BindContext) findCTE(name string) *CTERef {
 	parent := bc.parent
 	for parent != nil {
 		// the cte is masked already, we don't go further
-		if _, ok2 := parent.maskedCTEs[name]; ok2 {
+		if parent.cteState.masked(name) {
 			break
 		}
 		if cte, ok := parent.cteByName[name]; ok {
-			if !parent.maskedCTEs[name] {
+			if !parent.cteState.masked(name) {
 				return cte
 			}
 		}
@@ -111,8 +107,9 @@ func (bc *BindContext) findCTE(name string) *CTERef {
 	return nil
 }
 
-func (bc *BindContext) recordCteInBinding(name string, cte *CTERef) {
-	bc.boundCtes[name] = cte
+func (bc *BindContext) recordCteInBinding(name string, cte CteBindState) {
+	bc.boundCtes[name] = cte.cte
+	bc.cteState = cte
 }
 
 func (bc *BindContext) cteInBinding(name string) bool {
