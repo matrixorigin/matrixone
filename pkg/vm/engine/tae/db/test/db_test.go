@@ -62,6 +62,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
@@ -11175,4 +11176,116 @@ func TestFlushCommitAndSchedRace(t *testing.T) {
 		// EOB, the tombstone is already flushed
 		require.Error(t, flushTask2.Execute(ctx))
 	}
+}
+
+func TestCheckpointV2(t *testing.T) {
+	ctx := context.Background()
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+
+	txn, err := tae.StartTxn(nil)
+	assert.NoError(t, err)
+	db, err := testutil.CreateDatabase2(ctx, txn, "db")
+	require.NoError(t, err)
+	schema := catalog.MockSchemaAll(2, 1)
+	rel, err := testutil.CreateRelation2(ctx, txn, db, schema)
+	require.NoError(t, err)
+	assert.NoError(t, txn.Commit(ctx))
+
+	// ckpStartTS := tae.TxnMgr.Now()
+
+	tbl := rel.GetMeta().(*catalog.TableEntry)
+	err = tae.ForceFlush(ctx, tae.TxnMgr.Now())
+	assert.NoError(t, err)
+	var tombstoneCnt, dataCnt int
+
+	addobjFn := func(tbl *catalog.TableEntry) {
+		n := rand.Intn(6)
+		var isTombstone bool
+		var create, delete types.TS
+		switch n % 2 {
+		case 1:
+			isTombstone = true
+			tombstoneCnt++
+		case 0:
+			isTombstone = false
+			dataCnt++
+		}
+		switch n % 3 {
+		case 1:
+			create = tae.TxnMgr.Now()
+			delete = tae.TxnMgr.Now()
+		case 2:
+			create = types.BuildTS(100, 0)
+			delete = tae.TxnMgr.Now()
+		case 0:
+			create = tae.TxnMgr.Now()
+		}
+		obj := catalog.MockObjectEntry(tbl, tae.Catalog, isTombstone, create, delete)
+		tbl.AddEntryLocked(obj)
+	}
+
+	for i := 0; i < 10000; i++ {
+		addobjFn(tbl)
+	}
+
+	collector := logtail.NewBaseCollector_V2(types.TS{}, tae.TxnMgr.Now(), tae.Opts.Fs, common.DebugAllocator)
+	err = collector.Collect(tae.Catalog)
+	assert.NoError(t, err)
+	data := collector.OrphanData()
+	collector.Close()
+	loc, _, _, err := data.WriteTo(ctx, tae.Opts.Fs)
+	assert.NoError(t, err)
+	data.Close()
+
+	catalog2 := catalog.MockCatalog()
+	dataFactory := tables.NewDataFactory(
+		tae.Runtime, tae.Dir,
+	)
+
+	replayer := logtail.NewCheckpointReplayer(loc, common.DebugAllocator)
+	replayer.PrefetchMeta("", tae.Opts.Fs)
+	err = replayer.ReadMeta(ctx, "", tae.Opts.Fs)
+	assert.NoError(t, err)
+	replayer.PrefetchData("", tae.Opts.Fs)
+	err = replayer.ReadData(ctx, "", tae.Opts.Fs)
+	assert.NoError(t, err)
+	replayer.ReplayObjectlist(ctx, catalog2, true, dataFactory)
+	readTxn, err := tae.StartTxn(nil)
+	assert.NoError(t, err)
+	closeFn := catalog2.RelayFromSysTableObjects(
+		ctx, readTxn, dataFactory, tables.ReadSysTableBatch, func(cols []containers.Vector, pkidx int) (err2 error) {
+			_, err2 = mergesort.SortBlockColumns(cols, pkidx, tae.Runtime.VectorPool.Transient)
+			return
+		}, &objlistReplayer{},
+	)
+	for _, fn := range closeFn {
+		fn()
+	}
+	replayer.ReplayObjectlist(ctx, catalog2, false, dataFactory)
+
+	var tombstoneCnt2, dataCnt2 int
+	p := &catalog.LoopProcessor{}
+	p.ObjectFn = func(oe *catalog.ObjectEntry) error {
+		if !pkgcatalog.IsSystemTable(oe.GetTable().ID) {
+			dataCnt2++
+		}
+		return nil
+	}
+	p.TombstoneFn = func(oe *catalog.ObjectEntry) error {
+		if !pkgcatalog.IsSystemTable(oe.GetTable().ID) {
+			tombstoneCnt2++
+		}
+		return nil
+	}
+	err = catalog2.RecurLoop(p)
+	assert.NoError(t, err)
+	assert.Equal(t, dataCnt, dataCnt2)
+	assert.Equal(t, tombstoneCnt, tombstoneCnt2)
+}
+
+type objlistReplayer struct{}
+
+func (r *objlistReplayer) Submit(_ uint64, fn func()) {
+	fn()
 }
