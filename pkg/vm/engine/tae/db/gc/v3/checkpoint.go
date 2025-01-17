@@ -1668,7 +1668,12 @@ func (c *checkpointCleaner) doFastGCAgainstGlobalCheckpointLocked(
 		extraErrMsg = fmt.Sprintf("ExecuteGlobalCheckpointBasedGC %v failed", window)
 		return nil, err
 	}
-
+	c.mutAddMetaFileLocked(metafile, ioutil.NewTSRangeFile(
+		metafile,
+		ioutil.CheckpointExt,
+		window.tsRange.start,
+		window.tsRange.end,
+	))
 	return filesToGC, nil
 }
 
