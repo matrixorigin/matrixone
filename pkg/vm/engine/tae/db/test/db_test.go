@@ -11225,7 +11225,7 @@ func TestCheckpointV2(t *testing.T) {
 		tbl.AddEntryLocked(obj)
 	}
 
-	for i := 0; i < 10; i++ {
+	for i := 0; i < 10000; i++ {
 		addobjFn(tbl)
 	}
 
