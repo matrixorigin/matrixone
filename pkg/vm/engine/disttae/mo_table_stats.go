@@ -1780,6 +1780,8 @@ func (d *dynamicCtx) alphaTask(
 	errQueue := make(chan alphaError, len(tbls)*2)
 	ticker = time.NewTicker(time.Millisecond * 10)
 
+	var lastError error
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -1787,11 +1789,13 @@ func (d *dynamicCtx) alphaTask(
 			return
 
 		case ae := <-errQueue:
-			if ae.err != nil {
+			if ae.err != nil && !moerr.IsSameMoErr(ae.err, lastError) {
 				logutil.Error(logHeader,
 					zap.String("source", "alpha task received err"),
 					zap.Error(ae.err))
 			}
+
+			lastError = ae.err
 
 			tblBackup[ae.order].valid = false
 
@@ -3096,10 +3100,10 @@ func applyTombstones(
 	//
 	// here, we only collect the deletes that have not paired inserts
 	// according to its LESS function, the deletes come first
-	var lastInsert *logtailreplay.RowEntry
+	var lastInsert logtailreplay.RowEntry
 	err = pState.ScanRows(true, func(entry *logtailreplay.RowEntry) (bool, error) {
 		if !entry.Deleted {
-			lastInsert = entry
+			lastInsert = *entry
 			return true, nil
 		}
 

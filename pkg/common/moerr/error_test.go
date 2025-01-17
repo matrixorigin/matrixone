@@ -110,3 +110,20 @@ func TestEncoding(t *testing.T) {
 	require.Nil(t, err)
 	require.Equal(t, e, e2)
 }
+
+func TestIsSameMoErr(t *testing.T) {
+	var a, b error
+	require.False(t, IsSameMoErr(a, b))
+
+	a = GetOkExpectedEOB()
+	require.False(t, IsSameMoErr(a, b))
+
+	b = GetOkExpectedDup()
+	require.False(t, IsSameMoErr(a, b))
+
+	b = nil
+	require.False(t, IsSameMoErr(a, b))
+
+	b = GetOkExpectedEOB()
+	require.True(t, IsSameMoErr(a, b))
+}
