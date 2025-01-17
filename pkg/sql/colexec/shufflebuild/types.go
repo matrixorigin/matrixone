@@ -52,6 +52,7 @@ type ShuffleBuild struct {
 	OnDuplicateAction plan.Node_OnDuplicateAction
 	DedupColName      string
 	DedupColTypes     []plan.Type
+	DelColIdx         int32
 
 	vm.OperatorBase
 }
