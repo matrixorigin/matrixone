@@ -2264,10 +2264,6 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 		ctx.results = ctx.projects
 	}
 
-	//if ctx.initSelect {
-	//	lastNodeID = appendSinkNodeWithTag(builder, ctx, lastNodeID, ctx.sinkTag)
-	//}
-
 	// set heading
 	if isRoot {
 		builder.qry.Headings = append(builder.qry.Headings, ctx.headings...)
@@ -2317,12 +2313,13 @@ func (builder *QueryBuilder) bindNoRecursiveCte(
 	cteRef *CTERef,
 	table string) (nodeID int32, err error) {
 	subCtx := NewBindContext(builder, ctx)
-	//subCtx.normalCTE = true
-	subCtx.cteKind = CteKindNoRecur
-	subCtx.maskedCTEs = cteRef.maskedCTEs
 	subCtx.cteName = table
 	subCtx.snapshot = cteRef.snapshot
-	subCtx.recordCteInBinding(table, cteRef)
+	subCtx.recordCteInBinding(table,
+		CteBindState{
+			cteBindType:   CteBindTypeNonRecur,
+			cte:           cteRef,
+			recScanNodeId: -1})
 	cteRef.isRecursive = false
 
 	oldSnapshot := builder.compCtx.GetSnapshot()
@@ -2364,8 +2361,12 @@ func (builder *QueryBuilder) bindRecursiveCte(
 	}
 	//1. bind initial statement
 	initCtx := NewBindContext(builder, ctx)
-	//initCtx.initSelect = true
-	initCtx.cteKind = CteKindInitStmt
+	initCtx.cteName = table
+	initCtx.recordCteInBinding(table,
+		CteBindState{
+			cteBindType:   CteBindTypeInitStmt,
+			cte:           cteRef,
+			recScanNodeId: -1})
 	initCtx.sinkTag = builder.genNewTag()
 	initLastNodeID, err1 := builder.bindSelect(&tree.Select{Select: *left}, initCtx, false)
 	if err1 != nil {
@@ -2387,13 +2388,8 @@ func (builder *QueryBuilder) bindRecursiveCte(
 	//3. bind recursive parts
 	for i, r := range stmts {
 		subCtx := NewBindContext(builder, ctx)
-		subCtx.maskedCTEs = cteRef.maskedCTEs
 		subCtx.cteName = table
-		//subCtx.recSelect = true
-		subCtx.cteKind = CteKindRecurStmt
 		subCtx.sinkTag = initCtx.sinkTag
-		//subCtx.cteByName = make(map[string]*CTERef)
-		//subCtx.cteByName[table] = cteRef
 		//3.0 add initial statement as table binding into the subCtx of recursive part
 		err = builder.addBinding(initLastNodeID, *cteRef.ast.Name, subCtx)
 		if err != nil {
@@ -2401,9 +2397,16 @@ func (builder *QueryBuilder) bindRecursiveCte(
 		}
 		//3.1 add recursive cte Node
 		_ = builder.appendStep(recursiveLastNodeID)
-		subCtx.recRecursiveScanNodeId = appendRecursiveScanNode(builder, subCtx, initSourceStep, subCtx.sinkTag)
-		recursiveNodeIDs[i] = subCtx.recRecursiveScanNodeId
+		recScanId := appendRecursiveScanNode(builder, subCtx, initSourceStep, subCtx.sinkTag)
+		recursiveNodeIDs[i] = recScanId
 		recursiveSteps[i] = int32(len(builder.qry.Steps))
+
+		subCtx.recordCteInBinding(table,
+			CteBindState{
+				cteBindType:   CteBindTypeRecurStmt,
+				cte:           cteRef,
+				recScanNodeId: recScanId})
+
 		recursiveLastNodeID, err = builder.bindSelect(&tree.Select{Select: r}, subCtx, false)
 		if err != nil {
 			return
@@ -2506,20 +2509,25 @@ func (builder *QueryBuilder) bindRecursiveCte(
 	return
 }
 
+// check if binding cte currently
 func (bc *BindContext) bindingCte() bool {
-	return bc.cteKind != CteKindDisable
+	return bc.cteState.cteBindType != CteBindTypeNone
 }
 
+// check if binding non recursive cte currently
 func (bc *BindContext) bindingNonRecurCte() bool {
-	return bc.cteKind == CteKindNoRecur
+	return bc.cteState.cteBindType == CteBindTypeNonRecur
 }
 
+// check if binding recursive cte currently
 func (bc *BindContext) bindingRecurCte() bool {
-	return bc.cteKind == CteKindInitStmt || bc.cteKind == CteKindRecurStmt
+	return bc.cteState.cteBindType == CteBindTypeInitStmt ||
+		bc.cteState.cteBindType == CteBindTypeRecurStmt
 }
 
+// check if binding recursive part of recursive cte currently
 func (bc *BindContext) bindingRecurStmt() bool {
-	return bc.cteKind == CteKindRecurStmt
+	return bc.cteState.cteBindType == CteBindTypeRecurStmt
 }
 
 func (builder *QueryBuilder) bindCte(
@@ -3547,11 +3555,6 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 		ctx.results = ctx.projects
 	}
 
-	//if (ctx.initSelect || ctx.recSelect) && !ctx.unionSelect {
-	//	nodeID = appendSinkNodeWithTag(builder, ctx, nodeID, ctx.sinkTag)
-	//	builder.qry.Nodes[nodeID].RecursiveCte = ctx.recSelect
-	//}
-
 	if isRoot {
 		builder.qry.Headings = append(builder.qry.Headings, ctx.headings...)
 	}
@@ -4099,10 +4102,12 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 			cteRef := ctx.findCTE(table)
 			if cteRef != nil {
 				if ctx.cteInBinding(table) {
-					return 0, moerr.NewParseErrorf(builder.GetContext(), "cte %s reference itself", table)
+					if ctx.bindingNonRecurCte() {
+						return 0, moerr.NewParseErrorf(builder.GetContext(), "cte %s reference itself", table)
+					}
 				}
 				if ctx.bindingRecurStmt() {
-					nodeID = ctx.recRecursiveScanNodeId
+					nodeID = ctx.cteState.recScanNodeId
 					return
 				}
 
