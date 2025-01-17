@@ -17,9 +17,11 @@ package table_function
 import (
 	"encoding/json"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/fulltext"
+	"github.com/matrixorigin/matrixone/pkg/hnsw"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -27,7 +29,8 @@ import (
 
 type hnswCreateState struct {
 	inited bool
-	param  fulltext.FullTextParserParam
+	param  hnsw.HnswParam
+	idxcfg hnsw.IndexTableConfig
 	offset int
 	// holding one call batch, tokenizedState owns it.
 	batch *batch.Batch
@@ -80,6 +83,23 @@ func (u *hnswCreateState) start(tf *TableFunction, proc *process.Process, nthRow
 			}
 		}
 
+		// IndexTableConfig
+		cfgVec := tf.ctr.argVecs[0]
+		if cfgVec.GetType().Oid != types.T_varchar {
+			return moerr.NewInvalidInput(proc.Ctx, "First argument (IndexTableConfig must be a string")
+		}
+		if !cfgVec.IsConst() {
+			return moerr.NewInternalError(proc.Ctx, "IndexTableConfig must be a String constant")
+		}
+		cfgstr := cfgVec.UnsafeGetStringAt(0)
+		if len(cfgstr) == 0 {
+			return moerr.NewInternalError(proc.Ctx, "IndexTableConfig is empty")
+		}
+		err := json.Unmarshal([]byte(cfgstr), &u.idxcfg)
+		if err != nil {
+			return err
+		}
+
 		u.batch = tf.createResultBatch()
 		u.inited = true
 	}
@@ -90,5 +110,45 @@ func (u *hnswCreateState) start(tf *TableFunction, proc *process.Process, nthRow
 	// cleanup the batch
 	u.batch.CleanOnlyData()
 
+	/*
+		vlen := len(tf.ctr.argVecs)
+
+		cfgVec := tf.ctr.argVecs[0]
+		if cfgVec.GetType().Oid != types.T_varchar {
+			return moerr.NewInvalidInput(proc.Ctx, "First argument (IndexTableConfig must be a string")
+		}
+		if !cfgVec.IsConst() {
+			return moerr.NewInternalError(proc.Ctx, "IndexTableConfig must be a String constant")
+		}
+		cfgstr := cfgVec.UnsafeGetStringAt(0)
+		if len(cfgstr) == 0 {
+			return moerr.NewInternalError(proc.Ctx, "IndexTableConfig is empty")
+		}
+		err := json.Unmarshall([]byte(cfgstr), &u.idxcfg)
+		if err != nil {
+			return err
+		}
+	*/
+
+	idVec := tf.ctr.argVecs[1]
+	if idVec.GetType().Oid != types.T_int64 {
+		return moerr.NewInvalidInput(proc.Ctx, "Second argument (pkid must be a bigint")
+	}
+	id := vector.GetFixedAtNoTypeCheck[int64](idVec, nthRow)
+
+	f32aVec := tf.ctr.argVecs[2]
+	if f32aVec.GetType().Oid != types.T_array_float32 {
+		return moerr.NewInvalidInput(proc.Ctx, "Third argument (vector must be a vecfs32 type")
+	}
+	if f32aVec.IsNull(uint64(nthRow)) {
+		return nil
+	}
+
+	dimension := f32aVec.GetType().Width
+	f32a := types.BytesToArray[float32](f32aVec.GetBytesAt(nthRow))
+
+	_ = id
+	_ = dimension
+	_ = f32a
 	return nil
 }
