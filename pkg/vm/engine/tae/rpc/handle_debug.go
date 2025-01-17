@@ -273,19 +273,6 @@ func getChangedListFromCheckpoints(
 				tblIdVec := bats[j].GetVectorByName(logtail.SnapshotAttr_TID)
 				commitVec := bats[j].GetVectorByName(objectio.DefaultCommitTS_Attr)
 				if dbIdVec.Length() <= k || tblIdVec.Length() <= k || commitVec.Length() <= k {
-					logutil.Error("dbId/tblId/commit vector length not match",
-						zap.String("dbId vector", dbIdVec.String()),
-						zap.String("tblId vector", tblIdVec.String()),
-						zap.String("commit vector", commitVec.String()))
-
-					// some wrong, return quickly?
-					//resp.AccIds = req.AccIds
-					//resp.TableIds = req.TableIds
-					//resp.DatabaseIds = req.DatabaseIds
-					//tt := now.ToTimestamp()
-					//resp.Newest = &tt
-
-					err = moerr.NewInternalErrorNoCtx("dbId/tblId/ts vector length not match")
 					continue
 				}
 
