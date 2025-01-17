@@ -233,8 +233,9 @@ func (collector *BaseCollector_V2) visitObject(entry *catalog.ObjectEntry) error
 		if node.IsAborted() {
 			continue
 		}
-		create := node.End.Equal(&entry.CreatedAt)
-		err := collectObjectBatch(collector.data.batch, entry, create, collector.packer, collector.data.allocator)
+		isObjectTombstone := node.End.Equal(&entry.CreatedAt)
+		err := collectObjectBatch(
+			collector.data.batch, entry, isObjectTombstone, collector.packer, collector.data.allocator)
 		if err != nil {
 			return err
 		}
@@ -247,29 +248,29 @@ func (collector *BaseCollector_V2) visitObject(entry *catalog.ObjectEntry) error
 }
 
 func collectObjectBatch(
-	bat *batch.Batch,
+	data *batch.Batch,
 	srcObjectEntry *catalog.ObjectEntry,
-	create bool,
+	isObjectTombstone bool,
 	encoder *types.Packer,
 	mp *mpool.MPool,
 ) (err error) {
 	err = vector.AppendFixed(
-		bat.Vecs[ckputil.TableObjectsAttr_Accout_Idx], srcObjectEntry.GetTable().GetDB().GetTenantID(), false, mp)
+		data.Vecs[ckputil.TableObjectsAttr_Accout_Idx], srcObjectEntry.GetTable().GetDB().GetTenantID(), false, mp)
 	if err != nil {
 		return
 	}
 	err = vector.AppendFixed(
-		bat.Vecs[ckputil.TableObjectsAttr_DB_Idx], srcObjectEntry.GetTable().GetDB().ID, false, mp)
+		data.Vecs[ckputil.TableObjectsAttr_DB_Idx], srcObjectEntry.GetTable().GetDB().ID, false, mp)
 	if err != nil {
 		return
 	}
 	err = vector.AppendFixed(
-		bat.Vecs[ckputil.TableObjectsAttr_Table_Idx], srcObjectEntry.GetTable().ID, false, mp)
+		data.Vecs[ckputil.TableObjectsAttr_Table_Idx], srcObjectEntry.GetTable().ID, false, mp)
 	if err != nil {
 		return
 	}
 	err = vector.AppendBytes(
-		bat.Vecs[ckputil.TableObjectsAttr_ID_Idx], srcObjectEntry.ObjectStats[:], false, mp)
+		data.Vecs[ckputil.TableObjectsAttr_ID_Idx], srcObjectEntry.ObjectStats[:], false, mp)
 	if err != nil {
 		return
 	}
@@ -279,34 +280,34 @@ func collectObjectBatch(
 		objType = ckputil.ObjectType_Tombstone
 	}
 	err = vector.AppendFixed(
-		bat.Vecs[ckputil.TableObjectsAttr_ObjectType_Idx], objType, false, mp)
+		data.Vecs[ckputil.TableObjectsAttr_ObjectType_Idx], objType, false, mp)
 	if err != nil {
 		return
 	}
 	ckputil.EncodeCluser(encoder, srcObjectEntry.GetTable().ID, objType, srcObjectEntry.ID())
 	err = vector.AppendBytes(
-		bat.Vecs[ckputil.TableObjectsAttr_Cluster_Idx], encoder.Bytes(), false, mp)
+		data.Vecs[ckputil.TableObjectsAttr_Cluster_Idx], encoder.Bytes(), false, mp)
 	if err != nil {
 		return
 	}
 	err = vector.AppendFixed(
-		bat.Vecs[ckputil.TableObjectsAttr_CreateTS_Idx], srcObjectEntry.CreatedAt, false, mp)
+		data.Vecs[ckputil.TableObjectsAttr_CreateTS_Idx], srcObjectEntry.CreatedAt, false, mp)
 	if err != nil {
 		return
 	}
-	if create {
+	if isObjectTombstone {
 		err = vector.AppendFixed(
-			bat.Vecs[ckputil.TableObjectsAttr_CreateTS_Idx], types.TS{}, false, mp)
+			data.Vecs[ckputil.TableObjectsAttr_CreateTS_Idx], types.TS{}, false, mp)
 		if err != nil {
 			return
 		}
 	} else {
 		err = vector.AppendFixed(
-			bat.Vecs[ckputil.TableObjectsAttr_DeleteTS_Idx], srcObjectEntry.CreatedAt, false, mp)
+			data.Vecs[ckputil.TableObjectsAttr_DeleteTS_Idx], srcObjectEntry.CreatedAt, false, mp)
 		if err != nil {
 			return
 		}
 	}
-	bat.SetRowCount(bat.Vecs[0].Length())
+	data.SetRowCount(data.Vecs[0].Length())
 	return
 }
