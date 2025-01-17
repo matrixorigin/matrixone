@@ -82,6 +82,7 @@ func MockObjectEntry(
 			Prepare: delete,
 			End:     delete,
 		}
+		object.DeletedAt = delete
 	}
 	return object
 }

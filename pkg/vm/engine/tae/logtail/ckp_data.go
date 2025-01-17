@@ -322,7 +322,7 @@ func collectObjectBatch(
 		}
 	} else {
 		if err = vector.AppendFixed(
-			data.Vecs[ckputil.TableObjectsAttr_DeleteTS_Idx], srcObjectEntry.CreatedAt, false, mp,
+			data.Vecs[ckputil.TableObjectsAttr_DeleteTS_Idx], srcObjectEntry.DeletedAt, false, mp,
 		); err != nil {
 			return
 		}
