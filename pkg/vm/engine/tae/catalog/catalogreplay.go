@@ -541,9 +541,6 @@ func (catalog *Catalog) OnReplayObjectBatch_V2(
 			panic(err)
 		}
 		if obj == nil {
-			if !deleteTSs[i].IsEmpty() {
-				panic("logic error")
-			}
 			obj = &ObjectEntry{
 				table: rel,
 				ObjectNode: ObjectNode{
@@ -564,16 +561,23 @@ func (catalog *Catalog) OnReplayObjectBatch_V2(
 				},
 				ObjectState: ObjectState_Create_ApplyCommit,
 			}
+			if !deleteTSs[i].IsEmpty() {
+				obj.DeletedAt = deleteTSs[i]
+				obj.DeleteNode = txnbase.TxnMVCCNode{
+					Start:   deleteTSs[i].Prev(),
+					Prepare: deleteTSs[i],
+					End:     deleteTSs[i],
+				}
+			}
 			rel.AddEntryLocked(obj)
 		} else {
-			if deleteTSs[i].IsEmpty() {
-				panic("logic error")
-			}
-			obj.DeletedAt = deleteTSs[i]
-			obj.DeleteNode = txnbase.TxnMVCCNode{
-				Start:   deleteTSs[i].Prev(),
-				Prepare: deleteTSs[i],
-				End:     deleteTSs[i],
+			if obj.DeletedAt.IsEmpty() {
+				obj.DeletedAt = deleteTSs[i]
+				obj.DeleteNode = txnbase.TxnMVCCNode{
+					Start:   deleteTSs[i].Prev(),
+					Prepare: deleteTSs[i],
+					End:     deleteTSs[i],
+				}
 			}
 		}
 		if obj.objData == nil {

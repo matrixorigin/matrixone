@@ -98,6 +98,7 @@ type CheckpointReplayer struct {
 
 	meta       containers.Vectors
 	locations  map[string]objectio.Location
+	maxBlkIDs  map[string]uint16
 	objectInfo []containers.Vectors
 
 	closeCB []func()
@@ -108,6 +109,7 @@ func NewCheckpointReplayer(location objectio.Location, mp *mpool.MPool) *Checkpo
 		location:   location,
 		mp:         mp,
 		locations:  make(map[string]objectio.Location),
+		maxBlkIDs:  make(map[string]uint16),
 		objectInfo: make([]containers.Vectors, 0),
 		closeCB:    make([]func(), 0),
 	}
@@ -134,9 +136,21 @@ func (replayer *CheckpointReplayer) ReadMeta(ctx context.Context, sid string, fs
 	}
 	replayer.closeCB = append(replayer.closeCB, release)
 	locationVec := replayer.meta[ckputil.MetaAttr_Location_Idx]
+	endRowIDs := vector.MustFixedColNoTypeCheck[types.Rowid](&replayer.meta[ckputil.MetaAttr_End_Idx])
 	for i := 0; i < locationVec.Length(); i++ {
 		location := objectio.Location(locationVec.GetBytesAt(i))
-		replayer.locations[location.String()] = location
+		rowID := endRowIDs[i]
+		_, blkOffset := rowID.BorrowBlockID().Offsets()
+		str := location.String()
+		replayer.locations[str] = location
+		maxBlkID, ok := replayer.maxBlkIDs[str]
+		if !ok {
+			replayer.maxBlkIDs[str] = blkOffset
+		} else {
+			if maxBlkID < blkOffset {
+				replayer.maxBlkIDs[str] = blkOffset
+			}
+		}
 	}
 	return
 }
@@ -148,23 +162,27 @@ func (replayer *CheckpointReplayer) PrefetchData(sid string, fs fileservice.File
 }
 
 func (replayer *CheckpointReplayer) ReadData(ctx context.Context, sid string, fs fileservice.FileService) (err error) {
-	for _, loc := range replayer.locations {
-		dataVecs := containers.NewVectors(len(ckputil.TableObjectsAttrs))
-		var release func()
-		if _, release, err = ioutil.LoadColumnsData(
-			ctx,
-			ckputil.TableObjectsSeqnums,
-			ckputil.TableObjectsTypes,
-			fs,
-			loc,
-			dataVecs,
-			replayer.mp,
-			0,
-		); err != nil {
-			return
+	for str, loc := range replayer.locations {
+		maxBlkID := replayer.maxBlkIDs[str]
+		for i := 0; i <= int(maxBlkID); i++ {
+			loc.SetID(uint16(i))
+			dataVecs := containers.NewVectors(len(ckputil.TableObjectsAttrs))
+			var release func()
+			if _, release, err = ioutil.LoadColumnsData(
+				ctx,
+				ckputil.TableObjectsSeqnums,
+				ckputil.TableObjectsTypes,
+				fs,
+				loc,
+				dataVecs,
+				replayer.mp,
+				0,
+			); err != nil {
+				return
+			}
+			replayer.closeCB = append(replayer.closeCB, release)
+			replayer.objectInfo = append(replayer.objectInfo, dataVecs)
 		}
-		replayer.closeCB = append(replayer.closeCB, release)
-		replayer.objectInfo = append(replayer.objectInfo, dataVecs)
 	}
 	return
 }
