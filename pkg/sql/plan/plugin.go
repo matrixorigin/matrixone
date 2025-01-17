@@ -37,7 +37,7 @@ var (
 )
 
 // arg list [command, datalink]
-func (builder *QueryBuilder) buildPluginExec(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, childId int32) (int32, error) {
+func (builder *QueryBuilder) buildPluginExec(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
 
 	if len(exprs) != 4 {
 		return 0, moerr.NewInvalidInput(builder.GetContext(), "Invalid number of arguments (NARGS != 4).")
@@ -59,7 +59,7 @@ func (builder *QueryBuilder) buildPluginExec(tbl *tree.TableFunction, ctx *BindC
 		},
 		BindingTags:     []int32{builder.genNewTag()},
 		TblFuncExprList: exprs,
-		Children:        []int32{childId},
+		Children:        children,
 	}
 	return builder.appendNode(node, ctx), nil
 }

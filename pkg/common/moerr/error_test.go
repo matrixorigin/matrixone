@@ -110,3 +110,53 @@ func TestEncoding(t *testing.T) {
 	require.Nil(t, err)
 	require.Equal(t, e, e2)
 }
+
+type fakeErr struct {
+}
+
+func (f *fakeErr) Error() string {
+	return "fake error"
+}
+
+func TestIsSameMoErr(t *testing.T) {
+	var a, b error
+	require.False(t, IsSameMoErr(a, b))
+
+	_, ok := GetMoErrCode(a)
+	require.False(t, ok)
+
+	_, ok = GetMoErrCode(b)
+	require.False(t, ok)
+
+	a = &fakeErr{}
+	require.False(t, IsSameMoErr(a, b))
+
+	_, ok = GetMoErrCode(a)
+	require.False(t, ok)
+
+	b = &fakeErr{}
+	require.False(t, IsSameMoErr(a, b))
+
+	_, ok = GetMoErrCode(b)
+	require.False(t, ok)
+
+	a = GetOkExpectedEOB()
+	require.False(t, IsSameMoErr(a, b))
+
+	code, ok := GetMoErrCode(a)
+	require.True(t, ok)
+	require.Equal(t, OkExpectedEOB, code)
+
+	b = GetOkExpectedDup()
+	require.False(t, IsSameMoErr(a, b))
+
+	code, ok = GetMoErrCode(b)
+	require.True(t, ok)
+	require.Equal(t, OkExpectedDup, code)
+
+	b = nil
+	require.False(t, IsSameMoErr(a, b))
+
+	b = GetOkExpectedEOB()
+	require.True(t, IsSameMoErr(a, b))
+}
