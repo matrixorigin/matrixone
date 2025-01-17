@@ -106,9 +106,10 @@ Project
         ->  Join
               Join Type: INNER
               Join Cond: (src.id = mo_fulltext_alias_0.doc_id)
+              Runtime Filter Build: #[-1,0]
               ->  Table Scan on fulltext.src
+                    Runtime Filter Probe: src.id
               ->  Table Function on fulltext_index_scan
-                    ->  Values Scan "*VALUES*" 
 delete from src;
 select * from src where match(body) against('red');
 id    body    title
@@ -199,9 +200,10 @@ Project
         ->  Join
               Join Type: INNER
               Join Cond: (src.id = mo_fulltext_alias_0.doc_id)
+              Runtime Filter Build: #[-1,0]
               ->  Table Scan on fulltext.src
+                    Runtime Filter Probe: src.id
               ->  Table Function on fulltext_index_scan
-                    ->  Values Scan "*VALUES*" 
 desc src;
 Field    Type    Null    Key    Default    Extra    Comment
 id    BIGINT(64)    NO    PRI    null        
@@ -376,9 +378,10 @@ Project
         ->  Join
               Join Type: INNER
               Join Cond: (src.id = mo_fulltext_alias_0.doc_id)
+              Runtime Filter Build: #[-1,0]
               ->  Table Scan on fulltext.src
+                    Runtime Filter Probe: src.id
               ->  Table Function on fulltext_index_scan
-                    ->  Values Scan "*VALUES*" 
 update src set body='color is brown' where id=0;
 select * from src where match(body, title) against('brown');
 id    body    title
