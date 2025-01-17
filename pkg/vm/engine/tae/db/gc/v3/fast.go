@@ -77,7 +77,6 @@ func (e *CheckpointFastGCJob) Execute(ctx context.Context) error {
 	transObjects := make(map[string]*ObjectEntry, 100)
 	coarseFilter, err := makeSoftDeleteFilterCoarseFilter(
 		&transObjects,
-		e.filterTables,
 		e.snapshotMeta,
 	)
 	if err != nil {
