@@ -148,6 +148,7 @@ func makeSoftDeleteFilterCoarseFilter(
 					dropTS:   dropTS,
 					db:       dbs[i],
 					table:    tableIDs[i],
+					row:      i,
 				}
 				(*transObjects)[name] = object
 				continue
@@ -167,6 +168,7 @@ func makeSoftDeleteFilterCoarseFilter(
 			bm.Add(uint64(i))
 			if (*transObjects)[name] != nil {
 				(*transObjects)[name].dropTS = dropTS
+				bm.Add(uint64((*transObjects)[name].row))
 				continue
 			}
 		}
