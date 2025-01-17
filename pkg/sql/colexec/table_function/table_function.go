@@ -189,3 +189,7 @@ func (tableFunction *TableFunction) ApplyStart(nthRow int, proc *process.Process
 func (tableFunction *TableFunction) ApplyCall(proc *process.Process) (vm.CallResult, error) {
 	return tableFunction.ctr.state.call(tableFunction, proc)
 }
+
+func (tableFunction *TableFunction) ApplyEnd(proc *process.Process) error {
+	return tableFunction.ctr.state.end(tableFunction, proc)
+}

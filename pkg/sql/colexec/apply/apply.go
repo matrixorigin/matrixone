@@ -78,7 +78,12 @@ func (apply *Apply) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, nil
 			}
 			if ctr.inbat.Last() {
+				// last batch
 				result.Batch = ctr.inbat
+				err := apply.TableFunction.ApplyEnd(proc)
+				if err != nil {
+					return result, err
+				}
 				return result, nil
 			}
 			if ctr.inbat.IsEmpty() {
