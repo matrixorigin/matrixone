@@ -71,9 +71,9 @@ func TestPreInsertNormal(t *testing.T) {
 			},
 			Pkey: &plan.PrimaryKeyDef{},
 		},
-		Attrs:      []string{"int64_column", "scalar_int64", "varchar_column", "scalar_varchar", "int64_column"},
-		IsUpdate:   false,
-		HasAutoCol: false,
+		Attrs:       []string{"int64_column", "scalar_int64", "varchar_column", "scalar_varchar", "int64_column"},
+		IsOldUpdate: false,
+		HasAutoCol:  false,
 		OperatorBase: vm.OperatorBase{
 			OperatorInfo: vm.OperatorInfo{
 				Idx:     0,
@@ -183,7 +183,7 @@ func TestPreInsertHasAutoCol(t *testing.T) {
 	}).AnyTimes()
 
 	incrService := mock_frontend.NewMockAutoIncrementService(ctrl)
-	incrService.EXPECT().InsertValues(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(uint64(111111), nil).AnyTimes()
+	incrService.EXPECT().InsertValues(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(uint64(111111), nil).AnyTimes()
 
 	proc := testutil.NewProc()
 	proc.Base.TxnClient = txnClient
@@ -203,8 +203,8 @@ func TestPreInsertHasAutoCol(t *testing.T) {
 			},
 			Pkey: &plan.PrimaryKeyDef{},
 		},
-		Attrs:    []string{"int64_column", "scalar_int64", "varchar_column", "scalar_varchar", "int64_column"},
-		IsUpdate: false,
+		Attrs:       []string{"int64_column", "scalar_int64", "varchar_column", "scalar_varchar", "int64_column"},
+		IsOldUpdate: false,
 		OperatorBase: vm.OperatorBase{
 			OperatorInfo: vm.OperatorInfo{
 				Idx:     0,
@@ -249,16 +249,16 @@ func TestPreInsertIsUpdate(t *testing.T) {
 	}).AnyTimes()
 
 	incrService := mock_frontend.NewMockAutoIncrementService(ctrl)
-	incrService.EXPECT().InsertValues(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(uint64(111111), nil).AnyTimes()
+	incrService.EXPECT().InsertValues(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(uint64(111111), nil).AnyTimes()
 
 	proc := testutil.NewProc()
 	proc.Base.TxnClient = txnClient
 	proc.Base.IncrService = incrService
 	proc.Base.SessionInfo.StorageEngine = eng
 	argument1 := PreInsert{
-		ctr:        container{},
-		IsUpdate:   true,
-		SchemaName: "testDb",
+		ctr:         container{},
+		IsOldUpdate: true,
+		SchemaName:  "testDb",
 		TableDef: &plan.TableDef{
 			Cols: []*plan.ColDef{
 				{Name: "int64_column", Typ: i64typ},

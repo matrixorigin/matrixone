@@ -267,3 +267,6 @@ drop pitr if exists p20;
 create pitr for account sys range 1 'y';
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 15 near " for account sys range 1 'y';";
 drop account acc01;
+drop pitr pitr01;
+show pitr;
+PITR_NAME    CREATED_TIME    MODIFIED_TIME    PITR_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME    PITR_LENGTH    PITR_UNIT

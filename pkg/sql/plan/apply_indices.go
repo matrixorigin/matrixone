@@ -923,7 +923,8 @@ func (builder *QueryBuilder) getMostSelectiveIndexForPointSelect(indexes []*Inde
 func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
 	sid := builder.compCtx.GetProcess().GetService()
 
-	if node.JoinType == plan.Node_INDEX {
+	if node.JoinType != plan.Node_INNER && node.JoinType != plan.Node_RIGHT && node.JoinType != plan.Node_SEMI &&
+		(node.JoinType != plan.Node_ANTI || !node.BuildOnLeft) {
 		return nodeID
 	}
 

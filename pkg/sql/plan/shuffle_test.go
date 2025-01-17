@@ -209,7 +209,7 @@ func TestGetShuffleDop(t *testing.T) {
 	n = getShuffleDop(4, 2, 100000000000)
 	require.Equal(t, 16, n)
 	n = getShuffleDop(64, 1, 10000000000000)
-	require.Equal(t, 64, n)
+	require.Equal(t, 256, n)
 
 	n = getShuffleDop(16, 3, 1500000000)
 	require.Equal(t, 40, n)
@@ -248,11 +248,11 @@ func TestGetShuffleDop(t *testing.T) {
 	require.Equal(t, 16, n)
 
 	n = getShuffleDop(64, 1, 1500000000)
-	require.Equal(t, 64, n)
+	require.Equal(t, 256, n)
 	n = getShuffleDop(64, 1, 150000000)
-	require.Equal(t, 64, n)
+	require.Equal(t, 256, n)
 	n = getShuffleDop(64, 1, 15000000)
-	require.Equal(t, 64, n)
+	require.Equal(t, 128, n)
 	n = getShuffleDop(64, 1, 1500000)
 	require.Equal(t, 64, n)
 
