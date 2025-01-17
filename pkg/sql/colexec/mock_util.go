@@ -123,6 +123,20 @@ func MakeMockBatchs() *batch.Batch {
 	return bat
 }
 
+func MakeMockPartitionBatchs(val int32) *batch.Batch {
+	bat := batch.New([]string{"a"})
+	vecs := makeMockPartitionVecs(val)
+	bat.Vecs = vecs
+	bat.SetRowCount(vecs[0].Length())
+	return bat
+}
+
+func makeMockPartitionVecs(val int32) []*vector.Vector {
+	vecs := make([]*vector.Vector, 1)
+	vecs[0] = testutil.MakeInt32Vector([]int32{val, val, val}, nil)
+	return vecs
+}
+
 func makeMockTimeWinVecs() []*vector.Vector {
 	vecs := make([]*vector.Vector, 2)
 	vecs[0] = testutil.MakeDatetimeVector([]string{

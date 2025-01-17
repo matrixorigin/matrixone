@@ -99,8 +99,10 @@ func newExpression(pos int32, typeID types.T) *plan.Expr {
 }
 
 func resetChildren(arg *Partition) {
-	bat := colexec.MakeMockBatchs()
-	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	bat1 := colexec.MakeMockPartitionBatchs(1)
+	bat2 := colexec.MakeMockPartitionBatchs(2)
+	bat3 := colexec.MakeMockPartitionBatchs(3)
+	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat1, bat2, bat3})
 	arg.Children = nil
 	arg.AppendChild(op)
 }
