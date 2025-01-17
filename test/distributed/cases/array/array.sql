@@ -10,6 +10,11 @@ desc vec_table;
 insert into vec_table values(1, "[1,2,3]", "[4,5,6]");
 select * from vec_table;
 
+set save_query_result = on;
+/* save_result */ select * from vec_table;
+select * from result_scan(last_query_id()) as u;
+set save_query_result = off;
+
 -- binary operators
 select b+b from vec_table;
 select b-b from vec_table;
@@ -106,6 +111,10 @@ insert into t7 values(2, "[0.8166459, 0.66616553, 0.4886152]", NULL);
 insert into t7 values(3, "[0.1726299, 3.2908857, 30.433094]","[0.45052445, 2.1984527, 9.579752, 123.48039, 4635.894]");
 insert into t7 values(4, "[8.560689, 6.790359, 821.9778]", "[0.46323407, 23.498016, 563.923, 56.076736, 8732.958]");
 select * from t7;
+set save_query_result = on;
+/* save_result */ select * from t7;
+select * from result_scan(last_query_id()) as u;
+set save_query_result = off;
 select a, b + b, c + c from t7;
 select a, b * b, c * c from t7;
 select l2_norm(b), l2_norm(c) from t7;
