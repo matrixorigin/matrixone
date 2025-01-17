@@ -26,7 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -220,7 +220,8 @@ func (s *service) GetLastAllocateTS(
 func (s *service) InsertValues(
 	ctx context.Context,
 	tableID uint64,
-	bat *batch.Batch,
+	vecs []*vector.Vector,
+	rows int,
 	estimate int64,
 ) (uint64, error) {
 	ts, err := s.getCommittedTableCache(
@@ -232,7 +233,8 @@ func (s *service) InsertValues(
 	return ts.insertAutoValues(
 		ctx,
 		tableID,
-		bat,
+		vecs,
+		rows,
 		estimate,
 	)
 }

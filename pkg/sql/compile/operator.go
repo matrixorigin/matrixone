@@ -533,11 +533,13 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.SchemaName = t.SchemaName
 		op.TableDef = t.TableDef
 		op.Attrs = t.Attrs
-		op.IsUpdate = t.IsUpdate
+		op.IsOldUpdate = t.IsOldUpdate
+		op.IsNewUpdate = t.IsNewUpdate
 		op.HasAutoCol = t.HasAutoCol
 		op.EstimatedRowCount = t.EstimatedRowCount
 		op.CompPkeyExpr = t.CompPkeyExpr
 		op.ClusterByExpr = t.ClusterByExpr
+		op.ColOffset = t.ColOffset
 		op.SetInfo(&info)
 		return op
 	case vm.Deletion:
@@ -598,6 +600,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op := multi_update.NewArgument()
 		op.MultiUpdateCtx = t.MultiUpdateCtx
 		op.Action = t.Action
+		op.IsRemote = t.IsRemote
 		op.IsOnduplicateKeyUpdate = t.IsOnduplicateKeyUpdate
 		op.Engine = t.Engine
 		op.SetInfo(&info)
@@ -627,6 +630,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.DedupColTypes = t.DedupColTypes
 		op.UpdateColIdxList = t.UpdateColIdxList
 		op.UpdateColExprList = t.UpdateColExprList
+		op.DelColIdx = t.DelColIdx
 
 		return op
 	case vm.PostDml:
@@ -770,10 +774,12 @@ func constructPreInsert(ns []*plan.Node, n *plan.Node, eg engine.Engine, proc *p
 	op.SchemaName = schemaName
 	op.TableDef = preCtx.TableDef
 	op.Attrs = attrs
-	op.IsUpdate = preCtx.IsUpdate
+	op.IsOldUpdate = preCtx.IsOldUpdate
+	op.IsNewUpdate = preCtx.IsNewUpdate
 	op.EstimatedRowCount = int64(ns[n.Children[0]].Stats.Outcnt)
 	op.CompPkeyExpr = preCtx.CompPkeyExpr
 	op.ClusterByExpr = preCtx.ClusterByExpr
+	op.ColOffset = preCtx.ColOffset
 
 	return op, nil
 }
@@ -812,9 +818,10 @@ func constructLockOp(n *plan.Node, eng engine.Engine) (*lockop.LockOp, error) {
 	return arg, nil
 }
 
-func constructMultiUpdate(n *plan.Node, eg engine.Engine) *multi_update.MultiUpdate {
+func constructMultiUpdate(n *plan.Node, eg engine.Engine, isRemote bool) *multi_update.MultiUpdate {
 	arg := multi_update.NewArgument()
 	arg.Engine = eg
+	arg.IsRemote = isRemote
 
 	arg.MultiUpdateCtx = make([]*multi_update.MultiUpdateCtx, len(n.UpdateCtxList))
 	for i, updateCtx := range n.UpdateCtxList {
@@ -1132,9 +1139,13 @@ func constructDedupJoin(n *plan.Node, leftTypes, rightTypes []types.Type, proc *
 	arg.OnDuplicateAction = n.OnDuplicateAction
 	arg.DedupColName = n.DedupColName
 	arg.DedupColTypes = n.DedupColTypes
+	arg.DelColIdx = -1
 	if n.DedupJoinCtx != nil {
 		arg.UpdateColIdxList = n.DedupJoinCtx.UpdateColIdxList
 		arg.UpdateColExprList = n.DedupJoinCtx.UpdateColExprList
+		if n.OnDuplicateAction == plan.Node_FAIL && len(n.DedupJoinCtx.OldColList) > 0 {
+			arg.DelColIdx = n.DedupJoinCtx.OldColList[0].ColPos
+		}
 	}
 	arg.IsShuffle = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle
 	for i := range n.SendMsgList {
@@ -1872,6 +1883,7 @@ func constructHashBuild(op vm.Operator, proc *process.Process, mcpu int32) *hash
 		ret.OnDuplicateAction = arg.OnDuplicateAction
 		ret.DedupColName = arg.DedupColName
 		ret.DedupColTypes = arg.DedupColTypes
+		ret.DelColIdx = arg.DelColIdx
 		if len(arg.RuntimeFilterSpecs) > 0 {
 			ret.RuntimeFilterSpec = arg.RuntimeFilterSpecs[0]
 		}
@@ -2004,6 +2016,7 @@ func constructShuffleBuild(op vm.Operator, proc *process.Process) *shufflebuild.
 		ret.OnDuplicateAction = arg.OnDuplicateAction
 		ret.DedupColName = arg.DedupColName
 		ret.DedupColTypes = arg.DedupColTypes
+		ret.DelColIdx = arg.DelColIdx
 		if len(arg.RuntimeFilterSpecs) > 0 {
 			ret.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(arg.RuntimeFilterSpecs[0])
 		}

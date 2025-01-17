@@ -120,7 +120,7 @@ var (
 	}
 )
 
-func (builder *QueryBuilder) buildMetaScan(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, childId int32) (int32, error) {
+func (builder *QueryBuilder) buildMetaScan(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
 	var err error
 	val, err := builder.compCtx.ResolveVariable("save_query_result", true, false)
 	if err == nil {
@@ -151,7 +151,7 @@ func (builder *QueryBuilder) buildMetaScan(tbl *tree.TableFunction, ctx *BindCon
 			Cols: MetaColDefs,
 		},
 		BindingTags:     []int32{builder.genNewTag()},
-		Children:        []int32{childId},
+		Children:        children,
 		TblFuncExprList: exprs,
 	}
 	return builder.appendNode(node, ctx), nil

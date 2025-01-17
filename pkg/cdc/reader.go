@@ -100,8 +100,15 @@ func (reader *tableReader) Close() {
 }
 
 func (reader *tableReader) Run(ctx context.Context, ar *ActiveRoutine) {
-	var err error
+	key := GenDbTblKey(reader.info.SourceDbName, reader.info.SourceTblName)
+	if _, loaded := reader.runningReaders.LoadOrStore(key, reader); loaded {
+		logutil.Infof("cdc tableReader(%v).Run: already running, end", reader.info)
+		reader.Close()
+		return
+	}
 	logutil.Infof("cdc tableReader(%v).Run: start", reader.info)
+
+	var err error
 	defer func() {
 		if err != nil {
 			if err = reader.wMarkUpdater.SaveErrMsg(reader.info.SourceDbName, reader.info.SourceTblName, err.Error()); err != nil {
@@ -109,11 +116,10 @@ func (reader *tableReader) Run(ctx context.Context, ar *ActiveRoutine) {
 			}
 		}
 		reader.Close()
-		reader.runningReaders.Delete(GenDbTblKey(reader.info.SourceDbName, reader.info.SourceTblName))
+		reader.runningReaders.Delete(key)
 		logutil.Infof("cdc tableReader(%v).Run: end", reader.info)
 	}()
 
-	reader.runningReaders.Store(GenDbTblKey(reader.info.SourceDbName, reader.info.SourceTblName), reader)
 	for {
 		select {
 		case <-ctx.Done():
@@ -192,12 +198,13 @@ func (reader *tableReader) readTableWithTxn(
 	ctx context.Context,
 	txnOp client.TxnOperator,
 	packer *types.Packer,
-	ar *ActiveRoutine) (err error) {
+	ar *ActiveRoutine,
+) (err error) {
 	var rel engine.Relation
 	var changes engine.ChangesHandle
+
 	//step1 : get relation
-	_, _, rel, err = GetRelationById(ctx, reader.cnEngine, txnOp, reader.info.SourceTblId)
-	if err != nil {
+	if _, _, rel, err = GetRelationById(ctx, reader.cnEngine, txnOp, reader.info.SourceTblId); err != nil {
 		return
 	}
 
@@ -225,6 +232,7 @@ func (reader *tableReader) readTableWithTxn(
 	//step3: pull data
 	var insertData, deleteData *batch.Batch
 	var insertAtmBatch, deleteAtmBatch *AtomicBatch
+	var hasBegin bool
 
 	defer func() {
 		if insertData != nil {
@@ -239,6 +247,20 @@ func (reader *tableReader) readTableWithTxn(
 		if deleteAtmBatch != nil {
 			deleteAtmBatch.Close()
 		}
+
+		curTs := reader.wMarkUpdater.GetFromMem(reader.info.SourceDbName, reader.info.SourceTblName)
+		// if curTs != toTs, means this procedure end abnormally, need to rollback
+		// e.g. encounter errors, or interrupted by user (pause/cancel)
+		if !curTs.Equal(&toTs) {
+			logutil.Errorf("cdc tableReader(%v).readTableWithTxn end abnormally", reader.info)
+			if hasBegin {
+				reader.sinker.SendRollback()
+				reader.sinker.SendDummy()
+				if rollbackErr := reader.sinker.Error(); rollbackErr != nil {
+					logutil.Errorf("cdc tableReader(%v) send rollback failed, err: %v", reader.info, rollbackErr)
+				}
+			}
+		}
 	}()
 
 	allocateAtomicBatchIfNeed := func(atmBatch *AtomicBatch) *AtomicBatch {
@@ -247,51 +269,6 @@ func (reader *tableReader) readTableWithTxn(
 		}
 		return atmBatch
 	}
-
-	addStartMetrics := func() {
-		count := float64(batchRowCount(insertData) + batchRowCount(deleteData))
-		allocated := float64(insertData.Allocated() + deleteData.Allocated())
-		v2.CdcTotalProcessingRecordCountGauge.Add(count)
-		v2.CdcHoldChangesBytesGauge.Add(allocated)
-		v2.CdcReadRecordCounter.Add(count)
-	}
-
-	addSnapshotEndMetrics := func() {
-		count := float64(batchRowCount(insertData))
-		allocated := float64(insertData.Allocated())
-		v2.CdcTotalProcessingRecordCountGauge.Sub(count)
-		v2.CdcHoldChangesBytesGauge.Sub(allocated)
-		v2.CdcSinkRecordCounter.Add(count)
-	}
-
-	addTailEndMetrics := func(bat *AtomicBatch) {
-		count := float64(bat.RowCount())
-		allocated := float64(bat.Allocated())
-		v2.CdcTotalProcessingRecordCountGauge.Sub(count)
-		v2.CdcHoldChangesBytesGauge.Sub(allocated)
-		v2.CdcSinkRecordCounter.Add(count)
-	}
-
-	hasBegin := false
-	defer func() {
-		if err == nil { // execute successfully before
-			if hasBegin {
-				// error may not be caught immediately
-				reader.sinker.SendCommit()
-				// so send a dummy sql to guarantee previous commit is sent successfully
-				reader.sinker.SendDummy()
-				err = reader.sinker.Error()
-			}
-
-			if err == nil {
-				reader.wMarkUpdater.UpdateMem(reader.info.SourceDbName, reader.info.SourceTblName, toTs)
-			}
-		} else { // has error already
-			if hasBegin {
-				reader.sinker.SendRollback()
-			}
-		}
-	}()
 
 	var curHint engine.ChangesHandle_Hint
 	for {
@@ -319,19 +296,33 @@ func (reader *tableReader) readTableWithTxn(
 
 		// both nil denote no more data (end of this tail)
 		if insertData == nil && deleteData == nil {
-			// heartbeat
+			// heartbeat, send remaining data in sinker
 			reader.sinker.Sink(ctx, &DecoderOutput{
 				noMoreData: true,
 				fromTs:     fromTs,
 				toTs:       toTs,
 			})
+
 			// send a dummy to guarantee last piece of snapshot/tail send successfully
 			reader.sinker.SendDummy()
-			err = reader.sinker.Error()
+			if err = reader.sinker.Error(); err == nil {
+				if hasBegin {
+					// error may not be caught immediately
+					reader.sinker.SendCommit()
+					// so send a dummy sql to guarantee previous commit is sent successfully
+					reader.sinker.SendDummy()
+					err = reader.sinker.Error()
+				}
+
+				// if commit successfully, update watermark
+				if err == nil {
+					reader.wMarkUpdater.UpdateMem(reader.info.SourceDbName, reader.info.SourceTblName, toTs)
+				}
+			}
 			return
 		}
 
-		addStartMetrics()
+		addStartMetrics(insertData, deleteData)
 
 		switch curHint {
 		case engine.ChangesHandle_Snapshot:
@@ -348,7 +339,7 @@ func (reader *tableReader) readTableWithTxn(
 				fromTs:        fromTs,
 				toTs:          toTs,
 			})
-			addSnapshotEndMetrics()
+			addSnapshotEndMetrics(insertData)
 			insertData.Clean(reader.mp)
 		case engine.ChangesHandle_Tail_wip:
 			insertAtmBatch = allocateAtomicBatchIfNeed(insertAtmBatch)
