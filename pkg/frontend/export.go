@@ -593,12 +593,13 @@ func exportDataFromResultSetToCSVFile(oq *ExportConfig) error {
 			if err != nil {
 				return err
 			}
-			// if value if []byte
 			if _, ok := value.([]byte); ok {
 				value = addEscapeToString(value.([]byte))
 			} else if arr, ok := value.([]float32); ok {
+				// this is for T_array_float32 type
 				value = []byte(types.ArrayToString[float32](arr))
 			} else if arr, ok := value.([]float64); ok {
+				// this is for T_array_float64 type
 				value = []byte(types.ArrayToString[float64](arr))
 			}
 
