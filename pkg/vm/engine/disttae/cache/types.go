@@ -141,6 +141,10 @@ type TableItem struct {
 	ClusterByIdx int
 }
 
+func (item *TableItem) IsDeleted() bool {
+	return item.deleted
+}
+
 func (item *TableItem) String() string {
 	return fmt.Sprintln(
 		"item ptr", uintptr(unsafe.Pointer(item)),
