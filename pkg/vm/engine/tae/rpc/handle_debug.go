@@ -226,6 +226,12 @@ func getChangedListFromCheckpoints(
 		data    = &logtail.CheckpointData{}
 	)
 
+	defer func() {
+		if data != nil {
+			data.Close()
+		}
+	}()
+
 	logErr := func(e error, hint string) {
 		logutil.Info("handle get changed table list from ckp failed",
 			zap.Error(e),
@@ -234,6 +240,10 @@ func getChangedListFromCheckpoints(
 
 	ckps := h.GetDB().BGCheckpointRunner.GetAllCheckpoints()
 	for i := 0; i < len(ckps); i++ {
+		if data != nil {
+			data.Close()
+		}
+
 		if ckps[i] == nil {
 			continue
 		}
