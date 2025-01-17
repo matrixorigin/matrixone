@@ -24,13 +24,13 @@ var ErrAllRecordsRead = moerr.NewInternalErrorNoCtx("driver read cache: all reco
 type readCache struct {
 	psns []uint64
 	// PSN -> Record mapping
-	records map[uint64]*recordEntry
+	records map[uint64]LogEntry
 }
 
 func newReadCache() readCache {
 	return readCache{
 		psns:    make([]uint64, 0),
-		records: make(map[uint64]*recordEntry),
+		records: make(map[uint64]LogEntry),
 	}
 }
 
@@ -46,8 +46,7 @@ func (c *readCache) removeRecord(psn uint64) {
 }
 
 func (c *readCache) addRecord(
-	// psn uint64, r logservice.LogRecord,
-	psn uint64, e *recordEntry,
+	psn uint64, e LogEntry,
 ) (updated bool) {
 	if _, ok := c.records[psn]; ok {
 		return
@@ -63,7 +62,7 @@ func (c *readCache) isEmpty() bool {
 	return len(c.records) == 0
 }
 
-func (c *readCache) getRecord(psn uint64) (r *recordEntry, err error) {
+func (c *readCache) getRecord(psn uint64) (r LogEntry, err error) {
 	var ok bool
 	if r, ok = c.records[psn]; !ok {
 		err = ErrRecordNotFound

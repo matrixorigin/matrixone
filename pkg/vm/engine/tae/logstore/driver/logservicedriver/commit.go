@@ -28,7 +28,7 @@ var ErrTooMuchPenddings = moerr.NewInternalErrorNoCtx("too much penddings")
 func (d *LogServiceDriver) Append(e *entry.Entry) error {
 	d.dsnmu.Lock()
 	e.DSN = d.allocateDSNLocked()
-	_, err := d.doAppendLoop.Enqueue(e)
+	_, err := d.commitLoop.Enqueue(e)
 	if err != nil {
 		panic(err)
 	}
@@ -36,37 +36,51 @@ func (d *LogServiceDriver) Append(e *entry.Entry) error {
 	return nil
 }
 
-func (d *LogServiceDriver) getAppender() *driverAppender {
-	if int(d.currentAppender.entry.payloadSize) > d.config.RecordSize {
-		d.flushCurrentAppender()
+func (d *LogServiceDriver) getCommitter() *groupCommitter {
+	if int(d.committer.writer.Size()) > d.config.RecordSize {
+		d.flushCurrentCommitter()
 	}
-	return d.currentAppender
+	return d.committer
 }
 
-// this function flushes the current appender to the append queue and
-// creates a new appender as the current appender
-func (d *LogServiceDriver) flushCurrentAppender() {
-	d.scheduleAppend(d.currentAppender)
-	d.appendWaitQueue <- d.currentAppender
-	d.currentAppender = newDriverAppender()
+// this function flushes the current committer to the append queue and
+// creates a new committer as the current committer
+func (d *LogServiceDriver) flushCurrentCommitter() {
+	d.asyncCommit(d.committer)
+	d.commitWaitQueue <- d.committer
+	d.committer = getCommitter()
 }
 
-func (d *LogServiceDriver) onAppendRequests(items ...any) {
+func (d *LogServiceDriver) onCommitIntents(items ...any) {
 	for _, item := range items {
 		e := item.(*entry.Entry)
-		appender := d.getAppender()
-		appender.appendEntry(e)
+		committer := d.getCommitter()
+		committer.AddIntent(e)
 	}
-	d.flushCurrentAppender()
+	d.flushCurrentCommitter()
 }
 
-func (d *LogServiceDriver) scheduleAppend(appender *driverAppender) {
-	appender.client, appender.writeToken = d.getClientForWrite()
-	appender.entry.SetAppended(d.getSynced())
-	appender.contextDuration = d.config.NewClientDuration
-	appender.wg.Add(1)
+func (d *LogServiceDriver) asyncCommit(committer *groupCommitter) {
+	// apply write token and bind the client for committing
+	committer.client, committer.writeToken = d.getClientForWrite()
+
+	// set the safe DSN for the committer
+	// the safe DSN is the DSN of the last committed entry
+	// it is used to apply the DSN in consecutive sequence
+	committer.writer.SetSafeDSN(d.getCommittedDSNWatermark())
+
+	committer.Add(1)
 	d.appendPool.Submit(func() {
-		appender.append(d.config.RetryTimeout, d.config.ClientAppendDuration)
+		defer committer.Done()
+		if err := committer.Commit(
+			10,
+			d.config.ClientAppendDuration,
+		); err != nil {
+			logutil.Fatal(
+				"Wal-Cannot-Append",
+				zap.Error(err),
+			)
+		}
 	})
 }
 
@@ -108,26 +122,33 @@ func (d *LogServiceDriver) getClientForWrite() (client *wrappedClient, token uin
 	return
 }
 
-func (d *LogServiceDriver) onWaitAppendRequests(items []any, nextQueue chan any) {
-	appenders := make([]*driverAppender, 0, len(items))
+func (d *LogServiceDriver) onWaitCommitted(items []any, nextQueue chan any) {
+	committers := make([]*groupCommitter, 0, len(items))
 	for _, item := range items {
-		appender := item.(*driverAppender)
-		appender.waitDone()
-		d.clientPool.Put(appender.client)
-		appender.freeEntries()
-		appenders = append(appenders, appender)
+		committer := item.(*groupCommitter)
+		committer.Wait()
+		committer.PutbackClient(d.clientPool)
+		committer.NotifyCommitted()
+		committers = append(committers, committer)
 	}
-	nextQueue <- appenders
+
+	// PXU TODO: enqueue one by one
+	nextQueue <- committers
 }
 
-func (d *LogServiceDriver) onAppendDone(items []any, _ chan any) {
-	tokens := make([]uint64, 0, len(items))
+func (d *LogServiceDriver) onCommitDone(items []any, _ chan any) {
+	// PXU TODO: why need this queue???
 	for _, v := range items {
-		appenders := v.([]*driverAppender)
-		for _, appender := range appenders {
-			d.logAppend(appender)
-			tokens = append(tokens, appender.writeToken)
+		committers := v.([]*groupCommitter)
+		for i, committer := range committers {
+			d.recordCommitInfo(committer)
+			d.reuse.tokens = append(d.reuse.tokens, committer.writeToken)
+			putCommitter(committer)
+			committers[i] = nil
 		}
 	}
-	d.putbackWriteTokens(tokens)
+
+	d.commitWatermark()
+	d.putbackWriteTokens(d.reuse.tokens)
+	d.reuse.tokens = d.reuse.tokens[:0]
 }
