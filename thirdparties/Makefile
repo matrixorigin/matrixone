@@ -53,23 +53,22 @@ install/include/stringzilla/stringzilla.h:
 	cp -r $(STRINGZILLA_DIR)/include/* install/include
 
 USEARCH_CMAKE_FLAG := -DUSEARCH_BUILD_BENCH_CPP=OFF -DUSEARCH_BUILD_TEST_C=OFF -DUSEARCH_BUILD_TEST_CPP=OFF -DUSEARCH_BUILD_LIB_C=ON -DCMAKE_CXX_FLAGS=-I$(PWD)/install/include
+AVX512FP16 :=
 
 ifeq ($(UNAME_S),linux)
+  ifeq ($(MUSL),)
 	USEARCH_CMAKE_FLAG += -DUSEARCH_USE_OPENMP=1
+  endif
+  AVX512FP16 := $(shell lscpu | grep avx512fp16)
 endif
 
-#require avx512fp16 - disable for now
-#ifeq ($(UNAME_M),x86_64)
-#  ifeq ($(CC),gcc)
-#	USEARCH_CMAKE_FLAG += -DUSEARCH_USE_SIMSIMD=1
-#  endif
-#  ifeq ($(CC),)
-#	USEARCH_CMAKE_FLAG += -DUSEARCH_USE_SIMSIMD=1
-#  endif
-#  ifeq ($(CC),cc)
-#	USEARCH_CMAKE_FLAG += -DUSEARCH_USE_SIMSIMD=1
-#  endif
-#endif
+ifeq ($(UNAME_M),x86_64)
+  ifneq ($(AVX512FP16),)
+    ifeq ($(MUSL),)
+	USEARCH_CMAKE_FLAG += -DUSEARCH_USE_SIMSIMD=1
+    endif
+  endif
+endif
 
 install/include/usearch.h:
 	rm -rf $(USEARCH_DIR)
