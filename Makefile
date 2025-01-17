@@ -150,7 +150,7 @@ musl-cgo: musl-install
 
 
 musl-thirdparties: musl-install
-	@(cd $(ROOT_DIR)/thirdparties; CC=$(MUSL_CC) CXX=$(MUSL_CXX) ${MAKE} ${CGO_DEBUG_OPT})
+	@(cd $(ROOT_DIR)/thirdparties; MUSL=ON CC=$(MUSL_CC) CXX=$(MUSL_CXX) ${MAKE} ${CGO_DEBUG_OPT})
 	
 .PHONY: musl
 musl: override CGO_OPTS += CC=$(MUSL_CC)
