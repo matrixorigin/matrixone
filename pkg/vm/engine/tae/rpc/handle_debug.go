@@ -227,6 +227,10 @@ func (h *Handle) HandleGetChangedTableList(
 	now = types.BuildTS(time.Now().UnixNano(), 0)
 
 	defer func() {
+		if data != nil {
+			data.Close()
+		}
+
 		tt := now.ToTimestamp()
 		resp.Newest = &tt
 	}()
@@ -270,6 +274,11 @@ func (h *Handle) HandleGetChangedTableList(
 	logutil.Info("handle get changed table list", zap.Int("got ckp", len(ckps)))
 
 	for i := 0; i < len(ckps); i++ {
+
+		if data != nil {
+			data.Close()
+		}
+
 		if ckps[i] == nil {
 			continue
 		}
@@ -310,19 +319,7 @@ func (h *Handle) HandleGetChangedTableList(
 				tblIdVec := bats[j].GetVectorByName(logtail.SnapshotAttr_TID)
 				commitVec := bats[j].GetVectorByName(objectio.DefaultCommitTS_Attr)
 				if dbIdVec.Length() <= k || tblIdVec.Length() <= k || commitVec.Length() <= k {
-					logutil.Error("dbId/tblId/commit vector length not match",
-						zap.String("dbId vector", dbIdVec.String()),
-						zap.String("tblId vector", tblIdVec.String()),
-						zap.String("commit vector", commitVec.String()))
-
-					// some wrong, return quickly?
-					//resp.AccIds = req.AccIds
-					//resp.TableIds = req.TableIds
-					//resp.DatabaseIds = req.DatabaseIds
-					//tt := now.ToTimestamp()
-					//resp.Newest = &tt
-
-					return nil, nil
+					continue
 				}
 
 				dbId := dbIdVec.Get(k).(uint64)
