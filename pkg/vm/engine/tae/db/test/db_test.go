@@ -9706,6 +9706,12 @@ func TestGlobalCheckpoint7(t *testing.T) {
 		return tae.Wal.GetPenddingCnt() == 0
 	})
 	assert.Equal(t, uint64(0), tae.Wal.GetPenddingCnt())
+	testutils.WaitExpect(
+		1000,
+		func() bool {
+			return len(tae.BGCheckpointRunner.GetAllCheckpoints()) > 0
+		},
+	)
 
 	entries := tae.BGCheckpointRunner.GetAllCheckpoints()
 	for _, e := range entries {
