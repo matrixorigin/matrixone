@@ -11,6 +11,10 @@ insert into src values (0, 'color is red', 't1'), (1, 'car is yellow', 'crazy ca
 create fulltext index ftidx on src (body, title);
 select * from src where match(body) against('red');
 not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+select * from src where match(body,title) against('+]]]');
+internal error: Invalid input search string.  search string onverted to empty pattern
+select * from src where match(body,title) against('+I'm');
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 55 near "m');";
 select match(body) against('red') from src;
 not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
 alter table src add fulltext index ftidx2 (body);
@@ -96,9 +100,10 @@ Project
         ->  Join
               Join Type: INNER
               Join Cond: (src.id = mo_fulltext_alias_0.doc_id)
+              Runtime Filter Build: #[-1,0]
               ->  Table Scan on fulltext.src
+                    Runtime Filter Probe: src.id
               ->  Table Function on fulltext_index_scan
-                    ->  Values Scan "*VALUES*" 
 delete from src;
 select * from src where match(body) against('red');
 id    body    title
@@ -189,9 +194,10 @@ Project
         ->  Join
               Join Type: INNER
               Join Cond: (src.id = mo_fulltext_alias_0.doc_id)
+              Runtime Filter Build: #[-1,0]
               ->  Table Scan on fulltext.src
+                    Runtime Filter Probe: src.id
               ->  Table Function on fulltext_index_scan
-                    ->  Values Scan "*VALUES*" 
 desc src;
 Field    Type    Null    Key    Default    Extra    Comment
 id    BIGINT(64)    NO    PRI    null        
@@ -366,9 +372,10 @@ Project
         ->  Join
               Join Type: INNER
               Join Cond: (src.id = mo_fulltext_alias_0.doc_id)
+              Runtime Filter Build: #[-1,0]
               ->  Table Scan on fulltext.src
+                    Runtime Filter Probe: src.id
               ->  Table Function on fulltext_index_scan
-                    ->  Values Scan "*VALUES*" 
 update src set body='color is brown' where id=0;
 select * from src where match(body, title) against('brown');
 id    body    title

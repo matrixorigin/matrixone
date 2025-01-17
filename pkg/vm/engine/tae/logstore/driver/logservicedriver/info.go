@@ -23,7 +23,6 @@ import (
 
 	"github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
@@ -53,9 +52,11 @@ type driverInfo struct {
 	dsn   uint64
 	dsnmu sync.RWMutex
 
-	syncing  uint64
-	synced   uint64
-	syncedMu sync.RWMutex
+	watermark struct {
+		mu            sync.RWMutex
+		committingDSN uint64
+		committedDSN  uint64
+	}
 
 	truncateDSNIntent atomic.Uint64 //
 	truncatedPSN      uint64        //
@@ -99,8 +100,8 @@ func (info *driverInfo) GetDSN() uint64 {
 
 func (info *driverInfo) resetDSNStats(stats *DSNStats) {
 	info.dsn = stats.Max
-	info.synced = stats.Max
-	info.syncing = stats.Max
+	info.watermark.committingDSN = stats.Max
+	info.watermark.committedDSN = stats.Max
 	if stats.Min != math.MaxUint64 {
 		info.truncateDSNIntent.Store(stats.Min - 1)
 	}
@@ -214,24 +215,31 @@ func (info *driverInfo) tryApplyWriteToken(
 	return info.writeController.maxIssuedToken, nil
 }
 
-func (info *driverInfo) logAppend(appender *driverAppender) {
+func (info *driverInfo) recordCommitInfo(committer *groupCommitter) {
 	info.psn.mu.Lock()
-	array := make([]uint64, 0, len(appender.entry.Meta.addr))
-	for key := range appender.entry.Meta.addr {
-		array = append(array, key)
+	cnt := int(committer.writer.Entry.GetEntryCount())
+	startDSN := committer.writer.Entry.GetStartDSN()
+	dsns := make([]uint64, 0, cnt)
+	for i := 0; i < cnt; i++ {
+		dsn := startDSN + uint64(i)
+		dsns = append(dsns, dsn)
 	}
-	info.psn.records.Add(appender.logserviceLsn)
-	interval := common.NewClosedIntervalsBySlice(array)
-	info.psn.dsnMap[appender.logserviceLsn] = interval
+	info.psn.records.Add(committer.psn)
+	interval := common.NewClosedIntervalsBySlice(dsns)
+	info.psn.dsnMap[committer.psn] = interval
 	info.psn.mu.Unlock()
-	if interval.GetMin() != info.syncing+1 {
-		panic(fmt.Sprintf("logic err, expect %d, min is %d", info.syncing+1, interval.GetMin()))
+
+	if interval.GetMin() != info.watermark.committingDSN+1 {
+		panic(fmt.Sprintf(
+			"logic err, expect %d, min is %d",
+			info.watermark.committingDSN+1,
+			interval.GetMin()),
+		)
 	}
 	if len(interval.Intervals) != 1 {
-		logutil.Debugf("interval is %v", interval)
 		panic("logic err")
 	}
-	info.syncing = interval.GetMax()
+	info.watermark.committingDSN = interval.GetMax()
 }
 
 func (info *driverInfo) gcPSN(psn uint64) {
@@ -253,17 +261,19 @@ func (info *driverInfo) gcPSN(psn uint64) {
 	}
 }
 
-func (info *driverInfo) getSynced() uint64 {
-	info.syncedMu.RLock()
-	lsn := info.synced
-	info.syncedMu.RUnlock()
-	return lsn
+func (info *driverInfo) getCommittedDSNWatermark() uint64 {
+	info.watermark.mu.RLock()
+	defer info.watermark.mu.RUnlock()
+	return info.watermark.committedDSN
 }
-func (info *driverInfo) putbackWriteTokens(tokens []uint64) {
-	info.syncedMu.Lock()
-	info.synced = info.syncing
-	info.syncedMu.Unlock()
 
+func (info *driverInfo) commitWatermark() {
+	info.watermark.mu.Lock()
+	info.watermark.committedDSN = info.watermark.committingDSN
+	info.watermark.mu.Unlock()
+}
+
+func (info *driverInfo) putbackWriteTokens(tokens []uint64) {
 	finishedToken := common.NewClosedIntervalsBySlice(tokens)
 	info.writeController.Lock()
 	info.writeController.finishedTokens.TryMerge(finishedToken)
