@@ -174,7 +174,7 @@ func ExecSQLWithReadResult(
 	)
 
 	require.NoError(t, moerr.AttachCause(ctx, err), sql)
-	// WaitLogtailApplied(t, txnOp.Txn().CommitTS, cn)
+	WaitLogtailApplied(t, txnOp.Txn().CommitTS, cn)
 	return txnOp.Txn().CommitTS
 }
 

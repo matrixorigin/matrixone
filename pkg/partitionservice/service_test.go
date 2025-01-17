@@ -20,7 +20,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -130,6 +132,52 @@ func TestIs(t *testing.T) {
 			require.True(t, metadata.IsEmpty())
 		},
 	)
+}
+
+func TestPruneNoPartition(t *testing.T) {
+	runTestPartitionServiceTest(
+		func(
+			ctx context.Context,
+			txnOp client.TxnOperator,
+			s *service,
+			store *memStorage,
+		) {
+			res, err := s.Prune(ctx, 1, nil, txnOp)
+			require.NoError(t, err)
+			require.True(t, res.Empty())
+		},
+	)
+}
+
+func TestFilterNoPartition(t *testing.T) {
+	runTestPartitionServiceTest(
+		func(
+			ctx context.Context,
+			txnOp client.TxnOperator,
+			s *service,
+			store *memStorage,
+		) {
+			res, err := s.Filter(ctx, 1, nil, txnOp)
+			require.NoError(t, err)
+			require.Empty(t, res)
+		},
+	)
+}
+
+func TestIterResult(t *testing.T) {
+	res := PruneResult{
+		batches:    make([]*batch.Batch, 10),
+		partitions: make([]partition.Partition, 10),
+	}
+
+	n := 0
+	res.Iter(
+		func(partition partition.Partition, bat *batch.Batch) bool {
+			n++
+			return false
+		},
+	)
+	require.Equal(t, 1, n)
 }
 
 func runTestPartitionServiceTest(

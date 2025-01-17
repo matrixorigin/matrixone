@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2021-2024 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -50,7 +50,7 @@ func NewPartitionMultiUpdateFrom(
 	op.Action = from.raw.Action
 	op.IsOnduplicateKeyUpdate = from.raw.IsOnduplicateKeyUpdate
 	op.Engine = from.raw.Engine
-	return op
+	return NewPartitionMultiUpdate(op, from.tableID)
 }
 
 func (op *PartitionMultiUpdate) String(buf *bytes.Buffer) {
