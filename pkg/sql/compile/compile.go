@@ -995,7 +995,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 		}
 		ss = c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss)))
 		return ss, nil
-	case plan.Node_FILTER, plan.Node_PROJECT, plan.Node_PRE_DELETE:
+	case plan.Node_FILTER, plan.Node_PROJECT:
 		ss, err = c.compilePlanScope(step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
@@ -1246,10 +1246,13 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 		ss = c.compileProjection(n, ss)
 		return ss, nil
 	case plan.Node_FUNCTION_SCAN:
-		ss, err = c.compilePlanScope(step, n.Children[0], ns)
-		if err != nil {
-			return nil, err
+		if len(n.Children) != 0 {
+			ss, err = c.compilePlanScope(step, n.Children[0], ns)
+			if err != nil {
+				return nil, err
+			}
 		}
+
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		ss = c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, c.compileTableFunction(n, ss))))
 		return ss, nil
@@ -1742,6 +1745,14 @@ func (c *Compile) compileExternScanSerialReadWrite(n *plan.Node, param *tree.Ext
 
 func (c *Compile) compileTableFunction(n *plan.Node, ss []*Scope) []*Scope {
 	currentFirstFlag := c.anal.isFirst
+	if len(n.Children) == 0 {
+		ds := newScope(Merge)
+		ds.NodeInfo = getEngineNode(c)
+		ds.DataSource = &Source{isConst: true, node: n}
+		ds.NodeInfo = engine.Node{Addr: c.addr, Mcpu: 1}
+		ds.Proc = c.proc.NewNoContextChildProc(0)
+		ss = []*Scope{ds}
+	}
 	for i := range ss {
 		op := constructTableFunction(n)
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)

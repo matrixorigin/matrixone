@@ -34,6 +34,10 @@ const (
 	FULLTEXT_INDEX_TOKENIZE = "fulltext_index_tokenize"
 )
 
+func (tableFunction *TableFunction) isTbFuncSourceOp() bool {
+	return tableFunction.NumChildren() == 0
+}
+
 func (tableFunction *TableFunction) Call(proc *process.Process) (vm.CallResult, error) {
 	analyzer := tableFunction.OpAnalyzer
 
@@ -42,28 +46,42 @@ func (tableFunction *TableFunction) Call(proc *process.Process) (vm.CallResult, 
 		return vm.CancelResult, moerr.NewInternalErrorf(proc.Ctx, "table function %s state is nil", tableFunction.FuncName)
 	}
 
+	var err error
+
 	// loop
 	for {
 		if tableFunction.ctr.inputBatch.IsDone() || tableFunction.ctr.nextRow >= tableFunction.ctr.inputBatch.RowCount() {
 			// get to next input batch
-			input, err := vm.ChildrenCall(tableFunction.GetChildren(0), proc, analyzer)
-			if err != nil {
-				return input, err
-			}
-
-			tableFunction.ctr.inputBatch = input.Batch
-			if input.Batch.IsDone() {
-				// End of Input
-				err := tableFunction.ctr.state.end(tableFunction, proc)
-				if err != nil {
-					return vm.CancelResult, err
+			if tableFunction.isTbFuncSourceOp() {
+				if tableFunction.ctr.isDone {
+					// End of Input
+					err := tableFunction.ctr.state.end(tableFunction, proc)
+					if err != nil {
+						return vm.CancelResult, err
+					}
+					return vm.NewCallResult(), nil
 				}
-				return input, nil
+				tableFunction.ctr.inputBatch = batch.EmptyForConstFoldBatch
+				tableFunction.ctr.isDone = true
+			} else {
+				input, err := vm.ChildrenCall(tableFunction.GetChildren(0), proc, analyzer)
+				if err != nil {
+					return input, err
+				}
+				tableFunction.ctr.inputBatch = input.Batch
+				if input.Batch.IsDone() {
+					// End of Input
+					err := tableFunction.ctr.state.end(tableFunction, proc)
+					if err != nil {
+						return input, err
+					}
+					return input, nil
+				}
 			}
 
 			// Got a valid batch, eval tbf args
 			for i := range tableFunction.ctr.executorsForArgs {
-				tableFunction.ctr.argVecs[i], err = tableFunction.ctr.executorsForArgs[i].Eval(proc, []*batch.Batch{input.Batch}, nil)
+				tableFunction.ctr.argVecs[i], err = tableFunction.ctr.executorsForArgs[i].Eval(proc, []*batch.Batch{tableFunction.ctr.inputBatch}, nil)
 				if err != nil {
 					return vm.CancelResult, err
 				}

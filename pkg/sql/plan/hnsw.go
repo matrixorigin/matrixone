@@ -58,14 +58,14 @@ var (
 )
 
 // arg list [param, source_table_name, index_table_name, search_against, mode]
-func (builder *QueryBuilder) buildHnswCreate(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, childId int32) (int32, error) {
+func (builder *QueryBuilder) buildHnswCreate(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
 	return 0, nil
 }
 
-func (builder *QueryBuilder) buildHnswRefresh(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, childId int32) (int32, error) {
+func (builder *QueryBuilder) buildHnswRefresh(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
 	return 0, nil
 }
 
-func (builder *QueryBuilder) buildHnswSearch(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, childId int32) (int32, error) {
+func (builder *QueryBuilder) buildHnswSearch(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
 	return 0, nil
 }
