@@ -1259,13 +1259,13 @@ func (tbl *txnTable) UpdateConstraint(ctx context.Context, c *engine.ConstraintD
 //
 // 2. This check depends on replaying all catalog cache when cn starts.
 func (tbl *txnTable) isCreatedInTxn(ctx context.Context) (bool, error) {
-	if tbl.remoteWorkspace {
-		return tbl.createdInTxn, nil
+	// test or mo_table_stats
+	if tbl.fake {
+		return false, nil
 	}
 
-	// test or mo_table_stats
-	if tbl.db.op == nil {
-		return false, nil
+	if tbl.remoteWorkspace {
+		return tbl.createdInTxn, nil
 	}
 
 	if tbl.db.op.IsSnapOp() || catalog.IsSystemTable(tbl.tableId) {

@@ -2927,6 +2927,7 @@ func subscribeTable(
 		databaseName: tbl.dbName,
 	}
 
+	txnTbl.fake = true
 	txnTbl.eng = eng
 	txnTbl.relKind = tbl.relKind
 	txnTbl.primarySeqnum = tbl.pkSequence
