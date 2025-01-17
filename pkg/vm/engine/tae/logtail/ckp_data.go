@@ -45,15 +45,17 @@ func NewCheckpointData_V2(allocator *mpool.MPool, fs fileservice.FileService) *C
 	}
 }
 
-func (data *CheckpointData_V2) WriteTo(ctx context.Context, fs fileservice.FileService) (CNLocation, TNLocation objectio.Location, ckpfiles, err error) {
+func (data *CheckpointData_V2) WriteTo(
+	ctx context.Context,
+	fs fileservice.FileService,
+) (CNLocation, TNLocation objectio.Location, ckpfiles, err error) {
 	if data.batch.RowCount() != 0 {
 		err = data.sinker.Write(ctx, data.batch)
 		if err != nil {
 			return
 		}
 	}
-	err = data.sinker.Sync(ctx)
-	if err != nil {
+	if err = data.sinker.Sync(ctx); err != nil {
 		return
 	}
 	files, inMems := data.sinker.GetResult()
@@ -62,8 +64,9 @@ func (data *CheckpointData_V2) WriteTo(ctx context.Context, fs fileservice.FileS
 	}
 	ranges := ckputil.MakeTableRangeBatch()
 	defer ranges.Clean(data.allocator)
-	err = ckputil.CollectTableRanges(ctx, files, ranges, data.allocator, fs)
-	if err != nil {
+	if err = ckputil.CollectTableRanges(
+		ctx, files, ranges, data.allocator, fs,
+	); err != nil {
 		return
 	}
 	segmentid := objectio.NewSegmentid()
@@ -73,12 +76,11 @@ func (data *CheckpointData_V2) WriteTo(ctx context.Context, fs fileservice.FileS
 	if err != nil {
 		return
 	}
-	_, err = writer.WriteBatch(ranges)
-	if err != nil {
+	if _, err = writer.WriteBatch(ranges); err != nil {
 		return
 	}
-	blks, _, err := writer.Sync(ctx)
-	if err != nil {
+	var blks []objectio.BlockObject
+	if blks, _, err = writer.Sync(ctx); err != nil {
 		return
 	}
 	CNLocation = objectio.BuildLocation(name, blks[0].GetExtent(), 0, blks[0].GetID())
@@ -149,7 +151,7 @@ func (replayer *CheckpointReplayer) ReadData(ctx context.Context, sid string, fs
 	for _, loc := range replayer.locations {
 		dataVecs := containers.NewVectors(len(ckputil.TableObjectsAttrs))
 		var release func()
-		_, release, err = ioutil.LoadColumnsData(
+		if _, release, err = ioutil.LoadColumnsData(
 			ctx,
 			ckputil.TableObjectsSeqnums,
 			ckputil.TableObjectsTypes,
@@ -158,8 +160,7 @@ func (replayer *CheckpointReplayer) ReadData(ctx context.Context, sid string, fs
 			dataVecs,
 			replayer.mp,
 			0,
-		)
-		if err != nil {
+		); err != nil {
 			return
 		}
 		replayer.closeCB = append(replayer.closeCB, release)
@@ -234,9 +235,9 @@ func (collector *BaseCollector_V2) visitObject(entry *catalog.ObjectEntry) error
 			continue
 		}
 		isObjectTombstone := node.End.Equal(&entry.CreatedAt)
-		err := collectObjectBatch(
-			collector.data.batch, entry, isObjectTombstone, collector.packer, collector.data.allocator)
-		if err != nil {
+		if err := collectObjectBatch(
+			collector.data.batch, entry, isObjectTombstone, collector.packer, collector.data.allocator,
+		); err != nil {
 			return err
 		}
 		if collector.data.batch.RowCount() >= DefaultCheckpointBlockRows {
@@ -254,24 +255,24 @@ func collectObjectBatch(
 	encoder *types.Packer,
 	mp *mpool.MPool,
 ) (err error) {
-	err = vector.AppendFixed(
-		data.Vecs[ckputil.TableObjectsAttr_Accout_Idx], srcObjectEntry.GetTable().GetDB().GetTenantID(), false, mp)
-	if err != nil {
+	if err = vector.AppendFixed(
+		data.Vecs[ckputil.TableObjectsAttr_Accout_Idx], srcObjectEntry.GetTable().GetDB().GetTenantID(), false, mp,
+	); err != nil {
 		return
 	}
-	err = vector.AppendFixed(
-		data.Vecs[ckputil.TableObjectsAttr_DB_Idx], srcObjectEntry.GetTable().GetDB().ID, false, mp)
-	if err != nil {
+	if err = vector.AppendFixed(
+		data.Vecs[ckputil.TableObjectsAttr_DB_Idx], srcObjectEntry.GetTable().GetDB().ID, false, mp,
+	); err != nil {
 		return
 	}
-	err = vector.AppendFixed(
-		data.Vecs[ckputil.TableObjectsAttr_Table_Idx], srcObjectEntry.GetTable().ID, false, mp)
-	if err != nil {
+	if err = vector.AppendFixed(
+		data.Vecs[ckputil.TableObjectsAttr_Table_Idx], srcObjectEntry.GetTable().ID, false, mp,
+	); err != nil {
 		return
 	}
-	err = vector.AppendBytes(
-		data.Vecs[ckputil.TableObjectsAttr_ID_Idx], srcObjectEntry.ObjectStats[:], false, mp)
-	if err != nil {
+	if err = vector.AppendBytes(
+		data.Vecs[ckputil.TableObjectsAttr_ID_Idx], srcObjectEntry.ObjectStats[:], false, mp,
+	); err != nil {
 		return
 	}
 	encoder.Reset()
@@ -279,32 +280,32 @@ func collectObjectBatch(
 	if srcObjectEntry.IsTombstone {
 		objType = ckputil.ObjectType_Tombstone
 	}
-	err = vector.AppendFixed(
-		data.Vecs[ckputil.TableObjectsAttr_ObjectType_Idx], objType, false, mp)
-	if err != nil {
+	if err = vector.AppendFixed(
+		data.Vecs[ckputil.TableObjectsAttr_ObjectType_Idx], objType, false, mp,
+	); err != nil {
 		return
 	}
 	ckputil.EncodeCluser(encoder, srcObjectEntry.GetTable().ID, objType, srcObjectEntry.ID())
-	err = vector.AppendBytes(
-		data.Vecs[ckputil.TableObjectsAttr_Cluster_Idx], encoder.Bytes(), false, mp)
-	if err != nil {
+	if err = vector.AppendBytes(
+		data.Vecs[ckputil.TableObjectsAttr_Cluster_Idx], encoder.Bytes(), false, mp,
+	); err != nil {
 		return
 	}
-	err = vector.AppendFixed(
-		data.Vecs[ckputil.TableObjectsAttr_CreateTS_Idx], srcObjectEntry.CreatedAt, false, mp)
-	if err != nil {
+	if err = vector.AppendFixed(
+		data.Vecs[ckputil.TableObjectsAttr_CreateTS_Idx], srcObjectEntry.CreatedAt, false, mp,
+	); err != nil {
 		return
 	}
 	if isObjectTombstone {
-		err = vector.AppendFixed(
-			data.Vecs[ckputil.TableObjectsAttr_DeleteTS_Idx], types.TS{}, false, mp)
-		if err != nil {
+		if err = vector.AppendFixed(
+			data.Vecs[ckputil.TableObjectsAttr_DeleteTS_Idx], types.TS{}, false, mp,
+		); err != nil {
 			return
 		}
 	} else {
-		err = vector.AppendFixed(
-			data.Vecs[ckputil.TableObjectsAttr_DeleteTS_Idx], srcObjectEntry.CreatedAt, false, mp)
-		if err != nil {
+		if err = vector.AppendFixed(
+			data.Vecs[ckputil.TableObjectsAttr_DeleteTS_Idx], srcObjectEntry.CreatedAt, false, mp,
+		); err != nil {
 			return
 		}
 	}
