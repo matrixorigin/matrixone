@@ -78,6 +78,7 @@ func (e *CheckpointFastGCJob) Execute(ctx context.Context) error {
 	coarseFilter, err := makeSoftDeleteFilterCoarseFilter(
 		&transObjects,
 		e.filterTables,
+		e.snapshotMeta,
 	)
 	if err != nil {
 		return err
@@ -119,11 +120,13 @@ func (e *CheckpointFastGCJob) Execute(ctx context.Context) error {
 
 func makeSoftDeleteFilterCoarseFilter(
 	transObjects *map[string]*ObjectEntry,
-	filterTable *map[uint64]struct{},
+	meta *logtail.SnapshotMeta,
 ) (
 	FilterFn,
 	error,
 ) {
+	filterTable := meta.GetSnapshotTableIDs()
+	tables := meta.GetTableIDs()
 	return func(
 		ctx context.Context,
 		bm *bitmap.Bitmap,
@@ -153,7 +156,7 @@ func makeSoftDeleteFilterCoarseFilter(
 				(*transObjects)[name] = object
 				continue
 			}
-			if dropTS.IsEmpty() {
+			if dropTS.IsEmpty() && tables[tableIDs[i]] != nil {
 				continue
 			}
 			if _, ok := (*filterTable)[tableIDs[i]]; ok {

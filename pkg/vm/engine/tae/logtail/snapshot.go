@@ -333,6 +333,15 @@ func IsMoTable(tid uint64) bool {
 func (sm *SnapshotMeta) GetSnapshotTableIDs() *map[uint64]struct{} {
 	return &sm.snapshotTableIDs
 }
+func (sm *SnapshotMeta) GetTableIDs() map[uint64]*tableInfo {
+	sm.RLock()
+	defer sm.RUnlock()
+	tables := make(map[uint64]*tableInfo)
+	for id, table := range sm.tableIDIndex {
+		tables[id] = table
+	}
+	return tables
+}
 
 type tombstone struct {
 	rowid types.Rowid
