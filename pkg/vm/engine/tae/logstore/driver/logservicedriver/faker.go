@@ -130,3 +130,6 @@ func (d *mockDriver) readFromBackend(
 
 	return
 }
+
+type mockClient struct {
+}

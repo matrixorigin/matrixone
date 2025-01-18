@@ -16,6 +16,7 @@ package logservicedriver
 
 import (
 	"context"
+	"io"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -42,8 +43,24 @@ type clientConfig struct {
 	retryDuration         time.Duration
 }
 
+type BackendClient interface {
+	io.Closer
+
+	GetLogRecord(size int) logservice.LogRecord
+	Read(
+		ctx context.Context, firstPSN, maxSize uint64,
+	) ([]logservice.LogRecord, uint64, error)
+	GetTruncatedLsn(ctx context.Context) (uint64, error)
+
+	Append(
+		ctx context.Context,
+		record logservice.LogRecord,
+	) (psn uint64, err error)
+	Truncate(ctx context.Context, psn uint64) error
+}
+
 type wrappedClient struct {
-	c      logservice.Client
+	c      BackendClient
 	record logservice.LogRecord
 	id     int
 }
@@ -137,18 +154,17 @@ type clientpool struct {
 	cfg           *clientConfig
 }
 
-func newClientPool(maxsize int, cfg *clientConfig) *clientpool {
+func newClientPool(size int, cfg *clientConfig) *clientpool {
 	pool := &clientpool{
-		maxCount:    maxsize,
+		maxCount:    size,
 		getTimeout:  cfg.GetClientRetryTimeOut,
-		freeClients: make([]*wrappedClient, maxsize),
-		mu:          sync.Mutex{},
+		freeClients: make([]*wrappedClient, size),
 		cfg:         cfg,
 	}
 	pool.clientFactory = pool.createClientFactory(cfg)
 	pool.closefn = pool.onClose
 
-	for i := 0; i < maxsize; i++ {
+	for i := 0; i < size; i++ {
 		pool.freeClients[i] = pool.clientFactory()
 	}
 	return pool
