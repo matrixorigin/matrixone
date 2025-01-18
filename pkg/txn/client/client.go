@@ -747,6 +747,9 @@ func (client *txnClient) removeFromWaitActiveLocked(txnID []byte) bool {
 
 func (client *txnClient) waitMarkAllActiveAbortedLocked() {
 	if client.mu.waitMarkAllActiveAbortedC != nil {
-		<-client.mu.waitMarkAllActiveAbortedC
+		c := client.mu.waitMarkAllActiveAbortedC
+		client.mu.Unlock()
+		<-c
+		client.mu.Lock()
 	}
 }
