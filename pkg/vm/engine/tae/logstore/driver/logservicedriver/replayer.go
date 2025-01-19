@@ -34,6 +34,12 @@ import (
 
 type ReplayOption func(*replayer)
 
+func WithReplayerReadForever() ReplayOption {
+	return func(r *replayer) {
+		r.waitMoreRecords = true
+	}
+}
+
 func WithReplayerOnWriteSkip(f func(map[uint64]uint64)) ReplayOption {
 	return func(r *replayer) {
 		if r.onWriteSkip != nil {
@@ -133,6 +139,9 @@ type replayer struct {
 	onApplied           func(*entry.Entry)
 	onWriteSkip         func(map[uint64]uint64)
 	onReplayDone        func(resErr error, stats DSNStats)
+
+	// true means wait for more records after all existing records have been read
+	waitMoreRecords bool
 
 	replayedState struct {
 		// DSN->PSN mapping
@@ -302,7 +311,10 @@ func (r *replayer) Replay(ctx context.Context) (err error) {
 		return
 	}
 
-	var wg sync.WaitGroup
+	var (
+		wg       sync.WaitGroup
+		waitTime = time.Millisecond
+	)
 
 	wg.Add(1)
 	// a dedicated goroutine to replay entries from the applyC
@@ -311,9 +323,31 @@ func (r *replayer) Replay(ctx context.Context) (err error) {
 
 	// read log records batch by batch and schedule the records for apply
 	for {
-		if readDone, err = r.readNextBatch(ctx); err != nil || readDone {
+		select {
+		case <-ctx.Done():
+			err = context.Cause(ctx)
+			close(applyC)
+			logutil.Error(
+				"Wal-Replay-Context-Done",
+				zap.Error(err),
+			)
+			return
+		default:
+		}
+
+		if readDone, err = r.readNextBatch(ctx); err != nil || (readDone && !r.waitMoreRecords) {
 			break
 		}
+
+		if readDone && r.waitMoreRecords {
+			time.Sleep(waitTime)
+			waitTime *= 2
+			if waitTime > time.Millisecond*128 {
+				waitTime = time.Millisecond * 128
+			}
+			continue
+		}
+		waitTime = time.Millisecond
 
 		// when the schedule DSN is less than the safe DSN, we try to
 		// schedule some entries for apply
