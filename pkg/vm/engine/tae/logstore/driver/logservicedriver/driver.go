@@ -16,6 +16,7 @@ package logservicedriver
 
 import (
 	"context"
+	"sync/atomic"
 	"time"
 
 	"github.com/panjf2000/ants/v2"
@@ -133,23 +134,27 @@ func (d *LogServiceDriver) Replay(
 	mode driver.ReplayMode,
 ) (err error) {
 
+	var replayMode atomic.Int32
+	replayMode.Store(int32(mode))
+
+	onLogRecord := func(r logservice.LogRecord) {
+		// TODO: handle the config change log record
+	}
+
+	onWaitMore := func() bool {
+		return replayMode.Load() == int32(driver.ReplayMode_ReplayForever)
+	}
+
 	replayer := newReplayer(
 		h,
 		d,
 		ReplayReadSize,
-		// WithReplayerWaitMore(
-		// 	func() {
-		// 	},
-		// ),
-		// WithReplayerOnLogRecord(
-		// 	func(r logservice.LogRecord) {
-		// 		// If the record is config change log record
-		// 		// we need to update the config
-		// 		if r.Type != logservice.Internal {
-		// 			return
-		// 		}
-		// 	},
-		// ),
+		WithReplayerWaitMore(
+			onWaitMore,
+		),
+		WithReplayerOnLogRecord(
+			onLogRecord,
+		),
 
 		// driver is mangaging the psn to dsn mapping
 		// here the replayer is responsible to provide the all the existing psn to dsn

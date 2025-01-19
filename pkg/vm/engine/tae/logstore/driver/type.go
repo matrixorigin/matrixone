@@ -40,7 +40,7 @@ const (
 
 type ApplyHandle = func(*entry.Entry) (replayEntryState ReplayEntryState)
 
-type ReplayMode int16
+type ReplayMode int32
 
 const (
 	ReplayMode_Invalid ReplayMode = iota
