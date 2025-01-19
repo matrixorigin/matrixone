@@ -198,9 +198,15 @@ func (c *clientpool) Close() {
 		c.mu.Unlock()
 		return
 	}
+	var wg sync.WaitGroup
 	for _, client := range c.freeClients {
-		c.closefn(client)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			c.closefn(client)
+		}()
 	}
+	wg.Wait()
 	c.closed.Store(1)
 	c.mu.Unlock()
 }
