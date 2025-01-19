@@ -18,7 +18,6 @@ import (
 	"context"
 	"fmt"
 	"testing"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -148,8 +147,6 @@ func TestAppendSkipCmd2(t *testing.T) {
 		_, err = client.Append(
 			context.Background(),
 			entry,
-			time.Second,
-			10,
 			moerr.CauseDriverAppender1,
 		)
 		assert.NoError(t, err)
@@ -265,8 +262,6 @@ func TestAppendSkipCmd4(t *testing.T) {
 		_, err = client.Append(
 			context.Background(),
 			entry,
-			time.Second,
-			10,
 			moerr.CauseDriverAppender1,
 		)
 		assert.NoError(t, err)
@@ -322,8 +317,6 @@ func TestAppendSkipCmd4(t *testing.T) {
 		_, err = client.Append(
 			context.Background(),
 			entry,
-			time.Second,
-			10,
 			moerr.CauseDriverAppender1,
 		)
 		assert.NoError(t, err)
@@ -389,8 +382,6 @@ func TestAppendSkipCmd5(t *testing.T) {
 		_, err = client.Append(
 			context.Background(),
 			entry,
-			time.Second,
-			10,
 			moerr.CauseDriverAppender1,
 		)
 		assert.NoError(t, err)

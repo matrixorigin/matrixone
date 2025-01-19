@@ -103,6 +103,10 @@ func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
 	d.postCommitLoop.Start()
 	d.truncateQueue = sm.NewSafeQueue(10000, 10000, d.onTruncateRequests)
 	d.truncateQueue.Start()
+	logutil.Info(
+		"Wal-Driver-Start",
+		zap.String("config", cfg.String()),
+	)
 	return d
 }
 

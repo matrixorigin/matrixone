@@ -29,7 +29,7 @@ const (
 	DefaultMaxClient     = 100
 	DefaultClientBufSize = mpool.MB
 	DefaultMaxTimeout    = time.Second * 30
-	DefaultMaxRetryCount = 3
+	DefaultMaxRetryCount = 5
 )
 
 type Config struct {
@@ -151,4 +151,11 @@ func (cfg *Config) validate() {
 	if cfg.ClientFactory == nil {
 		panic("ClientFactory is nil")
 	}
+}
+
+func (cfg Config) RetryInterval() time.Duration {
+	if cfg.MaxRetryCount == 0 {
+		return 0
+	}
+	return cfg.MaxTimeout / time.Duration(cfg.MaxRetryCount) / 20
 }

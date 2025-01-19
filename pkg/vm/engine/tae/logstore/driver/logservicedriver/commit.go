@@ -72,10 +72,7 @@ func (d *LogServiceDriver) asyncCommit(committer *groupCommitter) {
 	committer.Add(1)
 	d.appendPool.Submit(func() {
 		defer committer.Done()
-		if err := committer.Commit(
-			d.config.MaxRetryCount,
-			d.config.MaxTimeout,
-		); err != nil {
+		if err := committer.Commit(); err != nil {
 			logutil.Fatal(
 				"Wal-Cannot-Append",
 				zap.Error(err),
@@ -98,27 +95,27 @@ func (d *LogServiceDriver) getClientForWrite() (client *wrappedClient, token uin
 		// should never happen
 		panic(err)
 	}
-	if client, err = d.clientPool.Get(); err == nil {
-		return
-	}
 
-	for ; retryTimes < d.config.MaxRetryCount; retryTimes++ {
+	for ; retryTimes < d.config.MaxRetryCount+1; retryTimes++ {
 		client, err = d.clientPool.Get()
 		if err == nil {
 			break
 		}
-		time.Sleep(time.Millisecond * 100)
+		time.Sleep(d.config.RetryInterval())
 	}
-	logger := logutil.Info
-	if err != nil {
-		logger = logutil.Error
+
+	if err != nil || retryTimes > 0 {
+		logger := logutil.Info
+		if err != nil {
+			logger = logutil.Error
+		}
+		logger(
+			"Wal-Get-Client",
+			zap.Int("retry-count", retryTimes),
+			zap.Error(err),
+			zap.Duration("duration", time.Since(now)),
+		)
 	}
-	logger(
-		"Wal-Get-Client",
-		zap.Int("retry-count", retryTimes),
-		zap.Error(err),
-		zap.Duration("duration", time.Since(now)),
-	)
 	if err != nil {
 		panic(err)
 	}

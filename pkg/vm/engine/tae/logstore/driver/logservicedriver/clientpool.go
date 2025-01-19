@@ -93,8 +93,6 @@ func (c *wrappedClient) Close() {
 func (c *wrappedClient) Append(
 	ctx context.Context,
 	e LogEntry,
-	timeout time.Duration,
-	maxRetry int,
 	timeoutCause error,
 ) (psn uint64, err error) {
 	if e.Size() > len(c.buf.Payload()) {
@@ -126,16 +124,17 @@ func (c *wrappedClient) Append(
 		}
 	}()
 
-	for ; retryTimes < maxRetry+1; retryTimes++ {
+	for ; retryTimes < c.pool.cfg.MaxRetryCount+1; retryTimes++ {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeoutCause(
-			ctx, timeout, moerr.CauseDriverAppender1,
+			ctx, c.pool.cfg.MaxTimeout, timeoutCause,
 		)
 		psn, err = c.wrapped.Append(ctx, c.buf)
 		cancel()
 		if err == nil {
 			break
 		}
+		time.Sleep(c.pool.cfg.RetryInterval())
 	}
 	return
 }

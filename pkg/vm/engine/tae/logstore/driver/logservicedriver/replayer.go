@@ -674,8 +674,7 @@ func (r *replayer) AppendSkipCmd(
 	skipMap map[uint64]uint64,
 ) (err error) {
 	var (
-		now        = time.Now()
-		retryTimes = 0
+		now = time.Now()
 	)
 	defer func() {
 		logger := logutil.Info
@@ -686,7 +685,6 @@ func (r *replayer) AppendSkipCmd(
 			"Wal-Replay-Append-Skip-Entries",
 			zap.Any("gsn-psn-map", skipMap),
 			zap.Duration("duration", time.Since(now)),
-			zap.Int("retry-times", retryTimes),
 			zap.Error(err),
 		)
 	}()
@@ -707,7 +705,7 @@ func (r *replayer) AppendSkipCmd(
 	entry := SkipMapToLogEntry(skipMap)
 
 	_, err = client.Append(
-		ctx, entry, time.Second*10, 10, moerr.CauseAppendSkipCmd,
+		ctx, entry, moerr.CauseAppendSkipCmd,
 	)
 	return
 }
