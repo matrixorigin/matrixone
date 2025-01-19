@@ -923,7 +923,7 @@ func Test_Replayer9(t *testing.T) {
 	)
 	assert.NoError(t, err)
 
-	entryCnt := 20000
+	entryCnt := 10000
 
 	entries := make([]*entry.Entry, 0, entryCnt)
 	for i := 0; i < entryCnt; i++ {
@@ -945,6 +945,7 @@ func Test_Replayer9(t *testing.T) {
 	assert.Equal(t, entryCnt, applyCnt)
 
 	toTruncates := []uint64{entries[entryCnt/2].DSN, entries[entryCnt/4].DSN, entries[entryCnt/8].DSN}
+	maxTrucateIntent := toTruncates[0]
 
 	entries = entries[:0]
 	for i := 0; i < entryCnt; i++ {
@@ -979,4 +980,123 @@ func Test_Replayer9(t *testing.T) {
 	readErr := <-errCh
 	t.Logf("Read error: %v", readErr)
 	assert.ErrorIs(t, readErr, cancelErr)
+
+	consumer = NewLogServiceDriver(&cfg)
+	readCtx, readCancel = context.WithCancelCause(context.Background())
+	maxReadDSN.Store(0)
+	go func() {
+		var err error
+		defer func() {
+			errCh <- err
+		}()
+		err = consumer.Replay(
+			readCtx,
+			func(e *entry.Entry) storeDriver.ReplayEntryState {
+				if e.DSN <= maxTrucateIntent {
+					return storeDriver.RE_Truncate
+				}
+				applyCnt++
+				if maxReadDSN.Load() == 0 {
+					maxReadDSN.Store(e.DSN)
+				} else {
+					assert.Equalf(t, e.DSN-1, maxReadDSN.Load(), fmt.Sprintf("%d, %d", e.DSN-1, maxReadDSN.Load()))
+					if e.DSN > maxReadDSN.Load() {
+						maxReadDSN.Store(e.DSN)
+					}
+				}
+				return storeDriver.RE_Nomal
+			},
+			storeDriver.ReplayMode_ReplayForever,
+		)
+	}()
+
+	// entries = entries[:0]
+	// for i := 0; i < entryCnt; i++ {
+	// 	v := uint64(entryCnt*2 + i)
+	// 	e := entry.MockEntryWithPayload(types.EncodeUint64(&v))
+	// 	err := producer.Append(e)
+	// 	assert.NoError(t, err)
+	// 	entries = append(entries, e)
+	// }
+	// for _, e := range entries {
+	// 	err := e.WaitDone()
+	// 	assert.NoError(t, err)
+	// }
+
+	testutils.WaitExpect(1000, func() bool {
+		return maxReadDSN.Load() == uint64(entryCnt*2)
+	})
+	t.Logf(
+		"maxReadDSN: %d, maxTruncateIntent: %d",
+		maxReadDSN.Load(), maxTrucateIntent,
+	)
+	assert.Equalf(t, uint64(entryCnt*2), maxReadDSN.Load(), fmt.Sprintf("%d, %d", entryCnt*2, maxReadDSN.Load()))
+
+	readCancel(cancelErr)
+	readErr = <-errCh
+	t.Logf("Read error: %v", readErr)
+	assert.ErrorIs(t, readErr, cancelErr)
+}
+
+// 111 + 1951 =
+func Test_Replayer10(t *testing.T) {
+	ctx := context.Background()
+	mockDriver := newMockDriver(
+		11,
+		// MetaType,PSN,DSN-S,DSN-E,Safe
+		[][5]uint64{
+			// {uint64(Cmd_Normal), 12, 37, 37, 0},
+			{uint64(Cmd_Normal), 13, 3025, 3064, 106},
+			{uint64(Cmd_Normal), 14, 3070, 3070, 106},
+			{uint64(Cmd_Normal), 15, 3068, 3069, 106},
+			{uint64(Cmd_Normal), 16, 2484, 3024, 106},
+			{uint64(Cmd_Normal), 17, 111, 2061, 59},
+			{uint64(Cmd_Normal), 18, 2464, 2483, 106},
+			{uint64(Cmd_Normal), 19, 3065, 3067, 106},
+			{uint64(Cmd_Normal), 20, 3071, 3071, 106},
+		},
+		30,
+	)
+	var appliedDSNs []uint64
+	mockHandle := mockHandleFactory(2502, func(e *entry.Entry) {
+		// mockHandle := mockHandleFactory(2000, func(e *entry.Entry) {
+		appliedDSNs = append(appliedDSNs, e.DSN)
+	})
+
+	var psnReaded []uint64
+	onRead := func(psn uint64, _ LogEntry) {
+		if len(psnReaded) > 0 {
+			assert.Equal(t, psnReaded[len(psnReaded)-1]+1, psn)
+		}
+		psnReaded = append(psnReaded, psn)
+	}
+
+	var dsnScheduled []uint64
+	onScheduled := func(_ uint64, _ *common.ClosedIntervals, r LogEntry) {
+		r.ForEachEntry(func(e *entry.Entry) {
+			// t.Logf("Scheduled DSN: %d", e.DSN)
+			if len(dsnScheduled) > 0 {
+				assert.True(t, dsnScheduled[len(dsnScheduled)-1] < e.DSN)
+			}
+			dsnScheduled = append(dsnScheduled, e.DSN)
+		})
+	}
+
+	r := newReplayer(
+		mockHandle,
+		mockDriver,
+		30,
+		WithReplayerAppendSkipCmd(noopAppendSkipCmd),
+		WithReplayerUnmarshalLogRecord(mockUnmarshalLogRecordFactor(mockDriver)),
+		WithReplayerOnUserLogEntry(onRead),
+		WithReplayerOnScheduled(onScheduled),
+	)
+
+	err := r.Replay(ctx)
+	assert.NoError(t, err)
+	t.Logf("psnReaded: %v", psnReaded)
+	t.Logf("dsnScheduled: %d=>%d", dsnScheduled[0], dsnScheduled[len(dsnScheduled)-1])
+	t.Logf("appliedDSNs: %d=>%d", appliedDSNs[0], appliedDSNs[len(appliedDSNs)-1])
+	assert.Equal(t, uint64(2502), appliedDSNs[0])
+	assert.Equal(t, uint64(3071), appliedDSNs[len(appliedDSNs)-1])
 }
