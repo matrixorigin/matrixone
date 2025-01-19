@@ -27,6 +27,7 @@ import (
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
+	"golang.org/x/exp/rand"
 )
 
 var _ BackendClient = (*mockBackendClient)(nil)
@@ -181,6 +182,7 @@ func newMockBackendClient(backend MockBackend) *mockBackendClient {
 func (c *mockBackend) Append(
 	ctx context.Context, record logservice.LogRecord,
 ) (psn uint64, err error) {
+	time.Sleep(time.Duration(rand.Intn(100)+5) * time.Microsecond)
 	cloned := record.Clone()
 	c.Lock()
 	defer c.Unlock()

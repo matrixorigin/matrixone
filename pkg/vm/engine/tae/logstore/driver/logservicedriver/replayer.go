@@ -199,6 +199,7 @@ type replayer struct {
 
 		appliedLSNCount  atomic.Int64
 		readPSNCount     int
+		readDSNCount     int
 		schedulePSNCount int
 		scheduleLSNCount int
 	}
@@ -264,6 +265,7 @@ func (r *replayer) exportFields(level int) []zap.Field {
 	ret := []zap.Field{
 		zap.Duration("read-duration", r.stats.readDuration),
 		zap.Int("read-psn-count", r.stats.readPSNCount),
+		zap.Int("read-dsn-count", r.stats.readDSNCount),
 		zap.Int64("apply-lsn-count", r.stats.appliedLSNCount.Load()),
 		zap.Int("schedule-psn-count", r.stats.schedulePSNCount),
 		zap.Int("schedule-lsn-count", r.stats.scheduleLSNCount),
@@ -650,6 +652,14 @@ func (r *replayer) readNextBatch(
 	if err != nil {
 		return
 	}
+
+	logutil.Debug(
+		"Wal-Debug-Read",
+		zap.Uint64("psn-to-read", r.waterMarks.psnToRead),
+		zap.Uint64("next-to-read", nextPSN),
+		zap.Int("readed-cnt", len(records)),
+	)
+
 	r.stats.readDuration += time.Since(t0)
 	for i, record := range records {
 		if r.onLogRecord != nil {
@@ -667,6 +677,15 @@ func (r *replayer) readNextBatch(
 			if r.onUserLogEntry != nil {
 				r.onUserLogEntry(psn, entry)
 			}
+
+			// logutil.Info(
+			// 	"Wal-Trace-Read",
+			// 	zap.Uint64("psn", psn),
+			// 	zap.Uint64("safe-dsn", entry.GetSafeDSN()),
+			// 	zap.Uint64("start-dsn", entry.GetStartDSN()),
+			// 	zap.Int("entry-count", int(entry.GetEntryCount())),
+			// )
+
 			// 1. update the safe DSN
 			if r.replayedState.safeDSN < entry.GetSafeDSN() {
 				r.replayedState.safeDSN = entry.GetSafeDSN()
@@ -674,6 +693,7 @@ func (r *replayer) readNextBatch(
 
 			// 2. update the stats
 			r.stats.readPSNCount++
+			r.stats.readDSNCount += int(entry.GetEntryCount())
 
 			// 3. remove the skipped records if the entry is a skip entry
 			if entry.GetCmdType() == uint16(Cmd_SkipDSN) {

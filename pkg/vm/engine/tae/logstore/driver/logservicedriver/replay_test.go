@@ -18,8 +18,10 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -870,4 +872,66 @@ func Test_Replayer8(t *testing.T) {
 	t.Logf("writeSkip: %v", writeSkip)
 	assert.Equal(t, []uint64{3, 4, 5, 6}, appliedDSNs)
 	assert.Equal(t, 0, len(writeSkip))
+}
+
+func Test_Replayer9(t *testing.T) {
+	store := newMockBackend()
+	cfg := NewConfig(
+		"",
+		WithConfigOptMaxClient(10),
+		WithConfigMockClient(store),
+	)
+
+	producer := NewLogServiceDriver(&cfg)
+	defer producer.Close()
+	consumer := NewLogServiceDriver(&cfg)
+	defer consumer.Close()
+
+	errCh := make(chan error, 1)
+
+	readCtx, readCancel := context.WithCancelCause(context.Background())
+	go func() {
+		var err error
+		defer func() {
+			errCh <- err
+		}()
+		err = consumer.Replay(
+			readCtx,
+			func(e *entry.Entry) storeDriver.ReplayEntryState {
+				t.Logf("Read DSN: %d", e.DSN)
+				return storeDriver.RE_Nomal
+			},
+			storeDriver.ReplayMode_ReplayForever,
+		)
+	}()
+
+	ctx := context.Background()
+	err := producer.Replay(
+		ctx,
+		func(e *entry.Entry) storeDriver.ReplayEntryState {
+			return storeDriver.RE_Nomal
+		},
+		storeDriver.ReplayMode_ReplayForWrite,
+	)
+	assert.NoError(t, err)
+
+	entries := make([]*entry.Entry, 0, 50)
+	for i := 0; i < 50; i++ {
+		v := uint64(i)
+		e := entry.MockEntryWithPayload(types.EncodeUint64(&v))
+		err := producer.Append(e)
+		assert.NoError(t, err)
+		entries = append(entries, e)
+	}
+	for _, e := range entries {
+		err := e.WaitDone()
+		assert.NoError(t, err)
+	}
+	time.Sleep(time.Millisecond * 300)
+
+	cancelErr := fmt.Errorf("cancel")
+	readCancel(cancelErr)
+	readErr := <-errCh
+	t.Logf("Read error: %v", readErr)
+	assert.ErrorIs(t, readErr, cancelErr)
 }

@@ -101,6 +101,7 @@ func (c *wrappedClient) Append(
 		c.buf.ResizePayload(e.Size())
 	}
 	c.buf.SetPayload(e[:])
+	// logutil.Infof("Client Append: %s", e.String())
 
 	var (
 		retryTimes int
