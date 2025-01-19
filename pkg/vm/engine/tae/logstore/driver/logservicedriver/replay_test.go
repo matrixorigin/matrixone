@@ -902,11 +902,11 @@ func Test_Replayer9(t *testing.T) {
 		err = consumer.Replay(
 			readCtx,
 			func(e *entry.Entry) storeDriver.ReplayEntryState {
+				applyCnt++
 				assert.Equal(t, e.DSN-1, maxReadDSN.Load())
 				if e.DSN > maxReadDSN.Load() {
 					maxReadDSN.Store(e.DSN)
 				}
-				applyCnt++
 				return storeDriver.RE_Nomal
 			},
 			storeDriver.ReplayMode_ReplayForever,
@@ -923,8 +923,10 @@ func Test_Replayer9(t *testing.T) {
 	)
 	assert.NoError(t, err)
 
-	entries := make([]*entry.Entry, 0, 50)
-	for i := 0; i < 50; i++ {
+	entryCnt := 400
+
+	entries := make([]*entry.Entry, 0, entryCnt)
+	for i := 0; i < entryCnt; i++ {
 		v := uint64(i)
 		e := entry.MockEntryWithPayload(types.EncodeUint64(&v))
 		err := producer.Append(e)
@@ -937,10 +939,29 @@ func Test_Replayer9(t *testing.T) {
 	}
 
 	testutils.WaitExpect(1000, func() bool {
-		return maxReadDSN.Load() == uint64(50)
+		return maxReadDSN.Load() == uint64(entryCnt)
 	})
-	assert.Equal(t, uint64(50), maxReadDSN.Load())
-	assert.Equal(t, 50, applyCnt)
+	assert.Equal(t, uint64(entryCnt), maxReadDSN.Load())
+	assert.Equal(t, entryCnt, applyCnt)
+
+	entries = entries[:0]
+	for i := 0; i < entryCnt; i++ {
+		i := uint64(entryCnt + i)
+		e := entry.MockEntryWithPayload(types.EncodeUint64(&i))
+		err := producer.Append(e)
+		assert.NoError(t, err)
+		entries = append(entries, e)
+	}
+
+	for _, e := range entries {
+		err = e.WaitDone()
+		assert.NoError(t, err)
+	}
+
+	testutils.WaitExpect(1000, func() bool {
+		return maxReadDSN.Load() == uint64(entryCnt*2)
+	})
+	assert.Equal(t, uint64(entryCnt*2), maxReadDSN.Load())
 
 	cancelErr := fmt.Errorf("cancel")
 	readCancel(cancelErr)

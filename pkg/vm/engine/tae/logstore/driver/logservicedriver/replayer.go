@@ -691,13 +691,13 @@ func (r *replayer) readNextBatch(
 				r.onUserLogEntry(psn, entry)
 			}
 
-			// logutil.Info(
-			// 	"Wal-Trace-Read",
-			// 	zap.Uint64("psn", psn),
-			// 	zap.Uint64("safe-dsn", entry.GetSafeDSN()),
-			// 	zap.Uint64("start-dsn", entry.GetStartDSN()),
-			// 	zap.Int("entry-count", int(entry.GetEntryCount())),
-			// )
+			logutil.Info(
+				"Wal-Trace-Read",
+				zap.Uint64("psn", psn),
+				zap.Uint64("safe-dsn", entry.GetSafeDSN()),
+				zap.Uint64("start-dsn", entry.GetStartDSN()),
+				zap.Int("entry-count", int(entry.GetEntryCount())),
+			)
 
 			// 1. update the safe DSN
 			if r.replayedState.safeDSN < entry.GetSafeDSN() {
