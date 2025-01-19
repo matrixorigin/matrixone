@@ -78,11 +78,9 @@ type LogServiceDriver struct {
 
 func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
 	clientpoolConfig := &clientConfig{
-		cancelDuration:        cfg.NewClientDuration,
-		recordSize:            cfg.RecordSize,
-		clientFactory:         cfg.ClientFactory,
-		GetClientRetryTimeOut: cfg.GetClientRetryTimeOut,
-		retryDuration:         cfg.RetryTimeout,
+		bufSize:    cfg.ClientBufSize,
+		factory:    cfg.ClientFactory,
+		maxTimeout: cfg.MaxTimeout,
 	}
 
 	// the tasks submitted to LogServiceDriver.appendPool append entries to logservice,
@@ -177,7 +175,6 @@ func (d *LogServiceDriver) readFromBackend(
 	var (
 		t0         = time.Now()
 		cancel     context.CancelFunc
-		maxRetry   = 10
 		retryTimes = 0
 	)
 
@@ -206,10 +203,10 @@ func (d *LogServiceDriver) readFromBackend(
 	}
 	defer d.clientPool.Put(client)
 
-	for ; retryTimes < maxRetry; retryTimes++ {
+	for ; retryTimes < d.config.MaxRetryCount; retryTimes++ {
 		ctx, cancel = context.WithTimeoutCause(
 			ctx,
-			d.config.ReadDuration,
+			d.config.MaxTimeout,
 			moerr.CauseReadFromLogService,
 		)
 		if records, nextPSN, err = client.c.Read(
@@ -222,6 +219,7 @@ func (d *LogServiceDriver) readFromBackend(
 		if err == nil {
 			break
 		}
+		time.Sleep(d.config.MaxTimeout / time.Duration(d.config.MaxRetryCount) / 10)
 	}
 
 	return

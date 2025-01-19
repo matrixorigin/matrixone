@@ -24,6 +24,7 @@ import (
 
 	"github.com/lni/vfs"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
@@ -88,8 +89,13 @@ func TestReplay1(t *testing.T) {
 	service, ccfg := initTest(t)
 	defer service.Close()
 
-	cfg := NewTestConfig("", ccfg)
-	driver := NewLogServiceDriver(cfg)
+	cfg := NewConfig(
+		"",
+		WithConfigOptClientConfig("", ccfg),
+		WithConfigOptClientBufSize(10*mpool.MB),
+		WithConfigOptMaxClient(10),
+	)
+	driver := NewLogServiceDriver(&cfg)
 
 	entryCount := 10000
 	entries := make([]*entry.Entry, entryCount)
@@ -127,9 +133,12 @@ func TestReplay2(t *testing.T) {
 	service, ccfg := initTest(t)
 	defer service.Close()
 
-	cfg := NewTestConfig("", ccfg)
-	cfg.RecordSize = 100
-	driver := NewLogServiceDriver(cfg)
+	cfg := NewConfig(
+		"",
+		WithConfigOptClientConfig("", ccfg),
+		WithConfigOptClientBufSize(100),
+	)
+	driver := NewLogServiceDriver(&cfg)
 
 	entryCount := 10000
 	entries := make([]*entry.Entry, entryCount)

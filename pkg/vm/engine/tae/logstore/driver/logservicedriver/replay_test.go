@@ -31,7 +31,8 @@ import (
 
 func Test_MockBackend1(t *testing.T) {
 	ctx := context.Background()
-	client := newMockBackendClient()
+	backend := newMockBackend()
+	client := newMockBackendClient(backend)
 	defer client.Close()
 	var (
 		psnSize    = make(map[uint64]int)
@@ -95,9 +96,13 @@ func Test_AppendSkipCmd(t *testing.T) {
 	service, ccfg := initTest(t)
 	defer service.Close()
 
-	cfg := NewTestConfig("", ccfg)
-	cfg.RecordSize = 100
-	driver := NewLogServiceDriver(cfg)
+	cfg := NewConfig(
+		"",
+		WithConfigOptMaxClient(10),
+		WithConfigOptClientBufSize(100),
+		WithConfigOptClientConfig("", ccfg),
+	)
+	driver := NewLogServiceDriver(&cfg)
 	defer driver.Close()
 
 	r := newReplayer(nil, driver, ReplayReadSize)
@@ -108,8 +113,12 @@ func TestAppendSkipCmd2(t *testing.T) {
 	service, ccfg := initTest(t)
 	defer service.Close()
 
-	cfg := NewTestConfig("", ccfg)
-	driver := NewLogServiceDriver(cfg)
+	cfg := NewConfig(
+		"",
+		WithConfigOptMaxClient(10),
+		WithConfigOptClientConfig("", ccfg),
+	)
+	driver := NewLogServiceDriver(&cfg)
 
 	entryCount := 10
 	entries := make([]*entry.Entry, entryCount)
@@ -186,8 +195,12 @@ func TestAppendSkipCmd3(t *testing.T) {
 	service, ccfg := initTest(t)
 	defer service.Close()
 
-	cfg := NewTestConfig("", ccfg)
-	driver := NewLogServiceDriver(cfg)
+	cfg := NewConfig(
+		"",
+		WithConfigOptMaxClient(10),
+		WithConfigOptClientConfig("", ccfg),
+	)
+	driver := NewLogServiceDriver(&cfg)
 	// truncated: 7
 	// empty log service
 
@@ -215,8 +228,12 @@ func TestAppendSkipCmd4(t *testing.T) {
 	service, ccfg := initTest(t)
 	defer service.Close()
 
-	cfg := NewTestConfig("", ccfg)
-	driver := NewLogServiceDriver(cfg)
+	cfg := NewConfig(
+		"",
+		WithConfigOptMaxClient(10),
+		WithConfigOptClientConfig("", ccfg),
+	)
+	driver := NewLogServiceDriver(&cfg)
 
 	entryCount := 4
 	entries := make([]*entry.Entry, entryCount)
@@ -337,8 +354,12 @@ func TestAppendSkipCmd5(t *testing.T) {
 	service, ccfg := initTest(t)
 	defer service.Close()
 
-	cfg := NewTestConfig("", ccfg)
-	driver := NewLogServiceDriver(cfg)
+	cfg := NewConfig(
+		"",
+		WithConfigOptMaxClient(10),
+		WithConfigOptClientConfig("", ccfg),
+	)
+	driver := NewLogServiceDriver(&cfg)
 
 	entryCount := 4
 	entries := make([]*entry.Entry, entryCount)

@@ -36,11 +36,22 @@ var ErrNoClientAvailable = moerr.NewInternalErrorNoCtx("no client available")
 var ErrClientPoolClosed = moerr.NewInternalErrorNoCtx("client pool closed")
 
 type clientConfig struct {
-	cancelDuration        time.Duration
-	recordSize            int
-	clientFactory         LogServiceClientFactory
-	GetClientRetryTimeOut time.Duration
-	retryDuration         time.Duration
+	bufSize    int
+	factory    LogServiceClientFactory
+	maxTimeout time.Duration
+}
+
+type MockBackend interface {
+	Read(
+		ctx context.Context, firstPSN, maxSize uint64,
+	) ([]logservice.LogRecord, uint64, error)
+	GetTruncatedLsn(ctx context.Context) (uint64, error)
+
+	Append(
+		ctx context.Context,
+		record logservice.LogRecord,
+	) (psn uint64, err error)
+	Truncate(ctx context.Context, psn uint64) error
 }
 
 type BackendClient interface {
@@ -65,22 +76,20 @@ type wrappedClient struct {
 	id     int
 }
 
-func newClient(factory LogServiceClientFactory, recordSize int, retryDuration time.Duration) *wrappedClient {
-	logserviceClient, err := factory()
-	if err != nil {
-		RetryWithTimeout(retryDuration, func() (shouldReturn bool) {
-			logserviceClient, err = factory()
-			return err == nil
-		})
-		if err != nil {
-			panic(err)
-		}
+func newClient(
+	factory LogServiceClientFactory, bufSize int,
+) *wrappedClient {
+	var (
+		err    error
+		client BackendClient
+	)
+	if client, err = factory(); err != nil {
+		panic(err)
 	}
-	c := &wrappedClient{
-		c:      logserviceClient,
-		record: logserviceClient.GetLogRecord(recordSize),
+	return &wrappedClient{
+		c:      client,
+		record: client.GetLogRecord(bufSize),
 	}
-	return c
 }
 
 func (c *wrappedClient) Close() {
@@ -144,9 +153,8 @@ func (c *wrappedClient) Append(
 }
 
 type clientpool struct {
-	maxCount   int
-	count      int
-	getTimeout time.Duration
+	maxCount int
+	count    int
 
 	closed atomic.Int32
 
@@ -160,7 +168,6 @@ type clientpool struct {
 func newClientPool(size int, cfg *clientConfig) *clientpool {
 	pool := &clientpool{
 		maxCount:    size,
-		getTimeout:  cfg.GetClientRetryTimeOut,
 		freeClients: make([]*wrappedClient, size),
 		cfg:         cfg,
 	}
@@ -176,7 +183,7 @@ func newClientPool(size int, cfg *clientConfig) *clientpool {
 func (c *clientpool) createClientFactory(cfg *clientConfig) func() *wrappedClient {
 	return func() *wrappedClient {
 		c.count++
-		client := newClient(cfg.clientFactory, cfg.recordSize, cfg.retryDuration)
+		client := newClient(cfg.factory, cfg.bufSize)
 		client.id = c.count
 		return client
 	}
@@ -201,17 +208,6 @@ func (c *clientpool) Close() {
 func (c *clientpool) onClose(client *wrappedClient) {
 	client.Close()
 }
-
-// func (c *clientpool) GetAndWait() (*wrappedClient, error) {
-// 	client, err := c.Get()
-// 	if err == ErrNoClientAvailable {
-// 		retryWithTimeout(c.getTimeout, func() (shouldReturn bool) {
-// 			client, err = c.Get()
-// 			return err != ErrNoClientAvailable
-// 		})
-// 	}
-// 	return client, nil
-// }
 
 func (c *clientpool) Get() (*wrappedClient, error) {
 	if c.IsClosed() {

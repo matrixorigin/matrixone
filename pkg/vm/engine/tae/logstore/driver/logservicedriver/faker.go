@@ -156,14 +156,7 @@ func (d *mockDriver) readFromBackend(
 	return
 }
 
-func newMockBackendClient() *mockBackendClient {
-	return &mockBackendClient{
-		nextPSN: 1,
-		shardId: 1,
-	}
-}
-
-type mockBackendClient struct {
+type mockBackend struct {
 	sync.RWMutex
 	store     []logservice.LogRecord
 	nextPSN   uint64
@@ -171,15 +164,21 @@ type mockBackendClient struct {
 	shardId   uint64
 }
 
-func (c *mockBackendClient) Close() (err error) {
-	return
+func newMockBackend() *mockBackend {
+	return &mockBackend{nextPSN: 1, shardId: 1}
 }
 
-func (c *mockBackendClient) GetLogRecord(size int) logservice.LogRecord {
-	return logservice.NewUserLogRecord(c.shardId, size)
+type mockBackendClient struct {
+	store MockBackend
 }
 
-func (c *mockBackendClient) Append(
+func newMockBackendClient(backend MockBackend) *mockBackendClient {
+	return &mockBackendClient{
+		store: backend,
+	}
+}
+
+func (c *mockBackend) Append(
 	ctx context.Context, record logservice.LogRecord,
 ) (psn uint64, err error) {
 	cloned := record.Clone()
@@ -192,7 +191,7 @@ func (c *mockBackendClient) Append(
 	return cloned.Lsn, nil
 }
 
-func (c *mockBackendClient) GetTruncatedLsn(
+func (c *mockBackend) GetTruncatedLsn(
 	ctx context.Context,
 ) (psn uint64, err error) {
 	c.RLock()
@@ -200,7 +199,7 @@ func (c *mockBackendClient) GetTruncatedLsn(
 	return c.truncated, nil
 }
 
-func (c *mockBackendClient) Truncate(
+func (c *mockBackend) Truncate(
 	ctx context.Context, psnIntent uint64,
 ) (err error) {
 	c.Lock()
@@ -225,7 +224,7 @@ func (c *mockBackendClient) Truncate(
 	return
 }
 
-func (c *mockBackendClient) Read(
+func (c *mockBackend) Read(
 	ctx context.Context, firstPSN, maxSize uint64,
 ) (records []logservice.LogRecord, nextPSN uint64, err error) {
 	c.RLock()
@@ -255,6 +254,38 @@ func (c *mockBackendClient) Read(
 		nextPSN = c.nextPSN
 	}
 	return
+}
+
+func (c *mockBackendClient) Close() (err error) {
+	return
+}
+
+func (c *mockBackendClient) GetLogRecord(size int) logservice.LogRecord {
+	return logservice.NewUserLogRecord(0, size)
+}
+
+func (c *mockBackendClient) Append(
+	ctx context.Context, record logservice.LogRecord,
+) (psn uint64, err error) {
+	return c.store.Append(ctx, record)
+}
+
+func (c *mockBackendClient) Truncate(
+	ctx context.Context, psnIntent uint64,
+) (err error) {
+	return c.store.Truncate(ctx, psnIntent)
+}
+
+func (c *mockBackendClient) Read(
+	ctx context.Context, firstPSN, maxSize uint64,
+) (records []logservice.LogRecord, nextPSN uint64, err error) {
+	return c.store.Read(ctx, firstPSN, maxSize)
+}
+
+func (c *mockBackendClient) GetTruncatedLsn(
+	ctx context.Context,
+) (psn uint64, err error) {
+	return c.store.GetTruncatedLsn(ctx)
 }
 
 func (c *mockBackendClient) SetRequiredLsn(ctx context.Context, lsn logservice.Lsn) error {

@@ -15,7 +15,9 @@
 package logservicedriver
 
 import (
+	"bytes"
 	"context"
+	"strconv"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -23,48 +25,130 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 )
 
-var DefaultReadMaxSize = uint64(10)
+const (
+	DefaultMaxClient     = 100
+	DefaultClientBufSize = mpool.MB
+	DefaultMaxTimeout    = time.Second * 30
+	DefaultMaxRetryCount = 3
+)
 
 type Config struct {
-	ClientMaxCount        int
-	GetClientRetryTimeOut time.Duration
+	ClientMaxCount int
+	ClientBufSize  int
 
-	RecordSize           int
-	ReadCacheSize        int
-	NewClientDuration    time.Duration
-	ClientAppendDuration time.Duration
-	TruncateDuration     time.Duration
-	// AppendFrequency      time.Duration
-	RetryTimeout        time.Duration
-	GetTruncateDuration time.Duration
-	ReadDuration        time.Duration
+	MaxTimeout    time.Duration
+	MaxRetryCount int
 
 	ClientFactory LogServiceClientFactory
+	IsMockBackend bool
 }
 
 type LogServiceClientFactory logservice.ClientFactory
 
-func NewTestConfig(sid string, ccfg *logservice.ClientConfig) *Config {
-	cfg := &Config{
-		ClientMaxCount:        10,
-		GetClientRetryTimeOut: time.Second,
+type ConfigOption func(*Config)
 
-		RecordSize:    int(mpool.MB * 10),
-		ReadCacheSize: 10,
-		// AppendFrequency:      time.Millisecond /1000,
-		RetryTimeout:         time.Minute,
-		NewClientDuration:    time.Second,
-		ClientAppendDuration: time.Second,
-		TruncateDuration:     time.Second,
-		GetTruncateDuration:  time.Second,
-		ReadDuration:         time.Second,
+func WithConfigOptClientFactory(f LogServiceClientFactory) ConfigOption {
+	return func(cfg *Config) {
+		cfg.IsMockBackend = false
+		cfg.ClientFactory = f
 	}
-	cfg.ClientFactory = func() (logservice.Client, error) {
-		ctx, cancel := context.WithTimeoutCause(context.Background(), cfg.NewClientDuration, moerr.CauseNewTestConfig)
-		logserviceClient, err := logservice.NewClient(ctx, sid, *ccfg)
-		err = moerr.AttachCause(ctx, err)
-		cancel()
-		return logserviceClient, err
+}
+
+func WithConfigOptClientConfig(sid string, clientCfg *logservice.ClientConfig) ConfigOption {
+	return func(cfg *Config) {
+		cfg.IsMockBackend = false
+		cfg.ClientFactory = func() (client logservice.Client, err error) {
+			ctx, cancel := context.WithTimeoutCause(
+				context.Background(), cfg.MaxTimeout, moerr.CauseNewLogServiceClient,
+			)
+			defer cancel()
+			if client, err = logservice.NewClient(ctx, sid, *clientCfg); err != nil {
+				err = moerr.AttachCause(ctx, err)
+			}
+			return
+		}
 	}
+}
+
+func WithConfigOptMaxClient(maxCount int) ConfigOption {
+	return func(cfg *Config) {
+		cfg.ClientMaxCount = maxCount
+	}
+}
+
+func WithConfigOptClientBufSize(bufSize int) ConfigOption {
+	return func(cfg *Config) {
+		cfg.ClientBufSize = bufSize
+	}
+}
+
+func WithConfigOptMaxTimeout(timeout time.Duration) ConfigOption {
+	return func(cfg *Config) {
+		cfg.MaxTimeout = timeout
+	}
+}
+
+func WithConfigOptMaxRetryCount(retryCount int) ConfigOption {
+	return func(cfg *Config) {
+		cfg.MaxRetryCount = retryCount
+	}
+}
+
+func WithConfigMockClient(backend MockBackend) ConfigOption {
+	return func(cfg *Config) {
+		cfg.IsMockBackend = true
+		cfg.ClientFactory = func() (logservice.Client, error) {
+			return newMockBackendClient(backend), nil
+		}
+	}
+}
+
+func NewConfig(
+	sid string,
+	opts ...ConfigOption,
+) (cfg Config) {
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+	cfg.fillDefaults()
+	cfg.validate()
 	return cfg
+}
+
+func (cfg Config) String() string {
+	var w bytes.Buffer
+	w.WriteString("LogDriver-Config{")
+	w.WriteString("ClientMaxCount:")
+	w.WriteString(strconv.Itoa(cfg.ClientMaxCount))
+	w.WriteString(",ClientBufSize:")
+	w.WriteString(strconv.Itoa(cfg.ClientBufSize))
+	w.WriteString(",MaxTimeout:")
+	w.WriteString(cfg.MaxTimeout.String())
+	w.WriteString(",MaxRetryCount:")
+	w.WriteString(strconv.Itoa(cfg.MaxRetryCount))
+	w.WriteString(",IsMockBackend:")
+	w.WriteString(strconv.FormatBool(cfg.IsMockBackend))
+	w.WriteString("}")
+	return w.String()
+}
+
+func (cfg *Config) fillDefaults() {
+	if cfg.MaxRetryCount <= 0 {
+		cfg.MaxRetryCount = DefaultMaxRetryCount
+	}
+	if cfg.ClientMaxCount <= 0 {
+		cfg.ClientMaxCount = DefaultMaxClient
+	}
+	if cfg.ClientBufSize <= 0 {
+		cfg.ClientBufSize = DefaultClientBufSize
+	}
+	if cfg.MaxTimeout <= 0 {
+		cfg.MaxTimeout = DefaultMaxTimeout
+	}
+}
+
+func (cfg *Config) validate() {
+	if cfg.ClientFactory == nil {
+		panic("ClientFactory is nil")
+	}
 }

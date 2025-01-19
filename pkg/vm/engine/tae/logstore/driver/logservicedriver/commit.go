@@ -37,7 +37,7 @@ func (d *LogServiceDriver) Append(e *entry.Entry) error {
 }
 
 func (d *LogServiceDriver) getCommitter() *groupCommitter {
-	if int(d.committer.writer.Size()) > d.config.RecordSize {
+	if int(d.committer.writer.Size()) > d.config.ClientBufSize {
 		d.flushCurrentCommitter()
 	}
 	return d.committer
@@ -73,8 +73,8 @@ func (d *LogServiceDriver) asyncCommit(committer *groupCommitter) {
 	d.appendPool.Submit(func() {
 		defer committer.Done()
 		if err := committer.Commit(
-			10,
-			d.config.ClientAppendDuration,
+			d.config.MaxRetryCount,
+			d.config.MaxTimeout,
 		); err != nil {
 			logutil.Fatal(
 				"Wal-Cannot-Append",
@@ -87,9 +87,13 @@ func (d *LogServiceDriver) asyncCommit(committer *groupCommitter) {
 // Node:
 // this function must be called in serial due to the write token
 func (d *LogServiceDriver) getClientForWrite() (client *wrappedClient, token uint64) {
-	var err error
+	var (
+		retryTimes = 0
+		err        error
+		now        = time.Now()
+	)
 	if token, err = d.applyWriteToken(
-		uint64(d.config.ClientMaxCount), time.Second,
+		uint64(d.config.ClientMaxCount), d.config.MaxTimeout,
 	); err != nil {
 		// should never happen
 		panic(err)
@@ -98,21 +102,20 @@ func (d *LogServiceDriver) getClientForWrite() (client *wrappedClient, token uin
 		return
 	}
 
-	var (
-		retryCount = 0
-		now        = time.Now()
-		logger     = logutil.Info
-	)
-	if err = RetryWithTimeout(d.config.RetryTimeout, func() (shouldReturn bool) {
-		retryCount++
+	for ; retryTimes < d.config.MaxRetryCount; retryTimes++ {
 		client, err = d.clientPool.Get()
-		return err == nil
-	}); err != nil {
+		if err == nil {
+			break
+		}
+		time.Sleep(time.Millisecond * 100)
+	}
+	logger := logutil.Info
+	if err != nil {
 		logger = logutil.Error
 	}
 	logger(
 		"Wal-Get-Client",
-		zap.Int("retry-count", retryCount),
+		zap.Int("retry-count", retryTimes),
 		zap.Error(err),
 		zap.Duration("duration", time.Since(now)),
 	)
