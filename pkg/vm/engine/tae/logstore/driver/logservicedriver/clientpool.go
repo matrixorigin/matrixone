@@ -49,7 +49,7 @@ type MockBackend interface {
 
 	Append(
 		ctx context.Context,
-		record logservice.LogRecord,
+		buf logservice.LogRecord,
 	) (psn uint64, err error)
 	Truncate(ctx context.Context, psn uint64) error
 }
@@ -65,15 +65,14 @@ type BackendClient interface {
 
 	Append(
 		ctx context.Context,
-		record logservice.LogRecord,
+		buf logservice.LogRecord,
 	) (psn uint64, err error)
 	Truncate(ctx context.Context, psn uint64) error
 }
 
 type wrappedClient struct {
-	c      BackendClient
-	record logservice.LogRecord
-	id     int
+	wrapped BackendClient
+	buf     logservice.LogRecord
 }
 
 func newClient(
@@ -87,18 +86,18 @@ func newClient(
 		panic(err)
 	}
 	return &wrappedClient{
-		c:      client,
-		record: client.GetLogRecord(bufSize),
+		wrapped: client,
+		buf:     client.GetLogRecord(bufSize),
 	}
 }
 
 func (c *wrappedClient) Close() {
-	c.c.Close()
+	c.wrapped.Close()
 }
 
 func (c *wrappedClient) tryResize(size int) {
-	if len(c.record.Payload()) < size {
-		c.record = c.c.GetLogRecord(size)
+	if len(c.buf.Payload()) < size {
+		c.buf = c.wrapped.GetLogRecord(size)
 	}
 }
 
@@ -109,12 +108,12 @@ func (c *wrappedClient) Append(
 	maxRetry int,
 	timeoutCause error,
 ) (psn uint64, err error) {
-	if e.Size() > len(c.record.Payload()) {
-		c.record = c.c.GetLogRecord(e.Size())
+	if e.Size() > len(c.buf.Payload()) {
+		c.buf = c.wrapped.GetLogRecord(e.Size())
 	} else {
-		c.record.ResizePayload(e.Size())
+		c.buf.ResizePayload(e.Size())
 	}
-	c.record.SetPayload(e[:])
+	c.buf.SetPayload(e[:])
 
 	var (
 		retryTimes int
@@ -143,7 +142,7 @@ func (c *wrappedClient) Append(
 		ctx, cancel = context.WithTimeoutCause(
 			ctx, timeout, moerr.CauseDriverAppender1,
 		)
-		psn, err = c.c.Append(ctx, c.record)
+		psn, err = c.wrapped.Append(ctx, c.buf)
 		cancel()
 		if err == nil {
 			break
@@ -153,38 +152,35 @@ func (c *wrappedClient) Append(
 }
 
 type clientpool struct {
-	maxCount int
-	count    int
-
+	mu     sync.Mutex
 	closed atomic.Int32
 
-	freeClients   []*wrappedClient
+	cfg      *clientConfig
+	maxCount int
+
+	clients       []*wrappedClient
 	clientFactory func() *wrappedClient
 	closefn       func(*wrappedClient)
-	mu            sync.Mutex
-	cfg           *clientConfig
 }
 
 func newClientPool(size int, cfg *clientConfig) *clientpool {
 	pool := &clientpool{
-		maxCount:    size,
-		freeClients: make([]*wrappedClient, size),
-		cfg:         cfg,
+		maxCount: size,
+		clients:  make([]*wrappedClient, size),
+		cfg:      cfg,
 	}
 	pool.clientFactory = pool.createClientFactory(cfg)
 	pool.closefn = pool.onClose
 
 	for i := 0; i < size; i++ {
-		pool.freeClients[i] = pool.clientFactory()
+		pool.clients[i] = pool.clientFactory()
 	}
 	return pool
 }
 
 func (c *clientpool) createClientFactory(cfg *clientConfig) func() *wrappedClient {
 	return func() *wrappedClient {
-		c.count++
 		client := newClient(cfg.factory, cfg.bufSize)
-		client.id = c.count
 		return client
 	}
 }
@@ -199,7 +195,7 @@ func (c *clientpool) Close() {
 		return
 	}
 	var wg sync.WaitGroup
-	for _, client := range c.freeClients {
+	for _, client := range c.clients {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -224,14 +220,11 @@ func (c *clientpool) Get() (*wrappedClient, error) {
 	if c.IsClosed() {
 		return nil, ErrClientPoolClosed
 	}
-	if len(c.freeClients) == 0 {
-		if c.count == c.maxCount {
-			return nil, ErrNoClientAvailable
-		}
-		return c.clientFactory(), nil
+	if len(c.clients) == 0 {
+		return nil, ErrNoClientAvailable
 	}
-	client := c.freeClients[len(c.freeClients)-1]
-	c.freeClients = c.freeClients[:len(c.freeClients)-1]
+	client := c.clients[len(c.clients)-1]
+	c.clients = c.clients[:len(c.clients)-1]
 	return client, nil
 }
 
@@ -240,8 +233,8 @@ func (c *clientpool) IsClosed() bool {
 }
 
 func (c *clientpool) Put(client *wrappedClient) {
-	if len(client.record.Payload()) > DefaultRecordSize {
-		client.record = client.c.GetLogRecord(DefaultRecordSize)
+	if len(client.buf.Payload()) > DefaultRecordSize {
+		client.buf = client.wrapped.GetLogRecord(DefaultRecordSize)
 	}
 	if c.IsClosed() {
 		c.closefn(client)
@@ -253,7 +246,6 @@ func (c *clientpool) Put(client *wrappedClient) {
 		c.mu.Unlock()
 		return
 	}
-	c.count--
-	c.freeClients = append(c.freeClients, client)
+	c.clients = append(c.clients, client)
 	defer c.mu.Unlock()
 }

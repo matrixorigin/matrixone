@@ -156,7 +156,7 @@ func (d *LogServiceDriver) truncateFromRemote(
 		loopCtx, cancel = context.WithTimeoutCause(
 			ctx, d.config.MaxTimeout, moerr.CauseTruncateLogservice,
 		)
-		err = client.c.Truncate(loopCtx, psnIntent)
+		err = client.wrapped.Truncate(loopCtx, psnIntent)
 		err = moerr.AttachCause(loopCtx, err)
 		cancel()
 
@@ -215,7 +215,7 @@ func (d *LogServiceDriver) getTruncatedPSNFromBackend(
 			d.config.MaxTimeout,
 			moerr.CauseGetLogserviceTruncate,
 		)
-		psn, err = client.c.GetTruncatedLsn(ctx)
+		psn, err = client.wrapped.GetTruncatedLsn(ctx)
 		err = moerr.AttachCause(ctx, err)
 		cancel()
 		if err == nil {

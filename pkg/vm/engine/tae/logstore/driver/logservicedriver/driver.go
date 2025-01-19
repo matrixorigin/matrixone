@@ -209,7 +209,7 @@ func (d *LogServiceDriver) readFromBackend(
 			d.config.MaxTimeout,
 			moerr.CauseReadFromLogService,
 		)
-		if records, nextPSN, err = client.c.Read(
+		if records, nextPSN, err = client.wrapped.Read(
 			ctx, firstPSN, uint64(maxSize),
 		); err != nil {
 			err = moerr.AttachCause(ctx, err)
