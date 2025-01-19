@@ -17,8 +17,8 @@ package logservicedriver
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	storeDriver "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -889,6 +890,9 @@ func Test_Replayer9(t *testing.T) {
 
 	errCh := make(chan error, 1)
 
+	var maxReadDSN atomic.Uint64
+	applyCnt := 0
+
 	readCtx, readCancel := context.WithCancelCause(context.Background())
 	go func() {
 		var err error
@@ -898,7 +902,11 @@ func Test_Replayer9(t *testing.T) {
 		err = consumer.Replay(
 			readCtx,
 			func(e *entry.Entry) storeDriver.ReplayEntryState {
-				t.Logf("Read DSN: %d", e.DSN)
+				assert.Equal(t, e.DSN-1, maxReadDSN.Load())
+				if e.DSN > maxReadDSN.Load() {
+					maxReadDSN.Store(e.DSN)
+				}
+				applyCnt++
 				return storeDriver.RE_Nomal
 			},
 			storeDriver.ReplayMode_ReplayForever,
@@ -927,7 +935,12 @@ func Test_Replayer9(t *testing.T) {
 		err := e.WaitDone()
 		assert.NoError(t, err)
 	}
-	time.Sleep(time.Millisecond * 300)
+
+	testutils.WaitExpect(1000, func() bool {
+		return maxReadDSN.Load() == uint64(50)
+	})
+	assert.Equal(t, uint64(50), maxReadDSN.Load())
+	assert.Equal(t, 50, applyCnt)
 
 	cancelErr := fmt.Errorf("cancel")
 	readCancel(cancelErr)

@@ -362,6 +362,19 @@ func (r *replayer) Replay(ctx context.Context) (err error) {
 		}
 
 		if readDone && r.waitMoreRecords() {
+			for err == nil || err != ErrAllRecordsRead {
+				lastScheduled, err = r.tryScheduleApply(
+					ctx, applyC, lastScheduled, false,
+				)
+			}
+			if err == ErrAllRecordsRead {
+				err = nil
+			}
+			if err != nil {
+				errMsg = fmt.Sprintf("read loop schedule apply error: %v", err)
+				close(applyC)
+				return
+			}
 			time.Sleep(waitTime)
 			waitTime *= 2
 			if waitTime > time.Millisecond*128 {
