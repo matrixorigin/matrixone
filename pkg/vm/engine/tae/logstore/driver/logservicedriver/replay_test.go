@@ -625,7 +625,7 @@ func Test_Replayer5(t *testing.T) {
 		30,
 		WithReplayerAppendSkipCmd(noopAppendSkipCmd),
 		WithReplayerUnmarshalLogRecord(mockUnmarshalLogRecordFactor(mockDriver)),
-		WithReplayerOnRead(onRead),
+		WithReplayerOnUserLogEntry(onRead),
 		WithReplayerOnScheduled(onScheduled),
 	)
 
@@ -692,7 +692,7 @@ func Test_Replayer6(t *testing.T) {
 		WithReplayerOnWriteSkip(onWriteSkip),
 		WithReplayerAppendSkipCmd(noopAppendSkipCmd),
 		WithReplayerUnmarshalLogRecord(mockUnmarshalLogRecordFactor(mockDriver)),
-		WithReplayerOnRead(onRead),
+		WithReplayerOnUserLogEntry(onRead),
 		WithReplayerOnScheduled(onScheduled),
 	)
 
@@ -765,7 +765,7 @@ func Test_Replayer7(t *testing.T) {
 		WithReplayerOnWriteSkip(onWriteSkip),
 		WithReplayerAppendSkipCmd(noopAppendSkipCmd),
 		WithReplayerUnmarshalLogRecord(mockUnmarshalLogRecordFactor(mockDriver)),
-		WithReplayerOnRead(onRead),
+		WithReplayerOnUserLogEntry(onRead),
 		WithReplayerOnScheduled(onScheduled),
 	)
 
@@ -838,7 +838,7 @@ func Test_Replayer8(t *testing.T) {
 		WithReplayerOnWriteSkip(onWriteSkip),
 		WithReplayerAppendSkipCmd(noopAppendSkipCmd),
 		WithReplayerUnmarshalLogRecord(mockUnmarshalLogRecordFactor(mockDriver)),
-		WithReplayerOnRead(onRead),
+		WithReplayerOnUserLogEntry(onRead),
 		WithReplayerOnScheduled(onScheduled),
 	)
 

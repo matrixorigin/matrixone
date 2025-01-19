@@ -53,15 +53,28 @@ func WithReplayerOnWriteSkip(f func(map[uint64]uint64)) ReplayOption {
 	}
 }
 
-func WithReplayerOnRead(f func(uint64, LogEntry)) ReplayOption {
+func WithReplayerOnLogRecord(f func(logservice.LogRecord)) ReplayOption {
 	return func(r *replayer) {
-		if r.onRead != nil {
-			r.onRead = func(psn uint64, entry LogEntry) {
-				f(psn, entry)
-				r.onRead(psn, entry)
+		if r.onLogRecord != nil {
+			r.onLogRecord = func(record logservice.LogRecord) {
+				f(record)
+				r.onLogRecord(record)
 			}
 		} else {
-			r.onRead = f
+			r.onLogRecord = f
+		}
+	}
+}
+
+func WithReplayerOnUserLogEntry(f func(uint64, LogEntry)) ReplayOption {
+	return func(r *replayer) {
+		if r.onUserLogEntry != nil {
+			r.onUserLogEntry = func(psn uint64, entry LogEntry) {
+				f(psn, entry)
+				r.onUserLogEntry(psn, entry)
+			}
+		} else {
+			r.onUserLogEntry = f
 		}
 	}
 }
@@ -134,7 +147,8 @@ type replayer struct {
 
 	logRecordToLogEntry func(logservice.LogRecord) LogEntry
 	appendSkipCmd       func(ctx context.Context, skipMap map[uint64]uint64) error
-	onRead              func(uint64, LogEntry)
+	onLogRecord         func(logservice.LogRecord)
+	onUserLogEntry      func(uint64, LogEntry)
 	onScheduled         func(uint64, *common.ClosedIntervals, LogEntry)
 	onApplied           func(*entry.Entry)
 	onWriteSkip         func(map[uint64]uint64)
@@ -638,6 +652,9 @@ func (r *replayer) readNextBatch(
 	}
 	r.stats.readDuration += time.Since(t0)
 	for i, record := range records {
+		if r.onLogRecord != nil {
+			r.onLogRecord(record)
+		}
 		// skip non-user records
 		if record.GetType() != pb.UserRecord {
 			continue
@@ -647,8 +664,8 @@ func (r *replayer) readNextBatch(
 		if updated := r.replayedState.readCache.addRecord(
 			psn, entry,
 		); updated {
-			if r.onRead != nil {
-				r.onRead(psn, entry)
+			if r.onUserLogEntry != nil {
+				r.onUserLogEntry(psn, entry)
 			}
 			// 1. update the safe DSN
 			if r.replayedState.safeDSN < entry.GetSafeDSN() {
