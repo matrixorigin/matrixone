@@ -18,6 +18,7 @@ import (
 	"context"
 	"sort"
 	"sync"
+	"time"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -29,6 +30,7 @@ import (
 )
 
 var _ BackendClient = (*mockBackendClient)(nil)
+var _ logservice.Client = (*mockBackendClient)(nil)
 
 func MockTruncateLogRecord(psn uint64) logservice.LogRecord {
 	ret := logservice.LogRecord{
@@ -253,4 +255,28 @@ func (c *mockBackendClient) Read(
 		nextPSN = c.nextPSN
 	}
 	return
+}
+
+func (c *mockBackendClient) SetRequiredLsn(ctx context.Context, lsn logservice.Lsn) error {
+	panic("not implemented")
+}
+func (c *mockBackendClient) GetRequiredLsn(_ context.Context) (logservice.Lsn, error) {
+	panic("not implemented")
+}
+func (c *mockBackendClient) GetLogRecordSize() int {
+	panic("not implemented")
+}
+func (c *mockBackendClient) GetTSOTimestamp(_ context.Context, _ uint64) (uint64, error) {
+	panic("not implemented")
+}
+func (c *mockBackendClient) GetLatestLsn(_ context.Context) (uint64, error) {
+	panic("not implemented")
+}
+
+// ReadLsn
+func (c *mockBackendClient) ReadLsn(_ context.Context, _ time.Time) (logservice.Lsn, error) {
+	panic("not implemented")
+}
+func (c *mockBackendClient) Config() logservice.ClientConfig {
+	panic("not implemented")
 }

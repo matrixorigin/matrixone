@@ -44,24 +44,6 @@ type Config struct {
 
 type LogServiceClientFactory logservice.ClientFactory
 
-func NewDefaultConfig(clientFactory LogServiceClientFactory) *Config {
-	return &Config{
-		ClientMaxCount:        100,
-		GetClientRetryTimeOut: time.Second * 3,
-
-		RecordSize:        int(mpool.MB * 1),
-		ReadCacheSize:     100,
-		NewClientDuration: time.Second * 3,
-		// AppendFrequency:      time.Millisecond * 5,
-		RetryTimeout:         time.Minute * 3,
-		ClientAppendDuration: time.Second * 10,
-		TruncateDuration:     time.Second * 10,
-		GetTruncateDuration:  time.Second * 5,
-		ReadDuration:         time.Second * 5,
-		ClientFactory:        clientFactory,
-	}
-}
-
 func NewTestConfig(sid string, ccfg *logservice.ClientConfig) *Config {
 	cfg := &Config{
 		ClientMaxCount:        10,
