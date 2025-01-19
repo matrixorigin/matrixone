@@ -154,6 +154,13 @@ func (d *mockDriver) readFromBackend(
 	return
 }
 
+func newMockBackendClient() *mockBackendClient {
+	return &mockBackendClient{
+		nextPSN: 1,
+		shardId: 1,
+	}
+}
+
 type mockBackendClient struct {
 	sync.RWMutex
 	store     []logservice.LogRecord
@@ -218,20 +225,14 @@ func (c *mockBackendClient) Truncate(
 
 func (c *mockBackendClient) Read(
 	ctx context.Context, firstPSN, maxSize uint64,
-) (ret []logservice.LogRecord, nextPSN uint64, err error) {
+) (records []logservice.LogRecord, nextPSN uint64, err error) {
 	c.RLock()
 	defer c.RUnlock()
-	var records []logservice.LogRecord
-	idx, found := sort.Find(len(c.store), func(i int) int {
-		if c.store[i].Lsn > firstPSN {
-			return 1
-		} else if c.store[i].Lsn == firstPSN {
-			return 0
-		} else {
-			return -1
-		}
+	idx := sort.Search(len(c.store), func(i int) bool {
+		return c.store[i].Lsn >= firstPSN
 	})
-	if !found {
+	// logutil.Infof("idx: %d, firstPSN=%d, total=%d", idx, firstPSN, len(c.store))
+	if idx >= len(c.store) {
 		nextPSN = firstPSN
 		return
 	}
@@ -240,7 +241,7 @@ func (c *mockBackendClient) Read(
 		size = 0
 	)
 	for ; i < len(c.store); i++ {
-		records = append(records, c.store[i])
+		records = append(records, c.store[i].Clone())
 		size += len(c.store[i].Data) + int(unsafe.Sizeof(logservice.LogRecord{}))
 		if size >= int(maxSize) {
 			break

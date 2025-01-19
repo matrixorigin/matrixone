@@ -29,6 +29,68 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func Test_MockBackend1(t *testing.T) {
+	ctx := context.Background()
+	client := newMockBackendClient()
+	defer client.Close()
+	var (
+		psnSize    = make(map[uint64]int)
+		lastPSN    uint64
+		psn        uint64
+		toTruncate uint64
+		truncated  uint64
+		err        error
+	)
+
+	for i := 0; i < 14; i++ {
+		if i == 4 || i == 8 {
+			truncated, err = client.GetTruncatedLsn(ctx)
+			assert.NoError(t, err)
+			assert.Equal(t, toTruncate, truncated)
+			toTruncate = uint64(i - 2)
+			err = client.Truncate(ctx, toTruncate)
+			assert.NoError(t, err)
+		}
+		record := client.GetLogRecord(400 * (i + 1))
+		assert.Equal(t, 400*(i+1), len(record.Payload()))
+		psn, err = client.Append(ctx, record)
+		assert.NoError(t, err)
+		psnSize[psn] = len(record.Payload())
+		assert.Greater(t, psn, lastPSN)
+		lastPSN = psn
+	}
+
+	truncated, err = client.GetTruncatedLsn(ctx)
+	assert.NoError(t, err)
+	assert.Equal(t, toTruncate, truncated)
+
+	first := toTruncate + 1
+	loaded, next, err := client.Read(ctx, first, 1000000)
+	t.Log(first, len(loaded), next, err, psnSize)
+	assert.NoError(t, err)
+	assert.Equal(t, 10, len(loaded))
+
+	var userRecordCount int
+	for _, r := range loaded {
+		if r.Type == pb.UserRecord {
+			userRecordCount++
+		}
+	}
+	assert.Equal(t, 9, userRecordCount)
+	assert.Equal(t, lastPSN+1, next)
+
+	var next2 uint64
+	loaded, next2, err = client.Read(ctx, next, 1000000)
+	assert.NoError(t, err)
+	assert.Equal(t, 0, len(loaded))
+	assert.Equal(t, next, next2)
+
+	loaded, next, err = client.Read(ctx, first, 8000)
+	assert.NoError(t, err)
+	assert.Equal(t, uint64(10), next)
+	assert.Equal(t, 3, len(loaded))
+}
+
 func Test_AppendSkipCmd(t *testing.T) {
 	service, ccfg := initTest(t)
 	defer service.Close()
