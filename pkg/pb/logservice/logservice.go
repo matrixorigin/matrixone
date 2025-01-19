@@ -73,6 +73,10 @@ func (m *LogRecord) ResizePayload(length int) {
 	m.Data = m.Data[:HeaderSize+8+length]
 }
 
+func (m LogRecord) SetPayload(payload []byte) {
+	copy(m.Data[HeaderSize+8:], payload)
+}
+
 // Payload returns the payload byte slice.
 func (m *LogRecord) Payload() []byte {
 	return m.Data[HeaderSize+8:]

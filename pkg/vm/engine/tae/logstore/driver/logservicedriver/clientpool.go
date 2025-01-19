@@ -100,9 +100,12 @@ func (c *wrappedClient) Append(
 	maxRetry int,
 	timeoutCause error,
 ) (psn uint64, err error) {
-	c.tryResize(len(e[:]))
-	copy(c.record.Payload(), e[:])
-	c.record.ResizePayload(len(e[:]))
+	if e.Size() > len(c.record.Payload()) {
+		c.record = c.c.GetLogRecord(e.Size())
+	} else {
+		c.record.ResizePayload(e.Size())
+	}
+	c.record.SetPayload(e[:])
 
 	var (
 		retryTimes int
