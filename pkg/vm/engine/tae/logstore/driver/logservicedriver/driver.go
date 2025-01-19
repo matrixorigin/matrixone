@@ -195,7 +195,7 @@ func (d *LogServiceDriver) readFromBackend(
 	if client, err = d.clientPool.Get(); err != nil {
 		return
 	}
-	defer d.clientPool.Put(client)
+	defer client.Putback()
 
 	for ; retryTimes < d.config.MaxRetryCount; retryTimes++ {
 		ctx, cancel = context.WithTimeoutCause(

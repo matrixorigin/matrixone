@@ -130,7 +130,7 @@ func (d *LogServiceDriver) onWaitCommitted(items []any, nextQueue chan any) {
 	for _, item := range items {
 		committer := item.(*groupCommitter)
 		committer.Wait()
-		committer.PutbackClient(d.clientPool)
+		committer.PutbackClient()
 		committer.NotifyCommitted()
 		committers = append(committers, committer)
 	}

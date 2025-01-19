@@ -113,8 +113,8 @@ func (a *groupCommitter) Commit(
 	return
 }
 
-func (a *groupCommitter) PutbackClient(pool *clientpool) {
-	pool.Put(a.client)
+func (a *groupCommitter) PutbackClient() {
+	a.client.Putback()
 	a.client = nil
 }
 

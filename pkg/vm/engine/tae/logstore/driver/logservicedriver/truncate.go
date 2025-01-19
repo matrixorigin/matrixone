@@ -146,7 +146,7 @@ func (d *LogServiceDriver) truncateFromRemote(
 	if client, err = d.clientPool.Get(); err == ErrClientPoolClosed {
 		return
 	}
-	defer d.clientPool.Put(client)
+	defer client.Putback()
 
 	for ; retryTimes < maxRetry+1; retryTimes++ {
 		var (
@@ -206,7 +206,7 @@ func (d *LogServiceDriver) getTruncatedPSNFromBackend(
 	if client, err = d.clientPool.Get(); err != nil {
 		return
 	}
-	defer d.clientPool.Put(client)
+	defer client.Putback()
 
 	for ; retryTimes < maxRetry; retryTimes++ {
 		var cancel context.CancelFunc

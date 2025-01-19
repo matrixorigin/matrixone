@@ -67,6 +67,7 @@ type BackendClient interface {
 type wrappedClient struct {
 	wrapped BackendClient
 	buf     logservice.LogRecord
+	pool    *clientpool
 }
 
 func newClient(
@@ -87,12 +88,6 @@ func newClient(
 
 func (c *wrappedClient) Close() {
 	c.wrapped.Close()
-}
-
-func (c *wrappedClient) tryResize(size int) {
-	if len(c.buf.Payload()) < size {
-		c.buf = c.wrapped.GetLogRecord(size)
-	}
 }
 
 func (c *wrappedClient) Append(
@@ -143,6 +138,14 @@ func (c *wrappedClient) Append(
 		}
 	}
 	return
+}
+
+func (c *wrappedClient) Putback() {
+	if c.pool != nil {
+		pool := c.pool
+		c.pool = nil
+		pool.Put(c)
+	}
 }
 
 type clientpool struct {
@@ -208,6 +211,7 @@ func (c *clientpool) Get() (*wrappedClient, error) {
 	}
 	client := c.clients[len(c.clients)-1]
 	c.clients = c.clients[:len(c.clients)-1]
+	client.pool = c
 	return client, nil
 }
 
