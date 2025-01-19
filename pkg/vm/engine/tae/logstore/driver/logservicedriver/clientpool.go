@@ -197,6 +197,14 @@ func (c *clientpool) onClose(client *wrappedClient) {
 	client.Close()
 }
 
+func (c *clientpool) GetOnFly() (*wrappedClient, error) {
+	if c.IsClosed() {
+		return nil, ErrClientPoolClosed
+	}
+	client := newClient(c.cfg.ClientFactory, c.cfg.ClientBufSize)
+	return client, nil
+}
+
 func (c *clientpool) Get() (*wrappedClient, error) {
 	if c.IsClosed() {
 		return nil, ErrClientPoolClosed

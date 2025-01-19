@@ -944,13 +944,24 @@ func Test_Replayer9(t *testing.T) {
 	assert.Equal(t, uint64(entryCnt), maxReadDSN.Load())
 	assert.Equal(t, entryCnt, applyCnt)
 
+	toTruncates := []uint64{entries[entryCnt/2].DSN, entries[entryCnt/4].DSN, entries[entryCnt/8].DSN}
+
 	entries = entries[:0]
 	for i := 0; i < entryCnt; i++ {
-		i := uint64(entryCnt + i)
-		e := entry.MockEntryWithPayload(types.EncodeUint64(&i))
+		v := uint64(entryCnt + i)
+		e := entry.MockEntryWithPayload(types.EncodeUint64(&v))
 		err := producer.Append(e)
 		assert.NoError(t, err)
 		entries = append(entries, e)
+		if i == entryCnt/16 || i == entryCnt/4 || i == entryCnt/8 {
+			if len(toTruncates) > 1 {
+				dsn := toTruncates[len(toTruncates)-1]
+				toTruncates = toTruncates[:len(toTruncates)-1]
+				err := producer.Truncate(dsn)
+				assert.NoError(t, err)
+				t.Logf("Truncate DSN: %d", dsn)
+			}
+		}
 	}
 
 	for _, e := range entries {
@@ -961,7 +972,7 @@ func Test_Replayer9(t *testing.T) {
 	testutils.WaitExpect(1000, func() bool {
 		return maxReadDSN.Load() == uint64(entryCnt*2)
 	})
-	assert.Equal(t, uint64(entryCnt*2), maxReadDSN.Load())
+	assert.Equalf(t, uint64(entryCnt*2), maxReadDSN.Load(), fmt.Sprintf("%d, %d", entryCnt*2, maxReadDSN.Load()))
 
 	cancelErr := fmt.Errorf("cancel")
 	readCancel(cancelErr)
