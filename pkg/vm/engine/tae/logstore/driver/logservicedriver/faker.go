@@ -182,7 +182,7 @@ func newMockBackendClient(backend MockBackend) *mockBackendClient {
 func (c *mockBackend) Append(
 	ctx context.Context, record logservice.LogRecord,
 ) (psn uint64, err error) {
-	time.Sleep(time.Duration(rand.Intn(2000)+50) * time.Microsecond)
+	time.Sleep(time.Duration(rand.Intn(2000)+500) * time.Microsecond)
 	cloned := record.Clone()
 	c.Lock()
 	defer c.Unlock()

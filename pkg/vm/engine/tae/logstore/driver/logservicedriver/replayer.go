@@ -571,6 +571,7 @@ func (r *replayer) tryScheduleApply(
 			"Wal-Replay-First-Entry",
 			zap.Uint64("dsn", dsn),
 			zap.Uint64("psn", psn),
+			zap.Any("read-state", readState),
 		)
 	}
 
@@ -733,11 +734,12 @@ func (r *replayer) readNextBatch(
 				cmd := SkipCmd(entry.GetEntry(0))
 				skipDSNs := cmd.GetDSNSlice()
 				logutil.Info(
-					"Wal-Replay-Skip-Entry",
+					"Wal-Read-Skip-Entry",
 					zap.Any("skip-dsns", skipDSNs),
 					zap.Any("skip-psns", cmd.GetPSNSlice()),
 					zap.Uint64("psn", psn),
 					zap.Uint64("safe-dsn", entry.GetSafeDSN()),
+					// zap.Any("dsn-psn", r.replayedState.dsn2PSNMap),
 				)
 
 				for _, dsn := range skipDSNs {
@@ -767,8 +769,12 @@ func (r *replayer) readNextBatch(
 					)
 					panic("logic error")
 				}
-				// logutil.Infof("DEBUG-2: dsn %d, psn %d, scheduled %d", dsn, psn, r.waterMarks.dsnScheduled)
-				r.waterMarks.dsnScheduled = safe
+				// logutil.Infof("DEBUG-3: dsn %d, psn %d, scheduled %d, safe %d", dsn, psn, r.waterMarks.dsnScheduled, safe)
+				if safe == 0 {
+					r.waterMarks.dsnScheduled = 0
+				} else {
+					r.waterMarks.dsnScheduled = safe - 1
+				}
 			}
 		}
 	}
