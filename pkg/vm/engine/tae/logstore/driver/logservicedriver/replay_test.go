@@ -903,7 +903,7 @@ func Test_Replayer9(t *testing.T) {
 			readCtx,
 			func(e *entry.Entry) storeDriver.ReplayEntryState {
 				applyCnt++
-				assert.Equal(t, e.DSN-1, maxReadDSN.Load())
+				assert.Equalf(t, e.DSN-1, maxReadDSN.Load(), fmt.Sprintf("%d, %d", e.DSN-1, maxReadDSN.Load()))
 				if e.DSN > maxReadDSN.Load() {
 					maxReadDSN.Store(e.DSN)
 				}
@@ -923,7 +923,7 @@ func Test_Replayer9(t *testing.T) {
 	)
 	assert.NoError(t, err)
 
-	entryCnt := 400
+	entryCnt := 20000
 
 	entries := make([]*entry.Entry, 0, entryCnt)
 	for i := 0; i < entryCnt; i++ {

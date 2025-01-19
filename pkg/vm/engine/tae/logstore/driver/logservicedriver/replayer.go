@@ -32,6 +32,14 @@ import (
 	"go.uber.org/zap"
 )
 
+type ReadState int32
+
+const (
+	ReadState_InLoop = iota
+	ReadState_InLoopDone
+	ReadState_AllDone
+)
+
 type ReplayOption func(*replayer)
 
 func WithReplayerWaitMore(wait func() bool) ReplayOption {
@@ -364,7 +372,7 @@ func (r *replayer) Replay(ctx context.Context) (err error) {
 		if readDone && r.waitMoreRecords() {
 			for err == nil || err != ErrAllRecordsRead {
 				lastScheduled, err = r.tryScheduleApply(
-					ctx, applyC, lastScheduled, false,
+					ctx, applyC, lastScheduled, ReadState_InLoopDone,
 				)
 			}
 			if err == ErrAllRecordsRead {
@@ -388,7 +396,7 @@ func (r *replayer) Replay(ctx context.Context) (err error) {
 		// schedule some entries for apply
 		for r.waterMarks.dsnScheduled < r.replayedState.safeDSN {
 			if lastScheduled, err = r.tryScheduleApply(
-				ctx, applyC, lastScheduled, false,
+				ctx, applyC, lastScheduled, ReadState_InLoop,
 			); err != nil {
 				break
 			}
@@ -407,7 +415,7 @@ func (r *replayer) Replay(ctx context.Context) (err error) {
 
 	for err == nil || err != ErrAllRecordsRead {
 		lastScheduled, err = r.tryScheduleApply(
-			ctx, applyC, lastScheduled, true,
+			ctx, applyC, lastScheduled, ReadState_AllDone,
 		)
 	}
 
@@ -442,7 +450,7 @@ func (r *replayer) tryScheduleApply(
 	ctx context.Context,
 	applyC chan<- *entry.Entry,
 	lastScheduled *entry.Entry,
-	readDone bool,
+	readState ReadState,
 ) (scheduled *entry.Entry, err error) {
 	scheduled = lastScheduled
 
@@ -454,6 +462,7 @@ func (r *replayer) tryScheduleApply(
 
 	dsn := r.waterMarks.dsnScheduled + 1
 	psn, ok := r.replayedState.dsn2PSNMap[dsn]
+	// logutil.Infof("DEBUG-1: dsn %d, psn %d, ok %v, %v", dsn, psn, ok, r.waterMarks.dsnScheduled)
 
 	// Senario 1 [dsn not found]:
 	// dsn is not found in the dsn2PSNMap, which means the record
@@ -511,8 +520,19 @@ func (r *replayer) tryScheduleApply(
 			// DSN: [37,37],[35,35],[40,40],[36,36],[39,39],[38,38]
 			// For DSN 36, it will get in here after all records have been read
 
-			if !readDone {
+			logutil.Debug(
+				"Wal-Replay-Info",
+				zap.Uint64("dsn", dsn),
+				zap.Uint64("safe-dsn", r.replayedState.safeDSN),
+				zap.Any("dsn-psn", r.replayedState.dsn2PSNMap),
+				zap.Uint64("dsn-scheduled", r.waterMarks.dsnScheduled),
+			)
+
+			if readState == ReadState_InLoop {
 				panic(fmt.Sprintf("logic error, safe dsn %d, dsn %d", r.replayedState.safeDSN, dsn))
+			} else if readState == ReadState_InLoopDone {
+				err = ErrAllRecordsRead
+				return
 			}
 
 			if appliedLSNCount == 0 {
@@ -691,7 +711,7 @@ func (r *replayer) readNextBatch(
 				r.onUserLogEntry(psn, entry)
 			}
 
-			logutil.Info(
+			logutil.Debug(
 				"Wal-Trace-Read",
 				zap.Uint64("psn", psn),
 				zap.Uint64("safe-dsn", entry.GetSafeDSN()),
@@ -733,6 +753,7 @@ func (r *replayer) readNextBatch(
 			// 4. update the DSN->PSN mapping
 			dsn := entry.GetStartDSN()
 			r.replayedState.dsn2PSNMap[dsn] = psn
+			safe := entry.GetSafeDSN()
 
 			// 5. init the scheduled DSN watermark
 			// it only happens there is no record scheduled for apply
@@ -740,12 +761,14 @@ func (r *replayer) readNextBatch(
 				if r.stats.schedulePSNCount != 0 {
 					// it means a bigger DSN has been scheduled for apply and then there is
 					// a smaller DSN with bigger PSN. it should not happen
-					panic(fmt.Sprintf(
-						"dsn: %d, psn: %d, scheduled: %d",
-						dsn, psn, r.waterMarks.dsnScheduled,
-					))
+					logutil.Errorf(
+						"safe: %d, dsn: %d, psn: %d, scheduled: %d",
+						safe, dsn, psn, r.waterMarks.dsnScheduled,
+					)
+					panic("logic error")
 				}
-				r.waterMarks.dsnScheduled = dsn - 1
+				// logutil.Infof("DEBUG-2: dsn %d, psn %d, scheduled %d", dsn, psn, r.waterMarks.dsnScheduled)
+				r.waterMarks.dsnScheduled = safe
 			}
 		}
 	}
