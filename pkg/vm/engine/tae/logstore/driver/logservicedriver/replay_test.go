@@ -163,17 +163,21 @@ func TestAppendSkipCmd2(t *testing.T) {
 		entryCount := 0
 		assert.NoError(t, driver.Close())
 		driver = NewLogServiceDriver(&driver.config)
-		err := driver.Replay(context.Background(), func(e *entry.Entry) storeDriver.ReplayEntryState {
-			assert.Less(t, e.DSN, uint64(11))
-			list1 = append(list1, e.DSN)
-			if e.DSN > 7 {
-				entryCount++
-				list2 = append(list2, e.DSN)
-				return storeDriver.RE_Nomal
-			} else {
-				return storeDriver.RE_Truncate
-			}
-		})
+		err := driver.Replay(
+			context.Background(),
+			func(e *entry.Entry) storeDriver.ReplayEntryState {
+				assert.Less(t, e.DSN, uint64(11))
+				list1 = append(list1, e.DSN)
+				if e.DSN > 7 {
+					entryCount++
+					list2 = append(list2, e.DSN)
+					return storeDriver.RE_Nomal
+				} else {
+					return storeDriver.RE_Truncate
+				}
+			},
+			storeDriver.ReplayMode_ReplayForWrite,
+		)
 		t.Logf("list1: %v", list1)
 		t.Logf("list2: %v", list2)
 		assert.NoError(t, err)
@@ -205,15 +209,19 @@ func TestAppendSkipCmd3(t *testing.T) {
 		entryCount := 0
 		assert.NoError(t, driver.Close())
 		driver = NewLogServiceDriver(&driver.config)
-		err := driver.Replay(ctx, func(e *entry.Entry) storeDriver.ReplayEntryState {
-			assert.Less(t, e.DSN, uint64(11))
-			if e.DSN > 7 {
-				entryCount++
-				return storeDriver.RE_Nomal
-			} else {
-				return storeDriver.RE_Truncate
-			}
-		})
+		err := driver.Replay(
+			ctx,
+			func(e *entry.Entry) storeDriver.ReplayEntryState {
+				assert.Less(t, e.DSN, uint64(11))
+				if e.DSN > 7 {
+					entryCount++
+					return storeDriver.RE_Nomal
+				} else {
+					return storeDriver.RE_Truncate
+				}
+			},
+			storeDriver.ReplayMode_ReplayForWrite,
+		)
 		assert.NoError(t, err)
 		assert.Equal(t, 0, entryCount)
 	}
@@ -272,15 +280,19 @@ func TestAppendSkipCmd4(t *testing.T) {
 		entryCount := 0
 		assert.NoError(t, driver.Close())
 		driver = NewLogServiceDriver(&driver.config)
-		err := driver.Replay(context.Background(), func(e *entry.Entry) storeDriver.ReplayEntryState {
-			assert.Less(t, e.DSN, uint64(4))
-			if e.DSN > 0 {
-				entryCount++
-				return storeDriver.RE_Nomal
-			} else {
-				return storeDriver.RE_Truncate
-			}
-		})
+		err := driver.Replay(
+			context.Background(),
+			func(e *entry.Entry) storeDriver.ReplayEntryState {
+				assert.Less(t, e.DSN, uint64(4))
+				if e.DSN > 0 {
+					entryCount++
+					return storeDriver.RE_Nomal
+				} else {
+					return storeDriver.RE_Truncate
+				}
+			},
+			storeDriver.ReplayMode_ReplayForWrite,
+		)
 		assert.NoError(t, err)
 		assert.Equal(t, 3, entryCount)
 	}
@@ -327,15 +339,19 @@ func TestAppendSkipCmd4(t *testing.T) {
 		entryCount := 0
 		assert.NoError(t, driver.Close())
 		driver = NewLogServiceDriver(&driver.config)
-		err := driver.Replay(context.Background(), func(e *entry.Entry) storeDriver.ReplayEntryState {
-			assert.Less(t, e.DSN, uint64(5))
-			if e.DSN > 0 {
-				entryCount++
-				return storeDriver.RE_Nomal
-			} else {
-				return storeDriver.RE_Truncate
-			}
-		})
+		err := driver.Replay(
+			context.Background(),
+			func(e *entry.Entry) storeDriver.ReplayEntryState {
+				assert.Less(t, e.DSN, uint64(5))
+				if e.DSN > 0 {
+					entryCount++
+					return storeDriver.RE_Nomal
+				} else {
+					return storeDriver.RE_Truncate
+				}
+			},
+			storeDriver.ReplayMode_ReplayForWrite,
+		)
 		assert.NoError(t, err)
 		assert.Equal(t, 4, entryCount)
 	}
@@ -396,15 +412,19 @@ func TestAppendSkipCmd5(t *testing.T) {
 		entryCount := 0
 		assert.NoError(t, driver.Close())
 		driver = NewLogServiceDriver(&driver.config)
-		err := driver.Replay(context.Background(), func(e *entry.Entry) storeDriver.ReplayEntryState {
-			assert.Less(t, e.DSN, uint64(13))
-			if e.DSN > 8 {
-				entryCount++
-				return storeDriver.RE_Nomal
-			} else {
-				return storeDriver.RE_Truncate
-			}
-		})
+		err := driver.Replay(
+			context.Background(),
+			func(e *entry.Entry) storeDriver.ReplayEntryState {
+				assert.Less(t, e.DSN, uint64(13))
+				if e.DSN > 8 {
+					entryCount++
+					return storeDriver.RE_Nomal
+				} else {
+					return storeDriver.RE_Truncate
+				}
+			},
+			storeDriver.ReplayMode_ReplayForWrite,
+		)
 		assert.NoError(t, err)
 		assert.Equal(t, 4, entryCount)
 	}

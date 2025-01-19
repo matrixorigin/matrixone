@@ -122,6 +122,6 @@ func main() {
 		// fmt.Printf("%s", payload)
 		return driver.RE_Nomal
 	}
-	err = s.Replay(context.Background(), a)
+	err = s.Replay(context.Background(), a, driver.ReplayMode_ReplayForWrite)
 	logutil.Infof("Open and replay takes %v, err = %v", time.Since(t0), err)
 }

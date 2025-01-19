@@ -130,11 +130,27 @@ func (d *LogServiceDriver) Close() error {
 func (d *LogServiceDriver) Replay(
 	ctx context.Context,
 	h driver.ApplyHandle,
+	mode driver.ReplayMode,
 ) (err error) {
+
 	replayer := newReplayer(
 		h,
 		d,
 		ReplayReadSize,
+		// WithReplayerWaitMore(
+		// 	func() {
+		// 	},
+		// ),
+		// WithReplayerOnLogRecord(
+		// 	func(r logservice.LogRecord) {
+		// 		// If the record is config change log record
+		// 		// we need to update the config
+		// 		if r.Type != logservice.Internal {
+		// 			return
+		// 		}
+		// 	},
+		// ),
+
 		// driver is mangaging the psn to dsn mapping
 		// here the replayer is responsible to provide the all the existing psn to dsn
 		// info to the driver

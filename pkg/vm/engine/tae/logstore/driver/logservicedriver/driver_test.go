@@ -55,16 +55,20 @@ func restartDriver(t *testing.T, d *LogServiceDriver, h func(*entry.Entry)) *Log
 	t.Logf("LSTruncated %d", d.truncatedPSN)
 	d = NewLogServiceDriver(&d.config)
 	tempLsn := uint64(0)
-	err := d.Replay(context.Background(), func(e *entry.Entry) driver.ReplayEntryState {
-		if e.DSN <= tempLsn {
-			panic("logic err")
-		}
-		tempLsn = e.DSN
-		if h != nil {
-			h(e)
-		}
-		return driver.RE_Nomal
-	})
+	err := d.Replay(
+		context.Background(),
+		func(e *entry.Entry) driver.ReplayEntryState {
+			if e.DSN <= tempLsn {
+				panic("logic err")
+			}
+			tempLsn = e.DSN
+			if h != nil {
+				h(e)
+			}
+			return driver.RE_Nomal
+		},
+		driver.ReplayMode_ReplayForWrite,
+	)
 	assert.NoError(t, err)
 	t.Log("Addr:")
 	for lsn, intervals := range d.psn.dsnMap {
