@@ -35,12 +35,6 @@ const (
 var ErrNoClientAvailable = moerr.NewInternalErrorNoCtx("no client available")
 var ErrClientPoolClosed = moerr.NewInternalErrorNoCtx("client pool closed")
 
-type clientConfig struct {
-	bufSize    int
-	factory    LogServiceClientFactory
-	maxTimeout time.Duration
-}
-
 type MockBackend interface {
 	Read(
 		ctx context.Context, firstPSN, maxSize uint64,
@@ -152,37 +146,26 @@ func (c *wrappedClient) Append(
 }
 
 type clientpool struct {
-	mu     sync.Mutex
 	closed atomic.Int32
 
-	cfg      *clientConfig
-	maxCount int
+	cfg *Config
 
-	clients       []*wrappedClient
-	clientFactory func() *wrappedClient
-	closefn       func(*wrappedClient)
+	mu      sync.Mutex
+	clients []*wrappedClient
+	closefn func(*wrappedClient)
 }
 
-func newClientPool(size int, cfg *clientConfig) *clientpool {
+func newClientPool(cfg *Config) *clientpool {
 	pool := &clientpool{
-		maxCount: size,
-		clients:  make([]*wrappedClient, size),
-		cfg:      cfg,
+		cfg:     cfg,
+		clients: make([]*wrappedClient, cfg.ClientMaxCount),
 	}
-	pool.clientFactory = pool.createClientFactory(cfg)
 	pool.closefn = pool.onClose
 
-	for i := 0; i < size; i++ {
-		pool.clients[i] = pool.clientFactory()
+	for i := 0; i < cfg.ClientMaxCount; i++ {
+		pool.clients[i] = newClient(cfg.ClientFactory, cfg.ClientBufSize)
 	}
 	return pool
-}
-
-func (c *clientpool) createClientFactory(cfg *clientConfig) func() *wrappedClient {
-	return func() *wrappedClient {
-		client := newClient(cfg.factory, cfg.bufSize)
-		return client
-	}
 }
 
 func (c *clientpool) Close() {

@@ -77,12 +77,6 @@ type LogServiceDriver struct {
 }
 
 func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
-	clientpoolConfig := &clientConfig{
-		bufSize:    cfg.ClientBufSize,
-		factory:    cfg.ClientFactory,
-		maxTimeout: cfg.MaxTimeout,
-	}
-
 	// the tasks submitted to LogServiceDriver.appendPool append entries to logservice,
 	// and we hope the task will crash all the tn service if append failed.
 	// so, set panic to pool.options.PanicHandler here, or it will only crash
@@ -92,7 +86,7 @@ func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
 	}))
 
 	d := &LogServiceDriver{
-		clientPool:      newClientPool(cfg.ClientMaxCount, clientpoolConfig),
+		clientPool:      newClientPool(cfg),
 		config:          *cfg,
 		committer:       getCommitter(),
 		driverInfo:      newDriverInfo(),
