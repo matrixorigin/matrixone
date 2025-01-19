@@ -34,9 +34,9 @@ import (
 
 type ReplayOption func(*replayer)
 
-func WithReplayerReadForever() ReplayOption {
+func WithReplayerWaitMore(wait func() bool) ReplayOption {
 	return func(r *replayer) {
-		r.waitMoreRecords = true
+		r.waitMoreRecords = wait
 	}
 }
 
@@ -141,7 +141,7 @@ type replayer struct {
 	onReplayDone        func(resErr error, stats DSNStats)
 
 	// true means wait for more records after all existing records have been read
-	waitMoreRecords bool
+	waitMoreRecords func() bool
 
 	replayedState struct {
 		// DSN->PSN mapping
@@ -226,6 +226,12 @@ func newReplayer(
 
 	if r.appendSkipCmd == nil {
 		r.appendSkipCmd = r.AppendSkipCmd
+	}
+
+	if r.waitMoreRecords == nil {
+		r.waitMoreRecords = func() bool {
+			return false
+		}
 	}
 
 	return r
@@ -335,11 +341,11 @@ func (r *replayer) Replay(ctx context.Context) (err error) {
 		default:
 		}
 
-		if readDone, err = r.readNextBatch(ctx); err != nil || (readDone && !r.waitMoreRecords) {
+		if readDone, err = r.readNextBatch(ctx); err != nil || (readDone && !r.waitMoreRecords()) {
 			break
 		}
 
-		if readDone && r.waitMoreRecords {
+		if readDone && r.waitMoreRecords() {
 			time.Sleep(waitTime)
 			waitTime *= 2
 			if waitTime > time.Millisecond*128 {
