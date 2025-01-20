@@ -356,8 +356,12 @@ func (th *TxnHandler) createUnsafe(execCtx *ExecCtx) error {
 	return err
 }
 
-func checkAccountVersion(ctx context.Context, ses FeSession, bh BackgroundExec) (string, int32, error) {
-	accSql := fmt.Sprintf("SELECT create_version, version_offset FROM mo_catalog.mo_account WHERE account_id = %d", ses.GetAccountId())
+func checkAccountVersion(ctx context.Context, ses FeSession, flag bool, bh BackgroundExec) (string, int32, error) {
+	offsetCol := ""
+	if !flag {
+		offsetCol = ", version_offset"
+	}
+	accSql := fmt.Sprintf("SELECT create_version %s FROM mo_catalog.mo_account WHERE account_id = %d", offsetCol, ses.GetAccountId())
 	bh.ClearExecResultSet()
 
 	sysTenantCtx := defines.AttachAccount(ctx, uint32(sysAccountID), uint32(rootID), uint32(moAdminRoleID))
@@ -377,9 +381,12 @@ func checkAccountVersion(ctx context.Context, ses FeSession, bh BackgroundExec) 
 			return "", 0, err
 		}
 
-		versionOffset, err := erArray[0].GetInt64(sysTenantCtx, i, 1)
-		if err != nil {
-			return "", 0, err
+		versionOffset := int64(-1)
+		if !flag {
+			versionOffset, err = erArray[0].GetInt64(sysTenantCtx, i, 1)
+			if err != nil {
+				return "", 0, err
+			}
 		}
 		return createVersion, int32(versionOffset), nil
 	}

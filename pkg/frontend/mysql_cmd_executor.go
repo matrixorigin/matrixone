@@ -2666,7 +2666,6 @@ func executeStmtWithWorkspace(ses FeSession,
 				return err
 			}
 			versionInfo.Cluster.Version = clusterVersion
-			//versionInfo.Cluster.VersionOffset = clusterOffset
 			versionInfo.Cluster.IsFinalVersion = isFinal
 
 			if state == versions.StateReady && versionInfo.FinalVersion == clusterVersion {
@@ -2679,72 +2678,15 @@ func executeStmtWithWorkspace(ses FeSession,
 				runtime.ServiceRuntime(ses.GetService()).SetGlobalVariables(runtime.ClusterIsFinalVersion, false)
 			}
 
-			if versions.Compare(versionInfo.Cluster.Version, "2.1.0") < 0 {
-				versionInfo.Account.Version = "2.0.3"
-				versionInfo.Account.VersionOffset = 7
-			} else {
-				currVersion, currOffset, err := checkAccountVersion(execCtx.reqCtx, execCtx.ses, bh)
-				if err != nil {
-					return err
-				}
-				versionInfo.Account.Version = currVersion
-				versionInfo.Account.VersionOffset = currOffset
+			flag := versions.Compare(versionInfo.Cluster.Version, "2.1.0") < 0
+			currVersion, currOffset, err := checkAccountVersion(execCtx.reqCtx, execCtx.ses, flag, bh)
+			if err != nil {
+				return err
 			}
+			versionInfo.Account.Version = currVersion
+			versionInfo.Account.VersionOffset = currOffset
 		}
 		execCtx.reqCtx = defines.AttachVersionInfo(execCtx.reqCtx, &versionInfo)
-
-		//mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm
-		//if !isFinalVersion {
-		//	bh := execCtx.ses.GetShareTxnBackgroundExec(execCtx.reqCtx, false)
-		//	defer bh.Close()
-		//
-		//	var versionInfo defines.VersionInfo
-		//	finalVersion := execCtx.ses.GetBaseService().GetFinalVersion()
-		//	finalVersionOffset := execCtx.ses.GetBaseService().GetFinalVersionOffset()
-		//
-		//	ses.GetTxnHandler().txnOp.TxnOptions().WithVersion(finalVersion, uint32(finalVersionOffset))
-		//
-		//	versionInfo.FinalVersion = finalVersion
-		//	versionInfo.FinalVersionOffset = uint32(finalVersionOffset)
-		//
-		//	clusterVersion, clusterOffset, state, err := checkClusterVersion(execCtx.reqCtx, execCtx.ses, bh)
-		//	if err != nil {
-		//		return err
-		//	}
-		//	versionInfo.Cluster.Version = clusterVersion
-		//	versionInfo.Cluster.VersionOffset = clusterOffset
-		//
-		//	if state == versions.StateReady && finalVersion == clusterVersion && uint32(finalVersionOffset) == clusterOffset {
-		//		versionInfo.FinalVersionCompleted = true
-		//		ses.GetTxnHandler().txnOp.TxnOptions().WithIsFinalVersion(true)
-		//		runtime.ServiceRuntime(ses.GetService()).SetGlobalVariables(runtime.ClusterIsFinalVersion, true)
-		//	} else {
-		//		versionInfo.FinalVersionCompleted = false
-		//		ses.GetTxnHandler().txnOp.TxnOptions().WithIsFinalVersion(false)
-		//		runtime.ServiceRuntime(ses.GetService()).SetGlobalVariables(runtime.ClusterIsFinalVersion, false)
-		//	}
-		//
-		//	currVersion, currOffset, err := checkAccountVersion(execCtx.reqCtx, execCtx.ses, bh)
-		//	if err != nil {
-		//		return err
-		//	}
-		//	versionInfo.Account.Version = currVersion
-		//	versionInfo.Account.VersionOffset = currOffset
-		//	execCtx.reqCtx = defines.AttachVersionInfo(execCtx.reqCtx, &versionInfo)
-		//
-		//	//if currVersion == finalVersion && currOffset >= uint32(finalVersionOffset) {
-		//	//	execCtx.reqCtx = defines.AttachIsFinalVersion(execCtx.reqCtx, true)
-		//	//
-		//	//	ses.GetTxnHandler().txnOp.TxnOptions().WithIsFinalVersion(true)
-		//	//
-		//	//	accKey := fmt.Sprintf(runtime.AccountIsFinalVersion+"%d", ses.GetAccountId())
-		//	//	runtime.ServiceRuntime(ses.GetService()).SetGlobalVariables(accKey, true)
-		//	//} else {
-		//	//	execCtx.reqCtx = defines.AttachIsFinalVersion(execCtx.reqCtx, false)
-		//	//	execCtx.reqCtx = defines.AttachVersion(execCtx.reqCtx, currVersion)
-		//	//	execCtx.reqCtx = defines.AttachVersionOffset(execCtx.reqCtx, uint32(finalVersionOffset))
-		//	//}
-		//}
 	}
 	//----------------------------------------------------------------------------------------------------------
 

@@ -205,7 +205,7 @@ func GetCurrentClusterVersion(finalVersion string, txn executor.TxnExecutor) (st
 
 func GeAccountVersion(accountId uint32, flag bool, txn executor.TxnExecutor) (string, int32, error) {
 	offsetCol := ""
-	if flag {
+	if !flag {
 		offsetCol = ", version_offset"
 	}
 	sql := fmt.Sprintf("SELECT create_version %s FROM mo_catalog.mo_account WHERE account_id = %d", offsetCol, accountId)
@@ -219,8 +219,8 @@ func GeAccountVersion(accountId uint32, flag bool, txn executor.TxnExecutor) (st
 	versionOffset := int32(-1)
 	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
 		version = cols[0].GetStringAt(0)
-		if flag {
-			versionOffset = vector.GetFixedAtWithTypeCheck[int32](cols[1], 0)
+		if !flag {
+			versionOffset = int32(vector.GetFixedAtWithTypeCheck[uint32](cols[1], 0))
 		}
 		return true
 	})
