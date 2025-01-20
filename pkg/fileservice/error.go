@@ -16,6 +16,7 @@ package fileservice
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"regexp"
@@ -106,4 +107,10 @@ func wrapSizeMismatchErr(p *error) {
 		httpBadLengthPattern.MatchString(str) {
 		*p = moerr.NewSizeNotMatchNoCtx("")
 	}
+}
+
+var errorF = fmt.Errorf
+
+func wrapError(what string, err error) error {
+	return errorF(what+": %w", err)
 }
