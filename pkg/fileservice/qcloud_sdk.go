@@ -229,7 +229,7 @@ func (a *QCloudSDK) Exists(
 		if a.is404(err) {
 			return false, nil
 		}
-		return false, err
+		return false, wrapError("QCloudSDK.Exists", err)
 	}
 
 	return true, nil

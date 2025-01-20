@@ -16,6 +16,7 @@ package fileservice
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"regexp"
@@ -107,4 +108,10 @@ func isDiskFull(err error) bool {
 	}
 	str := err.Error()
 	return strings.Contains(str, "disk quota exceeded")
+}
+
+var errorF = fmt.Errorf
+
+func wrapError(what string, err error) error {
+	return errorF(what+": %w", err)
 }
