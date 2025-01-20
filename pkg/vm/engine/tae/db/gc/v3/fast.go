@@ -159,16 +159,11 @@ func makeSoftDeleteFilterCoarseFilter(
 				continue
 			}
 
-			if dropTS.IsEmpty() && tables[tableIDs[i]] == nil {
-				logutil.Infof("table %d is not in tables, name is %v", tableIDs[i], name)
-			}
 			if _, ok := (*filterTable)[tableIDs[i]]; ok {
-				logutil.Infof("table %d is in filter table, skip, name is %v", tableIDs[i], name)
 				continue
 			}
 
 			if catalog.IsSystemTable(tableIDs[i]) {
-				logutil.Infof("table %d is system table, skip, name is %v", tableIDs[i], name)
 				continue
 			}
 			bm.Add(uint64(i))

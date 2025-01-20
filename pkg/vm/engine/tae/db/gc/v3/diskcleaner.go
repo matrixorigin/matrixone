@@ -99,6 +99,9 @@ func (cleaner *DiskCleaner) GC(ctx context.Context) (err error) {
 }
 
 func (cleaner *DiskCleaner) FastGC(ctx context.Context) (err error) {
+	running := new(runningCtx)
+	running.ctx, running.cancel = context.WithCancelCause(ctx)
+	cleaner.runningCtx.Store(running)
 	return cleaner.forceScheduleJob(JT_GCFastExecute)
 }
 

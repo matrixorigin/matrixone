@@ -59,6 +59,8 @@ var ObjectTableSeqnums []uint16
 var ObjectTableMetaAttrs []string
 var ObjectTableMetaTypes []types.Type
 
+type MinTS struct{}
+
 var FSinkerFactory ioutil.FileSinkerFactory
 
 const ObjectTablePrimaryKeyIdx = 0

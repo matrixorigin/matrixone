@@ -48,7 +48,6 @@ type ObjectEntry struct {
 	dropTS   types.TS
 	db       uint64
 	table    uint64
-	row      int
 }
 
 type WindowOption func(*GCWindow)

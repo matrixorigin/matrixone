@@ -1486,7 +1486,6 @@ func (c *checkpointCleaner) Process(inputCtx context.Context) (err error) {
 }
 
 func (c *checkpointCleaner) FastExecute(inputCtx context.Context) (err error) {
-
 	if !c.GCEnabled() {
 		return
 	}
@@ -1497,12 +1496,16 @@ func (c *checkpointCleaner) FastExecute(inputCtx context.Context) (err error) {
 
 	startScanWaterMark := c.GetScanWaterMark()
 	startGCWaterMark := c.GetGCWaterMark()
-
+	minTs := &types.TS{}
+	ts := inputCtx.Value(MinTS{}).(*types.TS)
+	if ts != nil {
+		minTs = ts
+	}
 	defer func() {
 		endScanWaterMark := c.GetScanWaterMark()
 		endGCWaterMark := c.GetGCWaterMark()
 		logutil.Info(
-			"GC-TRACE-PROCESS",
+			"GC-FAST-TRACE-PROCESS",
 			zap.String("task", c.TaskNameLocked()),
 			zap.Duration("duration", time.Since(now)),
 			zap.Error(err),
@@ -1510,9 +1513,9 @@ func (c *checkpointCleaner) FastExecute(inputCtx context.Context) (err error) {
 			zap.String("end-scan-watermark", endScanWaterMark.String()),
 			zap.String("start-gc-watermark", startGCWaterMark.String()),
 			zap.String("end-gc-watermark", endGCWaterMark.String()),
+			zap.String("min-ts", minTs.ToString()),
 		)
 	}()
-
 	ctx, cancel := context.WithCancelCause(inputCtx)
 	defer cancel(nil)
 	go func() {
@@ -1546,8 +1549,11 @@ func (c *checkpointCleaner) FastExecute(inputCtx context.Context) (err error) {
 	}
 
 	candidates := make([]*checkpoint.CheckpointEntry, 0, len(checkpoints))
-	// filter out the incremental checkpoints that do not meet the requirements
 	for _, ckp := range checkpoints {
+		start := ckp.GetStart()
+		if !minTs.IsEmpty() && start.LT(minTs) {
+			continue
+		}
 		candidates = append(candidates, ckp)
 	}
 
@@ -1689,11 +1695,6 @@ func (c *checkpointCleaner) doFastGCAgainstGlobalCheckpointLocked(
 		window.tsRange.start,
 		window.tsRange.end,
 	))
-
-	wind := c.GetScannedWindowLocked()
-	for _, file := range wind.files {
-		logutil.Infof("doFastGCAgainstGlobalCheckpointLocked after GC, file: %s, tsRange: %s-%s", file.ObjectName().String(), wind.tsRange.start.ToString(), wind.tsRange.end.ToString())
-	}
 	return filesToGC, nil
 }
 
