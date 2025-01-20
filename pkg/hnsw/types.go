@@ -141,7 +141,7 @@ func (idx *HnswBuildIndex) ToSql(cfg IndexTableConfig) (string, error) {
 		}
 
 		url := fmt.Sprintf("file://%s?offset=%d&size=%d", idx.Path, offset, chunksz)
-		tuple := fmt.Sprintf("(%d, %d, cast('%s' as datalink))", idx.Id, chunkid, url)
+		tuple := fmt.Sprintf("(%d, %d, load_file(cast('%s' as datalink)), 0)", idx.Id, chunkid, url)
 		values = append(values, tuple)
 
 		// offset and chunksz
@@ -257,26 +257,31 @@ func (h *HnswBuild) Add(key int64, vec []float32) error {
 	return idx.Add(key, vec)
 }
 
-func (h *HnswBuild) SaveToDB() error {
+func (h *HnswBuild) ToInsertSql(ts int64) ([]string, error) {
 
+	sqls := make([]string, 0, len(h.indexes)+1)
 	os.Stderr.WriteString(fmt.Sprintf("SaveToDb len = %d\n", len(h.indexes)))
-	for i, idx := range h.indexes {
+
+	metas := make([]string, 0, len(h.indexes))
+	for _, idx := range h.indexes {
 		sql, err := idx.ToSql(h.tblcfg)
 		if err != nil {
-			return err
+			return nil, err
 		}
+
+		sqls = append(sqls, sql)
+
 		os.Stderr.WriteString(fmt.Sprintf("Sql: %s\n", sql))
 		chksum, err := idx.CheckSum(h.tblcfg)
 		if err != nil {
-			return err
+			return nil, err
 		}
-		os.Stderr.WriteString(fmt.Sprintf("Meta Checksum: %s\n", chksum))
 
-		sz, err := idx.Index.Len()
-		if err != nil {
-			return err
-		}
-		os.Stderr.WriteString(fmt.Sprintf("%d: len %d\n", i, sz))
+		metas = append(metas, fmt.Sprintf("(%d, '%s', %d)", idx.Id, chksum, ts))
 	}
-	return nil
+
+	metasql := fmt.Sprintf("INSERT INTO `%s`.`%s` VALUES %s", h.tblcfg.DbName, h.tblcfg.MetadataTable, strings.Join(metas, ", "))
+
+	sqls = append(sqls, metasql)
+	return sqls, nil
 }
