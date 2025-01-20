@@ -129,7 +129,7 @@ col1    col2    col3
 2    3    e4r34f
 create fulltext index f01 on ab01 (col2);
 create fulltext index f02 on ab01 (col2);
-
+not supported: Fulltext index are not allowed to use the same column
 drop table ab01;
 drop table if exists char01;
 create table char01 (col1 varchar(200) primary key , col2 char(10));
