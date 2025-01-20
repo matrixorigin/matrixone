@@ -84,12 +84,8 @@ func (d *LogServiceDriver) getClientForWrite() (client *wrappedClient, token uin
 		err        error
 		now        = time.Now()
 	)
-	if token, err = d.applyWriteToken(
-		uint64(d.config.ClientMaxCount), d.config.MaxTimeout,
-	); err != nil {
-		// should never happen
-		panic(err)
-	}
+
+	token = d.applyWriteToken()
 
 	for ; retryTimes < d.config.MaxRetryCount+1; retryTimes++ {
 		client, err = d.clientPool.Get()
@@ -99,7 +95,7 @@ func (d *LogServiceDriver) getClientForWrite() (client *wrappedClient, token uin
 		time.Sleep(d.config.RetryInterval())
 	}
 
-	if err != nil || retryTimes > 0 {
+	if err != nil || retryTimes > 0 || time.Since(now) > time.Second*2 {
 		logger := logutil.Info
 		if err != nil {
 			logger = logutil.Error

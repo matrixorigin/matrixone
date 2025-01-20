@@ -19,7 +19,6 @@ import (
 	"math"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -107,33 +106,20 @@ type driverInfo struct {
 	truncateDSNIntent atomic.Uint64 //
 	truncatedPSN      uint64        //
 
-	// writeController is used to control the write token
+	// tokenController is used to control the write token
 	// it controles the max write token issued and all finished write tokens
 	// to avoid too much pendding writes
-	// Example:
-	// maxIssuedToken = 100
-	// maxFinishedToken = 50
-	// maxPendding = 60
 	// then we can only issue another 10 write token to avoid too much pendding writes
 	// In the real world, the maxFinishedToken is always being updated and it is very
 	// rare to reach the maxPendding
-	writeController struct {
-		sync.RWMutex
-		// max write token issued
-		maxIssuedToken uint64
-		// all finished write tokens
-		finishedTokens *common.ClosedIntervals
-	}
-
-	commitCond sync.Cond
+	tokenController *tokenController
 }
 
-func newDriverInfo() *driverInfo {
+func newDriverInfo(maxPenddingWrites uint64) *driverInfo {
 	d := &driverInfo{
-		commitCond: *sync.NewCond(new(sync.Mutex)),
+		tokenController: newTokenController(maxPenddingWrites),
 	}
 	d.psn.dsnMap = make(map[uint64]*common.ClosedIntervals)
-	d.writeController.finishedTokens = common.NewClosedIntervals()
 	return d
 }
 
@@ -145,7 +131,7 @@ func (info *driverInfo) resetDSNStats(stats *DSNStats) {
 		info.truncateDSNIntent.Store(stats.Min - 1)
 	}
 	info.truncatedPSN = stats.Truncated
-	info.writeController.finishedTokens = common.NewClosedIntervalsBySlice(stats.Written)
+	info.tokenController.Putback(stats.Written...)
 }
 
 // psn: physical sequence number
@@ -206,52 +192,8 @@ func (info *driverInfo) allocateDSN() uint64 {
 	return info.nextDSN
 }
 
-func (info *driverInfo) getMaxFinishedToken() uint64 {
-	info.writeController.RLock()
-	defer info.writeController.RUnlock()
-	finishedTokens := info.writeController.finishedTokens
-	if finishedTokens == nil ||
-		len(finishedTokens.Intervals) == 0 ||
-		finishedTokens.Intervals[0].Start != 1 {
-		return 0
-	}
-	return finishedTokens.Intervals[0].End
-}
-
-func (info *driverInfo) applyWriteToken(
-	maxPendding uint64, timeout time.Duration,
-) (token uint64, err error) {
-	token, err = info.tryApplyWriteToken(maxPendding)
-	if err == ErrTooMuchPenddings {
-		err = RetryWithTimeout(
-			timeout,
-			func() (shouldReturn bool) {
-				info.commitCond.L.Lock()
-				token, err = info.tryApplyWriteToken(maxPendding)
-				if err != ErrTooMuchPenddings {
-					info.commitCond.L.Unlock()
-					return true
-				}
-				info.commitCond.Wait()
-				info.commitCond.L.Unlock()
-				token, err = info.tryApplyWriteToken(maxPendding)
-				return err != ErrTooMuchPenddings
-			},
-		)
-	}
-	return
-}
-
-// NOTE: must be called in serial
-func (info *driverInfo) tryApplyWriteToken(
-	maxPendding uint64,
-) (token uint64, err error) {
-	maxFinishedToken := info.getMaxFinishedToken()
-	if info.writeController.maxIssuedToken-maxFinishedToken >= maxPendding {
-		return 0, ErrTooMuchPenddings
-	}
-	info.writeController.maxIssuedToken++
-	return info.writeController.maxIssuedToken, nil
+func (info *driverInfo) applyWriteToken() (token uint64) {
+	return info.tokenController.Apply()
 }
 
 func (info *driverInfo) recordCommitInfo(committer *groupCommitter) {
@@ -313,12 +255,5 @@ func (info *driverInfo) commitWatermark() {
 }
 
 func (info *driverInfo) putbackWriteTokens(tokens []uint64) {
-	finishedToken := common.NewClosedIntervalsBySlice(tokens)
-	info.writeController.Lock()
-	info.writeController.finishedTokens.TryMerge(finishedToken)
-	info.writeController.Unlock()
-
-	info.commitCond.L.Lock()
-	info.commitCond.Broadcast()
-	info.commitCond.L.Unlock()
+	info.tokenController.Putback(tokens...)
 }

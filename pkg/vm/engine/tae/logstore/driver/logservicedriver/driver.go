@@ -86,11 +86,15 @@ func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
 		panic(v)
 	}))
 
+	maxPenddingWrites := cfg.ClientMaxCount
+	if maxPenddingWrites < DefaultMaxClient {
+		maxPenddingWrites = DefaultMaxClient
+	}
 	d := &LogServiceDriver{
 		clientPool:      newClientPool(cfg),
 		config:          *cfg,
 		committer:       getCommitter(),
-		driverInfo:      newDriverInfo(),
+		driverInfo:      newDriverInfo(uint64(maxPenddingWrites)),
 		commitWaitQueue: make(chan any, 10000),
 		postCommitQueue: make(chan any, 10000),
 		appendPool:      pool,
