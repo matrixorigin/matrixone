@@ -94,12 +94,17 @@ func (data *CheckpointData_V2) Close() {
 
 type CheckpointReplayer struct {
 	location objectio.Location
+	version  uint32
 	mp       *mpool.MPool
 
-	meta       containers.Vectors
-	locations  map[string]objectio.Location
-	maxBlkIDs  map[string]uint16
-	objectInfo []containers.Vectors
+	meta               containers.Vectors
+	locations          map[string]objectio.Location
+	tombstoneLocations map[string]objectio.Location
+	maxBlkIDs          map[string]uint16
+	objectInfo         []containers.Vectors
+
+	objBatches     containers.Batch
+	tombstoneBatch containers.Batch
 
 	closeCB []func()
 }
@@ -155,10 +160,114 @@ func (replayer *CheckpointReplayer) ReadMeta(ctx context.Context, sid string, fs
 	return
 }
 
+func (replayer *CheckpointReplayer) readMetaForV12(
+	ctx context.Context,
+	sid string,
+	fs fileservice.FileService,
+) (err error) {
+	replayer.meta = containers.NewVectors(len(MetaSchemaAttr))
+	_, release, err := ioutil.LoadColumnsData(
+		ctx,
+		MetaSchemaSeqnums,
+		MetaShcemaTypes,
+		fs,
+		replayer.location,
+		replayer.meta,
+		replayer.mp,
+		0,
+	)
+	if err != nil {
+		return
+	}
+	replayer.closeCB = append(replayer.closeCB, release)
+	dataLocationsVec := replayer.meta[MetaSchema_DataObject_Idx]
+	tombstoneLocationsVec := replayer.meta[MetaSchema_TombstoneObject_Idx]
+	for i := 0; i < dataLocationsVec.Length(); i++ {
+		dataLocations := BlockLocations(dataLocationsVec.GetBytesAt(i))
+		it := dataLocations.MakeIterator()
+		for it.HasNext() {
+			loc := it.Next().GetLocation()
+			if !loc.IsEmpty() {
+				str := loc.String()
+				replayer.locations[str] = loc
+			}
+		}
+		tombstoneLocations := BlockLocations(tombstoneLocationsVec.GetBytesAt(i))
+		it = tombstoneLocations.MakeIterator()
+		for it.HasNext() {
+			loc := it.Next().GetLocation()
+			if !loc.IsEmpty() {
+				str := loc.String()
+				replayer.tombstoneLocations[str] = loc
+			}
+		}
+	}
+	return
+}
 func (replayer *CheckpointReplayer) PrefetchData(sid string, fs fileservice.FileService) {
 	for _, loc := range replayer.locations {
 		ioutil.Prefetch(sid, fs, loc)
 	}
+}
+func (replayer *CheckpointReplayer) readDataForV12(
+	ctx context.Context,
+	fs fileservice.FileService,
+) (err error) {
+	readFn := func(locs map[string]objectio.Location, batchIdx uint16, destBatch containers.Batch) {
+		for _, loc := range locs {
+			var reader *ioutil.BlockReader
+			if reader, err = ioutil.NewObjectReader(fs, loc); err != nil {
+				return
+			}
+			var bats []*containers.Batch
+			if bats, err = LoadBlkColumnsByMeta(
+				replayer.version, ctx, ObjectInfoTypes, objectInfoSchemaAttr, batchIdx, reader, replayer.mp,
+			); err != nil {
+				return
+			}
+			for _, bat := range bats {
+				if err = destBatch.Append(bat); err != nil {
+					return
+				}
+				bat.Close()
+			}
+		}
+	}
+	readFn(replayer.locations, ObjectInfoIDX, replayer.objBatches)
+	readFn(replayer.tombstoneLocations, TombstoneObjectInfoIDX, replayer.tombstoneBatch)
+	return
+}
+
+func (replayer *CheckpointReplayer) ReplayObjectlistForV12(
+	ctx context.Context,
+	c *catalog.Catalog,
+	forSys bool,
+	dataFactory *tables.DataFactory,
+) (err error) {
+	replayer.objectInfo = make([]containers.Vectors, 2)
+	upgradeFn := func(objectType int8, src containers.Batch) (dest containers.Vectors, err error) {
+		dest = containers.NewVectors(len(ckputil.TableObjectsAttrs))
+		dest[ckputil.TableObjectsAttr_Table_Idx] = *src.Vecs[ObjectInfo_TID_Idx].GetDownstreamVector()
+		dest[ckputil.TableObjectsAttr_ID_Idx] = *src.Vecs[ObjectInfo_ObjectStats_Idx].GetDownstreamVector()
+		dest[ckputil.TableObjectsAttr_DB_Idx] = *src.Vecs[ObjectInfo_DBID_Idx].GetDownstreamVector()
+		dest[ckputil.TableObjectsAttr_CreateTS_Idx] = *src.Vecs[ObjectInfo_CreateAt_Idx].GetDownstreamVector()
+		dest[ckputil.TableObjectsAttr_DeleteTS_Idx] = *src.Vecs[ObjectInfo_DeleteAt_Idx].GetDownstreamVector()
+		var objTypeVec *vector.Vector
+		if objTypeVec, err = vector.NewConstFixed(
+			types.T_int8.ToType(), objectType, src.Length(), replayer.mp,
+		); err != nil {
+			return
+		}
+		dest[ckputil.TableObjectsAttr_ObjectType_Idx] = *objTypeVec
+		return
+	}
+	if replayer.objectInfo[0], err = upgradeFn(ckputil.ObjectType_Data, replayer.objBatches); err != nil {
+		return
+	}
+	if replayer.objectInfo[1], err = upgradeFn(ckputil.ObjectType_Tombstone, replayer.tombstoneBatch); err != nil {
+		return
+	}
+	return
 }
 
 func (replayer *CheckpointReplayer) ReadData(ctx context.Context, sid string, fs fileservice.FileService) (err error) {
