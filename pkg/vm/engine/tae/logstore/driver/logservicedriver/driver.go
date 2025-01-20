@@ -57,8 +57,10 @@ func RetryWithTimeout(timeoutDuration time.Duration, fn func() (shouldReturn boo
 
 type LogServiceDriver struct {
 	*driverInfo
+
+	config Config
+
 	clientPool *clientPool
-	config     Config
 	committer  *groupCommitter
 
 	reuse struct {
@@ -72,8 +74,9 @@ type LogServiceDriver struct {
 	postCommitLoop  *sm.Loop
 	truncateQueue   sm.Queue
 
-	ctx        context.Context
-	cancel     context.CancelFunc
+	ctx    context.Context
+	cancel context.CancelFunc
+
 	appendPool *ants.Pool
 }
 
@@ -179,7 +182,7 @@ func (d *LogServiceDriver) Replay(
 				if replayErr != nil {
 					return
 				}
-				d.resetDSNStats(&dsnStats)
+				d.initState(&dsnStats)
 			},
 		),
 	)

@@ -120,7 +120,7 @@ func newDriverInfo(maxPenddingWrites uint64) *driverInfo {
 	return d
 }
 
-func (info *driverInfo) resetDSNStats(stats *DSNStats) {
+func (info *driverInfo) initState(stats *DSNStats) {
 	info.nextDSN = stats.Max
 	info.watermark.committingDSN = stats.Max
 	info.watermark.committedDSN = stats.Max
