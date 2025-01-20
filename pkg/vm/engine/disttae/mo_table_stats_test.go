@@ -15,6 +15,7 @@
 package disttae
 
 import (
+	"context"
 	"fmt"
 	"github.com/stretchr/testify/require"
 	"math/rand"
@@ -188,4 +189,61 @@ func Benchmark_joinAccountDatabaseTable(b *testing.B) {
 		_, f := joinAccountDatabaseTable(acc, db, tbl)
 		f()
 	}
+}
+
+func TestAlphaTask(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("forbidden beta", func(t *testing.T) {
+		eng := &Engine{}
+
+		initMoTableStatsConfig(ctx, eng)
+
+		tps := []tablePair{
+			{
+				onlyUpdateTS: true,
+				valid:        false,
+			},
+			{
+				onlyUpdateTS: true,
+				valid:        true,
+			},
+		}
+
+		eng.dynamicCtx.beta.forbidden = true
+
+		for _, tp := range tps {
+			fmt.Println(tp.String())
+		}
+
+		fmt.Println(eng.dynamicCtx.beta.String())
+
+		eng.dynamicCtx.alphaTask(ctx, "", tps, t.Name())
+	})
+
+	t.Run("normal", func(t *testing.T) {
+		eng := &Engine{}
+
+		initMoTableStatsConfig(ctx, eng)
+
+		tps := []tablePair{
+			{
+				onlyUpdateTS: true,
+				valid:        false,
+			},
+			{
+				onlyUpdateTS: true,
+				valid:        true,
+			},
+		}
+
+		for _, tp := range tps {
+			fmt.Println(tp.String())
+		}
+
+		fmt.Println(eng.dynamicCtx.beta.String())
+
+		eng.dynamicCtx.alphaTask(ctx, "", tps, t.Name())
+	})
+
 }

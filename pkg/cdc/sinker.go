@@ -566,10 +566,11 @@ func (s *mysqlSinker) appendSqlBuf(rowType RowType) (err error) {
 	// if s.sqlBuf has no enough space
 	if len(s.sqlBuf)+len(s.rowBuf)+suffixLen > cap(s.sqlBuf) {
 		// complete sql statement
-		if rowType == InsertRow {
+		if s.isNonEmptyInsertStmt() {
 			s.sqlBuf = appendString(s.sqlBuf, ";")
 			s.preSqlBufLen = len(s.sqlBuf)
-		} else {
+		}
+		if s.isNonEmptyDeleteStmt() {
 			s.sqlBuf = appendString(s.sqlBuf, ");")
 			s.preSqlBufLen = len(s.sqlBuf)
 		}
