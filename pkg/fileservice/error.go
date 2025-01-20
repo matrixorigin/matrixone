@@ -16,7 +16,6 @@ package fileservice
 
 import (
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"regexp"
@@ -109,8 +108,24 @@ func wrapSizeMismatchErr(p *error) {
 	}
 }
 
-var errorF = fmt.Errorf
+type errorWrap struct {
+	what string
+	err  error
+}
 
-func wrapError(what string, err error) error {
-	return errorF(what+": %w", err)
+var _ error = errorWrap{}
+
+func (e errorWrap) Error() string {
+	return e.what + ": " + e.err.Error()
+}
+
+func (e errorWrap) Unwrap() error {
+	return e.err
+}
+
+func wrapError(what string, err error) errorWrap {
+	return errorWrap{
+		what: what,
+		err:  err,
+	}
 }
