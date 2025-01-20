@@ -245,5 +245,5 @@ func (c *clientpool) Put(client *wrappedClient) {
 		return
 	}
 	c.clients = append(c.clients, client)
-	defer c.mu.Unlock()
+	c.mu.Unlock()
 }

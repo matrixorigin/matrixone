@@ -92,7 +92,7 @@ func (d *LogServiceDriver) getClientForWrite() (client *wrappedClient, token uin
 		if err == nil {
 			break
 		}
-		time.Sleep(d.config.RetryInterval())
+		time.Sleep(d.config.RetryInterval() * time.Duration(retryTimes+1))
 	}
 
 	if err != nil || retryTimes > 0 || time.Since(now) > time.Second*2 {

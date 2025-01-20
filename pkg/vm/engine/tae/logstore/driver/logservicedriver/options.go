@@ -29,7 +29,7 @@ const (
 	DefaultMaxClient     = 100
 	DefaultClientBufSize = mpool.MB
 	DefaultMaxTimeout    = time.Second * 30
-	DefaultMaxRetryCount = 5
+	DefaultMaxRetryCount = 10
 )
 
 type Config struct {
@@ -157,5 +157,5 @@ func (cfg Config) RetryInterval() time.Duration {
 	if cfg.MaxRetryCount == 0 {
 		return 0
 	}
-	return cfg.MaxTimeout / time.Duration(cfg.MaxRetryCount) / 20
+	return cfg.MaxTimeout / time.Duration(cfg.MaxRetryCount) / 100
 }
