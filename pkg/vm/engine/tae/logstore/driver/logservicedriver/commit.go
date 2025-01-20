@@ -80,33 +80,26 @@ func (d *LogServiceDriver) asyncCommit(committer *groupCommitter) {
 // this function must be called in serial due to the write token
 func (d *LogServiceDriver) getClientForWrite() (client *wrappedClient, token uint64) {
 	var (
-		retryTimes = 0
-		err        error
-		now        = time.Now()
+		err error
+		now = time.Now()
 	)
 
 	token = d.applyWriteToken()
 
-	for ; retryTimes < d.config.MaxRetryCount+1; retryTimes++ {
-		client, err = d.clientPool.Get()
-		if err == nil {
-			break
-		}
-		time.Sleep(d.config.RetryInterval() * time.Duration(retryTimes+1))
-	}
+	client, err = d.clientPool.Get()
 
-	if err != nil || retryTimes > 0 || time.Since(now) > time.Second*2 {
+	if err != nil || time.Since(now) > time.Second*2 {
 		logger := logutil.Info
 		if err != nil {
 			logger = logutil.Error
 		}
 		logger(
 			"Wal-Get-Client",
-			zap.Int("retry-count", retryTimes),
-			zap.Error(err),
 			zap.Duration("duration", time.Since(now)),
+			zap.Error(err),
 		)
 	}
+
 	if err != nil {
 		panic(err)
 	}

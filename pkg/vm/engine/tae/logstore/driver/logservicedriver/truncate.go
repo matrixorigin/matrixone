@@ -221,7 +221,7 @@ func (d *LogServiceDriver) getTruncatedPSNFromBackend(
 		if err == nil {
 			break
 		}
-		time.Sleep(d.config.RetryInterval())
+		time.Sleep(d.config.RetryInterval() * time.Duration(retryTimes+1))
 	}
 	return
 }

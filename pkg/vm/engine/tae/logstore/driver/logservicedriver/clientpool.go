@@ -18,7 +18,6 @@ import (
 	"context"
 	"io"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -152,21 +151,19 @@ func (c *wrappedClient) Putback() {
 }
 
 type clientpool struct {
-	closed atomic.Int32
+	closed bool
+	cfg    *Config
 
-	cfg *Config
-
-	mu      sync.Mutex
+	cond    sync.Cond
 	clients []*wrappedClient
-	closefn func(*wrappedClient)
 }
 
 func newClientPool(cfg *Config) *clientpool {
 	pool := &clientpool{
 		cfg:     cfg,
 		clients: make([]*wrappedClient, cfg.ClientMaxCount),
+		cond:    sync.Cond{L: new(sync.Mutex)},
 	}
-	pool.closefn = pool.onClose
 
 	for i := 0; i < cfg.ClientMaxCount; i++ {
 		pool.clients[i] = newClient(cfg.ClientFactory, cfg.ClientBufSize)
@@ -175,75 +172,65 @@ func newClientPool(cfg *Config) *clientpool {
 }
 
 func (c *clientpool) Close() {
-	if c.IsClosed() {
-		return
-	}
-	c.mu.Lock()
-	if c.IsClosed() {
-		c.mu.Unlock()
-		return
-	}
 	var wg sync.WaitGroup
+	c.cond.L.Lock()
+	defer c.cond.L.Unlock()
+	// pool is already closed
+	if c.closed {
+		return
+	}
+
 	for _, client := range c.clients {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			c.closefn(client)
+			client.Close()
 		}()
 	}
 	wg.Wait()
-	c.closed.Store(1)
-	c.mu.Unlock()
-}
-
-func (c *clientpool) onClose(client *wrappedClient) {
-	client.Close()
+	c.clients = nil
+	c.closed = true
+	c.cond.Broadcast()
 }
 
 func (c *clientpool) GetOnFly() (*wrappedClient, error) {
-	if c.IsClosed() {
+	c.cond.L.Lock()
+	defer c.cond.L.Unlock()
+	if c.closed {
 		return nil, ErrClientPoolClosed
 	}
 	client := newClient(c.cfg.ClientFactory, c.cfg.ClientBufSize)
 	return client, nil
 }
 
-func (c *clientpool) Get() (*wrappedClient, error) {
-	if c.IsClosed() {
-		return nil, ErrClientPoolClosed
+func (c *clientpool) Get() (client *wrappedClient, err error) {
+	c.cond.L.Lock()
+	defer c.cond.L.Unlock()
+	for {
+		if c.closed {
+			err = ErrClientPoolClosed
+			return
+		}
+		if len(c.clients) > 0 {
+			client = c.clients[len(c.clients)-1]
+			client.pool = c
+			c.clients = c.clients[:len(c.clients)-1]
+			return
+		}
+		c.cond.Wait()
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.IsClosed() {
-		return nil, ErrClientPoolClosed
-	}
-	if len(c.clients) == 0 {
-		return nil, ErrNoClientAvailable
-	}
-	client := c.clients[len(c.clients)-1]
-	c.clients = c.clients[:len(c.clients)-1]
-	client.pool = c
-	return client, nil
-}
-
-func (c *clientpool) IsClosed() bool {
-	return c.closed.Load() == 1
 }
 
 func (c *clientpool) Put(client *wrappedClient) {
 	if len(client.buf.Payload()) > DefaultRecordSize {
 		client.buf = client.wrapped.GetLogRecord(DefaultRecordSize)
 	}
-	if c.IsClosed() {
-		c.closefn(client)
-		return
-	}
-	c.mu.Lock()
-	if c.IsClosed() {
-		c.closefn(client)
-		c.mu.Unlock()
+	c.cond.L.Lock()
+	defer c.cond.L.Unlock()
+	if c.closed {
+		client.Close()
 		return
 	}
 	c.clients = append(c.clients, client)
-	c.mu.Unlock()
+	c.cond.Broadcast()
 }

@@ -242,7 +242,7 @@ func (d *LogServiceDriver) readFromBackend(
 		if err == nil {
 			break
 		}
-		time.Sleep(d.config.MaxTimeout / time.Duration(d.config.MaxRetryCount) / 10)
+		time.Sleep(d.config.RetryInterval() * time.Duration(retryTimes+1))
 	}
 
 	return
