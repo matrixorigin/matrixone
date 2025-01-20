@@ -11295,3 +11295,62 @@ type objlistReplayer struct{}
 func (r *objlistReplayer) Submit(_ uint64, fn func()) {
 	fn()
 }
+
+func TestCheckpointV2Compatibility(t *testing.T) {
+	ctx := context.Background()
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+
+	txn, err := tae.StartTxn(nil)
+	assert.NoError(t, err)
+	db, err := testutil.CreateDatabase2(ctx, txn, "db")
+	require.NoError(t, err)
+	schema := catalog.MockSchemaAll(2, 1)
+	bat := catalog.MockBatch(schema, 10)
+	_, err = testutil.CreateRelation2(ctx, txn, db, schema)
+	require.NoError(t, err)
+	assert.NoError(t, txn.Commit(ctx))
+
+	tae.BindSchema(schema)
+	txn, rel := tae.GetRelation()
+	err = rel.Append(context.Background(), bat)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit(context.Background()))
+
+	t.Log(tae.Catalog.SimplePPString(3))
+
+	tae.ForceCheckpoint()
+
+	ckps := tae.BGCheckpointRunner.GetAllCheckpoints()
+	assert.Equal(t, 1, len(ckps))
+
+	loc := ckps[0].GetTNLocation()
+
+	catalog2 := catalog.MockCatalog()
+	dataFactory := tables.NewDataFactory(
+		tae.Runtime, tae.Dir,
+	)
+
+	replayer := logtail.NewCheckpointReplayer(loc, common.DebugAllocator)
+	err = replayer.ReadMetaForV12(ctx, "", tae.Opts.Fs)
+	assert.NoError(t, err)
+	err = replayer.ReadDataForV12(ctx, tae.Opts.Fs)
+	assert.NoError(t, err)
+	err = replayer.UpgradeDate()
+	assert.NoError(t, err)
+	replayer.ReplayObjectlist(ctx, catalog2, true, dataFactory)
+	readTxn, err := tae.StartTxn(nil)
+	assert.NoError(t, err)
+	closeFn := catalog2.RelayFromSysTableObjects(
+		ctx, readTxn, dataFactory, tables.ReadSysTableBatch, func(cols []containers.Vector, pkidx int) (err2 error) {
+			_, err2 = mergesort.SortBlockColumns(cols, pkidx, tae.Runtime.VectorPool.Transient)
+			return
+		}, &objlistReplayer{},
+	)
+	for _, fn := range closeFn {
+		fn()
+	}
+	replayer.ReplayObjectlist(ctx, catalog2, false, dataFactory)
+
+	t.Log(catalog2.SimplePPString(3))
+}

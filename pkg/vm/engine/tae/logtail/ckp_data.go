@@ -160,7 +160,7 @@ func (replayer *CheckpointReplayer) ReadMeta(ctx context.Context, sid string, fs
 	return
 }
 
-func (replayer *CheckpointReplayer) readMetaForV12(
+func (replayer *CheckpointReplayer) ReadMetaForV12(
 	ctx context.Context,
 	sid string,
 	fs fileservice.FileService,
@@ -209,7 +209,7 @@ func (replayer *CheckpointReplayer) PrefetchData(sid string, fs fileservice.File
 		ioutil.Prefetch(sid, fs, loc)
 	}
 }
-func (replayer *CheckpointReplayer) readDataForV12(
+func (replayer *CheckpointReplayer) ReadDataForV12(
 	ctx context.Context,
 	fs fileservice.FileService,
 ) (err error) {
@@ -238,12 +238,7 @@ func (replayer *CheckpointReplayer) readDataForV12(
 	return
 }
 
-func (replayer *CheckpointReplayer) ReplayObjectlistForV12(
-	ctx context.Context,
-	c *catalog.Catalog,
-	forSys bool,
-	dataFactory *tables.DataFactory,
-) (err error) {
+func (replayer *CheckpointReplayer) UpgradeDate() (err error) {
 	replayer.objectInfo = make([]containers.Vectors, 2)
 	upgradeFn := func(objectType int8, src containers.Batch) (dest containers.Vectors, err error) {
 		dest = containers.NewVectors(len(ckputil.TableObjectsAttrs))
