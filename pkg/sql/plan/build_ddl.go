@@ -1455,7 +1455,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		}
 	}
 	if len(fullTextIndexInfos) != 0 {
-		err = buildFullTextIndexTable(createTable, fullTextIndexInfos, colMap, pkeyName, ctx)
+		err = buildFullTextIndexTable(createTable, fullTextIndexInfos, colMap, nil, pkeyName, ctx)
 		if err != nil {
 			return err
 		}
@@ -1530,9 +1530,35 @@ func getRefAction(typ tree.ReferenceOptionType) plan.ForeignKeyDef_RefAction {
 }
 
 // buildFullTextIndexTable create a secondary table with schema (doc_id, word, pos) cluster by (word)
-func buildFullTextIndexTable(createTable *plan.CreateTable, indexInfos []*tree.FullTextIndex, colMap map[string]*ColDef, pkeyName string, ctx CompilerContext) error {
+func buildFullTextIndexTable(createTable *plan.CreateTable, indexInfos []*tree.FullTextIndex, colMap map[string]*ColDef, existedIndexes []*plan.IndexDef, pkeyName string, ctx CompilerContext) error {
 	if pkeyName == "" || pkeyName == catalog.FakePrimaryKeyColName {
 		return moerr.NewInternalErrorNoCtx("primary key cannot be empty for fulltext index")
+	}
+
+	// check duplicate index
+	if len(existedIndexes) > 0 {
+		for _, existedIndex := range existedIndexes {
+			if existedIndex.IndexAlgo == "fulltext" {
+				for _, indexInfo := range indexInfos {
+					if len(indexInfo.KeyParts) != len(existedIndex.Parts) {
+						continue
+					}
+					n := 0
+					for _, keyPart := range indexInfo.KeyParts {
+						for _, ePart := range existedIndex.Parts {
+							if ePart == keyPart.ColName.ColName() {
+								n++
+								break
+							}
+						}
+					}
+
+					if n == len(indexInfo.KeyParts) {
+						return moerr.NewNotSupported(ctx.GetContext(), "Fulltext index are not allowed to use the same column")
+					}
+				}
+			}
+		}
 	}
 
 	for _, indexInfo := range indexInfos {
@@ -2929,7 +2955,7 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 		createIndex.TableExist = true
 	}
 	if ftIdx != nil {
-		if err := buildFullTextIndexTable(indexInfo, []*tree.FullTextIndex{ftIdx}, colMap, oriPriKeyName, ctx); err != nil {
+		if err := buildFullTextIndexTable(indexInfo, []*tree.FullTextIndex{ftIdx}, colMap, tableDef.Indexes, oriPriKeyName, ctx); err != nil {
 			return nil, err
 		}
 		createIndex.TableExist = true
@@ -3391,7 +3417,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 
 				oriPriKeyName := getTablePriKeyName(tableDef.Pkey)
 				indexInfo := &plan.CreateTable{TableDef: &TableDef{}}
-				if err = buildFullTextIndexTable(indexInfo, []*tree.FullTextIndex{def}, colMap, oriPriKeyName, ctx); err != nil {
+				if err = buildFullTextIndexTable(indexInfo, []*tree.FullTextIndex{def}, colMap, tableDef.Indexes, oriPriKeyName, ctx); err != nil {
 					return nil, err
 				}
 
