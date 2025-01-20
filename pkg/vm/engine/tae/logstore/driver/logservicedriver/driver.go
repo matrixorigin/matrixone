@@ -132,7 +132,6 @@ func (d *LogServiceDriver) Replay(
 	ctx context.Context,
 	h driver.ApplyHandle,
 	mode driver.ReplayMode,
-	opts ...ReplayOption,
 ) (err error) {
 
 	var replayMode atomic.Int32
