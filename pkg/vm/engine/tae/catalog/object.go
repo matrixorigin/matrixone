@@ -47,11 +47,33 @@ type ObjectEntry struct {
 	HasPrintedPrepareComapct atomic.Bool
 }
 
-func MockObjectEntry(
+func MockDroppedObjectEntry2List(created *ObjectEntry, delete types.TS) *ObjectEntry {
+	dropped := created.Clone()
+	dropped.DeleteNode = txnbase.TxnMVCCNode{
+		Start:   delete.Prev(),
+		Prepare: delete,
+		End:     delete,
+	}
+	dropped.DeletedAt = delete
+	dropped.ObjectState = ObjectState_Delete_ApplyCommit
+
+	updatedCEntry := created.Clone()
+	updatedCEntry.nextVersion = dropped
+	dropped.prevVersion = updatedCEntry
+
+	if created.IsTombstone {
+		created.table.getObjectList(true).modify(nil, dropped, updatedCEntry)
+	} else {
+		created.table.getObjectList(false).modify(nil, dropped, updatedCEntry)
+	}
+	return dropped
+}
+
+func MockCreatedObjectEntry2List(
 	rel *TableEntry,
 	catalog *Catalog,
 	isTombstone bool,
-	create, delete types.TS) *ObjectEntry {
+	create types.TS) *ObjectEntry {
 	var obj objectio.ObjectStats
 	objname := objectio.MockObjectName()
 	objectio.SetObjectStatsObjectName(&obj, objname)
@@ -76,13 +98,10 @@ func MockObjectEntry(
 		},
 		ObjectState: ObjectState_Create_ApplyCommit,
 	}
-	if !delete.IsEmpty() {
-		object.DeleteNode = txnbase.TxnMVCCNode{
-			Start:   delete.Prev(),
-			Prepare: delete,
-			End:     delete,
-		}
-		object.DeletedAt = delete
+	if isTombstone {
+		rel.getObjectList(true).modify(nil, object, nil)
+	} else {
+		rel.getObjectList(false).modify(nil, object, nil)
 	}
 	return object
 }
@@ -173,6 +192,7 @@ func (entry *ObjectEntry) GetDropEntry(
 	isNewNode = true
 	return
 }
+
 func (entry *ObjectEntry) GetUpdateEntry(
 	txn txnif.TxnReader,
 	stats *objectio.ObjectStats,

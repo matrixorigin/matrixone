@@ -571,23 +571,33 @@ func (catalog *Catalog) OnReplayObjectBatch_V2(
 				},
 				ObjectState: ObjectState_Create_ApplyCommit,
 			}
+			rel.AddEntryLocked(obj)
 			if !deleteTSs[i].IsEmpty() {
-				obj.DeletedAt = deleteTSs[i]
-				obj.DeleteNode = txnbase.TxnMVCCNode{
+				dropped := obj.Clone()
+				dropped.DeletedAt = deleteTSs[i]
+				dropped.DeleteNode = txnbase.TxnMVCCNode{
 					Start:   deleteTSs[i].Prev(),
 					Prepare: deleteTSs[i],
 					End:     deleteTSs[i],
 				}
+				dropped.prevVersion = obj
+				obj.nextVersion = dropped
+				dropped.ObjectState = ObjectState_Delete_ApplyCommit
+				rel.AddEntryLocked(dropped)
 			}
-			rel.AddEntryLocked(obj)
 		} else {
 			if obj.DeletedAt.IsEmpty() {
-				obj.DeletedAt = deleteTSs[i]
-				obj.DeleteNode = txnbase.TxnMVCCNode{
+				dropped := obj.Clone()
+				dropped.DeletedAt = deleteTSs[i]
+				dropped.DeleteNode = txnbase.TxnMVCCNode{
 					Start:   deleteTSs[i].Prev(),
 					Prepare: deleteTSs[i],
 					End:     deleteTSs[i],
 				}
+				dropped.prevVersion = obj
+				obj.nextVersion = dropped
+				dropped.ObjectState = ObjectState_Delete_ApplyCommit
+				rel.AddEntryLocked(dropped)
 			}
 		}
 		if obj.objData == nil {

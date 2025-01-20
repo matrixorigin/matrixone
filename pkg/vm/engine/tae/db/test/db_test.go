@@ -11222,14 +11222,17 @@ func TestCheckpointV2(t *testing.T) {
 		case 1:
 			create = tae.TxnMgr.Now()
 			delete = tae.TxnMgr.Now()
+			obj := catalog.MockCreatedObjectEntry2List(tbl, tae.Catalog, isTombstone, create)
+			catalog.MockDroppedObjectEntry2List(obj, delete)
 		case 2:
 			create = types.BuildTS(100, 0)
 			delete = tae.TxnMgr.Now()
+			obj := catalog.MockCreatedObjectEntry2List(tbl, tae.Catalog, isTombstone, create)
+			catalog.MockDroppedObjectEntry2List(obj, delete)
 		case 0:
 			create = tae.TxnMgr.Now()
+			catalog.MockCreatedObjectEntry2List(tbl, tae.Catalog, isTombstone, create)
 		}
-		obj := catalog.MockObjectEntry(tbl, tae.Catalog, isTombstone, create, delete)
-		tbl.AddEntryLocked(obj)
 	}
 
 	for i := 0; i < 10000; i++ {

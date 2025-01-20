@@ -52,7 +52,7 @@ nc - non-appendable C entry
 nd - non-appendable D entry
 
               +------------+
-           +--+---------+  |
+            +--+--------+  |
          +--+--+-----+  |  |
          |  |  |     |  |  |
          1  2  3  4  5  6  7  8  9 10 11    12 13 14 15
@@ -175,7 +175,7 @@ func (l *ObjectList) GetAllNodes(id *objectio.ObjectId) []*ObjectEntry {
 func (l *ObjectList) GetObjectByID(objectID *objectio.ObjectId) (obj *ObjectEntry, err error) {
 	obj = l.GetLastestNode(objectID)
 	if obj == nil {
-		logutil.Error("GetObjectByID", zap.String("obj", objectID.ShortStringEx()))
+		logutil.Debug("GetObjectByID not found", zap.String("obj", objectID.ShortStringEx()))
 		err = moerr.GetOkExpectedEOB()
 	}
 	return
