@@ -1319,6 +1319,11 @@ func (tbl *txnTable) UpdateConstraint(ctx context.Context, c *engine.ConstraintD
 //
 // 2. This check depends on replaying all catalog cache when cn starts.
 func (tbl *txnTable) isCreatedInTxn(ctx context.Context) (bool, error) {
+	// test or mo_table_stats
+	if tbl.fake {
+		return false, nil
+	}
+
 	if tbl.remoteWorkspace {
 		return tbl.createdInTxn, nil
 	}

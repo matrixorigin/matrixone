@@ -1008,6 +1008,8 @@ type txnTable struct {
 	remoteWorkspace bool
 	createdInTxn    bool
 	eng             engine.Engine
+
+	fake bool
 }
 
 // FIXME: no pointer here
