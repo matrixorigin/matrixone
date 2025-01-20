@@ -199,3 +199,25 @@ func Test_RetryWithTimeout(t *testing.T) {
 	err = RetryWithTimeout(time.Millisecond*3, tryFunc)
 	assert.Error(t, err)
 }
+
+// func Test_TokenController(t *testing.T) {
+// 	c := newTokenController(100)
+// 	var wg sync.WaitGroup
+
+// 	pool, _ := ants.NewPool(64)
+// 	defer pool.Release()
+
+// 	now := time.Now()
+
+// 	for i := 0; i < 1000; i++ {
+// 		wg.Add(1)
+// 		pool.Submit(func() {
+// 			defer wg.Done()
+// 			token := c.Apply()
+// 			time.Sleep(time.Millisecond * time.Duration(rand.Intn(10)+1))
+// 			c.Putback(token)
+// 		})
+// 	}
+// 	wg.Wait()
+// 	t.Logf("time cost: %v", time.Since(now))
+// }
