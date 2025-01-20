@@ -145,6 +145,9 @@ func (c *wrappedClient) Putback() {
 		pool := c.pool
 		c.pool = nil
 		pool.Put(c)
+	} else {
+		c.wrapped.Close()
+		c.wrapped = nil
 	}
 }
 
