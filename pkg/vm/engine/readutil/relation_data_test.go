@@ -54,9 +54,6 @@ func TestEmptyRelationData(t *testing.T) {
 	require.Panics(t, func() {
 		relData.DataSlice(0, 0)
 	})
-	require.Panics(t, func() {
-		relData.GroupByPartitionNum()
-	})
 	require.Equal(t, 0, relData.DataCnt())
 
 }

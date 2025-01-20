@@ -21,6 +21,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/partitionservice"
 	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
@@ -271,12 +272,13 @@ type BaseProcess struct {
 	Lim Limitation
 	mp  *mpool.MPool
 	// unix timestamp
-	UnixTime    int64
-	TxnClient   client.TxnClient
-	SessionInfo SessionInfo
-	FileService fileservice.FileService
-	LockService lockservice.LockService
-	IncrService incrservice.AutoIncrementService
+	UnixTime         int64
+	TxnClient        client.TxnClient
+	SessionInfo      SessionInfo
+	FileService      fileservice.FileService
+	LockService      lockservice.LockService
+	PartitionService partitionservice.PartitionService
+	IncrService      incrservice.AutoIncrementService
 
 	LastInsertID        *uint64
 	LoadLocalReader     *io.PipeReader

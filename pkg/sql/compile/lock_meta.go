@@ -177,7 +177,9 @@ func (l *LockMeta) lockMetaRows(e engine.Engine, proc *process.Process, executor
 	if err != nil {
 		return err
 	}
-	if err := lockop.LockRows(e, proc, nil, tableId, lockVec, *lockVec.GetType(), lock.LockMode_Shared, lock.Sharding_None, accountId); err != nil {
+	b := batch.NewWithSize(1)
+	b.SetVector(0, lockVec)
+	if err := lockop.LockRows(e, proc, nil, tableId, b, 0, *lockVec.GetType(), lock.LockMode_Shared, lock.Sharding_None, accountId); err != nil {
 		// if get error in locking mocatalog.mo_tables by it's dbName & tblName
 		// that means the origin table's schema was changed. then return NeedRetryWithDefChanged err
 		if moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) ||

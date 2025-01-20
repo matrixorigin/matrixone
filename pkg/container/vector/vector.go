@@ -278,6 +278,13 @@ func GetFixedAtWithTypeCheck[T any](v *Vector, idx int) T {
 	return slice[idx]
 }
 
+func (v *Vector) CloneBytesAt(i int) []byte {
+	bs := v.GetBytesAt(i)
+	ret := make([]byte, len(bs))
+	copy(ret, bs)
+	return ret
+}
+
 func (v *Vector) GetBytesAt(i int) []byte {
 	if v.IsConst() {
 		i = 0

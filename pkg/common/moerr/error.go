@@ -569,7 +569,7 @@ type Error struct {
 }
 
 func (e *Error) Error() string {
-	return e.message
+	return e.Display()
 }
 
 func (e *Error) Detail() string {
@@ -593,6 +593,10 @@ func (e *Error) MySQLCode() uint16 {
 
 func (e *Error) SqlState() string {
 	return e.sqlState
+}
+
+func (e *Error) SetDetail(detail string) {
+	e.detail = detail
 }
 
 var _ encoding.BinaryMarshaler = new(Error)
@@ -636,6 +640,40 @@ func IsMoErrCode(e error, rc uint16) bool {
 		return false
 	}
 	return me.code == rc
+}
+
+func GetMoErrCode(e error) (uint16, bool) {
+	if e == nil {
+		return 0, false
+	}
+
+	me, ok := e.(*Error)
+	if !ok {
+		return 0, false
+	}
+
+	return me.code, true
+}
+
+func IsSameMoErr(a error, b error) bool {
+	if a == nil || b == nil {
+		return false
+	}
+
+	var (
+		ok     bool
+		aa, bb *Error
+	)
+
+	if aa, ok = a.(*Error); !ok {
+		return false
+	}
+
+	if bb, ok = b.(*Error); !ok {
+		return false
+	}
+
+	return aa.code == bb.code
 }
 
 func DowncastError(e error) *Error {

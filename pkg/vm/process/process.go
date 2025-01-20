@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/partitionservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -106,6 +107,14 @@ func (proc *Process) GetLoadLocalReader() *io.PipeReader {
 
 func (proc *Process) GetLockService() lockservice.LockService {
 	return proc.Base.LockService
+}
+
+func (proc *Process) GetPartitionService() partitionservice.PartitionService {
+	ps := proc.Base.PartitionService
+	if ps == nil {
+		return partitionservice.DisabledService
+	}
+	return ps
 }
 
 func (proc *Process) GetWaitPolicy() lock.WaitPolicy {

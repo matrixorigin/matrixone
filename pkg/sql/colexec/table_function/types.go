@@ -88,6 +88,7 @@ type container struct {
 	// calls, we do not own it and do not free it.
 	nextRow    int
 	inputBatch *batch.Batch
+	isDone     bool // when table_function op as source op, after give a constant batch first time, set isDone true
 	// hold arg vectors, we do not own them and do not free them.
 	argVecs []*vector.Vector
 
