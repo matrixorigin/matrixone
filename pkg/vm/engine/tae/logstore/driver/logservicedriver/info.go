@@ -91,13 +91,6 @@ func newDriverInfo() *driverInfo {
 	return d
 }
 
-func (info *driverInfo) GetDSN() uint64 {
-	info.dsnmu.RLock()
-	lsn := info.dsn
-	info.dsnmu.RUnlock()
-	return lsn
-}
-
 func (info *driverInfo) resetDSNStats(stats *DSNStats) {
 	info.dsn = stats.Max
 	info.watermark.committingDSN = stats.Max
