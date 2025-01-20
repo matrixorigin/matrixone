@@ -403,6 +403,10 @@ func (it *VisibleCommittedObjectIt) Item() *ObjectEntry {
 }
 
 func (it *VisibleCommittedObjectIt) Release() {
+	if it.txn == nil {
+		logutil.Errorf("attempt to put iter %p into pool twice", it)
+		return
+	}
 	it.iter.Release()
 	it.curr = nil
 	it.txn = nil
