@@ -66,7 +66,7 @@ type BackendClient interface {
 type wrappedClient struct {
 	wrapped BackendClient
 	buf     logservice.LogRecord
-	pool    *clientpool
+	pool    *clientPool
 }
 
 func newClient(
@@ -150,7 +150,7 @@ func (c *wrappedClient) Putback() {
 	}
 }
 
-type clientpool struct {
+type clientPool struct {
 	closed bool
 	cfg    *Config
 
@@ -158,8 +158,8 @@ type clientpool struct {
 	clients []*wrappedClient
 }
 
-func newClientPool(cfg *Config) *clientpool {
-	pool := &clientpool{
+func newClientPool(cfg *Config) *clientPool {
+	pool := &clientPool{
 		cfg:     cfg,
 		clients: make([]*wrappedClient, cfg.ClientMaxCount),
 		cond:    sync.Cond{L: new(sync.Mutex)},
@@ -171,7 +171,7 @@ func newClientPool(cfg *Config) *clientpool {
 	return pool
 }
 
-func (c *clientpool) Close() {
+func (c *clientPool) Close() {
 	var wg sync.WaitGroup
 	c.cond.L.Lock()
 	defer c.cond.L.Unlock()
@@ -193,7 +193,7 @@ func (c *clientpool) Close() {
 	c.cond.Broadcast()
 }
 
-func (c *clientpool) GetOnFly() (*wrappedClient, error) {
+func (c *clientPool) GetOnFly() (*wrappedClient, error) {
 	c.cond.L.Lock()
 	defer c.cond.L.Unlock()
 	if c.closed {
@@ -203,7 +203,7 @@ func (c *clientpool) GetOnFly() (*wrappedClient, error) {
 	return client, nil
 }
 
-func (c *clientpool) Get() (client *wrappedClient, err error) {
+func (c *clientPool) Get() (client *wrappedClient, err error) {
 	c.cond.L.Lock()
 	defer c.cond.L.Unlock()
 	for {
@@ -221,7 +221,7 @@ func (c *clientpool) Get() (client *wrappedClient, err error) {
 	}
 }
 
-func (c *clientpool) Put(client *wrappedClient) {
+func (c *clientPool) Put(client *wrappedClient) {
 	if len(client.buf.Payload()) > DefaultRecordSize {
 		client.buf = client.wrapped.GetLogRecord(DefaultRecordSize)
 	}
