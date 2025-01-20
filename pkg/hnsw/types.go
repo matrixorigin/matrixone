@@ -15,8 +15,11 @@
 package hnsw
 
 import (
+	"crypto/md5"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"strings"
@@ -127,7 +130,7 @@ func (idx *HnswBuildIndex) ToSql(cfg IndexTableConfig) (string, error) {
 	chunksz := int64(0)
 	chunkid := int64(0)
 
-	sql := fmt.Sprintf("INSERT INTO `%s`.`%s` VALUES ", cfg.DbName, cfg.MetadataTable)
+	sql := fmt.Sprintf("INSERT INTO `%s`.`%s` VALUES ", cfg.DbName, cfg.IndexTable)
 	values := make([]string, 0, int64(math.Ceil(float64(filesz)/float64(MaxChunkSize))))
 	for offset = 0; offset < filesz; {
 		if offset+MaxChunkSize < filesz {
@@ -147,6 +150,24 @@ func (idx *HnswBuildIndex) ToSql(cfg IndexTableConfig) (string, error) {
 	}
 
 	sql += strings.Join(values, ", ")
+	return sql, nil
+}
+
+func (idx *HnswBuildIndex) ToMetaSql(cfg IndexTableConfig) (string, error) {
+
+	f, err := os.Open(idx.Path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+
+	h := md5.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	chksum := hex.EncodeToString(h.Sum(nil))
+
+	sql := fmt.Sprintf("INSERT INTO `%s`.`%s` VALUES (%d, '%s')", cfg.DbName, cfg.MetadataTable, idx.Id, chksum)
 	return sql, nil
 }
 
@@ -246,6 +267,12 @@ func (h *HnswBuild) SaveToDB() error {
 			return err
 		}
 		os.Stderr.WriteString(fmt.Sprintf("Sql: %s\n", sql))
+		metasql, err := idx.ToMetaSql(h.tblcfg)
+		if err != nil {
+			return err
+		}
+		os.Stderr.WriteString(fmt.Sprintf("Meta Sql: %s\n", metasql))
+
 		sz, err := idx.Index.Len()
 		if err != nil {
 			return err
