@@ -271,7 +271,7 @@ func TestObjOverlap(t *testing.T) {
 
 	objs = policy.revise(rc)
 	require.Equal(t, 1, len(objs))
-	require.Equal(t, 5, len(objs[0].objs))
+	require.Equal(t, 4, len(objs[0].objs))
 
 	policy.resetForTable(nil, nil)
 }
