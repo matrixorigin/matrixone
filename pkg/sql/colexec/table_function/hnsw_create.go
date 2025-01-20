@@ -28,12 +28,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	usearch "github.com/unum-cloud/usearch/golang"
 )
 
 type hnswCreateState struct {
 	inited bool
 	param  hnsw.HnswParam
 	idxcfg hnsw.IndexTableConfig
+	uscfg  usearch.IndexConfig
 	offset int
 	// holding one call batch, tokenizedState owns it.
 	batch *batch.Batch
@@ -91,14 +93,31 @@ func (u *hnswCreateState) start(tf *TableFunction, proc *process.Process, nthRow
 			}
 		}
 
-		u.param.M, err = strconv.ParseInt(u.param.MStr, 10, 64)
-		if err != nil {
-			return err
+		if len(u.param.Quantization) > 0 {
+			var ok bool
+			u.uscfg.Quantization, ok = hnsw.QuantizationValid(u.param.Quantization)
+			if !ok {
+				return moerr.NewInternalError(proc.Ctx, "Invalid quantization value")
+			}
 		}
 
-		u.param.EfConstruction, err = strconv.ParseInt(u.param.EfConstructionStr, 10, 64)
-		if err != nil {
-			return err
+		if len(u.param.M) > 0 {
+			val, err := strconv.Atoi(u.param.M)
+			if err != nil {
+				return err
+			}
+			u.uscfg.Connectivity = uint(val)
+		}
+
+		// default L2Sq
+		u.uscfg.Metric = usearch.L2sq
+
+		if len(u.param.EfConstruction) > 0 {
+			val, err := strconv.Atoi(u.param.EfConstruction)
+			if err != nil {
+				return err
+			}
+			u.uscfg.ExpansionAdd = uint(val)
 		}
 
 		// IndexTableConfig
@@ -128,10 +147,13 @@ func (u *hnswCreateState) start(tf *TableFunction, proc *process.Process, nthRow
 			return moerr.NewInvalidInput(proc.Ctx, "Third argument (vector must be a vecfs32 type")
 		}
 		dimension := f32aVec.GetType().Width
-		u.param.Dimension = dimension
+
+		// dimension
+		u.uscfg.Dimensions = uint(dimension)
 
 		os.Stderr.WriteString(fmt.Sprintf("Param %v\n", u.param))
 		os.Stderr.WriteString(fmt.Sprintf("Cfg %v\n", u.idxcfg))
+		os.Stderr.WriteString(fmt.Sprintf("USearch Cfg %v\n", u.uscfg))
 
 		u.batch = tf.createResultBatch()
 		u.inited = true

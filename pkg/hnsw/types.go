@@ -22,11 +22,8 @@ type IndexTableConfig struct {
 }
 
 type HnswParam struct {
-	MStr              string `json:"m"`
-	EfConstructionStr string `json:"ef_construction"`
-	Quantization      string `json:"quantization"`
-	OpType            string `json:"op_type"`
-	Dimension         int32
-	M                 int64
-	EfConstruction    int64
+	M              string `json:"m"`
+	EfConstruction string `json:"ef_construction"`
+	Quantization   string `json:"quantization"`
+	OpType         string `json:"op_type"`
 }
