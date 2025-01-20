@@ -88,16 +88,16 @@ type driverInfo struct {
 		records roaring64.Bitmap
 	}
 
-	// dsn: driver sequence number
-	// it is monotonically continuously increasing
-	// PSN:[DSN:LSN, DSN:LSN, DSN:LSN, ...]
-	// One : Many
-	nextDSN uint64
-
 	watermark struct {
 		mu            sync.RWMutex
 		committingDSN uint64
 		committedDSN  uint64
+
+		// dsn: driver sequence number
+		// it is monotonically continuously increasing
+		// PSN:[DSN:LSN, DSN:LSN, DSN:LSN, ...]
+		// One : Many
+		nextDSN atomic.Uint64
 	}
 
 	truncateDSNIntent atomic.Uint64 //
@@ -121,7 +121,7 @@ func newDriverInfo(maxPenddingWrites uint64) *driverInfo {
 }
 
 func (info *driverInfo) initState(stats *DSNStats) {
-	info.nextDSN = stats.Max
+	info.watermark.nextDSN.Store(stats.Max)
 	info.watermark.committingDSN = stats.Max
 	info.watermark.committedDSN = stats.Max
 	if stats.Min != math.MaxUint64 {
@@ -137,6 +137,10 @@ func (info *driverInfo) recordPSNInfo(
 ) {
 	info.psn.dsnMap[psn] = dsns
 	info.psn.records.Add(psn)
+}
+
+func (info *driverInfo) GetDSN() uint64 {
+	return info.watermark.nextDSN.Load()
 }
 
 func (info *driverInfo) getNextValidPSN(psn uint64) uint64 {
@@ -182,8 +186,7 @@ func (info *driverInfo) getMaxDSN(psn uint64) uint64 {
 }
 
 func (info *driverInfo) allocateDSN() uint64 {
-	info.nextDSN++
-	return info.nextDSN
+	return info.watermark.nextDSN.Add(1)
 }
 
 func (info *driverInfo) applyWriteToken() (token uint64) {
