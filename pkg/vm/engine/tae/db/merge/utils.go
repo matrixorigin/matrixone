@@ -173,7 +173,10 @@ func estimateMergeSize(objs []*catalog.ObjectEntry) int {
 	for _, o := range objs {
 		size += int(o.Rows()) * estimateMemUsagePerRow
 	}
-	return size
+	// Go's load factor is 6.5. This means there are average 6.5 key/elem pairs per bucket.
+	// Each bucket holds up to 8 key/elem pairs. So the memory wasted are 1.5 / 8 ~= 0.2.
+	// So we reserve 120% memory per row here.
+	return size / 5 * 6
 }
 
 type resourceController struct {
