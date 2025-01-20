@@ -975,7 +975,7 @@ func Test_Replayer9(t *testing.T) {
 	})
 	assert.Equalf(t, uint64(entryCnt*2), maxReadDSN.Load(), fmt.Sprintf("%d, %d", entryCnt*2, maxReadDSN.Load()))
 
-	cancelErr := fmt.Errorf("cancel")
+	cancelErr := moerr.NewInternalErrorNoCtx("cancel")
 	readCancel(cancelErr)
 	readErr := <-errCh
 	t.Logf("Read error: %v", readErr)
