@@ -15,6 +15,8 @@
 package ckputil
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
@@ -31,33 +33,33 @@ const (
 	TableObjectsAttr_Accout     = "account_id"
 	TableObjectsAttr_DB         = "db_id"
 	TableObjectsAttr_Table      = "table_id"
+	TableObjectsAttr_ObjectType = "object_type"
 	TableObjectsAttr_ID         = "id"
 	TableObjectsAttr_CreateTS   = "create_ts"
 	TableObjectsAttr_DeleteTS   = "delete_ts"
-	TableObjectsAttr_ObjectType = "object_type"
 
-	// TableObjects should be clustered by `table`+`id`
+	// TableObjects should be clustered by `table`+`object_type`+`id`
 	TableObjectsAttr_Cluster = "cluster"
 
 	// TableObjectsAttr_PhysicalAddr = objectio.PhysicalAddr_Attr
 )
 
 const (
-	TableObjectsAttr_Accout_Idx     = 0
-	TableObjectsAttr_DB_Idx         = 1
-	TableObjectsAttr_Table_Idx      = 2
-	TableObjectsAttr_ObjectType_Idx = 3
-	TableObjectsAttr_ID_Idx         = 4
-	TableObjectsAttr_CreateTS_Idx   = 5
-	TableObjectsAttr_DeleteTS_Idx   = 6
-	TableObjectsAttr_Cluster_Idx    = 7
+	TableObjectsAttr_Accout_Idx     = ioutil.TableObjectsAttr_Accout_Idx
+	TableObjectsAttr_DB_Idx         = ioutil.TableObjectsAttr_DB_Idx
+	TableObjectsAttr_Table_Idx      = ioutil.TableObjectsAttr_Table_Idx
+	TableObjectsAttr_ObjectType_Idx = ioutil.TableObjectsAttr_ObjectType_Idx
+	TableObjectsAttr_ID_Idx         = ioutil.TableObjectsAttr_ID_Idx
+	TableObjectsAttr_CreateTS_Idx   = ioutil.TableObjectsAttr_CreateTS_Idx
+	TableObjectsAttr_DeleteTS_Idx   = ioutil.TableObjectsAttr_DeleteTS_Idx
+	TableObjectsAttr_Cluster_Idx    = ioutil.TableObjectsAttr_Cluster_Idx
 	// TableObjectsAttr_PhysicalAddr_Idx = 8
 )
 
 const (
-	ObjectType_Invalid int8 = iota
-	ObjectType_Data
-	ObjectType_Tombstone
+	ObjectType_Invalid   = ioutil.ObjectType_Invalid
+	ObjectType_Data      = ioutil.ObjectType_Data
+	ObjectType_Tombstone = ioutil.ObjectType_Tombstone
 )
 
 var TableObjectsAttrs = []string{
@@ -98,21 +100,24 @@ var TableObjectsSeqnums = []uint16{0, 1, 2, 3, 4, 5, 6, 7}
 // }
 
 const (
-	MetaAttr_Table    = "table_id"
-	MetaAttr_Start    = "start_rowid"
-	MetaAttr_End      = "end_rowid"
-	MetaAttr_Location = "location"
+	MetaAttr_Table      = "table_id"
+	MetaAttr_ObjectType = "object_type"
+	MetaAttr_Start      = "start_rowid"
+	MetaAttr_End        = "end_rowid"
+	MetaAttr_Location   = "location"
 )
 
 const (
-	MetaAttr_Table_Idx    = 0
-	MetaAttr_Start_Idx    = 1
-	MetaAttr_End_Idx      = 2
-	MetaAttr_Location_Idx = 3
+	MetaAttr_Table_Idx      = 0
+	MetaAttr_ObjectType_Idx = 1
+	MetaAttr_Start_Idx      = 2
+	MetaAttr_End_Idx        = 3
+	MetaAttr_Location_Idx   = 4
 )
 
 var MetaAttrs = []string{
 	MetaAttr_Table,
+	MetaAttr_ObjectType,
 	MetaAttr_Start,
 	MetaAttr_End,
 	MetaAttr_Location,
@@ -120,12 +125,13 @@ var MetaAttrs = []string{
 
 var MetaTypes = []types.Type{
 	types.T_uint64.ToType(),
+	types.T_int8.ToType(),
 	types.T_Rowid.ToType(),
 	types.T_Rowid.ToType(),
 	types.T_char.ToType(),
 }
 
-var MetaSeqnums = []uint16{0, 1, 2, 3}
+var MetaSeqnums = []uint16{0, 1, 2, 3, 4}
 
 func NewObjectListBatch() *batch.Batch {
 	return batch.NewWithSchema(false, TableObjectsAttrs, TableObjectsTypes)
