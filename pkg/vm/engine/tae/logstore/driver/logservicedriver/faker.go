@@ -19,7 +19,6 @@ import (
 	"sort"
 	"sync"
 	"time"
-	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -249,7 +248,7 @@ func (c *mockBackend) Read(
 	)
 	for ; i < len(c.store); i++ {
 		records = append(records, c.store[i].Clone())
-		size += len(c.store[i].Data) + int(unsafe.Sizeof(logservice.LogRecord{}))
+		size += len(c.store[i].Data) + 20 //
 		if size >= int(maxSize) {
 			break
 		}
