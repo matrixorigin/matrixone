@@ -49,8 +49,7 @@ type driverInfo struct {
 	// it is monotonically continuously increasing
 	// PSN:[DSN:LSN, DSN:LSN, DSN:LSN, ...]
 	// One : Many
-	dsn   uint64
-	dsnmu sync.RWMutex
+	nextDSN uint64
 
 	watermark struct {
 		mu            sync.RWMutex
@@ -92,7 +91,7 @@ func newDriverInfo() *driverInfo {
 }
 
 func (info *driverInfo) resetDSNStats(stats *DSNStats) {
-	info.dsn = stats.Max
+	info.nextDSN = stats.Max
 	info.watermark.committingDSN = stats.Max
 	info.watermark.committedDSN = stats.Max
 	if stats.Min != math.MaxUint64 {
@@ -155,9 +154,9 @@ func (info *driverInfo) getMaxDSN(psn uint64) uint64 {
 	return lsn
 }
 
-func (info *driverInfo) allocateDSNLocked() uint64 {
-	info.dsn++
-	return info.dsn
+func (info *driverInfo) allocateDSN() uint64 {
+	info.nextDSN++
+	return info.nextDSN
 }
 
 func (info *driverInfo) getMaxFinishedToken() uint64 {
