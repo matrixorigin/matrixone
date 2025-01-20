@@ -1931,34 +1931,6 @@ func (s *Scope) handleVectorIvfFlatIndex(c *Compile, dbSource engine.Database, i
 
 }
 
-// TODO: ERIC
-func (s *Scope) handleVectorHnswIndex(c *Compile, dbSource engine.Database, indexDefs map[string]*plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef, indexInfo *plan.CreateTable) error {
-
-	if ok, err := s.isExperimentalEnabled(c, hnswIndexFlag); err != nil {
-		return err
-	} else if !ok {
-		return moerr.NewInternalErrorNoCtx("Hnsw index is not enabled")
-	}
-
-	// 1. static check
-	if len(indexDefs) != 2 {
-		return moerr.NewInternalErrorNoCtx("invalid hnsw index table definition")
-	} else if len(indexDefs[catalog.Hnsw_TblType_Metadata].Parts) != 1 {
-		return moerr.NewInternalErrorNoCtx("invalid hnsw index table definition")
-	}
-
-	// 2. create hidden tables
-	if indexInfo != nil {
-		for _, table := range indexInfo.GetIndexTables() {
-			if err := indexTableBuild(c, table, dbSource); err != nil {
-				return err
-			}
-		}
-	}
-
-	return nil
-}
-
 func (s *Scope) DropIndex(c *Compile) error {
 	if s.ScopeAnalyzer == nil {
 		s.ScopeAnalyzer = NewScopeAnalyzer()

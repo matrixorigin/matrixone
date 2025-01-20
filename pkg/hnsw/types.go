@@ -15,7 +15,7 @@
 package hnsw
 
 type IndexTableConfig struct {
-	Db            string `json:"db"`
+	DbName        string `json:"db"`
 	SrcTable      string `json:"src"`
 	MetadataTable string `json:"hnsw_meta"`
 	IndexTable    string `json:"hnsw_index"`
@@ -26,4 +26,5 @@ type HnswParam struct {
 	EfConstruction int64  `json:"ef_construction"`
 	Quantization   string `json:"quantization"`
 	OpType         string `json:"op_type"`
+	Dimension      int32  `json:"dimension,omitempty"`
 }

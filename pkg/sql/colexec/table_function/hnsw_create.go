@@ -110,7 +110,7 @@ func (u *hnswCreateState) start(tf *TableFunction, proc *process.Process, nthRow
 			return moerr.NewInvalidInput(proc.Ctx, "Third argument (vector must be a vecfs32 type")
 		}
 		dimension := f32aVec.GetType().Width
-		u.idxcfg.Dimension = dimension
+		u.param.Dimension = dimension
 
 		u.batch = tf.createResultBatch()
 		u.inited = true
