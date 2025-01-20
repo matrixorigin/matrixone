@@ -153,7 +153,7 @@ func (idx *HnswBuildIndex) ToSql(cfg IndexTableConfig) (string, error) {
 	return sql, nil
 }
 
-func (idx *HnswBuildIndex) ToMetaSql(cfg IndexTableConfig) (string, error) {
+func (idx *HnswBuildIndex) CheckSum(cfg IndexTableConfig) (string, error) {
 
 	f, err := os.Open(idx.Path)
 	if err != nil {
@@ -167,8 +167,7 @@ func (idx *HnswBuildIndex) ToMetaSql(cfg IndexTableConfig) (string, error) {
 	}
 	chksum := hex.EncodeToString(h.Sum(nil))
 
-	sql := fmt.Sprintf("INSERT INTO `%s`.`%s` VALUES (%d, '%s')", cfg.DbName, cfg.MetadataTable, idx.Id, chksum)
-	return sql, nil
+	return chksum, nil
 }
 
 func (idx *HnswBuildIndex) Empty() (bool, error) {
@@ -267,11 +266,11 @@ func (h *HnswBuild) SaveToDB() error {
 			return err
 		}
 		os.Stderr.WriteString(fmt.Sprintf("Sql: %s\n", sql))
-		metasql, err := idx.ToMetaSql(h.tblcfg)
+		chksum, err := idx.CheckSum(h.tblcfg)
 		if err != nil {
 			return err
 		}
-		os.Stderr.WriteString(fmt.Sprintf("Meta Sql: %s\n", metasql))
+		os.Stderr.WriteString(fmt.Sprintf("Meta Checksum: %s\n", chksum))
 
 		sz, err := idx.Index.Len()
 		if err != nil {
