@@ -52,10 +52,12 @@ func newTokenController(maxCount uint64) *tokenController {
 	}
 }
 
-func (rc *tokenController) Putback(token uint64) {
+func (rc *tokenController) Putback(tokens ...uint64) {
 	rc.L.Lock()
 	defer rc.L.Unlock()
-	rc.bm.Remove(token)
+	for _, token := range tokens {
+		rc.bm.Remove(token)
+	}
 	rc.Broadcast()
 }
 
