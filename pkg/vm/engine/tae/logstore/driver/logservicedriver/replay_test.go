@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	storeDriver "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
@@ -633,7 +632,7 @@ func Test_Replayer5(t *testing.T) {
 	}
 
 	var dsnScheduled []uint64
-	onScheduled := func(_ uint64, _ *common.ClosedIntervals, r LogEntry) {
+	onScheduled := func(_ uint64, r LogEntry) {
 		r.ForEachEntry(func(e *entry.Entry) {
 			if len(dsnScheduled) > 0 {
 				assert.True(t, dsnScheduled[len(dsnScheduled)-1] < e.DSN)
@@ -692,7 +691,7 @@ func Test_Replayer6(t *testing.T) {
 	}
 
 	var dsnScheduled []uint64
-	onScheduled := func(_ uint64, _ *common.ClosedIntervals, r LogEntry) {
+	onScheduled := func(_ uint64, r LogEntry) {
 		r.ForEachEntry(func(e *entry.Entry) {
 			if len(dsnScheduled) > 0 {
 				assert.True(t, dsnScheduled[len(dsnScheduled)-1] < e.DSN)
@@ -765,7 +764,7 @@ func Test_Replayer7(t *testing.T) {
 	}
 
 	var dsnScheduled []uint64
-	onScheduled := func(_ uint64, _ *common.ClosedIntervals, r LogEntry) {
+	onScheduled := func(_ uint64, r LogEntry) {
 		r.ForEachEntry(func(e *entry.Entry) {
 			if len(dsnScheduled) > 0 {
 				assert.True(t, dsnScheduled[len(dsnScheduled)-1] < e.DSN)
@@ -837,7 +836,7 @@ func Test_Replayer8(t *testing.T) {
 	}
 
 	var dsnScheduled []uint64
-	onScheduled := func(_ uint64, _ *common.ClosedIntervals, r LogEntry) {
+	onScheduled := func(_ uint64, r LogEntry) {
 		r.ForEachEntry(func(e *entry.Entry) {
 			if len(dsnScheduled) > 0 {
 				assert.True(t, dsnScheduled[len(dsnScheduled)-1] < e.DSN)
@@ -1072,7 +1071,7 @@ func Test_Replayer10(t *testing.T) {
 	}
 
 	var dsnScheduled []uint64
-	onScheduled := func(_ uint64, _ *common.ClosedIntervals, r LogEntry) {
+	onScheduled := func(_ uint64, r LogEntry) {
 		r.ForEachEntry(func(e *entry.Entry) {
 			// t.Logf("Scheduled DSN: %d", e.DSN)
 			if len(dsnScheduled) > 0 {

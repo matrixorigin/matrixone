@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 )
@@ -173,8 +172,8 @@ func (d *LogServiceDriver) Replay(
 		// for readwrite driver, it can only serve the write request
 		// after the REPLAYED state
 		WithReplayerOnScheduled(
-			func(psn uint64, dsnRange *common.ClosedIntervals, _ LogEntry) {
-				d.recordPSNInfo(psn, dsnRange)
+			func(psn uint64, e LogEntry) {
+				d.recordPSNInfo(psn, e.DSNRange())
 			},
 		),
 		WithReplayerOnReplayDone(

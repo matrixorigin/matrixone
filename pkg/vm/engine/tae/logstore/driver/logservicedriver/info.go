@@ -84,7 +84,7 @@ type driverInfo struct {
 	psn struct {
 		mu sync.RWMutex
 		// key: PSN, value: DSNs
-		dsnMap  map[uint64]*common.ClosedIntervals
+		dsnMap  map[uint64]common.ClosedInterval
 		records roaring64.Bitmap
 	}
 
@@ -116,7 +116,7 @@ func newDriverInfo(maxPenddingWrites uint64) *driverInfo {
 	d := &driverInfo{
 		tokenController: newTokenController(maxPenddingWrites),
 	}
-	d.psn.dsnMap = make(map[uint64]*common.ClosedIntervals)
+	d.psn.dsnMap = make(map[uint64]common.ClosedInterval)
 	return d
 }
 
@@ -133,7 +133,7 @@ func (info *driverInfo) initState(stats *DSNStats) {
 // psn: physical sequence number
 // dsns: dsns in the log entry of the psn
 func (info *driverInfo) recordPSNInfo(
-	psn uint64, dsns *common.ClosedIntervals,
+	psn uint64, dsns common.ClosedInterval,
 ) {
 	info.psn.dsnMap[psn] = dsns
 	info.psn.records.Add(psn)
@@ -173,14 +173,12 @@ func (info *driverInfo) isToTruncate(psn, dsn uint64) bool {
 
 func (info *driverInfo) getMaxDSN(psn uint64) uint64 {
 	info.psn.mu.RLock()
-	intervals, ok := info.psn.dsnMap[psn]
+	defer info.psn.mu.RUnlock()
+	dsnRange, ok := info.psn.dsnMap[psn]
 	if !ok {
-		info.psn.mu.RUnlock()
 		return 0
 	}
-	lsn := intervals.GetMax()
-	info.psn.mu.RUnlock()
-	return lsn
+	return dsnRange.End
 }
 
 func (info *driverInfo) allocateDSN() uint64 {
@@ -193,30 +191,21 @@ func (info *driverInfo) applyWriteToken() (token uint64) {
 }
 
 func (info *driverInfo) recordCommitInfo(committer *groupCommitter) {
+	dsnRange := committer.writer.Entry.DSNRange()
+
 	info.psn.mu.Lock()
-	cnt := int(committer.writer.Entry.GetEntryCount())
-	startDSN := committer.writer.Entry.GetStartDSN()
-	dsns := make([]uint64, 0, cnt)
-	for i := 0; i < cnt; i++ {
-		dsn := startDSN + uint64(i)
-		dsns = append(dsns, dsn)
-	}
 	info.psn.records.Add(committer.psn)
-	interval := common.NewClosedIntervalsBySlice(dsns)
-	info.psn.dsnMap[committer.psn] = interval
+	info.psn.dsnMap[committer.psn] = dsnRange
 	info.psn.mu.Unlock()
 
-	if interval.GetMin() != info.watermark.committingDSN+1 {
+	if dsnRange.Start != info.watermark.committingDSN+1 {
 		panic(fmt.Sprintf(
-			"logic err, expect %d, min is %d",
+			"logic err, expect %d, actual %s",
 			info.watermark.committingDSN+1,
-			interval.GetMin()),
-		)
+			dsnRange.String(),
+		))
 	}
-	if len(interval.Intervals) != 1 {
-		panic("logic err")
-	}
-	info.watermark.committingDSN = interval.GetMax()
+	info.watermark.committingDSN = dsnRange.End
 }
 
 func (info *driverInfo) gcPSN(psn uint64) {

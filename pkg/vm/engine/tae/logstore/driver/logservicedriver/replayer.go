@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 	"go.uber.org/zap"
@@ -100,12 +99,12 @@ func WithReplayerOnReplayDone(f func(error, DSNStats)) ReplayOption {
 	}
 }
 
-func WithReplayerOnScheduled(f func(uint64, *common.ClosedIntervals, LogEntry)) ReplayOption {
+func WithReplayerOnScheduled(f func(uint64, LogEntry)) ReplayOption {
 	return func(r *replayer) {
 		if r.onScheduled != nil {
-			r.onScheduled = func(psn uint64, dsnRange *common.ClosedIntervals, entry LogEntry) {
-				f(psn, dsnRange, entry)
-				r.onScheduled(psn, dsnRange, entry)
+			r.onScheduled = func(psn uint64, entry LogEntry) {
+				f(psn, entry)
+				r.onScheduled(psn, entry)
 			}
 		} else {
 			r.onScheduled = f
@@ -158,7 +157,7 @@ type replayer struct {
 	appendSkipCmd       func(ctx context.Context, skipMap map[uint64]uint64) error
 	onLogRecord         func(logservice.LogRecord)
 	onUserLogEntry      func(uint64, LogEntry)
-	onScheduled         func(uint64, *common.ClosedIntervals, LogEntry)
+	onScheduled         func(uint64, LogEntry)
 	onApplied           func(*entry.Entry)
 	onWriteSkip         func(map[uint64]uint64)
 	onReplayDone        func(resErr error, stats DSNStats)
@@ -577,9 +576,7 @@ func (r *replayer) tryScheduleApply(
 		return
 	}
 
-	dsns := make([]uint64, 0, record.GetEntryCount())
 	scheduleApply := func(e *entry.Entry) {
-		dsns = append(dsns, e.DSN)
 		scheduled = e
 		applyC <- e
 	}
@@ -588,10 +585,10 @@ func (r *replayer) tryScheduleApply(
 		return
 	}
 
-	dsnRange := common.NewClosedIntervalsBySlice(dsns)
-	r.updateDSN(dsnRange.GetMax())
-	r.updateDSN(dsnRange.GetMin())
-	r.waterMarks.dsnScheduled = dsnRange.GetMax()
+	dsnRange := record.DSNRange()
+	r.updateDSN(dsnRange.End)
+	r.updateDSN(dsnRange.Start)
+	r.waterMarks.dsnScheduled = dsnRange.End
 	r.stats.schedulePSNCount++
 
 	r.replayedState.readCache.removeRecord(psn)
@@ -599,7 +596,7 @@ func (r *replayer) tryScheduleApply(
 	delete(r.replayedState.dsn2PSNMap, dsn)
 
 	if r.onScheduled != nil {
-		r.onScheduled(psn, dsnRange, record)
+		r.onScheduled(psn, record)
 	}
 
 	return
