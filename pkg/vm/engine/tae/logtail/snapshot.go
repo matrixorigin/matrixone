@@ -436,7 +436,14 @@ func (sm *SnapshotMeta) updateTableInfo(
 			}
 			if name == catalog2.MO_PITR {
 				if sm.pitr.tid > 0 && sm.pitr.tid != tid {
-					panic(fmt.Sprintf("pitr table %v is not unique", tid))
+					logutil.Warn("GC-PANIC-UPDATE-TABLE-P8",
+						zap.Uint64("tid", tid),
+						zap.Uint64("old-tid", sm.pitr.tid),
+					)
+					sm.pitr.objects = nil
+					sm.pitr.tombstones = nil
+					sm.pitr.objects = make(map[objectio.Segmentid]*objectInfo)
+					sm.pitr.tombstones = make(map[objectio.Segmentid]*objectInfo)
 				}
 				sm.pitr.tid = tid
 			}
