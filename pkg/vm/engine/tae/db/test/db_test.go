@@ -7398,12 +7398,6 @@ func TestPitrMeta(t *testing.T) {
 	assert.True(t, len(pitr.ToTsList()) > 0)
 	tae.Restart(ctx)
 	db = tae.DB
-	txn, _ = db.StartTxn(nil)
-	database, _ = txn.GetDatabase("db")
-	rel5, err := testutil.CreateRelation2(ctx, txn, database, pitrSchema)
-	assert.Nil(t, err)
-	assert.Nil(t, txn.Commit(context.Background()))
-	appendPitr("db", rel5.ID())
 	testutils.WaitExpect(5000, func() bool {
 		if db.DiskCleaner.GetCleaner().GetScanWaterMark() == nil {
 			return false
@@ -7412,14 +7406,20 @@ func TestPitrMeta(t *testing.T) {
 		minEnd := minMerged.GetEnd()
 		return end.GE(&minEnd)
 	})
-	testutils.WaitExpect(10000, func() bool {
-		return db.Runtime.Scheduler.GetPenddingLSNCnt() == 0
-	})
 	end := db.DiskCleaner.GetCleaner().GetScanWaterMark().GetEnd()
 	minEnd = minMerged.GetEnd()
 	assert.True(t, end.GE(&minEnd))
 	err = db.DiskCleaner.GetCleaner().DoCheck()
 	assert.Nil(t, err)
+	txn, _ = db.StartTxn(nil)
+	database, _ = txn.GetDatabase("db")
+	rel5, err := testutil.CreateRelation2(ctx, txn, database, pitrSchema)
+	assert.Nil(t, err)
+	assert.Nil(t, txn.Commit(context.Background()))
+	appendPitr("db", rel5.ID())
+	testutils.WaitExpect(10000, func() bool {
+		return db.Runtime.Scheduler.GetPenddingLSNCnt() == 0
+	})
 	pitr, err = db.DiskCleaner.GetCleaner().GetPITRs()
 	assert.Nil(t, err)
 	assert.True(t, len(pitr.ToTsList()) > 0)
