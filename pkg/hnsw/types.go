@@ -17,13 +17,16 @@ package hnsw
 import (
 	"errors"
 	"fmt"
+	"math"
 	"os"
+	"strings"
 
 	usearch "github.com/unum-cloud/usearch/golang"
 )
 
 const (
 	MaxIndexCapacity = 100000
+	MaxChunkSize     = 65536
 )
 
 type IndexTableConfig struct {
@@ -41,15 +44,18 @@ type HnswParam struct {
 }
 
 type HnswBuildIndex struct {
+	Id    int64
 	Index *usearch.Index
 	Path  string
 	Saved bool
 	size  uint64
 }
 
-func NewHnswBuildIndex(cfg usearch.IndexConfig) (*HnswBuildIndex, error) {
+func NewHnswBuildIndex(id int64, cfg usearch.IndexConfig) (*HnswBuildIndex, error) {
 	var err error
 	idx := &HnswBuildIndex{}
+
+	idx.Id = id
 
 	idx.Index, err = usearch.NewIndex(cfg)
 	if err != nil {
@@ -84,7 +90,74 @@ func (idx *HnswBuildIndex) Destroy() error {
 
 func (idx *HnswBuildIndex) SaveToFile() error {
 
+	if idx.Saved {
+		return nil
+	}
+
+	f, err := os.CreateTemp("", "hnsw")
+	if err != nil {
+		return err
+	}
+
+	err = idx.Index.Save(f.Name())
+	if err != nil {
+		os.Remove(f.Name())
+		return err
+	}
+
+	idx.Saved = true
+	idx.Path = f.Name()
 	return nil
+}
+
+func (idx *HnswBuildIndex) ToSql(cfg IndexTableConfig) (string, error) {
+
+	err := idx.SaveToFile()
+	if err != nil {
+		return "", err
+	}
+
+	fi, err := os.Stat(idx.Path)
+	if err != nil {
+		return "", err
+	}
+
+	filesz := fi.Size()
+	offset := int64(0)
+	chunksz := int64(0)
+	chunkid := int64(0)
+
+	sql := fmt.Sprintf("INSERT INTO `%s`.`%s` VALUES ", cfg.DbName, cfg.MetadataTable)
+	values := make([]string, 0, int64(math.Ceil(float64(filesz)/float64(MaxChunkSize))))
+	for offset = 0; offset < filesz; {
+		if offset+MaxChunkSize < filesz {
+			chunksz = MaxChunkSize
+
+		} else {
+			chunksz = filesz - offset
+		}
+
+		url := fmt.Sprintf("file://%s?offset=%d&size=%d", idx.Path, offset, chunksz)
+		tuple := fmt.Sprintf("(%d, %d, cast('%s' as datalink))", idx.Id, chunkid, url)
+		values = append(values, tuple)
+
+		// offset and chunksz
+		offset += chunksz
+		chunkid++
+	}
+
+	sql += strings.Join(values, ", ")
+	return sql, nil
+}
+
+func (idx *HnswBuildIndex) Empty() (bool, error) {
+
+	sz, err := idx.Index.Len()
+	if err != nil {
+		return false, err
+	}
+
+	return (sz == 0), nil
 }
 
 func (idx *HnswBuildIndex) Full() (bool, error) {
@@ -129,15 +202,16 @@ func (h *HnswBuild) Destroy() error {
 func (h *HnswBuild) Add(key int64, vec []float32) error {
 	var err error
 	var idx *HnswBuildIndex
-	if len(h.indexes) == 0 {
-		idx, err = NewHnswBuildIndex(h.cfg)
+	nidx := int64(len(h.indexes))
+	if nidx == 0 {
+		idx, err = NewHnswBuildIndex(nidx, h.cfg)
 		if err != nil {
 			return err
 		}
 		h.indexes = append(h.indexes, idx)
 	} else {
 		// get last index
-		idx = h.indexes[len(h.indexes)-1]
+		idx = h.indexes[nidx-1]
 
 		full, err := idx.Full()
 		if err != nil {
@@ -152,7 +226,7 @@ func (h *HnswBuild) Add(key int64, vec []float32) error {
 			}
 
 			// create new index
-			idx, err = NewHnswBuildIndex(h.cfg)
+			idx, err = NewHnswBuildIndex(nidx, h.cfg)
 			if err != nil {
 				return err
 			}
@@ -167,6 +241,11 @@ func (h *HnswBuild) SaveToDB() error {
 
 	os.Stderr.WriteString(fmt.Sprintf("SaveToDb len = %d\n", len(h.indexes)))
 	for i, idx := range h.indexes {
+		sql, err := idx.ToSql(h.tblcfg)
+		if err != nil {
+			return err
+		}
+		os.Stderr.WriteString(fmt.Sprintf("Sql: %s\n", sql))
 		sz, err := idx.Index.Len()
 		if err != nil {
 			return err
