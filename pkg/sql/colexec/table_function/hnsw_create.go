@@ -16,6 +16,9 @@ package table_function
 
 import (
 	"encoding/json"
+	"fmt"
+	"os"
+	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -37,6 +40,7 @@ type hnswCreateState struct {
 }
 
 func (u *hnswCreateState) end(tf *TableFunction, proc *process.Process) error {
+	os.Stderr.WriteString("hnswCreate END")
 	return nil
 }
 
@@ -49,6 +53,10 @@ func (u *hnswCreateState) reset(tf *TableFunction, proc *process.Process) {
 func (u *hnswCreateState) call(tf *TableFunction, proc *process.Process) (vm.CallResult, error) {
 
 	u.batch.CleanOnlyData()
+
+	if u.batch.RowCount() == 0 {
+		return vm.CancelResult, nil
+	}
 
 	// write the batch
 	return vm.CallResult{Status: vm.ExecNext, Batch: u.batch}, nil
@@ -73,14 +81,24 @@ func hnswCreatePrepare(proc *process.Process, arg *TableFunction) (tvfState, err
 
 // start calling tvf on nthRow and put the result in u.batch.  Note that current tokenize impl will
 // always return one batch per nthRow.
-func (u *hnswCreateState) start(tf *TableFunction, proc *process.Process, nthRow int, analyzer process.Analyzer) error {
+func (u *hnswCreateState) start(tf *TableFunction, proc *process.Process, nthRow int, analyzer process.Analyzer) (err error) {
 
 	if !u.inited {
 		if len(tf.Params) > 0 {
-			err := json.Unmarshal([]byte(tf.Params), &u.param)
+			err = json.Unmarshal([]byte(tf.Params), &u.param)
 			if err != nil {
 				return err
 			}
+		}
+
+		u.param.M, err = strconv.ParseInt(u.param.MStr, 10, 64)
+		if err != nil {
+			return err
+		}
+
+		u.param.EfConstruction, err = strconv.ParseInt(u.param.EfConstructionStr, 10, 64)
+		if err != nil {
+			return err
 		}
 
 		// IndexTableConfig
@@ -112,6 +130,9 @@ func (u *hnswCreateState) start(tf *TableFunction, proc *process.Process, nthRow
 		dimension := f32aVec.GetType().Width
 		u.param.Dimension = dimension
 
+		os.Stderr.WriteString(fmt.Sprintf("Param %v\n", u.param))
+		os.Stderr.WriteString(fmt.Sprintf("Cfg %v\n", u.idxcfg))
+
 		u.batch = tf.createResultBatch()
 		u.inited = true
 	}
@@ -132,7 +153,6 @@ func (u *hnswCreateState) start(tf *TableFunction, proc *process.Process, nthRow
 
 	f32a := types.BytesToArray[float32](f32aVec.GetBytesAt(nthRow))
 
-	_ = id
-	_ = f32a
+	os.Stderr.WriteString(fmt.Sprintf("id:%d fp32: %v\n", id, f32a))
 	return nil
 }
