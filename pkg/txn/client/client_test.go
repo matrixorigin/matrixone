@@ -251,3 +251,16 @@ func TestOpenTxnWithWaitPausedDisabled(t *testing.T) {
 
 	require.Error(t, c.openTxn(op))
 }
+
+func TestWaitAbortMarked(t *testing.T) {
+	c := make(chan struct{})
+	tc := &txnClient{}
+	tc.mu.waitMarkAllActiveAbortedC = c
+	tc.mu.state = normal
+	tc.mu.activeTxns = map[string]*txnOperator{}
+	go func() {
+		close(c)
+	}()
+	op := &txnOperator{}
+	require.NoError(t, tc.openTxn(op))
+}

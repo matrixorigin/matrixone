@@ -511,6 +511,13 @@ type dynamicCtx struct {
 	sqlOpts ie.SessionOverrideOptions
 }
 
+func (d *dynamicCtx) IsBetaRunning() bool {
+	d.lock.RLock()
+	defer d.lock.RUnlock()
+
+	return d.beta.running
+}
+
 func (d *dynamicCtx) LogDynamicCtx() string {
 	d.lock.RLock()
 	defer d.lock.RUnlock()
@@ -1170,7 +1177,7 @@ func buildTablePairFromCache(
 ) (tbl tablePair, ok bool) {
 
 	item := eng.(*Engine).GetLatestCatalogCache().GetTableById(uint32(accId), dbId, tblId)
-	if item == nil {
+	if item == nil || item.IsDeleted() {
 		// account, db, tbl may delete already
 		// the `update_time` not change anymore
 		return
@@ -1452,7 +1459,8 @@ func (d *dynamicCtx) alphaTask(
 			zap.Int("batch count", batCnt),
 			zap.Duration("takes", dur),
 			zap.Duration("wait err", waitErrDur),
-			zap.String("caller", caller))
+			zap.String("caller", caller),
+			zap.Bool("is beta running", d.IsBetaRunning()))
 
 		v2.AlphaTaskDurationHistogram.Observe(dur.Seconds())
 		v2.AlphaTaskCountingHistogram.Observe(float64(processed))
@@ -1495,7 +1503,7 @@ func (d *dynamicCtx) alphaTask(
 					enterWait = true
 				}
 
-				if waitErrDur > time.Minute*5 {
+				if !d.IsBetaRunning() || waitErrDur > time.Minute*5 {
 					// waiting reached the limit
 					return nil
 				}
@@ -2006,6 +2014,10 @@ func (d *dynamicCtx) statsCalculateOp(
 	pState *logtailreplay.PartitionState,
 ) (sl statsList, err error) {
 
+	if pState == nil {
+		return
+	}
+
 	bcs := betaCycleStash{
 		born:       time.Now(),
 		snapshot:   snapshot,
@@ -2233,10 +2245,12 @@ func subscribeTable(
 		databaseName: tbl.dbName,
 	}
 
+	txnTbl.fake = true
+	txnTbl.eng = eng
 	txnTbl.relKind = tbl.relKind
 	txnTbl.primarySeqnum = tbl.pkSequence
 
-	if pState, err = eng.(*Engine).PushClient().toSubscribeTable(ctx, &txnTbl); err != nil {
+	if pState, err = txnTbl.tryToSubscribe(ctx); err != nil {
 		return nil, err
 	}
 
@@ -2405,10 +2419,10 @@ func applyTombstones(
 	//
 	// here, we only collect the deletes that have not paired inserts
 	// according to its LESS function, the deletes come first
-	var lastInsert *logtailreplay.RowEntry
+	var lastInsert logtailreplay.RowEntry
 	err = pState.ScanRows(true, func(entry *logtailreplay.RowEntry) (bool, error) {
 		if !entry.Deleted {
-			lastInsert = entry
+			lastInsert = *entry
 			return true, nil
 		}
 
@@ -2453,6 +2467,10 @@ func (d *dynamicCtx) bulkUpdateTableStatsList(
 	bat.Range(func(key, value any) bool {
 		tbl := key.(tablePair)
 		sl := value.(statsList)
+
+		if sl.stats == nil {
+			return true
+		}
 
 		tbls = append(tbls, tbl)
 
