@@ -22,6 +22,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -142,8 +144,9 @@ func (catalog *Catalog) onReplayUpdateTable(cmd *EntryCommand[*TableMVCCNode, *T
 		tbl.TableNode.schema.Store(schema)
 		// alter table rename
 		if schema.Extra.OldName != "" && un.DeletedAt.IsEmpty() {
-			err := tbl.db.RenameTableInTxn(schema.Extra.OldName, schema.Name, tbl.ID, schema.AcInfo.TenantID, un.GetTxn(), true)
-			if err != nil {
+			if err := tbl.db.RenameTableInTxn(
+				schema.Extra.OldName, schema.Name, tbl.ID, schema.AcInfo.TenantID, un.GetTxn(), true,
+			); err != nil {
 				logutil.Warn(schema.String())
 				panic(err)
 			}
@@ -273,27 +276,43 @@ func (catalog *Catalog) RelayFromSysTableObjects(
 
 	// replay table catalog
 	if tableBatch := readFunc(ctx, tableTbl, readTxn); tableBatch != nil {
-		if err := sortFunc(tableBatch.Vecs, pkgcatalog.MO_TABLES_REL_ID_IDX); err != nil {
+		if err := sortFunc(
+			tableBatch.Vecs, pkgcatalog.MO_TABLES_REL_ID_IDX,
+		); err != nil {
 			panic(err)
 		}
 		closeCB = append(closeCB, tableBatch.Close)
 		columnBatch := readFunc(ctx, columnTbl, readTxn)
-		if err := sortFunc(columnBatch.Vecs, pkgcatalog.MO_COLUMNS_ATT_RELNAME_ID_IDX); err != nil {
+		if err := sortFunc(
+			columnBatch.Vecs, pkgcatalog.MO_COLUMNS_ATT_RELNAME_ID_IDX,
+		); err != nil {
 			panic(err)
 		}
 		closeCB = append(closeCB, columnBatch.Close)
-		catalog.ReplayMOTables(ctx, txnNode, dataFactory, tableBatch, columnBatch, replayer)
+		catalog.ReplayMOTables(
+			ctx, txnNode, dataFactory, tableBatch, columnBatch, replayer,
+		)
 	}
 	// logutil.Info(catalog.SimplePPString(common.PPL3))
 	return
 }
 
 func (catalog *Catalog) ReplayMODatabase(ctx context.Context, txnNode *txnbase.TxnMVCCNode, bat *containers.Batch) {
-	dbids := vector.MustFixedColNoTypeCheck[uint64](bat.GetVectorByName(pkgcatalog.SystemDBAttr_ID).GetDownstreamVector())
-	tenantIDs := vector.MustFixedColNoTypeCheck[uint32](bat.GetVectorByName(pkgcatalog.SystemDBAttr_AccID).GetDownstreamVector())
-	userIDs := vector.MustFixedColNoTypeCheck[uint32](bat.GetVectorByName(pkgcatalog.SystemDBAttr_Creator).GetDownstreamVector())
-	roleIDs := vector.MustFixedColNoTypeCheck[uint32](bat.GetVectorByName(pkgcatalog.SystemDBAttr_Owner).GetDownstreamVector())
-	createAts := vector.MustFixedColNoTypeCheck[types.Timestamp](bat.GetVectorByName(pkgcatalog.SystemDBAttr_CreateAt).GetDownstreamVector())
+	dbids := vector.MustFixedColNoTypeCheck[uint64](
+		bat.GetVectorByName(pkgcatalog.SystemDBAttr_ID).GetDownstreamVector(),
+	)
+	tenantIDs := vector.MustFixedColNoTypeCheck[uint32](
+		bat.GetVectorByName(pkgcatalog.SystemDBAttr_AccID).GetDownstreamVector(),
+	)
+	userIDs := vector.MustFixedColNoTypeCheck[uint32](
+		bat.GetVectorByName(pkgcatalog.SystemDBAttr_Creator).GetDownstreamVector(),
+	)
+	roleIDs := vector.MustFixedColNoTypeCheck[uint32](
+		bat.GetVectorByName(pkgcatalog.SystemDBAttr_Owner).GetDownstreamVector(),
+	)
+	createAts := vector.MustFixedColNoTypeCheck[types.Timestamp](
+		bat.GetVectorByName(pkgcatalog.SystemDBAttr_CreateAt).GetDownstreamVector(),
+	)
 	for i := 0; i < bat.Length(); i++ {
 		dbid := dbids[i]
 		name := bat.GetVectorByName(pkgcatalog.SystemDBAttr_Name).GetDownstreamVector().GetStringAt(i)
@@ -303,7 +322,9 @@ func (catalog *Catalog) ReplayMODatabase(ctx context.Context, txnNode *txnbase.T
 		createAt := createAts[i]
 		createSql := bat.GetVectorByName(pkgcatalog.SystemDBAttr_CreateSQL).GetDownstreamVector().GetStringAt(i)
 		datType := bat.GetVectorByName(pkgcatalog.SystemDBAttr_Type).GetDownstreamVector().GetStringAt(i)
-		catalog.onReplayCreateDB(dbid, name, txnNode, tenantID, userID, roleID, createAt, createSql, datType)
+		catalog.onReplayCreateDB(
+			dbid, name, txnNode, tenantID, userID, roleID, createAt, createSql, datType,
+		)
 	}
 }
 
@@ -378,7 +399,8 @@ func (catalog *Catalog) ReplayMOTables(ctx context.Context, txnNode *txnbase.Txn
 			name := tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Name).GetDownstreamVector().GetStringAt(i)
 			schema := NewEmptySchema(name)
 			schema.ReadFromBatch(
-				colBat, colTids, nullables, isHiddens, clusterbys, autoIncrements, idxes, seqNums, startOffset, tid)
+				colBat, colTids, nullables, isHiddens, clusterbys, autoIncrements, idxes, seqNums, startOffset, tid,
+			)
 			schema.Comment = tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Comment).GetDownstreamVector().GetStringAt(i)
 			schema.Version = versions[i]
 			schema.CatalogVersion = catalogVersions[i]
@@ -387,12 +409,13 @@ func (catalog *Catalog) ReplayMOTables(ctx context.Context, txnNode *txnbase.Txn
 			schema.Relkind = tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Kind).GetDownstreamVector().GetStringAt(i)
 			schema.Createsql = tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_CreateSQL).GetDownstreamVector().GetStringAt(i)
 			schema.View = tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_ViewDef).GetDownstreamVector().GetStringAt(i)
-			schema.Constraint = tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Constraint).GetDownstreamVector().GetBytesAt(i)
+			schema.Constraint = tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Constraint).GetDownstreamVector().CloneBytesAt(i)
 			schema.AcInfo = accessInfo{}
 			schema.AcInfo.RoleID = roleIDs[i]
 			schema.AcInfo.UserID = userIDs[i]
 			schema.AcInfo.CreateAt = createAts[i]
 			schema.AcInfo.TenantID = tenantIDs[i]
+			// unmarshal before releasing, no need to copy
 			extra := tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_ExtraInfo).GetDownstreamVector().GetBytesAt(i)
 			schema.MustRestoreExtra(extra)
 			if err := schema.Finalize(true); err != nil {
@@ -462,15 +485,139 @@ func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, tx
 	}
 	tbl.InsertLocked(un)
 }
-
-func (catalog *Catalog) OnReplayObjectBatch(replayer ObjectListReplayer, objectInfo *containers.Batch, isTombstone bool, dataFactory DataFactory, forSys bool) {
-	tids := vector.MustFixedColNoTypeCheck[uint64](objectInfo.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector())
-	dbids := vector.MustFixedColNoTypeCheck[uint64](objectInfo.GetVectorByName(SnapshotAttr_DBID).GetDownstreamVector())
-	commitTSs := vector.MustFixedColNoTypeCheck[types.TS](objectInfo.GetVectorByName(txnbase.SnapshotAttr_CommitTS).GetDownstreamVector())
-	prepareTSs := vector.MustFixedColNoTypeCheck[types.TS](objectInfo.GetVectorByName(txnbase.SnapshotAttr_PrepareTS).GetDownstreamVector())
-	startTSs := vector.MustFixedColNoTypeCheck[types.TS](objectInfo.GetVectorByName(txnbase.SnapshotAttr_StartTS).GetDownstreamVector())
-	createTSs := vector.MustFixedColNoTypeCheck[types.TS](objectInfo.GetVectorByName(EntryNode_CreateAt).GetDownstreamVector())
-	deleteTSs := vector.MustFixedColNoTypeCheck[types.TS](objectInfo.GetVectorByName(EntryNode_DeleteAt).GetDownstreamVector())
+func (catalog *Catalog) OnReplayObjectBatch_V2(
+	vecs containers.Vectors,
+	dataFactory DataFactory,
+	start, end int,
+) {
+	dbid := vector.GetFixedAtNoTypeCheck[uint64](
+		&vecs[ioutil.TableObjectsAttr_DB_Idx], start,
+	)
+	db, err := catalog.GetDatabaseByID(dbid)
+	if err != nil {
+		// As replaying only the catalog view at the end time of lastest checkpoint
+		// it is normal fot deleted db or table to be missed
+		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+			return
+		}
+		logutil.Info(catalog.SimplePPString(common.PPL3))
+		panic(err)
+	}
+	tid := vector.GetFixedAtNoTypeCheck[uint64](
+		&vecs[ioutil.TableObjectsAttr_Table_Idx], start,
+	)
+	rel, err := db.GetTableEntryByID(tid)
+	if err != nil {
+		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+			return
+		}
+		logutil.Info(catalog.SimplePPString(common.PPL3))
+		panic(err)
+	}
+	statsVec := vecs[4]
+	objectTypes := vector.MustFixedColNoTypeCheck[int8](
+		&vecs[ioutil.TableObjectsAttr_ObjectType_Idx],
+	)
+	createTSs := vector.MustFixedColNoTypeCheck[types.TS](
+		&vecs[ioutil.TableObjectsAttr_CreateTS_Idx],
+	)
+	deleteTSs := vector.MustFixedColNoTypeCheck[types.TS](
+		&vecs[ioutil.TableObjectsAttr_DeleteTS_Idx],
+	)
+	for i := start; i < end; i++ {
+		stats := objectio.ObjectStats(statsVec.GetBytesAt(i))
+		objID := stats.ObjectName().ObjectId()
+		var isTombstone bool
+		switch objectTypes[i] {
+		case ioutil.ObjectType_Data:
+			isTombstone = false
+		case ioutil.ObjectType_Tombstone:
+			isTombstone = true
+		default:
+			panic(fmt.Sprintf("invalid object type %d", objectTypes[i]))
+		}
+		obj, err := rel.GetObjectByID(objID, isTombstone)
+		if err != nil && !moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+			panic(err)
+		}
+		if obj == nil {
+			obj = &ObjectEntry{
+				table: rel,
+				ObjectNode: ObjectNode{
+					SortHint:    catalog.NextObject(),
+					IsTombstone: isTombstone,
+					forcePNode:  true, // any object replayed from checkpoint is forced to be created
+				},
+				EntryMVCCNode: EntryMVCCNode{
+					CreatedAt: createTSs[i],
+				},
+				ObjectMVCCNode: ObjectMVCCNode{
+					ObjectStats: stats,
+				},
+				CreateNode: txnbase.TxnMVCCNode{
+					Start:   createTSs[i].Prev(),
+					Prepare: createTSs[i],
+					End:     createTSs[i],
+				},
+				ObjectState: ObjectState_Create_ApplyCommit,
+			}
+			if !deleteTSs[i].IsEmpty() {
+				obj.DeletedAt = deleteTSs[i]
+				obj.DeleteNode = txnbase.TxnMVCCNode{
+					Start:   deleteTSs[i].Prev(),
+					Prepare: deleteTSs[i],
+					End:     deleteTSs[i],
+				}
+			}
+			rel.AddEntryLocked(obj)
+		} else {
+			if obj.DeletedAt.IsEmpty() {
+				obj.DeletedAt = deleteTSs[i]
+				obj.DeleteNode = txnbase.TxnMVCCNode{
+					Start:   deleteTSs[i].Prev(),
+					Prepare: deleteTSs[i],
+					End:     deleteTSs[i],
+				}
+			}
+		}
+		if obj.objData == nil {
+			obj.objData = dataFactory.MakeObjectFactory()(obj)
+		} else {
+			deleteAt := obj.GetDeleteAt()
+			if !obj.IsAppendable() || (obj.IsAppendable() && !deleteAt.IsEmpty()) {
+				obj.objData.TryUpgrade()
+			}
+		}
+	}
+}
+func (catalog *Catalog) OnReplayObjectBatch(
+	replayer ObjectListReplayer,
+	objectInfo *containers.Batch,
+	isTombstone bool,
+	dataFactory DataFactory,
+	forSys bool,
+) {
+	tids := vector.MustFixedColNoTypeCheck[uint64](
+		objectInfo.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector(),
+	)
+	dbids := vector.MustFixedColNoTypeCheck[uint64](
+		objectInfo.GetVectorByName(SnapshotAttr_DBID).GetDownstreamVector(),
+	)
+	commitTSs := vector.MustFixedColNoTypeCheck[types.TS](
+		objectInfo.GetVectorByName(txnbase.SnapshotAttr_CommitTS).GetDownstreamVector(),
+	)
+	prepareTSs := vector.MustFixedColNoTypeCheck[types.TS](
+		objectInfo.GetVectorByName(txnbase.SnapshotAttr_PrepareTS).GetDownstreamVector(),
+	)
+	startTSs := vector.MustFixedColNoTypeCheck[types.TS](
+		objectInfo.GetVectorByName(txnbase.SnapshotAttr_StartTS).GetDownstreamVector(),
+	)
+	createTSs := vector.MustFixedColNoTypeCheck[types.TS](
+		objectInfo.GetVectorByName(EntryNode_CreateAt).GetDownstreamVector(),
+	)
+	deleteTSs := vector.MustFixedColNoTypeCheck[types.TS](
+		objectInfo.GetVectorByName(EntryNode_DeleteAt).GetDownstreamVector(),
+	)
 	objs := objectInfo.GetVectorByName(ObjectAttr_ObjectStats).GetDownstreamVector()
 	for i, tid := range tids {
 		if forSys != pkgcatalog.IsSystemTable(tid) {

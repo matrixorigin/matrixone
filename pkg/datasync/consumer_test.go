@@ -551,7 +551,7 @@ func TestConsumeEntries(t *testing.T) {
 		err := c.consumeEntries(ctx, []logservice.LogRecord{
 			{
 				Lsn:  10,
-				Data: make([]byte, 100),
+				Data: dataWithValidVersion(make([]byte, 100)),
 			},
 		}, false)
 		assert.NoError(t, err)
@@ -573,7 +573,7 @@ func TestConsumeEntries(t *testing.T) {
 		err := c.consumeEntries(ctx, []logservice.LogRecord{
 			{
 				Lsn:  10,
-				Data: make([]byte, 100),
+				Data: dataWithValidVersion(make([]byte, 100)),
 			},
 		}, true)
 		assert.Error(t, err)

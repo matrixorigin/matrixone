@@ -37,9 +37,9 @@ import (
 
 const (
 	InsertWriteS3Threshold uint64 = 128 * mpool.MB
-	DeleteWriteS3Threshold uint64 = 16 * mpool.MB
+	DeleteWriteS3Threshold uint64 = 64 * mpool.MB
 
-	TagS3SizeForMOLogger uint64 = 1 * mpool.MB
+	TagS3SizeForMOLogger uint64 = 8 * mpool.MB
 
 	RowIDIdx = 0
 	PkIdx    = 1
@@ -74,7 +74,8 @@ type s3Writer struct {
 	cacheBatchs *batch.CompactBatchs
 	segmentMap  map[string]int32
 
-	action actionType
+	action   actionType
+	isRemote bool
 
 	updateCtxs     []*MultiUpdateCtx
 	updateCtxInfos map[string]*updateCtxInfo
@@ -118,6 +119,7 @@ func newS3Writer(update *MultiUpdate) (*s3Writer, error) {
 		insertBlockInfo:     make([][]*batch.Batch, tableCount),
 		insertBlockRowCount: make([][]uint64, tableCount),
 		deleteBlockMap:      make([][]map[types.Blockid]*deleteBlockData, tableCount),
+		isRemote:            update.IsRemote,
 	}
 
 	mainIdx := 0
@@ -536,7 +538,7 @@ func (writer *s3Writer) fillInsertBlockInfo(
 }
 
 func (writer *s3Writer) flushTailAndWriteToOutput(proc *process.Process, analyzer process.Analyzer) (err error) {
-	if writer.batchSize > TagS3SizeForMOLogger {
+	if writer.isRemote && writer.batchSize > TagS3SizeForMOLogger {
 		//write tail batch to s3
 		err = writer.sortAndSync(proc, analyzer)
 		if err != nil {

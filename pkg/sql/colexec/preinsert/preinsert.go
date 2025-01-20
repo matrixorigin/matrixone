@@ -16,6 +16,7 @@ package preinsert
 
 import (
 	"bytes"
+	"slices"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -71,19 +72,26 @@ func (preInsert *PreInsert) constructColBuf(proc *proc, bat *batch.Batch, first 
 	if first {
 		for idx := range preInsert.Attrs {
 			if preInsert.TableDef.Cols[idx].Typ.AutoIncr {
-				preInsert.ctr.canFreeVecIdx[idx] = true
+				preInsert.ctr.canFreeVecIdx[int(preInsert.ColOffset)+idx] = true
 			}
 		}
-		preInsert.ctr.buf = batch.NewWithSize(len(preInsert.Attrs))
-		preInsert.ctr.buf.Attrs = make([]string, 0, len(preInsert.Attrs))
-		preInsert.ctr.buf.Attrs = append(preInsert.ctr.buf.Attrs, preInsert.Attrs...)
+		if preInsert.IsNewUpdate {
+			preInsert.ctr.buf = batch.NewWithSize(len(bat.Vecs))
+		} else {
+			preInsert.ctr.buf = batch.NewWithSize(len(preInsert.Attrs))
+			preInsert.ctr.buf.Attrs = slices.Clone(preInsert.Attrs)
+		}
 	} else {
 		preInsert.ctr.buf.SetRowCount(0)
 	}
 	// if col is AutoIncr, genAutoIncrCol function may change the vector of this col, we should copy the vec from children vec, so it in canFreeVecIdx
 	// and the other cols of preInsert.Attrs is stable, we just use the vecs of children's vecs
-	for idx := range preInsert.Attrs {
-		if _, ok := preInsert.ctr.canFreeVecIdx[idx]; ok {
+	vecCnt := len(preInsert.Attrs)
+	if preInsert.IsNewUpdate {
+		vecCnt = len(bat.Vecs)
+	}
+	for idx := 0; idx < vecCnt; idx++ {
+		if preInsert.ctr.canFreeVecIdx[idx] {
 			typ := bat.Vecs[idx].GetType()
 			if preInsert.ctr.buf.Vecs[idx] != nil {
 				preInsert.ctr.buf.Vecs[idx].CleanOnlyData()
@@ -118,54 +126,54 @@ func (preInsert *PreInsert) constructHiddenColBuf(proc *proc, bat *batch.Batch, 
 			if err != nil {
 				return err
 			}
+			preInsert.ctr.canFreeVecIdx[len(preInsert.ctr.buf.Vecs)] = true
 			preInsert.ctr.buf.Vecs = append(preInsert.ctr.buf.Vecs, vec)
 			preInsert.ctr.buf.Attrs = append(preInsert.ctr.buf.Attrs, catalog.CPrimaryKeyColName)
 		}
-
 		if preInsert.ctr.clusterByExecutor != nil {
 			vec, err := preInsert.ctr.clusterByExecutor.Eval(proc, []*batch.Batch{preInsert.ctr.buf}, nil)
 			if err != nil {
 				return err
 			}
+			preInsert.ctr.canFreeVecIdx[len(preInsert.ctr.buf.Vecs)] = true
 			preInsert.ctr.buf.Vecs = append(preInsert.ctr.buf.Vecs, vec)
 			preInsert.ctr.buf.Attrs = append(preInsert.ctr.buf.Attrs, preInsert.TableDef.ClusterBy.Name)
 		}
-		if preInsert.IsUpdate {
-			idx := len(bat.Vecs) - 1
+		if preInsert.IsOldUpdate {
+			rowIdIdx := len(bat.Vecs) - 1
 			preInsert.ctr.buf.Attrs = append(preInsert.ctr.buf.Attrs, catalog.Row_ID)
-			rowIdVec := vector.NewVec(*bat.GetVector(int32(idx)).GetType())
-			err = rowIdVec.UnionBatch(bat.Vecs[idx], 0, bat.Vecs[idx].Length(), nil, proc.Mp())
+			rowIdVec := vector.NewVec(*bat.GetVector(int32(rowIdIdx)).GetType())
+			err = rowIdVec.UnionBatch(bat.Vecs[rowIdIdx], 0, bat.Vecs[rowIdIdx].Length(), nil, proc.Mp())
 			if err != nil {
 				rowIdVec.Free(proc.Mp())
 				return err
 			}
+			preInsert.ctr.canFreeVecIdx[len(preInsert.ctr.buf.Vecs)] = true
 			preInsert.ctr.buf.Vecs = append(preInsert.ctr.buf.Vecs, rowIdVec)
 		}
-
 	} else {
-		idx := len(preInsert.Attrs)
+		colIdx := len(preInsert.Attrs)
 		if preInsert.ctr.compPkExecutor != nil {
 			vec, err := preInsert.ctr.compPkExecutor.Eval(proc, []*batch.Batch{preInsert.ctr.buf}, nil)
 			if err != nil {
 				return err
 			}
-			preInsert.ctr.buf.Vecs[idx] = vec
-			idx += 1
+			preInsert.ctr.buf.Vecs[colIdx] = vec
+			colIdx += 1
 		}
 		if preInsert.ctr.clusterByExecutor != nil {
 			vec, err := preInsert.ctr.clusterByExecutor.Eval(proc, []*batch.Batch{preInsert.ctr.buf}, nil)
 			if err != nil {
 				return err
 			}
-			preInsert.ctr.buf.Vecs[idx] = vec
-			idx += 1
+			preInsert.ctr.buf.Vecs[colIdx] = vec
+			colIdx += 1
 		}
-
-		if preInsert.IsUpdate {
-			i := len(bat.Vecs) - 1
-			rowIdVec := preInsert.ctr.buf.Vecs[idx]
+		if preInsert.IsOldUpdate {
+			rowIdIdx := len(bat.Vecs) - 1
+			rowIdVec := preInsert.ctr.buf.Vecs[colIdx]
 			rowIdVec.CleanOnlyData()
-			err = rowIdVec.UnionBatch(bat.Vecs[i], 0, bat.Vecs[i].Length(), nil, proc.Mp())
+			err = rowIdVec.UnionBatch(bat.Vecs[rowIdIdx], 0, bat.Vecs[rowIdIdx].Length(), nil, proc.Mp())
 			if err != nil {
 				return err
 			}
@@ -206,7 +214,7 @@ func (preInsert *PreInsert) Call(proc *proc) (vm.CallResult, error) {
 		analyzer.AddIncrementTime(start)
 	}
 	// check new rows not null
-	tempVecs := preInsert.ctr.buf.Vecs[:len(preInsert.Attrs)]
+	tempVecs := preInsert.ctr.buf.Vecs[preInsert.ColOffset : int(preInsert.ColOffset)+len(preInsert.Attrs)]
 	err = colexec.BatchDataNotNullCheck(tempVecs, preInsert.Attrs, preInsert.TableDef, proc.Ctx)
 	if err != nil {
 		return result, err
@@ -227,18 +235,18 @@ func (preInsert *PreInsert) Call(proc *proc) (vm.CallResult, error) {
 func checkIfNeedReGenAutoIncrCol(bat *batch.Batch, preInsert *PreInsert) map[string]int {
 	needCheck := make(map[string]int)
 
-	var pkSet map[string]struct{}
+	var pkSet map[string]bool
 	if preInsert.TableDef.IsTemporary || preInsert.TableDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
 		// 1. currently temporary table is supported by memory engine, this distinction should be removed after refactoring
 		// 2. for __mo_fake_pk_col, user can not specify the value for this column, so no need to check
 	} else {
-		pkSet = make(map[string]struct{})
+		pkSet = make(map[string]bool)
 		for _, n := range preInsert.TableDef.Pkey.Names {
-			pkSet[n] = struct{}{}
+			pkSet[n] = true
 		}
 		for i, col := range preInsert.TableDef.Cols {
-			if _, ok := pkSet[col.Name]; ok && col.Typ.AutoIncr {
-				vec := bat.GetVector(int32(i))
+			if pkSet[col.Name] && col.Typ.AutoIncr {
+				vec := bat.GetVector(preInsert.ColOffset + int32(i))
 				if vec.AllNull() {
 					needCheck[col.Name] = i
 				}
@@ -257,7 +265,8 @@ func genAutoIncrCol(bat *batch.Batch, proc *proc, preInsert *PreInsert) error {
 	lastInsertValue, err := proc.GetIncrService().InsertValues(
 		proc.Ctx,
 		tableID,
-		bat,
+		bat.Vecs[preInsert.ColOffset:int(preInsert.ColOffset)+len(preInsert.Attrs)],
+		bat.RowCount(),
 		preInsert.EstimatedRowCount,
 	)
 	if err != nil {
@@ -286,7 +295,7 @@ func genAutoIncrCol(bat *batch.Batch, proc *proc, preInsert *PreInsert) error {
 		}
 
 		for col, idx := range needReCheck {
-			vec := bat.GetVector(int32(idx))
+			vec := bat.GetVector(preInsert.ColOffset + int32(idx))
 			from, err := proc.GetIncrService().GetLastAllocateTS(proc.Ctx, tableID, col)
 			if err != nil {
 				return err
