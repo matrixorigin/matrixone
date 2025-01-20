@@ -16,7 +16,6 @@ package frontend
 
 import (
 	"context"
-	"fmt"
 	"math"
 	"sync"
 
@@ -155,12 +154,21 @@ func (ie *internalExecutor) Exec(ctx context.Context, sql string, opts ie.Sessio
 	}
 
 	//---------------------------------------------------------------------------
-	accKey := fmt.Sprintf(runtime.AccountIsFinalVersion+"%d", sess.GetTenantInfo().TenantID)
-	ss, ok := runtime.ServiceRuntime(ie.service).GetGlobalVariables(accKey)
+	//accKey := fmt.Sprintf(runtime.AccountIsFinalVersion+"%d", sess.GetTenantInfo().TenantID)
+	//ss, ok := runtime.ServiceRuntime(ie.service).GetGlobalVariables(accKey)
+	//if ok {
+	//	isFinalVersion := ss.(bool)
+	//	ctx = defines.AttachIsFinalVersion(ctx, isFinalVersion)
+	//}
+
+	ss, ok := runtime.ServiceRuntime(ie.service).GetGlobalVariables(runtime.ClusterIsFinalVersion)
 	if ok {
 		isFinalVersion := ss.(bool)
 		ctx = defines.AttachIsFinalVersion(ctx, isFinalVersion)
 	}
+
+	//sess.GetBaseService().GetFinalVersion()
+
 	//---------------------------------------------------------------------------
 
 	tempExecCtx := ExecCtx{
@@ -189,8 +197,14 @@ func (ie *internalExecutor) Query(ctx context.Context, sql string, opts ie.Sessi
 	sess.Debug(ctx, "internalExecutor new session")
 
 	//---------------------------------------------------------------------------
-	accKey := fmt.Sprintf(runtime.AccountIsFinalVersion+"%d", sess.GetTenantInfo().TenantID)
-	ss, ok := runtime.ServiceRuntime(ie.service).GetGlobalVariables(accKey)
+	//accKey := fmt.Sprintf(runtime.AccountIsFinalVersion+"%d", sess.GetTenantInfo().TenantID)
+	//ss, ok := runtime.ServiceRuntime(ie.service).GetGlobalVariables(accKey)
+	//if ok {
+	//	isFinalVersion := ss.(bool)
+	//	ctx = defines.AttachIsFinalVersion(ctx, isFinalVersion)
+	//}
+
+	ss, ok := runtime.ServiceRuntime(ie.service).GetGlobalVariables(runtime.ClusterIsFinalVersion)
 	if ok {
 		isFinalVersion := ss.(bool)
 		ctx = defines.AttachIsFinalVersion(ctx, isFinalVersion)

@@ -61,7 +61,10 @@ const (
 
 	// TestingContextKey is the key of context for testing
 	TestingContextKey = "testing-context"
-	
+
+	FinalVersion       = "final-version"
+	FinalVersionOffset = "final-version-offset"
+
 	AccountIsFinalVersion = "account-is-final-version-"
 	ClusterIsFinalVersion = "cluster-is-final-version"
 )

@@ -1114,7 +1114,6 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		psw                  []byte
 		accountVersion       uint64
 		createVersion        string
-		versionOffset        uint64
 		lastChangedTime      string
 		defPwdLife           int
 		userStatus           string
@@ -1124,6 +1123,10 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		needCheckLock        bool
 		maxLoginAttempts     int64
 		needCheckHost        bool
+
+		version       string
+		versionOffset uint64
+		versionState  int64
 	)
 
 	//Get tenant info
@@ -1144,8 +1147,13 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		}
 
 		//----------------------------------------------------------------------------------------
-		accKey := fmt.Sprintf(runtime2.AccountIsFinalVersion+"%d", ses.GetAccountId())
-		ss, ok := runtime2.ServiceRuntime(ses.GetService()).GetGlobalVariables(accKey)
+		//accKey := fmt.Sprintf(runtime2.AccountIsFinalVersion+"%d", ses.GetAccountId())
+		//ss, ok := runtime2.ServiceRuntime(ses.GetService()).GetGlobalVariables(accKey)
+		//if ok {
+		//	isFinalVersion := ss.(bool)
+		//	ses.GetTxnHandler().SetTxnCtxIsFinalVersionFlag(isFinalVersion)
+		//}
+		ss, ok := runtime2.ServiceRuntime(ses.GetService()).GetGlobalVariables(runtime2.ClusterIsFinalVersion)
 		if ok {
 			isFinalVersion := ss.(bool)
 			ses.GetTxnHandler().SetTxnCtxIsFinalVersionFlag(isFinalVersion)
@@ -1206,12 +1214,6 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		return nil, err
 	}
 
-	// create version
-	versionOffset, err = rsset[0].GetUint64(sysTenantCtx, 0, 6)
-	if err != nil {
-		return nil, err
-	}
-
 	if strings.ToLower(accountStatus) == tree.AccountStatusSuspend.String() {
 		return nil, moerr.NewInternalErrorf(sysTenantCtx, "Account %s is suspended", tenant.GetTenant())
 	}
@@ -1222,6 +1224,35 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	} else {
 		ses.getRoutine().setResricted(false)
 	}
+
+	//------------------------------------------------------------------------------------------------------------------
+	sqlForCheckVersion := "select version, version_offset, state from mo_catalog.mo_version order by create_at desc limit 1;"
+	rsset, err = executeSQLInBackgroundSession(sysTenantCtx, bh, sqlForCheckVersion)
+	if err != nil {
+		return nil, err
+	}
+	if !execResultArrayHasData(rsset) {
+		return nil, moerr.NewInternalErrorf(sysTenantCtx, "there is no verion info in mo_catalog")
+	}
+
+	// cn schema version
+	version, err = rsset[0].GetString(sysTenantCtx, 0, 0)
+	if err != nil {
+		return nil, err
+	}
+
+	// cn schema version offset
+	versionOffset, err = rsset[0].GetUint64(sysTenantCtx, 0, 1)
+	if err != nil {
+		return nil, err
+	}
+
+	// cn schema version offset state
+	versionState, err = rsset[0].GetInt64(sysTenantCtx, 0, 1)
+	if err != nil {
+		return nil, err
+	}
+	//------------------------------------------------------------------------------------------------------------------
 
 	tenant.SetTenantID(uint32(tenantID))
 	ses.timestampMap[TSCheckTenantEnd] = time.Now()
@@ -1495,12 +1526,14 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 
 	finalVersion := ses.GetBaseService().GetFinalVersion()
 	finalVersionOffset := ses.GetBaseService().GetFinalVersionOffset()
-	if createVersion == finalVersion && int32(versionOffset) >= finalVersionOffset {
+	if version == finalVersion && int32(versionOffset) >= finalVersionOffset && int32(versionState) == versions.StateReady {
 		ses.GetTxnHandler().SetTxnCtxIsFinalVersionFlag(true)
-		runtime2.ServiceRuntime(ses.service).SetGlobalVariables(fmt.Sprintf(runtime2.AccountIsFinalVersion+"%d", tenantID), true)
+		runtime2.ServiceRuntime(ses.service).SetGlobalVariables(runtime2.ClusterIsFinalVersion, true)
+		//runtime2.ServiceRuntime(ses.service).SetGlobalVariables(fmt.Sprintf(runtime2.AccountIsFinalVersion+"%d", tenantID), true)
 	} else {
-		runtime2.ServiceRuntime(ses.service).SetGlobalVariables(fmt.Sprintf(runtime2.AccountIsFinalVersion+"%d", tenantID), false)
 		ses.GetTxnHandler().SetTxnCtxIsFinalVersionFlag(false)
+		runtime2.ServiceRuntime(ses.service).SetGlobalVariables(runtime2.ClusterIsFinalVersion, false)
+		//runtime2.ServiceRuntime(ses.service).SetGlobalVariables(fmt.Sprintf(runtime2.AccountIsFinalVersion+"%d", tenantID), false)
 	}
 
 	return GetPassWord(pwd)

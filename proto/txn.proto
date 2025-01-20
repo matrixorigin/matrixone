@@ -380,7 +380,5 @@ message TxnOptions {
     bool autocommit = 15;//AUTOCOMMIT
     bool inIncrStmt = 16;
     bool inRollbackStmt = 17;
-    bool isFinalVersion = 18;
-    string version = 19;
-    uint32 versionOffset = 20;
+    bool isFinalVersion = 18; // Indicates whether the system has been upgraded to the latest version
 }

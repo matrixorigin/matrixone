@@ -131,6 +131,18 @@ func (mr *MockTxnExecutorMockRecorder) LockTable(table interface{}) *gomock.Call
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "LockTable", reflect.TypeOf((*MockTxnExecutor)(nil).LockTable), table)
 }
 
+// SetCtxValue mocks base method.
+func (m *MockTxnExecutor) SetCtxValue(key, value interface{}) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "SetCtxValue", key, value)
+}
+
+// SetCtxValue indicates an expected call of SetCtxValue.
+func (mr *MockTxnExecutorMockRecorder) SetCtxValue(key, value interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetCtxValue", reflect.TypeOf((*MockTxnExecutor)(nil).SetCtxValue), key, value)
+}
+
 // Txn mocks base method.
 func (m *MockTxnExecutor) Txn() client.TxnOperator {
 	m.ctrl.T.Helper()

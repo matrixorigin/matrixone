@@ -17,13 +17,14 @@ package versions
 import (
 	"testing"
 
+	"github.com/prashantv/gostub"
+	"github.com/stretchr/testify/assert"
+
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
-	"github.com/prashantv/gostub"
-	"github.com/stretchr/testify/assert"
 )
 
 type MockTxnExecutor struct{}
@@ -58,6 +59,10 @@ func (MockTxnExecutor) Exec(sql string, options executor.StatementOption) (execu
 func (MockTxnExecutor) Txn() client.TxnOperator {
 	//TODO implement me
 	panic("implement me")
+}
+
+func (MockTxnExecutor) SetCtxValue(key, value interface{}) {
+	return
 }
 
 func TestGetAllPubInfos(t *testing.T) {

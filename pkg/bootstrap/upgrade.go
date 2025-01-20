@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v2_0_1"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v2_0_2"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v2_1_0"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 )
 
 // initUpgrade all versions need create a upgrade handle in pkg/bootstrap/versions
@@ -40,6 +41,9 @@ func (s *service) initUpgrade() {
 	s.handles = append(s.handles, v2_0_2.Handler)
 	s.handles = append(s.handles, v2_1_0.Handler)
 
+	// Store the schema version information of the current binary file into the runtime global variable
+	runtime.ServiceRuntime(s.sid).SetGlobalVariables(runtime.FinalVersion, s.handles[len(s.handles)-1].Metadata().Version)
+	runtime.ServiceRuntime(s.sid).SetGlobalVariables(runtime.FinalVersionOffset, s.handles[len(s.handles)-1].Metadata().VersionOffset)
 }
 
 func (s *service) getFinalVersionHandle() VersionHandle {

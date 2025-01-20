@@ -26,3 +26,19 @@ var (
 	// Version version, setup by makefile
 	Version = ""
 )
+
+type VersionInfo struct {
+	// cluster
+	Cluster struct {
+		Version        string
+		VersionOffset  uint32
+		IsFinalVersion bool
+	}
+
+	// account
+	Account struct {
+		Version        string
+		VersionOffset  uint32
+		IsFinalVersion bool
+	}
+}

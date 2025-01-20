@@ -234,6 +234,7 @@ func (th *TxnHandler) GetTxnCtx() context.Context {
 	return th.txnCtx
 }
 
+// 指的是整个CN schema的版本升级是否达到最终状态
 func (th *TxnHandler) SetTxnCtxIsFinalVersionFlag(isFinalVersion bool) context.Context {
 	th.mu.Lock()
 	defer th.mu.Unlock()
@@ -359,29 +360,115 @@ func checkAccountVersion(ctx context.Context, ses FeSession, bh BackgroundExec) 
 	accSql := fmt.Sprintf("SELECT create_version, version_offset FROM mo_catalog.mo_account WHERE account_id = %d", ses.GetAccountId())
 	bh.ClearExecResultSet()
 
-	err := bh.Exec(ctx, accSql)
+	sysTenantCtx := defines.AttachAccount(ctx, uint32(sysAccountID), uint32(rootID), uint32(moAdminRoleID))
+	err := bh.Exec(sysTenantCtx, accSql)
 	if err != nil {
 		return "", 0, err
 	}
 
-	erArray, err := getResultSet(ctx, bh)
+	erArray, err := getResultSet(sysTenantCtx, bh)
 	if err != nil {
 		return "", 0, err
 	}
 
 	for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
-		createVersion, err := erArray[0].GetString(ctx, i, 0)
+		createVersion, err := erArray[0].GetString(sysTenantCtx, i, 0)
 		if err != nil {
 			return "", 0, err
 		}
 
-		versionOffset, err := erArray[0].GetUint64(ctx, i, 1)
+		versionOffset, err := erArray[0].GetInt64(sysTenantCtx, i, 1)
 		if err != nil {
 			return "", 0, err
 		}
 		return createVersion, int32(versionOffset), nil
 	}
 	return "", 0, nil
+}
+
+func checkClusterVersion(ctx context.Context, ses FeSession, bh BackgroundExec) (string, uint32, int32, error) {
+	accSql := fmt.Sprintf("SELECT version, version_offset, state FROM mo_catalog.mo_version where state >= 1 order by create_at desc limit 1")
+	bh.ClearExecResultSet()
+
+	sysTenantCtx := defines.AttachAccount(ctx, uint32(sysAccountID), uint32(rootID), uint32(moAdminRoleID))
+	err := bh.Exec(sysTenantCtx, accSql)
+	if err != nil {
+		return "", 0, 0, err
+	}
+
+	erArray, err := getResultSet(sysTenantCtx, bh)
+	if err != nil {
+		return "", 0, 0, err
+	}
+
+	for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
+		createVersion, err := erArray[0].GetString(sysTenantCtx, i, 0)
+		if err != nil {
+			return "", 0, 0, err
+		}
+
+		versionOffset, err := erArray[0].GetUint64(sysTenantCtx, i, 1)
+		if err != nil {
+			return "", 0, 0, err
+		}
+
+		state, err := erArray[0].GetInt64(sysTenantCtx, i, 2)
+		if err != nil {
+			return "", 0, 0, err
+		}
+		return createVersion, uint32(versionOffset), int32(state), nil
+	}
+	return "", 0, 0, err
+}
+
+func checkClusterVersionV1(ctx context.Context, finalVersion string, bh BackgroundExec) (string, int32, bool, error) {
+	sql := fmt.Sprintf("SELECT to_version, state, final_version = to_version FROM mo_catalog.mo_upgrade WHERE state >= 1 AND (final_version, final_version_offset) IN (SELECT version, version_offset FROM mo_catalog.mo_version ORDER BY create_at DESC LIMIT 1) ORDER BY upgrade_order DESC LIMIT 1")
+	bh.ClearExecResultSet()
+
+	sysTenantCtx := defines.AttachAccount(ctx, uint32(sysAccountID), uint32(rootID), uint32(moAdminRoleID))
+	err := bh.Exec(sysTenantCtx, sql)
+	if err != nil {
+		return "", 0, false, err
+	}
+
+	erArray, err := getResultSet(sysTenantCtx, bh)
+	if err != nil {
+		return "", 0, false, err
+	}
+
+	if len(erArray) == 0 {
+		// 说明当前为初始化版本，没有任何升级任务
+		sql2 := fmt.Sprintf("SELECT version, state, version = '%s' FROM mo_catalog.mo_version where state >= 1 order by create_at desc limit 1", finalVersion)
+		err := bh.Exec(sysTenantCtx, sql2)
+		if err != nil {
+			return "", 0, false, err
+		}
+
+		erArray, err = getResultSet(sysTenantCtx, bh)
+		if err != nil {
+			return "", 0, false, err
+		}
+	}
+
+	for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
+		clusterVersion, err := erArray[0].GetString(sysTenantCtx, i, 0)
+		if err != nil {
+			return "", 0, false, err
+		}
+
+		state, err := erArray[0].GetInt64(sysTenantCtx, i, 1)
+		if err != nil {
+			return "", 0, false, err
+		}
+
+		isFinalVersion, err := erArray[0].GetInt64(sysTenantCtx, i, 2)
+		if err != nil {
+			return "", 0, false, err
+		}
+
+		return clusterVersion, int32(state), isFinalVersion != 0, nil
+	}
+	return "", 0, false, err
 }
 
 // createTxnOpUnsafe creates a new txn operator using TxnClient. Should not be called outside txn

@@ -248,7 +248,21 @@ func GetVersionOffset(ctx context.Context) (uint32, error) {
 	if v := ctx.Value(VersionOffsetKey{}); v != nil {
 		return v.(uint32), nil
 	} else {
-		return 0, moerr.NewInternalError(ctx, "no version in context")
+		return 0, moerr.NewInternalError(ctx, "no versionOffset in context")
+	}
+}
+
+type VersionInfoKey struct{}
+
+func AttachVersionInfo(ctx context.Context, version *VersionInfo) context.Context {
+	return context.WithValue(ctx, VersionInfoKey{}, version)
+}
+
+func GetVersionInfo(ctx context.Context) (*VersionInfo, error) {
+	if v := ctx.Value(VersionInfoKey{}); v != nil {
+		return v.(*VersionInfo), nil
+	} else {
+		return nil, moerr.NewInternalError(ctx, "no VersionInfo in context")
 	}
 }
 
@@ -306,4 +320,23 @@ type AutoIncrCache struct {
 	CurNum uint64
 	MaxNum uint64
 	Step   uint64
+}
+
+type VersionInfo struct {
+	FinalVersion          string // schema version of current binary code
+	FinalVersionOffset    int32  // schema versionOffset of current binary code
+	FinalVersionCompleted bool   // if the system has been upgraded to current binary version, it's true, (refer to mo_version)
+	// cluster
+	Cluster struct {
+		Version        string
+		VersionOffset  int32
+		IsFinalVersion bool // mark unused
+	}
+
+	// account
+	Account struct {
+		Version        string
+		VersionOffset  int32
+		IsFinalVersion bool // mark unused
+	}
 }

@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
@@ -204,6 +205,33 @@ func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
 						zap.String("tenant-version", createVersion),
 						zap.String("upgrade", upgrade.String()))
 
+					//--------------------------------------------------------------------------------------------------
+					var versionInfo defines.VersionInfo
+					versionInfo.FinalVersion = s.GetFinalVersion()
+					versionInfo.FinalVersionOffset = s.GetFinalVersionOffset()
+					versionInfo.FinalVersionCompleted = false
+
+					clusterVersion, isFinal, err := versions.GetCurrentClusterVersion(versionInfo.FinalVersion, txn)
+					if err == nil {
+						versionInfo.Cluster.Version = clusterVersion
+						versionInfo.Cluster.IsFinalVersion = isFinal
+					} else {
+						s.logger.Error("failed get current cluster version",
+							zap.String("upgrade", upgrade.String()),
+							zap.Error(err))
+						return err
+					}
+
+					isOldVersion := versions.Compare(versionInfo.Cluster.Version, "2.1.0") < 0
+					accVersion, accOffset, err := versions.GeAccountVersion(uint32(id), isOldVersion, txn)
+					if err != nil {
+						return err
+					}
+					versionInfo.Account.Version = accVersion
+					versionInfo.Account.VersionOffset = accOffset
+
+					txn.SetCtxValue(defines.VersionInfoKey{}, &versionInfo)
+					//--------------------------------------------------------------------------------------------------
 					if err = h.HandleTenantUpgrade(ctx, id, txn); err != nil {
 						s.logger.Error("failed to execute upgrade tenant",
 							zap.Int32("tenant", id),

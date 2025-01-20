@@ -259,7 +259,7 @@ func (exec *txnExecutor) Exec(
 			exec.ctx = originCtx
 		}()
 	}
-	//------------------------------------------------------------------------------------------------------------------
+
 	if statementOption.IgnoreForeignKey() {
 		exec.ctx = context.WithValue(exec.ctx,
 			defines.IgnoreForeignKey{},
@@ -453,6 +453,10 @@ func (exec *txnExecutor) LockTable(table string) error {
 
 func (exec *txnExecutor) Txn() client.TxnOperator {
 	return exec.opts.Txn()
+}
+
+func (exec *txnExecutor) SetCtxValue(key, value interface{}) {
+	exec.ctx = context.WithValue(exec.ctx, key, value)
 }
 
 func (exec *txnExecutor) commit() error {

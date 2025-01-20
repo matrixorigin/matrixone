@@ -18,13 +18,14 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
-	"github.com/stretchr/testify/assert"
 )
 
 type MockTxnExecutor struct{}
@@ -56,6 +57,10 @@ func (MockTxnExecutor) Exec(sql string, options executor.StatementOption) (execu
 func (MockTxnExecutor) Txn() client.TxnOperator {
 	//TODO implement me
 	panic("implement me")
+}
+
+func (MockTxnExecutor) SetCtxValue(key, value interface{}) {
+	return
 }
 
 func TestAddSingleQuotesJoin(t *testing.T) {

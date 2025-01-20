@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
@@ -317,12 +318,14 @@ func (s *service) asyncUpgradeTask(ctx context.Context) {
 			return
 		case <-timer.C:
 			if s.upgrade.finalVersionCompleted.Load() {
+				runtime.ServiceRuntime(s.sid).SetGlobalVariables(runtime.ClusterIsFinalVersion, true)
 				return
 			}
 
 			completed, err := fn()
 			if err == nil && completed {
 				s.upgrade.finalVersionCompleted.Store(true)
+				runtime.ServiceRuntime(s.sid).SetGlobalVariables(runtime.ClusterIsFinalVersion, true)
 				return
 			}
 			timer.Reset(s.upgrade.checkUpgradeDuration)

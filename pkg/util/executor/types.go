@@ -46,6 +46,9 @@ type TxnExecutor interface {
 	// If not specified, it will be executed under the system tenant by default.
 	Exec(sql string, options StatementOption) (Result, error)
 	Txn() client.TxnOperator
+	// Set or update key value pairs in the context of txnExecuter using the parameter.
+	// This method will add a new key value pair to the existing context and return a new context.
+	SetCtxValue(key, value interface{})
 }
 
 // Options execute options.

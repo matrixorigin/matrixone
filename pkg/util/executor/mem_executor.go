@@ -89,6 +89,10 @@ func (te *memTxnExecutor) Txn() client.TxnOperator {
 	return te.txnOperator
 }
 
+func (te *memTxnExecutor) SetCtxValue(key, value interface{}) {
+	return
+}
+
 // MemResult used to test. Construct a Result from memory.
 type MemResult struct {
 	cols  int

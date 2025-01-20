@@ -18,14 +18,15 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/prashantv/gostub"
+	"github.com/stretchr/testify/assert"
+
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
-	"github.com/prashantv/gostub"
-	"github.com/stretchr/testify/assert"
 )
 
 type MockTxnExecutor struct {
@@ -59,6 +60,10 @@ func (e MockTxnExecutor) Exec(sql string, options executor.StatementOption) (exe
 func (MockTxnExecutor) Txn() client.TxnOperator {
 	//TODO implement me
 	panic("implement me")
+}
+
+func (MockTxnExecutor) SetCtxValue(key, value interface{}) {
+	return
 }
 
 func Test_getSubbedAccNames(t *testing.T) {
