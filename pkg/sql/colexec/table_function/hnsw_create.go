@@ -33,6 +33,7 @@ import (
 
 type hnswCreateState struct {
 	inited bool
+	build  *hnsw.HnswBuild
 	param  hnsw.HnswParam
 	idxcfg hnsw.IndexTableConfig
 	uscfg  usearch.IndexConfig
@@ -43,6 +44,9 @@ type hnswCreateState struct {
 
 func (u *hnswCreateState) end(tf *TableFunction, proc *process.Process) error {
 	os.Stderr.WriteString("hnswCreate END")
+
+	u.build.SaveToDB()
+
 	return nil
 }
 
@@ -67,6 +71,10 @@ func (u *hnswCreateState) call(tf *TableFunction, proc *process.Process) (vm.Cal
 func (u *hnswCreateState) free(tf *TableFunction, proc *process.Process, pipelineFailed bool, err error) {
 	if u.batch != nil {
 		u.batch.Clean(proc.Mp())
+	}
+
+	if u.build != nil {
+		err = u.build.Destroy()
 	}
 }
 
@@ -155,6 +163,11 @@ func (u *hnswCreateState) start(tf *TableFunction, proc *process.Process, nthRow
 		os.Stderr.WriteString(fmt.Sprintf("Cfg %v\n", u.idxcfg))
 		os.Stderr.WriteString(fmt.Sprintf("USearch Cfg %v\n", u.uscfg))
 
+		u.build, err = hnsw.NewHnswBuild(u.uscfg, u.idxcfg)
+		if err != nil {
+			return err
+		}
+
 		u.batch = tf.createResultBatch()
 		u.inited = true
 	}
@@ -175,6 +188,10 @@ func (u *hnswCreateState) start(tf *TableFunction, proc *process.Process, nthRow
 
 	f32a := types.BytesToArray[float32](f32aVec.GetBytesAt(nthRow))
 
+	err = u.build.Add(id, f32a)
+	if err != nil {
+		return err
+	}
 	os.Stderr.WriteString(fmt.Sprintf("id:%d fp32: %v\n", id, f32a))
 	return nil
 }
