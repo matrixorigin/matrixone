@@ -117,6 +117,8 @@ func newMockDriver(
 	}
 }
 
+func (d *mockDriver) putbackWriteTokens(tokens ...uint64) {}
+
 func (d *mockDriver) GetMaxClient() int {
 	return d.maxClient
 }

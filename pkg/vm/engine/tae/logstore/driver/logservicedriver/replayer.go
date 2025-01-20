@@ -144,6 +144,7 @@ type replayerDriver interface {
 	) (nextPSN uint64, records []logservice.LogRecord, err error)
 	getTruncatedPSNFromBackend(ctx context.Context) (uint64, error)
 	getClientForWrite() (*wrappedClient, uint64)
+	putbackWriteTokens(tokens ...uint64)
 	GetMaxClient() int
 }
 
@@ -178,8 +179,6 @@ type replayer struct {
 		// safeDSN have been safely written to the backend. When replaying, we
 		// can make sure that all records with DSN <= safeDSN have been replayed
 		safeDSN uint64
-
-		writeTokens []uint64
 
 		firstAppliedDSN uint64
 		firstAppliedLSN uint64
@@ -265,7 +264,6 @@ func (r *replayer) ExportDSNStats() DSNStats {
 		Min:       r.waterMarks.minDSN,
 		Max:       r.waterMarks.maxDSN,
 		Truncated: r.waterMarks.truncatedPSN,
-		Written:   r.replayedState.writeTokens,
 	}
 }
 
@@ -294,7 +292,6 @@ func (r *replayer) exportFields(level int) []zap.Field {
 	if level > 1 {
 		ret = append(ret,
 			zap.Any("dsn-psn-map", r.replayedState.dsn2PSNMap),
-			zap.Any("write-tokens", r.replayedState.writeTokens),
 		)
 	}
 	return ret
@@ -819,7 +816,10 @@ func (r *replayer) AppendSkipCmd(
 	}
 
 	client, writeToken := r.driver.getClientForWrite()
-	r.replayedState.writeTokens = append(r.replayedState.writeTokens, writeToken)
+	defer func() {
+		client.Putback()
+		r.driver.putbackWriteTokens(writeToken)
+	}()
 
 	entry := SkipMapToLogEntry(skipMap)
 

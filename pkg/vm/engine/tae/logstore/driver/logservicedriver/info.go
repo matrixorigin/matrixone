@@ -32,7 +32,6 @@ type DSNStats struct {
 	Truncated uint64
 	Min       uint64
 	Max       uint64
-	Written   []uint64
 }
 
 type tokenController struct {
@@ -40,8 +39,6 @@ type tokenController struct {
 	nextToken uint64
 	bm        roaring64.Bitmap
 	maxCount  uint64
-
-	count uint64
 }
 
 func newTokenController(maxCount uint64) *tokenController {
@@ -131,7 +128,6 @@ func (info *driverInfo) resetDSNStats(stats *DSNStats) {
 		info.truncateDSNIntent.Store(stats.Min - 1)
 	}
 	info.truncatedPSN = stats.Truncated
-	info.tokenController.Putback(stats.Written...)
 }
 
 // psn: physical sequence number
@@ -254,6 +250,6 @@ func (info *driverInfo) commitWatermark() {
 	info.watermark.mu.Unlock()
 }
 
-func (info *driverInfo) putbackWriteTokens(tokens []uint64) {
+func (info *driverInfo) putbackWriteTokens(tokens ...uint64) {
 	info.tokenController.Putback(tokens...)
 }

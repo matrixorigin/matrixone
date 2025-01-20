@@ -140,6 +140,6 @@ func (d *LogServiceDriver) onCommitDone(items []any, _ chan any) {
 	}
 
 	d.commitWatermark()
-	d.putbackWriteTokens(d.reuse.tokens)
+	d.putbackWriteTokens(d.reuse.tokens...)
 	d.reuse.tokens = d.reuse.tokens[:0]
 }
