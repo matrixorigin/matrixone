@@ -171,17 +171,23 @@ func (c *HnswCache) Destroy() {
 }
 
 func (c *HnswCache) GetIndex(proc *process.Process, cfg usearch.IndexConfig, tblcfg hnsw.IndexTableConfig, key string) (*HnswSearch, error) {
-	value, loaded := c.IndexMap.LoadOrStore(key, &HnswSearch{})
+	value, loaded := c.IndexMap.LoadOrStore(key, &HnswSearch{Idxcfg: cfg, Tblcfg: tblcfg})
 	if !loaded {
 		idx := value.(*HnswSearch)
-		idx.Mutex.Lock()
-		defer idx.Mutex.Unlock()
-
 		// load model from database and if error during loading, remove the entry from gIndexMap
-		idx.Idxcfg = cfg
-		idx.Tblcfg = tblcfg
+		err := idx.LoadFromDatabase(proc)
+		if err != nil {
+			return nil, err
+		}
 
 		return idx, nil
 	}
 	return value.(*HnswSearch), nil
+}
+
+func (s *HnswSearch) LoadFromDatabase(proc *process.Process) error {
+	s.Mutex.Lock()
+	defer s.Mutex.Unlock()
+
+	return nil
 }
