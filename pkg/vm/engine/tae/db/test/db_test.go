@@ -11266,7 +11266,7 @@ func TestCheckpointV2(t *testing.T) {
 
 	err = logtail.PrefetchCheckpoint(ctx,"",loc,common.DebugAllocator,tae.Opts.Fs)
 	assert.NoError(t, err)
-	err = logtail.ReplayCheckpoint(ctx, catalog2, false, dataFactory, loc, common.DebugAllocator, tae.Opts.Fs)
+	err = logtail.ReplayCheckpoint(ctx, catalog2, true, dataFactory, loc, common.DebugAllocator, tae.Opts.Fs)
 	assert.NoError(t, err)
 	readTxn, err := tae.StartTxn(nil)
 	assert.NoError(t, err)

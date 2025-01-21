@@ -176,6 +176,7 @@ func ReplayCheckpoint(
 	for i, vec := range metaVecs {
 		metaBatch.Vecs[i] = &vec
 	}
+	metaBatch.SetRowCount(metaVecs.Rows())
 	objs := ckputil.ScanObjectStats(metaBatch)
 	for _, obj := range objs {
 		if err = ckputil.ForEachFile(
