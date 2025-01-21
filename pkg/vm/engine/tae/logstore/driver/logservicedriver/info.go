@@ -34,51 +34,6 @@ type DSNStats struct {
 	Max       uint64
 }
 
-type tokenController struct {
-	sync.Cond
-	nextToken uint64
-	bm        roaring64.Bitmap
-	maxCount  uint64
-}
-
-func newTokenController(maxCount uint64) *tokenController {
-	return &tokenController{
-		maxCount: maxCount,
-		Cond:     *sync.NewCond(new(sync.Mutex)),
-	}
-}
-
-func (rc *tokenController) Putback(tokens ...uint64) {
-	rc.L.Lock()
-	defer rc.L.Unlock()
-	for _, token := range tokens {
-		rc.bm.Remove(token)
-	}
-	rc.Broadcast()
-}
-
-func (rc *tokenController) Apply() (token uint64) {
-	rc.L.Lock()
-	defer rc.L.Unlock()
-	for {
-		if rc.bm.IsEmpty() {
-			token = rc.nextToken
-			rc.nextToken++
-			rc.bm.Add(token)
-			return
-		}
-		minimum := rc.bm.Minimum()
-		if rc.nextToken < rc.maxCount+minimum {
-			token = rc.nextToken
-			rc.nextToken++
-			rc.bm.Add(token)
-			return
-		}
-		// logutil.Infof("too much pendding writes: %d, %d, %d", rc.bm.Minimum(), rc.bm.Maximum(), rc.bm.GetCardinality())
-		rc.Wait()
-	}
-}
-
 type driverInfo struct {
 	// PSN: physical sequence number. here is the lsn from logservice
 	psn struct {

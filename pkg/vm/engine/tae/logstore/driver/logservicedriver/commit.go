@@ -85,9 +85,7 @@ func (d *LogServiceDriver) getClientForWrite() (client *wrappedClient, token uin
 		now = time.Now()
 	)
 
-	token = d.tokenController.Apply()
-
-	client, err = d.clientPool.Get()
+	client, token, err = d.clientPool.GetWithWriteToken()
 
 	if err != nil || time.Since(now) > time.Second*2 {
 		logger := logutil.Info
