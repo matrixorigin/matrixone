@@ -28,7 +28,13 @@ func TestCache(t *testing.T) {
 	proc := testutil.NewProcess()
 
 	Cache.ticker_interval = 5 * time.Second
-	Cache.Serve()
+
+	Cache.Once()
+	Cache.Once()
+	Cache.Once()
+	Cache.Once()
+	Cache.Once()
+
 	idxcfg := usearch.DefaultConfig(8)
 	idxcfg.Metric = usearch.L2sq
 	tblcfg := hnsw.IndexTableConfig{DbName: "db", SrcTable: "src", MetadataTable: "__secondary_meta", IndexTable: "__secondary_index"}

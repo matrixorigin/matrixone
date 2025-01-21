@@ -78,6 +78,7 @@ type HnswCache struct {
 	ticker_interval time.Duration
 	started         atomic.Bool
 	exited          atomic.Bool
+	once            sync.Once
 }
 
 func NewHnswCache() *HnswCache {
@@ -123,6 +124,10 @@ func (c *HnswCache) Serve() {
 		os.Stderr.WriteString("go func exited\n")
 	}()
 	os.Stderr.WriteString("Serve end\n")
+}
+
+func (c *HnswCache) Once() {
+	c.once.Do(func() { c.Serve() })
 }
 
 func (c *HnswCache) HouseKeeping() {
