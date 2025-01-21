@@ -2637,6 +2637,9 @@ func executeStmtWithWorkspace(ses FeSession,
 		if err != nil {
 			return err
 		}
+	} else {
+		versionInfo := ses.GetTxnHandler().txnOp.GetVersionInfo()
+		execCtx.reqCtx = defines.AttachVersionInfo(execCtx.reqCtx, versionInfo)
 	}
 	//----------------------------------------------------------------------------------------------------------
 

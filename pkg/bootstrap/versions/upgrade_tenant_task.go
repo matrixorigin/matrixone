@@ -169,7 +169,11 @@ func UpgradeTenantVersion(
 }
 
 func GetCurrentClusterVersion(finalVersion string, txn executor.TxnExecutor) (string, bool, error) {
-	sql := fmt.Sprintf("SELECT to_version,  final_version = to_version FROM mo_upgrade WHERE state >= 1 AND (final_version, final_version_offset) IN (SELECT version, version_offset FROM mo_version ORDER BY create_at DESC LIMIT 1) ORDER BY upgrade_order DESC LIMIT 1")
+	sql := fmt.Sprintf("SELECT to_version,  final_version = to_version FROM %s WHERE state >= %d AND (final_version, final_version_offset) IN (SELECT version, version_offset FROM %s ORDER BY create_at DESC LIMIT 1) ORDER BY upgrade_order DESC LIMIT 1",
+		catalog.MOUpgradeTable,
+		StateUpgradingTenant,
+		catalog.MOVersionTable,
+	)
 	res, err := txn.Exec(sql, executor.StatementOption{})
 	if err != nil {
 		return "", false, err
@@ -202,7 +206,7 @@ func GetCurrentClusterVersion(finalVersion string, txn executor.TxnExecutor) (st
 	}
 
 	if version == "" {
-		getLogger(txn.Txn().TxnOptions().CN).Fatal(fmt.Sprintf("BUG: wuxiliang3Can't get crrent cluster version"))
+		getLogger(txn.Txn().TxnOptions().CN).Fatal("BUG: Can't get crrent cluster version")
 	}
 	return version, isFinalVersion, nil
 }

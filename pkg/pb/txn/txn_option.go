@@ -90,8 +90,3 @@ func (m TxnOptions) Is1PCDisabled() bool {
 func (m TxnOptions) featureEnabled(feature uint32) bool {
 	return m.Features&feature > 0
 }
-
-// Indicates whether the system has been upgraded to the latest version
-func (m TxnOptions) WithIsFinalVersion(flag bool) {
-	m.IsFinalVersion = flag
-}

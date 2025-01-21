@@ -62,7 +62,6 @@ func (MockTxnExecutor) Txn() client.TxnOperator {
 }
 
 func (MockTxnExecutor) SetCtxValue(key, value interface{}) {
-	return
 }
 
 func TestGetAllPubInfos(t *testing.T) {

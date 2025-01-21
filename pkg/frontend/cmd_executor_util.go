@@ -31,7 +31,6 @@ func handleVersionInfo(ses FeSession, execCtx *ExecCtx) error {
 		isFinalVersion = false
 	}
 	versionInfo.FinalVersionCompleted = isFinalVersion
-	ses.GetTxnHandler().txnOp.TxnOptions().WithIsFinalVersion(isFinalVersion) // delete it ?
 
 	if !isFinalVersion {
 		bh := execCtx.ses.GetShareTxnBackgroundExec(execCtx.reqCtx, false)
@@ -47,9 +46,8 @@ func handleVersionInfo(ses FeSession, execCtx *ExecCtx) error {
 		//-----------------------------------------------------------------------------------------
 		finalVersionCompleted := versionInfo.FinalVersion == clusterVersion && state == versions.StateReady
 
-		// Set TxnOptions and global variables for finalVersionCompleted
+		// set global variables for finalVersionCompleted
 		versionInfo.FinalVersionCompleted = finalVersionCompleted
-		ses.GetTxnHandler().txnOp.TxnOptions().WithIsFinalVersion(finalVersionCompleted)
 		runtime.ServiceRuntime(ses.GetService()).SetGlobalVariables(runtime.ClusterIsFinalVersion, finalVersionCompleted)
 
 		if !finalVersionCompleted {
@@ -62,6 +60,8 @@ func handleVersionInfo(ses FeSession, execCtx *ExecCtx) error {
 			versionInfo.Account.VersionOffset = accOffset
 		}
 	}
+
+	ses.GetTxnHandler().txnOp.SetVersionInfo(versionInfo)
 	execCtx.reqCtx = defines.AttachVersionInfo(execCtx.reqCtx, versionInfo)
 	return nil
 }
