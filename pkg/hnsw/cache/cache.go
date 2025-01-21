@@ -96,7 +96,7 @@ func NewHnswCache() *HnswCache {
 	return c
 }
 
-func (c *HnswCache) Serve() {
+func (c *HnswCache) serve() {
 	if c.started.Load() {
 		return
 	}
@@ -136,7 +136,7 @@ func (c *HnswCache) Serve() {
 }
 
 func (c *HnswCache) Once() {
-	c.once.Do(func() { c.Serve() })
+	c.once.Do(func() { c.serve() })
 }
 
 func (c *HnswCache) HouseKeeping() {
