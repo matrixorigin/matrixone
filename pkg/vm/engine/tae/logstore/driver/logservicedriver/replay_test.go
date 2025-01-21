@@ -17,25 +17,93 @@ package logservicedriver
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	storeDriver "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
 )
+
+func Test_MockBackend1(t *testing.T) {
+	ctx := context.Background()
+	backend := newMockBackend()
+	client := newMockBackendClient(backend)
+	defer client.Close()
+	var (
+		psnSize    = make(map[uint64]int)
+		lastPSN    uint64
+		psn        uint64
+		toTruncate uint64
+		truncated  uint64
+		err        error
+	)
+
+	for i := 0; i < 14; i++ {
+		if i == 4 || i == 8 {
+			truncated, err = client.GetTruncatedLsn(ctx)
+			assert.NoError(t, err)
+			assert.Equal(t, toTruncate, truncated)
+			toTruncate = uint64(i - 2)
+			err = client.Truncate(ctx, toTruncate)
+			assert.NoError(t, err)
+		}
+		record := client.GetLogRecord(400 * (i + 1))
+		assert.Equal(t, 400*(i+1), len(record.Payload()))
+		psn, err = client.Append(ctx, record)
+		assert.NoError(t, err)
+		psnSize[psn] = len(record.Payload())
+		assert.Greater(t, psn, lastPSN)
+		lastPSN = psn
+	}
+
+	truncated, err = client.GetTruncatedLsn(ctx)
+	assert.NoError(t, err)
+	assert.Equal(t, toTruncate, truncated)
+
+	first := toTruncate + 1
+	loaded, next, err := client.Read(ctx, first, 1000000)
+	t.Log(first, len(loaded), next, err, psnSize)
+	assert.NoError(t, err)
+	assert.Equal(t, 10, len(loaded))
+
+	var userRecordCount int
+	for _, r := range loaded {
+		if r.Type == pb.UserRecord {
+			userRecordCount++
+		}
+	}
+	assert.Equal(t, 9, userRecordCount)
+	assert.Equal(t, lastPSN+1, next)
+
+	var next2 uint64
+	loaded, next2, err = client.Read(ctx, next, 1000000)
+	assert.NoError(t, err)
+	assert.Equal(t, 0, len(loaded))
+	assert.Equal(t, next, next2)
+
+	loaded, next, err = client.Read(ctx, first, 8000)
+	assert.NoError(t, err)
+	assert.Equal(t, uint64(10), next)
+	assert.Equal(t, 3, len(loaded))
+}
 
 func Test_AppendSkipCmd(t *testing.T) {
 	service, ccfg := initTest(t)
 	defer service.Close()
 
-	cfg := NewTestConfig("", ccfg)
-	cfg.RecordSize = 100
-	driver := NewLogServiceDriver(cfg)
+	cfg := NewConfig(
+		"",
+		WithConfigOptMaxClient(10),
+		WithConfigOptClientBufSize(100),
+		WithConfigOptClientConfig("", ccfg),
+	)
+	driver := NewLogServiceDriver(&cfg)
 	defer driver.Close()
 
 	r := newReplayer(nil, driver, ReplayReadSize)
@@ -46,8 +114,12 @@ func TestAppendSkipCmd2(t *testing.T) {
 	service, ccfg := initTest(t)
 	defer service.Close()
 
-	cfg := NewTestConfig("", ccfg)
-	driver := NewLogServiceDriver(cfg)
+	cfg := NewConfig(
+		"",
+		WithConfigOptMaxClient(10),
+		WithConfigOptClientConfig("", ccfg),
+	)
+	driver := NewLogServiceDriver(&cfg)
 
 	entryCount := 10
 	entries := make([]*entry.Entry, entryCount)
@@ -77,8 +149,6 @@ func TestAppendSkipCmd2(t *testing.T) {
 		_, err = client.Append(
 			context.Background(),
 			entry,
-			time.Second,
-			10,
 			moerr.CauseDriverAppender1,
 		)
 		assert.NoError(t, err)
@@ -95,17 +165,21 @@ func TestAppendSkipCmd2(t *testing.T) {
 		entryCount := 0
 		assert.NoError(t, driver.Close())
 		driver = NewLogServiceDriver(&driver.config)
-		err := driver.Replay(context.Background(), func(e *entry.Entry) storeDriver.ReplayEntryState {
-			assert.Less(t, e.DSN, uint64(11))
-			list1 = append(list1, e.DSN)
-			if e.DSN > 7 {
-				entryCount++
-				list2 = append(list2, e.DSN)
-				return storeDriver.RE_Nomal
-			} else {
-				return storeDriver.RE_Truncate
-			}
-		})
+		err := driver.Replay(
+			context.Background(),
+			func(e *entry.Entry) storeDriver.ReplayEntryState {
+				assert.Less(t, e.DSN, uint64(11))
+				list1 = append(list1, e.DSN)
+				if e.DSN > 7 {
+					entryCount++
+					list2 = append(list2, e.DSN)
+					return storeDriver.RE_Nomal
+				} else {
+					return storeDriver.RE_Truncate
+				}
+			},
+			storeDriver.ReplayMode_ReplayForWrite,
+		)
 		t.Logf("list1: %v", list1)
 		t.Logf("list2: %v", list2)
 		assert.NoError(t, err)
@@ -124,8 +198,12 @@ func TestAppendSkipCmd3(t *testing.T) {
 	service, ccfg := initTest(t)
 	defer service.Close()
 
-	cfg := NewTestConfig("", ccfg)
-	driver := NewLogServiceDriver(cfg)
+	cfg := NewConfig(
+		"",
+		WithConfigOptMaxClient(10),
+		WithConfigOptClientConfig("", ccfg),
+	)
+	driver := NewLogServiceDriver(&cfg)
 	// truncated: 7
 	// empty log service
 
@@ -133,15 +211,19 @@ func TestAppendSkipCmd3(t *testing.T) {
 		entryCount := 0
 		assert.NoError(t, driver.Close())
 		driver = NewLogServiceDriver(&driver.config)
-		err := driver.Replay(ctx, func(e *entry.Entry) storeDriver.ReplayEntryState {
-			assert.Less(t, e.DSN, uint64(11))
-			if e.DSN > 7 {
-				entryCount++
-				return storeDriver.RE_Nomal
-			} else {
-				return storeDriver.RE_Truncate
-			}
-		})
+		err := driver.Replay(
+			ctx,
+			func(e *entry.Entry) storeDriver.ReplayEntryState {
+				assert.Less(t, e.DSN, uint64(11))
+				if e.DSN > 7 {
+					entryCount++
+					return storeDriver.RE_Nomal
+				} else {
+					return storeDriver.RE_Truncate
+				}
+			},
+			storeDriver.ReplayMode_ReplayForWrite,
+		)
 		assert.NoError(t, err)
 		assert.Equal(t, 0, entryCount)
 	}
@@ -153,8 +235,12 @@ func TestAppendSkipCmd4(t *testing.T) {
 	service, ccfg := initTest(t)
 	defer service.Close()
 
-	cfg := NewTestConfig("", ccfg)
-	driver := NewLogServiceDriver(cfg)
+	cfg := NewConfig(
+		"",
+		WithConfigOptMaxClient(10),
+		WithConfigOptClientConfig("", ccfg),
+	)
+	driver := NewLogServiceDriver(&cfg)
 
 	entryCount := 4
 	entries := make([]*entry.Entry, entryCount)
@@ -186,8 +272,6 @@ func TestAppendSkipCmd4(t *testing.T) {
 		_, err = client.Append(
 			context.Background(),
 			entry,
-			time.Second,
-			10,
 			moerr.CauseDriverAppender1,
 		)
 		assert.NoError(t, err)
@@ -198,15 +282,19 @@ func TestAppendSkipCmd4(t *testing.T) {
 		entryCount := 0
 		assert.NoError(t, driver.Close())
 		driver = NewLogServiceDriver(&driver.config)
-		err := driver.Replay(context.Background(), func(e *entry.Entry) storeDriver.ReplayEntryState {
-			assert.Less(t, e.DSN, uint64(4))
-			if e.DSN > 0 {
-				entryCount++
-				return storeDriver.RE_Nomal
-			} else {
-				return storeDriver.RE_Truncate
-			}
-		})
+		err := driver.Replay(
+			context.Background(),
+			func(e *entry.Entry) storeDriver.ReplayEntryState {
+				assert.Less(t, e.DSN, uint64(4))
+				if e.DSN > 0 {
+					entryCount++
+					return storeDriver.RE_Nomal
+				} else {
+					return storeDriver.RE_Truncate
+				}
+			},
+			storeDriver.ReplayMode_ReplayForWrite,
+		)
 		assert.NoError(t, err)
 		assert.Equal(t, 3, entryCount)
 	}
@@ -243,8 +331,6 @@ func TestAppendSkipCmd4(t *testing.T) {
 		_, err = client.Append(
 			context.Background(),
 			entry,
-			time.Second,
-			10,
 			moerr.CauseDriverAppender1,
 		)
 		assert.NoError(t, err)
@@ -255,15 +341,19 @@ func TestAppendSkipCmd4(t *testing.T) {
 		entryCount := 0
 		assert.NoError(t, driver.Close())
 		driver = NewLogServiceDriver(&driver.config)
-		err := driver.Replay(context.Background(), func(e *entry.Entry) storeDriver.ReplayEntryState {
-			assert.Less(t, e.DSN, uint64(5))
-			if e.DSN > 0 {
-				entryCount++
-				return storeDriver.RE_Nomal
-			} else {
-				return storeDriver.RE_Truncate
-			}
-		})
+		err := driver.Replay(
+			context.Background(),
+			func(e *entry.Entry) storeDriver.ReplayEntryState {
+				assert.Less(t, e.DSN, uint64(5))
+				if e.DSN > 0 {
+					entryCount++
+					return storeDriver.RE_Nomal
+				} else {
+					return storeDriver.RE_Truncate
+				}
+			},
+			storeDriver.ReplayMode_ReplayForWrite,
+		)
 		assert.NoError(t, err)
 		assert.Equal(t, 4, entryCount)
 	}
@@ -275,8 +365,12 @@ func TestAppendSkipCmd5(t *testing.T) {
 	service, ccfg := initTest(t)
 	defer service.Close()
 
-	cfg := NewTestConfig("", ccfg)
-	driver := NewLogServiceDriver(cfg)
+	cfg := NewConfig(
+		"",
+		WithConfigOptMaxClient(10),
+		WithConfigOptClientConfig("", ccfg),
+	)
+	driver := NewLogServiceDriver(&cfg)
 
 	entryCount := 4
 	entries := make([]*entry.Entry, entryCount)
@@ -306,8 +400,6 @@ func TestAppendSkipCmd5(t *testing.T) {
 		_, err = client.Append(
 			context.Background(),
 			entry,
-			time.Second,
-			10,
 			moerr.CauseDriverAppender1,
 		)
 		assert.NoError(t, err)
@@ -322,15 +414,19 @@ func TestAppendSkipCmd5(t *testing.T) {
 		entryCount := 0
 		assert.NoError(t, driver.Close())
 		driver = NewLogServiceDriver(&driver.config)
-		err := driver.Replay(context.Background(), func(e *entry.Entry) storeDriver.ReplayEntryState {
-			assert.Less(t, e.DSN, uint64(13))
-			if e.DSN > 8 {
-				entryCount++
-				return storeDriver.RE_Nomal
-			} else {
-				return storeDriver.RE_Truncate
-			}
-		})
+		err := driver.Replay(
+			context.Background(),
+			func(e *entry.Entry) storeDriver.ReplayEntryState {
+				assert.Less(t, e.DSN, uint64(13))
+				if e.DSN > 8 {
+					entryCount++
+					return storeDriver.RE_Nomal
+				} else {
+					return storeDriver.RE_Truncate
+				}
+			},
+			storeDriver.ReplayMode_ReplayForWrite,
+		)
 		assert.NoError(t, err)
 		assert.Equal(t, 4, entryCount)
 	}
@@ -536,7 +632,7 @@ func Test_Replayer5(t *testing.T) {
 	}
 
 	var dsnScheduled []uint64
-	onScheduled := func(_ uint64, _ *common.ClosedIntervals, r LogEntry) {
+	onScheduled := func(_ uint64, r LogEntry) {
 		r.ForEachEntry(func(e *entry.Entry) {
 			if len(dsnScheduled) > 0 {
 				assert.True(t, dsnScheduled[len(dsnScheduled)-1] < e.DSN)
@@ -551,7 +647,7 @@ func Test_Replayer5(t *testing.T) {
 		30,
 		WithReplayerAppendSkipCmd(noopAppendSkipCmd),
 		WithReplayerUnmarshalLogRecord(mockUnmarshalLogRecordFactor(mockDriver)),
-		WithReplayerOnRead(onRead),
+		WithReplayerOnUserLogEntry(onRead),
 		WithReplayerOnScheduled(onScheduled),
 	)
 
@@ -595,7 +691,7 @@ func Test_Replayer6(t *testing.T) {
 	}
 
 	var dsnScheduled []uint64
-	onScheduled := func(_ uint64, _ *common.ClosedIntervals, r LogEntry) {
+	onScheduled := func(_ uint64, r LogEntry) {
 		r.ForEachEntry(func(e *entry.Entry) {
 			if len(dsnScheduled) > 0 {
 				assert.True(t, dsnScheduled[len(dsnScheduled)-1] < e.DSN)
@@ -618,7 +714,7 @@ func Test_Replayer6(t *testing.T) {
 		WithReplayerOnWriteSkip(onWriteSkip),
 		WithReplayerAppendSkipCmd(noopAppendSkipCmd),
 		WithReplayerUnmarshalLogRecord(mockUnmarshalLogRecordFactor(mockDriver)),
-		WithReplayerOnRead(onRead),
+		WithReplayerOnUserLogEntry(onRead),
 		WithReplayerOnScheduled(onScheduled),
 	)
 
@@ -668,7 +764,7 @@ func Test_Replayer7(t *testing.T) {
 	}
 
 	var dsnScheduled []uint64
-	onScheduled := func(_ uint64, _ *common.ClosedIntervals, r LogEntry) {
+	onScheduled := func(_ uint64, r LogEntry) {
 		r.ForEachEntry(func(e *entry.Entry) {
 			if len(dsnScheduled) > 0 {
 				assert.True(t, dsnScheduled[len(dsnScheduled)-1] < e.DSN)
@@ -691,7 +787,7 @@ func Test_Replayer7(t *testing.T) {
 		WithReplayerOnWriteSkip(onWriteSkip),
 		WithReplayerAppendSkipCmd(noopAppendSkipCmd),
 		WithReplayerUnmarshalLogRecord(mockUnmarshalLogRecordFactor(mockDriver)),
-		WithReplayerOnRead(onRead),
+		WithReplayerOnUserLogEntry(onRead),
 		WithReplayerOnScheduled(onScheduled),
 	)
 
@@ -740,7 +836,7 @@ func Test_Replayer8(t *testing.T) {
 	}
 
 	var dsnScheduled []uint64
-	onScheduled := func(_ uint64, _ *common.ClosedIntervals, r LogEntry) {
+	onScheduled := func(_ uint64, r LogEntry) {
 		r.ForEachEntry(func(e *entry.Entry) {
 			if len(dsnScheduled) > 0 {
 				assert.True(t, dsnScheduled[len(dsnScheduled)-1] < e.DSN)
@@ -764,7 +860,7 @@ func Test_Replayer8(t *testing.T) {
 		WithReplayerOnWriteSkip(onWriteSkip),
 		WithReplayerAppendSkipCmd(noopAppendSkipCmd),
 		WithReplayerUnmarshalLogRecord(mockUnmarshalLogRecordFactor(mockDriver)),
-		WithReplayerOnRead(onRead),
+		WithReplayerOnUserLogEntry(onRead),
 		WithReplayerOnScheduled(onScheduled),
 	)
 
@@ -776,4 +872,230 @@ func Test_Replayer8(t *testing.T) {
 	t.Logf("writeSkip: %v", writeSkip)
 	assert.Equal(t, []uint64{3, 4, 5, 6}, appliedDSNs)
 	assert.Equal(t, 0, len(writeSkip))
+}
+
+func Test_Replayer9(t *testing.T) {
+	store := newMockBackend()
+	cfg := NewConfig(
+		"",
+		WithConfigOptMaxClient(10),
+		WithConfigMockClient(store),
+	)
+
+	producer := NewLogServiceDriver(&cfg)
+	defer producer.Close()
+	consumer := NewLogServiceDriver(&cfg)
+	defer consumer.Close()
+
+	errCh := make(chan error, 1)
+
+	var maxReadDSN atomic.Uint64
+	applyCnt := 0
+
+	readCtx, readCancel := context.WithCancelCause(context.Background())
+	go func() {
+		var err error
+		defer func() {
+			errCh <- err
+		}()
+		err = consumer.Replay(
+			readCtx,
+			func(e *entry.Entry) storeDriver.ReplayEntryState {
+				applyCnt++
+				assert.Equalf(t, e.DSN-1, maxReadDSN.Load(), fmt.Sprintf("%d, %d", e.DSN-1, maxReadDSN.Load()))
+				if e.DSN > maxReadDSN.Load() {
+					maxReadDSN.Store(e.DSN)
+				}
+				return storeDriver.RE_Nomal
+			},
+			storeDriver.ReplayMode_ReplayForever,
+		)
+	}()
+
+	ctx := context.Background()
+	err := producer.Replay(
+		ctx,
+		func(e *entry.Entry) storeDriver.ReplayEntryState {
+			return storeDriver.RE_Nomal
+		},
+		storeDriver.ReplayMode_ReplayForWrite,
+	)
+	assert.NoError(t, err)
+
+	entryCnt := 10000
+
+	entries := make([]*entry.Entry, 0, entryCnt)
+	for i := 0; i < entryCnt; i++ {
+		v := uint64(i)
+		e := entry.MockEntryWithPayload(types.EncodeUint64(&v))
+		err := producer.Append(e)
+		assert.NoError(t, err)
+		entries = append(entries, e)
+	}
+	for _, e := range entries {
+		err := e.WaitDone()
+		assert.NoError(t, err)
+	}
+
+	testutils.WaitExpect(1000, func() bool {
+		return maxReadDSN.Load() == uint64(entryCnt)
+	})
+	assert.Equal(t, uint64(entryCnt), maxReadDSN.Load())
+	assert.Equal(t, entryCnt, applyCnt)
+
+	toTruncates := []uint64{entries[entryCnt/2].DSN, entries[entryCnt/4].DSN, entries[entryCnt/8].DSN}
+	maxTrucateIntent := toTruncates[0]
+
+	entries = entries[:0]
+	for i := 0; i < entryCnt; i++ {
+		v := uint64(entryCnt + i)
+		e := entry.MockEntryWithPayload(types.EncodeUint64(&v))
+		err := producer.Append(e)
+		assert.NoError(t, err)
+		entries = append(entries, e)
+		if i == entryCnt/16 || i == entryCnt/4 || i == entryCnt/8 {
+			if len(toTruncates) > 1 {
+				dsn := toTruncates[len(toTruncates)-1]
+				toTruncates = toTruncates[:len(toTruncates)-1]
+				err := producer.Truncate(dsn)
+				assert.NoError(t, err)
+				t.Logf("Truncate DSN: %d", dsn)
+			}
+		}
+	}
+
+	for _, e := range entries {
+		err = e.WaitDone()
+		assert.NoError(t, err)
+	}
+
+	testutils.WaitExpect(1000, func() bool {
+		return maxReadDSN.Load() == uint64(entryCnt*2)
+	})
+	assert.Equalf(t, uint64(entryCnt*2), maxReadDSN.Load(), fmt.Sprintf("%d, %d", entryCnt*2, maxReadDSN.Load()))
+
+	cancelErr := moerr.NewInternalErrorNoCtx("cancel")
+	readCancel(cancelErr)
+	readErr := <-errCh
+	t.Logf("Read error: %v", readErr)
+	assert.ErrorIs(t, readErr, cancelErr)
+
+	consumer = NewLogServiceDriver(&cfg)
+	readCtx, readCancel = context.WithCancelCause(context.Background())
+	maxReadDSN.Store(0)
+	go func() {
+		var err error
+		defer func() {
+			errCh <- err
+		}()
+		err = consumer.Replay(
+			readCtx,
+			func(e *entry.Entry) storeDriver.ReplayEntryState {
+				if e.DSN <= maxTrucateIntent {
+					return storeDriver.RE_Truncate
+				}
+				applyCnt++
+				if maxReadDSN.Load() == 0 {
+					maxReadDSN.Store(e.DSN)
+				} else {
+					assert.Equalf(t, e.DSN-1, maxReadDSN.Load(), fmt.Sprintf("%d, %d", e.DSN-1, maxReadDSN.Load()))
+					if e.DSN > maxReadDSN.Load() {
+						maxReadDSN.Store(e.DSN)
+					}
+				}
+				return storeDriver.RE_Nomal
+			},
+			storeDriver.ReplayMode_ReplayForever,
+		)
+	}()
+
+	// entries = entries[:0]
+	// for i := 0; i < entryCnt; i++ {
+	// 	v := uint64(entryCnt*2 + i)
+	// 	e := entry.MockEntryWithPayload(types.EncodeUint64(&v))
+	// 	err := producer.Append(e)
+	// 	assert.NoError(t, err)
+	// 	entries = append(entries, e)
+	// }
+	// for _, e := range entries {
+	// 	err := e.WaitDone()
+	// 	assert.NoError(t, err)
+	// }
+
+	testutils.WaitExpect(1000, func() bool {
+		return maxReadDSN.Load() == uint64(entryCnt*2)
+	})
+	t.Logf(
+		"maxReadDSN: %d, maxTruncateIntent: %d",
+		maxReadDSN.Load(), maxTrucateIntent,
+	)
+	assert.Equalf(t, uint64(entryCnt*2), maxReadDSN.Load(), fmt.Sprintf("%d, %d", entryCnt*2, maxReadDSN.Load()))
+
+	readCancel(cancelErr)
+	readErr = <-errCh
+	t.Logf("Read error: %v", readErr)
+	assert.ErrorIs(t, readErr, cancelErr)
+}
+
+// 111 + 1951 =
+func Test_Replayer10(t *testing.T) {
+	ctx := context.Background()
+	mockDriver := newMockDriver(
+		11,
+		// MetaType,PSN,DSN-S,DSN-E,Safe
+		[][5]uint64{
+			// {uint64(Cmd_Normal), 12, 37, 37, 0},
+			{uint64(Cmd_Normal), 13, 3025, 3064, 106},
+			{uint64(Cmd_Normal), 14, 3070, 3070, 106},
+			{uint64(Cmd_Normal), 15, 3068, 3069, 106},
+			{uint64(Cmd_Normal), 16, 2484, 3024, 106},
+			{uint64(Cmd_Normal), 17, 111, 2061, 59},
+			{uint64(Cmd_Normal), 18, 2464, 2483, 106},
+			{uint64(Cmd_Normal), 19, 3065, 3067, 106},
+			{uint64(Cmd_Normal), 20, 3071, 3071, 106},
+		},
+		30,
+	)
+	var appliedDSNs []uint64
+	mockHandle := mockHandleFactory(2502, func(e *entry.Entry) {
+		// mockHandle := mockHandleFactory(2000, func(e *entry.Entry) {
+		appliedDSNs = append(appliedDSNs, e.DSN)
+	})
+
+	var psnReaded []uint64
+	onRead := func(psn uint64, _ LogEntry) {
+		if len(psnReaded) > 0 {
+			assert.Equal(t, psnReaded[len(psnReaded)-1]+1, psn)
+		}
+		psnReaded = append(psnReaded, psn)
+	}
+
+	var dsnScheduled []uint64
+	onScheduled := func(_ uint64, r LogEntry) {
+		r.ForEachEntry(func(e *entry.Entry) {
+			// t.Logf("Scheduled DSN: %d", e.DSN)
+			if len(dsnScheduled) > 0 {
+				assert.True(t, dsnScheduled[len(dsnScheduled)-1] < e.DSN)
+			}
+			dsnScheduled = append(dsnScheduled, e.DSN)
+		})
+	}
+
+	r := newReplayer(
+		mockHandle,
+		mockDriver,
+		30,
+		WithReplayerAppendSkipCmd(noopAppendSkipCmd),
+		WithReplayerUnmarshalLogRecord(mockUnmarshalLogRecordFactor(mockDriver)),
+		WithReplayerOnUserLogEntry(onRead),
+		WithReplayerOnScheduled(onScheduled),
+	)
+
+	err := r.Replay(ctx)
+	assert.NoError(t, err)
+	t.Logf("psnReaded: %v", psnReaded)
+	t.Logf("dsnScheduled: %d=>%d", dsnScheduled[0], dsnScheduled[len(dsnScheduled)-1])
+	t.Logf("appliedDSNs: %d=>%d", appliedDSNs[0], appliedDSNs[len(appliedDSNs)-1])
+	assert.Equal(t, uint64(2502), appliedDSNs[0])
+	assert.Equal(t, uint64(3071), appliedDSNs[len(appliedDSNs)-1])
 }

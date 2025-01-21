@@ -48,7 +48,7 @@ func TestCreateAndDeleteHashBased(t *testing.T) {
 				func(i int, s string, r executor.Result) {
 
 				},
-				fmt.Sprintf("create table %s (c int) partition by hash(c) partitions 2", t.Name()),
+				fmt.Sprintf("create table %s (c int comment 'abc') partition by hash(c) partitions 2", t.Name()),
 			)
 
 			metadata := getMetadata(

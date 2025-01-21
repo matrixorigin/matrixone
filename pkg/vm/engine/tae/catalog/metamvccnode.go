@@ -186,7 +186,9 @@ type ObjectNode struct {
 	// for tombstone
 	IsTombstone bool
 
-	forcePNode bool // not persisted, a flag to force ckp-replayed aobject to be created as a pnode
+	forcePNode  bool // not persisted, a flag to force ckp-replayed aobject to be created as a pnode
+	nextVersion *ObjectEntry
+	prevVersion *ObjectEntry
 }
 
 const (
