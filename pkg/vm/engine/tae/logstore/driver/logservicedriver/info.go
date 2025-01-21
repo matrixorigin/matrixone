@@ -102,20 +102,10 @@ type driverInfo struct {
 
 	truncateDSNIntent atomic.Uint64 //
 	truncatedPSN      uint64        //
-
-	// tokenController is used to control the write token
-	// it controles the max write token issued and all finished write tokens
-	// to avoid too much pendding writes
-	// then we can only issue another 10 write token to avoid too much pendding writes
-	// In the real world, the maxFinishedToken is always being updated and it is very
-	// rare to reach the maxPendding
-	tokenController *tokenController
 }
 
-func newDriverInfo(maxPenddingWrites uint64) *driverInfo {
-	d := &driverInfo{
-		tokenController: newTokenController(maxPenddingWrites),
-	}
+func newDriverInfo() *driverInfo {
+	d := new(driverInfo)
 	d.psn.dsnMap = make(map[uint64]common.ClosedInterval)
 	return d
 }
@@ -189,10 +179,6 @@ func (info *driverInfo) allocateDSN() uint64 {
 	return info.watermark.nextDSN.Add(1)
 }
 
-func (info *driverInfo) applyWriteToken() (token uint64) {
-	return info.tokenController.Apply()
-}
-
 func (info *driverInfo) recordCommitInfo(committer *groupCommitter) {
 	dsnRange := committer.writer.Entry.DSNRange()
 
@@ -240,8 +226,4 @@ func (info *driverInfo) commitWatermark() {
 	info.watermark.mu.Lock()
 	info.watermark.committedDSN = info.watermark.committingDSN
 	info.watermark.mu.Unlock()
-}
-
-func (info *driverInfo) putbackWriteTokens(tokens ...uint64) {
-	info.tokenController.Putback(tokens...)
 }

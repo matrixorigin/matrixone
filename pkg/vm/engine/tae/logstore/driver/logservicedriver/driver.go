@@ -40,8 +40,15 @@ type LogServiceDriver struct {
 
 	config Config
 
-	clientPool *clientPool
-	committer  *groupCommitter
+	// tokenController is used to control the write token
+	// it controles the max write token issued and all finished write tokens
+	// to avoid too much pendding writes
+	// then we can only issue another 10 write token to avoid too much pendding writes
+	// In the real world, the maxFinishedToken is always being updated and it is very
+	// rare to reach the maxPendding
+	tokenController *tokenController
+	clientPool      *clientPool
+	committer       *groupCommitter
 
 	reuse struct {
 		tokens []uint64
@@ -74,10 +81,11 @@ func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
 		maxPenddingWrites = DefaultMaxClient
 	}
 	d := &LogServiceDriver{
+		tokenController: newTokenController(uint64(maxPenddingWrites)),
 		clientPool:      newClientPool(cfg),
 		config:          *cfg,
 		committer:       getCommitter(),
-		driverInfo:      newDriverInfo(uint64(maxPenddingWrites)),
+		driverInfo:      newDriverInfo(),
 		commitWaitQueue: make(chan any, 10000),
 		postCommitQueue: make(chan any, 10000),
 		appendPool:      pool,
@@ -229,4 +237,8 @@ func (d *LogServiceDriver) readFromBackend(
 	}
 
 	return
+}
+
+func (d *LogServiceDriver) putbackWriteTokens(tokens ...uint64) {
+	d.tokenController.Putback(tokens...)
 }

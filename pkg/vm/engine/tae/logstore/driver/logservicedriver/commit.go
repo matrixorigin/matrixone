@@ -76,15 +76,16 @@ func (d *LogServiceDriver) asyncCommit(committer *groupCommitter) {
 	})
 }
 
-// Node:
-// this function must be called in serial due to the write token
+// get a client from the client pool for writing user data
+// user data: record with DSN
+// Truncate Logrecord is not user data
 func (d *LogServiceDriver) getClientForWrite() (client *wrappedClient, token uint64) {
 	var (
 		err error
 		now = time.Now()
 	)
 
-	token = d.applyWriteToken()
+	token = d.tokenController.Apply()
 
 	client, err = d.clientPool.Get()
 
