@@ -57,11 +57,11 @@ type LogServiceDriver struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	appendPool *ants.Pool
+	workers *ants.Pool
 }
 
 func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
-	// the tasks submitted to LogServiceDriver.appendPool append entries to logservice,
+	// the tasks submitted to LogServiceDriver.workers append entries to logservice,
 	// and we hope the task will crash all the tn service if append failed.
 	// so, set panic to pool.options.PanicHandler here, or it will only crash
 	// the goroutine the append task belongs to.
@@ -80,7 +80,7 @@ func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
 		driverInfo:      newDriverInfo(),
 		commitWaitQueue: make(chan any, 10000),
 		postCommitQueue: make(chan any, 10000),
-		appendPool:      pool,
+		workers:         pool,
 	}
 	d.ctx, d.cancel = context.WithCancel(context.Background())
 	d.commitLoop = sm.NewSafeQueue(10000, 10000, d.onCommitIntents)
@@ -111,7 +111,7 @@ func (d *LogServiceDriver) Close() error {
 	d.truncateQueue.Stop()
 	close(d.commitWaitQueue)
 	close(d.postCommitQueue)
-	d.appendPool.Release()
+	d.workers.Release()
 	return nil
 }
 

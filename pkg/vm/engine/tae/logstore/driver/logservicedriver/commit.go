@@ -65,7 +65,7 @@ func (d *LogServiceDriver) asyncCommit(committer *groupCommitter) {
 	committer.writer.SetSafeDSN(d.getCommittedDSNWatermark())
 
 	committer.Add(1)
-	d.appendPool.Submit(func() {
+	d.workers.Submit(func() {
 		defer committer.Done()
 		if err := committer.Commit(); err != nil {
 			logutil.Fatal(
