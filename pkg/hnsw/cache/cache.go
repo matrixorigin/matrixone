@@ -195,6 +195,7 @@ func (c *HnswCache) serve() {
 	c.started.Store(true)
 
 	go func() {
+		defer c.ticker.Stop()
 		for {
 			select {
 			case <-c.done:
@@ -249,7 +250,7 @@ func (c *HnswCache) HouseKeeping() {
 
 func (c *HnswCache) Destroy() {
 	if c.started.Load() {
-		c.ticker.Stop()
+		//c.ticker.Stop()
 		if !c.exited.Load() {
 			c.done <- true
 		}
