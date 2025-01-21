@@ -257,7 +257,7 @@ func ForEachFile(
 		end bool
 	)
 	tmpBat := batch.NewWithSchema(
-		true, DataScan_ObjectEntryAttrs, DataScan_ObjectEntryTypes,
+		true, DataScan_TableIDAtrrs, DataScan_TableIDTypes,
 	)
 	defer tmpBat.Clean(mp)
 	for {
