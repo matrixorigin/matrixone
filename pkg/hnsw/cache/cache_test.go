@@ -46,4 +46,5 @@ func TestCache(t *testing.T) {
 	os.Stderr.WriteString("cache.Destroy\n")
 	Cache.Destroy()
 	os.Stderr.WriteString("cache.Destroy end\n")
+	Cache = nil
 }
