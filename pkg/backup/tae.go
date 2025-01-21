@@ -293,6 +293,10 @@ func execBackup(
 	}()
 	now := time.Now()
 	baseTS := ts
+	// When rewriting the checkpoint and trimming the aobject,
+	// you need to collect the atombstone in the last checkpoint
+	// Before this, only the last special checkpoint needs to be collected
+	var lastData *logtail.CheckpointData
 	for i, name := range names {
 		if len(name) == 0 {
 			continue
@@ -322,6 +326,9 @@ func execBackup(
 		}
 		defer data.Close()
 		oNames = append(oNames, oneNames...)
+		if i == len(names)-1 {
+			lastData = data
+		}
 	}
 	loadDuration += time.Since(now)
 
@@ -402,7 +409,7 @@ func execBackup(
 			tnLocation      objectio.Location
 		)
 		cnLocation, tnLocation, checkpointFiles, err = logtail.ReWriteCheckpointAndBlockFromKey(ctx, sid, srcFs, dstFs,
-			cnLocation, uint32(version), start)
+			cnLocation, lastData, uint32(version), start)
 		for _, name := range checkpointFiles {
 			dentry, err := dstFs.StatFile(ctx, name)
 			if err != nil {
