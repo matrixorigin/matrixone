@@ -50,7 +50,7 @@ func (h *HnswSearch) Search(v []float32) (keys []int64, distances []float32, err
 	h.Mutex.RLock()
 	defer h.Mutex.RUnlock()
 	if h.Indexes == nil {
-		return nil, nil, moerr.NewInternalErrorNoCtx("HNSW cannot find index from database")
+		return nil, nil, moerr.NewInternalErrorNoCtx("HNSW cannot find index from database.")
 	}
 
 	ts := time.Now().Add(time.Hour).Unix()
@@ -188,6 +188,7 @@ func (c *HnswCache) GetIndex(proc *process.Process, cfg usearch.IndexConfig, tbl
 		// load model from database and if error during loading, remove the entry from gIndexMap
 		err := idx.LoadFromDatabase(proc)
 		if err != nil {
+			c.IndexMap.Delete(key)
 			return nil, err
 		}
 
