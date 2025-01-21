@@ -11353,4 +11353,5 @@ func TestCheckpointV2Compatibility(t *testing.T) {
 	replayer.ReplayObjectlist(ctx, catalog2, false, dataFactory)
 
 	t.Log(catalog2.SimplePPString(3))
+
 }

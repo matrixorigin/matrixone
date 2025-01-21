@@ -217,9 +217,13 @@ func (replayer *CheckpointReplayer) ReadDataForV12(
 			if reader, err = ioutil.NewObjectReader(fs, loc); err != nil {
 				return
 			}
+			typs := make([]types.Type, len(destBatch.Vecs))
+			for i, vec := range destBatch.Vecs {
+				typs[i] = *vec.GetType()
+			}
 			var bats []*containers.Batch
 			if bats, err = LoadBlkColumnsByMeta(
-				replayer.version, ctx, ObjectInfoTypes, objectInfoSchemaAttr, batchIdx, reader, replayer.mp,
+				replayer.version, ctx, typs, destBatch.Attrs, batchIdx, reader, replayer.mp,
 			); err != nil {
 				return
 			}
@@ -231,35 +235,40 @@ func (replayer *CheckpointReplayer) ReadDataForV12(
 			}
 		}
 	}
-	replayer.objBatches = makeRespBatchFromSchema(ObjectInfoSchema,replayer.mp)
+	replayer.objBatches = makeRespBatchFromSchema(ObjectInfoSchema, replayer.mp)
 	readFn(replayer.locations, ObjectInfoIDX, replayer.objBatches)
-	replayer.tombstoneBatch = makeRespBatchFromSchema(ObjectInfoSchema,replayer.mp)
+	replayer.tombstoneBatch = makeRespBatchFromSchema(ObjectInfoSchema, replayer.mp)
 	readFn(replayer.tombstoneLocations, TombstoneObjectInfoIDX, replayer.tombstoneBatch)
 	return
 }
 
 func (replayer *CheckpointReplayer) UpgradeDate() (err error) {
-	replayer.objectInfo = make([]containers.Vectors, 2)
-	upgradeFn := func(objectType int8, src *containers.Batch) (dest containers.Vectors, err error) {
-		dest = containers.NewVectors(len(ckputil.TableObjectsAttrs))
-		dest[ckputil.TableObjectsAttr_Table_Idx] = *src.Vecs[ObjectInfo_TID_Idx].GetDownstreamVector()
-		dest[ckputil.TableObjectsAttr_ID_Idx] = *src.Vecs[ObjectInfo_ObjectStats_Idx].GetDownstreamVector()
-		dest[ckputil.TableObjectsAttr_DB_Idx] = *src.Vecs[ObjectInfo_DBID_Idx].GetDownstreamVector()
-		dest[ckputil.TableObjectsAttr_CreateTS_Idx] = *src.Vecs[ObjectInfo_CreateAt_Idx].GetDownstreamVector()
-		dest[ckputil.TableObjectsAttr_DeleteTS_Idx] = *src.Vecs[ObjectInfo_DeleteAt_Idx].GetDownstreamVector()
-		var objTypeVec *vector.Vector
-		if objTypeVec, err = vector.NewConstFixed(
-			types.T_int8.ToType(), objectType, src.Length(), replayer.mp,
+	replayer.objectInfo = make([]containers.Vectors, 0)
+	upgradeFn := func(objectType int8, src *containers.Batch) (err error) {
+		if src == nil || src.Length() == 0 {
+			return
+		}
+		dest := containers.NewVectors(len(ckputil.TableObjectsAttrs))
+		dest[ckputil.TableObjectsAttr_Table_Idx] = *src.Vecs[ObjectInfo_TID_Idx+2].GetDownstreamVector()
+		dest[ckputil.TableObjectsAttr_ID_Idx] = *src.Vecs[ObjectInfo_ObjectStats_Idx+2].GetDownstreamVector()
+		dest[ckputil.TableObjectsAttr_DB_Idx] = *src.Vecs[ObjectInfo_DBID_Idx+2].GetDownstreamVector()
+		dest[ckputil.TableObjectsAttr_CreateTS_Idx] = *src.Vecs[ObjectInfo_CreateAt_Idx+2].GetDownstreamVector()
+		dest[ckputil.TableObjectsAttr_DeleteTS_Idx] = *src.Vecs[ObjectInfo_DeleteAt_Idx+2].GetDownstreamVector()
+		objTypeVec := vector.NewVec(types.T_int8.ToType())
+		if err = vector.AppendMultiFixed(
+			objTypeVec, objectType, false, src.Length(), replayer.mp,
 		); err != nil {
 			return
 		}
 		dest[ckputil.TableObjectsAttr_ObjectType_Idx] = *objTypeVec
+		replayer.objectInfo = append(replayer.objectInfo, dest)
 		return
 	}
-	if replayer.objectInfo[0], err = upgradeFn(ckputil.ObjectType_Data, replayer.objBatches); err != nil {
+
+	if err = upgradeFn(ckputil.ObjectType_Data, replayer.objBatches); err != nil {
 		return
 	}
-	if replayer.objectInfo[1], err = upgradeFn(ckputil.ObjectType_Tombstone, replayer.tombstoneBatch); err != nil {
+	if err = upgradeFn(ckputil.ObjectType_Tombstone, replayer.tombstoneBatch); err != nil {
 		return
 	}
 	return
