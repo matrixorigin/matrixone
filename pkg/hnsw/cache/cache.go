@@ -28,12 +28,7 @@ import (
 	usearch "github.com/unum-cloud/usearch/golang"
 )
 
-var Cache HsnwCache
-
-// start cache here
-func init() {
-	Cache.Serve()
-}
+var Cache *HnswCache = NewHnswCache()
 
 type HnswSearchIndex struct {
 	Id        int64
@@ -58,8 +53,8 @@ func (h *HnswSearch) Search(v []float32) error {
 		return moerr.NewInternalErrorNoCtx("HNSW cannot find index from database")
 	}
 
-	time.Now().Add(time.Hour)
-	h.ExpireAt.Store(time.Unix)
+	ts := time.Now().Add(time.Hour).Unix()
+	h.ExpireAt.Store(ts)
 
 	// search
 	return nil
@@ -68,9 +63,9 @@ func (h *HnswSearch) Search(v []float32) error {
 func (h *HnswSearch) Destroy() {
 	h.Mutex.Lock()
 	defer h.Mutex.Unlock()
-	// TODO: destroy index
+	// destroy index
 	for _, idx := range h.Indexes {
-		idx.Destroy()
+		idx.Index.Destroy()
 	}
 	h.Indexes = nil
 }
@@ -80,36 +75,55 @@ type HnswCache struct {
 	ticker          *time.Ticker
 	done            chan bool
 	sigc            chan os.Signal
-	ticker_interval int64
+	ticker_interval time.Duration
+	started         atomic.Bool
+}
+
+func NewHnswCache() *HnswCache {
+	c := &HnswCache{}
+	c.ticker_interval = time.Hour
+	return c
 }
 
 func (c *HnswCache) Serve() {
+	if c.started.Load() {
+		return
+	}
+
+	c.started.Store(true)
+
 	// try clean up the temp directory. set tempdir to /tmp/hnsw
 
-	// start the ticker
-	c.ticker_interval = time.Hour
+	os.Stderr.WriteString("Serve start\n")
 	c.ticker = time.NewTicker(c.ticker_interval)
-	c.sigc := make(chan os.Signal, 2)
-	signal.Notify(c.sigc, syscall.SIGTERM, syscall.SIGINT)
+	c.done = make(chan bool)
+	c.sigc = make(chan os.Signal, 3)
+	signal.Notify(c.sigc, syscall.SIGTERM, syscall.SIGINT, os.Interrupt)
 
 	go func() {
 		for {
 			select {
 			case <-c.done:
+				os.Stderr.WriteString("done handled...\n")
 				return
-			case sig := <-c.sigc:
+			case <-c.sigc:
 				// sig can be syscall.SIGTERM or syscall.SIGINT
+				os.Stderr.WriteString("signal handled...\n")
 				return
-			case t := <-c.ticker.C:
+			case <-c.ticker.C:
+				os.Stderr.WriteString("ticker...\n")
 				// delete expired index
 				c.HouseKeeping()
 			}
 		}
+		os.Stderr.WriteString("go func exited\n")
 	}()
+	os.Stderr.WriteString("Serve end\n")
 }
 
 func (c *HnswCache) HouseKeeping() {
 
+	os.Stderr.WriteString("house keeping\n")
 	expiredkeys := make([]string, 0, 16)
 
 	c.IndexMap.Range(func(key, value any) bool {
@@ -118,7 +132,7 @@ func (c *HnswCache) HouseKeeping() {
 		search.Mutex.RLock()
 		defer search.Mutex.RUnlock()
 
-		ts := search.ExpiredAt.Load()
+		ts := search.ExpireAt.Load()
 		now := time.Now().Unix()
 		if ts < now {
 			expiredkeys = append(expiredkeys, key.(string))
@@ -135,12 +149,12 @@ func (c *HnswCache) HouseKeeping() {
 			search = nil
 		}
 	}
+	os.Stderr.WriteString("house keeping end\n")
 }
 
 func (c *HnswCache) Destroy() {
 	c.ticker.Stop()
 	c.done <- true
-
 }
 
 func (c *HnswCache) GetIndex(proc *process.Process, cfg usearch.IndexConfig, tblcfg hnsw.IndexTableConfig, key string) (*HnswSearch, error) {
