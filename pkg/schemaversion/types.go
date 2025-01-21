@@ -15,8 +15,8 @@
 package schemaversion
 
 var (
-	FinalVersion       string
-	FinalVersionOffset int32
+	FinalVersion       string = "2.1.0"
+	FinalVersionOffset int32  = 3
 )
 
 type VersionInfo struct {
