@@ -144,12 +144,18 @@ func UpgradeTenantVersion(
 	tenantID int32,
 	version string,
 	versionOffset uint32,
+	handleOffset bool,
 	txn executor.TxnExecutor) error {
 
 	sql := fmt.Sprintf("update mo_account set create_version = '%s', version_offset = %d where account_id = %d",
 		version,
 		versionOffset,
 		tenantID)
+
+	if !handleOffset {
+		sql = fmt.Sprintf("update mo_account set create_version = '%s' where account_id = %d", version, tenantID)
+	}
+
 	res, err := txn.Exec(sql, executor.StatementOption{})
 	if err != nil {
 		return err
@@ -201,11 +207,10 @@ func GetCurrentClusterVersion(finalVersion string, txn executor.TxnExecutor) (st
 	return version, isFinalVersion, nil
 }
 
-//----------------------------------------------------------------------------------------------------------------------
-
+// ----------------------------------------------------------------------------------------------------------------------
 func GeAccountVersion(accountId uint32, flag bool, txn executor.TxnExecutor) (string, int32, error) {
 	offsetCol := ""
-	if !flag {
+	if flag {
 		offsetCol = ", version_offset"
 	}
 	sql := fmt.Sprintf("SELECT create_version %s FROM mo_catalog.mo_account WHERE account_id = %d", offsetCol, accountId)
@@ -219,12 +224,11 @@ func GeAccountVersion(accountId uint32, flag bool, txn executor.TxnExecutor) (st
 	versionOffset := int32(-1)
 	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
 		version = cols[0].GetStringAt(0)
-		if !flag {
+		if flag {
 			versionOffset = int32(vector.GetFixedAtWithTypeCheck[uint32](cols[1], 0))
 		}
 		return true
 	})
-
 	return version, versionOffset, nil
 }
 

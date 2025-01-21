@@ -2635,18 +2635,12 @@ func executeStmtWithWorkspace(ses FeSession,
 	//----------------------------------------------------------------------------------------------------------
 	if isNewTransaction {
 		var versionInfo defines.VersionInfo
-		ssv1, ok := runtime.ServiceRuntime(execCtx.ses.GetService()).GetGlobalVariables(runtime.FinalVersion)
-		if ok {
-			versionInfo.FinalVersion = ssv1.(string)
-		} else {
-			fmt.Println("----------------------------------------------------")
+		if ss, ok := runtime.ServiceRuntime(execCtx.ses.GetService()).GetGlobalVariables(runtime.FinalVersion); ok {
+			versionInfo.FinalVersion = ss.(string)
 		}
 
-		ssv2, ok := runtime.ServiceRuntime(execCtx.ses.GetService()).GetGlobalVariables(runtime.FinalVersionOffset)
-		if ok {
-			versionInfo.FinalVersionOffset = int32(ssv2.(uint32))
-		} else {
-			fmt.Println("----------------------------------------------------")
+		if ss, ok := runtime.ServiceRuntime(execCtx.ses.GetService()).GetGlobalVariables(runtime.FinalVersionOffset); ok {
+			versionInfo.FinalVersionOffset = int32(ss.(uint32))
 		}
 
 		isFinalVersion, err := defines.GetIsFinalVersion(execCtx.reqCtx)
@@ -2668,23 +2662,21 @@ func executeStmtWithWorkspace(ses FeSession,
 			versionInfo.Cluster.Version = clusterVersion
 			versionInfo.Cluster.IsFinalVersion = isFinal
 
-			if state == versions.StateReady && versionInfo.FinalVersion == clusterVersion {
-				versionInfo.FinalVersionCompleted = true
-				ses.GetTxnHandler().txnOp.TxnOptions().WithIsFinalVersion(true)
-				runtime.ServiceRuntime(ses.GetService()).SetGlobalVariables(runtime.ClusterIsFinalVersion, true)
-			} else {
-				versionInfo.FinalVersionCompleted = false
-				ses.GetTxnHandler().txnOp.TxnOptions().WithIsFinalVersion(false)
-				runtime.ServiceRuntime(ses.GetService()).SetGlobalVariables(runtime.ClusterIsFinalVersion, false)
-			}
+			isFinalVersion := state == versions.StateReady && versionInfo.FinalVersion == clusterVersion
+			versionInfo.FinalVersionCompleted = isFinalVersion
 
-			flag := versions.Compare(versionInfo.Cluster.Version, "2.1.0") < 0
-			currVersion, currOffset, err := checkAccountVersion(execCtx.reqCtx, execCtx.ses, flag, bh)
+			// 设置 TxnOptions 和全局变量
+			ses.GetTxnHandler().txnOp.TxnOptions().WithIsFinalVersion(isFinalVersion)
+			runtime.ServiceRuntime(ses.GetService()).SetGlobalVariables(runtime.ClusterIsFinalVersion, isFinalVersion)
+
+			//-----------------------------------------------------------------------------------------
+			handleOffset := versions.Compare(versionInfo.Cluster.Version, "2.1.0") >= 0
+			accVersion, accOffset, err := checkAccountVersion(execCtx.reqCtx, execCtx.ses, handleOffset, bh)
 			if err != nil {
 				return err
 			}
-			versionInfo.Account.Version = currVersion
-			versionInfo.Account.VersionOffset = currOffset
+			versionInfo.Account.Version = accVersion
+			versionInfo.Account.VersionOffset = accOffset
 		}
 		execCtx.reqCtx = defines.AttachVersionInfo(execCtx.reqCtx, &versionInfo)
 	}
