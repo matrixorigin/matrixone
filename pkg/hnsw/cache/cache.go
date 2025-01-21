@@ -70,6 +70,15 @@ func (h *HnswSearch) Destroy() {
 	h.Indexes = nil
 }
 
+func (h *HnswSearch) Expired() bool {
+	h.Mutex.RLock()
+	defer h.Mutex.RUnlock()
+
+	ts := h.ExpireAt.Load()
+	now := time.Now().Unix()
+	return (ts < now)
+}
+
 type HnswCache struct {
 	IndexMap        sync.Map
 	ticker          *time.Ticker
@@ -138,12 +147,7 @@ func (c *HnswCache) HouseKeeping() {
 	c.IndexMap.Range(func(key, value any) bool {
 
 		search := value.(*HnswSearch)
-		search.Mutex.RLock()
-		defer search.Mutex.RUnlock()
-
-		ts := search.ExpireAt.Load()
-		now := time.Now().Unix()
-		if ts < now {
+		if search.Expired() {
 			expiredkeys = append(expiredkeys, key.(string))
 		}
 		return true
