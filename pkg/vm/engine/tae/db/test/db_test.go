@@ -7422,6 +7422,9 @@ func TestPitrMeta(t *testing.T) {
 	})
 	pitr, err = db.DiskCleaner.GetCleaner().GetPITRs()
 	assert.Nil(t, err)
+	testutils.WaitExpect(10000, func() bool {
+		return len(pitr.ToTsList()) > 0
+	})
 	assert.True(t, len(pitr.ToTsList()) > 0)
 }
 
