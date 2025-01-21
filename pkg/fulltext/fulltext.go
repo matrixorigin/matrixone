@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/monlp/tokenizer"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	usearch "github.com/unum-cloud/usearch/golang"
 )
 
 /*
@@ -47,7 +46,6 @@ import (
 // Init Search Accum
 func NewSearchAccum(srctbl string, tblname string, pattern string, mode int64, params string) (*SearchAccum, error) {
 
-	_ = usearch.DefaultConfig(uint(1))
 	ps, err := ParsePattern(pattern, mode)
 	if err != nil {
 		return nil, err
