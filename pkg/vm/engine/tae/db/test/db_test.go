@@ -6778,7 +6778,7 @@ func TestAppendAndGC2(t *testing.T) {
 	dir := tae.Dir
 	tae.Close()
 	wal := wal.NewDriverWithBatchStore(opts.Ctx, dir, "wal", nil)
-	err = wal.Replay(opts.Ctx, loadFiles)
+	err = wal.Replay(opts.Ctx, loadFiles, driver.ReplayMode_ReplayForWrite)
 	assert.Nil(t, err)
 	assert.NotEqual(t, 0, len(files))
 	for file := range metaFile {
@@ -7265,48 +7265,51 @@ func TestPitrMeta(t *testing.T) {
 		types.T_varchar.ToType(), types.T_uint64.ToType(), types.T_varchar.ToType(),
 		types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_uint64.ToType(),
 		types.T_uint8.ToType(), types.T_varchar.ToType()}
-	for i := 0; i < 4; i++ {
-		opt := containers.Options{}
-		opt.Capacity = 0
-		data := containers.BuildBatch(attrs, vecTypes, opt)
-		data.Vecs[0].Append([]byte("db"), false)
-		data.Vecs[1].Append([]byte("rel"), false)
-		data.Vecs[2].Append(uint64(0), false)
-		data.Vecs[3].Append(uint64(0), false)
-		data.Vecs[4].Append(uint64(0), false)
-		if i == 0 {
-			data.Vecs[5].Append([]byte("cluster"), false)
-			data.Vecs[10].Append(uint64(0), false)
-			data.Vecs[11].Append(uint8(1), false)
-			data.Vecs[12].Append([]byte("h"), false)
-		} else if i == 1 {
-			data.Vecs[5].Append([]byte("account"), false)
-			data.Vecs[10].Append(uint64(0), false)
-			data.Vecs[11].Append(uint8(2), false)
-			data.Vecs[12].Append([]byte("h"), false)
-		} else if i == 2 {
-			data.Vecs[5].Append([]byte("database"), false)
-			data.Vecs[10].Append(uint64(database2.GetID()), false)
-			data.Vecs[11].Append(uint8(3), false)
-			data.Vecs[12].Append([]byte("h"), false)
-		} else {
-			data.Vecs[5].Append([]byte("table"), false)
-			data.Vecs[10].Append(uint64(rel4.ID()), false)
-			data.Vecs[11].Append(uint8(4), false)
-			data.Vecs[12].Append([]byte("h"), false)
+	appendPitr := func(name string, id uint64) {
+		for i := 0; i < 4; i++ {
+			opt := containers.Options{}
+			opt.Capacity = 0
+			data := containers.BuildBatch(attrs, vecTypes, opt)
+			data.Vecs[0].Append([]byte("db"), false)
+			data.Vecs[1].Append([]byte("rel"), false)
+			data.Vecs[2].Append(uint64(0), false)
+			data.Vecs[3].Append(uint64(0), false)
+			data.Vecs[4].Append(uint64(0), false)
+			if i == 0 {
+				data.Vecs[5].Append([]byte("cluster"), false)
+				data.Vecs[10].Append(uint64(0), false)
+				data.Vecs[11].Append(uint8(1), false)
+				data.Vecs[12].Append([]byte("h"), false)
+			} else if i == 1 {
+				data.Vecs[5].Append([]byte("account"), false)
+				data.Vecs[10].Append(uint64(0), false)
+				data.Vecs[11].Append(uint8(2), false)
+				data.Vecs[12].Append([]byte("h"), false)
+			} else if i == 2 {
+				data.Vecs[5].Append([]byte("database"), false)
+				data.Vecs[10].Append(uint64(database2.GetID()), false)
+				data.Vecs[11].Append(uint8(3), false)
+				data.Vecs[12].Append([]byte("h"), false)
+			} else {
+				data.Vecs[5].Append([]byte("table"), false)
+				data.Vecs[10].Append(uint64(rel4.ID()), false)
+				data.Vecs[11].Append(uint8(4), false)
+				data.Vecs[12].Append([]byte("h"), false)
+			}
+			data.Vecs[6].Append(uint64(0), false)
+			data.Vecs[7].Append([]byte("varchar"), false)
+			data.Vecs[8].Append([]byte("varchar"), false)
+			data.Vecs[9].Append([]byte("varchar"), false)
+			txn1, _ := db.StartTxn(nil)
+			database, _ = txn1.GetDatabase(name)
+			rel, _ := database.GetRelationByID(id)
+			err = rel.Append(context.Background(), data)
+			data.Close()
+			assert.Nil(t, err)
+			assert.Nil(t, txn1.Commit(context.Background()))
 		}
-		data.Vecs[6].Append(uint64(0), false)
-		data.Vecs[7].Append([]byte("varchar"), false)
-		data.Vecs[8].Append([]byte("varchar"), false)
-		data.Vecs[9].Append([]byte("varchar"), false)
-		txn1, _ := db.StartTxn(nil)
-		database, _ = txn1.GetDatabase("db1")
-		rel3, _ = database.GetRelationByID(rel3.ID())
-		err = rel3.Append(context.Background(), data)
-		data.Close()
-		assert.Nil(t, err)
-		assert.Nil(t, txn1.Commit(context.Background()))
 	}
+	appendPitr("db1", rel3.ID())
 	bat := catalog.MockBatch(schema1, int(schema1.Extra.BlockMaxRows*10-1))
 	defer bat.Close()
 	bats := bat.Split(bat.Length())
@@ -7388,6 +7391,9 @@ func TestPitrMeta(t *testing.T) {
 	err = db.DiskCleaner.GetCleaner().DoCheck()
 	assert.Nil(t, err)
 	assert.NotNil(t, minMerged)
+	pitr, err := db.DiskCleaner.GetCleaner().GetPITRs()
+	assert.Nil(t, err)
+	assert.True(t, len(pitr.ToTsList()) > 0)
 	tae.Restart(ctx)
 	db = tae.DB
 	testutils.WaitExpect(5000, func() bool {
@@ -7403,7 +7409,16 @@ func TestPitrMeta(t *testing.T) {
 	assert.True(t, end.GE(&minEnd))
 	err = db.DiskCleaner.GetCleaner().DoCheck()
 	assert.Nil(t, err)
-	pitr, err := db.DiskCleaner.GetCleaner().GetPITRs()
+	txn, _ = db.StartTxn(nil)
+	database, _ = txn.GetDatabase("db")
+	rel5, err := testutil.CreateRelation2(ctx, txn, database, pitrSchema)
+	assert.Nil(t, err)
+	assert.Nil(t, txn.Commit(context.Background()))
+	appendPitr("db", rel5.ID())
+	testutils.WaitExpect(10000, func() bool {
+		return db.Runtime.Scheduler.GetPenddingLSNCnt() == 0
+	})
+	pitr, err = db.DiskCleaner.GetCleaner().GetPITRs()
 	assert.Nil(t, err)
 	assert.True(t, len(pitr.ToTsList()) > 0)
 }

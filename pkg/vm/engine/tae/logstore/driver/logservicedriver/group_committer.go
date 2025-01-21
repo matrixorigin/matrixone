@@ -76,10 +76,7 @@ func (a *groupCommitter) AddIntent(e *entry.Entry) {
 	}
 }
 
-func (a *groupCommitter) Commit(
-	retryTimes int,
-	timeout time.Duration,
-) (err error) {
+func (a *groupCommitter) Commit() (err error) {
 	_, task := gotrace.NewTask(context.Background(), "logservice.append")
 	start := time.Now()
 	defer func() {
@@ -108,13 +105,13 @@ func (a *groupCommitter) Commit(
 	defer timeoutSpan.End()
 
 	a.psn, err = a.client.Append(
-		ctx, entry, time.Second*10, 10, moerr.CauseDriverAppender1,
+		ctx, entry, moerr.CauseDriverAppender1,
 	)
 	return
 }
 
-func (a *groupCommitter) PutbackClient(pool *clientpool) {
-	pool.Put(a.client)
+func (a *groupCommitter) PutbackClient() {
+	a.client.Putback()
 	a.client = nil
 }
 
