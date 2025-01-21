@@ -962,6 +962,7 @@ func TestConstructBlockPKFilter(t *testing.T) {
 						for x := lb; x <= ub; x++ {
 							vector.AppendBytes(vec, []byte(strconv.Itoa(int(x))), false, mp)
 						}
+						vec.InplaceSort()
 					}
 
 					str1 := strconv.Itoa(int(lb))
@@ -1006,7 +1007,7 @@ func TestConstructBlockPKFilter(t *testing.T) {
 				case types.T_decimal128:
 					if needVec(op) {
 						for x := lb; x <= ub; x++ {
-							xx := types.Decimal128{uint64(x), 0}
+							xx := types.Decimal128{B0_63: uint64(x)}
 							if opOnBinary(op) {
 								vector.AppendBytes(vec, types.EncodeDecimal128(&xx), false, mp)
 							} else {
@@ -1022,7 +1023,6 @@ func TestConstructBlockPKFilter(t *testing.T) {
 					if opOnBinary(op) {
 						vec.SetType(types.T_binary.ToType())
 					}
-					vec.InplaceSort()
 				}
 				basePKFilter := BasePKFilter{
 					Valid: true,
@@ -1151,6 +1151,7 @@ func TestConstructBlockPKFilter(t *testing.T) {
 						xx := strconv.Itoa(int(x))
 						vector.AppendBytes(inputVec, []byte(xx), false, mp)
 					}
+					inputVec.InplaceSort()
 
 				case types.T_date:
 					for x := lb - 1; x <= ub+1; x++ {
@@ -1172,8 +1173,6 @@ func TestConstructBlockPKFilter(t *testing.T) {
 						}
 					}
 				}
-
-				inputVec.InplaceSort()
 
 				if opOnBinary(op) && (ty == types.T_float32 || ty == types.T_float64) {
 					// can the Prefix apply on a float/double ???
@@ -1425,11 +1424,11 @@ func TestMergeBaseFilterInKind(t *testing.T) {
 
 			case types.T_decimal128:
 				for i := range rvals {
-					vector.AppendFixed(rvec, types.Decimal128{uint64(rvals[i]), 0}, false, mp)
+					vector.AppendFixed(rvec, types.Decimal128{B0_63: uint64(rvals[i])}, false, mp)
 				}
 
 				for i := range lvals {
-					vector.AppendFixed(lvec, types.Decimal128{uint64(lvals[i]), 0}, false, mp)
+					vector.AppendFixed(lvec, types.Decimal128{B0_63: uint64(lvals[i])}, false, mp)
 				}
 
 			case types.T_varchar, types.T_json, types.T_binary:
