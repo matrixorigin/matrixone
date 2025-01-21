@@ -183,25 +183,35 @@ func (catalog *Catalog) onReplayUpdateObject(
 		obj.table = rel
 		obj.ObjectNode = *cmd.node
 		obj.SortHint = catalog.NextObject()
-		obj.EntryMVCCNode = *cmd.mvccNode.EntryMVCCNode
-		obj.CreateNode = *cmd.mvccNode.TxnMVCCNode
-		cmd.mvccNode.TxnMVCCNode = &obj.CreateNode
-		cmd.mvccNode.EntryMVCCNode = &obj.EntryMVCCNode
+		obj.EntryMVCCNode = cmd.mvccNode.EntryMVCCNode
+		obj.CreateNode = cmd.mvccNode.TxnMVCCNode
+		cmd.mvccNode.CommitSideEffect = func(id string, ts types.TS) {
+			obj.CreateNode.ApplyCommit(id)
+			obj.EntryMVCCNode.ApplyCommit(ts)
+			rel.UpdateReplayEntryTs(obj, ts)
+		}
 		obj.ObjectMVCCNode = *cmd.mvccNode.BaseNode
 		obj.ObjectState = ObjectState_Create_ApplyCommit
 		rel.AddEntryLocked(obj)
 	}
 	if cmd.mvccNode.DeletedAt.Equal(&txnif.UncommitTS) {
-		obj, err = rel.GetObjectByID(cmd.ID.ObjectID(), cmd.node.IsTombstone)
+		cobj, err := rel.GetObjectByID(cmd.ID.ObjectID(), cmd.node.IsTombstone)
 		if err != nil {
 			panic(fmt.Sprintf("obj %v not existed, table:\n%v", cmd.ID.String(), rel.StringWithLevel(3)))
 		}
-		obj.EntryMVCCNode = *cmd.mvccNode.EntryMVCCNode
-		obj.DeleteNode = *cmd.mvccNode.TxnMVCCNode
+		obj = cobj.Clone()
+		obj.prevVersion = cobj
+		cobj.nextVersion = obj
+		obj.EntryMVCCNode = cmd.mvccNode.EntryMVCCNode
+		obj.DeleteNode = cmd.mvccNode.TxnMVCCNode
 		obj.ObjectMVCCNode = *cmd.mvccNode.BaseNode
-		cmd.mvccNode.TxnMVCCNode = &obj.DeleteNode
-		cmd.mvccNode.EntryMVCCNode = &obj.EntryMVCCNode
+		cmd.mvccNode.CommitSideEffect = func(id string, ts types.TS) {
+			obj.DeleteNode.ApplyCommit(id)
+			obj.EntryMVCCNode.ApplyCommit(ts)
+			rel.UpdateReplayEntryTs(obj, ts)
+		}
 		obj.ObjectState = ObjectState_Delete_ApplyCommit
+		rel.AddEntryLocked(obj)
 	}
 
 	if obj.objData == nil {
@@ -357,10 +367,10 @@ func (catalog *Catalog) onReplayCreateDB(
 	}
 	_ = catalog.AddEntryLocked(db, nil, true)
 	un := &MVCCNode[*EmptyMVCCNode]{
-		EntryMVCCNode: &EntryMVCCNode{
+		EntryMVCCNode: EntryMVCCNode{
 			CreatedAt: txnNode.End,
 		},
-		TxnMVCCNode: txnNode,
+		TxnMVCCNode: *txnNode,
 	}
 	db.InsertLocked(un)
 }
@@ -441,10 +451,10 @@ func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, tx
 		}
 		// alter table
 		un := &MVCCNode[*TableMVCCNode]{
-			EntryMVCCNode: &EntryMVCCNode{
+			EntryMVCCNode: EntryMVCCNode{
 				CreatedAt: tblCreatedAt,
 			},
-			TxnMVCCNode: txnNode,
+			TxnMVCCNode: *txnNode,
 			BaseNode: &TableMVCCNode{
 				Schema:          schema,
 				TombstoneSchema: GetTombstoneSchema(schema),
@@ -474,10 +484,10 @@ func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, tx
 	tbl.tableData = dataFactory.MakeTableFactory()(tbl)
 	_ = db.AddEntryLocked(tbl, nil, true)
 	un := &MVCCNode[*TableMVCCNode]{
-		EntryMVCCNode: &EntryMVCCNode{
+		EntryMVCCNode: EntryMVCCNode{
 			CreatedAt: txnNode.End,
 		},
-		TxnMVCCNode: txnNode,
+		TxnMVCCNode: *txnNode,
 		BaseNode: &TableMVCCNode{
 			Schema:          schema,
 			TombstoneSchema: GetTombstoneSchema(schema),
@@ -561,23 +571,33 @@ func (catalog *Catalog) OnReplayObjectBatch_V2(
 				},
 				ObjectState: ObjectState_Create_ApplyCommit,
 			}
+			rel.AddEntryLocked(obj)
 			if !deleteTSs[i].IsEmpty() {
-				obj.DeletedAt = deleteTSs[i]
-				obj.DeleteNode = txnbase.TxnMVCCNode{
+				dropped := obj.Clone()
+				dropped.DeletedAt = deleteTSs[i]
+				dropped.DeleteNode = txnbase.TxnMVCCNode{
 					Start:   deleteTSs[i].Prev(),
 					Prepare: deleteTSs[i],
 					End:     deleteTSs[i],
 				}
+				dropped.prevVersion = obj
+				obj.nextVersion = dropped
+				dropped.ObjectState = ObjectState_Delete_ApplyCommit
+				rel.AddEntryLocked(dropped)
 			}
-			rel.AddEntryLocked(obj)
 		} else {
 			if obj.DeletedAt.IsEmpty() {
-				obj.DeletedAt = deleteTSs[i]
-				obj.DeleteNode = txnbase.TxnMVCCNode{
+				dropped := obj.Clone()
+				dropped.DeletedAt = deleteTSs[i]
+				dropped.DeleteNode = txnbase.TxnMVCCNode{
 					Start:   deleteTSs[i].Prev(),
 					Prepare: deleteTSs[i],
 					End:     deleteTSs[i],
 				}
+				dropped.prevVersion = obj
+				obj.nextVersion = dropped
+				dropped.ObjectState = ObjectState_Delete_ApplyCommit
+				rel.AddEntryLocked(dropped)
 			}
 		}
 		if obj.objData == nil {
@@ -694,17 +714,21 @@ func (catalog *Catalog) onReplayCheckpointObject(
 				createTS.ToString(), deleteTS.ToString(), isTombstone, objNode.String(),
 				start.ToString(), prepare.ToString(), end.ToString(), rel.StringWithLevel(3)))
 		}
-		obj.EntryMVCCNode = EntryMVCCNode{
+		deleteNode := obj.Clone()
+		obj.nextVersion = deleteNode
+		deleteNode.prevVersion = obj
+		deleteNode.EntryMVCCNode = EntryMVCCNode{
 			CreatedAt: createTS,
 			DeletedAt: deleteTS,
 		}
-		obj.ObjectMVCCNode = *objNode
-		obj.DeleteNode = txnbase.TxnMVCCNode{
+		deleteNode.ObjectMVCCNode = *objNode
+		deleteNode.DeleteNode = txnbase.TxnMVCCNode{
 			Start:   start,
 			Prepare: prepare,
 			End:     end,
 		}
-		obj.ObjectState = ObjectState_Delete_ApplyCommit
+		deleteNode.ObjectState = ObjectState_Delete_ApplyCommit
+		rel.AddEntryLocked(deleteNode)
 	}
 	if !createTS.Equal(&end) && !deleteTS.Equal(&end) {
 		// In back up, aobj is replaced with naobj and its DeleteAt is removed.
@@ -715,7 +739,7 @@ func (catalog *Catalog) onReplayCheckpointObject(
 			rel.AddEntryLocked(obj)
 			_, sarg, _ := fault.TriggerFault("back up UT")
 			if sarg == "" {
-				obj.CreateNode = *txnbase.NewTxnMVCCNodeWithTS(obj.CreatedAt)
+				obj.CreateNode = txnbase.NewTxnMVCCNodeWithTS(obj.CreatedAt)
 			}
 			logutil.Warnf("obj %v, tbl %v-%d create %v, delete %v, end %v",
 				objid.String(), rel.fullName, rel.ID, createTS.ToString(),
@@ -730,8 +754,8 @@ func (catalog *Catalog) onReplayCheckpointObject(
 					obj = newObject()
 					rel.AddEntryLocked(obj)
 				}
-				obj.CreateNode = *txnbase.NewTxnMVCCNodeWithTS(createTS)
-				obj.DeleteNode = *txnbase.NewTxnMVCCNodeWithTS(deleteTS)
+				obj.CreateNode = txnbase.NewTxnMVCCNodeWithTS(createTS)
+				obj.DeleteNode = txnbase.NewTxnMVCCNodeWithTS(deleteTS)
 			}
 		}
 	}
@@ -754,31 +778,22 @@ func (catalog *Catalog) onReplayCheckpointObject(
 }
 
 func (catalog *Catalog) ReplayTableRows() {
-	rows := uint64(0)
-	tableProcessor := new(LoopProcessor)
-	tableProcessor.ObjectFn = func(be *ObjectEntry) error {
-		if !be.IsActive() {
-			return nil
-		}
-		rows += be.GetObjectData().GetRowsOnReplay()
-		return nil
-	}
-	tableProcessor.TombstoneFn = func(be *ObjectEntry) error {
-		if !be.IsActive() {
-			return nil
-		}
-		rows -= be.GetObjectData().GetRowsOnReplay()
-		return nil
-	}
 	processor := new(LoopProcessor)
 	processor.TableFn = func(tbl *TableEntry) error {
 		if tbl.db.name == pkgcatalog.MO_CATALOG {
 			return nil
 		}
-		rows = 0
-		err := tbl.RecurLoop(tableProcessor)
-		if err != nil {
-			panic(err)
+		rows := uint64(0)
+		reader := txnbase.MockTxnReaderWithNow()
+		it := tbl.MakeDataVisibleObjectIt(reader)
+		defer it.Release()
+		for it.Next() {
+			rows += it.Item().GetObjectData().GetRowsOnReplay()
+		}
+		it = tbl.MakeTombstoneVisibleObjectIt(reader)
+		defer it.Release()
+		for it.Next() {
+			rows -= it.Item().GetObjectData().GetRowsOnReplay()
 		}
 		tbl.rows.Store(rows)
 		return nil

@@ -73,20 +73,12 @@ func (executor *checkpointExecutor) softScheduleCheckpoint(
 	intent := executor.runner.store.GetICKPIntent()
 
 	check := func() (done bool) {
-		if !executor.runner.source.IsCommitted(intent.GetStart(), intent.GetEnd()) {
-			return false
-		}
-		tree := executor.runner.source.ScanInRangePruned(intent.GetStart(), intent.GetEnd())
-		tree.GetTree().Compact()
-		if !tree.IsEmpty() && intent.TooOld() {
-			logutil.Warn(
-				"CheckPoint-Wait-TooOld",
-				zap.String("entry", intent.String()),
-				zap.Duration("age", intent.Age()),
-			)
+		start, end := intent.GetStart(), intent.GetEnd()
+		ready := IsAllDirtyFlushed(executor.runner.source, executor.runner.catalog, start, end, intent.TooOld())
+		if !ready {
 			intent.DeferRetirement()
 		}
-		return tree.IsEmpty()
+		return ready
 	}
 
 	now := time.Now()
