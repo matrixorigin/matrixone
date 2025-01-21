@@ -44,7 +44,10 @@ func TestCache(t *testing.T) {
 
 	os.Stderr.WriteString("cache search\n")
 	fp32a := []float32{1, 2, 3, 4, 5, 6, 7, 8}
-	idx.Search(fp32a)
+	keys, distances, err := idx.Search(fp32a)
+	require.Nil(t, err)
+	_ = keys
+	_ = distances
 
 	os.Stderr.WriteString("cache sleep\n")
 	time.Sleep(12 * time.Second)

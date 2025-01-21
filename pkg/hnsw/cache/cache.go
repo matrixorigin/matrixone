@@ -46,18 +46,18 @@ type HnswSearch struct {
 	Tblcfg   hnsw.IndexTableConfig
 }
 
-func (h *HnswSearch) Search(v []float32) error {
+func (h *HnswSearch) Search(v []float32) (keys []int64, distances []float32, err error) {
 	h.Mutex.RLock()
 	defer h.Mutex.RUnlock()
 	if h.Indexes == nil {
-		return moerr.NewInternalErrorNoCtx("HNSW cannot find index from database")
+		return nil, nil, moerr.NewInternalErrorNoCtx("HNSW cannot find index from database")
 	}
 
 	ts := time.Now().Add(time.Hour).Unix()
 	h.ExpireAt.Store(ts)
 
 	// search
-	return nil
+	return nil, nil, nil
 }
 
 func (h *HnswSearch) Destroy() {
