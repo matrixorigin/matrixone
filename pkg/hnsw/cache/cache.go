@@ -77,7 +77,7 @@ type HnswCache struct {
 	sigc            chan os.Signal
 	ticker_interval time.Duration
 	started         atomic.Bool
-	exited          bool
+	exited          atomic.Bool
 }
 
 func NewHnswCache() *HnswCache {
@@ -107,12 +107,12 @@ func (c *HnswCache) Serve() {
 			select {
 			case <-c.done:
 				os.Stderr.WriteString("done handled...\n")
-				c.exited = true
+				c.exited.Store(true)
 				return
 			case <-c.sigc:
 				// sig can be syscall.SIGTERM or syscall.SIGINT
 				os.Stderr.WriteString("signal handled...\n")
-				c.exited = true
+				c.exited.Store(true)
 				return
 			case <-c.ticker.C:
 				os.Stderr.WriteString("ticker...\n")
@@ -159,7 +159,7 @@ func (c *HnswCache) HouseKeeping() {
 func (c *HnswCache) Destroy() {
 	if c.started.Load() {
 		c.ticker.Stop()
-		if !c.exited {
+		if !c.exited.Load() {
 			c.done <- true
 		}
 	}
