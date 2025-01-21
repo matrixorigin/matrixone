@@ -111,7 +111,7 @@ func validSample(ctx *BindContext, builder *QueryBuilder) error {
 		if len(ctx.aggregates) > 0 {
 			return moerr.NewSyntaxError(builder.GetContext(), "cannot fixed non-scalar function and scalar function in the same query")
 		}
-		if ctx.recSelect || builder.isForUpdate {
+		if ctx.bindingRecurStmt() || builder.isForUpdate {
 			return moerr.NewInternalError(builder.GetContext(), "not support sample function recursive cte or for update")
 		}
 		if len(ctx.windows) > 0 {

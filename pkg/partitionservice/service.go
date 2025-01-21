@@ -16,17 +16,19 @@ package partitionservice
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+)
+
+var (
+	DisabledService = NewService(Config{}, nil)
 )
 
 type service struct {
@@ -149,69 +151,56 @@ func (s *service) getMetadata(
 			option,
 			def,
 		)
+	case *tree.RangeType:
+		return s.getMetadataByRangeType(
+			option,
+			def,
+		)
 	default:
 		panic("BUG: unsupported partition method")
 	}
 
 }
 
-func (s *service) getMetadataByHashType(
-	option *tree.PartitionOption,
-	def *plan.TableDef,
-) (partition.PartitionMetadata, error) {
-	method := option.PartBy.PType.(*tree.HashType)
-	if option.PartBy.Num <= 0 {
-		return partition.PartitionMetadata{}, moerr.NewInvalidInputNoCtx("partition number is invalid")
-	}
-
-	columns, ok := method.Expr.(*tree.UnresolvedName)
-	if !ok {
-		return partition.PartitionMetadata{}, moerr.NewNotSupportedNoCtx("column expression is not supported")
-	}
-	if columns.NumParts != 1 {
-		return partition.PartitionMetadata{}, moerr.NewNotSupportedNoCtx("multi-column is not supported in HASH partition")
-	}
-	validColumns, err := validColumns(
-		columns,
-		def,
-		func(t plan.Type) bool {
-			return types.T(t.Id).IsInteger()
-		},
+func (s *service) Prune(
+	ctx context.Context,
+	tableID uint64,
+	bat *batch.Batch,
+	txnOp client.TxnOperator,
+) (PruneResult, error) {
+	metadata, err := s.readMetadata(
+		ctx,
+		tableID,
+		txnOp,
 	)
-	if err != nil {
-		return partition.PartitionMetadata{}, err
+	if err != nil || metadata.IsEmpty() {
+		return PruneResult{}, err
 	}
 
-	ctx := tree.NewFmtCtx(
-		dialect.MYSQL,
-		tree.WithQuoteString(true),
+	// TODO(fagongzi): partition
+	return PruneResult{
+		batches:    []*batch.Batch{bat, bat},
+		partitions: []partition.Partition{metadata.Partitions[0]},
+	}, nil
+}
+
+func (s *service) Filter(
+	ctx context.Context,
+	tableID uint64,
+	filters []*plan.Expr,
+	txnOp client.TxnOperator,
+) ([]int, error) {
+	metadata, err := s.readMetadata(
+		ctx,
+		tableID,
+		txnOp,
 	)
-	method.Expr.Format(ctx)
-
-	metadata := partition.PartitionMetadata{
-		TableID:      def.TblId,
-		TableName:    def.Name,
-		DatabaseName: def.DbName,
-		Method:       partition.PartitionMethod_Hash,
-		// TODO: ???
-		Expression:  "",
-		Description: ctx.String(),
-		Columns:     validColumns,
+	if err != nil || metadata.IsEmpty() {
+		return nil, err
 	}
 
-	for i := uint64(0); i < option.PartBy.Num; i++ {
-		name := fmt.Sprintf("p%d", i)
-		metadata.Partitions = append(
-			metadata.Partitions,
-			partition.Partition{
-				Name:               name,
-				PartitionTableName: fmt.Sprintf("%s_%s", def.Name, name),
-				Position:           uint32(i),
-				Comment:            "",
-			},
-		)
-	}
-	return metadata, nil
+	// TODO(fagongzi): partition
+	return []int{0}, nil
 }
 
 func (s *service) readMetadata(

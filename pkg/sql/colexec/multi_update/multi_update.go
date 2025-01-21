@@ -196,16 +196,21 @@ func (update *MultiUpdate) update_s3(proc *process.Process, analyzer process.Ana
 }
 
 func (update *MultiUpdate) update(proc *process.Process, analyzer process.Analyzer) (vm.CallResult, error) {
-	input, err := vm.ChildrenCall(update.GetChildren(0), proc, analyzer)
-	if err != nil {
-		return input, err
+	if !update.delegated {
+		input, err := vm.ChildrenCall(update.GetChildren(0), proc, analyzer)
+		if err != nil {
+			return input, err
+		}
+
+		if input.Batch == nil || input.Batch.IsEmpty() {
+			return input, nil
+		}
+
+		update.input = input
 	}
 
-	if input.Batch == nil || input.Batch.IsEmpty() {
-		return input, nil
-	}
-
-	err = update.updateOneBatch(proc, analyzer, input.Batch)
+	input := update.input
+	err := update.updateOneBatch(proc, analyzer, input.Batch)
 	if err != nil {
 		return vm.CancelResult, err
 	}
@@ -342,5 +347,44 @@ func (update *MultiUpdate) updateOneBatch(proc *process.Process, analyzer proces
 		}
 	}
 
+	return nil
+}
+
+func (update *MultiUpdate) resetMultiUpdateCtxs() {
+	for k := range update.ctr.updateCtxInfos {
+		delete(update.ctr.updateCtxInfos, k)
+	}
+
+	for _, updateCtx := range update.MultiUpdateCtx {
+		info := new(updateCtxInfo)
+		for _, col := range updateCtx.TableDef.Cols {
+			if col.Name != catalog.Row_ID {
+				info.insertAttrs = append(info.insertAttrs, col.Name)
+			}
+		}
+
+		tableType := UpdateMainTable
+		if strings.HasPrefix(updateCtx.TableDef.Name, catalog.UniqueIndexTableNamePrefix) {
+			tableType = UpdateUniqueIndexTable
+		} else if strings.HasPrefix(updateCtx.TableDef.Name, catalog.SecondaryIndexTableNamePrefix) {
+			tableType = UpdateSecondaryIndexTable
+		}
+		info.tableType = tableType
+		update.ctr.updateCtxInfos[updateCtx.TableDef.Name] = info
+	}
+}
+
+func (update *MultiUpdate) resetMultiSources(proc *process.Process) error {
+	for _, updateCtx := range update.MultiUpdateCtx {
+		info := update.ctr.updateCtxInfos[updateCtx.TableDef.Name]
+		info.Sources = nil
+		if update.Action != UpdateWriteS3 {
+			rel, err := colexec.GetRelAndPartitionRelsByObjRef(proc.Ctx, proc, update.Engine, updateCtx.ObjRef)
+			if err != nil {
+				return err
+			}
+			info.Sources = append(info.Sources, rel)
+		}
+	}
 	return nil
 }

@@ -21,14 +21,27 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func mockSchema(colCnt int, pkIdx int) ([]string, []types.Type, []uint16) {
+	attrs := make([]string, 0)
+	typs := make([]types.Type, 0)
+	seq := make([]uint16, 0)
+	for i := 0; i < colCnt; i++ {
+		colName := fmt.Sprintf("mock_%d", i)
+		attrs = append(attrs, colName)
+		typs = append(typs, types.T_int32.ToType())
+		seq = append(seq, uint16(i))
+	}
+	return attrs, typs, seq
+}
 
 func TestNewSinker(t *testing.T) {
 	proc := testutil.NewProc()
@@ -36,26 +49,22 @@ func TestNewSinker(t *testing.T) {
 		proc.GetFileService(), defines.SharedFileServiceName)
 	require.NoError(t, err)
 
-	schema := catalog.MockSchema(3, 2)
-	seqnums := make([]uint16, len(schema.Attrs()))
-	for i := range schema.Attrs() {
-		seqnums[i] = schema.GetSeqnum(schema.Attrs()[i])
-	}
+	attrs, typs, seqnums := mockSchema(3, 2)
 
-	buffer := containers.NewOneSchemaBatchBuffer(mpool.GB, schema.Attrs(), schema.Types())
+	buffer := containers.NewOneSchemaBatchBuffer(mpool.GB, attrs, typs)
 
 	factory := NewFSinkerImplFactory(
 		seqnums,
-		schema.GetPrimaryKey().Idx,
+		2,
 		true,
 		false,
-		schema.Version,
+		0,
 	)
 
 	sinker := NewSinker(
-		schema.GetPrimaryKey().Idx,
-		schema.Attrs(),
-		schema.Types(),
+		2,
+		attrs,
+		typs,
 		factory,
 		proc.Mp(),
 		fs,
@@ -67,7 +76,7 @@ func TestNewSinker(t *testing.T) {
 		WithBuffer(buffer, false),
 	)
 
-	bat := catalog.MockBatch(schema, 1000)
+	bat := containers.MockBatch(typs, 1000, 2, nil)
 	err = sinker.Write(context.Background(), containers.ToCNBatch(bat))
 	assert.Nil(t, err)
 
@@ -95,31 +104,23 @@ func TestNewSinker(t *testing.T) {
 }
 
 func makeTestSinker(
-	inSchema *catalog.Schema,
 	mp *mpool.MPool,
 	fs fileservice.FileService,
-) (outSchema *catalog.Schema, sinker *Sinker) {
-	outSchema = inSchema
-	if outSchema == nil {
-		outSchema = catalog.MockSchema(3, 2)
-	}
-	seqnums := make([]uint16, len(outSchema.Attrs()))
-	for i := range outSchema.Attrs() {
-		seqnums[i] = outSchema.GetSeqnum(outSchema.Attrs()[i])
-	}
+) (attr []string, typs []types.Type, seq []uint16, sinker *Sinker) {
+	attr, typs, seq = mockSchema(3, 2)
 
 	factory := NewFSinkerImplFactory(
-		seqnums,
-		outSchema.GetPrimaryKey().Idx,
+		seq,
+		2,
 		true,
 		false,
-		outSchema.Version,
+		0,
 	)
 
 	sinker = NewSinker(
-		outSchema.GetPrimaryKey().Idx,
-		outSchema.Attrs(),
-		outSchema.Types(),
+		2,
+		attr,
+		typs,
 		factory,
 		mp,
 		fs,
@@ -133,10 +134,10 @@ func TestNewSinker2(t *testing.T) {
 		proc.GetFileService(), defines.SharedFileServiceName)
 	require.NoError(t, err)
 
-	schema, sinker := makeTestSinker(nil, proc.Mp(), fs)
+	_, typs, _, sinker := makeTestSinker(proc.Mp(), fs)
 
 	for i := 0; i < 5; i++ {
-		bat := catalog.MockBatch(schema, 8192*2)
+		bat := containers.MockBatch(typs, 8192*2, 2, nil)
 		err = sinker.Write(context.Background(), containers.ToCNBatch(bat))
 		assert.Nil(t, err)
 

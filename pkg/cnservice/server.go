@@ -1041,6 +1041,7 @@ func (s *service) initProcessCodecService() {
 			s._txnClient,
 			s.fileService,
 			s.lockService,
+			s.partitionService,
 			s.queryClient,
 			s._hakeeperClient,
 			s.udfService,

@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/partitionservice"
@@ -47,7 +48,7 @@ func TestCreateAndDeleteHashBased(t *testing.T) {
 				func(i int, s string, r executor.Result) {
 
 				},
-				fmt.Sprintf("create table %s (c int) partition by hash(c) partitions 2", t.Name()),
+				fmt.Sprintf("create table %s (c int comment 'abc') partition by hash(c) partitions 2", t.Name()),
 			)
 
 			metadata := getMetadata(
@@ -90,6 +91,114 @@ func TestCreateAndDeleteHashBased(t *testing.T) {
 
 		},
 	)
+}
+
+func TestInsertAndDeleteHashBased(t *testing.T) {
+	creates := []string{
+		"create table %s (c int) partition by hash(c) partitions 2",
+		"create table %s (c int, b vecf32(2)) partition by hash(c) partitions 2",
+	}
+	inserts := []string{
+		"insert into %s values(1)",
+		"insert into %s values(1, '[1.1, 2.2]')",
+	}
+	deletes := []string{
+		"delete from %s where c = 1",
+		"delete from %s where c = 1",
+	}
+
+	runPartitionClusterTest(
+		t,
+		func(c embed.Cluster) {
+			cn, err := c.GetCNService(0)
+			require.NoError(t, err)
+
+			db := testutils.GetDatabaseName(t)
+			testutils.CreateTestDatabase(t, db, cn)
+
+			for idx := range creates {
+				table := fmt.Sprintf("%s_%d", t.Name(), idx)
+				create := fmt.Sprintf(creates[idx], table)
+				insert := fmt.Sprintf(inserts[idx], table)
+				delete := fmt.Sprintf(deletes[idx], table)
+
+				testutils.ExecSQL(
+					t,
+					db,
+					cn,
+					create,
+				)
+
+				fn := func() int64 {
+					n := int64(0)
+					for i := 0; i < 2; i++ {
+						testutils.ExecSQLWithReadResult(
+							t,
+							db,
+							cn,
+							func(i int, s string, r executor.Result) {
+								r.ReadRows(
+									func(rows int, cols []*vector.Vector) bool {
+										n += executor.GetFixedRows[int64](cols[0])[0]
+										return true
+									},
+								)
+							},
+							fmt.Sprintf("select count(1) from %s_p%d", table, i),
+						)
+					}
+					return n
+				}
+
+				testutils.ExecSQL(
+					t,
+					db,
+					cn,
+					insert,
+				)
+				require.Equal(t, int64(1), fn())
+
+				testutils.ExecSQLWithReadResult(
+					t,
+					db,
+					cn,
+					func(i int, s string, r executor.Result) {
+						r.ReadRows(
+							func(rows int, cols []*vector.Vector) bool {
+								require.Equal(t, int64(1), executor.GetFixedRows[int64](cols[0])[0])
+								return true
+							},
+						)
+					},
+					fmt.Sprintf("select count(1) from %s", table),
+				)
+
+				testutils.ExecSQL(
+					t,
+					db,
+					cn,
+					delete,
+				)
+				require.Equal(t, int64(0), fn())
+
+				testutils.ExecSQLWithReadResult(
+					t,
+					db,
+					cn,
+					func(i int, s string, r executor.Result) {
+						r.ReadRows(
+							func(rows int, cols []*vector.Vector) bool {
+								require.Equal(t, int64(0), executor.GetFixedRows[int64](cols[0])[0])
+								return true
+							},
+						)
+					},
+					fmt.Sprintf("select count(1) from %s", table),
+				)
+			}
+		},
+	)
+
 }
 
 func getMetadata(

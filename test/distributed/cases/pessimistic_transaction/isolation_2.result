@@ -603,7 +603,7 @@ a    b    c    d
 insert into dis_table_07 values (2,'blue',12.00,'2024-01-20');
 begin;
 update dis_table_07 set d='2024-01-20' where a=2 and b='blue';
-Duplicate entry '(2,blue,2024-01-20 00:00:00)' for key '__mo_cpkey_col'
+Duplicate entry '(2,blue,2024-01-20 00:00:00)' for key '(a,b,d)'
 select * from dis_table_07;
 a    b    c    d
 1    yellow    20.09    2020-09-27 00:00:00

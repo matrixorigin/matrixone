@@ -72,7 +72,7 @@ const (
 	MoLocksColTypeLockWait
 )
 
-func (builder *QueryBuilder) buildMoLocks(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, childId int32) (int32, error) {
+func (builder *QueryBuilder) buildMoLocks(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
 	var err error
 
 	colDefs := make([]*plan.ColDef, 0, len(MoLocksColNames))
@@ -98,7 +98,7 @@ func (builder *QueryBuilder) buildMoLocks(tbl *tree.TableFunction, ctx *BindCont
 			Cols: colDefs,
 		},
 		BindingTags:     []int32{builder.genNewTag()},
-		Children:        []int32{childId},
+		Children:        children,
 		TblFuncExprList: exprs,
 	}
 	return builder.appendNode(node, ctx), err
@@ -142,7 +142,7 @@ const (
 	MoConfigColTypeInternal
 )
 
-func (builder *QueryBuilder) buildMoConfigurations(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, childId int32) (int32, error) {
+func (builder *QueryBuilder) buildMoConfigurations(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
 	var err error
 
 	colDefs := make([]*plan.ColDef, 0, len(MoConfigColNames))
@@ -168,7 +168,7 @@ func (builder *QueryBuilder) buildMoConfigurations(tbl *tree.TableFunction, ctx 
 			Cols: colDefs,
 		},
 		BindingTags:     []int32{builder.genNewTag()},
-		Children:        []int32{childId},
+		Children:        children,
 		TblFuncExprList: exprs,
 	}
 	return builder.appendNode(node, ctx), err
@@ -244,7 +244,7 @@ const (
 	MoTransactionsColTypeLockMode
 )
 
-func (builder *QueryBuilder) buildMoTransactions(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, childId int32) (int32, error) {
+func (builder *QueryBuilder) buildMoTransactions(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
 	var err error
 
 	colDefs := make([]*plan.ColDef, 0, len(MoTransactionsColNames))
@@ -270,7 +270,7 @@ func (builder *QueryBuilder) buildMoTransactions(tbl *tree.TableFunction, ctx *B
 			Cols: colDefs,
 		},
 		BindingTags:     []int32{builder.genNewTag()},
-		Children:        []int32{childId},
+		Children:        children,
 		TblFuncExprList: exprs,
 	}
 	return builder.appendNode(node, ctx), err
@@ -314,7 +314,7 @@ const (
 	MoCacheColTypeHitRatio
 )
 
-func (builder *QueryBuilder) buildMoCache(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, childId int32) (int32, error) {
+func (builder *QueryBuilder) buildMoCache(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
 	var err error
 
 	colDefs := make([]*plan.ColDef, 0, len(MoCacheColNames))
@@ -340,7 +340,7 @@ func (builder *QueryBuilder) buildMoCache(tbl *tree.TableFunction, ctx *BindCont
 			Cols: colDefs,
 		},
 		BindingTags:     []int32{builder.genNewTag()},
-		Children:        []int32{childId},
+		Children:        children,
 		TblFuncExprList: exprs,
 	}
 	return builder.appendNode(node, ctx), err
