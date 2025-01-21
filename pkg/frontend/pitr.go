@@ -73,7 +73,7 @@ var (
 	getPubInfoWithPitrFormat = `select pub_name, database_name, database_id, table_list, account_list, created_time, update_time, owner, creator, comment from mo_catalog.mo_pubs {MO_TS = %d} where account_id = %d and database_name = '%s';`
 
 	// update mo_pitr object id
-	updateMoPitrAccountObjectIdFmt = `update mo_catalog.mo_pitr set obj_id = %d, modified_time = '%s' where account_name = '%s';`
+	updateMoPitrAccountObjectIdFmt = `update mo_catalog.mo_pitr set pitr_status = 0, pitr_status_changed_time = default where account_name = '%s' and pitr_status = 1 and obj_id = %d;`
 
 	getLengthAndUnitFmt = `select pitr_length, pitr_unit from mo_catalog.mo_pitr where account_id = %d and level = '%s'`
 )
@@ -158,8 +158,8 @@ func getPubInfoWithPitr(ts int64, accountId uint32, dbName string) string {
 	return fmt.Sprintf(getPubInfoWithPitrFormat, ts, accountId, dbName)
 }
 
-func getSqlForUpdateMoPitrAccountObjectId(accountName string, objId uint64, modifiedTime string) string {
-	return fmt.Sprintf(updateMoPitrAccountObjectIdFmt, objId, modifiedTime, accountName)
+func getSqlForUpdateMoPitrAccountObjectId(accountName string, objId uint64) string {
+	return fmt.Sprintf(updateMoPitrAccountObjectIdFmt, accountName, objId)
 }
 
 func getSqlForGetLengthAndUnitFmt(accountId uint32, level, accName, dbName, tblName string) string {
@@ -212,14 +212,14 @@ func getSqlForCheckPitrDup(createAccount string, createAccountId uint64, stmt *t
 		return getSqlForCheckDupPitrFormat(createAccountId, math.MaxUint64)
 	case tree.PITRLEVELACCOUNT:
 		if len(stmt.AccountName) > 0 {
-			return fmt.Sprintf(sql, createAccountId) + fmt.Sprintf(" and account_name = '%s' and level = 'account';", stmt.AccountName)
+			return fmt.Sprintf(sql, createAccountId) + fmt.Sprintf(" and account_name = '%s' and level = 'account' and pitr_status = 1;", stmt.AccountName)
 		} else {
-			return fmt.Sprintf(sql, createAccountId) + fmt.Sprintf(" and account_name = '%s' and level = 'account';", createAccount)
+			return fmt.Sprintf(sql, createAccountId) + fmt.Sprintf(" and account_name = '%s' and level = 'account' and pitr_status = 1;", createAccount)
 		}
 	case tree.PITRLEVELDATABASE:
-		return fmt.Sprintf(sql, createAccountId) + fmt.Sprintf(" and database_name = '%s' and level = 'database';", stmt.DatabaseName)
+		return fmt.Sprintf(sql, createAccountId) + fmt.Sprintf(" and database_name = '%s' and level = 'database' and pitr_status = 1;", stmt.DatabaseName)
 	case tree.PITRLEVELTABLE:
-		return fmt.Sprintf(sql, createAccountId) + fmt.Sprintf(" and database_name = '%s' and table_name = '%s' and level = 'table';", stmt.DatabaseName, stmt.TableName)
+		return fmt.Sprintf(sql, createAccountId) + fmt.Sprintf(" and database_name = '%s' and table_name = '%s' and level = 'table' and pitr_status = 1;", stmt.DatabaseName, stmt.TableName)
 	}
 	return sql
 }
@@ -2375,7 +2375,7 @@ func updatePitrObjectId(ctx context.Context,
 	sql := getSqlForUpdateMoPitrAccountObjectId(
 		accountName,
 		objId,
-		types.CurrentTimestamp().String2(time.UTC, 0))
+	)
 	err = bh.Exec(ctx, sql)
 	if err != nil {
 		return

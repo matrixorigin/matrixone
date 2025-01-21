@@ -43,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
 
 type inspectContext struct {
@@ -411,7 +412,8 @@ func (c *objectPruneArg) Run() error {
 	TaskCache.Unlock()
 	entry := c.tbl
 
-	it := entry.MakeDataObjectIt()
+	it := entry.MakeDataVisibleObjectIt(txnbase.MockTxnReaderWithNow())
+
 	now := c.ctx.db.TxnMgr.Now()
 	var total, stale, selected int
 	var minR, maxR, totalR, minS, maxS, totalS int

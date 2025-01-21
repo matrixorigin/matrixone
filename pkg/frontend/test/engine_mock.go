@@ -592,20 +592,6 @@ func (mr *MockRelDataMockRecorder) GetType() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetType", reflect.TypeOf((*MockRelData)(nil).GetType))
 }
 
-// GroupByPartitionNum mocks base method.
-func (m *MockRelData) GroupByPartitionNum() map[int16]engine.RelData {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GroupByPartitionNum")
-	ret0, _ := ret[0].(map[int16]engine.RelData)
-	return ret0
-}
-
-// GroupByPartitionNum indicates an expected call of GroupByPartitionNum.
-func (mr *MockRelDataMockRecorder) GroupByPartitionNum() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GroupByPartitionNum", reflect.TypeOf((*MockRelData)(nil).GroupByPartitionNum))
-}
-
 // MarshalBinary mocks base method.
 func (m *MockRelData) MarshalBinary() ([]byte, error) {
 	m.ctrl.T.Helper()
@@ -1320,33 +1306,33 @@ func (mr *MockRelationMockRecorder) MergeObjects(ctx, objstats, targetObjSize in
 }
 
 // PrimaryKeysMayBeModified mocks base method.
-func (m *MockRelation) PrimaryKeysMayBeModified(ctx context.Context, from, to types.TS, keyVector *vector.Vector) (bool, error) {
+func (m *MockRelation) PrimaryKeysMayBeModified(ctx context.Context, from, to types.TS, batch *batch.Batch, pkIndex int32) (bool, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "PrimaryKeysMayBeModified", ctx, from, to, keyVector)
+	ret := m.ctrl.Call(m, "PrimaryKeysMayBeModified", ctx, from, to, batch, pkIndex)
 	ret0, _ := ret[0].(bool)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // PrimaryKeysMayBeModified indicates an expected call of PrimaryKeysMayBeModified.
-func (mr *MockRelationMockRecorder) PrimaryKeysMayBeModified(ctx, from, to, keyVector interface{}) *gomock.Call {
+func (mr *MockRelationMockRecorder) PrimaryKeysMayBeModified(ctx, from, to, batch, pkIndex interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PrimaryKeysMayBeModified", reflect.TypeOf((*MockRelation)(nil).PrimaryKeysMayBeModified), ctx, from, to, keyVector)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PrimaryKeysMayBeModified", reflect.TypeOf((*MockRelation)(nil).PrimaryKeysMayBeModified), ctx, from, to, batch, pkIndex)
 }
 
 // PrimaryKeysMayBeUpserted mocks base method.
-func (m *MockRelation) PrimaryKeysMayBeUpserted(ctx context.Context, from, to types.TS, keyVector *vector.Vector) (bool, error) {
+func (m *MockRelation) PrimaryKeysMayBeUpserted(ctx context.Context, from, to types.TS, batch *batch.Batch, pkIndex int32) (bool, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "PrimaryKeysMayBeUpserted", ctx, from, to, keyVector)
+	ret := m.ctrl.Call(m, "PrimaryKeysMayBeUpserted", ctx, from, to, batch, pkIndex)
 	ret0, _ := ret[0].(bool)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // PrimaryKeysMayBeUpserted indicates an expected call of PrimaryKeysMayBeUpserted.
-func (mr *MockRelationMockRecorder) PrimaryKeysMayBeUpserted(ctx, from, to, keyVector interface{}) *gomock.Call {
+func (mr *MockRelationMockRecorder) PrimaryKeysMayBeUpserted(ctx, from, to, batch, pkIndex interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PrimaryKeysMayBeUpserted", reflect.TypeOf((*MockRelation)(nil).PrimaryKeysMayBeUpserted), ctx, from, to, keyVector)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PrimaryKeysMayBeUpserted", reflect.TypeOf((*MockRelation)(nil).PrimaryKeysMayBeUpserted), ctx, from, to, batch, pkIndex)
 }
 
 // Ranges mocks base method.

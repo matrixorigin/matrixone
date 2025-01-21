@@ -37,9 +37,9 @@ import (
 
 const (
 	InsertWriteS3Threshold uint64 = 128 * mpool.MB
-	DeleteWriteS3Threshold uint64 = 16 * mpool.MB
+	DeleteWriteS3Threshold uint64 = 64 * mpool.MB
 
-	TagS3SizeForMOLogger uint64 = 1 * mpool.MB
+	TagS3SizeForMOLogger uint64 = 8 * mpool.MB
 
 	RowIDIdx = 0
 	PkIdx    = 1
@@ -74,7 +74,8 @@ type s3Writer struct {
 	cacheBatchs *batch.CompactBatchs
 	segmentMap  map[string]int32
 
-	action actionType
+	action   actionType
+	isRemote bool
 
 	updateCtxs     []*MultiUpdateCtx
 	updateCtxInfos map[string]*updateCtxInfo
@@ -118,6 +119,7 @@ func newS3Writer(update *MultiUpdate) (*s3Writer, error) {
 		insertBlockInfo:     make([][]*batch.Batch, tableCount),
 		insertBlockRowCount: make([][]uint64, tableCount),
 		deleteBlockMap:      make([][]map[types.Blockid]*deleteBlockData, tableCount),
+		isRemote:            update.IsRemote,
 	}
 
 	mainIdx := 0
@@ -263,40 +265,20 @@ func (writer *s3Writer) prepareDeleteBatchs(
 func (writer *s3Writer) sortAndSync(proc *process.Process, analyzer process.Analyzer) (err error) {
 	var bats []*batch.Batch
 	for i, updateCtx := range writer.updateCtxs {
-		parititionCount := len(updateCtx.PartitionTableIDs)
-
 		// delete s3
 		if len(updateCtx.DeleteCols) > 0 {
 			var delBatchs []*batch.Batch
-			if parititionCount == 0 {
-				bats, err = fetchSomeVecFromCompactBatchs(writer.cacheBatchs, updateCtx.DeleteCols, DeleteBatchAttrs)
-				if err != nil {
-					return
-				}
-				delBatchs, err = writer.prepareDeleteBatchs(proc, i, 0, bats, false)
-				if err != nil {
-					return
-				}
-				err = writer.sortAndSyncOneTable(proc, analyzer, i, 0, true, delBatchs, true, true)
-				if err != nil {
-					return
-				}
-			} else {
-				// partition table
-				for getPartitionIdx := range parititionCount {
-					bats, err = cloneSomeVecFromCompactBatchs(proc, writer.cacheBatchs, updateCtx.OldPartitionIdx, getPartitionIdx, updateCtx.DeleteCols, DeleteBatchAttrs, 0)
-					if err != nil {
-						return
-					}
-					delBatchs, err = writer.prepareDeleteBatchs(proc, i, getPartitionIdx, bats, true)
-					if err != nil {
-						return
-					}
-					err = writer.sortAndSyncOneTable(proc, analyzer, i, int16(getPartitionIdx), true, delBatchs, true, true)
-					if err != nil {
-						return
-					}
-				}
+			bats, err = fetchSomeVecFromCompactBatchs(writer.cacheBatchs, updateCtx.DeleteCols, DeleteBatchAttrs)
+			if err != nil {
+				return
+			}
+			delBatchs, err = writer.prepareDeleteBatchs(proc, i, 0, bats, false)
+			if err != nil {
+				return
+			}
+			err = writer.sortAndSyncOneTable(proc, analyzer, i, 0, true, delBatchs, true, true)
+			if err != nil {
+				return
 			}
 		}
 
@@ -304,63 +286,50 @@ func (writer *s3Writer) sortAndSync(proc *process.Process, analyzer process.Anal
 		if len(updateCtx.InsertCols) > 0 {
 			insertAttrs := writer.updateCtxInfos[updateCtx.TableDef.Name].insertAttrs
 			isClusterBy := writer.isClusterBys[i]
-			if parititionCount == 0 {
-				needClone := writer.updateCtxInfos[updateCtx.TableDef.Name].tableType != UpdateMainTable //uk&sk need clone
-				if !needClone && writer.sortIdxs[i] > -1 {
+			needClone := writer.updateCtxInfos[updateCtx.TableDef.Name].tableType != UpdateMainTable //uk&sk need clone
+			if !needClone && writer.sortIdxs[i] > -1 {
+				sortIdx := updateCtx.InsertCols[writer.sortIdxs[i]]
+				for j := 0; j < writer.cacheBatchs.Length(); j++ {
+					needSortBat := writer.cacheBatchs.Get(j)
+					if needSortBat.GetVector(int32(sortIdx)).HasNull() {
+						needClone = true
+						break
+					}
+				}
+			}
+
+			var needCleanBatch, needSortBatch bool
+			if needClone {
+				// cluster by do not check if sort vector is null
+				sortIdx := writer.sortIdxs[i]
+				if isClusterBy {
+					sortIdx = -1
+				}
+				bats, err = cloneSomeVecFromCompactBatchs(proc, writer.cacheBatchs, updateCtx.InsertCols, insertAttrs, sortIdx)
+				needSortBatch = true
+				needCleanBatch = true
+			} else {
+				if writer.sortIdxs[i] > -1 {
 					sortIdx := updateCtx.InsertCols[writer.sortIdxs[i]]
 					for j := 0; j < writer.cacheBatchs.Length(); j++ {
 						needSortBat := writer.cacheBatchs.Get(j)
-						if needSortBat.GetVector(int32(sortIdx)).HasNull() {
-							needClone = true
-							break
+						err = colexec.SortByKey(proc, needSortBat, sortIdx, isClusterBy, proc.GetMPool())
+						if err != nil {
+							return
 						}
 					}
 				}
+				bats, err = fetchSomeVecFromCompactBatchs(writer.cacheBatchs, updateCtx.InsertCols, insertAttrs)
+				needSortBatch = false
+				needCleanBatch = false
+			}
 
-				var needCleanBatch, needSortBatch bool
-				if needClone {
-					// cluster by do not check if sort vector is null
-					sortIdx := writer.sortIdxs[i]
-					if isClusterBy {
-						sortIdx = -1
-					}
-					bats, err = cloneSomeVecFromCompactBatchs(proc, writer.cacheBatchs, updateCtx.NewPartitionIdx, 0, updateCtx.InsertCols, insertAttrs, sortIdx)
-					needSortBatch = true
-					needCleanBatch = true
-				} else {
-					if writer.sortIdxs[i] > -1 {
-						sortIdx := updateCtx.InsertCols[writer.sortIdxs[i]]
-						for j := 0; j < writer.cacheBatchs.Length(); j++ {
-							needSortBat := writer.cacheBatchs.Get(j)
-							err = colexec.SortByKey(proc, needSortBat, sortIdx, isClusterBy, proc.GetMPool())
-							if err != nil {
-								return
-							}
-						}
-					}
-					bats, err = fetchSomeVecFromCompactBatchs(writer.cacheBatchs, updateCtx.InsertCols, insertAttrs)
-					needSortBatch = false
-					needCleanBatch = false
-				}
-
-				if err != nil {
-					return
-				}
-				err = writer.sortAndSyncOneTable(proc, analyzer, i, 0, false, bats, needSortBatch, needCleanBatch)
-				if err != nil {
-					return
-				}
-			} else {
-				for getPartitionIdx := range parititionCount {
-					bats, err = cloneSomeVecFromCompactBatchs(proc, writer.cacheBatchs, updateCtx.NewPartitionIdx, getPartitionIdx, updateCtx.InsertCols, insertAttrs, writer.sortIdxs[i])
-					if err != nil {
-						return
-					}
-					err = writer.sortAndSyncOneTable(proc, analyzer, i, int16(getPartitionIdx), false, bats, true, true)
-					if err != nil {
-						return
-					}
-				}
+			if err != nil {
+				return
+			}
+			err = writer.sortAndSyncOneTable(proc, analyzer, i, 0, false, bats, needSortBatch, needCleanBatch)
+			if err != nil {
+				return
 			}
 		}
 	}
@@ -569,7 +538,7 @@ func (writer *s3Writer) fillInsertBlockInfo(
 }
 
 func (writer *s3Writer) flushTailAndWriteToOutput(proc *process.Process, analyzer process.Analyzer) (err error) {
-	if writer.batchSize > TagS3SizeForMOLogger {
+	if writer.isRemote && writer.batchSize > TagS3SizeForMOLogger {
 		//write tail batch to s3
 		err = writer.sortAndSync(proc, analyzer)
 		if err != nil {

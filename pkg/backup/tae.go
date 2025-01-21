@@ -293,6 +293,10 @@ func execBackup(
 	}()
 	now := time.Now()
 	baseTS := ts
+	// When rewriting the checkpoint and trimming the aobject,
+	// you need to collect the atombstone in the last checkpoint
+	// Before this, only the last special checkpoint needs to be collected
+	var lastData *logtail.CheckpointData
 	for i, name := range names {
 		if len(name) == 0 {
 			continue
@@ -322,12 +326,35 @@ func execBackup(
 		}
 		defer data.Close()
 		oNames = append(oNames, oneNames...)
+		if i == len(names)-1 {
+			lastData = data
+		}
 	}
 	loadDuration += time.Since(now)
+
+	dstObj, err := fileservice.SortedList(dstFs.List(ctx, ""))
+	dstHave := make(map[string]bool)
+	if err != nil {
+		return err
+	}
+	if len(dstObj) != 0 && dstObj[0].Name == fileList {
+		data, err := readFile(ctx, dstFs, fileList)
+		if err != nil {
+			return err
+		}
+		objects := strings.Split(string(data), "\n")
+		for _, object := range objects {
+			dstHave[object] = true
+		}
+	}
 	now = time.Now()
 	for _, oName := range oNames {
-		if files[oName.Location.Name().String()] == nil {
-			files[oName.Location.Name().String()] = oName
+		objName := oName.Location.Name().String()
+		if dstHave[objName] {
+			oName.NeedCopy = false
+		}
+		if files[objName] == nil {
+			files[objName] = oName
 		}
 	}
 
@@ -382,7 +409,7 @@ func execBackup(
 			tnLocation      objectio.Location
 		)
 		cnLocation, tnLocation, checkpointFiles, err = logtail.ReWriteCheckpointAndBlockFromKey(ctx, sid, srcFs, dstFs,
-			cnLocation, uint32(version), start)
+			cnLocation, lastData, uint32(version), start)
 		for _, name := range checkpointFiles {
 			dentry, err := dstFs.StatFile(ctx, name)
 			if err != nil {
@@ -414,6 +441,11 @@ func execBackup(
 		})
 	}
 	reWriteDuration += time.Since(now)
+	for _, file := range taeFileList {
+		if dstHave[file.path] {
+			file.needCopy = true
+		}
+	}
 	//save tae files size
 	err = saveTaeFilesList(ctx, dstFs, taeFileList, backupTime, start.ToString(), typ)
 	if err != nil {

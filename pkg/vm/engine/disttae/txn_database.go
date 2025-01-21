@@ -33,7 +33,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	txn2 "github.com/matrixorigin/matrixone/pkg/pb/txn"
-	"github.com/matrixorigin/matrixone/pkg/shardservice"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
@@ -150,11 +149,9 @@ func (db *txnDatabase) relation(ctx context.Context, name string, proc any) (eng
 	}
 
 	tbl, err := newTxnTable(
+		ctx,
 		db,
 		*item,
-		p,
-		shardservice.GetService(p.GetService()),
-		txn.engine,
 	)
 	if err != nil {
 		return nil, err
@@ -354,7 +351,8 @@ func (db *txnDatabase) Truncate(ctx context.Context, name string) (uint64, error
 	if db.op.IsSnapOp() {
 		return 0, moerr.NewInternalErrorNoCtx("truncate table in snapshot transaction")
 	}
-	newId, err := db.getTxn().allocateID(ctx)
+	txn := db.getTxn()
+	newId, err := txn.allocateID(ctx)
 	if err != nil {
 		return 0, err
 	}
@@ -364,6 +362,7 @@ func (db *txnDatabase) Truncate(ctx context.Context, name string) (uint64, error
 		return 0, err
 	}
 
+	txn.tableOps.addCreatedInTxn(newId, txn.statementID)
 	if err := db.createWithID(ctx, name, newId, defs, false); err != nil {
 		return 0, err
 	}
@@ -375,10 +374,12 @@ func (db *txnDatabase) Create(ctx context.Context, name string, defs []engine.Ta
 	if db.op.IsSnapOp() {
 		return moerr.NewInternalErrorNoCtx("create table in snapshot transaction")
 	}
-	tableId, err := db.getTxn().allocateID(ctx)
+	txn := db.getTxn()
+	tableId, err := txn.allocateID(ctx)
 	if err != nil {
 		return err
 	}
+	txn.tableOps.addCreatedInTxn(tableId, txn.statementID)
 	return db.createWithID(ctx, name, tableId, defs, false)
 }
 

@@ -31,6 +31,7 @@ import (
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -350,6 +351,10 @@ func initMoTableStatsConfig(
 
 		eng.dynamicCtx.executorPool = sync.Pool{
 			New: func() interface{} {
+				// only test will into this logic
+				if eng.config.ieFactory == nil {
+					return nil
+				}
 				return eng.config.ieFactory()
 			},
 		}
@@ -411,7 +416,7 @@ func initMoTableStatsConfig(
 				ants.WithNonblocking(false),
 				ants.WithPanicHandler(func(e interface{}) {
 					logutil.Error(logHeader,
-						zap.String("source", "beta task panic"),
+						zap.String("source", "gama task panic"),
 						zap.Any("error", e))
 				})); err != nil {
 				return
@@ -495,6 +500,13 @@ func initMoTableStatsConfig(
 	return err
 }
 
+func (d *dynamicCtx) isBetaRun() bool {
+	d.Lock()
+	defer d.Unlock()
+
+	return d.beta.running
+}
+
 func (d *dynamicCtx) initCronTask(
 	ctx context.Context,
 ) bool {
@@ -548,6 +560,16 @@ type taskState struct {
 	running     bool
 	executor    func(context.Context, string, engine.Engine)
 	launchTimes int
+
+	// for test
+	forbidden bool
+}
+
+func (ts taskState) String() string {
+	return fmt.Sprintf("running(%v)-launchTimes(%v)-forbidden(%v)",
+		ts.running,
+		ts.launchTimes,
+		ts.forbidden)
 }
 
 type dynamicCtx struct {
@@ -950,6 +972,10 @@ func joinAccountDatabaseTable(
 
 func (d *dynamicCtx) executeSQL(ctx context.Context, sql string, hint string) ie.InternalExecResult {
 	exec := d.executorPool.Get()
+	if exec == nil {
+		return nil
+	}
+
 	defer d.executorPool.Put(exec)
 
 	ctx = turn2SysCtx(ctx)
@@ -1054,7 +1080,7 @@ func (d *dynamicCtx) forceUpdateQuery(
 	}
 
 	if err = d.callAlphaWithRetry(
-		ctx, d.de.service, pairs, caller, 2); err != nil {
+		ctx, d.de.service, pairs, caller, 1); err != nil {
 		return nil, err
 	}
 
@@ -1413,7 +1439,7 @@ func buildTablePairFromCache(
 ) (tbl tablePair, ok bool) {
 
 	item := eng.(*Engine).GetLatestCatalogCache().GetTableById(uint32(accId), dbId, tblId)
-	if item == nil {
+	if item == nil || item.IsDeleted() {
 		// account, db, tbl may delete already
 		// the `update_time` not change anymore
 		return
@@ -1438,8 +1464,14 @@ func buildTablePairFromCache(
 }
 
 func (tp *tablePair) String() string {
-	return fmt.Sprintf("%d-%s(%d)-%s(%d)",
-		tp.acc, tp.dbName, tp.db, tp.tblName, tp.tbl)
+	return fmt.Sprintf(
+		"%d-%s(%d)-%s(%d)-valid(%v)-kind(%v)-alphaOrder(%d)-onlyTS(%v)",
+		tp.acc, tp.dbName, tp.db,
+		tp.tblName, tp.tbl,
+		tp.valid,
+		tp.relKind,
+		tp.alphaOrder,
+		tp.onlyUpdateTS)
 }
 
 func (tp *tablePair) Done(err error) {
@@ -1450,6 +1482,8 @@ func (tp *tablePair) Done(err error) {
 		}
 		tp.errChan = nil
 	}
+
+	tp.pState = nil
 }
 
 type statsList struct {
@@ -1534,6 +1568,17 @@ func (d *dynamicCtx) LaunchMTSTasksForUT() {
 	d.launchTask(betaTaskName)
 }
 
+func (d *dynamicCtx) cleanTableStock() {
+	d.Lock()
+	defer d.Unlock()
+
+	for i := range d.tableStock.tbls {
+		// cannot pin this pState
+		d.tableStock.tbls[i].pState = nil
+	}
+	d.tableStock.tbls = d.tableStock.tbls[:0]
+}
+
 func (d *dynamicCtx) tableStatsExecutor(
 	ctx context.Context,
 	service string,
@@ -1541,6 +1586,7 @@ func (d *dynamicCtx) tableStatsExecutor(
 ) (err error) {
 
 	defer func() {
+		d.cleanTableStock()
 		logutil.Info(logHeader,
 			zap.String("source", "table stats top executor"),
 			zap.String("exit by", fmt.Sprintf("%v", err)))
@@ -1586,7 +1632,8 @@ func (d *dynamicCtx) tableStatsExecutor(
 
 			d.Lock()
 
-			if len(d.tableStock.tbls) > 0 && !timeout {
+			executeTicker.Reset(d.conf.UpdateDuration)
+			if len(d.tableStock.tbls) > 0 && !timeout && err == nil {
 				// if alpha timeout, this round should mark as failed,
 				// skip the update of the special stats start.
 				if _, err = d.updateSpecialStatsStart(
@@ -1596,9 +1643,9 @@ func (d *dynamicCtx) tableStatsExecutor(
 				}
 			}
 
-			executeTicker.Reset(d.conf.UpdateDuration)
-			d.tableStock.tbls = d.tableStock.tbls[:0]
 			d.Unlock()
+
+			d.cleanTableStock()
 		}
 	}
 }
@@ -1717,6 +1764,7 @@ func (d *dynamicCtx) alphaTask(
 			zap.Duration("takes", dur),
 			zap.Duration("wait err", waitErrDur),
 			zap.String("caller", caller),
+			zap.Bool("isBetaRunning", d.isBetaRun()),
 			zap.String("timeout tbl", timeoutBuf.String()))
 
 		v2.AlphaTaskDurationHistogram.Observe(dur.Seconds())
@@ -1737,6 +1785,8 @@ func (d *dynamicCtx) alphaTask(
 	errQueue := make(chan alphaError, len(tbls)*2)
 	ticker = time.NewTicker(time.Millisecond * 10)
 
+	var lastError error
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -1744,11 +1794,13 @@ func (d *dynamicCtx) alphaTask(
 			return
 
 		case ae := <-errQueue:
-			if ae.err != nil {
+			if ae.err != nil && !moerr.IsSameMoErr(ae.err, lastError) {
 				logutil.Error(logHeader,
 					zap.String("source", "alpha task received err"),
 					zap.Error(ae.err))
 			}
+
+			lastError = ae.err
 
 			tblBackup[ae.order].valid = false
 
@@ -1771,26 +1823,41 @@ func (d *dynamicCtx) alphaTask(
 					enterWait = true
 				}
 
-				if waitErrDur >= time.Minute*5 {
+				betaRunning := d.isBetaRun()
+
+				if !betaRunning || waitErrDur >= time.Minute*5 {
+					timeoutCnt := 0
 					// waiting reached the limit
 					for i := range tblBackup {
+						// cannot pin this pState
+						tblBackup[i].pState = nil
 						if !tblBackup[i].valid {
 							continue
 						}
+
+						timeoutCnt++
 						timeoutBuf.WriteString(fmt.Sprintf("%d-%d(%v)-%d(%v); ",
 							tblBackup[i].acc, tblBackup[i].db, tblBackup[i].dbName,
 							tblBackup[i].tbl, tblBackup[i].tblName))
 					}
+
+					if timeoutCnt > 20 {
+						timeoutBuf.Reset()
+						timeoutBuf.WriteString(fmt.Sprintf("timeout count: %d", timeoutCnt))
+					}
+
 					return true, nil
 				}
 
-				if waitErrDur > 0 && waitErrDur%(time.Second*30) == 0 {
+				if d.beta.forbidden || (waitErrDur > 0 && waitErrDur%(time.Second*30) == 0) {
+
 					logutil.Warn(logHeader,
 						zap.String("source", "alpha task"),
 						zap.String("event", "waited err another 30s"),
 						zap.String("caller", caller),
 						zap.Int("total", processed),
-						zap.Int("left", errWaitToReceive))
+						zap.Int("left", errWaitToReceive),
+						zap.Bool("is beta running", betaRunning))
 				}
 
 				continue
@@ -1862,6 +1929,11 @@ func (d *dynamicCtx) betaTask(
 			zap.Error(err))
 	}()
 
+	if d.beta.forbidden {
+		err = moerr.NewInternalErrorNoCtx("forbidden")
+		return
+	}
+
 	var (
 		de        = eng.(*Engine)
 		slBat     sync.Map
@@ -1891,11 +1963,15 @@ func (d *dynamicCtx) betaTask(
 				continue
 			}
 
+			// 1. view
+			// 2. no update
+			// 3. deleted table
 			if tbl.pState == nil {
-				// 1. view
-				// 2. no update
-				//err = updateTableOnlyTS(ctx, service, tbl)
-				onlyTSBat = append(onlyTSBat, tbl)
+				if tbl.onlyUpdateTS {
+					onlyTSBat = append(onlyTSBat, tbl)
+				}
+
+				tbl.Done(nil)
 				continue
 			}
 
@@ -2442,6 +2518,10 @@ func (d *dynamicCtx) statsCalculateOp(
 	pState *logtailreplay.PartitionState,
 ) (sl statsList, err error) {
 
+	if pState == nil {
+		return
+	}
+
 	bcs := betaCycleStash{
 		born:       time.Now(),
 		snapshot:   snapshot,
@@ -2759,7 +2839,11 @@ func getChangedTableList(
 	}
 
 	defer func() {
-		err = txnOperator.Commit(newCtx)
+		if err != nil {
+			txnOperator.Rollback(newCtx)
+		} else {
+			err = txnOperator.Commit(newCtx)
+		}
 	}()
 
 	proc := process.NewTopProcess(
@@ -2847,10 +2931,12 @@ func subscribeTable(
 		databaseName: tbl.dbName,
 	}
 
+	txnTbl.fake = true
+	txnTbl.eng = eng
 	txnTbl.relKind = tbl.relKind
 	txnTbl.primarySeqnum = tbl.pkSequence
 
-	if pState, err = eng.(*Engine).PushClient().toSubscribeTable(ctx, &txnTbl); err != nil {
+	if pState, err = txnTbl.tryToSubscribe(ctx); err != nil {
 		return nil, err
 	}
 
@@ -3020,9 +3106,9 @@ func applyTombstones(
 	// here, we only collect the deletes that have not paired inserts
 	// according to its LESS function, the deletes come first
 	var lastInsert logtailreplay.RowEntry
-	err = pState.ScanRows(true, func(entry logtailreplay.RowEntry) (bool, error) {
+	err = pState.ScanRows(true, func(entry *logtailreplay.RowEntry) (bool, error) {
 		if !entry.Deleted {
-			lastInsert = entry
+			lastInsert = *entry
 			return true, nil
 		}
 
@@ -3067,6 +3153,10 @@ func (d *dynamicCtx) bulkUpdateTableStatsList(
 	bat.Range(func(key, value any) bool {
 		tbl := key.(tablePair)
 		sl := value.(statsList)
+
+		if sl.stats == nil {
+			return true
+		}
 
 		tbls = append(tbls, tbl)
 
@@ -3133,7 +3223,12 @@ func (d *dynamicCtx) bulkUpdateTableOnlyTS(
 
 	ret := d.executeSQL(ctx, sql, "bulk update only ts")
 
+	var err error
+	if ret != nil {
+		err = ret.Error()
+	}
+
 	for i := range tbls {
-		tbls[i].Done(ret.Error())
+		tbls[i].Done(err)
 	}
 }

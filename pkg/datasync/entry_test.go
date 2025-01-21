@@ -40,23 +40,24 @@ import (
 )
 
 type mockEntry struct {
-	entryType   uint16
-	version     uint16
-	meta        logservicedriver.Meta
-	entries     []*driverEntry.Entry
-	payloadSize uint64
+	logservicedriver.V1Meta
+	entryType uint16
+	version   uint16
+	entries   []*driverEntry.Entry
 }
 
 func newMockEntry() *mockEntry {
 	return &mockEntry{
 		entryType: objectio.IOET_ObjMeta,
+		version:   logservicedriver.IOET_WALRecord_V1,
 	}
 }
 
 func (m *mockEntry) appendEntry(e *driverEntry.Entry) {
 	m.entries = append(m.entries, e)
-	m.meta.AddAddr(e.Lsn, m.payloadSize)
-	m.payloadSize += uint64(e.GetSize())
+	sz := m.V1Meta.GetPayloadSize()
+	m.V1Meta.AddAddr(e.DSN, sz)
+	m.V1Meta.SetPayloadSize(sz + uint64(e.GetSize()))
 }
 
 func (m *mockEntry) WriteTo(w io.Writer) (int64, error) {
@@ -69,12 +70,12 @@ func (m *mockEntry) WriteTo(w io.Writer) (int64, error) {
 		return 0, err
 	}
 	n += 2
-	nn, err := m.meta.WriteTo(w)
+	nn, err := m.V1Meta.WriteTo(w)
 	if err != nil {
 		return 0, err
 	}
 	n += nn
-	if m.meta.GetType() == logservicedriver.TNormal {
+	if m.V1Meta.GetType() == logservicedriver.Cmd_Normal {
 		for _, e := range m.entries {
 			nn, err := e.WriteTo(w)
 			if err != nil {
@@ -101,13 +102,13 @@ func runWithBaseEnv(fn func(cat *catalog.Catalog, txn txnif.AsyncTxn) error) err
 }
 
 type parameter struct {
-	metaType  logservicedriver.MetaType
+	cmdType   logservicedriver.CmdType
 	groupType uint32
 }
 
 func newParameter() *parameter {
 	return &parameter{
-		metaType:  logservicedriver.TNormal,
+		cmdType:   logservicedriver.Cmd_Normal,
 		groupType: wal.GroupPrepare,
 	}
 }
@@ -117,8 +118,8 @@ func (p *parameter) withGroupType(t uint32) *parameter {
 	return p
 }
 
-func (p *parameter) withMetaType(t logservicedriver.MetaType) *parameter {
-	p.metaType = t
+func (p *parameter) withCmdType(t logservicedriver.CmdType) *parameter {
+	p.cmdType = t
 	return p
 }
 
@@ -182,8 +183,10 @@ func generateCmdPayload(param parameter, loc objectio.Location) ([]byte, error) 
 		drEntry.Entry.PrepareWrite()
 
 		me := newMockEntry()
-		me.meta.SetType(param.metaType)
-		me.appendEntry(drEntry)
+		me.V1Meta.SetType(param.cmdType)
+		if param.cmdType == logservicedriver.Cmd_Normal {
+			me.appendEntry(drEntry)
+		}
 		var buf bytes.Buffer
 		_, err = me.WriteTo(&buf)
 		if err != nil {
@@ -214,7 +217,7 @@ func generateCkpPayload(data []byte) ([]byte, error) {
 	drEntry.Entry.PrepareWrite()
 
 	me := newMockEntry()
-	me.meta.SetType(logservicedriver.TNormal)
+	me.V1Meta.SetType(logservicedriver.Cmd_Normal)
 	me.appendEntry(drEntry)
 	var buf bytes.Buffer
 	_, err = me.WriteTo(&buf)
@@ -244,6 +247,14 @@ func genRecord(payload []byte, upstreamLsn uint64) logservice.LogRecord {
 	return rec
 }
 
+func dataWithValidVersion(p []byte) []byte {
+	if len(p) >= 16 {
+		p[12] = 1
+		p[14] = 1
+	}
+	return p
+}
+
 func TestEntry_ParseLocation(t *testing.T) {
 	t.Run("invalid record type", func(t *testing.T) {
 		rec := logservice.LogRecord{
@@ -261,14 +272,14 @@ func TestEntry_ParseLocation(t *testing.T) {
 
 	t.Run("read buffer error", func(t *testing.T) {
 		rec := logservice.LogRecord{
-			Data: make([]byte, 22),
+			Data: dataWithValidVersion(make([]byte, 22)),
 		}
 		assert.Equal(t, []string(nil), getLocations(rec, ""))
 	})
 
 	t.Run("invalid meta type", func(t *testing.T) {
 		p, err := generateCmdPayload(
-			*newParameter().withMetaType(logservicedriver.TReplay),
+			*newParameter().withCmdType(logservicedriver.Cmd_SkipDSN),
 			genLocation(uuid.New(), 0, 0, 0, 0, 0),
 		)
 		assert.NoError(t, err)

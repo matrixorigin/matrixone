@@ -46,6 +46,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
+	"github.com/matrixorigin/matrixone/pkg/partitionservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -802,6 +803,22 @@ func (s *service) initShardService() {
 	)
 }
 
+func (s *service) initPartitionService() {
+	store := partitionservice.NewStorage(
+		s.cfg.UUID,
+		s.sqlExecutor,
+		s.storeEngine,
+	)
+	s.partitionService = partitionservice.NewService(
+		s.getPartitionServiceConfig(),
+		store,
+	)
+	runtime.ServiceRuntime(s.cfg.UUID).SetGlobalVariables(
+		runtime.PartitionService,
+		s.partitionService,
+	)
+}
+
 func (s *service) GetSQLExecutor() executor.SQLExecutor {
 	return s.sqlExecutor
 }
@@ -1020,6 +1037,7 @@ func (s *service) initProcessCodecService() {
 			s._txnClient,
 			s.fileService,
 			s.lockService,
+			s.partitionService,
 			s.queryClient,
 			s._hakeeperClient,
 			s.udfService,

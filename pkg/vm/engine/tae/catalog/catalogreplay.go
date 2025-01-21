@@ -22,6 +22,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -142,8 +144,9 @@ func (catalog *Catalog) onReplayUpdateTable(cmd *EntryCommand[*TableMVCCNode, *T
 		tbl.TableNode.schema.Store(schema)
 		// alter table rename
 		if schema.Extra.OldName != "" && un.DeletedAt.IsEmpty() {
-			err := tbl.db.RenameTableInTxn(schema.Extra.OldName, schema.Name, tbl.ID, schema.AcInfo.TenantID, un.GetTxn(), true)
-			if err != nil {
+			if err := tbl.db.RenameTableInTxn(
+				schema.Extra.OldName, schema.Name, tbl.ID, schema.AcInfo.TenantID, un.GetTxn(), true,
+			); err != nil {
 				logutil.Warn(schema.String())
 				panic(err)
 			}
@@ -180,25 +183,35 @@ func (catalog *Catalog) onReplayUpdateObject(
 		obj.table = rel
 		obj.ObjectNode = *cmd.node
 		obj.SortHint = catalog.NextObject()
-		obj.EntryMVCCNode = *cmd.mvccNode.EntryMVCCNode
-		obj.CreateNode = *cmd.mvccNode.TxnMVCCNode
-		cmd.mvccNode.TxnMVCCNode = &obj.CreateNode
-		cmd.mvccNode.EntryMVCCNode = &obj.EntryMVCCNode
+		obj.EntryMVCCNode = cmd.mvccNode.EntryMVCCNode
+		obj.CreateNode = cmd.mvccNode.TxnMVCCNode
+		cmd.mvccNode.CommitSideEffect = func(id string, ts types.TS) {
+			obj.CreateNode.ApplyCommit(id)
+			obj.EntryMVCCNode.ApplyCommit(ts)
+			rel.UpdateReplayEntryTs(obj, ts)
+		}
 		obj.ObjectMVCCNode = *cmd.mvccNode.BaseNode
 		obj.ObjectState = ObjectState_Create_ApplyCommit
 		rel.AddEntryLocked(obj)
 	}
 	if cmd.mvccNode.DeletedAt.Equal(&txnif.UncommitTS) {
-		obj, err = rel.GetObjectByID(cmd.ID.ObjectID(), cmd.node.IsTombstone)
+		cobj, err := rel.GetObjectByID(cmd.ID.ObjectID(), cmd.node.IsTombstone)
 		if err != nil {
 			panic(fmt.Sprintf("obj %v not existed, table:\n%v", cmd.ID.String(), rel.StringWithLevel(3)))
 		}
-		obj.EntryMVCCNode = *cmd.mvccNode.EntryMVCCNode
-		obj.DeleteNode = *cmd.mvccNode.TxnMVCCNode
+		obj = cobj.Clone()
+		obj.prevVersion = cobj
+		cobj.nextVersion = obj
+		obj.EntryMVCCNode = cmd.mvccNode.EntryMVCCNode
+		obj.DeleteNode = cmd.mvccNode.TxnMVCCNode
 		obj.ObjectMVCCNode = *cmd.mvccNode.BaseNode
-		cmd.mvccNode.TxnMVCCNode = &obj.DeleteNode
-		cmd.mvccNode.EntryMVCCNode = &obj.EntryMVCCNode
+		cmd.mvccNode.CommitSideEffect = func(id string, ts types.TS) {
+			obj.DeleteNode.ApplyCommit(id)
+			obj.EntryMVCCNode.ApplyCommit(ts)
+			rel.UpdateReplayEntryTs(obj, ts)
+		}
 		obj.ObjectState = ObjectState_Delete_ApplyCommit
+		rel.AddEntryLocked(obj)
 	}
 
 	if obj.objData == nil {
@@ -221,7 +234,9 @@ func (catalog *Catalog) RelayFromSysTableObjects(
 	dataFactory DataFactory,
 	readFunc func(context.Context, *TableEntry, txnif.AsyncTxn) *containers.Batch,
 	sortFunc func([]containers.Vector, int) error,
-) {
+	replayer ObjectListReplayer,
+) (closeCB []func()) {
+	closeCB = make([]func(), 0)
 	db, err := catalog.GetDatabaseByID(pkgcatalog.MO_CATALOG_ID)
 	if err != nil {
 		panic(err)
@@ -265,37 +280,61 @@ func (catalog *Catalog) RelayFromSysTableObjects(
 
 	// replay database catalog
 	if dbBatch := readFunc(ctx, dbTbl, readTxn); dbBatch != nil {
-		defer dbBatch.Close()
+		closeCB = append(closeCB, dbBatch.Close)
 		catalog.ReplayMODatabase(ctx, txnNode, dbBatch)
 	}
 
 	// replay table catalog
 	if tableBatch := readFunc(ctx, tableTbl, readTxn); tableBatch != nil {
-		if err := sortFunc(tableBatch.Vecs, pkgcatalog.MO_TABLES_REL_ID_IDX); err != nil {
+		if err := sortFunc(
+			tableBatch.Vecs, pkgcatalog.MO_TABLES_REL_ID_IDX,
+		); err != nil {
 			panic(err)
 		}
-		defer tableBatch.Close()
+		closeCB = append(closeCB, tableBatch.Close)
 		columnBatch := readFunc(ctx, columnTbl, readTxn)
-		if err := sortFunc(columnBatch.Vecs, pkgcatalog.MO_COLUMNS_ATT_RELNAME_ID_IDX); err != nil {
+		if err := sortFunc(
+			columnBatch.Vecs, pkgcatalog.MO_COLUMNS_ATT_RELNAME_ID_IDX,
+		); err != nil {
 			panic(err)
 		}
-		defer columnBatch.Close()
-		catalog.ReplayMOTables(ctx, txnNode, dataFactory, tableBatch, columnBatch)
+		closeCB = append(closeCB, columnBatch.Close)
+		catalog.ReplayMOTables(
+			ctx, txnNode, dataFactory, tableBatch, columnBatch, replayer,
+		)
 	}
 	// logutil.Info(catalog.SimplePPString(common.PPL3))
+	return
 }
 
 func (catalog *Catalog) ReplayMODatabase(ctx context.Context, txnNode *txnbase.TxnMVCCNode, bat *containers.Batch) {
+	dbids := vector.MustFixedColNoTypeCheck[uint64](
+		bat.GetVectorByName(pkgcatalog.SystemDBAttr_ID).GetDownstreamVector(),
+	)
+	tenantIDs := vector.MustFixedColNoTypeCheck[uint32](
+		bat.GetVectorByName(pkgcatalog.SystemDBAttr_AccID).GetDownstreamVector(),
+	)
+	userIDs := vector.MustFixedColNoTypeCheck[uint32](
+		bat.GetVectorByName(pkgcatalog.SystemDBAttr_Creator).GetDownstreamVector(),
+	)
+	roleIDs := vector.MustFixedColNoTypeCheck[uint32](
+		bat.GetVectorByName(pkgcatalog.SystemDBAttr_Owner).GetDownstreamVector(),
+	)
+	createAts := vector.MustFixedColNoTypeCheck[types.Timestamp](
+		bat.GetVectorByName(pkgcatalog.SystemDBAttr_CreateAt).GetDownstreamVector(),
+	)
 	for i := 0; i < bat.Length(); i++ {
-		dbid := bat.GetVectorByName(pkgcatalog.SystemDBAttr_ID).Get(i).(uint64)
-		name := string(bat.GetVectorByName(pkgcatalog.SystemDBAttr_Name).Get(i).([]byte))
-		tenantID := bat.GetVectorByName(pkgcatalog.SystemDBAttr_AccID).Get(i).(uint32)
-		userID := bat.GetVectorByName(pkgcatalog.SystemDBAttr_Creator).Get(i).(uint32)
-		roleID := bat.GetVectorByName(pkgcatalog.SystemDBAttr_Owner).Get(i).(uint32)
-		createAt := bat.GetVectorByName(pkgcatalog.SystemDBAttr_CreateAt).Get(i).(types.Timestamp)
-		createSql := string(bat.GetVectorByName(pkgcatalog.SystemDBAttr_CreateSQL).Get(i).([]byte))
-		datType := string(bat.GetVectorByName(pkgcatalog.SystemDBAttr_Type).Get(i).([]byte))
-		catalog.onReplayCreateDB(dbid, name, txnNode, tenantID, userID, roleID, createAt, createSql, datType)
+		dbid := dbids[i]
+		name := bat.GetVectorByName(pkgcatalog.SystemDBAttr_Name).GetDownstreamVector().GetStringAt(i)
+		tenantID := tenantIDs[i]
+		userID := userIDs[i]
+		roleID := roleIDs[i]
+		createAt := createAts[i]
+		createSql := bat.GetVectorByName(pkgcatalog.SystemDBAttr_CreateSQL).GetDownstreamVector().GetStringAt(i)
+		datType := bat.GetVectorByName(pkgcatalog.SystemDBAttr_Type).GetDownstreamVector().GetStringAt(i)
+		catalog.onReplayCreateDB(
+			dbid, name, txnNode, tenantID, userID, roleID, createAt, createSql, datType,
+		)
 	}
 }
 
@@ -328,42 +367,73 @@ func (catalog *Catalog) onReplayCreateDB(
 	}
 	_ = catalog.AddEntryLocked(db, nil, true)
 	un := &MVCCNode[*EmptyMVCCNode]{
-		EntryMVCCNode: &EntryMVCCNode{
+		EntryMVCCNode: EntryMVCCNode{
 			CreatedAt: txnNode.End,
 		},
-		TxnMVCCNode: txnNode,
+		TxnMVCCNode: *txnNode,
 	}
 	db.InsertLocked(un)
 }
 
-func (catalog *Catalog) ReplayMOTables(ctx context.Context, txnNode *txnbase.TxnMVCCNode, dataF DataFactory, tblBat, colBat *containers.Batch) {
+func (catalog *Catalog) ReplayMOTables(ctx context.Context, txnNode *txnbase.TxnMVCCNode, dataF DataFactory, tblBat, colBat *containers.Batch, replayer ObjectListReplayer) {
+	tids := vector.MustFixedColNoTypeCheck[uint64](tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_ID).GetDownstreamVector())
+	dbids := vector.MustFixedColNoTypeCheck[uint64](tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_DBID).GetDownstreamVector())
+	versions := vector.MustFixedColNoTypeCheck[uint32](tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Version).GetDownstreamVector())
+	catalogVersions := vector.MustFixedColNoTypeCheck[uint32](tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_CatalogVersion).GetDownstreamVector())
+	partitioneds := vector.MustFixedColNoTypeCheck[int8](tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Partitioned).GetDownstreamVector())
+	roleIDs := vector.MustFixedColNoTypeCheck[uint32](tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Owner).GetDownstreamVector())
+	userIDs := vector.MustFixedColNoTypeCheck[uint32](tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Creator).GetDownstreamVector())
+	createAts := vector.MustFixedColNoTypeCheck[types.Timestamp](tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_CreateAt).GetDownstreamVector())
+	tenantIDs := vector.MustFixedColNoTypeCheck[uint32](tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_AccID).GetDownstreamVector())
+
+	colTids := vector.MustFixedColNoTypeCheck[uint64](colBat.GetVectorByName(pkgcatalog.SystemColAttr_RelID).GetDownstreamVector())
+	nullables := vector.MustFixedColNoTypeCheck[int8](colBat.GetVectorByName(pkgcatalog.SystemColAttr_NullAbility).GetDownstreamVector())
+	isHiddens := vector.MustFixedColNoTypeCheck[int8](colBat.GetVectorByName(pkgcatalog.SystemColAttr_IsHidden).GetDownstreamVector())
+	clusterbys := vector.MustFixedColNoTypeCheck[int8](colBat.GetVectorByName(pkgcatalog.SystemColAttr_IsClusterBy).GetDownstreamVector())
+	autoIncrements := vector.MustFixedColNoTypeCheck[int8](colBat.GetVectorByName(pkgcatalog.SystemColAttr_IsAutoIncrement).GetDownstreamVector())
+	idxes := vector.MustFixedColNoTypeCheck[int32](colBat.GetVectorByName(pkgcatalog.SystemColAttr_Num).GetDownstreamVector())
+	seqNums := vector.MustFixedColNoTypeCheck[uint16](colBat.GetVectorByName(pkgcatalog.SystemColAttr_Seqnum).GetDownstreamVector())
+
 	schemaOffset := 0
 	for i := 0; i < tblBat.Length(); i++ {
-		tid := tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_ID).Get(i).(uint64)
-		dbid := tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_DBID).Get(i).(uint64)
-		name := string(tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Name).Get(i).([]byte))
-		schema := NewEmptySchema(name)
-		schemaOffset = schema.ReadFromBatch(colBat, schemaOffset, tid)
-		schema.Comment = string(tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Comment).Get(i).([]byte))
-		schema.Version = tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Version).Get(i).(uint32)
-		schema.CatalogVersion = tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_CatalogVersion).Get(i).(uint32)
-		schema.Partitioned = tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Partitioned).Get(i).(int8)
-		schema.Partition = string(tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Partition).Get(i).([]byte))
-		schema.Relkind = string(tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Kind).Get(i).([]byte))
-		schema.Createsql = string(tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_CreateSQL).Get(i).([]byte))
-		schema.View = string(tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_ViewDef).Get(i).([]byte))
-		schema.Constraint = tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Constraint).Get(i).([]byte)
-		schema.AcInfo = accessInfo{}
-		schema.AcInfo.RoleID = tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Owner).Get(i).(uint32)
-		schema.AcInfo.UserID = tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Creator).Get(i).(uint32)
-		schema.AcInfo.CreateAt = tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_CreateAt).Get(i).(types.Timestamp)
-		schema.AcInfo.TenantID = tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_AccID).Get(i).(uint32)
-		extra := tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_ExtraInfo).Get(i).([]byte)
-		schema.MustRestoreExtra(extra)
-		if err := schema.Finalize(true); err != nil {
-			panic(err)
+		startOffset := schemaOffset
+		tid := tids[i]
+		for i := startOffset; i < len(colTids); i++ {
+			if tid != colTids[i] {
+				schemaOffset = i
+				break
+			}
 		}
-		catalog.onReplayCreateTable(dbid, tid, schema, txnNode, dataF)
+		replayFn := func() {
+			dbid := dbids[i]
+			name := tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Name).GetDownstreamVector().GetStringAt(i)
+			schema := NewEmptySchema(name)
+			schema.ReadFromBatch(
+				colBat, colTids, nullables, isHiddens, clusterbys, autoIncrements, idxes, seqNums, startOffset, tid,
+			)
+			schema.Comment = tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Comment).GetDownstreamVector().GetStringAt(i)
+			schema.Version = versions[i]
+			schema.CatalogVersion = catalogVersions[i]
+			schema.Partitioned = partitioneds[i]
+			schema.Partition = tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Partition).GetDownstreamVector().GetStringAt(i)
+			schema.Relkind = tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Kind).GetDownstreamVector().GetStringAt(i)
+			schema.Createsql = tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_CreateSQL).GetDownstreamVector().GetStringAt(i)
+			schema.View = tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_ViewDef).GetDownstreamVector().GetStringAt(i)
+			schema.Constraint = tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Constraint).GetDownstreamVector().CloneBytesAt(i)
+			schema.AcInfo = accessInfo{}
+			schema.AcInfo.RoleID = roleIDs[i]
+			schema.AcInfo.UserID = userIDs[i]
+			schema.AcInfo.CreateAt = createAts[i]
+			schema.AcInfo.TenantID = tenantIDs[i]
+			// unmarshal before releasing, no need to copy
+			extra := tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_ExtraInfo).GetDownstreamVector().GetBytesAt(i)
+			schema.MustRestoreExtra(extra)
+			if err := schema.Finalize(true); err != nil {
+				panic(err)
+			}
+			catalog.onReplayCreateTable(dbid, tid, schema, txnNode, dataF)
+		}
+		replayer.Submit(dbids[i], replayFn)
 	}
 }
 
@@ -381,10 +451,10 @@ func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, tx
 		}
 		// alter table
 		un := &MVCCNode[*TableMVCCNode]{
-			EntryMVCCNode: &EntryMVCCNode{
+			EntryMVCCNode: EntryMVCCNode{
 				CreatedAt: tblCreatedAt,
 			},
-			TxnMVCCNode: txnNode,
+			TxnMVCCNode: *txnNode,
 			BaseNode: &TableMVCCNode{
 				Schema:          schema,
 				TombstoneSchema: GetTombstoneSchema(schema),
@@ -414,10 +484,10 @@ func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, tx
 	tbl.tableData = dataFactory.MakeTableFactory()(tbl)
 	_ = db.AddEntryLocked(tbl, nil, true)
 	un := &MVCCNode[*TableMVCCNode]{
-		EntryMVCCNode: &EntryMVCCNode{
+		EntryMVCCNode: EntryMVCCNode{
 			CreatedAt: txnNode.End,
 		},
-		TxnMVCCNode: txnNode,
+		TxnMVCCNode: *txnNode,
 		BaseNode: &TableMVCCNode{
 			Schema:          schema,
 			TombstoneSchema: GetTombstoneSchema(schema),
@@ -425,22 +495,157 @@ func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, tx
 	}
 	tbl.InsertLocked(un)
 }
-
-func (catalog *Catalog) OnReplayObjectBatch(replayer ObjectListReplayer, objectInfo *containers.Batch, isTombstone bool, dataFactory DataFactory, forSys bool) {
-	tids := vector.MustFixedColNoTypeCheck[uint64](objectInfo.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector())
-	dbids := vector.MustFixedColNoTypeCheck[uint64](objectInfo.GetVectorByName(SnapshotAttr_DBID).GetDownstreamVector())
-	commitTSs := vector.MustFixedColNoTypeCheck[types.TS](objectInfo.GetVectorByName(txnbase.SnapshotAttr_CommitTS).GetDownstreamVector())
-	prepareTSs := vector.MustFixedColNoTypeCheck[types.TS](objectInfo.GetVectorByName(txnbase.SnapshotAttr_PrepareTS).GetDownstreamVector())
-	startTSs := vector.MustFixedColNoTypeCheck[types.TS](objectInfo.GetVectorByName(txnbase.SnapshotAttr_StartTS).GetDownstreamVector())
-	createTSs := vector.MustFixedColNoTypeCheck[types.TS](objectInfo.GetVectorByName(EntryNode_CreateAt).GetDownstreamVector())
-	deleteTSs := vector.MustFixedColNoTypeCheck[types.TS](objectInfo.GetVectorByName(EntryNode_DeleteAt).GetDownstreamVector())
+func (catalog *Catalog) OnReplayObjectBatch_V2(
+	vecs containers.Vectors,
+	dataFactory DataFactory,
+	start, end int,
+) {
+	dbid := vector.GetFixedAtNoTypeCheck[uint64](
+		&vecs[ioutil.TableObjectsAttr_DB_Idx], start,
+	)
+	db, err := catalog.GetDatabaseByID(dbid)
+	if err != nil {
+		// As replaying only the catalog view at the end time of lastest checkpoint
+		// it is normal fot deleted db or table to be missed
+		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+			return
+		}
+		logutil.Info(catalog.SimplePPString(common.PPL3))
+		panic(err)
+	}
+	tid := vector.GetFixedAtNoTypeCheck[uint64](
+		&vecs[ioutil.TableObjectsAttr_Table_Idx], start,
+	)
+	rel, err := db.GetTableEntryByID(tid)
+	if err != nil {
+		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+			return
+		}
+		logutil.Info(catalog.SimplePPString(common.PPL3))
+		panic(err)
+	}
+	statsVec := vecs[4]
+	objectTypes := vector.MustFixedColNoTypeCheck[int8](
+		&vecs[ioutil.TableObjectsAttr_ObjectType_Idx],
+	)
+	createTSs := vector.MustFixedColNoTypeCheck[types.TS](
+		&vecs[ioutil.TableObjectsAttr_CreateTS_Idx],
+	)
+	deleteTSs := vector.MustFixedColNoTypeCheck[types.TS](
+		&vecs[ioutil.TableObjectsAttr_DeleteTS_Idx],
+	)
+	for i := start; i < end; i++ {
+		stats := objectio.ObjectStats(statsVec.GetBytesAt(i))
+		objID := stats.ObjectName().ObjectId()
+		var isTombstone bool
+		switch objectTypes[i] {
+		case ioutil.ObjectType_Data:
+			isTombstone = false
+		case ioutil.ObjectType_Tombstone:
+			isTombstone = true
+		default:
+			panic(fmt.Sprintf("invalid object type %d", objectTypes[i]))
+		}
+		obj, err := rel.GetObjectByID(objID, isTombstone)
+		if err != nil && !moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+			panic(err)
+		}
+		if obj == nil {
+			obj = &ObjectEntry{
+				table: rel,
+				ObjectNode: ObjectNode{
+					SortHint:    catalog.NextObject(),
+					IsTombstone: isTombstone,
+					forcePNode:  true, // any object replayed from checkpoint is forced to be created
+				},
+				EntryMVCCNode: EntryMVCCNode{
+					CreatedAt: createTSs[i],
+				},
+				ObjectMVCCNode: ObjectMVCCNode{
+					ObjectStats: stats,
+				},
+				CreateNode: txnbase.TxnMVCCNode{
+					Start:   createTSs[i].Prev(),
+					Prepare: createTSs[i],
+					End:     createTSs[i],
+				},
+				ObjectState: ObjectState_Create_ApplyCommit,
+			}
+			rel.AddEntryLocked(obj)
+			if !deleteTSs[i].IsEmpty() {
+				dropped := obj.Clone()
+				dropped.DeletedAt = deleteTSs[i]
+				dropped.DeleteNode = txnbase.TxnMVCCNode{
+					Start:   deleteTSs[i].Prev(),
+					Prepare: deleteTSs[i],
+					End:     deleteTSs[i],
+				}
+				dropped.prevVersion = obj
+				obj.nextVersion = dropped
+				dropped.ObjectState = ObjectState_Delete_ApplyCommit
+				rel.AddEntryLocked(dropped)
+			}
+		} else {
+			if obj.DeletedAt.IsEmpty() {
+				dropped := obj.Clone()
+				dropped.DeletedAt = deleteTSs[i]
+				dropped.DeleteNode = txnbase.TxnMVCCNode{
+					Start:   deleteTSs[i].Prev(),
+					Prepare: deleteTSs[i],
+					End:     deleteTSs[i],
+				}
+				dropped.prevVersion = obj
+				obj.nextVersion = dropped
+				dropped.ObjectState = ObjectState_Delete_ApplyCommit
+				rel.AddEntryLocked(dropped)
+			}
+		}
+		if obj.objData == nil {
+			obj.objData = dataFactory.MakeObjectFactory()(obj)
+		} else {
+			deleteAt := obj.GetDeleteAt()
+			if !obj.IsAppendable() || (obj.IsAppendable() && !deleteAt.IsEmpty()) {
+				obj.objData.TryUpgrade()
+			}
+		}
+	}
+}
+func (catalog *Catalog) OnReplayObjectBatch(
+	replayer ObjectListReplayer,
+	objectInfo *containers.Batch,
+	isTombstone bool,
+	dataFactory DataFactory,
+	forSys bool,
+) {
+	tids := vector.MustFixedColNoTypeCheck[uint64](
+		objectInfo.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector(),
+	)
+	dbids := vector.MustFixedColNoTypeCheck[uint64](
+		objectInfo.GetVectorByName(SnapshotAttr_DBID).GetDownstreamVector(),
+	)
+	commitTSs := vector.MustFixedColNoTypeCheck[types.TS](
+		objectInfo.GetVectorByName(txnbase.SnapshotAttr_CommitTS).GetDownstreamVector(),
+	)
+	prepareTSs := vector.MustFixedColNoTypeCheck[types.TS](
+		objectInfo.GetVectorByName(txnbase.SnapshotAttr_PrepareTS).GetDownstreamVector(),
+	)
+	startTSs := vector.MustFixedColNoTypeCheck[types.TS](
+		objectInfo.GetVectorByName(txnbase.SnapshotAttr_StartTS).GetDownstreamVector(),
+	)
+	createTSs := vector.MustFixedColNoTypeCheck[types.TS](
+		objectInfo.GetVectorByName(EntryNode_CreateAt).GetDownstreamVector(),
+	)
+	deleteTSs := vector.MustFixedColNoTypeCheck[types.TS](
+		objectInfo.GetVectorByName(EntryNode_DeleteAt).GetDownstreamVector(),
+	)
+	objs := objectInfo.GetVectorByName(ObjectAttr_ObjectStats).GetDownstreamVector()
 	for i, tid := range tids {
 		if forSys != pkgcatalog.IsSystemTable(tid) {
 			continue
 		}
 		replayFn := func() {
 			dbid := dbids[i]
-			objectNode := ReadObjectInfoTuple(objectInfo, i)
+			objectNode := ReadObjectInfoTuple(objs, i)
 			sid := objectNode.ObjectName().ObjectId()
 			catalog.onReplayCheckpointObject(
 				dbid, tid, sid, createTSs[i], deleteTSs[i], startTSs[i], prepareTSs[i], commitTSs[i], objectNode, isTombstone, dataFactory)
@@ -509,17 +714,21 @@ func (catalog *Catalog) onReplayCheckpointObject(
 				createTS.ToString(), deleteTS.ToString(), isTombstone, objNode.String(),
 				start.ToString(), prepare.ToString(), end.ToString(), rel.StringWithLevel(3)))
 		}
-		obj.EntryMVCCNode = EntryMVCCNode{
+		deleteNode := obj.Clone()
+		obj.nextVersion = deleteNode
+		deleteNode.prevVersion = obj
+		deleteNode.EntryMVCCNode = EntryMVCCNode{
 			CreatedAt: createTS,
 			DeletedAt: deleteTS,
 		}
-		obj.ObjectMVCCNode = *objNode
-		obj.DeleteNode = txnbase.TxnMVCCNode{
+		deleteNode.ObjectMVCCNode = *objNode
+		deleteNode.DeleteNode = txnbase.TxnMVCCNode{
 			Start:   start,
 			Prepare: prepare,
 			End:     end,
 		}
-		obj.ObjectState = ObjectState_Delete_ApplyCommit
+		deleteNode.ObjectState = ObjectState_Delete_ApplyCommit
+		rel.AddEntryLocked(deleteNode)
 	}
 	if !createTS.Equal(&end) && !deleteTS.Equal(&end) {
 		// In back up, aobj is replaced with naobj and its DeleteAt is removed.
@@ -530,7 +739,7 @@ func (catalog *Catalog) onReplayCheckpointObject(
 			rel.AddEntryLocked(obj)
 			_, sarg, _ := fault.TriggerFault("back up UT")
 			if sarg == "" {
-				obj.CreateNode = *txnbase.NewTxnMVCCNodeWithTS(obj.CreatedAt)
+				obj.CreateNode = txnbase.NewTxnMVCCNodeWithTS(obj.CreatedAt)
 			}
 			logutil.Warnf("obj %v, tbl %v-%d create %v, delete %v, end %v",
 				objid.String(), rel.fullName, rel.ID, createTS.ToString(),
@@ -545,8 +754,8 @@ func (catalog *Catalog) onReplayCheckpointObject(
 					obj = newObject()
 					rel.AddEntryLocked(obj)
 				}
-				obj.CreateNode = *txnbase.NewTxnMVCCNodeWithTS(createTS)
-				obj.DeleteNode = *txnbase.NewTxnMVCCNodeWithTS(deleteTS)
+				obj.CreateNode = txnbase.NewTxnMVCCNodeWithTS(createTS)
+				obj.DeleteNode = txnbase.NewTxnMVCCNodeWithTS(deleteTS)
 			}
 		}
 	}
@@ -569,31 +778,22 @@ func (catalog *Catalog) onReplayCheckpointObject(
 }
 
 func (catalog *Catalog) ReplayTableRows() {
-	rows := uint64(0)
-	tableProcessor := new(LoopProcessor)
-	tableProcessor.ObjectFn = func(be *ObjectEntry) error {
-		if !be.IsActive() {
-			return nil
-		}
-		rows += be.GetObjectData().GetRowsOnReplay()
-		return nil
-	}
-	tableProcessor.TombstoneFn = func(be *ObjectEntry) error {
-		if !be.IsActive() {
-			return nil
-		}
-		rows -= be.GetObjectData().GetRowsOnReplay()
-		return nil
-	}
 	processor := new(LoopProcessor)
 	processor.TableFn = func(tbl *TableEntry) error {
 		if tbl.db.name == pkgcatalog.MO_CATALOG {
 			return nil
 		}
-		rows = 0
-		err := tbl.RecurLoop(tableProcessor)
-		if err != nil {
-			panic(err)
+		rows := uint64(0)
+		reader := txnbase.MockTxnReaderWithNow()
+		it := tbl.MakeDataVisibleObjectIt(reader)
+		defer it.Release()
+		for it.Next() {
+			rows += it.Item().GetObjectData().GetRowsOnReplay()
+		}
+		it = tbl.MakeTombstoneVisibleObjectIt(reader)
+		defer it.Release()
+		for it.Next() {
+			rows -= it.Item().GetObjectData().GetRowsOnReplay()
 		}
 		tbl.rows.Store(rows)
 		return nil

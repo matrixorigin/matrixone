@@ -117,9 +117,13 @@ drop snapshot spsp01;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
 drop database if exists sp_test01;
+
 create database sp_test01;
+
 use sp_test01;
+
 drop table if exists partition01;
+
 create table partition01 (
 emp_no      int             not null,
 birth_date  date            not null,
@@ -134,30 +138,40 @@ partition p02 values less than (200001),
 partition p03 values less than (300001),
 partition p04 values less than (400001)
 );
+
 insert into partition01 values (9001,'1980-12-17', 'SMITH', 'CLERK', 'F', '2008-12-17'),
 (9002,'1981-02-20', 'ALLEN', 'SALESMAN', 'F', '2008-02-20');
+
 drop snapshot if exists spsp02;
+
 create snapshot spsp02 for database sp_test01;
+
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
 spsp02    2024-12-30 09:08:58.518045    database    sys    sp_test01    
 delete from partition01 where birth_date = '1980-12-17';
+
 select * from partition01;
 emp_no    birth_date    first_name    last_name    gender    hire_date
 9002    1981-02-20    ALLEN    SALESMAN    F    2008-02-20
 restore account sys database sp_test01 from snapshot spsp02 ;
+
 select * from partition01;
 emp_no    birth_date    first_name    last_name    gender    hire_date
 9001    1980-12-17    SMITH    CLERK    F    2008-12-17
 9002    1981-02-20    ALLEN    SALESMAN    F    2008-02-20
 drop table partition01;
+
 restore account sys database sp_test01 table partition01 from snapshot spsp02;
+
 select * from partition01;
 emp_no    birth_date    first_name    last_name    gender    hire_date
 9001    1980-12-17    SMITH    CLERK    F    2008-12-17
 9002    1981-02-20    ALLEN    SALESMAN    F    2008-02-20
 drop database sp_test01;
+
 drop snapshot spsp02;
+
 drop database if exists sp_test02;
 create database sp_test02;
 use sp_test02;
@@ -166,7 +180,7 @@ drop snapshot if exists `SELECT`;
 create snapshot `SELECT` for database sp_test02;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-select    2024-12-30 09:08:59.159408    database    sys    sp_test02    
+select    2025-01-17 03:40:58.952534    database    sys    sp_test02    
 select sname, level, account_name, database_name, table_name from mo_catalog.mo_snapshots;
 sname    level    account_name    database_name    table_name
 select    database    sys    sp_test02    
@@ -180,7 +194,7 @@ drop snapshot if exists AUTO_INCREMENT;
 create snapshot AUTO_INCREMENT for database sp_test03;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-auto_increment    2024-12-30 09:08:59.409431    database    sys    sp_test03    
+auto_increment    2025-01-17 03:40:59.225357    database    sys    sp_test03    
 select sname, level, account_name, database_name, table_name from mo_catalog.mo_snapshots;
 sname    level    account_name    database_name    table_name
 auto_increment    database    sys    sp_test03    
@@ -215,7 +229,7 @@ drop database sp_Test03;
 drop snapshot SP01;
 drop snapshot if exists sp_nor01;
 create snapshot sp_nor01 for database system;
-internal error: can not create snapshot for current database system
+internal error: can not create snapshot for system database system
 drop database if exists db01;
 create database db01;
 use db01;
@@ -236,8 +250,8 @@ create snapshot spsp02 for database db02;
 create snapshot spsp03 for table db02 table01;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-spsp03    2024-12-30 09:09:00.460849    table    sys    db02    table01
-spsp02    2024-12-30 09:09:00.424832    database    sys    db02    
+spsp03    2025-01-17 03:41:00.18732    table    sys    db02    table01
+spsp02    2025-01-17 03:41:00.160928    database    sys    db02    
 select sname, level, account_name, database_name, table_name from mo_catalog.mo_snapshots where level = 'database';
 sname    level    account_name    database_name    table_name
 spsp02    database    sys    db02    
@@ -268,21 +282,18 @@ drop database db10;
 drop role role1;
 drop user user1;
 use mo_catalog;
-
 drop table if exists t1;
-
 create cluster table t1(a int);
-
 insert into t1 values(1,6),(2,6),(3,6);
-
 select * from t1;
-
+a    account_id
+1    6
+2    6
+3    6
 drop snapshot if exists spsp07;
-
 create snapshot spsp07 for table mo_catalog t1;
-
+internal error: can not create snapshot for cluster table mo_catalog.t1
 drop table t1;
-
 drop database if exists db10;
 create database db10;
 use db10;
@@ -468,14 +479,14 @@ col1    load_file(col2)
 1    1000-01-01,0001-01-01,1970-01-01 00:00:01,0\n9999-12-31,9999-12-31,2038-01-19,1\n
 select * from test01;
 col1    col2
-1    file:///Users/ariznawl/matrixone/test/distributed/resources/load_data/time_date_1.csv
+1    file:///Users/ariznawl/code/matrixone/test/distributed/resources/load_data/time_date_1.csv
 drop snapshot if exists spsp10;
 create snapshot spsp10 for database db10;
 drop table test01;
 restore account sys database db10 table test01 from snapshot spsp10;
 select * from db10.test01;
 col1    col2
-1    file:///Users/ariznawl/matrixone/test/distributed/resources/load_data/time_date_1.csv
+1    file:///Users/ariznawl/code/matrixone/test/distributed/resources/load_data/time_date_1.csv
 drop database db10;
 drop snapshot spsp10;
 drop account acc01;

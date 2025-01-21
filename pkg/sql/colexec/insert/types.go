@@ -41,11 +41,12 @@ type container struct {
 	buf                *batch.Batch
 	affectedRows       uint64
 
-	source           engine.Relation
-	partitionSources []engine.Relation // Align array index with the partition number
+	source engine.Relation
 }
 
 type Insert struct {
+	delegated bool
+	input     vm.CallResult
 	ctr       container
 	ToWriteS3 bool // mark if this insert's target is S3 or not.
 	InsertCtx *InsertCtx
@@ -86,14 +87,11 @@ func (insert *Insert) Release() {
 
 type InsertCtx struct {
 	// insert data into Rel.
-	Engine                engine.Engine
-	Ref                   *plan.ObjectRef
-	AddAffectedRows       bool     // for hidden table, should not update affect Rows
-	Attrs                 []string // letter case: origin
-	PartitionTableIDs     []uint64 // Align array index with the partition number
-	PartitionTableNames   []string // Align array index with the partition number
-	PartitionIndexInBatch int      // The array index position of the partition expression column
-	TableDef              *plan.TableDef
+	Engine          engine.Engine
+	Ref             *plan.ObjectRef
+	AddAffectedRows bool     // for hidden table, should not update affect Rows
+	Attrs           []string // letter case: origin
+	TableDef        *plan.TableDef
 }
 
 func (insert *Insert) Reset(proc *process.Process, pipelineFailed bool, err error) {

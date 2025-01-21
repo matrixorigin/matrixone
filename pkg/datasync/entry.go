@@ -15,7 +15,6 @@
 package datasync
 
 import (
-	"bytes"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -51,31 +50,19 @@ func getLocations(rec logservice.LogRecord, tag string) []string {
 		logutil.Errorf("invalid data size %d", len(data))
 		return nil
 	}
-	buffer := bytes.NewBuffer(data[dataHeaderSize:])
-	m := &logservicedriver.Meta{}
-	_, err := m.ReadFrom(buffer)
-	if err != nil {
-		logutil.Errorf("failed to read data from buffer: %v", err)
-		return nil
-	}
-	if m.GetType() != logservicedriver.TNormal {
-		return nil
-	}
 	var locations []string
-	for range m.GetAddr() {
-		e := entry.NewEmptyEntry()
-		_, err := e.ReadFrom(buffer)
-		if err != nil {
-			logutil.Errorf("failed to read data from buffer: %v", err)
-			return nil
-		}
-		ei := e.Entry.GetInfo().(*entry2.Info)
-		payload := e.Entry.GetPayload()
+	_, err := logservicedriver.DecodeLogEntry(data[headerSize+replicaIDSize:], func(en *entry.Entry) {
+		ei := en.Entry.GetInfo().(*entry2.Info)
+		payload := en.Entry.GetPayload()
 		if ei.Group == wal.GroupPrepare {
 			locations = append(locations, parseCommonFiles(payload, tag)...)
 		} else if ei.Group == store.GroupFiles {
 			locations = append(locations, parseMetaFiles(payload, tag)...)
 		}
+	})
+	if err != nil {
+		logutil.Errorf("decode logentry error %s", err.Error())
+		return nil
 	}
 	return locations
 }

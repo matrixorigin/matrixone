@@ -39,8 +39,9 @@ var (
 )
 
 type Field struct {
-	Val    string
-	IsNull bool
+	Val            string
+	IsNull         bool
+	HasStringQuote bool
 }
 
 type escapeFlavor uint8
@@ -284,6 +285,7 @@ func (parser *CSVParser) readRow(row []Field) ([]Field, error) {
 		}
 		row[i].IsNull = isNull
 		row[i].Val = unescaped
+		row[i].HasStringQuote = parser.fieldIsQuoted[i]
 		preIdx = idx
 	}
 

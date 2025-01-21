@@ -18,6 +18,9 @@ import (
 	"bytes"
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -25,6 +28,7 @@ import (
 )
 
 var _ engine.RelData = new(BlockListRelData)
+var _ engine.RelData = new(ObjListRelData)
 
 func UnmarshalRelationData(data []byte) (engine.RelData, error) {
 	typ := engine.RelDataType(data[0])
@@ -59,6 +63,10 @@ func (rd *EmptyRelationData) String() string {
 }
 
 func (rd *EmptyRelationData) GetShardIDList() []uint64 {
+	panic("not supported")
+}
+
+func (rd *EmptyRelationData) Split(_ int) []engine.RelData {
 	panic("not supported")
 }
 
@@ -171,10 +179,6 @@ func (rd *EmptyRelationData) DataSlice(begin, end int) engine.RelData {
 	panic("Not Supported")
 }
 
-func (rd *EmptyRelationData) GroupByPartitionNum() map[int16]engine.RelData {
-	panic("Not Supported")
-}
-
 func (rd *EmptyRelationData) AppendDataBlk(blk any) {
 	panic("Not Supported")
 }
@@ -203,6 +207,163 @@ func NewBlockListRelationDataOfObject(
 	return &BlockListRelData{
 		blklist: slice,
 	}
+}
+
+type ObjListRelData struct {
+	NeedFirstEmpty   bool
+	expanded         bool
+	TotalBlocks      uint32
+	Objlist          []objectio.ObjectStats
+	Rsp              *engine.RangesShuffleParam
+	blocklistRelData BlockListRelData
+}
+
+func (or *ObjListRelData) expand() {
+	if !or.expanded {
+		or.expanded = true
+		or.blocklistRelData.blklist = objectio.MultiObjectStatsToBlockInfoSlice(or.Objlist, or.NeedFirstEmpty)
+	}
+}
+
+func (or *ObjListRelData) AppendObj(obj *objectio.ObjectStats) {
+	or.Objlist = append(or.Objlist, *obj)
+	or.TotalBlocks += obj.BlkCnt()
+}
+
+func (or *ObjListRelData) GetType() engine.RelDataType {
+	return engine.RelDataObjList
+}
+
+func (or *ObjListRelData) String() string {
+	return "ObjListRelData"
+}
+
+func (or *ObjListRelData) GetShardIDList() []uint64 {
+	panic("not supported")
+}
+func (or *ObjListRelData) GetShardID(i int) uint64 {
+	panic("not supported")
+}
+func (or *ObjListRelData) SetShardID(i int, id uint64) {
+	panic("not supported")
+}
+func (or *ObjListRelData) AppendShardID(id uint64) {
+	panic("not supported")
+}
+
+func (or *ObjListRelData) Split(cpunum int) []engine.RelData {
+	rsp := or.Rsp
+	if len(or.Objlist) < cpunum || or.TotalBlocks < 64 || rsp == nil || !rsp.Node.Stats.HashmapStats.Shuffle || rsp.Node.Stats.HashmapStats.ShuffleType != plan.ShuffleType_Range {
+		//dont need to range shuffle, just split average
+		or.expand()
+		return or.blocklistRelData.Split(cpunum)
+	}
+	//split by range shuffle
+	result := make([]engine.RelData, cpunum)
+	for i := range result {
+		result[i] = or.blocklistRelData.BuildEmptyRelData(int(or.TotalBlocks) / cpunum)
+	}
+	if or.NeedFirstEmpty {
+		result[0].AppendBlockInfo(&objectio.EmptyBlockInfo)
+	}
+	for i := range or.Objlist {
+		shuffleIDX := int(plan2.CalcRangeShuffleIDXForObj(rsp, &or.Objlist[i], int(rsp.CNCNT)*cpunum)) % cpunum
+		blks := objectio.ObjectStatsToBlockInfoSlice(&or.Objlist[i], false)
+		result[shuffleIDX].AppendBlockInfoSlice(blks)
+	}
+	//make result average
+	for {
+		maxCnt := result[0].DataCnt()
+		minCnt := result[0].DataCnt()
+		maxIdx := 0
+		minIdx := 0
+		for i := range result {
+			if result[i].DataCnt() > maxCnt {
+				maxCnt = result[i].DataCnt()
+				maxIdx = i
+			}
+			if result[i].DataCnt() < minCnt {
+				minCnt = result[i].DataCnt()
+				minIdx = i
+			}
+		}
+		if maxCnt < minCnt*2 {
+			break
+		}
+
+		diff := (maxCnt-minCnt)/3 + 1
+		cut_from := result[maxIdx].DataCnt() - diff
+		result[minIdx].AppendBlockInfoSlice(result[maxIdx].DataSlice(cut_from, maxCnt).GetBlockInfoSlice())
+		result[maxIdx] = result[maxIdx].DataSlice(0, cut_from)
+	}
+	//check total block cnt
+	totalBlocks := 0
+	for i := range result {
+		totalBlocks += result[i].DataCnt()
+	}
+	if totalBlocks != int(or.TotalBlocks) {
+		panic("wrong blocks cnt after objlist reldata split!")
+	}
+	return result
+}
+
+func (or *ObjListRelData) GetBlockInfoSlice() objectio.BlockInfoSlice {
+	or.expand()
+	return or.blocklistRelData.GetBlockInfoSlice()
+}
+
+func (or *ObjListRelData) BuildEmptyRelData(i int) engine.RelData {
+	return or.blocklistRelData.BuildEmptyRelData(i)
+}
+
+func (or *ObjListRelData) GetBlockInfo(i int) objectio.BlockInfo {
+	panic("not supported")
+}
+
+func (or *ObjListRelData) SetBlockInfo(i int, blk *objectio.BlockInfo) {
+	panic("not supported")
+}
+
+func (or *ObjListRelData) SetBlockList(slice objectio.BlockInfoSlice) {
+	or.expand()
+	or.blocklistRelData.SetBlockList(slice)
+}
+
+func (or *ObjListRelData) AppendBlockInfo(blk *objectio.BlockInfo) {
+	panic("not supported")
+}
+
+func (or *ObjListRelData) AppendBlockInfoSlice(slice objectio.BlockInfoSlice) {
+	or.expand()
+	or.blocklistRelData.AppendBlockInfoSlice(slice)
+}
+
+func (or *ObjListRelData) UnmarshalBinary(buf []byte) error {
+	or.expanded = true
+	return or.blocklistRelData.UnmarshalBinary(buf)
+}
+
+func (or *ObjListRelData) MarshalBinary() ([]byte, error) {
+	or.expand()
+	return or.blocklistRelData.MarshalBinary()
+}
+
+func (or *ObjListRelData) AttachTombstones(tombstones engine.Tombstoner) error {
+	or.blocklistRelData.tombstones = tombstones
+	return nil
+}
+
+func (or *ObjListRelData) GetTombstones() engine.Tombstoner {
+	return or.blocklistRelData.tombstones
+}
+
+func (or *ObjListRelData) DataSlice(i, j int) engine.RelData {
+	or.expand()
+	return or.blocklistRelData.DataSlice(i, j)
+}
+
+func (or *ObjListRelData) DataCnt() int {
+	return int(or.TotalBlocks)
 }
 
 type BlockListRelData struct {
@@ -240,6 +401,24 @@ func (relData *BlockListRelData) SetShardID(i int, id uint64) {
 }
 func (relData *BlockListRelData) AppendShardID(id uint64) {
 	panic("not supported")
+}
+
+func (relData *BlockListRelData) Split(i int) []engine.RelData {
+	blkCnt := relData.DataCnt()
+	mod := blkCnt % i
+	divide := blkCnt / i
+	current := 0
+	shards := make([]engine.RelData, i)
+	for j := 0; j < i; j++ {
+		if j < mod {
+			shards[j] = relData.DataSlice(current, current+divide+1)
+			current = current + divide + 1
+		} else {
+			shards[j] = relData.DataSlice(current, current+divide)
+			current = current + divide
+		}
+	}
+	return shards
 }
 
 func (relData *BlockListRelData) GetBlockInfoSlice() objectio.BlockInfoSlice {
@@ -358,29 +537,6 @@ func (relData *BlockListRelData) DataSlice(i, j int) engine.RelData {
 		blklist:    blist,
 		tombstones: relData.tombstones,
 	}
-}
-
-func (relData *BlockListRelData) GroupByPartitionNum() map[int16]engine.RelData {
-	ret := make(map[int16]engine.RelData)
-
-	blks := relData.GetBlockInfoSlice()
-	blksLen := blks.Len()
-	for idx := range blksLen {
-		blkInfo := blks.Get(idx)
-		if blkInfo.IsMemBlk() {
-			continue
-		}
-		partitionNum := blkInfo.PartitionNum
-		if _, ok := ret[partitionNum]; !ok {
-			ret[partitionNum] = &BlockListRelData{
-				tombstones: relData.tombstones,
-			}
-			ret[partitionNum].AppendBlockInfo(&objectio.EmptyBlockInfo)
-		}
-		ret[partitionNum].AppendBlockInfo(blkInfo)
-	}
-
-	return ret
 }
 
 func (relData *BlockListRelData) DataCnt() int {

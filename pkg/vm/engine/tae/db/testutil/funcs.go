@@ -67,7 +67,6 @@ func LenOfBats(bats []*containers.Batch) int {
 func PrintCheckpointStats(t *testing.T, tae *db.DB) {
 	t.Logf("GetCheckpointedLSN: %d", tae.Wal.GetCheckpointed())
 	t.Logf("GetPenddingLSNCnt: %d", tae.Wal.GetPenddingCnt())
-	t.Logf("GetCurrSeqNum: %d", tae.Wal.GetCurrSeqNum())
 }
 
 func CreateDB(t *testing.T, e *db.DB, dbName string) {
@@ -332,6 +331,7 @@ func GetDefaultRelation(t *testing.T, e *db.DB, name string) (txn txnif.AsyncTxn
 	return GetRelation(t, 0, e, DefaultTestDB, name)
 }
 
+// GetOneObject returns the newest visible object in the relation
 func GetOneObject(rel handle.Relation) handle.Object {
 	it := rel.MakeObjectIt(false)
 	it.Next()
@@ -339,9 +339,11 @@ func GetOneObject(rel handle.Relation) handle.Object {
 	return it.GetObject()
 }
 
+// GetOneBlockMeta returns the oldest visible object's meta in the relation
 func GetOneBlockMeta(rel handle.Relation) *catalog.ObjectEntry {
 	it := rel.MakeObjectIt(false)
-	it.Next()
+	for it.Next() {
+	}
 	defer it.Close()
 	return it.GetObject().GetMeta().(*catalog.ObjectEntry)
 }

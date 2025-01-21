@@ -52,7 +52,7 @@ func TestGetStats(t *testing.T) {
 	go func() {
 		time.Sleep(time.Millisecond * 20)
 		for _, tid := range tids {
-			gs.notifyLogtailUpdate(tid)
+			gs.notifyLogtailUpdate(tid, true)
 		}
 	}()
 	var wg sync.WaitGroup
@@ -233,7 +233,7 @@ func TestWaitLogtailUpdate(t *testing.T) {
 	tid = 200
 	go func() {
 		time.Sleep(time.Millisecond * 100)
-		gs.notifyLogtailUpdate(tid)
+		gs.notifyLogtailUpdate(tid, true)
 	}()
 	gs.waitLogtailUpdated(tid)
 }
@@ -301,7 +301,7 @@ func TestGlobalStats_ClearTables(t *testing.T) {
 	defer cancel()
 	gs := NewGlobalStats(ctx, nil, nil)
 	for i := 0; i < 10; i++ {
-		gs.notifyLogtailUpdate(uint64(2000 + i))
+		gs.notifyLogtailUpdate(uint64(2000+i), true)
 	}
 	assert.Equal(t, 10, len(gs.logtailUpdate.mu.updated))
 	gs.clearTables()
@@ -335,4 +335,40 @@ func TestWaitKeeper(t *testing.T) {
 	_, ok = w.records[tid]
 	assert.False(t, ok)
 	assert.False(t, gs.safeToUnsubscribe(tid))
+}
+
+func TestQueueWatcher(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	testAdjustFn := func(qw *queueWatcher) {
+		qw.checkInterval = time.Millisecond * 10
+		qw.threshold = time.Millisecond * 10
+	}
+	q := newQueueWatcher()
+	testAdjustFn(q)
+
+	t.Run("ok", func(t *testing.T) {
+		q.add(101)
+		q.add(102)
+		assert.Equal(t, 2, len(q.value))
+		q.del(101)
+		assert.Equal(t, 1, len(q.value))
+
+		time.Sleep(time.Millisecond * 20)
+		list := q.check()
+		assert.Equal(t, 1, len(list))
+		q.del(102)
+		assert.Equal(t, 0, len(q.value))
+	})
+
+	t.Run("run in background", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		go q.run(ctx)
+		q.add(101)
+		q.add(102)
+		time.Sleep(time.Millisecond * 20)
+		list := q.check()
+		assert.Equal(t, 2, len(list))
+	})
+
 }

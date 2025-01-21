@@ -43,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
+	"github.com/matrixorigin/matrixone/pkg/shardservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -52,6 +53,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
@@ -69,6 +71,64 @@ var traceFilterExprInterval atomic.Uint64
 var traceFilterExprInterval2 atomic.Uint64
 
 var _ engine.Relation = new(txnTable)
+
+func newTxnTable(
+	ctx context.Context,
+	db *txnDatabase,
+	item cache.TableItem,
+) (engine.Relation, error) {
+	txn := db.getTxn()
+	process := txn.proc
+	eng := txn.engine
+
+	tbl := &txnTableDelegate{
+		origin: newTxnTableWithItem(
+			db,
+			item,
+			process,
+			eng,
+		),
+	}
+	tbl.isLocal = tbl.isLocalFunc
+
+	ps := process.GetPartitionService()
+	if ps != nil && db.databaseId != catalog.MO_CATALOG_ID {
+
+		is, metadata, err := ps.Is(ctx, item.Id, txn.op)
+		if err != nil {
+			return nil, err
+		}
+		if is {
+			p, err := newPartitionTxnTable(
+				tbl.origin,
+				metadata,
+				ps,
+			)
+			if err != nil {
+				return nil, err
+			}
+			tbl.partition.tbl = p
+			tbl.partition.is = true
+			tbl.partition.service = ps
+		}
+
+		tbl.shard.service = shardservice.GetService(process.GetService())
+		tbl.shard.is = false
+
+		if tbl.shard.service.Config().Enable {
+			tableID, policy, is, err := tbl.shard.service.GetShardInfo(item.Id)
+			if err != nil {
+				return nil, err
+			}
+
+			tbl.shard.is = is
+			tbl.shard.policy = policy
+			tbl.shard.tableID = tableID
+		}
+	}
+
+	return tbl, nil
+}
 
 func (tbl *txnTable) getEngine() engine.Engine {
 	return tbl.eng
@@ -577,7 +637,52 @@ func (tbl *txnTable) CollectTombstones(
 //   - exprs: A slice of expressions used to filter data.
 //   - txnOffset: Transaction offset used to specify the starting position for reading data.
 func (tbl *txnTable) Ranges(ctx context.Context, rangesParam engine.RangesParam) (data engine.RelData, err error) {
+	if len(rangesParam.BlockFilters) == 0 && rangesParam.PreAllocBlocks > 128 && !rangesParam.DontSupportRelData {
+		//no block filters, no agg optimization, not partition table, then we can return object list instead of block list
+		return tbl.getObjList(ctx, rangesParam)
+	}
 	return tbl.doRanges(ctx, rangesParam)
+}
+
+func (tbl *txnTable) getObjList(ctx context.Context, rangesParam engine.RangesParam) (data engine.RelData, err error) {
+	needUncommited := rangesParam.Policy&engine.Policy_CollectUncommittedData != 0
+	objRelData := &readutil.ObjListRelData{
+		NeedFirstEmpty: needUncommited,
+		Rsp:            rangesParam.Rsp,
+	}
+
+	if needUncommited {
+		objRelData.TotalBlocks = 1 // first empty block
+		uncommittedObjects, _ := tbl.collectUnCommittedDataObjs(rangesParam.TxnOffset)
+		for i := range uncommittedObjects {
+			objRelData.AppendObj(&uncommittedObjects[i])
+		}
+	}
+
+	var part *logtailreplay.PartitionState
+	// get the table's snapshot
+	if rangesParam.Policy&engine.Policy_CollectCommittedData != 0 {
+		if part, err = tbl.getPartitionState(ctx); err != nil {
+			return
+		}
+	}
+
+	if err = ForeachSnapshotObjects(
+		tbl.db.op.SnapshotTS(),
+		func(obj objectio.ObjectEntry, isCommitted bool) (err2 error) {
+			//if need to shuffle objects
+			if plan2.ShouldSkipObjByShuffle(rangesParam.Rsp, &obj.ObjectStats) {
+				return
+			}
+			objRelData.AppendObj(&obj.ObjectStats)
+			return
+		},
+		part, nil, nil...); err != nil {
+		return nil, err
+	}
+
+	data = objRelData
+	return
 }
 
 func (tbl *txnTable) doRanges(ctx context.Context, rangesParam engine.RangesParam) (data engine.RelData, err error) {
@@ -1049,7 +1154,6 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 		var properties []*plan.Property
 		var TableType string
 		var Createsql string
-		var partitionInfo *plan.PartitionByDef
 		var viewSql *plan.ViewDef
 		var foreignKeys []*plan.ForeignKeyDef
 		var primarykey *plan.PrimaryKeyDef
@@ -1101,16 +1205,6 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 				Key:   catalog.SystemRelAttr_Comment,
 				Value: tbl.comment,
 			})
-		}
-
-		if tbl.partitioned > 0 {
-			p := &plan.PartitionByDef{}
-			err := p.UnMarshalPartitionInfo(([]byte)(tbl.partition))
-			if err != nil {
-				//panic(fmt.Sprintf("cannot unmarshal partition metadata information: %s", err))
-				return nil
-			}
-			partitionInfo = p
 		}
 
 		if tbl.viewdef != "" {
@@ -1188,7 +1282,6 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 			Createsql:     Createsql,
 			Pkey:          primarykey,
 			ViewSql:       viewSql,
-			Partition:     partitionInfo,
 			Fkeys:         foreignKeys,
 			RefChildTbls:  refChildTbls,
 			ClusterBy:     clusterByDef,
@@ -1226,6 +1319,11 @@ func (tbl *txnTable) UpdateConstraint(ctx context.Context, c *engine.ConstraintD
 //
 // 2. This check depends on replaying all catalog cache when cn starts.
 func (tbl *txnTable) isCreatedInTxn(ctx context.Context) (bool, error) {
+	// test or mo_table_stats
+	if tbl.fake {
+		return false, nil
+	}
+
 	if tbl.remoteWorkspace {
 		return tbl.createdInTxn, nil
 	}
@@ -1236,24 +1334,8 @@ func (tbl *txnTable) isCreatedInTxn(ctx context.Context) (bool, error) {
 		return false, nil
 	}
 
-	cache := tbl.db.getEng().GetLatestCatalogCache()
-	cacheTS := cache.GetStartTS().ToTimestamp()
-	if cacheTS.Greater(tbl.db.op.SnapshotTS()) {
-		logutil.Warn("FIND_TABLE loadNameByIdFromStorage", zap.String("name", tbl.tableName), zap.String("cacheTs", cacheTS.DebugString()), zap.String("txn", tbl.db.op.Txn().DebugString()))
-		if name, _, err := loadNameByIdFromStorage(ctx, tbl.db.op, tbl.accountId, tbl.tableId); err != nil {
-			return false, err
-		} else {
-			return name == "", nil
-		}
-	}
+	return tbl.db.getTxn().tableOps.existCreatedInTxn(tbl.tableId), nil
 
-	idAckedbyTN := cache.GetTableByIdAndTime(
-		tbl.accountId,
-		tbl.db.databaseId,
-		tbl.tableId,
-		tbl.db.op.SnapshotTS(),
-	)
-	return idAckedbyTN == nil, nil
 }
 
 func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, reqs []*api.AlterTableReq) error {
@@ -1302,16 +1384,7 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 	for _, req := range reqs {
 		switch req.GetKind() {
 		case api.AlterKind_AddPartition:
-			tbl.partitioned = 1
-			info, err := req.GetAddPartition().GetPartitionDef().MarshalPartitionInfo()
-			if err != nil {
-				return err
-			}
-			tbl.partition = string(info)
-			appendDef = append(appendDef, &engine.PartitionDef{
-				Partitioned: 1,
-				Partition:   tbl.partition,
-			})
+			// TODO: reimplement partition
 		case api.AlterKind_UpdateComment:
 			tbl.comment = req.GetUpdateComment().Comment
 			appendDef = append(appendDef, &engine.CommentDef{Comment: tbl.comment})
@@ -1384,13 +1457,12 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 	if err := tbl.db.createWithID(ctx, tbl.tableName, tbl.tableId, tbl.defs, !createdInTxn); err != nil {
 		return err
 	}
-
 	if createdInTxn {
 		// 3. adjust writes for the table
 		txn.Lock()
 		for i, n := 0, len(txn.writes); i < n; i++ {
 			if cur := txn.writes[i]; cur.tableId == tbl.tableId && cur.bat != nil && cur.bat.RowCount() > 0 {
-				if sels, exist := txn.batchSelectList[cur.bat]; exist && len(sels) == 0 {
+				if sels, exist := txn.batchSelectList[cur.bat]; exist && len(sels) == cur.bat.RowCount() {
 					continue
 				}
 				txn.writes = append(txn.writes, txn.writes[i]) // copy by value
@@ -1400,7 +1472,10 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 				if err != nil {
 					return err
 				}
-				txn.batchSelectList[cur.bat] = []int64{}
+				for j := 0; j < cur.bat.RowCount(); j++ {
+					txn.batchSelectList[cur.bat] = append(txn.batchSelectList[cur.bat], int64(j))
+				}
+
 			}
 		}
 		txn.Unlock()
@@ -1565,7 +1640,7 @@ func (tbl *txnTable) ensureSeqnumsAndTypesExpectRowid() {
 	for i := 0; i < len(tbl.tableDef.Cols)-1; i++ {
 		col := tbl.tableDef.Cols[i]
 		idxs = append(idxs, uint16(col.Seqnum))
-		typs = append(typs, vector.ProtoTypeToType(&col.Typ))
+		typs = append(typs, vector.ProtoTypeToType(col.Typ))
 	}
 	tbl.seqnums = idxs
 	tbl.typs = typs
@@ -1724,7 +1799,7 @@ func (tbl *txnTable) buildLocalDataSource(
 ) (source engine.DataSource, err error) {
 
 	switch relData.GetType() {
-	case engine.RelDataBlockList:
+	case engine.RelDataObjList, engine.RelDataBlockList:
 		ranges := relData.GetBlockInfoSlice()
 		skipReadMem := !bytes.Equal(
 			objectio.EncodeBlockInfo(ranges.Get(0)), objectio.EmptyBlockInfoBytes)
@@ -1784,10 +1859,6 @@ func (tbl *txnTable) BuildReaders(
 ) ([]engine.Reader, error) {
 	var rds []engine.Reader
 	proc := p.(*process.Process)
-	//copy from NewReader.
-	if plan2.IsFalseExpr(expr) {
-		return []engine.Reader{new(readutil.EmptyReader)}, nil
-	}
 
 	if orderBy && num != 1 {
 		return nil, moerr.NewInternalErrorNoCtx("orderBy only support one reader")
@@ -1807,19 +1878,9 @@ func (tbl *txnTable) BuildReaders(
 	}
 
 	def := tbl.GetTableDef(ctx)
-	mod := blkCnt % newNum
-	divide := blkCnt / newNum
-	current := 0
-	var shard engine.RelData
+	shards := relData.Split(newNum)
 	for i := 0; i < newNum; i++ {
-		if i < mod {
-			shard = relData.DataSlice(current, current+divide+1)
-			current = current + divide + 1
-		} else {
-			shard = relData.DataSlice(current, current+divide)
-			current = current + divide
-		}
-		ds, err := tbl.buildLocalDataSource(ctx, txnOffset, shard, tombstonePolicy, engine.GeneralLocalDataSource)
+		ds, err := tbl.buildLocalDataSource(ctx, txnOffset, shards[i], tombstonePolicy, engine.GeneralLocalDataSource)
 		if err != nil {
 			return nil, err
 		}
@@ -1902,13 +1963,12 @@ func (tbl *txnTable) getPartitionState(
 
 func (tbl *txnTable) tryToSubscribe(ctx context.Context) (ps *logtailreplay.PartitionState, err error) {
 	eng := tbl.eng.(*Engine)
+	var createdInTxn bool
 	defer func() {
-		if err == nil {
-			eng.globalStats.notifyLogtailUpdate(tbl.tableId)
-		}
+		eng.globalStats.notifyLogtailUpdate(tbl.tableId, err == nil && !createdInTxn)
 	}()
 
-	createdInTxn, err := tbl.isCreatedInTxn(ctx)
+	createdInTxn, err = tbl.isCreatedInTxn(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1916,8 +1976,8 @@ func (tbl *txnTable) tryToSubscribe(ctx context.Context) (ps *logtailreplay.Part
 		return
 	}
 
-	return eng.PushClient().toSubscribeTable(ctx, tbl)
-
+	ps, err = eng.PushClient().toSubscribeTable(ctx, tbl)
+	return ps, err
 }
 
 func (tbl *txnTable) PKPersistedBetween(
@@ -2014,7 +2074,6 @@ func (tbl *txnTable) PKPersistedBetween(
 
 					blk.SetFlagByObjStats(&obj.ObjectStats)
 
-					blk.PartitionNum = -1
 					candidateBlks[blk.BlockID] = &blk
 					return true
 				}, obj.ObjectStats)
@@ -2096,8 +2155,10 @@ func (tbl *txnTable) PrimaryKeysMayBeUpserted(
 	ctx context.Context,
 	from types.TS,
 	to types.TS,
-	keysVector *vector.Vector,
+	batch *batch.Batch,
+	pkIndex int32,
 ) (bool, error) {
+	keysVector := batch.GetVector(pkIndex)
 	return tbl.primaryKeysMayBeChanged(ctx, from, to, keysVector, false)
 }
 
@@ -2105,8 +2166,10 @@ func (tbl *txnTable) PrimaryKeysMayBeModified(
 	ctx context.Context,
 	from types.TS,
 	to types.TS,
-	keysVector *vector.Vector,
+	batch *batch.Batch,
+	pkIndex int32,
 ) (bool, error) {
+	keysVector := batch.GetVector(pkIndex)
 	return tbl.primaryKeysMayBeChanged(ctx, from, to, keysVector, true)
 }
 

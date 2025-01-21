@@ -675,6 +675,7 @@ const (
 	RelDataEmpty RelDataType = iota
 	RelDataShardIDList
 	RelDataBlockList
+	RelDataObjList
 )
 
 type RelData interface {
@@ -688,8 +689,6 @@ type RelData interface {
 	GetTombstones() Tombstoner
 	DataSlice(begin, end int) RelData
 
-	// GroupByPartitionNum TODO::remove it after refactor of partition table.
-	GroupByPartitionNum() map[int16]RelData
 	BuildEmptyRelData(preAllocSize int) RelData
 	DataCnt() int
 
@@ -702,6 +701,7 @@ type RelData interface {
 	AppendShardID(id uint64)
 
 	// for block info list
+	Split(i int) []RelData
 	GetBlockInfoSlice() objectio.BlockInfoSlice
 	GetBlockInfo(i int) objectio.BlockInfo
 	SetBlockInfo(i int, blk *objectio.BlockInfo)
@@ -838,18 +838,20 @@ type RangesShuffleParam struct {
 }
 
 type RangesParam struct {
-	BlockFilters   []*plan.Expr //Slice of expressions used to filter zonemap
-	PreAllocBlocks int          //estimated count of blocks
-	TxnOffset      int          //Transaction offset used to specify the starting position for reading data.
-	Policy         DataCollectPolicy
-	Rsp            *RangesShuffleParam
+	BlockFilters       []*plan.Expr //Slice of expressions used to filter zonemap
+	PreAllocBlocks     int          //estimated count of blocks
+	TxnOffset          int          //Transaction offset used to specify the starting position for reading data.
+	Policy             DataCollectPolicy
+	Rsp                *RangesShuffleParam
+	DontSupportRelData bool
 }
 
 var DefaultRangesParam RangesParam = RangesParam{
-	BlockFilters:   nil,
-	PreAllocBlocks: 2,
-	TxnOffset:      0,
-	Policy:         Policy_CollectAllData,
+	BlockFilters:       nil,
+	PreAllocBlocks:     2,
+	TxnOffset:          0,
+	Policy:             Policy_CollectAllData,
+	DontSupportRelData: true,
 }
 
 type Relation interface {
@@ -936,9 +938,9 @@ type Relation interface {
 	// PrimaryKeysMayBeModified reports whether any rows with any primary keys in keyVector was modified during `from` to `to`
 	// If not sure, returns true
 	// Initially added for implementing locking rows by primary keys
-	PrimaryKeysMayBeModified(ctx context.Context, from types.TS, to types.TS, keyVector *vector.Vector) (bool, error)
+	PrimaryKeysMayBeModified(ctx context.Context, from types.TS, to types.TS, batch *batch.Batch, pkIndex int32) (bool, error)
 
-	PrimaryKeysMayBeUpserted(ctx context.Context, from types.TS, to types.TS, keyVector *vector.Vector) (bool, error)
+	PrimaryKeysMayBeUpserted(ctx context.Context, from types.TS, to types.TS, batch *batch.Batch, pkIndex int32) (bool, error)
 
 	ApproxObjectsNum(ctx context.Context) int
 	MergeObjects(ctx context.Context, objstats []objectio.ObjectStats, targetObjSize uint32) (*api.MergeCommitEntry, error)

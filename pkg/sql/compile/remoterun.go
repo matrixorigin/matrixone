@@ -411,14 +411,11 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 	switch t := op.(type) {
 	case *insert.Insert:
 		in.Insert = &pipeline.Insert{
-			ToWriteS3:           t.ToWriteS3,
-			Ref:                 t.InsertCtx.Ref,
-			Attrs:               t.InsertCtx.Attrs,
-			AddAffectedRows:     t.InsertCtx.AddAffectedRows,
-			PartitionTableIds:   t.InsertCtx.PartitionTableIDs,
-			PartitionTableNames: t.InsertCtx.PartitionTableNames,
-			PartitionIdx:        int32(t.InsertCtx.PartitionIndexInBatch),
-			TableDef:            t.InsertCtx.TableDef,
+			ToWriteS3:       t.ToWriteS3,
+			Ref:             t.InsertCtx.Ref,
+			Attrs:           t.InsertCtx.Attrs,
+			AddAffectedRows: t.InsertCtx.AddAffectedRows,
+			TableDef:        t.InsertCtx.TableDef,
 		}
 	case *deletion.Deletion:
 		in.Delete = &pipeline.Deletion{
@@ -428,13 +425,10 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			IBucket:      t.IBucket,
 			NBucket:      t.Nbucket,
 			// deleteCtx
-			RowIdIdx:              int32(t.DeleteCtx.RowIdIdx),
-			PartitionTableIds:     t.DeleteCtx.PartitionTableIDs,
-			PartitionTableNames:   t.DeleteCtx.PartitionTableNames,
-			PartitionIndexInBatch: int32(t.DeleteCtx.PartitionIndexInBatch),
-			AddAffectedRows:       t.DeleteCtx.AddAffectedRows,
-			Ref:                   t.DeleteCtx.Ref,
-			PrimaryKeyIdx:         int32(t.DeleteCtx.PrimaryKeyIdx),
+			RowIdIdx:        int32(t.DeleteCtx.RowIdIdx),
+			AddAffectedRows: t.DeleteCtx.AddAffectedRows,
+			Ref:             t.DeleteCtx.Ref,
+			PrimaryKeyIdx:   int32(t.DeleteCtx.PrimaryKeyIdx),
 		}
 	case *onduplicatekey.OnDuplicatekey:
 		in.OnDuplicateKey = &pipeline.OnDuplicateKey{
@@ -458,11 +452,13 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			SchemaName:        t.SchemaName,
 			TableDef:          t.TableDef,
 			HasAutoCol:        t.HasAutoCol,
-			IsUpdate:          t.IsUpdate,
+			IsOldUpdate:       t.IsOldUpdate,
+			IsNewUpdate:       t.IsNewUpdate,
 			Attrs:             t.Attrs,
 			EstimatedRowCount: int64(t.EstimatedRowCount),
 			CompPkeyExpr:      t.CompPkeyExpr,
 			ClusterByExpr:     t.ClusterByExpr,
+			ColOffset:         t.ColOffset,
 		}
 	case *lockop.LockOp:
 		in.LockOp = &pipeline.LockOp{
@@ -771,6 +767,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			OnDuplicateAction: t.OnDuplicateAction,
 			DedupColName:      t.DedupColName,
 			DedupColTypes:     t.DedupColTypes,
+			DelColIdx:         t.DelColIdx,
 		}
 	case *shufflebuild.ShuffleBuild:
 		in.ShuffleBuild = &pipeline.Shufflebuild{
@@ -785,6 +782,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			OnDuplicateAction: t.OnDuplicateAction,
 			DedupColName:      t.DedupColName,
 			DedupColTypes:     t.DedupColTypes,
+			DelColIdx:         t.DelColIdx,
 		}
 	case *indexbuild.IndexBuild:
 		in.IndexBuild = &pipeline.Indexbuild{
@@ -804,6 +802,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			OnDuplicateAction:      t.OnDuplicateAction,
 			DedupColName:           t.DedupColName,
 			DedupColTypes:          t.DedupColTypes,
+			DelColIdx:              t.DelColIdx,
 			LeftTypes:              convertToPlanTypes(t.LeftTypes),
 			RightTypes:             convertToPlanTypes(t.RightTypes),
 			UpdateColIdxList:       t.UpdateColIdxList,
@@ -828,12 +827,8 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		updateCtxList := make([]*plan.UpdateCtx, len(t.MultiUpdateCtx))
 		for i, muCtx := range t.MultiUpdateCtx {
 			updateCtxList[i] = &plan.UpdateCtx{
-				ObjRef:              muCtx.ObjRef,
-				TableDef:            muCtx.TableDef,
-				PartitionTableIds:   muCtx.PartitionTableIDs,
-				PartitionTableNames: muCtx.PartitionTableNames,
-				OldPartitionIdx:     int32(muCtx.OldPartitionIdx),
-				NewPartitionIdx:     int32(muCtx.NewPartitionIdx),
+				ObjRef:   muCtx.ObjRef,
+				TableDef: muCtx.TableDef,
 			}
 
 			updateCtxList[i].InsertCols = make([]plan.ColRef, len(muCtx.InsertCols))
@@ -890,14 +885,11 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.IBucket = t.IBucket
 		arg.Nbucket = t.NBucket
 		arg.DeleteCtx = &deletion.DeleteCtx{
-			CanTruncate:           t.CanTruncate,
-			RowIdIdx:              int(t.RowIdIdx),
-			PartitionTableIDs:     t.PartitionTableIds,
-			PartitionTableNames:   t.PartitionTableNames,
-			PartitionIndexInBatch: int(t.PartitionIndexInBatch),
-			Ref:                   t.Ref,
-			AddAffectedRows:       t.AddAffectedRows,
-			PrimaryKeyIdx:         int(t.PrimaryKeyIdx),
+			CanTruncate:     t.CanTruncate,
+			RowIdIdx:        int(t.RowIdIdx),
+			Ref:             t.Ref,
+			AddAffectedRows: t.AddAffectedRows,
+			PrimaryKeyIdx:   int(t.PrimaryKeyIdx),
 		}
 		op = arg
 	case vm.Insert:
@@ -905,13 +897,10 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg := insert.NewArgument()
 		arg.ToWriteS3 = t.ToWriteS3
 		arg.InsertCtx = &insert.InsertCtx{
-			Ref:                   t.Ref,
-			AddAffectedRows:       t.AddAffectedRows,
-			Attrs:                 t.Attrs,
-			PartitionTableIDs:     t.PartitionTableIds,
-			PartitionTableNames:   t.PartitionTableNames,
-			PartitionIndexInBatch: int(t.PartitionIdx),
-			TableDef:              t.TableDef,
+			Ref:             t.Ref,
+			AddAffectedRows: t.AddAffectedRows,
+			Attrs:           t.Attrs,
+			TableDef:        t.TableDef,
 		}
 		op = arg
 	case vm.PreInsert:
@@ -921,10 +910,12 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.TableDef = t.GetTableDef()
 		arg.Attrs = t.GetAttrs()
 		arg.HasAutoCol = t.GetHasAutoCol()
-		arg.IsUpdate = t.GetIsUpdate()
+		arg.IsOldUpdate = t.GetIsOldUpdate()
+		arg.IsNewUpdate = t.GetIsNewUpdate()
 		arg.EstimatedRowCount = int64(t.GetEstimatedRowCount())
 		arg.CompPkeyExpr = t.CompPkeyExpr
 		arg.ClusterByExpr = t.ClusterByExpr
+		arg.ColOffset = t.ColOffset
 		op = arg
 	case vm.LockOp:
 		t := opr.GetLockOp()
@@ -1287,6 +1278,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.OnDuplicateAction = t.OnDuplicateAction
 		arg.DedupColName = t.DedupColName
 		arg.DedupColTypes = t.DedupColTypes
+		arg.DelColIdx = t.DelColIdx
 		op = arg
 	case vm.ShuffleBuild:
 		arg := shufflebuild.NewArgument()
@@ -1302,6 +1294,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.OnDuplicateAction = t.OnDuplicateAction
 		arg.DedupColName = t.DedupColName
 		arg.DedupColTypes = t.DedupColTypes
+		arg.DelColIdx = t.DelColIdx
 		op = arg
 	case vm.IndexBuild:
 		arg := indexbuild.NewArgument()
@@ -1321,6 +1314,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.OnDuplicateAction = t.OnDuplicateAction
 		arg.DedupColName = t.DedupColName
 		arg.DedupColTypes = t.DedupColTypes
+		arg.DelColIdx = t.DelColIdx
 		arg.UpdateColIdxList = t.UpdateColIdxList
 		arg.UpdateColExprList = t.UpdateColExprList
 		op = arg
@@ -1342,17 +1336,14 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		t := opr.GetMultiUpdate()
 		arg.SetAffectedRows(t.AffectedRows)
 		arg.Action = multi_update.UpdateAction(t.Action)
+		arg.IsRemote = true //only remote CN use this function to rebuild MultiUpdate
 
 		arg.MultiUpdateCtx = make([]*multi_update.MultiUpdateCtx, len(t.UpdateCtxList))
 		for i, muCtx := range t.UpdateCtxList {
 
 			arg.MultiUpdateCtx[i] = &multi_update.MultiUpdateCtx{
-				ObjRef:              muCtx.ObjRef,
-				TableDef:            muCtx.TableDef,
-				PartitionTableIDs:   muCtx.PartitionTableIds,
-				PartitionTableNames: muCtx.PartitionTableNames,
-				OldPartitionIdx:     int(muCtx.OldPartitionIdx),
-				NewPartitionIdx:     int(muCtx.NewPartitionIdx),
+				ObjRef:   muCtx.ObjRef,
+				TableDef: muCtx.TableDef,
 			}
 
 			arg.MultiUpdateCtx[i].InsertCols = make([]int, len(muCtx.InsertCols))

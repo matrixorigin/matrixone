@@ -348,13 +348,12 @@ func (rd *MemRelationData) DataSlice(i, j int) engine.RelData {
 	panic("Not Support")
 }
 
-// GroupByPartitionNum TODO::remove it after refactor of partition table.
-func (rd *MemRelationData) GroupByPartitionNum() map[int16]engine.RelData {
-	panic("Not Support")
-}
-
 func (rd *MemRelationData) BuildEmptyRelData(i int) engine.RelData {
 	return &MemRelationData{}
+}
+
+func (rd *MemRelationData) Split(i int) []engine.RelData {
+	panic("not supported")
 }
 
 func (rd *MemRelationData) DataCnt() int {
