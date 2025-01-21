@@ -32,7 +32,7 @@ type Cleaner interface {
 	Replay(context.Context) error
 	Process(context.Context) error
 	TryGC(context.Context) error
-	FastExecute(context.Context) error
+	FastExecute(context.Context, *types.TS) error
 	AddChecker(checker func(item any) bool, key string) int
 	RemoveChecker(key string) error
 	GetScanWaterMark() *checkpoint.CheckpointEntry
@@ -59,7 +59,7 @@ var ObjectTableSeqnums []uint16
 var ObjectTableMetaAttrs []string
 var ObjectTableMetaTypes []types.Type
 
-type MinTS struct{}
+type Fast struct{}
 
 var FSinkerFactory ioutil.FileSinkerFactory
 

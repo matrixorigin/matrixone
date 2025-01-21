@@ -17,6 +17,7 @@ package gc
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"math/rand"
 	"sync"
 	"sync/atomic"
@@ -62,6 +63,11 @@ type runningCtx struct {
 	cancel context.CancelCauseFunc
 }
 
+type fastGCJob struct {
+	jobType tasks.JobType
+	minTS   *types.TS
+}
+
 // DiskCleaner is the main structure of v2 operation,
 // and provides "JobFactory" to let tae notify itself
 // to perform a v2
@@ -98,11 +104,12 @@ func (cleaner *DiskCleaner) GC(ctx context.Context) (err error) {
 	return cleaner.scheduleGCJob(ctx)
 }
 
-func (cleaner *DiskCleaner) FastGC(ctx context.Context) (err error) {
-	running := new(runningCtx)
-	running.ctx, running.cancel = context.WithCancelCause(ctx)
-	cleaner.runningCtx.Store(running)
-	return cleaner.forceScheduleJob(JT_GCFastExecute)
+func (cleaner *DiskCleaner) FastGC(ctx context.Context, ts *types.TS) (err error) {
+	gcJob := new(fastGCJob)
+	gcJob.jobType = JT_GCFastExecute
+	gcJob.minTS = &types.TS{}
+	_, err = cleaner.processQueue.Enqueue(gcJob)
+	return err
 }
 
 func (cleaner *DiskCleaner) IsWriteMode() bool {
@@ -241,7 +248,10 @@ func (cleaner *DiskCleaner) scheduleGCJob(ctx context.Context) (err error) {
 	}
 	logutil.Info("GC-Send-Intents")
 	if rand.Intn(100)%2 == 0 {
-		_, err = cleaner.processQueue.Enqueue(JT_GCFastExecute)
+		gcJob := new(fastGCJob)
+		gcJob.jobType = JT_GCFastExecute
+		gcJob.minTS = &types.TS{}
+		_, err = cleaner.processQueue.Enqueue(gcJob)
 	} else {
 		_, err = cleaner.processQueue.Enqueue(JT_GCExecute)
 	}
@@ -281,7 +291,7 @@ func (cleaner *DiskCleaner) doExecute(ctx context.Context) (err error) {
 	return
 }
 
-func (cleaner *DiskCleaner) doFastExecute(ctx context.Context) (err error) {
+func (cleaner *DiskCleaner) doFastExecute(ctx context.Context, ts *types.TS) (err error) {
 	now := time.Now()
 	msg := "GC-Fast-Execute"
 	defer func() {
@@ -307,7 +317,7 @@ func (cleaner *DiskCleaner) doFastExecute(ctx context.Context) (err error) {
 			}
 		}
 	}
-	err = cleaner.cleaner.FastExecute(ctx)
+	err = cleaner.cleaner.FastExecute(ctx, ts)
 	return
 }
 
@@ -367,7 +377,9 @@ func (cleaner *DiskCleaner) process(items ...any) {
 			case JT_GCExecute:
 				cleaner.doExecute(ctx.ctx)
 			case JT_GCFastExecute:
-				cleaner.doFastExecute(ctx.ctx)
+				fastJob := item.(*fastGCJob)
+				logutil.Infof("GC-Fast-Execute", zap.Any("min-ts", fastJob.minTS.ToString()))
+				cleaner.doFastExecute(ctx.ctx, fastJob.minTS)
 			default:
 				logutil.Error("GC-Unknown-JobType", zap.Any("job-type", v))
 			}

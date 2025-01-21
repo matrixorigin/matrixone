@@ -1485,7 +1485,7 @@ func (c *checkpointCleaner) Process(inputCtx context.Context) (err error) {
 	return
 }
 
-func (c *checkpointCleaner) FastExecute(inputCtx context.Context) (err error) {
+func (c *checkpointCleaner) FastExecute(inputCtx context.Context, minTS *types.TS) (err error) {
 	if !c.GCEnabled() {
 		return
 	}
@@ -1496,11 +1496,6 @@ func (c *checkpointCleaner) FastExecute(inputCtx context.Context) (err error) {
 
 	startScanWaterMark := c.GetScanWaterMark()
 	startGCWaterMark := c.GetGCWaterMark()
-	minTs := &types.TS{}
-	ts := inputCtx.Value(MinTS{}).(*types.TS)
-	if ts != nil {
-		minTs = ts
-	}
 	defer func() {
 		endScanWaterMark := c.GetScanWaterMark()
 		endGCWaterMark := c.GetGCWaterMark()
@@ -1513,7 +1508,7 @@ func (c *checkpointCleaner) FastExecute(inputCtx context.Context) (err error) {
 			zap.String("end-scan-watermark", endScanWaterMark.String()),
 			zap.String("start-gc-watermark", startGCWaterMark.String()),
 			zap.String("end-gc-watermark", endGCWaterMark.String()),
-			zap.String("min-ts", minTs.ToString()),
+			zap.String("min-ts", minTS.ToString()),
 		)
 	}()
 	ctx, cancel := context.WithCancelCause(inputCtx)
@@ -1551,7 +1546,7 @@ func (c *checkpointCleaner) FastExecute(inputCtx context.Context) (err error) {
 	candidates := make([]*checkpoint.CheckpointEntry, 0, len(checkpoints))
 	for _, ckp := range checkpoints {
 		start := ckp.GetStart()
-		if !minTs.IsEmpty() && start.LT(minTs) {
+		if !minTS.IsEmpty() && start.LT(minTS) {
 			continue
 		}
 		candidates = append(candidates, ckp)
