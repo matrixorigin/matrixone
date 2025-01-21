@@ -47,10 +47,21 @@ type HnswSearch struct {
 	Mutex    sync.RWMutex
 	Indexes  []*HnswSearchIndex
 	ExpireAt atomic.Int64
+	Idxcfg   usearch.IndexConfig
+	Tblcfg   hnsw.IndexTableConfig
 }
 
 func (h *HnswSearch) Search(v []float32) error {
+	h.Mutex.RLock()
+	defer h.Mutex.RUnlock()
+	if h.Indexes == nil {
+		return moerr.NewInternalErrorNoCtx("HNSW cannot find index from database")
+	}
 
+	time.Now().Add(time.Hour)
+	h.ExpireAt.Store(time.Unix)
+
+	// search
 	return nil
 }
 
@@ -58,6 +69,10 @@ func (h *HnswSearch) Destroy() {
 	h.Mutex.Lock()
 	defer h.Mutex.Unlock()
 	// TODO: destroy index
+	for _, idx := range h.Indexes {
+		idx.Destroy()
+	}
+	h.Indexes = nil
 }
 
 type HnswCache struct {
@@ -117,19 +132,18 @@ func (c *HnswCache) HouseKeeping() {
 			search := value.(*HnswSearch)
 			// destroy the usearch indexes
 			search.Destroy()
+			search = nil
 		}
 	}
-
 }
 
 func (c *HnswCache) Destroy() {
-
 	c.ticker.Stop()
 	c.done <- true
 
 }
 
-func (c *HnswCache) GetIndex(proc *process.Process, key string) (*HnswSearch, error) {
+func (c *HnswCache) GetIndex(proc *process.Process, cfg usearch.IndexConfig, tblcfg hnsw.IndexTableConfig, key string) (*HnswSearch, error) {
 	value, loaded := c.IndexMap.LoadOrStore(key, &HnswSearch{})
 	if !loaded {
 		idx := value.(*HnswSearch)
@@ -137,28 +151,10 @@ func (c *HnswCache) GetIndex(proc *process.Process, key string) (*HnswSearch, er
 		defer idx.Mutex.Unlock()
 
 		// load model from database and if error during loading, remove the entry from gIndexMap
+		idx.Idxcfg = cfg
+		idx.Tblcfg = tblcfg
 
 		return idx, nil
 	}
 	return value.(*HnswSearch), nil
-}
-
-func (c *HnswCache) Search(proc *process.Process, cfg usearch.IndexConfig, tblcfg hnsw.IndexTableConfig, fp32a []float32) error {
-
-	search, err := c.GetIndex(proc, tblcfg.IndexTable)
-	if err != nil {
-		return err
-	}
-
-	// start search
-	search.Mutex.RLock()
-	defer search.Mutex.RUnlock()
-	if search.Indexes == nil {
-		return moerr.NewInternalErrorNoCtx("HNSW cannot find index from database")
-	}
-
-	time.Now().Add(time.Hour)
-	search.ExpireAt.Store(time.Unix)
-
-	return nil
 }
