@@ -92,29 +92,6 @@ func (data *CheckpointData_V2) Close() {
 	data.sinker.Close()
 }
 
-type CheckpointReplayer struct {
-	location objectio.Location
-	version  uint32
-	mp       *mpool.MPool
-
-	meta               containers.Vectors
-	locations          map[string]objectio.Location
-	tombstoneLocations map[string]objectio.Location
-	maxBlkIDs          map[string]uint16
-	objectInfo         []containers.Vectors
-
-	metaBatch      *containers.Batch
-	objBatches     *containers.Batch
-	tombstoneBatch *containers.Batch
-
-	closeCB []func()
-}
-
-type CheckpointReplayer_V2 struct {
-	location          objectio.Location
-	tableObjectsStats []objectio.ObjectStats
-}
-
 func PrefetchCheckpoint(
 	ctx context.Context,
 	sid string,
@@ -209,14 +186,26 @@ func ReplayCheckpoint(
 	return
 }
 
+type CheckpointReplayer struct {
+	location objectio.Location
+	mp       *mpool.MPool
+
+	locations          map[string]objectio.Location
+	tombstoneLocations map[string]objectio.Location
+
+	metaBatch      *containers.Batch
+	objBatches     *containers.Batch
+	tombstoneBatch *containers.Batch
+
+	closeCB []func()
+}
+
 func NewCheckpointReplayer(location objectio.Location, mp *mpool.MPool) *CheckpointReplayer {
 	return &CheckpointReplayer{
 		location:           location,
 		mp:                 mp,
 		locations:          make(map[string]objectio.Location),
-		maxBlkIDs:          make(map[string]uint16),
 		tombstoneLocations: make(map[string]objectio.Location),
-		objectInfo:         make([]containers.Vectors, 0),
 		closeCB:            make([]func(), 0),
 	}
 }
@@ -226,7 +215,6 @@ func (replayer *CheckpointReplayer) ReadMetaForV12(
 	sid string,
 	fs fileservice.FileService,
 ) (err error) {
-	replayer.meta = containers.NewVectors(len(MetaSchemaAttr))
 	var reader *ioutil.BlockReader
 	if reader, err = ioutil.NewObjectReader(fs, replayer.location); err != nil {
 		return
@@ -235,7 +223,7 @@ func (replayer *CheckpointReplayer) ReadMetaForV12(
 	typs := append(BaseTypes, MetaShcemaTypes...)
 	var bats []*containers.Batch
 	if bats, err = LoadBlkColumnsByMeta(
-		replayer.version, ctx, typs, attrs, MetaIDX, reader, replayer.mp,
+		CheckpointVersion12, ctx, typs, attrs, MetaIDX, reader, replayer.mp,
 	); err != nil {
 		return
 	}
@@ -280,7 +268,7 @@ func (replayer *CheckpointReplayer) ReadDataForV12(
 			}
 			var bats []*containers.Batch
 			if bats, err = LoadBlkColumnsByMeta(
-				replayer.version, ctx, typs, destBatch.Attrs, batchIdx, reader, replayer.mp,
+				CheckpointVersion12, ctx, typs, destBatch.Attrs, batchIdx, reader, replayer.mp,
 			); err != nil {
 				return
 			}
@@ -299,90 +287,37 @@ func (replayer *CheckpointReplayer) ReadDataForV12(
 	return
 }
 
-func (replayer *CheckpointReplayer) UpgradeDate() (err error) {
-	replayer.objectInfo = make([]containers.Vectors, 0)
-	upgradeFn := func(objectType int8, src *containers.Batch) (err error) {
-		if src == nil || src.Length() == 0 {
-			return
-		}
-		dest := containers.NewVectors(len(ckputil.TableObjectsAttrs))
-		dest[ckputil.TableObjectsAttr_Table_Idx] = *src.Vecs[ObjectInfo_TID_Idx+2].GetDownstreamVector()
-		dest[ckputil.TableObjectsAttr_ID_Idx] = *src.Vecs[ObjectInfo_ObjectStats_Idx+2].GetDownstreamVector()
-		dest[ckputil.TableObjectsAttr_DB_Idx] = *src.Vecs[ObjectInfo_DBID_Idx+2].GetDownstreamVector()
-		dest[ckputil.TableObjectsAttr_CreateTS_Idx] = *src.Vecs[ObjectInfo_CreateAt_Idx+2].GetDownstreamVector()
-		dest[ckputil.TableObjectsAttr_DeleteTS_Idx] = *src.Vecs[ObjectInfo_DeleteAt_Idx+2].GetDownstreamVector()
-		objTypeVec := vector.NewVec(types.T_int8.ToType())
-		if err = vector.AppendMultiFixed(
-			objTypeVec, objectType, false, src.Length(), replayer.mp,
-		); err != nil {
-			return
-		}
-		dest[ckputil.TableObjectsAttr_ObjectType_Idx] = *objTypeVec
-		replayer.objectInfo = append(replayer.objectInfo, dest)
-		return
-	}
-
-	if err = upgradeFn(ckputil.ObjectType_Data, replayer.objBatches); err != nil {
-		return
-	}
-	if err = upgradeFn(ckputil.ObjectType_Tombstone, replayer.tombstoneBatch); err != nil {
-		return
-	}
-	return
-}
-
-func (replayer *CheckpointReplayer) ReadData(ctx context.Context, sid string, fs fileservice.FileService) (err error) {
-	for str, loc := range replayer.locations {
-		maxBlkID := replayer.maxBlkIDs[str]
-		for i := 0; i <= int(maxBlkID); i++ {
-			loc.SetID(uint16(i))
-			dataVecs := containers.NewVectors(len(ckputil.TableObjectsAttrs))
-			var release func()
-			if _, release, err = ioutil.LoadColumnsData(
-				ctx,
-				ckputil.TableObjectsSeqnums,
-				ckputil.TableObjectsTypes,
-				fs,
-				loc,
-				dataVecs,
-				replayer.mp,
-				0,
-			); err != nil {
-				return
-			}
-			replayer.closeCB = append(replayer.closeCB, release)
-			replayer.objectInfo = append(replayer.objectInfo, dataVecs)
-		}
-	}
-	return
-}
 func (replayer *CheckpointReplayer) ReplayObjectlist(
 	ctx context.Context,
 	c *catalog.Catalog,
 	forSys bool,
 	dataFactory *tables.DataFactory) {
-	for _, vecs := range replayer.objectInfo {
-		// startOffset, endOffset := 0, 0
-		startOffset, _ := 0, 0
-		tids := vector.MustFixedColNoTypeCheck[uint64](&vecs[ckputil.TableObjectsAttr_Table_Idx])
-		prevTid := tids[0]
-		for i := 0; i < len(tids); i++ {
-			if tids[i] != prevTid {
-				// endOffset = i
-				if forSys == pkgcatalog.IsSystemTable(prevTid) {
-					panic("todo")
-					// c.OnReplayObjectBatch_V2(vecs, dataFactory, startOffset, endOffset)
-				}
-				startOffset = i
-				prevTid = tids[i]
+	replayFn := func(src *containers.Batch, objectType int8) {
+		if src == nil || src.Length() == 0 {
+			return
+		}
+		dbids := vector.MustFixedColNoTypeCheck[uint64](src.Vecs[ObjectInfo_DBID_Idx+2].GetDownstreamVector())
+		tids := vector.MustFixedColNoTypeCheck[uint64](src.Vecs[ObjectInfo_TID_Idx+2].GetDownstreamVector())
+		objectstatsVec := src.Vecs[ObjectInfo_ObjectStats_Idx+2].GetDownstreamVector()
+		createTSs := vector.MustFixedColNoTypeCheck[types.TS](src.Vecs[ObjectInfo_CreateAt_Idx+2].GetDownstreamVector())
+		deleteTSs := vector.MustFixedColNoTypeCheck[types.TS](src.Vecs[ObjectInfo_DeleteAt_Idx+2].GetDownstreamVector())
+		for i := 0; i < src.Length(); i++ {
+			if forSys == pkgcatalog.IsSystemTable(tids[i]) {
+				c.OnReplayObjectBatch_V2(
+					dbids[i],
+					tids[i],
+					objectType,
+					objectio.ObjectStats(objectstatsVec.GetBytesAt(i)),
+					createTSs[i],
+					deleteTSs[i],
+					dataFactory,
+				)
 			}
 		}
-		if startOffset != len(tids) {
-			if forSys == pkgcatalog.IsSystemTable(prevTid) {
-				// c.OnReplayObjectBatch_V2(vecs, dataFactory, startOffset, len(tids))
-			}
-		}
+
 	}
+	replayFn(replayer.objBatches, ckputil.ObjectType_Data)
+	replayFn(replayer.tombstoneBatch, ckputil.ObjectType_Tombstone)
 }
 
 type BaseCollector_V2 struct {

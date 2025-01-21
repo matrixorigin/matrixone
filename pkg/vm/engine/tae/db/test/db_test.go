@@ -11348,8 +11348,6 @@ func TestCheckpointV2Compatibility(t *testing.T) {
 	assert.NoError(t, err)
 	err = replayer.ReadDataForV12(ctx, tae.Opts.Fs)
 	assert.NoError(t, err)
-	err = replayer.UpgradeDate()
-	assert.NoError(t, err)
 	replayer.ReplayObjectlist(ctx, catalog2, true, dataFactory)
 	readTxn, err := tae.StartTxn(nil)
 	assert.NoError(t, err)
