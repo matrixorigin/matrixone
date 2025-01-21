@@ -617,8 +617,7 @@ func (h *Handle) HandleDiskCleaner(
 		return
 	case cmd_util.FastGC:
 		minTS := types.StringToTS(value)
-		logutil.Infof("fast gc execute, minTS: %v, value is %v", minTS.ToString(), value)
-		h.db.DiskCleaner.GetCleaner().FastExecute(ctx, &types.TS{})
+		err = h.db.DiskCleaner.GetCleaner().FastExecute(ctx, &minTS)
 		return
 	default:
 		return nil, moerr.NewInvalidArgNoCtx(key, value)
