@@ -18,6 +18,7 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"
 )
@@ -38,7 +39,7 @@ type Driver interface {
 	RangeCheckpoint(start, end uint64, files ...string) (e LogEntry, err error)
 	AppendEntry(uint32, LogEntry) (uint64, error)
 
-	Replay(ctx context.Context, handle store.ApplyHandle) error
+	Replay(ctx context.Context, handle store.ApplyHandle, mode driver.ReplayMode) error
 	Start()
 	Close() error
 

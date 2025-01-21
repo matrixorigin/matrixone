@@ -25,19 +25,13 @@ import (
 
 var ErrTooMuchPenddings = moerr.NewInternalErrorNoCtx("too much penddings")
 
-func (d *LogServiceDriver) Append(e *entry.Entry) error {
-	d.dsnmu.Lock()
-	e.DSN = d.allocateDSNLocked()
-	_, err := d.commitLoop.Enqueue(e)
-	if err != nil {
-		panic(err)
-	}
-	d.dsnmu.Unlock()
-	return nil
+func (d *LogServiceDriver) Append(e *entry.Entry) (err error) {
+	_, err = d.commitLoop.Enqueue(e)
+	return
 }
 
 func (d *LogServiceDriver) getCommitter() *groupCommitter {
-	if int(d.committer.writer.Size()) > d.config.RecordSize {
+	if int(d.committer.writer.Size()) > d.config.ClientBufSize {
 		d.flushCurrentCommitter()
 	}
 	return d.committer
@@ -54,6 +48,7 @@ func (d *LogServiceDriver) flushCurrentCommitter() {
 func (d *LogServiceDriver) onCommitIntents(items ...any) {
 	for _, item := range items {
 		e := item.(*entry.Entry)
+		e.DSN = d.allocateDSN()
 		committer := d.getCommitter()
 		committer.AddIntent(e)
 	}
@@ -72,10 +67,7 @@ func (d *LogServiceDriver) asyncCommit(committer *groupCommitter) {
 	committer.Add(1)
 	d.appendPool.Submit(func() {
 		defer committer.Done()
-		if err := committer.Commit(
-			10,
-			d.config.ClientAppendDuration,
-		); err != nil {
+		if err := committer.Commit(); err != nil {
 			logutil.Fatal(
 				"Wal-Cannot-Append",
 				zap.Error(err),
@@ -87,35 +79,27 @@ func (d *LogServiceDriver) asyncCommit(committer *groupCommitter) {
 // Node:
 // this function must be called in serial due to the write token
 func (d *LogServiceDriver) getClientForWrite() (client *wrappedClient, token uint64) {
-	var err error
-	if token, err = d.applyWriteToken(
-		uint64(d.config.ClientMaxCount), time.Second,
-	); err != nil {
-		// should never happen
-		panic(err)
-	}
-	if client, err = d.clientPool.Get(); err == nil {
-		return
+	var (
+		err error
+		now = time.Now()
+	)
+
+	token = d.applyWriteToken()
+
+	client, err = d.clientPool.Get()
+
+	if err != nil || time.Since(now) > time.Second*2 {
+		logger := logutil.Info
+		if err != nil {
+			logger = logutil.Error
+		}
+		logger(
+			"Wal-Get-Client",
+			zap.Duration("duration", time.Since(now)),
+			zap.Error(err),
+		)
 	}
 
-	var (
-		retryCount = 0
-		now        = time.Now()
-		logger     = logutil.Info
-	)
-	if err = RetryWithTimeout(d.config.RetryTimeout, func() (shouldReturn bool) {
-		retryCount++
-		client, err = d.clientPool.Get()
-		return err == nil
-	}); err != nil {
-		logger = logutil.Error
-	}
-	logger(
-		"Wal-Get-Client",
-		zap.Int("retry-count", retryCount),
-		zap.Error(err),
-		zap.Duration("duration", time.Since(now)),
-	)
 	if err != nil {
 		panic(err)
 	}
@@ -127,7 +111,7 @@ func (d *LogServiceDriver) onWaitCommitted(items []any, nextQueue chan any) {
 	for _, item := range items {
 		committer := item.(*groupCommitter)
 		committer.Wait()
-		committer.PutbackClient(d.clientPool)
+		committer.PutbackClient()
 		committer.NotifyCommitted()
 		committers = append(committers, committer)
 	}
@@ -149,6 +133,6 @@ func (d *LogServiceDriver) onCommitDone(items []any, _ chan any) {
 	}
 
 	d.commitWatermark()
-	d.putbackWriteTokens(d.reuse.tokens)
+	d.putbackWriteTokens(d.reuse.tokens...)
 	d.reuse.tokens = d.reuse.tokens[:0]
 }

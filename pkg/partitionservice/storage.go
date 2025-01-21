@@ -480,7 +480,7 @@ func getPartitionTableCreateSQL(
 		table.ObjectNamePrefix,
 		table.AtTsExpr,
 	)
-	return tree.String(stmt, dialect.MYSQL)
+	return tree.StringWithOpts(stmt, dialect.MYSQL, tree.WithSingleQuoteString())
 }
 
 func getInsertMetadataSQL(
