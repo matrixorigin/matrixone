@@ -219,10 +219,10 @@ func GeAccountVersion(accountId uint32, flag bool, txn executor.TxnExecutor) (st
 	}
 	sql := fmt.Sprintf("SELECT create_version %s FROM mo_catalog.mo_account WHERE account_id = %d", offsetCol, accountId)
 	res, err := txn.Exec(sql, executor.StatementOption{})
-	defer res.Close()
 	if err != nil {
 		return "", 0, err
 	}
+	defer res.Close()
 
 	version := ""
 	versionOffset := int32(-1)

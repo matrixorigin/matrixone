@@ -85,15 +85,15 @@ func getAccountVersion(ctx context.Context, ses FeSession, flag bool, bh Backgro
 		return "", 0, err
 	}
 
-	for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
-		createVersion, err := erArray[0].GetString(sysTenantCtx, i, 0)
+	if erArray[0].GetRowCount() > 0 {
+		createVersion, err := erArray[0].GetString(sysTenantCtx, 0, 0)
 		if err != nil {
 			return "", 0, err
 		}
 
 		versionOffset := int64(-1)
 		if flag {
-			versionOffset, err = erArray[0].GetInt64(sysTenantCtx, i, 1)
+			versionOffset, err = erArray[0].GetInt64(sysTenantCtx, 0, 1)
 			if err != nil {
 				return "", 0, err
 			}
@@ -132,18 +132,18 @@ func getClusterVersion(ctx context.Context, finalVersion string, bh BackgroundEx
 		}
 	}
 
-	for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
-		clusterVersion, err := erArray[0].GetString(sysTenantCtx, i, 0)
+	if erArray[0].GetRowCount() > 0 {
+		clusterVersion, err := erArray[0].GetString(sysTenantCtx, 0, 0)
 		if err != nil {
 			return "", 0, false, err
 		}
 
-		state, err := erArray[0].GetInt64(sysTenantCtx, i, 1)
+		state, err := erArray[0].GetInt64(sysTenantCtx, 0, 1)
 		if err != nil {
 			return "", 0, false, err
 		}
 
-		isFinalVersion, err := erArray[0].GetInt64(sysTenantCtx, i, 2)
+		isFinalVersion, err := erArray[0].GetInt64(sysTenantCtx, 0, 2)
 		if err != nil {
 			return "", 0, false, err
 		}

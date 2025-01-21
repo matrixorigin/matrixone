@@ -90,7 +90,6 @@ func (te *memTxnExecutor) Txn() client.TxnOperator {
 }
 
 func (te *memTxnExecutor) SetCtxValue(key, value interface{}) {
-	return
 }
 
 // MemResult used to test. Construct a Result from memory.
