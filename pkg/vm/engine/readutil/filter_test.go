@@ -15,8 +15,12 @@
 package readutil
 
 import (
+	"fmt"
+	"math/rand"
+	"slices"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -26,6 +30,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/stretchr/testify/require"
 )
 
@@ -753,106 +758,438 @@ func Test_ConstructBasePKFilter(t *testing.T) {
 }
 
 func TestConstructBlockPKFilter(t *testing.T) {
-	mp, err := mpool.NewMPool("", mpool.GB, 0)
+	mp, err := mpool.NewMPool("", mpool.GB*2, 0)
 	require.NoError(t, err)
 
 	ops := []int{
 		function.LESS_EQUAL, function.LESS_THAN,
 		function.GREAT_EQUAL, function.GREAT_THAN,
 		function.EQUAL, function.BETWEEN, RangeBothOpen, RangeLeftOpen, RangeRightOpen,
+		function.PREFIX_EQ,
+		function.PREFIX_IN,
+		function.PREFIX_BETWEEN,
 	}
 
 	tys := []types.T{
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
-		types.T_date, types.T_datetime, types.T_time, types.T_timestamp,
-		types.T_decimal64, types.T_decimal128, types.T_varchar, types.T_enum,
+		types.T_date, types.T_timestamp,
+		types.T_decimal128, types.T_varchar,
 	}
 
-	lb, ub := 1, 2
-
-	var basePKFilters []BasePKFilter
-	for _, op := range ops {
-		for _, ty := range tys {
-			var llb, uub []byte
-
-			if ty == types.T_decimal128 {
-				llb = types.EncodeDecimal128(&types.Decimal128{B0_63: uint64(lb), B64_127: uint64(lb)})
-				uub = types.EncodeDecimal128(&types.Decimal128{B0_63: uint64(ub), B64_127: uint64(ub)})
-
-			} else if ty == types.T_varchar {
-				llb = []byte(strconv.Itoa(lb))
-				uub = []byte(strconv.Itoa(ub))
-
-			} else {
-				llb = types.EncodeFixed(lb)
-				uub = types.EncodeFixed(ub)
-			}
-
-			basePKFilters = append(basePKFilters, BasePKFilter{
-				Valid: true,
-				Op:    op,
-				LB:    llb,
-				UB:    uub,
-				Vec:   nil,
-				Oid:   ty,
-			})
+	needVec := func(op int) bool {
+		if op == function.PREFIX_IN || op == function.IN {
+			return true
 		}
+
+		return false
 	}
 
-	for i := range basePKFilters {
-		blkPKFilter, err := ConstructBlockPKFilter(
-			false,
-			basePKFilters[i],
+	opOnBinary := func(op int) bool {
+		return op == function.PREFIX_IN ||
+			op == function.PREFIX_EQ ||
+			op == function.PREFIX_BETWEEN
+	}
+
+	for range 100 {
+		rnd := rand.New(rand.NewSource(time.Now().UnixNano()))
+		lb := float64(rnd.Intn(100) + 2)
+		ub := float64(rnd.Intn(100) + 2)
+
+		if lb > ub {
+			lb, ub = ub, lb
+		}
+
+		var (
+			vec      *vector.Vector
+			llb, uub []byte
+			inputVec *vector.Vector
 		)
-		require.NoError(t, err)
 
-		require.True(t, blkPKFilter.Valid)
-		require.NotNil(t, blkPKFilter.SortedSearchFunc)
-		require.NotNil(t, blkPKFilter.UnSortedSearchFunc)
+		for _, op := range ops {
+			for _, ty := range tys {
+				if vec != nil {
+					vec.CleanOnlyData()
+				}
+				vec = vector.NewVec(ty.ToType())
+				vec.PreExtend(1000, mp)
 
-		vec := vector.NewVec(basePKFilters[i].Oid.ToType())
-		switch basePKFilters[i].Oid {
-		case types.T_int8:
-			vector.AppendFixed(vec, int8(lb), false, mp)
-			vector.AppendFixed(vec, int8(ub), false, mp)
-		case types.T_int16:
-			vector.AppendFixed(vec, int16(lb), false, mp)
-			vector.AppendFixed(vec, int16(ub), false, mp)
-		case types.T_int32:
-			vector.AppendFixed(vec, int32(lb), false, mp)
-			vector.AppendFixed(vec, int32(ub), false, mp)
-		case types.T_int64:
-			vector.AppendFixed(vec, int64(lb), false, mp)
-			vector.AppendFixed(vec, int64(ub), false, mp)
-		case types.T_uint8:
-			vector.AppendFixed(vec, uint8(lb), false, mp)
-			vector.AppendFixed(vec, uint8(ub), false, mp)
-		case types.T_uint16:
-			vector.AppendFixed(vec, uint16(lb), false, mp)
-			vector.AppendFixed(vec, uint16(ub), false, mp)
-		case types.T_uint32:
-			vector.AppendFixed(vec, uint32(lb), false, mp)
-			vector.AppendFixed(vec, uint32(ub), false, mp)
-		case types.T_uint64:
-			vector.AppendFixed(vec, uint64(lb), false, mp)
-			vector.AppendFixed(vec, uint64(ub), false, mp)
-		case types.T_float32:
-			vector.AppendFixed(vec, float32(lb), false, mp)
-			vector.AppendFixed(vec, float32(ub), false, mp)
-		case types.T_float64:
-			vector.AppendFixed(vec, float64(lb), false, mp)
-			vector.AppendFixed(vec, float64(ub), false, mp)
-		case types.T_varchar:
-			vector.AppendBytes(vec, []byte("1"), false, mp)
-			vector.AppendBytes(vec, []byte("2"), false, mp)
+				switch ty {
+
+				case types.T_int8:
+					if needVec(op) {
+						//vec = vector.NewVec(ty.ToType())
+						for x := lb; x <= ub; x++ {
+							xx := int8(x)
+							if opOnBinary(op) {
+								vector.AppendBytes(vec, types.EncodeInt8(&xx), false, mp)
+							} else {
+								vector.AppendFixed(vec, xx, false, mp)
+							}
+						}
+					}
+					llb = types.EncodeValue(int8(lb), ty)
+					uub = types.EncodeValue(int8(ub), ty)
+				case types.T_int16:
+					if needVec(op) {
+						//vec = vector.NewVec(ty.ToType())
+						for x := lb; x <= ub; x++ {
+							xx := int16(x)
+							if opOnBinary(op) {
+								vector.AppendBytes(vec, types.EncodeInt16(&xx), false, mp)
+							} else {
+								vector.AppendFixed(vec, xx, false, mp)
+							}
+						}
+					}
+					llb = types.EncodeValue(int16(lb), ty)
+					uub = types.EncodeValue(int16(ub), ty)
+				case types.T_int32:
+					if needVec(op) {
+						//vec = vector.NewVec(ty.ToType())
+						for x := lb; x <= ub; x++ {
+							xx := int32(x)
+							if opOnBinary(op) {
+								vector.AppendBytes(vec, types.EncodeInt32(&xx), false, mp)
+							} else {
+								vector.AppendFixed(vec, xx, false, mp)
+							}
+						}
+					}
+					llb = types.EncodeValue(int32(lb), ty)
+					uub = types.EncodeValue(int32(ub), ty)
+				case types.T_int64:
+					if needVec(op) {
+						//vec = vector.NewVec(ty.ToType())
+						for x := lb; x <= ub; x++ {
+							xx := int64(x)
+							if opOnBinary(op) {
+								vector.AppendBytes(vec, types.EncodeInt64(&xx), false, mp)
+							} else {
+								vector.AppendFixed(vec, xx, false, mp)
+							}
+						}
+					}
+					llb = types.EncodeValue(int64(lb), ty)
+					uub = types.EncodeValue(int64(ub), ty)
+				case types.T_uint8:
+					if needVec(op) {
+						//vec = vector.NewVec(ty.ToType())
+						for x := lb; x <= ub; x++ {
+							xx := uint8(x)
+							if opOnBinary(op) {
+								vector.AppendBytes(vec, types.EncodeUint8(&xx), false, mp)
+							} else {
+								vector.AppendFixed(vec, xx, false, mp)
+							}
+						}
+					}
+					llb = types.EncodeValue(uint8(lb), ty)
+					uub = types.EncodeValue(uint8(ub), ty)
+				case types.T_uint16:
+					if needVec(op) {
+						//vec = vector.NewVec(ty.ToType())
+						for x := lb; x <= ub; x++ {
+							xx := uint16(x)
+							if opOnBinary(op) {
+								vector.AppendBytes(vec, types.EncodeUint16(&xx), false, mp)
+							} else {
+								vector.AppendFixed(vec, xx, false, mp)
+							}
+						}
+					}
+					llb = types.EncodeValue(uint16(lb), ty)
+					uub = types.EncodeValue(uint16(ub), ty)
+				case types.T_uint32:
+					if needVec(op) {
+						//vec = vector.NewVec(ty.ToType())
+						for x := lb; x <= ub; x++ {
+							xx := uint32(x)
+							if opOnBinary(op) {
+								vector.AppendBytes(vec, types.EncodeUint32(&xx), false, mp)
+							} else {
+								vector.AppendFixed(vec, xx, false, mp)
+							}
+						}
+					}
+					llb = types.EncodeValue(uint32(lb), ty)
+					uub = types.EncodeValue(uint32(ub), ty)
+				case types.T_uint64:
+					if needVec(op) {
+						//vec = vector.NewVec(ty.ToType())
+						for x := lb; x <= ub; x++ {
+							xx := int64(x)
+							if opOnBinary(op) {
+								vector.AppendBytes(vec, types.EncodeInt64(&xx), false, mp)
+							} else {
+								vector.AppendFixed(vec, xx, false, mp)
+							}
+						}
+					}
+					llb = types.EncodeValue(uint64(lb), ty)
+					uub = types.EncodeValue(uint64(ub), ty)
+				case types.T_float32:
+					if needVec(op) {
+						//vec = vector.NewVec(ty.ToType())
+						for x := lb; x <= ub; x++ {
+							xx := float32(x)
+							if opOnBinary(op) {
+								vector.AppendBytes(vec, types.EncodeFloat32(&xx), false, mp)
+							} else {
+								vector.AppendFixed(vec, xx, false, mp)
+							}
+						}
+					}
+					llb = types.EncodeValue(float32(lb), ty)
+					uub = types.EncodeValue(float32(ub), ty)
+				case types.T_float64:
+					if needVec(op) {
+						//vec = vector.NewVec(ty.ToType())
+						for x := lb; x <= ub; x++ {
+							xx := float64(x)
+							if opOnBinary(op) {
+								vector.AppendBytes(vec, types.EncodeFloat64(&xx), false, mp)
+							} else {
+								vector.AppendFixed(vec, xx, false, mp)
+							}
+						}
+					}
+					llb = types.EncodeValue(float64(lb), ty)
+					uub = types.EncodeValue(float64(ub), ty)
+				case types.T_varchar, types.T_binary:
+					if needVec(op) {
+						for x := lb; x <= ub; x++ {
+							vector.AppendBytes(vec, []byte(strconv.Itoa(int(x))), false, mp)
+						}
+					}
+
+					str1 := strconv.Itoa(int(lb))
+					str2 := strconv.Itoa(int(ub))
+					if str1 > str2 {
+						// string and integer have different sort type.
+						str1, str2 = str2, str1
+					}
+					llb = []byte(str1)
+					uub = []byte(str2)
+
+				case types.T_date:
+					if needVec(op) {
+						//vec = vector.NewVec(ty.ToType())
+						for x := lb; x <= ub; x++ {
+							xx := types.Date(x)
+							if opOnBinary(op) {
+								vector.AppendBytes(vec, types.EncodeDate(&xx), false, mp)
+							} else {
+								vector.AppendFixed(vec, xx, false, mp)
+							}
+						}
+					}
+					llb = types.EncodeValue(types.Date(lb), ty)
+					uub = types.EncodeValue(types.Date(ub), ty)
+
+				case types.T_timestamp:
+					if needVec(op) {
+						//vec = vector.NewVec(ty.ToType())
+						for x := lb; x <= ub; x++ {
+							xx := types.Timestamp(x)
+							if opOnBinary(op) {
+								vector.AppendBytes(vec, types.EncodeTimestamp(&xx), false, mp)
+							} else {
+								vector.AppendFixed(vec, xx, false, mp)
+							}
+						}
+					}
+					llb = types.EncodeValue(types.Timestamp(lb), ty)
+					uub = types.EncodeValue(types.Timestamp(ub), ty)
+
+				case types.T_decimal128:
+					if needVec(op) {
+						for x := lb; x <= ub; x++ {
+							xx := types.Decimal128{uint64(x), 0}
+							if opOnBinary(op) {
+								vector.AppendBytes(vec, types.EncodeDecimal128(&xx), false, mp)
+							} else {
+								vector.AppendFixed(vec, xx, false, mp)
+							}
+						}
+					}
+					llb = types.EncodeDecimal128(&types.Decimal128{B0_63: uint64(lb), B64_127: uint64(lb)})
+					uub = types.EncodeDecimal128(&types.Decimal128{B0_63: uint64(ub), B64_127: uint64(ub)})
+				}
+
+				if vec != nil {
+					if opOnBinary(op) {
+						vec.SetType(types.T_binary.ToType())
+					}
+					vec.InplaceSort()
+				}
+				basePKFilter := BasePKFilter{
+					Valid: true,
+					Op:    op,
+					LB:    llb,
+					UB:    uub,
+					Vec:   vec,
+					Oid:   ty,
+				}
+
+				blkPKFilter, err := ConstructBlockPKFilter(
+					false,
+					basePKFilter,
+				)
+				require.NoError(t, err)
+
+				require.True(t, blkPKFilter.Valid, basePKFilter.String())
+				require.NotNil(t, blkPKFilter.SortedSearchFunc)
+				require.NotNil(t, blkPKFilter.UnSortedSearchFunc)
+
+				if inputVec != nil {
+					inputVec.CleanOnlyData()
+				}
+				inputVec = vector.NewVec(ty.ToType())
+				inputVec.PreExtend(1000, mp)
+
+				if opOnBinary(op) {
+					inputVec.SetType(types.T_binary.ToType())
+				}
+
+				switch ty {
+				case types.T_int8:
+					for x := lb - 1; x <= ub+1; x++ {
+						xx := int8(x)
+						if opOnBinary(op) {
+							vector.AppendBytes(inputVec, types.EncodeInt8(&xx), false, mp)
+						} else {
+							vector.AppendFixed(inputVec, xx, false, mp)
+						}
+					}
+
+				case types.T_int16:
+					for x := lb - 1; x <= ub+1; x++ {
+						xx := int16(x)
+						if opOnBinary(op) {
+							vector.AppendBytes(inputVec, types.EncodeInt16(&xx), false, mp)
+						} else {
+							vector.AppendFixed(inputVec, xx, false, mp)
+						}
+					}
+
+				case types.T_int32:
+					for x := lb - 1; x <= ub+1; x++ {
+						xx := int32(x)
+						if opOnBinary(op) {
+							vector.AppendBytes(inputVec, types.EncodeInt32(&xx), false, mp)
+						} else {
+							vector.AppendFixed(inputVec, xx, false, mp)
+						}
+					}
+				case types.T_int64:
+					for x := lb - 1; x <= ub+1; x++ {
+						xx := int64(x)
+						if opOnBinary(op) {
+							vector.AppendBytes(inputVec, types.EncodeInt64(&xx), false, mp)
+						} else {
+							vector.AppendFixed(inputVec, xx, false, mp)
+						}
+					}
+				case types.T_uint8:
+					for x := lb - 1; x <= ub+1; x++ {
+						xx := uint8(x)
+						if opOnBinary(op) {
+							vector.AppendBytes(inputVec, types.EncodeUint8(&xx), false, mp)
+						} else {
+							vector.AppendFixed(inputVec, xx, false, mp)
+						}
+					}
+				case types.T_uint16:
+					for x := lb - 1; x <= ub+1; x++ {
+						xx := uint16(x)
+						if opOnBinary(op) {
+							vector.AppendBytes(inputVec, types.EncodeUint16(&xx), false, mp)
+						} else {
+							vector.AppendFixed(inputVec, xx, false, mp)
+						}
+					}
+				case types.T_uint32:
+					for x := lb - 1; x <= ub+1; x++ {
+						xx := uint32(x)
+						if opOnBinary(op) {
+							vector.AppendBytes(inputVec, types.EncodeUint32(&xx), false, mp)
+						} else {
+							vector.AppendFixed(inputVec, xx, false, mp)
+						}
+					}
+				case types.T_uint64:
+					for x := lb - 1; x <= ub+1; x++ {
+						xx := uint64(x)
+						if opOnBinary(op) {
+							vector.AppendBytes(inputVec, types.EncodeUint64(&xx), false, mp)
+						} else {
+							vector.AppendFixed(inputVec, xx, false, mp)
+						}
+					}
+				case types.T_float32:
+					for x := lb - 1; x <= ub+1; x++ {
+						xx := float32(x)
+						if opOnBinary(op) {
+							vector.AppendBytes(inputVec, types.EncodeFloat32(&xx), false, mp)
+						} else {
+							vector.AppendFixed(inputVec, xx, false, mp)
+						}
+					}
+				case types.T_float64:
+					for x := lb - 1; x <= ub+1; x++ {
+						xx := float64(x)
+						if opOnBinary(op) {
+							vector.AppendBytes(inputVec, types.EncodeFloat64(&xx), false, mp)
+						} else {
+							vector.AppendFixed(inputVec, xx, false, mp)
+						}
+					}
+				case types.T_varchar:
+					for x := lb - 1; x <= ub+1; x++ {
+						xx := strconv.Itoa(int(x))
+						vector.AppendBytes(inputVec, []byte(xx), false, mp)
+					}
+
+				case types.T_date:
+					for x := lb - 1; x <= ub+1; x++ {
+						xx := types.Date(x)
+						if opOnBinary(op) {
+							vector.AppendBytes(inputVec, types.EncodeDate(&xx), false, mp)
+						} else {
+							vector.AppendFixed(inputVec, xx, false, mp)
+						}
+					}
+
+				case types.T_timestamp:
+					for x := lb - 1; x <= ub+1; x++ {
+						xx := types.Timestamp(x)
+						if opOnBinary(op) {
+							vector.AppendBytes(inputVec, types.EncodeTimestamp(&xx), false, mp)
+						} else {
+							vector.AppendFixed(inputVec, xx, false, mp)
+						}
+					}
+				}
+
+				inputVec.InplaceSort()
+
+				if opOnBinary(op) && (ty == types.T_float32 || ty == types.T_float64) {
+					// can the Prefix apply on a float/double ???
+					continue
+				}
+
+				sel1 := blkPKFilter.SortedSearchFunc(inputVec)
+				sel2 := blkPKFilter.UnSortedSearchFunc(inputVec)
+
+				require.Equal(t, sel1, sel2,
+					fmt.Sprintf("lb: %v, ub: %v\nbaseFilter: %v\ninputVec: %v",
+						lb, ub,
+						basePKFilter.String(),
+						common.MoVectorToString(inputVec, 100)))
+			}
 		}
-
-		sel1 := blkPKFilter.SortedSearchFunc(vec)
-		sel2 := blkPKFilter.UnSortedSearchFunc(vec)
-
-		require.Equal(t, sel1, sel2, basePKFilters[i].String())
 	}
 }
 
@@ -866,81 +1203,283 @@ func TestMergeBaseFilterInKind(t *testing.T) {
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
+
+		types.T_varchar, types.T_binary, types.T_json,
+
+		types.T_decimal128,
+	}
+
+	checkFunc := func(mm map[float64]struct{}, ty types.T, retV *vector.Vector, msg string) {
+		require.Equal(t, len(mm), retV.Length(), msg)
+
+		switch ty {
+		case types.T_int8:
+			cols := vector.MustFixedColWithTypeCheck[int8](retV)
+			for i := range cols {
+				_, ok := mm[float64(cols[i])]
+				require.True(t, ok, msg)
+			}
+		case types.T_int16:
+			cols := vector.MustFixedColWithTypeCheck[int16](retV)
+			for i := range cols {
+				_, ok := mm[float64(cols[i])]
+				require.True(t, ok, msg)
+			}
+		case types.T_int32:
+			cols := vector.MustFixedColWithTypeCheck[int32](retV)
+			for i := range cols {
+				_, ok := mm[float64(cols[i])]
+				require.True(t, ok, msg)
+			}
+		case types.T_int64:
+			cols := vector.MustFixedColWithTypeCheck[int64](retV)
+			for i := range cols {
+				_, ok := mm[float64(cols[i])]
+				require.True(t, ok, msg)
+			}
+		case types.T_uint8:
+			cols := vector.MustFixedColWithTypeCheck[uint8](retV)
+			for i := range cols {
+				_, ok := mm[float64(cols[i])]
+				require.True(t, ok, msg)
+			}
+		case types.T_uint16:
+			cols := vector.MustFixedColWithTypeCheck[uint16](retV)
+			for i := range cols {
+				_, ok := mm[float64(cols[i])]
+				require.True(t, ok, msg)
+			}
+		case types.T_uint32:
+			cols := vector.MustFixedColWithTypeCheck[uint32](retV)
+			for i := range cols {
+				_, ok := mm[float64(cols[i])]
+				require.True(t, ok, msg)
+			}
+		case types.T_uint64:
+			cols := vector.MustFixedColWithTypeCheck[uint64](retV)
+			for i := range cols {
+				_, ok := mm[float64(cols[i])]
+				require.True(t, ok, msg)
+			}
+		case types.T_float32:
+			cols := vector.MustFixedColWithTypeCheck[float32](retV)
+			for i := range cols {
+				_, ok := mm[float64(cols[i])]
+				require.True(t, ok, msg)
+			}
+		case types.T_float64:
+			cols := vector.MustFixedColWithTypeCheck[float64](retV)
+			for i := range cols {
+				_, ok := mm[float64(cols[i])]
+				require.True(t, ok, msg)
+			}
+
+		case types.T_varchar, types.T_json, types.T_binary:
+			cols, area := vector.MustVarlenaRawData(retV)
+			for i := range cols {
+				str := string(cols[i].GetByteSlice(area))
+				val, err := strconv.Atoi(str)
+				require.NoError(t, err)
+				_, ok := mm[float64(val)]
+				require.True(t, ok)
+			}
+
+		case types.T_decimal128:
+			cols := vector.MustFixedColWithTypeCheck[types.Decimal128](retV)
+			for i := range cols {
+				_, ok := mm[float64(cols[i].B0_63)]
+				require.True(t, ok, msg)
+			}
+		}
 	}
 
 	var lvec, rvec *vector.Vector
-	var lvals, rvals = []float64{1, 1, 2, 2, 3, 3}, []float64{3, 3, 4, 4, 5}
-	var left, right = BasePKFilter{}, BasePKFilter{}
 
-	for _, ty := range tys {
-		lvec = vector.NewVec(ty.ToType())
-		rvec = vector.NewVec(ty.ToType())
-		switch ty {
-		case types.T_int8:
-			for i := range rvals {
-				vector.AppendFixed(rvec, int8(rvals[i]), false, mp)
-				vector.AppendFixed(lvec, int8(lvals[i]), false, mp)
-			}
+	for s := 0; s < 50; s++ {
+		var (
+			lstrs, rstrs []string
+			lvals, rvals []float64
+			left, right  = BasePKFilter{}, BasePKFilter{}
+		)
 
-		case types.T_int16:
-			for i := range rvals {
-				vector.AppendFixed(rvec, int16(rvals[i]), false, mp)
-				vector.AppendFixed(lvec, int16(lvals[i]), false, mp)
-			}
-		case types.T_int32:
-			for i := range rvals {
-				vector.AppendFixed(rvec, int32(rvals[i]), false, mp)
-				vector.AppendFixed(lvec, int32(lvals[i]), false, mp)
-			}
-		case types.T_int64:
-			for i := range rvals {
-				vector.AppendFixed(rvec, int64(rvals[i]), false, mp)
-				vector.AppendFixed(lvec, int64(lvals[i]), false, mp)
-			}
-		case types.T_uint8:
-			for i := range rvals {
-				vector.AppendFixed(rvec, uint8(rvals[i]), false, mp)
-				vector.AppendFixed(lvec, uint8(lvals[i]), false, mp)
-			}
-		case types.T_uint16:
-			for i := range rvals {
-				vector.AppendFixed(rvec, uint16(rvals[i]), false, mp)
-				vector.AppendFixed(lvec, uint16(lvals[i]), false, mp)
-			}
-		case types.T_uint32:
-			for i := range rvals {
-				vector.AppendFixed(rvec, uint32(rvals[i]), false, mp)
-				vector.AppendFixed(lvec, uint32(lvals[i]), false, mp)
-			}
-		case types.T_uint64:
-			for i := range rvals {
-				vector.AppendFixed(rvec, uint64(rvals[i]), false, mp)
-				vector.AppendFixed(lvec, uint64(lvals[i]), false, mp)
-			}
-		case types.T_float32:
-			for i := range rvals {
-				vector.AppendFixed(rvec, float32(rvals[i]), false, mp)
-				vector.AppendFixed(lvec, float32(lvals[i]), false, mp)
-			}
-		case types.T_float64:
-			for i := range rvals {
-				vector.AppendFixed(rvec, float64(rvals[i]), false, mp)
-				vector.AppendFixed(lvec, float64(lvals[i]), false, mp)
+		if lvec != nil {
+			lvec.CleanOnlyData()
+		}
+
+		if rvec != nil {
+			rvec.CleanOnlyData()
+		}
+
+		lcnt := rand.Intn(240) + 2
+		rcnt := rand.Intn(240) + 2
+
+		lvals = make([]float64, 0, lcnt)
+		rvals = make([]float64, 0, rcnt)
+
+		unionMap := make(map[float64]struct{})
+		interMap := make(map[float64]struct{})
+
+		for range lcnt {
+			val := float64(rand.Intn(lcnt / 2))
+			lvals = append(lvals, val)
+			unionMap[val] = struct{}{}
+		}
+
+		for range rcnt {
+			val := float64(rand.Intn(rcnt / 2))
+			rvals = append(rvals, val)
+			if _, ok := unionMap[val]; ok {
+				interMap[val] = struct{}{}
 			}
 		}
 
-		left.Vec = lvec
-		right.Vec = rvec
-		left.Oid = ty
-		right.Oid = ty
+		for r := range rcnt {
+			unionMap[rvals[r]] = struct{}{}
+		}
 
-		ret, err := mergeBaseFilterInKind(left, right, false, proc.Mp())
-		require.NoError(t, err)
-		require.Equal(t, int(1), int(ret.Vec.Length()), ret.Oid.String())
+		slices.Sort(rvals)
+		slices.Sort(lvals)
 
-		ret, err = mergeBaseFilterInKind(left, right, true, proc.Mp())
-		require.NoError(t, err)
-		require.Equal(t, int(5), int(ret.Vec.Length()))
+		for _, ty := range tys {
+			lvec = vector.NewVec(ty.ToType())
+			rvec = vector.NewVec(ty.ToType())
+			switch ty {
+			case types.T_int8:
+				for i := range rvals {
+					vector.AppendFixed(rvec, int8(rvals[i]), false, mp)
+				}
 
+				for i := range lvals {
+					vector.AppendFixed(lvec, int8(lvals[i]), false, mp)
+				}
+			case types.T_int16:
+				for i := range rvals {
+					vector.AppendFixed(rvec, int16(rvals[i]), false, mp)
+				}
+
+				for i := range lvals {
+					vector.AppendFixed(lvec, int16(lvals[i]), false, mp)
+				}
+			case types.T_int32:
+				for i := range rvals {
+					vector.AppendFixed(rvec, int32(rvals[i]), false, mp)
+				}
+
+				for i := range lvals {
+					vector.AppendFixed(lvec, int32(lvals[i]), false, mp)
+				}
+			case types.T_int64:
+				for i := range rvals {
+					vector.AppendFixed(rvec, int64(rvals[i]), false, mp)
+				}
+
+				for i := range lvals {
+					vector.AppendFixed(lvec, int64(lvals[i]), false, mp)
+				}
+			case types.T_uint8:
+				for i := range rvals {
+					vector.AppendFixed(rvec, uint8(rvals[i]), false, mp)
+				}
+
+				for i := range lvals {
+					vector.AppendFixed(lvec, uint8(lvals[i]), false, mp)
+				}
+			case types.T_uint16:
+				for i := range rvals {
+					vector.AppendFixed(rvec, uint16(rvals[i]), false, mp)
+				}
+
+				for i := range lvals {
+					vector.AppendFixed(lvec, uint16(lvals[i]), false, mp)
+				}
+			case types.T_uint32:
+				for i := range rvals {
+					vector.AppendFixed(rvec, uint32(rvals[i]), false, mp)
+				}
+				for i := range lvals {
+					vector.AppendFixed(lvec, uint32(lvals[i]), false, mp)
+				}
+			case types.T_uint64:
+				for i := range rvals {
+					vector.AppendFixed(rvec, uint64(rvals[i]), false, mp)
+				}
+				for i := range lvals {
+					vector.AppendFixed(lvec, uint64(lvals[i]), false, mp)
+				}
+			case types.T_float32:
+				for i := range rvals {
+					vector.AppendFixed(rvec, float32(rvals[i]), false, mp)
+				}
+
+				for i := range lvals {
+					vector.AppendFixed(lvec, float32(lvals[i]), false, mp)
+				}
+			case types.T_float64:
+				for i := range rvals {
+					vector.AppendFixed(rvec, float64(rvals[i]), false, mp)
+				}
+
+				for i := range lvals {
+					vector.AppendFixed(lvec, float64(lvals[i]), false, mp)
+				}
+
+			case types.T_decimal128:
+				for i := range rvals {
+					vector.AppendFixed(rvec, types.Decimal128{uint64(rvals[i]), 0}, false, mp)
+				}
+
+				for i := range lvals {
+					vector.AppendFixed(lvec, types.Decimal128{uint64(lvals[i]), 0}, false, mp)
+				}
+
+			case types.T_varchar, types.T_json, types.T_binary:
+				rstrs = make([]string, 0, len(rvals))
+				for i := range rvals {
+					str := strconv.Itoa(int(rvals[i]))
+					rstrs = append(rstrs, str)
+				}
+				slices.Sort(rstrs)
+				for i := range rstrs {
+					vector.AppendBytes(rvec, []byte(rstrs[i]), false, mp)
+				}
+
+				lstrs = make([]string, 0, len(lvals))
+				for i := range lvals {
+					str := strconv.Itoa(int(lvals[i]))
+					lstrs = append(lstrs, str)
+				}
+				slices.Sort(lstrs)
+				for i := range lstrs {
+					vector.AppendBytes(lvec, []byte(lstrs[i]), false, mp)
+				}
+			}
+
+			left.Vec = lvec
+			right.Vec = rvec
+			left.Oid = ty
+			right.Oid = ty
+
+			{
+				ret, err := mergeBaseFilterInKind(left, right, false, proc.Mp())
+				require.NoError(t, err)
+
+				extrInterMsg := fmt.Sprintf("\ntyp: %v\nlvals: %v\nrvals: %v\nlvec: %v\nrvec: %v\ninterMap: %v\nret.Vec: %v",
+					ty.String(), lvals, rvals, lvec.String(), rvec.String(),
+					interMap, ret.Vec.String())
+
+				checkFunc(interMap, ty, ret.Vec, extrInterMsg)
+			}
+
+			{
+				ret, err := mergeBaseFilterInKind(left, right, true, proc.Mp())
+				require.NoError(t, err)
+
+				extrUnionMsg := fmt.Sprintf("\ntyp: %v\nlvals: %v\nrvals: %v\nlvec: %v\nrvec: %v\nunionMap: %v\nret.Vec: %v",
+					ty.String(), lvals, rvals, lvec.String(), rvec.String(),
+					unionMap, ret.Vec.String())
+
+				checkFunc(unionMap, ty, ret.Vec, extrUnionMsg)
+			}
+		}
 	}
 }

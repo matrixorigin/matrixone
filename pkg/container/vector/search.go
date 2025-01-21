@@ -644,7 +644,7 @@ func CollectOffsetsByBetweenFactory[T types.BuiltinNumber | types.Times | types.
 			//return cols[i] > rval
 			return cmpRight(cols[i], rval)
 		})
-		if start == end {
+		if start >= end {
 			return nil
 		}
 		sels := make([]int64, end-start)
@@ -695,7 +695,7 @@ func CollectOffsetsByBetweenString(lval, rval string, hint int) func(*Vector) []
 			//return cols[i] > rval
 			return cmpRight(col[i].UnsafeGetString(area), rval)
 		})
-		if start == end {
+		if start >= end {
 			return nil
 		}
 		sels := make([]int64, end-start)

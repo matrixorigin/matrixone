@@ -16,6 +16,7 @@ package readutil
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -56,8 +57,24 @@ func (b *BasePKFilter) String() string {
 		function.PREFIX_IN:      "prefix_in",
 		function.PREFIX_BETWEEN: "prefix_between",
 	}
-	return fmt.Sprintf("valid = %v, op = %s, lb = %v, ub = %v, vec.type=%T, oid = %s",
-		b.Valid, name[b.Op], b.LB, b.UB, b.Vec, b.Oid.String())
+
+	vecStr := "nil"
+	if b.Vec != nil {
+		vecStr = common.MoVectorToString(b.Vec, b.Vec.Length())
+	}
+
+	var lb, ub any
+	if !b.Oid.IsFixedLen() {
+		lb = string(b.LB)
+		ub = string(b.UB)
+	} else {
+		lb = types.DecodeValue(b.LB, b.Oid)
+		ub = types.DecodeValue(b.UB, b.Oid)
+	}
+
+	return fmt.Sprintf("valid = %v, op = %s, lb = %v, ub = %v, vec = %v, oid = %s",
+		b.Valid, name[b.Op],
+		lb, ub, vecStr, b.Oid.String())
 }
 
 func ConstructBasePKFilter(
