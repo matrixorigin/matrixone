@@ -28,7 +28,7 @@ import (
 func TestCache(t *testing.T) {
 	proc := testutil.NewProcessWithMPool("", mpool.MustNewZero())
 
-	Cache.ticker_interval = 5 * time.Second
+	Cache.TickerInterval = 5 * time.Second
 
 	Cache.Once()
 	Cache.Once()

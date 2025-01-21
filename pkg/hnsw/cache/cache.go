@@ -109,6 +109,7 @@ func (s *HnswSearch) LoadMetadata(proc *process.Process) ([]*HnswSearchIndex, er
 
 			idx := &HnswSearchIndex{Id: id, Checksum: chksum, Timestamp: ts}
 			indexes = append(indexes, idx)
+			os.Stderr.WriteString(fmt.Sprintf("Meta %d %d %s\n", id, ts, chksum))
 		}
 	}
 
@@ -138,23 +139,26 @@ func (s *HnswSearch) LoadFromDatabase(proc *process.Process) error {
 
 	s.Indexes = indexes
 
+	ts := time.Now().Add(time.Hour).Unix()
+	s.ExpireAt.Store(ts)
+
 	return nil
 }
 
 type HnswCache struct {
-	IndexMap        sync.Map
-	ticker          *time.Ticker
-	done            chan bool
-	sigc            chan os.Signal
-	ticker_interval time.Duration
-	started         atomic.Bool
-	exited          atomic.Bool
-	once            sync.Once
+	IndexMap       sync.Map
+	TickerInterval time.Duration
+	ticker         *time.Ticker
+	done           chan bool
+	sigc           chan os.Signal
+	started        atomic.Bool
+	exited         atomic.Bool
+	once           sync.Once
 }
 
 func NewHnswCache() *HnswCache {
 	c := &HnswCache{}
-	c.ticker_interval = time.Hour
+	c.TickerInterval = time.Hour
 	return c
 }
 
@@ -166,7 +170,7 @@ func (c *HnswCache) serve() {
 	// try clean up the temp directory. set tempdir to /tmp/hnsw
 
 	os.Stderr.WriteString("Serve start\n")
-	c.ticker = time.NewTicker(c.ticker_interval)
+	c.ticker = time.NewTicker(c.TickerInterval)
 	c.done = make(chan bool)
 	c.sigc = make(chan os.Signal, 3)
 	signal.Notify(c.sigc, syscall.SIGTERM, syscall.SIGINT, os.Interrupt)
