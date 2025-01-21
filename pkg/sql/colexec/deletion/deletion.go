@@ -214,19 +214,25 @@ func (deletion *Deletion) remoteDelete(proc *process.Process) (vm.CallResult, er
 
 func (deletion *Deletion) normalDelete(proc *process.Process) (vm.CallResult, error) {
 	analyzer := deletion.OpAnalyzer
+	var result vm.CallResult
+	var err error
+	if !deletion.delegated {
+		result, err = vm.ChildrenCall(deletion.GetChildren(0), proc, analyzer)
+		if err != nil {
+			return result, err
+		}
+		if result.Batch == nil || result.Batch.IsEmpty() {
+			return result, nil
+		}
 
-	result, err := vm.ChildrenCall(deletion.GetChildren(0), proc, analyzer)
-	if err != nil {
-		return result, err
-	}
-	if result.Batch == nil || result.Batch.IsEmpty() {
-		return result, nil
-	}
+		if deletion.ctr.resBat == nil {
+			deletion.ctr.resBat = makeDelBatch(*result.Batch.GetVector(int32(deletion.DeleteCtx.PrimaryKeyIdx)).GetType())
+		} else {
+			deletion.ctr.resBat.CleanOnlyData()
+		}
 
-	if deletion.ctr.resBat == nil {
-		deletion.ctr.resBat = makeDelBatch(*result.Batch.GetVector(int32(deletion.DeleteCtx.PrimaryKeyIdx)).GetType())
 	} else {
-		deletion.ctr.resBat.CleanOnlyData()
+		result = deletion.input
 	}
 
 	bat := result.Batch
