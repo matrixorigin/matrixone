@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/hnsw"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
@@ -25,7 +26,7 @@ import (
 )
 
 func TestCache(t *testing.T) {
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcessWithMPool("", mpool.MustNewZero())
 
 	Cache.ticker_interval = 5 * time.Second
 
