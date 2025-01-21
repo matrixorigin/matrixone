@@ -19,7 +19,6 @@ import (
 	"math"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -33,7 +32,51 @@ type DSNStats struct {
 	Truncated uint64
 	Min       uint64
 	Max       uint64
-	Written   []uint64
+}
+
+type tokenController struct {
+	sync.Cond
+	nextToken uint64
+	bm        roaring64.Bitmap
+	maxCount  uint64
+}
+
+func newTokenController(maxCount uint64) *tokenController {
+	return &tokenController{
+		maxCount: maxCount,
+		Cond:     *sync.NewCond(new(sync.Mutex)),
+	}
+}
+
+func (rc *tokenController) Putback(tokens ...uint64) {
+	rc.L.Lock()
+	defer rc.L.Unlock()
+	for _, token := range tokens {
+		rc.bm.Remove(token)
+	}
+	rc.Broadcast()
+}
+
+func (rc *tokenController) Apply() (token uint64) {
+	rc.L.Lock()
+	defer rc.L.Unlock()
+	for {
+		if rc.bm.IsEmpty() {
+			token = rc.nextToken
+			rc.nextToken++
+			rc.bm.Add(token)
+			return
+		}
+		minimum := rc.bm.Minimum()
+		if rc.nextToken < rc.maxCount+minimum {
+			token = rc.nextToken
+			rc.nextToken++
+			rc.bm.Add(token)
+			return
+		}
+		// logutil.Infof("too much pendding writes: %d, %d, %d", rc.bm.Minimum(), rc.bm.Maximum(), rc.bm.GetCardinality())
+		rc.Wait()
+	}
 }
 
 type driverInfo struct {
@@ -41,81 +84,63 @@ type driverInfo struct {
 	psn struct {
 		mu sync.RWMutex
 		// key: PSN, value: DSNs
-		dsnMap  map[uint64]*common.ClosedIntervals
+		dsnMap  map[uint64]common.ClosedInterval
 		records roaring64.Bitmap
 	}
-
-	// dsn: driver sequence number
-	// it is monotonically continuously increasing
-	// PSN:[DSN:LSN, DSN:LSN, DSN:LSN, ...]
-	// One : Many
-	dsn   uint64
-	dsnmu sync.RWMutex
 
 	watermark struct {
 		mu            sync.RWMutex
 		committingDSN uint64
 		committedDSN  uint64
+
+		// dsn: driver sequence number
+		// it is monotonically continuously increasing
+		// PSN:[DSN:LSN, DSN:LSN, DSN:LSN, ...]
+		// One : Many
+		nextDSN atomic.Uint64
 	}
 
 	truncateDSNIntent atomic.Uint64 //
 	truncatedPSN      uint64        //
 
-	// writeController is used to control the write token
+	// tokenController is used to control the write token
 	// it controles the max write token issued and all finished write tokens
 	// to avoid too much pendding writes
-	// Example:
-	// maxIssuedToken = 100
-	// maxFinishedToken = 50
-	// maxPendding = 60
 	// then we can only issue another 10 write token to avoid too much pendding writes
 	// In the real world, the maxFinishedToken is always being updated and it is very
 	// rare to reach the maxPendding
-	writeController struct {
-		sync.RWMutex
-		// max write token issued
-		maxIssuedToken uint64
-		// all finished write tokens
-		finishedTokens *common.ClosedIntervals
-	}
-
-	commitCond sync.Cond
+	tokenController *tokenController
 }
 
-func newDriverInfo() *driverInfo {
+func newDriverInfo(maxPenddingWrites uint64) *driverInfo {
 	d := &driverInfo{
-		commitCond: *sync.NewCond(new(sync.Mutex)),
+		tokenController: newTokenController(maxPenddingWrites),
 	}
-	d.psn.dsnMap = make(map[uint64]*common.ClosedIntervals)
-	d.writeController.finishedTokens = common.NewClosedIntervals()
+	d.psn.dsnMap = make(map[uint64]common.ClosedInterval)
 	return d
 }
 
-func (info *driverInfo) GetDSN() uint64 {
-	info.dsnmu.RLock()
-	lsn := info.dsn
-	info.dsnmu.RUnlock()
-	return lsn
-}
-
-func (info *driverInfo) resetDSNStats(stats *DSNStats) {
-	info.dsn = stats.Max
+func (info *driverInfo) initState(stats *DSNStats) {
+	info.watermark.nextDSN.Store(stats.Max)
 	info.watermark.committingDSN = stats.Max
 	info.watermark.committedDSN = stats.Max
 	if stats.Min != math.MaxUint64 {
 		info.truncateDSNIntent.Store(stats.Min - 1)
 	}
 	info.truncatedPSN = stats.Truncated
-	info.writeController.finishedTokens = common.NewClosedIntervalsBySlice(stats.Written)
 }
 
 // psn: physical sequence number
 // dsns: dsns in the log entry of the psn
 func (info *driverInfo) recordPSNInfo(
-	psn uint64, dsns *common.ClosedIntervals,
+	psn uint64, dsns common.ClosedInterval,
 ) {
 	info.psn.dsnMap[psn] = dsns
 	info.psn.records.Add(psn)
+}
+
+func (info *driverInfo) GetDSN() uint64 {
+	return info.watermark.nextDSN.Load()
 }
 
 func (info *driverInfo) getNextValidPSN(psn uint64) uint64 {
@@ -152,94 +177,38 @@ func (info *driverInfo) isToTruncate(psn, dsn uint64) bool {
 
 func (info *driverInfo) getMaxDSN(psn uint64) uint64 {
 	info.psn.mu.RLock()
-	intervals, ok := info.psn.dsnMap[psn]
+	defer info.psn.mu.RUnlock()
+	dsnRange, ok := info.psn.dsnMap[psn]
 	if !ok {
-		info.psn.mu.RUnlock()
 		return 0
 	}
-	lsn := intervals.GetMax()
-	info.psn.mu.RUnlock()
-	return lsn
+	return dsnRange.End
 }
 
-func (info *driverInfo) allocateDSNLocked() uint64 {
-	info.dsn++
-	return info.dsn
+func (info *driverInfo) allocateDSN() uint64 {
+	return info.watermark.nextDSN.Add(1)
 }
 
-func (info *driverInfo) getMaxFinishedToken() uint64 {
-	info.writeController.RLock()
-	defer info.writeController.RUnlock()
-	finishedTokens := info.writeController.finishedTokens
-	if finishedTokens == nil ||
-		len(finishedTokens.Intervals) == 0 ||
-		finishedTokens.Intervals[0].Start != 1 {
-		return 0
-	}
-	return finishedTokens.Intervals[0].End
-}
-
-func (info *driverInfo) applyWriteToken(
-	maxPendding uint64, timeout time.Duration,
-) (token uint64, err error) {
-	token, err = info.tryApplyWriteToken(maxPendding)
-	if err == ErrTooMuchPenddings {
-		err = RetryWithTimeout(
-			timeout,
-			func() (shouldReturn bool) {
-				info.commitCond.L.Lock()
-				token, err = info.tryApplyWriteToken(maxPendding)
-				if err != ErrTooMuchPenddings {
-					info.commitCond.L.Unlock()
-					return true
-				}
-				info.commitCond.Wait()
-				info.commitCond.L.Unlock()
-				token, err = info.tryApplyWriteToken(maxPendding)
-				return err != ErrTooMuchPenddings
-			},
-		)
-	}
-	return
-}
-
-// NOTE: must be called in serial
-func (info *driverInfo) tryApplyWriteToken(
-	maxPendding uint64,
-) (token uint64, err error) {
-	maxFinishedToken := info.getMaxFinishedToken()
-	if info.writeController.maxIssuedToken-maxFinishedToken >= maxPendding {
-		return 0, ErrTooMuchPenddings
-	}
-	info.writeController.maxIssuedToken++
-	return info.writeController.maxIssuedToken, nil
+func (info *driverInfo) applyWriteToken() (token uint64) {
+	return info.tokenController.Apply()
 }
 
 func (info *driverInfo) recordCommitInfo(committer *groupCommitter) {
+	dsnRange := committer.writer.Entry.DSNRange()
+
 	info.psn.mu.Lock()
-	cnt := int(committer.writer.Entry.GetEntryCount())
-	startDSN := committer.writer.Entry.GetStartDSN()
-	dsns := make([]uint64, 0, cnt)
-	for i := 0; i < cnt; i++ {
-		dsn := startDSN + uint64(i)
-		dsns = append(dsns, dsn)
-	}
 	info.psn.records.Add(committer.psn)
-	interval := common.NewClosedIntervalsBySlice(dsns)
-	info.psn.dsnMap[committer.psn] = interval
+	info.psn.dsnMap[committer.psn] = dsnRange
 	info.psn.mu.Unlock()
 
-	if interval.GetMin() != info.watermark.committingDSN+1 {
+	if dsnRange.Start != info.watermark.committingDSN+1 {
 		panic(fmt.Sprintf(
-			"logic err, expect %d, min is %d",
+			"logic err, expect %d, actual %s",
 			info.watermark.committingDSN+1,
-			interval.GetMin()),
-		)
+			dsnRange.String(),
+		))
 	}
-	if len(interval.Intervals) != 1 {
-		panic("logic err")
-	}
-	info.watermark.committingDSN = interval.GetMax()
+	info.watermark.committingDSN = dsnRange.End
 }
 
 func (info *driverInfo) gcPSN(psn uint64) {
@@ -273,13 +242,6 @@ func (info *driverInfo) commitWatermark() {
 	info.watermark.mu.Unlock()
 }
 
-func (info *driverInfo) putbackWriteTokens(tokens []uint64) {
-	finishedToken := common.NewClosedIntervalsBySlice(tokens)
-	info.writeController.Lock()
-	info.writeController.finishedTokens.TryMerge(finishedToken)
-	info.writeController.Unlock()
-
-	info.commitCond.L.Lock()
-	info.commitCond.Broadcast()
-	info.commitCond.L.Unlock()
+func (info *driverInfo) putbackWriteTokens(tokens ...uint64) {
+	info.tokenController.Putback(tokens...)
 }
