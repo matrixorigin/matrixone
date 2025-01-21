@@ -11321,18 +11321,18 @@ func TestCheckpointV2Compatibility(t *testing.T) {
 	db, err := testutil.CreateDatabase2(ctx, txn, "db")
 	require.NoError(t, err)
 	schema := catalog.MockSchemaAll(2, 1)
-	bat := catalog.MockBatch(schema, 10)
-	_, err = testutil.CreateRelation2(ctx, txn, db, schema)
+	rel, err := testutil.CreateRelation2(ctx, txn, db, schema)
 	require.NoError(t, err)
 	assert.NoError(t, txn.Commit(ctx))
 
-	tae.BindSchema(schema)
-	txn, rel := tae.GetRelation()
-	err = rel.Append(context.Background(), bat)
-	assert.NoError(t, err)
-	assert.NoError(t, txn.Commit(context.Background()))
+	tbl := rel.GetMeta().(*catalog.TableEntry)
 
-	t.Log(tae.Catalog.SimplePPString(3))
+	for i := 0; i < 5; i++ {
+		obj := catalog.MockObjectEntry(tbl, tae.Catalog, true, tae.TxnMgr.Now(), tae.TxnMgr.Now())
+		tbl.AddEntryLocked(obj)
+		obj2 := catalog.MockObjectEntry(tbl, tae.Catalog, false, tae.TxnMgr.Now(), tae.TxnMgr.Now())
+		tbl.AddEntryLocked(obj2)
+	}
 
 	tae.ForceCheckpoint()
 
@@ -11367,6 +11367,25 @@ func TestCheckpointV2Compatibility(t *testing.T) {
 	}
 	replayer.ReplayObjectlist(ctx, catalog2, false, dataFactory)
 
-	t.Log(catalog2.SimplePPString(3))
+	var tombstoneCnt2, dataCnt2 int
+	p := &catalog.LoopProcessor{}
+	p.ObjectFn = func(oe *catalog.ObjectEntry) error {
+		if !pkgcatalog.IsSystemTable(oe.GetTable().ID) {
+			dataCnt2++
+		}
+		return nil
+	}
+	p.TombstoneFn = func(oe *catalog.ObjectEntry) error {
+		if !pkgcatalog.IsSystemTable(oe.GetTable().ID) {
+			tombstoneCnt2++
+		}
+		return nil
+	}
+	err = catalog2.RecurLoop(p)
+	assert.NoError(t, err)
+	assert.Equal(t, 5, dataCnt2)
+	assert.Equal(t, 5, tombstoneCnt2)
 
+	t.Log(catalog2.SimplePPString(3))
+	t.Log(tae.Catalog.SimplePPString(3))
 }

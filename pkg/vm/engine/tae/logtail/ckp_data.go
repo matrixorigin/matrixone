@@ -112,12 +112,13 @@ type CheckpointReplayer struct {
 
 func NewCheckpointReplayer(location objectio.Location, mp *mpool.MPool) *CheckpointReplayer {
 	return &CheckpointReplayer{
-		location:   location,
-		mp:         mp,
-		locations:  make(map[string]objectio.Location),
-		maxBlkIDs:  make(map[string]uint16),
-		objectInfo: make([]containers.Vectors, 0),
-		closeCB:    make([]func(), 0),
+		location:           location,
+		mp:                 mp,
+		locations:          make(map[string]objectio.Location),
+		maxBlkIDs:          make(map[string]uint16),
+		tombstoneLocations: make(map[string]objectio.Location),
+		objectInfo:         make([]containers.Vectors, 0),
+		closeCB:            make([]func(), 0),
 	}
 }
 
@@ -171,15 +172,17 @@ func (replayer *CheckpointReplayer) ReadMetaForV12(
 	if reader, err = ioutil.NewObjectReader(fs, replayer.location); err != nil {
 		return
 	}
+	attrs := append(BaseAttr, MetaSchemaAttr...)
+	typs := append(BaseTypes, MetaShcemaTypes...)
 	var bats []*containers.Batch
 	if bats, err = LoadBlkColumnsByMeta(
-		replayer.version, ctx, MetaShcemaTypes, MetaSchemaAttr, MetaIDX, reader, replayer.mp,
+		replayer.version, ctx, typs, attrs, MetaIDX, reader, replayer.mp,
 	); err != nil {
 		return
 	}
 	replayer.metaBatch = bats[0]
-	dataLocationsVec := replayer.metaBatch.Vecs[MetaSchema_DataObject_Idx]
-	tombstoneLocationsVec := replayer.metaBatch.Vecs[MetaSchema_TombstoneObject_Idx]
+	dataLocationsVec := replayer.metaBatch.Vecs[MetaSchema_DataObject_Idx+2]
+	tombstoneLocationsVec := replayer.metaBatch.Vecs[MetaSchema_TombstoneObject_Idx+2]
 	for i := 0; i < dataLocationsVec.Length(); i++ {
 		dataLocations := BlockLocations(dataLocationsVec.GetDownstreamVector().GetBytesAt(i))
 		it := dataLocations.MakeIterator()
