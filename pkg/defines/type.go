@@ -20,6 +20,7 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/schemaversion"
 )
 
 // information from: https://dev.mysql.com/doc/internals/en/com-query-response.html
@@ -215,52 +216,29 @@ type VersionOffsetKey struct{}
 
 type IsFinalVersionKey struct{}
 
-func AttachIsFinalVersion(ctx context.Context, flag bool) context.Context {
-	return context.WithValue(ctx, IsFinalVersionKey{}, flag)
+// AttachIsFinalVersion, It refers to whether the entire schema version has reached its final state
+func AttachIsFinalVersion(ctx context.Context, isAtFinal bool) context.Context {
+	return context.WithValue(ctx, IsFinalVersionKey{}, isAtFinal)
 }
 
+// GetIsFinalVersion It refers to whether the entire schema version has reached its final state
 func GetIsFinalVersion(ctx context.Context) (bool, error) {
 	if v := ctx.Value(IsFinalVersionKey{}); v != nil {
 		return v.(bool), nil
 	} else {
 		return false, nil
-		//return false, moerr.NewInternalError(ctx, "no IsFinalVersionKey in context")
-	}
-}
-
-func AttachVersion(ctx context.Context, version string) context.Context {
-	return context.WithValue(ctx, VersionKey{}, version)
-}
-
-func AttachVersionOffset(ctx context.Context, versionOffset uint32) context.Context {
-	return context.WithValue(ctx, VersionOffsetKey{}, versionOffset)
-}
-
-func GetVersion(ctx context.Context) (string, error) {
-	if v := ctx.Value(VersionKey{}); v != nil {
-		return v.(string), nil
-	} else {
-		return "", moerr.NewInternalError(ctx, "no version in context")
-	}
-}
-
-func GetVersionOffset(ctx context.Context) (uint32, error) {
-	if v := ctx.Value(VersionOffsetKey{}); v != nil {
-		return v.(uint32), nil
-	} else {
-		return 0, moerr.NewInternalError(ctx, "no versionOffset in context")
 	}
 }
 
 type VersionInfoKey struct{}
 
-func AttachVersionInfo(ctx context.Context, version *VersionInfo) context.Context {
+func AttachVersionInfo(ctx context.Context, version *schemaversion.VersionInfo) context.Context {
 	return context.WithValue(ctx, VersionInfoKey{}, version)
 }
 
-func GetVersionInfo(ctx context.Context) (*VersionInfo, error) {
+func GetVersionInfo(ctx context.Context) (*schemaversion.VersionInfo, error) {
 	if v := ctx.Value(VersionInfoKey{}); v != nil {
-		return v.(*VersionInfo), nil
+		return v.(*schemaversion.VersionInfo), nil
 	} else {
 		return nil, moerr.NewInternalError(ctx, "no VersionInfo in context")
 	}
@@ -320,23 +298,4 @@ type AutoIncrCache struct {
 	CurNum uint64
 	MaxNum uint64
 	Step   uint64
-}
-
-type VersionInfo struct {
-	FinalVersion          string // schema version of current binary code
-	FinalVersionOffset    int32  // schema versionOffset of current binary code
-	FinalVersionCompleted bool   // if the system has been upgraded to current binary version, it's true, (refer to mo_version)
-	// cluster
-	Cluster struct {
-		Version        string
-		VersionOffset  int32
-		IsFinalVersion bool // mark unused
-	}
-
-	// account
-	Account struct {
-		Version        string
-		VersionOffset  int32
-		IsFinalVersion bool // mark unused
-	}
 }

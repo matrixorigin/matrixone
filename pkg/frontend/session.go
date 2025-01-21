@@ -1147,12 +1147,6 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		}
 
 		//----------------------------------------------------------------------------------------
-		//accKey := fmt.Sprintf(runtime2.AccountIsFinalVersion+"%d", ses.GetAccountId())
-		//ss, ok := runtime2.ServiceRuntime(ses.GetService()).GetGlobalVariables(accKey)
-		//if ok {
-		//	isFinalVersion := ss.(bool)
-		//	ses.GetTxnHandler().SetTxnCtxIsFinalVersionFlag(isFinalVersion)
-		//}
 		ss, ok := runtime2.ServiceRuntime(ses.GetService()).GetGlobalVariables(runtime2.ClusterIsFinalVersion)
 		if ok {
 			isFinalVersion := ss.(bool)
@@ -1526,15 +1520,13 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 
 	finalVersion := ses.GetBaseService().GetFinalVersion()
 	finalVersionOffset := ses.GetBaseService().GetFinalVersionOffset()
-	if version == finalVersion && int32(versionOffset) >= finalVersionOffset && int32(versionState) == versions.StateReady {
-		ses.GetTxnHandler().SetTxnCtxIsFinalVersionFlag(true)
-		runtime2.ServiceRuntime(ses.service).SetGlobalVariables(runtime2.ClusterIsFinalVersion, true)
-		//runtime2.ServiceRuntime(ses.service).SetGlobalVariables(fmt.Sprintf(runtime2.AccountIsFinalVersion+"%d", tenantID), true)
-	} else {
-		ses.GetTxnHandler().SetTxnCtxIsFinalVersionFlag(false)
-		runtime2.ServiceRuntime(ses.service).SetGlobalVariables(runtime2.ClusterIsFinalVersion, false)
-		//runtime2.ServiceRuntime(ses.service).SetGlobalVariables(fmt.Sprintf(runtime2.AccountIsFinalVersion+"%d", tenantID), false)
-	}
+
+	finalVersionCompleted := version == finalVersion &&
+		int32(versionOffset) >= finalVersionOffset &&
+		int32(versionState) == versions.StateReady
+	// Set TxnCtx and global variable for finalVersionCompleted
+	ses.GetTxnHandler().SetTxnCtxIsFinalVersionFlag(finalVersionCompleted)
+	runtime2.ServiceRuntime(ses.service).SetGlobalVariables(runtime2.ClusterIsFinalVersion, finalVersionCompleted)
 
 	return GetPassWord(pwd)
 }

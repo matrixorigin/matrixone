@@ -37,7 +37,6 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 
-	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -2634,51 +2633,10 @@ func executeStmtWithWorkspace(ses FeSession,
 
 	//----------------------------------------------------------------------------------------------------------
 	if isNewTransaction {
-		var versionInfo defines.VersionInfo
-		if ss, ok := runtime.ServiceRuntime(execCtx.ses.GetService()).GetGlobalVariables(runtime.FinalVersion); ok {
-			versionInfo.FinalVersion = ss.(string)
-		}
-
-		if ss, ok := runtime.ServiceRuntime(execCtx.ses.GetService()).GetGlobalVariables(runtime.FinalVersionOffset); ok {
-			versionInfo.FinalVersionOffset = int32(ss.(uint32))
-		}
-
-		isFinalVersion, err := defines.GetIsFinalVersion(execCtx.reqCtx)
+		err = handleVersionInfo(ses, execCtx)
 		if err != nil {
-			isFinalVersion = false
+			return err
 		}
-		ses.GetTxnHandler().txnOp.TxnOptions().WithIsFinalVersion(isFinalVersion)
-
-		if isFinalVersion {
-			versionInfo.FinalVersionCompleted = true
-		} else {
-			bh := execCtx.ses.GetShareTxnBackgroundExec(execCtx.reqCtx, false)
-			defer bh.Close()
-
-			clusterVersion, state, isFinal, err := checkClusterVersionV1(execCtx.reqCtx, versionInfo.FinalVersion, bh)
-			if err != nil {
-				return err
-			}
-			versionInfo.Cluster.Version = clusterVersion
-			versionInfo.Cluster.IsFinalVersion = isFinal
-
-			isFinalVersion := state == versions.StateReady && versionInfo.FinalVersion == clusterVersion
-			versionInfo.FinalVersionCompleted = isFinalVersion
-
-			// 设置 TxnOptions 和全局变量
-			ses.GetTxnHandler().txnOp.TxnOptions().WithIsFinalVersion(isFinalVersion)
-			runtime.ServiceRuntime(ses.GetService()).SetGlobalVariables(runtime.ClusterIsFinalVersion, isFinalVersion)
-
-			//-----------------------------------------------------------------------------------------
-			handleOffset := versions.Compare(versionInfo.Cluster.Version, "2.1.0") >= 0
-			accVersion, accOffset, err := checkAccountVersion(execCtx.reqCtx, execCtx.ses, handleOffset, bh)
-			if err != nil {
-				return err
-			}
-			versionInfo.Account.Version = accVersion
-			versionInfo.Account.VersionOffset = accOffset
-		}
-		execCtx.reqCtx = defines.AttachVersionInfo(execCtx.reqCtx, &versionInfo)
 	}
 	//----------------------------------------------------------------------------------------------------------
 

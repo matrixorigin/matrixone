@@ -65,7 +65,6 @@ const (
 	FinalVersion       = "final-version"
 	FinalVersionOffset = "final-version-offset"
 
-	AccountIsFinalVersion = "account-is-final-version-"
 	ClusterIsFinalVersion = "cluster-is-final-version"
 )
 

@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/schemaversion"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
@@ -161,9 +162,7 @@ func (s *service) UpgradeOneTenant(ctx context.Context, tenantID int32) error {
 					v.Metadata().CanDirectUpgrade(from) {
 
 					//--------------------------------------------------------------------------------------------------
-					var versionInfo defines.VersionInfo
-					versionInfo.FinalVersion = s.GetFinalVersion()
-					versionInfo.FinalVersionOffset = s.GetFinalVersionOffset()
+					versionInfo := schemaversion.NewVersionInfo()
 					versionInfo.FinalVersionCompleted = false
 
 					versionInfo.Cluster.Version = clusterVersion
@@ -177,7 +176,7 @@ func (s *service) UpgradeOneTenant(ctx context.Context, tenantID int32) error {
 					versionInfo.Account.Version = accVersion
 					versionInfo.Account.VersionOffset = accOffset
 
-					txn.SetCtxValue(defines.VersionInfoKey{}, &versionInfo)
+					txn.SetCtxValue(defines.VersionInfoKey{}, versionInfo)
 					//--------------------------------------------------------------------------------------------------
 
 					if err := v.HandleTenantUpgrade(ctx, tenantID, txn); err != nil {
