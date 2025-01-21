@@ -16,16 +16,13 @@ package partitionservice
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
@@ -154,6 +151,11 @@ func (s *service) getMetadata(
 			option,
 			def,
 		)
+	case *tree.RangeType:
+		return s.getMetadataByRangeType(
+			option,
+			def,
+		)
 	default:
 		panic("BUG: unsupported partition method")
 	}
@@ -199,65 +201,6 @@ func (s *service) Filter(
 
 	// TODO(fagongzi): partition
 	return []int{0}, nil
-}
-
-func (s *service) getMetadataByHashType(
-	option *tree.PartitionOption,
-	def *plan.TableDef,
-) (partition.PartitionMetadata, error) {
-	method := option.PartBy.PType.(*tree.HashType)
-	if option.PartBy.Num <= 0 {
-		return partition.PartitionMetadata{}, moerr.NewInvalidInputNoCtx("partition number is invalid")
-	}
-
-	columns, ok := method.Expr.(*tree.UnresolvedName)
-	if !ok {
-		return partition.PartitionMetadata{}, moerr.NewNotSupportedNoCtx("column expression is not supported")
-	}
-	if columns.NumParts != 1 {
-		return partition.PartitionMetadata{}, moerr.NewNotSupportedNoCtx("multi-column is not supported in HASH partition")
-	}
-	validColumns, err := validColumns(
-		columns,
-		def,
-		func(t plan.Type) bool {
-			return types.T(t.Id).IsInteger()
-		},
-	)
-	if err != nil {
-		return partition.PartitionMetadata{}, err
-	}
-
-	ctx := tree.NewFmtCtx(
-		dialect.MYSQL,
-		tree.WithQuoteString(true),
-	)
-	method.Expr.Format(ctx)
-
-	metadata := partition.PartitionMetadata{
-		TableID:      def.TblId,
-		TableName:    def.Name,
-		DatabaseName: def.DbName,
-		Method:       partition.PartitionMethod_Hash,
-		// TODO: ???
-		Expression:  "",
-		Description: ctx.String(),
-		Columns:     validColumns,
-	}
-
-	for i := uint64(0); i < option.PartBy.Num; i++ {
-		name := fmt.Sprintf("p%d", i)
-		metadata.Partitions = append(
-			metadata.Partitions,
-			partition.Partition{
-				Name:               name,
-				PartitionTableName: fmt.Sprintf("%s_%s", def.Name, name),
-				Position:           uint32(i),
-				Comment:            "",
-			},
-		)
-	}
-	return metadata, nil
 }
 
 func (s *service) readMetadata(
