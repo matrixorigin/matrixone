@@ -405,9 +405,6 @@ type BaseCollector struct {
 
 	// to prefetch object meta when fill in object info batch
 
-	// true for prefech object meta
-	isPrefetch bool
-
 	Objects []*catalog.ObjectEntry
 	// for storage usage
 	Usage struct {
