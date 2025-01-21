@@ -802,18 +802,16 @@ func TestConstructBlockPKFilter(t *testing.T) {
 		}
 
 		var (
-			vec      *vector.Vector
 			llb, uub []byte
-			inputVec *vector.Vector
 		)
 
 		for _, op := range ops {
 			for _, ty := range tys {
-				if vec != nil {
-					vec.CleanOnlyData()
+				vec := vector.NewVec(ty.ToType())
+
+				if opOnBinary(op) {
+					vec.SetType(types.T_binary.ToType())
 				}
-				vec = vector.NewVec(ty.ToType())
-				vec.PreExtend(1000, mp)
 
 				switch ty {
 
@@ -1019,11 +1017,6 @@ func TestConstructBlockPKFilter(t *testing.T) {
 					uub = types.EncodeDecimal128(&types.Decimal128{B0_63: uint64(ub), B64_127: uint64(ub)})
 				}
 
-				if vec != nil {
-					if opOnBinary(op) {
-						vec.SetType(types.T_binary.ToType())
-					}
-				}
 				basePKFilter := BasePKFilter{
 					Valid: true,
 					Op:    op,
@@ -1043,11 +1036,7 @@ func TestConstructBlockPKFilter(t *testing.T) {
 				require.NotNil(t, blkPKFilter.SortedSearchFunc)
 				require.NotNil(t, blkPKFilter.UnSortedSearchFunc)
 
-				if inputVec != nil {
-					inputVec.CleanOnlyData()
-				}
-				inputVec = vector.NewVec(ty.ToType())
-				inputVec.PreExtend(1000, mp)
+				inputVec := vector.NewVec(ty.ToType())
 
 				if opOnBinary(op) {
 					inputVec.SetType(types.T_binary.ToType())

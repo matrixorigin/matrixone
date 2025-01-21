@@ -16,7 +16,6 @@ package readutil
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -60,7 +59,8 @@ func (b *BasePKFilter) String() string {
 
 	vecStr := "nil"
 	if b.Vec != nil {
-		vecStr = common.MoVectorToString(b.Vec, b.Vec.Length())
+		//vecStr = common.MoVectorToString(b.Vec, b.Vec.Length())
+		vecStr = b.Vec.String()
 	}
 
 	var lb, ub any
