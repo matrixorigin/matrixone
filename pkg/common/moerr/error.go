@@ -569,7 +569,7 @@ type Error struct {
 }
 
 func (e *Error) Error() string {
-	return e.message
+	return e.Display()
 }
 
 func (e *Error) Detail() string {
@@ -593,6 +593,10 @@ func (e *Error) MySQLCode() uint16 {
 
 func (e *Error) SqlState() string {
 	return e.sqlState
+}
+
+func (e *Error) SetDetail(detail string) {
+	e.detail = detail
 }
 
 var _ encoding.BinaryMarshaler = new(Error)
