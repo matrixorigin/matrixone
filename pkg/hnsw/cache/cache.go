@@ -90,8 +90,6 @@ func (c *HnswCache) Serve() {
 		return
 	}
 
-	c.started.Store(true)
-
 	// try clean up the temp directory. set tempdir to /tmp/hnsw
 
 	os.Stderr.WriteString("Serve start\n")
@@ -99,6 +97,9 @@ func (c *HnswCache) Serve() {
 	c.done = make(chan bool)
 	c.sigc = make(chan os.Signal, 3)
 	signal.Notify(c.sigc, syscall.SIGTERM, syscall.SIGINT, os.Interrupt)
+
+	// channel initizalized.  set started to true
+	c.started.Store(true)
 
 	go func() {
 		for {
@@ -153,8 +154,10 @@ func (c *HnswCache) HouseKeeping() {
 }
 
 func (c *HnswCache) Destroy() {
-	c.ticker.Stop()
-	c.done <- true
+	if c.started.Load() {
+		c.ticker.Stop()
+		c.done <- true
+	}
 }
 
 func (c *HnswCache) GetIndex(proc *process.Process, cfg usearch.IndexConfig, tblcfg hnsw.IndexTableConfig, key string) (*HnswSearch, error) {
