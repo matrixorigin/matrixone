@@ -114,7 +114,7 @@ func (d *LogServiceDriver) doTruncate() {
 	if psnTruncated > d.truncatedPSN {
 		d.truncatedPSN = psnTruncated
 	}
-	d.gcPSN(psnTruncated)
+	d.truncateByPSN(psnTruncated)
 }
 
 func (d *LogServiceDriver) truncateFromRemote(

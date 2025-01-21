@@ -36,7 +36,7 @@ const (
 )
 
 type LogServiceDriver struct {
-	*driverInfo
+	*sequenceNumberState
 
 	config Config
 
@@ -73,13 +73,13 @@ func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
 		maxPenddingWrites = DefaultMaxClient
 	}
 	d := &LogServiceDriver{
-		clientPool:      newClientPool(cfg),
-		config:          *cfg,
-		committer:       getCommitter(),
-		driverInfo:      newDriverInfo(),
-		commitWaitQueue: make(chan any, 10000),
-		postCommitQueue: make(chan any, 10000),
-		workers:         pool,
+		clientPool:          newClientPool(cfg),
+		config:              *cfg,
+		committer:           getCommitter(),
+		sequenceNumberState: newSequenceNumberState(),
+		commitWaitQueue:     make(chan any, 10000),
+		postCommitQueue:     make(chan any, 10000),
+		workers:             pool,
 	}
 	d.ctx, d.cancel = context.WithCancel(context.Background())
 	d.commitLoop = sm.NewSafeQueue(10000, 10000, d.onCommitIntents)
@@ -150,7 +150,7 @@ func (d *LogServiceDriver) Replay(
 		// after the REPLAYED state
 		WithReplayerOnScheduled(
 			func(psn uint64, e LogEntry) {
-				d.recordPSNInfo(psn, e.DSNRange())
+				d.recordSequenceNumbers(psn, e.DSNRange())
 			},
 		),
 		WithReplayerOnReplayDone(
