@@ -362,6 +362,16 @@ func (cleaner *DiskCleaner) doReplayAndExecute(ctx context.Context) (err error) 
 func (cleaner *DiskCleaner) process(items ...any) {
 	for _, item := range items {
 		switch v := item.(type) {
+		case *fastGCJob:
+			ctx := cleaner.runningCtx.Load()
+			if ctx == nil {
+				ctx = new(runningCtx)
+				ctx.ctx, ctx.cancel = context.WithCancelCause(context.Background())
+				cleaner.runningCtx.Store(ctx)
+			}
+			fastJob := item.(*fastGCJob)
+			logutil.Infof("GC-Fast-Execute", zap.Any("min-ts", fastJob.minTS.ToString()))
+			cleaner.doFastExecute(ctx.ctx, fastJob.minTS)
 		case tasks.JobType:
 			ctx := cleaner.runningCtx.Load()
 			if ctx == nil {
@@ -376,10 +386,6 @@ func (cleaner *DiskCleaner) process(items ...any) {
 				cleaner.doReplayAndExecute(ctx.ctx)
 			case JT_GCExecute:
 				cleaner.doExecute(ctx.ctx)
-			case JT_GCFastExecute:
-				fastJob := item.(*fastGCJob)
-				logutil.Infof("GC-Fast-Execute", zap.Any("min-ts", fastJob.minTS.ToString()))
-				cleaner.doFastExecute(ctx.ctx, fastJob.minTS)
 			default:
 				logutil.Error("GC-Unknown-JobType", zap.Any("job-type", v))
 			}
