@@ -15,7 +15,12 @@
 package cache
 
 import (
+	"os"
+	"os/signal"
 	"sync"
+	"sync/atomic"
+	"syscall"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/hnsw"
@@ -23,7 +28,12 @@ import (
 	usearch "github.com/unum-cloud/usearch/golang"
 )
 
-var gIndexMap sync.Map
+var Cache HsnwCache
+
+// start cache here
+func init() {
+	Cache.Serve()
+}
 
 type HnswSearchIndex struct {
 	Id        int64
@@ -34,8 +44,9 @@ type HnswSearchIndex struct {
 }
 
 type HnswSearch struct {
-	Mutex   sync.RWMutex
-	Indexes []*HnswSearchIndex
+	Mutex    sync.RWMutex
+	Indexes  []*HnswSearchIndex
+	ExpireAt atomic.Int64
 }
 
 func (h *HnswSearch) Search(v []float32) error {
@@ -43,8 +54,83 @@ func (h *HnswSearch) Search(v []float32) error {
 	return nil
 }
 
-func GetIndex(proc *process.Process, key string) (*HnswSearch, error) {
-	value, loaded := gIndexMap.LoadOrStore(key, &HnswSearch{})
+func (h *HnswSearch) Destroy() {
+	h.Mutex.Lock()
+	defer h.Mutex.Unlock()
+	// TODO: destroy index
+}
+
+type HnswCache struct {
+	IndexMap        sync.Map
+	ticker          *time.Ticker
+	done            chan bool
+	sigc            chan os.Signal
+	ticker_interval int64
+}
+
+func (c *HnswCache) Serve() {
+	// try clean up the temp directory. set tempdir to /tmp/hnsw
+
+	// start the ticker
+	c.ticker_interval = time.Hour
+	c.ticker = time.NewTicker(c.ticker_interval)
+	c.sigc := make(chan os.Signal, 2)
+	signal.Notify(c.sigc, syscall.SIGTERM, syscall.SIGINT)
+
+	go func() {
+		for {
+			select {
+			case <-c.done:
+				return
+			case sig := <-c.sigc:
+				// sig can be syscall.SIGTERM or syscall.SIGINT
+				return
+			case t := <-c.ticker.C:
+				// delete expired index
+				c.HouseKeeping()
+			}
+		}
+	}()
+}
+
+func (c *HnswCache) HouseKeeping() {
+
+	expiredkeys := make([]string, 0, 16)
+
+	c.IndexMap.Range(func(key, value any) bool {
+
+		search := value.(*HnswSearch)
+		search.Mutex.RLock()
+		defer search.Mutex.RUnlock()
+
+		ts := search.ExpiredAt.Load()
+		now := time.Now().Unix()
+		if ts < now {
+			expiredkeys = append(expiredkeys, key.(string))
+		}
+		return true
+	})
+
+	for _, k := range expiredkeys {
+		value, loaded := c.IndexMap.LoadAndDelete(k)
+		if loaded {
+			search := value.(*HnswSearch)
+			// destroy the usearch indexes
+			search.Destroy()
+		}
+	}
+
+}
+
+func (c *HnswCache) Destroy() {
+
+	c.ticker.Stop()
+	c.done <- true
+
+}
+
+func (c *HnswCache) GetIndex(proc *process.Process, key string) (*HnswSearch, error) {
+	value, loaded := c.IndexMap.LoadOrStore(key, &HnswSearch{})
 	if !loaded {
 		idx := value.(*HnswSearch)
 		idx.Mutex.Lock()
@@ -57,9 +143,9 @@ func GetIndex(proc *process.Process, key string) (*HnswSearch, error) {
 	return value.(*HnswSearch), nil
 }
 
-func Hnsw_Search(proc *process.Process, cfg usearch.IndexConfig, tblcfg hnsw.IndexTableConfig, fp32a []float32) error {
+func (c *HnswCache) Search(proc *process.Process, cfg usearch.IndexConfig, tblcfg hnsw.IndexTableConfig, fp32a []float32) error {
 
-	search, err := GetIndex(proc, tblcfg.IndexTable)
+	search, err := c.GetIndex(proc, tblcfg.IndexTable)
 	if err != nil {
 		return err
 	}
@@ -70,5 +156,9 @@ func Hnsw_Search(proc *process.Process, cfg usearch.IndexConfig, tblcfg hnsw.Ind
 	if search.Indexes == nil {
 		return moerr.NewInternalErrorNoCtx("HNSW cannot find index from database")
 	}
+
+	time.Now().Add(time.Hour)
+	search.ExpireAt.Store(time.Unix)
+
 	return nil
 }
