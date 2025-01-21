@@ -11264,14 +11264,10 @@ func TestCheckpointV2(t *testing.T) {
 		tae.Runtime, tae.Dir,
 	)
 
-	replayer := logtail.NewCheckpointReplayer(loc, common.DebugAllocator)
-	replayer.PrefetchMeta("", tae.Opts.Fs)
-	err = replayer.ReadMeta(ctx, "", tae.Opts.Fs)
+	err = logtail.PrefetchCheckpoint(ctx,"",loc,common.DebugAllocator,tae.Opts.Fs)
 	assert.NoError(t, err)
-	replayer.PrefetchData("", tae.Opts.Fs)
-	err = replayer.ReadData(ctx, "", tae.Opts.Fs)
+	err = logtail.ReplayCheckpoint(ctx, catalog2, false, dataFactory, loc, common.DebugAllocator, tae.Opts.Fs)
 	assert.NoError(t, err)
-	replayer.ReplayObjectlist(ctx, catalog2, true, dataFactory)
 	readTxn, err := tae.StartTxn(nil)
 	assert.NoError(t, err)
 	closeFn := catalog2.RelayFromSysTableObjects(
@@ -11283,7 +11279,8 @@ func TestCheckpointV2(t *testing.T) {
 	for _, fn := range closeFn {
 		fn()
 	}
-	replayer.ReplayObjectlist(ctx, catalog2, false, dataFactory)
+	err = logtail.ReplayCheckpoint(ctx, catalog2, false, dataFactory, loc, common.DebugAllocator, tae.Opts.Fs)
+	assert.NoError(t, err)
 
 	var tombstoneCnt2, dataCnt2 int
 	p := &catalog.LoopProcessor{}

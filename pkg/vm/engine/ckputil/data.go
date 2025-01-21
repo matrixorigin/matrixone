@@ -30,22 +30,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
-// used to scan data with columns: [`table_id`, `object_type`, `phy_addr`]
-var DataScan_TableIDAtrrs = []string{
-	TableObjectsAttr_Table,
-	TableObjectsAttr_ObjectType,
-	objectio.PhysicalAddr_Attr,
-}
-var DataScan_TableIDTypes = []types.Type{
-	TableObjectsTypes[TableObjectsAttr_Table_Idx],
-	TableObjectsTypes[TableObjectsAttr_ObjectType_Idx],
-	objectio.RowidType,
-}
-var DataScan_TableIDSeqnums = []uint16{
-	TableObjectsAttr_Table_Idx,
-	TableObjectsAttr_ObjectType_Idx,
-	objectio.SEQNUM_ROWID,
-}
+// used to scan data with columns: [table object attrs, `phy_addr`]
+var DataScan_TableIDAtrrs = append(TableObjectsAttrs, objectio.PhysicalAddr_Attr)
+var DataScan_TableIDTypes = append(TableObjectsTypes, objectio.RowidType)
+var DataScan_TableIDSeqnums = append(TableObjectsSeqnums, objectio.SEQNUM_ROWID)
 
 func MakeDataScanTableIDBatch() *batch.Batch {
 	return batch.NewWithSchema(
@@ -190,7 +178,7 @@ func (iter *ObjectIter) Next() (bool, error) {
 			DataScan_ObjectEntrySeqnums,
 			DataScan_ObjectEntryTypes,
 			iter.fs,
-			iter.ranges[iter.index.rangeIdx].Location,
+			iter.ranges[iter.index.rangeIdx].ObjectStats.ObjectLocation(),
 			iter.data,
 			iter.mp,
 			0,

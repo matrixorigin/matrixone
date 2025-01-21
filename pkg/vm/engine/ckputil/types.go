@@ -104,7 +104,7 @@ const (
 	MetaAttr_ObjectType = "object_type"
 	MetaAttr_Start      = "start_rowid"
 	MetaAttr_End        = "end_rowid"
-	MetaAttr_Location   = "location"
+	MetaAttr_ObjectStats   = "objectStats"
 )
 
 const (
@@ -112,7 +112,7 @@ const (
 	MetaAttr_ObjectType_Idx = 1
 	MetaAttr_Start_Idx      = 2
 	MetaAttr_End_Idx        = 3
-	MetaAttr_Location_Idx   = 4
+	MetaAttr_ObjectStats_Idx   = 4
 )
 
 var MetaAttrs = []string{
@@ -120,7 +120,7 @@ var MetaAttrs = []string{
 	MetaAttr_ObjectType,
 	MetaAttr_Start,
 	MetaAttr_End,
-	MetaAttr_Location,
+	MetaAttr_ObjectStats,
 }
 
 var MetaTypes = []types.Type{

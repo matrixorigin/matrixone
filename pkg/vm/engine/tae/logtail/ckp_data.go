@@ -110,6 +110,104 @@ type CheckpointReplayer struct {
 	closeCB []func()
 }
 
+type CheckpointReplayer_V2 struct {
+	location          objectio.Location
+	tableObjectsStats []objectio.ObjectStats
+}
+
+func PrefetchCheckpoint(
+	ctx context.Context,
+	sid string,
+	location objectio.Location,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+) (err error) {
+	metaVecs := containers.NewVectors(len(ckputil.MetaAttrs))
+	var release func()
+	if _, release, err = ioutil.LoadColumnsData(
+		ctx,
+		ckputil.MetaSeqnums,
+		ckputil.MetaTypes,
+		fs,
+		location,
+		metaVecs,
+		mp,
+		0,
+	); err != nil {
+		return
+	}
+	defer release()
+	metaBatch := batch.New(ckputil.MetaAttrs)
+	for i, vec := range metaVecs {
+		metaBatch.Vecs[i] = &vec
+	}
+	objs := ckputil.ScanObjectStats(metaBatch)
+	for _, stats := range objs {
+		ioutil.Prefetch(sid, fs, stats.ObjectLocation())
+	}
+	return
+}
+
+func ReplayCheckpoint(
+	ctx context.Context,
+	c *catalog.Catalog,
+	forSys bool,
+	dataFactory catalog.DataFactory,
+	location objectio.Location,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+) (err error) {
+	metaVecs := containers.NewVectors(len(ckputil.MetaAttrs))
+	var release func()
+	if _, release, err = ioutil.LoadColumnsData(
+		ctx,
+		ckputil.MetaSeqnums,
+		ckputil.MetaTypes,
+		fs,
+		location,
+		metaVecs,
+		mp,
+		0,
+	); err != nil {
+		return
+	}
+	defer release()
+	metaBatch := batch.New(ckputil.MetaAttrs)
+	for i, vec := range metaVecs {
+		metaBatch.Vecs[i] = &vec
+	}
+	objs := ckputil.ScanObjectStats(metaBatch)
+	for _, obj := range objs {
+		if err = ckputil.ForEachFile(
+			ctx,
+			obj,
+			func(
+				accout uint32,
+				dbid, tid uint64,
+				objectType int8,
+				objectStats objectio.ObjectStats,
+				create, delete types.TS,
+				rowID types.Rowid,
+			) error {
+				if forSys == pkgcatalog.IsSystemTable(tid) {
+					c.OnReplayObjectBatch_V2(
+						dbid, tid, objectType, objectStats, create, delete, dataFactory,
+					)
+				}
+				return nil
+			},
+			func() error {
+				return nil
+			},
+			mp,
+			fs,
+		); err != nil {
+			return
+		}
+	}
+	return
+}
+
 func NewCheckpointReplayer(location objectio.Location, mp *mpool.MPool) *CheckpointReplayer {
 	return &CheckpointReplayer{
 		location:           location,
@@ -120,46 +218,6 @@ func NewCheckpointReplayer(location objectio.Location, mp *mpool.MPool) *Checkpo
 		objectInfo:         make([]containers.Vectors, 0),
 		closeCB:            make([]func(), 0),
 	}
-}
-
-func (replayer *CheckpointReplayer) PrefetchMeta(sid string, fs fileservice.FileService) {
-	ioutil.Prefetch(sid, fs, replayer.location)
-}
-
-func (replayer *CheckpointReplayer) ReadMeta(ctx context.Context, sid string, fs fileservice.FileService) (err error) {
-	replayer.meta = containers.NewVectors(len(ckputil.MetaAttrs))
-	_, release, err := ioutil.LoadColumnsData(
-		ctx,
-		ckputil.MetaSeqnums,
-		ckputil.MetaTypes,
-		fs,
-		replayer.location,
-		replayer.meta,
-		replayer.mp,
-		0,
-	)
-	if err != nil {
-		return
-	}
-	replayer.closeCB = append(replayer.closeCB, release)
-	locationVec := replayer.meta[ckputil.MetaAttr_Location_Idx]
-	endRowIDs := vector.MustFixedColNoTypeCheck[types.Rowid](&replayer.meta[ckputil.MetaAttr_End_Idx])
-	for i := 0; i < locationVec.Length(); i++ {
-		location := objectio.Location(locationVec.GetBytesAt(i))
-		rowID := endRowIDs[i]
-		_, blkOffset := rowID.BorrowBlockID().Offsets()
-		str := location.String()
-		replayer.locations[str] = location
-		maxBlkID, ok := replayer.maxBlkIDs[str]
-		if !ok {
-			replayer.maxBlkIDs[str] = blkOffset
-		} else {
-			if maxBlkID < blkOffset {
-				replayer.maxBlkIDs[str] = blkOffset
-			}
-		}
-	}
-	return
 }
 
 func (replayer *CheckpointReplayer) ReadMetaForV12(
@@ -204,11 +262,6 @@ func (replayer *CheckpointReplayer) ReadMetaForV12(
 		}
 	}
 	return
-}
-func (replayer *CheckpointReplayer) PrefetchData(sid string, fs fileservice.FileService) {
-	for _, loc := range replayer.locations {
-		ioutil.Prefetch(sid, fs, loc)
-	}
 }
 func (replayer *CheckpointReplayer) ReadDataForV12(
 	ctx context.Context,
@@ -308,14 +361,16 @@ func (replayer *CheckpointReplayer) ReplayObjectlist(
 	forSys bool,
 	dataFactory *tables.DataFactory) {
 	for _, vecs := range replayer.objectInfo {
-		startOffset, endOffset := 0, 0
+		// startOffset, endOffset := 0, 0
+		startOffset, _ := 0, 0
 		tids := vector.MustFixedColNoTypeCheck[uint64](&vecs[ckputil.TableObjectsAttr_Table_Idx])
 		prevTid := tids[0]
 		for i := 0; i < len(tids); i++ {
 			if tids[i] != prevTid {
-				endOffset = i
+				// endOffset = i
 				if forSys == pkgcatalog.IsSystemTable(prevTid) {
-					c.OnReplayObjectBatch_V2(vecs, dataFactory, startOffset, endOffset)
+					panic("todo")
+					// c.OnReplayObjectBatch_V2(vecs, dataFactory, startOffset, endOffset)
 				}
 				startOffset = i
 				prevTid = tids[i]
@@ -323,7 +378,7 @@ func (replayer *CheckpointReplayer) ReplayObjectlist(
 		}
 		if startOffset != len(tids) {
 			if forSys == pkgcatalog.IsSystemTable(prevTid) {
-				c.OnReplayObjectBatch_V2(vecs, dataFactory, startOffset, len(tids))
+				// c.OnReplayObjectBatch_V2(vecs, dataFactory, startOffset, len(tids))
 			}
 		}
 	}
