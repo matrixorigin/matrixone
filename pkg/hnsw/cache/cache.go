@@ -42,6 +42,16 @@ type HnswSearchIndex struct {
 	Checksum  string
 }
 
+func (idx *HnswSearchIndex) LoadIndex(proc *process.Process) error {
+
+	return nil
+}
+
+func (idx *HnswSearchIndex) Search(proc *process.Process) (keys []int64, distances []float32, err error) {
+
+	return nil, nil, nil
+}
+
 type HnswSearch struct {
 	Mutex    sync.RWMutex
 	Indexes  []*HnswSearchIndex
@@ -118,7 +128,13 @@ func (s *HnswSearch) LoadMetadata(proc *process.Process) ([]*HnswSearchIndex, er
 
 func (s *HnswSearch) LoadIndex(proc *process.Process, indexes []*HnswSearchIndex) ([]*HnswSearchIndex, error) {
 
-	return nil, nil
+	for _, idx := range indexes {
+		err := idx.LoadIndex(proc)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return indexes, nil
 }
 
 func (s *HnswSearch) LoadFromDatabase(proc *process.Process) error {
