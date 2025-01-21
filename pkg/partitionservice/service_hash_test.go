@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestCreateHash(t *testing.T) {
@@ -64,6 +65,41 @@ func TestCreateHash(t *testing.T) {
 			},
 		)
 	}
+}
+
+func TestGetMetadataByHashType(t *testing.T) {
+	runTestPartitionServiceTest(
+		func(
+			ctx context.Context,
+			txnOp client.TxnOperator,
+			s *service,
+			store *memStorage,
+		) {
+			def := newTestTableDefine(1, []string{"c1"}, []types.T{types.T_date})
+			stmt := newTestHashOption(t, "c1", 1)
+
+			_, err := s.getMetadataByHashType(stmt.PartitionOption, def)
+			require.Error(t, err)
+
+			def = newTestTableDefine(1, []string{"c1"}, []types.T{types.T_int32})
+			method := stmt.PartitionOption.PartBy.PType.(*tree.HashType)
+			stmt.PartitionOption.PartBy.Num = 0
+			_, err = s.getMetadataByHashType(stmt.PartitionOption, def)
+			require.Error(t, err)
+			stmt.PartitionOption.PartBy.Num = 1
+
+			columns, _ := method.Expr.(*tree.UnresolvedName)
+			columns.NumParts = 0
+			_, err = s.getMetadataByHashType(stmt.PartitionOption, def)
+			require.Error(t, err)
+
+			columns.NumParts = 1
+			stmt.PartitionOption.PartBy.Num = 1
+			method.Expr = tree.NewMaxValue()
+			_, err = s.getMetadataByHashType(stmt.PartitionOption, def)
+			require.Error(t, err)
+		},
+	)
 }
 
 func newTestHashOption(

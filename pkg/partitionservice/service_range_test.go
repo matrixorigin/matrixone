@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestCreateRange(t *testing.T) {
@@ -64,6 +65,36 @@ func TestCreateRange(t *testing.T) {
 			},
 		)
 	}
+}
+
+func TestGetMetadataByRangeType(t *testing.T) {
+	runTestPartitionServiceTest(
+		func(
+			ctx context.Context,
+			txnOp client.TxnOperator,
+			s *service,
+			store *memStorage,
+		) {
+			def := newTestTableDefine(1, []string{"c1"}, []types.T{types.T_varchar})
+			stmt := newTestRangeOption(t, "c1", 1)
+
+			_, err := s.getMetadataByRangeType(stmt.PartitionOption, def)
+			require.Error(t, err)
+
+			def = newTestTableDefine(1, []string{"c1"}, []types.T{types.T_int32})
+			method := stmt.PartitionOption.PartBy.PType.(*tree.RangeType)
+
+			columns, _ := method.Expr.(*tree.UnresolvedName)
+			columns.NumParts = 0
+			_, err = s.getMetadataByRangeType(stmt.PartitionOption, def)
+			require.Error(t, err)
+			columns.NumParts = 1
+
+			method.Expr = tree.NewMaxValue()
+			_, err = s.getMetadataByRangeType(stmt.PartitionOption, def)
+			require.Error(t, err)
+		},
+	)
 }
 
 func newTestRangeOption(
