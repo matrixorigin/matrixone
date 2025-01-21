@@ -37,7 +37,7 @@ type BaseEntry interface {
 
 type BaseEntryImpl[T BaseNode[T]] struct {
 	//chain of MetadataMVCCNode
-	*txnbase.MVCCChain[*MVCCNode[T]]
+	txnbase.MVCCChain[*MVCCNode[T]]
 }
 
 func NewBaseEntry[T BaseNode[T]](factory func() T) *BaseEntryImpl[T] {
@@ -63,7 +63,7 @@ func (be *BaseEntryImpl[T]) PPStringLocked(level common.PPLevel, depth int, pref
 
 func (be *BaseEntryImpl[T]) CreateWithTSLocked(ts types.TS, baseNode T) {
 	node := &MVCCNode[T]{
-		EntryMVCCNode: &EntryMVCCNode{
+		EntryMVCCNode: EntryMVCCNode{
 			CreatedAt: ts,
 		},
 		TxnMVCCNode: txnbase.NewTxnMVCCNodeWithTS(ts),
@@ -77,7 +77,7 @@ func (be *BaseEntryImpl[T]) CreateWithTxnLocked(txn txnif.AsyncTxn, baseNode T) 
 		logutil.Warnf("unexpected txn is nil: %+v", stack.Callers(0))
 	}
 	node := &MVCCNode[T]{
-		EntryMVCCNode: &EntryMVCCNode{
+		EntryMVCCNode: EntryMVCCNode{
 			CreatedAt: txnif.UncommitTS,
 		},
 		TxnMVCCNode: txnbase.NewTxnMVCCNodeWithTxn(txn),
