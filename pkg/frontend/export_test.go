@@ -207,12 +207,26 @@ func Test_exportDataToCSVFile(t *testing.T) {
 			mrs: &MysqlResultSet{},
 		}
 
-		var col = make([]MysqlColumn, 13)
+		var col = make([]MysqlColumn, 15)
 		col[5].flag = 0
 		col[6].flag = 1 << 5
-		var colType = []defines.MysqlType{defines.MYSQL_TYPE_YEAR, defines.MYSQL_TYPE_YEAR, defines.MYSQL_TYPE_YEAR, defines.MYSQL_TYPE_SHORT, defines.MYSQL_TYPE_DOUBLE,
-			defines.MYSQL_TYPE_LONGLONG, defines.MYSQL_TYPE_LONGLONG, defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_DATE, defines.MYSQL_TYPE_DATETIME,
-			defines.MYSQL_TYPE_BOOL, defines.MYSQL_TYPE_DECIMAL, defines.MYSQL_TYPE_JSON}
+		var colType = []defines.MysqlType{
+			defines.MYSQL_TYPE_YEAR,
+			defines.MYSQL_TYPE_YEAR,
+			defines.MYSQL_TYPE_YEAR,
+			defines.MYSQL_TYPE_SHORT,
+			defines.MYSQL_TYPE_DOUBLE,
+			defines.MYSQL_TYPE_LONGLONG,
+			defines.MYSQL_TYPE_LONGLONG,
+			defines.MYSQL_TYPE_VARCHAR,
+			defines.MYSQL_TYPE_DATE,
+			defines.MYSQL_TYPE_DATETIME,
+			defines.MYSQL_TYPE_BOOL,
+			defines.MYSQL_TYPE_DECIMAL,
+			defines.MYSQL_TYPE_JSON,
+			defines.MYSQL_TYPE_VARCHAR,
+			defines.MYSQL_TYPE_VARCHAR,
+		}
 		for i := 0; i < len(col); i++ {
 			col[i].SetColumnType(colType[i])
 			ep.mrs.AddColumn(&col[i])
@@ -230,6 +244,8 @@ func Test_exportDataToCSVFile(t *testing.T) {
 		data[10] = true
 		data[11] = 1.2
 		data[12], _ = types.ParseStringToByteJson(`{"a":1}`)
+		data[13] = []float32{8.560689, 6.790359, 821.9778}
+		data[13] = []float64{8.560689, 6.790359, 821.9778}
 
 		ep.mrs.AddRow(data)
 

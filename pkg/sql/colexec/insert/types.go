@@ -45,6 +45,8 @@ type container struct {
 }
 
 type Insert struct {
+	delegated bool
+	input     vm.CallResult
 	ctr       container
 	ToWriteS3 bool // mark if this insert's target is S3 or not.
 	InsertCtx *InsertCtx

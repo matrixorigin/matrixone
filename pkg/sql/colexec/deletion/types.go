@@ -82,6 +82,8 @@ type container struct {
 	affectedRows uint64
 }
 type Deletion struct {
+	delegated bool
+	input     vm.CallResult
 	ctr       container
 	DeleteCtx *DeleteCtx
 
