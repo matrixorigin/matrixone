@@ -42,6 +42,13 @@ func IsValidArg(parameter string, proc *process.Process) (*cmd_util.DiskCleaner,
 	case cmd_util.CheckerKeyTTL:
 	case cmd_util.CheckerKeyMinTS:
 		break
+	case cmd_util.ExecuteFastGC:
+		minTS := types.TimestampToTS(proc.Base.TxnClient.MinTimestamp())
+		return &cmd_util.DiskCleaner{
+			Op:    op,
+			Key:   key,
+			Value: minTS.ToString(),
+		}, nil
 	default:
 		return nil, moerr.NewInternalError(proc.Ctx, "handleDiskCleaner: invalid key!")
 	}

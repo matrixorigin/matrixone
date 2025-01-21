@@ -18,7 +18,6 @@ import (
 	"context"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"math/rand"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -107,7 +106,7 @@ func (cleaner *DiskCleaner) GC(ctx context.Context) (err error) {
 func (cleaner *DiskCleaner) FastGC(ctx context.Context, ts *types.TS) (err error) {
 	gcJob := new(fastGCJob)
 	gcJob.jobType = JT_GCFastExecute
-	gcJob.minTS = &types.TS{}
+	gcJob.minTS = ts
 	_, err = cleaner.processQueue.Enqueue(gcJob)
 	return err
 }
@@ -247,14 +246,7 @@ func (cleaner *DiskCleaner) scheduleGCJob(ctx context.Context) (err error) {
 		return
 	}
 	logutil.Info("GC-Send-Intents")
-	if rand.Intn(100)%2 == 0 {
-		gcJob := new(fastGCJob)
-		gcJob.jobType = JT_GCFastExecute
-		gcJob.minTS = &types.TS{}
-		_, err = cleaner.processQueue.Enqueue(gcJob)
-	} else {
-		_, err = cleaner.processQueue.Enqueue(JT_GCExecute)
-	}
+	_, err = cleaner.processQueue.Enqueue(JT_GCExecute)
 	return
 }
 

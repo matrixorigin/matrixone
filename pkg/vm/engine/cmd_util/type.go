@@ -24,4 +24,6 @@ const (
 
 	AddChecker    = "add_checker"
 	RemoveChecker = "remove_checker"
+
+	ExecuteFastGC = "execute_fast_gc"
 )
