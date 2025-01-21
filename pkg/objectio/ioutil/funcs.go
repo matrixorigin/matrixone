@@ -274,7 +274,11 @@ func CheckTombstoneFile(
 			// !PrefixEq means there is no rowid of this block in this zonemap, so skip
 			if columnZonemap.RowidPrefixEq(prefixPattern) {
 				var goOn bool
-				if goOn, err = onBlockSelectedFn(tombstoneObject, pos); err != nil || !goOn {
+				goOn, err = onBlockSelectedFn(tombstoneObject, pos)
+				if err != nil {
+					return
+				}
+				if !goOn {
 					break
 				}
 			} else if columnZonemap.RowidPrefixGT(prefixPattern) {
