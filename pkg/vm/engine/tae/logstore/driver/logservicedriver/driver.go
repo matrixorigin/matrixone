@@ -35,25 +35,6 @@ const (
 	MaxReadSize    = mpool.MB * 64
 )
 
-func RetryWithTimeout(timeoutDuration time.Duration, fn func() (shouldReturn bool)) error {
-	ctx, cancel := context.WithTimeoutCause(
-		context.Background(),
-		timeoutDuration,
-		moerr.CauseRetryWithTimeout,
-	)
-	defer cancel()
-	for {
-		select {
-		case <-ctx.Done():
-			return moerr.AttachCause(ctx, ErrRetryTimeOut)
-		default:
-			if fn() {
-				return nil
-			}
-		}
-	}
-}
-
 type LogServiceDriver struct {
 	*driverInfo
 

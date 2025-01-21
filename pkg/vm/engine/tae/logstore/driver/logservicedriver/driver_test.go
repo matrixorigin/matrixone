@@ -20,7 +20,6 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/lni/vfs"
 
@@ -187,17 +186,6 @@ func TestReplay2(t *testing.T) {
 	}
 
 	driver.Close()
-}
-
-func Test_RetryWithTimeout(t *testing.T) {
-	tryFunc := func() bool {
-		return false
-	}
-	err := RetryWithTimeout(time.Second*0, tryFunc)
-	assert.Error(t, err)
-
-	err = RetryWithTimeout(time.Millisecond*3, tryFunc)
-	assert.Error(t, err)
 }
 
 // func Test_TokenController(t *testing.T) {
