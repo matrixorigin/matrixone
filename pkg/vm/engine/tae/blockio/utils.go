@@ -233,7 +233,11 @@ func CheckTombstoneFile(
 				continue
 			}
 			var goOn bool
-			if goOn, err = onBlockSelectedFn(tombstoneObject, pos); err != nil || !goOn {
+			goOn, err = onBlockSelectedFn(tombstoneObject, pos)
+			if err != nil {
+				return
+			}
+			if !goOn {
 				break
 			}
 		}
