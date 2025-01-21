@@ -139,7 +139,8 @@ func TestAppendSkipCmd2(t *testing.T) {
 	appended := []uint64{0, 1, 2, 5, 6, 6, 9, 10, 10, 10}
 
 	writer := NewLogEntryWriter()
-	client, _ := driver.getClientForWrite()
+	client := driver.getClientForWrite()
+	defer client.Putback()
 	for i := 0; i < entryCount; i++ {
 		entries[i].DSN = dsns[i]
 		err := writer.AppendEntry(entries[i])
@@ -261,7 +262,8 @@ func TestAppendSkipCmd4(t *testing.T) {
 
 	writer := NewLogEntryWriter()
 
-	client, _ := driver.getClientForWrite()
+	client := driver.getClientForWrite()
+	defer client.Putback()
 	for i := 0; i < entryCount; i++ {
 		entries[i].DSN = dsns[i]
 
@@ -317,7 +319,8 @@ func TestAppendSkipCmd4(t *testing.T) {
 
 	writer = NewLogEntryWriter()
 
-	client, _ = driver.getClientForWrite()
+	client = driver.getClientForWrite()
+	defer client.Putback()
 	for i := 0; i < entryCount; i++ {
 		payload := []byte(fmt.Sprintf("payload %d", i))
 		e := entry.MockEntryWithPayload(payload)
@@ -390,7 +393,8 @@ func TestAppendSkipCmd5(t *testing.T) {
 	appended := []uint64{8, 10, 10, 12}
 	writer := NewLogEntryWriter()
 
-	client, _ := driver.getClientForWrite()
+	client := driver.getClientForWrite()
+	defer client.Putback()
 	for i := 0; i < entryCount; i++ {
 		entries[i].DSN = dsns[i]
 		writer.SetSafeDSN(appended[i])

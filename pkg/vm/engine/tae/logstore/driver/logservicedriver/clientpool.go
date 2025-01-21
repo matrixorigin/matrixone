@@ -73,8 +73,9 @@ type userWriteController struct {
 
 func newTokenController(maxCount uint64) *userWriteController {
 	return &userWriteController{
-		maxCount: maxCount,
-		Cond:     *sync.NewCond(new(sync.Mutex)),
+		nextToken: uint64(1),
+		maxCount:  maxCount,
+		Cond:      *sync.NewCond(new(sync.Mutex)),
 	}
 }
 
@@ -110,9 +111,10 @@ func (rc *userWriteController) Apply() (token uint64) {
 }
 
 type wrappedClient struct {
-	wrapped BackendClient
-	buf     logservice.LogRecord
-	pool    *clientPool
+	wrapped    BackendClient
+	buf        logservice.LogRecord
+	pool       *clientPool
+	writeToken uint64
 }
 
 func newClient(
@@ -188,6 +190,10 @@ func (c *wrappedClient) Append(
 func (c *wrappedClient) Putback() {
 	if c.pool != nil {
 		pool := c.pool
+		if c.writeToken > 0 {
+			pool.PutbackTokens(c.writeToken)
+			c.writeToken = 0
+		}
 		c.pool = nil
 		pool.Put(c)
 	} else {
@@ -298,12 +304,16 @@ func (c *clientPool) Put(client *wrappedClient) {
 	c.cond.Broadcast()
 }
 
-func (c *clientPool) GetWithWriteToken() (client *wrappedClient, token uint64, err error) {
+func (c *clientPool) GetWithWriteToken() (client *wrappedClient, err error) {
 	if client, err = c.Get(); err != nil {
 		return
 	}
-	token = c.userWriteController.Apply()
+	token := c.userWriteController.Apply()
+	if token == 0 {
+		logutil.Fatal("token is 0")
+	}
 	client.pool = c
+	client.writeToken = token
 	return
 }
 

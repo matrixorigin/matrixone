@@ -44,9 +44,8 @@ type driverInfo struct {
 	}
 
 	watermark struct {
-		mu            sync.RWMutex
-		committingDSN uint64
-		committedDSN  uint64
+		mu           sync.RWMutex
+		committedDSN uint64
 
 		// dsn: driver sequence number
 		// it is monotonically continuously increasing
@@ -67,7 +66,6 @@ func newDriverInfo() *driverInfo {
 
 func (info *driverInfo) initState(stats *DSNStats) {
 	info.watermark.nextDSN.Store(stats.Max)
-	info.watermark.committingDSN = stats.Max
 	info.watermark.committedDSN = stats.Max
 	if stats.Min != math.MaxUint64 {
 		info.truncateDSNIntent.Store(stats.Min - 1)
@@ -142,14 +140,16 @@ func (info *driverInfo) recordCommitInfo(committer *groupCommitter) {
 	info.psn.dsnMap[committer.psn] = dsnRange
 	info.psn.mu.Unlock()
 
-	if dsnRange.Start != info.watermark.committingDSN+1 {
+	info.watermark.mu.Lock()
+	defer info.watermark.mu.Unlock()
+	if dsnRange.Start != info.watermark.committedDSN+1 {
 		panic(fmt.Sprintf(
 			"logic err, expect %d, actual %s",
-			info.watermark.committingDSN+1,
+			info.watermark.committedDSN+1,
 			dsnRange.String(),
 		))
 	}
-	info.watermark.committingDSN = dsnRange.End
+	info.watermark.committedDSN = dsnRange.End
 }
 
 func (info *driverInfo) gcPSN(psn uint64) {
@@ -175,10 +175,4 @@ func (info *driverInfo) getCommittedDSNWatermark() uint64 {
 	info.watermark.mu.RLock()
 	defer info.watermark.mu.RUnlock()
 	return info.watermark.committedDSN
-}
-
-func (info *driverInfo) commitWatermark() {
-	info.watermark.mu.Lock()
-	info.watermark.committedDSN = info.watermark.committingDSN
-	info.watermark.mu.Unlock()
 }

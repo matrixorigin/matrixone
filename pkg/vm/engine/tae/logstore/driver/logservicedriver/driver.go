@@ -51,7 +51,6 @@ type LogServiceDriver struct {
 	commitWaitQueue chan any
 	waitCommitLoop  *sm.Loop
 	postCommitQueue chan any
-	postCommitLoop  *sm.Loop
 	truncateQueue   sm.Queue
 
 	ctx    context.Context
@@ -85,10 +84,8 @@ func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
 	d.ctx, d.cancel = context.WithCancel(context.Background())
 	d.commitLoop = sm.NewSafeQueue(10000, 10000, d.onCommitIntents)
 	d.commitLoop.Start()
-	d.waitCommitLoop = sm.NewLoop(d.commitWaitQueue, d.postCommitQueue, d.onWaitCommitted, 10000)
+	d.waitCommitLoop = sm.NewLoop(d.commitWaitQueue, nil, d.onWaitCommitted, 10000)
 	d.waitCommitLoop.Start()
-	d.postCommitLoop = sm.NewLoop(d.postCommitQueue, nil, d.onCommitDone, 10000)
-	d.postCommitLoop.Start()
 	d.truncateQueue = sm.NewSafeQueue(10000, 10000, d.onTruncateRequests)
 	d.truncateQueue.Start()
 	logutil.Info(
@@ -107,7 +104,6 @@ func (d *LogServiceDriver) Close() error {
 	d.cancel()
 	d.commitLoop.Stop()
 	d.waitCommitLoop.Stop()
-	d.postCommitLoop.Stop()
 	d.truncateQueue.Stop()
 	close(d.commitWaitQueue)
 	close(d.postCommitQueue)
@@ -229,8 +225,4 @@ func (d *LogServiceDriver) readFromBackend(
 	}
 
 	return
-}
-
-func (d *LogServiceDriver) putbackWriteTokens(tokens ...uint64) {
-	d.clientPool.PutbackTokens(tokens...)
 }
