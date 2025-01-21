@@ -43,10 +43,6 @@ type LogServiceDriver struct {
 	clientPool *clientPool
 	committer  *groupCommitter
 
-	reuse struct {
-		tokens []uint64
-	}
-
 	commitLoop      sm.Queue
 	commitWaitQueue chan any
 	waitCommitLoop  *sm.Loop
@@ -68,10 +64,6 @@ func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
 		panic(v)
 	}))
 
-	maxPenddingWrites := cfg.ClientMaxCount
-	if maxPenddingWrites < DefaultMaxClient {
-		maxPenddingWrites = DefaultMaxClient
-	}
 	d := &LogServiceDriver{
 		clientPool:          newClientPool(cfg),
 		config:              *cfg,
