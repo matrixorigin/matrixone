@@ -79,6 +79,13 @@ func (h *HnswSearch) Expired() bool {
 	return (ts < now)
 }
 
+func (s *HnswSearch) LoadFromDatabase(proc *process.Process) error {
+	s.Mutex.Lock()
+	defer s.Mutex.Unlock()
+
+	return nil
+}
+
 type HnswCache struct {
 	IndexMap        sync.Map
 	ticker          *time.Ticker
@@ -187,11 +194,4 @@ func (c *HnswCache) GetIndex(proc *process.Process, cfg usearch.IndexConfig, tbl
 		return idx, nil
 	}
 	return value.(*HnswSearch), nil
-}
-
-func (s *HnswSearch) LoadFromDatabase(proc *process.Process) error {
-	s.Mutex.Lock()
-	defer s.Mutex.Unlock()
-
-	return nil
 }
