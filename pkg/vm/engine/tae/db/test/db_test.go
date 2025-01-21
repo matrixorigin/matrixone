@@ -11264,7 +11264,7 @@ func TestCheckpointV2(t *testing.T) {
 		tae.Runtime, tae.Dir,
 	)
 
-	err = logtail.PrefetchCheckpoint(ctx,"",loc,common.DebugAllocator,tae.Opts.Fs)
+	err = logtail.PrefetchCheckpoint(ctx, "", loc, common.DebugAllocator, tae.Opts.Fs)
 	assert.NoError(t, err)
 	err = logtail.ReplayCheckpoint(ctx, catalog2, true, dataFactory, loc, common.DebugAllocator, tae.Opts.Fs)
 	assert.NoError(t, err)
@@ -11324,7 +11324,7 @@ func TestCheckpointV2Compatibility(t *testing.T) {
 
 	tbl := rel.GetMeta().(*catalog.TableEntry)
 
-	for i := 0; i < 5; i++ {
+	for i := 0; i < 100; i++ {
 		obj := catalog.MockObjectEntry(tbl, tae.Catalog, true, tae.TxnMgr.Now(), tae.TxnMgr.Now())
 		tbl.AddEntryLocked(obj)
 		obj2 := catalog.MockObjectEntry(tbl, tae.Catalog, false, tae.TxnMgr.Now(), tae.TxnMgr.Now())
@@ -11332,23 +11332,38 @@ func TestCheckpointV2Compatibility(t *testing.T) {
 	}
 
 	tae.ForceCheckpoint()
-
-	ckps := tae.BGCheckpointRunner.GetAllCheckpoints()
-	assert.Equal(t, 1, len(ckps))
-
-	loc := ckps[0].GetTNLocation()
+	tae.ForceCheckpoint()
 
 	catalog2 := catalog.MockCatalog()
 	dataFactory := tables.NewDataFactory(
 		tae.Runtime, tae.Dir,
 	)
 
-	replayer := logtail.NewCheckpointReplayer(loc, common.DebugAllocator)
-	err = replayer.ReadMetaForV12(ctx, "", tae.Opts.Fs)
-	assert.NoError(t, err)
-	err = replayer.ReadDataForV12(ctx, tae.Opts.Fs)
-	assert.NoError(t, err)
-	replayer.ReplayObjectlist(ctx, catalog2, true, dataFactory)
+	ckps := tae.BGCheckpointRunner.GetAllCheckpoints()
+	assert.Equal(t, 2, len(ckps))
+
+	locs := make([]objectio.Location, 0)
+
+	for _, ckp := range ckps {
+		locs = append(locs, ckp.GetTNLocation())
+	}
+
+	replayers := make([]*logtail.CheckpointReplayer, len(locs))
+	for i, loc := range locs {
+		replayer := logtail.NewCheckpointReplayer(loc, common.DebugAllocator)
+		replayers[i] = replayer
+	}
+	for _, replayer := range replayers {
+		err = replayer.ReadMetaForV12(ctx, "", tae.Opts.Fs)
+		assert.NoError(t, err)
+	}
+	for _, replayer := range replayers {
+		err = replayer.ReadDataForV12(ctx, tae.Opts.Fs)
+		assert.NoError(t, err)
+	}
+	for _, replayer := range replayers {
+		replayer.ReplayObjectlist(ctx, catalog2, true, dataFactory)
+	}
 	readTxn, err := tae.StartTxn(nil)
 	assert.NoError(t, err)
 	closeFn := catalog2.RelayFromSysTableObjects(
@@ -11360,7 +11375,9 @@ func TestCheckpointV2Compatibility(t *testing.T) {
 	for _, fn := range closeFn {
 		fn()
 	}
-	replayer.ReplayObjectlist(ctx, catalog2, false, dataFactory)
+	for _, replayer := range replayers {
+		replayer.ReplayObjectlist(ctx, catalog2, false, dataFactory)
+	}
 
 	var tombstoneCnt2, dataCnt2 int
 	p := &catalog.LoopProcessor{}
@@ -11378,9 +11395,6 @@ func TestCheckpointV2Compatibility(t *testing.T) {
 	}
 	err = catalog2.RecurLoop(p)
 	assert.NoError(t, err)
-	assert.Equal(t, 5, dataCnt2)
-	assert.Equal(t, 5, tombstoneCnt2)
-
-	t.Log(catalog2.SimplePPString(3))
-	t.Log(tae.Catalog.SimplePPString(3))
+	assert.Equal(t, 100, dataCnt2)
+	assert.Equal(t, 100, tombstoneCnt2)
 }
