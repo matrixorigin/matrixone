@@ -45,6 +45,9 @@ func IsTempError(err error) bool {
 	return isTempError(err)
 }
 
+var NewLogRecord = pb.NewLogRecord
+var NewUserLogRecord = pb.NewUserLogRecord
+
 type ClientFactory func() (Client, error)
 
 // Client is the Log Service Client interface exposed to the DN.
@@ -192,10 +195,7 @@ func (c *managedClient) Config() ClientConfig {
 }
 
 func (c *managedClient) GetLogRecord(payloadLength int) pb.LogRecord {
-	data := make([]byte, headerSize+8+payloadLength)
-	binaryEnc.PutUint32(data, uint32(pb.UserEntryUpdate))
-	binaryEnc.PutUint64(data[headerSize:], c.cfg.TNReplicaID)
-	return pb.LogRecord{Data: data}
+	return NewUserLogRecord(c.cfg.TNReplicaID, payloadLength)
 }
 
 func (c *managedClient) Append(ctx context.Context, rec pb.LogRecord) (Lsn, error) {

@@ -21,14 +21,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 )
 
-func (w *StoreImpl) Replay(ctx context.Context, h ApplyHandle) error {
+func (w *StoreImpl) Replay(
+	ctx context.Context, h ApplyHandle, mode driver.ReplayMode,
+) error {
 	err := w.driver.Replay(ctx, func(e *entry.Entry) driver.ReplayEntryState {
 		state, err := w.replayEntry(e, h)
 		if err != nil {
 			panic(err)
 		}
 		return state
-	})
+	}, mode)
 	if err != nil {
 		panic(err)
 	}
