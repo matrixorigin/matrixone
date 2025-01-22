@@ -22,24 +22,24 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestCreateAndDeleteRangeBased(t *testing.T) {
+func TestCreateAndDeleteListBased(t *testing.T) {
 	runPartitionTableCreateAndDeleteTests(
 		t,
-		"create table %s (c int comment 'abc') partition by range (c) (partition p1 values less than (1) engine = innodb, partition p2 values less than (2) engine = innodb)",
-		partition.PartitionMethod_Range,
+		"create table %s (c int comment 'abc') partition by list (c) (partition p1 values in (1) engine = innodb, partition p2 values in (2) engine = innodb)",
+		partition.PartitionMethod_List,
 		func(idx int, p partition.Partition) {
-			require.Equal(t, fmt.Sprintf("values less than (%d)", idx+1), p.Comment)
+			require.Equal(t, fmt.Sprintf("values in (%d)", idx+1), p.Comment)
 		},
 	)
 }
 
-func TestCreateAndDeleteRangeColumnsBased(t *testing.T) {
+func TestCreateAndDeleteListColumnsBased(t *testing.T) {
 	runPartitionTableCreateAndDeleteTests(
 		t,
-		"create table %s (c DATETIME) partition by range columns (c) (partition p1 values less than ('2024-01-21 00:00:00'), partition p2 values less than ('2024-01-22 00:00:00'))",
-		partition.PartitionMethod_Range,
+		"create table %s (c DATETIME) partition by list columns (c) (partition p1 values in ('2024-01-21 00:00:00'), partition p2 values in ('2024-01-22 00:00:00'))",
+		partition.PartitionMethod_List,
 		func(idx int, p partition.Partition) {
-			require.Equal(t, fmt.Sprintf("values less than ('2024-01-2%d 00:00:00')", idx+1), p.Comment)
+			require.Equal(t, fmt.Sprintf("values in ('2024-01-2%d 00:00:00')", idx+1), p.Comment)
 		},
 	)
 }
