@@ -221,11 +221,11 @@ func CheckTombstoneFile(
 
 		for pos := startIdx; pos < blkCnt; pos++ {
 			blkMeta := dataMeta.GetBlockMeta(uint32(pos))
-			columnZonemap := blkMeta.MustGetColumn(0).ZoneMap()
+			columnZoneMap := blkMeta.MustGetColumn(0).ZoneMap()
 			// block id is the prefixPattern of the rowid and zonemap is min-max of rowid
 			// !PrefixEq means there is no rowid of this block in this zonemap, so skip
-			if !columnZonemap.RowidPrefixEq(prefixPattern) {
-				if columnZonemap.RowidPrefixGT(prefixPattern) {
+			if !columnZoneMap.RowidPrefixEq(prefixPattern) {
+				if columnZoneMap.RowidPrefixGT(prefixPattern) {
 					// all zone maps are sorted by the rowid
 					// if the block id is less than the prefixPattern of the min rowid, skip the rest blocks
 					break
@@ -233,7 +233,11 @@ func CheckTombstoneFile(
 				continue
 			}
 			var goOn bool
-			if goOn, err = onBlockSelectedFn(tombstoneObject, pos); err != nil || !goOn {
+			goOn, err = onBlockSelectedFn(tombstoneObject, pos)
+			if err != nil {
+				return
+			}
+			if !goOn {
 				break
 			}
 		}
