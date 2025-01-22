@@ -753,7 +753,7 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 		afterEntries  int
 	)
 	defer func() {
-		logutil.Debug(
+		logutil.Info(
 			"RollbackLastStatement",
 			zap.String("txn", hex.EncodeToString(txn.op.Txn().ID)),
 			zap.Int("before", beforeEntries),

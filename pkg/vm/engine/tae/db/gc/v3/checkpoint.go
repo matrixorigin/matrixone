@@ -81,8 +81,6 @@ type checkpointCleaner struct {
 		// will use this watermark as the start, and use `gcWaterMark` as the end to call `ICKPRange`,
 		// to get the ickp to perform a merge operation
 		checkpointGCWaterMark atomic.Pointer[types.TS]
-
-		fastScanWaterMark atomic.Pointer[checkpoint.CheckpointEntry]
 	}
 
 	options struct {
@@ -636,7 +634,6 @@ func (c *checkpointCleaner) deleteStaleSnapshotFilesLocked() error {
 func (c *checkpointCleaner) deleteStaleCKPMetaFileLocked() (err error) {
 	// TODO: add log
 	window := c.GetScannedWindowLocked()
-	logutil.Infof("deleteStaleCKPMetaFileLocked window: %s-%s", window.tsRange.start.ToString(), window.tsRange.end.ToString())
 	metaFiles := c.CloneMetaFilesLocked()
 	filesToDelete := make([]string, 0)
 	for _, metaFile := range metaFiles {
@@ -665,10 +662,8 @@ func (c *checkpointCleaner) deleteStaleCKPMetaFileLocked() (err error) {
 			return
 		}
 		for _, file := range gcWindow.files {
-			logutil.Infof("filesToDelete file: %s", file.ObjectName().String())
 			filesToDelete = append(filesToDelete, file.ObjectName().String())
 		}
-		logutil.Infof("filesToDelete file: %s", metaFile.GetGCFullName())
 		filesToDelete = append(filesToDelete, metaFile.GetGCFullName())
 		delete(metaFiles, metaFile.GetName())
 	}
@@ -1610,8 +1605,6 @@ func (c *checkpointCleaner) tryFastGCLocked(
 	return nil
 }
 
-// at least one incremental checkpoint has been scanned
-// and the GC'ed water mark less than the global checkpoint
 func (c *checkpointCleaner) doGCAgainstFastLocked(
 	accountSnapshots map[uint32][]types.TS,
 	pitrs *logtail.PitrInfo,
@@ -1641,14 +1634,6 @@ func (c *checkpointCleaner) doGCAgainstFastLocked(
 		)
 	}()
 
-	// do GC against the global checkpoint
-	// the result is the files that need to be deleted
-	// it will update the file list in the oneWindow
-	// Before:
-	// [t100, t400] [f1, f2, f3, f4, f5, f6, f7, f8, f9]
-	// After:
-	// [t100, t400] [f10, f11]
-	// Also, it will update the GC metadata
 	if filesToGC, metafile, err = window.ExecuteFastBasedGC(
 		c.ctx,
 		accountSnapshots,

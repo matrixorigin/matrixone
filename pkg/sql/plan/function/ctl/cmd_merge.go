@@ -184,7 +184,6 @@ func handleCNMerge(
 	if txnOp == nil {
 		return Result{}, moerr.NewInternalError(proc.Ctx, "handleFlush: txn operator is nil")
 	}
-	txnOp.TxnOptions()
 	a, err := parseArgsForPartitionTables(parameter)
 	if err != nil {
 		return Result{}, err

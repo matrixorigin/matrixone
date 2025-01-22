@@ -18,7 +18,6 @@ import (
 	"context"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -355,7 +354,6 @@ func MakeFinalCanGCSinker(
 			name := stats.ObjectName().String()
 			dropTS := dropTSs[i]
 			tableID := tableIDs[i]
-			logutil.Infof("name: %s, dropTS: %s, tableID: %d", name, dropTS.ToString(), tableID)
 			if !dropTS.IsEmpty() {
 				buffer[name] = struct{}{}
 				continue
