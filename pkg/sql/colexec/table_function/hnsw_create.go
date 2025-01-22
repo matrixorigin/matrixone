@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/hnsw"
+	hnswcache "github.com/matrixorigin/matrixone/pkg/hnsw/cache"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -48,7 +49,7 @@ type hnswCreateState struct {
 func (u *hnswCreateState) end(tf *TableFunction, proc *process.Process) error {
 	os.Stderr.WriteString("hnswCreate END\n")
 
-	sqls, err := u.build.ToInsertSql(time.Now().Unix())
+	sqls, err := u.build.ToInsertSql(time.Now().UnixMicro())
 	if err != nil {
 		return err
 	}
@@ -61,6 +62,18 @@ func (u *hnswCreateState) end(tf *TableFunction, proc *process.Process) error {
 		}
 		res.Close()
 	}
+
+	hnswcache.HnswCacheTTL = 30 * time.Second
+	hnswcache.Cache.TickerInterval = 5 * time.Second
+	hnswcache.Cache.Once()
+	s, err := hnswcache.Cache.GetIndex(proc, u.uscfg, u.idxcfg, u.idxcfg.IndexTable)
+	if err != nil {
+		return err
+	}
+
+	vec := []float32{1, 0, 1, 6, 6, 17, 47, 39, 2, 0, 1, 25, 27, 10, 56, 130, 18, 5, 2, 6, 15, 2, 19, 130, 42, 28, 1, 1, 2, 1, 0, 5, 0, 2, 4, 4, 31, 34, 44, 35, 9, 3, 8, 11, 33, 12, 61, 130, 130, 17, 0, 1, 6, 2, 9, 130, 111, 36, 0, 0, 11, 9, 1, 12, 2, 100, 130, 28, 7, 2, 6, 7, 9, 27, 130, 83, 5, 0, 1, 18, 130, 130, 84, 9, 0, 0, 2, 24, 111, 24, 0, 1, 37, 24, 2, 10, 12, 62, 33, 3, 0, 0, 0, 1, 3, 16, 106, 28, 0, 0, 0, 0, 17, 46, 85, 10, 0, 0, 1, 4, 11, 4, 2, 2, 9, 14, 8, 8}
+	s.Search(vec, 3)
+
 	return nil
 }
 
