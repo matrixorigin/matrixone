@@ -16,11 +16,13 @@ package partitionservice
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -156,6 +158,11 @@ func (s *service) getMetadata(
 			option,
 			def,
 		)
+	case *tree.ListType:
+		return s.getMetadataByListType(
+			option,
+			def,
+		)
 	default:
 		panic("BUG: unsupported partition method")
 	}
@@ -237,6 +244,49 @@ func (s *service) GetStorage() PartitionStorage {
 	return s.store
 }
 
+func (s *service) getManualPartitions(
+	option *tree.PartitionOption,
+	def *plan.TableDef,
+	columns *tree.UnresolvedName,
+	validTypeFunc func(plan.Type) bool,
+	partitionDesc string,
+	method partition.PartitionMethod,
+	applyPartitionComment func(*tree.Partition) string,
+) (partition.PartitionMetadata, error) {
+	validColumns, err := validColumns(
+		columns,
+		def,
+		validTypeFunc,
+	)
+	if err != nil {
+		return partition.PartitionMetadata{}, err
+	}
+
+	metadata := partition.PartitionMetadata{
+		TableID:      def.TblId,
+		TableName:    def.Name,
+		DatabaseName: def.DbName,
+		Method:       method,
+		// TODO: ???
+		Expression:  "",
+		Description: partitionDesc,
+		Columns:     validColumns,
+	}
+
+	for i, p := range option.Partitions {
+		metadata.Partitions = append(
+			metadata.Partitions,
+			partition.Partition{
+				Name:               p.Name.String(),
+				PartitionTableName: fmt.Sprintf("%s_%s", def.Name, p.Name.String()),
+				Position:           uint32(i),
+				Comment:            applyPartitionComment(p),
+			},
+		)
+	}
+	return metadata, nil
+}
+
 func validColumns(
 	columns *tree.UnresolvedName,
 	tableDefine *plan.TableDef,
@@ -254,7 +304,12 @@ func validColumns(
 
 			has = true
 			if !validType(c.Typ) {
-				return nil, moerr.NewNotSupportedNoCtx("column type is not supported in hash partition")
+				return nil, moerr.NewNotSupportedNoCtx(
+					fmt.Sprintf(
+						"column %s type %s is not supported",
+						col,
+						types.T(c.Typ.Id).String()),
+				)
 			}
 			break
 		}
