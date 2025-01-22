@@ -25,6 +25,7 @@ import (
 func TestReplicaBalance(t *testing.T) {
 	t.SkipNow()
 	runShardClusterTest(
+		t,
 		func(c embed.Cluster) {
 			// 3 replicas must allocated to 3 cn
 			db := testutils.GetDatabaseName(t)
