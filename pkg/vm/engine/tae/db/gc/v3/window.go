@@ -179,7 +179,6 @@ func (w *GCWindow) ExecuteFastBasedGC(
 	probility float64,
 	mp *mpool.MPool,
 	fs fileservice.FileService,
-	filterTables *map[uint64]struct{},
 ) ([]string, string, error) {
 
 	sourcer := w.MakeFilesReader(ctx, fs)
@@ -194,7 +193,6 @@ func (w *GCWindow) ExecuteFastBasedGC(
 		false,
 		mp,
 		fs,
-		filterTables,
 		WithGCJobCoarseConfig(estimateRows, probility, cacheSize),
 	)
 	defer job.Close()

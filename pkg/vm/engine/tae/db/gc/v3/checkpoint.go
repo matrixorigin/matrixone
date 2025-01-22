@@ -1645,7 +1645,6 @@ func (c *checkpointCleaner) doGCAgainstFastLocked(
 		c.config.probility,
 		c.mp,
 		c.fs.Service,
-		c.mutation.snapshotMeta.GetSnapshotTableIDs(),
 	); err != nil {
 		extraErrMsg = fmt.Sprintf("ExecuteGlobalCheckpointBasedGC %v failed", window)
 		return nil, err

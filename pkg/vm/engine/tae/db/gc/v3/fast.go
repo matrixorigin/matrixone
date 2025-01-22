@@ -32,7 +32,6 @@ import (
 
 type CheckpointFastGCJob struct {
 	CheckpointBasedGCJob
-	filterTables *map[uint64]struct{}
 }
 
 func NewCheckpointFastGCJob(
@@ -45,7 +44,6 @@ func NewCheckpointFastGCJob(
 	isOwner bool,
 	mp *mpool.MPool,
 	fs fileservice.FileService,
-	filterTables *map[uint64]struct{},
 	opts ...GCJobExecutorOption,
 ) *CheckpointFastGCJob {
 	e := &CheckpointBasedGCJob{
@@ -62,7 +60,6 @@ func NewCheckpointFastGCJob(
 	e.GCExecutor = *NewGCExecutor(buffer, isOwner, e.config.canGCCacheSize, mp, fs)
 	return &CheckpointFastGCJob{
 		CheckpointBasedGCJob: *e,
-		filterTables:         filterTables,
 	}
 }
 
