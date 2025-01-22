@@ -1479,7 +1479,7 @@ func (c *checkpointCleaner) Process(inputCtx context.Context) (err error) {
 	memoryBuffer := MakeGCWindowBuffer(16 * mpool.MB)
 	defer memoryBuffer.Close(c.mp)
 
-	if err = c.tryScanLocked(ctx, memoryBuffer); err != nil {
+	if err = c.tryScanLocked(ctx, memoryBuffer, nil); err != nil {
 		return
 	}
 	err = c.tryGCLocked(ctx, memoryBuffer)
@@ -1532,51 +1532,31 @@ func (c *checkpointCleaner) FastExecute(inputCtx context.Context, minTS *types.T
 	memoryBuffer := MakeGCWindowBuffer(16 * mpool.MB)
 	defer memoryBuffer.Close(c.mp)
 
-	var maxScannedTS types.TS
-	if startScanWaterMark != nil {
-		maxScannedTS = startScanWaterMark.GetEnd()
-	}
-	// get up to 10 incremental checkpoints starting from the max scanned timestamp
-	checkpoints := c.checkpointCli.ICKPSeekLT(maxScannedTS, 20)
-
-	// quick return if there is no incremental checkpoint
-	if len(checkpoints) == 0 {
-		return
-	}
-
-	candidates := make([]*checkpoint.CheckpointEntry, 0, len(checkpoints))
-	for _, ckp := range checkpoints {
+	checker := func(ckp *checkpoint.CheckpointEntry) bool {
 		start := ckp.GetStart()
 		if !minTS.IsEmpty() && start.LT(minTS) {
-			continue
+			return false
 		}
-		candidates = append(candidates, ckp)
+		return true
 	}
 
-	if len(candidates) == 0 {
+	if err = c.tryScanLocked(ctx, memoryBuffer, checker); err != nil {
 		return
 	}
+	return c.tryFastGCLocked(ctx, memoryBuffer)
+}
 
-	var newWindow *GCWindow
-	if newWindow, _, err = c.scanCheckpointsLocked(
-		ctx, candidates, memoryBuffer,
-	); err != nil {
-		logutil.Error(
-			"GC-SCAN-WINDOW-ERROR",
-			zap.Error(err),
-			zap.String("checkpoint", candidates[0].String()),
-		)
-		return
-	}
-	c.mutAddScannedLocked(newWindow)
-	c.updateScanWaterMark(candidates[len(candidates)-1])
-
+func (c *checkpointCleaner) tryFastGCLocked(
+	ctx context.Context,
+	memoryBuffer *containers.OneSchemaBatchBuffer,
+) (err error) {
 	var snapshots map[uint32]containers.Vector
 	var extraErrMsg string
+	now := time.Now()
 	defer func() {
 		logtail.CloseSnapshotList(snapshots)
 		logutil.Info(
-			"GC-TRACE-TRY-GC-AGAINST-GCKP",
+			"GC-TRACE-TRY-FAST-GC-AGAINST-GCKP",
 			zap.String("task", c.TaskNameLocked()),
 			zap.Duration("duration", time.Since(now)),
 			zap.Error(err),
@@ -1595,7 +1575,7 @@ func (c *checkpointCleaner) FastExecute(inputCtx context.Context, minTS *types.T
 	}
 	accountSnapshots := TransformToTSList(snapshots)
 	scanWindow := c.GetScannedWindowLocked()
-	filesToGC, err := c.doFastGCAgainstGlobalCheckpointLocked(
+	filesToGC, err := c.doGCAgainstFastLocked(
 		accountSnapshots, pitrs, memoryBuffer, scanWindow,
 	)
 	if err != nil {
@@ -1627,12 +1607,12 @@ func (c *checkpointCleaner) FastExecute(inputCtx context.Context, minTS *types.T
 			zap.String("task", c.TaskNameLocked()),
 		)
 	}
-	return
+	return nil
 }
 
 // at least one incremental checkpoint has been scanned
 // and the GC'ed water mark less than the global checkpoint
-func (c *checkpointCleaner) doFastGCAgainstGlobalCheckpointLocked(
+func (c *checkpointCleaner) doGCAgainstFastLocked(
 	accountSnapshots map[uint32][]types.TS,
 	pitrs *logtail.PitrInfo,
 	memoryBuffer *containers.OneSchemaBatchBuffer,
@@ -1650,7 +1630,7 @@ func (c *checkpointCleaner) doFastGCAgainstGlobalCheckpointLocked(
 
 	defer func() {
 		logutil.Info(
-			"GC-TRACE-DO-GC-AGAINST-GCKP",
+			"GC-TRACE-DO-GC-AGAINST-FAST",
 			zap.String("task", c.TaskNameLocked()),
 			zap.Duration("duration", time.Since(now)),
 			zap.Duration("soft-gc", softCost),
@@ -1701,6 +1681,7 @@ func (c *checkpointCleaner) doFastGCAgainstGlobalCheckpointLocked(
 func (c *checkpointCleaner) tryScanLocked(
 	ctx context.Context,
 	memoryBuffer *containers.OneSchemaBatchBuffer,
+	checker func(*checkpoint.CheckpointEntry) bool,
 ) (err error) {
 	// get the max scanned timestamp
 	var maxScannedTS types.TS
@@ -1719,8 +1700,14 @@ func (c *checkpointCleaner) tryScanLocked(
 	candidates := make([]*checkpoint.CheckpointEntry, 0, len(checkpoints))
 	// filter out the incremental checkpoints that do not meet the requirements
 	for _, ckp := range checkpoints {
-		if !c.checkExtras(ckp) {
-			continue
+		if checker != nil {
+			if !checker(ckp) {
+				continue
+			}
+		} else {
+			if !c.checkExtras(ckp) {
+				continue
+			}
 		}
 		candidates = append(candidates, ckp)
 	}

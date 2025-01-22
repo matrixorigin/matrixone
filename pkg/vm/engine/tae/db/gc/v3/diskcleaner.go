@@ -62,7 +62,7 @@ type runningCtx struct {
 	cancel context.CancelCauseFunc
 }
 
-type fastGCJob struct {
+type specialGCJob struct {
 	jobType tasks.JobType
 	minTS   *types.TS
 }
@@ -104,7 +104,8 @@ func (cleaner *DiskCleaner) GC(ctx context.Context) (err error) {
 }
 
 func (cleaner *DiskCleaner) FastGC(ctx context.Context, ts *types.TS) (err error) {
-	gcJob := new(fastGCJob)
+	logutil.Info("GC-Send-Intents-Fast")
+	gcJob := new(specialGCJob)
 	gcJob.jobType = JT_GCFastExecute
 	gcJob.minTS = ts
 	_, err = cleaner.processQueue.Enqueue(gcJob)
@@ -371,17 +372,19 @@ func (cleaner *DiskCleaner) process(items ...any) {
 			default:
 				logutil.Error("GC-Unknown-JobType", zap.Any("job-type", v))
 			}
-		case *fastGCJob:
+		case *specialGCJob:
 			ctx := cleaner.runningCtx.Load()
 			if ctx == nil {
 				ctx = new(runningCtx)
 				ctx.ctx, ctx.cancel = context.WithCancelCause(context.Background())
 				cleaner.runningCtx.Store(ctx)
 			}
-			fastJob := item.(*fastGCJob)
-			if fastJob.jobType == JT_GCFastExecute {
-				logutil.Infof("GC-Fast-Execute", zap.String("min-ts", fastJob.minTS.ToString()))
-				cleaner.doFastExecute(ctx.ctx, fastJob.minTS)
+			job := item.(*specialGCJob)
+			switch job.jobType {
+			case JT_GCFastExecute:
+				cleaner.doFastExecute(ctx.ctx, job.minTS)
+			default:
+				logutil.Error("GC-Unknown-Special-JobType", zap.Any("job-type", job.jobType))
 			}
 		case *tasks.Job:
 			// noop will reset the runningCtx
