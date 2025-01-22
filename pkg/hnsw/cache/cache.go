@@ -137,11 +137,12 @@ func (idx *HnswSearchIndex) Search(query []float32, limit uint) (keys []usearch.
 }
 
 type HnswSearch struct {
-	Mutex    sync.RWMutex
-	Indexes  []*HnswSearchIndex
-	ExpireAt atomic.Int64
-	Idxcfg   usearch.IndexConfig
-	Tblcfg   hnsw.IndexTableConfig
+	Mutex      sync.RWMutex
+	Indexes    []*HnswSearchIndex
+	ExpireAt   atomic.Int64
+	LastUpdate atomic.Int64
+	Idxcfg     usearch.IndexConfig
+	Tblcfg     hnsw.IndexTableConfig
 }
 
 func (h *HnswSearch) Search(query []float32, limit uint) (keys []int64, distances []float32, err error) {
@@ -279,7 +280,9 @@ func (s *HnswSearch) LoadFromDatabase(proc *process.Process) error {
 
 	s.Indexes = indexes
 
-	ts := time.Now().Add(time.Duration(HnswCacheTTL)).UnixMicro()
+	now := time.Now()
+	s.LastUpdate.Store(now.UnixMicro())
+	ts := now.Add(time.Duration(HnswCacheTTL)).UnixMicro()
 	s.ExpireAt.Store(ts)
 
 	return nil
@@ -384,8 +387,8 @@ func (c *HnswCache) Destroy() {
 
 func (c *HnswCache) GetIndex(proc *process.Process, cfg usearch.IndexConfig, tblcfg hnsw.IndexTableConfig, key string) (*HnswSearch, error) {
 	value, loaded := c.IndexMap.LoadOrStore(key, &HnswSearch{Idxcfg: cfg, Tblcfg: tblcfg})
+	idx := value.(*HnswSearch)
 	if !loaded {
-		idx := value.(*HnswSearch)
 		// load model from database and if error during loading, remove the entry from gIndexMap
 		err := idx.LoadFromDatabase(proc)
 		if err != nil {
@@ -395,7 +398,8 @@ func (c *HnswCache) GetIndex(proc *process.Process, cfg usearch.IndexConfig, tbl
 
 		return idx, nil
 	}
-	return value.(*HnswSearch), nil
+
+	return idx, nil
 }
 
 var runSql = runSql_fn
