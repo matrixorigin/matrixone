@@ -211,7 +211,7 @@ func (h *HnswBuild) Destroy() error {
 	for _, idx := range h.indexes {
 		err := idx.Destroy()
 		if err != nil {
-			errs = errors.Join(err)
+			errs = errors.Join(errs, err)
 		}
 	}
 	h.indexes = nil
