@@ -18,7 +18,6 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/tidwall/btree"
 )
@@ -73,7 +72,6 @@ func (c *BoundTableOperator) iterObject(from, to types.TS, isTombstone bool) err
 			break
 		}
 		obj := it.Item()
-		logutil.Infof("iterObject: %v", obj.StringWithLevel(2))
 		c.recordReport(isTombstone, obj.GetAppendable())
 		if obj.IsAppendable() && obj.IsCEntry() && obj.CreatedAt.LT(&from) {
 			earlybreak = true
