@@ -330,6 +330,7 @@ func (c *HnswCache) HouseKeeping() {
 	for _, k := range expiredkeys {
 		value, loaded := c.IndexMap.LoadAndDelete(k)
 		if loaded {
+			os.Stderr.WriteString(fmt.Sprintf("HouseKeep: key %s deleted\n", k))
 			search := value.(*HnswSearch)
 			// destroy the usearch indexes
 			search.Destroy()
