@@ -221,7 +221,8 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 
 	stm.ConnectionId = ses.GetConnectionID()
 	stm.Account = tenant.GetTenant()
-	stm.RoleId = proc.GetSessionInfo().RoleId
+	stm.RoleId = tenant.GetDefaultRoleID()
+	//stm.RoleId = proc.GetSessionInfo().RoleId
 	stm.User = tenant.GetUser()
 	stm.Host = ses.respr.GetStr(PEER)
 	stm.Database = ses.respr.GetStr(DBNAME)
@@ -3004,24 +3005,12 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	ses.CopySeqToProc(proc)
 	if ses.GetTenantInfo() != nil {
 		proc.Base.SessionInfo.Account = ses.GetTenantInfo().GetTenant()
-		proc.Base.SessionInfo.AccountId = ses.GetTenantInfo().GetTenantID()
 		proc.Base.SessionInfo.Role = ses.GetTenantInfo().GetDefaultRole()
-		proc.Base.SessionInfo.RoleId = ses.GetTenantInfo().GetDefaultRoleID()
-		proc.Base.SessionInfo.UserId = ses.GetTenantInfo().GetUserID()
 
 		if len(ses.GetTenantInfo().GetVersion()) != 0 {
 			proc.Base.SessionInfo.Version = ses.GetTenantInfo().GetVersion()
 		}
 		userNameOnly = ses.GetTenantInfo().GetUser()
-	} else {
-		var accountId uint32
-		accountId, retErr = defines.GetAccountId(execCtx.reqCtx)
-		if retErr != nil {
-			return retErr
-		}
-		proc.Base.SessionInfo.AccountId = accountId
-		proc.Base.SessionInfo.UserId = defines.GetUserId(execCtx.reqCtx)
-		proc.Base.SessionInfo.RoleId = defines.GetRoleId(execCtx.reqCtx)
 	}
 	var span trace.Span
 	execCtx.reqCtx, span = trace.Start(execCtx.reqCtx, "doComQuery",
