@@ -72,7 +72,7 @@ func TestSafeHeap(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for i := 0; i < 10; i++ {
-				h.Push(usearch.Key(j*10+i), float32(j*10+i))
+				h.Push(int64(usearch.Key(j*10+i)), float32(j*10+i))
 			}
 		}()
 	}

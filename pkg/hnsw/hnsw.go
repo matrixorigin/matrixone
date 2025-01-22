@@ -37,7 +37,7 @@ func QuantizationValid(a string) (usearch.Quantization, bool) {
 }
 
 type SearchResult struct {
-	id       uint64
+	id       int64
 	distance float32
 }
 
@@ -85,14 +85,14 @@ func (h *SearchResultSafeHeap) Len() int {
 	return h.resheap.Len()
 }
 
-func (h *SearchResultSafeHeap) Push(id usearch.Key, distance float32) {
+func (h *SearchResultSafeHeap) Push(id int64, distance float32) {
 	h.mutex.Lock()
 	defer h.mutex.Unlock()
 
 	heap.Push(&h.resheap, &SearchResult{id, distance})
 }
 
-func (h *SearchResultSafeHeap) Pop() (usearch.Key, float32) {
+func (h *SearchResultSafeHeap) Pop() (int64, float32) {
 	h.mutex.Lock()
 	defer h.mutex.Unlock()
 	x := heap.Pop(&h.resheap).(*SearchResult)
