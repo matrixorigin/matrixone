@@ -150,7 +150,7 @@ func (h *HnswSearch) Search(query []float32, limit uint) (keys []usearch.Key, di
 		return nil, nil, moerr.NewInternalErrorNoCtx("HNSW cannot find index from database.")
 	}
 
-	ts := time.Now().Add(HnswCacheTTL).Unix()
+	ts := time.Now().Add(HnswCacheTTL).UnixMicro()
 	h.ExpireAt.Store(ts)
 
 	// search
@@ -180,7 +180,7 @@ func (h *HnswSearch) Expired() bool {
 	defer h.Mutex.RUnlock()
 
 	ts := h.ExpireAt.Load()
-	now := time.Now().Unix()
+	now := time.Now().UnixMicro()
 	return (ts < now)
 }
 
@@ -246,7 +246,7 @@ func (s *HnswSearch) LoadFromDatabase(proc *process.Process) error {
 
 	s.Indexes = indexes
 
-	ts := time.Now().Add(time.Duration(HnswCacheTTL)).Unix()
+	ts := time.Now().Add(time.Duration(HnswCacheTTL)).UnixMicro()
 	s.ExpireAt.Store(ts)
 
 	return nil
