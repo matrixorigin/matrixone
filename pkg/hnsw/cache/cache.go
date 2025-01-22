@@ -402,6 +402,15 @@ func (c *HnswCache) GetIndex(proc *process.Process, cfg usearch.IndexConfig, tbl
 	return idx, nil
 }
 
+func (c *HnswCache) Remove(key string) {
+	value, loaded := c.IndexMap.LoadAndDelete(key)
+	if loaded {
+		search := value.(*HnswSearch)
+		search.Destroy()
+		search = nil
+	}
+}
+
 var runSql = runSql_fn
 
 // run SQL in batch mode. Result batches will stored in memory and return once all result batches received.
