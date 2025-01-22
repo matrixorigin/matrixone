@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 	"go.uber.org/zap"
 )
@@ -211,6 +212,17 @@ func (footer LogEntryFooter) GetEntry(i int) (offset, length uint32) {
 	return
 }
 
+func (e LogEntry) Desc() string {
+	return fmt.Sprintf(
+		"LogEntry[%d:%d][Cnt=%d][Cmd=%d][Size=%d]",
+		e.GetStartDSN(),
+		e.GetSafeDSN(),
+		e.GetEntryCount(),
+		e.GetCmdType(),
+		e.Size(),
+	)
+}
+
 func (e LogEntry) String() string {
 	safe := e.GetSafeDSN()
 	dsn := e.GetStartDSN()
@@ -264,6 +276,13 @@ func (e LogEntry) GetStartDSN() uint64 {
 
 func (e LogEntry) GetSafeDSN() uint64 {
 	return types.DecodeUint64(e[EntrySafeDSNOffset:])
+}
+
+func (e LogEntry) DSNRange() common.ClosedInterval {
+	return common.ClosedInterval{
+		Start: e.GetStartDSN(),
+		End:   e.GetStartDSN() + uint64(e.GetEntryCount()) - 1,
+	}
 }
 
 func (e LogEntry) SetHeader(

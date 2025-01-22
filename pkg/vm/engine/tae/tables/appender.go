@@ -61,6 +61,10 @@ func (appender *objectAppender) Close() {
 	appender.obj.Unref()
 }
 
+func (appender *objectAppender) PPString() string {
+	return appender.obj.PPString(common.PPL1, 0, "", 0)
+}
+
 func (appender *objectAppender) IsSameColumns(other any) bool {
 	n := appender.obj.PinNode()
 	defer n.Unref()
