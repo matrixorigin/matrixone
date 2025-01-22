@@ -16,6 +16,9 @@ package logtail
 
 import (
 	"context"
+	"strconv"
+	"strings"
+	"time"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -23,12 +26,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
+	"go.uber.org/zap"
 )
 
 type CheckpointData_V2 struct {
@@ -92,15 +98,13 @@ func (data *CheckpointData_V2) Close() {
 	data.sinker.Close()
 }
 
-func PrefetchCheckpoint(
+func readMetaBatch(
 	ctx context.Context,
-	sid string,
 	location objectio.Location,
 	mp *mpool.MPool,
 	fs fileservice.FileService,
-) (err error) {
+) (metaBatch *batch.Batch, release func(), err error) {
 	metaVecs := containers.NewVectors(len(ckputil.MetaAttrs))
-	var release func()
 	if _, release, err = ioutil.LoadColumnsData(
 		ctx,
 		ckputil.MetaSeqnums,
@@ -113,11 +117,29 @@ func PrefetchCheckpoint(
 	); err != nil {
 		return
 	}
-	defer release()
-	metaBatch := batch.New(ckputil.MetaAttrs)
+	metaBatch = batch.New(ckputil.MetaAttrs)
 	for i, vec := range metaVecs {
 		metaBatch.Vecs[i] = &vec
 	}
+	metaBatch.SetRowCount(metaVecs.Rows())
+	return
+}
+
+func PrefetchCheckpoint(
+	ctx context.Context,
+	sid string,
+	location objectio.Location,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+) (err error) {
+	var release func()
+	var metaBatch *batch.Batch
+	if metaBatch, release, err = readMetaBatch(
+		ctx, location, mp, fs,
+	); err != nil {
+		return
+	}
+	defer release()
 	objs := ckputil.ScanObjectStats(metaBatch)
 	for _, stats := range objs {
 		ioutil.Prefetch(sid, fs, stats.ObjectLocation())
@@ -134,26 +156,14 @@ func ReplayCheckpoint(
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 ) (err error) {
-	metaVecs := containers.NewVectors(len(ckputil.MetaAttrs))
 	var release func()
-	if _, release, err = ioutil.LoadColumnsData(
-		ctx,
-		ckputil.MetaSeqnums,
-		ckputil.MetaTypes,
-		fs,
-		location,
-		metaVecs,
-		mp,
-		0,
+	var metaBatch *batch.Batch
+	if metaBatch, release, err = readMetaBatch(
+		ctx, location, mp, fs,
 	); err != nil {
 		return
 	}
 	defer release()
-	metaBatch := batch.New(ckputil.MetaAttrs)
-	for i, vec := range metaVecs {
-		metaBatch.Vecs[i] = &vec
-	}
-	metaBatch.SetRowCount(metaVecs.Rows())
 	objs := ckputil.ScanObjectStats(metaBatch)
 	for _, obj := range objs {
 		if err = ckputil.ForEachFile(
@@ -186,6 +196,66 @@ func ReplayCheckpoint(
 	return
 }
 
+func PrefetchCheckpointWithTableID(
+	ctx context.Context,
+	sid string,
+	tid uint64,
+	location objectio.Location,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+) (err error) {
+	var release func()
+	var metaBatch *batch.Batch
+	if metaBatch, release, err = readMetaBatch(
+		ctx, location, mp, fs,
+	); err != nil {
+		return
+	}
+	defer release()
+	ranges := ckputil.ExportToTableRanges(metaBatch, tid, ckputil.ObjectType_Data)
+	for _, table := range ranges {
+		ioutil.Prefetch(sid, fs, table.ObjectStats.ObjectLocation())
+	}
+	return
+}
+
+func ConsumeCheckpointWithTableID(
+	ctx context.Context,
+	tid uint64,
+	location objectio.Location,
+	forEachObject func(obj objectio.ObjectEntry, isTombstone bool) (err error),
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+) (err error) {
+	var release func()
+	var metaBatch *batch.Batch
+	if metaBatch, release, err = readMetaBatch(
+		ctx, location, mp, fs,
+	); err != nil {
+		return
+	}
+	defer release()
+	ranges := ckputil.ExportToTableRanges(metaBatch, tid, ckputil.ObjectType_Data)
+	iter := ckputil.NewObjectIter(ctx, ranges, mp, fs)
+	for ok, err := iter.Next(); ok && err == nil; ok, err = iter.Next() {
+		entry := iter.Entry()
+		if err := forEachObject(entry, false); err != nil {
+			return err
+		}
+	}
+	iter.Close()
+	ranges = ckputil.ExportToTableRanges(metaBatch, tid, ckputil.ObjectType_Tombstone)
+	iter = ckputil.NewObjectIter(ctx, ranges, mp, fs)
+	for ok, err := iter.Next(); ok && err == nil; ok, err = iter.Next() {
+		entry := iter.Entry()
+		if err := forEachObject(entry, true); err != nil {
+			return err
+		}
+	}
+	iter.Close()
+	return
+}
+
 type CheckpointReplayer struct {
 	location objectio.Location
 	mp       *mpool.MPool
@@ -212,7 +282,6 @@ func NewCheckpointReplayer(location objectio.Location, mp *mpool.MPool) *Checkpo
 
 func (replayer *CheckpointReplayer) ReadMetaForV12(
 	ctx context.Context,
-	sid string,
 	fs fileservice.FileService,
 ) (err error) {
 	var reader *ioutil.BlockReader
@@ -231,6 +300,57 @@ func (replayer *CheckpointReplayer) ReadMetaForV12(
 	dataLocationsVec := replayer.metaBatch.Vecs[MetaSchema_DataObject_Idx+2]
 	tombstoneLocationsVec := replayer.metaBatch.Vecs[MetaSchema_TombstoneObject_Idx+2]
 	for i := 0; i < dataLocationsVec.Length(); i++ {
+		dataLocations := BlockLocations(dataLocationsVec.GetDownstreamVector().GetBytesAt(i))
+		it := dataLocations.MakeIterator()
+		for it.HasNext() {
+			loc := it.Next().GetLocation()
+			if !loc.IsEmpty() {
+				str := loc.String()
+				replayer.locations[str] = loc
+			}
+		}
+		tombstoneLocations := BlockLocations(tombstoneLocationsVec.GetDownstreamVector().GetBytesAt(i))
+		it = tombstoneLocations.MakeIterator()
+		for it.HasNext() {
+			loc := it.Next().GetLocation()
+			if !loc.IsEmpty() {
+				str := loc.String()
+				replayer.tombstoneLocations[str] = loc
+			}
+		}
+	}
+	return
+}
+func (replayer *CheckpointReplayer) ReadMetaForV12WithTableID(
+	ctx context.Context,
+	tid uint64,
+	fs fileservice.FileService,
+) (err error) {
+	var reader *ioutil.BlockReader
+	if reader, err = ioutil.NewObjectReader(fs, replayer.location); err != nil {
+		return
+	}
+	attrs := append(BaseAttr, MetaSchemaAttr...)
+	typs := append(BaseTypes, MetaShcemaTypes...)
+	var bats []*containers.Batch
+	if bats, err = LoadBlkColumnsByMeta(
+		CheckpointVersion12, ctx, typs, attrs, MetaIDX, reader, replayer.mp,
+	); err != nil {
+		return
+	}
+	replayer.metaBatch = bats[0]
+
+	tids := vector.MustFixedColNoTypeCheck[uint64](replayer.metaBatch.Vecs[MetaSchema_Tid_Idx+2].GetDownstreamVector())
+	dataLocationsVec := replayer.metaBatch.Vecs[MetaSchema_DataObject_Idx+2]
+	tombstoneLocationsVec := replayer.metaBatch.Vecs[MetaSchema_TombstoneObject_Idx+2]
+	start := vector.OrderedFindFirstIndexInSortedSlice(tid, tids)
+	if start == -1 {
+		return
+	}
+	for i := start; i < dataLocationsVec.Length(); i++ {
+		if tids[i] != tid {
+			break
+		}
 		dataLocations := BlockLocations(dataLocationsVec.GetDownstreamVector().GetBytesAt(i))
 		it := dataLocations.MakeIterator()
 		for it.HasNext() {
@@ -286,6 +406,19 @@ func (replayer *CheckpointReplayer) ReadDataForV12(
 	readFn(replayer.tombstoneLocations, TombstoneObjectInfoIDX, replayer.tombstoneBatch)
 	return
 }
+func (replayer *CheckpointReplayer) PrefetchData(
+	ctx context.Context,
+	sid string,
+	tid uint64,
+	fs fileservice.FileService,
+) {
+	for _, loc := range replayer.locations {
+		ioutil.Prefetch(sid, fs, loc)
+	}
+	for _, loc := range replayer.tombstoneLocations {
+		ioutil.Prefetch(sid, fs, loc)
+	}
+}
 
 func (replayer *CheckpointReplayer) ReplayObjectlist(
 	ctx context.Context,
@@ -318,6 +451,153 @@ func (replayer *CheckpointReplayer) ReplayObjectlist(
 	}
 	replayFn(replayer.objBatches, ckputil.ObjectType_Data)
 	replayFn(replayer.tombstoneBatch, ckputil.ObjectType_Tombstone)
+}
+func (replayer *CheckpointReplayer) ConsumeCheckpointWithTableID(
+	tid uint64,
+	forEachObject func(obj objectio.ObjectEntry, isTombstone bool) (err error),
+) (err error) {
+	replayFn := func(src *containers.Batch, isTombstone bool) {
+		if src == nil || src.Length() == 0 {
+			return
+		}
+		tids := vector.MustFixedColNoTypeCheck[uint64](src.Vecs[ObjectInfo_TID_Idx+2].GetDownstreamVector())
+		objectstatsVec := src.Vecs[ObjectInfo_ObjectStats_Idx+2].GetDownstreamVector()
+		createTSs := vector.MustFixedColNoTypeCheck[types.TS](src.Vecs[ObjectInfo_CreateAt_Idx+2].GetDownstreamVector())
+		deleteTSs := vector.MustFixedColNoTypeCheck[types.TS](src.Vecs[ObjectInfo_DeleteAt_Idx+2].GetDownstreamVector())
+		start := vector.OrderedFindFirstIndexInSortedSlice(tid, tids)
+		if start == -1 {
+			panic("logic error")
+		}
+		for i := start; i < src.Length(); i++ {
+			if tids[i] != tid {
+				break
+			}
+			obj := objectio.ObjectEntry{
+				ObjectStats: objectio.ObjectStats(objectstatsVec.GetBytesAt(i)),
+				CreateTime:  createTSs[i],
+				DeleteTime:  deleteTSs[i],
+			}
+			if err := forEachObject(obj, isTombstone); err != nil {
+				return
+			}
+		}
+
+	}
+	replayFn(replayer.objBatches, false)
+	replayFn(replayer.tombstoneBatch, true)
+	return
+}
+
+func (replayer *CheckpointReplayer) Close() {
+	replayer.metaBatch.Close()
+	replayer.tombstoneBatch.Close()
+	replayer.objBatches.Close()
+}
+
+func ConsumeCheckpointEntries(
+	ctx context.Context,
+	sid string,
+	metaLoc string,
+	tableID uint64,
+	tableName string,
+	dbID uint64,
+	dbName string,
+	forEachObject func(obj objectio.ObjectEntry, isTombstone bool) (err error),
+	mp *mpool.MPool,
+	fs fileservice.FileService) error {
+	if metaLoc == "" {
+		return nil
+	}
+	v2.LogtailLoadCheckpointCounter.Inc()
+	now := time.Now()
+	defer func() {
+		v2.LogTailLoadCheckpointDurationHistogram.Observe(time.Since(now).Seconds())
+	}()
+	locationsAndVersions := strings.Split(metaLoc, ";")
+	if len(locationsAndVersions)%2 == 1 {
+		locationsAndVersions = locationsAndVersions[1:]
+	}
+
+	locations := make([]objectio.Location, 0)
+	replayers := make([]*CheckpointReplayer, 0)
+	for i := 0; i < len(locationsAndVersions); i += 2 {
+		key := locationsAndVersions[i]
+		version, err := strconv.ParseUint(locationsAndVersions[i+1], 10, 32)
+		if err != nil {
+			logutil.Error(
+				"Parse-CKP-Name-Error",
+				zap.String("loc", metaLoc),
+				zap.Int("i", i),
+				zap.Error(err),
+			)
+			return err
+		}
+		if version <= uint64(CheckpointVersion12) {
+			location, err := objectio.StringToLocation(key)
+			if err != nil {
+				logutil.Error(
+					"Parse-CKP-Name-Error",
+					zap.String("loc", metaLoc),
+					zap.Int("i", i),
+					zap.Error(err),
+				)
+				return err
+			}
+			replayer := NewCheckpointReplayer(location, mp)
+			replayers = append(replayers, replayer)
+		} else {
+			location, err := objectio.StringToLocation(key)
+			if err != nil {
+				logutil.Error(
+					"Parse-CKP-Name-Error",
+					zap.String("loc", metaLoc),
+					zap.Int("i", i),
+					zap.Error(err),
+				)
+				return err
+			}
+			locations = append(locations, location)
+		}
+	}
+
+	for _, replayer := range replayers {
+		ioutil.Prefetch(sid, fs, replayer.location)
+	}
+	for _, loc := range locations {
+		ioutil.Prefetch(sid, fs, loc)
+	}
+
+	for _, replayer := range replayers {
+		replayer.PrefetchData(ctx, sid, tableID, fs)
+	}
+	for _, loc := range locations {
+		if err := PrefetchCheckpointWithTableID(
+			ctx, sid, tableID, loc, mp, fs,
+		); err != nil {
+			return err
+		}
+	}
+
+	for _, loc := range locations {
+		if err := ConsumeCheckpointWithTableID(
+			ctx, tableID, loc, forEachObject, mp, fs,
+		); err != nil {
+			return err
+		}
+	}
+	for _, replayer := range replayers {
+		if err := replayer.ConsumeCheckpointWithTableID(
+			tableID, forEachObject,
+		); err != nil {
+			return err
+		}
+	}
+
+	for _, replayer := range replayers {
+		replayer.Close()
+	}
+
+	return nil
 }
 
 type BaseCollector_V2 struct {

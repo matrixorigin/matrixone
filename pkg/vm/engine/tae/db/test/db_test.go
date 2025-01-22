@@ -11354,7 +11354,7 @@ func TestCheckpointV2Compatibility(t *testing.T) {
 		replayers[i] = replayer
 	}
 	for _, replayer := range replayers {
-		err = replayer.ReadMetaForV12(ctx, "", tae.Opts.Fs)
+		err = replayer.ReadMetaForV12(ctx, tae.Opts.Fs)
 		assert.NoError(t, err)
 	}
 	for _, replayer := range replayers {

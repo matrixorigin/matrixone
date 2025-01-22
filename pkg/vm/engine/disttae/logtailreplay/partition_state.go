@@ -99,6 +99,222 @@ func (p *PartitionState) Desc() string {
 	return fmt.Sprintf("PartitionState(tid:%d) objLen %v, rowsLen %v", p.tid, p.dataObjectsNameIndex.Len(), p.rows.Len())
 }
 
+func (p *PartitionState) HandleObjectEntry(ctx context.Context, objectEntry *objectio.ObjectEntry, isTombstone bool) (err error) {
+	if isTombstone {
+		return p.handleTombstoneObjectEntry(ctx, objectEntry)
+	} else {
+		return p.handleDataObjectEntry(ctx, objectEntry)
+	}
+}
+
+func (p *PartitionState) handleDataObjectEntry(ctx context.Context, objEntry *objectio.ObjectEntry) (err error) {
+	commitTS := objEntry.CreateTime
+	if !objEntry.DeleteTime.IsEmpty() {
+		commitTS = objEntry.DeleteTime
+	}
+	if commitTS.GT(&p.lastFlushTimestamp) {
+		p.lastFlushTimestamp = commitTS
+	}
+
+	if objEntry.Size() == 0 || (objEntry.GetAppendable() && objEntry.DeleteTime.IsEmpty()) {
+		// CN doesn't consume the create event of appendable object
+		return
+	}
+
+	old, exist := p.dataObjectsNameIndex.Get(*objEntry)
+	if exist {
+		// why check the deleteTime here? consider this situation:
+		// 		1. insert on an object, then these insert operations recorded into a CKP.
+		// 		2. and delete this object, this operation recorded into WAL.
+		// 		3. restart
+		// 		4. replay CKP(lazily) into partition state --> replay WAL into partition state
+		// the delete record in WAL could be overwritten by insert record in CKP,
+		// causing logic err of the objects' visibility(dead object back to life!!).
+		//
+		// if this happened, just skip this object will be fine,
+		if !old.DeleteTime.IsEmpty() {
+			return
+		}
+	} else {
+		e := ObjectIndexByTSEntry{
+			Time:         objEntry.CreateTime,
+			ShortObjName: *objEntry.ObjectShortName(),
+			IsDelete:     false,
+			IsAppendable: objEntry.GetAppendable(),
+		}
+		p.dataObjectTSIndex.Set(e)
+	}
+
+	p.dataObjectsNameIndex.Set(*objEntry)
+
+	// Need to insert an ee in dataObjectTSIndex, when soft delete appendable object.
+	if objEntry.DeleteTime.IsEmpty() {
+		e := ObjectIndexByTSEntry{
+			Time:         objEntry.DeleteTime,
+			IsDelete:     true,
+			ShortObjName: *objEntry.ObjectShortName(),
+			IsAppendable: objEntry.GetAppendable(),
+		}
+		p.dataObjectTSIndex.Set(e)
+	}
+
+	// for appendable object, gc rows when delete object
+	if objEntry.GetAppendable() && !objEntry.DeleteTime.IsEmpty() {
+		var numDeleted int64
+		iter := p.rows.Copy().Iter()
+		objID := objEntry.ObjectStats.ObjectName().ObjectId()
+		blkCnt := objEntry.ObjectStats.BlkCnt()
+		if blkCnt != 1 {
+			panic("logic error")
+		}
+		blkID := objectio.NewBlockidWithObjectID(objID, 0)
+		pivot := &RowEntry{
+			// aobj has only one blk
+			BlockID: *blkID,
+		}
+		for ok := iter.Seek(pivot); ok; ok = iter.Next() {
+			entry := iter.Item()
+			if entry.BlockID != *blkID {
+				break
+			}
+
+			// cannot gc the inmem tombstone at this point
+			if entry.Deleted {
+				continue
+			}
+
+			// if the inserting block is appendable, need to delete the rows for it;
+			// if the inserting block is non-appendable and has delta location, need to delete
+			// the deletes for it.
+			if entry.Time.LE(&objEntry.DeleteTime) {
+				// delete the row
+				p.rows.Delete(entry)
+
+				// delete the row's primary index
+				if len(entry.PrimaryIndexBytes) > 0 {
+					p.rowPrimaryKeyIndex.Delete(&PrimaryIndexEntry{
+						Bytes:      entry.PrimaryIndexBytes,
+						RowEntryID: entry.ID,
+						Time:       entry.Time,
+					})
+				}
+				numDeleted++
+			}
+
+			//it's tricky here.
+			//Due to consuming lazily the checkpoint,
+			//we have to take the following scenario into account:
+			//1. CN receives deletes for a non-appendable block from the log tail,
+			//   then apply the deletes into PartitionState.rows.
+			//2. CN receives block meta of the above non-appendable block to be inserted
+			//   from the checkpoint, then apply the block meta into PartitionState.blocks.
+			// So , if the above scenario happens, we need to set the non-appendable block into
+			// PartitionState.dirtyBlocks.
+			//if !objEntry.EntryState && !objEntry.HasDeltaLoc {
+			//	p.dirtyBlocks.Set(entry.BlockID)
+			//	break
+			//}
+		}
+		iter.Release()
+
+		// if there are no rows for the block, delete the block from the dirty
+		//if objEntry.EntryState && scanCnt == blockDeleted && p.dirtyBlocks.Len() > 0 {
+		//	p.dirtyBlocks.Delete(*blkID)
+		//}
+		perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {
+			c.DistTAE.Logtail.ActiveRows.Add(-numDeleted)
+		})
+	}
+
+	return
+}
+func (p *PartitionState) handleTombstoneObjectEntry(ctx context.Context, objEntry *objectio.ObjectEntry) (err error) {
+	commitTS := objEntry.CreateTime
+	if !objEntry.DeleteTime.IsEmpty() {
+		commitTS = objEntry.DeleteTime
+	}
+	if commitTS.GT(&p.lastFlushTimestamp) {
+		p.lastFlushTimestamp = commitTS
+	}
+	if objEntry.Size() == 0 || (objEntry.GetAppendable() && objEntry.DeleteTime.IsEmpty()) {
+		return
+	}
+
+	old, exist := p.tombstoneObjectsNameIndex.Get(*objEntry)
+	if exist {
+		// why check the deleteTime here? consider this situation:
+		// 		1. insert on an object, then these insert operations recorded into a CKP.
+		// 		2. and delete this object, this operation recorded into WAL.
+		// 		3. restart
+		// 		4. replay CKP(lazily) into partition state --> replay WAL into partition state
+		// the delete record in WAL could be overwritten by insert record in CKP,
+		// causing logic err of the objects' visibility(dead object back to life!!).
+		//
+		// if this happened, just skip this object will be fine,
+		if !old.DeleteTime.IsEmpty() {
+			return
+		}
+	}
+
+	p.tombstoneObjectsNameIndex.Set(*objEntry)
+	{ // update or set DTSIndex for objEntry
+		tmpObj := *objEntry
+		tmpObj.DeleteTime = types.TS{}
+		// if already exists, delete it first
+		p.tombstoneObjectDTSIndex.Delete(tmpObj)
+		p.tombstoneObjectDTSIndex.Set(*objEntry)
+	}
+
+	// for appendable object, gc rows when delete object
+	if !objEntry.GetAppendable() {
+		return
+	}
+
+	truncatePoint := objEntry.DeleteTime
+
+	var deletedRow *RowEntry
+	var numDeleted int64
+	var tbIter = p.inMemTombstoneRowIdIndex.Copy().Iter()
+	defer tbIter.Release()
+
+	for ok := tbIter.Seek(&PrimaryIndexEntry{
+		Bytes: objEntry.ObjectName().ObjectId()[:],
+		Time:  types.MaxTs(),
+	}); ok; ok = tbIter.Next() {
+		if truncatePoint.LT(&tbIter.Item().Time) {
+			continue
+		}
+
+		current := types.Objectid(tbIter.Item().Bytes)
+		if !objEntry.ObjectName().ObjectId().EQ(&current) {
+			break
+		}
+
+		if deletedRow, exist = p.rows.Get(&RowEntry{
+			ID:      tbIter.Item().RowEntryID,
+			BlockID: tbIter.Item().BlockID,
+			RowID:   tbIter.Item().RowID,
+			Time:    tbIter.Item().Time,
+		}); !exist {
+			continue
+		}
+
+		p.rows.Delete(deletedRow)
+		p.inMemTombstoneRowIdIndex.Delete(tbIter.Item())
+		if len(deletedRow.PrimaryIndexBytes) > 0 {
+			p.rowPrimaryKeyIndex.Delete(&PrimaryIndexEntry{
+				Bytes:      deletedRow.PrimaryIndexBytes,
+				RowEntryID: deletedRow.ID,
+				Time:       deletedRow.Time,
+			})
+		}
+	}
+
+	perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {
+		c.DistTAE.Logtail.ActiveRows.Add(-numDeleted)
+	})
+	return
+}
 func (p *PartitionState) HandleLogtailEntry(
 	ctx context.Context,
 	fs fileservice.FileService,
