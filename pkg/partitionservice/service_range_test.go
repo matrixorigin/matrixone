@@ -97,6 +97,64 @@ func TestGetMetadataByRangeType(t *testing.T) {
 	)
 }
 
+func TestGetMetadataByRangeColumnsType(t *testing.T) {
+	runTestPartitionServiceTest(
+		func(
+			ctx context.Context,
+			txnOp client.TxnOperator,
+			s *service,
+			store *memStorage,
+		) {
+			def := newTestTableDefine(1, []string{"c1"}, []types.T{types.T_varchar})
+			stmt := newTestRangeColumnsOption(t, "c1", 2)
+
+			_, err := s.getMetadataByRangeType(stmt.PartitionOption, def)
+			require.Error(t, err)
+
+			def = newTestTableDefine(1, []string{"c1"}, []types.T{types.T_date})
+			method := stmt.PartitionOption.PartBy.PType.(*tree.RangeType)
+
+			method.ColumnList = nil
+			_, err = s.getMetadataByRangeType(stmt.PartitionOption, def)
+			require.Error(t, err)
+		},
+	)
+}
+
+func TestCreateRangeColumns(t *testing.T) {
+	num := uint64(2)
+	tableID := uint64(1)
+	columns := []string{"a"}
+	allowedT := []types.T{
+		types.T_datetime,
+		types.T_date,
+	}
+
+	for _, v := range allowedT {
+		runTestPartitionServiceTest(
+			func(
+				ctx context.Context,
+				txnOp client.TxnOperator,
+				s *service,
+				store *memStorage,
+			) {
+				def := newTestTableDefine(1, columns, []types.T{v})
+				store.addUncommittedTable(def)
+
+				stmt := newTestRangeColumnsOption(t, columns[0], num)
+				assert.NoError(t, s.Create(ctx, tableID, stmt, txnOp))
+
+				v, ok := store.uncommitted[tableID]
+				assert.True(t, ok)
+				assert.Equal(t, 2, len(v.partitions))
+				for _, p := range v.partitions {
+					assert.NotEqual(t, 0, p.PartitionID)
+				}
+			},
+		)
+	}
+}
+
 func newTestRangeOption(
 	t *testing.T,
 	column string,
@@ -114,6 +172,30 @@ func newTestRangeOption(
 		t,
 		fmt.Sprintf(
 			"create table t(%s int) partition by range (%s) (%s)",
+			column,
+			column,
+			partitions,
+		),
+	)
+}
+
+func newTestRangeColumnsOption(
+	t *testing.T,
+	column string,
+	num uint64,
+) *tree.CreateTable {
+	partitions := ""
+	for i := uint64(1); i <= num; i++ {
+		partitions += fmt.Sprintf("partition p%d values less than ('2024-10-1%d')", i, i)
+		if i != num {
+			partitions += ", "
+		}
+	}
+
+	return getCreateTableStatement(
+		t,
+		fmt.Sprintf(
+			"create table t(%s date) partition by range columns (%s) (%s)",
 			column,
 			column,
 			partitions,
