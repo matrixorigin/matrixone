@@ -18,6 +18,7 @@ import (
 	"github.com/fagongzi/util/protoc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -44,7 +45,10 @@ func IsValidArg(parameter string, proc *process.Process) (*cmd_util.DiskCleaner,
 	case cmd_util.CheckerKeyMinTS:
 		break
 	case cmd_util.FastGC:
-		minTS := types.TimestampToTS(proc.Base.TxnClient.MinTimestamp())
+		logutil.Infof("Fast GC get ts start...")
+		ts := proc.Base.TxnClient.MinTimestamp()
+		logutil.Infof("Fast GC get ts end... ts %v", ts.String())
+		minTS := types.TimestampToTS(ts)
 		return &cmd_util.DiskCleaner{
 			Op:    op,
 			Key:   key,
