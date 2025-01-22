@@ -32,7 +32,10 @@ import (
 	usearch "github.com/unum-cloud/usearch/golang"
 )
 
-var Cache *HnswCache = NewHnswCache()
+var (
+	HnswCacheTTL time.Duration = 30 * time.Minute
+	Cache        *HnswCache    = NewHnswCache()
+)
 
 type HnswSearchIndex struct {
 	Id        int64
@@ -67,7 +70,7 @@ func (h *HnswSearch) Search(v []float32) (keys []int64, distances []float32, err
 		return nil, nil, moerr.NewInternalErrorNoCtx("HNSW cannot find index from database.")
 	}
 
-	ts := time.Now().Add(time.Hour).Unix()
+	ts := time.Now().Add(HnswCacheTTL).Unix()
 	h.ExpireAt.Store(ts)
 
 	// search
@@ -155,7 +158,7 @@ func (s *HnswSearch) LoadFromDatabase(proc *process.Process) error {
 
 	s.Indexes = indexes
 
-	ts := time.Now().Add(time.Hour).Unix()
+	ts := time.Now().Add(time.Duration(HnswCacheTTL)).Unix()
 	s.ExpireAt.Store(ts)
 
 	return nil
@@ -174,7 +177,7 @@ type HnswCache struct {
 
 func NewHnswCache() *HnswCache {
 	c := &HnswCache{}
-	c.TickerInterval = time.Hour
+	c.TickerInterval = HnswCacheTTL / 2
 	return c
 }
 
