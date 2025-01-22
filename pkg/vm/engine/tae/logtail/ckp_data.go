@@ -223,7 +223,7 @@ func ConsumeCheckpointWithTableID(
 	ctx context.Context,
 	tid uint64,
 	location objectio.Location,
-	forEachObject func(obj objectio.ObjectEntry, isTombstone bool) (err error),
+	forEachObject func(ctx context.Context, obj objectio.ObjectEntry, isTombstone bool) (err error),
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 ) (err error) {
@@ -239,7 +239,7 @@ func ConsumeCheckpointWithTableID(
 	iter := ckputil.NewObjectIter(ctx, ranges, mp, fs)
 	for ok, err := iter.Next(); ok && err == nil; ok, err = iter.Next() {
 		entry := iter.Entry()
-		if err := forEachObject(entry, false); err != nil {
+		if err := forEachObject(ctx, entry, false); err != nil {
 			return err
 		}
 	}
@@ -248,7 +248,7 @@ func ConsumeCheckpointWithTableID(
 	iter = ckputil.NewObjectIter(ctx, ranges, mp, fs)
 	for ok, err := iter.Next(); ok && err == nil; ok, err = iter.Next() {
 		entry := iter.Entry()
-		if err := forEachObject(entry, true); err != nil {
+		if err := forEachObject(ctx, entry, true); err != nil {
 			return err
 		}
 	}
@@ -453,8 +453,9 @@ func (replayer *CheckpointReplayer) ReplayObjectlist(
 	replayFn(replayer.tombstoneBatch, ckputil.ObjectType_Tombstone)
 }
 func (replayer *CheckpointReplayer) ConsumeCheckpointWithTableID(
+	ctx context.Context,
 	tid uint64,
-	forEachObject func(obj objectio.ObjectEntry, isTombstone bool) (err error),
+	forEachObject func(ctx context.Context, obj objectio.ObjectEntry, isTombstone bool) (err error),
 ) (err error) {
 	replayFn := func(src *containers.Batch, isTombstone bool) {
 		if src == nil || src.Length() == 0 {
@@ -464,20 +465,16 @@ func (replayer *CheckpointReplayer) ConsumeCheckpointWithTableID(
 		objectstatsVec := src.Vecs[ObjectInfo_ObjectStats_Idx+2].GetDownstreamVector()
 		createTSs := vector.MustFixedColNoTypeCheck[types.TS](src.Vecs[ObjectInfo_CreateAt_Idx+2].GetDownstreamVector())
 		deleteTSs := vector.MustFixedColNoTypeCheck[types.TS](src.Vecs[ObjectInfo_DeleteAt_Idx+2].GetDownstreamVector())
-		start := vector.OrderedFindFirstIndexInSortedSlice(tid, tids)
-		if start == -1 {
-			panic("logic error")
-		}
-		for i := start; i < src.Length(); i++ {
+		for i := 0; i < src.Length(); i++ {
 			if tids[i] != tid {
-				break
+				continue
 			}
 			obj := objectio.ObjectEntry{
 				ObjectStats: objectio.ObjectStats(objectstatsVec.GetBytesAt(i)),
 				CreateTime:  createTSs[i],
 				DeleteTime:  deleteTSs[i],
 			}
-			if err := forEachObject(obj, isTombstone); err != nil {
+			if err := forEachObject(ctx, obj, isTombstone); err != nil {
 				return
 			}
 		}
@@ -489,9 +486,18 @@ func (replayer *CheckpointReplayer) ConsumeCheckpointWithTableID(
 }
 
 func (replayer *CheckpointReplayer) Close() {
-	replayer.metaBatch.Close()
-	replayer.tombstoneBatch.Close()
-	replayer.objBatches.Close()
+	if replayer.metaBatch != nil {
+		replayer.metaBatch.Close()
+		replayer.metaBatch = nil
+	}
+	if replayer.tombstoneBatch != nil {
+		replayer.tombstoneBatch.Close()
+		replayer.tombstoneBatch = nil
+	}
+	if replayer.objBatches != nil {
+		replayer.objBatches.Close()
+		replayer.objBatches = nil
+	}
 }
 
 func ConsumeCheckpointEntries(
@@ -502,7 +508,7 @@ func ConsumeCheckpointEntries(
 	tableName string,
 	dbID uint64,
 	dbName string,
-	forEachObject func(obj objectio.ObjectEntry, isTombstone bool) (err error),
+	forEachObject func(ctx context.Context, obj objectio.ObjectEntry, isTombstone bool) (err error),
 	mp *mpool.MPool,
 	fs fileservice.FileService) error {
 	if metaLoc == "" {
@@ -568,6 +574,9 @@ func ConsumeCheckpointEntries(
 	}
 
 	for _, replayer := range replayers {
+		if err := replayer.ReadMetaForV12WithTableID(ctx, tableID, fs); err != nil {
+			return err
+		}
 		replayer.PrefetchData(ctx, sid, tableID, fs)
 	}
 	for _, loc := range locations {
@@ -586,8 +595,11 @@ func ConsumeCheckpointEntries(
 		}
 	}
 	for _, replayer := range replayers {
+		if err := replayer.ReadDataForV12(ctx, fs); err != nil {
+			return err
+		}
 		if err := replayer.ConsumeCheckpointWithTableID(
-			tableID, forEachObject,
+			ctx, tableID, forEachObject,
 		); err != nil {
 			return err
 		}
