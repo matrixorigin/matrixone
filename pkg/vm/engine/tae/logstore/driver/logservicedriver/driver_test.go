@@ -20,7 +20,6 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/lni/vfs"
 
@@ -45,12 +44,12 @@ func restartDriver(t *testing.T, d *LogServiceDriver, h func(*entry.Entry)) *Log
 	assert.NoError(t, d.Close())
 	t.Log("Addr:")
 	// preAddr:=d.addr
-	for lsn, intervals := range d.psn.dsnMap {
+	for lsn, intervals := range d.sequence.psn2DSNMap {
 		t.Logf("%d %v", lsn, intervals)
 	}
 	// preLsns:=d.validPSN
-	t.Logf("Valid lsn: %v", d.psn.records)
-	t.Logf("Driver DSN %d, Syncing %d, Synced %d", d.watermark.nextDSN.Load(), d.watermark.committingDSN, d.watermark.committedDSN)
+	t.Logf("Valid lsn: %v", d.sequence.psns)
+	t.Logf("Driver DSN %d, Synced %d", d.watermark.nextDSN.Load(), d.watermark.committedDSN)
 	t.Logf("Truncated %d", d.truncateDSNIntent.Load())
 	t.Logf("LSTruncated %d", d.truncatedPSN)
 	d = NewLogServiceDriver(&d.config)
@@ -71,7 +70,7 @@ func restartDriver(t *testing.T, d *LogServiceDriver, h func(*entry.Entry)) *Log
 	)
 	assert.NoError(t, err)
 	t.Log("Addr:")
-	for lsn, intervals := range d.psn.dsnMap {
+	for lsn, intervals := range d.sequence.psn2DSNMap {
 		t.Logf("%d %v", lsn, intervals)
 	}
 	// assert.Equal(t,len(preAddr),len(d.addr))
@@ -81,7 +80,7 @@ func restartDriver(t *testing.T, d *LogServiceDriver, h func(*entry.Entry)) *Log
 	// 	assert.Equal(t,intervals.Intervals[0].Start,replayedInterval.Intervals[0].Start)
 	// 	assert.Equal(t,intervals.Intervals[0].End,replayedInterval.Intervals[0].End)
 	// }
-	t.Logf("Valid lsn: %v", d.psn.records)
+	t.Logf("Valid lsn: %v", d.sequence.psns)
 	// assert.Equal(t,preLsns.GetCardinality(),d.validPSN.GetCardinality())
 	t.Logf("Truncated %d", d.truncateDSNIntent.Load())
 	t.Logf("LSTruncated %d", d.truncatedPSN)
@@ -187,17 +186,6 @@ func TestReplay2(t *testing.T) {
 	}
 
 	driver.Close()
-}
-
-func Test_RetryWithTimeout(t *testing.T) {
-	tryFunc := func() bool {
-		return false
-	}
-	err := RetryWithTimeout(time.Second*0, tryFunc)
-	assert.Error(t, err)
-
-	err = RetryWithTimeout(time.Millisecond*3, tryFunc)
-	assert.Error(t, err)
 }
 
 // func Test_TokenController(t *testing.T) {
