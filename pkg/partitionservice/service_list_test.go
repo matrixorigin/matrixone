@@ -26,7 +26,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestCreateRange(t *testing.T) {
+func TestCreateList(t *testing.T) {
 	num := uint64(2)
 	tableID := uint64(1)
 	columns := []string{"a"}
@@ -52,7 +52,7 @@ func TestCreateRange(t *testing.T) {
 				def := newTestTableDefine(1, columns, []types.T{v})
 				store.addUncommittedTable(def)
 
-				stmt := newTestRangeOption(t, columns[0], num)
+				stmt := newTestListOption(t, columns[0], num)
 				assert.NoError(t, s.Create(ctx, tableID, stmt, txnOp))
 
 				v, ok := store.uncommitted[tableID]
@@ -67,7 +67,7 @@ func TestCreateRange(t *testing.T) {
 	}
 }
 
-func TestGetMetadataByRangeType(t *testing.T) {
+func TestGetMetadataByListType(t *testing.T) {
 	runTestPartitionServiceTest(
 		func(
 			ctx context.Context,
@@ -76,28 +76,28 @@ func TestGetMetadataByRangeType(t *testing.T) {
 			store *memStorage,
 		) {
 			def := newTestTableDefine(1, []string{"c1"}, []types.T{types.T_varchar})
-			stmt := newTestRangeOption(t, "c1", 1)
+			stmt := newTestListOption(t, "c1", 1)
 
-			_, err := s.getMetadataByRangeType(stmt.PartitionOption, def)
+			_, err := s.getMetadataByListType(stmt.PartitionOption, def)
 			require.Error(t, err)
 
 			def = newTestTableDefine(1, []string{"c1"}, []types.T{types.T_int32})
-			method := stmt.PartitionOption.PartBy.PType.(*tree.RangeType)
+			method := stmt.PartitionOption.PartBy.PType.(*tree.ListType)
 
 			columns, _ := method.Expr.(*tree.UnresolvedName)
 			columns.NumParts = 0
-			_, err = s.getMetadataByRangeType(stmt.PartitionOption, def)
+			_, err = s.getMetadataByListType(stmt.PartitionOption, def)
 			require.Error(t, err)
 			columns.NumParts = 1
 
 			method.Expr = tree.NewMaxValue()
-			_, err = s.getMetadataByRangeType(stmt.PartitionOption, def)
+			_, err = s.getMetadataByListType(stmt.PartitionOption, def)
 			require.Error(t, err)
 		},
 	)
 }
 
-func TestGetMetadataByRangeColumnsType(t *testing.T) {
+func TestGetMetadataByListColumnsType(t *testing.T) {
 	runTestPartitionServiceTest(
 		func(
 			ctx context.Context,
@@ -105,29 +105,30 @@ func TestGetMetadataByRangeColumnsType(t *testing.T) {
 			s *service,
 			store *memStorage,
 		) {
-			def := newTestTableDefine(1, []string{"c1"}, []types.T{types.T_varchar})
-			stmt := newTestRangeColumnsOption(t, "c1", 2)
+			def := newTestTableDefine(1, []string{"c1"}, []types.T{types.T_json})
+			stmt := newTestListColumnsOption(t, "c1", 2)
 
-			_, err := s.getMetadataByRangeType(stmt.PartitionOption, def)
+			_, err := s.getMetadataByListType(stmt.PartitionOption, def)
 			require.Error(t, err)
 
 			def = newTestTableDefine(1, []string{"c1"}, []types.T{types.T_date})
-			method := stmt.PartitionOption.PartBy.PType.(*tree.RangeType)
+			method := stmt.PartitionOption.PartBy.PType.(*tree.ListType)
 
 			method.ColumnList = nil
-			_, err = s.getMetadataByRangeType(stmt.PartitionOption, def)
+			_, err = s.getMetadataByListType(stmt.PartitionOption, def)
 			require.Error(t, err)
 		},
 	)
 }
 
-func TestCreateRangeColumns(t *testing.T) {
+func TestCreateListColumns(t *testing.T) {
 	num := uint64(2)
 	tableID := uint64(1)
 	columns := []string{"a"}
 	allowedT := []types.T{
 		types.T_datetime,
 		types.T_date,
+		types.T_varchar,
 	}
 
 	for _, v := range allowedT {
@@ -141,7 +142,7 @@ func TestCreateRangeColumns(t *testing.T) {
 				def := newTestTableDefine(1, columns, []types.T{v})
 				store.addUncommittedTable(def)
 
-				stmt := newTestRangeColumnsOption(t, columns[0], num)
+				stmt := newTestListColumnsOption(t, columns[0], num)
 				assert.NoError(t, s.Create(ctx, tableID, stmt, txnOp))
 
 				v, ok := store.uncommitted[tableID]
@@ -155,14 +156,14 @@ func TestCreateRangeColumns(t *testing.T) {
 	}
 }
 
-func newTestRangeOption(
+func newTestListOption(
 	t *testing.T,
 	column string,
 	num uint64,
 ) *tree.CreateTable {
 	partitions := ""
 	for i := uint64(1); i <= num; i++ {
-		partitions += fmt.Sprintf("partition p%d values less than (%d)", i, i)
+		partitions += fmt.Sprintf("partition p%d values in (%d)", i, i)
 		if i != num {
 			partitions += ", "
 		}
@@ -171,7 +172,7 @@ func newTestRangeOption(
 	return getCreateTableStatement(
 		t,
 		fmt.Sprintf(
-			"create table t(%s int) partition by range (%s) (%s)",
+			"create table t(%s int) partition by list (%s) (%s)",
 			column,
 			column,
 			partitions,
@@ -179,14 +180,14 @@ func newTestRangeOption(
 	)
 }
 
-func newTestRangeColumnsOption(
+func newTestListColumnsOption(
 	t *testing.T,
 	column string,
 	num uint64,
 ) *tree.CreateTable {
 	partitions := ""
 	for i := uint64(1); i <= num; i++ {
-		partitions += fmt.Sprintf("partition p%d values less than ('2024-10-1%d')", i, i)
+		partitions += fmt.Sprintf("partition p%d values in ('2024-10-1%d')", i, i)
 		if i != num {
 			partitions += ", "
 		}
@@ -195,7 +196,7 @@ func newTestRangeColumnsOption(
 	return getCreateTableStatement(
 		t,
 		fmt.Sprintf(
-			"create table t(%s date) partition by range columns (%s) (%s)",
+			"create table t(%s date) partition by list columns (%s) (%s)",
 			column,
 			column,
 			partitions,

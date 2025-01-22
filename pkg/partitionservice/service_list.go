@@ -23,11 +23,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func (s *service) getMetadataByRangeType(
+func (s *service) getMetadataByListType(
 	option *tree.PartitionOption,
 	def *plan.TableDef,
 ) (partition.PartitionMetadata, error) {
-	method := option.PartBy.PType.(*tree.RangeType)
+	method := option.PartBy.PType.(*tree.ListType)
 
 	var columns *tree.UnresolvedName
 	var ok bool
@@ -39,7 +39,7 @@ func (s *service) getMetadataByRangeType(
 			return partition.PartitionMetadata{}, moerr.NewNotSupportedNoCtx("column expression is not supported")
 		}
 		if columns.NumParts != 1 {
-			return partition.PartitionMetadata{}, moerr.NewNotSupportedNoCtx("multi-column is not supported in RANGE partition")
+			return partition.PartitionMetadata{}, moerr.NewNotSupportedNoCtx("multi-column is not supported in LIST partition")
 		}
 
 		validTypeFunc = func(t plan.Type) bool {
@@ -54,12 +54,14 @@ func (s *service) getMetadataByRangeType(
 		desc = ctx.String()
 	} else {
 		if len(method.ColumnList) != 1 {
-			return partition.PartitionMetadata{}, moerr.NewNotSupportedNoCtx("multi-column is not supported in RANGE partition")
+			return partition.PartitionMetadata{}, moerr.NewNotSupportedNoCtx("multi-column is not supported in LIST partition")
 		}
 
 		columns = method.ColumnList[0]
 		validTypeFunc = func(t plan.Type) bool {
-			return types.T(t.Id) == types.T_date || types.T(t.Id) == types.T_datetime
+			return types.T(t.Id) == types.T_date ||
+				types.T(t.Id) == types.T_datetime ||
+				types.T(t.Id).IsMySQLString()
 		}
 	}
 
@@ -69,7 +71,7 @@ func (s *service) getMetadataByRangeType(
 		columns,
 		validTypeFunc,
 		desc,
-		partition.PartitionMethod_Range,
+		partition.PartitionMethod_List,
 		func(p *tree.Partition) string {
 			ctx := tree.NewFmtCtx(
 				dialect.MYSQL,
