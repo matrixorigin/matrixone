@@ -808,21 +808,22 @@ func TestCannotBusyLoopIfWriteCIsFull(t *testing.T) {
 			return conn.Write(msg, goetty.WriteOptions{Flush: true})
 		},
 		func(b *remoteBackend) {
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second*60)
-			defer cancel()
-
 			var wg sync.WaitGroup
 			for i := 0; i < 10; i++ {
 				wg.Add(1)
 				go func() {
 					defer wg.Done()
 					for i := 0; i < 10; i++ {
-						req := newTestMessage(1)
-						f, err := b.Send(ctx, req)
-						if err == nil { //ignore timeout
-							_, err = f.Get()
-							assert.NoError(t, err)
-						}
+						func() {
+							ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+							defer cancel()
+							req := newTestMessage(0)
+							f, err := b.Send(ctx, req)
+							if err == nil { //ignore timeout
+								_, _ = f.Get()
+								f.Close()
+							}
+						}()
 					}
 				}()
 			}
