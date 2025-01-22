@@ -153,9 +153,8 @@ func (idx *HnswBuildIndex) ToSql(cfg IndexTableConfig) (string, error) {
 	return sql, nil
 }
 
-func (idx *HnswBuildIndex) CheckSum(cfg IndexTableConfig) (string, error) {
-
-	f, err := os.Open(idx.Path)
+func CheckSum(path string) (string, error) {
+	f, err := os.Open(path)
 	if err != nil {
 		return "", err
 	}
@@ -272,7 +271,7 @@ func (h *HnswBuild) ToInsertSql(ts int64) ([]string, error) {
 		sqls = append(sqls, sql)
 
 		os.Stderr.WriteString(fmt.Sprintf("Sql: %s\n", sql))
-		chksum, err := idx.CheckSum(h.tblcfg)
+		chksum, err := CheckSum(idx.Path)
 		if err != nil {
 			return nil, err
 		}
