@@ -20,13 +20,13 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func (f *fixedSizeMmapAllocator) reuseMem(ptr unsafe.Pointer, hints Hints, clearSize uint64) {
+func reuseMem(ptr unsafe.Pointer, size int) {
 	// no need to clear, since re-visiting a MADV_DONTNEED-advised page will zero it
 }
 
-func (f *fixedSizeMmapAllocator) freeMem(ptr unsafe.Pointer) {
+func freeMem(ptr unsafe.Pointer, size int) {
 	if err := unix.Madvise(
-		unsafe.Slice((*byte)(ptr), f.size),
+		unsafe.Slice((*byte)(ptr), size),
 		unix.MADV_DONTNEED,
 	); err != nil {
 		panic(err)

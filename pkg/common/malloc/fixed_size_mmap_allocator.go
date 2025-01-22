@@ -15,41 +15,38 @@
 package malloc
 
 import (
+	"math/bits"
+	"slices"
+	"sync"
+	"sync/atomic"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
 )
 
-const (
-	// Classes with smaller size than smallClassCap will buffer min((smallClassCap/size), maxBuffer1Cap) objects in buffer1
-	smallClassCap = 1 * MB
-	maxBuffer1Cap = 256
-
-	// objects in buffer2 will be MADV_DONTNEED-advised and will not occupy RSS, so it's safe to use a large number
-	buffer2Cap = 1024
-)
-
 type fixedSizeMmapAllocator struct {
 	size uint64
-	// buffer1 buffers objects
-	buffer1 chan unsafe.Pointer
-	// buffer2 buffers MADV_DONTNEED objects
-	buffer2 chan unsafe.Pointer
+
+	mu           sync.Mutex
+	slabs        []*_Slab
+	maxSlabs     int
+	freeSlabs    []*_Slab
+	maxFreeSlabs int
 
 	deallocatorPool *ClosureDeallocatorPool[fixedSizeMmapDeallocatorArgs, *fixedSizeMmapDeallocatorArgs]
 }
 
 type fixedSizeMmapDeallocatorArgs struct {
-	length uint64
-	ptr    unsafe.Pointer
+	slab *_Slab
+	ptr  unsafe.Pointer
 }
 
 func (f fixedSizeMmapDeallocatorArgs) As(trait Trait) bool {
-	if info, ok := trait.(*MmapInfo); ok {
-		info.Addr = f.ptr
-		info.Length = f.length
-		return true
-	}
+	//if info, ok := trait.(*MmapInfo); ok {
+	//	info.Addr = f.ptr
+	//	info.Length = f.length
+	//	return true
+	//}
 	return false
 }
 
@@ -60,50 +57,34 @@ type MmapInfo struct {
 
 func (*MmapInfo) IsTrait() {}
 
+const (
+	maxActiveSlabs  = 256
+	maxActiveBytes  = 1 * MB
+	maxStandbySlabs = 1024
+	maxStandbyBytes = 128 * MB
+)
+
 func NewFixedSizeMmapAllocator(
 	size uint64,
 ) (ret *fixedSizeMmapAllocator) {
 
-	// if size is larger than smallClassCap, num1 will be zero, buffer1 will be empty
-	num1 := smallClassCap / size
-	if num1 > maxBuffer1Cap {
-		// don't buffer too much, since chans with larger buffer consume more memory
-		num1 = maxBuffer1Cap
-	}
-
 	ret = &fixedSizeMmapAllocator{
-		size:    size,
-		buffer1: make(chan unsafe.Pointer, num1),
-		buffer2: make(chan unsafe.Pointer, buffer2Cap),
+		size: size,
+		maxSlabs: min(
+			maxActiveSlabs,
+			maxActiveBytes/(int(size)*slabCapacity),
+		),
+		maxFreeSlabs: min(
+			maxStandbySlabs,
+			maxStandbyBytes/(int(size)*slabCapacity),
+		),
 
 		deallocatorPool: NewClosureDeallocatorPool(
 			func(hints Hints, args *fixedSizeMmapDeallocatorArgs) {
-
-				if hints&DoNotReuse > 0 {
-					ret.freeMem(args.ptr)
-					return
+				empty := args.slab.free(args.ptr)
+				if empty {
+					ret.freeSlab(args.slab)
 				}
-
-				select {
-
-				case ret.buffer1 <- args.ptr:
-					// buffer in buffer1
-
-				default:
-
-					ret.freeMem(args.ptr)
-
-					select {
-
-					case ret.buffer2 <- args.ptr:
-						// buffer in buffer2
-
-					default:
-
-					}
-
-				}
-
 			},
 		),
 	}
@@ -113,44 +94,147 @@ func NewFixedSizeMmapAllocator(
 
 var _ FixedSizeAllocator = new(fixedSizeMmapAllocator)
 
-func (f *fixedSizeMmapAllocator) Allocate(hints Hints, clearSize uint64) (slice []byte, dec Deallocator, err error) {
+func (f *fixedSizeMmapAllocator) Allocate(hints Hints, clearSize uint64) ([]byte, Deallocator, error) {
+	slab, ptr, err := f.allocate()
+	if err != nil {
+		return nil, nil, err
+	}
 
-	select {
-
-	case ptr := <-f.buffer1:
-		// from buffer1
-		slice = unsafe.Slice((*byte)(ptr), f.size)
-		if hints&NoClear == 0 {
-			clear(slice[:clearSize])
-		}
-
-	default:
-
-		select {
-
-		case ptr := <-f.buffer2:
-			// from buffer2
-			f.reuseMem(ptr, hints, clearSize)
-			slice = unsafe.Slice((*byte)(ptr), f.size)
-
-		default:
-			// allocate new
-			slice, err = unix.Mmap(
-				-1, 0,
-				int(f.size),
-				unix.PROT_READ|unix.PROT_WRITE,
-				unix.MAP_PRIVATE|unix.MAP_ANONYMOUS,
-			)
-			if err != nil {
-				return nil, nil, err
-			}
-
-		}
-
+	slice := unsafe.Slice(
+		(*byte)(ptr),
+		f.size,
+	)
+	if hints&NoClear == 0 {
+		clear(slice[:min(clearSize, f.size)])
 	}
 
 	return slice, f.deallocatorPool.Get(fixedSizeMmapDeallocatorArgs{
-		ptr:    unsafe.Pointer(unsafe.SliceData(slice)),
-		length: f.size,
+		slab: slab,
+		ptr:  ptr,
 	}), nil
+}
+
+func (f *fixedSizeMmapAllocator) allocate() (*_Slab, unsafe.Pointer, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	// from existing
+	for _, slab := range f.slabs {
+		ptr, ok := slab.allocate()
+		if ok {
+			return slab, ptr, nil
+		}
+	}
+
+	// empty or all full
+	// from freeSlabs
+	if len(f.freeSlabs) > 0 {
+		slab := f.freeSlabs[len(f.freeSlabs)-1]
+		f.freeSlabs = f.freeSlabs[:len(f.freeSlabs)-1]
+		reuseMem(slab.base, slab.objectSize*slabCapacity)
+		f.slabs = append(f.slabs, slab)
+		ptr, _ := slab.allocate()
+		return slab, ptr, nil
+	}
+
+	// allocate new
+	slice, err := unix.Mmap(
+		-1, 0,
+		int(f.size*slabCapacity),
+		unix.PROT_READ|unix.PROT_WRITE,
+		unix.MAP_PRIVATE|unix.MAP_ANONYMOUS,
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	base := unsafe.Pointer(unsafe.SliceData(slice))
+	slab := &_Slab{
+		base:       base,
+		objectSize: int(f.size),
+	}
+	f.slabs = append(f.slabs, slab)
+
+	ptr, _ := slab.allocate()
+	return slab, ptr, nil
+}
+
+func (f *fixedSizeMmapAllocator) freeSlab(slab *_Slab) {
+	f.mu.Lock() // to prevent new allocation
+	defer f.mu.Unlock()
+
+	if len(f.slabs) < f.maxSlabs {
+		return
+	}
+
+	if slab.mask.Load() != 0 {
+		// has new allocation
+		return
+	}
+
+	offset := -1
+	for i, s := range f.slabs {
+		if s == slab {
+			offset = i
+			break
+		}
+	}
+	if offset == -1 {
+		// already moved
+		return
+	}
+
+	// free slab memory
+	freeMem(slab.base, slab.objectSize*slabCapacity)
+
+	// move to freeSlabs
+	f.slabs = slices.Delete(f.slabs, offset, offset+1)
+	f.freeSlabs = append(f.freeSlabs, slab)
+
+	for len(f.freeSlabs) > f.maxFreeSlabs {
+		slab := f.freeSlabs[len(f.freeSlabs)-1]
+		f.freeSlabs = f.freeSlabs[:len(f.freeSlabs)-1]
+		unix.Munmap(
+			unsafe.Slice(
+				(*byte)(slab.base),
+				slab.objectSize*slabCapacity,
+			),
+		)
+	}
+
+}
+
+const slabCapacity = 64 // uint64 masked
+
+type _Slab struct {
+	base       unsafe.Pointer
+	objectSize int
+	mask       atomic.Uint64
+}
+
+func (s *_Slab) allocate() (unsafe.Pointer, bool) {
+	for {
+		mask := s.mask.Load()
+		reverse := ^mask
+		if reverse == 0 {
+			// full
+			return nil, false
+		}
+		offset := bits.TrailingZeros64(reverse)
+		addr := unsafe.Add(s.base, offset*s.objectSize)
+		if s.mask.CompareAndSwap(mask, mask|(1<<offset)) {
+			return addr, true
+		}
+	}
+}
+
+func (s *_Slab) free(ptr unsafe.Pointer) bool {
+	offset := (uintptr(ptr) - uintptr(s.base)) / uintptr(s.objectSize)
+	for {
+		mask := s.mask.Load()
+		newMask := mask & ^(uint64(1) << offset)
+		if s.mask.CompareAndSwap(mask, newMask) {
+			return newMask == 0
+		}
+	}
 }
