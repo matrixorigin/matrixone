@@ -383,6 +383,13 @@ func (c *HnswCache) Destroy() {
 			c.done <- true
 		}
 	}
+	// remove all keys
+	c.IndexMap.Range(func(key, value any) bool {
+		c.IndexMap.Delete(key)
+		search := value.(*HnswSearch)
+		search.Destroy()
+		return true
+	})
 }
 
 func (c *HnswCache) GetIndex(proc *process.Process, cfg usearch.IndexConfig, tblcfg hnsw.IndexTableConfig, key string) (*HnswSearch, error) {
