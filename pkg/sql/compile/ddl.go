@@ -91,6 +91,11 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	s.ScopeAnalyzer.Start()
 	defer s.ScopeAnalyzer.Stop()
 
+	accountId, err := defines.GetAccountId(c.proc.Ctx)
+	if err != nil {
+		return err
+	}
+
 	dbName := s.Plan.GetDdl().GetDropDatabase().GetDatabase()
 	db, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
@@ -199,11 +204,6 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	}
 
 	// 5.update mo_pitr table
-	accountId, err := defines.GetAccountId(c.proc.Ctx)
-	if err != nil {
-		return err
-	}
-
 	if !needSkipDbs[dbName] {
 		updatePitrSql := fmt.Sprintf("update `%s`.`%s` set `%s` = %d, `%s` = %s where `%s` = %d and `%s` = '%s' and `%s` = %d and `%s` = %s",
 			catalog.MO_CATALOG, catalog.MO_PITR, catalog.MO_PITR_STATUS, 0, catalog.MO_PITR_CHANGED_TIME, "default",

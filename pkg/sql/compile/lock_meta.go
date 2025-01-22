@@ -95,6 +95,11 @@ func (l *LockMeta) doLock(e engine.Engine, proc *process.Process) error {
 		return nil
 	}
 
+	accountId, err := defines.GetAccountId(proc.Ctx)
+	if err != nil {
+		return err
+	}
+
 	tables := make([]string, 0, lockLen)
 	for table := range l.metaTables {
 		tables = append(tables, table)
@@ -118,11 +123,6 @@ func (l *LockMeta) doLock(e engine.Engine, proc *process.Process) error {
 		for _, vec := range l.lockMetaVecs {
 			vec.CleanOnlyData()
 		}
-	}
-
-	accountId, err := defines.GetAccountId(proc.Ctx)
-	if err != nil {
-		return err
 	}
 
 	lockDbs := make(map[string]struct{})

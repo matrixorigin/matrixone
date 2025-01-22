@@ -602,3 +602,48 @@ func TestScope_CreateView(t *testing.T) {
 	})
 
 }
+
+func TestScope_Database(t *testing.T) {
+	dropDbDef := &plan2.DropDatabase{
+		IfExists: false,
+		Database: "test",
+	}
+
+	cplan := &plan.Plan{
+		Plan: &plan2.Plan_Ddl{
+			Ddl: &plan2.DataDefinition{
+				DdlType: plan2.DataDefinition_DROP_DATABASE,
+				Definition: &plan2.DataDefinition_DropDatabase{
+					DropDatabase: dropDbDef,
+				},
+			},
+		},
+	}
+
+	s := &Scope{
+		Magic:     DropDatabase,
+		Plan:      cplan,
+		TxnOffset: 0,
+	}
+
+	sql := `create database test;`
+
+	convey.Convey("create table FaultTolerance1", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		proc := testutil.NewProcess()
+		proc.Base.SessionInfo.Buf = buffer.New()
+
+		proc.Ctx = context.Background()
+		txnCli, txnOp := newTestTxnClientAndOp(ctrl)
+		proc.Base.TxnClient = txnCli
+		proc.Base.TxnOperator = txnOp
+		proc.ReplaceTopCtx(context.Background())
+
+		eng := mock_frontend.NewMockEngine(ctrl)
+
+		c := NewCompile("test", "test", sql, "", "", eng, proc, nil, false, nil, time.Now())
+		assert.Error(t, s.DropDatabase(c))
+	})
+}
