@@ -50,8 +50,8 @@ func (l *Loop) Start() {
 
 func (l *Loop) loop() {
 	defer l.wg.Done()
+	batch := make([]any, 0)
 	for {
-		batch := make([]any, 0)
 		select {
 		case <-l.queueCtx.Done():
 			return
@@ -70,6 +70,7 @@ func (l *Loop) loop() {
 		l.Itemcount += len(batch)
 		l.Itemtimes++
 		l.fn(batch, l.nextQueue)
+		batch = batch[:0]
 	}
 }
 

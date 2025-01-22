@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
@@ -63,10 +64,57 @@ type BackendClient interface {
 	Truncate(ctx context.Context, psn uint64) error
 }
 
+type writeTokenController struct {
+	sync.Cond
+	nextToken uint64
+	bm        roaring64.Bitmap
+	maxCount  uint64
+}
+
+func newTokenController(maxCount uint64) *writeTokenController {
+	return &writeTokenController{
+		nextToken: uint64(1),
+		maxCount:  maxCount,
+		Cond:      *sync.NewCond(new(sync.Mutex)),
+	}
+}
+
+func (rc *writeTokenController) Putback(tokens ...uint64) {
+	rc.L.Lock()
+	defer rc.L.Unlock()
+	for _, token := range tokens {
+		rc.bm.Remove(token)
+	}
+	rc.Broadcast()
+}
+
+func (rc *writeTokenController) Apply() (token uint64) {
+	rc.L.Lock()
+	defer rc.L.Unlock()
+	for {
+		if rc.bm.IsEmpty() {
+			token = rc.nextToken
+			rc.nextToken++
+			rc.bm.Add(token)
+			return
+		}
+		minimum := rc.bm.Minimum()
+		if rc.nextToken < rc.maxCount+minimum {
+			token = rc.nextToken
+			rc.nextToken++
+			rc.bm.Add(token)
+			return
+		}
+		// logutil.Infof("too much pendding writes: %d, %d, %d", rc.bm.Minimum(), rc.bm.Maximum(), rc.bm.GetCardinality())
+		rc.Wait()
+	}
+}
+
 type wrappedClient struct {
-	wrapped BackendClient
-	buf     logservice.LogRecord
-	pool    *clientPool
+	wrapped    BackendClient
+	buf        logservice.LogRecord
+	pool       *clientPool
+	writeToken uint64
 }
 
 func newClient(
@@ -142,6 +190,10 @@ func (c *wrappedClient) Append(
 func (c *wrappedClient) Putback() {
 	if c.pool != nil {
 		pool := c.pool
+		if c.writeToken > 0 {
+			pool.PutbackTokens(c.writeToken)
+			c.writeToken = 0
+		}
 		c.pool = nil
 		pool.Put(c)
 	} else {
@@ -150,19 +202,36 @@ func (c *wrappedClient) Putback() {
 	}
 }
 
-type clientPool struct {
-	closed bool
-	cfg    *Config
+// ============================================================================
+// ----------------------------- Client Pool ---------------------------------
+// ============================================================================
 
-	cond    sync.Cond
+type clientPool struct {
+	cond   sync.Cond
+	cfg    *Config
+	closed bool
+
 	clients []*wrappedClient
+
+	// writeTokenController is used to control the write token
+	// it controles the max write token issued and all finished write tokens
+	// to avoid too much pendding writes
+	// then we can only issue another 10 write token to avoid too much pendding writes
+	// In the real world, the maxFinishedToken is always being updated and it is very
+	// rare to reach the maxPendding
+	writeTokenController *writeTokenController
 }
 
 func newClientPool(cfg *Config) *clientPool {
+	maxPenddingWrites := cfg.ClientMaxCount
+	if maxPenddingWrites < DefaultMaxClient {
+		maxPenddingWrites = DefaultMaxClient
+	}
 	pool := &clientPool{
-		cfg:     cfg,
-		clients: make([]*wrappedClient, cfg.ClientMaxCount),
-		cond:    sync.Cond{L: new(sync.Mutex)},
+		cfg:                  cfg,
+		clients:              make([]*wrappedClient, cfg.ClientMaxCount),
+		cond:                 sync.Cond{L: new(sync.Mutex)},
+		writeTokenController: newTokenController(uint64(maxPenddingWrites)),
 	}
 
 	for i := 0; i < cfg.ClientMaxCount; i++ {
@@ -233,4 +302,21 @@ func (c *clientPool) Put(client *wrappedClient) {
 	}
 	c.clients = append(c.clients, client)
 	c.cond.Broadcast()
+}
+
+func (c *clientPool) GetWithWriteToken() (client *wrappedClient, err error) {
+	if client, err = c.Get(); err != nil {
+		return
+	}
+	token := c.writeTokenController.Apply()
+	if token == 0 {
+		logutil.Fatal("token is 0")
+	}
+	client.pool = c
+	client.writeToken = token
+	return
+}
+
+func (c *clientPool) PutbackTokens(tokens ...uint64) {
+	c.writeTokenController.Putback(tokens...)
 }

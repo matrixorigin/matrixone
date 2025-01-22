@@ -76,10 +76,10 @@ func (d *LogServiceDriver) doTruncate() {
 			break
 		}
 	}
-	d.psn.mu.RLock()
-	minPSN := d.psn.records.Minimum()
-	maxPSN := d.psn.records.Maximum()
-	d.psn.mu.RUnlock()
+	d.sequence.mu.RLock()
+	minPSN := d.sequence.psns.Minimum()
+	maxPSN := d.sequence.psns.Maximum()
+	d.sequence.mu.RUnlock()
 	logutil.Info(
 		"Wal-Truncate-Prepare",
 		zap.Int("loop-count", loopCount),
@@ -114,7 +114,7 @@ func (d *LogServiceDriver) doTruncate() {
 	if psnTruncated > d.truncatedPSN {
 		d.truncatedPSN = psnTruncated
 	}
-	d.gcPSN(psnTruncated)
+	d.truncateByPSN(psnTruncated)
 }
 
 func (d *LogServiceDriver) truncateFromRemote(

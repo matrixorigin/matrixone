@@ -3296,7 +3296,7 @@ func (c *Compile) compileMultiUpdate(_ []*plan.Node, n *plan.Node, ss []*Scope) 
 		rs.setRootOperator(multiUpdateArg)
 		ss = []*Scope{rs}
 	} else {
-		if len(ss) > 0 {
+		if !c.IsTpQuery() {
 			rs := c.newMergeScope(ss)
 			ss = []*Scope{rs}
 		}
@@ -3407,7 +3407,7 @@ func (c *Compile) compileLock(n *plan.Node, ss []*Scope) ([]*Scope, error) {
 	}
 
 	currentFirstFlag := c.anal.isFirst
-	if len(ss) > 0 {
+	if !c.IsTpQuery() || len(c.pn.GetQuery().Steps) > 1 { // todo: don't support dml with multi steps for now
 		rs := c.newMergeScope(ss)
 		ss = []*Scope{rs}
 	}
