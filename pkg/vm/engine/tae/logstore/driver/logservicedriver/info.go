@@ -34,64 +34,18 @@ type DSNStats struct {
 	Max       uint64
 }
 
-type tokenController struct {
-	sync.Cond
-	nextToken uint64
-	bm        roaring64.Bitmap
-	maxCount  uint64
-}
-
-func newTokenController(maxCount uint64) *tokenController {
-	return &tokenController{
-		maxCount: maxCount,
-		Cond:     *sync.NewCond(new(sync.Mutex)),
-	}
-}
-
-func (rc *tokenController) Putback(tokens ...uint64) {
-	rc.L.Lock()
-	defer rc.L.Unlock()
-	for _, token := range tokens {
-		rc.bm.Remove(token)
-	}
-	rc.Broadcast()
-}
-
-func (rc *tokenController) Apply() (token uint64) {
-	rc.L.Lock()
-	defer rc.L.Unlock()
-	for {
-		if rc.bm.IsEmpty() {
-			token = rc.nextToken
-			rc.nextToken++
-			rc.bm.Add(token)
-			return
-		}
-		minimum := rc.bm.Minimum()
-		if rc.nextToken < rc.maxCount+minimum {
-			token = rc.nextToken
-			rc.nextToken++
-			rc.bm.Add(token)
-			return
-		}
-		// logutil.Infof("too much pendding writes: %d, %d, %d", rc.bm.Minimum(), rc.bm.Maximum(), rc.bm.GetCardinality())
-		rc.Wait()
-	}
-}
-
-type driverInfo struct {
+type sequenceNumberState struct {
 	// PSN: physical sequence number. here is the lsn from logservice
-	psn struct {
+	sequence struct {
 		mu sync.RWMutex
 		// key: PSN, value: DSNs
-		dsnMap  map[uint64]common.ClosedInterval
-		records roaring64.Bitmap
+		psn2DSNMap map[uint64]common.ClosedInterval
+		psns       roaring64.Bitmap
 	}
 
 	watermark struct {
-		mu            sync.RWMutex
-		committingDSN uint64
-		committedDSN  uint64
+		mu           sync.RWMutex
+		committedDSN uint64
 
 		// dsn: driver sequence number
 		// it is monotonically continuously increasing
@@ -102,54 +56,43 @@ type driverInfo struct {
 
 	truncateDSNIntent atomic.Uint64 //
 	truncatedPSN      uint64        //
-
-	// tokenController is used to control the write token
-	// it controles the max write token issued and all finished write tokens
-	// to avoid too much pendding writes
-	// then we can only issue another 10 write token to avoid too much pendding writes
-	// In the real world, the maxFinishedToken is always being updated and it is very
-	// rare to reach the maxPendding
-	tokenController *tokenController
 }
 
-func newDriverInfo(maxPenddingWrites uint64) *driverInfo {
-	d := &driverInfo{
-		tokenController: newTokenController(maxPenddingWrites),
-	}
-	d.psn.dsnMap = make(map[uint64]common.ClosedInterval)
+func newSequenceNumberState() *sequenceNumberState {
+	d := new(sequenceNumberState)
+	d.sequence.psn2DSNMap = make(map[uint64]common.ClosedInterval)
 	return d
 }
 
-func (info *driverInfo) initState(stats *DSNStats) {
-	info.watermark.nextDSN.Store(stats.Max)
-	info.watermark.committingDSN = stats.Max
-	info.watermark.committedDSN = stats.Max
+func (sns *sequenceNumberState) initState(stats *DSNStats) {
+	sns.watermark.nextDSN.Store(stats.Max)
+	sns.watermark.committedDSN = stats.Max
 	if stats.Min != math.MaxUint64 {
-		info.truncateDSNIntent.Store(stats.Min - 1)
+		sns.truncateDSNIntent.Store(stats.Min - 1)
 	}
-	info.truncatedPSN = stats.Truncated
+	sns.truncatedPSN = stats.Truncated
 }
 
 // psn: physical sequence number
 // dsns: dsns in the log entry of the psn
-func (info *driverInfo) recordPSNInfo(
+func (sns *sequenceNumberState) recordSequenceNumbers(
 	psn uint64, dsns common.ClosedInterval,
 ) {
-	info.psn.dsnMap[psn] = dsns
-	info.psn.records.Add(psn)
+	sns.sequence.psn2DSNMap[psn] = dsns
+	sns.sequence.psns.Add(psn)
 }
 
-func (info *driverInfo) GetDSN() uint64 {
-	return info.watermark.nextDSN.Load()
+func (sns *sequenceNumberState) GetDSN() uint64 {
+	return sns.watermark.nextDSN.Load()
 }
 
-func (info *driverInfo) getNextValidPSN(psn uint64) uint64 {
-	info.psn.mu.RLock()
-	defer info.psn.mu.RUnlock()
-	if info.psn.records.IsEmpty() {
+func (sns *sequenceNumberState) getNextValidPSN(psn uint64) uint64 {
+	sns.sequence.mu.RLock()
+	defer sns.sequence.mu.RUnlock()
+	if sns.sequence.psns.IsEmpty() {
 		return 0
 	}
-	maxPSN := info.psn.records.Maximum()
+	maxPSN := sns.sequence.psns.Maximum()
 	// [psn >= maxPSN]
 	if psn >= maxPSN {
 		return maxPSN
@@ -157,16 +100,16 @@ func (info *driverInfo) getNextValidPSN(psn uint64) uint64 {
 	// [psn < maxPSN]
 	// PXU TODO: psn++???
 	psn++
-	for !info.psn.records.Contains(psn) {
+	for !sns.sequence.psns.Contains(psn) {
 		psn++
 	}
 	return psn
 }
 
-func (info *driverInfo) isToTruncate(psn, dsn uint64) bool {
-	maxDSN := info.getMaxDSN(psn)
+func (sns *sequenceNumberState) isToTruncate(psn, dsn uint64) bool {
+	maxDSN := sns.getMaxDSN(psn)
 
-	// psn cannot be found in the psn.dsnMap
+	// psn cannot be found in the psn.psn2DSNMap
 	if maxDSN == 0 {
 		return false
 	}
@@ -175,73 +118,61 @@ func (info *driverInfo) isToTruncate(psn, dsn uint64) bool {
 	return maxDSN <= dsn
 }
 
-func (info *driverInfo) getMaxDSN(psn uint64) uint64 {
-	info.psn.mu.RLock()
-	defer info.psn.mu.RUnlock()
-	dsnRange, ok := info.psn.dsnMap[psn]
+func (sns *sequenceNumberState) getMaxDSN(psn uint64) uint64 {
+	sns.sequence.mu.RLock()
+	defer sns.sequence.mu.RUnlock()
+	dsnRange, ok := sns.sequence.psn2DSNMap[psn]
 	if !ok {
 		return 0
 	}
 	return dsnRange.End
 }
 
-func (info *driverInfo) allocateDSN() uint64 {
-	return info.watermark.nextDSN.Add(1)
+func (sns *sequenceNumberState) allocateDSN() uint64 {
+	return sns.watermark.nextDSN.Add(1)
 }
 
-func (info *driverInfo) applyWriteToken() (token uint64) {
-	return info.tokenController.Apply()
-}
-
-func (info *driverInfo) recordCommitInfo(committer *groupCommitter) {
+func (sns *sequenceNumberState) recordCommitInfo(committer *groupCommitter) {
 	dsnRange := committer.writer.Entry.DSNRange()
 
-	info.psn.mu.Lock()
-	info.psn.records.Add(committer.psn)
-	info.psn.dsnMap[committer.psn] = dsnRange
-	info.psn.mu.Unlock()
+	sns.sequence.mu.Lock()
+	sns.sequence.psns.Add(committer.psn)
+	sns.sequence.psn2DSNMap[committer.psn] = dsnRange
+	sns.sequence.mu.Unlock()
 
-	if dsnRange.Start != info.watermark.committingDSN+1 {
+	sns.watermark.mu.Lock()
+	defer sns.watermark.mu.Unlock()
+	if dsnRange.Start != sns.watermark.committedDSN+1 {
 		panic(fmt.Sprintf(
 			"logic err, expect %d, actual %s",
-			info.watermark.committingDSN+1,
+			sns.watermark.committedDSN+1,
 			dsnRange.String(),
 		))
 	}
-	info.watermark.committingDSN = dsnRange.End
+	sns.watermark.committedDSN = dsnRange.End
 }
 
-func (info *driverInfo) gcPSN(psn uint64) {
-	info.psn.mu.Lock()
-	defer info.psn.mu.Unlock()
+func (sns *sequenceNumberState) truncateByPSN(psn uint64) {
+	sns.sequence.mu.Lock()
+	defer sns.sequence.mu.Unlock()
 	candidates := make([]uint64, 0)
 	// collect all the PSN that is less than the given PSN
-	for sn := range info.psn.dsnMap {
+	for sn := range sns.sequence.psn2DSNMap {
 		if sn < psn {
 			candidates = append(candidates, sn)
 		}
 	}
 	// remove 0 to the given PSN from the validPSN
-	info.psn.records.RemoveRange(0, psn)
+	sns.sequence.psns.RemoveRange(0, psn)
 
 	// remove the PSN from the map
 	for _, lsn := range candidates {
-		delete(info.psn.dsnMap, lsn)
+		delete(sns.sequence.psn2DSNMap, lsn)
 	}
 }
 
-func (info *driverInfo) getCommittedDSNWatermark() uint64 {
-	info.watermark.mu.RLock()
-	defer info.watermark.mu.RUnlock()
-	return info.watermark.committedDSN
-}
-
-func (info *driverInfo) commitWatermark() {
-	info.watermark.mu.Lock()
-	info.watermark.committedDSN = info.watermark.committingDSN
-	info.watermark.mu.Unlock()
-}
-
-func (info *driverInfo) putbackWriteTokens(tokens ...uint64) {
-	info.tokenController.Putback(tokens...)
+func (sns *sequenceNumberState) getCommittedDSNWatermark() uint64 {
+	sns.watermark.mu.RLock()
+	defer sns.watermark.mu.RUnlock()
+	return sns.watermark.committedDSN
 }

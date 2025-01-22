@@ -35,52 +35,28 @@ const (
 	MaxReadSize    = mpool.MB * 64
 )
 
-func RetryWithTimeout(timeoutDuration time.Duration, fn func() (shouldReturn bool)) error {
-	ctx, cancel := context.WithTimeoutCause(
-		context.Background(),
-		timeoutDuration,
-		moerr.CauseRetryWithTimeout,
-	)
-	defer cancel()
-	for {
-		select {
-		case <-ctx.Done():
-			return moerr.AttachCause(ctx, ErrRetryTimeOut)
-		default:
-			if fn() {
-				return nil
-			}
-		}
-	}
-}
-
 type LogServiceDriver struct {
-	*driverInfo
+	*sequenceNumberState
 
 	config Config
 
 	clientPool *clientPool
 	committer  *groupCommitter
 
-	reuse struct {
-		tokens []uint64
-	}
-
 	commitLoop      sm.Queue
 	commitWaitQueue chan any
 	waitCommitLoop  *sm.Loop
 	postCommitQueue chan any
-	postCommitLoop  *sm.Loop
 	truncateQueue   sm.Queue
 
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	appendPool *ants.Pool
+	workers *ants.Pool
 }
 
 func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
-	// the tasks submitted to LogServiceDriver.appendPool append entries to logservice,
+	// the tasks submitted to LogServiceDriver.workers append entries to logservice,
 	// and we hope the task will crash all the tn service if append failed.
 	// so, set panic to pool.options.PanicHandler here, or it will only crash
 	// the goroutine the append task belongs to.
@@ -88,26 +64,20 @@ func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
 		panic(v)
 	}))
 
-	maxPenddingWrites := cfg.ClientMaxCount
-	if maxPenddingWrites < DefaultMaxClient {
-		maxPenddingWrites = DefaultMaxClient
-	}
 	d := &LogServiceDriver{
-		clientPool:      newClientPool(cfg),
-		config:          *cfg,
-		committer:       getCommitter(),
-		driverInfo:      newDriverInfo(uint64(maxPenddingWrites)),
-		commitWaitQueue: make(chan any, 10000),
-		postCommitQueue: make(chan any, 10000),
-		appendPool:      pool,
+		clientPool:          newClientPool(cfg),
+		config:              *cfg,
+		committer:           getCommitter(),
+		sequenceNumberState: newSequenceNumberState(),
+		commitWaitQueue:     make(chan any, 10000),
+		postCommitQueue:     make(chan any, 10000),
+		workers:             pool,
 	}
 	d.ctx, d.cancel = context.WithCancel(context.Background())
 	d.commitLoop = sm.NewSafeQueue(10000, 10000, d.onCommitIntents)
 	d.commitLoop.Start()
-	d.waitCommitLoop = sm.NewLoop(d.commitWaitQueue, d.postCommitQueue, d.onWaitCommitted, 10000)
+	d.waitCommitLoop = sm.NewLoop(d.commitWaitQueue, nil, d.onWaitCommitted, 10000)
 	d.waitCommitLoop.Start()
-	d.postCommitLoop = sm.NewLoop(d.postCommitQueue, nil, d.onCommitDone, 10000)
-	d.postCommitLoop.Start()
 	d.truncateQueue = sm.NewSafeQueue(10000, 10000, d.onTruncateRequests)
 	d.truncateQueue.Start()
 	logutil.Info(
@@ -126,11 +96,10 @@ func (d *LogServiceDriver) Close() error {
 	d.cancel()
 	d.commitLoop.Stop()
 	d.waitCommitLoop.Stop()
-	d.postCommitLoop.Stop()
 	d.truncateQueue.Stop()
 	close(d.commitWaitQueue)
 	close(d.postCommitQueue)
-	d.appendPool.Release()
+	d.workers.Release()
 	return nil
 }
 
@@ -173,7 +142,7 @@ func (d *LogServiceDriver) Replay(
 		// after the REPLAYED state
 		WithReplayerOnScheduled(
 			func(psn uint64, e LogEntry) {
-				d.recordPSNInfo(psn, e.DSNRange())
+				d.recordSequenceNumbers(psn, e.DSNRange())
 			},
 		),
 		WithReplayerOnReplayDone(

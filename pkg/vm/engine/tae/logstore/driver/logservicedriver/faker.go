@@ -117,8 +117,6 @@ func newMockDriver(
 	}
 }
 
-func (d *mockDriver) putbackWriteTokens(tokens ...uint64) {}
-
 func (d *mockDriver) GetMaxClient() int {
 	return d.maxClient
 }
@@ -130,8 +128,8 @@ func (d *mockDriver) addSkipMap(psn, skipDSN, skipPSN uint64) {
 	d.skipMap[psn][skipDSN] = skipPSN
 }
 
-func (d *mockDriver) getClientForWrite() (*wrappedClient, uint64) {
-	return nil, 0
+func (d *mockDriver) getClientForWrite() *wrappedClient {
+	return nil
 }
 
 func (d *mockDriver) getTruncatedPSNFromBackend(ctx context.Context) (uint64, error) {
