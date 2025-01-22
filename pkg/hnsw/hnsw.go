@@ -46,7 +46,7 @@ type SearchResultHeap []*SearchResult
 func (h SearchResultHeap) Len() int { return len(h) }
 
 func (h SearchResultHeap) Less(i, j int) bool {
-	return h[i].distance > h[j].distance
+	return h[i].distance < h[j].distance
 }
 
 func (h SearchResultHeap) Swap(i, j int) {
