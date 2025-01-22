@@ -45,14 +45,94 @@ type HnswSearchIndex struct {
 	Checksum  string
 }
 
-func (idx *HnswSearchIndex) LoadIndex(proc *process.Process) error {
+func (idx *HnswSearchIndex) loadChunk(proc *process.Process, stream_chan chan executor.Result, error_chan chan error, fp *os.File) (stream_closed bool, err error) {
+	var res executor.Result
+	var ok bool
+
+	select {
+	case res, ok = <-stream_chan:
+		if !ok {
+			return true, nil
+		}
+	case err = <-error_chan:
+		return false, err
+	case <-proc.Ctx.Done():
+		return false, moerr.NewInternalError(proc.Ctx, "context cancelled")
+	}
+
+	bat := res.Batches[0]
+	defer res.Close()
+
+	for i := 0; i < bat.RowCount(); i++ {
+		data := bat.Vecs[0].GetRawBytesAt(i)
+		_, err = fp.Write(data)
+		if err != nil {
+			return false, err
+		}
+	}
+	return false, nil
+}
+
+func (idx *HnswSearchIndex) LoadIndex(proc *process.Process, idxcfg usearch.IndexConfig, tblcfg hnsw.IndexTableConfig) error {
+
+	stream_chan := make(chan executor.Result, 2)
+	error_chan := make(chan error)
+
+	sql := fmt.Sprintf("SELECT data from `%s`.`%s` WHERE index_id = %d ORDER BY chunk_id ASC", tblcfg.DbName, tblcfg.IndexTable, idx.Id)
+
+	go func() {
+		_, err := runSql_streaming(proc, sql, stream_chan, error_chan)
+		if err != nil {
+			error_chan <- err
+			return
+		}
+	}()
+
+	// create tempfile for writing
+	fp, err := os.CreateTemp("", "hnswindx")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(fp.Name())
+
+	// incremental load from database
+	sql_closed := false
+	for !sql_closed {
+		sql_closed, err = idx.loadChunk(proc, stream_chan, error_chan, fp)
+		if err != nil {
+			return err
+		}
+	}
+
+	// load index to memory
+	fp.Close()
+
+	// check checksum
+	chksum, err := hnsw.CheckSum(fp.Name())
+	if err != nil {
+		return err
+	}
+	if chksum != idx.Checksum {
+		return moerr.NewInternalError(proc.Ctx, "Checksum mismatch with the index file")
+	}
+
+	usearchidx, err := usearch.NewIndex(idxcfg)
+	if err != nil {
+		return err
+	}
+
+	err = usearchidx.Load(fp.Name())
+	if err != nil {
+		return err
+	}
+
+	idx.Index = usearchidx
 
 	return nil
 }
 
-func (idx *HnswSearchIndex) Search(proc *process.Process) (keys []int64, distances []float32, err error) {
-
-	return nil, nil, nil
+func (idx *HnswSearchIndex) Search(query []float32, limit uint) (keys []usearch.Key, distances []float32, err error) {
+	return idx.Index.Search(query, limit)
 }
 
 type HnswSearch struct {
@@ -63,7 +143,7 @@ type HnswSearch struct {
 	Tblcfg   hnsw.IndexTableConfig
 }
 
-func (h *HnswSearch) Search(v []float32) (keys []int64, distances []float32, err error) {
+func (h *HnswSearch) Search(query []float32, limit uint) (keys []usearch.Key, distances []float32, err error) {
 	h.Mutex.RLock()
 	defer h.Mutex.RUnlock()
 	if h.Indexes == nil {
@@ -74,6 +154,14 @@ func (h *HnswSearch) Search(v []float32) (keys []int64, distances []float32, err
 	h.ExpireAt.Store(ts)
 
 	// search
+	for _, idx := range h.Indexes {
+		keys, distances, err := idx.Search(query, limit)
+		if err != nil {
+			return nil, nil, err
+		}
+		os.Stderr.WriteString(fmt.Sprintf("Keys %v\n", keys))
+		os.Stderr.WriteString(fmt.Sprintf("Distances %v\n", distances))
+	}
 	return nil, nil, nil
 }
 
@@ -132,7 +220,7 @@ func (s *HnswSearch) LoadMetadata(proc *process.Process) ([]*HnswSearchIndex, er
 func (s *HnswSearch) LoadIndex(proc *process.Process, indexes []*HnswSearchIndex) ([]*HnswSearchIndex, error) {
 
 	for _, idx := range indexes {
-		err := idx.LoadIndex(proc)
+		err := idx.LoadIndex(proc, s.Idxcfg, s.Tblcfg)
 		if err != nil {
 			return nil, err
 		}
