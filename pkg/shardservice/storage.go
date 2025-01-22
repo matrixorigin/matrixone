@@ -20,8 +20,6 @@ import (
 	"fmt"
 	"strings"
 
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -29,12 +27,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/partitionservice"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/shard"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"go.uber.org/zap"
 )
 
 var (
@@ -66,6 +66,7 @@ type storage struct {
 	waiter   client.TimestampWaiter
 	handles  map[int]ReadFunc
 	engine   engine.Engine
+	ps       partitionservice.PartitionService
 }
 
 func NewShardStorage(
@@ -83,6 +84,7 @@ func NewShardStorage(
 		handles:  handles,
 		engine:   engine,
 		logger:   runtime.ServiceRuntime(sid).Logger().Named("shardservice"),
+		ps:       partitionservice.GetService(sid),
 	}
 }
 
@@ -250,21 +252,26 @@ func (s *storage) Create(
 			// If the current table is a non partition
 			// table, we should not create sharding metadata
 			// for the current table.
-			partitions, err := readPartitionIDs(
+			partition, ok, err := s.ps.GetStorage().GetMetadata(
+				ctx,
 				table,
-				txn,
+				txnOp,
 			)
-			if err != nil ||
-				len(partitions) == 0 {
+			if err != nil || !ok {
 				return err
+			}
+
+			partitionIDs := make([]uint64, 0, len(partition.Partitions))
+			for _, p := range partition.Partitions {
+				partitionIDs = append(partitionIDs, p.PartitionID)
 			}
 
 			created = true
 			metadata := pb.ShardsMetadata{
 				Policy:          pb.Policy_Partition,
-				ShardsCount:     uint32(len(partitions)),
+				ShardsCount:     uint32(len(partition.Partitions)),
 				AccountID:       uint64(accountID),
-				ShardIDs:        partitions,
+				ShardIDs:        partitionIDs,
 				Version:         1,
 				MaxReplicaCount: 1,
 			}
@@ -463,49 +470,6 @@ func getTableIDByShardID(
 	return tableID, nil
 }
 
-func readPartitionIDs(
-	table uint64,
-	txn executor.TxnExecutor,
-) ([]uint64, error) {
-	res, err := txn.Exec(
-		getPartitionsSQL(table),
-		executor.StatementOption{},
-	)
-	if err != nil {
-		return nil, err
-	}
-	var names []string
-	res.ReadRows(
-		func(rows int, cols []*vector.Vector) bool {
-			names = append(names, executor.GetStringRows(cols[0])...)
-			return true
-		},
-	)
-	res.Close()
-
-	if len(names) == 0 {
-		return nil, err
-	}
-
-	res, err = txn.Exec(
-		getTableIDsSQL(names),
-		executor.StatementOption{},
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	var ids []uint64
-	res.ReadRows(
-		func(rows int, cols []*vector.Vector) bool {
-			ids = append(ids, executor.GetFixedRows[uint64](cols[0])...)
-			return true
-		},
-	)
-	res.Close()
-	return ids, nil
-}
-
 func execSQL(
 	sql []string,
 	txn executor.TxnExecutor,
@@ -588,31 +552,6 @@ func getDeleteShardsSQL(
 		catalog.MO_CATALOG,
 		catalog.MOShards,
 		table,
-	)
-}
-
-func getPartitionsSQL(
-	table uint64,
-) string {
-	return fmt.Sprintf("select partition_table_name from %s.%s where table_id = %d",
-		catalog.MO_CATALOG,
-		catalog.MO_TABLE_PARTITIONS,
-		table,
-	)
-}
-
-func getTableIDsSQL(
-	names []string,
-) string {
-	values := make([]string, 0, len(names))
-	for _, name := range names {
-		values = append(values, fmt.Sprintf("'%s'", name))
-	}
-
-	return fmt.Sprintf("select rel_id from %s.%s where relname in (%s)",
-		catalog.MO_CATALOG,
-		catalog.MO_TABLES,
-		strings.Join(values, ","),
 	)
 }
 

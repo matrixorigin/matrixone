@@ -34,8 +34,8 @@ import (
 )
 
 func TestPartitionBasedShardCanBeCreated(t *testing.T) {
-	t.SkipNow()
-	embed.RunBaseClusterTests(
+	runShardClusterTest(
+		t,
 		func(c embed.Cluster) {
 			cn1, err := c.GetCNService(0)
 			require.NoError(t, err)
@@ -51,7 +51,6 @@ func TestPartitionBasedShardCanBeCreated(t *testing.T) {
 				db,
 				t.Name(),
 				cn1,
-				store,
 			)
 
 			checkPartitionBasedShardMetadata(
@@ -65,13 +64,13 @@ func TestPartitionBasedShardCanBeCreated(t *testing.T) {
 }
 
 func TestPartitionBasedShardCanBeDeleted(t *testing.T) {
-	t.SkipNow()
-	embed.RunBaseClusterTests(
+	runShardClusterTest(
+		t,
 		func(c embed.Cluster) {
 			accountID := uint32(0)
 			ctx, cancel := context.WithTimeout(
 				defines.AttachAccountId(context.Background(), accountID),
-				time.Second*10,
+				time.Second*60,
 			)
 			defer cancel()
 
@@ -88,7 +87,6 @@ func TestPartitionBasedShardCanBeDeleted(t *testing.T) {
 				db,
 				t.Name(),
 				cn1,
-				store,
 			)
 
 			exec := testutils.GetSQLExecutor(cn1)
@@ -186,12 +184,11 @@ func mustCreatePartitionTable(
 	db string,
 	table string,
 	cn embed.ServiceOperator,
-	store shardservice.ShardStorage,
 ) uint64 {
 	accountID := uint32(0)
 	ctx, cancel := context.WithTimeout(
 		defines.AttachAccountId(context.Background(), accountID),
-		time.Second*10,
+		time.Second*60,
 	)
 	defer cancel()
 
@@ -202,8 +199,6 @@ func mustCreatePartitionTable(
 	err := exec.ExecTxn(
 		ctx,
 		func(txn executor.TxnExecutor) error {
-			txnOp := txn.Txn()
-
 			res, err := txn.Exec(sql, executor.StatementOption{})
 			if err != nil {
 				return err
@@ -211,15 +206,6 @@ func mustCreatePartitionTable(
 			res.Close()
 
 			tableID = mustGetTableID(t, db, table, txn)
-			ok, err := store.Create(
-				ctx,
-				tableID,
-				txnOp,
-			)
-			if err != nil {
-				return err
-			}
-			require.True(t, ok)
 			return nil
 		},
 		executor.Options{}.
