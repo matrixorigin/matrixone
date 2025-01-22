@@ -54,7 +54,7 @@ func (s *service) getMetadataByHashType(
 
 	ctx := tree.NewFmtCtx(
 		dialect.MYSQL,
-		tree.WithQuoteString(true),
+		tree.WithEscapeSingleQuoteString(),
 	)
 	method.Expr.Format(ctx)
 
