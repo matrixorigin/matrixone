@@ -15,6 +15,7 @@
 package cache
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -143,7 +144,7 @@ type HnswSearch struct {
 	Tblcfg   hnsw.IndexTableConfig
 }
 
-func (h *HnswSearch) Search(query []float32, limit uint) (keys []usearch.Key, distances []float32, err error) {
+func (h *HnswSearch) Search(query []float32, limit uint) (keys []int64, distances []float32, err error) {
 	h.Mutex.RLock()
 	defer h.Mutex.RUnlock()
 	if h.Indexes == nil {
@@ -154,15 +155,48 @@ func (h *HnswSearch) Search(query []float32, limit uint) (keys []usearch.Key, di
 	h.ExpireAt.Store(ts)
 
 	// search
+	size := len(h.Indexes) * int(limit)
+	heap := hnsw.NewSearchResultSafeHeap(size)
+	var wg sync.WaitGroup
+
+	var errs error
+
 	for _, idx := range h.Indexes {
-		keys, distances, err := idx.Search(query, limit)
-		if err != nil {
-			return nil, nil, err
-		}
-		os.Stderr.WriteString(fmt.Sprintf("Keys %v\n", keys))
-		os.Stderr.WriteString(fmt.Sprintf("Distances %v\n", distances))
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+			keys, distances, err := idx.Search(query, limit)
+			if err != nil {
+				errs = errors.Join(errs, err)
+				return
+			}
+			os.Stderr.WriteString(fmt.Sprintf("Keys %v\n", keys))
+			os.Stderr.WriteString(fmt.Sprintf("Distances %v\n", distances))
+
+			for i := range keys {
+				heap.Push(int64(keys[i]), distances[i])
+			}
+		}()
 	}
-	return nil, nil, nil
+
+	wg.Wait()
+
+	if errs != nil {
+		return nil, nil, errs
+	}
+
+	reskeys := make([]int64, 0, limit)
+	resdistances := make([]float32, 0, limit)
+
+	n := heap.Len()
+	for i := 0; i < int(limit) && i < n; i++ {
+		key, distance := heap.Pop()
+		reskeys = append(reskeys, key)
+		resdistances = append(resdistances, distance)
+	}
+
+	return reskeys, resdistances, nil
 }
 
 func (h *HnswSearch) Destroy() {
