@@ -23,7 +23,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/hnsw"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	usearch "github.com/unum-cloud/usearch/golang"
@@ -35,10 +34,10 @@ var (
 )
 
 type VectorIndexSearchIf interface {
-	GetParent() VectorIndexSearch
 	Search(query []float32, limit uint) (keys []int64, distances []float32, err error)
 	Destroy()
 	Expired() bool
+	LoadFromDatabase(*process.Process) error
 }
 
 type VectorIndexSearch struct {
@@ -154,23 +153,18 @@ func (c *VectorIndexCache) Destroy() {
 
 func (c *VectorIndexCache) GetIndex(proc *process.Process, key string, def VectorIndexSearchIf) (VectorIndexSearchIf, error) {
 	value, loaded := c.IndexMap.LoadOrStore(key, def)
+	search := value.(VectorIndexSearchIf)
 	if !loaded {
 		// load model from database and if error during loading, remove the entry from gIndexMap
-		switch search := value.(type) {
-		case *HnswSearch:
-			err := search.LoadFromDatabase(proc)
-			if err != nil {
-				c.IndexMap.Delete(key)
-				return nil, err
-			}
-			return value.(VectorIndexSearchIf), nil
-		default:
-			return nil, moerr.NewInternalError(proc.Ctx, "unsupported VectorIndexSearch type")
+		err := search.LoadFromDatabase(proc)
+		if err != nil {
+			c.IndexMap.Delete(key)
+			return nil, err
 		}
-
+		return search, nil
 	}
 
-	return value.(VectorIndexSearchIf), nil
+	return search, nil
 }
 
 func (c *VectorIndexCache) Remove(key string) {

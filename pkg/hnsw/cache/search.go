@@ -133,10 +133,6 @@ type HnswSearch struct {
 	Indexes []*HnswSearchIndex
 }
 
-func (h *HnswSearch) GetParent() VectorIndexSearch {
-	return h.VectorIndexSearch
-}
-
 func (h *HnswSearch) Search(query []float32, limit uint) (keys []int64, distances []float32, err error) {
 	h.Mutex.RLock()
 	defer h.Mutex.RUnlock()
