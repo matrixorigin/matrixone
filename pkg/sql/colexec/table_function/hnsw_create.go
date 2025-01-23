@@ -64,17 +64,18 @@ func (u *hnswCreateState) end(tf *TableFunction, proc *process.Process) error {
 		res.Close()
 	}
 
+	vec := []float32{1, 0, 1, 6, 6, 17, 47, 39, 2, 0, 1, 25, 27, 10, 56, 130, 18, 5, 2, 6, 15, 2, 19, 130, 42, 28, 1, 1, 2, 1, 0, 5, 0, 2, 4, 4, 31, 34, 44, 35, 9, 3, 8, 11, 33, 12, 61, 130, 130, 17, 0, 1, 6, 2, 9, 130, 111, 36, 0, 0, 11, 9, 1, 12, 2, 100, 130, 28, 7, 2, 6, 7, 9, 27, 130, 83, 5, 0, 1, 18, 130, 130, 84, 9, 0, 0, 2, 24, 111, 24, 0, 1, 37, 24, 2, 10, 12, 62, 33, 3, 0, 0, 0, 1, 3, 16, 106, 28, 0, 0, 0, 0, 17, 46, 85, 10, 0, 0, 1, 4, 11, 4, 2, 2, 9, 14, 8, 8}
 	veccache.VectorIndexCacheTTL = 30 * time.Second
 	veccache.Cache.TickerInterval = 5 * time.Second
 	veccache.Cache.Once()
-	s, err := veccache.Cache.GetIndex(proc, u.tblcfg.IndexTable, &hnsw.HnswSearch{
-		VectorIndexSearch: veccache.VectorIndexSearch{Idxcfg: u.idxcfg, Tblcfg: u.tblcfg}})
+
+	keys, distance, err := veccache.Cache.Search(proc, u.tblcfg.IndexTable, &hnsw.HnswSearch{
+		VectorIndexSearch: veccache.VectorIndexSearch{Idxcfg: u.idxcfg, Tblcfg: u.tblcfg}}, vec, 3)
 	if err != nil {
 		return err
 	}
 
-	vec := []float32{1, 0, 1, 6, 6, 17, 47, 39, 2, 0, 1, 25, 27, 10, 56, 130, 18, 5, 2, 6, 15, 2, 19, 130, 42, 28, 1, 1, 2, 1, 0, 5, 0, 2, 4, 4, 31, 34, 44, 35, 9, 3, 8, 11, 33, 12, 61, 130, 130, 17, 0, 1, 6, 2, 9, 130, 111, 36, 0, 0, 11, 9, 1, 12, 2, 100, 130, 28, 7, 2, 6, 7, 9, 27, 130, 83, 5, 0, 1, 18, 130, 130, 84, 9, 0, 0, 2, 24, 111, 24, 0, 1, 37, 24, 2, 10, 12, 62, 33, 3, 0, 0, 0, 1, 3, 16, 106, 28, 0, 0, 0, 0, 17, 46, 85, 10, 0, 0, 1, 4, 11, 4, 2, 2, 9, 14, 8, 8}
-	s.Search(vec, 3)
+	os.Stderr.WriteString(fmt.Sprintf("keys %v, distances %v\n", keys, distance))
 
 	return nil
 }

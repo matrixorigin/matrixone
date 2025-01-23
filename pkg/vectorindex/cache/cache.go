@@ -172,7 +172,8 @@ func (c *VectorIndexCache) Destroy() {
 }
 
 // Get index from cache and return VectorIndexSearchIf interface
-func (c *VectorIndexCache) GetIndex(proc *process.Process, key string, def VectorIndexSearchIf) (VectorIndexSearchIf, error) {
+func (c *VectorIndexCache) Search(proc *process.Process, key string, def VectorIndexSearchIf,
+	query []float32, limit uint) (keys []int64, distances []float32, err error) {
 	value, loaded := c.IndexMap.LoadOrStore(key, def)
 	search := value.(VectorIndexSearchIf)
 	if !loaded {
@@ -180,12 +181,10 @@ func (c *VectorIndexCache) GetIndex(proc *process.Process, key string, def Vecto
 		err := search.LoadFromDatabase(proc)
 		if err != nil {
 			c.IndexMap.Delete(key)
-			return nil, err
+			return nil, nil, err
 		}
-		return search, nil
 	}
-
-	return search, nil
+	return search.Search(query, limit)
 }
 
 // remove key from cache
