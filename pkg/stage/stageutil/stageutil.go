@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/stage"
 
@@ -57,6 +58,14 @@ func runSql(proc *process.Process, sql string) (executor.Result, error) {
 	if !ok {
 		panic("missing lock service")
 	}
+
+	// get context for SQLExecutor
+	topContext := proc.GetTopContext()
+	accountId, err := defines.GetAccountId(topContext)
+	if err != nil {
+		return executor.Result{}, err
+	}
+
 	exec := v.(executor.SQLExecutor)
 	opts := executor.Options{}.
 		// All runSql and runSqlWithResult is a part of input sql, can not incr statement.
@@ -65,8 +74,8 @@ func runSql(proc *process.Process, sql string) (executor.Result, error) {
 		WithTxn(proc.GetTxnOperator()).
 		WithDatabase(proc.GetSessionInfo().Database).
 		WithTimeZone(proc.GetSessionInfo().TimeZone).
-		WithAccountID(proc.GetSessionInfo().AccountId)
-	return exec.Exec(proc.GetTopContext(), sql, opts)
+		WithAccountID(accountId)
+	return exec.Exec(topContext, sql, opts)
 }
 
 func StageLoadCatalog(proc *process.Process, stagename string) (s stage.StageDef, err error) {

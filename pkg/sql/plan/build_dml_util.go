@@ -3111,6 +3111,13 @@ func runSql(ctx CompilerContext, sql string) (executor.Result, error) {
 		panic("missing lock service")
 	}
 	proc := ctx.GetProcess()
+
+	topContext := proc.GetTopContext()
+	accountId, err := defines.GetAccountId(topContext)
+	if err != nil {
+		return executor.Result{}, err
+	}
+
 	exec := v.(executor.SQLExecutor)
 	opts := executor.Options{}.
 		// All runSql and runSqlWithResult is a part of input sql, can not incr statement.
@@ -3119,8 +3126,8 @@ func runSql(ctx CompilerContext, sql string) (executor.Result, error) {
 		WithTxn(proc.GetTxnOperator()).
 		WithDatabase(proc.GetSessionInfo().Database).
 		WithTimeZone(proc.GetSessionInfo().TimeZone).
-		WithAccountID(proc.GetSessionInfo().AccountId)
-	return exec.Exec(proc.GetTopContext(), sql, opts)
+		WithAccountID(accountId)
+	return exec.Exec(topContext, sql, opts)
 }
 
 /*
