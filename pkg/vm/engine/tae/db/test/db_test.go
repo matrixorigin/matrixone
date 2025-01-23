@@ -11227,6 +11227,7 @@ func TestCheckpointV2(t *testing.T) {
 	err = tae.ForceFlush(ctx, tae.TxnMgr.Now())
 	assert.NoError(t, err)
 	var tombstoneCnt, dataCnt int
+	var tombstoneEntryCnt, dataEntryCnt int
 
 	addobjFn := func(tbl *catalog.TableEntry) {
 		n := rand.Intn(6)
@@ -11246,14 +11247,29 @@ func TestCheckpointV2(t *testing.T) {
 			delete = tae.TxnMgr.Now()
 			obj := catalog.MockCreatedObjectEntry2List(tbl, tae.Catalog, isTombstone, create)
 			catalog.MockDroppedObjectEntry2List(obj, delete)
+			if isTombstone {
+				tombstoneEntryCnt += 2
+			} else {
+				dataEntryCnt += 2
+			}
 		case 2:
 			create = types.BuildTS(100, 0)
 			delete = tae.TxnMgr.Now()
 			obj := catalog.MockCreatedObjectEntry2List(tbl, tae.Catalog, isTombstone, create)
 			catalog.MockDroppedObjectEntry2List(obj, delete)
+			if isTombstone {
+				tombstoneEntryCnt += 2
+			} else {
+				dataEntryCnt += 2
+			}
 		case 0:
 			create = tae.TxnMgr.Now()
 			catalog.MockCreatedObjectEntry2List(tbl, tae.Catalog, isTombstone, create)
+			if isTombstone {
+				tombstoneEntryCnt++
+			} else {
+				dataEntryCnt++
+			}
 		}
 	}
 
@@ -11311,6 +11327,30 @@ func TestCheckpointV2(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, dataCnt, dataCnt2)
 	assert.Equal(t, tombstoneCnt, tombstoneCnt2)
+
+	var tombstoneCnt3, dataCnt3 int
+	err = logtail.PrefetchCheckpointWithTableID(ctx, "", rel.ID(), loc, common.DebugAllocator, tae.Opts.Fs)
+	assert.NoError(t, err)
+	err = logtail.ConsumeCheckpointWithTableID(
+		ctx,
+		rel.ID(),
+		loc,
+		func(
+			ctx context.Context, obj objectio.ObjectEntry, isTombstone bool,
+		) (err error) {
+			if isTombstone {
+				tombstoneCnt3++
+			} else {
+				dataCnt3++
+			}
+			return
+		},
+		common.DebugAllocator,
+		tae.Opts.Fs,
+	)
+	assert.NoError(t, err)
+	assert.Equal(t, tombstoneEntryCnt, tombstoneCnt3)
+	assert.Equal(t, dataEntryCnt, dataCnt3)
 }
 
 type objlistReplayer struct{}
