@@ -21,8 +21,8 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/hnsw"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 )
 
 // Index Algorithm names
@@ -139,7 +139,7 @@ func IndexParamsToStringList(indexParams string) (string, error) {
 
 	if val, ok := result[HnswQuantization]; ok {
 		val = ToLower(val)
-		_, ok := hnsw.QuantizationValid(val)
+		_, ok := vectorindex.QuantizationValid(val)
 		if !ok {
 			return "", moerr.NewInternalErrorNoCtxf("invalid quantization '%s'", val)
 		}
@@ -263,7 +263,7 @@ func indexParamsToMap(def interface{}) (map[string]string, error) {
 				return nil, moerr.NewInternalErrorNoCtx("invalid ef_construction. hnsw.ef_construction must be > 0")
 			}
 			if len(idx.IndexOption.HnswQuantization) > 0 {
-				_, ok := hnsw.QuantizationValid(idx.IndexOption.HnswQuantization)
+				_, ok := vectorindex.QuantizationValid(idx.IndexOption.HnswQuantization)
 				if !ok {
 					return nil, moerr.NewInternalErrorNoCtx("invalid hnsw quantization.")
 				}

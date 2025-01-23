@@ -12,10 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package hnsw
+package vectorindex
 
 import (
 	"container/heap"
+	"crypto/md5"
+	"encoding/hex"
+	"io"
+	"os"
 	"strings"
 	"sync"
 
@@ -34,6 +38,23 @@ func QuantizationValid(a string) (usearch.Quantization, bool) {
 		"F32": usearch.F32, "I8": usearch.I8}
 	r, ok := quantization[q]
 	return r, ok
+}
+
+// get the checksum of the file
+func CheckSum(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+
+	h := md5.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	chksum := hex.EncodeToString(h.Sum(nil))
+
+	return chksum, nil
 }
 
 // Priority Queue/Heap structure for getting N-Best results from multiple mini-indexes

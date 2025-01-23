@@ -23,7 +23,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/hnsw"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -60,8 +60,8 @@ type VectorIndexSearch struct {
 	Mutex      sync.RWMutex
 	ExpireAt   atomic.Int64
 	LastUpdate atomic.Int64
-	Idxcfg     hnsw.IndexConfig
-	Tblcfg     hnsw.IndexTableConfig
+	Idxcfg     vectorindex.IndexConfig
+	Tblcfg     vectorindex.IndexTableConfig
 }
 
 // implementation of VectorIndexCache

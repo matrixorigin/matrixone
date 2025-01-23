@@ -24,8 +24,8 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/hnsw"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -488,7 +488,7 @@ func genInsertIndexTableSqlForFullTextIndex(originalTableDef *plan.TableDef, ind
 }
 
 func genBuildHnswIndex(indexDefs map[string]*plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef) ([]string, error) {
-	var cfg hnsw.IndexTableConfig
+	var cfg vectorindex.IndexTableConfig
 	src_alias := "src"
 	pkColName := src_alias + "." + originalTableDef.Pkey.PkeyColName
 

@@ -19,8 +19,9 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/hnsw"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw"
 	"github.com/stretchr/testify/require"
 	usearch "github.com/unum-cloud/usearch/golang"
 )
@@ -38,9 +39,9 @@ func TestCache(t *testing.T) {
 
 	idxcfg := usearch.DefaultConfig(8)
 	idxcfg.Metric = usearch.L2sq
-	tblcfg := hnsw.IndexTableConfig{DbName: "db", SrcTable: "src", MetadataTable: "__secondary_meta", IndexTable: "__secondary_index"}
+	tblcfg := vectorindex.IndexTableConfig{DbName: "db", SrcTable: "src", MetadataTable: "__secondary_meta", IndexTable: "__secondary_index"}
 	os.Stderr.WriteString("cache getindex\n")
-	idx, err := Cache.GetIndex(proc, tblcfg.IndexTable, &HnswSearch{VectorIndexSearch: VectorIndexSearch{Idxcfg: idxcfg, Tblcfg: tblcfg}})
+	idx, err := Cache.GetIndex(proc, tblcfg.IndexTable, &hnsw.HnswSearch{VectorIndexSearch: VectorIndexSearch{Idxcfg: idxcfg, Tblcfg: tblcfg}})
 	require.Nil(t, err)
 
 	os.Stderr.WriteString("cache search\n")

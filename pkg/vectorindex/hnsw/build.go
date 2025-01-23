@@ -15,15 +15,13 @@
 package hnsw
 
 import (
-	"crypto/md5"
-	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
 	"math"
 	"os"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	usearch "github.com/unum-cloud/usearch/golang"
 )
 
@@ -37,13 +35,13 @@ type HnswBuildIndex struct {
 }
 
 type HnswBuild struct {
-	cfg     IndexConfig
-	tblcfg  IndexTableConfig
+	cfg     vectorindex.IndexConfig
+	tblcfg  vectorindex.IndexTableConfig
 	indexes []*HnswBuildIndex
 }
 
 // New HnswBuildIndex struct
-func NewHnswBuildIndex(id int64, cfg IndexConfig) (*HnswBuildIndex, error) {
+func NewHnswBuildIndex(id int64, cfg vectorindex.IndexConfig) (*HnswBuildIndex, error) {
 	var err error
 	idx := &HnswBuildIndex{}
 
@@ -54,7 +52,7 @@ func NewHnswBuildIndex(id int64, cfg IndexConfig) (*HnswBuildIndex, error) {
 		return nil, err
 	}
 
-	err = idx.Index.Reserve(MaxIndexCapacity)
+	err = idx.Index.Reserve(vectorindex.MaxIndexCapacity)
 	if err != nil {
 		return nil, err
 	}
@@ -106,7 +104,7 @@ func (idx *HnswBuildIndex) SaveToFile() error {
 
 // Generate the SQL to update the secondary index tables.
 // 1. store the index file into the index table
-func (idx *HnswBuildIndex) ToSql(cfg IndexTableConfig) (string, error) {
+func (idx *HnswBuildIndex) ToSql(cfg vectorindex.IndexTableConfig) (string, error) {
 
 	err := idx.SaveToFile()
 	if err != nil {
@@ -124,10 +122,10 @@ func (idx *HnswBuildIndex) ToSql(cfg IndexTableConfig) (string, error) {
 	chunkid := int64(0)
 
 	sql := fmt.Sprintf("INSERT INTO `%s`.`%s` VALUES ", cfg.DbName, cfg.IndexTable)
-	values := make([]string, 0, int64(math.Ceil(float64(filesz)/float64(MaxChunkSize))))
+	values := make([]string, 0, int64(math.Ceil(float64(filesz)/float64(vectorindex.MaxChunkSize))))
 	for offset = 0; offset < filesz; {
-		if offset+MaxChunkSize < filesz {
-			chunksz = MaxChunkSize
+		if offset+vectorindex.MaxChunkSize < filesz {
+			chunksz = vectorindex.MaxChunkSize
 
 		} else {
 			chunksz = filesz - offset
@@ -144,23 +142,6 @@ func (idx *HnswBuildIndex) ToSql(cfg IndexTableConfig) (string, error) {
 
 	sql += strings.Join(values, ", ")
 	return sql, nil
-}
-
-// get the checksum of the file
-func CheckSum(path string) (string, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return "", err
-	}
-	defer f.Close()
-
-	h := md5.New()
-	if _, err := io.Copy(h, f); err != nil {
-		return "", err
-	}
-	chksum := hex.EncodeToString(h.Sum(nil))
-
-	return chksum, nil
 }
 
 // is the index empty
@@ -182,7 +163,7 @@ func (idx *HnswBuildIndex) Full() (bool, error) {
 		return false, err
 	}
 
-	return (sz == MaxIndexCapacity), nil
+	return (sz == vectorindex.MaxIndexCapacity), nil
 }
 
 // add vector to the index
@@ -192,7 +173,7 @@ func (idx *HnswBuildIndex) Add(key int64, vec []float32) error {
 }
 
 // create HsnwBuild struct
-func NewHnswBuild(cfg IndexConfig, tblcfg IndexTableConfig) (info *HnswBuild, err error) {
+func NewHnswBuild(cfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) (info *HnswBuild, err error) {
 	info = &HnswBuild{cfg, tblcfg, make([]*HnswBuildIndex, 0, 16)}
 	return info, nil
 }
@@ -269,7 +250,7 @@ func (h *HnswBuild) ToInsertSql(ts int64) ([]string, error) {
 		sqls = append(sqls, sql)
 
 		os.Stderr.WriteString(fmt.Sprintf("Sql: %s\n", sql))
-		chksum, err := CheckSum(idx.Path)
+		chksum, err := vectorindex.CheckSum(idx.Path)
 		if err != nil {
 			return nil, err
 		}

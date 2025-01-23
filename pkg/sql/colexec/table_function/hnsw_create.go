@@ -26,10 +26,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/hnsw"
-	hnswcache "github.com/matrixorigin/matrixone/pkg/hnsw/cache"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	usearch "github.com/unum-cloud/usearch/golang"
@@ -38,9 +39,9 @@ import (
 type hnswCreateState struct {
 	inited bool
 	build  *hnsw.HnswBuild
-	param  hnsw.HnswParam
-	tblcfg hnsw.IndexTableConfig
-	idxcfg hnsw.IndexConfig
+	param  vectorindex.HnswParam
+	tblcfg vectorindex.IndexTableConfig
+	idxcfg vectorindex.IndexConfig
 	offset int
 	// holding one call batch, tokenizedState owns it.
 	batch *batch.Batch
@@ -63,11 +64,11 @@ func (u *hnswCreateState) end(tf *TableFunction, proc *process.Process) error {
 		res.Close()
 	}
 
-	hnswcache.VectorIndexCacheTTL = 30 * time.Second
-	hnswcache.Cache.TickerInterval = 5 * time.Second
-	hnswcache.Cache.Once()
-	s, err := hnswcache.Cache.GetIndex(proc, u.tblcfg.IndexTable, &hnswcache.HnswSearch{
-		VectorIndexSearch: hnswcache.VectorIndexSearch{Idxcfg: u.idxcfg, Tblcfg: u.tblcfg}})
+	veccache.VectorIndexCacheTTL = 30 * time.Second
+	veccache.Cache.TickerInterval = 5 * time.Second
+	veccache.Cache.Once()
+	s, err := veccache.Cache.GetIndex(proc, u.tblcfg.IndexTable, &hnsw.HnswSearch{
+		VectorIndexSearch: veccache.VectorIndexSearch{Idxcfg: u.idxcfg, Tblcfg: u.tblcfg}})
 	if err != nil {
 		return err
 	}
@@ -131,7 +132,7 @@ func (u *hnswCreateState) start(tf *TableFunction, proc *process.Process, nthRow
 
 		if len(u.param.Quantization) > 0 {
 			var ok bool
-			u.idxcfg.Usearch.Quantization, ok = hnsw.QuantizationValid(u.param.Quantization)
+			u.idxcfg.Usearch.Quantization, ok = vectorindex.QuantizationValid(u.param.Quantization)
 			if !ok {
 				return moerr.NewInternalError(proc.Ctx, "Invalid quantization value")
 			}

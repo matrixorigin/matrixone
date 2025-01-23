@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package cache
+package hnsw
 
 import (
 	"errors"
@@ -24,8 +24,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/hnsw"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	usearch "github.com/unum-cloud/usearch/golang"
 )
@@ -43,7 +44,7 @@ type HnswSearchIndex struct {
 
 // This is the HNSW search implementation that implement VectorIndexSearchIf interface
 type HnswSearch struct {
-	VectorIndexSearch
+	cache.VectorIndexSearch
 	Indexes []*HnswSearchIndex
 }
 
@@ -77,7 +78,7 @@ func (idx *HnswSearchIndex) loadChunk(proc *process.Process, stream_chan chan ex
 }
 
 // load index from database
-func (idx *HnswSearchIndex) LoadIndex(proc *process.Process, idxcfg hnsw.IndexConfig, tblcfg hnsw.IndexTableConfig) error {
+func (idx *HnswSearchIndex) LoadIndex(proc *process.Process, idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) error {
 
 	stream_chan := make(chan executor.Result, 2)
 	error_chan := make(chan error)
@@ -112,7 +113,7 @@ func (idx *HnswSearchIndex) LoadIndex(proc *process.Process, idxcfg hnsw.IndexCo
 	fp.Close()
 
 	// check checksum
-	chksum, err := hnsw.CheckSum(fp.Name())
+	chksum, err := vectorindex.CheckSum(fp.Name())
 	if err != nil {
 		return err
 	}
@@ -148,12 +149,12 @@ func (h *HnswSearch) Search(query []float32, limit uint) (keys []int64, distance
 		return []int64{}, []float32{}, nil
 	}
 
-	ts := time.Now().Add(VectorIndexCacheTTL).UnixMicro()
+	ts := time.Now().Add(cache.VectorIndexCacheTTL).UnixMicro()
 	h.ExpireAt.Store(ts)
 
 	// search
 	size := len(h.Indexes) * int(limit)
-	heap := hnsw.NewSearchResultSafeHeap(size)
+	heap := vectorindex.NewSearchResultSafeHeap(size)
 	var wg sync.WaitGroup
 
 	var errs error
@@ -294,7 +295,7 @@ func (s *HnswSearch) LoadFromDatabase(proc *process.Process) error {
 
 	now := time.Now()
 	s.LastUpdate.Store(now.UnixMicro())
-	ts := now.Add(time.Duration(VectorIndexCacheTTL)).UnixMicro()
+	ts := now.Add(time.Duration(cache.VectorIndexCacheTTL)).UnixMicro()
 	s.ExpireAt.Store(ts)
 
 	return nil
