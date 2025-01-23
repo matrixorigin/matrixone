@@ -36,8 +36,9 @@ import (
 
    1. When the index is loaded into memory, index can be shared with RWMutex.Rlock() (Read-Only)
    2. With RWMutex.Lock (Write),  index can be loaded from database without race.
-   3. HouseKeeping. Index will have time-to-live interval (see VectorIndexCacheTTL).  When the index is expired (Now < ExpireDate), index will be
-   deleted from the cache. Ticker go routine will manage the house keeping.
+   3. HouseKeeping. Index will have time-to-live interval (see VectorIndexCacheTTL).
+      3.1 When the index is expired (ExpireAt > 0 && ExpiredAt < Now), index will be deleted from the cache. Ticker go routine will manage the house keeping.
+      3.2 ExpiredAt == 0 means index is loading from database so cannot be deleted from housekeeping
 */
 
 var (
