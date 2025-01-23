@@ -175,8 +175,8 @@ func (h *HnswSearch) Search(query []float32, limit uint) (keys []int64, distance
 						return
 					}
 
-					for i := range keys {
-						heap.Push(int64(keys[i]), distances[i])
+					for k := range keys {
+						heap.Push(int64(keys[k]), distances[k])
 					}
 				}
 			}
