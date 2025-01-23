@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -94,6 +95,11 @@ func (l *LockMeta) doLock(e engine.Engine, proc *process.Process) error {
 		return nil
 	}
 
+	accountId, err := defines.GetAccountId(proc.Ctx)
+	if err != nil {
+		return err
+	}
+
 	tables := make([]string, 0, lockLen)
 	for table := range l.metaTables {
 		tables = append(tables, table)
@@ -119,7 +125,6 @@ func (l *LockMeta) doLock(e engine.Engine, proc *process.Process) error {
 		}
 	}
 
-	accountId := proc.GetSessionInfo().AccountId
 	lockDbs := make(map[string]struct{})
 	bat := batch.NewWithSize(3)
 	for _, table := range tables {
@@ -141,7 +146,7 @@ func (l *LockMeta) doLock(e engine.Engine, proc *process.Process) error {
 
 	// call serial function to lock mo_tables
 	bat.Vecs = l.lockMetaVecs
-	err := l.lockMetaRows(e, proc, l.lockTableExe, bat, accountId, l.table_table_id)
+	err = l.lockMetaRows(e, proc, l.lockTableExe, bat, accountId, l.table_table_id)
 	if err != nil {
 		return err
 	}
