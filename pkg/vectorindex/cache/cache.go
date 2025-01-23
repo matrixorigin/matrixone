@@ -178,6 +178,7 @@ func (c *VectorIndexCache) Search(proc *process.Process, key string, def VectorI
 	search := value.(VectorIndexSearchIf)
 	if !loaded {
 		// load model from database and if error during loading, remove the entry from gIndexMap
+		os.Stderr.WriteString("Search not loaded...Load From Database\n")
 		err := search.LoadFromDatabase(proc)
 		if err != nil {
 			c.IndexMap.Delete(key)
