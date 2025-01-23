@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
@@ -50,6 +51,54 @@ func (m *MockSearch) Expired() bool {
 func (m *MockSearch) LoadFromDatabase(*process.Process) error {
 	ts := time.Now().Add(VectorIndexCacheTTL).UnixMicro()
 	m.ExpireAt.Store(ts)
+	return nil
+}
+
+type MockSearchLoadError struct {
+	VectorIndexSearch
+}
+
+func (m *MockSearchLoadError) Search(query []float32, limit uint) (keys []int64, distances []float32, err error) {
+	return []int64{1}, []float32{2.0}, nil
+}
+
+func (m *MockSearchLoadError) Destroy() {
+
+}
+
+func (m *MockSearchLoadError) Expired() bool {
+	now := time.Now().UnixMicro()
+	expireat := m.ExpireAt.Load()
+
+	os.Stderr.WriteString(fmt.Sprintf("now %d, expire %d\n", now, expireat))
+	return (expireat > 0 && expireat < now)
+}
+
+func (m *MockSearchLoadError) LoadFromDatabase(*process.Process) error {
+	return moerr.NewInternalErrorNoCtx("Load from database error")
+}
+
+type MockSearchSearchError struct {
+	VectorIndexSearch
+}
+
+func (m *MockSearchSearchError) Search(query []float32, limit uint) (keys []int64, distances []float32, err error) {
+	return nil, nil, moerr.NewInternalErrorNoCtx("Search error")
+}
+
+func (m *MockSearchSearchError) Destroy() {
+
+}
+
+func (m *MockSearchSearchError) Expired() bool {
+	now := time.Now().UnixMicro()
+	expireat := m.ExpireAt.Load()
+
+	os.Stderr.WriteString(fmt.Sprintf("now %d, expire %d\n", now, expireat))
+	return (expireat > 0 && expireat < now)
+}
+
+func (m *MockSearchSearchError) LoadFromDatabase(*process.Process) error {
 	return nil
 }
 
@@ -94,6 +143,67 @@ func TestCache(t *testing.T) {
 	idx3, err := Cache.GetIndex(proc, tblcfg.IndexTable, m3)
 	require.Nil(t, err)
 	require.Equal(t, m3, idx3)
+
+	os.Stderr.WriteString("cache.Destroy\n")
+	Cache.Destroy()
+	os.Stderr.WriteString("cache.Destroy end\n")
+	Cache = nil
+}
+
+func TestCacheLoadError(t *testing.T) {
+	proc := testutil.NewProcessWithMPool("", mpool.MustNewZero())
+
+	VectorIndexCacheTTL = 5 * time.Second
+	Cache = NewVectorIndexCache()
+	Cache.TickerInterval = 5 * time.Second
+
+	Cache.Once()
+	Cache.Once()
+	Cache.Once()
+	Cache.Once()
+	Cache.Once()
+
+	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(8)}
+	idxcfg.Usearch.Metric = usearch.L2sq
+	tblcfg := vectorindex.IndexTableConfig{DbName: "db", SrcTable: "src", MetadataTable: "__secondary_meta", IndexTable: "__secondary_index"}
+	os.Stderr.WriteString("cache getindex\n")
+	m1 := &MockSearchLoadError{VectorIndexSearch: VectorIndexSearch{Idxcfg: idxcfg, Tblcfg: tblcfg}}
+	_, err := Cache.GetIndex(proc, tblcfg.IndexTable, m1)
+	require.NotNil(t, err)
+
+	os.Stderr.WriteString(fmt.Sprintf("error : %v\n", err))
+	os.Stderr.WriteString("cache.Destroy\n")
+	Cache.Destroy()
+	os.Stderr.WriteString("cache.Destroy end\n")
+	Cache = nil
+}
+
+func TestCacheSearchError(t *testing.T) {
+	proc := testutil.NewProcessWithMPool("", mpool.MustNewZero())
+
+	VectorIndexCacheTTL = 5 * time.Second
+	Cache = NewVectorIndexCache()
+	Cache.TickerInterval = 5 * time.Second
+
+	Cache.Once()
+	Cache.Once()
+	Cache.Once()
+	Cache.Once()
+	Cache.Once()
+
+	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(8)}
+	idxcfg.Usearch.Metric = usearch.L2sq
+	tblcfg := vectorindex.IndexTableConfig{DbName: "db", SrcTable: "src", MetadataTable: "__secondary_meta", IndexTable: "__secondary_index"}
+	os.Stderr.WriteString("cache getindex\n")
+	m1 := &MockSearchSearchError{VectorIndexSearch: VectorIndexSearch{Idxcfg: idxcfg, Tblcfg: tblcfg}}
+	idx, err := Cache.GetIndex(proc, tblcfg.IndexTable, m1)
+	require.Nil(t, err)
+	require.Equal(t, m1, idx)
+
+	fp32a := []float32{1, 2, 3, 4, 5, 6, 7, 8}
+	_, _, err = idx.Search(fp32a, 4)
+	require.NotNil(t, err)
+	os.Stderr.WriteString(fmt.Sprintf("error : %v\n", err))
 
 	os.Stderr.WriteString("cache.Destroy\n")
 	Cache.Destroy()
