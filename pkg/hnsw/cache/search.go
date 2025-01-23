@@ -144,8 +144,8 @@ func (idx *HnswSearchIndex) Search(query []float32, limit uint) (keys []usearch.
 func (h *HnswSearch) Search(query []float32, limit uint) (keys []int64, distances []float32, err error) {
 	h.Mutex.RLock()
 	defer h.Mutex.RUnlock()
-	if h.Indexes == nil {
-		return nil, nil, moerr.NewInternalErrorNoCtx("HNSW cannot find index from database.")
+	if len(h.Indexes) == 0 {
+		return []int64{}, []float32{}, nil
 	}
 
 	ts := time.Now().Add(VectorIndexCacheTTL).UnixMicro()
@@ -282,10 +282,12 @@ func (s *HnswSearch) LoadFromDatabase(proc *process.Process) error {
 		return err
 	}
 
-	// load index model
-	indexes, err = s.LoadIndex(proc, indexes)
-	if err != nil {
-		return err
+	if len(indexes) > 0 {
+		// load index model
+		indexes, err = s.LoadIndex(proc, indexes)
+		if err != nil {
+			return err
+		}
 	}
 
 	s.Indexes = indexes
