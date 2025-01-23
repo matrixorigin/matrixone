@@ -1733,7 +1733,7 @@ func appendPreInsertNode(builder *QueryBuilder, bindCtx *BindContext,
 			Ref:           objRef,
 			TableDef:      DeepCopyTableDef(tableDef, true),
 			HasAutoCol:    hashAutoCol,
-			IsUpdate:      isUpdate,
+			IsOldUpdate:   isUpdate,
 			CompPkeyExpr:  makeCompPkeyExpr(tableDef, name2ColIndex),
 			ClusterByExpr: makeClusterByExpr(tableDef, name2ColIndex),
 		},
@@ -3111,6 +3111,13 @@ func runSql(ctx CompilerContext, sql string) (executor.Result, error) {
 		panic("missing lock service")
 	}
 	proc := ctx.GetProcess()
+
+	topContext := proc.GetTopContext()
+	accountId, err := defines.GetAccountId(topContext)
+	if err != nil {
+		return executor.Result{}, err
+	}
+
 	exec := v.(executor.SQLExecutor)
 	opts := executor.Options{}.
 		// All runSql and runSqlWithResult is a part of input sql, can not incr statement.
@@ -3119,8 +3126,8 @@ func runSql(ctx CompilerContext, sql string) (executor.Result, error) {
 		WithTxn(proc.GetTxnOperator()).
 		WithDatabase(proc.GetSessionInfo().Database).
 		WithTimeZone(proc.GetSessionInfo().TimeZone).
-		WithAccountID(proc.GetSessionInfo().AccountId)
-	return exec.Exec(proc.GetTopContext(), sql, opts)
+		WithAccountID(accountId)
+	return exec.Exec(topContext, sql, opts)
 }
 
 /*
@@ -4333,7 +4340,7 @@ func buildPreInsertFullTextIndex(stmt *tree.Insert, ctx CompilerContext, builder
 			Ref:           indexObjRef,
 			TableDef:      DeepCopyTableDef(indexTableDef, true),
 			HasAutoCol:    true,
-			IsUpdate:      false,
+			IsOldUpdate:   false,
 			CompPkeyExpr:  nil,
 			ClusterByExpr: nil,
 		},

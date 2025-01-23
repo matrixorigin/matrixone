@@ -15,99 +15,37 @@
 package logservicedriver
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"math"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 	"go.uber.org/zap"
 )
 
-type ReplayCmd struct {
-	// DSN->PSN mapping
-	skipMap map[uint64]uint64
-}
+type ReadState int32
 
-func NewReplayCmd(skipMap map[uint64]uint64) ReplayCmd {
-	return ReplayCmd{
-		skipMap: skipMap,
-	}
-}
-func NewEmptyReplayCmd() ReplayCmd {
-	return ReplayCmd{
-		skipMap: make(map[uint64]uint64),
-	}
-}
-
-func (c *ReplayCmd) WriteTo(w io.Writer) (n int64, err error) {
-	length := uint16(len(c.skipMap))
-	if _, err = w.Write(types.EncodeUint16(&length)); err != nil {
-		return
-	}
-	n += 2
-	for dsn, psn := range c.skipMap {
-		if _, err = w.Write(types.EncodeUint64(&dsn)); err != nil {
-			return
-		}
-		n += 8
-		if _, err = w.Write(types.EncodeUint64(&psn)); err != nil {
-			return
-		}
-		n += 8
-	}
-	return
-}
-
-func (c *ReplayCmd) ReadFrom(r io.Reader) (n int64, err error) {
-	length := uint16(0)
-	if _, err = r.Read(types.EncodeUint16(&length)); err != nil {
-		return
-	}
-	n += 2
-	for i := 0; i < int(length); i++ {
-		dsn := uint64(0)
-		lsn := uint64(0)
-		if _, err = r.Read(types.EncodeUint64(&dsn)); err != nil {
-			return
-		}
-		n += 8
-		if _, err = r.Read(types.EncodeUint64(&lsn)); err != nil {
-			return
-		}
-		n += 8
-		c.skipMap[dsn] = lsn
-	}
-	return
-}
-
-func (c *ReplayCmd) Unmarshal(buf []byte) error {
-	bbuf := bytes.NewBuffer(buf)
-	_, err := c.ReadFrom(bbuf)
-	return err
-}
-
-func (c *ReplayCmd) Marshal() (buf []byte, err error) {
-	var bbuf bytes.Buffer
-	if _, err = c.WriteTo(&bbuf); err != nil {
-		return
-	}
-	buf = bbuf.Bytes()
-	return
-}
+const (
+	ReadState_InLoop = iota
+	ReadState_InLoopDone
+	ReadState_AllDone
+)
 
 type ReplayOption func(*replayer)
+
+func WithReplayerWaitMore(wait func() bool) ReplayOption {
+	return func(r *replayer) {
+		r.waitMoreRecords = wait
+	}
+}
 
 func WithReplayerOnWriteSkip(f func(map[uint64]uint64)) ReplayOption {
 	return func(r *replayer) {
@@ -122,15 +60,28 @@ func WithReplayerOnWriteSkip(f func(map[uint64]uint64)) ReplayOption {
 	}
 }
 
-func WithReplayerOnRead(f func(uint64, *recordEntry)) ReplayOption {
+func WithReplayerOnLogRecord(f func(logservice.LogRecord)) ReplayOption {
 	return func(r *replayer) {
-		if r.onRead != nil {
-			r.onRead = func(psn uint64, record *recordEntry) {
-				f(psn, record)
-				r.onRead(psn, record)
+		if r.onLogRecord != nil {
+			r.onLogRecord = func(record logservice.LogRecord) {
+				f(record)
+				r.onLogRecord(record)
 			}
 		} else {
-			r.onRead = f
+			r.onLogRecord = f
+		}
+	}
+}
+
+func WithReplayerOnUserLogEntry(f func(uint64, LogEntry)) ReplayOption {
+	return func(r *replayer) {
+		if r.onUserLogEntry != nil {
+			r.onUserLogEntry = func(psn uint64, entry LogEntry) {
+				f(psn, entry)
+				r.onUserLogEntry(psn, entry)
+			}
+		} else {
+			r.onUserLogEntry = f
 		}
 	}
 }
@@ -148,12 +99,12 @@ func WithReplayerOnReplayDone(f func(error, DSNStats)) ReplayOption {
 	}
 }
 
-func WithReplayerOnScheduled(f func(uint64, *common.ClosedIntervals, *recordEntry)) ReplayOption {
+func WithReplayerOnScheduled(f func(uint64, LogEntry)) ReplayOption {
 	return func(r *replayer) {
 		if r.onScheduled != nil {
-			r.onScheduled = func(psn uint64, dsnRange *common.ClosedIntervals, record *recordEntry) {
-				f(psn, dsnRange, record)
-				r.onScheduled(psn, dsnRange, record)
+			r.onScheduled = func(psn uint64, entry LogEntry) {
+				f(psn, entry)
+				r.onScheduled(psn, entry)
 			}
 		} else {
 			r.onScheduled = f
@@ -174,9 +125,9 @@ func WithReplayerOnApplied(f func(*entry.Entry)) ReplayOption {
 	}
 }
 
-func WithReplayerUnmarshalLogRecord(f func(logservice.LogRecord) *recordEntry) ReplayOption {
+func WithReplayerUnmarshalLogRecord(f func(logservice.LogRecord) LogEntry) ReplayOption {
 	return func(r *replayer) {
-		r.unmarshalLogRecord = f
+		r.logRecordToLogEntry = f
 	}
 }
 
@@ -191,7 +142,7 @@ type replayerDriver interface {
 		ctx context.Context, firstPSN uint64, maxSize int,
 	) (nextPSN uint64, records []logservice.LogRecord, err error)
 	getTruncatedPSNFromBackend(ctx context.Context) (uint64, error)
-	getClientForWrite() (*wrappedClient, uint64)
+	getClientForWrite() *wrappedClient
 	GetMaxClient() int
 }
 
@@ -201,13 +152,17 @@ type replayer struct {
 	driver replayerDriver
 	handle driver.ApplyHandle
 
-	unmarshalLogRecord func(logservice.LogRecord) *recordEntry
-	appendSkipCmd      func(ctx context.Context, skipMap map[uint64]uint64) error
-	onRead             func(uint64, *recordEntry)
-	onScheduled        func(uint64, *common.ClosedIntervals, *recordEntry)
-	onApplied          func(*entry.Entry)
-	onWriteSkip        func(map[uint64]uint64)
-	onReplayDone       func(resErr error, stats DSNStats)
+	logRecordToLogEntry func(logservice.LogRecord) LogEntry
+	appendSkipCmd       func(ctx context.Context, skipMap map[uint64]uint64) error
+	onLogRecord         func(logservice.LogRecord)
+	onUserLogEntry      func(uint64, LogEntry)
+	onScheduled         func(uint64, LogEntry)
+	onApplied           func(*entry.Entry)
+	onWriteSkip         func(map[uint64]uint64)
+	onReplayDone        func(resErr error, stats DSNStats)
+
+	// true means wait for more records after all existing records have been read
+	waitMoreRecords func() bool
 
 	replayedState struct {
 		// DSN->PSN mapping
@@ -222,8 +177,6 @@ type replayer struct {
 		// safeDSN have been safely written to the backend. When replaying, we
 		// can make sure that all records with DSN <= safeDSN have been replayed
 		safeDSN uint64
-
-		writeTokens []uint64
 
 		firstAppliedDSN uint64
 		firstAppliedLSN uint64
@@ -251,6 +204,7 @@ type replayer struct {
 
 		appliedLSNCount  atomic.Int64
 		readPSNCount     int
+		readDSNCount     int
 		schedulePSNCount int
 		scheduleLSNCount int
 	}
@@ -275,16 +229,29 @@ func newReplayer(
 		opt(r)
 	}
 
-	if r.unmarshalLogRecord == nil {
-		r.unmarshalLogRecord = func(record logservice.LogRecord) *recordEntry {
-			e := newEmptyRecordEntry(record)
-			e.unmarshal()
+	if r.logRecordToLogEntry == nil {
+		r.logRecordToLogEntry = func(record logservice.LogRecord) LogEntry {
+			e, err := DecodeLogEntry(record.Payload(), nil)
+			if err != nil {
+				logutil.Fatal(
+					"Wal-Replay",
+					zap.Error(err),
+					zap.Uint64("psn", record.Lsn),
+					zap.Any("type", record.Type),
+				)
+			}
 			return e
 		}
 	}
 
 	if r.appendSkipCmd == nil {
 		r.appendSkipCmd = r.AppendSkipCmd
+	}
+
+	if r.waitMoreRecords == nil {
+		r.waitMoreRecords = func() bool {
+			return false
+		}
 	}
 
 	return r
@@ -295,7 +262,6 @@ func (r *replayer) ExportDSNStats() DSNStats {
 		Min:       r.waterMarks.minDSN,
 		Max:       r.waterMarks.maxDSN,
 		Truncated: r.waterMarks.truncatedPSN,
-		Written:   r.replayedState.writeTokens,
 	}
 }
 
@@ -303,6 +269,7 @@ func (r *replayer) exportFields(level int) []zap.Field {
 	ret := []zap.Field{
 		zap.Duration("read-duration", r.stats.readDuration),
 		zap.Int("read-psn-count", r.stats.readPSNCount),
+		zap.Int("read-dsn-count", r.stats.readDSNCount),
 		zap.Int64("apply-lsn-count", r.stats.appliedLSNCount.Load()),
 		zap.Int("schedule-psn-count", r.stats.schedulePSNCount),
 		zap.Int("schedule-lsn-count", r.stats.scheduleLSNCount),
@@ -323,7 +290,6 @@ func (r *replayer) exportFields(level int) []zap.Field {
 	if level > 1 {
 		ret = append(ret,
 			zap.Any("dsn-psn-map", r.replayedState.dsn2PSNMap),
-			zap.Any("write-tokens", r.replayedState.writeTokens),
 		)
 	}
 	return ret
@@ -370,7 +336,10 @@ func (r *replayer) Replay(ctx context.Context) (err error) {
 		return
 	}
 
-	var wg sync.WaitGroup
+	var (
+		wg       sync.WaitGroup
+		waitTime = time.Millisecond
+	)
 
 	wg.Add(1)
 	// a dedicated goroutine to replay entries from the applyC
@@ -379,15 +348,50 @@ func (r *replayer) Replay(ctx context.Context) (err error) {
 
 	// read log records batch by batch and schedule the records for apply
 	for {
-		if readDone, err = r.readNextBatch(ctx); err != nil || readDone {
+		select {
+		case <-ctx.Done():
+			err = context.Cause(ctx)
+			close(applyC)
+			logutil.Error(
+				"Wal-Replay-Context-Done",
+				zap.Error(err),
+			)
+			return
+		default:
+		}
+
+		if readDone, err = r.readNextBatch(ctx); err != nil || (readDone && !r.waitMoreRecords()) {
 			break
 		}
+
+		if readDone && r.waitMoreRecords() {
+			for err == nil || err != ErrAllRecordsRead {
+				lastScheduled, err = r.tryScheduleApply(
+					ctx, applyC, lastScheduled, ReadState_InLoopDone,
+				)
+			}
+			if err == ErrAllRecordsRead {
+				err = nil
+			}
+			if err != nil {
+				errMsg = fmt.Sprintf("read loop schedule apply error: %v", err)
+				close(applyC)
+				return
+			}
+			time.Sleep(waitTime)
+			waitTime *= 2
+			if waitTime > time.Millisecond*128 {
+				waitTime = time.Millisecond * 128
+			}
+			continue
+		}
+		waitTime = time.Millisecond
 
 		// when the schedule DSN is less than the safe DSN, we try to
 		// schedule some entries for apply
 		for r.waterMarks.dsnScheduled < r.replayedState.safeDSN {
 			if lastScheduled, err = r.tryScheduleApply(
-				ctx, applyC, lastScheduled, false,
+				ctx, applyC, lastScheduled, ReadState_InLoop,
 			); err != nil {
 				break
 			}
@@ -406,7 +410,7 @@ func (r *replayer) Replay(ctx context.Context) (err error) {
 
 	for err == nil || err != ErrAllRecordsRead {
 		lastScheduled, err = r.tryScheduleApply(
-			ctx, applyC, lastScheduled, true,
+			ctx, applyC, lastScheduled, ReadState_AllDone,
 		)
 	}
 
@@ -441,7 +445,7 @@ func (r *replayer) tryScheduleApply(
 	ctx context.Context,
 	applyC chan<- *entry.Entry,
 	lastScheduled *entry.Entry,
-	readDone bool,
+	readState ReadState,
 ) (scheduled *entry.Entry, err error) {
 	scheduled = lastScheduled
 
@@ -453,6 +457,7 @@ func (r *replayer) tryScheduleApply(
 
 	dsn := r.waterMarks.dsnScheduled + 1
 	psn, ok := r.replayedState.dsn2PSNMap[dsn]
+	// logutil.Infof("DEBUG-1: dsn %d, psn %d, ok %v, %v", dsn, psn, ok, r.waterMarks.dsnScheduled)
 
 	// Senario 1 [dsn not found]:
 	// dsn is not found in the dsn2PSNMap, which means the record
@@ -510,8 +515,19 @@ func (r *replayer) tryScheduleApply(
 			// DSN: [37,37],[35,35],[40,40],[36,36],[39,39],[38,38]
 			// For DSN 36, it will get in here after all records have been read
 
-			if !readDone {
+			logutil.Debug(
+				"Wal-Replay-Info",
+				zap.Uint64("dsn", dsn),
+				zap.Uint64("safe-dsn", r.replayedState.safeDSN),
+				zap.Any("dsn-psn", r.replayedState.dsn2PSNMap),
+				zap.Uint64("dsn-scheduled", r.waterMarks.dsnScheduled),
+			)
+
+			if readState == ReadState_InLoop {
 				panic(fmt.Sprintf("logic error, safe dsn %d, dsn %d", r.replayedState.safeDSN, dsn))
+			} else if readState == ReadState_InLoopDone {
+				err = ErrAllRecordsRead
+				return
 			}
 
 			if appliedLSNCount == 0 {
@@ -550,29 +566,28 @@ func (r *replayer) tryScheduleApply(
 			"Wal-Replay-First-Entry",
 			zap.Uint64("dsn", dsn),
 			zap.Uint64("psn", psn),
+			zap.Any("read-state", readState),
 		)
 	}
 
-	var record *recordEntry
+	var record LogEntry
 	if record, err = r.replayedState.readCache.getRecord(psn); err != nil {
 		return
 	}
 
-	dsns := make([]uint64, 0, len(record.Meta.addr))
 	scheduleApply := func(e *entry.Entry) {
-		dsns = append(dsns, e.DSN)
 		scheduled = e
 		applyC <- e
 	}
 
-	if err = record.forEachLogEntry(scheduleApply); err != nil {
+	if err = record.ForEachEntry(scheduleApply); err != nil {
 		return
 	}
 
-	dsnRange := common.NewClosedIntervalsBySlice(dsns)
-	r.updateDSN(dsnRange.GetMax())
-	r.updateDSN(dsnRange.GetMin())
-	r.waterMarks.dsnScheduled = dsnRange.GetMax()
+	dsnRange := record.DSNRange()
+	r.updateDSN(dsnRange.End)
+	r.updateDSN(dsnRange.Start)
+	r.waterMarks.dsnScheduled = dsnRange.End
 	r.stats.schedulePSNCount++
 
 	r.replayedState.readCache.removeRecord(psn)
@@ -580,7 +595,7 @@ func (r *replayer) tryScheduleApply(
 	delete(r.replayedState.dsn2PSNMap, dsn)
 
 	if r.onScheduled != nil {
-		r.onScheduled(psn, dsnRange, record)
+		r.onScheduled(psn, record)
 	}
 
 	return
@@ -664,38 +679,63 @@ func (r *replayer) readNextBatch(
 	if err != nil {
 		return
 	}
+
+	logutil.Debug(
+		"Wal-Debug-Read",
+		zap.Uint64("psn-to-read", r.waterMarks.psnToRead),
+		zap.Uint64("next-to-read", nextPSN),
+		zap.Int("readed-cnt", len(records)),
+	)
+
 	r.stats.readDuration += time.Since(t0)
 	for i, record := range records {
+		if r.onLogRecord != nil {
+			r.onLogRecord(record)
+		}
 		// skip non-user records
 		if record.GetType() != pb.UserRecord {
 			continue
 		}
 		psn := r.waterMarks.psnToRead + uint64(i)
-		entry := r.unmarshalLogRecord(record)
+		entry := r.logRecordToLogEntry(record)
 		if updated := r.replayedState.readCache.addRecord(
 			psn, entry,
 		); updated {
-			if r.onRead != nil {
-				r.onRead(psn, entry)
+			if r.onUserLogEntry != nil {
+				r.onUserLogEntry(psn, entry)
 			}
+
+			logutil.Debug(
+				"Wal-Trace-Read",
+				zap.Uint64("psn", psn),
+				zap.Uint64("safe-dsn", entry.GetSafeDSN()),
+				zap.Uint64("start-dsn", entry.GetStartDSN()),
+				zap.Int("entry-count", int(entry.GetEntryCount())),
+			)
+
 			// 1. update the safe DSN
-			if r.replayedState.safeDSN < entry.appended {
-				r.replayedState.safeDSN = entry.appended
+			if r.replayedState.safeDSN < entry.GetSafeDSN() {
+				r.replayedState.safeDSN = entry.GetSafeDSN()
 			}
 
 			// 2. update the stats
 			r.stats.readPSNCount++
+			r.stats.readDSNCount += int(entry.GetEntryCount())
 
 			// 3. remove the skipped records if the entry is a skip entry
-			if entry.Meta.metaType == TReplay {
+			if entry.GetCmdType() == uint16(Cmd_SkipDSN) {
+				cmd := SkipCmd(entry.GetEntry(0))
+				skipDSNs := cmd.GetDSNSlice()
 				logutil.Info(
-					"Wal-Replay-Skip-Entry",
-					zap.Any("skip-map", entry.cmd.skipMap),
+					"Wal-Read-Skip-Entry",
+					zap.Any("skip-dsns", skipDSNs),
+					zap.Any("skip-psns", cmd.GetPSNSlice()),
 					zap.Uint64("psn", psn),
-					zap.Uint64("safe-dsn", entry.appended),
+					zap.Uint64("safe-dsn", entry.GetSafeDSN()),
+					// zap.Any("dsn-psn", r.replayedState.dsn2PSNMap),
 				)
 
-				for dsn := range entry.cmd.skipMap {
+				for _, dsn := range skipDSNs {
 					if _, ok := r.replayedState.dsn2PSNMap[dsn]; !ok {
 						panic(fmt.Sprintf("dsn %d not found in the dsn2PSNMap", dsn))
 					}
@@ -706,8 +746,9 @@ func (r *replayer) readNextBatch(
 			}
 
 			// 4. update the DSN->PSN mapping
-			dsn := entry.GetMinLsn()
+			dsn := entry.GetStartDSN()
 			r.replayedState.dsn2PSNMap[dsn] = psn
+			safe := entry.GetSafeDSN()
 
 			// 5. init the scheduled DSN watermark
 			// it only happens there is no record scheduled for apply
@@ -715,12 +756,18 @@ func (r *replayer) readNextBatch(
 				if r.stats.schedulePSNCount != 0 {
 					// it means a bigger DSN has been scheduled for apply and then there is
 					// a smaller DSN with bigger PSN. it should not happen
-					panic(fmt.Sprintf(
-						"dsn: %d, psn: %d, scheduled: %d",
-						dsn, psn, r.waterMarks.dsnScheduled,
-					))
+					logutil.Errorf(
+						"safe: %d, dsn: %d, psn: %d, scheduled: %d",
+						safe, dsn, psn, r.waterMarks.dsnScheduled,
+					)
+					panic("logic error")
 				}
-				r.waterMarks.dsnScheduled = dsn - 1
+				// logutil.Infof("DEBUG-3: dsn %d, psn %d, scheduled %d, safe %d", dsn, psn, r.waterMarks.dsnScheduled, safe)
+				if safe == 0 {
+					r.waterMarks.dsnScheduled = 0
+				} else {
+					r.waterMarks.dsnScheduled = safe - 1
+				}
 			}
 		}
 	}
@@ -739,9 +786,7 @@ func (r *replayer) AppendSkipCmd(
 	skipMap map[uint64]uint64,
 ) (err error) {
 	var (
-		now        = time.Now()
-		maxRetry   = 10
-		retryTimes = 0
+		now = time.Now()
 	)
 	defer func() {
 		logger := logutil.Info
@@ -752,7 +797,6 @@ func (r *replayer) AppendSkipCmd(
 			"Wal-Replay-Append-Skip-Entries",
 			zap.Any("gsn-psn-map", skipMap),
 			zap.Duration("duration", time.Since(now)),
-			zap.Int("retry-times", retryTimes),
 			zap.Error(err),
 		)
 	}()
@@ -767,31 +811,15 @@ func (r *replayer) AppendSkipCmd(
 		return
 	}
 
-	cmd := NewReplayCmd(skipMap)
-	recordEntry := newRecordEntry()
-	recordEntry.Meta.metaType = TReplay
-	recordEntry.cmd = cmd
+	client := r.driver.getClientForWrite()
+	defer func() {
+		client.Putback()
+	}()
 
-	client, writeToken := r.driver.getClientForWrite()
-	r.replayedState.writeTokens = append(r.replayedState.writeTokens, writeToken)
+	entry := SkipMapToLogEntry(skipMap)
 
-	size := recordEntry.prepareRecord()
-	client.TryResize(size)
-	record := client.record
-	copy(record.Payload(), recordEntry.payload)
-	record.ResizePayload(size)
-
-	for ; retryTimes < maxRetry; retryTimes++ {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeoutCause(
-			ctx, time.Second*10, moerr.CauseAppendSkipCmd,
-		)
-		_, err = client.c.Append(ctx, client.record)
-		err = moerr.AttachCause(ctx, err)
-		cancel()
-		if err == nil {
-			break
-		}
-	}
+	_, err = client.Append(
+		ctx, entry, moerr.CauseAppendSkipCmd,
+	)
 	return
 }

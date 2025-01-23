@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/partitionservice"
@@ -31,6 +32,28 @@ import (
 )
 
 func TestCreateAndDeleteHashBased(t *testing.T) {
+	runPartitionTableCreateAndDeleteTests(
+		t,
+		"create table %s (c int comment 'abc') partition by hash(c) partitions 2",
+		partition.PartitionMethod_Hash,
+		func(idx int, p partition.Partition) {},
+	)
+}
+
+func TestInsertAndDeleteHashBased(t *testing.T) {
+	creates := []string{
+		"create table %s (c int) partition by hash(c) partitions 2",
+		"create table %s (c int, b vecf32(2)) partition by hash(c) partitions 2",
+	}
+	inserts := []string{
+		"insert into %s values(1)",
+		"insert into %s values(1, '[1.1, 2.2]')",
+	}
+	deletes := []string{
+		"delete from %s where c = 1",
+		"delete from %s where c = 1",
+	}
+
 	runPartitionClusterTest(
 		t,
 		func(c embed.Cluster) {
@@ -40,56 +63,89 @@ func TestCreateAndDeleteHashBased(t *testing.T) {
 			db := testutils.GetDatabaseName(t)
 			testutils.CreateTestDatabase(t, db, cn)
 
-			testutils.ExecSQLWithReadResult(
-				t,
-				db,
-				cn,
-				func(i int, s string, r executor.Result) {
+			for idx := range creates {
+				table := fmt.Sprintf("%s_%d", t.Name(), idx)
+				create := fmt.Sprintf(creates[idx], table)
+				insert := fmt.Sprintf(inserts[idx], table)
+				delete := fmt.Sprintf(deletes[idx], table)
 
-				},
-				fmt.Sprintf("create table %s (c int) partition by hash(c) partitions 2", t.Name()),
-			)
+				testutils.ExecSQL(
+					t,
+					db,
+					cn,
+					create,
+				)
 
-			metadata := getMetadata(
-				t,
-				0,
-				db,
-				t.Name(),
-				cn,
-			)
-			require.Equal(t, 2, len(metadata.Partitions))
-			require.Equal(t, partition.PartitionMethod_Hash, metadata.Method)
+				fn := func() int64 {
+					n := int64(0)
+					for i := 0; i < 2; i++ {
+						testutils.ExecSQLWithReadResult(
+							t,
+							db,
+							cn,
+							func(i int, s string, r executor.Result) {
+								r.ReadRows(
+									func(rows int, cols []*vector.Vector) bool {
+										n += executor.GetFixedRows[int64](cols[0])[0]
+										return true
+									},
+								)
+							},
+							fmt.Sprintf("select count(1) from %s_p%d", table, i),
+						)
+					}
+					return n
+				}
 
-			var tables []string
-			for idx, p := range metadata.Partitions {
-				tables = append(tables, p.PartitionTableName)
-				require.NotEqual(t, uint64(0), p.PartitionID)
-				require.Equal(t, metadata.TableID, p.PrimaryTableID)
-				require.Equal(t, uint32(idx), p.Position)
-				require.Equal(t, fmt.Sprintf("%s_%s", metadata.TableName, p.Name), p.PartitionTableName)
+				testutils.ExecSQL(
+					t,
+					db,
+					cn,
+					insert,
+				)
+				require.Equal(t, int64(1), fn())
+
+				testutils.ExecSQLWithReadResult(
+					t,
+					db,
+					cn,
+					func(i int, s string, r executor.Result) {
+						r.ReadRows(
+							func(rows int, cols []*vector.Vector) bool {
+								require.Equal(t, int64(1), executor.GetFixedRows[int64](cols[0])[0])
+								return true
+							},
+						)
+					},
+					fmt.Sprintf("select count(1) from %s", table),
+				)
+
+				testutils.ExecSQL(
+					t,
+					db,
+					cn,
+					delete,
+				)
+				require.Equal(t, int64(0), fn())
+
+				testutils.ExecSQLWithReadResult(
+					t,
+					db,
+					cn,
+					func(i int, s string, r executor.Result) {
+						r.ReadRows(
+							func(rows int, cols []*vector.Vector) bool {
+								require.Equal(t, int64(0), executor.GetFixedRows[int64](cols[0])[0])
+								return true
+							},
+						)
+					},
+					fmt.Sprintf("select count(1) from %s", table),
+				)
 			}
-
-			testutils.ExecSQL(
-				t,
-				db,
-				cn,
-				fmt.Sprintf("drop table %s", t.Name()),
-			)
-			metadata = getMetadata(
-				t,
-				0,
-				db,
-				t.Name(),
-				cn,
-			)
-			require.Equal(t, partition.PartitionMetadata{}, metadata)
-
-			for _, name := range tables {
-				require.False(t, testutils.TableExists(t, db, name, cn))
-			}
-
 		},
 	)
+
 }
 
 func getMetadata(

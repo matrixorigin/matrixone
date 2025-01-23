@@ -838,7 +838,6 @@ func (tbl *txnTable) dedup(ctx context.Context, pk containers.Vector, isTombston
 		if err = tbl.DedupSnapByPK(
 			ctx,
 			pk,
-			false,
 			isTombstone,
 		); err != nil {
 			return
@@ -898,7 +897,7 @@ func (tbl *txnTable) GetByFilter(
 	pks := tbl.store.rt.VectorPool.Small.GetVector(pkType)
 	defer pks.Close()
 	pks.Append(filter.Val, false)
-	rowIDs, err := tbl.dataTable.getRowsByPK(ctx, pks, false)
+	rowIDs, err := tbl.dataTable.getRowsByPK(ctx, pks)
 	if err != nil && !moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
 		return
 	}
@@ -1063,28 +1062,22 @@ func (tbl *txnTable) PrePrepareDedup(ctx context.Context, isTombstone bool, phas
 func (tbl *txnTable) DedupSnapByPK(
 	ctx context.Context,
 	keys containers.Vector,
-	dedupAfterSnapshotTS bool,
 	isTombstone bool,
 ) (err error) {
 	r := trace.StartRegion(ctx, "DedupSnapByPK")
 	defer r.End()
 	var rowIDs containers.Vector
-	if dedupAfterSnapshotTS {
-		rowIDs, err = tbl.getBaseTable(isTombstone).incrementalGetRowsByPK(ctx, keys, tbl.store.txn.GetStartTS(), tbl.dedupTS, false)
-	} else {
-		rowIDs, err = tbl.getBaseTable(isTombstone).getRowsByPK(ctx, keys, true)
-	}
+	rowIDs, err = tbl.getBaseTable(isTombstone).getRowsByPK(ctx, keys)
 	if err != nil {
+		logutil.Errorf("getRowsByPK failed, %v", err)
 		return
 	}
 	defer rowIDs.Close()
 	from, to := types.TS{}, tbl.store.txn.GetStartTS()
-	if dedupAfterSnapshotTS {
-		from, to = tbl.store.txn.GetStartTS(), tbl.dedupTS
-	}
 	if !isTombstone {
 		err = tbl.findDeletes(ctx, rowIDs, from, to)
 		if err != nil {
+			logutil.Errorf("getRowsByPK failed 2, %v", err)
 			return
 		}
 	}
@@ -1103,6 +1096,14 @@ func (tbl *txnTable) DedupSnapByPK(
 	}
 	return
 }
+
+/*
+findDeletes set the rowIDs to null if the row is deleted, and committed in time range [from, to]
+
+candidates:
+1. NAppendable where from <= createdAt <= to
+2. Appendable where x <= createdAt <= to,  where x is the first appendable entry with CreatedAt < from
+*/
 func (tbl *txnTable) findDeletes(
 	ctx context.Context,
 	rowIDs containers.Vector,
@@ -1114,29 +1115,40 @@ func (tbl *txnTable) findDeletes(
 		return
 	}
 	tbl.contains(ctx, rowIDs, keysZM, common.WorkspaceAllocator)
+
+	tbl.entry.WaitTombstoneObjectCommitted(to)
 	it := tbl.entry.MakeTombstoneObjectIt()
-	for it.Next() {
+	defer it.Release()
+	var earlybreak bool
+	for ok := it.Last(); ok; ok = it.Prev() {
+		if earlybreak {
+			break
+		}
 		obj := it.Item()
-		objData := obj.GetObjectData()
-		needWait, txn := obj.CreateNode.NeedWaitCommitting(to)
-		if needWait {
-			txn.GetTxnState(true)
+
+		if obj.CreatedAt.GT(&to) {
+			continue
 		}
-		needWait2, txn := obj.DeleteNode.NeedWaitCommitting(to)
-		if needWait2 {
-			txn.GetTxnState(true)
+
+		if obj.IsAppendable() {
+			if !obj.HasDropIntent() && obj.CreatedAt.LT(&from) {
+				earlybreak = true
+			}
+		} else if obj.CreatedAt.LT(&from) {
+			continue
 		}
-		if needWait || needWait2 {
-			obj = obj.GetLatestNode()
+
+		// only keep the category-a + category-c for candidates.
+		if obj.GetPrevVersion() == nil && obj.GetNextVersion() != nil {
+			continue
 		}
-		if objData == nil {
-			panic(fmt.Sprintf("logic error, object %v", obj.StringWithLevel(3)))
-		}
+
 		if !obj.VisibleByTS(to) {
 			continue
 		}
-		if !obj.IsAppendable() && obj.CreatedAt.LT(&from) {
-			continue
+		objData := obj.GetObjectData()
+		if objData == nil {
+			panic(fmt.Sprintf("logic error, object %v", obj.StringWithLevel(3)))
 		}
 		// PXU TODO: jxm need to double check this logic
 		// if !obj.ObjectLocation().IsEmpty() {
@@ -1324,15 +1336,17 @@ func (tbl *txnTable) DoBatchDedup(key containers.Vector) (err error) {
 		key.Length(),
 		0,
 		true); err != nil {
+		logutil.Infof("DoBatchDedup BatchInsert failed1 %v", err)
 		return
 	}
 
 	err = tbl.DedupWorkSpace(key, false)
 	if err != nil {
+		logutil.Infof("DoBatchDedup BatchInsert failed2 %v", err)
 		return
 	}
 	//Check whether primary key is duplicated in txn's snapshot data.
-	err = tbl.DedupSnapByPK(context.Background(), key, false, false)
+	err = tbl.DedupSnapByPK(context.Background(), key, false)
 	return
 }
 

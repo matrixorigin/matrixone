@@ -275,3 +275,16 @@ func TestNewWithUpdateSnapshotTimeout(t *testing.T) {
 	assert.Equal(t, 0, len(v.mu.waitActiveTxns))
 	v.mu.Unlock()
 }
+
+func TestWaitAbortMarked(t *testing.T) {
+	c := make(chan struct{})
+	tc := &txnClient{}
+	tc.mu.waitMarkAllActiveAbortedC = c
+	tc.mu.state = normal
+	tc.mu.activeTxns = map[string]*txnOperator{}
+	go func() {
+		close(c)
+	}()
+	op := &txnOperator{}
+	require.NoError(t, tc.openTxn(op))
+}

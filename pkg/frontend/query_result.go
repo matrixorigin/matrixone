@@ -199,11 +199,16 @@ func saveMeta(ctx context.Context, ses *Session) error {
 	if err != nil {
 		return err
 	}
+
+	//-------------------------------------------------------
+	roleId := defines.GetRoleId(ctx)
+	//-------------------------------------------------------
+
 	m := &catalog.Meta{
 		QueryId:       ses.GetStmtId(),
 		Statement:     ses.GetSql(),
 		AccountId:     ses.GetTenantInfo().GetTenantID(),
-		RoleId:        ses.proc.GetSessionInfo().RoleId,
+		RoleId:        roleId,
 		ResultPath:    buf.String(),
 		CreateTime:    types.UnixToTimestamp(ses.createdTime.Unix()),
 		ResultSize:    ses.curResultSize,

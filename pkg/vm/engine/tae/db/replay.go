@@ -114,7 +114,9 @@ func (replayer *Replayer) postReplayWal() error {
 func (replayer *Replayer) Replay(ctx context.Context) (err error) {
 	replayer.wg.Add(1)
 	go replayer.applyTxnCmds()
-	if err = replayer.db.Wal.Replay(ctx, replayer.OnReplayEntry); err != nil {
+	if err = replayer.db.Wal.Replay(
+		ctx, replayer.OnReplayEntry, driver.ReplayMode_ReplayForWrite,
+	); err != nil {
 		return
 	}
 	replayer.txnCmdChan <- txnbase.NewLastTxnCmd()

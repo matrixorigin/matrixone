@@ -2230,6 +2230,77 @@ func TestReLockSuccWithReStartCN(t *testing.T) {
 	)
 }
 
+func TestCheckRemoteTxnTimeout(t *testing.T) {
+	runLockServiceTestsWithLevel(
+		t,
+		zapcore.DebugLevel,
+		[]string{"s1", "s2"},
+		time.Second*1,
+		func(alloc *lockTableAllocator, s []*service) {
+			l1 := s[0]
+			l2 := s[1]
+
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				time.Second*10)
+			defer cancel()
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			// table 0 in s2
+			_, err := l2.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn1"),
+				option)
+			require.NoError(t, err)
+			require.NoError(t, l2.Unlock(ctx, []byte("txn1"), timestamp.Timestamp{}))
+
+			// table 1 in s1
+			_, err = l1.Lock(
+				ctx,
+				1,
+				[][]byte{{1}},
+				[]byte("txn2"),
+				option)
+			require.NoError(t, err)
+			_, err = l1.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn2"),
+				option)
+			require.NoError(t, err)
+			l1.tableGroups.removeWithFilter(func(_ uint64, v lockTable) bool {
+				return true
+			})
+			require.NoError(t, l1.Unlock(ctx, []byte("txn2"), timestamp.Timestamp{}))
+
+			require.False(t, l2.activeTxnHolder.empty())
+
+			alloc.setRestartService("s2")
+			for {
+				if l2.isStatus(pb.Status_ServiceLockWaiting) {
+					break
+				}
+				select {
+				case <-ctx.Done():
+					panic("timeout bug")
+				default:
+				}
+			}
+
+			l2.checkRemoteTxnTimeout(ctx)
+			require.True(t, l2.activeTxnHolder.empty())
+		},
+		nil,
+	)
+}
+
 func TestReLockSuccWithKeepBindTimeout(t *testing.T) {
 	runLockServiceTestsWithLevel(
 		t,

@@ -33,7 +33,7 @@ var (
 	}
 )
 
-func (builder *QueryBuilder) buildStageList(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, childId int32) (int32, error) {
+func (builder *QueryBuilder) buildStageList(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
 	colDefs := _getColDefs(stageListColDefs)
 	node := &plan.Node{
 		NodeType: plan.Node_FUNCTION_SCAN,
@@ -47,7 +47,7 @@ func (builder *QueryBuilder) buildStageList(tbl *tree.TableFunction, ctx *BindCo
 			Cols: colDefs,
 		},
 		BindingTags:     []int32{builder.genNewTag()},
-		Children:        []int32{childId},
+		Children:        children,
 		TblFuncExprList: exprs,
 	}
 	return builder.appendNode(node, ctx), nil

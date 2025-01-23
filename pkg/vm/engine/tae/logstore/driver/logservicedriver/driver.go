@@ -16,6 +16,7 @@ package logservicedriver
 
 import (
 	"context"
+	"sync/atomic"
 	"time"
 
 	"github.com/panjf2000/ants/v2"
@@ -25,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 )
@@ -35,54 +35,28 @@ const (
 	MaxReadSize    = mpool.MB * 64
 )
 
-func RetryWithTimeout(timeoutDuration time.Duration, fn func() (shouldReturn bool)) error {
-	ctx, cancel := context.WithTimeoutCause(
-		context.Background(),
-		timeoutDuration,
-		moerr.CauseRetryWithTimeout,
-	)
-	defer cancel()
-	for {
-		select {
-		case <-ctx.Done():
-			return moerr.AttachCause(ctx, ErrRetryTimeOut)
-		default:
-			if fn() {
-				return nil
-			}
-		}
-	}
-}
-
 type LogServiceDriver struct {
-	*driverInfo
-	clientPool      *clientpool
-	config          *Config
-	currentAppender *driverAppender
+	*sequenceNumberState
 
-	closeCtx        context.Context
-	closeCancel     context.CancelFunc
-	doAppendLoop    sm.Queue
-	appendWaitQueue chan any
-	waitAppendLoop  *sm.Loop
-	postAppendQueue chan any
-	postAppendLoop  *sm.Loop
+	config Config
 
-	appendPool *ants.Pool
+	clientPool *clientPool
+	committer  *groupCommitter
 
-	truncateQueue sm.Queue
+	commitLoop      sm.Queue
+	commitWaitQueue chan any
+	waitCommitLoop  *sm.Loop
+	postCommitQueue chan any
+	truncateQueue   sm.Queue
+
+	ctx    context.Context
+	cancel context.CancelFunc
+
+	workers *ants.Pool
 }
 
 func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
-	clientpoolConfig := &clientConfig{
-		cancelDuration:        cfg.NewClientDuration,
-		recordSize:            cfg.RecordSize,
-		clientFactory:         cfg.ClientFactory,
-		GetClientRetryTimeOut: cfg.GetClientRetryTimeOut,
-		retryDuration:         cfg.RetryTimeout,
-	}
-
-	// the tasks submitted to LogServiceDriver.appendPool append entries to logservice,
+	// the tasks submitted to LogServiceDriver.workers append entries to logservice,
 	// and we hope the task will crash all the tn service if append failed.
 	// so, set panic to pool.options.PanicHandler here, or it will only crash
 	// the goroutine the append task belongs to.
@@ -91,23 +65,25 @@ func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
 	}))
 
 	d := &LogServiceDriver{
-		clientPool:      newClientPool(cfg.ClientMaxCount, clientpoolConfig),
-		config:          cfg,
-		currentAppender: newDriverAppender(),
-		driverInfo:      newDriverInfo(),
-		appendWaitQueue: make(chan any, 10000),
-		postAppendQueue: make(chan any, 10000),
-		appendPool:      pool,
+		clientPool:          newClientPool(cfg),
+		config:              *cfg,
+		committer:           getCommitter(),
+		sequenceNumberState: newSequenceNumberState(),
+		commitWaitQueue:     make(chan any, 10000),
+		postCommitQueue:     make(chan any, 10000),
+		workers:             pool,
 	}
-	d.closeCtx, d.closeCancel = context.WithCancel(context.Background())
-	d.doAppendLoop = sm.NewSafeQueue(10000, 10000, d.onAppendRequests)
-	d.doAppendLoop.Start()
-	d.waitAppendLoop = sm.NewLoop(d.appendWaitQueue, d.postAppendQueue, d.onWaitAppendRequests, 10000)
-	d.waitAppendLoop.Start()
-	d.postAppendLoop = sm.NewLoop(d.postAppendQueue, nil, d.onAppendDone, 10000)
-	d.postAppendLoop.Start()
+	d.ctx, d.cancel = context.WithCancel(context.Background())
+	d.commitLoop = sm.NewSafeQueue(10000, 10000, d.onCommitIntents)
+	d.commitLoop.Start()
+	d.waitCommitLoop = sm.NewLoop(d.commitWaitQueue, nil, d.onWaitCommitted, 10000)
+	d.waitCommitLoop.Start()
 	d.truncateQueue = sm.NewSafeQueue(10000, 10000, d.onTruncateRequests)
 	d.truncateQueue.Start()
+	logutil.Info(
+		"Wal-Driver-Start",
+		zap.String("config", cfg.String()),
+	)
 	return d
 }
 
@@ -117,25 +93,44 @@ func (d *LogServiceDriver) GetMaxClient() int {
 
 func (d *LogServiceDriver) Close() error {
 	d.clientPool.Close()
-	d.closeCancel()
-	d.doAppendLoop.Stop()
-	d.waitAppendLoop.Stop()
-	d.postAppendLoop.Stop()
+	d.cancel()
+	d.commitLoop.Stop()
+	d.waitCommitLoop.Stop()
 	d.truncateQueue.Stop()
-	close(d.appendWaitQueue)
-	close(d.postAppendQueue)
-	d.appendPool.Release()
+	close(d.commitWaitQueue)
+	close(d.postCommitQueue)
+	d.workers.Release()
 	return nil
 }
 
 func (d *LogServiceDriver) Replay(
 	ctx context.Context,
 	h driver.ApplyHandle,
+	mode driver.ReplayMode,
 ) (err error) {
+
+	var replayMode atomic.Int32
+	replayMode.Store(int32(mode))
+
+	onLogRecord := func(r logservice.LogRecord) {
+		// TODO: handle the config change log record
+	}
+
+	onWaitMore := func() bool {
+		return replayMode.Load() == int32(driver.ReplayMode_ReplayForever)
+	}
+
 	replayer := newReplayer(
 		h,
 		d,
 		ReplayReadSize,
+		WithReplayerWaitMore(
+			onWaitMore,
+		),
+		WithReplayerOnLogRecord(
+			onLogRecord,
+		),
+
 		// driver is mangaging the psn to dsn mapping
 		// here the replayer is responsible to provide the all the existing psn to dsn
 		// info to the driver
@@ -146,8 +141,8 @@ func (d *LogServiceDriver) Replay(
 		// for readwrite driver, it can only serve the write request
 		// after the REPLAYED state
 		WithReplayerOnScheduled(
-			func(psn uint64, dsnRange *common.ClosedIntervals, _ *recordEntry) {
-				d.recordPSNInfo(psn, dsnRange)
+			func(psn uint64, e LogEntry) {
+				d.recordSequenceNumbers(psn, e.DSNRange())
 			},
 		),
 		WithReplayerOnReplayDone(
@@ -155,7 +150,7 @@ func (d *LogServiceDriver) Replay(
 				if replayErr != nil {
 					return
 				}
-				d.resetDSNStats(&dsnStats)
+				d.initState(&dsnStats)
 			},
 		),
 	)
@@ -174,7 +169,6 @@ func (d *LogServiceDriver) readFromBackend(
 	var (
 		t0         = time.Now()
 		cancel     context.CancelFunc
-		maxRetry   = 10
 		retryTimes = 0
 	)
 
@@ -201,15 +195,15 @@ func (d *LogServiceDriver) readFromBackend(
 	if client, err = d.clientPool.Get(); err != nil {
 		return
 	}
-	defer d.clientPool.Put(client)
+	defer client.Putback()
 
-	for ; retryTimes < maxRetry; retryTimes++ {
+	for ; retryTimes < d.config.MaxRetryCount; retryTimes++ {
 		ctx, cancel = context.WithTimeoutCause(
 			ctx,
-			d.config.ReadDuration,
+			d.config.MaxTimeout,
 			moerr.CauseReadFromLogService,
 		)
-		if records, nextPSN, err = client.c.Read(
+		if records, nextPSN, err = client.wrapped.Read(
 			ctx, firstPSN, uint64(maxSize),
 		); err != nil {
 			err = moerr.AttachCause(ctx, err)
@@ -219,6 +213,7 @@ func (d *LogServiceDriver) readFromBackend(
 		if err == nil {
 			break
 		}
+		time.Sleep(d.config.RetryInterval() * time.Duration(retryTimes+1))
 	}
 
 	return

@@ -17,9 +17,8 @@ package preinsert
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -37,16 +36,18 @@ type container struct {
 type PreInsert struct {
 	ctr container
 
-	HasAutoCol bool
-	IsUpdate   bool
-	SchemaName string
-	TableDef   *pb.TableDef
+	HasAutoCol  bool
+	IsOldUpdate bool
+	IsNewUpdate bool
+	SchemaName  string
+	TableDef    *plan.TableDef
 	// letter case: origin
 	Attrs []string
 
 	EstimatedRowCount int64
 	CompPkeyExpr      *plan.Expr
 	ClusterByExpr     *plan.Expr
+	ColOffset         int32
 
 	vm.OperatorBase
 }
@@ -101,20 +102,8 @@ func (preInsert *PreInsert) Free(proc *process.Process, pipelineFailed bool, err
 		preInsert.ctr.clusterByExecutor = nil
 	}
 	if preInsert.ctr.buf != nil {
-		for idx := range preInsert.Attrs {
-			if _, ok := preInsert.ctr.canFreeVecIdx[idx]; !ok {
-				preInsert.ctr.buf.SetVector(int32(idx), nil)
-			}
-		}
-		idx := len(preInsert.Attrs)
-		if preInsert.CompPkeyExpr != nil {
-			if idx < len(preInsert.ctr.buf.Vecs) {
-				preInsert.ctr.buf.SetVector(int32(idx), nil)
-			}
-			idx += 1
-		}
-		if preInsert.ClusterByExpr != nil {
-			if idx < len(preInsert.ctr.buf.Vecs) {
+		for idx := range preInsert.ctr.buf.Vecs {
+			if !preInsert.ctr.canFreeVecIdx[idx] {
 				preInsert.ctr.buf.SetVector(int32(idx), nil)
 			}
 		}
