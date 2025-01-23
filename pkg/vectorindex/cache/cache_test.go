@@ -69,8 +69,10 @@ func TestCache(t *testing.T) {
 	idxcfg.Usearch.Metric = usearch.L2sq
 	tblcfg := vectorindex.IndexTableConfig{DbName: "db", SrcTable: "src", MetadataTable: "__secondary_meta", IndexTable: "__secondary_index"}
 	os.Stderr.WriteString("cache getindex\n")
-	idx, err := Cache.GetIndex(proc, tblcfg.IndexTable, &MockSearch{VectorIndexSearch: VectorIndexSearch{Idxcfg: idxcfg, Tblcfg: tblcfg}})
+	m1 := &MockSearch{VectorIndexSearch: VectorIndexSearch{Idxcfg: idxcfg, Tblcfg: tblcfg}}
+	idx, err := Cache.GetIndex(proc, tblcfg.IndexTable, m1)
 	require.Nil(t, err)
+	require.Equal(t, m1, idx)
 
 	idx2, err := Cache.GetIndex(proc, tblcfg.IndexTable, &MockSearch{VectorIndexSearch: VectorIndexSearch{Idxcfg: idxcfg, Tblcfg: tblcfg}})
 	require.Equal(t, idx, idx2)
@@ -85,6 +87,11 @@ func TestCache(t *testing.T) {
 
 	os.Stderr.WriteString("cache sleep\n")
 	time.Sleep(8 * time.Second)
+
+	// cache expired
+	m3 := &MockSearch{VectorIndexSearch: VectorIndexSearch{Idxcfg: idxcfg, Tblcfg: tblcfg}}
+	idx3, err := Cache.GetIndex(proc, tblcfg.IndexTable, m3)
+	require.Equal(t, m3, idx3)
 
 	os.Stderr.WriteString("cache.Destroy\n")
 	Cache.Destroy()
