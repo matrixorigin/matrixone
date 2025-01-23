@@ -39,7 +39,7 @@ type service struct {
 
 	mu struct {
 		sync.RWMutex
-		tables map[uint64]partition.PartitionMetadata
+		tables map[uint64]metadataCache
 	}
 }
 
@@ -51,7 +51,7 @@ func NewService(
 		cfg:   cfg,
 		store: store,
 	}
-	s.mu.tables = make(map[uint64]partition.PartitionMetadata)
+	s.mu.tables = make(map[uint64]metadataCache)
 	return s
 }
 
@@ -80,6 +80,17 @@ func (s *service) Create(
 	)
 	if err != nil {
 		return err
+	}
+
+	if txnOp != nil {
+		txnOp.AppendEventCallback(
+			client.CommitEvent,
+			func(_ client.TxnEvent) {
+				s.mu.Lock()
+				s.mu.tables[tableID] = newMetadataCache(metadata)
+				s.mu.Unlock()
+			},
+		)
 	}
 
 	return s.store.Create(
@@ -112,11 +123,28 @@ func (s *service) Delete(
 		return nil
 	}
 
-	return s.store.Delete(
+	if txnOp != nil {
+		txnOp.AppendEventCallback(
+			client.CommitEvent,
+			func(te client.TxnEvent) {
+				s.mu.Lock()
+				delete(s.mu.tables, tableID)
+				s.mu.Unlock()
+			},
+		)
+	}
+
+	err = s.store.Delete(
 		ctx,
 		metadata,
 		txnOp,
 	)
+	if err == nil && txnOp == nil {
+		s.mu.Lock()
+		delete(s.mu.tables, tableID)
+		s.mu.Unlock()
+	}
+	return err
 }
 
 func (s *service) Is(
@@ -216,10 +244,10 @@ func (s *service) readMetadata(
 	txnOp client.TxnOperator,
 ) (partition.PartitionMetadata, error) {
 	s.mu.RLock()
-	metadata, ok := s.mu.tables[tableID]
+	c, ok := s.mu.tables[tableID]
 	s.mu.RUnlock()
 	if ok {
-		return metadata, nil
+		return c.metadata, nil
 	}
 
 	metadata, ok, err := s.store.GetMetadata(
@@ -235,7 +263,7 @@ func (s *service) readMetadata(
 	}
 
 	s.mu.Lock()
-	s.mu.tables[tableID] = metadata
+	s.mu.tables[tableID] = newMetadataCache(metadata)
 	s.mu.Unlock()
 	return metadata, nil
 }
@@ -319,4 +347,16 @@ func validColumns(
 		validColumns = append(validColumns, col)
 	}
 	return validColumns, nil
+}
+
+type metadataCache struct {
+	metadata partition.PartitionMetadata
+}
+
+func newMetadataCache(
+	metadata partition.PartitionMetadata,
+) metadataCache {
+	return metadataCache{
+		metadata: metadata,
+	}
 }
