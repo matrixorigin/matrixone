@@ -292,13 +292,14 @@ func ForEachFile(
 				return
 			}
 		}
-		if err = postEachRow(); err != nil {
-			return
-		}
+	}
+	if err = postEachRow(); err != nil {
+		return
 	}
 	return
 }
 
+// the data in the obj must be sorted by the table id and object type
 func CollectTableRangesFromFile(
 	ctx context.Context,
 	obj objectio.ObjectStats,
@@ -356,74 +357,6 @@ func CollectTableRangesFromFile(
 		fs,
 	); err != nil {
 		return
-	}
-	return
-}
-
-// the data in the obj must be sorted by the table id and object type
-func CollectTableRangesFromFile2(
-	ctx context.Context,
-	obj objectio.ObjectStats,
-	tmpBat *batch.Batch,
-	data *batch.Batch,
-	mp *mpool.MPool,
-	fs fileservice.FileService,
-) (err error) {
-	reader := NewDataReader(
-		ctx,
-		fs,
-		obj,
-		readutil.WithColumns(
-			DataScan_TableIDSeqnums,
-			DataScan_TableIDTypes,
-		),
-	)
-	var (
-		end         bool
-		activeRange TableRange
-	)
-	for {
-		tmpBat.CleanOnlyData()
-		if end, err = reader.Read(
-			ctx, tmpBat.Attrs, nil, mp, tmpBat,
-		); err != nil {
-			return
-		}
-		if end {
-			break
-		}
-		tableIds := vector.MustFixedColNoTypeCheck[uint64](tmpBat.Vecs[0])
-		objectTypes := vector.MustFixedColNoTypeCheck[int8](tmpBat.Vecs[1])
-		rowids := vector.MustFixedColNoTypeCheck[types.Rowid](tmpBat.Vecs[2])
-		for i, rows := 0, tmpBat.RowCount(); i < rows; i++ {
-			if activeRange.TableID != tableIds[i] || activeRange.ObjectType != objectTypes[i] {
-				if activeRange.IsEmpty() {
-					// first table id, object type
-					activeRange.TableID = tableIds[i]
-					activeRange.ObjectType = objectTypes[i]
-					activeRange.Start = rowids[i]
-					activeRange.ObjectStats = obj
-				} else {
-					// different table id, object type
-					// 1. save the active range to data
-					if err = activeRange.AppendTo(data, mp); err != nil {
-						return
-					}
-
-					// 2. reset the active range
-					activeRange.TableID = tableIds[i]
-					activeRange.ObjectType = objectTypes[i]
-					activeRange.Start = rowids[i]
-					activeRange.ObjectStats = obj
-				}
-			}
-			activeRange.End = rowids[i]
-		}
-		if !activeRange.IsEmpty() {
-			if err = activeRange.AppendTo(data, mp); err != nil {
-				return
-			}
-		}
 	}
 	return
 }

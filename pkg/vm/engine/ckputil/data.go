@@ -135,6 +135,7 @@ func (iter *ObjectIter) Next() (bool, error) {
 		if iter.index.offset >= objectio.BlockMaxRows {
 			iter.index.blockIdx++
 			iter.index.offset = 0
+			needLoad = true
 		}
 		if iter.index.blockIdx == iter.ranges[iter.index.rangeIdx].End.GetBlockOffset() {
 			// blockIdx == end
@@ -173,12 +174,14 @@ func (iter *ObjectIter) Next() (bool, error) {
 		}
 		iter.data.Free(iter.mp)
 		var err error
+		loc := iter.ranges[iter.index.rangeIdx].ObjectStats.ObjectLocation().Clone()
+		loc.SetID(iter.index.blockIdx)
 		if _, iter.release, err = ioutil.LoadColumnsData(
 			iter.ctx,
 			DataScan_ObjectEntrySeqnums,
 			DataScan_ObjectEntryTypes,
 			iter.fs,
-			iter.ranges[iter.index.rangeIdx].ObjectStats.ObjectLocation(),
+			loc,
 			iter.data,
 			iter.mp,
 			0,
