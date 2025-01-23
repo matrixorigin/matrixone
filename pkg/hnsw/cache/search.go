@@ -30,6 +30,8 @@ import (
 	usearch "github.com/unum-cloud/usearch/golang"
 )
 
+const NThreadSearch = 4
+
 // Hnsw search index struct to hold the usearch index
 type HnswSearchIndex struct {
 	Id        int64
@@ -156,19 +158,27 @@ func (h *HnswSearch) Search(query []float32, limit uint) (keys []int64, distance
 
 	var errs error
 
-	for _, idx := range h.Indexes {
-		wg.Add(1)
+	nthread := NThreadSearch
+	if nthread > len(h.Indexes) {
+		nthread = len(h.Indexes)
+	}
 
+	for i := 0; i < nthread; i++ {
+		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			keys, distances, err := idx.Search(query, limit)
-			if err != nil {
-				errs = errors.Join(errs, err)
-				return
-			}
+			for j, idx := range h.Indexes {
+				if j%nthread == i {
+					keys, distances, err := idx.Search(query, limit)
+					if err != nil {
+						errs = errors.Join(errs, err)
+						return
+					}
 
-			for i := range keys {
-				heap.Push(int64(keys[i]), distances[i])
+					for i := range keys {
+						heap.Push(int64(keys[i]), distances[i])
+					}
+				}
 			}
 		}()
 	}
