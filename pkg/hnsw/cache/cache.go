@@ -139,6 +139,8 @@ func (idx *HnswSearchIndex) Search(query []float32, limit uint) (keys []usearch.
 type VectorIndexSearchIf interface {
 	GetParent() VectorIndexSearch
 	Search(query []float32, limit uint) (keys []int64, distances []float32, err error)
+	Destroy()
+	Expired() bool
 }
 
 type VectorIndexSearch struct {
@@ -220,6 +222,7 @@ func (h *HnswSearch) Destroy() {
 		idx.Index.Destroy()
 	}
 	h.Indexes = nil
+	os.Stderr.WriteString("hnsw search destroy\n")
 }
 
 func (h *HnswSearch) Expired() bool {
@@ -368,8 +371,7 @@ func (c *VectorIndexCache) HouseKeeping() {
 	expiredkeys := make([]string, 0, 16)
 
 	c.IndexMap.Range(func(key, value any) bool {
-
-		search := value.(*HnswSearch)
+		search := value.(VectorIndexSearchIf)
 		if search.Expired() {
 			expiredkeys = append(expiredkeys, key.(string))
 		}
@@ -379,13 +381,10 @@ func (c *VectorIndexCache) HouseKeeping() {
 	for _, k := range expiredkeys {
 		value, loaded := c.IndexMap.LoadAndDelete(k)
 		if loaded {
-			switch search := value.(type) {
-			case *HnswSearch:
-				os.Stderr.WriteString(fmt.Sprintf("HnswSearch HouseKeep: key %s deleted\n", k))
-				search.Destroy()
-				search = nil
-			default:
-			}
+			search := value.(VectorIndexSearchIf)
+			os.Stderr.WriteString(fmt.Sprintf("HouseKeep: key %s deleted\n", k))
+			search.Destroy()
+			search = nil
 		}
 	}
 	os.Stderr.WriteString("house keeping end\n")
@@ -401,12 +400,9 @@ func (c *VectorIndexCache) Destroy() {
 	// remove all keys
 	c.IndexMap.Range(func(key, value any) bool {
 		c.IndexMap.Delete(key)
-		switch search := value.(type) {
-		case *HnswSearch:
-			search.Destroy()
-			search = nil
-		default:
-		}
+		search := value.(VectorIndexSearchIf)
+		search.Destroy()
+		search = nil
 		return true
 	})
 }
@@ -435,11 +431,9 @@ func (c *VectorIndexCache) GetIndex(proc *process.Process, key string, def Vecto
 func (c *VectorIndexCache) Remove(key string) {
 	value, loaded := c.IndexMap.LoadAndDelete(key)
 	if loaded {
-		switch search := value.(type) {
-		case *HnswSearch:
-			search.Destroy()
-			search = nil
-		}
+		search := value.(VectorIndexSearchIf)
+		search.Destroy()
+		search = nil
 	}
 }
 
