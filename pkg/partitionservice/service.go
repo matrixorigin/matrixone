@@ -267,10 +267,8 @@ func (s *service) getManualPartitions(
 		TableName:    def.Name,
 		DatabaseName: def.DbName,
 		Method:       method,
-		// TODO: ???
-		Expression:  "",
-		Description: partitionDesc,
-		Columns:     validColumns,
+		Description:  partitionDesc,
+		Columns:      validColumns,
 	}
 
 	for i, p := range option.Partitions {
@@ -280,7 +278,7 @@ func (s *service) getManualPartitions(
 				Name:               p.Name.String(),
 				PartitionTableName: fmt.Sprintf("%s_%s", def.Name, p.Name.String()),
 				Position:           uint32(i),
-				Comment:            applyPartitionComment(p),
+				Expression:         applyPartitionComment(p),
 			},
 		)
 	}
