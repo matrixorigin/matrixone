@@ -40,6 +40,15 @@ func TestCreateAndDeleteHashBased(t *testing.T) {
 	)
 }
 
+func TestCreateAndDeleteLinearHashBased(t *testing.T) {
+	runPartitionTableCreateAndDeleteTests(
+		t,
+		"create table %s (c int comment 'abc') partition by linear hash(c) partitions 2",
+		partition.PartitionMethod_LinearHash,
+		func(idx int, p partition.Partition) {},
+	)
+}
+
 func TestInsertAndDeleteHashBased(t *testing.T) {
 	creates := []string{
 		"create table %s (c int) partition by hash(c) partitions 2",
