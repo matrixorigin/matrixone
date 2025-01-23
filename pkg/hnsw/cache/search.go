@@ -38,6 +38,11 @@ type HnswSearchIndex struct {
 	Checksum  string
 }
 
+type HnswSearch struct {
+	VectorIndexSearch
+	Indexes []*HnswSearchIndex
+}
+
 func (idx *HnswSearchIndex) loadChunk(proc *process.Process, stream_chan chan executor.Result, error_chan chan error, fp *os.File) (stream_closed bool, err error) {
 	var res executor.Result
 	var ok bool
@@ -126,11 +131,6 @@ func (idx *HnswSearchIndex) LoadIndex(proc *process.Process, idxcfg hnsw.IndexCo
 
 func (idx *HnswSearchIndex) Search(query []float32, limit uint) (keys []usearch.Key, distances []float32, err error) {
 	return idx.Index.Search(query, limit)
-}
-
-type HnswSearch struct {
-	VectorIndexSearch
-	Indexes []*HnswSearchIndex
 }
 
 func (h *HnswSearch) Search(query []float32, limit uint) (keys []int64, distances []float32, err error) {
