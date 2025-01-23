@@ -39,6 +39,7 @@ import (
    3. HouseKeeping. Index will have time-to-live interval (see VectorIndexCacheTTL).
       3.1 When the index is expired (ExpireAt > 0 && ExpiredAt < Now), index will be deleted from the cache. Ticker go routine will manage the house keeping.
       3.2 ExpiredAt == 0 means index is loading from database so cannot be deleted from housekeeping
+      3.3 Every time index is visited by Search/LoadFromDatabase, ExpireAt will be extended to time.Now() + VectorIndexCacheTTL.
 */
 
 var (
