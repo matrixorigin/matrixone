@@ -26,8 +26,8 @@ const (
 type IndexTableConfig struct {
 	DbName        string `json:"db"`
 	SrcTable      string `json:"src"`
-	MetadataTable string `json:"hnsw_meta"`
-	IndexTable    string `json:"hnsw_index"`
+	MetadataTable string `json:"metadata"`
+	IndexTable    string `json:"index"`
 }
 
 type HnswParam struct {
