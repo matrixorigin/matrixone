@@ -75,6 +75,7 @@ func TestCache(t *testing.T) {
 	require.Equal(t, m1, idx)
 
 	idx2, err := Cache.GetIndex(proc, tblcfg.IndexTable, &MockSearch{VectorIndexSearch: VectorIndexSearch{Idxcfg: idxcfg, Tblcfg: tblcfg}})
+	require.Nil(t, err)
 	require.Equal(t, idx, idx2)
 
 	os.Stderr.WriteString("cache search\n")
@@ -91,6 +92,7 @@ func TestCache(t *testing.T) {
 	// cache expired
 	m3 := &MockSearch{VectorIndexSearch: VectorIndexSearch{Idxcfg: idxcfg, Tblcfg: tblcfg}}
 	idx3, err := Cache.GetIndex(proc, tblcfg.IndexTable, m3)
+	require.Nil(t, err)
 	require.Equal(t, m3, idx3)
 
 	os.Stderr.WriteString("cache.Destroy\n")
