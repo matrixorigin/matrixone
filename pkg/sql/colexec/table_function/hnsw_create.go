@@ -63,10 +63,11 @@ func (u *hnswCreateState) end(tf *TableFunction, proc *process.Process) error {
 		res.Close()
 	}
 
-	hnswcache.HnswCacheTTL = 30 * time.Second
+	hnswcache.VectorIndexCacheTTL = 30 * time.Second
 	hnswcache.Cache.TickerInterval = 5 * time.Second
 	hnswcache.Cache.Once()
-	s, err := hnswcache.Cache.GetIndex(proc, u.uscfg, u.idxcfg, u.idxcfg.IndexTable)
+	s, err := hnswcache.Cache.GetIndex(proc, u.idxcfg.IndexTable, &hnswcache.HnswSearch{
+		VectorIndexSearch: hnswcache.VectorIndexSearch{Idxcfg: u.uscfg, Tblcfg: u.idxcfg}})
 	if err != nil {
 		return err
 	}

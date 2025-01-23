@@ -40,12 +40,12 @@ func TestCache(t *testing.T) {
 	idxcfg.Metric = usearch.L2sq
 	tblcfg := hnsw.IndexTableConfig{DbName: "db", SrcTable: "src", MetadataTable: "__secondary_meta", IndexTable: "__secondary_index"}
 	os.Stderr.WriteString("cache getindex\n")
-	idx, err := Cache.GetIndex(proc, idxcfg, tblcfg, tblcfg.IndexTable)
+	idx, err := Cache.GetIndex(proc, tblcfg.IndexTable, &HnswSearch{VectorIndexSearch: VectorIndexSearch{Idxcfg: idxcfg, Tblcfg: tblcfg}})
 	require.Nil(t, err)
 
 	os.Stderr.WriteString("cache search\n")
 	fp32a := []float32{1, 2, 3, 4, 5, 6, 7, 8}
-	keys, distances, err := idx.Search(fp32a)
+	keys, distances, err := idx.Search(fp32a, 4)
 	require.Nil(t, err)
 	_ = keys
 	_ = distances

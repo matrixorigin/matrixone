@@ -34,8 +34,8 @@ import (
 )
 
 var (
-	HnswCacheTTL time.Duration = 30 * time.Minute
-	Cache        *HnswCache    = NewHnswCache()
+	VectorIndexCacheTTL time.Duration     = 30 * time.Minute
+	Cache               *VectorIndexCache = NewVectorIndexCache()
 )
 
 type HnswSearchIndex struct {
@@ -136,13 +136,26 @@ func (idx *HnswSearchIndex) Search(query []float32, limit uint) (keys []usearch.
 	return idx.Index.Search(query, limit)
 }
 
-type HnswSearch struct {
+type VectorIndexSearchIf interface {
+	GetParent() VectorIndexSearch
+	Search(query []float32, limit uint) (keys []int64, distances []float32, err error)
+}
+
+type VectorIndexSearch struct {
 	Mutex      sync.RWMutex
-	Indexes    []*HnswSearchIndex
 	ExpireAt   atomic.Int64
 	LastUpdate atomic.Int64
 	Idxcfg     usearch.IndexConfig
 	Tblcfg     hnsw.IndexTableConfig
+}
+
+type HnswSearch struct {
+	VectorIndexSearch
+	Indexes []*HnswSearchIndex
+}
+
+func (h *HnswSearch) GetParent() VectorIndexSearch {
+	return h.VectorIndexSearch
 }
 
 func (h *HnswSearch) Search(query []float32, limit uint) (keys []int64, distances []float32, err error) {
@@ -152,7 +165,7 @@ func (h *HnswSearch) Search(query []float32, limit uint) (keys []int64, distance
 		return nil, nil, moerr.NewInternalErrorNoCtx("HNSW cannot find index from database.")
 	}
 
-	ts := time.Now().Add(HnswCacheTTL).UnixMicro()
+	ts := time.Now().Add(VectorIndexCacheTTL).UnixMicro()
 	h.ExpireAt.Store(ts)
 
 	// search
@@ -215,7 +228,7 @@ func (h *HnswSearch) Expired() bool {
 
 	ts := h.ExpireAt.Load()
 	now := time.Now().UnixMicro()
-	return (ts < now)
+	return (ts > 0 && ts < now)
 }
 
 func (s *HnswSearch) LoadMetadata(proc *process.Process) ([]*HnswSearchIndex, error) {
@@ -282,13 +295,13 @@ func (s *HnswSearch) LoadFromDatabase(proc *process.Process) error {
 
 	now := time.Now()
 	s.LastUpdate.Store(now.UnixMicro())
-	ts := now.Add(time.Duration(HnswCacheTTL)).UnixMicro()
+	ts := now.Add(time.Duration(VectorIndexCacheTTL)).UnixMicro()
 	s.ExpireAt.Store(ts)
 
 	return nil
 }
 
-type HnswCache struct {
+type VectorIndexCache struct {
 	IndexMap       sync.Map
 	TickerInterval time.Duration
 	ticker         *time.Ticker
@@ -299,13 +312,13 @@ type HnswCache struct {
 	once           sync.Once
 }
 
-func NewHnswCache() *HnswCache {
-	c := &HnswCache{}
-	c.TickerInterval = HnswCacheTTL / 2
+func NewVectorIndexCache() *VectorIndexCache {
+	c := &VectorIndexCache{}
+	c.TickerInterval = VectorIndexCacheTTL / 2
 	return c
 }
 
-func (c *HnswCache) serve() {
+func (c *VectorIndexCache) serve() {
 	if c.started.Load() {
 		return
 	}
@@ -345,11 +358,11 @@ func (c *HnswCache) serve() {
 	os.Stderr.WriteString("Serve end\n")
 }
 
-func (c *HnswCache) Once() {
+func (c *VectorIndexCache) Once() {
 	c.once.Do(func() { c.serve() })
 }
 
-func (c *HnswCache) HouseKeeping() {
+func (c *VectorIndexCache) HouseKeeping() {
 
 	os.Stderr.WriteString("house keeping\n")
 	expiredkeys := make([]string, 0, 16)
@@ -366,17 +379,19 @@ func (c *HnswCache) HouseKeeping() {
 	for _, k := range expiredkeys {
 		value, loaded := c.IndexMap.LoadAndDelete(k)
 		if loaded {
-			os.Stderr.WriteString(fmt.Sprintf("HouseKeep: key %s deleted\n", k))
-			search := value.(*HnswSearch)
-			// destroy the usearch indexes
-			search.Destroy()
-			search = nil
+			switch search := value.(type) {
+			case *HnswSearch:
+				os.Stderr.WriteString(fmt.Sprintf("HnswSearch HouseKeep: key %s deleted\n", k))
+				search.Destroy()
+				search = nil
+			default:
+			}
 		}
 	}
 	os.Stderr.WriteString("house keeping end\n")
 }
 
-func (c *HnswCache) Destroy() {
+func (c *VectorIndexCache) Destroy() {
 	if c.started.Load() {
 		//c.ticker.Stop()
 		if !c.exited.Load() {
@@ -386,35 +401,45 @@ func (c *HnswCache) Destroy() {
 	// remove all keys
 	c.IndexMap.Range(func(key, value any) bool {
 		c.IndexMap.Delete(key)
-		search := value.(*HnswSearch)
-		search.Destroy()
+		switch search := value.(type) {
+		case *HnswSearch:
+			search.Destroy()
+			search = nil
+		default:
+		}
 		return true
 	})
 }
 
-func (c *HnswCache) GetIndex(proc *process.Process, cfg usearch.IndexConfig, tblcfg hnsw.IndexTableConfig, key string) (*HnswSearch, error) {
-	value, loaded := c.IndexMap.LoadOrStore(key, &HnswSearch{Idxcfg: cfg, Tblcfg: tblcfg})
-	idx := value.(*HnswSearch)
+func (c *VectorIndexCache) GetIndex(proc *process.Process, key string, def VectorIndexSearchIf) (VectorIndexSearchIf, error) {
+	value, loaded := c.IndexMap.LoadOrStore(key, def)
 	if !loaded {
 		// load model from database and if error during loading, remove the entry from gIndexMap
-		err := idx.LoadFromDatabase(proc)
-		if err != nil {
-			c.IndexMap.Delete(key)
-			return nil, err
+		switch search := value.(type) {
+		case *HnswSearch:
+			err := search.LoadFromDatabase(proc)
+			if err != nil {
+				c.IndexMap.Delete(key)
+				return nil, err
+			}
+			return value.(VectorIndexSearchIf), nil
+		default:
+			return nil, moerr.NewInternalError(proc.Ctx, "unsupported VectorIndexSearch type")
 		}
 
-		return idx, nil
 	}
 
-	return idx, nil
+	return value.(VectorIndexSearchIf), nil
 }
 
-func (c *HnswCache) Remove(key string) {
+func (c *VectorIndexCache) Remove(key string) {
 	value, loaded := c.IndexMap.LoadAndDelete(key)
 	if loaded {
-		search := value.(*HnswSearch)
-		search.Destroy()
-		search = nil
+		switch search := value.(type) {
+		case *HnswSearch:
+			search.Destroy()
+			search = nil
+		}
 	}
 }
 
