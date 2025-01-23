@@ -66,7 +66,7 @@ func (idx *HnswSearchIndex) loadChunk(proc *process.Process, stream_chan chan ex
 	return false, nil
 }
 
-func (idx *HnswSearchIndex) LoadIndex(proc *process.Process, idxcfg usearch.IndexConfig, tblcfg hnsw.IndexTableConfig) error {
+func (idx *HnswSearchIndex) LoadIndex(proc *process.Process, idxcfg hnsw.IndexConfig, tblcfg hnsw.IndexTableConfig) error {
 
 	stream_chan := make(chan executor.Result, 2)
 	error_chan := make(chan error)
@@ -109,7 +109,7 @@ func (idx *HnswSearchIndex) LoadIndex(proc *process.Process, idxcfg usearch.Inde
 		return moerr.NewInternalError(proc.Ctx, "Checksum mismatch with the index file")
 	}
 
-	usearchidx, err := usearch.NewIndex(idxcfg)
+	usearchidx, err := usearch.NewIndex(idxcfg.Usearch)
 	if err != nil {
 		return err
 	}

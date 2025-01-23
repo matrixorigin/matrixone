@@ -39,8 +39,8 @@ type hnswCreateState struct {
 	inited bool
 	build  *hnsw.HnswBuild
 	param  hnsw.HnswParam
-	idxcfg hnsw.IndexTableConfig
-	uscfg  usearch.IndexConfig
+	tblcfg hnsw.IndexTableConfig
+	idxcfg hnsw.IndexConfig
 	offset int
 	// holding one call batch, tokenizedState owns it.
 	batch *batch.Batch
@@ -66,8 +66,8 @@ func (u *hnswCreateState) end(tf *TableFunction, proc *process.Process) error {
 	hnswcache.VectorIndexCacheTTL = 30 * time.Second
 	hnswcache.Cache.TickerInterval = 5 * time.Second
 	hnswcache.Cache.Once()
-	s, err := hnswcache.Cache.GetIndex(proc, u.idxcfg.IndexTable, &hnswcache.HnswSearch{
-		VectorIndexSearch: hnswcache.VectorIndexSearch{Idxcfg: u.uscfg, Tblcfg: u.idxcfg}})
+	s, err := hnswcache.Cache.GetIndex(proc, u.tblcfg.IndexTable, &hnswcache.HnswSearch{
+		VectorIndexSearch: hnswcache.VectorIndexSearch{Idxcfg: u.idxcfg, Tblcfg: u.tblcfg}})
 	if err != nil {
 		return err
 	}
@@ -131,7 +131,7 @@ func (u *hnswCreateState) start(tf *TableFunction, proc *process.Process, nthRow
 
 		if len(u.param.Quantization) > 0 {
 			var ok bool
-			u.uscfg.Quantization, ok = hnsw.QuantizationValid(u.param.Quantization)
+			u.idxcfg.Usearch.Quantization, ok = hnsw.QuantizationValid(u.param.Quantization)
 			if !ok {
 				return moerr.NewInternalError(proc.Ctx, "Invalid quantization value")
 			}
@@ -142,18 +142,18 @@ func (u *hnswCreateState) start(tf *TableFunction, proc *process.Process, nthRow
 			if err != nil {
 				return err
 			}
-			u.uscfg.Connectivity = uint(val)
+			u.idxcfg.Usearch.Connectivity = uint(val)
 		}
 
 		// default L2Sq
-		u.uscfg.Metric = usearch.L2sq
+		u.idxcfg.Usearch.Metric = usearch.L2sq
 
 		if len(u.param.EfConstruction) > 0 {
 			val, err := strconv.Atoi(u.param.EfConstruction)
 			if err != nil {
 				return err
 			}
-			u.uscfg.ExpansionAdd = uint(val)
+			u.idxcfg.Usearch.ExpansionAdd = uint(val)
 		}
 
 		// IndexTableConfig
@@ -168,7 +168,7 @@ func (u *hnswCreateState) start(tf *TableFunction, proc *process.Process, nthRow
 		if len(cfgstr) == 0 {
 			return moerr.NewInternalError(proc.Ctx, "IndexTableConfig is empty")
 		}
-		err := json.Unmarshal([]byte(cfgstr), &u.idxcfg)
+		err := json.Unmarshal([]byte(cfgstr), &u.tblcfg)
 		if err != nil {
 			return err
 		}
@@ -185,13 +185,14 @@ func (u *hnswCreateState) start(tf *TableFunction, proc *process.Process, nthRow
 		dimension := f32aVec.GetType().Width
 
 		// dimension
-		u.uscfg.Dimensions = uint(dimension)
+		u.idxcfg.Usearch.Dimensions = uint(dimension)
+		u.idxcfg.Type = "hnsw"
 
 		os.Stderr.WriteString(fmt.Sprintf("Param %v\n", u.param))
-		os.Stderr.WriteString(fmt.Sprintf("Cfg %v\n", u.idxcfg))
-		os.Stderr.WriteString(fmt.Sprintf("USearch Cfg %v\n", u.uscfg))
+		os.Stderr.WriteString(fmt.Sprintf("Cfg %v\n", u.tblcfg))
+		os.Stderr.WriteString(fmt.Sprintf("USearch Cfg %v\n", u.idxcfg))
 
-		u.build, err = hnsw.NewHnswBuild(u.uscfg, u.idxcfg)
+		u.build, err = hnsw.NewHnswBuild(u.idxcfg, u.tblcfg)
 		if err != nil {
 			return err
 		}

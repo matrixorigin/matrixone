@@ -46,6 +46,11 @@ type HnswParam struct {
 	OpType         string `json:"op_type"`
 }
 
+type IndexConfig struct {
+	Type    string
+	Usearch usearch.IndexConfig
+}
+
 type HnswBuildIndex struct {
 	Id    int64
 	Index *usearch.Index
@@ -54,13 +59,13 @@ type HnswBuildIndex struct {
 	size  uint64
 }
 
-func NewHnswBuildIndex(id int64, cfg usearch.IndexConfig) (*HnswBuildIndex, error) {
+func NewHnswBuildIndex(id int64, cfg IndexConfig) (*HnswBuildIndex, error) {
 	var err error
 	idx := &HnswBuildIndex{}
 
 	idx.Id = id
 
-	idx.Index, err = usearch.NewIndex(cfg)
+	idx.Index, err = usearch.NewIndex(cfg.Usearch)
 	if err != nil {
 		return nil, err
 	}
@@ -195,12 +200,12 @@ func (idx *HnswBuildIndex) Add(key int64, vec []float32) error {
 }
 
 type HnswBuild struct {
-	cfg     usearch.IndexConfig
+	cfg     IndexConfig
 	tblcfg  IndexTableConfig
 	indexes []*HnswBuildIndex
 }
 
-func NewHnswBuild(cfg usearch.IndexConfig, tblcfg IndexTableConfig) (info *HnswBuild, err error) {
+func NewHnswBuild(cfg IndexConfig, tblcfg IndexTableConfig) (info *HnswBuild, err error) {
 	info = &HnswBuild{cfg, tblcfg, make([]*HnswBuildIndex, 0, 16)}
 	return info, nil
 }

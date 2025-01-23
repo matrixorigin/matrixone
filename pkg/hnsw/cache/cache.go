@@ -25,7 +25,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/hnsw"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	usearch "github.com/unum-cloud/usearch/golang"
 )
 
 var (
@@ -44,7 +43,7 @@ type VectorIndexSearch struct {
 	Mutex      sync.RWMutex
 	ExpireAt   atomic.Int64
 	LastUpdate atomic.Int64
-	Idxcfg     usearch.IndexConfig
+	Idxcfg     hnsw.IndexConfig
 	Tblcfg     hnsw.IndexTableConfig
 }
 
