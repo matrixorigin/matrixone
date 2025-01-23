@@ -36,11 +36,13 @@ func QuantizationValid(a string) (usearch.Quantization, bool) {
 	return r, ok
 }
 
+// Priority Queue/Heap structure for getting N-Best results from multiple mini-indexes
 type SearchResult struct {
 	id       int64
 	distance float32
 }
 
+// Non thread-safe heap struct
 type SearchResultHeap []*SearchResult
 
 func (h SearchResultHeap) Len() int { return len(h) }
@@ -67,6 +69,7 @@ func (h *SearchResultHeap) Pop() any {
 	return item
 }
 
+// Thread-safe Heap struct
 type SearchResultSafeHeap struct {
 	mutex   sync.Mutex
 	resheap SearchResultHeap

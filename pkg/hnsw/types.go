@@ -18,11 +18,20 @@ import (
 	usearch "github.com/unum-cloud/usearch/golang"
 )
 
+/*
+  HNSW vector index using usearch
+
+  Multiple mini-indexes with max size 10K vectors will be build and search will run usearch.Search concurrently with all mini-indexes.
+  Single model file will be splited into chunks and each chunk size is 64K maximum.
+*/
+
 const (
 	MaxIndexCapacity = 100000
 	MaxChunkSize     = 65536
 )
 
+// HNSW have two secondary index tables, metadata and index storage.  For new vector index algorithm that share the same secondary tables,
+// can use the same IndexTableConfig struct
 type IndexTableConfig struct {
 	DbName        string `json:"db"`
 	SrcTable      string `json:"src"`
@@ -30,6 +39,7 @@ type IndexTableConfig struct {
 	IndexTable    string `json:"index"`
 }
 
+// HNSW specified parameters
 type HnswParam struct {
 	M              string `json:"m"`
 	EfConstruction string `json:"ef_construction"`
@@ -37,6 +47,7 @@ type HnswParam struct {
 	OpType         string `json:"op_type"`
 }
 
+// This is generalized index config and able to share between various algorithm types.  Simply add your new configuration such as usearch.IndexConfig
 type IndexConfig struct {
 	Type    string
 	Usearch usearch.IndexConfig

@@ -30,6 +30,7 @@ import (
 	usearch "github.com/unum-cloud/usearch/golang"
 )
 
+// Hnsw search index struct to hold the usearch index
 type HnswSearchIndex struct {
 	Id        int64
 	Path      string
@@ -38,11 +39,13 @@ type HnswSearchIndex struct {
 	Checksum  string
 }
 
+// This is the HNSW search implementation that implement VectorIndexSearchIf interface
 type HnswSearch struct {
 	VectorIndexSearch
 	Indexes []*HnswSearchIndex
 }
 
+// load chunk from database
 func (idx *HnswSearchIndex) loadChunk(proc *process.Process, stream_chan chan executor.Result, error_chan chan error, fp *os.File) (stream_closed bool, err error) {
 	var res executor.Result
 	var ok bool
@@ -71,6 +74,7 @@ func (idx *HnswSearchIndex) loadChunk(proc *process.Process, stream_chan chan ex
 	return false, nil
 }
 
+// load index from database
 func (idx *HnswSearchIndex) LoadIndex(proc *process.Process, idxcfg hnsw.IndexConfig, tblcfg hnsw.IndexTableConfig) error {
 
 	stream_chan := make(chan executor.Result, 2)
@@ -129,10 +133,12 @@ func (idx *HnswSearchIndex) LoadIndex(proc *process.Process, idxcfg hnsw.IndexCo
 	return nil
 }
 
+// Call usearch.Search
 func (idx *HnswSearchIndex) Search(query []float32, limit uint) (keys []usearch.Key, distances []float32, err error) {
 	return idx.Index.Search(query, limit)
 }
 
+// Search the hnsw index (implement VectorIndexSearch.Search)
 func (h *HnswSearch) Search(query []float32, limit uint) (keys []int64, distances []float32, err error) {
 	h.Mutex.RLock()
 	defer h.Mutex.RUnlock()
@@ -187,6 +193,7 @@ func (h *HnswSearch) Search(query []float32, limit uint) (keys []int64, distance
 	return reskeys, resdistances, nil
 }
 
+// Destroy HnswSearch (implement VectorIndexSearch.Destroy)
 func (h *HnswSearch) Destroy() {
 	h.Mutex.Lock()
 	defer h.Mutex.Unlock()
@@ -198,6 +205,7 @@ func (h *HnswSearch) Destroy() {
 	os.Stderr.WriteString("hnsw search destroy\n")
 }
 
+// Check Expired (implement VectorIndexSearch.Expired)
 func (h *HnswSearch) Expired() bool {
 	h.Mutex.RLock()
 	defer h.Mutex.RUnlock()
@@ -207,6 +215,7 @@ func (h *HnswSearch) Expired() bool {
 	return (ts > 0 && ts < now)
 }
 
+// load metadata from database
 func (s *HnswSearch) LoadMetadata(proc *process.Process) ([]*HnswSearchIndex, error) {
 
 	sql := fmt.Sprintf("SELECT * FROM `%s`.`%s`", s.Tblcfg.DbName, s.Tblcfg.MetadataTable)
@@ -240,6 +249,7 @@ func (s *HnswSearch) LoadMetadata(proc *process.Process) ([]*HnswSearchIndex, er
 	return indexes, nil
 }
 
+// load index from database
 func (s *HnswSearch) LoadIndex(proc *process.Process, indexes []*HnswSearchIndex) ([]*HnswSearchIndex, error) {
 
 	for _, idx := range indexes {
@@ -251,6 +261,7 @@ func (s *HnswSearch) LoadIndex(proc *process.Process, indexes []*HnswSearchIndex
 	return indexes, nil
 }
 
+// load index from database (implement VectorIndexSearch.LoadFromDatabase)
 func (s *HnswSearch) LoadFromDatabase(proc *process.Process) error {
 	s.Mutex.Lock()
 	defer s.Mutex.Unlock()

@@ -27,11 +27,25 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+/*
+   VectorIndexCache is the generalized cache structure for various algorithm types that share the VectorIndexSearchIf interface.
+   Implement the VectorIndexSearchIf such as HnswSearch to able to use VectorIndexCache.
+
+   VectorIndexCache allows to search the vector index concurrently.  Usually vector index model is huge in size and it is not possible
+   to load the whole model to memory for each user.  We need a cache that can run concurrently and able to refresh automatically.
+
+   1. When the index is loaded into memory, index can be shared with RWMutex.Rlock() (Read-Only)
+   2. With RWMutex.Lock (Write),  index can be loaded from database without race.
+   3. HouseKeeping. Index will have time-to-live interval (see VectorIndexCacheTTL).  When the index is expired (Now < ExpireDate), index will be
+   deleted from the cache. Ticker go routine will manage the house keeping.
+*/
+
 var (
 	VectorIndexCacheTTL time.Duration     = 30 * time.Minute
 	Cache               *VectorIndexCache = NewVectorIndexCache()
 )
 
+// Various vector index algorithm wants to share with VectorIndexCache need to implement VectorIndexSearchIf interface (see HnswSearch)
 type VectorIndexSearchIf interface {
 	Search(query []float32, limit uint) (keys []int64, distances []float32, err error)
 	Destroy()
@@ -39,6 +53,7 @@ type VectorIndexSearchIf interface {
 	LoadFromDatabase(*process.Process) error
 }
 
+// base VectorIndex Search structure for VectorIndexSearchIf (see HnswSearch)
 type VectorIndexSearch struct {
 	Mutex      sync.RWMutex
 	ExpireAt   atomic.Int64
@@ -47,6 +62,7 @@ type VectorIndexSearch struct {
 	Tblcfg     hnsw.IndexTableConfig
 }
 
+// implementation of VectorIndexCache
 type VectorIndexCache struct {
 	IndexMap       sync.Map
 	TickerInterval time.Duration
@@ -104,10 +120,12 @@ func (c *VectorIndexCache) serve() {
 	os.Stderr.WriteString("Serve end\n")
 }
 
+// initialize the Cache and only call once
 func (c *VectorIndexCache) Once() {
 	c.once.Do(func() { c.serve() })
 }
 
+// house keeping to check expired keys and delete from cache
 func (c *VectorIndexCache) HouseKeeping() {
 
 	os.Stderr.WriteString("house keeping\n")
@@ -133,6 +151,7 @@ func (c *VectorIndexCache) HouseKeeping() {
 	os.Stderr.WriteString("house keeping end\n")
 }
 
+// destroy the cache
 func (c *VectorIndexCache) Destroy() {
 	if c.started.Load() {
 		//c.ticker.Stop()
@@ -150,6 +169,7 @@ func (c *VectorIndexCache) Destroy() {
 	})
 }
 
+// Get index from cache and return VectorIndexSearchIf interface
 func (c *VectorIndexCache) GetIndex(proc *process.Process, key string, def VectorIndexSearchIf) (VectorIndexSearchIf, error) {
 	value, loaded := c.IndexMap.LoadOrStore(key, def)
 	search := value.(VectorIndexSearchIf)
@@ -166,6 +186,7 @@ func (c *VectorIndexCache) GetIndex(proc *process.Process, key string, def Vecto
 	return search, nil
 }
 
+// remove key from cache
 func (c *VectorIndexCache) Remove(key string) {
 	value, loaded := c.IndexMap.LoadAndDelete(key)
 	if loaded {

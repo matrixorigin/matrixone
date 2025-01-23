@@ -27,6 +27,7 @@ import (
 	usearch "github.com/unum-cloud/usearch/golang"
 )
 
+// Hnsw Build index implementation
 type HnswBuildIndex struct {
 	Id    int64
 	Index *usearch.Index
@@ -41,6 +42,7 @@ type HnswBuild struct {
 	indexes []*HnswBuildIndex
 }
 
+// New HnswBuildIndex struct
 func NewHnswBuildIndex(id int64, cfg IndexConfig) (*HnswBuildIndex, error) {
 	var err error
 	idx := &HnswBuildIndex{}
@@ -59,6 +61,7 @@ func NewHnswBuildIndex(id int64, cfg IndexConfig) (*HnswBuildIndex, error) {
 	return idx, nil
 }
 
+// Destroy the struct
 func (idx *HnswBuildIndex) Destroy() error {
 	if idx.Index != nil {
 		err := idx.Index.Destroy()
@@ -78,6 +81,7 @@ func (idx *HnswBuildIndex) Destroy() error {
 	return nil
 }
 
+// Save the index to file
 func (idx *HnswBuildIndex) SaveToFile() error {
 
 	if idx.Saved {
@@ -100,6 +104,8 @@ func (idx *HnswBuildIndex) SaveToFile() error {
 	return nil
 }
 
+// Generate the SQL to update the secondary index tables.
+// 1. store the index file into the index table
 func (idx *HnswBuildIndex) ToSql(cfg IndexTableConfig) (string, error) {
 
 	err := idx.SaveToFile()
@@ -140,6 +146,7 @@ func (idx *HnswBuildIndex) ToSql(cfg IndexTableConfig) (string, error) {
 	return sql, nil
 }
 
+// get the checksum of the file
 func CheckSum(path string) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -156,6 +163,7 @@ func CheckSum(path string) (string, error) {
 	return chksum, nil
 }
 
+// is the index empty
 func (idx *HnswBuildIndex) Empty() (bool, error) {
 
 	sz, err := idx.Index.Len()
@@ -166,6 +174,7 @@ func (idx *HnswBuildIndex) Empty() (bool, error) {
 	return (sz == 0), nil
 }
 
+// check the index is full, i.e. 10K vectors
 func (idx *HnswBuildIndex) Full() (bool, error) {
 
 	sz, err := idx.Index.Len()
@@ -176,16 +185,19 @@ func (idx *HnswBuildIndex) Full() (bool, error) {
 	return (sz == MaxIndexCapacity), nil
 }
 
+// add vector to the index
 func (idx *HnswBuildIndex) Add(key int64, vec []float32) error {
 
 	return idx.Index.Add(uint64(key), vec)
 }
 
+// create HsnwBuild struct
 func NewHnswBuild(cfg IndexConfig, tblcfg IndexTableConfig) (info *HnswBuild, err error) {
 	info = &HnswBuild{cfg, tblcfg, make([]*HnswBuildIndex, 0, 16)}
 	return info, nil
 }
 
+// destroy
 func (h *HnswBuild) Destroy() error {
 
 	var errs error
@@ -199,6 +211,8 @@ func (h *HnswBuild) Destroy() error {
 	return errs
 }
 
+// add vector to the build
+// it will check the current index is full and add the vector to available index
 func (h *HnswBuild) Add(key int64, vec []float32) error {
 	var err error
 	var idx *HnswBuildIndex
@@ -237,6 +251,9 @@ func (h *HnswBuild) Add(key int64, vec []float32) error {
 	return idx.Add(key, vec)
 }
 
+// generate SQL to update the secondary index tables
+// 1. sync the metadata table
+// 2. sync the index file to index table
 func (h *HnswBuild) ToInsertSql(ts int64) ([]string, error) {
 
 	sqls := make([]string, 0, len(h.indexes)+1)
