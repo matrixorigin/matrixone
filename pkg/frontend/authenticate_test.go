@@ -30,6 +30,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -11184,5 +11185,144 @@ func Test_checkPitrDup(t *testing.T) {
 		isDup, err := checkPitrDup(ctx, bh, tenant.Tenant, 0, stmt)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(isDup, convey.ShouldBeTrue)
+	})
+}
+
+func Test_determineUserHasPrivilegeSet(t *testing.T) {
+	convey.Convey("determineUserHasPrivilegeSet error test", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
+		setPu("", pu)
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		rm, _ := NewRoutineManager(ctx, "")
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		priv := &privilege{}
+		ret, _, err := determineUserHasPrivilegeSet(ctx, ses, priv)
+		convey.ShouldBeFalse(ret, false)
+		convey.So(err, convey.ShouldBeNil)
+	})
+
+	convey.Convey("determineUserHasPrivilegeSet error test", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		privStub := gostub.Stub(&privilegeCacheIsEnabled, func(ctx context.Context, ses *Session) (bool, error) {
+			return false, moerr.NewInternalErrorNoCtx("")
+		})
+		defer privStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
+		setPu("", pu)
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		rm, _ := NewRoutineManager(ctx, "")
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		priv := determinePrivilegeSetOfStatement(&tree.CreateTable{})
+		_, _, err := determineUserHasPrivilegeSet(ctx, ses, priv)
+		convey.So(err, convey.ShouldNotBeNil)
+	})
+
+	convey.Convey("determineUserHasPrivilegeSet error test", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		privStub := gostub.Stub(&checkPrivilegeInCache, func(ctx context.Context, ses *Session, priv *privilege, enableCache bool) (bool, error) {
+			return false, moerr.NewInternalErrorNoCtx("")
+		})
+		defer privStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
+		setPu("", pu)
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		rm, _ := NewRoutineManager(ctx, "")
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		priv := determinePrivilegeSetOfStatement(&tree.CreateTable{})
+		_, _, err := determineUserHasPrivilegeSet(ctx, ses, priv)
+		convey.So(err, convey.ShouldNotBeNil)
+	})
+
+	convey.Convey("determineUserHasPrivilegeSet error test", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		privStub := gostub.Stub(&checkPrivilegeInCache, func(ctx context.Context, ses *Session, priv *privilege, enableCache bool) (bool, error) {
+			return true, nil
+		})
+		defer privStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
+		setPu("", pu)
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		rm, _ := NewRoutineManager(ctx, "")
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		priv := determinePrivilegeSetOfStatement(&tree.CreateTable{})
+		ret, _, err := determineUserHasPrivilegeSet(ctx, ses, priv)
+		convey.ShouldBeFalse(ret, false)
+		convey.So(err, convey.ShouldBeNil)
 	})
 }

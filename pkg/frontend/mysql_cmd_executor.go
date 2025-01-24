@@ -1037,7 +1037,6 @@ func doExplainStmt(reqCtx context.Context, ses *Session, stmt *tree.ExplainStmt)
 	}
 
 	//get query optimizer and execute Optimize
-	//exPlan, err := buildPlan(reqCtx, ses, ses.GetTxnCompileCtx(), stmt.Statement)
 	exPlan, err := buildPlanWithAuthorization(reqCtx, ses, ses.GetTxnCompileCtx(), stmt.Statement)
 	if err != nil {
 		return err
@@ -1155,7 +1154,6 @@ func createPrepareStmt(
 	stmt tree.Statement,
 	saveStmt tree.Statement) (*PrepareStmt, error) {
 
-	//preparePlan, err := buildPlan(execCtx.reqCtx, ses, ses.GetTxnCompileCtx(), stmt)
 	preparePlan, err := buildPlanWithAuthorization(execCtx.reqCtx, ses, ses.GetTxnCompileCtx(), stmt)
 	if err != nil {
 		return nil, err
@@ -1204,7 +1202,6 @@ func createPrepareStmt(
 
 func doDeallocate(ses *Session, execCtx *ExecCtx, st *tree.Deallocate) error {
 	deallocatePlan, err := buildPlanWithAuthorization(execCtx.reqCtx, ses, ses.GetTxnCompileCtx(), st)
-	//deallocatePlan, err := buildPlan(execCtx.reqCtx, ses, ses.GetTxnCompileCtx(), st)
 	if err != nil {
 		return err
 	}
@@ -2269,8 +2266,6 @@ func authenticateUserCanExecuteStatement(reqCtx context.Context, ses *Session, s
 	if ses.skipAuthForSpecialUser() {
 		return stats, nil
 	}
-	//var havePrivilege bool
-	//var err error
 	if ses.GetTenantInfo() != nil {
 		ses.SetPrivilege(determinePrivilegeSetOfStatement(stmt))
 
@@ -3057,7 +3052,6 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	proc.Base.SessionInfo.User = userNameOnly
 	proc.Base.SessionInfo.QueryId = ses.getQueryId(input.isInternal())
 
-	//statsInfo := new(statistic.StatsInfo)
 	statsInfo := statistic.NewStatsInfo()
 	statsInfo.ParseStage.ParseStartTime = beginInstant
 

@@ -62,7 +62,6 @@ func handleCreateDynamicTable(ctx context.Context, ses *Session, st *tree.Create
 	}
 
 	generatedPlan, err := buildPlanWithAuthorization(ctx, ses, ses.GetTxnCompileCtx(), st.AsSource)
-	//generatedPlan, err := buildPlan(ctx, ses, ses.GetTxnCompileCtx(), st.AsSource)
 	if err != nil {
 		return err
 	}
