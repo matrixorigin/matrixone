@@ -59,15 +59,16 @@ type VectorIndexSearch struct {
 	Mutex      sync.RWMutex
 	ExpireAt   atomic.Int64
 	LastUpdate atomic.Int64
-	Status     atomic.Int32 // 0 - NOT INIT, 1 - LOADED, 2 or above ERRCODE
+	Status     atomic.Int32 // 0 - NOT INIT, 1 - LOADED, 2 - DESTROYED, 3 or above ERRCODE
 	Algo       VectorIndexSearchIf
 }
 
 func (s *VectorIndexSearch) Destroy() {
 	s.Mutex.Lock()
 	defer s.Mutex.Unlock()
-
 	s.Algo.Destroy()
+	// destroyed
+	s.Status.Store(2)
 }
 
 func (s *VectorIndexSearch) Load(proc *process.Process) error {
@@ -76,9 +77,11 @@ func (s *VectorIndexSearch) Load(proc *process.Process) error {
 
 	err := s.Algo.Load(proc)
 	if err != nil {
-		s.Status.Store(2)
+		// load error
+		s.Status.Store(3)
 		return err
 	}
+	// Loaded
 	s.Status.Store(1)
 	s.extend(true)
 	return nil
@@ -114,8 +117,13 @@ func (s *VectorIndexSearch) Search(query []float32, limit uint) (keys []int64, d
 	}
 	defer s.Mutex.RUnlock()
 
-	if s.Status.Load() > 1 {
-		return nil, nil, moerr.NewInternalErrorNoCtx("Load index error")
+	status := s.Status.Load()
+	if status > 1 {
+		if status == 2 {
+			return nil, nil, moerr.NewInternalErrorNoCtx("Index destroyed")
+		} else {
+			return nil, nil, moerr.NewInternalErrorNoCtx("Load index error")
+		}
 	}
 
 	s.extend(false)
