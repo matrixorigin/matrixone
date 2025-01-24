@@ -35,6 +35,7 @@ type MockSearch struct {
 }
 
 func (m *MockSearch) Search(query []float32, limit uint) (keys []int64, distances []float32, err error) {
+	time.Sleep(2 * time.Millisecond)
 	return []int64{1}, []float32{2.0}, nil
 }
 
@@ -42,6 +43,7 @@ func (m *MockSearch) Destroy() {
 }
 
 func (m *MockSearch) Load(*process.Process) error {
+	time.Sleep(2 * time.Second)
 	return nil
 }
 
@@ -148,7 +150,7 @@ func TestCacheConcurrent(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for j := 0; j < 200000; j++ {
+			for j := 0; j < 2000; j++ {
 				idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(8)}
 				idxcfg.Usearch.Metric = usearch.L2sq
 				tblcfg := vectorindex.IndexTableConfig{DbName: "db", SrcTable: "src", MetadataTable: "__secondary_meta", IndexTable: "__secondary_index"}

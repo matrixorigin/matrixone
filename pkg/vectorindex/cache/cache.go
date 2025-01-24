@@ -236,7 +236,7 @@ func (c *VectorIndexCache) Search(proc *process.Process, key string, newalgo Vec
 	algo := value.(*VectorIndexSearch)
 	if !loaded {
 		// load model from database and if error during loading, remove the entry from gIndexMap
-		os.Stderr.WriteString("Search not loaded...Load From Database\n")
+		os.Stderr.WriteString("New Algo and Load From Database\n")
 		err := algo.Load(proc)
 		if err != nil {
 			c.IndexMap.Delete(key)
