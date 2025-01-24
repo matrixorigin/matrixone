@@ -123,7 +123,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			idxObjRefs[i], idxTableDefs[i] = builder.compCtx.ResolveIndexTableByRef(objRef, idxDef.IndexTableName, bindCtx.snapshot)
 
 			if len(idxDef.Parts) == 1 {
-				oldColName2Idx[idxDef.IndexTableName+"."+catalog.IndexTableIndexColName] = [2]int32{fullProjTag, colName2Idx[tableDef.Name+"."+idxDef.Parts[0]]}
+				oldColName2Idx[idxDef.IndexTableName+"."+catalog.IndexTableIndexColName] = oldColName2Idx[tableDef.Name+"."+idxDef.Parts[0]]
 			} else {
 				args := make([]*plan.Expr, len(idxDef.Parts))
 				for j, part := range idxDef.Parts {
