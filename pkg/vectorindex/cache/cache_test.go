@@ -35,7 +35,7 @@ type MockSearch struct {
 }
 
 func (m *MockSearch) Search(query []float32, limit uint) (keys []int64, distances []float32, err error) {
-	time.Sleep(2 * time.Millisecond)
+	//time.Sleep(2 * time.Millisecond)
 	return []int64{1}, []float32{2.0}, nil
 }
 
@@ -43,7 +43,7 @@ func (m *MockSearch) Destroy() {
 }
 
 func (m *MockSearch) Load(*process.Process) error {
-	time.Sleep(6 * time.Second)
+	//time.Sleep(6 * time.Second)
 	return nil
 }
 
