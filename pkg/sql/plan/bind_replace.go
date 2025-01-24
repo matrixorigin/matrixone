@@ -423,7 +423,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 	updateCtxList := make([]*plan.UpdateCtx, 0)
 
 	finalProjTag := builder.genNewTag()
-	var finalProjList []*plan.Expr
+	finalProjList := make([]*plan.Expr, 0, len(tableDef.Cols)+len(tableDef.Indexes)*2)
 	var newPkIdx int32
 
 	{
