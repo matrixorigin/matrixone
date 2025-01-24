@@ -60,7 +60,6 @@ func TestHnsw(t *testing.T) {
 	cache.VectorIndexCacheTTL = 2 * time.Second
 	cache.VectorIndexCacheTTL = 2 * time.Second
 	cache.Cache = cache.NewVectorIndexCache()
-	cache.Cache.Once()
 
 	time.Sleep(1999 * time.Millisecond)
 
@@ -77,6 +76,7 @@ func TestHnsw(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for j := 0; j < 20000; j++ {
+				cache.Cache.Once()
 
 				algo := &HnswSearch{Idxcfg: idxcfg, Tblcfg: tblcfg}
 				keys, distances, err := cache.Cache.Search(proc, tblcfg.IndexTable, algo, fp32a, 4)
