@@ -57,10 +57,12 @@ func TestHnsw(t *testing.T) {
 	runSql_streaming = mock_runSql_streaming
 
 	// init cache
-	cache.VectorIndexCacheTTL = 5 * time.Second
-	cache.VectorIndexCacheTTL = 5 * time.Second
+	cache.VectorIndexCacheTTL = 2 * time.Second
+	cache.VectorIndexCacheTTL = 2 * time.Second
 	cache.Cache = cache.NewVectorIndexCache()
 	cache.Cache.Once()
+
+	time.Sleep(1999 * time.Millisecond)
 
 	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}
 	idxcfg.Usearch.Metric = usearch.L2sq
@@ -68,13 +70,13 @@ func TestHnsw(t *testing.T) {
 	fp32a := []float32{0, 1, 2}
 
 	var wg sync.WaitGroup
-	nthread := 8
+	nthread := 16
 
 	for i := 0; i < nthread; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for j := 0; j < 2000; j++ {
+			for j := 0; j < 200000; j++ {
 
 				algo := &HnswSearch{Idxcfg: idxcfg, Tblcfg: tblcfg}
 				keys, distances, err := cache.Cache.Search(proc, tblcfg.IndexTable, algo, fp32a, 4)
@@ -90,7 +92,8 @@ func TestHnsw(t *testing.T) {
 
 	wg.Wait()
 
-	time.Sleep(10 * time.Second)
+	os.Stderr.WriteString("threads stopped\n")
+	time.Sleep(3 * time.Second)
 	cache.Cache.Destroy()
 }
 
