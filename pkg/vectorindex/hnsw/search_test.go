@@ -70,13 +70,13 @@ func TestHnsw(t *testing.T) {
 	fp32a := []float32{0, 1, 2}
 
 	var wg sync.WaitGroup
-	nthread := 16
+	nthread := 64
 
 	for i := 0; i < nthread; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for j := 0; j < 200000; j++ {
+			for j := 0; j < 20000; j++ {
 
 				algo := &HnswSearch{Idxcfg: idxcfg, Tblcfg: tblcfg}
 				keys, distances, err := cache.Cache.Search(proc, tblcfg.IndexTable, algo, fp32a, 4)
