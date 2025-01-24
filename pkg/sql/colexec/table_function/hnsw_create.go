@@ -47,6 +47,13 @@ type hnswCreateState struct {
 	batch *batch.Batch
 }
 
+// stub function
+var newHnswAlgo = newHnswAlgoFn
+
+func newHnswAlgoFn(idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) veccache.VectorIndexSearchIf {
+	return &hnsw.HnswSearch{Idxcfg: idxcfg, Tblcfg: tblcfg}
+}
+
 func (u *hnswCreateState) end(tf *TableFunction, proc *process.Process) error {
 	os.Stderr.WriteString("hnswCreate END\n")
 
@@ -69,8 +76,8 @@ func (u *hnswCreateState) end(tf *TableFunction, proc *process.Process) error {
 	veccache.Cache.TickerInterval = 5 * time.Second
 	veccache.Cache.Once()
 
-	keys, distance, err := veccache.Cache.Search(proc, u.tblcfg.IndexTable,
-		&hnsw.HnswSearch{Idxcfg: u.idxcfg, Tblcfg: u.tblcfg}, vec, 3)
+	algo := newHnswAlgo(u.idxcfg, u.tblcfg)
+	keys, distance, err := veccache.Cache.Search(proc, u.tblcfg.IndexTable, algo, vec, 3)
 	if err != nil {
 		return err
 	}
