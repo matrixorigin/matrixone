@@ -1474,7 +1474,8 @@ func (c *checkpointCleaner) Process(inputCtx context.Context) (err error) {
 	memoryBuffer := MakeGCWindowBuffer(16 * mpool.MB)
 	defer memoryBuffer.Close(c.mp)
 
-	if err = c.tryScanLocked(ctx, memoryBuffer, nil); err != nil {
+	var tryGC bool
+	if tryGC, err = c.tryScanLocked(ctx, memoryBuffer, nil); err != nil || !tryGC {
 		return
 	}
 	err = c.tryGCLocked(ctx, memoryBuffer)
@@ -1534,8 +1535,8 @@ func (c *checkpointCleaner) FastExecute(inputCtx context.Context, minTS *types.T
 		}
 		return true
 	}
-
-	if err = c.tryScanLocked(ctx, memoryBuffer, checker); err != nil {
+	var tryGC bool
+	if tryGC, err = c.tryScanLocked(ctx, memoryBuffer, checker); err != nil || !tryGC {
 		return
 	}
 	return c.tryFastGCLocked(ctx, memoryBuffer)
@@ -1570,6 +1571,10 @@ func (c *checkpointCleaner) tryFastGCLocked(
 	}
 	accountSnapshots := TransformToTSList(snapshots)
 	scanWindow := c.GetScannedWindowLocked()
+
+	if scanWindow == nil {
+		return
+	}
 	filesToGC, err := c.doGCAgainstFastLocked(
 		accountSnapshots, pitrs, memoryBuffer, scanWindow,
 	)
@@ -1666,7 +1671,7 @@ func (c *checkpointCleaner) tryScanLocked(
 	ctx context.Context,
 	memoryBuffer *containers.OneSchemaBatchBuffer,
 	checker func(*checkpoint.CheckpointEntry) bool,
-) (err error) {
+) (tryGC bool, err error) {
 	// get the max scanned timestamp
 	var maxScannedTS types.TS
 	if scanWaterMark := c.GetScanWaterMark(); scanWaterMark != nil {
@@ -1714,6 +1719,7 @@ func (c *checkpointCleaner) tryScanLocked(
 	}
 	c.mutAddScannedLocked(newWindow)
 	c.updateScanWaterMark(candidates[len(candidates)-1])
+	tryGC = true
 	files := tmpNewFiles
 	for _, stats := range c.GetScannedWindowLocked().files {
 		files = append(files, stats.ObjectName().String())
