@@ -43,7 +43,7 @@ func (m *MockSearch) Destroy() {
 }
 
 func (m *MockSearch) Load(*process.Process) error {
-	time.Sleep(2 * time.Second)
+	time.Sleep(6 * time.Second)
 	return nil
 }
 

@@ -88,8 +88,8 @@ func (s *VectorIndexSearch) Load(proc *process.Process) error {
 }
 
 func (s *VectorIndexSearch) Expired() bool {
-	s.Mutex.RLock()
-	defer s.Mutex.RUnlock()
+	//s.Mutex.RLock()
+	//defer s.Mutex.RUnlock()
 
 	ts := s.ExpireAt.Load()
 	now := time.Now().UnixMicro()
