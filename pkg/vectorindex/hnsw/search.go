@@ -192,7 +192,7 @@ func (h *HnswSearch) Search(query []float32, limit uint) (keys []int64, distance
 		key, distance := heap.Pop()
 		reskeys = append(reskeys, key)
 		resdistances = append(resdistances, distance)
-		os.Stderr.WriteString(fmt.Sprintf("i=%d Key %d distance = %f\n", i, key, distance))
+		//os.Stderr.WriteString(fmt.Sprintf("i=%d Key %d distance = %f\n", i, key, distance))
 	}
 
 	return reskeys, resdistances, nil
