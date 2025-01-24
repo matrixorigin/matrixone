@@ -69,8 +69,8 @@ func (u *hnswCreateState) end(tf *TableFunction, proc *process.Process) error {
 	veccache.Cache.TickerInterval = 5 * time.Second
 	veccache.Cache.Once()
 
-	keys, distance, err := veccache.Cache.Search(proc, u.tblcfg.IndexTable, &hnsw.HnswSearch{
-		VectorIndexSearch: veccache.VectorIndexSearch{Idxcfg: u.idxcfg, Tblcfg: u.tblcfg}}, vec, 3)
+	keys, distance, err := veccache.Cache.Search(proc, u.tblcfg.IndexTable,
+		&hnsw.HnswSearch{Idxcfg: u.idxcfg, Tblcfg: u.tblcfg}, vec, 3)
 	if err != nil {
 		return err
 	}

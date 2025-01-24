@@ -23,7 +23,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -50,9 +50,8 @@ var (
 // Various vector index algorithm wants to share with VectorIndexCache need to implement VectorIndexSearchIf interface (see HnswSearch)
 type VectorIndexSearchIf interface {
 	Search(query []float32, limit uint) (keys []int64, distances []float32, err error)
+	Load(*process.Process) error
 	Destroy()
-	Expired() bool
-	LoadFromDatabase(*process.Process) error
 }
 
 // base VectorIndex Search structure for VectorIndexSearchIf (see HnswSearch)
@@ -60,8 +59,67 @@ type VectorIndexSearch struct {
 	Mutex      sync.RWMutex
 	ExpireAt   atomic.Int64
 	LastUpdate atomic.Int64
-	Idxcfg     vectorindex.IndexConfig
-	Tblcfg     vectorindex.IndexTableConfig
+	Status     atomic.Int32 // 0 - NOT INIT, 1 - LOADED, 2 or above ERRCODE
+	Algo       VectorIndexSearchIf
+}
+
+func (s *VectorIndexSearch) Destroy() {
+	s.Mutex.Lock()
+	defer s.Mutex.Unlock()
+
+	s.Algo.Destroy()
+}
+
+func (s *VectorIndexSearch) Load(proc *process.Process) error {
+	s.Mutex.Lock()
+	defer s.Mutex.Unlock()
+
+	err := s.Algo.Load(proc)
+	if err != nil {
+		s.Status.Store(2)
+		return err
+	}
+	s.Status.Store(1)
+	s.extend(true)
+	return nil
+}
+
+func (s *VectorIndexSearch) Expired() bool {
+	s.Mutex.RLock()
+	defer s.Mutex.RUnlock()
+
+	ts := s.ExpireAt.Load()
+	now := time.Now().UnixMicro()
+	os.Stderr.WriteString(fmt.Sprintf("expired %t, now = %d, expired_at = %d\n", (ts > 0 && ts < now), now, ts))
+	return (ts > 0 && ts < now)
+}
+
+func (s *VectorIndexSearch) extend(update bool) {
+	now := time.Now()
+	if update {
+		s.LastUpdate.Store(now.UnixMicro())
+	}
+	ts := time.Now().Add(VectorIndexCacheTTL).UnixMicro()
+	s.ExpireAt.Store(ts)
+}
+
+func (s *VectorIndexSearch) Search(query []float32, limit uint) (keys []int64, distances []float32, err error) {
+	s.Mutex.RLock()
+
+	for s.Status.Load() == 0 {
+		s.Mutex.RUnlock()
+		os.Stderr.WriteString("Search index is not ready yet\n")
+		time.Sleep(time.Millisecond)
+		s.Mutex.RLock()
+	}
+	defer s.Mutex.RUnlock()
+
+	if s.Status.Load() > 1 {
+		return nil, nil, moerr.NewInternalErrorNoCtx("Load index error")
+	}
+
+	s.extend(false)
+	return s.Algo.Search(query, limit)
 }
 
 // implementation of VectorIndexCache
@@ -134,8 +192,8 @@ func (c *VectorIndexCache) HouseKeeping() {
 	expiredkeys := make([]string, 0, 16)
 
 	c.IndexMap.Range(func(key, value any) bool {
-		search := value.(VectorIndexSearchIf)
-		if search.Expired() {
+		algo := value.(*VectorIndexSearch)
+		if algo.Expired() {
 			expiredkeys = append(expiredkeys, key.(string))
 		}
 		return true
@@ -144,10 +202,10 @@ func (c *VectorIndexCache) HouseKeeping() {
 	for _, k := range expiredkeys {
 		value, loaded := c.IndexMap.LoadAndDelete(k)
 		if loaded {
-			search := value.(VectorIndexSearchIf)
+			algo := value.(*VectorIndexSearch)
 			os.Stderr.WriteString(fmt.Sprintf("HouseKeep: key %s deleted\n", k))
-			search.Destroy()
-			search = nil
+			algo.Destroy()
+			algo = nil
 		}
 	}
 	os.Stderr.WriteString("house keeping end\n")
@@ -164,36 +222,36 @@ func (c *VectorIndexCache) Destroy() {
 	// remove all keys
 	c.IndexMap.Range(func(key, value any) bool {
 		c.IndexMap.Delete(key)
-		search := value.(VectorIndexSearchIf)
-		search.Destroy()
-		search = nil
+		algo := value.(*VectorIndexSearch)
+		algo.Destroy()
+		algo = nil
 		return true
 	})
 }
 
 // Get index from cache and return VectorIndexSearchIf interface
-func (c *VectorIndexCache) Search(proc *process.Process, key string, def VectorIndexSearchIf,
+func (c *VectorIndexCache) Search(proc *process.Process, key string, newalgo VectorIndexSearchIf,
 	query []float32, limit uint) (keys []int64, distances []float32, err error) {
-	value, loaded := c.IndexMap.LoadOrStore(key, def)
-	search := value.(VectorIndexSearchIf)
+	value, loaded := c.IndexMap.LoadOrStore(key, &VectorIndexSearch{Algo: newalgo})
+	algo := value.(*VectorIndexSearch)
 	if !loaded {
 		// load model from database and if error during loading, remove the entry from gIndexMap
 		os.Stderr.WriteString("Search not loaded...Load From Database\n")
-		err := search.LoadFromDatabase(proc)
+		err := algo.Load(proc)
 		if err != nil {
 			c.IndexMap.Delete(key)
 			return nil, nil, err
 		}
 	}
-	return search.Search(query, limit)
+	return algo.Search(query, limit)
 }
 
 // remove key from cache
 func (c *VectorIndexCache) Remove(key string) {
 	value, loaded := c.IndexMap.LoadAndDelete(key)
 	if loaded {
-		search := value.(VectorIndexSearchIf)
-		search.Destroy()
-		search = nil
+		algo := value.(*VectorIndexSearch)
+		algo.Destroy()
+		algo = nil
 	}
 }

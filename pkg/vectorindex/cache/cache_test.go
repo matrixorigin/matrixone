@@ -30,56 +30,25 @@ import (
 )
 
 type MockSearch struct {
-	VectorIndexSearch
-	value int64
+	Idxcfg vectorindex.IndexConfig
+	Tblcfg vectorindex.IndexTableConfig
 }
 
 func (m *MockSearch) Search(query []float32, limit uint) (keys []int64, distances []float32, err error) {
-	m.Mutex.RLock()
-
-	for m.value == 0 {
-		m.Mutex.RUnlock()
-		os.Stderr.WriteString("VALUE 0.........\n")
-		time.Sleep(10 * time.Millisecond)
-		m.Mutex.RLock()
-	}
-	defer m.Mutex.RUnlock()
-
-	if m.value == 2 {
-		panic("Race between Search and Destroy")
-	}
-
 	return []int64{1}, []float32{2.0}, nil
 }
 
 func (m *MockSearch) Destroy() {
-	m.Mutex.Lock()
-	defer m.Mutex.Unlock()
-	m.value = 2
 }
 
-func (m *MockSearch) Expired() bool {
-	m.Mutex.RLock()
-	defer m.Mutex.RUnlock()
-	now := time.Now().UnixMicro()
-	expireat := m.ExpireAt.Load()
-
-	os.Stderr.WriteString(fmt.Sprintf("now %d, expire %d %t\n", now, expireat, (expireat < now)))
-	return (expireat > 0 && expireat < now)
-}
-
-func (m *MockSearch) LoadFromDatabase(*process.Process) error {
-	m.Mutex.Lock()
-	defer m.Mutex.Unlock()
-	m.value = 1
-	os.Stderr.WriteString(fmt.Sprintf("LoadFromDatabase value %d\n", m.value))
-	ts := time.Now().Add(VectorIndexCacheTTL).UnixMicro()
-	m.ExpireAt.Store(ts)
+func (m *MockSearch) Load(*process.Process) error {
 	return nil
 }
 
+// Load Error
 type MockSearchLoadError struct {
-	VectorIndexSearch
+	Idxcfg vectorindex.IndexConfig
+	Tblcfg vectorindex.IndexTableConfig
 }
 
 func (m *MockSearchLoadError) Search(query []float32, limit uint) (keys []int64, distances []float32, err error) {
@@ -90,20 +59,14 @@ func (m *MockSearchLoadError) Destroy() {
 
 }
 
-func (m *MockSearchLoadError) Expired() bool {
-	now := time.Now().UnixMicro()
-	expireat := m.ExpireAt.Load()
-
-	os.Stderr.WriteString(fmt.Sprintf("now %d, expire %d\n", now, expireat))
-	return (expireat > 0 && expireat < now)
-}
-
-func (m *MockSearchLoadError) LoadFromDatabase(*process.Process) error {
+func (m *MockSearchLoadError) Load(*process.Process) error {
 	return moerr.NewInternalErrorNoCtx("Load from database error")
 }
 
+// Search Error
 type MockSearchSearchError struct {
-	VectorIndexSearch
+	Idxcfg vectorindex.IndexConfig
+	Tblcfg vectorindex.IndexTableConfig
 }
 
 func (m *MockSearchSearchError) Search(query []float32, limit uint) (keys []int64, distances []float32, err error) {
@@ -114,15 +77,7 @@ func (m *MockSearchSearchError) Destroy() {
 
 }
 
-func (m *MockSearchSearchError) Expired() bool {
-	now := time.Now().UnixMicro()
-	expireat := m.ExpireAt.Load()
-
-	os.Stderr.WriteString(fmt.Sprintf("now %d, expire %d\n", now, expireat))
-	return (expireat > 0 && expireat < now)
-}
-
-func (m *MockSearchSearchError) LoadFromDatabase(*process.Process) error {
+func (m *MockSearchSearchError) Load(*process.Process) error {
 	return nil
 }
 
@@ -144,7 +99,7 @@ func TestCache(t *testing.T) {
 	idxcfg.Usearch.Metric = usearch.L2sq
 	tblcfg := vectorindex.IndexTableConfig{DbName: "db", SrcTable: "src", MetadataTable: "__secondary_meta", IndexTable: "__secondary_index"}
 	os.Stderr.WriteString("cache getindex\n")
-	m := &MockSearch{VectorIndexSearch: VectorIndexSearch{Idxcfg: idxcfg, Tblcfg: tblcfg}}
+	m := &MockSearch{Idxcfg: idxcfg, Tblcfg: tblcfg}
 	os.Stderr.WriteString("cache search\n")
 	fp32a := []float32{1, 2, 3, 4, 5, 6, 7, 8}
 	keys, distances, err := Cache.Search(proc, tblcfg.IndexTable, m, fp32a, 4)
@@ -159,7 +114,7 @@ func TestCache(t *testing.T) {
 	// cache expired
 
 	// new search
-	m3 := &MockSearch{VectorIndexSearch: VectorIndexSearch{Idxcfg: idxcfg, Tblcfg: tblcfg}}
+	m3 := &MockSearch{Idxcfg: idxcfg, Tblcfg: tblcfg}
 	keys, distances, err = Cache.Search(proc, tblcfg.IndexTable, m3, fp32a, 4)
 	require.Nil(t, err)
 	require.Equal(t, len(keys), 1)
@@ -198,7 +153,7 @@ func TestCacheConcurrent(t *testing.T) {
 				idxcfg.Usearch.Metric = usearch.L2sq
 				tblcfg := vectorindex.IndexTableConfig{DbName: "db", SrcTable: "src", MetadataTable: "__secondary_meta", IndexTable: "__secondary_index"}
 				//os.Stderr.WriteString("cache getindex\n")
-				m := &MockSearch{VectorIndexSearch: VectorIndexSearch{Idxcfg: idxcfg, Tblcfg: tblcfg}}
+				m := &MockSearch{Idxcfg: idxcfg, Tblcfg: tblcfg}
 				//os.Stderr.WriteString("cache search\n")
 				fp32a := []float32{1, 2, 3, 4, 5, 6, 7, 8}
 				keys, distances, err := Cache.Search(proc, tblcfg.IndexTable, m, fp32a, 4)
@@ -211,7 +166,7 @@ func TestCacheConcurrent(t *testing.T) {
 	}
 
 	wg.Wait()
-	time.Sleep(2 * time.Second)
+	time.Sleep(4 * time.Second)
 
 	os.Stderr.WriteString("cache.Destroy\n")
 	Cache.Destroy()
@@ -236,7 +191,7 @@ func TestCacheLoadError(t *testing.T) {
 	idxcfg.Usearch.Metric = usearch.L2sq
 	tblcfg := vectorindex.IndexTableConfig{DbName: "db", SrcTable: "src", MetadataTable: "__secondary_meta", IndexTable: "__secondary_index"}
 	os.Stderr.WriteString("cache getindex\n")
-	m1 := &MockSearchLoadError{VectorIndexSearch: VectorIndexSearch{Idxcfg: idxcfg, Tblcfg: tblcfg}}
+	m1 := &MockSearchLoadError{Idxcfg: idxcfg, Tblcfg: tblcfg}
 	fp32a := []float32{1, 2, 3, 4, 5, 6, 7, 8}
 	_, _, err := Cache.Search(proc, tblcfg.IndexTable, m1, fp32a, 4)
 	require.NotNil(t, err)
@@ -265,7 +220,7 @@ func TestCacheSearchError(t *testing.T) {
 	idxcfg.Usearch.Metric = usearch.L2sq
 	tblcfg := vectorindex.IndexTableConfig{DbName: "db", SrcTable: "src", MetadataTable: "__secondary_meta", IndexTable: "__secondary_index"}
 	os.Stderr.WriteString("cache getindex\n")
-	m1 := &MockSearchSearchError{VectorIndexSearch: VectorIndexSearch{Idxcfg: idxcfg, Tblcfg: tblcfg}}
+	m1 := &MockSearchSearchError{Idxcfg: idxcfg, Tblcfg: tblcfg}
 	fp32a := []float32{1, 2, 3, 4, 5, 6, 7, 8}
 	_, _, err := Cache.Search(proc, tblcfg.IndexTable, m1, fp32a, 4)
 	require.NotNil(t, err)

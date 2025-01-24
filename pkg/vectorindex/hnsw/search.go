@@ -19,14 +19,12 @@ import (
 	"fmt"
 	"os"
 	"sync"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	usearch "github.com/unum-cloud/usearch/golang"
 )
@@ -44,7 +42,8 @@ type HnswSearchIndex struct {
 
 // This is the HNSW search implementation that implement VectorIndexSearchIf interface
 type HnswSearch struct {
-	cache.VectorIndexSearch
+	Idxcfg  vectorindex.IndexConfig
+	Tblcfg  vectorindex.IndexTableConfig
 	Indexes []*HnswSearchIndex
 }
 
@@ -143,14 +142,9 @@ func (idx *HnswSearchIndex) Search(query []float32, limit uint) (keys []usearch.
 
 // Search the hnsw index (implement VectorIndexSearch.Search)
 func (h *HnswSearch) Search(query []float32, limit uint) (keys []int64, distances []float32, err error) {
-	h.Mutex.RLock()
-	defer h.Mutex.RUnlock()
 	if len(h.Indexes) == 0 {
 		return []int64{}, []float32{}, nil
 	}
-
-	ts := time.Now().Add(cache.VectorIndexCacheTTL).UnixMicro()
-	h.ExpireAt.Store(ts)
 
 	// search
 	size := len(h.Indexes) * int(limit)
@@ -206,24 +200,12 @@ func (h *HnswSearch) Search(query []float32, limit uint) (keys []int64, distance
 
 // Destroy HnswSearch (implement VectorIndexSearch.Destroy)
 func (h *HnswSearch) Destroy() {
-	h.Mutex.Lock()
-	defer h.Mutex.Unlock()
 	// destroy index
 	for _, idx := range h.Indexes {
 		idx.Index.Destroy()
 	}
 	h.Indexes = nil
 	os.Stderr.WriteString("hnsw search destroy\n")
-}
-
-// Check Expired (implement VectorIndexSearch.Expired)
-func (h *HnswSearch) Expired() bool {
-	h.Mutex.RLock()
-	defer h.Mutex.RUnlock()
-
-	ts := h.ExpireAt.Load()
-	now := time.Now().UnixMicro()
-	return (ts > 0 && ts < now)
 }
 
 // load metadata from database
@@ -273,10 +255,7 @@ func (s *HnswSearch) LoadIndex(proc *process.Process, indexes []*HnswSearchIndex
 }
 
 // load index from database (implement VectorIndexSearch.LoadFromDatabase)
-func (s *HnswSearch) LoadFromDatabase(proc *process.Process) error {
-	s.Mutex.Lock()
-	defer s.Mutex.Unlock()
-
+func (s *HnswSearch) Load(proc *process.Process) error {
 	// load metadata
 	indexes, err := s.LoadMetadata(proc)
 	if err != nil {
@@ -292,11 +271,6 @@ func (s *HnswSearch) LoadFromDatabase(proc *process.Process) error {
 	}
 
 	s.Indexes = indexes
-
-	now := time.Now()
-	s.LastUpdate.Store(now.UnixMicro())
-	ts := now.Add(time.Duration(cache.VectorIndexCacheTTL)).UnixMicro()
-	s.ExpireAt.Store(ts)
 
 	return nil
 }
