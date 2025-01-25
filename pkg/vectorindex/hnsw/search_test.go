@@ -20,6 +20,8 @@ import (
 	"testing"
 	"time"
 
+	fallocate "github.com/detailyang/go-fallocate"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -126,4 +128,12 @@ func makeIndexBatch(proc *process.Process) *batch.Batch {
 	vector.AppendBytes(bat.Vecs[0], dat, false, proc.Mp())
 	bat.SetRowCount(1)
 	return bat
+}
+
+func TestFallocate(t *testing.T) {
+
+	f, err := os.Create("apple")
+	require.Nil(t, err)
+	fallocate.Fallocate(f, 0, 10000)
+	f.Close()
 }
