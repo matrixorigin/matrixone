@@ -20,6 +20,7 @@ import (
 	"os"
 	"sync"
 
+	"github.com/detailyang/go-fallocate"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -38,6 +39,7 @@ type HnswSearchIndex struct {
 	Index     *usearch.Index
 	Timestamp int64
 	Checksum  string
+	Filesize  int64
 }
 
 // This is the HNSW search implementation that implement VectorIndexSearchIf interface
@@ -67,7 +69,15 @@ func (idx *HnswSearchIndex) loadChunk(proc *process.Process, stream_chan chan ex
 	defer res.Close()
 
 	for i := 0; i < bat.RowCount(); i++ {
-		data := bat.Vecs[0].GetRawBytesAt(i)
+		chunk_id := vector.GetFixedAtWithTypeCheck[int64](bat.Vecs[0], i)
+		data := bat.Vecs[1].GetRawBytesAt(i)
+
+		offset := chunk_id * vectorindex.MaxChunkSize
+		offset, err = fp.Seek(offset, os.SEEK_SET)
+		if err != nil {
+			return false, err
+		}
+
 		_, err = fp.Write(data)
 		if err != nil {
 			return false, err
@@ -88,7 +98,7 @@ func (idx *HnswSearchIndex) LoadIndex(proc *process.Process, idxcfg vectorindex.
 	stream_chan := make(chan executor.Result, 2)
 	error_chan := make(chan error)
 
-	sql := fmt.Sprintf("SELECT data from `%s`.`%s` WHERE index_id = %d ORDER BY chunk_id ASC", tblcfg.DbName, tblcfg.IndexTable, idx.Id)
+	sql := fmt.Sprintf("SELECT chunk_id, data from `%s`.`%s` WHERE index_id = %d", tblcfg.DbName, tblcfg.IndexTable, idx.Id)
 
 	go func() {
 		_, err := runSql_streaming(proc, sql, stream_chan, error_chan)
@@ -104,6 +114,11 @@ func (idx *HnswSearchIndex) LoadIndex(proc *process.Process, idxcfg vectorindex.
 		return err
 	}
 	defer os.Remove(fp.Name())
+
+	err = fallocate.Fallocate(fp, 0, idx.Filesize)
+	if err != nil {
+		return err
+	}
 
 	// incremental load from database
 	sql_closed := false
@@ -234,14 +249,16 @@ func (s *HnswSearch) LoadMetadata(proc *process.Process) ([]*HnswSearchIndex, er
 		idVec := bat.Vecs[0]
 		chksumVec := bat.Vecs[1]
 		tsVec := bat.Vecs[2]
+		fsVec := bat.Vecs[3]
 		for i := 0; i < bat.RowCount(); i++ {
 			id := vector.GetFixedAtWithTypeCheck[int64](idVec, i)
 			chksum := chksumVec.GetStringAt(i)
 			ts := vector.GetFixedAtWithTypeCheck[int64](tsVec, i)
+			fs := vector.GetFixedAtWithTypeCheck[int64](fsVec, i)
 
-			idx := &HnswSearchIndex{Id: id, Checksum: chksum, Timestamp: ts}
+			idx := &HnswSearchIndex{Id: id, Checksum: chksum, Timestamp: ts, Filesize: fs}
 			indexes = append(indexes, idx)
-			os.Stderr.WriteString(fmt.Sprintf("Meta %d %d %s\n", id, ts, chksum))
+			os.Stderr.WriteString(fmt.Sprintf("Meta %d %d %d %s\n", id, ts, fs, chksum))
 		}
 	}
 

@@ -2534,7 +2534,7 @@ func buildHnswSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colM
 		tableDefs[0] = &TableDef{
 			Name:      indexTableName,
 			TableType: catalog.Hnsw_TblType_Metadata,
-			Cols:      make([]*ColDef, 3),
+			Cols:      make([]*ColDef, 4),
 		}
 
 		// 1.b indexDef1 init
@@ -2574,6 +2574,20 @@ func buildHnswSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colM
 		}
 		tableDefs[0].Cols[2] = &ColDef{
 			Name: catalog.Hnsw_TblCol_Metadata_Timestamp,
+			Alg:  plan.CompressType_Lz4,
+			Typ: Type{
+				Id:    int32(types.T_int64),
+				Width: 0,
+				Scale: 0,
+			},
+			Default: &plan.Default{
+				NullAbility:  false,
+				Expr:         nil,
+				OriginString: "",
+			},
+		}
+		tableDefs[0].Cols[3] = &ColDef{
+			Name: catalog.Hnsw_TblCol_Metadata_Filesize,
 			Alg:  plan.CompressType_Lz4,
 			Typ: Type{
 				Id:    int32(types.T_int64),

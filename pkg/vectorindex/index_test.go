@@ -36,6 +36,7 @@ func TestUSearch(t *testing.T) {
 	vectorSize := 3
 	vectorsCount := 100
 	conf := usearch.DefaultConfig(uint(vectorSize))
+	conf.Metric = usearch.L2sq
 	index, err := usearch.NewIndex(conf)
 	if err != nil {
 		panic("Failed to create Index")
@@ -54,8 +55,35 @@ func TestUSearch(t *testing.T) {
 		}
 	}
 
+	index2, err := usearch.NewIndex(conf)
+	if err != nil {
+		panic("Failed to create Index")
+	}
+	defer index2.Destroy()
+
+	// Add to Index
+	err = index2.Reserve(uint(vectorsCount))
+	if err != nil {
+		panic("Failed to reserve")
+	}
+	for i := 0; i < vectorsCount; i++ {
+		err = index2.Add(usearch.Key(i+vectorsCount), []float32{float32(i + vectorsCount), float32(i + 1 + vectorsCount), float32(i + 2 + vectorsCount)})
+		if err != nil {
+			panic("Failed to add")
+		}
+	}
+
+	index.Save("hnsw0.bin")
+	index2.Save("hnsw1.bin")
+
 	// Search
 	keys, distances, err := index.Search([]float32{0.0, 1.0, 2.0}, 3)
+	if err != nil {
+		panic("Failed to search")
+	}
+	fmt.Println(keys, distances)
+
+	keys, distances, err = index2.Search([]float32{0.0, 1.0, 2.0}, 3)
 	if err != nil {
 		panic("Failed to search")
 	}

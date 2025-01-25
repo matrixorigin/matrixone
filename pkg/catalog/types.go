@@ -387,6 +387,7 @@ const (
 	Hnsw_TblCol_Metadata_Index_Id  = "index_id"
 	Hnsw_TblCol_Metadata_Timestamp = "timestamp"
 	Hnsw_TblCol_Metadata_Checksum  = "checksum"
+	Hnsw_TblCol_Metadata_Filesize  = "filesize"
 )
 
 const (

@@ -255,7 +255,13 @@ func (h *HnswBuild) ToInsertSql(ts int64) ([]string, error) {
 			return nil, err
 		}
 
-		metas = append(metas, fmt.Sprintf("(%d, '%s', %d)", idx.Id, chksum, ts))
+		finfo, err := os.Stat(idx.Path)
+		if err != nil {
+			return nil, err
+		}
+		fs := finfo.Size()
+
+		metas = append(metas, fmt.Sprintf("(%d, '%s', %d, %d)", idx.Id, chksum, ts, fs))
 	}
 
 	metasql := fmt.Sprintf("INSERT INTO `%s`.`%s` VALUES %s", h.tblcfg.DbName, h.tblcfg.MetadataTable, strings.Join(metas, ", "))
