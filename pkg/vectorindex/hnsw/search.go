@@ -77,6 +77,12 @@ func (idx *HnswSearchIndex) loadChunk(proc *process.Process, stream_chan chan ex
 }
 
 // load index from database
+// TODO: loading file is tricky.
+// 1. we need to know the size of the file.
+// 2. Write Zero to file to have a pre-allocated size
+// 3. SELECT chunk_id, data from index_table WHERE index_id = id.  Result will be out of order
+// 4. according to the chunk_id, seek to the offset and write the chunk
+// 5. check the checksum to verify the correctness of the file
 func (idx *HnswSearchIndex) LoadIndex(proc *process.Process, idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) error {
 
 	stream_chan := make(chan executor.Result, 2)
