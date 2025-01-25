@@ -100,32 +100,44 @@ func TestHnsw(t *testing.T) {
 }
 
 func makeMetaBatch(proc *process.Process) *batch.Batch {
-	bat := batch.NewWithSize(3)
+	indexfile := "resources/hnsw0.bin"
+
+	bat := batch.NewWithSize(4)
 	bat.Vecs[0] = vector.NewVec(types.New(types.T_int64, 8, 0))       // index_id
 	bat.Vecs[1] = vector.NewVec(types.New(types.T_varchar, 65536, 0)) // checksum
 	bat.Vecs[2] = vector.NewVec(types.New(types.T_int64, 8, 0))       // timestamp
+	bat.Vecs[3] = vector.NewVec(types.New(types.T_int64, 8, 0))       // timestamp
 
 	vector.AppendFixed[int64](bat.Vecs[0], int64(0), false, proc.Mp())
-	chksum, err := vectorindex.CheckSum("resources/hnsw0.bin")
+	chksum, err := vectorindex.CheckSum(indexfile)
 	if err != nil {
 		panic("file checksum error")
 	}
+
+	finfo, err := os.Stat(indexfile)
+	if err != nil {
+		panic("file not found")
+	}
+
 	vector.AppendBytes(bat.Vecs[1], []byte(chksum), false, proc.Mp())
 	vector.AppendFixed[int64](bat.Vecs[2], int64(0), false, proc.Mp())
+	vector.AppendFixed[int64](bat.Vecs[3], finfo.Size(), false, proc.Mp())
 
 	bat.SetRowCount(1)
 	return bat
 }
 
 func makeIndexBatch(proc *process.Process) *batch.Batch {
-	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.New(types.T_blob, 65536, 0)) // index_id
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = vector.NewVec(types.New(types.T_int64, 8, 0))    // chunk_id
+	bat.Vecs[1] = vector.NewVec(types.New(types.T_blob, 65536, 0)) // data
 
 	dat, err := os.ReadFile("resources/hnsw0.bin")
 	if err != nil {
 		panic("read file error")
 	}
-	vector.AppendBytes(bat.Vecs[0], dat, false, proc.Mp())
+	vector.AppendFixed[int64](bat.Vecs[0], int64(0), false, proc.Mp())
+	vector.AppendBytes(bat.Vecs[1], dat, false, proc.Mp())
 	bat.SetRowCount(1)
 	return bat
 }
