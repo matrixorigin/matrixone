@@ -6306,7 +6306,7 @@ const (
 )
 
 // loadAllSecondaryRoles loads all secondary roles
-func loadAllSecondaryRoles(ctx context.Context, bh BackgroundExec, account *TenantInfo, roleSetOfCurrentUser *btree.Set[int64]) error {
+var loadAllSecondaryRoles = func(ctx context.Context, bh BackgroundExec, account *TenantInfo, roleSetOfCurrentUser *btree.Set[int64]) error {
 	var err error
 	var sql string
 
