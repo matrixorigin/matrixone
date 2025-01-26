@@ -1543,7 +1543,7 @@ test01    CREATE TABLE `test01` (\n  `col1` tinyint DEFAULT NULL,\n  `col2` smal
 create publication publication01 database test account all;
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-publication01    test    *    *        2024-10-28 17:46:53    null    
+publication01    test    *    *        2024-10-28 17:46:53    null
 drop table if exists test02;
 create table test02 as select * from test01;
 select * from test02;
@@ -1565,7 +1565,7 @@ a    b    c    d
 3    4    c    324243243
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-sys_pub_1    test    *    *        2024-10-28 17:46:53    null    
+sys_pub_1    test    *    *        2024-10-28 17:46:53    null
 select pub_name, database_name, account_list from mo_catalog.mo_pubs;
 pub_name    database_name    account_list
 sys_pub_1    test    all
@@ -1822,3 +1822,17 @@ avgcol    sumcol    countcol    maxcol    mincol
 drop table agg01;
 drop table math01;
 drop database db8;
+drop database if exists db9;
+create database db9;
+use db9;
+CREATE TABLE tx1 (
+category INT NOT NULL,
+id INT NOT NULL,
+name VARCHAR(20) NOT NULL,
+price DECIMAL,
+PRIMARY KEY (category, id)
+);
+create dynamic table dt_test as select * from tx1;
+lack of option type
+drop table tx1;
+drop database db9;
