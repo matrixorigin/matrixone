@@ -245,7 +245,7 @@ func (group *Group) consumeBatchToGetFinalResult(
 
 	switch group.ctr.mtyp {
 	case H0:
-		// 没有分组的情况。
+		// without group by.
 		if group.ctr.result1.IsEmpty() {
 			if err := group.generateInitialResult1WithoutGroupBy(proc); err != nil {
 				return err
@@ -260,6 +260,7 @@ func (group *Group) consumeBatchToGetFinalResult(
 		}
 
 	default:
+		// without group by.
 		if group.ctr.result1.IsEmpty() {
 			err := group.ctr.hr.BuildHashTable(false, group.ctr.mtyp == HStr, group.ctr.keyNullable, group.PreAllocSize)
 			if err != nil {
