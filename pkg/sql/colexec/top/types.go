@@ -127,7 +127,8 @@ func (ctr *container) reset(proc *process.Process) {
 	}
 
 	if ctr.buildBat != nil {
-		ctr.buildBat.Clean(proc.Mp())
+		// should not clean ctr.buildBat, because ctr.buildBat's value from PreOperator or ctr.executorsForOrderColumn.Eval
+		// PreOperator or ctr.executorsForOrderColumn will clean them
 		ctr.buildBat = nil
 	}
 }
