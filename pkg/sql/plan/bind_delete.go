@@ -24,7 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func canDeleteRewriteToTruncate(ctx CompilerContext, dmlCtx DMLContext) (bool, error) {
+func canDeleteRewriteToTruncate(ctx CompilerContext, dmlCtx *DMLContext) (bool, error) {
 	accountId, err := ctx.GetAccountId()
 	if err != nil {
 		return false, err
@@ -74,7 +74,7 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 	//FIXME: optimize truncate table?
 	if stmt.Where == nil && stmt.Limit == nil {
 		var cantrucate bool
-		cantrucate, err = canDeleteRewriteToTruncate(ctx, *dmlCtx)
+		cantrucate, err = canDeleteRewriteToTruncate(ctx, dmlCtx)
 		if err != nil {
 			return 0, err
 		}
