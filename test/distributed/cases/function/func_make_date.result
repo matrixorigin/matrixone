@@ -24,7 +24,7 @@ years_passed
 0
 SELECT IF(MAKEDATE(YEAR(NOW()), 366) < NOW(), '闰年', '平年') AS leap_year_status;
 leap_year_status
-平年
+闰年
 create database abc;
 use abc;
 CREATE TABLE employees (

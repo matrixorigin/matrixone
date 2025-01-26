@@ -343,7 +343,8 @@ func doComQueryInBack(
 	defer span.End()
 
 	// Instantiate StatsInfo to track SQL resource statistics
-	statsInfo := new(statistic.StatsInfo)
+	//statsInfo := new(statistic.StatsInfo)
+	statsInfo := statistic.NewStatsInfo()
 	statsInfo.ParseStage.ParseStartTime = beginInstant
 	execCtx.reqCtx = statistic.ContextWithStatsInfo(execCtx.reqCtx, statsInfo)
 	execCtx.input = input

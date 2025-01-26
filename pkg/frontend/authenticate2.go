@@ -110,7 +110,7 @@ func verifyPrivilegeEntryInMultiPrivilegeLevelsInCache(
 }
 
 // checkPrivilegeInCache checks the privilege in the cache first.
-func checkPrivilegeInCache(ctx context.Context, ses *Session, priv *privilege, enableCache bool) (bool, error) {
+var checkPrivilegeInCache = func(ctx context.Context, ses *Session, priv *privilege, enableCache bool) (bool, error) {
 	var err error
 	var pls []privilegeLevelType
 	var yes2, yes bool
@@ -209,7 +209,7 @@ func checkPrivilegeInCache(ctx context.Context, ses *Session, priv *privilege, e
 }
 
 // privilegeCacheIsEnabled checks if the privilege cache is enabled.
-func privilegeCacheIsEnabled(ctx context.Context, ses *Session) (bool, error) {
+var privilegeCacheIsEnabled = func(ctx context.Context, ses *Session) (bool, error) {
 	var err error
 	var value interface{}
 	var newValue bool
