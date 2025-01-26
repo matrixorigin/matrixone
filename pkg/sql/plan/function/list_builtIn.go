@@ -16,7 +16,8 @@ package function
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/fault"
+
+	fj "github.com/matrixorigin/matrixone/pkg/sql/plan/function/fault"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -1445,9 +1446,9 @@ var supportedStringBuiltIns = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_varchar.ToType()
 				},
-				newOpWithFree: func() (executeLogicOfOverload, executeFreeOfOverload) {
+				newOpWithFree: func() (executeLogicOfOverload, executeResetOfOverload, executeFreeOfOverload) {
 					opSerial := newOpSerial()
-					return opSerial.BuiltInSerial, opSerial.Close
+					return opSerial.BuiltInSerial, opSerial.Reset, opSerial.Close
 				},
 			},
 		},
@@ -1471,9 +1472,9 @@ var supportedStringBuiltIns = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_varchar.ToType()
 				},
-				newOpWithFree: func() (executeLogicOfOverload, executeFreeOfOverload) {
+				newOpWithFree: func() (executeLogicOfOverload, executeResetOfOverload, executeFreeOfOverload) {
 					opSerial := newOpSerial()
-					return opSerial.BuiltInSerialFull, opSerial.Close
+					return opSerial.BuiltInSerialFull, opSerial.Reset, opSerial.Close
 				},
 			},
 		},

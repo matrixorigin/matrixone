@@ -18,9 +18,12 @@ import (
 	"net/url"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/stretchr/testify/require"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
 func TestStageCache(t *testing.T) {
@@ -77,4 +80,16 @@ func TestStageFail(t *testing.T) {
 
 	_, err = UrlToStageDef("not a url", proc)
 	require.NotNil(t, err)
+}
+
+func Test_runSql(t *testing.T) {
+	rt := moruntime.DefaultRuntime()
+	moruntime.SetupServiceBasedRuntime("", rt)
+	rt.SetGlobalVariables(moruntime.InternalSQLExecutor, executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+		return executor.Result{}, nil
+	}))
+
+	proc := testutil.NewProcess()
+	_, err := runSql(proc, "")
+	require.Nil(t, err)
 }

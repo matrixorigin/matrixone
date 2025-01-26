@@ -74,9 +74,9 @@ internal error: snapshot sn1 already exists
 create snapshot if not exists sn1  for account;
 drop snapshot if exists sn1;
 create snapshot sn1 for database mo_catalog;
-internal error: can not create snapshot for current database mo_catalog
+internal error: can not create snapshot for system database mo_catalog
 create snapshot sn1 for table mo_catalog mo_user;
-internal error: can not create pitr for current table mo_catalog.mo_user
+internal error: can not create pitr for system table mo_catalog.mo_user
 drop snapshot if exists sn1;
 drop snapshot if exists sn1;
 create snapshot sn1 for account;

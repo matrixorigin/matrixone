@@ -15,13 +15,17 @@
 package logservicedriver
 
 import (
+	"context"
+	"io"
 	"sync"
-	"sync/atomic"
 	"time"
 
+	"github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"go.uber.org/zap"
 )
 
 const (
@@ -31,158 +35,288 @@ const (
 var ErrNoClientAvailable = moerr.NewInternalErrorNoCtx("no client available")
 var ErrClientPoolClosed = moerr.NewInternalErrorNoCtx("client pool closed")
 
-type clientConfig struct {
-	cancelDuration        time.Duration
-	recordSize            int
-	clientFactory         LogServiceClientFactory
-	GetClientRetryTimeOut time.Duration
-	retryDuration         time.Duration
+type MockBackend interface {
+	Read(
+		ctx context.Context, firstPSN, maxSize uint64,
+	) ([]logservice.LogRecord, uint64, error)
+	GetTruncatedLsn(ctx context.Context) (uint64, error)
+
+	Append(
+		ctx context.Context,
+		buf logservice.LogRecord,
+	) (psn uint64, err error)
+	Truncate(ctx context.Context, psn uint64) error
+}
+
+type BackendClient interface {
+	io.Closer
+
+	GetLogRecord(size int) logservice.LogRecord
+	Read(
+		ctx context.Context, firstPSN, maxSize uint64,
+	) ([]logservice.LogRecord, uint64, error)
+	GetTruncatedLsn(ctx context.Context) (uint64, error)
+
+	Append(
+		ctx context.Context,
+		buf logservice.LogRecord,
+	) (psn uint64, err error)
+	Truncate(ctx context.Context, psn uint64) error
+}
+
+type writeTokenController struct {
+	sync.Cond
+	nextToken uint64
+	bm        roaring64.Bitmap
+	maxCount  uint64
+}
+
+func newTokenController(maxCount uint64) *writeTokenController {
+	return &writeTokenController{
+		nextToken: uint64(1),
+		maxCount:  maxCount,
+		Cond:      *sync.NewCond(new(sync.Mutex)),
+	}
+}
+
+func (rc *writeTokenController) Putback(tokens ...uint64) {
+	rc.L.Lock()
+	defer rc.L.Unlock()
+	for _, token := range tokens {
+		rc.bm.Remove(token)
+	}
+	rc.Broadcast()
+}
+
+func (rc *writeTokenController) Apply() (token uint64) {
+	rc.L.Lock()
+	defer rc.L.Unlock()
+	for {
+		if rc.bm.IsEmpty() {
+			token = rc.nextToken
+			rc.nextToken++
+			rc.bm.Add(token)
+			return
+		}
+		minimum := rc.bm.Minimum()
+		if rc.nextToken < rc.maxCount+minimum {
+			token = rc.nextToken
+			rc.nextToken++
+			rc.bm.Add(token)
+			return
+		}
+		// logutil.Infof("too much pendding writes: %d, %d, %d", rc.bm.Minimum(), rc.bm.Maximum(), rc.bm.GetCardinality())
+		rc.Wait()
+	}
 }
 
 type wrappedClient struct {
-	c      logservice.Client
-	record logservice.LogRecord
-	id     int
+	wrapped    BackendClient
+	buf        logservice.LogRecord
+	pool       *clientPool
+	writeToken uint64
 }
 
-func newClient(factory LogServiceClientFactory, recordSize int, retryDuration time.Duration) *wrappedClient {
-	logserviceClient, err := factory()
-	if err != nil {
-		RetryWithTimeout(retryDuration, func() (shouldReturn bool) {
-			logserviceClient, err = factory()
-			return err == nil
-		})
-		if err != nil {
-			panic(err)
-		}
+func newClient(
+	factory LogServiceClientFactory, bufSize int,
+) *wrappedClient {
+	var (
+		err    error
+		client BackendClient
+	)
+	if client, err = factory(); err != nil {
+		panic(err)
 	}
-	c := &wrappedClient{
-		c:      logserviceClient,
-		record: logserviceClient.GetLogRecord(recordSize),
+	return &wrappedClient{
+		wrapped: client,
+		buf:     client.GetLogRecord(bufSize),
 	}
-	return c
 }
 
 func (c *wrappedClient) Close() {
-	c.c.Close()
+	c.wrapped.Close()
 }
 
-func (c *wrappedClient) TryResize(size int) {
-	if len(c.record.Payload()) < size {
-		c.record = c.c.GetLogRecord(size)
+func (c *wrappedClient) Append(
+	ctx context.Context,
+	e LogEntry,
+	timeoutCause error,
+) (psn uint64, err error) {
+	if e.Size() > len(c.buf.Payload()) {
+		c.buf = c.wrapped.GetLogRecord(e.Size())
+	} else {
+		c.buf.ResizePayload(e.Size())
+	}
+	c.buf.SetPayload(e[:])
+	// logutil.Infof("Client Append: %s", e.String())
+
+	var (
+		retryTimes int
+		now        = time.Now()
+	)
+
+	defer func() {
+		if err != nil || retryTimes > 0 || time.Since(now) > time.Second*5 {
+			logger := logutil.Info
+			if err != nil {
+				logger = logutil.Error
+			}
+			logger(
+				"WAL-Commit-Append",
+				zap.Uint64("psn", psn),
+				zap.Int("size", len(e[:])),
+				zap.Int("retry-times", retryTimes),
+				zap.Duration("duration", time.Since(now)),
+				zap.Error(err),
+			)
+		}
+	}()
+
+	for ; retryTimes < c.pool.cfg.MaxRetryCount+1; retryTimes++ {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeoutCause(
+			ctx, c.pool.cfg.MaxTimeout, timeoutCause,
+		)
+		psn, err = c.wrapped.Append(ctx, c.buf)
+		cancel()
+		if err == nil {
+			break
+		}
+		time.Sleep(c.pool.cfg.RetryInterval())
+	}
+	return
+}
+
+func (c *wrappedClient) Putback() {
+	if c.pool != nil {
+		pool := c.pool
+		if c.writeToken > 0 {
+			pool.PutbackTokens(c.writeToken)
+			c.writeToken = 0
+		}
+		c.pool = nil
+		pool.Put(c)
+	} else {
+		c.wrapped.Close()
+		c.wrapped = nil
 	}
 }
 
-type clientpool struct {
-	maxCount   int
-	count      int
-	getTimeout time.Duration
+// ============================================================================
+// ----------------------------- Client Pool ---------------------------------
+// ============================================================================
 
-	closed atomic.Int32
+type clientPool struct {
+	cond   sync.Cond
+	cfg    *Config
+	closed bool
 
-	freeClients   []*wrappedClient
-	clientFactory func() *wrappedClient
-	closefn       func(*wrappedClient)
-	mu            sync.Mutex
-	cfg           *clientConfig
+	clients []*wrappedClient
+
+	// writeTokenController is used to control the write token
+	// it controles the max write token issued and all finished write tokens
+	// to avoid too much pendding writes
+	// then we can only issue another 10 write token to avoid too much pendding writes
+	// In the real world, the maxFinishedToken is always being updated and it is very
+	// rare to reach the maxPendding
+	writeTokenController *writeTokenController
 }
 
-func newClientPool(maxsize int, cfg *clientConfig) *clientpool {
-	pool := &clientpool{
-		maxCount:    maxsize,
-		getTimeout:  cfg.GetClientRetryTimeOut,
-		freeClients: make([]*wrappedClient, maxsize),
-		mu:          sync.Mutex{},
-		cfg:         cfg,
+func newClientPool(cfg *Config) *clientPool {
+	maxPenddingWrites := cfg.ClientMaxCount
+	if maxPenddingWrites < DefaultMaxClient {
+		maxPenddingWrites = DefaultMaxClient
 	}
-	pool.clientFactory = pool.createClientFactory(cfg)
-	pool.closefn = pool.onClose
+	pool := &clientPool{
+		cfg:                  cfg,
+		clients:              make([]*wrappedClient, cfg.ClientMaxCount),
+		cond:                 sync.Cond{L: new(sync.Mutex)},
+		writeTokenController: newTokenController(uint64(maxPenddingWrites)),
+	}
 
-	for i := 0; i < maxsize; i++ {
-		pool.freeClients[i] = pool.clientFactory()
+	for i := 0; i < cfg.ClientMaxCount; i++ {
+		pool.clients[i] = newClient(cfg.ClientFactory, cfg.ClientBufSize)
 	}
 	return pool
 }
 
-func (c *clientpool) createClientFactory(cfg *clientConfig) func() *wrappedClient {
-	return func() *wrappedClient {
-		c.count++
-		client := newClient(cfg.clientFactory, cfg.recordSize, cfg.retryDuration)
-		client.id = c.count
-		return client
-	}
-}
-
-func (c *clientpool) Close() {
-	if c.IsClosed() {
+func (c *clientPool) Close() {
+	var wg sync.WaitGroup
+	c.cond.L.Lock()
+	defer c.cond.L.Unlock()
+	// pool is already closed
+	if c.closed {
 		return
 	}
-	c.mu.Lock()
-	if c.IsClosed() {
-		c.mu.Unlock()
-		return
+
+	for _, client := range c.clients {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			client.Close()
+		}()
 	}
-	for _, client := range c.freeClients {
-		c.closefn(client)
-	}
-	c.closed.Store(1)
-	c.mu.Unlock()
+	wg.Wait()
+	c.clients = nil
+	c.closed = true
+	c.cond.Broadcast()
 }
 
-func (c *clientpool) onClose(client *wrappedClient) {
-	client.Close()
-}
-
-// func (c *clientpool) GetAndWait() (*wrappedClient, error) {
-// 	client, err := c.Get()
-// 	if err == ErrNoClientAvailable {
-// 		retryWithTimeout(c.getTimeout, func() (shouldReturn bool) {
-// 			client, err = c.Get()
-// 			return err != ErrNoClientAvailable
-// 		})
-// 	}
-// 	return client, nil
-// }
-
-func (c *clientpool) Get() (*wrappedClient, error) {
-	if c.IsClosed() {
+func (c *clientPool) GetOnFly() (*wrappedClient, error) {
+	c.cond.L.Lock()
+	defer c.cond.L.Unlock()
+	if c.closed {
 		return nil, ErrClientPoolClosed
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.IsClosed() {
-		return nil, ErrClientPoolClosed
-	}
-	if len(c.freeClients) == 0 {
-		if c.count == c.maxCount {
-			return nil, ErrNoClientAvailable
-		}
-		return c.clientFactory(), nil
-	}
-	client := c.freeClients[len(c.freeClients)-1]
-	c.freeClients = c.freeClients[:len(c.freeClients)-1]
+	client := newClient(c.cfg.ClientFactory, c.cfg.ClientBufSize)
 	return client, nil
 }
 
-func (c *clientpool) IsClosed() bool {
-	return c.closed.Load() == 1
+func (c *clientPool) Get() (client *wrappedClient, err error) {
+	c.cond.L.Lock()
+	defer c.cond.L.Unlock()
+	for {
+		if c.closed {
+			err = ErrClientPoolClosed
+			return
+		}
+		if len(c.clients) > 0 {
+			client = c.clients[len(c.clients)-1]
+			client.pool = c
+			c.clients = c.clients[:len(c.clients)-1]
+			return
+		}
+		c.cond.Wait()
+	}
 }
 
-func (c *clientpool) Put(client *wrappedClient) {
-	if len(client.record.Payload()) > DefaultRecordSize {
-		client.record = client.c.GetLogRecord(DefaultRecordSize)
+func (c *clientPool) Put(client *wrappedClient) {
+	if len(client.buf.Payload()) > DefaultRecordSize {
+		client.buf = client.wrapped.GetLogRecord(DefaultRecordSize)
 	}
-	if c.IsClosed() {
-		c.closefn(client)
+	c.cond.L.Lock()
+	defer c.cond.L.Unlock()
+	if c.closed {
+		client.Close()
 		return
 	}
-	c.mu.Lock()
-	if c.IsClosed() {
-		c.closefn(client)
-		c.mu.Unlock()
+	c.clients = append(c.clients, client)
+	c.cond.Broadcast()
+}
+
+func (c *clientPool) GetWithWriteToken() (client *wrappedClient, err error) {
+	if client, err = c.Get(); err != nil {
 		return
 	}
-	c.count--
-	c.freeClients = append(c.freeClients, client)
-	defer c.mu.Unlock()
+	token := c.writeTokenController.Apply()
+	if token == 0 {
+		logutil.Fatal("token is 0")
+	}
+	client.pool = c
+	client.writeToken = token
+	return
+}
+
+func (c *clientPool) PutbackTokens(tokens ...uint64) {
+	c.writeTokenController.Putback(tokens...)
 }

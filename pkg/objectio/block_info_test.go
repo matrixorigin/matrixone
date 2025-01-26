@@ -15,6 +15,7 @@
 package objectio
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -287,4 +288,19 @@ func BenchmarkObjectStatsRelatedUtils(b *testing.B) {
 			stats.ConstructBlockId(uint16(1))
 		}
 	})
+}
+
+func TestMarshalAndUnMarshal(t *testing.T) {
+	b := &BlockInfo{}
+	b.PartitionIdx = 1
+	b.ObjectFlags = 1
+
+	buf := bytes.NewBuffer(nil)
+	_, err := b.MarshalWithBuf(buf)
+	require.NoError(t, err)
+
+	b2 := &BlockInfo{}
+	require.NoError(t, b2.Unmarshal(buf.Bytes()))
+
+	require.Equal(t, b, b2)
 }

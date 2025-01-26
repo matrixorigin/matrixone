@@ -527,17 +527,29 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.ToWriteS3 = t.ToWriteS3
 		op.SetInfo(&info)
 		return op
+	case vm.PartitionInsert:
+		t := sourceOp.(*insert.PartitionInsert)
+		op := insert.NewPartitionInsertFrom(t)
+		op.SetInfo(&info)
+		return op
+	case vm.PartitionDelete:
+		t := sourceOp.(*deletion.PartitionDelete)
+		op := deletion.NewPartitionDeleteFrom(t)
+		op.SetInfo(&info)
+		return op
 	case vm.PreInsert:
 		t := sourceOp.(*preinsert.PreInsert)
 		op := preinsert.NewArgument()
 		op.SchemaName = t.SchemaName
 		op.TableDef = t.TableDef
 		op.Attrs = t.Attrs
-		op.IsUpdate = t.IsUpdate
+		op.IsOldUpdate = t.IsOldUpdate
+		op.IsNewUpdate = t.IsNewUpdate
 		op.HasAutoCol = t.HasAutoCol
 		op.EstimatedRowCount = t.EstimatedRowCount
 		op.CompPkeyExpr = t.CompPkeyExpr
 		op.ClusterByExpr = t.ClusterByExpr
+		op.ColOffset = t.ColOffset
 		op.SetInfo(&info)
 		return op
 	case vm.Deletion:
@@ -598,6 +610,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op := multi_update.NewArgument()
 		op.MultiUpdateCtx = t.MultiUpdateCtx
 		op.Action = t.Action
+		op.IsRemote = t.IsRemote
 		op.IsOnduplicateKeyUpdate = t.IsOnduplicateKeyUpdate
 		op.Engine = t.Engine
 		op.SetInfo(&info)
@@ -627,6 +640,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.DedupColTypes = t.DedupColTypes
 		op.UpdateColIdxList = t.UpdateColIdxList
 		op.UpdateColExprList = t.UpdateColExprList
+		op.DelColIdx = t.DelColIdx
 
 		return op
 	case vm.PostDml:
@@ -646,7 +660,7 @@ func constructRestrict(n *plan.Node, filterExpr *plan.Expr) *filter.Filter {
 	return op
 }
 
-func constructDeletion(n *plan.Node, eg engine.Engine) (*deletion.Deletion, error) {
+func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (vm.Operator, error) {
 	oldCtx := n.DeleteCtx
 	delCtx := &deletion.DeleteCtx{
 		Ref:             oldCtx.Ref,
@@ -659,7 +673,22 @@ func constructDeletion(n *plan.Node, eg engine.Engine) (*deletion.Deletion, erro
 
 	op := deletion.NewArgument()
 	op.DeleteCtx = delCtx
-	return op, nil
+
+	ps := proc.GetPartitionService()
+	ok, _, err := ps.Is(
+		proc.Ctx,
+		oldCtx.TableDef.TblId,
+		proc.GetTxnOperator(),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	if !ok {
+		return op, nil
+	}
+
+	return deletion.NewPartitionDelete(op, oldCtx.TableDef.TblId), nil
 }
 
 func constructOnduplicateKey(n *plan.Node, _ engine.Engine) *onduplicatekey.OnDuplicatekey {
@@ -770,10 +799,12 @@ func constructPreInsert(ns []*plan.Node, n *plan.Node, eg engine.Engine, proc *p
 	op.SchemaName = schemaName
 	op.TableDef = preCtx.TableDef
 	op.Attrs = attrs
-	op.IsUpdate = preCtx.IsUpdate
+	op.IsOldUpdate = preCtx.IsOldUpdate
+	op.IsNewUpdate = preCtx.IsNewUpdate
 	op.EstimatedRowCount = int64(ns[n.Children[0]].Stats.Outcnt)
 	op.CompPkeyExpr = preCtx.CompPkeyExpr
 	op.ClusterByExpr = preCtx.ClusterByExpr
+	op.ColOffset = preCtx.ColOffset
 
 	return op, nil
 }
@@ -812,9 +843,16 @@ func constructLockOp(n *plan.Node, eng engine.Engine) (*lockop.LockOp, error) {
 	return arg, nil
 }
 
-func constructMultiUpdate(n *plan.Node, eg engine.Engine) *multi_update.MultiUpdate {
+func constructMultiUpdate(
+	n *plan.Node,
+	eg engine.Engine,
+	proc *process.Process,
+	action multi_update.UpdateAction,
+	isRemote bool,
+) (vm.Operator, error) {
 	arg := multi_update.NewArgument()
 	arg.Engine = eg
+	arg.IsRemote = isRemote
 
 	arg.MultiUpdateCtx = make([]*multi_update.MultiUpdateCtx, len(n.UpdateCtxList))
 	for i, updateCtx := range n.UpdateCtxList {
@@ -835,11 +873,34 @@ func constructMultiUpdate(n *plan.Node, eg engine.Engine) *multi_update.MultiUpd
 			DeleteCols: deleteCols,
 		}
 	}
+	arg.Action = action
 
-	return arg
+	ps := proc.GetPartitionService()
+	ok, _, err := ps.Is(
+		proc.Ctx,
+		n.UpdateCtxList[0].TableDef.TblId,
+		proc.GetTxnOperator(),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	if !ok {
+		return arg, nil
+	}
+
+	return multi_update.NewPartitionMultiUpdate(
+		arg,
+		n.UpdateCtxList[0].TableDef.TblId,
+	), nil
 }
 
-func constructInsert(n *plan.Node, eg engine.Engine) *insert.Insert {
+func constructInsert(
+	proc *process.Process,
+	n *plan.Node,
+	eg engine.Engine,
+	toS3 bool,
+) (vm.Operator, error) {
 	oldCtx := n.InsertCtx
 	var attrs []string
 	for _, col := range oldCtx.TableDef.Cols {
@@ -856,7 +917,27 @@ func constructInsert(n *plan.Node, eg engine.Engine) *insert.Insert {
 	}
 	arg := insert.NewArgument()
 	arg.InsertCtx = newCtx
-	return arg
+	arg.ToWriteS3 = toS3
+
+	ps := proc.GetPartitionService()
+	if ps == nil {
+		return arg, nil
+	}
+
+	ok, _, err := ps.Is(
+		proc.Ctx,
+		oldCtx.TableDef.TblId,
+		proc.GetTxnOperator(),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	if !ok {
+		return arg, nil
+	}
+
+	return insert.NewPartitionInsert(arg, oldCtx.TableDef.TblId), nil
 }
 
 func constructProjection(n *plan.Node) *projection.Projection {
@@ -1132,9 +1213,13 @@ func constructDedupJoin(n *plan.Node, leftTypes, rightTypes []types.Type, proc *
 	arg.OnDuplicateAction = n.OnDuplicateAction
 	arg.DedupColName = n.DedupColName
 	arg.DedupColTypes = n.DedupColTypes
+	arg.DelColIdx = -1
 	if n.DedupJoinCtx != nil {
 		arg.UpdateColIdxList = n.DedupJoinCtx.UpdateColIdxList
 		arg.UpdateColExprList = n.DedupJoinCtx.UpdateColExprList
+		if n.OnDuplicateAction == plan.Node_FAIL && len(n.DedupJoinCtx.OldColList) > 0 {
+			arg.DelColIdx = n.DedupJoinCtx.OldColList[0].ColPos
+		}
 	}
 	arg.IsShuffle = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle
 	for i := range n.SendMsgList {
@@ -1872,6 +1957,7 @@ func constructHashBuild(op vm.Operator, proc *process.Process, mcpu int32) *hash
 		ret.OnDuplicateAction = arg.OnDuplicateAction
 		ret.DedupColName = arg.DedupColName
 		ret.DedupColTypes = arg.DedupColTypes
+		ret.DelColIdx = arg.DelColIdx
 		if len(arg.RuntimeFilterSpecs) > 0 {
 			ret.RuntimeFilterSpec = arg.RuntimeFilterSpecs[0]
 		}
@@ -2004,6 +2090,7 @@ func constructShuffleBuild(op vm.Operator, proc *process.Process) *shufflebuild.
 		ret.OnDuplicateAction = arg.OnDuplicateAction
 		ret.DedupColName = arg.DedupColName
 		ret.DedupColTypes = arg.DedupColTypes
+		ret.DelColIdx = arg.DelColIdx
 		if len(arg.RuntimeFilterSpecs) > 0 {
 			ret.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(arg.RuntimeFilterSpecs[0])
 		}

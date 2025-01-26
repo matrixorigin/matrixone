@@ -1,4 +1,4 @@
-// Copyright 2024 Matrix Origin
+// Copyright 2021-2024 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,19 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package logservicedriver
+package partitionservice
 
-import (
-	"testing"
-
-	"github.com/stretchr/testify/assert"
-)
-
-func Test_NewTestConfig(t *testing.T) {
-	service, ccfg := initTest(t)
-	defer service.Close()
-
-	cfg := NewTestConfig("", ccfg)
-	_, err := cfg.ClientFactory()
-	assert.NoError(t, err)
+// Config partition service
+type Config struct {
+	// ServiceID service id
+	ServiceID string `toml:"-"`
+	// Enable enable shard service
+	Enable bool `toml:"enable"`
 }
