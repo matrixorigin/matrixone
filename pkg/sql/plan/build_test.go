@@ -22,8 +22,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -1242,4 +1245,16 @@ func Test_limitUint64(t *testing.T) {
 		}
 		outPutPlan(logicPlan, true, t)
 	}
+}
+
+// test canDeleteRewriteToTruncate
+func Test_bind_delete(t *testing.T) {
+	ctx := context.TODO()
+	ctrl := gomock.NewController(t)
+	compileCtx := NewMockCompilerContext2(ctrl)
+	compileCtx.EXPECT().ResolveVariable(gomock.Any(), gomock.Any(), gomock.Any()).Return("", nil).AnyTimes()
+	compileCtx.EXPECT().GetAccountId().Return(catalog.System_Account, moerr.NewInternalError(ctx, "no account id in context")).AnyTimes()
+	dmlCtx := &DMLContext{}
+	_, err := canDeleteRewriteToTruncate(compileCtx, dmlCtx)
+	assert.Error(t, err)
 }
