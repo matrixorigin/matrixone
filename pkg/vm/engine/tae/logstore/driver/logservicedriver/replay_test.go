@@ -106,7 +106,7 @@ func Test_AppendSkipCmd(t *testing.T) {
 	driver := NewLogServiceDriver(&cfg)
 	defer driver.Close()
 
-	r := newReplayer(nil, driver, ReplayReadSize)
+	r := newReplayer(nil, driver, MaxReadBatchSize)
 	r.AppendSkipCmd(context.Background(), nil)
 }
 

@@ -31,8 +31,7 @@ import (
 )
 
 const (
-	ReplayReadSize = mpool.MB * 64
-	MaxReadSize    = mpool.MB * 64
+	MaxReadBatchSize = mpool.MB * 64
 )
 
 type LogServiceDriver struct {
@@ -123,7 +122,7 @@ func (d *LogServiceDriver) Replay(
 	replayer := newReplayer(
 		h,
 		d,
-		ReplayReadSize,
+		MaxReadBatchSize,
 		WithReplayerWaitMore(
 			onWaitMore,
 		),
