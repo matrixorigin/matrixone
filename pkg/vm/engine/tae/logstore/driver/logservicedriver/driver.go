@@ -219,6 +219,21 @@ func (d *LogServiceDriver) readFromBackend(
 	return
 }
 
+func (d *LogServiceDriver) IsReadonly() bool {
+	return d.config.Load().Readonly
+}
+
 func (d *LogServiceDriver) GetCfg() *Config {
 	return d.config.Load()
+}
+
+func (d *LogServiceDriver) ChangeMode(readonly bool) (updated bool) {
+	cfg := d.config.Load()
+	if cfg.Readonly == readonly {
+		return false
+	}
+	newCfg := *cfg
+	newCfg.Readonly = readonly
+	d.config.Store(&newCfg)
+	return true
 }
