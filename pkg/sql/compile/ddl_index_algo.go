@@ -482,7 +482,7 @@ func (s *Scope) handleVectorHnswIndex(c *Compile, dbSource engine.Database, inde
 	}
 
 	// 3. build hnsw index
-	sqls, err := genBuildHnswIndex(indexDefs, qryDatabase, originalTableDef)
+	sqls, err := genBuildHnswIndex(c.proc, indexDefs, qryDatabase, originalTableDef)
 	if err != nil {
 		return err
 	}

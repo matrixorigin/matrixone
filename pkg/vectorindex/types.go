@@ -47,6 +47,7 @@ type HnswParam struct {
 	EfConstruction string `json:"ef_construction"`
 	Quantization   string `json:"quantization"`
 	OpType         string `json:"op_type"`
+	EfSearch       int64  `json:"ef_search"`
 }
 
 // This is generalized index config and able to share between various algorithm types.  Simply add your new configuration such as usearch.IndexConfig

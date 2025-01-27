@@ -487,7 +487,7 @@ func genInsertIndexTableSqlForFullTextIndex(originalTableDef *plan.TableDef, ind
 	return []string{sql}
 }
 
-func genBuildHnswIndex(indexDefs map[string]*plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef) ([]string, error) {
+func genBuildHnswIndex(proc *process.Process, indexDefs map[string]*plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef) ([]string, error) {
 	var cfg vectorindex.IndexTableConfig
 	src_alias := "src"
 	pkColName := src_alias + "." + originalTableDef.Pkey.PkeyColName
@@ -510,7 +510,24 @@ func genBuildHnswIndex(indexDefs map[string]*plan.IndexDef, qryDatabase string, 
 
 	params := idxdef_index.IndexAlgoParams
 
-	bytes, err := json.Marshal(cfg)
+	var hnswparam vectorindex.HnswParam
+	err := json.Unmarshal([]byte(params), &hnswparam)
+	if err != nil {
+		return nil, err
+	}
+
+	val, err := proc.GetResolveVariableFunc()("hnsw_ef_search", true, false)
+	if err != nil {
+		return nil, err
+	}
+	hnswparam.EfSearch = val.(int64)
+
+	hnswparambytes, err := json.Marshal(hnswparam)
+	if err != nil {
+		return nil, err
+	}
+
+	cfgbytes, err := json.Marshal(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -520,8 +537,8 @@ func genBuildHnswIndex(indexDefs map[string]*plan.IndexDef, qryDatabase string, 
 	sql := fmt.Sprintf(insertIntoHnswIndexTableFormat,
 		qryDatabase, originalTableDef.Name,
 		src_alias,
-		params,
-		string(bytes),
+		string(hnswparambytes),
+		string(cfgbytes),
 		pkColName,
 		part)
 

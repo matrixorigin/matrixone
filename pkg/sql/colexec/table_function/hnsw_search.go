@@ -156,6 +156,9 @@ func (u *hnswSearchState) start(tf *TableFunction, proc *process.Process, nthRow
 			u.idxcfg.Usearch.ExpansionAdd = uint(val)
 		}
 
+		// ef_search
+		u.idxcfg.Usearch.ExpansionSearch = uint(u.param.EfSearch)
+
 		// IndexTableConfig
 		cfgVec := tf.ctr.argVecs[0]
 		if cfgVec.GetType().Oid != types.T_varchar {
@@ -183,13 +186,6 @@ func (u *hnswSearchState) start(tf *TableFunction, proc *process.Process, nthRow
 		// dimension
 		u.idxcfg.Usearch.Dimensions = uint(dimension)
 		u.idxcfg.Type = "hnsw"
-
-		// ef_search
-		val, err := proc.GetResolveVariableFunc()("hnsw_ef_search", true, false)
-		if err != nil {
-			return err
-		}
-		u.idxcfg.Usearch.ExpansionSearch = uint(val.(int64))
 
 		os.Stderr.WriteString(fmt.Sprintf("Param %v\n", u.param))
 		os.Stderr.WriteString(fmt.Sprintf("Cfg %v\n", u.tblcfg))
