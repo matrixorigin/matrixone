@@ -52,7 +52,7 @@ func restartDriver(t *testing.T, d *LogServiceDriver, h func(*entry.Entry)) *Log
 	t.Logf("Driver DSN %d, Synced %d", d.watermark.nextDSN.Load(), d.watermark.committedDSN)
 	t.Logf("Truncated %d", d.truncateDSNIntent.Load())
 	t.Logf("LSTruncated %d", d.truncatedPSN)
-	d = NewLogServiceDriver(&d.config)
+	d = NewLogServiceDriver(d.config.Load())
 	tempLsn := uint64(0)
 	err := d.Replay(
 		context.Background(),

@@ -41,6 +41,7 @@ type Config struct {
 
 	ClientFactory LogServiceClientFactory
 	IsMockBackend bool
+	Readonly      bool
 }
 
 type LogServiceClientFactory logservice.ClientFactory

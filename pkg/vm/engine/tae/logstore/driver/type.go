@@ -40,6 +40,14 @@ const (
 
 type ApplyHandle = func(*entry.Entry) (replayEntryState ReplayEntryState)
 
+type DriverMode int32
+
+const (
+	DriverMode_Invalid DriverMode = iota
+	DriverMode_Writable
+	DriverMode_Readonly
+)
+
 type ReplayMode int32
 
 const (

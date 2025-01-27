@@ -165,7 +165,7 @@ func TestAppendSkipCmd2(t *testing.T) {
 		var list2 []uint64
 		entryCount := 0
 		assert.NoError(t, driver.Close())
-		driver = NewLogServiceDriver(&driver.config)
+		driver = NewLogServiceDriver(driver.GetCfg())
 		err := driver.Replay(
 			context.Background(),
 			func(e *entry.Entry) storeDriver.ReplayEntryState {
@@ -211,7 +211,7 @@ func TestAppendSkipCmd3(t *testing.T) {
 	{
 		entryCount := 0
 		assert.NoError(t, driver.Close())
-		driver = NewLogServiceDriver(&driver.config)
+		driver = NewLogServiceDriver(driver.GetCfg())
 		err := driver.Replay(
 			ctx,
 			func(e *entry.Entry) storeDriver.ReplayEntryState {
@@ -283,7 +283,7 @@ func TestAppendSkipCmd4(t *testing.T) {
 	{
 		entryCount := 0
 		assert.NoError(t, driver.Close())
-		driver = NewLogServiceDriver(&driver.config)
+		driver = NewLogServiceDriver(driver.GetCfg())
 		err := driver.Replay(
 			context.Background(),
 			func(e *entry.Entry) storeDriver.ReplayEntryState {
@@ -343,7 +343,7 @@ func TestAppendSkipCmd4(t *testing.T) {
 	{
 		entryCount := 0
 		assert.NoError(t, driver.Close())
-		driver = NewLogServiceDriver(&driver.config)
+		driver = NewLogServiceDriver(driver.GetCfg())
 		err := driver.Replay(
 			context.Background(),
 			func(e *entry.Entry) storeDriver.ReplayEntryState {
@@ -417,7 +417,7 @@ func TestAppendSkipCmd5(t *testing.T) {
 	{
 		entryCount := 0
 		assert.NoError(t, driver.Close())
-		driver = NewLogServiceDriver(&driver.config)
+		driver = NewLogServiceDriver(driver.GetCfg())
 		err := driver.Replay(
 			context.Background(),
 			func(e *entry.Entry) storeDriver.ReplayEntryState {

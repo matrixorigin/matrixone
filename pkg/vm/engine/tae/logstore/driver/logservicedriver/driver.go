@@ -37,7 +37,7 @@ const (
 type LogServiceDriver struct {
 	*sequenceNumberState
 
-	config Config
+	config atomic.Pointer[Config]
 
 	clientPool *clientPool
 	committer  *groupCommitter
@@ -65,13 +65,13 @@ func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
 
 	d := &LogServiceDriver{
 		clientPool:          newClientPool(cfg),
-		config:              *cfg,
 		committer:           getCommitter(),
 		sequenceNumberState: newSequenceNumberState(),
 		commitWaitQueue:     make(chan any, 10000),
 		postCommitQueue:     make(chan any, 10000),
 		workers:             pool,
 	}
+	d.config.Store(cfg)
 	d.ctx, d.cancel = context.WithCancel(context.Background())
 	d.commitLoop = sm.NewSafeQueue(10000, 10000, d.onCommitIntents)
 	d.commitLoop.Start()
@@ -87,7 +87,7 @@ func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
 }
 
 func (d *LogServiceDriver) GetMaxClient() int {
-	return d.config.ClientMaxCount
+	return d.config.Load().ClientMaxCount
 }
 
 func (d *LogServiceDriver) Close() error {
@@ -196,10 +196,11 @@ func (d *LogServiceDriver) readFromBackend(
 	}
 	defer client.Putback()
 
-	for ; retryTimes < d.config.MaxRetryCount; retryTimes++ {
+	cfg := d.config.Load()
+	for ; retryTimes < cfg.MaxRetryCount; retryTimes++ {
 		ctx, cancel = context.WithTimeoutCause(
 			ctx,
-			d.config.MaxTimeout,
+			cfg.MaxTimeout,
 			moerr.CauseReadFromLogService,
 		)
 		if records, nextPSN, err = client.wrapped.Read(
@@ -212,8 +213,12 @@ func (d *LogServiceDriver) readFromBackend(
 		if err == nil {
 			break
 		}
-		time.Sleep(d.config.RetryInterval() * time.Duration(retryTimes+1))
+		time.Sleep(cfg.RetryInterval() * time.Duration(retryTimes+1))
 	}
 
 	return
+}
+
+func (d *LogServiceDriver) GetCfg() *Config {
+	return d.config.Load()
 }
