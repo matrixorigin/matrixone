@@ -93,6 +93,41 @@ func bindAndOptimizeInsertQuery(ctx CompilerContext, stmt *tree.Insert, isPrepar
 	}, err
 }
 
+func bindAndOptimizeReplaceQuery(ctx CompilerContext, stmt *tree.Replace, isPrepareStmt bool, skipStats bool) (*Plan, error) {
+	start := time.Now()
+	defer func() {
+		v2.TxnStatementBuildInsertHistogram.Observe(time.Since(start).Seconds())
+	}()
+
+	builder := NewQueryBuilder(plan.Query_INSERT, ctx, isPrepareStmt, true)
+	builder.parseOptimizeHints()
+	bindCtx := NewBindContext(builder, nil)
+	if IsSnapshotValid(ctx.GetSnapshot()) {
+		bindCtx.snapshot = ctx.GetSnapshot()
+	}
+
+	rootId, err := builder.bindReplace(stmt, bindCtx)
+	if err != nil {
+		if err.(*moerr.Error).ErrorCode() == moerr.ErrUnsupportedDML {
+			return buildReplace(stmt, ctx, false, isPrepareStmt)
+		}
+		return nil, err
+	}
+	ctx.SetViews(bindCtx.views)
+
+	builder.qry.Steps = append(builder.qry.Steps, rootId)
+	builder.skipStats = skipStats
+	query, err := builder.createQuery()
+	if err != nil {
+		return nil, err
+	}
+	return &Plan{
+		Plan: &plan.Plan_Query{
+			Query: query,
+		},
+	}, err
+}
+
 func bindAndOptimizeLoadQuery(ctx CompilerContext, stmt *tree.Load, isPrepareStmt bool, skipStats bool) (*Plan, error) {
 	// return buildLoad(stmt, ctx, isPrepareStmt)
 	start := time.Now()
@@ -163,10 +198,6 @@ func bindAndOptimizeDeleteQuery(ctx CompilerContext, stmt *tree.Delete, isPrepar
 }
 
 func bindAndOptimizeUpdateQuery(ctx CompilerContext, stmt *tree.Update, isPrepareStmt bool, skipStats bool) (*Plan, error) {
-	// if !isExplain {
-	// 	return buildTableUpdate(stmt, ctx, isPrepareStmt)
-	// }
-
 	start := time.Now()
 	defer func() {
 		v2.TxnStatementBuildDeleteHistogram.Observe(time.Since(start).Seconds())
@@ -258,7 +289,7 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*P
 	case *tree.Insert:
 		return bindAndOptimizeInsertQuery(ctx, stmt, isPrepareStmt, false)
 	case *tree.Replace:
-		return buildReplace(stmt, ctx, isPrepareStmt, false)
+		return bindAndOptimizeReplaceQuery(ctx, stmt, isPrepareStmt, false)
 	case *tree.Update:
 		return bindAndOptimizeUpdateQuery(ctx, stmt, isPrepareStmt, false)
 	case *tree.Delete:
