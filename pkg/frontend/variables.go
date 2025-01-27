@@ -3539,8 +3539,8 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Scope:             ScopeBoth,
 		Dynamic:           true,
 		SetVarHintApplies: false,
-		Type:              InitSystemVariableBoolType("hnsw_ef_search"),
-		Default:           int64(64),
+		Type:              InitSystemVariableIntType("hnsw_ef_search", 0, 65535, false),
+		Default:           int64(0),
 	},
 	"validate_password": {
 		Name:              "validate_password",

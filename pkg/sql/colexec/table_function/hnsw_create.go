@@ -29,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
-	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -45,13 +44,6 @@ type hnswCreateState struct {
 	offset int
 	// holding one call batch, tokenizedState owns it.
 	batch *batch.Batch
-}
-
-// stub function
-var newHnswAlgo = newHnswAlgoFn
-
-func newHnswAlgoFn(idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) veccache.VectorIndexSearchIf {
-	return &hnsw.HnswSearch{Idxcfg: idxcfg, Tblcfg: tblcfg}
 }
 
 func (u *hnswCreateState) end(tf *TableFunction, proc *process.Process) error {
@@ -70,21 +62,6 @@ func (u *hnswCreateState) end(tf *TableFunction, proc *process.Process) error {
 		}
 		res.Close()
 	}
-
-	/*
-		vec := []float32{1, 0, 1, 6, 6, 17, 47, 39, 2, 0, 1, 25, 27, 10, 56, 130, 18, 5, 2, 6, 15, 2, 19, 130, 42, 28, 1, 1, 2, 1, 0, 5, 0, 2, 4, 4, 31, 34, 44, 35, 9, 3, 8, 11, 33, 12, 61, 130, 130, 17, 0, 1, 6, 2, 9, 130, 111, 36, 0, 0, 11, 9, 1, 12, 2, 100, 130, 28, 7, 2, 6, 7, 9, 27, 130, 83, 5, 0, 1, 18, 130, 130, 84, 9, 0, 0, 2, 24, 111, 24, 0, 1, 37, 24, 2, 10, 12, 62, 33, 3, 0, 0, 0, 1, 3, 16, 106, 28, 0, 0, 0, 0, 17, 46, 85, 10, 0, 0, 1, 4, 11, 4, 2, 2, 9, 14, 8, 8}
-		veccache.VectorIndexCacheTTL = 30 * time.Second
-		veccache.Cache.TickerInterval = 5 * time.Second
-		veccache.Cache.Once()
-
-		algo := newHnswAlgo(u.idxcfg, u.tblcfg)
-		keys, distance, err := veccache.Cache.Search(proc, u.tblcfg.IndexTable, algo, vec, 3)
-		if err != nil {
-			return err
-		}
-
-		os.Stderr.WriteString(fmt.Sprintf("keys %v, distances %v\n", keys, distance))
-	*/
 
 	return nil
 }
@@ -198,6 +175,13 @@ func (u *hnswCreateState) start(tf *TableFunction, proc *process.Process, nthRow
 		// dimension
 		u.idxcfg.Usearch.Dimensions = uint(dimension)
 		u.idxcfg.Type = "hnsw"
+
+		// ef_search
+		val, err := proc.GetResolveVariableFunc()("hnsw_ef_search", true, false)
+		if err != nil {
+			return err
+		}
+		u.idxcfg.Usearch.ExpansionSearch = uint(val.(int64))
 
 		os.Stderr.WriteString(fmt.Sprintf("Param %v\n", u.param))
 		os.Stderr.WriteString(fmt.Sprintf("Cfg %v\n", u.tblcfg))
