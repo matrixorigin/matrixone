@@ -363,7 +363,7 @@ import (
 
 // Secondary Index
 %token <str> PARSER VISIBLE INVISIBLE BTREE HASH RTREE BSI IVFFLAT MASTER HNSW
-%token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS OP_TYPE REINDEX EF_CONSTRUCTION M QUANTIZATION
+%token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS OP_TYPE REINDEX EF_SEARCH EF_CONSTRUCTION M QUANTIZATION
 
 
 // Alter
@@ -7501,7 +7501,9 @@ index_option_list:
  	      opt1.HnswEfConstruction = opt2.HnswEfConstruction
  	    } else if len(opt2.HnswQuantization) > 0 {
 	      opt1.HnswQuantization = opt2.HnswQuantization
-            }
+            } else if opt2.HnswEfSearch > 0 {
+	      opt1.HnswEfSearch = opt2.HnswEfSearch
+ 	    }
             $$ = opt1
         }
     }
@@ -7575,6 +7577,17 @@ index_option:
 	}
 	io := tree.NewIndexOption()
 	io.HnswEfConstruction = val
+	$$ = io
+     }
+|   EF_SEARCH equal_opt INTEGRAL
+    {
+        val := int64($3.(int64))
+	if val <= 0 {
+		yylex.Error("EF_SEARCH should be greater than 0")
+		return 1
+	}
+	io := tree.NewIndexOption()
+	io.HnswEfSearch = val
 	$$ = io
      }
 |    QUANTIZATION equal_opt STRING
@@ -12538,6 +12551,7 @@ non_reserved_keyword:
 |   DUPLICATE
 |   DELAY_KEY_WRITE
 |   EF_CONSTRUCTION
+|   EF_SEARCH
 |   ENUM
 |   ENCRYPTION
 |   ENGINE
