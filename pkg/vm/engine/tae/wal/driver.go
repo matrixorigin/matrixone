@@ -93,6 +93,11 @@ func (driver *walDriver) Close() error {
 	return driver.impl.Close()
 }
 
+func (driver *walDriver) RangeCheckpoint(start, end uint64, files ...string) (e LogEntry, err error) {
+	e, err = driver.impl.RangeCheckpoint(GroupPrepare, start, end, files...)
+	return
+}
+
 // for UT
 func (driver *walDriver) GetTruncated() uint64 {
 	return driver.impl.GetTruncated()
