@@ -55,6 +55,14 @@ func (d *LogServiceDriver) GetTruncated() (dsn uint64, err error) {
 }
 
 func (d *LogServiceDriver) onTruncateRequests(items ...any) {
+	if d.IsReadonly() {
+		logutil.Warn(
+			"Wal-Readonly-Skip-Truncate",
+			zap.Uint64("dsn-intent", d.truncateDSNIntent.Load()),
+			zap.Uint64("truncated-psn", d.truncatedPSN),
+		)
+		return
+	}
 	d.doTruncate()
 }
 

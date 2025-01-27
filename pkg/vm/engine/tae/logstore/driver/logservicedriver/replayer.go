@@ -142,7 +142,7 @@ type replayerDriver interface {
 		ctx context.Context, firstPSN uint64, maxSize int,
 	) (nextPSN uint64, records []logservice.LogRecord, err error)
 	getTruncatedPSNFromBackend(ctx context.Context) (uint64, error)
-	getClientForWrite() *wrappedClient
+	getClientForWrite() (*wrappedClient, error)
 	GetMaxClient() int
 }
 
@@ -811,10 +811,11 @@ func (r *replayer) AppendSkipCmd(
 		return
 	}
 
-	client := r.driver.getClientForWrite()
-	defer func() {
-		client.Putback()
-	}()
+	var client *wrappedClient
+	if client, err = r.driver.getClientForWrite(); err != nil {
+		return
+	}
+	defer client.Putback()
 
 	entry := SkipMapToLogEntry(skipMap)
 
