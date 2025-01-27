@@ -43,6 +43,7 @@ type replayState struct {
 
 func newReplayState(
 	done bool,
+	err error,
 	mode driver.ReplayMode,
 	waitCh chan struct{},
 ) *replayState {
@@ -151,20 +152,15 @@ func (d *LogServiceDriver) Replay(
 		return moerr.NewInternalErrorNoCtx("replay already done")
 	}
 
-	replayState := newReplayState(false, mode, nil)
+	replayState := newReplayState(false, nil, mode, nil)
 	if !d.replayState.CompareAndSwap(oldState, replayState) {
 		return moerr.NewInternalErrorNoCtx("concurrent replay")
 	}
 
 	defer func() {
-		if err != nil {
-			d.replayState.Store(nil)
-			replayState.Done(err)
-		} else {
-			doneState := newReplayState(true, mode, replayState.waitCh)
-			d.replayState.Store(doneState)
-			doneState.Done(nil)
-		}
+		doneState := newReplayState(true, err, mode, replayState.waitCh)
+		d.replayState.Store(doneState)
+		doneState.Done(err)
 	}()
 
 	onLogRecord := func(r logservice.LogRecord) {
@@ -280,6 +276,20 @@ func (d *LogServiceDriver) readFromBackend(
 	}
 
 	return
+}
+
+func (d *LogServiceDriver) ReplayWaitC() <-chan struct{} {
+	state := d.replayState.Load()
+	if state == nil {
+		ch := make(chan struct{})
+		close(ch)
+		return ch
+	}
+	return state.WaitC()
+}
+
+func (d *LogServiceDriver) GetReplayState() *replayState {
+	return d.replayState.Load()
 }
 
 func (d *LogServiceDriver) GetCfg() *Config {

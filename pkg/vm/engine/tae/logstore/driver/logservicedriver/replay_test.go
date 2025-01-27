@@ -901,18 +901,12 @@ func Test_Replayer9(t *testing.T) {
 	consumer := NewLogServiceDriver(&cfg)
 	defer consumer.Close()
 
-	errCh := make(chan error, 1)
-
 	var maxReadDSN atomic.Uint64
 	applyCnt := 0
 
 	readCtx, readCancel := context.WithCancelCause(context.Background())
 	go func() {
-		var err error
-		defer func() {
-			errCh <- err
-		}()
-		err = consumer.Replay(
+		consumer.Replay(
 			readCtx,
 			func(e *entry.Entry) storeDriver.ReplayEntryState {
 				applyCnt++
@@ -994,7 +988,8 @@ func Test_Replayer9(t *testing.T) {
 
 	cancelErr := moerr.NewInternalErrorNoCtx("cancel")
 	readCancel(cancelErr)
-	readErr := <-errCh
+	<-consumer.ReplayWaitC()
+	readErr := consumer.GetReplayState().Err()
 	t.Logf("Read error: %v", readErr)
 	assert.ErrorIs(t, readErr, cancelErr)
 
@@ -1002,11 +997,7 @@ func Test_Replayer9(t *testing.T) {
 	readCtx, readCancel = context.WithCancelCause(context.Background())
 	maxReadDSN.Store(0)
 	go func() {
-		var err error
-		defer func() {
-			errCh <- err
-		}()
-		err = consumer.Replay(
+		consumer.Replay(
 			readCtx,
 			func(e *entry.Entry) storeDriver.ReplayEntryState {
 				if e.DSN <= maxTrucateIntent {
@@ -1052,7 +1043,8 @@ func Test_Replayer9(t *testing.T) {
 	assert.Equalf(t, uint64(entryCnt*2), maxReadDSN.Load(), fmt.Sprintf("%d, %d", entryCnt*2, maxReadDSN.Load()))
 
 	readCancel(cancelErr)
-	readErr = <-errCh
+	<-consumer.ReplayWaitC()
+	readErr = consumer.GetReplayState().Err()
 	t.Logf("Read error: %v", readErr)
 	assert.ErrorIs(t, readErr, cancelErr)
 }
