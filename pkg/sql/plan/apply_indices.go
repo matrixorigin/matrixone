@@ -340,9 +340,34 @@ func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan
 					return newSortNode, nil
 				}
 			case catalog.MoIndexHnswAlgo.ToString():
-				// TODO
-				continue
+				storedParams, err := catalog.IndexParamsStringToMap(multiTableIndex.IndexDefs[catalog.Hnsw_TblType_Metadata].IndexAlgoParams)
+				if err != nil {
+					continue
+				}
+				storedOpType, ok := storedParams[catalog.IndexAlgoParamOpType]
+				if !ok {
+					continue
+				}
 
+				// if index is not the order by column, skip
+				idxDef0 := multiTableIndex.IndexDefs[catalog.Hnsw_TblType_Metadata]
+				if scanNode.TableDef.Name2ColIndex[idxDef0.Parts[0]] != colPosOrderBy {
+					continue
+				}
+
+				// if index is of the same distance function in order by, the index is valid
+				if storedOpType == distFuncOpTypes[distFnExpr.Func.ObjName] {
+					multiTableIndexWithSortDistFn := multiTableIndex
+
+					newSortNode := builder.applyIndicesForSortUsingHnsw(nodeID, projNode, sortNode, scanNode,
+						colRefCnt, idxColMap, multiTableIndexWithSortDistFn, colPosOrderBy)
+
+					// TODO: consult with nitao and aungr
+					projNode.Children[0] = newSortNode
+					replaceColumnsForNode(projNode, idxColMap)
+
+					return newSortNode, nil
+				}
 			}
 		}
 	}
