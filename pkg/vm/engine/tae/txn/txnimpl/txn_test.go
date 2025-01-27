@@ -436,7 +436,7 @@ func TestTxnManager1(t *testing.T) {
 
 func initTestContext(ctx context.Context, t *testing.T, dir string) (*catalog.Catalog, *txnbase.TxnManager, wal.Driver) {
 	c := catalog.MockCatalog()
-	driver := wal.NewDriverWithBatchStore(context.Background(), dir, "store", nil)
+	driver := wal.NewBatchStoreDriver(ctx, dir, "store")
 	serviceDir := path.Join(dir, "data")
 	service := objectio.TmpNewFileservice(ctx, path.Join(dir, "data"))
 	fs := objectio.NewObjectFS(service, serviceDir)

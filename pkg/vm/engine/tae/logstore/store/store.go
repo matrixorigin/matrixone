@@ -54,7 +54,9 @@ func NewStoreWithLogserviceDriver(factory logservicedriver.LogServiceClientFacto
 	return NewStore(driver)
 }
 
-func NewStoreWithBatchStoreDriver(dir, name string, cfg *batchstoredriver.StoreCfg) Store {
+func NewStoreWithBatchStoreDriver(
+	dir, name string, cfg *batchstoredriver.StoreCfg,
+) Store {
 	driver, err := batchstoredriver.NewBaseStore(dir, name, cfg)
 	if err != nil {
 		panic(err)

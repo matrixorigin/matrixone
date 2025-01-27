@@ -16,18 +16,12 @@ package wal
 
 import (
 	"context"
-	"time"
 
 	storeDriver "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/batchstoredriver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/logservicedriver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"
 )
-
-type DriverConfig struct {
-	BatchStoreConfig   *batchstoredriver.StoreCfg
-	CheckpointDuration time.Duration
-}
 
 type walDriver struct {
 	impl store.Store
@@ -41,36 +35,31 @@ func NewLogserviceDriver(
 	return &walDriver{impl: impl}
 }
 
-func NewDriverWithBatchStore(ctx context.Context, dir, name string, cfg *DriverConfig) Driver {
-	var batchStoreCfg *batchstoredriver.StoreCfg
-	ckpDuration := time.Second * 5
-	if cfg != nil {
-		batchStoreCfg = cfg.BatchStoreConfig
-		ckpDuration = cfg.CheckpointDuration
-	}
-	impl := store.NewStoreWithBatchStoreDriver(dir, name, batchStoreCfg)
-	driver := NewDriverWithStore(ctx, impl, ckpDuration)
-	return driver
+func NewBatchStoreDriver(
+	ctx context.Context, dir, name string, cfg *batchstoredriver.StoreCfg,
+) Driver {
+	impl := store.NewStoreWithBatchStoreDriver(dir, name, cfg)
+	return &walDriver{impl: impl}
 }
 
-func NewDriverWithStore(ctx context.Context, impl store.Store, ckpDuration time.Duration) Driver {
-	if ckpDuration == 0 {
-		ckpDuration = time.Second
-	}
-	driver := &walDriver{
-		impl: impl,
-	}
-	return driver
-}
 func (driver *walDriver) Start() {}
+
 func (driver *walDriver) GetCheckpointed() uint64 {
 	return driver.impl.GetCheckpointed(GroupPrepare)
 }
+
 func (driver *walDriver) replayhandle(handle store.ApplyHandle) store.ApplyHandle {
-	return func(group uint32, commitId uint64, payload []byte, typ uint16, info any) storeDriver.ReplayEntryState {
+	return func(
+		group uint32,
+		commitId uint64,
+		payload []byte,
+		typ uint16,
+		info any,
+	) storeDriver.ReplayEntryState {
 		return handle(group, commitId, payload, typ, nil)
 	}
 }
+
 func (driver *walDriver) Replay(
 	ctx context.Context, handle store.ApplyHandle, mode storeDriver.ReplayMode,
 ) error {
@@ -94,7 +83,9 @@ func (driver *walDriver) Close() error {
 	return driver.impl.Close()
 }
 
-func (driver *walDriver) RangeCheckpoint(start, end uint64, files ...string) (e LogEntry, err error) {
+func (driver *walDriver) RangeCheckpoint(
+	start, end uint64, files ...string,
+) (e LogEntry, err error) {
 	e, err = driver.impl.RangeCheckpoint(GroupPrepare, start, end, files...)
 	return
 }

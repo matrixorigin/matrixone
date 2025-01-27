@@ -152,7 +152,7 @@ func Open(
 
 	switch opts.LogStoreT {
 	case options.LogstoreBatchStore:
-		db.Wal = wal.NewDriverWithBatchStore(opts.Ctx, dirname, WALDir, nil)
+		db.Wal = wal.NewBatchStoreDriver(opts.Ctx, dirname, WALDir)
 	case options.LogstoreLogservice:
 		db.Wal = wal.NewLogserviceDriver(opts.Ctx, opts.Lc)
 	}
