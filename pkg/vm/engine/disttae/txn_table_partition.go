@@ -43,13 +43,12 @@ func newPartitionTxnTable(
 	primary *txnTable,
 	metadata partition.PartitionMetadata,
 	ps partitionservice.PartitionService,
-) (*partitionTxnTable, error) {
-	tbl := &partitionTxnTable{
+) *partitionTxnTable {
+	return &partitionTxnTable{
 		primary:  primary,
 		metadata: metadata,
 		ps:       ps,
 	}
-	return tbl, nil
 }
 
 func (t *partitionTxnTable) getRelation(

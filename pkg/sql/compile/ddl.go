@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/shardservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -1444,24 +1445,26 @@ func (s *Scope) CreateTable(c *Compile) error {
 		}
 	}
 
-	if qry.IsPartition {
-		// cannot has err.
-		stmt, _ := parsers.ParseOne(
-			c.proc.Ctx,
-			dialect.MYSQL,
-			qry.RawSQL,
-			c.getLower(),
-		)
+	if !features.IsPartitioned(qry.TableDef.FeatureFlag) {
+		return nil
+	}
 
-		err = partitionservice.GetService(c.proc.GetService()).Create(
-			c.proc.Ctx,
-			qry.GetTableDef().TblId,
-			stmt.(*tree.CreateTable),
-			c.proc.GetTxnOperator(),
-		)
-		if err != nil {
-			return err
-		}
+	// cannot has err.
+	stmt, _ := parsers.ParseOne(
+		c.proc.Ctx,
+		dialect.MYSQL,
+		qry.RawSQL,
+		c.getLower(),
+	)
+
+	err = partitionservice.GetService(c.proc.GetService()).Create(
+		c.proc.Ctx,
+		qry.TableDef.TblId,
+		stmt.(*tree.CreateTable),
+		c.proc.GetTxnOperator(),
+	)
+	if err != nil {
+		return err
 	}
 
 	return shardservice.GetService(c.proc.GetService()).Create(
@@ -2675,6 +2678,7 @@ func (s *Scope) DropTable(c *Compile) error {
 var planDefsToExeDefs = func(tableDef *plan.TableDef) ([]engine.TableDef, error) {
 	planDefs := tableDef.GetDefs()
 	var exeDefs []engine.TableDef
+	var propDef *engine.PropertiesDef
 	c := new(engine.ConstraintDef)
 	for _, def := range planDefs {
 		switch defVal := def.GetDef().(type) {
@@ -2686,14 +2690,30 @@ var planDefsToExeDefs = func(tableDef *plan.TableDef) ([]engine.TableDef, error)
 					Value: p.GetValue(),
 				}
 			}
-			exeDefs = append(exeDefs, &engine.PropertiesDef{
-				Properties: properties,
-			})
+			propDef = &engine.PropertiesDef{Properties: properties}
+			exeDefs = append(exeDefs, propDef)
 			c.Cts = append(c.Cts, &engine.StreamConfigsDef{
 				Configs: defVal.Properties.GetProperties(),
 			})
 		}
 	}
+
+	if propDef == nil {
+		propDef = &engine.PropertiesDef{Properties: make([]engine.Property, 0)}
+	}
+	propDef.Properties = append(
+		propDef.Properties,
+		engine.Property{
+			Key: catalog.PropSchemaExtra,
+			Value: string(
+				api.MustMarshalTblExtra(
+					&api.SchemaExtra{
+						FeatureFlag: tableDef.FeatureFlag,
+					},
+				),
+			),
+		},
+	)
 
 	if tableDef.Indexes != nil {
 		c.Cts = append(c.Cts, &engine.IndexDef{

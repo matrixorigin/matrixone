@@ -147,20 +147,16 @@ func (s *service) Delete(
 	return err
 }
 
-func (s *service) Is(
+func (s *service) GetPartitionMetadata(
 	ctx context.Context,
 	tableID uint64,
 	txnOp client.TxnOperator,
-) (bool, partition.PartitionMetadata, error) {
+) (partition.PartitionMetadata, error) {
 	if !s.cfg.Enable {
-		return false, partition.PartitionMetadata{}, nil
+		return partition.PartitionMetadata{}, nil
 	}
 
-	metadata, err := s.readMetadata(ctx, tableID, txnOp)
-	if err != nil {
-		return false, partition.PartitionMetadata{}, err
-	}
-	return !metadata.IsEmpty(), metadata, nil
+	return s.readMetadata(ctx, tableID, txnOp)
 }
 
 func (s *service) getMetadata(

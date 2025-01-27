@@ -832,5 +832,6 @@ func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) (*plan.TableDef,
 		Indexes:       indexes,
 		Version:       tblItem.Version,
 		DbId:          tblItem.DatabaseId,
+		FeatureFlag:   tblItem.ExtraInfo.GetFeatureFlag(),
 	}, tableDef
 }
