@@ -6778,7 +6778,13 @@ func TestAppendAndGC2(t *testing.T) {
 	dir := tae.Dir
 	tae.Close()
 	wal := wal.NewBatchStoreDriver(opts.Ctx, dir, "wal", nil)
-	err = wal.Replay(opts.Ctx, loadFiles, driver.ReplayMode_ReplayForWrite)
+	err = wal.Replay(
+		opts.Ctx,
+		loadFiles,
+		func() driver.ReplayMode {
+			return driver.ReplayMode_ReplayForWrite
+		},
+	)
 	assert.Nil(t, err)
 	assert.NotEqual(t, 0, len(files))
 	for file := range metaFile {

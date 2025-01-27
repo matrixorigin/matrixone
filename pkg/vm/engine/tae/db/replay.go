@@ -115,7 +115,9 @@ func (replayer *Replayer) Replay(ctx context.Context) (err error) {
 	replayer.wg.Add(1)
 	go replayer.applyTxnCmds()
 	if err = replayer.db.Wal.Replay(
-		ctx, replayer.OnReplayEntry, driver.ReplayMode_ReplayForWrite,
+		ctx,
+		replayer.OnReplayEntry,
+		func() driver.ReplayMode { return driver.ReplayMode_ReplayForWrite },
 	); err != nil {
 		return
 	}
