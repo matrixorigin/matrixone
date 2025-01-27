@@ -180,6 +180,12 @@ func (d *LogServiceDriver) Replay(
 		h,
 		d,
 		MaxReadBatchSize,
+		WithReplayerNeedWriteSkip(
+			func() bool {
+				mode := modeGetter()
+				return mode == driver.ReplayMode_ReplayForWrite
+			},
+		),
 		WithReplayerWaitMore(
 			onWaitMore,
 		),

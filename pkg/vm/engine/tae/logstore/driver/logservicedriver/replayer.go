@@ -60,6 +60,12 @@ func WithReplayerOnWriteSkip(f func(map[uint64]uint64)) ReplayOption {
 	}
 }
 
+func WithReplayerNeedWriteSkip(f func() bool) ReplayOption {
+	return func(r *replayer) {
+		r.needWriteSkip = f
+	}
+}
+
 func WithReplayerOnLogRecord(f func(logservice.LogRecord)) ReplayOption {
 	return func(r *replayer) {
 		if r.onLogRecord != nil {
@@ -158,8 +164,10 @@ type replayer struct {
 	onUserLogEntry      func(uint64, LogEntry)
 	onScheduled         func(uint64, LogEntry)
 	onApplied           func(*entry.Entry)
-	onWriteSkip         func(map[uint64]uint64)
-	onReplayDone        func(resErr error, stats DSNStats)
+
+	needWriteSkip func() bool
+	onWriteSkip   func(map[uint64]uint64)
+	onReplayDone  func(resErr error, stats DSNStats)
 
 	// true means wait for more records after all existing records have been read
 	waitMoreRecords func() bool
@@ -546,7 +554,7 @@ func (r *replayer) tryScheduleApply(
 			}
 
 			// [dsn not found && dsn > safeDSN]
-			if len(r.replayedState.dsn2PSNMap) != 0 {
+			if len(r.replayedState.dsn2PSNMap) != 0 && (r.needWriteSkip == nil || r.needWriteSkip()) {
 				if r.onWriteSkip != nil {
 					r.onWriteSkip(r.replayedState.dsn2PSNMap)
 				}
