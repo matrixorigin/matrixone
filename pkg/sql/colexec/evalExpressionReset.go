@@ -57,12 +57,18 @@ type functionInformationForEval struct {
 		proc *process.Process,
 		rowCount int,
 		selectList *function.FunctionSelectList) error
-	freeFn func() error
+	resetFn func() error
+	freeFn  func() error
 }
 
 func (fI *functionInformationForEval) reset() {
 	// we need to regenerate the evalFn to avoid a wrong result since the function may take an own runtime contest.
 	// todo: in fact, we can jump this step if the function is a pure function. but we don't have this information now.
+
+	if fI.resetFn != nil {
+		_ = fI.resetFn()
+		return
+	}
 
 	if fI.freeFn != nil {
 		_ = fI.freeFn()
@@ -73,7 +79,7 @@ func (fI *functionInformationForEval) reset() {
 	if fI.evalFn != nil {
 		// we can set the context nil here since this function will never return an error.
 		overload, _ := function.GetFunctionById(context.TODO(), fI.overloadID)
-		fI.evalFn, fI.freeFn = overload.GetExecuteMethod()
+		fI.evalFn, fI.resetFn, fI.freeFn = overload.GetExecuteMethod()
 	}
 }
 

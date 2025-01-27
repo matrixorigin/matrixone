@@ -33,7 +33,6 @@ var (
 		table_name                 varchar(500)                       not null,
 		database_name			   varchar(500)                       not null,
 		partition_method           varchar(13)                        not null,  
-		partition_expression       varchar(2048)                      not null,
 		partition_description      text                               not null,
 		partition_count            int	         unsigned
 	)`, catalog.MO_CATALOG, catalog.MOPartitionMetadata)
@@ -44,7 +43,7 @@ var (
 		primary_table_id 		   bigint        unsigned not null, 
 		partition_name             varchar(50)   not null,
 		partition_ordinal_position int	         unsigned not null,
-		partition_comment          text
+		partition_expression       varchar(2048) not null
 	)`, catalog.MO_CATALOG, catalog.MOPartitionTables)
 
 	InitSQLs = []string{

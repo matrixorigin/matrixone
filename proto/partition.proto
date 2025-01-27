@@ -24,10 +24,12 @@ option (gogoproto.goproto_enum_prefix_all) = true;
  
 // PartitionMethod partition method
 enum PartitionMethod {
-    Key      = 0;
-    Hash     = 1;
-    Range    = 2;
-    List     = 3;
+    Key        = 0;
+    LinearKey  = 1;
+    Hash       = 2;
+    LinearHash = 3;
+    Range      = 4;
+    List       = 5;
 }
 
 message PartitionMetadata {
@@ -35,10 +37,9 @@ message PartitionMetadata {
     string             TableName    = 2;
     string             DatabaseName = 3;
     PartitionMethod    Method       = 4;
-    string             Expression   = 5;
-    string             Description  = 6;   
-    repeated string    Columns      = 7;
-    repeated Partition Partitions   = 8 [(gogoproto.nullable) = false];
+    string             Description  = 5;   
+    repeated string    Columns      = 6;
+    repeated Partition Partitions   = 7 [(gogoproto.nullable) = false];
 }
 
 message Partition {
@@ -47,5 +48,5 @@ message Partition {
     uint64 PrimaryTableID     = 3;
     string Name               = 4;
     uint32 Position           = 5;
-    string Comment            = 7;
+    string Expression         = 6;
 }

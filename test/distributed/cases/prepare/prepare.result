@@ -641,4 +641,16 @@ internal error: table 'tb_delete_opt_to_truncate' has been changed, please reset
 set session delete_opt_to_truncate = 123;
 internal error: convert to the system variable bool type failed
 drop table tb_delete_opt_to_truncate;
+drop table if exists t1;
+create table t1 (a bigint not null auto_increment, b int, primary key(a));
+insert into t1(b) values (1),(2),(3);
+prepare s1 from select * from t1 where a = ? order by a limit 1 for update;
+set @a=1;
+execute s1 using @a;
+a    b
+1    1
+set @a=2;
+execute s1 using @a;
+a    b
+2    2
 drop database prepare_test_2;

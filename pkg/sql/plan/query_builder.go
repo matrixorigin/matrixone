@@ -2711,9 +2711,15 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 							Exprs:    selectClause.Exprs,
 							From:     selectClause.From,
 							Where:    selectClause.Where,
-							GroupBy:  &tree.GroupByClause{GroupByExprsList: selectClause.GroupBy.GroupByExprsList, GroupingSet: list, Apart: true, Cube: false, Rollup: false},
-							Having:   selectClause.Having,
-							Option:   selectClause.Option,
+							GroupBy: &tree.GroupByClause{
+								GroupByExprsList: selectClause.GroupBy.GroupByExprsList,
+								GroupingSet:      list,
+								Apart:            true,
+								Cube:             false,
+								Rollup:           false,
+							},
+							Having: selectClause.Having,
+							Option: selectClause.Option,
 						}
 					}
 				}

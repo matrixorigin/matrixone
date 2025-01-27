@@ -1711,6 +1711,8 @@ func (c *Compile) compileExternScanParallelReadWrite(n *plan.Node, param *tree.E
 				fileOffsetTmp[j].Offset = append(fileOffsetTmp[j].Offset, fileOffset[j][2*preIndex:2*preIndex+2*count]...)
 			}
 		}
+		logutil.Infof("compileExternScanParallelReadWrite, len of cnList is %d, cn addr is %s, mcpu is %d, filepath is %s, file size is %d", len(c.cnList), c.cnList[i].Addr, scope.NodeInfo.Mcpu, param.ExParamConst.Filepath, param.ExParamConst.FileSize)
+		logutil.Infof("compileExternScanParallelReadWrite, %v\n", fileOffsetTmp)
 		op := constructExternal(n, param, c.proc.Ctx, fileList, fileSize, fileOffsetTmp, strictSqlMode)
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		scope.setRootOperator(op)

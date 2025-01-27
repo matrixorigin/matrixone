@@ -101,23 +101,25 @@ func (lc *leakChecker) check(ctx context.Context) {
 }
 
 func (lc *leakChecker) doCheck() []ActiveTxn {
-	lc.RLock()
-	defer lc.RUnlock()
-
-	var values []ActiveTxn
 	now := time.Now()
+	var values []ActiveTxn
+	lc.RLock()
 	for _, txn := range lc.actives {
 		if now.Sub(txn.CreateAt) >= lc.maxActiveAges {
-			if txn.txnOp != nil {
-				txn.Options.Counter = txn.txnOp.counter()
-				txn.Options.InRunSql = txn.txnOp.inRunSql()
-				txn.Options.InCommit = txn.txnOp.inCommit()
-				txn.Options.InRollback = txn.txnOp.inRollback()
-				txn.Options.InIncrStmt = txn.txnOp.inIncrStmt()
-				txn.Options.InRollbackStmt = txn.txnOp.inRollbackStmt()
-				txn.Options.SessionInfo = txn.txnOp.opts.options.SessionInfo
-			}
 			values = append(values, txn)
+		}
+	}
+	lc.RUnlock()
+
+	for _, txn := range values {
+		if txn.txnOp != nil {
+			txn.Options.Counter = txn.txnOp.counter()
+			txn.Options.InRunSql = txn.txnOp.inRunSql()
+			txn.Options.InCommit = txn.txnOp.inCommit()
+			txn.Options.InRollback = txn.txnOp.inRollback()
+			txn.Options.InIncrStmt = txn.txnOp.inIncrStmt()
+			txn.Options.InRollbackStmt = txn.txnOp.inRollbackStmt()
+			txn.Options.SessionInfo = txn.txnOp.opts.options.SessionInfo
 		}
 	}
 	return values

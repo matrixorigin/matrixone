@@ -494,6 +494,14 @@ execute st_delete_opt_to_truncate;
 set session delete_opt_to_truncate = 123;
 
 drop table tb_delete_opt_to_truncate;
+drop table if exists t1;
+create table t1 (a bigint not null auto_increment, b int, primary key(a));
+insert into t1(b) values (1),(2),(3);
+prepare s1 from select * from t1 where a = ? order by a limit 1 for update;
+set @a=1;
+execute s1 using @a;
+set @a=2;
+execute s1 using @a;
 drop database prepare_test_2;
 
 

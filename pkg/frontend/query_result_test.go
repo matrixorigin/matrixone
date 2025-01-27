@@ -24,6 +24,7 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/google/uuid"
 	"github.com/prashantv/gostub"
+	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/assert"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -268,4 +269,31 @@ func Test_getFileSize(t *testing.T) {
 	}
 	assert.Equal(t, int64(1), getFileSize(files, "a"))
 	assert.Equal(t, int64(-1), getFileSize(files, "b"))
+}
+
+func Test_checkPrivilege(t *testing.T) {
+	convey.Convey("checkPrivilege error test", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		uuids := []string{
+			"xxxxx#####01",
+		}
+		ctx := context.Background()
+		_, err := checkPrivilege("", uuids, ctx, ses)
+		convey.So(err, convey.ShouldNotBeNil)
+	})
 }

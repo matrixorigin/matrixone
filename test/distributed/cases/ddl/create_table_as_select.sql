@@ -1338,7 +1338,6 @@ drop role role_r1;
 drop user role_u1;
 drop database db7;
 
-
 -- issue 17822
 drop database if exists db8;
 create database db8;
@@ -1358,3 +1357,20 @@ select * from agg01;
 drop table agg01;
 drop table math01;
 drop database db8;
+
+drop database if exists db9;
+create database db9;
+use db9;
+
+CREATE TABLE tx1 (
+    category INT NOT NULL,
+    id INT NOT NULL,
+    name VARCHAR(20) NOT NULL,
+    price DECIMAL,
+    PRIMARY KEY (category, id)
+);
+
+-- error test
+create dynamic table dt_test as select * from tx1;
+drop table tx1;
+drop database db9;
