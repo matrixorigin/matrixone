@@ -16,7 +16,6 @@ package wal
 
 import (
 	"context"
-	"sync"
 	"time"
 
 	storeDriver "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
@@ -31,20 +30,13 @@ type DriverConfig struct {
 }
 
 type walDriver struct {
-	sync.RWMutex
 	impl store.Store
-	own  bool
-
-	ckpDuration   time.Duration
-	cancelfn      context.CancelFunc
-	cancelContext context.Context
-	wg            sync.WaitGroup
 }
 
 func NewDriverWithLogservice(ctx context.Context, factory logservicedriver.LogServiceClientFactory) Driver {
 	ckpDuration := time.Second * 5
 	impl := store.NewStoreWithLogserviceDriver(factory)
-	driver := NewDriverWithStore(ctx, impl, true, ckpDuration)
+	driver := NewDriverWithStore(ctx, impl, ckpDuration)
 	return driver
 }
 
@@ -56,22 +48,17 @@ func NewDriverWithBatchStore(ctx context.Context, dir, name string, cfg *DriverC
 		ckpDuration = cfg.CheckpointDuration
 	}
 	impl := store.NewStoreWithBatchStoreDriver(dir, name, batchStoreCfg)
-	driver := NewDriverWithStore(ctx, impl, true, ckpDuration)
+	driver := NewDriverWithStore(ctx, impl, ckpDuration)
 	return driver
 }
 
-func NewDriverWithStore(ctx context.Context, impl store.Store, own bool, ckpDuration time.Duration) Driver {
+func NewDriverWithStore(ctx context.Context, impl store.Store, ckpDuration time.Duration) Driver {
 	if ckpDuration == 0 {
 		ckpDuration = time.Second
 	}
 	driver := &walDriver{
-		impl:        impl,
-		own:         own,
-		wg:          sync.WaitGroup{},
-		ckpDuration: ckpDuration,
+		impl: impl,
 	}
-	driver.cancelContext, driver.cancelfn = context.WithCancel(ctx)
-	driver.wg.Add(1)
 	return driver
 }
 func (driver *walDriver) Start() {}
@@ -103,12 +90,7 @@ func (driver *walDriver) AppendEntry(group uint32, e LogEntry) (uint64, error) {
 }
 
 func (driver *walDriver) Close() error {
-	driver.cancelfn()
-	if driver.own {
-		return driver.impl.Close()
-	}
-	driver.wg.Wait()
-	return nil
+	return driver.impl.Close()
 }
 
 // for UT
