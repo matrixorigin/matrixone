@@ -154,7 +154,7 @@ func Open(
 	case options.LogstoreBatchStore:
 		db.Wal = wal.NewDriverWithBatchStore(opts.Ctx, dirname, WALDir, nil)
 	case options.LogstoreLogservice:
-		db.Wal = wal.NewDriverWithLogservice(opts.Ctx, opts.Lc)
+		db.Wal = wal.NewLogserviceDriver(opts.Ctx, opts.Lc)
 	}
 	scheduler := newTaskScheduler(db, db.Opts.SchedulerCfg.AsyncWorkers, db.Opts.SchedulerCfg.IOWorkers)
 	db.Runtime = dbutils.NewRuntime(

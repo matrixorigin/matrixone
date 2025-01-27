@@ -33,11 +33,12 @@ type walDriver struct {
 	impl store.Store
 }
 
-func NewDriverWithLogservice(ctx context.Context, factory logservicedriver.LogServiceClientFactory) Driver {
-	ckpDuration := time.Second * 5
+func NewLogserviceDriver(
+	ctx context.Context,
+	factory logservicedriver.LogServiceClientFactory,
+) Driver {
 	impl := store.NewStoreWithLogserviceDriver(factory)
-	driver := NewDriverWithStore(ctx, impl, ckpDuration)
-	return driver
+	return &walDriver{impl: impl}
 }
 
 func NewDriverWithBatchStore(ctx context.Context, dir, name string, cfg *DriverConfig) Driver {
@@ -85,7 +86,7 @@ func (driver *walDriver) GetDSN() uint64 {
 }
 
 func (driver *walDriver) AppendEntry(group uint32, e LogEntry) (uint64, error) {
-	id, err := driver.impl.Append(group, e)
+	id, err := driver.impl.AppendEntry(group, e)
 	return id, err
 }
 

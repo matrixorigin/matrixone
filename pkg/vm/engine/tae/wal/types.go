@@ -32,7 +32,7 @@ type ReplayObserver interface {
 	OnTimeStamp(ts types.TS)
 }
 
-type LogEntry entry.Entry
+type LogEntry = entry.Entry
 
 type Driver interface {
 	GetCheckpointed() uint64

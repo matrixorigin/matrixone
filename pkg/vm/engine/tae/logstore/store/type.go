@@ -28,7 +28,7 @@ const (
 )
 
 type Store interface {
-	Append(gid uint32, entry entry.Entry) (lsn uint64, err error)
+	AppendEntry(gid uint32, entry entry.Entry) (lsn uint64, err error)
 	RangeCheckpoint(gid uint32, start, end uint64, files ...string) (ckpEntry entry.Entry, err error)
 
 	GetCurrSeqNum(gid uint32) (lsn uint64)
