@@ -505,6 +505,9 @@ func genBuildHnswIndex(indexDefs map[string]*plan.IndexDef, qryDatabase string, 
 	cfg.IndexTable = idxdef_index.IndexTableName
 	cfg.DbName = qryDatabase
 	cfg.SrcTable = originalTableDef.Name
+	cfg.PKey = pkColName
+	cfg.KeyPart = idxdef_index.Parts[0]
+
 	params := idxdef_index.IndexAlgoParams
 
 	bytes, err := json.Marshal(cfg)

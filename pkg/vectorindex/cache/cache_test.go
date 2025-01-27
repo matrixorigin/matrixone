@@ -47,6 +47,10 @@ func (m *MockSearch) Load(*process.Process) error {
 	return nil
 }
 
+func (m *MockSearch) UpdateConfig(newalgo VectorIndexSearchIf) error {
+	return nil
+}
+
 // Load Error
 type MockSearchLoadError struct {
 	Idxcfg vectorindex.IndexConfig
@@ -65,6 +69,10 @@ func (m *MockSearchLoadError) Load(*process.Process) error {
 	return moerr.NewInternalErrorNoCtx("Load from database error")
 }
 
+func (m *MockSearchLoadError) UpdateConfig(newalgo VectorIndexSearchIf) error {
+	return nil
+}
+
 // Search Error
 type MockSearchSearchError struct {
 	Idxcfg vectorindex.IndexConfig
@@ -80,6 +88,10 @@ func (m *MockSearchSearchError) Destroy() {
 }
 
 func (m *MockSearchSearchError) Load(*process.Process) error {
+	return nil
+}
+
+func (m *MockSearchSearchError) UpdateConfig(newalgo VectorIndexSearchIf) error {
 	return nil
 }
 

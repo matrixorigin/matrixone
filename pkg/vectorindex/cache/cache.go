@@ -42,6 +42,14 @@ import (
       3.3 Every time index is visited by Search/LoadFromDatabase, ExpireAt will be extended to time.Now() + VectorIndexCacheTTL.
 */
 
+const (
+	STATUS_NOT_INIT  = 0
+	STATUS_LOADED    = 1
+	STATUS_OUTDATED  = 2
+	STATUS_DESTROYED = 3
+	STATUS_ERROR     = 4
+)
+
 var (
 	VectorIndexCacheTTL time.Duration     = 30 * time.Minute
 	Cache               *VectorIndexCache = NewVectorIndexCache()
@@ -51,6 +59,7 @@ var (
 type VectorIndexSearchIf interface {
 	Search(query []float32, limit uint) (keys []int64, distances []float32, err error)
 	Load(*process.Process) error
+	UpdateConfig(VectorIndexSearchIf) error
 	Destroy()
 }
 
@@ -59,7 +68,7 @@ type VectorIndexSearch struct {
 	Mutex      sync.RWMutex
 	ExpireAt   atomic.Int64
 	LastUpdate atomic.Int64
-	Status     atomic.Int32 // 0 - NOT INIT, 1 - LOADED, 2 - DESTROYED, 3 or above ERRCODE
+	Status     atomic.Int32 // 0 - NOT INIT, 1 - LOADED, 2 - marked as outdated,  3 - DESTROYED,  4 or above ERRCODE
 	Algo       VectorIndexSearchIf
 }
 
@@ -68,7 +77,7 @@ func (s *VectorIndexSearch) Destroy() {
 	defer s.Mutex.Unlock()
 	s.Algo.Destroy()
 	// destroyed
-	s.Status.Store(2)
+	s.Status.Store(STATUS_DESTROYED)
 }
 
 func (s *VectorIndexSearch) Load(proc *process.Process) error {
@@ -78,11 +87,11 @@ func (s *VectorIndexSearch) Load(proc *process.Process) error {
 	err := s.Algo.Load(proc)
 	if err != nil {
 		// load error
-		s.Status.Store(3)
+		s.Status.Store(STATUS_ERROR)
 		return err
 	}
 	// Loaded
-	s.Status.Store(1)
+	s.Status.Store(STATUS_LOADED)
 	s.extend(true)
 	return nil
 }
@@ -106,7 +115,7 @@ func (s *VectorIndexSearch) extend(update bool) {
 	s.ExpireAt.Store(ts)
 }
 
-func (s *VectorIndexSearch) Search(query []float32, limit uint) (keys []int64, distances []float32, err error) {
+func (s *VectorIndexSearch) Search(newalgo VectorIndexSearchIf, query []float32, limit uint) (keys []int64, distances []float32, err error) {
 	s.Mutex.RLock()
 
 	for s.Status.Load() == 0 {
@@ -118,12 +127,18 @@ func (s *VectorIndexSearch) Search(query []float32, limit uint) (keys []int64, d
 	defer s.Mutex.RUnlock()
 
 	status := s.Status.Load()
-	if status > 1 {
-		if status == 2 {
+	if status >= STATUS_DESTROYED {
+		if status == STATUS_DESTROYED {
 			return nil, nil, moerr.NewInternalErrorNoCtx("Index destroyed")
 		} else {
 			return nil, nil, moerr.NewInternalErrorNoCtx("Load index error")
 		}
+	}
+
+	// if error mark as outdated
+	err = s.Algo.UpdateConfig(newalgo)
+	if err != nil {
+		s.Status.Store(STATUS_OUTDATED)
 	}
 
 	s.extend(false)
@@ -201,7 +216,7 @@ func (c *VectorIndexCache) HouseKeeping() {
 
 	c.IndexMap.Range(func(key, value any) bool {
 		algo := value.(*VectorIndexSearch)
-		if algo.Expired() {
+		if algo.Expired() || algo.Status.Load() == STATUS_OUTDATED {
 			expiredkeys = append(expiredkeys, key.(string))
 		}
 		return true
@@ -251,7 +266,7 @@ func (c *VectorIndexCache) Search(proc *process.Process, key string, newalgo Vec
 		}
 		os.Stderr.WriteString("New Algo and Loaded From Database\n")
 	}
-	return algo.Search(query, limit)
+	return algo.Search(newalgo, query, limit)
 }
 
 // remove key from cache

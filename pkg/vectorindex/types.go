@@ -37,6 +37,8 @@ type IndexTableConfig struct {
 	SrcTable      string `json:"src"`
 	MetadataTable string `json:"metadata"`
 	IndexTable    string `json:"index"`
+	PKey          string `json:pkey"`
+	KeyPart       string `json:"part"`
 }
 
 // HNSW specified parameters

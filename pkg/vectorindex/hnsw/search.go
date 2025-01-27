@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	usearch "github.com/unum-cloud/usearch/golang"
 )
@@ -294,6 +295,12 @@ func (s *HnswSearch) Load(proc *process.Process) error {
 	}
 
 	s.Indexes = indexes
+
+	return nil
+}
+
+// check config and update some parameters such as ef_search
+func (s *HnswSearch) UpdateConfig(newalgo cache.VectorIndexSearchIf) error {
 
 	return nil
 }
