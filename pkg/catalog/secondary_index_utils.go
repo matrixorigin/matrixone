@@ -86,6 +86,7 @@ const (
 	HnswM              = "m"
 	HnswEfConstruction = "ef_construction"
 	HnswQuantization   = "quantization"
+	HnswEfSearch       = "ef_search"
 )
 
 const (
@@ -135,6 +136,10 @@ func IndexParamsToStringList(indexParams string) (string, error) {
 
 	if val, ok := result[HnswEfConstruction]; ok {
 		res += fmt.Sprintf(" %s = %s ", HnswEfConstruction, val)
+	}
+
+	if val, ok := result[HnswEfSearch]; ok {
+		res += fmt.Sprintf(" %s = %s ", HnswEfSearch, val)
 	}
 
 	if val, ok := result[HnswQuantization]; ok {
@@ -262,6 +267,9 @@ func indexParamsToMap(def interface{}) (map[string]string, error) {
 			if idx.IndexOption.HnswEfConstruction < 0 {
 				return nil, moerr.NewInternalErrorNoCtx("invalid ef_construction. hnsw.ef_construction must be > 0")
 			}
+			if idx.IndexOption.HnswEfSearch < 0 {
+				return nil, moerr.NewInternalErrorNoCtx("invalid ef_search. hnsw.ef_search must be > 0")
+			}
 			if len(idx.IndexOption.HnswQuantization) > 0 {
 				_, ok := vectorindex.QuantizationValid(idx.IndexOption.HnswQuantization)
 				if !ok {
@@ -275,6 +283,9 @@ func indexParamsToMap(def interface{}) (map[string]string, error) {
 			}
 			if idx.IndexOption.HnswEfConstruction > 0 {
 				res[HnswEfConstruction] = strconv.FormatInt(idx.IndexOption.HnswEfConstruction, 10)
+			}
+			if idx.IndexOption.HnswEfSearch > 0 {
+				res[HnswEfSearch] = strconv.FormatInt(idx.IndexOption.HnswEfSearch, 10)
 			}
 
 			if len(idx.IndexOption.HnswQuantization) > 0 {

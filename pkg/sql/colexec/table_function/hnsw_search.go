@@ -155,9 +155,14 @@ func (u *hnswSearchState) start(tf *TableFunction, proc *process.Process, nthRow
 			}
 			u.idxcfg.Usearch.ExpansionAdd = uint(val)
 		}
-
 		// ef_search
-		u.idxcfg.Usearch.ExpansionSearch = uint(u.param.EfSearch)
+		if len(u.param.EfSearch) > 0 {
+			val, err := strconv.Atoi(u.param.EfSearch)
+			if err != nil {
+				return err
+			}
+			u.idxcfg.Usearch.ExpansionSearch = uint(val)
+		}
 
 		// IndexTableConfig
 		cfgVec := tf.ctr.argVecs[0]

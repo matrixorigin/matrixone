@@ -510,23 +510,6 @@ func genBuildHnswIndex(proc *process.Process, indexDefs map[string]*plan.IndexDe
 
 	params := idxdef_index.IndexAlgoParams
 
-	var hnswparam vectorindex.HnswParam
-	err := json.Unmarshal([]byte(params), &hnswparam)
-	if err != nil {
-		return nil, err
-	}
-
-	val, err := proc.GetResolveVariableFunc()("hnsw_ef_search", true, false)
-	if err != nil {
-		return nil, err
-	}
-	hnswparam.EfSearch = val.(int64)
-
-	hnswparambytes, err := json.Marshal(hnswparam)
-	if err != nil {
-		return nil, err
-	}
-
 	cfgbytes, err := json.Marshal(cfg)
 	if err != nil {
 		return nil, err
@@ -537,7 +520,7 @@ func genBuildHnswIndex(proc *process.Process, indexDefs map[string]*plan.IndexDe
 	sql := fmt.Sprintf(insertIntoHnswIndexTableFormat,
 		qryDatabase, originalTableDef.Name,
 		src_alias,
-		string(hnswparambytes),
+		params,
 		string(cfgbytes),
 		pkColName,
 		part)

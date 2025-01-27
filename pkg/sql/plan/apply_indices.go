@@ -254,7 +254,8 @@ func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan
 		// 1.a if there are no table scans with multi-table indexes, skip
 		multiTableIndexes := make(map[string]*MultiTableIndex)
 		for _, indexDef := range scanNode.TableDef.Indexes {
-			if catalog.IsIvfIndexAlgo(indexDef.IndexAlgo) {
+			if catalog.IsIvfIndexAlgo(indexDef.IndexAlgo) ||
+				catalog.IsHnswIndexAlgo(indexDef.IndexAlgo) {
 				if _, ok := multiTableIndexes[indexDef.IndexName]; !ok {
 					multiTableIndexes[indexDef.IndexName] = &MultiTableIndex{
 						IndexAlgo: catalog.ToLower(indexDef.IndexAlgo),
@@ -297,8 +298,6 @@ func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan
 		colPosOrderBy := distFnExpr.Args[0].GetCol().ColPos
 
 		// 1.d if the distance function in sortNode is not indexed for that column in any of the IVFFLAT index, skip
-		distanceFunctionIndexed := false
-		var multiTableIndexWithSortDistFn *MultiTableIndex
 
 		// This is important to get consistent result.
 		// HashMap can give you random order during iteration.
@@ -329,26 +328,23 @@ func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan
 
 				// if index is of the same distance function in order by, the index is valid
 				if storedOpType == distFuncOpTypes[distFnExpr.Func.ObjName] {
-					distanceFunctionIndexed = true
-					multiTableIndexWithSortDistFn = multiTableIndex
+					multiTableIndexWithSortDistFn := multiTableIndex
+
+					newSortNode := builder.applyIndicesForSortUsingVectorIndex(nodeID, projNode, sortNode, scanNode,
+						colRefCnt, idxColMap, multiTableIndexWithSortDistFn, colPosOrderBy)
+
+					// TODO: consult with nitao and aungr
+					projNode.Children[0] = newSortNode
+					replaceColumnsForNode(projNode, idxColMap)
+
+					return newSortNode, nil
 				}
-			}
-			if distanceFunctionIndexed {
-				break
+			case catalog.MoIndexHnswAlgo.ToString():
+				// TODO
+				continue
+
 			}
 		}
-		if !distanceFunctionIndexed {
-			goto END0
-		}
-
-		newSortNode := builder.applyIndicesForSortUsingVectorIndex(nodeID, projNode, sortNode, scanNode,
-			colRefCnt, idxColMap, multiTableIndexWithSortDistFn, colPosOrderBy)
-
-		// TODO: consult with nitao and aungr
-		projNode.Children[0] = newSortNode
-		replaceColumnsForNode(projNode, idxColMap)
-
-		return newSortNode, nil
 	}
 END0:
 	// 2. Regular Index Check

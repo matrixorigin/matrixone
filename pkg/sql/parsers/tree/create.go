@@ -2076,6 +2076,7 @@ type IndexOption struct {
 	AlgoParamVectorOpType    string
 	HnswM                    int64
 	HnswEfConstruction       int64
+	HnswEfSearch             int64
 	HnswQuantization         string
 }
 
@@ -2085,7 +2086,7 @@ func (node *IndexOption) Format(ctx *FmtCtx) {
 		node.Comment != "" || node.Visible != VISIBLE_TYPE_INVALID ||
 		node.AlgoParamList != 0 || node.AlgoParamVectorOpType != "" ||
 		node.HnswM != 0 || node.HnswEfConstruction != 0 ||
-		node.HnswQuantization != "" {
+		node.HnswEfSearch != 0 || node.HnswQuantization != "" {
 		ctx.WriteByte(' ')
 	}
 	if node.KeyBlockSize != 0 {
@@ -2116,6 +2117,11 @@ func (node *IndexOption) Format(ctx *FmtCtx) {
 	if node.HnswEfConstruction != 0 {
 		ctx.WriteString("EF_CONSTRUCTION ")
 		ctx.WriteString(strconv.FormatInt(node.HnswEfConstruction, 10))
+		ctx.WriteByte(' ')
+	}
+	if node.HnswEfSearch != 0 {
+		ctx.WriteString("EF_SEARCH ")
+		ctx.WriteString(strconv.FormatInt(node.HnswEfSearch, 10))
 		ctx.WriteByte(' ')
 	}
 	if node.HnswQuantization != "" {
