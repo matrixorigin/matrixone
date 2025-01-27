@@ -175,7 +175,7 @@ func bindAndOptimizeDeleteQuery(ctx CompilerContext, stmt *tree.Delete, isPrepar
 		bindCtx.snapshot = ctx.GetSnapshot()
 	}
 
-	rootId, err := builder.bindDelete(stmt, bindCtx)
+	rootId, err := builder.bindDelete(ctx, stmt, bindCtx)
 	if err != nil {
 		if err.(*moerr.Error).ErrorCode() == moerr.ErrUnsupportedDML {
 			return buildDelete(stmt, ctx, isPrepareStmt)
