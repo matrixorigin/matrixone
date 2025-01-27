@@ -53,5 +53,6 @@ type ReplayMode int32
 const (
 	ReplayMode_Invalid ReplayMode = iota
 	ReplayMode_ReplayForWrite
+	ReplayMode_ReplayForRead
 	ReplayMode_ReplayForever
 )

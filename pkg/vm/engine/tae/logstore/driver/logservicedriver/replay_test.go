@@ -179,7 +179,9 @@ func TestAppendSkipCmd2(t *testing.T) {
 					return storeDriver.RE_Truncate
 				}
 			},
-			storeDriver.ReplayMode_ReplayForWrite,
+			func() storeDriver.ReplayMode {
+				return storeDriver.ReplayMode_ReplayForWrite
+			},
 		)
 		t.Logf("list1: %v", list1)
 		t.Logf("list2: %v", list2)
@@ -223,7 +225,9 @@ func TestAppendSkipCmd3(t *testing.T) {
 					return storeDriver.RE_Truncate
 				}
 			},
-			storeDriver.ReplayMode_ReplayForWrite,
+			func() storeDriver.ReplayMode {
+				return storeDriver.ReplayMode_ReplayForWrite
+			},
 		)
 		assert.NoError(t, err)
 		assert.Equal(t, 0, entryCount)
@@ -295,7 +299,9 @@ func TestAppendSkipCmd4(t *testing.T) {
 					return storeDriver.RE_Truncate
 				}
 			},
-			storeDriver.ReplayMode_ReplayForWrite,
+			func() storeDriver.ReplayMode {
+				return storeDriver.ReplayMode_ReplayForWrite
+			},
 		)
 		assert.NoError(t, err)
 		assert.Equal(t, 3, entryCount)
@@ -355,7 +361,9 @@ func TestAppendSkipCmd4(t *testing.T) {
 					return storeDriver.RE_Truncate
 				}
 			},
-			storeDriver.ReplayMode_ReplayForWrite,
+			func() storeDriver.ReplayMode {
+				return storeDriver.ReplayMode_ReplayForWrite
+			},
 		)
 		assert.NoError(t, err)
 		assert.Equal(t, 4, entryCount)
@@ -429,7 +437,9 @@ func TestAppendSkipCmd5(t *testing.T) {
 					return storeDriver.RE_Truncate
 				}
 			},
-			storeDriver.ReplayMode_ReplayForWrite,
+			func() storeDriver.ReplayMode {
+				return storeDriver.ReplayMode_ReplayForWrite
+			},
 		)
 		assert.NoError(t, err)
 		assert.Equal(t, 4, entryCount)
@@ -912,7 +922,9 @@ func Test_Replayer9(t *testing.T) {
 				}
 				return storeDriver.RE_Nomal
 			},
-			storeDriver.ReplayMode_ReplayForever,
+			func() storeDriver.ReplayMode {
+				return storeDriver.ReplayMode_ReplayForever
+			},
 		)
 	}()
 
@@ -922,7 +934,9 @@ func Test_Replayer9(t *testing.T) {
 		func(e *entry.Entry) storeDriver.ReplayEntryState {
 			return storeDriver.RE_Nomal
 		},
-		storeDriver.ReplayMode_ReplayForWrite,
+		func() storeDriver.ReplayMode {
+			return storeDriver.ReplayMode_ReplayForWrite
+		},
 	)
 	assert.NoError(t, err)
 
@@ -1009,7 +1023,9 @@ func Test_Replayer9(t *testing.T) {
 				}
 				return storeDriver.RE_Nomal
 			},
-			storeDriver.ReplayMode_ReplayForever,
+			func() storeDriver.ReplayMode {
+				return storeDriver.ReplayMode_ReplayForever
+			},
 		)
 	}()
 

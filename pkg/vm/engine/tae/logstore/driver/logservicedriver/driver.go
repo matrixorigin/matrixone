@@ -34,10 +34,47 @@ const (
 	MaxReadBatchSize = mpool.MB * 64
 )
 
+type replayState struct {
+	mode   driver.ReplayMode
+	done   bool
+	err    error
+	waitCh chan struct{}
+}
+
+func newReplayState(
+	done bool,
+	mode driver.ReplayMode,
+	waitCh chan struct{},
+) *replayState {
+	if waitCh == nil {
+		waitCh = make(chan struct{}, 1)
+	}
+	return &replayState{
+		mode:   mode,
+		done:   done,
+		waitCh: waitCh,
+	}
+}
+
+func (s *replayState) Done(err error) {
+	s.err = err
+	close(s.waitCh)
+}
+
+func (s *replayState) WaitC() <-chan struct{} {
+	return s.waitCh
+}
+
+func (s *replayState) Err() error {
+	return s.err
+}
+
 type LogServiceDriver struct {
 	*sequenceNumberState
 
-	config atomic.Pointer[Config]
+	replayState atomic.Pointer[replayState]
+
+	config Config
 
 	clientPool *clientPool
 	committer  *groupCommitter
@@ -71,7 +108,7 @@ func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
 		postCommitQueue:     make(chan any, 10000),
 		workers:             pool,
 	}
-	d.config.Store(cfg)
+	d.config = *cfg
 	d.ctx, d.cancel = context.WithCancel(context.Background())
 	d.commitLoop = sm.NewSafeQueue(10000, 10000, d.onCommitIntents)
 	d.commitLoop.Start()
@@ -87,7 +124,7 @@ func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
 }
 
 func (d *LogServiceDriver) GetMaxClient() int {
-	return d.config.Load().ClientMaxCount
+	return d.config.ClientMaxCount
 }
 
 func (d *LogServiceDriver) Close() error {
@@ -105,18 +142,38 @@ func (d *LogServiceDriver) Close() error {
 func (d *LogServiceDriver) Replay(
 	ctx context.Context,
 	h driver.ApplyHandle,
-	mode driver.ReplayMode,
+	modeGetter func() driver.ReplayMode,
 ) (err error) {
+	mode := modeGetter()
 
-	var replayMode atomic.Int32
-	replayMode.Store(int32(mode))
+	oldState := d.replayState.Load()
+	if oldState != nil && oldState.done {
+		return moerr.NewInternalErrorNoCtx("replay already done")
+	}
+
+	replayState := newReplayState(false, mode, nil)
+	if !d.replayState.CompareAndSwap(oldState, replayState) {
+		return moerr.NewInternalErrorNoCtx("concurrent replay")
+	}
+
+	defer func() {
+		if err != nil {
+			d.replayState.Store(nil)
+			replayState.Done(err)
+		} else {
+			doneState := newReplayState(true, mode, replayState.waitCh)
+			d.replayState.Store(doneState)
+			doneState.Done(nil)
+		}
+	}()
 
 	onLogRecord := func(r logservice.LogRecord) {
 		// TODO: handle the config change log record
 	}
 
 	onWaitMore := func() bool {
-		return replayMode.Load() == int32(driver.ReplayMode_ReplayForever)
+		mode = modeGetter()
+		return mode == driver.ReplayMode_ReplayForever
 	}
 
 	replayer := newReplayer(
@@ -196,7 +253,7 @@ func (d *LogServiceDriver) readFromBackend(
 	}
 	defer client.Putback()
 
-	cfg := d.config.Load()
+	cfg := d.config
 	for ; retryTimes < cfg.MaxRetryCount; retryTimes++ {
 		ctx, cancel = context.WithTimeoutCause(
 			ctx,
@@ -219,21 +276,11 @@ func (d *LogServiceDriver) readFromBackend(
 	return
 }
 
-func (d *LogServiceDriver) IsReadonly() bool {
-	return d.config.Load().Readonly
-}
-
 func (d *LogServiceDriver) GetCfg() *Config {
-	return d.config.Load()
+	return &d.config
 }
 
-func (d *LogServiceDriver) ChangeMode(readonly bool) (updated bool) {
-	cfg := d.config.Load()
-	if cfg.Readonly == readonly {
-		return false
-	}
-	newCfg := *cfg
-	newCfg.Readonly = readonly
-	d.config.Store(&newCfg)
-	return true
+func (d *LogServiceDriver) canWrite() bool {
+	replayState := d.replayState.Load()
+	return replayState != nil && replayState.done && replayState.mode == driver.ReplayMode_ReplayForWrite
 }

@@ -24,18 +24,19 @@ import (
 )
 
 var ErrTooMuchPenddings = moerr.NewInternalErrorNoCtx("too much penddings")
-var ErrWriteInReadOnlyMode = moerr.NewInternalErrorNoCtx("write in read only mode")
+var ErrNeedReplayForWrite = moerr.NewInternalErrorNoCtx("need replay for write")
 
 func (d *LogServiceDriver) Append(e *entry.Entry) (err error) {
-	if d.IsReadonly() {
-		return ErrWriteInReadOnlyMode
+	if !d.canWrite() {
+		return ErrNeedReplayForWrite
 	}
+
 	_, err = d.commitLoop.Enqueue(e)
 	return
 }
 
 func (d *LogServiceDriver) getCommitter() *groupCommitter {
-	if int(d.committer.writer.Size()) > d.config.Load().ClientBufSize {
+	if int(d.committer.writer.Size()) > d.config.ClientBufSize {
 		d.flushCurrentCommitter()
 	}
 	return d.committer

@@ -55,7 +55,7 @@ func (d *LogServiceDriver) GetTruncated() (dsn uint64, err error) {
 }
 
 func (d *LogServiceDriver) onTruncateRequests(items ...any) {
-	if d.IsReadonly() {
+	if !d.canWrite() {
 		logutil.Warn(
 			"Wal-Readonly-Skip-Truncate",
 			zap.Uint64("dsn-intent", d.truncateDSNIntent.Load()),
@@ -162,7 +162,7 @@ func (d *LogServiceDriver) truncateFromRemote(
 			loopCtx context.Context
 		)
 		loopCtx, cancel = context.WithTimeoutCause(
-			ctx, d.config.Load().MaxTimeout, moerr.CauseTruncateLogservice,
+			ctx, d.config.MaxTimeout, moerr.CauseTruncateLogservice,
 		)
 		err = client.wrapped.Truncate(loopCtx, psnIntent)
 		err = moerr.AttachCause(loopCtx, err)
@@ -171,7 +171,7 @@ func (d *LogServiceDriver) truncateFromRemote(
 		// the psnIntent is already truncated
 		if moerr.IsMoErrCode(err, moerr.ErrInvalidTruncateLsn) {
 			loopCtx, cancel = context.WithTimeoutCause(
-				ctx, d.config.Load().MaxTimeout, moerr.CauseGetLogserviceTruncate,
+				ctx, d.config.MaxTimeout, moerr.CauseGetLogserviceTruncate,
 			)
 			psnTruncated, err = d.getTruncatedPSNFromBackend(loopCtx)
 			cancel()
@@ -215,7 +215,7 @@ func (d *LogServiceDriver) getTruncatedPSNFromBackend(
 	}
 	defer client.Putback()
 
-	cfg := d.config.Load()
+	cfg := d.config
 
 	for ; retryTimes < cfg.MaxRetryCount; retryTimes++ {
 		var cancel context.CancelFunc
