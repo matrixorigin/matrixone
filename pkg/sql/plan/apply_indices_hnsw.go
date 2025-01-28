@@ -1,0 +1,213 @@
+// Copyright 2024 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package plan
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+)
+
+func (builder *QueryBuilder) checkValidDistFn(nodeID int32, projNode, sortNode, scanNode *plan.Node,
+	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr, multiTableIndex *MultiTableIndex) bool {
+
+	if len(sortNode.OrderBy) != 1 {
+		return false
+	}
+
+	distFnExpr := sortNode.OrderBy[0].Expr.GetF()
+	if distFnExpr == nil {
+		return false
+	}
+	if _, ok := distFuncOpTypes[distFnExpr.Func.ObjName]; !ok {
+		return false
+	}
+
+	idxdef := multiTableIndex.IndexDefs[catalog.Hnsw_TblType_Metadata]
+
+	params, err := catalog.IndexParamsStringToMap(idxdef.IndexAlgoParams)
+	if err != nil {
+		return false
+	}
+
+	optype, ok := params[catalog.IndexAlgoParamOpType]
+	if !ok {
+		return false
+	}
+
+	if optype != distFuncOpTypes[distFnExpr.Func.ObjName] {
+		return false
+	}
+
+	_, value, ok := builder.getArgsFromDistFn(scanNode, distFnExpr, idxdef.Parts[0])
+	if !ok {
+		return false
+	}
+
+	if value.Typ.GetId() != int32(types.T_array_float32) {
+		return false
+	}
+
+	if value.GetF() != nil {
+		fnexpr := value.GetF()
+		if fnexpr.Func.ObjName != "cast" {
+			os.Stderr.WriteString("value is not a cast of array float32\n")
+			return false
+		}
+
+		os.Stderr.WriteString(fmt.Sprintf("vec32 %s\n", fnexpr.Args[0].GetLit().GetSval()))
+	}
+
+	return true
+}
+
+func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, projNode, sortNode, scanNode *plan.Node,
+	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr, multiTableIndex *MultiTableIndex) (int32, error) {
+
+	ctx := builder.ctxByNode[nodeID]
+	metadef := multiTableIndex.IndexDefs[catalog.Hnsw_TblType_Metadata]
+	idxdef := multiTableIndex.IndexDefs[catalog.Hnsw_TblType_Storage]
+	pkPos := scanNode.TableDef.Name2ColIndex[scanNode.TableDef.Pkey.PkeyColName]
+	keypart := idxdef.Parts[0]
+	params := idxdef.IndexAlgoParams
+	var tblcfg vectorindex.IndexTableConfig
+
+	tblcfg.DbName = scanNode.ObjRef.SchemaName
+	tblcfg.SrcTable = scanNode.TableDef.Name
+	tblcfg.MetadataTable = metadef.IndexTableName
+	tblcfg.IndexTable = idxdef.IndexTableName
+
+	cfgbytes, err := json.Marshal(tblcfg)
+	if err != nil {
+		return nodeID, err
+	}
+	tblcfgstr := string(cfgbytes)
+
+	distFnExpr := sortNode.OrderBy[0].Expr.GetF()
+	sortDirection := sortNode.OrderBy[0].Flag // For the most part, it is ASC
+
+	key, value, ok := builder.getArgsFromDistFn(scanNode, distFnExpr, keypart)
+	if !ok {
+		return nodeID, moerr.NewInternalErrorNoCtx("invalid distance function")
+	}
+
+	distFnName := distFuncInternalDistFunc[distFnExpr.Func.ObjName]
+	// fp32vstr := distFnExpr.Args[1].GetLit().GetSval() // fp32vec
+
+	os.Stderr.WriteString(fmt.Sprintf("DISTFN KEY %v\n", key))
+	os.Stderr.WriteString(fmt.Sprintf("DISTFN VALUE %v\n", value))
+
+	var exprs tree.Exprs
+
+	exprs = append(exprs, tree.NewNumVal[string](params, params, false, tree.P_char))
+	exprs = append(exprs, tree.NewNumVal[string](tblcfgstr, tblcfgstr, false, tree.P_char))
+
+	if value.GetF() != nil {
+		fnexpr := value.GetF()
+		f32vec := fnexpr.Args[0].GetLit().GetSval()
+
+		valExpr := &tree.CastExpr{Expr: tree.NewNumVal[string](f32vec, f32vec, false, tree.P_char),
+			Type: &tree.T{tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_VAR_STRING), FamilyString: "vecf32", Family: tree.ArrayFamily, DisplayWith: -1}}}
+
+		exprs = append(exprs, valExpr)
+	}
+
+	if value.GetCol() != nil {
+		//valExpr := tree.NewUnresolvedName(tree.NewCStr(keypart, 1), tree.NewCStr(tblcfg.SrcTable, 1), tree.NewCStr(tblcfg.DbName, 1))
+		valExpr := tree.NewUnresolvedColName(keypart)
+
+		exprs = append(exprs, valExpr)
+	}
+
+	hnsw_func := tree.NewCStr(hnsw_search_func_name, 1)
+	alias_name := fmt.Sprintf("mo_hnsw_alias_0")
+	name := tree.NewUnresolvedName(hnsw_func)
+
+	tmpTableFunc := &tree.AliasedTableExpr{
+		Expr: &tree.TableFunction{
+			Func: &tree.FuncExpr{
+				Func:     tree.FuncName2ResolvableFunctionReference(name),
+				FuncName: hnsw_func,
+				Exprs:    exprs,
+				Type:     tree.FUNC_TYPE_TABLE,
+			},
+		},
+		As: tree.AliasClause{
+			Alias: tree.Identifier(alias_name),
+		},
+	}
+
+	curr_node_id, err := builder.buildTable(tmpTableFunc, ctx, -1, nil)
+	if err != nil {
+		return nodeID, err
+	}
+
+	curr_node := builder.qry.Nodes[curr_node_id]
+	curr_node_tag := curr_node.BindingTags[0]
+
+	os.Stderr.WriteString(fmt.Sprintf("TABLE NODE %v,   tag = %d\n", curr_node, curr_node_tag))
+
+	// check equal distFn and only compute once for equal function()
+
+	// JOIN between source table and hnsw_search table function
+
+	// Create SortBy with distance column from table function
+
+	// replace the project with ColRef (same distFn as the order by)
+
+	_ = params
+	_ = pkPos
+	_ = distFnName
+	_ = sortDirection
+	return nodeID, nil
+}
+
+func (builder *QueryBuilder) getArgsFromDistFn(scanNode *plan.Node, distfn *plan.Function, keypart string) (key *plan.Expr, value *plan.Expr, found bool) {
+
+	found = false
+	keyid := -1
+	key = nil
+	value = nil
+
+	for i, a := range distfn.Args {
+		if a.GetCol() != nil {
+			colPosOrderBy := a.GetCol().ColPos
+			if colPosOrderBy == scanNode.TableDef.Name2ColIndex[keypart] {
+				found = true
+				keyid = i
+				break
+			}
+		}
+	}
+
+	if found {
+		key = distfn.Args[keyid]
+		if keyid == 0 {
+			value = distfn.Args[1]
+		} else {
+			value = distfn.Args[0]
+		}
+	}
+
+	return key, value, found
+}
