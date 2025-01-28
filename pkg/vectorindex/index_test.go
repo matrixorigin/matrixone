@@ -26,7 +26,7 @@ func TestQuantization(t *testing.T) {
 	q, ok := QuantizationValid("f16")
 	require.True(t, ok)
 	require.Equal(t, q, usearch.F16)
-	q, ok = QuantizationValid("")
+	_, ok = QuantizationValid("")
 	require.False(t, ok)
 }
 

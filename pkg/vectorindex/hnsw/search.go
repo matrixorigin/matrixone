@@ -163,28 +163,28 @@ func (idx *HnswSearchIndex) Search(query []float32, limit uint) (keys []usearch.
 }
 
 // Search the hnsw index (implement VectorIndexSearch.Search)
-func (h *HnswSearch) Search(query []float32, limit uint) (keys []int64, distances []float32, err error) {
-	if len(h.Indexes) == 0 {
+func (s *HnswSearch) Search(query []float32, limit uint) (keys []int64, distances []float32, err error) {
+	if len(s.Indexes) == 0 {
 		return []int64{}, []float32{}, nil
 	}
 
 	// search
-	size := len(h.Indexes) * int(limit)
+	size := len(s.Indexes) * int(limit)
 	heap := vectorindex.NewSearchResultSafeHeap(size)
 	var wg sync.WaitGroup
 
 	var errs error
 
 	nthread := NThreadSearch
-	if nthread > len(h.Indexes) {
-		nthread = len(h.Indexes)
+	if nthread > len(s.Indexes) {
+		nthread = len(s.Indexes)
 	}
 
 	for i := 0; i < nthread; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for j, idx := range h.Indexes {
+			for j, idx := range s.Indexes {
 				if j%nthread == i {
 					keys, distances, err := idx.Search(query, limit)
 					if err != nil {
@@ -221,12 +221,12 @@ func (h *HnswSearch) Search(query []float32, limit uint) (keys []int64, distance
 }
 
 // Destroy HnswSearch (implement VectorIndexSearch.Destroy)
-func (h *HnswSearch) Destroy() {
+func (s *HnswSearch) Destroy() {
 	// destroy index
-	for _, idx := range h.Indexes {
+	for _, idx := range s.Indexes {
 		idx.Index.Destroy()
 	}
-	h.Indexes = nil
+	s.Indexes = nil
 	os.Stderr.WriteString("hnsw search destroy\n")
 }
 

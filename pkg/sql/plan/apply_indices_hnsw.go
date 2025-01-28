@@ -153,7 +153,8 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, projNode
 		f32vec := fnexpr.Args[0].GetLit().GetSval()
 
 		valExpr := &tree.CastExpr{Expr: tree.NewNumVal[string](f32vec, f32vec, false, tree.P_char),
-			Type: &tree.T{tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_VAR_STRING), FamilyString: "vecf32", Family: tree.ArrayFamily, DisplayWith: partType.Width}}}
+			Type: &tree.T{InternalType: tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_VAR_STRING),
+				FamilyString: "vecf32", Family: tree.ArrayFamily, DisplayWith: partType.Width}}}
 
 		exprs = append(exprs, valExpr)
 	}
@@ -167,7 +168,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, projNode
 	}
 
 	hnsw_func := tree.NewCStr(hnsw_search_func_name, 1)
-	alias_name := fmt.Sprintf("mo_hnsw_alias_0")
+	alias_name := "mo_hnsw_alias_0"
 	name := tree.NewUnresolvedName(hnsw_func)
 
 	tmpTableFunc := &tree.AliasedTableExpr{

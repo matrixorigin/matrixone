@@ -183,7 +183,7 @@ func generateSeriesPrepare(proc *process.Process, tableFunction *TableFunction) 
 	return st, err
 }
 
-func (s *generateSeriesArg) end(tf *TableFunction, proc *process.Process) error {
+func (g *generateSeriesArg) end(tf *TableFunction, proc *process.Process) error {
 	return nil
 }
 

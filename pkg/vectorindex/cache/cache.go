@@ -198,7 +198,6 @@ func (c *VectorIndexCache) serve() {
 				c.HouseKeeping()
 			}
 		}
-		os.Stderr.WriteString("go func exited\n")
 	}()
 	os.Stderr.WriteString("Serve end\n")
 }

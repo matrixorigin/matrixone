@@ -31,7 +31,7 @@ type HnswBuildIndex struct {
 	Index *usearch.Index
 	Path  string
 	Saved bool
-	size  uint64
+	Size  int64
 }
 
 type HnswBuild struct {
@@ -120,6 +120,8 @@ func (idx *HnswBuildIndex) ToSql(cfg vectorindex.IndexTableConfig) (string, erro
 	offset := int64(0)
 	chunksz := int64(0)
 	chunkid := int64(0)
+
+	idx.Size = filesz
 
 	sql := fmt.Sprintf("INSERT INTO `%s`.`%s` VALUES ", cfg.DbName, cfg.IndexTable)
 	values := make([]string, 0, int64(math.Ceil(float64(filesz)/float64(vectorindex.MaxChunkSize))))
