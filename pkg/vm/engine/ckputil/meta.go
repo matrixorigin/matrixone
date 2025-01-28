@@ -37,21 +37,9 @@ import (
 // `start_row` is the start rowid of the table in the object
 // `end_row` is the end rowid of the table in the object (same object as `start_row`)
 // `location` is the location of the object
-var MetaSchema_TableRange_Seqnums = []uint16{0, 1, 2, 3, 4}
-var MetaSchema_TableRange_Attrs = []string{
-	TableObjectsAttr_Table,
-	"object_type",
-	"start_row",
-	"end_row",
-	"location",
-}
-var MetaSchema_TableRange_Types = []types.Type{
-	TableObjectsTypes[TableObjectsAttr_Table_Idx],
-	types.T_int8.ToType(),
-	objectio.RowidType,
-	objectio.RowidType,
-	types.T_char.ToType(),
-}
+var MetaSchema_TableRange_Seqnums = MetaSeqnums
+var MetaSchema_TableRange_Attrs = MetaAttrs
+var MetaSchema_TableRange_Types = MetaTypes
 
 func TableRangesString(r []TableRange) string {
 	var buf bytes.Buffer

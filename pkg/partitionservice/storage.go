@@ -96,7 +96,6 @@ func (s *storage) GetMetadata(
 							table_name,    
 							database_name,             
 							partition_method,           
-							partition_expression,       
 							partition_description,      
 							partition_count         
 						from %s
@@ -135,9 +134,8 @@ func (s *storage) GetMetadata(
 						metadata.Method = partition.PartitionMethod(
 							partition.PartitionMethod_value[executor.GetStringRows(cols[2])[i]],
 						)
-						metadata.Expression = executor.GetStringRows(cols[3])[i]
-						metadata.Description = executor.GetStringRows(cols[4])[i]
-						n = executor.GetFixedRows[uint32](cols[5])[i]
+						metadata.Description = executor.GetStringRows(cols[3])[i]
+						n = executor.GetFixedRows[uint32](cols[4])[i]
 					}
 					return true
 				},
@@ -156,7 +154,7 @@ func (s *storage) GetMetadata(
 						partition_table_name      ,
 						partition_name            ,
 						partition_ordinal_position,
-						partition_comment         
+						partition_expression         
 					from %s
 					where 
 						primary_table_id = %d
@@ -187,7 +185,7 @@ func (s *storage) GetMetadata(
 								PartitionTableName: executor.GetStringRows(cols[1])[i],
 								Name:               executor.GetStringRows(cols[2])[i],
 								Position:           executor.GetFixedRows[uint32](cols[3])[i],
-								Comment:            executor.GetStringRows(cols[4])[i],
+								Expression:         executor.GetStringRows(cols[4])[i],
 							},
 						)
 					}
@@ -372,7 +370,7 @@ func (s *storage) createPartitionTable(
 				primary_table_id, 
 				partition_name, 
 				partition_ordinal_position, 
-				partition_comment
+				partition_expression
 			)
 			values
 			(
@@ -390,7 +388,7 @@ func (s *storage) createPartitionTable(
 			metadata.TableID,
 			partition.Name,
 			partition.Position,
-			partition.Comment,
+			partition.Expression,
 		)
 
 		res, err := txn.Exec(
@@ -480,7 +478,7 @@ func getPartitionTableCreateSQL(
 		table.ObjectNamePrefix,
 		table.AtTsExpr,
 	)
-	return tree.String(stmt, dialect.MYSQL)
+	return tree.StringWithOpts(stmt, dialect.MYSQL, tree.WithSingleQuoteString())
 }
 
 func getInsertMetadataSQL(
@@ -493,7 +491,6 @@ func getInsertMetadataSQL(
 				table_name,
 				database_name,
 				partition_method,
-				partition_expression,
 				partition_description,
 				partition_count
 			)
@@ -502,7 +499,6 @@ func getInsertMetadataSQL(
 				%d, 
 				'%s', 
 				'%s',
-				'%s', 
 				'%s', 
 				'%s',
 				 %d
@@ -513,7 +509,6 @@ func getInsertMetadataSQL(
 		metadata.TableName,
 		metadata.DatabaseName,
 		metadata.Method.String(),
-		metadata.Expression,
 		metadata.Description,
 		len(metadata.Partitions),
 	)

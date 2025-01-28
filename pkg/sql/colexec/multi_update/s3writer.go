@@ -538,7 +538,7 @@ func (writer *s3Writer) fillInsertBlockInfo(
 }
 
 func (writer *s3Writer) flushTailAndWriteToOutput(proc *process.Process, analyzer process.Analyzer) (err error) {
-	if writer.isRemote && writer.batchSize > TagS3SizeForMOLogger {
+	if writer.batchSize > TagS3SizeForMOLogger {
 		//write tail batch to s3
 		err = writer.sortAndSync(proc, analyzer)
 		if err != nil {

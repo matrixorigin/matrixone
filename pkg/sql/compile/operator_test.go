@@ -1,4 +1,4 @@
-// Copyright 2024 Matrix Origin
+// Copyright 2021-2024 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,19 +12,31 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package logservicedriver
+package compile
 
 import (
 	"testing"
 
-	"github.com/stretchr/testify/assert"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
 )
 
-func Test_NewTestConfig(t *testing.T) {
-	service, ccfg := initTest(t)
-	defer service.Close()
+func TestDupOperator(t *testing.T) {
+	dupOperator(
+		insert.NewPartitionInsert(
+			&insert.Insert{},
+			1,
+		),
+		0,
+		0,
+	)
 
-	cfg := NewTestConfig("", ccfg)
-	_, err := cfg.ClientFactory()
-	assert.NoError(t, err)
+	dupOperator(
+		deletion.NewPartitionDelete(
+			&deletion.Deletion{},
+			1,
+		),
+		0,
+		0,
+	)
 }

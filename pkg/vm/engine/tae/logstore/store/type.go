@@ -37,7 +37,7 @@ type Store interface {
 	GetCheckpointed(gid uint32) (lsn uint64)
 	GetTruncated() uint64
 
-	Replay(ctx context.Context, h ApplyHandle) error
+	Replay(ctx context.Context, h ApplyHandle, mode driver.ReplayMode) error
 	Close() error
 }
 

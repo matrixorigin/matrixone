@@ -295,14 +295,13 @@ func genAutoIncrCol(bat *batch.Batch, proc *proc, preInsert *PreInsert) error {
 		}
 
 		for col, idx := range needReCheck {
-			vec := bat.GetVector(preInsert.ColOffset + int32(idx))
 			from, err := proc.GetIncrService().GetLastAllocateTS(proc.Ctx, tableID, col)
 			if err != nil {
 				return err
 			}
 			fromTs := types.TimestampToTS(from)
 			toTs := types.TimestampToTS(proc.Base.TxnOperator.SnapshotTS())
-			if mayChanged, err := rel.PrimaryKeysMayBeUpserted(proc.Ctx, fromTs, toTs, vec); err == nil {
+			if mayChanged, err := rel.PrimaryKeysMayBeUpserted(proc.Ctx, fromTs, toTs, bat, preInsert.ColOffset+int32(idx)); err == nil {
 				if mayChanged {
 					logutil.Debugf("user may have manually specified the value to be inserted into the auto pk col before this transaction.")
 					return moerr.NewTxnNeedRetry(proc.Ctx)

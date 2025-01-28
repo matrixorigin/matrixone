@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fulltext"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -221,6 +222,15 @@ func ft_runSql_fn(proc *process.Process, sql string) (executor.Result, error) {
 	if !ok {
 		panic("missing lock service")
 	}
+
+	//-------------------------------------------------------
+	topContext := proc.GetTopContext()
+	accountId, err := defines.GetAccountId(proc.Ctx)
+	if err != nil {
+		return executor.Result{}, err
+	}
+	//-------------------------------------------------------
+
 	exec := v.(executor.SQLExecutor)
 	opts := executor.Options{}.
 		// All runSql and runSqlWithResult is a part of input sql, can not incr statement.
@@ -229,8 +239,8 @@ func ft_runSql_fn(proc *process.Process, sql string) (executor.Result, error) {
 		WithTxn(proc.GetTxnOperator()).
 		WithDatabase(proc.GetSessionInfo().Database).
 		WithTimeZone(proc.GetSessionInfo().TimeZone).
-		WithAccountID(proc.GetSessionInfo().AccountId)
-	return exec.Exec(proc.GetTopContext(), sql, opts)
+		WithAccountID(accountId)
+	return exec.Exec(topContext, sql, opts)
 }
 
 var ft_runSql_streaming = ft_runSql_streaming_fn
@@ -241,6 +251,14 @@ func ft_runSql_streaming_fn(proc *process.Process, sql string, stream_chan chan 
 	if !ok {
 		panic("missing lock service")
 	}
+
+	//-------------------------------------------------------
+	topContext := proc.GetTopContext()
+	accountId, err := defines.GetAccountId(proc.Ctx)
+	if err != nil {
+		return executor.Result{}, err
+	}
+	//-------------------------------------------------------
 	exec := v.(executor.SQLExecutor)
 	opts := executor.Options{}.
 		// All runSql and runSqlWithResult is a part of input sql, can not incr statement.
@@ -249,9 +267,9 @@ func ft_runSql_streaming_fn(proc *process.Process, sql string, stream_chan chan 
 		WithTxn(proc.GetTxnOperator()).
 		WithDatabase(proc.GetSessionInfo().Database).
 		WithTimeZone(proc.GetSessionInfo().TimeZone).
-		WithAccountID(proc.GetSessionInfo().AccountId).
+		WithAccountID(accountId).
 		WithStreaming(stream_chan, error_chan)
-	return exec.Exec(proc.GetTopContext(), sql, opts)
+	return exec.Exec(topContext, sql, opts)
 }
 
 // run SQL to get the (doc_id, word_index) of all patterns (words) in the search string

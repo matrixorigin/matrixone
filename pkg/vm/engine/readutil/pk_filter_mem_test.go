@@ -95,21 +95,59 @@ func TestNewMemPKFilter(t *testing.T) {
 func TestMemPKFilter_FilterVector(t *testing.T) {
 	lb, ub := 10, 20
 
+	mp := mpool.MustNewZeroNoFixed()
+
+	inVec := vector.NewVec(types.T_int32.ToType())
+	vector.AppendFixed(inVec, int32(1), false, mp)
+	vector.AppendFixed(inVec, int32(10), false, mp)
+	vector.AppendFixed(inVec, int32(20), false, mp)
+	vector.AppendFixed(inVec, int32(21), false, mp)
+
+	prefixInVec := vector.NewVec(types.T_varchar.ToType())
+	vector.AppendBytes(prefixInVec, []byte("aa"), false, mp)
+	vector.AppendBytes(prefixInVec, []byte("bb"), false, mp)
+	vector.AppendBytes(prefixInVec, []byte("cc"), false, mp)
+
 	baseFilters := []BasePKFilter{
 		{Op: function.BETWEEN, Valid: true, Oid: types.T_int32, LB: types.EncodeFixed(int32(lb)), UB: types.EncodeFixed(int32(ub))},
 		{Op: RangeBothOpen, Valid: true, Oid: types.T_int32, LB: types.EncodeFixed(int32(lb)), UB: types.EncodeFixed(int32(ub))},
 		{Op: RangeLeftOpen, Valid: true, Oid: types.T_int32, LB: types.EncodeFixed(int32(lb)), UB: types.EncodeFixed(int32(ub))},
 		{Op: RangeRightOpen, Valid: true, Oid: types.T_int32, LB: types.EncodeFixed(int32(lb)), UB: types.EncodeFixed(int32(ub))},
 		{Op: function.LESS_EQUAL, Valid: true, Oid: types.T_int32, LB: types.EncodeFixed(int32(ub))},
+		{Op: function.IN, Valid: true, Oid: types.T_int32, Vec: inVec},
+		{Op: function.PREFIX_IN, Valid: true, Oid: types.T_varchar, Vec: prefixInVec},
+		{Op: function.PREFIX_EQ, Valid: true, Oid: types.T_varchar, LB: []byte("aa")},
 	}
 
-	mp := mpool.MustNewZeroNoFixed()
+	skipCnt := []int{
+		2, // between
+		4, // ()
+		3, // (]
+		3, // [)
+		1, // <=
+		3, // in
+		0, // prefix in
+		2, // prefix eq
+	}
 
 	vecs := make([]*vector.Vector, 0, len(baseFilters))
-	for range baseFilters {
-		vec := vector.NewVec(types.T_int32.ToType())
-		vector.AppendFixed[int32](vec, int32(21), false, mp)
-		vecs = append(vecs, vec)
+	for _, f := range baseFilters {
+		if f.Op != function.PREFIX_IN && f.Op != function.PREFIX_EQ {
+			vec := vector.NewVec(types.T_int32.ToType())
+			vector.AppendFixed[int32](vec, int32(9), false, mp)
+			vector.AppendFixed[int32](vec, int32(10), false, mp)
+			vector.AppendFixed[int32](vec, int32(11), false, mp)
+			vector.AppendFixed[int32](vec, int32(19), false, mp)
+			vector.AppendFixed[int32](vec, int32(20), false, mp)
+			vector.AppendFixed[int32](vec, int32(21), false, mp)
+			vecs = append(vecs, vec)
+		} else {
+			vec := vector.NewVec(types.T_varchar.ToType())
+			vector.AppendBytes(vec, []byte("aaa"), false, mp)
+			vector.AppendBytes(vec, []byte("bbb"), false, mp)
+			vector.AppendBytes(vec, []byte("ccc"), false, mp)
+			vecs = append(vecs, vec)
+		}
 	}
 
 	tableDef := &plan.TableDef{
@@ -161,7 +199,7 @@ func TestMemPKFilter_FilterVector(t *testing.T) {
 		filter.FilterVector(vecs[i], packer, &skipMask)
 		put.Put()
 
-		require.Equal(t, 1, skipMask.Count(), filter.String())
+		require.Equal(t, skipCnt[i], skipMask.Count(), filter.String())
 
 		skipMask.Release()
 	}
