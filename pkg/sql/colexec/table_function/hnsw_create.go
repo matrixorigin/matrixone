@@ -90,7 +90,7 @@ func (u *hnswCreateState) free(tf *TableFunction, proc *process.Process, pipelin
 	}
 
 	if u.build != nil {
-		err = u.build.Destroy()
+		u.build.Destroy()
 	}
 }
 
