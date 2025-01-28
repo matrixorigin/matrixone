@@ -90,6 +90,8 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, projNode
 	pkPos := scanNode.TableDef.Name2ColIndex[scanNode.TableDef.Pkey.PkeyColName]
 	pkType := scanNode.TableDef.Cols[pkPos].Typ
 	keypart := idxdef.Parts[0]
+	partPos := scanNode.TableDef.Name2ColIndex[keypart]
+	partType := scanNode.TableDef.Cols[partPos].Typ
 	params := idxdef.IndexAlgoParams
 
 	var limit *plan.Expr
@@ -139,12 +141,13 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, projNode
 		f32vec := fnexpr.Args[0].GetLit().GetSval()
 
 		valExpr := &tree.CastExpr{Expr: tree.NewNumVal[string](f32vec, f32vec, false, tree.P_char),
-			Type: &tree.T{tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_VAR_STRING), FamilyString: "vecf32", Family: tree.ArrayFamily, DisplayWith: -1}}}
+			Type: &tree.T{tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_VAR_STRING), FamilyString: "vecf32", Family: tree.ArrayFamily, DisplayWith: partType.Width}}}
 
 		exprs = append(exprs, valExpr)
 	}
 
 	if value.GetCol() != nil {
+		// TODO: CROSS APPLY with Column
 		//valExpr := tree.NewUnresolvedName(tree.NewCStr(keypart, 1), tree.NewCStr(tblcfg.SrcTable, 1), tree.NewCStr(tblcfg.DbName, 1))
 		valExpr := tree.NewUnresolvedColName(keypart)
 
@@ -175,6 +178,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, projNode
 	}
 
 	curr_node := builder.qry.Nodes[curr_node_id]
+
 	curr_node_tag := curr_node.BindingTags[0]
 
 	curr_node_pkcol := &Expr{
@@ -192,6 +196,15 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, projNode
 		curr_node.Limit = DeepCopyExpr(limit)
 	}
 
+	/*
+		joinnodeID := builder.appendNode(&plan.Node{
+			NodeType:  plan.Node_APPLY,
+			Children:  []int32{scanNode.NodeId, curr_node_id},
+			ApplyType: plan.Node_CROSSAPPLY,
+		}, ctx)
+
+		_ = pkType
+	*/
 	// oncond
 	wherePkEqPk, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
 		{

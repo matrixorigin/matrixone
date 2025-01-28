@@ -80,10 +80,13 @@ func (u *hnswSearchState) call(tf *TableFunction, proc *process.Process) (vm.Cal
 
 	u.offset += n
 
+	u.batch.SetRowCount(n)
+
 	if u.batch.RowCount() == 0 {
 		return vm.CancelResult, nil
 	}
 
+	os.Stderr.WriteString(fmt.Sprintf("CALL write %d rows\n", u.batch.RowCount()))
 	// write the batch
 	return vm.CallResult{Status: vm.ExecNext, Batch: u.batch}, nil
 }
@@ -214,6 +217,8 @@ func (u *hnswSearchState) start(tf *TableFunction, proc *process.Process, nthRow
 	}
 
 	f32a := types.BytesToArray[float32](f32aVec.GetBytesAt(nthRow))
+
+	os.Stderr.WriteString(fmt.Sprintf("vec %v\n", f32a))
 
 	veccache.Cache.Once()
 
