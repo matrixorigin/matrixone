@@ -17,6 +17,7 @@ package hnsw
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"sync"
 
@@ -74,7 +75,7 @@ func (idx *HnswSearchIndex) loadChunk(proc *process.Process, stream_chan chan ex
 		data := bat.Vecs[1].GetRawBytesAt(i)
 
 		offset := chunk_id * vectorindex.MaxChunkSize
-		_, err = fp.Seek(offset, os.SEEK_SET)
+		_, err = fp.Seek(offset, io.SeekStart)
 		if err != nil {
 			return false, err
 		}
