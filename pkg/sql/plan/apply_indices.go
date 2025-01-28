@@ -17,7 +17,6 @@ package plan
 import (
 	"fmt"
 	"slices"
-	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -254,7 +253,8 @@ func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan
 		// 1.a if there are no table scans with multi-table indexes, skip
 		multiTableIndexes := make(map[string]*MultiTableIndex)
 		for _, indexDef := range scanNode.TableDef.Indexes {
-			if catalog.IsIvfIndexAlgo(indexDef.IndexAlgo) {
+			if catalog.IsIvfIndexAlgo(indexDef.IndexAlgo) ||
+				catalog.IsHnswIndexAlgo(indexDef.IndexAlgo) {
 				if _, ok := multiTableIndexes[indexDef.IndexName]; !ok {
 					multiTableIndexes[indexDef.IndexName] = &MultiTableIndex{
 						IndexAlgo: catalog.ToLower(indexDef.IndexAlgo),
@@ -268,50 +268,49 @@ func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan
 			return nodeID, nil
 		}
 
-		//1.b if sortNode has more than one order by, skip
-		if len(sortNode.OrderBy) != 1 {
-			goto END0
-		}
-
-		// 1.c if sortNode does not have a registered distance function, skip
-		distFnExpr := sortNode.OrderBy[0].Expr.GetF()
-		if distFnExpr == nil {
-			goto END0
-		}
-		if _, ok := distFuncOpTypes[distFnExpr.Func.ObjName]; !ok {
-			goto END0
-		}
-
-		// 1.d if the order by argument order is not of the form dist_func(col, const), swap and see
-		// if that works. if not, skip
-		if isRuntimeConstExpr(distFnExpr.Args[0]) && distFnExpr.Args[1].GetCol() != nil {
-			distFnExpr.Args[0], distFnExpr.Args[1] = distFnExpr.Args[1], distFnExpr.Args[0]
-		}
-		if !isRuntimeConstExpr(distFnExpr.Args[1]) {
-			goto END0
-		}
-		if distFnExpr.Args[0].GetCol() == nil {
-			goto END0
-		}
-		// NOTE: here we assume the first argument is the column to order by
-		colPosOrderBy := distFnExpr.Args[0].GetCol().ColPos
-
-		// 1.d if the distance function in sortNode is not indexed for that column in any of the IVFFLAT index, skip
-		distanceFunctionIndexed := false
-		var multiTableIndexWithSortDistFn *MultiTableIndex
-
 		// This is important to get consistent result.
 		// HashMap can give you random order during iteration.
 		var multiTableIndexKeys []string
 		for key := range multiTableIndexes {
 			multiTableIndexKeys = append(multiTableIndexKeys, key)
 		}
-		sort.Strings(multiTableIndexKeys)
+		//sort.Strings(multiTableIndexKeys)
 
 		for _, multiTableIndexKey := range multiTableIndexKeys {
 			multiTableIndex := multiTableIndexes[multiTableIndexKey]
 			switch multiTableIndex.IndexAlgo {
 			case catalog.MoIndexIvfFlatAlgo.ToString():
+
+				//1.b if sortNode has more than one order by, skip
+				if len(sortNode.OrderBy) != 1 {
+					goto END0
+				}
+
+				// 1.c if sortNode does not have a registered distance function, skip
+				distFnExpr := sortNode.OrderBy[0].Expr.GetF()
+				if distFnExpr == nil {
+					goto END0
+				}
+				if _, ok := distFuncOpTypes[distFnExpr.Func.ObjName]; !ok {
+					goto END0
+				}
+
+				// 1.d if the order by argument order is not of the form dist_func(col, const), swap and see
+				// if that works. if not, skip
+				if isRuntimeConstExpr(distFnExpr.Args[0]) && distFnExpr.Args[1].GetCol() != nil {
+					distFnExpr.Args[0], distFnExpr.Args[1] = distFnExpr.Args[1], distFnExpr.Args[0]
+				}
+				if !isRuntimeConstExpr(distFnExpr.Args[1]) {
+					goto END0
+				}
+				if distFnExpr.Args[0].GetCol() == nil {
+					goto END0
+				}
+				// NOTE: here we assume the first argument is the column to order by
+				colPosOrderBy := distFnExpr.Args[0].GetCol().ColPos
+
+				// 1.d if the distance function in sortNode is not indexed for that column in any of the IVFFLAT index, skip
+
 				storedParams, err := catalog.IndexParamsStringToMap(multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexAlgoParams)
 				if err != nil {
 					continue
@@ -329,26 +328,28 @@ func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan
 
 				// if index is of the same distance function in order by, the index is valid
 				if storedOpType == distFuncOpTypes[distFnExpr.Func.ObjName] {
-					distanceFunctionIndexed = true
-					multiTableIndexWithSortDistFn = multiTableIndex
+					multiTableIndexWithSortDistFn := multiTableIndex
+
+					newSortNode := builder.applyIndicesForSortUsingVectorIndex(nodeID, projNode, sortNode, scanNode,
+						colRefCnt, idxColMap, multiTableIndexWithSortDistFn, colPosOrderBy)
+
+					// TODO: consult with nitao and aungr
+					projNode.Children[0] = newSortNode
+					replaceColumnsForNode(projNode, idxColMap)
+
+					return newSortNode, nil
 				}
-			}
-			if distanceFunctionIndexed {
-				break
+			case catalog.MoIndexHnswAlgo.ToString():
+
+				if !builder.checkValidDistFn(nodeID, projNode, sortNode, scanNode, colRefCnt, idxColMap, multiTableIndex) {
+					continue
+				}
+
+				return builder.applyIndicesForSortUsingHnsw(nodeID, projNode, sortNode, scanNode,
+					colRefCnt, idxColMap, multiTableIndex)
+
 			}
 		}
-		if !distanceFunctionIndexed {
-			goto END0
-		}
-
-		newSortNode := builder.applyIndicesForSortUsingVectorIndex(nodeID, projNode, sortNode, scanNode,
-			colRefCnt, idxColMap, multiTableIndexWithSortDistFn, colPosOrderBy)
-
-		// TODO: consult with nitao and aungr
-		projNode.Children[0] = newSortNode
-		replaceColumnsForNode(projNode, idxColMap)
-
-		return newSortNode, nil
 	}
 END0:
 	// 2. Regular Index Check

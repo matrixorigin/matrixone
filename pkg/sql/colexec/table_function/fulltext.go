@@ -54,6 +54,10 @@ type fulltextState struct {
 	batch *batch.Batch
 }
 
+func (u *fulltextState) end(tf *TableFunction, proc *process.Process) error {
+	return nil
+}
+
 func (u *fulltextState) reset(tf *TableFunction, proc *process.Process) {
 	if u.batch != nil {
 		u.batch.CleanOnlyData()

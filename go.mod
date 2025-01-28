@@ -28,6 +28,7 @@ require (
 	github.com/confluentinc/confluent-kafka-go/v2 v2.4.0
 	github.com/containerd/cgroups/v3 v3.0.1
 	github.com/cpegeric/pdftotext-go v0.0.0-20241112123704-49cb86a3790e
+	github.com/detailyang/go-fallocate v0.0.0-20180908115635-432fa640bd2e
 	github.com/docker/go-units v0.5.0
 	github.com/dolthub/maphash v0.1.0
 	github.com/dslipak/pdf v0.0.2

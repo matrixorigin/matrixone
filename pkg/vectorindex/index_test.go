@@ -11,14 +11,24 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-package hnsw
+package vectorindex
 
 import (
 	"fmt"
+	"sync"
 	"testing"
 
+	"github.com/stretchr/testify/require"
 	usearch "github.com/unum-cloud/usearch/golang"
 )
+
+func TestQuantization(t *testing.T) {
+	q, ok := QuantizationValid("f16")
+	require.True(t, ok)
+	require.Equal(t, q, usearch.F16)
+	q, ok = QuantizationValid("")
+	require.False(t, ok)
+}
 
 func TestUSearch(t *testing.T) {
 
@@ -26,6 +36,7 @@ func TestUSearch(t *testing.T) {
 	vectorSize := 3
 	vectorsCount := 100
 	conf := usearch.DefaultConfig(uint(vectorSize))
+	conf.Metric = usearch.L2sq
 	index, err := usearch.NewIndex(conf)
 	if err != nil {
 		panic("Failed to create Index")
@@ -44,10 +55,62 @@ func TestUSearch(t *testing.T) {
 		}
 	}
 
+	index2, err := usearch.NewIndex(conf)
+	if err != nil {
+		panic("Failed to create Index")
+	}
+	defer index2.Destroy()
+
+	// Add to Index
+	err = index2.Reserve(uint(vectorsCount))
+	if err != nil {
+		panic("Failed to reserve")
+	}
+	for i := 0; i < vectorsCount; i++ {
+		err = index2.Add(usearch.Key(i+vectorsCount), []float32{float32(i + vectorsCount), float32(i + 1 + vectorsCount), float32(i + 2 + vectorsCount)})
+		if err != nil {
+			panic("Failed to add")
+		}
+	}
+
+	index.Save("hnsw0.bin")
+	index2.Save("hnsw1.bin")
+
 	// Search
 	keys, distances, err := index.Search([]float32{0.0, 1.0, 2.0}, 3)
 	if err != nil {
 		panic("Failed to search")
 	}
 	fmt.Println(keys, distances)
+
+	keys, distances, err = index2.Search([]float32{0.0, 1.0, 2.0}, 3)
+	if err != nil {
+		panic("Failed to search")
+	}
+	fmt.Println(keys, distances)
+}
+
+func TestSafeHeap(t *testing.T) {
+
+	var wg sync.WaitGroup
+
+	h := NewSearchResultSafeHeap(40)
+	for j := 0; j < 4; j++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 10; i++ {
+				h.Push(int64(usearch.Key(j*10+i)), float32(j*10+i))
+			}
+		}()
+	}
+
+	wg.Wait()
+
+	n := h.Len()
+	fmt.Printf("Len = %d\n", n)
+	for i := 0; i < n; i++ {
+		id, score := h.Pop()
+		fmt.Printf("id = %d, score = %f\n", id, score)
+	}
 }

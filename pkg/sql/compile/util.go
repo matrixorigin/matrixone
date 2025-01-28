@@ -17,6 +17,7 @@ package compile
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -24,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -98,6 +100,10 @@ var (
 
 var (
 	insertIntoFullTextIndexTableFormat = "INSERT INTO `%s`.`%s` SELECT f.* FROM `%s`.`%s` AS %s CROSS APPLY fulltext_index_tokenize('%s', %s, %s) AS f;"
+)
+
+var (
+	insertIntoHnswIndexTableFormat = "SELECT f.* from `%s`.`%s` AS %s CROSS APPLY hnsw_create('%s', '%s', %s, %s) AS f;"
 )
 
 // genInsertIndexTableSql: Generate an insert statement for inserting data into the index table
@@ -479,4 +485,45 @@ func genInsertIndexTableSqlForFullTextIndex(originalTableDef *plan.TableDef, ind
 		concat)
 
 	return []string{sql}
+}
+
+func genBuildHnswIndex(proc *process.Process, indexDefs map[string]*plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef) ([]string, error) {
+	var cfg vectorindex.IndexTableConfig
+	src_alias := "src"
+	pkColName := src_alias + "." + originalTableDef.Pkey.PkeyColName
+
+	idxdef_meta, ok := indexDefs[catalog.Hnsw_TblType_Metadata]
+	if !ok {
+		return nil, moerr.NewInternalErrorNoCtx("hnsw_meta index definition not found")
+	}
+	cfg.MetadataTable = idxdef_meta.IndexTableName
+
+	idxdef_index, ok := indexDefs[catalog.Hnsw_TblType_Storage]
+	if !ok {
+		return nil, moerr.NewInternalErrorNoCtx("hnsw_index index definition not found")
+	}
+	cfg.IndexTable = idxdef_index.IndexTableName
+	cfg.DbName = qryDatabase
+	cfg.SrcTable = originalTableDef.Name
+	cfg.PKey = pkColName
+	cfg.KeyPart = idxdef_index.Parts[0]
+
+	params := idxdef_index.IndexAlgoParams
+
+	cfgbytes, err := json.Marshal(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	part := src_alias + "." + idxdef_index.Parts[0]
+
+	sql := fmt.Sprintf(insertIntoHnswIndexTableFormat,
+		qryDatabase, originalTableDef.Name,
+		src_alias,
+		params,
+		string(cfgbytes),
+		pkColName,
+		part)
+
+	return []string{sql}, nil
 }

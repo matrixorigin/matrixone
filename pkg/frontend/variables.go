@@ -3526,6 +3526,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableBoolType("experimental_fulltext_index"),
 		Default:           int64(0),
 	},
+	"experimental_hnsw_index": {
+		Name:              "experimental_hnsw_index",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableBoolType("experimental_hnsw_index"),
+		Default:           int64(0),
+	},
 	"validate_password": {
 		Name:              "validate_password",
 		Scope:             ScopeGlobal,

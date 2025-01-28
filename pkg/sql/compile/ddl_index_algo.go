@@ -29,6 +29,7 @@ import (
 const (
 	ivfFlatIndexFlag  = "experimental_ivf_index"
 	fulltextIndexFlag = "experimental_fulltext_index"
+	hnswIndexFlag     = "experimental_hnsw_index"
 )
 
 func (s *Scope) handleUniqueIndexTable(c *Compile, dbSource engine.Database,
@@ -450,6 +451,47 @@ func (s *Scope) handleIvfIndexDeleteOldEntries(c *Compile,
 	err = s.logTimestamp(c, qryDatabase, metadataTableName, "pruning_end")
 	if err != nil {
 		return err
+	}
+
+	return nil
+}
+
+func (s *Scope) handleVectorHnswIndex(c *Compile, dbSource engine.Database, indexDefs map[string]*plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef, indexInfo *plan.CreateTable) error {
+
+	if ok, err := s.isExperimentalEnabled(c, hnswIndexFlag); err != nil {
+		return err
+	} else if !ok {
+		return moerr.NewInternalErrorNoCtx("Hnsw index is not enabled")
+	}
+
+	// 1. static check
+	if len(indexDefs) != 2 {
+		return moerr.NewInternalErrorNoCtx("invalid hnsw index table definition")
+	}
+	if len(indexDefs[catalog.Hnsw_TblType_Metadata].Parts) != 1 {
+		return moerr.NewInternalErrorNoCtx("invalid hnsw index part must be 1.")
+	}
+
+	// 2. create hidden tables
+	if indexInfo != nil {
+		for _, table := range indexInfo.GetIndexTables() {
+			if err := indexTableBuild(c, table, dbSource); err != nil {
+				return err
+			}
+		}
+	}
+
+	// 3. build hnsw index
+	sqls, err := genBuildHnswIndex(c.proc, indexDefs, qryDatabase, originalTableDef)
+	if err != nil {
+		return err
+	}
+
+	for _, sql := range sqls {
+		err = c.runSql(sql)
+		if err != nil {
+			return err
+		}
 	}
 
 	return nil

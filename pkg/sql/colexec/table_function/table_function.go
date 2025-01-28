@@ -54,6 +54,11 @@ func (tableFunction *TableFunction) Call(proc *process.Process) (vm.CallResult, 
 			// get to next input batch
 			if tableFunction.isTbFuncSourceOp() {
 				if tableFunction.ctr.isDone {
+					// End of Input
+					err := tableFunction.ctr.state.end(tableFunction, proc)
+					if err != nil {
+						return vm.CancelResult, err
+					}
 					return vm.NewCallResult(), nil
 				}
 				tableFunction.ctr.inputBatch = batch.EmptyForConstFoldBatch
@@ -65,6 +70,11 @@ func (tableFunction *TableFunction) Call(proc *process.Process) (vm.CallResult, 
 				}
 				tableFunction.ctr.inputBatch = input.Batch
 				if input.Batch.IsDone() {
+					// End of Input
+					err := tableFunction.ctr.state.end(tableFunction, proc)
+					if err != nil {
+						return input, err
+					}
 					return input, nil
 				}
 			}
@@ -158,6 +168,12 @@ func (tableFunction *TableFunction) Prepare(proc *process.Process) error {
 		tblArg.ctr.state, err = stageListPrepare(proc, tblArg)
 	case "moplugin_table":
 		tblArg.ctr.state, err = pluginPrepare(proc, tblArg)
+	case "hnsw_create":
+		tblArg.ctr.state, err = hnswCreatePrepare(proc, tblArg)
+	case "hnsw_refresh":
+		tblArg.ctr.state, err = hnswRefreshPrepare(proc, tblArg)
+	case "hnsw_search":
+		tblArg.ctr.state, err = hnswSearchPrepare(proc, tblArg)
 	default:
 		tblArg.ctr.state = nil
 		err = moerr.NewNotSupported(proc.Ctx, fmt.Sprintf("table function %s is not supported", tblArg.FuncName))
@@ -196,4 +212,8 @@ func (tableFunction *TableFunction) ApplyStart(nthRow int, proc *process.Process
 
 func (tableFunction *TableFunction) ApplyCall(proc *process.Process) (vm.CallResult, error) {
 	return tableFunction.ctr.state.call(tableFunction, proc)
+}
+
+func (tableFunction *TableFunction) ApplyEnd(proc *process.Process) error {
+	return tableFunction.ctr.state.end(tableFunction, proc)
 }
