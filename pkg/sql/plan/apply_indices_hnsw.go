@@ -43,6 +43,18 @@ func (builder *QueryBuilder) checkValidDistFn(nodeID int32, projNode, sortNode, 
 		return false
 	}
 
+	var limit *plan.Expr
+	if sortNode.Limit != nil {
+		limit = sortNode.Limit
+	} else if scanNode.Limit != nil {
+		limit = scanNode.Limit
+	} else if projNode.Limit != nil {
+		limit = projNode.Limit
+	}
+	if limit == nil {
+		return false
+	}
+
 	idxdef := multiTableIndex.IndexDefs[catalog.Hnsw_TblType_Metadata]
 
 	params, err := catalog.IndexParamsStringToMap(idxdef.IndexAlgoParams)
