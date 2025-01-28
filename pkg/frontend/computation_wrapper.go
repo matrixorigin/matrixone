@@ -175,11 +175,14 @@ func (cwft *TxnComputationWrapper) GetServerStatus() uint16 {
 	return uint16(cwft.ses.GetTxnHandler().GetServerStatus())
 }
 
-func checkResultQueryPrivilege(proc *process.Process, p *plan.Plan, reqCtx context.Context, sid string, ses *Session) error {
+func checkResultQueryPrivilege(proc *process.Process, p *plan.Plan, reqCtx context.Context, sid string, ses *Session) (statistic.StatsArray, error) {
 	var ids []string
 	var err error
+	var stats statistic.StatsArray
+	stats.Reset()
+
 	if ids, err = isResultQuery(proc, p); err != nil || ids == nil {
-		return err
+		return stats, err
 	}
 	return checkPrivilege(sid, ids, reqCtx, ses)
 }
@@ -188,20 +191,26 @@ func checkResultQueryPrivilege(proc *process.Process, p *plan.Plan, reqCtx conte
 func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *perfcounter.CounterSet) error) (interface{}, error) {
 	var originSQL string
 	var span trace.Span
+	var err error
+
 	execCtx := any.(*ExecCtx)
 	execCtx.reqCtx, span = trace.Start(execCtx.reqCtx, "TxnComputationWrapper.Compile",
 		trace.WithKind(trace.SpanKindStatement))
 	defer span.End(trace.WithStatementExtra(cwft.ses.GetTxnId(), cwft.ses.GetStmtId(), cwft.ses.GetSqlOfStmt()))
 
-	var err error
 	defer RecordStatementTxnID(execCtx.reqCtx, cwft.ses)
 	if cwft.ses.GetTxnHandler().HasTempEngine() {
 		updateTempStorageInCtx(execCtx, cwft.proc, cwft.ses.GetTxnHandler().GetTempStorage())
 	}
+	stats := statistic.StatsInfoFromContext(execCtx.reqCtx)
 
 	cacheHit := cwft.plan != nil
 	if !cacheHit {
-		cwft.plan, err = buildPlan(execCtx.reqCtx, cwft.ses, cwft.ses.GetTxnCompileCtx(), cwft.stmt)
+		cwft.plan, err = buildPlanWithAuthorization(execCtx.reqCtx, cwft.ses, cwft.ses.GetTxnCompileCtx(), cwft.stmt)
+		if err != nil {
+			return nil, err
+		}
+		//cwft.plan, err = buildPlan(execCtx.reqCtx, cwft.ses, cwft.ses.GetTxnCompileCtx(), cwft.stmt)
 	} else if cwft.ses != nil && cwft.ses.GetTenantInfo() != nil && !cwft.ses.IsBackgroundSession() {
 		var accId uint32
 		accId, err = defines.GetAccountId(execCtx.reqCtx)
@@ -209,16 +218,29 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 			return nil, err
 		}
 		cwft.ses.SetAccountId(accId)
-		err = authenticateCanExecuteStatementAndPlan(execCtx.reqCtx, cwft.ses.(*Session), cwft.stmt, cwft.plan)
-	}
-	if err != nil {
-		return nil, err
-	}
-	if !cwft.ses.IsBackgroundSession() {
-		cwft.ses.SetPlan(cwft.plan)
-		if err := checkResultQueryPrivilege(cwft.proc, cwft.plan, execCtx.reqCtx, cwft.ses.GetService(), cwft.ses.(*Session)); err != nil {
+
+		//err = authenticateCanExecuteStatementAndPlan(execCtx.reqCtx, cwft.ses.(*Session), cwft.stmt, cwft.plan)
+		authStats, err := authenticateCanExecuteStatementAndPlan(execCtx.reqCtx, cwft.ses.(*Session), cwft.stmt, cwft.plan)
+		if err != nil {
 			return nil, err
 		}
+		// record permission statistics.
+		stats.PermissionAuth.Add(&authStats)
+	}
+	//if err != nil {
+	//	return nil, err
+	//}
+	if !cwft.ses.IsBackgroundSession() {
+		cwft.ses.SetPlan(cwft.plan)
+		//if err := checkResultQueryPrivilege(cwft.proc, cwft.plan, execCtx.reqCtx, cwft.ses.GetService(), cwft.ses.(*Session)); err != nil {
+		//	return nil, err
+		//}
+
+		authStats, err := checkResultQueryPrivilege(cwft.proc, cwft.plan, execCtx.reqCtx, cwft.ses.GetService(), cwft.ses.(*Session))
+		if err != nil {
+			return nil, err
+		}
+		stats.PermissionAuth.Add(&authStats)
 	}
 
 	if _, isTextProtExecute := cwft.stmt.(*tree.Execute); isTextProtExecute || execCtx.input.isBinaryProtExecute {
@@ -232,9 +254,15 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 			if err != nil {
 				return nil, err
 			}
-			if err := checkResultQueryPrivilege(cwft.proc, plan, execCtx.reqCtx, cwft.ses.GetService(), cwft.ses.(*Session)); err != nil {
+			//if err := checkResultQueryPrivilege(cwft.proc, plan, execCtx.reqCtx, cwft.ses.GetService(), cwft.ses.(*Session)); err != nil {
+			//	return nil, err
+			//}
+			authStats, err := checkResultQueryPrivilege(cwft.proc, plan, execCtx.reqCtx, cwft.ses.GetService(), cwft.ses.(*Session))
+			if err != nil {
 				return nil, err
 			}
+			stats.PermissionAuth.Add(&authStats)
+
 			cwft.plan = plan
 			cwft.stmt.Free()
 			// reset plan & stmt
@@ -510,6 +538,7 @@ func createCompile(
 	)
 	retCompile.SetIsPrepare(isPrepare)
 	retCompile.SetBuildPlanFunc(func(ctx context.Context) (*plan2.Plan, error) {
+		// No permission verification is required when retry execute buildPlan
 		plan, err := buildPlan(ctx, ses, ses.GetTxnCompileCtx(), stmt)
 		if err != nil {
 			return nil, err

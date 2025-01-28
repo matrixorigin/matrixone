@@ -20,47 +20,45 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/embed"
+	"github.com/matrixorigin/matrixone/pkg/partitionservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/shardservice"
+	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	"github.com/stretchr/testify/require"
 )
 
 var (
-	// TODO: skip all shard tests.
-	enableAllShardTests bool
-	once                sync.Once
-	shardingCluster     embed.Cluster
-	mu                  sync.Mutex
+	once         sync.Once
+	shareCluster embed.Cluster
+	mu           sync.Mutex
 )
 
 func runShardClusterTest(
+	t *testing.T,
 	fn func(embed.Cluster),
 ) error {
 	return runShardClusterTestWithReuse(
+		t,
 		fn,
 		true,
 	)
 }
 
 func runShardClusterTestWithReuse(
+	t *testing.T,
 	fn func(embed.Cluster),
 	reuse bool,
 ) error {
-	if !enableAllShardTests {
-		return nil
-	}
-
 	mu.Lock()
 	defer mu.Unlock()
 
-	var err error
-	var cluster embed.Cluster
 	var c embed.Cluster
-	createFunc := func() {
-		c, err = embed.NewCluster(
+	createFunc := func() embed.Cluster {
+		new, err := embed.NewCluster(
 			embed.WithCNCount(3),
 			embed.WithTesting(),
 			embed.WithPreStart(
@@ -68,6 +66,7 @@ func runShardClusterTestWithReuse(
 					op.Adjust(
 						func(sc *embed.ServiceConfig) {
 							if op.ServiceType() == metadata.ServiceType_CN {
+								sc.CN.PartitionService.Enable = true
 								sc.CN.ShardService.Enable = true
 								sc.CN.HAKeeper.HeatbeatInterval.Duration = time.Second
 							} else if op.ServiceType() == metadata.ServiceType_TN {
@@ -87,31 +86,34 @@ func runShardClusterTestWithReuse(
 				},
 			),
 		)
-		if err != nil {
-			return
-		}
-		err = c.Start()
-		if err != nil {
-			return
-		}
-		cluster = c
-		if reuse {
-			shardingCluster = cluster
-		}
-	}
-
-	if err != nil {
-		return err
+		require.NoError(t, err)
+		require.NoError(t, new.Start())
+		return new
 	}
 
 	if reuse {
-		once.Do(createFunc)
-		cluster = shardingCluster
+		once.Do(
+			func() {
+				c = createFunc()
+				shareCluster = c
+			},
+		)
+		c = shareCluster
 	} else {
-		createFunc()
+		c = createFunc()
 	}
 
-	fn(cluster)
+	cn, err := c.GetCNService(0)
+	require.NoError(t, err)
+	if !testutils.TableExists(t, catalog.MO_CATALOG, catalog.MOPartitionMetadata, cn) {
+		testutils.ExecSQL(
+			t,
+			catalog.MO_CATALOG,
+			cn,
+			partitionservice.InitSQLs...,
+		)
+	}
+	fn(c)
 	return nil
 }
 
@@ -133,7 +135,7 @@ func getPartitionTableSQL(
 		id          INT             NOT NULL,
 		value       INT             NULL,
 		PRIMARY KEY (id)
-	) PARTITION BY RANGE columns (id)(
+	) PARTITION BY RANGE (id)(
 		%s
 	);
 	`,

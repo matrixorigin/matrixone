@@ -740,7 +740,7 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 
 	rawSQL := ""
 	if stmt.PartitionOption != nil {
-		rawSQL = tree.String(stmt, dialect.MYSQL)
+		rawSQL = tree.StringWithOpts(stmt, dialect.MYSQL, tree.WithSingleQuoteString())
 	}
 
 	createTable := &plan.CreateTable{

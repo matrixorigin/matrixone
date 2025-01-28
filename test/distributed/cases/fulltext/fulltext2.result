@@ -26,7 +26,8 @@ Rapier    Abigail    F    Human Resources    38
 create fulltext index ftidx on fulltext01 (LastName, FirstName);
 alter table fulltext01 add column newcolumn decimal after LastName;
 show create table fulltext01;
-
+Table    Create Table
+fulltext01    CREATE TABLE `fulltext01` (\n  `LastName` char(10) NOT NULL,\n  `newcolumn` decimal(38,0) DEFAULT NULL,\n  `FirstName` char(10) DEFAULT NULL,\n  `Gender` char(1) DEFAULT NULL,\n  `DepartmentName` char(20) DEFAULT NULL,\n  `Age` int DEFAULT NULL,\n  PRIMARY KEY (`LastName`),\n FULLTEXT `ftidx`(`LastName`,`FirstName`)\n)
 select * from fulltext01;
 lastname    newcolumn    firstname    gender    departmentname    age
 Gilbert    null    Kevin    M    Tool Design    33
@@ -60,7 +61,8 @@ employeenumber    lastname    firstname    extension    email    officecode    r
 create fulltext index f01 on employees (LastName, FirstName);
 alter table employees drop column LastName;
 show create table employees;
-
+Table    Create Table
+employees    CREATE TABLE `employees` (\n  `employeeNumber` int NOT NULL,\n  `firstName` varchar(50) NOT NULL,\n  `extension` varchar(10) NOT NULL,\n  `email` varchar(100) NOT NULL,\n  `officeCode` varchar(10) NOT NULL,\n  `reportsTo` int DEFAULT NULL,\n  `jobTitle` varchar(50) NOT NULL,\n  PRIMARY KEY (`employeeNumber`),\n FULLTEXT `f01`(`firstName`)\n)
 select * from employees;
 employeenumber    firstname    extension    email    officecode    reportsto    jobtitle
 1002    Diane    x5800    dmurphy@classicmodelcars.com    1    null    President
@@ -80,7 +82,8 @@ insert into t1 values(4, 'ab_def');
 create fulltext index f02 on t1 (col2);
 alter table t1 modify column col2 text;
 show create table t1;
-
+Table    Create Table
+t1    CREATE TABLE `t1` (\n  `col1` int NOT NULL,\n  `col2` text DEFAULT NULL,\n  PRIMARY KEY (`col1`),\n FULLTEXT `f02`(`col2`)\n)
 select * from t1;
 col1    col2
 1    abcdef
@@ -126,7 +129,7 @@ col1    col2    col3
 2    3    e4r34f
 create fulltext index f01 on ab01 (col2);
 create fulltext index f02 on ab01 (col2);
-
+not supported: Fulltext index are not allowed to use the same column
 drop table ab01;
 drop table if exists char01;
 create table char01 (col1 varchar(200) primary key , col2 char(10));
@@ -139,7 +142,8 @@ col1    col2
 alter table char01 add fulltext index f01(col1);
 alter table char01 add fulltext index f02(col2);
 show create table char01;
-
+Table    Create Table
+char01    CREATE TABLE `char01` (\n  `col1` varchar(200) NOT NULL,\n  `col2` char(10) DEFAULT NULL,\n  PRIMARY KEY (`col1`),\n FULLTEXT `f01`(`col1`),\n FULLTEXT `f02`(`col2`)\n)
 drop table char01;
 drop table if exists ab02;
 create table ab02 (a bigint unsigned not null, primary key(a));
@@ -235,7 +239,8 @@ insert into prepare_fulltext values (1, 11), (2, 22), (3, 33);
 prepare stmt1 from 'create fulltext index f06 on prepare_fulltext (a)';
 execute stmt1;
 show create table prepare_fulltext;
-
+Table    Create Table
+prepare_fulltext    CREATE TABLE `prepare_fulltext` (\n  `a` char(1) NOT NULL,\n  `b` varchar(20) DEFAULT NULL,\n  PRIMARY KEY (`a`),\n FULLTEXT `f06`(`a`)\n)
 select * from prepare_fulltext;
 a    b
 1    11
@@ -253,7 +258,8 @@ execute stmt4;
 prepare stmt3 from 'alter table pro add fulltext index pro2(name)';
 execute stmt3;
 show create table pro;
-
+Table    Create Table
+pro    CREATE TABLE `pro` (\n  `id` int NOT NULL AUTO_INCREMENT,\n  `name` varchar(255) DEFAULT NULL,\n  `details` json DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT `pro1`(`details`) WITH PARSER json,\n FULLTEXT `pro2`(`name`)\n)
 insert into pro (name, details) values('手机', '{"brand": "Apple", "model": "iPhone 12", "price": 800}');
 select * from pro;
 id    name    details
@@ -271,7 +277,8 @@ PRIMARY KEY (`col1`),
 fulltext(col5)
 );
 show create table test_table;
-
+Table    Create Table
+test_table    CREATE TABLE `test_table` (\n  `col1` int NOT NULL AUTO_INCREMENT,\n  `col2` float DEFAULT NULL,\n  `col3` bool DEFAULT NULL,\n  `col4` date DEFAULT NULL,\n  `col5` varchar(255) DEFAULT NULL,\n  `col6` text DEFAULT NULL,\n  PRIMARY KEY (`col1`),\n FULLTEXT (`col5`)\n)
 load data infile '$resources/load_data/test_1.csv' into table test_table fields terminated by ',' parallel 'true';
 select * from test_table;
 col1    col2    col3    col4    col5    col6
@@ -367,7 +374,8 @@ true    2    var    2020-09-07    2020-09-07 00:00:00    2020-09-07 00:00:00    
 true    3    var    2020-09-07    2020-09-07 00:00:00    2020-09-07 00:00:00    18    121.11    ["1", 2, null, false, true, {"q": 1}]    1az    null    null
 true    4    var    2020-09-07    2020-09-07 00:00:00    2020-09-07 00:00:00    18    121.11    {"b": ["a", "b", {"q": 4}], "c": 1}    1qaz    null    null
 show create table t1;
-
+Table    Create Table
+t1    CREATE TABLE `t1` (\n  `col1` bool DEFAULT NULL,\n  `col2` int NOT NULL,\n  `col3` varchar(100) DEFAULT NULL,\n  `col4` date DEFAULT NULL,\n  `col5` datetime DEFAULT NULL,\n  `col6` timestamp NULL DEFAULT NULL,\n  `col7` decimal(38,0) DEFAULT NULL,\n  `col8` float DEFAULT NULL,\n  `col9` json DEFAULT NULL,\n  `col10` text DEFAULT NULL,\n  `col11` json DEFAULT NULL,\n  `col12` bool DEFAULT NULL,\n  PRIMARY KEY (`col2`),\n FULLTEXT `f06`(`col9`)\n)
 drop table t1;
 drop table if exists articles;
 create table articles (
@@ -608,4 +616,28 @@ where match(comment_text) AGAINST ('全文索引' IN NATURAL LANGUAGE MODE);
 
 drop table comments;
 drop table posts;
+drop table if exists fulltext_test01;
+create table `fulltext_test01` (
+`col1` bigint default NULL,
+`col2` int not null,
+`col3` varchar(200) default NULL,
+`col4` varchar(200) default NULL,
+PRIMARY KEY (`col2`),
+FULLTEXT f01(`col3`) WITH PARSER ngram
+);
+load data infile '$resources/external_table_file/zhwiki.txt' into table fulltext_test01 fields terminated by ':' ESCAPED BY '\t' lines terminated by '\n';
+show create table fulltext_test01;
+Table    Create Table
+fulltext_test01    CREATE TABLE `fulltext_test01` (\n  `col1` bigint DEFAULT NULL,\n  `col2` int NOT NULL,\n  `col3` varchar(200) DEFAULT NULL,\n  `col4` varchar(200) DEFAULT NULL,\n  PRIMARY KEY (`col2`),\n FULLTEXT `f01`(`col3`) WITH PARSER ngram\n)
+alter table fulltext_test01 drop index f01;
+show create table fulltext_test01;
+Table    Create Table
+fulltext_test01    CREATE TABLE `fulltext_test01` (\n  `col1` bigint DEFAULT NULL,\n  `col2` int NOT NULL,\n  `col3` varchar(200) DEFAULT NULL,\n  `col4` varchar(200) DEFAULT NULL,\n  PRIMARY KEY (`col2`)\n)
+select * from fulltext_test01;
+col1    col2    col3    col4
+608    1    Wikipedia    上载纪录/存档/2002年
+608    2    Wikipedia    删除纪录/档案馆/2004年3月
+608    26    Wikipedia    繁简分歧词表
+608    31    Wikipedia    宣告/2005年
+drop table fulltext_test01;
 drop database test_fulltext;

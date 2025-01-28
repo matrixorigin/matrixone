@@ -362,3 +362,26 @@ func TestDebugLogFor19288(t *testing.T) {
 		})
 	}
 }
+
+func TestLockMeta_doLock(t *testing.T) {
+	lm := &LockMeta{
+		database_table_id: 11230,
+		table_table_id:    123123,
+		metaTables: map[string]struct{}{
+			"test1": {},
+		},
+		lockDbExe:    nil,
+		lockTableExe: nil,
+		lockMetaVecs: nil,
+	}
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	proc := testutil.NewProcess()
+	proc.Base.SessionInfo.Buf = buffer.New()
+	proc.Ctx = context.Background()
+	eng := mock_frontend.NewMockEngine(ctrl)
+
+	assert.Error(t, lm.doLock(eng, proc))
+}

@@ -526,6 +526,7 @@ func explainResourceOverview(queryResult *util.RunResult, statsInfo *statistic.S
 				statsInfo.PlanStage.BuildPlanStatsIOConsumption,
 				statsInfo.IOAccessTimeConsumption,
 				statsInfo.S3FSPrefetchFileIOMergerTimeConsumption))
+			buffer.WriteString(fmt.Sprintf("\t\t- Permission Authentication Stats Array: %v \n", statsInfo.PermissionAuth))
 
 			//-------------------------------------------------------------------------------------------------------
 			if option.Analyze {

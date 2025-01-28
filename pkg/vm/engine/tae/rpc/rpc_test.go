@@ -1065,8 +1065,6 @@ func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 	IDAlloc := catalog.NewIDAllocator()
 	schema := catalog.MockSchemaAll(2, -1)
 	schema.Name = "tbtest"
-	schema.Extra.BlockMaxRows = 10
-	schema.Extra.ObjectMaxBlocks = 2
 	dbName := "dbtest"
 	ac := AccessInfo{
 		accountId: 0,
@@ -1271,7 +1269,7 @@ func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 		obj := it.GetObject()
 		for j := 0; j < obj.BlkCnt(); j++ {
 			var v *containers.Batch
-			err := it.GetObject().Scan(ctx, &v, uint16(0), []int{schema.ColDefs[1].Idx}, common.DefaultAllocator)
+			err := it.GetObject().Scan(ctx, &v, uint16(j), []int{schema.ColDefs[1].Idx}, common.DefaultAllocator)
 			assert.NoError(t, err)
 			defer v.Close()
 			assert.Equal(t, 100, v.Length())
@@ -1286,8 +1284,8 @@ func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 	err = testutil.GetOneObject(tbH).Scan(ctx, &v, 0, []int{hideColIdx, schema.GetPrimaryKey().Idx}, common.DefaultAllocator)
 	assert.NoError(t, err)
 	defer v.Close()
+	assert.Equal(t, 100, v.Length())
 
-	_ = it.Close()
 	delBat := batch.New([]string{hideCol[0].Name, schema.GetPrimaryKey().GetName()})
 	delBat.Vecs[0] = v.Vecs[0].GetDownstreamVector()
 	delBat.Vecs[1] = v.Vecs[1].GetDownstreamVector()

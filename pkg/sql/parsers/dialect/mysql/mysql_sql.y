@@ -5854,36 +5854,36 @@ group_by_opt:
         exprsList := []tree.Exprs{$3}
         $$ = &tree.GroupByClause{
             GroupByExprsList: exprsList,
-            Apart: false,
+            Apart:      false,
             Cube :      false,
-            Rollup:       $4,
+            Rollup:     $4,
         }
     }
 |   GROUP BY GROUPING SETS '(' grouping_sets ')'
     {
         $$ = &tree.GroupByClause{
             GroupByExprsList: $6,
-            Apart: false,
+            Apart:      false,
             Cube :      false,
-            Rollup:       false,
+            Rollup:     false,
         }
     }
 |   GROUP BY CUBE '('  expression_list ')'
     {
         $$ = &tree.GroupByClause{
             GroupByExprsList: []tree.Exprs{$5},
-            Apart: false,
+            Apart:      false,
             Cube :      true,
-            Rollup:       false,
+            Rollup:     false,
         }
     }
 |   GROUP BY ROLLUP '(' expression_list ')'
     {
         $$ = &tree.GroupByClause{
             GroupByExprsList: []tree.Exprs{$5},
-            Apart: false,
+            Apart:      false,
             Cube :      false,
-            Rollup:       true,
+            Rollup:     true,
         }
     }
 

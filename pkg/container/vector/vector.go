@@ -55,8 +55,8 @@ type Vector struct {
 	capacity int
 	length   int
 
-	nsp nulls.Nulls    // nulls list
-	gsp nulls.Grouping // grouping list
+	nsp nulls.Nulls // nulls list
+	gsp nulls.Nulls // grouping list
 
 	cantFreeData bool
 	cantFreeArea bool
