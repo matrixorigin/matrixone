@@ -74,7 +74,7 @@ func (idx *HnswSearchIndex) loadChunk(proc *process.Process, stream_chan chan ex
 		data := bat.Vecs[1].GetRawBytesAt(i)
 
 		offset := chunk_id * vectorindex.MaxChunkSize
-		offset, err = fp.Seek(offset, os.SEEK_SET)
+		_, err = fp.Seek(offset, os.SEEK_SET)
 		if err != nil {
 			return false, err
 		}
