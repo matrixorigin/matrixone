@@ -88,8 +88,19 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, projNode
 	metadef := multiTableIndex.IndexDefs[catalog.Hnsw_TblType_Metadata]
 	idxdef := multiTableIndex.IndexDefs[catalog.Hnsw_TblType_Storage]
 	pkPos := scanNode.TableDef.Name2ColIndex[scanNode.TableDef.Pkey.PkeyColName]
+	pkType := scanNode.TableDef.Cols[pkPos].Typ
 	keypart := idxdef.Parts[0]
 	params := idxdef.IndexAlgoParams
+
+	var limit *plan.Expr
+	if sortNode.Limit != nil {
+		limit = sortNode.Limit
+	} else if scanNode.Limit != nil {
+		limit = scanNode.Limit
+	} else if projNode.Limit != nil {
+		limit = projNode.Limit
+	}
+
 	var tblcfg vectorindex.IndexTableConfig
 
 	tblcfg.DbName = scanNode.ObjRef.SchemaName
@@ -111,12 +122,13 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, projNode
 		return nodeID, moerr.NewInternalErrorNoCtx("invalid distance function")
 	}
 
-	distFnName := distFuncInternalDistFunc[distFnExpr.Func.ObjName]
+	//distFnName := distFuncInternalDistFunc[distFnExpr.Func.ObjName]
 	// fp32vstr := distFnExpr.Args[1].GetLit().GetSval() // fp32vec
 
 	os.Stderr.WriteString(fmt.Sprintf("DISTFN KEY %v\n", key))
 	os.Stderr.WriteString(fmt.Sprintf("DISTFN VALUE %v\n", value))
 
+	// JOIN between source table and hnsw_search table function
 	var exprs tree.Exprs
 
 	exprs = append(exprs, tree.NewNumVal[string](params, params, false, tree.P_char))
@@ -165,20 +177,83 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, projNode
 	curr_node := builder.qry.Nodes[curr_node_id]
 	curr_node_tag := curr_node.BindingTags[0]
 
+	curr_node_pkcol := &Expr{
+		Typ: pkType,
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: curr_node_tag,
+				ColPos: 0,
+			},
+		},
+	}
+
+	// pushdown limit
+	if limit != nil {
+		curr_node.Limit = DeepCopyExpr(limit)
+	}
+
+	// oncond
+	wherePkEqPk, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
+		{
+			Typ: pkType,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: scanNode.BindingTags[0],
+					ColPos: pkPos, // tbl.pk
+				},
+			},
+		},
+		{
+			Typ: pkType,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: curr_node_pkcol.GetCol().RelPos, // last idxTbl (may be join) relPos
+					ColPos: 0,                               // idxTbl.pk
+				},
+			},
+		},
+	})
+
+	joinnodeID := builder.appendNode(&plan.Node{
+		NodeType: plan.Node_JOIN,
+		Children: []int32{scanNode.NodeId, curr_node_id},
+		JoinType: plan.Node_INNER,
+		OnList:   []*Expr{wherePkEqPk},
+		Limit:    DeepCopyExpr(scanNode.Limit),
+		Offset:   DeepCopyExpr(scanNode.Offset),
+	}, ctx)
+
+	scanNode.Limit = nil
+	scanNode.Offset = nil
+
 	os.Stderr.WriteString(fmt.Sprintf("TABLE NODE %v,   tag = %d\n", curr_node, curr_node_tag))
+
+	// Create SortBy with distance column from table function
+	orderByScore := make([]*OrderBySpec, 0, 1)
+	orderByScore = append(orderByScore, &OrderBySpec{
+		Expr: &Expr{
+			Typ: curr_node.TableDef.Cols[1].Typ, // score column
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: curr_node.BindingTags[0],
+					ColPos: 1, // score column
+				},
+			},
+		},
+		Flag: sortDirection,
+	})
+
+	sortByID := builder.appendNode(&plan.Node{
+		NodeType: plan.Node_SORT,
+		Children: []int32{joinnodeID},
+		OrderBy:  orderByScore,
+	}, ctx)
+
+	projNode.Children[0] = sortByID
 
 	// check equal distFn and only compute once for equal function()
 
-	// JOIN between source table and hnsw_search table function
-
-	// Create SortBy with distance column from table function
-
 	// replace the project with ColRef (same distFn as the order by)
-
-	_ = params
-	_ = pkPos
-	_ = distFnName
-	_ = sortDirection
 	return nodeID, nil
 }
 
