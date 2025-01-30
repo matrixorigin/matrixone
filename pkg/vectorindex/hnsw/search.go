@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
@@ -314,6 +315,15 @@ func runSql_fn(proc *process.Process, sql string) (executor.Result, error) {
 	if !ok {
 		panic("missing lock service")
 	}
+
+	//-------------------------------------------------------
+	topContext := proc.GetTopContext()
+	accountId, err := defines.GetAccountId(proc.Ctx)
+	if err != nil {
+		return executor.Result{}, err
+	}
+	//-------------------------------------------------------
+
 	exec := v.(executor.SQLExecutor)
 	opts := executor.Options{}.
 		// All runSql and runSqlWithResult is a part of input sql, can not incr statement.
@@ -322,8 +332,8 @@ func runSql_fn(proc *process.Process, sql string) (executor.Result, error) {
 		WithTxn(proc.GetTxnOperator()).
 		WithDatabase(proc.GetSessionInfo().Database).
 		WithTimeZone(proc.GetSessionInfo().TimeZone).
-		WithAccountID(proc.GetSessionInfo().AccountId)
-	return exec.Exec(proc.GetTopContext(), sql, opts)
+		WithAccountID(accountId)
+	return exec.Exec(topContext, sql, opts)
 }
 
 var runSql_streaming = runSql_streaming_fn
@@ -334,6 +344,15 @@ func runSql_streaming_fn(proc *process.Process, sql string, stream_chan chan exe
 	if !ok {
 		panic("missing lock service")
 	}
+
+	//-------------------------------------------------------
+	topContext := proc.GetTopContext()
+	accountId, err := defines.GetAccountId(proc.Ctx)
+	if err != nil {
+		return executor.Result{}, err
+	}
+	//-------------------------------------------------------
+
 	exec := v.(executor.SQLExecutor)
 	opts := executor.Options{}.
 		// All runSql and runSqlWithResult is a part of input sql, can not incr statement.
@@ -342,7 +361,7 @@ func runSql_streaming_fn(proc *process.Process, sql string, stream_chan chan exe
 		WithTxn(proc.GetTxnOperator()).
 		WithDatabase(proc.GetSessionInfo().Database).
 		WithTimeZone(proc.GetSessionInfo().TimeZone).
-		WithAccountID(proc.GetSessionInfo().AccountId).
+		WithAccountID(accountId).
 		WithStreaming(stream_chan, error_chan)
-	return exec.Exec(proc.GetTopContext(), sql, opts)
+	return exec.Exec(topContext, sql, opts)
 }
