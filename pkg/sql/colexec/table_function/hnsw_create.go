@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
@@ -239,6 +240,15 @@ func hnsw_runSql_fn(proc *process.Process, sql string) (executor.Result, error) 
 	if !ok {
 		panic("missing lock service")
 	}
+
+	//-------------------------------------------------------
+	topContext := proc.GetTopContext()
+	accountId, err := defines.GetAccountId(proc.Ctx)
+	if err != nil {
+		return executor.Result{}, err
+	}
+	//-------------------------------------------------------
+
 	exec := v.(executor.SQLExecutor)
 	opts := executor.Options{}.
 		// All runSql and runSqlWithResult is a part of input sql, can not incr statement.
@@ -247,6 +257,6 @@ func hnsw_runSql_fn(proc *process.Process, sql string) (executor.Result, error) 
 		WithTxn(proc.GetTxnOperator()).
 		WithDatabase(proc.GetSessionInfo().Database).
 		WithTimeZone(proc.GetSessionInfo().TimeZone).
-		WithAccountID(proc.GetSessionInfo().AccountId)
-	return exec.Exec(proc.GetTopContext(), sql, opts)
+		WithAccountID(accountId)
+	return exec.Exec(topContext, sql, opts)
 }
