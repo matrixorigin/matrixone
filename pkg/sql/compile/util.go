@@ -487,6 +487,28 @@ func genInsertIndexTableSqlForFullTextIndex(originalTableDef *plan.TableDef, ind
 	return []string{sql}
 }
 
+func genDeleteHnswIndex(proc *process.Process, indexDefs map[string]*plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef) ([]string, error) {
+	idxdef_meta, ok := indexDefs[catalog.Hnsw_TblType_Metadata]
+	if !ok {
+		return nil, moerr.NewInternalErrorNoCtx("hnsw_meta index definition not found")
+	}
+
+	idxdef_index, ok := indexDefs[catalog.Hnsw_TblType_Storage]
+	if !ok {
+		return nil, moerr.NewInternalErrorNoCtx("hnsw_index index definition not found")
+	}
+
+	sqls := make([]string, 0, 2)
+
+	sql := fmt.Sprintf("DELETE FROM `%s`.`%s`", qryDatabase, idxdef_meta.IndexTableName)
+	sqls = append(sqls, sql)
+	sql = fmt.Sprintf("DELETE FROM `%s`.`%s`", qryDatabase, idxdef_index.IndexTableName)
+	sqls = append(sqls, sql)
+
+	return sqls, nil
+
+}
+
 func genBuildHnswIndex(proc *process.Process, indexDefs map[string]*plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef) ([]string, error) {
 	var cfg vectorindex.IndexTableConfig
 	src_alias := "src"

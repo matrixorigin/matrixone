@@ -744,6 +744,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 						}
 
 					case catalog.MoIndexHnswAlgo.ToString():
+						// TODO: ERIC ReIndex hnsw here
 						// pass
 					default:
 						return moerr.NewInternalError(c.proc.Ctx, "invalid index algo type for alter reindex")

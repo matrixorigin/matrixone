@@ -481,6 +481,21 @@ func (s *Scope) handleVectorHnswIndex(c *Compile, dbSource engine.Database, inde
 		}
 	}
 
+	// delete old data first
+	{
+		sqls, err := genDeleteHnswIndex(c.proc, indexDefs, qryDatabase, originalTableDef)
+		if err != nil {
+			return err
+		}
+
+		for _, sql := range sqls {
+			err = c.runSql(sql)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
 	// 3. build hnsw index
 	sqls, err := genBuildHnswIndex(c.proc, indexDefs, qryDatabase, originalTableDef)
 	if err != nil {

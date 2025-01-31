@@ -3777,6 +3777,8 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 					return nil, moerr.NewInternalError(ctx.GetContext(), "lists should be > 0.")
 				}
 				alterTableReIndex.IndexAlgoParamList = opt.AlgoParamList
+			case tree.INDEX_TYPE_HNSW:
+				// TODO: ERIC fix the options
 			default:
 				return nil, moerr.NewInternalErrorf(ctx.GetContext(), "unsupported index type: %v", opt.KeyType)
 			}
