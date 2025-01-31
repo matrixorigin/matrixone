@@ -311,6 +311,7 @@ func (builder *QueryBuilder) getArgsFromDistFn(scanNode *plan.Node, distfn *plan
 	return key, value, found
 }
 
+/*
 func (builder *QueryBuilder) findPkFromProject(projNode *plan.Node, pkPos int32) []int32 {
 
 	projids := make([]int32, 0)
@@ -371,3 +372,4 @@ func (builder *QueryBuilder) findEqualDistFnFromProject(projNode *plan.Node, dis
 
 	return projids
 }
+*/
