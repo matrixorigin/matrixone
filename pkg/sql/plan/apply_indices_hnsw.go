@@ -88,6 +88,8 @@ func (builder *QueryBuilder) checkValidDistFn(nodeID int32, projNode, sortNode, 
 		}
 
 		os.Stderr.WriteString(fmt.Sprintf("vec32 %s\n", fnexpr.Args[0].GetLit().GetSval()))
+	} else {
+		return false
 	}
 
 	return true
@@ -160,7 +162,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, projNode
 	}
 
 	if value.GetCol() != nil {
-		// TODO: CROSS APPLY with Column
+		// CROSS APPLY with Column
 		//valExpr := tree.NewUnresolvedName(tree.NewCStr(keypart, 1), tree.NewCStr(tblcfg.SrcTable, 1), tree.NewCStr(tblcfg.DbName, 1))
 		valExpr := tree.NewUnresolvedColName(keypart)
 
@@ -209,45 +211,48 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, projNode
 		curr_node.Limit = DeepCopyExpr(limit)
 	}
 
-	/*
-		joinnodeID := builder.appendNode(&plan.Node{
+	var joinnodeID int32
+	if value.GetCol() != nil {
+		// CROSS APPLY
+		joinnodeID = builder.appendNode(&plan.Node{
 			NodeType:  plan.Node_APPLY,
 			Children:  []int32{scanNode.NodeId, curr_node_id},
 			ApplyType: plan.Node_CROSSAPPLY,
 		}, ctx)
+	}
 
-		_ = pkType
-	*/
-	// oncond
-	wherePkEqPk, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
-		{
-			Typ: pkType,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: scanNode.BindingTags[0],
-					ColPos: pkPos, // tbl.pk
+	if value.GetF() != nil {
+		// oncond
+		wherePkEqPk, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
+			{
+				Typ: pkType,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: scanNode.BindingTags[0],
+						ColPos: pkPos, // tbl.pk
+					},
 				},
 			},
-		},
-		{
-			Typ: pkType,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: curr_node_pkcol.GetCol().RelPos, // last idxTbl (may be join) relPos
-					ColPos: 0,                               // idxTbl.pk
+			{
+				Typ: pkType,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: curr_node_pkcol.GetCol().RelPos, // last idxTbl (may be join) relPos
+						ColPos: 0,                               // idxTbl.pk
+					},
 				},
 			},
-		},
-	})
+		})
 
-	joinnodeID := builder.appendNode(&plan.Node{
-		NodeType: plan.Node_JOIN,
-		Children: []int32{scanNode.NodeId, curr_node_id},
-		JoinType: plan.Node_INNER,
-		OnList:   []*Expr{wherePkEqPk},
-		Limit:    DeepCopyExpr(scanNode.Limit),
-		Offset:   DeepCopyExpr(scanNode.Offset),
-	}, ctx)
+		joinnodeID = builder.appendNode(&plan.Node{
+			NodeType: plan.Node_JOIN,
+			Children: []int32{scanNode.NodeId, curr_node_id},
+			JoinType: plan.Node_INNER,
+			OnList:   []*Expr{wherePkEqPk},
+			Limit:    DeepCopyExpr(scanNode.Limit),
+			Offset:   DeepCopyExpr(scanNode.Offset),
+		}, ctx)
+	}
 
 	scanNode.Limit = nil
 	scanNode.Offset = nil
@@ -278,8 +283,39 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, projNode
 	projNode.Children[0] = sortByID
 
 	// check equal distFn and only compute once for equal function()
+	projids := builder.findEqualDistFnFromProject(projNode, distFnExpr)
 
 	// replace the project with ColRef (same distFn as the order by)
+	for _, id := range projids {
+		projNode.ProjectList[id] = &Expr{
+			Typ: curr_node.TableDef.Cols[1].Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: curr_node.BindingTags[0],
+					ColPos: 1, // score
+				},
+			},
+		}
+	}
+
+	// if CROSS APPLY append table_func arg[0]
+	if value.GetCol() != nil {
+		// get primary key from project list and replace with output from table function
+		pkids := builder.findPkFromProject(projNode, pkPos)
+
+		for _, id := range pkids {
+			projNode.ProjectList[id] = &Expr{
+				Typ: curr_node.TableDef.Cols[0].Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: curr_node.BindingTags[0],
+						ColPos: 0, // score
+					},
+				},
+			}
+		}
+	}
+
 	return nodeID, nil
 }
 
@@ -311,4 +347,65 @@ func (builder *QueryBuilder) getArgsFromDistFn(scanNode *plan.Node, distfn *plan
 	}
 
 	return key, value, found
+}
+
+func (builder *QueryBuilder) findPkFromProject(projNode *plan.Node, pkPos int32) []int32 {
+
+	projids := make([]int32, 0)
+	for i, expr := range projNode.ProjectList {
+		if expr.GetCol() != nil {
+			if expr.GetCol().ColPos == pkPos {
+				projids = append(projids, int32(i))
+			}
+		}
+	}
+	return projids
+}
+
+// e.g. SELECT a, L2_DISTANCE(b, '[0, ..]') FROM SRC ORDER BY L2_DISTANCE(b, '[0,..]') limit 4
+// the plan is 'project -> sort -> project -> tablescan'
+func (builder *QueryBuilder) findEqualDistFnFromProject(projNode *plan.Node, distfn *plan.Function) []int32 {
+
+	projids := make([]int32, 0)
+	optype := distfn.Func.ObjName
+
+	for i, expr := range projNode.ProjectList {
+		fn := expr.GetF()
+		if fn == nil {
+			continue
+		}
+
+		if fn.Func.ObjName != optype {
+			continue
+		}
+
+		// check args
+
+		equal := false
+		for j := range distfn.Args {
+			targ := distfn.Args[j]
+			arg := fn.Args[j]
+
+			if targ.GetCol() != nil && arg.GetCol() != nil && targ.GetCol().ColPos == arg.GetCol().ColPos {
+				equal = true
+				continue
+			}
+			if targ.GetF() != nil && arg.GetF() != nil && targ.GetF().Func.ObjName == "cast" && arg.GetF().Func.ObjName == "cast" {
+				tv32 := targ.GetF().Args[0].GetLit().GetSval()
+				v32 := arg.GetF().Args[0].GetLit().GetSval()
+				if tv32 == v32 {
+					equal = true
+					continue
+				}
+			}
+
+			equal = false
+		}
+
+		if equal {
+			projids = append(projids, int32(i))
+		}
+	}
+
+	return projids
 }
