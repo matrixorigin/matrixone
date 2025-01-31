@@ -110,6 +110,8 @@ func hnswSearchPrepare(proc *process.Process, arg *TableFunction) (tvfState, err
 				st.limit = c.U64Val
 			}
 		}
+	} else {
+		st.limit = uint64(1)
 	}
 
 	/*
