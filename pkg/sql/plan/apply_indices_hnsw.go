@@ -150,24 +150,14 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, projNode
 	exprs = append(exprs, tree.NewNumVal[string](params, params, false, tree.P_char))
 	exprs = append(exprs, tree.NewNumVal[string](tblcfgstr, tblcfgstr, false, tree.P_char))
 
-	if value.GetF() != nil {
-		fnexpr := value.GetF()
-		f32vec := fnexpr.Args[0].GetLit().GetSval()
+	fnexpr := value.GetF()
+	f32vec := fnexpr.Args[0].GetLit().GetSval()
 
-		valExpr := &tree.CastExpr{Expr: tree.NewNumVal[string](f32vec, f32vec, false, tree.P_char),
-			Type: &tree.T{InternalType: tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_VAR_STRING),
-				FamilyString: "vecf32", Family: tree.ArrayFamily, DisplayWith: partType.Width}}}
+	valExpr := &tree.CastExpr{Expr: tree.NewNumVal[string](f32vec, f32vec, false, tree.P_char),
+		Type: &tree.T{InternalType: tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_VAR_STRING),
+			FamilyString: "vecf32", Family: tree.ArrayFamily, DisplayWith: partType.Width}}}
 
-		exprs = append(exprs, valExpr)
-	}
-
-	if value.GetCol() != nil {
-		// CROSS APPLY with Column
-		//valExpr := tree.NewUnresolvedName(tree.NewCStr(keypart, 1), tree.NewCStr(tblcfg.SrcTable, 1), tree.NewCStr(tblcfg.DbName, 1))
-		valExpr := tree.NewUnresolvedColName(keypart)
-
-		exprs = append(exprs, valExpr)
-	}
+	exprs = append(exprs, valExpr)
 
 	hnsw_func := tree.NewCStr(hnsw_search_func_name, 1)
 	alias_name := "mo_hnsw_alias_0"
@@ -211,48 +201,36 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, projNode
 		curr_node.Limit = DeepCopyExpr(limit)
 	}
 
-	var joinnodeID int32
-	if value.GetCol() != nil {
-		// CROSS APPLY
-		joinnodeID = builder.appendNode(&plan.Node{
-			NodeType:  plan.Node_APPLY,
-			Children:  []int32{scanNode.NodeId, curr_node_id},
-			ApplyType: plan.Node_CROSSAPPLY,
-		}, ctx)
-	}
-
-	if value.GetF() != nil {
-		// oncond
-		wherePkEqPk, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
-			{
-				Typ: pkType,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: scanNode.BindingTags[0],
-						ColPos: pkPos, // tbl.pk
-					},
+	// oncond
+	wherePkEqPk, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
+		{
+			Typ: pkType,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: scanNode.BindingTags[0],
+					ColPos: pkPos, // tbl.pk
 				},
 			},
-			{
-				Typ: pkType,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: curr_node_pkcol.GetCol().RelPos, // last idxTbl (may be join) relPos
-						ColPos: 0,                               // idxTbl.pk
-					},
+		},
+		{
+			Typ: pkType,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: curr_node_pkcol.GetCol().RelPos, // last idxTbl (may be join) relPos
+					ColPos: 0,                               // idxTbl.pk
 				},
 			},
-		})
+		},
+	})
 
-		joinnodeID = builder.appendNode(&plan.Node{
-			NodeType: plan.Node_JOIN,
-			Children: []int32{scanNode.NodeId, curr_node_id},
-			JoinType: plan.Node_INNER,
-			OnList:   []*Expr{wherePkEqPk},
-			Limit:    DeepCopyExpr(scanNode.Limit),
-			Offset:   DeepCopyExpr(scanNode.Offset),
-		}, ctx)
-	}
+	joinnodeID := builder.appendNode(&plan.Node{
+		NodeType: plan.Node_JOIN,
+		Children: []int32{scanNode.NodeId, curr_node_id},
+		JoinType: plan.Node_INNER,
+		OnList:   []*Expr{wherePkEqPk},
+		Limit:    DeepCopyExpr(scanNode.Limit),
+		Offset:   DeepCopyExpr(scanNode.Offset),
+	}, ctx)
 
 	scanNode.Limit = nil
 	scanNode.Offset = nil
@@ -282,39 +260,23 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, projNode
 
 	projNode.Children[0] = sortByID
 
-	// check equal distFn and only compute once for equal function()
-	projids := builder.findEqualDistFnFromProject(projNode, distFnExpr)
+	/*
+		// check equal distFn and only compute once for equal function()
+		projids := builder.findEqualDistFnFromProject(projNode, distFnExpr)
 
-	// replace the project with ColRef (same distFn as the order by)
-	for _, id := range projids {
-		projNode.ProjectList[id] = &Expr{
-			Typ: curr_node.TableDef.Cols[1].Typ,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: curr_node.BindingTags[0],
-					ColPos: 1, // score
-				},
-			},
-		}
-	}
-
-	// if CROSS APPLY append table_func arg[0]
-	if value.GetCol() != nil {
-		// get primary key from project list and replace with output from table function
-		pkids := builder.findPkFromProject(projNode, pkPos)
-
-		for _, id := range pkids {
+		// replace the project with ColRef (same distFn as the order by)
+		for _, id := range projids {
 			projNode.ProjectList[id] = &Expr{
-				Typ: curr_node.TableDef.Cols[0].Typ,
+				Typ: curr_node.TableDef.Cols[1].Typ,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: curr_node.BindingTags[0],
-						ColPos: 0, // score
+						ColPos: 1, // score
 					},
 				},
 			}
 		}
-	}
+	*/
 
 	return nodeID, nil
 }
