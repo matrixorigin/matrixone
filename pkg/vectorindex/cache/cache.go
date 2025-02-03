@@ -191,6 +191,7 @@ func (c *VectorIndexCache) serve() {
 				// sig can be syscall.SIGTERM or syscall.SIGINT
 				os.Stderr.WriteString("signal handled...\n")
 				c.exited.Store(true)
+				c.Destroy()
 				return
 			case <-c.ticker.C:
 				os.Stderr.WriteString("ticker...\n")
