@@ -281,7 +281,7 @@ func Open(
 	)
 
 	now = time.Now()
-	if err = db.Replay(ctx, dataFactory, checkpointed, ckpLSN, valid); err != nil {
+	if err = db.ReplayWal(ctx, dataFactory, checkpointed, ckpLSN, valid); err != nil {
 		return
 	}
 	db.Catalog.ReplayTableRows()
