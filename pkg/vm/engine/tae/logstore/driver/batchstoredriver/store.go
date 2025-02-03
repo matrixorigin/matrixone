@@ -270,7 +270,7 @@ func (bs *baseStore) Append(e *entry.Entry) error {
 func (bs *baseStore) Replay(
 	ctx context.Context,
 	h driver.ApplyHandle,
-	_ driver.ReplayMode,
+	_ func() driver.ReplayMode,
 ) error {
 	r := newReplayer(h)
 	bs.addrs = r.addrs

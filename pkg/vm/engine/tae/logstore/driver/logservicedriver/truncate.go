@@ -55,6 +55,14 @@ func (d *LogServiceDriver) GetTruncated() (dsn uint64, err error) {
 }
 
 func (d *LogServiceDriver) onTruncateRequests(items ...any) {
+	if !d.canWrite() {
+		logutil.Warn(
+			"Wal-Readonly-Skip-Truncate",
+			zap.Uint64("dsn-intent", d.truncateDSNIntent.Load()),
+			zap.Uint64("truncated-psn", d.truncatedPSN),
+		)
+		return
+	}
 	d.doTruncate()
 }
 
@@ -187,7 +195,6 @@ func (d *LogServiceDriver) getTruncatedPSNFromBackend(
 	var (
 		client     *wrappedClient
 		retryTimes int
-		maxRetry   = 20
 		start      = time.Now()
 	)
 	defer func() {
@@ -208,11 +215,13 @@ func (d *LogServiceDriver) getTruncatedPSNFromBackend(
 	}
 	defer client.Putback()
 
-	for ; retryTimes < maxRetry; retryTimes++ {
+	cfg := d.config
+
+	for ; retryTimes < cfg.MaxRetryCount; retryTimes++ {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeoutCause(
 			ctx,
-			d.config.MaxTimeout,
+			cfg.MaxTimeout,
 			moerr.CauseGetLogserviceTruncate,
 		)
 		psn, err = client.wrapped.GetTruncatedLsn(ctx)
@@ -221,7 +230,7 @@ func (d *LogServiceDriver) getTruncatedPSNFromBackend(
 		if err == nil {
 			break
 		}
-		time.Sleep(d.config.RetryInterval() * time.Duration(retryTimes+1))
+		time.Sleep(cfg.RetryInterval() * time.Duration(retryTimes+1))
 	}
 	return
 }

@@ -152,9 +152,9 @@ func Open(
 
 	switch opts.LogStoreT {
 	case options.LogstoreBatchStore:
-		db.Wal = wal.NewDriverWithBatchStore(opts.Ctx, dirname, WALDir, nil)
+		db.Wal = wal.NewBatchStoreDriver(opts.Ctx, dirname, WALDir, nil)
 	case options.LogstoreLogservice:
-		db.Wal = wal.NewDriverWithLogservice(opts.Ctx, opts.Lc)
+		db.Wal = wal.NewLogserviceDriver(opts.Ctx, opts.Lc)
 	}
 	scheduler := newTaskScheduler(db, db.Opts.SchedulerCfg.AsyncWorkers, db.Opts.SchedulerCfg.IOWorkers)
 	db.Runtime = dbutils.NewRuntime(
@@ -281,7 +281,7 @@ func Open(
 	)
 
 	now = time.Now()
-	if err = db.Replay(ctx, dataFactory, checkpointed, ckpLSN, valid); err != nil {
+	if err = db.ReplayWal(ctx, dataFactory, checkpointed, ckpLSN, valid); err != nil {
 		return
 	}
 	db.Catalog.ReplayTableRows()
