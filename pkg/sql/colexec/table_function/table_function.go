@@ -170,8 +170,6 @@ func (tableFunction *TableFunction) Prepare(proc *process.Process) error {
 		tblArg.ctr.state, err = pluginPrepare(proc, tblArg)
 	case "hnsw_create":
 		tblArg.ctr.state, err = hnswCreatePrepare(proc, tblArg)
-	case "hnsw_refresh":
-		tblArg.ctr.state, err = hnswRefreshPrepare(proc, tblArg)
 	case "hnsw_search":
 		tblArg.ctr.state, err = hnswSearchPrepare(proc, tblArg)
 	default:

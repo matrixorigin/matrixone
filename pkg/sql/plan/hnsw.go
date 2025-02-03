@@ -23,9 +23,8 @@ import (
 
 // coldef shall copy index type
 var (
-	hnsw_create_func_name  = "hnsw_create"
-	hnsw_refresh_func_name = "hnsw_refresh"
-	hnsw_search_func_name  = "hnsw_search"
+	hnsw_create_func_name = "hnsw_create"
+	hnsw_search_func_name = "hnsw_search"
 
 	hnswBuildIndexColDefs = []*plan.ColDef{
 		{
@@ -86,40 +85,6 @@ func (builder *QueryBuilder) buildHnswCreate(tbl *tree.TableFunction, ctx *BindC
 			//Name:               tbl.String(),
 			TblFunc: &plan.TableFunction{
 				Name:  hnsw_create_func_name,
-				Param: []byte(params),
-			},
-			Cols: colDefs,
-		},
-		BindingTags:     []int32{builder.genNewTag()},
-		TblFuncExprList: exprs,
-		Children:        children,
-	}
-	return builder.appendNode(node, ctx), nil
-}
-
-// arg list [param, hnsw.IndexTableconfig (JSON)]
-func (builder *QueryBuilder) buildHnswRefresh(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
-	if len(exprs) < 2 {
-		return 0, moerr.NewInvalidInput(builder.GetContext(), "Invalid number of arguments (NARGS < 2).")
-	}
-
-	colDefs := _getColDefs(hnswBuildIndexColDefs)
-	params, err := builder.getHnswParams(tbl.Func)
-	if err != nil {
-		return 0, err
-	}
-
-	// remove the first argment and put the first argument to Param
-	exprs = exprs[1:]
-
-	node := &plan.Node{
-		NodeType: plan.Node_FUNCTION_SCAN,
-		Stats:    &plan.Stats{},
-		TableDef: &plan.TableDef{
-			TableType: "func_table", //test if ok
-			//Name:               tbl.String(),
-			TblFunc: &plan.TableFunction{
-				Name:  hnsw_refresh_func_name,
 				Param: []byte(params),
 			},
 			Cols: colDefs,
