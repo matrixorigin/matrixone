@@ -2490,12 +2490,12 @@ func buildHnswSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colM
 	}
 
 	if colMap[pkeyName].Typ.Id != int32(types.T_int64) {
-		return nil, nil, moerr.NewInternalErrorNoCtx("type of primary key must be uint64")
+		return nil, nil, moerr.NewInternalErrorNoCtx("type of primary key must be bigint")
 	}
 
 	indexParts := make([]string, 1)
 
-	// 0. Validate: We only support 1 column of either VECF32 or VECF64 type
+	// 0. Validate: We only support 1 column of VECF32
 	{
 		if len(indexInfo.KeyParts) != 1 {
 			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "don't support multi column  HNSW vector index")
@@ -2507,8 +2507,8 @@ func buildHnswSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colM
 		if _, ok := colMap[name]; !ok {
 			return nil, nil, moerr.NewInvalidInputf(ctx.GetContext(), "column '%s' is not exist", indexInfo.KeyParts[0].ColName.ColNameOrigin())
 		}
-		if colMap[name].Typ.Id != int32(types.T_array_float32) && colMap[name].Typ.Id != int32(types.T_array_float64) {
-			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "HNSW only supports VECFXX column types")
+		if colMap[name].Typ.Id != int32(types.T_array_float32) {
+			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "HNSW only supports VECF32 column types")
 		}
 
 		if len(existedIndexes) > 0 {
