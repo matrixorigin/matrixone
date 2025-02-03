@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -480,6 +481,10 @@ func (s *Scope) handleVectorHnswIndex(c *Compile, dbSource engine.Database, inde
 			}
 		}
 	}
+
+	// clear the cache (it only work in standalone mode though)
+	key := indexDefs[catalog.Hnsw_TblType_Storage].IndexTableName
+	cache.Cache.Remove(key)
 
 	// delete old data first
 	{
