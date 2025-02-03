@@ -239,6 +239,10 @@ func (h *HnswBuild) Add(key int64, vec []float32) error {
 // 2. sync the index file to index table
 func (h *HnswBuild) ToInsertSql(ts int64) ([]string, error) {
 
+	if len(h.indexes) == 0 {
+		return []string{}, nil
+	}
+
 	sqls := make([]string, 0, len(h.indexes)+1)
 	os.Stderr.WriteString(fmt.Sprintf("SaveToDb len = %d\n", len(h.indexes)))
 
