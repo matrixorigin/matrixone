@@ -50,6 +50,10 @@ type hnswCreateState struct {
 func (u *hnswCreateState) end(tf *TableFunction, proc *process.Process) error {
 	os.Stderr.WriteString("hnswCreate END\n")
 
+	if u.build == nil {
+		return nil
+	}
+
 	sqls, err := u.build.ToInsertSql(time.Now().UnixMicro())
 	if err != nil {
 		return err
