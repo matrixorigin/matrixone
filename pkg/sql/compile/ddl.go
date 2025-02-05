@@ -91,6 +91,11 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	s.ScopeAnalyzer.Start()
 	defer s.ScopeAnalyzer.Stop()
 
+	accountId, err := defines.GetAccountId(c.proc.Ctx)
+	if err != nil {
+		return err
+	}
+
 	dbName := s.Plan.GetDdl().GetDropDatabase().GetDatabase()
 	db, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
@@ -202,7 +207,7 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	if !needSkipDbs[dbName] {
 		updatePitrSql := fmt.Sprintf("update `%s`.`%s` set `%s` = %d, `%s` = %s where `%s` = %d and `%s` = '%s' and `%s` = %d and `%s` = %s",
 			catalog.MO_CATALOG, catalog.MO_PITR, catalog.MO_PITR_STATUS, 0, catalog.MO_PITR_CHANGED_TIME, "default",
-			catalog.MO_PITR_ACCOUNT_ID, c.proc.GetSessionInfo().AccountId,
+			catalog.MO_PITR_ACCOUNT_ID, accountId,
 			catalog.MO_PITR_DB_NAME, dbName,
 			catalog.MO_PITR_STATUS, 1,
 			catalog.MO_PITR_OBJECT_ID, database.GetDatabaseId(c.proc.Ctx),
@@ -2622,10 +2627,15 @@ func (s *Scope) DropTable(c *Compile) error {
 		return err
 	}
 
+	accountId, err := defines.GetAccountId(c.proc.Ctx)
+	if err != nil {
+		return err
+	}
+
 	if !needSkipDbs[dbName] {
 		updatePitrSql := fmt.Sprintf("update `%s`.`%s` set `%s` = %d, `%s` = %s where `%s` = %d and `%s` = '%s' and `%s` = '%s' and `%s` = %d and `%s` = %d",
 			catalog.MO_CATALOG, catalog.MO_PITR, catalog.MO_PITR_STATUS, 0, catalog.MO_PITR_CHANGED_TIME, "default",
-			catalog.MO_PITR_ACCOUNT_ID, c.proc.GetSessionInfo().AccountId,
+			catalog.MO_PITR_ACCOUNT_ID, accountId,
 			catalog.MO_PITR_DB_NAME, dbName,
 			catalog.MO_PITR_TABLE_NAME, tblName,
 			catalog.MO_PITR_STATUS, 1,
@@ -3682,7 +3692,10 @@ var lockMoDatabase = func(c *Compile, dbName string, lockMode lock.LockMode) err
 	if err != nil {
 		return err
 	}
-	accountID := c.proc.GetSessionInfo().AccountId
+	accountID, err := defines.GetAccountId(c.proc.Ctx)
+	if err != nil {
+		return err
+	}
 	bat, err := getLockBatch(c.proc, accountID, []string{dbName})
 	if err != nil {
 		return err
@@ -3704,7 +3717,10 @@ var lockMoTable = func(
 	if err != nil {
 		return err
 	}
-	accountID := c.proc.GetSessionInfo().AccountId
+	accountID, err := defines.GetAccountId(c.proc.Ctx)
+	if err != nil {
+		return err
+	}
 	bat, err := getLockBatch(c.proc, accountID, []string{dbName, tblName})
 	if err != nil {
 		return err

@@ -58,15 +58,18 @@ func (s *service) getMetadataByHashType(
 	)
 	method.Expr.Format(ctx)
 
+	pm := partition.PartitionMethod_Hash
+	if method.Linear {
+		pm = partition.PartitionMethod_LinearHash
+	}
+
 	metadata := partition.PartitionMetadata{
 		TableID:      def.TblId,
 		TableName:    def.Name,
 		DatabaseName: def.DbName,
-		Method:       partition.PartitionMethod_Hash,
-		// TODO: ???
-		Expression:  "",
-		Description: ctx.String(),
-		Columns:     validColumns,
+		Method:       pm,
+		Description:  ctx.String(),
+		Columns:      validColumns,
 	}
 
 	for i := uint64(0); i < option.PartBy.Num; i++ {
@@ -77,7 +80,6 @@ func (s *service) getMetadataByHashType(
 				Name:               name,
 				PartitionTableName: fmt.Sprintf("%s_%s", def.Name, name),
 				Position:           uint32(i),
-				Comment:            "",
 			},
 		)
 	}

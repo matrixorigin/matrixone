@@ -21,6 +21,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -83,8 +84,9 @@ func SetupAutoIncrService(sid string) {
 
 func NewProcessWithMPool(sid string, mp *mpool.MPool) *process.Process {
 	SetupAutoIncrService(sid)
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	proc := process.NewTopProcess(
-		context.Background(),
+		ctx,
 		mp,
 		nil, // no txn client can be set
 		nil, // no txn operator can be set
@@ -100,6 +102,7 @@ func NewProcessWithMPool(sid string, mp *mpool.MPool) *process.Process {
 	proc.Base.Lim.BatchSize = 1 << 20
 	proc.Base.Lim.ReaderSize = 1 << 20
 	proc.Base.SessionInfo.TimeZone = time.Local
+
 	return proc
 }
 

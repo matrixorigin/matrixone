@@ -25,7 +25,7 @@ type Driver interface {
 	Truncate(lsn uint64) error
 	GetTruncated() (lsn uint64, err error)
 	Close() error
-	Replay(ctx context.Context, h ApplyHandle, mode ReplayMode) error
+	Replay(ctx context.Context, h ApplyHandle, modeGetter func() ReplayMode) error
 	GetDSN() uint64
 }
 
@@ -40,10 +40,19 @@ const (
 
 type ApplyHandle = func(*entry.Entry) (replayEntryState ReplayEntryState)
 
+type DriverMode int32
+
+const (
+	DriverMode_Invalid DriverMode = iota
+	DriverMode_Writable
+	DriverMode_Readonly
+)
+
 type ReplayMode int32
 
 const (
 	ReplayMode_Invalid ReplayMode = iota
 	ReplayMode_ReplayForWrite
+	ReplayMode_ReplayForRead
 	ReplayMode_ReplayForever
 )
