@@ -1530,10 +1530,11 @@ func (c *checkpointCleaner) FastExecute(inputCtx context.Context, minTS *types.T
 
 	checker := func(ckp *checkpoint.CheckpointEntry) bool {
 		start := ckp.GetStart()
-		if !minTS.IsEmpty() && start.LT(minTS) {
-			return false
+		end := ckp.GetEnd()
+		if !minTS.IsEmpty() && ((start.IsEmpty() && end.GT(minTS)) || start.GT(minTS)) {
+			return true
 		}
-		return true
+		return false
 	}
 	var tryGC bool
 	if tryGC, err = c.tryScanLocked(ctx, memoryBuffer, checker); err != nil || !tryGC {
