@@ -73,7 +73,7 @@ func (e *CheckpointFastGCJob) Execute(ctx context.Context) error {
 	defer buffer.Close(e.mp)
 	transObjects := make(map[string]*ObjectEntry, 100)
 	coarseFilter, err := makeSoftDeleteFilterCoarseFilter(
-		&transObjects,
+		transObjects,
 		e.snapshotMeta,
 	)
 	if err != nil {
@@ -115,7 +115,7 @@ func (e *CheckpointFastGCJob) Execute(ctx context.Context) error {
 }
 
 func makeSoftDeleteFilterCoarseFilter(
-	transObjects *map[string]*ObjectEntry,
+	transObjects map[string]*ObjectEntry,
 	meta *logtail.SnapshotMeta,
 ) (
 	FilterFn,
@@ -140,7 +140,8 @@ func makeSoftDeleteFilterCoarseFilter(
 			buf := bat.Vecs[0].GetRawBytesAt(i)
 			stats := (objectio.ObjectStats)(buf)
 			name := stats.ObjectName().UnsafeString()
-			if dropTS.IsEmpty() && (*transObjects)[name] == nil {
+			dropTSIsEmpty := dropTS.IsEmpty()
+			if dropTSIsEmpty && (transObjects)[name] == nil {
 				object := &ObjectEntry{
 					stats:    &stats,
 					createTS: createTS,
@@ -148,10 +149,10 @@ func makeSoftDeleteFilterCoarseFilter(
 					db:       dbs[i],
 					table:    tableIDs[i],
 				}
-				(*transObjects)[name] = object
+				(transObjects)[name] = object
 				continue
 			}
-			if dropTS.IsEmpty() && tables[tableIDs[i]] != nil {
+			if dropTSIsEmpty && tables[tableIDs[i]] != nil {
 				continue
 			}
 
@@ -163,8 +164,8 @@ func makeSoftDeleteFilterCoarseFilter(
 				continue
 			}
 			bm.Add(uint64(i))
-			if (*transObjects)[name] != nil {
-				(*transObjects)[name].dropTS = dropTS
+			if (transObjects)[name] != nil {
+				(transObjects)[name].dropTS = dropTS
 				continue
 			}
 		}
