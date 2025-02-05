@@ -1342,7 +1342,6 @@ func (c *checkpointCleaner) DoCheck() error {
 		return err
 	}
 
-	//logutil.Infof("debug table2 is %d, stats is %v", len(debugWindow.files.stats), debugWindow.files.stats[0].ObjectName().String())
 	objects1, objects2, equal := mergeWindow.Compare(debugWindow, buffer)
 	if !equal {
 		logutil.Error(
@@ -1441,12 +1440,14 @@ func (c *checkpointCleaner) Process(
 	var name, msg string
 	var checker func(*checkpoint.CheckpointEntry) bool
 	var execute func(context.Context, *containers.OneSchemaBatchBuffer) error
+	var scanCount int
 	minTS := &types.TS{}
 	switch jobType {
 	case JT_GCExecute:
 		name = "gc-execute"
 		msg = "GC-EXECUTE-PROCESS"
 		execute = c.tryGCLocked
+		scanCount = 10
 	case JT_GCFastExecute:
 		name = "gc-fast-execute"
 		msg = "GC-FAST-EXECUTE-PROCESS"
@@ -1462,6 +1463,7 @@ func (c *checkpointCleaner) Process(
 			return false
 		}
 		execute = c.tryFastGCLocked
+		scanCount = 20
 	default:
 		return moerr.NewInternalErrorNoCtx("unknown job type")
 	}
@@ -1505,7 +1507,8 @@ func (c *checkpointCleaner) Process(
 	defer memoryBuffer.Close(c.mp)
 
 	var tryGC bool
-	if tryGC, err = c.tryScanLocked(ctx, memoryBuffer, checker); err != nil || !tryGC {
+	if tryGC, err = c.tryScanLocked(
+		ctx, memoryBuffer, scanCount, checker); err != nil || !tryGC {
 		return
 	}
 	return execute(ctx, memoryBuffer)
@@ -1637,9 +1640,13 @@ func (c *checkpointCleaner) doGCAgainstFastLocked(
 // it will update `mutation.scanned` and `mutation.metaFiles`
 // it will update the scan watermark
 // it will save the snapshot meta and table info to the disk
+
+// checker is the specified checker function, used to filter checkpoints.
+// The checker is nil during normal GC, and is passed in during fast-gc.
 func (c *checkpointCleaner) tryScanLocked(
 	ctx context.Context,
 	memoryBuffer *containers.OneSchemaBatchBuffer,
+	scanCount int,
 	checker func(*checkpoint.CheckpointEntry) bool,
 ) (tryGC bool, err error) {
 	// get the max scanned timestamp
@@ -1649,7 +1656,7 @@ func (c *checkpointCleaner) tryScanLocked(
 	}
 
 	// get up to 10 incremental checkpoints starting from the max scanned timestamp
-	checkpoints := c.checkpointCli.ICKPSeekLT(maxScannedTS, 10)
+	checkpoints := c.checkpointCli.ICKPSeekLT(maxScannedTS, scanCount)
 
 	// quick return if there is no incremental checkpoint
 	if len(checkpoints) == 0 {
