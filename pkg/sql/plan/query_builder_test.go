@@ -239,7 +239,7 @@ func TestQueryBuilder_bindWhere(t *testing.T) {
 	builder, bindCtx := genBuilderAndCtx()
 	bindCtx.binder = NewWhereBinder(builder, bindCtx)
 
-	stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, "select * from select_test.bind_select where a > 0 and b < 0 or c = 0", 1)
+	stmts, _ := parsers.Parse(context.TODO(), dialect.MYSQL, "select * from select_test.bind_select where a > 0 and b < 0 or c = 0", 1)
 	clause := stmts[0].(*tree.Select).Select.(*tree.SelectClause).Where
 
 	newNodeID, boundFilterList, notCacheable, err := builder.bindWhere(bindCtx, clause, 0)
@@ -285,10 +285,10 @@ func TestQueryBuilder_bindWhere(t *testing.T) {
 func TestQueryBuilder_bindGroupBy(t *testing.T) {
 	builder, bindCtx := genBuilderAndCtx()
 
-	stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, "select a from select_test.bind_select group by a", 1)
+	stmts, _ := parsers.Parse(context.TODO(), dialect.MYSQL, "select a from select_test.bind_select group by a", 1)
 	clause := stmts[0].(*tree.Select).Select.(*tree.SelectClause).GroupBy
 
-	_, err = builder.bindGroupBy(bindCtx, clause, nil, nil, nil)
+	_, err := builder.bindGroupBy(bindCtx, clause, nil, nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, 1, len(bindCtx.groups))
 	colExpr, ok := bindCtx.groups[0].Expr.(*plan.Expr_Col)
@@ -307,10 +307,10 @@ func TestQueryBuilder_bindGroupBy(t *testing.T) {
 func TestQueryBuilder_bindHaving(t *testing.T) {
 	builder, bindCtx := genBuilderAndCtx()
 
-	stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, "select a from select_test.bind_select group by a having a > 0", 1)
+	stmts, _ := parsers.Parse(context.TODO(), dialect.MYSQL, "select a from select_test.bind_select group by a having a > 0", 1)
 	selectClause := stmts[0].(*tree.Select).Select.(*tree.SelectClause)
 
-	_, err = builder.bindGroupBy(bindCtx, selectClause.GroupBy, nil, nil, nil)
+	_, err := builder.bindGroupBy(bindCtx, selectClause.GroupBy, nil, nil, nil)
 	require.NoError(t, err)
 
 	boundHavingList, err := builder.bindHaving(bindCtx, selectClause.Having, NewHavingBinder(builder, bindCtx))
