@@ -323,10 +323,6 @@ func (db *DB) ReplayWal(
 		return
 	}
 
-	if err = db.TxnMgr.Init(replayer.GetMaxTS()); err != nil {
-		return
-	}
-
 	// TODO: error?
 	db.usageMemo.EstablishFromCKPs(db.Catalog)
 	db.Catalog.ReplayTableRows()

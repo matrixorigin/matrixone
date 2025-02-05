@@ -259,15 +259,6 @@ func (mgr *TxnManager) GetTxnSkipFlags() TxnSkipFlag {
 	return TxnSkipFlag(mgr.txns.skipFlags.Load())
 }
 
-func (mgr *TxnManager) Init(prevTs types.TS) error {
-	logutil.Info(
-		"TxnManager-Init",
-		zap.String("prev-ts", prevTs.ToString()),
-	)
-	mgr.ts.allocator.SetStart(prevTs)
-	return nil
-}
-
 // Note: Replay should always runs in a single thread
 func (mgr *TxnManager) OnReplayTxn(txn txnif.AsyncTxn) (err error) {
 	mgr.storeTxn(txn, TxnFlag_Replay)
