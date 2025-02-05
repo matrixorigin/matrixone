@@ -126,10 +126,6 @@ func (c *MockCleaner) GetPITRs() (*logtail.PitrInfo, error) {
 func (c *MockCleaner) SetTid(tid uint64) {
 }
 
-func (c *MockCleaner) FastExecute(context.Context, *types.TS) error {
-	return nil
-}
-
 func (c *MockCleaner) EnableGC() {
 }
 
