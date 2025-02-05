@@ -7674,6 +7674,76 @@ func TestCkpLeak(t *testing.T) {
 
 }
 
+func TestFastGC(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
+	opts := config.WithQuickScanAndCKPOpts(nil)
+	opts.GCCfg.GCTTL = 1 * time.Hour
+	opts.GCCfg.ScanGCInterval = 1 * time.Hour
+	options.WithDisableGCCheckpoint()(opts)
+	merge.StopMerge.Store(true)
+	defer merge.StopMerge.Store(false)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	db := tae.DB
+
+	schema1 := catalog.MockSchemaAll(13, 2)
+	schema1.Extra.BlockMaxRows = 10
+	schema1.Extra.ObjectMaxBlocks = 2
+
+	schema2 := catalog.MockSchemaAll(13, 2)
+	schema2.Extra.BlockMaxRows = 10
+	schema2.Extra.ObjectMaxBlocks = 2
+	{
+		txn, _ := db.StartTxn(nil)
+		database, err := txn.CreateDatabase("db", "", "")
+		assert.Nil(t, err)
+		_, err = database.CreateRelation(schema1)
+		assert.Nil(t, err)
+		_, err = database.CreateRelation(schema2)
+		assert.Nil(t, err)
+		assert.Nil(t, txn.Commit(context.Background()))
+	}
+	bat := catalog.MockBatch(schema1, int(schema1.Extra.BlockMaxRows*10-1))
+	defer bat.Close()
+	bats := bat.Split(bat.Length())
+
+	pool, err := ants.NewPool(20)
+	assert.Nil(t, err)
+	defer pool.Release()
+	var wg sync.WaitGroup
+
+	for _, data := range bats {
+		wg.Add(2)
+		err = pool.Submit(testutil.AppendClosure(t, data, schema1.Name, db, &wg))
+		assert.Nil(t, err)
+		err = pool.Submit(testutil.AppendClosure(t, data, schema2.Name, db, &wg))
+		assert.Nil(t, err)
+	}
+	wg.Wait()
+	testutils.WaitExpect(10000, func() bool {
+		return db.Runtime.Scheduler.GetPenddingLSNCnt() == 0
+	})
+	t.Log(tae.Catalog.SimplePPString(common.PPL1))
+	if db.Runtime.Scheduler.GetPenddingLSNCnt() != 0 {
+		return
+	}
+	tae.ForceCheckpoint()
+	logutil.Infof("start gc")
+	minTS := tae.TxnMgr.Now()
+	err = db.DiskCleaner.FastGC(ctx, &minTS)
+	assert.Nil(t, err)
+	assert.Equal(t, uint64(0), db.Runtime.Scheduler.GetPenddingLSNCnt())
+	testutils.WaitExpect(10000, func() bool {
+		return db.DiskCleaner.GetCleaner().GetScanWaterMark() != nil
+	})
+	testutils.WaitExpect(10000, func() bool {
+		return db.DiskCleaner.GetCleaner().GetMinMerged() != nil
+	})
+}
+
 func TestGlobalCheckpoint2(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
