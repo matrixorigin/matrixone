@@ -158,7 +158,7 @@ func makeSoftDeleteFilterCoarseFilter(
 				}
 			}
 
-			if _, ok := (*filterTable)[tableIDs[i]]; ok {
+			if _, ok := filterTable[tableIDs[i]]; ok {
 				continue
 			}
 

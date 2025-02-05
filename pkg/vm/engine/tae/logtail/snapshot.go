@@ -334,8 +334,8 @@ func IsMoTable(tid uint64) bool {
 	return tid == catalog2.MO_TABLES_ID
 }
 
-func (sm *SnapshotMeta) GetSnapshotTableIDs() *map[uint64]struct{} {
-	return &sm.snapshotTableIDs
+func (sm *SnapshotMeta) GetSnapshotTableIDs() map[uint64]struct{} {
+	return sm.snapshotTableIDs
 }
 func (sm *SnapshotMeta) GetTableIDs() map[uint64]*tableInfo {
 	sm.RLock()
