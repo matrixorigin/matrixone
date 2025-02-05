@@ -280,11 +280,12 @@ func Open(
 		zap.String("max-checkpoint", checkpointed.ToString()),
 	)
 
+	db.LogtailMgr.UpdateMaxCommittedLSN(ckpLSN)
+
 	now = time.Now()
 	if err = db.ReplayWal(ctx, dataFactory, checkpointed, ckpLSN, valid); err != nil {
 		return
 	}
-	db.Catalog.ReplayTableRows()
 
 	// checkObjectState(db)
 	logutil.Info(

@@ -179,6 +179,12 @@ func (mgr *Manager) Start() {
 	mgr.collectLogtailQueue.Start()
 }
 
+func (mgr *Manager) UpdateMaxCommittedLSN(lsn uint64) {
+	if lsn > mgr.maxCommittedLSN.Load() {
+		mgr.maxCommittedLSN.Store(lsn)
+	}
+}
+
 func (mgr *Manager) GetMaxCommittedLSN() uint64 {
 	return mgr.maxCommittedLSN.Load()
 }

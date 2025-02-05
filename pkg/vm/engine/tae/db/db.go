@@ -329,6 +329,7 @@ func (db *DB) ReplayWal(
 
 	// TODO: error?
 	db.usageMemo.EstablishFromCKPs(db.Catalog)
+	db.Catalog.ReplayTableRows()
 	return
 }
 
