@@ -152,8 +152,11 @@ func makeSoftDeleteFilterCoarseFilter(
 				(transObjects)[name] = object
 				continue
 			}
-			if dropTSIsEmpty && tables[tableIDs[i]] != nil {
-				continue
+			if dropTSIsEmpty {
+				table := tables[tableIDs[i]]
+				if table != nil && !table.IsDrop() {
+					continue
+				}
 			}
 
 			if _, ok := (*filterTable)[tableIDs[i]]; ok {

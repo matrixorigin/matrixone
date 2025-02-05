@@ -169,6 +169,10 @@ type tableInfo struct {
 	pk        string
 }
 
+func (t *tableInfo) IsDrop() bool {
+	return !t.deleteAt.IsEmpty()
+}
+
 type PitrInfo struct {
 	cluster  types.TS
 	account  map[uint32]types.TS

@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -1320,7 +1321,6 @@ func (c *checkpointCleaner) DoCheck() error {
 		return err
 	}
 
-	//logutil.Infof("debug table is %d, stats is %v", len(debugWindow.files.stats), debugWindow.files.stats[0].ObjectName().String())
 	if _, _, err = debugWindow.ExecuteGlobalCheckpointBasedGC(
 		c.ctx,
 		gCkp,
@@ -1426,78 +1426,50 @@ func (c *checkpointCleaner) DoCheck() error {
 	return nil
 }
 
-func (c *checkpointCleaner) Process(inputCtx context.Context) (err error) {
+func (c *checkpointCleaner) Process(
+	inputCtx context.Context,
+	jobType tasks.JobType,
+	minTS *types.TS,
+) (err error) {
 	if !c.GCEnabled() {
 		return
 	}
 	now := time.Now()
 
-	c.StartMutationTask("gc-process")
-	defer c.StopMutationTask()
-
 	startScanWaterMark := c.GetScanWaterMark()
 	startGCWaterMark := c.GetGCWaterMark()
-
-	defer func() {
-		endScanWaterMark := c.GetScanWaterMark()
-		endGCWaterMark := c.GetGCWaterMark()
-		logutil.Info(
-			"GC-TRACE-PROCESS",
-			zap.String("task", c.TaskNameLocked()),
-			zap.Duration("duration", time.Since(now)),
-			zap.Error(err),
-			zap.String("start-scan-watermark", startScanWaterMark.String()),
-			zap.String("end-scan-watermark", endScanWaterMark.String()),
-			zap.String("start-gc-watermark", startGCWaterMark.String()),
-			zap.String("end-gc-watermark", endGCWaterMark.String()),
-		)
-	}()
-
-	ctx, cancel := context.WithCancelCause(inputCtx)
-	defer cancel(nil)
-	go func() {
-		select {
-		case <-ctx.Done():
-		case <-c.ctx.Done():
-			cancel(context.Cause(c.ctx))
-		case <-inputCtx.Done():
-			cancel(context.Cause(inputCtx))
+	var name, msg string
+	var checker func(*checkpoint.CheckpointEntry) bool
+	var execute func(context.Context, *containers.OneSchemaBatchBuffer) error
+	switch jobType {
+	case JT_GCExecute:
+		name = "gc-execute"
+		msg = "GC-EXECUTE-PROCESS"
+		execute = c.tryGCLocked
+	case JT_GCFastExecute:
+		name = "gc-fast-execute"
+		msg = "GC-FAST-EXECUTE-PROCESS"
+		checker = func(ckp *checkpoint.CheckpointEntry) bool {
+			start := ckp.GetStart()
+			end := ckp.GetEnd()
+			if !minTS.IsEmpty() &&
+				((start.IsEmpty() && end.LT(minTS)) ||
+					start.LT(minTS)) {
+				return true
+			}
+			return false
 		}
-	}()
-
-	select {
-	case <-ctx.Done():
-		return context.Cause(ctx)
+		execute = c.tryFastGCLocked
 	default:
+		return moerr.NewInternalErrorNoCtx("unknown job type")
 	}
-
-	memoryBuffer := MakeGCWindowBuffer(16 * mpool.MB)
-	defer memoryBuffer.Close(c.mp)
-
-	var tryGC bool
-	if tryGC, err = c.tryScanLocked(ctx, memoryBuffer, nil); err != nil || !tryGC {
-		return
-	}
-	err = c.tryGCLocked(ctx, memoryBuffer)
-	return
-}
-
-func (c *checkpointCleaner) FastExecute(inputCtx context.Context, minTS *types.TS) (err error) {
-	if !c.GCEnabled() {
-		return
-	}
-	now := time.Now()
-
-	c.StartMutationTask("gc-fast-execute")
+	c.StartMutationTask(name)
 	defer c.StopMutationTask()
-
-	startScanWaterMark := c.GetScanWaterMark()
-	startGCWaterMark := c.GetGCWaterMark()
 	defer func() {
 		endScanWaterMark := c.GetScanWaterMark()
 		endGCWaterMark := c.GetGCWaterMark()
 		logutil.Info(
-			"GC-FAST-TRACE-PROCESS",
+			msg,
 			zap.String("task", c.TaskNameLocked()),
 			zap.Duration("duration", time.Since(now)),
 			zap.Error(err),
@@ -1508,6 +1480,7 @@ func (c *checkpointCleaner) FastExecute(inputCtx context.Context, minTS *types.T
 			zap.String("min-ts", minTS.ToString()),
 		)
 	}()
+
 	ctx, cancel := context.WithCancelCause(inputCtx)
 	defer cancel(nil)
 	go func() {
@@ -1525,22 +1498,15 @@ func (c *checkpointCleaner) FastExecute(inputCtx context.Context, minTS *types.T
 		return context.Cause(ctx)
 	default:
 	}
+
 	memoryBuffer := MakeGCWindowBuffer(16 * mpool.MB)
 	defer memoryBuffer.Close(c.mp)
 
-	checker := func(ckp *checkpoint.CheckpointEntry) bool {
-		start := ckp.GetStart()
-		end := ckp.GetEnd()
-		if !minTS.IsEmpty() && ((start.IsEmpty() && end.GT(minTS)) || start.GT(minTS)) {
-			return true
-		}
-		return false
-	}
 	var tryGC bool
 	if tryGC, err = c.tryScanLocked(ctx, memoryBuffer, checker); err != nil || !tryGC {
 		return
 	}
-	return c.tryFastGCLocked(ctx, memoryBuffer)
+	return execute(ctx, memoryBuffer)
 }
 
 func (c *checkpointCleaner) tryFastGCLocked(

@@ -16,6 +16,7 @@ package gc
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -30,9 +31,8 @@ import (
 
 type Cleaner interface {
 	Replay(context.Context) error
-	Process(context.Context) error
+	Process(context.Context, tasks.JobType, *types.TS) error
 	TryGC(context.Context) error
-	FastExecute(context.Context, *types.TS) error
 	AddChecker(checker func(item any) bool, key string) int
 	RemoveChecker(key string) error
 	GetScanWaterMark() *checkpoint.CheckpointEntry

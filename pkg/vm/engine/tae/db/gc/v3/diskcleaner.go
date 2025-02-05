@@ -280,7 +280,7 @@ func (cleaner *DiskCleaner) doExecute(ctx context.Context) (err error) {
 			}
 		}
 	}
-	err = cleaner.cleaner.Process(ctx)
+	err = cleaner.cleaner.Process(ctx, JT_GCExecute, nil)
 	return
 }
 
@@ -310,7 +310,7 @@ func (cleaner *DiskCleaner) doFastExecute(ctx context.Context, ts *types.TS) (er
 			}
 		}
 	}
-	err = cleaner.cleaner.FastExecute(ctx, ts)
+	err = cleaner.cleaner.Process(ctx, JT_GCFastExecute, ts)
 	return
 }
 
