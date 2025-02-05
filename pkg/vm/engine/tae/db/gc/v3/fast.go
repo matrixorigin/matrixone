@@ -141,20 +141,20 @@ func makeSoftDeleteFilterCoarseFilter(
 			stats := (objectio.ObjectStats)(buf)
 			name := stats.ObjectName().UnsafeString()
 			dropTSIsEmpty := dropTS.IsEmpty()
-			if dropTSIsEmpty && (transObjects)[name] == nil {
-				object := &ObjectEntry{
-					stats:    &stats,
-					createTS: createTS,
-					dropTS:   dropTS,
-					db:       dbs[i],
-					table:    tableIDs[i],
-				}
-				(transObjects)[name] = object
-				continue
-			}
 			if dropTSIsEmpty {
+				if (transObjects)[name] == nil {
+					object := &ObjectEntry{
+						stats:    &stats,
+						createTS: createTS,
+						dropTS:   dropTS,
+						db:       dbs[i],
+						table:    tableIDs[i],
+					}
+					(transObjects)[name] = object
+				}
 				table := tables[tableIDs[i]]
 				if table != nil && !table.IsDrop() {
+					logutil.Infof("table %d is not drop", tableIDs[i])
 					continue
 				}
 			}
