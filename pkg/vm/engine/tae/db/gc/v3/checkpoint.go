@@ -1429,7 +1429,7 @@ func (c *checkpointCleaner) DoCheck() error {
 func (c *checkpointCleaner) Process(
 	inputCtx context.Context,
 	jobType tasks.JobType,
-	minTS *types.TS,
+	ts *types.TS,
 ) (err error) {
 	if !c.GCEnabled() {
 		return
@@ -1441,6 +1441,7 @@ func (c *checkpointCleaner) Process(
 	var name, msg string
 	var checker func(*checkpoint.CheckpointEntry) bool
 	var execute func(context.Context, *containers.OneSchemaBatchBuffer) error
+	minTS := &types.TS{}
 	switch jobType {
 	case JT_GCExecute:
 		name = "gc-execute"
@@ -1449,6 +1450,7 @@ func (c *checkpointCleaner) Process(
 	case JT_GCFastExecute:
 		name = "gc-fast-execute"
 		msg = "GC-FAST-EXECUTE-PROCESS"
+		minTS = ts
 		checker = func(ckp *checkpoint.CheckpointEntry) bool {
 			start := ckp.GetStart()
 			end := ckp.GetEnd()
