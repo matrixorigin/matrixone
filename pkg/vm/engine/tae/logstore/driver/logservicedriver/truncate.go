@@ -16,6 +16,7 @@ package logservicedriver
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"go.uber.org/zap"
@@ -123,6 +124,17 @@ func (d *LogServiceDriver) doTruncate() {
 		d.truncatedPSN = psnTruncated
 	}
 	d.truncateByPSN(psnTruncated)
+}
+
+// it is only called by the replayer and no concurrent scenario
+// 1. update the truncatedPSN and the truncateDSNIntent
+func (d *LogServiceDriver) commitTruncateInfo(psn uint64) {
+	if psn < d.truncatedPSN {
+		panic(fmt.Sprintf("invalid psn %d < %d", psn, d.truncatedPSN))
+		return
+	}
+	d.truncatedPSN = psn
+	d.truncateByPSN(psn)
 }
 
 func (d *LogServiceDriver) truncateFromRemote(

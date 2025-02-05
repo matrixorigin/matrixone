@@ -6784,6 +6784,7 @@ func TestAppendAndGC2(t *testing.T) {
 		func() driver.ReplayMode {
 			return driver.ReplayMode_ReplayForWrite
 		},
+		nil,
 	)
 	assert.Nil(t, err)
 	assert.NotEqual(t, 0, len(files))

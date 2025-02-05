@@ -125,6 +125,7 @@ func (replayer *WalReplayer) Replay(ctx context.Context) (err error) {
 		ctx,
 		replayer.OnReplayEntry,
 		func() driver.ReplayMode { return driver.ReplayMode_ReplayForWrite },
+		nil,
 	); err != nil {
 		return
 	}

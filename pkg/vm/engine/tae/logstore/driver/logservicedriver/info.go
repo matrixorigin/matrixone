@@ -22,7 +22,9 @@ import (
 
 	"github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"go.uber.org/zap"
 )
 
 var ErrDSNNotFound = moerr.NewInternalErrorNoCtx("dsn not found")
@@ -153,8 +155,22 @@ func (sns *sequenceNumberState) recordCommitInfo(committer *groupCommitter) {
 }
 
 func (sns *sequenceNumberState) truncateByPSN(psn uint64) {
+	var (
+		beforeCnt uint64
+		afterCnt  uint64
+	)
+	defer func() {
+		logutil.Info(
+			"Wal-Truncate-By-PSN",
+			zap.Uint64("psn", psn),
+			zap.Uint64("before", beforeCnt),
+			zap.Uint64("after", afterCnt),
+			zap.Uint64("deleted", beforeCnt-afterCnt),
+		)
+	}()
 	sns.sequence.mu.Lock()
 	defer sns.sequence.mu.Unlock()
+	beforeCnt = uint64(len(sns.sequence.psn2DSNMap))
 	candidates := make([]uint64, 0)
 	// collect all the PSN that is less than the given PSN
 	for sn := range sns.sequence.psn2DSNMap {
@@ -169,6 +185,7 @@ func (sns *sequenceNumberState) truncateByPSN(psn uint64) {
 	for _, lsn := range candidates {
 		delete(sns.sequence.psn2DSNMap, lsn)
 	}
+	afterCnt = uint64(len(sns.sequence.psn2DSNMap))
 }
 
 func (sns *sequenceNumberState) getCommittedDSNWatermark() uint64 {

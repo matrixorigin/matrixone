@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -182,6 +183,7 @@ func TestAppendSkipCmd2(t *testing.T) {
 			func() storeDriver.ReplayMode {
 				return storeDriver.ReplayMode_ReplayForWrite
 			},
+			nil,
 		)
 		t.Logf("list1: %v", list1)
 		t.Logf("list2: %v", list2)
@@ -228,6 +230,7 @@ func TestAppendSkipCmd3(t *testing.T) {
 			func() storeDriver.ReplayMode {
 				return storeDriver.ReplayMode_ReplayForWrite
 			},
+			nil,
 		)
 		assert.NoError(t, err)
 		assert.Equal(t, 0, entryCount)
@@ -302,6 +305,7 @@ func TestAppendSkipCmd4(t *testing.T) {
 			func() storeDriver.ReplayMode {
 				return storeDriver.ReplayMode_ReplayForWrite
 			},
+			nil,
 		)
 		assert.NoError(t, err)
 		assert.Equal(t, 3, entryCount)
@@ -364,6 +368,7 @@ func TestAppendSkipCmd4(t *testing.T) {
 			func() storeDriver.ReplayMode {
 				return storeDriver.ReplayMode_ReplayForWrite
 			},
+			nil,
 		)
 		assert.NoError(t, err)
 		assert.Equal(t, 4, entryCount)
@@ -440,6 +445,7 @@ func TestAppendSkipCmd5(t *testing.T) {
 			func() storeDriver.ReplayMode {
 				return storeDriver.ReplayMode_ReplayForWrite
 			},
+			nil,
 		)
 		assert.NoError(t, err)
 		assert.Equal(t, 4, entryCount)
@@ -919,6 +925,9 @@ func Test_Replayer9(t *testing.T) {
 			func() storeDriver.ReplayMode {
 				return storeDriver.ReplayMode_ReplayForever
 			},
+			&storeDriver.ReplayOption{
+				PollTruncateInterval: 10 * time.Millisecond,
+			},
 		)
 	}()
 
@@ -931,6 +940,7 @@ func Test_Replayer9(t *testing.T) {
 		func() storeDriver.ReplayMode {
 			return storeDriver.ReplayMode_ReplayForWrite
 		},
+		nil,
 	)
 	assert.NoError(t, err)
 
@@ -1016,6 +1026,9 @@ func Test_Replayer9(t *testing.T) {
 			},
 			func() storeDriver.ReplayMode {
 				return storeDriver.ReplayMode_ReplayForever
+			},
+			&storeDriver.ReplayOption{
+				PollTruncateInterval: 10 * time.Millisecond,
 			},
 		)
 	}()
@@ -1147,6 +1160,7 @@ func Test_Replayer11(t *testing.T) {
 			func() storeDriver.ReplayMode {
 				return storeDriver.ReplayMode(mode.Load())
 			},
+			nil,
 		)
 		assert.NoError(t, err)
 	}()
@@ -1161,6 +1175,7 @@ func Test_Replayer11(t *testing.T) {
 		func() storeDriver.ReplayMode {
 			return storeDriver.ReplayMode_ReplayForWrite
 		},
+		nil,
 	)
 	assert.NoError(t, err)
 
@@ -1200,6 +1215,7 @@ func Test_Replayer11(t *testing.T) {
 			func() storeDriver.ReplayMode {
 				return storeDriver.ReplayMode(mode.Load())
 			},
+			nil,
 		)
 		assert.NoError(t, err)
 	}()
