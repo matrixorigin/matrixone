@@ -170,6 +170,7 @@ func (w *GCWindow) ExecuteGlobalCheckpointBasedGC(
 
 func (w *GCWindow) ExecuteFastBasedGC(
 	ctx context.Context,
+	ts *types.TS,
 	accountSnapshots map[uint32][]types.TS,
 	pitrs *logtail.PitrInfo,
 	snapshotMeta *logtail.SnapshotMeta,
@@ -184,7 +185,7 @@ func (w *GCWindow) ExecuteFastBasedGC(
 	sourcer := w.MakeFilesReader(ctx, fs)
 
 	job := NewCheckpointFastGCJob(
-		&types.TS{},
+		ts,
 		sourcer,
 		pitrs,
 		accountSnapshots,

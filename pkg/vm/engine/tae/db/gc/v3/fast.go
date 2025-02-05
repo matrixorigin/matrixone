@@ -167,6 +167,7 @@ func makeSoftDeleteFilterCoarseFilter(
 				continue
 			}
 			bm.Add(uint64(i))
+			logutil.Infof("drop name %s ", name)
 			if (transObjects)[name] != nil {
 				(transObjects)[name].dropTS = dropTS
 				continue

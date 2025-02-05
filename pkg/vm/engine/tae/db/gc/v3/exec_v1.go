@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -311,11 +312,14 @@ func MakeSnapshotAndPitrFineFilter(
 				if !logtail.ObjectIsSnapshotRefers(
 					entry.stats, pitr, &entry.createTS, &entry.dropTS, snapshots,
 				) {
+					logutil.Infof("object11 %s is not snapshot refers, %s-%s", name, createTS.ToString(), dropTS.ToString())
 					bm.Add(uint64(i))
 				}
+				logutil.Infof("object %s is  snapshot refers, %s-%s", name, entry.createTS.ToString(), entry.dropTS.ToString())
 				continue
 			}
 			if !createTS.LT(ts) || !dropTS.LT(ts) {
+				logutil.Infof("object %s is not in the time range, %s, %s, %s", name, createTS.ToString(), dropTS.ToString(), ts.ToString())
 				continue
 			}
 			if dropTS.IsEmpty() {
@@ -324,6 +328,7 @@ func MakeSnapshotAndPitrFineFilter(
 			if !logtail.ObjectIsSnapshotRefers(
 				&stats, pitr, &createTS, &dropTS, snapshots,
 			) {
+				logutil.Infof("object %s is not snapshot refers, %s-%s", name, createTS.ToString(), dropTS.ToString())
 				bm.Add(uint64(i))
 			}
 		}

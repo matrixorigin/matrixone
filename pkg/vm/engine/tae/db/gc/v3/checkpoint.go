@@ -1607,9 +1607,10 @@ func (c *checkpointCleaner) doGCAgainstFastLocked(
 			zap.String("extra-err-msg", extraErrMsg),
 		)
 	}()
-
+	scanWindow := c.GetScannedWindowLocked()
 	if filesToGC, metafile, err = window.ExecuteFastBasedGC(
 		c.ctx,
+		&scanWindow.tsRange.end,
 		accountSnapshots,
 		pitrs,
 		c.mutation.snapshotMeta,
