@@ -178,7 +178,7 @@ func (mgr *Manager) generateLogtailWithTxn(txn *txnWithLogtails) {
 // OnEndPrePrepare is a listener for TxnManager. When a txn completes PrePrepare,
 // add it to the logtail manager
 func (mgr *Manager) OnEndPrePrepare(txn txnif.AsyncTxn) {
-	if txn.GetStore().GetTransactionType() == txnif.TxnType_Heartbeat {
+	if txn.GetStore().IsHeartbeat() {
 		return
 	}
 	mgr.table.AddTxn(txn)

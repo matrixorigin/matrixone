@@ -76,7 +76,6 @@ func newWalReplayer(
 		lsn:         lsn,
 		// for ckp version less than 7, lsn is always 0 and lsnCheck is disable
 		enableLSNCheck: enableLSNCheck,
-		wg:             sync.WaitGroup{},
 		txnCmdChan:     make(chan *txnbase.TxnCmd, 100),
 	}
 	replayer.OnTimeStamp(ckpedTS)

@@ -589,7 +589,7 @@ func (db *txnDB) CollectCmd(cmdMgr *commandManager) (err error) {
 	return
 }
 
-func (db *txnDB) AddTxnEntry(t txnif.TxnEntryType, entry txnif.TxnEntry) {
+func (db *txnDB) AddTxnEntry(entry txnif.TxnEntry) {
 	// TODO
 }
 
