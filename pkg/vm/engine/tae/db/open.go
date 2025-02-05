@@ -15,7 +15,6 @@
 package db
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"path"
@@ -26,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"go.uber.org/zap"
 
-	"github.com/BurntSushi/toml"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -113,14 +111,11 @@ func Open(
 	opts = opts.FillDefaults(dirname)
 	fillRuntimeOptions(opts)
 
-	wbuf := &bytes.Buffer{}
-	werr := toml.NewEncoder(wbuf).Encode(opts)
 	logutil.Info(
 		Phase_Open,
-		zap.String("config", wbuf.String()),
-		zap.Error(werr),
+		zap.String("config", opts.JsonString()),
 	)
-	serviceDir := path.Join(dirname, "data")
+
 	if opts.Fs == nil {
 		// TODO:fileservice needs to be passed in as a parameter
 		opts.Fs = objectio.TmpNewFileservice(ctx, path.Join(dirname, "data"))
@@ -138,11 +133,19 @@ func Open(
 	for _, opt := range dbOpts {
 		opt(db)
 	}
+
+	db.Controller = NewController(db)
+	db.Controller.Start()
+	onErrorCalls = append(onErrorCalls, func() {
+		db.Controller.Stop()
+	})
+
 	txnMode := db.GetTxnMode()
 	if !txnMode.IsValid() {
 		panic(fmt.Sprintf("open-tae: invalid txn mode %s", txnMode))
 	}
 
+	serviceDir := path.Join(dirname, "data")
 	fs := objectio.NewObjectFS(opts.Fs, serviceDir)
 	localFs := objectio.NewObjectFS(opts.LocalFs, serviceDir)
 	transferTable, err := model.NewTransferTable[*model.TransferHashPage](ctx, opts.LocalFs)
@@ -341,9 +344,6 @@ func Open(
 	if err = AddCronJobs(db); err != nil {
 		return
 	}
-
-	db.Controller = NewController(db)
-	db.Controller.Start()
 
 	// For debug or test
 	//fmt.Println(db.Catalog.SimplePPString(common.PPL3))
