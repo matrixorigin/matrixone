@@ -107,7 +107,6 @@ func (e *CheckpointFastGCJob) Execute(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	transObjects = nil
 
 	e.result.filesNotGC = make([]objectio.ObjectStats, 0, len(newFiles))
 	e.result.filesNotGC = append(e.result.filesNotGC, newFiles...)
