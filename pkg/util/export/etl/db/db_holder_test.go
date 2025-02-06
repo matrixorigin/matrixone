@@ -230,6 +230,40 @@ func TestCheck(t *testing.T) {
 	require.Equal(t, true, got)
 }
 
+func Test_WriteRowRecords2(t *testing.T) {
+	SyncTestWriteRowRecords(t, func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("an error '%s' was not expected when opening a stub database connection", err)
+		}
+		defer db.Close()
+		mock.ExpectExec(regexp.QuoteMeta(`LOAD DATA INLINE FORMAT='csv', DATA='record1
+' INTO TABLE testDB.testTable`)).WillReturnError(moerr.NewInternalErrorNoCtx("return_err"))
+		SetDBConn(db)
+
+		// set up your DefaultSqlWriter and records
+		var dummyStrColumn = table.Column{Name: "str", ColType: table.TVarchar, Scale: 32, Default: "", Comment: "str column"}
+
+		tbl := &table.Table{
+			Database: "testDB",
+			Table:    "testTable",
+			Columns:  []table.Column{dummyStrColumn},
+		}
+		records := [][]string{
+			{"record1"},
+			// {"record2"},
+			// add more records as needed
+		}
+
+		// call the function to test
+		_, err = WriteRowRecords(records, tbl, 1*time.Second)
+		assert.Error(t, err)
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("there were unfulfilled expectations: %s", err)
+		}
+	})
+}
+
 func TestWriteRowRecords_WithBackoff(t *testing.T) {
 	SyncTestWriteRowRecords(t, func(t *testing.T) {
 		old := DBConnErrCount
