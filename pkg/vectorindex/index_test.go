@@ -167,3 +167,8 @@ func TestConcurrent(t *testing.T) {
 
 	wg.Wait()
 }
+
+func TestChecksum(t *testing.T) {
+	_, err := CheckSum("abc")
+	require.NotNil(t, err)
+}

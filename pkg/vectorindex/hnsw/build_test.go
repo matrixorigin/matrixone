@@ -45,3 +45,16 @@ func TestBuild(t *testing.T) {
 	//fmt.Printf("LENF %d\n", len(sqls))
 
 }
+
+func TestBuildIndex(t *testing.T) {
+	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}
+	idxcfg.Usearch.Metric = 100
+	//tblcfg := vectorindex.IndexTableConfig{DbName: "db", SrcTable: "src", MetadataTable: "__secondary_meta", IndexTable: "__secondary_index"}
+
+	idx, err := NewHnswBuildIndex(0, idxcfg)
+	require.Nil(t, err)
+
+	empty, err := idx.Empty()
+	require.Nil(t, err)
+	require.Equal(t, empty, true)
+}

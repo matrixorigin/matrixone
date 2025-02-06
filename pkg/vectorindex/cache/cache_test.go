@@ -95,6 +95,27 @@ func (m *MockSearchSearchError) UpdateConfig(newalgo VectorIndexSearchIf) error 
 	return nil
 }
 
+func TestCacheServe(t *testing.T) {
+	proc := testutil.NewProcessWithMPool("", mpool.MustNewZero())
+	Cache = NewVectorIndexCache()
+	Cache.serve()
+	Cache.serve()
+	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(8)}
+	idxcfg.Usearch.Metric = usearch.L2sq
+	tblcfg := vectorindex.IndexTableConfig{DbName: "db", SrcTable: "src", MetadataTable: "__secondary_meta", IndexTable: "__secondary_index"}
+	m := &MockSearch{Idxcfg: idxcfg, Tblcfg: tblcfg}
+	fp32a := []float32{1, 2, 3, 4, 5, 6, 7, 8}
+	keys, distances, err := Cache.Search(proc, tblcfg.IndexTable, m, fp32a, 4)
+	require.Nil(t, err)
+	require.Equal(t, len(keys), 1)
+	require.Equal(t, keys[0], int64(1))
+	require.Equal(t, distances[0], float32(2.0))
+
+	Cache.Remove(tblcfg.IndexTable)
+
+	Cache.Destroy()
+}
+
 func TestCache(t *testing.T) {
 	proc := testutil.NewProcessWithMPool("", mpool.MustNewZero())
 
