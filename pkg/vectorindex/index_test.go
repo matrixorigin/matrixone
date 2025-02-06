@@ -83,30 +83,10 @@ func TestUSearch(t *testing.T) {
 	}
 	fmt.Println(keys, distances)
 
-	// concurrent
-
-	var wg sync.WaitGroup
-	nthread := 64
-
-	for i := 0; i < nthread; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for j := 0; j < 2000; j++ {
-
-				keys, distances, err = index.Search([]float32{0.0, 1.0, 2.0}, 3)
-				if err != nil {
-					panic("Failed to search")
-				}
-				require.Equal(t, len(keys), 3)
-				require.Equal(t, keys[0], uint64(0))
-				require.Equal(t, distances[0], float32(0))
-				//fmt.Println(keys, distances)
-			}
-		}()
+	keys, distances, err = index2.Search([]float32{0.0, 1.0, 2.0}, 3)
+	if err != nil {
+		panic("Failed to search")
 	}
-
-	wg.Wait()
 }
 
 func TestSafeHeap(t *testing.T) {
@@ -132,4 +112,58 @@ func TestSafeHeap(t *testing.T) {
 		id, score := h.Pop()
 		fmt.Printf("id = %d, score = %f\n", id, score)
 	}
+}
+
+func TestConcurrent(t *testing.T) {
+
+        // Create Index
+        vectorSize := 3
+        vectorsCount := 100
+        conf := usearch.DefaultConfig(uint(vectorSize))
+        conf.Metric = usearch.L2sq
+        index, err := usearch.NewIndex(conf)
+        if err != nil {
+                panic("Failed to create Index")
+        }
+        defer index.Destroy()
+
+        // Add to Index
+        err = index.Reserve(uint(vectorsCount))
+        if err != nil {
+                panic("Failed to reserve")
+        }
+        for i := 0; i < vectorsCount; i++ {
+                err = index.Add(usearch.Key(i), []float32{float32(i), float32(i + 1), float32(i + 2)})
+                if err != nil {
+                        panic("Failed to add")
+                }
+        }
+
+
+        var wg sync.WaitGroup
+        nthread := 64
+	var mutex sync.Mutex
+
+        for i := 0; i < nthread; i++ {
+                wg.Add(1)
+                go func() {
+                        defer wg.Done()
+                        for j := 0; j < 200000; j++ {
+
+				mutex.Lock()
+				keys, distances, err := index.Search([]float32{0.0, 1.0, 2.0}, 3)
+                                if err != nil {
+					mutex.Unlock()
+                                        panic("Failed to search")
+                                }
+				mutex.Unlock()
+                                require.Equal(t, len(keys), 3)
+                                require.Equal(t, keys[0], uint64(0))
+                                require.Equal(t, distances[0], float32(0))
+                                //fmt.Println(keys, distances)
+                        }
+                }()
+        }
+
+        wg.Wait()
 }
