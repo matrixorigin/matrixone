@@ -355,7 +355,7 @@ func TestQueryBuilder_bindTimeWindow(t *testing.T) {}
 func TestQueryBuilder_bindOrderBy(t *testing.T) {
 	builder, bindCtx := genBuilderAndCtx()
 
-	stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, "select a, b from select_test.bind_select order by a desc, b asc", 1)
+	stmts, _ := parsers.Parse(context.TODO(), dialect.MYSQL, "select a, b from select_test.bind_select order by a desc, b asc", 1)
 	orderList := stmts[0].(*tree.Select).OrderBy
 
 	havingBinder := NewHavingBinder(builder, bindCtx)
@@ -377,7 +377,7 @@ func TestQueryBuilder_bindOrderBy(t *testing.T) {
 func TestQueryBuilder_bindLimit(t *testing.T) {
 	builder, bindCtx := genBuilderAndCtx()
 
-	stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, "select a from select_test.bind_select limit 1, 5", 1)
+	stmts, _ := parsers.Parse(context.TODO(), dialect.MYSQL, "select a from select_test.bind_select limit 1, 5", 1)
 	astLimit := stmts[0].(*tree.Select).Limit
 
 	boundOffsetExpr, boundCountExpr, err := builder.bindLimit(bindCtx, astLimit)
@@ -414,7 +414,7 @@ func TestQueryBuilder_appendWhereNode(t *testing.T) {
 	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
 	bindCtx := NewBindContext(builder, nil)
 
-	stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, "select * from select_test.bind_select where a = 0", 1)
+	stmts, _ := parsers.Parse(context.TODO(), dialect.MYSQL, "select * from select_test.bind_select where a = 0", 1)
 	selectClause := stmts[0].(*tree.Select).Select.(*tree.SelectClause)
 
 	nodeID, err := builder.buildFrom(selectClause.From.Tables, bindCtx, true)
@@ -444,7 +444,7 @@ func TestQueryBuilder_appendAggNode(t *testing.T) {
 	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
 	bindCtx := NewBindContext(builder, nil)
 
-	stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, "select a from select_test.bind_select group by a having a > 0", 1)
+	stmts, _ := parsers.Parse(context.TODO(), dialect.MYSQL, "select a from select_test.bind_select group by a having a > 0", 1)
 	selectClause := stmts[0].(*tree.Select).Select.(*tree.SelectClause)
 
 	nodeID, err := builder.buildFrom(selectClause.From.Tables, bindCtx, true)
@@ -487,7 +487,7 @@ func TestQueryBuilder_appendProjectionNode(t *testing.T) {
 	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
 	bindCtx := NewBindContext(builder, nil)
 
-	stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, "select a from select_test.bind_select", 1)
+	stmts, _ := parsers.Parse(context.TODO(), dialect.MYSQL, "select a from select_test.bind_select", 1)
 	selectClause := stmts[0].(*tree.Select).Select.(*tree.SelectClause)
 
 	nodeID, selectList, _, notCacheable, _, _, _, _ := builder.bindSelectClause(bindCtx, selectClause, nil, nil, nil, true)
@@ -496,7 +496,7 @@ func TestQueryBuilder_appendProjectionNode(t *testing.T) {
 	projectionBinder := NewProjectionBinder(builder, bindCtx, havingBinder)
 	_, notCacheable, _ = builder.bindProjection(bindCtx, projectionBinder, selectList, notCacheable)
 
-	nodeID, err = builder.appendProjectionNode(bindCtx, nodeID, notCacheable)
+	nodeID, err := builder.appendProjectionNode(bindCtx, nodeID, notCacheable)
 	require.NoError(t, err)
 	require.Equal(t, int32(1), nodeID)
 
@@ -509,7 +509,7 @@ func TestQueryBuilder_appendDistinctNode(t *testing.T) {
 	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
 	bindCtx := NewBindContext(builder, nil)
 
-	stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, "select distinct a from select_test.bind_select", 1)
+	stmts, _ := parsers.Parse(context.TODO(), dialect.MYSQL, "select distinct a from select_test.bind_select", 1)
 	selectClause := stmts[0].(*tree.Select).Select.(*tree.SelectClause)
 
 	nodeID, err := builder.buildFrom(selectClause.From.Tables, bindCtx, true)
