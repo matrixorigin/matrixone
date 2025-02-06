@@ -65,7 +65,7 @@ type VectorIndexSearchIf interface {
 
 // base VectorIndex Search structure for VectorIndexSearchIf (see HnswSearch)
 type VectorIndexSearch struct {
-	Mutex      sync.RWMutex
+	Mutex      sync.Mutex
 	ExpireAt   atomic.Int64
 	LastUpdate atomic.Int64
 	Status     atomic.Int32 // 0 - NOT INIT, 1 - LOADED, 2 - marked as outdated,  3 - DESTROYED,  4 or above ERRCODE

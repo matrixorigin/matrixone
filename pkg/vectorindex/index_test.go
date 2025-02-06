@@ -87,6 +87,7 @@ func TestUSearch(t *testing.T) {
 	if err != nil {
 		panic("Failed to search")
 	}
+	fmt.Println(keys, distances)
 }
 
 func TestSafeHeap(t *testing.T) {
