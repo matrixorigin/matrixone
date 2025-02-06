@@ -45,7 +45,7 @@ var (
 
 	dbMux sync.Mutex
 
-	DBConnErrCount atomic.Uint32
+	DBConnErrCount = NewReConnectionBackOff(time.Minute, DBConnRetryThreshold)
 )
 
 const MOLoggerUser = "mo_logger"
@@ -101,7 +101,7 @@ func CloseDBConn() {
 	}
 }
 
-func GetOrInitDBConn(forceNewConn bool, randomCN bool) (*sql.DB, error) {
+var GetOrInitDBConn = func(forceNewConn bool, randomCN bool) (*sql.DB, error) {
 	dbMux.Lock()
 	defer dbMux.Unlock()
 	initFunc := func() error {
@@ -161,9 +161,8 @@ func WriteRowRecords(records [][]string, tbl *table.Table, timeout time.Duration
 
 	var dbConn *sql.DB
 
-	if DBConnErrCount.Load() > DBConnRetryThreshold {
+	if !DBConnErrCount.Check() {
 		dbConn, err = GetOrInitDBConn(true, true)
-		DBConnErrCount.Store(0)
 	} else {
 		dbConn, err = GetOrInitDBConn(false, false)
 	}
@@ -177,7 +176,7 @@ func WriteRowRecords(records [][]string, tbl *table.Table, timeout time.Duration
 	err = bulkInsert(ctx, dbConn, records, tbl)
 	if err != nil {
 		err = moerr.AttachCause(ctx, err)
-		DBConnErrCount.Add(1)
+		_ = DBConnErrCount.Count()
 		return 0, err
 	}
 
@@ -358,4 +357,46 @@ func SetLabelSelector(labels map[string]string) {
 // - If you use labels{"account":"sys", "role":"ob"}, the Selector can match those pods, which have labels{"account":"*", "role":"ob"}
 func GetLabelSelector() map[string]string {
 	return gLabels
+}
+
+var _ table.BackOff = (*ReConnectionBackOff)(nil)
+
+type ReConnectionBackOff struct {
+	sync.Mutex
+	// setting
+	window    time.Duration
+	threshold int
+	// status
+	last  time.Time
+	count int
+}
+
+func NewReConnectionBackOff(window time.Duration, threshold int) *ReConnectionBackOff {
+	return &ReConnectionBackOff{
+		window:    window,
+		threshold: threshold,
+		last:      time.Now(),
+		count:     0,
+	}
+}
+
+// Count implement table.BackOff
+// return true, means not in backoff cycle. You can run your code.
+func (b *ReConnectionBackOff) Count() bool {
+	b.Lock()
+	defer b.Unlock()
+	if time.Since(b.last) > b.window {
+		b.count = 1
+		b.last = time.Now()
+		return true
+	}
+
+	b.count++
+	b.last = time.Now()
+	return b.count <= b.threshold
+}
+
+// Check return same as Count, but without changed.
+func (b *ReConnectionBackOff) Check() bool {
+	return b.count <= b.threshold || time.Since(b.last) > b.window
 }
