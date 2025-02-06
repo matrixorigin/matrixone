@@ -83,11 +83,30 @@ func TestUSearch(t *testing.T) {
 	}
 	fmt.Println(keys, distances)
 
-	keys, distances, err = index2.Search([]float32{0.0, 1.0, 2.0}, 3)
-	if err != nil {
-		panic("Failed to search")
+	// concurrent
+
+	var wg sync.WaitGroup
+	nthread := 64
+
+	for i := 0; i < nthread; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 2000; j++ {
+
+				keys, distances, err = index.Search([]float32{0.0, 1.0, 2.0}, 3)
+				if err != nil {
+					panic("Failed to search")
+				}
+				require.Equal(t, len(keys), 3)
+				require.Equal(t, keys[0], uint64(0))
+				require.Equal(t, distances[0], float32(0))
+				//fmt.Println(keys, distances)
+			}
+		}()
 	}
-	fmt.Println(keys, distances)
+
+	wg.Wait()
 }
 
 func TestSafeHeap(t *testing.T) {
