@@ -151,6 +151,9 @@ func (u *hnswSearchState) start(tf *TableFunction, proc *process.Process, nthRow
 		}
 
 		// default L2Sq
+		if u.param.OpType != "vector_l2_ops" {
+			return moerr.NewInternalError(proc.Ctx, "Invalid op_type")
+		}
 		u.idxcfg.Usearch.Metric = usearch.L2sq
 
 		if len(u.param.EfConstruction) > 0 {
