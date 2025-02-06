@@ -76,7 +76,7 @@ install/include/usearch.h:
 	cp -r $(FP16_DIR)/* $(USEARCH_DIR)/fp16
 	cp -r $(SIMSIMD_DIR)/* $(USEARCH_DIR)/simsimd
 	cp -r $(STRINGZILLA_DIR)/* $(USEARCH_DIR)/stringzilla
-	(cd $(USEARCH_DIR) && mkdir build && cd build && cmake $(USEARCH_CMAKE_FLAG) .. && make)
+	(cd $(USEARCH_DIR) && cmake -B build $(USEARCH_CMAKE_FLAG) && cmake --build build --config Release)
 ifeq ($(UNAME_S),darwin)
 	cp $(USEARCH_DIR)/build/*.dylib install/lib
 endif
