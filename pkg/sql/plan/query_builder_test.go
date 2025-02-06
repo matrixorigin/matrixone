@@ -538,7 +538,7 @@ func TestQueryBuilder_appendSortNode(t *testing.T) {
 
 	havingBinder := NewHavingBinder(builder, bindCtx)
 	projectionBinder := NewProjectionBinder(builder, bindCtx, havingBinder)
-	boundOrderBys, err := builder.bindOrderBy(bindCtx, orderList, projectionBinder, nil)
+	boundOrderBys, _ := builder.bindOrderBy(bindCtx, orderList, projectionBinder, nil)
 
 	nodeID = builder.appendSortNode(bindCtx, nodeID, boundOrderBys)
 	require.Equal(t, int32(1), nodeID)
