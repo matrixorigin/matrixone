@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -85,6 +86,31 @@ func makeBatchForTest(
 	bat.SetVector(0, vec)
 	bat.SetRowCount(len(ints))
 	return bat
+}
+
+func TestTxnTable_Reset(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	t.Run("nil workspace", func(t *testing.T) {
+		tbl := newTxnTableForTest()
+		newOp, closeFn := client.NewTestTxnOperator(ctx)
+		defer closeFn()
+		assert.Error(t, tbl.Reset(newOp))
+	})
+
+	t.Run("ok", func(t *testing.T) {
+		tbl := newTxnTableForTest()
+		newOp, closeFn := client.NewTestTxnOperator(ctx)
+		defer closeFn()
+		newProc := &process.Process{}
+		newOp.AddWorkspace(&Transaction{
+			proc: newProc,
+		})
+		assert.NoError(t, tbl.Reset(newOp))
+		assert.Equal(t, newOp, tbl.db.op)
+		assert.Equal(t, newProc, tbl.proc.Load())
+	})
 }
 
 // func TestPrimaryKeyCheck(t *testing.T) {
