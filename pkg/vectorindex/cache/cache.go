@@ -116,15 +116,19 @@ func (s *VectorIndexSearch) extend(update bool) {
 }
 
 func (s *VectorIndexSearch) Search(newalgo VectorIndexSearchIf, query []float32, limit uint) (keys []int64, distances []float32, err error) {
-	s.Mutex.RLock()
+	//s.Mutex.RLock()
+	s.Mutex.Lock()
 
 	for s.Status.Load() == 0 {
-		s.Mutex.RUnlock()
+		//s.Mutex.RUnlock()
+		s.Mutex.Unlock()
 		os.Stderr.WriteString("Search index is not ready yet\n")
 		time.Sleep(time.Millisecond)
-		s.Mutex.RLock()
+		//s.Mutex.RLock()
+		s.Mutex.Lock()
 	}
-	defer s.Mutex.RUnlock()
+	//defer s.Mutex.RUnlock()
+	defer s.Mutex.Unlock()
 
 	status := s.Status.Load()
 	if status >= STATUS_DESTROYED {
