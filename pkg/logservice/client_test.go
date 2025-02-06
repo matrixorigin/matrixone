@@ -166,6 +166,32 @@ func TestClientGetTSOTimestamp(t *testing.T) {
 	RunClientTest(t, false, nil, fn)
 }
 
+func TestClientUpdateLeaseholderID(t *testing.T) {
+	fn := func(t *testing.T, s *Service, cfg ClientConfig, c Client) {
+		rec := c.GetLogRecord(16)
+		rand.Read(rec.Payload())
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second*2)
+		defer cancel()
+		lsn, err := c.Append(ctx, rec)
+		require.NoError(t, err)
+		assert.Equal(t, uint64(4), lsn)
+
+		var newLeaseholderID uint64 = 922
+		err = c.UpdateLeaseholderID(ctx, newLeaseholderID)
+		require.NoError(t, err)
+
+		lsn, err = c.Append(ctx, rec)
+		require.Error(t, err)
+
+		c.(*managedClient).cfg.TNReplicaID = newLeaseholderID
+		rec = c.GetLogRecord(16)
+		lsn, err = c.Append(ctx, rec)
+		require.NoError(t, err)
+		assert.Equal(t, uint64(8), lsn)
+	}
+	RunClientTest(t, false, nil, fn)
+}
+
 func TestClientAppend(t *testing.T) {
 	fn := func(t *testing.T, s *Service, cfg ClientConfig, c Client) {
 		rec := c.GetLogRecord(16)
