@@ -2515,7 +2515,6 @@ func (s *Scope) DropTable(c *Compile) error {
 		if qry.IfExists {
 			return nil
 		}
-		return moerr.NewInternalErrorf(c.proc.Ctx, "table %s not exists", qry.GetTable())
 	}
 	var isSource = false
 	if qry.TableDef != nil {
