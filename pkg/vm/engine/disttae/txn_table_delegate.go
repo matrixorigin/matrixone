@@ -34,6 +34,7 @@ import (
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/shardservice"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
@@ -1034,6 +1035,13 @@ func (tbl *txnTableDelegate) GetProcess() any {
 		return tbl.partition.tbl.GetProcess()
 	}
 	return tbl.origin.GetProcess()
+}
+
+func (tbl *txnTableDelegate) Reset(op client.TxnOperator) error {
+	if tbl.partition.is {
+		return tbl.partition.tbl.Reset(op)
+	}
+	return tbl.origin.Reset(op)
 }
 
 func (tbl *txnTableDelegate) isLocalFunc() (bool, error) {
