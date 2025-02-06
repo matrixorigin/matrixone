@@ -2511,6 +2511,12 @@ func (s *Scope) DropTable(c *Compile) error {
 	dbName := qry.GetDatabase()
 	tblName := qry.GetTable()
 	isView := qry.GetIsView()
+	if !isView && qry.TableDef == nil {
+		if qry.IfExists {
+			return nil
+		}
+		return moerr.NewInternalErrorf(c.proc.Ctx, "table %s not exists", qry.GetTable())
+	}
 	var isSource = false
 	if qry.TableDef != nil {
 		isSource = qry.TableDef.TableType == catalog.SystemSourceRel
