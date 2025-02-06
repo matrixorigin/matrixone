@@ -17,7 +17,9 @@ package disttae
 import (
 	"context"
 	"testing"
+	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -25,9 +27,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/shardservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -85,6 +89,74 @@ func makeBatchForTest(
 	bat.SetVector(0, vec)
 	bat.SetRowCount(len(ints))
 	return bat
+}
+
+func TestTxnTable_Reset(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	t.Run("nil workspace", func(t *testing.T) {
+		tbl := newTxnTableForTest()
+		newOp, closeFn := client.NewTestTxnOperator(ctx)
+		defer closeFn()
+		assert.Error(t, tbl.Reset(newOp))
+	})
+
+	t.Run("ok", func(t *testing.T) {
+		tbl := newTxnTableForTest()
+		newOp, closeFn := client.NewTestTxnOperator(ctx)
+		defer closeFn()
+		newProc := &process.Process{}
+		newOp.AddWorkspace(&Transaction{
+			proc: newProc,
+		})
+		assert.NoError(t, tbl.Reset(newOp))
+		assert.Equal(t, newOp, tbl.db.op)
+		assert.Equal(t, newProc, tbl.proc.Load())
+	})
+
+	t.Run("delegate", func(t *testing.T) {
+		op, closeFn := client.NewTestTxnOperator(ctx)
+		defer closeFn()
+		proc := &process.Process{
+			Base: &process.BaseProcess{},
+		}
+		op.AddWorkspace(&Transaction{
+			proc: proc,
+		})
+		orig, err := newTxnTable(ctx, &txnDatabase{
+			op: op,
+		}, cache.TableItem{})
+		assert.NoError(t, err)
+		rt := runtime.DefaultRuntime()
+		runtime.SetupServiceBasedRuntime("s1", rt)
+		mc := clusterservice.NewMOCluster("s1", nil, time.Second,
+			clusterservice.WithDisableRefresh())
+		rt.SetGlobalVariables(runtime.ClusterService, mc)
+		st := shardservice.NewShardStorage("", rt.Clock(), nil, nil, nil, nil)
+		sv := shardservice.NewService(shardservice.Config{
+			ServiceID: "s1",
+		}, st)
+		tbl, err := MockTableDelegate(orig, sv)
+		assert.NoError(t, err)
+		assert.NotNil(t, tbl)
+
+		newOp, closeFn1 := client.NewTestTxnOperator(ctx)
+		defer closeFn1()
+		newProc := &process.Process{
+			Base: &process.BaseProcess{},
+		}
+		newOp.AddWorkspace(&Transaction{
+			proc: newProc,
+		})
+		assert.NoError(t, tbl.Reset(newOp))
+
+		tbl.(*txnTableDelegate).partition.is = true
+		tbl.(*txnTableDelegate).partition.tbl = &partitionTxnTable{
+			primary: newTxnTableForTest(),
+		}
+		assert.NoError(t, tbl.Reset(newOp))
+	})
 }
 
 // func TestPrimaryKeyCheck(t *testing.T) {
