@@ -380,7 +380,6 @@ func (sm *SnapshotMeta) updateTableInfo(
 		}
 		id := stats.ObjectName().SegmentId()
 		moTable := (*objects)[tid]
-
 		// dropped object will overwrite the created object, updating the deleteAt
 		moTable[id] = &objectInfo{
 			stats:    stats,

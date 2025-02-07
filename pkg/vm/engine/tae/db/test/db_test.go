@@ -7704,11 +7704,11 @@ func TestFastGC(t *testing.T) {
 	schema2.Extra.ObjectMaxBlocks = 2
 	{
 		txn, _ := db.StartTxn(nil)
-		database, err := txn.CreateDatabase("db", "", "")
+		database, err := testutil.CreateDatabase2(ctx, txn, "db")
 		assert.Nil(t, err)
-		_, err = database.CreateRelation(schema1)
+		_, err = testutil.CreateRelation2(ctx, txn, database, schema1)
 		assert.Nil(t, err)
-		_, err = database.CreateRelation(schema2)
+		_, err = testutil.CreateRelation2(ctx, txn, database, schema2)
 		assert.Nil(t, err)
 		assert.Nil(t, txn.Commit(context.Background()))
 	}
@@ -7745,9 +7745,8 @@ func TestFastGC(t *testing.T) {
 	testutils.WaitExpect(10000, func() bool {
 		return db.DiskCleaner.GetCleaner().GetScanWaterMark() != nil
 	})
-	testutils.WaitExpect(10000, func() bool {
-		return db.DiskCleaner.GetCleaner().GetMinMerged() != nil
-	})
+	err = db.DiskCleaner.GetCleaner().DoCheck()
+	assert.Nil(t, err)
 }
 
 func TestGlobalCheckpoint2(t *testing.T) {
