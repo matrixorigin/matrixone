@@ -500,6 +500,13 @@ func (replayer *CheckpointReplayer) Close() {
 	}
 }
 
+// metaLoc records locaion of checkpoints.
+// In v1, for each checkpoint, it records location and version
+// separated by ';'.
+// e.g. ckp1-location;ckp1-version;ckp2-location;ckp2-version;
+// In v2, it first records the version of the whole metaloc,
+// then follows the same format as v1 for each ckp.
+// e.g. 2;ckp1-location;ckp1-version;ckp2-location;ckp2-version;
 func ConsumeCheckpointEntries(
 	ctx context.Context,
 	sid string,
@@ -520,6 +527,9 @@ func ConsumeCheckpointEntries(
 		v2.LogTailLoadCheckpointDurationHistogram.Observe(time.Since(now).Seconds())
 	}()
 	locationsAndVersions := strings.Split(metaLoc, ";")
+
+	// If the length of locationsAndVersions is even, the protocal version is v1.
+	// If it's odd, the first value is version.
 	if len(locationsAndVersions)%2 == 1 {
 		locationsAndVersions = locationsAndVersions[1:]
 	}
