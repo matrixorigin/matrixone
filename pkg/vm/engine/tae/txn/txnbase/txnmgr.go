@@ -269,7 +269,6 @@ func (mgr *TxnManager) OpenOfflineTxn(
 	store := mgr.TxnStoreFactory()
 	txn := mgr.TxnFactory(nil, store, txnId, ts, types.TS{})
 	store.BindTxn(txn)
-	mgr.storeTxn(txn, TxnFlag_Normal)
 	return txn
 }
 
