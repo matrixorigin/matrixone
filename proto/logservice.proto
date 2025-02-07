@@ -246,6 +246,7 @@ enum MethodType {
   GET_LEADER_ID = 25;
   CHECK_HEALTH = 26;
   READ_LSN = 27;
+  UPDATE_LEASEHOLDER_ID = 28;
 };
 
 enum RecordType {

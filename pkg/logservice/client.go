@@ -56,6 +56,8 @@ type Client interface {
 	Close() error
 	// Config returns the specified configuration when creating the client.
 	Config() ClientConfig
+	// UpdateLeaseholderID updates the leaseholder ID for the shard.
+	UpdateLeaseholderID(ctx context.Context, leaseholderID uint64) error
 	// GetLogRecord returns a new LogRecord instance with its Data field enough
 	// to hold payloadLength bytes of payload. The layout of the Data field is
 	// 4 bytes of record type (pb.UserEntryUpdate) + 8 bytes TN replica ID +
@@ -192,6 +194,23 @@ func (c *managedClient) Close() error {
 
 func (c *managedClient) Config() ClientConfig {
 	return c.cfg
+}
+
+// UpdateLeaseholderID implements the Client interface.
+func (c *managedClient) UpdateLeaseholderID(ctx context.Context, leaseholderID uint64) error {
+	for {
+		if err := c.prepareClient(ctx); err != nil {
+			return err
+		}
+		err := c.client.updateLeaseholderID(ctx, leaseholderID)
+		if err != nil {
+			c.resetClient()
+		}
+		if c.isRetryableError(err) {
+			continue
+		}
+		return err
+	}
 }
 
 func (c *managedClient) GetLogRecord(payloadLength int) pb.LogRecord {
@@ -536,6 +555,10 @@ func (c *client) close() error {
 	return c.client.Close()
 }
 
+func (c *client) updateLeaseholderID(ctx context.Context, leaseholderID uint64) error {
+	return c.doUpdateLeaseholderID(ctx, leaseholderID)
+}
+
 func (c *client) append(ctx context.Context, rec pb.LogRecord) (Lsn, error) {
 	if c.readOnly() {
 		return 0, moerr.NewInvalidInput(ctx, "incompatible client")
@@ -604,11 +627,16 @@ func (c *client) request(ctx context.Context,
 	maxSize uint64, ts time.Time) (pb.Response, []pb.LogRecord, error) {
 	ctx, span := trace.Debug(ctx, "client.request")
 	defer span.End()
+	tnID := c.cfg.TNReplicaID
+	if mt == pb.UPDATE_LEASEHOLDER_ID {
+		// when the method is pb.UPDATE_LEASEHOLDER_ID, the lsn is the leaseholder ID.
+		tnID = lsn
+	}
 	req := pb.Request{
 		Method: mt,
 		LogRequest: pb.LogRequest{
 			ShardID: c.cfg.LogShardID,
-			TNID:    c.cfg.TNReplicaID,
+			TNID:    tnID,
 			Lsn:     lsn,
 			MaxSize: maxSize,
 			TS:      ts,
@@ -679,6 +707,11 @@ func (c *client) tsoRequest(ctx context.Context, count uint64) (uint64, error) {
 
 func (c *client) connect(ctx context.Context, mt pb.MethodType) error {
 	_, _, err := c.request(ctx, mt, nil, 0, 0, time.Time{})
+	return err
+}
+
+func (c *client) doUpdateLeaseholderID(ctx context.Context, leaseholderID uint64) error {
+	_, _, err := c.request(ctx, pb.UPDATE_LEASEHOLDER_ID, nil, leaseholderID, 0, time.Time{})
 	return err
 }
 
