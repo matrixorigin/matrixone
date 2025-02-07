@@ -142,7 +142,6 @@ func TestConcurrent(t *testing.T) {
 
 	var wg sync.WaitGroup
 	nthread := 64
-	var mutex sync.Mutex
 
 	for i := 0; i < nthread; i++ {
 		wg.Add(1)
@@ -150,13 +149,10 @@ func TestConcurrent(t *testing.T) {
 			defer wg.Done()
 			for j := 0; j < 20000; j++ {
 
-				mutex.Lock()
 				keys, distances, err := index.Search([]float32{0.0, 1.0, 2.0}, 3)
 				if err != nil {
-					mutex.Unlock()
 					panic("Failed to search")
 				}
-				mutex.Unlock()
 				require.Equal(t, len(keys), 3)
 				require.Equal(t, keys[0], uint64(0))
 				require.Equal(t, distances[0], float32(0))
