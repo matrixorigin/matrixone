@@ -2403,6 +2403,11 @@ func (s *Scope) DropTable(c *Compile) error {
 	dbName := qry.GetDatabase()
 	tblName := qry.GetTable()
 	isView := qry.GetIsView()
+	if !isView && qry.TableDef == nil {
+		if qry.IfExists {
+			return nil
+		}
+	}
 	var isSource = false
 	if qry.TableDef != nil {
 		isSource = qry.TableDef.TableType == catalog.SystemSourceRel
