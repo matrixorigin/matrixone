@@ -16,11 +16,12 @@ package partitionservice
 
 import (
 	"context"
-	"fmt"
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -29,47 +30,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-func TestCreateHash(t *testing.T) {
-	num := uint64(2)
-	tableID := uint64(1)
-	columns := []string{"a"}
-	allowedT := []types.T{
-		types.T_int8,
-		types.T_int16,
-		types.T_int32,
-		types.T_int64,
-		types.T_uint8,
-		types.T_uint16,
-		types.T_uint32,
-		types.T_uint64,
-	}
-
-	for _, v := range allowedT {
-		runTestPartitionServiceTest(
-			func(
-				ctx context.Context,
-				txnOp client.TxnOperator,
-				s *service,
-				store *memStorage,
-			) {
-				def := newTestTableDefine(1, columns, []types.T{v})
-				store.addUncommittedTable(def)
-
-				stmt := newTestHashOption(t, columns[0], num)
-				assert.NoError(t, s.Create(ctx, tableID, stmt, txnOp))
-
-				v, ok := store.uncommitted[tableID]
-				assert.True(t, ok)
-				assert.Equal(t, columns[0], v.metadata.Description)
-				assert.Equal(t, 2, len(v.partitions))
-				for _, p := range v.partitions {
-					assert.NotEqual(t, 0, p.PartitionID)
-				}
-			},
-		)
-	}
-}
 
 func TestDelete(t *testing.T) {
 	num := uint64(2)
@@ -90,6 +50,7 @@ func TestDelete(t *testing.T) {
 			assert.NoError(t, s.Create(ctx, tableID, stmt, txnOp))
 
 			require.NoError(t, txnOp.Commit(ctx))
+			require.NotEmpty(t, s.mu.tables)
 
 			require.NoError(t, s.Delete(ctx, tableID, nil))
 
@@ -132,6 +93,52 @@ func TestIs(t *testing.T) {
 	)
 }
 
+func TestPruneNoPartition(t *testing.T) {
+	runTestPartitionServiceTest(
+		func(
+			ctx context.Context,
+			txnOp client.TxnOperator,
+			s *service,
+			store *memStorage,
+		) {
+			res, err := s.Prune(ctx, 1, nil, txnOp)
+			require.NoError(t, err)
+			require.True(t, res.Empty())
+		},
+	)
+}
+
+func TestFilterNoPartition(t *testing.T) {
+	runTestPartitionServiceTest(
+		func(
+			ctx context.Context,
+			txnOp client.TxnOperator,
+			s *service,
+			store *memStorage,
+		) {
+			res, err := s.Filter(ctx, 1, nil, txnOp)
+			require.NoError(t, err)
+			require.Empty(t, res)
+		},
+	)
+}
+
+func TestIterResult(t *testing.T) {
+	res := PruneResult{
+		batches:    make([]*batch.Batch, 10),
+		partitions: make([]partition.Partition, 10),
+	}
+
+	n := 0
+	res.Iter(
+		func(partition partition.Partition, bat *batch.Batch) bool {
+			n++
+			return false
+		},
+	)
+	require.Equal(t, 1, n)
+}
+
 func runTestPartitionServiceTest(
 	fn func(
 		ctx context.Context,
@@ -170,22 +177,6 @@ func newTestTableDefine(
 		)
 	}
 	return def
-}
-
-func newTestHashOption(
-	t *testing.T,
-	column string,
-	num uint64,
-) *tree.CreateTable {
-	return getCreateTableStatement(
-		t,
-		fmt.Sprintf(
-			"create table t(%s int) partition by hash(%s) partitions %d",
-			column,
-			column,
-			num,
-		),
-	)
 }
 
 func getCreateTableStatement(

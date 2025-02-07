@@ -26,7 +26,6 @@ import (
 )
 
 type Bitmap = Nulls
-type Grouping = Nulls
 
 type Nulls struct {
 	np bitmap.Bitmap

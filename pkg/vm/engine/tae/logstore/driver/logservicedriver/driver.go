@@ -16,6 +16,7 @@ package logservicedriver
 
 import (
 	"context"
+	"sync/atomic"
 	"time"
 
 	"github.com/panjf2000/ants/v2"
@@ -25,67 +26,74 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 )
 
 const (
-	ReplayReadSize = mpool.MB * 64
-	MaxReadSize    = mpool.MB * 64
+	MaxReadBatchSize = mpool.MB * 64
 )
 
-func RetryWithTimeout(timeoutDuration time.Duration, fn func() (shouldReturn bool)) error {
-	ctx, cancel := context.WithTimeoutCause(
-		context.Background(),
-		timeoutDuration,
-		moerr.CauseRetryWithTimeout,
-	)
-	defer cancel()
-	for {
-		select {
-		case <-ctx.Done():
-			return moerr.AttachCause(ctx, ErrRetryTimeOut)
-		default:
-			if fn() {
-				return nil
-			}
-		}
+type replayState struct {
+	mode   driver.ReplayMode
+	done   bool
+	err    error
+	waitCh chan struct{}
+}
+
+func newReplayState(
+	done bool,
+	err error,
+	mode driver.ReplayMode,
+	waitCh chan struct{},
+) *replayState {
+	if waitCh == nil {
+		waitCh = make(chan struct{}, 1)
+	}
+	return &replayState{
+		mode:   mode,
+		done:   done,
+		waitCh: waitCh,
 	}
 }
 
-type LogServiceDriver struct {
-	*driverInfo
-	clientPool *clientpool
-	config     Config
-	committer  *groupCommitter
+func (s *replayState) Done(err error) {
+	s.err = err
+	close(s.waitCh)
+}
 
-	reuse struct {
-		tokens []uint64
-	}
+func (s *replayState) WaitC() <-chan struct{} {
+	return s.waitCh
+}
+
+func (s *replayState) Err() error {
+	return s.err
+}
+
+type LogServiceDriver struct {
+	*sequenceNumberState
+
+	replayState atomic.Pointer[replayState]
+
+	config Config
+
+	clientPool *clientPool
+	committer  *groupCommitter
 
 	commitLoop      sm.Queue
 	commitWaitQueue chan any
 	waitCommitLoop  *sm.Loop
 	postCommitQueue chan any
-	postCommitLoop  *sm.Loop
 	truncateQueue   sm.Queue
 
-	ctx        context.Context
-	cancel     context.CancelFunc
-	appendPool *ants.Pool
+	ctx    context.Context
+	cancel context.CancelFunc
+
+	workers *ants.Pool
 }
 
 func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
-	clientpoolConfig := &clientConfig{
-		cancelDuration:        cfg.NewClientDuration,
-		recordSize:            cfg.RecordSize,
-		clientFactory:         cfg.ClientFactory,
-		GetClientRetryTimeOut: cfg.GetClientRetryTimeOut,
-		retryDuration:         cfg.RetryTimeout,
-	}
-
-	// the tasks submitted to LogServiceDriver.appendPool append entries to logservice,
+	// the tasks submitted to LogServiceDriver.workers append entries to logservice,
 	// and we hope the task will crash all the tn service if append failed.
 	// so, set panic to pool.options.PanicHandler here, or it will only crash
 	// the goroutine the append task belongs to.
@@ -94,23 +102,25 @@ func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
 	}))
 
 	d := &LogServiceDriver{
-		clientPool:      newClientPool(cfg.ClientMaxCount, clientpoolConfig),
-		config:          *cfg,
-		committer:       getCommitter(),
-		driverInfo:      newDriverInfo(),
-		commitWaitQueue: make(chan any, 10000),
-		postCommitQueue: make(chan any, 10000),
-		appendPool:      pool,
+		clientPool:          newClientPool(cfg),
+		committer:           getCommitter(),
+		sequenceNumberState: newSequenceNumberState(),
+		commitWaitQueue:     make(chan any, 10000),
+		postCommitQueue:     make(chan any, 10000),
+		workers:             pool,
 	}
+	d.config = *cfg
 	d.ctx, d.cancel = context.WithCancel(context.Background())
 	d.commitLoop = sm.NewSafeQueue(10000, 10000, d.onCommitIntents)
 	d.commitLoop.Start()
-	d.waitCommitLoop = sm.NewLoop(d.commitWaitQueue, d.postCommitQueue, d.onWaitCommitted, 10000)
+	d.waitCommitLoop = sm.NewLoop(d.commitWaitQueue, nil, d.onWaitCommitted, 10000)
 	d.waitCommitLoop.Start()
-	d.postCommitLoop = sm.NewLoop(d.postCommitQueue, nil, d.onCommitDone, 10000)
-	d.postCommitLoop.Start()
 	d.truncateQueue = sm.NewSafeQueue(10000, 10000, d.onTruncateRequests)
 	d.truncateQueue.Start()
+	logutil.Info(
+		"Wal-Driver-Start",
+		zap.String("config", cfg.String()),
+	)
 	return d
 }
 
@@ -123,22 +133,62 @@ func (d *LogServiceDriver) Close() error {
 	d.cancel()
 	d.commitLoop.Stop()
 	d.waitCommitLoop.Stop()
-	d.postCommitLoop.Stop()
 	d.truncateQueue.Stop()
 	close(d.commitWaitQueue)
 	close(d.postCommitQueue)
-	d.appendPool.Release()
+	d.workers.Release()
 	return nil
 }
 
 func (d *LogServiceDriver) Replay(
 	ctx context.Context,
 	h driver.ApplyHandle,
+	modeGetter func() driver.ReplayMode,
 ) (err error) {
+	mode := modeGetter()
+
+	oldState := d.replayState.Load()
+	if oldState != nil && oldState.done {
+		return moerr.NewInternalErrorNoCtx("replay already done")
+	}
+
+	replayState := newReplayState(false, nil, mode, nil)
+	if !d.replayState.CompareAndSwap(oldState, replayState) {
+		return moerr.NewInternalErrorNoCtx("concurrent replay")
+	}
+
+	defer func() {
+		doneState := newReplayState(true, err, mode, replayState.waitCh)
+		d.replayState.Store(doneState)
+		doneState.Done(err)
+	}()
+
+	onLogRecord := func(r logservice.LogRecord) {
+		// TODO: handle the config change log record
+	}
+
+	onWaitMore := func() bool {
+		mode = modeGetter()
+		return mode == driver.ReplayMode_ReplayForever
+	}
+
 	replayer := newReplayer(
 		h,
 		d,
-		ReplayReadSize,
+		MaxReadBatchSize,
+		WithReplayerNeedWriteSkip(
+			func() bool {
+				mode := modeGetter()
+				return mode == driver.ReplayMode_ReplayForWrite
+			},
+		),
+		WithReplayerWaitMore(
+			onWaitMore,
+		),
+		WithReplayerOnLogRecord(
+			onLogRecord,
+		),
+
 		// driver is mangaging the psn to dsn mapping
 		// here the replayer is responsible to provide the all the existing psn to dsn
 		// info to the driver
@@ -149,8 +199,8 @@ func (d *LogServiceDriver) Replay(
 		// for readwrite driver, it can only serve the write request
 		// after the REPLAYED state
 		WithReplayerOnScheduled(
-			func(psn uint64, dsnRange *common.ClosedIntervals, _ LogEntry) {
-				d.recordPSNInfo(psn, dsnRange)
+			func(psn uint64, e LogEntry) {
+				d.recordSequenceNumbers(psn, e.DSNRange())
 			},
 		),
 		WithReplayerOnReplayDone(
@@ -158,7 +208,7 @@ func (d *LogServiceDriver) Replay(
 				if replayErr != nil {
 					return
 				}
-				d.resetDSNStats(&dsnStats)
+				d.initState(&dsnStats)
 			},
 		),
 	)
@@ -177,7 +227,6 @@ func (d *LogServiceDriver) readFromBackend(
 	var (
 		t0         = time.Now()
 		cancel     context.CancelFunc
-		maxRetry   = 10
 		retryTimes = 0
 	)
 
@@ -204,15 +253,16 @@ func (d *LogServiceDriver) readFromBackend(
 	if client, err = d.clientPool.Get(); err != nil {
 		return
 	}
-	defer d.clientPool.Put(client)
+	defer client.Putback()
 
-	for ; retryTimes < maxRetry; retryTimes++ {
+	cfg := d.config
+	for ; retryTimes < cfg.MaxRetryCount; retryTimes++ {
 		ctx, cancel = context.WithTimeoutCause(
 			ctx,
-			d.config.ReadDuration,
+			cfg.MaxTimeout,
 			moerr.CauseReadFromLogService,
 		)
-		if records, nextPSN, err = client.c.Read(
+		if records, nextPSN, err = client.wrapped.Read(
 			ctx, firstPSN, uint64(maxSize),
 		); err != nil {
 			err = moerr.AttachCause(ctx, err)
@@ -222,7 +272,31 @@ func (d *LogServiceDriver) readFromBackend(
 		if err == nil {
 			break
 		}
+		time.Sleep(cfg.RetryInterval() * time.Duration(retryTimes+1))
 	}
 
 	return
+}
+
+func (d *LogServiceDriver) ReplayWaitC() <-chan struct{} {
+	state := d.replayState.Load()
+	if state == nil {
+		ch := make(chan struct{})
+		close(ch)
+		return ch
+	}
+	return state.WaitC()
+}
+
+func (d *LogServiceDriver) GetReplayState() *replayState {
+	return d.replayState.Load()
+}
+
+func (d *LogServiceDriver) GetCfg() *Config {
+	return &d.config
+}
+
+func (d *LogServiceDriver) canWrite() bool {
+	replayState := d.replayState.Load()
+	return replayState != nil && replayState.done && replayState.mode == driver.ReplayMode_ReplayForWrite
 }

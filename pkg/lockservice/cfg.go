@@ -28,6 +28,7 @@ var (
 	defaultKeepRemoteLockDuration = time.Second
 	defaultKeepBindTimeout        = time.Second * 10
 	defaultRemoteLockTimeout      = time.Minute * 10
+	defaultRemoteTxnTimeout       = time.Second * 10
 )
 
 // Config lock service config

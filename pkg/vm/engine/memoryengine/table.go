@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -535,11 +534,11 @@ func (t *Table) GetColumMetadataScanInfo(ctx context.Context, name string) ([]*p
 	return nil, nil
 }
 
-func (t *Table) PrimaryKeysMayBeModified(ctx context.Context, from types.TS, to types.TS, keyVector *vector.Vector) (bool, error) {
+func (t *Table) PrimaryKeysMayBeModified(ctx context.Context, from types.TS, to types.TS, bat *batch.Batch, idx int32) (bool, error) {
 	return true, nil
 }
 
-func (t *Table) PrimaryKeysMayBeUpserted(ctx context.Context, from types.TS, to types.TS, keyVector *vector.Vector) (bool, error) {
+func (t *Table) PrimaryKeysMayBeUpserted(ctx context.Context, from types.TS, to types.TS, bat *batch.Batch, idx int32) (bool, error) {
 	return true, nil
 }
 
@@ -553,4 +552,8 @@ func (t *Table) MergeObjects(ctx context.Context, objstats []objectio.ObjectStat
 
 func (t *Table) GetNonAppendableObjectStats(ctx context.Context) ([]objectio.ObjectStats, error) {
 	return nil, nil
+}
+
+func (t *Table) Reset(op client.TxnOperator) error {
+	return nil
 }

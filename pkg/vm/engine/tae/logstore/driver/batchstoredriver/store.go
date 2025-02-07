@@ -267,7 +267,11 @@ func (bs *baseStore) Append(e *entry.Entry) error {
 	return nil
 }
 
-func (bs *baseStore) Replay(ctx context.Context, h driver.ApplyHandle) error {
+func (bs *baseStore) Replay(
+	ctx context.Context,
+	h driver.ApplyHandle,
+	_ func() driver.ReplayMode,
+) error {
 	r := newReplayer(h)
 	bs.addrs = r.addrs
 	err := bs.file.Replay(r)

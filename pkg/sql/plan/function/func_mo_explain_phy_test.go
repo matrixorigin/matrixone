@@ -922,6 +922,7 @@ Scope 1 (Magic: Merge, mcpu: 1, Receiver: [0])
 	CPU Usage: 
 		- Total CPU Time: 91033157ns 
 		- CPU Time Detail: Parse(162026)+BuildPlan(649910)+Compile(299370)+PhyExec(304651393)+PrepareRun(178265)-PreRunWaitLock(0)-PlanStatsIO(0)-IOAccess(214917833)-IOMerge(0)
+		- Permission Authentication Stats Array: [0 0 0 0 0 0 0 0 0 0 0] 
 Physical Plan Deployment:
 LOCAL SCOPES:
 Scope 1 (Magic: Merge, mcpu: 1, Receiver: [0])
@@ -979,6 +980,7 @@ Scope 1 (Magic: Merge, mcpu: 1, Receiver: [0])
 	CPU Usage: 
 		- Total CPU Time: 91033157ns 
 		- CPU Time Detail: Parse(162026)+BuildPlan(649910)+Compile(299370)+PhyExec(304651393)+PrepareRun(178265)-PreRunWaitLock(0)-PlanStatsIO(0)-IOAccess(214917833)-IOMerge(0)
+		- Permission Authentication Stats Array: [0 0 0 0 0 0 0 0 0 0 0] 
 	Query Build Plan Stage:
 		- CPU Time: 649910ns 
 		- S3List:0, S3Head:0, S3Put:0, S3Get:0, S3Delete:0, S3DeleteMul:0

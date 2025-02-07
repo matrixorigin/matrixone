@@ -242,7 +242,6 @@ drop user user1;
 
 
 -- create snapshot for cluster table
--- @bvt:issue#21006
 use mo_catalog;
 drop table if exists t1;
 create cluster table t1(a int);
@@ -251,7 +250,6 @@ select * from t1;
 drop snapshot if exists spsp07;
 create snapshot spsp07 for table mo_catalog t1;
 drop table t1;
--- @bvt:issue
 
 
 

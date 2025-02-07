@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"runtime/debug"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
@@ -150,6 +151,9 @@ func (m Response) UnwrapError() error {
 	err := &moerr.Error{}
 	if e := err.UnmarshalBinary(m.Error); e != nil {
 		panic(e)
+	}
+	if moerr.IsMoErrCode(err, moerr.ErrRetryForCNRollingRestart) {
+		err.SetDetail(string(debug.Stack()))
 	}
 	return err
 }

@@ -55,6 +55,14 @@ func (d *LogServiceDriver) GetTruncated() (dsn uint64, err error) {
 }
 
 func (d *LogServiceDriver) onTruncateRequests(items ...any) {
+	if !d.canWrite() {
+		logutil.Warn(
+			"Wal-Readonly-Skip-Truncate",
+			zap.Uint64("dsn-intent", d.truncateDSNIntent.Load()),
+			zap.Uint64("truncated-psn", d.truncatedPSN),
+		)
+		return
+	}
 	d.doTruncate()
 }
 
@@ -76,10 +84,10 @@ func (d *LogServiceDriver) doTruncate() {
 			break
 		}
 	}
-	d.psn.mu.RLock()
-	minPSN := d.psn.records.Minimum()
-	maxPSN := d.psn.records.Maximum()
-	d.psn.mu.RUnlock()
+	d.sequence.mu.RLock()
+	minPSN := d.sequence.psns.Minimum()
+	maxPSN := d.sequence.psns.Maximum()
+	d.sequence.mu.RUnlock()
 	logutil.Info(
 		"Wal-Truncate-Prepare",
 		zap.Int("loop-count", loopCount),
@@ -114,7 +122,7 @@ func (d *LogServiceDriver) doTruncate() {
 	if psnTruncated > d.truncatedPSN {
 		d.truncatedPSN = psnTruncated
 	}
-	d.gcPSN(psnTruncated)
+	d.truncateByPSN(psnTruncated)
 }
 
 func (d *LogServiceDriver) truncateFromRemote(
@@ -143,10 +151,10 @@ func (d *LogServiceDriver) truncateFromRemote(
 		)
 	}()
 
-	if client, err = d.clientPool.Get(); err == ErrClientPoolClosed {
+	if client, err = d.clientPool.GetOnFly(); err == ErrClientPoolClosed {
 		return
 	}
-	defer d.clientPool.Put(client)
+	defer client.Putback()
 
 	for ; retryTimes < maxRetry+1; retryTimes++ {
 		var (
@@ -154,16 +162,16 @@ func (d *LogServiceDriver) truncateFromRemote(
 			loopCtx context.Context
 		)
 		loopCtx, cancel = context.WithTimeoutCause(
-			ctx, d.config.TruncateDuration, moerr.CauseTruncateLogservice,
+			ctx, d.config.MaxTimeout, moerr.CauseTruncateLogservice,
 		)
-		err = client.c.Truncate(loopCtx, psnIntent)
+		err = client.wrapped.Truncate(loopCtx, psnIntent)
 		err = moerr.AttachCause(loopCtx, err)
 		cancel()
 
 		// the psnIntent is already truncated
 		if moerr.IsMoErrCode(err, moerr.ErrInvalidTruncateLsn) {
 			loopCtx, cancel = context.WithTimeoutCause(
-				ctx, d.config.GetTruncateDuration, moerr.CauseGetLogserviceTruncate,
+				ctx, d.config.MaxTimeout, moerr.CauseGetLogserviceTruncate,
 			)
 			psnTruncated, err = d.getTruncatedPSNFromBackend(loopCtx)
 			cancel()
@@ -187,7 +195,6 @@ func (d *LogServiceDriver) getTruncatedPSNFromBackend(
 	var (
 		client     *wrappedClient
 		retryTimes int
-		maxRetry   = 20
 		start      = time.Now()
 	)
 	defer func() {
@@ -206,21 +213,24 @@ func (d *LogServiceDriver) getTruncatedPSNFromBackend(
 	if client, err = d.clientPool.Get(); err != nil {
 		return
 	}
-	defer d.clientPool.Put(client)
+	defer client.Putback()
 
-	for ; retryTimes < maxRetry; retryTimes++ {
+	cfg := d.config
+
+	for ; retryTimes < cfg.MaxRetryCount; retryTimes++ {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeoutCause(
 			ctx,
-			d.config.GetTruncateDuration,
+			cfg.MaxTimeout,
 			moerr.CauseGetLogserviceTruncate,
 		)
-		psn, err = client.c.GetTruncatedLsn(ctx)
+		psn, err = client.wrapped.GetTruncatedLsn(ctx)
 		err = moerr.AttachCause(ctx, err)
 		cancel()
 		if err == nil {
 			break
 		}
+		time.Sleep(cfg.RetryInterval() * time.Duration(retryTimes+1))
 	}
 	return
 }

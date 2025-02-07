@@ -220,12 +220,14 @@ const (
 	ErrTxnCannotRetry             uint16 = 20630
 	ErrTxnNeedRetryWithDefChanged uint16 = 20631
 	ErrTxnStale                   uint16 = 20632
-	ErrRetryForCNRollingRestart   uint16 = 20633
-	ErrNewTxnInCNRollingRestart   uint16 = 20634
-	ErrPrevCheckpointNotFinished  uint16 = 20635
-	ErrCantDelGCChecker           uint16 = 20636
-	ErrTxnUnknown                 uint16 = 20637
-	ErrTxnControl                 uint16 = 20638
+	// ErrRetryForCNRollingRestart rolling upgrade related, do not modify
+	ErrRetryForCNRollingRestart uint16 = 20634
+	// ErrNewTxnInCNRollingRestart rolling upgrade related, do not modify
+	ErrNewTxnInCNRollingRestart  uint16 = 20635
+	ErrPrevCheckpointNotFinished uint16 = 20636
+	ErrCantDelGCChecker          uint16 = 20637
+	ErrTxnUnknown                uint16 = 20638
+	ErrTxnControl                uint16 = 20639
 
 	// Group 7: lock service
 	// ErrDeadLockDetected lockservice has detected a deadlock and should abort the transaction if it receives this error
@@ -569,7 +571,7 @@ type Error struct {
 }
 
 func (e *Error) Error() string {
-	return e.message
+	return e.Display()
 }
 
 func (e *Error) Detail() string {
@@ -593,6 +595,10 @@ func (e *Error) MySQLCode() uint16 {
 
 func (e *Error) SqlState() string {
 	return e.sqlState
+}
+
+func (e *Error) SetDetail(detail string) {
+	e.detail = detail
 }
 
 var _ encoding.BinaryMarshaler = new(Error)

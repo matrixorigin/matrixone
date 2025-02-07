@@ -39,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -198,11 +199,16 @@ func saveMeta(ctx context.Context, ses *Session) error {
 	if err != nil {
 		return err
 	}
+
+	//-------------------------------------------------------
+	roleId := defines.GetRoleId(ctx)
+	//-------------------------------------------------------
+
 	m := &catalog.Meta{
 		QueryId:       ses.GetStmtId(),
 		Statement:     ses.GetSql(),
 		AccountId:     ses.GetTenantInfo().GetTenantID(),
-		RoleId:        ses.proc.GetSessionInfo().RoleId,
+		RoleId:        roleId,
 		ResultPath:    buf.String(),
 		CreateTime:    types.UnixToTimestamp(ses.createdTime.Unix()),
 		ResultSize:    ses.curResultSize,
@@ -357,19 +363,22 @@ func isResultQuery(proc *process.Process, p *plan.Plan) ([]string, error) {
 	return uuids, nil
 }
 
-func checkPrivilege(sid string, uuids []string, reqCtx context.Context, ses *Session) error {
+func checkPrivilege(sid string, uuids []string, reqCtx context.Context, ses *Session) (statistic.StatsArray, error) {
+	var stats statistic.StatsArray
+	stats.Reset()
+
 	f := getPu(ses.GetService()).FileService
 	for _, id := range uuids {
 		// var size int64 = -1
 		path := catalog.BuildQueryResultMetaPath(ses.GetTenantInfo().GetTenant(), id)
 		reader, err := ioutil.NewFileReader(f, path)
 		if err != nil {
-			return err
+			return stats, err
 		}
 		idxs := []uint16{catalog.PLAN_IDX, catalog.AST_IDX}
 		bats, closeCB, err := reader.LoadAllColumns(reqCtx, idxs, ses.GetMemPool())
 		if err != nil {
-			return err
+			return stats, err
 		}
 		defer func() {
 			if closeCB != nil {
@@ -380,18 +389,21 @@ func checkPrivilege(sid string, uuids []string, reqCtx context.Context, ses *Ses
 		p := bat.Vecs[0].UnsafeGetStringAt(0)
 		pn := &plan.Plan{}
 		if err = pn.Unmarshal([]byte(p)); err != nil {
-			return err
+			return stats, err
 		}
 		a := bat.Vecs[1].UnsafeGetStringAt(0)
 		var ast tree.Statement
 		if ast, err = simpleAstUnmarshal([]byte(a)); err != nil {
-			return err
+			return stats, err
 		}
-		if err = authenticateCanExecuteStatementAndPlan(reqCtx, ses, ast, pn); err != nil {
-			return err
+
+		delta, err := authenticateCanExecuteStatementAndPlan(reqCtx, ses, ast, pn)
+		if err != nil {
+			return stats, err
 		}
+		stats.Add(&delta)
 	}
-	return nil
+	return stats, nil
 }
 
 type simpleAst struct {

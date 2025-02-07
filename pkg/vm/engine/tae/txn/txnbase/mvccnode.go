@@ -40,27 +40,27 @@ var (
 	SnapshotAttr_LogIndex_Size = "log_index_size"
 )
 
-func NewTxnMVCCNodeWithTxn(txn txnif.TxnReader) *TxnMVCCNode {
+func NewTxnMVCCNodeWithTxn(txn txnif.TxnReader) TxnMVCCNode {
 	var ts types.TS
 	if txn != nil {
 		ts = txn.GetStartTS()
 	}
-	return &TxnMVCCNode{
+	return TxnMVCCNode{
 		Start:   ts,
 		Prepare: txnif.UncommitTS,
 		End:     txnif.UncommitTS,
 		Txn:     txn,
 	}
 }
-func NewTxnMVCCNodeWithTS(ts types.TS) *TxnMVCCNode {
-	return &TxnMVCCNode{
+func NewTxnMVCCNodeWithTS(ts types.TS) TxnMVCCNode {
+	return TxnMVCCNode{
 		Start:   ts,
 		Prepare: ts,
 		End:     ts,
 	}
 }
-func NewTxnMVCCNodeWithStartEnd(start, end types.TS) *TxnMVCCNode {
-	return &TxnMVCCNode{
+func NewTxnMVCCNodeWithStartEnd(start, end types.TS) TxnMVCCNode {
+	return TxnMVCCNode{
 		Start:   start,
 		Prepare: end,
 		End:     end,
@@ -390,8 +390,8 @@ func (un *TxnMVCCNode) Update(o *TxnMVCCNode) {
 	}
 }
 
-func (un *TxnMVCCNode) CloneAll() *TxnMVCCNode {
-	n := &TxnMVCCNode{}
+func (un *TxnMVCCNode) CloneAll() TxnMVCCNode {
+	n := TxnMVCCNode{}
 	n.Start = un.Start
 	n.Prepare = un.Prepare
 	n.End = un.End
