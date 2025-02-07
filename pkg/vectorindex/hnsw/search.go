@@ -22,7 +22,6 @@ import (
 	"runtime"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/detailyang/go-fallocate"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -59,6 +58,7 @@ type HnswSearch struct {
 	Indexes     []*HnswSearchIndex
 	Concurrency atomic.Int32
 	Mutex       sync.Mutex
+	Cond        *sync.Cond
 }
 
 // load chunk from database
@@ -184,18 +184,21 @@ func (s *HnswSearch) Search(query []float32, limit uint) (keys []int64, distance
 		return []int64{}, []float32{}, nil
 	}
 
+	if s.Cond == nil {
+		s.Cond = sync.NewCond(&s.Mutex)
+	}
+
 	// check max threads
-	s.Mutex.Lock()
+	s.Cond.L.Lock()
 	for s.Concurrency.Load() >= MaxUSearchThreads {
-		s.Mutex.Unlock()
-		time.Sleep(time.Millisecond)
-		s.Mutex.Lock()
+		s.Cond.Wait()
 	}
 	s.Concurrency.Add(1)
-	s.Mutex.Unlock()
+	s.Cond.L.Unlock()
 
 	defer func() {
 		s.Concurrency.Add(int32(-1))
+		s.Cond.Signal()
 	}()
 
 	// search
