@@ -65,7 +65,7 @@ type VectorIndexSearchIf interface {
 
 // base VectorIndex Search structure for VectorIndexSearchIf (see HnswSearch)
 type VectorIndexSearch struct {
-	Mutex      sync.Mutex
+	Mutex      sync.RWMutex
 	ExpireAt   atomic.Int64
 	LastUpdate atomic.Int64
 	Status     atomic.Int32 // 0 - NOT INIT, 1 - LOADED, 2 - marked as outdated,  3 - DESTROYED,  4 or above ERRCODE
@@ -116,19 +116,15 @@ func (s *VectorIndexSearch) extend(update bool) {
 }
 
 func (s *VectorIndexSearch) Search(newalgo VectorIndexSearchIf, query []float32, limit uint) (keys []int64, distances []float32, err error) {
-	//s.Mutex.RLock()
-	s.Mutex.Lock()
+	s.Mutex.RLock()
 
 	for s.Status.Load() == 0 {
-		//s.Mutex.RUnlock()
-		s.Mutex.Unlock()
+		s.Mutex.RUnlock()
 		os.Stderr.WriteString("Search index is not ready yet\n")
 		time.Sleep(time.Millisecond)
-		//s.Mutex.RLock()
-		s.Mutex.Lock()
+		s.Mutex.RLock()
 	}
-	//defer s.Mutex.RUnlock()
-	defer s.Mutex.Unlock()
+	defer s.Mutex.RUnlock()
 
 	status := s.Status.Load()
 	if status >= STATUS_DESTROYED {
