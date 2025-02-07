@@ -185,17 +185,12 @@ func (s *HnswSearch) Search(query []float32, limit uint) (keys []int64, distance
 
 	// check max threads
 	for s.Concurrency.Load() >= MaxUSearchThreads {
-		os.Stderr.WriteString(fmt.Sprintf("SEARCH HIT MAX %d\n", MaxUSearchThreads))
 		time.Sleep(time.Millisecond)
 	}
-	cnt := s.Concurrency.Add(1)
+	s.Concurrency.Add(1)
 	defer func() {
 		s.Concurrency.Add(int32(-1))
 	}()
-
-	if cnt >= MaxUSearchThreads {
-		os.Stderr.WriteString(fmt.Sprintf("concurrent count %d\n", cnt))
-	}
 
 	// search
 	size := len(s.Indexes) * int(limit)
