@@ -36,7 +36,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	gc2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc/v3"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
@@ -83,7 +82,7 @@ func Open(
 		zap.String("db-dirname", dirname),
 		zap.Error(err),
 	)
-	totalTime := time.Now()
+	startTime := time.Now()
 
 	if err != nil {
 		return nil, err
@@ -102,7 +101,7 @@ func Open(
 		}
 		logutil.Info(
 			Phase_Open,
-			zap.Duration("total-cost", time.Since(totalTime)),
+			zap.Duration("total-cost", time.Since(startTime)),
 			zap.String("mode", db.GetTxnMode().String()),
 			zap.Error(err),
 		)
@@ -260,16 +259,11 @@ func Open(
 		return
 	}
 
-	var txn txnif.AsyncTxn
-	{
-		// create a txn manually
-		txnIdAlloc := common.NewTxnIDAllocator()
-		store := txnStoreFactory()
-		txn = txnFactory(db.TxnMgr, store, txnIdAlloc.Alloc(), checkpointed, types.TS{})
-		store.BindTxn(txn)
-	}
 	// 2. replay all table Entries
-	if err = ckpReplayer.ReplayCatalog(txn, Phase_Open); err != nil {
+	if err = ckpReplayer.ReplayCatalog(
+		db.TxnMgr.OpenOfflineTxn(checkpointed),
+		Phase_Open,
+	); err != nil {
 		return
 	}
 
@@ -282,8 +276,6 @@ func Open(
 		zap.Duration("replay-checkpoints-cost", time.Since(now)),
 		zap.String("max-checkpoint", checkpointed.ToString()),
 	)
-
-	db.LogtailMgr.UpdateMaxCommittedLSN(ckpLSN)
 
 	now = time.Now()
 	if err = db.ReplayWal(ctx, dataFactory, checkpointed, ckpLSN, valid); err != nil {

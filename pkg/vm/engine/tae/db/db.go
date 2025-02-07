@@ -318,6 +318,9 @@ func (db *DB) ReplayWal(
 	if !valid {
 		logutil.Infof("checkpoint version is too small, LSN check is disable")
 	}
+
+	db.LogtailMgr.UpdateMaxCommittedLSN(lsn)
+
 	replayer := newWalReplayer(dataFactory, db, maxTs, lsn, valid)
 	if err = replayer.Replay(ctx); err != nil {
 		return

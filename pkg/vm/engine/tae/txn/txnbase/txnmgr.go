@@ -259,6 +259,20 @@ func (mgr *TxnManager) GetTxnSkipFlags() TxnSkipFlag {
 	return TxnSkipFlag(mgr.txns.skipFlags.Load())
 }
 
+// open a txn for offline use
+// the txn cannot be committed or rollbacked
+// the txn can be used to read data
+func (mgr *TxnManager) OpenOfflineTxn(
+	ts types.TS,
+) txnif.AsyncTxn {
+	txnId := mgr.IdAlloc.Alloc()
+	store := mgr.TxnStoreFactory()
+	txn := mgr.TxnFactory(nil, store, txnId, ts, types.TS{})
+	store.BindTxn(txn)
+	mgr.storeTxn(txn, TxnFlag_Normal)
+	return txn
+}
+
 // Note: Replay should always runs in a single thread
 func (mgr *TxnManager) OnReplayTxn(txn txnif.AsyncTxn) (err error) {
 	mgr.storeTxn(txn, TxnFlag_Replay)
