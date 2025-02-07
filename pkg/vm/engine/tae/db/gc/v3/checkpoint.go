@@ -1510,7 +1510,10 @@ func (c *checkpointCleaner) Process(
 
 	var tryGC bool
 	if tryGC, err = c.tryScanLocked(
-		ctx, memoryBuffer, scanCount, checker); err != nil || !tryGC {
+		ctx, memoryBuffer, scanCount, checker); err != nil ||
+		(!tryGC && jobType == JT_GCFastExecute) {
+		// fast gc can return directly if no gc is needed, but normal gc must execute
+		// tryGCLocked because it needs to clean up and merge expired checkpoints
 		return
 	}
 	return execute(ctx, memoryBuffer)
