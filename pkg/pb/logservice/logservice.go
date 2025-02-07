@@ -225,6 +225,7 @@ func (s *TNState) Update(hb TNStoreHeartbeat, tick uint64) {
 		storeInfo.ConfigData = hb.ConfigData
 	}
 	storeInfo.QueryAddress = hb.QueryAddress
+	storeInfo.ReplayedLsn = hb.ReplayedLsn
 	s.Stores[hb.UUID] = storeInfo
 }
 

@@ -204,6 +204,7 @@ message TNStoreHeartbeat {
   // QueryAddress is the address of queryservice on tn
   string QueryAddress = 9;
   string  ShardServiceAddress   = 10;
+  uint64  ReplayedLsn = 11;
 };
 
 message RSMState {
@@ -585,6 +586,7 @@ message TNStoreInfo {
   // QueryAddress is the address of queryservice on tn
   string          QueryAddress       = 9;
   string  ShardServiceAddress   = 10;
+  uint64 ReplayedLsn = 11;
 }
 
 // TNState contains all TN details known to the HAKeeper.
