@@ -80,6 +80,8 @@ func (sns *sequenceNumberState) initState(stats *DSNStats) {
 func (sns *sequenceNumberState) recordSequenceNumbers(
 	psn uint64, dsns common.ClosedInterval,
 ) {
+	sns.sequence.mu.Lock()
+	defer sns.sequence.mu.Unlock()
 	sns.sequence.psn2DSNMap[psn] = dsns
 	sns.sequence.psns.Add(psn)
 }
