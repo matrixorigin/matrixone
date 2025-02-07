@@ -115,7 +115,7 @@ func (c *MockCleaner) GetMinMerged() *checkpoint.CheckpointEntry {
 	return nil
 }
 
-func (c *MockCleaner) DoCheck() error {
+func (c *MockCleaner) DoCheck(_ bool) error {
 	return nil
 }
 

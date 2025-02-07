@@ -1205,7 +1205,7 @@ func (c *checkpointCleaner) scanCheckpointsAsDebugWindow(
 	return
 }
 
-func (c *checkpointCleaner) DoCheck() error {
+func (c *checkpointCleaner) DoCheck(waitGC bool) error {
 	c.StartMutationTask("gc-check")
 	defer c.StopMutationTask()
 
@@ -1219,10 +1219,12 @@ func (c *checkpointCleaner) DoCheck() error {
 	}
 
 	gCkp := c.GetGCWaterMark()
-	testutils.WaitExpect(10000, func() bool {
-		gCkp = c.GetGCWaterMark()
-		return gCkp != nil
-	})
+	if waitGC {
+		testutils.WaitExpect(10000, func() bool {
+			gCkp = c.GetGCWaterMark()
+			return gCkp != nil
+		})
+	}
 	if gCkp == nil {
 		gCkp = c.checkpointCli.MaxGlobalCheckpoint()
 		if gCkp == nil {

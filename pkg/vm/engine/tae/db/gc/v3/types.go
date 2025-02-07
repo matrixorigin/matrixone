@@ -40,7 +40,7 @@ type Cleaner interface {
 	GetScannedWindow() *GCWindow
 	Stop()
 	GetMinMerged() *checkpoint.CheckpointEntry
-	DoCheck() error
+	DoCheck(bool) error
 	GetPITRs() (*logtail.PitrInfo, error)
 	SetTid(tid uint64)
 	EnableGC()
