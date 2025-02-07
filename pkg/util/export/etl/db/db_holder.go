@@ -101,6 +101,10 @@ func CloseDBConn() {
 	}
 }
 
+// GetOrInitDBConn get the target cn to do the load query.
+// if @forceNewConn is true, it will force close old db conn, and re-find new cn.
+// if @forceNewConn is false, it will normally fetch the current db connection. BUT in 1 cases, it will re-find the cn:
+//  1. DBRefreshTime interval, it will try to fetch the 'new' ob-sys cn.
 var GetOrInitDBConn = func(forceNewConn bool, randomCN bool) (*sql.DB, error) {
 	dbMux.Lock()
 	defer dbMux.Unlock()
@@ -167,6 +171,13 @@ func WriteRowRecords(records [][]string, tbl *table.Table, timeout time.Duration
 		dbConn, err = GetOrInitDBConn(false, false)
 	}
 	if err != nil {
+		v2.TraceMOLoggerErrorConnDBCounter.Inc()
+		_ = DBConnErrCount.Count()
+		return 0, err
+	}
+	if dbConn.Ping() != nil {
+		v2.TraceMOLoggerErrorPingDBCounter.Inc()
+		_ = DBConnErrCount.Count()
 		return 0, err
 	}
 
@@ -398,5 +409,6 @@ func (b *ReConnectionBackOff) Count() bool {
 
 // Check return same as Count, but without changed.
 func (b *ReConnectionBackOff) Check() bool {
-	return b.count <= b.threshold || time.Since(b.last) > b.window
+	return b.count <= b.threshold ||
+		(time.Now().Before(b.last) || time.Since(b.last) > b.window)
 }

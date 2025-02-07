@@ -228,6 +228,24 @@ func TestCheck(t *testing.T) {
 	backOff.last = time.Now().Add(-time.Hour)
 	got = backOff.Check()
 	require.Equal(t, true, got)
+
+	// inject count == threshold
+	backOff.count = 2
+	backOff.last = time.Now().Add(time.Minute)
+	got = backOff.Check()
+	require.Equal(t, true, got)
+
+	// inject valid 'false' case
+	backOff.count = 20
+	backOff.last = time.Now()
+	got = backOff.Check()
+	require.Equal(t, false, got)
+
+	// inject invalid 'last' value
+	backOff.count = 20
+	backOff.last = time.Now().Add(time.Hour)
+	got = backOff.Check()
+	require.Equal(t, true, got)
 }
 
 func Test_WriteRowRecords2(t *testing.T) {

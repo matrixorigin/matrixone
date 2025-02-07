@@ -180,11 +180,16 @@ func NewSQLFlusher(tbl *table.Table) *SQLFlusher {
 }
 
 func (f *SQLFlusher) FlushBuffer(buf *bytes.Buffer) (int, error) {
-	// FIXME: if error sometime, pls back-off
 	forceNewConn := !db_holder.DBConnErrCount.Check()
 	conn, err := db_holder.GetOrInitDBConn(forceNewConn, true)
 	if err != nil {
 		v2.TraceMOLoggerErrorConnDBCounter.Inc()
+		_ = db_holder.DBConnErrCount.Count()
+		return 0, err
+	}
+	if err = conn.Ping(); err != nil {
+		v2.TraceMOLoggerErrorPingDBCounter.Inc()
+		_ = db_holder.DBConnErrCount.Count()
 		return 0, err
 	}
 
