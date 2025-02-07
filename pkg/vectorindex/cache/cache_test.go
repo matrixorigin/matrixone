@@ -26,7 +26,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
-	usearch "github.com/unum-cloud/usearch/golang"
+
+	//usearch "github.com/unum-cloud/usearch/golang"
+	usearch "github.com/cpegeric/usearch/golang"
 )
 
 type MockSearch struct {

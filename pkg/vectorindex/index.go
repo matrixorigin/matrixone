@@ -23,7 +23,8 @@ import (
 	"strings"
 	"sync"
 
-	usearch "github.com/unum-cloud/usearch/golang"
+	//usearch "github.com/unum-cloud/usearch/golang"
+	usearch "github.com/cpegeric/usearch/golang"
 )
 
 /*

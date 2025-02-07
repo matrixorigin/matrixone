@@ -19,7 +19,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-	usearch "github.com/unum-cloud/usearch/golang"
+	//usearch "github.com/unum-cloud/usearch/golang"
+	usearch "github.com/cpegeric/usearch/golang"
 )
 
 func TestQuantization(t *testing.T) {
@@ -48,6 +49,7 @@ func TestUSearch(t *testing.T) {
 	if err != nil {
 		panic("Failed to reserve")
 	}
+
 	for i := 0; i < vectorsCount; i++ {
 		err = index.Add(usearch.Key(i), []float32{float32(i), float32(i + 1), float32(i + 2)})
 		if err != nil {
@@ -133,6 +135,13 @@ func TestConcurrent(t *testing.T) {
 	if err != nil {
 		panic("Failed to reserve")
 	}
+
+	nthread := 64
+	err = index.ChangeThreadsSearch(uint(nthread))
+	if err != nil {
+		panic("failed to set threads_search")
+	}
+
 	for i := 0; i < vectorsCount; i++ {
 		err = index.Add(usearch.Key(i), []float32{float32(i), float32(i + 1), float32(i + 2)})
 		if err != nil {
@@ -141,7 +150,6 @@ func TestConcurrent(t *testing.T) {
 	}
 
 	var wg sync.WaitGroup
-	nthread := 64
 
 	for i := 0; i < nthread; i++ {
 		wg.Add(1)

@@ -33,7 +33,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	usearch "github.com/unum-cloud/usearch/golang"
+
+	//usearch "github.com/unum-cloud/usearch/golang"
+	usearch "github.com/cpegeric/usearch/golang"
 )
 
 type hnswCreateState struct {

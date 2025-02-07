@@ -15,7 +15,9 @@
 package hnsw
 
 import (
+	"fmt"
 	"os"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -32,7 +34,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
-	usearch "github.com/unum-cloud/usearch/golang"
+
+	//usearch "github.com/unum-cloud/usearch/golang"
+	usearch "github.com/cpegeric/usearch/golang"
 )
 
 // give metadata [index_id, checksum, timestamp]
@@ -70,6 +74,7 @@ func TestHnsw(t *testing.T) {
 	tblcfg := vectorindex.IndexTableConfig{DbName: "db", SrcTable: "src", MetadataTable: "__secondary_meta", IndexTable: "__secondary_index"}
 	fp32a := []float32{0, 1, 2}
 
+	os.Stderr.WriteString(fmt.Sprintf("NUM CPU = %d\n", runtime.NumCPU()))
 	var wg sync.WaitGroup
 	nthread := 64
 

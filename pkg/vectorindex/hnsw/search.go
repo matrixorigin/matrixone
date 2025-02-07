@@ -19,7 +19,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/detailyang/go-fallocate"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -30,10 +33,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	usearch "github.com/unum-cloud/usearch/golang"
+
+	//usearch "github.com/unum-cloud/usearch/golang"
+	usearch "github.com/cpegeric/usearch/golang"
 )
 
 const NThreadSearch = 4
+
+var MaxUSearchThreads = int32(runtime.NumCPU())
 
 // Hnsw search index struct to hold the usearch index
 type HnswSearchIndex struct {
@@ -47,9 +54,10 @@ type HnswSearchIndex struct {
 
 // This is the HNSW search implementation that implement VectorIndexSearchIf interface
 type HnswSearch struct {
-	Idxcfg  vectorindex.IndexConfig
-	Tblcfg  vectorindex.IndexTableConfig
-	Indexes []*HnswSearchIndex
+	Idxcfg      vectorindex.IndexConfig
+	Tblcfg      vectorindex.IndexTableConfig
+	Indexes     []*HnswSearchIndex
+	Concurrency atomic.Int32
 }
 
 // load chunk from database
@@ -154,6 +162,11 @@ func (idx *HnswSearchIndex) LoadIndex(proc *process.Process, idxcfg vectorindex.
 		return err
 	}
 
+	err = usearchidx.ChangeThreadsSearch(uint(MaxUSearchThreads))
+	if err != nil {
+		return err
+	}
+
 	idx.Index = usearchidx
 
 	return nil
@@ -168,6 +181,20 @@ func (idx *HnswSearchIndex) Search(query []float32, limit uint) (keys []usearch.
 func (s *HnswSearch) Search(query []float32, limit uint) (keys []int64, distances []float32, err error) {
 	if len(s.Indexes) == 0 {
 		return []int64{}, []float32{}, nil
+	}
+
+	// check max threads
+	for s.Concurrency.Load() >= MaxUSearchThreads {
+		os.Stderr.WriteString(fmt.Sprintf("SEARCH HIT MAX %d\n", MaxUSearchThreads))
+		time.Sleep(time.Millisecond)
+	}
+	cnt := s.Concurrency.Add(1)
+	defer func() {
+		s.Concurrency.Add(int32(-1))
+	}()
+
+	if cnt >= MaxUSearchThreads {
+		os.Stderr.WriteString(fmt.Sprintf("concurrent count %d\n", cnt))
 	}
 
 	// search
