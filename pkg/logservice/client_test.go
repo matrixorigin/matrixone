@@ -180,7 +180,7 @@ func TestClientUpdateLeaseholderID(t *testing.T) {
 		err = c.UpdateLeaseholderID(ctx, newLeaseholderID)
 		require.NoError(t, err)
 
-		lsn, err = c.Append(ctx, rec)
+		_, err = c.Append(ctx, rec)
 		require.Error(t, err)
 
 		c.(*managedClient).cfg.TNReplicaID = newLeaseholderID
