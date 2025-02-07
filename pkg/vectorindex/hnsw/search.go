@@ -188,7 +188,7 @@ func (s *HnswSearch) Search(query []float32, limit uint) (keys []int64, distance
 	s.Mutex.Lock()
 	for s.Concurrency.Load() >= MaxUSearchThreads {
 		s.Mutex.Unlock()
-		time.Sleep(time.Millisecond)
+		time.Sleep(10 * time.Microsecond)
 		s.Mutex.Lock()
 	}
 	s.Concurrency.Add(1)
