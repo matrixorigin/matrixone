@@ -207,6 +207,7 @@ func TestCount(t *testing.T) {
 	backOff.last = time.Now().Add(-time.Hour)
 	got = backOff.Count()
 	require.Equal(t, true, got)
+	require.Equal(t, 1, backOff.count)
 }
 
 func TestCheck(t *testing.T) {
