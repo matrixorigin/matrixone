@@ -69,6 +69,7 @@ func restartDriver(t *testing.T, d *LogServiceDriver, h func(*entry.Entry)) *Log
 		func() driver.ReplayMode {
 			return driver.ReplayMode_ReplayForWrite
 		},
+		nil,
 	)
 	assert.NoError(t, err)
 	t.Log("Addr:")
@@ -110,6 +111,7 @@ func TestReplay1(t *testing.T) {
 		func() driver.ReplayMode {
 			return driver.ReplayMode_ReplayForWrite
 		},
+		nil,
 	)
 	assert.NoError(t, err)
 

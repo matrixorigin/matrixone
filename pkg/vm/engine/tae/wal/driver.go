@@ -61,9 +61,12 @@ func (driver *walDriver) replayhandle(handle store.ApplyHandle) store.ApplyHandl
 }
 
 func (driver *walDriver) Replay(
-	ctx context.Context, handle store.ApplyHandle, modeGetter func() storeDriver.ReplayMode,
+	ctx context.Context,
+	handle store.ApplyHandle,
+	modeGetter func() storeDriver.ReplayMode,
+	opt *storeDriver.ReplayOption,
 ) error {
-	return driver.impl.Replay(ctx, driver.replayhandle(handle), modeGetter)
+	return driver.impl.Replay(ctx, driver.replayhandle(handle), modeGetter, opt)
 }
 
 func (driver *walDriver) GetPenddingCnt() uint64 {
