@@ -50,7 +50,7 @@ type WalReplayer struct {
 	db            *DB
 	maxTs         types.TS
 	once          sync.Once
-	ckpedTS       types.TS
+	fromTS        types.TS
 	wg            sync.WaitGroup
 	applyDuration time.Duration
 	txnCmdChan    chan *txnbase.TxnCmd
@@ -65,21 +65,20 @@ type WalReplayer struct {
 func newWalReplayer(
 	dataFactory *tables.DataFactory,
 	db *DB,
-	ckpedTS types.TS,
+	fromTS types.TS,
 	lsn uint64,
 	enableLSNCheck bool,
 ) *WalReplayer {
 	replayer := &WalReplayer{
 		DataFactory: dataFactory,
 		db:          db,
-		ckpedTS:     ckpedTS,
+		fromTS:      fromTS,
 		lsn:         lsn,
 		// for ckp version less than 7, lsn is always 0 and lsnCheck is disable
 		enableLSNCheck: enableLSNCheck,
-		wg:             sync.WaitGroup{},
 		txnCmdChan:     make(chan *txnbase.TxnCmd, 100),
 	}
-	replayer.OnTimeStamp(ckpedTS)
+	replayer.OnTimeStamp(fromTS)
 	return replayer
 }
 
@@ -90,10 +89,10 @@ func (replayer *WalReplayer) PreReplayWal() {
 			return moerr.GetOkStopCurrRecur()
 		}
 		dropCommit, obj := entry.TreeMaxDropCommitEntry()
-		if dropCommit != nil && dropCommit.DeleteBeforeLocked(replayer.ckpedTS) {
+		if dropCommit != nil && dropCommit.DeleteBeforeLocked(replayer.fromTS) {
 			return moerr.GetOkStopCurrRecur()
 		}
-		if obj != nil && obj.DeleteBefore(replayer.ckpedTS) {
+		if obj != nil && obj.DeleteBefore(replayer.fromTS) {
 			return moerr.GetOkStopCurrRecur()
 		}
 		entry.InitData(replayer.DataFactory)
@@ -126,6 +125,7 @@ func (replayer *WalReplayer) Replay(ctx context.Context) (err error) {
 		ctx,
 		replayer.OnReplayEntry,
 		func() driver.ReplayMode { return driver.ReplayMode_ReplayForWrite },
+		nil,
 	); err != nil {
 		return
 	}

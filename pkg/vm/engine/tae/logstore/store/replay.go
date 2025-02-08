@@ -22,7 +22,7 @@ import (
 )
 
 func (w *StoreImpl) Replay(
-	ctx context.Context, h ApplyHandle, modeGetter func() driver.ReplayMode,
+	ctx context.Context, h ApplyHandle, modeGetter func() driver.ReplayMode, opt *driver.ReplayOption,
 ) error {
 	err := w.driver.Replay(ctx, func(e *entry.Entry) driver.ReplayEntryState {
 		state, err := w.replayEntry(e, h)
@@ -30,7 +30,7 @@ func (w *StoreImpl) Replay(
 			panic(err)
 		}
 		return state
-	}, modeGetter)
+	}, modeGetter, opt)
 	if err != nil {
 		panic(err)
 	}
