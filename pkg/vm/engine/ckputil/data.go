@@ -30,22 +30,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
-// used to scan data with columns: [`table_id`, `object_type`, `phy_addr`]
-var DataScan_TableIDAtrrs = []string{
-	TableObjectsAttr_Table,
-	TableObjectsAttr_ObjectType,
-	objectio.PhysicalAddr_Attr,
-}
-var DataScan_TableIDTypes = []types.Type{
-	TableObjectsTypes[TableObjectsAttr_Table_Idx],
-	TableObjectsTypes[TableObjectsAttr_ObjectType_Idx],
-	objectio.RowidType,
-}
-var DataScan_TableIDSeqnums = []uint16{
-	TableObjectsAttr_Table_Idx,
-	TableObjectsAttr_ObjectType_Idx,
-	objectio.SEQNUM_ROWID,
-}
+// used to scan data with columns: [table object attrs, `phy_addr`]
+var DataScan_TableIDAtrrs = append(TableObjectsAttrs, objectio.PhysicalAddr_Attr)
+var DataScan_TableIDTypes = append(TableObjectsTypes, objectio.RowidType)
+var DataScan_TableIDSeqnums = append(TableObjectsSeqnums, objectio.SEQNUM_ROWID)
 
 func MakeDataScanTableIDBatch() *batch.Batch {
 	return batch.NewWithSchema(
@@ -147,6 +135,7 @@ func (iter *ObjectIter) Next() (bool, error) {
 		if iter.index.offset >= objectio.BlockMaxRows {
 			iter.index.blockIdx++
 			iter.index.offset = 0
+			needLoad = true
 		}
 		if iter.index.blockIdx == iter.ranges[iter.index.rangeIdx].End.GetBlockOffset() {
 			// blockIdx == end
@@ -185,12 +174,14 @@ func (iter *ObjectIter) Next() (bool, error) {
 		}
 		iter.data.Free(iter.mp)
 		var err error
+		loc := iter.ranges[iter.index.rangeIdx].ObjectStats.ObjectLocation().Clone()
+		loc.SetID(iter.index.blockIdx)
 		if _, iter.release, err = ioutil.LoadColumnsData(
 			iter.ctx,
 			DataScan_ObjectEntrySeqnums,
 			DataScan_ObjectEntryTypes,
 			iter.fs,
-			iter.ranges[iter.index.rangeIdx].Location,
+			loc,
 			iter.data,
 			iter.mp,
 			0,

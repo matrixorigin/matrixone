@@ -24,6 +24,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
 type snapshotInfo struct {
@@ -178,9 +179,34 @@ func (l *store) shouldProcess(shardID uint64, lsn uint64) bool {
 // The param lsn is the biggest one from exported snapshots that are
 // managed by snapshotManager.
 // This check avoid doing the truncation at the same lsn.
-func (l *store) shouldDoImport(shardID uint64, lsn uint64, dir string) bool {
+func (l *store) shouldDoImport(
+	ctx context.Context, shardID uint64, lsn uint64, dir string,
+) bool {
 	if len(dir) == 0 {
 		return false
+	}
+	ctx, cancel := context.WithTimeoutCause(ctx, time.Second*5, moerr.CauseProcessTruncationReadState)
+	defer cancel()
+	v, err := l.read(ctx, hakeeper.DefaultHAKeeperShardID, &hakeeper.StateQuery{})
+	if err != nil {
+		l.runtime.Logger().Error("read state from HAKeeper failed", zap.Error(err))
+		return false
+	}
+	tnStore := v.(*pb.CheckerState).TNState
+	// the replayed LSN of all TN instances should greater than the request LSN.
+	// otherwise, return false.
+	// if the replayed LSN is 0, do not check it, because it is the master TN.
+	for id, ss := range tnStore.Stores {
+		if ss.ReplayedLsn > 0 && ss.ReplayedLsn < lsn {
+			l.runtime.Logger().Warn("cannot import snapshot, as the replayed "+
+				"LSN is lower than the requested LSN",
+				zap.Uint64("shardID", shardID),
+				zap.String("tn uuid", id),
+				zap.Uint64("replayed LSN", ss.ReplayedLsn),
+				zap.Uint64("requested LSN", lsn),
+			)
+			return false
+		}
 	}
 	return lsn > l.shardSnapshotInfo.getTruncatedLsn(shardID)
 }
@@ -233,7 +259,7 @@ func (l *store) processShardTruncateLog(ctx context.Context, shardID uint64) err
 
 	replicaID := uint64(l.getReplicaID(shardID))
 	dir, lsn := l.snapshotMgr.EvalImportSnapshot(shardID, replicaID, lsnInSM)
-	if l.shouldDoImport(shardID, lsn, dir) {
+	if l.shouldDoImport(ctx, shardID, lsn, dir) {
 		if err := l.importSnapshot(ctx, shardID, replicaID, lsn, dir); err != nil {
 			l.runtime.Logger().Error("do truncate log failed",
 				zap.Uint64("shard ID", shardID),
