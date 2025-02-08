@@ -131,7 +131,6 @@ func (d *LogServiceDriver) doTruncate() {
 func (d *LogServiceDriver) commitTruncateInfo(psn uint64) {
 	if psn < d.truncatedPSN {
 		panic(fmt.Sprintf("invalid psn %d < %d", psn, d.truncatedPSN))
-		return
 	}
 	d.truncatedPSN = psn
 	d.truncateByPSN(psn)
