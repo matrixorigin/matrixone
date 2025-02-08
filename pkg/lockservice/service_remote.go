@@ -477,6 +477,10 @@ func (s *service) unlockTimeoutRemoteTxn(ctx context.Context) {
 	timer := time.NewTimer(wait)
 	defer timer.Stop()
 
+	timeout := defaultRemoteTxnTimeout
+	txnTimer := time.NewTimer(timeout)
+	defer txnTimer.Stop()
+
 	var timeoutTxns [][]byte
 	timeoutServices := make(map[string]struct{})
 	for {
@@ -497,6 +501,30 @@ func (s *service) unlockTimeoutRemoteTxn(ctx context.Context) {
 			}
 
 			timer.Reset(wait)
+		case <-txnTimer.C:
+			s.checkRemoteTxnTimeout(ctx)
+			txnTimer.Reset(timeout)
+		}
+	}
+}
+
+func (s *service) checkRemoteTxnTimeout(ctx context.Context) {
+	if s.isStatus(pb.Status_ServiceLockEnable) {
+		return
+	}
+	txns := s.activeTxnHolder.getAllTxnID()
+	for _, t := range txns {
+		txn := s.activeTxnHolder.getActiveTxn(t, false, "")
+		createOn := txn.remoteService
+		if len(createOn) == 0 {
+			continue
+		}
+
+		waitTxn := pb.WaitTxn{TxnID: t, CreatedOn: createOn}
+		if !s.activeTxnHolder.isValidRemoteTxn(waitTxn) {
+			s.logger.Warn("found timeout txn",
+				bytesArrayField("txn", [][]byte{t}))
+			_ = s.Unlock(ctx, t, timestamp.Timestamp{})
 		}
 	}
 }

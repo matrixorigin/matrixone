@@ -329,32 +329,22 @@ func doComQueryInBack(
 	//!!!does not init sequence in the background exec
 	if backSes.tenant != nil {
 		proc.Base.SessionInfo.Account = backSes.tenant.GetTenant()
-		proc.Base.SessionInfo.AccountId = backSes.tenant.GetTenantID()
 		proc.Base.SessionInfo.Role = backSes.tenant.GetDefaultRole()
-		proc.Base.SessionInfo.RoleId = backSes.tenant.GetDefaultRoleID()
-		proc.Base.SessionInfo.UserId = backSes.tenant.GetUserID()
 
 		if len(backSes.tenant.GetVersion()) != 0 {
 			proc.Base.SessionInfo.Version = backSes.tenant.GetVersion()
 		}
 		userNameOnly = backSes.tenant.GetUser()
-	} else {
-		var accountId uint32
-		accountId, retErr = defines.GetAccountId(execCtx.reqCtx)
-		if retErr != nil {
-			return retErr
-		}
-		proc.Base.SessionInfo.AccountId = accountId
-		proc.Base.SessionInfo.UserId = defines.GetUserId(execCtx.reqCtx)
-		proc.Base.SessionInfo.RoleId = defines.GetRoleId(execCtx.reqCtx)
 	}
+
 	var span trace.Span
 	execCtx.reqCtx, span = trace.Start(execCtx.reqCtx, "backExec.doComQueryInBack",
 		trace.WithKind(trace.SpanKindStatement))
 	defer span.End()
 
 	// Instantiate StatsInfo to track SQL resource statistics
-	statsInfo := new(statistic.StatsInfo)
+	//statsInfo := new(statistic.StatsInfo)
+	statsInfo := statistic.NewStatsInfo()
 	statsInfo.ParseStage.ParseStartTime = beginInstant
 	execCtx.reqCtx = statistic.ContextWithStatsInfo(execCtx.reqCtx, statsInfo)
 	execCtx.input = input

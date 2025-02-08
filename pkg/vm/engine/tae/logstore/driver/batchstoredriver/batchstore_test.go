@@ -69,7 +69,9 @@ func restartStore(s *baseStore, t *testing.T) *baseStore {
 			// logutil.Infof("lsn is %d",e.DSN)
 			return driver.RE_Nomal
 		},
-		driver.ReplayMode_ReplayForWrite,
+		func() driver.ReplayMode {
+			return driver.ReplayMode_ReplayForWrite
+		},
 	)
 	assert.NoError(t, err)
 	assert.Equal(t, maxlsn, s.GetDSN())

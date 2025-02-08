@@ -2298,6 +2298,23 @@ func (tbl *txnTable) GetNonAppendableObjectStats(ctx context.Context) ([]objecti
 	return objStats, nil
 }
 
+func (tbl *txnTable) Reset(op client.TxnOperator) error {
+	ws := op.GetWorkspace()
+	if ws == nil {
+		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("workspace is nil when reset relation %s:%s",
+			tbl.db.databaseName, tbl.tableName))
+	}
+	txn, ok := ws.(*Transaction)
+	if !ok {
+		return moerr.NewInternalErrorNoCtx("failed to assert txn")
+	}
+	tbl.db.op = op
+	tbl.proc.Store(txn.proc)
+	tbl.createdInTxn = false
+	tbl.lastTS = op.SnapshotTS()
+	return nil
+}
+
 func (tbl *txnTable) getSortKeyPosAndSortKeyIsPK() (int, bool) {
 	sortKeyPos := -1
 	sortKeyIsPK := false
