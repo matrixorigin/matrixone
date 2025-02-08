@@ -496,13 +496,12 @@ func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, tx
 	tbl.InsertLocked(un)
 }
 func (catalog *Catalog) OnReplayObjectBatch_V2(
-	vecs containers.Vectors,
+	dbid, tid uint64,
+	objectType int8,
+	stats objectio.ObjectStats,
+	create, delete types.TS,
 	dataFactory DataFactory,
-	start, end int,
 ) {
-	dbid := vector.GetFixedAtNoTypeCheck[uint64](
-		&vecs[ioutil.TableObjectsAttr_DB_Idx], start,
-	)
 	db, err := catalog.GetDatabaseByID(dbid)
 	if err != nil {
 		// As replaying only the catalog view at the end time of lastest checkpoint
@@ -513,9 +512,6 @@ func (catalog *Catalog) OnReplayObjectBatch_V2(
 		logutil.Info(catalog.SimplePPString(common.PPL3))
 		panic(err)
 	}
-	tid := vector.GetFixedAtNoTypeCheck[uint64](
-		&vecs[ioutil.TableObjectsAttr_Table_Idx], start,
-	)
 	rel, err := db.GetTableEntryByID(tid)
 	if err != nil {
 		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
@@ -524,89 +520,76 @@ func (catalog *Catalog) OnReplayObjectBatch_V2(
 		logutil.Info(catalog.SimplePPString(common.PPL3))
 		panic(err)
 	}
-	statsVec := vecs[4]
-	objectTypes := vector.MustFixedColNoTypeCheck[int8](
-		&vecs[ioutil.TableObjectsAttr_ObjectType_Idx],
-	)
-	createTSs := vector.MustFixedColNoTypeCheck[types.TS](
-		&vecs[ioutil.TableObjectsAttr_CreateTS_Idx],
-	)
-	deleteTSs := vector.MustFixedColNoTypeCheck[types.TS](
-		&vecs[ioutil.TableObjectsAttr_DeleteTS_Idx],
-	)
-	for i := start; i < end; i++ {
-		stats := objectio.ObjectStats(statsVec.GetBytesAt(i))
-		objID := stats.ObjectName().ObjectId()
-		var isTombstone bool
-		switch objectTypes[i] {
-		case ioutil.ObjectType_Data:
-			isTombstone = false
-		case ioutil.ObjectType_Tombstone:
-			isTombstone = true
-		default:
-			panic(fmt.Sprintf("invalid object type %d", objectTypes[i]))
+	objID := stats.ObjectName().ObjectId()
+	var isTombstone bool
+	switch objectType {
+	case ioutil.ObjectType_Data:
+		isTombstone = false
+	case ioutil.ObjectType_Tombstone:
+		isTombstone = true
+	default:
+		panic(fmt.Sprintf("invalid object type %d", objectType))
+	}
+	obj, err := rel.GetObjectByID(objID, isTombstone)
+	if err != nil && !moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+		panic(err)
+	}
+	if obj == nil {
+		obj = &ObjectEntry{
+			table: rel,
+			ObjectNode: ObjectNode{
+				SortHint:    catalog.NextObject(),
+				IsTombstone: isTombstone,
+				forcePNode:  true, // any object replayed from checkpoint is forced to be created
+			},
+			EntryMVCCNode: EntryMVCCNode{
+				CreatedAt: create,
+			},
+			ObjectMVCCNode: ObjectMVCCNode{
+				ObjectStats: stats,
+			},
+			CreateNode: txnbase.TxnMVCCNode{
+				Start:   create.Prev(),
+				Prepare: create,
+				End:     create,
+			},
+			ObjectState: ObjectState_Create_ApplyCommit,
 		}
-		obj, err := rel.GetObjectByID(objID, isTombstone)
-		if err != nil && !moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
-			panic(err)
+		rel.AddEntryLocked(obj)
+		if !delete.IsEmpty() {
+			dropped := obj.Clone()
+			dropped.DeletedAt = delete
+			dropped.DeleteNode = txnbase.TxnMVCCNode{
+				Start:   delete.Prev(),
+				Prepare: delete,
+				End:     delete,
+			}
+			dropped.prevVersion = obj
+			obj.nextVersion = dropped
+			dropped.ObjectState = ObjectState_Delete_ApplyCommit
+			rel.AddEntryLocked(dropped)
 		}
-		if obj == nil {
-			obj = &ObjectEntry{
-				table: rel,
-				ObjectNode: ObjectNode{
-					SortHint:    catalog.NextObject(),
-					IsTombstone: isTombstone,
-					forcePNode:  true, // any object replayed from checkpoint is forced to be created
-				},
-				EntryMVCCNode: EntryMVCCNode{
-					CreatedAt: createTSs[i],
-				},
-				ObjectMVCCNode: ObjectMVCCNode{
-					ObjectStats: stats,
-				},
-				CreateNode: txnbase.TxnMVCCNode{
-					Start:   createTSs[i].Prev(),
-					Prepare: createTSs[i],
-					End:     createTSs[i],
-				},
-				ObjectState: ObjectState_Create_ApplyCommit,
+	} else {
+		if obj.DeletedAt.IsEmpty() && !delete.IsEmpty() {
+			dropped := obj.Clone()
+			dropped.DeletedAt = delete
+			dropped.DeleteNode = txnbase.TxnMVCCNode{
+				Start:   delete.Prev(),
+				Prepare: delete,
+				End:     delete,
 			}
-			rel.AddEntryLocked(obj)
-			if !deleteTSs[i].IsEmpty() {
-				dropped := obj.Clone()
-				dropped.DeletedAt = deleteTSs[i]
-				dropped.DeleteNode = txnbase.TxnMVCCNode{
-					Start:   deleteTSs[i].Prev(),
-					Prepare: deleteTSs[i],
-					End:     deleteTSs[i],
-				}
-				dropped.prevVersion = obj
-				obj.nextVersion = dropped
-				dropped.ObjectState = ObjectState_Delete_ApplyCommit
-				rel.AddEntryLocked(dropped)
-			}
-		} else {
-			if obj.DeletedAt.IsEmpty() {
-				dropped := obj.Clone()
-				dropped.DeletedAt = deleteTSs[i]
-				dropped.DeleteNode = txnbase.TxnMVCCNode{
-					Start:   deleteTSs[i].Prev(),
-					Prepare: deleteTSs[i],
-					End:     deleteTSs[i],
-				}
-				dropped.prevVersion = obj
-				obj.nextVersion = dropped
-				dropped.ObjectState = ObjectState_Delete_ApplyCommit
-				rel.AddEntryLocked(dropped)
-			}
+			dropped.prevVersion = obj
+			obj.nextVersion = dropped
+			dropped.ObjectState = ObjectState_Delete_ApplyCommit
+			rel.AddEntryLocked(dropped)
 		}
-		if obj.objData == nil {
-			obj.objData = dataFactory.MakeObjectFactory()(obj)
-		} else {
-			deleteAt := obj.GetDeleteAt()
-			if !obj.IsAppendable() || (obj.IsAppendable() && !deleteAt.IsEmpty()) {
-				obj.objData.TryUpgrade()
-			}
+	}
+	if obj.objData == nil {
+		obj.objData = dataFactory.MakeObjectFactory()(obj)
+	} else {
+		deleteAt := obj.GetDeleteAt()
+		if !obj.IsAppendable() || (obj.IsAppendable() && !deleteAt.IsEmpty()) {
+			obj.objData.TryUpgrade()
 		}
 	}
 }
