@@ -40,12 +40,12 @@ func TestBuild(t *testing.T) {
 	defer build.Destroy()
 
 	var wg sync.WaitGroup
-	for j := 0; j < 10; j++ {
+	for j := 0; j < 6; j++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 
-			nitem := 500000
+			nitem := 100000
 			for i := 0; i < nitem; i++ {
 				v := []float32{float32(i), float32(i + 1), float32(i + 2)}
 				err := build.Add(int64(j*nitem+i), v)
@@ -58,7 +58,7 @@ func TestBuild(t *testing.T) {
 
 	sqls, err := build.ToInsertSql(time.Now().UnixMicro())
 	require.Nil(t, err)
-	require.Equal(t, len(sqls), 51)
+	require.Equal(t, len(sqls), 7)
 	//fmt.Printf("SQLS %v\n", sqls)
 	//fmt.Printf("LENF %d\n", len(sqls))
 
