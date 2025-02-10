@@ -1275,7 +1275,7 @@ func storageUsageDetails(c *storageUsageHistoryArg) (err error) {
 
 	if usageInsData, usageDelData, err = logtail.GetStorageUsageHistory(
 		ctx, c.ctx.db.Runtime.SID(), locations, versions,
-		c.ctx.db.Runtime.Fs.Service, common.DebugAllocator); err != nil {
+		c.ctx.db.Runtime.Fs, common.DebugAllocator); err != nil {
 		return err
 	}
 

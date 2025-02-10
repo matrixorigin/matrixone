@@ -108,7 +108,7 @@ func (c *CkpReplayer) readCheckpointEntries() (
 	if files, err = ioutil.ListTSRangeFiles(
 		c.r.ctx,
 		c.dir,
-		c.r.rt.Fs.Service,
+		c.r.rt.Fs,
 	); err != nil {
 		return
 	}
@@ -148,7 +148,7 @@ func (c *CkpReplayer) readCheckpointEntries() (
 			0,
 			nil,
 			common.CheckpointAllocator,
-			c.r.rt.Fs.Service,
+			c.r.rt.Fs,
 		); err != nil {
 			return
 		}
@@ -202,7 +202,7 @@ func (c *CkpReplayer) readCheckpointEntries() (
 				0,
 				updateGlobal,
 				common.CheckpointAllocator,
-				c.r.rt.Fs.Service,
+				c.r.rt.Fs,
 			); err != nil {
 				return
 			}
@@ -287,7 +287,7 @@ func (c *CkpReplayer) ReadCkpFiles() (err error) {
 
 	for _, entry := range c.ckpEntries {
 		if err = ioutil.PrefetchMeta(
-			r.rt.SID(), r.rt.Fs.Service, entry.GetLocation(),
+			r.rt.SID(), r.rt.Fs, entry.GetLocation(),
 		); err != nil {
 			return
 		}

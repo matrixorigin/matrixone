@@ -15,6 +15,8 @@
 package merge
 
 import (
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -25,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	dto "github.com/prometheus/client_model/go"
-	"time"
 )
 
 type Scheduler struct {
@@ -43,7 +44,7 @@ type Scheduler struct {
 func NewScheduler(rt *dbutils.Runtime, sched *CNMergeScheduler) *Scheduler {
 	policySlice := []policy{
 		newObjOverlapPolicy(),
-		newObjCompactPolicy(rt.Fs.Service),
+		newObjCompactPolicy(rt.Fs),
 		newTombstonePolicy(),
 	}
 	op := &Scheduler{
