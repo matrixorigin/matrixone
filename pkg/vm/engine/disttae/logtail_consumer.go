@@ -2175,12 +2175,14 @@ func consumeCkpsAndLogTail(
 ) (err error) {
 	var entries []*api.Entry
 	var closeCBs []func()
-	if entries, closeCBs, err = taeLogtail.LoadCheckpointEntries(
+	if err = taeLogtail.ConsumeCheckpointEntries(
 		ctx,
 		engine.service,
 		lt.CkpLocation,
 		tableId, lt.Table.TbName,
-		databaseId, lt.Table.DbName, engine.mp, engine.fs); err != nil {
+		databaseId, lt.Table.DbName,
+		state.HandleObjectEntry,
+		engine.mp, engine.fs); err != nil {
 		return
 	}
 	defer func() {

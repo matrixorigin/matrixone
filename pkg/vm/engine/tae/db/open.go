@@ -266,7 +266,7 @@ func Open(
 	}
 
 	// 3. replay other tables' objectlist
-	if err = ckpReplayer.ReplayObjectlist(Phase_Open); err != nil {
+	if err = ckpReplayer.ReplayObjectlist(ctx, Phase_Open); err != nil {
 		return
 	}
 	logutil.Info(
