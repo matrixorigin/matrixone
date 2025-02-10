@@ -51,10 +51,9 @@ func putCommitter(c *groupCommitter) {
 type groupCommitter struct {
 	sync.WaitGroup
 
-	client     *wrappedClient
-	writeToken uint64
-	psn        uint64
-	writer     *LogEntryWriter
+	client *wrappedClient
+	psn    uint64
+	writer *LogEntryWriter
 }
 
 func newGroupCommitter() *groupCommitter {
@@ -65,7 +64,6 @@ func newGroupCommitter() *groupCommitter {
 
 func (a *groupCommitter) Reset() {
 	a.client = nil
-	a.writeToken = 0
 	a.psn = 0
 	a.writer.Reset()
 }
@@ -87,7 +85,7 @@ func (a *groupCommitter) Commit() (err error) {
 	entry := a.writer.Finish()
 
 	v2.LogTailBytesHistogram.Observe(float64(entry.Size()))
-	defer logSlowAppend(entry.Size(), a.writeToken)()
+	defer logSlowAppend(entry)()
 
 	var (
 		ctx         context.Context
@@ -120,18 +118,16 @@ func (a *groupCommitter) NotifyCommitted() {
 }
 
 func logSlowAppend(
-	size int,
-	writeToken uint64,
+	entry LogEntry,
 ) func() {
 	start := time.Now()
 	return func() {
 		elapsed := time.Since(start)
 		if elapsed >= SlowAppendThreshold {
 			logutil.Warn(
-				"SLOW-LOG-AppendWAL",
+				"Wal-SLOW-LOG-Append",
 				zap.Duration("latency", elapsed),
-				zap.Int("size", size),
-				zap.Uint64("write-token", writeToken),
+				zap.String("entry", entry.Desc()),
 			)
 		}
 	}

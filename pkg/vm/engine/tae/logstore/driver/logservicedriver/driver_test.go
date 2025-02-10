@@ -20,7 +20,6 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/lni/vfs"
 
@@ -45,15 +44,15 @@ func restartDriver(t *testing.T, d *LogServiceDriver, h func(*entry.Entry)) *Log
 	assert.NoError(t, d.Close())
 	t.Log("Addr:")
 	// preAddr:=d.addr
-	for lsn, intervals := range d.psn.dsnMap {
+	for lsn, intervals := range d.sequence.psn2DSNMap {
 		t.Logf("%d %v", lsn, intervals)
 	}
 	// preLsns:=d.validPSN
-	t.Logf("Valid lsn: %v", d.psn.records)
-	t.Logf("Driver DSN %d, Syncing %d, Synced %d", d.watermark.nextDSN.Load(), d.watermark.committingDSN, d.watermark.committedDSN)
+	t.Logf("Valid lsn: %v", d.sequence.psns)
+	t.Logf("Driver DSN %d, Synced %d", d.watermark.nextDSN.Load(), d.watermark.committedDSN)
 	t.Logf("Truncated %d", d.truncateDSNIntent.Load())
 	t.Logf("LSTruncated %d", d.truncatedPSN)
-	d = NewLogServiceDriver(&d.config)
+	d = NewLogServiceDriver(d.GetCfg())
 	tempLsn := uint64(0)
 	err := d.Replay(
 		context.Background(),
@@ -67,11 +66,14 @@ func restartDriver(t *testing.T, d *LogServiceDriver, h func(*entry.Entry)) *Log
 			}
 			return driver.RE_Nomal
 		},
-		driver.ReplayMode_ReplayForWrite,
+		func() driver.ReplayMode {
+			return driver.ReplayMode_ReplayForWrite
+		},
+		nil,
 	)
 	assert.NoError(t, err)
 	t.Log("Addr:")
-	for lsn, intervals := range d.psn.dsnMap {
+	for lsn, intervals := range d.sequence.psn2DSNMap {
 		t.Logf("%d %v", lsn, intervals)
 	}
 	// assert.Equal(t,len(preAddr),len(d.addr))
@@ -81,7 +83,7 @@ func restartDriver(t *testing.T, d *LogServiceDriver, h func(*entry.Entry)) *Log
 	// 	assert.Equal(t,intervals.Intervals[0].Start,replayedInterval.Intervals[0].Start)
 	// 	assert.Equal(t,intervals.Intervals[0].End,replayedInterval.Intervals[0].End)
 	// }
-	t.Logf("Valid lsn: %v", d.psn.records)
+	t.Logf("Valid lsn: %v", d.sequence.psns)
 	// assert.Equal(t,preLsns.GetCardinality(),d.validPSN.GetCardinality())
 	t.Logf("Truncated %d", d.truncateDSNIntent.Load())
 	t.Logf("LSTruncated %d", d.truncatedPSN)
@@ -99,7 +101,19 @@ func TestReplay1(t *testing.T) {
 		WithConfigOptClientBufSize(10*mpool.MB),
 		WithConfigOptMaxClient(10),
 	)
-	driver := NewLogServiceDriver(&cfg)
+	d := NewLogServiceDriver(&cfg)
+
+	err := d.Replay(
+		context.Background(),
+		func(e *entry.Entry) driver.ReplayEntryState {
+			return driver.RE_Nomal
+		},
+		func() driver.ReplayMode {
+			return driver.ReplayMode_ReplayForWrite
+		},
+		nil,
+	)
+	assert.NoError(t, err)
 
 	entryCount := 10000
 	entries := make([]*entry.Entry, entryCount)
@@ -107,7 +121,7 @@ func TestReplay1(t *testing.T) {
 	for i := 0; i < entryCount; i++ {
 		payload := []byte(fmt.Sprintf("payload %d", i))
 		e := entry.MockEntryWithPayload(payload)
-		driver.Append(e)
+		d.Append(e)
 		entries[i] = e
 	}
 
@@ -122,13 +136,13 @@ func TestReplay1(t *testing.T) {
 	// 	i++
 	// }
 
-	driver = restartDriver(t, driver, nil)
+	d = restartDriver(t, d, nil)
 
 	for _, e := range entries {
 		e.Entry.Free()
 	}
 
-	driver.Close()
+	d.Close()
 }
 
 func TestReplay2(t *testing.T) {
@@ -187,17 +201,6 @@ func TestReplay2(t *testing.T) {
 	}
 
 	driver.Close()
-}
-
-func Test_RetryWithTimeout(t *testing.T) {
-	tryFunc := func() bool {
-		return false
-	}
-	err := RetryWithTimeout(time.Second*0, tryFunc)
-	assert.Error(t, err)
-
-	err = RetryWithTimeout(time.Millisecond*3, tryFunc)
-	assert.Error(t, err)
 }
 
 // func Test_TokenController(t *testing.T) {

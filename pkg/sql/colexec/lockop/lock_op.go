@@ -98,6 +98,15 @@ func (lockOp *LockOp) Prepare(proc *process.Process) error {
 				lockOp.ctr.relations[i] = rel
 			}
 		}
+	} else {
+		for i, target := range lockOp.targets {
+			if target.objRef != nil {
+				err := lockOp.ctr.relations[i].Reset(proc.GetTxnOperator())
+				if err != nil {
+					return err
+				}
+			}
+		}
 	}
 	lockOp.ctr.parker = types.NewPacker()
 	return nil
@@ -152,6 +161,28 @@ func callNonBlocking(
 	return result, nil
 }
 
+// if input vec is not allnull and has null, return a copy vector without null value
+func getVec(proc *process.Process, vec *vector.Vector) (*vector.Vector, error) {
+	if vec.HasNull() {
+		nulls := vec.GetNulls()
+		newVec := vector.NewVec(*vec.GetType())
+		for i := 0; i < vec.Length(); i++ {
+			if !nulls.Contains(uint64(i)) {
+				if err := vector.AppendBytes(newVec, nil, true, proc.Mp()); err != nil {
+					newVec.Free(proc.GetMPool())
+					return nil, err
+				}
+				if err := newVec.Copy(vec, int64(newVec.Length()-1), int64(i), proc.GetMPool()); err != nil {
+					newVec.Free(proc.GetMPool())
+					return nil, err
+				}
+			}
+		}
+		return newVec, nil
+	}
+	return vec, nil
+}
+
 func performLock(
 	bat *batch.Batch,
 	proc *process.Process,
@@ -174,15 +205,24 @@ func performLock(
 			zap.Int32("primary-index", target.primaryColumnIndexInBatch))
 		var filterCols []int32
 		// For partitioned tables, filter is not nil
-		if target.filter != nil {
-			filterCols = vector.MustFixedColWithTypeCheck[int32](bat.GetVector(target.filterColIndexInBatch))
+		// no function call AddLockTargetWithPartition to set target.filter, so next code is unused
+		/* 		if target.filter != nil {
+			srcVec := bat.GetVector(target.filterColIndexInBatch)
+			vec, err := getVec(proc, srcVec)
+			if err != nil {
+				return err
+			}
+			filterCols = vector.MustFixedColWithTypeCheck[int32](vec)
+			if srcVec != vec {
+				vec.Free(proc.GetMPool())
+			}
 			for _, value := range filterCols {
 				// has Illegal Partition index
 				if value == -1 {
 					return moerr.NewInvalidInput(proc.Ctx, "Table has no partition for value from column_list")
 				}
 			}
-		}
+		} */
 		locked, defChanged, refreshTS, err := doLock(
 			proc.Ctx,
 			lockOp.engine,
@@ -425,8 +465,18 @@ func doLock(
 		vec = bat.GetVector(idx)
 	}
 
+	var err error
 	if vec != nil && vec.AllNull() {
 		return false, false, timestamp.Timestamp{}, nil
+	}
+	if vec != nil {
+		inputVec := vec
+		if vec, err = getVec(proc, inputVec); err != nil {
+			return false, false, timestamp.Timestamp{}, err
+		}
+		if vec != inputVec {
+			defer vec.Free(proc.GetMPool())
+		}
 	}
 
 	if opts.maxCountPerLock == 0 {
@@ -944,12 +994,12 @@ func (lockOp *LockOp) Reset(proc *process.Process, pipelineFailed bool, err erro
 	lockOp.resetParker()
 	lockOp.ctr.retryError = nil
 	lockOp.ctr.defChanged = false
-	lockOp.ctr.relations = nil
 }
 
 // Free free mem
 func (lockOp *LockOp) Free(proc *process.Process, pipelineFailed bool, err error) {
 	lockOp.cleanParker()
+	lockOp.ctr.relations = nil
 }
 
 func (lockOp *LockOp) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {

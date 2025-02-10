@@ -34,8 +34,12 @@ type txnImpl struct {
 }
 
 var TxnFactory = func(catalog *catalog.Catalog) txnbase.TxnFactory {
-	return func(mgr *txnbase.TxnManager, store txnif.TxnStore, txnId []byte,
-		start, snapshot types.TS) txnif.AsyncTxn {
+	return func(
+		mgr *txnbase.TxnManager,
+		store txnif.TxnStore,
+		txnId []byte,
+		start, snapshot types.TS,
+	) txnif.AsyncTxn {
 		return newTxnImpl(catalog, mgr, store, txnId, start, snapshot)
 	}
 }

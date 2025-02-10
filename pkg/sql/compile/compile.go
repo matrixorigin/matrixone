@@ -1711,6 +1711,8 @@ func (c *Compile) compileExternScanParallelReadWrite(n *plan.Node, param *tree.E
 				fileOffsetTmp[j].Offset = append(fileOffsetTmp[j].Offset, fileOffset[j][2*preIndex:2*preIndex+2*count]...)
 			}
 		}
+		logutil.Infof("compileExternScanParallelReadWrite, len of cnList is %d, cn addr is %s, mcpu is %d, filepath is %s, file size is %d", len(c.cnList), c.cnList[i].Addr, scope.NodeInfo.Mcpu, param.ExParamConst.Filepath, param.ExParamConst.FileSize)
+		logutil.Infof("compileExternScanParallelReadWrite, %v\n", fileOffsetTmp)
 		op := constructExternal(n, param, c.proc.Ctx, fileList, fileSize, fileOffsetTmp, strictSqlMode)
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		scope.setRootOperator(op)
@@ -3296,7 +3298,7 @@ func (c *Compile) compileMultiUpdate(_ []*plan.Node, n *plan.Node, ss []*Scope) 
 		rs.setRootOperator(multiUpdateArg)
 		ss = []*Scope{rs}
 	} else {
-		if len(ss) > 0 {
+		if !c.IsTpQuery() {
 			rs := c.newMergeScope(ss)
 			ss = []*Scope{rs}
 		}
@@ -3407,7 +3409,7 @@ func (c *Compile) compileLock(n *plan.Node, ss []*Scope) ([]*Scope, error) {
 	}
 
 	currentFirstFlag := c.anal.isFirst
-	if len(ss) > 0 {
+	if !c.IsTpQuery() || len(c.pn.GetQuery().Steps) > 1 { // todo: don't support dml with multi steps for now
 		rs := c.newMergeScope(ss)
 		ss = []*Scope{rs}
 	}

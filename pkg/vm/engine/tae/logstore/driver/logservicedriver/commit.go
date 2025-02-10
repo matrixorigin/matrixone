@@ -24,8 +24,13 @@ import (
 )
 
 var ErrTooMuchPenddings = moerr.NewInternalErrorNoCtx("too much penddings")
+var ErrNeedReplayForWrite = moerr.NewInternalErrorNoCtx("need replay for write")
 
 func (d *LogServiceDriver) Append(e *entry.Entry) (err error) {
+	if !d.canWrite() {
+		return ErrNeedReplayForWrite
+	}
+
 	_, err = d.commitLoop.Enqueue(e)
 	return
 }
@@ -57,7 +62,10 @@ func (d *LogServiceDriver) onCommitIntents(items ...any) {
 
 func (d *LogServiceDriver) asyncCommit(committer *groupCommitter) {
 	// apply write token and bind the client for committing
-	committer.client, committer.writeToken = d.getClientForWrite()
+	var err error
+	if committer.client, err = d.getClientForWrite(); err != nil {
+		panic(err)
+	}
 
 	// set the safe DSN for the committer
 	// the safe DSN is the DSN of the last committed entry
@@ -65,7 +73,7 @@ func (d *LogServiceDriver) asyncCommit(committer *groupCommitter) {
 	committer.writer.SetSafeDSN(d.getCommittedDSNWatermark())
 
 	committer.Add(1)
-	d.appendPool.Submit(func() {
+	d.workers.Submit(func() {
 		defer committer.Done()
 		if err := committer.Commit(); err != nil {
 			logutil.Fatal(
@@ -76,63 +84,36 @@ func (d *LogServiceDriver) asyncCommit(committer *groupCommitter) {
 	})
 }
 
-// Node:
-// this function must be called in serial due to the write token
-func (d *LogServiceDriver) getClientForWrite() (client *wrappedClient, token uint64) {
-	var (
-		err error
-		now = time.Now()
-	)
-
-	token = d.applyWriteToken()
-
-	client, err = d.clientPool.Get()
-
-	if err != nil || time.Since(now) > time.Second*2 {
-		logger := logutil.Info
-		if err != nil {
-			logger = logutil.Error
+// get a client from the client pool for writing user data
+// user data: record with DSN
+// Truncate Logrecord is not user data
+func (d *LogServiceDriver) getClientForWrite() (client *wrappedClient, err error) {
+	now := time.Now()
+	defer func() {
+		if err != nil || time.Since(now) > time.Second*2 {
+			logger := logutil.Info
+			if err != nil {
+				logger = logutil.Error
+			}
+			logger(
+				"Wal-Get-Client",
+				zap.Duration("duration", time.Since(now)),
+				zap.Error(err),
+			)
 		}
-		logger(
-			"Wal-Get-Client",
-			zap.Duration("duration", time.Since(now)),
-			zap.Error(err),
-		)
-	}
+	}()
 
-	if err != nil {
-		panic(err)
-	}
+	client, err = d.clientPool.GetWithWriteToken()
 	return
 }
 
 func (d *LogServiceDriver) onWaitCommitted(items []any, nextQueue chan any) {
-	committers := make([]*groupCommitter, 0, len(items))
 	for _, item := range items {
 		committer := item.(*groupCommitter)
 		committer.Wait()
 		committer.PutbackClient()
 		committer.NotifyCommitted()
-		committers = append(committers, committer)
+		d.recordCommitInfo(committer)
+		putCommitter(committer)
 	}
-
-	// PXU TODO: enqueue one by one
-	nextQueue <- committers
-}
-
-func (d *LogServiceDriver) onCommitDone(items []any, _ chan any) {
-	// PXU TODO: why need this queue???
-	for _, v := range items {
-		committers := v.([]*groupCommitter)
-		for i, committer := range committers {
-			d.recordCommitInfo(committer)
-			d.reuse.tokens = append(d.reuse.tokens, committer.writeToken)
-			putCommitter(committer)
-			committers[i] = nil
-		}
-	}
-
-	d.commitWatermark()
-	d.putbackWriteTokens(d.reuse.tokens...)
-	d.reuse.tokens = d.reuse.tokens[:0]
 }

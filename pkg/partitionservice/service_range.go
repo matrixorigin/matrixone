@@ -15,8 +15,6 @@
 package partitionservice
 
 import (
-	"fmt"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
@@ -31,58 +29,54 @@ func (s *service) getMetadataByRangeType(
 ) (partition.PartitionMetadata, error) {
 	method := option.PartBy.PType.(*tree.RangeType)
 
-	columns, ok := method.Expr.(*tree.UnresolvedName)
-	if !ok {
-		return partition.PartitionMetadata{}, moerr.NewNotSupportedNoCtx("column expression is not supported")
-	}
-	if columns.NumParts != 1 {
-		return partition.PartitionMetadata{}, moerr.NewNotSupportedNoCtx("multi-column is not supported in RANGE partition")
+	var columns *tree.UnresolvedName
+	var ok bool
+	var validTypeFunc func(t plan.Type) bool
+	desc := ""
+	if method.Expr != nil {
+		columns, ok = method.Expr.(*tree.UnresolvedName)
+		if !ok {
+			return partition.PartitionMetadata{}, moerr.NewNotSupportedNoCtx("column expression is not supported")
+		}
+		if columns.NumParts != 1 {
+			return partition.PartitionMetadata{}, moerr.NewNotSupportedNoCtx("multi-column is not supported in RANGE partition")
+		}
+
+		validTypeFunc = func(t plan.Type) bool {
+			return types.T(t.Id).IsInteger()
+		}
+
+		ctx := tree.NewFmtCtx(
+			dialect.MYSQL,
+			tree.WithEscapeSingleQuoteString(),
+		)
+		method.Expr.Format(ctx)
+		desc = ctx.String()
+	} else {
+		if len(method.ColumnList) != 1 {
+			return partition.PartitionMetadata{}, moerr.NewNotSupportedNoCtx("multi-column is not supported in RANGE partition")
+		}
+
+		columns = method.ColumnList[0]
+		validTypeFunc = func(t plan.Type) bool {
+			return types.T(t.Id) == types.T_date || types.T(t.Id) == types.T_datetime
+		}
 	}
 
-	validColumns, err := validColumns(
-		columns,
+	return s.getManualPartitions(
+		option,
 		def,
-		func(t plan.Type) bool {
-			return types.T(t.Id).IsInteger()
+		columns,
+		validTypeFunc,
+		desc,
+		partition.PartitionMethod_Range,
+		func(p *tree.Partition) string {
+			ctx := tree.NewFmtCtx(
+				dialect.MYSQL,
+				tree.WithEscapeSingleQuoteString(),
+			)
+			p.Values.Format(ctx)
+			return ctx.String()
 		},
 	)
-	if err != nil {
-		return partition.PartitionMetadata{}, err
-	}
-
-	ctx := tree.NewFmtCtx(
-		dialect.MYSQL,
-		tree.WithSingleQuoteString(),
-	)
-	method.Expr.Format(ctx)
-
-	metadata := partition.PartitionMetadata{
-		TableID:      def.TblId,
-		TableName:    def.Name,
-		DatabaseName: def.DbName,
-		Method:       partition.PartitionMethod_Range,
-		// TODO: ???
-		Expression:  "",
-		Description: ctx.String(),
-		Columns:     validColumns,
-	}
-
-	for i, p := range option.Partitions {
-		ctx = tree.NewFmtCtx(
-			dialect.MYSQL,
-			tree.WithSingleQuoteString(),
-		)
-		p.Values.Format(ctx)
-
-		metadata.Partitions = append(
-			metadata.Partitions,
-			partition.Partition{
-				Name:               p.Name.String(),
-				PartitionTableName: fmt.Sprintf("%s_%s", def.Name, p.Name.String()),
-				Position:           uint32(i),
-				Comment:            ctx.String(),
-			},
-		)
-	}
-	return metadata, nil
 }

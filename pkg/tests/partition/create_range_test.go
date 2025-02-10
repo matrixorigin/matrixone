@@ -15,90 +15,31 @@
 package partition
 
 import (
-	"context"
 	"fmt"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
-	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
-	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/require"
 )
 
 func TestCreateAndDeleteRangeBased(t *testing.T) {
-	runPartitionClusterTest(
+	runPartitionTableCreateAndDeleteTests(
 		t,
-		func(c embed.Cluster) {
-			cn, err := c.GetCNService(0)
-			require.NoError(t, err)
-
-			db := testutils.GetDatabaseName(t)
-			testutils.CreateTestDatabase(t, db, cn)
-
-			testutils.ExecSQLWithReadResult(
-				t,
-				db,
-				cn,
-				func(i int, s string, r executor.Result) {
-
-				},
-				fmt.Sprintf("create table %s (c int comment 'abc') partition by range (c) (partition p1 values less than (1) engine = innodb, partition p2 values less than (2) engine = innodb)", t.Name()),
-			)
-
-			metadata := getMetadata(
-				t,
-				0,
-				db,
-				t.Name(),
-				cn,
-			)
-			require.Equal(t, 2, len(metadata.Partitions))
-			require.Equal(t, partition.PartitionMethod_Range, metadata.Method)
-
-			var tables []string
-			for idx, p := range metadata.Partitions {
-				tables = append(tables, p.PartitionTableName)
-				require.NotEqual(t, uint64(0), p.PartitionID)
-				require.Equal(t, metadata.TableID, p.PrimaryTableID)
-				require.Equal(t, uint32(idx), p.Position)
-				require.Equal(t, fmt.Sprintf("%s_%s", metadata.TableName, p.Name), p.PartitionTableName)
-				require.Equal(t, fmt.Sprintf("values less than (%d)", idx+1), p.Comment)
-			}
-
-			testutils.ExecSQL(
-				t,
-				db,
-				cn,
-				fmt.Sprintf("drop table %s", t.Name()),
-			)
-			metadata = getMetadata(
-				t,
-				0,
-				db,
-				t.Name(),
-				cn,
-			)
-			require.Equal(t, partition.PartitionMetadata{}, metadata)
-
-			for _, name := range tables {
-				require.False(t, testutils.TableExists(t, db, name, cn))
-			}
-
+		"create table %s (c int comment 'abc') partition by range (c) (partition p1 values less than (1) engine = innodb, partition p2 values less than (2) engine = innodb)",
+		partition.PartitionMethod_Range,
+		func(idx int, p partition.Partition) {
+			require.Equal(t, fmt.Sprintf("values less than (%d)", idx+1), p.Expression)
 		},
 	)
 }
 
-func TestParse(t *testing.T) {
-	sql := `
-	create table t (
-		c DATE comment 'abc'
-	) partition by range (YEAR(c)) (
-	 	partition p1 values less than (10), 
-		partition p2 values less than (100)
-	)`
-	_, err := parsers.Parse(context.TODO(), dialect.MYSQL, sql, 0)
-	require.NoError(t, err)
+func TestCreateAndDeleteRangeColumnsBased(t *testing.T) {
+	runPartitionTableCreateAndDeleteTests(
+		t,
+		"create table %s (c DATETIME) partition by range columns (c) (partition p1 values less than ('2024-01-21 00:00:00'), partition p2 values less than ('2024-01-22 00:00:00'))",
+		partition.PartitionMethod_Range,
+		func(idx int, p partition.Partition) {
+			require.Equal(t, fmt.Sprintf("values less than ('2024-01-2%d 00:00:00')", idx+1), p.Expression)
+		},
+	)
 }

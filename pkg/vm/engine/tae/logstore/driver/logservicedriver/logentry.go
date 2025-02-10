@@ -212,6 +212,17 @@ func (footer LogEntryFooter) GetEntry(i int) (offset, length uint32) {
 	return
 }
 
+func (e LogEntry) Desc() string {
+	return fmt.Sprintf(
+		"LogEntry[%d:%d][Cnt=%d][Cmd=%d][Size=%d]",
+		e.GetStartDSN(),
+		e.GetSafeDSN(),
+		e.GetEntryCount(),
+		e.GetCmdType(),
+		e.Size(),
+	)
+}
+
 func (e LogEntry) String() string {
 	safe := e.GetSafeDSN()
 	dsn := e.GetStartDSN()

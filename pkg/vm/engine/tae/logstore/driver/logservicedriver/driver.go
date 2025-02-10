@@ -31,56 +31,69 @@ import (
 )
 
 const (
-	ReplayReadSize = mpool.MB * 64
-	MaxReadSize    = mpool.MB * 64
+	MaxReadBatchSize = mpool.MB * 64
 )
 
-func RetryWithTimeout(timeoutDuration time.Duration, fn func() (shouldReturn bool)) error {
-	ctx, cancel := context.WithTimeoutCause(
-		context.Background(),
-		timeoutDuration,
-		moerr.CauseRetryWithTimeout,
-	)
-	defer cancel()
-	for {
-		select {
-		case <-ctx.Done():
-			return moerr.AttachCause(ctx, ErrRetryTimeOut)
-		default:
-			if fn() {
-				return nil
-			}
-		}
+type replayState struct {
+	mode   driver.ReplayMode
+	done   bool
+	err    error
+	waitCh chan struct{}
+}
+
+func newReplayState(
+	done bool,
+	err error,
+	mode driver.ReplayMode,
+	waitCh chan struct{},
+) *replayState {
+	if waitCh == nil {
+		waitCh = make(chan struct{}, 1)
+	}
+	return &replayState{
+		mode:   mode,
+		done:   done,
+		waitCh: waitCh,
 	}
 }
 
+func (s *replayState) Done(err error) {
+	s.err = err
+	close(s.waitCh)
+}
+
+func (s *replayState) WaitC() <-chan struct{} {
+	return s.waitCh
+}
+
+func (s *replayState) Err() error {
+	return s.err
+}
+
 type LogServiceDriver struct {
-	*driverInfo
+	*sequenceNumberState
+
+	replayState atomic.Pointer[replayState]
 
 	config Config
 
 	clientPool *clientPool
 	committer  *groupCommitter
 
-	reuse struct {
-		tokens []uint64
-	}
-
 	commitLoop      sm.Queue
 	commitWaitQueue chan any
 	waitCommitLoop  *sm.Loop
 	postCommitQueue chan any
-	postCommitLoop  *sm.Loop
 	truncateQueue   sm.Queue
 
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	appendPool *ants.Pool
+	workers *ants.Pool
 }
 
 func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
-	// the tasks submitted to LogServiceDriver.appendPool append entries to logservice,
+	// the tasks submitted to LogServiceDriver.workers append entries to logservice,
 	// and we hope the task will crash all the tn service if append failed.
 	// so, set panic to pool.options.PanicHandler here, or it will only crash
 	// the goroutine the append task belongs to.
@@ -88,26 +101,20 @@ func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
 		panic(v)
 	}))
 
-	maxPenddingWrites := cfg.ClientMaxCount
-	if maxPenddingWrites < DefaultMaxClient {
-		maxPenddingWrites = DefaultMaxClient
-	}
 	d := &LogServiceDriver{
-		clientPool:      newClientPool(cfg),
-		config:          *cfg,
-		committer:       getCommitter(),
-		driverInfo:      newDriverInfo(uint64(maxPenddingWrites)),
-		commitWaitQueue: make(chan any, 10000),
-		postCommitQueue: make(chan any, 10000),
-		appendPool:      pool,
+		clientPool:          newClientPool(cfg),
+		committer:           getCommitter(),
+		sequenceNumberState: newSequenceNumberState(),
+		commitWaitQueue:     make(chan any, 10000),
+		postCommitQueue:     make(chan any, 10000),
+		workers:             pool,
 	}
+	d.config = *cfg
 	d.ctx, d.cancel = context.WithCancel(context.Background())
 	d.commitLoop = sm.NewSafeQueue(10000, 10000, d.onCommitIntents)
 	d.commitLoop.Start()
-	d.waitCommitLoop = sm.NewLoop(d.commitWaitQueue, d.postCommitQueue, d.onWaitCommitted, 10000)
+	d.waitCommitLoop = sm.NewLoop(d.commitWaitQueue, nil, d.onWaitCommitted, 10000)
 	d.waitCommitLoop.Start()
-	d.postCommitLoop = sm.NewLoop(d.postCommitQueue, nil, d.onCommitDone, 10000)
-	d.postCommitLoop.Start()
 	d.truncateQueue = sm.NewSafeQueue(10000, 10000, d.onTruncateRequests)
 	d.truncateQueue.Start()
 	logutil.Info(
@@ -126,64 +133,89 @@ func (d *LogServiceDriver) Close() error {
 	d.cancel()
 	d.commitLoop.Stop()
 	d.waitCommitLoop.Stop()
-	d.postCommitLoop.Stop()
 	d.truncateQueue.Stop()
 	close(d.commitWaitQueue)
 	close(d.postCommitQueue)
-	d.appendPool.Release()
+	d.workers.Release()
 	return nil
 }
 
 func (d *LogServiceDriver) Replay(
 	ctx context.Context,
 	h driver.ApplyHandle,
-	mode driver.ReplayMode,
+	modeGetter func() driver.ReplayMode,
+	replayOpt *driver.ReplayOption,
 ) (err error) {
+	mode := modeGetter()
 
-	var replayMode atomic.Int32
-	replayMode.Store(int32(mode))
+	oldState := d.replayState.Load()
+	if oldState != nil && oldState.done {
+		return moerr.NewInternalErrorNoCtx("replay already done")
+	}
+
+	replayState := newReplayState(false, nil, mode, nil)
+	if !d.replayState.CompareAndSwap(oldState, replayState) {
+		return moerr.NewInternalErrorNoCtx("concurrent replay")
+	}
+
+	defer func() {
+		doneState := newReplayState(true, err, mode, replayState.waitCh)
+		d.replayState.Store(doneState)
+		doneState.Done(err)
+	}()
 
 	onLogRecord := func(r logservice.LogRecord) {
 		// TODO: handle the config change log record
 	}
 
 	onWaitMore := func() bool {
-		return replayMode.Load() == int32(driver.ReplayMode_ReplayForever)
+		mode = modeGetter()
+		return mode == driver.ReplayMode_ReplayForever
+	}
+
+	var opts []ReplayOption
+	opts = append(opts, WithReplayerOnTruncate(
+		d.commitTruncateInfo,
+	))
+	opts = append(opts, WithReplayerNeedWriteSkip(
+		func() bool {
+			mode := modeGetter()
+			return mode == driver.ReplayMode_ReplayForWrite
+		},
+	))
+	opts = append(opts, WithReplayerWaitMore(onWaitMore))
+	opts = append(opts, WithReplayerOnLogRecord(onLogRecord))
+	// driver is mangaging the psn to dsn mapping
+	// here the replayer is responsible to provide the all the existing psn to dsn
+	// info to the driver
+	// a driver is a statemachine.
+	// INITed -> REPLAYING -> REPLAYED
+	// a driver can be readonly or readwrite
+	// for readonly driver, it is always in the REPLAYING state
+	// for readwrite driver, it can only serve the write request
+	// after the REPLAYED state
+	opts = append(opts, WithReplayerOnScheduled(
+		func(psn uint64, e LogEntry) {
+			d.recordSequenceNumbers(psn, e.DSNRange())
+		},
+	))
+	opts = append(opts, WithReplayerOnReplayDone(
+		func(replayErr error, dsnStats DSNStats) {
+			if replayErr != nil {
+				return
+			}
+			d.initState(&dsnStats)
+		},
+	))
+	if replayOpt != nil {
+		opts = append(opts, WithReplayerPollTruncateInterval(replayOpt.PollTruncateInterval))
 	}
 
 	replayer := newReplayer(
 		h,
 		d,
-		ReplayReadSize,
-		WithReplayerWaitMore(
-			onWaitMore,
-		),
-		WithReplayerOnLogRecord(
-			onLogRecord,
-		),
-
-		// driver is mangaging the psn to dsn mapping
-		// here the replayer is responsible to provide the all the existing psn to dsn
-		// info to the driver
-		// a driver is a statemachine.
-		// INITed -> REPLAYING -> REPLAYED
-		// a driver can be readonly or readwrite
-		// for readonly driver, it is always in the REPLAYING state
-		// for readwrite driver, it can only serve the write request
-		// after the REPLAYED state
-		WithReplayerOnScheduled(
-			func(psn uint64, e LogEntry) {
-				d.recordPSNInfo(psn, e.DSNRange())
-			},
-		),
-		WithReplayerOnReplayDone(
-			func(replayErr error, dsnStats DSNStats) {
-				if replayErr != nil {
-					return
-				}
-				d.initState(&dsnStats)
-			},
-		),
+		MaxReadBatchSize,
+		opts...,
 	)
 
 	err = replayer.Replay(ctx)
@@ -228,10 +260,11 @@ func (d *LogServiceDriver) readFromBackend(
 	}
 	defer client.Putback()
 
-	for ; retryTimes < d.config.MaxRetryCount; retryTimes++ {
+	cfg := d.config
+	for ; retryTimes < cfg.MaxRetryCount; retryTimes++ {
 		ctx, cancel = context.WithTimeoutCause(
 			ctx,
-			d.config.MaxTimeout,
+			cfg.MaxTimeout,
 			moerr.CauseReadFromLogService,
 		)
 		if records, nextPSN, err = client.wrapped.Read(
@@ -244,8 +277,31 @@ func (d *LogServiceDriver) readFromBackend(
 		if err == nil {
 			break
 		}
-		time.Sleep(d.config.RetryInterval() * time.Duration(retryTimes+1))
+		time.Sleep(cfg.RetryInterval() * time.Duration(retryTimes+1))
 	}
 
 	return
+}
+
+func (d *LogServiceDriver) ReplayWaitC() <-chan struct{} {
+	state := d.replayState.Load()
+	if state == nil {
+		ch := make(chan struct{})
+		close(ch)
+		return ch
+	}
+	return state.WaitC()
+}
+
+func (d *LogServiceDriver) GetReplayState() *replayState {
+	return d.replayState.Load()
+}
+
+func (d *LogServiceDriver) GetCfg() *Config {
+	return &d.config
+}
+
+func (d *LogServiceDriver) canWrite() bool {
+	replayState := d.replayState.Load()
+	return replayState != nil && replayState.done && replayState.mode == driver.ReplayMode_ReplayForWrite
 }
