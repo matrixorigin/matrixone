@@ -24,7 +24,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -256,12 +255,12 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 				})
 			}
 		}
-		childId := node.Children[0]
-		childNode := builder.qry.Nodes[childId]
 
-		if childNode.NodeType == plan.Node_VALUE_SCAN {
+		if len(node.Children) == 0 {
 			break
 		}
+
+		childId := node.Children[0]
 		for _, expr := range node.TblFuncExprList {
 			increaseRefCnt(expr, 1, colRefCnt)
 		}
@@ -1387,8 +1386,8 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 	case plan.Node_LOCK_OP:
 		preNode := builder.qry.Nodes[node.Children[0]]
 
-		var pkExprs, partExprs []*plan.Expr
-		var oldPkPos, oldPartPos [][2]int32
+		var pkExprs []*plan.Expr
+		var oldPkPos [][2]int32
 		for _, lockTarget := range node.LockTargets {
 			pkExpr := &plan.Expr{
 				// Typ: node.LockTargets[0].GetPrimaryColTyp(),
@@ -1402,9 +1401,6 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			increaseRefCnt(pkExpr, 1, colRefCnt)
 			pkExprs = append(pkExprs, pkExpr)
 			oldPkPos = append(oldPkPos, [2]int32{lockTarget.PrimaryColRelPos, lockTarget.PrimaryColIdxInBat})
-
-			partExprs = append(partExprs, nil)
-			oldPartPos = append(oldPartPos, [2]int32{-1, -1})
 		}
 
 		childRemapping, err := builder.remapAllColRefs(node.Children[0], step, colRefCnt, colRefBool, sinkColRef)
@@ -1412,20 +1408,12 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			return nil, err
 		}
 
-		for pkIdx, pkExpr := range pkExprs {
-			if newPos, ok := childRemapping.globalToLocal[oldPkPos[pkIdx]]; ok {
-				node.LockTargets[pkIdx].PrimaryColRelPos = newPos[0]
-				node.LockTargets[pkIdx].PrimaryColIdxInBat = newPos[1]
+		for oldPkIdx, lockTarget := range node.LockTargets {
+			if newPos, ok := childRemapping.globalToLocal[oldPkPos[oldPkIdx]]; ok {
+				lockTarget.PrimaryColRelPos = newPos[0]
+				lockTarget.PrimaryColIdxInBat = newPos[1]
 			}
-			increaseRefCnt(pkExpr, -1, colRefCnt)
-
-			if partExprs[pkIdx] != nil {
-				if newPos, ok := childRemapping.globalToLocal[oldPartPos[pkIdx]]; ok {
-					node.LockTargets[pkIdx].FilterColRelPos = newPos[0]
-					node.LockTargets[pkIdx].FilterColIdxInBat = newPos[1]
-				}
-				increaseRefCnt(partExprs[pkIdx], -1, colRefCnt)
-			}
+			increaseRefCnt(pkExprs[oldPkIdx], -1, colRefCnt)
 		}
 
 		for i, globalRef := range childRemapping.localToGlobal {
@@ -1766,7 +1754,8 @@ func (builder *QueryBuilder) rewriteStarApproxCount(nodeID int32) {
 							NodeType: plan.Node_VALUE_SCAN,
 						}
 						childId := builder.appendNode(scanNode, nil)
-						node.Children[0] = builder.buildMetadataScan(nil, nil, exprs, childId)
+						children := []int32{childId}
+						node.Children[0] = builder.buildMetadataScan(nil, nil, exprs, children)
 						child = builder.qry.Nodes[node.Children[0]]
 						switch expr := agg.Args[0].Expr.(type) {
 						case *plan.Expr_Col:
@@ -1931,11 +1920,14 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 }
 
 func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.OrderBy, astLimit *tree.Limit, ctx *BindContext, isRoot bool) (int32, error) {
+	if builder.isForUpdate {
+		return 0, moerr.NewInternalError(builder.GetContext(), "not support select union for update")
+	}
+
 	var selectStmts []tree.Statement
 	var unionTypes []plan.Node_NodeType
 
 	// get Union selectStmts
-
 	err := getUnionSelects(builder.GetContext(), stmt, &selectStmts, &unionTypes)
 	if err != nil {
 		return 0, err
@@ -1992,7 +1984,6 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 	var nodeID int32
 	for idx, sltStmt := range selectStmts {
 		subCtx := NewBindContext(builder, ctx)
-		subCtx.unionSelect = subCtx.initSelect
 		if slt, ok := sltStmt.(*tree.Select); ok {
 			nodeID, err = builder.bindSelect(slt, subCtx, isRoot)
 		} else {
@@ -2265,10 +2256,6 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 		ctx.results = ctx.projects
 	}
 
-	if ctx.initSelect {
-		lastNodeID = appendSinkNodeWithTag(builder, ctx, lastNodeID, ctx.sinkTag)
-	}
-
 	// set heading
 	if isRoot {
 		builder.qry.Headings = append(builder.qry.Headings, ctx.headings...)
@@ -2318,11 +2305,13 @@ func (builder *QueryBuilder) bindNoRecursiveCte(
 	cteRef *CTERef,
 	table string) (nodeID int32, err error) {
 	subCtx := NewBindContext(builder, ctx)
-	subCtx.normalCTE = true
-	subCtx.maskedCTEs = cteRef.maskedCTEs
 	subCtx.cteName = table
 	subCtx.snapshot = cteRef.snapshot
-	subCtx.recordCteInBinding(table, cteRef)
+	subCtx.recordCteInBinding(table,
+		CteBindState{
+			cteBindType:   CteBindTypeNonRecur,
+			cte:           cteRef,
+			recScanNodeId: -1})
 	cteRef.isRecursive = false
 
 	oldSnapshot := builder.compCtx.GetSnapshot()
@@ -2362,15 +2351,25 @@ func (builder *QueryBuilder) bindRecursiveCte(
 	if len(s.OrderBy) > 0 {
 		return 0, moerr.NewParseError(builder.GetContext(), "not support ORDER BY in recursive cte")
 	}
-	// initial statement
+	//1. bind initial statement
 	initCtx := NewBindContext(builder, ctx)
-	initCtx.initSelect = true
+	initCtx.cteName = table
+	initCtx.recordCteInBinding(table,
+		CteBindState{
+			cteBindType:   CteBindTypeInitStmt,
+			cte:           cteRef,
+			recScanNodeId: -1})
 	initCtx.sinkTag = builder.genNewTag()
 	initLastNodeID, err1 := builder.bindSelect(&tree.Select{Select: *left}, initCtx, false)
 	if err1 != nil {
 		err = err1
 		return
 	}
+
+	//2. add Sink Node on top of initial statement
+	initLastNodeID = appendSinkNodeWithTag(builder, initCtx, initLastNodeID, initCtx.sinkTag)
+	builder.qry.Nodes[initLastNodeID].RecursiveCte = false
+
 	projects := builder.qry.Nodes[builder.qry.Nodes[initLastNodeID].Children[0]].ProjectList
 	// recursive statement
 	recursiveLastNodeID := initLastNodeID
@@ -2378,26 +2377,36 @@ func (builder *QueryBuilder) bindRecursiveCte(
 	recursiveSteps := make([]int32, len(stmts))
 	recursiveNodeIDs := make([]int32, len(stmts))
 
+	//3. bind recursive parts
 	for i, r := range stmts {
 		subCtx := NewBindContext(builder, ctx)
-		subCtx.maskedCTEs = cteRef.maskedCTEs
 		subCtx.cteName = table
-		subCtx.recSelect = true
 		subCtx.sinkTag = initCtx.sinkTag
-		subCtx.cteByName = make(map[string]*CTERef)
-		subCtx.cteByName[table] = cteRef
+		//3.0 add initial statement as table binding into the subCtx of recursive part
 		err = builder.addBinding(initLastNodeID, *cteRef.ast.Name, subCtx)
 		if err != nil {
 			return
 		}
+		//3.1 add recursive cte Node
 		_ = builder.appendStep(recursiveLastNodeID)
-		subCtx.recRecursiveScanNodeId = appendRecursiveScanNode(builder, subCtx, initSourceStep, subCtx.sinkTag)
-		recursiveNodeIDs[i] = subCtx.recRecursiveScanNodeId
+		recScanId := appendRecursiveScanNode(builder, subCtx, initSourceStep, subCtx.sinkTag)
+		recursiveNodeIDs[i] = recScanId
 		recursiveSteps[i] = int32(len(builder.qry.Steps))
+
+		subCtx.recordCteInBinding(table,
+			CteBindState{
+				cteBindType:   CteBindTypeRecurStmt,
+				cte:           cteRef,
+				recScanNodeId: recScanId})
+
 		recursiveLastNodeID, err = builder.bindSelect(&tree.Select{Select: r}, subCtx, false)
 		if err != nil {
 			return
 		}
+
+		//3.2 add Sink Node on the top of single recursive part
+		recursiveLastNodeID = appendSinkNodeWithTag(builder, subCtx, recursiveLastNodeID, subCtx.sinkTag)
+		builder.qry.Nodes[recursiveLastNodeID].RecursiveCte = true
 		if !checkOnly {
 			// some check
 			n := builder.qry.Nodes[builder.qry.Nodes[recursiveLastNodeID].Children[0]]
@@ -2456,6 +2465,7 @@ func (builder *QueryBuilder) bindRecursiveCte(
 		}
 	}
 
+	//4. add CTE Scan Node
 	_ = builder.appendStep(recursiveLastNodeID)
 	nodeID = appendCTEScanNode(builder, ctx, initSourceStep, initCtx.sinkTag)
 	if limitExpr != nil || offsetExpr != nil {
@@ -2463,26 +2473,53 @@ func (builder *QueryBuilder) bindRecursiveCte(
 		node.Limit = limitExpr
 		node.Offset = offsetExpr
 	}
+	//4.1 make recursive parts as the source step of the CTE Scan Node besides initSourceStep of initial statement
 	for i := 0; i < len(recursiveSteps); i++ {
 		builder.qry.Nodes[nodeID].SourceStep = append(builder.qry.Nodes[nodeID].SourceStep, recursiveSteps[i])
 	}
+
+	//4.2 make CTE scan as the source step of the Recursive cte Node
 	curStep := int32(len(builder.qry.Steps))
 	for _, id := range recursiveNodeIDs {
 		builder.qry.Nodes[id].SourceStep[0] = curStep
 	}
+
+	//4.3 add Sink Node on top of CTE Scan Node
 	unionAllLastNodeID := appendSinkNodeWithTag(builder, ctx, nodeID, ctx.sinkTag)
 	builder.qry.Nodes[unionAllLastNodeID].RecursiveSink = true
 
-	// final statement
-	ctx.finalSelect = true
+	//5. bind final statement
 	ctx.sinkTag = initCtx.sinkTag
+	//5.0 add initial statement as table binding into the ctx of main query
 	err = builder.addBinding(initLastNodeID, *cteRef.ast.Name, ctx)
 	if err != nil {
 		return
 	}
+	//5.1 add Sink Scan Node as the scan node of the recursive cte
 	sourceStep := builder.appendStep(unionAllLastNodeID)
 	nodeID = appendSinkScanNodeWithTag(builder, ctx, sourceStep, initCtx.sinkTag)
 	return
+}
+
+// check if binding cte currently
+func (bc *BindContext) bindingCte() bool {
+	return bc.cteState.cteBindType != CteBindTypeNone
+}
+
+// check if binding non recursive cte currently
+func (bc *BindContext) bindingNonRecurCte() bool {
+	return bc.cteState.cteBindType == CteBindTypeNonRecur
+}
+
+// check if binding recursive cte currently
+func (bc *BindContext) bindingRecurCte() bool {
+	return bc.cteState.cteBindType == CteBindTypeInitStmt ||
+		bc.cteState.cteBindType == CteBindTypeRecurStmt
+}
+
+// check if binding recursive part of recursive cte currently
+func (bc *BindContext) bindingRecurStmt() bool {
+	return bc.cteState.cteBindType == CteBindTypeRecurStmt
 }
 
 func (builder *QueryBuilder) bindCte(
@@ -2586,20 +2623,41 @@ func (builder *QueryBuilder) preprocessCte(stmt *tree.Select, ctx *BindContext) 
 	return nil
 }
 
-func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isRoot bool) (int32, error) {
-	var err error
+func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isRoot bool) (nodeID int32, err error) {
 	// preprocess CTEs
-	err = builder.preprocessCte(stmt, ctx)
-	if err != nil {
-		return 0, err
+	if err = builder.preprocessCte(stmt, ctx); err != nil {
+		return
 	}
 
-	var clause *tree.SelectClause
-	var valuesClause *tree.ValuesClause
-	var nodeID int32
+	var projectionBinder *ProjectionBinder
+	var havingBinder *HavingBinder
+	var boundHavingList []*plan.Expr
+	var selectList tree.SelectExprs
+	var resultLen int
+	var lockNode *plan.Node
+	var notCacheable bool
+	var helpFunc *helpFunc
+	var boundTimeWindowGroupBy *plan.Expr
+
 	astOrderBy := stmt.OrderBy
 	astLimit := stmt.Limit
 	astTimeWindow := stmt.TimeWindow
+
+	ctx.groupTag = builder.genNewTag()
+	ctx.aggregateTag = builder.genNewTag()
+	ctx.projectTag = builder.genNewTag()
+	ctx.windowTag = builder.genNewTag()
+	ctx.sampleTag = builder.genNewTag()
+	if astTimeWindow != nil {
+		ctx.timeTag = builder.genNewTag() // ctx.timeTag > 0
+		if astTimeWindow.Sliding != nil {
+			ctx.sliding = true
+		}
+
+		if helpFunc, err = makeHelpFuncForTimeWindow(astTimeWindow); err != nil {
+			return
+		}
+	}
 
 	if stmt.SelectLockInfo != nil && stmt.SelectLockInfo.LockType == tree.SelectLockForUpdate {
 		builder.isForUpdate = true
@@ -2638,7 +2696,8 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 		}
 	}
 
-	if selectClause, ok := stmt.Select.(*tree.SelectClause); ok {
+	switch selectClause := stmt.Select.(type) {
+	case *tree.SelectClause:
 		if selectClause.GroupBy != nil {
 			if selectClause.GroupBy.Rollup {
 				for i := len(selectClause.GroupBy.GroupByExprsList[0]) - 1; i > 0; i-- {
@@ -2677,9 +2736,15 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 							Exprs:    selectClause.Exprs,
 							From:     selectClause.From,
 							Where:    selectClause.Where,
-							GroupBy:  &tree.GroupByClause{GroupByExprsList: selectClause.GroupBy.GroupByExprsList, GroupingSet: list, Apart: true, Cube: false, Rollup: false},
-							Having:   selectClause.Having,
-							Option:   selectClause.Option,
+							GroupBy: &tree.GroupByClause{
+								GroupByExprsList: selectClause.GroupBy.GroupByExprsList,
+								GroupingSet:      list,
+								Apart:            true,
+								Cube:             false,
+								Rollup:           false,
+							},
+							Having: selectClause.Having,
+							Option: selectClause.Option,
 						}
 					}
 				}
@@ -2693,337 +2758,446 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 				return builder.buildUnion(leftClause, astOrderBy, astLimit, ctx, isRoot)
 			}
 		}
-	}
 
-	switch selectClause := stmt.Select.(type) {
-	case *tree.SelectClause:
-		clause = selectClause
-	case *tree.UnionClause:
-		if builder.isForUpdate {
-			return 0, moerr.NewInternalError(builder.GetContext(), "not support select union for update")
+		if nodeID, selectList, lockNode, notCacheable, boundTimeWindowGroupBy, havingBinder, boundHavingList, err = builder.bindSelectClause(
+			ctx,
+			selectClause,
+			astLimit,
+			astTimeWindow,
+			helpFunc,
+			isRoot,
+		); err != nil {
+			return
 		}
+	case *tree.UnionClause:
 		return builder.buildUnion(selectClause, astOrderBy, astLimit, ctx, isRoot)
 	case *tree.ValuesClause:
-		valuesClause = selectClause
+		if nodeID, selectList, err = builder.bindValues(ctx, selectClause); err != nil {
+			return
+		}
 	default:
 		return 0, moerr.NewNYIf(builder.GetContext(), "statement '%s'", tree.String(stmt, dialect.MYSQL))
 	}
 
-	var projectionBinder *ProjectionBinder
-	var havingList []*plan.Expr
-	var selectList tree.SelectExprs
-	var resultLen int
-	var havingBinder *HavingBinder
-	var lockNode *plan.Node
-	var notCacheable bool
-	var helpFunc *helpFunc
-	var timeWindowGroup *plan.Expr
+	// bind SELECT clause (Projection List)
+	projectionBinder = NewProjectionBinder(builder, ctx, havingBinder)
+	if resultLen, notCacheable, err = builder.bindProjection(ctx, projectionBinder, selectList, notCacheable); err != nil {
+		return
+	}
 
-	if clause == nil {
-		rowCount := len(valuesClause.Rows)
-		if len(valuesClause.Rows) == 0 {
-			return 0, moerr.NewInternalError(builder.GetContext(), "values statement have not rows")
+	// bind TIME WINDOW
+	var fillType plan.Node_FillType
+	var fillVals, fillCols []*Expr
+	var interval, sliding, ts, wEnd *Expr
+	var boundTimeWindowOrderBy *plan.OrderBySpec
+	if astTimeWindow != nil {
+		if fillType, fillVals, fillCols, interval, sliding, ts, wEnd, boundTimeWindowOrderBy, err = builder.bindTimeWindow(
+			ctx,
+			projectionBinder,
+			astTimeWindow,
+			boundTimeWindowGroupBy,
+			helpFunc,
+		); err != nil {
+			return
 		}
-		strTyp := plan.Type{
-			Id:          int32(types.T_text),
-			NotNullable: false,
-		}
-		strColTyp := makeTypeByPlan2Type(strTyp)
-		strColTargetTyp := &plan.Expr{
-			Typ: strTyp,
-			Expr: &plan.Expr_T{
-				T: &plan.TargetType{},
-			},
-		}
-		colCount := len(valuesClause.Rows[0])
-		for j := 1; j < rowCount; j++ {
-			if len(valuesClause.Rows[j]) != colCount {
-				return 0, moerr.NewInternalError(builder.GetContext(), fmt.Sprintf("have different column count in row '%v'", j))
-			}
-		}
+	}
 
-		ctx.hasSingleRow = rowCount == 1
-		rowSetData := &plan.RowsetData{
-			Cols: make([]*plan.ColData, colCount),
+	// bind ORDER BY clause
+	var boundOrderBys []*plan.OrderBySpec
+	if astOrderBy != nil {
+		if boundOrderBys, err = builder.bindOrderBy(ctx, astOrderBy, projectionBinder, selectList); err != nil {
+			return
 		}
-		tableDef := &plan.TableDef{
-			TblId: 0,
-			Name:  "",
-			Cols:  make([]*plan.ColDef, colCount),
-		}
-		ctx.binder = NewWhereBinder(builder, ctx)
-		for i := 0; i < colCount; i++ {
-			rowSetData.Cols[i] = &plan.ColData{}
-			for j := 0; j < rowCount; j++ {
-				planExpr, err := ctx.binder.BindExpr(valuesClause.Rows[j][i], 0, true)
-				if err != nil {
-					return 0, err
-				}
-				planExpr, err = forceCastExpr2(builder.GetContext(), planExpr, strColTyp, strColTargetTyp)
-				if err != nil {
-					return 0, err
-				}
-				rowSetData.Cols[i].Data = append(rowSetData.Cols[i].Data, &plan.RowsetExpr{
-					Expr: planExpr,
-				})
-			}
+	}
 
-			colName := fmt.Sprintf("column_%d", i) // like MySQL
-			selectList = append(selectList, tree.SelectExpr{
-				Expr: tree.NewUnresolvedColName(colName),
-				As:   tree.NewCStr(colName, ctx.lower),
-			})
-			ctx.headings = append(ctx.headings, colName)
-			tableDef.Cols[i] = &plan.ColDef{
-				ColId: 0,
-				Name:  colName,
-				Typ:   strTyp,
-			}
-		}
-		nodeUUID, _ := uuid.NewV7()
-		nodeID = builder.appendNode(&plan.Node{
-			NodeType:     plan.Node_VALUE_SCAN,
-			RowsetData:   rowSetData,
-			TableDef:     tableDef,
-			BindingTags:  []int32{builder.genNewTag()},
-			Uuid:         nodeUUID[:],
-			NotCacheable: true,
-		}, ctx)
-
-		if err = builder.addBinding(nodeID, tree.AliasClause{Alias: "_valuescan"}, ctx); err != nil {
-			return 0, err
-		}
-	} else {
-		if ctx.recSelect && clause.Distinct {
-			return 0, moerr.NewParseError(builder.GetContext(), "not support DISTINCT in recursive cte")
-		}
-
-		if len(clause.Exprs) == 1 {
-			switch clause.Exprs[0].Expr.(type) {
-			case tree.UnqualifiedStar:
-				if astLimit != nil && astLimit.Count != nil {
-					limitBinder := NewLimitBinder(builder, ctx)
-					limitExpr, err := limitBinder.BindExpr(astLimit.Count, 0, true)
-					if err != nil {
-						return 0, err
-					}
-
-					if cExpr, ok := limitExpr.Expr.(*plan.Expr_Lit); ok {
-						if c, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
-							if c.U64Val == 0 {
-								builder.isSkipResolveTableDef = true
-							}
-						}
-					}
-				}
-			}
-		}
-
-		// build FROM clause
-		nodeID, err = builder.buildFrom(clause.From.Tables, ctx, isRoot)
-		if err != nil {
-			return 0, err
-		}
-
-		ctx.binder = NewWhereBinder(builder, ctx)
-		// unfold stars and generate headings
-		selectList, err = appendSelectList(builder, ctx, selectList, clause.Exprs...)
-		if err != nil {
-			return 0, err
-		}
-
-		if len(selectList) == 0 {
-			return 0, moerr.NewParseError(builder.GetContext(), "No tables used")
+	// bind limit/offset clause
+	var boundOffsetExpr *Expr
+	var boundCountExpr *Expr
+	if astLimit != nil {
+		if boundOffsetExpr, boundCountExpr, err = builder.bindLimit(ctx, astLimit); err != nil {
+			return
 		}
 
 		if builder.isForUpdate {
-			tableDef := builder.qry.Nodes[nodeID].GetTableDef()
-			pkPos, pkTyp := getPkPos(tableDef, false)
-			lastTag := builder.qry.Nodes[nodeID].BindingTags[0]
-			lockTarget := &plan.LockTarget{
-				TableId:            tableDef.TblId,
-				PrimaryColIdxInBat: int32(pkPos),
-				PrimaryColRelPos:   lastTag,
-				PrimaryColTyp:      pkTyp,
-				Block:              true,
-				RefreshTsIdxInBat:  -1, //unsupport now
-			}
-
-			lockNode = &Node{
-				NodeType:    plan.Node_LOCK_OP,
-				Children:    []int32{nodeID},
-				TableDef:    tableDef,
-				LockTargets: []*plan.LockTarget{lockTarget},
-				BindingTags: []int32{builder.genNewTag()},
-			}
-
-			if astLimit == nil {
-				nodeID = builder.appendNode(lockNode, ctx)
-			}
+			lockNode.Children[0] = nodeID
+			nodeID = builder.appendNode(lockNode, ctx)
 		}
-
-		// rewrite right join to left join
-		builder.rewriteRightJoinToLeftJoin(nodeID)
-		if clause.Where != nil {
-			whereList, err := splitAndBindCondition(clause.Where.Expr, NoAlias, ctx)
-			if err != nil {
-				return 0, err
-			}
-
-			var newFilterList []*plan.Expr
-			var expr *plan.Expr
-
-			for _, cond := range whereList {
-				nodeID, expr, err = builder.flattenSubqueries(nodeID, cond, ctx)
-				if err != nil {
-					return 0, err
-				}
-
-				newFilterList = append(newFilterList, expr)
-			}
-
-			for _, filter := range newFilterList {
-				if detectedExprWhetherTimeRelated(filter) {
-					notCacheable = true
-				}
-				if err := checkGrouping(ctx.binder.GetContext(), filter); err != nil {
-					return 0, err
-				}
-			}
-
-			nodeID = builder.appendNode(&plan.Node{
-				NodeType:     plan.Node_FILTER,
-				Children:     []int32{nodeID},
-				FilterList:   newFilterList,
-				NotCacheable: notCacheable,
-			}, ctx)
-		}
-
-		ctx.groupTag = builder.genNewTag()
-		ctx.aggregateTag = builder.genNewTag()
-		ctx.projectTag = builder.genNewTag()
-		ctx.windowTag = builder.genNewTag()
-		ctx.sampleTag = builder.genNewTag()
-		if astTimeWindow != nil {
-			ctx.timeTag = builder.genNewTag() // ctx.timeTag > 0
-			if astTimeWindow.Sliding != nil {
-				ctx.sliding = true
-			}
-		}
-
-		// Preprocess aliases
-		for i := range selectList {
-			selectList[i].Expr, err = ctx.qualifyColumnNames(selectList[i].Expr, NoAlias)
-			if err != nil {
-				return 0, err
-			}
-
-			builder.nameByColRef[[2]int32{ctx.projectTag, int32(i)}] = tree.String(selectList[i].Expr, dialect.MYSQL)
-
-			if selectList[i].As != nil && !selectList[i].As.Empty() {
-				ctx.aliasMap[selectList[i].As.Compare()] = &aliasItem{
-					idx:     int32(i),
-					astExpr: selectList[i].Expr,
-				}
-				ctx.aliasFrequency[selectList[i].As.Compare()]++
-			}
-
-			field := SelectField{
-				ast: selectList[i].Expr,
-				pos: int32(i),
-			}
-
-			if selectList[i].As != nil && !selectList[i].As.Empty() {
-				field.aliasName = selectList[i].As.Compare()
-			}
-			ctx.projectByAst = append(ctx.projectByAst, field)
-		}
-
-		if astTimeWindow != nil {
-			helpFunc, err = makeHelpFuncForTimeWindow(astTimeWindow, builder.GetContext())
-			if err != nil {
-				return 0, err
-			}
-		}
-		// bind GROUP BY clause
-		if clause.GroupBy != nil || astTimeWindow != nil {
-			if ctx.recSelect {
-				return 0, moerr.NewParseErrorf(builder.GetContext(), "not support group by in recursive cte: '%v'", tree.String(clause.GroupBy, dialect.MYSQL))
-			}
-			groupBinder := NewGroupBinder(builder, ctx, selectList)
-			if clause.GroupBy != nil {
-				for _, list := range clause.GroupBy.GroupByExprsList {
-					for _, group := range list {
-						group, err = ctx.qualifyColumnNames(group, AliasAfterColumn)
-						if err != nil {
-							return 0, err
-						}
-
-						_, err = groupBinder.BindExpr(group, 0, true)
-						if err != nil {
-							return 0, err
-						}
-					}
-				}
-				ctx.groupingFlag = make([]bool, len(ctx.groups))
-				if clause.GroupBy.Apart {
-					ctx.isGroupingSet = true
-					for _, group := range clause.GroupBy.GroupingSet {
-						_, err = groupBinder.BindExpr(group, 0, true)
-						if err != nil {
-							return 0, err
-						}
-					}
-				} else {
-					for i := range ctx.groupingFlag {
-						ctx.groupingFlag[i] = true
-					}
-				}
-			}
-			if astTimeWindow != nil {
-				group, err := ctx.qualifyColumnNames(helpFunc.truncate, AliasAfterColumn)
-				if err != nil {
-					return 0, err
-				}
-
-				_, err = groupBinder.BindExpr(group, 0, true)
-				if err != nil {
-					return 0, err
-				}
-				colPos := groupBinder.ctx.groupByAst[tree.String(helpFunc.truncate, dialect.MYSQL)]
-				timeWindowGroup = &plan.Expr{
-					Typ: groupBinder.ctx.groups[colPos].Typ,
-					Expr: &plan.Expr_Col{
-						Col: &plan.ColRef{
-							RelPos: groupBinder.ctx.groupTag,
-							ColPos: colPos,
-						},
-					},
-				}
-
-			}
-		}
-
-		// bind HAVING clause
-		havingBinder = NewHavingBinder(builder, ctx)
-		if clause.Having != nil {
-			if ctx.recSelect {
-				return 0, moerr.NewParseErrorf(builder.GetContext(), "not support having in recursive cte: '%v'", tree.String(clause.Having, dialect.MYSQL))
-			}
-			ctx.binder = havingBinder
-			havingList, err = splitAndBindCondition(clause.Having.Expr, AliasAfterColumn, ctx)
-			if err != nil {
-				return 0, err
-			}
-		}
-
-		ctx.isDistinct = clause.Distinct
 	}
 
-	// bind SELECT clause (Projection List)
-	projectionBinder = NewProjectionBinder(builder, ctx, havingBinder)
+	if ctx.sampleFunc.hasSampleFunc {
+		// return err if it's not a legal SAMPLE function.
+		if err = validSample(ctx, builder); err != nil {
+			return 0, err
+		}
+	} else {
+		// sample can ignore these check because it supports the sql like 'select a, b, sample(c) from t group by a' whose b is not in group by clause.
+		if (len(ctx.groups) > 0 || len(ctx.aggregates) > 0 || len(ctx.times) > 0) && len(projectionBinder.boundCols) > 0 {
+			if !builder.mysqlCompatible {
+				return 0, moerr.NewSyntaxErrorf(builder.GetContext(), "column %q must appear in the GROUP BY clause or be used in an aggregate function", projectionBinder.boundCols[0])
+			}
+
+			// For MySQL compatibility, wrap bare ColRefs in any_value()
+			for i, proj := range ctx.projects {
+				ctx.projects[i] = builder.wrapBareColRefsInAnyValue(proj, ctx)
+			}
+		}
+	}
+
+	if ctx.forceWindows {
+		ctx.tmpGroups = ctx.groups
+		ctx.windows, _ = ctx.generateForceWinSpecList()
+		ctx.aggregates = nil
+		ctx.groups = nil
+
+		for i := range ctx.projects {
+			ctx.projects[i] = DeepProcessExprForGroupConcat(ctx.projects[i], ctx)
+		}
+
+		for i := range boundHavingList {
+			boundHavingList[i] = DeepProcessExprForGroupConcat(boundHavingList[i], ctx)
+		}
+
+		for i := range boundOrderBys {
+			boundOrderBys[i].Expr = DeepProcessExprForGroupConcat(boundOrderBys[i].Expr, ctx)
+		}
+
+	}
+
+	// FIXME: delete this when SINGLE join is ready
+	if len(ctx.groups) == 0 && len(ctx.aggregates) > 0 {
+		ctx.hasSingleRow = true
+	}
+
+	// append AGG node or SAMPLE node
+	if ctx.sampleFunc.hasSampleFunc {
+		if nodeID, err = builder.appendSampleNode(ctx, nodeID, boundHavingList); err != nil {
+			return
+		}
+	} else if len(ctx.groups) > 0 || len(ctx.aggregates) > 0 {
+		if nodeID, err = builder.appendAggNode(ctx, nodeID, boundHavingList); err != nil {
+			return
+		}
+	}
+
+	// append TIME WINDOW node
+	if len(ctx.times) > 0 {
+		if nodeID, err = builder.appendTimeWindowNode(
+			ctx,
+			nodeID,
+			boundTimeWindowOrderBy,
+			boundTimeWindowGroupBy,
+			fillType,
+			fillVals, fillCols,
+			interval, sliding, ts, wEnd,
+			astTimeWindow,
+		); err != nil {
+			return
+		}
+	}
+
+	// append WINDOW node
+	if len(ctx.windows) > 0 {
+		if nodeID, err = builder.appendWindowNode(ctx, nodeID, boundHavingList); err != nil {
+			return
+		}
+	}
+
+	// append PROJECT node
+	if nodeID, err = builder.appendProjectionNode(ctx, nodeID, notCacheable); err != nil {
+		return
+	}
+
+	// append DISTINCT node
+	if ctx.isDistinct {
+		nodeID = builder.appendDistinctNode(ctx, nodeID)
+	}
+
+	// append SORT node (include limit, offset)
+	if len(boundOrderBys) > 0 {
+		nodeID = builder.appendSortNode(ctx, nodeID, boundOrderBys)
+	}
+
+	// attach limit/offset to last node
+	if boundCountExpr != nil || boundOffsetExpr != nil {
+		node := builder.qry.Nodes[nodeID]
+
+		node.Limit = boundCountExpr
+		node.Offset = boundOffsetExpr
+	}
+
+	// append result PROJECT node
+	if builder.qry.Nodes[nodeID].NodeType != plan.Node_PROJECT {
+		nodeID = builder.appendResultProjectionNode(ctx, nodeID, resultLen)
+	} else {
+		ctx.results = ctx.projects
+	}
+
+	if isRoot {
+		builder.qry.Headings = append(builder.qry.Headings, ctx.headings...)
+	}
+
+	return
+}
+
+func (builder *QueryBuilder) bindSelectClause(
+	ctx *BindContext,
+	clause *tree.SelectClause,
+	astLimit *tree.Limit,
+	astTimeWindow *tree.TimeWindow,
+	helpFunc *helpFunc,
+	isRoot bool,
+) (
+	nodeID int32,
+	selectList tree.SelectExprs,
+	lockNode *plan.Node,
+	notCacheable bool,
+	boundTimeWindowGroupBy *plan.Expr,
+	havingBinder *HavingBinder,
+	boundHavingList []*plan.Expr,
+	err error,
+) {
+	if ctx.bindingRecurStmt() && clause.Distinct {
+		err = moerr.NewParseError(builder.GetContext(), "not support DISTINCT in recursive cte")
+		return
+	}
+
+	if len(clause.Exprs) == 1 {
+		switch clause.Exprs[0].Expr.(type) {
+		case tree.UnqualifiedStar:
+			if astLimit != nil && astLimit.Count != nil {
+				var limitExpr *plan.Expr
+				limitBinder := NewLimitBinder(builder, ctx)
+				if limitExpr, err = limitBinder.BindExpr(astLimit.Count, 0, true); err != nil {
+					return
+				}
+
+				if cExpr, ok := limitExpr.Expr.(*plan.Expr_Lit); ok {
+					if c, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
+						if c.U64Val == 0 {
+							builder.isSkipResolveTableDef = true
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// build FROM clause
+	if nodeID, err = builder.buildFrom(clause.From.Tables, ctx, isRoot); err != nil {
+		return
+	}
+
+	ctx.binder = NewWhereBinder(builder, ctx)
+	// unfold stars and generate headings
+	if selectList, err = appendSelectList(builder, ctx, selectList, clause.Exprs...); err != nil {
+		return
+	}
+	if len(selectList) == 0 {
+		err = moerr.NewParseError(builder.GetContext(), "No tables used")
+		return
+	}
+
+	if builder.isForUpdate {
+		tableDef := builder.qry.Nodes[nodeID].GetTableDef()
+		pkPos, pkTyp := getPkPos(tableDef, false)
+		lastTag := builder.qry.Nodes[nodeID].BindingTags[0]
+		lockTarget := &plan.LockTarget{
+			TableId:            tableDef.TblId,
+			PrimaryColIdxInBat: int32(pkPos),
+			PrimaryColRelPos:   lastTag,
+			PrimaryColTyp:      pkTyp,
+			Block:              true,
+			RefreshTsIdxInBat:  -1, //unsupport now
+		}
+
+		lockNode = &Node{
+			NodeType:    plan.Node_LOCK_OP,
+			Children:    []int32{nodeID},
+			TableDef:    tableDef,
+			LockTargets: []*plan.LockTarget{lockTarget},
+			BindingTags: []int32{builder.genNewTag()},
+		}
+
+		if astLimit == nil {
+			nodeID = builder.appendNode(lockNode, ctx)
+		}
+	}
+
+	// rewrite right join to left join
+	builder.rewriteRightJoinToLeftJoin(nodeID)
+	if clause.Where != nil {
+		var boundFilterList []*plan.Expr
+		if nodeID, boundFilterList, notCacheable, err = builder.bindWhere(ctx, clause.Where, nodeID); err != nil {
+			return
+		}
+
+		nodeID = builder.appendWhereNode(ctx, nodeID, boundFilterList, notCacheable)
+	}
+
+	// Preprocess aliases
+	for i := range selectList {
+		if selectList[i].Expr, err = ctx.qualifyColumnNames(selectList[i].Expr, NoAlias); err != nil {
+			return
+		}
+
+		builder.nameByColRef[[2]int32{ctx.projectTag, int32(i)}] = tree.String(selectList[i].Expr, dialect.MYSQL)
+
+		if selectList[i].As != nil && !selectList[i].As.Empty() {
+			ctx.aliasMap[selectList[i].As.Compare()] = &aliasItem{
+				idx:     int32(i),
+				astExpr: selectList[i].Expr,
+			}
+			ctx.aliasFrequency[selectList[i].As.Compare()]++
+		}
+
+		field := SelectField{
+			ast: selectList[i].Expr,
+			pos: int32(i),
+		}
+
+		if selectList[i].As != nil && !selectList[i].As.Empty() {
+			field.aliasName = selectList[i].As.Compare()
+		}
+		ctx.projectByAst = append(ctx.projectByAst, field)
+	}
+
+	// bind GROUP BY clause
+	if clause.GroupBy != nil || astTimeWindow != nil {
+		if boundTimeWindowGroupBy, err = builder.bindGroupBy(ctx, clause.GroupBy, selectList, astTimeWindow, helpFunc); err != nil {
+			return
+		}
+	}
+
+	// bind HAVING clause
+	havingBinder = NewHavingBinder(builder, ctx)
+	if clause.Having != nil {
+		if boundHavingList, err = builder.bindHaving(ctx, clause.Having, havingBinder); err != nil {
+			return
+		}
+	}
+
+	// distinct
+	ctx.isDistinct = clause.Distinct
+	return
+}
+
+func (builder *QueryBuilder) bindWhere(
+	ctx *BindContext,
+	clause *tree.Where,
+	nodeID int32,
+) (newNodeID int32, boundFilterList []*plan.Expr, notCacheable bool, err error) {
+	whereList, err := splitAndBindCondition(clause.Expr, NoAlias, ctx)
+	if err != nil {
+		return
+	}
+
+	var expr *plan.Expr
+	for _, cond := range whereList {
+		if nodeID, expr, err = builder.flattenSubqueries(nodeID, cond, ctx); err != nil {
+			return
+		}
+		boundFilterList = append(boundFilterList, expr)
+	}
+
+	for _, filter := range boundFilterList {
+		if detectedExprWhetherTimeRelated(filter) {
+			notCacheable = true
+		}
+		if err = checkGrouping(ctx.binder.GetContext(), filter); err != nil {
+			return
+		}
+	}
+
+	newNodeID = nodeID
+	return
+}
+
+func (builder *QueryBuilder) bindGroupBy(
+	ctx *BindContext,
+	clause *tree.GroupByClause,
+	selectList tree.SelectExprs,
+	astTimeWindow *tree.TimeWindow,
+	helpFunc *helpFunc,
+) (boundTimeWindowGroupBy *plan.Expr, err error) {
+	if ctx.bindingRecurStmt() {
+		err = moerr.NewParseErrorf(builder.GetContext(), "not support group by in recursive cte: '%v'", tree.String(clause, dialect.MYSQL))
+		return
+	}
+
+	groupBinder := NewGroupBinder(builder, ctx, selectList)
+
+	if clause != nil {
+		for _, list := range clause.GroupByExprsList {
+			for _, group := range list {
+				if group, err = ctx.qualifyColumnNames(group, AliasAfterColumn); err != nil {
+					return
+				}
+				if _, err = groupBinder.BindExpr(group, 0, true); err != nil {
+					return
+				}
+			}
+		}
+
+		ctx.groupingFlag = make([]bool, len(ctx.groups))
+		if clause.Apart {
+			ctx.isGroupingSet = true
+			for _, group := range clause.GroupingSet {
+				if _, err = groupBinder.BindExpr(group, 0, true); err != nil {
+					return
+				}
+			}
+		} else {
+			for i := range ctx.groupingFlag {
+				ctx.groupingFlag[i] = true
+			}
+		}
+	}
+
+	if astTimeWindow != nil {
+		var group tree.Expr
+		if group, err = ctx.qualifyColumnNames(helpFunc.truncate, AliasAfterColumn); err != nil {
+			return
+		}
+
+		if _, err = groupBinder.BindExpr(group, 0, true); err != nil {
+			return
+		}
+
+		colPos := groupBinder.ctx.groupByAst[tree.String(helpFunc.truncate, dialect.MYSQL)]
+		boundTimeWindowGroupBy = &plan.Expr{
+			Typ: groupBinder.ctx.groups[colPos].Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: groupBinder.ctx.groupTag,
+					ColPos: colPos,
+				},
+			},
+		}
+	}
+	return
+}
+
+func (builder *QueryBuilder) bindHaving(
+	ctx *BindContext,
+	clause *tree.Where,
+	havingBinder *HavingBinder,
+) (boundHavingList []*plan.Expr, err error) {
+	if ctx.bindingRecurStmt() {
+		err = moerr.NewParseErrorf(builder.GetContext(), "not support having in recursive cte: '%v'", tree.String(clause, dialect.MYSQL))
+		return
+	}
+	ctx.binder = havingBinder
+	return splitAndBindCondition(clause.Expr, AliasAfterColumn, ctx)
+}
+
+func (builder *QueryBuilder) bindProjection(
+	ctx *BindContext,
+	projectionBinder *ProjectionBinder,
+	selectList tree.SelectExprs,
+	notCacheable bool,
+) (resultLen int, newNotCacheable bool, err error) {
 	if err = bindProjectionList(ctx, projectionBinder, selectList); err != nil {
-		return 0, err
+		return
 	}
 
 	resultLen = len(ctx.projects)
@@ -3049,237 +3223,475 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 		}
 	}
 
-	// bind TIME WINDOW
-	var fillType plan.Node_FillType
-	var fillVals, fillCols []*Expr
-	var inteval, sliding, ts, wEnd *Expr
-	var orderBy *plan.OrderBySpec
-	if astTimeWindow != nil {
-		h := projectionBinder.havingBinder
-		col, err := ctx.qualifyColumnNames(astTimeWindow.Interval.Col, NoAlias)
-		if err != nil {
-			return 0, err
+	newNotCacheable = notCacheable
+	return
+}
+
+func (builder *QueryBuilder) bindTimeWindow(
+	ctx *BindContext,
+	projectionBinder *ProjectionBinder,
+	astTimeWindow *tree.TimeWindow,
+	timeWindowGroup *plan.Expr,
+	helpFunc *helpFunc,
+) (
+	fillType plan.Node_FillType,
+	fillVals, fillCols []*Expr,
+	interval, sliding, ts, wEnd *Expr,
+	boundTimeWindowOrderBy *plan.OrderBySpec,
+	err error,
+) {
+	h := projectionBinder.havingBinder
+	col, err := ctx.qualifyColumnNames(astTimeWindow.Interval.Col, NoAlias)
+	if err != nil {
+		return
+	}
+
+	h.insideAgg = true
+	if ts, err = h.BindExpr(col, 0, true); err != nil {
+		return
+	}
+	h.insideAgg = false
+
+	t := types.Type{Oid: types.T(ts.Typ.Id)}
+	if !t.IsTemporal() {
+		err = moerr.NewNotSupportedf(builder.GetContext(), "the type of %s must be temporal in time window", tree.String(col, dialect.MYSQL))
+		return
+	}
+
+	boundTimeWindowOrderBy = &plan.OrderBySpec{
+		Expr: timeWindowGroup,
+		Flag: plan.OrderBySpec_INTERNAL | plan.OrderBySpec_ASC | plan.OrderBySpec_NULLS_FIRST,
+	}
+
+	if interval, err = projectionBinder.BindExpr(helpFunc.interval, 0, true); err != nil {
+		return
+	}
+
+	if astTimeWindow.Sliding != nil {
+		if sliding, err = projectionBinder.BindExpr(helpFunc.sliding, 0, true); err != nil {
+			return
 		}
-		h.insideAgg = true
-		ts, err = h.BindExpr(col, 0, true)
-		if err != nil {
-			return 0, err
+	} else {
+		var tmp *plan.Expr
+		if tmp, err = projectionBinder.BindExpr(helpFunc.dateAdd, 0, true); err != nil {
+			return
 		}
-		h.insideAgg = false
-		t := types.Type{Oid: types.T(ts.Typ.Id)}
-		if !t.IsTemporal() {
-			return 0, moerr.NewNotSupportedf(builder.GetContext(), "the type of %s must be temporal in time window", tree.String(col, dialect.MYSQL))
+		if wEnd, err = appendCastBeforeExpr(builder.GetContext(), tmp, ts.Typ); err != nil {
+			return
 		}
-		orderBy = &plan.OrderBySpec{
-			Expr: timeWindowGroup,
-			Flag: plan.OrderBySpec_INTERNAL | plan.OrderBySpec_ASC | plan.OrderBySpec_NULLS_FIRST,
+	}
+
+	if astTimeWindow.Fill != nil && astTimeWindow.Fill.Mode != tree.FillNone && astTimeWindow.Fill.Mode != tree.FillNull {
+		switch astTimeWindow.Fill.Mode {
+		case tree.FillPrev:
+			fillType = plan.Node_PREV
+		case tree.FillNext:
+			fillType = plan.Node_NEXT
+		case tree.FillValue:
+			fillType = plan.Node_VALUE
+		case tree.FillLinear:
+			fillType = plan.Node_LINEAR
 		}
 
-		inteval, err = projectionBinder.BindExpr(helpFunc.interval, 0, true)
-		if err != nil {
-			return 0, err
-		}
-
-		if astTimeWindow.Sliding != nil {
-			sliding, err = projectionBinder.BindExpr(helpFunc.sliding, 0, true)
-			if err != nil {
-				return 0, err
-			}
-		} else {
-			tmp, err := projectionBinder.BindExpr(helpFunc.dateAdd, 0, true)
-			if err != nil {
-				return 0, err
-			}
-			wEnd, err = appendCastBeforeExpr(builder.GetContext(), tmp, ts.Typ)
-			if err != nil {
-				return 0, err
+		var v, castedExpr *Expr
+		if astTimeWindow.Fill.Val != nil {
+			if v, err = projectionBinder.BindExpr(astTimeWindow.Fill.Val, 0, true); err != nil {
+				return
 			}
 		}
 
-		if astTimeWindow.Fill != nil && astTimeWindow.Fill.Mode != tree.FillNone && astTimeWindow.Fill.Mode != tree.FillNull {
-			switch astTimeWindow.Fill.Mode {
-			case tree.FillPrev:
-				fillType = plan.Node_PREV
-			case tree.FillNext:
-				fillType = plan.Node_NEXT
-			case tree.FillValue:
-				fillType = plan.Node_VALUE
-			case tree.FillLinear:
-				fillType = plan.Node_LINEAR
+		for _, t := range ctx.times {
+			if e, ok := t.Expr.(*plan.Expr_Col); ok {
+				if e.Col.Name == TimeWindowStart || e.Col.Name == TimeWindowEnd {
+					continue
+				}
 			}
-			var v *Expr
 			if astTimeWindow.Fill.Val != nil {
-				v, err = projectionBinder.BindExpr(astTimeWindow.Fill.Val, 0, true)
-				if err != nil {
-					return 0, err
+				if castedExpr, err = appendCastBeforeExpr(builder.GetContext(), v, t.Typ); err != nil {
+					return
 				}
+				fillVals = append(fillVals, castedExpr)
 			}
+			fillCols = append(fillCols, t)
+		}
 
-			for _, t := range ctx.times {
-				if e, ok := t.Expr.(*plan.Expr_Col); ok {
-					if e.Col.Name == TimeWindowStart || e.Col.Name == TimeWindowEnd {
-						continue
-					}
-				}
-				if astTimeWindow.Fill.Val != nil {
-					e, err := appendCastBeforeExpr(builder.GetContext(), v, t.Typ)
-					if err != nil {
-						return 0, err
-					}
-					fillVals = append(fillVals, e)
-				}
-				fillCols = append(fillCols, t)
-			}
-			if astTimeWindow.Fill.Mode == tree.FillLinear {
-				for i, e := range ctx.timeAsts {
-					b := &tree.BinaryExpr{
-						Op: tree.DIV,
-						Left: &tree.ParenExpr{
-							Expr: &tree.BinaryExpr{
-								Op:    tree.PLUS,
-								Left:  e,
-								Right: e,
-							},
+		if astTimeWindow.Fill.Mode == tree.FillLinear {
+			for i, timeAst := range ctx.timeAsts {
+				b := &tree.BinaryExpr{
+					Op: tree.DIV,
+					Left: &tree.ParenExpr{
+						Expr: &tree.BinaryExpr{
+							Op:    tree.PLUS,
+							Left:  timeAst,
+							Right: timeAst,
 						},
-						Right: tree.NewNumVal(int64(2), "2", false, tree.P_int64),
-					}
-					v, err = projectionBinder.BindExpr(b, 0, true)
-					if err != nil {
-						return 0, err
-					}
-					col, err := appendCastBeforeExpr(builder.GetContext(), v, fillCols[i].Typ)
-					if err != nil {
-						return 0, err
-					}
-					fillVals = append(fillVals, col)
+					},
+					Right: tree.NewNumVal(int64(2), "2", false, tree.P_int64),
 				}
-			}
-		}
-	}
-
-	// bind ORDER BY clause
-	var orderBys []*plan.OrderBySpec
-	if astOrderBy != nil {
-		if ctx.recSelect {
-			return 0, moerr.NewParseErrorf(builder.GetContext(), "not support order by in recursive cte: '%v'", tree.String(&astOrderBy, dialect.MYSQL))
-		}
-		orderBinder := NewOrderBinder(projectionBinder, selectList)
-		orderBys = make([]*plan.OrderBySpec, 0, len(astOrderBy))
-
-		for _, order := range astOrderBy {
-			expr, err := orderBinder.BindExpr(order.Expr)
-			if err != nil {
-				return 0, err
-			}
-
-			orderBy := &plan.OrderBySpec{
-				Expr: expr,
-				Flag: plan.OrderBySpec_INTERNAL,
-			}
-
-			switch order.Direction {
-			case tree.Ascending:
-				orderBy.Flag |= plan.OrderBySpec_ASC
-			case tree.Descending:
-				orderBy.Flag |= plan.OrderBySpec_DESC
-			}
-
-			switch order.NullsPosition {
-			case tree.NullsFirst:
-				orderBy.Flag |= plan.OrderBySpec_NULLS_FIRST
-			case tree.NullsLast:
-				orderBy.Flag |= plan.OrderBySpec_NULLS_LAST
-			}
-
-			orderBys = append(orderBys, orderBy)
-		}
-	}
-
-	// bind limit/offset clause
-	var limitExpr *Expr
-	var offsetExpr *Expr
-	if astLimit != nil {
-		limitBinder := NewLimitBinder(builder, ctx)
-		if astLimit.Offset != nil {
-			offsetExpr, err = limitBinder.BindExpr(astLimit.Offset, 0, true)
-			if err != nil {
-				return 0, err
-			}
-		}
-		if astLimit.Count != nil {
-			limitExpr, err = limitBinder.BindExpr(astLimit.Count, 0, true)
-			if err != nil {
-				return 0, err
-			}
-
-			if cExpr, ok := limitExpr.Expr.(*plan.Expr_Lit); ok {
-				if c, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
-					ctx.hasSingleRow = c.U64Val == 1
+				if v, err = projectionBinder.BindExpr(b, 0, true); err != nil {
+					return
 				}
+				if castedExpr, err = appendCastBeforeExpr(builder.GetContext(), v, fillCols[i].Typ); err != nil {
+					return
+				}
+				fillVals = append(fillVals, castedExpr)
 			}
 		}
-		if builder.isForUpdate {
-			lockNode.Children[0] = nodeID
-			nodeID = builder.appendNode(lockNode, ctx)
+	}
+	return
+}
+
+func (builder *QueryBuilder) bindOrderBy(
+	ctx *BindContext,
+	astOrderBy tree.OrderBy,
+	projectionBinder *ProjectionBinder,
+	selectList tree.SelectExprs,
+) (boundOrderBys []*plan.OrderBySpec, err error) {
+	if ctx.bindingRecurStmt() {
+		err = moerr.NewParseErrorf(builder.GetContext(), "not support order by in recursive cte: '%v'", tree.String(&astOrderBy, dialect.MYSQL))
+		return
+	}
+
+	orderBinder := NewOrderBinder(projectionBinder, selectList)
+	boundOrderBys = make([]*plan.OrderBySpec, 0, len(astOrderBy))
+	for _, order := range astOrderBy {
+		var expr *plan.Expr
+		if expr, err = orderBinder.BindExpr(order.Expr); err != nil {
+			return
+		}
+
+		orderBy := &plan.OrderBySpec{
+			Expr: expr,
+			Flag: plan.OrderBySpec_INTERNAL,
+		}
+
+		switch order.Direction {
+		case tree.Ascending:
+			orderBy.Flag |= plan.OrderBySpec_ASC
+		case tree.Descending:
+			orderBy.Flag |= plan.OrderBySpec_DESC
+		}
+
+		switch order.NullsPosition {
+		case tree.NullsFirst:
+			orderBy.Flag |= plan.OrderBySpec_NULLS_FIRST
+		case tree.NullsLast:
+			orderBy.Flag |= plan.OrderBySpec_NULLS_LAST
+		}
+
+		boundOrderBys = append(boundOrderBys, orderBy)
+	}
+
+	return
+}
+
+func (builder *QueryBuilder) bindLimit(
+	ctx *BindContext,
+	astLimit *tree.Limit,
+) (boundOffsetExpr, boundCountExpr *Expr, err error) {
+	limitBinder := NewLimitBinder(builder, ctx)
+	if astLimit.Offset != nil {
+		if boundOffsetExpr, err = limitBinder.BindExpr(astLimit.Offset, 0, true); err != nil {
+			return
+		}
+	}
+	if astLimit.Count != nil {
+		if boundCountExpr, err = limitBinder.BindExpr(astLimit.Count, 0, true); err != nil {
+			return
+		}
+
+		if cExpr, ok := boundCountExpr.Expr.(*plan.Expr_Lit); ok {
+			if c, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
+				ctx.hasSingleRow = c.U64Val == 1
+			}
+		}
+	}
+	return
+}
+
+func (builder *QueryBuilder) bindValues(
+	ctx *BindContext,
+	valuesClause *tree.ValuesClause,
+) (nodeID int32, selectList tree.SelectExprs, err error) {
+	rowCount := len(valuesClause.Rows)
+	if len(valuesClause.Rows) == 0 {
+		err = moerr.NewInternalError(builder.GetContext(), "values statement have not rows")
+		return
+	}
+
+	strTyp := plan.Type{
+		Id:          int32(types.T_text),
+		NotNullable: false,
+	}
+	strColTyp := makeTypeByPlan2Type(strTyp)
+	strColTargetTyp := &plan.Expr{
+		Typ: strTyp,
+		Expr: &plan.Expr_T{
+			T: &plan.TargetType{},
+		},
+	}
+	colCount := len(valuesClause.Rows[0])
+	for j := 1; j < rowCount; j++ {
+		if len(valuesClause.Rows[j]) != colCount {
+			err = moerr.NewInternalError(builder.GetContext(), fmt.Sprintf("have different column count in row '%v'", j))
+			return
 		}
 	}
 
-	// return err if it's not a legal SAMPLE function.
-	if err = validSample(ctx, builder); err != nil {
-		return 0, err
+	ctx.hasSingleRow = rowCount == 1
+	rowSetData := &plan.RowsetData{
+		Cols: make([]*plan.ColData, colCount),
+	}
+	tableDef := &plan.TableDef{
+		TblId: 0,
+		Name:  "",
+		Cols:  make([]*plan.ColDef, colCount),
+	}
+	ctx.binder = NewWhereBinder(builder, ctx)
+	for i := 0; i < colCount; i++ {
+		rowSetData.Cols[i] = &plan.ColData{}
+		for j := 0; j < rowCount; j++ {
+			var planExpr *plan.Expr
+			if planExpr, err = ctx.binder.BindExpr(valuesClause.Rows[j][i], 0, true); err != nil {
+				return
+			}
+			if planExpr, err = forceCastExpr2(builder.GetContext(), planExpr, strColTyp, strColTargetTyp); err != nil {
+				return
+			}
+			rowSetData.Cols[i].Data = append(rowSetData.Cols[i].Data, &plan.RowsetExpr{
+				Expr: planExpr,
+			})
+		}
+
+		colName := fmt.Sprintf("column_%d", i) // like MySQL
+		selectList = append(selectList, tree.SelectExpr{
+			Expr: tree.NewUnresolvedColName(colName),
+			As:   tree.NewCStr(colName, ctx.lower),
+		})
+		ctx.headings = append(ctx.headings, colName)
+		tableDef.Cols[i] = &plan.ColDef{
+			ColId: 0,
+			Name:  colName,
+			Typ:   strTyp,
+		}
+	}
+	nodeUUID, _ := uuid.NewV7()
+	nodeID = builder.appendNode(&plan.Node{
+		NodeType:     plan.Node_VALUE_SCAN,
+		RowsetData:   rowSetData,
+		TableDef:     tableDef,
+		BindingTags:  []int32{builder.genNewTag()},
+		Uuid:         nodeUUID[:],
+		NotCacheable: true,
+	}, ctx)
+
+	err = builder.addBinding(nodeID, tree.AliasClause{Alias: "_valuescan"}, ctx)
+	return
+}
+
+func (builder *QueryBuilder) appendWhereNode(
+	ctx *BindContext,
+	nodeID int32,
+	boundFilterList []*plan.Expr,
+	notCacheable bool,
+) int32 {
+	return builder.appendNode(&plan.Node{
+		NodeType:     plan.Node_FILTER,
+		Children:     []int32{nodeID},
+		FilterList:   boundFilterList,
+		NotCacheable: notCacheable,
+	}, ctx)
+}
+
+func (builder *QueryBuilder) appendSampleNode(
+	ctx *BindContext,
+	nodeID int32,
+	boundHavingList []*plan.Expr,
+) (newNodeID int32, err error) {
+	nodeID = builder.appendNode(generateSamplePlanNode(ctx, nodeID), ctx)
+
+	if len(boundHavingList) > 0 {
+		var newFilterList []*plan.Expr
+		var expr *plan.Expr
+
+		for _, cond := range boundHavingList {
+			if nodeID, expr, err = builder.flattenSubqueries(nodeID, cond, ctx); err != nil {
+				return
+			}
+
+			newFilterList = append(newFilterList, expr)
+		}
+
+		nodeID = builder.appendNode(&plan.Node{
+			NodeType:   plan.Node_FILTER,
+			Children:   []int32{nodeID},
+			FilterList: newFilterList,
+		}, ctx)
 	}
 
-	// sample can ignore these check because it supports the sql like 'select a, b, sample(c) from t group by a' whose b is not in group by clause.
-	if !ctx.sampleFunc.hasSampleFunc {
-		if (len(ctx.groups) > 0 || len(ctx.aggregates) > 0 || len(ctx.times) > 0) && len(projectionBinder.boundCols) > 0 {
-			if !builder.mysqlCompatible {
-				return 0, moerr.NewSyntaxErrorf(builder.GetContext(), "column %q must appear in the GROUP BY clause or be used in an aggregate function", projectionBinder.boundCols[0])
+	for name, id := range ctx.groupByAst {
+		builder.nameByColRef[[2]int32{ctx.groupTag, id}] = name
+	}
+
+	for name, id := range ctx.sampleByAst {
+		builder.nameByColRef[[2]int32{ctx.sampleTag, id}] = name
+	}
+
+	newNodeID = nodeID
+	return
+}
+
+func (builder *QueryBuilder) appendAggNode(
+	ctx *BindContext,
+	nodeID int32,
+	boundHavingList []*plan.Expr,
+) (newNodeID int32, err error) {
+	if ctx.bindingRecurStmt() {
+		err = moerr.NewInternalError(builder.GetContext(), "not support aggregate function recursive cte")
+		return
+	}
+	if builder.isForUpdate {
+		err = moerr.NewInternalError(builder.GetContext(), "not support select aggregate function for update")
+		return
+	}
+
+	if !ctx.forceWindows {
+		nodeID = builder.appendNode(&plan.Node{
+			NodeType:     plan.Node_AGG,
+			Children:     []int32{nodeID},
+			GroupBy:      ctx.groups,
+			GroupingFlag: ctx.groupingFlag,
+			AggList:      ctx.aggregates,
+			BindingTags:  []int32{ctx.groupTag, ctx.aggregateTag},
+		}, ctx)
+	}
+
+	if len(boundHavingList) > 0 {
+		var newFilterList []*plan.Expr
+		var expr *plan.Expr
+
+		for _, cond := range boundHavingList {
+			if nodeID, expr, err = builder.flattenSubqueries(nodeID, cond, ctx); err != nil {
+				return
 			}
 
-			// For MySQL compatibility, wrap bare ColRefs in any_value()
-			for i, proj := range ctx.projects {
-				ctx.projects[i] = builder.wrapBareColRefsInAnyValue(proj, ctx)
-			}
+			newFilterList = append(newFilterList, expr)
 		}
+
+		nodeID = builder.appendNode(&plan.Node{
+			NodeType:   plan.Node_FILTER,
+			Children:   []int32{nodeID},
+			FilterList: newFilterList,
+		}, ctx)
+	}
+
+	for name, id := range ctx.groupByAst {
+		builder.nameByColRef[[2]int32{ctx.groupTag, id}] = name
+	}
+
+	for name, id := range ctx.aggregateByAst {
+		builder.nameByColRef[[2]int32{ctx.aggregateTag, id}] = name
+	}
+
+	newNodeID = nodeID
+	return
+}
+
+func (builder *QueryBuilder) appendTimeWindowNode(
+	ctx *BindContext,
+	nodeID int32,
+	boundTimeWindowOrderBy *plan.OrderBySpec,
+	boundTimeWindowGroupBy *plan.Expr,
+	fillType plan.Node_FillType,
+	fillVals, fillCols []*Expr,
+	interval, sliding, ts, wEnd *Expr,
+	astTimeWindow *tree.TimeWindow,
+) (newNodeID int32, err error) {
+	if ctx.bindingRecurStmt() {
+		err = moerr.NewInternalError(builder.GetContext(), "not support time window in recursive cte")
+		return
+	}
+
+	nodeID = builder.appendNode(&plan.Node{
+		NodeType:    plan.Node_TIME_WINDOW,
+		Children:    []int32{nodeID},
+		AggList:     ctx.times,
+		BindingTags: []int32{ctx.timeTag, ctx.groupTag},
+		OrderBy:     []*plan.OrderBySpec{boundTimeWindowOrderBy},
+		Interval:    interval,
+		Sliding:     sliding,
+		GroupBy:     []*plan.Expr{boundTimeWindowGroupBy},
+		Timestamp:   ts,
+		WEnd:        wEnd,
+	}, ctx)
+
+	for name, id := range ctx.timeByAst {
+		builder.nameByColRef[[2]int32{ctx.timeTag, id}] = name
+	}
+
+	if astTimeWindow.Fill != nil {
+		nodeID = builder.appendNode(&plan.Node{
+			NodeType:    plan.Node_FILL,
+			Children:    []int32{nodeID},
+			AggList:     fillCols,
+			BindingTags: []int32{ctx.timeTag},
+			FillType:    fillType,
+			FillVal:     fillVals,
+		}, ctx)
+	}
+
+	newNodeID = nodeID
+	return
+}
+
+func (builder *QueryBuilder) appendWindowNode(
+	ctx *BindContext,
+	nodeID int32,
+	boundHavingList []*plan.Expr,
+) (newNodeID int32, err error) {
+	if ctx.bindingRecurStmt() {
+		err = moerr.NewInternalError(builder.GetContext(), "not support window function in recursive cte")
+		return
+	}
+
+	for i, w := range ctx.windows {
+		e := w.GetW()
+		if len(e.PartitionBy) > 0 {
+			partitionBy := make([]*plan.OrderBySpec, 0, len(e.PartitionBy))
+			for _, p := range e.PartitionBy {
+				partitionBy = append(partitionBy, &plan.OrderBySpec{
+					Expr: p,
+					Flag: plan.OrderBySpec_INTERNAL,
+				})
+			}
+			nodeID = builder.appendNode(&plan.Node{
+				NodeType:    plan.Node_PARTITION,
+				Children:    []int32{nodeID},
+				OrderBy:     partitionBy,
+				BindingTags: []int32{ctx.windowTag},
+			}, ctx)
+		}
+		nodeID = builder.appendNode(&plan.Node{
+			NodeType:    plan.Node_WINDOW,
+			Children:    []int32{nodeID},
+			WinSpecList: []*Expr{w},
+			WindowIdx:   int32(i),
+			BindingTags: []int32{ctx.windowTag},
+		}, ctx)
+	}
+
+	for name, id := range ctx.windowByAst {
+		builder.nameByColRef[[2]int32{ctx.windowTag, id}] = name
 	}
 
 	if ctx.forceWindows {
-		ctx.tmpGroups = ctx.groups
-		ctx.windows, _ = ctx.generateForceWinSpecList()
-		ctx.aggregates = nil
-		ctx.groups = nil
-
-		for i := range ctx.projects {
-			ctx.projects[i] = DeepProcessExprForGroupConcat(ctx.projects[i], ctx)
-		}
-
-		for i := range havingList {
-			havingList[i] = DeepProcessExprForGroupConcat(havingList[i], ctx)
-		}
-
-		for i := range orderBys {
-			orderBys[i].Expr = DeepProcessExprForGroupConcat(orderBys[i].Expr, ctx)
-		}
-
-	}
-
-	// FIXME: delete this when SINGLE join is ready
-	if len(ctx.groups) == 0 && len(ctx.aggregates) > 0 {
-		ctx.hasSingleRow = true
-	}
-
-	// append AGG node or SAMPLE node
-	if ctx.sampleFunc.hasSampleFunc {
-		nodeID = builder.appendNode(generateSamplePlanNode(ctx, nodeID), ctx)
-
-		if len(havingList) > 0 {
+		if len(boundHavingList) > 0 {
 			var newFilterList []*plan.Expr
 			var expr *plan.Expr
 
-			for _, cond := range havingList {
-				nodeID, expr, err = builder.flattenSubqueries(nodeID, cond, ctx)
-				if err != nil {
-					return 0, err
+			for _, cond := range boundHavingList {
+				if nodeID, expr, err = builder.flattenSubqueries(nodeID, cond, ctx); err != nil {
+					return
 				}
 
 				newFilterList = append(newFilterList, expr)
@@ -3291,164 +3703,21 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 				FilterList: newFilterList,
 			}, ctx)
 		}
-
-		for name, id := range ctx.groupByAst {
-			builder.nameByColRef[[2]int32{ctx.groupTag, id}] = name
-		}
-
-		for name, id := range ctx.sampleByAst {
-			builder.nameByColRef[[2]int32{ctx.sampleTag, id}] = name
-		}
-	} else {
-		if len(ctx.groups) > 0 || len(ctx.aggregates) > 0 {
-			if ctx.recSelect {
-				return 0, moerr.NewInternalError(builder.GetContext(), "not support aggregate function recursive cte")
-			}
-			if builder.isForUpdate {
-				return 0, moerr.NewInternalError(builder.GetContext(), "not support select aggregate function for update")
-			}
-			if ctx.forceWindows {
-			} else {
-				nodeID = builder.appendNode(&plan.Node{
-					NodeType:     plan.Node_AGG,
-					Children:     []int32{nodeID},
-					GroupBy:      ctx.groups,
-					GroupingFlag: ctx.groupingFlag,
-					AggList:      ctx.aggregates,
-					BindingTags:  []int32{ctx.groupTag, ctx.aggregateTag},
-				}, ctx)
-			}
-			if len(havingList) > 0 {
-				var newFilterList []*plan.Expr
-				var expr *plan.Expr
-
-				for _, cond := range havingList {
-					nodeID, expr, err = builder.flattenSubqueries(nodeID, cond, ctx)
-					if err != nil {
-						return 0, err
-					}
-
-					newFilterList = append(newFilterList, expr)
-				}
-
-				nodeID = builder.appendNode(&plan.Node{
-					NodeType:   plan.Node_FILTER,
-					Children:   []int32{nodeID},
-					FilterList: newFilterList,
-				}, ctx)
-			}
-
-			for name, id := range ctx.groupByAst {
-				builder.nameByColRef[[2]int32{ctx.groupTag, id}] = name
-			}
-
-			for name, id := range ctx.aggregateByAst {
-				builder.nameByColRef[[2]int32{ctx.aggregateTag, id}] = name
-			}
-		}
 	}
 
-	// append TIME WINDOW node
-	if len(ctx.times) > 0 {
-		if ctx.recSelect {
-			return 0, moerr.NewInternalError(builder.GetContext(), "not support time window in recursive cte")
-		}
-		nodeID = builder.appendNode(&plan.Node{
-			NodeType:    plan.Node_TIME_WINDOW,
-			Children:    []int32{nodeID},
-			AggList:     ctx.times,
-			BindingTags: []int32{ctx.timeTag, ctx.groupTag},
-			OrderBy:     []*plan.OrderBySpec{orderBy},
-			Interval:    inteval,
-			Sliding:     sliding,
-			GroupBy:     []*plan.Expr{timeWindowGroup},
-			Timestamp:   ts,
-			WEnd:        wEnd,
-		}, ctx)
+	newNodeID = nodeID
+	return
+}
 
-		for name, id := range ctx.timeByAst {
-			builder.nameByColRef[[2]int32{ctx.timeTag, id}] = name
-		}
-
-		if astTimeWindow.Fill != nil {
-			nodeID = builder.appendNode(&plan.Node{
-				NodeType:    plan.Node_FILL,
-				Children:    []int32{nodeID},
-				AggList:     fillCols,
-				BindingTags: []int32{ctx.timeTag},
-				FillType:    fillType,
-				FillVal:     fillVals,
-			}, ctx)
-		}
-	}
-
-	// append WINDOW node
-	if len(ctx.windows) > 0 {
-		if ctx.recSelect {
-			return 0, moerr.NewInternalError(builder.GetContext(), "not support window function in recursive cte")
-		}
-
-		for i, w := range ctx.windows {
-			e := w.GetW()
-			if len(e.PartitionBy) > 0 {
-				partitionBy := make([]*plan.OrderBySpec, 0, len(e.PartitionBy))
-				for _, p := range e.PartitionBy {
-					partitionBy = append(partitionBy, &plan.OrderBySpec{
-						Expr: p,
-						Flag: plan.OrderBySpec_INTERNAL,
-					})
-				}
-				nodeID = builder.appendNode(&plan.Node{
-					NodeType:    plan.Node_PARTITION,
-					Children:    []int32{nodeID},
-					OrderBy:     partitionBy,
-					BindingTags: []int32{ctx.windowTag},
-				}, ctx)
-			}
-			nodeID = builder.appendNode(&plan.Node{
-				NodeType:    plan.Node_WINDOW,
-				Children:    []int32{nodeID},
-				WinSpecList: []*Expr{w},
-				WindowIdx:   int32(i),
-				BindingTags: []int32{ctx.windowTag},
-			}, ctx)
-		}
-
-		for name, id := range ctx.windowByAst {
-			builder.nameByColRef[[2]int32{ctx.windowTag, id}] = name
-		}
-
-		if ctx.forceWindows {
-			if len(havingList) > 0 {
-				var newFilterList []*plan.Expr
-				var expr *plan.Expr
-
-				for _, cond := range havingList {
-					nodeID, expr, err = builder.flattenSubqueries(nodeID, cond, ctx)
-					if err != nil {
-						return 0, err
-					}
-
-					newFilterList = append(newFilterList, expr)
-				}
-
-				nodeID = builder.appendNode(&plan.Node{
-					NodeType:   plan.Node_FILTER,
-					Children:   []int32{nodeID},
-					FilterList: newFilterList,
-				}, ctx)
-			}
-		}
-
-	}
-
-	// append PROJECT node
+func (builder *QueryBuilder) appendProjectionNode(
+	ctx *BindContext,
+	nodeID int32,
+	notCacheable bool,
+) (newNodeID int32, err error) {
 	for i, proj := range ctx.projects {
-		nodeID, proj, err = builder.flattenSubqueries(nodeID, proj, ctx)
-		if err != nil {
-			return 0, err
+		if nodeID, proj, err = builder.flattenSubqueries(nodeID, proj, ctx); err != nil {
+			return
 		}
-
 		ctx.projects[i] = proj
 	}
 
@@ -3460,66 +3729,45 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 		NotCacheable: notCacheable,
 	}, ctx)
 
-	// append DISTINCT node
-	if ctx.isDistinct {
-		nodeID = builder.appendNode(&plan.Node{
-			NodeType: plan.Node_DISTINCT,
-			Children: []int32{nodeID},
-		}, ctx)
-	}
+	newNodeID = nodeID
+	return
+}
 
-	// append SORT node (include limit, offset)
-	if len(orderBys) > 0 {
-		nodeID = builder.appendNode(&plan.Node{
-			NodeType: plan.Node_SORT,
-			Children: []int32{nodeID},
-			OrderBy:  orderBys,
-		}, ctx)
-	}
+func (builder *QueryBuilder) appendDistinctNode(ctx *BindContext, nodeID int32) int32 {
+	return builder.appendNode(&plan.Node{
+		NodeType: plan.Node_DISTINCT,
+		Children: []int32{nodeID},
+	}, ctx)
+}
 
-	if limitExpr != nil || offsetExpr != nil {
-		node := builder.qry.Nodes[nodeID]
+func (builder *QueryBuilder) appendSortNode(ctx *BindContext, nodeID int32, boundOrderBys []*plan.OrderBySpec) int32 {
+	return builder.appendNode(&plan.Node{
+		NodeType: plan.Node_SORT,
+		Children: []int32{nodeID},
+		OrderBy:  boundOrderBys,
+	}, ctx)
+}
 
-		node.Limit = limitExpr
-		node.Offset = offsetExpr
-	}
-
-	// append result PROJECT node
-	if builder.qry.Nodes[nodeID].NodeType != plan.Node_PROJECT {
-		for i := 0; i < resultLen; i++ {
-			ctx.results = append(ctx.results, &plan.Expr{
-				Typ: ctx.projects[i].Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: ctx.projectTag,
-						ColPos: int32(i),
-					},
+func (builder *QueryBuilder) appendResultProjectionNode(ctx *BindContext, nodeID int32, resultLen int) int32 {
+	for i := 0; i < resultLen; i++ {
+		ctx.results = append(ctx.results, &plan.Expr{
+			Typ: ctx.projects[i].Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: ctx.projectTag,
+					ColPos: int32(i),
 				},
-			})
-		}
-
-		ctx.resultTag = builder.genNewTag()
-
-		nodeID = builder.appendNode(&plan.Node{
-			NodeType:    plan.Node_PROJECT,
-			ProjectList: ctx.results,
-			Children:    []int32{nodeID},
-			BindingTags: []int32{ctx.resultTag},
-		}, ctx)
-	} else {
-		ctx.results = ctx.projects
+			},
+		})
 	}
 
-	if (ctx.initSelect || ctx.recSelect) && !ctx.unionSelect {
-		nodeID = appendSinkNodeWithTag(builder, ctx, nodeID, ctx.sinkTag)
-		builder.qry.Nodes[nodeID].RecursiveCte = ctx.recSelect
-	}
-
-	if isRoot {
-		builder.qry.Headings = append(builder.qry.Headings, ctx.headings...)
-	}
-
-	return nodeID, nil
+	ctx.resultTag = builder.genNewTag()
+	return builder.appendNode(&plan.Node{
+		NodeType:    plan.Node_PROJECT,
+		ProjectList: ctx.results,
+		Children:    []int32{nodeID},
+		BindingTags: []int32{ctx.resultTag},
+	}, ctx)
 }
 
 type helpFunc struct {
@@ -3529,7 +3777,7 @@ type helpFunc struct {
 	dateAdd  *tree.FuncExpr
 }
 
-func makeHelpFuncForTimeWindow(astTimeWindow *tree.TimeWindow, ctx context.Context) (*helpFunc, error) {
+func makeHelpFuncForTimeWindow(astTimeWindow *tree.TimeWindow) (*helpFunc, error) {
 	h := &helpFunc{}
 
 	name := tree.NewUnresolvedColName("interval")
@@ -4056,16 +4304,18 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 			break
 		}
 
-		if len(schema) == 0 && ctx.normalCTE && table == ctx.cteName {
+		if len(schema) == 0 && ctx.bindingNonRecurCte() && table == ctx.cteName {
 			return 0, moerr.NewParseErrorf(builder.GetContext(), "In recursive query block of Recursive Common Table Expression %s, the recursive table must be referenced only once, and not in any subquery", table)
 		} else if len(schema) == 0 {
 			cteRef := ctx.findCTE(table)
 			if cteRef != nil {
 				if ctx.cteInBinding(table) {
-					return 0, moerr.NewParseErrorf(builder.GetContext(), "cte %s reference itself", table)
+					if ctx.bindingNonRecurCte() {
+						return 0, moerr.NewParseErrorf(builder.GetContext(), "cte %s reference itself", table)
+					}
 				}
-				if ctx.recSelect {
-					nodeID = ctx.recRecursiveScanNodeId
+				if ctx.bindingRecurStmt() {
+					nodeID = ctx.cteState.recScanNodeId
 					return
 				}
 
@@ -4619,15 +4869,13 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 		nodeId  int32
 	)
 
+	var children []int32
 	if preNodeId == -1 {
-		scanNode := &plan.Node{
-			NodeType: plan.Node_VALUE_SCAN,
-		}
-		childId = builder.appendNode(scanNode, ctx)
 		ctx.binder = NewTableBinder(builder, ctx)
 	} else {
 		ctx.binder = NewTableBinder(builder, leftCtx)
 		childId = builder.copyNode(ctx, preNodeId)
+		children = []int32{childId}
 	}
 
 	exprs := make([]*plan.Expr, 0, len(tbl.Func.Exprs))
@@ -4641,33 +4889,33 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 	id := tbl.Id()
 	switch id {
 	case "unnest":
-		nodeId, err = builder.buildUnnest(tbl, ctx, exprs, childId)
+		nodeId, err = builder.buildUnnest(tbl, ctx, exprs, children)
 	case "generate_series":
-		nodeId = builder.buildGenerateSeries(tbl, ctx, exprs, childId)
+		nodeId = builder.buildGenerateSeries(tbl, ctx, exprs, children)
 	case "meta_scan":
-		nodeId, err = builder.buildMetaScan(tbl, ctx, exprs, childId)
+		nodeId, err = builder.buildMetaScan(tbl, ctx, exprs, children)
 	case "current_account":
-		nodeId, err = builder.buildCurrentAccount(tbl, ctx, exprs, childId)
+		nodeId, err = builder.buildCurrentAccount(tbl, ctx, exprs, children)
 	case "metadata_scan":
-		nodeId = builder.buildMetadataScan(tbl, ctx, exprs, childId)
+		nodeId = builder.buildMetadataScan(tbl, ctx, exprs, children)
 	case "processlist", "mo_sessions":
-		nodeId, err = builder.buildProcesslist(tbl, ctx, exprs, childId)
+		nodeId, err = builder.buildProcesslist(tbl, ctx, exprs, children)
 	case "mo_configurations":
-		nodeId, err = builder.buildMoConfigurations(tbl, ctx, exprs, childId)
+		nodeId, err = builder.buildMoConfigurations(tbl, ctx, exprs, children)
 	case "mo_locks":
-		nodeId, err = builder.buildMoLocks(tbl, ctx, exprs, childId)
+		nodeId, err = builder.buildMoLocks(tbl, ctx, exprs, children)
 	case "mo_transactions":
-		nodeId, err = builder.buildMoTransactions(tbl, ctx, exprs, childId)
+		nodeId, err = builder.buildMoTransactions(tbl, ctx, exprs, children)
 	case "mo_cache":
-		nodeId, err = builder.buildMoCache(tbl, ctx, exprs, childId)
+		nodeId, err = builder.buildMoCache(tbl, ctx, exprs, children)
 	case "fulltext_index_scan":
-		nodeId, err = builder.buildFullTextIndexScan(tbl, ctx, exprs, childId)
+		nodeId, err = builder.buildFullTextIndexScan(tbl, ctx, exprs, children)
 	case "fulltext_index_tokenize":
-		nodeId, err = builder.buildFullTextIndexTokenize(tbl, ctx, exprs, childId)
+		nodeId, err = builder.buildFullTextIndexTokenize(tbl, ctx, exprs, children)
 	case "stage_list":
-		nodeId, err = builder.buildStageList(tbl, ctx, exprs, childId)
+		nodeId, err = builder.buildStageList(tbl, ctx, exprs, children)
 	case "moplugin_table":
-		nodeId, err = builder.buildPluginExec(tbl, ctx, exprs, childId)
+		nodeId, err = builder.buildPluginExec(tbl, ctx, exprs, children)
 	default:
 		err = moerr.NewNotSupportedf(builder.GetContext(), "table function '%s' not supported", id)
 	}

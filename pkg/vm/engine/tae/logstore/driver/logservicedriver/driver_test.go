@@ -20,10 +20,10 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/lni/vfs"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
@@ -44,29 +44,35 @@ func restartDriver(t *testing.T, d *LogServiceDriver, h func(*entry.Entry)) *Log
 	assert.NoError(t, d.Close())
 	t.Log("Addr:")
 	// preAddr:=d.addr
-	for lsn, intervals := range d.psn.dsnMap {
+	for lsn, intervals := range d.sequence.psn2DSNMap {
 		t.Logf("%d %v", lsn, intervals)
 	}
 	// preLsns:=d.validPSN
-	t.Logf("Valid lsn: %v", d.psn.records)
-	t.Logf("Driver DSN %d, Syncing %d, Synced %d", d.dsn, d.syncing, d.synced)
+	t.Logf("Valid lsn: %v", d.sequence.psns)
+	t.Logf("Driver DSN %d, Synced %d", d.watermark.nextDSN.Load(), d.watermark.committedDSN)
 	t.Logf("Truncated %d", d.truncateDSNIntent.Load())
 	t.Logf("LSTruncated %d", d.truncatedPSN)
-	d = NewLogServiceDriver(d.config)
+	d = NewLogServiceDriver(d.GetCfg())
 	tempLsn := uint64(0)
-	err := d.Replay(context.Background(), func(e *entry.Entry) driver.ReplayEntryState {
-		if e.DSN <= tempLsn {
-			panic("logic err")
-		}
-		tempLsn = e.DSN
-		if h != nil {
-			h(e)
-		}
-		return driver.RE_Nomal
-	})
+	err := d.Replay(
+		context.Background(),
+		func(e *entry.Entry) driver.ReplayEntryState {
+			if e.DSN <= tempLsn {
+				panic("logic err")
+			}
+			tempLsn = e.DSN
+			if h != nil {
+				h(e)
+			}
+			return driver.RE_Nomal
+		},
+		func() driver.ReplayMode {
+			return driver.ReplayMode_ReplayForWrite
+		},
+	)
 	assert.NoError(t, err)
 	t.Log("Addr:")
-	for lsn, intervals := range d.psn.dsnMap {
+	for lsn, intervals := range d.sequence.psn2DSNMap {
 		t.Logf("%d %v", lsn, intervals)
 	}
 	// assert.Equal(t,len(preAddr),len(d.addr))
@@ -76,9 +82,8 @@ func restartDriver(t *testing.T, d *LogServiceDriver, h func(*entry.Entry)) *Log
 	// 	assert.Equal(t,intervals.Intervals[0].Start,replayedInterval.Intervals[0].Start)
 	// 	assert.Equal(t,intervals.Intervals[0].End,replayedInterval.Intervals[0].End)
 	// }
-	t.Logf("Valid lsn: %v", d.psn.records)
+	t.Logf("Valid lsn: %v", d.sequence.psns)
 	// assert.Equal(t,preLsns.GetCardinality(),d.validPSN.GetCardinality())
-	t.Logf("Driver DSN %d, Syncing %d, Synced %d", d.dsn, d.syncing, d.synced)
 	t.Logf("Truncated %d", d.truncateDSNIntent.Load())
 	t.Logf("LSTruncated %d", d.truncatedPSN)
 	return d
@@ -89,8 +94,24 @@ func TestReplay1(t *testing.T) {
 	service, ccfg := initTest(t)
 	defer service.Close()
 
-	cfg := NewTestConfig("", ccfg)
-	driver := NewLogServiceDriver(cfg)
+	cfg := NewConfig(
+		"",
+		WithConfigOptClientConfig("", ccfg),
+		WithConfigOptClientBufSize(10*mpool.MB),
+		WithConfigOptMaxClient(10),
+	)
+	d := NewLogServiceDriver(&cfg)
+
+	err := d.Replay(
+		context.Background(),
+		func(e *entry.Entry) driver.ReplayEntryState {
+			return driver.RE_Nomal
+		},
+		func() driver.ReplayMode {
+			return driver.ReplayMode_ReplayForWrite
+		},
+	)
+	assert.NoError(t, err)
 
 	entryCount := 10000
 	entries := make([]*entry.Entry, entryCount)
@@ -98,7 +119,7 @@ func TestReplay1(t *testing.T) {
 	for i := 0; i < entryCount; i++ {
 		payload := []byte(fmt.Sprintf("payload %d", i))
 		e := entry.MockEntryWithPayload(payload)
-		driver.Append(e)
+		d.Append(e)
 		entries[i] = e
 	}
 
@@ -113,13 +134,13 @@ func TestReplay1(t *testing.T) {
 	// 	i++
 	// }
 
-	driver = restartDriver(t, driver, nil)
+	d = restartDriver(t, d, nil)
 
 	for _, e := range entries {
 		e.Entry.Free()
 	}
 
-	driver.Close()
+	d.Close()
 }
 
 func TestReplay2(t *testing.T) {
@@ -128,9 +149,12 @@ func TestReplay2(t *testing.T) {
 	service, ccfg := initTest(t)
 	defer service.Close()
 
-	cfg := NewTestConfig("", ccfg)
-	cfg.RecordSize = 100
-	driver := NewLogServiceDriver(cfg)
+	cfg := NewConfig(
+		"",
+		WithConfigOptClientConfig("", ccfg),
+		WithConfigOptClientBufSize(100),
+	)
+	driver := NewLogServiceDriver(&cfg)
 
 	entryCount := 10000
 	entries := make([]*entry.Entry, entryCount)
@@ -142,7 +166,7 @@ func TestReplay2(t *testing.T) {
 		entries[i] = e
 	}
 
-	synced := driver.getSynced()
+	synced := driver.getCommittedDSNWatermark()
 	driver.Truncate(synced)
 
 	for i, e := range entries {
@@ -177,13 +201,24 @@ func TestReplay2(t *testing.T) {
 	driver.Close()
 }
 
-func Test_RetryWithTimeout(t *testing.T) {
-	tryFunc := func() bool {
-		return false
-	}
-	err := RetryWithTimeout(time.Second*0, tryFunc)
-	assert.Error(t, err)
+// func Test_TokenController(t *testing.T) {
+// 	c := newTokenController(100)
+// 	var wg sync.WaitGroup
 
-	err = RetryWithTimeout(time.Millisecond*3, tryFunc)
-	assert.Error(t, err)
-}
+// 	pool, _ := ants.NewPool(64)
+// 	defer pool.Release()
+
+// 	now := time.Now()
+
+// 	for i := 0; i < 1000; i++ {
+// 		wg.Add(1)
+// 		pool.Submit(func() {
+// 			defer wg.Done()
+// 			token := c.Apply()
+// 			time.Sleep(time.Millisecond * time.Duration(rand.Intn(10)+1))
+// 			c.Putback(token)
+// 		})
+// 	}
+// 	wg.Wait()
+// 	t.Logf("time cost: %v", time.Since(now))
+// }

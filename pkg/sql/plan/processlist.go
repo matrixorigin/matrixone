@@ -26,7 +26,7 @@ import (
 
 var SessionsColTypes []types.Type
 
-func (builder *QueryBuilder) buildProcesslist(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, childId int32) (int32, error) {
+func (builder *QueryBuilder) buildProcesslist(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
 	if len(tbl.Func.Exprs) > 0 {
 		return 0, moerr.NewInvalidArg(builder.GetContext(), "processlist function has invalid input args length", len(tbl.Func.Exprs))
 	}
@@ -61,7 +61,7 @@ func (builder *QueryBuilder) buildProcesslist(tbl *tree.TableFunction, ctx *Bind
 			Cols: sessionsColDefs,
 		},
 		BindingTags:     []int32{builder.genNewTag()},
-		Children:        []int32{childId},
+		Children:        children,
 		TblFuncExprList: exprs,
 	}
 	return builder.appendNode(node, ctx), nil

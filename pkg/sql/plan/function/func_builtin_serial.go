@@ -34,3 +34,8 @@ func (op *opSerial) Close() error {
 	op.packer.Close()
 	return nil
 }
+
+func (op *opSerial) Reset() error {
+	op.packer.Reset()
+	return nil
+}

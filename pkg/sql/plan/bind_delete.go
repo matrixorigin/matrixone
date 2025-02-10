@@ -24,14 +24,40 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func (builder *QueryBuilder) bindDelete(stmt *tree.Delete, bindCtx *BindContext) (int32, error) {
-	if len(stmt.Tables) != 1 {
-		return 0, moerr.NewUnsupportedDML(builder.GetContext(), "delete from multiple tables")
+func canDeleteRewriteToTruncate(ctx CompilerContext, dmlCtx *DMLContext) (bool, error) {
+	accountId, err := ctx.GetAccountId()
+	if err != nil {
+		return false, err
 	}
 
-	//FIXME: optimize truncate table?
-	if stmt.Where == nil && stmt.Limit == nil {
-		return 0, moerr.NewUnsupportedDML(builder.GetContext(), "rewrite to truncate table")
+	deleteOptToTruncate, err := checkDeleteOptToTruncate(ctx)
+	if err != nil {
+		return false, err
+	}
+
+	if !deleteOptToTruncate {
+		return false, nil
+	}
+
+	enabled, err := IsForeignKeyChecksEnabled(ctx)
+	if err != nil {
+		return false, err
+	}
+
+	for i, tableDef := range dmlCtx.tableDefs {
+		if enabled && len(tableDef.RefChildTbls) > 0 ||
+			tableDef.ViewSql != nil ||
+			(dmlCtx.isClusterTable[i] && accountId != catalog.System_Account) ||
+			dmlCtx.objRefs[i].PubInfo != nil {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, bindCtx *BindContext) (int32, error) {
+	if len(stmt.Tables) != 1 {
+		return 0, moerr.NewUnsupportedDML(builder.GetContext(), "delete from multiple tables")
 	}
 
 	aliasMap := make(map[string][2]string)
@@ -43,6 +69,19 @@ func (builder *QueryBuilder) bindDelete(stmt *tree.Delete, bindCtx *BindContext)
 	err := dmlCtx.ResolveTables(builder.compCtx, stmt.Tables, stmt.With, aliasMap, false)
 	if err != nil {
 		return 0, err
+	}
+
+	//FIXME: optimize truncate table?
+	if stmt.Where == nil && stmt.Limit == nil {
+		var cantrucate bool
+		cantrucate, err = canDeleteRewriteToTruncate(ctx, dmlCtx)
+		if err != nil {
+			return 0, err
+		}
+
+		if cantrucate {
+			return 0, moerr.NewUnsupportedDML(builder.GetContext(), "rewrite to truncate table")
+		}
 	}
 
 	var selectList []tree.SelectExpr
@@ -230,7 +269,7 @@ func (builder *QueryBuilder) bindDelete(stmt *tree.Delete, bindCtx *BindContext)
 				lockTarget := &plan.LockTarget{
 					TableId:            tableDef.TblId,
 					ObjRef:             DeepCopyObjectRef(dmlCtx.objRefs[i]),
-					PrimaryColIdxInBat: int32(pkPos),
+					PrimaryColIdxInBat: pkPos,
 					PrimaryColRelPos:   selectNodeTag,
 					PrimaryColTyp:      col.Typ,
 				}
@@ -266,7 +305,7 @@ func (builder *QueryBuilder) bindDelete(stmt *tree.Delete, bindCtx *BindContext)
 						lockTargets = append(lockTargets, &plan.LockTarget{
 							TableId:            idxNode.TableDef.TblId,
 							ObjRef:             DeepCopyObjectRef(idxNode.ObjRef),
-							PrimaryColIdxInBat: int32(pkPos),
+							PrimaryColIdxInBat: pkPos,
 							PrimaryColRelPos:   idxNode.BindingTags[0],
 							PrimaryColTyp:      col.Typ,
 						})

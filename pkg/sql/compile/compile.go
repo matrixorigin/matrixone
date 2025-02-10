@@ -995,7 +995,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 		}
 		ss = c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss)))
 		return ss, nil
-	case plan.Node_FILTER, plan.Node_PROJECT, plan.Node_PRE_DELETE:
+	case plan.Node_FILTER, plan.Node_PROJECT:
 		ss, err = c.compilePlanScope(step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
@@ -1246,10 +1246,13 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 		ss = c.compileProjection(n, ss)
 		return ss, nil
 	case plan.Node_FUNCTION_SCAN:
-		ss, err = c.compilePlanScope(step, n.Children[0], ns)
-		if err != nil {
-			return nil, err
+		if len(n.Children) != 0 {
+			ss, err = c.compilePlanScope(step, n.Children[0], ns)
+			if err != nil {
+				return nil, err
+			}
 		}
+
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		ss = c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, c.compileTableFunction(n, ss))))
 		return ss, nil
@@ -1708,6 +1711,8 @@ func (c *Compile) compileExternScanParallelReadWrite(n *plan.Node, param *tree.E
 				fileOffsetTmp[j].Offset = append(fileOffsetTmp[j].Offset, fileOffset[j][2*preIndex:2*preIndex+2*count]...)
 			}
 		}
+		logutil.Infof("compileExternScanParallelReadWrite, len of cnList is %d, cn addr is %s, mcpu is %d, filepath is %s, file size is %d", len(c.cnList), c.cnList[i].Addr, scope.NodeInfo.Mcpu, param.ExParamConst.Filepath, param.ExParamConst.FileSize)
+		logutil.Infof("compileExternScanParallelReadWrite, %v\n", fileOffsetTmp)
 		op := constructExternal(n, param, c.proc.Ctx, fileList, fileSize, fileOffsetTmp, strictSqlMode)
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		scope.setRootOperator(op)
@@ -1742,6 +1747,14 @@ func (c *Compile) compileExternScanSerialReadWrite(n *plan.Node, param *tree.Ext
 
 func (c *Compile) compileTableFunction(n *plan.Node, ss []*Scope) []*Scope {
 	currentFirstFlag := c.anal.isFirst
+	if len(n.Children) == 0 {
+		ds := newScope(Merge)
+		ds.NodeInfo = getEngineNode(c)
+		ds.DataSource = &Source{isConst: true, node: n}
+		ds.NodeInfo = engine.Node{Addr: c.addr, Mcpu: 1}
+		ds.Proc = c.proc.NewNoContextChildProc(0)
+		ss = []*Scope{ds}
+	}
 	for i := range ss {
 		op := constructTableFunction(n)
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
@@ -3139,8 +3152,12 @@ func (c *Compile) compileInsert(ns []*plan.Node, n *plan.Node, ss []*Scope) ([]*
 		currentFirstFlag := c.anal.isFirst
 		// Not write S3
 		for i := range ss {
-			insertArg := constructInsert(n, c.e)
-			insertArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+			insertArg, err := constructInsert(c.proc, n, c.e, false)
+			if err != nil {
+				return nil, err
+			}
+
+			insertArg.GetOperatorBase().SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 			ss[i].setRootOperator(insertArg)
 		}
 		c.anal.isFirst = false
@@ -3187,9 +3204,12 @@ func (c *Compile) compileInsert(ns []*plan.Node, n *plan.Node, ss []*Scope) ([]*
 		}
 		dataScope.IsEnd = true
 		for i := range scopes {
-			insertArg := constructInsert(n, c.e)
-			insertArg.ToWriteS3 = true
-			insertArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+			insertArg, err := constructInsert(c.proc, n, c.e, true)
+			if err != nil {
+				return nil, err
+			}
+
+			insertArg.GetOperatorBase().SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 			scopes[i].setRootOperator(insertArg)
 		}
 		currentFirstFlag = false
@@ -3207,9 +3227,12 @@ func (c *Compile) compileInsert(ns []*plan.Node, n *plan.Node, ss []*Scope) ([]*
 	currentFirstFlag := c.anal.isFirst
 	c.anal.isFirst = false
 	for i := range ss {
-		insertArg := constructInsert(n, c.e)
-		insertArg.ToWriteS3 = true
-		insertArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+		insertArg, err := constructInsert(c.proc, n, c.e, true)
+		if err != nil {
+			return nil, err
+		}
+
+		insertArg.GetOperatorBase().SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[i].setRootOperator(insertArg)
 	}
 	currentFirstFlag = false
@@ -3253,9 +3276,12 @@ func (c *Compile) compileMultiUpdate(_ []*plan.Node, n *plan.Node, ss []*Scope) 
 		}
 
 		for i := range ss {
-			multiUpdateArg := constructMultiUpdate(n, c.e, ss[i].IsRemote)
-			multiUpdateArg.Action = multi_update.UpdateWriteS3
-			multiUpdateArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+			multiUpdateArg, err := constructMultiUpdate(n, c.e, c.proc, multi_update.UpdateWriteS3, ss[i].IsRemote)
+			if err != nil {
+				return nil, err
+			}
+
+			multiUpdateArg.GetOperatorBase().SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 			ss[i].setRootOperator(multiUpdateArg)
 		}
 
@@ -3264,18 +3290,23 @@ func (c *Compile) compileMultiUpdate(_ []*plan.Node, n *plan.Node, ss []*Scope) 
 			rs = c.newMergeScope(ss)
 		}
 
-		multiUpdateArg := constructMultiUpdate(n, c.e, rs.IsRemote)
-		multiUpdateArg.Action = multi_update.UpdateFlushS3Info
+		multiUpdateArg, err := constructMultiUpdate(n, c.e, c.proc, multi_update.UpdateFlushS3Info, rs.IsRemote)
+		if err != nil {
+			return nil, err
+		}
+
 		rs.setRootOperator(multiUpdateArg)
 		ss = []*Scope{rs}
 	} else {
-		if len(ss) > 0 {
+		if !c.IsTpQuery() {
 			rs := c.newMergeScope(ss)
 			ss = []*Scope{rs}
 		}
-		multiUpdateArg := constructMultiUpdate(n, c.e, ss[0].IsRemote)
-		multiUpdateArg.Action = multi_update.UpdateWriteTable
-		multiUpdateArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+		multiUpdateArg, err := constructMultiUpdate(n, c.e, c.proc, multi_update.UpdateWriteTable, ss[0].IsRemote)
+		if err != nil {
+			return nil, err
+		}
+		multiUpdateArg.GetOperatorBase().SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[0].setRootOperator(multiUpdateArg)
 	}
 	c.anal.isFirst = false
@@ -3305,14 +3336,21 @@ func (c *Compile) compilePreInsertSK(n *plan.Node, ss []*Scope) []*Scope {
 }
 
 func (c *Compile) compileDelete(n *plan.Node, ss []*Scope) ([]*Scope, error) {
-	var arg *deletion.Deletion
 	currentFirstFlag := c.anal.isFirst
-	arg, err := constructDeletion(n, c.e)
+	op, err := constructDeletion(n, c.e, c.proc)
 	if err != nil {
 		return nil, err
 	}
-	arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+
+	op.GetOperatorBase().SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	c.anal.isFirst = false
+
+	var arg *deletion.Deletion
+	if _, ok := op.(*deletion.Deletion); ok {
+		arg = op.(*deletion.Deletion)
+	} else {
+		arg = op.(*deletion.PartitionDelete).GetDelete()
+	}
 
 	if n.Stats.GetOutcnt()*float64(SingleLineSizeEstimate) > float64(DistributedThreshold) && !arg.DeleteCtx.CanTruncate {
 		rs := c.newDeleteMergeScope(arg, ss, n)
@@ -3339,7 +3377,7 @@ func (c *Compile) compileDelete(n *plan.Node, ss []*Scope) ([]*Scope, error) {
 			rs = c.newMergeScope(ss)
 		}
 
-		rs.setRootOperator(arg)
+		rs.setRootOperator(op)
 		ss = []*Scope{rs}
 		return ss, nil
 	}
@@ -3371,7 +3409,7 @@ func (c *Compile) compileLock(n *plan.Node, ss []*Scope) ([]*Scope, error) {
 	}
 
 	currentFirstFlag := c.anal.isFirst
-	if len(ss) > 0 {
+	if !c.IsTpQuery() || len(c.pn.GetQuery().Steps) > 1 { // todo: don't support dml with multi steps for now
 		rs := c.newMergeScope(ss)
 		ss = []*Scope{rs}
 	}

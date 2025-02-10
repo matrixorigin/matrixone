@@ -21,12 +21,16 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+)
+
+var (
+	DisabledService = NewService(Config{}, nil)
 )
 
 type service struct {
@@ -35,7 +39,7 @@ type service struct {
 
 	mu struct {
 		sync.RWMutex
-		tables map[uint64]partition.PartitionMetadata
+		tables map[uint64]metadataCache
 	}
 }
 
@@ -47,7 +51,7 @@ func NewService(
 		cfg:   cfg,
 		store: store,
 	}
-	s.mu.tables = make(map[uint64]partition.PartitionMetadata)
+	s.mu.tables = make(map[uint64]metadataCache)
 	return s
 }
 
@@ -76,6 +80,17 @@ func (s *service) Create(
 	)
 	if err != nil {
 		return err
+	}
+
+	if txnOp != nil {
+		txnOp.AppendEventCallback(
+			client.CommitEvent,
+			func(_ client.TxnEvent) {
+				s.mu.Lock()
+				s.mu.tables[tableID] = newMetadataCache(metadata)
+				s.mu.Unlock()
+			},
+		)
 	}
 
 	return s.store.Create(
@@ -108,11 +123,28 @@ func (s *service) Delete(
 		return nil
 	}
 
-	return s.store.Delete(
+	if txnOp != nil {
+		txnOp.AppendEventCallback(
+			client.CommitEvent,
+			func(te client.TxnEvent) {
+				s.mu.Lock()
+				delete(s.mu.tables, tableID)
+				s.mu.Unlock()
+			},
+		)
+	}
+
+	err = s.store.Delete(
 		ctx,
 		metadata,
 		txnOp,
 	)
+	if err == nil && txnOp == nil {
+		s.mu.Lock()
+		delete(s.mu.tables, tableID)
+		s.mu.Unlock()
+	}
+	return err
 }
 
 func (s *service) Is(
@@ -149,69 +181,61 @@ func (s *service) getMetadata(
 			option,
 			def,
 		)
+	case *tree.RangeType:
+		return s.getMetadataByRangeType(
+			option,
+			def,
+		)
+	case *tree.ListType:
+		return s.getMetadataByListType(
+			option,
+			def,
+		)
 	default:
 		panic("BUG: unsupported partition method")
 	}
 
 }
 
-func (s *service) getMetadataByHashType(
-	option *tree.PartitionOption,
-	def *plan.TableDef,
-) (partition.PartitionMetadata, error) {
-	method := option.PartBy.PType.(*tree.HashType)
-	if option.PartBy.Num <= 0 {
-		return partition.PartitionMetadata{}, moerr.NewInvalidInputNoCtx("partition number is invalid")
-	}
-
-	columns, ok := method.Expr.(*tree.UnresolvedName)
-	if !ok {
-		return partition.PartitionMetadata{}, moerr.NewNotSupportedNoCtx("column expression is not supported")
-	}
-	if columns.NumParts != 1 {
-		return partition.PartitionMetadata{}, moerr.NewNotSupportedNoCtx("multi-column is not supported in HASH partition")
-	}
-	validColumns, err := validColumns(
-		columns,
-		def,
-		func(t plan.Type) bool {
-			return types.T(t.Id).IsInteger()
-		},
+func (s *service) Prune(
+	ctx context.Context,
+	tableID uint64,
+	bat *batch.Batch,
+	txnOp client.TxnOperator,
+) (PruneResult, error) {
+	metadata, err := s.readMetadata(
+		ctx,
+		tableID,
+		txnOp,
 	)
-	if err != nil {
-		return partition.PartitionMetadata{}, err
+	if err != nil || metadata.IsEmpty() {
+		return PruneResult{}, err
 	}
 
-	ctx := tree.NewFmtCtx(
-		dialect.MYSQL,
-		tree.WithQuoteString(true),
+	// TODO(fagongzi): partition
+	return PruneResult{
+		batches:    []*batch.Batch{bat, bat},
+		partitions: []partition.Partition{metadata.Partitions[0]},
+	}, nil
+}
+
+func (s *service) Filter(
+	ctx context.Context,
+	tableID uint64,
+	filters []*plan.Expr,
+	txnOp client.TxnOperator,
+) ([]int, error) {
+	metadata, err := s.readMetadata(
+		ctx,
+		tableID,
+		txnOp,
 	)
-	method.Expr.Format(ctx)
-
-	metadata := partition.PartitionMetadata{
-		TableID:      def.TblId,
-		TableName:    def.Name,
-		DatabaseName: def.DbName,
-		Method:       partition.PartitionMethod_Hash,
-		// TODO: ???
-		Expression:  "",
-		Description: ctx.String(),
-		Columns:     validColumns,
+	if err != nil || metadata.IsEmpty() {
+		return nil, err
 	}
 
-	for i := uint64(0); i < option.PartBy.Num; i++ {
-		name := fmt.Sprintf("p%d", i)
-		metadata.Partitions = append(
-			metadata.Partitions,
-			partition.Partition{
-				Name:               name,
-				PartitionTableName: fmt.Sprintf("%s_%s", def.Name, name),
-				Position:           uint32(i),
-				Comment:            "",
-			},
-		)
-	}
-	return metadata, nil
+	// TODO(fagongzi): partition
+	return []int{0}, nil
 }
 
 func (s *service) readMetadata(
@@ -220,10 +244,10 @@ func (s *service) readMetadata(
 	txnOp client.TxnOperator,
 ) (partition.PartitionMetadata, error) {
 	s.mu.RLock()
-	metadata, ok := s.mu.tables[tableID]
+	c, ok := s.mu.tables[tableID]
 	s.mu.RUnlock()
 	if ok {
-		return metadata, nil
+		return c.metadata, nil
 	}
 
 	metadata, ok, err := s.store.GetMetadata(
@@ -239,13 +263,54 @@ func (s *service) readMetadata(
 	}
 
 	s.mu.Lock()
-	s.mu.tables[tableID] = metadata
+	s.mu.tables[tableID] = newMetadataCache(metadata)
 	s.mu.Unlock()
 	return metadata, nil
 }
 
 func (s *service) GetStorage() PartitionStorage {
 	return s.store
+}
+
+func (s *service) getManualPartitions(
+	option *tree.PartitionOption,
+	def *plan.TableDef,
+	columns *tree.UnresolvedName,
+	validTypeFunc func(plan.Type) bool,
+	partitionDesc string,
+	method partition.PartitionMethod,
+	applyPartitionComment func(*tree.Partition) string,
+) (partition.PartitionMetadata, error) {
+	validColumns, err := validColumns(
+		columns,
+		def,
+		validTypeFunc,
+	)
+	if err != nil {
+		return partition.PartitionMetadata{}, err
+	}
+
+	metadata := partition.PartitionMetadata{
+		TableID:      def.TblId,
+		TableName:    def.Name,
+		DatabaseName: def.DbName,
+		Method:       method,
+		Description:  partitionDesc,
+		Columns:      validColumns,
+	}
+
+	for i, p := range option.Partitions {
+		metadata.Partitions = append(
+			metadata.Partitions,
+			partition.Partition{
+				Name:               p.Name.String(),
+				PartitionTableName: fmt.Sprintf("%s_%s", def.Name, p.Name.String()),
+				Position:           uint32(i),
+				Expression:         applyPartitionComment(p),
+			},
+		)
+	}
+	return metadata, nil
 }
 
 func validColumns(
@@ -265,7 +330,12 @@ func validColumns(
 
 			has = true
 			if !validType(c.Typ) {
-				return nil, moerr.NewNotSupportedNoCtx("column type is not supported in hash partition")
+				return nil, moerr.NewNotSupportedNoCtx(
+					fmt.Sprintf(
+						"column %s type %s is not supported",
+						col,
+						types.T(c.Typ.Id).String()),
+				)
 			}
 			break
 		}
@@ -275,4 +345,16 @@ func validColumns(
 		validColumns = append(validColumns, col)
 	}
 	return validColumns, nil
+}
+
+type metadataCache struct {
+	metadata partition.PartitionMetadata
+}
+
+func newMetadataCache(
+	metadata partition.PartitionMetadata,
+) metadataCache {
+	return metadataCache{
+		metadata: metadata,
+	}
 }

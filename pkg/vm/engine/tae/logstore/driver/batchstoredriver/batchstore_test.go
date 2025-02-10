@@ -57,16 +57,22 @@ func restartStore(s *baseStore, t *testing.T) *baseStore {
 	s, err = NewBaseStore(s.dir, s.name, cfg)
 	assert.NoError(t, err)
 	tempLsn := uint64(0)
-	err = s.Replay(context.Background(), func(e *entry.Entry) driver.ReplayEntryState {
-		if e.DSN < tempLsn {
-			panic(moerr.NewInternalErrorNoCtxf("logic error %d<%d", e.DSN, tempLsn))
-		}
-		tempLsn = e.DSN
-		_, err = s.Read(e.DSN)
-		assert.NoError(t, err)
-		// logutil.Infof("lsn is %d",e.DSN)
-		return driver.RE_Nomal
-	})
+	err = s.Replay(
+		context.Background(),
+		func(e *entry.Entry) driver.ReplayEntryState {
+			if e.DSN < tempLsn {
+				panic(moerr.NewInternalErrorNoCtxf("logic error %d<%d", e.DSN, tempLsn))
+			}
+			tempLsn = e.DSN
+			_, err = s.Read(e.DSN)
+			assert.NoError(t, err)
+			// logutil.Infof("lsn is %d",e.DSN)
+			return driver.RE_Nomal
+		},
+		func() driver.ReplayMode {
+			return driver.ReplayMode_ReplayForWrite
+		},
+	)
 	assert.NoError(t, err)
 	assert.Equal(t, maxlsn, s.GetDSN())
 	assert.Equal(t, maxlsn, s.synced)

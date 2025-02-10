@@ -46,12 +46,17 @@ type StoreImpl struct {
 }
 
 func NewStoreWithLogserviceDriver(factory logservicedriver.LogServiceClientFactory) Store {
-	cfg := logservicedriver.NewDefaultConfig(factory)
-	driver := logservicedriver.NewLogServiceDriver(cfg)
+	cfg := logservicedriver.NewConfig(
+		"",
+		logservicedriver.WithConfigOptClientFactory(factory),
+	)
+	driver := logservicedriver.NewLogServiceDriver(&cfg)
 	return NewStore(driver)
 }
 
-func NewStoreWithBatchStoreDriver(dir, name string, cfg *batchstoredriver.StoreCfg) Store {
+func NewStoreWithBatchStoreDriver(
+	dir, name string, cfg *batchstoredriver.StoreCfg,
+) Store {
 	driver, err := batchstoredriver.NewBaseStore(dir, name, cfg)
 	if err != nil {
 		panic(err)
@@ -101,7 +106,7 @@ func (w *StoreImpl) Close() error {
 	}
 	return nil
 }
-func (w *StoreImpl) Append(gid uint32, e entry.Entry) (lsn uint64, err error) {
+func (w *StoreImpl) AppendEntry(gid uint32, e entry.Entry) (lsn uint64, err error) {
 	_, lsn, err = w.doAppend(gid, e)
 	return
 }
