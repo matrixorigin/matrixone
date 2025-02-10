@@ -20,9 +20,12 @@ import (
 	"math"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	usearch "github.com/unum-cloud/usearch/golang"
 )
 
@@ -37,13 +40,25 @@ type HnswBuildIndex struct {
 }
 
 type HnswBuild struct {
-	cfg     vectorindex.IndexConfig
-	tblcfg  vectorindex.IndexTableConfig
-	indexes []*HnswBuildIndex
+	cfg      vectorindex.IndexConfig
+	tblcfg   vectorindex.IndexTableConfig
+	indexes  []*HnswBuildIndex
+	nthread  int
+	add_chan chan AddItem
+	err_chan chan error
+	wg       sync.WaitGroup
+	once     sync.Once
+	mutex    sync.Mutex
+	count    atomic.Int64
+}
+
+type AddItem struct {
+	key int64
+	vec []float32
 }
 
 // New HnswBuildIndex struct
-func NewHnswBuildIndex(id int64, cfg vectorindex.IndexConfig) (*HnswBuildIndex, error) {
+func NewHnswBuildIndex(id int64, cfg vectorindex.IndexConfig, nthread int) (*HnswBuildIndex, error) {
 	var err error
 	idx := &HnswBuildIndex{}
 
@@ -55,6 +70,11 @@ func NewHnswBuildIndex(id int64, cfg vectorindex.IndexConfig) (*HnswBuildIndex, 
 	}
 
 	err = idx.Index.Reserve(vectorindex.MaxIndexCapacity)
+	if err != nil {
+		return nil, err
+	}
+
+	err = idx.Index.ChangeThreadsAdd(uint(nthread))
 	if err != nil {
 		return nil, err
 	}
@@ -83,7 +103,6 @@ func (idx *HnswBuildIndex) Destroy() error {
 
 // Save the index to file
 func (idx *HnswBuildIndex) SaveToFile() error {
-
 	if idx.Saved {
 		return nil
 	}
@@ -150,32 +169,95 @@ func (idx *HnswBuildIndex) ToSql(cfg vectorindex.IndexTableConfig) (string, erro
 
 // is the index empty
 func (idx *HnswBuildIndex) Empty() (bool, error) {
-	sz := idx.Count.Load()
+	sz, err := idx.Index.Len()
+	if err != nil {
+		return false, err
+	}
 	return (sz == 0), nil
 }
 
 // check the index is full, i.e. 10K vectors
 func (idx *HnswBuildIndex) Full() (bool, error) {
-	sz := idx.Count.Load()
+	sz, err := idx.Index.Len()
+	if err != nil {
+		return false, err
+	}
 	return (sz == vectorindex.MaxIndexCapacity), nil
 }
 
 // add vector to the index
 func (idx *HnswBuildIndex) Add(key int64, vec []float32) error {
-	idx.Count.Add(1)
 	return idx.Index.Add(uint64(key), vec)
 }
 
 // create HsnwBuild struct
-func NewHnswBuild(cfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) (info *HnswBuild, err error) {
-	info = &HnswBuild{cfg, tblcfg, make([]*HnswBuildIndex, 0, 16)}
+func NewHnswBuild(proc *process.Process, cfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) (info *HnswBuild, err error) {
+	nthread := MaxUSearchThreads / 2
+	info = &HnswBuild{cfg: cfg,
+		tblcfg:   tblcfg,
+		indexes:  make([]*HnswBuildIndex, 0, 16),
+		nthread:  int(nthread),
+		add_chan: make(chan AddItem, nthread*2),
+		err_chan: make(chan error),
+	}
+
+	// create multi-threads worker for add
+	for i := 0; i < info.nthread; i++ {
+
+		info.wg.Add(1)
+		go func() {
+			defer info.wg.Done()
+			var err0 error
+			closed := false
+			for !closed {
+				closed, err0 = info.addFromChannel(proc)
+				if err0 != nil {
+					info.err_chan <- err0
+					return
+				}
+			}
+		}()
+	}
+
 	return info, nil
+}
+
+func (h *HnswBuild) addFromChannel(proc *process.Process) (stream_closed bool, err error) {
+	var res AddItem
+	var ok bool
+
+	select {
+	case res, ok = <-h.add_chan:
+		if !ok {
+			return true, nil
+		}
+	case <-proc.Ctx.Done():
+		return false, moerr.NewInternalError(proc.Ctx, "context cancelled")
+	}
+
+	// add
+	err = h.addVector(res.key, res.vec)
+	if err != nil {
+		return false, err
+	}
+
+	return false, nil
+}
+
+func (h *HnswBuild) CloseAndWait() {
+	h.once.Do(func() {
+		close(h.add_chan)
+		h.wg.Wait()
+	})
 }
 
 // destroy
 func (h *HnswBuild) Destroy() error {
 
 	var errs error
+
+	h.CloseAndWait()
+
 	for _, idx := range h.indexes {
 		err := idx.Destroy()
 		if err != nil {
@@ -186,43 +268,64 @@ func (h *HnswBuild) Destroy() error {
 	return errs
 }
 
-// add vector to the build
-// it will check the current index is full and add the vector to available index
 func (h *HnswBuild) Add(key int64, vec []float32) error {
-	var err error
-	var idx *HnswBuildIndex
+	select {
+	case err := <-h.err_chan:
+		return err
+	default:
+	}
+	h.add_chan <- AddItem{key, vec}
+	return nil
+}
+
+func (h *HnswBuild) getIndexForAdd() (idx *HnswBuildIndex, err error) {
+	h.mutex.Lock()
+	defer h.mutex.Unlock()
 	nidx := int64(len(h.indexes))
 	if nidx == 0 {
-		idx, err = NewHnswBuildIndex(nidx, h.cfg)
+		idx, err = NewHnswBuildIndex(nidx, h.cfg, h.nthread)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		h.indexes = append(h.indexes, idx)
 	} else {
 		// get last index
 		idx = h.indexes[nidx-1]
 
-		full, err := idx.Full()
-		if err != nil {
-			return err
-		}
-
-		if full {
+		cnt := h.count.Load()
+		if cnt >= vectorindex.MaxIndexCapacity {
 			// save the current index to file
 			err = idx.SaveToFile()
 			if err != nil {
-				return err
+				return nil, err
 			}
 
 			// create new index
-			idx, err = NewHnswBuildIndex(nidx, h.cfg)
+			idx, err = NewHnswBuildIndex(nidx, h.cfg, h.nthread)
 			if err != nil {
-				return err
+				return nil, err
 			}
 			h.indexes = append(h.indexes, idx)
+			// reset count for next index
+			h.count.Store(0)
+		} else {
+			h.count.Add(1)
 		}
 	}
 
+	return idx, nil
+}
+
+// add vector to the build
+// it will check the current index is full and add the vector to available index
+func (h *HnswBuild) addVector(key int64, vec []float32) error {
+	var err error
+	var idx *HnswBuildIndex
+
+	idx, err = h.getIndexForAdd()
+	if err != nil {
+		return err
+	}
 	return idx.Add(key, vec)
 }
 
@@ -230,6 +333,8 @@ func (h *HnswBuild) Add(key int64, vec []float32) error {
 // 1. sync the metadata table
 // 2. sync the index file to index table
 func (h *HnswBuild) ToInsertSql(ts int64) ([]string, error) {
+
+	h.CloseAndWait()
 
 	if len(h.indexes) == 0 {
 		return []string{}, nil
@@ -247,7 +352,7 @@ func (h *HnswBuild) ToInsertSql(ts int64) ([]string, error) {
 
 		sqls = append(sqls, sql)
 
-		os.Stderr.WriteString(fmt.Sprintf("Sql: %s\n", sql))
+		//os.Stderr.WriteString(fmt.Sprintf("Sql: %s\n", sql))
 		chksum, err := vectorindex.CheckSum(idx.Path)
 		if err != nil {
 			return nil, err
