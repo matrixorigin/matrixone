@@ -208,7 +208,7 @@ func (u *hnswCreateState) start(tf *TableFunction, proc *process.Process, nthRow
 		os.Stderr.WriteString(fmt.Sprintf("Cfg %v\n", u.tblcfg))
 		os.Stderr.WriteString(fmt.Sprintf("USearch Cfg %v\n", u.idxcfg))
 
-		u.build, err = hnsw.NewHnswBuild(u.idxcfg, u.tblcfg)
+		u.build, err = hnsw.NewHnswBuild(proc, u.idxcfg, u.tblcfg)
 		if err != nil {
 			return err
 		}
