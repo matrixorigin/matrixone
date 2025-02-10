@@ -39,7 +39,12 @@ type Driver interface {
 	RangeCheckpoint(start, end uint64, files ...string) (e LogEntry, err error)
 	AppendEntry(uint32, LogEntry) (uint64, error)
 
-	Replay(ctx context.Context, handle store.ApplyHandle, modeGetter func() driver.ReplayMode) error
+	Replay(
+		ctx context.Context,
+		handle store.ApplyHandle,
+		modeGetter func() driver.ReplayMode,
+		opt *driver.ReplayOption,
+	) error
 	Start()
 	Close() error
 
