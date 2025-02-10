@@ -36,7 +36,6 @@ type HnswBuildIndex struct {
 	Path  string
 	Saved bool
 	Size  int64
-	Count atomic.Int64
 }
 
 type HnswBuild struct {
