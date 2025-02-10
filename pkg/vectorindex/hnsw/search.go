@@ -36,8 +36,6 @@ import (
 	usearch "github.com/unum-cloud/usearch/golang"
 )
 
-const NThreadSearch = 4
-
 var MaxUSearchThreads = int32(runtime.NumCPU())
 
 // Hnsw search index struct to hold the usearch index
@@ -216,7 +214,7 @@ func (s *HnswSearch) Search(query []float32, limit uint) (keys []int64, distance
 
 	var errs error
 
-	nthread := NThreadSearch
+	nthread := runtime.NumCPU()
 	if nthread > len(s.Indexes) {
 		nthread = len(s.Indexes)
 	}
