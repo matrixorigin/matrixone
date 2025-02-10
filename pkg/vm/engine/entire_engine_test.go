@@ -27,6 +27,7 @@ import (
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/schemaversion"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 )
@@ -84,6 +85,14 @@ func (o *testOperator) ExitRollbackStmt() {
 
 func (o *testOperator) SetFootPrints(id int, enter bool) {
 	//TODO implement me
+	panic("implement me")
+}
+
+func (o *testOperator) SetVersionInfo(versionInfo *schemaversion.VersionInfo) {
+	panic("implement me")
+}
+
+func (o *testOperator) GetVersionInfo() *schemaversion.VersionInfo {
 	panic("implement me")
 }
 

@@ -143,10 +143,19 @@ func GetTenantCreateVersionForUpdate(
 func UpgradeTenantVersion(
 	tenantID int32,
 	version string,
+	versionOffset uint32,
+	handleOffset bool,
 	txn executor.TxnExecutor) error {
-	sql := fmt.Sprintf("update mo_account set create_version = '%s' where account_id = %d",
+
+	sql := fmt.Sprintf("update mo_account set create_version = '%s', version_offset = %d where account_id = %d",
 		version,
+		versionOffset,
 		tenantID)
+
+	if !handleOffset {
+		sql = fmt.Sprintf("update mo_account set create_version = '%s' where account_id = %d", version, tenantID)
+	}
+
 	res, err := txn.Exec(sql, executor.StatementOption{})
 	if err != nil {
 		return err
@@ -158,6 +167,76 @@ func UpgradeTenantVersion(
 	}
 	return nil
 }
+
+func GetCurrentClusterVersion(finalVersion string, txn executor.TxnExecutor) (string, bool, error) {
+	sql := fmt.Sprintf("SELECT to_version,  final_version = to_version FROM %s WHERE state >= %d AND (final_version, final_version_offset) IN (SELECT version, version_offset FROM %s ORDER BY create_at DESC LIMIT 1) ORDER BY upgrade_order DESC LIMIT 1",
+		catalog.MOUpgradeTable,
+		StateUpgradingTenant,
+		catalog.MOVersionTable,
+	)
+	res, err := txn.Exec(sql, executor.StatementOption{})
+	if err != nil {
+		return "", false, err
+	}
+	version := ""
+	isFinalVersion := false
+
+	loaded := false
+	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		version = cols[0].GetStringAt(0)
+		isFinalVersion = vector.GetFixedAtWithTypeCheck[bool](cols[1], 0)
+		loaded = true
+		return true
+	})
+	res.Close()
+
+	if !loaded {
+		sql2 := fmt.Sprintf("SELECT version, state, version = '%s' FROM mo_catalog.mo_version where state >= 1 order by create_at desc limit 1", finalVersion)
+		res, err = txn.Exec(sql2, executor.StatementOption{})
+		if err != nil {
+			return "", false, err
+		}
+
+		res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+			version = cols[0].GetStringAt(0)
+			isFinalVersion = vector.GetFixedAtWithTypeCheck[bool](cols[1], 0)
+			return true
+		})
+		res.Close()
+	}
+
+	if version == "" {
+		getLogger(txn.Txn().TxnOptions().CN).Fatal("BUG: Can't get crrent cluster version")
+	}
+	return version, isFinalVersion, nil
+}
+
+// ----------------------------------------------------------------------------------------------------------------------
+func GeAccountVersion(accountId uint32, flag bool, txn executor.TxnExecutor) (string, int32, error) {
+	offsetCol := ""
+	if flag {
+		offsetCol = ", version_offset"
+	}
+	sql := fmt.Sprintf("SELECT create_version %s FROM mo_catalog.mo_account WHERE account_id = %d", offsetCol, accountId)
+	res, err := txn.Exec(sql, executor.StatementOption{})
+	if err != nil {
+		return "", 0, err
+	}
+	defer res.Close()
+
+	version := ""
+	versionOffset := int32(-1)
+	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		version = cols[0].GetStringAt(0)
+		if flag {
+			versionOffset = int32(vector.GetFixedAtWithTypeCheck[uint32](cols[1], 0))
+		}
+		return true
+	})
+	return version, versionOffset, nil
+}
+
+//----------------------------------------------------------------------------------------------------------------------
 
 func isConflictError(err error) bool {
 	return moerr.IsMoErrCode(err, moerr.ErrLockConflict)

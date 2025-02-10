@@ -31,7 +31,7 @@ import (
 
 // InitSysTenant initializes the tenant SYS before any tenants and accepting any requests
 // during the system is booting.
-func InitSysTenant(ctx context.Context, txn executor.TxnExecutor, finalVersion string) (err error) {
+func InitSysTenant(ctx context.Context, txn executor.TxnExecutor, finalVersion string, finalVersonOffset int32) (err error) {
 	txn.Use(catalog.MO_CATALOG)
 	res, err := txn.Exec(createDbInformationSchemaSql, executor.StatementOption{})
 	if err != nil {
@@ -45,7 +45,7 @@ func InitSysTenant(ctx context.Context, txn executor.TxnExecutor, finalVersion s
 	}
 
 	if !exists {
-		if err = createTablesInMoCatalog(ctx, txn, finalVersion); err != nil {
+		if err = createTablesInMoCatalog(ctx, txn, finalVersion, finalVersonOffset); err != nil {
 			return err
 		}
 	}
@@ -53,7 +53,7 @@ func InitSysTenant(ctx context.Context, txn executor.TxnExecutor, finalVersion s
 }
 
 // createTablesInMoCatalog creates catalog tables in the database mo_catalog.
-func createTablesInMoCatalog(ctx context.Context, txn executor.TxnExecutor, finalVersion string) error {
+func createTablesInMoCatalog(ctx context.Context, txn executor.TxnExecutor, finalVersion string, finalVersonOffset int32) error {
 	var initMoAccount string
 	var initDataSqls []string
 	var err error
@@ -69,7 +69,7 @@ func createTablesInMoCatalog(ctx context.Context, txn executor.TxnExecutor, fina
 
 	//initialize the default data of tables for the tenant
 	//step 1: add new tenant entry to the mo_account
-	initMoAccount = fmt.Sprintf(initMoAccountFormat, sysAccountID, sysAccountName, rootName, sysAccountStatus, types.CurrentTimestamp().String2(time.UTC, 0), sysAccountComments, finalVersion)
+	initMoAccount = fmt.Sprintf(initMoAccountFormat, sysAccountID, sysAccountName, rootName, sysAccountStatus, types.CurrentTimestamp().String2(time.UTC, 0), sysAccountComments, finalVersion, finalVersonOffset)
 	addSqlIntoSet(initMoAccount)
 
 	//step 2:add new role entries to the mo_role

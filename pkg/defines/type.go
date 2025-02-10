@@ -20,6 +20,7 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/schemaversion"
 )
 
 // information from: https://dev.mysql.com/doc/internals/en/com-query-response.html
@@ -208,6 +209,39 @@ func AttachUserId(ctx context.Context, userId uint32) context.Context {
 
 func AttachRoleId(ctx context.Context, roleId uint32) context.Context {
 	return context.WithValue(ctx, RoleIDKey{}, roleId)
+}
+
+type VersionKey struct{}
+type VersionOffsetKey struct{}
+
+type IsFinalVersionKey struct{}
+
+// AttachIsFinalVersion, It refers to whether the entire schema version has reached its final state
+func AttachIsFinalVersion(ctx context.Context, isAtFinal bool) context.Context {
+	return context.WithValue(ctx, IsFinalVersionKey{}, isAtFinal)
+}
+
+// GetIsFinalVersion It refers to whether the entire schema version has reached its final state
+func GetIsFinalVersion(ctx context.Context) (bool, error) {
+	if v := ctx.Value(IsFinalVersionKey{}); v != nil {
+		return v.(bool), nil
+	} else {
+		return false, nil
+	}
+}
+
+type VersionInfoKey struct{}
+
+func AttachVersionInfo(ctx context.Context, version *schemaversion.VersionInfo) context.Context {
+	return context.WithValue(ctx, VersionInfoKey{}, version)
+}
+
+func GetVersionInfo(ctx context.Context) (*schemaversion.VersionInfo, error) {
+	if v := ctx.Value(VersionInfoKey{}); v != nil {
+		return v.(*schemaversion.VersionInfo), nil
+	} else {
+		return nil, moerr.NewInternalError(ctx, "no VersionInfo in context")
+	}
 }
 
 // EngineKey use EngineKey{} to get engine from Context

@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/schemaversion"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 )
 
@@ -209,6 +210,8 @@ type TxnOperator interface {
 	EnterRollbackStmt()
 	ExitRollbackStmt()
 	SetFootPrints(id int, enter bool)
+	SetVersionInfo(versionInfo *schemaversion.VersionInfo)
+	GetVersionInfo() *schemaversion.VersionInfo
 }
 
 // TxnIDGenerator txn id generator

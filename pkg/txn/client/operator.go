@@ -24,6 +24,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -32,11 +34,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/schemaversion"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"go.uber.org/zap"
 )
 
 var (
@@ -227,6 +229,7 @@ type txnOperator struct {
 	clock           clock.Clock
 	lockService     lockservice.LockService
 	timestampWaiter TimestampWaiter
+	versionInfo     *schemaversion.VersionInfo
 
 	mu struct {
 		sync.RWMutex
@@ -1444,6 +1447,14 @@ func (tc *txnOperator) counter() string {
 
 func (tc *txnOperator) SetFootPrints(id int, enter bool) {
 	tc.reset.fprints.add(id, enter)
+}
+
+func (tc *txnOperator) SetVersionInfo(versionInfo *schemaversion.VersionInfo) {
+	tc.versionInfo = versionInfo
+}
+
+func (tc *txnOperator) GetVersionInfo() *schemaversion.VersionInfo {
+	return tc.versionInfo
 }
 
 func (tc *txnOperator) addFlag(flags ...uint32) {

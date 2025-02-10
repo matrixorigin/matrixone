@@ -25,6 +25,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/schemaversion"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
@@ -141,6 +143,14 @@ func (s *service) UpgradeOneTenant(ctx context.Context, tenantID int32) error {
 				time.Sleep(time.Second)
 			}
 
+			//----------------------------------------------------------------------------------------------------------
+			clusterVersion, isFinal, err := versions.GetCurrentClusterVersion(s.GetFinalVersion(), txn)
+			if err != nil {
+				s.logger.Error("failed get current cluster version", zap.Error(err))
+				return err
+			}
+			//----------------------------------------------------------------------------------------------------------
+
 			// upgrade in current goroutine immediately
 			version, err = versions.GetTenantCreateVersionForUpdate(tenantID, txn)
 			if err != nil {
@@ -150,10 +160,29 @@ func (s *service) UpgradeOneTenant(ctx context.Context, tenantID int32) error {
 			for _, v := range s.handles {
 				if versions.Compare(v.Metadata().Version, from) >= 0 &&
 					v.Metadata().CanDirectUpgrade(from) {
+
+					//--------------------------------------------------------------------------------------------------
+					versionInfo := schemaversion.NewVersionInfo()
+					versionInfo.FinalVersionCompleted = false
+
+					versionInfo.Cluster.Version = clusterVersion
+					versionInfo.Cluster.IsFinalVersion = isFinal
+
+					handleOffset := versions.Compare(versionInfo.Cluster.Version, "2.1.0") >= 0
+					accVersion, accOffset, err := versions.GeAccountVersion(uint32(tenantID), handleOffset, txn)
+					if err != nil {
+						return err
+					}
+					versionInfo.Account.Version = accVersion
+					versionInfo.Account.VersionOffset = accOffset
+
+					txn.SetCtxValue(defines.VersionInfoKey{}, versionInfo)
+					//--------------------------------------------------------------------------------------------------
+
 					if err := v.HandleTenantUpgrade(ctx, tenantID, txn); err != nil {
 						return err
 					}
-					if err := versions.UpgradeTenantVersion(tenantID, v.Metadata().Version, txn); err != nil {
+					if err := versions.UpgradeTenantVersion(tenantID, v.Metadata().Version, v.Metadata().VersionOffset, handleOffset, txn); err != nil {
 						return err
 					}
 					from = v.Metadata().Version

@@ -44,6 +44,9 @@ func (MockTxnExecutor) Txn() client.TxnOperator {
 	panic("implement me")
 }
 
+func (MockTxnExecutor) SetCtxValue(key, value interface{}) {
+}
+
 func TestInsertInitDataKey(t *testing.T) {
 	txn := &MockTxnExecutor{}
 	err := InsertInitDataKey(txn, "01234567890123456789012345678901")

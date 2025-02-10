@@ -25,6 +25,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/schemaversion"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
@@ -98,6 +100,14 @@ func (s *service) MaybeUpgradeTenant(
 				time.Sleep(time.Second)
 			}
 
+			//----------------------------------------------------------------------------------------------------------
+			clusterVersion, isFinal, err := versions.GetCurrentClusterVersion(s.GetFinalVersion(), txn)
+			if err != nil {
+				s.logger.Error("failed get current cluster version", zap.Error(err))
+				return err
+			}
+			//----------------------------------------------------------------------------------------------------------
+
 			// upgrade in current goroutine immediately
 			version, err = versions.GetTenantCreateVersionForUpdate(tenantID, txn)
 			if err != nil {
@@ -107,10 +117,46 @@ func (s *service) MaybeUpgradeTenant(
 			for _, v := range s.handles {
 				if versions.Compare(v.Metadata().Version, from) > 0 &&
 					v.Metadata().CanDirectUpgrade(from) {
+
+					//--------------------------------------------------------------------------------------------------
+					versionInfo := schemaversion.NewVersionInfo()
+					versionInfo.FinalVersionCompleted = false
+					versionInfo.Cluster.Version = clusterVersion
+					versionInfo.Cluster.IsFinalVersion = isFinal
+
+					handleOffset := versions.Compare(versionInfo.Cluster.Version, "2.1.0") >= 0
+					accVersion, accOffset, err := versions.GeAccountVersion(uint32(tenantID), handleOffset, txn)
+					if err != nil {
+						return err
+					}
+					versionInfo.Account.Version = accVersion
+					versionInfo.Account.VersionOffset = accOffset
+
+					txn.SetCtxValue(defines.VersionInfoKey{}, versionInfo)
+
+					//var versionInfo defines.VersionInfo
+					//versionInfo.FinalVersion = s.GetFinalVersion()
+					//versionInfo.FinalVersionOffset = s.GetFinalVersionOffset()
+					//versionInfo.FinalVersionCompleted = false
+					//
+					//versionInfo.Cluster.Version = clusterVersion
+					//versionInfo.Cluster.IsFinalVersion = isFinal
+					//
+					//handleOffset := versions.Compare(versionInfo.Cluster.Version, "2.1.0") >= 0
+					//accVersion, accOffset, err := versions.GeAccountVersion(uint32(tenantID), handleOffset, txn)
+					//if err != nil {
+					//	return err
+					//}
+					//versionInfo.Account.Version = accVersion
+					//versionInfo.Account.VersionOffset = accOffset
+					//
+					//txn.SetCtxValue(defines.VersionInfoKey{}, &versionInfo)
+					//--------------------------------------------------------------------------------------------------
+
 					if err := v.HandleTenantUpgrade(ctx, tenantID, txn); err != nil {
 						return err
 					}
-					if err := versions.UpgradeTenantVersion(tenantID, v.Metadata().Version, txn); err != nil {
+					if err := versions.UpgradeTenantVersion(tenantID, v.Metadata().Version, v.Metadata().VersionOffset, handleOffset, txn); err != nil {
 						return err
 					}
 					from = v.Metadata().Version
@@ -183,6 +229,14 @@ func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
 					return nil
 				}
 
+				clusterVersion, isFinal, err := versions.GetCurrentClusterVersion(s.GetFinalVersion(), txn)
+				if err != nil {
+					s.logger.Error("failed get current cluster version",
+						zap.String("upgrade", upgrade.String()),
+						zap.Error(err))
+					return err
+				}
+
 				hasUpgradeTenants = true
 				h := s.getVersionHandle(upgrade.ToVersion)
 				updated := int32(0)
@@ -204,6 +258,22 @@ func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
 						zap.String("tenant-version", createVersion),
 						zap.String("upgrade", upgrade.String()))
 
+					//--------------------------------------------------------------------------------------------------
+					versionInfo := schemaversion.NewVersionInfo()
+					versionInfo.FinalVersionCompleted = false
+					versionInfo.Cluster.Version = clusterVersion
+					versionInfo.Cluster.IsFinalVersion = isFinal
+
+					handleOffset := versions.Compare(versionInfo.Cluster.Version, "2.1.0") >= 0
+					accVersion, accOffset, err := versions.GeAccountVersion(uint32(id), handleOffset, txn)
+					if err != nil {
+						return err
+					}
+					versionInfo.Account.Version = accVersion
+					versionInfo.Account.VersionOffset = accOffset
+
+					txn.SetCtxValue(defines.VersionInfoKey{}, versionInfo)
+					//--------------------------------------------------------------------------------------------------
 					if err = h.HandleTenantUpgrade(ctx, id, txn); err != nil {
 						s.logger.Error("failed to execute upgrade tenant",
 							zap.Int32("tenant", id),
@@ -213,7 +283,7 @@ func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
 						return err
 					}
 
-					if err = versions.UpgradeTenantVersion(id, h.Metadata().Version, txn); err != nil {
+					if err = versions.UpgradeTenantVersion(id, h.Metadata().Version, h.Metadata().VersionOffset, handleOffset, txn); err != nil {
 						s.logger.Error("failed to update upgrade tenant create version",
 							zap.Int32("tenant", id),
 							zap.String("upgrade", upgrade.String()),

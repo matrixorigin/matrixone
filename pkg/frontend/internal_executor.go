@@ -20,13 +20,12 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	planPb "github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
-
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	planPb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -153,6 +152,25 @@ func (ie *internalExecutor) Exec(ctx context.Context, sql string, opts ie.Sessio
 	if sql == "" {
 		return
 	}
+
+	//---------------------------------------------------------------------------
+	//accKey := fmt.Sprintf(runtime.AccountIsFinalVersion+"%d", sess.GetTenantInfo().TenantID)
+	//ss, ok := runtime.ServiceRuntime(ie.service).GetGlobalVariables(accKey)
+	//if ok {
+	//	isFinalVersion := ss.(bool)
+	//	ctx = defines.AttachIsFinalVersion(ctx, isFinalVersion)
+	//}
+
+	ss, ok := runtime.ServiceRuntime(ie.service).GetGlobalVariables(runtime.ClusterIsFinalVersion)
+	if ok {
+		isFinalVersion := ss.(bool)
+		ctx = defines.AttachIsFinalVersion(ctx, isFinalVersion)
+	}
+
+	//sess.GetBaseService().GetFinalVersion()
+
+	//---------------------------------------------------------------------------
+
 	tempExecCtx := ExecCtx{
 		reqCtx: ctx,
 		ses:    sess,
@@ -177,6 +195,22 @@ func (ie *internalExecutor) Query(ctx context.Context, sql string, opts ie.Sessi
 	defer sess.ExitFPrint(FPInternalExecutorQuery)
 	ie.proto.stashResult = true
 	sess.Debug(ctx, "internalExecutor new session")
+
+	//---------------------------------------------------------------------------
+	//accKey := fmt.Sprintf(runtime.AccountIsFinalVersion+"%d", sess.GetTenantInfo().TenantID)
+	//ss, ok := runtime.ServiceRuntime(ie.service).GetGlobalVariables(accKey)
+	//if ok {
+	//	isFinalVersion := ss.(bool)
+	//	ctx = defines.AttachIsFinalVersion(ctx, isFinalVersion)
+	//}
+
+	ss, ok := runtime.ServiceRuntime(ie.service).GetGlobalVariables(runtime.ClusterIsFinalVersion)
+	if ok {
+		isFinalVersion := ss.(bool)
+		ctx = defines.AttachIsFinalVersion(ctx, isFinalVersion)
+	}
+	//---------------------------------------------------------------------------
+
 	tempExecCtx := ExecCtx{
 		reqCtx: ctx,
 		ses:    sess,

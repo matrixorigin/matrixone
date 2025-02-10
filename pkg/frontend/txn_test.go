@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/schemaversion"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
@@ -971,4 +972,12 @@ func (txnop *testTxnOp) ExitRollbackStmt() {
 
 func (txnop *testTxnOp) SetFootPrints(id int, enter bool) {
 
+}
+
+func (txnop *testTxnOp) SetVersionInfo(versionInfo *schemaversion.VersionInfo) {
+	panic("implement me")
+}
+
+func (txnop *testTxnOp) GetVersionInfo() *schemaversion.VersionInfo {
+	panic("implement me")
 }

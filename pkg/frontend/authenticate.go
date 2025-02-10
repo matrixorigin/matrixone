@@ -33,6 +33,7 @@ import (
 	"github.com/tidwall/btree"
 	"golang.org/x/sync/errgroup"
 
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -1108,14 +1109,25 @@ var (
 				status,
 				created_time,
 				comments,
-                create_version) values (%d,"%s","%s","%s","%s","%s","%s");`
+                create_version,
+                version_offset) values (%d,"%s","%s","%s","%s","%s","%s",%d);`
 	initMoAccountWithoutIDFormat = `insert into mo_catalog.mo_account(
 				account_name,
                 admin_name,
 				status,
 				created_time,
 				comments,
+				create_version,
+                version_offset) values ("%s","%s","%s","%s","%s","%s",%d);`
+
+	initMoAccountWithoutIDAndOffsetFormat = `insert into mo_catalog.mo_account(
+				account_name,
+                admin_name,
+				status,
+				created_time,
+				comments,
 				create_version) values ("%s","%s","%s","%s","%s","%s");`
+
 	initMoRoleFormat = `insert into mo_catalog.mo_role(
 				role_id,
 				role_name,
@@ -7370,6 +7382,7 @@ func InitGeneralTenant(ctx context.Context, bh BackgroundExec, ses *Session, ca 
 	defer span.End()
 	tenant := ses.GetTenantInfo()
 	finalVersion := ses.rm.baseService.GetFinalVersion()
+	finalVersionOffset := ses.rm.baseService.GetFinalVersionOffset()
 
 	if !(tenant.IsSysTenant() && tenant.IsMoAdminRole()) {
 		return moerr.NewInternalErrorf(ctx, "tenant %s user %s role %s do not have the privilege to create the new account", tenant.GetTenant(), tenant.GetUser(), tenant.GetDefaultRole())
@@ -7447,7 +7460,7 @@ func InitGeneralTenant(ctx context.Context, bh BackgroundExec, ses *Session, ca 
 			}
 			return rtnErr
 		} else {
-			newTenant, newTenantCtx, rtnErr = createTablesInMoCatalogOfGeneralTenant(ctx, bh, finalVersion, ca)
+			newTenant, newTenantCtx, rtnErr = createTablesInMoCatalogOfGeneralTenant(ctx, bh, finalVersion, finalVersionOffset, ca)
 			if rtnErr != nil {
 				return rtnErr
 			}
@@ -7524,7 +7537,7 @@ func InitGeneralTenant(ctx context.Context, bh BackgroundExec, ses *Session, ca 
 }
 
 // createTablesInMoCatalogOfGeneralTenant creates catalog tables in the database mo_catalog.
-func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundExec, finalVersion string, ca *createAccount) (*TenantInfo, context.Context, error) {
+func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundExec, finalVersion string, finalVersionOffset int32, ca *createAccount) (*TenantInfo, context.Context, error) {
 	var err error
 	var initMoAccount string
 	var erArray []ExecResult
@@ -7562,7 +7575,16 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundEx
 		}
 	}
 
-	initMoAccount = fmt.Sprintf(initMoAccountWithoutIDFormat, ca.Name, ca.AdminName, status, types.CurrentTimestamp().String2(time.UTC, 0), comment, finalVersion)
+	versionInfo, err := defines.GetVersionInfo(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if versionInfo.FinalVersionCompleted || versions.Compare(versionInfo.Cluster.Version, "2.1.0") >= 0 {
+		initMoAccount = fmt.Sprintf(initMoAccountWithoutIDFormat, ca.Name, ca.AdminName, status, types.CurrentTimestamp().String2(time.UTC, 0), comment, finalVersion, finalVersionOffset)
+	} else {
+		initMoAccount = fmt.Sprintf(initMoAccountWithoutIDAndOffsetFormat, ca.Name, ca.AdminName, status, types.CurrentTimestamp().String2(time.UTC, 0), comment, finalVersion)
+	}
 	//execute the insert
 	err = bh.Exec(ctx, initMoAccount)
 	if err != nil {

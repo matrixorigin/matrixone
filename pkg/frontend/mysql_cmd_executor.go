@@ -2657,10 +2657,24 @@ func executeStmtWithWorkspace(ses FeSession,
 	}
 
 	execCtx.txnOpt.autoCommit = autocommit
+
+	isNewTransaction := execCtx.txnOpt.byBegin || !ses.GetTxnHandler().inActiveTxnUnsafe()
 	err = ses.GetTxnHandler().Create(execCtx)
 	if err != nil {
 		return err
 	}
+
+	//----------------------------------------------------------------------------------------------------------
+	if isNewTransaction {
+		err = handleVersionInfo(ses, execCtx)
+		if err != nil {
+			return err
+		}
+	} else {
+		versionInfo := ses.GetTxnHandler().txnOp.GetVersionInfo()
+		execCtx.reqCtx = defines.AttachVersionInfo(execCtx.reqCtx, versionInfo)
+	}
+	//----------------------------------------------------------------------------------------------------------
 
 	//skip BEGIN stmt
 	if beginStmt {
@@ -2672,7 +2686,6 @@ func executeStmtWithWorkspace(ses FeSession,
 	}
 
 	txnOp := ses.GetTxnHandler().GetTxn()
-
 	//refresh txn id
 	ses.SetTxnId(txnOp.Txn().ID)
 	ses.SetStaticTxnInfo(makeCompactTxnInfo(txnOp))

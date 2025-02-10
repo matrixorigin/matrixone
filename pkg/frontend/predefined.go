@@ -50,7 +50,8 @@ var (
 				comments varchar(256),
 				version bigint unsigned auto_increment,
 				suspended_time timestamp default NULL,
-				create_version varchar(50) default '1.2.0'
+				create_version varchar(50) default '1.2.0',
+				version_offset int unsigned default 0
 			)`
 
 	MoCatalogMoRoleDDL = `create table mo_catalog.mo_role (

@@ -13,6 +13,7 @@ import (
 	lock "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	timestamp "github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	txn "github.com/matrixorigin/matrixone/pkg/pb/txn"
+	schemaversion "github.com/matrixorigin/matrixone/pkg/schemaversion"
 	client "github.com/matrixorigin/matrixone/pkg/txn/client"
 	rpc "github.com/matrixorigin/matrixone/pkg/txn/rpc"
 )
@@ -632,6 +633,20 @@ func (mr *MockTxnOperatorMockRecorder) GetOverview() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetOverview", reflect.TypeOf((*MockTxnOperator)(nil).GetOverview))
 }
 
+// GetVersionInfo mocks base method.
+func (m *MockTxnOperator) GetVersionInfo() *schemaversion.VersionInfo {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetVersionInfo")
+	ret0, _ := ret[0].(*schemaversion.VersionInfo)
+	return ret0
+}
+
+// GetVersionInfo indicates an expected call of GetVersionInfo.
+func (mr *MockTxnOperatorMockRecorder) GetVersionInfo() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetVersionInfo", reflect.TypeOf((*MockTxnOperator)(nil).GetVersionInfo))
+}
+
 // GetWaitActiveCost mocks base method.
 func (m *MockTxnOperator) GetWaitActiveCost() time.Duration {
 	m.ctrl.T.Helper()
@@ -767,6 +782,18 @@ func (m *MockTxnOperator) SetFootPrints(id int, enter bool) {
 func (mr *MockTxnOperatorMockRecorder) SetFootPrints(id, enter interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetFootPrints", reflect.TypeOf((*MockTxnOperator)(nil).SetFootPrints), id, enter)
+}
+
+// SetVersionInfo mocks base method.
+func (m *MockTxnOperator) SetVersionInfo(versionInfo *schemaversion.VersionInfo) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "SetVersionInfo", versionInfo)
+}
+
+// SetVersionInfo indicates an expected call of SetVersionInfo.
+func (mr *MockTxnOperatorMockRecorder) SetVersionInfo(versionInfo interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetVersionInfo", reflect.TypeOf((*MockTxnOperator)(nil).SetVersionInfo), versionInfo)
 }
 
 // Snapshot mocks base method.

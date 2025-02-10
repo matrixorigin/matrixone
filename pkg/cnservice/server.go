@@ -346,6 +346,10 @@ func (s *service) GetFinalVersion() string {
 	return s.bootstrapService.GetFinalVersion()
 }
 
+func (s *service) GetFinalVersionOffset() int32 {
+	return s.bootstrapService.GetFinalVersionOffset()
+}
+
 func (s *service) stopFrontend() error {
 	defer logutil.LogClose(s.logger, "cnservice/frontend")()
 

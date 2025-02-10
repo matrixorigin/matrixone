@@ -23,6 +23,7 @@ import (
 var clusterUpgEntries = []versions.UpgradeEntry{
 	upg_mo_pitr_add_status,
 	upg_mo_pitr_add_status_changed_time,
+	upg_mo_account_version_offset,
 }
 
 var upg_mo_pitr_add_status = versions.UpgradeEntry{
@@ -46,6 +47,20 @@ var upg_mo_pitr_add_status_changed_time = versions.UpgradeEntry{
 	UpgSql:    "alter table mo_catalog.mo_pitr add column pitr_status_changed_time TIMESTAMP DEFAULT UTC_TIMESTAMP after pitr_status",
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
 		colInfo, err := versions.CheckTableColumn(txn, accountId, catalog.MO_CATALOG, catalog.MO_PITR, "pitr_status_changed_time")
+		if err != nil {
+			return false, err
+		}
+		return colInfo.IsExits, nil
+	},
+}
+
+var upg_mo_account_version_offset = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: catalog.MOAccountTable,
+	UpgType:   versions.ADD_COLUMN,
+	UpgSql:    "alter table mo_catalog.mo_account add column version_offset int unsigned default 0 after create_version",
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		colInfo, err := versions.CheckTableColumn(txn, accountId, catalog.MO_CATALOG, catalog.MOAccountTable, "version_offset")
 		if err != nil {
 			return false, err
 		}

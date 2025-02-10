@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	runtime2 "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -1122,6 +1123,10 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		needCheckLock        bool
 		maxLoginAttempts     int64
 		needCheckHost        bool
+
+		version       string
+		versionOffset uint64
+		versionState  int64
 	)
 
 	//Get tenant info
@@ -1140,6 +1145,14 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		if len(ses.requestLabel) == 0 {
 			ses.requestLabel = db_holder.GetLabelSelector()
 		}
+
+		//----------------------------------------------------------------------------------------
+		ss, ok := runtime2.ServiceRuntime(ses.GetService()).GetGlobalVariables(runtime2.ClusterIsFinalVersion)
+		if ok {
+			isFinalVersion := ss.(bool)
+			ses.GetTxnHandler().SetTxnCtxIsFinalVersionFlag(isFinalVersion)
+		}
+		//----------------------------------------------------------------------------------------
 		return GetPassWord(HashPassWordWithByte(pwdBytes))
 	}
 
@@ -1205,6 +1218,35 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	} else {
 		ses.getRoutine().setResricted(false)
 	}
+
+	//------------------------------------------------------------------------------------------------------------------
+	sqlForCheckVersion := "select version, version_offset, state from mo_catalog.mo_version order by create_at desc limit 1;"
+	rsset, err = executeSQLInBackgroundSession(sysTenantCtx, bh, sqlForCheckVersion)
+	if err != nil {
+		return nil, err
+	}
+	if !execResultArrayHasData(rsset) {
+		return nil, moerr.NewInternalErrorf(sysTenantCtx, "there is no verion info in mo_catalog")
+	}
+
+	// cn schema version
+	version, err = rsset[0].GetString(sysTenantCtx, 0, 0)
+	if err != nil {
+		return nil, err
+	}
+
+	// cn schema version offset
+	versionOffset, err = rsset[0].GetUint64(sysTenantCtx, 0, 1)
+	if err != nil {
+		return nil, err
+	}
+
+	// cn schema version offset state
+	versionState, err = rsset[0].GetInt64(sysTenantCtx, 0, 1)
+	if err != nil {
+		return nil, err
+	}
+	//------------------------------------------------------------------------------------------------------------------
 
 	tenant.SetTenantID(uint32(tenantID))
 	ses.timestampMap[TSCheckTenantEnd] = time.Now()
@@ -1476,6 +1518,16 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	ses.Debug(ctx, tenant.String())
 	ses.SetCreateVersion(createVersion)
 
+	finalVersion := ses.GetBaseService().GetFinalVersion()
+	finalVersionOffset := ses.GetBaseService().GetFinalVersionOffset()
+
+	finalVersionCompleted := version == finalVersion &&
+		int32(versionOffset) >= finalVersionOffset &&
+		int32(versionState) == versions.StateReady
+	// Set TxnCtx and global variable for finalVersionCompleted
+	ses.GetTxnHandler().SetTxnCtxIsFinalVersionFlag(finalVersionCompleted)
+	runtime2.ServiceRuntime(ses.service).SetGlobalVariables(runtime2.ClusterIsFinalVersion, finalVersionCompleted)
+
 	return GetPassWord(pwd)
 }
 
@@ -1493,11 +1545,22 @@ func (ses *Session) UpgradeTenant(ctx context.Context, tenantName string, retryC
 	return ses.rm.baseService.UpgradeTenant(ctx, tenantName, retryCount, isALLAccount)
 }
 
+func (ses *Session) GetBaseService() BaseService {
+	return ses.rm.baseService
+}
+
 func (ses *Session) getGlobalSysVars(ctx context.Context, bh BackgroundExec) (gSysVars map[string]interface{}, err error) {
 	var execResults []ExecResult
 
 	tenantInfo := ses.GetTenantInfo()
 	tenantCtx := defines.AttachAccount(ctx, tenantInfo.TenantID, tenantInfo.UserID, tenantInfo.DefaultRoleID)
+
+	isFinalVersion, err := defines.GetIsFinalVersion(ses.GetTxnHandler().GetTxnCtx())
+	if err != nil {
+		return
+	}
+	tenantCtx = defines.AttachIsFinalVersion(tenantCtx, isFinalVersion)
+
 	// get system variable from mo_mysql_compatibility mode
 	sqlForGetVariables := getSqlForGetSystemVariablesWithAccount(uint64(tenantInfo.GetTenantID()))
 

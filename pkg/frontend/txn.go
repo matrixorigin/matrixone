@@ -233,6 +233,14 @@ func (th *TxnHandler) GetTxnCtx() context.Context {
 	return th.txnCtx
 }
 
+// SetTxnCtxIsFinalVersionFlag It refers to whether the entire schema version has reached its final state
+func (th *TxnHandler) SetTxnCtxIsFinalVersionFlag(isFinalVersion bool) context.Context {
+	th.mu.Lock()
+	defer th.mu.Unlock()
+	th.txnCtx = defines.AttachIsFinalVersion(th.txnCtx, isFinalVersion)
+	return th.txnCtx
+}
+
 // invalidateTxnUnsafe releases the txnOp and clears the server status bit SERVER_STATUS_IN_TRANS
 func (th *TxnHandler) invalidateTxnUnsafe() {
 	th.txnOp = nil

@@ -42,6 +42,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
+	"github.com/matrixorigin/matrixone/pkg/schemaversion"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -262,6 +263,10 @@ func Test_createTablesInMoCatalogOfGeneralTenant(t *testing.T) {
 
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
+		versionInfo := schemaversion.NewVersionInfo()
+		versionInfo.FinalVersionCompleted = true
+		ctx = defines.AttachVersionInfo(ctx, versionInfo)
+
 		bh := mock_frontend.NewMockBackgroundExec(ctrl)
 		bh.EXPECT().Close().Return().AnyTimes()
 		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
@@ -292,7 +297,8 @@ func Test_createTablesInMoCatalogOfGeneralTenant(t *testing.T) {
 			Comment:     tree.AccountComment{Exist: true, Comment: "test acccount"},
 		}
 		finalVersion := "1.2.0"
-		_, _, err := createTablesInMoCatalogOfGeneralTenant(ctx, bh, finalVersion, ca)
+		finalVersionOffset := 32
+		_, _, err := createTablesInMoCatalogOfGeneralTenant(ctx, bh, finalVersion, int32(finalVersionOffset), ca)
 		convey.So(err, convey.ShouldBeNil)
 
 		err = createTablesInInformationSchemaOfGeneralTenant(ctx, bh)
@@ -7490,6 +7496,10 @@ func (m *MockBaseService) CheckTenantUpgrade(ctx context.Context, tenantID int64
 
 func (m *MockBaseService) GetFinalVersion() string {
 	return "1.2.0"
+}
+
+func (m *MockBaseService) GetFinalVersionOffset() int32 {
+	return 8
 }
 
 func (s *MockBaseService) UpgradeTenant(ctx context.Context, tenantName string, retryCount uint32, isALLAccount bool) error {
