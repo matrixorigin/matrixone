@@ -315,10 +315,9 @@ func (h *HnswBuild) getIndexForAdd() (idx *HnswBuildIndex, err error) {
 			h.indexes = append(h.indexes, idx)
 			// reset count for next index
 			h.count.Store(0)
-		} else {
-			h.count.Add(1)
 		}
 	}
+	h.count.Add(1)
 
 	return idx, nil
 }
