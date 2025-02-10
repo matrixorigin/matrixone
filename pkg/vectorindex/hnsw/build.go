@@ -117,6 +117,13 @@ func (idx *HnswBuildIndex) SaveToFile() error {
 		return err
 	}
 
+	// free memory
+	err = idx.Index.Destroy()
+	if err != nil {
+		return err
+	}
+	idx.Index = nil
+
 	idx.Saved = true
 	idx.Path = f.Name()
 	return nil
