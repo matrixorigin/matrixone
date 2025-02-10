@@ -76,7 +76,7 @@ func (idx ImmutIndex) BatchDedup(
 			ctx,
 			idx.location,
 			false,
-			rt.Fs.Service,
+			rt.Fs,
 		); err != nil {
 			return
 		}
@@ -124,7 +124,7 @@ func (idx ImmutIndex) Dedup(
 			ctx,
 			idx.location,
 			false,
-			rt.Fs.Service,
+			rt.Fs,
 		); err != nil {
 			return
 		}

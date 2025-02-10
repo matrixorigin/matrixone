@@ -846,7 +846,7 @@ func TestChangesHandleStaleFiles1(t *testing.T) {
 
 	fs := taeHandler.GetDB().Runtime.Fs
 	deleteFileName := obj.ObjectStats.ObjectName().String()
-	err = fs.DelFiles(ctx, []string{string(deleteFileName)})
+	err = fs.Service.Delete(ctx, []string{string(deleteFileName)}...)
 	assert.NoError(t, err)
 	gcTS := taeHandler.GetDB().TxnMgr.Now()
 	gcTSFileName := ioutil.EncodeCompactCKPMetadataFullName(
@@ -951,7 +951,7 @@ func TestChangesHandleStaleFiles2(t *testing.T) {
 			fs := taeEngine.GetDB().Runtime.Fs
 			for _, obj := range objs {
 				deleteFileName := obj.ObjectStats.ObjectName().String()
-				err = fs.DelFiles(ctx, []string{string(deleteFileName)})
+				err = fs.Service.Delete(ctx, deleteFileName)
 				assert.NoError(t, err)
 			}
 			gcTS := taeEngine.GetDB().TxnMgr.Now()
