@@ -183,24 +183,31 @@ func NewHnswSearch(idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTable
 	return s
 }
 
+// acquire lock from a usearch threads
+func (s *HnswSearch) lock() {
+	// check max threads
+	s.Cond.L.Lock()
+	defer s.Cond.L.Unlock()
+	for s.Concurrency.Load() >= MaxUSearchThreads {
+		s.Cond.Wait()
+	}
+	s.Concurrency.Add(1)
+}
+
+// release a lock from a usearch threads
+func (s *HnswSearch) unlock() {
+	s.Concurrency.Add(int32(-1))
+	s.Cond.Signal()
+}
+
 // Search the hnsw index (implement VectorIndexSearch.Search)
 func (s *HnswSearch) Search(query []float32, limit uint) (keys []int64, distances []float32, err error) {
 	if len(s.Indexes) == 0 {
 		return []int64{}, []float32{}, nil
 	}
 
-	// check max threads
-	s.Cond.L.Lock()
-	for s.Concurrency.Load() >= MaxUSearchThreads {
-		s.Cond.Wait()
-	}
-	s.Concurrency.Add(1)
-	s.Cond.L.Unlock()
-
-	defer func() {
-		s.Concurrency.Add(int32(-1))
-		s.Cond.Signal()
-	}()
+	s.lock()
+	defer s.unlock()
 
 	// search
 	size := len(s.Indexes) * int(limit)
