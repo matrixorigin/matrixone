@@ -18,6 +18,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/stretchr/testify/require"
 
@@ -25,11 +27,14 @@ import (
 )
 
 func TestBuild(t *testing.T) {
+	m := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool("", m)
+
 	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}
 	idxcfg.Usearch.Metric = usearch.L2sq
 	tblcfg := vectorindex.IndexTableConfig{DbName: "db", SrcTable: "src", MetadataTable: "__secondary_meta", IndexTable: "__secondary_index"}
 
-	build, err := NewHnswBuild(idxcfg, tblcfg)
+	build, err := NewHnswBuild(proc, idxcfg, tblcfg)
 	require.Nil(t, err)
 	defer build.Destroy()
 
@@ -52,7 +57,7 @@ func TestBuildIndex(t *testing.T) {
 	idxcfg.Usearch.Metric = 100
 	//tblcfg := vectorindex.IndexTableConfig{DbName: "db", SrcTable: "src", MetadataTable: "__secondary_meta", IndexTable: "__secondary_index"}
 
-	idx, err := NewHnswBuildIndex(0, idxcfg)
+	idx, err := NewHnswBuildIndex(0, idxcfg, 1)
 	require.Nil(t, err)
 
 	empty, err := idx.Empty()

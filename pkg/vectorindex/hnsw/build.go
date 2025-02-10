@@ -20,8 +20,11 @@ import (
 	"math"
 	"os"
 	"strings"
+	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	usearch "github.com/unum-cloud/usearch/golang"
 )
 
@@ -32,16 +35,27 @@ type HnswBuildIndex struct {
 	Path  string
 	Saved bool
 	Size  int64
+	mutex sync.Mutex
 }
 
 type HnswBuild struct {
-	cfg     vectorindex.IndexConfig
-	tblcfg  vectorindex.IndexTableConfig
-	indexes []*HnswBuildIndex
+	cfg      vectorindex.IndexConfig
+	tblcfg   vectorindex.IndexTableConfig
+	indexes  []*HnswBuildIndex
+	nthread  int
+	add_chan chan AddItem
+	wg       sync.WaitGroup
+	once     sync.Once
+	mutex    sync.Mutex
+}
+
+type AddItem struct {
+	key int64
+	vec []float32
 }
 
 // New HnswBuildIndex struct
-func NewHnswBuildIndex(id int64, cfg vectorindex.IndexConfig) (*HnswBuildIndex, error) {
+func NewHnswBuildIndex(id int64, cfg vectorindex.IndexConfig, nthread int) (*HnswBuildIndex, error) {
 	var err error
 	idx := &HnswBuildIndex{}
 
@@ -56,11 +70,18 @@ func NewHnswBuildIndex(id int64, cfg vectorindex.IndexConfig) (*HnswBuildIndex, 
 	if err != nil {
 		return nil, err
 	}
+
+	err = idx.Index.ChangeThreadsAdd(uint(nthread))
+	if err != nil {
+		return nil, err
+	}
 	return idx, nil
 }
 
 // Destroy the struct
 func (idx *HnswBuildIndex) Destroy() error {
+	idx.mutex.Lock()
+	defer idx.mutex.Unlock()
 	if idx.Index != nil {
 		err := idx.Index.Destroy()
 		if err != nil {
@@ -82,6 +103,8 @@ func (idx *HnswBuildIndex) Destroy() error {
 // Save the index to file
 func (idx *HnswBuildIndex) SaveToFile() error {
 
+	idx.mutex.Lock()
+	defer idx.mutex.Unlock()
 	if idx.Saved {
 		return nil
 	}
@@ -111,6 +134,8 @@ func (idx *HnswBuildIndex) ToSql(cfg vectorindex.IndexTableConfig) (string, erro
 		return "", err
 	}
 
+	idx.mutex.Lock()
+	defer idx.mutex.Unlock()
 	fi, err := os.Stat(idx.Path)
 	if err != nil {
 		return "", err
@@ -148,6 +173,8 @@ func (idx *HnswBuildIndex) ToSql(cfg vectorindex.IndexTableConfig) (string, erro
 
 // is the index empty
 func (idx *HnswBuildIndex) Empty() (bool, error) {
+	idx.mutex.Lock()
+	defer idx.mutex.Unlock()
 
 	sz, err := idx.Index.Len()
 	if err != nil {
@@ -159,6 +186,8 @@ func (idx *HnswBuildIndex) Empty() (bool, error) {
 
 // check the index is full, i.e. 10K vectors
 func (idx *HnswBuildIndex) Full() (bool, error) {
+	idx.mutex.Lock()
+	defer idx.mutex.Unlock()
 
 	sz, err := idx.Index.Len()
 	if err != nil {
@@ -170,20 +199,77 @@ func (idx *HnswBuildIndex) Full() (bool, error) {
 
 // add vector to the index
 func (idx *HnswBuildIndex) Add(key int64, vec []float32) error {
-
+	idx.mutex.Lock()
+	defer idx.mutex.Unlock()
 	return idx.Index.Add(uint64(key), vec)
 }
 
 // create HsnwBuild struct
-func NewHnswBuild(cfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) (info *HnswBuild, err error) {
-	info = &HnswBuild{cfg, tblcfg, make([]*HnswBuildIndex, 0, 16)}
+func NewHnswBuild(proc *process.Process, cfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) (info *HnswBuild, err error) {
+	info = &HnswBuild{cfg: cfg,
+		tblcfg:   tblcfg,
+		indexes:  make([]*HnswBuildIndex, 0, 16),
+		nthread:  int(MaxUSearchThreads),
+		add_chan: make(chan AddItem, MaxUSearchThreads),
+	}
+
+	// create multi-threads worker for add
+	for i := 0; i < info.nthread; i++ {
+
+		info.wg.Add(1)
+		go func() {
+			var err0 error
+			defer info.wg.Done()
+			closed := false
+			for !closed {
+				closed, err0 = info.addFromChannel(proc)
+				if err0 != nil {
+					return
+				}
+			}
+
+		}()
+	}
+
 	return info, nil
+}
+
+func (h *HnswBuild) addFromChannel(proc *process.Process) (stream_closed bool, err error) {
+	var res AddItem
+	var ok bool
+
+	select {
+	case res, ok = <-h.add_chan:
+		if !ok {
+			return true, nil
+		}
+	case <-proc.Ctx.Done():
+		return false, moerr.NewInternalError(proc.Ctx, "context cancelled")
+	}
+
+	// add
+	err = h.addVector(res.key, res.vec)
+	if err != nil {
+		return false, err
+	}
+
+	return false, nil
+}
+
+func (h *HnswBuild) CloseAndWait() {
+	h.once.Do(func() {
+		close(h.add_chan)
+		h.wg.Wait()
+	})
 }
 
 // destroy
 func (h *HnswBuild) Destroy() error {
 
 	var errs error
+
+	h.CloseAndWait()
+
 	for _, idx := range h.indexes {
 		err := idx.Destroy()
 		if err != nil {
@@ -194,16 +280,19 @@ func (h *HnswBuild) Destroy() error {
 	return errs
 }
 
-// add vector to the build
-// it will check the current index is full and add the vector to available index
 func (h *HnswBuild) Add(key int64, vec []float32) error {
-	var err error
-	var idx *HnswBuildIndex
+	h.add_chan <- AddItem{key, vec}
+	return nil
+}
+
+func (h *HnswBuild) getIndexForAdd() (idx *HnswBuildIndex, err error) {
+	h.mutex.Lock()
+	defer h.mutex.Unlock()
 	nidx := int64(len(h.indexes))
 	if nidx == 0 {
-		idx, err = NewHnswBuildIndex(nidx, h.cfg)
+		idx, err = NewHnswBuildIndex(nidx, h.cfg, h.nthread)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		h.indexes = append(h.indexes, idx)
 	} else {
@@ -212,25 +301,38 @@ func (h *HnswBuild) Add(key int64, vec []float32) error {
 
 		full, err := idx.Full()
 		if err != nil {
-			return err
+			return nil, err
 		}
 
 		if full {
 			// save the current index to file
 			err = idx.SaveToFile()
 			if err != nil {
-				return err
+				return nil, err
 			}
 
 			// create new index
-			idx, err = NewHnswBuildIndex(nidx, h.cfg)
+			idx, err = NewHnswBuildIndex(nidx, h.cfg, h.nthread)
 			if err != nil {
-				return err
+				return nil, err
 			}
 			h.indexes = append(h.indexes, idx)
 		}
 	}
 
+	return idx, nil
+}
+
+// add vector to the build
+// it will check the current index is full and add the vector to available index
+func (h *HnswBuild) addVector(key int64, vec []float32) error {
+	var err error
+	var idx *HnswBuildIndex
+
+	idx, err = h.getIndexForAdd()
+	if err != nil {
+		return err
+	}
 	return idx.Add(key, vec)
 }
 
@@ -238,6 +340,8 @@ func (h *HnswBuild) Add(key int64, vec []float32) error {
 // 1. sync the metadata table
 // 2. sync the index file to index table
 func (h *HnswBuild) ToInsertSql(ts int64) ([]string, error) {
+
+	h.CloseAndWait()
 
 	if len(h.indexes) == 0 {
 		return []string{}, nil
