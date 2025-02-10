@@ -204,7 +204,7 @@ func NewHnswBuild(proc *process.Process, cfg vectorindex.IndexConfig, tblcfg vec
 		indexes:  make([]*HnswBuildIndex, 0, 16),
 		nthread:  int(nthread),
 		add_chan: make(chan AddItem, nthread*2),
-		err_chan: make(chan error),
+		err_chan: make(chan error, nthread),
 	}
 
 	// create multi-threads worker for add
