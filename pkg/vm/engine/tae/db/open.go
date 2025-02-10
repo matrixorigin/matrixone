@@ -296,7 +296,6 @@ func Open(
 	// w-zr TODO: need to support replay and write mode
 	db.MergeScheduler = merge.NewScheduler(db.Runtime, merge.NewTaskServiceGetter(opts.TaskServiceGetter))
 	scanner.RegisterOp(db.MergeScheduler)
-	db.Wal.Start()
 	db.BGFlusher.Start()
 
 	db.BGScanner = w.NewHeartBeater(
