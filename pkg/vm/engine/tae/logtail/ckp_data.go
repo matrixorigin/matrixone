@@ -35,7 +35,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"go.uber.org/zap"
 )
 
@@ -432,7 +431,6 @@ func (replayer *CheckpointReplayer) ReadDataForV12(
 func (replayer *CheckpointReplayer) PrefetchData(
 	ctx context.Context,
 	sid string,
-	tid uint64,
 	fs fileservice.FileService,
 ) {
 	for _, loc := range replayer.locations {
@@ -447,7 +445,7 @@ func (replayer *CheckpointReplayer) ReplayObjectlist(
 	ctx context.Context,
 	c *catalog.Catalog,
 	forSys bool,
-	dataFactory *tables.DataFactory) {
+	dataFactory catalog.DataFactory) {
 	replayFn := func(src *containers.Batch, objectType int8) {
 		if src == nil || src.Length() == 0 {
 			return
@@ -610,7 +608,7 @@ func ConsumeCheckpointEntries(
 		if err := replayer.ReadMetaForV12WithTableID(ctx, tableID, fs); err != nil {
 			return err
 		}
-		replayer.PrefetchData(ctx, sid, tableID, fs)
+		replayer.PrefetchData(ctx, sid, fs)
 	}
 	for _, loc := range locations {
 		if err := PrefetchCheckpointWithTableID(

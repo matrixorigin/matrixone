@@ -11284,7 +11284,7 @@ func TestCheckpointV2(t *testing.T) {
 		addobjFn(tbl)
 	}
 
-	collector := logtail.NewBaseCollector_V2(types.TS{}, tae.TxnMgr.Now(), tae.Opts.Fs, common.DebugAllocator)
+	collector := logtail.NewBaseCollector_V2(types.TS{}, tae.TxnMgr.Now(), tae.Opts.Fs)
 	err = collector.Collect(tae.Catalog)
 	assert.NoError(t, err)
 	data := collector.OrphanData()
@@ -11493,3 +11493,4 @@ func TestDedupx(t *testing.T) {
 }
 
 // TODO test ckpdata.ExportStats
+// TODO test read ckp entry after gc (handle error)

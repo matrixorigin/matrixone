@@ -396,12 +396,16 @@ func (e *CheckpointEntry) String() string {
 func (e *CheckpointEntry) Prefetch(
 	ctx context.Context,
 	fs *objectio.ObjectFS,
-	data *logtail.CheckpointData,
+	replayer *logtail.CheckpointReplayer,
 ) (err error) {
-	if err = data.PrefetchFrom(
-		fs.Service,
-	); err != nil {
-		return
+	if e.version <= logtail.CheckpointVersion12 {
+		replayer.PrefetchData(ctx, e.sid, fs.Service)
+	} else {
+		if err = logtail.PrefetchCheckpoint(
+			ctx, e.sid, e.GetTNLocation(), common.CheckpointAllocator, fs.Service,
+		); err != nil {
+			return
+		}
 	}
 	return
 }
@@ -409,21 +413,13 @@ func (e *CheckpointEntry) Prefetch(
 func (e *CheckpointEntry) Read(
 	ctx context.Context,
 	fs *objectio.ObjectFS,
-	data *logtail.CheckpointData,
+	replayer *logtail.CheckpointReplayer,
 ) (err error) {
-	reader, err := ioutil.NewObjectReader(fs.Service, e.tnLocation)
-	if err != nil {
-		return
-	}
-
-	if err = data.ReadFrom(
-		ctx,
-		e.version,
-		e.tnLocation,
-		reader,
-		fs.Service,
-	); err != nil {
-		return
+	// for version greater than 12, read data when replay ckp
+	if e.version <= logtail.CheckpointVersion12 {
+		if err = replayer.ReadDataForV12(ctx, fs.Service); err != nil {
+			return
+		}
 	}
 	return
 }
@@ -431,27 +427,29 @@ func (e *CheckpointEntry) Read(
 func (e *CheckpointEntry) PrefetchMetaIdx(
 	ctx context.Context,
 	fs *objectio.ObjectFS,
-) (data *logtail.CheckpointData, err error) {
-	data = logtail.NewCheckpointData(e.sid, common.CheckpointAllocator)
-	if err = data.PrefetchMeta(
-		fs.Service,
-		e.tnLocation,
-	); err != nil {
-		return
+) (replayer *logtail.CheckpointReplayer, err error) {
+	// replayer is for compatibility
+	if e.version <= logtail.CheckpointVersion12 {
+		replayer = logtail.NewCheckpointReplayer(e.GetTNLocation(), common.CheckpointAllocator)
 	}
+	ioutil.Prefetch(e.sid, fs.Service, e.GetTNLocation())
 	return
 }
 
 func (e *CheckpointEntry) ReadMetaIdx(
 	ctx context.Context,
 	fs *objectio.ObjectFS,
-	data *logtail.CheckpointData,
+	replayer *logtail.CheckpointReplayer,
 ) (err error) {
-	reader, err := ioutil.NewObjectReader(fs.Service, e.tnLocation)
-	if err != nil {
-		return
+	// for ckp version greater than 12, read meta when prefetch ckp data
+	if e.version <= logtail.CheckpointVersion12 {
+		if err = replayer.ReadMetaForV12(
+			ctx, fs.Service,
+		); err != nil {
+			return
+		}
 	}
-	return data.ReadTNMetaBatch(ctx, e.version, e.tnLocation, reader)
+	return
 }
 
 func (e *CheckpointEntry) GetTableByID(

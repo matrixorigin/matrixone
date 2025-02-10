@@ -56,7 +56,7 @@ type CkpReplayer struct {
 	r          *runner
 	dataF      catalog.DataFactory
 	ckpEntries []*CheckpointEntry
-	ckpdatas   []*logtail.CheckpointData
+	ckpdatas   []*logtail.CheckpointReplayer // for compatibility
 	closes     []func()
 	emptyFile  []*CheckpointEntry
 
@@ -252,7 +252,7 @@ func (c *CkpReplayer) ReadCkpFiles() (err error) {
 
 	// step2. read checkpoint data, output is the ckpdatas
 
-	c.ckpdatas = make([]*logtail.CheckpointData, len(c.ckpEntries))
+	c.ckpdatas = make([]*logtail.CheckpointReplayer, len(c.ckpEntries))
 
 	readfn := func(i int, readType uint16) (err error) {
 		checkpointEntry := c.ckpEntries[i]
@@ -344,6 +344,27 @@ func (c *CkpReplayer) ReadCkpFiles() (err error) {
 	return
 }
 
+func applyObjectList(
+	ctx context.Context,
+	entry *CheckpointEntry,
+	replayer *logtail.CheckpointReplayer,
+	forSys bool,
+	dataFactory catalog.DataFactory,
+	c *catalog.Catalog,
+	fs fileservice.FileService,
+) (err error) {
+	if entry.version <= logtail.CheckpointVersion12 {
+		replayer.ReplayObjectlist(ctx, c, forSys, dataFactory)
+	} else {
+		if err = logtail.ReplayCheckpoint(
+			ctx, c, forSys, dataFactory, entry.GetTNLocation(), common.CheckpointAllocator, fs,
+		); err != nil {
+			return
+		}
+	}
+	return
+}
+
 // ReplayThreeTablesObjectlist replays the object list the three tables, and check the LSN and TS.
 func (c *CkpReplayer) ReplayThreeTablesObjectlist(phase string) (
 	maxTs types.TS,
@@ -365,11 +386,18 @@ func (c *CkpReplayer) ReplayThreeTablesObjectlist(phase string) (
 	r := c.r
 	ctx := c.r.ctx
 	entries := c.ckpEntries
-	datas := c.ckpdatas
 	dataFactory := c.dataF
 	maxGlobal := r.MaxGlobalCheckpoint()
 	if maxGlobal != nil {
-		err = datas[c.globalCkpIdx].ApplyReplayTo(c, r.catalog, dataFactory, true)
+		err = applyObjectList(
+			ctx,
+			c.ckpEntries[c.globalCkpIdx],
+			c.ckpdatas[c.globalCkpIdx],
+			true,
+			dataFactory,
+			r.catalog,
+			c.r.rt.Options.Fs,
+		)
 		c.applyCount++
 		logger := logutil.Info
 		if err != nil {
@@ -415,7 +443,15 @@ func (c *CkpReplayer) ReplayThreeTablesObjectlist(phase string) (
 			continue
 		}
 		start := time.Now()
-		if err = datas[i].ApplyReplayTo(c, r.catalog, dataFactory, true); err != nil {
+		if err = applyObjectList(
+			ctx,
+			c.ckpEntries[i],
+			c.ckpdatas[i],
+			true,
+			dataFactory,
+			r.catalog,
+			c.r.rt.Options.Fs,
+		); err != nil {
 			logger = logutil.Error
 		}
 		logger(
@@ -496,26 +532,28 @@ func (c *CkpReplayer) ReplayCatalog(
 }
 
 // ReplayObjectlist replays the data part of the checkpoint.
-func (c *CkpReplayer) ReplayObjectlist(phase string) (err error) {
+func (c *CkpReplayer) ReplayObjectlist(ctx context.Context, phase string) (err error) {
 	if len(c.ckpEntries) == 0 {
 		return
 	}
 	t0 := time.Now()
 	r := c.r
 	entries := c.ckpEntries
-	datas := c.ckpdatas
 	dataFactory := c.dataF
 	maxTs := types.TS{}
-	var ckpVers []uint32
-	var ckpDatas []*logtail.CheckpointData
 	if maxGlobal := r.MaxGlobalCheckpoint(); maxGlobal != nil {
-		err = datas[c.globalCkpIdx].ApplyReplayTo(c, r.catalog, dataFactory, false)
-		if err != nil {
+		if err = applyObjectList(
+			ctx,
+			c.ckpEntries[c.globalCkpIdx],
+			c.ckpdatas[c.globalCkpIdx],
+			false,
+			dataFactory,
+			r.catalog,
+			c.r.rt.Options.Fs,
+		); err != nil {
 			return
 		}
 		maxTs = maxGlobal.end
-		ckpVers = append(ckpVers, maxGlobal.version)
-		ckpDatas = append(ckpDatas, datas[c.globalCkpIdx])
 	}
 	for i := 0; i < len(entries); i++ {
 		checkpointEntry := entries[i]
@@ -525,23 +563,23 @@ func (c *CkpReplayer) ReplayObjectlist(phase string) (err error) {
 		if checkpointEntry.end.LE(&maxTs) {
 			continue
 		}
-		err = datas[i].ApplyReplayTo(
-			c,
-			r.catalog,
+		if err = applyObjectList(
+			ctx,
+			c.ckpEntries[i],
+			c.ckpdatas[i],
+			false,
 			dataFactory,
-			false)
-		if err != nil {
+			r.catalog,
+			c.r.rt.Options.Fs,
+		); err != nil {
 			return
 		}
 		if maxTs.LT(&checkpointEntry.end) {
 			maxTs = checkpointEntry.end
 		}
-		ckpVers = append(ckpVers, checkpointEntry.version)
-		ckpDatas = append(ckpDatas, datas[i])
 	}
 	c.wg.Wait()
 	c.applyDuration += time.Since(t0)
-	r.catalog.GetUsageMemo().(*logtail.TNUsageMemo).PrepareReplay(ckpDatas, ckpVers)
 	r.source.Init(maxTs)
 	maxTableID, maxObjectCount := uint64(0), 0
 	for tid, count := range c.objectCountMap {
