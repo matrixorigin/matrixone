@@ -98,6 +98,15 @@ func (lockOp *LockOp) Prepare(proc *process.Process) error {
 				lockOp.ctr.relations[i] = rel
 			}
 		}
+	} else {
+		for i, target := range lockOp.targets {
+			if target.objRef != nil {
+				err := lockOp.ctr.relations[i].Reset(proc.GetTxnOperator())
+				if err != nil {
+					return err
+				}
+			}
+		}
 	}
 	lockOp.ctr.parker = types.NewPacker()
 	return nil
@@ -985,12 +994,12 @@ func (lockOp *LockOp) Reset(proc *process.Process, pipelineFailed bool, err erro
 	lockOp.resetParker()
 	lockOp.ctr.retryError = nil
 	lockOp.ctr.defChanged = false
-	lockOp.ctr.relations = nil
 }
 
 // Free free mem
 func (lockOp *LockOp) Free(proc *process.Process, pipelineFailed bool, err error) {
 	lockOp.cleanParker()
+	lockOp.ctr.relations = nil
 }
 
 func (lockOp *LockOp) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {

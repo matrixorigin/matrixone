@@ -300,7 +300,7 @@ type TxnStore interface {
 	CreateNonAppendableObject(dbId, tid uint64, isTombstone bool, opt *objectio.CreateObjOpt) (handle.Object, error)
 	SoftDeleteObject(isTombstone bool, id *common.ID) error
 
-	AddTxnEntry(TxnEntryType, TxnEntry)
+	AddTxnEntry(TxnEntry)
 
 	LogTxnEntry(dbId, tableId uint64, entry TxnEntry, readedObject, readedTombstone []*common.ID) error
 	LogTxnState(sync bool) (entry.Entry, error)
@@ -315,19 +315,10 @@ type TxnStore interface {
 		rotateTable func(aid uint32, dbName, tblName string, dbid, tid uint64, pkSeqnum uint16),
 		visitObject func(obj any),
 		visitAppend func(bat any, isTombstone bool))
-	GetTransactionType() TxnType
+	IsHeartbeat() bool
 	UpdateObjectStats(*common.ID, *objectio.ObjectStats, bool) error
 	FillInWorkspaceDeletes(id *common.ID, deletes **nulls.Nulls, deleteStartOffset uint64) error
 }
-
-type TxnType int8
-
-const (
-	TxnType_Normal = iota
-	TxnType_Heartbeat
-)
-
-type TxnEntryType int16
 
 type TxnEntry interface {
 	PrepareCommit() error

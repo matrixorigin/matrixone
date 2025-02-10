@@ -16,6 +16,7 @@ package driver
 
 import (
 	"context"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 )
@@ -25,7 +26,12 @@ type Driver interface {
 	Truncate(lsn uint64) error
 	GetTruncated() (lsn uint64, err error)
 	Close() error
-	Replay(ctx context.Context, h ApplyHandle, modeGetter func() ReplayMode) error
+	Replay(
+		ctx context.Context,
+		h ApplyHandle,
+		modeGetter func() ReplayMode,
+		opt *ReplayOption,
+	) error
 	GetDSN() uint64
 }
 
@@ -47,6 +53,10 @@ const (
 	DriverMode_Writable
 	DriverMode_Readonly
 )
+
+type ReplayOption struct {
+	PollTruncateInterval time.Duration // Logservice only
+}
 
 type ReplayMode int32
 
