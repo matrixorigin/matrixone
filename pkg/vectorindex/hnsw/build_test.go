@@ -15,6 +15,7 @@
 package hnsw
 
 import (
+	"sync"
 	"testing"
 	"time"
 
@@ -38,15 +39,26 @@ func TestBuild(t *testing.T) {
 	require.Nil(t, err)
 	defer build.Destroy()
 
-	for i := 0; i < 500000; i++ {
-		v := []float32{float32(i), float32(i + 1), float32(i + 2)}
-		err := build.Add(int64(i), v)
-		require.Nil(t, err)
+	var wg sync.WaitGroup
+	for j := 0; j < 10; j++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+
+			nitem := 500000
+			for i := 0; i < nitem; i++ {
+				v := []float32{float32(i), float32(i + 1), float32(i + 2)}
+				err := build.Add(int64(j*nitem+i), v)
+				require.Nil(t, err)
+			}
+		}()
 	}
+
+	wg.Wait()
 
 	sqls, err := build.ToInsertSql(time.Now().UnixMicro())
 	require.Nil(t, err)
-	require.Equal(t, len(sqls), 6)
+	require.Equal(t, len(sqls), 51)
 	//fmt.Printf("SQLS %v\n", sqls)
 	//fmt.Printf("LENF %d\n", len(sqls))
 

@@ -21,6 +21,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
@@ -36,6 +37,7 @@ type HnswBuildIndex struct {
 	Saved bool
 	Size  int64
 	mutex sync.Mutex
+	Count atomic.Int64
 }
 
 type HnswBuild struct {
@@ -173,34 +175,19 @@ func (idx *HnswBuildIndex) ToSql(cfg vectorindex.IndexTableConfig) (string, erro
 
 // is the index empty
 func (idx *HnswBuildIndex) Empty() (bool, error) {
-	idx.mutex.Lock()
-	defer idx.mutex.Unlock()
-
-	sz, err := idx.Index.Len()
-	if err != nil {
-		return false, err
-	}
-
-	return (sz == 0), nil
+	cnt := idx.Count.Load()
+	return (cnt == 0), nil
 }
 
 // check the index is full, i.e. 10K vectors
 func (idx *HnswBuildIndex) Full() (bool, error) {
-	idx.mutex.Lock()
-	defer idx.mutex.Unlock()
-
-	sz, err := idx.Index.Len()
-	if err != nil {
-		return false, err
-	}
-
-	return (sz == vectorindex.MaxIndexCapacity), nil
+	cnt := idx.Count.Load()
+	return (cnt == vectorindex.MaxIndexCapacity), nil
 }
 
 // add vector to the index
 func (idx *HnswBuildIndex) Add(key int64, vec []float32) error {
-	idx.mutex.Lock()
-	defer idx.mutex.Unlock()
+	idx.Count.Add(1)
 	return idx.Index.Add(uint64(key), vec)
 }
 
@@ -213,21 +200,24 @@ func NewHnswBuild(proc *process.Process, cfg vectorindex.IndexConfig, tblcfg vec
 		add_chan: make(chan AddItem, MaxUSearchThreads),
 	}
 
+	fmt.Printf("nthread = %d\n", info.nthread)
 	// create multi-threads worker for add
 	for i := 0; i < info.nthread; i++ {
 
 		info.wg.Add(1)
 		go func() {
-			var err0 error
 			defer info.wg.Done()
+			var err0 error
 			closed := false
 			for !closed {
 				closed, err0 = info.addFromChannel(proc)
 				if err0 != nil {
+					fmt.Printf("err %v\n", err0)
 					return
 				}
 			}
 
+			fmt.Printf("thred close %d\n", i)
 		}()
 	}
 
@@ -359,7 +349,7 @@ func (h *HnswBuild) ToInsertSql(ts int64) ([]string, error) {
 
 		sqls = append(sqls, sql)
 
-		os.Stderr.WriteString(fmt.Sprintf("Sql: %s\n", sql))
+		//os.Stderr.WriteString(fmt.Sprintf("Sql: %s\n", sql))
 		chksum, err := vectorindex.CheckSum(idx.Path)
 		if err != nil {
 			return nil, err
