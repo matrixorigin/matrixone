@@ -280,7 +280,8 @@ func (h *HnswBuild) Add(key int64, vec []float32) error {
 		return err
 	default:
 	}
-	h.add_chan <- AddItem{key, vec}
+	// copy the []float32 slice.
+	h.add_chan <- AddItem{key, append(make([]float32, 0, len(vec)), vec...)}
 	return nil
 }
 
