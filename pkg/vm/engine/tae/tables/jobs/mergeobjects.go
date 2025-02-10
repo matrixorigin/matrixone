@@ -346,7 +346,7 @@ func (task *mergeObjectsTask) PrepareNewWriter() *ioutil.BlockWriter {
 		sortkeyPos,
 		sortkeyIsPK,
 		task.isTombstone,
-		task.rt.Fs.Service,
+		task.rt.Fs,
 	)
 	task.num++
 	return writer

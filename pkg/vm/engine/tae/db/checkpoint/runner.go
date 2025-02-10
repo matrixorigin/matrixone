@@ -456,7 +456,7 @@ func (r *runner) saveCheckpoint(
 	bat := r.collectCheckpointMetadata(start, end)
 	defer bat.Close()
 	name = ioutil.EncodeCKPMetadataFullName(start, end)
-	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterCheckpoint, name, r.rt.Fs.Service)
+	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterCheckpoint, name, r.rt.Fs)
 	if err != nil {
 		return
 	}

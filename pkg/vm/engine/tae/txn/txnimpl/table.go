@@ -279,7 +279,7 @@ func (tbl *txnTable) TransferDeletes(
 			var currentTransferBatch *containers.Batch
 			tFindTombstone := time.Now()
 			sel, err := ioutil.FindTombstonesOfObject(
-				ctx, obj.ID(), tbl.tombstoneTable.tableSpace.stats, tbl.store.rt.Fs.Service,
+				ctx, obj.ID(), tbl.tombstoneTable.tableSpace.stats, tbl.store.rt.Fs,
 			)
 			findTombstoneDuration += time.Since(tFindTombstone)
 			if err != nil {
@@ -341,7 +341,7 @@ func (tbl *txnTable) TransferDeletes(
 						tbl.store.ctx,
 						[]uint16{0, 1},
 						nil,
-						tbl.store.rt.Fs.Service,
+						tbl.store.rt.Fs,
 						loc,
 						fileservice.Policy(0),
 						false,
@@ -366,7 +366,7 @@ func (tbl *txnTable) TransferDeletes(
 						objectio.HiddenColumnSelection_None,
 						*pkType,
 						common.WorkspaceAllocator,
-						tbl.store.rt.Fs.Service,
+						tbl.store.rt.Fs,
 						ioutil.WithBufferSizeCap(TransferSinkerBufferSize),
 						ioutil.WithMemorySizeThreshold(TransferSinkerMemorySizeThreshold))
 				}
@@ -1257,7 +1257,7 @@ func (tbl *txnTable) DoPrecommitDedupByNode(ctx context.Context, stats objectio.
 			ctx,
 			[]uint16{uint16(schema.GetSingleSortKeyIdx())},
 			nil,
-			tbl.store.rt.Fs.Service,
+			tbl.store.rt.Fs,
 			loc,
 			fileservice.Policy(0),
 			false,
@@ -1663,7 +1663,7 @@ func (tbl *txnTable) contains(
 			continue
 		}
 		var bf objectio.BloomFilter
-		bf, err = objectio.FastLoadBF(ctx, stats.ObjectLocation(), false, tbl.store.rt.Fs.Service)
+		bf, err = objectio.FastLoadBF(ctx, stats.ObjectLocation(), false, tbl.store.rt.Fs)
 		if err != nil {
 			return
 		}
@@ -1687,7 +1687,7 @@ func (tbl *txnTable) contains(
 				tbl.store.ctx,
 				[]uint16{uint16(tbl.tombstoneTable.schema.GetSingleSortKeyIdx())},
 				nil,
-				tbl.store.rt.Fs.Service,
+				tbl.store.rt.Fs,
 				metaloc,
 				fileservice.Policy(0),
 				false,
@@ -1780,7 +1780,7 @@ func (tbl *txnTable) FillInWorkspaceDeletes(blkID types.Blockid, deletes **nulls
 				tbl.store.ctx,
 				[]uint16{uint16(tbl.tombstoneTable.schema.GetSingleSortKeyIdx())},
 				nil,
-				tbl.store.rt.Fs.Service,
+				tbl.store.rt.Fs,
 				loc,
 				fileservice.Policy(0),
 				false,
@@ -1845,7 +1845,7 @@ func (tbl *txnTable) IsDeletedInWorkSpace(blkID *objectio.Blockid, row uint32) (
 				tbl.store.ctx,
 				[]uint16{uint16(tbl.tombstoneTable.schema.GetSingleSortKeyIdx())},
 				nil,
-				tbl.store.rt.Fs.Service,
+				tbl.store.rt.Fs,
 				loc,
 				fileservice.Policy(0),
 				false,

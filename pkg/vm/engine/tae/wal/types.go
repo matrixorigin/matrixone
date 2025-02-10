@@ -45,7 +45,6 @@ type Driver interface {
 		modeGetter func() driver.ReplayMode,
 		opt *driver.ReplayOption,
 	) error
-	Start()
 	Close() error
 
 	GetTruncated() uint64
