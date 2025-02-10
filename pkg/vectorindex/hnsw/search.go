@@ -107,16 +107,6 @@ func (idx *HnswSearchIndex) LoadIndex(proc *process.Process, idxcfg vectorindex.
 	stream_chan := make(chan executor.Result, 2)
 	error_chan := make(chan error)
 
-	sql := fmt.Sprintf("SELECT chunk_id, data from `%s`.`%s` WHERE index_id = %d", tblcfg.DbName, tblcfg.IndexTable, idx.Id)
-
-	go func() {
-		_, err := runSql_streaming(proc, sql, stream_chan, error_chan)
-		if err != nil {
-			error_chan <- err
-			return
-		}
-	}()
-
 	// create tempfile for writing
 	fp, err := os.CreateTemp("", "hnswindx")
 	if err != nil {
@@ -128,6 +118,16 @@ func (idx *HnswSearchIndex) LoadIndex(proc *process.Process, idxcfg vectorindex.
 	if err != nil {
 		return err
 	}
+
+	// run streaming sql
+	sql := fmt.Sprintf("SELECT chunk_id, data from `%s`.`%s` WHERE index_id = %d", tblcfg.DbName, tblcfg.IndexTable, idx.Id)
+	go func() {
+		_, err := runSql_streaming(proc, sql, stream_chan, error_chan)
+		if err != nil {
+			error_chan <- err
+			return
+		}
+	}()
 
 	// incremental load from database
 	sql_closed := false
@@ -155,12 +155,12 @@ func (idx *HnswSearchIndex) LoadIndex(proc *process.Process, idxcfg vectorindex.
 		return err
 	}
 
-	err = usearchidx.Load(fp.Name())
+	err = usearchidx.ChangeThreadsSearch(uint(MaxUSearchThreads))
 	if err != nil {
 		return err
 	}
 
-	err = usearchidx.ChangeThreadsSearch(uint(MaxUSearchThreads))
+	err = usearchidx.Load(fp.Name())
 	if err != nil {
 		return err
 	}
