@@ -1143,7 +1143,7 @@ func FillUsageBatOfGlobal(collector *GlobalCollector) {
 
 	log1, cnt := putCacheBack2Track(collector.BaseCollector)
 	log2 := collector.UsageMemo.ClearDroppedAccounts(collector.Usage.ReservedAccIds)
-	collector.UsageMemo.replayIntoGCKP(collector)
+	// collector.UsageMemo.replayIntoGCKP(collector)
 
 	doSummary("G",
 		zap.String("update old data", log1),

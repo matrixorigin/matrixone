@@ -645,6 +645,19 @@ func NewBaseCollector_V2(start, end types.TS, fs fileservice.FileService, mp *mp
 	collector.TombstoneFn = collector.visitObject
 	return collector
 }
+func NewBackupCollector_V2(start, end types.TS, fs fileservice.FileService, mp *mpool.MPool) *BaseCollector_V2 {
+	collector := &BaseCollector_V2{
+		LoopProcessor: &catalog.LoopProcessor{},
+		data:          NewCheckpointData_V2(mp, fs),
+		start:         start,
+		end:           end,
+		packer:        types.NewPacker(),
+	}
+	collector.ObjectFn = collector.visitObjectForBackup
+	collector.TombstoneFn = collector.visitObjectForBackup
+	return collector
+}
+
 func (collector *BaseCollector_V2) Close() {
 	collector.packer.Close()
 }
@@ -677,6 +690,56 @@ func (collector *BaseCollector_V2) visitObject(entry *catalog.ObjectEntry) error
 		}
 	}
 	return nil
+}
+
+func (collector *BaseCollector_V2) visitObjectForBackup(entry *catalog.ObjectEntry) error {
+	createTS := entry.GetCreatedAt()
+	if createTS.GT(&collector.start) {
+		return nil
+	}
+	return collector.visitObject(entry)
+}
+
+func NewGlobalCollector_V2(
+	fs fileservice.FileService,
+	end types.TS,
+	versionInterval time.Duration,
+	mp *mpool.MPool,
+) *GlobalCollector_V2 {
+	versionThresholdTS := types.BuildTS(end.Physical()-versionInterval.Nanoseconds(), end.Logical())
+	collector := &GlobalCollector_V2{
+		BaseCollector_V2: *NewBaseCollector_V2(types.TS{}, end, fs, mp),
+		versionThershold: versionThresholdTS,
+	}
+	collector.ObjectFn = collector.visitObjectForGlobal
+	collector.TombstoneFn = collector.visitObjectForGlobal
+
+	return collector
+}
+
+type GlobalCollector_V2 struct {
+	BaseCollector_V2
+	// not collect objects deleted before versionThershold
+	versionThershold types.TS
+}
+
+func (collector *GlobalCollector_V2) isEntryDeletedBeforeThreshold(entry catalog.BaseEntry) bool {
+	entry.RLock()
+	defer entry.RUnlock()
+	return entry.DeleteBeforeLocked(collector.versionThershold)
+}
+
+func (collector *GlobalCollector_V2) visitObjectForGlobal(entry *catalog.ObjectEntry) error {
+	if entry.DeleteBefore(collector.versionThershold) {
+		return nil
+	}
+	if collector.isEntryDeletedBeforeThreshold(entry.GetTable().BaseEntryImpl) {
+		return nil
+	}
+	if collector.isEntryDeletedBeforeThreshold(entry.GetTable().GetDB().BaseEntryImpl) {
+		return nil
+	}
+	return collector.BaseCollector_V2.visitObject(entry)
 }
 
 func collectObjectBatch(

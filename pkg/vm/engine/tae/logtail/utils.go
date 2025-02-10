@@ -132,38 +132,31 @@ func registerCheckpointDataReferVersion(version uint32, schemas []*catalog.Schem
 }
 
 func IncrementalCheckpointDataFactory(
-	sid string,
+	fs fileservice.FileService,
 	start, end types.TS,
 	collectUsage bool,
-) func(c *catalog.Catalog) (*CheckpointData, error) {
-	return func(c *catalog.Catalog) (data *CheckpointData, err error) {
-		collector := NewIncrementalCollector(sid, start, end)
-		defer collector.Close()
-		err = c.RecurLoop(collector)
-		if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
-			err = nil
-		}
-		if err != nil {
+	mp *mpool.MPool,
+) func(c *catalog.Catalog) (*CheckpointData_V2, error) {
+	if collectUsage {
+		panic("todo")
+	}
+	return func(c *catalog.Catalog) (data *CheckpointData_V2, err error) {
+		collector := NewBaseCollector_V2(start, end, fs, mp)
+		if err = collector.Collect(c); err != nil {
 			return
 		}
-
-		if collectUsage {
-			collector.UsageMemo = c.GetUsageMemo().(*TNUsageMemo)
-			// collecting usage happens only when do ckp
-			FillUsageBatOfIncremental(collector)
-		}
-
 		data = collector.OrphanData()
 		return
 	}
 }
 
 func BackupCheckpointDataFactory(
-	sid string,
+	fs fileservice.FileService,
 	start, end types.TS,
-) func(c *catalog.Catalog) (*CheckpointData, error) {
-	return func(c *catalog.Catalog) (data *CheckpointData, err error) {
-		collector := NewBackupCollector(sid, start, end)
+	mp *mpool.MPool,
+) func(c *catalog.Catalog) (*CheckpointData_V2, error) {
+	return func(c *catalog.Catalog) (data *CheckpointData_V2, err error) {
+		collector := NewBaseCollector_V2(start, end, fs, mp)
 		defer collector.Close()
 		err = c.RecurLoop(collector)
 		if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
@@ -175,12 +168,13 @@ func BackupCheckpointDataFactory(
 }
 
 func GlobalCheckpointDataFactory(
-	sid string,
+	fs fileservice.FileService,
 	end types.TS,
 	versionInterval time.Duration,
-) func(c *catalog.Catalog) (*CheckpointData, error) {
-	return func(c *catalog.Catalog) (data *CheckpointData, err error) {
-		collector := NewGlobalCollector(sid, end, versionInterval)
+	mp *mpool.MPool,
+) func(c *catalog.Catalog) (*CheckpointData_V2, error) {
+	return func(c *catalog.Catalog) (data *CheckpointData_V2, err error) {
+		collector := NewGlobalCollector_V2(fs, end, versionInterval, mp)
 		defer collector.Close()
 		err = c.RecurLoop(collector)
 		if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
@@ -190,8 +184,6 @@ func GlobalCheckpointDataFactory(
 		if err != nil {
 			return
 		}
-		collector.UsageMemo = c.GetUsageMemo().(*TNUsageMemo)
-		FillUsageBatOfGlobal(collector)
 
 		data = collector.OrphanData()
 
