@@ -11491,3 +11491,5 @@ func TestDedupx(t *testing.T) {
 		t.Log(nit.Item().StringWithLevel(2))
 	}
 }
+
+// TODO test ckpdata.ExportStats

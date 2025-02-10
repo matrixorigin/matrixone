@@ -227,8 +227,6 @@ func Open(
 			IncrementalInterval:         opts.CheckpointCfg.IncrementalInterval,
 			GlobalMinCount:              opts.CheckpointCfg.GlobalMinCount,
 			GlobalHistoryDuration:       opts.CheckpointCfg.GlobalVersionInterval,
-			SizeHint:                    opts.CheckpointCfg.Size,
-			BlockMaxRowsHint:            opts.CheckpointCfg.BlockRows,
 		},
 	)
 	db.BGCheckpointRunner.Start()

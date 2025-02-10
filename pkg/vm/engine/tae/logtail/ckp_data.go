@@ -16,6 +16,7 @@ package logtail
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -32,6 +33,7 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"go.uber.org/zap"
@@ -54,7 +56,7 @@ func NewCheckpointData_V2(allocator *mpool.MPool, fs fileservice.FileService) *C
 func (data *CheckpointData_V2) WriteTo(
 	ctx context.Context,
 	fs fileservice.FileService,
-) (CNLocation, TNLocation objectio.Location, ckpfiles, err error) {
+) (CNLocation, TNLocation objectio.Location, ckpfiles []string, err error) {
 	if data.batch.RowCount() != 0 {
 		err = data.sinker.Write(ctx, data.batch)
 		if err != nil {
@@ -91,11 +93,28 @@ func (data *CheckpointData_V2) WriteTo(
 	}
 	CNLocation = objectio.BuildLocation(name, blks[0].GetExtent(), 0, blks[0].GetID())
 	TNLocation = CNLocation
+	ckpfiles = make([]string, 0)
+	for _, obj := range files {
+		ckpfiles = append(ckpfiles, obj.ObjectName().String())
+	}
 	return
 }
 func (data *CheckpointData_V2) Close() {
 	data.batch.FreeColumns(data.allocator)
 	data.sinker.Close()
+}
+func (data *CheckpointData_V2) ExportStats(prefix string) []zap.Field {
+	fields := make([]zap.Field, 0)
+	size := data.batch.Allocated()
+	rows := data.batch.RowCount()
+	persisted, _ := data.sinker.GetResult()
+	for _, obj := range persisted {
+		size += int(obj.Size())
+		rows += int(obj.Rows())
+	}
+	fields = append(fields, zap.Int(fmt.Sprintf("%stotalSize", prefix), size))
+	fields = append(fields, zap.Int(fmt.Sprintf("%stotalRow", prefix), rows))
+	return fields
 }
 
 func readMetaBatch(
@@ -633,10 +652,10 @@ type BaseCollector_V2 struct {
 	packer     *types.Packer
 }
 
-func NewBaseCollector_V2(start, end types.TS, fs fileservice.FileService, mp *mpool.MPool) *BaseCollector_V2 {
+func NewBaseCollector_V2(start, end types.TS, fs fileservice.FileService) *BaseCollector_V2 {
 	collector := &BaseCollector_V2{
 		LoopProcessor: &catalog.LoopProcessor{},
-		data:          NewCheckpointData_V2(mp, fs),
+		data:          NewCheckpointData_V2(common.CheckpointAllocator, fs),
 		start:         start,
 		end:           end,
 		packer:        types.NewPacker(),
@@ -645,10 +664,10 @@ func NewBaseCollector_V2(start, end types.TS, fs fileservice.FileService, mp *mp
 	collector.TombstoneFn = collector.visitObject
 	return collector
 }
-func NewBackupCollector_V2(start, end types.TS, fs fileservice.FileService, mp *mpool.MPool) *BaseCollector_V2 {
+func NewBackupCollector_V2(start, end types.TS, fs fileservice.FileService) *BaseCollector_V2 {
 	collector := &BaseCollector_V2{
 		LoopProcessor: &catalog.LoopProcessor{},
-		data:          NewCheckpointData_V2(mp, fs),
+		data:          NewCheckpointData_V2(common.CheckpointAllocator, fs),
 		start:         start,
 		end:           end,
 		packer:        types.NewPacker(),
@@ -704,11 +723,10 @@ func NewGlobalCollector_V2(
 	fs fileservice.FileService,
 	end types.TS,
 	versionInterval time.Duration,
-	mp *mpool.MPool,
 ) *GlobalCollector_V2 {
 	versionThresholdTS := types.BuildTS(end.Physical()-versionInterval.Nanoseconds(), end.Logical())
 	collector := &GlobalCollector_V2{
-		BaseCollector_V2: *NewBaseCollector_V2(types.TS{}, end, fs, mp),
+		BaseCollector_V2: *NewBaseCollector_V2(types.TS{}, end, fs),
 		versionThershold: versionThresholdTS,
 	}
 	collector.ObjectFn = collector.visitObjectForGlobal

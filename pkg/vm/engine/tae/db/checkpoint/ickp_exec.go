@@ -231,7 +231,7 @@ func (executor *checkpointExecutor) doIncrementalCheckpoint(
 	entry *CheckpointEntry,
 ) (fields []zap.Field, files []string, err error) {
 	factory := logtail.IncrementalCheckpointDataFactory(
-		executor.runner.rt.SID(), entry.start, entry.end, true,
+		entry.start, entry.end, executor.runner.rt.Fs.Service,
 	)
 	data, err := factory(executor.runner.catalog)
 	if err != nil {
@@ -242,8 +242,6 @@ func (executor *checkpointExecutor) doIncrementalCheckpoint(
 	var cnLocation, tnLocation objectio.Location
 	cnLocation, tnLocation, files, err = data.WriteTo(
 		executor.ctx,
-		executor.cfg.BlockMaxRowsHint,
-		executor.cfg.SizeHint,
 		executor.runner.rt.Fs.Service,
 	)
 	if err != nil {
