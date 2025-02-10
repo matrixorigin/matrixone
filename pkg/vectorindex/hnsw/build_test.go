@@ -21,8 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/stretchr/testify/require"
 
-	//usearch "github.com/unum-cloud/usearch/golang"
-	usearch "github.com/cpegeric/usearch/golang"
+	usearch "github.com/unum-cloud/usearch/golang"
 )
 
 func TestBuild(t *testing.T) {

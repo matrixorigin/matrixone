@@ -33,8 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
-	//usearch "github.com/unum-cloud/usearch/golang"
-	usearch "github.com/cpegeric/usearch/golang"
+	usearch "github.com/unum-cloud/usearch/golang"
 )
 
 const NThreadSearch = 4
@@ -178,14 +177,16 @@ func (idx *HnswSearchIndex) Search(query []float32, limit uint) (keys []usearch.
 	return idx.Index.Search(query, limit)
 }
 
+func NewHnswSearch(idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) *HnswSearch {
+	s := &HnswSearch{Idxcfg: idxcfg, Tblcfg: tblcfg}
+	s.Cond = sync.NewCond(&s.Mutex)
+	return s
+}
+
 // Search the hnsw index (implement VectorIndexSearch.Search)
 func (s *HnswSearch) Search(query []float32, limit uint) (keys []int64, distances []float32, err error) {
 	if len(s.Indexes) == 0 {
 		return []int64{}, []float32{}, nil
-	}
-
-	if s.Cond == nil {
-		s.Cond = sync.NewCond(&s.Mutex)
 	}
 
 	// check max threads

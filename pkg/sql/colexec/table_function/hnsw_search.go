@@ -32,8 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
-	//usearch "github.com/unum-cloud/usearch/golang"
-	usearch "github.com/cpegeric/usearch/golang"
+	usearch "github.com/unum-cloud/usearch/golang"
 )
 
 type hnswSearchState struct {
@@ -53,7 +52,7 @@ type hnswSearchState struct {
 var newHnswAlgo = newHnswAlgoFn
 
 func newHnswAlgoFn(idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) veccache.VectorIndexSearchIf {
-	return &hnsw.HnswSearch{Idxcfg: idxcfg, Tblcfg: tblcfg}
+	return hnsw.NewHnswSearch(idxcfg, tblcfg)
 }
 
 func (u *hnswSearchState) end(tf *TableFunction, proc *process.Process) error {

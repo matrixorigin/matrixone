@@ -35,8 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 
-	//usearch "github.com/unum-cloud/usearch/golang"
-	usearch "github.com/cpegeric/usearch/golang"
+	usearch "github.com/unum-cloud/usearch/golang"
 )
 
 // give metadata [index_id, checksum, timestamp]
@@ -85,7 +84,7 @@ func TestHnsw(t *testing.T) {
 			for j := 0; j < 20000; j++ {
 				cache.Cache.Once()
 
-				algo := &HnswSearch{Idxcfg: idxcfg, Tblcfg: tblcfg}
+				algo := NewHnswSearch(idxcfg, tblcfg)
 				keys, distances, err := cache.Cache.Search(proc, tblcfg.IndexTable, algo, fp32a, 4)
 				require.Nil(t, err)
 

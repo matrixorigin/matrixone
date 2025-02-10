@@ -15,8 +15,7 @@
 package vectorindex
 
 import (
-	//usearch "github.com/unum-cloud/usearch/golang"
-	usearch "github.com/cpegeric/usearch/golang"
+	usearch "github.com/unum-cloud/usearch/golang"
 )
 
 /*
