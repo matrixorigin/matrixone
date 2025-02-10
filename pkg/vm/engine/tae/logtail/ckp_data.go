@@ -216,6 +216,10 @@ func PrefetchCheckpointWithTableID(
 	for _, table := range ranges {
 		ioutil.Prefetch(sid, fs, table.ObjectStats.ObjectLocation())
 	}
+	ranges = ckputil.ExportToTableRanges(metaBatch, tid, ckputil.ObjectType_Tombstone)
+	for _, table := range ranges {
+		ioutil.Prefetch(sid, fs, table.ObjectStats.ObjectLocation())
+	}
 	return
 }
 
