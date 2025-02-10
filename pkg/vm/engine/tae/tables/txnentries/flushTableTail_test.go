@@ -103,7 +103,6 @@ func Test_PrepareRollback(t *testing.T) {
 	defer cancel()
 	dir := testutils.InitTestEnv(ModuleName, t)
 	fs := objectio.TmpNewFileservice(ctx, path.Join(dir, "data"))
-	defer service.Close(ctx)
 	rt := dbutils.NewRuntime(
 		dbutils.WithRuntimeObjectFS(fs),
 		dbutils.WithRuntimeScheduler(&testScheduler{}),
