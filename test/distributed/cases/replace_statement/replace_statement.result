@@ -75,7 +75,7 @@ id    data    name
 1    test_3    replace_name_1
 2    test_3    replace_name_2
 create table t4 (
-a int unique key,
+a int primary key,
 b varchar(64)
 );
 replace into t4 values (1, 'a');
@@ -101,7 +101,7 @@ create table t5(
 a int,
 b int,
 c varchar(64),
-unique key(a, b)
+primary key(a, b)
 );
 replace into t5 values (1, 1, '');
 select * from t5;

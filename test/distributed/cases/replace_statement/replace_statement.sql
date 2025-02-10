@@ -60,7 +60,7 @@ select * from t3;
 
 -- A uniquely constrained primary key
 create table t4 (
-a int unique key,
+a int primary key,
 b varchar(64)
 );
 
@@ -78,7 +78,7 @@ create table t5(
 a int,
 b int,
 c varchar(64),
-unique key(a, b)
+primary key(a, b)
 );
 
 replace into t5 values (1, 1, '');

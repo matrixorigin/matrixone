@@ -57,13 +57,8 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 
 	for _, idxDef := range tableDef.Indexes {
 		if !catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) {
-			return 0, moerr.NewUnsupportedDML(builder.GetContext(), "have vector index table")
+			return 0, moerr.NewUnsupportedDML(builder.GetContext(), "have vector/text index table")
 		}
-	}
-
-	if pkName == catalog.FakePrimaryKeyColName {
-		return 0, moerr.NewUnsupportedDML(builder.GetContext(), "fake primary key")
-		//return builder.appendDedupAndMultiUpdateNodesForBindInsert(bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil)
 	}
 
 	selectNode := builder.qry.Nodes[lastNodeID]
