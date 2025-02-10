@@ -20,6 +20,7 @@ import (
 	"math"
 	"os"
 	"strings"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	usearch "github.com/unum-cloud/usearch/golang"
@@ -32,6 +33,7 @@ type HnswBuildIndex struct {
 	Path  string
 	Saved bool
 	Size  int64
+	Count atomic.Int64
 }
 
 type HnswBuild struct {
@@ -148,29 +150,19 @@ func (idx *HnswBuildIndex) ToSql(cfg vectorindex.IndexTableConfig) (string, erro
 
 // is the index empty
 func (idx *HnswBuildIndex) Empty() (bool, error) {
-
-	sz, err := idx.Index.Len()
-	if err != nil {
-		return false, err
-	}
-
+	sz := idx.Count.Load()
 	return (sz == 0), nil
 }
 
 // check the index is full, i.e. 10K vectors
 func (idx *HnswBuildIndex) Full() (bool, error) {
-
-	sz, err := idx.Index.Len()
-	if err != nil {
-		return false, err
-	}
-
+	sz := idx.Count.Load()
 	return (sz == vectorindex.MaxIndexCapacity), nil
 }
 
 // add vector to the index
 func (idx *HnswBuildIndex) Add(key int64, vec []float32) error {
-
+	idx.Count.Add(1)
 	return idx.Index.Add(uint64(key), vec)
 }
 
