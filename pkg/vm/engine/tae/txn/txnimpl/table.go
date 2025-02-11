@@ -712,8 +712,8 @@ func (tbl *txnTable) CreateNonAppendableObject(opts *objectio.CreateObjOpt) (obj
 
 func (tbl *txnTable) createObject(opts *objectio.CreateObjOpt) (obj handle.Object, err error) {
 	var factory catalog.ObjectDataFactory
-	if tbl.store.dataFactory != nil {
-		factory = tbl.store.dataFactory.MakeObjectFactory()
+	if tbl.store.catalog.DataFactory != nil {
+		factory = tbl.store.catalog.DataFactory.MakeObjectFactory()
 	}
 	var meta *catalog.ObjectEntry
 	if meta, err = tbl.entry.CreateObject(

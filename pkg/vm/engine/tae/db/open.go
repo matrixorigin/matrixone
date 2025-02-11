@@ -17,7 +17,6 @@ package db
 import (
 	"context"
 	"fmt"
-	"path"
 	"sync/atomic"
 	"time"
 
@@ -27,7 +26,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -75,11 +73,16 @@ func Open(
 	opts *options.Options,
 	dbOpts ...DBOption,
 ) (db *DB, err error) {
+	opts = opts.FillDefaults(dirname)
+	// TODO: remove
+	fillRuntimeOptions(opts)
+
 	dbLocker, err := createDBLock(dirname)
 
 	logutil.Info(
 		Phase_Open,
 		zap.String("db-dirname", dirname),
+		zap.String("config", opts.JsonString()),
 		zap.Error(err),
 	)
 	startTime := time.Now()
@@ -107,22 +110,6 @@ func Open(
 		)
 	}()
 
-	opts = opts.FillDefaults(dirname)
-	fillRuntimeOptions(opts)
-
-	logutil.Info(
-		Phase_Open,
-		zap.String("config", opts.JsonString()),
-	)
-
-	if opts.Fs == nil {
-		// TODO:fileservice needs to be passed in as a parameter
-		opts.Fs = objectio.TmpNewFileservice(ctx, path.Join(dirname, "data"))
-	}
-	if opts.LocalFs == nil {
-		opts.LocalFs = objectio.TmpNewFileservice(ctx, path.Join(dirname, "data"))
-	}
-
 	db = &DB{
 		Dir:       dirname,
 		Opts:      opts,
@@ -139,11 +126,6 @@ func Open(
 		db.Controller.Stop()
 	})
 
-	txnMode := db.GetTxnMode()
-	if !txnMode.IsValid() {
-		panic(fmt.Sprintf("open-tae: invalid txn mode %s", txnMode))
-	}
-
 	transferTable, err := model.NewTransferTable[*model.TransferHashPage](ctx, opts.LocalFs)
 	if err != nil {
 		panic(fmt.Sprintf("open-tae: model.NewTransferTable failed, %s", err))
@@ -155,7 +137,17 @@ func Open(
 	case options.LogstoreLogservice:
 		db.Wal = wal.NewLogserviceDriver(opts.Ctx, opts.Lc)
 	}
-	scheduler := newTaskScheduler(db, db.Opts.SchedulerCfg.AsyncWorkers, db.Opts.SchedulerCfg.IOWorkers)
+	onErrorCalls = append(onErrorCalls, func() {
+		db.Wal.Close()
+	})
+
+	scheduler := newTaskScheduler(
+		db, db.Opts.SchedulerCfg.AsyncWorkers, db.Opts.SchedulerCfg.IOWorkers,
+	)
+	onErrorCalls = append(onErrorCalls, func() {
+		scheduler.Stop()
+	})
+
 	db.Runtime = dbutils.NewRuntime(
 		dbutils.WithRuntimeTransferTable(transferTable),
 		dbutils.WithRuntimeObjectFS(opts.Fs),
@@ -169,11 +161,18 @@ func Open(
 	dataFactory := tables.NewDataFactory(
 		db.Runtime, db.Dir,
 	)
-	catalog.DefaultTableDataFactory = dataFactory.MakeTableFactory()
-	if db.Catalog, err = catalog.OpenCatalog(db.usageMemo); err != nil {
+	if db.Catalog, err = catalog.OpenCatalog(db.usageMemo, dataFactory); err != nil {
 		return
 	}
 	db.usageMemo.C = db.Catalog
+	onErrorCalls = append(onErrorCalls, func() {
+		db.Catalog.Close()
+	})
+
+	txnMode := db.GetTxnMode()
+	if !txnMode.IsValid() {
+		panic(fmt.Sprintf("open-tae: invalid txn mode %s", txnMode))
+	}
 
 	// Init and start txn manager
 	txnStoreFactory := txnimpl.TxnStoreFactory(
@@ -181,7 +180,6 @@ func Open(
 		db.Catalog,
 		db.Wal,
 		db.Runtime,
-		dataFactory,
 		opts.MaxMessageSize,
 	)
 	txnFactory := txnimpl.TxnFactory(db.Catalog)
@@ -244,7 +242,7 @@ func Open(
 
 	now := time.Now()
 	// TODO: checkpoint dir should be configurable
-	ckpReplayer := db.BGCheckpointRunner.BuildReplayer(ioutil.GetCheckpointDir(), dataFactory)
+	ckpReplayer := db.BGCheckpointRunner.BuildReplayer(ioutil.GetCheckpointDir())
 	defer ckpReplayer.Close()
 	if err = ckpReplayer.ReadCkpFiles(); err != nil {
 		return

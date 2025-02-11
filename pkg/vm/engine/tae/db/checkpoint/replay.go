@@ -28,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -54,7 +53,6 @@ const (
 type CkpReplayer struct {
 	dir        string
 	r          *runner
-	dataF      catalog.DataFactory
 	ckpEntries []*CheckpointEntry
 	ckpdatas   []*logtail.CheckpointData
 	closes     []func()
@@ -366,10 +364,9 @@ func (c *CkpReplayer) ReplayThreeTablesObjectlist(phase string) (
 	ctx := c.r.ctx
 	entries := c.ckpEntries
 	datas := c.ckpdatas
-	dataFactory := c.dataF
 	maxGlobal := r.MaxGlobalCheckpoint()
 	if maxGlobal != nil {
-		err = datas[c.globalCkpIdx].ApplyReplayTo(c, r.catalog, dataFactory, true)
+		err = datas[c.globalCkpIdx].ApplyReplayTo(c, r.catalog, true)
 		c.applyCount++
 		logger := logutil.Info
 		if err != nil {
@@ -415,7 +412,7 @@ func (c *CkpReplayer) ReplayThreeTablesObjectlist(phase string) (
 			continue
 		}
 		start := time.Now()
-		if err = datas[i].ApplyReplayTo(c, r.catalog, dataFactory, true); err != nil {
+		if err = datas[i].ApplyReplayTo(c, r.catalog, true); err != nil {
 			logger = logutil.Error
 		}
 		logger(
@@ -481,7 +478,6 @@ func (c *CkpReplayer) ReplayCatalog(
 	closeFn := c.r.catalog.RelayFromSysTableObjects(
 		c.r.ctx,
 		readTxn,
-		c.dataF,
 		tables.ReadSysTableBatch,
 		sortFunc,
 		c,
@@ -504,12 +500,11 @@ func (c *CkpReplayer) ReplayObjectlist(phase string) (err error) {
 	r := c.r
 	entries := c.ckpEntries
 	datas := c.ckpdatas
-	dataFactory := c.dataF
 	maxTs := types.TS{}
 	var ckpVers []uint32
 	var ckpDatas []*logtail.CheckpointData
 	if maxGlobal := r.MaxGlobalCheckpoint(); maxGlobal != nil {
-		err = datas[c.globalCkpIdx].ApplyReplayTo(c, r.catalog, dataFactory, false)
+		err = datas[c.globalCkpIdx].ApplyReplayTo(c, r.catalog, false)
 		if err != nil {
 			return
 		}
@@ -528,7 +523,6 @@ func (c *CkpReplayer) ReplayObjectlist(phase string) (err error) {
 		err = datas[i].ApplyReplayTo(
 			c,
 			r.catalog,
-			dataFactory,
 			false)
 		if err != nil {
 			return
@@ -577,12 +571,10 @@ func (c *CkpReplayer) resetObjectCountMap() {
 
 func (r *runner) BuildReplayer(
 	dir string,
-	dataFactory catalog.DataFactory,
 ) *CkpReplayer {
 	replayer := &CkpReplayer{
 		r:              r,
 		dir:            dir,
-		dataF:          dataFactory,
 		objectCountMap: make(map[uint64]int),
 	}
 	objectWorker := make([]sm.Queue, DefaultObjectReplayWorkerCount)

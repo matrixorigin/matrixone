@@ -42,8 +42,6 @@ func NewBatchStoreDriver(
 	return &walDriver{impl: impl}
 }
 
-func (driver *walDriver) Start() {}
-
 func (driver *walDriver) GetCheckpointed() uint64 {
 	return driver.impl.GetCheckpointed(GroupPrepare)
 }
