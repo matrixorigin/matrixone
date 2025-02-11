@@ -167,7 +167,6 @@ func Open(
 		db.Catalog,
 		db.Wal,
 		db.Runtime,
-		dataFactory,
 		opts.MaxMessageSize,
 	)
 	txnFactory := txnimpl.TxnFactory(db.Catalog)
