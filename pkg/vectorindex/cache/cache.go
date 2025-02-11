@@ -15,7 +15,6 @@
 package cache
 
 import (
-	"fmt"
 	"os"
 	"os/signal"
 	"sync"
@@ -102,7 +101,6 @@ func (s *VectorIndexSearch) Expired() bool {
 
 	ts := s.ExpireAt.Load()
 	now := time.Now().UnixMicro()
-	os.Stderr.WriteString(fmt.Sprintf("expired %t, now = %d, expired_at = %d\n", (ts > 0 && ts < now), now, ts))
 	return (ts > 0 && ts < now)
 }
 
@@ -120,7 +118,6 @@ func (s *VectorIndexSearch) Search(newalgo VectorIndexSearchIf, query []float32,
 
 	for s.Status.Load() == 0 {
 		s.Mutex.RUnlock()
-		os.Stderr.WriteString("Search index is not ready yet\n")
 		time.Sleep(time.Millisecond)
 		s.Mutex.RLock()
 	}
@@ -169,8 +166,6 @@ func (c *VectorIndexCache) serve() {
 	}
 
 	// try clean up the temp directory. set tempdir to /tmp/hnsw
-
-	os.Stderr.WriteString("Serve start\n")
 	c.ticker = time.NewTicker(c.TickerInterval)
 	c.done = make(chan bool)
 	c.sigc = make(chan os.Signal, 3)
@@ -184,23 +179,19 @@ func (c *VectorIndexCache) serve() {
 		for {
 			select {
 			case <-c.done:
-				os.Stderr.WriteString("done handled...\n")
 				c.exited.Store(true)
 				return
 			case <-c.sigc:
 				// sig can be syscall.SIGTERM or syscall.SIGINT
-				os.Stderr.WriteString("signal handled...\n")
 				c.exited.Store(true)
 				c.Destroy()
 				return
 			case <-c.ticker.C:
-				os.Stderr.WriteString("ticker...\n")
 				// delete expired index
 				c.HouseKeeping()
 			}
 		}
 	}()
-	os.Stderr.WriteString("Serve end\n")
 }
 
 // initialize the Cache and only call once
@@ -211,7 +202,6 @@ func (c *VectorIndexCache) Once() {
 // house keeping to check expired keys and delete from cache
 func (c *VectorIndexCache) HouseKeeping() {
 
-	os.Stderr.WriteString("house keeping\n")
 	expiredkeys := make([]string, 0, 16)
 
 	c.IndexMap.Range(func(key, value any) bool {
@@ -226,12 +216,10 @@ func (c *VectorIndexCache) HouseKeeping() {
 		value, loaded := c.IndexMap.LoadAndDelete(k)
 		if loaded {
 			algo := value.(*VectorIndexSearch)
-			os.Stderr.WriteString(fmt.Sprintf("HouseKeep: key %s deleted\n", k))
 			algo.Destroy()
 			algo = nil
 		}
 	}
-	os.Stderr.WriteString("house keeping end\n")
 }
 
 // destroy the cache
@@ -264,7 +252,6 @@ func (c *VectorIndexCache) Search(proc *process.Process, key string, newalgo Vec
 			c.IndexMap.Delete(key)
 			return nil, nil, err
 		}
-		os.Stderr.WriteString("New Algo and Loaded From Database\n")
 	}
 	return algo.Search(newalgo, query, limit)
 }

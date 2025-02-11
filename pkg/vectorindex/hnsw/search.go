@@ -253,7 +253,6 @@ func (s *HnswSearch) Search(query []float32, limit uint) (keys []int64, distance
 		key, distance := heap.Pop()
 		reskeys = append(reskeys, key)
 		resdistances = append(resdistances, distance)
-		//os.Stderr.WriteString(fmt.Sprintf("i=%d Key %d distance = %f\n", i, key, distance))
 	}
 
 	return reskeys, resdistances, nil
@@ -285,7 +284,6 @@ func (s *HnswSearch) Destroy() {
 		idx.Index.Destroy()
 	}
 	s.Indexes = nil
-	os.Stderr.WriteString("hnsw search destroy\n")
 }
 
 // load metadata from database
@@ -317,7 +315,6 @@ func (s *HnswSearch) LoadMetadata(proc *process.Process) ([]*HnswSearchIndex, er
 
 			idx := &HnswSearchIndex{Id: id, Checksum: chksum, Timestamp: ts, Filesize: fs}
 			indexes = append(indexes, idx)
-			os.Stderr.WriteString(fmt.Sprintf("Meta %d %d %d %s\n", id, ts, fs, chksum))
 		}
 	}
 

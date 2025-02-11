@@ -357,7 +357,6 @@ func (h *HnswBuild) ToInsertSql(ts int64) ([]string, error) {
 	}
 
 	sqls := make([]string, 0, len(h.indexes)+1)
-	os.Stderr.WriteString(fmt.Sprintf("SaveToDb len = %d\n", len(h.indexes)))
 
 	metas := make([]string, 0, len(h.indexes))
 	for _, idx := range h.indexes {

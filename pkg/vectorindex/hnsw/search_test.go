@@ -15,9 +15,7 @@
 package hnsw
 
 import (
-	"fmt"
 	"os"
-	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -73,7 +71,6 @@ func TestHnsw(t *testing.T) {
 	tblcfg := vectorindex.IndexTableConfig{DbName: "db", SrcTable: "src", MetadataTable: "__secondary_meta", IndexTable: "__secondary_index"}
 	fp32a := []float32{0, 1, 2}
 
-	os.Stderr.WriteString(fmt.Sprintf("NUM CPU = %d\n", runtime.NumCPU()))
 	var wg sync.WaitGroup
 	nthread := 64
 
@@ -98,7 +95,6 @@ func TestHnsw(t *testing.T) {
 
 	wg.Wait()
 
-	os.Stderr.WriteString("threads stopped\n")
 	time.Sleep(3 * time.Second)
 	cache.Cache.Destroy()
 }

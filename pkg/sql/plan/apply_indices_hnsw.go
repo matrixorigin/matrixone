@@ -16,8 +16,6 @@ package plan
 
 import (
 	"encoding/json"
-	"fmt"
-	"os"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -83,11 +81,8 @@ func (builder *QueryBuilder) checkValidDistFn(nodeID int32, projNode, sortNode, 
 	if value.GetF() != nil {
 		fnexpr := value.GetF()
 		if fnexpr.Func.ObjName != "cast" {
-			os.Stderr.WriteString("value is not a cast of array float32\n")
 			return false
 		}
-
-		os.Stderr.WriteString(fmt.Sprintf("vec32 %s\n", fnexpr.Args[0].GetLit().GetSval()))
 	} else {
 		return false
 	}
@@ -140,9 +135,6 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, projNode
 
 	//distFnName := distFuncInternalDistFunc[distFnExpr.Func.ObjName]
 	// fp32vstr := distFnExpr.Args[1].GetLit().GetSval() // fp32vec
-
-	os.Stderr.WriteString(fmt.Sprintf("DISTFN KEY %v\n", key))
-	os.Stderr.WriteString(fmt.Sprintf("DISTFN VALUE %v\n", value))
 
 	// JOIN between source table and hnsw_search table function
 	var exprs tree.Exprs
@@ -234,8 +226,6 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, projNode
 
 	scanNode.Limit = nil
 	scanNode.Offset = nil
-
-	os.Stderr.WriteString(fmt.Sprintf("TABLE NODE %v,   tag = %d\n", curr_node, curr_node_tag))
 
 	// Create SortBy with distance column from table function
 	orderByScore := make([]*OrderBySpec, 0, 1)

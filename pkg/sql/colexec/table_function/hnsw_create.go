@@ -16,8 +16,6 @@ package table_function
 
 import (
 	"encoding/json"
-	"fmt"
-	"os"
 	"strconv"
 	"time"
 
@@ -49,8 +47,6 @@ type hnswCreateState struct {
 }
 
 func (u *hnswCreateState) end(tf *TableFunction, proc *process.Process) error {
-	os.Stderr.WriteString("hnswCreate END\n")
-
 	if u.build == nil {
 		return nil
 	}
@@ -60,7 +56,6 @@ func (u *hnswCreateState) end(tf *TableFunction, proc *process.Process) error {
 		return err
 	}
 
-	os.Stderr.WriteString(fmt.Sprintf("SQLS: %v\n", sqls))
 	for _, s := range sqls {
 		res, err := hnsw_runSql(proc, s)
 		if err != nil {
@@ -204,10 +199,6 @@ func (u *hnswCreateState) start(tf *TableFunction, proc *process.Process, nthRow
 		u.idxcfg.Usearch.Dimensions = uint(dimension)
 		u.idxcfg.Type = "hnsw"
 
-		os.Stderr.WriteString(fmt.Sprintf("Param %v\n", u.param))
-		os.Stderr.WriteString(fmt.Sprintf("Cfg %v\n", u.tblcfg))
-		os.Stderr.WriteString(fmt.Sprintf("USearch Cfg %v\n", u.idxcfg))
-
 		u.build, err = hnsw.NewHnswBuild(proc, u.idxcfg, u.tblcfg)
 		if err != nil {
 			return err
@@ -237,7 +228,6 @@ func (u *hnswCreateState) start(tf *TableFunction, proc *process.Process, nthRow
 	if err != nil {
 		return err
 	}
-	os.Stderr.WriteString(fmt.Sprintf("id:%d fp32: %v\n", id, f32a))
 	return nil
 }
 

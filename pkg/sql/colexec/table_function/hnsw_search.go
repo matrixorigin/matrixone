@@ -16,8 +16,6 @@ package table_function
 
 import (
 	"encoding/json"
-	"fmt"
-	"os"
 	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -87,7 +85,6 @@ func (u *hnswSearchState) call(tf *TableFunction, proc *process.Process) (vm.Cal
 		return vm.CancelResult, nil
 	}
 
-	os.Stderr.WriteString(fmt.Sprintf("CALL write %d rows\n", u.batch.RowCount()))
 	// write the batch
 	return vm.CallResult{Status: vm.ExecNext, Batch: u.batch}, nil
 }
@@ -201,10 +198,6 @@ func (u *hnswSearchState) start(tf *TableFunction, proc *process.Process, nthRow
 		u.idxcfg.Usearch.Dimensions = uint(dimension)
 		u.idxcfg.Type = "hnsw"
 
-		os.Stderr.WriteString(fmt.Sprintf("Param %v\n", u.param))
-		os.Stderr.WriteString(fmt.Sprintf("Cfg %v\n", u.tblcfg))
-		os.Stderr.WriteString(fmt.Sprintf("USearch Cfg %v\n", u.idxcfg))
-
 		u.batch = tf.createResultBatch()
 		u.inited = true
 	}
@@ -224,8 +217,6 @@ func (u *hnswSearchState) start(tf *TableFunction, proc *process.Process, nthRow
 
 	f32a := types.BytesToArray[float32](f32aVec.GetBytesAt(nthRow))
 
-	os.Stderr.WriteString(fmt.Sprintf("vec %v\n", f32a))
-
 	veccache.Cache.Once()
 
 	algo := newHnswAlgo(u.idxcfg, u.tblcfg)
@@ -233,8 +224,5 @@ func (u *hnswSearchState) start(tf *TableFunction, proc *process.Process, nthRow
 	if err != nil {
 		return err
 	}
-
-	os.Stderr.WriteString(fmt.Sprintf("keys %v, distances %v\n", u.keys, u.distances))
-
 	return nil
 }
