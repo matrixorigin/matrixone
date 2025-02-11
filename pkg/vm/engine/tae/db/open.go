@@ -144,9 +144,6 @@ func Open(
 		panic(fmt.Sprintf("open-tae: invalid txn mode %s", txnMode))
 	}
 
-	serviceDir := path.Join(dirname, "data")
-	fs := objectio.NewObjectFS(opts.Fs, serviceDir)
-	localFs := objectio.NewObjectFS(opts.LocalFs, serviceDir)
 	transferTable, err := model.NewTransferTable[*model.TransferHashPage](ctx, opts.LocalFs)
 	if err != nil {
 		panic(fmt.Sprintf("open-tae: model.NewTransferTable failed, %s", err))
@@ -161,8 +158,8 @@ func Open(
 	scheduler := newTaskScheduler(db, db.Opts.SchedulerCfg.AsyncWorkers, db.Opts.SchedulerCfg.IOWorkers)
 	db.Runtime = dbutils.NewRuntime(
 		dbutils.WithRuntimeTransferTable(transferTable),
-		dbutils.WithRuntimeObjectFS(fs),
-		dbutils.WithRuntimeLocalFS(localFs),
+		dbutils.WithRuntimeObjectFS(opts.Fs),
+		dbutils.WithRuntimeLocalFS(opts.LocalFs),
 		dbutils.WithRuntimeSmallPool(dbutils.MakeDefaultSmallPool("small-vector-pool")),
 		dbutils.WithRuntimeTransientPool(dbutils.MakeDefaultTransientPool("trasient-vector-pool")),
 		dbutils.WithRuntimeScheduler(scheduler),
@@ -296,7 +293,6 @@ func Open(
 	// w-zr TODO: need to support replay and write mode
 	db.MergeScheduler = merge.NewScheduler(db.Runtime, merge.NewTaskServiceGetter(opts.TaskServiceGetter))
 	scanner.RegisterOp(db.MergeScheduler)
-	db.Wal.Start()
 	db.BGFlusher.Start()
 
 	db.BGScanner = w.NewHeartBeater(
@@ -311,7 +307,7 @@ func Open(
 	cleaner := gc2.NewCheckpointCleaner(
 		opts.Ctx,
 		opts.SID,
-		fs,
+		opts.Fs,
 		db.Wal,
 		db.BGCheckpointRunner,
 		gc2.WithCanGCCacheSize(opts.GCCfg.CacheSize),

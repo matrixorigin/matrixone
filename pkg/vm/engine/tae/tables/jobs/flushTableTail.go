@@ -672,7 +672,7 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context, isTombstone bool
 	objID := objectio.NewObjectid()
 	name := objectio.BuildObjectNameWithObjectID(objID)
 	writer, err := ioutil.NewBlockWriterNew(
-		task.rt.Fs.Service,
+		task.rt.Fs,
 		name,
 		schema.Version,
 		seqnums,

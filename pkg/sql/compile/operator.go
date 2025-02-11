@@ -414,10 +414,15 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op := table_function.NewArgument()
 		op.FuncName = t.FuncName
 		op.Args = t.Args
+		op.OffsetTotal = t.OffsetTotal
 		op.Rets = t.Rets
+		op.CanOpt = t.CanOpt
 		op.Attrs = t.Attrs
 		op.Params = t.Params
 		op.SetInfo(&info)
+		if op.FuncName == "generate_series" {
+			op.GenerateSeriesCtrNumState(t.OffsetTotal[index][0], t.OffsetTotal[index][1], t.GetGenerateSeriesCtrNumStateStep(), t.OffsetTotal[index][0])
+		}
 		return op
 	case vm.External:
 		t := sourceOp.(*external.External)
