@@ -6988,48 +6988,51 @@ func TestSnapshotGC(t *testing.T) {
 	assert.True(t, end.GE(&minEnd))
 	err = db.DiskCleaner.GetCleaner().DoCheck()
 	assert.Nil(t, err)
-	dataObject, tombstoneObject := testutil.GetUserTablesInsBatch(t, rele2.ID(), types.TS{}, viewSnapshot, db.Catalog)
+	tbl := rele2.GetMeta().(*catalog.TableEntry)
+	db2, err := db.Catalog.GetDatabaseByID(tbl.GetDB().ID)
+	assert.NoError(t, err)
+	tbl2, err := db2.GetTableEntryByID(tbl.ID)
 	db.BGCheckpointRunner.GetCheckpointMetaFiles()
 	ckps, err := checkpoint.ListSnapshotCheckpoint(ctx, "", db.Opts.Fs, viewSnapshot, db.BGCheckpointRunner.GetCheckpointMetaFiles())
 	assert.Nil(t, err)
 	objects := make(map[string]struct{})
 	tombstones := make(map[string]struct{})
 	for _, ckp := range ckps {
-		_, _, dataObject, tombstoneObject, cbs := testutil.ReadSnapshotCheckpoint(t, rele2.ID(), ckp.GetLocation(), db.Opts.Fs)
-		for _, cb := range cbs {
-			if cb != nil {
-				cb()
-			}
-		}
-		if dataObject != nil {
-			moIns, err := batch.ProtoBatchToBatch(dataObject)
-			assert.NoError(t, err)
-			for i := 0; i < moIns.Vecs[2].Length(); i++ {
-				stats := objectio.ObjectStats(moIns.Vecs[2].GetBytesAt(i))
-				objects[stats.ObjectName().String()] = struct{}{}
-			}
-		}
-		if tombstoneObject != nil {
-			moIns, err := batch.ProtoBatchToBatch(tombstoneObject)
-			assert.NoError(t, err)
-			for i := 0; i < moIns.Vecs[2].Length(); i++ {
-				stats := objectio.ObjectStats(moIns.Vecs[2].GetBytesAt(i))
-				tombstones[stats.ObjectName().String()] = struct{}{}
-			}
-		}
+		logtail.ConsumeCheckpointWithTableID(
+			ctx,
+			rele2.ID(),
+			ckp.GetLocation(),
+			func(ctx context.Context, obj objectio.ObjectEntry, isTombstone bool) (err error) {
+				if isTombstone {
+					tombstones[obj.ObjectName().String()] = struct{}{}
+				} else {
+					objects[obj.ObjectName().String()] = struct{}{}
+				}
+				return
+			},
+			common.DebugAllocator,
+			tae.Opts.Fs,
+		)
 	}
-	vec1 := dataObject.GetVectorByName(catalog.ObjectAttr_ObjectStats).GetDownstreamVector()
-	vec2 := tombstoneObject.GetVectorByName(catalog.ObjectAttr_ObjectStats).GetDownstreamVector()
-	for i := 0; i < dataObject.Length(); i++ {
-		stats := objectio.ObjectStats(vec1.GetBytesAt(i))
-		_, ok := objects[stats.ObjectName().String()]
+	p := &catalog.LoopProcessor{}
+	p.ObjectFn = func(oe *catalog.ObjectEntry) error {
+		if oe.CreatedAt.GT(&viewSnapshot) {
+			return nil
+		}
+		_, ok := objects[oe.ObjectName().String()]
 		assert.True(t, ok)
+		return nil
 	}
-	for i := 0; i < tombstoneObject.Length(); i++ {
-		stats := objectio.ObjectStats(vec2.GetBytesAt(i))
-		_, ok := tombstones[stats.ObjectName().String()]
+	p.TombstoneFn = func(oe *catalog.ObjectEntry) error {
+		if oe.CreatedAt.GT(&viewSnapshot) {
+			return nil
+		}
+		_, ok := tombstones[oe.ObjectName().String()]
 		assert.True(t, ok)
+		return nil
 	}
+	err = tbl2.RecurLoop(p)
+	assert.NoError(t, err)
 	assert.True(t, checkPK == db.DiskCleaner.GetCleaner().GetTablePK(checkrel.ID()))
 }
 
@@ -9454,47 +9457,50 @@ func TestSnapshotCheckpoint(t *testing.T) {
 			t.Log(tae.Catalog.SimplePPString(3))
 			tae.ForceCheckpoint()
 			tae.ForceCheckpoint()
-			dataObject, tombstoneObject := testutil.GetUserTablesInsBatch(t, rel1.ID(), types.TS{}, snapshot, db.Catalog)
+			tbl := rel1.GetMeta().(*catalog.TableEntry)
+			db2, err := db.Catalog.GetDatabaseByID(tbl.GetDB().ID)
+			assert.NoError(t, err)
+			tbl2, err := db2.GetTableEntryByID(tbl.ID)
 			ckps, err := checkpoint.ListSnapshotCheckpoint(ctx, "", db.Opts.Fs, snapshot, db.BGCheckpointRunner.GetCheckpointMetaFiles())
 			assert.Nil(t, err)
 			objects := make(map[string]struct{})
 			tombstones := make(map[string]struct{})
 			for _, ckp := range ckps {
-				_, _, dataObject, tombstoneObject, cbs := testutil.ReadSnapshotCheckpoint(t, rel1.ID(), ckp.GetLocation(), db.Opts.Fs)
-				for _, cb := range cbs {
-					if cb != nil {
-						cb()
-					}
-				}
-				if dataObject != nil {
-					moIns, err := batch.ProtoBatchToBatch(dataObject)
-					assert.NoError(t, err)
-					for i := 0; i < moIns.Vecs[2].Length(); i++ {
-						stats := objectio.ObjectStats(moIns.Vecs[2].GetBytesAt(i))
-						objects[stats.ObjectName().String()] = struct{}{}
-					}
-				}
-				if tombstoneObject != nil {
-					moIns, err := batch.ProtoBatchToBatch(tombstoneObject)
-					assert.NoError(t, err)
-					for i := 0; i < moIns.Vecs[2].Length(); i++ {
-						stats := objectio.ObjectStats(moIns.Vecs[2].GetBytesAt(i))
-						tombstones[stats.ObjectName().String()] = struct{}{}
-					}
-				}
+				logtail.ConsumeCheckpointWithTableID(
+					ctx,
+					rel1.ID(),
+					ckp.GetLocation(),
+					func(ctx context.Context, obj objectio.ObjectEntry, isTombstone bool) (err error) {
+						if isTombstone {
+							tombstones[obj.ObjectName().String()] = struct{}{}
+						} else {
+							objects[obj.ObjectName().String()] = struct{}{}
+						}
+						return
+					},
+					common.DebugAllocator,
+					tae.Opts.Fs,
+				)
 			}
-			vec1 := dataObject.GetVectorByName(catalog.ObjectAttr_ObjectStats).GetDownstreamVector()
-			vec2 := tombstoneObject.GetVectorByName(catalog.ObjectAttr_ObjectStats).GetDownstreamVector()
-			for i := 0; i < dataObject.Length(); i++ {
-				stats := objectio.ObjectStats(vec1.GetBytesAt(i))
-				_, ok := objects[stats.ObjectName().String()]
+			p := &catalog.LoopProcessor{}
+			p.ObjectFn = func(oe *catalog.ObjectEntry) error {
+				if oe.CreatedAt.GT(&snapshot) {
+					return nil
+				}
+				_, ok := objects[oe.ObjectName().String()]
 				assert.True(t, ok)
+				return nil
 			}
-			for i := 0; i < tombstoneObject.Length(); i++ {
-				stats := objectio.ObjectStats(vec2.GetBytesAt(i))
-				_, ok := tombstones[stats.ObjectName().String()]
+			p.TombstoneFn = func(oe *catalog.ObjectEntry) error {
+				if oe.CreatedAt.GT(&snapshot) {
+					return nil
+				}
+				_, ok := tombstones[oe.ObjectName().String()]
 				assert.True(t, ok)
+				return nil
 			}
+			err = tbl2.RecurLoop(p)
+			assert.NoError(t, err)
 		},
 	)
 }
@@ -11280,7 +11286,7 @@ func TestCheckpointV2(t *testing.T) {
 		addobjFn(tbl)
 	}
 
-	collector := logtail.NewBaseCollector_V2(types.TS{}, tae.TxnMgr.Now(), tae.Opts.Fs)
+	collector := logtail.NewBaseCollector_V2(types.TS{}, tae.TxnMgr.Now(), 0, tae.Opts.Fs)
 	err = collector.Collect(tae.Catalog)
 	assert.NoError(t, err)
 	data := collector.OrphanData()
