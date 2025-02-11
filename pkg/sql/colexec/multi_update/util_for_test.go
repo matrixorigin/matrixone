@@ -22,6 +22,7 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -49,10 +50,11 @@ var (
 )
 
 type testCase struct {
-	op           *MultiUpdate
-	inputBatchs  []*batch.Batch
-	expectErr    bool
-	affectedRows uint64
+	op                *MultiUpdate
+	inputBatchs       []*batch.Batch
+	expectErr         bool
+	relResetExpectErr bool
+	affectedRows      uint64
 }
 
 func runTestCases(t *testing.T, proc *process.Process, tcs []*testCase) {
@@ -101,7 +103,17 @@ func runTestCases(t *testing.T, proc *process.Process, tcs []*testCase) {
 		if tc.op.ctr.s3Writer != nil {
 			tc.op.ctr.s3Writer.flushThreshold = 2 * mpool.MB
 		}
+		if tc.relResetExpectErr {
+			require.Error(t, err)
+			for _, bat := range tc.inputBatchs {
+				bat.Clean(proc.GetMPool())
+			}
+			tc.op.Children[0].Free(proc, false, nil)
+			tc.op.Free(proc, true, err)
+			continue
+		}
 		require.NoError(t, err)
+
 		for {
 			res, err = vm.Exec(tc.op, proc)
 			if res.Batch == nil || res.Status == vm.ExecStop {
@@ -172,7 +184,7 @@ func prepareTestCtx(t *testing.T, withFs bool) (context.Context, *gomock.Control
 	return ctx, ctrl, proc
 }
 
-func prepareTestEng(ctrl *gomock.Controller) engine.Engine {
+func prepareTestEng(ctrl *gomock.Controller, relationResetReturnError bool) engine.Engine {
 	eng := mock_frontend.NewMockEngine(ctrl)
 	eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 	eng.EXPECT().Hints().Return(engine.Hints{
@@ -184,7 +196,12 @@ func prepareTestEng(ctrl *gomock.Controller) engine.Engine {
 
 	relation := mock_frontend.NewMockRelation(ctrl)
 	relation.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-	relation.EXPECT().Reset(gomock.Any()).Return(nil).AnyTimes()
+	if relationResetReturnError {
+		relation.EXPECT().Reset(gomock.Any()).Return(moerr.NewInternalErrorNoCtx("")).AnyTimes()
+	} else {
+		relation.EXPECT().Reset(gomock.Any()).Return(nil).AnyTimes()
+	}
+
 	relation.EXPECT().Delete(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
 	database.EXPECT().Relation(gomock.Any(), gomock.Any(), gomock.Any()).Return(relation, nil).AnyTimes()
@@ -294,7 +311,7 @@ func buildTestCase(
 	eng engine.Engine,
 	inputBats []*batch.Batch,
 	affectRows uint64,
-	action UpdateAction) *testCase {
+	action UpdateAction, relResetExpectErr bool) *testCase {
 
 	retCase := &testCase{
 		op: &MultiUpdate{
@@ -311,9 +328,10 @@ func buildTestCase(
 				},
 			},
 		},
-		inputBatchs:  inputBats,
-		expectErr:    false,
-		affectedRows: affectRows,
+		inputBatchs:       inputBats,
+		expectErr:         false,
+		relResetExpectErr: relResetExpectErr,
+		affectedRows:      affectRows,
 	}
 
 	return retCase
