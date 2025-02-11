@@ -126,11 +126,6 @@ func Open(
 		db.Controller.Stop()
 	})
 
-	txnMode := db.GetTxnMode()
-	if !txnMode.IsValid() {
-		panic(fmt.Sprintf("open-tae: invalid txn mode %s", txnMode))
-	}
-
 	transferTable, err := model.NewTransferTable[*model.TransferHashPage](ctx, opts.LocalFs)
 	if err != nil {
 		panic(fmt.Sprintf("open-tae: model.NewTransferTable failed, %s", err))
@@ -142,7 +137,17 @@ func Open(
 	case options.LogstoreLogservice:
 		db.Wal = wal.NewLogserviceDriver(opts.Ctx, opts.Lc)
 	}
-	scheduler := newTaskScheduler(db, db.Opts.SchedulerCfg.AsyncWorkers, db.Opts.SchedulerCfg.IOWorkers)
+	onErrorCalls = append(onErrorCalls, func() {
+		db.Wal.Close()
+	})
+
+	scheduler := newTaskScheduler(
+		db, db.Opts.SchedulerCfg.AsyncWorkers, db.Opts.SchedulerCfg.IOWorkers,
+	)
+	onErrorCalls = append(onErrorCalls, func() {
+		scheduler.Stop()
+	})
+
 	db.Runtime = dbutils.NewRuntime(
 		dbutils.WithRuntimeTransferTable(transferTable),
 		dbutils.WithRuntimeObjectFS(opts.Fs),
@@ -160,6 +165,14 @@ func Open(
 		return
 	}
 	db.usageMemo.C = db.Catalog
+	onErrorCalls = append(onErrorCalls, func() {
+		db.Catalog.Close()
+	})
+
+	txnMode := db.GetTxnMode()
+	if !txnMode.IsValid() {
+		panic(fmt.Sprintf("open-tae: invalid txn mode %s", txnMode))
+	}
 
 	// Init and start txn manager
 	txnStoreFactory := txnimpl.TxnStoreFactory(
