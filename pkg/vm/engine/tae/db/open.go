@@ -17,7 +17,6 @@ package db
 import (
 	"context"
 	"fmt"
-	"path"
 	"sync/atomic"
 	"time"
 
@@ -27,7 +26,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -75,11 +73,16 @@ func Open(
 	opts *options.Options,
 	dbOpts ...DBOption,
 ) (db *DB, err error) {
+	opts = opts.FillDefaults(dirname)
+	// TODO: remove
+	fillRuntimeOptions(opts)
+
 	dbLocker, err := createDBLock(dirname)
 
 	logutil.Info(
 		Phase_Open,
 		zap.String("db-dirname", dirname),
+		zap.String("config", opts.JsonString()),
 		zap.Error(err),
 	)
 	startTime := time.Now()
@@ -106,22 +109,6 @@ func Open(
 			zap.Error(err),
 		)
 	}()
-
-	opts = opts.FillDefaults(dirname)
-	fillRuntimeOptions(opts)
-
-	logutil.Info(
-		Phase_Open,
-		zap.String("config", opts.JsonString()),
-	)
-
-	if opts.Fs == nil {
-		// TODO:fileservice needs to be passed in as a parameter
-		opts.Fs = objectio.TmpNewFileservice(ctx, path.Join(dirname, "data"))
-	}
-	if opts.LocalFs == nil {
-		opts.LocalFs = objectio.TmpNewFileservice(ctx, path.Join(dirname, "data"))
-	}
 
 	db = &DB{
 		Dir:       dirname,
