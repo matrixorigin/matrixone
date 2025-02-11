@@ -61,13 +61,14 @@ type Catalog struct {
 	gcTS      types.TS
 }
 
-func MockCatalog() *Catalog {
+func MockCatalog(dataFactory DataFactory) *Catalog {
 	catalog := &Catalog{
 		RWMutex:     new(sync.RWMutex),
 		IDAllocator: NewIDAllocator(),
 		entries:     make(map[uint64]*common.GenericDLNode[*DBEntry]),
 		nameNodes:   make(map[string]*nodeList[*DBEntry]),
 		link:        common.NewGenericSortedDList((*DBEntry).Less),
+		DataFactory: dataFactory,
 	}
 	catalog.InitSystemDB()
 	return catalog

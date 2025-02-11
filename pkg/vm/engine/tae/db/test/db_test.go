@@ -11293,10 +11293,10 @@ func TestCheckpointV2(t *testing.T) {
 	assert.NoError(t, err)
 	data.Close()
 
-	catalog2 := catalog.MockCatalog()
 	dataFactory := tables.NewDataFactory(
 		tae.Runtime, tae.Dir,
 	)
+	catalog2 := catalog.MockCatalog(dataFactory)
 
 	err = logtail.PrefetchCheckpoint(ctx, "", loc, common.DebugAllocator, tae.Opts.Fs)
 	assert.NoError(t, err)
@@ -11392,10 +11392,10 @@ func TestCheckpointV2Compatibility(t *testing.T) {
 	tae.ForceCheckpoint()
 	tae.ForceCheckpoint()
 
-	catalog2 := catalog.MockCatalog()
 	dataFactory := tables.NewDataFactory(
 		tae.Runtime, tae.Dir,
 	)
+	catalog2 := catalog.MockCatalog(dataFactory)
 
 	ckps := tae.BGCheckpointRunner.GetAllCheckpoints()
 	assert.Equal(t, 2, len(ckps))
