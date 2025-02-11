@@ -106,8 +106,8 @@ func NewSystemTableEntry(db *DBEntry, id uint64, schema *Schema) *TableEntry {
 			Schema:          schema,
 			TombstoneSchema: GetTombstoneSchema(schema)})
 
-	if DefaultTableDataFactory != nil {
-		e.tableData = DefaultTableDataFactory(e)
+	if db.catalog.dataFactory != nil {
+		e.tableData = db.catalog.dataFactory.MakeTableFactory()(e)
 	}
 	return e
 }

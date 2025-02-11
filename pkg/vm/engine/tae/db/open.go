@@ -156,8 +156,7 @@ func Open(
 	dataFactory := tables.NewDataFactory(
 		db.Runtime, db.Dir,
 	)
-	catalog.DefaultTableDataFactory = dataFactory.MakeTableFactory()
-	if db.Catalog, err = catalog.OpenCatalog(db.usageMemo); err != nil {
+	if db.Catalog, err = catalog.OpenCatalog(db.usageMemo, dataFactory); err != nil {
 		return
 	}
 	db.usageMemo.C = db.Catalog
