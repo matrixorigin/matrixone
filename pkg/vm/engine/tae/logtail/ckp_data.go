@@ -220,6 +220,47 @@ func ReplayCheckpoint(
 	return
 }
 
+func ForEachRowInCheckpointData(
+	ctx context.Context,
+	forEachRow func(
+		accout uint32,
+		dbid, tid uint64,
+		objectType int8,
+		objectStats objectio.ObjectStats,
+		create, delete types.TS,
+		rowID types.Rowid,
+	) error,
+	location objectio.Location,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+) (objectBatch *batch.Batch,err error) {
+	var release func()
+	var metaBatch *batch.Batch
+	if metaBatch, release, err = readMetaBatch(
+		ctx, location, mp, fs,
+	); err != nil {
+		return
+	}
+	defer release()
+	objs := ckputil.ScanObjectStats(metaBatch)
+	for _, obj := range objs {
+
+		if err = ckputil.ForEachFile(
+			ctx,
+			obj,
+			forEachRow,
+			func() error {
+				return nil
+			},
+			mp,
+			fs,
+		); err != nil {
+			return
+		}
+	}
+	return
+}
+
 func PrefetchCheckpointWithTableID(
 	ctx context.Context,
 	sid string,
