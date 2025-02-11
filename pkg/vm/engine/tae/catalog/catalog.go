@@ -49,16 +49,16 @@ type DataFactory interface {
 }
 
 type Catalog struct {
+	DataFactory
 	*IDAllocator
 	*sync.RWMutex
 
-	usageMemo   any
-	entries     map[uint64]*common.GenericDLNode[*DBEntry]
-	nameNodes   map[string]*nodeList[*DBEntry]
-	link        *common.GenericSortedDList[*DBEntry]
-	nodesMu     sync.RWMutex
-	gcTS        types.TS
-	dataFactory DataFactory
+	usageMemo any
+	entries   map[uint64]*common.GenericDLNode[*DBEntry]
+	nameNodes map[string]*nodeList[*DBEntry]
+	link      *common.GenericSortedDList[*DBEntry]
+	nodesMu   sync.RWMutex
+	gcTS      types.TS
 }
 
 func MockCatalog() *Catalog {
@@ -81,7 +81,7 @@ func OpenCatalog(usageMemo any, dataFactory DataFactory) (*Catalog, error) {
 		nameNodes:   make(map[string]*nodeList[*DBEntry]),
 		link:        common.NewGenericSortedDList((*DBEntry).Less),
 		usageMemo:   usageMemo,
-		dataFactory: dataFactory,
+		DataFactory: dataFactory,
 	}
 	catalog.InitSystemDB()
 	return catalog, nil
