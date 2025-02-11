@@ -33,15 +33,15 @@ func TestBuild(t *testing.T) {
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool("", m)
 
-	ndim := 3
+	ndim := 32
 	nthread := 5
 	nitem := vectorindex.MaxIndexCapacity
 
 	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(uint(ndim))}
 	idxcfg.Usearch.Metric = usearch.L2sq
-	//idxcfg.Usearch.Connectivity = 100
-	//idxcfg.Usearch.ExpansionAdd = 512
-	//idxcfg.Usearch.ExpansionSearch = 128
+	idxcfg.Usearch.Connectivity = 48    // default 16
+	idxcfg.Usearch.ExpansionAdd = 128   // default 128
+	idxcfg.Usearch.ExpansionSearch = 30 // default 64
 	tblcfg := vectorindex.IndexTableConfig{DbName: "db", SrcTable: "src", MetadataTable: "__secondary_meta", IndexTable: "__secondary_index"}
 
 	build, err := NewHnswBuild(proc, idxcfg, tblcfg)
@@ -60,6 +60,7 @@ func TestBuild(t *testing.T) {
 		}
 	}
 
+	fmt.Printf("sample created\n")
 	var wg sync.WaitGroup
 	for j := 0; j < nthread; j++ {
 		wg.Add(1)
@@ -75,6 +76,7 @@ func TestBuild(t *testing.T) {
 	}
 	wg.Wait()
 
+	fmt.Printf("model built\n")
 	sqls, err := build.ToInsertSql(time.Now().UnixMicro())
 	require.Nil(t, err)
 	_ = sqls
@@ -83,6 +85,7 @@ func TestBuild(t *testing.T) {
 	indexes := build.GetIndexes()
 	require.Equal(t, 5, len(indexes))
 
+	fmt.Printf("model search\n")
 	// load index file and search
 	search := NewHnswSearch(idxcfg, tblcfg)
 	defer search.Destroy()
@@ -126,8 +129,8 @@ func TestBuild(t *testing.T) {
 	wg2.Wait()
 
 	recall := float32(nthread*nitem-failed) / float32(nthread*nitem)
-	require.True(t, (recall > 0.96))
 	fmt.Printf("Recall %f\n", float32(nthread*nitem-failed)/float32(nthread*nitem))
+	require.True(t, (recall > 0.96))
 
 }
 

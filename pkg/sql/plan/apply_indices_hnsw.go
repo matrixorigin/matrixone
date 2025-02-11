@@ -128,7 +128,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, projNode
 	distFnExpr := sortNode.OrderBy[0].Expr.GetF()
 	sortDirection := sortNode.OrderBy[0].Flag // For the most part, it is ASC
 
-	key, value, ok := builder.getArgsFromDistFn(scanNode, distFnExpr, keypart)
+	_, value, ok := builder.getArgsFromDistFn(scanNode, distFnExpr, keypart)
 	if !ok {
 		return nodeID, moerr.NewInternalErrorNoCtx("invalid distance function")
 	}

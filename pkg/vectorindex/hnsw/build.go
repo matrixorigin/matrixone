@@ -198,7 +198,7 @@ func (idx *HnswBuildIndex) Add(key int64, vec []float32) error {
 
 // create HsnwBuild struct
 func NewHnswBuild(proc *process.Process, cfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) (info *HnswBuild, err error) {
-	nthread := MaxUSearchThreads / 2
+	nthread := MaxUSearchThreads
 	info = &HnswBuild{cfg: cfg,
 		tblcfg:   tblcfg,
 		indexes:  make([]*HnswBuildIndex, 0, 16),
