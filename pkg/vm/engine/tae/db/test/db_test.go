@@ -11300,12 +11300,12 @@ func TestCheckpointV2(t *testing.T) {
 
 	err = logtail.PrefetchCheckpoint(ctx, "", loc, common.DebugAllocator, tae.Opts.Fs)
 	assert.NoError(t, err)
-	err = logtail.ReplayCheckpoint(ctx, catalog2, true, dataFactory, loc, common.DebugAllocator, tae.Opts.Fs)
+	err = logtail.ReplayCheckpoint(ctx, catalog2, true, loc, common.DebugAllocator, tae.Opts.Fs)
 	assert.NoError(t, err)
 	readTxn, err := tae.StartTxn(nil)
 	assert.NoError(t, err)
 	closeFn := catalog2.RelayFromSysTableObjects(
-		ctx, readTxn, dataFactory, tables.ReadSysTableBatch, func(cols []containers.Vector, pkidx int) (err2 error) {
+		ctx, readTxn, tables.ReadSysTableBatch, func(cols []containers.Vector, pkidx int) (err2 error) {
 			_, err2 = mergesort.SortBlockColumns(cols, pkidx, tae.Runtime.VectorPool.Transient)
 			return
 		}, &objlistReplayer{},
@@ -11313,7 +11313,7 @@ func TestCheckpointV2(t *testing.T) {
 	for _, fn := range closeFn {
 		fn()
 	}
-	err = logtail.ReplayCheckpoint(ctx, catalog2, false, dataFactory, loc, common.DebugAllocator, tae.Opts.Fs)
+	err = logtail.ReplayCheckpoint(ctx, catalog2, false, loc, common.DebugAllocator, tae.Opts.Fs)
 	assert.NoError(t, err)
 
 	var tombstoneCnt2, dataCnt2 int
@@ -11420,12 +11420,12 @@ func TestCheckpointV2Compatibility(t *testing.T) {
 		assert.NoError(t, err)
 	}
 	for _, replayer := range replayers {
-		replayer.ReplayObjectlist(ctx, catalog2, true, dataFactory)
+		replayer.ReplayObjectlist(ctx, catalog2, true)
 	}
 	readTxn, err := tae.StartTxn(nil)
 	assert.NoError(t, err)
 	closeFn := catalog2.RelayFromSysTableObjects(
-		ctx, readTxn, dataFactory, tables.ReadSysTableBatch, func(cols []containers.Vector, pkidx int) (err2 error) {
+		ctx, readTxn, tables.ReadSysTableBatch, func(cols []containers.Vector, pkidx int) (err2 error) {
 			_, err2 = mergesort.SortBlockColumns(cols, pkidx, tae.Runtime.VectorPool.Transient)
 			return
 		}, &objlistReplayer{},
@@ -11434,7 +11434,7 @@ func TestCheckpointV2Compatibility(t *testing.T) {
 		fn()
 	}
 	for _, replayer := range replayers {
-		replayer.ReplayObjectlist(ctx, catalog2, false, dataFactory)
+		replayer.ReplayObjectlist(ctx, catalog2, false)
 	}
 
 	var tombstoneCnt2, dataCnt2 int
