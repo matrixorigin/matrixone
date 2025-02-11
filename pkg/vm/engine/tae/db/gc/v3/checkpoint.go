@@ -1541,7 +1541,7 @@ func (c *checkpointCleaner) tryFastGCLocked(
 		extraErrMsg = "GetPITRs failed"
 		return
 	}
-	snapshots, err = c.mutation.snapshotMeta.GetSnapshot(c.ctx, c.sid, c.fs.Service, c.mp)
+	snapshots, err = c.mutation.snapshotMeta.GetSnapshot(c.ctx, c.sid, c.fs, c.mp)
 	if err != nil {
 		extraErrMsg = "GetSnapshot failed"
 		return
@@ -1626,9 +1626,9 @@ func (c *checkpointCleaner) doGCAgainstFastLocked(
 		c.config.estimateRows,
 		c.config.probility,
 		c.mp,
-		c.fs.Service,
+		c.fs,
 	); err != nil {
-		extraErrMsg = fmt.Sprintf("ExecuteGlobalCheckpointBasedGC %v failed", window)
+		extraErrMsg = fmt.Sprintf("ExecuteGlobalCheckpointBasedGC %v-%v failed", window.tsRange.start.ToString(), window.tsRange.end.ToString())
 		return nil, err
 	}
 	c.mutAddMetaFileLocked(metafile, ioutil.NewTSRangeFile(
