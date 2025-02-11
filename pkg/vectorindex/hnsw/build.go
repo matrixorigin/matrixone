@@ -388,3 +388,7 @@ func (h *HnswBuild) ToInsertSql(ts int64) ([]string, error) {
 	sqls = append(sqls, metasql)
 	return sqls, nil
 }
+
+func (h *HnswBuild) GetIndexes() []*HnswBuildIndex {
+	return h.indexes
+}

@@ -15,6 +15,7 @@
 package hnsw
 
 import (
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -23,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/exp/rand"
 
 	usearch "github.com/unum-cloud/usearch/golang"
 )
@@ -31,36 +33,101 @@ func TestBuild(t *testing.T) {
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool("", m)
 
-	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}
+	ndim := 3
+	nthread := 5
+	nitem := 100000
+
+	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(uint(ndim))}
 	idxcfg.Usearch.Metric = usearch.L2sq
+	//idxcfg.Usearch.Connectivity = 100
+	//idxcfg.Usearch.ExpansionAdd = 512
+	//idxcfg.Usearch.ExpansionSearch = 128
 	tblcfg := vectorindex.IndexTableConfig{DbName: "db", SrcTable: "src", MetadataTable: "__secondary_meta", IndexTable: "__secondary_index"}
 
 	build, err := NewHnswBuild(proc, idxcfg, tblcfg)
 	require.Nil(t, err)
 	defer build.Destroy()
 
+	// fix the seek
+	r := rand.New(rand.NewSource(99))
+
+	// create sample date
+	sample := make([][]float32, nitem*nthread)
+	for i := 0; i < nthread*nitem; i++ {
+		sample[i] = make([]float32, ndim)
+		for j := 0; j < ndim; j++ {
+			sample[i][j] = r.Float32()
+		}
+	}
+
 	var wg sync.WaitGroup
-	for j := 0; j < 6; j++ {
+	for j := 0; j < nthread; j++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 
-			nitem := 100000
 			for i := 0; i < nitem; i++ {
-				v := []float32{float32(i), float32(i + 1), float32(i + 2)}
-				err := build.Add(int64(j*nitem+i), v)
+				key := j*nitem + i
+				err := build.Add(int64(key), sample[key])
 				require.Nil(t, err)
 			}
 		}()
 	}
-
 	wg.Wait()
 
 	sqls, err := build.ToInsertSql(time.Now().UnixMicro())
 	require.Nil(t, err)
-	require.Equal(t, len(sqls), 7)
-	//fmt.Printf("SQLS %v\n", sqls)
-	//fmt.Printf("LENF %d\n", len(sqls))
+	_ = sqls
+	require.Equal(t, len(sqls), 6)
+
+	indexes := build.GetIndexes()
+	require.Equal(t, 5, len(indexes))
+
+	// load index file and search
+	search := NewHnswSearch(idxcfg, tblcfg)
+	defer search.Destroy()
+
+	search.Indexes = make([]*HnswSearchIndex, len(indexes))
+	for i, idx := range indexes {
+		sidx := &HnswSearchIndex{}
+		sidx.Index, err = usearch.NewIndex(idxcfg.Usearch)
+		require.Nil(t, err)
+		err = sidx.Index.Load(idx.Path)
+		require.Nil(t, err)
+		search.Indexes[i] = sidx
+
+		slen, err := sidx.Index.Len()
+		require.Nil(t, err)
+		require.Equal(t, nitem, int(slen))
+	}
+
+	failed := 0
+	var wg2 sync.WaitGroup
+	for j := 0; j < nthread; j++ {
+		wg2.Add(1)
+		go func() {
+			defer wg2.Done()
+			for i := 0; i < nitem; i++ {
+				key := int64(j*nitem + i)
+				keys, distances, err := search.Search(sample[key], 10)
+				require.Nil(t, err)
+
+				_ = distances
+				if keys[0] != key {
+					failed++
+					found, err := search.Contains(key)
+					require.Nil(t, err)
+					require.True(t, found)
+				}
+			}
+		}()
+	}
+
+	wg2.Wait()
+
+	recall := float32(nthread*nitem-failed) / float32(nthread*nitem)
+	require.True(t, (recall > 0.96))
+	fmt.Printf("Recall %f\n", float32(nthread*nitem-failed)/float32(nthread*nitem))
 
 }
 
@@ -75,4 +142,8 @@ func TestBuildIndex(t *testing.T) {
 	empty, err := idx.Empty()
 	require.Nil(t, err)
 	require.Equal(t, empty, true)
+
+	full, err := idx.Full()
+	require.Nil(t, err)
+	require.Equal(t, full, false)
 }

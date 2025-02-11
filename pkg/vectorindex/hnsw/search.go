@@ -259,6 +259,25 @@ func (s *HnswSearch) Search(query []float32, limit uint) (keys []int64, distance
 	return reskeys, resdistances, nil
 }
 
+func (s *HnswSearch) Contains(key int64) (bool, error) {
+	if len(s.Indexes) == 0 {
+		return false, nil
+	}
+	s.lock()
+	defer s.unlock()
+
+	for _, idx := range s.Indexes {
+		found, err := idx.Index.Contains(uint64(key))
+		if err != nil {
+			return false, err
+		}
+		if found {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // Destroy HnswSearch (implement VectorIndexSearch.Destroy)
 func (s *HnswSearch) Destroy() {
 	// destroy index
