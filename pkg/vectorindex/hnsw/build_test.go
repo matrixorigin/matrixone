@@ -35,7 +35,7 @@ func TestBuild(t *testing.T) {
 
 	ndim := 3
 	nthread := 5
-	nitem := 100000
+	nitem := vectorindex.MaxIndexCapacity
 
 	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(uint(ndim))}
 	idxcfg.Usearch.Metric = usearch.L2sq
