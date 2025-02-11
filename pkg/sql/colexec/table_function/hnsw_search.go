@@ -112,10 +112,6 @@ func hnswSearchPrepare(proc *process.Process, arg *TableFunction) (tvfState, err
 		st.limit = uint64(1)
 	}
 
-	/*
-	   veccache.VectorIndexCacheTTL = 30 * time.Second
-	   veccache.Cache.TickerInterval = 5 * time.Second
-	*/
 	return st, err
 
 }
