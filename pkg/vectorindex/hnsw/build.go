@@ -285,14 +285,17 @@ func (h *HnswBuild) Add(key int64, vec []float32) error {
 	return nil
 }
 
-func (h *HnswBuild) getIndexForAdd() (idx *HnswBuildIndex, err error) {
+func (h *HnswBuild) getIndexForAdd() (idx *HnswBuildIndex, save_idx *HnswBuildIndex, err error) {
+
+	save_idx = nil
 	h.mutex.Lock()
 	defer h.mutex.Unlock()
+
 	nidx := int64(len(h.indexes))
 	if nidx == 0 {
 		idx, err = NewHnswBuildIndex(nidx, h.cfg, h.nthread)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		h.indexes = append(h.indexes, idx)
 	} else {
@@ -301,16 +304,13 @@ func (h *HnswBuild) getIndexForAdd() (idx *HnswBuildIndex, err error) {
 
 		cnt := h.count.Load()
 		if cnt >= vectorindex.MaxIndexCapacity {
-			// save the current index to file
-			err = idx.SaveToFile()
-			if err != nil {
-				return nil, err
-			}
+			// assign save_idx to save out of mutex
+			save_idx = idx
 
 			// create new index
 			idx, err = NewHnswBuildIndex(nidx, h.cfg, h.nthread)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			h.indexes = append(h.indexes, idx)
 			// reset count for next index
@@ -319,7 +319,7 @@ func (h *HnswBuild) getIndexForAdd() (idx *HnswBuildIndex, err error) {
 	}
 	h.count.Add(1)
 
-	return idx, nil
+	return idx, save_idx, nil
 }
 
 // add vector to the build
@@ -327,11 +327,21 @@ func (h *HnswBuild) getIndexForAdd() (idx *HnswBuildIndex, err error) {
 func (h *HnswBuild) addVector(key int64, vec []float32) error {
 	var err error
 	var idx *HnswBuildIndex
+	var save_idx *HnswBuildIndex
 
-	idx, err = h.getIndexForAdd()
+	idx, save_idx, err = h.getIndexForAdd()
 	if err != nil {
 		return err
 	}
+
+	if save_idx != nil {
+		// save the current index to file
+		err = save_idx.SaveToFile()
+		if err != nil {
+			return err
+		}
+	}
+
 	return idx.Add(key, vec)
 }
 
