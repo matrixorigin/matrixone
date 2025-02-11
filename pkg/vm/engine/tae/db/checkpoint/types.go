@@ -68,7 +68,7 @@ type Runner interface {
 	Start()
 	Stop()
 
-	BuildReplayer(string, catalog.DataFactory) *CkpReplayer
+	BuildReplayer(string) *CkpReplayer
 	GCByTS(ctx context.Context, ts types.TS) error
 }
 
