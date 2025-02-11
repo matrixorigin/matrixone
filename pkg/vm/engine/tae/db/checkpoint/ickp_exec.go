@@ -244,7 +244,7 @@ func (executor *checkpointExecutor) doIncrementalCheckpoint(
 		executor.ctx,
 		executor.cfg.BlockMaxRowsHint,
 		executor.cfg.SizeHint,
-		executor.runner.rt.Fs.Service,
+		executor.runner.rt.Fs,
 	)
 	if err != nil {
 		return

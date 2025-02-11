@@ -187,7 +187,7 @@ func newStore(
 }
 
 func (store *txnStore) StartTrace() {
-	if store.IsReadonly() || store.GetTransactionType() == txnif.TxnType_Heartbeat {
+	if store.IsReadonly() || store.IsHeartbeat() {
 		return
 	}
 	store.tracer = getTracer()
@@ -836,7 +836,7 @@ func (store *txnStore) CollectCmd() (err error) {
 	return
 }
 
-func (store *txnStore) AddTxnEntry(t txnif.TxnEntryType, entry txnif.TxnEntry) {
+func (store *txnStore) AddTxnEntry(entry txnif.TxnEntry) {
 	// TODO
 }
 

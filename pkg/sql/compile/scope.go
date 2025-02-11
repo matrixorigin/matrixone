@@ -473,6 +473,10 @@ func (s *Scope) ParallelRun(c *Compile) (err error) {
 		parallelScope, err = buildScanParallelRun(s, c)
 		//fmt.Println("after scan parallel run", DebugShowScopes([]*Scope{parallelScope}, OldLevel))
 
+	// probability 3: src op is tablefunction
+	case s.IsTbFunc:
+		parallelScope, err = buildLoadParallelRun(s, c)
+
 	// others.
 	default:
 		parallelScope, err = s, nil

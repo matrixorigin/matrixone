@@ -30,12 +30,14 @@ var _ vm.Operator = new(TableFunction)
 type TableFunction struct {
 	ctr container
 
-	Rets     []*plan.ColDef
-	Args     []*plan.Expr
-	Attrs    []string
-	Params   []byte
-	FuncName string
-	Limit    *plan.Expr
+	Rets        []*plan.ColDef
+	Args        []*plan.Expr
+	Attrs       []string
+	Params      []byte
+	FuncName    string
+	Limit       *plan.Expr
+	OffsetTotal [][2]int64
+	CanOpt      bool
 
 	vm.OperatorBase
 }

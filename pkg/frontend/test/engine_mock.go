@@ -631,6 +631,20 @@ func (mr *MockRelDataMockRecorder) SetShardID(i, id interface{}) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetShardID", reflect.TypeOf((*MockRelData)(nil).SetShardID), i, id)
 }
 
+// Split mocks base method.
+func (m *MockRelData) Split(i int) []engine.RelData {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Split", i)
+	ret0, _ := ret[0].([]engine.RelData)
+	return ret0
+}
+
+// Split indicates an expected call of Split.
+func (mr *MockRelDataMockRecorder) Split(i interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Split", reflect.TypeOf((*MockRelData)(nil).Split), i)
+}
+
 // String mocks base method.
 func (m *MockRelData) String() string {
 	m.ctrl.T.Helper()
@@ -1348,6 +1362,20 @@ func (m *MockRelation) Ranges(arg0 context.Context, arg1 engine.RangesParam) (en
 func (mr *MockRelationMockRecorder) Ranges(arg0, arg1 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Ranges", reflect.TypeOf((*MockRelation)(nil).Ranges), arg0, arg1)
+}
+
+// Reset mocks base method.
+func (m *MockRelation) Reset(op client.TxnOperator) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Reset", op)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// Reset indicates an expected call of Reset.
+func (mr *MockRelationMockRecorder) Reset(op interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Reset", reflect.TypeOf((*MockRelation)(nil).Reset), op)
 }
 
 // Rows mocks base method.

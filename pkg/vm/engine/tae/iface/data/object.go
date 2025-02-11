@@ -18,6 +18,7 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -99,7 +100,7 @@ type Object interface {
 	GetRuntime() *dbutils.Runtime
 
 	Init() error
-	GetFs() *objectio.ObjectFS
+	GetFs() fileservice.FileService
 	FreezeAppend()
 
 	Contains(
