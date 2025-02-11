@@ -44,10 +44,16 @@ type CheckpointData_V2 struct {
 	allocator *mpool.MPool
 }
 
-func NewCheckpointData_V2(allocator *mpool.MPool, fs fileservice.FileService) *CheckpointData_V2 {
+func NewCheckpointData_V2(
+	allocator *mpool.MPool,
+	objSize int,
+	fs fileservice.FileService,
+) *CheckpointData_V2 {
 	return &CheckpointData_V2{
-		batch:     ckputil.NewObjectListBatch(),
-		sinker:    ckputil.NewDataSinker(allocator, fs),
+		batch: ckputil.NewObjectListBatch(),
+		sinker: ckputil.NewDataSinker(
+			allocator, fs, ioutil.WithMemorySizeThreshold(objSize),
+		),
 		allocator: allocator,
 	}
 }
@@ -650,10 +656,10 @@ type BaseCollector_V2 struct {
 	packer     *types.Packer
 }
 
-func NewBaseCollector_V2(start, end types.TS, fs fileservice.FileService) *BaseCollector_V2 {
+func NewBaseCollector_V2(start, end types.TS, size int, fs fileservice.FileService) *BaseCollector_V2 {
 	collector := &BaseCollector_V2{
 		LoopProcessor: &catalog.LoopProcessor{},
-		data:          NewCheckpointData_V2(common.CheckpointAllocator, fs),
+		data:          NewCheckpointData_V2(common.CheckpointAllocator, size, fs),
 		start:         start,
 		end:           end,
 		packer:        types.NewPacker(),
@@ -665,7 +671,7 @@ func NewBaseCollector_V2(start, end types.TS, fs fileservice.FileService) *BaseC
 func NewBackupCollector_V2(start, end types.TS, fs fileservice.FileService) *BaseCollector_V2 {
 	collector := &BaseCollector_V2{
 		LoopProcessor: &catalog.LoopProcessor{},
-		data:          NewCheckpointData_V2(common.CheckpointAllocator, fs),
+		data:          NewCheckpointData_V2(common.CheckpointAllocator, 0, fs),
 		start:         start,
 		end:           end,
 		packer:        types.NewPacker(),
@@ -724,7 +730,7 @@ func NewGlobalCollector_V2(
 ) *GlobalCollector_V2 {
 	versionThresholdTS := types.BuildTS(end.Physical()-versionInterval.Nanoseconds(), end.Logical())
 	collector := &GlobalCollector_V2{
-		BaseCollector_V2: *NewBaseCollector_V2(types.TS{}, end, fs),
+		BaseCollector_V2: *NewBaseCollector_V2(types.TS{}, end, 0, fs),
 		versionThershold: versionThresholdTS,
 	}
 	collector.ObjectFn = collector.visitObjectForGlobal

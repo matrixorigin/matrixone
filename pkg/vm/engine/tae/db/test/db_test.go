@@ -9323,7 +9323,7 @@ func TestCheckpointReadWrite(t *testing.T) {
 	assert.NoError(t, txn.Commit(context.Background()))
 
 	t1 := tae.TxnMgr.Now()
-	testutil.CheckCheckpointReadWrite(t, types.TS{}, t1, tae.Catalog, smallCheckpointBlockRows, smallCheckpointSize, tae.Opts.Fs)
+	testutil.CheckCheckpointReadWrite(t, t1, tae.Catalog, smallCheckpointSize, tae)
 
 	txn, err = tae.StartTxn(nil)
 	assert.NoError(t, err)
@@ -9336,8 +9336,7 @@ func TestCheckpointReadWrite(t *testing.T) {
 	assert.NoError(t, txn.Commit(context.Background()))
 
 	t2 := tae.TxnMgr.Now()
-	testutil.CheckCheckpointReadWrite(t, types.TS{}, t2, tae.Catalog, smallCheckpointBlockRows, smallCheckpointSize, tae.Opts.Fs)
-	testutil.CheckCheckpointReadWrite(t, t1, t2, tae.Catalog, smallCheckpointBlockRows, smallCheckpointSize, tae.Opts.Fs)
+	testutil.CheckCheckpointReadWrite(t, t2, tae.Catalog, smallCheckpointSize, tae)
 
 	txn, err = tae.StartTxn(nil)
 	assert.NoError(t, err)
@@ -9345,8 +9344,7 @@ func TestCheckpointReadWrite(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 	t3 := tae.TxnMgr.Now()
-	testutil.CheckCheckpointReadWrite(t, types.TS{}, t3, tae.Catalog, smallCheckpointBlockRows, smallCheckpointSize, tae.Opts.Fs)
-	testutil.CheckCheckpointReadWrite(t, t2, t3, tae.Catalog, smallCheckpointBlockRows, smallCheckpointSize, tae.Opts.Fs)
+	testutil.CheckCheckpointReadWrite(t, t3, tae.Catalog, smallCheckpointSize, tae)
 
 	schema := catalog.MockSchemaAll(2, 1)
 	schema.Extra.BlockMaxRows = 1
@@ -9356,13 +9354,11 @@ func TestCheckpointReadWrite(t *testing.T) {
 
 	tae.CreateRelAndAppend(bat, true)
 	t4 := tae.TxnMgr.Now()
-	testutil.CheckCheckpointReadWrite(t, types.TS{}, t4, tae.Catalog, smallCheckpointBlockRows, smallCheckpointSize, tae.Opts.Fs)
-	testutil.CheckCheckpointReadWrite(t, t3, t4, tae.Catalog, smallCheckpointBlockRows, smallCheckpointSize, tae.Opts.Fs)
+	testutil.CheckCheckpointReadWrite(t, t4, tae.Catalog, smallCheckpointSize, tae)
 
 	tae.CompactBlocks(false)
 	t5 := tae.TxnMgr.Now()
-	testutil.CheckCheckpointReadWrite(t, types.TS{}, t5, tae.Catalog, smallCheckpointBlockRows, smallCheckpointSize, tae.Opts.Fs)
-	testutil.CheckCheckpointReadWrite(t, t4, t5, tae.Catalog, smallCheckpointBlockRows, smallCheckpointSize, tae.Opts.Fs)
+	testutil.CheckCheckpointReadWrite(t, t5, tae.Catalog, smallCheckpointSize, tae)
 }
 
 func TestCheckpointReadWrite2(t *testing.T) {
@@ -9388,7 +9384,7 @@ func TestCheckpointReadWrite2(t *testing.T) {
 	}
 
 	t1 := tae.TxnMgr.Now()
-	testutil.CheckCheckpointReadWrite(t, types.TS{}, t1, tae.Catalog, smallCheckpointBlockRows, smallCheckpointSize, tae.Opts.Fs)
+	testutil.CheckCheckpointReadWrite(t, t1, tae.Catalog, smallCheckpointSize, tae)
 }
 
 func TestSnapshotCheckpoint(t *testing.T) {
@@ -11494,3 +11490,4 @@ func TestDedupx(t *testing.T) {
 
 // TODO test ckpdata.ExportStats
 // TODO test read ckp entry after gc (handle error)
+// TODO test mpool

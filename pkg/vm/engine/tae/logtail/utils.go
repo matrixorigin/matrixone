@@ -133,10 +133,11 @@ func registerCheckpointDataReferVersion(version uint32, schemas []*catalog.Schem
 
 func IncrementalCheckpointDataFactory(
 	start, end types.TS,
+	size int,
 	fs fileservice.FileService,
 ) func(c *catalog.Catalog) (*CheckpointData_V2, error) {
 	return func(c *catalog.Catalog) (data *CheckpointData_V2, err error) {
-		collector := NewBaseCollector_V2(start, end, fs)
+		collector := NewBaseCollector_V2(start, end, size, fs)
 		if err = collector.Collect(c); err != nil {
 			return
 		}
@@ -150,7 +151,7 @@ func BackupCheckpointDataFactory(
 	fs fileservice.FileService,
 ) func(c *catalog.Catalog) (*CheckpointData_V2, error) {
 	return func(c *catalog.Catalog) (data *CheckpointData_V2, err error) {
-		collector := NewBaseCollector_V2(start, end, fs)
+		collector := NewBaseCollector_V2(start, end, 0, fs)
 		defer collector.Close()
 		err = c.RecurLoop(collector)
 		if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
