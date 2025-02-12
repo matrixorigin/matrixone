@@ -159,7 +159,7 @@ func (w *GCWindow) ExecuteGlobalCheckpointBasedGC(
 	var metaFile string
 	var err error
 	if metaFile, err = w.writeMetaForRemainings(
-		ctx, filesNotGC,
+		ctx, filesNotGC, ioutil.EncodeGCMetadataName,
 	); err != nil {
 		return nil, "", err
 	}
@@ -206,7 +206,7 @@ func (w *GCWindow) ExecuteFastBasedGC(
 	var metaFile string
 	var err error
 	if metaFile, err = w.writeMetaForRemainings(
-		ctx, filesNotGC,
+		ctx, filesNotGC, ioutil.EncodeGCFastMetadataName,
 	); err != nil {
 		return nil, "", err
 	}
@@ -289,7 +289,7 @@ func (w *GCWindow) ScanCheckpoints(
 	w.tsRange.end = end
 	newFiles, _ := sinker.GetResult()
 	if metaFile, err = w.writeMetaForRemainings(
-		ctx, newFiles,
+		ctx, newFiles, ioutil.EncodeGCScanMetadataName,
 	); err != nil {
 		return
 	}
@@ -316,13 +316,14 @@ func (w *GCWindow) getSinker(
 func (w *GCWindow) writeMetaForRemainings(
 	ctx context.Context,
 	stats []objectio.ObjectStats,
+	encode func(types.TS, types.TS) string,
 ) (string, error) {
 	select {
 	case <-ctx.Done():
 		return "", context.Cause(ctx)
 	default:
 	}
-	name := ioutil.EncodeGCMetadataName(w.tsRange.start, w.tsRange.end)
+	name := encode(w.tsRange.start, w.tsRange.end)
 	ret := batch.NewWithSchema(
 		false, ObjectTableMetaAttrs, ObjectTableMetaTypes,
 	)

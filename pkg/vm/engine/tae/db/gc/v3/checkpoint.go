@@ -341,6 +341,17 @@ func (c *checkpointCleaner) Replay(inputCtx context.Context) (err error) {
 			maxConsumedStart = *meta.GetStart()
 			maxConsumedEnd = *meta.GetEnd()
 			gcFiles = append(gcFiles, meta.GetName())
+
+			if meta.IsCKPFile() && maxConsumedStart.IsEmpty() {
+				gckp := c.checkpointCli.MaxGlobalCheckpoint()
+				logutil.Infof("maxGlobalCheckpoint: %s, maxConsumedEnd is %v", gckp.String(), maxConsumedEnd.ToString())
+				if gckp != nil {
+					end := gckp.GetEnd()
+					if end.LT(&maxConsumedEnd) {
+						c.updateGCWaterMark(gckp)
+					}
+				}
+			}
 		}
 	}
 
@@ -471,6 +482,7 @@ func (c *checkpointCleaner) mutAddScannedLocked(window *GCWindow) {
 		c.mutation.scanned.Merge(window)
 		window.Close()
 	}
+	logutil.Infof("mutAddScannedLocked file count %d, %v-%v ", len(c.mutation.scanned.files), c.mutation.scanned.tsRange.start.ToString(), c.mutation.scanned.tsRange.end.ToString())
 }
 
 func (c *checkpointCleaner) GetScanWaterMark() *checkpoint.CheckpointEntry {
@@ -638,7 +650,7 @@ func (c *checkpointCleaner) deleteStaleCKPMetaFileLocked() (err error) {
 	metaFiles := c.CloneMetaFilesLocked()
 	filesToDelete := make([]string, 0)
 	for _, metaFile := range metaFiles {
-		if !metaFile.IsCKPFile() ||
+		if (!metaFile.IsCKPFile() && !metaFile.IsScanFile() && !metaFile.IsFastFile()) ||
 			(metaFile.RangeEqual(&window.tsRange.start, &window.tsRange.end)) {
 			logutil.Info(
 				"GC-TRACE-DELETE-CKP-FILE-SKIP",
@@ -1633,7 +1645,7 @@ func (c *checkpointCleaner) doGCAgainstFastLocked(
 	}
 	c.mutAddMetaFileLocked(metafile, ioutil.NewTSRangeFile(
 		metafile,
-		ioutil.CheckpointExt,
+		ioutil.FastMetaExt,
 		window.tsRange.start,
 		window.tsRange.end,
 	))
@@ -1791,6 +1803,7 @@ func (c *checkpointCleaner) scanCheckpointsLocked(
 
 	var (
 		snapSize, tableSize uint32
+		gcMetaFile          string
 	)
 	defer func() {
 		logutil.Info(
@@ -1800,7 +1813,9 @@ func (c *checkpointCleaner) scanCheckpointsLocked(
 			zap.Duration("duration", time.Since(now)),
 			zap.Uint32("snap-meta-size :", snapSize),
 			zap.Uint32("table-meta-size :", tableSize),
-			zap.String("snapshot-detail", c.mutation.snapshotMeta.String()))
+			zap.String("snapshot-detail", c.mutation.snapshotMeta.String()),
+			zap.String("scan-meta-file", gcMetaFile),
+		)
 	}()
 
 	var snapshotFile, accountFile ioutil.TSRangeFile
@@ -1857,7 +1872,6 @@ func (c *checkpointCleaner) scanCheckpointsLocked(
 	}
 
 	gcWindow = NewGCWindow(c.mp, c.fs)
-	var gcMetaFile string
 	if gcMetaFile, err = gcWindow.ScanCheckpoints(
 		ctx,
 		ckps,
@@ -1877,7 +1891,7 @@ func (c *checkpointCleaner) scanCheckpointsLocked(
 		gcMetaFile,
 		ioutil.NewTSRangeFile(
 			gcMetaFile,
-			ioutil.CheckpointExt,
+			ioutil.ScanMetaExt,
 			gcWindow.tsRange.start,
 			gcWindow.tsRange.end,
 		),
