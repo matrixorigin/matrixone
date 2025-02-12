@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"go.uber.org/zap"
@@ -37,6 +38,7 @@ const (
 	CronJobs_Name_ReportStats = "Report-Stats"
 
 	CronJobs_Name_Checker = "Checker"
+	CronJobs_Name_Scanner = "Scanner"
 )
 
 var CronJobs_Open_WriteMode = []string{
@@ -47,6 +49,7 @@ var CronJobs_Open_WriteMode = []string{
 	CronJobs_Name_GCLogtail,
 	CronJobs_Name_GCLockMerge,
 	CronJobs_Name_ReportStats,
+	CronJobs_Name_Scanner,
 }
 
 var CronJobs_Open_ReplayMode = []string{
@@ -69,6 +72,7 @@ var CronJobs_Spec = map[string][]bool{
 	CronJobs_Name_GCLockMerge:     {true, true, true, false},
 	CronJobs_Name_ReportStats:     {true, true, true, true},
 	CronJobs_Name_Checker:         {true, false, true, false},
+	CronJobs_Name_Scanner:         {true, true, false, false},
 }
 
 func CanAddCronJob(name string, isWriteModeDB, skipMode bool) bool {
@@ -223,6 +227,19 @@ func AddCronJob(db *DB, name string, skipMode bool) (err error) {
 			db.Opts.CheckpointCfg.MetadataCheckInterval,
 			func(ctx context.Context) {
 				db.Catalog.CheckMetadata()
+			},
+			1,
+		)
+		return
+	case CronJobs_Name_Scanner:
+		scanner := NewDBScanner(db, nil)
+		db.MergeScheduler = merge.NewScheduler(db.Runtime, merge.NewTaskServiceGetter(db.Opts.TaskServiceGetter))
+		scanner.RegisterOp(db.MergeScheduler)
+		err = db.CronJobs.AddJob(
+			CronJobs_Name_Scanner,
+			db.Opts.GCCfg.ScanGCInterval,
+			func(ctx context.Context) {
+				scanner.OnExec()
 			},
 			1,
 		)
