@@ -231,15 +231,6 @@ func Open(
 		db.BGCheckpointRunner.Stop()
 	})
 
-	db.BGFlusher = checkpoint.NewFlusher(
-		db.Runtime,
-		db.BGCheckpointRunner,
-		db.Catalog,
-		db.BGCheckpointRunner.GetDirtyCollector(),
-		checkpoint.WithFlusherInterval(opts.CheckpointCfg.FlushInterval),
-		checkpoint.WithFlusherCronPeriod(opts.CheckpointCfg.ScanInterval),
-	)
-
 	now := time.Now()
 	// TODO: checkpoint dir should be configurable
 	ckpReplayer := db.BGCheckpointRunner.BuildReplayer(ioutil.GetCheckpointDir())
@@ -285,18 +276,25 @@ func Open(
 
 	db.DBLocker, dbLocker = dbLocker, nil
 
-	// Init timed scanner
-	scanner := NewDBScanner(db, nil)
-
-	// w-zr TODO: need to support replay and write mode
-	db.MergeScheduler = merge.NewScheduler(db.Runtime, merge.NewTaskServiceGetter(opts.TaskServiceGetter))
-	scanner.RegisterOp(db.MergeScheduler)
+	db.BGFlusher = checkpoint.NewFlusher(
+		db.Runtime,
+		db.BGCheckpointRunner,
+		db.Catalog,
+		db.BGCheckpointRunner.GetDirtyCollector(),
+		checkpoint.WithFlusherInterval(opts.CheckpointCfg.FlushInterval),
+		checkpoint.WithFlusherCronPeriod(opts.CheckpointCfg.ScanInterval),
+	)
 	db.BGFlusher.Start()
 
+	// w-zr TODO: need to support replay and write mode
+	scanner := NewDBScanner(db, nil)
+	db.MergeScheduler = merge.NewScheduler(db.Runtime, merge.NewTaskServiceGetter(opts.TaskServiceGetter))
+	scanner.RegisterOp(db.MergeScheduler)
 	db.BGScanner = w.NewHeartBeater(
 		opts.CheckpointCfg.ScanInterval,
 		scanner)
 	db.BGScanner.Start()
+
 	// TODO: WithGCInterval requires configuration parameters
 	gc2.SetDeleteTimeout(opts.GCCfg.GCDeleteTimeout)
 	gc2.SetDeleteBatchSize(opts.GCCfg.GCDeleteBatchSize)
