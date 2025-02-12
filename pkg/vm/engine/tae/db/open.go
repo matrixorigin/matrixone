@@ -279,6 +279,7 @@ func Open(
 		db.BGCheckpointRunner,
 		db.Catalog,
 		db.BGCheckpointRunner.GetDirtyCollector(),
+		false,
 		checkpoint.WithFlusherInterval(opts.CheckpointCfg.FlushInterval),
 		checkpoint.WithFlusherCronPeriod(opts.CheckpointCfg.ScanInterval),
 	)
