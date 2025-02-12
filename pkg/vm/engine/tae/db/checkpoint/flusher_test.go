@@ -52,8 +52,6 @@ func Test_RestartFlusher(t *testing.T) {
 	assert.Equal(t, ErrFlusherStopped, f.ForceFlushWithInterval(ctx, ts, time.Millisecond))
 	f.ChangeForceCheckInterval(time.Millisecond)
 	f.ChangeForceFlushTimeout(time.Millisecond)
-	f.Start()
-	assert.True(t, f.IsStopped())
 
 	f.Restart(WithFlusherCfg(cfg))
 	assert.False(t, f.IsStopped())

@@ -69,7 +69,6 @@ type Flusher interface {
 	GetCfg() FlushCfg
 	Restart(opts ...FlusherOption)
 	IsStopped() bool
-	Start()
 	Stop()
 }
 
@@ -174,6 +173,7 @@ func NewFlusher(
 		sourcer:            sourcer,
 	}
 	flusher.impl.Store(newFlusherImpl(rt, checkpointSchduler, catalogCache, sourcer, opts...))
+	flusher.impl.Load().Start()
 	return flusher
 }
 
@@ -260,15 +260,6 @@ func (f *flusher) GetCfg() FlushCfg {
 		return FlushCfg{}
 	}
 	return impl.GetCfg()
-}
-
-func (f *flusher) Start() {
-	impl := f.impl.Load()
-	if impl == nil {
-		logutil.Warn("need restart")
-		return
-	}
-	impl.Start()
 }
 
 func (f *flusher) Stop() {

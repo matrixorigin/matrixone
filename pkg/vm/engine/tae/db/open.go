@@ -282,7 +282,6 @@ func Open(
 		checkpoint.WithFlusherInterval(opts.CheckpointCfg.FlushInterval),
 		checkpoint.WithFlusherCronPeriod(opts.CheckpointCfg.ScanInterval),
 	)
-	db.BGFlusher.Start()
 
 	// TODO: WithGCInterval requires configuration parameters
 	gc2.SetDeleteTimeout(opts.GCCfg.GCDeleteTimeout)
