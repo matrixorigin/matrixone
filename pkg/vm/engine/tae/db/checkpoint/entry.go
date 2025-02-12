@@ -499,6 +499,7 @@ func (e *CheckpointEntry) GetCheckpointMetaInfo(
 ) (res *logtail.ObjectInfoJson, err error) {
 	if e.version <= logtail.CheckpointVersion12 {
 		replayer := logtail.NewCheckpointReplayer(e.GetLocation(), mp)
+		defer replayer.Close()
 		if err = replayer.ReadMetaForV12(ctx, fs); err != nil {
 			return
 		}
@@ -525,6 +526,7 @@ func (e *CheckpointEntry) GetTableIDs(
 ) (result []uint64, err error) {
 	if e.version <= logtail.CheckpointVersion12 {
 		replayer := logtail.NewCheckpointReplayer(e.GetLocation(), mp)
+		defer replayer.Close()
 		if err = replayer.ReadMetaForV12(ctx, fs); err != nil {
 			return
 		}
@@ -552,6 +554,7 @@ func (e *CheckpointEntry) GetObjects(
 ) (err error) {
 	if e.version <= logtail.CheckpointVersion12 {
 		replayer := logtail.NewCheckpointReplayer(e.GetLocation(), mp)
+		defer replayer.Close()
 		if err = replayer.ReadMetaForV12(ctx, fs); err != nil {
 			return
 		}
@@ -585,6 +588,7 @@ func (e *CheckpointEntry) ForEachRow(
 ) (err error) {
 	if e.version <= logtail.CheckpointVersion12 {
 		replayer := logtail.NewCheckpointReplayer(e.GetLocation(), mp)
+		defer replayer.Close()
 		if err = replayer.ReadMetaForV12(ctx, fs); err != nil {
 			return
 		}
@@ -592,6 +596,31 @@ func (e *CheckpointEntry) ForEachRow(
 	} else {
 		return logtail.ForEachRowInCheckpointData(
 			ctx, fn, e.GetLocation(), mp, fs,
+		)
+	}
+}
+
+func (e *CheckpointEntry) GetData(
+	ctx context.Context,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+) (data *logtail.CheckpointData, err error) {
+	if e.version <= logtail.CheckpointVersion12 {
+		replayer := logtail.NewCheckpointReplayer(e.GetLocation(), mp)
+		defer replayer.Close()
+		if err = replayer.ReadMetaForV12(ctx, fs); err != nil {
+			return
+		}
+		if err = replayer.ReadDataForV12(ctx, fs); err != nil {
+			return
+		}
+		return replayer.OrphanCKPData(mp)
+	} else {
+		return logtail.GetCKPData(
+			ctx,
+			e.GetLocation(),
+			mp,
+			fs,
 		)
 	}
 }

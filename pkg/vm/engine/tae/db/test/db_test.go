@@ -11497,3 +11497,4 @@ func TestDedupx(t *testing.T) {
 // TODO test ckpdata.ExportStats
 // TODO test read ckp entry after gc (handle error)
 // TODO test mpool
+// TODO test get ckp data v12

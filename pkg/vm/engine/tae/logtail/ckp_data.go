@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"go.uber.org/zap"
 )
 
@@ -505,6 +506,54 @@ func ConsumeCheckpointWithTableID(
 	return
 }
 
+// TODO remove it
+func GetCKPData(
+	ctx context.Context,
+	location objectio.Location,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+) (data *CheckpointData, err error) {
+	data = NewCheckpointDataWithVersion(CheckpointVersion12, mp)
+	ForEachRowInCheckpointData(
+		ctx,
+		func(
+			account uint32,
+			dbid, tid uint64,
+			objectType int8,
+			objectStats objectio.ObjectStats,
+			create, delete types.TS,
+			rowID types.Rowid,
+		) error {
+			commitTS := create
+			if !delete.IsEmpty() {
+				commitTS = delete
+			}
+			var dest *containers.Batch
+			switch objectType {
+			case ckputil.ObjectType_Data:
+				dest = data.bats[ObjectInfoIDX]
+			case ckputil.ObjectType_Tombstone:
+				dest = data.bats[TombstoneObjectInfoIDX]
+			default:
+				panic(fmt.Sprintf("invalid object type %d", objectType))
+			}
+			dest.GetVectorByName(ObjectAttr_ObjectStats).Append(objectStats[:], false)
+			dest.GetVectorByName(SnapshotAttr_DBID).Append(dbid, false)
+			dest.GetVectorByName(SnapshotAttr_TID).Append(tid, false)
+			dest.GetVectorByName(EntryNode_CreateAt).Append(create, false)
+			dest.GetVectorByName(EntryNode_DeleteAt).Append(delete, false)
+			dest.GetVectorByName(txnbase.SnapshotAttr_StartTS).Append(commitTS.Prev(), false)
+			dest.GetVectorByName(txnbase.SnapshotAttr_PrepareTS).Append(commitTS, false)
+			dest.GetVectorByName(txnbase.SnapshotAttr_CommitTS).Append(commitTS, false)
+			return nil
+		},
+		location,
+		mp,
+		fs,
+	)
+	return
+}
+
 type CheckpointReplayer struct {
 	location objectio.Location
 	mp       *mpool.MPool
@@ -824,6 +873,14 @@ func (replayer *CheckpointReplayer) ForEachRow(
 		scanFn(replayer.tombstoneBatch, ckputil.ObjectType_Tombstone)
 	}
 	return nil
+}
+func (replayer *CheckpointReplayer) OrphanCKPData(mp *mpool.MPool) (data *CheckpointData, err error) {
+	data = NewCheckpointDataWithVersion(CheckpointVersion12, mp)
+	data.bats[ObjectInfoIDX] = replayer.objBatches
+	data.bats[TombstoneObjectInfoIDX] = replayer.tombstoneBatch
+	replayer.objBatches = nil
+	replayer.tombstoneBatch = nil
+	return data, nil
 }
 func (replayer *CheckpointReplayer) Close() {
 	if replayer.metaBatch != nil {

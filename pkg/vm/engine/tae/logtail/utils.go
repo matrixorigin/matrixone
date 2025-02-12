@@ -42,6 +42,7 @@ const DefaultCheckpointSize = 512 * 1024 * 1024
 
 const (
 	CheckpointVersion12 uint32 = 12
+	CheckpointVersion13 uint32 = 13
 
 	CheckpointCurrentVersion = CheckpointVersion12
 )
@@ -359,6 +360,7 @@ func NewCheckpointData(
 	sid string,
 	mp *mpool.MPool,
 ) *CheckpointData {
+	panic("not support")
 	data := &CheckpointData{
 		sid:       sid,
 		meta:      make(map[uint64]*CheckpointMeta),
@@ -372,6 +374,9 @@ func NewCheckpointData(
 
 // for test
 func NewCheckpointDataWithVersion(ver uint32, mp *mpool.MPool) *CheckpointData {
+	if ver> CheckpointVersion12{
+		panic("not support")
+	}
 	data := &CheckpointData{
 		meta:      make(map[uint64]*CheckpointMeta),
 		allocator: mp,

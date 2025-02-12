@@ -907,9 +907,7 @@ func (c *checkpointCleaner) collectCkpData(
 	ctx context.Context,
 	ckp *checkpoint.CheckpointEntry,
 ) (data *logtail.CheckpointData, err error) {
-	return logtail.GetCheckpointData(
-		ctx, c.sid, c.fs.Service, ckp.GetLocation(), ckp.GetVersion(),
-	)
+	return ckp.GetData(ctx, common.CheckpointAllocator, c.fs.Service)
 }
 
 func (c *checkpointCleaner) GetPITRs() (*logtail.PitrInfo, error) {
