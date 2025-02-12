@@ -569,3 +569,29 @@ func (e *CheckpointEntry) GetObjects(
 		)
 	}
 }
+
+func (e *CheckpointEntry) ForEachRow(
+	ctx context.Context,
+	fn func(
+		account uint32,
+		dbid, tid uint64,
+		objectType int8,
+		objectStats objectio.ObjectStats,
+		create, delete types.TS,
+		rowID types.Rowid,
+	) error,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+) (err error) {
+	if e.version <= logtail.CheckpointVersion12 {
+		replayer := logtail.NewCheckpointReplayer(e.GetLocation(), mp)
+		if err = replayer.ReadMetaForV12(ctx, fs); err != nil {
+			return
+		}
+		return replayer.ForEachRow(fn)
+	} else {
+		return logtail.ForEachRowInCheckpointData(
+			ctx, fn, e.GetLocation(), mp, fs,
+		)
+	}
+}

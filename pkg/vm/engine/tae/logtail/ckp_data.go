@@ -224,7 +224,7 @@ func ReplayCheckpoint(
 func ForEachRowInCheckpointData(
 	ctx context.Context,
 	forEachRow func(
-		accout uint32,
+		account uint32,
 		dbid, tid uint64,
 		objectType int8,
 		objectStats objectio.ObjectStats,
@@ -234,7 +234,7 @@ func ForEachRowInCheckpointData(
 	location objectio.Location,
 	mp *mpool.MPool,
 	fs fileservice.FileService,
-) (objectBatch *batch.Batch, err error) {
+) (err error) {
 	var release func()
 	var metaBatch *batch.Batch
 	if metaBatch, release, err = readMetaBatch(
@@ -346,7 +346,7 @@ func GetCheckpointMetaInfo(
 
 	files := make(map[uint64]*tableinfo)
 	objBatchLength := 0
-	ForEachRowInCheckpointData(
+	if err = ForEachRowInCheckpointData(
 		ctx,
 		func(
 			accout uint32,
@@ -374,7 +374,9 @@ func GetCheckpointMetaInfo(
 		location,
 		common.CheckpointAllocator,
 		fs,
-	)
+	); err != nil {
+		return
+	}
 	res, err = getMetaInfo(
 		files, id, objBatchLength, tombstoneInfo, tombstone,
 	)
@@ -389,7 +391,7 @@ func GetTableIDsFromCheckpoint(
 ) (result []uint64, err error) {
 	seen := make(map[uint64]struct{})
 
-	ForEachRowInCheckpointData(
+	if err = ForEachRowInCheckpointData(
 		ctx,
 		func(
 			accout uint32,
@@ -410,7 +412,9 @@ func GetTableIDsFromCheckpoint(
 		location,
 		common.CheckpointAllocator,
 		fs,
-	)
+	); err != nil {
+		return
+	}
 	return
 }
 
@@ -791,6 +795,35 @@ func (replayer *CheckpointReplayer) GetObjects(
 		pinned[loc.Name().String()] = true
 	}
 	return
+}
+func (replayer *CheckpointReplayer) ForEachRow(
+	fn func(
+		account uint32,
+		dbid, tid uint64,
+		objectType int8,
+		objectStats objectio.ObjectStats,
+		create, delete types.TS,
+		rowID types.Rowid,
+	) error,
+) (err error) {
+	scanFn := func(src *containers.Batch, objectType int8) {
+		dbids := vector.MustFixedColNoTypeCheck[uint64](src.Vecs[ObjectInfo_DBID_Idx+2].GetDownstreamVector())
+		tids := vector.MustFixedColNoTypeCheck[uint64](src.Vecs[ObjectInfo_TID_Idx+2].GetDownstreamVector())
+		objectstatsVec := src.Vecs[ObjectInfo_ObjectStats_Idx+2].GetDownstreamVector()
+		createTSs := vector.MustFixedColNoTypeCheck[types.TS](src.Vecs[ObjectInfo_CreateAt_Idx+2].GetDownstreamVector())
+		deleteTSs := vector.MustFixedColNoTypeCheck[types.TS](src.Vecs[ObjectInfo_DeleteAt_Idx+2].GetDownstreamVector())
+		for i := 0; i < src.Length(); i++ {
+			objStats := objectio.ObjectStats(objectstatsVec.GetBytesAt(i))
+			fn(0, dbids[i], tids[i], objectType, objStats, createTSs[i], deleteTSs[i], types.Rowid{})
+		}
+	}
+	if replayer.objBatches != nil {
+		scanFn(replayer.objBatches, ckputil.ObjectType_Data)
+	}
+	if replayer.tombstoneBatch != nil {
+		scanFn(replayer.tombstoneBatch, ckputil.ObjectType_Tombstone)
+	}
+	return nil
 }
 func (replayer *CheckpointReplayer) Close() {
 	if replayer.metaBatch != nil {
