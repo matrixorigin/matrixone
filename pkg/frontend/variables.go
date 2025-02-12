@@ -3539,7 +3539,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Scope:             ScopeBoth,
 		Dynamic:           true,
 		SetVarHintApplies: false,
-		Type:              InitSystemVariableBoolType("hnsw_threads_build"),
+		Type:              InitSystemVariableIntType("hnsw_threads_build", 0, 1024, false),
 		Default:           int64(0),
 	},
 	"hnsw_threads_search": {
@@ -3547,7 +3547,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Scope:             ScopeBoth,
 		Dynamic:           true,
 		SetVarHintApplies: false,
-		Type:              InitSystemVariableBoolType("hnsw_threads_search"),
+		Type:              InitSystemVariableIntType("hnsw_threads_search", 0, 1024, false),
 		Default:           int64(0),
 	},
 	"validate_password": {
