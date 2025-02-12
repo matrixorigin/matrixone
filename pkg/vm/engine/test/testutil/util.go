@@ -128,7 +128,7 @@ func CreateEngines(
 	taeEngine, err = NewTestTAEEngine(ctx, taeDir, t, rpcAgent, opts.TaeEngineOptions)
 	require.Nil(t, err)
 
-	disttaeEngine, err = NewTestDisttaeEngine(ctx, taeEngine.GetDB().Runtime.Fs.Service, rpcAgent, taeEngine, funcOpts...)
+	disttaeEngine, err = NewTestDisttaeEngine(ctx, taeEngine.GetDB().Runtime.Fs, rpcAgent, taeEngine, funcOpts...)
 	require.Nil(t, err)
 
 	mp = disttaeEngine.mp

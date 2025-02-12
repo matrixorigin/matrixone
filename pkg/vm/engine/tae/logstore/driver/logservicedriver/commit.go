@@ -24,8 +24,13 @@ import (
 )
 
 var ErrTooMuchPenddings = moerr.NewInternalErrorNoCtx("too much penddings")
+var ErrNeedReplayForWrite = moerr.NewInternalErrorNoCtx("need replay for write")
 
 func (d *LogServiceDriver) Append(e *entry.Entry) (err error) {
+	if !d.canWrite() {
+		return ErrNeedReplayForWrite
+	}
+
 	_, err = d.commitLoop.Enqueue(e)
 	return
 }
@@ -57,7 +62,10 @@ func (d *LogServiceDriver) onCommitIntents(items ...any) {
 
 func (d *LogServiceDriver) asyncCommit(committer *groupCommitter) {
 	// apply write token and bind the client for committing
-	committer.client = d.getClientForWrite()
+	var err error
+	if committer.client, err = d.getClientForWrite(); err != nil {
+		panic(err)
+	}
 
 	// set the safe DSN for the committer
 	// the safe DSN is the DSN of the last committed entry
@@ -79,29 +87,23 @@ func (d *LogServiceDriver) asyncCommit(committer *groupCommitter) {
 // get a client from the client pool for writing user data
 // user data: record with DSN
 // Truncate Logrecord is not user data
-func (d *LogServiceDriver) getClientForWrite() (client *wrappedClient) {
-	var (
-		err error
-		now = time.Now()
-	)
+func (d *LogServiceDriver) getClientForWrite() (client *wrappedClient, err error) {
+	now := time.Now()
+	defer func() {
+		if err != nil || time.Since(now) > time.Second*2 {
+			logger := logutil.Info
+			if err != nil {
+				logger = logutil.Error
+			}
+			logger(
+				"Wal-Get-Client",
+				zap.Duration("duration", time.Since(now)),
+				zap.Error(err),
+			)
+		}
+	}()
 
 	client, err = d.clientPool.GetWithWriteToken()
-
-	if err != nil || time.Since(now) > time.Second*2 {
-		logger := logutil.Info
-		if err != nil {
-			logger = logutil.Error
-		}
-		logger(
-			"Wal-Get-Client",
-			zap.Duration("duration", time.Since(now)),
-			zap.Error(err),
-		)
-	}
-
-	if err != nil {
-		panic(err)
-	}
 	return
 }
 

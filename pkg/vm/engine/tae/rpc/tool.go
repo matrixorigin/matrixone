@@ -317,7 +317,7 @@ func (c *moObjStatArg) Run() (err error) {
 	}
 
 	if c.ctx != nil {
-		c.fs = c.ctx.db.Runtime.Fs.Service
+		c.fs = c.ctx.db.Runtime.Fs
 	}
 
 	if err = c.InitReader(ctx, c.name); err != nil {
@@ -687,7 +687,7 @@ func (c *objGetArg) Run() (err error) {
 	}
 
 	if c.ctx != nil {
-		c.fs = c.ctx.db.Runtime.Fs.Service
+		c.fs = c.ctx.db.Runtime.Fs
 	}
 
 	if err = c.InitReader(ctx, c.name); err != nil {
@@ -1129,7 +1129,11 @@ func (c *ckpStatArg) Run() (err error) {
 	return
 }
 
-func getCkpData(ctx context.Context, entry *checkpoint.CheckpointEntry, fs *objectio.ObjectFS) (data *logtail.CheckpointData, err error) {
+func getCkpData(
+	ctx context.Context,
+	entry *checkpoint.CheckpointEntry,
+	fs fileservice.FileService,
+) (data *logtail.CheckpointData, err error) {
 	if data, err = entry.PrefetchMetaIdx(ctx, fs); err != nil {
 		err = moerr.NewInfoNoCtx(fmt.Sprintf("failed to get checkpoint data %v", err))
 		return

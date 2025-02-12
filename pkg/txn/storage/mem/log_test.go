@@ -89,3 +89,8 @@ func TestTruncateLog(t *testing.T) {
 	assert.Equal(t, uint64(1), lsn)
 	assert.Equal(t, logs[10:], readed)
 }
+
+func TestMemLogClient_UpdateLeaseholderID(t *testing.T) {
+	l := NewMemLog()
+	assert.NoError(t, l.UpdateLeaseholderID(context.Background(), 1))
+}

@@ -33,16 +33,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type mockRelation struct {
-	engine.Relation
-	result *batch.Batch
-}
-
-func (e *mockRelation) Write(_ context.Context, b *batch.Batch) error {
-	e.result = b
-	return nil
-}
-
 func TestInsertOperator(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -66,7 +56,7 @@ func TestInsertOperator(t *testing.T) {
 
 	relation := mock_frontend.NewMockRelation(ctrl)
 	relation.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-
+	relation.EXPECT().Reset(gomock.Any()).Return(nil).AnyTimes()
 	database.EXPECT().Relation(gomock.Any(), gomock.Any(), gomock.Any()).Return(relation, nil).AnyTimes()
 
 	proc := testutil.NewProc()
@@ -102,8 +92,7 @@ func TestInsertOperator(t *testing.T) {
 			},
 		},
 		ctr: container{
-			state:  vm.Build,
-			source: &mockRelation{},
+			state: vm.Build,
 		},
 	}
 	resetChildren(&argument1, batch1)

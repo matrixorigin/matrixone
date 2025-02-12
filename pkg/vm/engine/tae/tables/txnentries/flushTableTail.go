@@ -142,7 +142,15 @@ func (entry *flushTableTailEntry) addTransferPages(ctx context.Context) {
 		id := entry.aobjHandles[i].Fingerprint()
 		entry.pageIds = append(entry.pageIds, id)
 		objectIDs := []*objectio.ObjectId{entry.createdObjHandle.GetID()}
-		page := model.NewTransferHashPage(id, bts, isTransient, entry.rt.LocalFs.Service, model.GetTTL(), model.GetDiskTTL(), objectIDs)
+		page := model.NewTransferHashPage(
+			id,
+			bts,
+			isTransient,
+			entry.rt.LocalFs,
+			model.GetTTL(),
+			model.GetDiskTTL(),
+			objectIDs,
+		)
 		page.Train(m)
 
 		start = time.Now()
@@ -155,7 +163,7 @@ func (entry *flushTableTailEntry) addTransferPages(ctx context.Context) {
 	}
 
 	start = time.Now()
-	model.WriteTransferPage(ctx, entry.rt.LocalFs.Service, pages, *ioVector)
+	model.WriteTransferPage(ctx, entry.rt.LocalFs, pages, *ioVector)
 	now := time.Now()
 	for _, page := range pages {
 		if page.BornTS() != bts {
@@ -304,7 +312,7 @@ func (entry *flushTableTailEntry) PrepareRollback() (err error) {
 	//    It's ok to leave the DelsMap fade away naturally.
 
 	// remove written file
-	fs := entry.rt.Fs.Service
+	fs := entry.rt.Fs
 
 	// object for snapshot read of aobjects
 	aobjNames := make([]string, 0, len(entry.aobjMetas))

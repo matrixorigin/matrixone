@@ -17,17 +17,11 @@ package objectio
 import (
 	"context"
 	"fmt"
-	"iter"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 )
-
-type ObjectFS struct {
-	Service fileservice.FileService
-	Dir     string
-}
 
 func TmpNewFileservice(ctx context.Context, dir string) fileservice.FileService {
 	return tmpNewFileservice(ctx, defines.LocalFileServiceName, dir)
@@ -50,24 +44,4 @@ func tmpNewFileservice(ctx context.Context, kind string, dir string) fileservice
 		panic(any(err))
 	}
 	return service
-}
-
-func NewObjectFS(service fileservice.FileService, dir string) *ObjectFS {
-	fs := &ObjectFS{
-		Service: service,
-		Dir:     dir,
-	}
-	return fs
-}
-
-func (o *ObjectFS) ListDir(dir string) iter.Seq2[*fileservice.DirEntry, error] {
-	return o.Service.List(context.Background(), dir)
-}
-
-func (o *ObjectFS) DelFiles(ctx context.Context, name []string) error {
-	return o.Service.Delete(ctx, name...)
-}
-
-func (o *ObjectFS) Delete(fileName string) error {
-	return o.Service.Delete(context.Background(), fileName)
 }

@@ -553,3 +553,7 @@ func (t *Table) MergeObjects(ctx context.Context, objstats []objectio.ObjectStat
 func (t *Table) GetNonAppendableObjectStats(ctx context.Context) ([]objectio.ObjectStats, error) {
 	return nil, nil
 }
+
+func (t *Table) Reset(op client.TxnOperator) error {
+	return nil
+}

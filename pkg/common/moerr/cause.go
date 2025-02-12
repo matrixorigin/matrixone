@@ -124,6 +124,7 @@ var (
 	CauseRunClientTest                 = NewInternalError(context.Background(), "RunClientTest")
 	CauseProcessShardTruncateLog       = NewInternalError(context.Background(), "processShardTruncateLog")
 	CauseProcessHAKeeperTruncation     = NewInternalError(context.Background(), "processHAKeeperTruncation")
+	CauseProcessTruncationReadState    = NewInternalError(context.Background(), "processTruncationReadState")
 	//pkg/proxy
 	CauseProxyBootstrap  = NewInternalError(context.Background(), "proxy Bootstrap")
 	CauseGenConnID       = NewInternalError(context.Background(), "genConnID")

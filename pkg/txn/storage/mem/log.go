@@ -66,6 +66,10 @@ func (mc *memLogClient) GetLogRecord(payloadLength int) logpb.LogRecord {
 	return logpb.LogRecord{}
 }
 
+func (mc *memLogClient) UpdateLeaseholderID(ctx context.Context, lease uint64) error {
+	return nil
+}
+
 func (mc *memLogClient) Append(ctx context.Context, log logpb.LogRecord) (logservice.Lsn, error) {
 	mc.Lock()
 	defer mc.Unlock()

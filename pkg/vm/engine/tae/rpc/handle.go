@@ -1003,7 +1003,7 @@ func (h *Handle) HandleWrite(
 					ctx,
 					[]uint16{uint16(rowidIdx), uint16(pkIdx)},
 					nil,
-					h.db.Runtime.Fs.Service,
+					h.db.Runtime.Fs,
 					loc,
 					fileservice.Policy(0),
 					false,

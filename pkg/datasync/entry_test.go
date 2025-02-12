@@ -88,7 +88,7 @@ func (m *mockEntry) WriteTo(w io.Writer) (int64, error) {
 }
 
 func runWithBaseEnv(fn func(cat *catalog.Catalog, txn txnif.AsyncTxn) error) error {
-	cat := catalog.MockCatalog()
+	cat := catalog.MockCatalog(nil)
 	defer cat.Close()
 	txnMgr := txnbase.NewTxnManager(
 		catalog.MockTxnStoreFactory(cat),

@@ -61,11 +61,20 @@ func (insert *Insert) Prepare(proc *process.Process) error {
 	} else {
 		ref := insert.InsertCtx.Ref
 		eng := insert.InsertCtx.Engine
-		rel, err := colexec.GetRelAndPartitionRelsByObjRef(proc.Ctx, proc, eng, ref)
-		if err != nil {
-			return err
+
+		if insert.ctr.source == nil {
+			rel, err := colexec.GetRelAndPartitionRelsByObjRef(proc.Ctx, proc, eng, ref)
+			if err != nil {
+				return err
+			}
+			insert.ctr.source = rel
+		} else {
+			err := insert.ctr.source.Reset(proc.GetTxnOperator())
+			if err != nil {
+				return err
+			}
 		}
-		insert.ctr.source = rel
+
 		if insert.ctr.buf == nil {
 			insert.ctr.buf = batch.NewWithSize(len(insert.InsertCtx.Attrs))
 			insert.ctr.buf.SetAttributes(insert.InsertCtx.Attrs)

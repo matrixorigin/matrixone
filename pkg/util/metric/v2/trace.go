@@ -176,6 +176,7 @@ var (
 	TraceMOLoggerErrorWriteItemCounter = traceMOLoggerErrorCounter.WithLabelValues("write_item")
 	TraceMOLoggerErrorFlushCounter     = traceMOLoggerErrorCounter.WithLabelValues("flush")
 	TraceMOLoggerErrorConnDBCounter    = traceMOLoggerErrorCounter.WithLabelValues("conn_db")
+	TraceMOLoggerErrorPingDBCounter    = traceMOLoggerErrorCounter.WithLabelValues("ping_db")
 
 	traceMOLoggerBufferActionCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{

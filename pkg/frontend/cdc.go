@@ -545,6 +545,13 @@ var checkPitr = func(ctx context.Context, bh BackgroundExec, accName string, pts
 		return !(unit == "h" && length < minPitrLen), nil
 	}
 
+	if ok, err := checkPitrByLevel(cdc2.ClusterLevel, "", ""); err != nil {
+		return err
+	} else if ok {
+		// covered by cluster level pitr
+		return nil
+	}
+
 	for _, pt := range pts.Pts {
 		dbName := pt.Source.Database
 		tblName := pt.Source.Table

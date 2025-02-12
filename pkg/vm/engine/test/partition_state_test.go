@@ -18,6 +18,8 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -27,9 +29,12 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 
+	pkgCatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -743,4 +748,89 @@ func Test_Bug_DupEntryWhenGCInMemTombstones(t *testing.T) {
 				[]int32{4, 3, 2, 1}))
 		res.Close()
 	}
+}
+
+func TestConsumeCheckpointEntry(t *testing.T) {
+	pkgCatalog.SetupDefines("")
+
+	var (
+		accountId    = pkgCatalog.System_Account
+		tableName    = "test1"
+		databaseName = "db1"
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
+
+	disttaeEngine, taeHandler, rpcAgent, _ := testutil.CreateEngines(ctx, testutil.TestOptions{}, t)
+	defer func() {
+		disttaeEngine.Close(ctx)
+		taeHandler.Close(true)
+		rpcAgent.Close()
+	}()
+	schema := catalog.MockSchemaAll(20, 0)
+	schema.Name = tableName
+	bat := catalog.MockBatch(schema, 10)
+
+	ctx, cancel = context.WithTimeout(ctx, time.Minute*5)
+	defer cancel()
+	_, _, err := disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
+	require.NoError(t, err)
+	txn, rel := testutil2.GetRelation(t, accountId, taeHandler.GetDB(), databaseName, tableName)
+	require.Nil(t, rel.Append(ctx, bat))
+	require.Nil(t, txn.Commit(ctx))
+
+	txn, rel = testutil2.GetRelation(t, accountId, taeHandler.GetDB(), databaseName, tableName)
+	id := rel.GetMeta().(*catalog.TableEntry).AsCommonID()
+	obj := testutil2.GetOneBlockMeta(rel)
+	err = rel.RangeDelete(obj.AsCommonID(), 0, 0, handle.DT_Normal)
+	require.Nil(t, err)
+	require.Nil(t, txn.Commit(ctx))
+
+	err = disttaeEngine.SubscribeTable(ctx, id.DbID, id.TableID, false)
+	require.Nil(t, err)
+	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
+	mp := common.DebugAllocator
+	partitionState := disttaeEngine.Engine.GetOrCreateLatestPart(id.DbID, id.TableID).Snapshot().Copy()
+
+	taeHandler.GetDB().ForceCheckpoint(ctx, taeHandler.GetDB().TxnMgr.Now())
+	taeHandler.GetDB().ForceCheckpoint(ctx, taeHandler.GetDB().TxnMgr.Now())
+
+	metaLoc, _, err := taeHandler.GetDB().CollectCheckpointsInRange(ctx, types.TS{}, taeHandler.GetDB().TxnMgr.Now())
+	assert.NoError(t, err)
+	locationsAndVersions := strings.Split(metaLoc, ";")
+	locationsAndVersions = locationsAndVersions[:len(locationsAndVersions)-1]
+	locationsAndVersions = append([]string{strconv.Itoa(2)}, locationsAndVersions...)
+	metaLoc = strings.Join(locationsAndVersions, ";")
+
+	err = logtail.ConsumeCheckpointEntries(
+		ctx,
+		"",
+		metaLoc,
+		id.TableID,
+		tableName,
+		id.DbID,
+		databaseName,
+		partitionState.HandleObjectEntry,
+		mp,
+		taeHandler.GetDB().Opts.Fs,
+	)
+	assert.NoError(t, err)
+
+	objIter, err := partitionState.NewObjectsIter(taeHandler.GetDB().Runtime.Now(), false, false)
+	assert.NoError(t, err)
+	objCount := 0
+	for objIter.Next() {
+		objCount++
+	}
+	assert.Equal(t, 2, objCount)
+
+	objIter, err = partitionState.NewObjectsIter(taeHandler.GetDB().Runtime.Now(), false, true)
+	assert.NoError(t, err)
+	objCount = 0
+	for objIter.Next() {
+		objCount++
+	}
+	assert.Equal(t, 2, objCount)
 }

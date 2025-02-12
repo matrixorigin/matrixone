@@ -1225,7 +1225,7 @@ func getCost(start *Expr, end *Expr, step *Expr) (float64, bool) {
 			stepNum = 1
 		}
 	}
-	ret := (endNum - startNum) / stepNum
+	ret := (endNum - startNum + 1) / stepNum
 	if ret < 0 {
 		return 0, false
 	}

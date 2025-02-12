@@ -34,7 +34,7 @@ func TestComposedCmd(t *testing.T) {
 	defer composed.Close()
 
 	schema := catalog.MockSchema(1, 0)
-	c := catalog.MockCatalog()
+	c := catalog.MockCatalog(nil)
 	defer c.Close()
 
 	db, _ := c.CreateDBEntry("db", "", "", nil)
@@ -87,7 +87,7 @@ func TestComposedCmdMaxSize(t *testing.T) {
 	defer composed.Close()
 
 	schema := catalog.MockSchema(1, 0)
-	c := catalog.MockCatalog()
+	c := catalog.MockCatalog(nil)
 	defer c.Close()
 
 	db, _ := c.CreateDBEntry("db", "", "", nil)

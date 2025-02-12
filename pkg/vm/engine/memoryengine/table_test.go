@@ -18,6 +18,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -39,4 +40,11 @@ func Test_TableReader(t *testing.T) {
 	assert.Panics(t, func() {
 		table.GetProcess()
 	})
+}
+
+func TestTable_Reset(t *testing.T) {
+	table := new(Table)
+	newOp, closeFn := client.NewTestTxnOperator(context.TODO())
+	defer closeFn()
+	assert.NoError(t, table.Reset(newOp))
 }

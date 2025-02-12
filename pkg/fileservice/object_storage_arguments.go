@@ -23,8 +23,6 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"go.uber.org/zap"
 )
 
 type ObjectStorageArguments struct {
@@ -153,23 +151,23 @@ func (o *ObjectStorageArguments) validate() error {
 	// region
 	if o.Region == "" {
 
-		// 腾讯云
 		if o.Endpoint != "" && strings.Contains(o.Endpoint, "myqcloud.com") {
+			// 腾讯云
 			matches := qcloudEndpointPattern.FindStringSubmatch(o.Endpoint)
 			if len(matches) > 0 {
 				o.Region = matches[1]
 			}
 
-		} else {
+		} else if o.Endpoint != "" && strings.Contains(o.Endpoint, "amazonaws.com") {
+			// AWS
 			// try to get region from bucket
-			// only works for AWS S3
 			resp, err := http.Head("https://" + o.Bucket + ".s3.amazonaws.com")
 			if err == nil {
 				if value := resp.Header.Get("x-amz-bucket-region"); value != "" {
 					o.Region = value
 				}
 			} else {
-				logutil.Debug("error", zap.Error(err))
+				return err
 			}
 		}
 

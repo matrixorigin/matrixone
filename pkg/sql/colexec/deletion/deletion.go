@@ -77,11 +77,19 @@ func (deletion *Deletion) Prepare(proc *process.Process) error {
 	} else {
 		ref := deletion.DeleteCtx.Ref
 		eng := deletion.DeleteCtx.Engine
-		rel, err := colexec.GetRelAndPartitionRelsByObjRef(proc.Ctx, proc, eng, ref)
-		if err != nil {
-			return err
+		if deletion.ctr.source == nil {
+			rel, err := colexec.GetRelAndPartitionRelsByObjRef(proc.Ctx, proc, eng, ref)
+			if err != nil {
+				return err
+			}
+			deletion.ctr.source = rel
+		} else {
+			err := deletion.ctr.source.Reset(proc.GetTxnOperator())
+			if err != nil {
+				return err
+			}
 		}
-		deletion.ctr.source = rel
+
 	}
 	deletion.ctr.affectedRows = 0
 

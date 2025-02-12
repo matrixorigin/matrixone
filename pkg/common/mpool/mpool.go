@@ -544,7 +544,7 @@ func sizeToIdx(size int) int {
 
 func (mp *MPool) Alloc(sz int, offHeap bool) ([]byte, error) {
 	// reject unexpected alloc size.
-	if sz < 0 || sz > GB {
+	if sz < 0 || sz > 2*GB {
 		logutil.Errorf("mpool memory allocation exceed limit with requested size %d: %s", sz, string(debug.Stack()))
 		return nil, moerr.NewInternalErrorNoCtxf("mpool memory allocation exceed limit with requested size %d", sz)
 	}

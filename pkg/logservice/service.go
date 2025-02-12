@@ -299,6 +299,8 @@ func (s *Service) handle(ctx context.Context, req pb.Request,
 		return s.handleTruncate(ctx, req), pb.LogRecordResponse{}
 	case pb.GET_TRUNCATE:
 		return s.handleGetTruncatedIndex(ctx, req), pb.LogRecordResponse{}
+	case pb.UPDATE_LEASEHOLDER_ID:
+		return s.handleUpdateLeaseholderID(ctx, req), pb.LogRecordResponse{}
 	case pb.CONNECT:
 		return s.handleConnect(ctx, req), pb.LogRecordResponse{}
 	case pb.CONNECT_RO:
@@ -395,6 +397,15 @@ func (s *Service) handleTsoUpdate(ctx context.Context, req pb.Request) pb.Respon
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 	} else {
 		resp.TsoResponse = &pb.TsoResponse{Value: v}
+	}
+	return resp
+}
+
+func (s *Service) handleUpdateLeaseholderID(ctx context.Context, req pb.Request) pb.Response {
+	r := req.LogRequest
+	resp := getResponse(req)
+	if err := s.store.getOrExtendTNLease(ctx, r.ShardID, r.TNID); err != nil {
+		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 	}
 	return resp
 }

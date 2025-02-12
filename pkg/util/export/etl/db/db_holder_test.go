@@ -19,13 +19,27 @@ import (
 	"database/sql"
 	"reflect"
 	"regexp"
+	"sync"
 	"testing"
+	"time"
 
+	"github.com/prashantv/gostub"
+	"github.com/stretchr/testify/assert"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/require"
 )
+
+var testWriteRowRecordsMux sync.Mutex
+
+func SyncTestWriteRowRecords(t *testing.T, f func(t *testing.T)) {
+	testWriteRowRecordsMux.Lock()
+	defer testWriteRowRecordsMux.Unlock()
+	f(t)
+}
 
 func TestBulkInsert(t *testing.T) {
 
@@ -141,4 +155,179 @@ func TestSetLabelSelector(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestNewReConnectionBackOff(t *testing.T) {
+	// Test with valid parameters
+	backOff := NewReConnectionBackOff(1*time.Second, 3)
+	if backOff.window != 1*time.Second || backOff.threshold != 3 {
+		t.Errorf("Expected window 1s and threshold 3, got %v and %v", backOff.window, backOff.threshold)
+	}
+
+	// Test with zero window
+	backOff = NewReConnectionBackOff(0, 3)
+	if backOff.window != 0 || backOff.threshold != 3 {
+		t.Errorf("Expected window 0s and threshold 3, got %v and %v", backOff.window, backOff.threshold)
+	}
+
+	// Test with negative window
+	backOff = NewReConnectionBackOff(-1*time.Second, 3)
+	if backOff.window != -1*time.Second || backOff.threshold != 3 {
+		t.Errorf("Expected window -1s and threshold 3, got %v and %v", backOff.window, backOff.threshold)
+	}
+
+	// Test with zero threshold
+	backOff = NewReConnectionBackOff(1*time.Second, 0)
+	if backOff.window != 1*time.Second || backOff.threshold != 0 {
+		t.Errorf("Expected window 1s and threshold 0, got %v and %v", backOff.window, backOff.threshold)
+	}
+
+	// Test with negative threshold
+	backOff = NewReConnectionBackOff(1*time.Second, -1)
+	if backOff.window != 1*time.Second || backOff.threshold != -1 {
+		t.Errorf("Expected window 1s and threshold -1, got %v and %v", backOff.window, backOff.threshold)
+	}
+}
+
+func TestCount(t *testing.T) {
+	backOff := NewReConnectionBackOff(time.Minute, 2)
+
+	// Test initial count
+	got := backOff.Count()
+	require.Equal(t, true, got)
+
+	// Test count increment
+	backOff.Count()
+	backOff.Count()
+	got = backOff.Count()
+	require.Equal(t, false, got)
+
+	// Test reset after window
+	// inject: reset after window.
+	backOff.last = time.Now().Add(-time.Hour)
+	got = backOff.Count()
+	require.Equal(t, true, got)
+	require.Equal(t, 1, backOff.count)
+}
+
+func TestCheck(t *testing.T) {
+	backOff := NewReConnectionBackOff(time.Minute, 2)
+
+	// Test initial check
+	got := backOff.Check()
+	require.Equal(t, true, got)
+
+	// Test check after incrementing count
+	backOff.Count()
+	backOff.Count()
+	backOff.Count()
+	got = backOff.Check()
+	require.Equal(t, false, got)
+
+	// Test reset after window
+	// inject: reset after window.
+	backOff.last = time.Now().Add(-time.Hour)
+	got = backOff.Check()
+	require.Equal(t, true, got)
+
+	// inject count == threshold
+	backOff.count = 2
+	backOff.last = time.Now().Add(time.Minute)
+	got = backOff.Check()
+	require.Equal(t, true, got)
+
+	// inject valid 'false' case
+	backOff.count = 20
+	backOff.last = time.Now()
+	got = backOff.Check()
+	require.Equal(t, false, got)
+
+	// inject invalid 'last' value
+	backOff.count = 20
+	backOff.last = time.Now().Add(time.Hour)
+	got = backOff.Check()
+	require.Equal(t, true, got)
+}
+
+func Test_WriteRowRecords2(t *testing.T) {
+	SyncTestWriteRowRecords(t, func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("an error '%s' was not expected when opening a stub database connection", err)
+		}
+		defer db.Close()
+		mock.ExpectExec(regexp.QuoteMeta(`LOAD DATA INLINE FORMAT='csv', DATA='record1
+' INTO TABLE testDB.testTable`)).WillReturnError(moerr.NewInternalErrorNoCtx("return_err"))
+		SetDBConn(db)
+
+		// set up your DefaultSqlWriter and records
+		var dummyStrColumn = table.Column{Name: "str", ColType: table.TVarchar, Scale: 32, Default: "", Comment: "str column"}
+
+		tbl := &table.Table{
+			Database: "testDB",
+			Table:    "testTable",
+			Columns:  []table.Column{dummyStrColumn},
+		}
+		records := [][]string{
+			{"record1"},
+			// {"record2"},
+			// add more records as needed
+		}
+
+		// call the function to test
+		_, err = WriteRowRecords(records, tbl, 1*time.Second)
+		assert.Error(t, err)
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("there were unfulfilled expectations: %s", err)
+		}
+	})
+}
+
+func TestWriteRowRecords_WithBackoff(t *testing.T) {
+	SyncTestWriteRowRecords(t, func(t *testing.T) {
+		old := DBConnErrCount
+		defer func() {
+			DBConnErrCount = old
+		}()
+
+		// set up your DefaultSqlWriter and records
+		var dummyStrColumn = table.Column{Name: "str", ColType: table.TVarchar, Scale: 32, Default: "", Comment: "str column"}
+
+		tbl := &table.Table{
+			Database: "testDB",
+			Table:    "testTable",
+			Columns:  []table.Column{dummyStrColumn},
+		}
+		records := [][]string{
+			{"record1"},
+			// {"record2"},
+			// add more records as needed
+		}
+
+		DBConnErrCount = NewReConnectionBackOff(time.Hour, 0)
+		DBConnErrCount.Count()
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("an error '%s' was not expected when opening a stub database connection", err)
+		}
+		defer db.Close()
+		mock.ExpectExec(regexp.QuoteMeta(`LOAD DATA INLINE FORMAT='csv', DATA='record1
+' INTO TABLE testDB.testTable`)).WillReturnError(moerr.NewInternalErrorNoCtx("return_err"))
+
+		newConn := false
+		stubs := gostub.Stub(&GetOrInitDBConn, func(forceNewConn bool, randomCN bool) (*sql.DB, error) {
+			newConn = forceNewConn
+			return db, nil
+		})
+		defer stubs.Reset()
+
+		// call the function to test
+		_, err = WriteRowRecords(records, tbl, 1*time.Second)
+		assert.Error(t, err)
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("there were unfulfilled expectations: %s", err)
+		}
+
+		require.True(t, newConn)
+	})
 }

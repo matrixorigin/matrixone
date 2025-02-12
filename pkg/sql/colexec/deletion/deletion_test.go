@@ -23,6 +23,7 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -31,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func TestString(t *testing.T) {
@@ -39,10 +41,7 @@ func TestString(t *testing.T) {
 	arg.String(buf)
 }
 
-func TestNormalDeletion(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
+func prepareDeletionTest(ctrl *gomock.Controller, relResetExpectErr bool) (*process.Process, engine.Engine) {
 	ctx := context.TODO()
 	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 	txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
@@ -66,6 +65,11 @@ func TestNormalDeletion(t *testing.T) {
 	relation := mock_frontend.NewMockRelation(ctrl)
 	relation.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 	relation.EXPECT().Delete(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+	if relResetExpectErr {
+		relation.EXPECT().Reset(gomock.Any()).Return(moerr.NewInternalErrorNoCtx("")).AnyTimes()
+	} else {
+		relation.EXPECT().Reset(gomock.Any()).Return(nil).AnyTimes()
+	}
 
 	database.EXPECT().Relation(gomock.Any(), gomock.Any(), gomock.Any()).Return(relation, nil).AnyTimes()
 
@@ -73,7 +77,14 @@ func TestNormalDeletion(t *testing.T) {
 	proc.Base.TxnClient = txnClient
 	proc.Ctx = ctx
 	proc.Base.TxnOperator = txnOperator
+	return proc, eng
+}
 
+func TestNormalDeletion(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	proc, eng := prepareDeletionTest(ctrl, false)
 	arg := Deletion{
 		DeleteCtx: &DeleteCtx{
 			Ref: &plan.ObjectRef{
@@ -84,9 +95,7 @@ func TestNormalDeletion(t *testing.T) {
 			Engine:        eng,
 			PrimaryKeyIdx: 1,
 		},
-		ctr: container{
-			source: relation,
-		},
+		ctr: container{},
 	}
 
 	resetChildren(&arg)
@@ -101,6 +110,40 @@ func TestNormalDeletion(t *testing.T) {
 	require.NoError(t, err)
 	_, err = vm.Exec(&arg, proc)
 	require.NoError(t, err)
+	arg.Free(proc, false, nil)
+	proc.Free()
+	require.Equal(t, int64(0), proc.GetMPool().CurrNB())
+}
+
+func TestNormalDeletionError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	proc, eng := prepareDeletionTest(ctrl, true)
+
+	arg := Deletion{
+		DeleteCtx: &DeleteCtx{
+			Ref: &plan.ObjectRef{
+				Obj:        0,
+				SchemaName: "testDb",
+				ObjName:    "testTable",
+			},
+			Engine:        eng,
+			PrimaryKeyIdx: 1,
+		},
+		ctr: container{},
+	}
+
+	resetChildren(&arg)
+	err := arg.Prepare(proc)
+	require.NoError(t, err)
+	_, err = vm.Exec(&arg, proc)
+	require.NoError(t, err)
+
+	arg.Reset(proc, false, nil)
+
+	err = arg.Prepare(proc)
+	require.Error(t, err)
 	arg.Free(proc, false, nil)
 	proc.Free()
 	require.Equal(t, int64(0), proc.GetMPool().CurrNB())

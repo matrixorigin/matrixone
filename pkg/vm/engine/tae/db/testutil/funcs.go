@@ -21,6 +21,7 @@ import (
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
@@ -576,7 +577,7 @@ func GetSingleSortKeyValue(bat *containers.Batch, schema *catalog.Schema, row in
 }
 
 func MockCNDeleteInS3(
-	fs *objectio.ObjectFS,
+	fs fileservice.FileService,
 	rowIDVec containers.Vector,
 	pkVec containers.Vector,
 	schema *catalog.Schema,
@@ -586,7 +587,7 @@ func MockCNDeleteInS3(
 	bat.AddVector(objectio.TombstoneAttr_Rowid_Attr, rowIDVec)
 	bat.AddVector("pk", pkVec)
 	name := objectio.MockObjectName()
-	writer, err := ioutil.NewBlockWriterNew(fs.Service, name, 0, nil, true)
+	writer, err := ioutil.NewBlockWriterNew(fs, name, 0, nil, true)
 	writer.SetPrimaryKeyWithType(uint16(objectio.TombstonePrimaryKeyIdx), index.HBF,
 		index.ObjectPrefixFn,
 		index.BlockPrefixFn)

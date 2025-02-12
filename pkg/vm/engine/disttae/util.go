@@ -17,6 +17,7 @@ package disttae
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 
@@ -683,7 +684,9 @@ func (e *concurrentExecutor) Run(ctx context.Context) {
 
 				case t := <-e.tasks:
 					if err := t(); err != nil {
-						logutil.Errorf("failed to execute task: %v", err)
+						if !errors.Is(err, context.Canceled) {
+							logutil.Errorf("failed to execute task: %v", err)
+						}
 					}
 				}
 			}

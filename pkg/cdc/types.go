@@ -38,6 +38,7 @@ const (
 	TableLevel   = "table"
 	DbLevel      = "database"
 	AccountLevel = "account"
+	ClusterLevel = "cluster"
 	MatchAll     = "*"
 
 	MysqlSink       = "mysql"

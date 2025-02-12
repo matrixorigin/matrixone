@@ -169,6 +169,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 	bvtTest3Schema := make(map[string]*Schema)
 	informationSchemaSchema := make(map[string]*Schema)
 	cteTest2Schema := make(map[string]*Schema)
+	selectTestSchema := make(map[string]*Schema)
 
 	schemas := map[string]map[string]*Schema{
 		"tpch":               tpchSchema,
@@ -180,6 +181,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 		"bvt_test3":          bvtTest3Schema,
 		"information_schema": informationSchemaSchema,
 		"cte_test2":          cteTest2Schema,
+		"select_test":        selectTestSchema,
 	}
 
 	dbs := make(map[string]bool)
@@ -416,7 +418,6 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 		},
 		pks: []int{0},
 	}
-
 	moSchema["mo_role_privs"] = &Schema{
 		cols: []col{
 			{"privilege_level", types.T_varchar, false, 100, 0},
@@ -432,7 +433,6 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
 		},
 	}
-
 	moSchema["mo_user_defined_function"] = &Schema{
 		cols: []col{
 			{"function_id", types.T_int32, false, 50, 0},
@@ -456,7 +456,6 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 		},
 		pks: []int{0},
 	}
-
 	moSchema["mo_indexes"] = &Schema{
 		cols: []col{
 			{"id", types.T_uint64, false, 100, 0},
@@ -478,7 +477,6 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 		},
 		pks: []int{0},
 	}
-
 	moSchema["mo_role"] = &Schema{
 		cols: []col{
 			{"role_id", types.T_uint64, false, 100, 0},
@@ -490,7 +488,6 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 		},
 		pks: []int{0},
 	}
-
 	moSchema["mo_stages"] = &Schema{
 		cols: []col{
 			{"stage_id", types.T_uint64, false, 100, 0},
@@ -502,7 +499,6 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			{"comment", types.T_varchar, false, 2048, 0},
 		},
 	}
-
 	moSchema["mo_snapshots"] = &Schema{
 		cols: []col{
 			{"snapshot_id", types.T_uuid, false, 100, 0},
@@ -516,7 +512,6 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 		},
 		pks: []int{0},
 	}
-
 	moSchema["mo_pitr"] = &Schema{
 		cols: []col{
 			{"pitr_id", types.T_uuid, false, 100, 0},
@@ -974,6 +969,18 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			db:  "cte_test2",
 		},
 	}
+
+	// select_test schema
+	{
+		selectTestSchema["bind_select"] = &Schema{
+			cols: []col{
+				{"a", types.T_int64, false, 0, 0},
+				{"b", types.T_int64, false, 0, 0},
+				{"c", types.T_int64, false, 0, 0},
+			},
+		}
+	}
+
 	objects := make(map[string]*ObjectRef)
 	tables := make(map[string]*TableDef)
 	stats := make(map[string]*Stats)

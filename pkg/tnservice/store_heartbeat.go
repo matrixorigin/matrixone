@@ -70,6 +70,8 @@ func (s *store) heartbeat(ctx context.Context) {
 		LockServiceAddress:   s.lockServiceServiceAddr(),
 		ShardServiceAddress:  s.shardServiceServiceAddr(),
 		ConfigData:           s.config.GetData(),
+		// if the replayed LSN is 0, then it is the master TN.
+		ReplayedLsn: 0,
 	}
 
 	if s.queryService != nil {

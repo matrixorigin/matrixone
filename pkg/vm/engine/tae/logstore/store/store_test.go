@@ -123,7 +123,7 @@ func TestReplay(t *testing.T) {
 	if err != nil {
 		panic(err)
 	}
-	_, err = wal.Append(10, e)
+	_, err = wal.AppendEntry(10, e)
 	assert.NoError(t, err)
 
 	err = e.WaitDone()
@@ -135,7 +135,7 @@ func TestReplay(t *testing.T) {
 	if err != nil {
 		panic(err)
 	}
-	_, err = wal.Append(10, e2)
+	_, err = wal.AppendEntry(10, e2)
 	assert.NoError(t, err)
 
 	err = e2.WaitDone()
@@ -147,7 +147,7 @@ func TestReplay(t *testing.T) {
 	if err != nil {
 		panic(err)
 	}
-	_, err = wal.Append(10, e2)
+	_, err = wal.AppendEntry(10, e2)
 	assert.NoError(t, err)
 
 	err = e2.WaitDone()
@@ -169,7 +169,7 @@ func TestTruncate(t *testing.T) {
 	group := entry.GTCustomized
 	for i := 0; i < entryCount; i++ {
 		e := mockEntry()
-		lsn, err := wal.Append(group, e)
+		lsn, err := wal.AppendEntry(group, e)
 		assert.NoError(t, err)
 		assert.NoError(t, e.WaitDone())
 		entryGroupID, entryLSN := e.GetLsn()
@@ -197,7 +197,7 @@ func TestTruncate(t *testing.T) {
 
 	for i := 0; i < entryCount; i++ {
 		e := mockEntry()
-		lsn, err := wal.Append(group, e)
+		lsn, err := wal.AppendEntry(group, e)
 		assert.NoError(t, err)
 		assert.NoError(t, e.WaitDone())
 		entryGroupID, entryLSN := e.GetLsn()

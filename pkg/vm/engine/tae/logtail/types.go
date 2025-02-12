@@ -78,6 +78,13 @@ var (
 		types.New(types.T_varchar, types.MaxVarcharLen, 0),
 		types.New(types.T_varchar, types.MaxVarcharLen, 0),
 	}
+
+	MetaSchemaSeqnums = []uint16{0, 1, 2, 3, 4, 5, 6}
+
+	MetaSchema_Tid_Idx             = 0
+	MetaSchema_DataObject_Idx      = 3
+	MetaSchema_TombstoneObject_Idx = 4
+
 	TNMetaSchemaAttr = []string{
 		CheckpointMetaAttr_BlockLocation,
 		CheckpointMetaAttr_SchemaType,
@@ -107,6 +114,12 @@ var (
 		types.New(types.T_TS, 0, 0),
 		types.New(types.T_TS, 0, 0),
 	}
+	ObjectInfoSeqnums          = []uint16{0, 1, 2, 3, 4, 5, 6, 7}
+	ObjectInfo_ObjectStats_Idx = 0
+	ObjectInfo_DBID_Idx        = 1
+	ObjectInfo_TID_Idx         = 2
+	ObjectInfo_CreateAt_Idx    = 3
+	ObjectInfo_DeleteAt_Idx    = 4
 
 	StorageUsageSchemaAttrs = []string{
 		pkgcatalog.SystemColAttr_AccID,

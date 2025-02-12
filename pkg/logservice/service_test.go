@@ -161,6 +161,24 @@ func TestNotSupportCmd(t *testing.T) {
 	runServiceTest(t, false, true, fn)
 }
 
+func TestServiceUpdateLeaseholderID(t *testing.T) {
+	fn := func(t *testing.T, s *Service) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+
+		req := pb.Request{
+			Method: pb.UPDATE_LEASEHOLDER_ID,
+			LogRequest: pb.LogRequest{
+				ShardID: 1,
+				TNID:    100,
+			},
+		}
+		resp := s.handleUpdateLeaseholderID(ctx, req)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+	}
+	runServiceTest(t, false, true, fn)
+}
+
 func TestServiceConnect(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)

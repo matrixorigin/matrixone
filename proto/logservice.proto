@@ -204,6 +204,7 @@ message TNStoreHeartbeat {
   // QueryAddress is the address of queryservice on tn
   string QueryAddress = 9;
   string  ShardServiceAddress   = 10;
+  uint64  ReplayedLsn = 11;
 };
 
 message RSMState {
@@ -246,6 +247,7 @@ enum MethodType {
   GET_LEADER_ID = 25;
   CHECK_HEALTH = 26;
   READ_LSN = 27;
+  UPDATE_LEASEHOLDER_ID = 28;
 };
 
 enum RecordType {
@@ -584,6 +586,7 @@ message TNStoreInfo {
   // QueryAddress is the address of queryservice on tn
   string          QueryAddress       = 9;
   string  ShardServiceAddress   = 10;
+  uint64 ReplayedLsn = 11;
 }
 
 // TNState contains all TN details known to the HAKeeper.

@@ -162,8 +162,25 @@ func TestQCloudRegion(t *testing.T) {
 
 func TestAWSRegion(t *testing.T) {
 	args := ObjectStorageArguments{
+		Endpoint: "amazonaws.com",
+
 		Bucket: "aws", // hope it will not change its region
 	}
-	args.validate()
+	assert.Nil(t, args.validate())
 	assert.Equal(t, "us-east-1", args.Region)
+
+	args = ObjectStorageArguments{
+		Endpoint: "amazonaws.com",
+
+		Bucket: "fdsafdsafasdfsdafsadfsdafdsafewrewqrweqrewrwerwqrew", // invalid bucket
+	}
+	assert.Nil(t, args.validate())
+	assert.Equal(t, "", args.Region)
+
+	args = ObjectStorageArguments{
+		Endpoint: "amazonaws.com",
+
+		Bucket: "a/b/c", // invalid bucket
+	}
+	assert.NotNil(t, args.validate())
 }

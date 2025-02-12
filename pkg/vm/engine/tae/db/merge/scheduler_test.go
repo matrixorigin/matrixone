@@ -16,6 +16,8 @@ package merge
 
 import (
 	"context"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -26,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestStopStartMerge(t *testing.T) {
@@ -42,7 +43,7 @@ func TestStopStartMerge(t *testing.T) {
 	}
 
 	lockService := scheduler.executor.rt.LockMergeService
-	cata := catalog.MockCatalog()
+	cata := catalog.MockCatalog(nil)
 	defer cata.Close()
 	txnMgr := txnbase.NewTxnManager(catalog.MockTxnStoreFactory(cata), catalog.MockTxnFactory(cata), types.NewMockHLCClock(1))
 	txnMgr.Start(context.Background())

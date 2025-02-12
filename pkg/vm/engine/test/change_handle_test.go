@@ -846,13 +846,13 @@ func TestChangesHandleStaleFiles1(t *testing.T) {
 
 	fs := taeHandler.GetDB().Runtime.Fs
 	deleteFileName := obj.ObjectStats.ObjectName().String()
-	err = fs.DelFiles(ctx, []string{string(deleteFileName)})
+	err = fs.Delete(ctx, []string{string(deleteFileName)}...)
 	assert.NoError(t, err)
 	gcTS := taeHandler.GetDB().TxnMgr.Now()
 	gcTSFileName := ioutil.EncodeCompactCKPMetadataFullName(
 		types.TS{}, gcTS,
 	)
-	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterCheckpoint, gcTSFileName, fs.Service)
+	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterCheckpoint, gcTSFileName, fs)
 	assert.NoError(t, err)
 	_, err = writer.Write(containers.ToCNBatch(bat))
 	assert.NoError(t, err)
@@ -951,14 +951,14 @@ func TestChangesHandleStaleFiles2(t *testing.T) {
 			fs := taeEngine.GetDB().Runtime.Fs
 			for _, obj := range objs {
 				deleteFileName := obj.ObjectStats.ObjectName().String()
-				err = fs.DelFiles(ctx, []string{string(deleteFileName)})
+				err = fs.Delete(ctx, deleteFileName)
 				assert.NoError(t, err)
 			}
 			gcTS := taeEngine.GetDB().TxnMgr.Now()
 			gcTSFileName := ioutil.EncodeCompactCKPMetadataFullName(
 				types.TS{}, gcTS,
 			)
-			writer, err := objectio.NewObjectWriterSpecial(objectio.WriterCheckpoint, gcTSFileName, fs.Service)
+			writer, err := objectio.NewObjectWriterSpecial(objectio.WriterCheckpoint, gcTSFileName, fs)
 			assert.NoError(t, err)
 			_, err = writer.Write(containers.ToCNBatch(bat))
 			assert.NoError(t, err)

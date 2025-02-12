@@ -32,7 +32,7 @@ func TestGetActiveRow(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	ts1 := types.BuildTS(1, 0)
 	schema := catalog.MockSchema(1, 0)
-	c := catalog.MockCatalog()
+	c := catalog.MockCatalog(nil)
 	defer c.Close()
 
 	db, _ := c.CreateDBEntry("db", "", "", nil)

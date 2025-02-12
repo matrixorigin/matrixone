@@ -126,9 +126,8 @@ func (l *LockMeta) doLock(e engine.Engine, proc *process.Process) error {
 	lockDbs := make(map[string]struct{})
 	lockVec := l.lockTableVec
 
-	var bat *batch.Batch
+	bat := batch.NewWithSize(3)
 	if l.lockTableVec == nil {
-		bat = batch.NewWithSize(3)
 		for _, table := range tables {
 			names := strings.SplitN(table, " ", 2)
 			err = vector.AppendFixed(l.lockMetaVecs[0], accountId, false, proc.GetMPool()) //account_id

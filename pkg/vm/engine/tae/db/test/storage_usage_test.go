@@ -27,6 +27,7 @@ import (
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
+
 	// "github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -526,7 +527,7 @@ func Test_RemoveStaleAccounts(t *testing.T) {
 func Test_GatherSpecialSize(t *testing.T) {
 	ioutil.RunPipelineTest(
 		func() {
-			cc := catalog.MockCatalog()
+			cc := catalog.MockCatalog(nil)
 			memo := logtail.NewTNUsageMemo(cc)
 			memo.Clear()
 

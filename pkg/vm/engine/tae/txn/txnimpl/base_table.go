@@ -128,7 +128,7 @@ func (tbl *baseTable) addObjsWithMetaLoc(ctx context.Context, stats objectio.Obj
 					ctx,
 					[]uint16{uint16(schema.GetSingleSortKeyIdx())},
 					nil,
-					tbl.txnTable.store.rt.Fs.Service,
+					tbl.txnTable.store.rt.Fs,
 					loc,
 					fileservice.Policy(0),
 					false,

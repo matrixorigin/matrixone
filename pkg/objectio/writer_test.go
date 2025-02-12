@@ -164,8 +164,7 @@ func TestNewObjectWriter(t *testing.T) {
 	assert.Equal(t, uint8(0xa), buf[63])
 	assert.True(t, nb0 == pool.CurrNB())
 
-	fs := NewObjectFS(service, dir)
-	dirs, err := fileservice.SortedList(fs.ListDir(""))
+	dirs, err := fileservice.SortedList(service.List(ctx, ""))
 	assert.Nil(t, err)
 	assert.Equal(t, 1, len(dirs))
 	objectReader, err = NewObjectReaderWithStr(name, service)

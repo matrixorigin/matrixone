@@ -15,10 +15,13 @@
 package options
 
 import (
+	"bytes"
 	"context"
+	"path"
 	"runtime"
 	"time"
 
+	"github.com/BurntSushi/toml"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -124,6 +127,12 @@ func WithReserveWALEntryCount(count uint64) func(*Options) {
 	return func(r *Options) {
 		r.CheckpointCfg.ReservedWALEntryCount = count
 	}
+}
+
+func (o *Options) JsonString() string {
+	var w bytes.Buffer
+	toml.NewEncoder(&w).Encode(o)
+	return w.String()
 }
 
 func (o *Options) FillDefaults(dirname string) *Options {
@@ -252,6 +261,14 @@ func (o *Options) FillDefaults(dirname string) *Options {
 
 	if o.Ctx == nil {
 		o.Ctx = context.Background()
+	}
+
+	if o.Fs == nil {
+		// TODO:fileservice needs to be passed in as a parameter
+		o.Fs = objectio.TmpNewFileservice(o.Ctx, path.Join(dirname, "data"))
+	}
+	if o.LocalFs == nil {
+		o.LocalFs = objectio.TmpNewFileservice(o.Ctx, path.Join(dirname, "data"))
 	}
 
 	return o

@@ -16,12 +16,13 @@ package disttae
 
 import (
 	"context"
+	"io"
 	"math/rand"
 	"slices"
+	"sync"
 	"testing"
 
-	"github.com/stretchr/testify/require"
-
+	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -32,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
+	"github.com/stretchr/testify/require"
 )
 
 func TestBlockMetaMarshal(t *testing.T) {
@@ -332,4 +334,33 @@ func TestDeletedBlocks_GetDeletedRowIDs(t *testing.T) {
 		x := slices.Index(have, int64(offset))
 		require.NotEqual(t, -1, x)
 	}
+}
+
+func TestConcurrentExecutor_Run(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	ex := newConcurrentExecutor(3)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ex.Run(ctx)
+	require.Equal(t, 3, ex.GetConcurrency())
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	ex.AppendTask(func() error {
+		defer wg.Done()
+		return nil
+	})
+
+	wg.Add(1)
+	ex.AppendTask(func() error {
+		defer wg.Done()
+		return context.Canceled
+	})
+
+	wg.Add(1)
+	ex.AppendTask(func() error {
+		defer wg.Done()
+		return io.EOF
+	})
+	wg.Wait()
 }
