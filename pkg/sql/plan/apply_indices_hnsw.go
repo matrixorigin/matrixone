@@ -112,12 +112,15 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, projNode
 		limit = projNode.Limit
 	}
 
-	var tblcfg vectorindex.IndexTableConfig
-
-	tblcfg.DbName = scanNode.ObjRef.SchemaName
-	tblcfg.SrcTable = scanNode.TableDef.Name
-	tblcfg.MetadataTable = metadef.IndexTableName
-	tblcfg.IndexTable = idxdef.IndexTableName
+	val, err := builder.compCtx.ResolveVariable("hnsw_threads_search", true, false)
+	if err != nil {
+		return nodeID, err
+	}
+	tblcfg := vectorindex.IndexTableConfig{DbName: scanNode.ObjRef.SchemaName,
+		SrcTable:      scanNode.TableDef.Name,
+		MetadataTable: metadef.IndexTableName,
+		IndexTable:    idxdef.IndexTableName,
+		ThreadsSearch: val.(int64)}
 
 	cfgbytes, err := json.Marshal(tblcfg)
 	if err != nil {

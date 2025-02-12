@@ -529,6 +529,11 @@ func genBuildHnswIndex(proc *process.Process, indexDefs map[string]*plan.IndexDe
 	cfg.SrcTable = originalTableDef.Name
 	cfg.PKey = pkColName
 	cfg.KeyPart = idxdef_index.Parts[0]
+	val, err := proc.GetResolveVariableFunc()("hnsw_threads_build", true, false)
+	if err != nil {
+		return nil, err
+	}
+	cfg.ThreadsBuild = val.(int64)
 
 	params := idxdef_index.IndexAlgoParams
 

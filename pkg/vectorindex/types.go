@@ -15,6 +15,8 @@
 package vectorindex
 
 import (
+	"runtime"
+
 	usearch "github.com/unum-cloud/usearch/golang"
 )
 
@@ -39,6 +41,8 @@ type IndexTableConfig struct {
 	IndexTable    string `json:"index"`
 	PKey          string `json:"pkey"`
 	KeyPart       string `json:"part"`
+	ThreadsBuild  int64  `json:"threads_build"`
+	ThreadsSearch int64  `json:"threads_search"`
 }
 
 // HNSW specified parameters
@@ -54,4 +58,17 @@ type HnswParam struct {
 type IndexConfig struct {
 	Type    string
 	Usearch usearch.IndexConfig
+}
+
+// nthread == 0, result will return NumCPU - 1
+func GetConcurrency(nthread int64) int64 {
+	ret := int64(1)
+	if nthread > 0 {
+		return nthread
+	}
+	ncpu := runtime.NumCPU()
+	if ncpu > 1 {
+		ret = int64(ncpu - 1)
+	}
+	return ret
 }

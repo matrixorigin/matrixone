@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"runtime"
 	"sync"
 	"sync/atomic"
 
@@ -36,8 +35,6 @@ import (
 	usearch "github.com/unum-cloud/usearch/golang"
 )
 
-var MaxUSearchThreads = int32(runtime.NumCPU())
-
 // Hnsw search index struct to hold the usearch index
 type HnswSearchIndex struct {
 	Id        int64
@@ -50,12 +47,13 @@ type HnswSearchIndex struct {
 
 // This is the HNSW search implementation that implement VectorIndexSearchIf interface
 type HnswSearch struct {
-	Idxcfg      vectorindex.IndexConfig
-	Tblcfg      vectorindex.IndexTableConfig
-	Indexes     []*HnswSearchIndex
-	Concurrency atomic.Int32
-	Mutex       sync.Mutex
-	Cond        *sync.Cond
+	Idxcfg        vectorindex.IndexConfig
+	Tblcfg        vectorindex.IndexTableConfig
+	Indexes       []*HnswSearchIndex
+	Concurrency   atomic.Int64
+	Mutex         sync.Mutex
+	Cond          *sync.Cond
+	ThreadsSearch int64
 }
 
 // load chunk from database
@@ -102,7 +100,7 @@ func (idx *HnswSearchIndex) loadChunk(proc *process.Process, stream_chan chan ex
 // 3. SELECT chunk_id, data from index_table WHERE index_id = id.  Result will be out of order
 // 4. according to the chunk_id, seek to the offset and write the chunk
 // 5. check the checksum to verify the correctness of the file
-func (idx *HnswSearchIndex) LoadIndex(proc *process.Process, idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) error {
+func (idx *HnswSearchIndex) LoadIndex(proc *process.Process, idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig, nthread int64) error {
 
 	stream_chan := make(chan executor.Result, 2)
 	error_chan := make(chan error)
@@ -155,7 +153,7 @@ func (idx *HnswSearchIndex) LoadIndex(proc *process.Process, idxcfg vectorindex.
 		return err
 	}
 
-	err = usearchidx.ChangeThreadsSearch(uint(MaxUSearchThreads))
+	err = usearchidx.ChangeThreadsSearch(uint(nthread))
 	if err != nil {
 		return err
 	}
@@ -176,7 +174,8 @@ func (idx *HnswSearchIndex) Search(query []float32, limit uint) (keys []usearch.
 }
 
 func NewHnswSearch(idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) *HnswSearch {
-	s := &HnswSearch{Idxcfg: idxcfg, Tblcfg: tblcfg}
+	nthread := vectorindex.GetConcurrency(tblcfg.ThreadsSearch)
+	s := &HnswSearch{Idxcfg: idxcfg, Tblcfg: tblcfg, ThreadsSearch: nthread}
 	s.Cond = sync.NewCond(&s.Mutex)
 	return s
 }
@@ -186,7 +185,7 @@ func (s *HnswSearch) lock() {
 	// check max threads
 	s.Cond.L.Lock()
 	defer s.Cond.L.Unlock()
-	for s.Concurrency.Load() >= MaxUSearchThreads {
+	for s.Concurrency.Load() >= s.ThreadsSearch {
 		s.Cond.Wait()
 	}
 	s.Concurrency.Add(1)
@@ -194,7 +193,7 @@ func (s *HnswSearch) lock() {
 
 // release a lock from a usearch threads
 func (s *HnswSearch) unlock() {
-	s.Concurrency.Add(int32(-1))
+	s.Concurrency.Add(-1)
 	s.Cond.Signal()
 }
 
@@ -214,7 +213,7 @@ func (s *HnswSearch) Search(query []float32, limit uint) (keys []int64, distance
 
 	var errs error
 
-	nthread := runtime.NumCPU()
+	nthread := int(vectorindex.GetConcurrency(0))
 	if nthread > len(s.Indexes) {
 		nthread = len(s.Indexes)
 	}
@@ -325,7 +324,7 @@ func (s *HnswSearch) LoadMetadata(proc *process.Process) ([]*HnswSearchIndex, er
 func (s *HnswSearch) LoadIndex(proc *process.Process, indexes []*HnswSearchIndex) ([]*HnswSearchIndex, error) {
 
 	for _, idx := range indexes {
-		err := idx.LoadIndex(proc, s.Idxcfg, s.Tblcfg)
+		err := idx.LoadIndex(proc, s.Idxcfg, s.Tblcfg, s.ThreadsSearch)
 		if err != nil {
 			return nil, err
 		}

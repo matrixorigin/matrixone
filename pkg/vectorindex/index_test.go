@@ -15,6 +15,7 @@ package vectorindex
 
 import (
 	"fmt"
+	"runtime"
 	"sync"
 	"testing"
 
@@ -174,4 +175,13 @@ func TestConcurrent(t *testing.T) {
 func TestChecksum(t *testing.T) {
 	_, err := CheckSum("abc")
 	require.NotNil(t, err)
+}
+
+func TestGetConcurrency(t *testing.T) {
+	nthread := GetConcurrency(0)
+	require.Equal(t, int64(runtime.NumCPU()-1), nthread)
+
+	concurrent := int64(64)
+	nthread = GetConcurrency(concurrent)
+	require.Equal(t, concurrent, nthread)
 }
