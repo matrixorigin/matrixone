@@ -39,6 +39,7 @@ func TestBuild(t *testing.T) {
 
 	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(uint(ndim))}
 	idxcfg.Usearch.Metric = usearch.L2sq
+	//idxcfg.Usearch.Quantization = usearch.F32
 	idxcfg.Usearch.Connectivity = 48    // default 16
 	idxcfg.Usearch.ExpansionAdd = 128   // default 128
 	idxcfg.Usearch.ExpansionSearch = 30 // default 64
@@ -85,22 +86,37 @@ func TestBuild(t *testing.T) {
 	indexes := build.GetIndexes()
 	require.Equal(t, 5, len(indexes))
 
+	/*
+		for _, idx := range indexes {
+			fi, err := os.Stat(idx.Path)
+			require.Nil(t, err)
+			filesz := fi.Size()
+			fmt.Printf("file %s size = %d\n", idx.Path, filesz)
+		}
+	*/
+
 	fmt.Printf("model search\n")
 	// load index file and search
 	search := NewHnswSearch(idxcfg, tblcfg)
 	defer search.Destroy()
 
+	fmt.Printf("threads search %d\n", search.ThreadsSearch)
 	// test Contains with no indexes
 	found, err := search.Contains(int64(nthread*nitem + 1))
 	require.Nil(t, err)
 	require.False(t, found)
 
+	fmt.Printf("load model from files\n")
 	// load index
 	search.Indexes = make([]*HnswSearchIndex, len(indexes))
 	for i, idx := range indexes {
 		sidx := &HnswSearchIndex{}
 		sidx.Index, err = usearch.NewIndex(idxcfg.Usearch)
 		require.Nil(t, err)
+
+		err = sidx.Index.ChangeThreadsSearch(uint(search.ThreadsSearch))
+		require.Nil(t, err)
+
 		err = sidx.Index.Load(idx.Path)
 		require.Nil(t, err)
 		search.Indexes[i] = sidx
@@ -110,6 +126,7 @@ func TestBuild(t *testing.T) {
 		require.Equal(t, nitem, int(slen))
 	}
 
+	fmt.Println("start recall")
 	// check recall
 	failed := 0
 	var wg2 sync.WaitGroup
