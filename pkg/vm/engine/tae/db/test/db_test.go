@@ -6798,7 +6798,9 @@ func TestAppendAndGC2(t *testing.T) {
 	// check gc meta files
 	var gcFile bool
 	for file := range files {
-		if strings.Contains(file, "/gc_") && strings.Contains(file, ".ckp") {
+		if strings.Contains(file, "/gc_") && (strings.Contains(file, ".ckp") ||
+			strings.Contains(file, ".fast") ||
+			strings.Contains(file, ".scan")) {
 			gcFile = true
 			break
 		}
