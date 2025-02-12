@@ -90,6 +90,12 @@ func TestBuild(t *testing.T) {
 	search := NewHnswSearch(idxcfg, tblcfg)
 	defer search.Destroy()
 
+	// test Contains with no indexes
+	found, err := search.Contains(int64(nthread*nitem + 1))
+	require.Nil(t, err)
+	require.False(t, found)
+
+	// load index
 	search.Indexes = make([]*HnswSearchIndex, len(indexes))
 	for i, idx := range indexes {
 		sidx := &HnswSearchIndex{}
@@ -104,6 +110,7 @@ func TestBuild(t *testing.T) {
 		require.Equal(t, nitem, int(slen))
 	}
 
+	// check recall
 	failed := 0
 	var wg2 sync.WaitGroup
 	for j := 0; j < nthread; j++ {
@@ -128,6 +135,11 @@ func TestBuild(t *testing.T) {
 
 	wg2.Wait()
 
+	// test Contains false
+	found, err = search.Contains(int64(nthread*nitem + 1))
+	require.Nil(t, err)
+	require.False(t, found)
+
 	recall := float32(nthread*nitem-failed) / float32(nthread*nitem)
 	fmt.Printf("Recall %f\n", float32(nthread*nitem-failed)/float32(nthread*nitem))
 	require.True(t, (recall > 0.96))
@@ -149,4 +161,7 @@ func TestBuildIndex(t *testing.T) {
 	full, err := idx.Full()
 	require.Nil(t, err)
 	require.Equal(t, full, false)
+
+	err = idx.Destroy()
+	require.Nil(t, err)
 }
