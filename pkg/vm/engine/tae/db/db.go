@@ -34,7 +34,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	wb "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -310,7 +309,6 @@ func (db *DB) RollbackTxn(txn txnif.AsyncTxn) error {
 
 func (db *DB) ReplayWal(
 	ctx context.Context,
-	dataFactory *tables.DataFactory,
 	maxTs types.TS,
 	lsn uint64,
 	valid bool,
@@ -321,7 +319,7 @@ func (db *DB) ReplayWal(
 
 	db.LogtailMgr.UpdateMaxCommittedLSN(lsn)
 
-	replayer := newWalReplayer(dataFactory, db, maxTs, lsn, valid)
+	replayer := newWalReplayer(db, maxTs, lsn, valid)
 	if err = replayer.Replay(ctx); err != nil {
 		return
 	}

@@ -273,7 +273,7 @@ func Open(
 	)
 
 	now = time.Now()
-	if err = db.ReplayWal(ctx, dataFactory, checkpointed, ckpLSN, valid); err != nil {
+	if err = db.ReplayWal(ctx, checkpointed, ckpLSN, valid); err != nil {
 		return
 	}
 
