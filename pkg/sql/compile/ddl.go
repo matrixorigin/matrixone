@@ -1796,7 +1796,15 @@ func (s *Scope) CreateIndex(c *Compile) error {
 	if err != nil {
 		return err
 	}
-	ct := defs[0].(*engine.ConstraintDef)
+
+	var ok bool
+	var ct *engine.ConstraintDef
+	for _, def := range defs {
+		ct, ok = def.(*engine.ConstraintDef)
+		if ok {
+			break
+		}
+	}
 
 	oldCt, err := GetConstraintDef(c.proc.Ctx, r)
 	if err != nil {
@@ -2700,6 +2708,7 @@ var planDefsToExeDefs = func(tableDef *plan.TableDef) ([]engine.TableDef, error)
 
 	if propDef == nil {
 		propDef = &engine.PropertiesDef{Properties: make([]engine.Property, 0)}
+		exeDefs = append(exeDefs, propDef)
 	}
 	propDef.Properties = append(
 		propDef.Properties,
