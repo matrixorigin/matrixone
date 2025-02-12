@@ -20,8 +20,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -487,4 +489,83 @@ func (e *CheckpointEntry) GetTableByID(
 	}
 	ins, del, dataObject, tombstoneObject, err = data.GetTableDataFromBats(tid, bats)
 	return
+}
+
+func (e *CheckpointEntry) GetCheckpointMetaInfo(
+	ctx context.Context,
+	id uint64,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+) (res *logtail.ObjectInfoJson, err error) {
+	if e.version <= logtail.CheckpointVersion12 {
+		replayer := logtail.NewCheckpointReplayer(e.GetLocation(), mp)
+		if err = replayer.ReadMetaForV12(ctx, fs); err != nil {
+			return
+		}
+		if err = replayer.ReadDataForV12(ctx, fs); err != nil {
+			return
+		}
+		res, err = replayer.GetCheckpointMetaInfo(id)
+		return
+	} else {
+		return logtail.GetCheckpointMetaInfo(
+			ctx, e.GetLocation(),
+			id,
+			mp,
+			fs,
+		)
+	}
+}
+
+func (e *CheckpointEntry) GetTableIDs(
+	ctx context.Context,
+	loc objectio.Location,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+) (result []uint64, err error) {
+	if e.version <= logtail.CheckpointVersion12 {
+		replayer := logtail.NewCheckpointReplayer(e.GetLocation(), mp)
+		if err = replayer.ReadMetaForV12(ctx, fs); err != nil {
+			return
+		}
+		if err = replayer.ReadDataForV12(ctx, fs); err != nil {
+			return
+		}
+		result, err = replayer.GetTableIDs()
+		return
+	} else {
+		result, err = logtail.GetTableIDsFromCheckpoint(
+			ctx,
+			loc,
+			mp,
+			fs,
+		)
+		return
+	}
+}
+
+func (e *CheckpointEntry) GetObjects(
+	ctx context.Context,
+	pinned map[string]bool,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+) (err error) {
+	if e.version <= logtail.CheckpointVersion12 {
+		replayer := logtail.NewCheckpointReplayer(e.GetLocation(), mp)
+		if err = replayer.ReadMetaForV12(ctx, fs); err != nil {
+			return
+		}
+		if err = replayer.GetObjects(ctx, e.GetLocation(), pinned, mp, fs); err != nil {
+			return
+		}
+		return
+	} else {
+		return logtail.GetObjectsFromCKPMeta(
+			ctx,
+			e.GetLocation(),
+			pinned,
+			mp,
+			fs,
+		)
+	}
 }

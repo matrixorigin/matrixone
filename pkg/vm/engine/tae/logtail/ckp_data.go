@@ -17,6 +17,7 @@ package logtail
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -233,7 +234,7 @@ func ForEachRowInCheckpointData(
 	location objectio.Location,
 	mp *mpool.MPool,
 	fs fileservice.FileService,
-) (objectBatch *batch.Batch,err error) {
+) (objectBatch *batch.Batch, err error) {
 	var release func()
 	var metaBatch *batch.Batch
 	if metaBatch, release, err = readMetaBatch(
@@ -257,6 +258,181 @@ func ForEachRowInCheckpointData(
 		); err != nil {
 			return
 		}
+	}
+	return
+}
+
+func getMetaInfo(
+	files map[uint64]*tableinfo,
+	id uint64,
+	objBatchLength int,
+	tombstoneInfo map[uint64]*tableinfo,
+	tombstone map[string]struct{},
+) (res *ObjectInfoJson, err error) {
+	tableinfos := make([]*tableinfo, 0)
+	objectCount := uint64(0)
+	addCount := uint64(0)
+	deleteCount := uint64(0)
+	for _, count := range files {
+		tableinfos = append(tableinfos, count)
+		objectCount += count.add
+		addCount += count.add
+		objectCount += count.delete
+		deleteCount += count.delete
+	}
+	sort.Slice(tableinfos, func(i, j int) bool {
+		return tableinfos[i].add > tableinfos[j].add
+	})
+	tableJsons := make([]TableInfoJson, 0, objBatchLength)
+	tables := make(map[uint64]int)
+	for i := range len(tableinfos) {
+		tablejson := TableInfoJson{
+			ID:     tableinfos[i].tid,
+			Add:    tableinfos[i].add,
+			Delete: tableinfos[i].delete,
+		}
+		if id == 0 || tablejson.ID == id {
+			tables[tablejson.ID] = len(tableJsons)
+			tableJsons = append(tableJsons, tablejson)
+		}
+	}
+	tableinfos2 := make([]*tableinfo, 0)
+	objectCount2 := uint64(0)
+	addCount2 := uint64(0)
+	for _, count := range tombstoneInfo {
+		tableinfos2 = append(tableinfos2, count)
+		objectCount2 += count.add
+		addCount2 += count.add
+	}
+	sort.Slice(tableinfos2, func(i, j int) bool {
+		return tableinfos2[i].add > tableinfos2[j].add
+	})
+
+	for i := range len(tableinfos2) {
+		if idx, ok := tables[tableinfos2[i].tid]; ok {
+			tablejson := &tableJsons[idx]
+			tablejson.TombstoneRows = tableinfos2[i].add
+			tablejson.TombstoneCount = tableinfos2[i].delete
+			continue
+		}
+		tablejson := TableInfoJson{
+			ID:             tableinfos2[i].tid,
+			TombstoneRows:  tableinfos2[i].add,
+			TombstoneCount: tableinfos2[i].delete,
+		}
+		if id == 0 || tablejson.ID == id {
+			tableJsons = append(tableJsons, tablejson)
+		}
+	}
+
+	res = &ObjectInfoJson{
+		TableCnt:     len(tableJsons),
+		ObjectCnt:    objectCount,
+		ObjectAddCnt: addCount,
+		ObjectDelCnt: deleteCount,
+		TombstoneCnt: len(tombstone),
+	}
+	return
+}
+func GetCheckpointMetaInfo(
+	ctx context.Context,
+	location objectio.Location,
+	id uint64,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+) (res *ObjectInfoJson, err error) {
+	tombstone := make(map[string]struct{})
+	tombstoneInfo := make(map[uint64]*tableinfo)
+
+	files := make(map[uint64]*tableinfo)
+	objBatchLength := 0
+	ForEachRowInCheckpointData(
+		ctx,
+		func(
+			accout uint32,
+			dbid, tid uint64,
+			objectType int8,
+			objectStats objectio.ObjectStats,
+			createTs, deleteTs types.TS,
+			rowID types.Rowid,
+		) error {
+			if objectType == ckputil.ObjectType_Data {
+				objBatchLength++
+				if files[tid] == nil {
+					files[tid] = &tableinfo{
+						tid: tid,
+					}
+				}
+				if deleteTs.IsEmpty() {
+					files[tid].add++
+				} else {
+					files[tid].delete++
+				}
+			}
+			return nil
+		},
+		location,
+		common.CheckpointAllocator,
+		fs,
+	)
+	res, err = getMetaInfo(
+		files, id, objBatchLength, tombstoneInfo, tombstone,
+	)
+	return
+}
+
+func GetTableIDsFromCheckpoint(
+	ctx context.Context,
+	location objectio.Location,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+) (result []uint64, err error) {
+	seen := make(map[uint64]struct{})
+
+	ForEachRowInCheckpointData(
+		ctx,
+		func(
+			accout uint32,
+			dbid, tid uint64,
+			objectType int8,
+			objectStats objectio.ObjectStats,
+			createTs, deleteTs types.TS,
+			rowID types.Rowid,
+		) error {
+			if objectType == ckputil.ObjectType_Data {
+				if _, ok := seen[tid]; !ok {
+					result = append(result, tid)
+					seen[tid] = struct{}{}
+				}
+			}
+			return nil
+		},
+		location,
+		common.CheckpointAllocator,
+		fs,
+	)
+	return
+}
+
+func GetObjectsFromCKPMeta(
+	ctx context.Context,
+	loc objectio.Location,
+	pinned map[string]bool,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+) (err error) {
+	var release func()
+	var metaBatch *batch.Batch
+	if metaBatch, release, err = readMetaBatch(
+		ctx, loc, mp, fs,
+	); err != nil {
+		return
+	}
+	defer release()
+
+	objs := ckputil.ScanObjectStats(metaBatch)
+	for _, obj := range objs {
+		pinned[obj.ObjectLocation().Name().String()] = true
 	}
 	return
 }
@@ -552,7 +728,70 @@ func (replayer *CheckpointReplayer) ConsumeCheckpointWithTableID(
 	replayFn(replayer.tombstoneBatch, true)
 	return
 }
+func (replayer *CheckpointReplayer) GetCheckpointMetaInfo(
+	id uint64,
+) (res *ObjectInfoJson, err error) {
+	tombstone := make(map[string]struct{})
+	tombstoneInfo := make(map[uint64]*tableinfo)
 
+	files := make(map[uint64]*tableinfo)
+	objectBatchLength := replayer.objBatches.Length()
+
+	tids := vector.MustFixedColNoTypeCheck[uint64](
+		replayer.objBatches.Vecs[ObjectInfo_TID_Idx+2].GetDownstreamVector(),
+	)
+	deleteTSs := vector.MustFixedColNoTypeCheck[types.TS](
+		replayer.objBatches.Vecs[ObjectInfo_DeleteAt_Idx+2].GetDownstreamVector(),
+	)
+	for i := 0; i < objectBatchLength; i++ {
+		tid := tids[i]
+		if files[tid] == nil {
+			files[tid] = &tableinfo{
+				tid: tid,
+			}
+		}
+		deleteTs := deleteTSs[i]
+		if deleteTs.IsEmpty() {
+			files[tid].add++
+		} else {
+			files[tid].delete++
+		}
+	}
+	res, err = getMetaInfo(
+		files, id, objectBatchLength, tombstoneInfo, tombstone,
+	)
+	return
+}
+func (replayer *CheckpointReplayer) GetTableIDs() (result []uint64, err error) {
+	seen := make(map[uint64]struct{})
+
+	tids := vector.MustFixedColNoTypeCheck[uint64](
+		replayer.objBatches.Vecs[ObjectInfo_TID_Idx+2].GetDownstreamVector(),
+	)
+	for i := 0; i < replayer.objBatches.Length(); i++ {
+		tid := tids[i]
+		if _, ok := seen[tid]; !ok {
+			result = append(result, tid)
+			seen[tid] = struct{}{}
+		}
+	}
+	return
+}
+func (replayer *CheckpointReplayer) GetObjects(
+	ctx context.Context,
+	loc objectio.Location,
+	pinned map[string]bool,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+) (err error) {
+	for _, loc := range replayer.locations {
+		pinned[loc.Name().String()] = true
+	}
+	for _, loc := range replayer.tombstoneLocations {
+		pinned[loc.Name().String()] = true
+	}
+	return
+}
 func (replayer *CheckpointReplayer) Close() {
 	if replayer.metaBatch != nil {
 		replayer.metaBatch.Close()
