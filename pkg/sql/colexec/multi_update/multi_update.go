@@ -68,13 +68,22 @@ func (update *MultiUpdate) Prepare(proc *process.Process) error {
 
 	for _, updateCtx := range update.MultiUpdateCtx {
 		info := update.ctr.updateCtxInfos[updateCtx.TableDef.Name]
-		info.Sources = nil
 		if update.Action != UpdateWriteS3 {
-			rel, err := colexec.GetRelAndPartitionRelsByObjRef(proc.Ctx, proc, update.Engine, updateCtx.ObjRef)
-			if err != nil {
-				return err
+			if len(info.Sources) == 0 {
+				info.Sources = nil
+				rel, err := colexec.GetRelAndPartitionRelsByObjRef(proc.Ctx, proc, update.Engine, updateCtx.ObjRef)
+				if err != nil {
+					return err
+				}
+				info.Sources = append(info.Sources, rel)
+			} else {
+				for _, rel := range info.Sources {
+					err := rel.Reset(proc.GetTxnOperator())
+					if err != nil {
+						return err
+					}
+				}
 			}
-			info.Sources = append(info.Sources, rel)
 		}
 	}
 

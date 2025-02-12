@@ -209,22 +209,16 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 				}
 			} else {
 				if col.OnUpdate != nil && col.OnUpdate.Expr != nil {
-					//pos := colName2Idx[alias+"."+col.Name]
-					//selectNode.ProjectList[pos] = col.OnUpdate.Expr
-					//
-					//if col.Typ.Id == int32(types.T_enum) {
-					//	selectNode.ProjectList[pos], err = funcCastForEnumType(builder.GetContext(), selectNode.ProjectList[pos], col.Typ)
-					//	if err != nil {
-					//		return 0, err
-					//	}
-					//} else {
-					//	selectNode.ProjectList[pos], err = forceCastExpr(builder.GetContext(), selectNode.ProjectList[pos], col.Typ)
-					//	if err != nil {
-					//		return 0, err
-					//	}
-					//}
-					return 0, moerr.NewUnsupportedDML(builder.compCtx.GetContext(), "update column with on update")
+					newDefExpr := DeepCopyExpr(col.OnUpdate.Expr)
+					err = replaceFuncId(builder.GetContext(), newDefExpr)
+
+					oldPos := oldColName2Idx[alias+"."+col.Name]
+					newColName2Idx[alias+"."+col.Name] = oldPos
+					oldColName2Idx[alias+"."+col.Name] = int32(len(selectList))
+					selectNode.ProjectList = append(selectNode.ProjectList, selectNode.ProjectList[oldPos])
+					selectNode.ProjectList[oldPos] = newDefExpr
 				}
+
 				if col.Typ.Id == int32(types.T_enum) {
 					selectNode.ProjectList[originPos], err = funcCastForEnumType(builder.GetContext(), selectNode.ProjectList[originPos], col.Typ)
 					if err != nil {

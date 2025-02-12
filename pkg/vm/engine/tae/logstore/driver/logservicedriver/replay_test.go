@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -106,7 +107,7 @@ func Test_AppendSkipCmd(t *testing.T) {
 	driver := NewLogServiceDriver(&cfg)
 	defer driver.Close()
 
-	r := newReplayer(nil, driver, ReplayReadSize)
+	r := newReplayer(nil, driver, MaxReadBatchSize)
 	r.AppendSkipCmd(context.Background(), nil)
 }
 
@@ -139,7 +140,7 @@ func TestAppendSkipCmd2(t *testing.T) {
 	appended := []uint64{0, 1, 2, 5, 6, 6, 9, 10, 10, 10}
 
 	writer := NewLogEntryWriter()
-	client := driver.getClientForWrite()
+	client, _ := driver.getClientForWrite()
 	defer client.Putback()
 	for i := 0; i < entryCount; i++ {
 		entries[i].DSN = dsns[i]
@@ -165,7 +166,7 @@ func TestAppendSkipCmd2(t *testing.T) {
 		var list2 []uint64
 		entryCount := 0
 		assert.NoError(t, driver.Close())
-		driver = NewLogServiceDriver(&driver.config)
+		driver = NewLogServiceDriver(driver.GetCfg())
 		err := driver.Replay(
 			context.Background(),
 			func(e *entry.Entry) storeDriver.ReplayEntryState {
@@ -179,7 +180,10 @@ func TestAppendSkipCmd2(t *testing.T) {
 					return storeDriver.RE_Truncate
 				}
 			},
-			storeDriver.ReplayMode_ReplayForWrite,
+			func() storeDriver.ReplayMode {
+				return storeDriver.ReplayMode_ReplayForWrite
+			},
+			nil,
 		)
 		t.Logf("list1: %v", list1)
 		t.Logf("list2: %v", list2)
@@ -211,7 +215,7 @@ func TestAppendSkipCmd3(t *testing.T) {
 	{
 		entryCount := 0
 		assert.NoError(t, driver.Close())
-		driver = NewLogServiceDriver(&driver.config)
+		driver = NewLogServiceDriver(driver.GetCfg())
 		err := driver.Replay(
 			ctx,
 			func(e *entry.Entry) storeDriver.ReplayEntryState {
@@ -223,7 +227,10 @@ func TestAppendSkipCmd3(t *testing.T) {
 					return storeDriver.RE_Truncate
 				}
 			},
-			storeDriver.ReplayMode_ReplayForWrite,
+			func() storeDriver.ReplayMode {
+				return storeDriver.ReplayMode_ReplayForWrite
+			},
+			nil,
 		)
 		assert.NoError(t, err)
 		assert.Equal(t, 0, entryCount)
@@ -262,7 +269,7 @@ func TestAppendSkipCmd4(t *testing.T) {
 
 	writer := NewLogEntryWriter()
 
-	client := driver.getClientForWrite()
+	client, _ := driver.getClientForWrite()
 	defer client.Putback()
 	for i := 0; i < entryCount; i++ {
 		entries[i].DSN = dsns[i]
@@ -283,7 +290,7 @@ func TestAppendSkipCmd4(t *testing.T) {
 	{
 		entryCount := 0
 		assert.NoError(t, driver.Close())
-		driver = NewLogServiceDriver(&driver.config)
+		driver = NewLogServiceDriver(driver.GetCfg())
 		err := driver.Replay(
 			context.Background(),
 			func(e *entry.Entry) storeDriver.ReplayEntryState {
@@ -295,7 +302,10 @@ func TestAppendSkipCmd4(t *testing.T) {
 					return storeDriver.RE_Truncate
 				}
 			},
-			storeDriver.ReplayMode_ReplayForWrite,
+			func() storeDriver.ReplayMode {
+				return storeDriver.ReplayMode_ReplayForWrite
+			},
+			nil,
 		)
 		assert.NoError(t, err)
 		assert.Equal(t, 3, entryCount)
@@ -319,7 +329,7 @@ func TestAppendSkipCmd4(t *testing.T) {
 
 	writer = NewLogEntryWriter()
 
-	client = driver.getClientForWrite()
+	client, _ = driver.getClientForWrite()
 	defer client.Putback()
 	for i := 0; i < entryCount; i++ {
 		payload := []byte(fmt.Sprintf("payload %d", i))
@@ -343,7 +353,7 @@ func TestAppendSkipCmd4(t *testing.T) {
 	{
 		entryCount := 0
 		assert.NoError(t, driver.Close())
-		driver = NewLogServiceDriver(&driver.config)
+		driver = NewLogServiceDriver(driver.GetCfg())
 		err := driver.Replay(
 			context.Background(),
 			func(e *entry.Entry) storeDriver.ReplayEntryState {
@@ -355,7 +365,10 @@ func TestAppendSkipCmd4(t *testing.T) {
 					return storeDriver.RE_Truncate
 				}
 			},
-			storeDriver.ReplayMode_ReplayForWrite,
+			func() storeDriver.ReplayMode {
+				return storeDriver.ReplayMode_ReplayForWrite
+			},
+			nil,
 		)
 		assert.NoError(t, err)
 		assert.Equal(t, 4, entryCount)
@@ -393,7 +406,7 @@ func TestAppendSkipCmd5(t *testing.T) {
 	appended := []uint64{8, 10, 10, 12}
 	writer := NewLogEntryWriter()
 
-	client := driver.getClientForWrite()
+	client, _ := driver.getClientForWrite()
 	defer client.Putback()
 	for i := 0; i < entryCount; i++ {
 		entries[i].DSN = dsns[i]
@@ -417,7 +430,7 @@ func TestAppendSkipCmd5(t *testing.T) {
 	{
 		entryCount := 0
 		assert.NoError(t, driver.Close())
-		driver = NewLogServiceDriver(&driver.config)
+		driver = NewLogServiceDriver(driver.GetCfg())
 		err := driver.Replay(
 			context.Background(),
 			func(e *entry.Entry) storeDriver.ReplayEntryState {
@@ -429,7 +442,10 @@ func TestAppendSkipCmd5(t *testing.T) {
 					return storeDriver.RE_Truncate
 				}
 			},
-			storeDriver.ReplayMode_ReplayForWrite,
+			func() storeDriver.ReplayMode {
+				return storeDriver.ReplayMode_ReplayForWrite
+			},
+			nil,
 		)
 		assert.NoError(t, err)
 		assert.Equal(t, 4, entryCount)
@@ -891,18 +907,12 @@ func Test_Replayer9(t *testing.T) {
 	consumer := NewLogServiceDriver(&cfg)
 	defer consumer.Close()
 
-	errCh := make(chan error, 1)
-
 	var maxReadDSN atomic.Uint64
 	applyCnt := 0
 
 	readCtx, readCancel := context.WithCancelCause(context.Background())
 	go func() {
-		var err error
-		defer func() {
-			errCh <- err
-		}()
-		err = consumer.Replay(
+		consumer.Replay(
 			readCtx,
 			func(e *entry.Entry) storeDriver.ReplayEntryState {
 				applyCnt++
@@ -912,7 +922,12 @@ func Test_Replayer9(t *testing.T) {
 				}
 				return storeDriver.RE_Nomal
 			},
-			storeDriver.ReplayMode_ReplayForever,
+			func() storeDriver.ReplayMode {
+				return storeDriver.ReplayMode_ReplayForever
+			},
+			&storeDriver.ReplayOption{
+				PollTruncateInterval: 10 * time.Millisecond,
+			},
 		)
 	}()
 
@@ -922,7 +937,10 @@ func Test_Replayer9(t *testing.T) {
 		func(e *entry.Entry) storeDriver.ReplayEntryState {
 			return storeDriver.RE_Nomal
 		},
-		storeDriver.ReplayMode_ReplayForWrite,
+		func() storeDriver.ReplayMode {
+			return storeDriver.ReplayMode_ReplayForWrite
+		},
+		nil,
 	)
 	assert.NoError(t, err)
 
@@ -980,7 +998,8 @@ func Test_Replayer9(t *testing.T) {
 
 	cancelErr := moerr.NewInternalErrorNoCtx("cancel")
 	readCancel(cancelErr)
-	readErr := <-errCh
+	<-consumer.ReplayWaitC()
+	readErr := consumer.GetReplayState().Err()
 	t.Logf("Read error: %v", readErr)
 	assert.ErrorIs(t, readErr, cancelErr)
 
@@ -988,11 +1007,7 @@ func Test_Replayer9(t *testing.T) {
 	readCtx, readCancel = context.WithCancelCause(context.Background())
 	maxReadDSN.Store(0)
 	go func() {
-		var err error
-		defer func() {
-			errCh <- err
-		}()
-		err = consumer.Replay(
+		consumer.Replay(
 			readCtx,
 			func(e *entry.Entry) storeDriver.ReplayEntryState {
 				if e.DSN <= maxTrucateIntent {
@@ -1009,7 +1024,12 @@ func Test_Replayer9(t *testing.T) {
 				}
 				return storeDriver.RE_Nomal
 			},
-			storeDriver.ReplayMode_ReplayForever,
+			func() storeDriver.ReplayMode {
+				return storeDriver.ReplayMode_ReplayForever
+			},
+			&storeDriver.ReplayOption{
+				PollTruncateInterval: 10 * time.Millisecond,
+			},
 		)
 	}()
 
@@ -1036,12 +1056,12 @@ func Test_Replayer9(t *testing.T) {
 	assert.Equalf(t, uint64(entryCnt*2), maxReadDSN.Load(), fmt.Sprintf("%d, %d", entryCnt*2, maxReadDSN.Load()))
 
 	readCancel(cancelErr)
-	readErr = <-errCh
+	<-consumer.ReplayWaitC()
+	readErr = consumer.GetReplayState().Err()
 	t.Logf("Read error: %v", readErr)
 	assert.ErrorIs(t, readErr, cancelErr)
 }
 
-// 111 + 1951 =
 func Test_Replayer10(t *testing.T) {
 	ctx := context.Background()
 	mockDriver := newMockDriver(
@@ -1102,4 +1122,119 @@ func Test_Replayer10(t *testing.T) {
 	t.Logf("appliedDSNs: %d=>%d", appliedDSNs[0], appliedDSNs[len(appliedDSNs)-1])
 	assert.Equal(t, uint64(2502), appliedDSNs[0])
 	assert.Equal(t, uint64(3071), appliedDSNs[len(appliedDSNs)-1])
+}
+
+// start producer and consumer at the same time
+// producer append 1000 entries while consumer replay forever
+// change the consumer replay mode to replay for write
+// and append 1000 entries again and open a new consumer to
+// replay forever
+func Test_Replayer11(t *testing.T) {
+	store := newMockBackend()
+	cfg := NewConfig(
+		"",
+		WithConfigOptMaxClient(10),
+		WithConfigMockClient(store),
+	)
+
+	producer := NewLogServiceDriver(&cfg)
+	defer producer.Close()
+
+	consumer := NewLogServiceDriver(&cfg)
+	defer consumer.Close()
+
+	appendCnt := 5000
+
+	applyCnt := 0
+
+	var mode atomic.Int32
+	mode.Store(int32(storeDriver.ReplayMode_ReplayForever))
+
+	go func() {
+		err := consumer.Replay(
+			context.Background(),
+			func(e *entry.Entry) storeDriver.ReplayEntryState {
+				applyCnt++
+				return storeDriver.RE_Nomal
+			},
+			func() storeDriver.ReplayMode {
+				return storeDriver.ReplayMode(mode.Load())
+			},
+			nil,
+		)
+		assert.NoError(t, err)
+	}()
+
+	var lastEntry *entry.Entry
+
+	err := producer.Replay(
+		context.Background(),
+		func(e *entry.Entry) storeDriver.ReplayEntryState {
+			return storeDriver.RE_Nomal
+		},
+		func() storeDriver.ReplayMode {
+			return storeDriver.ReplayMode_ReplayForWrite
+		},
+		nil,
+	)
+	assert.NoError(t, err)
+
+	for i := 0; i < appendCnt; i++ {
+		v := uint64(i)
+		e := entry.MockEntryWithPayload(types.EncodeUint64(&v))
+		err = producer.Append(e)
+		assert.NoError(t, err)
+		lastEntry = e
+	}
+	err = lastEntry.WaitDone()
+	assert.NoError(t, err)
+
+	mode.Store(int32(storeDriver.ReplayMode_ReplayForWrite))
+
+	<-consumer.ReplayWaitC()
+	state := consumer.GetReplayState()
+	assert.NoError(t, state.Err())
+	assert.Equal(t, storeDriver.ReplayMode_ReplayForWrite, state.mode)
+	assert.Equal(t, appendCnt, applyCnt)
+
+	producer = consumer
+
+	consumer = NewLogServiceDriver(&cfg)
+	defer consumer.Close()
+
+	applyCnt = 0
+	mode.Store(int32(storeDriver.ReplayMode_ReplayForever))
+
+	go func() {
+		err := consumer.Replay(
+			context.Background(),
+			func(e *entry.Entry) storeDriver.ReplayEntryState {
+				applyCnt++
+				return storeDriver.RE_Nomal
+			},
+			func() storeDriver.ReplayMode {
+				return storeDriver.ReplayMode(mode.Load())
+			},
+			nil,
+		)
+		assert.NoError(t, err)
+	}()
+
+	for i := 0; i < appendCnt; i++ {
+		v := uint64(appendCnt + i)
+		e := entry.MockEntryWithPayload(types.EncodeUint64(&v))
+		err = producer.Append(e)
+		assert.NoError(t, err)
+		lastEntry = e
+	}
+	err = lastEntry.WaitDone()
+	assert.NoError(t, err)
+
+	mode.Store(int32(storeDriver.ReplayMode_ReplayForRead))
+
+	<-consumer.ReplayWaitC()
+	state = consumer.GetReplayState()
+	assert.NoError(t, state.Err())
+	assert.Equal(t, storeDriver.ReplayMode_ReplayForRead, state.mode)
+	assert.Equal(t, appendCnt*2, applyCnt)
 }

@@ -34,9 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
-	wb "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 	"go.uber.org/zap"
@@ -103,7 +101,6 @@ type DB struct {
 
 	CronJobs *tasks.CancelableJobs
 
-	BGScanner          wb.IHeartbeater
 	BGCheckpointRunner checkpoint.Runner
 	BGFlusher          checkpoint.Flusher
 
@@ -308,9 +305,8 @@ func (db *DB) RollbackTxn(txn txnif.AsyncTxn) error {
 	return txn.Rollback(context.Background())
 }
 
-func (db *DB) Replay(
+func (db *DB) ReplayWal(
 	ctx context.Context,
-	dataFactory *tables.DataFactory,
 	maxTs types.TS,
 	lsn uint64,
 	valid bool,
@@ -318,18 +314,17 @@ func (db *DB) Replay(
 	if !valid {
 		logutil.Infof("checkpoint version is too small, LSN check is disable")
 	}
-	replayer := newReplayer(dataFactory, db, maxTs, lsn, valid)
-	replayer.OnTimeStamp(maxTs)
-	if err = replayer.Replay(ctx); err != nil {
-		return
-	}
 
-	if err = db.TxnMgr.Init(replayer.GetMaxTS()); err != nil {
+	db.LogtailMgr.UpdateMaxCommittedLSN(lsn)
+
+	replayer := newWalReplayer(db, maxTs, lsn, valid)
+	if err = replayer.Replay(ctx); err != nil {
 		return
 	}
 
 	// TODO: error?
 	db.usageMemo.EstablishFromCKPs(db.Catalog)
+	db.Catalog.ReplayTableRows()
 	return
 }
 
@@ -355,7 +350,6 @@ func (db *DB) Close() error {
 	db.Closed.Store(ErrClosed)
 	db.Controller.Stop()
 	db.CronJobs.Reset()
-	db.BGScanner.Stop()
 	db.BGFlusher.Stop()
 	db.BGCheckpointRunner.Stop()
 	db.Runtime.Scheduler.Stop()

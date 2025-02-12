@@ -259,13 +259,17 @@ func (mgr *TxnManager) GetTxnSkipFlags() TxnSkipFlag {
 	return TxnSkipFlag(mgr.txns.skipFlags.Load())
 }
 
-func (mgr *TxnManager) Init(prevTs types.TS) error {
-	logutil.Info(
-		"TxnManager-Init",
-		zap.String("prev-ts", prevTs.ToString()),
-	)
-	mgr.ts.allocator.SetStart(prevTs)
-	return nil
+// open a txn for offline use
+// the txn cannot be committed or rollbacked
+// the txn can be used to read data
+func (mgr *TxnManager) OpenOfflineTxn(
+	ts types.TS,
+) txnif.AsyncTxn {
+	txnId := mgr.IdAlloc.Alloc()
+	store := mgr.TxnStoreFactory()
+	txn := mgr.TxnFactory(nil, store, txnId, ts, types.TS{})
+	store.BindTxn(txn)
+	return txn
 }
 
 // Note: Replay should always runs in a single thread

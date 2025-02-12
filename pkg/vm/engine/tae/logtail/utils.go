@@ -494,13 +494,12 @@ func NewGlobalCollector(
 func (data *CheckpointData) ApplyReplayTo(
 	objectlistReplayer catalog.ObjectListReplayer,
 	c *catalog.Catalog,
-	dataFactory catalog.DataFactory,
 	forSys bool,
 ) (err error) {
 	objectInfo := data.GetTombstoneObjectBatchs()
-	c.OnReplayObjectBatch(objectlistReplayer, objectInfo, true, dataFactory, forSys)
+	c.OnReplayObjectBatch(objectlistReplayer, objectInfo, true, forSys)
 	objectInfo = data.GetObjectBatchs()
-	c.OnReplayObjectBatch(objectlistReplayer, objectInfo, false, dataFactory, forSys)
+	c.OnReplayObjectBatch(objectlistReplayer, objectInfo, false, forSys)
 	return
 }
 

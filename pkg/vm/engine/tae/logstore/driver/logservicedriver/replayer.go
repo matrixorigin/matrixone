@@ -39,6 +39,10 @@ const (
 	ReadState_AllDone
 )
 
+const (
+	DefaultPollTruncateInterval = time.Second * 5
+)
+
 type ReplayOption func(*replayer)
 
 func WithReplayerWaitMore(wait func() bool) ReplayOption {
@@ -57,6 +61,12 @@ func WithReplayerOnWriteSkip(f func(map[uint64]uint64)) ReplayOption {
 		} else {
 			r.onWriteSkip = f
 		}
+	}
+}
+
+func WithReplayerNeedWriteSkip(f func() bool) ReplayOption {
+	return func(r *replayer) {
+		r.needWriteSkip = f
 	}
 }
 
@@ -99,6 +109,19 @@ func WithReplayerOnReplayDone(f func(error, DSNStats)) ReplayOption {
 	}
 }
 
+func WithReplayerOnTruncate(f func(uint64)) ReplayOption {
+	return func(r *replayer) {
+		if r.onTruncate != nil {
+			r.onTruncate = func(psn uint64) {
+				f(psn)
+				r.onTruncate(psn)
+			}
+		} else {
+			r.onTruncate = f
+		}
+	}
+}
+
 func WithReplayerOnScheduled(f func(uint64, LogEntry)) ReplayOption {
 	return func(r *replayer) {
 		if r.onScheduled != nil {
@@ -125,6 +148,12 @@ func WithReplayerOnApplied(f func(*entry.Entry)) ReplayOption {
 	}
 }
 
+func WithReplayerPollTruncateInterval(interval time.Duration) ReplayOption {
+	return func(r *replayer) {
+		r.pollTruncateInterval = interval
+	}
+}
+
 func WithReplayerUnmarshalLogRecord(f func(logservice.LogRecord) LogEntry) ReplayOption {
 	return func(r *replayer) {
 		r.logRecordToLogEntry = f
@@ -142,12 +171,13 @@ type replayerDriver interface {
 		ctx context.Context, firstPSN uint64, maxSize int,
 	) (nextPSN uint64, records []logservice.LogRecord, err error)
 	getTruncatedPSNFromBackend(ctx context.Context) (uint64, error)
-	getClientForWrite() *wrappedClient
+	getClientForWrite() (*wrappedClient, error)
 	GetMaxClient() int
 }
 
 type replayer struct {
-	readBatchSize int
+	readBatchSize        int
+	pollTruncateInterval time.Duration
 
 	driver replayerDriver
 	handle driver.ApplyHandle
@@ -158,8 +188,11 @@ type replayer struct {
 	onUserLogEntry      func(uint64, LogEntry)
 	onScheduled         func(uint64, LogEntry)
 	onApplied           func(*entry.Entry)
-	onWriteSkip         func(map[uint64]uint64)
-	onReplayDone        func(resErr error, stats DSNStats)
+
+	needWriteSkip func() bool
+	onWriteSkip   func(map[uint64]uint64)
+	onTruncate    func(uint64)
+	onReplayDone  func(resErr error, stats DSNStats)
 
 	// true means wait for more records after all existing records have been read
 	waitMoreRecords func() bool
@@ -227,6 +260,10 @@ func newReplayer(
 	r.waterMarks.minDSN = math.MaxUint64
 	for _, opt := range opts {
 		opt(r)
+	}
+
+	if r.pollTruncateInterval <= 0 {
+		r.pollTruncateInterval = DefaultPollTruncateInterval
 	}
 
 	if r.logRecordToLogEntry == nil {
@@ -305,7 +342,9 @@ func (r *replayer) initReadWatermarks(ctx context.Context) (err error) {
 	return
 }
 
-func (r *replayer) Replay(ctx context.Context) (err error) {
+func (r *replayer) Replay(
+	ctx context.Context,
+) (err error) {
 	var (
 		readDone      bool
 		resultC       = make(chan error, 1)
@@ -341,10 +380,16 @@ func (r *replayer) Replay(ctx context.Context) (err error) {
 		waitTime = time.Millisecond
 	)
 
-	wg.Add(1)
+	wg.Add(2)
 	// a dedicated goroutine to replay entries from the applyC
 	go r.streamApplying(ctx, applyC, resultC, &wg)
-	defer wg.Wait()
+	ctx2, cancel := context.WithCancel(ctx)
+	go r.pollTruncateLoop(ctx2, &wg)
+
+	defer func() {
+		cancel()
+		wg.Wait()
+	}()
 
 	// read log records batch by batch and schedule the records for apply
 	for {
@@ -546,7 +591,7 @@ func (r *replayer) tryScheduleApply(
 			}
 
 			// [dsn not found && dsn > safeDSN]
-			if len(r.replayedState.dsn2PSNMap) != 0 {
+			if len(r.replayedState.dsn2PSNMap) != 0 && (r.needWriteSkip == nil || r.needWriteSkip()) {
 				if r.onWriteSkip != nil {
 					r.onWriteSkip(r.replayedState.dsn2PSNMap)
 				}
@@ -611,6 +656,41 @@ func (r *replayer) updateDSN(dsn uint64) {
 	}
 	if dsn > r.waterMarks.maxDSN {
 		r.waterMarks.maxDSN = dsn
+	}
+}
+
+func (r *replayer) pollTruncateLoop(
+	ctx context.Context,
+	wg *sync.WaitGroup,
+) {
+	var (
+		err error
+	)
+	defer func() {
+		if err != nil {
+			logutil.Error(
+				"Wal-Replay-Truncate-Loop",
+				zap.Error(err),
+			)
+		}
+		wg.Done()
+	}()
+	ticker := time.NewTicker(r.pollTruncateInterval)
+	for {
+		select {
+		case <-ctx.Done():
+			err = context.Cause(ctx)
+			return
+		case <-ticker.C:
+			var psn uint64
+			if psn, err = r.driver.getTruncatedPSNFromBackend(ctx); err != nil {
+				return
+			}
+			r.waterMarks.truncatedPSN = psn
+			if r.onTruncate != nil {
+				r.onTruncate(psn)
+			}
+		}
 	}
 }
 
@@ -811,10 +891,11 @@ func (r *replayer) AppendSkipCmd(
 		return
 	}
 
-	client := r.driver.getClientForWrite()
-	defer func() {
-		client.Putback()
-	}()
+	var client *wrappedClient
+	if client, err = r.driver.getClientForWrite(); err != nil {
+		return
+	}
+	defer client.Putback()
 
 	entry := SkipMapToLogEntry(skipMap)
 

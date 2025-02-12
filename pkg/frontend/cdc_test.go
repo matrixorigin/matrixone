@@ -2875,13 +2875,6 @@ func TestCdcTask_addExecPipelineForTable(t *testing.T) {
 }
 
 func TestCdcTask_checkPitr(t *testing.T) {
-	stubGetPitrLength := gostub.Stub(&getPitrLengthAndUnit,
-		func(_ context.Context, _ BackgroundExec, level, _, _, _ string) (int64, string, bool, error) {
-			return 0, "", level == "table", nil
-		},
-	)
-	defer stubGetPitrLength.Reset()
-
 	pts := &cdc2.PatternTuples{
 		Pts: []*cdc2.PatternTuple{
 			{
@@ -2905,8 +2898,32 @@ func TestCdcTask_checkPitr(t *testing.T) {
 		},
 	}
 
+	stubGetPitrLength := gostub.Stub(&getPitrLengthAndUnit,
+		func(_ context.Context, _ BackgroundExec, level, _, _, _ string) (int64, string, bool, error) {
+			return 0, "", level == "table", nil
+		},
+	)
 	err := checkPitr(context.Background(), nil, "acc1", pts)
 	assert.Error(t, err)
+	stubGetPitrLength.Reset()
+
+	stubGetPitrLength = gostub.Stub(&getPitrLengthAndUnit,
+		func(_ context.Context, _ BackgroundExec, _, _, _, _ string) (int64, string, bool, error) {
+			return 0, "", false, moerr.NewInternalErrorNoCtx("")
+		},
+	)
+	err = checkPitr(context.Background(), nil, "acc1", pts)
+	assert.Error(t, err)
+	stubGetPitrLength.Reset()
+
+	stubGetPitrLength = gostub.Stub(&getPitrLengthAndUnit,
+		func(_ context.Context, _ BackgroundExec, _, _, _, _ string) (int64, string, bool, error) {
+			return 0, "", true, nil
+		},
+	)
+	err = checkPitr(context.Background(), nil, "acc1", pts)
+	assert.NoError(t, err)
+	stubGetPitrLength.Reset()
 }
 
 func Test_parseTimestamp(t *testing.T) {

@@ -30,7 +30,7 @@ func Test_RestartFlusher(t *testing.T) {
 	cfg.FlushInterval = time.Millisecond * 11
 	cfg.CronPeriod = time.Millisecond * 2
 	f := NewFlusher(
-		nil, nil, nil, nil,
+		nil, nil, nil, nil, false,
 		WithFlusherInterval(cfg.FlushInterval),
 		WithFlusherCronPeriod(cfg.CronPeriod),
 		WithFlusherForceTimeout(cfg.ForceFlushTimeout),
@@ -39,10 +39,10 @@ func Test_RestartFlusher(t *testing.T) {
 
 	fCfg := f.GetCfg()
 	assert.Equal(t, cfg, fCfg)
-	assert.False(t, f.IsStopped())
+	assert.False(t, f.IsNoop())
 
 	f.Stop()
-	assert.True(t, f.IsStopped())
+	assert.True(t, f.IsNoop())
 
 	ctx := context.Background()
 	var ts types.TS
@@ -52,11 +52,9 @@ func Test_RestartFlusher(t *testing.T) {
 	assert.Equal(t, ErrFlusherStopped, f.ForceFlushWithInterval(ctx, ts, time.Millisecond))
 	f.ChangeForceCheckInterval(time.Millisecond)
 	f.ChangeForceFlushTimeout(time.Millisecond)
-	f.Start()
-	assert.True(t, f.IsStopped())
 
 	f.Restart(WithFlusherCfg(cfg))
-	assert.False(t, f.IsStopped())
+	assert.False(t, f.IsNoop())
 	fCfg = f.GetCfg()
 	assert.Equal(t, cfg, fCfg)
 }

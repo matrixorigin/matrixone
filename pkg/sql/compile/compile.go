@@ -1254,7 +1254,11 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 		}
 
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
-		ss = c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, c.compileTableFunction(n, ss))))
+		ss, err = c.compileTableFunction(n, ss)
+		if err != nil {
+			return nil, err
+		}
+		ss = c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss)))
 		return ss, nil
 	case plan.Node_SINK_SCAN:
 		c.setAnalyzeCurrent(nil, int(curNodeIdx))
@@ -1745,15 +1749,168 @@ func (c *Compile) compileExternScanSerialReadWrite(n *plan.Node, param *tree.Ext
 	return ss, nil
 }
 
-func (c *Compile) compileTableFunction(n *plan.Node, ss []*Scope) []*Scope {
+func (c *Compile) getTableFunctionParallelSize(n *plan.Node, mcpu int) int {
+	if n.TableDef.TblFunc.Name != "generate_series" {
+		return 1
+	}
+
+	temp := max(int(n.Stats.Cost)/80000, 1)
+	return min(temp, mcpu)
+}
+
+func (c *Compile) generateSeriesParallel(proc *process.Process, n *plan.Node, parallelSize int) (canOpt bool, step int64, offset [][2]int64, err error) {
+	for _, expr := range n.TblFuncExprList {
+		_, ok := expr.Expr.(*plan.Expr_Lit)
+		if !ok {
+			return false, 0, nil, nil
+		}
+	}
+
+	var start, end int64
+	switch val := n.TblFuncExprList[0].Expr.(*plan.Expr_Lit).Lit.GetValue().(type) {
+	case *plan.Literal_I32Val:
+		if len(n.TblFuncExprList) == 1 {
+			start = 1
+			end = int64(val.I32Val)
+		} else {
+			start = int64(val.I32Val)
+			if val, ok := n.TblFuncExprList[1].Expr.(*plan.Expr_Lit).Lit.GetValue().(*plan.Literal_I32Val); ok {
+				end = int64(val.I32Val)
+			} else if val, ok := n.TblFuncExprList[1].Expr.(*plan.Expr_Lit).Lit.GetValue().(*plan.Literal_I64Val); ok {
+				end = val.I64Val
+			} else {
+				return false, 0, nil, moerr.NewInvalidInput(proc.Ctx, "generate_series end must be int32 or int64")
+			}
+		}
+
+	case *plan.Literal_I64Val:
+		if len(n.TblFuncExprList) == 1 {
+			start = 1
+			end = int64(val.I64Val)
+		} else {
+			start = int64(val.I64Val)
+			if val, ok := n.TblFuncExprList[1].Expr.(*plan.Expr_Lit).Lit.GetValue().(*plan.Literal_I32Val); ok {
+				end = int64(val.I32Val)
+			} else if val, ok := n.TblFuncExprList[1].Expr.(*plan.Expr_Lit).Lit.GetValue().(*plan.Literal_I64Val); ok {
+				end = val.I64Val
+			} else {
+				return false, 0, nil, moerr.NewInvalidInput(proc.Ctx, "generate_series end must be int32 or int64")
+			}
+		}
+	default:
+		return false, 0, nil, nil
+	}
+
+	if len(n.TblFuncExprList) == 3 {
+		if val, ok := n.TblFuncExprList[2].Expr.(*plan.Expr_Lit).Lit.GetValue().(*plan.Literal_I32Val); ok {
+			step = int64(val.I32Val)
+		} else if val, ok := n.TblFuncExprList[2].Expr.(*plan.Expr_Lit).Lit.GetValue().(*plan.Literal_I64Val); ok {
+			step = val.I64Val
+		} else {
+			return false, 0, nil, moerr.NewInvalidInput(proc.Ctx, "generate_series step must be int32 or int64")
+		}
+	} else {
+		if start < end {
+			step = 1
+		} else {
+			step = -1
+		}
+	}
+	if step == 0 {
+		return false, 0, nil, moerr.NewInvalidInput(proc.Ctx, "generate_series step cannot be zero")
+	}
+
+	if parallelSize == 1 {
+		return true, 0, nil, nil
+	}
+
+	temp := (end - start + 1) / int64(parallelSize)
+	for i := 0; i < parallelSize; i++ {
+		tempEnd := start + temp - 1
+		if i == parallelSize-1 {
+			tempEnd = end
+		}
+
+		arr := [2]int64{start, tempEnd}
+		offset = append(offset, arr)
+		start = tempEnd + 1
+	}
+
+	return true, step, offset, nil
+}
+
+func (c *Compile) compileSingleTableFunction(n *plan.Node) ([]*Scope, error) {
 	currentFirstFlag := c.anal.isFirst
-	if len(n.Children) == 0 {
+	ds := newScope(Merge)
+	ds.NodeInfo = getEngineNode(c)
+	ds.DataSource = &Source{isConst: true, node: n}
+	ds.NodeInfo = engine.Node{Addr: c.addr, Mcpu: 1}
+	ds.Proc = c.proc.NewNoContextChildProc(0)
+	op := constructTableFunction(n)
+	op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+	ds.setRootOperator(op)
+	ss := []*Scope{ds}
+	c.anal.isFirst = false
+	return ss, nil
+}
+
+func (c *Compile) compileGenerateSeriesParallel(n *plan.Node, ss []*Scope, parallelSize int, canOpt bool, offset [][2]int64, step int64) ([]*Scope, error) {
+	currentFirstFlag := c.anal.isFirst
+	startOffset := 0
+	for i := 0; i < len(c.cnList); i++ {
 		ds := newScope(Merge)
+		currMcpu := min(c.cnList[i].Mcpu, parallelSize)
+		op := constructTableFunction(n)
+		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+
+		if currMcpu > 1 {
+			ds.Magic = Remote
+		}
+
+		op.CanOpt = canOpt
+		op.GenerateSeriesCtrNumState(offset[0][0], offset[len(offset)-1][1], step, offset[0][0])
+		op.OffsetTotal = append(op.OffsetTotal, offset[startOffset:startOffset+currMcpu]...)
+
 		ds.NodeInfo = getEngineNode(c)
 		ds.DataSource = &Source{isConst: true, node: n}
-		ds.NodeInfo = engine.Node{Addr: c.addr, Mcpu: 1}
+
+		ds.NodeInfo = engine.Node{Addr: c.addr, Mcpu: currMcpu}
 		ds.Proc = c.proc.NewNoContextChildProc(0)
-		ss = []*Scope{ds}
+		parallelSize -= currMcpu
+		ds.IsTbFunc = true
+		ss = append(ss, ds)
+
+		ds.setRootOperator(op)
+		if parallelSize == 0 {
+			break
+		}
+	}
+	c.anal.isFirst = false
+	return ss, nil
+}
+
+func (c *Compile) compileTableFunction(n *plan.Node, ss []*Scope) ([]*Scope, error) {
+	currentFirstFlag := c.anal.isFirst
+
+	if len(n.Children) == 0 {
+		switch n.TableDef.TblFunc.Name {
+		case "generate_series":
+			var mcpuTotal int
+			for i := 0; i < len(c.cnList); i++ {
+				mcpuTotal += c.cnList[i].Mcpu
+			}
+			parallelSize := c.getTableFunctionParallelSize(n, mcpuTotal)
+			canOpt, step, offset, err := c.generateSeriesParallel(c.proc, n, parallelSize)
+			if err != nil {
+				return nil, err
+			}
+			if parallelSize == 1 || !canOpt {
+				return c.compileSingleTableFunction(n)
+			}
+			return c.compileGenerateSeriesParallel(n, ss, parallelSize, canOpt, offset, step)
+		default:
+			return c.compileSingleTableFunction(n)
+		}
 	}
 	for i := range ss {
 		op := constructTableFunction(n)
@@ -1762,7 +1919,7 @@ func (c *Compile) compileTableFunction(n *plan.Node, ss []*Scope) []*Scope {
 	}
 	c.anal.isFirst = false
 
-	return ss
+	return ss, nil
 }
 
 func (c *Compile) compileValueScan(n *plan.Node) ([]*Scope, error) {

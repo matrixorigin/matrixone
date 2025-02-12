@@ -143,7 +143,9 @@ func (tableFunction *TableFunction) Prepare(proc *process.Process) error {
 	case "unnest":
 		tblArg.ctr.state, err = unnestPrepare(proc, tblArg)
 	case "generate_series":
-		tblArg.ctr.state, err = generateSeriesPrepare(proc, tblArg)
+		if !tblArg.CanOpt {
+			tblArg.ctr.state, err = generateSeriesPrepare(proc, tblArg)
+		}
 	case "meta_scan":
 		tblArg.ctr.state, err = metaScanPrepare(proc, tblArg)
 	case "current_account":
@@ -214,4 +216,13 @@ func (tableFunction *TableFunction) ApplyCall(proc *process.Process) (vm.CallRes
 
 func (tableFunction *TableFunction) ApplyEnd(proc *process.Process) error {
 	return tableFunction.ctr.state.end(tableFunction, proc)
+}
+
+func (tableFunction *TableFunction) GenerateSeriesCtrNumState(start, end, step, next int64) {
+	tableFunction.ctr.state = &generateSeriesArg{i64State: genNumState[int64]{start: start, end: end, step: step, next: next}}
+}
+
+func (tableFunction *TableFunction) GetGenerateSeriesCtrNumStateStep() int64 {
+	arg := tableFunction.ctr.state.(*generateSeriesArg)
+	return arg.i64State.step
 }
