@@ -103,12 +103,12 @@ func makeMetaBatch(proc *process.Process) *batch.Batch {
 	indexfile := "resources/hnsw0.bin"
 
 	bat := batch.NewWithSize(4)
-	bat.Vecs[0] = vector.NewVec(types.New(types.T_int64, 8, 0))       // index_id
+	bat.Vecs[0] = vector.NewVec(types.New(types.T_varchar, 128, 0))   // index_id
 	bat.Vecs[1] = vector.NewVec(types.New(types.T_varchar, 65536, 0)) // checksum
 	bat.Vecs[2] = vector.NewVec(types.New(types.T_int64, 8, 0))       // timestamp
 	bat.Vecs[3] = vector.NewVec(types.New(types.T_int64, 8, 0))       // timestamp
 
-	vector.AppendFixed[int64](bat.Vecs[0], int64(0), false, proc.Mp())
+	vector.AppendBytes(bat.Vecs[0], []byte("abc-0"), false, proc.Mp())
 	chksum, err := vectorindex.CheckSum(indexfile)
 	if err != nil {
 		panic("file checksum error")

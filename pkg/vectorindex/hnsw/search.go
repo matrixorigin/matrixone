@@ -37,7 +37,7 @@ import (
 
 // Hnsw search index struct to hold the usearch index
 type HnswSearchIndex struct {
-	Id        int64
+	Id        string
 	Path      string
 	Index     *usearch.Index
 	Timestamp int64
@@ -118,7 +118,7 @@ func (idx *HnswSearchIndex) LoadIndex(proc *process.Process, idxcfg vectorindex.
 	}
 
 	// run streaming sql
-	sql := fmt.Sprintf("SELECT chunk_id, data from `%s`.`%s` WHERE index_id = %d", tblcfg.DbName, tblcfg.IndexTable, idx.Id)
+	sql := fmt.Sprintf("SELECT chunk_id, data from `%s`.`%s` WHERE index_id = '%s'", tblcfg.DbName, tblcfg.IndexTable, idx.Id)
 	go func() {
 		_, err := runSql_streaming(proc, sql, stream_chan, error_chan)
 		if err != nil {
@@ -307,7 +307,7 @@ func (s *HnswSearch) LoadMetadata(proc *process.Process) ([]*HnswSearchIndex, er
 		tsVec := bat.Vecs[2]
 		fsVec := bat.Vecs[3]
 		for i := 0; i < bat.RowCount(); i++ {
-			id := vector.GetFixedAtWithTypeCheck[int64](idVec, i)
+			id := idVec.GetStringAt(i)
 			chksum := chksumVec.GetStringAt(i)
 			ts := vector.GetFixedAtWithTypeCheck[int64](tsVec, i)
 			fs := vector.GetFixedAtWithTypeCheck[int64](fsVec, i)
