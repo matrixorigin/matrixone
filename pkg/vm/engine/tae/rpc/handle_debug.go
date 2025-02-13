@@ -242,7 +242,7 @@ func getChangedListFromCheckpoints(
 		}
 		ioutil.Prefetch(
 			h.GetDB().Runtime.SID(),
-			h.GetDB().Runtime.Fs.Service,
+			h.GetDB().Runtime.Fs,
 			ckps[i].GetLocation(),
 		)
 	}
@@ -259,7 +259,7 @@ func getChangedListFromCheckpoints(
 			h.GetDB().Runtime.SID(),
 			ckps[i].GetLocation(),
 			common.CheckpointAllocator,
-			h.GetDB().Runtime.Fs.Service,
+			h.GetDB().Runtime.Fs,
 		)
 	}
 	for i := 0; i < len(ckps); i++ {
@@ -300,7 +300,7 @@ func getChangedListFromCheckpoints(
 			},
 			ckps[i].GetLocation(),
 			common.CheckpointAllocator,
-			h.GetDB().Runtime.Fs.Service,
+			h.GetDB().Runtime.Fs,
 		)
 	}
 	return

@@ -270,7 +270,7 @@ func (r *runner) CreateSpecialCheckpointFile(
 	default:
 	}
 
-	factory := logtail.BackupCheckpointDataFactory(start, end, r.rt.Fs.Service)
+	factory := logtail.BackupCheckpointDataFactory(start, end, r.rt.Fs)
 	var data *logtail.CheckpointData_V2
 	if data, err = factory(r.catalog); err != nil {
 		return

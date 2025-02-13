@@ -1112,7 +1112,7 @@ func (c *ckpStatArg) Run() (err error) {
 				ctx,
 				c.tid,
 				common.CheckpointAllocator,
-				c.ctx.db.Runtime.Fs.Service,
+				c.ctx.db.Runtime.Fs,
 			); err != nil {
 				return moerr.NewInfoNoCtx(fmt.Sprintf("failed to get checkpoint data %v, %v", c.cid, err))
 			}
@@ -1252,7 +1252,7 @@ func (c *ckpListArg) getTableList(ctx context.Context) (res string, err error) {
 			ctx,
 			entry.GetLocation(),
 			common.CheckpointAllocator,
-			c.ctx.db.Runtime.Fs.Service,
+			c.ctx.db.Runtime.Fs,
 		)
 	}
 	if c.limit < len(ids) {
@@ -1437,7 +1437,7 @@ func (c *gcDumpArg) getCheckpointObject(ctx context.Context, pinned map[string]b
 		tnObj := tnLoc.Name().String()
 		pinned[tnObj] = true
 
-		err := entry.GetObjects(ctx, pinned, common.CheckpointAllocator, c.ctx.db.Runtime.Fs.Service)
+		err := entry.GetObjects(ctx, pinned, common.CheckpointAllocator, c.ctx.db.Runtime.Fs)
 		if err != nil {
 			return moerr.NewInfoNoCtx(fmt.Sprintf("failed to get checkpoint data %v, %v", entry.LSN(), err))
 		}
