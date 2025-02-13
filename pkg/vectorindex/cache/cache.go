@@ -50,7 +50,7 @@ const (
 )
 
 var (
-	VectorIndexCacheTTL time.Duration     = 30 * time.Minute
+	VectorIndexCacheTTL time.Duration     = 5 * time.Minute
 	Cache               *VectorIndexCache = NewVectorIndexCache()
 )
 
