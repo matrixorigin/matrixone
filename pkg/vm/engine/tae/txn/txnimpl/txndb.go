@@ -210,8 +210,8 @@ func (db *txnDB) GetValue(id *common.ID, row uint32, colIdx uint16, skipCheckDel
 func (db *txnDB) CreateRelation(def any) (relation handle.Relation, err error) {
 	schema := def.(*catalog.Schema)
 	var factory catalog.TableDataFactory
-	if db.store.dataFactory != nil {
-		factory = db.store.dataFactory.MakeTableFactory()
+	if db.store.catalog.DataFactory != nil {
+		factory = db.store.catalog.DataFactory.MakeTableFactory()
 	}
 	meta, err := db.entry.CreateTableEntry(schema, db.store.txn, factory)
 	if err != nil {
@@ -229,8 +229,8 @@ func (db *txnDB) CreateRelation(def any) (relation handle.Relation, err error) {
 func (db *txnDB) CreateRelationWithTableId(tableId uint64, def any) (relation handle.Relation, err error) {
 	schema := def.(*catalog.Schema)
 	var factory catalog.TableDataFactory
-	if db.store.dataFactory != nil {
-		factory = db.store.dataFactory.MakeTableFactory()
+	if db.store.catalog.DataFactory != nil {
+		factory = db.store.catalog.DataFactory.MakeTableFactory()
 	}
 	meta, err := db.entry.CreateTableEntryWithTableId(schema, db.store.txn, factory, tableId)
 	if err != nil {

@@ -104,7 +104,7 @@ func (h *Handle) HandleSnapshotRead(
 	checkpoints, err := checkpoint.ListSnapshotCheckpoint(
 		ctx,
 		"",
-		h.db.Runtime.Fs.Service,
+		h.db.Runtime.Fs,
 		snapshot,
 		h.db.BGCheckpointRunner.GetCheckpointMetaFiles())
 	if err != nil {
@@ -697,11 +697,11 @@ func (h *Handle) HandleCommitMerge(
 	defer func() {
 		if err != nil {
 			resp.ReturnStr = err.Error()
-			merge.CleanUpUselessFiles(req, h.db.Runtime.Fs.Service)
+			merge.CleanUpUselessFiles(req, h.db.Runtime.Fs)
 		}
 	}()
 
-	transferMaps, err := marshalTransferMaps(ctx, req, h.db.Runtime.SID(), h.db.Runtime.Fs.Service)
+	transferMaps, err := marshalTransferMaps(ctx, req, h.db.Runtime.SID(), h.db.Runtime.Fs)
 	if err != nil {
 		return err
 	}

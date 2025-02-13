@@ -317,7 +317,7 @@ func (c *moObjStatArg) Run() (err error) {
 	}
 
 	if c.ctx != nil {
-		c.fs = c.ctx.db.Runtime.Fs.Service
+		c.fs = c.ctx.db.Runtime.Fs
 	}
 
 	if err = c.InitReader(ctx, c.name); err != nil {
@@ -687,7 +687,7 @@ func (c *objGetArg) Run() (err error) {
 	}
 
 	if c.ctx != nil {
-		c.fs = c.ctx.db.Runtime.Fs.Service
+		c.fs = c.ctx.db.Runtime.Fs
 	}
 
 	if err = c.InitReader(ctx, c.name); err != nil {

@@ -126,7 +126,7 @@ func (job *checkpointJob) doGlobalCheckpoint(
 	fields = data.ExportStats("")
 
 	cnLocation, tnLocation, files, err := data.WriteTo(
-		job.executor.ctx, runner.rt.Fs.Service,
+		job.executor.ctx, runner.rt.Fs,
 	)
 	if err != nil {
 		runner.store.RemoveGCKPIntent()

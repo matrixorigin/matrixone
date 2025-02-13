@@ -242,7 +242,7 @@ func (executor *checkpointExecutor) doIncrementalCheckpoint(
 	var cnLocation, tnLocation objectio.Location
 	cnLocation, tnLocation, files, err = data.WriteTo(
 		executor.ctx,
-		executor.runner.rt.Fs.Service,
+		executor.runner.rt.Fs,
 	)
 	if err != nil {
 		return

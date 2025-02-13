@@ -40,6 +40,19 @@ import (
 	"go.uber.org/zap"
 )
 
+type CKPDataReader interface {
+	ForEachRow(
+		func(account uint32,
+			dbid, tid uint64,
+			objectType int8,
+			objectStats objectio.ObjectStats,
+			create, delete types.TS,
+			rowID types.Rowid,
+		) error)
+	GetLocations() []objectio.Location //location of object batch
+	Close()
+}
+
 type CheckpointData_V2 struct {
 	batch     *batch.Batch
 	sinker    *ioutil.Sinker
@@ -60,11 +73,18 @@ func NewCheckpointData_V2(
 	}
 }
 
+func NewCheckpointDataWithSinker(sinker *ioutil.Sinker, allocator *mpool.MPool) *CheckpointData_V2 {
+	return &CheckpointData_V2{
+		sinker:    sinker,
+		allocator: allocator,
+	}
+}
+
 func (data *CheckpointData_V2) WriteTo(
 	ctx context.Context,
 	fs fileservice.FileService,
 ) (CNLocation, TNLocation objectio.Location, ckpfiles []string, err error) {
-	if data.batch.RowCount() != 0 {
+	if data.batch != nil && data.batch.RowCount() != 0 {
 		err = data.sinker.Write(ctx, data.batch)
 		if err != nil {
 			return
@@ -177,7 +197,6 @@ func ReplayCheckpoint(
 	ctx context.Context,
 	c *catalog.Catalog,
 	forSys bool,
-	dataFactory catalog.DataFactory,
 	location objectio.Location,
 	mp *mpool.MPool,
 	fs fileservice.FileService,
@@ -205,7 +224,7 @@ func ReplayCheckpoint(
 			) error {
 				if forSys == pkgcatalog.IsSystemTable(tid) {
 					c.OnReplayObjectBatch_V2(
-						dbid, tid, objectType, objectStats, create, delete, dataFactory,
+						dbid, tid, objectType, objectStats, create, delete,
 					)
 				}
 				return nil
@@ -740,7 +759,6 @@ func (replayer *CheckpointReplayer) ReplayObjectlist(
 					objectio.ObjectStats(objectstatsVec.GetBytesAt(i)),
 					createTSs[i],
 					deleteTSs[i],
-					dataFactory,
 				)
 			}
 		}

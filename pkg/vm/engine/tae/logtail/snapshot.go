@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -339,7 +340,7 @@ type tombstone struct {
 func (sm *SnapshotMeta) updateTableInfo(
 	ctx context.Context,
 	fs fileservice.FileService,
-	data *CheckpointData, startts, endts types.TS,
+	data CKPDataReader, startts, endts types.TS,
 ) error {
 	var objects map[uint64]map[objectio.Segmentid]*objectInfo
 	var tombstones map[uint64]map[objectio.Segmentid]*objectInfo
@@ -371,8 +372,8 @@ func (sm *SnapshotMeta) updateTableInfo(
 			deleteAt: deleteTS,
 		}
 	}
-	collectObjects(&objects, nil, data.GetObjectBatchs(), collector)
-	collectObjects(&tombstones, nil, data.GetTombstoneObjectBatchs(), collector)
+	collectObjects_V2(&objects, nil, data, ckputil.ObjectType_Data, collector)
+	collectObjects_V2(&tombstones, nil, data, ckputil.ObjectType_Tombstone, collector)
 	tObjects := objects[catalog2.MO_TABLES_ID]
 	tTombstones := tombstones[catalog2.MO_TABLES_ID]
 	orderedInfos := make([]*objectInfo, 0, len(tObjects))
@@ -596,10 +597,40 @@ func collectObjects(
 	}
 }
 
+func collectObjects_V2(
+	objects *map[uint64]map[objectio.Segmentid]*objectInfo,
+	objects2 *map[objectio.Segmentid]*objectInfo,
+	data CKPDataReader,
+	objType int8,
+	collector func(
+		*map[uint64]map[objectio.Segmentid]*objectInfo,
+		*map[objectio.Segmentid]*objectInfo,
+		uint64,
+		objectio.ObjectStats,
+		types.TS, types.TS,
+	),
+) {
+	data.ForEachRow(
+		func(
+			account uint32,
+			dbid, table uint64,
+			objectType int8,
+			objectStats objectio.ObjectStats,
+			createTS, deleteTS types.TS,
+			rowID types.Rowid,
+		) error {
+			if objectType == objType {
+				collector(objects, objects2, table, objectStats, createTS, deleteTS)
+			}
+			return nil
+		},
+	)
+}
+
 func (sm *SnapshotMeta) Update(
 	ctx context.Context,
 	fs fileservice.FileService,
-	data *CheckpointData,
+	data CKPDataReader,
 	startts, endts types.TS,
 	taskName string,
 ) (err error) {
@@ -701,16 +732,18 @@ func (sm *SnapshotMeta) Update(
 		}
 		mapFun((*objects1)[tid])
 	}
-	collectObjects(
+	collectObjects_V2(
 		&sm.objects,
 		&sm.pitr.objects,
-		data.GetObjectBatchs(),
+		data,
+		ckputil.ObjectType_Data,
 		collector,
 	)
-	collectObjects(
-		&sm.tombstones,
-		&sm.pitr.tombstones,
-		data.GetTombstoneObjectBatchs(),
+	collectObjects_V2(
+		&sm.objects,
+		&sm.pitr.objects,
+		data,
+		ckputil.ObjectType_Tombstone,
 		collector,
 	)
 	return
@@ -1417,7 +1450,7 @@ func (sm *SnapshotMeta) ReadTableInfo(ctx context.Context, name string, fs files
 func (sm *SnapshotMeta) InitTableInfo(
 	ctx context.Context,
 	fs fileservice.FileService,
-	data *CheckpointData,
+	data CKPDataReader,
 	startts, endts types.TS,
 ) {
 	sm.Lock()

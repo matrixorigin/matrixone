@@ -1172,7 +1172,7 @@ func FillUsageBatOfIncremental(collector *IncrementalCollector) {
 
 func FillUsageBatOfCompacted(
 	usage *TNUsageMemo,
-	data *CheckpointData,
+	data CKPDataReader,
 	meta *SnapshotMeta,
 	accountSnapshots map[uint32][]types.TS,
 	pitrs *PitrInfo,
@@ -1186,70 +1186,63 @@ func FillUsageBatOfCompacted(
 		v2.TaskCompactedCollectUsageDurationHistogram.Observe(time.Since(start).Seconds())
 		usage.LeaveProcessing()
 	}()
-	objects := data.GetObjectBatchs()
-	tombstones := data.GetTombstoneObjectBatchs()
 	usageData := make(map[[3]uint64]UsageData)
 	tableSnapshots, tablePitrs := meta.AccountToTableSnapshots(
 		accountSnapshots,
 		pitrs,
 	)
 	objectsName := make(map[string]struct{})
-	scan := func(bat *containers.Batch) {
-		insDeleteTSVec := vector.MustFixedColWithTypeCheck[types.TS](
-			bat.GetVectorByName(catalog.EntryNode_DeleteAt).GetDownstreamVector())
-		insCreateTSVec := vector.MustFixedColWithTypeCheck[types.TS](
-			bat.GetVectorByName(catalog.EntryNode_CreateAt).GetDownstreamVector())
-		dbid := vector.MustFixedColNoTypeCheck[uint64](
-			bat.GetVectorByName(catalog.SnapshotAttr_DBID).GetDownstreamVector())
-		tableID := vector.MustFixedColNoTypeCheck[uint64](
-			bat.GetVectorByName(catalog.SnapshotAttr_TID).GetDownstreamVector())
-		for i := 0; i < bat.Length(); i++ {
-			if insDeleteTSVec[i].IsEmpty() {
-				dropTs, ok := meta.GetTableDropAt(tableID[i])
-				if !ok || dropTs.IsEmpty() {
-					continue
-				}
+	scan := func(
+		account uint32,
+		dbid, tid uint64,
+		objectType int8,
+		stats objectio.ObjectStats,
+		create, delete types.TS,
+		rowID types.Rowid,
+	) (err error) {
+		if delete.IsEmpty() {
+			dropTs, ok := meta.GetTableDropAt(tid)
+			if !ok || dropTs.IsEmpty() {
+				return
 			}
-			id, ok := meta.GetAccountId(tableID[i])
-			if !ok {
-				continue
-			}
-			accountId := uint64(id)
-			if len(tableSnapshots[tableID[i]]) == 0 &&
-				(tablePitrs[tableID[i]] == nil ||
-					tablePitrs[tableID[i]].IsEmpty()) {
-				continue
-			}
-
-			buf := bat.GetVectorByName(ObjectAttr_ObjectStats).GetDownstreamVector().GetRawBytesAt(i)
-			stats := (objectio.ObjectStats)(buf)
-			if !ObjectIsSnapshotRefers(
-				&stats,
-				tablePitrs[tableID[i]],
-				&insCreateTSVec[i],
-				&insDeleteTSVec[i],
-				tableSnapshots[tableID[i]]) {
-				continue
-			}
-			// skip the same object
-			if _, ok = objectsName[stats.ObjectName().String()]; ok {
-				continue
-			}
-			key := [3]uint64{accountId, dbid[i], tableID[i]}
-			snapSize := usageData[key].SnapshotSize
-			snapSize += uint64(stats.Size())
-			usageData[key] = UsageData{
-				AccId:        accountId,
-				DbId:         dbid[i],
-				TblId:        tableID[i],
-				SnapshotSize: snapSize,
-			}
-
-			objectsName[stats.ObjectName().String()] = struct{}{}
 		}
+		id, ok := meta.GetAccountId(tid)
+		if !ok {
+			return
+		}
+		accountId := uint64(id)
+		if len(tableSnapshots[tid]) == 0 &&
+			(tablePitrs[tid] == nil ||
+				tablePitrs[tid].IsEmpty()) {
+			return
+		}
+
+		if !ObjectIsSnapshotRefers(
+			&stats,
+			tablePitrs[tid],
+			&create,
+			&delete,
+			tableSnapshots[tid]) {
+			return
+		}
+		// skip the same object
+		if _, ok = objectsName[stats.ObjectName().String()]; ok {
+			return
+		}
+		key := [3]uint64{accountId, dbid, tid}
+		snapSize := usageData[key].SnapshotSize
+		snapSize += uint64(stats.Size())
+		usageData[key] = UsageData{
+			AccId:        accountId,
+			DbId:         dbid,
+			TblId:        tid,
+			SnapshotSize: snapSize,
+		}
+
+		objectsName[stats.ObjectName().String()] = struct{}{}
+		return nil
 	}
-	scan(objects)
-	scan(tombstones)
+	data.ForEachRow(scan)
 	iter := usage.cache.data.Iter()
 	update := make(map[[3]uint64]UsageData)
 	for iter.Next() {

@@ -162,6 +162,11 @@ type Scope struct {
 	// IsLoad means the pipeline is load
 	IsLoad bool
 
+	// IsTbFunc means the leaf op of pipeline is tablefunction, tablefunction is src op
+	IsTbFunc bool
+
+	HasPartialResults bool
+
 	Plan *plan.Plan
 	// DataSource stores information about data source.
 	DataSource *Source
@@ -180,8 +185,6 @@ type Scope struct {
 	ScopeAnalyzer *ScopeAnalyzer
 
 	RemoteReceivRegInfos []RemoteReceivRegInfo
-
-	HasPartialResults bool
 }
 
 // ipAddrMatch return true if the node-addr of the scope matches to local address.

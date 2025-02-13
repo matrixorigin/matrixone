@@ -67,23 +67,23 @@ func TestDeleteS3TableWithUniqueKeyAndSecondaryKey(t *testing.T) {
 // ----- util function ----
 func buildDeleteTestCase(t *testing.T, hasUniqueKey bool, hasSecondaryKey bool) (*process.Process, *testCase) {
 	_, ctrl, proc := prepareTestCtx(t, false)
-	eng := prepareTestEng(ctrl)
+	eng := prepareTestEng(ctrl, false)
 
 	batchs, affectRows := prepareTestDeleteBatchs(proc.GetMPool(), 2, hasUniqueKey, hasSecondaryKey)
 	multiUpdateCtxs := prepareTestDeleteMultiUpdateCtx(hasUniqueKey, hasSecondaryKey)
 	action := UpdateWriteTable
-	retCase := buildTestCase(multiUpdateCtxs, eng, batchs, affectRows, action)
+	retCase := buildTestCase(multiUpdateCtxs, eng, batchs, affectRows, action, false)
 	return proc, retCase
 }
 
 func buildDeleteS3TestCase(t *testing.T, hasUniqueKey bool, hasSecondaryKey bool) (*process.Process, *testCase) {
 	_, ctrl, proc := prepareTestCtx(t, true)
-	eng := prepareTestEng(ctrl)
+	eng := prepareTestEng(ctrl, false)
 
 	batchs, _ := prepareTestDeleteBatchs(proc.GetMPool(), 12, hasUniqueKey, hasSecondaryKey)
 	multiUpdateCtxs := prepareTestDeleteMultiUpdateCtx(hasUniqueKey, hasSecondaryKey)
 	action := UpdateWriteS3
-	retCase := buildTestCase(multiUpdateCtxs, eng, batchs, 0, action)
+	retCase := buildTestCase(multiUpdateCtxs, eng, batchs, 0, action, false)
 	return proc, retCase
 }
 
