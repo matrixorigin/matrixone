@@ -648,6 +648,59 @@ outside:
 	return nil
 }
 
+func (parser *CSVParser) tryReadNewLineSkipWhitespaces() (bool, error) {
+	var err error
+	var eof, newline bool
+	newline, eof, err = parser.tryPeekExact(parser.newLine)
+	if err != nil {
+		return false, err
+	}
+
+	if newline || eof {
+		return true, nil
+	}
+
+	cnt := len(parser.newLine)
+	var leftLen, i int
+	var bs []byte
+	for i = 0; i < len(parser.buf); i++ {
+		if parser.buf[i] == ' ' || parser.buf[i] == '	' {
+			continue
+		}
+		leftLen = len(parser.buf) - i
+		if leftLen < cnt {
+			if err := parser.readBlock(); err != nil {
+				return false, err
+			}
+			newReadLen := len(parser.buf) - leftLen
+			if newReadLen == 0 {
+				return true, nil
+			}
+			if len(parser.buf) < cnt {
+				for j := i; j < len(parser.buf); j++ {
+					if parser.buf[j] == ' ' || parser.buf[j] == '	' {
+						continue
+					}
+					return false, nil
+				}
+			}
+			bs = parser.buf[:cnt]
+		} else {
+			bs = parser.buf[:cnt]
+		}
+
+		if bytes.Equal(bs, parser.newLine) {
+			if i > 0 {
+				parser.skipBytes(i)
+			}
+			return true, nil
+		}
+
+		return false, nil
+	}
+	return false, nil
+}
+
 func (parser *CSVParser) readQuotedField() error {
 	for {
 		prevPos := parser.pos
@@ -689,13 +742,15 @@ func (parser *CSVParser) readQuotedField() error {
 				if comma || err2 != nil {
 					return err2
 				}
-				newline, eof, err2 := parser.tryPeekExact(parser.newLine)
-				if eof || newline {
+				// 	newline, eof, err2 := parser.tryPeekExact(parser.newLine)
+				newline, err := parser.tryReadNewLineSkipWhitespaces()
+				if err != nil {
+					return err
+				}
+				if newline {
 					return nil
 				}
-				if err2 != nil {
-					return err2
-				}
+
 				parser.recordBuffer = append(parser.recordBuffer, parser.quote...)
 			} else {
 				// the field is completed, exit.
