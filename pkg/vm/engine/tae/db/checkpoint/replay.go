@@ -346,14 +346,11 @@ func (c *CkpReplayer) ReadCkpFiles() (err error) {
 func (c *CkpReplayer) ReplayThreeTablesObjectlist(phase string) (
 	maxTs types.TS,
 	maxLSN uint64,
-	isLSNValid bool,
-	err error) {
+	err error,
+) {
 	t0 := time.Now()
 	defer func() {
 		c.applyDuration += time.Since(t0)
-		if maxTs.IsEmpty() {
-			isLSNValid = true
-		}
 	}()
 
 	if len(c.ckpEntries) == 0 {
@@ -390,16 +387,13 @@ func (c *CkpReplayer) ReplayThreeTablesObjectlist(phase string) (
 			if maxGlobal.ckpLSN < maxLSN {
 				panic(fmt.Sprintf("logic error, current lsn %d, incoming lsn %d", maxLSN, maxGlobal.ckpLSN))
 			}
-			isLSNValid = true
 			maxLSN = maxGlobal.ckpLSN
 		}
 	}
 	for _, e := range c.emptyFile {
 		if e.end.GE(&maxTs) {
-			return types.TS{}, 0, false,
-				moerr.NewInternalErrorf(ctx,
-					"read checkpoint %v failed",
-					e.String())
+			return types.TS{}, 0,
+				moerr.NewInternalErrorf(ctx, "read checkpoint %v failed", e.String())
 		}
 	}
 	logger := logutil.Info
@@ -433,14 +427,7 @@ func (c *CkpReplayer) ReplayThreeTablesObjectlist(phase string) (
 			if checkpointEntry.ckpLSN < maxLSN {
 				panic(fmt.Sprintf("logic error, current lsn %d, incoming lsn %d", maxLSN, checkpointEntry.ckpLSN))
 			}
-			isLSNValid = true
 			maxLSN = checkpointEntry.ckpLSN
-		}
-		// For version 7, all ckp LSN of force ickp is 0.
-		// In db.ForceIncrementalCheckpoint，it truncates.
-		// If the last ckp is force ickp，LSN check should be disable.
-		if checkpointEntry.ckpLSN == 0 {
-			isLSNValid = false
 		}
 	}
 	c.wg.Wait()

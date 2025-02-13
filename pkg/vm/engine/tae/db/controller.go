@@ -558,16 +558,15 @@ func (c *Controller) AssembleDB(ctx context.Context) (err error) {
 	var (
 		checkpointed        types.TS
 		ckpLSN              uint64
-		valid               bool
 		releaseReplayPinned func()
 		replayWalWaiter     func() error
 	)
-	if checkpointed, ckpLSN, valid, releaseReplayPinned, err = c.replayFromCheckpoints(); err != nil {
+	if checkpointed, ckpLSN, releaseReplayPinned, err = c.replayFromCheckpoints(); err != nil {
 		return
 	}
 
 	if replayWalWaiter, err = c.replayFromWal(
-		ctx, checkpointed, ckpLSN, valid,
+		ctx, checkpointed, ckpLSN,
 	); err != nil {
 		releaseReplayPinned()
 		return
@@ -600,7 +599,6 @@ func (c *Controller) replayFromWal(
 	ctx context.Context,
 	checkpointed types.TS,
 	ckpLSN uint64,
-	valid bool,
 ) (waiter func() error, err error) {
 	var (
 		mode = c.db.GetTxnMode()
@@ -622,18 +620,17 @@ func (c *Controller) replayFromWal(
 	}()
 
 	if mode.IsWriteMode() {
-		err = db.ReplayWal(ctx, checkpointed, ckpLSN, valid)
+		err = db.ReplayWal(ctx, checkpointed, ckpLSN)
 		return
 	}
 	// TODO: replay mode is different from write mode
-	err = db.ReplayWal(ctx, checkpointed, ckpLSN, valid)
+	err = db.ReplayWal(ctx, checkpointed, ckpLSN)
 	return
 }
 
 func (c *Controller) replayFromCheckpoints() (
 	checkpointed types.TS,
 	ckpLSN uint64,
-	valid bool,
 	release func(),
 	err error,
 ) {
@@ -653,9 +650,8 @@ func (c *Controller) replayFromCheckpoints() (
 		logger(
 			Phase_Open,
 			zap.Duration("replay-checkpoints-cost", time.Since(now)),
-			zap.Any("checkpointed", checkpointed),
+			zap.String("checkpointed", checkpointed.ToString()),
 			zap.Uint64("checkpoint-lsn", ckpLSN),
-			zap.Bool("valid", valid),
 			zap.Error(err),
 		)
 	}()
@@ -667,7 +663,7 @@ func (c *Controller) replayFromCheckpoints() (
 	}
 
 	// 1. replay three tables objectlist
-	if checkpointed, ckpLSN, valid, err = ckpReplayer.ReplayThreeTablesObjectlist(Phase_Open); err != nil {
+	if checkpointed, ckpLSN, err = ckpReplayer.ReplayThreeTablesObjectlist(Phase_Open); err != nil {
 		return
 	}
 

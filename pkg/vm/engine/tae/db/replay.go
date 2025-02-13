@@ -56,23 +56,19 @@ type WalReplayer struct {
 	applyCount    int
 	maxLSN        uint64
 
-	lsn            uint64
-	enableLSNCheck bool
+	lsn uint64
 }
 
 func newWalReplayer(
 	db *DB,
 	fromTS types.TS,
 	lsn uint64,
-	enableLSNCheck bool,
 ) *WalReplayer {
 	replayer := &WalReplayer{
-		db:     db,
-		fromTS: fromTS,
-		lsn:    lsn,
-		// for ckp version less than 7, lsn is always 0 and lsnCheck is disable
-		enableLSNCheck: enableLSNCheck,
-		txnCmdChan:     make(chan *txnbase.TxnCmd, 100),
+		db:         db,
+		fromTS:     fromTS,
+		lsn:        lsn,
+		txnCmdChan: make(chan *txnbase.TxnCmd, 100),
 	}
 	replayer.OnTimeStamp(fromTS)
 	return replayer
@@ -190,9 +186,6 @@ func (replayer *WalReplayer) OnTimeStamp(ts types.TS) {
 	}
 }
 func (replayer *WalReplayer) checkLSN(lsn uint64) (needReplay bool) {
-	if !replayer.enableLSNCheck {
-		return true
-	}
 	if lsn <= replayer.lsn {
 		return false
 	}
