@@ -112,7 +112,7 @@ func (replayer *WalReplayer) postReplayWal() error {
 }
 func (replayer *WalReplayer) Replay(ctx context.Context) (err error) {
 	replayer.wg.Add(1)
-	go replayer.applyTxnCmds()
+	go replayer.applyReplayTxnLoop()
 	if err = replayer.db.Wal.Replay(
 		ctx,
 		replayer.OnReplayEntry,
@@ -121,7 +121,7 @@ func (replayer *WalReplayer) Replay(ctx context.Context) (err error) {
 	); err != nil {
 		return
 	}
-	replayer.txnCmdChan <- txnbase.NewLastTxnCmd()
+	replayer.txnCmdChan <- txnbase.NewEndCmd()
 	close(replayer.txnCmdChan)
 	replayer.wg.Wait()
 	if err = replayer.postReplayWal(); err != nil {
@@ -162,11 +162,11 @@ func (replayer *WalReplayer) OnReplayEntry(group uint32, lsn uint64, payload []b
 	replayer.txnCmdChan <- txnCmd
 	return driver.RE_Nomal
 }
-func (replayer *WalReplayer) applyTxnCmds() {
+func (replayer *WalReplayer) applyReplayTxnLoop() {
 	defer replayer.wg.Done()
 	for {
 		txnCmd := <-replayer.txnCmdChan
-		if txnCmd.IsLastCmd() {
+		if txnCmd.IsEnd() {
 			break
 		}
 		t0 := time.Now()
