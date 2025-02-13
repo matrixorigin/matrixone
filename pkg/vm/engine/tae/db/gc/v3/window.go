@@ -174,8 +174,8 @@ func (w *GCWindow) ExecuteGlobalCheckpointBasedGC(
 func (w *GCWindow) ScanCheckpoints(
 	ctx context.Context,
 	checkpointEntries []*checkpoint.CheckpointEntry,
-	collectCkpData func(context.Context, *checkpoint.CheckpointEntry) (*logtail.CheckpointData, error),
-	processCkpData func(*checkpoint.CheckpointEntry, *logtail.CheckpointData) error,
+	collectCkpData func(context.Context, *checkpoint.CheckpointEntry) (logtail.CKPDataReader, error),
+	processCkpData func(*checkpoint.CheckpointEntry, logtail.CKPDataReader) error,
 	onScanDone func() error,
 	buffer *containers.OneSchemaBatchBuffer,
 ) (metaFile string, err error) {
@@ -204,7 +204,7 @@ func (w *GCWindow) ScanCheckpoints(
 			}
 		}
 		objects := make(map[string]*ObjectEntry)
-		collectObjectsFromCheckpointData(data, objects)
+		collectObjectsFromCheckpointData_V2(data, objects)
 		if err = collectMapData(objects, bat, mp); err != nil {
 			return false, err
 		}
@@ -363,6 +363,30 @@ func collectObjectsFromCheckpointData(data *logtail.CheckpointData, objects map[
 		}
 		objects[name] = object
 	}
+}
+
+func collectObjectsFromCheckpointData_V2(data logtail.CKPDataReader, objects map[string]*ObjectEntry) {
+	data.ForEachRow(
+		func(
+			account uint32,
+			dbid, tid uint64,
+			objectType int8,
+			stats objectio.ObjectStats,
+			createTS, deleteTS types.TS,
+			rowID types.Rowid,
+		) error {
+			name := stats.ObjectName().String()
+			object := &ObjectEntry{
+				stats:    &stats,
+				createTS: createTS,
+				dropTS:   deleteTS,
+				db:       dbid,
+				table:    tid,
+			}
+			objects[name] = object
+			return nil
+		},
+	)
 }
 
 func (w *GCWindow) Close() {

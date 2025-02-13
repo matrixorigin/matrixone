@@ -911,6 +911,14 @@ func (c *checkpointCleaner) collectCkpData(
 		ctx, c.sid, c.fs, ckp.GetLocation(), ckp.GetVersion(),
 	)
 }
+func (c *checkpointCleaner) collectCkpData_V2(
+	ctx context.Context,
+	ckp *checkpoint.CheckpointEntry,
+) (data logtail.CKPDataReader, err error) {
+	return logtail.GetCheckpointData(
+		ctx, c.sid, c.fs, ckp.GetLocation(), ckp.GetVersion(),
+	)
+}
 
 func (c *checkpointCleaner) GetPITRs() (*logtail.PitrInfo, error) {
 	c.mutation.Lock()
@@ -1196,7 +1204,7 @@ func (c *checkpointCleaner) scanCheckpointsAsDebugWindow(
 ) (window *GCWindow, err error) {
 	window = NewGCWindow(c.mp, c.fs, WithWindowDir("debug/"))
 	if _, err = window.ScanCheckpoints(
-		c.ctx, ckps, c.collectCkpData, nil, nil, buffer,
+		c.ctx, ckps, c.collectCkpData_V2, nil, nil, buffer,
 	); err != nil {
 		window.Close()
 		window = nil
@@ -1690,7 +1698,7 @@ func (c *checkpointCleaner) scanCheckpointsLocked(
 	if gcMetaFile, err = gcWindow.ScanCheckpoints(
 		ctx,
 		ckps,
-		c.collectCkpData,
+		c.collectCkpData_V2,
 		c.mutUpdateSnapshotMetaLocked,
 		saveSnapshot,
 		memoryBuffer,
@@ -1716,7 +1724,7 @@ func (c *checkpointCleaner) scanCheckpointsLocked(
 
 func (c *checkpointCleaner) mutUpdateSnapshotMetaLocked(
 	ckp *checkpoint.CheckpointEntry,
-	data *logtail.CheckpointData,
+	data logtail.CKPDataReader,
 ) error {
 	return c.mutation.snapshotMeta.Update(
 		c.ctx,
