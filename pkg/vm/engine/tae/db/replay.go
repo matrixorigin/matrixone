@@ -212,7 +212,6 @@ func (replayer *WalReplayer) OnReplayTxn(cmd txnif.TxnCmd, lsn uint64) {
 		txnCmd,
 		replayer,
 		replayer.db.Catalog,
-		replayer.db.Wal,
 	)
 	if err = replayer.db.TxnMgr.OnReplayTxn(txn); err != nil {
 		panic(err)
