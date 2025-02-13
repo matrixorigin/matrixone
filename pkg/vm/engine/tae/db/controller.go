@@ -607,6 +607,7 @@ func (c *Controller) replayFromWal(
 		db   = c.db
 		now  = time.Now()
 	)
+	waiter = func() error { return nil }
 	defer func() {
 		logger := logutil.Info
 		if err != nil {
@@ -621,13 +622,12 @@ func (c *Controller) replayFromWal(
 	}()
 
 	if mode.IsWriteMode() {
-		if err = db.ReplayWal(ctx, checkpointed, ckpLSN, valid); err != nil {
-			return
-		}
-		waiter = func() error { return nil }
+		err = db.ReplayWal(ctx, checkpointed, ckpLSN, valid)
 		return
 	}
-	panic("not implemented")
+	// TODO: replay mode is different from write mode
+	err = db.ReplayWal(ctx, checkpointed, ckpLSN, valid)
+	return
 }
 
 func (c *Controller) replayFromCheckpoints() (
