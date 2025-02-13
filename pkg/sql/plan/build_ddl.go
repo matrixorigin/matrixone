@@ -2548,8 +2548,8 @@ func buildHnswSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colM
 			Name: catalog.Hnsw_TblCol_Metadata_Index_Id,
 			Alg:  plan.CompressType_Lz4,
 			Typ: Type{
-				Id:    int32(types.T_int64),
-				Width: 0,
+				Id:    int32(types.T_varchar),
+				Width: 128,
 				Scale: 0,
 			},
 			Primary: true,
@@ -2646,8 +2646,8 @@ func buildHnswSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colM
 			Name: catalog.Hnsw_TblCol_Storage_Index_Id,
 			Alg:  plan.CompressType_Lz4,
 			Typ: Type{
-				Id:    int32(types.T_int64),
-				Width: 0,
+				Id:    int32(types.T_varchar),
+				Width: 128,
 				Scale: 0,
 			},
 			Default: &plan.Default{

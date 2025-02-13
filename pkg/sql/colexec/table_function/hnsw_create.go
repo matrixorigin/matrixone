@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -199,7 +200,8 @@ func (u *hnswCreateState) start(tf *TableFunction, proc *process.Process, nthRow
 		u.idxcfg.Usearch.Dimensions = uint(dimension)
 		u.idxcfg.Type = "hnsw"
 
-		u.build, err = hnsw.NewHnswBuild(proc, u.idxcfg, u.tblcfg)
+		uid := uint64(util.UnsafeUintptr(tf))
+		u.build, err = hnsw.NewHnswBuild(proc, uid, u.idxcfg, u.tblcfg)
 		if err != nil {
 			return err
 		}
