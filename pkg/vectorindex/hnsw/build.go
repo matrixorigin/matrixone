@@ -31,7 +31,7 @@ import (
 
 // Hnsw Build index implementation
 type HnswBuildIndex struct {
-	Id    int64
+	Id    string
 	Index *usearch.Index
 	Path  string
 	Saved bool
@@ -39,6 +39,7 @@ type HnswBuildIndex struct {
 }
 
 type HnswBuild struct {
+	uid      uint64
 	cfg      vectorindex.IndexConfig
 	tblcfg   vectorindex.IndexTableConfig
 	indexes  []*HnswBuildIndex
@@ -57,7 +58,7 @@ type AddItem struct {
 }
 
 // New HnswBuildIndex struct
-func NewHnswBuildIndex(id int64, cfg vectorindex.IndexConfig, nthread int) (*HnswBuildIndex, error) {
+func NewHnswBuildIndex(id string, cfg vectorindex.IndexConfig, nthread int) (*HnswBuildIndex, error) {
 	var err error
 	idx := &HnswBuildIndex{}
 
@@ -161,7 +162,7 @@ func (idx *HnswBuildIndex) ToSql(cfg vectorindex.IndexTableConfig) (string, erro
 		}
 
 		url := fmt.Sprintf("file://%s?offset=%d&size=%d", idx.Path, offset, chunksz)
-		tuple := fmt.Sprintf("(%d, %d, load_file(cast('%s' as datalink)), 0)", idx.Id, chunkid, url)
+		tuple := fmt.Sprintf("('%s', %d, load_file(cast('%s' as datalink)), 0)", idx.Id, chunkid, url)
 		values = append(values, tuple)
 
 		// offset and chunksz
@@ -197,35 +198,40 @@ func (idx *HnswBuildIndex) Add(key int64, vec []float32) error {
 }
 
 // create HsnwBuild struct
-func NewHnswBuild(proc *process.Process, cfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) (info *HnswBuild, err error) {
+func NewHnswBuild(proc *process.Process, uid uint64, cfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) (info *HnswBuild, err error) {
 
 	nthread := vectorindex.GetConcurrency(tblcfg.ThreadsBuild)
-	info = &HnswBuild{cfg: cfg,
-		tblcfg:   tblcfg,
-		indexes:  make([]*HnswBuildIndex, 0, 16),
-		nthread:  int(nthread),
-		add_chan: make(chan AddItem, nthread*4),
-		err_chan: make(chan error, nthread),
+	info = &HnswBuild{
+		uid:     uid,
+		cfg:     cfg,
+		tblcfg:  tblcfg,
+		indexes: make([]*HnswBuildIndex, 0, 16),
+		nthread: int(nthread),
 	}
 
-	// create multi-threads worker for add
-	for i := 0; i < info.nthread; i++ {
+	if nthread > 1 {
+		info.add_chan = make(chan AddItem, nthread*4)
+		info.err_chan = make(chan error, nthread)
 
-		info.wg.Add(1)
-		go func() {
-			defer info.wg.Done()
-			var err0 error
-			closed := false
-			for !closed {
-				closed, err0 = info.addFromChannel(proc)
-				if err0 != nil {
-					info.err_chan <- err0
-					return
+		// create multi-threads worker for add
+		for i := 0; i < info.nthread; i++ {
+
+			info.wg.Add(1)
+			go func() {
+				defer info.wg.Done()
+				var err0 error
+				closed := false
+				for !closed {
+					closed, err0 = info.addFromChannel(proc)
+					if err0 != nil {
+						info.err_chan <- err0
+						return
+					}
 				}
-			}
-		}()
-	}
+			}()
+		}
 
+	}
 	return info, nil
 }
 
@@ -243,7 +249,7 @@ func (h *HnswBuild) addFromChannel(proc *process.Process) (stream_closed bool, e
 	}
 
 	// add
-	err = h.addVector(res.key, res.vec)
+	err = h.addVectorSync(res.key, res.vec)
 	if err != nil {
 		return false, err
 	}
@@ -252,10 +258,12 @@ func (h *HnswBuild) addFromChannel(proc *process.Process) (stream_closed bool, e
 }
 
 func (h *HnswBuild) CloseAndWait() {
-	h.once.Do(func() {
-		close(h.add_chan)
-		h.wg.Wait()
-	})
+	if h.nthread > 1 {
+		h.once.Do(func() {
+			close(h.add_chan)
+			h.wg.Wait()
+		})
+	}
 }
 
 // destroy
@@ -276,25 +284,37 @@ func (h *HnswBuild) Destroy() error {
 }
 
 func (h *HnswBuild) Add(key int64, vec []float32) error {
-	select {
-	case err := <-h.err_chan:
-		return err
-	default:
+	if h.nthread > 1 {
+
+		select {
+		case err := <-h.err_chan:
+			return err
+		default:
+		}
+		// copy the []float32 slice.
+		h.add_chan <- AddItem{key, append(make([]float32, 0, len(vec)), vec...)}
+		return nil
+	} else {
+		return h.addVector(key, vec)
 	}
-	// copy the []float32 slice.
-	h.add_chan <- AddItem{key, append(make([]float32, 0, len(vec)), vec...)}
-	return nil
+}
+
+func (h *HnswBuild) createIndexUniqueKey(id int64) string {
+	return fmt.Sprintf("%x-%d", h.uid, id)
+}
+
+func (h *HnswBuild) getIndexForAddSync() (idx *HnswBuildIndex, save_idx *HnswBuildIndex, err error) {
+	h.mutex.Lock()
+	defer h.mutex.Unlock()
+	return h.getIndexForAdd()
 }
 
 func (h *HnswBuild) getIndexForAdd() (idx *HnswBuildIndex, save_idx *HnswBuildIndex, err error) {
 
 	save_idx = nil
-	h.mutex.Lock()
-	defer h.mutex.Unlock()
-
 	nidx := int64(len(h.indexes))
 	if nidx == 0 {
-		idx, err = NewHnswBuildIndex(nidx, h.cfg, h.nthread)
+		idx, err = NewHnswBuildIndex(h.createIndexUniqueKey(nidx), h.cfg, h.nthread)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -309,7 +329,7 @@ func (h *HnswBuild) getIndexForAdd() (idx *HnswBuildIndex, save_idx *HnswBuildIn
 			save_idx = idx
 
 			// create new index
-			idx, err = NewHnswBuildIndex(nidx, h.cfg, h.nthread)
+			idx, err = NewHnswBuildIndex(h.createIndexUniqueKey(nidx), h.cfg, h.nthread)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -325,11 +345,38 @@ func (h *HnswBuild) getIndexForAdd() (idx *HnswBuildIndex, save_idx *HnswBuildIn
 
 // add vector to the build
 // it will check the current index is full and add the vector to available index
+// sync version for multi-thread
+func (h *HnswBuild) addVectorSync(key int64, vec []float32) error {
+	var err error
+	var idx *HnswBuildIndex
+	var save_idx *HnswBuildIndex
+
+	idx, save_idx, err = h.getIndexForAddSync()
+	if err != nil {
+		return err
+	}
+
+	if save_idx != nil {
+		// save the current index to file
+		err = save_idx.SaveToFile()
+		if err != nil {
+			return err
+		}
+	}
+
+	return idx.Add(key, vec)
+}
+
+// add vector to the build
+// it will check the current index is full and add the vector to available index
+// single-threaded version.
 func (h *HnswBuild) addVector(key int64, vec []float32) error {
 	var err error
 	var idx *HnswBuildIndex
 	var save_idx *HnswBuildIndex
 
+	h.mutex.Lock()
+	defer h.mutex.Unlock()
 	idx, save_idx, err = h.getIndexForAdd()
 	if err != nil {
 		return err
@@ -380,7 +427,7 @@ func (h *HnswBuild) ToInsertSql(ts int64) ([]string, error) {
 		}
 		fs := finfo.Size()
 
-		metas = append(metas, fmt.Sprintf("(%d, '%s', %d, %d)", idx.Id, chksum, ts, fs))
+		metas = append(metas, fmt.Sprintf("('%s', '%s', %d, %d)", idx.Id, chksum, ts, fs))
 	}
 
 	metasql := fmt.Sprintf("INSERT INTO `%s`.`%s` VALUES %s", h.tblcfg.DbName, h.tblcfg.MetadataTable, strings.Join(metas, ", "))
