@@ -147,6 +147,9 @@ func (item *TableItem) IsDeleted() bool {
 }
 
 func (item *TableItem) IsPartitionTable() bool {
+	if item.TableDef == nil {
+		return false
+	}
 	return features.IsPartitioned(item.TableDef.FeatureFlag)
 }
 
