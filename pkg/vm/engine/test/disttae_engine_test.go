@@ -1522,3 +1522,26 @@ func TestCacheNotServing(t *testing.T) {
 
 	require.NoError(t, staleTxn.Commit(p.Ctx))
 }
+
+func TestInvalidTxnOp(t *testing.T) {
+	opts := config.WithLongScanAndCKPOpts(nil)
+	p := testutil.InitEnginePack(testutil.TestOptions{TaeEngineOptions: opts}, t)
+	defer p.Close()
+	txnop := p.StartCNTxn()
+
+	schema := catalog2.MockSchemaAll(2, 0)
+	schema.Name = "test"
+	p.CreateDBAndTable(txnop, "db", schema)
+
+	require.NoError(t, txnop.Commit(p.Ctx))
+
+	txnop = p.StartCNTxn()
+
+	userDb, err := p.D.Engine.Database(p.Ctx, "db", txnop)
+	require.NoError(t, err)
+
+	require.NoError(t, txnop.Commit(p.Ctx))
+
+	_, err = userDb.Relation(p.Ctx, "test", nil)
+	require.Error(t, err)
+}

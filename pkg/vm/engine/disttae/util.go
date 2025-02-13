@@ -17,6 +17,7 @@ package disttae
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"reflect"
@@ -626,6 +627,10 @@ func txnIsValid(txnOp client.TxnOperator) (*Transaction, error) {
 	var ok bool
 	if wsTxn, ok = ws.(*Transaction); ok {
 		if wsTxn == nil {
+			return nil, moerr.NewTxnClosedNoCtx(txnOp.Txn().ID)
+		}
+		if wsTxn.removed {
+			logutil.Error("txn is removed", zap.String("id", hex.EncodeToString(txnOp.Txn().ID)), zap.String("status", txnOp.Status().String()))
 			return nil, moerr.NewTxnClosedNoCtx(txnOp.Txn().ID)
 		}
 	}

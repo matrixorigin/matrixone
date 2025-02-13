@@ -228,6 +228,7 @@ func (c *Controller) handleToReplayCmd(cmd *controlCmd) {
 	// 2.1 remove GC disk cron job. no new GC job will be issued from now on
 	RemoveCronJob(c.db, CronJobs_Name_GCDisk)
 	RemoveCronJob(c.db, CronJobs_Name_GCCheckpoint)
+	RemoveCronJob(c.db, CronJobs_Name_Scanner)
 	if err = c.db.DiskCleaner.SwitchToReplayMode(ctx); err != nil {
 		// Rollback
 		return
@@ -396,6 +397,12 @@ func (c *Controller) handleToWriteCmd(cmd *controlCmd) {
 	}
 	if err = AddCronJob(
 		c.db, CronJobs_Name_GCCheckpoint, true,
+	); err != nil {
+		// Rollback
+		return
+	}
+	if err = AddCronJob(
+		c.db, CronJobs_Name_Scanner, true,
 	); err != nil {
 		// Rollback
 		return
