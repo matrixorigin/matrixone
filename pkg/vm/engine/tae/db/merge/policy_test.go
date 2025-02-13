@@ -272,7 +272,7 @@ func TestPolicyCompact(t *testing.T) {
 	p := newObjCompactPolicy(fs)
 	rc := new(resourceController)
 
-	cata := catalog.MockCatalog()
+	cata := catalog.MockCatalog(nil)
 	defer cata.Close()
 	txnMgr := txnbase.NewTxnManager(catalog.MockTxnStoreFactory(cata), catalog.MockTxnFactory(cata), types.NewMockHLCClock(1))
 	txnMgr.Start(context.Background())
@@ -311,7 +311,7 @@ func Test_timeout(t *testing.T) {
 	require.NoError(t, err)
 	p := newObjCompactPolicy(fs)
 
-	cata := catalog.MockCatalog()
+	cata := catalog.MockCatalog(nil)
 	defer cata.Close()
 	txnMgr := txnbase.NewTxnManager(catalog.MockTxnStoreFactory(cata), catalog.MockTxnFactory(cata), types.NewMockHLCClock(1))
 	txnMgr.Start(context.Background())

@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -395,12 +396,10 @@ func (e *CheckpointEntry) String() string {
 
 func (e *CheckpointEntry) Prefetch(
 	ctx context.Context,
-	fs *objectio.ObjectFS,
+	fs fileservice.FileService,
 	data *logtail.CheckpointData,
 ) (err error) {
-	if err = data.PrefetchFrom(
-		fs.Service,
-	); err != nil {
+	if err = data.PrefetchFrom(fs); err != nil {
 		return
 	}
 	return
@@ -408,10 +407,10 @@ func (e *CheckpointEntry) Prefetch(
 
 func (e *CheckpointEntry) Read(
 	ctx context.Context,
-	fs *objectio.ObjectFS,
+	fs fileservice.FileService,
 	data *logtail.CheckpointData,
 ) (err error) {
-	reader, err := ioutil.NewObjectReader(fs.Service, e.tnLocation)
+	reader, err := ioutil.NewObjectReader(fs, e.tnLocation)
 	if err != nil {
 		return
 	}
@@ -421,7 +420,7 @@ func (e *CheckpointEntry) Read(
 		e.version,
 		e.tnLocation,
 		reader,
-		fs.Service,
+		fs,
 	); err != nil {
 		return
 	}
@@ -430,11 +429,11 @@ func (e *CheckpointEntry) Read(
 
 func (e *CheckpointEntry) PrefetchMetaIdx(
 	ctx context.Context,
-	fs *objectio.ObjectFS,
+	fs fileservice.FileService,
 ) (data *logtail.CheckpointData, err error) {
 	data = logtail.NewCheckpointData(e.sid, common.CheckpointAllocator)
 	if err = data.PrefetchMeta(
-		fs.Service,
+		fs,
 		e.tnLocation,
 	); err != nil {
 		return
@@ -444,10 +443,10 @@ func (e *CheckpointEntry) PrefetchMetaIdx(
 
 func (e *CheckpointEntry) ReadMetaIdx(
 	ctx context.Context,
-	fs *objectio.ObjectFS,
+	fs fileservice.FileService,
 	data *logtail.CheckpointData,
 ) (err error) {
-	reader, err := ioutil.NewObjectReader(fs.Service, e.tnLocation)
+	reader, err := ioutil.NewObjectReader(fs, e.tnLocation)
 	if err != nil {
 		return
 	}
@@ -455,19 +454,19 @@ func (e *CheckpointEntry) ReadMetaIdx(
 }
 
 func (e *CheckpointEntry) GetTableByID(
-	ctx context.Context, fs *objectio.ObjectFS, tid uint64,
+	ctx context.Context, fs fileservice.FileService, tid uint64,
 ) (ins, del, dataObject, tombstoneObject *api.Batch, err error) {
-	reader, err := ioutil.NewObjectReader(fs.Service, e.cnLocation)
+	reader, err := ioutil.NewObjectReader(fs, e.cnLocation)
 	if err != nil {
 		return
 	}
 	data := logtail.NewCNCheckpointData(e.sid)
-	err = ioutil.PrefetchMeta(e.sid, fs.Service, e.cnLocation)
+	err = ioutil.PrefetchMeta(e.sid, fs, e.cnLocation)
 	if err != nil {
 		return
 	}
 
-	err = data.PrefetchMetaIdx(ctx, e.version, logtail.GetMetaIdxesByVersion(e.version), e.cnLocation, fs.Service)
+	err = data.PrefetchMetaIdx(ctx, e.version, logtail.GetMetaIdxesByVersion(e.version), e.cnLocation, fs)
 	if err != nil {
 		return
 	}
@@ -475,11 +474,11 @@ func (e *CheckpointEntry) GetTableByID(
 	if err != nil {
 		return
 	}
-	err = data.PrefetchMetaFrom(ctx, e.version, e.cnLocation, fs.Service, tid)
+	err = data.PrefetchMetaFrom(ctx, e.version, e.cnLocation, fs, tid)
 	if err != nil {
 		return
 	}
-	err = data.PrefetchFrom(ctx, e.version, fs.Service, e.cnLocation, tid)
+	err = data.PrefetchFrom(ctx, e.version, fs, e.cnLocation, tid)
 	if err != nil {
 		return
 	}

@@ -37,7 +37,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 
@@ -138,18 +137,17 @@ func (tracer *txnTracer) Stop() {
 type txnStore struct {
 	ctx context.Context
 	txnbase.NoopTxnStore
-	mu          sync.RWMutex
-	rt          *dbutils.Runtime
-	dbs         map[uint64]*txnDB
-	driver      wal.Driver
-	txn         txnif.AsyncTxn
-	catalog     *catalog.Catalog
-	cmdMgr      *commandManager
-	logs        []entry.Entry
-	warChecker  *warChecker
-	dataFactory *tables.DataFactory
-	writeOps    atomic.Uint32
-	tracer      *txnTracer
+	mu         sync.RWMutex
+	rt         *dbutils.Runtime
+	dbs        map[uint64]*txnDB
+	driver     wal.Driver
+	txn        txnif.AsyncTxn
+	catalog    *catalog.Catalog
+	cmdMgr     *commandManager
+	logs       []entry.Entry
+	warChecker *warChecker
+	writeOps   atomic.Uint32
+	tracer     *txnTracer
 
 	wg sync.WaitGroup
 }
@@ -159,10 +157,9 @@ var TxnStoreFactory = func(
 	catalog *catalog.Catalog,
 	driver wal.Driver,
 	rt *dbutils.Runtime,
-	dataFactory *tables.DataFactory,
 	maxMessageSize uint64) txnbase.TxnStoreFactory {
 	return func() txnif.TxnStore {
-		return newStore(ctx, catalog, driver, rt, dataFactory, maxMessageSize)
+		return newStore(ctx, catalog, driver, rt, maxMessageSize)
 	}
 }
 
@@ -171,18 +168,16 @@ func newStore(
 	catalog *catalog.Catalog,
 	driver wal.Driver,
 	rt *dbutils.Runtime,
-	dataFactory *tables.DataFactory,
-	maxMessageSize uint64) *txnStore {
+	maxMessageSize uint64,
+) *txnStore {
 	return &txnStore{
-		ctx:         ctx,
-		rt:          rt,
-		dbs:         make(map[uint64]*txnDB),
-		catalog:     catalog,
-		cmdMgr:      newCommandManager(driver, maxMessageSize),
-		driver:      driver,
-		logs:        make([]entry.Entry, 0),
-		dataFactory: dataFactory,
-		wg:          sync.WaitGroup{},
+		ctx:     ctx,
+		rt:      rt,
+		dbs:     make(map[uint64]*txnDB),
+		catalog: catalog,
+		cmdMgr:  newCommandManager(driver, maxMessageSize),
+		driver:  driver,
+		logs:    make([]entry.Entry, 0),
 	}
 }
 

@@ -125,7 +125,7 @@ func LoadPersistedColumnDatas(
 	vecs, _, err = ioutil.LoadColumns2(
 		ctx, cols,
 		typs,
-		rt.Fs.Service,
+		rt.Fs,
 		location,
 		fileservice.Policy(0),
 		true,

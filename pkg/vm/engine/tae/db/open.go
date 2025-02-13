@@ -17,7 +17,6 @@ package db
 import (
 	"context"
 	"fmt"
-	"path"
 	"sync/atomic"
 	"time"
 
@@ -27,7 +26,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -35,13 +33,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	gc2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc/v3"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
-	w "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
@@ -75,11 +71,16 @@ func Open(
 	opts *options.Options,
 	dbOpts ...DBOption,
 ) (db *DB, err error) {
+	opts = opts.FillDefaults(dirname)
+	// TODO: remove
+	fillRuntimeOptions(opts)
+
 	dbLocker, err := createDBLock(dirname)
 
 	logutil.Info(
 		Phase_Open,
 		zap.String("db-dirname", dirname),
+		zap.String("config", opts.JsonString()),
 		zap.Error(err),
 	)
 	startTime := time.Now()
@@ -107,22 +108,6 @@ func Open(
 		)
 	}()
 
-	opts = opts.FillDefaults(dirname)
-	fillRuntimeOptions(opts)
-
-	logutil.Info(
-		Phase_Open,
-		zap.String("config", opts.JsonString()),
-	)
-
-	if opts.Fs == nil {
-		// TODO:fileservice needs to be passed in as a parameter
-		opts.Fs = objectio.TmpNewFileservice(ctx, path.Join(dirname, "data"))
-	}
-	if opts.LocalFs == nil {
-		opts.LocalFs = objectio.TmpNewFileservice(ctx, path.Join(dirname, "data"))
-	}
-
 	db = &DB{
 		Dir:       dirname,
 		Opts:      opts,
@@ -139,14 +124,6 @@ func Open(
 		db.Controller.Stop()
 	})
 
-	txnMode := db.GetTxnMode()
-	if !txnMode.IsValid() {
-		panic(fmt.Sprintf("open-tae: invalid txn mode %s", txnMode))
-	}
-
-	serviceDir := path.Join(dirname, "data")
-	fs := objectio.NewObjectFS(opts.Fs, serviceDir)
-	localFs := objectio.NewObjectFS(opts.LocalFs, serviceDir)
 	transferTable, err := model.NewTransferTable[*model.TransferHashPage](ctx, opts.LocalFs)
 	if err != nil {
 		panic(fmt.Sprintf("open-tae: model.NewTransferTable failed, %s", err))
@@ -158,11 +135,21 @@ func Open(
 	case options.LogstoreLogservice:
 		db.Wal = wal.NewLogserviceDriver(opts.Ctx, opts.Lc)
 	}
-	scheduler := newTaskScheduler(db, db.Opts.SchedulerCfg.AsyncWorkers, db.Opts.SchedulerCfg.IOWorkers)
+	onErrorCalls = append(onErrorCalls, func() {
+		db.Wal.Close()
+	})
+
+	scheduler := newTaskScheduler(
+		db, db.Opts.SchedulerCfg.AsyncWorkers, db.Opts.SchedulerCfg.IOWorkers,
+	)
+	onErrorCalls = append(onErrorCalls, func() {
+		scheduler.Stop()
+	})
+
 	db.Runtime = dbutils.NewRuntime(
 		dbutils.WithRuntimeTransferTable(transferTable),
-		dbutils.WithRuntimeObjectFS(fs),
-		dbutils.WithRuntimeLocalFS(localFs),
+		dbutils.WithRuntimeObjectFS(opts.Fs),
+		dbutils.WithRuntimeLocalFS(opts.LocalFs),
 		dbutils.WithRuntimeSmallPool(dbutils.MakeDefaultSmallPool("small-vector-pool")),
 		dbutils.WithRuntimeTransientPool(dbutils.MakeDefaultTransientPool("trasient-vector-pool")),
 		dbutils.WithRuntimeScheduler(scheduler),
@@ -172,11 +159,18 @@ func Open(
 	dataFactory := tables.NewDataFactory(
 		db.Runtime, db.Dir,
 	)
-	catalog.DefaultTableDataFactory = dataFactory.MakeTableFactory()
-	if db.Catalog, err = catalog.OpenCatalog(db.usageMemo); err != nil {
+	if db.Catalog, err = catalog.OpenCatalog(db.usageMemo, dataFactory); err != nil {
 		return
 	}
 	db.usageMemo.C = db.Catalog
+	onErrorCalls = append(onErrorCalls, func() {
+		db.Catalog.Close()
+	})
+
+	txnMode := db.GetTxnMode()
+	if !txnMode.IsValid() {
+		panic(fmt.Sprintf("open-tae: invalid txn mode %s", txnMode))
+	}
 
 	// Init and start txn manager
 	txnStoreFactory := txnimpl.TxnStoreFactory(
@@ -184,7 +178,6 @@ func Open(
 		db.Catalog,
 		db.Wal,
 		db.Runtime,
-		dataFactory,
 		opts.MaxMessageSize,
 	)
 	txnFactory := txnimpl.TxnFactory(db.Catalog)
@@ -236,18 +229,9 @@ func Open(
 		db.BGCheckpointRunner.Stop()
 	})
 
-	db.BGFlusher = checkpoint.NewFlusher(
-		db.Runtime,
-		db.BGCheckpointRunner,
-		db.Catalog,
-		db.BGCheckpointRunner.GetDirtyCollector(),
-		checkpoint.WithFlusherInterval(opts.CheckpointCfg.FlushInterval),
-		checkpoint.WithFlusherCronPeriod(opts.CheckpointCfg.ScanInterval),
-	)
-
 	now := time.Now()
 	// TODO: checkpoint dir should be configurable
-	ckpReplayer := db.BGCheckpointRunner.BuildReplayer(ioutil.GetCheckpointDir(), dataFactory)
+	ckpReplayer := db.BGCheckpointRunner.BuildReplayer(ioutil.GetCheckpointDir())
 	defer ckpReplayer.Close()
 	if err = ckpReplayer.ReadCkpFiles(); err != nil {
 		return
@@ -278,7 +262,7 @@ func Open(
 	)
 
 	now = time.Now()
-	if err = db.ReplayWal(ctx, dataFactory, checkpointed, ckpLSN, valid); err != nil {
+	if err = db.ReplayWal(ctx, checkpointed, ckpLSN, valid); err != nil {
 		return
 	}
 
@@ -290,19 +274,16 @@ func Open(
 
 	db.DBLocker, dbLocker = dbLocker, nil
 
-	// Init timed scanner
-	scanner := NewDBScanner(db, nil)
+	db.BGFlusher = checkpoint.NewFlusher(
+		db.Runtime,
+		db.BGCheckpointRunner,
+		db.Catalog,
+		db.BGCheckpointRunner.GetDirtyCollector(),
+		false,
+		checkpoint.WithFlusherInterval(opts.CheckpointCfg.FlushInterval),
+		checkpoint.WithFlusherCronPeriod(opts.CheckpointCfg.ScanInterval),
+	)
 
-	// w-zr TODO: need to support replay and write mode
-	db.MergeScheduler = merge.NewScheduler(db.Runtime, merge.NewTaskServiceGetter(opts.TaskServiceGetter))
-	scanner.RegisterOp(db.MergeScheduler)
-	db.Wal.Start()
-	db.BGFlusher.Start()
-
-	db.BGScanner = w.NewHeartBeater(
-		opts.CheckpointCfg.ScanInterval,
-		scanner)
-	db.BGScanner.Start()
 	// TODO: WithGCInterval requires configuration parameters
 	gc2.SetDeleteTimeout(opts.GCCfg.GCDeleteTimeout)
 	gc2.SetDeleteBatchSize(opts.GCCfg.GCDeleteBatchSize)
@@ -311,7 +292,7 @@ func Open(
 	cleaner := gc2.NewCheckpointCleaner(
 		opts.Ctx,
 		opts.SID,
-		fs,
+		opts.Fs,
 		db.Wal,
 		db.BGCheckpointRunner,
 		gc2.WithCanGCCacheSize(opts.GCCfg.CacheSize),
