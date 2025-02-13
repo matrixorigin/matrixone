@@ -112,13 +112,6 @@ func Open(
 		opt(db)
 	}
 
-	db.Controller = NewController(db)
-	db.Controller.Start()
-	rollbackSteps.Add("rollback start controller", func() error {
-		db.Controller.Stop()
-		return nil
-	})
-
 	transferTable, err := model.NewTransferTable[*model.TransferHashPage](ctx, opts.LocalFs)
 	if err != nil {
 		panic(fmt.Sprintf("open-tae: model.NewTransferTable failed, %s", err))
@@ -164,9 +157,11 @@ func Open(
 		return nil
 	})
 
+	db.Controller = NewController(db)
 	if err = db.Controller.AssembleDB(ctx); err != nil {
 		return
 	}
+	db.Controller.Start()
 
 	db.DBLocker, dbLocker = dbLocker, nil
 	// For debug or test
