@@ -31,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
-	txn2 "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/shardservice"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -95,8 +94,8 @@ func (db *txnDatabase) relation(ctx context.Context, name string, proc any) (eng
 		)
 	})
 	txn := db.getTxn()
-	if txn.op.Status() == txn2.TxnStatus_Aborted {
-		return nil, moerr.NewTxnClosedNoCtx(txn.op.Txn().ID)
+	if _, err := txnIsValid(txn.op); err != nil {
+		return nil, err
 	}
 
 	p := txn.proc
