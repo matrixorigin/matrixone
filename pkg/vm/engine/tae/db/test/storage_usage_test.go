@@ -462,7 +462,7 @@ func Test_EstablishFromCheckpoints(t *testing.T) {
 	memo.Clear()
 
 	memo.PrepareReplay(ckps, vers)
-	memo.EstablishFromCKPs(nil)
+	memo.EstablishFromCKPs()
 
 	memoShadow := logtail.NewTNUsageMemo(nil)
 	for idx := range usageIns {

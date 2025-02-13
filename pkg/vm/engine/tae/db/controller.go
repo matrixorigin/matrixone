@@ -556,24 +556,28 @@ func (c *Controller) AssembleDB(ctx context.Context) (err error) {
 	db.DiskCleaner = gc2.NewDiskCleaner(cleaner, db.IsWriteMode())
 
 	var (
-		checkpointed    types.TS
-		ckpLSN          uint64
-		valid           bool
-		replayWalWaiter func() error
+		checkpointed        types.TS
+		ckpLSN              uint64
+		valid               bool
+		releaseReplayPinned func()
+		replayWalWaiter     func() error
 	)
-	if checkpointed, ckpLSN, valid, err = c.replayFromCheckpoints(); err != nil {
+	if checkpointed, ckpLSN, valid, releaseReplayPinned, err = c.replayFromCheckpoints(); err != nil {
 		return
 	}
 
 	if replayWalWaiter, err = c.replayFromWal(
 		ctx, checkpointed, ckpLSN, valid,
 	); err != nil {
+		releaseReplayPinned()
 		return
 	}
 
 	if err = replayWalWaiter(); err != nil {
+		releaseReplayPinned()
 		return
 	}
+	releaseReplayPinned()
 
 	// start flusher and disk cleaner
 	db.BGFlusher.Start()
@@ -630,6 +634,7 @@ func (c *Controller) replayFromCheckpoints() (
 	checkpointed types.TS,
 	ckpLSN uint64,
 	valid bool,
+	release func(),
 	err error,
 ) {
 	var (
@@ -639,6 +644,10 @@ func (c *Controller) replayFromCheckpoints() (
 	defer func() {
 		logger := logutil.Info
 		if err != nil {
+			if release != nil {
+				release()
+				release = nil
+			}
 			logger = logutil.Error
 		}
 		logger(
@@ -652,7 +661,7 @@ func (c *Controller) replayFromCheckpoints() (
 	}()
 
 	ckpReplayer := db.BGCheckpointRunner.BuildReplayer(ioutil.GetCheckpointDir())
-	defer ckpReplayer.Close()
+	release = ckpReplayer.Close
 	if err = ckpReplayer.ReadCkpFiles(); err != nil {
 		return
 	}
