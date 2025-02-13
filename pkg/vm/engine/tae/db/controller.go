@@ -442,9 +442,15 @@ func (c *Controller) AssembleDB(ctx context.Context) (err error) {
 		db            = c.db
 		txnMode       = db.GetTxnMode()
 		rollbackSteps stepFuncs
+		errMsg        string
 	)
 	defer func() {
 		if err != nil {
+			logutil.Error(
+				Phase_Open,
+				zap.String("error-msg", errMsg),
+				zap.Error(err),
+			)
 			if err2 := rollbackSteps.Apply(
 				"DB-Assemble-Rollback", true, 1,
 			); err2 != nil {
@@ -559,24 +565,45 @@ func (c *Controller) AssembleDB(ctx context.Context) (err error) {
 		checkpointed        types.TS
 		ckpLSN              uint64
 		releaseReplayPinned func()
-		replayWalWaiter     func() error
+		replayCtl           *replayCtl
+		replayWalDuration   time.Duration
 	)
+	defer func() {
+		if err != nil {
+			if replayCtl != nil {
+				replayCtl.Stop()
+			}
+		} else {
+			logutil.Info(
+				Phase_Open,
+				zap.String("checkpointed", checkpointed.ToString()),
+				zap.Uint64("checkpoint-lsn", ckpLSN),
+				zap.Duration("replay-wal-duration", replayWalDuration),
+			)
+			db.ReplayCtl = replayCtl
+		}
+	}()
 	if checkpointed, ckpLSN, releaseReplayPinned, err = c.replayFromCheckpoints(); err != nil {
 		return
 	}
 
-	if replayWalWaiter, err = c.replayFromWal(
-		ctx, checkpointed, ckpLSN,
+	if replayCtl, err = db.ReplayWal(
+		ctx, checkpointed, ckpLSN, releaseReplayPinned,
 	); err != nil {
-		releaseReplayPinned()
 		return
 	}
 
-	if err = replayWalWaiter(); err != nil {
-		releaseReplayPinned()
-		return
+	if db.IsWriteMode() {
+		// in the write mode
+		// 1. we need to wait the replayCtl to finish the wal replay
+		// 2. close the replayCtl after replaying the wal in write mode
+		if err = replayCtl.Wait(); err != nil {
+			return
+		}
+		replayWalDuration = replayCtl.Duration()
+		replayCtl.Stop()
+		replayCtl = nil
 	}
-	releaseReplayPinned()
 
 	// start flusher and disk cleaner
 	db.BGFlusher.Start()
@@ -592,39 +619,6 @@ func (c *Controller) AssembleDB(ctx context.Context) (err error) {
 
 	db.CronJobs = tasks.NewCancelableJobs()
 	err = AddCronJobs(db)
-	return
-}
-
-func (c *Controller) replayFromWal(
-	ctx context.Context,
-	checkpointed types.TS,
-	ckpLSN uint64,
-) (waiter func() error, err error) {
-	var (
-		mode = c.db.GetTxnMode()
-		db   = c.db
-		now  = time.Now()
-	)
-	waiter = func() error { return nil }
-	defer func() {
-		logger := logutil.Info
-		if err != nil {
-			logger = logutil.Error
-		}
-		logger(
-			Phase_Open,
-			zap.Duration("replay-wal-cost", time.Since(now)),
-			zap.String("txn-mode", mode.String()),
-			zap.Error(err),
-		)
-	}()
-
-	if mode.IsWriteMode() {
-		err = db.ReplayWal(ctx, checkpointed, ckpLSN)
-		return
-	}
-	// TODO: replay mode is different from write mode
-	err = db.ReplayWal(ctx, checkpointed, ckpLSN)
 	return
 }
 

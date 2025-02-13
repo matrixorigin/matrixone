@@ -32,6 +32,7 @@ import (
 	gc2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc/v3"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
@@ -109,6 +110,8 @@ type DB struct {
 	DiskCleaner *gc2.DiskCleaner
 
 	Runtime *dbutils.Runtime
+
+	ReplayCtl *replayCtl
 
 	DBLocker io.Closer
 
@@ -309,17 +312,22 @@ func (db *DB) ReplayWal(
 	ctx context.Context,
 	maxTs types.TS,
 	lsn uint64,
-) (err error) {
+	onDone func(), // onDone must be called after replay is done or failed
+) (ctl *replayCtl, err error) {
 	db.LogtailMgr.UpdateMaxCommittedLSN(lsn)
 
 	replayer := newWalReplayer(db, maxTs, lsn)
-	if err = replayer.Replay(ctx); err != nil {
-		return
+	var mode driver.ReplayMode
+	if db.GetTxnMode() == DBTxnMode_Replay {
+		mode = driver.ReplayMode_ReplayForever
+	} else {
+		mode = driver.ReplayMode_ReplayForWrite
 	}
-
-	// TODO: error?
-	db.usageMemo.EstablishFromCKPs()
-	db.Catalog.ReplayTableRows()
+	if ctl, err = replayer.Schedule(ctx, mode, onDone); err != nil {
+		if onDone != nil {
+			onDone()
+		}
+	}
 	return
 }
 

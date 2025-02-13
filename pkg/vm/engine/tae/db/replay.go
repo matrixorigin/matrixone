@@ -17,6 +17,7 @@ package db
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
@@ -36,6 +37,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
+var ErrCancelReplayAnyway = moerr.NewInternalErrorNoCtx("terminate")
+
 var (
 	skippedTbl = map[uint64]bool{
 		pkgcatalog.MO_DATABASE_ID: true,
@@ -43,6 +46,83 @@ var (
 		pkgcatalog.MO_COLUMNS_ID:  true,
 	}
 )
+
+type replayCtl struct {
+	startTime   time.Time
+	doneTime    time.Time
+	doneCh      chan struct{}
+	err         error
+	causeCancel context.CancelCauseFunc
+	mode        atomic.Int32
+	onSuccess   func()
+}
+
+func newReplayCtl(
+	mode driver.ReplayMode,
+	onSuccess func(),
+) *replayCtl {
+	ctl := &replayCtl{
+		doneCh:    make(chan struct{}),
+		startTime: time.Now(),
+		onSuccess: onSuccess,
+	}
+	ctl.mode.Store(int32(mode))
+	return ctl
+}
+
+func (ctl *replayCtl) Wait() (err error) {
+	<-ctl.doneCh
+	return ctl.err
+}
+
+func (ctl *replayCtl) Done(err error) {
+	ctl.err = err
+	ctl.doneTime = time.Now()
+	if ctl.onSuccess != nil {
+		ctl.onSuccess()
+	}
+	close(ctl.doneCh)
+}
+
+func (ctl *replayCtl) Stop() (err error) {
+	if ctl.causeCancel != nil {
+		ctl.causeCancel(ErrCancelReplayAnyway)
+		ctl.Wait()
+		ctl.causeCancel = nil
+	}
+
+	err = ctl.err
+	// ErrCancelReplayAnyway or nil means no error
+	return
+}
+
+func (ctl *replayCtl) StopForWrite() (err error) {
+	ctl.mode.Store(int32(driver.ReplayMode_ReplayForWrite))
+	ctl.Wait()
+	// here cancel has no effect, just close the channel
+	if ctl.causeCancel != nil {
+		ctl.causeCancel(nil)
+		ctl.causeCancel = nil
+	}
+
+	// nil means no error
+	err = ctl.err
+	return
+}
+
+func (ctl *replayCtl) GetMode() driver.ReplayMode {
+	return driver.ReplayMode(ctl.mode.Load())
+}
+
+// must be called after Wait
+func (ctl *replayCtl) Err() error {
+	return ctl.err
+}
+
+// must be called after Wait
+func (ctl *replayCtl) Duration() time.Duration {
+	return ctl.doneTime.Sub(ctl.startTime)
+}
 
 type WalReplayer struct {
 	db            *DB
@@ -110,6 +190,49 @@ func (replayer *WalReplayer) postReplayWal() error {
 	}
 	return replayer.db.Catalog.RecurLoop(processor)
 }
+
+func (replayer *WalReplayer) Schedule(
+	ctx context.Context,
+	mode driver.ReplayMode,
+	onDone func(),
+) (
+	ctl *replayCtl,
+	err error,
+) {
+	replayer.wg.Add(1)
+	go replayer.applyReplayTxnLoop()
+
+	ctl = newReplayCtl(mode, func() {
+		replayer.db.usageMemo.EstablishFromCKPs()
+		replayer.db.Catalog.ReplayTableRows()
+		if onDone != nil {
+			onDone()
+		}
+	})
+	ctx, ctl.causeCancel = context.WithCancelCause(ctx)
+
+	go func() {
+		var err2 error
+		defer func() {
+			ctl.Done(err2)
+		}()
+		err2 = replayer.db.Wal.Replay(
+			ctx,
+			replayer.OnReplayEntry,
+			ctl.GetMode,
+			nil,
+		)
+		replayer.txnCmdChan <- txnbase.NewEndCmd()
+		close(replayer.txnCmdChan)
+		replayer.wg.Wait()
+		if err2 != nil {
+			return
+		}
+		err2 = replayer.postReplayWal()
+	}()
+	return
+}
+
 func (replayer *WalReplayer) Replay(ctx context.Context) (err error) {
 	replayer.wg.Add(1)
 	go replayer.applyReplayTxnLoop()
@@ -121,9 +244,6 @@ func (replayer *WalReplayer) Replay(ctx context.Context) (err error) {
 	); err != nil {
 		return
 	}
-	replayer.txnCmdChan <- txnbase.NewEndCmd()
-	close(replayer.txnCmdChan)
-	replayer.wg.Wait()
 	if err = replayer.postReplayWal(); err != nil {
 		return
 	}
