@@ -21,7 +21,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/stretchr/testify/require"
@@ -49,7 +48,8 @@ func TestBuild(t *testing.T) {
 		ThreadsSearch: 3,
 		ThreadsBuild:  3}
 
-	build, err := NewHnswBuild(proc, uint64(util.UnsafeUintptr(&idxcfg)), idxcfg, tblcfg)
+	uid := fmt.Sprintf("%s:%d:%d", "localhost", 1, 0)
+	build, err := NewHnswBuild(proc, uid, idxcfg, tblcfg)
 	require.Nil(t, err)
 	defer build.Destroy()
 
@@ -206,8 +206,8 @@ func TestBuildSingleThread(t *testing.T) {
 		MetadataTable: "__secondary_meta", IndexTable: "__secondary_index",
 		ThreadsSearch: 0,
 		ThreadsBuild:  1}
-
-	build, err := NewHnswBuild(proc, uint64(util.UnsafeUintptr(&idxcfg)), idxcfg, tblcfg)
+	uid := fmt.Sprintf("%s:%d:%d", "localhost", 1, 0)
+	build, err := NewHnswBuild(proc, uid, idxcfg, tblcfg)
 	require.Nil(t, err)
 	defer build.Destroy()
 

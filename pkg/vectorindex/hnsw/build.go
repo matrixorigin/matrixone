@@ -39,7 +39,7 @@ type HnswBuildIndex struct {
 }
 
 type HnswBuild struct {
-	uid      uint64
+	uid      string
 	cfg      vectorindex.IndexConfig
 	tblcfg   vectorindex.IndexTableConfig
 	indexes  []*HnswBuildIndex
@@ -198,7 +198,7 @@ func (idx *HnswBuildIndex) Add(key int64, vec []float32) error {
 }
 
 // create HsnwBuild struct
-func NewHnswBuild(proc *process.Process, uid uint64, cfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) (info *HnswBuild, err error) {
+func NewHnswBuild(proc *process.Process, uid string, cfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) (info *HnswBuild, err error) {
 
 	nthread := vectorindex.GetConcurrency(tblcfg.ThreadsBuild)
 	info = &HnswBuild{
@@ -300,7 +300,7 @@ func (h *HnswBuild) Add(key int64, vec []float32) error {
 }
 
 func (h *HnswBuild) createIndexUniqueKey(id int64) string {
-	return fmt.Sprintf("%x-%d", h.uid, id)
+	return fmt.Sprintf("%s:%d", h.uid, id)
 }
 
 func (h *HnswBuild) getIndexForAddSync() (idx *HnswBuildIndex, save_idx *HnswBuildIndex, err error) {
