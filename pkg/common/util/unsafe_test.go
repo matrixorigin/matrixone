@@ -16,6 +16,7 @@ package util
 
 import (
 	"testing"
+	"unsafe"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -58,4 +59,10 @@ func TestUnsafeSliceCast(t *testing.T) {
 	assert.Equal(t, []int{1, 2}, s)
 	s = UnsafeSliceCast[int]([]int64(nil))
 	assert.Equal(t, []int(nil), s)
+}
+
+func TestUnsafeUintptr(t *testing.T) {
+	a := int(100)
+	ptr := UnsafeUintptr(&a)
+	assert.Equal(t, ptr, uintptr(unsafe.Pointer(&a)))
 }
