@@ -347,10 +347,9 @@ func (db *DB) StopTxnHeartbeat() {
 }
 
 func (db *DB) Close() error {
-	if err := db.Closed.Load(); err != nil {
-		panic(err)
+	if !db.Closed.CompareAndSwap(nil, ErrClosed) {
+		panic(ErrClosed)
 	}
-	db.Closed.Store(ErrClosed)
 	db.Controller.Stop()
 	db.CronJobs.Reset()
 	db.BGFlusher.Stop()
