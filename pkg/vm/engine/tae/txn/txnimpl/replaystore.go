@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
@@ -33,12 +32,11 @@ var ErrDebugReplay = moerr.NewInternalErrorNoCtx("debug")
 
 type replayTxnStore struct {
 	txnbase.NoopTxnStore
-	Cmd         *txnbase.TxnCmd
-	Observer    wal.ReplayObserver
-	catalog     *catalog.Catalog
-	dataFactory *tables.DataFactory
-	wal         wal.Driver
-	ctx         context.Context
+	Cmd      *txnbase.TxnCmd
+	Observer wal.ReplayObserver
+	catalog  *catalog.Catalog
+	wal      wal.Driver
+	ctx      context.Context
 }
 
 func MakeReplayTxn(
@@ -49,15 +47,13 @@ func MakeReplayTxn(
 	cmd *txnbase.TxnCmd,
 	observer wal.ReplayObserver,
 	catalog *catalog.Catalog,
-	dataFactory *tables.DataFactory,
 	wal wal.Driver) *txnbase.Txn {
 	store := &replayTxnStore{
-		Cmd:         cmd,
-		Observer:    observer,
-		catalog:     catalog,
-		dataFactory: dataFactory,
-		wal:         wal,
-		ctx:         ctx,
+		Cmd:      cmd,
+		Observer: observer,
+		catalog:  catalog,
+		wal:      wal,
+		ctx:      ctx,
 	}
 	txn := txnbase.NewPersistedTxn(
 		mgr,

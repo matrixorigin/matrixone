@@ -31,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
@@ -46,7 +45,6 @@ var (
 )
 
 type WalReplayer struct {
-	DataFactory   *tables.DataFactory
 	db            *DB
 	maxTs         types.TS
 	once          sync.Once
@@ -63,17 +61,15 @@ type WalReplayer struct {
 }
 
 func newWalReplayer(
-	dataFactory *tables.DataFactory,
 	db *DB,
 	fromTS types.TS,
 	lsn uint64,
 	enableLSNCheck bool,
 ) *WalReplayer {
 	replayer := &WalReplayer{
-		DataFactory: dataFactory,
-		db:          db,
-		fromTS:      fromTS,
-		lsn:         lsn,
+		db:     db,
+		fromTS: fromTS,
+		lsn:    lsn,
 		// for ckp version less than 7, lsn is always 0 and lsnCheck is disable
 		enableLSNCheck: enableLSNCheck,
 		txnCmdChan:     make(chan *txnbase.TxnCmd, 100),
@@ -95,7 +91,7 @@ func (replayer *WalReplayer) PreReplayWal() {
 		if obj != nil && obj.DeleteBefore(replayer.fromTS) {
 			return moerr.GetOkStopCurrRecur()
 		}
-		entry.InitData(replayer.DataFactory)
+		entry.InitData(replayer.db.Catalog.DataFactory)
 		return
 	}
 	if err := replayer.db.Catalog.RecurLoop(processor); err != nil {
@@ -223,7 +219,6 @@ func (replayer *WalReplayer) OnReplayTxn(cmd txnif.TxnCmd, lsn uint64) {
 		txnCmd,
 		replayer,
 		replayer.db.Catalog,
-		replayer.DataFactory,
 		replayer.db.Wal,
 	)
 	if err = replayer.db.TxnMgr.OnReplayTxn(txn); err != nil {

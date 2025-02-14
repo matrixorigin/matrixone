@@ -34,9 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
-	wb "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 	"go.uber.org/zap"
@@ -103,7 +101,6 @@ type DB struct {
 
 	CronJobs *tasks.CancelableJobs
 
-	BGScanner          wb.IHeartbeater
 	BGCheckpointRunner checkpoint.Runner
 	BGFlusher          checkpoint.Flusher
 
@@ -310,7 +307,6 @@ func (db *DB) RollbackTxn(txn txnif.AsyncTxn) error {
 
 func (db *DB) ReplayWal(
 	ctx context.Context,
-	dataFactory *tables.DataFactory,
 	maxTs types.TS,
 	lsn uint64,
 	valid bool,
@@ -321,7 +317,7 @@ func (db *DB) ReplayWal(
 
 	db.LogtailMgr.UpdateMaxCommittedLSN(lsn)
 
-	replayer := newWalReplayer(dataFactory, db, maxTs, lsn, valid)
+	replayer := newWalReplayer(db, maxTs, lsn, valid)
 	if err = replayer.Replay(ctx); err != nil {
 		return
 	}
@@ -354,7 +350,6 @@ func (db *DB) Close() error {
 	db.Closed.Store(ErrClosed)
 	db.Controller.Stop()
 	db.CronJobs.Reset()
-	db.BGScanner.Stop()
 	db.BGFlusher.Stop()
 	db.BGCheckpointRunner.Stop()
 	db.Runtime.Scheduler.Stop()
