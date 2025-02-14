@@ -33,7 +33,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"go.uber.org/zap"
 
@@ -174,8 +173,8 @@ func (w *GCWindow) ExecuteGlobalCheckpointBasedGC(
 func (w *GCWindow) ScanCheckpoints(
 	ctx context.Context,
 	checkpointEntries []*checkpoint.CheckpointEntry,
-	collectCkpData func(context.Context, *checkpoint.CheckpointEntry) (logtail.CKPDataReader, error),
-	processCkpData func(*checkpoint.CheckpointEntry, logtail.CKPDataReader) error,
+	collectCkpData func(context.Context, *checkpoint.CheckpointEntry) (*logtail.CKPDataReader, error),
+	processCkpData func(*checkpoint.CheckpointEntry, *logtail.CKPDataReader) error,
 	onScanDone func() error,
 	buffer *containers.OneSchemaBatchBuffer,
 ) (metaFile string, err error) {
@@ -204,7 +203,7 @@ func (w *GCWindow) ScanCheckpoints(
 			}
 		}
 		objects := make(map[string]*ObjectEntry)
-		collectObjectsFromCheckpointData_V2(data, objects)
+		collectObjectsFromCheckpointData(data, objects)
 		if err = collectMapData(objects, bat, mp); err != nil {
 			return false, err
 		}
@@ -321,51 +320,7 @@ func (w *GCWindow) Merge(o *GCWindow) {
 	}
 }
 
-func collectObjectsFromCheckpointData(data *logtail.CheckpointData, objects map[string]*ObjectEntry) {
-	ins := data.GetObjectBatchs()
-	insDeleteTSVec := ins.GetVectorByName(catalog.EntryNode_DeleteAt).GetDownstreamVector()
-	insCreateTSVec := ins.GetVectorByName(catalog.EntryNode_CreateAt).GetDownstreamVector()
-	dbid := ins.GetVectorByName(catalog.SnapshotAttr_DBID).GetDownstreamVector()
-	tableID := ins.GetVectorByName(catalog.SnapshotAttr_TID).GetDownstreamVector()
-
-	for i := 0; i < ins.Length(); i++ {
-		buf := ins.GetVectorByName(catalog.ObjectAttr_ObjectStats).Get(i).([]byte)
-		stats := (objectio.ObjectStats)(buf)
-		name := stats.ObjectName().String()
-		deleteTS := vector.GetFixedAtNoTypeCheck[types.TS](insDeleteTSVec, i)
-		createTS := vector.GetFixedAtNoTypeCheck[types.TS](insCreateTSVec, i)
-		object := &ObjectEntry{
-			stats:    &stats,
-			createTS: createTS,
-			dropTS:   deleteTS,
-			db:       vector.GetFixedAtNoTypeCheck[uint64](dbid, i),
-			table:    vector.GetFixedAtNoTypeCheck[uint64](tableID, i),
-		}
-		objects[name] = object
-	}
-	del := data.GetTombstoneObjectBatchs()
-	delDeleteTSVec := del.GetVectorByName(catalog.EntryNode_DeleteAt).GetDownstreamVector()
-	delCreateTSVec := del.GetVectorByName(catalog.EntryNode_CreateAt).GetDownstreamVector()
-	delDbid := del.GetVectorByName(catalog.SnapshotAttr_DBID).GetDownstreamVector()
-	delTableID := del.GetVectorByName(catalog.SnapshotAttr_TID).GetDownstreamVector()
-	for i := 0; i < del.Length(); i++ {
-		buf := del.GetVectorByName(catalog.ObjectAttr_ObjectStats).Get(i).([]byte)
-		stats := (objectio.ObjectStats)(buf)
-		name := stats.ObjectName().String()
-		deleteTS := vector.GetFixedAtNoTypeCheck[types.TS](delDeleteTSVec, i)
-		createTS := vector.GetFixedAtNoTypeCheck[types.TS](delCreateTSVec, i)
-		object := &ObjectEntry{
-			stats:    &stats,
-			createTS: createTS,
-			dropTS:   deleteTS,
-			db:       vector.GetFixedAtNoTypeCheck[uint64](delDbid, i),
-			table:    vector.GetFixedAtNoTypeCheck[uint64](delTableID, i),
-		}
-		objects[name] = object
-	}
-}
-
-func collectObjectsFromCheckpointData_V2(data logtail.CKPDataReader, objects map[string]*ObjectEntry) {
+func collectObjectsFromCheckpointData(data *logtail.CKPDataReader, objects map[string]*ObjectEntry) {
 	data.ForEachRow(
 		func(
 			account uint32,

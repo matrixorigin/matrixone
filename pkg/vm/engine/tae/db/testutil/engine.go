@@ -463,17 +463,17 @@ func mockAndReplayCatalog(
 	loc objectio.Location,
 	e *TestEngine,
 ) *catalog.Catalog {
-	c := catalog.MockCatalog()
 	dataFactory := tables.NewDataFactory(e.Runtime, e.Dir)
+	c := catalog.MockCatalog(dataFactory)
 	err := logtail.ReplayCheckpoint(
-		ctx, c, true, dataFactory, loc, common.DebugAllocator, e.Opts.Fs,
+		ctx, c, true, loc, common.DebugAllocator, e.Opts.Fs,
 	)
 	assert.NoError(t, err)
 
 	readTxn, err := e.StartTxn(nil)
 	assert.NoError(t, err)
 	closeFn := c.RelayFromSysTableObjects(
-		ctx, readTxn, dataFactory, tables.ReadSysTableBatch, func(cols []containers.Vector, pkidx int) (err2 error) {
+		ctx, readTxn, tables.ReadSysTableBatch, func(cols []containers.Vector, pkidx int) (err2 error) {
 			_, err2 = mergesort.SortBlockColumns(cols, pkidx, e.Runtime.VectorPool.Transient)
 			return
 		}, &objlistReplayer{},
@@ -484,7 +484,7 @@ func mockAndReplayCatalog(
 	assert.NoError(t, readTxn.Commit(ctx))
 
 	err = logtail.ReplayCheckpoint(
-		ctx, c, false, dataFactory, loc, common.DebugAllocator, e.Opts.Fs,
+		ctx, c, false, loc, common.DebugAllocator, e.Opts.Fs,
 	)
 	assert.NoError(t, err)
 

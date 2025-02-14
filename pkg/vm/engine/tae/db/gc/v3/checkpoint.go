@@ -398,7 +398,7 @@ func (c *checkpointCleaner) Replay(inputCtx context.Context) (err error) {
 		end := compacted.GetEnd()
 		c.updateCheckpointGCWaterMark(&end)
 
-		var ckpData *logtail.CheckpointData
+		var ckpData *logtail.CKPDataReader
 		if ckpData, err = c.collectCkpData(ctx, compacted); err != nil {
 			logutil.Error(
 				"GC-REPLAY-COLLECT-ERROR",
@@ -765,7 +765,7 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 		checkpointMaxEnd  types.TS
 		toMergeEntries    []*checkpoint.CheckpointEntry
 		extraErrMsg       string
-		newCheckpointData *logtail.CheckpointData
+		newCheckpointData *logtail.CKPDataReader
 	)
 
 	defer func() {
@@ -906,15 +906,7 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 func (c *checkpointCleaner) collectCkpData(
 	ctx context.Context,
 	ckp *checkpoint.CheckpointEntry,
-) (data *logtail.CheckpointData, err error) {
-	return logtail.GetCheckpointData(
-		ctx, c.sid, c.fs, ckp.GetLocation(), ckp.GetVersion(),
-	)
-}
-func (c *checkpointCleaner) collectCkpData_V2(
-	ctx context.Context,
-	ckp *checkpoint.CheckpointEntry,
-) (data logtail.CKPDataReader, err error) {
+) (data *logtail.CKPDataReader, err error) {
 	return logtail.GetCheckpointData(
 		ctx, c.sid, c.fs, ckp.GetLocation(), ckp.GetVersion(),
 	)
@@ -1204,7 +1196,7 @@ func (c *checkpointCleaner) scanCheckpointsAsDebugWindow(
 ) (window *GCWindow, err error) {
 	window = NewGCWindow(c.mp, c.fs, WithWindowDir("debug/"))
 	if _, err = window.ScanCheckpoints(
-		c.ctx, ckps, c.collectCkpData_V2, nil, nil, buffer,
+		c.ctx, ckps, c.collectCkpData, nil, nil, buffer,
 	); err != nil {
 		window.Close()
 		window = nil
@@ -1698,7 +1690,7 @@ func (c *checkpointCleaner) scanCheckpointsLocked(
 	if gcMetaFile, err = gcWindow.ScanCheckpoints(
 		ctx,
 		ckps,
-		c.collectCkpData_V2,
+		c.collectCkpData,
 		c.mutUpdateSnapshotMetaLocked,
 		saveSnapshot,
 		memoryBuffer,
@@ -1724,7 +1716,7 @@ func (c *checkpointCleaner) scanCheckpointsLocked(
 
 func (c *checkpointCleaner) mutUpdateSnapshotMetaLocked(
 	ckp *checkpoint.CheckpointEntry,
-	data logtail.CKPDataReader,
+	data *logtail.CKPDataReader,
 ) error {
 	return c.mutation.snapshotMeta.Update(
 		c.ctx,

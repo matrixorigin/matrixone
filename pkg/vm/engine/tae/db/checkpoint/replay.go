@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -347,15 +348,14 @@ func applyObjectList(
 	entry *CheckpointEntry,
 	replayer *logtail.CheckpointReplayer,
 	forSys bool,
-	dataFactory catalog.DataFactory,
 	c *catalog.Catalog,
 	fs fileservice.FileService,
 ) (err error) {
 	if entry.version <= logtail.CheckpointVersion12 {
-		replayer.ReplayObjectlist(ctx, c, forSys, dataFactory)
+		replayer.ReplayObjectlist(ctx, c, forSys)
 	} else {
 		if err = logtail.ReplayCheckpoint(
-			ctx, c, forSys, dataFactory, entry.GetTNLocation(), common.CheckpointAllocator, fs,
+			ctx, c, forSys, entry.GetTNLocation(), common.CheckpointAllocator, fs,
 		); err != nil {
 			return
 		}
@@ -384,7 +384,6 @@ func (c *CkpReplayer) ReplayThreeTablesObjectlist(phase string) (
 	r := c.r
 	ctx := c.r.ctx
 	entries := c.ckpEntries
-	dataFactory := c.dataF
 	maxGlobal := r.MaxGlobalCheckpoint()
 	if maxGlobal != nil {
 		err = applyObjectList(
@@ -392,7 +391,6 @@ func (c *CkpReplayer) ReplayThreeTablesObjectlist(phase string) (
 			c.ckpEntries[c.globalCkpIdx],
 			c.ckpdatas[c.globalCkpIdx],
 			true,
-			dataFactory,
 			r.catalog,
 			c.r.rt.Options.Fs,
 		)
@@ -446,7 +444,6 @@ func (c *CkpReplayer) ReplayThreeTablesObjectlist(phase string) (
 			c.ckpEntries[i],
 			c.ckpdatas[i],
 			true,
-			dataFactory,
 			r.catalog,
 			c.r.rt.Options.Fs,
 		); err != nil {
@@ -536,7 +533,6 @@ func (c *CkpReplayer) ReplayObjectlist(ctx context.Context, phase string) (err e
 	t0 := time.Now()
 	r := c.r
 	entries := c.ckpEntries
-	dataFactory := c.dataF
 	maxTs := types.TS{}
 	if maxGlobal := r.MaxGlobalCheckpoint(); maxGlobal != nil {
 		if err = applyObjectList(
@@ -544,7 +540,6 @@ func (c *CkpReplayer) ReplayObjectlist(ctx context.Context, phase string) (err e
 			c.ckpEntries[c.globalCkpIdx],
 			c.ckpdatas[c.globalCkpIdx],
 			false,
-			dataFactory,
 			r.catalog,
 			c.r.rt.Options.Fs,
 		); err != nil {
@@ -565,7 +560,6 @@ func (c *CkpReplayer) ReplayObjectlist(ctx context.Context, phase string) (err e
 			c.ckpEntries[i],
 			c.ckpdatas[i],
 			false,
-			dataFactory,
 			r.catalog,
 			c.r.rt.Options.Fs,
 		); err != nil {

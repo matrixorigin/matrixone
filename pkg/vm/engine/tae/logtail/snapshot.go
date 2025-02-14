@@ -340,7 +340,7 @@ type tombstone struct {
 func (sm *SnapshotMeta) updateTableInfo(
 	ctx context.Context,
 	fs fileservice.FileService,
-	data CKPDataReader, startts, endts types.TS,
+	data *CKPDataReader, startts, endts types.TS,
 ) error {
 	var objects map[uint64]map[objectio.Segmentid]*objectInfo
 	var tombstones map[uint64]map[objectio.Segmentid]*objectInfo
@@ -372,8 +372,8 @@ func (sm *SnapshotMeta) updateTableInfo(
 			deleteAt: deleteTS,
 		}
 	}
-	collectObjects_V2(&objects, nil, data, ckputil.ObjectType_Data, collector)
-	collectObjects_V2(&tombstones, nil, data, ckputil.ObjectType_Tombstone, collector)
+	collectObjects(&objects, nil, data, ckputil.ObjectType_Data, collector)
+	collectObjects(&tombstones, nil, data, ckputil.ObjectType_Tombstone, collector)
 	tObjects := objects[catalog2.MO_TABLES_ID]
 	tTombstones := tombstones[catalog2.MO_TABLES_ID]
 	orderedInfos := make([]*objectInfo, 0, len(tObjects))
@@ -571,36 +571,7 @@ func (sm *SnapshotMeta) updateTableInfo(
 func collectObjects(
 	objects *map[uint64]map[objectio.Segmentid]*objectInfo,
 	objects2 *map[objectio.Segmentid]*objectInfo,
-	ins *containers.Batch,
-	collector func(
-		*map[uint64]map[objectio.Segmentid]*objectInfo,
-		*map[objectio.Segmentid]*objectInfo,
-		uint64,
-		objectio.ObjectStats,
-		types.TS, types.TS,
-	),
-) {
-	insDeleteTSs := vector.MustFixedColWithTypeCheck[types.TS](
-		ins.GetVectorByName(catalog.EntryNode_DeleteAt).GetDownstreamVector())
-	insCreateTSs := vector.MustFixedColWithTypeCheck[types.TS](
-		ins.GetVectorByName(catalog.EntryNode_CreateAt).GetDownstreamVector())
-	insTableIDs := vector.MustFixedColWithTypeCheck[uint64](
-		ins.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector())
-	insStats := ins.GetVectorByName(catalog.ObjectAttr_ObjectStats).GetDownstreamVector()
-
-	for i := 0; i < ins.Length(); i++ {
-		table := insTableIDs[i]
-		deleteTS := insDeleteTSs[i]
-		createTS := insCreateTSs[i]
-		objectStats := (objectio.ObjectStats)(insStats.GetBytesAt(i))
-		collector(objects, objects2, table, objectStats, createTS, deleteTS)
-	}
-}
-
-func collectObjects_V2(
-	objects *map[uint64]map[objectio.Segmentid]*objectInfo,
-	objects2 *map[objectio.Segmentid]*objectInfo,
-	data CKPDataReader,
+	data *CKPDataReader,
 	objType int8,
 	collector func(
 		*map[uint64]map[objectio.Segmentid]*objectInfo,
@@ -630,7 +601,7 @@ func collectObjects_V2(
 func (sm *SnapshotMeta) Update(
 	ctx context.Context,
 	fs fileservice.FileService,
-	data CKPDataReader,
+	data *CKPDataReader,
 	startts, endts types.TS,
 	taskName string,
 ) (err error) {
@@ -732,14 +703,14 @@ func (sm *SnapshotMeta) Update(
 		}
 		mapFun((*objects1)[tid])
 	}
-	collectObjects_V2(
+	collectObjects(
 		&sm.objects,
 		&sm.pitr.objects,
 		data,
 		ckputil.ObjectType_Data,
 		collector,
 	)
-	collectObjects_V2(
+	collectObjects(
 		&sm.objects,
 		&sm.pitr.objects,
 		data,
@@ -1450,7 +1421,7 @@ func (sm *SnapshotMeta) ReadTableInfo(ctx context.Context, name string, fs files
 func (sm *SnapshotMeta) InitTableInfo(
 	ctx context.Context,
 	fs fileservice.FileService,
-	data CKPDataReader,
+	data *CKPDataReader,
 	startts, endts types.TS,
 ) {
 	sm.Lock()

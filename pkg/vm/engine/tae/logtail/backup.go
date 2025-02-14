@@ -39,7 +39,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
 
 type objData struct {
@@ -295,27 +294,13 @@ func GetCheckpointData(
 	fs fileservice.FileService,
 	location objectio.Location,
 	version uint32,
-) (CKPDataReader, error) {
+) (*CKPDataReader, error) {
 	select {
 	case <-ctx.Done():
 		return nil, context.Cause(ctx)
 	default:
 	}
-
-	data := NewCheckpointData(sid, common.CheckpointAllocator)
-	reader, err := ioutil.NewObjectReader(fs, location)
-	if err != nil {
-		return nil, err
-	}
-	err = data.readMetaBatch(ctx, version, reader, nil)
-	if err != nil {
-		return nil, err
-	}
-	err = data.readAll(ctx, version, fs)
-	if err != nil {
-		return nil, err
-	}
-	return data, nil
+	return GetCKPDataReader(ctx,location,version,fs,common.CheckpointAllocator)
 }
 
 func addObjectToObjectData(
@@ -395,18 +380,52 @@ func appendValToBatch(
 	id objectio.ObjectStats,
 	create, delete types.TS,
 	encoder *types.Packer,
-	dst *containers.Batch,
-) {
-	dst.Vecs[ckputil.TableObjectsAttr_Accout_Idx].Append(account, false)
-	dst.Vecs[ckputil.TableObjectsAttr_DB_Idx].Append(db, false)
-	dst.Vecs[ckputil.TableObjectsAttr_Table_Idx].Append(tbl, false)
-	dst.Vecs[ckputil.TableObjectsAttr_ID_Idx].Append(id[:], false)
-	dst.Vecs[ckputil.TableObjectsAttr_ObjectType_Idx].Append(objType, false)
+	dst *batch.Batch,
+	mp *mpool.MPool,
+) (err error) {
+	if err = vector.AppendFixed(
+		dst.Vecs[ckputil.TableObjectsAttr_Accout_Idx], account, false, mp,
+	); err != nil {
+		return
+	}
+	if err = vector.AppendFixed(
+		dst.Vecs[ckputil.TableObjectsAttr_DB_Idx], db, false, mp,
+	); err != nil {
+		return
+	}
+	if err = vector.AppendFixed(
+		dst.Vecs[ckputil.TableObjectsAttr_Table_Idx], tbl, false, mp,
+	); err != nil {
+		return
+	}
+	if err = vector.AppendBytes(
+		dst.Vecs[ckputil.TableObjectsAttr_ID_Idx], id[:], false, mp,
+	); err != nil {
+		return
+	}
+	if err = vector.AppendFixed(
+		dst.Vecs[ckputil.TableObjectsAttr_ObjectType_Idx], objType, false, mp,
+	); err != nil {
+		return
+	}
 	encoder.Reset()
 	ckputil.EncodeCluser(encoder, tbl, objType, id.ObjectName().ObjectId())
-	dst.Vecs[ckputil.TableObjectsAttr_Cluster_Idx].Append(encoder.Bytes(), false)
-	dst.Vecs[ckputil.TableObjectsAttr_CreateTS_Idx].Append(create, false)
-	dst.Vecs[ckputil.TableObjectsAttr_DeleteTS_Idx].Append(delete, false)
+	if err = vector.AppendBytes(
+		dst.Vecs[ckputil.TableObjectsAttr_Cluster_Idx], encoder.Bytes(), false, mp,
+	); err != nil {
+		return
+	}
+	if err = vector.AppendFixed(
+		dst.Vecs[ckputil.TableObjectsAttr_CreateTS_Idx], create, false, mp,
+	); err != nil {
+		return
+	}
+	if err = vector.AppendFixed(
+		dst.Vecs[ckputil.TableObjectsAttr_DeleteTS_Idx], delete, false, mp,
+	); err != nil {
+		return
+	}
+	return
 }
 
 // Need to format the loaded batch, otherwise panic may occur when WriteBatch.
@@ -431,7 +450,7 @@ func LoadCheckpointEntriesFromKey(
 	version uint32,
 	softDeletes *map[string]bool,
 	baseTS *types.TS,
-) ([]*objectio.BackupObject, CKPDataReader, error) {
+) ([]*objectio.BackupObject, *CKPDataReader, error) {
 	locations := make([]*objectio.BackupObject, 0)
 	data, err := GetCheckpointData(ctx, sid, fs, location, version)
 	if err != nil {
@@ -775,9 +794,11 @@ func ReWriteCheckpointAndBlockFromKey(
 
 	dataSinker := ckputil.NewDataSinker(
 		common.CheckpointAllocator, fs, ioutil.WithMemorySizeThreshold(DefaultCheckpointSize))
+	encoder := types.NewPacker()
+	defer encoder.Close()
 	if len(insertObjBatch) > 0 {
-		objectInfoMeta := makeRespBatchFromSchema(checkpointDataSchemas_Curr[ObjectInfoIDX], common.CheckpointAllocator)
-		tombstoneInfoMeta := makeRespBatchFromSchema(checkpointDataSchemas_Curr[TombstoneObjectInfoIDX], common.CheckpointAllocator)
+		objectInfoMeta := ckputil.NewObjectListBatch()
+		tombstoneInfoMeta := ckputil.NewObjectListBatch()
 		infoInsert := make(map[int]*objData, 0)
 		infoInsertTombstone := make(map[int]*objData, 0)
 		for tid := range insertObjBatch {
@@ -798,9 +819,7 @@ func ReWriteCheckpointAndBlockFromKey(
 
 		}
 
-		encoder := types.NewPacker()
-		defer encoder.Close()
-		initCkpBatch := func(objectType int8, newMeta *containers.Batch, insertObjData map[int]*objData) {
+		initCkpBatch := func(objectType int8, newMeta *batch.Batch, insertObjData map[int]*objData) {
 			i := 0
 			data.ForEachRow(
 				func(
@@ -812,23 +831,28 @@ func ReWriteCheckpointAndBlockFromKey(
 					rowID types.Rowid,
 				) error {
 					if objectType2 == objectType {
-						appendValToBatch(account, dbid, tid, objectType2, objectStats, create, delete, encoder, newMeta)
+						appendValToBatch(account, dbid, tid, objectType2, objectStats, create, delete, encoder, newMeta, common.CheckpointAllocator)
 						if insertObjData[i] != nil {
 							if !insertObjData[i].appendable {
-								row := newMeta.Length() - 1
-								newMeta.GetVectorByName(EntryNode_DeleteAt).Update(row, types.TS{}, false)
+								row := newMeta.RowCount() - 1
+								containers.UpdateValue(
+									newMeta.Vecs[ckputil.TableObjectsAttr_DeleteTS_Idx], uint32(row), types.TS{}, false, common.CheckpointAllocator,
+								)
 							} else {
-								appendValToBatch(account, dbid, tid, objectType2, objectStats, create, delete, encoder, newMeta)
-								row := newMeta.Length() - 1
+								appendValToBatch(account, dbid, tid, objectType2, objectStats, create, delete, encoder, newMeta, common.CheckpointAllocator)
+								row := newMeta.RowCount() - 1
 								objectio.WithSorted()(insertObjData[i].stats)
-								newMeta.GetVectorByName(ObjectAttr_ObjectStats).Update(row, insertObjData[i].stats[:], false)
-								newMeta.GetVectorByName(EntryNode_DeleteAt).Update(row, types.TS{}, false)
+								containers.UpdateValue(
+									newMeta.Vecs[ckputil.TableObjectsAttr_ID_Idx], uint32(row), insertObjData[i].stats[:], false, common.CheckpointAllocator,
+								)
+								containers.UpdateValue(
+									newMeta.Vecs[ckputil.TableObjectsAttr_DeleteTS_Idx], uint32(row), types.TS{}, false, common.CheckpointAllocator,
+								)
 								_, sarg, _ := fault.TriggerFault("back up UT")
 								if sarg == "" {
-									createTS := newMeta.GetVectorByName(EntryNode_CreateAt).Get(i).(types.TS)
-									newMeta.GetVectorByName(txnbase.SnapshotAttr_CommitTS).Update(row, createTS, false)
-									newMeta.GetVectorByName(txnbase.SnapshotAttr_PrepareTS).Update(row, createTS, false)
-									newMeta.GetVectorByName(txnbase.SnapshotAttr_StartTS).Update(row, createTS.Prev(), false)
+									containers.UpdateValue(
+										newMeta.Vecs[ckputil.TableObjectsAttr_CreateTS_Idx], uint32(row), create, false, common.CheckpointAllocator,
+									)
 								}
 							}
 						}
@@ -841,38 +865,27 @@ func ReWriteCheckpointAndBlockFromKey(
 
 		initCkpBatch(ckputil.ObjectType_Data, objectInfoMeta, infoInsert)
 		initCkpBatch(ckputil.ObjectType_Tombstone, tombstoneInfoMeta, infoInsertTombstone)
-		dataSinker.Write(ctx, containers.ToCNBatch(objectInfoMeta))
-		dataSinker.Write(ctx, containers.ToCNBatch(tombstoneInfoMeta))
-		tableInsertOff := make(map[uint64]*tableOffset)
-		tableTombstoneOff := make(map[uint64]*tableOffset)
-		for i := 0; i < objectInfoMeta.Vecs[0].Length(); i++ {
-			tid := objectInfoMeta.GetVectorByName(SnapshotAttr_TID).Get(i).(uint64)
-			stats := objectio.NewObjectStats()
-			stats.UnMarshal(objectInfoMeta.GetVectorByName(ObjectAttr_ObjectStats).Get(i).([]byte))
-			if tableInsertOff[tid] == nil {
-				tableInsertOff[tid] = &tableOffset{
-					offset: i,
-					end:    i,
-				}
-			}
-			tableInsertOff[tid].end += 1
-		}
-
-		for i := 0; i < tombstoneInfoMeta.Vecs[0].Length(); i++ {
-			tid := tombstoneInfoMeta.GetVectorByName(SnapshotAttr_TID).Get(i).(uint64)
-			stats := objectio.NewObjectStats()
-			stats.UnMarshal(tombstoneInfoMeta.GetVectorByName(ObjectAttr_ObjectStats).Get(i).([]byte))
-			if tableTombstoneOff[tid] == nil {
-				tableTombstoneOff[tid] = &tableOffset{
-					offset: i,
-					end:    i,
-				}
-			}
-			tableTombstoneOff[tid].end += 1
-		}
+		dataSinker.Write(ctx, objectInfoMeta)
+		dataSinker.Write(ctx, tombstoneInfoMeta)
 
 	} else {
-		dataSinker.Write(ctx, data.OrphanData())
+		dest := ckputil.NewObjectListBatch()
+		data.ForEachRow(
+			func(
+				account uint32,
+				dbid, tid uint64,
+				objectType int8,
+				objectStats objectio.ObjectStats,
+				create, delete types.TS,
+				rowID types.Rowid,
+			) error {
+				appendValToBatch(
+					account, dbid, tid, objectType, objectStats, create, delete, encoder, dest, common.CheckpointAllocator,
+				)
+				return nil
+			},
+		)
+		dataSinker.Write(ctx, dest)
 	}
 	newData := NewCheckpointDataWithSinker(dataSinker, common.CheckpointAllocator)
 	cnLocation, dnLocation, checkpointFiles, err := newData.WriteTo(

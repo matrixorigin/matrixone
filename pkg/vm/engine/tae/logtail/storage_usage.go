@@ -1172,7 +1172,7 @@ func FillUsageBatOfIncremental(collector *IncrementalCollector) {
 
 func FillUsageBatOfCompacted(
 	usage *TNUsageMemo,
-	data CKPDataReader,
+	data *CKPDataReader,
 	meta *SnapshotMeta,
 	accountSnapshots map[uint32][]types.TS,
 	pitrs *PitrInfo,

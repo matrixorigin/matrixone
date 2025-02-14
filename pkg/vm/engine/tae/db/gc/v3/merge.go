@@ -19,9 +19,9 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
-	"github.com/matrixorigin/matrixone/pkg/objectio/mergeutil"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -51,9 +52,9 @@ func MergeCheckpoint(
 	client checkpoint.Runner,
 	pool *mpool.MPool,
 	fs fileservice.FileService,
-) (deleteFiles, newFiles []string, checkpointEntry *checkpoint.CheckpointEntry, ckpData *logtail.CheckpointData, err error) {
-	ckpData = logtail.NewCheckpointData(sid, pool)
-	datas := make([]*logtail.CheckpointData, 0)
+) (deleteFiles, newFiles []string, checkpointEntry *checkpoint.CheckpointEntry, ckpData *logtail.CKPDataReader, err error) {
+	ckpDataBatch := ckputil.NewObjectListBatch()
+	datas := make([]*logtail.CKPDataReader, 0)
 	deleteFiles = make([]string, 0)
 	for _, ckpEntry := range ckpEntries {
 		select {
@@ -67,7 +68,7 @@ func MergeCheckpoint(
 			zap.String("task", taskName),
 			zap.String("entry", ckpEntry.String()),
 		)
-		var data *logtail.CheckpointData
+		var data *logtail.CKPDataReader
 		var locations map[string]objectio.Location
 		if _, data, err = logtail.LoadCheckpointEntriesFromKey(
 			ctx,
@@ -130,75 +131,26 @@ func MergeCheckpoint(
 			return
 		default:
 		}
-		ins := data.GetObjectBatchs()
-		tombstone := data.GetTombstoneObjectBatchs()
-		bf.Test(ins.GetVectorByName(catalog.ObjectAttr_ObjectStats).GetDownstreamVector(),
+		objectBatch := data.GetBatch()
+		statsVec := objectBatch.Vecs[ckputil.TableObjectsAttr_ID_Idx]
+		bf.Test(statsVec,
 			func(exists bool, i int) {
 				if !exists {
 					return
 				}
-				appendValToBatch(ins, ckpData.GetObjectBatchs(), i)
-			})
-		bf.Test(tombstone.GetVectorByName(catalog.ObjectAttr_ObjectStats).GetDownstreamVector(),
-			func(exists bool, i int) {
-				if !exists {
-					return
-				}
-				appendValToBatch(tombstone, ckpData.GetTombstoneObjectBatchs(), i)
+				appendValToBatchForObjectListBatch(objectBatch, ckpDataBatch, i, pool)
 			})
 	}
+	ckpData = logtail.NewCheckpointReaderWithBatch(ckpDataBatch,pool)
 
-	tidColIdx := 4
-	objectBatch := containers.ToCNBatch(ckpData.GetObjectBatchs())
-	err = mergeutil.SortColumnsByIndex(objectBatch.Vecs, tidColIdx, pool)
-	if err != nil {
+	sinker := ckputil.NewDataSinker(pool, fs)
+	if err = sinker.Write(ctx, ckpDataBatch); err != nil {
 		return
 	}
-
-	tombstoneBatch := containers.ToCNBatch(ckpData.GetTombstoneObjectBatchs())
-	err = mergeutil.SortColumnsByIndex(tombstoneBatch.Vecs, tidColIdx, pool)
-	if err != nil {
-		return
-	}
-
-	// Update checkpoint Dat[meta]
-	tableInsertOff := make(map[uint64]*tableOffset)
-	tableTombstoneOff := make(map[uint64]*tableOffset)
-	tableInsertTid := vector.MustFixedColNoTypeCheck[uint64](
-		ckpData.GetObjectBatchs().GetVectorByName(catalog.SnapshotAttr_TID).GetDownstreamVector())
-	tableTombstoneTid := vector.MustFixedColNoTypeCheck[uint64](
-		ckpData.GetTombstoneObjectBatchs().GetVectorByName(catalog.SnapshotAttr_TID).GetDownstreamVector())
-	for i := 0; i < ckpData.GetObjectBatchs().Vecs[0].Length(); i++ {
-		tid := tableInsertTid[i]
-		if tableInsertOff[tid] == nil {
-			tableInsertOff[tid] = &tableOffset{
-				offset: i,
-				end:    i,
-			}
-		}
-		tableInsertOff[tid].end += 1
-	}
-	for i := 0; i < ckpData.GetTombstoneObjectBatchs().Vecs[0].Length(); i++ {
-		tid := tableTombstoneTid[i]
-		if tableTombstoneOff[tid] == nil {
-			tableTombstoneOff[tid] = &tableOffset{
-				offset: i,
-				end:    i,
-			}
-		}
-		tableTombstoneOff[tid].end += 1
-	}
-
-	for tid, table := range tableInsertOff {
-		ckpData.UpdateObjectInsertMeta(tid, int32(table.offset), int32(table.end))
-	}
-	for tid, table := range tableTombstoneOff {
-		ckpData.UpdateTombstoneInsertMeta(tid, int32(table.offset), int32(table.end))
-	}
-	cnLocation, tnLocation, files, err := ckpData.WriteTo(
-		ctx, logtail.DefaultCheckpointBlockRows, logtail.DefaultCheckpointSize, fs,
-	)
-	if err != nil {
+	ckpWriter := logtail.NewCheckpointDataWithSinker(sinker, pool)
+	var cnLocation, tnLocation objectio.Location
+	var files []string
+	if cnLocation, tnLocation, files, err = ckpWriter.WriteTo(ctx, fs); err != nil {
 		return
 	}
 
@@ -253,13 +205,25 @@ func makeBatchFromSchema(schema *catalog.Schema) *containers.Batch {
 	return bat
 }
 
-func appendValToBatch(src, dst *containers.Batch, row int) {
-	for v, vec := range src.Vecs {
-		val := vec.Get(row)
-		if val == nil {
-			dst.Vecs[v].Append(val, true)
-		} else {
-			dst.Vecs[v].Append(val, false)
-		}
+func appendValToBatchForObjectListBatch(src, dst *batch.Batch, row int, mp *mpool.MPool) {
+	if src.Vecs[ckputil.TableObjectsAttr_Accout_Idx].IsNull(uint64(row)) {
+		vector.AppendFixed(dst.Vecs[ckputil.TableObjectsAttr_Accout_Idx], uint32(0), true, mp)
+	} else {
+		account := vector.GetFixedAtNoTypeCheck[uint32](src.Vecs[ckputil.TableObjectsAttr_Accout_Idx], row)
+		vector.AppendFixed(dst.Vecs[ckputil.TableObjectsAttr_Accout_Idx], account, false, mp)
 	}
+	db := vector.GetFixedAtNoTypeCheck[uint64](src.Vecs[ckputil.TableObjectsAttr_DB_Idx], row)
+	vector.AppendFixed(dst.Vecs[ckputil.TableObjectsAttr_DB_Idx], db, false, mp)
+	tbl := vector.GetFixedAtNoTypeCheck[uint64](src.Vecs[ckputil.TableObjectsAttr_Table_Idx], row)
+	vector.AppendFixed(dst.Vecs[ckputil.TableObjectsAttr_Table_Idx], tbl, false, mp)
+	objType := vector.GetFixedAtNoTypeCheck[int8](src.Vecs[ckputil.TableObjectsAttr_ObjectType_Idx], row)
+	vector.AppendFixed(dst.Vecs[ckputil.TableObjectsAttr_ObjectType_Idx], objType, false, mp)
+	stats := src.Vecs[ckputil.TableObjectsAttr_ID_Idx].GetBytesAt(row)
+	vector.AppendBytes(dst.Vecs[ckputil.TableObjectsAttr_ID_Idx], stats, false, mp)
+	createAt := vector.GetFixedAtNoTypeCheck[types.TS](src.Vecs[ckputil.TableObjectsAttr_CreateTS_Idx], row)
+	vector.AppendFixed(dst.Vecs[ckputil.TableObjectsAttr_ObjectType_Idx], createAt, false, mp)
+	deleteAt := vector.GetFixedAtNoTypeCheck[types.TS](src.Vecs[ckputil.TableObjectsAttr_DeleteTS_Idx], row)
+	vector.AppendFixed(dst.Vecs[ckputil.TableObjectsAttr_ObjectType_Idx], deleteAt, false, mp)
+	cluster := src.Vecs[ckputil.TableObjectsAttr_Cluster_Idx].GetBytesAt(row)
+	vector.AppendBytes(dst.Vecs[ckputil.TableObjectsAttr_Cluster_Idx], cluster, false, mp)
 }
