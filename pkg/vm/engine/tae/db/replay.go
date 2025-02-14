@@ -214,6 +214,18 @@ func (replayer *WalReplayer) Schedule(
 	go func() {
 		var err2 error
 		defer func() {
+			logger := logutil.Info
+			if err2 != nil {
+				logger = logutil.Error
+			}
+			logger(
+				"Wal-Replay-Trace-End",
+				zap.Duration("apply-cost", replayer.applyDuration),
+				zap.Int("read-count", replayer.readCount),
+				zap.Int("apply-count", replayer.applyCount),
+				zap.Uint64("max-lsn", replayer.maxLSN),
+				zap.Error(err2),
+			)
 			ctl.Done(err2)
 		}()
 		err2 = replayer.db.Wal.Replay(
@@ -230,30 +242,6 @@ func (replayer *WalReplayer) Schedule(
 		}
 		err2 = replayer.postReplayWal()
 	}()
-	return
-}
-
-func (replayer *WalReplayer) Replay(ctx context.Context) (err error) {
-	replayer.wg.Add(1)
-	go replayer.applyReplayTxnLoop()
-	if err = replayer.db.Wal.Replay(
-		ctx,
-		replayer.OnReplayEntry,
-		func() driver.ReplayMode { return driver.ReplayMode_ReplayForWrite },
-		nil,
-	); err != nil {
-		return
-	}
-	if err = replayer.postReplayWal(); err != nil {
-		return
-	}
-	logutil.Info(
-		"Wal-Replay-Trace-End",
-		zap.Duration("apply-cost", replayer.applyDuration),
-		zap.Int("read-count", replayer.readCount),
-		zap.Int("apply-count", replayer.applyCount),
-		zap.Uint64("max-lsn", replayer.maxLSN),
-	)
 	return
 }
 
