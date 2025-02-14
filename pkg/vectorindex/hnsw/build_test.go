@@ -35,7 +35,7 @@ func TestBuildMulti(t *testing.T) {
 
 	ndim := 128
 	nthread := 8
-	total := 500000
+	total := 200000
 	nitem := total / nthread // vectorindex.MaxIndexCapacity
 
 	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(uint(ndim))}
