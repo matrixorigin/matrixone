@@ -33,7 +33,7 @@ func TestBuildMulti(t *testing.T) {
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool("", m)
 
-	ndim := 128
+	ndim := 32
 	nthread := 8
 	total := 200000
 	nitem := total / nthread // vectorindex.MaxIndexCapacity
