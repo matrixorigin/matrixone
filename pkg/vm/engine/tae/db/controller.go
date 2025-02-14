@@ -566,7 +566,6 @@ func (c *Controller) AssembleDB(ctx context.Context) (err error) {
 		ckpLSN              uint64
 		releaseReplayPinned func()
 		replayCtl           *replayCtl
-		replayWalDuration   time.Duration
 	)
 	defer func() {
 		if err != nil {
@@ -578,7 +577,6 @@ func (c *Controller) AssembleDB(ctx context.Context) (err error) {
 				Phase_Open,
 				zap.String("checkpointed", checkpointed.ToString()),
 				zap.Uint64("checkpoint-lsn", ckpLSN),
-				zap.Duration("replay-wal-duration", replayWalDuration),
 			)
 			db.ReplayCtl = replayCtl
 		}
@@ -600,7 +598,6 @@ func (c *Controller) AssembleDB(ctx context.Context) (err error) {
 		if err = replayCtl.Wait(); err != nil {
 			return
 		}
-		replayWalDuration = replayCtl.Duration()
 		replayCtl.Stop()
 		replayCtl = nil
 	}
