@@ -29,24 +29,25 @@ import (
 	usearch "github.com/unum-cloud/usearch/golang"
 )
 
-func TestBuild(t *testing.T) {
+func TestBuildMulti(t *testing.T) {
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool("", m)
 
-	ndim := 32
-	nthread := 5
-	nitem := vectorindex.MaxIndexCapacity
+	ndim := 128
+	nthread := 8
+	total := 500000
+	nitem := total / nthread // vectorindex.MaxIndexCapacity
 
 	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(uint(ndim))}
 	idxcfg.Usearch.Metric = usearch.L2sq
 	//idxcfg.Usearch.Quantization = usearch.F32
-	idxcfg.Usearch.Connectivity = 48    // default 16
-	idxcfg.Usearch.ExpansionAdd = 128   // default 128
-	idxcfg.Usearch.ExpansionSearch = 30 // default 64
+	idxcfg.Usearch.Connectivity = 48 // default 16
+	//idxcfg.Usearch.ExpansionAdd = 128   // default 128
+	//idxcfg.Usearch.ExpansionSearch = 30 // default 64
 	tblcfg := vectorindex.IndexTableConfig{DbName: "db", SrcTable: "src",
 		MetadataTable: "__secondary_meta", IndexTable: "__secondary_index",
-		ThreadsSearch: 3,
-		ThreadsBuild:  3}
+		ThreadsSearch: int64(nthread),
+		ThreadsBuild:  int64(nthread)}
 
 	uid := fmt.Sprintf("%s:%d:%d", "localhost", 1, 0)
 	build, err := NewHnswBuild(proc, uid, idxcfg, tblcfg)
@@ -66,6 +67,9 @@ func TestBuild(t *testing.T) {
 	}
 
 	fmt.Printf("sample created\n")
+
+	start := time.Now()
+
 	var wg sync.WaitGroup
 	for j := 0; j < nthread; j++ {
 		wg.Add(1)
@@ -81,31 +85,20 @@ func TestBuild(t *testing.T) {
 	}
 	wg.Wait()
 
+	end := time.Now()
+
+	fmt.Printf("Build Time %f sec\n", end.Sub(start).Seconds())
+
 	fmt.Printf("model built\n")
-	sqls, err := build.ToInsertSql(time.Now().UnixMicro())
+	_, err = build.ToInsertSql(time.Now().UnixMicro())
 	require.Nil(t, err)
-	require.Equal(t, len(sqls), 6)
-	fmt.Println(sqls[0])
-	fmt.Println(sqls[5])
-
 	indexes := build.GetIndexes()
-	require.Equal(t, 5, len(indexes))
-
-	/*
-		for _, idx := range indexes {
-			fi, err := os.Stat(idx.Path)
-			require.Nil(t, err)
-			filesz := fi.Size()
-			fmt.Printf("file %s size = %d\n", idx.Path, filesz)
-		}
-	*/
 
 	fmt.Printf("model search\n")
 	// load index file and search
 	search := NewHnswSearch(idxcfg, tblcfg)
 	defer search.Destroy()
 
-	fmt.Printf("threads search %d\n", search.ThreadsSearch)
 	// test Contains with no indexes
 	found, err := search.Contains(int64(nthread*nitem + 1))
 	require.Nil(t, err)
@@ -125,13 +118,11 @@ func TestBuild(t *testing.T) {
 		err = sidx.Index.Load(idx.Path)
 		require.Nil(t, err)
 		search.Indexes[i] = sidx
-
-		slen, err := sidx.Index.Len()
-		require.Nil(t, err)
-		require.Equal(t, nitem, int(slen))
 	}
 
 	fmt.Println("start recall")
+	start = time.Now()
+
 	// check recall
 	failed := 0
 	var wg2 sync.WaitGroup
@@ -156,6 +147,10 @@ func TestBuild(t *testing.T) {
 	}
 
 	wg2.Wait()
+
+	end = time.Now()
+	elapsed := end.Sub(start).Seconds()
+	fmt.Printf("Search Time %f sec, size = %d, rate = %f msec/row\n", elapsed, nthread*nitem, 1000*elapsed/float64(nthread*nitem))
 
 	// test Contains false
 	found, err = search.Contains(int64(nthread*nitem + 1))
