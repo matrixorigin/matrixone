@@ -54,7 +54,7 @@ type stepFunc struct {
 
 type stepFuncs []stepFunc
 
-func (s stepFuncs) Apply(msg string, reversed bool, logLevel int) (err error) {
+func (s *stepFuncs) Apply(msg string, reversed bool, logLevel int) (err error) {
 	now := time.Now()
 	defer func() {
 		if logLevel > 0 {
@@ -68,12 +68,12 @@ func (s stepFuncs) Apply(msg string, reversed bool, logLevel int) (err error) {
 	}()
 
 	if reversed {
-		for i := len(s) - 1; i >= 0; i-- {
+		for i := len(*s) - 1; i >= 0; i-- {
 			start := time.Now()
-			if err = s[i].fn(); err != nil {
+			if err = (*s)[i].fn(); err != nil {
 				logutil.Error(
 					msg,
-					zap.String("step", s[i].desc),
+					zap.String("step", (*s)[i].desc),
 					zap.Error(err),
 				)
 				return
@@ -81,17 +81,17 @@ func (s stepFuncs) Apply(msg string, reversed bool, logLevel int) (err error) {
 			if logLevel > 1 {
 				logutil.Info(
 					msg,
-					zap.String("step", s[i].desc),
+					zap.String("step", (*s)[i].desc),
 					zap.Duration("duration", time.Since(start)),
 				)
 			}
 		}
 	} else {
-		for i := 0; i < len(s); i++ {
-			if err = s[i].fn(); err != nil {
+		for i := 0; i < len(*s); i++ {
+			if err = (*s)[i].fn(); err != nil {
 				logutil.Error(
 					msg,
-					zap.String("step", s[i].desc),
+					zap.String("step", (*s)[i].desc),
 					zap.Error(err),
 				)
 				return
@@ -99,7 +99,7 @@ func (s stepFuncs) Apply(msg string, reversed bool, logLevel int) (err error) {
 			if logLevel > 1 {
 				logutil.Info(
 					msg,
-					zap.String("step", s[i].desc),
+					zap.String("step", (*s)[i].desc),
 				)
 			}
 		}
@@ -107,11 +107,12 @@ func (s stepFuncs) Apply(msg string, reversed bool, logLevel int) (err error) {
 	return nil
 }
 
-func (s stepFuncs) Add(desc string, fn func() error) stepFuncs {
-	return append(s, stepFunc{
+func (s *stepFuncs) Add(desc string, fn func() error) {
+	*s = append(*s, stepFunc{
 		fn:   fn,
 		desc: desc,
 	})
+	return
 }
 
 func newControlCmd(
@@ -452,7 +453,7 @@ func (c *Controller) AssembleDB(ctx context.Context) (err error) {
 				zap.Error(err),
 			)
 			if err2 := rollbackSteps.Apply(
-				"DB-Assemble-Rollback", true, 1,
+				"DB-Assemble-Rollback", true, 2,
 			); err2 != nil {
 				panic(err2)
 			}
