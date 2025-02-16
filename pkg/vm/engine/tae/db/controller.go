@@ -112,7 +112,6 @@ func (s *stepFuncs) Add(desc string, fn func() error) {
 		fn:   fn,
 		desc: desc,
 	})
-	return
 }
 
 func newControlCmd(
