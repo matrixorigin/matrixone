@@ -55,10 +55,13 @@ type stepFunc struct {
 type stepFuncs []stepFunc
 
 func (s *stepFuncs) Apply(msg string, reversed bool, logLevel int) (err error) {
-	now := time.Now()
+	var (
+		logger = logutil.Info
+		now    = time.Now()
+	)
 	defer func() {
 		if logLevel > 0 {
-			logutil.Info(
+			logger(
 				msg,
 				zap.String("step", "all"),
 				zap.Duration("duration", time.Since(now)),
@@ -67,40 +70,34 @@ func (s *stepFuncs) Apply(msg string, reversed bool, logLevel int) (err error) {
 		}
 	}()
 
+	rollbackStep := func(i int) (err2 error) {
+		start := time.Now()
+		err2 = (*s)[i].fn()
+		if err2 != nil {
+			logger = logutil.Error
+		}
+		if logLevel > 1 || err2 != nil {
+			logger(
+				msg,
+				zap.Int("step-i", i),
+				zap.String("step-desc", (*s)[i].desc),
+				zap.Duration("duration", time.Since(start)),
+				zap.Error(err2),
+			)
+		}
+		return
+	}
+
 	if reversed {
 		for i := len(*s) - 1; i >= 0; i-- {
-			start := time.Now()
-			if err = (*s)[i].fn(); err != nil {
-				logutil.Error(
-					msg,
-					zap.String("step", (*s)[i].desc),
-					zap.Error(err),
-				)
+			if err = rollbackStep(i); err != nil {
 				return
-			}
-			if logLevel > 1 {
-				logutil.Info(
-					msg,
-					zap.String("step", (*s)[i].desc),
-					zap.Duration("duration", time.Since(start)),
-				)
 			}
 		}
 	} else {
 		for i := 0; i < len(*s); i++ {
-			if err = (*s)[i].fn(); err != nil {
-				logutil.Error(
-					msg,
-					zap.String("step", (*s)[i].desc),
-					zap.Error(err),
-				)
+			if err = rollbackStep(i); err != nil {
 				return
-			}
-			if logLevel > 1 {
-				logutil.Info(
-					msg,
-					zap.String("step", (*s)[i].desc),
-				)
 			}
 		}
 	}
