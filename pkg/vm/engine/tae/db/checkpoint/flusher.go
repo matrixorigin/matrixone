@@ -69,6 +69,7 @@ type Flusher interface {
 	GetCfg() FlushCfg
 	Restart(opts ...FlusherOption)
 	IsNoop() bool
+	Start()
 	Stop()
 }
 
@@ -177,8 +178,16 @@ func NewFlusher(
 		return flusher
 	}
 	flusher.impl.Store(newFlusherImpl(rt, checkpointSchduler, catalogCache, sourcer, opts...))
-	flusher.impl.Load().Start()
+	// flusher.impl.Load().Start()
 	return flusher
+}
+
+func (f *flusher) Start() {
+	if impl := f.impl.Load(); impl != nil {
+		impl.Start()
+	} else {
+		logutil.Info("flushImpl-noop-Started")
+	}
 }
 
 func (f *flusher) IsNoop() bool {

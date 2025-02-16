@@ -22,11 +22,20 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	rpc2 "github.com/matrixorigin/matrixone/pkg/txn/rpc"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
+	gc2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc/v3"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
 	"go.uber.org/zap"
 )
 
@@ -45,11 +54,14 @@ type stepFunc struct {
 
 type stepFuncs []stepFunc
 
-func (s stepFuncs) Apply(msg string, reversed bool, logLevel int) (err error) {
-	now := time.Now()
+func (s *stepFuncs) Apply(msg string, reversed bool, logLevel int) (err error) {
+	var (
+		logger = logutil.Info
+		now    = time.Now()
+	)
 	defer func() {
 		if logLevel > 0 {
-			logutil.Info(
+			logger(
 				msg,
 				zap.String("step", "all"),
 				zap.Duration("duration", time.Since(now)),
@@ -58,48 +70,45 @@ func (s stepFuncs) Apply(msg string, reversed bool, logLevel int) (err error) {
 		}
 	}()
 
+	rollbackStep := func(i int) (err2 error) {
+		start := time.Now()
+		err2 = (*s)[i].fn()
+		if err2 != nil {
+			logger = logutil.Error
+		}
+		if logLevel > 1 || err2 != nil {
+			logger(
+				msg,
+				zap.Int("step-i", i),
+				zap.String("step-desc", (*s)[i].desc),
+				zap.Duration("duration", time.Since(start)),
+				zap.Error(err2),
+			)
+		}
+		return
+	}
+
 	if reversed {
-		for i := len(s) - 1; i >= 0; i-- {
-			start := time.Now()
-			if err = s[i].fn(); err != nil {
-				logutil.Error(
-					msg,
-					zap.String("step", s[i].desc),
-					zap.Error(err),
-				)
+		for i := len(*s) - 1; i >= 0; i-- {
+			if err = rollbackStep(i); err != nil {
 				return
-			}
-			if logLevel > 1 {
-				logutil.Info(
-					msg,
-					zap.String("step", s[i].desc),
-					zap.Duration("duration", time.Since(start)),
-				)
 			}
 		}
 	} else {
-		for i := 0; i < len(s); i++ {
-			if err = s[i].fn(); err != nil {
-				logutil.Error(
-					msg,
-					zap.String("step", s[i].desc),
-					zap.Error(err),
-				)
+		for i := 0; i < len(*s); i++ {
+			if err = rollbackStep(i); err != nil {
 				return
-			}
-			if logLevel > 1 {
-				logutil.Info(
-					msg,
-					zap.String("step", s[i].desc),
-				)
 			}
 		}
 	}
 	return nil
 }
 
-func (s stepFuncs) Push(ss ...stepFunc) stepFuncs {
-	return append(s, ss...)
+func (s *stepFuncs) Add(desc string, fn func() error) {
+	*s = append(*s, stepFunc{
+		fn:   fn,
+		desc: desc,
+	})
 }
 
 func newControlCmd(
@@ -236,17 +245,10 @@ func (c *Controller) handleToReplayCmd(cmd *controlCmd) {
 	// 2.x TODO: checkpoint runner
 	flushCfg := c.db.BGFlusher.GetCfg()
 	c.db.BGFlusher.Stop()
-	rollbackSteps.Push(
-		struct {
-			fn   func() error
-			desc string
-		}{
-			fn: func() error {
-				c.db.BGFlusher.Restart(checkpoint.WithFlusherCfg(flushCfg))
-				return nil
-			},
-			desc: "start bg flusher",
-		})
+	rollbackSteps.Add("start bg flusher", func() error {
+		c.db.BGFlusher.Restart(checkpoint.WithFlusherCfg(flushCfg))
+		return nil
+	})
 
 	// 3. build forward write request tunnel to the new write candidate
 	if err = c.db.TxnServer.SwitchTxnHandleStateTo(
@@ -255,14 +257,8 @@ func (c *Controller) handleToReplayCmd(cmd *controlCmd) {
 		})); err != nil {
 		return
 	}
-	rollbackSteps.Push(struct {
-		fn   func() error
-		desc string
-	}{
-		fn: func() error {
-			return c.db.TxnServer.SwitchTxnHandleStateTo(rpc2.TxnLocalHandle)
-		},
-		desc: "rollback txn handle state",
+	rollbackSteps.Add("rollback txn handle state", func() error {
+		return c.db.TxnServer.SwitchTxnHandleStateTo(rpc2.TxnLocalHandle)
 	})
 
 	// 4. build logtail tunnel to the new write candidate
@@ -371,18 +367,10 @@ func (c *Controller) handleToWriteCmd(cmd *controlCmd) {
 	// 5. start merge scheduler|checkpoint|diskcleaner
 	// 5.1 TODO: start the merger|checkpoint|flusher
 	c.db.BGFlusher.Restart() // TODO: Restart with new config
-	rollbackSteps.Push(
-		struct {
-			fn   func() error
-			desc string
-		}{
-			fn: func() error {
-				c.db.BGFlusher.Stop()
-				return nil
-			},
-			desc: "stop bg flusher",
-		},
-	)
+	rollbackSteps.Add("stop bg flusher", func() error {
+		c.db.BGFlusher.Stop()
+		return nil
+	})
 
 	// 5.2 switch the diskcleaner to write mode
 	if err = c.db.DiskCleaner.SwitchToWriteMode(ctx); err != nil {
@@ -444,4 +432,238 @@ func (c *Controller) SwitchTxnMode(
 	}
 	cmd.waitDone()
 	return cmd.err
+}
+
+func (c *Controller) AssembleDB(ctx context.Context) (err error) {
+	var (
+		db            = c.db
+		txnMode       = db.GetTxnMode()
+		rollbackSteps stepFuncs
+		errMsg        string
+	)
+	defer func() {
+		if err != nil {
+			logutil.Error(
+				Phase_Open,
+				zap.String("error-msg", errMsg),
+				zap.Error(err),
+			)
+			if err2 := rollbackSteps.Apply(
+				"DB-Assemble-Rollback", true, 2,
+			); err2 != nil {
+				panic(err2)
+			}
+		}
+	}()
+
+	if !txnMode.IsValid() {
+		return moerr.NewTxnControlErrorNoCtxf("bad txn mode %d", txnMode)
+	}
+
+	txnStoreFactory := txnimpl.TxnStoreFactory(
+		db.Opts.Ctx,
+		db.Catalog,
+		db.Wal,
+		db.Runtime,
+		db.Opts.MaxMessageSize,
+	)
+
+	txnFactory := txnimpl.TxnFactory(db.Catalog)
+	var txnMgrOpts []txnbase.TxnManagerOption
+	switch txnMode {
+	case DBTxnMode_Write:
+		txnMgrOpts = append(txnMgrOpts, txnbase.WithWriteMode)
+	case DBTxnMode_Replay:
+		txnMgrOpts = append(txnMgrOpts, txnbase.WithReplayMode)
+	}
+	db.TxnMgr = txnbase.NewTxnManager(
+		txnStoreFactory, txnFactory, db.Opts.Clock, txnMgrOpts...,
+	)
+	db.Runtime.Now = db.TxnMgr.Now
+	db.LogtailMgr = logtail.NewManager(
+		db.Runtime,
+		int(db.Opts.LogtailCfg.PageSize),
+		db.TxnMgr.Now,
+	)
+	db.TxnMgr.CommitListener.AddTxnCommitListener(db.LogtailMgr)
+
+	db.TxnMgr.Start(db.Opts.Ctx)
+	db.LogtailMgr.Start()
+
+	rollbackSteps.Add("stop logtail mgr", func() error {
+		db.LogtailMgr.Stop()
+		return nil
+	})
+	rollbackSteps.Add("stop txn mgr", func() error {
+		db.TxnMgr.Stop()
+		return nil
+	})
+
+	db.BGCheckpointRunner = checkpoint.NewRunner(
+		db.Opts.Ctx,
+		db.Runtime,
+		db.Catalog,
+		logtail.NewDirtyCollector(db.LogtailMgr, db.Opts.Clock, db.Catalog, new(catalog.LoopProcessor)),
+		db.Wal,
+		&checkpoint.CheckpointCfg{
+			MinCount:                    db.Opts.CheckpointCfg.MinCount,
+			IncrementalReservedWALCount: db.Opts.CheckpointCfg.ReservedWALEntryCount,
+			IncrementalInterval:         db.Opts.CheckpointCfg.IncrementalInterval,
+			GlobalMinCount:              db.Opts.CheckpointCfg.GlobalMinCount,
+			GlobalHistoryDuration:       db.Opts.CheckpointCfg.GlobalVersionInterval,
+			SizeHint:                    db.Opts.CheckpointCfg.Size,
+			BlockMaxRowsHint:            db.Opts.CheckpointCfg.BlockRows,
+		},
+	)
+	db.BGCheckpointRunner.Start()
+	rollbackSteps.Add("stop bg checkpoint runner", func() error {
+		db.BGCheckpointRunner.Stop()
+		return nil
+	})
+
+	db.BGFlusher = checkpoint.NewFlusher(
+		db.Runtime,
+		db.BGCheckpointRunner,
+		db.Catalog,
+		db.BGCheckpointRunner.GetDirtyCollector(),
+		db.IsReplayMode(),
+		checkpoint.WithFlusherInterval(db.Opts.CheckpointCfg.FlushInterval),
+		checkpoint.WithFlusherCronPeriod(db.Opts.CheckpointCfg.ScanInterval),
+	)
+
+	// TODO: WithGCInterval requires configuration parameters
+	gc2.SetDeleteTimeout(db.Opts.GCCfg.GCDeleteTimeout)
+	gc2.SetDeleteBatchSize(db.Opts.GCCfg.GCDeleteBatchSize)
+
+	// sjw TODO: cleaner need to support replay and write mode
+	cleaner := gc2.NewCheckpointCleaner(
+		db.Opts.Ctx,
+		db.Opts.SID,
+		db.Opts.Fs,
+		db.Wal,
+		db.BGCheckpointRunner,
+		gc2.WithCanGCCacheSize(db.Opts.GCCfg.CacheSize),
+		gc2.WithMaxMergeCheckpointCount(db.Opts.GCCfg.GCMergeCount),
+		gc2.WithEstimateRows(db.Opts.GCCfg.GCestimateRows),
+		gc2.WithGCProbility(db.Opts.GCCfg.GCProbility),
+		gc2.WithCheckOption(db.Opts.GCCfg.CheckGC),
+		gc2.WithGCCheckpointOption(!db.Opts.CheckpointCfg.DisableGCCheckpoint))
+	cleaner.AddChecker(
+		func(item any) bool {
+			checkpoint := item.(*checkpoint.CheckpointEntry)
+			ts := types.BuildTS(time.Now().UTC().UnixNano()-int64(db.Opts.GCCfg.GCTTL), 0)
+			endTS := checkpoint.GetEnd()
+			return !endTS.GE(&ts)
+		}, cmd_util.CheckerKeyTTL)
+
+	db.DiskCleaner = gc2.NewDiskCleaner(cleaner, db.IsWriteMode())
+
+	var (
+		checkpointed        types.TS
+		ckpLSN              uint64
+		releaseReplayPinned func()
+		replayCtl           *replayCtl
+	)
+	defer func() {
+		if err != nil {
+			if replayCtl != nil {
+				replayCtl.Stop()
+			}
+		} else {
+			logutil.Info(
+				Phase_Open,
+				zap.String("checkpointed", checkpointed.ToString()),
+				zap.Uint64("checkpoint-lsn", ckpLSN),
+			)
+			db.ReplayCtl = replayCtl
+		}
+	}()
+	if checkpointed, ckpLSN, releaseReplayPinned, err = c.replayFromCheckpoints(); err != nil {
+		return
+	}
+
+	if replayCtl, err = db.ReplayWal(
+		ctx, checkpointed, ckpLSN, releaseReplayPinned,
+	); err != nil {
+		return
+	}
+
+	if db.IsWriteMode() {
+		// in the write mode
+		// 1. we need to wait the replayCtl to finish the wal replay
+		// 2. close the replayCtl after replaying the wal in write mode
+		if err = replayCtl.Wait(); err != nil {
+			return
+		}
+		replayCtl.Stop()
+		replayCtl = nil
+	}
+
+	// start flusher and disk cleaner
+	db.BGFlusher.Start()
+	rollbackSteps.Add("stop bg flusher", func() error {
+		db.BGFlusher.Stop()
+		return nil
+	})
+	db.DiskCleaner.Start()
+	rollbackSteps.Add("stop disk cleaner", func() error {
+		db.DiskCleaner.Stop()
+		return nil
+	})
+
+	db.CronJobs = tasks.NewCancelableJobs()
+	err = AddCronJobs(db)
+	return
+}
+
+func (c *Controller) replayFromCheckpoints() (
+	checkpointed types.TS,
+	ckpLSN uint64,
+	release func(),
+	err error,
+) {
+	var (
+		db  = c.db
+		now = time.Now()
+	)
+	defer func() {
+		logger := logutil.Info
+		if err != nil {
+			if release != nil {
+				release()
+				release = nil
+			}
+			logger = logutil.Error
+		}
+		logger(
+			Phase_Open,
+			zap.Duration("replay-checkpoints-cost", time.Since(now)),
+			zap.String("checkpointed", checkpointed.ToString()),
+			zap.Uint64("checkpoint-lsn", ckpLSN),
+			zap.Error(err),
+		)
+	}()
+
+	ckpReplayer := db.BGCheckpointRunner.BuildReplayer(ioutil.GetCheckpointDir())
+	release = ckpReplayer.Close
+	if err = ckpReplayer.ReadCkpFiles(); err != nil {
+		return
+	}
+
+	// 1. replay three tables objectlist
+	if checkpointed, ckpLSN, err = ckpReplayer.ReplayThreeTablesObjectlist(Phase_Open); err != nil {
+		return
+	}
+
+	// 2. replay all table Entries
+	if err = ckpReplayer.ReplayCatalog(
+		db.TxnMgr.OpenOfflineTxn(checkpointed),
+		Phase_Open,
+	); err != nil {
+		return
+	}
+
+	// 3. replay other tables' objectlist
+	err = ckpReplayer.ReplayObjectlist(Phase_Open)
+	return
 }
