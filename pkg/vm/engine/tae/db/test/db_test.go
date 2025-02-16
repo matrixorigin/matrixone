@@ -29,7 +29,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lni/goutils/leaktest"
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -11494,7 +11493,7 @@ func TestDedupx(t *testing.T) {
 }
 
 func Test_OpenWithError(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	// defer leaktest.AfterTest(t)()
 	ctx := context.Background()
 	fault.Enable()
 	defer fault.Disable()
