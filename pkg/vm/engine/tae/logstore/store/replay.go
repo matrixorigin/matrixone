@@ -32,7 +32,7 @@ func (w *StoreImpl) Replay(
 		return state
 	}, modeGetter, opt)
 	if err != nil {
-		panic(err)
+		return err
 	}
 	lsn, err := w.driver.GetTruncated()
 	if err != nil {

@@ -60,6 +60,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/logservicedriver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
@@ -11546,4 +11547,48 @@ func Test_Controller2(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+func Test_RWDB1(t *testing.T) {
+	_, clientFactory := logservicedriver.NewMockServiceAndClientFactory()
+	ctx := context.Background()
+	wOpts := config.WithLongScanAndCKPOpts(nil)
+	wOpts.Lc = clientFactory
+	wOpts.LogStoreT = options.LogstoreLogservice
+	wTae := testutil.NewTestEngine(ctx, ModuleName, t, wOpts)
+	defer wTae.Close()
+	rOpts := config.WithLongScanAndCKPOpts(nil)
+	rOpts.Lc = clientFactory
+	rOpts.LogStoreT = options.LogstoreLogservice
+
+	rTae := testutil.NewReplayTestEngine(ctx, ModuleName, t, rOpts)
+
+	i := 0
+	commitOneTxn := func() {
+		txn, _ := wTae.StartTxn(nil)
+		_, err := testutil.CreateDatabase2(ctx, txn, fmt.Sprintf("db_%d", i))
+		i++
+		assert.Nil(t, err)
+		assert.Nil(t, txn.Commit(ctx))
+	}
+
+	commitOneTxn()
+	commitOneTxn()
+
+	{
+		time.Sleep(time.Millisecond * 100)
+		txn, err := wTae.StartTxn(nil)
+		assert.NoError(t, err)
+		_, err = txn.GetDatabase("db_0")
+		assert.NoError(t, err)
+	}
+
+	{
+		txn, err := rTae.StartTxn(nil)
+		assert.NoError(t, err)
+		_, err = txn.GetDatabase("db_0")
+		assert.NoError(t, err)
+	}
+
+	rTae.Close()
 }

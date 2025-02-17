@@ -47,6 +47,13 @@ type LogServiceClientFactory logservice.ClientFactory
 
 type ConfigOption func(*Config)
 
+func NewMockServiceAndClientFactory() (MockBackend, LogServiceClientFactory) {
+	backend := NewMockBackend()
+	return backend, func() (logservice.Client, error) {
+		return newMockBackendClient(backend), nil
+	}
+}
+
 func WithConfigOptClientFactory(f LogServiceClientFactory) ConfigOption {
 	return func(cfg *Config) {
 		cfg.IsMockBackend = false
