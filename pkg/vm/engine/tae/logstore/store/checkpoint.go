@@ -15,15 +15,15 @@
 package store
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	driverEntry "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 	"go.uber.org/zap"
 )
 
@@ -53,27 +53,20 @@ func (w *StoreImpl) RangeCheckpoint(gid uint32, start, end uint64, files ...stri
 	logutil.Info("TRACE-WAL-TRUNCATE-RangeCheckpoint", zap.Uint32("group", gid), zap.Uint64("lsn", end))
 	ckpEntry = w.makeRangeCheckpointEntry(gid, start, end)
 	drentry, _, err := w.doAppend(GroupCKP, ckpEntry)
-	if err == sm.ErrClose {
-		return nil, err
-	}
 	if err != nil {
-		panic(err)
+		return
 	}
 	if len(files) > 0 {
 		var fileEntry entry.Entry
-		fileEntry, err = BuildFilesEntry(files)
-		if err != nil {
+		if fileEntry, err = BuildFilesEntry(files); err != nil {
 			return
 		}
-		_, _, err = w.doAppend(GroupFiles, fileEntry)
-		if err != nil {
+		// TODO: too bad!!!
+		if _, _, err = w.doAppend(GroupFiles, fileEntry); err != nil {
 			return
 		}
 	}
 	_, err = w.checkpointQueue.Enqueue(drentry)
-	if err != nil {
-		panic(err)
-	}
 	return
 }
 
@@ -91,85 +84,64 @@ func (w *StoreImpl) makeRangeCheckpointEntry(gid uint32, start, end uint64) (ckp
 	return
 }
 
-func (w *StoreImpl) onLogCKPInfoQueue(items ...any) {
-	for _, item := range items {
-		e := item.(*driverEntry.Entry)
+func (w *StoreImpl) onCheckpointIntent(intents ...any) {
+	for _, intent := range intents {
+		e := intent.(*driverEntry.Entry)
 		err := e.WaitDone()
+		logger := logutil.Info
 		if err != nil {
-			panic(err)
+			logger = logutil.Error
 		}
-		logutil.Info("TRACE-WAL-TRUNCATE-CKP-Entry",
+		logger(
+			"TRACE-WAL-TRUNCATE-CKP-Entry",
 			zap.Uint32("group", e.Info.Checkpoints[0].Group),
-			zap.Uint64("lsn", e.Info.Checkpoints[0].Ranges.GetMax()))
-		w.logCheckpointInfo(e.Info)
-	}
-	w.onCheckpoint()
-}
-
-func (w *StoreImpl) onCheckpoint() {
-	w.StoreInfo.onCheckpoint()
-	w.ckpCkp()
-}
-
-func (w *StoreImpl) ckpCkp() {
-	t0 := time.Now()
-	e := w.makeInternalCheckpointEntry()
-	driverEntry, _, err := w.doAppend(GroupInternal, e)
-	if err == sm.ErrClose {
-		return
-	}
-	if err != nil {
-		panic(err)
-	}
-	logutil.Info("TRACE-WAL-TRUNCATE-Internal-Entry",
-		zap.String("duration", time.Since(t0).String()))
-	w.truncatingQueue.Enqueue(driverEntry)
-	err = e.WaitDone()
-	if err != nil {
-		panic(err)
-	}
-	e.Free()
-}
-
-func (w *StoreImpl) onTruncatingQueue(items ...any) {
-	t0 := time.Now()
-	for _, item := range items {
-		e := item.(*driverEntry.Entry)
-		err := e.WaitDone()
-		if err != nil {
-			panic(err)
+			zap.Uint64("lsn", e.Info.Checkpoints[0].Ranges.GetMax()),
+			zap.Error(err),
+		)
+		if err == nil {
+			w.logCheckpointInfo(e.Info)
 		}
-		w.logCheckpointInfo(e.Info)
 	}
-	tTruncateEntry := time.Since(t0)
-	t0 = time.Now()
-	gid, driverLsn := w.getDriverCheckpointed()
-	tGetDriverEntry := time.Since(t0)
-	logutil.Info("TRACE-WAL-TRUNCATE",
-		zap.String("wait truncating entry takes", tTruncateEntry.String()),
-		zap.String("get driver lsn takes", tGetDriverEntry.String()),
-		zap.Uint64("driver lsn", driverLsn))
+	w.postCheckpointWaited()
+}
+
+func (w *StoreImpl) postCheckpointWaited() {
+	w.StoreInfo.onCheckpoint()
+	start := time.Now()
+	gid, dsn := w.getDriverCheckpointed()
+	logutil.Info(
+		"TRACE-WAL-TRUNCATE",
+		zap.Duration("calculate-dsn-cost", time.Since(start)),
+		zap.Uint64("dsn", dsn),
+		zap.Uint32("group", gid),
+	)
 	if gid == 0 {
 		return
 	}
-	w.driverCheckpointing.Store(driverLsn)
-	_, err := w.truncateQueue.Enqueue(struct{}{})
-	if err != nil {
-		panic(err)
-	}
-}
-
-func (w *StoreImpl) onTruncateQueue(items ...any) {
-	lsn := w.driverCheckpointing.Load()
-	if lsn != w.driverCheckpointed.Load() {
-		err := w.driver.Truncate(lsn)
-		for err != nil {
-			lsn = w.driverCheckpointing.Load()
-			err = w.driver.Truncate(lsn)
+	if dsn > w.driverCheckpointed.Load() {
+		for i := 0; i < 10; i++ {
+			if err := w.driver.Truncate(dsn); err != nil {
+				logutil.Error(
+					"TRACE-WAL-TRUNCATE-Error",
+					zap.Uint32("group", gid),
+					zap.Uint64("dsn-intent", dsn),
+					zap.Uint64("dsn-checkpointed", w.driverCheckpointed.Load()),
+					zap.Int("retry", i),
+					zap.Error(err),
+				)
+				continue
+			}
+			start = time.Now()
+			w.gcWalDriverLsnMap(dsn)
+			prev := w.driverCheckpointed.Load()
+			w.driverCheckpointed.Store(dsn)
+			logutil.Info(
+				"TRACE-WAL-TRUNCATE-GC-Store",
+				zap.Duration("duration", time.Since(start)),
+				zap.Uint32("group", gid),
+				zap.Uint64("dsn", dsn),
+				zap.Uint64("dsn-prev", prev),
+			)
 		}
-		t := time.Now()
-		w.gcWalDriverLsnMap(lsn)
-		logutil.Info("TRACE-WAL-TRUNCATE-GC-Store", zap.String("duration", time.Since(t).String()))
-		w.driverCheckpointed.Store(lsn)
 	}
 }

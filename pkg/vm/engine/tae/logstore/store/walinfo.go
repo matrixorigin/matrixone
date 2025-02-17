@@ -238,11 +238,6 @@ func (w *StoreInfo) logCheckpointInfo(info *entry.Info) {
 			}
 			w.ckpMu.Unlock()
 		}
-	case GroupInternal:
-		w.checkpointedMu.Lock()
-		w.checkpointed[GroupCKP] = info.TargetLsn
-		w.checkpointed[GroupInternal] = info.GroupLSN - 1
-		w.checkpointedMu.Unlock()
 	}
 }
 
@@ -294,25 +289,6 @@ func (w *StoreInfo) getDriverCheckpointed() (gid uint32, driverLsn uint64) {
 	} else {
 		return entry.GTCustomized, maxLsn
 	}
-}
-
-func (w *StoreInfo) makeInternalCheckpointEntry() (e entry.Entry) {
-	e = entry.GetBase()
-	lsn := w.GetSynced(GroupCKP)
-	e.SetType(entry.IOET_WALEntry_PostCommit)
-	buf, err := w.marshalPostCommitEntry()
-	if err != nil {
-		panic(err)
-	}
-	err = e.SetPayload(buf)
-	if err != nil {
-		panic(err)
-	}
-	info := &entry.Info{}
-	info.TargetLsn = lsn
-	info.Group = GroupInternal
-	e.SetInfo(info)
-	return
 }
 
 func (w *StoreInfo) marshalPostCommitEntry() (buf []byte, err error) {

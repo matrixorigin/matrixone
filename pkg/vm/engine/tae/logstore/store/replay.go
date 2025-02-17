@@ -76,11 +76,10 @@ func (w *StoreImpl) replayEntry(e *entry.Entry, h ApplyHandle) (driver.ReplayEnt
 	info := e.Info
 	switch info.Group {
 	case GroupInternal:
-		w.unmarshalPostCommitEntry(walEntry.GetPayload())
-		w.checkpointed[GroupCKP] = info.TargetLsn
 		return driver.RE_Internal, nil
 	case GroupCKP:
 		w.logCheckpointInfo(info)
+		// TODO:  should return?
 	}
 	w.logDriverLsn(e)
 	w.onReplayLsn(info.Group, info.GroupLSN)

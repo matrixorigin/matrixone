@@ -40,9 +40,6 @@ type StoreImpl struct {
 	logInfoQueue      sm.Queue
 
 	checkpointQueue sm.Queue
-
-	truncatingQueue sm.Queue
-	truncateQueue   sm.Queue
 }
 
 func NewStoreWithLogserviceDriver(factory logservicedriver.LogServiceClientFactory) Store {
@@ -73,9 +70,7 @@ func NewStore(driver driver.Driver) *StoreImpl {
 	w.driverAppendQueue = sm.NewSafeQueue(DefaultMaxBatchSize*10, DefaultMaxBatchSize, w.onDriverAppendQueue)
 	w.doneWithErrQueue = sm.NewSafeQueue(DefaultMaxBatchSize*10, DefaultMaxBatchSize, w.onDoneWithErrQueue)
 	w.logInfoQueue = sm.NewSafeQueue(DefaultMaxBatchSize*10, DefaultMaxBatchSize, w.onLogInfoQueue)
-	w.checkpointQueue = sm.NewSafeQueue(DefaultMaxBatchSize*10, DefaultMaxBatchSize, w.onLogCKPInfoQueue)
-	w.truncatingQueue = sm.NewSafeQueue(DefaultMaxBatchSize*10, DefaultMaxBatchSize, w.onTruncatingQueue)
-	w.truncateQueue = sm.NewSafeQueue(DefaultMaxBatchSize*10, DefaultMaxBatchSize, w.onTruncateQueue)
+	w.checkpointQueue = sm.NewSafeQueue(DefaultMaxBatchSize*10, DefaultMaxBatchSize, w.onCheckpointIntent)
 	w.Start()
 	return w
 }
@@ -84,8 +79,6 @@ func (w *StoreImpl) Start() {
 	w.doneWithErrQueue.Start()
 	w.logInfoQueue.Start()
 	w.checkpointQueue.Start()
-	w.truncatingQueue.Start()
-	w.truncateQueue.Start()
 }
 func (w *StoreImpl) Close() error {
 	if !w.TryClose() {
@@ -98,8 +91,6 @@ func (w *StoreImpl) Close() error {
 	w.doneWithErrQueue.Stop()
 	w.logInfoQueue.Stop()
 	w.checkpointQueue.Stop()
-	w.truncatingQueue.Stop()
-	w.truncateQueue.Stop()
 	err := w.driver.Close()
 	if err != nil {
 		return err
