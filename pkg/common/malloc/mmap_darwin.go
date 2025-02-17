@@ -25,23 +25,23 @@ const (
 	madv_FREE_REUSE    = 0x8
 )
 
-func reuseMem(ptr unsafe.Pointer, size int) {
-	slice := unsafe.Slice((*byte)(ptr), size)
-	if err := unix.Madvise(slice, madv_FREE_REUSE); err != nil {
+func (f *fixedSizeMmapAllocator) reuseMem(ptr unsafe.Pointer, hints Hints, clearSize uint64) {
+	if err := unix.Madvise(
+		unsafe.Slice((*byte)(ptr), f.size),
+		madv_FREE_REUSE,
+	); err != nil {
 		panic(err)
 	}
-	clear(slice)
-	if err := unix.Mprotect(slice, unix.PROT_READ|unix.PROT_WRITE); err != nil {
-		panic(err)
+	if hints&NoClear == 0 {
+		clear(unsafe.Slice((*byte)(ptr), clearSize))
 	}
 }
 
-func freeMem(ptr unsafe.Pointer, size int) {
-	slice := unsafe.Slice((*byte)(ptr), size)
-	if err := unix.Madvise(slice, madv_FREE_REUSABLE); err != nil {
-		panic(err)
-	}
-	if err := unix.Mprotect(slice, unix.PROT_NONE); err != nil {
+func (f *fixedSizeMmapAllocator) freeMem(ptr unsafe.Pointer) {
+	if err := unix.Madvise(
+		unsafe.Slice((*byte)(ptr), f.size),
+		madv_FREE_REUSABLE,
+	); err != nil {
 		panic(err)
 	}
 }
