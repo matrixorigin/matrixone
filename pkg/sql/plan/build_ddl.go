@@ -3204,7 +3204,6 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 		}
 		createIndex.TableExist = true
 	}
-	// TODO: ERIC use tableDef.Indexes (existedIndexes) to check duplicate same as IVFFLAT
 	if ftIdx != nil {
 		if err := buildFullTextIndexTable(indexInfo, []*tree.FullTextIndex{ftIdx}, colMap, tableDef.Indexes, oriPriKeyName, ctx); err != nil {
 			return nil, err
@@ -3778,7 +3777,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				}
 				alterTableReIndex.IndexAlgoParamList = opt.AlgoParamList
 			case tree.INDEX_TYPE_HNSW:
-				// TODO: ERIC fix the options
+				// PASS: keep options on change for incremental update
 			default:
 				return nil, moerr.NewInternalErrorf(ctx.GetContext(), "unsupported index type: %v", opt.KeyType)
 			}

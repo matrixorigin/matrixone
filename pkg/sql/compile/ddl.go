@@ -744,8 +744,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 						}
 
 					case catalog.MoIndexHnswAlgo.ToString():
-						// TODO: ERIC ReIndex hnsw here
-						// pass
+						// PASS: keep option unchange for incremental update
 					default:
 						return moerr.NewInternalError(c.proc.Ctx, "invalid index algo type for alter reindex")
 					}
@@ -767,7 +766,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 				case catalog.MoIndexIvfFlatAlgo.ToString():
 					err = s.handleVectorIvfFlatIndex(c, dbSource, multiTableIndex.IndexDefs, qry.Database, tableDef, nil)
 				case catalog.MoIndexHnswAlgo.ToString():
-					// TODO: ERIC we should call refresh Hnsw Index function instead of CreateHnswIndex function
+					// TODO: we should call refresh Hnsw Index function instead of CreateHnswIndex function
 					err = s.handleVectorHnswIndex(c, dbSource, multiTableIndex.IndexDefs, qry.Database, tableDef, nil)
 				}
 
