@@ -36,6 +36,7 @@ func Test_RestartFlusher(t *testing.T) {
 		WithFlusherForceTimeout(cfg.ForceFlushTimeout),
 		WithFlusherForceCheckInterval(cfg.ForceFlushCheckInterval),
 	)
+	f.Start()
 
 	fCfg := f.GetCfg()
 	assert.Equal(t, cfg, fCfg)

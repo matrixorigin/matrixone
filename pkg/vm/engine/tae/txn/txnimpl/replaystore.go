@@ -35,7 +35,6 @@ type replayTxnStore struct {
 	Cmd      *txnbase.TxnCmd
 	Observer wal.ReplayObserver
 	catalog  *catalog.Catalog
-	wal      wal.Driver
 	ctx      context.Context
 }
 
@@ -47,12 +46,11 @@ func MakeReplayTxn(
 	cmd *txnbase.TxnCmd,
 	observer wal.ReplayObserver,
 	catalog *catalog.Catalog,
-	wal wal.Driver) *txnbase.Txn {
+) *txnbase.Txn {
 	store := &replayTxnStore{
 		Cmd:      cmd,
 		Observer: observer,
 		catalog:  catalog,
-		wal:      wal,
 		ctx:      ctx,
 	}
 	txn := txnbase.NewPersistedTxn(

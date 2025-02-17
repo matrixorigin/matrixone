@@ -21,11 +21,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"go.uber.org/zap"
 )
+
+var ErrCronJobsOpen = moerr.NewInternalErrorNoCtx("cron jobs mock error")
 
 const (
 	CronJobs_Name_GCTransferTable = "GC-Transfer-Table"
@@ -89,6 +92,9 @@ func CanAddCronJob(name string, isWriteModeDB, skipMode bool) bool {
 }
 
 func AddCronJobs(db *DB) (err error) {
+	if objectio.SimpleInjected(objectio.FJ_CronJobsOpen) {
+		return ErrCronJobsOpen
+	}
 	isWriteMode := db.IsWriteMode()
 	if isWriteMode {
 		for _, name := range CronJobs_Open_WriteMode {

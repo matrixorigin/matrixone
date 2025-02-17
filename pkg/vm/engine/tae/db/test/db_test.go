@@ -60,6 +60,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/logservicedriver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
@@ -11490,4 +11491,104 @@ func TestDedupx(t *testing.T) {
 	for nit.Next() {
 		t.Log(nit.Item().StringWithLevel(2))
 	}
+}
+
+func Test_OpenWithError(t *testing.T) {
+	// defer leaktest.AfterTest(t)()
+	ctx := context.Background()
+	fault.Enable()
+	defer fault.Disable()
+	rm, err := objectio.SimpleInject(objectio.FJ_CronJobsOpen)
+	defer rm()
+	assert.NoError(t, err)
+	dir := testutils.InitTestEnv(ModuleName, t)
+	_, err = db.Open(ctx, dir, nil)
+	assert.ErrorIs(t, db.ErrCronJobsOpen, err)
+}
+
+func Test_Controller1(t *testing.T) {
+	ctx := context.Background()
+	ctl := db.NewController(nil)
+	ctl.Start()
+	var count atomic.Int32
+	for i := 0; i < 3; i++ {
+		_, err := ctl.ScheduleCustomized(ctx, func() error {
+			time.Sleep(time.Millisecond * 1)
+			count.Add(1)
+			return nil
+		})
+		assert.NoError(t, err)
+	}
+
+	ctl.Stop(nil)
+	assert.Equal(t, int32(3), count.Load())
+}
+
+func Test_Controller2(t *testing.T) {
+	ctx := context.Background()
+	ctl := db.NewController(nil)
+	ctl.Start()
+	var count atomic.Int32
+	for i := 0; i < 2; i++ {
+		_, err := ctl.ScheduleCustomized(ctx, func() error {
+			time.Sleep(time.Millisecond * 2)
+			count.Add(1)
+			return nil
+		})
+		assert.NoError(t, err)
+	}
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ctl.Stop(nil)
+			assert.Equal(t, int32(2), count.Load())
+		}()
+	}
+	wg.Wait()
+}
+
+func Test_RWDB1(t *testing.T) {
+	_, clientFactory := logservicedriver.NewMockServiceAndClientFactory()
+	ctx := context.Background()
+	wOpts := config.WithLongScanAndCKPOpts(nil)
+	wOpts.Lc = clientFactory
+	wOpts.LogStoreT = options.LogstoreLogservice
+	wTae := testutil.NewTestEngine(ctx, ModuleName, t, wOpts)
+	defer wTae.Close()
+	rOpts := config.WithLongScanAndCKPOpts(nil)
+	rOpts.Lc = clientFactory
+	rOpts.LogStoreT = options.LogstoreLogservice
+
+	rTae := testutil.NewReplayTestEngine(ctx, ModuleName, t, rOpts)
+
+	i := 0
+	commitOneTxn := func() {
+		txn, _ := wTae.StartTxn(nil)
+		_, err := testutil.CreateDatabase2(ctx, txn, fmt.Sprintf("db_%d", i))
+		i++
+		assert.Nil(t, err)
+		assert.Nil(t, txn.Commit(ctx))
+	}
+
+	commitOneTxn()
+	commitOneTxn()
+
+	{
+		time.Sleep(time.Millisecond * 100)
+		txn, err := wTae.StartTxn(nil)
+		assert.NoError(t, err)
+		_, err = txn.GetDatabase("db_0")
+		assert.NoError(t, err)
+	}
+
+	{
+		txn, err := rTae.StartTxn(nil)
+		assert.NoError(t, err)
+		_, err = txn.GetDatabase("db_0")
+		assert.NoError(t, err)
+	}
+
+	rTae.Close()
 }
