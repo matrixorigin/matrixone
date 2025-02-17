@@ -198,9 +198,21 @@ func (idx *HnswBuildIndex) Add(key int64, vec []float32) error {
 }
 
 // create HsnwBuild struct
-func NewHnswBuild(proc *process.Process, uid string, cfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) (info *HnswBuild, err error) {
+func NewHnswBuild(proc *process.Process, uid string, nworker int32, cfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) (info *HnswBuild, err error) {
 
-	nthread := vectorindex.GetConcurrency(tblcfg.ThreadsBuild)
+	// estimate the number of worker threads
+	nthread := 0
+	if nworker <= 1 {
+		// single database thread and set nthread to ThreadsBuild
+		nthread = int(vectorindex.GetConcurrency(tblcfg.ThreadsBuild))
+	} else {
+		// multiple database worker threads
+		threadsbuild := vectorindex.GetConcurrencyForBuild(tblcfg.ThreadsBuild)
+		nthread = int(float64(threadsbuild) / float64(nworker))
+	}
+	if nthread < 1 {
+		nthread = 1
+	}
 	info = &HnswBuild{
 		uid:     uid,
 		cfg:     cfg,

@@ -3540,7 +3540,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("hnsw_threads_build", 0, 1024, false),
-		Default:           int64(1),
+		Default:           int64(0),
 	},
 	"hnsw_threads_search": {
 		Name:              "hnsw_threads_search",

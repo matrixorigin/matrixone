@@ -184,4 +184,11 @@ func TestGetConcurrency(t *testing.T) {
 	concurrent := int64(64)
 	nthread = GetConcurrency(concurrent)
 	require.Equal(t, concurrent, nthread)
+
+	nthread = GetConcurrencyForBuild(0)
+	require.Equal(t, int64(runtime.NumCPU()), nthread)
+
+	nthread = GetConcurrencyForBuild(4)
+	require.Equal(t, int64(4), nthread)
+
 }

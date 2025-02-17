@@ -72,3 +72,11 @@ func GetConcurrency(nthread int64) int64 {
 	}
 	return ret
 }
+
+// nthread == 0, result will return NumCPU
+func GetConcurrencyForBuild(nthread int64) int64 {
+	if nthread > 0 {
+		return nthread
+	}
+	return int64(runtime.NumCPU())
+}

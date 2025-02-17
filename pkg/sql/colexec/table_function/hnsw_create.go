@@ -201,7 +201,7 @@ func (u *hnswCreateState) start(tf *TableFunction, proc *process.Process, nthRow
 		u.idxcfg.Type = "hnsw"
 
 		uid := fmt.Sprintf("%s:%d:%d", tf.CnAddr, tf.MaxParallel, tf.ParallelID)
-		u.build, err = hnsw.NewHnswBuild(proc, uid, u.idxcfg, u.tblcfg)
+		u.build, err = hnsw.NewHnswBuild(proc, uid, tf.MaxParallel, u.idxcfg, u.tblcfg)
 		if err != nil {
 			return err
 		}

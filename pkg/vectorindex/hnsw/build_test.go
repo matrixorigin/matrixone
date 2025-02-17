@@ -50,7 +50,7 @@ func TestBuildMulti(t *testing.T) {
 		ThreadsBuild:  int64(nthread)}
 
 	uid := fmt.Sprintf("%s:%d:%d", "localhost", 1, 0)
-	build, err := NewHnswBuild(proc, uid, idxcfg, tblcfg)
+	build, err := NewHnswBuild(proc, uid, 1, idxcfg, tblcfg)
 	require.Nil(t, err)
 	defer build.Destroy()
 
@@ -202,7 +202,7 @@ func TestBuildSingleThread(t *testing.T) {
 		ThreadsSearch: 0,
 		ThreadsBuild:  1}
 	uid := fmt.Sprintf("%s:%d:%d", "localhost", 1, 0)
-	build, err := NewHnswBuild(proc, uid, idxcfg, tblcfg)
+	build, err := NewHnswBuild(proc, uid, 1, idxcfg, tblcfg)
 	require.Nil(t, err)
 	defer build.Destroy()
 
