@@ -133,6 +133,7 @@ func (insert *Insert) Free(proc *process.Process, pipelineFailed bool, err error
 		insert.ctr.buf.Clean(proc.Mp())
 		insert.ctr.buf = nil
 	}
+	insert.ctr.source = nil
 }
 
 func (insert *Insert) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {

@@ -790,7 +790,7 @@ func (m *TNUsageMemo) ClearDroppedAccounts(reserved map[uint64]struct{}) string 
 }
 
 // EstablishFromCKPs replays usage info which stored in ckps into the tn cache
-func (m *TNUsageMemo) EstablishFromCKPs(c *catalog.Catalog) {
+func (m *TNUsageMemo) EstablishFromCKPs() {
 	m.EnterProcessing()
 	defer m.LeaveProcessing()
 

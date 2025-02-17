@@ -33,7 +33,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"go.uber.org/zap"
 )
 
@@ -151,7 +150,6 @@ func ReplayCheckpoint(
 	ctx context.Context,
 	c *catalog.Catalog,
 	forSys bool,
-	dataFactory catalog.DataFactory,
 	location objectio.Location,
 	mp *mpool.MPool,
 	fs fileservice.FileService,
@@ -179,7 +177,7 @@ func ReplayCheckpoint(
 			) error {
 				if forSys == pkgcatalog.IsSystemTable(tid) {
 					c.OnReplayObjectBatch_V2(
-						dbid, tid, objectType, objectStats, create, delete, dataFactory,
+						dbid, tid, objectType, objectStats, create, delete,
 					)
 				}
 				return nil
@@ -424,7 +422,7 @@ func (replayer *CheckpointReplayer) ReplayObjectlist(
 	ctx context.Context,
 	c *catalog.Catalog,
 	forSys bool,
-	dataFactory *tables.DataFactory) {
+) {
 	replayFn := func(src *containers.Batch, objectType int8) {
 		if src == nil || src.Length() == 0 {
 			return
@@ -443,7 +441,6 @@ func (replayer *CheckpointReplayer) ReplayObjectlist(
 					objectio.ObjectStats(objectstatsVec.GetBytesAt(i)),
 					createTSs[i],
 					deleteTSs[i],
-					dataFactory,
 				)
 			}
 		}

@@ -11364,19 +11364,19 @@ func TestCheckpointV2(t *testing.T) {
 	assert.NoError(t, err)
 	data.Close()
 
-	catalog2 := catalog.MockCatalog()
 	dataFactory := tables.NewDataFactory(
 		tae.Runtime, tae.Dir,
 	)
+	catalog2 := catalog.MockCatalog(dataFactory)
 
 	err = logtail.PrefetchCheckpoint(ctx, "", loc, common.DebugAllocator, tae.Opts.Fs)
 	assert.NoError(t, err)
-	err = logtail.ReplayCheckpoint(ctx, catalog2, true, dataFactory, loc, common.DebugAllocator, tae.Opts.Fs)
+	err = logtail.ReplayCheckpoint(ctx, catalog2, true, loc, common.DebugAllocator, tae.Opts.Fs)
 	assert.NoError(t, err)
 	readTxn, err := tae.StartTxn(nil)
 	assert.NoError(t, err)
 	closeFn := catalog2.RelayFromSysTableObjects(
-		ctx, readTxn, dataFactory, tables.ReadSysTableBatch, func(cols []containers.Vector, pkidx int) (err2 error) {
+		ctx, readTxn, tables.ReadSysTableBatch, func(cols []containers.Vector, pkidx int) (err2 error) {
 			_, err2 = mergesort.SortBlockColumns(cols, pkidx, tae.Runtime.VectorPool.Transient)
 			return
 		}, &objlistReplayer{},
@@ -11384,7 +11384,7 @@ func TestCheckpointV2(t *testing.T) {
 	for _, fn := range closeFn {
 		fn()
 	}
-	err = logtail.ReplayCheckpoint(ctx, catalog2, false, dataFactory, loc, common.DebugAllocator, tae.Opts.Fs)
+	err = logtail.ReplayCheckpoint(ctx, catalog2, false, loc, common.DebugAllocator, tae.Opts.Fs)
 	assert.NoError(t, err)
 
 	var tombstoneCnt2, dataCnt2 int
@@ -11463,10 +11463,10 @@ func TestCheckpointV2Compatibility(t *testing.T) {
 	tae.ForceCheckpoint()
 	tae.ForceCheckpoint()
 
-	catalog2 := catalog.MockCatalog()
 	dataFactory := tables.NewDataFactory(
 		tae.Runtime, tae.Dir,
 	)
+	catalog2 := catalog.MockCatalog(dataFactory)
 
 	ckps := tae.BGCheckpointRunner.GetAllCheckpoints()
 	assert.Equal(t, 2, len(ckps))
@@ -11491,12 +11491,12 @@ func TestCheckpointV2Compatibility(t *testing.T) {
 		assert.NoError(t, err)
 	}
 	for _, replayer := range replayers {
-		replayer.ReplayObjectlist(ctx, catalog2, true, dataFactory)
+		replayer.ReplayObjectlist(ctx, catalog2, true)
 	}
 	readTxn, err := tae.StartTxn(nil)
 	assert.NoError(t, err)
 	closeFn := catalog2.RelayFromSysTableObjects(
-		ctx, readTxn, dataFactory, tables.ReadSysTableBatch, func(cols []containers.Vector, pkidx int) (err2 error) {
+		ctx, readTxn, tables.ReadSysTableBatch, func(cols []containers.Vector, pkidx int) (err2 error) {
 			_, err2 = mergesort.SortBlockColumns(cols, pkidx, tae.Runtime.VectorPool.Transient)
 			return
 		}, &objlistReplayer{},
@@ -11505,7 +11505,7 @@ func TestCheckpointV2Compatibility(t *testing.T) {
 		fn()
 	}
 	for _, replayer := range replayers {
-		replayer.ReplayObjectlist(ctx, catalog2, false, dataFactory)
+		replayer.ReplayObjectlist(ctx, catalog2, false)
 	}
 
 	var tombstoneCnt2, dataCnt2 int
@@ -11561,4 +11561,17 @@ func TestDedupx(t *testing.T) {
 	for nit.Next() {
 		t.Log(nit.Item().StringWithLevel(2))
 	}
+}
+
+func Test_OpenWithError(t *testing.T) {
+	// defer leaktest.AfterTest(t)()
+	ctx := context.Background()
+	fault.Enable()
+	defer fault.Disable()
+	rm, err := objectio.SimpleInject(objectio.FJ_CronJobsOpen)
+	defer rm()
+	assert.NoError(t, err)
+	dir := testutils.InitTestEnv(ModuleName, t)
+	_, err = db.Open(ctx, dir, nil)
+	assert.ErrorIs(t, db.ErrCronJobsOpen, err)
 }

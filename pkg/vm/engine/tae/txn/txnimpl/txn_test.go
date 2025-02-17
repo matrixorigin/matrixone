@@ -381,7 +381,7 @@ func TestNodeCommand(t *testing.T) {
 func TestTxnManager1(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	mgr := txnbase.NewTxnManager(TxnStoreFactory(context.Background(), nil, nil, nil, nil, 0),
+	mgr := txnbase.NewTxnManager(TxnStoreFactory(context.Background(), nil, nil, nil, 0),
 		TxnFactory(nil), types.NewMockHLCClock(1))
 	mgr.Start(context.Background())
 	txn, _ := mgr.StartTxn(nil)
@@ -435,14 +435,14 @@ func TestTxnManager1(t *testing.T) {
 }
 
 func initTestContext(ctx context.Context, t *testing.T, dir string) (*catalog.Catalog, *txnbase.TxnManager, wal.Driver) {
-	c := catalog.MockCatalog()
-	driver := wal.NewBatchStoreDriver(ctx, dir, "store", nil)
 	fs := objectio.TmpNewFileservice(ctx, path.Join(dir, "data"))
 	rt := dbutils.NewRuntime(
 		dbutils.WithRuntimeObjectFS(fs),
 	)
 	factory := tables.NewDataFactory(rt, dir)
-	mgr := txnbase.NewTxnManager(TxnStoreFactory(context.Background(), c, driver, rt, factory, 0),
+	c := catalog.MockCatalog(factory)
+	driver := wal.NewBatchStoreDriver(ctx, dir, "store", nil)
+	mgr := txnbase.NewTxnManager(TxnStoreFactory(context.Background(), c, driver, rt, 0),
 		TxnFactory(c), types.NewMockHLCClock(1))
 	rt.Now = mgr.Now
 	mgr.Start(context.Background())

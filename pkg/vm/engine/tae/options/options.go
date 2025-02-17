@@ -17,6 +17,7 @@ package options
 import (
 	"bytes"
 	"context"
+	"path"
 	"runtime"
 	"time"
 
@@ -260,6 +261,14 @@ func (o *Options) FillDefaults(dirname string) *Options {
 
 	if o.Ctx == nil {
 		o.Ctx = context.Background()
+	}
+
+	if o.Fs == nil {
+		// TODO:fileservice needs to be passed in as a parameter
+		o.Fs = objectio.TmpNewFileservice(o.Ctx, path.Join(dirname, "data"))
+	}
+	if o.LocalFs == nil {
+		o.LocalFs = objectio.TmpNewFileservice(o.Ctx, path.Join(dirname, "data"))
 	}
 
 	return o

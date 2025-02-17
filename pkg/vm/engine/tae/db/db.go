@@ -32,11 +32,10 @@ import (
 	gc2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc/v3"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
-	wb "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 	"go.uber.org/zap"
@@ -103,7 +102,6 @@ type DB struct {
 
 	CronJobs *tasks.CancelableJobs
 
-	BGScanner          wb.IHeartbeater
 	BGCheckpointRunner checkpoint.Runner
 	BGFlusher          checkpoint.Flusher
 
@@ -112,6 +110,8 @@ type DB struct {
 	DiskCleaner *gc2.DiskCleaner
 
 	Runtime *dbutils.Runtime
+
+	ReplayCtl *replayCtl
 
 	DBLocker io.Closer
 
@@ -310,25 +310,24 @@ func (db *DB) RollbackTxn(txn txnif.AsyncTxn) error {
 
 func (db *DB) ReplayWal(
 	ctx context.Context,
-	dataFactory *tables.DataFactory,
 	maxTs types.TS,
 	lsn uint64,
-	valid bool,
-) (err error) {
-	if !valid {
-		logutil.Infof("checkpoint version is too small, LSN check is disable")
-	}
-
+	onDone func(), // onDone must be called after replay is done or failed
+) (ctl *replayCtl, err error) {
 	db.LogtailMgr.UpdateMaxCommittedLSN(lsn)
 
-	replayer := newWalReplayer(dataFactory, db, maxTs, lsn, valid)
-	if err = replayer.Replay(ctx); err != nil {
-		return
+	replayer := newWalReplayer(db, maxTs, lsn)
+	var mode driver.ReplayMode
+	if db.GetTxnMode() == DBTxnMode_Replay {
+		mode = driver.ReplayMode_ReplayForever
+	} else {
+		mode = driver.ReplayMode_ReplayForWrite
 	}
-
-	// TODO: error?
-	db.usageMemo.EstablishFromCKPs(db.Catalog)
-	db.Catalog.ReplayTableRows()
+	if ctl, err = replayer.Schedule(ctx, mode, onDone); err != nil {
+		if onDone != nil {
+			onDone()
+		}
+	}
 	return
 }
 
@@ -348,13 +347,11 @@ func (db *DB) StopTxnHeartbeat() {
 }
 
 func (db *DB) Close() error {
-	if err := db.Closed.Load(); err != nil {
-		panic(err)
+	if !db.Closed.CompareAndSwap(nil, ErrClosed) {
+		panic(ErrClosed)
 	}
-	db.Closed.Store(ErrClosed)
 	db.Controller.Stop()
 	db.CronJobs.Reset()
-	db.BGScanner.Stop()
 	db.BGFlusher.Stop()
 	db.BGCheckpointRunner.Stop()
 	db.Runtime.Scheduler.Stop()

@@ -44,26 +44,26 @@ type ObjectListReplayer interface {
 
 func (catalog *Catalog) ReplayCmd(
 	txncmd txnif.TxnCmd,
-	dataFactory DataFactory,
-	observer wal.ReplayObserver) {
+	observer wal.ReplayObserver,
+) {
 	switch txncmd.GetType() {
 	case txnbase.IOET_WALTxnCommand_Composed:
 		cmds := txncmd.(*txnbase.ComposedCmd)
 		for _, cmds := range cmds.Cmds {
-			catalog.ReplayCmd(cmds, dataFactory, observer)
+			catalog.ReplayCmd(cmds, observer)
 		}
 	case IOET_WALTxnCommand_Database:
 		cmd := txncmd.(*EntryCommand[*EmptyMVCCNode, *DBNode])
 		catalog.onReplayUpdateDatabase(cmd, observer)
 	case IOET_WALTxnCommand_Table:
 		cmd := txncmd.(*EntryCommand[*TableMVCCNode, *TableNode])
-		catalog.onReplayUpdateTable(cmd, dataFactory, observer)
+		catalog.onReplayUpdateTable(cmd, observer)
 	case IOET_WALTxnCommand_Object:
 		cmd := txncmd.(*EntryCommand[*ObjectMVCCNode, *ObjectNode])
-		catalog.onReplayUpdateObject(cmd, dataFactory, observer)
+		catalog.onReplayUpdateObject(cmd, observer)
 	// case IOET_WALTxnCommand_Block:
 	// 	cmd := txncmd.(*EntryCommand[*MetadataMVCCNode, *BlockNode])
-	// 	catalog.onReplayUpdateBlock(cmd, dataFactory, observer)
+	// 	catalog.onReplayUpdateBlock(cmd, observer)
 	// case IOET_WALTxnCommand_Segment:
 	// 	// segment is deprecated
 	// 	return
@@ -103,7 +103,7 @@ func (catalog *Catalog) onReplayUpdateDatabase(cmd *EntryCommand[*EmptyMVCCNode,
 	}
 }
 
-func (catalog *Catalog) onReplayUpdateTable(cmd *EntryCommand[*TableMVCCNode, *TableNode], dataFactory DataFactory, _ wal.ReplayObserver) {
+func (catalog *Catalog) onReplayUpdateTable(cmd *EntryCommand[*TableMVCCNode, *TableNode], _ wal.ReplayObserver) {
 	catalog.OnReplayTableID(cmd.ID.TableID)
 	// prepareTS := cmd.GetTs()
 	// if prepareTS.LessEq(catalog.GetCheckpointed().MaxTS) {
@@ -123,7 +123,7 @@ func (catalog *Catalog) onReplayUpdateTable(cmd *EntryCommand[*TableMVCCNode, *T
 		tbl = NewReplayTableEntry()
 		tbl.ID = cmd.ID.TableID
 		tbl.db = db
-		tbl.tableData = dataFactory.MakeTableFactory()(tbl)
+		tbl.tableData = catalog.MakeTableFactory()(tbl)
 		tbl.TableNode = cmd.node
 		tbl.TableNode.schema.Store(un.BaseNode.Schema)
 		tbl.InsertLocked(un)
@@ -156,8 +156,8 @@ func (catalog *Catalog) onReplayUpdateTable(cmd *EntryCommand[*TableMVCCNode, *T
 
 func (catalog *Catalog) onReplayUpdateObject(
 	cmd *EntryCommand[*ObjectMVCCNode, *ObjectNode],
-	dataFactory DataFactory,
-	_ wal.ReplayObserver) {
+	_ wal.ReplayObserver,
+) {
 	catalog.OnReplayObjectID(cmd.node.SortHint)
 
 	db, err := catalog.GetDatabaseByID(cmd.ID.DbID)
@@ -215,7 +215,7 @@ func (catalog *Catalog) onReplayUpdateObject(
 	}
 
 	if obj.objData == nil {
-		obj.objData = dataFactory.MakeObjectFactory()(obj)
+		obj.objData = catalog.MakeObjectFactory()(obj)
 	} else {
 		deleteAt := obj.GetDeleteAt()
 		if !obj.IsAppendable() || (obj.IsAppendable() && !deleteAt.IsEmpty()) {
@@ -231,7 +231,6 @@ func (catalog *Catalog) onReplayUpdateObject(
 func (catalog *Catalog) RelayFromSysTableObjects(
 	ctx context.Context,
 	readTxn txnif.AsyncTxn,
-	dataFactory DataFactory,
 	readFunc func(context.Context, *TableEntry, txnif.AsyncTxn) *containers.Batch,
 	sortFunc func([]containers.Vector, int) error,
 	replayer ObjectListReplayer,
@@ -300,7 +299,7 @@ func (catalog *Catalog) RelayFromSysTableObjects(
 		}
 		closeCB = append(closeCB, columnBatch.Close)
 		catalog.ReplayMOTables(
-			ctx, txnNode, dataFactory, tableBatch, columnBatch, replayer,
+			ctx, txnNode, tableBatch, columnBatch, replayer,
 		)
 	}
 	// logutil.Info(catalog.SimplePPString(common.PPL3))
@@ -375,7 +374,7 @@ func (catalog *Catalog) onReplayCreateDB(
 	db.InsertLocked(un)
 }
 
-func (catalog *Catalog) ReplayMOTables(ctx context.Context, txnNode *txnbase.TxnMVCCNode, dataF DataFactory, tblBat, colBat *containers.Batch, replayer ObjectListReplayer) {
+func (catalog *Catalog) ReplayMOTables(ctx context.Context, txnNode *txnbase.TxnMVCCNode, tblBat, colBat *containers.Batch, replayer ObjectListReplayer) {
 	tids := vector.MustFixedColNoTypeCheck[uint64](tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_ID).GetDownstreamVector())
 	dbids := vector.MustFixedColNoTypeCheck[uint64](tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_DBID).GetDownstreamVector())
 	versions := vector.MustFixedColNoTypeCheck[uint32](tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Version).GetDownstreamVector())
@@ -431,13 +430,13 @@ func (catalog *Catalog) ReplayMOTables(ctx context.Context, txnNode *txnbase.Txn
 			if err := schema.Finalize(true); err != nil {
 				panic(err)
 			}
-			catalog.onReplayCreateTable(dbid, tid, schema, txnNode, dataF)
+			catalog.onReplayCreateTable(dbid, tid, schema, txnNode)
 		}
 		replayer.Submit(dbids[i], replayFn)
 	}
 }
 
-func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, txnNode *txnbase.TxnMVCCNode, dataFactory DataFactory) {
+func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, txnNode *txnbase.TxnMVCCNode) {
 	catalog.OnReplayTableID(tid)
 	db, err := catalog.GetDatabaseByID(dbid)
 	if err != nil {
@@ -481,7 +480,7 @@ func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, tx
 	tbl.TableNode.schema.Store(schema)
 	tbl.db = db
 	tbl.ID = tid
-	tbl.tableData = dataFactory.MakeTableFactory()(tbl)
+	tbl.tableData = catalog.MakeTableFactory()(tbl)
 	_ = db.AddEntryLocked(tbl, nil, true)
 	un := &MVCCNode[*TableMVCCNode]{
 		EntryMVCCNode: EntryMVCCNode{
@@ -500,7 +499,6 @@ func (catalog *Catalog) OnReplayObjectBatch_V2(
 	objectType int8,
 	stats objectio.ObjectStats,
 	create, delete types.TS,
-	dataFactory DataFactory,
 ) {
 	db, err := catalog.GetDatabaseByID(dbid)
 	if err != nil {
@@ -585,7 +583,7 @@ func (catalog *Catalog) OnReplayObjectBatch_V2(
 		}
 	}
 	if obj.objData == nil {
-		obj.objData = dataFactory.MakeObjectFactory()(obj)
+		obj.objData = catalog.MakeObjectFactory()(obj)
 	} else {
 		deleteAt := obj.GetDeleteAt()
 		if !obj.IsAppendable() || (obj.IsAppendable() && !deleteAt.IsEmpty()) {
@@ -597,7 +595,6 @@ func (catalog *Catalog) OnReplayObjectBatch(
 	replayer ObjectListReplayer,
 	objectInfo *containers.Batch,
 	isTombstone bool,
-	dataFactory DataFactory,
 	forSys bool,
 ) {
 	tids := vector.MustFixedColNoTypeCheck[uint64](
@@ -631,7 +628,7 @@ func (catalog *Catalog) OnReplayObjectBatch(
 			objectNode := ReadObjectInfoTuple(objs, i)
 			sid := objectNode.ObjectName().ObjectId()
 			catalog.onReplayCheckpointObject(
-				dbid, tid, sid, createTSs[i], deleteTSs[i], startTSs[i], prepareTSs[i], commitTSs[i], objectNode, isTombstone, dataFactory)
+				dbid, tid, sid, createTSs[i], deleteTSs[i], startTSs[i], prepareTSs[i], commitTSs[i], objectNode, isTombstone)
 		}
 		replayer.Submit(tid, replayFn)
 	}
@@ -644,7 +641,6 @@ func (catalog *Catalog) onReplayCheckpointObject(
 	start, prepare, end types.TS,
 	objNode *ObjectMVCCNode,
 	isTombstone bool,
-	dataFactory DataFactory,
 ) {
 	db, err := catalog.GetDatabaseByID(dbid)
 	if err != nil {
@@ -751,7 +747,7 @@ func (catalog *Catalog) onReplayCheckpointObject(
 		}
 	}
 	if obj.objData == nil {
-		obj.objData = dataFactory.MakeObjectFactory()(obj)
+		obj.objData = catalog.MakeObjectFactory()(obj)
 	} else {
 		deleteAt := obj.GetDeleteAt()
 		if !obj.IsAppendable() || (obj.IsAppendable() && !deleteAt.IsEmpty()) {
