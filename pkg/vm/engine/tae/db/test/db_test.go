@@ -11504,3 +11504,46 @@ func Test_OpenWithError(t *testing.T) {
 	_, err = db.Open(ctx, dir, nil)
 	assert.ErrorIs(t, db.ErrCronJobsOpen, err)
 }
+
+func Test_Controller1(t *testing.T) {
+	ctx := context.Background()
+	ctl := db.NewController(nil)
+	ctl.Start()
+	var count atomic.Int32
+	for i := 0; i < 3; i++ {
+		_, err := ctl.ScheduleCustomized(ctx, func() error {
+			time.Sleep(time.Millisecond * 1)
+			count.Add(1)
+			return nil
+		})
+		assert.NoError(t, err)
+	}
+
+	ctl.Stop()
+	assert.Equal(t, int32(3), count.Load())
+}
+
+func Test_Controller2(t *testing.T) {
+	ctx := context.Background()
+	ctl := db.NewController(nil)
+	ctl.Start()
+	var count atomic.Int32
+	for i := 0; i < 2; i++ {
+		_, err := ctl.ScheduleCustomized(ctx, func() error {
+			time.Sleep(time.Millisecond * 2)
+			count.Add(1)
+			return nil
+		})
+		assert.NoError(t, err)
+	}
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ctl.Stop()
+			assert.Equal(t, int32(2), count.Load())
+		}()
+	}
+	wg.Wait()
+}
