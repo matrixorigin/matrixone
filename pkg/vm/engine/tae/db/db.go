@@ -352,6 +352,10 @@ func (db *DB) Close() error {
 	}
 	var err error
 	db.Controller.Stop(func() error {
+		if db.ReplayCtl != nil {
+			// TODO: error handling
+			db.ReplayCtl.Stop()
+		}
 		db.CronJobs.Reset()
 		db.BGFlusher.Stop()
 		db.BGCheckpointRunner.Stop()
