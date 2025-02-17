@@ -175,8 +175,9 @@ func NewController(db *DB) *Controller {
 	return c
 }
 
-func (c *Controller) stopReceiver() bool {
+func (c *Controller) stopReceiver(fn func() error) bool {
 	closeCmd := newControlCmd(context.Background(), ControlCmd_Customized, "")
+	closeCmd.fn = fn
 	if c.closedCmd.CompareAndSwap(nil, closeCmd) {
 		now := time.Now()
 		for {
@@ -465,8 +466,8 @@ func (c *Controller) Start() {
 	c.queue.Start()
 }
 
-func (c *Controller) Stop() {
-	if c.stopReceiver() {
+func (c *Controller) Stop(fn func() error) {
+	if c.stopReceiver(fn) {
 		c.queue.Stop()
 	}
 }

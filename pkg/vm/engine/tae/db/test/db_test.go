@@ -11519,7 +11519,7 @@ func Test_Controller1(t *testing.T) {
 		assert.NoError(t, err)
 	}
 
-	ctl.Stop()
+	ctl.Stop(nil)
 	assert.Equal(t, int32(3), count.Load())
 }
 
@@ -11541,7 +11541,7 @@ func Test_Controller2(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			ctl.Stop()
+			ctl.Stop(nil)
 			assert.Equal(t, int32(2), count.Load())
 		}()
 	}

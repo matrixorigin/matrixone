@@ -350,17 +350,21 @@ func (db *DB) Close() error {
 	if !db.Closed.CompareAndSwap(nil, ErrClosed) {
 		panic(ErrClosed)
 	}
-	db.Controller.Stop()
-	db.CronJobs.Reset()
-	db.BGFlusher.Stop()
-	db.BGCheckpointRunner.Stop()
-	db.Runtime.Scheduler.Stop()
-	db.TxnMgr.Stop()
-	db.LogtailMgr.Stop()
-	db.Catalog.Close()
-	db.DiskCleaner.Stop()
-	db.Wal.Close()
-	db.Runtime.TransferTable.Close()
-	db.usageMemo.Clear()
-	return db.DBLocker.Close()
+	var err error
+	db.Controller.Stop(func() error {
+		db.CronJobs.Reset()
+		db.BGFlusher.Stop()
+		db.BGCheckpointRunner.Stop()
+		db.Runtime.Scheduler.Stop()
+		db.TxnMgr.Stop()
+		db.LogtailMgr.Stop()
+		db.Catalog.Close()
+		db.DiskCleaner.Stop()
+		db.Wal.Close()
+		db.Runtime.TransferTable.Close()
+		db.usageMemo.Clear()
+		err = db.DBLocker.Close()
+		return err
+	})
+	return err
 }
