@@ -661,10 +661,14 @@ func (c *Controller) AssembleDB(ctx context.Context) (err error) {
 		return
 	}
 
+	// in the write mode
+	// 1. we need to wait the replayCtl to finish the wal replay
+	// 2. close the replayCtl after replaying the wal in write mode
+	// in the replay mode
+	// there is one replay loop running in the background
+	// replayCtl is will be assigned to db.ReplayCtl
+	// we can use db.ReplayCtl to control the replay loop
 	if db.IsWriteMode() {
-		// in the write mode
-		// 1. we need to wait the replayCtl to finish the wal replay
-		// 2. close the replayCtl after replaying the wal in write mode
 		if err = replayCtl.Wait(); err != nil {
 			return
 		}

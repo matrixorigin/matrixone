@@ -17,6 +17,7 @@ package db
 import (
 	"context"
 	"fmt"
+	"io"
 	"sync/atomic"
 	"time"
 
@@ -67,25 +68,17 @@ func Open(
 	// TODO: remove
 	fillRuntimeOptions(opts)
 
-	dbLocker, err := createDBLock(dirname)
-
-	logutil.Info(
-		Phase_Open,
-		zap.String("db-dirname", dirname),
-		zap.String("config", opts.JsonString()),
-		zap.Error(err),
-	)
-
-	if err != nil {
-		return nil, err
-	}
-
 	var (
+		dbLocker      io.Closer
 		startTime     = time.Now()
 		rollbackSteps stepFuncs
+		logger        = logutil.Info
 	)
 
 	defer func() {
+		if err == nil && dbLocker != nil {
+			db.DBLocker, dbLocker = dbLocker, nil
+		}
 		if dbLocker != nil {
 			dbLocker.Close()
 		}
@@ -93,11 +86,14 @@ func Open(
 			if err2 := rollbackSteps.Apply("open-tae", true, 1); err2 != nil {
 				panic(fmt.Sprintf("open-tae: rollback failed, %s", err2))
 			}
+			logger = logutil.Error
 		}
-		logutil.Info(
+		logger(
 			Phase_Open,
 			zap.Duration("total-cost", time.Since(startTime)),
 			zap.String("mode", db.GetTxnMode().String()),
+			zap.String("db-dirname", dirname),
+			zap.String("config", opts.JsonString()),
 			zap.Error(err),
 		)
 	}()
@@ -112,9 +108,15 @@ func Open(
 		opt(db)
 	}
 
+	if db.IsWriteMode() {
+		if dbLocker, err = createDBLock(dirname); err != nil {
+			return
+		}
+	}
+
 	transferTable, err := model.NewTransferTable[*model.TransferHashPage](ctx, opts.LocalFs)
 	if err != nil {
-		panic(fmt.Sprintf("open-tae: model.NewTransferTable failed, %s", err))
+		return
 	}
 
 	switch opts.LogStoreT {
@@ -163,7 +165,6 @@ func Open(
 	}
 	db.Controller.Start()
 
-	db.DBLocker, dbLocker = dbLocker, nil
 	// For debug or test
 	//fmt.Println(db.Catalog.SimplePPString(common.PPL3))
 	return

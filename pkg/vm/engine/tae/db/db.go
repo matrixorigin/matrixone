@@ -367,7 +367,9 @@ func (db *DB) Close() error {
 		db.Wal.Close()
 		db.Runtime.TransferTable.Close()
 		db.usageMemo.Clear()
-		err = db.DBLocker.Close()
+		if db.DBLocker != nil {
+			err = db.DBLocker.Close()
+		}
 		return err
 	})
 	return err
