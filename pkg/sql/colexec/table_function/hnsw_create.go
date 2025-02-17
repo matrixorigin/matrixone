@@ -103,15 +103,6 @@ func hnswCreatePrepare(proc *process.Process, arg *TableFunction) (tvfState, err
 	arg.ctr.executorsForArgs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, arg.Args)
 	arg.ctr.argVecs = make([]*vector.Vector, len(arg.Args))
 
-	/*
-		val, err := proc.GetResolveVariableFunc()("experimental_hnsw_index", true, false)
-		if err != nil {
-			return nil, err
-		}
-		//os.Stderr.WriteString(fmt.Sprintf("Prepare ef_search %d\n", val.(int64)))
-		os.Stderr.WriteString(fmt.Sprintf("Prepare ef_search %v\n", val))
-	*/
-
 	return st, err
 
 }
