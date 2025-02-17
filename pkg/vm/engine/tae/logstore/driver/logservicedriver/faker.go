@@ -164,7 +164,7 @@ type mockBackend struct {
 	shardId   uint64
 }
 
-func newMockBackend() *mockBackend {
+func NewMockBackend() *mockBackend {
 	return &mockBackend{nextPSN: 1, shardId: 1}
 }
 
