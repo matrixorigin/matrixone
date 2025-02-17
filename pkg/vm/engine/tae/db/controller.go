@@ -480,6 +480,7 @@ func (c *Controller) ScheduleCustomized(
 	command.fn = fn
 	if err = c.onReceiveCmd(command); err != nil {
 		cmd = nil
+		return
 	}
 	cmd = command
 	return
