@@ -134,14 +134,14 @@ func (w *StoreImpl) onCheckpointIntent(intents ...any) {
 func (w *StoreImpl) postCheckpointWaited() {
 	w.StoreInfo.onCheckpoint()
 	start := time.Now()
-	gid, dsn := w.getDriverCheckpointed()
+	dsn, found := w.getCheckpointedDSN()
 	logutil.Info(
 		"TRACE-WAL-TRUNCATE",
 		zap.Duration("calculate-dsn-cost", time.Since(start)),
 		zap.Uint64("dsn", dsn),
-		zap.Uint32("group", gid),
+		zap.Bool("found", found),
 	)
-	if gid == 0 {
+	if !found {
 		return
 	}
 	if dsn > w.watermark.dsnCheckpointed.Load() {
@@ -149,7 +149,6 @@ func (w *StoreImpl) postCheckpointWaited() {
 			if err := w.driver.Truncate(dsn); err != nil {
 				logutil.Error(
 					"TRACE-WAL-TRUNCATE-Error",
-					zap.Uint32("group", gid),
 					zap.Uint64("dsn-intent", dsn),
 					zap.Uint64("dsn-checkpointed", w.watermark.dsnCheckpointed.Load()),
 					zap.Int("retry", i),
@@ -164,7 +163,6 @@ func (w *StoreImpl) postCheckpointWaited() {
 			logutil.Info(
 				"TRACE-WAL-TRUNCATE-GC-Store",
 				zap.Duration("duration", time.Since(start)),
-				zap.Uint32("group", gid),
 				zap.Uint64("dsn", dsn),
 				zap.Uint64("dsn-prev", prev),
 			)

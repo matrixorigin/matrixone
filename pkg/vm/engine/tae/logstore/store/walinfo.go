@@ -142,7 +142,7 @@ func (w *StoreInfo) onAppend() {
 	w.syncedMu.Unlock()
 }
 
-func (w *StoreInfo) retryGetDriverLsn(lsn uint64) (dsn uint64, err error) {
+func (w *StoreInfo) retryGetDSN(lsn uint64) (dsn uint64, err error) {
 	gid := entry.GTCustomized
 	dsn, err = w.getDriverLsn(gid, lsn)
 	if err == ErrGroupNotFount || err == ErrLsnNotFount {
@@ -248,7 +248,7 @@ func (w *StoreInfo) onCheckpoint() {
 func (w *StoreInfo) GetTruncated() uint64 {
 	return w.watermark.dsnCheckpointed.Load()
 }
-func (w *StoreInfo) getDriverCheckpointed() (gid uint32, dsn uint64) {
+func (w *StoreInfo) getCheckpointedDSN() (dsn uint64, found bool) {
 	// deep copy watermark
 	watermark := make(map[uint32]uint64, 0)
 	w.watermark.mu.Lock()
@@ -265,16 +265,16 @@ func (w *StoreInfo) getDriverCheckpointed() (gid uint32, dsn uint64) {
 	maxLsn := watermark[entry.GTCustomized]
 	lsn := w.checkpointed[entry.GTCustomized]
 	if lsn < maxLsn {
-		drLsn, err := w.retryGetDriverLsn(lsn + 1)
+		drLsn, err := w.retryGetDSN(lsn + 1)
 		if err != nil {
 			if err == ErrLsnTooSmall {
-				return entry.GTCustomized, 0
+				return 0, true
 			}
 			panic(err)
 		}
 		drLsn--
-		return entry.GTCustomized, drLsn
+		return drLsn, true
 	} else {
-		return entry.GTCustomized, maxLsn
+		return maxLsn, true
 	}
 }
