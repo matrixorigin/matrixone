@@ -102,7 +102,7 @@ func (w *StoreInfo) GetCheckpointed() (lsn uint64) {
 	return
 }
 
-func (w *StoreInfo) allocateLsn(gid uint32) uint64 {
+func (w *StoreInfo) nextLSN(gid uint32) uint64 {
 	w.watermark.mu.Lock()
 	defer w.watermark.mu.Unlock()
 	if lsn, ok := w.watermark.nextLSN[gid]; ok {
@@ -114,7 +114,7 @@ func (w *StoreInfo) allocateLsn(gid uint32) uint64 {
 	return 1
 }
 
-func (w *StoreInfo) logDriverLsn(driverEntry *driverEntry.Entry) {
+func (w *StoreInfo) logDSN(driverEntry *driverEntry.Entry) {
 	info := driverEntry.Info
 
 	if w.syncing[info.Group] < info.GroupLSN {

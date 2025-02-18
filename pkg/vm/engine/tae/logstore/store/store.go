@@ -109,7 +109,7 @@ func (w *StoreImpl) doAppend(gid uint32, e entry.Entry) (drEntry *driverEntry.En
 	}
 	w.appendMu.Lock()
 	defer w.appendMu.Unlock()
-	lsn = w.allocateLsn(gid)
+	lsn = w.nextLSN(gid)
 	v1 := e.GetInfo()
 	var info *entry.Info
 	if v1 == nil {
@@ -167,7 +167,7 @@ func (w *StoreImpl) onDoneWithErrQueue(items ...any) {
 func (w *StoreImpl) onLogInfoQueue(items ...any) {
 	for _, item := range items {
 		e := item.(*driverEntry.Entry)
-		w.logDriverLsn(e)
+		w.logDSN(e)
 	}
 	w.onAppend()
 }

@@ -63,7 +63,7 @@ func (w *StoreImpl) Replay(
 	return nil
 }
 
-func (w *StoreImpl) onReplayLsn(g uint32, lsn uint64) {
+func (w *StoreImpl) onReplayLSN(g uint32, lsn uint64) {
 	_, ok := w.lsn2dsn.minLSN[g]
 	if !ok {
 		w.lsn2dsn.minLSN[g] = lsn
@@ -80,8 +80,8 @@ func (w *StoreImpl) replayEntry(e *entry.Entry, h ApplyHandle) (driver.ReplayEnt
 		w.logCheckpointInfo(info)
 		// TODO:  should return?
 	}
-	w.logDriverLsn(e)
-	w.onReplayLsn(info.Group, info.GroupLSN)
+	w.logDSN(e)
+	w.onReplayLSN(info.Group, info.GroupLSN)
 	state := h(info.Group, info.GroupLSN, walEntry.GetPayload(), walEntry.GetType(), walEntry.GetInfo())
 	return state, nil
 }
