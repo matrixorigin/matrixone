@@ -107,3 +107,25 @@ func wrapSizeMismatchErr(p *error) {
 		*p = moerr.NewSizeNotMatchNoCtx("")
 	}
 }
+
+type errorWrap struct {
+	what string
+	err  error
+}
+
+var _ error = errorWrap{}
+
+func (e errorWrap) Error() string {
+	return e.what + ": " + e.err.Error()
+}
+
+func (e errorWrap) Unwrap() error {
+	return e.err
+}
+
+func wrapError(what string, err error) errorWrap {
+	return errorWrap{
+		what: what,
+		err:  err,
+	}
+}

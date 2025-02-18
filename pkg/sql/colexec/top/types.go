@@ -95,15 +95,14 @@ func (top *Top) Release() {
 }
 
 func (top *Top) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	top.ctr.reset()
+	top.ctr.reset(proc)
 }
 
 func (top *Top) Free(proc *process.Process, pipelineFailed bool, err error) {
 	top.ctr.free(proc)
 }
 
-func (ctr *container) reset() {
-
+func (ctr *container) reset(proc *process.Process) {
 	ctr.n = 0
 	ctr.state = 0
 	ctr.sels = nil
@@ -123,9 +122,15 @@ func (ctr *container) reset() {
 	ctr.desc = false
 	ctr.topValueZM = nil
 	if ctr.bat != nil {
-		ctr.bat.CleanOnlyData()
+		ctr.bat.Clean(proc.Mp())
+		ctr.bat = nil
 	}
 
+	if ctr.buildBat != nil {
+		// should not clean ctr.buildBat, because ctr.buildBat's value from PreOperator or ctr.executorsForOrderColumn.Eval
+		// PreOperator or ctr.executorsForOrderColumn will clean them
+		ctr.buildBat = nil
+	}
 }
 
 func (ctr *container) free(proc *process.Process) {

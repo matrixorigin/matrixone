@@ -12,22 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build cgo && !musl
+//go:build cgo && musl
 
 package malloc
 
-/*
-#include <stdlib.h>
-#include <malloc.h>
-*/
-import "C"
-
-func init() {
-	// malloc tunings
-	C.mallopt(C.M_TOP_PAD, 0)        // no sbrk padding
-	C.mallopt(C.M_MMAP_THRESHOLD, 0) // always use mmap
-}
-
 func returnMallocMemoryToOS() {
-	C.malloc_trim(0)
+	// not supported by musl
 }
