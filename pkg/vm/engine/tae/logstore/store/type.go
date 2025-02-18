@@ -32,7 +32,6 @@ type Store interface {
 	RangeCheckpoint(start, end uint64, files ...string) (ckpEntry entry.Entry, err error)
 
 	GetCurrSeqNum() (lsn uint64)
-	GetSynced(gid uint32) (lsn uint64)
 	GetPendding() (cnt uint64)
 	GetCheckpointed(gid uint32) (lsn uint64)
 	GetTruncated() uint64

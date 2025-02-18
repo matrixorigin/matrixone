@@ -87,13 +87,6 @@ func (w *StoreInfo) GetCurrSeqNum() (lsn uint64) {
 	return w.watermark.nextLSN[entry.GTCustomized]
 }
 
-func (w *StoreInfo) GetSynced(gid uint32) (lsn uint64) {
-	w.syncedMu.RLock()
-	defer w.syncedMu.RUnlock()
-	lsn = w.synced[gid]
-	return
-}
-
 func (w *StoreInfo) GetPendding() (cnt uint64) {
 	lsn := w.GetCurrSeqNum()
 	w.ckpcntMu.RLock()
