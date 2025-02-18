@@ -33,6 +33,7 @@ type StoreImpl struct {
 
 	driver driver.Driver
 
+	appendMu          sync.Mutex
 	appendWg          sync.WaitGroup
 	driverAppendQueue sm.Queue
 	doneWithErrQueue  sm.Queue
@@ -103,6 +104,8 @@ func (w *StoreImpl) doAppend(gid uint32, e entry.Entry) (drEntry *driverEntry.En
 		w.appendWg.Done()
 		return nil, 0, sm.ErrClose
 	}
+	w.appendMu.Lock()
+	defer w.appendMu.Unlock()
 	lsn = w.allocateLsn(gid)
 	v1 := e.GetInfo()
 	var info *entry.Info
