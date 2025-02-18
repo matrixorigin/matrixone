@@ -31,6 +31,8 @@ const (
 	InnerProduct
 	CosineDistance
 	L1Distance
+
+	DistanceTypeCount
 )
 
 type InitType uint16

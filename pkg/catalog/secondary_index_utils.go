@@ -76,6 +76,7 @@ const (
 	IndexAlgoParamOpType_l2  = "vector_l2_ops"
 	IndexAlgoParamOpType_ip  = "vector_ip_ops"
 	IndexAlgoParamOpType_cos = "vector_cosine_ops"
+	IndexAlgoParamOpType_l1  = "vector_l1_ops"
 )
 
 const (
@@ -123,7 +124,8 @@ func IndexParamsToStringList(indexParams string) (string, error) {
 		opType = ToLower(opType)
 		if opType != IndexAlgoParamOpType_l2 &&
 			opType != IndexAlgoParamOpType_ip &&
-			opType != IndexAlgoParamOpType_cos {
+			opType != IndexAlgoParamOpType_cos &&
+			opType != IndexAlgoParamOpType_l1 {
 			return "", moerr.NewInternalErrorNoCtxf("invalid op_type: '%s'", opType)
 		}
 
@@ -216,7 +218,8 @@ func indexParamsToMap(def interface{}) (map[string]string, error) {
 				opType := ToLower(idx.IndexOption.AlgoParamVectorOpType)
 				if opType != IndexAlgoParamOpType_l2 &&
 					opType != IndexAlgoParamOpType_ip &&
-					opType != IndexAlgoParamOpType_cos {
+					opType != IndexAlgoParamOpType_cos &&
+					opType != IndexAlgoParamOpType_l1 {
 
 					return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid op_type: '%s'",
 						opType))
