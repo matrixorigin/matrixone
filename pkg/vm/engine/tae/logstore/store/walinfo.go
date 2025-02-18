@@ -48,17 +48,10 @@ type StoreInfo struct {
 		dsnCheckpointed atomic.Uint64
 		lsnCheckpointed atomic.Uint64
 	}
-
-	syncing  map[uint32]uint64 //todo
-	synced   map[uint32]uint64 //todo
-	syncedMu sync.RWMutex
 }
 
 func newWalInfo() *StoreInfo {
-	s := StoreInfo{
-		syncing: make(map[uint32]uint64),
-		synced:  make(map[uint32]uint64),
-	}
+	var s StoreInfo
 	s.watermark.nextLSN = make(map[uint32]uint64)
 	s.lsn2dsn.mapping = make(map[uint32]map[uint64]uint64)
 	return &s
@@ -95,11 +88,6 @@ func (w *StoreInfo) nextLSN(gid uint32) uint64 {
 
 func (w *StoreInfo) logDSN(driverEntry *driverEntry.Entry) {
 	info := driverEntry.Info
-
-	if w.syncing[info.Group] < info.GroupLSN {
-		w.syncing[info.Group] = info.GroupLSN
-	}
-
 	w.lsn2dsn.mu.Lock()
 	defer w.lsn2dsn.mu.Unlock()
 	groupMapping, ok := w.lsn2dsn.mapping[info.Group]
@@ -108,14 +96,6 @@ func (w *StoreInfo) logDSN(driverEntry *driverEntry.Entry) {
 		w.lsn2dsn.mapping[info.Group] = groupMapping
 	}
 	groupMapping[info.GroupLSN] = driverEntry.DSN
-}
-
-func (w *StoreInfo) onAppend() {
-	w.syncedMu.Lock()
-	for gid, lsn := range w.syncing {
-		w.synced[gid] = lsn
-	}
-	w.syncedMu.Unlock()
 }
 
 func (w *StoreInfo) gcDSNMapping(dsnIntent uint64) {

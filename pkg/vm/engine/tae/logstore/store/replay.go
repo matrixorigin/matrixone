@@ -40,15 +40,10 @@ func (w *StoreImpl) Replay(
 		panic(err)
 	}
 	w.watermark.dsnCheckpointed.Store(dsn)
-	for g, lsn := range w.syncing {
-		w.watermark.nextLSN[g] = lsn
-		w.synced[g] = lsn
-	}
 
 	if lsnCheckpointed := w.watermark.lsnCheckpointed.Load(); lsnCheckpointed > 0 {
 		if w.watermark.nextLSN[logEntry.GTCustomized] == 0 {
 			w.watermark.nextLSN[logEntry.GTCustomized] = lsnCheckpointed
-			w.synced[logEntry.GTCustomized] = lsnCheckpointed
 		}
 	}
 
@@ -64,6 +59,10 @@ func (w *StoreImpl) replayEntry(e *entry.Entry, h ApplyHandle) (driver.ReplayEnt
 	case GroupCKP:
 		w.updateLSNCheckpointed(info)
 		// TODO:  should return?
+	}
+	// update nextLSN
+	if w.watermark.nextLSN[info.Group] < info.GroupLSN {
+		w.watermark.nextLSN[info.Group] = info.GroupLSN
 	}
 	w.logDSN(e)
 	state := h(info.Group, info.GroupLSN, walEntry.GetPayload(), walEntry.GetType(), walEntry.GetInfo())

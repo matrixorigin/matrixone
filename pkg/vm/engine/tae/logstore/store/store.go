@@ -28,21 +28,23 @@ import (
 var DefaultMaxBatchSize = 10000
 
 type StoreImpl struct {
-	*StoreInfo
 	sm.ClosedState
+	*StoreInfo
 
 	driver driver.Driver
 
-	appendMu          sync.Mutex
-	appendWg          sync.WaitGroup
+	appendMu sync.Mutex
+	appendWg sync.WaitGroup
+
 	driverAppendQueue sm.Queue
 	doneWithErrQueue  sm.Queue
 	logInfoQueue      sm.Queue
-
-	checkpointQueue sm.Queue
+	checkpointQueue   sm.Queue
 }
 
-func NewStoreWithLogserviceDriver(factory logservicedriver.LogServiceClientFactory) Store {
+func NewStoreWithLogserviceDriver(
+	factory logservicedriver.LogServiceClientFactory,
+) Store {
 	cfg := logservicedriver.NewConfig(
 		"",
 		logservicedriver.WithConfigOptClientFactory(factory),
@@ -60,6 +62,7 @@ func NewStoreWithBatchStoreDriver(
 	}
 	return NewStore(driver)
 }
+
 func NewStore(driver driver.Driver) *StoreImpl {
 	w := &StoreImpl{
 		StoreInfo: newWalInfo(),
@@ -169,5 +172,4 @@ func (w *StoreImpl) onLogInfoQueue(items ...any) {
 		e := item.(*driverEntry.Entry)
 		w.logDSN(e)
 	}
-	w.onAppend()
 }
