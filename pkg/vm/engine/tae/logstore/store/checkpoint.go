@@ -120,21 +120,19 @@ func (w *StoreImpl) onCheckpointIntent(intents ...any) {
 		}
 		logger(
 			"TRACE-WAL-TRUNCATE-Intent-Committed",
-			zap.Uint32("group", e.Info.Checkpoints[0].Group),
-			zap.Uint64("lsn", e.Info.Checkpoints[0].Ranges.GetMax()),
+			zap.Uint64("lsn", e.Info.Checkpoints[0].GetMax()),
 			zap.Error(err),
 		)
 		if err == nil {
-			w.logCheckpointInfo(e.Info)
+			w.updateLSNCheckpointed(e.Info)
 		}
 	}
-	w.postCheckpointWaited()
+	w.updateDSNCheckpointed()
 }
 
-func (w *StoreImpl) postCheckpointWaited() {
-	w.StoreInfo.onCheckpoint()
+func (w *StoreImpl) updateDSNCheckpointed() {
 	start := time.Now()
-	dsn, found := w.getCheckpointedDSN()
+	dsn, found := w.getCheckpointedDSNIntent()
 	logutil.Info(
 		"TRACE-WAL-TRUNCATE",
 		zap.Duration("calculate-dsn-cost", time.Since(start)),
@@ -158,8 +156,7 @@ func (w *StoreImpl) postCheckpointWaited() {
 			}
 			start = time.Now()
 			w.gcDSNMapping(dsn)
-			prev := w.watermark.dsnCheckpointed.Load()
-			w.watermark.dsnCheckpointed.Store(dsn)
+			prev := w.watermark.dsnCheckpointed.Swap(dsn)
 			logutil.Info(
 				"TRACE-WAL-TRUNCATE-GC-Store",
 				zap.Duration("duration", time.Since(start)),

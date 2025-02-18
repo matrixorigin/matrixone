@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
+	logEntry "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 )
 
 func (w *StoreImpl) Replay(
@@ -34,40 +35,24 @@ func (w *StoreImpl) Replay(
 	if err != nil {
 		return err
 	}
-	lsn, err := w.driver.GetTruncated()
+	dsn, err := w.driver.GetTruncated()
 	if err != nil {
 		panic(err)
 	}
-	w.StoreInfo.onCheckpoint()
-	w.watermark.dsnCheckpointed.Store(lsn)
+	w.watermark.dsnCheckpointed.Store(dsn)
 	for g, lsn := range w.syncing {
 		w.watermark.nextLSN[g] = lsn
 		w.synced[g] = lsn
 	}
-	for g, ckped := range w.checkpointed {
-		if w.watermark.nextLSN[g] == 0 {
-			w.watermark.nextLSN[g] = ckped
-			w.synced[g] = ckped
-		}
-		if w.lsn2dsn.minLSN[g] <= w.watermark.dsnCheckpointed.Load() {
-			minLSN := w.lsn2dsn.minLSN[g]
-			for ; minLSN <= ckped+1; minLSN++ {
-				dsn, err := w.getDriverLsn(g, minLSN)
-				if err == nil && dsn > w.watermark.dsnCheckpointed.Load() {
-					break
-				}
-			}
-			w.lsn2dsn.minLSN[g] = minLSN
-		}
-	}
-	return nil
-}
 
-func (w *StoreImpl) onReplayLSN(g uint32, lsn uint64) {
-	_, ok := w.lsn2dsn.minLSN[g]
-	if !ok {
-		w.lsn2dsn.minLSN[g] = lsn
+	if lsnCheckpointed := w.watermark.lsnCheckpointed.Load(); lsnCheckpointed > 0 {
+		if w.watermark.nextLSN[logEntry.GTCustomized] == 0 {
+			w.watermark.nextLSN[logEntry.GTCustomized] = lsnCheckpointed
+			w.synced[logEntry.GTCustomized] = lsnCheckpointed
+		}
 	}
+
+	return nil
 }
 
 func (w *StoreImpl) replayEntry(e *entry.Entry, h ApplyHandle) (driver.ReplayEntryState, error) {
@@ -77,11 +62,10 @@ func (w *StoreImpl) replayEntry(e *entry.Entry, h ApplyHandle) (driver.ReplayEnt
 	case GroupInternal:
 		return driver.RE_Internal, nil
 	case GroupCKP:
-		w.logCheckpointInfo(info)
+		w.updateLSNCheckpointed(info)
 		// TODO:  should return?
 	}
 	w.logDSN(e)
-	w.onReplayLSN(info.Group, info.GroupLSN)
 	state := h(info.Group, info.GroupLSN, walEntry.GetPayload(), walEntry.GetType(), walEntry.GetInfo())
 	return state, nil
 }

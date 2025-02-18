@@ -19,7 +19,6 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	driverEntry "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 )
@@ -32,8 +31,7 @@ var (
 )
 
 type StoreInfo struct {
-	checkpointInfo map[uint32]*checkpointInfo
-	ckpMu          sync.RWMutex
+	ckpMu sync.RWMutex
 
 	// lsn: monotonically increasing in each group
 	// dsn: monotonically increasing in the whole store
@@ -44,14 +42,13 @@ type StoreInfo struct {
 		mu sync.RWMutex
 		// group -> lsn -> dsn
 		mapping map[uint32]map[uint64]uint64
-		// minLSN: the minimum lsn logged in the lsn2DSN for each group
-		minLSN map[uint32]uint64
 	}
 
 	watermark struct {
 		mu              sync.Mutex
 		nextLSN         map[uint32]uint64
 		dsnCheckpointed atomic.Uint64
+		lsnCheckpointed atomic.Uint64
 	}
 
 	syncing map[uint32]uint64 //todo
@@ -60,24 +57,18 @@ type StoreInfo struct {
 	syncedMu   sync.RWMutex
 	commitCond sync.Cond
 
-	checkpointed   map[uint32]uint64
-	checkpointedMu sync.RWMutex
-	ckpcnt         map[uint32]uint64
-	ckpcntMu       sync.RWMutex
+	ckpcnt   map[uint32]uint64
+	ckpcntMu sync.RWMutex
 }
 
 func newWalInfo() *StoreInfo {
 	s := StoreInfo{
-		checkpointInfo: make(map[uint32]*checkpointInfo),
-		syncing:        make(map[uint32]uint64),
-		commitCond:     *sync.NewCond(new(sync.Mutex)),
-		checkpointed:   make(map[uint32]uint64),
-		synced:         make(map[uint32]uint64),
-		ckpcnt:         make(map[uint32]uint64),
+		syncing:    make(map[uint32]uint64),
+		commitCond: *sync.NewCond(new(sync.Mutex)),
+		synced:     make(map[uint32]uint64),
 	}
 	s.watermark.nextLSN = make(map[uint32]uint64)
 	s.lsn2dsn.mapping = make(map[uint32]map[uint64]uint64)
-	s.lsn2dsn.minLSN = make(map[uint32]uint64)
 	return &s
 }
 
@@ -87,19 +78,15 @@ func (w *StoreInfo) GetCurrSeqNum() (lsn uint64) {
 	return w.watermark.nextLSN[entry.GTCustomized]
 }
 
+// only for test
 func (w *StoreInfo) GetPendding() (cnt uint64) {
+	lsnCheckpointed := w.watermark.lsnCheckpointed.Load()
 	lsn := w.GetCurrSeqNum()
-	w.ckpcntMu.RLock()
-	ckpcnt := w.ckpcnt[entry.GTCustomized]
-	w.ckpcntMu.RUnlock()
-	cnt = lsn - ckpcnt
-	return
+	return lsn - lsnCheckpointed
 }
+
 func (w *StoreInfo) GetCheckpointed() (lsn uint64) {
-	w.checkpointedMu.RLock()
-	lsn = w.checkpointed[entry.GTCustomized]
-	w.checkpointedMu.RUnlock()
-	return
+	return w.watermark.lsnCheckpointed.Load()
 }
 
 func (w *StoreInfo) nextLSN(gid uint32) uint64 {
@@ -142,139 +129,50 @@ func (w *StoreInfo) onAppend() {
 	w.syncedMu.Unlock()
 }
 
-func (w *StoreInfo) retryGetDSN(lsn uint64) (dsn uint64, err error) {
-	gid := entry.GTCustomized
-	dsn, err = w.getDriverLsn(gid, lsn)
-	if err == ErrGroupNotFount || err == ErrLsnNotFount {
-		currLsn := w.GetCurrSeqNum()
-		if lsn <= currLsn {
-			for i := 0; i < 10; i++ {
-				logutil.Debugf("retry %d-%d", gid, lsn)
-				w.commitCond.L.Lock()
-				dsn, err = w.getDriverLsn(gid, lsn)
-				if err != ErrGroupNotFount && err != ErrLsnNotFount {
-					w.commitCond.L.Unlock()
-					return
-				}
-				w.commitCond.Wait()
-				w.commitCond.L.Unlock()
-				dsn, err = w.getDriverLsn(gid, lsn)
-				if err != ErrGroupNotFount && err != ErrLsnNotFount {
-					return
-				}
-			}
-			return 0, ErrTimeOut
-		}
-		return
-	}
-	return
-}
-
-func (w *StoreInfo) getDriverLsn(gid uint32, lsn uint64) (dsn uint64, err error) {
-	w.lsn2dsn.mu.RLock()
-	defer w.lsn2dsn.mu.RUnlock()
-	minLsn := w.lsn2dsn.minLSN[gid]
-	if lsn < minLsn {
-		return 0, ErrLsnTooSmall
-	}
-	groupMapping, ok := w.lsn2dsn.mapping[gid]
-	if !ok {
-		return 0, ErrGroupNotFount
-	}
-	if dsn, ok = groupMapping[lsn]; !ok {
-		return 0, ErrLsnNotFount
-	}
-	return
-}
-
 func (w *StoreInfo) gcDSNMapping(dsnIntent uint64) {
+	lsns := make([]uint64, 0, 100)
 	w.lsn2dsn.mu.Lock()
 	defer w.lsn2dsn.mu.Unlock()
-	for gid, groupMapping := range w.lsn2dsn.mapping {
-		minLsn := w.lsn2dsn.minLSN[gid]
-		lsns := make([]uint64, 0)
+	for _, groupMapping := range w.lsn2dsn.mapping {
+		lsns = lsns[:0]
 		for lsn, dsn := range groupMapping {
 			if dsn < dsnIntent {
 				lsns = append(lsns, lsn)
-				if lsn > minLsn {
-					minLsn = lsn
-				}
 			}
 		}
 		for _, lsn := range lsns {
 			delete(groupMapping, lsn)
 		}
-		w.lsn2dsn.minLSN[gid] = minLsn + 1
 	}
 }
 
-func (w *StoreInfo) logCheckpointInfo(info *entry.Info) {
+func (w *StoreInfo) updateLSNCheckpointed(info *entry.Info) {
 	switch info.Group {
 	case GroupCKP:
 		for _, intervals := range info.Checkpoints {
-			w.ckpMu.Lock()
-			ckpInfo, ok := w.checkpointInfo[intervals.Group]
-			if !ok {
-				ckpInfo = newCheckpointInfo()
-				w.checkpointInfo[intervals.Group] = ckpInfo
+			maxLSN := intervals.GetMax()
+			if maxLSN > w.watermark.lsnCheckpointed.Load() {
+				w.watermark.lsnCheckpointed.Store(maxLSN)
 			}
-			if intervals.Ranges != nil && len(intervals.Ranges.Intervals) > 0 {
-				ckpInfo.UpdateWtihRanges(intervals.Ranges)
-			}
-			if intervals.Command != nil {
-				ckpInfo.MergeCommandMap(intervals.Command)
-			}
-			w.ckpMu.Unlock()
 		}
 	}
 }
 
-func (w *StoreInfo) onCheckpoint() {
-	w.checkpointedMu.Lock()
-	for gid, ckp := range w.checkpointInfo {
-		ckped := ckp.GetCheckpointed()
-		if ckped == 0 {
-			continue
-		}
-		w.checkpointed[gid] = ckped
-	}
-	w.checkpointedMu.Unlock()
-	w.ckpcntMu.Lock()
-	for gid, ckp := range w.checkpointInfo {
-		w.ckpcnt[gid] = ckp.GetCkpCnt()
-	}
-	w.ckpcntMu.Unlock()
-}
 func (w *StoreInfo) GetTruncated() uint64 {
 	return w.watermark.dsnCheckpointed.Load()
 }
-func (w *StoreInfo) getCheckpointedDSN() (dsn uint64, found bool) {
-	// deep copy watermark
-	watermark := make(map[uint32]uint64, 0)
-	w.watermark.mu.Lock()
-	for g, lsn := range w.watermark.nextLSN {
-		watermark[g] = lsn
-	}
-	w.watermark.mu.Unlock()
 
-	w.checkpointedMu.RLock()
-	defer w.checkpointedMu.RUnlock()
-	if len(w.checkpointed) == 0 {
+func (w *StoreInfo) getCheckpointedDSNIntent() (dsn uint64, found bool) {
+	lsn := w.watermark.lsnCheckpointed.Load()
+	if lsn == 0 {
 		return
 	}
-	maxLsn := watermark[entry.GTCustomized]
-	lsn := w.checkpointed[entry.GTCustomized]
-	if lsn < maxLsn {
-		drLsn, err := w.retryGetDSN(lsn + 1)
-		if err != nil {
-			if err == ErrLsnTooSmall {
-				return 0, true
-			}
-			panic(err)
-		}
-		drLsn--
-		return drLsn, true
-	} else {
-		return maxLsn, true
+	w.lsn2dsn.mu.RLock()
+	defer w.lsn2dsn.mu.RUnlock()
+	mapping, ok := w.lsn2dsn.mapping[entry.GTCustomized]
+	if !ok {
+		return
 	}
+	dsn, found = mapping[lsn]
+	return
 }
