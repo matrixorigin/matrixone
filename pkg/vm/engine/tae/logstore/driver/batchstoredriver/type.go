@@ -91,5 +91,4 @@ type Store interface {
 	Read(lsn uint64) (*entry.Entry, error)
 	Close() error
 	Replay(driver.ApplyHandle) error
-	GetCurrSeqNum(uint32) uint64
 }

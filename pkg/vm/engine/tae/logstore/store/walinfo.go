@@ -95,17 +95,11 @@ func (w *StoreInfo) GetPendding() (cnt uint64) {
 	cnt = lsn - ckpcnt
 	return
 }
-func (w *StoreInfo) GetCheckpointed(gid uint32) (lsn uint64) {
+func (w *StoreInfo) GetCheckpointed() (lsn uint64) {
 	w.checkpointedMu.RLock()
-	lsn = w.checkpointed[gid]
+	lsn = w.checkpointed[entry.GTCustomized]
 	w.checkpointedMu.RUnlock()
 	return
-}
-
-func (w *StoreInfo) SetCheckpointed(gid uint32, lsn uint64) {
-	w.checkpointedMu.Lock()
-	w.checkpointed[gid] = lsn
-	w.checkpointedMu.Unlock()
 }
 
 func (w *StoreInfo) allocateLsn(gid uint32) uint64 {

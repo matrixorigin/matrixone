@@ -43,7 +43,7 @@ func NewBatchStoreDriver(
 }
 
 func (driver *walDriver) GetCheckpointed() uint64 {
-	return driver.impl.GetCheckpointed(GroupPrepare)
+	return driver.impl.GetCheckpointed()
 }
 
 func (driver *walDriver) replayhandle(handle store.ApplyHandle) store.ApplyHandle {
@@ -71,7 +71,7 @@ func (driver *walDriver) GetPenddingCnt() uint64 {
 	return driver.impl.GetPendding()
 }
 
-func (driver *walDriver) GetDSN() uint64 {
+func (driver *walDriver) GetLSNWatermark() uint64 {
 	return driver.impl.GetCurrSeqNum()
 }
 
