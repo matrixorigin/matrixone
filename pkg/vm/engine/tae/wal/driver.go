@@ -68,7 +68,7 @@ func (driver *walDriver) Replay(
 }
 
 func (driver *walDriver) GetPenddingCnt() uint64 {
-	return driver.impl.GetPendding(GroupPrepare)
+	return driver.impl.GetPendding()
 }
 
 func (driver *walDriver) GetDSN() uint64 {

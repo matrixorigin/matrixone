@@ -33,7 +33,7 @@ type Store interface {
 
 	GetCurrSeqNum(gid uint32) (lsn uint64)
 	GetSynced(gid uint32) (lsn uint64)
-	GetPendding(gid uint32) (cnt uint64)
+	GetPendding() (cnt uint64)
 	GetCheckpointed(gid uint32) (lsn uint64)
 	GetTruncated() uint64
 

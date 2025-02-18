@@ -106,10 +106,7 @@ func (info *checkpointInfo) String() string {
 }
 
 func (info *checkpointInfo) GetCkpCnt() uint64 {
-	cnt := uint64(0)
-	cnt += uint64(info.ranges.GetCardinality())
-	// cnt += uint64(len(info.partial))
-	return cnt
+	return uint64(info.ranges.GetCardinality())
 }
 
 func (info *checkpointInfo) WriteTo(w io.Writer) (n int64, err error) {
