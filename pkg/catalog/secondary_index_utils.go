@@ -220,9 +220,7 @@ func indexParamsToMap(def interface{}) (map[string]string, error) {
 					opType != IndexAlgoParamOpType_ip &&
 					opType != IndexAlgoParamOpType_cos &&
 					opType != IndexAlgoParamOpType_l1 {
-
-					return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid op_type: '%s'",
-						opType))
+					return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid op_type: '%s'", opType))
 				}
 				res[IndexAlgoParamOpType] = idx.IndexOption.AlgoParamVectorOpType
 			} else {

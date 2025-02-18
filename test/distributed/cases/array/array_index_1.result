@@ -26,9 +26,11 @@ select cluster_centers(b kmeans '2,vector_cosine_ops') from t1;
 cluster_centers(b, 2,vector_cosine_ops)
 [ [116.666664, 44.666668, 70],[1, 2.35, 4.5] ]
 select cluster_centers(b kmeans '2,vector_ip_ops') from t1;
-internal error: unsupported distance_type 'vector_ip_ops' for cluster_centers
+cluster_centers(b, 2,vector_ip_ops)
+[ [0.4377142, 0.4246375, 0.68682307],[50.57143, 20.485714, 32.57143] ]
 select cluster_centers(b kmeans '2,vector_cosine_ops') from t1;
-internal error: unsupported distance_type 'vector_cosine_ops' for cluster_centers
+cluster_centers(b, 2,vector_cosine_ops)
+[ [116.666664, 44.666668, 70],[1, 2.35, 4.5] ]
 SELECT value FROM  (SELECT cluster_centers(b kmeans '2,vector_cosine_ops,kmeansplusplus,false') AS centers FROM t1) AS subquery CROSS JOIN  UNNEST(subquery.centers) AS u;
 value
 [116.666664, 44.666668, 70]
@@ -50,9 +52,11 @@ select cluster_centers(c kmeans '2,vector_cosine_ops') from t1;
 cluster_centers(c, 2,vector_cosine_ops)
 [ [116.66666666666666, 44.666666666666664, 70, 80, 90],[1, 2.35, 4.5, 4, 5] ]
 select cluster_centers(c kmeans '2,vector_ip_ops') from t1;
-internal error: unsupported distance_type 'vector_ip_ops' for cluster_centers
+cluster_centers(c, 2,vector_ip_ops)
+[ [0.6868230728671094, 0.06563701921747622, 0.15651925473279124, 0.09696951891448456, 0.30091186058528707],[50.57142857142857, 20.485714285714284, 32.57142857142857, 36.57142857142857, 41.42857142857142] ]
 select cluster_centers(c kmeans '2,vector_cosine_ops') from t1;
-internal error: unsupported distance_type 'vector_cosine_ops' for cluster_centers
+cluster_centers(c, 2,vector_cosine_ops)
+[ [116.66666666666666, 44.666666666666664, 70, 80, 90],[1, 2.35, 4.5, 4, 5] ]
 SELECT value FROM  (SELECT cluster_centers(c kmeans '2,vector_cosine_ops') AS centers FROM t1) AS subquery CROSS JOIN  UNNEST(subquery.centers) AS u;
 value
 [116.66666666666666, 44.666666666666664, 70, 80, 90]
