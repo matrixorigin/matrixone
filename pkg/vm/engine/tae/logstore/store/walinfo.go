@@ -24,10 +24,10 @@ import (
 )
 
 var (
-	ErrGroupNotFount = moerr.NewInternalErrorNoCtx("group not found")
-	ErrLsnNotFount   = moerr.NewInternalErrorNoCtx("lsn not found")
-	ErrTimeOut       = moerr.NewInternalErrorNoCtx("retry timeout")
-	ErrLsnTooSmall   = moerr.NewInternalErrorNoCtx("lsn is too small")
+	ErrGroupNotFount         = moerr.NewInternalErrorNoCtx("group not found")
+	ErrLsnNotFount           = moerr.NewInternalErrorNoCtx("lsn not found")
+	ErrTimeOut               = moerr.NewInternalErrorNoCtx("retry timeout")
+	ErrStaleCheckpointIntent = moerr.NewInternalErrorNoCtx("small checkpoint intent")
 )
 
 type StoreInfo struct {
@@ -44,7 +44,7 @@ type StoreInfo struct {
 
 	watermark struct {
 		mu              sync.Mutex
-		nextLSN         map[uint32]uint64
+		allocatedLSN    map[uint32]uint64
 		dsnCheckpointed atomic.Uint64
 		lsnCheckpointed atomic.Uint64
 	}
@@ -52,7 +52,7 @@ type StoreInfo struct {
 
 func newWalInfo() *StoreInfo {
 	var s StoreInfo
-	s.watermark.nextLSN = make(map[uint32]uint64)
+	s.watermark.allocatedLSN = make(map[uint32]uint64)
 	s.lsn2dsn.mapping = make(map[uint32]map[uint64]uint64)
 	return &s
 }
@@ -60,7 +60,7 @@ func newWalInfo() *StoreInfo {
 func (w *StoreInfo) GetCurrSeqNum() (lsn uint64) {
 	w.watermark.mu.Lock()
 	defer w.watermark.mu.Unlock()
-	return w.watermark.nextLSN[entry.GTCustomized]
+	return w.watermark.allocatedLSN[entry.GTCustomized]
 }
 
 // only for test
@@ -77,12 +77,12 @@ func (w *StoreInfo) GetCheckpointed() (lsn uint64) {
 func (w *StoreInfo) nextLSN(gid uint32) uint64 {
 	w.watermark.mu.Lock()
 	defer w.watermark.mu.Unlock()
-	if lsn, ok := w.watermark.nextLSN[gid]; ok {
+	if lsn, ok := w.watermark.allocatedLSN[gid]; ok {
 		lsn++
-		w.watermark.nextLSN[gid] = lsn
+		w.watermark.allocatedLSN[gid] = lsn
 		return lsn
 	}
-	w.watermark.nextLSN[gid] = 1
+	w.watermark.allocatedLSN[gid] = 1
 	return 1
 }
 
@@ -105,7 +105,7 @@ func (w *StoreInfo) gcDSNMapping(dsnIntent uint64) {
 	for _, groupMapping := range w.lsn2dsn.mapping {
 		lsns = lsns[:0]
 		for lsn, dsn := range groupMapping {
-			if dsn < dsnIntent {
+			if dsn <= dsnIntent {
 				lsns = append(lsns, lsn)
 			}
 		}

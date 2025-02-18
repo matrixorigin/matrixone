@@ -44,7 +44,7 @@ type StoreImpl struct {
 
 func NewStoreWithLogserviceDriver(
 	factory logservicedriver.LogServiceClientFactory,
-) Store {
+) *StoreImpl {
 	cfg := logservicedriver.NewConfig(
 		"",
 		logservicedriver.WithConfigOptClientFactory(factory),

@@ -75,6 +75,10 @@ func (w *StoreImpl) RangeCheckpoint(
 
 	// TODO: it is too bad!!!
 	// we should not split the checkpoint entry into two entries!!!
+	if end < w.watermark.lsnCheckpointed.Load() {
+		err = ErrStaleCheckpointIntent
+		return
+	}
 	ckpEntry = w.makeRangeCheckpointEntry(gid, start, end)
 	if drentry, _, err = w.doAppend(GroupCKP, ckpEntry); err != nil {
 		return
@@ -163,6 +167,7 @@ func (w *StoreImpl) updateDSNCheckpointed() {
 				zap.Uint64("dsn", dsn),
 				zap.Uint64("dsn-prev", prev),
 			)
+			break
 		}
 	}
 }
