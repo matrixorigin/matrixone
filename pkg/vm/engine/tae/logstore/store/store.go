@@ -34,7 +34,6 @@ type StoreImpl struct {
 	driver driver.Driver
 
 	appendWg          sync.WaitGroup
-	appendMu          sync.RWMutex
 	driverAppendQueue sm.Queue
 	doneWithErrQueue  sm.Queue
 	logInfoQueue      sm.Queue
@@ -64,17 +63,15 @@ func NewStore(driver driver.Driver) *StoreImpl {
 	w := &StoreImpl{
 		StoreInfo: newWalInfo(),
 		driver:    driver,
-		appendWg:  sync.WaitGroup{},
-		appendMu:  sync.RWMutex{},
 	}
 	w.driverAppendQueue = sm.NewSafeQueue(DefaultMaxBatchSize*10, DefaultMaxBatchSize, w.onDriverAppendQueue)
 	w.doneWithErrQueue = sm.NewSafeQueue(DefaultMaxBatchSize*10, DefaultMaxBatchSize, w.onDoneWithErrQueue)
 	w.logInfoQueue = sm.NewSafeQueue(DefaultMaxBatchSize*10, DefaultMaxBatchSize, w.onLogInfoQueue)
 	w.checkpointQueue = sm.NewSafeQueue(DefaultMaxBatchSize*10, DefaultMaxBatchSize, w.onCheckpointIntent)
-	w.Start()
+	w.start()
 	return w
 }
-func (w *StoreImpl) Start() {
+func (w *StoreImpl) start() {
 	w.driverAppendQueue.Start()
 	w.doneWithErrQueue.Start()
 	w.logInfoQueue.Start()
@@ -84,9 +81,7 @@ func (w *StoreImpl) Close() error {
 	if !w.TryClose() {
 		return nil
 	}
-	w.appendMu.RLock()
 	w.appendWg.Wait()
-	w.appendMu.RUnlock()
 	w.driverAppendQueue.Stop()
 	w.doneWithErrQueue.Stop()
 	w.logInfoQueue.Stop()
@@ -103,11 +98,6 @@ func (w *StoreImpl) AppendEntry(gid uint32, e entry.Entry) (lsn uint64, err erro
 }
 
 func (w *StoreImpl) doAppend(gid uint32, e entry.Entry) (drEntry *driverEntry.Entry, lsn uint64, err error) {
-	if w.IsClosed() {
-		return nil, 0, sm.ErrClose
-	}
-	w.appendMu.Lock()
-	defer w.appendMu.Unlock()
 	w.appendWg.Add(1)
 	if w.IsClosed() {
 		w.appendWg.Done()
@@ -134,6 +124,7 @@ func (w *StoreImpl) doAppend(gid uint32, e entry.Entry) (drEntry *driverEntry.En
 	return
 }
 
+// TODO: error handling
 func (w *StoreImpl) onDriverAppendQueue(items ...any) {
 	for _, item := range items {
 		driverEntry := item.(*driverEntry.Entry)
@@ -150,6 +141,7 @@ func (w *StoreImpl) onDriverAppendQueue(items ...any) {
 	}
 }
 
+// TODO: error handling
 func (w *StoreImpl) onDoneWithErrQueue(items ...any) {
 	for _, item := range items {
 		e := item.(*driverEntry.Entry)
