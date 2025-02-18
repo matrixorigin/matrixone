@@ -175,12 +175,12 @@ func TestTruncate(t *testing.T) {
 		entryGroupID, entryLSN := e.GetLsn()
 		assert.Equal(t, group, entryGroupID)
 		assert.Equal(t, lsn, entryLSN)
-		currLsn := wal.GetCurrSeqNum(group)
+		currLsn := wal.GetCurrSeqNum()
 		assert.LessOrEqual(t, lsn, currLsn)
 		assert.NoError(t, e.WaitDone())
 	}
 
-	currLsn := wal.GetCurrSeqNum(group)
+	currLsn := wal.GetCurrSeqNum()
 	drcurrLsn := driver.GetDSN()
 	ckpEntry, err := wal.RangeCheckpoint(0, currLsn)
 	assert.NoError(t, err)
@@ -203,12 +203,12 @@ func TestTruncate(t *testing.T) {
 		entryGroupID, entryLSN := e.GetLsn()
 		assert.Equal(t, group, entryGroupID)
 		assert.Equal(t, lsn, entryLSN)
-		currLsn := wal.GetCurrSeqNum(group)
+		currLsn := wal.GetCurrSeqNum()
 		assert.LessOrEqual(t, lsn, currLsn)
 		assert.NoError(t, e.WaitDone())
 	}
 
-	currLsn = wal.GetCurrSeqNum(group)
+	currLsn = wal.GetCurrSeqNum()
 	drcurrLsn = driver.GetDSN()
 	ckpEntry, err = wal.RangeCheckpoint(0, currLsn)
 	assert.NoError(t, err)

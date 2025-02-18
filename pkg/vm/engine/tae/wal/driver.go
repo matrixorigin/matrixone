@@ -72,7 +72,7 @@ func (driver *walDriver) GetPenddingCnt() uint64 {
 }
 
 func (driver *walDriver) GetDSN() uint64 {
-	return driver.impl.GetCurrSeqNum(GroupPrepare)
+	return driver.impl.GetCurrSeqNum()
 }
 
 func (driver *walDriver) AppendEntry(group uint32, e LogEntry) (uint64, error) {

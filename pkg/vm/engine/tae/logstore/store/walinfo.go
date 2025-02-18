@@ -81,10 +81,10 @@ func newWalInfo() *StoreInfo {
 	return &s
 }
 
-func (w *StoreInfo) GetCurrSeqNum(gid uint32) (lsn uint64) {
+func (w *StoreInfo) GetCurrSeqNum() (lsn uint64) {
 	w.watermark.mu.Lock()
 	defer w.watermark.mu.Unlock()
-	return w.watermark.nextLSN[gid]
+	return w.watermark.nextLSN[entry.GTCustomized]
 }
 
 func (w *StoreInfo) GetSynced(gid uint32) (lsn uint64) {
@@ -95,7 +95,7 @@ func (w *StoreInfo) GetSynced(gid uint32) (lsn uint64) {
 }
 
 func (w *StoreInfo) GetPendding() (cnt uint64) {
-	lsn := w.GetCurrSeqNum(entry.GTCustomized)
+	lsn := w.GetCurrSeqNum()
 	w.ckpcntMu.RLock()
 	ckpcnt := w.ckpcnt[entry.GTCustomized]
 	w.ckpcntMu.RUnlock()
@@ -155,10 +155,11 @@ func (w *StoreInfo) onAppend() {
 	w.syncedMu.Unlock()
 }
 
-func (w *StoreInfo) retryGetDriverLsn(gid uint32, lsn uint64) (dsn uint64, err error) {
+func (w *StoreInfo) retryGetDriverLsn(lsn uint64) (dsn uint64, err error) {
+	gid := entry.GTCustomized
 	dsn, err = w.getDriverLsn(gid, lsn)
 	if err == ErrGroupNotFount || err == ErrLsnNotFount {
-		currLsn := w.GetCurrSeqNum(gid)
+		currLsn := w.GetCurrSeqNum()
 		if lsn <= currLsn {
 			for i := 0; i < 10; i++ {
 				logutil.Debugf("retry %d-%d", gid, lsn)
@@ -277,7 +278,7 @@ func (w *StoreInfo) getDriverCheckpointed() (gid uint32, dsn uint64) {
 	maxLsn := watermark[entry.GTCustomized]
 	lsn := w.checkpointed[entry.GTCustomized]
 	if lsn < maxLsn {
-		drLsn, err := w.retryGetDriverLsn(entry.GTCustomized, lsn+1)
+		drLsn, err := w.retryGetDriverLsn(lsn + 1)
 		if err != nil {
 			if err == ErrLsnTooSmall {
 				return entry.GTCustomized, 0
