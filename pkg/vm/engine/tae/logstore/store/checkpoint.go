@@ -49,11 +49,34 @@ func BuildFilesEntry(files []string) (entry.Entry, error) {
 	return filesEntry, nil
 }
 
-func (w *StoreImpl) RangeCheckpoint(gid uint32, start, end uint64, files ...string) (ckpEntry entry.Entry, err error) {
-	logutil.Info("TRACE-WAL-TRUNCATE-RangeCheckpoint", zap.Uint32("group", gid), zap.Uint64("lsn", end))
+// user should guarantee that the checkpoint is valid
+// it is not safe to call this function concurrently
+func (w *StoreImpl) RangeCheckpoint(
+	gid uint32, start, end uint64, files ...string,
+) (ckpEntry entry.Entry, err error) {
+	var (
+		drentry *driverEntry.Entry
+	)
+	defer func() {
+		var (
+			logger = logutil.Info
+		)
+		if err != nil {
+			logger = logutil.Error
+			ckpEntry = nil
+		}
+		logger(
+			"TRACE-WAL-TRUNCATE-Send-Intent",
+			zap.Uint32("group", gid),
+			zap.Uint64("lsn-intent", end),
+			zap.Error(err),
+		)
+	}()
+
+	// TODO: it is too bad!!!
+	// we should not split the checkpoint entry into two entries!!!
 	ckpEntry = w.makeRangeCheckpointEntry(gid, start, end)
-	drentry, _, err := w.doAppend(GroupCKP, ckpEntry)
-	if err != nil {
+	if drentry, _, err = w.doAppend(GroupCKP, ckpEntry); err != nil {
 		return
 	}
 	if len(files) > 0 {
@@ -70,7 +93,10 @@ func (w *StoreImpl) RangeCheckpoint(gid uint32, start, end uint64, files ...stri
 	return
 }
 
-func (w *StoreImpl) makeRangeCheckpointEntry(gid uint32, start, end uint64) (ckpEntry entry.Entry) {
+func (w *StoreImpl) makeRangeCheckpointEntry(
+	gid uint32, start, end uint64,
+) (ckpEntry entry.Entry) {
+	// TODO: this entry Info is too bad!!!
 	info := &entry.Info{
 		Group: entry.GTCKp,
 		Checkpoints: []*entry.CkpRanges{{
@@ -93,7 +119,7 @@ func (w *StoreImpl) onCheckpointIntent(intents ...any) {
 			logger = logutil.Error
 		}
 		logger(
-			"TRACE-WAL-TRUNCATE-CKP-Entry",
+			"TRACE-WAL-TRUNCATE-Intent-Committed",
 			zap.Uint32("group", e.Info.Checkpoints[0].Group),
 			zap.Uint64("lsn", e.Info.Checkpoints[0].Ranges.GetMax()),
 			zap.Error(err),

@@ -72,12 +72,7 @@ func NewStore(driver driver.Driver) *StoreImpl {
 	w.start()
 	return w
 }
-func (w *StoreImpl) start() {
-	w.driverAppendQueue.Start()
-	w.doneWithErrQueue.Start()
-	w.logInfoQueue.Start()
-	w.checkpointQueue.Start()
-}
+
 func (w *StoreImpl) Close() error {
 	if !w.TryClose() {
 		return nil
@@ -93,9 +88,17 @@ func (w *StoreImpl) Close() error {
 	}
 	return nil
 }
+
 func (w *StoreImpl) AppendEntry(gid uint32, e entry.Entry) (lsn uint64, err error) {
 	_, lsn, err = w.doAppend(gid, e)
 	return
+}
+
+func (w *StoreImpl) start() {
+	w.driverAppendQueue.Start()
+	w.doneWithErrQueue.Start()
+	w.logInfoQueue.Start()
+	w.checkpointQueue.Start()
 }
 
 func (w *StoreImpl) doAppend(gid uint32, e entry.Entry) (drEntry *driverEntry.Entry, lsn uint64, err error) {
