@@ -87,7 +87,7 @@ func (driver *walDriver) Close() error {
 func (driver *walDriver) RangeCheckpoint(
 	start, end uint64, files ...string,
 ) (e LogEntry, err error) {
-	e, err = driver.impl.RangeCheckpoint(GroupPrepare, start, end, files...)
+	e, err = driver.impl.RangeCheckpoint(start, end, files...)
 	return
 }
 

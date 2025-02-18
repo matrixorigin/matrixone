@@ -155,22 +155,22 @@ func (w *StoreInfo) onAppend() {
 	w.syncedMu.Unlock()
 }
 
-func (w *StoreInfo) retryGetDriverLsn(gid uint32, lsn uint64) (driverLsn uint64, err error) {
-	driverLsn, err = w.getDriverLsn(gid, lsn)
+func (w *StoreInfo) retryGetDriverLsn(gid uint32, lsn uint64) (dsn uint64, err error) {
+	dsn, err = w.getDriverLsn(gid, lsn)
 	if err == ErrGroupNotFount || err == ErrLsnNotFount {
 		currLsn := w.GetCurrSeqNum(gid)
 		if lsn <= currLsn {
 			for i := 0; i < 10; i++ {
 				logutil.Debugf("retry %d-%d", gid, lsn)
 				w.commitCond.L.Lock()
-				driverLsn, err = w.getDriverLsn(gid, lsn)
+				dsn, err = w.getDriverLsn(gid, lsn)
 				if err != ErrGroupNotFount && err != ErrLsnNotFount {
 					w.commitCond.L.Unlock()
 					return
 				}
 				w.commitCond.Wait()
 				w.commitCond.L.Unlock()
-				driverLsn, err = w.getDriverLsn(gid, lsn)
+				dsn, err = w.getDriverLsn(gid, lsn)
 				if err != ErrGroupNotFount && err != ErrLsnNotFount {
 					return
 				}
@@ -245,7 +245,6 @@ func (w *StoreInfo) onCheckpoint() {
 	w.checkpointedMu.Lock()
 	for gid, ckp := range w.checkpointInfo {
 		ckped := ckp.GetCheckpointed()
-		// logutil.Infof("%d-%v", gid, ckp)
 		if ckped == 0 {
 			continue
 		}
@@ -261,7 +260,7 @@ func (w *StoreInfo) onCheckpoint() {
 func (w *StoreInfo) GetTruncated() uint64 {
 	return w.watermark.dsnCheckpointed.Load()
 }
-func (w *StoreInfo) getDriverCheckpointed() (gid uint32, driverLsn uint64) {
+func (w *StoreInfo) getDriverCheckpointed() (gid uint32, dsn uint64) {
 	// deep copy watermark
 	watermark := make(map[uint32]uint64, 0)
 	w.watermark.mu.Lock()

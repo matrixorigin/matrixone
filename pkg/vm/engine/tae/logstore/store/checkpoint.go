@@ -52,9 +52,10 @@ func BuildFilesEntry(files []string) (entry.Entry, error) {
 // user should guarantee that the checkpoint is valid
 // it is not safe to call this function concurrently
 func (w *StoreImpl) RangeCheckpoint(
-	gid uint32, start, end uint64, files ...string,
+	start, end uint64, files ...string,
 ) (ckpEntry entry.Entry, err error) {
 	var (
+		gid     = entry.GTCustomized
 		drentry *driverEntry.Entry
 	)
 	defer func() {
@@ -67,7 +68,6 @@ func (w *StoreImpl) RangeCheckpoint(
 		}
 		logger(
 			"TRACE-WAL-TRUNCATE-Send-Intent",
-			zap.Uint32("group", gid),
 			zap.Uint64("lsn-intent", end),
 			zap.Error(err),
 		)
