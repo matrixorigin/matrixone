@@ -39,7 +39,7 @@ func (w *StoreImpl) Replay(
 		panic(err)
 	}
 	w.StoreInfo.onCheckpoint()
-	w.watermark.driverCheckpointed.Store(lsn)
+	w.watermark.dsnCheckpointed.Store(lsn)
 	for g, lsn := range w.syncing {
 		w.watermark.nextLSN[g] = lsn
 		w.synced[g] = lsn
@@ -49,24 +49,24 @@ func (w *StoreImpl) Replay(
 			w.watermark.nextLSN[g] = ckped
 			w.synced[g] = ckped
 		}
-		if w.minLsn[g] <= w.watermark.driverCheckpointed.Load() {
-			minLsn := w.minLsn[g]
-			for ; minLsn <= ckped+1; minLsn++ {
-				drLsn, err := w.getDriverLsn(g, minLsn)
-				if err == nil && drLsn > w.watermark.driverCheckpointed.Load() {
+		if w.lsn2dsn.minLSN[g] <= w.watermark.dsnCheckpointed.Load() {
+			minLSN := w.lsn2dsn.minLSN[g]
+			for ; minLSN <= ckped+1; minLSN++ {
+				dsn, err := w.getDriverLsn(g, minLSN)
+				if err == nil && dsn > w.watermark.dsnCheckpointed.Load() {
 					break
 				}
 			}
-			w.minLsn[g] = minLsn
+			w.lsn2dsn.minLSN[g] = minLSN
 		}
 	}
 	return nil
 }
 
 func (w *StoreImpl) onReplayLsn(g uint32, lsn uint64) {
-	_, ok := w.minLsn[g]
+	_, ok := w.lsn2dsn.minLSN[g]
 	if !ok {
-		w.minLsn[g] = lsn
+		w.lsn2dsn.minLSN[g] = lsn
 	}
 }
 

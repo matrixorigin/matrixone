@@ -144,14 +144,14 @@ func (w *StoreImpl) postCheckpointWaited() {
 	if gid == 0 {
 		return
 	}
-	if dsn > w.watermark.driverCheckpointed.Load() {
+	if dsn > w.watermark.dsnCheckpointed.Load() {
 		for i := 0; i < 10; i++ {
 			if err := w.driver.Truncate(dsn); err != nil {
 				logutil.Error(
 					"TRACE-WAL-TRUNCATE-Error",
 					zap.Uint32("group", gid),
 					zap.Uint64("dsn-intent", dsn),
-					zap.Uint64("dsn-checkpointed", w.watermark.driverCheckpointed.Load()),
+					zap.Uint64("dsn-checkpointed", w.watermark.dsnCheckpointed.Load()),
 					zap.Int("retry", i),
 					zap.Error(err),
 				)
@@ -159,8 +159,8 @@ func (w *StoreImpl) postCheckpointWaited() {
 			}
 			start = time.Now()
 			w.gcDSNMapping(dsn)
-			prev := w.watermark.driverCheckpointed.Load()
-			w.watermark.driverCheckpointed.Store(dsn)
+			prev := w.watermark.dsnCheckpointed.Load()
+			w.watermark.dsnCheckpointed.Store(dsn)
 			logutil.Info(
 				"TRACE-WAL-TRUNCATE-GC-Store",
 				zap.Duration("duration", time.Since(start)),

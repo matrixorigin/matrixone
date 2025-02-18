@@ -40,15 +40,18 @@ type StoreInfo struct {
 	// dsn:    1, 2, 3, 4, 5
 	// group:  1, 2, 1, 1, 2
 	// lsn:    1, 1, 2, 3, 2
-	// group -> lsn -> dsn
-	lsn2DSNMapping map[uint32]map[uint64]uint64
-
-	lsnMu sync.RWMutex
+	lsn2dsn struct {
+		mu sync.RWMutex
+		// group -> lsn -> dsn
+		mapping map[uint32]map[uint64]uint64
+		// minLSN: the minimum lsn logged in the lsn2DSN for each group
+		minLSN map[uint32]uint64
+	}
 
 	watermark struct {
-		mu                 sync.Mutex
-		nextLSN            map[uint32]uint64
-		driverCheckpointed atomic.Uint64
+		mu              sync.Mutex
+		nextLSN         map[uint32]uint64
+		dsnCheckpointed atomic.Uint64
 	}
 
 	syncing map[uint32]uint64 //todo
@@ -61,22 +64,20 @@ type StoreInfo struct {
 	checkpointedMu sync.RWMutex
 	ckpcnt         map[uint32]uint64
 	ckpcntMu       sync.RWMutex
-
-	minLsn map[uint32]uint64
 }
 
 func newWalInfo() *StoreInfo {
 	s := StoreInfo{
 		checkpointInfo: make(map[uint32]*checkpointInfo),
-		lsn2DSNMapping: make(map[uint32]map[uint64]uint64),
 		syncing:        make(map[uint32]uint64),
 		commitCond:     *sync.NewCond(new(sync.Mutex)),
 		checkpointed:   make(map[uint32]uint64),
 		synced:         make(map[uint32]uint64),
 		ckpcnt:         make(map[uint32]uint64),
-		minLsn:         make(map[uint32]uint64),
 	}
 	s.watermark.nextLSN = make(map[uint32]uint64)
+	s.lsn2dsn.mapping = make(map[uint32]map[uint64]uint64)
+	s.lsn2dsn.minLSN = make(map[uint32]uint64)
 	return &s
 }
 
@@ -133,14 +134,14 @@ func (w *StoreInfo) logDriverLsn(driverEntry *driverEntry.Entry) {
 		w.syncing[info.Group] = info.GroupLSN
 	}
 
-	w.lsnMu.Lock()
-	lsnMap, ok := w.lsn2DSNMapping[info.Group]
+	w.lsn2dsn.mu.Lock()
+	defer w.lsn2dsn.mu.Unlock()
+	groupMapping, ok := w.lsn2dsn.mapping[info.Group]
 	if !ok {
-		lsnMap = make(map[uint64]uint64)
-		w.lsn2DSNMapping[info.Group] = lsnMap
+		groupMapping = make(map[uint64]uint64)
+		w.lsn2dsn.mapping[info.Group] = groupMapping
 	}
-	lsnMap[info.GroupLSN] = driverEntry.DSN
-	w.lsnMu.Unlock()
+	groupMapping[info.GroupLSN] = driverEntry.DSN
 }
 
 func (w *StoreInfo) onAppend() {
@@ -181,42 +182,41 @@ func (w *StoreInfo) retryGetDriverLsn(gid uint32, lsn uint64) (driverLsn uint64,
 	return
 }
 
-func (w *StoreInfo) getDriverLsn(gid uint32, lsn uint64) (driverLsn uint64, err error) {
-	w.lsnMu.RLock()
-	defer w.lsnMu.RUnlock()
-	minLsn := w.minLsn[gid]
+func (w *StoreInfo) getDriverLsn(gid uint32, lsn uint64) (dsn uint64, err error) {
+	w.lsn2dsn.mu.RLock()
+	defer w.lsn2dsn.mu.RUnlock()
+	minLsn := w.lsn2dsn.minLSN[gid]
 	if lsn < minLsn {
 		return 0, ErrLsnTooSmall
 	}
-	lsnMap, ok := w.lsn2DSNMapping[gid]
+	groupMapping, ok := w.lsn2dsn.mapping[gid]
 	if !ok {
 		return 0, ErrGroupNotFount
 	}
-	driverLsn, ok = lsnMap[lsn]
-	if !ok {
+	if dsn, ok = groupMapping[lsn]; !ok {
 		return 0, ErrLsnNotFount
 	}
 	return
 }
 
 func (w *StoreInfo) gcDSNMapping(dsnIntent uint64) {
-	w.lsnMu.Lock()
-	defer w.lsnMu.Unlock()
-	for gid, lsn2DSNMapping := range w.lsn2DSNMapping {
-		minLsn := w.minLsn[gid]
-		lsnsToDelete := make([]uint64, 0)
-		for storeLSN, dsn := range lsn2DSNMapping {
+	w.lsn2dsn.mu.Lock()
+	defer w.lsn2dsn.mu.Unlock()
+	for gid, groupMapping := range w.lsn2dsn.mapping {
+		minLsn := w.lsn2dsn.minLSN[gid]
+		lsns := make([]uint64, 0)
+		for lsn, dsn := range groupMapping {
 			if dsn < dsnIntent {
-				lsnsToDelete = append(lsnsToDelete, storeLSN)
-				if storeLSN > minLsn {
-					minLsn = storeLSN
+				lsns = append(lsns, lsn)
+				if lsn > minLsn {
+					minLsn = lsn
 				}
 			}
 		}
-		for _, lsn := range lsnsToDelete {
-			delete(lsn2DSNMapping, lsn)
+		for _, lsn := range lsns {
+			delete(groupMapping, lsn)
 		}
-		w.minLsn[gid] = minLsn + 1
+		w.lsn2dsn.minLSN[gid] = minLsn + 1
 	}
 }
 
@@ -259,7 +259,7 @@ func (w *StoreInfo) onCheckpoint() {
 	w.ckpcntMu.Unlock()
 }
 func (w *StoreInfo) GetTruncated() uint64 {
-	return w.watermark.driverCheckpointed.Load()
+	return w.watermark.dsnCheckpointed.Load()
 }
 func (w *StoreInfo) getDriverCheckpointed() (gid uint32, driverLsn uint64) {
 	// deep copy watermark
