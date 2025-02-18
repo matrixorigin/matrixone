@@ -40,14 +40,13 @@ func (w *StoreImpl) Replay(
 	}
 	w.StoreInfo.onCheckpoint()
 	w.driverCheckpointed.Store(lsn)
-	w.driverCheckpointing.Store(lsn)
 	for g, lsn := range w.syncing {
-		w.walCurrentLsn[g] = lsn
+		w.watermark.lsn[g] = lsn
 		w.synced[g] = lsn
 	}
 	for g, ckped := range w.checkpointed {
-		if w.walCurrentLsn[g] == 0 {
-			w.walCurrentLsn[g] = ckped
+		if w.watermark.lsn[g] == 0 {
+			w.watermark.lsn[g] = ckped
 			w.synced[g] = ckped
 		}
 		if w.minLsn[g] <= w.driverCheckpointed.Load() {

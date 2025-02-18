@@ -32,15 +32,26 @@ var (
 )
 
 type StoreInfo struct {
-	checkpointInfo      map[uint32]*checkpointInfo
-	ckpMu               sync.RWMutex
-	walDriverLsnMap     map[uint32]map[uint64]uint64
-	lsnMu               sync.RWMutex
-	driverCheckpointing atomic.Uint64
-	driverCheckpointed  atomic.Uint64
-	walCurrentLsn       map[uint32]uint64 //todo
-	lsnmu               sync.RWMutex
-	syncing             map[uint32]uint64 //todo
+	checkpointInfo map[uint32]*checkpointInfo
+	ckpMu          sync.RWMutex
+
+	// lsn: monotonically increasing in each group
+	// dsn: monotonically increasing in the whole store
+	// dsn:    1, 2, 3, 4, 5
+	// group:  1, 2, 1, 1, 2
+	// lsn:    1, 1, 2, 3, 2
+	// group -> lsn -> dsn
+	lsn2DSNMapping map[uint32]map[uint64]uint64
+
+	lsnMu              sync.RWMutex
+	driverCheckpointed atomic.Uint64
+
+	watermark struct {
+		mu  sync.Mutex
+		lsn map[uint32]uint64
+	}
+
+	syncing map[uint32]uint64 //todo
 
 	synced     map[uint32]uint64 //todo
 	syncedMu   sync.RWMutex
@@ -55,33 +66,26 @@ type StoreInfo struct {
 }
 
 func newWalInfo() *StoreInfo {
-	return &StoreInfo{
-		checkpointInfo:  make(map[uint32]*checkpointInfo),
-		ckpMu:           sync.RWMutex{},
-		walDriverLsnMap: make(map[uint32]map[uint64]uint64),
-		lsnMu:           sync.RWMutex{},
-		walCurrentLsn:   make(map[uint32]uint64),
-		lsnmu:           sync.RWMutex{},
-		syncing:         make(map[uint32]uint64),
-		commitCond:      *sync.NewCond(&sync.Mutex{}),
-
+	s := StoreInfo{
+		checkpointInfo: make(map[uint32]*checkpointInfo),
+		lsn2DSNMapping: make(map[uint32]map[uint64]uint64),
+		syncing:        make(map[uint32]uint64),
+		commitCond:     *sync.NewCond(new(sync.Mutex)),
 		checkpointed:   make(map[uint32]uint64),
-		checkpointedMu: sync.RWMutex{},
 		synced:         make(map[uint32]uint64),
-		syncedMu:       sync.RWMutex{},
 		ckpcnt:         make(map[uint32]uint64),
-		ckpcntMu:       sync.RWMutex{},
-
-		minLsn: make(map[uint32]uint64),
+		minLsn:         make(map[uint32]uint64),
 	}
+	s.watermark.lsn = make(map[uint32]uint64)
+	return &s
 }
 
 func (w *StoreInfo) GetCurrSeqNum(gid uint32) (lsn uint64) {
-	w.lsnmu.RLock()
-	defer w.lsnmu.RUnlock()
-	lsn = w.walCurrentLsn[gid]
-	return
+	w.watermark.mu.Lock()
+	defer w.watermark.mu.Unlock()
+	return w.watermark.lsn[gid]
 }
+
 func (w *StoreInfo) GetSynced(gid uint32) (lsn uint64) {
 	w.syncedMu.RLock()
 	defer w.syncedMu.RUnlock()
@@ -111,16 +115,15 @@ func (w *StoreInfo) SetCheckpointed(gid uint32, lsn uint64) {
 }
 
 func (w *StoreInfo) allocateLsn(gid uint32) uint64 {
-	w.lsnmu.Lock()
-	defer w.lsnmu.Unlock()
-	lsn, ok := w.walCurrentLsn[gid]
-	if !ok {
-		w.walCurrentLsn[gid] = 1
-		return 1
+	w.watermark.mu.Lock()
+	defer w.watermark.mu.Unlock()
+	if lsn, ok := w.watermark.lsn[gid]; ok {
+		lsn++
+		w.watermark.lsn[gid] = lsn
+		return lsn
 	}
-	lsn++
-	w.walCurrentLsn[gid] = lsn
-	return lsn
+	w.watermark.lsn[gid] = 1
+	return 1
 }
 
 func (w *StoreInfo) logDriverLsn(driverEntry *driverEntry.Entry) {
@@ -131,10 +134,10 @@ func (w *StoreInfo) logDriverLsn(driverEntry *driverEntry.Entry) {
 	}
 
 	w.lsnMu.Lock()
-	lsnMap, ok := w.walDriverLsnMap[info.Group]
+	lsnMap, ok := w.lsn2DSNMapping[info.Group]
 	if !ok {
 		lsnMap = make(map[uint64]uint64)
-		w.walDriverLsnMap[info.Group] = lsnMap
+		w.lsn2DSNMapping[info.Group] = lsnMap
 	}
 	lsnMap[info.GroupLSN] = driverEntry.DSN
 	w.lsnMu.Unlock()
@@ -185,7 +188,7 @@ func (w *StoreInfo) getDriverLsn(gid uint32, lsn uint64) (driverLsn uint64, err 
 	if lsn < minLsn {
 		return 0, ErrLsnTooSmall
 	}
-	lsnMap, ok := w.walDriverLsnMap[gid]
+	lsnMap, ok := w.lsn2DSNMapping[gid]
 	if !ok {
 		return 0, ErrGroupNotFount
 	}
@@ -196,14 +199,14 @@ func (w *StoreInfo) getDriverLsn(gid uint32, lsn uint64) (driverLsn uint64, err 
 	return
 }
 
-func (w *StoreInfo) gcWalDriverLsnMap(drlsn uint64) {
+func (w *StoreInfo) gcDSNMapping(dsnIntent uint64) {
 	w.lsnMu.Lock()
 	defer w.lsnMu.Unlock()
-	for gid, walDriverLsnMap := range w.walDriverLsnMap {
+	for gid, lsn2DSNMapping := range w.lsn2DSNMapping {
 		minLsn := w.minLsn[gid]
 		lsnsToDelete := make([]uint64, 0)
-		for storeLSN, driverLSN := range walDriverLsnMap {
-			if driverLSN < drlsn {
+		for storeLSN, dsn := range lsn2DSNMapping {
+			if dsn < dsnIntent {
 				lsnsToDelete = append(lsnsToDelete, storeLSN)
 				if storeLSN > minLsn {
 					minLsn = storeLSN
@@ -211,7 +214,7 @@ func (w *StoreInfo) gcWalDriverLsnMap(drlsn uint64) {
 			}
 		}
 		for _, lsn := range lsnsToDelete {
-			delete(walDriverLsnMap, lsn)
+			delete(lsn2DSNMapping, lsn)
 		}
 		w.minLsn[gid] = minLsn + 1
 	}
@@ -259,19 +262,20 @@ func (w *StoreInfo) GetTruncated() uint64 {
 	return w.driverCheckpointed.Load()
 }
 func (w *StoreInfo) getDriverCheckpointed() (gid uint32, driverLsn uint64) {
-	groups := make(map[uint32]uint64, 0)
-	w.lsnmu.Lock()
-	for g, lsn := range w.walCurrentLsn {
-		groups[g] = lsn
+	// deep copy watermark
+	watermark := make(map[uint32]uint64, 0)
+	w.watermark.mu.Lock()
+	for g, lsn := range w.watermark.lsn {
+		watermark[g] = lsn
 	}
-	w.lsnmu.Unlock()
+	w.watermark.mu.Unlock()
 
 	w.checkpointedMu.RLock()
 	defer w.checkpointedMu.RUnlock()
 	if len(w.checkpointed) == 0 {
 		return
 	}
-	maxLsn := groups[entry.GTCustomized]
+	maxLsn := watermark[entry.GTCustomized]
 	lsn := w.checkpointed[entry.GTCustomized]
 	if lsn < maxLsn {
 		drLsn, err := w.retryGetDriverLsn(entry.GTCustomized, lsn+1)

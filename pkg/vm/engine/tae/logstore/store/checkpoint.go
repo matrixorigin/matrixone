@@ -158,7 +158,7 @@ func (w *StoreImpl) postCheckpointWaited() {
 				continue
 			}
 			start = time.Now()
-			w.gcWalDriverLsnMap(dsn)
+			w.gcDSNMapping(dsn)
 			prev := w.driverCheckpointed.Load()
 			w.driverCheckpointed.Store(dsn)
 			logutil.Info(
