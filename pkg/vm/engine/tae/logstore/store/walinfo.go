@@ -31,8 +31,6 @@ var (
 )
 
 type StoreInfo struct {
-	ckpMu sync.RWMutex
-
 	// lsn: monotonically increasing in each group
 	// dsn: monotonically increasing in the whole store
 	// dsn:    1, 2, 3, 4, 5
@@ -51,21 +49,15 @@ type StoreInfo struct {
 		lsnCheckpointed atomic.Uint64
 	}
 
-	syncing map[uint32]uint64 //todo
-
-	synced     map[uint32]uint64 //todo
-	syncedMu   sync.RWMutex
-	commitCond sync.Cond
-
-	ckpcnt   map[uint32]uint64
-	ckpcntMu sync.RWMutex
+	syncing  map[uint32]uint64 //todo
+	synced   map[uint32]uint64 //todo
+	syncedMu sync.RWMutex
 }
 
 func newWalInfo() *StoreInfo {
 	s := StoreInfo{
-		syncing:    make(map[uint32]uint64),
-		commitCond: *sync.NewCond(new(sync.Mutex)),
-		synced:     make(map[uint32]uint64),
+		syncing: make(map[uint32]uint64),
+		synced:  make(map[uint32]uint64),
 	}
 	s.watermark.nextLSN = make(map[uint32]uint64)
 	s.lsn2dsn.mapping = make(map[uint32]map[uint64]uint64)
@@ -119,9 +111,6 @@ func (w *StoreInfo) logDSN(driverEntry *driverEntry.Entry) {
 }
 
 func (w *StoreInfo) onAppend() {
-	w.commitCond.L.Lock()
-	w.commitCond.Broadcast()
-	w.commitCond.L.Unlock()
 	w.syncedMu.Lock()
 	for gid, lsn := range w.syncing {
 		w.synced[gid] = lsn
