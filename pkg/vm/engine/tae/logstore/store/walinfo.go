@@ -15,13 +15,10 @@
 package store
 
 import (
-	"bytes"
-	"io"
 	"sync"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	driverEntry "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
@@ -289,73 +286,4 @@ func (w *StoreInfo) getDriverCheckpointed() (gid uint32, driverLsn uint64) {
 	} else {
 		return entry.GTCustomized, maxLsn
 	}
-}
-
-func (w *StoreInfo) marshalPostCommitEntry() (buf []byte, err error) {
-	var bbuf bytes.Buffer
-	if _, err = w.writePostCommitEntry(&bbuf); err != nil {
-		return
-	}
-	buf = bbuf.Bytes()
-	return
-}
-
-func (w *StoreInfo) unmarshalPostCommitEntry(buf []byte) (err error) {
-	bbuf := bytes.NewBuffer(buf)
-	_, err = w.readPostCommitEntry(bbuf)
-	return
-}
-
-func (w *StoreInfo) writePostCommitEntry(writer io.Writer) (n int64, err error) {
-	w.ckpMu.RLock()
-	defer w.ckpMu.RUnlock()
-	//checkpointing
-	length := uint32(len(w.checkpointInfo))
-	if _, err = writer.Write(types.EncodeUint32(&length)); err != nil {
-		return
-	}
-	n += 4
-	for groupID, ckpInfo := range w.checkpointInfo {
-		if _, err = writer.Write(types.EncodeUint32(&groupID)); err != nil {
-			return
-		}
-		n += 4
-		sn, err := ckpInfo.WriteTo(writer)
-		n += sn
-		if err != nil {
-			return n, err
-		}
-	}
-	return
-}
-
-func (w *StoreInfo) readPostCommitEntry(reader io.Reader) (n int64, err error) {
-	w.ckpMu.Lock()
-	defer w.ckpMu.Unlock()
-	//checkpointing
-	length := uint32(0)
-	if _, err = reader.Read(types.EncodeUint32(&length)); err != nil {
-		return
-	}
-	n += 4
-	for i := 0; i < int(length); i++ {
-		groupID := uint32(0)
-		if _, err = reader.Read(types.EncodeUint32(&groupID)); err != nil {
-			return
-		}
-		n += 4
-		ckpInfo := newCheckpointInfo()
-		sn, err := ckpInfo.ReadFrom(reader)
-		n += sn
-		if err != nil {
-			return n, err
-		}
-		ckp, ok := w.checkpointInfo[groupID]
-		if ok {
-			ckp.MergeCheckpointInfo(ckpInfo)
-		} else {
-			w.checkpointInfo[groupID] = ckpInfo
-		}
-	}
-	return
 }
