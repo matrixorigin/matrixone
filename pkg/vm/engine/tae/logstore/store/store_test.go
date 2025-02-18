@@ -20,9 +20,6 @@ import (
 	"strconv"
 	"testing"
 
-	// "net/http"
-	// _ "net/http/pprof"
-
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/batchstoredriver"
@@ -275,14 +272,14 @@ func TestReplayWithCheckpoint(t *testing.T) {
 
 	// map[11:map[1:1 2:2 3:5 4:6] 200000:map[1:3 2:4]]
 	mappingExpected := map[uint32]map[uint64]uint64{
-		11:     map[uint64]uint64{1: 1, 2: 2, 3: 5, 4: 6},
-		200000: map[uint64]uint64{1: 3, 2: 4},
+		11:     {1: 1, 2: 2, 3: 5, 4: 6},
+		200000: {1: 3, 2: 4},
 	}
 	testutils.WaitExpect(4000, func() bool {
 		wal.lsn2dsn.mu.RLock()
 		defer wal.lsn2dsn.mu.RUnlock()
 		mapping := wal.lsn2dsn.mapping[11]
-		return mapping != nil && len(mapping) == 4
+		return len(mapping) == 4
 	})
 
 	assert.Equalf(t, mappingExpected, wal.lsn2dsn.mapping, "mapping: %v", wal.lsn2dsn.mapping)
