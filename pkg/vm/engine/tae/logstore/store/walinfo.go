@@ -43,12 +43,12 @@ type StoreInfo struct {
 	// group -> lsn -> dsn
 	lsn2DSNMapping map[uint32]map[uint64]uint64
 
-	lsnMu              sync.RWMutex
-	driverCheckpointed atomic.Uint64
+	lsnMu sync.RWMutex
 
 	watermark struct {
-		mu  sync.Mutex
-		lsn map[uint32]uint64
+		mu                 sync.Mutex
+		nextLSN            map[uint32]uint64
+		driverCheckpointed atomic.Uint64
 	}
 
 	syncing map[uint32]uint64 //todo
@@ -76,14 +76,14 @@ func newWalInfo() *StoreInfo {
 		ckpcnt:         make(map[uint32]uint64),
 		minLsn:         make(map[uint32]uint64),
 	}
-	s.watermark.lsn = make(map[uint32]uint64)
+	s.watermark.nextLSN = make(map[uint32]uint64)
 	return &s
 }
 
 func (w *StoreInfo) GetCurrSeqNum(gid uint32) (lsn uint64) {
 	w.watermark.mu.Lock()
 	defer w.watermark.mu.Unlock()
-	return w.watermark.lsn[gid]
+	return w.watermark.nextLSN[gid]
 }
 
 func (w *StoreInfo) GetSynced(gid uint32) (lsn uint64) {
@@ -117,12 +117,12 @@ func (w *StoreInfo) SetCheckpointed(gid uint32, lsn uint64) {
 func (w *StoreInfo) allocateLsn(gid uint32) uint64 {
 	w.watermark.mu.Lock()
 	defer w.watermark.mu.Unlock()
-	if lsn, ok := w.watermark.lsn[gid]; ok {
+	if lsn, ok := w.watermark.nextLSN[gid]; ok {
 		lsn++
-		w.watermark.lsn[gid] = lsn
+		w.watermark.nextLSN[gid] = lsn
 		return lsn
 	}
-	w.watermark.lsn[gid] = 1
+	w.watermark.nextLSN[gid] = 1
 	return 1
 }
 
@@ -259,13 +259,13 @@ func (w *StoreInfo) onCheckpoint() {
 	w.ckpcntMu.Unlock()
 }
 func (w *StoreInfo) GetTruncated() uint64 {
-	return w.driverCheckpointed.Load()
+	return w.watermark.driverCheckpointed.Load()
 }
 func (w *StoreInfo) getDriverCheckpointed() (gid uint32, driverLsn uint64) {
 	// deep copy watermark
 	watermark := make(map[uint32]uint64, 0)
 	w.watermark.mu.Lock()
-	for g, lsn := range w.watermark.lsn {
+	for g, lsn := range w.watermark.nextLSN {
 		watermark[g] = lsn
 	}
 	w.watermark.mu.Unlock()

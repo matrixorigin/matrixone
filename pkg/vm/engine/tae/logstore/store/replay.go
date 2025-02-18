@@ -39,21 +39,21 @@ func (w *StoreImpl) Replay(
 		panic(err)
 	}
 	w.StoreInfo.onCheckpoint()
-	w.driverCheckpointed.Store(lsn)
+	w.watermark.driverCheckpointed.Store(lsn)
 	for g, lsn := range w.syncing {
-		w.watermark.lsn[g] = lsn
+		w.watermark.nextLSN[g] = lsn
 		w.synced[g] = lsn
 	}
 	for g, ckped := range w.checkpointed {
-		if w.watermark.lsn[g] == 0 {
-			w.watermark.lsn[g] = ckped
+		if w.watermark.nextLSN[g] == 0 {
+			w.watermark.nextLSN[g] = ckped
 			w.synced[g] = ckped
 		}
-		if w.minLsn[g] <= w.driverCheckpointed.Load() {
+		if w.minLsn[g] <= w.watermark.driverCheckpointed.Load() {
 			minLsn := w.minLsn[g]
 			for ; minLsn <= ckped+1; minLsn++ {
 				drLsn, err := w.getDriverLsn(g, minLsn)
-				if err == nil && drLsn > w.driverCheckpointed.Load() {
+				if err == nil && drLsn > w.watermark.driverCheckpointed.Load() {
 					break
 				}
 			}
