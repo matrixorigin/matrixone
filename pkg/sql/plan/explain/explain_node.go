@@ -1106,6 +1106,7 @@ func (c *CostDescribeImpl) GetDescription(ctx context.Context, options *ExplainO
 		buf.WriteString(" (cost=" + strconv.FormatFloat(c.Stats.Cost, 'f', 2, 64) +
 			" outcnt=" + strconv.FormatFloat(c.Stats.Outcnt, 'f', 2, 64) +
 			" selectivity=" + strconv.FormatFloat(c.Stats.Selectivity, 'f', 4, 64) +
+			" dop=" + strconv.FormatInt(int64(c.Stats.Dop), 10) +
 			blockNumStr + hashmapSizeStr + ")")
 	}
 	return nil

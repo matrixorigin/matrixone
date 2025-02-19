@@ -71,11 +71,12 @@ func IsFullTextIndexAlgo(algo string) bool {
 
 // ------------------------[START] IndexAlgoParams------------------------
 const (
-	IndexAlgoParamLists     = "lists"
-	IndexAlgoParamOpType    = "op_type"
-	IndexAlgoParamOpType_l2 = "vector_l2_ops"
-	//IndexAlgoParamOpType_ip  = "vector_ip_ops"
-	//IndexAlgoParamOpType_cos = "vector_cosine_ops"
+	IndexAlgoParamLists      = "lists"
+	IndexAlgoParamOpType     = "op_type"
+	IndexAlgoParamOpType_l2  = "vector_l2_ops"
+	IndexAlgoParamOpType_ip  = "vector_ip_ops"
+	IndexAlgoParamOpType_cos = "vector_cosine_ops"
+	IndexAlgoParamOpType_l1  = "vector_l1_ops"
 )
 
 const (
@@ -121,12 +122,11 @@ func IndexParamsToStringList(indexParams string) (string, error) {
 
 	if opType, ok := result[IndexAlgoParamOpType]; ok {
 		opType = ToLower(opType)
-		if opType != IndexAlgoParamOpType_l2 {
-			//	opType != IndexAlgoParamOpType_ip &&
-			//	opType != IndexAlgoParamOpType_cos
-			return "", moerr.NewInternalErrorNoCtxf("invalid op_type. not of type '%s'", IndexAlgoParamOpType_l2)
-			//IndexAlgoParamOpType_ip, , IndexAlgoParamOpType_cos)
-
+		if opType != IndexAlgoParamOpType_l2 &&
+			opType != IndexAlgoParamOpType_ip &&
+			opType != IndexAlgoParamOpType_cos &&
+			opType != IndexAlgoParamOpType_l1 {
+			return "", moerr.NewInternalErrorNoCtxf("invalid op_type: '%s'", opType)
 		}
 
 		res += fmt.Sprintf(" %s '%s' ", IndexAlgoParamOpType, opType)
@@ -216,13 +216,11 @@ func indexParamsToMap(def interface{}) (map[string]string, error) {
 
 			if len(idx.IndexOption.AlgoParamVectorOpType) > 0 {
 				opType := ToLower(idx.IndexOption.AlgoParamVectorOpType)
-				if opType != IndexAlgoParamOpType_l2 {
-					//opType != IndexAlgoParamOpType_ip &&
-					//opType != IndexAlgoParamOpType_cos &&
-
-					return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid op_type. not of type '%s'",
-						IndexAlgoParamOpType_l2))
-					//IndexAlgoParamOpType_ip, IndexAlgoParamOpType_cos,
+				if opType != IndexAlgoParamOpType_l2 &&
+					opType != IndexAlgoParamOpType_ip &&
+					opType != IndexAlgoParamOpType_cos &&
+					opType != IndexAlgoParamOpType_l1 {
+					return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid op_type: '%s'", opType))
 				}
 				res[IndexAlgoParamOpType] = idx.IndexOption.AlgoParamVectorOpType
 			} else {
