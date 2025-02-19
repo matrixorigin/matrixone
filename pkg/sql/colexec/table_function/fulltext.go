@@ -34,8 +34,11 @@ import (
 )
 
 const (
-	countstar_sql   = "SELECT COUNT(*) FROM %s"
-	get_doc_len_sql = "SELECT doc_id, pos from %s where word = '%s'"
+	countstar_sql               = "SELECT COUNT(*) FROM %s"
+	get_doc_len_sql             = "SELECT doc_id, pos from %s where word = '%s'"
+	fulltextRelevancyAlgo       = "ft_relevancy_algorithm"
+	fulltextRelevancyAlgo_bm25  = "BM25"
+	fulltextRelevancyAlgo_tfidf = "TFIDF"
 )
 
 type fulltextState struct {
@@ -191,7 +194,17 @@ func (u *fulltextState) start(tf *TableFunction, proc *process.Process, nthRow i
 	}
 	mode := vector.GetFixedAtNoTypeCheck[int64](v, 0)
 
-	scoreAlgo := fulltext.ALGO_TFIDF
+	scoreAlgo := fulltext.ALGO_BM25
+	val, err := proc.GetResolveVariableFunc()(fulltextRelevancyAlgo, true, false)
+	if err != nil {
+		return err
+	}
+	if val != nil {
+		algo := fmt.Sprintf("%v", val)
+		if algo == fulltextRelevancyAlgo_tfidf {
+			scoreAlgo = fulltext.ALGO_TFIDF
+		}
+	}
 
 	return fulltextIndexMatch(u, proc, tf, source_table, index_table, pattern, mode, scoreAlgo, u.batch)
 }

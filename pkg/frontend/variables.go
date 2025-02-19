@@ -3526,6 +3526,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableBoolType("experimental_fulltext_index"),
 		Default:           int64(0),
 	},
+	"ft_relevancy_algorithm": {
+		Name:              "ft_relevancy_algorithm",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableStringType("ft_relevancy_algorithm"),
+		Default:           "BM25",
+	},
 	"validate_password": {
 		Name:              "validate_password",
 		Scope:             ScopeGlobal,
