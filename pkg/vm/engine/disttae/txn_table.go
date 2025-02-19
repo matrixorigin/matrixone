@@ -1921,44 +1921,42 @@ func (tbl *txnTable) BuildShardingReaders(
 func (tbl *txnTable) getPartitionState(
 	ctx context.Context,
 ) (*logtailreplay.PartitionState, error) {
-	if !tbl.db.op.IsSnapOp() {
-		if tbl._partState.Load() == nil {
-			ps, err := tbl.tryToSubscribe(ctx)
-			if err != nil {
-				return nil, err
-			}
-			if ps == nil {
-				ps = tbl.getTxn().engine.GetOrCreateLatestPart(tbl.db.databaseId, tbl.tableId).Snapshot()
-			}
-			tbl._partState.Store(ps)
-			if tbl.tableId == catalog.MO_COLUMNS_ID {
-				logutil.Info("open partition state for mo_columns",
-					zap.String("txn", tbl.db.op.Txn().DebugString()),
-					zap.String("desc", ps.Desc()),
-					zap.String("pointer", fmt.Sprintf("%p", ps)))
-			}
-		}
-		return tbl._partState.Load(), nil
-	}
 
-	// for snapshot txnOp
-	if tbl._partState.Load() == nil {
-		ps, err := tbl.getTxn().engine.getOrCreateSnapPart(
-			ctx,
-			tbl,
-			types.TimestampToTS(tbl.db.op.Txn().SnapshotTS))
+	if !tbl.db.op.IsSnapOp() {
+		ps, err := tbl.tryToSubscribe(ctx)
 		if err != nil {
 			return nil, err
 		}
-		logutil.Infof("Get partition state for snapshot read, tbl:%p, table name:%s, tid:%v, txn:%s, ps:%p",
-			tbl,
-			tbl.tableName,
-			tbl.tableId,
-			tbl.db.op.Txn().DebugString(),
-			ps)
-		tbl._partState.Store(ps)
+		if ps == nil {
+			ps = tbl.getTxn().engine.GetOrCreateLatestPart(tbl.db.databaseId, tbl.tableId).Snapshot()
+		}
+
+		if tbl.tableId == catalog.MO_COLUMNS_ID {
+			logutil.Info("open partition state for mo_columns",
+				zap.String("txn", tbl.db.op.Txn().DebugString()),
+				zap.String("desc", ps.Desc()),
+				zap.String("pointer", fmt.Sprintf("%p", ps)))
+		}
+
+		return ps, nil
 	}
-	return tbl._partState.Load(), nil
+
+	// for snapshot txnOp
+	ps, err := tbl.getTxn().engine.getOrCreateSnapPart(
+		ctx,
+		tbl,
+		types.TimestampToTS(tbl.db.op.Txn().SnapshotTS))
+	if err != nil {
+		return nil, err
+	}
+	logutil.Infof("Get partition state for snapshot read, tbl:%p, table name:%s, tid:%v, txn:%s, ps:%p",
+		tbl,
+		tbl.tableName,
+		tbl.tableId,
+		tbl.db.op.Txn().DebugString(),
+		ps)
+
+	return ps, nil
 }
 
 func (tbl *txnTable) tryToSubscribe(ctx context.Context) (ps *logtailreplay.PartitionState, err error) {
