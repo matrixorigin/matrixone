@@ -29,11 +29,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/wal"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
 const (
@@ -121,9 +121,11 @@ func Open(
 
 	switch opts.LogStoreT {
 	case options.LogstoreBatchStore:
-		db.Wal = wal.NewBatchStoreDriver(opts.Ctx, dirname, WALDir, nil)
+		db.Wal = wal.NewLocalHandle(
+			dirname, WALDir, nil,
+		)
 	case options.LogstoreLogservice:
-		db.Wal = wal.NewLogserviceDriver(opts.Ctx, opts.Lc)
+		db.Wal = wal.NewLogserviceHandle(opts.Lc)
 	}
 	rollbackSteps.Add("rollback open wal", func() error {
 		return db.Wal.Close()

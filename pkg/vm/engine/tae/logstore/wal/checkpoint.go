@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package store
+package wal
 
 import (
 	"time"
@@ -55,7 +55,7 @@ func (w *StoreImpl) RangeCheckpoint(
 	start, end uint64, files ...string,
 ) (ckpEntry entry.Entry, err error) {
 	var (
-		gid     = entry.GTCustomized
+		gid     = GroupUserTxn
 		drentry *driverEntry.Entry
 	)
 	defer func() {

@@ -37,8 +37,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/wal"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 
 	"go.uber.org/zap"
 )
@@ -140,7 +140,7 @@ type txnStore struct {
 	mu         sync.RWMutex
 	rt         *dbutils.Runtime
 	dbs        map[uint64]*txnDB
-	driver     wal.Driver
+	driver     wal.Store
 	txn        txnif.AsyncTxn
 	catalog    *catalog.Catalog
 	cmdMgr     *commandManager
@@ -155,7 +155,7 @@ type txnStore struct {
 var TxnStoreFactory = func(
 	ctx context.Context,
 	catalog *catalog.Catalog,
-	driver wal.Driver,
+	driver wal.Store,
 	rt *dbutils.Runtime,
 	maxMessageSize uint64) txnbase.TxnStoreFactory {
 	return func() txnif.TxnStore {
@@ -166,7 +166,7 @@ var TxnStoreFactory = func(
 func newStore(
 	ctx context.Context,
 	catalog *catalog.Catalog,
-	driver wal.Driver,
+	driver wal.Store,
 	rt *dbutils.Runtime,
 	maxMessageSize uint64,
 ) *txnStore {

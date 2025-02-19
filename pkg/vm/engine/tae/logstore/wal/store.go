@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package store
+package wal
 
 import (
 	"sync"
@@ -42,7 +42,7 @@ type StoreImpl struct {
 	checkpointQueue   sm.Queue
 }
 
-func NewStoreWithLogserviceDriver(
+func NewLogserviceHandle(
 	factory logservicedriver.LogServiceClientFactory,
 ) *StoreImpl {
 	cfg := logservicedriver.NewConfig(
@@ -53,7 +53,7 @@ func NewStoreWithLogserviceDriver(
 	return NewStore(driver)
 }
 
-func NewStoreWithBatchStoreDriver(
+func NewLocalHandle(
 	dir, name string, cfg *batchstoredriver.StoreCfg,
 ) Store {
 	driver, err := batchstoredriver.NewBaseStore(dir, name, cfg)
