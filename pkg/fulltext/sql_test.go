@@ -51,7 +51,7 @@ func TestSqlPhrase(t *testing.T) {
 	}
 
 	for _, c := range tests {
-		s, err := NewSearchAccum("src", "index", c.pattern, int64(tree.FULLTEXT_BOOLEAN), "")
+		s, err := NewSearchAccum("src", "index", c.pattern, int64(tree.FULLTEXT_BOOLEAN), "", ALGO_TFIDF)
 		require.Nil(t, err)
 		result, err := PatternToSql(s.Pattern, int64(tree.FULLTEXT_BOOLEAN), "`__mo_index_secondary_`", "")
 		require.Nil(t, err)
@@ -114,7 +114,7 @@ func TestSqlBoolean(t *testing.T) {
 	}
 
 	for _, c := range tests {
-		s, err := NewSearchAccum("src", "index", c.pattern, int64(tree.FULLTEXT_BOOLEAN), "")
+		s, err := NewSearchAccum("src", "index", c.pattern, int64(tree.FULLTEXT_BOOLEAN), "", ALGO_TFIDF)
 		require.Nil(t, err)
 		result, err := PatternToSql(s.Pattern, int64(tree.FULLTEXT_BOOLEAN), "`__mo_index_secondary_`", "")
 		//fmt.Println(PatternListToStringWithPosition(s.Pattern))
@@ -146,7 +146,7 @@ func TestSqlNL(t *testing.T) {
 	}
 
 	for _, c := range tests {
-		s, err := NewSearchAccum("src", "index", c.pattern, int64(tree.FULLTEXT_NL), "")
+		s, err := NewSearchAccum("src", "index", c.pattern, int64(tree.FULLTEXT_NL), "", ALGO_TFIDF)
 		require.Nil(t, err)
 		result, err := PatternToSql(s.Pattern, int64(tree.FULLTEXT_NL), "`__mo_index_secondary_`", "")
 		require.Nil(t, err)

@@ -34,7 +34,8 @@ import (
 )
 
 const (
-	countstar_sql = "SELECT COUNT(*) FROM %s"
+	countstar_sql   = "SELECT COUNT(*) FROM %s"
+	get_doc_len_sql = "SELECT doc_id, pos from %s where word = '%s'"
 )
 
 type fulltextState struct {
@@ -190,7 +191,9 @@ func (u *fulltextState) start(tf *TableFunction, proc *process.Process, nthRow i
 	}
 	mode := vector.GetFixedAtNoTypeCheck[int64](v, 0)
 
-	return fulltextIndexMatch(u, proc, tf, source_table, index_table, pattern, mode, u.batch)
+	scoreAlgo := fulltext.ALGO_TFIDF
+
+	return fulltextIndexMatch(u, proc, tf, source_table, index_table, pattern, mode, scoreAlgo, u.batch)
 }
 
 // prepare
@@ -465,11 +468,11 @@ func runCountStar(proc *process.Process, s *fulltext.SearchAccum) (int64, error)
 }
 
 func fulltextIndexMatch(u *fulltextState, proc *process.Process, tableFunction *TableFunction, srctbl, tblname, pattern string,
-	mode int64, bat *batch.Batch) (err error) {
+	mode int64, scoreAlgo fulltext.FullTextScoreAlgo, bat *batch.Batch) (err error) {
 
 	if u.sacc == nil {
 		// parse the search string to []Pattern and create SearchAccum
-		s, err := fulltext.NewSearchAccum(srctbl, tblname, pattern, mode, "")
+		s, err := fulltext.NewSearchAccum(srctbl, tblname, pattern, mode, "", scoreAlgo)
 		if err != nil {
 			return err
 		}

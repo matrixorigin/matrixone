@@ -44,7 +44,7 @@ import (
 */
 
 // Init Search Accum
-func NewSearchAccum(srctbl string, tblname string, pattern string, mode int64, params string) (*SearchAccum, error) {
+func NewSearchAccum(srctbl string, tblname string, pattern string, mode int64, params string, scoreAlgo FullTextScoreAlgo) (*SearchAccum, error) {
 
 	ps, err := ParsePattern(pattern, mode)
 	if err != nil {
@@ -53,7 +53,7 @@ func NewSearchAccum(srctbl string, tblname string, pattern string, mode int64, p
 
 	nwords := GetResultCountFromPattern(ps)
 	return &SearchAccum{SrcTblName: srctbl, TblName: tblname, Mode: mode,
-		Pattern: ps, Params: params, Nkeywords: nwords}, nil
+		Pattern: ps, Params: params, Nkeywords: nwords, ScoreAlgo: scoreAlgo}, nil
 }
 
 // find pattern by operator
