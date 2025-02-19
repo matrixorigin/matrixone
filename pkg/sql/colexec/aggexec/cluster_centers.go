@@ -16,6 +16,9 @@ package aggexec
 
 import (
 	"fmt"
+	"strconv"
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
@@ -24,8 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec/algos/kmeans"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec/algos/kmeans/elkans"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
-	"strconv"
-	"strings"
 )
 
 const (
@@ -45,7 +46,10 @@ var (
 	}
 
 	distTypeStrToEnum = map[string]kmeans.DistanceType{
-		"vector_l2_ops": kmeans.L2Distance,
+		"vector_l2_ops":     kmeans.L2Distance,
+		"vector_ip_ops":     kmeans.InnerProduct,
+		"vector_cosine_ops": kmeans.CosineDistance,
+		"vector_l1_ops":     kmeans.L1Distance,
 	}
 
 	initTypeStrToEnum = map[string]kmeans.InitType{
