@@ -232,6 +232,11 @@ func (job *checkpointJob) RunICKP(ctx context.Context) (err error) {
 	}
 
 	lsn = runner.source.GetMaxLSN(entry.start, entry.end)
+	if lsn == 0 {
+		if maxICKP := runner.store.MaxIncrementalCheckpoint(); maxICKP != nil {
+			lsn = maxICKP.LSN()
+		}
+	}
 	if lsn > job.executor.cfg.IncrementalReservedWALCount {
 		lsnToTruncate = lsn - job.executor.cfg.IncrementalReservedWALCount
 	}

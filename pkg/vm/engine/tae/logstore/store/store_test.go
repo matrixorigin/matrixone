@@ -15,16 +15,15 @@
 package store
 
 import (
+	"context"
 	"math/rand"
 	"strconv"
 	"testing"
 
-	// "net/http"
-	// _ "net/http/pprof"
-
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/batchstoredriver"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/logservicedriver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
@@ -175,14 +174,14 @@ func TestTruncate(t *testing.T) {
 		entryGroupID, entryLSN := e.GetLsn()
 		assert.Equal(t, group, entryGroupID)
 		assert.Equal(t, lsn, entryLSN)
-		currLsn := wal.GetCurrSeqNum(group)
+		currLsn := wal.GetCurrSeqNum()
 		assert.LessOrEqual(t, lsn, currLsn)
 		assert.NoError(t, e.WaitDone())
 	}
 
-	currLsn := wal.GetCurrSeqNum(group)
+	currLsn := wal.GetCurrSeqNum()
 	drcurrLsn := driver.GetDSN()
-	ckpEntry, err := wal.RangeCheckpoint(group, 0, currLsn)
+	ckpEntry, err := wal.RangeCheckpoint(0, currLsn)
 	assert.NoError(t, err)
 	assert.NoError(t, ckpEntry.WaitDone())
 	testutils.WaitExpect(4000, func() bool {
@@ -203,14 +202,14 @@ func TestTruncate(t *testing.T) {
 		entryGroupID, entryLSN := e.GetLsn()
 		assert.Equal(t, group, entryGroupID)
 		assert.Equal(t, lsn, entryLSN)
-		currLsn := wal.GetCurrSeqNum(group)
+		currLsn := wal.GetCurrSeqNum()
 		assert.LessOrEqual(t, lsn, currLsn)
 		assert.NoError(t, e.WaitDone())
 	}
 
-	currLsn = wal.GetCurrSeqNum(group)
+	currLsn = wal.GetCurrSeqNum()
 	drcurrLsn = driver.GetDSN()
-	ckpEntry, err = wal.RangeCheckpoint(group, 0, currLsn)
+	ckpEntry, err = wal.RangeCheckpoint(0, currLsn)
 	assert.NoError(t, err)
 	assert.NoError(t, ckpEntry.WaitDone())
 	testutils.WaitExpect(4000, func() bool {
@@ -222,4 +221,148 @@ func TestTruncate(t *testing.T) {
 	assert.NoError(t, err)
 	t.Logf("truncated %d, current %d", truncated, drcurrLsn)
 	assert.GreaterOrEqual(t, truncated, currLsn)
+}
+
+// 1. append 2 entries for group GroupPrepare
+// 2. append 2 entries for group 200000
+// 3. append 2 entries for group GroupPrepare
+// 4. RangeCheckpoint(0, 3) => Check DSN and LSN and Checkpointed
+// 5. append 2 entries for group 200000
+// 6. append 2 entries for group GroupPrepare
+// 7. RangeCheckpoint(0, 5) => Check DSN and LSN and Checkpointed
+// 8. append 2 entries for group GroupPrepare
+// 9. Restart => Check DSN and LSN and Checkpointed
+func TestReplayWithCheckpoint(t *testing.T) {
+	_, clientFactory := logservicedriver.NewMockServiceAndClientFactory()
+	wal := NewStoreWithLogserviceDriver(clientFactory)
+	replayHandle := func(
+		group uint32,
+		commitId uint64,
+		payload []byte,
+		typ uint16,
+		info any,
+	) driver.ReplayEntryState {
+		return driver.RE_Nomal
+	}
+	modeGetter := func() driver.ReplayMode {
+		return driver.ReplayMode_ReplayForWrite
+	}
+	err := wal.Replay(context.Background(), replayHandle, modeGetter, nil)
+	assert.NoError(t, err)
+
+	groups := []uint32{entry.GTCustomized, 200000, entry.GTCustomized}
+
+	for _, group := range groups {
+		for i := 0; i < 2; i++ {
+			e := mockEntry()
+			lsn, err := wal.AppendEntry(group, e)
+			assert.NoError(t, err)
+			assert.NoError(t, e.WaitDone())
+			entryGroupID, entryLSN := e.GetLsn()
+			assert.Equal(t, group, entryGroupID)
+			assert.Equal(t, lsn, entryLSN)
+			currLsn := wal.GetCurrSeqNum()
+			assert.LessOrEqual(t, lsn, currLsn)
+		}
+	}
+
+	assert.Equal(t, uint64(0), wal.GetCheckpointed())
+	assert.Equal(t, uint64(0), wal.GetTruncated())
+	assert.Equal(t, uint64(4), wal.GetCurrSeqNum())
+
+	// map[11:map[1:1 2:2 3:5 4:6] 200000:map[1:3 2:4]]
+	mappingExpected := map[uint32]map[uint64]uint64{
+		11:     {1: 1, 2: 2, 3: 5, 4: 6},
+		200000: {1: 3, 2: 4},
+	}
+	testutils.WaitExpect(4000, func() bool {
+		wal.lsn2dsn.mu.RLock()
+		defer wal.lsn2dsn.mu.RUnlock()
+		mapping := wal.lsn2dsn.mapping[11]
+		return len(mapping) == 4
+	})
+
+	assert.Equalf(t, mappingExpected, wal.lsn2dsn.mapping, "mapping: %v", wal.lsn2dsn.mapping)
+
+	ckpEntry, err := wal.RangeCheckpoint(0, 3)
+	assert.NoError(t, err)
+	assert.NoError(t, ckpEntry.WaitDone())
+	testutils.WaitExpect(4000, func() bool {
+		return wal.GetCheckpointed() == uint64(3)
+	})
+	assert.Equal(t, uint64(3), wal.GetCheckpointed())
+	assert.Equal(t, uint64(1), wal.GetPendding())
+	testutils.WaitExpect(4000, func() bool {
+		return wal.GetTruncated() == uint64(5)
+	})
+	assert.Equal(t, uint64(5), wal.GetTruncated())
+
+	for _, group := range groups[:2] {
+		for i := 0; i < 2; i++ {
+			e := mockEntry()
+			lsn, err := wal.AppendEntry(group, e)
+			assert.NoError(t, err)
+			assert.NoError(t, e.WaitDone())
+			entryGroupID, entryLSN := e.GetLsn()
+			assert.Equal(t, group, entryGroupID)
+			assert.Equal(t, lsn, entryLSN)
+			currLsn := wal.GetCurrSeqNum()
+			assert.LessOrEqual(t, lsn, currLsn)
+		}
+	}
+
+	assert.Equal(t, uint64(3), wal.GetCheckpointed())
+	assert.Equal(t, uint64(3), wal.GetPendding())
+	assert.Equal(t, uint64(5), wal.GetTruncated())
+
+	ckpEntry, err = wal.RangeCheckpoint(0, 5)
+	assert.NoError(t, err)
+	assert.NoError(t, ckpEntry.WaitDone())
+	testutils.WaitExpect(4000, func() bool {
+		return wal.GetCheckpointed() == uint64(5)
+	})
+	assert.Equal(t, uint64(6), wal.GetCurrSeqNum())
+	assert.Equal(t, uint64(5), wal.GetCheckpointed())
+	assert.Equal(t, uint64(1), wal.GetPendding())
+	testutils.WaitExpect(4000, func() bool {
+		return wal.GetTruncated() == uint64(8)
+	})
+	assert.Equal(t, uint64(8), wal.GetTruncated())
+
+	for _, group := range groups[:1] {
+		for i := 0; i < 2; i++ {
+			e := mockEntry()
+			lsn, err := wal.AppendEntry(group, e)
+			assert.NoError(t, err)
+			assert.NoError(t, e.WaitDone())
+			entryGroupID, entryLSN := e.GetLsn()
+			assert.Equal(t, group, entryGroupID)
+			assert.Equal(t, lsn, entryLSN)
+			currLsn := wal.GetCurrSeqNum()
+			assert.LessOrEqual(t, lsn, currLsn)
+		}
+	}
+
+	assert.Equal(t, uint64(5), wal.GetCheckpointed())
+	assert.Equal(t, uint64(3), wal.GetPendding())
+	assert.Equal(t, uint64(8), wal.GetTruncated())
+	assert.Equal(t, uint64(8), wal.GetCurrSeqNum())
+
+	_, err = wal.RangeCheckpoint(0, 3)
+	assert.ErrorIs(t, err, ErrStaleCheckpointIntent)
+
+	wal.Close()
+
+	wal = NewStoreWithLogserviceDriver(clientFactory)
+	defer wal.Close()
+
+	err = wal.Replay(context.Background(), replayHandle, modeGetter, nil)
+	assert.NoError(t, err)
+	assert.Equal(t, uint64(8), wal.GetCurrSeqNum())
+	assert.Equal(t, uint64(5), wal.GetCheckpointed())
+	assert.Equal(t, uint64(8), wal.GetTruncated())
+	assert.Equal(t, uint64(3), wal.GetPendding())
+	assert.Equal(t, map[uint64]uint64{6: 9, 7: 13, 8: 14}, wal.lsn2dsn.mapping[11])
+	assert.Equal(t, map[uint64]uint64{3: 10, 4: 11}, wal.lsn2dsn.mapping[200000])
+
 }

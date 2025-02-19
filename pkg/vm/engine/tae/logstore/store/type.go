@@ -29,12 +29,22 @@ const (
 
 type Store interface {
 	AppendEntry(gid uint32, entry entry.Entry) (lsn uint64, err error)
-	RangeCheckpoint(gid uint32, start, end uint64, files ...string) (ckpEntry entry.Entry, err error)
 
-	GetCurrSeqNum(gid uint32) (lsn uint64)
-	GetSynced(gid uint32) (lsn uint64)
-	GetPendding(gid uint32) (cnt uint64)
-	GetCheckpointed(gid uint32) (lsn uint64)
+	// it always checkpoint the GroupPrepare group
+	RangeCheckpoint(start, end uint64, files ...string) (ckpEntry entry.Entry, err error)
+
+	// only used in the test
+	// it returns the next lsn of group `GroupPrepare`
+	GetCurrSeqNum() (lsn uint64)
+	// only used in the test
+	// it returns the remaining entries of group `GroupPrepare` to be checkpointed
+	// GetCurrSeqNum() - GetCheckpointed()
+	GetPendding() (cnt uint64)
+	// only used in the test
+	// it returns the last lsn of group `GroupPrepare` that has been checkpointed
+	GetCheckpointed() (lsn uint64)
+	// only used in the test
+	// it returns the truncated dsn
 	GetTruncated() uint64
 
 	Replay(
@@ -43,6 +53,7 @@ type Store interface {
 		modeGetter func() driver.ReplayMode,
 		opt *driver.ReplayOption,
 	) error
+
 	Close() error
 }
 
