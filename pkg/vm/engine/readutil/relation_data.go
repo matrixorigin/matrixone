@@ -17,7 +17,6 @@ package readutil
 import (
 	"bytes"
 	"fmt"
-
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 
@@ -83,6 +82,14 @@ func (rd *EmptyRelationData) AppendShardID(id uint64) {
 }
 
 func (rd *EmptyRelationData) GetBlockInfoSlice() objectio.BlockInfoSlice {
+	panic("not supported")
+}
+
+func (rd *EmptyRelationData) GetPState() any {
+	panic("not supported")
+}
+
+func (rd *EmptyRelationData) SetPState(pState any) {
 	panic("not supported")
 }
 
@@ -304,12 +311,25 @@ func (or *ObjListRelData) Split(cpunum int) []engine.RelData {
 	if totalBlocks != int(or.TotalBlocks) {
 		panic("wrong blocks cnt after objlist reldata split!")
 	}
+
+	for i := range result {
+		result[i].SetPState(or.GetPState())
+	}
+
 	return result
 }
 
 func (or *ObjListRelData) GetBlockInfoSlice() objectio.BlockInfoSlice {
 	or.expand()
 	return or.blocklistRelData.GetBlockInfoSlice()
+}
+
+func (or *ObjListRelData) GetPState() any {
+	return or.blocklistRelData.pState
+}
+
+func (or *ObjListRelData) SetPState(pState any) {
+	or.blocklistRelData.SetPState(pState)
 }
 
 func (or *ObjListRelData) BuildEmptyRelData(i int) engine.RelData {
@@ -370,6 +390,7 @@ type BlockListRelData struct {
 	// blkList[0] is a empty block info
 	blklist objectio.BlockInfoSlice
 
+	pState any
 	// tombstones
 	tombstones engine.Tombstoner
 }
@@ -417,12 +438,17 @@ func (relData *BlockListRelData) Split(i int) []engine.RelData {
 			shards[j] = relData.DataSlice(current, current+divide)
 			current = current + divide
 		}
+		shards[j].SetPState(relData.pState)
 	}
 	return shards
 }
 
 func (relData *BlockListRelData) GetBlockInfoSlice() objectio.BlockInfoSlice {
 	return relData.blklist.GetAllBytes()
+}
+
+func (relData *BlockListRelData) GetPState() any {
+	return relData.pState
 }
 
 func (relData *BlockListRelData) BuildEmptyRelData(i int) engine.RelData {
@@ -442,6 +468,10 @@ func (relData *BlockListRelData) SetBlockInfo(i int, blk *objectio.BlockInfo) {
 
 func (relData *BlockListRelData) SetBlockList(slice objectio.BlockInfoSlice) {
 	relData.blklist = slice
+}
+
+func (relData *BlockListRelData) SetPState(pState any) {
+	relData.pState = pState
 }
 
 func (relData *BlockListRelData) AppendBlockInfo(blk *objectio.BlockInfo) {

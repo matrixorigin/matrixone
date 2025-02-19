@@ -520,6 +520,14 @@ func (r *partitionedRelData) GetBlockInfoSlice() objectio.BlockInfoSlice {
 	return r.blocks
 }
 
+func (r *partitionedRelData) GetPState() any {
+	panic("not implemented")
+}
+
+func (r *partitionedRelData) SetPState(any) {
+	panic("not implemented")
+}
+
 func (r *partitionedRelData) GetType() engine.RelDataType {
 	panic("not implemented")
 }
