@@ -135,6 +135,7 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 	}
 
 	if isnull {
+		u.doc.Words = append(u.doc.Words, FullTextEntry{DocId: id, Word: fulltext.DOC_LEN_WORD, Pos: 0})
 		return nil
 	}
 

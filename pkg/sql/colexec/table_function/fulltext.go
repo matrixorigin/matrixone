@@ -306,7 +306,7 @@ func evaluate(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) 
 			return nil, err
 		}
 
-		score, err := s.Eval(docvec, aggcnt)
+		score, err := s.Eval(docvec, aggcnt, doc_id)
 		if err != nil {
 			return nil, err
 		}

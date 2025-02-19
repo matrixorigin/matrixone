@@ -31,7 +31,7 @@ const (
 const (
 	fulltextRelevancyAlgo       = "ft_relevancy_algorithm"
 	fulltextRelevancyAlgo_bm25  = "BM25"
-	fulltextRelevancyAlgo_tfidf = "TFIDF"
+	fulltextRelevancyAlgo_tfidf = "TF-IDF"
 )
 
 /*
