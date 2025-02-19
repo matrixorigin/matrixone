@@ -234,7 +234,7 @@ func TestTruncate(t *testing.T) {
 // 9. Restart => Check DSN and LSN and Checkpointed
 func TestReplayWithCheckpoint(t *testing.T) {
 	_, clientFactory := logservicedriver.NewMockServiceAndClientFactory()
-	wal := NewStoreWithLogserviceDriver(clientFactory)
+	wal := NewLogserviceHandle(clientFactory)
 	replayHandle := func(
 		group uint32,
 		commitId uint64,
@@ -353,7 +353,7 @@ func TestReplayWithCheckpoint(t *testing.T) {
 
 	wal.Close()
 
-	wal = NewStoreWithLogserviceDriver(clientFactory)
+	wal = NewLogserviceHandle(clientFactory)
 	defer wal.Close()
 
 	err = wal.Replay(context.Background(), replayHandle, modeGetter, nil)

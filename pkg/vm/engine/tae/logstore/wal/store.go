@@ -42,7 +42,7 @@ type StoreImpl struct {
 	checkpointQueue   sm.Queue
 }
 
-func NewStoreWithLogserviceDriver(
+func NewLogserviceHandle(
 	factory logservicedriver.LogServiceClientFactory,
 ) *StoreImpl {
 	cfg := logservicedriver.NewConfig(
@@ -53,7 +53,7 @@ func NewStoreWithLogserviceDriver(
 	return NewStore(driver)
 }
 
-func NewStoreWithBatchStoreDriver(
+func NewLocalHandle(
 	dir, name string, cfg *batchstoredriver.StoreCfg,
 ) Store {
 	driver, err := batchstoredriver.NewBaseStore(dir, name, cfg)

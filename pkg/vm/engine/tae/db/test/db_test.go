@@ -6777,7 +6777,7 @@ func TestAppendAndGC2(t *testing.T) {
 	}
 	dir := tae.Dir
 	tae.Close()
-	wal := wal.NewStoreWithBatchStoreDriver(dir, "wal", nil)
+	wal := wal.NewLocalHandle(dir, "wal", nil)
 	err = wal.Replay(
 		opts.Ctx,
 		loadFiles,
