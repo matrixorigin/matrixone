@@ -42,12 +42,13 @@ func TestTableObjectStats(t *testing.T) {
 
 func TestObjectList(t *testing.T) {
 	ll := NewObjectList(false)
+	nobjid := objectio.NewObjectid()
 	entry1 := &ObjectEntry{
 		ObjectNode: ObjectNode{SortHint: 1},
 		EntryMVCCNode: EntryMVCCNode{
 			CreatedAt: types.BuildTS(1, 0),
 		},
-		ObjectMVCCNode: ObjectMVCCNode{ObjectStats: *objectio.NewObjectStatsWithObjectID(objectio.NewObjectid(), true, false, false)},
+		ObjectMVCCNode: ObjectMVCCNode{ObjectStats: *objectio.NewObjectStatsWithObjectID(&nobjid, true, false, false)},
 		CreateNode:     txnbase.NewTxnMVCCNodeWithTS(types.BuildTS(1, 0)),
 		ObjectState:    ObjectState_Create_ApplyCommit,
 	}

@@ -210,7 +210,7 @@ func (space *tableSpace) prepareApplyANode(node *anode, startOffset uint32) erro
 		blkID := objectio.NewBlockidWithObjectID(objID, 0)
 		if err = objectio.ConstructRowidColumnTo(
 			col.GetDownstreamVector(),
-			blkID,
+			&blkID,
 			anode.GetMaxRow()-toAppend,
 			toAppend,
 			col.GetAllocator(),

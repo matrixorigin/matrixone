@@ -357,8 +357,8 @@ func makeTestRowIDVector(m *mpool.MPool, objectID *types.Objectid, blockNum uint
 	blockID := types.NewBlockidWithObjectID(objectID, blockNum+1000)
 	vec := vector.NewVec(types.T_Rowid.ToType())
 	for i := 0; i < rowCount; i++ {
-		rowID := types.NewRowid(blockID, uint32(i)+1)
-		if err := vector.AppendFixed(vec, *rowID, false, m); err != nil {
+		rowID := types.NewRowid(&blockID, uint32(i)+1)
+		if err := vector.AppendFixed(vec, rowID, false, m); err != nil {
 			vec.Free(m)
 			return nil
 		}
