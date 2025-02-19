@@ -53,7 +53,7 @@ func getLocations(rec logservice.LogRecord, tag string) []string {
 	_, err := logservicedriver.DecodeLogEntry(data[headerSize+replicaIDSize:], func(en *entry.Entry) {
 		ei := en.Entry.GetInfo().(*entry2.Info)
 		payload := en.Entry.GetPayload()
-		if ei.Group == wal.GroupPrepare {
+		if ei.Group == wal.GroupUserTxn {
 			locations = append(locations, parseCommonFiles(payload, tag)...)
 		} else if ei.Group == wal.GroupFiles {
 			locations = append(locations, parseMetaFiles(payload, tag)...)

@@ -60,7 +60,7 @@ func newWalInfo() *StoreInfo {
 func (w *StoreInfo) GetLSNWatermark() (lsn uint64) {
 	w.watermark.mu.Lock()
 	defer w.watermark.mu.Unlock()
-	return w.watermark.allocatedLSN[entry.GTCustomized]
+	return w.watermark.allocatedLSN[GroupUserTxn]
 }
 
 // only for test
@@ -138,7 +138,7 @@ func (w *StoreInfo) getCheckpointedDSNIntent() (dsn uint64, found bool) {
 	}
 	w.lsn2dsn.mu.RLock()
 	defer w.lsn2dsn.mu.RUnlock()
-	mapping, ok := w.lsn2dsn.mapping[entry.GTCustomized]
+	mapping, ok := w.lsn2dsn.mapping[GroupUserTxn]
 	if !ok {
 		return
 	}

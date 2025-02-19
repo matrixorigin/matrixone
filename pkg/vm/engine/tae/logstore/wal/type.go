@@ -29,7 +29,7 @@ const (
 )
 
 const (
-	GroupPrepare = entry.GTCustomized + iota
+	GroupUserTxn = entry.GTCustomized + iota
 	GroupC
 )
 
@@ -42,18 +42,18 @@ type LogEntry = entry.Entry
 type Store interface {
 	AppendEntry(gid uint32, entry entry.Entry) (lsn uint64, err error)
 
-	// it always checkpoint the GroupPrepare group
+	// it always checkpoint the GroupUserTxn group
 	RangeCheckpoint(start, end uint64, files ...string) (ckpEntry entry.Entry, err error)
 
 	// only used in the test
-	// it returns the next lsn of group `GroupPrepare`
+	// it returns the next lsn of group `GroupUserTxn`
 	GetLSNWatermark() (lsn uint64)
 	// only used in the test
-	// it returns the remaining entries of group `GroupPrepare` to be checkpointed
+	// it returns the remaining entries of group `GroupUserTxn` to be checkpointed
 	// GetLSNWatermark() - GetCheckpointed()
 	GetPenddingCnt() (cnt uint64)
 	// only used in the test
-	// it returns the last lsn of group `GroupPrepare` that has been checkpointed
+	// it returns the last lsn of group `GroupUserTxn` that has been checkpointed
 	GetCheckpointed() (lsn uint64)
 	// only used in the test
 	// it returns the truncated dsn

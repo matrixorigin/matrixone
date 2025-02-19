@@ -108,7 +108,7 @@ type parameter struct {
 func newParameter() *parameter {
 	return &parameter{
 		cmdType:   logservicedriver.Cmd_Normal,
-		groupType: wal.GroupPrepare,
+		groupType: wal.GroupUserTxn,
 	}
 }
 

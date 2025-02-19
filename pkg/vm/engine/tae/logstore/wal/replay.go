@@ -19,7 +19,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
-	logEntry "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 )
 
 func (w *StoreImpl) Replay(
@@ -42,8 +41,8 @@ func (w *StoreImpl) Replay(
 	w.watermark.dsnCheckpointed.Store(dsn)
 
 	if lsnCheckpointed := w.watermark.lsnCheckpointed.Load(); lsnCheckpointed > 0 {
-		if w.watermark.allocatedLSN[logEntry.GTCustomized] == 0 {
-			w.watermark.allocatedLSN[logEntry.GTCustomized] = lsnCheckpointed
+		if w.watermark.allocatedLSN[GroupUserTxn] == 0 {
+			w.watermark.allocatedLSN[GroupUserTxn] = lsnCheckpointed
 		}
 	}
 

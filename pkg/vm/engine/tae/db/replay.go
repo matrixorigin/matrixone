@@ -253,7 +253,7 @@ func (replayer *WalReplayer) MakeReplayHandle(
 		group uint32, lsn uint64, payload []byte, typ uint16, info any,
 	) driver.ReplayEntryState {
 		replayer.once.Do(replayer.PreReplayWal)
-		if group != wal.GroupPrepare && group != wal.GroupC {
+		if group != wal.GroupUserTxn && group != wal.GroupC {
 			return driver.RE_Internal
 		}
 		if !replayer.checkLSN(lsn) {

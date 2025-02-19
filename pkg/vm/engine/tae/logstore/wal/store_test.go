@@ -165,7 +165,7 @@ func TestTruncate(t *testing.T) {
 	wal := NewStore(driver)
 	defer wal.Close()
 	entryCount := 5
-	group := entry.GTCustomized
+	group := GroupUserTxn
 	for i := 0; i < entryCount; i++ {
 		e := mockEntry()
 		lsn, err := wal.AppendEntry(group, e)
@@ -223,14 +223,14 @@ func TestTruncate(t *testing.T) {
 	assert.GreaterOrEqual(t, truncated, currLsn)
 }
 
-// 1. append 2 entries for group GroupPrepare
+// 1. append 2 entries for group GroupUserTxn
 // 2. append 2 entries for group 200000
-// 3. append 2 entries for group GroupPrepare
+// 3. append 2 entries for group GroupUserTxn
 // 4. RangeCheckpoint(0, 3) => Check DSN and LSN and Checkpointed
 // 5. append 2 entries for group 200000
-// 6. append 2 entries for group GroupPrepare
+// 6. append 2 entries for group GroupUserTxn
 // 7. RangeCheckpoint(0, 5) => Check DSN and LSN and Checkpointed
-// 8. append 2 entries for group GroupPrepare
+// 8. append 2 entries for group GroupUserTxn
 // 9. Restart => Check DSN and LSN and Checkpointed
 func TestReplayWithCheckpoint(t *testing.T) {
 	_, clientFactory := logservicedriver.NewMockServiceAndClientFactory()
@@ -250,7 +250,7 @@ func TestReplayWithCheckpoint(t *testing.T) {
 	err := wal.Replay(context.Background(), replayHandle, modeGetter, nil)
 	assert.NoError(t, err)
 
-	groups := []uint32{entry.GTCustomized, 200000, entry.GTCustomized}
+	groups := []uint32{GroupUserTxn, 200000, GroupUserTxn}
 
 	for _, group := range groups {
 		for i := 0; i < 2; i++ {

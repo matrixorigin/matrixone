@@ -78,11 +78,11 @@ func (mgr *commandManager) ApplyTxnRecord(txn txnif.AsyncTxn) (logEntry entry.En
 		return
 	}
 	info := &entry.Info{
-		Group: wal.GroupPrepare,
+		Group: wal.GroupUserTxn,
 	}
 	logEntry.SetInfo(info)
 	t2 := time.Now()
-	mgr.lsn, err = mgr.driver.AppendEntry(wal.GroupPrepare, logEntry)
+	mgr.lsn, err = mgr.driver.AppendEntry(wal.GroupUserTxn, logEntry)
 	t3 := time.Now()
 	if t3.Sub(t1) > time.Millisecond*500 {
 		logutil.Warn(
