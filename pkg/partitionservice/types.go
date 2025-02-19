@@ -54,12 +54,6 @@ var (
 
 // PartitionService is used to maintaining the metadata of the partition table.
 type PartitionService interface {
-	Is(
-		ctx context.Context,
-		tableID uint64,
-		txnOp client.TxnOperator,
-	) (bool, partition.PartitionMetadata, error)
-
 	// Create creates metadata of the partition table.
 	Create(
 		ctx context.Context,
@@ -73,6 +67,12 @@ type PartitionService interface {
 		tableID uint64,
 		txnOp client.TxnOperator,
 	) error
+
+	GetPartitionMetadata(
+		ctx context.Context,
+		tableID uint64,
+		txnOp client.TxnOperator,
+	) (partition.PartitionMetadata, error)
 
 	Prune(
 		ctx context.Context,
