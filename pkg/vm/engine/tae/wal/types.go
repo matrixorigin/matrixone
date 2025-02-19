@@ -49,6 +49,6 @@ type Driver interface {
 
 	GetTruncated() uint64
 
-	GetDSN() uint64
+	GetLSNWatermark() uint64
 	GetPenddingCnt() uint64
 }

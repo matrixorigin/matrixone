@@ -43,7 +43,7 @@ func NewBatchStoreDriver(
 }
 
 func (driver *walDriver) GetCheckpointed() uint64 {
-	return driver.impl.GetCheckpointed(GroupPrepare)
+	return driver.impl.GetCheckpointed()
 }
 
 func (driver *walDriver) replayhandle(handle store.ApplyHandle) store.ApplyHandle {
@@ -68,11 +68,11 @@ func (driver *walDriver) Replay(
 }
 
 func (driver *walDriver) GetPenddingCnt() uint64 {
-	return driver.impl.GetPendding(GroupPrepare)
+	return driver.impl.GetPendding()
 }
 
-func (driver *walDriver) GetDSN() uint64 {
-	return driver.impl.GetCurrSeqNum(GroupPrepare)
+func (driver *walDriver) GetLSNWatermark() uint64 {
+	return driver.impl.GetCurrSeqNum()
 }
 
 func (driver *walDriver) AppendEntry(group uint32, e LogEntry) (uint64, error) {
@@ -87,7 +87,7 @@ func (driver *walDriver) Close() error {
 func (driver *walDriver) RangeCheckpoint(
 	start, end uint64, files ...string,
 ) (e LogEntry, err error) {
-	e, err = driver.impl.RangeCheckpoint(GroupPrepare, start, end, files...)
+	e, err = driver.impl.RangeCheckpoint(start, end, files...)
 	return
 }
 
