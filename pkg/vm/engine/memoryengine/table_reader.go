@@ -283,6 +283,14 @@ func (rd *MemRelationData) GetBlockInfoSlice() objectio.BlockInfoSlice {
 	panic("not supported")
 }
 
+func (rd *MemRelationData) GetPState() any {
+	panic("not supported")
+}
+
+func (rd *MemRelationData) SetPState(pState any) {
+	panic("not supported")
+}
+
 func (rd *MemRelationData) GetBlockInfo(i int) objectio.BlockInfo {
 	panic("not supported")
 }

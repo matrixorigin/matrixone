@@ -681,6 +681,7 @@ func (tbl *txnTable) getObjList(ctx context.Context, rangesParam engine.RangesPa
 		return nil, err
 	}
 
+	objRelData.SetPState(part)
 	data = objRelData
 	return
 }
@@ -801,6 +802,7 @@ func (tbl *txnTable) doRanges(ctx context.Context, rangesParam engine.RangesPara
 	}
 
 	blklist := &readutil.BlockListRelData{}
+	blklist.SetPState(part)
 	blklist.SetBlockList(blocks)
 	data = blklist
 	return
@@ -1800,6 +1802,15 @@ func (tbl *txnTable) buildLocalDataSource(
 
 	switch relData.GetType() {
 	case engine.RelDataObjList, engine.RelDataBlockList:
+		var pState *logtailreplay.PartitionState
+		val := relData.GetPState()
+		if val == nil {
+			x := 0
+			x++
+		}
+
+		pState = val.(*logtailreplay.PartitionState)
+
 		ranges := relData.GetBlockInfoSlice()
 		skipReadMem := !bytes.Equal(
 			objectio.EncodeBlockInfo(ranges.Get(0)), objectio.EmptyBlockInfoBytes)
@@ -1823,6 +1834,7 @@ func (tbl *txnTable) buildLocalDataSource(
 				ctx,
 				tbl,
 				txnOffset,
+				pState,
 				ranges,
 				relData.GetTombstones(),
 				skipReadMem,
@@ -1867,7 +1879,14 @@ func (tbl *txnTable) BuildReaders(
 	//relData maybe is nil, indicate that only read data from memory.
 	if relData == nil || relData.DataCnt() == 0 {
 		relData = readutil.NewBlockListRelationData(1)
+
+		part, err := tbl.getPartitionState(ctx)
+		if err != nil {
+			return nil, err
+		}
+		relData.SetPState(part)
 	}
+
 	blkCnt := relData.DataCnt()
 	newNum := num
 	if blkCnt < num {

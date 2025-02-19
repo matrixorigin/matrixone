@@ -322,6 +322,8 @@ func (tbl *txnTableDelegate) Ranges(ctx context.Context, rangesParam engine.Rang
 		ret.AppendBlockInfo(blocks.Get(i))
 	}
 
+	ret.SetPState(rs.GetPState())
+
 	return ret, nil
 }
 
