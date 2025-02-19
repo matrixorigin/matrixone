@@ -15,14 +15,19 @@
 package elkans
 
 import (
+	"fmt"
+	"math"
+	"math/rand"
+	"os"
+	"runtime"
+	"sync"
+	"sync/atomic"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec/algos/kmeans"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"gonum.org/v1/gonum/mat"
-	"math"
-	"math/rand"
-	"sync"
 )
 
 // ElkanClusterer is an improved kmeans algorithm which using the triangle inequality to reduce the number of
@@ -114,6 +119,7 @@ func NewKMeans(vectors [][]float64, clusterCnt,
 		return nil, err
 	}
 
+	os.Stderr.WriteString(fmt.Sprintf("new clustering... cnt %d\n", clusterCnt))
 	return &ElkanClusterer{
 		maxIterations:  maxIterations,
 		deltaThreshold: deltaThreshold,
@@ -153,6 +159,7 @@ func (km *ElkanClusterer) InitCentroids() error {
 
 // Cluster returns the final centroids and the error if any.
 func (km *ElkanClusterer) Cluster() ([][]float64, error) {
+	os.Stderr.WriteString("Cluster now\n")
 	if km.normalize {
 		moarray.NormalizeGonumVectors(km.vectorList)
 	}
@@ -161,13 +168,16 @@ func (km *ElkanClusterer) Cluster() ([][]float64, error) {
 		return moarray.ToMoArrays[float64](km.vectorList)
 	}
 
+	os.Stderr.WriteString("Cluster InitCentroids\n")
 	err := km.InitCentroids() // step 0.1
 	if err != nil {
 		return nil, err
 	}
 
+	os.Stderr.WriteString("Cluster InitBound\n")
 	km.initBounds() // step 0.2
 
+	os.Stderr.WriteString("Cluster elkansCluster\n")
 	res, err := km.elkansCluster()
 	if err != nil {
 		return nil, err
@@ -177,14 +187,20 @@ func (km *ElkanClusterer) Cluster() ([][]float64, error) {
 }
 
 func (km *ElkanClusterer) elkansCluster() ([]*mat.VecDense, error) {
+	os.Stderr.WriteString("elkanCluster loop start\n")
 
-	for iter := 0; ; iter++ {
+	for iter := 0; iter < 2; iter++ {
+		os.Stderr.WriteString(fmt.Sprintf("iter %d\n", iter))
+		os.Stderr.WriteString("elkanCluster compute centroid distance\n")
 		km.computeCentroidDistances() // step 1
 
+		os.Stderr.WriteString("elkanCluster assigne data\n")
 		changes := km.assignData() // step 2 and 3
 
+		os.Stderr.WriteString("elkanCluster recalc centroids\n")
 		newCentroids := km.recalculateCentroids() // step 4
 
+		os.Stderr.WriteString("elkanCluster update bounds\n")
 		km.updateBounds(newCentroids) // step 5 and 6
 
 		km.centroids = newCentroids // step 7
@@ -194,6 +210,7 @@ func (km *ElkanClusterer) elkansCluster() ([]*mat.VecDense, error) {
 			break
 		}
 	}
+	os.Stderr.WriteString("elkanCluster loop end\n")
 	return km.centroids, nil
 }
 
@@ -236,21 +253,40 @@ func (km *ElkanClusterer) initBounds() {
 	// Assign each x to its closest initial center c(x)=min{ d(x, c) }, using Lemma 1 to avoid
 	// redundant distance calculations. Each time d(x, c) is computed, set l(x, c)=d(x, c).
 	// Assign upper bounds u(x)=min_c d(x, c).
-	for x := range km.vectorList {
-		minDist := math.MaxFloat64
-		closestCenter := 0
-		for c := range km.centroids {
-			dist := km.distFn(km.vectorList[x], km.centroids[c])
-			km.vectorMetas[x].lower[c] = dist
-			if dist < minDist {
-				minDist = dist
-				closestCenter = c
-			}
-		}
 
-		km.vectorMetas[x].upper = minDist
-		km.assignments[x] = closestCenter
+	ncpu := runtime.NumCPU() - 1
+	if len(km.vectorList) < ncpu {
+		ncpu = len(km.vectorList)
 	}
+
+	var wg sync.WaitGroup
+
+	for n := 0; n < ncpu; n++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for x := range km.vectorList {
+				if x%ncpu != n {
+					continue
+				}
+				minDist := math.MaxFloat64
+				closestCenter := 0
+				for c := range km.centroids {
+					dist := km.distFn(km.vectorList[x], km.centroids[c])
+					km.vectorMetas[x].lower[c] = dist
+					if dist < minDist {
+						minDist = dist
+						closestCenter = c
+					}
+				}
+
+				km.vectorMetas[x].upper = minDist
+				km.assignments[x] = closestCenter
+			}
+		}()
+	}
+
+	wg.Wait()
 }
 
 // computeCentroidDistances computes the centroid distances and the min centroid distances.
@@ -260,19 +296,32 @@ func (km *ElkanClusterer) computeCentroidDistances() {
 	// step 1.a
 	// For all centers c and c', compute 0.5 x d(c, c').
 	var wg sync.WaitGroup
-	for r := 0; r < km.clusterCnt; r++ {
-		for c := r + 1; c < km.clusterCnt; c++ {
-			wg.Add(1)
-			go func(i, j int) {
-				defer wg.Done()
-				dist := 0.5 * km.distFn(km.centroids[i], km.centroids[j])
-				km.halfInterCentroidDistMatrix[i][j] = dist
-				km.halfInterCentroidDistMatrix[j][i] = dist
-			}(r, c)
-		}
+	ncpu := runtime.NumCPU() - 1
+	if km.clusterCnt < ncpu {
+		ncpu = km.clusterCnt
+	}
+
+	os.Stderr.WriteString(fmt.Sprintf("Compute elkan kmean %d thread %d cluster Cnt %d START\n", ncpu, km.clusterCnt))
+	for n := 0; n < ncpu; n++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < km.clusterCnt; i++ {
+				for j := i + 1; j < km.clusterCnt; j++ {
+					segid := i*km.clusterCnt + j
+					if segid%ncpu == n {
+						dist := 0.5 * km.distFn(km.centroids[i], km.centroids[j])
+						km.halfInterCentroidDistMatrix[i][j] = dist
+						km.halfInterCentroidDistMatrix[j][i] = dist
+
+					}
+				}
+			}
+		}()
 	}
 	wg.Wait()
 
+	os.Stderr.WriteString(fmt.Sprintf("Compute elkan kmean %d thread END\n", ncpu))
 	// step 1.b
 	//  For all centers c, compute s(c)=0.5 x min{d(c, c') | c'!= c}.
 	for i := 0; i < km.clusterCnt; i++ {
@@ -291,67 +340,85 @@ func (km *ElkanClusterer) computeCentroidDistances() {
 // This is the place where most of the "distance computation skipping" happens.
 func (km *ElkanClusterer) assignData() int {
 
-	changes := 0
+	var changes atomic.Int64
+	ncpu := runtime.NumCPU() - 1
+	if len(km.vectorList) < ncpu {
+		ncpu = len(km.vectorList)
+	}
 
-	for currVector := range km.vectorList {
+	var wg sync.WaitGroup
+	for n := 0; n < ncpu; n++ {
 
-		// step 2
-		// u(x) <= s(c(x))
-		if km.vectorMetas[currVector].upper <= km.minHalfInterCentroidDist[km.assignments[currVector]] {
-			continue
-		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
 
-		for c := range km.centroids { // c is nextPossibleCentroidIdx
-			// step 3
-			// For all remaining points x and centers c such that
-			// (i) c != c(x) and
-			// (ii) u(x)>l(x, c) and
-			// (iii) u(x)> 0.5 x d(c(x), c)
-			if c != km.assignments[currVector] &&
-				km.vectorMetas[currVector].upper > km.vectorMetas[currVector].lower[c] &&
-				km.vectorMetas[currVector].upper > km.halfInterCentroidDistMatrix[km.assignments[currVector]][c] {
+			for currVector := range km.vectorList {
 
-				//step 3.a - Bounds update
-				// If r(x) then compute d(x, c(x)) and assign r(x)= false.
-				var dxcx float64
-				if km.vectorMetas[currVector].recompute {
-					km.vectorMetas[currVector].recompute = false
-
-					dxcx = km.distFn(km.vectorList[currVector], km.centroids[km.assignments[currVector]])
-					km.vectorMetas[currVector].upper = dxcx
-					km.vectorMetas[currVector].lower[km.assignments[currVector]] = dxcx
-
-					if km.vectorMetas[currVector].upper <= km.vectorMetas[currVector].lower[c] {
-						continue // Pruned by triangle inequality on lower bound.
-					}
-
-					if km.vectorMetas[currVector].upper <= km.halfInterCentroidDistMatrix[km.assignments[currVector]][c] {
-						continue // Pruned by triangle inequality on cluster distances.
-					}
-
-				} else {
-					dxcx = km.vectorMetas[currVector].upper //  Otherwise, d(x, c(x))=u(x).
+				if currVector%ncpu != n {
+					continue
+				}
+				// step 2
+				// u(x) <= s(c(x))
+				if km.vectorMetas[currVector].upper <= km.minHalfInterCentroidDist[km.assignments[currVector]] {
+					continue
 				}
 
-				//step 3.b - Update
-				// If d(x, c(x))>l(x, c) or d(x, c(x))> 0.5 d(c(x), c) then
-				// Compute d(x, c)
-				// If d(x, c)<d(x, c(x)) then assign c(x)=c.
-				if dxcx > km.vectorMetas[currVector].lower[c] ||
-					dxcx > km.halfInterCentroidDistMatrix[km.assignments[currVector]][c] {
+				for c := range km.centroids { // c is nextPossibleCentroidIdx
+					// step 3
+					// For all remaining points x and centers c such that
+					// (i) c != c(x) and
+					// (ii) u(x)>l(x, c) and
+					// (iii) u(x)> 0.5 x d(c(x), c)
+					if c != km.assignments[currVector] &&
+						km.vectorMetas[currVector].upper > km.vectorMetas[currVector].lower[c] &&
+						km.vectorMetas[currVector].upper > km.halfInterCentroidDistMatrix[km.assignments[currVector]][c] {
 
-					dxc := km.distFn(km.vectorList[currVector], km.centroids[c]) // d(x,c) in the paper
-					km.vectorMetas[currVector].lower[c] = dxc
-					if dxc < dxcx {
-						km.vectorMetas[currVector].upper = dxc
-						km.assignments[currVector] = c
-						changes++
+						//step 3.a - Bounds update
+						// If r(x) then compute d(x, c(x)) and assign r(x)= false.
+						var dxcx float64
+						if km.vectorMetas[currVector].recompute {
+							km.vectorMetas[currVector].recompute = false
+
+							dxcx = km.distFn(km.vectorList[currVector], km.centroids[km.assignments[currVector]])
+							km.vectorMetas[currVector].upper = dxcx
+							km.vectorMetas[currVector].lower[km.assignments[currVector]] = dxcx
+
+							if km.vectorMetas[currVector].upper <= km.vectorMetas[currVector].lower[c] {
+								continue // Pruned by triangle inequality on lower bound.
+							}
+
+							if km.vectorMetas[currVector].upper <= km.halfInterCentroidDistMatrix[km.assignments[currVector]][c] {
+								continue // Pruned by triangle inequality on cluster distances.
+							}
+
+						} else {
+							dxcx = km.vectorMetas[currVector].upper //  Otherwise, d(x, c(x))=u(x).
+						}
+
+						//step 3.b - Update
+						// If d(x, c(x))>l(x, c) or d(x, c(x))> 0.5 d(c(x), c) then
+						// Compute d(x, c)
+						// If d(x, c)<d(x, c(x)) then assign c(x)=c.
+						if dxcx > km.vectorMetas[currVector].lower[c] ||
+							dxcx > km.halfInterCentroidDistMatrix[km.assignments[currVector]][c] {
+
+							dxc := km.distFn(km.vectorList[currVector], km.centroids[c]) // d(x,c) in the paper
+							km.vectorMetas[currVector].lower[c] = dxc
+							if dxc < dxcx {
+								km.vectorMetas[currVector].upper = dxc
+								km.assignments[currVector] = c
+								changes.Add(1)
+							}
+						}
 					}
 				}
 			}
-		}
+		}()
 	}
-	return changes
+
+	wg.Wait()
+	return int(changes.Load())
 }
 
 // recalculateCentroids calculates the new mean centroids based on the new assignments.
@@ -405,13 +472,22 @@ func (km *ElkanClusterer) updateBounds(newCentroid []*mat.VecDense) {
 	// d(c', m(c')) in the paper
 	centroidShiftDist := make([]float64, km.clusterCnt)
 	var wg sync.WaitGroup
-	for c := 0; c < km.clusterCnt; c++ {
+
+	ncpu := runtime.NumCPU()
+	if ncpu > km.clusterCnt {
+		ncpu = km.clusterCnt
+	}
+	for n := 0; n < ncpu; n++ {
 		wg.Add(1)
-		go func(cIdx int) {
+		go func() {
 			defer wg.Done()
-			centroidShiftDist[cIdx] = km.distFn(km.centroids[cIdx], newCentroid[cIdx])
-			logutil.Debugf("centroidShiftDist[%d]=%f", cIdx, centroidShiftDist[cIdx])
-		}(c)
+			for c := 0; c < km.clusterCnt; c++ {
+				if c%ncpu == n {
+					centroidShiftDist[c] = km.distFn(km.centroids[c], newCentroid[c])
+					//logutil.Debugf("centroidShiftDist[%d]=%f", c, centroidShiftDist[c])
+				}
+			}
+		}()
 	}
 	wg.Wait()
 

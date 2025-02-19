@@ -16,6 +16,10 @@ package aggexec
 
 import (
 	"fmt"
+	"os"
+	"strconv"
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
@@ -24,8 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec/algos/kmeans"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec/algos/kmeans/elkans"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
-	"strconv"
-	"strings"
 )
 
 const (
@@ -79,6 +81,7 @@ func (exec *clusterCentersExec) GetOptResult() SplitResult {
 }
 
 func (exec *clusterCentersExec) marshal() ([]byte, error) {
+	os.Stderr.WriteString("clusterCentersExc marshal()\n")
 	d := exec.singleAggInfo.getEncoded()
 	r, em, err := exec.ret.marshalToBytes()
 	if err != nil {
@@ -115,6 +118,7 @@ func (exec *clusterCentersExec) marshal() ([]byte, error) {
 }
 
 func (exec *clusterCentersExec) unmarshal(mp *mpool.MPool, result, empties, groups [][]byte) error {
+	os.Stderr.WriteString("clusterCentersExc unmarshal()\n")
 	if err := exec.ret.unmarshalFromBytes(result, empties); err != nil {
 		return err
 	}
@@ -139,6 +143,7 @@ func (exec *clusterCentersExec) unmarshal(mp *mpool.MPool, result, empties, grou
 }
 
 func newClusterCentersExecutor(mg AggMemoryManager, info singleAggInfo) (AggFuncExec, error) {
+	os.Stderr.WriteString(fmt.Sprintf("clusterCentersExc New() Aggid %d\n", info.AggID()))
 	if info.distinct {
 		return nil, moerr.NewInternalErrorNoCtx("do not support distinct for cluster_centers()")
 	}
@@ -153,6 +158,7 @@ func newClusterCentersExecutor(mg AggMemoryManager, info singleAggInfo) (AggFunc
 }
 
 func (exec *clusterCentersExec) GroupGrow(more int) error {
+	os.Stderr.WriteString(fmt.Sprintf("clusterCentersExc GroupGrow(%d)\n", more))
 	if err := exec.ret.grows(more); err != nil {
 		return err
 	}
@@ -167,6 +173,7 @@ func (exec *clusterCentersExec) PreAllocateGroups(more int) error {
 }
 
 func (exec *clusterCentersExec) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
+	os.Stderr.WriteString("clusterCentersExc Fill()\n")
 	if vectors[0].IsNull(uint64(row)) {
 		return nil
 	}
@@ -180,6 +187,7 @@ func (exec *clusterCentersExec) Fill(groupIndex int, row int, vectors []*vector.
 }
 
 func (exec *clusterCentersExec) BulkFill(groupIndex int, vectors []*vector.Vector) error {
+	os.Stderr.WriteString("clusterCentersExc BulkFill()\n")
 	if vectors[0].IsConstNull() {
 		return nil
 	}
@@ -212,6 +220,7 @@ func (exec *clusterCentersExec) BulkFill(groupIndex int, vectors []*vector.Vecto
 }
 
 func (exec *clusterCentersExec) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
+	os.Stderr.WriteString("clusterCentersExc BatchFill()\n")
 	if vectors[0].IsConstNull() {
 		return nil
 	}
@@ -256,6 +265,7 @@ func (exec *clusterCentersExec) BatchFill(offset int, groups []uint64, vectors [
 }
 
 func (exec *clusterCentersExec) Merge(next AggFuncExec, groupIdx1 int, groupIdx2 int) error {
+	os.Stderr.WriteString("clusterCentersExc Merge()\n")
 	other := next.(*clusterCentersExec)
 	if other.groupData[groupIdx2] == nil || other.groupData[groupIdx2].Length() == 0 {
 		return nil
@@ -281,6 +291,7 @@ func (exec *clusterCentersExec) Merge(next AggFuncExec, groupIdx1 int, groupIdx2
 }
 
 func (exec *clusterCentersExec) BatchMerge(next AggFuncExec, offset int, groups []uint64) error {
+	os.Stderr.WriteString("clusterCentersExc BatchMerge()\n")
 	for i, group := range groups {
 		if group != GroupNotMatched {
 			if err := exec.Merge(next, int(group)-1, i+offset); err != nil {
@@ -292,6 +303,8 @@ func (exec *clusterCentersExec) BatchMerge(next AggFuncExec, offset int, groups 
 }
 
 func (exec *clusterCentersExec) Flush() ([]*vector.Vector, error) {
+	os.Stderr.WriteString(fmt.Sprintf("clusterCentersExc Flush() id %d\n", exec.AggID()))
+
 	switch exec.singleAggInfo.argType.Oid {
 	case types.T_array_float32:
 		if err := exec.flushArray32(); err != nil {
@@ -377,6 +390,7 @@ func (exec *clusterCentersExec) getCentersByKmeansAlgorithm(f64s [][]float64) ([
 	var centers [][]float64
 	var err error
 
+	os.Stderr.WriteString("clusterCenterExec: start KmeanAlgorithm\n")
 	if clusterer, err = elkans.NewKMeans(
 		f64s, int(exec.clusterCnt),
 		defaultKmeansMaxIteration,

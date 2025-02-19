@@ -15,10 +15,15 @@
 package elkans
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec/algos/kmeans"
-	"gonum.org/v1/gonum/mat"
+	"fmt"
 	"math"
 	"math/rand"
+	"os"
+	"runtime"
+	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec/algos/kmeans"
+	"gonum.org/v1/gonum/mat"
 )
 
 type Initializer interface {
@@ -67,8 +72,11 @@ func NewKMeansPlusPlusInitializer(distFn kmeans.DistanceFunction) Initializer {
 }
 
 func (kpp *KMeansPlusPlus) InitCentroids(vectors []*mat.VecDense, k int) (centroids []*mat.VecDense) {
+	var mutex sync.Mutex
 	numSamples := len(vectors)
 	centroids = make([]*mat.VecDense, k)
+
+	os.Stderr.WriteString(fmt.Sprintf("KmeanPlusPlus init centroid numSampe = %d\n", numSamples))
 
 	// 1. start with a random center
 	centroids[0] = vectors[kpp.rand.Intn(numSamples)]
@@ -78,21 +86,46 @@ func (kpp *KMeansPlusPlus) InitCentroids(vectors []*mat.VecDense, k int) (centro
 		distances[j] = math.MaxFloat64
 	}
 
+	ncpu := runtime.NumCPU() - 1
+	if numSamples < ncpu {
+		ncpu = numSamples
+	}
+
 	for nextCentroidIdx := 1; nextCentroidIdx < k; nextCentroidIdx++ {
 
 		// 2. for each data point, compute the min distance to the existing centers
 		var totalDistToExistingCenters float64
-		for vecIdx := range vectors {
-			// this is a deviation from standard kmeans.here we are not using minDistance to all the existing centers.
-			// This code was very slow: https://github.com/matrixorigin/matrixone/blob/77ff1452bd56cd93a10e3327632adebdbaf279cb/pkg/sql/plan/function/functionAgg/algos/kmeans/elkans/initializer.go#L81-L86
-			// but instead we are using the distance to the last center that was chosen.
-			distance := kpp.distFn(vectors[vecIdx], centroids[nextCentroidIdx-1])
-			distance *= distance
-			if distance < distances[vecIdx] {
-				distances[vecIdx] = distance
-			}
-			totalDistToExistingCenters += distances[vecIdx]
+
+		var wg sync.WaitGroup
+		for n := 0; n < ncpu; n++ {
+			wg.Add(1)
+
+			go func() {
+				wg.Done()
+
+				for vecIdx := range vectors {
+
+					if vecIdx%ncpu != n {
+						continue
+					}
+
+					// this is a deviation from standard kmeans.here we are not using minDistance to all the existing centers.
+					// This code was very slow: https://github.com/matrixorigin/matrixone/blob/77ff1452bd56cd93a10e3327632adebdbaf279cb/pkg/sql/plan/function/functionAgg/algos/kmeans/elkans/initializer.go#L81-L86
+					// but instead we are using the distance to the last center that was chosen.
+					distance := kpp.distFn(vectors[vecIdx], centroids[nextCentroidIdx-1])
+
+					distance *= distance
+					mutex.Lock()
+					if distance < distances[vecIdx] {
+						distances[vecIdx] = distance
+					}
+					totalDistToExistingCenters += distances[vecIdx]
+					mutex.Unlock()
+				}
+			}()
 		}
+
+		wg.Wait()
 
 		// 3. choose the next random center, using a weighted probability distribution
 		// where it is chosen with probability proportional to D(x)^2
@@ -106,5 +139,6 @@ func (kpp *KMeansPlusPlus) InitCentroids(vectors []*mat.VecDense, k int) (centro
 			}
 		}
 	}
+	os.Stderr.WriteString("KmeanPlusPlus init centroid END\n")
 	return centroids
 }
