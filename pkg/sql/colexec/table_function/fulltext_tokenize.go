@@ -30,8 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const DOC_LEN_WORD = "__DocLen" //
-
 type FullTextEntry struct {
 	DocId any
 	Pos   int32
@@ -179,7 +177,7 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 			u.doc.Words = append(u.doc.Words, FullTextEntry{DocId: id, Word: word, Pos: t.BytePos})
 		}
 
-		u.doc.Words = append(u.doc.Words, FullTextEntry{DocId: id, Word: DOC_LEN_WORD, Pos: int32(len(u.doc.Words))})
+		u.doc.Words = append(u.doc.Words, FullTextEntry{DocId: id, Word: fulltext.DOC_LEN_WORD, Pos: int32(len(u.doc.Words))})
 	case "json":
 		joffset := int32(0)
 		for i := 1; i < vlen; i++ {
@@ -214,7 +212,7 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 
 			joffset += int32(len(c))
 		}
-		u.doc.Words = append(u.doc.Words, FullTextEntry{DocId: id, Word: DOC_LEN_WORD, Pos: int32(len(u.doc.Words))})
+		u.doc.Words = append(u.doc.Words, FullTextEntry{DocId: id, Word: fulltext.DOC_LEN_WORD, Pos: int32(len(u.doc.Words))})
 	case "json_value":
 		joffset := int32(0)
 		for i := 1; i < vlen; i++ {
@@ -243,7 +241,7 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 
 			joffset += int32(len(c))
 		}
-		u.doc.Words = append(u.doc.Words, FullTextEntry{DocId: id, Word: DOC_LEN_WORD, Pos: int32(len(u.doc.Words))})
+		u.doc.Words = append(u.doc.Words, FullTextEntry{DocId: id, Word: fulltext.DOC_LEN_WORD, Pos: int32(len(u.doc.Words))})
 	default:
 		return moerr.NewInternalError(proc.Ctx, "Invalid fulltext parser")
 	}

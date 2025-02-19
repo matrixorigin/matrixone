@@ -218,7 +218,7 @@ func TestFullTextNL(t *testing.T) {
 	s, err := NewSearchAccum("src", "index", pattern, int64(tree.FULLTEXT_NL), "", ALGO_TFIDF)
 	require.Nil(t, err)
 
-	sql, err := PatternToSql(s.Pattern, int64(tree.FULLTEXT_NL), "indextbl", "")
+	sql, err := PatternToSql(s.Pattern, int64(tree.FULLTEXT_NL), "indextbl", "", ALGO_TFIDF)
 	require.Nil(t, err)
 
 	fmt.Println(sql)
@@ -983,7 +983,7 @@ func TestFullTextPhrase(t *testing.T) {
 	s, err := NewSearchAccum("src", "index", pattern, int64(tree.FULLTEXT_BOOLEAN), "", ALGO_TFIDF)
 	require.Nil(t, err)
 
-	sql, err := PatternToSql(s.Pattern, int64(tree.FULLTEXT_BOOLEAN), "idxtbl", "")
+	sql, err := PatternToSql(s.Pattern, int64(tree.FULLTEXT_BOOLEAN), "idxtbl", "", ALGO_TFIDF)
 	require.Nil(t, err)
 	fmt.Println(sql)
 

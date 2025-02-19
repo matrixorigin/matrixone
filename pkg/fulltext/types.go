@@ -19,11 +19,19 @@ import "strings"
 const BM25_K1 = 1.5
 const BM25_B = 0.75
 
+const DOC_LEN_WORD = "__DocLen" //
+
 type FullTextScoreAlgo int
 
 const (
 	ALGO_BM25 FullTextScoreAlgo = iota
 	ALGO_TFIDF
+)
+
+const (
+	fulltextRelevancyAlgo       = "ft_relevancy_algorithm"
+	fulltextRelevancyAlgo_bm25  = "BM25"
+	fulltextRelevancyAlgo_tfidf = "TFIDF"
 )
 
 /*
@@ -107,7 +115,7 @@ type SearchAccum struct {
 	Nkeywords  int
 
 	ScoreAlgo FullTextScoreAlgo
-	DocLenMap map[string]int64
+	DocLenMap map[any]int32
 	AvgDocLen float64
 }
 

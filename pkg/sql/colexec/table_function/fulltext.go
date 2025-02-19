@@ -34,11 +34,8 @@ import (
 )
 
 const (
-	countstar_sql               = "SELECT COUNT(*) FROM %s"
-	get_doc_len_sql             = "SELECT doc_id, pos from %s where word = '%s'"
-	fulltextRelevancyAlgo       = "ft_relevancy_algorithm"
-	fulltextRelevancyAlgo_bm25  = "BM25"
-	fulltextRelevancyAlgo_tfidf = "TFIDF"
+	countstar_sql       = "SELECT COUNT(*) FROM %s"
+	countstart_bm25_sql = "SELECT COUNT(*), AVG(pos) from %s where word = '%s'"
 )
 
 type fulltextState struct {
@@ -194,16 +191,9 @@ func (u *fulltextState) start(tf *TableFunction, proc *process.Process, nthRow i
 	}
 	mode := vector.GetFixedAtNoTypeCheck[int64](v, 0)
 
-	scoreAlgo := fulltext.ALGO_BM25
-	val, err := proc.GetResolveVariableFunc()(fulltextRelevancyAlgo, true, false)
+	scoreAlgo, err := fulltext.GetScoreAlgo(proc)
 	if err != nil {
 		return err
-	}
-	if val != nil {
-		algo := fmt.Sprintf("%v", val)
-		if algo == fulltextRelevancyAlgo_tfidf {
-			scoreAlgo = fulltext.ALGO_TFIDF
-		}
 	}
 
 	return fulltextIndexMatch(u, proc, tf, source_table, index_table, pattern, mode, scoreAlgo, u.batch)
@@ -287,7 +277,7 @@ func ft_runSql_streaming_fn(proc *process.Process, sql string, stream_chan chan 
 // run SQL to get the (doc_id, word_index) of all patterns (words) in the search string
 func runWordStats(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) (executor.Result, error) {
 
-	sql, err := fulltext.PatternToSql(s.Pattern, s.Mode, s.TblName, u.param.Parser)
+	sql, err := fulltext.PatternToSql(s.Pattern, s.Mode, s.TblName, u.param.Parser, s.ScoreAlgo)
 	if err != nil {
 		return executor.Result{}, err
 	}
@@ -366,9 +356,10 @@ func groupby(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) (
 	bat := res.Batches[0]
 	defer res.Close()
 
-	if len(bat.Vecs) != 2 {
+	if len(bat.Vecs) > 3 {
 		return false, moerr.NewInternalError(proc.Ctx, "output vector columns not match")
 	}
+	needSetDocLen := len(bat.Vecs) == 3
 
 	u.nrows += bat.RowCount()
 
@@ -381,6 +372,11 @@ func groupby(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) (
 			// change it to string
 			key := string(bytes)
 			doc_id = key
+		}
+
+		if needSetDocLen {
+			docLen := vector.GetFixedAtWithTypeCheck[int32](bat.Vecs[2], i)
+			s.DocLenMap[doc_id] = docLen
 		}
 
 		// word string
@@ -456,28 +452,37 @@ func groupby(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) (
 }
 
 // Run SQL to get number of records in source table
-func runCountStar(proc *process.Process, s *fulltext.SearchAccum) (int64, error) {
-	var nrow int64
-	nrow = 0
-	sql := fmt.Sprintf(countstar_sql, s.SrcTblName)
+func runCountStar(proc *process.Process, s *fulltext.SearchAccum) error {
+	var sql string
+	if s.ScoreAlgo == fulltext.ALGO_BM25 {
+		sql = fmt.Sprintf(countstart_bm25_sql, s.TblName, fulltext.DOC_LEN_WORD)
+	} else {
+		sql = fmt.Sprintf(countstar_sql, s.SrcTblName)
+	}
 
 	res, err := ft_runSql(proc, sql)
 	if err != nil {
-		return 0, err
+		return err
 	}
 	defer res.Close()
 
 	if len(res.Batches) == 0 {
-		return 0, nil
+		return nil
 	}
 
 	bat := res.Batches[0]
 	if bat.RowCount() == 1 {
-		nrow = vector.GetFixedAtWithTypeCheck[int64](bat.Vecs[0], 0)
+		nrow := vector.GetFixedAtWithTypeCheck[int64](bat.Vecs[0], 0)
+		s.Nrow = nrow
+
+		if s.ScoreAlgo == fulltext.ALGO_BM25 {
+			avgDocLen := vector.GetFixedAtWithTypeCheck[float64](bat.Vecs[1], 0)
+			s.AvgDocLen = avgDocLen
+		}
 		//logutil.Infof("NROW = %d", nrow)
 	}
 
-	return nrow, nil
+	return nil
 }
 
 func fulltextIndexMatch(u *fulltextState, proc *process.Process, tableFunction *TableFunction, srctbl, tblname, pattern string,
@@ -495,11 +500,10 @@ func fulltextIndexMatch(u *fulltextState, proc *process.Process, tableFunction *
 		u.aggcnt = make([]int64, s.Nkeywords)
 
 		// count(*) to get number of records in source table
-		nrow, err := runCountStar(proc, s)
+		err = runCountStar(proc, s)
 		if err != nil {
 			return err
 		}
-		s.Nrow = nrow
 
 		u.sacc = s
 

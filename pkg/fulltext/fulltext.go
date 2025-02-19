@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/monlp/tokenizer"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 /*
@@ -53,7 +54,7 @@ func NewSearchAccum(srctbl string, tblname string, pattern string, mode int64, p
 
 	nwords := GetResultCountFromPattern(ps)
 	return &SearchAccum{SrcTblName: srctbl, TblName: tblname, Mode: mode,
-		Pattern: ps, Params: params, Nkeywords: nwords, ScoreAlgo: scoreAlgo}, nil
+		Pattern: ps, Params: params, Nkeywords: nwords, ScoreAlgo: scoreAlgo, DocLenMap: make(map[any]int32)}, nil
 }
 
 // find pattern by operator
@@ -934,4 +935,19 @@ func ParsePattern(pattern string, mode int64) ([]*Pattern, error) {
 		return nil, moerr.NewInternalErrorNoCtx("invalid fulltext search mode")
 
 	}
+}
+
+func GetScoreAlgo(proc *process.Process) (FullTextScoreAlgo, error) {
+	scoreAlgo := ALGO_BM25
+	val, err := proc.GetResolveVariableFunc()(fulltextRelevancyAlgo, true, false)
+	if err != nil {
+		return scoreAlgo, err
+	}
+	if val != nil {
+		algo := fmt.Sprintf("%v", val)
+		if algo == fulltextRelevancyAlgo_tfidf {
+			scoreAlgo = ALGO_TFIDF
+		}
+	}
+	return scoreAlgo, err
 }
