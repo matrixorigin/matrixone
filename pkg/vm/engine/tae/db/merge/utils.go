@@ -318,7 +318,7 @@ func CleanUpUselessFiles(entry *api.MergeCommitEntry, fs fileservice.FileService
 }
 
 type policy interface {
-	onObject(*catalog.ObjectEntry, *BasicPolicyConfig) bool
+	onObject(*catalog.ObjectEntry) bool
 	revise(*resourceController) []reviseResult
 	resetForTable(*catalog.TableEntry, *BasicPolicyConfig)
 }
