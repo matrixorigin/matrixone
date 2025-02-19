@@ -20,7 +20,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"
+)
+
+const (
+	GroupCKP      = entry.GTCKp
+	GroupInternal = entry.GTInternal
+	GroupFiles    = entry.GTFiles
 )
 
 const (
@@ -34,21 +39,34 @@ type ReplayObserver interface {
 
 type LogEntry = entry.Entry
 
-type Driver interface {
-	GetCheckpointed() uint64
-	RangeCheckpoint(start, end uint64, files ...string) (e LogEntry, err error)
-	AppendEntry(uint32, LogEntry) (uint64, error)
+type Store interface {
+	AppendEntry(gid uint32, entry entry.Entry) (lsn uint64, err error)
+
+	// it always checkpoint the GroupPrepare group
+	RangeCheckpoint(start, end uint64, files ...string) (ckpEntry entry.Entry, err error)
+
+	// only used in the test
+	// it returns the next lsn of group `GroupPrepare`
+	GetLSNWatermark() (lsn uint64)
+	// only used in the test
+	// it returns the remaining entries of group `GroupPrepare` to be checkpointed
+	// GetLSNWatermark() - GetCheckpointed()
+	GetPenddingCnt() (cnt uint64)
+	// only used in the test
+	// it returns the last lsn of group `GroupPrepare` that has been checkpointed
+	GetCheckpointed() (lsn uint64)
+	// only used in the test
+	// it returns the truncated dsn
+	GetTruncated() uint64
 
 	Replay(
 		ctx context.Context,
-		handle store.ApplyHandle,
+		h ApplyHandle,
 		modeGetter func() driver.ReplayMode,
 		opt *driver.ReplayOption,
 	) error
+
 	Close() error
-
-	GetTruncated() uint64
-
-	GetLSNWatermark() uint64
-	GetPenddingCnt() uint64
 }
+
+type ApplyHandle = func(group uint32, commitId uint64, payload []byte, typ uint16, info any) driver.ReplayEntryState

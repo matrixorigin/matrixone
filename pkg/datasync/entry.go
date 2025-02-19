@@ -26,9 +26,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/logservicedriver"
 	entry2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/wal"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
 const (
@@ -56,7 +55,7 @@ func getLocations(rec logservice.LogRecord, tag string) []string {
 		payload := en.Entry.GetPayload()
 		if ei.Group == wal.GroupPrepare {
 			locations = append(locations, parseCommonFiles(payload, tag)...)
-		} else if ei.Group == store.GroupFiles {
+		} else if ei.Group == wal.GroupFiles {
 			locations = append(locations, parseMetaFiles(payload, tag)...)
 		}
 	})

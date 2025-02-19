@@ -32,10 +32,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/wal"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
 var ErrCancelReplayAnyway = moerr.NewInternalErrorNoCtx("terminate")
@@ -249,7 +248,7 @@ func (replayer *WalReplayer) Schedule(
 
 func (replayer *WalReplayer) MakeReplayHandle(
 	sender chan<- *txnbase.TxnCmd,
-) store.ApplyHandle {
+) wal.ApplyHandle {
 	return func(
 		group uint32, lsn uint64, payload []byte, typ uint16, info any,
 	) driver.ReplayEntryState {

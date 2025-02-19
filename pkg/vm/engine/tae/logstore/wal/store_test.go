@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package store
+package wal
 
 import (
 	"context"
@@ -174,12 +174,12 @@ func TestTruncate(t *testing.T) {
 		entryGroupID, entryLSN := e.GetLsn()
 		assert.Equal(t, group, entryGroupID)
 		assert.Equal(t, lsn, entryLSN)
-		currLsn := wal.GetCurrSeqNum()
+		currLsn := wal.GetLSNWatermark()
 		assert.LessOrEqual(t, lsn, currLsn)
 		assert.NoError(t, e.WaitDone())
 	}
 
-	currLsn := wal.GetCurrSeqNum()
+	currLsn := wal.GetLSNWatermark()
 	drcurrLsn := driver.GetDSN()
 	ckpEntry, err := wal.RangeCheckpoint(0, currLsn)
 	assert.NoError(t, err)
@@ -202,12 +202,12 @@ func TestTruncate(t *testing.T) {
 		entryGroupID, entryLSN := e.GetLsn()
 		assert.Equal(t, group, entryGroupID)
 		assert.Equal(t, lsn, entryLSN)
-		currLsn := wal.GetCurrSeqNum()
+		currLsn := wal.GetLSNWatermark()
 		assert.LessOrEqual(t, lsn, currLsn)
 		assert.NoError(t, e.WaitDone())
 	}
 
-	currLsn = wal.GetCurrSeqNum()
+	currLsn = wal.GetLSNWatermark()
 	drcurrLsn = driver.GetDSN()
 	ckpEntry, err = wal.RangeCheckpoint(0, currLsn)
 	assert.NoError(t, err)
@@ -261,14 +261,14 @@ func TestReplayWithCheckpoint(t *testing.T) {
 			entryGroupID, entryLSN := e.GetLsn()
 			assert.Equal(t, group, entryGroupID)
 			assert.Equal(t, lsn, entryLSN)
-			currLsn := wal.GetCurrSeqNum()
+			currLsn := wal.GetLSNWatermark()
 			assert.LessOrEqual(t, lsn, currLsn)
 		}
 	}
 
 	assert.Equal(t, uint64(0), wal.GetCheckpointed())
 	assert.Equal(t, uint64(0), wal.GetTruncated())
-	assert.Equal(t, uint64(4), wal.GetCurrSeqNum())
+	assert.Equal(t, uint64(4), wal.GetLSNWatermark())
 
 	// map[11:map[1:1 2:2 3:5 4:6] 200000:map[1:3 2:4]]
 	mappingExpected := map[uint32]map[uint64]uint64{
@@ -291,7 +291,7 @@ func TestReplayWithCheckpoint(t *testing.T) {
 		return wal.GetCheckpointed() == uint64(3)
 	})
 	assert.Equal(t, uint64(3), wal.GetCheckpointed())
-	assert.Equal(t, uint64(1), wal.GetPendding())
+	assert.Equal(t, uint64(1), wal.GetPenddingCnt())
 	testutils.WaitExpect(4000, func() bool {
 		return wal.GetTruncated() == uint64(5)
 	})
@@ -306,13 +306,13 @@ func TestReplayWithCheckpoint(t *testing.T) {
 			entryGroupID, entryLSN := e.GetLsn()
 			assert.Equal(t, group, entryGroupID)
 			assert.Equal(t, lsn, entryLSN)
-			currLsn := wal.GetCurrSeqNum()
+			currLsn := wal.GetLSNWatermark()
 			assert.LessOrEqual(t, lsn, currLsn)
 		}
 	}
 
 	assert.Equal(t, uint64(3), wal.GetCheckpointed())
-	assert.Equal(t, uint64(3), wal.GetPendding())
+	assert.Equal(t, uint64(3), wal.GetPenddingCnt())
 	assert.Equal(t, uint64(5), wal.GetTruncated())
 
 	ckpEntry, err = wal.RangeCheckpoint(0, 5)
@@ -321,9 +321,9 @@ func TestReplayWithCheckpoint(t *testing.T) {
 	testutils.WaitExpect(4000, func() bool {
 		return wal.GetCheckpointed() == uint64(5)
 	})
-	assert.Equal(t, uint64(6), wal.GetCurrSeqNum())
+	assert.Equal(t, uint64(6), wal.GetLSNWatermark())
 	assert.Equal(t, uint64(5), wal.GetCheckpointed())
-	assert.Equal(t, uint64(1), wal.GetPendding())
+	assert.Equal(t, uint64(1), wal.GetPenddingCnt())
 	testutils.WaitExpect(4000, func() bool {
 		return wal.GetTruncated() == uint64(8)
 	})
@@ -338,15 +338,15 @@ func TestReplayWithCheckpoint(t *testing.T) {
 			entryGroupID, entryLSN := e.GetLsn()
 			assert.Equal(t, group, entryGroupID)
 			assert.Equal(t, lsn, entryLSN)
-			currLsn := wal.GetCurrSeqNum()
+			currLsn := wal.GetLSNWatermark()
 			assert.LessOrEqual(t, lsn, currLsn)
 		}
 	}
 
 	assert.Equal(t, uint64(5), wal.GetCheckpointed())
-	assert.Equal(t, uint64(3), wal.GetPendding())
+	assert.Equal(t, uint64(3), wal.GetPenddingCnt())
 	assert.Equal(t, uint64(8), wal.GetTruncated())
-	assert.Equal(t, uint64(8), wal.GetCurrSeqNum())
+	assert.Equal(t, uint64(8), wal.GetLSNWatermark())
 
 	_, err = wal.RangeCheckpoint(0, 3)
 	assert.ErrorIs(t, err, ErrStaleCheckpointIntent)
@@ -358,10 +358,10 @@ func TestReplayWithCheckpoint(t *testing.T) {
 
 	err = wal.Replay(context.Background(), replayHandle, modeGetter, nil)
 	assert.NoError(t, err)
-	assert.Equal(t, uint64(8), wal.GetCurrSeqNum())
+	assert.Equal(t, uint64(8), wal.GetLSNWatermark())
 	assert.Equal(t, uint64(5), wal.GetCheckpointed())
 	assert.Equal(t, uint64(8), wal.GetTruncated())
-	assert.Equal(t, uint64(3), wal.GetPendding())
+	assert.Equal(t, uint64(3), wal.GetPenddingCnt())
 	assert.Equal(t, map[uint64]uint64{6: 9, 7: 13, 8: 14}, wal.lsn2dsn.mapping[11])
 	assert.Equal(t, map[uint64]uint64{3: 10, 4: 11}, wal.lsn2dsn.mapping[200000])
 

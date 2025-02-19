@@ -61,7 +61,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/logservicedriver"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/wal"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
@@ -73,7 +73,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -6758,7 +6757,7 @@ func TestAppendAndGC2(t *testing.T) {
 	db = tae.DB
 	files := make(map[string]struct{}, 0)
 	loadFiles := func(group uint32, lsn uint64, payload []byte, typ uint16, info any) driver.ReplayEntryState {
-		if group != store.GroupFiles {
+		if group != wal.GroupFiles {
 			return driver.RE_Nomal
 		}
 		vec := vector.NewVec(types.Type{})
@@ -6778,7 +6777,7 @@ func TestAppendAndGC2(t *testing.T) {
 	}
 	dir := tae.Dir
 	tae.Close()
-	wal := wal.NewBatchStoreDriver(opts.Ctx, dir, "wal", nil)
+	wal := wal.NewStoreWithBatchStoreDriver(dir, "wal", nil)
 	err = wal.Replay(
 		opts.Ctx,
 		loadFiles,
