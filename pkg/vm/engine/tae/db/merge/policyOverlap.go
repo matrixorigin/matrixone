@@ -82,7 +82,7 @@ func (m *objOverlapPolicy) revise(rc *resourceController) []reviseResult {
 					continue
 				}
 				viewed[p.obj] = struct{}{}
-				if p.obj.OriginSize() < m.config.MaxOsizeMergedObj && sum < m.config.MaxOsizeMergedObj {
+				if p.obj.OriginSize() < m.config.MaxOsizeMergedObj || sum < m.config.MaxOsizeMergedObj {
 					sum += p.obj.OriginSize()
 					tmp = append(tmp, p.obj)
 				} else {
