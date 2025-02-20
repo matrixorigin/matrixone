@@ -520,6 +520,7 @@ func HandleShardingReadPrimaryKeysMayBeModified(
 		to,
 		batch,
 		0,
+		-1,
 	)
 	if err != nil {
 		return nil, err
