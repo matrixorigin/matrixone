@@ -27,6 +27,25 @@ func L2Distance(v1, v2 *mat.VecDense) float64 {
 	return mat.Norm(diff, 2)
 }
 
+// InnerProduct is used for InnerProduct distance in Spherical Kmeans.
+func InnerProduct(v1, v2 *mat.VecDense) float64 {
+	return mat.Dot(v1, v2)
+}
+
+// CosineDistance is used for CosineDistance distance in Spherical Kmeans.
+func CosineDistance(v1, v2 *mat.VecDense) float64 {
+	similarity := mat.Dot(v1, v2) / (mat.Norm(v1, 2) * mat.Norm(v2, 2))
+	similarity = min(max(similarity, -1), 1)
+	return 1 - similarity
+}
+
+// L1Distance is used for L1Distance distance in Manhattan Kmeans.
+func L1Distance(v1, v2 *mat.VecDense) float64 {
+	diff := mat.NewVecDense(v1.Len(), nil)
+	diff.SubVec(v1, v2)
+	return mat.Norm(diff, 1)
+}
+
 //// SphericalDistance is used for InnerProduct and CosineDistance in Spherical Kmeans.
 //// NOTE: spherical distance between two points on a sphere is equal to the
 //// angular distance between the two points, scaled by pi.
@@ -66,8 +85,12 @@ func resolveDistanceFn(distType kmeans.DistanceType) (kmeans.DistanceFunction, e
 	switch distType {
 	case kmeans.L2Distance:
 		distanceFunction = L2Distance
-	//case kmeans.InnerProduct, kmeans.CosineDistance:
-	//	distanceFunction = SphericalDistance
+	case kmeans.InnerProduct:
+		distanceFunction = InnerProduct
+	case kmeans.CosineDistance:
+		distanceFunction = CosineDistance
+	case kmeans.L1Distance:
+		distanceFunction = L1Distance
 	default:
 		return nil, moerr.NewInternalErrorNoCtx("invalid distance type")
 	}
