@@ -15,6 +15,7 @@
 package table_function
 
 import (
+	"math/rand"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -352,10 +353,12 @@ func makeBatchFT(proc *process.Process) *batch.Batch {
 
 // create count (int64)
 func makeCountBatchFT(proc *process.Process) *batch.Batch {
-	bat := batch.NewWithSize(1)
+	bat := batch.NewWithSize(2)
 	bat.Vecs[0] = vector.NewVec(types.New(types.T_int64, 8, 0))
+	bat.Vecs[1] = vector.NewVec(types.New(types.T_float64, 8, 4))
 
 	vector.AppendFixed[int64](bat.Vecs[0], int64(100), false, proc.Mp())
+	vector.AppendFixed[float64](bat.Vecs[1], float64(10.6666), false, proc.Mp())
 
 	bat.SetRowCount(1)
 	return bat
@@ -363,9 +366,10 @@ func makeCountBatchFT(proc *process.Process) *batch.Batch {
 
 // create (doc_id, text)
 func makeTextBatchFT(proc *process.Process) *batch.Batch {
-	bat := batch.NewWithSize(2)
+	bat := batch.NewWithSize(3)
 	bat.Vecs[0] = vector.NewVec(types.New(types.T_int32, 4, 0)) // doc_id
 	bat.Vecs[1] = vector.NewVec(types.New(types.T_int32, 4, 0)) // word index
+	bat.Vecs[2] = vector.NewVec(types.New(types.T_int32, 4, 0)) // word index
 
 	nitem := 8192*3 + 1
 	for i := 0; i < nitem; i++ {
@@ -374,6 +378,10 @@ func makeTextBatchFT(proc *process.Process) *batch.Batch {
 
 		// word index
 		vector.AppendFixed[int32](bat.Vecs[1], int32(0), false, proc.Mp())
+
+		// doc len
+		docLen := rand.Intn(20)
+		vector.AppendFixed[int32](bat.Vecs[2], int32(docLen), false, proc.Mp())
 	}
 
 	bat.SetRowCount(nitem)
