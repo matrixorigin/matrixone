@@ -2,15 +2,15 @@
 # for triage only
 
 # github and CI-related stuff
-.github @sukki37
-.github/actions @sukki37
-.github/workflow @sukki37
+.github @fengttt
+.github/actions @fengttt
+.github/workflow @fengttt
 
 # files under the top-level directory
-/*.yml @sukki37
-/*.yaml @sukki37
-/.gitignore @sukki37
-/.dockerignore @sukki37
+/*.yml @fengttt
+/*.yaml @fengttt
+/.gitignore @fengttt
+/.dockerignore @fengttt
 /Makefile @zhangxu19830126
 /README.md @dengn
 /README_CN.md @dengn
@@ -24,8 +24,8 @@
 /cgo @aunjgr
 /docs @fengttt
 /etc @zhangxu19830126
-/optools @sukki37
-/pkg @sukki37
+/optools @fengttt
+/pkg @fengttt
 /proto @zhangxu19830126
 /cmd @daviszhen @zhangxu19830126
 /test @aressu1985 @heni02
@@ -226,7 +226,7 @@
 
 /pkg/stream @fengttt
 
-/pkg/udf @aylei @daviszhen @fengttt
+/pkg/udf @daviszhen @fengttt
 
 /pkg/version @zhangxu19830126
 

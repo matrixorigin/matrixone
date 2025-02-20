@@ -229,7 +229,7 @@ func validateArgs(vectorList [][]float64, clusterCnt,
 	if deltaThreshold <= 0.0 || deltaThreshold >= 1.0 {
 		return moerr.NewInternalErrorNoCtx("delta threshold is out of bounds (must be > 0.0 and < 1.0)")
 	}
-	if distanceType > 2 {
+	if distanceType >= kmeans.DistanceTypeCount {
 		return moerr.NewInternalErrorNoCtx("distance type is not supported")
 	}
 	if initType > 1 {

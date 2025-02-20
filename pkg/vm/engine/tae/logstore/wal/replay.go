@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package store
+package wal
 
 import (
 	"context"
@@ -34,41 +34,19 @@ func (w *StoreImpl) Replay(
 	if err != nil {
 		return err
 	}
-	lsn, err := w.driver.GetTruncated()
+	dsn, err := w.driver.GetTruncated()
 	if err != nil {
 		panic(err)
 	}
-	w.StoreInfo.onCheckpoint()
-	w.driverCheckpointed.Store(lsn)
-	w.driverCheckpointing.Store(lsn)
-	for g, lsn := range w.syncing {
-		w.walCurrentLsn[g] = lsn
-		w.synced[g] = lsn
-	}
-	for g, ckped := range w.checkpointed {
-		if w.walCurrentLsn[g] == 0 {
-			w.walCurrentLsn[g] = ckped
-			w.synced[g] = ckped
-		}
-		if w.minLsn[g] <= w.driverCheckpointed.Load() {
-			minLsn := w.minLsn[g]
-			for ; minLsn <= ckped+1; minLsn++ {
-				drLsn, err := w.getDriverLsn(g, minLsn)
-				if err == nil && drLsn > w.driverCheckpointed.Load() {
-					break
-				}
-			}
-			w.minLsn[g] = minLsn
-		}
-	}
-	return nil
-}
+	w.watermark.dsnCheckpointed.Store(dsn)
 
-func (w *StoreImpl) onReplayLsn(g uint32, lsn uint64) {
-	_, ok := w.minLsn[g]
-	if !ok {
-		w.minLsn[g] = lsn
+	if lsnCheckpointed := w.watermark.lsnCheckpointed.Load(); lsnCheckpointed > 0 {
+		if w.watermark.allocatedLSN[GroupUserTxn] == 0 {
+			w.watermark.allocatedLSN[GroupUserTxn] = lsnCheckpointed
+		}
 	}
+
+	return nil
 }
 
 func (w *StoreImpl) replayEntry(e *entry.Entry, h ApplyHandle) (driver.ReplayEntryState, error) {
@@ -76,14 +54,16 @@ func (w *StoreImpl) replayEntry(e *entry.Entry, h ApplyHandle) (driver.ReplayEnt
 	info := e.Info
 	switch info.Group {
 	case GroupInternal:
-		w.unmarshalPostCommitEntry(walEntry.GetPayload())
-		w.checkpointed[GroupCKP] = info.TargetLsn
 		return driver.RE_Internal, nil
 	case GroupCKP:
-		w.logCheckpointInfo(info)
+		w.updateLSNCheckpointed(info)
+		// TODO:  should return?
 	}
-	w.logDriverLsn(e)
-	w.onReplayLsn(info.Group, info.GroupLSN)
+	// update allocatedLSN
+	if w.watermark.allocatedLSN[info.Group] < info.GroupLSN {
+		w.watermark.allocatedLSN[info.Group] = info.GroupLSN
+	}
+	w.logDSN(e)
 	state := h(info.Group, info.GroupLSN, walEntry.GetPayload(), walEntry.GetType(), walEntry.GetInfo())
 	return state, nil
 }
