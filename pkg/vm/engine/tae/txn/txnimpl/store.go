@@ -222,8 +222,12 @@ func (store *txnStore) IsReadonly() bool {
 	return store.writeOps.Load() == 0
 }
 
-func (store *txnStore) IncreateWriteCnt() int {
-	return int(store.writeOps.Add(1))
+func (store *txnStore) IncreateWriteCnt(caller string) (err error) {
+	if store.IsOffline() {
+		return moerr.NewOfflineTxnWriteNoCtx(caller)
+	}
+	store.writeOps.Add(1)
+	return
 }
 
 func (store *txnStore) LogTxnEntry(dbId uint64, tableId uint64, entry txnif.TxnEntry, readedObject, readedTombstone []*common.ID) (err error) {
@@ -297,7 +301,9 @@ func (store *txnStore) BatchDedup(dbId, id uint64, pk containers.Vector) (err er
 }
 
 func (store *txnStore) Append(ctx context.Context, dbId, id uint64, data *containers.Batch) error {
-	store.IncreateWriteCnt()
+	if err := store.IncreateWriteCnt("append"); err != nil {
+		return err
+	}
 	db, err := store.getOrSetDB(dbId)
 	if err != nil {
 		return err
@@ -313,7 +319,9 @@ func (store *txnStore) AddDataFiles(
 	dbId, tid uint64,
 	stats containers.Vector,
 ) error {
-	store.IncreateWriteCnt()
+	if err := store.IncreateWriteCnt("add data files"); err != nil {
+		return err
+	}
 	db, err := store.getOrSetDB(dbId)
 	if err != nil {
 		return err
@@ -325,7 +333,9 @@ func (store *txnStore) RangeDelete(
 	id *common.ID, start, end uint32,
 	pkVec containers.Vector, dt handle.DeleteType,
 ) (err error) {
-	store.IncreateWriteCnt()
+	if err = store.IncreateWriteCnt("range delete"); err != nil {
+		return
+	}
 	db, err := store.getOrSetDB(id.DbID)
 	if err != nil {
 		return err
@@ -337,7 +347,9 @@ func (store *txnStore) DeleteByPhyAddrKeys(
 	id *common.ID,
 	rowIDVec, pkVec containers.Vector, dt handle.DeleteType,
 ) (err error) {
-	store.IncreateWriteCnt()
+	if err = store.IncreateWriteCnt("delete by phy addr"); err != nil {
+		return
+	}
 	db, err := store.getOrSetDB(id.DbID)
 	if err != nil {
 		return err
@@ -348,7 +360,10 @@ func (store *txnStore) DeleteByPhyAddrKeys(
 func (store *txnStore) AddPersistedTombstoneFile(
 	id *common.ID, stats objectio.ObjectStats,
 ) (ok bool, err error) {
-	store.IncreateWriteCnt()
+	if err = store.IncreateWriteCnt("append persisted tombstone file"); err != nil {
+		return
+	}
+
 	db, err := store.getOrSetDB(id.DbID)
 	if err != nil {
 		return

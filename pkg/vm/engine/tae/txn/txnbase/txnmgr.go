@@ -466,6 +466,9 @@ func (mgr *TxnManager) newHeartbeatOpTxn(ctx context.Context) *OpTxn {
 }
 
 func (mgr *TxnManager) OnOpTxn(op *OpTxn) (err error) {
+	if op.Txn.GetStore().IsOffline() {
+		panic("offline txn should not be here")
+	}
 	_, err = mgr.PreparingSM.EnqueueReceived(op)
 	return
 }

@@ -8934,7 +8934,7 @@ func TestDeduplication(t *testing.T) {
 		new(objectio.CreateObjOpt).WithObjectStats(stats).WithIsTombstone(false), dataFactory.MakeObjectFactory())
 	assert.NoError(t, err)
 	txn.GetStore().AddTxnEntry(obj)
-	txn.GetStore().IncreateWriteCnt()
+	txn.GetStore().IncreateWriteCnt("")
 	assert.NoError(t, txn.Commit(context.Background()))
 	assert.NoError(t, obj.PrepareCommit())
 	assert.NoError(t, obj.ApplyCommit(txn.GetID()))

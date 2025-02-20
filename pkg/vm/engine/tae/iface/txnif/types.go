@@ -134,7 +134,7 @@ type TxnAsyncer interface {
 }
 
 type TxnTest interface {
-	MockIncWriteCnt() int
+	MockIncWriteCnt() error
 	MockStartTS(types.TS)
 	SetFreezeFn(func(AsyncTxn) error)
 	SetPrepareCommitFn(func(AsyncTxn) error)
@@ -311,7 +311,7 @@ type TxnStore interface {
 	// Offline txn is created when TxnMgr is in Recovery mode
 	// Offline txn is not writable and all offline txns are ReadOnly
 	IsOffline() bool
-	IncreateWriteCnt() int
+	IncreateWriteCnt(string) error
 	ObserveTxn(
 		visitDatabase func(db any),
 		visitTable func(tbl any),
