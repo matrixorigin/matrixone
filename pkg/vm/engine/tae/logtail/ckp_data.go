@@ -683,16 +683,14 @@ func GetCKPData(
 			fs,
 			obj,
 			readutil.WithColumns(
-				ckputil.DataScan_TableIDSeqnums,
-				ckputil.DataScan_TableIDTypes,
+				ckputil.TableObjectsSeqnums,
+				ckputil.TableObjectsTypes,
 			),
 		)
 		var (
 			end bool
 		)
-		tmpBat := batch.NewWithSchema(
-			true, ckputil.DataScan_TableIDAtrrs, ckputil.DataScan_TableIDTypes,
-		)
+		tmpBat := ckputil.NewObjectListBatch()
 		defer tmpBat.Clean(mp)
 		for {
 			tmpBat.CleanOnlyData()
