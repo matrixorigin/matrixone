@@ -17,6 +17,8 @@ package disttae
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"reflect"
 
@@ -627,6 +629,10 @@ func txnIsValid(txnOp client.TxnOperator) (*Transaction, error) {
 		if wsTxn == nil {
 			return nil, moerr.NewTxnClosedNoCtx(txnOp.Txn().ID)
 		}
+		if wsTxn.removed {
+			logutil.Error("txn is removed", zap.String("id", hex.EncodeToString(txnOp.Txn().ID)), zap.String("status", txnOp.Status().String()))
+			return nil, moerr.NewTxnClosedNoCtx(txnOp.Txn().ID)
+		}
 	}
 	//if it is not the Transaction instance, only check the txnOp
 	if txnOp.Status() == txn.TxnStatus_Aborted {
@@ -683,7 +689,9 @@ func (e *concurrentExecutor) Run(ctx context.Context) {
 
 				case t := <-e.tasks:
 					if err := t(); err != nil {
-						logutil.Errorf("failed to execute task: %v", err)
+						if !errors.Is(err, context.Canceled) {
+							logutil.Errorf("failed to execute task: %v", err)
+						}
 					}
 				}
 			}
