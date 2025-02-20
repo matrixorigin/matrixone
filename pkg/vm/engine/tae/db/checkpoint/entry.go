@@ -23,10 +23,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
-	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 )
@@ -454,40 +455,51 @@ func (e *CheckpointEntry) ReadMetaIdx(
 	return
 }
 
+// Only for test
+// Only fill in columns ObjectID, CreateTS and DeleteTS
 func (e *CheckpointEntry) GetTableByID(
-	ctx context.Context, fs fileservice.FileService, tid uint64,
-) (ins, del, dataObject, tombstoneObject *api.Batch, err error) {
-	reader, err := ioutil.NewObjectReader(fs, e.cnLocation)
-	if err != nil {
-		return
+	ctx context.Context, fs fileservice.FileService, tid uint64, mp *mpool.MPool,
+) (data *batch.Batch, err error) {
+	if e.version <= logtail.CheckpointVersion12 {
+		replayer := logtail.NewCheckpointReplayer(e.GetLocation(), mp)
+		if err = replayer.ReadMetaForV12WithTableID(ctx, tid, fs); err != nil {
+			return
+		}
+		if err = replayer.ReadDataForV12(ctx, fs); err != nil {
+			return
+		}
+		return replayer.GetObjectListBatch()
+	} else {
+		data = ckputil.NewObjectListBatch()
+		totalLength := 0
+		if err = logtail.ConsumeCheckpointWithTableID(
+			ctx,
+			tid,
+			e.GetLocation(),
+			func(
+				ctx context.Context,
+				obj objectio.ObjectEntry,
+				isTombstone bool,
+			) (err error) {
+				totalLength++
+				vector.AppendFixed[types.TS](
+					data.Vecs[ckputil.TableObjectsAttr_CreateTS_Idx], obj.CreateTime, false, mp,
+				)
+				vector.AppendFixed[types.TS](
+					data.Vecs[ckputil.TableObjectsAttr_DeleteTS_Idx], obj.CreateTime, false, mp,
+				)
+				vector.AppendBytes(
+					data.Vecs[ckputil.TableObjectsAttr_ID_Idx], obj.ObjectStats[:], false, mp,
+				)
+				return
+			},
+			common.CheckpointAllocator,
+			fs,
+		); err != nil {
+			return
+		}
+		data.SetRowCount(totalLength)
 	}
-	data := logtail.NewCNCheckpointData(e.sid)
-	err = ioutil.PrefetchMeta(e.sid, fs, e.cnLocation)
-	if err != nil {
-		return
-	}
-
-	err = data.PrefetchMetaIdx(ctx, e.version, logtail.GetMetaIdxesByVersion(e.version), e.cnLocation, fs)
-	if err != nil {
-		return
-	}
-	err = data.InitMetaIdx(ctx, e.version, reader, e.cnLocation, common.CheckpointAllocator)
-	if err != nil {
-		return
-	}
-	err = data.PrefetchMetaFrom(ctx, e.version, e.cnLocation, fs, tid)
-	if err != nil {
-		return
-	}
-	err = data.PrefetchFrom(ctx, e.version, fs, e.cnLocation, tid)
-	if err != nil {
-		return
-	}
-	var bats []*batch.Batch
-	if bats, err = data.ReadFromData(ctx, tid, e.cnLocation, reader, e.version, common.CheckpointAllocator); err != nil {
-		return
-	}
-	ins, del, dataObject, tombstoneObject, err = data.GetTableDataFromBats(tid, bats)
 	return
 }
 

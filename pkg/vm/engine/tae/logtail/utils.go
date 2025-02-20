@@ -44,7 +44,7 @@ const (
 	CheckpointVersion12 uint32 = 12
 	CheckpointVersion13 uint32 = 13
 
-	CheckpointCurrentVersion = CheckpointVersion12
+	CheckpointCurrentVersion = CheckpointVersion13
 )
 
 const (

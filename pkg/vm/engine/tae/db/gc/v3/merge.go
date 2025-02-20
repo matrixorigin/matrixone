@@ -160,6 +160,7 @@ func MergeCheckpoint(
 	bat.GetVectorByName(checkpoint.CheckpointAttr_EndTS).Append(*end, false)
 	bat.GetVectorByName(checkpoint.CheckpointAttr_MetaLocation).Append([]byte(cnLocation), false)
 	bat.GetVectorByName(checkpoint.CheckpointAttr_EntryType).Append(false, false)
+	logutil.Infof("lalala version %v",ckpEntries[len(ckpEntries)-1].String())
 	bat.GetVectorByName(checkpoint.CheckpointAttr_Version).Append(ckpEntries[len(ckpEntries)-1].GetVersion(), false)
 	bat.GetVectorByName(checkpoint.CheckpointAttr_AllLocations).Append([]byte(tnLocation), false)
 	bat.GetVectorByName(checkpoint.CheckpointAttr_CheckpointLSN).Append(uint64(0), false)

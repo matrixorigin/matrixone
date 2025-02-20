@@ -2721,14 +2721,9 @@ func TestSegDelLogtail(t *testing.T) {
 		ckpEntries := tae.BGCheckpointRunner.GetAllIncrementalCheckpoints()
 		assert.Equal(t, 1, len(ckpEntries))
 		entry := ckpEntries[0]
-		ins, del, dataObj, tombstoneObj, err := entry.GetTableByID(context.Background(), tae.Runtime.Fs, tid)
+		data, err := entry.GetTableByID(context.Background(), tae.Runtime.Fs, tid, common.CheckpointAllocator)
 		assert.NoError(t, err)
-		assert.Nil(t, ins)                              // 0 ins
-		assert.Nil(t, del)                              // 0  del
-		assert.Equal(t, uint32(9), dataObj.Vecs[0].Len) // 5 create + 4 delete
-		assert.Equal(t, 10, len(dataObj.Vecs))
-		assert.Equal(t, uint32(4), tombstoneObj.Vecs[0].Len) // 2 create + 2 delete
-		assert.Equal(t, 10, len(tombstoneObj.Vecs))
+		assert.Equal(t, 13, data.RowCount()) // data: 5 create + 4 delete, tombstone: 2 create + 2 delete
 	}
 	check()
 
@@ -4795,31 +4790,18 @@ func TestReadCheckpoint(t *testing.T) {
 	}
 	for _, entry := range entries {
 		for _, tid := range tids {
-			ins, del, _, _, err := entry.GetTableByID(context.Background(), tae.Runtime.Fs, tid)
+			_, err := entry.GetTableByID(context.Background(), tae.Runtime.Fs, tid, common.CheckpointAllocator)
 			assert.NoError(t, err)
 			t.Logf("table %d", tid)
-			if ins != nil {
-				logutil.Infof("ins is %v", ins.Vecs[0].String())
-				t.Log(common.ApiBatchToString(ins, 3))
-			}
-			if del != nil {
-				t.Log(common.ApiBatchToString(del, 3))
-			}
 		}
 	}
 	tae.Restart(ctx)
 	entries = tae.BGCheckpointRunner.GetAllGlobalCheckpoints()
 	entry := entries[len(entries)-1]
 	for _, tid := range tids {
-		ins, del, _, _, err := entry.GetTableByID(context.Background(), tae.Runtime.Fs, tid)
+		_, err := entry.GetTableByID(context.Background(), tae.Runtime.Fs, tid, common.CheckpointAllocator)
 		assert.NoError(t, err)
 		t.Logf("table %d", tid)
-		if ins != nil {
-			t.Log(common.ApiBatchToString(ins, 3))
-		}
-		if del != nil {
-			t.Log(common.ApiBatchToString(del, 3))
-		}
 	}
 }
 
@@ -11498,3 +11480,4 @@ func TestDedupx(t *testing.T) {
 // TODO test read ckp entry after gc (handle error)
 // TODO test mpool
 // TODO test get ckp data v12
+// test cn read ckp, multiple batches

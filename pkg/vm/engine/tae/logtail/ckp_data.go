@@ -107,36 +107,10 @@ func GetCKPDataReader(
 		if err = replayer.ReadDataForV12(ctx, fs); err != nil {
 			return
 		}
-		objectlistBatch := ckputil.NewObjectListBatch()
-		compatibilityFn := func(src *containers.Batch, dataType int8) {
-			vector.AppendMultiFixed(
-				objectlistBatch.Vecs[ckputil.TableObjectsAttr_Accout_Idx],
-				0,
-				true,
-				replayer.objBatches.Length(),
-				mp,
-			)
-			objectlistBatch.Vecs[ckputil.TableObjectsAttr_DB_Idx] = src.Vecs[ObjectInfo_DBID_Idx+2].GetDownstreamVector()
-			src.Vecs[ObjectInfo_DBID_Idx+2] = nil
-			objectlistBatch.Vecs[ckputil.TableObjectsAttr_Table_Idx] = src.Vecs[ObjectInfo_TID_Idx+2].GetDownstreamVector()
-			src.Vecs[ObjectInfo_TID_Idx+2] = nil
-			vector.AppendMultiFixed(
-				objectlistBatch.Vecs[ckputil.TableObjectsAttr_ObjectType_Idx],
-				dataType,
-				true,
-				replayer.objBatches.Length(),
-				mp,
-			)
-			objectlistBatch.Vecs[ckputil.TableObjectsAttr_ID_Idx] = src.Vecs[ObjectInfo_ObjectStats_Idx+2].GetDownstreamVector()
-			src.Vecs[ObjectInfo_ObjectStats_Idx+2] = nil
-			objectlistBatch.Vecs[ckputil.TableObjectsAttr_CreateTS_Idx] = src.Vecs[ObjectInfo_CreateAt_Idx+2].GetDownstreamVector()
-			src.Vecs[ObjectInfo_CreateAt_Idx+2] = nil
-			objectlistBatch.Vecs[ckputil.TableObjectsAttr_DeleteTS_Idx] = src.Vecs[ObjectInfo_DeleteAt_Idx+2].GetDownstreamVector()
-			src.Vecs[ObjectInfo_DeleteAt_Idx+2] = nil
+		var objectlistBatch *batch.Batch
+		if objectlistBatch, err = replayer.GetObjectListBatch(); err != nil {
+			return
 		}
-
-		compatibilityFn(replayer.objBatches, ckputil.ObjectType_Data)
-		compatibilityFn(replayer.tombstoneBatch, ckputil.ObjectType_Tombstone)
 		reader = NewCheckpointReaderWithBatch(objectlistBatch, mp)
 		return
 	} else {
@@ -663,23 +637,27 @@ func ConsumeCheckpointWithTableID(
 	}
 	defer release()
 	ranges := ckputil.ExportToTableRanges(metaBatch, tid, ckputil.ObjectType_Data)
-	iter := ckputil.NewObjectIter(ctx, ranges, mp, fs)
-	for ok, err := iter.Next(); ok && err == nil; ok, err = iter.Next() {
-		entry := iter.Entry()
-		if err := forEachObject(ctx, entry, false); err != nil {
-			return err
+	if len(ranges) != 0 {
+		iter := ckputil.NewObjectIter(ctx, ranges, mp, fs)
+		for ok, err := iter.Next(); ok && err == nil; ok, err = iter.Next() {
+			entry := iter.Entry()
+			if err := forEachObject(ctx, entry, false); err != nil {
+				return err
+			}
 		}
+		iter.Close()
 	}
-	iter.Close()
 	ranges = ckputil.ExportToTableRanges(metaBatch, tid, ckputil.ObjectType_Tombstone)
-	iter = ckputil.NewObjectIter(ctx, ranges, mp, fs)
-	for ok, err := iter.Next(); ok && err == nil; ok, err = iter.Next() {
-		entry := iter.Entry()
-		if err := forEachObject(ctx, entry, true); err != nil {
-			return err
+	if ranges != nil {
+		iter := ckputil.NewObjectIter(ctx, ranges, mp, fs)
+		for ok, err := iter.Next(); ok && err == nil; ok, err = iter.Next() {
+			entry := iter.Entry()
+			if err := forEachObject(ctx, entry, true); err != nil {
+				return err
+			}
 		}
+		iter.Close()
 	}
-	iter.Close()
 	return
 }
 
@@ -1052,13 +1030,39 @@ func (replayer *CheckpointReplayer) ForEachRow(
 	}
 	return nil
 }
-func (replayer *CheckpointReplayer) OrphanCKPData(mp *mpool.MPool) (data *CheckpointData, err error) {
-	data = NewCheckpointDataWithVersion(CheckpointVersion12, mp)
-	data.bats[ObjectInfoIDX] = replayer.objBatches
-	data.bats[TombstoneObjectInfoIDX] = replayer.tombstoneBatch
-	replayer.objBatches = nil
-	replayer.tombstoneBatch = nil
-	return data, nil
+func (replayer *CheckpointReplayer) GetObjectListBatch() (*batch.Batch, error) {
+	objectlistBatch := ckputil.NewObjectListBatch()
+	compatibilityFn := func(src *containers.Batch, dataType int8) {
+		vector.AppendMultiFixed(
+			objectlistBatch.Vecs[ckputil.TableObjectsAttr_Accout_Idx],
+			0,
+			true,
+			replayer.objBatches.Length(),
+			replayer.mp,
+		)
+		objectlistBatch.Vecs[ckputil.TableObjectsAttr_DB_Idx] = src.Vecs[ObjectInfo_DBID_Idx+2].GetDownstreamVector()
+		src.Vecs[ObjectInfo_DBID_Idx+2] = nil
+		objectlistBatch.Vecs[ckputil.TableObjectsAttr_Table_Idx] = src.Vecs[ObjectInfo_TID_Idx+2].GetDownstreamVector()
+		src.Vecs[ObjectInfo_TID_Idx+2] = nil
+		vector.AppendMultiFixed(
+			objectlistBatch.Vecs[ckputil.TableObjectsAttr_ObjectType_Idx],
+			dataType,
+			true,
+			replayer.objBatches.Length(),
+			replayer.mp,
+		)
+		objectlistBatch.Vecs[ckputil.TableObjectsAttr_ID_Idx] = src.Vecs[ObjectInfo_ObjectStats_Idx+2].GetDownstreamVector()
+		src.Vecs[ObjectInfo_ObjectStats_Idx+2] = nil
+		objectlistBatch.Vecs[ckputil.TableObjectsAttr_CreateTS_Idx] = src.Vecs[ObjectInfo_CreateAt_Idx+2].GetDownstreamVector()
+		src.Vecs[ObjectInfo_CreateAt_Idx+2] = nil
+		objectlistBatch.Vecs[ckputil.TableObjectsAttr_DeleteTS_Idx] = src.Vecs[ObjectInfo_DeleteAt_Idx+2].GetDownstreamVector()
+		src.Vecs[ObjectInfo_DeleteAt_Idx+2] = nil
+	}
+
+	compatibilityFn(replayer.objBatches, ckputil.ObjectType_Data)
+	compatibilityFn(replayer.tombstoneBatch, ckputil.ObjectType_Tombstone)
+	objectlistBatch.SetRowCount(objectlistBatch.Vecs[0].Length())
+	return objectlistBatch, nil
 }
 func (replayer *CheckpointReplayer) GetLocations() []objectio.Location {
 	result := make([]objectio.Location, 0, len(replayer.tombstoneLocations)+len(replayer.locations))
