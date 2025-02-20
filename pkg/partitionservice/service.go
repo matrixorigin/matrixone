@@ -21,7 +21,6 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -33,7 +32,7 @@ var (
 	DisabledService = NewService(Config{}, nil)
 )
 
-type service struct {
+type Service struct {
 	cfg   Config
 	store PartitionStorage
 
@@ -46,8 +45,8 @@ type service struct {
 func NewService(
 	cfg Config,
 	store PartitionStorage,
-) PartitionService {
-	s := &service{
+) *Service {
+	s := &Service{
 		cfg:   cfg,
 		store: store,
 	}
@@ -55,7 +54,7 @@ func NewService(
 	return s
 }
 
-func (s *service) Create(
+func (s *Service) Create(
 	ctx context.Context,
 	tableID uint64,
 	stmt *tree.CreateTable,
@@ -75,6 +74,7 @@ func (s *service) Create(
 	}
 
 	metadata, err := s.getMetadata(
+		ctx,
 		def,
 		stmt.PartitionOption,
 	)
@@ -102,7 +102,7 @@ func (s *service) Create(
 	)
 }
 
-func (s *service) Delete(
+func (s *Service) Delete(
 	ctx context.Context,
 	tableID uint64,
 	txnOp client.TxnOperator,
@@ -147,7 +147,7 @@ func (s *service) Delete(
 	return err
 }
 
-func (s *service) Is(
+func (s *Service) Is(
 	ctx context.Context,
 	tableID uint64,
 	txnOp client.TxnOperator,
@@ -163,7 +163,8 @@ func (s *service) Is(
 	return !metadata.IsEmpty(), metadata, nil
 }
 
-func (s *service) getMetadata(
+func (s *Service) getMetadata(
+	ctx context.Context,
 	def *plan.TableDef,
 	option *tree.PartitionOption,
 ) (partition.PartitionMetadata, error) {
@@ -197,29 +198,7 @@ func (s *service) getMetadata(
 
 }
 
-func (s *service) Prune(
-	ctx context.Context,
-	tableID uint64,
-	bat *batch.Batch,
-	txnOp client.TxnOperator,
-) (PruneResult, error) {
-	metadata, err := s.readMetadata(
-		ctx,
-		tableID,
-		txnOp,
-	)
-	if err != nil || metadata.IsEmpty() {
-		return PruneResult{}, err
-	}
-
-	// TODO(fagongzi): partition
-	return PruneResult{
-		batches:    []*batch.Batch{bat, bat},
-		partitions: []partition.Partition{metadata.Partitions[0]},
-	}, nil
-}
-
-func (s *service) Filter(
+func (s *Service) Filter(
 	ctx context.Context,
 	tableID uint64,
 	filters []*plan.Expr,
@@ -234,11 +213,14 @@ func (s *service) Filter(
 		return nil, err
 	}
 
-	// TODO(fagongzi): partition
-	return []int{0}, nil
+	var res []int
+	for _, p := range metadata.Partitions {
+		res = append(res, int(p.Position))
+	}
+	return res, nil
 }
 
-func (s *service) readMetadata(
+func (s *Service) readMetadata(
 	ctx context.Context,
 	tableID uint64,
 	txnOp client.TxnOperator,
@@ -268,11 +250,11 @@ func (s *service) readMetadata(
 	return metadata, nil
 }
 
-func (s *service) GetStorage() PartitionStorage {
+func (s *Service) GetStorage() PartitionStorage {
 	return s.store
 }
 
-func (s *service) getManualPartitions(
+func (s *Service) getManualPartitions(
 	option *tree.PartitionOption,
 	def *plan.TableDef,
 	columns *tree.UnresolvedName,
@@ -306,7 +288,8 @@ func (s *service) getManualPartitions(
 				Name:               p.Name.String(),
 				PartitionTableName: fmt.Sprintf("%s_%s", def.Name, p.Name.String()),
 				Position:           uint32(i),
-				Expression:         applyPartitionComment(p),
+				ExprStr:            applyPartitionComment(p),
+				Expr:               def.Partition.PartitionDefs[i].Def,
 			},
 		)
 	}

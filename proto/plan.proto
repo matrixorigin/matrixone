@@ -367,6 +367,15 @@ message CheckDef {
 	Expr check	= 2;
 }
 
+
+message Partition {
+	repeated PartitionDef PartitionDefs = 1;
+}
+
+message PartitionDef {
+	Expr def	= 1;
+}
+
 message ClusterByDef {
 	// XXX: Deprecated and to be removed soon. letter case: lower ?
 	string name = 1;
@@ -432,6 +441,8 @@ message TableDef {
 
 	string db_name = 32;
 	uint64 db_id = 33;
+
+	Partition partition = 34;
 }
 
 message TableFunction{

@@ -16,12 +16,12 @@ package partition
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/partitionservice"
 	"sync"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/embed"
-	"github.com/matrixorigin/matrixone/pkg/partitionservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"

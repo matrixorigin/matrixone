@@ -16,12 +16,12 @@ package process
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/partitionservice"
 	"io"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/partitionservice"
 	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 

@@ -47,6 +47,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/pipeline"
@@ -586,9 +587,11 @@ func (s *Scope) getRelData(c *Compile, blockExprList []*plan.Expr) error {
 		if err != nil {
 			return err
 		}
-		err = s.aggOptimize(c, rel, ctx)
-		if err != nil {
-			return err
+		if _, ok := s.NodeInfo.Data.(*disttae.PartitionedRelData); !ok {
+			err = s.aggOptimize(c, rel, ctx)
+			if err != nil {
+				return err
+			}
 		}
 		return nil
 	}
