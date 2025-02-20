@@ -57,6 +57,10 @@ func (m *objOverlapPolicy) onObject(obj *catalog.ObjectEntry) bool {
 }
 
 func (m *objOverlapPolicy) revise(rc *resourceController) []reviseResult {
+	if rc.cpuPercent > 80 {
+		return nil
+	}
+
 	for _, objects := range m.segments {
 		l := segLevel(len(objects))
 		for obj := range objects {
@@ -66,14 +70,21 @@ func (m *objOverlapPolicy) revise(rc *resourceController) []reviseResult {
 
 	reviseResults := make([]reviseResult, 0, len(levels))
 	for i := range 4 {
-		objects := m.leveledObjects[i]
-		if len(objects) < 2 {
+		if len(m.leveledObjects[i]) < 2 {
 			continue
 		}
 
-		points := makeEndPoints(objects)
-		res := objectsWithGivenOverlaps(points, 5)
-		if len(res) == 0 {
+		points := makeEndPoints(m.leveledObjects[i])
+		if res := objectsWithGivenOverlaps(points, 5); len(res) != 0 {
+			for _, objs := range res {
+				objs = removeOversize(objs)
+				if len(objs) < 2 || score(objs) < 1.1 {
+					continue
+				}
+				result := reviseResult{objs: objs, kind: taskHostDN}
+				reviseResults = append(reviseResults, result)
+			}
+		} else {
 			viewed := make(map[*catalog.ObjectEntry]struct{})
 			tmp := make([]*catalog.ObjectEntry, 0)
 			sum := uint32(0)
@@ -87,39 +98,34 @@ func (m *objOverlapPolicy) revise(rc *resourceController) []reviseResult {
 					tmp = append(tmp, p.obj)
 				} else {
 					if len(tmp) > 1 {
-						reviseResults = append(reviseResults, reviseResult{objs: removeOversize(tmp), kind: taskHostDN})
+						reviseResults = append(reviseResults, reviseResult{objs: removeOversize(slices.Clone(tmp)), kind: taskHostDN})
 					}
 					tmp = tmp[:0]
 					sum = 0
 				}
 			}
-		}
-
-		for _, objs := range res {
-			objs = removeOversize(objs)
-			if len(objs) < 2 || score(objs) < 1.1 {
-				continue
+			if len(tmp) > 1 {
+				reviseResults = append(reviseResults, reviseResult{objs: removeOversize(slices.Clone(tmp)), kind: taskHostDN})
 			}
-			result := reviseResult{objs: objs, kind: taskHostDN}
-			if rc.cpuPercent > 80 {
-				continue
-			}
-
-			for !rc.resourceAvailable(result.objs) && len(result.objs) > 1 {
-				result.objs = result.objs[:len(result.objs)-1]
-			}
-			if len(result.objs) < 2 {
-				continue
-			}
-			if len(result.objs) > 30 {
-				result.objs = result.objs[:30]
-			}
-
-			rc.reserveResources(result.objs)
-			reviseResults = append(reviseResults, result)
 		}
 	}
-	return reviseResults
+
+	for _, result := range reviseResults {
+		for !rc.resourceAvailable(result.objs) && len(result.objs) > 1 {
+			result.objs = result.objs[:len(result.objs)-1]
+		}
+		if len(result.objs) < 2 {
+			continue
+		}
+		if len(result.objs) > 30 {
+			result.objs = result.objs[:30]
+		}
+
+		rc.reserveResources(result.objs)
+	}
+	return slices.DeleteFunc(reviseResults, func(result reviseResult) bool {
+		return len(result.objs) < 2
+	})
 }
 
 func (m *objOverlapPolicy) resetForTable(entry *catalog.TableEntry, config *BasicPolicyConfig) {
