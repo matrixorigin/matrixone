@@ -206,6 +206,7 @@ func (h *CheckpointChangesHandle) initReader(ctx context.Context) (err error) {
 	for i, end := 0, blockList.Len(); i < end; i++ {
 		relData.AppendBlockInfo(blockList.Get(i))
 	}
+	relData.SetPState(part)
 
 	readers, err := h.table.BuildReaders(
 		ctx,

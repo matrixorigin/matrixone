@@ -1799,13 +1799,7 @@ func (tbl *txnTable) buildLocalDataSource(
 	switch relData.GetType() {
 	case engine.RelDataObjList, engine.RelDataBlockList:
 		var pState *logtailreplay.PartitionState
-		val := relData.GetPState()
-		if val == nil {
-			x := 0
-			x++
-		}
-
-		pState = val.(*logtailreplay.PartitionState)
+		pState = relData.GetPState().(*logtailreplay.PartitionState)
 
 		ranges := relData.GetBlockInfoSlice()
 		skipReadMem := !bytes.Equal(
