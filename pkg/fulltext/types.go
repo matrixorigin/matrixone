@@ -29,9 +29,9 @@ const (
 )
 
 const (
-	fulltextRelevancyAlgo       = "ft_relevancy_algorithm"
-	fulltextRelevancyAlgo_bm25  = "BM25"
-	fulltextRelevancyAlgo_tfidf = "TF-IDF"
+	FulltextRelevancyAlgo       = "ft_relevancy_algorithm"
+	FulltextRelevancyAlgo_bm25  = "BM25"
+	FulltextRelevancyAlgo_tfidf = "TF-IDF"
 )
 
 /*
@@ -115,7 +115,6 @@ type SearchAccum struct {
 	Nkeywords  int
 
 	ScoreAlgo FullTextScoreAlgo
-	DocLenMap map[any]int32
 	AvgDocLen float64
 }
 

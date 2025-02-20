@@ -54,7 +54,7 @@ func NewSearchAccum(srctbl string, tblname string, pattern string, mode int64, p
 
 	nwords := GetResultCountFromPattern(ps)
 	return &SearchAccum{SrcTblName: srctbl, TblName: tblname, Mode: mode,
-		Pattern: ps, Params: params, Nkeywords: nwords, ScoreAlgo: scoreAlgo, DocLenMap: make(map[any]int32)}, nil
+		Pattern: ps, Params: params, Nkeywords: nwords, ScoreAlgo: scoreAlgo}, nil
 }
 
 // find pattern by operator
@@ -92,17 +92,12 @@ func (s *SearchAccum) PatternAnyPlus() bool {
 }
 
 // Evaluate the search string
-func (s *SearchAccum) Eval(docvec []uint8, aggcnt []int64, docId any) ([]float32, error) {
+func (s *SearchAccum) Eval(docvec []uint8, docLen int64, aggcnt []int64) ([]float32, error) {
 	var result []float32
 	var err error
 
 	if s.Nrow == 0 {
 		return result, nil
-	}
-
-	docLen := int64(0)
-	if len, ok := s.DocLenMap[docId]; ok {
-		docLen = int64(len)
 	}
 
 	for _, p := range s.Pattern {
@@ -959,13 +954,13 @@ func ParsePattern(pattern string, mode int64) ([]*Pattern, error) {
 
 func GetScoreAlgo(proc *process.Process) (FullTextScoreAlgo, error) {
 	scoreAlgo := ALGO_BM25
-	val, err := proc.GetResolveVariableFunc()(fulltextRelevancyAlgo, true, false)
+	val, err := proc.GetResolveVariableFunc()(FulltextRelevancyAlgo, true, false)
 	if err != nil {
 		return scoreAlgo, err
 	}
 	if val != nil {
 		algo := fmt.Sprintf("%v", val)
-		if algo == fulltextRelevancyAlgo_tfidf {
+		if algo == FulltextRelevancyAlgo_tfidf {
 			scoreAlgo = ALGO_TFIDF
 		}
 	}

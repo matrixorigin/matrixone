@@ -34,8 +34,7 @@ import (
 )
 
 const (
-	countstar_sql       = "SELECT COUNT(*) FROM %s"
-	countstart_bm25_sql = "SELECT COUNT(*), AVG(pos) from %s where word = '%s'"
+	countstar_sql = "SELECT COUNT(*), AVG(pos) from %s where word = '%s'"
 )
 
 type fulltextState struct {
@@ -51,6 +50,7 @@ type fulltextState struct {
 	aggcnt      []int64
 	mpool       *fulltext.FixedBytePool
 	param       fulltext.FullTextParserParam
+	docLenMap   map[any]int32
 
 	// holding output batch
 	batch *batch.Batch
@@ -165,6 +165,7 @@ func (u *fulltextState) start(tf *TableFunction, proc *process.Process, nthRow i
 		u.stream_chan = make(chan executor.Result, 8)
 		u.idx2word = make(map[int]string)
 		u.inited = true
+		u.docLenMap = make(map[any]int32)
 	}
 
 	v := tf.ctr.argVecs[0]
@@ -306,7 +307,12 @@ func evaluate(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) 
 			return nil, err
 		}
 
-		score, err := s.Eval(docvec, aggcnt, doc_id)
+		docLen := int64(0)
+		if len, ok := u.docLenMap[doc_id]; ok {
+			docLen = int64(len)
+		}
+
+		score, err := s.Eval(docvec, docLen, aggcnt)
 		if err != nil {
 			return nil, err
 		}
@@ -376,7 +382,7 @@ func groupby(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) (
 
 		if needSetDocLen {
 			docLen := vector.GetFixedAtWithTypeCheck[int32](bat.Vecs[2], i)
-			s.DocLenMap[doc_id] = docLen
+			u.docLenMap[doc_id] = docLen
 		}
 
 		// word string
@@ -453,12 +459,7 @@ func groupby(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) (
 
 // Run SQL to get number of records in source table
 func runCountStar(proc *process.Process, s *fulltext.SearchAccum) error {
-	var sql string
-	if s.ScoreAlgo == fulltext.ALGO_BM25 {
-		sql = fmt.Sprintf(countstart_bm25_sql, s.TblName, fulltext.DOC_LEN_WORD)
-	} else {
-		sql = fmt.Sprintf(countstar_sql, s.SrcTblName)
-	}
+	sql := fmt.Sprintf(countstar_sql, s.TblName, fulltext.DOC_LEN_WORD)
 
 	res, err := ft_runSql(proc, sql)
 	if err != nil {
@@ -475,10 +476,8 @@ func runCountStar(proc *process.Process, s *fulltext.SearchAccum) error {
 		nrow := vector.GetFixedAtWithTypeCheck[int64](bat.Vecs[0], 0)
 		s.Nrow = nrow
 
-		if s.ScoreAlgo == fulltext.ALGO_BM25 {
-			avgDocLen := vector.GetFixedAtWithTypeCheck[float64](bat.Vecs[1], 0)
-			s.AvgDocLen = avgDocLen
-		}
+		avgDocLen := vector.GetFixedAtWithTypeCheck[float64](bat.Vecs[1], 0)
+		s.AvgDocLen = avgDocLen
 		//logutil.Infof("NROW = %d", nrow)
 	}
 
