@@ -274,9 +274,6 @@ func (replayer *WalReplayer) MakeReplayHandle(
 		if !replayer.checkLSN(lsn) {
 			return driver.RE_Truncate
 		}
-		if lsn > replayer.maxLSN.Load() {
-			replayer.maxLSN.Store(lsn)
-		}
 		head := objectio.DecodeIOEntryHeader(payload)
 		if head.Version < txnbase.IOET_WALTxnEntry_V4 {
 			return driver.RE_Nomal
@@ -305,6 +302,9 @@ func (replayer *WalReplayer) applyReplayTxnLoop(
 		}
 		t0 := time.Now()
 		replayer.OnReplayTxn(txnCmd, txnCmd.Lsn)
+		if txnCmd.Lsn > replayer.maxLSN.Load() {
+			replayer.maxLSN.Store(txnCmd.Lsn)
+		}
 		txnCmd.Close()
 		replayer.applyDuration += time.Since(t0)
 	}
