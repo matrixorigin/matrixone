@@ -1250,6 +1250,8 @@ func Test_ShardingLocalReader(t *testing.T) {
 		relData, err := rel.Ranges(ctx, engine.DefaultRangesParam)
 		require.NoError(t, err)
 
+		fmt.Println(relData.String())
+
 		shardSvr := testutil.MockShardService()
 		delegate, _ := disttae.MockTableDelegate(rel, shardSvr)
 		num := 10

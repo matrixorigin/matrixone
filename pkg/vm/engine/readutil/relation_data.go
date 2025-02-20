@@ -408,6 +408,8 @@ func (relData *BlockListRelData) String() string {
 	} else {
 		w.WriteString("\tTombstones: nil\n")
 	}
+
+	w.WriteString(fmt.Sprintf("\nPState: %v", relData.pState))
 	return w.String()
 }
 
