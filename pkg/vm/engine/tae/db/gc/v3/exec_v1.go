@@ -221,7 +221,7 @@ func MakeBloomfilterCoarseFilter(
 		ctx,
 		rowCount,
 		probability,
-		2,
+		ckputil.TableObjectsAttr_ID_Idx,
 		reader.LoadBatchData,
 		buffer,
 		mp,

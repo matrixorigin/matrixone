@@ -85,8 +85,13 @@ func (reader *CKPDataReader) LoadBatchData(
 	mp *mpool.MPool,
 	bat *batch.Batch,
 ) (end bool, err error) {
-	_, err = bat.Append(ctx, mp, reader.objectList)
-	end = true
+	if reader.objectList != nil {
+		_, err = bat.Append(ctx, mp, reader.objectList)
+		reader.objectList.Clean(mp)
+		reader.objectList = nil
+	} else {
+		end = true
+	}
 	return
 }
 func (reader *CKPDataReader) Close() {
