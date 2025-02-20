@@ -33,11 +33,10 @@ const (
 )
 
 type container struct {
-	state    int
-	probeIdx int
-	bat      *batch.Batch // build batch
-	rbat     *batch.Batch
-	inBat    *batch.Batch // probe batch
+	state int
+	bat   *batch.Batch // build batch
+	rbat  *batch.Batch
+	inBat *batch.Batch // probe batch
 }
 
 type Productl2 struct {
@@ -89,7 +88,6 @@ func (productl2 *Productl2) Reset(proc *process.Process, pipelineFailed bool, er
 	}
 	productl2.ctr.inBat = nil
 	productl2.ctr.state = Build
-	productl2.ctr.probeIdx = 0
 }
 
 func (productl2 *Productl2) Free(proc *process.Process, pipelineFailed bool, err error) {
