@@ -119,6 +119,7 @@ func (t *partitionTxnTable) BuildReaders(
 		if !ok {
 			data = relData.BuildEmptyRelData(n)
 			data.AttachTombstones(data.GetTombstones())
+			data.SetPState(relData.GetPState())
 			m[int(value.PartitionIdx)] = data
 		}
 		data.AppendBlockInfo(value)

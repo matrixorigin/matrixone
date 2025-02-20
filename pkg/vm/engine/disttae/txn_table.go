@@ -2305,6 +2305,8 @@ func (tbl *txnTable) GetNonAppendableObjectStats(ctx context.Context) ([]objecti
 	return objStats, nil
 }
 
+// Reset what?
+// TODO: txnTable should be stateless
 func (tbl *txnTable) Reset(op client.TxnOperator) error {
 	ws := op.GetWorkspace()
 	if ws == nil {
