@@ -10828,6 +10828,24 @@ func TestMergeAndTransfer(t *testing.T) {
 	id := testutil.GetOneBlockMeta(rel).AsCommonID()
 	txn.Commit(ctx)
 
+	{
+		offlineTxn := tae.DB.TxnMgr.OpenOfflineTxn(tae.DB.TxnMgr.Now())
+		assert.True(t, offlineTxn.GetStore().IsOffline())
+		offlineRel := tae.GetRelationWithTxn(offlineTxn)
+		err2 := offlineRel.RangeDelete(id, 0, 0, handle.DT_Normal)
+		t.Logf("offline delete err: %v", err2)
+		assert.True(t, moerr.IsMoErrCode(err2, moerr.ErrOfflineTxnWrite))
+		err2 = offlineRel.Append(ctx, bat)
+		t.Logf("offline append err: %v", err2)
+		assert.True(t, moerr.IsMoErrCode(err2, moerr.ErrOfflineTxnWrite))
+		txnDB, err2 := offlineRel.GetDB()
+		assert.NoError(t, err2)
+		_, err2 := txnDB.DropRelationByID(offlineRel.ID())
+		assert.True(t, moerr.IsMoErrCode(err2, moerr.ErrOfflineTxnWrite))
+		// offlineTxn.DropDatabase()
+		assert.NoError(t, offlineTxn.Rollback(ctx))
+	}
+
 	txn, rel = tae.GetRelation()
 	err := rel.RangeDelete(id, 0, 0, handle.DT_Normal)
 	txn.SetFreezeFn(func(at txnif.AsyncTxn) error {
@@ -11566,6 +11584,14 @@ func Test_RWDB1(t *testing.T) {
 		assert.NoError(t, err)
 		_, err = txn.GetDatabase(name)
 		assert.NoError(t, err)
+	}
+
+	{
+		txn, err := rTae.StartTxn(nil)
+		assert.NoError(t, err)
+		assert.True(t, txn.GetStore().IsOffline())
+		_, err = txn.CreateDatabase("xxx", "", "")
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrOfflineTxnWrite))
 	}
 
 	{
