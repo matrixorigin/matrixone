@@ -374,7 +374,7 @@ func NewCheckpointData(
 
 // for test
 func NewCheckpointDataWithVersion(ver uint32, mp *mpool.MPool) *CheckpointData {
-	if ver> CheckpointVersion12{
+	if ver > CheckpointVersion12 {
 		panic("not support")
 	}
 	data := &CheckpointData{
@@ -1375,20 +1375,19 @@ func LoadCheckpointLocations(
 	default:
 	}
 	var err error
-	data := NewCheckpointData(sid, common.CheckpointAllocator)
+	var data *CKPDataReader
+	if data, err = GetCKPDataReader(
+		ctx, location, version, common.CheckpointAllocator, fs,
+	); err != nil {
+		return nil, err
+	}
 	defer data.Close()
-
-	var reader *ioutil.BlockReader
-	if reader, err = ioutil.NewObjectReader(fs, location); err != nil {
-		return nil, err
+	locationMap := make(map[string]objectio.Location)
+	locations := data.GetLocations()
+	for _, loc := range locations {
+		locationMap[loc.Name().String()] = loc
 	}
-
-	if err = data.readMetaBatch(ctx, version, reader, nil); err != nil {
-		return nil, err
-	}
-
-	data.replayMetaBatch(version)
-	return data.locations, nil
+	return locationMap, nil
 }
 
 // LoadSpecifiedCkpBatch loads a specified checkpoint data batch

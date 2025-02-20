@@ -138,6 +138,7 @@ func (w *GCWindow) ExecuteGlobalCheckpointBasedGC(
 	job := NewCheckpointBasedGCJob(
 		&gcTS,
 		gCkp.GetLocation(),
+		gCkp.GetVersion(),
 		sourcer,
 		pitrs,
 		accountSnapshots,

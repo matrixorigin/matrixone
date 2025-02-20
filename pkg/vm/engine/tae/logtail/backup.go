@@ -300,7 +300,7 @@ func GetCheckpointData(
 		return nil, context.Cause(ctx)
 	default:
 	}
-	return GetCKPDataReader(ctx,location,version,fs,common.CheckpointAllocator)
+	return GetCKPDataReader(ctx, location, version, common.CheckpointAllocator, fs)
 }
 
 func addObjectToObjectData(

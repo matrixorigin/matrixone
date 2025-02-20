@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
@@ -77,6 +78,17 @@ func (reader *CKPDataReader) GetLocations() []objectio.Location {
 func (reader *CKPDataReader) GetBatch() *batch.Batch {
 	return reader.objectList
 }
+func (reader *CKPDataReader) LoadBatchData(
+	ctx context.Context,
+	str []string,
+	_ *plan.Expr,
+	mp *mpool.MPool,
+	bat *batch.Batch,
+) (end bool, err error) {
+	_, err = bat.Append(ctx, mp, reader.objectList)
+	end = true
+	return
+}
 func (reader *CKPDataReader) Close() {
 	if reader.objectList != nil {
 		reader.objectList.Clean(reader.mp)
@@ -95,8 +107,8 @@ func GetCKPDataReader(
 	ctx context.Context,
 	location objectio.Location,
 	version uint32,
-	fs fileservice.FileService,
 	mp *mpool.MPool,
+	fs fileservice.FileService,
 ) (reader *CKPDataReader, err error) {
 	if version <= CheckpointVersion12 {
 		replayer := NewCheckpointReplayer(location, mp)
@@ -112,13 +124,16 @@ func GetCKPDataReader(
 			return
 		}
 		reader = NewCheckpointReaderWithBatch(objectlistBatch, mp)
+		reader.locations = replayer.GetLocations()
 		return
 	} else {
 		var data *batch.Batch
-		if data, err = GetCKPData(ctx, location, mp, fs); err != nil {
+		var locs []objectio.Location
+		if data, locs, err = GetCKPData(ctx, location, mp, fs); err != nil {
 			return
 		}
 		reader = NewCheckpointReaderWithBatch(data, mp)
+		reader.locations = locs
 		return
 	}
 }
@@ -666,7 +681,7 @@ func GetCKPData(
 	location objectio.Location,
 	mp *mpool.MPool,
 	fs fileservice.FileService,
-) (data *batch.Batch, err error) {
+) (data *batch.Batch, locations []objectio.Location, err error) {
 	data = ckputil.NewObjectListBatch()
 	var release func()
 	var metaBatch *batch.Batch
@@ -677,7 +692,13 @@ func GetCKPData(
 	}
 	defer release()
 	objs := ckputil.ScanObjectStats(metaBatch)
+	locations = make([]objectio.Location, 0)
 	for _, obj := range objs {
+		for i := 0; i < int(obj.BlkCnt()); i++ {
+			loc := obj.ObjectLocation()
+			loc.SetID(uint16(i))
+			locations = append(locations, loc)
+		}
 		reader := ckputil.NewDataReader(
 			ctx,
 			fs,
