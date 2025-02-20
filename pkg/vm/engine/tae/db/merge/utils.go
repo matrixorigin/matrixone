@@ -171,6 +171,10 @@ func removeOversize(objs []*catalog.ObjectEntry) []*catalog.ObjectEntry {
 func estimateMergeSize(objs []*catalog.ObjectEntry) int {
 	size := 0
 	for _, o := range objs {
+		if o.Rows() == 0 {
+			continue
+		}
+		size += 8192 * int(o.OriginSize()/o.Rows())
 		size += int(o.Rows()) * estimateMemUsagePerRow
 	}
 	// Go's load factor is 6.5. This means there are average 6.5 key/elem pairs per bucket.
