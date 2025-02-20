@@ -11573,6 +11573,7 @@ func Test_RWDB1(t *testing.T) {
 		assert.NoError(t, err)
 		_, err = txn.GetDatabase(name)
 		assert.NoError(t, err)
+		assert.NoError(t, txn.Commit(ctx))
 	}
 
 	rTae.Close()
@@ -11658,7 +11659,7 @@ func Test_RWDB2(t *testing.T) {
 		assert.NoError(t, err)
 		names := txn.DatabaseNames()
 		t.Log(names)
-		// assert.NoError(t, txn.Commit(ctx))
+		assert.NoError(t, txn.Commit(ctx))
 	}
 
 	checkName(rTae1)
