@@ -11552,13 +11552,11 @@ func Test_RWDB1(t *testing.T) {
 	_, clientFactory := logservicedriver.NewMockServiceAndClientFactory()
 	ctx := context.Background()
 	wOpts := config.WithLongScanAndCKPOpts(nil)
-	wOpts.Lc = clientFactory
-	wOpts.LogStoreT = options.LogstoreLogservice
+	wOpts.WalClientFactory = clientFactory
 	wTae := testutil.NewTestEngine(ctx, ModuleName, t, wOpts)
 	defer wTae.Close()
 	rOpts := config.WithLongScanAndCKPOpts(nil)
-	rOpts.Lc = clientFactory
-	rOpts.LogStoreT = options.LogstoreLogservice
+	rOpts.WalClientFactory = clientFactory
 
 	rTae := testutil.NewReplayTestEngine(ctx, ModuleName, t, rOpts)
 

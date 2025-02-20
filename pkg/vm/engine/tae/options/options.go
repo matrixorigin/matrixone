@@ -255,10 +255,6 @@ func (o *Options) FillDefaults(dirname string) *Options {
 		}
 	}
 
-	if o.LogStoreT == "" {
-		o.LogStoreT = DefaultLogstoreType
-	}
-
 	if o.Ctx == nil {
 		o.Ctx = context.Background()
 	}

@@ -119,14 +119,12 @@ func Open(
 		return
 	}
 
-	switch opts.LogStoreT {
-	case options.LogstoreBatchStore:
-		db.Wal = wal.NewLocalHandle(
-			dirname, WALDir, nil,
-		)
-	case options.LogstoreLogservice:
-		db.Wal = wal.NewLogserviceHandle(opts.Lc)
+	if opts.WalClientFactory != nil {
+		db.Wal = wal.NewLogserviceHandle(opts.WalClientFactory)
+	} else {
+		db.Wal = wal.NewLocalHandle(dirname, WALDir, nil)
 	}
+
 	rollbackSteps.Add("rollback open wal", func() error {
 		return db.Wal.Close()
 	})
