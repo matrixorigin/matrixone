@@ -815,13 +815,6 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 	txn.incrStatementCalled = false
 	return nil
 }
-func (txn *Transaction) resetSnapshot() error {
-	txn.tableCache.Range(func(key, value interface{}) bool {
-		value.(*txnTableDelegate).origin.resetSnapshot()
-		return true
-	})
-	return nil
-}
 
 func (txn *Transaction) IncrSQLCount() {
 	n := txn.sqlCount.Add(1)
@@ -844,8 +837,7 @@ func (txn *Transaction) advanceSnapshot(
 		return err
 	}
 
-	// reset to get the latest partitionstate
-	return txn.resetSnapshot()
+	return nil
 }
 
 // For RC isolation, update the snapshot TS of transaction for each statement.
@@ -983,7 +975,6 @@ type txnTable struct {
 	tableDef      *plan.TableDef
 	seqnums       []uint16
 	typs          []types.Type
-	_partState    atomic.Pointer[logtailreplay.PartitionState]
 	primaryIdx    int // -1 means no primary key
 	primarySeqnum int // -1 means no primary key
 	clusterByIdx  int // -1 means no clusterBy key
