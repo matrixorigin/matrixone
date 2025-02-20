@@ -11556,29 +11556,22 @@ func Test_RWDB1(t *testing.T) {
 	rTae := testutil.NewReplayTestEngine(ctx, ModuleName, t, rOpts)
 
 	i := 0
-	commitOneTxn := func() {
-		txn, _ := wTae.StartTxn(nil)
-		_, err := testutil.CreateDatabase2(ctx, txn, fmt.Sprintf("db_%d", i))
-		i++
-		assert.Nil(t, err)
-		assert.Nil(t, txn.Commit(ctx))
-	}
-
-	commitOneTxn()
-	commitOneTxn()
-
+	name := testutil.CreateOneDatabase(ctx, t, wTae.DB, i)
+	i++
+	testutil.CreateOneDatabase(ctx, t, wTae.DB, i)
+	i++
 	{
 		time.Sleep(time.Millisecond * 100)
 		txn, err := wTae.StartTxn(nil)
 		assert.NoError(t, err)
-		_, err = txn.GetDatabase("db_0")
+		_, err = txn.GetDatabase(name)
 		assert.NoError(t, err)
 	}
 
 	{
 		txn, err := rTae.StartTxn(nil)
 		assert.NoError(t, err)
-		_, err = txn.GetDatabase("db_0")
+		_, err = txn.GetDatabase(name)
 		assert.NoError(t, err)
 	}
 
