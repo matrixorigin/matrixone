@@ -11577,3 +11577,95 @@ func Test_RWDB1(t *testing.T) {
 
 	rTae.Close()
 }
+
+// 1. start a write engine wTae
+// 2. wTae commit 2 txns
+// 3. start a replay engine rTae1. wTae waits for rTae1 to start
+// 4. open rTae1 and notify wTae to continue and open rTae2
+// 5. wTae continue to commit 2 txns
+// 6. wTae force checkpoint
+// 7. wTae continue to commit 2 txns
+// 8. check if rTae and rTae2 can replay the 6 txns and the checkpoint
+func Test_RWDB2(t *testing.T) {
+	ctx := context.Background()
+	wOpts := config.WithLongScanAndCKPOpts(nil, options.WithWalClientFactory(nil))
+	wTae := testutil.NewTestEngine(ctx, ModuleName, t, wOpts)
+	defer wTae.Close()
+
+	var (
+		sem1     sync.WaitGroup
+		rTae1Sem sync.WaitGroup
+		rTae2Sem sync.WaitGroup
+		txnSem   sync.WaitGroup
+		rTae1    *testutil.TestEngine
+		rTae2    *testutil.TestEngine
+		name     string
+	)
+	sem1.Add(1)
+	rTae1Sem.Add(1)
+	rTae2Sem.Add(1)
+	txnSem.Add(1)
+
+	go func() {
+		defer txnSem.Done()
+		for i := 0; i < 8; i++ {
+			name = testutil.CreateOneDatabase(ctx, t, wTae.DB, i)
+			if i == 2 {
+				sem1.Done()
+				rTae1Sem.Wait()
+			}
+			if i == 5 {
+				wTae.ForceCheckpoint()
+			}
+		}
+	}()
+
+	go func() {
+		defer rTae1Sem.Done()
+		sem1.Wait()
+		rOpts := config.WithLongScanAndCKPOpts(nil, options.WithWalClientFactory(wOpts.WalClientFactory))
+		rTae1 = testutil.NewReplayTestEngine(ctx, ModuleName, t, rOpts)
+	}()
+
+	go func() {
+		defer rTae2Sem.Done()
+		rTae1Sem.Wait()
+		rOpts := config.WithLongScanAndCKPOpts(nil, options.WithWalClientFactory(wOpts.WalClientFactory))
+		rTae2 = testutil.NewReplayTestEngine(ctx, ModuleName, t, rOpts)
+	}()
+
+	rTae2Sem.Wait()
+	txnSem.Wait()
+
+	checkName := func(tae *testutil.TestEngine) {
+		testutils.WaitExpect(
+			4000,
+			func() bool {
+				// wait checkpointed
+				lsn := tae.DB.Wal.GetCheckpointed()
+				if lsn == 0 {
+					return false
+				}
+				penddingCnt := tae.DB.Wal.GetPenddingCnt()
+				return penddingCnt == 2
+				// txn, err := tae.StartTxn(nil)
+				// assert.NoError(t, err)
+				// _, err = txn.GetDatabase(name)
+				// return err == nil
+			},
+		)
+		txn, err := tae.StartTxn(nil)
+		assert.NoError(t, err)
+		_, err = txn.GetDatabase(name)
+		assert.NoError(t, err)
+		names := txn.DatabaseNames()
+		t.Log(names)
+		// assert.NoError(t, txn.Commit(ctx))
+	}
+
+	checkName(rTae1)
+	checkName(rTae2)
+
+	rTae1.Close()
+	rTae2.Close()
+}
