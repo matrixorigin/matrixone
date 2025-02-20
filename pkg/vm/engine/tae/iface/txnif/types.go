@@ -257,7 +257,7 @@ type TxnStore interface {
 	Txn2PC
 	TxnUnsafe
 	WaitPrepared(ctx context.Context) error
-	BindTxn(AsyncTxn)
+	BindTxn(AsyncTxn, bool)
 	GetLSN() uint64
 	GetContext() context.Context
 	SetContext(context.Context)
@@ -308,6 +308,9 @@ type TxnStore interface {
 	AddWaitEvent(cnt int)
 
 	IsReadonly() bool
+	// Offline txn is created when TxnMgr is in Recovery mode
+	// Offline txn is not writable and all offline txns are ReadOnly
+	IsOffline() bool
 	IncreateWriteCnt() int
 	ObserveTxn(
 		visitDatabase func(db any),

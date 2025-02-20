@@ -149,7 +149,8 @@ type txnStore struct {
 	writeOps   atomic.Uint32
 	tracer     *txnTracer
 
-	wg sync.WaitGroup
+	wg        sync.WaitGroup
+	isOffline bool
 }
 
 var TxnStoreFactory = func(
@@ -157,9 +158,11 @@ var TxnStoreFactory = func(
 	catalog *catalog.Catalog,
 	driver wal.Store,
 	rt *dbutils.Runtime,
-	maxMessageSize uint64) txnbase.TxnStoreFactory {
+	maxMessageSize uint64,
+) txnbase.TxnStoreFactory {
 	return func() txnif.TxnStore {
-		return newStore(ctx, catalog, driver, rt, maxMessageSize)
+		isOffline := false
+		return newStore(ctx, catalog, driver, rt, isOffline, maxMessageSize)
 	}
 }
 
@@ -168,16 +171,18 @@ func newStore(
 	catalog *catalog.Catalog,
 	driver wal.Store,
 	rt *dbutils.Runtime,
+	isOffline bool,
 	maxMessageSize uint64,
 ) *txnStore {
 	return &txnStore{
-		ctx:     ctx,
-		rt:      rt,
-		dbs:     make(map[uint64]*txnDB),
-		catalog: catalog,
-		cmdMgr:  newCommandManager(driver, maxMessageSize),
-		driver:  driver,
-		logs:    make([]entry.Entry, 0),
+		ctx:       ctx,
+		rt:        rt,
+		dbs:       make(map[uint64]*txnDB),
+		catalog:   catalog,
+		cmdMgr:    newCommandManager(driver, maxMessageSize),
+		driver:    driver,
+		isOffline: isOffline,
+		logs:      make([]entry.Entry, 0),
 	}
 }
 
@@ -208,6 +213,10 @@ func (store *txnStore) TriggerTrace(state uint8) {
 
 func (store *txnStore) GetContext() context.Context    { return store.ctx }
 func (store *txnStore) SetContext(ctx context.Context) { store.ctx = ctx }
+
+func (store *txnStore) IsOffline() bool {
+	return store.isOffline
+}
 
 func (store *txnStore) IsReadonly() bool {
 	return store.writeOps.Load() == 0
@@ -270,7 +279,8 @@ func (store *txnStore) Close() error {
 	return err
 }
 
-func (store *txnStore) BindTxn(txn txnif.AsyncTxn) {
+func (store *txnStore) BindTxn(txn txnif.AsyncTxn, offline bool) {
+	store.isOffline = offline
 	store.txn = txn
 }
 
