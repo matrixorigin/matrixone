@@ -28,7 +28,7 @@ func TestCreateAndDeleteRangeBased(t *testing.T) {
 		"create table %s (c int comment 'abc') partition by range (c) (partition p1 values less than (1) engine = innodb, partition p2 values less than (2) engine = innodb)",
 		partition.PartitionMethod_Range,
 		func(idx int, p partition.Partition) {
-			require.Equal(t, fmt.Sprintf("values less than (%d)", idx+1), p.Expression)
+			require.Equal(t, fmt.Sprintf("values less than (%d)", idx+1), p.ExprStr)
 		},
 	)
 }
@@ -39,7 +39,7 @@ func TestCreateAndDeleteRangeColumnsBased(t *testing.T) {
 		"create table %s (c DATETIME) partition by range columns (c) (partition p1 values less than ('2024-01-21 00:00:00'), partition p2 values less than ('2024-01-22 00:00:00'))",
 		partition.PartitionMethod_Range,
 		func(idx int, p partition.Partition) {
-			require.Equal(t, fmt.Sprintf("values less than ('2024-01-2%d 00:00:00')", idx+1), p.Expression)
+			require.Equal(t, fmt.Sprintf("values less than ('2024-01-2%d 00:00:00')", idx+1), p.ExprStr)
 		},
 	)
 }

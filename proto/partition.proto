@@ -16,6 +16,7 @@ syntax = "proto3";
 package partition; 
 option go_package = "github.com/matrixorigin/matrixone/pkg/pb/partition";
 
+import "plan.proto";
 import "github.com/gogo/protobuf/gogoproto/gogo.proto";
 
 option (gogoproto.sizer_all) = false;
@@ -43,10 +44,11 @@ message PartitionMetadata {
 }
 
 message Partition {
-    uint64 PartitionID        = 1;
-    string PartitionTableName = 2;
-    uint64 PrimaryTableID     = 3;
-    string Name               = 4;
-    uint32 Position           = 5;
-    string Expression         = 6;
+    uint64    PartitionID        = 1;
+    string    PartitionTableName = 2;
+    uint64    PrimaryTableID     = 3;
+    string    Name               = 4;
+    uint32    Position           = 5;
+    string    ExprStr            = 6;
+    plan.Expr Expr               = 7;
 }

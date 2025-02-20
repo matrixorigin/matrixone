@@ -17,6 +17,7 @@ package partition
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/partitionservice"
 	"testing"
 	"time"
 
@@ -24,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/embed"
-	"github.com/matrixorigin/matrixone/pkg/partitionservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -53,14 +53,49 @@ func TestInsertAndDeleteHashBased(t *testing.T) {
 	creates := []string{
 		"create table %s (c int) partition by hash(c) partitions 2",
 		"create table %s (c int, b vecf32(2)) partition by hash(c) partitions 2",
+		"create table %s (c int, b vecf32(2)) partition by hash(c) partitions 3",
+		"create table %s (c int primary key) partition by range columns(c) (partition p0 values less than (1), partition p1 values less than (5))",
+		"create table %s (c int primary key) partition by list (c) (partition p0 values in (1, 2), partition p1 values in (3, 4))",
+		"create table %s (a int unsigned, c int) partition by range columns(c) (partition p0 values less than (1), partition p1 values less than (5))",
+		"create table %s (b vecf32(2), c int) partition by hash(c) partitions 2",
 	}
 	inserts := []string{
 		"insert into %s values(1)",
 		"insert into %s values(1, '[1.1, 2.2]')",
+		"insert into %s values(1, '[1.1, 2.2]'), (2, '[1.1, 2.2]'), (3, '[1.1, 2.2]')",
+		"insert into %s values(1), (2), (3), (4)",
+		"insert into %s values(1), (2), (3), (4)",
+		"insert into %s values(1, 1), (2,2), (3,3), (6,4)",
+		"insert into %s values('[1.1, 2.2]', 1), ('[1.1, 2.2]', 2), ('[1.1, 2.2]', 3)",
 	}
 	deletes := []string{
 		"delete from %s where c = 1",
 		"delete from %s where c = 1",
+		"delete from %s where c > 0",
+		"delete from %s where c > 0",
+		"delete from %s where c > 0",
+		"delete from %s where c > 0",
+		"delete from %s where c > 0",
+	}
+
+	partitionCount := []int{
+		2,
+		2,
+		3,
+		2,
+		2,
+		2,
+		2,
+	}
+
+	results := [][]int{
+		{1, 0},
+		{1, 0},
+		{3, 0},
+		{4, 0},
+		{4, 0},
+		{4, 0},
+		{3, 0},
 	}
 
 	runPartitionClusterTest(
@@ -87,7 +122,7 @@ func TestInsertAndDeleteHashBased(t *testing.T) {
 
 				fn := func() int64 {
 					n := int64(0)
-					for i := 0; i < 2; i++ {
+					for i := 0; i < partitionCount[idx]; i++ {
 						testutils.ExecSQLWithReadResult(
 							t,
 							db,
@@ -112,7 +147,7 @@ func TestInsertAndDeleteHashBased(t *testing.T) {
 					cn,
 					insert,
 				)
-				require.Equal(t, int64(1), fn())
+				require.Equal(t, int64(results[idx][0]), fn())
 
 				testutils.ExecSQLWithReadResult(
 					t,
@@ -121,7 +156,7 @@ func TestInsertAndDeleteHashBased(t *testing.T) {
 					func(i int, s string, r executor.Result) {
 						r.ReadRows(
 							func(rows int, cols []*vector.Vector) bool {
-								require.Equal(t, int64(1), executor.GetFixedRows[int64](cols[0])[0])
+								require.Equal(t, int64(results[idx][0]), executor.GetFixedRows[int64](cols[0])[0])
 								return true
 							},
 						)
@@ -135,7 +170,7 @@ func TestInsertAndDeleteHashBased(t *testing.T) {
 					cn,
 					delete,
 				)
-				require.Equal(t, int64(0), fn())
+				require.Equal(t, int64(results[idx][1]), fn())
 
 				testutils.ExecSQLWithReadResult(
 					t,
@@ -144,7 +179,7 @@ func TestInsertAndDeleteHashBased(t *testing.T) {
 					func(i int, s string, r executor.Result) {
 						r.ReadRows(
 							func(rows int, cols []*vector.Vector) bool {
-								require.Equal(t, int64(0), executor.GetFixedRows[int64](cols[0])[0])
+								require.Equal(t, int64(results[idx][1]), executor.GetFixedRows[int64](cols[0])[0])
 								return true
 							},
 						)
