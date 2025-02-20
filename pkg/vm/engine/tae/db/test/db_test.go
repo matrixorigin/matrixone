@@ -10840,7 +10840,7 @@ func TestMergeAndTransfer(t *testing.T) {
 		assert.True(t, moerr.IsMoErrCode(err2, moerr.ErrOfflineTxnWrite))
 		txnDB, err2 := offlineRel.GetDB()
 		assert.NoError(t, err2)
-		_, err2 := txnDB.DropRelationByID(offlineRel.ID())
+		_, err2 = txnDB.DropRelationByID(offlineRel.ID())
 		assert.True(t, moerr.IsMoErrCode(err2, moerr.ErrOfflineTxnWrite))
 		// offlineTxn.DropDatabase()
 		assert.NoError(t, offlineTxn.Rollback(ctx))
