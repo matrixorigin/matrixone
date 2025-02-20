@@ -19,7 +19,6 @@ import (
 	"math"
 	"math/rand"
 	"os"
-	"runtime"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec/algos/kmeans"
@@ -72,7 +71,6 @@ func NewKMeansPlusPlusInitializer(distFn kmeans.DistanceFunction) Initializer {
 }
 
 func (kpp *KMeansPlusPlus) InitCentroids(vectors []*mat.VecDense, k int) (centroids []*mat.VecDense) {
-	var mutex sync.Mutex
 	numSamples := len(vectors)
 	centroids = make([]*mat.VecDense, k)
 
@@ -86,7 +84,7 @@ func (kpp *KMeansPlusPlus) InitCentroids(vectors []*mat.VecDense, k int) (centro
 		distances[j] = math.MaxFloat64
 	}
 
-	ncpu := runtime.NumCPU() - 1
+	ncpu := 2
 	if numSamples < ncpu {
 		ncpu = numSamples
 	}
@@ -97,6 +95,7 @@ func (kpp *KMeansPlusPlus) InitCentroids(vectors []*mat.VecDense, k int) (centro
 		var totalDistToExistingCenters float64
 
 		var wg sync.WaitGroup
+		var mutex sync.Mutex
 		for n := 0; n < ncpu; n++ {
 			wg.Add(1)
 

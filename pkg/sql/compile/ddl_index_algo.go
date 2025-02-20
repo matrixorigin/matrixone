@@ -16,6 +16,7 @@ package compile
 
 import (
 	"fmt"
+	"os"
 	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -221,14 +222,25 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef
 
 	// 2. Sampling SQL Logic
 	sampleCnt := catalog.CalcSampleCount(int64(centroidParamsLists), totalCnt)
+	/*
+		indexColumnName := indexDef.Parts[0]
+		sampleSQL := fmt.Sprintf("(select sample(`%s`, %d rows, 'row') as `%s` from `%s`.`%s`)",
+			indexColumnName,
+			sampleCnt,
+			indexColumnName,
+			qryDatabase,
+			originalTableDef.Name,
+		)
+	*/
 	indexColumnName := indexDef.Parts[0]
-	sampleSQL := fmt.Sprintf("(select sample(`%s`, %d rows, 'row') as `%s` from `%s`.`%s`)",
-		indexColumnName,
-		sampleCnt,
+	sampleSQL := fmt.Sprintf("(SELECT %s from `%s`.`%s` LIMIT %d)",
 		indexColumnName,
 		qryDatabase,
 		originalTableDef.Name,
-	)
+		sampleCnt)
+
+	os.Stderr.WriteString(sampleSQL)
+	os.Stderr.WriteString("\n")
 
 	// 3. Insert into centroids table
 	insertSQL := fmt.Sprintf("insert into `%s`.`%s` (`%s`, `%s`, `%s`)",
@@ -274,6 +286,9 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef
 		sampleSQL,
 	)
 
+	os.Stderr.WriteString(clusterCentersSQL)
+	os.Stderr.WriteString("\n")
+
 	err = s.logTimestamp(c, qryDatabase, metadataTableName, "clustering_start")
 	if err != nil {
 		return err
@@ -289,6 +304,7 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef
 		return err
 	}
 
+	os.Stderr.WriteString("cluster centroid end\n")
 	return nil
 }
 
@@ -357,6 +373,8 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 		indexColumnName,
 	)
 
+	os.Stderr.WriteString("ivf entries table start\n")
+	os.Stderr.WriteString(fmt.Sprintf("%s\n", centroidsCrossL2JoinTbl))
 	err := s.logTimestamp(c, qryDatabase, metadataTableName, "mapping_start")
 	if err != nil {
 		return err
@@ -371,6 +389,7 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 	if err != nil {
 		return err
 	}
+	os.Stderr.WriteString("ivf entries table end\n")
 
 	return nil
 }

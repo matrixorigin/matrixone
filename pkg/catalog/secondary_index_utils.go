@@ -103,13 +103,15 @@ func CalcSampleCount(lists, totalCnt int64) (sampleCnt int64) {
 		sampleCnt = totalCnt
 	}
 
-	if totalCnt > MaxSampleCount && sampleCnt < MaxSampleCount {
-		sampleCnt = MaxSampleCount
-	}
+	/*
+		if totalCnt > MaxSampleCount && sampleCnt < MaxSampleCount {
+			sampleCnt = MaxSampleCount
+		}
 
-	if sampleCnt > MaxSampleCount {
-		sampleCnt = MaxSampleCount
-	}
+		if sampleCnt > MaxSampleCount {
+			sampleCnt = MaxSampleCount
+		}
+	*/
 
 	return sampleCnt
 }

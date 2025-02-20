@@ -187,7 +187,7 @@ func (exec *clusterCentersExec) Fill(groupIndex int, row int, vectors []*vector.
 }
 
 func (exec *clusterCentersExec) BulkFill(groupIndex int, vectors []*vector.Vector) error {
-	os.Stderr.WriteString("clusterCentersExc BulkFill()\n")
+	os.Stderr.WriteString(fmt.Sprintf("clusterCentersExc BulkFill() groupid = %d,  nvec = %d, addr = %d\n", groupIndex, len(vectors), util.UnsafeUintptr(exec)))
 	if vectors[0].IsConstNull() {
 		return nil
 	}
