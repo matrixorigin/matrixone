@@ -25,11 +25,21 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/logservicedriver"
 )
 
 func WithTransferTableTTL(ttl time.Duration) func(*Options) {
 	return func(opts *Options) {
 		opts.TransferTableTTL = ttl
+	}
+}
+
+func WithWalClientFactory(factory logservicedriver.LogServiceClientFactory) func(*Options) {
+	return func(opts *Options) {
+		opts.WalClientFactory = factory
+		if opts.WalClientFactory == nil {
+			_, opts.WalClientFactory = logservicedriver.NewMockServiceAndClientFactory()
+		}
 	}
 }
 
