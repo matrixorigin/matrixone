@@ -1943,7 +1943,7 @@ func (tbl *txnTable) getPartitionState(
 		if tbl.tableId == catalog.MO_COLUMNS_ID {
 			logutil.Info("open partition state for mo_columns",
 				zap.String("txn", tbl.db.op.Txn().DebugString()),
-				zap.String("desc", ps.Desc()),
+				zap.String("desc", ps.Desc(true)),
 				zap.String("pointer", fmt.Sprintf("%p", ps)))
 		}
 

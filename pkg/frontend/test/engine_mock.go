@@ -536,6 +536,20 @@ func (mr *MockRelDataMockRecorder) GetBlockInfoSlice() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetBlockInfoSlice", reflect.TypeOf((*MockRelData)(nil).GetBlockInfoSlice))
 }
 
+// GetPState mocks base method.
+func (m *MockRelData) GetPState() any {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetPState")
+	ret0, _ := ret[0].(any)
+	return ret0
+}
+
+// GetPState indicates an expected call of GetPState.
+func (mr *MockRelDataMockRecorder) GetPState() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetPState", reflect.TypeOf((*MockRelData)(nil).GetPState))
+}
+
 // GetShardID mocks base method.
 func (m *MockRelData) GetShardID(i int) uint64 {
 	m.ctrl.T.Helper()
@@ -617,6 +631,18 @@ func (m *MockRelData) SetBlockInfo(i int, blk *objectio.BlockInfo) {
 func (mr *MockRelDataMockRecorder) SetBlockInfo(i, blk interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetBlockInfo", reflect.TypeOf((*MockRelData)(nil).SetBlockInfo), i, blk)
+}
+
+// SetPState mocks base method.
+func (m *MockRelData) SetPState(pState any) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "SetPState", pState)
+}
+
+// SetPState indicates an expected call of SetPState.
+func (mr *MockRelDataMockRecorder) SetPState(pState interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetPState", reflect.TypeOf((*MockRelData)(nil).SetPState), pState)
 }
 
 // SetShardID mocks base method.
