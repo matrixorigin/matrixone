@@ -322,7 +322,11 @@ func (tbl *txnTableDelegate) Ranges(ctx context.Context, rangesParam engine.Rang
 		ret.AppendBlockInfo(blocks.Get(i))
 	}
 
-	ret.SetPState(rs.GetPState())
+	part, err := tbl.origin.getPartitionState(ctx)
+	if err != nil {
+		return nil, err
+	}
+	ret.SetPState(part)
 
 	return ret, nil
 }
@@ -572,6 +576,11 @@ func (tbl *txnTableDelegate) BuildShardingReaders(
 	//relData maybe is nil, indicate that only read data from memory.
 	if relData == nil || relData.DataCnt() == 0 {
 		relData = readutil.NewBlockListRelationData(1)
+		part, err := tbl.origin.getPartitionState(ctx)
+		if err != nil {
+			return nil, err
+		}
+		relData.SetPState(part)
 	}
 
 	blkCnt := relData.DataCnt()
@@ -597,6 +606,7 @@ func (tbl *txnTableDelegate) BuildShardingReaders(
 		}
 
 		localRelData, remoteRelData := group(shard)
+		localRelData.SetPState(relData.GetPState())
 
 		srd := &shardingLocalReader{
 			tblDelegate:           tbl,
