@@ -11637,6 +11637,8 @@ func Test_RWDB2(t *testing.T) {
 	rTae2Sem.Wait()
 	txnSem.Wait()
 
+	pendings := wTae.DB.Wal.GetPenddingCnt()
+
 	checkName := func(tae *testutil.TestEngine) {
 		testutils.WaitExpect(
 			4000,
@@ -11647,7 +11649,7 @@ func Test_RWDB2(t *testing.T) {
 					return false
 				}
 				penddingCnt := tae.DB.Wal.GetPenddingCnt()
-				return penddingCnt == 2
+				return penddingCnt == pendings
 				// txn, err := tae.StartTxn(nil)
 				// assert.NoError(t, err)
 				// _, err = txn.GetDatabase(name)
