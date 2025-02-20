@@ -60,7 +60,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/logservicedriver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/wal"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
@@ -11549,17 +11548,11 @@ func Test_Controller2(t *testing.T) {
 }
 
 func Test_RWDB1(t *testing.T) {
-	_, clientFactory := logservicedriver.NewMockServiceAndClientFactory()
 	ctx := context.Background()
-	wOpts := config.WithLongScanAndCKPOpts(nil)
-	wOpts.Lc = clientFactory
-	wOpts.LogStoreT = options.LogstoreLogservice
+	wOpts := config.WithLongScanAndCKPOpts(nil, options.WithWalClientFactory(nil))
 	wTae := testutil.NewTestEngine(ctx, ModuleName, t, wOpts)
 	defer wTae.Close()
-	rOpts := config.WithLongScanAndCKPOpts(nil)
-	rOpts.Lc = clientFactory
-	rOpts.LogStoreT = options.LogstoreLogservice
-
+	rOpts := config.WithLongScanAndCKPOpts(nil, options.WithWalClientFactory(wOpts.WalClientFactory))
 	rTae := testutil.NewReplayTestEngine(ctx, ModuleName, t, rOpts)
 
 	i := 0
