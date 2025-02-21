@@ -505,4 +505,31 @@ execute s1 using @a;
 drop database prepare_test_2;
 
 
+drop database if exists db1;
+create database db1;
+use db1;
+create table test_prepare_1(col1 int);
+insert into test_prepare_1 values(1);
+prepare st_prepare from select * from test_prepare_1 order by col1;
+execute st_prepare;
+alter table test_prepare_1 add col2 int;
+execute st_prepare;
+alter table test_prepare_1 drop column col2;
+execute st_prepare;
+execute st_prepare;
+
+create table test_prepare_2(col1 int);
+insert into test_prepare_2 values(1),(2);
+prepare st_prepare_2 from select * from test_prepare_1 join test_prepare_2 on test_prepare_1.col1 = test_prepare_2.col1;
+execute st_prepare_2;
+alter table test_prepare_1 add col2 int;
+alter table test_prepare_2 add col2 int;
+execute st_prepare_2;
+execute st_prepare_2;
+
+drop table test_prepare_1;
+drop table test_prepare_2;
+drop database db1;
+
+
 
