@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 )
 
 var clusterUpgEntries = []versions.UpgradeEntry{
@@ -27,6 +28,8 @@ var clusterUpgEntries = []versions.UpgradeEntry{
 	upg_mo_subs_add_sub_account_name,
 	upg_mo_subs_add_pub_account_id,
 	upg_mo_account_lock,
+	upg_drop_information_schema_table_constraints,
+	upg_create_information_schema_table_constraints,
 }
 
 var upg_mo_cdc_watermark = versions.UpgradeEntry{
@@ -95,5 +98,26 @@ var upg_mo_account_lock = versions.UpgradeEntry{
 	UpgSql:    frontend.MoCatalogMoAccountLockDDL,
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
 		return versions.CheckTableDefinition(txn, accountId, catalog.MO_CATALOG, catalog.MO_ACCOUNT_LOCK)
+	},
+}
+
+var upg_drop_information_schema_table_constraints = versions.UpgradeEntry{
+	Schema:    sysview.InformationDBConst,
+	TableName: "table_constraints",
+	UpgType:   versions.DROP_TABLE,
+	UpgSql:    "drop table information_schema.table_constraints",
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		exist, err := versions.CheckTableDefinition(txn, accountId, sysview.InformationDBConst, "table_constraints")
+		return !exist, err
+	},
+}
+
+var upg_create_information_schema_table_constraints = versions.UpgradeEntry{
+	Schema:    sysview.InformationDBConst,
+	TableName: "table_constraints",
+	UpgType:   versions.CREATE_VIEW,
+	UpgSql:    sysview.InformationSchemaTableConstraintsDDL,
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		return versions.CheckTableDefinition(txn, accountId, sysview.InformationDBConst, "table_constraints")
 	},
 }

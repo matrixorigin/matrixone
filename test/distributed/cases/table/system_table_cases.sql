@@ -85,6 +85,9 @@ SELECT COUNT(0) FROM (SELECT * FROM tables LIMIT 10) AS temp;
 SELECT COUNT('') FROM (SELECT * FROM tables LIMIT 10) AS temp;
 SELECT COUNT(NULL) FROM (SELECT * FROM tables LIMIT 10) AS temp;
 
+-- table_constraints
+SELECT COUNT(*) FROM table_constraints;
+
 -- tables in mo_catalog
 USE mo_catalog;
 SHOW CREATE TABLE mo_columns;

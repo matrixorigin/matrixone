@@ -1,161 +1,164 @@
 USE mysql;
 SELECT COUNT(*) FROM (SELECT * FROM user LIMIT 10) AS temp;
-count(*)
+COUNT(*)
 0
 SELECT COUNT(0) FROM (SELECT * FROM user LIMIT 10) AS temp;
-count(0)
+COUNT(0)
 0
 SELECT COUNT('') FROM (SELECT * FROM user LIMIT 10) AS temp;
-count()
+COUNT()
 0
 SELECT COUNT(NULL) FROM (SELECT * FROM user LIMIT 10) AS temp;
-count(null)
+COUNT(null)
 0
 SELECT COUNT(*) FROM (SELECT * FROM db LIMIT 10) AS temp;
-count(*)
+COUNT(*)
 0
 SELECT COUNT(0) FROM (SELECT * FROM db LIMIT 10) AS temp;
-count(0)
+COUNT(0)
 0
 SELECT COUNT('') FROM (SELECT * FROM db LIMIT 10) AS temp;
-count()
+COUNT()
 0
 SELECT COUNT(NULL) FROM (SELECT * FROM db LIMIT 10) AS temp;
-count(null)
+COUNT(null)
 0
 SELECT COUNT(*) FROM (SELECT * FROM procs_priv LIMIT 10) AS temp;
-count(*)
+COUNT(*)
 0
 SELECT COUNT(0) FROM (SELECT * FROM procs_priv LIMIT 10) AS temp;
-count(0)
+COUNT(0)
 0
 SELECT COUNT('') FROM (SELECT * FROM procs_priv LIMIT 10) AS temp;
-count()
+COUNT()
 0
 SELECT COUNT(NULL) FROM (SELECT * FROM procs_priv LIMIT 10) AS temp;
-count(null)
+COUNT(null)
 0
 SELECT COUNT(*) FROM (SELECT * FROM columns_priv LIMIT 10) AS temp;
-count(*)
+COUNT(*)
 0
 SELECT COUNT(0) FROM (SELECT * FROM columns_priv LIMIT 10) AS temp;
-count(0)
+COUNT(0)
 0
 SELECT COUNT('') FROM (SELECT * FROM columns_priv LIMIT 10) AS temp;
-count()
+COUNT()
 0
 SELECT COUNT(NULL) FROM (SELECT * FROM columns_priv LIMIT 10) AS temp;
-count(null)
+COUNT(null)
 0
 SELECT COUNT(*) FROM (SELECT * FROM tables_priv LIMIT 10) AS temp;
-count(*)
+COUNT(*)
 0
 SELECT COUNT(0) FROM (SELECT * FROM tables_priv LIMIT 10) AS temp;
-count(0)
+COUNT(0)
 0
 SELECT COUNT('') FROM (SELECT * FROM tables_priv LIMIT 10) AS temp;
-count()
+COUNT()
 0
 SELECT COUNT(NULL) FROM (SELECT * FROM tables_priv LIMIT 10) AS temp;
-count(null)
+COUNT(null)
 0
 USE information_schema;
 SELECT COUNT(*) FROM (SELECT * FROM key_column_usage LIMIT 10) AS temp;
-count(*)
+COUNT(*)
 0
 SELECT COUNT(0) FROM (SELECT * FROM key_column_usage LIMIT 10) AS temp;
-count(0)
+COUNT(0)
 0
 SELECT COUNT('') FROM (SELECT * FROM key_column_usage LIMIT 10) AS temp;
-count()
+COUNT()
 0
 SELECT COUNT(NULL) FROM (SELECT * FROM key_column_usage LIMIT 10) AS temp;
-count(null)
+COUNT(null)
 0
 SELECT COUNT(*) FROM (SELECT * FROM columns LIMIT 10) AS temp;
-count(*)
+COUNT(*)
 10
 SELECT COUNT(0) FROM (SELECT * FROM columns LIMIT 10) AS temp;
-count(0)
+COUNT(0)
 10
 SELECT COUNT('') FROM (SELECT * FROM columns LIMIT 10) AS temp;
-count()
+COUNT()
 10
 SELECT COUNT(NULL) FROM (SELECT * FROM columns LIMIT 10) AS temp;
-count(null)
+COUNT(null)
 0
 SELECT COUNT(*) FROM (SELECT * FROM profiling LIMIT 10) AS temp;
-count(*)
+COUNT(*)
 0
 SELECT COUNT(0) FROM (SELECT * FROM profiling LIMIT 10) AS temp;
-count(0)
+COUNT(0)
 0
 SELECT COUNT('') FROM (SELECT * FROM profiling LIMIT 10) AS temp;
-count()
+COUNT()
 0
 SELECT COUNT(NULL) FROM (SELECT * FROM profiling LIMIT 10) AS temp;
-count(null)
+COUNT(null)
 0
 SELECT COUNT(*) FROM (SELECT * FROM user_privileges LIMIT 10) AS temp;
-count(*)
+COUNT(*)
 0
 SELECT COUNT(0) FROM (SELECT * FROM user_privileges LIMIT 10) AS temp;
-count(0)
+COUNT(0)
 0
 SELECT COUNT('') FROM (SELECT * FROM user_privileges LIMIT 10) AS temp;
-count()
+COUNT()
 0
 SELECT COUNT(NULL) FROM (SELECT * FROM user_privileges LIMIT 10) AS temp;
-count(null)
+COUNT(null)
 0
 SELECT COUNT(*) FROM (SELECT * FROM schemata where schema_name = 'mo_catalog' or schema_name = 'mo_task' LIMIT 10) AS temp;
-count(*)
+COUNT(*)
 2
 SELECT COUNT(0) FROM (SELECT * FROM schemata where schema_name = 'mo_catalog' or schema_name = 'mo_task' LIMIT 10) AS temp;
-count(0)
+COUNT(0)
 2
 SELECT COUNT('') FROM (SELECT * FROM schemata where schema_name = 'mo_catalog' or schema_name = 'mo_task' LIMIT 10) AS temp;
-count()
+COUNT()
 2
 SELECT COUNT(NULL) FROM (SELECT * FROM schemata where schema_name = 'mo_catalog' or schema_name = 'mo_task' LIMIT 10) AS temp;
-count(null)
+COUNT(null)
 0
 SELECT COUNT(*) FROM (SELECT * FROM character_sets LIMIT 10) AS temp;
-count(*)
+COUNT(*)
 0
 SELECT COUNT(0) FROM (SELECT * FROM character_sets LIMIT 10) AS temp;
-count(0)
+COUNT(0)
 0
 SELECT COUNT('') FROM (SELECT * FROM character_sets LIMIT 10) AS temp;
-count()
+COUNT()
 0
 SELECT COUNT(NULL) FROM (SELECT * FROM character_sets LIMIT 10) AS temp;
-count(null)
+COUNT(null)
 0
 SELECT COUNT(*) FROM (SELECT * FROM triggers LIMIT 10) AS temp;
-count(*)
+COUNT(*)
 0
 SELECT COUNT(0) FROM (SELECT * FROM triggers LIMIT 10) AS temp;
-count(0)
+COUNT(0)
 0
 SELECT COUNT('') FROM (SELECT * FROM triggers LIMIT 10) AS temp;
-count()
+COUNT()
 0
 SELECT COUNT(NULL) FROM (SELECT * FROM triggers LIMIT 10) AS temp;
-count(null)
+COUNT(null)
 0
 SELECT COUNT(*) FROM (SELECT * FROM tables LIMIT 10) AS temp;
-count(*)
+COUNT(*)
 10
 SELECT COUNT(0) FROM (SELECT * FROM tables LIMIT 10) AS temp;
-count(0)
+COUNT(0)
 10
 SELECT COUNT('') FROM (SELECT * FROM tables LIMIT 10) AS temp;
-count()
+COUNT()
 10
 SELECT COUNT(NULL) FROM (SELECT * FROM tables LIMIT 10) AS temp;
-count(null)
+COUNT(null)
 0
+SELECT COUNT(*) FROM table_constraints;
+COUNT(*)
+109
 USE mo_catalog;
 SHOW CREATE TABLE mo_columns;
 Table    Create Table

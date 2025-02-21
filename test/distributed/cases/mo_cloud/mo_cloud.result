@@ -268,7 +268,7 @@ SHOW GLOBAL VARIABLES LIKE 'save_query_result';
 Variable_name    Value
 save_query_result    off
 SHOW SUBSCRIPTIONS;
-pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
 SHOW TABLES FROM mo_sample_data_tpch_sf1;
 Unknown database mo_sample_data_tpch_sf1
 UPDATE `mo_mo`.`operation` SET `created_at`='2023-07-28 05:00:13.704',`statement_id`='a3055a4e-2d03-11ee-9e81-96ce077ba0f3',`connection_id`=11349,`db`='mo_sample_data_tpch_sf10',`run_status`='success' WHERE `id` = '3b30a3c1-4dca-4ded-9576-51a99e47b53a';
@@ -616,7 +616,7 @@ information_schema    routines    r    accountadmin
 information_schema    schema_privileges    r    accountadmin
 information_schema    schemata    v    accountadmin
 information_schema    statistics    v    accountadmin
-information_schema    table_constraints    r    accountadmin
+information_schema    table_constraints    v    accountadmin
 information_schema    table_privileges    r    accountadmin
 information_schema    tables    v    accountadmin
 information_schema    triggers    r    accountadmin
@@ -666,14 +666,15 @@ system_metrics    sql_transaction_errors    v    accountadmin
 system_metrics    sql_transaction_total    v    accountadmin
 SELECT relname AS `name`, IF (role_name IS NULL, '-', role_name) AS `owner` FROM mo_catalog.mo_tables LEFT JOIN mo_catalog.mo_role ON mo_catalog.mo_tables.owner=role_id WHERE relkind IN ('v') AND reldatabase='information_schema';
 name    owner
+columns    accountadmin
+processlist    accountadmin
+schemata    accountadmin
 tables    accountadmin
 partitions    accountadmin
 views    accountadmin
 statistics    accountadmin
 referential_constraints    accountadmin
-columns    accountadmin
-processlist    accountadmin
-schemata    accountadmin
+table_constraints    accountadmin
 SELECT relname AS `name`, IF (role_name IS NULL, '-', role_name) AS `owner` FROM mo_catalog.mo_tables LEFT JOIN mo_catalog.mo_role ON mo_catalog.mo_tables.owner=role_id WHERE relkind IN ('v') AND reldatabase='mo_sample_data_tpch_sf1';
 name    owner
 SELECT relname AS `name`, IF (role_name IS NULL, '-', role_name) AS `owner` FROM mo_catalog.mo_tables LEFT JOIN mo_catalog.mo_role ON mo_catalog.mo_tables.owner=role_id WHERE relkind IN ('v') AND reldatabase='mysql';
@@ -694,6 +695,10 @@ server_snapshot_usage    accountadmin
 set mo_table_stats.use_old_impl = yes;
 SELECT relname AS `name`, mo_table_rows(reldatabase, relname) AS `rows`, mo_table_size(reldatabase, relname) AS `size`, if (role_name IS NULL, '-', role_name) AS `owner` FROM mo_catalog.mo_tables LEFT JOIN mo_catalog.mo_role ON mo_catalog.mo_tables.owner=role_id WHERE relkind IN ('r','e','cluster') AND reldatabase='information_schema';
 name    rows    size    owner
+key_column_usage    0    0    accountadmin
+profiling    0    0    accountadmin
+user_privileges    0    0    accountadmin
+character_sets    0    0    accountadmin
 triggers    0    0    accountadmin
 engines    0    0    accountadmin
 routines    0    0    accountadmin
@@ -703,23 +708,18 @@ schema_privileges    0    0    accountadmin
 table_privileges    0    0    accountadmin
 column_privileges    0    0    accountadmin
 collations    0    0    accountadmin
-table_constraints    0    0    accountadmin
 events    0    0    accountadmin
 files    0    0    accountadmin
-key_column_usage    0    0    accountadmin
-profiling    0    0    accountadmin
-user_privileges    0    0    accountadmin
-character_sets    0    0    accountadmin
 SELECT relname AS `name`, mo_table_rows(reldatabase, relname) AS `rows`, mo_table_size(reldatabase, relname) AS `size`, if (role_name IS NULL, '-', role_name) AS `owner` FROM mo_catalog.mo_tables LEFT JOIN mo_catalog.mo_role ON mo_catalog.mo_tables.owner=role_id WHERE relkind IN ('r','e','cluster') AND reldatabase='mo_sample_data_tpch_sf1';
 name    rows    size    owner
 SELECT relname AS `name`, mo_table_rows(reldatabase, relname) AS `rows`, mo_table_size(reldatabase, relname) AS `size`, if (role_name IS NULL, '-', role_name) AS `owner` FROM mo_catalog.mo_tables LEFT JOIN mo_catalog.mo_role ON mo_catalog.mo_tables.owner=role_id WHERE relkind IN ('r','e','cluster') AND reldatabase='mysql';
 name    rows    size    owner
+user    0    0    accountadmin
+db    0    0    accountadmin
 procs_priv    0    0    accountadmin
 columns_priv    0    0    accountadmin
 tables_priv    0    0    accountadmin
 role_edges    0    0    accountadmin
-user    0    0    accountadmin
-db    0    0    accountadmin
 SELECT relname AS `name`, mo_table_rows(reldatabase, relname) AS `rows`, mo_table_size(reldatabase, relname) AS `size`, if (role_name IS NULL, '-', role_name) AS `owner` FROM mo_catalog.mo_tables LEFT JOIN mo_catalog.mo_role ON mo_catalog.mo_tables.owner=role_id WHERE relkind IN ('r','e','cluster') AND reldatabase='system';
 name    rows    size    owner
 statement_info    0    0    accountadmin
