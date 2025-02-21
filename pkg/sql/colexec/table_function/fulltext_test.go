@@ -15,12 +15,14 @@
 package table_function
 
 import (
+	"math/rand"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fulltext"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -57,8 +59,19 @@ var (
 	}
 )
 
-func newFTTestCase(m *mpool.MPool, attrs []string) fulltextTestCase {
+func newFTTestCase(m *mpool.MPool, attrs []string, algo fulltext.FullTextScoreAlgo) fulltextTestCase {
 	proc := testutil.NewProcessWithMPool("", m)
+	proc.SetResolveVariableFunc(func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+		if varName == fulltext.FulltextRelevancyAlgo {
+			if algo == fulltext.ALGO_BM25 {
+				return fulltext.FulltextRelevancyAlgo_bm25, nil
+			} else if algo == fulltext.ALGO_TFIDF {
+				return fulltext.FulltextRelevancyAlgo_tfidf, nil
+			}
+			return fulltext.FulltextRelevancyAlgo_bm25, nil
+		}
+		return nil, nil
+	})
 	colDefs := make([]*plan.ColDef, len(attrs))
 	for i := range attrs {
 		for j := range ftdefaultColdefs {
@@ -116,7 +129,7 @@ func fake_runSql_streaming(proc *process.Process, sql string, ch chan executor.R
 // argvec [src_tbl, index_tbl, pattern, mode int64]
 func TestFullTextCall(t *testing.T) {
 
-	ut := newFTTestCase(mpool.MustNewZero(), ftdefaultAttrs)
+	ut := newFTTestCase(mpool.MustNewZero(), ftdefaultAttrs, fulltext.ALGO_TFIDF)
 
 	inbat := makeBatchFT(ut.proc)
 
@@ -171,7 +184,7 @@ func TestFullTextCall(t *testing.T) {
 // argvec [src_tbl, index_tbl, pattern, mode int64]
 func TestFullTextCallOneAttr(t *testing.T) {
 
-	ut := newFTTestCase(mpool.MustNewZero(), ftdefaultAttrs[0:1])
+	ut := newFTTestCase(mpool.MustNewZero(), ftdefaultAttrs[0:1], fulltext.ALGO_TFIDF)
 
 	inbat := makeBatchFT(ut.proc)
 
@@ -226,7 +239,7 @@ func TestFullTextCallOneAttr(t *testing.T) {
 // argvec [src_tbl, index_tbl, pattern, mode int64]
 func TestFullTextEarlyFree(t *testing.T) {
 
-	ut := newFTTestCase(mpool.MustNewZero(), ftdefaultAttrs[0:1])
+	ut := newFTTestCase(mpool.MustNewZero(), ftdefaultAttrs[0:1], fulltext.ALGO_TFIDF)
 
 	inbat := makeBatchFT(ut.proc)
 
@@ -340,10 +353,12 @@ func makeBatchFT(proc *process.Process) *batch.Batch {
 
 // create count (int64)
 func makeCountBatchFT(proc *process.Process) *batch.Batch {
-	bat := batch.NewWithSize(1)
+	bat := batch.NewWithSize(2)
 	bat.Vecs[0] = vector.NewVec(types.New(types.T_int64, 8, 0))
+	bat.Vecs[1] = vector.NewVec(types.New(types.T_float64, 8, 4))
 
 	vector.AppendFixed[int64](bat.Vecs[0], int64(100), false, proc.Mp())
+	vector.AppendFixed[float64](bat.Vecs[1], float64(10.6666), false, proc.Mp())
 
 	bat.SetRowCount(1)
 	return bat
@@ -351,9 +366,10 @@ func makeCountBatchFT(proc *process.Process) *batch.Batch {
 
 // create (doc_id, text)
 func makeTextBatchFT(proc *process.Process) *batch.Batch {
-	bat := batch.NewWithSize(2)
+	bat := batch.NewWithSize(3)
 	bat.Vecs[0] = vector.NewVec(types.New(types.T_int32, 4, 0)) // doc_id
 	bat.Vecs[1] = vector.NewVec(types.New(types.T_int32, 4, 0)) // word index
+	bat.Vecs[2] = vector.NewVec(types.New(types.T_int32, 4, 0)) // word index
 
 	nitem := 8192*3 + 1
 	for i := 0; i < nitem; i++ {
@@ -362,6 +378,10 @@ func makeTextBatchFT(proc *process.Process) *batch.Batch {
 
 		// word index
 		vector.AppendFixed[int32](bat.Vecs[1], int32(0), false, proc.Mp())
+
+		// doc len
+		docLen := rand.Intn(20)
+		vector.AppendFixed[int32](bat.Vecs[2], int32(docLen), false, proc.Mp())
 	}
 
 	bat.SetRowCount(nitem)

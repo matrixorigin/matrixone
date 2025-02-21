@@ -480,8 +480,23 @@ func SqlPhrase(ps []*Pattern, mode int64, idxtbl string, withIndex bool) (string
 }
 
 // API for generate SQL from pattern
-func PatternToSql(ps []*Pattern, mode int64, idxtbl string, parser string) (string, error) {
+func PatternToSql(ps []*Pattern, mode int64, idxtbl string, parser string, algo FullTextScoreAlgo) (string, error) {
+	sql, err := patternToSql(ps, mode, idxtbl, parser)
+	if err != nil {
+		return "", err
+	}
+	switch algo {
+	case ALGO_BM25:
+		newSql := fmt.Sprintf("select a.*, b.pos as doc_len from (%s) a left join %s b on a.doc_id = b.doc_id and b.word = '%s'", sql, idxtbl, DOC_LEN_WORD)
+		return newSql, nil
+	case ALGO_TFIDF:
+	default:
+		return "", moerr.NewInternalErrorNoCtx("invalid fulltext search mode")
+	}
+	return sql, nil
+}
 
+func patternToSql(ps []*Pattern, mode int64, idxtbl string, parser string) (string, error) {
 	switch mode {
 	case int64(tree.FULLTEXT_NL), int64(tree.FULLTEXT_DEFAULT):
 		return SqlPhrase(ps, mode, idxtbl, true)

@@ -101,6 +101,7 @@ select relkind from mo_catalog.mo_tables where relname in (select distinct index
 
 -------------------------------------------------------------------------------------------------------------------
 set experimental_fulltext_index=1;
+set ft_relevancy_algorithm="TF-IDF";
 
 create table src1 (id bigint primary key, body varchar, title text);
 insert into src1 values (0, 'color is red', 't1'), (1, 'car is yellow', 'crazy car'), (2, 'sky is blue', 'no limit'), (3, 'blue is not red', 'colorful'),
