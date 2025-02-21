@@ -41,7 +41,6 @@ type HDFS struct {
 	name            string
 	client          *hdfs.Client
 	perfCounterSets []*perfcounter.CounterSet
-	dir             string
 }
 
 func NewHDFS(
@@ -89,15 +88,6 @@ func NewHDFS(
 		name:            args.Name,
 		client:          client,
 		perfCounterSets: perfCounterSets,
-		dir: path.Join(
-			"/user",
-			args.User,
-			args.KeyPrefix,
-		),
-	}
-
-	if err := ret.client.MkdirAll(ret.dir, 0755); err != nil {
-		return nil, err
 	}
 
 	logutil.Info("new object storage",
@@ -132,7 +122,7 @@ func (h *HDFS) Delete(ctx context.Context, keys ...string) (err error) {
 }
 
 func (h *HDFS) keyToPath(key string) string {
-	return path.Join(h.dir, key)
+	return key
 }
 
 func (h *HDFS) createTemp() (*hdfs.FileWriter, string, error) {
