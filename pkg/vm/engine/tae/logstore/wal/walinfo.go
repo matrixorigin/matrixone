@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package store
+package wal
 
 import (
 	"sync"
@@ -57,16 +57,16 @@ func newWalInfo() *StoreInfo {
 	return &s
 }
 
-func (w *StoreInfo) GetCurrSeqNum() (lsn uint64) {
+func (w *StoreInfo) GetLSNWatermark() (lsn uint64) {
 	w.watermark.mu.Lock()
 	defer w.watermark.mu.Unlock()
-	return w.watermark.allocatedLSN[entry.GTCustomized]
+	return w.watermark.allocatedLSN[GroupUserTxn]
 }
 
 // only for test
-func (w *StoreInfo) GetPendding() (cnt uint64) {
+func (w *StoreInfo) GetPenddingCnt() (cnt uint64) {
 	lsnCheckpointed := w.watermark.lsnCheckpointed.Load()
-	lsn := w.GetCurrSeqNum()
+	lsn := w.GetLSNWatermark()
 	return lsn - lsnCheckpointed
 }
 
@@ -138,7 +138,7 @@ func (w *StoreInfo) getCheckpointedDSNIntent() (dsn uint64, found bool) {
 	}
 	w.lsn2dsn.mu.RLock()
 	defer w.lsn2dsn.mu.RUnlock()
-	mapping, ok := w.lsn2dsn.mapping[entry.GTCustomized]
+	mapping, ok := w.lsn2dsn.mapping[GroupUserTxn]
 	if !ok {
 		return
 	}
