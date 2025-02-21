@@ -33,7 +33,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
@@ -359,7 +358,7 @@ func (e *Engine) init(ctx context.Context) error {
 
 	e.catalog.Store(newcache)
 	// clear all tables in global stats.
-	e.globalStats.clearTables()
+	//e.globalStats.clearTables()
 
 	return nil
 }
@@ -651,19 +650,21 @@ func (e *Engine) GetOrCreateLatestPart(
 
 func (e *Engine) LazyLoadLatestCkp(
 	ctx context.Context,
-	tblHandler engine.Relation) (*logtailreplay.Partition, error) {
+	tableID uint64,
+	tableName string,
+	dbID uint64,
+	dbName string) (*logtailreplay.Partition, error) {
 
 	var (
-		ok  bool
-		tbl *txnTable
+	//ok  bool
+	//tbl *txnTable
 	)
+	//if tbl, ok = tblHandler.(*txnTable); !ok {
+	//	delegate := tblHandler.(*txnTableDelegate)
+	//	tbl = delegate.origin
+	//}
 
-	if tbl, ok = tblHandler.(*txnTable); !ok {
-		delegate := tblHandler.(*txnTableDelegate)
-		tbl = delegate.origin
-	}
-
-	part := e.GetOrCreateLatestPart(tbl.db.databaseId, tbl.tableId)
+	part := e.GetOrCreateLatestPart(dbID, tableID)
 	cache := e.GetLatestCatalogCache()
 
 	if err := part.ConsumeCheckpoints(
@@ -673,10 +674,10 @@ func (e *Engine) LazyLoadLatestCkp(
 				ctx,
 				e.service,
 				checkpoint,
-				tbl.tableId,
-				tbl.tableName,
-				tbl.db.databaseId,
-				tbl.db.databaseName,
+				tableID,
+				tableName,
+				dbID,
+				dbName,
 				e.mp,
 				e.fs)
 			if err != nil {
@@ -690,7 +691,15 @@ func (e *Engine) LazyLoadLatestCkp(
 				}
 			}()
 			for _, entry := range entries {
-				if err = consumeEntry(ctx, tbl.primarySeqnum, e, cache, state, entry, false); err != nil {
+				//the primarySeqnum is not used in the consume of checkpoint.
+				if err = consumeEntry(
+					ctx,
+					-1,
+					e,
+					cache,
+					state,
+					entry,
+					false); err != nil {
 					return err
 				}
 			}
