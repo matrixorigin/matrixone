@@ -1884,6 +1884,8 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 			indexDef, tableDef, err = buildIvfFlatSecondaryIndexDef(ctx, indexInfo, colMap, existedIndexes, pkeyName)
 		case tree.INDEX_TYPE_MASTER:
 			indexDef, tableDef, err = buildMasterSecondaryIndexDef(ctx, indexInfo, colMap, pkeyName)
+		case tree.INDEX_TYPE_HNSW:
+			indexDef, tableDef, err = buildHnswSecondaryIndexDef(ctx, indexInfo, colMap, existedIndexes, pkeyName)
 		default:
 			return moerr.NewInvalidInputNoCtxf("unsupported index type: %s", indexInfo.KeyType.ToString())
 		}
@@ -2481,6 +2483,249 @@ func buildIvfFlatSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 	return indexDefs, tableDefs, nil
 }
 
+func buildHnswSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colMap map[string]*ColDef, existedIndexes []*plan.IndexDef, pkeyName string) ([]*plan.IndexDef, []*TableDef, error) {
+
+	if pkeyName == "" || pkeyName == catalog.FakePrimaryKeyColName {
+		return nil, nil, moerr.NewInternalErrorNoCtx("primary key cannot be empty for fulltext index")
+	}
+
+	if colMap[pkeyName].Typ.Id != int32(types.T_int64) {
+		return nil, nil, moerr.NewInternalErrorNoCtx("type of primary key must be bigint")
+	}
+
+	indexParts := make([]string, 1)
+
+	// 0. Validate: We only support 1 column of VECF32
+	{
+		if len(indexInfo.KeyParts) != 1 {
+			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "don't support multi column  HNSW vector index")
+		}
+
+		name := indexInfo.KeyParts[0].ColName.ColName()
+		indexParts[0] = name
+
+		if _, ok := colMap[name]; !ok {
+			return nil, nil, moerr.NewInvalidInputf(ctx.GetContext(), "column '%s' is not exist", indexInfo.KeyParts[0].ColName.ColNameOrigin())
+		}
+		if colMap[name].Typ.Id != int32(types.T_array_float32) {
+			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "HNSW only supports VECF32 column types")
+		}
+
+		if len(existedIndexes) > 0 {
+			for _, existedIndex := range existedIndexes {
+				if existedIndex.IndexAlgo == "hnsw" && existedIndex.Parts[0] == name {
+					return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "Multiple HNSW indexes are not allowed to use the same column")
+				}
+			}
+		}
+
+	}
+
+	indexDefs := make([]*plan.IndexDef, 2)
+	tableDefs := make([]*TableDef, 2)
+
+	// 1. create hnsw `metadata` table
+	{
+		// 1.a tableDef1 init
+		indexTableName, err := util.BuildIndexTableName(ctx.GetContext(), false)
+		if err != nil {
+			return nil, nil, err
+		}
+		tableDefs[0] = &TableDef{
+			Name:      indexTableName,
+			TableType: catalog.Hnsw_TblType_Metadata,
+			Cols:      make([]*ColDef, 4),
+		}
+
+		// 1.b indexDef1 init
+		indexDefs[0], err = CreateIndexDef(indexInfo, indexTableName, catalog.Hnsw_TblType_Metadata, indexParts, false)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		// 1.c columns: key (PK), val
+		tableDefs[0].Cols[0] = &ColDef{
+			Name: catalog.Hnsw_TblCol_Metadata_Index_Id,
+			Alg:  plan.CompressType_Lz4,
+			Typ: Type{
+				Id:    int32(types.T_varchar),
+				Width: 128,
+				Scale: 0,
+			},
+			Primary: true,
+			Default: &plan.Default{
+				NullAbility:  false,
+				Expr:         nil,
+				OriginString: "",
+			},
+		}
+		tableDefs[0].Cols[1] = &ColDef{
+			Name: catalog.Hnsw_TblCol_Metadata_Checksum,
+			Alg:  plan.CompressType_Lz4,
+			Typ: Type{
+				Id:    int32(types.T_varchar),
+				Width: types.MaxVarcharLen,
+			},
+			Default: &plan.Default{
+				NullAbility:  false,
+				Expr:         nil,
+				OriginString: "",
+			},
+		}
+		tableDefs[0].Cols[2] = &ColDef{
+			Name: catalog.Hnsw_TblCol_Metadata_Timestamp,
+			Alg:  plan.CompressType_Lz4,
+			Typ: Type{
+				Id:    int32(types.T_int64),
+				Width: 0,
+				Scale: 0,
+			},
+			Default: &plan.Default{
+				NullAbility:  false,
+				Expr:         nil,
+				OriginString: "",
+			},
+		}
+		tableDefs[0].Cols[3] = &ColDef{
+			Name: catalog.Hnsw_TblCol_Metadata_Filesize,
+			Alg:  plan.CompressType_Lz4,
+			Typ: Type{
+				Id:    int32(types.T_int64),
+				Width: 0,
+				Scale: 0,
+			},
+			Default: &plan.Default{
+				NullAbility:  false,
+				Expr:         nil,
+				OriginString: "",
+			},
+		}
+
+		// 1.d PK def
+		tableDefs[0].Pkey = &PrimaryKeyDef{
+			Names:       []string{catalog.Hnsw_TblCol_Metadata_Index_Id},
+			PkeyColName: catalog.Hnsw_TblCol_Metadata_Index_Id,
+		}
+
+		properties := []*plan.Property{
+			{
+				Key:   catalog.SystemRelAttr_Kind,
+				Value: catalog.Hnsw_TblType_Metadata,
+			},
+		}
+		tableDefs[0].Defs = append(tableDefs[0].Defs, &plan.TableDef_DefType{
+			Def: &plan.TableDef_DefType_Properties{
+				Properties: &plan.PropertiesDef{
+					Properties: properties,
+				},
+			}})
+	}
+
+	// 2. create hnsw storage table
+	//colName := indexInfo.KeyParts[0].ColName.ColName()
+	{
+		// 1.a tableDef1 init
+		indexTableName, err := util.BuildIndexTableName(ctx.GetContext(), false)
+		if err != nil {
+			return nil, nil, err
+		}
+		tableDefs[1] = &TableDef{
+			Name:      indexTableName,
+			TableType: catalog.Hnsw_TblType_Storage,
+			Cols:      make([]*ColDef, 5),
+		}
+
+		// 1.b indexDef1 init
+		indexDefs[1], err = CreateIndexDef(indexInfo, indexTableName, catalog.Hnsw_TblType_Storage, indexParts, false)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		// 1.c columns: key (PK), val
+		tableDefs[1].Cols[0] = &ColDef{
+			Name: catalog.Hnsw_TblCol_Storage_Index_Id,
+			Alg:  plan.CompressType_Lz4,
+			Typ: Type{
+				Id:    int32(types.T_varchar),
+				Width: 128,
+				Scale: 0,
+			},
+			Default: &plan.Default{
+				NullAbility:  false,
+				Expr:         nil,
+				OriginString: "",
+			},
+		}
+		tableDefs[1].Cols[1] = &ColDef{
+			Name: catalog.Hnsw_TblCol_Storage_Chunk_Id,
+			Alg:  plan.CompressType_Lz4,
+			Typ: Type{
+				Id:    int32(types.T_int64),
+				Width: 0,
+				Scale: 0,
+			},
+			Default: &plan.Default{
+				NullAbility:  false,
+				Expr:         nil,
+				OriginString: "",
+			},
+		}
+		tableDefs[1].Cols[2] = &ColDef{
+			Name: catalog.Hnsw_TblCol_Storage_Data,
+			Alg:  plan.CompressType_Lz4,
+			Typ: Type{
+				Id:    int32(types.T_blob),
+				Width: 65536,
+				Scale: 0,
+			},
+			Default: &plan.Default{
+				NullAbility:  false,
+				Expr:         nil,
+				OriginString: "",
+			},
+		}
+		tableDefs[1].Cols[3] = &ColDef{
+			Name: catalog.Hnsw_TblCol_Storage_Tag,
+			Alg:  plan.CompressType_Lz4,
+			Typ: Type{
+				Id:    int32(types.T_int64),
+				Width: 0,
+				Scale: 0,
+			},
+			Default: &plan.Default{
+				NullAbility:  false,
+				Expr:         nil,
+				OriginString: "",
+			},
+		}
+
+		tableDefs[1].Cols[4] = MakeHiddenColDefByName(catalog.CPrimaryKeyColName)
+		tableDefs[1].Cols[4].Alg = plan.CompressType_Lz4
+		tableDefs[1].Cols[4].Primary = true
+
+		tableDefs[1].Pkey = &PrimaryKeyDef{
+			Names: []string{catalog.Hnsw_TblCol_Storage_Index_Id,
+				catalog.Hnsw_TblCol_Storage_Chunk_Id},
+			PkeyColName: catalog.CPrimaryKeyColName,
+			CompPkeyCol: tableDefs[1].Cols[3],
+		}
+
+		properties := []*plan.Property{
+			{
+				Key:   catalog.SystemRelAttr_Kind,
+				Value: catalog.Hnsw_TblType_Storage,
+			},
+		}
+		tableDefs[1].Defs = append(tableDefs[1].Defs, &plan.TableDef_DefType{
+			Def: &plan.TableDef_DefType_Properties{
+				Properties: &plan.PropertiesDef{
+					Properties: properties,
+				},
+			}})
+	}
+	return indexDefs, tableDefs, nil
+}
+
 func CreateIndexDef(indexInfo *tree.Index,
 	indexTableName, indexAlgoTableType string,
 	indexParts []string, isUnique bool) (*plan.IndexDef, error) {
@@ -2523,6 +2768,9 @@ func CreateIndexDef(indexInfo *tree.Index,
 			if err != nil {
 				return nil, err
 			}
+		case catalog.MoIndexHnswAlgo:
+			indexDef.Comment = ""
+			indexDef.IndexAlgoParams = ""
 		}
 
 	}
@@ -2611,6 +2859,8 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 				} else if indexdef.TableExist && catalog.IsMasterIndexAlgo(indexdef.IndexAlgo) {
 					truncateTable.IndexTableNames = append(truncateTable.IndexTableNames, indexdef.IndexTableName)
 				} else if indexdef.TableExist && catalog.IsFullTextIndexAlgo(indexdef.IndexAlgo) {
+					truncateTable.IndexTableNames = append(truncateTable.IndexTableNames, indexdef.IndexTableName)
+				} else if indexdef.TableExist && catalog.IsHnswIndexAlgo(indexdef.IndexAlgo) {
 					truncateTable.IndexTableNames = append(truncateTable.IndexTableNames, indexdef.IndexTableName)
 				}
 			}
@@ -3526,6 +3776,8 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 					return nil, moerr.NewInternalError(ctx.GetContext(), "lists should be > 0.")
 				}
 				alterTableReIndex.IndexAlgoParamList = opt.AlgoParamList
+			case tree.INDEX_TYPE_HNSW:
+				// PASS: keep options on change for incremental update
 			default:
 				return nil, moerr.NewInternalErrorf(ctx.GetContext(), "unsupported index type: %v", opt.KeyType)
 			}

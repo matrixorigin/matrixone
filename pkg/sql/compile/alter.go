@@ -212,7 +212,8 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 		newTableDef := newRel.CopyTableDef(c.proc.Ctx)
 
 		for _, indexDef := range newTableDef.Indexes {
-			if catalog.IsIvfIndexAlgo(indexDef.IndexAlgo) {
+			if catalog.IsIvfIndexAlgo(indexDef.IndexAlgo) ||
+				catalog.IsHnswIndexAlgo(indexDef.IndexAlgo) {
 				if _, ok := multiTableIndexes[indexDef.IndexName]; !ok {
 					multiTableIndexes[indexDef.IndexName] = &MultiTableIndex{
 						IndexAlgo: catalog.ToLower(indexDef.IndexAlgo),
@@ -226,6 +227,8 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 			switch multiTableIndex.IndexAlgo {
 			case catalog.MoIndexIvfFlatAlgo.ToString():
 				err = s.handleVectorIvfFlatIndex(c, dbSource, multiTableIndex.IndexDefs, qry.Database, newTableDef, nil)
+			case catalog.MoIndexHnswAlgo.ToString():
+				err = s.handleVectorHnswIndex(c, dbSource, multiTableIndex.IndexDefs, qry.Database, newTableDef, nil)
 			}
 			if err != nil {
 				c.proc.Error(c.proc.Ctx, "invoke reindex for the new table for alter table",

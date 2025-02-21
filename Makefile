@@ -41,7 +41,8 @@
 # where am I
 ROOT_DIR = $(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
 BIN_NAME := mo-service
-UNAME_S := $(shell uname -s)
+UNAME_S := $(shell uname -s | tr A-Z a-z)
+UNAME_M := $(shell uname -m)
 GOPATH := $(shell go env GOPATH)
 GO_VERSION=$(shell go version)
 BRANCH_NAME=$(shell git rev-parse --abbrev-ref HEAD)
@@ -49,9 +50,18 @@ LAST_COMMIT_ID=$(shell git rev-parse --short HEAD)
 BUILD_TIME=$(shell date +%s)
 MO_VERSION=$(shell git symbolic-ref -q --short HEAD || git describe --tags --exact-match)
 GO_MODULE=$(shell go list -m)
-MUSL_DIR=$(ROOT_DIR)/musl
-MUSL_CC=$(MUSL_DIR)/bin/musl-gcc
-MUSL_VERSION:=1.2.5
+
+# check the MUSL_TARGET from https://musl.cc
+# make MUSL_TARGET=aarch64-linux musl to cross make the aarch64 linux executable
+ifeq ($(MUSL_TARGET),)
+	MUSL_TARGET=$(UNAME_M)-$(UNAME_S)
+	#MUSL_TARGET=x86_64-linux
+endif
+MUSL_NAME=$(MUSL_TARGET)-musl-cross
+MUSL_DIR=$(ROOT_DIR)/$(MUSL_NAME)
+MUSL_TAR=$(MUSL_NAME).tgz
+MUSL_CC=$(MUSL_DIR)/bin/$(MUSL_TARGET)-musl-gcc
+MUSL_CXX=$(MUSL_DIR)/bin/$(MUSL_TARGET)-musl-g++
 
 # cross compilation has been disabled for now
 ifneq ($(GOARCH)$(TARGET_ARCH)$(GOOS)$(TARGET_OS),)
@@ -95,11 +105,12 @@ pb: vendor-build generate-pb fmt
 # build mo-service
 ###############################################################################
 
+THIRDPARTIES_INSTALL_DIR=$(ROOT_DIR)/thirdparties/install
 RACE_OPT :=
 DEBUG_OPT :=
 CGO_DEBUG_OPT :=
-CGO_OPTS :=
-GOLDFLAGS=-ldflags="-X '$(GO_MODULE)/pkg/version.GoVersion=$(GO_VERSION)' -X '$(GO_MODULE)/pkg/version.BranchName=$(BRANCH_NAME)' -X '$(GO_MODULE)/pkg/version.CommitID=$(LAST_COMMIT_ID)' -X '$(GO_MODULE)/pkg/version.BuildTime=$(BUILD_TIME)' -X '$(GO_MODULE)/pkg/version.Version=$(MO_VERSION)'"
+CGO_OPTS :=CGO_CFLAGS="-I$(THIRDPARTIES_INSTALL_DIR)/include"
+GOLDFLAGS=-ldflags="-extldflags '-L$(THIRDPARTIES_INSTALL_DIR)/lib -Wl,-rpath,$(THIRDPARTIES_INSTALL_DIR)/lib' -X '$(GO_MODULE)/pkg/version.GoVersion=$(GO_VERSION)' -X '$(GO_MODULE)/pkg/version.BranchName=$(BRANCH_NAME)' -X '$(GO_MODULE)/pkg/version.CommitID=$(LAST_COMMIT_ID)' -X '$(GO_MODULE)/pkg/version.BuildTime=$(BUILD_TIME)' -X '$(GO_MODULE)/pkg/version.Version=$(MO_VERSION)'"
 TAGS :=
 
 ifeq ($(GOBUILD_OPT),)
@@ -110,21 +121,26 @@ endif
 cgo:
 	@(cd cgo; ${MAKE} ${CGO_DEBUG_OPT})
 
+.PHONY: thirdparties
+thirdparties:
+	@(cd thirdparties; ${MAKE})
+
 # build mo-service binary
 .PHONY: build
-build: config
+build: config cgo thirdparties
 	$(info [Build binary])
 	$(CGO_OPTS) go build $(TAGS) $(RACE_OPT) $(GOLDFLAGS) $(DEBUG_OPT) $(GOBUILD_OPT) -o $(BIN_NAME) ./cmd/mo-service
 
+# https://wiki.musl-libc.org/getting-started.html
+# https://musl.cc/
 .PHONY: musl-install
 musl-install:
-ifeq ("$(UNAME_S)","Linux")
+ifeq ("$(UNAME_S)","linux")
  ifeq ("$(wildcard $(MUSL_CC))","")
-	@rm -rf /tmp/musl-$(MUSL_VERSION) musl-$(MUSL_VERSION).tar.gz
-	@curl -SfL "https://musl.libc.org/releases/musl-$(MUSL_VERSION).tar.gz" -o /tmp/musl-$(MUSL_VERSION).tar.gz
-	@tar -zxf /tmp/musl-$(MUSL_VERSION).tar.gz -C $(ROOT_DIR)
-	@cd musl-$(MUSL_VERSION) && ./configure --prefix=$(MUSL_DIR) --syslibdir=$(MUSL_DIR)/syslib && $(MAKE) && $(MAKE) install
-	@rm -rf musl-$(MUSL_VERSION) /tmp/musl-$(MUSL_VERSION).tar.gz
+	@rm -rf /tmp/$(MUSL_TAR)
+	@echo "https://musl.cc/${MUSL_TAR}"
+	@curl -SfL "https://musl.cc/$(MUSL_TAR)" -o /tmp/$(MUSL_TAR)
+	@tar -zxf /tmp/$(MUSL_TAR) -C $(ROOT_DIR)
  endif
 endif
 
@@ -132,20 +148,24 @@ endif
 musl-cgo: musl-install
 	@(cd $(ROOT_DIR)/cgo; CC=$(MUSL_CC) ${MAKE} ${CGO_DEBUG_OPT})
 
+
+musl-thirdparties: musl-install
+	@(cd $(ROOT_DIR)/thirdparties; MUSL=ON CC=$(MUSL_CC) CXX=$(MUSL_CXX) ${MAKE} ${CGO_DEBUG_OPT})
+	
 .PHONY: musl
 musl: override CGO_OPTS += CC=$(MUSL_CC)
-musl: override GOLDFLAGS:=-ldflags="--linkmode 'external' --extldflags '-static' -X '$(GO_MODULE)/pkg/version.GoVersion=$(GO_VERSION)' -X '$(GO_MODULE)/pkg/version.BranchName=$(BRANCH_NAME)' -X '$(GO_MODULE)/pkg/version.CommitID=$(LAST_COMMIT_ID)' -X '$(GO_MODULE)/pkg/version.BuildTime=$(BUILD_TIME)' -X '$(GO_MODULE)/pkg/version.Version=$(MO_VERSION)'"
+musl: override GOLDFLAGS:=-ldflags="--linkmode 'external' --extldflags '-static -L$(THIRDPARTIES_INSTALL_DIR)/lib -lstdc++ -Wl,-rpath,$(THIRDPARTIES_INSTALL_DIR)/lib' -X '$(GO_MODULE)/pkg/version.GoVersion=$(GO_VERSION)' -X '$(GO_MODULE)/pkg/version.BranchName=$(BRANCH_NAME)' -X '$(GO_MODULE)/pkg/version.CommitID=$(LAST_COMMIT_ID)' -X '$(GO_MODULE)/pkg/version.BuildTime=$(BUILD_TIME)' -X '$(GO_MODULE)/pkg/version.Version=$(MO_VERSION)'"
 musl: override TAGS := -tags musl
-musl: musl-install musl-cgo config
+musl: musl-install musl-cgo config musl-thirdparties
 musl:
 	$(info [Build binary(musl)])
 	$(CGO_OPTS) go build $(TAGS) $(RACE_OPT) $(GOLDFLAGS) $(DEBUG_OPT) $(GOBUILD_OPT) -o $(BIN_NAME) ./cmd/mo-service
 
 # build mo-tool
 .PHONY: mo-tool
-mo-tool: config
+mo-tool: config cgo thirdparties
 	$(info [Build mo-tool tool])
-	$(CGO_OPTS) go build -o mo-tool ./cmd/mo-tool
+	$(CGO_OPTS) go build $(GOLDFLAGS) -o mo-tool ./cmd/mo-tool
 
 # build mo-service binary for debugging with go's race detector enabled
 # produced executable is 10x slower and consumes much more memory
@@ -162,9 +182,9 @@ debug: build
 # Excluding frontend test cases temporarily
 # Argument SKIP_TEST to skip a specific go test
 .PHONY: ut
-ut: config
+ut: config cgo thirdparties
 	$(info [Unit testing])
-ifeq ($(UNAME_S),Darwin)
+ifeq ($(UNAME_S),darwin)
 	@cd optools && ./run_ut.sh UT $(SKIP_TEST)
 else
 	@cd optools && timeout 60m ./run_ut.sh UT $(SKIP_TEST)
@@ -226,8 +246,9 @@ clean:
 	rm -f $(BIN_NAME)
 	rm -rf $(ROOT_DIR)/vendor
 	rm -rf $(MUSL_DIR)
-	rm -rf /tmp/musl-$(MUSL_VERSION).tar.gz
+	rm -rf /tmp/$(MUSL_TAR)
 	$(MAKE) -C cgo clean
+	$(MAKE) -C thirdparties clean
 
 ###############################################################################
 # static checks

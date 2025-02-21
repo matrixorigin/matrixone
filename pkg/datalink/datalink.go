@@ -93,7 +93,7 @@ func (d Datalink) NewWriter(proc *process.Process) (*fileservice.FileServiceWrit
 // and returns the Mo FS url, []int{offset,size}, fileType and error
 // Mo FS url: The URL that is used by MO FS to access the file
 // offsetSize: The offset and size of the file to be read
-func ParseDatalink(fsPath string, proc *process.Process) (string, []int, error) {
+func ParseDatalink(fsPath string, proc *process.Process) (string, []int64, error) {
 	u, err := url.Parse(fsPath)
 	if err != nil {
 		return "", nil, err
@@ -118,14 +118,14 @@ func ParseDatalink(fsPath string, proc *process.Process) (string, []int, error) 
 	for k, v := range u.Query() {
 		urlParams[strings.ToLower(k)] = strings.ToLower(v[0])
 	}
-	offsetSize := []int{0, -1}
+	offsetSize := []int64{0, -1}
 	if _, ok := urlParams["offset"]; ok {
-		if offsetSize[0], err = strconv.Atoi(urlParams["offset"]); err != nil {
+		if offsetSize[0], err = strconv.ParseInt(urlParams["offset"], 10, 64); err != nil {
 			return "", nil, err
 		}
 	}
 	if _, ok := urlParams["size"]; ok {
-		if offsetSize[1], err = strconv.Atoi(urlParams["size"]); err != nil {
+		if offsetSize[1], err = strconv.ParseInt(urlParams["size"], 10, 64); err != nil {
 			return "", nil, err
 		}
 	}

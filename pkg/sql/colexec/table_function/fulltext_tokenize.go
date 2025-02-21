@@ -49,6 +49,10 @@ type tokenizeState struct {
 	batch *batch.Batch
 }
 
+func (u *tokenizeState) end(tf *TableFunction, proc *process.Process) error {
+	return nil
+}
+
 func (u *tokenizeState) reset(tf *TableFunction, proc *process.Process) {
 	if u.batch != nil {
 		u.batch.CleanOnlyData()

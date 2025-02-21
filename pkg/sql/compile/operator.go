@@ -126,8 +126,8 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		IsLast:      srcOpBase.IsLast,
 		CnAddr:      srcOpBase.CnAddr,
 		OperatorID:  srcOpBase.OperatorID,
-		MaxParallel: srcOpBase.MaxParallel,
-		ParallelID:  srcOpBase.ParallelID,
+		MaxParallel: int32(maxParallel),
+		ParallelID:  int32(index),
 	}
 	switch sourceOp.OpType() {
 	case vm.ShuffleBuild:

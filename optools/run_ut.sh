@@ -94,13 +94,15 @@ function run_tests(){
     logger "INF" "Ingore code coverage $(echo ${leave_out[@]}|tr " " "|")"
     local cover_profile='profile.raw'
     make cgo
+    make thirdparties
+    THIRDPARTIES_INSTALL_DIR=${BUILD_WKSP}/thirdparties/install
     if [[ $SKIP_TESTS == 'race' ]]; then
         logger "INF" "Run UT without race check"
-        CGO_CFLAGS="-I${BUILD_WKSP}/cgo" CGO_LDFLAGS="-L${BUILD_WKSP}/cgo -lmo" go test -short -v -json -tags matrixone_test -p ${UT_PARALLEL} -timeout "${UT_TIMEOUT}m"  $test_scope | tee $UT_REPORT
+	CGO_CFLAGS="-I${BUILD_WKSP}/cgo -I${THIRDPARTIES_INSTALL_DIR}/include" CGO_LDFLAGS="-Wl,-rpath,${THIRDPARTIES_INSTALL_DIR}/lib -L${THIRDPARTIES_INSTALL_DIR}/lib -L${BUILD_WKSP}/cgo -lmo" go test -short -v -json -tags matrixone_test -p ${UT_PARALLEL} -timeout "${UT_TIMEOUT}m"  $test_scope | tee $UT_REPORT
 
     else
         logger "INF" "Run UT with race check"
-        CGO_CFLAGS="-I${BUILD_WKSP}/cgo" CGO_LDFLAGS="-L${BUILD_WKSP}/cgo -lmo" go test -short -v -json -tags matrixone_test -p ${UT_PARALLEL} -timeout "${UT_TIMEOUT}m" -race $test_scope | tee $UT_REPORT
+        CGO_CFLAGS="-I${BUILD_WKSP}/cgo -I${THIRDPARTIES_INSTALL_DIR}/include" CGO_LDFLAGS="-Wl,-rpath,${THIRDPARTIES_INSTALL_DIR}/lib -L${THIRDPARTIES_INSTALL_DIR}/lib -L${BUILD_WKSP}/cgo -lmo" go test -short -v -json -tags matrixone_test -p ${UT_PARALLEL} -timeout "${UT_TIMEOUT}m" -race $test_scope | tee $UT_REPORT
     fi
 }
 
