@@ -32,7 +32,10 @@ func WithQuickScanAndCKPOpts2(in *options.Options, factor int) (opts *options.Op
 	return opts
 }
 
-func WithQuickScanAndCKPOpts(in *options.Options) (opts *options.Options) {
+func WithQuickScanAndCKPOpts(
+	in *options.Options,
+	ops ...func(*options.Options),
+) (opts *options.Options) {
 	if in == nil {
 		opts = new(options.Options)
 	} else {
@@ -56,10 +59,16 @@ func WithQuickScanAndCKPOpts(in *options.Options) (opts *options.Options) {
 	opts.CatalogCfg = new(options.CatalogCfg)
 	opts.CatalogCfg.GCInterval = time.Millisecond * 1
 	opts.Ctx = context.Background()
+	for _, op := range ops {
+		op(opts)
+	}
 	return opts
 }
 
-func WithQuickScanAndCKPAndGCOpts(in *options.Options) (opts *options.Options) {
+func WithQuickScanAndCKPAndGCOpts(
+	in *options.Options,
+	ops ...func(*options.Options),
+) (opts *options.Options) {
 	if in == nil {
 		opts = new(options.Options)
 	} else {
@@ -81,10 +90,16 @@ func WithQuickScanAndCKPAndGCOpts(in *options.Options) (opts *options.Options) {
 	opts.GCCfg.GCTTL = time.Millisecond * 1
 	opts.GCCfg.GCDeleteBatchSize = 2
 	opts.Ctx = context.Background()
+	for _, op := range ops {
+		op(opts)
+	}
 	return opts
 }
 
-func WithLongScanAndCKPOpts(in *options.Options) (opts *options.Options) {
+func WithLongScanAndCKPOpts(
+	in *options.Options,
+	ops ...func(*options.Options),
+) (opts *options.Options) {
 	if in == nil {
 		opts = new(options.Options)
 	} else {
@@ -97,10 +112,16 @@ func WithLongScanAndCKPOpts(in *options.Options) (opts *options.Options) {
 	opts.CheckpointCfg.GlobalMinCount = 10000000
 	opts.CheckpointCfg.BlockRows = 10
 	opts.Ctx = context.Background()
+	for _, option := range ops {
+		option(opts)
+	}
 	return opts
 }
 
-func WithLongScanAndCKPOptsAndQuickGC(in *options.Options) (opts *options.Options) {
+func WithLongScanAndCKPOptsAndQuickGC(
+	in *options.Options,
+	ops ...func(*options.Options),
+) (opts *options.Options) {
 	if in == nil {
 		opts = new(options.Options)
 	} else {
@@ -117,5 +138,8 @@ func WithLongScanAndCKPOptsAndQuickGC(in *options.Options) (opts *options.Option
 	opts.GCCfg.GCTTL = time.Millisecond * 1
 	opts.GCCfg.GCDeleteBatchSize = 2
 	opts.Ctx = context.Background()
+	for _, option := range ops {
+		option(opts)
+	}
 	return opts
 }

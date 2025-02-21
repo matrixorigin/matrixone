@@ -31,10 +31,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/wal"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 	"go.uber.org/zap"
 )
 
@@ -47,7 +46,7 @@ type checkpointCleaner struct {
 	mp *mpool.MPool
 	fs fileservice.FileService
 
-	logDriver     wal.Driver
+	logDriver     wal.Store
 	checkpointCli checkpoint.Runner
 	deleter       *Deleter
 
@@ -167,7 +166,7 @@ func NewCheckpointCleaner(
 	ctx context.Context,
 	sid string,
 	fs fileservice.FileService,
-	logDriver wal.Driver,
+	logDriver wal.Store,
 	checkpointCli checkpoint.Runner,
 	opts ...CheckpointCleanerOption,
 ) Cleaner {
@@ -1596,11 +1595,11 @@ func (c *checkpointCleaner) appendFilesToWAL(files ...string) error {
 	if c.logDriver == nil {
 		return nil
 	}
-	entry, err := store.BuildFilesEntry(files)
+	entry, err := wal.BuildFilesEntry(files)
 	if err != nil {
 		return err
 	}
-	_, err = c.logDriver.AppendEntry(store.GroupFiles, entry)
+	_, err = c.logDriver.AppendEntry(wal.GroupFiles, entry)
 	if err != nil {
 		return err
 	}

@@ -174,7 +174,7 @@ func LoadObjectMetaByExtent(
 			zap.String("name", name.String()),
 			zap.String("extent", extent.String()))
 	}
-	if v, err = ReadExtent(ctx, name.String(), extent, policy, fs, constructorFactory); err != nil {
+	if v, err = ReadExtent(ctx, name.UnsafeString(), extent, policy, fs, constructorFactory); err != nil {
 		return
 	}
 	meta = MustObjectMeta(v)

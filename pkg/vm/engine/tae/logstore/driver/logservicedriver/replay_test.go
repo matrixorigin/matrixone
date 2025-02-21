@@ -33,7 +33,7 @@ import (
 
 func Test_MockBackend1(t *testing.T) {
 	ctx := context.Background()
-	backend := newMockBackend()
+	backend := NewMockBackend()
 	client := newMockBackendClient(backend)
 	defer client.Close()
 	var (
@@ -895,7 +895,7 @@ func Test_Replayer8(t *testing.T) {
 }
 
 func Test_Replayer9(t *testing.T) {
-	store := newMockBackend()
+	store := NewMockBackend()
 	cfg := NewConfig(
 		"",
 		WithConfigOptMaxClient(10),
@@ -1130,7 +1130,7 @@ func Test_Replayer10(t *testing.T) {
 // and append 1000 entries again and open a new consumer to
 // replay forever
 func Test_Replayer11(t *testing.T) {
-	store := newMockBackend()
+	store := NewMockBackend()
 	cfg := NewConfig(
 		"",
 		WithConfigOptMaxClient(10),

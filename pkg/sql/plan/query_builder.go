@@ -1868,7 +1868,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 			reCheckifNeedLockWholeTable(builder)
 		}
 
-		builder.handleMessgaes(rootID)
+		builder.handleMessages(rootID)
 
 		builder.rewriteStarApproxCount(rootID)
 

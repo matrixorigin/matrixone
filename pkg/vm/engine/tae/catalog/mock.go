@@ -57,7 +57,7 @@ func (store *mockTxnStore) AddTxnEntry(entry txnif.TxnEntry) {
 	store.entries[entry] = true
 }
 
-func (store *mockTxnStore) BindTxn(txn txnif.AsyncTxn) {
+func (store *mockTxnStore) BindTxn(txn txnif.AsyncTxn, _ bool) {
 	store.txn = txn
 }
 

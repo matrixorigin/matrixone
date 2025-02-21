@@ -60,7 +60,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/wal"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
@@ -72,7 +72,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -6757,7 +6756,7 @@ func TestAppendAndGC2(t *testing.T) {
 	db = tae.DB
 	files := make(map[string]struct{}, 0)
 	loadFiles := func(group uint32, lsn uint64, payload []byte, typ uint16, info any) driver.ReplayEntryState {
-		if group != store.GroupFiles {
+		if group != wal.GroupFiles {
 			return driver.RE_Nomal
 		}
 		vec := vector.NewVec(types.Type{})
@@ -6777,7 +6776,7 @@ func TestAppendAndGC2(t *testing.T) {
 	}
 	dir := tae.Dir
 	tae.Close()
-	wal := wal.NewBatchStoreDriver(opts.Ctx, dir, "wal", nil)
+	wal := wal.NewLocalHandle(dir, "wal", nil)
 	err = wal.Replay(
 		opts.Ctx,
 		loadFiles,
@@ -8935,7 +8934,7 @@ func TestDeduplication(t *testing.T) {
 		new(objectio.CreateObjOpt).WithObjectStats(stats).WithIsTombstone(false), dataFactory.MakeObjectFactory())
 	assert.NoError(t, err)
 	txn.GetStore().AddTxnEntry(obj)
-	txn.GetStore().IncreateWriteCnt()
+	txn.GetStore().IncreateWriteCnt("")
 	assert.NoError(t, txn.Commit(context.Background()))
 	assert.NoError(t, obj.PrepareCommit())
 	assert.NoError(t, obj.ApplyCommit(txn.GetID()))
@@ -10829,6 +10828,24 @@ func TestMergeAndTransfer(t *testing.T) {
 	id := testutil.GetOneBlockMeta(rel).AsCommonID()
 	txn.Commit(ctx)
 
+	{
+		offlineTxn := tae.DB.TxnMgr.OpenOfflineTxn(tae.DB.TxnMgr.Now())
+		assert.True(t, offlineTxn.GetStore().IsOffline())
+		offlineRel := tae.GetRelationWithTxn(offlineTxn)
+		err2 := offlineRel.RangeDelete(id, 0, 0, handle.DT_Normal)
+		t.Logf("offline delete err: %v", err2)
+		assert.True(t, moerr.IsMoErrCode(err2, moerr.ErrOfflineTxnWrite))
+		err2 = offlineRel.Append(ctx, bat)
+		t.Logf("offline append err: %v", err2)
+		assert.True(t, moerr.IsMoErrCode(err2, moerr.ErrOfflineTxnWrite))
+		txnDB, err2 := offlineRel.GetDB()
+		assert.NoError(t, err2)
+		_, err2 = txnDB.DropRelationByID(offlineRel.ID())
+		assert.True(t, moerr.IsMoErrCode(err2, moerr.ErrOfflineTxnWrite))
+		// offlineTxn.DropDatabase()
+		assert.NoError(t, offlineTxn.Rollback(ctx))
+	}
+
 	txn, rel = tae.GetRelation()
 	err := rel.RangeDelete(id, 0, 0, handle.DT_Normal)
 	txn.SetFreezeFn(func(at txnif.AsyncTxn) error {
@@ -11503,4 +11520,176 @@ func Test_OpenWithError(t *testing.T) {
 	dir := testutils.InitTestEnv(ModuleName, t)
 	_, err = db.Open(ctx, dir, nil)
 	assert.ErrorIs(t, db.ErrCronJobsOpen, err)
+}
+
+func Test_Controller1(t *testing.T) {
+	ctx := context.Background()
+	ctl := db.NewController(nil)
+	ctl.Start()
+	var count atomic.Int32
+	for i := 0; i < 3; i++ {
+		_, err := ctl.ScheduleCustomized(ctx, func() error {
+			time.Sleep(time.Millisecond * 1)
+			count.Add(1)
+			return nil
+		})
+		assert.NoError(t, err)
+	}
+
+	ctl.Stop(nil)
+	assert.Equal(t, int32(3), count.Load())
+}
+
+func Test_Controller2(t *testing.T) {
+	ctx := context.Background()
+	ctl := db.NewController(nil)
+	ctl.Start()
+	var count atomic.Int32
+	for i := 0; i < 2; i++ {
+		_, err := ctl.ScheduleCustomized(ctx, func() error {
+			time.Sleep(time.Millisecond * 2)
+			count.Add(1)
+			return nil
+		})
+		assert.NoError(t, err)
+	}
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ctl.Stop(nil)
+			assert.Equal(t, int32(2), count.Load())
+		}()
+	}
+	wg.Wait()
+}
+
+func Test_RWDB1(t *testing.T) {
+	ctx := context.Background()
+	wOpts := config.WithLongScanAndCKPOpts(nil, options.WithWalClientFactory(nil))
+	wTae := testutil.NewTestEngine(ctx, ModuleName, t, wOpts)
+	defer wTae.Close()
+	rOpts := config.WithLongScanAndCKPOpts(nil, options.WithWalClientFactory(wOpts.WalClientFactory))
+	rTae := testutil.NewReplayTestEngine(ctx, ModuleName, t, rOpts)
+
+	i := 0
+	name := testutil.CreateOneDatabase(ctx, t, wTae.DB, i)
+	i++
+	testutil.CreateOneDatabase(ctx, t, wTae.DB, i)
+	{
+		time.Sleep(time.Millisecond * 100)
+		txn, err := wTae.StartTxn(nil)
+		assert.NoError(t, err)
+		_, err = txn.GetDatabase(name)
+		assert.NoError(t, err)
+	}
+
+	{
+		txn, err := rTae.StartTxn(nil)
+		assert.NoError(t, err)
+		assert.True(t, txn.GetStore().IsOffline())
+		_, err = txn.CreateDatabase("xxx", "", "")
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrOfflineTxnWrite))
+	}
+
+	{
+		txn, err := rTae.StartTxn(nil)
+		assert.NoError(t, err)
+		_, err = txn.GetDatabase(name)
+		assert.NoError(t, err)
+		assert.NoError(t, txn.Commit(ctx))
+	}
+
+	rTae.Close()
+}
+
+// 1. start a write engine wTae
+// 2. wTae commit 2 txns
+// 3. start a replay engine rTae1. wTae waits for rTae1 to start
+// 4. open rTae1 and notify wTae to continue and open rTae2
+// 5. wTae continue to commit 2 txns
+// 6. wTae force checkpoint
+// 7. wTae continue to commit 2 txns
+// 8. check if rTae and rTae2 can replay the 6 txns and the checkpoint
+func Test_RWDB2(t *testing.T) {
+	ctx := context.Background()
+	wOpts := config.WithLongScanAndCKPOpts(nil, options.WithWalClientFactory(nil))
+	wTae := testutil.NewTestEngine(ctx, ModuleName, t, wOpts)
+	defer wTae.Close()
+
+	var (
+		sem1     sync.WaitGroup
+		rTae1Sem sync.WaitGroup
+		rTae2Sem sync.WaitGroup
+		txnSem   sync.WaitGroup
+		rTae1    *testutil.TestEngine
+		rTae2    *testutil.TestEngine
+		name     string
+	)
+	sem1.Add(1)
+	rTae1Sem.Add(1)
+	rTae2Sem.Add(1)
+	txnSem.Add(1)
+
+	go func() {
+		defer txnSem.Done()
+		for i := 0; i < 8; i++ {
+			name = testutil.CreateOneDatabase(ctx, t, wTae.DB, i)
+			if i == 2 {
+				sem1.Done()
+				rTae1Sem.Wait()
+			}
+			if i == 5 {
+				wTae.ForceCheckpoint()
+			}
+		}
+	}()
+
+	go func() {
+		defer rTae1Sem.Done()
+		sem1.Wait()
+		rOpts := config.WithLongScanAndCKPOpts(nil, options.WithWalClientFactory(wOpts.WalClientFactory))
+		rTae1 = testutil.NewReplayTestEngine(ctx, ModuleName, t, rOpts)
+	}()
+
+	go func() {
+		defer rTae2Sem.Done()
+		rTae1Sem.Wait()
+		rOpts := config.WithLongScanAndCKPOpts(nil, options.WithWalClientFactory(wOpts.WalClientFactory))
+		rTae2 = testutil.NewReplayTestEngine(ctx, ModuleName, t, rOpts)
+	}()
+
+	rTae2Sem.Wait()
+	txnSem.Wait()
+
+	maxLSN := wTae.DB.Wal.GetLSNWatermark()
+
+	checkName := func(tae *testutil.TestEngine) {
+		testutils.WaitExpect(
+			4000,
+			func() bool {
+				// wait checkpointed
+				lsn := tae.DB.ReplayCtl.MaxLSN()
+				return lsn == maxLSN
+				// txn, err := tae.StartTxn(nil)
+				// assert.NoError(t, err)
+				// _, err = txn.GetDatabase(name)
+				// return err == nil
+			},
+		)
+		txn, err := tae.StartTxn(nil)
+		assert.NoError(t, err)
+		_, err = txn.GetDatabase(name)
+		assert.NoError(t, err)
+		names := txn.DatabaseNames()
+		t.Log(names)
+		assert.NoError(t, txn.Commit(ctx))
+	}
+
+	checkName(rTae1)
+	checkName(rTae2)
+
+	rTae1.Close()
+	rTae2.Close()
 }
