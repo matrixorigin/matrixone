@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2025 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,20 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package txnbase
+//go:build !race
 
-type heartbeatStore struct {
-	NoopTxnStore
-}
+package vector
 
-func (store *heartbeatStore) IsReadonly() bool {
-	return false
-}
-
-func (store *heartbeatStore) IsOffline() bool {
-	return false
-}
-
-func (store *heartbeatStore) IsHeartbeat() bool {
-	return true
+func checkTypeIfRaceDetectorEnabled[T any](vec *Vector) {
+	// do nothing
 }

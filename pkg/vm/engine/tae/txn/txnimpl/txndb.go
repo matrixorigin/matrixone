@@ -52,21 +52,25 @@ func newTxnDB(store *txnStore, entry *catalog.DBEntry) *txnDB {
 	return db
 }
 
-func (db *txnDB) SetCreateEntry(e txnif.TxnEntry) error {
+func (db *txnDB) SetCreateEntry(e txnif.TxnEntry) (err error) {
 	if db.createEntry != nil {
 		panic("logic error")
 	}
-	db.store.IncreateWriteCnt()
+	if err = db.store.IncreateWriteCnt("set create entry"); err != nil {
+		return
+	}
 	db.store.txn.GetMemo().AddCatalogChange()
 	db.createEntry = e
-	return nil
+	return
 }
 
-func (db *txnDB) SetDropEntry(e txnif.TxnEntry) error {
+func (db *txnDB) SetDropEntry(e txnif.TxnEntry) (err error) {
 	if db.dropEntry != nil {
 		panic("logic error")
 	}
-	db.store.IncreateWriteCnt()
+	if err = db.store.IncreateWriteCnt("set drop entry"); err != nil {
+		return
+	}
 	db.store.txn.GetMemo().AddCatalogChange()
 	db.dropEntry = e
 	return nil
@@ -222,7 +226,7 @@ func (db *txnDB) CreateRelation(def any) (relation handle.Relation, err error) {
 		return
 	}
 	relation = newRelation(table)
-	table.SetCreateEntry(meta)
+	err = table.SetCreateEntry(meta)
 	return
 }
 
@@ -241,7 +245,7 @@ func (db *txnDB) CreateRelationWithTableId(tableId uint64, def any) (relation ha
 		return
 	}
 	relation = newRelation(table)
-	table.SetCreateEntry(meta)
+	err = table.SetCreateEntry(meta)
 	return
 }
 

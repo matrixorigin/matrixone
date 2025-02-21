@@ -74,6 +74,14 @@ func (w *StoreInfo) GetCheckpointed() (lsn uint64) {
 	return w.watermark.lsnCheckpointed.Load()
 }
 
+func (w *StoreInfo) replayAllocatedLSN(group uint32, lsn uint64) {
+	w.watermark.mu.Lock()
+	defer w.watermark.mu.Unlock()
+	if w.watermark.allocatedLSN[group] < lsn {
+		w.watermark.allocatedLSN[group] = lsn
+	}
+}
+
 func (w *StoreInfo) nextLSN(gid uint32) uint64 {
 	w.watermark.mu.Lock()
 	defer w.watermark.mu.Unlock()

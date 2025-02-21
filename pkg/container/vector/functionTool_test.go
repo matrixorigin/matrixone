@@ -140,7 +140,7 @@ func TestReuseFunctionParameterFixed(t *testing.T) {
 	var err error
 	vec1 := NewVec(types.T_int32.ToType())
 	for i := uint64(0); i < 10; i++ {
-		err = appendOneFixed(vec1, i, false, mp)
+		err = appendOneFixed(vec1, int32(i), false, mp)
 		require.NoError(t, err)
 	}
 	g2 := GenerateFunctionFixedTypeParameter[int32](vec1)
@@ -162,7 +162,7 @@ func TestReuseFunctionParameterFixed(t *testing.T) {
 	ok = ReuseFunctionFixedTypeParameter(vec1, g2)
 	require.Equal(t, true, ok)
 
-	err = appendOneFixed(vec1, 0, false, mp)
+	err = appendOneFixed(vec1, int32(0), false, mp)
 	require.NoError(t, err)
 	ok = ReuseFunctionFixedTypeParameter(vec1, g2)
 	require.Equal(t, false, ok)

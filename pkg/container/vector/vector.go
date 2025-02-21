@@ -88,18 +88,24 @@ func (t *typedSlice) setFromVector(v *Vector) {
 }
 
 func ToSliceNoTypeCheck[T any](vec *Vector, ret *[]T) {
+	checkTypeIfRaceDetectorEnabled[T](vec)
 	*ret = unsafe.Slice((*T)(vec.col.Ptr), vec.col.Cap)
 }
 
 func ToSliceNoTypeCheck2[T any](vec *Vector) []T {
+	checkTypeIfRaceDetectorEnabled[T](vec)
 	return unsafe.Slice((*T)(vec.col.Ptr), vec.col.Cap)
 }
 
 func ToSlice[T any](vec *Vector, ret *[]T) {
-	if !typeCompatible[T](vec.typ) {
-		panic(fmt.Sprintf("type mismatch: %T %v", []T{}, vec.typ.String()))
-	}
+	checkType[T](vec)
 	*ret = unsafe.Slice((*T)(vec.col.Ptr), vec.col.Cap)
+}
+
+func checkType[T any](vec *Vector) {
+	if !typeCompatible[T](vec.typ) {
+		panic(fmt.Sprintf("type mismatch: casting %v vector to %T", vec.typ.String(), []T{}))
+	}
 }
 
 func (v *Vector) GetSorted() bool {

@@ -332,7 +332,7 @@ func makeBatchFT(proc *process.Process) *batch.Batch {
 	vector.AppendBytes(bat.Vecs[0], []byte("src_table"), false, proc.Mp())
 	vector.AppendBytes(bat.Vecs[1], []byte("idx_table"), false, proc.Mp())
 	vector.AppendBytes(bat.Vecs[2], []byte("pattern"), false, proc.Mp())
-	vector.AppendFixed[int64](bat.Vecs[3], int64(0), false, proc.Mp())
+	vector.AppendFixed[int32](bat.Vecs[3], int32(0), false, proc.Mp())
 
 	bat.SetRowCount(1)
 	return bat
