@@ -16,6 +16,7 @@ package memoryengine
 
 import (
 	"context"
+	"github.com/stretchr/testify/require"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -47,4 +48,14 @@ func TestTable_Reset(t *testing.T) {
 	newOp, closeFn := client.NewTestTxnOperator(context.TODO())
 	defer closeFn()
 	assert.NoError(t, table.Reset(newOp))
+}
+
+func TestMemRelationData(t *testing.T) {
+	data := MemRelationData{}
+	require.Panics(t, func() {
+		data.GetPState()
+	})
+	require.Panics(t, func() {
+		data.SetPState(nil)
+	})
 }
