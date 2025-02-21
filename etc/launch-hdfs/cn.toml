@@ -14,6 +14,7 @@ backend = "S3" # for hdfs, the backend is also S3
 [fileservice.s3]
 endpoint = "hdfs://[name-node-address]:[name-node-port]" # must begin with "hdfs://" and must not be empty
 user = "" # hdfs user name, must not be empty
+key-prefix = "/user/hadoop" # root path in HDFS
 # the following are optional
 kerberos-service-principle-name = "" # kerberos service principle name
 kerberos-username = "" # kerberos username
