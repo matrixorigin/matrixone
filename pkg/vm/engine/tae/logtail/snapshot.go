@@ -653,12 +653,10 @@ func (sm *SnapshotMeta) Update(
 			}
 			id := stats.ObjectName().SegmentId()
 			if objects1[id] == nil {
-				if !deleteTS.IsEmpty() {
-					return
-				}
 				objects1[id] = &objectInfo{
 					stats:    stats,
 					createAt: createTS,
+					deleteAt: deleteTS,
 				}
 				logutil.Info(
 					"GC-SnapshotMeta-Update-Collector",
@@ -670,27 +668,15 @@ func (sm *SnapshotMeta) Update(
 
 				return
 			}
-			if deleteTS.IsEmpty() {
-				// Compatible with the cluster restored by backup
-				logutil.Warn(
-					"GC-SnapshotMeta-Update-Collector-Skip",
+			if objects1[id].deleteAt.IsEmpty() {
+				objects1[id].deleteAt = deleteTS
+				logutil.Info(
+					"GC-SnapshotMeta-Update-Collector",
 					zap.Uint64("table-id", tid),
-					zap.String("object-name", stats.ObjectName().String()),
-					zap.String("create-at", createTS.ToString()),
-					zap.String("task", taskName),
-					zap.String("start", startts.ToString()),
-					zap.String("end", endts.ToString()),
+					zap.String("object-name", id.String()),
+					zap.String("delete-at", deleteTS.ToString()),
 				)
-				return
 			}
-			logutil.Info(
-				"GC-SnapshotMeta-Update-Collector",
-				zap.Uint64("table-id", tid),
-				zap.String("object-name", id.String()),
-				zap.String("delete-at", deleteTS.ToString()),
-			)
-
-			delete(objects1, id)
 		}
 		if tid == sm.pitr.tid {
 			mapFun(*objects2)
@@ -711,12 +697,24 @@ func (sm *SnapshotMeta) Update(
 		collector,
 	)
 	collectObjects(
-		&sm.objects,
-		&sm.pitr.objects,
+		&sm.tombstones,
+		&sm.pitr.tombstones,
 		data,
 		ckputil.ObjectType_Tombstone,
 		collector,
 	)
+	for id, info := range sm.pitr.objects {
+		if !info.deleteAt.IsEmpty() {
+			delete(sm.pitr.objects, id)
+		}
+	}
+	for _, objs := range sm.objects {
+		for id, info := range objs {
+			if !info.deleteAt.IsEmpty() {
+				delete(objs, id)
+			}
+		}
+	}
 	return
 }
 
