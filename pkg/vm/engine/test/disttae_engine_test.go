@@ -254,7 +254,7 @@ func TestLogtailBasic(t *testing.T) {
 	// at first, we can see nothing
 	minTs, maxTs := types.BuildTS(0, 0), types.BuildTS(1000, 1000)
 	reader := logMgr.GetReader(minTs, maxTs)
-	require.Equal(t, 0, len(reader.GetDirtyByTable(1000, 1000).Objs))
+	require.Equal(t, 0, reader.GetDirtyByTable(1000, 1000).DataCnt)
 
 	schema := catalog2.MockSchemaAll(2, -1)
 	schema.Name = "test"
@@ -341,12 +341,12 @@ func TestLogtailBasic(t *testing.T) {
 	firstWriteTs, lastWriteTs := writeTs[0], writeTs[len(writeTs)-1]
 
 	reader = logMgr.GetReader(minTs, types.TimestampToTS(catalogWriteTs))
-	require.Equal(t, 0, len(reader.GetDirtyByTable(dbID, tableID).Objs))
+	require.Equal(t, 0, reader.GetDirtyByTable(dbID, tableID).DataCnt)
 	reader = logMgr.GetReader(firstWriteTs, lastWriteTs)
-	require.Equal(t, 0, len(reader.GetDirtyByTable(dbID, tableID-1).Objs))
+	require.Equal(t, 0, reader.GetDirtyByTable(dbID, tableID-1).DataCnt)
 	reader = logMgr.GetReader(firstWriteTs, lastWriteTs)
 	dirties := reader.GetDirtyByTable(dbID, tableID)
-	require.Equal(t, 10, len(dirties.Objs))
+	require.Equal(t, 110, dirties.DataCnt) // create 10 objects and insert 100 rows. Note: tombstone is not counted
 
 	fixedColCnt := 2 // __rowid + commit_time, the columns for a delBatch
 	// check Bat rows count consistency

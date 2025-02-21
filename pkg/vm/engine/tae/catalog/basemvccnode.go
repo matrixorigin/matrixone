@@ -107,22 +107,6 @@ func (un *EntryMVCCNode) ApplyCommit(ts types.TS) (err error) {
 	return nil
 }
 
-func (un EntryMVCCNode) AppendTuple(bat *containers.Batch) {
-	startTSVec := bat.GetVectorByName(EntryNode_CreateAt)
-	vector.AppendFixed(
-		startTSVec.GetDownstreamVector(),
-		un.CreatedAt,
-		false,
-		startTSVec.GetAllocator(),
-	)
-	vector.AppendFixed(
-		bat.GetVectorByName(EntryNode_DeleteAt).GetDownstreamVector(),
-		un.DeletedAt,
-		false,
-		startTSVec.GetAllocator(),
-	)
-}
-
 func (un EntryMVCCNode) AppendObjectTuple(bat *containers.Batch, create bool) {
 	startTSVec := bat.GetVectorByName(EntryNode_CreateAt)
 	vector.AppendFixed(
