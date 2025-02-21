@@ -150,7 +150,7 @@ func WithUpdateWorkerFactor(f int) GlobalStatsOption {
 }
 
 // WithStatsUpdater set the update function to update stats info.
-func WithStatsUpdater(f func(context.Context, pb.StatsInfoKey, *pb.StatsInfo) bool) GlobalStatsOption {
+func WithStatsUpdater(f func(context.Context, *logtailreplay.PartitionState, pb.StatsInfoKey, *pb.StatsInfo) bool) GlobalStatsOption {
 	return func(s *GlobalStats) {
 		s.statsUpdater = f
 	}
@@ -226,7 +226,7 @@ type GlobalStats struct {
 
 	// statsUpdate is the function which updates the stats info.
 	// If it is nil, set it to doUpdate.
-	statsUpdater func(context.Context, pb.StatsInfoKey, *pb.StatsInfo) bool
+	statsUpdater func(context.Context, *logtailreplay.PartitionState, pb.StatsInfoKey, *pb.StatsInfo) bool
 	// for test only currently.
 	approxObjectNumUpdater func() int64
 
@@ -688,25 +688,37 @@ func (gs *GlobalStats) updateTableStats(wrapKey pb.StatsInfoKeyWithContext) {
 		gs.mu.statsInfoMap[wrapKey.Key] = nil
 		gs.mu.cond.Broadcast()
 	}
-
-	// wait until the table's logtail has been updated.
-	logtailUpdated, err := gs.waitLogtailUpdated(wrapKey.Key.TableID)
+	// Get the latest partition state of the table.
+	ps, err := gs.engine.pClient.toSubscribeTable(
+		wrapKey.Ctx,
+		wrapKey.Key.TableID,
+		wrapKey.Key.TableName,
+		wrapKey.Key.DatabaseID,
+		wrapKey.Key.DbName)
 	if err != nil {
 		logutil.Errorf("wait logtail updated error: %s, table ID: %d", err, wrapKey.Key.TableID)
 		broadcastWithoutUpdate()
 		return
 	}
-	if !logtailUpdated {
-		logutil.Warnf("logtail not updated, table ID: %d", wrapKey.Key.TableID)
-		broadcastWithoutUpdate()
-		return
-	}
+
+	// wait until the table's logtail has been updated.
+	//logtailUpdated, err := gs.waitLogtailUpdated(wrapKey.Key.TableID)
+	//if err != nil {
+	//	logutil.Errorf("wait logtail updated error: %s, table ID: %d", err, wrapKey.Key.TableID)
+	//	broadcastWithoutUpdate()
+	//	return
+	//}
+	//if !logtailUpdated {
+	//	logutil.Warnf("logtail not updated, table ID: %d", wrapKey.Key.TableID)
+	//	broadcastWithoutUpdate()
+	//	return
+	//}
 
 	stats := plan2.NewStatsInfo()
 
 	newCtx := perfcounter.AttachS3RequestKey(wrapKey.Ctx, crs)
 	if gs.statsUpdater != nil {
-		updated = gs.statsUpdater(newCtx, wrapKey.Key, stats)
+		updated = gs.statsUpdater(newCtx, ps, wrapKey.Key, stats)
 	}
 	statser.AddBuildPlanStatsS3Request(statistic.S3Request{
 		List:      crs.FileService.S3.List.Load(),
@@ -730,7 +742,7 @@ func (gs *GlobalStats) updateTableStats(wrapKey pb.StatsInfoKeyWithContext) {
 	gs.mu.cond.Broadcast()
 }
 
-func (gs *GlobalStats) doUpdate(ctx context.Context, key pb.StatsInfoKey, stats *pb.StatsInfo) bool {
+func (gs *GlobalStats) doUpdate(ctx context.Context, ps *logtailreplay.PartitionState, key pb.StatsInfoKey, stats *pb.StatsInfo) bool {
 	table := gs.engine.GetLatestCatalogCache().GetTableById(key.AccId, key.DatabaseID, key.TableID)
 	// table or its definition is nil, means that the table is created but not committed yet.
 	if table == nil || table.TableDef == nil {
@@ -738,8 +750,8 @@ func (gs *GlobalStats) doUpdate(ctx context.Context, key pb.StatsInfoKey, stats 
 		return false
 	}
 
-	partitionState := gs.engine.GetOrCreateLatestPart(key.DatabaseID, key.TableID).Snapshot()
-	approxObjectNum := int64(partitionState.ApproxDataObjectsNum())
+	//partitionState := gs.engine.GetOrCreateLatestPart(key.DatabaseID, key.TableID).Snapshot()
+	approxObjectNum := int64(ps.ApproxDataObjectsNum())
 	if gs.approxObjectNumUpdater == nil && approxObjectNum == 0 {
 		// There are no objects flushed yet.
 		return false
@@ -749,7 +761,7 @@ func (gs *GlobalStats) doUpdate(ctx context.Context, key pb.StatsInfoKey, stats 
 	now := timestamp.Timestamp{PhysicalTime: time.Now().UnixNano()}
 	req := newUpdateStatsRequest(
 		table.TableDef,
-		partitionState,
+		ps,
 		gs.engine.fs,
 		types.TimestampToTS(now),
 		approxObjectNum,

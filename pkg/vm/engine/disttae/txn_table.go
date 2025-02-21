@@ -156,16 +156,18 @@ func (tbl *txnTable) PrefetchAllMeta(ctx context.Context) bool {
 }
 
 func (tbl *txnTable) Stats(ctx context.Context, sync bool) (*pb.StatsInfo, error) {
-	_, err := tbl.getPartitionState(ctx)
-	if err != nil {
-		logutil.Errorf("failed to get partition state of table %d: %v", tbl.tableId, err)
-		return nil, err
-	}
+	//_, err := tbl.getPartitionState(ctx)
+	//if err != nil {
+	//	logutil.Errorf("failed to get partition state of table %d: %v", tbl.tableId, err)
+	//	return nil, err
+	//}
 	if !tbl.db.op.IsSnapOp() {
 		return tbl.getEngine().Stats(ctx, pb.StatsInfoKey{
 			AccId:      tbl.accountId,
 			DatabaseID: tbl.db.databaseId,
 			TableID:    tbl.tableId,
+			TableName:  tbl.tableName,
+			DbName:     tbl.db.databaseName,
 		}, sync), nil
 	}
 	info, err := tbl.stats(ctx)
@@ -1964,9 +1966,9 @@ func (tbl *txnTable) getPartitionState(
 func (tbl *txnTable) tryToSubscribe(ctx context.Context) (ps *logtailreplay.PartitionState, err error) {
 	eng := tbl.eng.(*Engine)
 	var createdInTxn bool
-	defer func() {
-		eng.globalStats.notifyLogtailUpdate(tbl.tableId, err == nil && !createdInTxn)
-	}()
+	//defer func() {
+	//	eng.globalStats.notifyLogtailUpdate(tbl.tableId, err == nil && !createdInTxn)
+	//}()
 
 	createdInTxn, err = tbl.isCreatedInTxn(ctx)
 	if err != nil {
@@ -1976,7 +1978,19 @@ func (tbl *txnTable) tryToSubscribe(ctx context.Context) (ps *logtailreplay.Part
 		return
 	}
 
-	ps, err = eng.PushClient().toSubscribeTable(ctx, tbl)
+	// no need to subscribe a view
+	// for issue #19192
+	if strings.ToUpper(tbl.relKind) == "V" {
+		return
+	}
+
+	ps, err = eng.PushClient().toSubscribeTable(
+		ctx,
+		tbl.tableId,
+		tbl.tableName,
+		tbl.db.databaseId,
+		tbl.db.databaseName)
+
 	return ps, err
 }
 
@@ -2184,12 +2198,12 @@ func (tbl *txnTable) primaryKeysMayBeChanged(
 		return false,
 			moerr.NewInternalErrorNoCtx("primary key modification is not allowed in snapshot transaction")
 	}
-
-	//snap, err := tbl.getPartitionState(ctx)
-	//if err != nil {
-	//	return false, err
-	//}
-	part, err := tbl.eng.(*Engine).LazyLoadLatestCkp(ctx, tbl)
+	part, err := tbl.eng.(*Engine).LazyLoadLatestCkp(
+		ctx,
+		tbl.tableId,
+		tbl.tableName,
+		tbl.db.databaseId,
+		tbl.db.databaseName)
 	if err != nil {
 		return false, err
 	}

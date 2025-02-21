@@ -270,7 +270,11 @@ func Test_Bug_CheckpointInsertObjectOverwrittenMergeDeletedObject(t *testing.T) 
 				engineTbl, err := engineDB.Relation(ctx, tableName, nil)
 				require.Nil(t, err)
 
-				_, err = disttaeEngine.Engine.LazyLoadLatestCkp(ctx, engineTbl)
+				_, err = disttaeEngine.Engine.LazyLoadLatestCkp(ctx,
+					engineTbl.GetTableID(ctx),
+					engineTbl.GetTableName(),
+					engineTbl.GetDBID(ctx),
+					databaseName)
 				require.Nil(t, err)
 
 				stats, err := disttaeEngine.GetPartitionStateStats(ctx, database.GetID(), rel.ID())
@@ -500,7 +504,11 @@ func Test_EmptyObjectStats(t *testing.T) {
 		engineTbl, err := engineDB.Relation(p.Ctx, tableName, nil)
 		require.Nil(t, err)
 
-		_, err = disttaeEngine.Engine.LazyLoadLatestCkp(p.Ctx, engineTbl)
+		_, err = disttaeEngine.Engine.LazyLoadLatestCkp(p.Ctx,
+			engineTbl.GetTableID(p.Ctx),
+			engineTbl.GetTableName(),
+			engineTbl.GetDBID(p.Ctx),
+			databaseName)
 		require.Nil(t, err)
 
 		stats, err := disttaeEngine.GetPartitionStateStats(p.Ctx, database.GetID(), rel.ID())
