@@ -123,7 +123,7 @@ func TestFullTextTokenizeCall(t *testing.T) {
 
 	require.Equal(t, result.Status, vm.ExecNext)
 
-	require.Equal(t, 4, result.Batch.RowCount())
+	require.Equal(t, 5, result.Batch.RowCount())
 
 	// reset
 	ut.arg.ctr.state.reset(ut.arg, ut.proc)
@@ -161,7 +161,7 @@ func TestFullTextTokenizeCallJSON(t *testing.T) {
 
 	require.Equal(t, result.Status, vm.ExecNext)
 
-	require.Equal(t, 1, result.Batch.RowCount())
+	require.Equal(t, 2, result.Batch.RowCount())
 
 	// reset
 	ut.arg.ctr.state.reset(ut.arg, ut.proc)
@@ -199,7 +199,7 @@ func TestFullTextTokenizeCallJSONValue(t *testing.T) {
 
 	require.Equal(t, result.Status, vm.ExecNext)
 
-	require.Equal(t, 1, result.Batch.RowCount())
+	require.Equal(t, 2, result.Batch.RowCount())
 
 	// reset
 	ut.arg.ctr.state.reset(ut.arg, ut.proc)
