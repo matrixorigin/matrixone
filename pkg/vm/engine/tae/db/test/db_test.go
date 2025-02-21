@@ -11577,7 +11577,6 @@ func Test_RWDB1(t *testing.T) {
 	name := testutil.CreateOneDatabase(ctx, t, wTae.DB, i)
 	i++
 	testutil.CreateOneDatabase(ctx, t, wTae.DB, i)
-	i++
 	{
 		time.Sleep(time.Millisecond * 100)
 		txn, err := wTae.StartTxn(nil)

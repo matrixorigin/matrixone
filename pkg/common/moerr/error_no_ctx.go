@@ -338,8 +338,8 @@ func NewTxnControlErrorNoCtxf(format string, args ...any) *Error {
 	return newError(Context(), ErrTxnControl, fmt.Sprintf(format, args...))
 }
 
-func NewOfflineTxnWriteNoCtx(format string, args ...any) *Error {
-	return newError(Context(), ErrOfflineTxnWrite, fmt.Sprintf(format, args...))
+func NewOfflineTxnWriteNoCtx(msg string) *Error {
+	return newError(Context(), ErrOfflineTxnWrite, msg)
 }
 
 func NewNotFoundNoCtx() *Error {
