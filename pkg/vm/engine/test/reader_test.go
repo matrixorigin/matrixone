@@ -1242,6 +1242,30 @@ func Test_ShardingLocalReader(t *testing.T) {
 
 	}
 
+	// test build reader using nil relData
+	{
+		//start to build sharding readers.
+		_, rel, txn, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
+		require.NoError(t, err)
+
+		shardSvr := testutil.MockShardService()
+		delegate, _ := disttae.MockTableDelegate(rel, shardSvr)
+		num := 10
+		_, err = delegate.BuildShardingReaders(
+			ctx,
+			rel.GetProcess(),
+			nil,
+			nil,
+			num,
+			0,
+			false,
+			0,
+		)
+
+		require.NoError(t, err)
+		require.NoError(t, txn.Commit(ctx))
+	}
+
 	{
 		//start to build sharding readers.
 		_, rel, txn, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
