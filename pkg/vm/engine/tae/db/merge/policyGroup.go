@@ -48,7 +48,7 @@ func newPolicyGroup(policies ...policy) *policyGroup {
 
 func (g *policyGroup) onObject(obj *catalog.ObjectEntry) {
 	for _, p := range g.policies {
-		if p.onObject(obj, g.config) {
+		if p.onObject(obj) {
 			return
 		}
 	}
