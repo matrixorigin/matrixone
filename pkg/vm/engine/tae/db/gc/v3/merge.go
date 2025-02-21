@@ -226,4 +226,5 @@ func appendValToBatchForObjectListBatch(src, dst *batch.Batch, row int, mp *mpoo
 	vector.AppendFixed(dst.Vecs[ckputil.TableObjectsAttr_ObjectType_Idx], deleteAt, false, mp)
 	cluster := src.Vecs[ckputil.TableObjectsAttr_Cluster_Idx].GetBytesAt(row)
 	vector.AppendBytes(dst.Vecs[ckputil.TableObjectsAttr_Cluster_Idx], cluster, false, mp)
+	dst.SetRowCount(dst.Vecs[0].Length())
 }
