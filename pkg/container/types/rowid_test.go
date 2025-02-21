@@ -90,3 +90,17 @@ func TestBlockID(t *testing.T) {
 	cloned := base.CloneBlockID()
 	require.NotEqual(t, unsafe.Pointer(&base[0]), unsafe.Pointer(&cloned[0]))
 }
+
+func TestNewIds(t *testing.T) {
+	oid1 := NewObjectid()
+	oid2 := NewObjectid()
+	require.NotEqual(t, oid1, oid2)
+
+	blk1 := NewBlockidWithObjectID(&oid1, 1)
+	blk2 := NewBlockidWithObjectID(&oid1, 2)
+	require.NotEqual(t, blk1, blk2)
+
+	row1 := NewRowid(&blk1, 1)
+	row11 := NewRowid(&blk1, 1)
+	require.Equal(t, row1, row11)
+}

@@ -593,7 +593,7 @@ func TestNonAppendableBlock(t *testing.T) {
 		var view *containers.Batch
 		tbl := rel.GetMeta().(*catalog.TableEntry)
 		blkID := objectio.NewBlockidWithObjectID(obj.GetID(), 0)
-		err = tables.HybridScanByBlock(context.Background(), tbl, txn, &view, schema, []int{2}, blkID, common.DefaultAllocator)
+		err = tables.HybridScanByBlock(context.Background(), tbl, txn, &view, schema, []int{2}, &blkID, common.DefaultAllocator)
 		assert.Nil(t, err)
 		assert.Nil(t, view.Deletes)
 		assert.Equal(t, bat.Vecs[2].Length(), view.Length())
@@ -611,7 +611,7 @@ func TestNonAppendableBlock(t *testing.T) {
 		err = rel.RangeDelete(obj.Fingerprint(), 1, 2, handle.DT_Normal)
 		assert.Nil(t, err)
 
-		err = tables.HybridScanByBlock(ctx, tbl, txn, &view, schema, []int{2}, blkID, common.DefaultAllocator)
+		err = tables.HybridScanByBlock(ctx, tbl, txn, &view, schema, []int{2}, &blkID, common.DefaultAllocator)
 		assert.Nil(t, err)
 		assert.True(t, view.Deletes.Contains(1))
 		assert.True(t, view.Deletes.Contains(2))
@@ -622,7 +622,7 @@ func TestNonAppendableBlock(t *testing.T) {
 		// _, err = dataBlk.Update(txn, 3, 2, int32(999))
 		// assert.Nil(t, err)
 
-		err = tables.HybridScanByBlock(ctx, tbl, txn, &view, schema, []int{2}, blkID, common.DefaultAllocator)
+		err = tables.HybridScanByBlock(ctx, tbl, txn, &view, schema, []int{2}, &blkID, common.DefaultAllocator)
 		assert.Nil(t, err)
 		assert.True(t, view.Deletes.Contains(1))
 		assert.True(t, view.Deletes.Contains(2))
@@ -1402,7 +1402,7 @@ func TestFlushTabletail(t *testing.T) {
 			var views *containers.Batch
 			for j := uint16(0); j < uint16(obj.BlkCnt()); j++ {
 				blkID := objectio.NewBlockidWithObjectID(obj.GetID(), j)
-				err := tables.HybridScanByBlock(ctx, tblEntry, txn, &views, schema, idxs, blkID, common.DefaultAllocator)
+				err := tables.HybridScanByBlock(ctx, tblEntry, txn, &views, schema, idxs, &blkID, common.DefaultAllocator)
 				assert.NoError(t, err)
 				defer views.Close()
 				for j, view := range views.Vecs {
@@ -2902,8 +2902,8 @@ func TestMergeBlocksIntoMultipleObjects(t *testing.T) {
 		it := rel.MakeObjectIt(false)
 		for it.Next() {
 			obj := it.GetObject()
-			assert.Nil(t, tae.Runtime.TransferDelsMap.GetDelsForBlk(*objectio.NewBlockidWithObjectID(obj.GetID(), 0)))
-			assert.Nil(t, tae.Runtime.TransferDelsMap.GetDelsForBlk(*objectio.NewBlockidWithObjectID(obj.GetID(), 1)))
+			assert.Nil(t, tae.Runtime.TransferDelsMap.GetDelsForBlk(objectio.NewBlockidWithObjectID(obj.GetID(), 0)))
+			assert.Nil(t, tae.Runtime.TransferDelsMap.GetDelsForBlk(objectio.NewBlockidWithObjectID(obj.GetID(), 1)))
 		}
 	}
 
@@ -2950,9 +2950,9 @@ func TestMergeBlocksIntoMultipleObjects(t *testing.T) {
 			for it := rel.MakeObjectIt(false); it.Next(); {
 				obj := it.GetObject()
 				if objCnt == 1 {
-					assert.NotNil(t, tae.Runtime.TransferDelsMap.GetDelsForBlk(*objectio.NewBlockidWithObjectID(obj.GetID(), 0)))
+					assert.NotNil(t, tae.Runtime.TransferDelsMap.GetDelsForBlk(objectio.NewBlockidWithObjectID(obj.GetID(), 0)))
 				} else {
-					assert.NotNil(t, tae.Runtime.TransferDelsMap.GetDelsForBlk(*objectio.NewBlockidWithObjectID(obj.GetID(), 1)))
+					assert.NotNil(t, tae.Runtime.TransferDelsMap.GetDelsForBlk(objectio.NewBlockidWithObjectID(obj.GetID(), 1)))
 				}
 				objCnt++
 			}
@@ -3497,7 +3497,7 @@ func TestCompactblk3(t *testing.T) {
 		for j := 0; j < be.BlockCnt(); j++ {
 			var view *containers.Batch
 			blkID := objectio.NewBlockidWithObjectID(be.ID(), uint16(j))
-			err := tables.HybridScanByBlock(ctx, tblEntry, txn, &view, schema, []int{0}, blkID, common.DefaultAllocator)
+			err := tables.HybridScanByBlock(ctx, tblEntry, txn, &view, schema, []int{0}, &blkID, common.DefaultAllocator)
 			assert.NoError(t, err)
 			view.Compact()
 			assert.Equal(t, 2, view.Length())
@@ -4356,7 +4356,7 @@ func TestBlockRead(t *testing.T) {
 			bid, _ := blkEntry.ID(), blkEntry.ID()
 
 			info := &objectio.BlockInfo{
-				BlockID: *objectio.NewBlockidWithObjectID(bid, 0),
+				BlockID: objectio.NewBlockidWithObjectID(bid, 0),
 			}
 			metaloc := objectEntry.ObjectLocation()
 			metaloc.SetRows(schema.Extra.BlockMaxRows)
@@ -4503,7 +4503,7 @@ func TestBlockRead2(t *testing.T) {
 			bid, _ := blkEntry.ID(), blkEntry.ID()
 
 			info := &objectio.BlockInfo{
-				BlockID: *objectio.NewBlockidWithObjectID(bid, 0),
+				BlockID: objectio.NewBlockidWithObjectID(bid, 0),
 			}
 			metaloc := objectEntry.ObjectLocation()
 			metaloc.SetRows(schema.Extra.BlockMaxRows)
@@ -5297,7 +5297,8 @@ func TestMergeMemsize(t *testing.T) {
 	batCnt := 40
 	bats := wholebat.Split(batCnt)
 	// write only one block by apply metaloc
-	objName1 := objectio.BuildObjectNameWithObjectID(objectio.NewObjectid())
+	nobjid := objectio.NewObjectid()
+	objName1 := objectio.BuildObjectNameWithObjectID(&nobjid)
 	writer, err := ioutil.NewBlockWriterNew(tae.Runtime.Fs, objName1, 0, nil, false)
 	assert.Nil(t, err)
 	writer.SetPrimaryKey(3)
@@ -5369,7 +5370,8 @@ func TestCollectDeletesAfterCKP(t *testing.T) {
 
 	bat := catalog.MockBatch(schema, 400)
 	// write only one block by apply metaloc
-	objName1 := objectio.BuildObjectNameWithObjectID(objectio.NewObjectid())
+	nobjid := objectio.NewObjectid()
+	objName1 := objectio.BuildObjectNameWithObjectID(&nobjid)
 	writer, err := ioutil.NewBlockWriterNew(tae.Runtime.Fs, objName1, 0, nil, false)
 	assert.Nil(t, err)
 	writer.SetPrimaryKey(3)
@@ -5474,7 +5476,8 @@ func TestAlwaysUpdate(t *testing.T) {
 	defer statsVec.Close()
 	// write only one Object
 	for i := 0; i < 1; i++ {
-		objName1 := objectio.BuildObjectNameWithObjectID(objectio.NewObjectid())
+		nobjid := objectio.NewObjectid()
+		objName1 := objectio.BuildObjectNameWithObjectID(&nobjid)
 		writer, err := ioutil.NewBlockWriterNew(tae.Runtime.Fs, objName1, 0, nil, false)
 		assert.Nil(t, err)
 		writer.SetPrimaryKey(3)
@@ -6386,7 +6389,7 @@ func TestAlterFakePk(t *testing.T) {
 		tbl := rel.GetMeta().(*catalog.TableEntry)
 		var view *containers.Batch
 		blkID := objectio.NewBlockidWithObjectID(obj.GetID(), 0)
-		err = tables.HybridScanByBlock(ctx, tbl, txn, &view, newSchema.(*catalog.Schema), []int{1}, blkID, common.DefaultAllocator)
+		err = tables.HybridScanByBlock(ctx, tbl, txn, &view, newSchema.(*catalog.Schema), []int{1}, &blkID, common.DefaultAllocator)
 		view.Vecs[0].Foreach(func(v any, isNull bool, row int) error {
 			assert.True(t, true)
 			rows = append(rows, row)
@@ -8642,7 +8645,8 @@ func TestCommitS3Blocks(t *testing.T) {
 
 	statsVecs := make([]containers.Vector, 0)
 	for _, bat := range datas {
-		name := objectio.BuildObjectNameWithObjectID(objectio.NewObjectid())
+		nobjid := objectio.NewObjectid()
+		name := objectio.BuildObjectNameWithObjectID(&nobjid)
 		writer, err := ioutil.NewBlockWriterNew(tae.Runtime.Fs, name, 0, nil, false)
 		assert.Nil(t, err)
 		writer.SetPrimaryKey(3)
@@ -8720,7 +8724,8 @@ func TestDedupSnapshot2(t *testing.T) {
 	data := catalog.MockBatch(schema, 200)
 	testutil.CreateRelation(t, tae.DB, "db", schema, true)
 
-	name := objectio.BuildObjectNameWithObjectID(objectio.NewObjectid())
+	nobjid := objectio.NewObjectid()
+	name := objectio.BuildObjectNameWithObjectID(&nobjid)
 	writer, err := ioutil.NewBlockWriterNew(tae.Runtime.Fs, name, 0, nil, false)
 	assert.Nil(t, err)
 	writer.SetPrimaryKey(3)
@@ -8734,7 +8739,8 @@ func TestDedupSnapshot2(t *testing.T) {
 	ss := writer.GetObjectStats()
 	statsVec.Append(ss[:], false)
 
-	name2 := objectio.BuildObjectNameWithObjectID(objectio.NewObjectid())
+	nobjid = objectio.NewObjectid()
+	name2 := objectio.BuildObjectNameWithObjectID(&nobjid)
 	writer, err = ioutil.NewBlockWriterNew(tae.Runtime.Fs, name2, 0, nil, false)
 	assert.Nil(t, err)
 	writer.SetPrimaryKey(3)
@@ -8893,14 +8899,14 @@ func TestDeduplication(t *testing.T) {
 	bat := catalog.MockBatch(schema, rows)
 	bats := bat.Split(rows)
 
-	ObjectIDs := make([]*types.Objectid, 2)
+	ObjectIDs := make([]types.Objectid, 2)
 	ObjectIDs[0] = objectio.NewObjectid()
 	ObjectIDs[1] = objectio.NewObjectid()
 	sort.Slice(ObjectIDs, func(i, j int) bool {
-		return ObjectIDs[i].LE(ObjectIDs[j])
+		return ObjectIDs[i].LE(&ObjectIDs[j])
 	})
 
-	blk1Name := objectio.BuildObjectNameWithObjectID(ObjectIDs[1])
+	blk1Name := objectio.BuildObjectNameWithObjectID(&ObjectIDs[1])
 	writer, err := ioutil.NewBlockWriterNew(tae.Runtime.Fs, blk1Name, 0, nil, false)
 	assert.NoError(t, err)
 	writer.SetPrimaryKey(3)
@@ -8928,7 +8934,7 @@ func TestDeduplication(t *testing.T) {
 	dataFactory := tables.NewDataFactory(
 		tae.Runtime,
 		tae.Dir)
-	stats := objectio.NewObjectStatsWithObjectID(ObjectIDs[0], true, false, false)
+	stats := objectio.NewObjectStatsWithObjectID(&ObjectIDs[0], true, false, false)
 	obj, err := tbl.CreateObject(
 		txn,
 		new(objectio.CreateObjOpt).WithObjectStats(stats).WithIsTombstone(false), dataFactory.MakeObjectFactory())
@@ -9524,11 +9530,11 @@ func TestEstimateMemSize(t *testing.T) {
 		schema50rowSize = size1
 
 		blkID := objectio.NewBlockidWithObjectID(blk.ID(), 0)
-		err := rel.DeleteByPhyAddrKey(*objectio.NewRowid(blkID, 1))
+		err := rel.DeleteByPhyAddrKey(objectio.NewRowid(&blkID, 1))
 		assert.NoError(t, err)
 		size2 := blk.GetObjectData().EstimateMemSize()
 
-		err = rel.DeleteByPhyAddrKey(*objectio.NewRowid(blkID, 5))
+		err = rel.DeleteByPhyAddrKey(objectio.NewRowid(&blkID, 5))
 		assert.NoError(t, err)
 		size3 := blk.GetObjectData().EstimateMemSize()
 		// assert.Less(t, size1, size2)
@@ -9547,12 +9553,12 @@ func TestEstimateMemSize(t *testing.T) {
 		size1 := blk.GetObjectData().EstimateMemSize()
 
 		blkID := objectio.NewBlockidWithObjectID(blk.ID(), 0)
-		err := rel.DeleteByPhyAddrKey(*objectio.NewRowid(blkID, 1))
+		err := rel.DeleteByPhyAddrKey(objectio.NewRowid(&blkID, 1))
 		assert.NoError(t, err)
 
 		size2 := blk.GetObjectData().EstimateMemSize()
 
-		err = rel.DeleteByPhyAddrKey(*objectio.NewRowid(blkID, 5))
+		err = rel.DeleteByPhyAddrKey(objectio.NewRowid(&blkID, 5))
 		assert.NoError(t, err)
 		size3 := blk.GetObjectData().EstimateMemSize()
 
@@ -10149,7 +10155,7 @@ func TestPersistTransferTable(t *testing.T) {
 		transferMap[uint32(i)] = api.TransferDestPos{
 			RowIdx: uint32(i),
 		}
-		rowID := *objectio.NewRowid(&id2.BlockID, uint32(i))
+		rowID := objectio.NewRowid(&id2.BlockID, uint32(i))
 		ids[i] = rowID
 	}
 	page.Train(transferMap)
@@ -10218,7 +10224,7 @@ func TestClearPersistTransferTable(t *testing.T) {
 					BlkIdx: 0,
 					RowIdx: uint32(i),
 				}
-				rowID := *objectio.NewRowid(&id2.BlockID, uint32(i))
+				rowID := objectio.NewRowid(&id2.BlockID, uint32(i))
 				ids[i] = rowID
 			}
 			page.Train(transferMap)
@@ -10513,10 +10519,11 @@ func TestFillBlockTombstonesPersistedAobj(t *testing.T) {
 
 	txn, _ = tae.GetRelation()
 	deletes := &nulls.Nulls{}
+	nbid := types.NewBlockidWithObjectID(dataObj.ID(), 0)
 	atombstone.GetObjectData().FillBlockTombstones(
 		ctx,
 		txn,
-		types.NewBlockidWithObjectID(dataObj.ID(), 0),
+		&nbid,
 		&deletes,
 		0,
 		common.DebugAllocator)

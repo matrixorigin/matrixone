@@ -1491,7 +1491,7 @@ func Test_DeleteUncommittedBlock(t *testing.T) {
 				)
 				for i := 0; i < deleteCnt; i++ {
 					rid := types.NewRowid(bid, uint32(i))
-					require.NoError(t, vector.AppendFixed[types.Rowid](bat2.Vecs[0], *rid, false, mp))
+					require.NoError(t, vector.AppendFixed[types.Rowid](bat2.Vecs[0], rid, false, mp))
 				}
 				bat2.SetRowCount(deleteCnt)
 

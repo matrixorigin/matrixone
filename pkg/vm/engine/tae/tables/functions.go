@@ -114,13 +114,13 @@ var containsAlkFunctions = map[types.T]any{
 	types.T_Rowid: containsABlkFuncFactory(types.CompareRowidRowidAligned),
 }
 
-func parseNAGetDuplicatedArgs(args ...any) (vec *vector.Vector, rowIDs containers.Vector, blkID *types.Blockid) {
+func parseNAGetDuplicatedArgs(args ...any) (vec *vector.Vector, rowIDs containers.Vector, blkID types.Blockid) {
 	vec = args[0].(containers.Vector).GetDownstreamVector()
 	if args[1] != nil {
 		rowIDs = args[1].(containers.Vector)
 	}
 	if args[2] != nil {
-		blkID = args[2].(*types.Blockid)
+		blkID = args[2].(types.Blockid)
 	}
 	return
 }
@@ -134,7 +134,7 @@ func parseNAContainsArgs(args ...any) (vec *vector.Vector, rowIDs containers.Vec
 }
 
 func parseAGetDuplicateRowIDsArgs(args ...any) (
-	vec containers.Vector, rowIDs containers.Vector, blkID *types.Blockid,
+	vec containers.Vector, rowIDs containers.Vector, blkID types.Blockid,
 	scanFn func(uint16) (vec containers.Vector, err error), txn txnif.TxnReader, from, to types.TS,
 ) {
 	vec = args[0].(containers.Vector)
@@ -142,7 +142,7 @@ func parseAGetDuplicateRowIDsArgs(args ...any) (
 		rowIDs = args[1].(containers.Vector)
 	}
 	if args[2] != nil {
-		blkID = args[2].(*types.Blockid)
+		blkID = args[2].(types.Blockid)
 	}
 	if args[3] != nil {
 		scanFn = args[3].(func(bid uint16) (vec containers.Vector, err error))
@@ -194,8 +194,8 @@ func getDuplicateRowIDNABlkFuncFactory[T any](comp func(T, T) int) func(args ...
 				comp,
 				nil,
 			); existed {
-				rowID := objectio.NewRowid(blkID, uint32(offset))
-				rowIDs.Update(row, *rowID, false)
+				rowID := objectio.NewRowid(&blkID, uint32(offset))
+				rowIDs.Update(row, rowID, false)
 			}
 			return
 		}
@@ -236,8 +236,8 @@ func getDuplicatedRowIDsNABlkBytesFunc(args ...any) func([]byte, bool, int) erro
 			v,
 			nil,
 		); existed {
-			rowID := objectio.NewRowid(blkID, uint32(offset))
-			rowIDs.Update(row, *rowID, false)
+			rowID := objectio.NewRowid(&blkID, uint32(offset))
+			rowIDs.Update(row, rowID, false)
 		}
 		return
 	}
@@ -256,8 +256,8 @@ func getDuplicatedRowIDNABlkOrderedFunc[T types.OrderedT](args ...any) func(T, b
 			v,
 			nil,
 		); existed {
-			rowID := objectio.NewRowid(blkID, uint32(offset))
-			rowIDs.Update(row, *rowID, false)
+			rowID := objectio.NewRowid(&blkID, uint32(offset))
+			rowIDs.Update(row, rowID, false)
 		}
 		return
 	}
@@ -311,8 +311,8 @@ func getDuplicatedRowIDABlkBytesFunc(args ...any) func([]byte, bool, int) error 
 					)
 					return txnif.ErrTxnWWConflict
 				}
-				rowID := objectio.NewRowid(blkID, uint32(row))
-				rowIDs.Update(rowOffset, *rowID, false)
+				rowID := objectio.NewRowid(&blkID, uint32(row))
+				rowIDs.Update(rowOffset, rowID, false)
 				return nil
 			}, nil, nil)
 	}
@@ -366,8 +366,8 @@ func getDuplicatedRowIDABlkFuncFactory[T types.FixedSizeT](comp func(T, T) int) 
 						)
 						return txnif.ErrTxnWWConflict
 					}
-					rowID := objectio.NewRowid(blkID, uint32(row))
-					rowIDs.Update(rowOffset, *rowID, false)
+					rowID := objectio.NewRowid(&blkID, uint32(row))
+					rowIDs.Update(rowOffset, rowID, false)
 					return nil
 				}, nil, nil)
 		}

@@ -236,8 +236,8 @@ func (entry *flushTableTailEntry) collectDelsAndTransfer(
 				return
 			}
 			blkID := objectio.NewBlockidWithObjectID(entry.createdObjHandle.GetID(), destpos.BlkIdx)
-			entry.delTbls[destpos.BlkIdx] = blkID
-			entry.rt.TransferDelsMap.SetDelsForBlk(*blkID, int(destpos.RowIdx), entry.txn.GetPrepareTS(), ts[i])
+			entry.delTbls[destpos.BlkIdx] = &blkID
+			entry.rt.TransferDelsMap.SetDelsForBlk(blkID, int(destpos.RowIdx), entry.txn.GetPrepareTS(), ts[i])
 			id := entry.createdObjHandle.Fingerprint()
 			id.SetBlockOffset(uint16(destpos.BlkIdx))
 			if pkVec == nil {

@@ -392,7 +392,7 @@ func (ttree *TableTree) ReadFromWithVersion(r io.Reader, ver uint16) (n int64, e
 		for i := 0; i < int(cnt); i++ {
 			id := objectio.NewObjectid()
 			if ver == MemoTreeVersion3 {
-				obj := NewObjectTree(id)
+				obj := NewObjectTree(&id)
 				if tmpn, err = obj.ReadFromV3(r); err != nil {
 					return
 				}
@@ -413,7 +413,7 @@ func (ttree *TableTree) ReadFromWithVersion(r io.Reader, ver uint16) (n int64, e
 	}
 	for i := 0; i < int(cnt); i++ {
 		id := objectio.NewObjectid()
-		obj := NewObjectTree(id)
+		obj := NewObjectTree(&id)
 		if tmpn, err = obj.ReadFromV3(r); err != nil {
 			return
 		}

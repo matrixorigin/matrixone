@@ -670,7 +670,7 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context, isTombstone bool
 
 	// write!
 	objID := objectio.NewObjectid()
-	name := objectio.BuildObjectNameWithObjectID(objID)
+	name := objectio.BuildObjectNameWithObjectID(&objID)
 	writer, err := ioutil.NewBlockWriterNew(
 		task.rt.Fs,
 		name,
@@ -718,7 +718,7 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context, isTombstone bool
 		sorted = true
 	}
 	// update new status for created blocks
-	stats := objectio.NewObjectStatsWithObjectID(objID, false, sorted, false)
+	stats := objectio.NewObjectStatsWithObjectID(&objID, false, sorted, false)
 	writerStats := writer.Stats()
 	objectio.SetObjectStats(stats, &writerStats)
 	// create new object to hold merged blocks

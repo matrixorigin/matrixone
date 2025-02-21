@@ -370,7 +370,8 @@ func TestObject1(t *testing.T) {
 	schema.Name = tbName
 	tb, err := db.CreateTableEntry(schema, txn1, nil)
 	assert.Nil(t, err)
-	stats := objectio.NewObjectStatsWithObjectID(objectio.NewObjectid(), true, false, false)
+	nobjid := objectio.NewObjectid()
+	stats := objectio.NewObjectStatsWithObjectID(&nobjid, true, false, false)
 	obj1, err := tb.CreateObject(txn1, &objectio.CreateObjOpt{Stats: stats, IsTombstone: false}, nil)
 	assert.Nil(t, err)
 	err = txn1.Commit(context.Background())

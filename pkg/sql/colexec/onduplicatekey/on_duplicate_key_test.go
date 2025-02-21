@@ -97,8 +97,8 @@ func resetChildren(arg *OnDuplicatekey) {
 	vecs[3] = testutil.MakeInt64Vector([]int64{2, 2}, []uint64{0, 1})
 	uuid1 := objectio.NewSegmentid()
 	blkId1 := objectio.NewBlockid(uuid1, 0, 0)
-	rowid1 := *objectio.NewRowid(blkId1, 0)
-	rowid2 := *objectio.NewRowid(blkId1, 0)
+	rowid1 := objectio.NewRowid(blkId1, 0)
+	rowid2 := objectio.NewRowid(blkId1, 0)
 	vecs[4] = testutil.MakeRowIdVector([]types.Rowid{rowid1, rowid2}, []uint64{0, 1})
 	bat.Vecs = vecs
 	bat.SetRowCount(vecs[0].Length())

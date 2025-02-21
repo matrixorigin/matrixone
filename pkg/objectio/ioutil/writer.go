@@ -72,7 +72,8 @@ func ConstructWriter(
 	isTombstone bool,
 	fs fileservice.FileService,
 ) *BlockWriter {
-	name := objectio.BuildObjectNameWithObjectID(objectio.NewObjectid())
+	noid := objectio.NewObjectid()
+	name := objectio.BuildObjectNameWithObjectID(&noid)
 	return constructWriterWithName(name,
 		ver, seqnums, sortkeyPos, sortkeyIsPK, isTombstone, fs)
 }

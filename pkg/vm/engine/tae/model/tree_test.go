@@ -27,7 +27,7 @@ func TestTree(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	tree := NewTree()
 	obj2 := objectio.NewObjectid()
-	tree.AddObject(1, 2, obj2, false)
+	tree.AddObject(1, 2, &obj2, false)
 	t.Log(tree.String())
 	assert.Equal(t, 1, tree.TableCount())
 
@@ -47,7 +47,7 @@ func TestTableTree_ReadOldVersion(t *testing.T) {
 	tree := NewTableTree(0, 0)
 	var w bytes.Buffer
 	obj := objectio.NewObjectid()
-	tree.AddObject(obj, false)
+	tree.AddObject(&obj, false)
 	_, err := tree.WriteTo(&w)
 	assert.NoError(t, err)
 

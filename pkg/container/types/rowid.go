@@ -54,27 +54,24 @@ func BuildTestBlockid(a, b int64) (ret Blockid) {
 	return
 }
 
-func NewObjectid() *Objectid {
+func NewObjectid() (oid Objectid) {
 	sid := Uuid(uuid.Must(uuid.NewV7()))
-	var oid Objectid
 	copy(oid[:UuidSize], sid[:])
-	return &oid
+	return
 }
 
-func NewBlockidWithObjectID(id *Objectid, blknum uint16) *Blockid {
-	var bid Blockid
+func NewBlockidWithObjectID(id *Objectid, blknum uint16) (bid Blockid) {
 	size := ObjectidSize
 	copy(bid[:size], id[:])
 	copy(bid[size:size+2], EncodeUint16(&blknum))
-	return &bid
+	return
 }
 
-func NewRowid(blkid *Blockid, offset uint32) *Rowid {
-	var rowid Rowid
+func NewRowid(blkid *Blockid, offset uint32) (rowid Rowid) {
 	size := BlockidSize
 	copy(rowid[:size], blkid[:])
 	copy(rowid[size:size+4], EncodeUint32(&offset))
-	return &rowid
+	return
 }
 
 func NewRowIDWithObjectIDBlkNumAndRowID(id Objectid, blknum uint16, offset uint32) Rowid {

@@ -47,7 +47,8 @@ func TestComposedCmd(t *testing.T) {
 	assert.Nil(t, err)
 	composed.AddCmd(tblCmd)
 
-	stats := objectio.NewObjectStatsWithObjectID(objectio.NewObjectid(), true, false, false)
+	noid := objectio.NewObjectid()
+	stats := objectio.NewObjectStatsWithObjectID(&noid, true, false, false)
 	obj, _ := table.CreateObject(nil, &objectio.CreateObjOpt{Stats: stats}, nil)
 	objCmd, err := obj.MakeCommand(1)
 	assert.Nil(t, err)

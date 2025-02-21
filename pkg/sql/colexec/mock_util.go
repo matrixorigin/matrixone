@@ -168,8 +168,8 @@ func MakeMockBatchsWithRowID() *batch.Batch {
 
 	uuid1 := objectio.NewSegmentid()
 	blkId1 := objectio.NewBlockid(uuid1, 0, 0)
-	rowid1 := *objectio.NewRowid(blkId1, 0)
-	rowid2 := *objectio.NewRowid(blkId1, 0)
+	rowid1 := objectio.NewRowid(blkId1, 0)
+	rowid2 := objectio.NewRowid(blkId1, 0)
 	bat.Vecs[0] = testutil.MakeRowIdVector([]types.Rowid{rowid1, rowid2}, nil)
 	for i := range vecs {
 		bat.Vecs[i+1] = vecs[i]

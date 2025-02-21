@@ -563,7 +563,7 @@ func (obj *baseObject) GetValue(
 		var bat *containers.Batch
 		blkID := objectio.NewBlockidWithObjectID(obj.meta.Load().ID(), blkOffset)
 		err = HybridScanByBlock(
-			ctx, obj.meta.Load().GetTable(), txn, &bat, readSchema.(*catalog.Schema), []int{col}, blkID, mp)
+			ctx, obj.meta.Load().GetTable(), txn, &bat, readSchema.(*catalog.Schema), []int{col}, &blkID, mp)
 		if err != nil {
 			return
 		}

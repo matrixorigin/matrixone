@@ -39,7 +39,7 @@ func Test_ClusterKey1(t *testing.T) {
 	tableId := uint64(20)
 	obj := types.NewObjectid()
 
-	EncodeCluser(packer, tableId, ObjectType_Data, obj)
+	EncodeCluser(packer, tableId, ObjectType_Data, &obj)
 
 	buf := packer.Bytes()
 	packer.Reset()

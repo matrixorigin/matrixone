@@ -71,7 +71,8 @@ func TestHandle_HandleCommitPerformanceForS3Load(t *testing.T) {
 	var stats []objectio.ObjectStats
 	offset := 0
 	for i := 0; i < 100; i++ {
-		name := objectio.BuildObjectNameWithObjectID(objectio.NewObjectid())
+		noid := objectio.NewObjectid()
+		name := objectio.BuildObjectNameWithObjectID(&noid)
 		objNames = append(objNames, name)
 		writer, err := ioutil.NewBlockWriterNew(fs, objNames[i], 0, nil, false)
 		assert.Nil(t, err)
@@ -220,7 +221,8 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	moBats[3] = containers.ToCNBatch(taeBats[3])
 
 	//write taeBats[0], taeBats[1] two blocks into file service
-	objName1 := objectio.BuildObjectNameWithObjectID(objectio.NewObjectid())
+	noid := objectio.NewObjectid()
+	objName1 := objectio.BuildObjectNameWithObjectID(&noid)
 	writer, err := ioutil.NewBlockWriterNew(fs, objName1, 0, nil, false)
 	assert.Nil(t, err)
 	writer.SetPrimaryKey(1)
@@ -239,7 +241,8 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	require.Equal(t, int(20), int(stats1.Rows()))
 
 	//write taeBats[3] into file service
-	objName2 := objectio.BuildObjectNameWithObjectID(objectio.NewObjectid())
+	noid = objectio.NewObjectid()
+	objName2 := objectio.BuildObjectNameWithObjectID(&noid)
 	writer, err = ioutil.NewBlockWriterNew(fs, objName2, 0, nil, false)
 	assert.Nil(t, err)
 	writer.SetPrimaryKey(1)
@@ -429,7 +432,8 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	assert.Nil(t, err)
 
 	//write deleted row ids into FS
-	objName3 := objectio.BuildObjectNameWithObjectID(objectio.NewObjectid())
+	noid = objectio.NewObjectid()
+	objName3 := objectio.BuildObjectNameWithObjectID(&noid)
 	writer, err = ioutil.NewBlockWriterNew(fs, objName3, 0, nil, true)
 	assert.Nil(t, err)
 	writer.SetPrimaryKeyWithType(uint16(objectio.TombstonePrimaryKeyIdx), index.HBF,
@@ -1783,7 +1787,7 @@ func TestApplyDeltaloc(t *testing.T) {
 		id, offset, err := rel.GetByFilter(context.Background(), filter)
 		assert.NoError(t, err)
 		rowIDVec := containers.MakeVector(types.T_Rowid.ToType(), common.DefaultAllocator)
-		rowIDVec.Append(*objectio.NewRowid(&id.BlockID, offset), false)
+		rowIDVec.Append(objectio.NewRowid(&id.BlockID, offset), false)
 		pkVec := containers.MakeVector(schema.GetPrimaryKey().GetType(), common.DefaultAllocator)
 		pkVec.Append(val, false)
 		bat := containers.NewBatch()
@@ -1886,7 +1890,7 @@ func TestApplyDeltaloc(t *testing.T) {
 			for j := 0; j < blk.BlkCnt(); j++ {
 				var view *containers.Batch
 				blkID := objectio.NewBlockidWithObjectID(meta.ID(), uint16(j))
-				err := tables.HybridScanByBlock(ctx, meta.GetTable(), txn0, &view, schema, []int{def.Idx}, blkID, common.DefaultAllocator)
+				err := tables.HybridScanByBlock(ctx, meta.GetTable(), txn0, &view, schema, []int{def.Idx}, &blkID, common.DefaultAllocator)
 				assert.NoError(t, err)
 				view.Compact()
 				length += view.Length()

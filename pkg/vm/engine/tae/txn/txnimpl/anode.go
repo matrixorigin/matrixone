@@ -145,7 +145,7 @@ func (n *anode) FillPhyAddrColumn(startRow, length uint32) (err error) {
 	blkID := objectio.NewBlockidWithObjectID(n.meta.ID(), 0)
 	if err = objectio.ConstructRowidColumnTo(
 		col.GetDownstreamVector(),
-		blkID, startRow, length,
+		&blkID, startRow, length,
 		col.GetAllocator(),
 	); err != nil {
 		col.Close()

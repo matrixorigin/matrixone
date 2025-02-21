@@ -583,8 +583,8 @@ func (tbl *txnTable) CollectTombstones(
 			})
 
 		//collect uncommitted in-memory tombstones belongs to blocks persisted by CN writing S3
-		tbl.getTxn().deletedBlocks.getDeletedRowIDs(func(row *types.Rowid) {
-			tombstone.AppendInMemory(*row)
+		tbl.getTxn().deletedBlocks.getDeletedRowIDs(func(row types.Rowid) {
+			tombstone.AppendInMemory(row)
 		})
 
 		//collect uncommitted persisted tombstones.

@@ -302,7 +302,7 @@ func TestLogtailBasic(t *testing.T) {
 				id := obj.GetMeta().(*catalog2.ObjectEntry).ID()
 				for j := 0; j < obj.BlkCnt(); j++ {
 					blkID := objectio.NewBlockidWithObjectID(id, uint16(j))
-					deleteRowIDs = append(deleteRowIDs, *objectio.NewRowid(blkID, 5))
+					deleteRowIDs = append(deleteRowIDs, objectio.NewRowid(&blkID, 5))
 				}
 			}
 			blkIt.Close()
@@ -655,7 +655,7 @@ func TestInProgressTransfer(t *testing.T) {
 		userTbl, _ := userDB.GetRelationByID(tid)
 		id, row, err := userTbl.GetByFilter(p.Ctx, handle.NewEQFilter(int64(7)))
 		require.NoError(t, err)
-		rowid := *objectio.NewRowid(&id.BlockID, row)
+		rowid := objectio.NewRowid(&id.BlockID, row)
 
 		vec1 := vector.NewVec(types.T_Rowid.ToType())
 		require.NoError(t, vector.AppendFixed(vec1, rowid, false, p.Mp))
