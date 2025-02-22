@@ -132,12 +132,16 @@ func (h *HDFS) createTemp() (*hdfs.FileWriter, string, error) {
 		name := h.keyToPath(
 			base32.HexEncoding.WithPadding(base32.NoPadding).EncodeToString(randomBytes),
 		)
-		_, err := h.client.Stat(name)
+		_, err := DoWithRetry("HDFS: stat", func() (os.FileInfo, error) {
+			return h.client.Stat(name)
+		}, maxRetryAttemps, IsRetryableError)
 		if err == nil {
 			// existed
 			continue
 		}
-		file, err := h.client.Create(name)
+		file, err := DoWithRetry("HDFS: create", func() (*hdfs.FileWriter, error) {
+			return h.client.Create(name)
+		}, maxRetryAttemps, IsRetryableError)
 		if err != nil {
 			return nil, "", err
 		}
@@ -154,7 +158,9 @@ func (h *HDFS) Exists(ctx context.Context, key string) (bool, error) {
 		counter.FileService.S3.Head.Add(1)
 	}, h.perfCounterSets...)
 
-	_, err := h.client.Stat(h.keyToPath(key))
+	_, err := DoWithRetry("HDFS: stat", func() (os.FileInfo, error) {
+		return h.client.Stat(h.keyToPath(key))
+	}, maxRetryAttemps, IsRetryableError)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return false, nil
@@ -178,7 +184,9 @@ func (h *HDFS) List(ctx context.Context, prefix string) iter.Seq2[*DirEntry, err
 
 		dir, prefix := path.Split(prefix)
 
-		f, err := h.client.Open(h.keyToPath(dir))
+		f, err := DoWithRetry("HDFS: open", func() (*hdfs.FileReader, error) {
+			return h.client.Open(h.keyToPath(dir))
+		}, maxRetryAttemps, IsRetryableError)
 		if err != nil {
 			if os.IsNotExist(err) {
 				return
@@ -235,7 +243,9 @@ func (h *HDFS) Read(ctx context.Context, key string, min *int64, max *int64) (r 
 		counter.FileService.S3.Get.Add(1)
 	}, h.perfCounterSets...)
 
-	f, err := h.client.Open(h.keyToPath(key))
+	f, err := DoWithRetry("HDFS: open", func() (*hdfs.FileReader, error) {
+		return h.client.Open(h.keyToPath(key))
+	}, maxRetryAttemps, IsRetryableError)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, moerr.NewFileNotFoundNoCtx(key)
@@ -287,7 +297,9 @@ func (h *HDFS) Stat(ctx context.Context, key string) (size int64, err error) {
 		counter.FileService.S3.Head.Add(1)
 	}, h.perfCounterSets...)
 
-	stat, err := h.client.Stat(h.keyToPath(key))
+	stat, err := DoWithRetry("HDFS: stat", func() (os.FileInfo, error) {
+		return h.client.Stat(h.keyToPath(key))
+	}, maxRetryAttemps, IsRetryableError)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return 0, moerr.NewFileNotFoundNoCtx(key)
@@ -337,14 +349,19 @@ func (h *HDFS) Write(ctx context.Context, key string, r io.Reader, sizeHint *int
 	}
 
 	filePath := h.keyToPath(key)
-	err = h.client.MkdirAll(path.Dir(filePath), 0755)
+	_, err = DoWithRetry("HDFS: MkdirAll", func() (bool, error) {
+		return true, h.client.MkdirAll(path.Dir(filePath), 0755)
+	}, maxRetryAttemps, IsRetryableError)
 	if err != nil {
 		if !os.IsExist(err) {
 			return err
 		}
 	}
 
-	if err := h.client.Rename(tempFilePath, filePath); err != nil {
+	_, err = DoWithRetry("HDFS: Rename", func() (bool, error) {
+		return true, h.client.Rename(tempFilePath, filePath)
+	}, maxRetryAttemps, IsRetryableError)
+	if err != nil {
 		return err
 	}
 
