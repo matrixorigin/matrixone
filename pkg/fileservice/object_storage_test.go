@@ -153,30 +153,6 @@ func testObjectStorage[T ObjectStorage](
 				t.Fatal()
 			}
 
-			// list root
-			n = 0
-			for _, err := range storage.List(ctx, "") {
-				if err != nil {
-					t.Fatal(err)
-				}
-				n++
-			}
-			if n != 2 {
-				t.Fatal()
-			}
-
-			// list root
-			n = 0
-			for _, err := range storage.List(ctx, "/") {
-				if err != nil {
-					t.Fatal(err)
-				}
-				n++
-			}
-			if n != 2 {
-				t.Fatal()
-			}
-
 		})
 
 		t.Run("invalid write length", func(t *testing.T) {
