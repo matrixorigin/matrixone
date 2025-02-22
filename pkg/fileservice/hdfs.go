@@ -40,6 +40,7 @@ import (
 type HDFS struct {
 	name            string
 	client          *hdfs.Client
+	rootPath        string
 	perfCounterSets []*perfcounter.CounterSet
 }
 
@@ -61,7 +62,6 @@ func NewHDFS(
 	args.User = firstNonZero(
 		args.User,
 		u.Query().Get("user"),
-		args.Bucket,
 		"hadoop",
 	)
 
@@ -87,6 +87,7 @@ func NewHDFS(
 	ret := &HDFS{
 		name:            args.Name,
 		client:          client,
+		rootPath:        args.Bucket,
 		perfCounterSets: perfCounterSets,
 	}
 
@@ -122,7 +123,7 @@ func (h *HDFS) Delete(ctx context.Context, keys ...string) (err error) {
 }
 
 func (h *HDFS) keyToPath(key string) string {
-	return key
+	return path.Join(h.rootPath, key)
 }
 
 func (h *HDFS) createTemp() (*hdfs.FileWriter, string, error) {
