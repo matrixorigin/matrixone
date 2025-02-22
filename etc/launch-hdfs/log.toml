@@ -1,0 +1,21 @@
+# service node type, [DN|CN|LOG]
+service-type = "LOG"
+data-dir = "./mo-data"
+
+[log]
+level = "info"
+
+[[fileservice]]
+name = "SHARED"
+backend = "S3" # for hdfs, the backend is also S3
+[fileservice.s3]
+endpoint = "hdfs://[name-node-address]:[name-node-port]" # must begin with "hdfs://" and must not be empty
+bucket = "/user/mo" # root path in HDFS, must be existed and read-writable
+user = "mo" # hdfs user name, must not be empty
+# the following are optional
+kerberos-service-principle-name = "" # kerberos service principle name
+kerberos-username = "" # kerberos username
+kerberos-realm = "" # kerberos realm
+kerberos-password = "" # kerberos password
+kerberos-keytab-path = "" # kerberos keytab path
+
