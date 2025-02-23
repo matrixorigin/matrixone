@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 )
 
 func TestGetStats(t *testing.T) {
@@ -42,7 +43,11 @@ func TestGetStats(t *testing.T) {
 	defer cancel()
 	gs := NewGlobalStats(ctx, nil, nil,
 		WithUpdateWorkerFactor(4),
-		WithStatsUpdater(func(_ context.Context, key statsinfo.StatsInfoKey, info *statsinfo.StatsInfo) bool {
+		WithStatsUpdater(func(
+			_ context.Context,
+			ps *logtailreplay.PartitionState,
+			key statsinfo.StatsInfoKey,
+			info *statsinfo.StatsInfo) bool {
 			info.BlockNumber = 20
 			return true
 		}),

@@ -688,7 +688,10 @@ func (gs *GlobalStats) updateTableStats(wrapKey pb.StatsInfoKeyWithContext) {
 		gs.mu.statsInfoMap[wrapKey.Key] = nil
 		gs.mu.cond.Broadcast()
 	}
+
 	// Get the latest partition state of the table.
+	//Notice that for snapshot read, subscribing the table maybe failed since the invalid table id,
+	//We should handle this case in next PR if needed.
 	ps, err := gs.engine.pClient.toSubscribeTable(
 		wrapKey.Ctx,
 		wrapKey.Key.TableID,
