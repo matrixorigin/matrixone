@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package store
+package wal
 
 import (
 	"sync"
@@ -28,24 +28,23 @@ import (
 var DefaultMaxBatchSize = 10000
 
 type StoreImpl struct {
-	*StoreInfo
 	sm.ClosedState
+	*StoreInfo
 
 	driver driver.Driver
 
-	appendWg          sync.WaitGroup
-	appendMu          sync.RWMutex
+	appendMu sync.Mutex
+	appendWg sync.WaitGroup
+
 	driverAppendQueue sm.Queue
 	doneWithErrQueue  sm.Queue
 	logInfoQueue      sm.Queue
-
-	checkpointQueue sm.Queue
-
-	truncatingQueue sm.Queue
-	truncateQueue   sm.Queue
+	checkpointQueue   sm.Queue
 }
 
-func NewStoreWithLogserviceDriver(factory logservicedriver.LogServiceClientFactory) Store {
+func NewLogserviceHandle(
+	factory logservicedriver.LogServiceClientFactory,
+) *StoreImpl {
 	cfg := logservicedriver.NewConfig(
 		"",
 		logservicedriver.WithConfigOptClientFactory(factory),
@@ -54,7 +53,7 @@ func NewStoreWithLogserviceDriver(factory logservicedriver.LogServiceClientFacto
 	return NewStore(driver)
 }
 
-func NewStoreWithBatchStoreDriver(
+func NewLocalHandle(
 	dir, name string, cfg *batchstoredriver.StoreCfg,
 ) Store {
 	driver, err := batchstoredriver.NewBaseStore(dir, name, cfg)
@@ -63,66 +62,57 @@ func NewStoreWithBatchStoreDriver(
 	}
 	return NewStore(driver)
 }
+
 func NewStore(driver driver.Driver) *StoreImpl {
 	w := &StoreImpl{
 		StoreInfo: newWalInfo(),
 		driver:    driver,
-		appendWg:  sync.WaitGroup{},
-		appendMu:  sync.RWMutex{},
 	}
 	w.driverAppendQueue = sm.NewSafeQueue(DefaultMaxBatchSize*10, DefaultMaxBatchSize, w.onDriverAppendQueue)
 	w.doneWithErrQueue = sm.NewSafeQueue(DefaultMaxBatchSize*10, DefaultMaxBatchSize, w.onDoneWithErrQueue)
 	w.logInfoQueue = sm.NewSafeQueue(DefaultMaxBatchSize*10, DefaultMaxBatchSize, w.onLogInfoQueue)
-	w.checkpointQueue = sm.NewSafeQueue(DefaultMaxBatchSize*10, DefaultMaxBatchSize, w.onLogCKPInfoQueue)
-	w.truncatingQueue = sm.NewSafeQueue(DefaultMaxBatchSize*10, DefaultMaxBatchSize, w.onTruncatingQueue)
-	w.truncateQueue = sm.NewSafeQueue(DefaultMaxBatchSize*10, DefaultMaxBatchSize, w.onTruncateQueue)
-	w.Start()
+	w.checkpointQueue = sm.NewSafeQueue(DefaultMaxBatchSize*10, DefaultMaxBatchSize, w.onCheckpointIntent)
+	w.start()
 	return w
 }
-func (w *StoreImpl) Start() {
-	w.driverAppendQueue.Start()
-	w.doneWithErrQueue.Start()
-	w.logInfoQueue.Start()
-	w.checkpointQueue.Start()
-	w.truncatingQueue.Start()
-	w.truncateQueue.Start()
-}
+
 func (w *StoreImpl) Close() error {
 	if !w.TryClose() {
 		return nil
 	}
-	w.appendMu.RLock()
 	w.appendWg.Wait()
-	w.appendMu.RUnlock()
 	w.driverAppendQueue.Stop()
 	w.doneWithErrQueue.Stop()
 	w.logInfoQueue.Stop()
 	w.checkpointQueue.Stop()
-	w.truncatingQueue.Stop()
-	w.truncateQueue.Stop()
 	err := w.driver.Close()
 	if err != nil {
 		return err
 	}
 	return nil
 }
+
 func (w *StoreImpl) AppendEntry(gid uint32, e entry.Entry) (lsn uint64, err error) {
 	_, lsn, err = w.doAppend(gid, e)
 	return
 }
 
+func (w *StoreImpl) start() {
+	w.driverAppendQueue.Start()
+	w.doneWithErrQueue.Start()
+	w.logInfoQueue.Start()
+	w.checkpointQueue.Start()
+}
+
 func (w *StoreImpl) doAppend(gid uint32, e entry.Entry) (drEntry *driverEntry.Entry, lsn uint64, err error) {
-	if w.IsClosed() {
-		return nil, 0, sm.ErrClose
-	}
-	w.appendMu.Lock()
-	defer w.appendMu.Unlock()
 	w.appendWg.Add(1)
 	if w.IsClosed() {
 		w.appendWg.Done()
 		return nil, 0, sm.ErrClose
 	}
-	lsn = w.allocateLsn(gid)
+	w.appendMu.Lock()
+	defer w.appendMu.Unlock()
+	lsn = w.nextLSN(gid)
 	v1 := e.GetInfo()
 	var info *entry.Info
 	if v1 == nil {
@@ -143,6 +133,7 @@ func (w *StoreImpl) doAppend(gid uint32, e entry.Entry) (drEntry *driverEntry.En
 	return
 }
 
+// TODO: error handling
 func (w *StoreImpl) onDriverAppendQueue(items ...any) {
 	for _, item := range items {
 		driverEntry := item.(*driverEntry.Entry)
@@ -159,6 +150,7 @@ func (w *StoreImpl) onDriverAppendQueue(items ...any) {
 	}
 }
 
+// TODO: error handling
 func (w *StoreImpl) onDoneWithErrQueue(items ...any) {
 	for _, item := range items {
 		e := item.(*driverEntry.Entry)
@@ -178,7 +170,6 @@ func (w *StoreImpl) onDoneWithErrQueue(items ...any) {
 func (w *StoreImpl) onLogInfoQueue(items ...any) {
 	for _, item := range items {
 		e := item.(*driverEntry.Entry)
-		w.logDriverLsn(e)
+		w.logDSN(e)
 	}
-	w.onAppend()
 }

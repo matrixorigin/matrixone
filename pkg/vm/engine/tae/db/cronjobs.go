@@ -21,10 +21,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"go.uber.org/zap"
 )
+
+var ErrCronJobsOpen = moerr.NewInternalErrorNoCtx("cron jobs mock error")
 
 const (
 	CronJobs_Name_GCTransferTable = "GC-Transfer-Table"
@@ -37,6 +41,7 @@ const (
 	CronJobs_Name_ReportStats = "Report-Stats"
 
 	CronJobs_Name_Checker = "Checker"
+	CronJobs_Name_Scanner = "Scanner"
 )
 
 var CronJobs_Open_WriteMode = []string{
@@ -47,6 +52,7 @@ var CronJobs_Open_WriteMode = []string{
 	CronJobs_Name_GCLogtail,
 	CronJobs_Name_GCLockMerge,
 	CronJobs_Name_ReportStats,
+	CronJobs_Name_Scanner,
 }
 
 var CronJobs_Open_ReplayMode = []string{
@@ -69,6 +75,7 @@ var CronJobs_Spec = map[string][]bool{
 	CronJobs_Name_GCLockMerge:     {true, true, true, false},
 	CronJobs_Name_ReportStats:     {true, true, true, true},
 	CronJobs_Name_Checker:         {true, false, true, false},
+	CronJobs_Name_Scanner:         {true, true, false, false},
 }
 
 func CanAddCronJob(name string, isWriteModeDB, skipMode bool) bool {
@@ -85,6 +92,9 @@ func CanAddCronJob(name string, isWriteModeDB, skipMode bool) bool {
 }
 
 func AddCronJobs(db *DB) (err error) {
+	if objectio.SimpleInjected(objectio.FJ_CronJobsOpen) {
+		return ErrCronJobsOpen
+	}
 	isWriteMode := db.IsWriteMode()
 	if isWriteMode {
 		for _, name := range CronJobs_Open_WriteMode {
@@ -223,6 +233,19 @@ func AddCronJob(db *DB, name string, skipMode bool) (err error) {
 			db.Opts.CheckpointCfg.MetadataCheckInterval,
 			func(ctx context.Context) {
 				db.Catalog.CheckMetadata()
+			},
+			1,
+		)
+		return
+	case CronJobs_Name_Scanner:
+		scanner := NewDBScanner(db, nil)
+		db.MergeScheduler = merge.NewScheduler(db.Runtime, merge.NewTaskServiceGetter(db.Opts.TaskServiceGetter))
+		scanner.RegisterOp(db.MergeScheduler)
+		err = db.CronJobs.AddJob(
+			CronJobs_Name_Scanner,
+			db.Opts.GCCfg.ScanGCInterval,
+			func(ctx context.Context) {
+				scanner.OnExec()
 			},
 			1,
 		)

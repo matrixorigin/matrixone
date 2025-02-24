@@ -28,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -54,7 +53,6 @@ const (
 type CkpReplayer struct {
 	dir        string
 	r          *runner
-	dataF      catalog.DataFactory
 	ckpEntries []*CheckpointEntry
 	ckpdatas   []*logtail.CheckpointData
 	closes     []func()
@@ -348,14 +346,11 @@ func (c *CkpReplayer) ReadCkpFiles() (err error) {
 func (c *CkpReplayer) ReplayThreeTablesObjectlist(phase string) (
 	maxTs types.TS,
 	maxLSN uint64,
-	isLSNValid bool,
-	err error) {
+	err error,
+) {
 	t0 := time.Now()
 	defer func() {
 		c.applyDuration += time.Since(t0)
-		if maxTs.IsEmpty() {
-			isLSNValid = true
-		}
 	}()
 
 	if len(c.ckpEntries) == 0 {
@@ -366,10 +361,9 @@ func (c *CkpReplayer) ReplayThreeTablesObjectlist(phase string) (
 	ctx := c.r.ctx
 	entries := c.ckpEntries
 	datas := c.ckpdatas
-	dataFactory := c.dataF
 	maxGlobal := r.MaxGlobalCheckpoint()
 	if maxGlobal != nil {
-		err = datas[c.globalCkpIdx].ApplyReplayTo(c, r.catalog, dataFactory, true)
+		err = datas[c.globalCkpIdx].ApplyReplayTo(c, r.catalog, true)
 		c.applyCount++
 		logger := logutil.Info
 		if err != nil {
@@ -393,16 +387,13 @@ func (c *CkpReplayer) ReplayThreeTablesObjectlist(phase string) (
 			if maxGlobal.ckpLSN < maxLSN {
 				panic(fmt.Sprintf("logic error, current lsn %d, incoming lsn %d", maxLSN, maxGlobal.ckpLSN))
 			}
-			isLSNValid = true
 			maxLSN = maxGlobal.ckpLSN
 		}
 	}
 	for _, e := range c.emptyFile {
 		if e.end.GE(&maxTs) {
-			return types.TS{}, 0, false,
-				moerr.NewInternalErrorf(ctx,
-					"read checkpoint %v failed",
-					e.String())
+			return types.TS{}, 0,
+				moerr.NewInternalErrorf(ctx, "read checkpoint %v failed", e.String())
 		}
 	}
 	logger := logutil.Info
@@ -415,7 +406,7 @@ func (c *CkpReplayer) ReplayThreeTablesObjectlist(phase string) (
 			continue
 		}
 		start := time.Now()
-		if err = datas[i].ApplyReplayTo(c, r.catalog, dataFactory, true); err != nil {
+		if err = datas[i].ApplyReplayTo(c, r.catalog, true); err != nil {
 			logger = logutil.Error
 		}
 		logger(
@@ -436,14 +427,7 @@ func (c *CkpReplayer) ReplayThreeTablesObjectlist(phase string) (
 			if checkpointEntry.ckpLSN < maxLSN {
 				panic(fmt.Sprintf("logic error, current lsn %d, incoming lsn %d", maxLSN, checkpointEntry.ckpLSN))
 			}
-			isLSNValid = true
 			maxLSN = checkpointEntry.ckpLSN
-		}
-		// For version 7, all ckp LSN of force ickp is 0.
-		// In db.ForceIncrementalCheckpoint，it truncates.
-		// If the last ckp is force ickp，LSN check should be disable.
-		if checkpointEntry.ckpLSN == 0 {
-			isLSNValid = false
 		}
 	}
 	c.wg.Wait()
@@ -481,7 +465,6 @@ func (c *CkpReplayer) ReplayCatalog(
 	closeFn := c.r.catalog.RelayFromSysTableObjects(
 		c.r.ctx,
 		readTxn,
-		c.dataF,
 		tables.ReadSysTableBatch,
 		sortFunc,
 		c,
@@ -504,12 +487,11 @@ func (c *CkpReplayer) ReplayObjectlist(phase string) (err error) {
 	r := c.r
 	entries := c.ckpEntries
 	datas := c.ckpdatas
-	dataFactory := c.dataF
 	maxTs := types.TS{}
 	var ckpVers []uint32
 	var ckpDatas []*logtail.CheckpointData
 	if maxGlobal := r.MaxGlobalCheckpoint(); maxGlobal != nil {
-		err = datas[c.globalCkpIdx].ApplyReplayTo(c, r.catalog, dataFactory, false)
+		err = datas[c.globalCkpIdx].ApplyReplayTo(c, r.catalog, false)
 		if err != nil {
 			return
 		}
@@ -528,7 +510,6 @@ func (c *CkpReplayer) ReplayObjectlist(phase string) (err error) {
 		err = datas[i].ApplyReplayTo(
 			c,
 			r.catalog,
-			dataFactory,
 			false)
 		if err != nil {
 			return
@@ -577,12 +558,10 @@ func (c *CkpReplayer) resetObjectCountMap() {
 
 func (r *runner) BuildReplayer(
 	dir string,
-	dataFactory catalog.DataFactory,
 ) *CkpReplayer {
 	replayer := &CkpReplayer{
 		r:              r,
 		dir:            dir,
-		dataF:          dataFactory,
 		objectCountMap: make(map[uint64]int),
 	}
 	objectWorker := make([]sm.Queue, DefaultObjectReplayWorkerCount)

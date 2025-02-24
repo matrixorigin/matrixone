@@ -47,6 +47,8 @@ const (
 
 	FJ_LogReader    = "fj/log/reader"
 	FJ_LogWorkspace = "fj/log/workspace"
+
+	FJ_CronJobsOpen = "fj/cronjobs/open"
 )
 
 const (
@@ -212,6 +214,29 @@ func InjectLogging(
 		fault.RemoveFaultPoint(context.Background(), key)
 	}
 	return
+}
+
+func SimpleInject(key string) (rmFault func(), err error) {
+	if err = fault.AddFaultPoint(
+		context.Background(),
+		key,
+		":::",
+		"echo",
+		0,
+		"",
+		false,
+	); err != nil {
+		return
+	}
+	rmFault = func() {
+		fault.RemoveFaultPoint(context.Background(), key)
+	}
+	return
+}
+
+func SimpleInjected(key string) bool {
+	_, _, injected := fault.TriggerFault(key)
+	return injected
 }
 
 // inject log reader and partition state
