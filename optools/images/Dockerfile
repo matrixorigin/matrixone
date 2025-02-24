@@ -32,11 +32,11 @@ FROM ubuntu:22.04
 
 COPY --from=builder /go/src/github.com/matrixorigin/matrixone/mo-service /mo-service
 COPY --from=builder /go/src/github.com/matrixorigin/matrixone/etc /etc
-COPY --from=builder /go/src/github.com/matrixorigin/matrixone/thirdparties/install/lib/*.so /usr/lib
+COPY --from=builder /go/src/github.com/matrixorigin/matrixone/thirdparties/install/lib/*.so /usr/lib/x86_64-linux-gnu
 
-ENV LD_LIBRARY_PATH /usr/lib
+ENV LD_LIBRARY_PATH /usr/lib/x86_64-linux-gnu
 RUN ldconfig
-RUN ls /usr/lib
+RUN ls /usr/lib/x86_64-linux-gnu
 RUN echo ${LD_LIBRARY_PATH}
 
 WORKDIR /
