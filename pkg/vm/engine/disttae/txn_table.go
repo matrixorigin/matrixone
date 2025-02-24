@@ -801,6 +801,12 @@ func (tbl *txnTable) doRanges(ctx context.Context, rangesParam engine.RangesPara
 		return
 	}
 
+	if part == nil {
+		if part, err = tbl.getPartitionState(ctx); err != nil {
+			return
+		}
+	}
+
 	blklist := readutil.NewBlockListRelationData(
 		0,
 		readutil.WithPartitionState(part))
