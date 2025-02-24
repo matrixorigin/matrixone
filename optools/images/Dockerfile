@@ -34,8 +34,14 @@ COPY --from=builder /go/src/github.com/matrixorigin/matrixone/mo-service /mo-ser
 COPY --from=builder /go/src/github.com/matrixorigin/matrixone/etc /etc
 COPY --from=builder /go/src/github.com/matrixorigin/matrixone/thirdparties/install/lib/*.so /usr/local/lib
 
-RUN apt-get update && \
-    apt-get install -y libcurl4-openssl-dev libgomp1
+# Install some utilities used for debugging or by startup script
+RUN apt-get update && apt-get install -y \
+    dnsutils \
+    curl \
+    git \
+    cmake \
+    libcurl4-openssl-dev libgomp1 \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 RUN ldconfig
 
