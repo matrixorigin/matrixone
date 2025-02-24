@@ -161,25 +161,18 @@ func (tbl *txnTable) Stats(ctx context.Context, sync bool) (*pb.StatsInfo, error
 		logutil.Errorf("failed to get partition state of table %d: %v", tbl.tableId, err)
 		return nil, err
 	}
-	if !tbl.db.op.IsSnapOp() {
-		//logutil.Infof("xxxx Stats start, table:%s, tableID:%d, txn:%s, sync:%v",
-		//	tbl.tableName, tbl.tableId, tbl.db.op.Txn().DebugString(), sync)
-		stats := tbl.getEngine().Stats(ctx, pb.StatsInfoKey{
-			AccId:      tbl.accountId,
-			DatabaseID: tbl.db.databaseId,
-			TableID:    tbl.tableId,
-			TableName:  tbl.tableName,
-			DbName:     tbl.db.databaseName,
-		}, sync)
-		//logutil.Infof("xxxx Stats end, table:%s, tableID:%d, txn:%s, stats:%p",
-		//	tbl.tableName, tbl.tableId, tbl.db.op.Txn().DebugString(), stats)
-		return stats, nil
-	}
-	info, err := tbl.stats(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return info, nil
+	//logutil.Infof("xxxx Stats start, table:%s, tableID:%d, txn:%s, sync:%v",
+	//	tbl.tableName, tbl.tableId, tbl.db.op.Txn().DebugString(), sync)
+	return tbl.getEngine().Stats(ctx, pb.StatsInfoKey{
+		AccId:      tbl.accountId,
+		DatabaseID: tbl.db.databaseId,
+		TableID:    tbl.tableId,
+		TableName:  tbl.tableName,
+		DbName:     tbl.db.databaseName,
+	}, sync), nil
+	//logutil.Infof("xxxx Stats end, table:%s, tableID:%d, txn:%s, stats:%p",
+	//	tbl.tableName, tbl.tableId, tbl.db.op.Txn().DebugString(), stats)
+	//}
 }
 
 func (tbl *txnTable) stats(ctx context.Context) (*pb.StatsInfo, error) {

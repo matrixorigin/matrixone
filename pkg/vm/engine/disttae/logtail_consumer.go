@@ -418,7 +418,8 @@ func (c *PushClient) toSubscribeTable(
 			c.subscribed.clearTable(dbID, tableID)
 			return nil, moerr.NewInternalErrorf(
 				ctx,
-				"to subcribe table:%d failed, since table is not exist",
+				"%s to subcribe table:%d failed, since table is not exist",
+				logTag,
 				tableID)
 		case Unsubscribing:
 			//need to wait for unsubscribe succeed for making the subscribe and unsubscribe execute in order,
