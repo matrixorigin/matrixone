@@ -2,10 +2,7 @@ package frontend
 
 import (
 	"context"
-	"github.com/google/uuid"
-	"io"
 	"sync"
-	"time"
 )
 
 // BinlogSyncerConfig is the configuration for BinlogSyncer.
@@ -22,47 +19,6 @@ type BinlogSyncerConfig struct {
 	Password string
 
 	EventCacheCount int
-}
-
-type FormatDescriptionEvent struct {
-}
-
-type TableMapEvent struct {
-}
-
-type RowsEvent struct {
-}
-
-type GTIDEvent struct {
-}
-
-type BinlogParser struct {
-	format *FormatDescriptionEvent
-
-	tables map[uint64]*TableMapEvent
-
-	// for rawMode, we only parse FormatDescriptionEvent and RotateEvent
-	rawMode bool
-
-	parseTime               bool
-	timestampStringLocation *time.Location
-
-	// used to start/stop processing
-	stopProcessing uint32
-
-	useDecimal          bool
-	ignoreJSONDecodeErr bool
-	verifyChecksum      bool
-
-	rowsEventDecodeFunc func(*RowsEvent, []byte) error
-
-	tableMapOptionalMetaDecodeFunc func([]byte) error
-}
-
-// Position for binlog filename + position based replication
-type Position struct {
-	Name string
-	Pos  uint32
 }
 
 // BinlogSyncer syncs binlog events from the server.
@@ -94,41 +50,8 @@ type BinlogSyncer struct {
 	retryCount int
 }
 
-// Like MySQL GTID Interval struct, [start, stop), left closed and right open
-// See MySQL rpl_gtid.h
-type Interval struct {
-	// The first GID of this interval.
-	Start int64
-	// The first GID after this interval.
-	Stop int64
-}
-
-type UUIDSet struct {
-	SID uuid.UUID
-
-	Intervals []Interval
-}
-
 type GTIDSet struct {
 	Sets map[string]*UUIDSet
-}
-
-type EventType byte
-
-type EventHeader struct {
-	Timestamp uint32
-	EventType EventType
-	ServerID  uint32
-	EventSize uint32
-	LogPos    uint32
-	Flags     uint16
-}
-
-type Event interface {
-	//Dump Event, format like python-mysql-replication
-	Dump(w io.Writer)
-
-	Decode(data []byte) error
 }
 
 type BinlogEvent struct {
