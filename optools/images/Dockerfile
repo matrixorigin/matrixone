@@ -10,8 +10,6 @@ RUN apt-get update && apt-get install -y \
     curl \
     git \
     cmake \
-    libomp-dev \
-    libcurl4-openssl-dev libgomp1 \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 RUN mkdir -p /go/src/github.com/matrixorigin/matrixone
@@ -42,7 +40,8 @@ RUN ls /usr/local/lib
 RUN apt-get update && \
     apt-get install -y libcurl4-openssl-dev libgomp1
 
-RUN /mo-service -h
+# Debug purpose - run below command to check shared library not found
+# RUN /mo-service -h
 
 WORKDIR /
 
