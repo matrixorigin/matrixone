@@ -46,6 +46,7 @@ func NewLocalDataSource(
 	ctx context.Context,
 	table *txnTable,
 	txnOffset int,
+	pState *logtailreplay.PartitionState,
 	rangesSlice objectio.BlockInfoSlice,
 	extraTombstones engine.Tombstoner,
 	skipReadMem bool,
@@ -75,11 +76,7 @@ func NewLocalDataSource(
 	}
 
 	if source.category != engine.ShardingLocalDataSource {
-		state, err := table.getPartitionState(ctx)
-		if err != nil {
-			return nil, err
-		}
-		source.pState = state
+		source.pState = pState
 	}
 
 	source.table = table
