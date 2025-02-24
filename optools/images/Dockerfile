@@ -11,6 +11,7 @@ RUN apt-get update && apt-get install -y \
     git \
     cmake \
     libomp-dev \
+    libgomp1 \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 RUN mkdir -p /go/src/github.com/matrixorigin/matrixone
