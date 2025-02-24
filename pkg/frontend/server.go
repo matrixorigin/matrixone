@@ -88,7 +88,6 @@ func (mo *MOServer) GetRoutineManager() *RoutineManager {
 func (mo *MOServer) Start() error {
 	logutil.Infof("Server Listening on : %s ", mo.addr)
 	mo.running = true
-	go startReplication(mo.rm.ctx)
 	mo.startListener()
 	setMoServerStarted(mo.service, true)
 	return nil
