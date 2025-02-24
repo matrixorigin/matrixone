@@ -34,7 +34,6 @@ services:
       - AWS_ACCESS_KEY_ID=minio
       - AWS_SECRET_ACCESS_KEY=minio123
       - mo_reuse_enable_checker=true
-      - LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu
     networks:
       monet:
         aliases:
@@ -57,7 +56,6 @@ services:
       - AWS_ACCESS_KEY_ID=minio
       - AWS_SECRET_ACCESS_KEY=minio123
       - mo_reuse_enable_checker=true
-      - LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu
     networks:
       monet:
         aliases:
@@ -79,7 +77,6 @@ services:
       - AWS_ACCESS_KEY_ID=minio
       - AWS_SECRET_ACCESS_KEY=minio123
       - mo_reuse_enable_checker=true
-      - LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu
     networks:
       monet:
         aliases:
@@ -103,7 +100,6 @@ services:
       - AWS_ACCESS_KEY_ID=minio
       - AWS_SECRET_ACCESS_KEY=minio123
       - mo_reuse_enable_checker=true
-      - LD_LIBRARY_PATH=/usr/lib
     networks:
       monet:
         aliases:
