@@ -37,8 +37,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/wal"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 
 	"go.uber.org/zap"
 )
@@ -140,7 +140,7 @@ type txnStore struct {
 	mu         sync.RWMutex
 	rt         *dbutils.Runtime
 	dbs        map[uint64]*txnDB
-	driver     wal.Driver
+	driver     wal.Store
 	txn        txnif.AsyncTxn
 	catalog    *catalog.Catalog
 	cmdMgr     *commandManager
@@ -149,35 +149,40 @@ type txnStore struct {
 	writeOps   atomic.Uint32
 	tracer     *txnTracer
 
-	wg sync.WaitGroup
+	wg        sync.WaitGroup
+	isOffline bool
 }
 
 var TxnStoreFactory = func(
 	ctx context.Context,
 	catalog *catalog.Catalog,
-	driver wal.Driver,
+	driver wal.Store,
 	rt *dbutils.Runtime,
-	maxMessageSize uint64) txnbase.TxnStoreFactory {
+	maxMessageSize uint64,
+) txnbase.TxnStoreFactory {
 	return func() txnif.TxnStore {
-		return newStore(ctx, catalog, driver, rt, maxMessageSize)
+		isOffline := false
+		return newStore(ctx, catalog, driver, rt, isOffline, maxMessageSize)
 	}
 }
 
 func newStore(
 	ctx context.Context,
 	catalog *catalog.Catalog,
-	driver wal.Driver,
+	driver wal.Store,
 	rt *dbutils.Runtime,
+	isOffline bool,
 	maxMessageSize uint64,
 ) *txnStore {
 	return &txnStore{
-		ctx:     ctx,
-		rt:      rt,
-		dbs:     make(map[uint64]*txnDB),
-		catalog: catalog,
-		cmdMgr:  newCommandManager(driver, maxMessageSize),
-		driver:  driver,
-		logs:    make([]entry.Entry, 0),
+		ctx:       ctx,
+		rt:        rt,
+		dbs:       make(map[uint64]*txnDB),
+		catalog:   catalog,
+		cmdMgr:    newCommandManager(driver, maxMessageSize),
+		driver:    driver,
+		isOffline: isOffline,
+		logs:      make([]entry.Entry, 0),
 	}
 }
 
@@ -209,12 +214,20 @@ func (store *txnStore) TriggerTrace(state uint8) {
 func (store *txnStore) GetContext() context.Context    { return store.ctx }
 func (store *txnStore) SetContext(ctx context.Context) { store.ctx = ctx }
 
+func (store *txnStore) IsOffline() bool {
+	return store.isOffline
+}
+
 func (store *txnStore) IsReadonly() bool {
 	return store.writeOps.Load() == 0
 }
 
-func (store *txnStore) IncreateWriteCnt() int {
-	return int(store.writeOps.Add(1))
+func (store *txnStore) IncreateWriteCnt(caller string) (err error) {
+	if store.IsOffline() {
+		return moerr.NewOfflineTxnWriteNoCtx(caller)
+	}
+	store.writeOps.Add(1)
+	return
 }
 
 func (store *txnStore) LogTxnEntry(dbId uint64, tableId uint64, entry txnif.TxnEntry, readedObject, readedTombstone []*common.ID) (err error) {
@@ -270,7 +283,8 @@ func (store *txnStore) Close() error {
 	return err
 }
 
-func (store *txnStore) BindTxn(txn txnif.AsyncTxn) {
+func (store *txnStore) BindTxn(txn txnif.AsyncTxn, offline bool) {
+	store.isOffline = offline
 	store.txn = txn
 }
 
@@ -287,7 +301,9 @@ func (store *txnStore) BatchDedup(dbId, id uint64, pk containers.Vector) (err er
 }
 
 func (store *txnStore) Append(ctx context.Context, dbId, id uint64, data *containers.Batch) error {
-	store.IncreateWriteCnt()
+	if err := store.IncreateWriteCnt("append"); err != nil {
+		return err
+	}
 	db, err := store.getOrSetDB(dbId)
 	if err != nil {
 		return err
@@ -303,7 +319,9 @@ func (store *txnStore) AddDataFiles(
 	dbId, tid uint64,
 	stats containers.Vector,
 ) error {
-	store.IncreateWriteCnt()
+	if err := store.IncreateWriteCnt("add data files"); err != nil {
+		return err
+	}
 	db, err := store.getOrSetDB(dbId)
 	if err != nil {
 		return err
@@ -315,7 +333,9 @@ func (store *txnStore) RangeDelete(
 	id *common.ID, start, end uint32,
 	pkVec containers.Vector, dt handle.DeleteType,
 ) (err error) {
-	store.IncreateWriteCnt()
+	if err = store.IncreateWriteCnt("range delete"); err != nil {
+		return
+	}
 	db, err := store.getOrSetDB(id.DbID)
 	if err != nil {
 		return err
@@ -327,7 +347,9 @@ func (store *txnStore) DeleteByPhyAddrKeys(
 	id *common.ID,
 	rowIDVec, pkVec containers.Vector, dt handle.DeleteType,
 ) (err error) {
-	store.IncreateWriteCnt()
+	if err = store.IncreateWriteCnt("delete by phy addr"); err != nil {
+		return
+	}
 	db, err := store.getOrSetDB(id.DbID)
 	if err != nil {
 		return err
@@ -338,7 +360,10 @@ func (store *txnStore) DeleteByPhyAddrKeys(
 func (store *txnStore) AddPersistedTombstoneFile(
 	id *common.ID, stats objectio.ObjectStats,
 ) (ok bool, err error) {
-	store.IncreateWriteCnt()
+	if err = store.IncreateWriteCnt("append persisted tombstone file"); err != nil {
+		return
+	}
+
 	db, err := store.getOrSetDB(id.DbID)
 	if err != nil {
 		return

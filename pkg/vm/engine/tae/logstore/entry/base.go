@@ -42,6 +42,10 @@ type CkpRanges struct {
 	Command map[uint64]CommandInfo
 }
 
+func (r *CkpRanges) GetMax() uint64 {
+	return r.Ranges.GetMax()
+}
+
 func (r CkpRanges) String() string {
 	s := fmt.Sprintf("G%d-%v", r.Group, r.Ranges)
 	for lsn, cmd := range r.Command {

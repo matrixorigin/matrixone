@@ -2869,6 +2869,7 @@ func makePreUpdateDeletePlan(
 			if err != nil {
 				return -1, err
 			}
+			newPkPos = int32(len(lastProjectList))
 			lastProjectList = append(lastProjectList, cpPkExpr)
 			projNode := &Node{
 				NodeType:    plan.Node_PROJECT,

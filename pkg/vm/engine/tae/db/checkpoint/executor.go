@@ -26,9 +26,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/wal"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 	"go.uber.org/zap"
 )
 
@@ -149,11 +148,11 @@ func (job *checkpointJob) doGlobalCheckpoint(
 
 	files = append(files, name)
 
-	fileEntry, err := store.BuildFilesEntry(files)
+	fileEntry, err := wal.BuildFilesEntry(files)
 	if err != nil {
 		return
 	}
-	_, err = runner.wal.AppendEntry(store.GroupFiles, fileEntry)
+	_, err = runner.wal.AppendEntry(wal.GroupFiles, fileEntry)
 	if err != nil {
 		return
 	}
@@ -232,6 +231,11 @@ func (job *checkpointJob) RunICKP(ctx context.Context) (err error) {
 	}
 
 	lsn = runner.source.GetMaxLSN(entry.start, entry.end)
+	if lsn == 0 {
+		if maxICKP := runner.store.MaxIncrementalCheckpoint(); maxICKP != nil {
+			lsn = maxICKP.LSN()
+		}
+	}
 	if lsn > job.executor.cfg.IncrementalReservedWALCount {
 		lsnToTruncate = lsn - job.executor.cfg.IncrementalReservedWALCount
 	}

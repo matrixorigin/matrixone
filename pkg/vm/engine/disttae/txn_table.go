@@ -2312,6 +2312,7 @@ func (tbl *txnTable) Reset(op client.TxnOperator) error {
 	tbl.proc.Store(txn.proc)
 	tbl.createdInTxn = false
 	tbl.lastTS = op.SnapshotTS()
+	tbl.resetSnapshot()
 	return nil
 }
 

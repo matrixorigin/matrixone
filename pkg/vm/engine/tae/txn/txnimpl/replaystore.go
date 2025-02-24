@@ -23,9 +23,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/wal"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
 var ErrDebugReplay = moerr.NewInternalErrorNoCtx("debug")
@@ -35,7 +35,6 @@ type replayTxnStore struct {
 	Cmd      *txnbase.TxnCmd
 	Observer wal.ReplayObserver
 	catalog  *catalog.Catalog
-	wal      wal.Driver
 	ctx      context.Context
 }
 
@@ -47,12 +46,11 @@ func MakeReplayTxn(
 	cmd *txnbase.TxnCmd,
 	observer wal.ReplayObserver,
 	catalog *catalog.Catalog,
-	wal wal.Driver) *txnbase.Txn {
+) *txnbase.Txn {
 	store := &replayTxnStore{
 		Cmd:      cmd,
 		Observer: observer,
 		catalog:  catalog,
-		wal:      wal,
 		ctx:      ctx,
 	}
 	txn := txnbase.NewPersistedTxn(
@@ -69,6 +67,7 @@ func MakeReplayTxn(
 func (store *replayTxnStore) GetContext() context.Context {
 	return store.ctx
 }
+func (store *replayTxnStore) IsOffline() bool  { return false }
 func (store *replayTxnStore) IsReadonly() bool { return false }
 
 func (store *replayTxnStore) prepareCommit(txn txnif.AsyncTxn) (err error) {

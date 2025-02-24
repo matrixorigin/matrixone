@@ -113,7 +113,6 @@ func (s *Scope) resetForReuse(c *Compile) (err error) {
 	}
 
 	if s.DataSource != nil && !s.DataSource.isConst {
-		s.DataSource.Rel = nil
 		s.DataSource.R = nil
 	}
 
@@ -129,9 +128,6 @@ func (s *Scope) initDataSource(c *Compile) (err error) {
 		return nil
 	}
 
-	if s.DataSource.Rel != nil {
-		return nil
-	}
 	return c.compileTableScanDataSource(s)
 }
 
