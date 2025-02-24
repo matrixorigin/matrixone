@@ -171,10 +171,13 @@ func removeOversize(objs []*catalog.ObjectEntry) []*catalog.ObjectEntry {
 func estimateMergeSize(objs []*catalog.ObjectEntry) int {
 	size := 0
 	for _, o := range objs {
-		if o.Rows() == 0 {
+		blkRow := 8192
+		if r := o.Rows(); r == 0 {
 			continue
+		} else if r < 8192 {
+			blkRow = int(r)
 		}
-		size += 8192 * int(o.OriginSize()/o.Rows())
+		size += blkRow * int(o.OriginSize()/o.Rows()) / 2 * 3
 		size += int(o.Rows()) * estimateMemUsagePerRow
 	}
 	// Go's load factor is 6.5. This means there are average 6.5 key/elem pairs per bucket.
@@ -269,9 +272,8 @@ func (c *resourceController) printStats() {
 func (c *resourceController) reserveResources(objs []*catalog.ObjectEntry) {
 	for _, obj := range objs {
 		c.reservedMergeRows += int64(obj.Rows())
-		c.reserved += estimateMemUsagePerRow * int64(obj.Rows())
-		c.reserved += 8196 * int64(obj.OriginSize()/obj.Rows()) * 6 / 5
 	}
+	c.reserved += int64(estimateMergeSize(objs))
 }
 
 func (c *resourceController) resourceAvailable(objs []*catalog.ObjectEntry) bool {

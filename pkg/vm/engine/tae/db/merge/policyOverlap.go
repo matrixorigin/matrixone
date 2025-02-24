@@ -104,7 +104,7 @@ func (m *objOverlapPolicy) revise(rc *resourceController) []reviseResult {
 					sum = 0
 				}
 			}
-			if len(tmp) > 1 {
+			if len(tmp) > 200 { // let the little objs accumulate to a certain number
 				reviseResults = append(reviseResults, reviseResult{objs: removeOversize(slices.Clone(tmp)), kind: taskHostDN})
 			}
 		}
