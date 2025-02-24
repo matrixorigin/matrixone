@@ -43,6 +43,9 @@ type IndexTableConfig struct {
 	KeyPart       string `json:"part"`
 	ThreadsBuild  int64  `json:"threads_build"`
 	ThreadsSearch int64  `json:"threads_search"`
+
+	// IVF related
+	EntriesTable string `json:"entries"`
 }
 
 // HNSW specified parameters
@@ -52,6 +55,12 @@ type HnswParam struct {
 	Quantization   string `json:"quantization"`
 	OpType         string `json:"op_type"`
 	EfSearch       string `json:"ef_search"`
+}
+
+// IVF specified parameters
+type IvfParam struct {
+	Lists  string `json:"lists"`
+	OpType string `json:"op_type"`
 }
 
 // This is generalized index config and able to share between various algorithm types.  Simply add your new configuration such as usearch.IndexConfig

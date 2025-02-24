@@ -15,6 +15,7 @@
 package compile
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"strconv"
@@ -24,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -182,6 +184,33 @@ func (s *Scope) handleIvfIndexMetaTable(c *Compile, indexDef *plan.IndexDef, qry
 func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef,
 	qryDatabase string, originalTableDef *plan.TableDef, totalCnt int64, metadataTableName string) error {
 
+	var cfg vectorindex.IndexTableConfig
+	src_alias := "src"
+	pkColName := src_alias + "." + originalTableDef.Pkey.PkeyColName
+
+	cfg.MetadataTable = metadataTableName
+	cfg.IndexTable = indexDef.IndexTableName
+	cfg.DbName = qryDatabase
+	cfg.SrcTable = originalTableDef.Name
+	cfg.PKey = pkColName
+	cfg.KeyPart = indexDef.Parts[0]
+	/*
+		val, err := proc.GetResolveVariableFunc()("hnsw_threads_build", true, false)
+		if err != nil {
+			return nil, err
+		}
+		cfg.ThreadsBuild = val.(int64)
+	*/
+
+	params_str := indexDef.IndexAlgoParams
+
+	cfgbytes, err := json.Marshal(cfg)
+	if err != nil {
+		return err
+	}
+
+	part := src_alias + "." + indexDef.Parts[0]
+
 	// 1.a algo params
 	params, err := catalog.IndexParamsStringToMap(indexDef.IndexAlgoParams)
 	if err != nil {
@@ -191,46 +220,20 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef
 	if err != nil {
 		return err
 	}
-	centroidParamsDistFn := catalog.ToLower(params[catalog.IndexAlgoParamOpType])
-	kmeansInitType := "kmeansplusplus"
-	kmeansNormalize := "false"
+	//centroidParamsDistFn := catalog.ToLower(params[catalog.IndexAlgoParamOpType])
+	//kmeansInitType := "kmeansplusplus"
+	//kmeansNormalize := "false"
 
-	// 1.b init centroids table with default centroid, if centroids are not enough.
-	// NOTE: we can run re-index to improve the centroid quality.
-	if totalCnt == 0 || totalCnt < int64(centroidParamsLists) {
-		initSQL := fmt.Sprintf("INSERT INTO `%s`.`%s` (`%s`, `%s`, `%s`) "+
-			"SELECT "+
-			"(SELECT CAST(`%s` AS BIGINT) FROM `%s`.`%s` WHERE `%s` = 'version'), "+
-			"1, NULL;",
-			qryDatabase,
-			indexDef.IndexTableName,
-			catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
-			catalog.SystemSI_IVFFLAT_TblCol_Centroids_id,
-			catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid,
-
-			catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
-			qryDatabase,
-			metadataTableName,
-			catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
-		)
-		err := c.runSql(initSQL)
-		if err != nil {
-			return err
-		}
-		return nil
-	}
-
-	// 2. Sampling SQL Logic
 	sampleCnt := catalog.CalcSampleCount(int64(centroidParamsLists), totalCnt)
 	/*
-		indexColumnName := indexDef.Parts[0]
-		sampleSQL := fmt.Sprintf("(select sample(`%s`, %d rows, 'row') as `%s` from `%s`.`%s`)",
-			indexColumnName,
-			sampleCnt,
-			indexColumnName,
-			qryDatabase,
-			originalTableDef.Name,
-		)
+	   indexColumnName := indexDef.Parts[0]
+	   sampleSQL := fmt.Sprintf("(select sample(`%s`, %d rows, 'row') as `%s` from `%s`.`%s`)",
+	           indexColumnName,
+	           sampleCnt,
+	           indexColumnName,
+	           qryDatabase,
+	           originalTableDef.Name,
+	   )
 	*/
 	indexColumnName := indexDef.Parts[0]
 	sampleSQL := fmt.Sprintf("(SELECT %s from `%s`.`%s` LIMIT %d)",
@@ -239,62 +242,22 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef
 		originalTableDef.Name,
 		sampleCnt)
 
-	os.Stderr.WriteString(sampleSQL)
-	os.Stderr.WriteString("\n")
+	insertIntoIvfIndexTableFormat := "SELECT f.* from %s AS %s CROSS APPLY ivf_create('%s', '%s', %s) AS f;"
 
-	// 3. Insert into centroids table
-	insertSQL := fmt.Sprintf("insert into `%s`.`%s` (`%s`, `%s`, `%s`)",
-		qryDatabase,
-		indexDef.IndexTableName,
-		catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
-		catalog.SystemSI_IVFFLAT_TblCol_Centroids_id,
-		catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid)
-
-	/*
-		Sample SQL:
-
-		SELECT
-		(SELECT CAST(`value` AS BIGINT) FROM meta WHERE `key` = 'version'),
-		ROW_NUMBER() OVER(),
-		cast(`__mo_index_unnest_cols`.`value` as VARCHAR)
-		FROM
-		(SELECT cluster_centers(`embedding` kmeans '2,vector_l2_ops') AS `__mo_index_centroids_string` FROM (select sample(embedding, 10 rows) as embedding from tbl) ) AS `__mo_index_centroids_tbl`
-		CROSS JOIN
-		UNNEST(`__mo_index_centroids_tbl`.`__mo_index_centroids_string`) AS `__mo_index_unnest_cols`;
-	*/
-	// 4. final SQL
-	clusterCentersSQL := fmt.Sprintf("%s "+
-		"SELECT "+
-		"(SELECT CAST(`%s` AS BIGINT) FROM `%s` WHERE `%s` = 'version'), "+
-		"ROW_NUMBER() OVER(), "+
-		"cast(`__mo_index_unnest_cols`.`value` as VARCHAR) "+
-		"FROM "+
-		"(SELECT cluster_centers(`%s` kmeans '%d,%s,%s,%s') AS `__mo_index_centroids_string` FROM %s ) AS `__mo_index_centroids_tbl` "+
-		"CROSS JOIN "+
-		"UNNEST(`__mo_index_centroids_tbl`.`__mo_index_centroids_string`) AS `__mo_index_unnest_cols`;",
-		insertSQL,
-
-		catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
-		metadataTableName,
-		catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
-
-		indexColumnName,
-		centroidParamsLists,
-		centroidParamsDistFn,
-		kmeansInitType,
-		kmeansNormalize,
+	sql := fmt.Sprintf(insertIntoIvfIndexTableFormat,
 		sampleSQL,
-	)
-
-	os.Stderr.WriteString(clusterCentersSQL)
-	os.Stderr.WriteString("\n")
+		qryDatabase, originalTableDef.Name,
+		src_alias,
+		params_str,
+		string(cfgbytes),
+		part)
 
 	err = s.logTimestamp(c, qryDatabase, metadataTableName, "clustering_start")
 	if err != nil {
 		return err
 	}
 
-	err = c.runSql(clusterCentersSQL)
+	err = c.runSql(sql)
 	if err != nil {
 		return err
 	}
