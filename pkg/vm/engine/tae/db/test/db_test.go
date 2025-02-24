@@ -10081,6 +10081,7 @@ func TestCKPCollectObject(t *testing.T) {
 			loc, _, _, err := ckpData.WriteTo(ctx, tae.Opts.Fs)
 			assert.NoError(t, err)
 			reader, err := logtail.GetCKPDataReader(ctx, loc, logtail.CheckpointCurrentVersion, common.DebugAllocator, tae.Opts.Fs)
+			defer reader.Close()
 			assert.NoError(t, err)
 			bat2 := reader.GetBatch()
 			assert.Equal(t, 1, bat2.RowCount())
@@ -11389,9 +11390,3 @@ func TestDedupx(t *testing.T) {
 		t.Log(nit.Item().StringWithLevel(2))
 	}
 }
-
-// TODO test ckpdata.ExportStats
-// TODO test read ckp entry after gc (handle error)
-// TODO test mpool
-// TODO test get ckp data v12
-// test cn read ckp, multiple batches
