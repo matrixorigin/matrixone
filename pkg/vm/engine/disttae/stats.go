@@ -671,7 +671,7 @@ func (gs *GlobalStats) broadcastStats(key pb.StatsInfoKey) {
 func (gs *GlobalStats) updateTableStats(wrapKey pb.StatsInfoKeyWithContext) {
 	statser := statistic.StatsInfoFromContext(wrapKey.Ctx)
 	crs := new(perfcounter.CounterSet)
-
+	//logutil.Infof("xxxx updateTableStats,start to update table stats, table ID: %d", wrapKey.Key.TableID)
 	if !gs.shouldUpdate(wrapKey.Key) {
 		return
 	}
@@ -699,10 +699,14 @@ func (gs *GlobalStats) updateTableStats(wrapKey pb.StatsInfoKeyWithContext) {
 		wrapKey.Key.DatabaseID,
 		wrapKey.Key.DbName)
 	if err != nil {
-		logutil.Errorf("wait logtail updated error: %s, table ID: %d", err, wrapKey.Key.TableID)
+		logutil.Errorf(
+			"updateTableStats:Failed to subsrcribe table:%d, err:%s",
+			wrapKey.Key.TableID,
+			err)
 		broadcastWithoutUpdate()
 		return
 	}
+	//logutil.Infof("xxxx updateTableStats,subscribe table success, table ID: %d", wrapKey.Key.TableID)
 
 	// wait until the table's logtail has been updated.
 	//logtailUpdated, err := gs.waitLogtailUpdated(wrapKey.Key.TableID)
@@ -735,9 +739,11 @@ func (gs *GlobalStats) updateTableStats(wrapKey pb.StatsInfoKeyWithContext) {
 	gs.mu.Lock()
 	defer gs.mu.Unlock()
 	if updated {
+		logutil.Infof("xxxx updateTableStats,update table stats success, table ID: %d", wrapKey.Key.TableID)
 		gs.mu.statsInfoMap[wrapKey.Key] = stats
 		gs.broadcastStats(wrapKey.Key)
 	} else if _, ok := gs.mu.statsInfoMap[wrapKey.Key]; !ok {
+		logutil.Infof("xxxx updateTableStats,update table stats failed, table ID: %d", wrapKey.Key.TableID)
 		gs.mu.statsInfoMap[wrapKey.Key] = nil
 	}
 

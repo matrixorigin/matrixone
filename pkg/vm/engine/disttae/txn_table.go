@@ -156,19 +156,24 @@ func (tbl *txnTable) PrefetchAllMeta(ctx context.Context) bool {
 }
 
 func (tbl *txnTable) Stats(ctx context.Context, sync bool) (*pb.StatsInfo, error) {
-	//_, err := tbl.getPartitionState(ctx)
-	//if err != nil {
-	//	logutil.Errorf("failed to get partition state of table %d: %v", tbl.tableId, err)
-	//	return nil, err
-	//}
+	_, err := tbl.getPartitionState(ctx)
+	if err != nil {
+		logutil.Errorf("failed to get partition state of table %d: %v", tbl.tableId, err)
+		return nil, err
+	}
 	if !tbl.db.op.IsSnapOp() {
-		return tbl.getEngine().Stats(ctx, pb.StatsInfoKey{
+		//logutil.Infof("xxxx Stats start, table:%s, tableID:%d, txn:%s, sync:%v",
+		//	tbl.tableName, tbl.tableId, tbl.db.op.Txn().DebugString(), sync)
+		stats := tbl.getEngine().Stats(ctx, pb.StatsInfoKey{
 			AccId:      tbl.accountId,
 			DatabaseID: tbl.db.databaseId,
 			TableID:    tbl.tableId,
 			TableName:  tbl.tableName,
 			DbName:     tbl.db.databaseName,
-		}, sync), nil
+		}, sync)
+		//logutil.Infof("xxxx Stats end, table:%s, tableID:%d, txn:%s, stats:%p",
+		//	tbl.tableName, tbl.tableId, tbl.db.op.Txn().DebugString(), stats)
+		return stats, nil
 	}
 	info, err := tbl.stats(ctx)
 	if err != nil {
@@ -1990,7 +1995,6 @@ func (tbl *txnTable) tryToSubscribe(ctx context.Context) (ps *logtailreplay.Part
 		tbl.tableName,
 		tbl.db.databaseId,
 		tbl.db.databaseName)
-
 	return ps, err
 }
 

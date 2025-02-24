@@ -414,6 +414,12 @@ func (c *PushClient) toSubscribeTable(
 			if err != nil {
 				return nil, err
 			}
+		case SubRspTableNotExist:
+			c.subscribed.clearTable(dbID, tableID)
+			return nil, moerr.NewInternalErrorf(
+				ctx,
+				"to subcribe table:%d failed, since table is not exist",
+				tableID)
 		case Unsubscribing:
 			//need to wait for unsubscribe succeed for making the subscribe and unsubscribe execute in order,
 			// otherwise the partition state will leak log tails.
@@ -627,6 +633,17 @@ func (c *PushClient) receiveOneLogtail(ctx context.Context, e *Engine) error {
 			logutil.Errorf("%s dispatch unsubscribe response failed, err: %s", logTag, err)
 			return err
 		}
+	} else if errRsp := resp.response.GetError(); errRsp != nil {
+		status := errRsp.GetStatus()
+		if uint16(status.GetCode()) == moerr.OkExpectedEOB {
+			c.subscribed.setTableSubNotExist(
+				errRsp.GetTable().GetDbId(),
+				errRsp.GetTable().GetTbId())
+		}
+		logutil.Errorf("%s subsribe table:%d failed, err:%s",
+			logTag,
+			errRsp.GetTable().GetTbId(),
+			status.GetMessage())
 	}
 	return nil
 }
@@ -1323,6 +1340,24 @@ func (c *PushClient) Disconnect() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.subscriber.logTailClient.Close()
+}
+
+func (s *subscribedTable) setTableSubNotExist(dbId, tblId uint64) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	s.m[tblId] = SubTableStatus{
+		DBID:       dbId,
+		SubState:   SubRspTableNotExist,
+		LatestTime: time.Now(),
+	}
+	logutil.Infof("%s subscribe tbl[db: %d, tbl: %d] response failed, since table is not exist",
+		logTag, dbId, tblId)
+}
+
+func (s *subscribedTable) clearTable(dbId, tblId uint64) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	delete(s.m, tblId)
 }
 
 func (s *subscribedTable) setTableSubscribed(dbId, tblId uint64) {
