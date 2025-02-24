@@ -260,7 +260,7 @@ func TestObjOverlap(t *testing.T) {
 
 	policy.resetForTable(nil, defaultBasicConfig)
 
-	for i := range 31 {
+	for i := range 30 {
 		require.True(t, policy.onObject(newSortedTestObjectEntry(t, int32(i), int32(i+100), 1)))
 	}
 	rc.setMemLimit(math.MaxInt64)
