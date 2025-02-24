@@ -10,6 +10,7 @@ RUN apt-get update && apt-get install -y \
     curl \
     git \
     cmake \
+    libomp-dev \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 RUN mkdir -p /go/src/github.com/matrixorigin/matrixone
@@ -32,12 +33,10 @@ FROM ubuntu:22.04
 
 COPY --from=builder /go/src/github.com/matrixorigin/matrixone/mo-service /mo-service
 COPY --from=builder /go/src/github.com/matrixorigin/matrixone/etc /etc
-COPY --from=builder /go/src/github.com/matrixorigin/matrixone/thirdparties/install/lib/*.so /usr/lib/x86_64-linux-gnu
+COPY --from=builder /go/src/github.com/matrixorigin/matrixone/thirdparties/install/lib/*.so /usr/local/lib
 
-#ENV LD_LIBRARY_PATH /usr/lib/x86_64-linux-gnu
 RUN ldconfig
-RUN ls /usr/lib/x86_64-linux-gnu
-#RUN echo ${LD_LIBRARY_PATH}
+RUN ls /usr/local/lib
 
 RUN /mo-service -h
 
