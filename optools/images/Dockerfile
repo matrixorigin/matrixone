@@ -34,11 +34,10 @@ COPY --from=builder /go/src/github.com/matrixorigin/matrixone/mo-service /mo-ser
 COPY --from=builder /go/src/github.com/matrixorigin/matrixone/etc /etc
 COPY --from=builder /go/src/github.com/matrixorigin/matrixone/thirdparties/install/lib/*.so /usr/local/lib
 
-RUN ldconfig
-RUN ls /usr/local/lib
-
 RUN apt-get update && \
     apt-get install -y libcurl4-openssl-dev libgomp1
+
+RUN ldconfig
 
 # Debug purpose - run below command to check shared library not found
 # RUN /mo-service -h
