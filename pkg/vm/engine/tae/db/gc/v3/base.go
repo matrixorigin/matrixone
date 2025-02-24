@@ -28,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
-	"unsafe"
 )
 
 const (
@@ -255,7 +254,7 @@ func MakeFinalCanGCSinker(
 		}
 		for i := 0; i < bat.Vecs[0].Length(); i++ {
 			buf := bat.Vecs[0].GetRawBytesAt(i)
-			stats := (*objectio.ObjectStats)(unsafe.Pointer(&buf[0]))
+			stats := (objectio.ObjectStats)(buf)
 			name := stats.ObjectName().String()
 			dropTS := dropTSs[i]
 			tableID := tableIDs[i]
