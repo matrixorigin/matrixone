@@ -16,7 +16,6 @@ package gc
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"sync"
 )
@@ -32,11 +31,7 @@ type ObjectEntry struct {
 var objectEntryPool = sync.Pool{
 	New: func() interface{} {
 		return &ObjectEntry{
-			stats:    new(objectio.ObjectStats),
-			createTS: types.TS{},
-			dropTS:   types.TS{},
-			db:       0,
-			table:    0,
+			stats: new(objectio.ObjectStats),
 		}
 	},
 }
@@ -45,13 +40,8 @@ func NewObjectEntry() *ObjectEntry {
 	entry, ok := objectEntryPool.Get().(*ObjectEntry)
 	if !ok {
 		// Defensive programming: create a new instance when the pool is polluted
-		logutil.Warn("objectEntryPool contains invalid type")
 		return &ObjectEntry{
-			stats:    new(objectio.ObjectStats),
-			createTS: types.TS{},
-			dropTS:   types.TS{},
-			db:       0,
-			table:    0,
+			stats: new(objectio.ObjectStats),
 		}
 	}
 	return entry
