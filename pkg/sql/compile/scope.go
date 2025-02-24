@@ -636,8 +636,6 @@ func (s *Scope) getRelData(c *Compile, blockExprList []*plan.Expr) error {
 		}
 
 		s.NodeInfo.Data.AppendBlockInfoSlice(commited.GetBlockInfoSlice())
-		s.NodeInfo.Data.SetPState(commited.GetPState())
-
 	} else {
 		tombstones := s.NodeInfo.Data.GetTombstones()
 		commited.AttachTombstones(tombstones)
@@ -975,8 +973,6 @@ func (s *Scope) aggOptimize(c *Compile, rel engine.Relation, ctx context.Context
 			}); err != nil {
 				return err
 			}
-
-			newRelData.SetPState(s.NodeInfo.Data.GetPState())
 
 			if partialResults != nil {
 				s.NodeInfo.Data = newRelData

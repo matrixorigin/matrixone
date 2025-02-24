@@ -201,12 +201,13 @@ func (h *CheckpointChangesHandle) initReader(ctx context.Context) (err error) {
 	); err != nil {
 		return
 	}
-	relData := readutil.NewBlockListRelationData(1)
+	relData := readutil.NewBlockListRelationData(
+		1,
+		readutil.WithPartitionState(part))
 	h.blockList = blockList
 	for i, end := 0, blockList.Len(); i < end; i++ {
 		relData.AppendBlockInfo(blockList.Get(i))
 	}
-	relData.SetPState(part)
 
 	readers, err := h.table.BuildReaders(
 		ctx,

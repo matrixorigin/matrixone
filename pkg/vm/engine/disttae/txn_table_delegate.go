@@ -311,7 +311,14 @@ func (tbl *txnTableDelegate) Ranges(ctx context.Context, rangesParam engine.Rang
 		return nil, err
 	}
 
-	ret := readutil.NewBlockListRelationData(0)
+	part, err := tbl.origin.getPartitionState(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	ret := readutil.NewBlockListRelationData(
+		0,
+		readutil.WithPartitionState(part))
 
 	for i := 0; i < rs.DataCnt(); i++ {
 		blk := rs.GetBlockInfo(i)
@@ -321,12 +328,6 @@ func (tbl *txnTableDelegate) Ranges(ctx context.Context, rangesParam engine.Rang
 	for i := 0; i < len(blocks); i++ {
 		ret.AppendBlockInfo(blocks.Get(i))
 	}
-
-	part, err := tbl.origin.getPartitionState(ctx)
-	if err != nil {
-		return nil, err
-	}
-	ret.SetPState(part)
 
 	return ret, nil
 }
@@ -575,12 +576,14 @@ func (tbl *txnTableDelegate) BuildShardingReaders(
 
 	//relData maybe is nil, indicate that only read data from memory.
 	if relData == nil || relData.DataCnt() == 0 {
-		relData = readutil.NewBlockListRelationData(1)
-		part, err := tbl.origin.getPartitionState(ctx)
-		if err != nil {
-			return nil, err
+		part, err2 := tbl.origin.getPartitionState(ctx)
+		if err2 != nil {
+			return nil, err2
 		}
-		relData.SetPState(part)
+
+		relData = readutil.NewBlockListRelationData(
+			1,
+			readutil.WithPartitionState(part))
 	}
 
 	blkCnt := relData.DataCnt()
@@ -606,7 +609,6 @@ func (tbl *txnTableDelegate) BuildShardingReaders(
 		}
 
 		localRelData, remoteRelData := group(shard)
-		localRelData.SetPState(relData.GetPState())
 
 		srd := &shardingLocalReader{
 			tblDelegate:           tbl,

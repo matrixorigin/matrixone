@@ -263,12 +263,6 @@ func HandleShardingReadBuildReader(
 		return nil, err
 	}
 
-	part, err := tbl.getPartitionState(ctx)
-	if err != nil {
-		return nil, err
-	}
-	relData.SetPState(part)
-
 	ds, err := tbl.buildLocalDataSource(
 		ctx,
 		0,

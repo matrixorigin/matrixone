@@ -16,7 +16,6 @@ package disttae
 
 import (
 	"context"
-	"github.com/stretchr/testify/require"
 	"testing"
 	"time"
 
@@ -249,14 +248,4 @@ func BenchmarkTxnTableInsert(b *testing.B) {
 		)
 		assert.Nil(b, err)
 	}
-}
-
-func TestPartitionedRelData(t *testing.T) {
-	data := partitionedRelData{}
-	require.Panics(t, func() {
-		data.GetPState()
-	})
-	require.Panics(t, func() {
-		data.SetPState(nil)
-	})
 }

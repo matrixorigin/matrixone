@@ -55,13 +55,5 @@ func TestEmptyRelationData(t *testing.T) {
 		relData.DataSlice(0, 0)
 	})
 
-	require.Panics(t, func() {
-		relData.GetPState()
-	})
-
-	require.Panics(t, func() {
-		relData.SetPState(nil)
-	})
-
 	require.Equal(t, 0, relData.DataCnt())
 }

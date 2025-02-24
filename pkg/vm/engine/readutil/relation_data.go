@@ -84,14 +84,6 @@ func (rd *EmptyRelationData) GetBlockInfoSlice() objectio.BlockInfoSlice {
 	panic("not supported")
 }
 
-func (rd *EmptyRelationData) GetPState() any {
-	panic("not supported")
-}
-
-func (rd *EmptyRelationData) SetPState(pState any) {
-	panic("not supported")
-}
-
 func (rd *EmptyRelationData) GetBlockInfo(i int) objectio.BlockInfo {
 	panic("not supported")
 }
@@ -197,11 +189,27 @@ func (rd *EmptyRelationData) DataCnt() int {
 	return 0
 }
 
+func WithPartitionState(part any) func(*BlockListRelData) {
+	return func(blrd *BlockListRelData) {
+		blrd.pState = part
+	}
+}
+
 // emptyCnt is the number of empty blocks preserved
-func NewBlockListRelationData(emptyCnt int) *BlockListRelData {
-	return &BlockListRelData{
+func NewBlockListRelationData(
+	emptyCnt int,
+	opts ...func(op *BlockListRelData),
+) *BlockListRelData {
+
+	blrd := &BlockListRelData{
 		blklist: objectio.MakeBlockInfoSlice(emptyCnt),
 	}
+
+	for i := range opts {
+		opts[i](blrd)
+	}
+
+	return blrd
 }
 
 func NewBlockListRelationDataOfObject(
@@ -216,6 +224,7 @@ func NewBlockListRelationDataOfObject(
 }
 
 type ObjListRelData struct {
+	PState           any
 	NeedFirstEmpty   bool
 	expanded         bool
 	TotalBlocks      uint32
@@ -228,6 +237,10 @@ func (or *ObjListRelData) expand() {
 	if !or.expanded {
 		or.expanded = true
 		or.blocklistRelData.blklist = objectio.MultiObjectStatsToBlockInfoSlice(or.Objlist, or.NeedFirstEmpty)
+	}
+
+	if or.blocklistRelData.pState == nil {
+		or.blocklistRelData.pState = or.PState
 	}
 }
 
@@ -264,6 +277,11 @@ func (or *ObjListRelData) Split(cpunum int) []engine.RelData {
 		or.expand()
 		return or.blocklistRelData.Split(cpunum)
 	}
+
+	if or.blocklistRelData.pState == nil {
+		or.blocklistRelData.pState = or.PState
+	}
+
 	//split by range shuffle
 	result := make([]engine.RelData, cpunum)
 	for i := range result {
@@ -311,24 +329,12 @@ func (or *ObjListRelData) Split(cpunum int) []engine.RelData {
 		panic("wrong blocks cnt after objlist reldata split!")
 	}
 
-	for i := range result {
-		result[i].SetPState(or.GetPState())
-	}
-
 	return result
 }
 
 func (or *ObjListRelData) GetBlockInfoSlice() objectio.BlockInfoSlice {
 	or.expand()
 	return or.blocklistRelData.GetBlockInfoSlice()
-}
-
-func (or *ObjListRelData) GetPState() any {
-	return or.blocklistRelData.pState
-}
-
-func (or *ObjListRelData) SetPState(pState any) {
-	or.blocklistRelData.SetPState(pState)
 }
 
 func (or *ObjListRelData) BuildEmptyRelData(i int) engine.RelData {
@@ -439,22 +445,22 @@ func (relData *BlockListRelData) Split(i int) []engine.RelData {
 			shards[j] = relData.DataSlice(current, current+divide)
 			current = current + divide
 		}
-		shards[j].SetPState(relData.pState)
 	}
 	return shards
-}
-
-func (relData *BlockListRelData) GetBlockInfoSlice() objectio.BlockInfoSlice {
-	return relData.blklist.GetAllBytes()
 }
 
 func (relData *BlockListRelData) GetPState() any {
 	return relData.pState
 }
 
+func (relData *BlockListRelData) GetBlockInfoSlice() objectio.BlockInfoSlice {
+	return relData.blklist.GetAllBytes()
+}
+
 func (relData *BlockListRelData) BuildEmptyRelData(i int) engine.RelData {
 	l := make([]byte, 0, objectio.BlockInfoSize*i)
 	return &BlockListRelData{
+		pState:  relData.pState,
 		blklist: l,
 	}
 }
@@ -469,10 +475,6 @@ func (relData *BlockListRelData) SetBlockInfo(i int, blk *objectio.BlockInfo) {
 
 func (relData *BlockListRelData) SetBlockList(slice objectio.BlockInfoSlice) {
 	relData.blklist = slice
-}
-
-func (relData *BlockListRelData) SetPState(pState any) {
-	relData.pState = pState
 }
 
 func (relData *BlockListRelData) AppendBlockInfo(blk *objectio.BlockInfo) {
@@ -565,6 +567,7 @@ func (relData *BlockListRelData) GetTombstones() engine.Tombstoner {
 func (relData *BlockListRelData) DataSlice(i, j int) engine.RelData {
 	blist := objectio.BlockInfoSlice(relData.blklist.Slice(i, j))
 	return &BlockListRelData{
+		pState:     relData.pState,
 		blklist:    blist,
 		tombstones: relData.tombstones,
 	}

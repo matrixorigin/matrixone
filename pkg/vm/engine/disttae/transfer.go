@@ -480,16 +480,18 @@ func doTransferRowids(
 		return
 	}
 
-	relData := readutil.NewBlockListRelationData(1)
-	for i, end := 0, blockList.Len(); i < end; i++ {
-		relData.AppendBlockInfo(blockList.Get(i))
-	}
-
 	part, err := table.getPartitionState(ctx)
 	if err != nil {
 		return err
 	}
-	relData.SetPState(part)
+
+	relData := readutil.NewBlockListRelationData(
+		1,
+		readutil.WithPartitionState(part))
+
+	for i, end := 0, blockList.Len(); i < end; i++ {
+		relData.AppendBlockInfo(blockList.Get(i))
+	}
 
 	readers, err := table.BuildReaders(
 		ctx,

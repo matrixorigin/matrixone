@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -642,9 +643,16 @@ func (tbl *txnTable) Ranges(ctx context.Context, rangesParam engine.RangesParam)
 
 func (tbl *txnTable) getObjList(ctx context.Context, rangesParam engine.RangesParam) (data engine.RelData, err error) {
 	needUncommited := rangesParam.Policy&engine.Policy_CollectUncommittedData != 0
+
+	var part *logtailreplay.PartitionState
+	if part, err = tbl.getPartitionState(ctx); err != nil {
+		return
+	}
+
 	objRelData := &readutil.ObjListRelData{
 		NeedFirstEmpty: needUncommited,
 		Rsp:            rangesParam.Rsp,
+		PState:         part,
 	}
 
 	if needUncommited {
@@ -655,12 +663,9 @@ func (tbl *txnTable) getObjList(ctx context.Context, rangesParam engine.RangesPa
 		}
 	}
 
-	var part *logtailreplay.PartitionState
 	// get the table's snapshot
-	if rangesParam.Policy&engine.Policy_CollectCommittedData != 0 {
-		if part, err = tbl.getPartitionState(ctx); err != nil {
-			return
-		}
+	if !(rangesParam.Policy&engine.Policy_CollectCommittedData != 0) {
+		part = nil
 	}
 
 	if err = ForeachSnapshotObjects(
@@ -677,7 +682,6 @@ func (tbl *txnTable) getObjList(ctx context.Context, rangesParam engine.RangesPa
 		return nil, err
 	}
 
-	objRelData.SetPState(part)
 	data = objRelData
 	return
 }
@@ -797,10 +801,12 @@ func (tbl *txnTable) doRanges(ctx context.Context, rangesParam engine.RangesPara
 		return
 	}
 
-	blklist := &readutil.BlockListRelData{}
-	blklist.SetPState(part)
+	blklist := readutil.NewBlockListRelationData(
+		0,
+		readutil.WithPartitionState(part))
 	blklist.SetBlockList(blocks)
 	data = blklist
+
 	return
 }
 
@@ -1788,6 +1794,16 @@ func BuildLocalDataSource(
 		engine.GeneralLocalDataSource)
 }
 
+func extractPStateFromRelData(relData engine.RelData) *logtailreplay.PartitionState {
+	if x1, o1 := relData.(*readutil.ObjListRelData); o1 {
+		return x1.PState.(*logtailreplay.PartitionState)
+	} else if x2, o2 := relData.(*readutil.BlockListRelData); o2 {
+		return x2.GetPState().(*logtailreplay.PartitionState)
+	}
+
+	return nil
+}
+
 func (tbl *txnTable) buildLocalDataSource(
 	ctx context.Context,
 	txnOffset int,
@@ -1799,7 +1815,21 @@ func (tbl *txnTable) buildLocalDataSource(
 	switch relData.GetType() {
 	case engine.RelDataObjList, engine.RelDataBlockList:
 		var pState *logtailreplay.PartitionState
-		pState = relData.GetPState().(*logtailreplay.PartitionState)
+
+		pState = extractPStateFromRelData(relData)
+		if pState == nil {
+			part, err2 := tbl.getPartitionState(ctx)
+			if err2 != nil {
+				return nil, err2
+			}
+
+			pState = part
+
+			logutil.Warn("RELDATA-WITH-EMPTY-PSTATE",
+				zap.String("db", tbl.db.databaseName),
+				zap.String("table", tbl.tableName),
+				zap.String("stack", string(debug.Stack())))
+		}
 
 		ranges := relData.GetBlockInfoSlice()
 		skipReadMem := !bytes.Equal(
@@ -1868,13 +1898,14 @@ func (tbl *txnTable) BuildReaders(
 
 	//relData maybe is nil, indicate that only read data from memory.
 	if relData == nil || relData.DataCnt() == 0 {
-		relData = readutil.NewBlockListRelationData(1)
-
 		part, err := tbl.getPartitionState(ctx)
 		if err != nil {
 			return nil, err
 		}
-		relData.SetPState(part)
+
+		relData = readutil.NewBlockListRelationData(
+			1,
+			readutil.WithPartitionState(part))
 	}
 
 	blkCnt := relData.DataCnt()

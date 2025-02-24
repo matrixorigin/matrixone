@@ -119,7 +119,6 @@ func (t *partitionTxnTable) BuildReaders(
 		if !ok {
 			data = relData.BuildEmptyRelData(n)
 			data.AttachTombstones(data.GetTombstones())
-			data.SetPState(relData.GetPState())
 			m[int(value.PartitionIdx)] = data
 		}
 		data.AppendBlockInfo(value)
@@ -519,14 +518,6 @@ func (r *partitionedRelData) DataCnt() int {
 
 func (r *partitionedRelData) GetBlockInfoSlice() objectio.BlockInfoSlice {
 	return r.blocks
-}
-
-func (r *partitionedRelData) GetPState() any {
-	panic("not implemented")
-}
-
-func (r *partitionedRelData) SetPState(any) {
-	panic("not implemented")
 }
 
 func (r *partitionedRelData) GetType() engine.RelDataType {
