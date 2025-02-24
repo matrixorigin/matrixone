@@ -703,8 +703,6 @@ type RelData interface {
 	// for block info list
 	Split(i int) []RelData
 	GetBlockInfoSlice() objectio.BlockInfoSlice
-	//GetPState() any
-	//SetPState(pState any)
 	GetBlockInfo(i int) objectio.BlockInfo
 	SetBlockInfo(i int, blk *objectio.BlockInfo)
 	AppendBlockInfo(blk *objectio.BlockInfo)

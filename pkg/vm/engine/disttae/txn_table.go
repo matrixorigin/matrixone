@@ -1794,14 +1794,44 @@ func BuildLocalDataSource(
 		engine.GeneralLocalDataSource)
 }
 
-func extractPStateFromRelData(relData engine.RelData) *logtailreplay.PartitionState {
+func extractPStateFromRelData(
+	ctx context.Context,
+	tbl *txnTable,
+	relData engine.RelData,
+) (*logtailreplay.PartitionState, error) {
+
+	var part any
+
 	if x1, o1 := relData.(*readutil.ObjListRelData); o1 {
-		return x1.PState.(*logtailreplay.PartitionState)
+		part = x1.PState
 	} else if x2, o2 := relData.(*readutil.BlockListRelData); o2 {
-		return x2.GetPState().(*logtailreplay.PartitionState)
+		part = x2.GetPState()
 	}
 
-	return nil
+	if part == nil {
+		// why the partition will be nil ??
+		sql := ""
+		if p := tbl.proc.Load().GetStmtProfile(); p != nil {
+			sql = p.GetSqlOfStmt()
+		}
+
+		logutil.Warn("RELDATA-WITH-EMPTY-PSTATE",
+			zap.String("db", tbl.db.databaseName),
+			zap.String("table", tbl.tableName),
+			zap.String("sql", sql),
+			zap.String("relDataType", fmt.Sprintf("%T", relData)),
+			zap.String("relDataContent", relData.String()),
+			zap.String("stack", string(debug.Stack())))
+
+		pState, err := tbl.getPartitionState(ctx)
+		if err != nil {
+			return nil, err
+		}
+
+		return pState, nil
+	}
+
+	return part.(*logtailreplay.PartitionState), nil
 }
 
 func (tbl *txnTable) buildLocalDataSource(
@@ -1816,19 +1846,9 @@ func (tbl *txnTable) buildLocalDataSource(
 	case engine.RelDataObjList, engine.RelDataBlockList:
 		var pState *logtailreplay.PartitionState
 
-		pState = extractPStateFromRelData(relData)
-		if pState == nil {
-			part, err2 := tbl.getPartitionState(ctx)
-			if err2 != nil {
-				return nil, err2
-			}
-
-			pState = part
-
-			logutil.Warn("RELDATA-WITH-EMPTY-PSTATE",
-				zap.String("db", tbl.db.databaseName),
-				zap.String("table", tbl.tableName),
-				zap.String("stack", string(debug.Stack())))
+		pState, err = extractPStateFromRelData(ctx, tbl, relData)
+		if err != nil {
+			return nil, err
 		}
 
 		ranges := relData.GetBlockInfoSlice()
