@@ -480,6 +480,10 @@ func runCountStar(proc *process.Process, s *fulltext.SearchAccum) error {
 		s.AvgDocLen = avgDocLen
 		//logutil.Infof("NROW = %d", nrow)
 	}
+	// downgrade BM25 to TF-IDF if AvgDocLen is zro
+	if s.ScoreAlgo == fulltext.ALGO_BM25 && s.AvgDocLen == 0 {
+		s.ScoreAlgo = fulltext.ALGO_TFIDF
+	}
 
 	return nil
 }

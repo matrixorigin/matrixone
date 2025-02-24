@@ -50,13 +50,22 @@ func TestSqlPhrase(t *testing.T) {
 		},
 	}
 
+	idxTable := "`__mo_index_secondary_`"
 	for _, c := range tests {
 		s, err := NewSearchAccum("src", "index", c.pattern, int64(tree.FULLTEXT_BOOLEAN), "", ALGO_TFIDF)
 		require.Nil(t, err)
-		result, err := PatternToSql(s.Pattern, int64(tree.FULLTEXT_BOOLEAN), "`__mo_index_secondary_`", "", ALGO_TFIDF)
+		result, err := PatternToSql(s.Pattern, int64(tree.FULLTEXT_BOOLEAN), idxTable, "", ALGO_TFIDF)
 		require.Nil(t, err)
 		//fmt.Println(result)
 		assert.Equal(t, c.expect, result)
+	}
+
+	for _, c := range tests {
+		s, err := NewSearchAccum("src", "index", c.pattern, int64(tree.FULLTEXT_BOOLEAN), "", ALGO_BM25)
+		require.Nil(t, err)
+		result, err := PatternToSql(s.Pattern, int64(tree.FULLTEXT_BOOLEAN), idxTable, "", ALGO_BM25)
+		require.Nil(t, err)
+		assert.Equal(t, genBM25SQL(c.expect, idxTable), result)
 	}
 }
 
@@ -113,14 +122,23 @@ func TestSqlBoolean(t *testing.T) {
 		},
 	}
 
+	idxTable := "`__mo_index_secondary_`"
 	for _, c := range tests {
 		s, err := NewSearchAccum("src", "index", c.pattern, int64(tree.FULLTEXT_BOOLEAN), "", ALGO_TFIDF)
 		require.Nil(t, err)
-		result, err := PatternToSql(s.Pattern, int64(tree.FULLTEXT_BOOLEAN), "`__mo_index_secondary_`", "", ALGO_TFIDF)
+		result, err := PatternToSql(s.Pattern, int64(tree.FULLTEXT_BOOLEAN), idxTable, "", ALGO_TFIDF)
 		//fmt.Println(PatternListToStringWithPosition(s.Pattern))
 		require.Nil(t, err)
 		//fmt.Println(result)
 		assert.Equal(t, c.expect, result)
+	}
+
+	for _, c := range tests {
+		s, err := NewSearchAccum("src", "index", c.pattern, int64(tree.FULLTEXT_BOOLEAN), "", ALGO_BM25)
+		require.Nil(t, err)
+		result, err := PatternToSql(s.Pattern, int64(tree.FULLTEXT_BOOLEAN), idxTable, "", ALGO_BM25)
+		require.Nil(t, err)
+		assert.Equal(t, genBM25SQL(c.expect, idxTable), result)
 	}
 }
 
@@ -145,12 +163,21 @@ func TestSqlNL(t *testing.T) {
 		},
 	}
 
+	idxTable := "`__mo_index_secondary_`"
 	for _, c := range tests {
 		s, err := NewSearchAccum("src", "index", c.pattern, int64(tree.FULLTEXT_NL), "", ALGO_TFIDF)
 		require.Nil(t, err)
-		result, err := PatternToSql(s.Pattern, int64(tree.FULLTEXT_NL), "`__mo_index_secondary_`", "", ALGO_TFIDF)
+		result, err := PatternToSql(s.Pattern, int64(tree.FULLTEXT_NL), idxTable, "", ALGO_TFIDF)
 		require.Nil(t, err)
 		//fmt.Println(result)
 		assert.Equal(t, c.expect, result)
+	}
+
+	for _, c := range tests {
+		s, err := NewSearchAccum("src", "index", c.pattern, int64(tree.FULLTEXT_NL), "", ALGO_BM25)
+		require.Nil(t, err)
+		result, err := PatternToSql(s.Pattern, int64(tree.FULLTEXT_NL), idxTable, "", ALGO_BM25)
+		require.Nil(t, err)
+		assert.Equal(t, genBM25SQL(c.expect, idxTable), result)
 	}
 }
