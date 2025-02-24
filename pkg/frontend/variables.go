@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fulltext"
 )
 
 var (
@@ -3527,12 +3528,12 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Default:           int64(0),
 	},
 	"ft_relevancy_algorithm": {
-		Name:              "ft_relevancy_algorithm",
+		Name:              fulltext.FulltextRelevancyAlgo,
 		Scope:             ScopeBoth,
 		Dynamic:           true,
 		SetVarHintApplies: false,
-		Type:              InitSystemVariableStringType("ft_relevancy_algorithm"),
-		Default:           "BM25",
+		Type:              InitSystemVariableStringType(fulltext.FulltextRelevancyAlgo),
+		Default:           fulltext.FulltextRelevancyAlgo_tfidf,
 	},
 	"validate_password": {
 		Name:              "validate_password",
