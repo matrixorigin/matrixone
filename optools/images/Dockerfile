@@ -35,6 +35,8 @@ COPY --from=builder /go/src/github.com/matrixorigin/matrixone/mo-service /mo-ser
 COPY --from=builder /go/src/github.com/matrixorigin/matrixone/etc /etc
 COPY --from=builder /go/src/github.com/matrixorigin/matrixone/thirdparties/install/lib /lib
 
+RUN ls /lib
+RUN echo ${LD_LIBRARY_PATH}
 
 WORKDIR /
 
