@@ -39,6 +39,9 @@ COPY --from=builder /go/src/github.com/matrixorigin/matrixone/thirdparties/insta
 RUN ldconfig
 RUN ls /usr/local/lib
 
+RUN apt-get update && \
+    apt-get install -y libcurl4-openssl-dev libgomp1
+
 RUN /mo-service -h
 
 WORKDIR /
