@@ -425,6 +425,7 @@ func appendValToBatch(
 	); err != nil {
 		return
 	}
+	dst.SetRowCount(dst.Vecs[0].Length())
 	return
 }
 
@@ -521,7 +522,7 @@ func ReWriteCheckpointAndBlockFromKey(
 	sid string,
 	fs, dstFs fileservice.FileService,
 	loc objectio.Location,
-	lastCkpData CKPDataReader,
+	lastCkpData *CKPDataReader,
 	version uint32, ts types.TS,
 ) (objectio.Location, objectio.Location, []string, error) {
 	logutil.Info("[Start]", common.OperationField("ReWrite Checkpoint"),
@@ -793,7 +794,7 @@ func ReWriteCheckpointAndBlockFromKey(
 	phaseNumber = 5
 
 	dataSinker := ckputil.NewDataSinker(
-		common.CheckpointAllocator, fs, ioutil.WithMemorySizeThreshold(DefaultCheckpointSize))
+		common.CheckpointAllocator, dstFs, ioutil.WithMemorySizeThreshold(DefaultCheckpointSize))
 	encoder := types.NewPacker()
 	defer encoder.Close()
 	if len(insertObjBatch) > 0 {
