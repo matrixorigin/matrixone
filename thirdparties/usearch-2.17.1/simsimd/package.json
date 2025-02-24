@@ -1,0 +1,61 @@
+{
+  "name": "simsimd",
+  "version": "6.2.3",
+  "description": "Portable mixed-precision BLAS-like vector math library for x86 and ARM",
+  "homepage": "https://github.com/ashvardanian/simsimd",
+  "author": "Ash Vardanian",
+  "license": "Apache 2.0",
+  "keywords": [
+    "vector",
+    "distance",
+    "similarity",
+    "search",
+    "ai",
+    "math",
+    "avx2",
+    "avx512",
+    "neon",
+    "sve",
+    "arm",
+    "x86",
+    "simd",
+    "f16"
+  ],
+  "scripts": {
+    "install": "node-gyp-build",
+    "prebuild-single": "prebuildify --napi --strip --target=10.4.0",
+    "prebuild-arm64": "prebuildify --arch arm64 --napi --strip --target=10.4.0",
+    "prebuild-darwin-x64+arm64": "prebuildify --arch arm64+x64 --napi --strip --target=10.4.0",
+    "build-js": "rm -fr javascript/dist/* && tsc -p javascript/tsconfig-esm.json && tsc -p javascript/tsconfig-cjs.json && cp javascript/dist-package-esm.json javascript/dist/esm/package.json && cp javascript/dist-package-cjs.json javascript/dist/cjs/package.json",
+    "test": "node --test ./scripts/test.mjs",
+    "bench": "node ./scripts/bench.js"
+  },
+  "main": "javascript/dist/cjs/simsimd.js",
+  "module": "javascript/dist/esm/simsimd.js",
+  "exports": {
+    ".": {
+      "import": "./javascript/dist/esm/simsimd.js",
+      "require": "./javascript/dist/cjs/simsimd.js"
+    }
+  },
+  "engines": {
+    "node": "~10 >=10.20 || >=12.17"
+  },
+  "dependencies": {
+    "bindings": "^1.5.0",
+    "node-addon-api": "^3.2.1",
+    "node-gyp-build": "^4.8.0"
+  },
+  "devDependencies": {
+    "@types/bindings": "^1.5.5",
+    "@types/node": "^20.17.6",
+    "node-gyp": "^10.0.1",
+    "prebuildify": "^6.0.0",
+    "typescript": "^5.3.3"
+  },
+  "optionalDependencies": {
+    "benchmark": "^2.1.4",
+    "mathjs": "^11.11.2",
+    "usearch": "^2.8.15"
+  }
+}

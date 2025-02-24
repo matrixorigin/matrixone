@@ -1,0 +1,227 @@
+name: Pre-Release
+
+on:
+  push:
+    branches: ["main-*"]
+  pull_request:
+    branches: ["main-*"]
+
+env:
+  BUILD_TYPE: Release
+  GH_TOKEN: ${{ secrets.SEMANTIC_RELEASE_TOKEN }}
+  SWIFT_VERSION: 5.9
+  PYTHONUTF8: 1
+
+# Sets permissions of the GITHUB_TOKEN to allow deployment to GitHub Pages
+permissions:
+  contents: read
+
+jobs:
+  versioning:
+    name: Update Version
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Run TinySemVer
+        uses: ashvardanian/tinysemver@v2.1.1
+        with:
+          verbose: "true"
+          version-file: "VERSION"
+          update-version-in: |
+            Cargo.toml:^version = "(\d+\.\d+\.\d+)"
+            package.json:"version": "(\d+\.\d+\.\d+)"
+            CMakeLists.txt:VERSION (\d+\.\d+\.\d+)
+          update-major-version-in: |
+            include/simsimd/simsimd.h:^#define SIMSIMD_VERSION_MAJOR (\d+)
+          update-minor-version-in: |
+            include/simsimd/simsimd.h:^#define SIMSIMD_VERSION_MINOR (\d+)
+          update-patch-version-in: |
+            include/simsimd/simsimd.h:^#define SIMSIMD_VERSION_PATCH (\d+)
+          dry-run: "true"
+
+  test_c:
+    name: Test C
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: git submodule update --init --recursive
+
+      - name: Install dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y cmake build-essential libjemalloc-dev libomp-dev libopenblas-dev
+
+      - name: Build locally
+        run: |
+          cmake -D CMAKE_BUILD_TYPE=Release -D SIMSIMD_BUILD_TESTS=1 -D SIMSIMD_BUILD_BENCHMARKS=1 -D SIMSIMD_BUILD_BENCHMARKS_WITH_CBLAS=1 -B build_release
+          cmake --build build_release --config Release
+
+      - name: Test
+        run: build_release/simsimd_test_run_time
+
+  test_python:
+    name: Test Python ${{ matrix.python-version }} on ${{ matrix.architecture }} ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, macOS-14, windows-2022]
+        python-version: ["3.13", "3.8"]
+        architecture: [x64, arm64]
+
+    steps:
+      - uses: actions/checkout@v4
+      - run: git submodule update --init --recursive
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --no-cache-dir --upgrade pip
+          pip install --no-cache-dir py-cpuinfo pytest pytest-repeat numpy scipy tabulate
+          python -c "from cpuinfo import get_cpu_info; print(get_cpu_info())"
+
+      - name: Build locally on Ubuntu
+        run: |
+          sudo apt-get update
+          sudo apt-get install gcc-12 -y
+          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 12
+          sudo update-alternatives --config gcc
+          gcc --version
+          python -m pip install .
+        if: ${{ matrix.os == 'ubuntu-22.04' }}
+
+      - name: Build locally on other OS
+        run: python -m pip install .
+        if: ${{ matrix.os != 'ubuntu-22.04' }}
+
+      - name: Test with PyTest
+        run: |
+          python -c "import simsimd; print(simsimd.get_capabilities())"
+          pytest scripts/test.py -s -x -Wd -v
+
+  test_nodejs:
+    name: Test Node.js
+    runs-on: ubuntu-22.04
+    env:
+      CC: gcc-12
+      CXX: g++-12
+
+    steps:
+      - uses: actions/checkout@v4
+      - run: git submodule update --init --recursive
+
+      - name: Update compilers
+        run: |
+          sudo apt update
+          sudo apt install -y cmake build-essential libjemalloc-dev libomp-dev gcc-12 g++-12
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Build and Test
+        run: |
+          npm ci --ignore-scripts
+          npm run install
+          npm run build-js
+          npm test
+
+  test_deno:
+    name: Test Deno
+    runs-on: ubuntu-22.04
+    env:
+      CC: gcc-12
+      CXX: g++-12
+
+    steps:
+      - uses: actions/checkout@v4
+      - run: git submodule update --init --recursive
+
+      - name: Update compilers
+        run: |
+          sudo apt update
+          sudo apt install -y cmake build-essential libjemalloc-dev libomp-dev gcc-12 g++-12
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Build and Test with Node
+        run: |
+          npm ci --ignore-scripts
+          npm run install
+          npm run build-js
+          npm test
+
+      - name: Set up Deno
+        uses: denoland/setup-deno@v1
+        with:
+          deno-version: vx.x.x
+
+      - name: Test with Deno
+        run: deno test --allow-read
+
+  test_rust:
+    name: Test Rust
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - run: git submodule update --init --recursive
+
+      - name: Install Rust toolchain
+        uses: moonrepo/setup-rust@v1
+
+      - name: Build and Test
+        run: cargo test
+
+  # Temporary workaround to run Swift tests on Linux
+  # Based on: https://github.com/swift-actions/setup-swift/issues/591#issuecomment-1685710678
+  test_ubuntu_swift:
+    name: Swift on Linux
+    runs-on: ubuntu-22.04
+    container: swift:5.9
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test Swift
+        run: swift test
+
+  build_wheels:
+    name: Build Python ${{ matrix.python-version }} for ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    needs: [test_python]
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: ["37", "38", "39", "310", "311", "312", "313"]
+    steps:
+      - uses: actions/checkout@v4.2.2
+      - name: Set up Python
+        uses: actions/setup-python@v5.3.0
+        with:
+          python-version: 3.9
+
+        # We only need QEMU for Linux builds
+      - name: Setup QEMU
+        if: matrix.os == 'ubuntu-latest'
+        uses: docker/setup-qemu-action@v3
+      - name: Upgrade MSVC tooling
+        if: matrix.os == 'windows-latest'
+        uses: microsoft/setup-msbuild@v2
+        with:
+          vs-version: "17.10"
+      - name: Install cibuildwheel
+        run: python -m pip install cibuildwheel==2.21.3
+      - name: Build wheels
+        run: cibuildwheel --output-dir wheelhouse
+        env:
+          CIBW_BUILD: cp${{ matrix.python-version }}-*

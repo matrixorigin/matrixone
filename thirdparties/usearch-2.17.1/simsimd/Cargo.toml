@@ -1,0 +1,49 @@
+[package]
+name = "simsimd"
+description = "Portable mixed-precision BLAS-like vector math library for x86 and ARM"
+version = "6.2.3"
+edition = "2021"
+license = "Apache-2.0"
+authors = ["Ash Vardanian <1983160+ashvardanian@users.noreply.github.com>"]
+repository = "https://github.com/ashvardanian/SimSIMD"
+documentation = "https://docs.rs/simsimd"
+homepage = "https://ashvardanian.com/posts/simsimd-faster-scipy"
+keywords = ["simd", "search", "linear-algebra", "vector"]
+categories = [
+  "mathematics",
+  "hardware-support",
+  "no-std",
+  "wasm",
+  "external-ffi-bindings",
+]
+include = ["/rust/**", "/c/**", "/include/**", "/build.rs"]
+
+
+[lib]
+name = "simsimd"
+path = "rust/lib.rs"
+
+[build-dependencies]
+cc = "1.0.83"
+
+
+[[bench]]
+name = "cosine"
+harness = false
+path = "scripts/bench_cosine.rs"
+
+[[bench]]
+name = "sqeuclidean"
+harness = false
+path = "scripts/bench_sqeuclidean.rs"
+
+[profile.bench]
+opt-level = 3     # Corresponds to -O3
+lto = true        # Enables Link Time Optimization for further optimizations
+codegen-units = 1 # May increase compilation time but optimizes further
+rpath = false     # On some systems, setting this to false can help with optimizations
+
+[dev-dependencies]
+criterion = { version = "0.5.1" }
+rand = { version = "0.8.5" }
+half = { version = "2.4.0" }

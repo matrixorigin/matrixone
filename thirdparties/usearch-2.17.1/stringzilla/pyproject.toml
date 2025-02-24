@@ -1,0 +1,121 @@
+# This file configures wheels compilation for `cibuilwheel` for StringZilla CPython bindings.
+# On a good day it will produce:
+#   - `manylinux` and `musllinux` wheels for Linux on x86_64, aarch64, i686, ppc64le, s390x;
+#   - `macos` wheels for x86_64, arm64, and universal2;
+#   - `windows` wheels for AMD64, x86, and ARM64.
+#   * for Python versions from 3.6 to 3.13.
+#   * running over 5,000 tests on each wheel.
+#   = meaning 16 platforms * 8 Python versions = 128 builds.
+#   = meaning over 500,000 tests.
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+minversion = "6.0"
+addopts = ["-ra", "--showlocals", "--strict-markers", "--strict-config"]
+xfail_strict = true
+filterwarnings = ["error"]
+
+[tool.cibuildwheel]
+test-requires = ["pytest", "pytest-repeat"]
+test-command = "pytest {project}/scripts/test.py -x"
+build-verbosity = 0
+
+# We need to build for all platforms:
+# - on Linux: x86_64, aarch64, i686, ppc64le, s390x
+# - on MacOS: x86_64, arm64, universal2
+# - on Windows: AMD64, x86, ARM64
+# https://cibuildwheel.readthedocs.io/en/stable/options/#archs
+#
+# Important to note, not all those paltforms have recent images.
+# The `manylinux_2_28` seems to be missing for `i686`.
+# The `i686` is 32-bit x86, and `x86_64` is 64-bit x86.
+archs = ["all"]
+
+# Add "pp*" to skip PyPy builds, but they should work fine these days :)
+# https://cibuildwheel.readthedocs.io/en/stable/options/#build-skip
+# https://cibuildwheel.readthedocs.io/en/stable/#what-does-it-do
+skip = []
+
+[tool.cibuildwheel.linux]
+before-build = ["rm -rf {project}/build"]
+repair-wheel-command = "auditwheel repair --lib-sdir . -w {dest_dir} {wheel}"
+
+# Use more recent images for the most popular SIMD-capable CPU architectures, to have access to newer compilers.
+# Otherwise, prepare yourself to all kinds of AVX-512 issues and other SIMD-related pain.
+# You can keep track of the most recent images on Quay:
+# - for `manylinux`: https://quay.io/search?q=manylinux
+# - for `musllinux`: https://quay.io/search?q=musllinux
+manylinux-x86_64-image = "manylinux_2_28"
+manylinux-aarch64-image = "manylinux_2_28"
+manylinux-s390x-image = "manylinux_2_28"
+manylinux-ppc64le-image = "manylinux_2_28"
+musllinux-x86_64-image = "musllinux_1_2"
+musllinux-aarch64-image = "musllinux_1_2"
+musllinux-s390x-image = "musllinux_1_2"
+musllinux-ppc64le-image = "musllinux_1_2"
+musllinux-i686-image = "musllinux_1_2"
+
+# On CentOS we have to use `yum`.
+# The healthy version would be: `apt-get update && apt-get install -y libc6-dev wget python3-dev`.
+before-all = ["yum update -y && yum install -y glibc-devel wget python3-devel"]
+
+# With `musl` builds, we obviously don't need the `glibc` and can't use `yum`.
+# This may also be handy for using custom dependencies for different Python versions:
+# https://cibuildwheel.readthedocs.io/en/stable/options/#overrides
+[[tool.cibuildwheel.overrides]]
+select = "*-musllinux*"
+before-all = "apk add --update wget python3-dev"
+
+[tool.cibuildwheel.macos]
+before-build = ["rm -rf {project}/build"]
+repair-wheel-command = "delocate-wheel --require-archs {delocate_archs} -w {dest_dir} -v {wheel}"
+
+[tool.cibuildwheel.windows]
+before-build = ["rd /s /q {project}\\build || echo Done"]
+
+# Detect x86 64-bit builds
+[[tool.cibuildwheel.overrides]]
+select = "*-win_amd64"
+inherit.environment = "append"
+environment.SZ_X86_64 = "1"
+
+[[tool.cibuildwheel.overrides]]
+select = "*-manylinux*_x86_64"
+inherit.environment = "append"
+environment.SZ_X86_64 = "1"
+
+[[tool.cibuildwheel.overrides]]
+select = "*-musllinux*_x86_64"
+inherit.environment = "append"
+environment.SZ_X86_64 = "1"
+
+[[tool.cibuildwheel.overrides]]
+select = "*-macos*_x86_64"
+inherit.environment = "append"
+environment.SZ_X86_64 = "1"
+
+# Detect ARM 64-bit builds
+[[tool.cibuildwheel.overrides]]
+select = "*-win_arm64"
+inherit.environment = "append"
+environment.SZ_ARM64 = "1"
+
+[[tool.cibuildwheel.overrides]]
+select = "*-manylinux*_aarch64"
+inherit.environment = "append"
+environment.SZ_ARM64 = "1"
+
+[[tool.cibuildwheel.overrides]]
+select = "*-musllinux*_aarch64"
+inherit.environment = "append"
+environment.SZ_ARM64 = "1"
+
+[[tool.cibuildwheel.overrides]]
+select = "*-macos*_arm64"
+inherit.environment = "append"
+environment.SZ_ARM64 = "1"
+
+[tool.cibuildwheel.macos.environment]
+MACOSX_DEPLOYMENT_TARGET = "10.11"

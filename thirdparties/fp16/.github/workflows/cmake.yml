@@ -1,0 +1,186 @@
+name: CMake build
+on:
+  push:
+    paths:
+      - '.github/**/*.yml'
+      - 'CMakeLists.txt'
+      - 'cmake/**'
+      - '**.cc'
+      - '**.h'
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+jobs:
+  cmake-linux-x86_64:
+    runs-on: ubuntu-20.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Update apt
+        run: sudo apt update
+      - name: Install ninja
+        run: sudo apt install ninja-build
+      - name: Configure
+        run: cmake -Bbuild -S. -G Ninja -DCMAKE_BUILD_TYPE=Release -DFP16_BUILD_COMPARATIVE_BENCHMARKS=ON
+      - name: Build
+        run: cmake --build build --parallel
+      - name: Test
+        run: ctest --test-dir build --parallel --output-on-failure
+  cmake-linux-x86_64-f16c:
+    runs-on: ubuntu-24.04  # required for gcc >= 12
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Update apt
+        run: sudo apt update
+      - name: Install ninja
+        run: sudo apt install ninja-build
+      - name: Configure
+        run: cmake -Bbuild -S. -G Ninja -DCMAKE_BUILD_TYPE=Release -DFP16_BUILD_COMPARATIVE_BENCHMARKS=ON
+        env:
+          CFLAGS: "-mf16c"
+          CXXFLAGS: "-mf16c"
+      - name: Build
+        run: cmake --build build --parallel
+      - name: Test
+        run: ctest --test-dir build --parallel --output-on-failure
+  cmake-linux-x86:
+    runs-on: ubuntu-20.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Update apt
+        run: sudo apt update
+      - name: Install multilib gcc
+        run: sudo apt install gcc-multilib g++-multilib
+      - name: Install ninja
+        run: sudo apt install ninja-build
+      - name: Configure
+        run: cmake -Bbuild -S. -G Ninja -DCMAKE_BUILD_TYPE=Release -DFP16_BUILD_COMPARATIVE_BENCHMARKS=ON
+        env:
+          CFLAGS: "-m32 -mfpmath=387"
+          CXXFLAGS: "-m32 -mfpmath=387"
+          LDFLAGS: "-m32"
+      - name: Build
+        run: cmake --build build --parallel
+      - name: Test
+        run: ctest --test-dir build --parallel --output-on-failure
+  cmake-linux-x86-f16c:
+    runs-on: ubuntu-20.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Update apt
+        run: sudo apt update
+      - name: Install multilib gcc
+        run: sudo apt install gcc-multilib g++-multilib
+      - name: Install ninja
+        run: sudo apt install ninja-build
+      - name: Configure
+        run: cmake -Bbuild -S. -G Ninja -DCMAKE_BUILD_TYPE=Release -DFP16_BUILD_COMPARATIVE_BENCHMARKS=ON
+        env:
+          CFLAGS: "-m32 -mf16c"
+          CXXFLAGS: "-m32 -mf16c"
+          LDFLAGS: "-m32"
+      - name: Build
+        run: cmake --build build --parallel
+      - name: Test
+        run: ctest --test-dir build --parallel --output-on-failure
+  cmake-macos-x86_64:
+    runs-on: macos-12
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -Bbuild -S. -G Xcode -DCMAKE_OSX_ARCHITECTURES=x86_64 -DFP16_BUILD_COMPARATIVE_BENCHMARKS=ON
+      - name: Build
+        run: cmake --build build --config Release --parallel -- -quiet
+      - name: Test
+        run: ctest --test-dir build --build-config Release --parallel --output-on-failure
+  cmake-macos-x86_64-f16c:
+    runs-on: macos-12
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -Bbuild -S. -G Xcode -DCMAKE_OSX_ARCHITECTURES=x86_64 -DFP16_BUILD_COMPARATIVE_BENCHMARKS=ON
+        env:
+          CFLAGS: "-mf16c"
+          CXXFLAGS: "-mf16c"
+      - name: Build
+        run: cmake --build build --config Release --parallel -- -quiet
+      - name: Test
+        run: ctest --test-dir build --build-config Release --parallel --output-on-failure
+  cmake-macos-arm64:
+    runs-on: macos-14
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -Bbuild -S. -G Xcode -DCMAKE_OSX_ARCHITECTURES=arm64 -DFP16_BUILD_COMPARATIVE_BENCHMARKS=ON
+      - name: Build
+        run: cmake --build build --config Release --parallel -- -quiet
+      - name: Test
+        run: ctest --test-dir build --build-config Release --parallel --output-on-failure
+  cmake-windows-x86:
+    runs-on: windows-2019
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -Bbuild -S. -G "Visual Studio 16 2019" -A Win32 -DFP16_BUILD_COMPARATIVE_BENCHMARKS=ON
+        env:
+          CFLAGS: "/arch:IA32"
+          CXXFLAGS: "/arch:IA32"
+      - name: Build
+        run: cmake --build build --config Release --parallel
+      - name: Test
+        run: ctest --test-dir build --build-config Release --parallel --output-on-failure
+  cmake-windows-x86-avx2:
+    runs-on: windows-2019
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -Bbuild -S. -G "Visual Studio 16 2019" -A Win32 -DFP16_BUILD_COMPARATIVE_BENCHMARKS=ON
+        env:
+          CFLAGS: "/arch:AVX2"
+          CXXFLAGS: "/arch:AVX2"
+      - name: Build
+        run: cmake --build build --config Release --parallel
+      - name: Test
+        run: ctest --test-dir build --build-config Release --parallel --output-on-failure
+  cmake-windows-x64:
+    runs-on: windows-2019
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -Bbuild -S. -G "Visual Studio 16 2019" -A x64 -DFP16_BUILD_COMPARATIVE_BENCHMARKS=ON
+      - name: Build
+        run: cmake --build build --config Release --parallel
+      - name: Test
+        run: ctest --test-dir build --build-config Release --parallel --output-on-failure
+  cmake-windows-x64-avx2:
+    runs-on: windows-2019
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -Bbuild -S. -G "Visual Studio 16 2019" -A x64 -DFP16_BUILD_COMPARATIVE_BENCHMARKS=ON
+        env:
+          CFLAGS: "/arch:AVX2"
+          CXXFLAGS: "/arch:AVX2"
+      - name: Build
+        run: cmake --build build --config Release --parallel
+      - name: Test
+        run: ctest --test-dir build --build-config Release --parallel --output-on-failure
+  cmake-windows-arm64:
+    runs-on: windows-2019
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -Bbuild -S. -G "Visual Studio 16 2019" -A ARM64 -DFP16_BUILD_COMPARATIVE_BENCHMARKS=ON
+      - name: Build
+        run: cmake --build build --config Release --parallel
