@@ -31,7 +31,7 @@ import (
 )
 
 type CheckpointFastGCJob struct {
-	CheckpointBasedGCJob
+	BaseCheckpointGCJob
 }
 
 func NewCheckpointFastGCJob(
@@ -46,71 +46,32 @@ func NewCheckpointFastGCJob(
 	fs fileservice.FileService,
 	opts ...GCJobExecutorOption,
 ) *CheckpointFastGCJob {
-	e := &CheckpointBasedGCJob{
+	e := &BaseCheckpointGCJob{
 		sourcer:          sourcer,
 		snapshotMeta:     snapshotMeta,
 		accountSnapshots: accountSnapshots,
 		pitr:             pitr,
 		ts:               ts,
+		transObjects:     make(map[string]*ObjectEntry, 100),
 	}
+
 	for _, opt := range opts {
 		opt(e)
 	}
 	e.fillDefaults()
 	e.GCExecutor = *NewGCExecutor(buffer, isOwner, e.config.canGCCacheSize, mp, fs)
-	return &CheckpointFastGCJob{
-		CheckpointBasedGCJob: *e,
+	job := &CheckpointFastGCJob{
+		BaseCheckpointGCJob: *e,
 	}
+	job.filterProvider = job
+	return job
 }
 
-func (e *CheckpointFastGCJob) Execute(ctx context.Context) error {
-	attrs, attrTypes := logtail.GetDataSchema()
-	buffer := containers.NewOneSchemaBatchBuffer(
-		mpool.MB*16,
-		attrs,
-		attrTypes,
-	)
-	defer buffer.Close(e.mp)
-	transObjects := make(map[string]*ObjectEntry, 100)
-	coarseFilter, err := makeSoftDeleteFilterCoarseFilter(
-		transObjects,
+func (e *CheckpointFastGCJob) CoarseFilter(_ context.Context) (FilterFn, error) {
+	return makeSoftDeleteFilterCoarseFilter(
+		e.transObjects,
 		e.snapshotMeta,
 	)
-	if err != nil {
-		return err
-	}
-
-	fineFilter, err := MakeSnapshotAndPitrFineFilter(
-		e.ts,
-		e.accountSnapshots,
-		e.pitr,
-		e.snapshotMeta,
-		transObjects,
-	)
-	if err != nil {
-		return err
-	}
-
-	e.result.filesToGC = make([]string, 0, 20)
-	finalSinker, err := MakeFinalCanGCSinker(&e.result.filesToGC)
-	if err != nil {
-		return err
-	}
-
-	newFiles, err := e.Run(
-		ctx,
-		e.sourcer.Read,
-		coarseFilter,
-		fineFilter,
-		finalSinker,
-	)
-	if err != nil {
-		return err
-	}
-
-	e.result.filesNotGC = make([]objectio.ObjectStats, 0, len(newFiles))
-	e.result.filesNotGC = append(e.result.filesNotGC, newFiles...)
-	return nil
 }
 
 func makeSoftDeleteFilterCoarseFilter(
@@ -142,13 +103,12 @@ func makeSoftDeleteFilterCoarseFilter(
 			dropTSIsEmpty := dropTS.IsEmpty()
 			if dropTSIsEmpty {
 				if (transObjects)[name] == nil {
-					object := &ObjectEntry{
-						stats:    &stats,
-						createTS: createTS,
-						dropTS:   dropTS,
-						db:       dbs[i],
-						table:    tableIDs[i],
-					}
+					object := NewObjectEntry()
+					object.stats = &stats
+					object.createTS = createTS
+					object.dropTS = dropTS
+					object.db = dbs[i]
+					object.table = tableIDs[i]
 					(transObjects)[name] = object
 				}
 				table := tables[tableIDs[i]]

@@ -42,14 +42,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 )
 
-type ObjectEntry struct {
-	stats    *objectio.ObjectStats
-	createTS types.TS
-	dropTS   types.TS
-	db       uint64
-	table    uint64
-}
-
 type WindowOption func(*GCWindow)
 
 func WithWindowDir(dir string) WindowOption {
