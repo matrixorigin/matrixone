@@ -4,6 +4,14 @@ FROM golang:1.23.0-bookworm AS builder
 ARG GOPROXY="https://proxy.golang.org,direct"
 RUN go env -w GOPROXY=${GOPROXY}
 
+# Install some utilities used for debugging or by startup script
+RUN apt-get update && apt-get install -y \
+    dnsutils \
+    curl \
+    git \
+    cmake \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
 RUN mkdir -p /go/src/github.com/matrixorigin/matrixone
 
 WORKDIR /go/src/github.com/matrixorigin/matrixone
@@ -27,12 +35,6 @@ COPY --from=builder /go/src/github.com/matrixorigin/matrixone/mo-service /mo-ser
 COPY --from=builder /go/src/github.com/matrixorigin/matrixone/etc /etc
 COPY --from=builder /go/src/github.com/matrixorigin/matrixone/thirdparties/install/lib /lib
 
-# Install some utilities used for debugging or by startup script
-RUN apt-get update && apt-get install -y \
-    dnsutils \
-    curl \
-    git \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /
 
