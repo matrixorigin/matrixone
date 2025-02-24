@@ -10075,11 +10075,15 @@ func TestCKPCollectObject(t *testing.T) {
 			assert.NoError(t, err)
 			assert.NoError(t, task1.Execute(ctx))
 
-			collector := logtail.NewIncrementalCollector("", types.TS{}, tae.TxnMgr.Now())
+			collector := logtail.NewBaseCollector_V2(types.TS{}, tae.TxnMgr.Now(), 0, tae.Opts.Fs)
 			assert.NoError(t, tae.Catalog.RecurLoop(collector))
 			ckpData := collector.OrphanData()
-			objBatch := ckpData.GetObjectBatchs()
-			assert.Equal(t, 1, objBatch.Length())
+			loc, _, _, err := ckpData.WriteTo(ctx, tae.Opts.Fs)
+			assert.NoError(t, err)
+			reader, err := logtail.GetCKPDataReader(ctx, loc, logtail.CheckpointCurrentVersion, common.DebugAllocator, tae.Opts.Fs)
+			assert.NoError(t, err)
+			bat2 := reader.GetBatch()
+			assert.Equal(t, 1, bat2.RowCount())
 			assert.NoError(t, txn.Commit(ctx))
 		},
 	)
@@ -11350,96 +11354,6 @@ func (r *objlistReplayer) Submit(_ uint64, fn func()) {
 	fn()
 }
 
-func TestCheckpointV2Compatibility(t *testing.T) {
-	ctx := context.Background()
-	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
-
-	txn, err := tae.StartTxn(nil)
-	assert.NoError(t, err)
-	db, err := testutil.CreateDatabase2(ctx, txn, "db")
-	require.NoError(t, err)
-	schema := catalog.MockSchemaAll(2, 1)
-	rel, err := testutil.CreateRelation2(ctx, txn, db, schema)
-	require.NoError(t, err)
-	assert.NoError(t, txn.Commit(ctx))
-
-	tbl := rel.GetMeta().(*catalog.TableEntry)
-
-	for i := 0; i < 100; i++ {
-		created := catalog.MockCreatedObjectEntry2List(tbl, tae.Catalog, false, tae.TxnMgr.Now())
-		catalog.MockDroppedObjectEntry2List(created, tae.TxnMgr.Now())
-		created = catalog.MockCreatedObjectEntry2List(tbl, tae.Catalog, true, tae.TxnMgr.Now())
-		catalog.MockDroppedObjectEntry2List(created, tae.TxnMgr.Now())
-	}
-
-	tae.ForceCheckpoint()
-	tae.ForceCheckpoint()
-
-	dataFactory := tables.NewDataFactory(
-		tae.Runtime, tae.Dir,
-	)
-	catalog2 := catalog.MockCatalog(dataFactory)
-
-	ckps := tae.BGCheckpointRunner.GetAllCheckpoints()
-	assert.Equal(t, 2, len(ckps))
-
-	locs := make([]objectio.Location, 0)
-
-	for _, ckp := range ckps {
-		locs = append(locs, ckp.GetTNLocation())
-	}
-
-	replayers := make([]*logtail.CheckpointReplayer, len(locs))
-	for i, loc := range locs {
-		replayer := logtail.NewCheckpointReplayer(loc, common.DebugAllocator)
-		replayers[i] = replayer
-	}
-	for _, replayer := range replayers {
-		err = replayer.ReadMetaForV12(ctx, tae.Opts.Fs)
-		assert.NoError(t, err)
-	}
-	for _, replayer := range replayers {
-		err = replayer.ReadDataForV12(ctx, tae.Opts.Fs)
-		assert.NoError(t, err)
-	}
-	for _, replayer := range replayers {
-		replayer.ReplayObjectlist(ctx, catalog2, true)
-	}
-	readTxn, err := tae.StartTxn(nil)
-	assert.NoError(t, err)
-	closeFn := catalog2.RelayFromSysTableObjects(
-		ctx, readTxn, tables.ReadSysTableBatch, func(cols []containers.Vector, pkidx int) (err2 error) {
-			_, err2 = mergesort.SortBlockColumns(cols, pkidx, tae.Runtime.VectorPool.Transient)
-			return
-		}, &objlistReplayer{},
-	)
-	for _, fn := range closeFn {
-		fn()
-	}
-	for _, replayer := range replayers {
-		replayer.ReplayObjectlist(ctx, catalog2, false)
-	}
-
-	var tombstoneCnt2, dataCnt2 int
-	p := &catalog.LoopProcessor{}
-	p.ObjectFn = func(oe *catalog.ObjectEntry) error {
-		if !pkgcatalog.IsSystemTable(oe.GetTable().ID) {
-			dataCnt2++
-		}
-		return nil
-	}
-	p.TombstoneFn = func(oe *catalog.ObjectEntry) error {
-		if !pkgcatalog.IsSystemTable(oe.GetTable().ID) {
-			tombstoneCnt2++
-		}
-		return nil
-	}
-	err = catalog2.RecurLoop(p)
-	assert.NoError(t, err)
-	assert.Equal(t, 100, dataCnt2)
-	assert.Equal(t, 100, tombstoneCnt2)
-}
 func TestDedupx(t *testing.T) {
 	ctx := context.Background()
 
