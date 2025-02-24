@@ -29,12 +29,12 @@ RUN make build
 
 FROM ubuntu:22.04
 
-ENV LD_LIBRARY_PATH '/lib'
 
 COPY --from=builder /go/src/github.com/matrixorigin/matrixone/mo-service /mo-service
 COPY --from=builder /go/src/github.com/matrixorigin/matrixone/etc /etc
 COPY --from=builder /go/src/github.com/matrixorigin/matrixone/thirdparties/install/lib /lib
 
+ENV LD_LIBRARY_PATH /lib
 RUN ldconfig
 RUN ls /lib
 RUN echo ${LD_LIBRARY_PATH}
