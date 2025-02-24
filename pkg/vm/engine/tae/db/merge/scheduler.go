@@ -15,6 +15,8 @@
 package merge
 
 import (
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -25,8 +27,24 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	dto "github.com/prometheus/client_model/go"
-	"time"
 )
+
+type mergeCountMinSeq struct {
+	counts [6]uint64
+}
+
+func (m *mergeCountMinSeq) push(cnt uint64) {
+	m.counts[0] = m.counts[1]
+	m.counts[1] = m.counts[2]
+	m.counts[2] = m.counts[3]
+	m.counts[3] = m.counts[4]
+	m.counts[4] = m.counts[5]
+	m.counts[5] = cnt
+}
+
+func (m *mergeCountMinSeq) maxDiff() uint64 {
+	return m.counts[5] - m.counts[0]
+}
 
 type Scheduler struct {
 	*catalog.LoopProcessor
@@ -36,6 +54,9 @@ type Scheduler struct {
 	executor *executor
 
 	skipForTransPageLimit bool
+	skipForStandAloneBusy bool
+
+	mergeCount mergeCountMinSeq
 
 	rc *resourceController
 }
@@ -81,6 +102,7 @@ func (s *Scheduler) resetForTable(entry *catalog.TableEntry) {
 func (s *Scheduler) PreExecute() error {
 	s.rc.refresh()
 	s.skipForTransPageLimit = false
+	s.skipForStandAloneBusy = false
 	m := &dto.Metric{}
 	if err := v2.TaskMergeTransferPageLengthGauge.Write(m); err != nil {
 		return err
@@ -92,6 +114,21 @@ func (s *Scheduler) PreExecute() error {
 			common.HumanReadableBytes(int(s.rc.transferPageLimit)))
 		s.skipForTransPageLimit = true
 	}
+
+	if common.IsStandaloneBoost.Load() {
+		mCount := &dto.Metric{}
+		if err := v2.TaskDNMergeScheduledByCounter.Write(mCount); err != nil {
+			return err
+		}
+		v := uint64(mCount.GetCounter().GetValue())
+		s.mergeCount.push(v)
+
+		if s.mergeCount.maxDiff() > uint64(common.RuntimeStandaloneBusyMergeCount.Load()) {
+			logutil.Infof("[mergeblocks] skip merge scanning due to standalone busy")
+			s.skipForStandAloneBusy = true
+		}
+	}
+
 	return nil
 }
 
@@ -108,7 +145,7 @@ func (s *Scheduler) onDataBase(*catalog.DBEntry) (err error) {
 		return moerr.GetOkStopCurrRecur()
 	}
 
-	if s.skipForTransPageLimit {
+	if s.skipForTransPageLimit || s.skipForStandAloneBusy {
 		return moerr.GetOkStopCurrRecur()
 	}
 

@@ -228,7 +228,8 @@ func logMergeStart(name, txnInfo, host, startTS string, mergedObjs [][]byte) {
 		}
 
 		fromSize += float64(obj.OriginSize())
-		estSize += float64(obj.Rows() * 20)
+		estSize += float64(obj.Rows() * 60)
+		estSize += float64(8192 * int(obj.OriginSize()/obj.Rows()) * 2)
 		rows += int(obj.Rows())
 		blkn += int(obj.BlkCnt())
 	}
