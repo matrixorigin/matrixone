@@ -30,9 +30,7 @@ type ObjectEntry struct {
 
 var objectEntryPool = sync.Pool{
 	New: func() interface{} {
-		return &ObjectEntry{
-			stats: new(objectio.ObjectStats),
-		}
+		return &ObjectEntry{}
 	},
 }
 
@@ -40,19 +38,16 @@ func NewObjectEntry() *ObjectEntry {
 	entry, ok := objectEntryPool.Get().(*ObjectEntry)
 	if !ok {
 		// Defensive programming: create a new instance when the pool is polluted
-		return &ObjectEntry{
-			stats: new(objectio.ObjectStats),
-		}
+		return &ObjectEntry{}
 	}
 	return entry
 }
 
 func (e *ObjectEntry) Release() {
-	*e.stats = objectio.ObjectStats{}
+	e.stats = nil
 	e.createTS = types.TS{}
 	e.dropTS = types.TS{}
 	e.db = 0
 	e.table = 0
-
 	objectEntryPool.Put(e)
 }
