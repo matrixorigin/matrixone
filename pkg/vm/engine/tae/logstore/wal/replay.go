@@ -59,11 +59,8 @@ func (w *StoreImpl) replayEntry(e *entry.Entry, h ApplyHandle) (driver.ReplayEnt
 		w.updateLSNCheckpointed(info)
 		// TODO:  should return?
 	}
-	// update allocatedLSN
-	if w.watermark.allocatedLSN[info.Group] < info.GroupLSN {
-		w.watermark.allocatedLSN[info.Group] = info.GroupLSN
-	}
-	w.logDSN(e)
 	state := h(info.Group, info.GroupLSN, walEntry.GetPayload(), walEntry.GetType(), walEntry.GetInfo())
+	w.replayAllocatedLSN(info.Group, info.GroupLSN)
+	w.logDSN(e)
 	return state, nil
 }
