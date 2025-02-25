@@ -18,7 +18,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -210,49 +209,14 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef
 	}
 
 	part := src_alias + "." + indexDef.Parts[0]
-
-	// 1.a algo params
-	params, err := catalog.IndexParamsStringToMap(indexDef.IndexAlgoParams)
-	if err != nil {
-		return err
-	}
-	centroidParamsLists, err := strconv.Atoi(params[catalog.IndexAlgoParamLists])
-	if err != nil {
-		return err
-	}
-	//centroidParamsDistFn := catalog.ToLower(params[catalog.IndexAlgoParamOpType])
-	//kmeansInitType := "kmeansplusplus"
-	//kmeansNormalize := "false"
-
-	sampleCnt := catalog.CalcSampleCount(int64(centroidParamsLists), totalCnt)
-	/*
-	   indexColumnName := indexDef.Parts[0]
-	   sampleSQL := fmt.Sprintf("(select sample(`%s`, %d rows, 'row') as `%s` from `%s`.`%s`)",
-	           indexColumnName,
-	           sampleCnt,
-	           indexColumnName,
-	           qryDatabase,
-	           originalTableDef.Name,
-	   )
-	*/
-	indexColumnName := indexDef.Parts[0]
-	sampleSQL := fmt.Sprintf("(SELECT %s from `%s`.`%s` LIMIT %d)",
-		indexColumnName,
-		qryDatabase,
-		originalTableDef.Name,
-		sampleCnt)
-
-	insertIntoIvfIndexTableFormat := "SELECT f.* from %s AS %s CROSS APPLY ivf_create('%s', '%s', %s) AS f;"
-
+	insertIntoIvfIndexTableFormat := "SELECT f.* from `%s`.`%s` AS %s CROSS APPLY ivf_create('%s', '%s', %s) AS f;"
 	sql := fmt.Sprintf(insertIntoIvfIndexTableFormat,
-		sampleSQL,
+		qryDatabase, originalTableDef.Name,
 		src_alias,
 		params_str,
 		string(cfgbytes),
 		part)
 
-	os.Stderr.WriteString(sql)
-	os.Stderr.WriteString("\n")
 	err = s.logTimestamp(c, qryDatabase, metadataTableName, "clustering_start")
 	if err != nil {
 		return err

@@ -67,12 +67,14 @@ var (
 )
 
 type ivfCreateState struct {
-	inited bool
-	param  vectorindex.IvfParam
-	tblcfg vectorindex.IndexTableConfig
-	idxcfg vectorindex.IndexConfig
-	data   [][]float64
-	offset int
+	inited  bool
+	param   vectorindex.IvfParam
+	tblcfg  vectorindex.IndexTableConfig
+	idxcfg  vectorindex.IndexConfig
+	data    [][]float64
+	nsample uint
+	offset  int
+
 	// holding one call batch, tokenizedState owns it.
 	batch *batch.Batch
 }
@@ -92,6 +94,8 @@ func (u *ivfCreateState) end(tf *TableFunction, proc *process.Process) error {
 	var clusterer kmeans.Clusterer
 	var centers [][]float64
 	var err error
+
+	os.Stderr.WriteString(fmt.Sprintf("END nsample %d\n", len(u.data)))
 
 	if clusterer, err = elkans.NewKMeans(
 		u.data, int(u.idxcfg.Ivfflat.Lists),
@@ -259,7 +263,11 @@ func (u *ivfCreateState) start(tf *TableFunction, proc *process.Process, nthRow 
 		u.idxcfg.Ivfflat.Dimensions = uint(dimension)
 		u.idxcfg.Type = "ivfflat"
 
-		u.data = make([][]float64, 0, u.idxcfg.Ivfflat.Lists*50)
+		u.nsample = u.idxcfg.Ivfflat.Lists * 50
+		if u.nsample < 10000 {
+			u.nsample = 10000
+		}
+		u.data = make([][]float64, 0, u.nsample)
 
 		u.batch = tf.createResultBatch()
 		u.inited = true
@@ -270,6 +278,11 @@ func (u *ivfCreateState) start(tf *TableFunction, proc *process.Process, nthRow 
 
 	// cleanup the batch
 	u.batch.CleanOnlyData()
+
+	if uint(len(u.data)) >= u.nsample {
+		// enough sample data
+		return nil
+	}
 
 	fpaVec := tf.ctr.argVecs[1]
 	if fpaVec.IsNull(uint64(nthRow)) {
