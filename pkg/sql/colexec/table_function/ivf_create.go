@@ -97,22 +97,10 @@ func (u *ivfCreateState) end(tf *TableFunction, proc *process.Process) error {
 
 	os.Stderr.WriteString(fmt.Sprintf("END nsample %d\n", len(u.data)))
 
-	if clusterer, err = elkans.NewKMeans(
-		u.data, int(u.idxcfg.Ivfflat.Lists),
-		defaultKmeansMaxIteration,
-		defaultKmeansDeltaThreshold,
-		kmeans.DistanceType(u.idxcfg.Ivfflat.Metric),
-		kmeans.InitType(u.idxcfg.Ivfflat.InitType),
-		u.idxcfg.Ivfflat.Normalize); err != nil {
-		return err
-	}
-	if centers, err = clusterer.Cluster(); err != nil {
-		return err
-	}
-
 	version, err := func() (int64, error) {
-		sql := fmt.Sprintf("SELECT CAST(`%s` AS BIGINT) FROM `%s` WHERE `%s` = 'version'",
+		sql := fmt.Sprintf("SELECT CAST(`%s` AS BIGINT) FROM `%s`.`%s` WHERE `%s` = 'version'",
 			catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
+			u.tblcfg.DbName,
 			u.tblcfg.MetadataTable,
 			catalog.SystemSI_IVFFLAT_TblCol_Metadata_key)
 
@@ -135,6 +123,24 @@ func (u *ivfCreateState) end(tf *TableFunction, proc *process.Process) error {
 
 		return version, nil
 	}()
+	if err != nil {
+		return err
+	}
+
+	os.Stderr.WriteString(fmt.Sprintf("GET version %d\n", version))
+
+	if clusterer, err = elkans.NewKMeans(
+		u.data, int(u.idxcfg.Ivfflat.Lists),
+		defaultKmeansMaxIteration,
+		defaultKmeansDeltaThreshold,
+		kmeans.DistanceType(u.idxcfg.Ivfflat.Metric),
+		kmeans.InitType(u.idxcfg.Ivfflat.InitType),
+		u.idxcfg.Ivfflat.Normalize); err != nil {
+		return err
+	}
+	if centers, err = clusterer.Cluster(); err != nil {
+		return err
+	}
 
 	// insert into centroid table
 	values := make([]string, 0, len(centers))
@@ -150,6 +156,7 @@ func (u *ivfCreateState) end(tf *TableFunction, proc *process.Process) error {
 		strings.Join(values, ","))
 
 	//os.Stderr.WriteString(sql)
+	os.Stderr.WriteString("INSERT CENTROID START\n")
 
 	sqls := []string{sql}
 	for _, s := range sqls {
@@ -159,6 +166,7 @@ func (u *ivfCreateState) end(tf *TableFunction, proc *process.Process) error {
 		}
 		res.Close()
 	}
+	os.Stderr.WriteString("INSERT CENTROID END\n")
 
 	return nil
 }
