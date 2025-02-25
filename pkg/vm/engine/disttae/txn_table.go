@@ -175,34 +175,6 @@ func (tbl *txnTable) Stats(ctx context.Context, sync bool) (*pb.StatsInfo, error
 	//}
 }
 
-func (tbl *txnTable) stats(ctx context.Context) (*pb.StatsInfo, error) {
-	partitionState, err := tbl.getPartitionState(ctx)
-	if err != nil {
-		return nil, err
-	}
-	e := tbl.db.getEng()
-	approxObjectNum := int64(partitionState.ApproxDataObjectsNum())
-	if approxObjectNum == 0 {
-		// There are no objects flushed yet.
-		return nil, nil
-	}
-
-	stats := plan2.NewStatsInfo()
-	req := newUpdateStatsRequest(
-		tbl.tableDef,
-		partitionState,
-		e.fs,
-		types.TimestampToTS(tbl.db.op.SnapshotTS()),
-		approxObjectNum,
-		stats,
-	)
-	if err := UpdateStats(ctx, req, nil); err != nil {
-		logutil.Errorf("failed to init stats info for table %d", tbl.tableId)
-		return nil, err
-	}
-	return stats, nil
-}
-
 func (tbl *txnTable) Rows(ctx context.Context) (uint64, error) {
 	var rows uint64
 	deletes := make(map[types.Rowid]struct{})

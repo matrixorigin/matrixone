@@ -24,6 +24,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -39,7 +41,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
-	"github.com/stretchr/testify/assert"
 )
 
 /*
@@ -262,11 +263,8 @@ func TestSubscribedTable(t *testing.T) {
 
 	subscribeRecord.m = make(map[uint64]SubTableStatus)
 	subscribeRecord.eng = &Engine{
-		partitions: make(map[[2]uint64]*logtailreplay.Partition),
-		globalStats: &GlobalStats{
-			logtailUpdate: newLogtailUpdate(),
-			waitKeeper:    newWaitKeeper(),
-		},
+		partitions:  make(map[[2]uint64]*logtailreplay.Partition),
+		globalStats: &GlobalStats{},
 	}
 	assert.Equal(t, 0, len(subscribeRecord.m))
 
@@ -547,7 +545,6 @@ func TestPushClient_DoGCUnusedTable(t *testing.T) {
 		var c PushClient
 		initFn(ctx, &c)
 		var tid uint64 = 200
-		c.eng.globalStats.waitKeeper.add(tid)
 		c.subscribed.m[tid] = SubTableStatus{
 			DBID:       1000,
 			SubState:   Subscribed,
@@ -574,7 +571,6 @@ func TestPushClient_DoGCUnusedTable(t *testing.T) {
 		var c PushClient
 		initFn(ctx, &c)
 		var tid uint64 = 200
-		c.eng.globalStats.waitKeeper.add(tid)
 		c.subscribed.m[tid] = SubTableStatus{
 			DBID:       1000,
 			SubState:   Subscribed,
