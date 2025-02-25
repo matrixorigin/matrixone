@@ -29,7 +29,6 @@ const (
 	DefaultMinCNMergeSize        = 80000 // MB
 	DefaultCNMergeMemControlHint = 8192  // MB
 	DefaultMaxMergeObjN          = 16
-	DefaultBusyMergeCount        = 12
 
 	Const1GBytes = 1 << 30
 	Const1MBytes = 1 << 20
@@ -48,8 +47,6 @@ var (
 
 	RuntimeOverallFlushMemCap atomic.Uint64
 
-	RuntimeStandaloneBusyMergeCount atomic.Int32
-
 	FlushMemCapacity atomic.Int32
 )
 
@@ -58,7 +55,6 @@ func init() {
 	RuntimeOsizeRowsQualified.Store(DefaultMinOsizeQualifiedMB * Const1MBytes)
 	RuntimeMaxObjOsize.Store(DefaultMaxOsizeObjMB * Const1MBytes)
 	FlushMemCapacity.Store(20 * Const1MBytes)
-	RuntimeStandaloneBusyMergeCount.Store(DefaultBusyMergeCount)
 }
 
 ///
