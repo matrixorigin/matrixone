@@ -95,8 +95,28 @@ func (p *PartitionState) LogEntry(entry *api.Entry, msg string) {
 	)
 }
 
-func (p *PartitionState) Desc() string {
-	return fmt.Sprintf("PartitionState(tid:%d) objLen %v, rowsLen %v", p.tid, p.dataObjectsNameIndex.Len(), p.rows.Len())
+func (p *PartitionState) Desc(short bool) string {
+	buf := bytes.Buffer{}
+	buf.WriteString(fmt.Sprintf("tid= %d, dataObjectCnt= %d, tombstoneObjectCnt= %d, rowsCnt= %d",
+		p.tid,
+		p.dataObjectsNameIndex.Len(),
+		p.tombstoneObjectsNameIndex.Len(),
+		p.rows.Len()))
+
+	if short {
+		return buf.String()
+	}
+
+	buf.WriteString("\n\nRows:\n")
+
+	str := p.LogAllRowEntry()
+	buf.WriteString(str)
+
+	return buf.String()
+}
+
+func (p *PartitionState) String() string {
+	return p.Desc(false)
 }
 
 func (p *PartitionState) HandleObjectEntry(ctx context.Context, objectEntry objectio.ObjectEntry, isTombstone bool) (err error) {
