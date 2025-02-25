@@ -17,13 +17,11 @@ package readutil
 import (
 	"bytes"
 	"fmt"
-
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -191,11 +189,27 @@ func (rd *EmptyRelationData) DataCnt() int {
 	return 0
 }
 
+func WithPartitionState(part any) func(*BlockListRelData) {
+	return func(blrd *BlockListRelData) {
+		blrd.pState = part
+	}
+}
+
 // emptyCnt is the number of empty blocks preserved
-func NewBlockListRelationData(emptyCnt int) *BlockListRelData {
-	return &BlockListRelData{
+func NewBlockListRelationData(
+	emptyCnt int,
+	opts ...func(op *BlockListRelData),
+) *BlockListRelData {
+
+	blrd := &BlockListRelData{
 		blklist: objectio.MakeBlockInfoSlice(emptyCnt),
 	}
+
+	for i := range opts {
+		opts[i](blrd)
+	}
+
+	return blrd
 }
 
 func NewBlockListRelationDataOfObject(
@@ -210,6 +224,7 @@ func NewBlockListRelationDataOfObject(
 }
 
 type ObjListRelData struct {
+	PState           any
 	NeedFirstEmpty   bool
 	expanded         bool
 	TotalBlocks      uint32
@@ -222,6 +237,10 @@ func (or *ObjListRelData) expand() {
 	if !or.expanded {
 		or.expanded = true
 		or.blocklistRelData.blklist = objectio.MultiObjectStatsToBlockInfoSlice(or.Objlist, or.NeedFirstEmpty)
+	}
+
+	if or.blocklistRelData.pState == nil {
+		or.blocklistRelData.pState = or.PState
 	}
 }
 
@@ -258,6 +277,11 @@ func (or *ObjListRelData) Split(cpunum int) []engine.RelData {
 		or.expand()
 		return or.blocklistRelData.Split(cpunum)
 	}
+
+	if or.blocklistRelData.pState == nil {
+		or.blocklistRelData.pState = or.PState
+	}
+
 	//split by range shuffle
 	result := make([]engine.RelData, cpunum)
 	for i := range result {
@@ -304,6 +328,7 @@ func (or *ObjListRelData) Split(cpunum int) []engine.RelData {
 	if totalBlocks != int(or.TotalBlocks) {
 		panic("wrong blocks cnt after objlist reldata split!")
 	}
+
 	return result
 }
 
@@ -370,6 +395,7 @@ type BlockListRelData struct {
 	// blkList[0] is a empty block info
 	blklist objectio.BlockInfoSlice
 
+	pState any
 	// tombstones
 	tombstones engine.Tombstoner
 }
@@ -387,6 +413,8 @@ func (relData *BlockListRelData) String() string {
 	} else {
 		w.WriteString("\tTombstones: nil\n")
 	}
+
+	w.WriteString(fmt.Sprintf("\nPState: %v", relData.pState))
 	return w.String()
 }
 
@@ -421,6 +449,10 @@ func (relData *BlockListRelData) Split(i int) []engine.RelData {
 	return shards
 }
 
+func (relData *BlockListRelData) GetPState() any {
+	return relData.pState
+}
+
 func (relData *BlockListRelData) GetBlockInfoSlice() objectio.BlockInfoSlice {
 	return relData.blklist.GetAllBytes()
 }
@@ -428,6 +460,7 @@ func (relData *BlockListRelData) GetBlockInfoSlice() objectio.BlockInfoSlice {
 func (relData *BlockListRelData) BuildEmptyRelData(i int) engine.RelData {
 	l := make([]byte, 0, objectio.BlockInfoSize*i)
 	return &BlockListRelData{
+		pState:  relData.pState,
 		blklist: l,
 	}
 }
@@ -534,6 +567,7 @@ func (relData *BlockListRelData) GetTombstones() engine.Tombstoner {
 func (relData *BlockListRelData) DataSlice(i, j int) engine.RelData {
 	blist := objectio.BlockInfoSlice(relData.blklist.Slice(i, j))
 	return &BlockListRelData{
+		pState:     relData.pState,
 		blklist:    blist,
 		tombstones: relData.tombstones,
 	}
