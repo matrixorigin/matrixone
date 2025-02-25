@@ -32,6 +32,8 @@ type objOverlapPolicy struct {
 	leveledObjects [len(levels)][]*catalog.ObjectEntry
 
 	segments map[objectio.Segmentid]map[*catalog.ObjectEntry]struct{}
+
+	config *BasicPolicyConfig
 }
 
 func newObjOverlapPolicy() *objOverlapPolicy {
@@ -40,7 +42,7 @@ func newObjOverlapPolicy() *objOverlapPolicy {
 	}
 }
 
-func (m *objOverlapPolicy) onObject(obj *catalog.ObjectEntry, config *BasicPolicyConfig) bool {
+func (m *objOverlapPolicy) onObject(obj *catalog.ObjectEntry) bool {
 	if obj.IsTombstone {
 		return false
 	}
@@ -55,6 +57,10 @@ func (m *objOverlapPolicy) onObject(obj *catalog.ObjectEntry, config *BasicPolic
 }
 
 func (m *objOverlapPolicy) revise(rc *resourceController) []reviseResult {
+	if rc.cpuPercent > 80 {
+		return nil
+	}
+
 	for _, objects := range m.segments {
 		l := segLevel(len(objects))
 		for obj := range objects {
@@ -68,34 +74,62 @@ func (m *objOverlapPolicy) revise(rc *resourceController) []reviseResult {
 			continue
 		}
 
-		for _, objs := range objectsWithGivenOverlaps(m.leveledObjects[i], 5) {
-			objs = removeOversize(objs)
-			if len(objs) < 2 || score(objs) < 1.1 {
-				continue
+		points := makeEndPoints(m.leveledObjects[i])
+		if res := objectsWithGivenOverlaps(points, 5); len(res) != 0 {
+			for _, objs := range res {
+				objs = removeOversize(objs)
+				if len(objs) < 2 || score(objs) < 1.1 {
+					continue
+				}
+				result := reviseResult{objs: objs, kind: taskHostDN}
+				reviseResults = append(reviseResults, result)
 			}
-			result := reviseResult{objs: objs, kind: taskHostDN}
-			if rc.cpuPercent > 80 {
-				continue
+		} else {
+			viewed := make(map[*catalog.ObjectEntry]struct{})
+			tmp := make([]*catalog.ObjectEntry, 0)
+			sum := uint32(0)
+			for _, p := range points {
+				if _, ok := viewed[p.obj]; ok {
+					continue
+				}
+				viewed[p.obj] = struct{}{}
+				if p.obj.OriginSize() < m.config.MaxOsizeMergedObj/2 || sum < m.config.MaxOsizeMergedObj/2 {
+					sum += p.obj.OriginSize()
+					tmp = append(tmp, p.obj)
+				} else {
+					if len(tmp) > 1 {
+						reviseResults = append(reviseResults, reviseResult{objs: removeOversize(slices.Clone(tmp)), kind: taskHostDN})
+					}
+					tmp = tmp[:0]
+					sum = 0
+				}
 			}
-
-			for !rc.resourceAvailable(result.objs) && len(result.objs) > 1 {
-				result.objs = result.objs[:len(result.objs)-1]
+			if len(tmp) > 200 { // let the little objs accumulate to a certain number
+				reviseResults = append(reviseResults, reviseResult{objs: removeOversize(slices.Clone(tmp)), kind: taskHostDN})
 			}
-			if len(result.objs) < 2 {
-				continue
-			}
-
-			rc.reserveResources(result.objs)
-			reviseResults = append(reviseResults, result)
 		}
 	}
-	return reviseResults
+
+	for _, result := range reviseResults {
+		for !rc.resourceAvailable(result.objs) && len(result.objs) > 1 {
+			result.objs = result.objs[:len(result.objs)-1]
+		}
+		if len(result.objs) < 2 {
+			continue
+		}
+
+		rc.reserveResources(result.objs)
+	}
+	return slices.DeleteFunc(reviseResults, func(result reviseResult) bool {
+		return len(result.objs) < 2
+	})
 }
 
-func (m *objOverlapPolicy) resetForTable(*catalog.TableEntry, *BasicPolicyConfig) {
+func (m *objOverlapPolicy) resetForTable(entry *catalog.TableEntry, config *BasicPolicyConfig) {
 	for i := range m.leveledObjects {
 		m.leveledObjects[i] = m.leveledObjects[i][:0]
 	}
+	m.config = config
 	clear(m.segments)
 }
 
@@ -117,26 +151,7 @@ type endPoint struct {
 	obj *catalog.ObjectEntry
 }
 
-func objectsWithGivenOverlaps(objects []*catalog.ObjectEntry, overlaps int) [][]*catalog.ObjectEntry {
-	if len(objects) < 2 {
-		return nil
-	}
-	points := make([]endPoint, 0, 2*len(objects))
-	for _, obj := range objects {
-		zm := obj.SortKeyZoneMap()
-		points = append(points, endPoint{val: zm.GetMinBuf(), s: 1, obj: obj})
-		points = append(points, endPoint{val: zm.GetMaxBuf(), s: -1, obj: obj})
-	}
-	slices.SortFunc(points, func(a, b endPoint) int {
-		c := compute.Compare(a.val, b.val, objects[0].SortKeyZoneMap().GetType(),
-			a.obj.SortKeyZoneMap().GetScale(), b.obj.SortKeyZoneMap().GetScale())
-		if c != 0 {
-			return c
-		}
-		// left node is first
-		return -a.s
-	})
-
+func objectsWithGivenOverlaps(points []endPoint, overlaps int) [][]*catalog.ObjectEntry {
 	globalMax := 0
 
 	res := make([][]*catalog.ObjectEntry, 0)
@@ -167,4 +182,23 @@ func objectsWithGivenOverlaps(objects []*catalog.ObjectEntry, overlaps int) [][]
 		})
 		globalMax = 0
 	}
+}
+
+func makeEndPoints(objects []*catalog.ObjectEntry) []endPoint {
+	points := make([]endPoint, 0, 2*len(objects))
+	for _, obj := range objects {
+		zm := obj.SortKeyZoneMap()
+		points = append(points, endPoint{val: zm.GetMinBuf(), s: 1, obj: obj})
+		points = append(points, endPoint{val: zm.GetMaxBuf(), s: -1, obj: obj})
+	}
+	slices.SortFunc(points, func(a, b endPoint) int {
+		c := compute.Compare(a.val, b.val, objects[0].SortKeyZoneMap().GetType(),
+			a.obj.SortKeyZoneMap().GetScale(), b.obj.SortKeyZoneMap().GetScale())
+		if c != 0 {
+			return c
+		}
+		// left node is first
+		return -a.s
+	})
+	return points
 }
