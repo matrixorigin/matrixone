@@ -1015,10 +1015,6 @@ func (c *PushClient) doGCUnusedTable(ctx context.Context) {
 			// never unsubscribe the mo_databases, mo_tables, mo_columns.
 			continue
 		}
-		//if !c.eng.safeToUnsubscribe(k) {
-		//	logutil.Infof("%s table [%d-%d] is not safe to unsubscribe", logTag, v.DBID, k)
-		//	continue
-		//}
 		if !v.LatestTime.After(shouldClean) {
 			if v.SubState != Subscribed {
 				continue

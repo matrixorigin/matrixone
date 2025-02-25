@@ -161,8 +161,6 @@ func (tbl *txnTable) Stats(ctx context.Context, sync bool) (*pb.StatsInfo, error
 		logutil.Errorf("failed to get partition state of table %d: %v", tbl.tableId, err)
 		return nil, err
 	}
-	//logutil.Infof("xxxx Stats start, table:%s, tableID:%d, txn:%s, sync:%v",
-	//	tbl.tableName, tbl.tableId, tbl.db.op.Txn().DebugString(), sync)
 	return tbl.getEngine().Stats(ctx, pb.StatsInfoKey{
 		AccId:      tbl.accountId,
 		DatabaseID: tbl.db.databaseId,
@@ -170,9 +168,6 @@ func (tbl *txnTable) Stats(ctx context.Context, sync bool) (*pb.StatsInfo, error
 		TableName:  tbl.tableName,
 		DbName:     tbl.db.databaseName,
 	}, sync), nil
-	//logutil.Infof("xxxx Stats end, table:%s, tableID:%d, txn:%s, stats:%p",
-	//	tbl.tableName, tbl.tableId, tbl.db.op.Txn().DebugString(), stats)
-	//}
 }
 
 func (tbl *txnTable) Rows(ctx context.Context) (uint64, error) {
@@ -1936,10 +1931,6 @@ func (tbl *txnTable) getPartitionState(
 func (tbl *txnTable) tryToSubscribe(ctx context.Context) (ps *logtailreplay.PartitionState, err error) {
 	eng := tbl.eng.(*Engine)
 	var createdInTxn bool
-	//defer func() {
-	//	eng.globalStats.notifyLogtailUpdate(tbl.tableId, err == nil && !createdInTxn)
-	//}()
-
 	createdInTxn, err = tbl.isCreatedInTxn(ctx)
 	if err != nil {
 		return nil, err

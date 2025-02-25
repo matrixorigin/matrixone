@@ -43,42 +43,7 @@ var (
 	// MinUpdateInterval is the minimal interval to update stats info as it
 	// is necessary to update stats every time.
 	MinUpdateInterval = time.Second * 15
-
-	initCheckInterval = time.Millisecond * 10
-	maxCheckInterval  = time.Second * 5
-	checkTimeout      = time.Minute
 )
-
-// waitKeeper is used to mark the table has finished waited,
-// only after which, the table can be unsubscribed.
-type waitKeeper struct {
-	sync.Mutex
-	records map[uint64]struct{}
-}
-
-func newWaitKeeper() *waitKeeper {
-	return &waitKeeper{
-		records: make(map[uint64]struct{}),
-	}
-}
-
-func (w *waitKeeper) reset() {
-	w.Lock()
-	defer w.Unlock()
-	w.records = make(map[uint64]struct{})
-}
-
-func (w *waitKeeper) add(tid uint64) {
-	w.Lock()
-	defer w.Unlock()
-	w.records[tid] = struct{}{}
-}
-
-func (w *waitKeeper) del(tid uint64) {
-	w.Lock()
-	defer w.Unlock()
-	delete(w.records, tid)
-}
 
 type updateStatsRequest struct {
 	// statsInfo is the field which is to update.
@@ -116,22 +81,6 @@ func newUpdateStatsRequest(
 type updateItem struct {
 	tableID uint64
 	updated bool
-}
-
-type logtailUpdate struct {
-	c  chan *updateItem
-	mu struct {
-		sync.Mutex
-		updated map[uint64]bool
-	}
-}
-
-func newLogtailUpdate() *logtailUpdate {
-	u := &logtailUpdate{
-		c: make(chan *updateItem, 1000),
-	}
-	u.mu.updated = make(map[uint64]bool)
-	return u
 }
 
 type GlobalStatsConfig struct {
@@ -191,8 +140,6 @@ type GlobalStats struct {
 		updating map[pb.StatsInfoKey]*updateRecord
 	}
 
-	logtailUpdate *logtailUpdate
-
 	// tableLogtailCounter is the counter of the logtail entry of stats info key.
 	tableLogtailCounter map[pb.StatsInfoKey]int64
 
@@ -223,9 +170,6 @@ type GlobalStats struct {
 	statsUpdater func(context.Context, *logtailreplay.PartitionState, pb.StatsInfoKey, *pb.StatsInfo) bool
 	// for test only currently.
 	approxObjectNumUpdater func() int64
-
-	// pool is for logtail update item.
-	pool sync.Pool
 }
 
 func NewGlobalStats(
@@ -239,11 +183,6 @@ func NewGlobalStats(
 		tableLogtailCounter: make(map[pb.StatsInfoKey]int64),
 		KeyRouter:           keyRouter,
 		queueWatcher:        newQueueWatcher(),
-		pool: sync.Pool{
-			New: func() interface{} {
-				return &updateItem{}
-			},
-		},
 	}
 	s.updatingMu.updating = make(map[pb.StatsInfoKey]*updateRecord)
 	s.mu.statsInfoMap = make(map[pb.StatsInfoKey]*pb.StatsInfo)
@@ -536,7 +475,6 @@ func (gs *GlobalStats) broadcastStats(key pb.StatsInfoKey) {
 func (gs *GlobalStats) updateTableStats(wrapKey pb.StatsInfoKeyWithContext) {
 	statser := statistic.StatsInfoFromContext(wrapKey.Ctx)
 	crs := new(perfcounter.CounterSet)
-	//logutil.Infof("xxxx updateTableStats,start to update table stats, table ID: %d", wrapKey.Key.TableID)
 	if !gs.shouldUpdate(wrapKey.Key) {
 		return
 	}
@@ -571,21 +509,6 @@ func (gs *GlobalStats) updateTableStats(wrapKey pb.StatsInfoKeyWithContext) {
 		broadcastWithoutUpdate()
 		return
 	}
-	//logutil.Infof("xxxx updateTableStats,subscribe table success, table ID: %d", wrapKey.Key.TableID)
-
-	// wait until the table's logtail has been updated.
-	//logtailUpdated, err := gs.waitLogtailUpdated(wrapKey.Key.TableID)
-	//if err != nil {
-	//	logutil.Errorf("wait logtail updated error: %s, table ID: %d", err, wrapKey.Key.TableID)
-	//	broadcastWithoutUpdate()
-	//	return
-	//}
-	//if !logtailUpdated {
-	//	logutil.Warnf("logtail not updated, table ID: %d", wrapKey.Key.TableID)
-	//	broadcastWithoutUpdate()
-	//	return
-	//}
-
 	stats := plan2.NewStatsInfo()
 
 	newCtx := perfcounter.AttachS3RequestKey(wrapKey.Ctx, crs)
@@ -604,11 +527,9 @@ func (gs *GlobalStats) updateTableStats(wrapKey pb.StatsInfoKeyWithContext) {
 	gs.mu.Lock()
 	defer gs.mu.Unlock()
 	if updated {
-		logutil.Infof("xxxx updateTableStats,update table stats success, table ID: %d", wrapKey.Key.TableID)
 		gs.mu.statsInfoMap[wrapKey.Key] = stats
 		gs.broadcastStats(wrapKey.Key)
 	} else if _, ok := gs.mu.statsInfoMap[wrapKey.Key]; !ok {
-		logutil.Infof("xxxx updateTableStats,update table stats failed, table ID: %d", wrapKey.Key.TableID)
 		gs.mu.statsInfoMap[wrapKey.Key] = nil
 	}
 
