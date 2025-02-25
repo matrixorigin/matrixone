@@ -88,7 +88,7 @@ func (builder *QueryBuilder) buildIvfCreate(tbl *tree.TableFunction, ctx *BindCo
 			TblFunc: &plan.TableFunction{
 				Name:     ivf_create_func_name,
 				Param:    []byte(params),
-				IsSingle: true,
+				IsSingle: true, // centroid computation require single thread mode so set IsSingle to true
 			},
 			Cols: colDefs,
 		},

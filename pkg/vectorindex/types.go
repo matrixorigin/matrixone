@@ -66,8 +66,10 @@ type IvfParam struct {
 type IvfflatIndexConfig struct {
 	Lists      uint
 	nprobe     uint
-	Metric     uint
+	Metric     uint16
+	InitType   uint16
 	Dimensions uint
+	Normalize  bool
 }
 
 // This is generalized index config and able to share between various algorithm types.  Simply add your new configuration such as usearch.IndexConfig
