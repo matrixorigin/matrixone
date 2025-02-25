@@ -125,24 +125,15 @@ func (u *ivfCreateState) end(tf *TableFunction, proc *process.Process) error {
 		strings.Join(values, ","))
 
 	os.Stderr.WriteString(sql)
-	/*
-		if u.build == nil {
-			return nil
-		}
 
-		sqls, err := u.build.ToInsertSql(time.Now().UnixMicro())
+	sqls := []string{sql}
+	for _, s := range sqls {
+		res, err := ivf_runSql(proc, s)
 		if err != nil {
 			return err
 		}
-
-		for _, s := range sqls {
-			res, err := hnsw_runSql(proc, s)
-			if err != nil {
-				return err
-			}
-			res.Close()
-		}
-	*/
+		res.Close()
+	}
 
 	return nil
 }
