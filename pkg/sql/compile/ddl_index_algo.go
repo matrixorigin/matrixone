@@ -246,12 +246,13 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef
 
 	sql := fmt.Sprintf(insertIntoIvfIndexTableFormat,
 		sampleSQL,
-		qryDatabase, originalTableDef.Name,
 		src_alias,
 		params_str,
 		string(cfgbytes),
 		part)
 
+	os.Stderr.WriteString(sql)
+	os.Stderr.WriteString("\n")
 	err = s.logTimestamp(c, qryDatabase, metadataTableName, "clustering_start")
 	if err != nil {
 		return err
