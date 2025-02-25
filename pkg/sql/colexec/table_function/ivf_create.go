@@ -38,7 +38,7 @@ import (
 )
 
 const (
-	defaultKmeansMaxIteration   = 500
+	defaultKmeansMaxIteration   = 10
 	defaultKmeansDeltaThreshold = 0.01
 	defaultKmeansDistanceType   = kmeans.L2Distance
 	defaultKmeansInitType       = kmeans.Random
@@ -106,8 +106,6 @@ func (u *ivfCreateState) end(tf *TableFunction, proc *process.Process) error {
 		return err
 	}
 
-	_ = centers
-
 	// get version
 	version := 0
 
@@ -115,7 +113,7 @@ func (u *ivfCreateState) end(tf *TableFunction, proc *process.Process) error {
 	values := make([]string, 0, len(centers))
 	for i, c := range centers {
 		s := types.ArrayToString[float64](c)
-		values = append(values, fmt.Sprintf("(%d, %d, %s)", version, i, s))
+		values = append(values, fmt.Sprintf("(%d, %d, '%s')", version, i, s))
 	}
 
 	sql := fmt.Sprintf("INSERT INTO `%s`.`%s` (`%s`, `%s`, `%s`) VALUES %s", u.tblcfg.DbName, u.tblcfg.IndexTable,
