@@ -758,8 +758,7 @@ type mergePolicyArg struct {
 	cnMinMergeSize    int32
 	hints             []api.MergeHint
 
-	busyMergeCount int32
-	stopMerge      bool
+	stopMerge bool
 }
 
 func (c *mergePolicyArg) PrepareCommand() *cobra.Command {
@@ -775,7 +774,6 @@ func (c *mergePolicyArg) PrepareCommand() *cobra.Command {
 	policyCmd.Flags().Int32P("minCNMergeSize", "c", common.DefaultMinCNMergeSize, "Merge task whose memory occupation exceeds minCNMergeSize(MB) will be moved to CN")
 	policyCmd.Flags().Int32SliceP("mergeHints", "n", []int32{0}, "hints to merge the table")
 	policyCmd.Flags().BoolP("stopMerge", "s", false, "stop merging the target table")
-	policyCmd.Flags().Int32P("busyMergeCount", "b", common.DefaultBusyMergeCount, "skip the current merge scan if busyMergeCount merge happend in the past 30s")
 	return policyCmd
 }
 
@@ -823,7 +821,6 @@ func (c *mergePolicyArg) FromCommand(cmd *cobra.Command) error {
 	if err != nil {
 		return err
 	}
-	c.busyMergeCount, _ = cmd.Flags().GetInt32("busyMergeCount")
 	return nil
 }
 
@@ -848,7 +845,6 @@ func (c *mergePolicyArg) Run() error {
 		common.RuntimeOsizeRowsQualified.Store(minosize)
 		common.RuntimeMaxObjOsize.Store(maxosize)
 		common.RuntimeMinCNMergeSize.Store(cnsize)
-		common.RuntimeStandaloneBusyMergeCount.Store(c.busyMergeCount)
 		if c.maxMergeObjN == 0 && c.minOsizeQualified == 0 {
 			merge.StopMerge.Store(true)
 			c.ctx.resp.Payload = []byte("auto merge is disabled")
