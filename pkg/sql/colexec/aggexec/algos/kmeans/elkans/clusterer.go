@@ -301,7 +301,7 @@ func (km *ElkanClusterer) computeCentroidDistances() {
 		ncpu = km.clusterCnt
 	}
 
-	os.Stderr.WriteString(fmt.Sprintf("Compute elkan kmean %d thread %d cluster Cnt %d START\n", ncpu, km.clusterCnt))
+	os.Stderr.WriteString(fmt.Sprintf("Compute elkan kmean %d thread %d cluster Cnt START\n", ncpu, km.clusterCnt))
 	for n := 0; n < ncpu; n++ {
 		wg.Add(1)
 		go func() {

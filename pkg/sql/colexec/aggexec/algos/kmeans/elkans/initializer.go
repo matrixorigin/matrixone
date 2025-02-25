@@ -94,14 +94,14 @@ func (kpp *KMeansPlusPlus) InitCentroids(vectors []*mat.VecDense, k int) (centro
 
 		// 2. for each data point, compute the min distance to the existing centers
 		var totalDistToExistingCenters float64
-
 		var wg sync.WaitGroup
 		var mutex sync.Mutex
+
 		for n := 0; n < ncpu; n++ {
 			wg.Add(1)
 
 			go func() {
-				wg.Done()
+				defer wg.Done()
 
 				for vecIdx := range vectors {
 
