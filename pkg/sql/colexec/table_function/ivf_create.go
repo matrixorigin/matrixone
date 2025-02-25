@@ -106,8 +106,31 @@ func (u *ivfCreateState) end(tf *TableFunction, proc *process.Process) error {
 		return err
 	}
 
-	// get version
-	version := 0
+	version, err := func() (int64, error) {
+		sql := fmt.Sprintf("SELECT CAST(`%s` AS BIGINT) FROM `%s` WHERE `%s` = 'version'",
+			catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
+			u.tblcfg.MetadataTable,
+			catalog.SystemSI_IVFFLAT_TblCol_Metadata_key)
+
+		res, err := ivf_runSql(proc, sql)
+		if err != nil {
+			return 0, err
+		}
+		defer res.Close()
+
+		if len(res.Batches) == 0 {
+			return 0, moerr.NewInternalError(proc.Ctx, "version not found")
+		}
+
+		version := int64(0)
+		bat := res.Batches[0]
+		if bat.RowCount() == 1 {
+			version = vector.GetFixedAtWithTypeCheck[int64](bat.Vecs[0], 0)
+			//logutil.Infof("NROW = %d", nrow)
+		}
+
+		return version, nil
+	}()
 
 	// insert into centroid table
 	values := make([]string, 0, len(centers))
