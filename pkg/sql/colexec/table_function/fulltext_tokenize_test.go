@@ -297,7 +297,7 @@ func makeBatchJSONFTT(proc *process.Process) *batch.Batch {
 	bat.Vecs[1] = vector.NewVec(types.New(types.T_varchar, 128, 0))
 
 	vector.AppendFixed[int32](bat.Vecs[0], int32(1), false, proc.Mp())
-	vector.AppendBytes(bat.Vecs[0], []byte("{\"a\":\"abcdedfghijklmnopqrstuvwxyz\"}"), false, proc.Mp())
+	vector.AppendBytes(bat.Vecs[1], []byte("{\"a\":\"abcdedfghijklmnopqrstuvwxyz\"}"), false, proc.Mp())
 
 	bat.SetRowCount(1)
 	return bat
