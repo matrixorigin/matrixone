@@ -152,7 +152,7 @@ func BackupCheckpointDataFactory(
 	fs fileservice.FileService,
 ) func(c *catalog.Catalog) (*CheckpointData_V2, error) {
 	return func(c *catalog.Catalog) (data *CheckpointData_V2, err error) {
-		collector := NewBaseCollector_V2(start, end, 0, fs)
+		collector := NewBackupCollector_V2(start, end, fs)
 		defer collector.Close()
 		err = c.RecurLoop(collector)
 		if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {

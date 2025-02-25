@@ -592,6 +592,7 @@ func ReWriteCheckpointAndBlockFromKey(
 						panic(any(fmt.Sprintf("commitTs less than ts: %v-%v", commitTS.ToString(), ts.ToString())))
 					}
 					if deleteAt.IsEmpty() {
+						i++
 						return nil
 					}
 					if createAt.GE(&ts) {
@@ -623,9 +624,11 @@ func ReWriteCheckpointAndBlockFromKey(
 				if objectType2 == objectType {
 					appendable := stats.GetAppendable()
 					if deleteAt.IsEmpty() {
+						i++
 						return nil
 					}
 					if !appendable {
+						i++
 						return nil
 					}
 					addObjectToObjectData(&stats, appendable, i, tid, dataType, od)
