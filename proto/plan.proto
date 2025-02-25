@@ -437,6 +437,7 @@ message TableDef {
 message TableFunction{
 	string name = 1;
 	bytes param = 2;
+        bool is_single = 3;
 }
 
 enum ShuffleType {

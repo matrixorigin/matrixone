@@ -419,6 +419,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.CanOpt = t.CanOpt
 		op.Attrs = t.Attrs
 		op.Params = t.Params
+		op.IsSingle = t.IsSingle
 		op.SetInfo(&info)
 		if op.FuncName == "generate_series" {
 			op.GenerateSeriesCtrNumState(t.OffsetTotal[index][0], t.OffsetTotal[index][1], t.GetGenerateSeriesCtrNumStateStep(), t.OffsetTotal[index][0])
@@ -607,6 +608,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.TableFunction.Rets = t.TableFunction.Rets
 		op.TableFunction.Attrs = t.TableFunction.Attrs
 		op.TableFunction.Params = t.TableFunction.Params
+		op.TableFunction.IsSingle = t.TableFunction.IsSingle
 		op.TableFunction.SetInfo(&info)
 		op.SetInfo(&info)
 		return op
@@ -1007,6 +1009,7 @@ func constructTableFunction(n *plan.Node) *table_function.TableFunction {
 	arg.Args = n.TblFuncExprList
 	arg.FuncName = n.TableDef.TblFunc.Name
 	arg.Params = n.TableDef.TblFunc.Param
+	arg.IsSingle = n.TableDef.TblFunc.IsSingle
 	arg.Limit = n.Limit
 	return arg
 }

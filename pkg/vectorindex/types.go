@@ -63,10 +63,18 @@ type IvfParam struct {
 	OpType string `json:"op_type"`
 }
 
+type IvfflatIndexConfig struct {
+	Lists      uint
+	nprobe     uint
+	Metric     uint
+	Dimensions uint
+}
+
 // This is generalized index config and able to share between various algorithm types.  Simply add your new configuration such as usearch.IndexConfig
 type IndexConfig struct {
 	Type    string
 	Usearch usearch.IndexConfig
+	Ivfflat IvfflatIndexConfig
 }
 
 // nthread == 0, result will return NumCPU - 1

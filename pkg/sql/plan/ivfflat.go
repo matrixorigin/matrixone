@@ -86,8 +86,9 @@ func (builder *QueryBuilder) buildIvfCreate(tbl *tree.TableFunction, ctx *BindCo
 			TableType: "func_table", //test if ok
 			//Name:               tbl.String(),
 			TblFunc: &plan.TableFunction{
-				Name:  ivf_create_func_name,
-				Param: []byte(params),
+				Name:     ivf_create_func_name,
+				Param:    []byte(params),
+				IsSingle: true,
 			},
 			Cols: colDefs,
 		},
