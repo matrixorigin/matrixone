@@ -250,4 +250,4 @@ bit_and(a)    bit_or(a)    bit_xor(a)
 0    ?    ?
 insert into t1 values(33);
 select bit_and(a) from t1;
-internal error: Binary operands of bitwise operators must be of equal length
+(?s)internal error: Binary operands of bitwise operators must be of equal length.*
