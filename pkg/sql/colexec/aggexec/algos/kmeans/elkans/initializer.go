@@ -19,6 +19,7 @@ import (
 	"math"
 	"math/rand"
 	"os"
+	"runtime"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec/algos/kmeans"
@@ -84,7 +85,7 @@ func (kpp *KMeansPlusPlus) InitCentroids(vectors []*mat.VecDense, k int) (centro
 		distances[j] = math.MaxFloat64
 	}
 
-	ncpu := 2
+	ncpu := runtime.NumCPU()
 	if numSamples < ncpu {
 		ncpu = numSamples
 	}

@@ -149,7 +149,7 @@ func (u *ivfCreateState) end(tf *TableFunction, proc *process.Process) error {
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid,
 		strings.Join(values, ","))
 
-	os.Stderr.WriteString(sql)
+	//os.Stderr.WriteString(sql)
 
 	sqls := []string{sql}
 	for _, s := range sqls {

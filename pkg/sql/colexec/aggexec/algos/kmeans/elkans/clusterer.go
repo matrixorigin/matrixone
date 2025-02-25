@@ -189,7 +189,7 @@ func (km *ElkanClusterer) Cluster() ([][]float64, error) {
 func (km *ElkanClusterer) elkansCluster() ([]*mat.VecDense, error) {
 	os.Stderr.WriteString("elkanCluster loop start\n")
 
-	for iter := 0; iter < 1; iter++ {
+	for iter := 0; iter < 10; iter++ {
 		os.Stderr.WriteString(fmt.Sprintf("iter %d\n", iter))
 		os.Stderr.WriteString("elkanCluster compute centroid distance\n")
 		km.computeCentroidDistances() // step 1
@@ -254,7 +254,7 @@ func (km *ElkanClusterer) initBounds() {
 	// redundant distance calculations. Each time d(x, c) is computed, set l(x, c)=d(x, c).
 	// Assign upper bounds u(x)=min_c d(x, c).
 
-	ncpu := runtime.NumCPU() / 2
+	ncpu := runtime.NumCPU()
 	if len(km.vectorList) < ncpu {
 		ncpu = len(km.vectorList)
 	}
@@ -296,7 +296,7 @@ func (km *ElkanClusterer) computeCentroidDistances() {
 	// step 1.a
 	// For all centers c and c', compute 0.5 x d(c, c').
 	var wg sync.WaitGroup
-	ncpu := runtime.NumCPU() / 2
+	ncpu := runtime.NumCPU()
 	if km.clusterCnt < ncpu {
 		ncpu = km.clusterCnt
 	}
@@ -341,7 +341,7 @@ func (km *ElkanClusterer) computeCentroidDistances() {
 func (km *ElkanClusterer) assignData() int {
 
 	var changes atomic.Int64
-	ncpu := runtime.NumCPU() / 2
+	ncpu := runtime.NumCPU()
 	if len(km.vectorList) < ncpu {
 		ncpu = len(km.vectorList)
 	}
@@ -473,7 +473,7 @@ func (km *ElkanClusterer) updateBounds(newCentroid []*mat.VecDense) {
 	centroidShiftDist := make([]float64, km.clusterCnt)
 	var wg sync.WaitGroup
 
-	ncpu := runtime.NumCPU() / 2
+	ncpu := runtime.NumCPU()
 	if ncpu > km.clusterCnt {
 		ncpu = km.clusterCnt
 	}
