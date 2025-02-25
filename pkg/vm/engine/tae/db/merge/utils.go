@@ -262,6 +262,9 @@ func (c *resourceController) printStats() {
 
 func (c *resourceController) reserveResources(objs []*catalog.ObjectEntry) {
 	for _, obj := range objs {
+		if obj.Rows() == 0 {
+			continue
+		}
 		c.reservedMergeRows += int64(obj.Rows())
 		c.reserved += estimateMemUsagePerRow * int64(obj.Rows())
 		c.reserved += 8196 * int64(obj.OriginSize()/obj.Rows())
