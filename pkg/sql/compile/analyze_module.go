@@ -48,9 +48,12 @@ type AnalyzeModule struct {
 }
 
 // Reset When Compile reused, reset AnalyzeModule to prevent resource accumulation
-func (anal *AnalyzeModule) Reset() {
+func (anal *AnalyzeModule) Reset(isPrepare bool, isTpQuery bool) {
 	if anal != nil {
-		anal.phyPlan = nil
+		if !isPrepare || !isTpQuery {
+			anal.phyPlan = nil
+		}
+
 		anal.remotePhyPlans = nil
 		anal.explainPhyBuffer = nil
 		anal.retryTimes = 0
@@ -278,6 +281,17 @@ func ConvertScopeToPhyScope(scope *Scope, receiverMap map[*process.WaitRegister]
 	return phyScope
 }
 
+func UpdatePreparePhyScope(scope *Scope, phyScope models.PhyScope) {
+	UpdatePreparePhyOperator(scope.RootOp, phyScope.RootOperator)
+	if scope.ScopeAnalyzer != nil {
+		phyScope.PrepareTimeConsumed = scope.ScopeAnalyzer.TimeConsumed
+	}
+
+	for i, preScope := range scope.PreScopes {
+		UpdatePreparePhyScope(preScope, phyScope.PreScopes[i])
+	}
+}
+
 func getScopeReceiver(s *Scope, rs []*process.WaitRegister, rmp map[*process.WaitRegister]int) []models.PhyReceiver {
 	receivers := make([]models.PhyReceiver, 0)
 	for i := range rs {
@@ -336,6 +350,21 @@ func ConvertOperatorToPhyOperator(op vm.Operator, rmp map[*process.WaitRegister]
 	return phyOp
 }
 
+func UpdatePreparePhyOperator(op vm.Operator, phyOp *models.PhyOperator) {
+	if op == nil {
+		return
+	}
+
+	if op.GetOperatorBase().OpAnalyzer != nil {
+		phyOp.OpStats = op.GetOperatorBase().OpAnalyzer.GetOpStats()
+	}
+
+	children := op.GetOperatorBase().Children
+	for i, child := range children {
+		UpdatePreparePhyOperator(child, phyOp.Children[i])
+	}
+}
+
 // getDestReceiver returns the DestReceiver of the current Operator
 func getDestReceiver(op vm.Operator, mp map[*process.WaitRegister]int) []models.PhyReceiver {
 	receivers := make([]models.PhyReceiver, 0)
@@ -392,6 +421,18 @@ func ConvertSourceToPhySource(source *Source) *models.PhySource {
 		SchemaName:   source.SchemaName,
 		RelationName: source.RelationName,
 		Attributes:   source.Attributes,
+	}
+}
+
+func (c *Compile) UpdatePreparePhyPlan(runC *Compile) {
+	//------------------------------------------------------------------------------------------------------
+	c.anal.phyPlan.RetryTime = runC.anal.retryTimes
+	c.anal.curNodeIdx = runC.anal.curNodeIdx
+
+	if len(runC.scopes) > 0 {
+		for i := range runC.scopes {
+			UpdatePreparePhyScope(runC.scopes[i], c.anal.phyPlan.LocalScope[i])
+		}
 	}
 }
 
