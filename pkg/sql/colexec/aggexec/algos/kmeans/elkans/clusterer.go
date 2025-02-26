@@ -24,7 +24,6 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec/algos/kmeans"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"gonum.org/v1/gonum/mat"
@@ -189,7 +188,7 @@ func (km *ElkanClusterer) Cluster() ([][]float64, error) {
 func (km *ElkanClusterer) elkansCluster() ([]*mat.VecDense, error) {
 	os.Stderr.WriteString("elkanCluster loop start\n")
 
-	for iter := 0; iter < 10; iter++ {
+	for iter := 0; ; iter++ {
 		os.Stderr.WriteString(fmt.Sprintf("iter %d\n", iter))
 		os.Stderr.WriteString("elkanCluster compute centroid distance\n")
 		km.computeCentroidDistances() // step 1
@@ -205,7 +204,7 @@ func (km *ElkanClusterer) elkansCluster() ([]*mat.VecDense, error) {
 
 		km.centroids = newCentroids // step 7
 
-		logutil.Debugf("kmeans iter=%d, changes=%d", iter, changes)
+		os.Stderr.WriteString(fmt.Sprintf("kmeans iter=%d, changes=%d\n", iter, changes))
 		if iter != 0 && km.isConverged(iter, changes) {
 			break
 		}

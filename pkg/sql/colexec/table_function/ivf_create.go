@@ -35,10 +35,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"golang.org/x/exp/rand"
 )
 
 const (
-	defaultKmeansMaxIteration   = 10
+	defaultKmeansMaxIteration   = 500
 	defaultKmeansDeltaThreshold = 0.01
 	defaultKmeansDistanceType   = kmeans.L2Distance
 	defaultKmeansInitType       = kmeans.Random
@@ -72,6 +73,7 @@ type ivfCreateState struct {
 	tblcfg  vectorindex.IndexTableConfig
 	idxcfg  vectorindex.IndexConfig
 	data    [][]float64
+	rand    *rand.Rand
 	nsample uint
 	offset  int
 
@@ -229,6 +231,7 @@ func (u *ivfCreateState) start(tf *TableFunction, proc *process.Process, nthRow 
 		}
 
 		u.idxcfg.Ivfflat.InitType = uint16(kmeans.KmeansPlusPlus)
+		//u.idxcfg.Ivfflat.InitType = uint16(kmeans.Random)
 
 		metric, ok := distTypeStrToEnum[u.param.OpType]
 		if !ok {
@@ -277,6 +280,7 @@ func (u *ivfCreateState) start(tf *TableFunction, proc *process.Process, nthRow 
 		}
 		u.data = make([][]float64, 0, u.nsample)
 
+		u.rand = rand.New(rand.NewSource(99))
 		u.batch = tf.createResultBatch()
 		u.inited = true
 	}
@@ -296,6 +300,12 @@ func (u *ivfCreateState) start(tf *TableFunction, proc *process.Process, nthRow 
 	if fpaVec.IsNull(uint64(nthRow)) {
 		return nil
 	}
+
+	/*
+		if u.rand.Float32() > 0.3 {
+			return nil
+		}
+	*/
 
 	var f64a []float64
 	if fpaVec.GetType().Oid == types.T_array_float32 {

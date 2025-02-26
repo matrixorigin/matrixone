@@ -158,21 +158,8 @@ func (ctr *container) probe(ap *Productl2, proc *process.Process, result *vm.Cal
 	buildCount := ctr.bat.RowCount()
 	probeCount := ctr.inBat.RowCount()
 
-	var leastClusterIndex int
-	var leastDistance float64
-
 	centroidColPos := ap.OnExpr.GetF().GetArgs()[0].GetCol().GetColPos()
 	tblColPos := ap.OnExpr.GetF().GetArgs()[1].GetCol().GetColPos()
-
-	var clusterEmbeddingF32 []float32
-	var tblEmbeddingF32 []float32
-	//var normalizeTblEmbeddingPtrF32 *[]float32
-	//var normalizeTblEmbeddingF32 []float32
-
-	var clusterEmbeddingF64 []float64
-	var tblEmbeddingF64 []float64
-	//var normalizeTblEmbeddingPtrF64 *[]float64
-	//var normalizeTblEmbeddingF64 []float64
 
 	var errs error
 	var mutex sync.Mutex
@@ -180,6 +167,14 @@ func (ctr *container) probe(ap *Productl2, proc *process.Process, result *vm.Cal
 	ncpu := runtime.NumCPU() - 1
 	if probeCount < ncpu {
 		ncpu = probeCount
+	}
+
+	leastClusterIndex := make([]int, probeCount)
+	leastDistance := make([]float64, probeCount)
+
+	for i := 0; i < probeCount; i++ {
+		leastClusterIndex[i] = 0
+		leastDistance[i] = math.MaxFloat64
 	}
 
 	for n := 0; n < ncpu; n++ {
@@ -193,13 +188,12 @@ func (ctr *container) probe(ap *Productl2, proc *process.Process, result *vm.Cal
 					continue
 				}
 
-				leastClusterIndex = 0
-				leastDistance = math.MaxFloat64
-
 				// for each row in probe table,
 				// find the nearest cluster center from the build table.
 				switch ctr.bat.Vecs[centroidColPos].GetType().Oid {
 				case types.T_array_float32:
+					var tblEmbeddingF32 []float32
+
 					tblEmbeddingF32IsNull := ctr.inBat.Vecs[tblColPos].IsNull(uint64(j))
 					if !tblEmbeddingF32IsNull {
 						tblEmbeddingF32 = types.BytesToArray[float32](ctr.inBat.Vecs[tblColPos].GetBytesAt(j))
@@ -217,19 +211,19 @@ func (ctr *container) probe(ap *Productl2, proc *process.Process, result *vm.Cal
 
 					for i := 0; i < buildCount; i++ {
 						if tblEmbeddingF32IsNull || ctr.bat.Vecs[centroidColPos].IsNull(uint64(i)) {
-							leastDistance = 0
-							leastClusterIndex = i
+							leastDistance[j] = 0
+							leastClusterIndex[j] = i
 						} else {
-							clusterEmbeddingF32 = types.BytesToArray[float32](ctr.bat.Vecs[centroidColPos].GetBytesAt(i))
+							clusterEmbeddingF32 := types.BytesToArray[float32](ctr.bat.Vecs[centroidColPos].GetBytesAt(i))
 
 							dist, err := moarray.L2DistanceSq[float32](clusterEmbeddingF32, tblEmbeddingF32)
 							if err != nil {
 								errs = errors.Join(errs, err)
 								return
 							}
-							if dist < leastDistance {
-								leastDistance = dist
-								leastClusterIndex = i
+							if dist < leastDistance[j] {
+								leastDistance[j] = dist
+								leastClusterIndex[j] = i
 							}
 						}
 					}
@@ -237,6 +231,8 @@ func (ctr *container) probe(ap *Productl2, proc *process.Process, result *vm.Cal
 					//*normalizeTblEmbeddingPtrF32 = normalizeTblEmbeddingF32
 					//arrayF32Pool.Put(normalizeTblEmbeddingPtrF32)
 				case types.T_array_float64:
+					var tblEmbeddingF64 []float64
+
 					tblEmbeddingF64IsNull := ctr.inBat.Vecs[tblColPos].IsNull(uint64(j))
 					if !tblEmbeddingF64IsNull {
 						tblEmbeddingF64 = types.BytesToArray[float64](ctr.inBat.Vecs[tblColPos].GetBytesAt(j))
@@ -253,18 +249,18 @@ func (ctr *container) probe(ap *Productl2, proc *process.Process, result *vm.Cal
 
 					for i := 0; i < buildCount; i++ {
 						if tblEmbeddingF64IsNull || ctr.bat.Vecs[centroidColPos].IsNull(uint64(i)) {
-							leastDistance = 0
-							leastClusterIndex = i
+							leastDistance[j] = 0
+							leastClusterIndex[j] = i
 						} else {
-							clusterEmbeddingF64 = types.BytesToArray[float64](ctr.bat.Vecs[centroidColPos].GetBytesAt(i))
+							clusterEmbeddingF64 := types.BytesToArray[float64](ctr.bat.Vecs[centroidColPos].GetBytesAt(i))
 
 							dist, err := moarray.L2DistanceSq[float64](clusterEmbeddingF64, tblEmbeddingF64)
 							if err != nil {
 								errs = errors.Join(errs, err)
 							}
-							if dist < leastDistance {
-								leastDistance = dist
-								leastClusterIndex = i
+							if dist < leastDistance[j] {
+								leastDistance[j] = dist
+								leastClusterIndex[j] = i
 							}
 						}
 					}
@@ -280,7 +276,7 @@ func (ctr *container) probe(ap *Productl2, proc *process.Process, result *vm.Cal
 								return err
 							}
 						} else {
-							if err := ctr.rbat.Vecs[k].UnionOne(ctr.bat.Vecs[rp.Pos], int64(leastClusterIndex), proc.Mp()); err != nil {
+							if err := ctr.rbat.Vecs[k].UnionOne(ctr.bat.Vecs[rp.Pos], int64(leastClusterIndex[j]), proc.Mp()); err != nil {
 								return err
 							}
 						}
