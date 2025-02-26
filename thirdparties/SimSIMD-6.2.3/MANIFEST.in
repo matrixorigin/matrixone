@@ -1,3 +1,0 @@
-include include/simsimd/*.h
-include include/*
-include VERSION
