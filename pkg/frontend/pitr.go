@@ -74,8 +74,6 @@ var (
 
 	// update mo_pitr object id
 	updateMoPitrAccountObjectIdFmt = `update mo_catalog.mo_pitr set pitr_status = 0, pitr_status_changed_time = default where account_name = '%s' and pitr_status = 1 and obj_id = %d;`
-
-	getLengthAndUnitFmt = `select pitr_length, pitr_unit from mo_catalog.mo_pitr where account_id = %d and level = '%s'`
 )
 
 type pitrRecord struct {
