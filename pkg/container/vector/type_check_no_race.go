@@ -12,14 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build darwin
+//go:build !race
 
-package tcpconn
+package vector
 
-import (
-	"sync"
-)
-
-func IsConnected(connMap *sync.Map) {
-	return
+func checkTypeIfRaceDetectorEnabled[T any](vec *Vector) {
+	// do nothing
 }

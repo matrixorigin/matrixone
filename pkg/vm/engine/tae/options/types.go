@@ -57,15 +57,6 @@ const (
 	DefaultAsyncWorkers = int(16)
 
 	DefaultLogtailTxnPageSize = 256
-
-	DefaultLogstoreType = LogstoreBatchStore
-)
-
-type LogstoreType string
-
-const (
-	LogstoreBatchStore LogstoreType = "batchstore"
-	LogstoreLogservice LogstoreType = "logservice"
 )
 
 type Options struct {
@@ -83,11 +74,10 @@ type Options struct {
 	TransferTableTTL time.Duration
 	IncrementalDedup bool
 	IsStandalone     bool
-	LogStoreT        LogstoreType
 
 	Fs                fileservice.FileService                  `toml:"-"`
 	LocalFs           fileservice.FileService                  `toml:"-"`
-	Lc                logservicedriver.LogServiceClientFactory `toml:"-"`
+	WalClientFactory  logservicedriver.LogServiceClientFactory `toml:"-"`
 	Ctx               context.Context                          `toml:"-"`
 	Shard             metadata.TNShard                         `toml:"-"`
 	Clock             clock.Clock                              `toml:"-"`

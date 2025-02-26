@@ -634,8 +634,8 @@ func (s *Scope) getRelData(c *Compile, blockExprList []*plan.Expr) error {
 		if err != nil {
 			return err
 		}
-		s.NodeInfo.Data.AppendBlockInfoSlice(commited.GetBlockInfoSlice())
 
+		s.NodeInfo.Data.AppendBlockInfoSlice(commited.GetBlockInfoSlice())
 	} else {
 		tombstones := s.NodeInfo.Data.GetTombstones()
 		commited.AttachTombstones(tombstones)
@@ -973,6 +973,7 @@ func (s *Scope) aggOptimize(c *Compile, rel engine.Relation, ctx context.Context
 			}); err != nil {
 				return err
 			}
+
 			if partialResults != nil {
 				s.NodeInfo.Data = newRelData
 				//find the last mergegroup

@@ -311,7 +311,14 @@ func (tbl *txnTableDelegate) Ranges(ctx context.Context, rangesParam engine.Rang
 		return nil, err
 	}
 
-	ret := readutil.NewBlockListRelationData(0)
+	part, err := tbl.origin.getPartitionState(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	ret := readutil.NewBlockListRelationData(
+		0,
+		readutil.WithPartitionState(part))
 
 	for i := 0; i < rs.DataCnt(); i++ {
 		blk := rs.GetBlockInfo(i)
@@ -569,7 +576,14 @@ func (tbl *txnTableDelegate) BuildShardingReaders(
 
 	//relData maybe is nil, indicate that only read data from memory.
 	if relData == nil || relData.DataCnt() == 0 {
-		relData = readutil.NewBlockListRelationData(1)
+		part, err2 := tbl.origin.getPartitionState(ctx)
+		if err2 != nil {
+			return nil, err2
+		}
+
+		relData = readutil.NewBlockListRelationData(
+			1,
+			readutil.WithPartitionState(part))
 	}
 
 	blkCnt := relData.DataCnt()

@@ -95,8 +95,28 @@ func (p *PartitionState) LogEntry(entry *api.Entry, msg string) {
 	)
 }
 
-func (p *PartitionState) Desc() string {
-	return fmt.Sprintf("PartitionState(tid:%d) objLen %v, rowsLen %v", p.tid, p.dataObjectsNameIndex.Len(), p.rows.Len())
+func (p *PartitionState) Desc(short bool) string {
+	buf := bytes.Buffer{}
+	buf.WriteString(fmt.Sprintf("tid= %d, dataObjectCnt= %d, tombstoneObjectCnt= %d, rowsCnt= %d",
+		p.tid,
+		p.dataObjectsNameIndex.Len(),
+		p.tombstoneObjectsNameIndex.Len(),
+		p.rows.Len()))
+
+	if short {
+		return buf.String()
+	}
+
+	buf.WriteString("\n\nRows:\n")
+
+	str := p.LogAllRowEntry()
+	buf.WriteString(str)
+
+	return buf.String()
+}
+
+func (p *PartitionState) String() string {
+	return p.Desc(false)
 }
 
 func (p *PartitionState) HandleObjectEntry(ctx context.Context, objectEntry objectio.ObjectEntry, isTombstone bool) (err error) {
@@ -170,11 +190,11 @@ func (p *PartitionState) handleDataObjectEntry(ctx context.Context, objEntry obj
 		blkID := objectio.NewBlockidWithObjectID(objID, 0)
 		pivot := &RowEntry{
 			// aobj has only one blk
-			BlockID: *blkID,
+			BlockID: blkID,
 		}
 		for ok := iter.Seek(pivot); ok; ok = iter.Next() {
 			entry := iter.Item()
-			if entry.BlockID != *blkID {
+			if entry.BlockID != blkID {
 				break
 			}
 
@@ -451,11 +471,11 @@ func (p *PartitionState) HandleDataObjectList(
 			blkID := objectio.NewBlockidWithObjectID(objID, uint16(i))
 			pivot := &RowEntry{
 				// aobj has only one blk
-				BlockID: *blkID,
+				BlockID: blkID,
 			}
 			for ok := iter.Seek(pivot); ok; ok = iter.Next() {
 				entry := iter.Item()
-				if entry.BlockID != *blkID {
+				if entry.BlockID != blkID {
 					break
 				}
 

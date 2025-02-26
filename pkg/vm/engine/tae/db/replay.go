@@ -32,10 +32,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/wal"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
 var ErrCancelReplayAnyway = moerr.NewInternalErrorNoCtx("terminate")
@@ -56,9 +55,11 @@ type replayCtl struct {
 	causeCancel context.CancelCauseFunc
 	mode        atomic.Int32
 	onSuccess   func()
+	replayer    *WalReplayer
 }
 
 func newReplayCtl(
+	replayer *WalReplayer,
 	mode driver.ReplayMode,
 	onSuccess func(),
 ) *replayCtl {
@@ -66,9 +67,14 @@ func newReplayCtl(
 		doneCh:    make(chan struct{}),
 		startTime: time.Now(),
 		onSuccess: onSuccess,
+		replayer:  replayer,
 	}
 	ctl.mode.Store(int32(mode))
 	return ctl
+}
+
+func (ctl *replayCtl) MaxLSN() uint64 {
+	return ctl.replayer.MaxLSN()
 }
 
 func (ctl *replayCtl) Wait() (err error) {
@@ -133,7 +139,7 @@ type WalReplayer struct {
 	applyDuration time.Duration
 	readCount     int
 	applyCount    int
-	maxLSN        uint64
+	maxLSN        atomic.Uint64
 
 	lsn uint64
 }
@@ -204,13 +210,17 @@ func (replayer *WalReplayer) Schedule(
 	wg.Add(1)
 	go replayer.applyReplayTxnLoop(cmdQueue, &wg)
 
-	ctl = newReplayCtl(mode, func() {
-		replayer.db.usageMemo.EstablishFromCKPs()
-		replayer.db.Catalog.ReplayTableRows()
-		if onDone != nil {
-			onDone()
-		}
-	})
+	ctl = newReplayCtl(
+		replayer,
+		mode,
+		func() {
+			replayer.db.usageMemo.EstablishFromCKPs()
+			replayer.db.Catalog.ReplayTableRows()
+			if onDone != nil {
+				onDone()
+			}
+		},
+	)
 	ctx, ctl.causeCancel = context.WithCancelCause(ctx)
 
 	go func() {
@@ -225,7 +235,7 @@ func (replayer *WalReplayer) Schedule(
 				zap.Duration("apply-cost", replayer.applyDuration),
 				zap.Int("read-count", replayer.readCount),
 				zap.Int("apply-count", replayer.applyCount),
-				zap.Uint64("max-lsn", replayer.maxLSN),
+				zap.Uint64("max-lsn", replayer.maxLSN.Load()),
 				zap.Error(err2),
 			)
 			ctl.Done(err2)
@@ -247,21 +257,22 @@ func (replayer *WalReplayer) Schedule(
 	return
 }
 
+func (replayer *WalReplayer) MaxLSN() uint64 {
+	return replayer.maxLSN.Load()
+}
+
 func (replayer *WalReplayer) MakeReplayHandle(
 	sender chan<- *txnbase.TxnCmd,
-) store.ApplyHandle {
+) wal.ApplyHandle {
 	return func(
 		group uint32, lsn uint64, payload []byte, typ uint16, info any,
 	) driver.ReplayEntryState {
 		replayer.once.Do(replayer.PreReplayWal)
-		if group != wal.GroupPrepare && group != wal.GroupC {
+		if group != wal.GroupUserTxn && group != wal.GroupC {
 			return driver.RE_Internal
 		}
 		if !replayer.checkLSN(lsn) {
 			return driver.RE_Truncate
-		}
-		if lsn > replayer.maxLSN {
-			replayer.maxLSN = lsn
 		}
 		head := objectio.DecodeIOEntryHeader(payload)
 		if head.Version < txnbase.IOET_WALTxnEntry_V4 {
@@ -291,6 +302,9 @@ func (replayer *WalReplayer) applyReplayTxnLoop(
 		}
 		t0 := time.Now()
 		replayer.OnReplayTxn(txnCmd, txnCmd.Lsn)
+		if txnCmd.Lsn > replayer.maxLSN.Load() {
+			replayer.maxLSN.Store(txnCmd.Lsn)
+		}
 		txnCmd.Close()
 		replayer.applyDuration += time.Since(t0)
 	}

@@ -12,8 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package v2_1_0
+//go:build race
 
-import "github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
+package vector
 
-var tenantUpgEntries = []versions.UpgradeEntry{}
+func checkTypeIfRaceDetectorEnabled[T any](vec *Vector) {
+	checkType[T](vec)
+}

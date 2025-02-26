@@ -193,7 +193,7 @@ func (idx *MutIndex) GetDuplicatedRows(
 			return nil
 		}
 		rowID := objectio.NewRowid(blkID, maxRow)
-		containers.UpdateValue(rowIDs, uint32(offset), *rowID, false, mp)
+		containers.UpdateValue(rowIDs, uint32(offset), rowID, false, mp)
 		return nil
 	}
 	if err = containers.ForeachWindowBytes(keys, 0, keys.Length(), op, nil); err != nil {
