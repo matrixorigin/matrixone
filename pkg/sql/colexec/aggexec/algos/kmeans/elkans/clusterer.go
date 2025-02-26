@@ -307,14 +307,14 @@ func (km *ElkanClusterer) computeCentroidDistances() {
 		go func() {
 			defer wg.Done()
 			for i := 0; i < km.clusterCnt; i++ {
+				if i%ncpu != n {
+					continue
+				}
 				for j := i + 1; j < km.clusterCnt; j++ {
-					segid := i*km.clusterCnt + j
-					if segid%ncpu == n {
-						dist := 0.5 * km.distFn(km.centroids[i], km.centroids[j])
-						km.halfInterCentroidDistMatrix[i][j] = dist
-						km.halfInterCentroidDistMatrix[j][i] = dist
+					dist := 0.5 * km.distFn(km.centroids[i], km.centroids[j])
+					km.halfInterCentroidDistMatrix[i][j] = dist
+					km.halfInterCentroidDistMatrix[j][i] = dist
 
-					}
 				}
 			}
 		}()
