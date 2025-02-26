@@ -3017,12 +3017,12 @@ unlock_table_stmt:
 
 prepareable_stmt:
     create_stmt
+|   alter_stmt
 |   insert_stmt
 |   delete_stmt
 |   drop_stmt
 |   show_stmt
 |   update_stmt
-|   alter_account_stmt
 |   select_stmt
     {
         $$ = $1
