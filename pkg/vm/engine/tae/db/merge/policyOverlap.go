@@ -110,15 +110,15 @@ func (m *objOverlapPolicy) revise(rc *resourceController) []reviseResult {
 		}
 	}
 
-	for _, result := range reviseResults {
-		for !rc.resourceAvailable(result.objs) && len(result.objs) > 1 {
-			result.objs = result.objs[:len(result.objs)-1]
+	for i := range reviseResults {
+		for !rc.resourceAvailable(reviseResults[i].objs) && len(reviseResults[i].objs) > 1 {
+			reviseResults[i].objs = reviseResults[i].objs[:len(reviseResults[i].objs)-1]
 		}
-		if len(result.objs) < 2 {
+		if len(reviseResults[i].objs) < 2 {
 			continue
 		}
 
-		rc.reserveResources(result.objs)
+		rc.reserveResources(reviseResults[i].objs)
 	}
 	return slices.DeleteFunc(reviseResults, func(result reviseResult) bool {
 		return len(result.objs) < 2
