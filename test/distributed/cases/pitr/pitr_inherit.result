@@ -4,18 +4,18 @@ drop pitr if exists pitr01;
 create pitr pitr01 for account acc01 range 1 'h';
 select `pitr_id`, `pitr_name`, `create_account`, `create_time`, `modified_time`, `level`, `account_id`, `account_name`, `database_name`, `table_name`, `obj_id`, `pitr_length`, `pitr_unit` from mo_catalog.mo_pitr Where pitr_name != 'sys_mo_catalog_pitr';
 pitr_id    pitr_name    create_account    create_time    modified_time    level    account_id    account_name    database_name    table_name    obj_id    pitr_length    pitr_unit
-0195418b-832c-704a-8be5-04483574a88c    pitr01    0    2025-02-26 09:16:57    2025-02-26 09:16:57    account    1    acc01            1    1    h
+019541b4-a1c0-753b-a116-39d46692fe93    pitr01    0    2025-02-26 10:01:51    2025-02-26 10:01:51    account    4    acc01            4    1    h
 select account_id, account_name from mo_catalog.mo_account where account_name = 'acc01';
 account_id    account_name
-1    acc01
+4    acc01
 drop account if exists acc01;
 create account acc01 admin_name = 'test_account' identified by '111';
 select `pitr_id`, `pitr_name`, `create_account`, `create_time`, `modified_time`, `level`, `account_id`, `account_name`, `database_name`, `table_name`, `obj_id`, `pitr_length`, `pitr_unit` from mo_catalog.mo_pitr Where pitr_name != 'sys_mo_catalog_pitr';
 pitr_id    pitr_name    create_account    create_time    modified_time    level    account_id    account_name    database_name    table_name    obj_id    pitr_length    pitr_unit
-0195418b-832c-704a-8be5-04483574a88c    pitr01    0    2025-02-26 09:16:57    2025-02-26 09:16:57    account    1    acc01            1    1    h
+019541b4-a1c0-753b-a116-39d46692fe93    pitr01    0    2025-02-26 10:01:51    2025-02-26 10:01:51    account    4    acc01            4    1    h
 select account_id, account_name from mo_catalog.mo_account where account_name = 'acc01';
 account_id    account_name
-2    acc01
+5    acc01
 drop account if exists acc01;
 drop pitr if exists pitr01;
 drop database if exists abc1;
@@ -24,12 +24,12 @@ drop pitr if exists pitr02;
 create pitr pitr02 for database abc1 range 1 'h';
 select `pitr_id`, `pitr_name`, `create_account`, `create_time`, `modified_time`, `level`, `account_id`, `account_name`, `database_name`, `table_name`, `obj_id`, `pitr_length`, `pitr_unit` from mo_catalog.mo_pitr Where pitr_name != 'sys_mo_catalog_pitr';
 pitr_id    pitr_name    create_account    create_time    modified_time    level    account_id    account_name    database_name    table_name    obj_id    pitr_length    pitr_unit
-0195418b-86d6-7b81-8e63-2cb33599cd41    pitr02    0    2025-02-26 09:16:57    2025-02-26 09:16:57    database    0    sys    abc1        272669    1    h
+019541b4-a543-7a77-8902-565106e3d997    pitr02    0    2025-02-26 10:01:52    2025-02-26 10:01:52    database    0    sys    abc1        272911    1    h
 drop database abc1;
 create database abc1;
 select `pitr_id`, `pitr_name`, `create_account`, `create_time`, `modified_time`, `level`, `account_id`, `account_name`, `database_name`, `table_name`, `obj_id`, `pitr_length`, `pitr_unit` from mo_catalog.mo_pitr Where pitr_name != 'sys_mo_catalog_pitr';
 pitr_id    pitr_name    create_account    create_time    modified_time    level    account_id    account_name    database_name    table_name    obj_id    pitr_length    pitr_unit
-0195418b-86d6-7b81-8e63-2cb33599cd41    pitr02    0    2025-02-26 09:16:57    2025-02-26 09:16:57    database    0    sys    abc1        272669    1    h
+019541b4-a543-7a77-8902-565106e3d997    pitr02    0    2025-02-26 10:01:52    2025-02-26 10:01:52    database    0    sys    abc1        272911    1    h
 drop database abc1;
 drop pitr if exists pitr02;
 drop database if exists abc1;
@@ -40,12 +40,12 @@ drop pitr if exists pitr03;
 create pitr pitr03 for database abc1 table test1 range 1 'h';
 select `pitr_id`, `pitr_name`, `create_account`, `create_time`, `modified_time`, `level`, `account_id`, `account_name`, `database_name`, `table_name`, `obj_id`, `pitr_length`, `pitr_unit` from mo_catalog.mo_pitr Where pitr_name != 'sys_mo_catalog_pitr';
 pitr_id    pitr_name    create_account    create_time    modified_time    level    account_id    account_name    database_name    table_name    obj_id    pitr_length    pitr_unit
-0195418b-871f-7d1b-81a9-3b001c78e121    pitr03    0    2025-02-26 09:16:58    2025-02-26 09:16:58    table    0    sys    abc1    test1    272672    1    h
+019541b4-a58c-7645-90fd-18e5c3188718    pitr03    0    2025-02-26 10:01:52    2025-02-26 10:01:52    table    0    sys    abc1    test1    272914    1    h
 drop table test1;
 create table test1(a timestamp);
 select `pitr_id`, `pitr_name`, `create_account`, `create_time`, `modified_time`, `level`, `account_id`, `account_name`, `database_name`, `table_name`, `obj_id`, `pitr_length`, `pitr_unit` from mo_catalog.mo_pitr Where pitr_name != 'sys_mo_catalog_pitr';
 pitr_id    pitr_name    create_account    create_time    modified_time    level    account_id    account_name    database_name    table_name    obj_id    pitr_length    pitr_unit
-0195418b-871f-7d1b-81a9-3b001c78e121    pitr03    0    2025-02-26 09:16:58    2025-02-26 09:16:58    table    0    sys    abc1    test1    272672    1    h
+019541b4-a58c-7645-90fd-18e5c3188718    pitr03    0    2025-02-26 10:01:52    2025-02-26 10:01:52    table    0    sys    abc1    test1    272914    1    h
 drop database abc1;
 drop pitr if exists pitr03;
 drop account if exists acc01;
@@ -56,12 +56,12 @@ drop pitr if exists pitr02;
 create pitr pitr02 for database abc1 range 1 'h';
 select `pitr_id`, `pitr_name`, `create_account`, `create_time`, `modified_time`, `level`, `account_id`, `account_name`, `database_name`, `table_name`, `obj_id`, `pitr_length`, `pitr_unit` from mo_catalog.mo_pitr Where pitr_name != 'sys_mo_catalog_pitr';
 pitr_id    pitr_name    create_account    create_time    modified_time    level    account_id    account_name    database_name    table_name    obj_id    pitr_length    pitr_unit
-0195418b-881c-75c0-a55e-0465e47c9ebe    pitr02    3    2025-02-26 09:16:58    2025-02-26 09:16:58    database    3    acc01    abc1        272751    1    h
+019541b4-a6cb-7762-8a9f-d898fece2375    pitr02    6    2025-02-26 10:01:53    2025-02-26 10:01:53    database    6    acc01    abc1        272993    1    h
 drop database abc1;
 create database abc1;
 select `pitr_id`, `pitr_name`, `create_account`, `create_time`, `modified_time`, `level`, `account_id`, `account_name`, `database_name`, `table_name`, `obj_id`, `pitr_length`, `pitr_unit` from mo_catalog.mo_pitr Where pitr_name != 'sys_mo_catalog_pitr';
 pitr_id    pitr_name    create_account    create_time    modified_time    level    account_id    account_name    database_name    table_name    obj_id    pitr_length    pitr_unit
-0195418b-881c-75c0-a55e-0465e47c9ebe    pitr02    3    2025-02-26 09:16:58    2025-02-26 09:16:58    database    3    acc01    abc1        272751    1    h
+019541b4-a6cb-7762-8a9f-d898fece2375    pitr02    6    2025-02-26 10:01:53    2025-02-26 10:01:53    database    6    acc01    abc1        272993    1    h
 drop database abc1;
 drop database if exists abc1;
 create database abc1;
@@ -71,14 +71,14 @@ drop pitr if exists pitr03;
 create pitr pitr03 for database abc1 table test1 range 1 'h';
 select `pitr_id`, `pitr_name`, `create_account`, `create_time`, `modified_time`, `level`, `account_id`, `account_name`, `database_name`, `table_name`, `obj_id`, `pitr_length`, `pitr_unit` from mo_catalog.mo_pitr Where pitr_name != 'sys_mo_catalog_pitr';
 pitr_id    pitr_name    create_account    create_time    modified_time    level    account_id    account_name    database_name    table_name    obj_id    pitr_length    pitr_unit
-0195418b-881c-75c0-a55e-0465e47c9ebe    pitr02    3    2025-02-26 09:16:58    2025-02-26 09:16:58    database    3    acc01    abc1        272751    1    h
-0195418b-8862-7908-b313-004b71ed1551    pitr03    3    2025-02-26 09:16:58    2025-02-26 09:16:58    table    3    acc01    abc1    test1    272754    1    h
+019541b4-a6cb-7762-8a9f-d898fece2375    pitr02    6    2025-02-26 10:01:53    2025-02-26 10:01:53    database    6    acc01    abc1        272993    1    h
+019541b4-a716-77bc-bcf4-002e29393e2c    pitr03    6    2025-02-26 10:01:53    2025-02-26 10:01:53    table    6    acc01    abc1    test1    272996    1    h
 drop table test1;
 create table test1(a timestamp);
 select `pitr_id`, `pitr_name`, `create_account`, `create_time`, `modified_time`, `level`, `account_id`, `account_name`, `database_name`, `table_name`, `obj_id`, `pitr_length`, `pitr_unit` from mo_catalog.mo_pitr Where pitr_name != 'sys_mo_catalog_pitr';
 pitr_id    pitr_name    create_account    create_time    modified_time    level    account_id    account_name    database_name    table_name    obj_id    pitr_length    pitr_unit
-0195418b-881c-75c0-a55e-0465e47c9ebe    pitr02    3    2025-02-26 09:16:58    2025-02-26 09:16:58    database    3    acc01    abc1        272751    1    h
-0195418b-8862-7908-b313-004b71ed1551    pitr03    3    2025-02-26 09:16:58    2025-02-26 09:16:58    table    3    acc01    abc1    test1    272754    1    h
+019541b4-a6cb-7762-8a9f-d898fece2375    pitr02    6    2025-02-26 10:01:53    2025-02-26 10:01:53    database    6    acc01    abc1        272993    1    h
+019541b4-a716-77bc-bcf4-002e29393e2c    pitr03    6    2025-02-26 10:01:53    2025-02-26 10:01:53    table    6    acc01    abc1    test1    272996    1    h
 drop database abc1;
 drop account if exists acc01;
 create pitr pitr_mo_catalog for database mo_catalog range 1 'h';
