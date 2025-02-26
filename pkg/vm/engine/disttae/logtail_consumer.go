@@ -642,10 +642,6 @@ func (c *PushClient) receiveOneLogtail(ctx context.Context, e *Engine) error {
 				errRsp.GetTable().GetDbId(),
 				errRsp.GetTable().GetTbId())
 		}
-		logutil.Errorf("%s subsribe table:%d failed, err:%s",
-			logTag,
-			errRsp.GetTable().GetTbId(),
-			status.GetMessage())
 	}
 	return nil
 }
@@ -1348,7 +1344,7 @@ func (s *subscribedTable) setTableSubNotExist(dbId, tblId uint64) {
 		SubState:   SubRspTableNotExist,
 		LatestTime: time.Now(),
 	}
-	logutil.Errorf("%s received incorrect response:table is not exist for subscribe tbl[db: %d, tbl: %d]",
+	logutil.Errorf("%s received incorrect subscribe response, table[db: %d, tbl: %d] is not exist",
 		logTag, dbId, tblId)
 }
 

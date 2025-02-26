@@ -497,7 +497,7 @@ func (gs *GlobalStats) updateTableStats(wrapKey pb.StatsInfoKeyWithContext) {
 		wrapKey.Key.DatabaseID,
 		wrapKey.Key.DbName)
 	if err != nil {
-		logutil.Errorf(
+		logutil.Warnf(
 			"updateTableStats:failed to subsrcribe table[%d-%s], error:%s",
 			wrapKey.Key.TableID,
 			wrapKey.Key.TableName,

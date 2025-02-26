@@ -30,7 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
@@ -710,11 +709,4 @@ func (e *Engine) LazyLoadLatestCkp(
 	}
 
 	return part, nil
-}
-
-func (e *Engine) UpdateOfPush(
-	ctx context.Context,
-	databaseId,
-	tableId uint64, ts timestamp.Timestamp) error {
-	return e.pClient.TryToSubscribeTable(ctx, databaseId, tableId)
 }
