@@ -213,10 +213,7 @@ func MakeBloomfilterCoarseFilter(
 	FilterFn,
 	error,
 ) {
-	reader, err := logtail.GetCKPDataReader(ctx, location, ckpVersion, mp, fs)
-	if err != nil {
-		return nil, err
-	}
+	reader:= logtail.NewCKPReader_V2(ckpVersion, location, mp, fs)
 	bf, err := BuildBloomfilter(
 		ctx,
 		rowCount,
@@ -227,10 +224,8 @@ func MakeBloomfilterCoarseFilter(
 		mp,
 	)
 	if err != nil {
-		reader.Close()
 		return nil, err
 	}
-	reader.Close()
 	return func(
 		ctx context.Context,
 		bm *bitmap.Bitmap,

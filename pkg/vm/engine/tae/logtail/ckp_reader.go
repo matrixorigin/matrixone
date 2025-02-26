@@ -16,6 +16,7 @@ package logtail
 
 import (
 	"context"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -275,7 +276,7 @@ func readMetaWithTableID(
 	return
 }
 
-func (reader *CKPReader_V2) GetLocation() []objectio.Location {
+func (reader *CKPReader_V2) GetLocations() []objectio.Location {
 	if reader.version <= CheckpointVersion12 {
 		locations := make([]objectio.Location, 0, len(reader.dataLocations)+len(reader.dataLocations))
 		for _, loc := range reader.dataLocations {
@@ -320,7 +321,7 @@ func (reader *CKPReader_V2) GetLocation() []objectio.Location {
 }
 
 func (reader *CKPReader_V2) PrefetchData(sid string) {
-	locations := reader.GetLocation()
+	locations := reader.GetLocations()
 	for _, loc := range locations {
 		ioutil.Prefetch(sid, reader.fs, loc)
 	}
@@ -734,6 +735,78 @@ func GetCheckpointMetaInfo(
 	)
 }
 
+func getMetaInfo(
+	files map[uint64]*tableinfo,
+	id uint64,
+	objBatchLength int,
+	tombstoneInfo map[uint64]*tableinfo,
+	tombstone map[string]struct{},
+) (res *ObjectInfoJson, err error) {
+	tableinfos := make([]*tableinfo, 0)
+	objectCount := uint64(0)
+	addCount := uint64(0)
+	deleteCount := uint64(0)
+	for _, count := range files {
+		tableinfos = append(tableinfos, count)
+		objectCount += count.add
+		addCount += count.add
+		objectCount += count.delete
+		deleteCount += count.delete
+	}
+	sort.Slice(tableinfos, func(i, j int) bool {
+		return tableinfos[i].add > tableinfos[j].add
+	})
+	tableJsons := make([]TableInfoJson, 0, objBatchLength)
+	tables := make(map[uint64]int)
+	for i := range len(tableinfos) {
+		tablejson := TableInfoJson{
+			ID:     tableinfos[i].tid,
+			Add:    tableinfos[i].add,
+			Delete: tableinfos[i].delete,
+		}
+		if id == 0 || tablejson.ID == id {
+			tables[tablejson.ID] = len(tableJsons)
+			tableJsons = append(tableJsons, tablejson)
+		}
+	}
+	tableinfos2 := make([]*tableinfo, 0)
+	objectCount2 := uint64(0)
+	addCount2 := uint64(0)
+	for _, count := range tombstoneInfo {
+		tableinfos2 = append(tableinfos2, count)
+		objectCount2 += count.add
+		addCount2 += count.add
+	}
+	sort.Slice(tableinfos2, func(i, j int) bool {
+		return tableinfos2[i].add > tableinfos2[j].add
+	})
+
+	for i := range len(tableinfos2) {
+		if idx, ok := tables[tableinfos2[i].tid]; ok {
+			tablejson := &tableJsons[idx]
+			tablejson.TombstoneRows = tableinfos2[i].add
+			tablejson.TombstoneCount = tableinfos2[i].delete
+			continue
+		}
+		tablejson := TableInfoJson{
+			ID:             tableinfos2[i].tid,
+			TombstoneRows:  tableinfos2[i].add,
+			TombstoneCount: tableinfos2[i].delete,
+		}
+		if id == 0 || tablejson.ID == id {
+			tableJsons = append(tableJsons, tablejson)
+		}
+	}
+
+	res = &ObjectInfoJson{
+		TableCnt:     len(tableJsons),
+		ObjectCnt:    objectCount,
+		ObjectAddCnt: addCount,
+		ObjectDelCnt: deleteCount,
+		TombstoneCnt: len(tombstone),
+	}
+	return
+}
 func GetTableIDsFromCheckpoint(
 	ctx context.Context,
 	reader *CKPReader_V2,
@@ -771,7 +844,7 @@ func GetObjectsFromCKPMeta(
 	pinned map[string]bool,
 ) (err error) {
 
-	locations := reader.GetLocation()
+	locations := reader.GetLocations()
 	for _, loc := range locations {
 		pinned[loc.Name().String()] = true
 	}

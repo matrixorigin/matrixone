@@ -455,7 +455,7 @@ func LoadCheckpointEntriesFromKey(
 	version uint32,
 	softDeletes *map[string]bool,
 	baseTS *types.TS,
-) ([]*objectio.BackupObject, *CKPDataReader, error) {
+) ([]*objectio.BackupObject, *CKPReader_V2, error) {
 	locations := make([]*objectio.BackupObject, 0)
 	data, err := GetCheckpointData(ctx, sid, fs, location, version)
 	if err != nil {
@@ -475,6 +475,7 @@ func LoadCheckpointEntriesFromKey(
 	}
 
 	data.ForEachRow(
+		ctx,
 		func(
 			account uint32,
 			dbid, tid uint64,
@@ -526,7 +527,7 @@ func ReWriteCheckpointAndBlockFromKey(
 	sid string,
 	fs, dstFs fileservice.FileService,
 	loc objectio.Location,
-	lastCkpData *CKPDataReader,
+	lastCkpData *CKPReader_V2,
 	version uint32, ts types.TS,
 ) (objectio.Location, objectio.Location, []string, error) {
 	logutil.Info("[Start]", common.OperationField("ReWrite Checkpoint"),
@@ -565,7 +566,6 @@ func ReWriteCheckpointAndBlockFromKey(
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	defer data.Close()
 
 	phaseNumber = 2
 	// Analyze checkpoint to get the object file
@@ -578,6 +578,7 @@ func ReWriteCheckpointAndBlockFromKey(
 	) {
 		i := 0
 		data.ForEachRow(
+			ctx,
 			func(
 				account uint32,
 				dbid, tid uint64,
@@ -617,6 +618,7 @@ func ReWriteCheckpointAndBlockFromKey(
 	) {
 		i := 0
 		lastCkpData.ForEachRow(
+			ctx,
 			func(
 				account uint32,
 				dbid, tid uint64,
@@ -830,6 +832,7 @@ func ReWriteCheckpointAndBlockFromKey(
 		initCkpBatch := func(objectType int8, newMeta *batch.Batch, insertObjData map[int]*objData) {
 			i := 0
 			data.ForEachRow(
+				ctx,
 				func(
 					account uint32,
 					dbid, tid uint64,
@@ -879,6 +882,7 @@ func ReWriteCheckpointAndBlockFromKey(
 	} else {
 		dest := ckputil.NewObjectListBatch()
 		data.ForEachRow(
+			ctx,
 			func(
 				account uint32,
 				dbid, tid uint64,

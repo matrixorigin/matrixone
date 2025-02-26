@@ -1171,8 +1171,9 @@ func FillUsageBatOfIncremental(collector *IncrementalCollector) {
 }
 
 func FillUsageBatOfCompacted(
+	ctx context.Context,
 	usage *TNUsageMemo,
-	data *CKPDataReader,
+	data *batch.Batch,
 	meta *SnapshotMeta,
 	accountSnapshots map[uint32][]types.TS,
 	pitrs *PitrInfo,
@@ -1242,7 +1243,7 @@ func FillUsageBatOfCompacted(
 		objectsName[stats.ObjectName().String()] = struct{}{}
 		return nil
 	}
-	data.ForEachRow(scan)
+	data.ForEachRow(ctx, scan)
 	iter := usage.cache.data.Iter()
 	update := make(map[[3]uint64]UsageData)
 	for iter.Next() {

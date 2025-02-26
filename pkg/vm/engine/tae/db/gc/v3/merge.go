@@ -52,9 +52,9 @@ func MergeCheckpoint(
 	client checkpoint.Runner,
 	pool *mpool.MPool,
 	fs fileservice.FileService,
-) (deleteFiles, newFiles []string, checkpointEntry *checkpoint.CheckpointEntry, ckpData *logtail.CKPDataReader, err error) {
-	ckpDataBatch := ckputil.NewObjectListBatch()
-	datas := make([]*logtail.CKPDataReader, 0)
+) (deleteFiles, newFiles []string, checkpointEntry *checkpoint.CheckpointEntry, ckpData *batch.Batch, err error) {
+	ckpData = ckputil.NewObjectListBatch()
+	datas := make([]*logtail.CKPReader_V2, 0)
 	deleteFiles = make([]string, 0)
 	for _, ckpEntry := range ckpEntries {
 		select {
@@ -68,7 +68,7 @@ func MergeCheckpoint(
 			zap.String("task", taskName),
 			zap.String("entry", ckpEntry.String()),
 		)
-		var data *logtail.CKPDataReader
+		var data *logtail.CKPReader_V2
 		var locations map[string]objectio.Location
 		if _, data, err = logtail.LoadCheckpointEntriesFromKey(
 			ctx,
@@ -98,7 +98,7 @@ func MergeCheckpoint(
 		// add checkpoint idx file to deleteFiles
 		deleteFiles = append(deleteFiles, ckpEntry.GetLocation().Name().String())
 		locations, err = logtail.LoadCheckpointLocations(
-			ctx, sid, ckpEntry.GetTNLocation(), ckpEntry.GetVersion(), fs,
+			ctx, sid, data,
 		)
 		if err != nil {
 			if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
@@ -112,11 +112,6 @@ func MergeCheckpoint(
 			deleteFiles = append(deleteFiles, name)
 		}
 	}
-	defer func() {
-		for _, data := range datas {
-			data.Close()
-		}
-	}()
 	if len(datas) == 0 {
 		return
 	}
@@ -131,20 +126,23 @@ func MergeCheckpoint(
 			return
 		default:
 		}
-		objectBatch := data.GetBatch()
+		var objectBatch *batch.Batch
+		if objectBatch, err = data.GetCheckpointData(ctx); err != nil {
+			return
+		}
+		defer objectBatch.Clean(common.CheckpointAllocator)
 		statsVec := objectBatch.Vecs[ckputil.TableObjectsAttr_ID_Idx]
 		bf.Test(statsVec,
 			func(exists bool, i int) {
 				if !exists {
 					return
 				}
-				appendValToBatchForObjectListBatch(objectBatch, ckpDataBatch, i, pool)
+				appendValToBatchForObjectListBatch(objectBatch, ckpData, i, pool)
 			})
 	}
-	ckpData = logtail.NewCheckpointReaderWithBatch(ckpDataBatch, pool)
 
 	sinker := ckputil.NewDataSinker(pool, fs)
-	if err = sinker.Write(ctx, ckpDataBatch); err != nil {
+	if err = sinker.Write(ctx, ckpData); err != nil {
 		return
 	}
 	ckpWriter := logtail.NewCheckpointDataWithSinker(sinker, pool)

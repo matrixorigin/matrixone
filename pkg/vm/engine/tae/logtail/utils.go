@@ -1365,25 +1365,15 @@ func (data *CheckpointData) ReadFrom(
 func LoadCheckpointLocations(
 	ctx context.Context,
 	sid string,
-	location objectio.Location,
-	version uint32,
-	fs fileservice.FileService,
+	reader *CKPReader_V2,
 ) (map[string]objectio.Location, error) {
 	select {
 	case <-ctx.Done():
 		return nil, context.Cause(ctx)
 	default:
 	}
-	var err error
-	var data *CKPDataReader
-	if data, err = GetCKPDataReader(
-		ctx, location, version, common.CheckpointAllocator, fs,
-	); err != nil {
-		return nil, err
-	}
-	defer data.Close()
 	locationMap := make(map[string]objectio.Location)
-	locations := data.GetLocations()
+	locations := reader.GetLocations()
 	for _, loc := range locations {
 		locationMap[loc.Name().String()] = loc
 	}

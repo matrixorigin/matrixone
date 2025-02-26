@@ -340,7 +340,7 @@ type tombstone struct {
 func (sm *SnapshotMeta) updateTableInfo(
 	ctx context.Context,
 	fs fileservice.FileService,
-	data *CKPDataReader, startts, endts types.TS,
+	data *CKPReader_V2, startts, endts types.TS,
 ) error {
 	var objects map[uint64]map[objectio.Segmentid]*objectInfo
 	var tombstones map[uint64]map[objectio.Segmentid]*objectInfo
@@ -372,8 +372,8 @@ func (sm *SnapshotMeta) updateTableInfo(
 			deleteAt: deleteTS,
 		}
 	}
-	collectObjects(&objects, nil, data, ckputil.ObjectType_Data, collector)
-	collectObjects(&tombstones, nil, data, ckputil.ObjectType_Tombstone, collector)
+	collectObjects(ctx, &objects, nil, data, ckputil.ObjectType_Data, collector)
+	collectObjects(ctx, &tombstones, nil, data, ckputil.ObjectType_Tombstone, collector)
 	tObjects := objects[catalog2.MO_TABLES_ID]
 	tTombstones := tombstones[catalog2.MO_TABLES_ID]
 	orderedInfos := make([]*objectInfo, 0, len(tObjects))
@@ -569,9 +569,10 @@ func (sm *SnapshotMeta) updateTableInfo(
 }
 
 func collectObjects(
+	ctx context.Context,
 	objects *map[uint64]map[objectio.Segmentid]*objectInfo,
 	objects2 *map[objectio.Segmentid]*objectInfo,
-	data *CKPDataReader,
+	data *CKPReader_V2,
 	objType int8,
 	collector func(
 		*map[uint64]map[objectio.Segmentid]*objectInfo,
@@ -582,6 +583,7 @@ func collectObjects(
 	),
 ) {
 	data.ForEachRow(
+		ctx,
 		func(
 			account uint32,
 			dbid, table uint64,
@@ -601,7 +603,7 @@ func collectObjects(
 func (sm *SnapshotMeta) Update(
 	ctx context.Context,
 	fs fileservice.FileService,
-	data *CKPDataReader,
+	data *CKPReader_V2,
 	startts, endts types.TS,
 	taskName string,
 ) (err error) {
@@ -690,6 +692,7 @@ func (sm *SnapshotMeta) Update(
 		mapFun((*objects1)[tid])
 	}
 	collectObjects(
+		ctx,
 		&sm.objects,
 		&sm.pitr.objects,
 		data,
@@ -697,6 +700,7 @@ func (sm *SnapshotMeta) Update(
 		collector,
 	)
 	collectObjects(
+		ctx,
 		&sm.tombstones,
 		&sm.pitr.tombstones,
 		data,
@@ -1419,7 +1423,7 @@ func (sm *SnapshotMeta) ReadTableInfo(ctx context.Context, name string, fs files
 func (sm *SnapshotMeta) InitTableInfo(
 	ctx context.Context,
 	fs fileservice.FileService,
-	data *CKPDataReader,
+	data *CKPReader_V2,
 	startts, endts types.TS,
 ) {
 	sm.Lock()

@@ -174,8 +174,8 @@ func (w *GCWindow) ExecuteGlobalCheckpointBasedGC(
 func (w *GCWindow) ScanCheckpoints(
 	ctx context.Context,
 	checkpointEntries []*checkpoint.CheckpointEntry,
-	collectCkpData func(context.Context, *checkpoint.CheckpointEntry) (*logtail.CKPDataReader, error),
-	processCkpData func(*checkpoint.CheckpointEntry, *logtail.CKPDataReader) error,
+	collectCkpData func(context.Context, *checkpoint.CheckpointEntry) (*logtail.CKPReader_V2, error),
+	processCkpData func(*checkpoint.CheckpointEntry, *logtail.CKPReader_V2) error,
 	onScanDone func() error,
 	buffer *containers.OneSchemaBatchBuffer,
 ) (metaFile string, err error) {
@@ -197,14 +197,13 @@ func (w *GCWindow) ScanCheckpoints(
 		if err != nil {
 			return false, err
 		}
-		defer data.Close()
 		if processCkpData != nil {
 			if err = processCkpData(checkpointEntries[0], data); err != nil {
 				return false, err
 			}
 		}
 		objects := make(map[string]*ObjectEntry)
-		collectObjectsFromCheckpointData(data, objects)
+		collectObjectsFromCheckpointData(ctx, data, objects)
 		if err = collectMapData(objects, bat, mp); err != nil {
 			return false, err
 		}
@@ -321,8 +320,9 @@ func (w *GCWindow) Merge(o *GCWindow) {
 	}
 }
 
-func collectObjectsFromCheckpointData(data *logtail.CKPDataReader, objects map[string]*ObjectEntry) {
+func collectObjectsFromCheckpointData(ctx context.Context, data *logtail.CKPReader_V2, objects map[string]*ObjectEntry) {
 	data.ForEachRow(
+		ctx,
 		func(
 			account uint32,
 			dbid, tid uint64,
