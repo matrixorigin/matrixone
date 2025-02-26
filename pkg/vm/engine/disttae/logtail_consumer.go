@@ -418,9 +418,10 @@ func (c *PushClient) toSubscribeTable(
 			c.subscribed.clearTable(dbID, tableID)
 			return nil, moerr.NewInternalErrorf(
 				ctx,
-				"%s to subcribe table:%d failed, since table is not exist",
+				"%s to subcribe tbl[%d-%s] failed since table is not exist",
 				logTag,
-				tableID)
+				tableID,
+				tableName)
 		case Unsubscribing:
 			//need to wait for unsubscribe succeed for making the subscribe and unsubscribe execute in order,
 			// otherwise the partition state will leak log tails.
@@ -1347,7 +1348,7 @@ func (s *subscribedTable) setTableSubNotExist(dbId, tblId uint64) {
 		SubState:   SubRspTableNotExist,
 		LatestTime: time.Now(),
 	}
-	logutil.Infof("%s subscribe tbl[db: %d, tbl: %d] response failed, since table is not exist",
+	logutil.Errorf("%s received incorrect response:table is not exist for subscribe tbl[db: %d, tbl: %d]",
 		logTag, dbId, tblId)
 }
 

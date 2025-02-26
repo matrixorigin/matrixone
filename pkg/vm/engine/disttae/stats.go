@@ -78,11 +78,6 @@ func newUpdateStatsRequest(
 	}
 }
 
-type updateItem struct {
-	tableID uint64
-	updated bool
-}
-
 type GlobalStatsConfig struct {
 	LogtailUpdateStatsThreshold int
 }
@@ -503,8 +498,9 @@ func (gs *GlobalStats) updateTableStats(wrapKey pb.StatsInfoKeyWithContext) {
 		wrapKey.Key.DbName)
 	if err != nil {
 		logutil.Errorf(
-			"updateTableStats:Failed to subsrcribe table:%d, err:%s",
+			"updateTableStats:failed to subsrcribe table[%d-%s], error:%s",
 			wrapKey.Key.TableID,
+			wrapKey.Key.TableName,
 			err)
 		broadcastWithoutUpdate()
 		return
