@@ -457,3 +457,22 @@ func TestObjectsWithMaximumOverlaps(t *testing.T) {
 	require.ElementsMatch(t, []*catalog.ObjectEntry{o1, o3, o4, o5}, res8[0])
 	require.ElementsMatch(t, []*catalog.ObjectEntry{o2, o6}, res8[1])
 }
+
+func TestLargeMerge(t *testing.T) {
+	objs := make([]*catalog.ObjectEntry, 250)
+	for i := range objs {
+		objs[i] = newTestVarcharObjectEntry(t, "a", "a", 110*common.Const1MBytes)
+	}
+
+	policy := newObjOverlapPolicy()
+	policy.resetForTable(nil, defaultBasicConfig)
+
+	rc := new(resourceController)
+	rc.setMemLimit(10 * common.Const1GBytes)
+	for _, obj := range objs {
+		policy.onObject(obj)
+	}
+	results := policy.revise(rc)
+	require.Equal(t, 1, len(results))
+	require.Less(t, len(results[0].objs), 250)
+}
