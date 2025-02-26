@@ -97,6 +97,14 @@ func (s *Scheduler) PreExecute() error {
 
 func (s *Scheduler) PostExecute() error {
 	s.rc.printStats()
+	if s.rc.skippedFromOOM {
+		logutil.Warnf("[MERGE-SCHEDULE] Merge Skipped from OOM")
+		s.rc.prevCount = s.rc.count
+		// if previous merge is too large, wait for a while.
+		time.Sleep(time.Minute)
+	} else {
+		s.rc.prevCount = 0
+	}
 	return nil
 }
 
@@ -117,6 +125,14 @@ func (s *Scheduler) onDataBase(*catalog.DBEntry) (err error) {
 
 func (s *Scheduler) onTable(tableEntry *catalog.TableEntry) (err error) {
 	if StopMerge.Load() {
+		return moerr.GetOkStopCurrRecur()
+	}
+	s.rc.count++
+	if s.rc.count < s.rc.prevCount {
+		return moerr.GetOkStopCurrRecur()
+	}
+	if s.rc.availableMem() < 100*common.Const1MBytes {
+		s.rc.skippedFromOOM = true
 		return moerr.GetOkStopCurrRecur()
 	}
 

@@ -197,6 +197,10 @@ type resourceController struct {
 	transferPageLimit int64
 
 	cpuPercent float64
+
+	skippedFromOOM bool
+	count          int
+	prevCount      int
 }
 
 func (c *resourceController) setMemLimit(total uint64) {
@@ -246,6 +250,9 @@ func (c *resourceController) refresh() {
 	}
 	c.reservedMergeRows = 0
 	c.reserved = 0
+
+	c.skippedFromOOM = false
+	c.count = 0
 }
 
 func (c *resourceController) availableMem() int64 {
