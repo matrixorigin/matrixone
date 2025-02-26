@@ -3534,6 +3534,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableStringType(fulltext.FulltextRelevancyAlgo),
 		Default:           fulltext.FulltextRelevancyAlgo_tfidf,
+	},
 	"experimental_hnsw_index": {
 		Name:              "experimental_hnsw_index",
 		Scope:             ScopeBoth,
