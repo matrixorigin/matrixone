@@ -471,25 +471,10 @@ func (km *ElkanClusterer) updateBounds(newCentroid []*mat.VecDense) {
 	// compute the centroid shift distance matrix once.
 	// d(c', m(c')) in the paper
 	centroidShiftDist := make([]float64, km.clusterCnt)
-	var wg sync.WaitGroup
-
-	ncpu := runtime.NumCPU()
-	if ncpu > km.clusterCnt {
-		ncpu = km.clusterCnt
+	for c := 0; c < km.clusterCnt; c++ {
+		centroidShiftDist[c] = km.distFn(km.centroids[c], newCentroid[c])
+		//logutil.Debugf("centroidShiftDist[%d]=%f", c, centroidShiftDist[c])
 	}
-	for n := 0; n < ncpu; n++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for c := 0; c < km.clusterCnt; c++ {
-				if c%ncpu == n {
-					centroidShiftDist[c] = km.distFn(km.centroids[c], newCentroid[c])
-					//logutil.Debugf("centroidShiftDist[%d]=%f", c, centroidShiftDist[c])
-				}
-			}
-		}()
-	}
-	wg.Wait()
 
 	// step 5
 	//For each point x and center c, assign
