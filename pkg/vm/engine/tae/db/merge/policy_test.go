@@ -209,7 +209,7 @@ func TestObjOverlap(t *testing.T) {
 	require.True(t, policy.onObject(entry3))
 	require.True(t, policy.onObject(entry4))
 	objs = policy.revise(rc)
-	require.Zero(t, len(objs))
+	require.Equal(t, 1, len(objs))
 	policy.resetForTable(nil, defaultBasicConfig)
 
 	// entry is not sorted
@@ -242,7 +242,7 @@ func TestObjOverlap(t *testing.T) {
 	require.True(t, policy.onObject(entry11))
 
 	objs = policy.revise(rc)
-	require.Zero(t, len(objs))
+	require.Equal(t, 1, len(objs))
 
 	policy.resetForTable(nil, defaultBasicConfig)
 
@@ -255,7 +255,7 @@ func TestObjOverlap(t *testing.T) {
 
 	objs = policy.revise(rc)
 	for _, obj := range objs {
-		require.Equal(t, 0, len(obj.objs))
+		require.Equal(t, 2, len(obj.objs))
 	}
 
 	policy.resetForTable(nil, defaultBasicConfig)

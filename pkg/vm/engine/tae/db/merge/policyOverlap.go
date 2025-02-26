@@ -15,6 +15,7 @@
 package merge
 
 import (
+	"maps"
 	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -146,7 +147,7 @@ func segLevel(length int) int {
 
 type endPoint struct {
 	val []byte
-	s   int
+	s   bool
 
 	obj *catalog.ObjectEntry
 }
@@ -156,29 +157,35 @@ func objectsWithGivenOverlaps(points []endPoint, overlaps int) [][]*catalog.Obje
 
 	res := make([][]*catalog.ObjectEntry, 0)
 	tmp := make(map[*catalog.ObjectEntry]struct{})
+	targets := make(map[*catalog.ObjectEntry]struct{})
+
 	for {
-		objs := make([]*catalog.ObjectEntry, 0, len(points)/2)
 		clear(tmp)
+		clear(targets)
+
 		for _, p := range points {
-			if p.s == 1 {
+			if p.s {
 				tmp[p.obj] = struct{}{}
 			} else {
 				delete(tmp, p.obj)
 			}
 			if len(tmp) > globalMax {
 				globalMax = len(tmp)
-				objs = objs[:0]
-				for obj := range tmp {
-					objs = append(objs, obj)
-				}
+				clear(targets)
+				maps.Copy(targets, tmp)
 			}
 		}
-		if len(objs) < overlaps {
+
+		if len(targets) > 1 {
+			res = append(res, slices.Collect(maps.Keys(targets)))
+		}
+		if len(targets) < overlaps {
 			return res
 		}
-		res = append(res, objs)
+
 		points = slices.DeleteFunc(points, func(point endPoint) bool {
-			return slices.Contains(objs, point.obj)
+			_, ok := targets[point.obj]
+			return ok
 		})
 		globalMax = 0
 	}
@@ -188,8 +195,8 @@ func makeEndPoints(objects []*catalog.ObjectEntry) []endPoint {
 	points := make([]endPoint, 0, 2*len(objects))
 	for _, obj := range objects {
 		zm := obj.SortKeyZoneMap()
-		points = append(points, endPoint{val: zm.GetMinBuf(), s: 1, obj: obj})
-		points = append(points, endPoint{val: zm.GetMaxBuf(), s: -1, obj: obj})
+		points = append(points, endPoint{val: zm.GetMinBuf(), s: true, obj: obj})
+		points = append(points, endPoint{val: zm.GetMaxBuf(), s: false, obj: obj})
 	}
 	slices.SortFunc(points, func(a, b endPoint) int {
 		c := compute.Compare(a.val, b.val, objects[0].SortKeyZoneMap().GetType(),
@@ -198,7 +205,10 @@ func makeEndPoints(objects []*catalog.ObjectEntry) []endPoint {
 			return c
 		}
 		// left node is first
-		return -a.s
+		if a.s {
+			return -1
+		}
+		return 1
 	})
 	return points
 }
