@@ -294,13 +294,17 @@ func GetCheckpointData(
 	fs fileservice.FileService,
 	location objectio.Location,
 	version uint32,
-) (*CKPDataReader, error) {
+) (*CKPReader_V2, error) {
 	select {
 	case <-ctx.Done():
 		return nil, context.Cause(ctx)
 	default:
 	}
-	return GetCKPDataReader(ctx, location, version, common.CheckpointAllocator, fs)
+	reader := NewCKPReader_V2(version, location, common.CheckpointAllocator, fs)
+	if err := reader.ReadMeta(ctx); err != nil {
+		return nil, err
+	}
+	return reader, nil
 }
 
 func addObjectToObjectData(

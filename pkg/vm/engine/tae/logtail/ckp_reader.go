@@ -693,7 +693,6 @@ func ReplayCheckpoint(
 
 func GetCheckpointMetaInfo(
 	ctx context.Context,
-	location objectio.Location,
 	id uint64,
 	reader *CKPReader_V2,
 ) (res *ObjectInfoJson, err error) {

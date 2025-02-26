@@ -28,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -55,7 +54,7 @@ type CkpReplayer struct {
 	dir        string
 	r          *runner
 	ckpEntries []*CheckpointEntry
-	ckpdatas   []*logtail.CheckpointReplayer // for compatibility
+	ckpReader  []*logtail.CKPReader_V2
 	closes     []func()
 	emptyFile  []*CheckpointEntry
 
@@ -75,11 +74,6 @@ func (c *CkpReplayer) Close() {
 	}
 	for _, worker := range c.objectReplayWorker {
 		worker.Stop()
-	}
-	for _, data := range c.ckpdatas {
-		if data != nil {
-			data.Close()
-		}
 	}
 }
 
@@ -251,7 +245,7 @@ func (c *CkpReplayer) ReadCkpFiles() (err error) {
 
 	// step2. read checkpoint data, output is the ckpdatas
 
-	c.ckpdatas = make([]*logtail.CheckpointReplayer, len(c.ckpEntries))
+	c.ckpReader = make([]*logtail.CKPReader_V2, len(c.ckpEntries))
 
 	readfn := func(i int, readType uint16) (err error) {
 		checkpointEntry := c.ckpEntries[i]
@@ -261,22 +255,15 @@ func (c *CkpReplayer) ReadCkpFiles() (err error) {
 		}
 		var err2 error
 		if readType == PrefetchData {
-			if err2 = checkpointEntry.Prefetch(ctx, r.rt.Fs, c.ckpdatas[i]); err2 != nil {
-				logutil.Warnf("read %v failed: %v", checkpointEntry.String(), err2)
-			}
+			c.ckpReader[i].PrefetchData(checkpointEntry.sid)
 		} else if readType == PrefetchMetaIdx {
 			c.readCount++
-			c.ckpdatas[i], err = checkpointEntry.PrefetchMetaIdx(ctx, r.rt.Fs)
-			if err != nil {
-				return
-			}
+			c.ckpReader[i] = logtail.NewCKPReader_V2(
+				checkpointEntry.GetVersion(), checkpointEntry.GetLocation(), common.CheckpointAllocator, r.rt.Fs,
+			)
+			ioutil.Prefetch(checkpointEntry.sid, r.rt.Fs, checkpointEntry.GetLocation())
 		} else if readType == ReadMetaIdx {
-			err = checkpointEntry.ReadMetaIdx(ctx, r.rt.Fs, c.ckpdatas[i])
-			if err != nil {
-				return
-			}
-		} else {
-			if err2 = checkpointEntry.Read(ctx, r.rt.Fs, c.ckpdatas[i]); err2 != nil {
+			if err2 = c.ckpReader[i].ReadMeta(ctx); err2 != nil {
 				logutil.Warnf("read %v failed: %v", checkpointEntry.String(), err2)
 				c.emptyFile = append(c.emptyFile, checkpointEntry)
 			}
@@ -310,12 +297,6 @@ func (c *CkpReplayer) ReadCkpFiles() (err error) {
 		}
 	}
 
-	for i := 0; i < len(c.ckpEntries); i++ {
-		if err = readfn(i, ReadData); err != nil {
-			return
-		}
-	}
-
 	c.readDuration += time.Since(t0)
 
 	// step3. Add entries to the runner
@@ -343,26 +324,6 @@ func (c *CkpReplayer) ReadCkpFiles() (err error) {
 	return
 }
 
-func applyObjectList(
-	ctx context.Context,
-	entry *CheckpointEntry,
-	replayer *logtail.CheckpointReplayer,
-	forSys bool,
-	c *catalog.Catalog,
-	fs fileservice.FileService,
-) (err error) {
-	if entry.version <= logtail.CheckpointVersion12 {
-		replayer.ReplayObjectlist(ctx, c, forSys)
-	} else {
-		if err = logtail.ReplayCheckpoint(
-			ctx, c, forSys, entry.GetTNLocation(), common.CheckpointAllocator, fs,
-		); err != nil {
-			return
-		}
-	}
-	return
-}
-
 // ReplayThreeTablesObjectlist replays the object list the three tables, and check the LSN and TS.
 func (c *CkpReplayer) ReplayThreeTablesObjectlist(phase string) (
 	maxTs types.TS,
@@ -383,13 +344,8 @@ func (c *CkpReplayer) ReplayThreeTablesObjectlist(phase string) (
 	entries := c.ckpEntries
 	maxGlobal := r.MaxGlobalCheckpoint()
 	if maxGlobal != nil {
-		err = applyObjectList(
-			ctx,
-			c.ckpEntries[c.globalCkpIdx],
-			c.ckpdatas[c.globalCkpIdx],
-			true,
-			r.catalog,
-			c.r.rt.Options.Fs,
+		err = logtail.ReplayCheckpoint(
+			ctx, r.catalog, true, c.ckpReader[c.globalCkpIdx],
 		)
 		c.applyCount++
 		logger := logutil.Info
@@ -433,13 +389,8 @@ func (c *CkpReplayer) ReplayThreeTablesObjectlist(phase string) (
 			continue
 		}
 		start := time.Now()
-		if err = applyObjectList(
-			ctx,
-			c.ckpEntries[i],
-			c.ckpdatas[i],
-			true,
-			r.catalog,
-			c.r.rt.Options.Fs,
+		if err = logtail.ReplayCheckpoint(
+			ctx, r.catalog, true, c.ckpReader[i],
 		); err != nil {
 			logger = logutil.Error
 		}
@@ -522,13 +473,8 @@ func (c *CkpReplayer) ReplayObjectlist(ctx context.Context, phase string) (err e
 	entries := c.ckpEntries
 	maxTs := types.TS{}
 	if maxGlobal := r.MaxGlobalCheckpoint(); maxGlobal != nil {
-		if err = applyObjectList(
-			ctx,
-			c.ckpEntries[c.globalCkpIdx],
-			c.ckpdatas[c.globalCkpIdx],
-			false,
-			r.catalog,
-			c.r.rt.Options.Fs,
+		if err = logtail.ReplayCheckpoint(
+			ctx, r.catalog, false, c.ckpReader[c.globalCkpIdx],
 		); err != nil {
 			return
 		}
@@ -542,13 +488,8 @@ func (c *CkpReplayer) ReplayObjectlist(ctx context.Context, phase string) (err e
 		if checkpointEntry.end.LE(&maxTs) {
 			continue
 		}
-		if err = applyObjectList(
-			ctx,
-			c.ckpEntries[i],
-			c.ckpdatas[i],
-			false,
-			r.catalog,
-			c.r.rt.Options.Fs,
+		if err = logtail.ReplayCheckpoint(
+			ctx, r.catalog, false, c.ckpReader[i],
 		); err != nil {
 			return
 		}

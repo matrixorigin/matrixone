@@ -6979,10 +6979,16 @@ func TestSnapshotGC(t *testing.T) {
 	objects := make(map[string]struct{})
 	tombstones := make(map[string]struct{})
 	for _, ckp := range ckps {
-		logtail.ConsumeCheckpointWithTableID(
-			ctx,
-			rele2.ID(),
+		reader := logtail.NewCKPReaderWithTableID_V2(
+			logtail.CheckpointCurrentVersion,
 			ckp.GetLocation(),
+			rele2.ID(),
+			common.DebugAllocator,
+			tae.Opts.Fs,
+		)
+		err = reader.ReadMeta(ctx)
+		reader.ConsumeCheckpointWithTableID(
+			ctx,
 			func(ctx context.Context, obj objectio.ObjectEntry, isTombstone bool) (err error) {
 				if isTombstone {
 					tombstones[obj.ObjectName().String()] = struct{}{}
@@ -6991,8 +6997,6 @@ func TestSnapshotGC(t *testing.T) {
 				}
 				return
 			},
-			common.DebugAllocator,
-			tae.Opts.Fs,
 		)
 	}
 	p := &catalog.LoopProcessor{}
@@ -9447,10 +9451,16 @@ func TestSnapshotCheckpoint(t *testing.T) {
 			objects := make(map[string]struct{})
 			tombstones := make(map[string]struct{})
 			for _, ckp := range ckps {
-				logtail.ConsumeCheckpointWithTableID(
-					ctx,
-					rel1.ID(),
+				reader := logtail.NewCKPReaderWithTableID_V2(
+					logtail.CheckpointCurrentVersion,
 					ckp.GetLocation(),
+					rel1.ID(),
+					common.DebugAllocator,
+					tae.Opts.Fs,
+				)
+				err = reader.ReadMeta(ctx)
+				reader.ConsumeCheckpointWithTableID(
+					ctx,
 					func(ctx context.Context, obj objectio.ObjectEntry, isTombstone bool) (err error) {
 						if isTombstone {
 							tombstones[obj.ObjectName().String()] = struct{}{}
@@ -9459,8 +9469,6 @@ func TestSnapshotCheckpoint(t *testing.T) {
 						}
 						return
 					},
-					common.DebugAllocator,
-					tae.Opts.Fs,
 				)
 			}
 			p := &catalog.LoopProcessor{}
@@ -11304,9 +11312,14 @@ func TestCheckpointV2(t *testing.T) {
 	)
 	catalog2 := catalog.MockCatalog(dataFactory)
 
-	err = logtail.PrefetchCheckpoint(ctx, "", loc, common.DebugAllocator, tae.Opts.Fs)
-	assert.NoError(t, err)
-	err = logtail.ReplayCheckpoint(ctx, catalog2, true, loc, common.DebugAllocator, tae.Opts.Fs)
+	reader := logtail.NewCKPReader_V2(
+		logtail.CheckpointCurrentVersion,
+		loc,
+		common.DebugAllocator,
+		tae.Opts.Fs,
+	)
+	err = reader.ReadMeta(ctx)
+	err = logtail.ReplayCheckpoint(ctx, catalog2, true, reader)
 	assert.NoError(t, err)
 	readTxn, err := tae.StartTxn(nil)
 	assert.NoError(t, err)
@@ -11319,7 +11332,7 @@ func TestCheckpointV2(t *testing.T) {
 	for _, fn := range closeFn {
 		fn()
 	}
-	err = logtail.ReplayCheckpoint(ctx, catalog2, false, loc, common.DebugAllocator, tae.Opts.Fs)
+	err = logtail.ReplayCheckpoint(ctx, catalog2, false, reader)
 	assert.NoError(t, err)
 
 	var tombstoneCnt2, dataCnt2 int
@@ -11342,12 +11355,16 @@ func TestCheckpointV2(t *testing.T) {
 	assert.Equal(t, tombstoneCnt, tombstoneCnt2)
 
 	var tombstoneCnt3, dataCnt3 int
-	err = logtail.PrefetchCheckpointWithTableID(ctx, "", rel.ID(), loc, common.DebugAllocator, tae.Opts.Fs)
-	assert.NoError(t, err)
-	err = logtail.ConsumeCheckpointWithTableID(
-		ctx,
-		rel.ID(),
+	reader = logtail.NewCKPReaderWithTableID_V2(
+		logtail.CheckpointCurrentVersion,
 		loc,
+		rel.ID(),
+		common.DebugAllocator,
+		tae.Opts.Fs,
+	)
+	err = reader.ReadMeta(ctx)
+	err = reader.ConsumeCheckpointWithTableID(
+		ctx,
 		func(
 			ctx context.Context, obj objectio.ObjectEntry, isTombstone bool,
 		) (err error) {
@@ -11358,8 +11375,6 @@ func TestCheckpointV2(t *testing.T) {
 			}
 			return
 		},
-		common.DebugAllocator,
-		tae.Opts.Fs,
 	)
 	assert.NoError(t, err)
 	assert.Equal(t, tombstoneEntryCnt, tombstoneCnt3)

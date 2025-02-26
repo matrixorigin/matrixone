@@ -26,9 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 )
 
@@ -396,110 +394,39 @@ func (e *CheckpointEntry) String() string {
 // read related
 //===============================================================
 
-func (e *CheckpointEntry) Prefetch(
-	ctx context.Context,
-	fs fileservice.FileService,
-	replayer *logtail.CheckpointReplayer,
-) (err error) {
-	if e.version <= logtail.CheckpointVersion12 {
-		replayer.PrefetchData(ctx, e.sid, fs)
-	} else {
-		if err = logtail.PrefetchCheckpoint(
-			ctx, e.sid, e.GetTNLocation(), common.CheckpointAllocator, fs,
-		); err != nil {
-			return
-		}
-	}
-	return
-}
-
-func (e *CheckpointEntry) Read(
-	ctx context.Context,
-	fs fileservice.FileService,
-	replayer *logtail.CheckpointReplayer,
-) (err error) {
-	// for version greater than 12, read data when replay ckp
-	if e.version <= logtail.CheckpointVersion12 {
-		if err = replayer.ReadDataForV12(ctx, fs); err != nil {
-			return
-		}
-	}
-	return
-}
-
-func (e *CheckpointEntry) PrefetchMetaIdx(
-	ctx context.Context,
-	fs fileservice.FileService,
-) (replayer *logtail.CheckpointReplayer, err error) {
-	// replayer is for compatibility
-	if e.version <= logtail.CheckpointVersion12 {
-		replayer = logtail.NewCheckpointReplayer(e.GetTNLocation(), common.CheckpointAllocator)
-	}
-	ioutil.Prefetch(e.sid, fs, e.GetTNLocation())
-	return
-}
-
-func (e *CheckpointEntry) ReadMetaIdx(
-	ctx context.Context,
-	fs fileservice.FileService,
-	replayer *logtail.CheckpointReplayer,
-) (err error) {
-	// for ckp version greater than 12, read meta when prefetch ckp data
-	if e.version <= logtail.CheckpointVersion12 {
-		if err = replayer.ReadMetaForV12(
-			ctx, fs,
-		); err != nil {
-			return
-		}
-	}
-	return
-}
-
 // Only for test
 // Only fill in columns ObjectID, CreateTS and DeleteTS
 func (e *CheckpointEntry) GetTableByID(
 	ctx context.Context, fs fileservice.FileService, tid uint64, mp *mpool.MPool,
 ) (data *batch.Batch, err error) {
-	if e.version <= logtail.CheckpointVersion12 {
-		replayer := logtail.NewCheckpointReplayer(e.GetLocation(), mp)
-		if err = replayer.ReadMetaForV12WithTableID(ctx, tid, fs); err != nil {
-			return
-		}
-		if err = replayer.ReadDataForV12(ctx, fs); err != nil {
-			return
-		}
-		return replayer.GetObjectListBatch()
-	} else {
-		data = ckputil.NewObjectListBatch()
-		totalLength := 0
-		if err = logtail.ConsumeCheckpointWithTableID(
-			ctx,
-			tid,
-			e.GetLocation(),
-			func(
-				ctx context.Context,
-				obj objectio.ObjectEntry,
-				isTombstone bool,
-			) (err error) {
-				totalLength++
-				vector.AppendFixed[types.TS](
-					data.Vecs[ckputil.TableObjectsAttr_CreateTS_Idx], obj.CreateTime, false, mp,
-				)
-				vector.AppendFixed[types.TS](
-					data.Vecs[ckputil.TableObjectsAttr_DeleteTS_Idx], obj.CreateTime, false, mp,
-				)
-				vector.AppendBytes(
-					data.Vecs[ckputil.TableObjectsAttr_ID_Idx], obj.ObjectStats[:], false, mp,
-				)
-				return
-			},
-			common.CheckpointAllocator,
-			fs,
-		); err != nil {
-			return
-		}
-		data.SetRowCount(totalLength)
+	reader := logtail.NewCKPReaderWithTableID_V2(e.version, e.cnLocation, tid, mp, fs)
+	if err = reader.ReadMeta(ctx); err != nil {
+		return
 	}
+	totalLength := 0
+	if err = reader.ConsumeCheckpointWithTableID(
+		ctx,
+		func(
+			ctx context.Context,
+			obj objectio.ObjectEntry,
+			isTombstone bool,
+		) (err error) {
+			totalLength++
+			vector.AppendFixed[types.TS](
+				data.Vecs[ckputil.TableObjectsAttr_CreateTS_Idx], obj.CreateTime, false, mp,
+			)
+			vector.AppendFixed[types.TS](
+				data.Vecs[ckputil.TableObjectsAttr_DeleteTS_Idx], obj.CreateTime, false, mp,
+			)
+			vector.AppendBytes(
+				data.Vecs[ckputil.TableObjectsAttr_ID_Idx], obj.ObjectStats[:], false, mp,
+			)
+			return
+		},
+	); err != nil {
+		return
+	}
+	data.SetRowCount(totalLength)
 	return
 }
 
@@ -509,25 +436,11 @@ func (e *CheckpointEntry) GetCheckpointMetaInfo(
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 ) (res *logtail.ObjectInfoJson, err error) {
-	if e.version <= logtail.CheckpointVersion12 {
-		replayer := logtail.NewCheckpointReplayer(e.GetLocation(), mp)
-		defer replayer.Close()
-		if err = replayer.ReadMetaForV12(ctx, fs); err != nil {
-			return
-		}
-		if err = replayer.ReadDataForV12(ctx, fs); err != nil {
-			return
-		}
-		res, err = replayer.GetCheckpointMetaInfo(id)
+	reader := logtail.NewCKPReader_V2(e.version, e.cnLocation, mp, fs)
+	if err = reader.ReadMeta(ctx); err != nil {
 		return
-	} else {
-		return logtail.GetCheckpointMetaInfo(
-			ctx, e.GetLocation(),
-			id,
-			mp,
-			fs,
-		)
 	}
+	return logtail.GetCheckpointMetaInfo(ctx, id, reader)
 }
 
 func (e *CheckpointEntry) GetTableIDs(
@@ -536,26 +449,11 @@ func (e *CheckpointEntry) GetTableIDs(
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 ) (result []uint64, err error) {
-	if e.version <= logtail.CheckpointVersion12 {
-		replayer := logtail.NewCheckpointReplayer(e.GetLocation(), mp)
-		defer replayer.Close()
-		if err = replayer.ReadMetaForV12(ctx, fs); err != nil {
-			return
-		}
-		if err = replayer.ReadDataForV12(ctx, fs); err != nil {
-			return
-		}
-		result, err = replayer.GetTableIDs()
-		return
-	} else {
-		result, err = logtail.GetTableIDsFromCheckpoint(
-			ctx,
-			loc,
-			mp,
-			fs,
-		)
+	reader := logtail.NewCKPReader_V2(e.version, e.cnLocation, mp, fs)
+	if err = reader.ReadMeta(ctx); err != nil {
 		return
 	}
+	return logtail.GetTableIDsFromCheckpoint(ctx, reader)
 }
 
 func (e *CheckpointEntry) GetObjects(
@@ -564,50 +462,9 @@ func (e *CheckpointEntry) GetObjects(
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 ) (err error) {
-	if e.version <= logtail.CheckpointVersion12 {
-		replayer := logtail.NewCheckpointReplayer(e.GetLocation(), mp)
-		defer replayer.Close()
-		if err = replayer.ReadMetaForV12(ctx, fs); err != nil {
-			return
-		}
-		if err = replayer.GetObjects(ctx, e.GetLocation(), pinned, mp, fs); err != nil {
-			return
-		}
+	reader := logtail.NewCKPReader_V2(e.version, e.cnLocation, mp, fs)
+	if err = reader.ReadMeta(ctx); err != nil {
 		return
-	} else {
-		return logtail.GetObjectsFromCKPMeta(
-			ctx,
-			e.GetLocation(),
-			pinned,
-			mp,
-			fs,
-		)
 	}
-}
-
-func (e *CheckpointEntry) ForEachRow(
-	ctx context.Context,
-	fn func(
-		account uint32,
-		dbid, tid uint64,
-		objectType int8,
-		objectStats objectio.ObjectStats,
-		create, delete types.TS,
-		rowID types.Rowid,
-	) error,
-	mp *mpool.MPool,
-	fs fileservice.FileService,
-) (err error) {
-	if e.version <= logtail.CheckpointVersion12 {
-		replayer := logtail.NewCheckpointReplayer(e.GetLocation(), mp)
-		defer replayer.Close()
-		if err = replayer.ReadMetaForV12(ctx, fs); err != nil {
-			return
-		}
-		return replayer.ForEachRow(fn)
-	} else {
-		return logtail.ForEachRowInCheckpointData(
-			ctx, fn, e.GetLocation(), mp, fs,
-		)
-	}
+	return logtail.GetObjectsFromCKPMeta(ctx, reader, pinned)
 }

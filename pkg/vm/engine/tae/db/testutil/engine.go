@@ -465,9 +465,15 @@ func mockAndReplayCatalog(
 ) *catalog.Catalog {
 	dataFactory := tables.NewDataFactory(e.Runtime, e.Dir)
 	c := catalog.MockCatalog(dataFactory)
-	err := logtail.ReplayCheckpoint(
-		ctx, c, true, loc, common.DebugAllocator, e.Opts.Fs,
+	reader := logtail.NewCKPReader_V2(
+		logtail.CheckpointCurrentVersion,
+		loc,
+		common.DebugAllocator,
+		e.Opts.Fs,
 	)
+	err := reader.ReadMeta(ctx)
+	assert.NoError(t, err)
+	err = logtail.ReplayCheckpoint(ctx, c, true, reader)
 	assert.NoError(t, err)
 
 	readTxn, err := e.StartTxn(nil)
@@ -483,9 +489,15 @@ func mockAndReplayCatalog(
 	}
 	assert.NoError(t, readTxn.Commit(ctx))
 
-	err = logtail.ReplayCheckpoint(
-		ctx, c, false, loc, common.DebugAllocator, e.Opts.Fs,
+	reader = logtail.NewCKPReader_V2(
+		logtail.CheckpointCurrentVersion,
+		loc,
+		common.DebugAllocator,
+		e.Opts.Fs,
 	)
+	err = reader.ReadMeta(ctx)
+	assert.NoError(t, err)
+	err = logtail.ReplayCheckpoint(ctx, c, false, reader)
 	assert.NoError(t, err)
 
 	return c
@@ -500,10 +512,17 @@ func checkCheckpointDataByTableID(
 	e *TestEngine,
 ) {
 	objCount := 0
-	err := logtail.ConsumeCheckpointWithTableID(
-		ctx,
-		tbl.ID,
+	reader := logtail.NewCKPReaderWithTableID_V2(
+		logtail.CheckpointCurrentVersion,
 		loc,
+		tbl.ID,
+		common.DebugAllocator,
+		e.Opts.Fs,
+	)
+	err := reader.ReadMeta(ctx)
+	assert.NoError(t, err)
+	err = reader.ConsumeCheckpointWithTableID(
+		ctx,
 		func(
 			ctx context.Context, obj objectio.ObjectEntry, isTombstone bool,
 		) (err error) {
@@ -521,8 +540,6 @@ func checkCheckpointDataByTableID(
 			assert.True(t, delete2.EQ(&obj.DeleteTime))
 			return
 		},
-		common.DebugAllocator,
-		e.Opts.Fs,
 	)
 	assert.NoError(t, err)
 	objInCatalogCount := 0
