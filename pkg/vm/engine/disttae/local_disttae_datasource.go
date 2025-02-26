@@ -1089,7 +1089,7 @@ func (ls *LocalDisttaeDataSource) applyPStateInMemDeletes(
 	leftRows = offsets
 
 	if len(leftRows) == logtailreplay.IndexScaleOne {
-		if ls.pState.CheckRowIdDeletedInMem(ls.snapshotTS, *types.NewRowid(bid, uint32(offsets[0]))) {
+		if ls.pState.CheckRowIdDeletedInMem(ls.snapshotTS, types.NewRowid(bid, uint32(offsets[0]))) {
 			return nil
 		}
 
@@ -1152,7 +1152,7 @@ func (ls *LocalDisttaeDataSource) applyPStateTombstoneObjects(
 		deleted, err := ioutil.IsRowDeleted(
 			ls.ctx,
 			&ls.snapshotTS,
-			rowid,
+			&rowid,
 			getTombstone,
 			ls.fs,
 		)
