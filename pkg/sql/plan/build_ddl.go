@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -738,19 +739,17 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 		return nil, moerr.NewInternalError(ctx.GetContext(), "rewrite for create table like failed")
 	}
 
-	rawSQL := ""
-	if stmt.PartitionOption != nil {
-		rawSQL = tree.StringWithOpts(stmt, dialect.MYSQL, tree.WithSingleQuoteString())
-	}
-
 	createTable := &plan.CreateTable{
 		IfNotExists: stmt.IfNotExists,
 		Temporary:   stmt.Temporary,
 		TableDef: &TableDef{
 			Name: string(stmt.Table.ObjectName),
 		},
-		RawSQL:      rawSQL,
-		IsPartition: stmt.PartitionOption != nil,
+	}
+
+	if stmt.PartitionOption != nil {
+		createTable.RawSQL = tree.StringWithOpts(stmt, dialect.MYSQL, tree.WithSingleQuoteString())
+		createTable.TableDef.FeatureFlag |= features.Partitioned
 	}
 
 	// get database name
