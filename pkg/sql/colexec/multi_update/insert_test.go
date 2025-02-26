@@ -249,7 +249,7 @@ func buildFlushS3InfoBatch(mp *mpool.MPool, hasUniqueKey bool, hasSecondaryKey b
 	totalRowCount := 0
 	for _, bat := range insertBats {
 		totalRowCount += bat.RowCount()
-		_ = vector.AppendFixed(retBat.Vecs[3], bat.RowCount(), false, mp)
+		_ = vector.AppendFixed[uint64](retBat.Vecs[3], uint64(bat.RowCount()), false, mp)
 
 		val, _ := bat.MarshalBinary()
 		_ = vector.AppendBytes(retBat.Vecs[5], val, false, mp)
