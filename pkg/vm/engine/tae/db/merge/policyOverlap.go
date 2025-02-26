@@ -113,7 +113,7 @@ func (m *objOverlapPolicy) revise(rc *resourceController) []reviseResult {
 
 	for i := range reviseResults {
 		for !rc.resourceAvailable(reviseResults[i].objs) && len(reviseResults[i].objs) > 1 {
-			reviseResults[i].objs = reviseResults[i].objs[:len(reviseResults[i].objs)-1]
+			reviseResults[i].objs = reviseResults[i].objs[:len(reviseResults[i].objs)/2]
 		}
 		if len(reviseResults[i].objs) < 2 {
 			continue
@@ -153,41 +153,44 @@ type endPoint struct {
 }
 
 func objectsWithGivenOverlaps(points []endPoint, overlaps int) [][]*catalog.ObjectEntry {
-	globalMax := 0
-
 	res := make([][]*catalog.ObjectEntry, 0)
 	tmp := make(map[*catalog.ObjectEntry]struct{})
-	targets := make(map[*catalog.ObjectEntry]struct{})
-
 	for {
 		clear(tmp)
-		clear(targets)
-
+		count := 0
+		globalMax := 0
+		for _, p := range points {
+			if p.s {
+				count++
+			} else {
+				count--
+			}
+			if count > globalMax {
+				globalMax = count
+			}
+		}
 		for _, p := range points {
 			if p.s {
 				tmp[p.obj] = struct{}{}
 			} else {
 				delete(tmp, p.obj)
 			}
-			if len(tmp) > globalMax {
-				globalMax = len(tmp)
-				clear(targets)
-				maps.Copy(targets, tmp)
+			if len(tmp) == globalMax {
+				break
 			}
 		}
 
-		if len(targets) > 1 {
-			res = append(res, slices.Collect(maps.Keys(targets)))
+		if len(tmp) > 1 {
+			res = append(res, slices.Collect(maps.Keys(tmp)))
 		}
-		if len(targets) < overlaps {
+		if len(tmp) < overlaps {
 			return res
 		}
 
 		points = slices.DeleteFunc(points, func(point endPoint) bool {
-			_, ok := targets[point.obj]
+			_, ok := tmp[point.obj]
 			return ok
 		})
-		globalMax = 0
 	}
 }
 

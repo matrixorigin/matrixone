@@ -459,7 +459,7 @@ func TestObjectsWithMaximumOverlaps(t *testing.T) {
 }
 
 func TestLargeMerge(t *testing.T) {
-	objs := make([]*catalog.ObjectEntry, 250)
+	objs := make([]*catalog.ObjectEntry, 500000)
 	for i := range objs {
 		objs[i] = newTestVarcharObjectEntry(t, "a", "a", 110*common.Const1MBytes)
 	}
@@ -468,11 +468,11 @@ func TestLargeMerge(t *testing.T) {
 	policy.resetForTable(nil, defaultBasicConfig)
 
 	rc := new(resourceController)
-	rc.setMemLimit(10 * common.Const1GBytes)
+	rc.setMemLimit(50 * common.Const1GBytes)
 	for _, obj := range objs {
 		policy.onObject(obj)
 	}
 	results := policy.revise(rc)
 	require.Equal(t, 1, len(results))
-	require.Less(t, len(results[0].objs), 250)
+	require.Less(t, len(results[0].objs), 500000)
 }
