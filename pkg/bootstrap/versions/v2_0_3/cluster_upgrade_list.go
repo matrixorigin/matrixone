@@ -73,6 +73,7 @@ var upg_create_information_schema_table_constraints = versions.UpgradeEntry{
 	UpgType:   versions.CREATE_VIEW,
 	UpgSql:    sysview.InformationSchemaTableConstraintsDDL,
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
-		return versions.CheckTableDefinition(txn, accountId, sysview.InformationDBConst, "table_constraints")
+		exist, _, err := versions.CheckViewDefinition(txn, accountId, sysview.InformationDBConst, "table_constraints")
+		return exist, err
 	},
 }
