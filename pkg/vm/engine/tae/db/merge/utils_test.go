@@ -41,6 +41,14 @@ func TestResourceController(t *testing.T) {
 	require.Equal(t, int64(1), rc.availableMem())
 
 	require.Panics(t, func() { rc.setMemLimit(0) })
+
+	objs := []*catalog.ObjectEntry{
+		newTestObjectEntry(t, 0, false),
+		newTestVarcharObjectEntry(t, "", "", 2),
+	}
+	rc.reserveResources(objs)
+	require.Equal(t, int64(2), rc.reservedMergeRows)
+	require.Equal(t, int64(8256), rc.reserved)
 }
 
 func Test_CleanUpUselessFiles(t *testing.T) {
