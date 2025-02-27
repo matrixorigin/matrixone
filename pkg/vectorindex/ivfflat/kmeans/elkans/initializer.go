@@ -22,7 +22,7 @@ import (
 	"runtime"
 	"sync"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec/algos/kmeans"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/kmeans"
 	"gonum.org/v1/gonum/mat"
 )
 

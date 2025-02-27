@@ -15,12 +15,13 @@
 package elkans
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/assertx"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec/algos/kmeans"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"reflect"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/common/assertx"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/kmeans"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 )
 
 func Test_NewKMeans(t *testing.T) {

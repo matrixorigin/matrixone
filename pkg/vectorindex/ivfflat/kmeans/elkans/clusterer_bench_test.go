@@ -15,10 +15,11 @@
 package elkans
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec/algos/kmeans"
 	"math/rand"
 	"strconv"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/kmeans"
 )
 
 /*
