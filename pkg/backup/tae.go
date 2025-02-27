@@ -296,7 +296,7 @@ func execBackup(
 	// When rewriting the checkpoint and trimming the aobject,
 	// you need to collect the atombstone in the last checkpoint
 	// Before this, only the last special checkpoint needs to be collected
-	var lastData *logtail.CKPDataReader
+	var lastData *logtail.CKPReader_V2
 	for i, name := range names {
 		if len(name) == 0 {
 			continue
@@ -315,7 +315,7 @@ func execBackup(
 			return err
 		}
 		var oneNames []*objectio.BackupObject
-		var data *logtail.CKPDataReader
+		var data *logtail.CKPReader_V2
 		if i == 0 {
 			oneNames, data, err = logtail.LoadCheckpointEntriesFromKey(ctx, sid, srcFs, key, uint32(version), nil, &baseTS)
 		} else {
@@ -324,7 +324,6 @@ func execBackup(
 		if err != nil {
 			return err
 		}
-		defer data.Close()
 		oNames = append(oNames, oneNames...)
 		if i == len(names)-1 {
 			lastData = data
