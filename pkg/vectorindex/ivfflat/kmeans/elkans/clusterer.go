@@ -244,7 +244,6 @@ func (km *ElkanClusterer) initBounds() {
 	if len(km.vectorList) < ncpu {
 		ncpu = len(km.vectorList)
 	}
-	ncpu = 1
 
 	var wg sync.WaitGroup
 
@@ -287,7 +286,6 @@ func (km *ElkanClusterer) computeCentroidDistances() {
 	if km.clusterCnt < ncpu {
 		ncpu = km.clusterCnt
 	}
-	ncpu = 1
 
 	for n := 0; n < ncpu; n++ {
 		wg.Add(1)
@@ -331,7 +329,6 @@ func (km *ElkanClusterer) assignData() int {
 	if len(km.vectorList) < ncpu {
 		ncpu = len(km.vectorList)
 	}
-	ncpu = 1
 
 	var wg sync.WaitGroup
 	for n := 0; n < ncpu; n++ {

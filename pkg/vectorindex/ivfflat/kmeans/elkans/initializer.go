@@ -85,7 +85,6 @@ func (kpp *KMeansPlusPlus) InitCentroids(vectors []*mat.VecDense, k int) (centro
 	if numSamples < ncpu {
 		ncpu = numSamples
 	}
-	ncpu = 1
 
 	for nextCentroidIdx := 1; nextCentroidIdx < k; nextCentroidIdx++ {
 

@@ -2797,22 +2797,6 @@ func (c *Compile) compileApply(node, right *plan.Node, rs []*Scope) []*Scope {
 			op.SetIdx(c.anal.curNodeIdx)
 			rs[i].setRootOperator(op)
 		}
-		/*
-			op := constructApply(node, right, apply.CROSS, c.proc)
-			if op.TableFunction.IsSingle {
-				// table function requires single thread mode
-				mergeRs := c.newMergeScope(rs)
-				op.SetIdx(c.anal.curNodeIdx)
-				mergeRs.setRootOperator(op)
-				rs = []*Scope{mergeRs}
-			} else {
-				for i := range rs {
-					op := constructApply(node, right, apply.CROSS, c.proc)
-					op.SetIdx(c.anal.curNodeIdx)
-					rs[i].setRootOperator(op)
-				}
-			}
-		*/
 	case plan.Node_OUTERAPPLY:
 		for i := range rs {
 			op := constructApply(node, right, apply.OUTER, c.proc)

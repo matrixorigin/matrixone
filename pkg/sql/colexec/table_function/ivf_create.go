@@ -269,7 +269,7 @@ func (u *ivfCreateState) start(tf *TableFunction, proc *process.Process, nthRow 
 			}
 		}
 		if !supported {
-			return moerr.NewInvalidInput(proc.Ctx, "Third argument (vector must be a vecf32 or vecf64 type")
+			return moerr.NewInvalidInput(proc.Ctx, "Second argument (vector must be a vecf32 or vecf64 type")
 		}
 		dimension := f32aVec.GetType().Width
 
