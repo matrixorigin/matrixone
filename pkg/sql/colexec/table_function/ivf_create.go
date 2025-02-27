@@ -46,8 +46,6 @@ const (
 	defaultKmeansInitType       = kmeans.Random
 	defaultKmeansClusterCnt     = 1
 	defaultKmeansNormalize      = false
-
-	configSeparator = ","
 )
 
 var (
@@ -60,11 +58,6 @@ var (
 		"vector_ip_ops":     kmeans.InnerProduct,
 		"vector_cosine_ops": kmeans.CosineDistance,
 		"vector_l1_ops":     kmeans.L1Distance,
-	}
-
-	initTypeStrToEnum = map[string]kmeans.InitType{
-		"random":         kmeans.Random,
-		"kmeansplusplus": kmeans.KmeansPlusPlus,
 	}
 )
 
@@ -202,6 +195,10 @@ func (u *ivfCreateState) free(tf *TableFunction, proc *process.Process, pipeline
 func ivfCreatePrepare(proc *process.Process, arg *TableFunction) (tvfState, error) {
 	var err error
 	st := &ivfCreateState{}
+
+	if arg.MaxParallel > 1 {
+		return nil, moerr.NewInternalError(proc.Ctx, fmt.Sprintf("Table Function ivf_create must run in single process. MaxParallel = %d\n", arg.MaxParallel))
+	}
 
 	arg.ctr.executorsForArgs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, arg.Args)
 	arg.ctr.argVecs = make([]*vector.Vector, len(arg.Args))
