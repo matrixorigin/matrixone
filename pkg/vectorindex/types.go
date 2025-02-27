@@ -65,8 +65,8 @@ type IvfParam struct {
 }
 
 type IvfflatIndexConfig struct {
-	Lists      uint
-	nprobe     uint
+	Lists uint
+	//Nprobe     uint
 	Metric     uint16
 	InitType   uint16
 	Dimensions uint

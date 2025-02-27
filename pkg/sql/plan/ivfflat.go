@@ -24,7 +24,7 @@ import (
 // coldef shall copy index type
 var (
 	ivf_create_func_name = "ivf_create"
-	ivf_search_func_name = "ivf_search"
+	//ivf_search_func_name = "ivf_search"
 
 	ivfBuildIndexColDefs = []*plan.ColDef{
 		{
