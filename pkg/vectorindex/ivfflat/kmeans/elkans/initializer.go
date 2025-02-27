@@ -15,10 +15,8 @@
 package elkans
 
 import (
-	"fmt"
 	"math"
 	"math/rand"
-	"os"
 	"runtime"
 	"sync"
 
@@ -74,8 +72,6 @@ func NewKMeansPlusPlusInitializer(distFn kmeans.DistanceFunction) Initializer {
 func (kpp *KMeansPlusPlus) InitCentroids(vectors []*mat.VecDense, k int) (centroids []*mat.VecDense) {
 	numSamples := len(vectors)
 	centroids = make([]*mat.VecDense, k)
-
-	os.Stderr.WriteString(fmt.Sprintf("KmeanPlusPlus init centroid numSampe = %d\n", numSamples))
 
 	// 1. start with a random center
 	centroids[0] = vectors[kpp.rand.Intn(numSamples)]
@@ -139,6 +135,5 @@ func (kpp *KMeansPlusPlus) InitCentroids(vectors []*mat.VecDense, k int) (centro
 			}
 		}
 	}
-	os.Stderr.WriteString("KmeanPlusPlus init centroid END\n")
 	return centroids
 }

@@ -18,12 +18,12 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
-	"os"
 	"runtime"
 	"sync"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/kmeans"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"gonum.org/v1/gonum/mat"
@@ -118,7 +118,6 @@ func NewKMeans(vectors [][]float64, clusterCnt,
 		return nil, err
 	}
 
-	os.Stderr.WriteString(fmt.Sprintf("new clustering... cnt %d\n", clusterCnt))
 	return &ElkanClusterer{
 		maxIterations:  maxIterations,
 		deltaThreshold: deltaThreshold,
@@ -158,7 +157,6 @@ func (km *ElkanClusterer) InitCentroids() error {
 
 // Cluster returns the final centroids and the error if any.
 func (km *ElkanClusterer) Cluster() ([][]float64, error) {
-	os.Stderr.WriteString("Cluster now\n")
 	if km.normalize {
 		moarray.NormalizeGonumVectors(km.vectorList)
 	}
@@ -167,16 +165,13 @@ func (km *ElkanClusterer) Cluster() ([][]float64, error) {
 		return moarray.ToMoArrays[float64](km.vectorList)
 	}
 
-	os.Stderr.WriteString("Cluster InitCentroids\n")
 	err := km.InitCentroids() // step 0.1
 	if err != nil {
 		return nil, err
 	}
 
-	os.Stderr.WriteString("Cluster InitBound\n")
 	km.initBounds() // step 0.2
 
-	os.Stderr.WriteString("Cluster elkansCluster\n")
 	res, err := km.elkansCluster()
 	if err != nil {
 		return nil, err
@@ -186,30 +181,23 @@ func (km *ElkanClusterer) Cluster() ([][]float64, error) {
 }
 
 func (km *ElkanClusterer) elkansCluster() ([]*mat.VecDense, error) {
-	os.Stderr.WriteString("elkanCluster loop start\n")
 
 	for iter := 0; ; iter++ {
-		os.Stderr.WriteString(fmt.Sprintf("iter %d\n", iter))
-		os.Stderr.WriteString("elkanCluster compute centroid distance\n")
 		km.computeCentroidDistances() // step 1
 
-		os.Stderr.WriteString("elkanCluster assigne data\n")
 		changes := km.assignData() // step 2 and 3
 
-		os.Stderr.WriteString("elkanCluster recalc centroids\n")
 		newCentroids := km.recalculateCentroids() // step 4
 
-		os.Stderr.WriteString("elkanCluster update bounds\n")
 		km.updateBounds(newCentroids) // step 5 and 6
 
 		km.centroids = newCentroids // step 7
 
-		os.Stderr.WriteString(fmt.Sprintf("kmeans iter=%d, changes=%d\n", iter, changes))
+		logutil.Debugf(fmt.Sprintf("kmeans iter=%d, changes=%d\n", iter, changes))
 		if iter != 0 && km.isConverged(iter, changes) {
 			break
 		}
 	}
-	os.Stderr.WriteString("elkanCluster loop end\n")
 	return km.centroids, nil
 }
 
@@ -300,7 +288,6 @@ func (km *ElkanClusterer) computeCentroidDistances() {
 		ncpu = km.clusterCnt
 	}
 
-	os.Stderr.WriteString(fmt.Sprintf("Compute elkan kmean %d thread %d cluster Cnt START\n", ncpu, km.clusterCnt))
 	for n := 0; n < ncpu; n++ {
 		wg.Add(1)
 		go func() {
@@ -320,7 +307,6 @@ func (km *ElkanClusterer) computeCentroidDistances() {
 	}
 	wg.Wait()
 
-	os.Stderr.WriteString(fmt.Sprintf("Compute elkan kmean %d thread END\n", ncpu))
 	// step 1.b
 	//  For all centers c, compute s(c)=0.5 x min{d(c, c') | c'!= c}.
 	for i := 0; i < km.clusterCnt; i++ {
