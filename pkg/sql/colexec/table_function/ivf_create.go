@@ -92,6 +92,10 @@ func (u *ivfCreateState) end(tf *TableFunction, proc *process.Process) error {
 	var centers [][]float64
 	var err error
 
+	if !u.inited || len(u.data) == 0 {
+		return nil
+	}
+
 	os.Stderr.WriteString(fmt.Sprintf("END nsample %d\n", len(u.data)))
 
 	version, err := func() (int64, error) {

@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -194,6 +195,41 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef
 	cfg.PKey = pkColName
 	cfg.KeyPart = indexDef.Parts[0]
 	cfg.DataSize = totalCnt
+
+	// 1.a algo params
+	params, err := catalog.IndexParamsStringToMap(indexDef.IndexAlgoParams)
+	if err != nil {
+		return err
+	}
+	centroidParamsLists, err := strconv.Atoi(params[catalog.IndexAlgoParamLists])
+	if err != nil {
+		return err
+	}
+
+	// 1.b init centroids table with default centroid, if centroids are not enough.
+	// NOTE: we can run re-index to improve the centroid quality.
+	if totalCnt == 0 || totalCnt < int64(centroidParamsLists) {
+		initSQL := fmt.Sprintf("INSERT INTO `%s`.`%s` (`%s`, `%s`, `%s`) "+
+			"SELECT "+
+			"(SELECT CAST(`%s` AS BIGINT) FROM `%s`.`%s` WHERE `%s` = 'version'), "+
+			"1, NULL;",
+			qryDatabase,
+			indexDef.IndexTableName,
+			catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
+			catalog.SystemSI_IVFFLAT_TblCol_Centroids_id,
+			catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid,
+
+			catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
+			qryDatabase,
+			metadataTableName,
+			catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
+		)
+		err := c.runSql(initSQL)
+		if err != nil {
+			return err
+		}
+		return nil
+	}
 
 	/*
 		val, err := proc.GetResolveVariableFunc()("hnsw_threads_build", true, false)
