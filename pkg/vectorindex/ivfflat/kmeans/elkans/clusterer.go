@@ -15,7 +15,6 @@
 package elkans
 
 import (
-	"fmt"
 	"math"
 	"math/rand"
 	"runtime"
@@ -193,7 +192,7 @@ func (km *ElkanClusterer) elkansCluster() ([]*mat.VecDense, error) {
 
 		km.centroids = newCentroids // step 7
 
-		logutil.Debugf(fmt.Sprintf("kmeans iter=%d, changes=%d\n", iter, changes))
+		logutil.Debugf("kmeans iter=%d, changes=%d\n", iter, changes)
 		if iter != 0 && km.isConverged(iter, changes) {
 			break
 		}

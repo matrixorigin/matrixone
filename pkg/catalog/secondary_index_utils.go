@@ -90,33 +90,6 @@ const (
 	HnswEfSearch             = "ef_search"
 )
 
-const (
-	KmeansSamplePerList = 50
-	MaxSampleCount      = 10_000
-)
-
-// CalcSampleCount is used to calculate the sample count for Kmeans index.
-func CalcSampleCount(lists, totalCnt int64) (sampleCnt int64) {
-
-	if totalCnt > lists*KmeansSamplePerList {
-		sampleCnt = lists * KmeansSamplePerList
-	} else {
-		sampleCnt = totalCnt
-	}
-
-	/*
-		if totalCnt > MaxSampleCount && sampleCnt < MaxSampleCount {
-			sampleCnt = MaxSampleCount
-		}
-
-		if sampleCnt > MaxSampleCount {
-			sampleCnt = MaxSampleCount
-		}
-	*/
-
-	return sampleCnt
-}
-
 /* 1. ToString Functions */
 
 // IndexParamsToStringList used by buildShowCreateTable and restoreDDL
