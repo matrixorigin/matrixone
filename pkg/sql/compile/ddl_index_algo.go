@@ -206,6 +206,8 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef
 		return err
 	}
 
+	os.Stderr.WriteString(fmt.Sprintf("compile list %d\n", centroidParamsLists))
+
 	// 1.b init centroids table with default centroid, if centroids are not enough.
 	// NOTE: we can run re-index to improve the centroid quality.
 	if totalCnt == 0 || totalCnt < int64(centroidParamsLists) {
