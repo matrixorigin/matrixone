@@ -60,7 +60,7 @@ var upg_drop_information_schema_table_constraints = versions.UpgradeEntry{
 	Schema:    sysview.InformationDBConst,
 	TableName: "table_constraints",
 	UpgType:   versions.DROP_TABLE,
-	UpgSql:    "drop table information_schema.table_constraints",
+	UpgSql:    "drop table if exists information_schema.table_constraints",
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
 		exist, err := versions.CheckTableDefinition(txn, accountId, sysview.InformationDBConst, "table_constraints")
 		return !exist, err
@@ -73,6 +73,7 @@ var upg_create_information_schema_table_constraints = versions.UpgradeEntry{
 	UpgType:   versions.CREATE_VIEW,
 	UpgSql:    sysview.InformationSchemaTableConstraintsDDL,
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
-		return versions.CheckTableDefinition(txn, accountId, sysview.InformationDBConst, "table_constraints")
+		exists, _, err := versions.CheckViewDefinition(txn, accountId, sysview.InformationDBConst, "table_constraints")
+		return exists, err
 	},
 }
