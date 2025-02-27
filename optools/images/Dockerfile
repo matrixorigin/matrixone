@@ -1,16 +1,21 @@
-FROM golang:1.23.0-bookworm AS builder
+FROM ubuntu:22.04 AS builder
 
-# goproxy
-ARG GOPROXY="https://proxy.golang.org,direct"
-RUN go env -w GOPROXY=${GOPROXY}
 
 # Install some utilities used for debugging or by startup script
 RUN apt-get update && apt-get install -y \
+    golang-1.23 \
+    build-essential \
     dnsutils \
     curl \
     git \
     cmake \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+ENV PATH ${PATH}:/usr/lib/go-1.23/bin/
+
+# goproxy
+ARG GOPROXY="https://proxy.golang.org,direct"
+RUN go env -w GOPROXY=${GOPROXY}
 
 RUN mkdir -p /go/src/github.com/matrixorigin/matrixone
 
@@ -29,7 +34,6 @@ RUN make build
 
 FROM ubuntu:22.04
 
-
 COPY --from=builder /go/src/github.com/matrixorigin/matrixone/mo-service /mo-service
 COPY --from=builder /go/src/github.com/matrixorigin/matrixone/etc /etc
 COPY --from=builder /go/src/github.com/matrixorigin/matrixone/thirdparties/install/lib/*.so /usr/local/lib
@@ -46,7 +50,7 @@ RUN apt-get update && apt-get install -y \
 RUN ldconfig
 
 # Debug purpose - run below command to check shared library not found
-# RUN /mo-service -h
+RUN /mo-service -h
 
 WORKDIR /
 
