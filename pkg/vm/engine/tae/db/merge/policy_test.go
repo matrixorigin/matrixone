@@ -18,6 +18,7 @@ import (
 	"context"
 	"math"
 	"math/rand/v2"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -475,4 +476,21 @@ func TestLargeMerge(t *testing.T) {
 	results := policy.revise(rc)
 	require.Equal(t, 1, len(results))
 	require.Less(t, len(results[0].objs), 500000)
+}
+
+func TestVarcharOverflow(t *testing.T) {
+	objs := make([]*catalog.ObjectEntry, 10)
+	for i := range objs {
+		objs[i] = newTestVarcharObjectEntry(t, strings.Repeat("a", 100), strings.Repeat("a", 100), 110*common.Const1MBytes)
+	}
+	policy := newObjOverlapPolicy()
+	policy.resetForTable(nil, defaultBasicConfig)
+	rc := new(resourceController)
+	rc.setMemLimit(50 * common.Const1GBytes)
+
+	for _, obj := range objs {
+		policy.onObject(obj)
+	}
+	results := policy.revise(rc)
+	require.Equal(t, 0, len(results))
 }

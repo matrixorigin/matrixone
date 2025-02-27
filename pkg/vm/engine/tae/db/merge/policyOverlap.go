@@ -15,11 +15,13 @@
 package merge
 
 import (
+	"bytes"
 	"maps"
 	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 )
 
@@ -198,6 +200,25 @@ func makeEndPoints(objects []*catalog.ObjectEntry) []endPoint {
 	points := make([]endPoint, 0, 2*len(objects))
 	for _, obj := range objects {
 		zm := obj.SortKeyZoneMap()
+		if obj.OriginSize() >= common.DefaultMinOsizeQualifiedMB*common.Const1MBytes {
+			if !zm.IsString() {
+				if zm.GetMin() == zm.GetMax() {
+					continue
+				}
+			} else {
+				if zm.MaxTruncated() {
+					continue
+				}
+				minBuf := zm.GetMinBuf()
+				maxBuf := zm.GetMaxBuf()
+				if len(minBuf) == len(maxBuf) && len(minBuf) == 30 {
+					maxBuf[29] = maxBuf[29] - 1
+					if bytes.Compare(minBuf, maxBuf) == 0 {
+						continue
+					}
+				}
+			}
+		}
 		points = append(points, endPoint{val: zm.GetMinBuf(), s: true, obj: obj})
 		points = append(points, endPoint{val: zm.GetMaxBuf(), s: false, obj: obj})
 	}
