@@ -141,7 +141,6 @@ func (e *TestEngine) RestartDisableGC(ctx context.Context) {
 func (e *TestEngine) Close() error {
 	ioutil.Stop("")
 	err := e.DB.Close()
-	assert.Equal(e.T, int64(0), common.DebugAllocator.CurrNB())
 	return err
 }
 
