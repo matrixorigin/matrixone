@@ -146,8 +146,8 @@ func TestBlockRowIdsCompare(t *testing.T) {
 		var blks1 []types.Blockid
 		var blks2 []types.Blockid
 		for i := 0; i < 1000; i++ {
-			blks1 = append(blks1, *types.NewBlockidWithObjectID(obj, uint16(i)))
-			blks2 = append(blks2, *types.NewBlockidWithObjectID(obj, uint16(i)))
+			blks1 = append(blks1, types.NewBlockidWithObjectID(&obj, uint16(i)))
+			blks2 = append(blks2, types.NewBlockidWithObjectID(&obj, uint16(i)))
 		}
 
 		for range blks1 {
@@ -174,7 +174,7 @@ func TestBlockRowIdsCompare(t *testing.T) {
 				blkIdx++
 			}
 
-			rowId := types.NewRowIDWithObjectIDBlkNumAndRowID(*obj, blkIdx, uint32(i))
+			rowId := types.NewRowIDWithObjectIDBlkNumAndRowID(obj, blkIdx, uint32(i))
 			rowIds1 = append(rowIds1, rowId)
 			rowIds2 = append(rowIds2, rowId)
 		}

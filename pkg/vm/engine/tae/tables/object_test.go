@@ -37,7 +37,8 @@ func TestGetActiveRow(t *testing.T) {
 
 	db, _ := c.CreateDBEntry("db", "", "", nil)
 	table, _ := db.CreateTableEntry(schema, nil, nil)
-	stats := objectio.NewObjectStatsWithObjectID(objectio.NewObjectid(), true, false, false)
+	noid := objectio.NewObjectid()
+	stats := objectio.NewObjectStatsWithObjectID(&noid, true, false, false)
 	obj, _ := table.CreateObject(nil, &objectio.CreateObjOpt{Stats: stats}, nil)
 	mvcc := updates.NewAppendMVCCHandle(obj)
 	// blk := &dataBlock{
