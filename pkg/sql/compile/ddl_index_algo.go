@@ -193,6 +193,8 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef
 	cfg.SrcTable = originalTableDef.Name
 	cfg.PKey = pkColName
 	cfg.KeyPart = indexDef.Parts[0]
+	cfg.DataSize = totalCnt
+
 	/*
 		val, err := proc.GetResolveVariableFunc()("hnsw_threads_build", true, false)
 		if err != nil {

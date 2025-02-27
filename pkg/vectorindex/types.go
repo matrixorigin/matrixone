@@ -46,6 +46,7 @@ type IndexTableConfig struct {
 
 	// IVF related
 	EntriesTable string `json:"entries"`
+	DataSize     int64  `json:"datasize"`
 }
 
 // HNSW specified parameters

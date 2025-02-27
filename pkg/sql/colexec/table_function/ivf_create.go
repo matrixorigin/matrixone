@@ -20,6 +20,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -68,14 +69,15 @@ var (
 )
 
 type ivfCreateState struct {
-	inited  bool
-	param   vectorindex.IvfParam
-	tblcfg  vectorindex.IndexTableConfig
-	idxcfg  vectorindex.IndexConfig
-	data    [][]float64
-	rand    *rand.Rand
-	nsample uint
-	offset  int
+	inited       bool
+	param        vectorindex.IvfParam
+	tblcfg       vectorindex.IndexTableConfig
+	idxcfg       vectorindex.IndexConfig
+	data         [][]float64
+	rand         *rand.Rand
+	nsample      uint
+	sample_ratio float64
+	offset       int
 
 	// holding one call batch, tokenizedState owns it.
 	batch *batch.Batch
@@ -275,12 +277,20 @@ func (u *ivfCreateState) start(tf *TableFunction, proc *process.Process, nthRow 
 		u.idxcfg.Type = "ivfflat"
 
 		u.nsample = u.idxcfg.Ivfflat.Lists * 50
-		if u.nsample < 10000 {
-			u.nsample = 10000
+		min_nsample := uint(10000)
+		if u.nsample < min_nsample {
+			u.nsample = min_nsample
 		}
 		u.data = make([][]float64, 0, u.nsample)
+		u.sample_ratio = float64(1)
+		if u.tblcfg.DataSize > 0 {
+			u.sample_ratio = float64(u.nsample) / float64(u.tblcfg.DataSize)
+			if u.sample_ratio < 0.1 {
+				u.sample_ratio = 0.1
+			}
+		}
 
-		u.rand = rand.New(rand.NewSource(99))
+		u.rand = rand.New(rand.NewSource(uint64(time.Now().UnixMicro())))
 		u.batch = tf.createResultBatch()
 		u.inited = true
 	}
@@ -301,11 +311,10 @@ func (u *ivfCreateState) start(tf *TableFunction, proc *process.Process, nthRow 
 		return nil
 	}
 
-	/*
-		if u.rand.Float32() > 0.3 {
-			return nil
-		}
-	*/
+	if u.sample_ratio < u.rand.Float64() {
+		// skip the sample
+		return nil
+	}
 
 	var f64a []float64
 	if fpaVec.GetType().Oid == types.T_array_float32 {
