@@ -10080,7 +10080,6 @@ func TestCKPCollectObject(t *testing.T) {
 			tae.BindSchema(schema)
 			bat := catalog.MockBatch(schema, 1)
 			defer bat.Close()
-			logutil.Infof("lalala alloc %v",common.DebugAllocator.CurrNB())
 
 			tae.CreateRelAndAppend(bat, true)
 
@@ -10093,26 +10092,17 @@ func TestCKPCollectObject(t *testing.T) {
 			collector := logtail.NewBaseCollector_V2(types.TS{}, tae.TxnMgr.Now(), 0, tae.Opts.Fs)
 			assert.NoError(t, tae.Catalog.RecurLoop(collector))
 			ckpData := collector.OrphanData()
-			logutil.Infof("lalala alloc %v",common.DebugAllocator.CurrNB())
 			defer ckpData.Close()
 			loc, _, _, err := ckpData.WriteTo(ctx, tae.Opts.Fs)
 			assert.NoError(t, err)
-<<<<<<< Updated upstream
 			reader := logtail.NewCKPReader(logtail.CheckpointCurrentVersion, loc, common.DebugAllocator, tae.Opts.Fs)
-=======
-			reader := logtail.NewCKPReader_V2(logtail.CheckpointCurrentVersion, loc, common.DebugAllocator, tae.Opts.Fs)
-			logutil.Infof("lalala alloc %v",common.DebugAllocator.CurrNB())
->>>>>>> Stashed changes
 			err = reader.ReadMeta(ctx)
-			logutil.Infof("lalala alloc %v",common.DebugAllocator.CurrNB())
 			assert.NoError(t, err)
 			bat2, err := reader.GetCheckpointData(ctx)
 			defer bat2.Clean(common.DebugAllocator)
 			assert.NoError(t, err)
-			logutil.Infof("lalala alloc %v",common.DebugAllocator.CurrNB())
 			assert.Equal(t, 1, bat2.RowCount())
 			assert.NoError(t, txn.Commit(ctx))
-			logutil.Infof("lalala alloc %v",common.DebugAllocator.CurrNB())
 		},
 	)
 }
