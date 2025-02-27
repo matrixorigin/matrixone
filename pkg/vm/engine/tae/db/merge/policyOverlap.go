@@ -16,13 +16,17 @@ package merge
 
 import (
 	"bytes"
+	"fmt"
 	"maps"
 	"slices"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
+
+	"go.uber.org/zap"
 )
 
 var _ policy = (*objOverlapPolicy)(nil)
@@ -37,6 +41,8 @@ type objOverlapPolicy struct {
 	segments map[objectio.Segmentid]map[*catalog.ObjectEntry]struct{}
 
 	config *BasicPolicyConfig
+	tid    uint64
+	name   string
 }
 
 func newObjOverlapPolicy() *objOverlapPolicy {
@@ -49,14 +55,40 @@ func (m *objOverlapPolicy) onObject(obj *catalog.ObjectEntry) bool {
 	if obj.IsTombstone {
 		return false
 	}
-	if !obj.SortKeyZoneMap().IsInited() {
-		return false
-	}
 	if m.segments[obj.ObjectName().SegmentId()] == nil {
 		m.segments[obj.ObjectName().SegmentId()] = make(map[*catalog.ObjectEntry]struct{})
 	}
 	m.segments[obj.ObjectName().SegmentId()][obj] = struct{}{}
 	return true
+}
+
+func IsSameSegment(objs []*catalog.ObjectEntry) bool {
+	if len(objs) < 2 {
+		return true
+	}
+	segId := objs[0].ObjectName().SegmentId()
+	for _, obj := range objs {
+		if !obj.ObjectName().SegmentId().Eq(segId) {
+			return false
+		}
+	}
+	return true
+}
+
+func hasHundredSmallObjs(objs []*catalog.ObjectEntry, small uint32) bool {
+	if len(objs) < 100 {
+		return false
+	}
+	cnt := 0
+	for _, obj := range objs {
+		if obj.OriginSize() < small {
+			cnt++
+		}
+		if cnt > 100 {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *objOverlapPolicy) revise(rc *resourceController) []reviseResult {
@@ -72,6 +104,27 @@ func (m *objOverlapPolicy) revise(rc *resourceController) []reviseResult {
 	}
 
 	reviseResults := make([]reviseResult, 0, len(levels))
+
+	checkNonoverlapObj := func(objs []*catalog.ObjectEntry, note string) {
+		tmp := make([]*catalog.ObjectEntry, 0)
+		sum := uint32(0)
+		for _, obj := range objs {
+			if obj.OriginSize() < m.config.MaxOsizeMergedObj/2 || sum < m.config.MaxOsizeMergedObj/2 {
+				sum += obj.OriginSize()
+				tmp = append(tmp, obj)
+			} else {
+				if len(tmp) > 1 {
+					reviseResults = append(reviseResults, reviseResult{objs: removeOversize(slices.Clone(tmp)), kind: taskHostDN, note: note})
+				}
+				tmp = tmp[:0]
+				sum = 0
+			}
+		}
+		if len(tmp) > 200 { // let the little objs accumulate to a certain number
+			reviseResults = append(reviseResults, reviseResult{objs: removeOversize(slices.Clone(tmp)), kind: taskHostDN, note: "end: " + note})
+		}
+	}
+
 	for i := range 4 {
 		if len(m.leveledObjects[i]) < 2 {
 			continue
@@ -84,45 +137,68 @@ func (m *objOverlapPolicy) revise(rc *resourceController) []reviseResult {
 				if len(objs) < 2 || score(objs) < 1.1 {
 					continue
 				}
-				result := reviseResult{objs: objs, kind: taskHostDN}
+				if i >= 1 && IsSameSegment(objs) {
+					continue
+				}
+				result := reviseResult{objs: objs, kind: taskHostDN, note: "overlap"}
 				reviseResults = append(reviseResults, result)
 			}
-		} else {
+		} else if len(points) > 0 { // zm is inited
 			viewed := make(map[*catalog.ObjectEntry]struct{})
 			tmp := make([]*catalog.ObjectEntry, 0)
-			sum := uint32(0)
 			for _, p := range points {
 				if _, ok := viewed[p.obj]; ok {
 					continue
 				}
 				viewed[p.obj] = struct{}{}
-				if p.obj.OriginSize() < m.config.MaxOsizeMergedObj/2 || sum < m.config.MaxOsizeMergedObj/2 {
-					sum += p.obj.OriginSize()
-					tmp = append(tmp, p.obj)
-				} else {
-					if len(tmp) > 1 {
-						reviseResults = append(reviseResults, reviseResult{objs: removeOversize(slices.Clone(tmp)), kind: taskHostDN})
-					}
-					tmp = tmp[:0]
-					sum = 0
-				}
+				tmp = append(tmp, p.obj)
 			}
-			if len(tmp) > 200 { // let the little objs accumulate to a certain number
-				reviseResults = append(reviseResults, reviseResult{objs: removeOversize(slices.Clone(tmp)), kind: taskHostDN})
+			checkNonoverlapObj(tmp, "nonoverlap")
+		} else { // no sort key
+			checkNonoverlapObj(m.leveledObjects[i], "noSortKey")
+		}
+
+		if (len(reviseResults) == 0 || (len(reviseResults) == 1 && len(reviseResults[0].objs) == 2)) && hasHundredSmallObjs(m.leveledObjects[i], m.config.MaxOsizeMergedObj/2) {
+			// try merge small objs
+			var oldtask reviseResult
+			if len(reviseResults) == 1 {
+				oldtask = reviseResults[0]
+				reviseResults = reviseResults[:0]
+			}
+			checkNonoverlapObj(m.leveledObjects[i], "check")
+			// restore the old task
+			if len(reviseResults) == 0 {
+				reviseResults = append(reviseResults, oldtask)
 			}
 		}
 	}
 
 	for i := range reviseResults {
+		original := len(reviseResults[i].objs)
 		for !rc.resourceAvailable(reviseResults[i].objs) && len(reviseResults[i].objs) > 1 {
 			reviseResults[i].objs = reviseResults[i].objs[:len(reviseResults[i].objs)/2]
 		}
+		if original-len(reviseResults[i].objs) > 100 {
+			tablename := "unknown"
+			if len(reviseResults[i].objs) > 0 {
+				tablename = fmt.Sprintf("%v-%v", m.tid, m.name)
+			}
+			logutil.Info("MergeExecutorEvent",
+				zap.String("event", "Popout"),
+				zap.String("table", tablename),
+				zap.Int("original", original),
+				zap.Int("revised", len(reviseResults[i].objs)),
+				zap.String("createNote", string(reviseResults[i].note)),
+				zap.String("avail", common.HumanReadableBytes(int(rc.availableMem()))))
+		}
+
 		if len(reviseResults[i].objs) < 2 {
 			continue
 		}
 
 		rc.reserveResources(reviseResults[i].objs)
 	}
+
 	return slices.DeleteFunc(reviseResults, func(result reviseResult) bool {
 		return len(result.objs) < 2
 	})
@@ -133,6 +209,10 @@ func (m *objOverlapPolicy) resetForTable(entry *catalog.TableEntry, config *Basi
 		m.leveledObjects[i] = m.leveledObjects[i][:0]
 	}
 	m.config = config
+	if entry != nil {
+		m.tid = entry.ID
+		m.name = entry.GetLastestSchema(false).Name
+	}
 	clear(m.segments)
 }
 
@@ -200,6 +280,9 @@ func makeEndPoints(objects []*catalog.ObjectEntry) []endPoint {
 	points := make([]endPoint, 0, 2*len(objects))
 	for _, obj := range objects {
 		zm := obj.SortKeyZoneMap()
+		if !zm.IsInited() {
+			continue
+		}
 		if obj.OriginSize() >= common.DefaultMinOsizeQualifiedMB*common.Const1MBytes {
 			if !zm.IsString() {
 				if zm.GetMin() == zm.GetMax() {
