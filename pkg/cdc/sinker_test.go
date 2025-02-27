@@ -110,7 +110,7 @@ func TestNewSinker(t *testing.T) {
 	})
 	defer sinkStub.Reset()
 
-	sinkerStub := gostub.Stub(&NewMysqlSinker, func(Sink, *DbTableInfo, IWatermarkUpdater, *plan.TableDef, *ActiveRoutine, uint64) Sinker {
+	sinkerStub := gostub.Stub(&NewMysqlSinker, func(Sink, *DbTableInfo, IWatermarkUpdater, *plan.TableDef, *ActiveRoutine, uint64, bool) Sinker {
 		return nil
 	})
 	defer sinkerStub.Reset()
@@ -340,7 +340,7 @@ func TestNewMysqlSinker(t *testing.T) {
 			Names: []string{"pk"},
 		},
 	}
-	NewMysqlSinker(sink, dbTblInfo, nil, tableDef, NewCdcActiveRoutine(), DefaultMaxSqlLength)
+	NewMysqlSinker(sink, dbTblInfo, nil, tableDef, NewCdcActiveRoutine(), DefaultMaxSqlLength, false)
 }
 
 func Test_mysqlSinker_appendSqlBuf(t *testing.T) {
@@ -372,6 +372,11 @@ func Test_mysqlSinker_appendSqlBuf(t *testing.T) {
 		ar:             ar,
 		sqlBufSendCh:   make(chan []byte),
 	}
+	s.insertSuffix = []byte(";")
+	s.insertRowPrefix = []byte("(")
+	s.insertColSeparator = []byte(",")
+	s.insertRowSuffix = []byte(")")
+	s.insertRowSeparator = []byte(",")
 	s.sqlBufs[0] = make([]byte, sqlBufReserved, len(tsDeletePrefix)+8+sqlBufReserved)
 	s.sqlBufs[1] = make([]byte, sqlBufReserved, len(tsDeletePrefix)+8+sqlBufReserved)
 	s.curBufIdx = 0
@@ -419,6 +424,11 @@ func Test_mysqlSinker_getDeleteRowBuf(t *testing.T) {
 			{Oid: types.T_uint64},
 		},
 	}
+	s.deleteRowPrefix = []byte("(")
+	s.deleteColSeparator = []byte(",")
+	s.deleteRowSuffix = []byte(")")
+	s.deleteRowSeparator = []byte(",")
+
 	err := s.getDeleteRowBuf(context.Background())
 	assert.NoError(t, err)
 	assert.Equal(t, []byte("(1)"), s.rowBuf)
@@ -432,6 +442,11 @@ func Test_mysqlSinker_getDeleteRowBuf(t *testing.T) {
 			{Oid: types.T_uint64},
 		},
 	}
+	s.deleteSuffix = []byte(");")
+	s.deleteRowPrefix = []byte("(")
+	s.deleteColSeparator = []byte(",")
+	s.deleteRowSuffix = []byte(")")
+	s.deleteRowSeparator = []byte(",")
 
 	stub := gostub.Stub(&unpackWithSchema, func(_ []byte) (types.Tuple, []types.T, error) {
 		return types.Tuple{uint64(1), uint64(2)}, nil, nil
@@ -452,6 +467,11 @@ func Test_mysqlSinker_getInsertRowBuf(t *testing.T) {
 			{Oid: types.T_varchar},
 		},
 	}
+	s.insertRowPrefix = []byte("(")
+	s.insertColSeparator = []byte(",")
+	s.insertRowSuffix = []byte(")")
+	s.insertRowSeparator = []byte(",")
+
 	err := s.getInsertRowBuf(context.Background())
 	assert.NoError(t, err)
 	assert.Equal(t, []byte("(1,'a')"), s.rowBuf)
@@ -509,7 +529,7 @@ func Test_mysqlSinker_Sink(t *testing.T) {
 
 	ar := NewCdcActiveRoutine()
 
-	s := NewMysqlSinker(sink, dbTblInfo, watermarkUpdater, tableDef, ar, DefaultMaxSqlLength)
+	s := NewMysqlSinker(sink, dbTblInfo, watermarkUpdater, tableDef, ar, DefaultMaxSqlLength, false)
 	go s.Run(ctx, ar)
 	defer func() {
 		// call dummy to guarantee sqls has been sent, then close
