@@ -134,6 +134,7 @@ func readMetaForV12(
 		return
 	}
 	metaBatch := bats[0]
+	defer metaBatch.Close()
 	data = make(map[string]objectio.Location)
 	tombstone = make(map[string]objectio.Location)
 	dataLocationsVec := metaBatch.Vecs[MetaSchema_DataObject_Idx+2]
@@ -181,6 +182,7 @@ func readMetaForV12WithTableID(
 		return
 	}
 	metaBatch := bats[0]
+	defer metaBatch.Close()
 
 	data = make(map[string]objectio.Location)
 	tombstone = make(map[string]objectio.Location)
