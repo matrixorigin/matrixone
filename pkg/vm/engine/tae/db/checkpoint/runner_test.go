@@ -732,7 +732,7 @@ func Test_RunnerStore7(t *testing.T) {
 	t.Log(locations)
 	assert.Equalf(t, checkpointed, t1, checkpointed.ToString())
 	words := strings.Split(locations, ";")
-	_, err = objectio.StringToLocation(words[0])
+	_, err = objectio.StringToLocation(words[1])
 	assert.NoError(t, err)
 
 }

@@ -732,15 +732,6 @@ func (m *TNUsageMemo) applySegDeletes(deletes []UsageData, ckpData *CheckpointDa
 	}
 }
 
-func (m *TNUsageMemo) replayIntoGCKP(collector *GlobalCollector) {
-	iter := m.cache.data.Iter()
-	for iter.Next() {
-		usage := iter.Item()
-		appendToStorageUsageBat(collector.data, usage, false, collector.Allocator())
-	}
-	iter.Release()
-}
-
 func (m *TNUsageMemo) deleteAccount(accId uint64) (size uint64) {
 	trash := make([]UsageData, 0)
 	povit := UsageData{AccId: accId, special: unknown}
@@ -1144,7 +1135,6 @@ func FillUsageBatOfGlobal(collector *GlobalCollector) {
 
 	log1, cnt := putCacheBack2Track(collector.BaseCollector)
 	log2 := collector.UsageMemo.ClearDroppedAccounts(collector.Usage.ReservedAccIds)
-	// collector.UsageMemo.replayIntoGCKP(collector)
 
 	doSummary("G",
 		zap.String("update old data", log1),

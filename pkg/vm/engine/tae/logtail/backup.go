@@ -51,11 +51,6 @@ type objData struct {
 	dataType   objectio.DataMetaType
 }
 
-type tableOffset struct {
-	offset int
-	end    int
-}
-
 type BackupDeltaLocDataSource struct {
 	ctx        context.Context
 	fs         fileservice.FileService

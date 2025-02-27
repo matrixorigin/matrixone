@@ -6990,6 +6990,7 @@ func TestSnapshotGC(t *testing.T) {
 			tae.Opts.Fs,
 		)
 		err = reader.ReadMeta(ctx)
+		assert.NoError(t, err)
 		reader.ConsumeCheckpointWithTableID(
 			ctx,
 			func(ctx context.Context, obj objectio.ObjectEntry, isTombstone bool) (err error) {
@@ -9465,6 +9466,7 @@ func TestSnapshotCheckpoint(t *testing.T) {
 					tae.Opts.Fs,
 				)
 				err = reader.ReadMeta(ctx)
+				assert.NoError(t, err)
 				reader.ConsumeCheckpointWithTableID(
 					ctx,
 					func(ctx context.Context, obj objectio.ObjectEntry, isTombstone bool) (err error) {
@@ -11330,6 +11332,8 @@ func TestCheckpointV2(t *testing.T) {
 		tae.Opts.Fs,
 	)
 	err = reader.ReadMeta(ctx)
+	assert.NoError(t, err)
+
 	err = logtail.ReplayCheckpoint(ctx, catalog2, true, reader)
 	assert.NoError(t, err)
 	readTxn, err := tae.StartTxn(nil)
@@ -11374,6 +11378,7 @@ func TestCheckpointV2(t *testing.T) {
 		tae.Opts.Fs,
 	)
 	err = reader.ReadMeta(ctx)
+	assert.NoError(t, err)
 	err = reader.ConsumeCheckpointWithTableID(
 		ctx,
 		func(

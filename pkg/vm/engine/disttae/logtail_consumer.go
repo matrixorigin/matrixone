@@ -2192,11 +2192,5 @@ func consumeCkpsAndLogTail(
 			}
 		}
 	}()
-	for _, entry := range entries {
-		if err = consumeEntry(ctx, primarySeqnum,
-			engine, engine.GetLatestCatalogCache(), state, entry, isSub); err != nil {
-			return
-		}
-	}
 	return consumeLogTail(ctx, primarySeqnum, engine, state, lt, isSub)
 }

@@ -37,11 +37,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 )
 
-type tableOffset struct {
-	offset int
-	end    int
-}
-
 func MergeCheckpoint(
 	ctx context.Context,
 	taskName string,
