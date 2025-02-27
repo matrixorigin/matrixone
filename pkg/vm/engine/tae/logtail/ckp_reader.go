@@ -47,13 +47,13 @@ type CKPReader_V2 struct {
 	withTableID bool
 	tid         uint64
 
-	skipFn func(tid uint64) (skip bool)
-
 	ckpDataObjectStats []objectio.ObjectStats
 	dataRanges         []ckputil.TableRange         // read by tid
 	tombstoneRanges    []ckputil.TableRange         // read by tid
 	dataLocations      map[string]objectio.Location // for version 12
 	tombstoneLocations map[string]objectio.Location // for version 12
+
+	objectIdx int
 }
 
 // with opt
@@ -273,7 +273,7 @@ func readMetaWithTableID(
 	}
 	defer release()
 	dataRanges = ckputil.ExportToTableRanges(metaBatch, tableID, ckputil.ObjectType_Data)
-	tombstoneRanges = ckputil.ExportToTableRanges(metaBatch, tableID, ckputil.ObjectType_Data)
+	tombstoneRanges = ckputil.ExportToTableRanges(metaBatch, tableID, ckputil.ObjectType_Tombstone)
 	return
 }
 
@@ -362,15 +362,69 @@ func (reader *CKPReader_V2) LoadBatchData(
 	if data == nil {
 		panic("invalid input")
 	}
-	var bat *batch.Batch
-	if bat, err = reader.GetCheckpointData(ctx); err != nil {
+	if reader.version <= CheckpointVersion12 {
+		if reader.objectIdx >= 1 {
+			return true, nil
+		}
+		var bat *batch.Batch
+		if bat, err = reader.GetCheckpointData(ctx); err != nil {
+			return
+		}
+		defer bat.Clean(reader.mp)
+		if _, err = data.Append(ctx, reader.mp, bat); err != nil {
+			return
+		}
+		reader.objectIdx++
+		return
+	} else {
+		if reader.objectIdx >= len(reader.ckpDataObjectStats) {
+			return true, nil
+		}
+		if err = getDataFromObject(
+			ctx, reader.ckpDataObjectStats[reader.objectIdx], data, reader.mp, reader.fs,
+		); err != nil {
+			return
+		}
+		reader.objectIdx++
 		return
 	}
-	defer bat.Clean(reader.mp)
-	if _, err = data.Append(ctx, reader.mp, bat); err != nil {
-		return
+}
+
+func getDataFromObject(
+	ctx context.Context,
+	objectStats objectio.ObjectStats,
+	ckpData *batch.Batch,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+) (err error) {
+	reader := ckputil.NewDataReader(
+		ctx,
+		fs,
+		objectStats,
+		readutil.WithColumns(
+			ckputil.TableObjectsSeqnums,
+			ckputil.TableObjectsTypes,
+		),
+	)
+	var (
+		end bool
+	)
+	tmpBat := ckputil.NewObjectListBatch()
+	defer tmpBat.Clean(mp)
+	for {
+		tmpBat.CleanOnlyData()
+		if end, err = reader.Read(
+			ctx, tmpBat.Attrs, nil, mp, tmpBat,
+		); err != nil {
+			return
+		}
+		if end {
+			break
+		}
+		if _, err = ckpData.Append(ctx, mp, tmpBat); err != nil {
+			return
+		}
 	}
-	end = true
 	return
 }
 
@@ -385,33 +439,8 @@ func getCKPData(
 		panic("invalid batch")
 	}
 	for _, obj := range objects {
-		reader := ckputil.NewDataReader(
-			ctx,
-			fs,
-			obj,
-			readutil.WithColumns(
-				ckputil.TableObjectsSeqnums,
-				ckputil.TableObjectsTypes,
-			),
-		)
-		var (
-			end bool
-		)
-		tmpBat := ckputil.NewObjectListBatch()
-		defer tmpBat.Clean(mp)
-		for {
-			tmpBat.CleanOnlyData()
-			if end, err = reader.Read(
-				ctx, tmpBat.Attrs, nil, mp, tmpBat,
-			); err != nil {
-				return
-			}
-			if end {
-				break
-			}
-			if _, err = ckpData.Append(ctx, mp, tmpBat); err != nil {
-				return
-			}
+		if err = getDataFromObject(ctx, obj, ckpData, mp, fs); err != nil {
+			return
 		}
 	}
 	return

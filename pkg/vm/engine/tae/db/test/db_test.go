@@ -10091,6 +10091,7 @@ func TestCKPCollectObject(t *testing.T) {
 			err = reader.ReadMeta(ctx)
 			assert.NoError(t, err)
 			bat2, err := reader.GetCheckpointData(ctx)
+			defer bat2.Clean(common.DebugAllocator)
 			assert.NoError(t, err)
 			assert.Equal(t, 1, bat2.RowCount())
 			assert.NoError(t, txn.Commit(ctx))
