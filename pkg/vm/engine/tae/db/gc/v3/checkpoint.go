@@ -398,7 +398,7 @@ func (c *checkpointCleaner) Replay(inputCtx context.Context) (err error) {
 		end := compacted.GetEnd()
 		c.updateCheckpointGCWaterMark(&end)
 
-		var ckpData *logtail.CKPReader_V2
+		var ckpData *logtail.CKPReader
 		if ckpData, err = c.collectCkpData(ctx, compacted); err != nil {
 			logutil.Error(
 				"GC-REPLAY-COLLECT-ERROR",
@@ -911,7 +911,7 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 func (c *checkpointCleaner) collectCkpData(
 	ctx context.Context,
 	ckp *checkpoint.CheckpointEntry,
-) (data *logtail.CKPReader_V2, err error) {
+) (data *logtail.CKPReader, err error) {
 	return logtail.GetCheckpointData(
 		ctx, c.sid, c.fs, ckp.GetLocation(), ckp.GetVersion(),
 	)
@@ -1721,7 +1721,7 @@ func (c *checkpointCleaner) scanCheckpointsLocked(
 
 func (c *checkpointCleaner) mutUpdateSnapshotMetaLocked(
 	ckp *checkpoint.CheckpointEntry,
-	data *logtail.CKPReader_V2,
+	data *logtail.CKPReader,
 ) error {
 	return c.mutation.snapshotMeta.Update(
 		c.ctx,

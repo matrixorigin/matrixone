@@ -54,7 +54,7 @@ type CkpReplayer struct {
 	dir        string
 	r          *runner
 	ckpEntries []*CheckpointEntry
-	ckpReader  []*logtail.CKPReader_V2
+	ckpReader  []*logtail.CKPReader
 	closes     []func()
 	emptyFile  []*CheckpointEntry
 
@@ -245,7 +245,7 @@ func (c *CkpReplayer) ReadCkpFiles() (err error) {
 
 	// step2. read checkpoint data, output is the ckpdatas
 
-	c.ckpReader = make([]*logtail.CKPReader_V2, len(c.ckpEntries))
+	c.ckpReader = make([]*logtail.CKPReader, len(c.ckpEntries))
 
 	readfn := func(i int, readType uint16) (err error) {
 		checkpointEntry := c.ckpEntries[i]
@@ -258,7 +258,7 @@ func (c *CkpReplayer) ReadCkpFiles() (err error) {
 			c.ckpReader[i].PrefetchData(checkpointEntry.sid)
 		} else if readType == PrefetchMetaIdx {
 			c.readCount++
-			c.ckpReader[i] = logtail.NewCKPReader_V2(
+			c.ckpReader[i] = logtail.NewCKPReader(
 				checkpointEntry.GetVersion(), checkpointEntry.GetLocation(), common.CheckpointAllocator, r.rt.Fs,
 			)
 			ioutil.Prefetch(checkpointEntry.sid, r.rt.Fs, checkpointEntry.GetLocation())

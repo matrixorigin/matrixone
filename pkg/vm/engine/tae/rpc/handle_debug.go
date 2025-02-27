@@ -232,7 +232,7 @@ func getChangedListFromCheckpoints(
 
 	ckps := h.GetDB().BGCheckpointRunner.GetAllCheckpoints()
 	tblIds = make([]uint64, 0)
-	readers := make([]*logtail.CKPReader_V2, len(ckps))
+	readers := make([]*logtail.CKPReader, len(ckps))
 	for i := 0; i < len(ckps); i++ {
 
 		if ckps[i] == nil {
@@ -255,7 +255,7 @@ func getChangedListFromCheckpoints(
 		if !ckps[i].HasOverlap(from, to) {
 			continue
 		}
-		readers[i] = logtail.NewCKPReader_V2(
+		readers[i] = logtail.NewCKPReader(
 			ckps[i].GetVersion(),
 			ckps[i].GetLocation(),
 			common.CheckpointAllocator,

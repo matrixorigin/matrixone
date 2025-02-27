@@ -10093,7 +10093,7 @@ func TestCKPCollectObject(t *testing.T) {
 			ckpData := collector.OrphanData()
 			loc, _, _, err := ckpData.WriteTo(ctx, tae.Opts.Fs)
 			assert.NoError(t, err)
-			reader := logtail.NewCKPReader_V2(logtail.CheckpointCurrentVersion, loc, common.DebugAllocator, tae.Opts.Fs)
+			reader := logtail.NewCKPReader(logtail.CheckpointCurrentVersion, loc, common.DebugAllocator, tae.Opts.Fs)
 			err = reader.ReadMeta(ctx)
 			assert.NoError(t, err)
 			bat2, err := reader.GetCheckpointData(ctx)
@@ -11321,7 +11321,7 @@ func TestCheckpointV2(t *testing.T) {
 	)
 	catalog2 := catalog.MockCatalog(dataFactory)
 
-	reader := logtail.NewCKPReader_V2(
+	reader := logtail.NewCKPReader(
 		logtail.CheckpointCurrentVersion,
 		loc,
 		common.DebugAllocator,

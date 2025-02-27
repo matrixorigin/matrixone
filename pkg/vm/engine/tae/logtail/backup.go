@@ -294,13 +294,13 @@ func GetCheckpointData(
 	fs fileservice.FileService,
 	location objectio.Location,
 	version uint32,
-) (*CKPReader_V2, error) {
+) (*CKPReader, error) {
 	select {
 	case <-ctx.Done():
 		return nil, context.Cause(ctx)
 	default:
 	}
-	reader := NewCKPReader_V2(version, location, common.CheckpointAllocator, fs)
+	reader := NewCKPReader(version, location, common.CheckpointAllocator, fs)
 	if err := reader.ReadMeta(ctx); err != nil {
 		return nil, err
 	}
@@ -455,7 +455,7 @@ func LoadCheckpointEntriesFromKey(
 	version uint32,
 	softDeletes *map[string]bool,
 	baseTS *types.TS,
-) ([]*objectio.BackupObject, *CKPReader_V2, error) {
+) ([]*objectio.BackupObject, *CKPReader, error) {
 	locations := make([]*objectio.BackupObject, 0)
 	data, err := GetCheckpointData(ctx, sid, fs, location, version)
 	if err != nil {
@@ -527,7 +527,7 @@ func ReWriteCheckpointAndBlockFromKey(
 	sid string,
 	fs, dstFs fileservice.FileService,
 	loc objectio.Location,
-	lastCkpData *CKPReader_V2,
+	lastCkpData *CKPReader,
 	version uint32, ts types.TS,
 ) (objectio.Location, objectio.Location, []string, error) {
 	logutil.Info("[Start]", common.OperationField("ReWrite Checkpoint"),

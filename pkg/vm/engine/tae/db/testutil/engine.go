@@ -465,7 +465,7 @@ func mockAndReplayCatalog(
 ) *catalog.Catalog {
 	dataFactory := tables.NewDataFactory(e.Runtime, e.Dir)
 	c := catalog.MockCatalog(dataFactory)
-	reader := logtail.NewCKPReader_V2(
+	reader := logtail.NewCKPReader(
 		logtail.CheckpointCurrentVersion,
 		loc,
 		common.DebugAllocator,
@@ -489,7 +489,7 @@ func mockAndReplayCatalog(
 	}
 	assert.NoError(t, readTxn.Commit(ctx))
 
-	reader = logtail.NewCKPReader_V2(
+	reader = logtail.NewCKPReader(
 		logtail.CheckpointCurrentVersion,
 		loc,
 		common.DebugAllocator,

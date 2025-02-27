@@ -1365,7 +1365,7 @@ func (data *CheckpointData) ReadFrom(
 func LoadCheckpointLocations(
 	ctx context.Context,
 	sid string,
-	reader *CKPReader_V2,
+	reader *CKPReader,
 ) (map[string]objectio.Location, error) {
 	select {
 	case <-ctx.Done():

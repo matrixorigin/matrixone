@@ -39,7 +39,7 @@ import (
 	"go.uber.org/zap"
 )
 
-type CKPReader_V2 struct {
+type CKPReader struct {
 	version     uint32
 	location    objectio.Location
 	mp          *mpool.MPool
@@ -57,13 +57,13 @@ type CKPReader_V2 struct {
 }
 
 // with opt
-func NewCKPReader_V2(
+func NewCKPReader(
 	version uint32,
 	location objectio.Location,
 	mp *mpool.MPool,
 	fs fileservice.FileService,
-) *CKPReader_V2 {
-	return &CKPReader_V2{
+) *CKPReader {
+	return &CKPReader{
 		version:  version,
 		location: location,
 		mp:       mp,
@@ -77,8 +77,8 @@ func NewCKPReaderWithTableID_V2(
 	tableID uint64,
 	mp *mpool.MPool,
 	fs fileservice.FileService,
-) *CKPReader_V2 {
-	return &CKPReader_V2{
+) *CKPReader {
+	return &CKPReader{
 		version:     version,
 		location:    location,
 		withTableID: true,
@@ -88,7 +88,7 @@ func NewCKPReaderWithTableID_V2(
 	}
 }
 
-func (reader *CKPReader_V2) ReadMeta(
+func (reader *CKPReader) ReadMeta(
 	ctx context.Context,
 ) (err error) {
 	if reader.version <= CheckpointVersion12 {
@@ -277,7 +277,7 @@ func readMetaWithTableID(
 	return
 }
 
-func (reader *CKPReader_V2) GetLocations() []objectio.Location {
+func (reader *CKPReader) GetLocations() []objectio.Location {
 	if reader.version <= CheckpointVersion12 {
 		locations := make([]objectio.Location, 0, len(reader.dataLocations)+len(reader.dataLocations))
 		for _, loc := range reader.dataLocations {
@@ -321,14 +321,14 @@ func (reader *CKPReader_V2) GetLocations() []objectio.Location {
 	}
 }
 
-func (reader *CKPReader_V2) PrefetchData(sid string) {
+func (reader *CKPReader) PrefetchData(sid string) {
 	locations := reader.GetLocations()
 	for _, loc := range locations {
 		ioutil.Prefetch(sid, reader.fs, loc)
 	}
 }
 
-func (reader *CKPReader_V2) GetCheckpointData(ctx context.Context) (bat *batch.Batch, err error) {
+func (reader *CKPReader) GetCheckpointData(ctx context.Context) (bat *batch.Batch, err error) {
 	if reader.withTableID {
 		panic("not support")
 	}
@@ -352,7 +352,7 @@ func (reader *CKPReader_V2) GetCheckpointData(ctx context.Context) (bat *batch.B
 	}
 }
 
-func (reader *CKPReader_V2) LoadBatchData(
+func (reader *CKPReader) LoadBatchData(
 	ctx context.Context,
 	_ []string,
 	_ *plan.Expr,
@@ -524,7 +524,7 @@ func compatibilityForV12(
 	return
 }
 
-func (reader *CKPReader_V2) ForEachRow(
+func (reader *CKPReader) ForEachRow(
 	ctx context.Context,
 	forEachRow func(
 		account uint32,
@@ -623,7 +623,7 @@ func forEachRowForV12(
 	return
 }
 
-func (reader *CKPReader_V2) ConsumeCheckpointWithTableID(
+func (reader *CKPReader) ConsumeCheckpointWithTableID(
 	ctx context.Context,
 	forEachObject func(ctx context.Context, obj objectio.ObjectEntry, isTombstone bool) (err error),
 ) (err error) {
@@ -722,7 +722,7 @@ func ReplayCheckpoint(
 	ctx context.Context,
 	c *catalog.Catalog,
 	forSys bool,
-	reader *CKPReader_V2,
+	reader *CKPReader,
 ) (err error) {
 	return reader.ForEachRow(
 		ctx,
@@ -747,7 +747,7 @@ func ReplayCheckpoint(
 func GetCheckpointMetaInfo(
 	ctx context.Context,
 	id uint64,
-	reader *CKPReader_V2,
+	reader *CKPReader,
 ) (res *ObjectInfoJson, err error) {
 	tombstone := make(map[string]struct{})
 	tombstoneInfo := make(map[uint64]*tableinfo)
@@ -861,7 +861,7 @@ func getMetaInfo(
 }
 func GetTableIDsFromCheckpoint(
 	ctx context.Context,
-	reader *CKPReader_V2,
+	reader *CKPReader,
 ) (result []uint64, err error) {
 	seen := make(map[uint64]struct{})
 
@@ -892,7 +892,7 @@ func GetTableIDsFromCheckpoint(
 // only need to read meta
 func GetObjectsFromCKPMeta(
 	ctx context.Context,
-	reader *CKPReader_V2,
+	reader *CKPReader,
 	pinned map[string]bool,
 ) (err error) {
 
@@ -937,7 +937,7 @@ func ConsumeCheckpointEntries(
 		locationsAndVersions = locationsAndVersions[1:]
 	}
 
-	readers := make([]*CKPReader_V2, 0)
+	readers := make([]*CKPReader, 0)
 	for i := 0; i < len(locationsAndVersions); i += 2 {
 		key := locationsAndVersions[i]
 		var version uint64

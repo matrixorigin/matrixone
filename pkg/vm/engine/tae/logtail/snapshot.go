@@ -340,7 +340,7 @@ type tombstone struct {
 func (sm *SnapshotMeta) updateTableInfo(
 	ctx context.Context,
 	fs fileservice.FileService,
-	data *CKPReader_V2, startts, endts types.TS,
+	data *CKPReader, startts, endts types.TS,
 ) error {
 	var objects map[uint64]map[objectio.Segmentid]*objectInfo
 	var tombstones map[uint64]map[objectio.Segmentid]*objectInfo
@@ -572,7 +572,7 @@ func collectObjects(
 	ctx context.Context,
 	objects *map[uint64]map[objectio.Segmentid]*objectInfo,
 	objects2 *map[objectio.Segmentid]*objectInfo,
-	data *CKPReader_V2,
+	data *CKPReader,
 	objType int8,
 	collector func(
 		*map[uint64]map[objectio.Segmentid]*objectInfo,
@@ -603,7 +603,7 @@ func collectObjects(
 func (sm *SnapshotMeta) Update(
 	ctx context.Context,
 	fs fileservice.FileService,
-	data *CKPReader_V2,
+	data *CKPReader,
 	startts, endts types.TS,
 	taskName string,
 ) (err error) {
@@ -1423,7 +1423,7 @@ func (sm *SnapshotMeta) ReadTableInfo(ctx context.Context, name string, fs files
 func (sm *SnapshotMeta) InitTableInfo(
 	ctx context.Context,
 	fs fileservice.FileService,
-	data *CKPReader_V2,
+	data *CKPReader,
 	startts, endts types.TS,
 ) {
 	sm.Lock()

@@ -174,8 +174,8 @@ func (w *GCWindow) ExecuteGlobalCheckpointBasedGC(
 func (w *GCWindow) ScanCheckpoints(
 	ctx context.Context,
 	checkpointEntries []*checkpoint.CheckpointEntry,
-	collectCkpData func(context.Context, *checkpoint.CheckpointEntry) (*logtail.CKPReader_V2, error),
-	processCkpData func(*checkpoint.CheckpointEntry, *logtail.CKPReader_V2) error,
+	collectCkpData func(context.Context, *checkpoint.CheckpointEntry) (*logtail.CKPReader, error),
+	processCkpData func(*checkpoint.CheckpointEntry, *logtail.CKPReader) error,
 	onScanDone func() error,
 	buffer *containers.OneSchemaBatchBuffer,
 ) (metaFile string, err error) {
@@ -320,7 +320,7 @@ func (w *GCWindow) Merge(o *GCWindow) {
 	}
 }
 
-func collectObjectsFromCheckpointData(ctx context.Context, data *logtail.CKPReader_V2, objects map[string]*ObjectEntry) {
+func collectObjectsFromCheckpointData(ctx context.Context, data *logtail.CKPReader, objects map[string]*ObjectEntry) {
 	data.ForEachRow(
 		ctx,
 		func(

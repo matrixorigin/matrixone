@@ -213,7 +213,7 @@ func MakeBloomfilterCoarseFilter(
 	FilterFn,
 	error,
 ) {
-	reader := logtail.NewCKPReader_V2(ckpVersion, location, mp, fs)
+	reader := logtail.NewCKPReader(ckpVersion, location, mp, fs)
 	var err error
 	if err = reader.ReadMeta(ctx); err != nil {
 		return nil, err

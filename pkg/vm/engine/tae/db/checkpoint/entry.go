@@ -437,7 +437,7 @@ func (e *CheckpointEntry) GetCheckpointMetaInfo(
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 ) (res *logtail.ObjectInfoJson, err error) {
-	reader := logtail.NewCKPReader_V2(e.version, e.cnLocation, mp, fs)
+	reader := logtail.NewCKPReader(e.version, e.cnLocation, mp, fs)
 	if err = reader.ReadMeta(ctx); err != nil {
 		return
 	}
@@ -450,7 +450,7 @@ func (e *CheckpointEntry) GetTableIDs(
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 ) (result []uint64, err error) {
-	reader := logtail.NewCKPReader_V2(e.version, e.cnLocation, mp, fs)
+	reader := logtail.NewCKPReader(e.version, e.cnLocation, mp, fs)
 	if err = reader.ReadMeta(ctx); err != nil {
 		return
 	}
@@ -463,7 +463,7 @@ func (e *CheckpointEntry) GetObjects(
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 ) (err error) {
-	reader := logtail.NewCKPReader_V2(e.version, e.cnLocation, mp, fs)
+	reader := logtail.NewCKPReader(e.version, e.cnLocation, mp, fs)
 	if err = reader.ReadMeta(ctx); err != nil {
 		return
 	}

@@ -54,7 +54,7 @@ func MergeCheckpoint(
 	fs fileservice.FileService,
 ) (deleteFiles, newFiles []string, checkpointEntry *checkpoint.CheckpointEntry, ckpData *batch.Batch, err error) {
 	ckpData = ckputil.NewObjectListBatch()
-	datas := make([]*logtail.CKPReader_V2, 0)
+	datas := make([]*logtail.CKPReader, 0)
 	deleteFiles = make([]string, 0)
 	for _, ckpEntry := range ckpEntries {
 		select {
@@ -68,7 +68,7 @@ func MergeCheckpoint(
 			zap.String("task", taskName),
 			zap.String("entry", ckpEntry.String()),
 		)
-		var data *logtail.CKPReader_V2
+		var data *logtail.CKPReader
 		var locations map[string]objectio.Location
 		if _, data, err = logtail.LoadCheckpointEntriesFromKey(
 			ctx,
