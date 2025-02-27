@@ -121,7 +121,7 @@ func prepareUpdateTestBatchs(mp *mpool.MPool, size int, hasUniqueKey bool, hasSe
 		columnB := testutil.NewStringVector(rowCount, types.T_varchar.ToType(), mp, false, nil)
 		columnC := testutil.NewInt32Vector(rowCount, types.T_int32.ToType(), mp, false, nil)
 		columnD := testutil.NewInt32Vector(rowCount, types.T_int32.ToType(), mp, false, nil)
-		columnRowID := makeTestRowIDVector(mp, mainObjectID, uint16(i), rowCount)
+		columnRowID := makeTestRowIDVector(mp, &mainObjectID, uint16(i), rowCount)
 
 		attrs := []string{"a", "b", "c", "d", catalog.Row_ID}
 		bat := &batch.Batch{
@@ -130,7 +130,7 @@ func prepareUpdateTestBatchs(mp *mpool.MPool, size int, hasUniqueKey bool, hasSe
 		}
 
 		if hasUniqueKey {
-			columnRowID := makeTestRowIDVector(mp, uniqueObjectID, uint16(i), rowCount)
+			columnRowID := makeTestRowIDVector(mp, &uniqueObjectID, uint16(i), rowCount)
 			columnOldPk := testutil.NewStringVector(rowCount, types.T_varchar.ToType(), mp, true, nil)
 			columnNewPk := testutil.NewStringVector(rowCount, types.T_varchar.ToType(), mp, true, nil)
 			bat.Vecs = append(bat.Vecs, columnRowID)
@@ -140,7 +140,7 @@ func prepareUpdateTestBatchs(mp *mpool.MPool, size int, hasUniqueKey bool, hasSe
 		}
 
 		if hasSecondaryKey {
-			columnRowID := makeTestRowIDVector(mp, secondaryObjectID, uint16(i), rowCount)
+			columnRowID := makeTestRowIDVector(mp, &secondaryObjectID, uint16(i), rowCount)
 			columnOldPk := testutil.NewStringVector(rowCount, types.T_varchar.ToType(), mp, true, nil)
 			columnNewPk := testutil.NewStringVector(rowCount, types.T_varchar.ToType(), mp, true, nil)
 			bat.Vecs = append(bat.Vecs, columnRowID)

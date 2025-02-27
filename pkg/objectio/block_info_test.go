@@ -195,7 +195,7 @@ func TestBlockInfoSlice_Remove(t *testing.T) {
 
 func TestObjectStatsToBlockInfoSlice(t *testing.T) {
 	obj1 := NewObjectid()
-	stats := NewObjectStatsWithObjectID(obj1, true, true, true)
+	stats := NewObjectStatsWithObjectID(&obj1, true, true, true)
 	extent := NewExtent(0x1f, 0x2f, 0x3f, 0x4f)
 	SetObjectStatsExtent(stats, extent)
 	blkCnt := uint16(99)
@@ -210,7 +210,7 @@ func TestObjectStatsToBlockInfoSlice(t *testing.T) {
 		require.True(t, blk.IsAppendable())
 		require.True(t, blk.IsSorted())
 		require.True(t, blk.IsCNCreated())
-		require.True(t, blk.BlockID.Object().EQ(obj1))
+		require.True(t, blk.BlockID.Object().EQ(&obj1))
 		require.Equal(t, uint16(i), blk.BlockID.Sequence())
 		if i == int(blkCnt)-1 {
 			require.Equal(t, uint32(1), blk.MetaLocation().Rows())
@@ -230,7 +230,7 @@ func TestObjectStatsToBlockInfoSlice(t *testing.T) {
 		require.True(t, blk.IsAppendable())
 		require.True(t, blk.IsSorted())
 		require.True(t, blk.IsCNCreated())
-		require.True(t, blk.BlockID.Object().EQ(obj1))
+		require.True(t, blk.BlockID.Object().EQ(&obj1))
 		require.Equal(t, uint16(i-1), blk.BlockID.Sequence())
 		if i == int(blkCnt) {
 			require.Equal(t, uint32(1), blk.MetaLocation().Rows())
