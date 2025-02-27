@@ -243,7 +243,7 @@ func AddCronJob(db *DB, name string, skipMode bool) (err error) {
 		scanner.RegisterOp(db.MergeScheduler)
 		err = db.CronJobs.AddJob(
 			CronJobs_Name_Scanner,
-			db.Opts.GCCfg.ScanGCInterval,
+			db.Opts.CheckpointCfg.ScanInterval,
 			func(ctx context.Context) {
 				scanner.OnExec()
 			},
