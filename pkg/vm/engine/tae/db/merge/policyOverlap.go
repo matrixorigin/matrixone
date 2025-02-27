@@ -212,8 +212,19 @@ func makeEndPoints(objects []*catalog.ObjectEntry) []endPoint {
 				minBuf := zm.GetMinBuf()
 				maxBuf := zm.GetMaxBuf()
 				if len(minBuf) == len(maxBuf) && len(minBuf) == 30 {
-					maxBuf[29] = maxBuf[29] - 1
-					if bytes.Compare(minBuf, maxBuf) == 0 {
+					copiedMin := make([]byte, len(minBuf))
+					copiedMax := make([]byte, len(maxBuf))
+
+					copy(copiedMin, minBuf)
+					copy(copiedMax, maxBuf)
+					for i := 29; i >= 0; i-- {
+						if copiedMax[i] != 0 {
+							copiedMax[i]--
+							break
+						}
+						copiedMax[i]--
+					}
+					if bytes.Compare(copiedMin, copiedMax) == 0 {
 						continue
 					}
 				}
