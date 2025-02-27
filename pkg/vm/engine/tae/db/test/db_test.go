@@ -6674,7 +6674,7 @@ func TestAppendAndGC(t *testing.T) {
 	}
 	logutil.Infof("start gc")
 	assert.Equal(t, uint64(0), db.Runtime.Scheduler.GetPenddingLSNCnt())
-	err = db.DiskCleaner.GetCleaner().DoCheck()
+	err = db.DiskCleaner.GetCleaner().DoCheck(ctx)
 	assert.Nil(t, err)
 	testutils.WaitExpect(10000, func() bool {
 		return db.DiskCleaner.GetCleaner().GetMinMerged() != nil
@@ -6952,7 +6952,7 @@ func TestSnapshotGC(t *testing.T) {
 		return
 	}
 	assert.NotNil(t, minMerged)
-	err = db.DiskCleaner.GetCleaner().DoCheck()
+	err = db.DiskCleaner.GetCleaner().DoCheck(ctx)
 	assert.Nil(t, err)
 	tae.RestartDisableGC(ctx)
 	db = tae.DB
@@ -6967,7 +6967,7 @@ func TestSnapshotGC(t *testing.T) {
 	end := db.DiskCleaner.GetCleaner().GetScanWaterMark().GetEnd()
 	minEnd := minMerged.GetEnd()
 	assert.True(t, end.GE(&minEnd))
-	err = db.DiskCleaner.GetCleaner().DoCheck()
+	err = db.DiskCleaner.GetCleaner().DoCheck(ctx)
 	assert.Nil(t, err)
 	tbl := rele2.GetMeta().(*catalog.TableEntry)
 	db2, err := db.Catalog.GetDatabaseByID(tbl.GetDB().ID)
@@ -7164,7 +7164,7 @@ func TestSnapshotMeta(t *testing.T) {
 	for _, snap := range snaps {
 		assert.Equal(t, len(snapshots), snap.Length())
 	}
-	err = db.DiskCleaner.GetCleaner().DoCheck()
+	err = db.DiskCleaner.GetCleaner().DoCheck(ctx)
 	assert.Nil(t, err)
 	tae.RestartDisableGC(ctx)
 	db = tae.DB
@@ -7189,7 +7189,7 @@ func TestSnapshotMeta(t *testing.T) {
 	for _, snap := range snaps {
 		assert.Equal(t, len(snapshots), snap.Length())
 	}
-	err = db.DiskCleaner.GetCleaner().DoCheck()
+	err = db.DiskCleaner.GetCleaner().DoCheck(ctx)
 	assert.Nil(t, err)
 }
 
@@ -7383,7 +7383,7 @@ func TestPitrMeta(t *testing.T) {
 		}
 	}
 
-	err = db.DiskCleaner.GetCleaner().DoCheck()
+	err = db.DiskCleaner.GetCleaner().DoCheck(ctx)
 	assert.Nil(t, err)
 	assert.NotNil(t, minMerged)
 	pitr, err := db.DiskCleaner.GetCleaner().GetPITRs()
@@ -7402,7 +7402,7 @@ func TestPitrMeta(t *testing.T) {
 	end := db.DiskCleaner.GetCleaner().GetScanWaterMark().GetEnd()
 	minEnd = minMerged.GetEnd()
 	assert.True(t, end.GE(&minEnd))
-	err = db.DiskCleaner.GetCleaner().DoCheck()
+	err = db.DiskCleaner.GetCleaner().DoCheck(ctx)
 	assert.Nil(t, err)
 	txn, _ = db.StartTxn(nil)
 	database, _ = txn.GetDatabase("db")

@@ -39,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/tidwall/btree"
@@ -1193,57 +1194,61 @@ func FillUsageBatOfCompacted(
 		pitrs,
 	)
 	objectsName := make(map[string]struct{})
-	scan := func(
-		account uint32,
-		dbid, tid uint64,
-		objectType int8,
-		stats objectio.ObjectStats,
-		create, delete types.TS,
-		rowID types.Rowid,
-	) (err error) {
-		if delete.IsEmpty() {
-			dropTs, ok := meta.GetTableDropAt(tid)
-			if !ok || dropTs.IsEmpty() {
-				return
+	scan := func(bat *batch.Batch) {
+		insDeleteTSVec := vector.MustFixedColWithTypeCheck[types.TS](
+			bat.Vecs[ckputil.TableObjectsAttr_DeleteTS_Idx])
+		insCreateTSVec := vector.MustFixedColWithTypeCheck[types.TS](
+			bat.Vecs[ckputil.TableObjectsAttr_CreateTS_Idx])
+		dbid := vector.MustFixedColNoTypeCheck[uint64](
+			bat.Vecs[ckputil.TableObjectsAttr_DB_Idx])
+		tableID := vector.MustFixedColNoTypeCheck[uint64](
+			bat.Vecs[ckputil.TableObjectsAttr_Table_Idx])
+		for i := 0; i < bat.RowCount(); i++ {
+			if insDeleteTSVec[i].IsEmpty() {
+				dropTs, ok := meta.GetTableDropAt(tableID[i])
+				if !ok || dropTs.IsEmpty() {
+					continue
+				}
 			}
-		}
-		id, ok := meta.GetAccountId(tid)
-		if !ok {
-			return
-		}
-		accountId := uint64(id)
-		if len(tableSnapshots[tid]) == 0 &&
-			(tablePitrs[tid] == nil ||
-				tablePitrs[tid].IsEmpty()) {
-			return
-		}
+			id, ok := meta.GetAccountId(tableID[i])
+			if !ok {
+				continue
+			}
+			accountId := uint64(id)
+			if len(tableSnapshots[tableID[i]]) == 0 &&
+				(tablePitrs[tableID[i]] == nil ||
+					tablePitrs[tableID[i]].IsEmpty()) {
+				continue
+			}
 
-		if !ObjectIsSnapshotRefers(
-			&stats,
-			tablePitrs[tid],
-			&create,
-			&delete,
-			tableSnapshots[tid]) {
-			return
-		}
-		// skip the same object
-		if _, ok = objectsName[stats.ObjectName().String()]; ok {
-			return
-		}
-		key := [3]uint64{accountId, dbid, tid}
-		snapSize := usageData[key].SnapshotSize
-		snapSize += uint64(stats.Size())
-		usageData[key] = UsageData{
-			AccId:        accountId,
-			DbId:         dbid,
-			TblId:        tid,
-			SnapshotSize: snapSize,
-		}
+			buf := bat.Vecs[ckputil.TableObjectsAttr_ID_Idx].GetRawBytesAt(i)
+			stats := (objectio.ObjectStats)(buf)
+			if !ObjectIsSnapshotRefers(
+				&stats,
+				tablePitrs[tableID[i]],
+				&insCreateTSVec[i],
+				&insDeleteTSVec[i],
+				tableSnapshots[tableID[i]]) {
+				continue
+			}
+			// skip the same object
+			if _, ok = objectsName[stats.ObjectName().String()]; ok {
+				continue
+			}
+			key := [3]uint64{accountId, dbid[i], tableID[i]}
+			snapSize := usageData[key].SnapshotSize
+			snapSize += uint64(stats.Size())
+			usageData[key] = UsageData{
+				AccId:        accountId,
+				DbId:         dbid[i],
+				TblId:        tableID[i],
+				SnapshotSize: snapSize,
+			}
 
-		objectsName[stats.ObjectName().String()] = struct{}{}
-		return nil
+			objectsName[stats.ObjectName().String()] = struct{}{}
+		}
 	}
-	data.ForEachRow(ctx, scan)
+	scan(data)
 	iter := usage.cache.data.Iter()
 	update := make(map[[3]uint64]UsageData)
 	for iter.Next() {

@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
@@ -349,6 +350,28 @@ func (reader *CKPReader_V2) GetCheckpointData(ctx context.Context) (bat *batch.B
 		}
 		return
 	}
+}
+
+func (reader *CKPReader_V2) LoadBatchData(
+	ctx context.Context,
+	_ []string,
+	_ *plan.Expr,
+	_ *mpool.MPool,
+	data *batch.Batch,
+) (end bool, err error) {
+	if data == nil {
+		panic("invalid input")
+	}
+	var bat *batch.Batch
+	if bat, err = reader.GetCheckpointData(ctx); err != nil {
+		return
+	}
+	defer bat.Clean(reader.mp)
+	if _, err = data.Append(ctx, reader.mp, bat); err != nil {
+		return
+	}
+	end = true
+	return
 }
 
 func getCKPData(
