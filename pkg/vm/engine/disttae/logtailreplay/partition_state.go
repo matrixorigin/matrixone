@@ -190,11 +190,11 @@ func (p *PartitionState) handleDataObjectEntry(ctx context.Context, objEntry obj
 		blkID := objectio.NewBlockidWithObjectID(objID, 0)
 		pivot := &RowEntry{
 			// aobj has only one blk
-			BlockID: *blkID,
+			BlockID: blkID,
 		}
 		for ok := iter.Seek(pivot); ok; ok = iter.Next() {
 			entry := iter.Item()
-			if entry.BlockID != *blkID {
+			if entry.BlockID != blkID {
 				break
 			}
 
@@ -471,11 +471,11 @@ func (p *PartitionState) HandleDataObjectList(
 			blkID := objectio.NewBlockidWithObjectID(objID, uint16(i))
 			pivot := &RowEntry{
 				// aobj has only one blk
-				BlockID: *blkID,
+				BlockID: blkID,
 			}
 			for ok := iter.Seek(pivot); ok; ok = iter.Next() {
 				entry := iter.Item()
-				if entry.BlockID != *blkID {
+				if entry.BlockID != blkID {
 					break
 				}
 

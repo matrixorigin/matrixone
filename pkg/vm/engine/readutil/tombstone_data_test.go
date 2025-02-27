@@ -84,17 +84,17 @@ func TestTombstoneData1(t *testing.T) {
 
 	obj1 := objectio.NewObjectid()
 	obj2 := objectio.NewObjectid()
-	blk1_0 := objectio.NewBlockidWithObjectID(obj1, 0)
-	blk1_1 := objectio.NewBlockidWithObjectID(obj1, 1)
-	blk1_2 := objectio.NewBlockidWithObjectID(obj1, 2)
-	blk2_0 := objectio.NewBlockidWithObjectID(obj2, 0)
+	blk1_0 := objectio.NewBlockidWithObjectID(&obj1, 0)
+	blk1_1 := objectio.NewBlockidWithObjectID(&obj1, 1)
+	blk1_2 := objectio.NewBlockidWithObjectID(&obj1, 2)
+	blk2_0 := objectio.NewBlockidWithObjectID(&obj2, 0)
 
 	rowids := make([]types.Rowid, 0)
 	for i := 0; i < 4; i++ {
-		rowid := types.NewRowid(blk1_0, uint32(i))
-		rowids = append(rowids, *rowid)
-		rowid = types.NewRowid(blk2_0, uint32(i))
-		rowids = append(rowids, *rowid)
+		rowid := types.NewRowid(&blk1_0, uint32(i))
+		rowids = append(rowids, rowid)
+		rowid = types.NewRowid(&blk2_0, uint32(i))
+		rowids = append(rowids, rowid)
 	}
 
 	// Test AppendInMemory and AppendFiles and SortInMemory
@@ -139,10 +139,10 @@ func TestTombstoneData1(t *testing.T) {
 	tombstones2 := NewEmptyTombstoneData()
 	rowids = rowids[:0]
 	for i := 0; i < 3; i++ {
-		rowid := types.NewRowid(blk1_1, uint32(i))
-		rowids = append(rowids, *rowid)
-		rowid = types.NewRowid(blk1_2, uint32(i))
-		rowids = append(rowids, *rowid)
+		rowid := types.NewRowid(&blk1_1, uint32(i))
+		rowids = append(rowids, rowid)
+		rowid = types.NewRowid(&blk1_2, uint32(i))
+		rowids = append(rowids, rowid)
 	}
 	err = tombstones2.AppendInMemory(rowids...)
 	require.Nil(t, err)
@@ -182,10 +182,10 @@ func TestTombstoneData1(t *testing.T) {
 
 	// case 1: target is blk1_3 and rowsOffset is [0, 1, 2, 3]
 	// expect: left is [0, 1, 2, 3]. no rows are deleted
-	target := types.NewBlockidWithObjectID(obj1, 3)
+	target := types.NewBlockidWithObjectID(&obj1, 3)
 	rowsOffset := []int64{0, 1, 2, 3}
 	left := tombstones1.ApplyInMemTombstones(
-		target,
+		&target,
 		rowsOffset,
 		nil,
 	)
@@ -197,7 +197,7 @@ func TestTombstoneData1(t *testing.T) {
 	defer deleted.Release()
 	deleted.Add(5)
 	left = tombstones1.ApplyInMemTombstones(
-		target,
+		&target,
 		nil,
 		&deleted,
 	)
@@ -207,10 +207,10 @@ func TestTombstoneData1(t *testing.T) {
 
 	// case 3: target is blk2_0 and rowsOffset is [2, 3, 4]
 	// expect: left is [4]. [2, 3] are deleted
-	target = types.NewBlockidWithObjectID(obj2, 0)
+	target = types.NewBlockidWithObjectID(&obj2, 0)
 	rowsOffset = []int64{2, 3, 4}
 	left = tombstones1.ApplyInMemTombstones(
-		target,
+		&target,
 		rowsOffset,
 		nil,
 	)
@@ -218,11 +218,11 @@ func TestTombstoneData1(t *testing.T) {
 
 	// case 4: target is blk1_1 and deleted rows is [4]
 	// expect: left is [], deleted rows is [0,1,2,4].
-	target = types.NewBlockidWithObjectID(obj1, 1)
+	target = types.NewBlockidWithObjectID(&obj1, 1)
 	deleted.Clear()
 	deleted.Add(4)
 	left = tombstones1.ApplyInMemTombstones(
-		target,
+		&target,
 		nil,
 		&deleted,
 	)
@@ -237,12 +237,12 @@ func TestTombstoneData1(t *testing.T) {
 func TestRowIdsToOffset(t *testing.T) {
 
 	objId := types.NewObjectid()
-	blkId := types.NewBlockidWithObjectID(objId, 1)
+	blkId := types.NewBlockidWithObjectID(&objId, 1)
 
 	rowIds := make([]types.Rowid, 0, 10)
 	for i := 0; i < 10; i++ {
-		row := types.NewRowid(blkId, uint32(i))
-		rowIds = append(rowIds, *row)
+		row := types.NewRowid(&blkId, uint32(i))
+		rowIds = append(rowIds, row)
 	}
 
 	skipMask := objectio.GetReusableBitmap()

@@ -1347,8 +1347,8 @@ func Test_SimpleReader(t *testing.T) {
 	)
 	defer bat1.Clean(mp)
 	obj := types.NewObjectid()
-	blk0 := types.NewBlockidWithObjectID(obj, 0)
-	blk1 := types.NewBlockidWithObjectID(obj, 1)
+	blk0 := types.NewBlockidWithObjectID(&obj, 0)
+	blk1 := types.NewBlockidWithObjectID(&obj, 1)
 	idx := int32(0)
 	for i := 0; i < 10; i++ {
 		vector.AppendFixed[int32](
@@ -1358,10 +1358,10 @@ func Test_SimpleReader(t *testing.T) {
 			mp,
 		)
 		idx++
-		rowid := types.NewRowid(blk0, uint32(i))
+		rowid := types.NewRowid(&blk0, uint32(i))
 		vector.AppendFixed[types.Rowid](
 			bat1.Vecs[0],
-			*rowid,
+			rowid,
 			false,
 			mp,
 		)
@@ -1374,10 +1374,10 @@ func Test_SimpleReader(t *testing.T) {
 			mp,
 		)
 		idx++
-		rowid := types.NewRowid(blk1, uint32(i))
+		rowid := types.NewRowid(&blk1, uint32(i))
 		vector.AppendFixed[types.Rowid](
 			bat1.Vecs[0],
-			*rowid,
+			rowid,
 			false,
 			mp,
 		)
