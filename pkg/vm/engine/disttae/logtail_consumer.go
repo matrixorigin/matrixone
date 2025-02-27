@@ -2173,7 +2173,6 @@ func consumeCkpsAndLogTail(
 	tableId uint64,
 	isSub bool,
 ) (err error) {
-	var entries []*api.Entry
 	var closeCBs []func()
 	if err = taeLogtail.ConsumeCheckpointEntries(
 		ctx,
