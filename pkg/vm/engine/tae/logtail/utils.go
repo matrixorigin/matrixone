@@ -360,7 +360,6 @@ func NewCheckpointData(
 	sid string,
 	mp *mpool.MPool,
 ) *CheckpointData {
-	panic("not support")
 	data := &CheckpointData{
 		sid:       sid,
 		meta:      make(map[uint64]*CheckpointMeta),
@@ -455,31 +454,6 @@ func NewBackupCollector(
 type GlobalCollector struct {
 	*BaseCollector
 	versionThershold types.TS
-}
-
-func NewGlobalCollector(
-	sid string,
-	end types.TS,
-	versionInterval time.Duration,
-) *GlobalCollector {
-	versionThresholdTS := types.BuildTS(end.Physical()-versionInterval.Nanoseconds(), end.Logical())
-	collector := &GlobalCollector{
-		BaseCollector: &BaseCollector{
-			LoopProcessor: new(catalog.LoopProcessor),
-			data:          NewCheckpointData(sid, common.CheckpointAllocator),
-			end:           end,
-		},
-		versionThershold: versionThresholdTS,
-	}
-
-	collector.DatabaseFn = collector.VisitDB
-	collector.TableFn = collector.VisitTable
-	collector.ObjectFn = collector.VisitObj
-	collector.TombstoneFn = collector.VisitObj
-
-	collector.Usage.ReservedAccIds = make(map[uint64]struct{})
-
-	return collector
 }
 
 func (data *CheckpointData) ApplyReplayTo(

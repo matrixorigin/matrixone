@@ -6976,6 +6976,7 @@ func TestSnapshotGC(t *testing.T) {
 	db2, err := db.Catalog.GetDatabaseByID(tbl.GetDB().ID)
 	assert.NoError(t, err)
 	tbl2, err := db2.GetTableEntryByID(tbl.ID)
+	assert.NoError(t, err)
 	db.BGCheckpointRunner.GetCheckpointMetaFiles()
 	ckps, err := checkpoint.ListSnapshotCheckpoint(ctx, "", db.Opts.Fs, viewSnapshot, db.BGCheckpointRunner.GetCheckpointMetaFiles())
 	assert.Nil(t, err)
