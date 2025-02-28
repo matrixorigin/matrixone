@@ -64,6 +64,9 @@ type ElkanClusterer struct {
 	initType  kmeans.InitType
 	rand      *rand.Rand
 	normalize bool
+
+	// number of worker threads
+	nworker int
 }
 
 // vectorMeta holds required information for Elkan's kmeans pruning.
@@ -84,6 +87,7 @@ func NewKMeans(vectors [][]float64, clusterCnt,
 	maxIterations int, deltaThreshold float64,
 	distanceType kmeans.DistanceType, initType kmeans.InitType,
 	normalize bool,
+	nworker int,
 ) (kmeans.Clusterer, error) {
 
 	err := validateArgs(vectors, clusterCnt, maxIterations, deltaThreshold, distanceType, initType)
@@ -117,6 +121,10 @@ func NewKMeans(vectors [][]float64, clusterCnt,
 		return nil, err
 	}
 
+	if nworker <= 0 {
+		nworker = runtime.NumCPU()
+	}
+
 	return &ElkanClusterer{
 		maxIterations:  maxIterations,
 		deltaThreshold: deltaThreshold,
@@ -136,6 +144,7 @@ func NewKMeans(vectors [][]float64, clusterCnt,
 
 		rand:      rand.New(rand.NewSource(kmeans.DefaultRandSeed)),
 		normalize: normalize,
+		nworker:   nworker,
 	}, nil
 }
 
@@ -240,7 +249,7 @@ func (km *ElkanClusterer) initBounds() {
 	// redundant distance calculations. Each time d(x, c) is computed, set l(x, c)=d(x, c).
 	// Assign upper bounds u(x)=min_c d(x, c).
 
-	ncpu := runtime.NumCPU()
+	ncpu := km.nworker
 	if len(km.vectorList) < ncpu {
 		ncpu = len(km.vectorList)
 	}
@@ -282,7 +291,7 @@ func (km *ElkanClusterer) computeCentroidDistances() {
 	// step 1.a
 	// For all centers c and c', compute 0.5 x d(c, c').
 	var wg sync.WaitGroup
-	ncpu := runtime.NumCPU()
+	ncpu := km.nworker
 	if km.clusterCnt < ncpu {
 		ncpu = km.clusterCnt
 	}
@@ -325,7 +334,7 @@ func (km *ElkanClusterer) computeCentroidDistances() {
 func (km *ElkanClusterer) assignData() int {
 
 	var changes atomic.Int64
-	ncpu := runtime.NumCPU()
+	ncpu := km.nworker
 	if len(km.vectorList) < ncpu {
 		ncpu = len(km.vectorList)
 	}

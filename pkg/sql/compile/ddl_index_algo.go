@@ -230,13 +230,11 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef
 		return nil
 	}
 
-	/*
-		val, err := proc.GetResolveVariableFunc()("hnsw_threads_build", true, false)
-		if err != nil {
-			return nil, err
-		}
-		cfg.ThreadsBuild = val.(int64)
-	*/
+	val, err := c.proc.GetResolveVariableFunc()("ivf_threads_build", true, false)
+	if err != nil {
+		return err
+	}
+	cfg.ThreadsBuild = val.(int64)
 
 	params_str := indexDef.IndexAlgoParams
 

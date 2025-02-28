@@ -3510,6 +3510,22 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableBoolType("experimental_ivf_index"),
 		Default:           int64(0),
 	},
+	"ivf_threads_build": {
+		Name:              "ivf_threads_build",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("ivf_threads_build", 0, 1024, false),
+		Default:           int64(0),
+	},
+	"ivf_threads_search": {
+		Name:              "ivf_threads_search",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("ivf_threads_search", 0, 1024, false),
+		Default:           int64(0),
+	},
 	"disable_agg_statement": {
 		Name:              "disable_agg_statement",
 		Scope:             ScopeSession,

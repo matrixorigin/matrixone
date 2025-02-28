@@ -17,7 +17,6 @@ package table_function
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -96,8 +95,6 @@ func (u *ivfCreateState) end(tf *TableFunction, proc *process.Process) error {
 		return nil
 	}
 
-	os.Stderr.WriteString(fmt.Sprintf("END nsample %d\n", len(u.data)))
-
 	version, err := func() (int64, error) {
 		sql := fmt.Sprintf("SELECT CAST(`%s` AS BIGINT) FROM `%s`.`%s` WHERE `%s` = 'version'",
 			catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
@@ -128,7 +125,7 @@ func (u *ivfCreateState) end(tf *TableFunction, proc *process.Process) error {
 		return err
 	}
 
-	os.Stderr.WriteString(fmt.Sprintf("GET version %d\n", version))
+	nworker := vectorindex.GetConcurrencyForBuild(u.tblcfg.ThreadsBuild)
 
 	if clusterer, err = elkans.NewKMeans(
 		u.data, int(u.idxcfg.Ivfflat.Lists),
@@ -136,7 +133,8 @@ func (u *ivfCreateState) end(tf *TableFunction, proc *process.Process) error {
 		defaultKmeansDeltaThreshold,
 		kmeans.DistanceType(u.idxcfg.Ivfflat.Metric),
 		kmeans.InitType(u.idxcfg.Ivfflat.InitType),
-		u.idxcfg.Ivfflat.Normalize); err != nil {
+		u.idxcfg.Ivfflat.Normalize,
+		int(nworker)); err != nil {
 		return err
 	}
 	if centers, err = clusterer.Cluster(); err != nil {
@@ -157,7 +155,6 @@ func (u *ivfCreateState) end(tf *TableFunction, proc *process.Process) error {
 		strings.Join(values, ","))
 
 	//os.Stderr.WriteString(sql)
-	os.Stderr.WriteString("INSERT CENTROID START\n")
 
 	sqls := []string{sql}
 	for _, s := range sqls {
@@ -167,7 +164,6 @@ func (u *ivfCreateState) end(tf *TableFunction, proc *process.Process) error {
 		}
 		res.Close()
 	}
-	os.Stderr.WriteString("INSERT CENTROID END\n")
 
 	return nil
 }
