@@ -575,6 +575,7 @@ func (c *checkpointCleaner) deleteStaleSnapshotFilesLocked() error {
 			delete(metaFiles, maxFile)
 			return
 		}
+		newMaxFile = maxFile
 
 		// thisTS <= maxTS: this file is expired and should be deleted
 		if err = c.fs.Delete(c.ctx, ioutil.MakeGCFullName(thisFile)); err != nil {
