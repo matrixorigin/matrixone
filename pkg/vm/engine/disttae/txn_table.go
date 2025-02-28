@@ -162,46 +162,13 @@ func (tbl *txnTable) Stats(ctx context.Context, sync bool) (*pb.StatsInfo, error
 		logutil.Errorf("failed to get partition state of table %d: %v", tbl.tableId, err)
 		return nil, err
 	}
-	if !tbl.db.op.IsSnapOp() {
-		return tbl.getEngine().Stats(ctx, pb.StatsInfoKey{
-			AccId:      tbl.accountId,
-			DatabaseID: tbl.db.databaseId,
-			TableID:    tbl.tableId,
-		}, sync), nil
-	}
-	info, err := tbl.stats(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return info, nil
-}
-
-func (tbl *txnTable) stats(ctx context.Context) (*pb.StatsInfo, error) {
-	partitionState, err := tbl.getPartitionState(ctx)
-	if err != nil {
-		return nil, err
-	}
-	e := tbl.db.getEng()
-	approxObjectNum := int64(partitionState.ApproxDataObjectsNum())
-	if approxObjectNum == 0 {
-		// There are no objects flushed yet.
-		return nil, nil
-	}
-
-	stats := plan2.NewStatsInfo()
-	req := newUpdateStatsRequest(
-		tbl.tableDef,
-		partitionState,
-		e.fs,
-		types.TimestampToTS(tbl.db.op.SnapshotTS()),
-		approxObjectNum,
-		stats,
-	)
-	if err := UpdateStats(ctx, req, nil); err != nil {
-		logutil.Errorf("failed to init stats info for table %d", tbl.tableId)
-		return nil, err
-	}
-	return stats, nil
+	return tbl.getEngine().Stats(ctx, pb.StatsInfoKey{
+		AccId:      tbl.accountId,
+		DatabaseID: tbl.db.databaseId,
+		TableID:    tbl.tableId,
+		TableName:  tbl.tableName,
+		DbName:     tbl.db.databaseName,
+	}, sync), nil
 }
 
 func (tbl *txnTable) Rows(ctx context.Context) (uint64, error) {
@@ -2028,10 +1995,6 @@ func (tbl *txnTable) getPartitionState(
 func (tbl *txnTable) tryToSubscribe(ctx context.Context) (ps *logtailreplay.PartitionState, err error) {
 	eng := tbl.eng.(*Engine)
 	var createdInTxn bool
-	defer func() {
-		eng.globalStats.notifyLogtailUpdate(tbl.tableId, err == nil && !createdInTxn)
-	}()
-
 	createdInTxn, err = tbl.isCreatedInTxn(ctx)
 	if err != nil {
 		return nil, err
@@ -2040,7 +2003,18 @@ func (tbl *txnTable) tryToSubscribe(ctx context.Context) (ps *logtailreplay.Part
 		return
 	}
 
-	ps, err = eng.PushClient().toSubscribeTable(ctx, tbl)
+	// no need to subscribe a view
+	// for issue #19192
+	if strings.ToUpper(tbl.relKind) == "V" {
+		return
+	}
+
+	ps, err = eng.PushClient().toSubscribeTable(
+		ctx,
+		tbl.tableId,
+		tbl.tableName,
+		tbl.db.databaseId,
+		tbl.db.databaseName)
 	return ps, err
 }
 
@@ -2248,12 +2222,12 @@ func (tbl *txnTable) primaryKeysMayBeChanged(
 		return false,
 			moerr.NewInternalErrorNoCtx("primary key modification is not allowed in snapshot transaction")
 	}
-
-	//snap, err := tbl.getPartitionState(ctx)
-	//if err != nil {
-	//	return false, err
-	//}
-	part, err := tbl.eng.(*Engine).LazyLoadLatestCkp(ctx, tbl)
+	part, err := tbl.eng.(*Engine).LazyLoadLatestCkp(
+		ctx,
+		tbl.tableId,
+		tbl.tableName,
+		tbl.db.databaseId,
+		tbl.db.databaseName)
 	if err != nil {
 		return false, err
 	}
