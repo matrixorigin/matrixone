@@ -516,3 +516,20 @@ func TestEmptyZm(t *testing.T) {
 	require.Equal(t, 1, len(results))
 	t.Log(len(results[0].objs))
 }
+
+func TestToolFunctions(t *testing.T) {
+	objs := make([]*catalog.ObjectEntry, 101)
+	for i := range objs {
+		objs[i] = newTestObjectEntry(t, 1*common.Const1MBytes, false)
+	}
+
+	require.True(t, hasHundredSmallObjs(objs, 2*common.Const1MBytes))
+
+	// test for IsSameSegment
+	segID := objectio.NewSegmentid()
+	objectio.SetObjectStatsObjectName(&objs[0].ObjectStats, objectio.BuildObjectName(segID, 1))
+	objectio.SetObjectStatsObjectName(&objs[1].ObjectStats, objectio.BuildObjectName(segID, 2))
+	objectio.SetObjectStatsObjectName(&objs[2].ObjectStats, objectio.BuildObjectName(segID, 3))
+	require.True(t, IsSameSegment(objs[:3]))
+	require.False(t, IsSameSegment(objs[:4]))
+}
