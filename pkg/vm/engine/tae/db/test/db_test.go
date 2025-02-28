@@ -11513,7 +11513,6 @@ func TestCheckpointCompatibility(t *testing.T) {
 
 	t.Log(catalog2.SimplePPString(3))
 	testutil.IsCatalogEqual(t, tae.Catalog, catalog2)
-	return
 }
 
 func Test_OpenWithError(t *testing.T) {
