@@ -47,6 +47,7 @@ type IndexTableConfig struct {
 	// IVF related
 	EntriesTable string `json:"entries"`
 	DataSize     int64  `json:"datasize"`
+	Nprobe       uint   `json:"nprobe"`
 }
 
 // HNSW specified parameters
@@ -65,8 +66,8 @@ type IvfParam struct {
 }
 
 type IvfflatIndexConfig struct {
-	Lists uint
-	//Nprobe     uint
+	Lists      uint
+	Nprobe     uint
 	Metric     uint16
 	InitType   uint16
 	Dimensions uint

@@ -163,12 +163,14 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, projN
 	exprs = append(exprs, tree.NewNumVal[string](tblcfgstr, tblcfgstr, false, tree.P_char))
 
 	fnexpr := value.GetF()
-	f32vec := fnexpr.Args[0].GetLit().GetSval()
-
-	valExpr := &tree.CastExpr{Expr: tree.NewNumVal[string](f32vec, f32vec, false, tree.P_char),
+	vecsval := fnexpr.Args[0].GetLit().GetSval()
+	family := "vecf32"
+	if value.Typ.GetId() == int32(types.T_array_float64) {
+		family = "vecf64"
+	}
+	valExpr := &tree.CastExpr{Expr: tree.NewNumVal[string](vecsval, vecsval, false, tree.P_char),
 		Type: &tree.T{InternalType: tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_VAR_STRING),
-			FamilyString: "vecf32", Family: tree.ArrayFamily, DisplayWith: partType.Width}}}
-
+			FamilyString: family, Family: tree.ArrayFamily, DisplayWith: partType.Width}}}
 	exprs = append(exprs, valExpr)
 
 	ivf_func := tree.NewCStr(ivf_search_func_name, 1)
