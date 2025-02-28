@@ -1,4 +1,5 @@
 set experimental_fulltext_index=1;
+set ft_relevancy_algorithm="TF-IDF";
 
 create stage ftstage URL='file:///$resources/fulltext/';
 

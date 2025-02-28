@@ -149,7 +149,11 @@ func (builder *QueryBuilder) getFullTextSql(fn *tree.FuncExpr, params string) (s
 	if err != nil {
 		return "", err
 	}
-	return fulltext.PatternToSql(ps, mode, idxtbl, param.Parser)
+	scoreAlgo, err := fulltext.GetScoreAlgo(builder.compCtx.GetProcess())
+	if err != nil {
+		return "", err
+	}
+	return fulltext.PatternToSql(ps, mode, idxtbl, param.Parser, scoreAlgo)
 }
 
 // select * from index_table, fulltext_index_tokenize(doc_id, concat(body, ' ', title))

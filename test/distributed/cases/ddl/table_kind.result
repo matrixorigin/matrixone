@@ -196,6 +196,7 @@ metadata
 centroids
 entries
 set experimental_fulltext_index=1;
+set ft_relevancy_algorithm="TF-IDF";
 create table src1 (id bigint primary key, body varchar, title text);
 insert into src1 values (0, 'color is red', 't1'), (1, 'car is yellow', 'crazy car'), (2, 'sky is blue', 'no limit'), (3, 'blue is not red', 'colorful'),
 (4, '遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。', '遠東兒童中文'),
@@ -237,7 +238,7 @@ id    body    title
 3    blue is not red    colorful
 select *, match(body, title) against('is red' in natural language mode) as score from src1;
 id    body    title    score
-0    color is red    t1    2.1689975
+0    color is red    t1    1.6311431
 select * from src1 where match(body, title) against('教學指引');
 id    body    title
 6    各個單元主題內容涵蓋中華文化及生活應用的介紹。本套教材含課本、教學指引、生字卡、學生作業本與CD，中英對照，精美大字版。本系列有繁體字及簡體字兩種版本印行。    中文短篇小說
@@ -281,7 +282,7 @@ id    body    title
 3    blue is not red    colorful
 select *, match(body, title) against('is red' in natural language mode) as score from src2;
 id    body    title    score
-0    color is red    t1    2.1689975
+0    color is red    t1    1.6311431
 select * from src2 where match(body, title) against('教學指引');
 id    body    title
 6    各個單元主題內容涵蓋中華文化及生活應用的介紹。本套教材含課本、教學指引、生字卡、學生作業本與CD，中英對照，精美大字版。本系列有繁體字及簡體字兩種版本印行。    中文短篇小說\n
@@ -297,7 +298,7 @@ id    body    title
 4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文
 select *, match(body, title) against('遠東兒童中文' in natural language mode) as score from src2;
 id    body    title    score
-4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    6.577643
-5    每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。    遠東兒童中文    3.2888215
+4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    4.3497148
+5    每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。    遠東兒童中文    2.1748574
 drop table src2;
 DROP DATABASE IF EXISTS db1;

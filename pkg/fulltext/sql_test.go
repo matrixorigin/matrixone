@@ -22,6 +22,24 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestSqlPhraseBM25(t *testing.T) {
+	tests := []TestCase{
+		{
+			pattern: "\"Ma'trix Origin\"",
+			expect:  "select a.*, b.pos as doc_len from (WITH kw0 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = 'ma\\'trix'), kw1 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = 'origin') SELECT kw0.doc_id, CAST(0 as int) FROM kw0, kw1 WHERE kw0.doc_id = kw1.doc_id AND kw1.pos - kw0.pos = 8) a left join `__mo_index_secondary_` b on a.doc_id = b.doc_id and b.word = '__DocLen'",
+		},
+	}
+
+	idxTable := "`__mo_index_secondary_`"
+	for _, c := range tests {
+		s, err := NewSearchAccum("src", "index", c.pattern, int64(tree.FULLTEXT_BOOLEAN), "", ALGO_BM25)
+		require.Nil(t, err)
+		result, err := PatternToSql(s.Pattern, int64(tree.FULLTEXT_BOOLEAN), idxTable, "", ALGO_BM25)
+		require.Nil(t, err)
+		assert.Equal(t, c.expect, result)
+	}
+}
+
 func TestSqlPhrase(t *testing.T) {
 	tests := []TestCase{
 		{
@@ -50,10 +68,11 @@ func TestSqlPhrase(t *testing.T) {
 		},
 	}
 
+	idxTable := "`__mo_index_secondary_`"
 	for _, c := range tests {
-		s, err := NewSearchAccum("src", "index", c.pattern, int64(tree.FULLTEXT_BOOLEAN), "")
+		s, err := NewSearchAccum("src", "index", c.pattern, int64(tree.FULLTEXT_BOOLEAN), "", ALGO_TFIDF)
 		require.Nil(t, err)
-		result, err := PatternToSql(s.Pattern, int64(tree.FULLTEXT_BOOLEAN), "`__mo_index_secondary_`", "")
+		result, err := PatternToSql(s.Pattern, int64(tree.FULLTEXT_BOOLEAN), idxTable, "", ALGO_TFIDF)
 		require.Nil(t, err)
 		//fmt.Println(result)
 		assert.Equal(t, c.expect, result)
@@ -113,13 +132,33 @@ func TestSqlBoolean(t *testing.T) {
 		},
 	}
 
+	idxTable := "`__mo_index_secondary_`"
 	for _, c := range tests {
-		s, err := NewSearchAccum("src", "index", c.pattern, int64(tree.FULLTEXT_BOOLEAN), "")
+		s, err := NewSearchAccum("src", "index", c.pattern, int64(tree.FULLTEXT_BOOLEAN), "", ALGO_TFIDF)
 		require.Nil(t, err)
-		result, err := PatternToSql(s.Pattern, int64(tree.FULLTEXT_BOOLEAN), "`__mo_index_secondary_`", "")
+		result, err := PatternToSql(s.Pattern, int64(tree.FULLTEXT_BOOLEAN), idxTable, "", ALGO_TFIDF)
 		//fmt.Println(PatternListToStringWithPosition(s.Pattern))
 		require.Nil(t, err)
 		//fmt.Println(result)
+		assert.Equal(t, c.expect, result)
+	}
+}
+
+func TestSqlBooleanBM25(t *testing.T) {
+
+	tests := []TestCase{
+		{
+			pattern: "Ma'trix Origin",
+			expect:  "select a.*, b.pos as doc_len from (WITH t0 AS (WITH kw0 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE prefix_eq(word,'ma')), kw1 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = 'trix') SELECT kw0.doc_id FROM kw0, kw1 WHERE kw0.doc_id = kw1.doc_id AND kw1.pos - kw0.pos = 3), t1 AS (SELECT doc_id FROM `__mo_index_secondary_` WHERE word = 'origin') SELECT doc_id, CAST(0 as int) FROM t0 UNION ALL SELECT doc_id, CAST(1 as int) FROM t1) a left join `__mo_index_secondary_` b on a.doc_id = b.doc_id and b.word = '__DocLen'",
+		},
+	}
+
+	idxTable := "`__mo_index_secondary_`"
+	for _, c := range tests {
+		s, err := NewSearchAccum("src", "index", c.pattern, int64(tree.FULLTEXT_BOOLEAN), "", ALGO_BM25)
+		require.Nil(t, err)
+		result, err := PatternToSql(s.Pattern, int64(tree.FULLTEXT_BOOLEAN), idxTable, "", ALGO_BM25)
+		require.Nil(t, err)
 		assert.Equal(t, c.expect, result)
 	}
 }
@@ -145,10 +184,31 @@ func TestSqlNL(t *testing.T) {
 		},
 	}
 
+	idxTable := "`__mo_index_secondary_`"
 	for _, c := range tests {
-		s, err := NewSearchAccum("src", "index", c.pattern, int64(tree.FULLTEXT_NL), "")
+		s, err := NewSearchAccum("src", "index", c.pattern, int64(tree.FULLTEXT_NL), "", ALGO_TFIDF)
 		require.Nil(t, err)
-		result, err := PatternToSql(s.Pattern, int64(tree.FULLTEXT_NL), "`__mo_index_secondary_`", "")
+		result, err := PatternToSql(s.Pattern, int64(tree.FULLTEXT_NL), idxTable, "", ALGO_TFIDF)
+		require.Nil(t, err)
+		//fmt.Println(result)
+		assert.Equal(t, c.expect, result)
+	}
+}
+
+func TestSqlNLBM25(t *testing.T) {
+
+	tests := []TestCase{
+		{
+			pattern: "Ma'trix Origin",
+			expect:  "select a.*, b.pos as doc_len from (WITH kw0 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE prefix_eq(word,'ma')), kw1 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = 'trix'), kw2 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = 'origin') SELECT kw0.doc_id, CAST(0 as int) FROM kw0, kw1, kw2 WHERE kw0.doc_id = kw1.doc_id AND kw1.pos - kw0.pos = 3 AND kw0.doc_id = kw2.doc_id AND kw2.pos - kw0.pos = 8) a left join `__mo_index_secondary_` b on a.doc_id = b.doc_id and b.word = '__DocLen'",
+		},
+	}
+
+	idxTable := "`__mo_index_secondary_`"
+	for _, c := range tests {
+		s, err := NewSearchAccum("src", "index", c.pattern, int64(tree.FULLTEXT_NL), "", ALGO_BM25)
+		require.Nil(t, err)
+		result, err := PatternToSql(s.Pattern, int64(tree.FULLTEXT_NL), idxTable, "", ALGO_BM25)
 		require.Nil(t, err)
 		//fmt.Println(result)
 		assert.Equal(t, c.expect, result)
