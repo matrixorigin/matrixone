@@ -176,6 +176,8 @@ func (tableFunction *TableFunction) Prepare(proc *process.Process) error {
 		tblArg.ctr.state, err = hnswSearchPrepare(proc, tblArg)
 	case "ivf_create":
 		tblArg.ctr.state, err = ivfCreatePrepare(proc, tblArg)
+	case "ivf_search":
+		tblArg.ctr.state, err = ivfSearchPrepare(proc, tblArg)
 	default:
 		tblArg.ctr.state = nil
 		err = moerr.NewNotSupported(proc.Ctx, fmt.Sprintf("table function %s is not supported", tblArg.FuncName))
