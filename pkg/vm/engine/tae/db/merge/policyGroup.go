@@ -30,6 +30,7 @@ import (
 type reviseResult struct {
 	objs []*catalog.ObjectEntry
 	kind taskHostKind
+	note string
 }
 
 type policyGroup struct {

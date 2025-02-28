@@ -15,6 +15,9 @@
 package merge
 
 import (
+	"fmt"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -25,7 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	dto "github.com/prometheus/client_model/go"
-	"time"
+	"go.uber.org/zap"
 )
 
 type Scheduler struct {
@@ -92,14 +95,14 @@ func (s *Scheduler) PreExecute() error {
 			common.HumanReadableBytes(int(s.rc.transferPageLimit)))
 		s.skipForTransPageLimit = true
 	}
+	logutil.Info("MergeExecutorEvent", zap.String("event", "begin"), zap.Int("prevBreakPoint", s.rc.prevCount), zap.String("avail", common.HumanReadableBytes(int(s.rc.availableMem()))))
 	return nil
 }
 
 func (s *Scheduler) PostExecute() error {
 	s.rc.printStats()
 	if s.rc.skippedFromOOM {
-		logutil.Warnf("[MERGE-SCHEDULE] Merge Skipped from OOM")
-		s.rc.prevCount = s.rc.count
+		logutil.Info("MergeExecutorEvent", zap.String("event", "Merge Skipped from OOM"))
 		// if previous merge is too large, wait for a while.
 		time.Sleep(time.Minute)
 	} else {
@@ -131,8 +134,17 @@ func (s *Scheduler) onTable(tableEntry *catalog.TableEntry) (err error) {
 	if s.rc.count < s.rc.prevCount {
 		return moerr.GetOkStopCurrRecur()
 	}
+
+	if s.rc.skippedFromOOM {
+		return moerr.GetOkStopCurrRecur()
+	}
+
 	if s.rc.availableMem() < 100*common.Const1MBytes {
 		s.rc.skippedFromOOM = true
+		s.rc.prevCount = s.rc.count
+		logutil.Info("MergeExecutorEvent", zap.String("event", "skip table scane due to memcontrol"),
+			zap.Int("breakpoint", s.rc.count),
+			zap.String("table", fmt.Sprintf("%v-%v", tableEntry.ID, tableEntry.GetLastestSchema(false).Name)))
 		return moerr.GetOkStopCurrRecur()
 	}
 
@@ -152,6 +164,7 @@ func (s *Scheduler) onTable(tableEntry *catalog.TableEntry) (err error) {
 		return moerr.GetOkStopCurrRecur()
 	}
 	tableEntry.RUnlock()
+	s.rc.tableStart = time.Now()
 	s.resetForTable(tableEntry)
 
 	return
@@ -165,6 +178,10 @@ func (s *Scheduler) onPostTable(tableEntry *catalog.TableEntry) (err error) {
 	// delObjs := s.ObjectHelper.finish()
 
 	results := s.policies.revise(s.rc)
+	if time.Since(s.rc.tableStart) > 10*time.Second {
+		logutil.Warn("MergeExecutorEvent", zap.String("event", "long process"), zap.String("table", fmt.Sprintf("%v-%v", tableEntry.ID, tableEntry.GetLastestSchema(false).Name)), zap.Duration("time", time.Since(s.rc.tableStart)))
+	}
+
 	for _, r := range results {
 		if len(r.objs) > 0 {
 			s.executor.executeFor(tableEntry, r.objs, r.kind)

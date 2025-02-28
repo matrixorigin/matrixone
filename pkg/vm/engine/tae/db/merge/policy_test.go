@@ -108,7 +108,10 @@ func newTestVarcharObjectEntry(t testing.TB, v1, v2 string, size uint32) *catalo
 
 func newTestObjectEntry(t *testing.T, size uint32, isTombstone bool) *catalog.ObjectEntry {
 	stats := objectio.NewObjectStats()
+	objName := objectio.BuildObjectNameWithObjectID(objectio.NewObjectid())
+	require.NoError(t, objectio.SetObjectStatsObjectName(stats, objName))
 	require.NoError(t, objectio.SetObjectStatsOriginSize(stats, size))
+	require.NoError(t, objectio.SetObjectStatsRowCnt(stats, 2))
 
 	return &catalog.ObjectEntry{
 		ObjectMVCCNode: catalog.ObjectMVCCNode{ObjectStats: *stats},
@@ -216,8 +219,8 @@ func TestObjOverlap(t *testing.T) {
 	// entry is not sorted
 	entry5 := newTestObjectEntry(t, overlapSizeThreshold, false)
 	entry6 := newTestObjectEntry(t, overlapSizeThreshold, false)
-	require.False(t, policy.onObject(entry5))
-	require.False(t, policy.onObject(entry6))
+	policy.onObject(entry5)
+	policy.onObject(entry6)
 	require.Equal(t, 6, len(policy.leveledObjects))
 	objs = policy.revise(rc)
 	for _, obj := range objs {
@@ -493,4 +496,58 @@ func TestVarcharOverflow(t *testing.T) {
 	}
 	results := policy.revise(rc)
 	require.Equal(t, 0, len(results))
+}
+
+func TestEmptyZm(t *testing.T) {
+	objs := make([]*catalog.ObjectEntry, 300)
+	for i := range objs {
+		objs[i] = newTestObjectEntry(t, 1*common.Const1MBytes, false)
+	}
+
+	policy := newObjOverlapPolicy()
+	policy.resetForTable(nil, defaultBasicConfig)
+
+	rc := new(resourceController)
+	rc.setMemLimit(50 * common.Const1MBytes)
+	for _, obj := range objs {
+		policy.onObject(obj)
+	}
+	results := policy.revise(rc)
+	require.Equal(t, 1, len(results))
+	require.Less(t, len(results[0].objs), 500000)
+	t.Log(len(results[0].objs))
+}
+
+func TestVarcharOverflow(t *testing.T) {
+	objs := make([]*catalog.ObjectEntry, 10)
+	for i := range objs {
+		objs[i] = newTestVarcharObjectEntry(t, strings.Repeat("a", 100), strings.Repeat("a", 100), 110*common.Const1MBytes)
+	}
+	policy := newObjOverlapPolicy()
+	policy.resetForTable(nil, defaultBasicConfig)
+	rc := new(resourceController)
+	rc.setMemLimit(50 * common.Const1GBytes)
+
+	for _, obj := range objs {
+		policy.onObject(obj)
+	}
+	results := policy.revise(rc)
+	require.Equal(t, 0, len(results))
+}
+
+func TestToolFunctions(t *testing.T) {
+	objs := make([]*catalog.ObjectEntry, 101)
+	for i := range objs {
+		objs[i] = newTestObjectEntry(t, 1*common.Const1MBytes, false)
+	}
+
+	require.True(t, hasHundredSmallObjs(objs, 2*common.Const1MBytes))
+
+	// test for IsSameSegment
+	segID := objectio.NewSegmentid()
+	objectio.SetObjectStatsObjectName(&objs[0].ObjectStats, objectio.BuildObjectName(segID, 1))
+	objectio.SetObjectStatsObjectName(&objs[1].ObjectStats, objectio.BuildObjectName(segID, 2))
+	objectio.SetObjectStatsObjectName(&objs[2].ObjectStats, objectio.BuildObjectName(segID, 3))
+	require.True(t, IsSameSegment(objs[:3]))
+	require.False(t, IsSameSegment(objs[:4]))
 }
