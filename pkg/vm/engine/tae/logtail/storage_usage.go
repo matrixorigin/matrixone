@@ -39,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/tidwall/btree"
@@ -731,15 +732,6 @@ func (m *TNUsageMemo) applySegDeletes(deletes []UsageData, ckpData *CheckpointDa
 	}
 }
 
-func (m *TNUsageMemo) replayIntoGCKP(collector *GlobalCollector) {
-	iter := m.cache.data.Iter()
-	for iter.Next() {
-		usage := iter.Item()
-		appendToStorageUsageBat(collector.data, usage, false, collector.Allocator())
-	}
-	iter.Release()
-}
-
 func (m *TNUsageMemo) deleteAccount(accId uint64) (size uint64) {
 	trash := make([]UsageData, 0)
 	povit := UsageData{AccId: accId, special: unknown}
@@ -1143,7 +1135,6 @@ func FillUsageBatOfGlobal(collector *GlobalCollector) {
 
 	log1, cnt := putCacheBack2Track(collector.BaseCollector)
 	log2 := collector.UsageMemo.ClearDroppedAccounts(collector.Usage.ReservedAccIds)
-	collector.UsageMemo.replayIntoGCKP(collector)
 
 	doSummary("G",
 		zap.String("update old data", log1),
@@ -1171,8 +1162,9 @@ func FillUsageBatOfIncremental(collector *IncrementalCollector) {
 }
 
 func FillUsageBatOfCompacted(
+	ctx context.Context,
 	usage *TNUsageMemo,
-	data *CheckpointData,
+	data *batch.Batch,
 	meta *SnapshotMeta,
 	accountSnapshots map[uint32][]types.TS,
 	pitrs *PitrInfo,
@@ -1186,24 +1178,22 @@ func FillUsageBatOfCompacted(
 		v2.TaskCompactedCollectUsageDurationHistogram.Observe(time.Since(start).Seconds())
 		usage.LeaveProcessing()
 	}()
-	objects := data.GetObjectBatchs()
-	tombstones := data.GetTombstoneObjectBatchs()
 	usageData := make(map[[3]uint64]UsageData)
 	tableSnapshots, tablePitrs := meta.AccountToTableSnapshots(
 		accountSnapshots,
 		pitrs,
 	)
 	objectsName := make(map[string]struct{})
-	scan := func(bat *containers.Batch) {
+	scan := func(bat *batch.Batch) {
 		insDeleteTSVec := vector.MustFixedColWithTypeCheck[types.TS](
-			bat.GetVectorByName(catalog.EntryNode_DeleteAt).GetDownstreamVector())
+			bat.Vecs[ckputil.TableObjectsAttr_DeleteTS_Idx])
 		insCreateTSVec := vector.MustFixedColWithTypeCheck[types.TS](
-			bat.GetVectorByName(catalog.EntryNode_CreateAt).GetDownstreamVector())
+			bat.Vecs[ckputil.TableObjectsAttr_CreateTS_Idx])
 		dbid := vector.MustFixedColNoTypeCheck[uint64](
-			bat.GetVectorByName(catalog.SnapshotAttr_DBID).GetDownstreamVector())
+			bat.Vecs[ckputil.TableObjectsAttr_DB_Idx])
 		tableID := vector.MustFixedColNoTypeCheck[uint64](
-			bat.GetVectorByName(catalog.SnapshotAttr_TID).GetDownstreamVector())
-		for i := 0; i < bat.Length(); i++ {
+			bat.Vecs[ckputil.TableObjectsAttr_Table_Idx])
+		for i := 0; i < bat.RowCount(); i++ {
 			if insDeleteTSVec[i].IsEmpty() {
 				dropTs, ok := meta.GetTableDropAt(tableID[i])
 				if !ok || dropTs.IsEmpty() {
@@ -1221,7 +1211,7 @@ func FillUsageBatOfCompacted(
 				continue
 			}
 
-			buf := bat.GetVectorByName(ObjectAttr_ObjectStats).GetDownstreamVector().GetRawBytesAt(i)
+			buf := bat.Vecs[ckputil.TableObjectsAttr_ID_Idx].GetRawBytesAt(i)
 			stats := (objectio.ObjectStats)(buf)
 			if !ObjectIsSnapshotRefers(
 				&stats,
@@ -1248,8 +1238,7 @@ func FillUsageBatOfCompacted(
 			objectsName[stats.ObjectName().String()] = struct{}{}
 		}
 	}
-	scan(objects)
-	scan(tombstones)
+	scan(data)
 	iter := usage.cache.data.Iter()
 	update := make(map[[3]uint64]UsageData)
 	for iter.Next() {

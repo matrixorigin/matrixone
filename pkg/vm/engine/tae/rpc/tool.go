@@ -35,7 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
@@ -1105,15 +1105,15 @@ func (c *ckpStatArg) Run() (err error) {
 	entries := c.ctx.db.BGCheckpointRunner.GetAllCheckpoints()
 	for _, entry := range entries {
 		if entry.LSN() == c.cid {
-			var data *logtail.CheckpointData
-			data, err = getCkpData(ctx, entry, c.ctx.db.Runtime.Fs)
-			if err != nil {
-				return moerr.NewInfoNoCtx(fmt.Sprintf("failed to get checkpoint data %v, %v", c.cid, err))
-			}
 			if c.all {
 				c.tid = 0
 			}
-			if checkpointJson, err = data.GetCheckpointMetaInfo(c.tid, c.limit); err != nil {
+			if checkpointJson, err = entry.GetCheckpointMetaInfo(
+				ctx,
+				c.tid,
+				common.CheckpointAllocator,
+				c.ctx.db.Runtime.Fs,
+			); err != nil {
 				return moerr.NewInfoNoCtx(fmt.Sprintf("failed to get checkpoint data %v, %v", c.cid, err))
 			}
 		}
@@ -1125,31 +1125,6 @@ func (c *ckpStatArg) Run() (err error) {
 		return
 	}
 	c.res = string(jsonData)
-
-	return
-}
-
-func getCkpData(
-	ctx context.Context,
-	entry *checkpoint.CheckpointEntry,
-	fs fileservice.FileService,
-) (data *logtail.CheckpointData, err error) {
-	if data, err = entry.PrefetchMetaIdx(ctx, fs); err != nil {
-		err = moerr.NewInfoNoCtx(fmt.Sprintf("failed to get checkpoint data %v", err))
-		return
-	}
-	if err = entry.ReadMetaIdx(ctx, fs, data); err != nil {
-		err = moerr.NewInfoNoCtx(fmt.Sprintf("failed to get checkpoint data %v", err))
-		return
-	}
-	if err = entry.Prefetch(ctx, fs, data); err != nil {
-		err = moerr.NewInfoNoCtx(fmt.Sprintf("failed to get checkpoint data %v", err))
-		return
-	}
-	if err = entry.Read(ctx, fs, data); err != nil {
-		err = moerr.NewInfoNoCtx(fmt.Sprintf("failed to get checkpoint data %v", err))
-		return
-	}
 
 	return
 }
@@ -1273,8 +1248,12 @@ func (c *ckpListArg) getTableList(ctx context.Context) (res string, err error) {
 			continue
 		}
 
-		data, _ := getCkpData(ctx, entry, c.ctx.db.Runtime.Fs)
-		ids = data.GetTableIds()
+		ids, _ = entry.GetTableIDs(
+			ctx,
+			entry.GetLocation(),
+			common.CheckpointAllocator,
+			c.ctx.db.Runtime.Fs,
+		)
 	}
 	if c.limit < len(ids) {
 		ids = ids[:c.limit]
@@ -1458,66 +1437,12 @@ func (c *gcDumpArg) getCheckpointObject(ctx context.Context, pinned map[string]b
 		tnObj := tnLoc.Name().String()
 		pinned[tnObj] = true
 
-		data, err := getCkpData(ctx, entry, c.ctx.db.Runtime.Fs)
+		err := entry.GetObjects(ctx, pinned, common.CheckpointAllocator, c.ctx.db.Runtime.Fs)
 		if err != nil {
 			return moerr.NewInfoNoCtx(fmt.Sprintf("failed to get checkpoint data %v, %v", entry.LSN(), err))
 		}
-		getObjectsFromCkpMeta(data, pinned)
-		getObjectsFromCkpData(data, pinned)
 	}
 	return
-}
-
-func getObjectsFromCkpMeta(data *logtail.CheckpointData, pinned map[string]bool) {
-	bats := data.GetBatches()
-
-	metaBat := bats[logtail.MetaIDX]
-	metaAttr := logtail.MetaSchemaAttr
-	for _, attr := range metaAttr {
-		if attr == logtail.SnapshotAttr_TID {
-			continue
-		}
-		vec := metaBat.GetVectorByName(attr)
-		for i := 0; i < vec.Length(); i++ {
-			v := vec.Get(i).([]byte)
-			if len(v) == 0 {
-				continue
-			}
-			loc := objectio.Location(v)
-			obj := loc.Name().String()
-			pinned[obj] = true
-		}
-	}
-
-	tnBat := bats[logtail.TNMetaIDX]
-	vec := tnBat.GetVectorByName(logtail.CheckpointMetaAttr_BlockLocation)
-	for i := 0; i < vec.Length(); i++ {
-		v := vec.Get(i).([]byte)
-		if len(v) == 0 {
-			continue
-		}
-		loc := objectio.Location(v)
-		obj := loc.Name().String()
-		pinned[obj] = true
-	}
-}
-
-func getObjectsFromCkpData(data *logtail.CheckpointData, pinned map[string]bool) {
-	bat := data.GetObjectBatchs()
-	vec := bat.GetVectorByName(logtail.ObjectAttr_ObjectStats)
-	for i := 0; i < vec.Length(); i++ {
-		v := vec.Get(i).([]byte)
-		obj := objectio.ObjectStats(v)
-		pinned[obj.ObjectName().String()] = true
-	}
-
-	bat = data.GetTombstoneObjectBatchs()
-	vec = bat.GetVectorByName(logtail.ObjectAttr_ObjectStats)
-	for i := 0; i < vec.Length(); i++ {
-		v := vec.Get(i).([]byte)
-		obj := objectio.ObjectStats(v)
-		pinned[obj.ObjectName().String()] = true
-	}
 }
 
 type gcRemoveArg struct {

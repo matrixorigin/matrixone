@@ -17,8 +17,6 @@ package checkpoint
 import (
 	"encoding/json"
 	"time"
-
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 )
 
 type CheckpointCfg struct {
@@ -43,10 +41,6 @@ type CheckpointCfg struct {
 
 	// history duration to keep for a global checkpoint
 	GlobalHistoryDuration time.Duration
-
-	/* for test */
-	BlockMaxRowsHint int
-	SizeHint         int
 }
 
 func (cfg CheckpointCfg) String() string {
@@ -66,11 +60,5 @@ func (cfg *CheckpointCfg) FillDefaults() {
 	}
 	if cfg.GlobalHistoryDuration < 0 {
 		cfg.GlobalHistoryDuration = 0
-	}
-	if cfg.BlockMaxRowsHint <= 0 {
-		cfg.BlockMaxRowsHint = logtail.DefaultCheckpointBlockRows
-	}
-	if cfg.SizeHint <= 0 {
-		cfg.SizeHint = logtail.DefaultCheckpointSize
 	}
 }

@@ -181,7 +181,7 @@ func TestForMockCoverage(t *testing.T) {
 	require.Nil(t, cleaner.GetCheckpointGCWaterMark())
 	require.Nil(t, cleaner.GetScannedWindow())
 	require.Nil(t, cleaner.GetMinMerged())
-	require.Nil(t, cleaner.DoCheck())
+	require.Nil(t, cleaner.DoCheck(ctx))
 	v1, v2 := cleaner.GetPITRs()
 	require.Nil(t, v1)
 	require.Nil(t, v2)

@@ -327,6 +327,7 @@ func (de *TestDisttaeEngine) analyzeCheckpoint(
 	ckps := state.Checkpoints()
 	for x := range ckps {
 		locAndVersions := strings.Split(ckps[x], ";")
+		locAndVersions = locAndVersions[1:]
 		stats.CheckpointCnt += len(locAndVersions) / 2
 		for y := 0; y < len(locAndVersions); y += 2 {
 			stats.Details.CheckpointLocs[0] = append(stats.Details.CheckpointLocs[0], locAndVersions[y])

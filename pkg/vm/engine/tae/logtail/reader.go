@@ -137,11 +137,6 @@ func MakeGlobalCheckpointDataReader(
 	return metadata, nil
 }
 
-func GetDataSchema() ([]string, []types.Type) {
-	return checkpointDataReferVersions[CheckpointCurrentVersion][ObjectInfoIDX].attrs,
-		checkpointDataReferVersions[CheckpointCurrentVersion][ObjectInfoIDX].types
-}
-
 func (r *CheckpointReader) LoadBatchData(
 	ctx context.Context,
 	_ []string, _ *plan.Expr,

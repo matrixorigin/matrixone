@@ -42,8 +42,9 @@ const DefaultCheckpointSize = 512 * 1024 * 1024
 
 const (
 	CheckpointVersion12 uint32 = 12
+	CheckpointVersion13 uint32 = 13
 
-	CheckpointCurrentVersion = CheckpointVersion12
+	CheckpointCurrentVersion = CheckpointVersion13
 )
 
 const (
@@ -132,38 +133,26 @@ func registerCheckpointDataReferVersion(version uint32, schemas []*catalog.Schem
 }
 
 func IncrementalCheckpointDataFactory(
-	sid string,
 	start, end types.TS,
-	collectUsage bool,
-) func(c *catalog.Catalog) (*CheckpointData, error) {
-	return func(c *catalog.Catalog) (data *CheckpointData, err error) {
-		collector := NewIncrementalCollector(sid, start, end)
-		defer collector.Close()
-		err = c.RecurLoop(collector)
-		if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
-			err = nil
-		}
-		if err != nil {
+	size int,
+	fs fileservice.FileService,
+) func(c *catalog.Catalog) (*CheckpointData_V2, error) {
+	return func(c *catalog.Catalog) (data *CheckpointData_V2, err error) {
+		collector := NewBaseCollector_V2(start, end, size, fs)
+		if err = collector.Collect(c); err != nil {
 			return
 		}
-
-		if collectUsage {
-			collector.UsageMemo = c.GetUsageMemo().(*TNUsageMemo)
-			// collecting usage happens only when do ckp
-			FillUsageBatOfIncremental(collector)
-		}
-
 		data = collector.OrphanData()
 		return
 	}
 }
 
 func BackupCheckpointDataFactory(
-	sid string,
 	start, end types.TS,
-) func(c *catalog.Catalog) (*CheckpointData, error) {
-	return func(c *catalog.Catalog) (data *CheckpointData, err error) {
-		collector := NewBackupCollector(sid, start, end)
+	fs fileservice.FileService,
+) func(c *catalog.Catalog) (*CheckpointData_V2, error) {
+	return func(c *catalog.Catalog) (data *CheckpointData_V2, err error) {
+		collector := NewBackupCollector_V2(start, end, fs)
 		defer collector.Close()
 		err = c.RecurLoop(collector)
 		if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
@@ -175,12 +164,12 @@ func BackupCheckpointDataFactory(
 }
 
 func GlobalCheckpointDataFactory(
-	sid string,
 	end types.TS,
 	versionInterval time.Duration,
-) func(c *catalog.Catalog) (*CheckpointData, error) {
-	return func(c *catalog.Catalog) (data *CheckpointData, err error) {
-		collector := NewGlobalCollector(sid, end, versionInterval)
+	fs fileservice.FileService,
+) func(c *catalog.Catalog) (*CheckpointData_V2, error) {
+	return func(c *catalog.Catalog) (data *CheckpointData_V2, err error) {
+		collector := NewGlobalCollector_V2(fs, end, versionInterval)
 		defer collector.Close()
 		err = c.RecurLoop(collector)
 		if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
@@ -190,8 +179,6 @@ func GlobalCheckpointDataFactory(
 		if err != nil {
 			return
 		}
-		collector.UsageMemo = c.GetUsageMemo().(*TNUsageMemo)
-		FillUsageBatOfGlobal(collector)
 
 		data = collector.OrphanData()
 
@@ -386,6 +373,9 @@ func NewCheckpointData(
 
 // for test
 func NewCheckpointDataWithVersion(ver uint32, mp *mpool.MPool) *CheckpointData {
+	if ver > CheckpointVersion12 {
+		panic("not support")
+	}
 	data := &CheckpointData{
 		meta:      make(map[uint64]*CheckpointMeta),
 		allocator: mp,
@@ -464,31 +454,6 @@ func NewBackupCollector(
 type GlobalCollector struct {
 	*BaseCollector
 	versionThershold types.TS
-}
-
-func NewGlobalCollector(
-	sid string,
-	end types.TS,
-	versionInterval time.Duration,
-) *GlobalCollector {
-	versionThresholdTS := types.BuildTS(end.Physical()-versionInterval.Nanoseconds(), end.Logical())
-	collector := &GlobalCollector{
-		BaseCollector: &BaseCollector{
-			LoopProcessor: new(catalog.LoopProcessor),
-			data:          NewCheckpointData(sid, common.CheckpointAllocator),
-			end:           end,
-		},
-		versionThershold: versionThresholdTS,
-	}
-
-	collector.DatabaseFn = collector.VisitDB
-	collector.TableFn = collector.VisitTable
-	collector.ObjectFn = collector.VisitObj
-	collector.TombstoneFn = collector.VisitObj
-
-	collector.Usage.ReservedAccIds = make(map[uint64]struct{})
-
-	return collector
 }
 
 func (data *CheckpointData) ApplyReplayTo(
@@ -1374,30 +1339,19 @@ func (data *CheckpointData) ReadFrom(
 func LoadCheckpointLocations(
 	ctx context.Context,
 	sid string,
-	location objectio.Location,
-	version uint32,
-	fs fileservice.FileService,
+	reader *CKPReader,
 ) (map[string]objectio.Location, error) {
 	select {
 	case <-ctx.Done():
 		return nil, context.Cause(ctx)
 	default:
 	}
-	var err error
-	data := NewCheckpointData(sid, common.CheckpointAllocator)
-	defer data.Close()
-
-	var reader *ioutil.BlockReader
-	if reader, err = ioutil.NewObjectReader(fs, location); err != nil {
-		return nil, err
+	locationMap := make(map[string]objectio.Location)
+	locations := reader.GetLocations()
+	for _, loc := range locations {
+		locationMap[loc.Name().String()] = loc
 	}
-
-	if err = data.readMetaBatch(ctx, version, reader, nil); err != nil {
-		return nil, err
-	}
-
-	data.replayMetaBatch(version)
-	return data.locations, nil
+	return locationMap, nil
 }
 
 // LoadSpecifiedCkpBatch loads a specified checkpoint data batch
