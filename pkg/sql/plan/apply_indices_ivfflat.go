@@ -137,7 +137,10 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, projN
 		IndexTable:    idxdef.IndexTableName,
 		ThreadsSearch: val.(int64),
 		EntriesTable:  entriesdef.IndexTableName,
-		Nprobe:        uint(nprobe)}
+		Nprobe:        uint(nprobe),
+		PKeyType:      pkType.Id,
+		PKey:          scanNode.TableDef.Pkey.PkeyColName,
+		KeyPart:       keypart}
 
 	cfgbytes, err := json.Marshal(tblcfg)
 	if err != nil {
