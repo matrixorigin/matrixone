@@ -707,11 +707,12 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		}
 	case *table_function.TableFunction:
 		in.TableFunction = &pipeline.TableFunction{
-			Attrs:  t.Attrs,
-			Rets:   t.Rets,
-			Args:   t.Args,
-			Params: t.Params,
-			Name:   t.FuncName,
+			Attrs:    t.Attrs,
+			Rets:     t.Rets,
+			Args:     t.Args,
+			Params:   t.Params,
+			Name:     t.FuncName,
+			IsSingle: t.IsSingle,
 		}
 
 	case *external.External:
@@ -818,11 +819,12 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			Types:     convertToPlanTypes(t.Typs),
 		}
 		in.TableFunction = &pipeline.TableFunction{
-			Attrs:  t.TableFunction.Attrs,
-			Rets:   t.TableFunction.Rets,
-			Args:   t.TableFunction.Args,
-			Params: t.TableFunction.Params,
-			Name:   t.TableFunction.FuncName,
+			Attrs:    t.TableFunction.Attrs,
+			Rets:     t.TableFunction.Rets,
+			Args:     t.TableFunction.Args,
+			Params:   t.TableFunction.Params,
+			Name:     t.TableFunction.FuncName,
+			IsSingle: t.TableFunction.IsSingle,
 		}
 	case *multi_update.MultiUpdate:
 		updateCtxList := make([]*plan.UpdateCtx, len(t.MultiUpdateCtx))
@@ -1217,6 +1219,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.Args = opr.TableFunction.Args
 		arg.FuncName = opr.TableFunction.Name
 		arg.Params = opr.TableFunction.Params
+		arg.IsSingle = opr.TableFunction.IsSingle
 		op = arg
 	case vm.External:
 		t := opr.GetExternalScan()
@@ -1331,6 +1334,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.TableFunction.Args = opr.TableFunction.Args
 		arg.TableFunction.FuncName = opr.TableFunction.Name
 		arg.TableFunction.Params = opr.TableFunction.Params
+		arg.TableFunction.IsSingle = opr.TableFunction.IsSingle
 		op = arg
 	case vm.MultiUpdate:
 		arg := multi_update.NewArgument()

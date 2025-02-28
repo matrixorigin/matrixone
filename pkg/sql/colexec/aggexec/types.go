@@ -224,9 +224,6 @@ func makeSpecialAggExec(
 			return makeGroupConcat(mg, id, isDistinct, params, getCroupConcatRet(params...), groupConcatSep), true, nil
 		case aggIdOfApproxCount:
 			return makeApproxCount(mg, id, params[0]), true, nil
-		case aggIdOfClusterCenters:
-			exec, err := makeClusterCenters(mg, id, isDistinct, params[0])
-			return exec, true, err
 		case winIdOfRowNumber, winIdOfRank, winIdOfDenseRank:
 			exec, err := makeWindowExec(mg, id, isDistinct)
 			return exec, true, err
@@ -280,18 +277,6 @@ func makeMedian(
 		emptyNull: true,
 	}
 	return newMedianExecutor(mg, info)
-}
-
-func makeClusterCenters(
-	mg AggMemoryManager, aggID int64, isDistinct bool, param types.Type) (AggFuncExec, error) {
-	info := singleAggInfo{
-		aggID:     aggID,
-		distinct:  isDistinct,
-		argType:   param,
-		retType:   ClusterCentersReturnType([]types.Type{param}),
-		emptyNull: true,
-	}
-	return newClusterCentersExecutor(mg, info)
 }
 
 func makeWindowExec(
