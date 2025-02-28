@@ -307,7 +307,7 @@ func makeEndPoints(objects []*catalog.ObjectEntry) []endPoint {
 						}
 						copiedMax[i]--
 					}
-					if bytes.Compare(copiedMin, copiedMax) == 0 {
+					if bytes.Equal(copiedMin, copiedMax) {
 						continue
 					}
 				}
