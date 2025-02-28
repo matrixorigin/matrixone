@@ -376,7 +376,9 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		t := sourceOp.(*top.Top)
 		op := top.NewArgument()
 		op.Limit = t.Limit
-		op.TopValueTag = t.TopValueTag
+		if t.TopValueTag > 0 {
+			op.TopValueTag = t.TopValueTag + int32(index)<<16
+		}
 		op.Fs = t.Fs
 		op.SetInfo(&info)
 		return op
@@ -1015,7 +1017,7 @@ func constructTop(n *plan.Node, topN *plan.Expr) *top.Top {
 	arg := top.NewArgument()
 	arg.Fs = n.OrderBy
 	arg.Limit = topN
-	if len(n.SendMsgList) > 0 {
+	if len(n.SendMsgList) > 0 && n.SendMsgList[0].MsgType == int32(message.MsgTopValue) {
 		arg.TopValueTag = n.SendMsgList[0].MsgTag
 	}
 	return arg
