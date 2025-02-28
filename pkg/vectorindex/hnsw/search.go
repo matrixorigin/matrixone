@@ -198,7 +198,15 @@ func (s *HnswSearch) unlock() {
 }
 
 // Search the hnsw index (implement VectorIndexSearch.Search)
-func (s *HnswSearch) Search(query []float32, limit uint) (keys []int64, distances []float32, err error) {
+func (s *HnswSearch) Search(anyquery any, rt vectorindex.RuntimeConfig) (keys any, distances []float32, err error) {
+
+	query, ok := anyquery.([]float32)
+	if !ok {
+		return nil, nil, moerr.NewInternalErrorNoCtx("query is not []float32")
+	}
+
+	limit := rt.Limit
+
 	if len(s.Indexes) == 0 {
 		return []int64{}, []float32{}, nil
 	}

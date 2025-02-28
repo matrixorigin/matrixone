@@ -216,9 +216,17 @@ func (u *hnswSearchState) start(tf *TableFunction, proc *process.Process, nthRow
 	veccache.Cache.Once()
 
 	algo := newHnswAlgo(u.idxcfg, u.tblcfg)
-	u.keys, u.distances, err = veccache.Cache.Search(proc, u.tblcfg.IndexTable, algo, f32a, uint(u.limit))
+
+	var keys any
+	keys, u.distances, err = veccache.Cache.Search(proc, u.tblcfg.IndexTable, algo, f32a, vectorindex.RuntimeConfig{Limit: uint(u.limit)})
 	if err != nil {
 		return err
+	}
+
+	var ok bool
+	u.keys, ok = keys.([]int64)
+	if !ok {
+		return moerr.NewInternalError(proc.Ctx, "keys is not []int64")
 	}
 	return nil
 }

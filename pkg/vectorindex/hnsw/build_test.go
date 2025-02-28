@@ -132,9 +132,10 @@ func TestBuildMulti(t *testing.T) {
 			defer wg2.Done()
 			for i := 0; i < nitem; i++ {
 				key := int64(j*nitem + i)
-				keys, distances, err := search.Search(sample[key], 10)
+				anykeys, distances, err := search.Search(sample[key], vectorindex.RuntimeConfig{Limit: 10})
 				require.Nil(t, err)
-
+				keys, ok := anykeys.([]int64)
+				require.True(t, ok)
 				_ = distances
 				if keys[0] != key {
 					failed++
@@ -294,9 +295,10 @@ func TestBuildSingleThread(t *testing.T) {
 			defer wg2.Done()
 			for i := 0; i < nitem; i++ {
 				key := int64(j*nitem + i)
-				keys, distances, err := search.Search(sample[key], 10)
+				anykeys, distances, err := search.Search(sample[key], vectorindex.RuntimeConfig{Limit: 10})
 				require.Nil(t, err)
-
+				keys, ok := anykeys.([]int64)
+				require.True(t, ok)
 				_ = distances
 				if keys[0] != key {
 					failed++

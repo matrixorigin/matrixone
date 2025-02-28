@@ -97,7 +97,7 @@ type MockSearch struct {
 	Tblcfg vectorindex.IndexTableConfig
 }
 
-func (m *MockSearch) Search(query []float32, limit uint) (keys []int64, distances []float32, err error) {
+func (m *MockSearch) Search(query any, rt vectorindex.RuntimeConfig) (keys any, distances []float32, err error) {
 	//time.Sleep(2 * time.Millisecond)
 	return []int64{1}, []float32{2.0}, nil
 }

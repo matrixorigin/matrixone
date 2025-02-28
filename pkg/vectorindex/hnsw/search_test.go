@@ -82,8 +82,10 @@ func TestHnsw(t *testing.T) {
 				cache.Cache.Once()
 
 				algo := NewHnswSearch(idxcfg, tblcfg)
-				keys, distances, err := cache.Cache.Search(proc, tblcfg.IndexTable, algo, fp32a, 4)
+				anykeys, distances, err := cache.Cache.Search(proc, tblcfg.IndexTable, algo, fp32a, vectorindex.RuntimeConfig{Limit: 4})
 				require.Nil(t, err)
+				keys, ok := anykeys.([]int64)
+				require.True(t, ok)
 
 				require.Equal(t, len(keys), 4)
 				require.Equal(t, keys[0], int64(0))

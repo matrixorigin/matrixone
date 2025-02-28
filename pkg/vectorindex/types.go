@@ -67,7 +67,6 @@ type IvfParam struct {
 
 type IvfflatIndexConfig struct {
 	Lists      uint
-	Nprobe     uint
 	Metric     uint16
 	InitType   uint16
 	Dimensions uint
@@ -79,6 +78,11 @@ type IndexConfig struct {
 	Type    string
 	Usearch usearch.IndexConfig
 	Ivfflat IvfflatIndexConfig
+}
+
+type RuntimeConfig struct {
+	Limit uint
+	Probe uint
 }
 
 // nthread == 0, result will return NumCPU - 1
