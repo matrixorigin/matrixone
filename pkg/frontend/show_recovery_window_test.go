@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -112,4 +113,25 @@ func Test_getAccountPitrRecords(t *testing.T) {
 		convey.So(err, convey.ShouldNotBeNil)
 
 	})
+}
+
+func TestMarshalRcoveryWindowToJsonForSnapshot(t *testing.T) {
+	// 设置测试数据
+	ts := time.Now().Unix()
+	records := tableRecoveryWindowForSnapshot{
+		ts:           ts,
+		snapshotName: "test_snapshot",
+	}
+
+	// 调用函数
+	result := marshalRcoveryWindowToJsonForSnapshot(records)
+
+	// 预期的时间格式
+	expectedTime := time.Unix(0, ts).Local().Format("2006-01-02 15:04:05")
+	expectedResult := `{"timestamp": "` + expectedTime + `", "source": "snapshot", "source_name": "test_snapshot"}`
+
+	// 验证结果
+	if result != expectedResult {
+		t.Errorf("Expected %s, but got %s", expectedResult, result)
+	}
 }
