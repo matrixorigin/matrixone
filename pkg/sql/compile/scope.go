@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -189,8 +190,8 @@ func (s *Scope) Run(c *Compile) (err error) {
 			}
 
 			var tag int32
-			if s.DataSource.node != nil && len(s.DataSource.node.RecvMsgList) > 0 {
-				tag = s.DataSource.node.RecvMsgList[0].MsgTag
+			if len(s.DataSource.RecvMsgList) > 0 {
+				tag = s.DataSource.RecvMsgList[0].MsgTag
 			}
 			s.ScopeAnalyzer.Stop()
 			_, err = p.RunWithReader(s.DataSource.R, tag, s.Proc)
@@ -534,12 +535,19 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 		return s, nil
 	}
 
-	if len(s.DataSource.OrderBy) > 0 {
-		return nil, moerr.NewInternalError(c.proc.Ctx, "ordered scan must run in only one parallel.")
-	}
+	//if len(s.DataSource.OrderBy) > 0 {
+	//	return nil, moerr.NewInternalError(c.proc.Ctx, "ordered scan must run in only one parallel.")
+	//}
 
 	ms, ss := newParallelScope(s)
 	for i := range ss {
+		recvMsgList := slices.Clone(s.DataSource.RecvMsgList)
+		for j := range recvMsgList {
+			if recvMsgList[j].MsgType == int32(message.MsgTopValue) {
+				recvMsgList[j].MsgTag += int32(i) << 16
+			}
+		}
+
 		ss[i].DataSource = &Source{
 			R:            readers[i],
 			SchemaName:   s.DataSource.SchemaName,
@@ -547,6 +555,7 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 			Attributes:   s.DataSource.Attributes,
 			AccountId:    s.DataSource.AccountId,
 			node:         s.DataSource.node,
+			RecvMsgList:  recvMsgList,
 		}
 	}
 

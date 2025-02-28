@@ -18,7 +18,6 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"os"
 	"strings"
 
 	"go.uber.org/zap"
@@ -1895,21 +1894,18 @@ func (s *Scope) handleVectorIvfFlatIndex(c *Compile, dbSource engine.Database, i
 		}
 	}
 
-	os.Stderr.WriteString("total cnt\n")
 	// 3. get count of secondary index column in original table
 	totalCnt, err := s.handleIndexColCount(c, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata], qryDatabase, originalTableDef)
 	if err != nil {
 		return err
 	}
 
-	os.Stderr.WriteString("populate meta data\n")
 	// 4.a populate meta table
 	err = s.handleIvfIndexMetaTable(c, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata], qryDatabase)
 	if err != nil {
 		return err
 	}
 
-	os.Stderr.WriteString("populate centroid\n")
 	// 4.b populate centroids table
 	err = s.handleIvfIndexCentroidsTable(c, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids], qryDatabase, originalTableDef,
 		totalCnt,
@@ -1918,7 +1914,6 @@ func (s *Scope) handleVectorIvfFlatIndex(c *Compile, dbSource engine.Database, i
 		return err
 	}
 
-	os.Stderr.WriteString("populate enries\n")
 	// 4.c populate entries table
 	err = s.handleIvfIndexEntriesTable(c, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries], qryDatabase, originalTableDef,
 		indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName,
