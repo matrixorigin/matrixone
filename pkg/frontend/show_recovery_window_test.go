@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -134,4 +135,287 @@ func TestMarshalRcoveryWindowToJsonForSnapshot(t *testing.T) {
 	if result != expectedResult {
 		t.Errorf("Expected %s, but got %s", expectedResult, result)
 	}
+}
+
+func Test_GetTableRecoveryWindowRows(t *testing.T) {
+	convey.Convey("getAccountPitrRecords", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		setPu("", pu)
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		rm, _ := NewRoutineManager(ctx, "")
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+
+		_, err := getTableRecoveryWindowRows(ctx, ses, bh, "sys", "db1", "table1")
+		convey.So(err, convey.ShouldNotBeNil)
+
+		sql := fmt.Sprintf(getTablePitrRecordsFormat, 0, "sys", "db1", "table1", SYSMOCATALOGPITR)
+		mrs := newMrsForPitrRecord([][]interface{}{{"pitr_01", "2025-01-13 00:00:00", uint64(1), "h", uint64(1), "2025-01-13 00:00:00"}})
+		bh.sql2result[sql] = mrs
+
+		_, err = getTableRecoveryWindowRows(ctx, ses, bh, "sys", "db1", "table1")
+		convey.So(err, convey.ShouldNotBeNil)
+
+		sql = fmt.Sprintf(getTablePitrRecordsFormat, 0, "sys", "db1", "table1", SYSMOCATALOGPITR)
+		mrs = newMrsForPitrRecord([][]interface{}{{types.Date(1), "2025-01-13 00:00:00", uint64(1), "h", uint64(1), "2025-01-13 00:00:00"}})
+		bh.sql2result[sql] = mrs
+		_, err = getTableRecoveryWindowRows(ctx, ses, bh, "sys", "db1", "table1")
+		convey.So(err, convey.ShouldNotBeNil)
+
+		sql = fmt.Sprintf(getTablePitrRecordsFormat, 0, "sys", "db1", "table1", SYSMOCATALOGPITR)
+		mrs = newMrsForPitrRecord([][]interface{}{{"pitr_01", types.Date(1), uint64(1), "h", uint64(1), "2025-01-13 00:00:00"}})
+		bh.sql2result[sql] = mrs
+		_, err = getTableRecoveryWindowRows(ctx, ses, bh, "sys", "db1", "table1")
+		convey.So(err, convey.ShouldNotBeNil)
+
+		sql = fmt.Sprintf(getTablePitrRecordsFormat, 0, "sys", "db1", "table1", SYSMOCATALOGPITR)
+		mrs = newMrsForPitrRecord([][]interface{}{{"pitr_01", "2025-01-13 00:00:00", "uint64(1)", "h", uint64(1), "2025-01-13 00:00:00"}})
+		bh.sql2result[sql] = mrs
+		_, err = getTableRecoveryWindowRows(ctx, ses, bh, "sys", "db1", "table1")
+		convey.So(err, convey.ShouldNotBeNil)
+
+		sql = fmt.Sprintf(getTablePitrRecordsFormat, 0, "sys", "db1", "table1", SYSMOCATALOGPITR)
+		mrs = newMrsForPitrRecord([][]interface{}{{"pitr_01", "2025-01-13 00:00:00", uint64(1), types.Date(1), uint64(1), "2025-01-13 00:00:00"}})
+		bh.sql2result[sql] = mrs
+		_, err = getTableRecoveryWindowRows(ctx, ses, bh, "sys", "db1", "table1")
+		convey.So(err, convey.ShouldNotBeNil)
+
+		sql = fmt.Sprintf(getTablePitrRecordsFormat, 0, "sys", "db1", "table1", SYSMOCATALOGPITR)
+		mrs = newMrsForPitrRecord([][]interface{}{{"pitr_01", "2025-01-13 00:00:00", uint64(1), "h", "uint64(1)", "2025-01-13 00:00:00"}})
+		bh.sql2result[sql] = mrs
+		_, err = getTableRecoveryWindowRows(ctx, ses, bh, "sys", "db1", "table1")
+		convey.So(err, convey.ShouldNotBeNil)
+
+		sql = fmt.Sprintf(getTablePitrRecordsFormat, 0, "sys", "db1", "table1", SYSMOCATALOGPITR)
+		mrs = newMrsForPitrRecord([][]interface{}{{"pitr_01", "2025-01-13 00:00:00", uint64(1), "h", uint64(1), types.Day_Hour}})
+		bh.sql2result[sql] = mrs
+		_, err = getTableRecoveryWindowRows(ctx, ses, bh, "sys", "db1", "table1")
+		convey.So(err, convey.ShouldNotBeNil)
+
+		sql = fmt.Sprintf(getTableSnapshotRecordsFormat, "sys", "db1", "table1")
+		mrs = newMrsForPitrRecord([][]interface{}{{types.Date(1), int64(10000000)}})
+		bh.sql2result[sql] = mrs
+		_, err = getTableRecoveryWindowRows(ctx, ses, bh, "sys", "db1", "table1")
+		convey.So(err, convey.ShouldNotBeNil)
+
+		sql = fmt.Sprintf(getTableSnapshotRecordsFormat, "sys", "db1", "table1")
+		mrs = newMrsForPitrRecord([][]interface{}{{"sys", "123"}})
+		bh.sql2result[sql] = mrs
+		_, err = getTableRecoveryWindowRows(ctx, ses, bh, "sys", "db1", "table1")
+		convey.So(err, convey.ShouldNotBeNil)
+
+		sql = fmt.Sprintf(getTablePitrRecordsFormat, 0, "sys", "db1", "table1", SYSMOCATALOGPITR)
+		mrs = newMrsForPitrRecord([][]interface{}{{"pitr_01", "2025-01-13 00:00:00", uint64(1), "h", uint64(1), "2025-01-13 00:00:00"}})
+		bh.sql2result[sql] = mrs
+		sql = fmt.Sprintf(getTableSnapshotRecordsFormat, "sys", "db1", "table1")
+		mrs = newMrsForPitrRecord([][]interface{}{{"snapshot_01", int64(10000000)}})
+		bh.sql2result[sql] = mrs
+		_, err = getTableRecoveryWindowRows(ctx, ses, bh, "sys", "db1", "table1")
+		convey.So(err, convey.ShouldBeNil)
+	})
+}
+
+func Test_GetDbRecoveryWindowRows(t *testing.T) {
+	convey.Convey("GetDbRecoveryWindowRows", t, func(convey.C) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		setPu("", pu)
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		rm, _ := NewRoutineManager(ctx, "")
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+
+		_, err := getDbRecoveryWindowRows(ctx, ses, bh, "sys", "db1")
+		convey.So(err, convey.ShouldNotBeNil)
+
+		sql := fmt.Sprintf(getDbPitrRecordsFormat, 0, "sys", "db1", SYSMOCATALOGPITR)
+		mrs := newMrsForPitrRecord([][]interface{}{{"pitr_01", "2025-01-13 00:00:00", uint64(1), "h", uint64(1), "2025-01-13 00:00:00"}})
+		bh.sql2result[sql] = mrs
+		_, err = getDbRecoveryWindowRows(ctx, ses, bh, "sys", "db1")
+		convey.So(err, convey.ShouldNotBeNil)
+
+		sql = fmt.Sprintf(getDbPitrRecordsFormat, 0, "sys", "db1", SYSMOCATALOGPITR)
+		mrs = newMrsForPitrRecord([][]interface{}{{types.Date(1), "2025-01-13 00:00:00", uint64(1), "h", uint64(1), "2025-01-13 00:00:00"}})
+		bh.sql2result[sql] = mrs
+		_, err = getDbRecoveryWindowRows(ctx, ses, bh, "sys", "db1")
+		convey.So(err, convey.ShouldNotBeNil)
+
+		sql = fmt.Sprintf(getDbPitrRecordsFormat, 0, "sys", "db1", SYSMOCATALOGPITR)
+		mrs = newMrsForPitrRecord([][]interface{}{{"pitr_01", types.Date(1), uint64(1), "h", uint64(1), "2025-01-13 00:00:00"}})
+		bh.sql2result[sql] = mrs
+		_, err = getDbRecoveryWindowRows(ctx, ses, bh, "sys", "db1")
+		convey.So(err, convey.ShouldNotBeNil)
+
+		sql = fmt.Sprintf(getDbPitrRecordsFormat, 0, "sys", "db1", SYSMOCATALOGPITR)
+		mrs = newMrsForPitrRecord([][]interface{}{{"pitr_01", "2025-01-13 00:00:00", uint64(1), "h", uint64(1), "2025-01-13 00:00:00"}})
+		bh.sql2result[sql] = mrs
+		_, err = getDbRecoveryWindowRows(ctx, ses, bh, "sys", "db1")
+		convey.So(err, convey.ShouldNotBeNil)
+
+		sql = fmt.Sprintf(getDbPitrRecordsFormat, 0, "sys", "db1", SYSMOCATALOGPITR)
+		mrs = newMrsForPitrRecord([][]interface{}{{"pitr_01", "2025-01-13 00:00:00", "uint64(1)", "h", uint64(1), "2025-01-13 00:00:00"}})
+		bh.sql2result[sql] = mrs
+		_, err = getDbRecoveryWindowRows(ctx, ses, bh, "sys", "db1")
+		convey.So(err, convey.ShouldNotBeNil)
+
+		sql = fmt.Sprintf(getDbPitrRecordsFormat, 0, "sys", "db1", SYSMOCATALOGPITR)
+		mrs = newMrsForPitrRecord([][]interface{}{{"pitr_01", "2025-01-13 00:00:00", uint64(1), types.Date(1), uint64(1), "2025-01-13 00:00:00"}})
+		bh.sql2result[sql] = mrs
+		_, err = getDbRecoveryWindowRows(ctx, ses, bh, "sys", "db1")
+		convey.So(err, convey.ShouldNotBeNil)
+
+		sql = fmt.Sprintf(getDbPitrRecordsFormat, 0, "sys", "db1", SYSMOCATALOGPITR)
+		mrs = newMrsForPitrRecord([][]interface{}{{"pitr_01", "2025-01-13 00:00:00", uint64(1), "h", "uint64(1)", "2025-01-13 00:00:00"}})
+		bh.sql2result[sql] = mrs
+		_, err = getDbRecoveryWindowRows(ctx, ses, bh, "sys", "db1")
+		convey.So(err, convey.ShouldNotBeNil)
+
+		sql = fmt.Sprintf(getDbPitrRecordsFormat, 0, "sys", "db1", SYSMOCATALOGPITR)
+		mrs = newMrsForPitrRecord([][]interface{}{{"pitr_01", "2025-01-13 00:00:00", uint64(1), "h", uint64(1), types.Date(1)}})
+		bh.sql2result[sql] = mrs
+		_, err = getDbRecoveryWindowRows(ctx, ses, bh, "sys", "db1")
+		convey.So(err, convey.ShouldNotBeNil)
+
+		sql = fmt.Sprint(getDbSnapshotRecordsFormat, "sys", "db1")
+		mrs = newMrsForPitrRecord([][]interface{}{{types.Date(1), int64(10000000)}})
+		bh.sql2result[sql] = mrs
+		_, err = getDbRecoveryWindowRows(ctx, ses, bh, "sys", "db1")
+		convey.So(err, convey.ShouldNotBeNil)
+
+		sql = fmt.Sprint(getDbSnapshotRecordsFormat, "sys", "db1")
+		mrs = newMrsForPitrRecord([][]interface{}{{"snapshot_01", types.Date(1)}})
+		bh.sql2result[sql] = mrs
+		_, err = getDbRecoveryWindowRows(ctx, ses, bh, "sys", "db1")
+		convey.So(err, convey.ShouldNotBeNil)
+
+		sql = fmt.Sprintf(getDbPitrRecordsFormat, 0, "sys", "db1", SYSMOCATALOGPITR)
+		mrs = newMrsForPitrRecord([][]interface{}{{"pitr_01", "2025-01-13 00:00:00", uint64(1), "h", uint64(1), "2025-01-13 00:00:00"}})
+		bh.sql2result[sql] = mrs
+		sql = fmt.Sprint(getDbSnapshotRecordsFormat, "sys", "db1")
+		mrs = newMrsForPitrRecord([][]interface{}{{"snapshot_01", int64(10000000)}})
+		bh.sql2result[sql] = mrs
+		_, err = getDbRecoveryWindowRows(ctx, ses, bh, "sys", "db1")
+		convey.So(err, convey.ShouldNotBeNil)
+
+		sql = "show tables from " + "db1"
+		mrs = newMrsForPitrRecord([][]interface{}{{"table1"}})
+		bh.sql2result[sql] = mrs
+
+		sql = fmt.Sprintf(getTablePitrRecordsFormat, 0, "sys", "db1", "table1", SYSMOCATALOGPITR)
+		mrs = newMrsForPitrRecord([][]interface{}{{"pitr_01", "2025-01-13 00:00:00", uint64(1), "h", uint64(1), "2025-01-13 00:00:00"}})
+		bh.sql2result[sql] = mrs
+		sql = fmt.Sprintf(getTableSnapshotRecordsFormat, "sys", "db1", "table1")
+		mrs = newMrsForPitrRecord([][]interface{}{{"snapshot_01", int64(10000000)}})
+		bh.sql2result[sql] = mrs
+
+		sql = fmt.Sprintf(getDbPitrRecordsFormat, 0, "sys", "db1", SYSMOCATALOGPITR)
+		mrs = newMrsForPitrRecord([][]interface{}{{types.Date(1), "2025-01-13 00:00:00", uint64(1), "h", uint64(1), "2025-01-13 00:00:00"}})
+		bh.sql2result[sql] = mrs
+		_, err = getDbRecoveryWindowRows(ctx, ses, bh, "sys", "db1")
+		convey.So(err, convey.ShouldNotBeNil)
+
+		sql = fmt.Sprintf(getDbPitrRecordsFormat, 0, "sys", "db1", SYSMOCATALOGPITR)
+		mrs = newMrsForPitrRecord([][]interface{}{{"pitr_01", types.Date(1), uint64(1), "h", uint64(1), "2025-01-13 00:00:00"}})
+		bh.sql2result[sql] = mrs
+		_, err = getDbRecoveryWindowRows(ctx, ses, bh, "sys", "db1")
+		convey.So(err, convey.ShouldNotBeNil)
+
+		sql = fmt.Sprintf(getDbPitrRecordsFormat, 0, "sys", "db1", SYSMOCATALOGPITR)
+		mrs = newMrsForPitrRecord([][]interface{}{{"pitr_01", "2025-01-13 00:00:00", uint64(1), "h", uint64(1), "2025-01-13 00:00:00"}})
+		bh.sql2result[sql] = mrs
+		_, err = getDbRecoveryWindowRows(ctx, ses, bh, "sys", "db1")
+		convey.So(err, convey.ShouldNotBeNil)
+
+		sql = fmt.Sprintf(getDbPitrRecordsFormat, 0, "sys", "db1", SYSMOCATALOGPITR)
+		mrs = newMrsForPitrRecord([][]interface{}{{"pitr_01", "2025-01-13 00:00:00", "uint64(1)", "h", uint64(1), "2025-01-13 00:00:00"}})
+		bh.sql2result[sql] = mrs
+		_, err = getDbRecoveryWindowRows(ctx, ses, bh, "sys", "db1")
+		convey.So(err, convey.ShouldNotBeNil)
+
+		sql = fmt.Sprintf(getDbPitrRecordsFormat, 0, "sys", "db1", SYSMOCATALOGPITR)
+		mrs = newMrsForPitrRecord([][]interface{}{{"pitr_01", "2025-01-13 00:00:00", uint64(1), types.Date(1), uint64(1), "2025-01-13 00:00:00"}})
+		bh.sql2result[sql] = mrs
+		_, err = getDbRecoveryWindowRows(ctx, ses, bh, "sys", "db1")
+		convey.So(err, convey.ShouldNotBeNil)
+
+		sql = fmt.Sprintf(getDbPitrRecordsFormat, 0, "sys", "db1", SYSMOCATALOGPITR)
+		mrs = newMrsForPitrRecord([][]interface{}{{"pitr_01", "2025-01-13 00:00:00", uint64(1), "h", "uint64(1)", "2025-01-13 00:00:00"}})
+		bh.sql2result[sql] = mrs
+		_, err = getDbRecoveryWindowRows(ctx, ses, bh, "sys", "db1")
+		convey.So(err, convey.ShouldNotBeNil)
+
+		sql = fmt.Sprintf(getDbPitrRecordsFormat, 0, "sys", "db1", SYSMOCATALOGPITR)
+		mrs = newMrsForPitrRecord([][]interface{}{{"pitr_01", "2025-01-13 00:00:00", uint64(1), "h", uint64(1), types.Date(1)}})
+		bh.sql2result[sql] = mrs
+		_, err = getDbRecoveryWindowRows(ctx, ses, bh, "sys", "db1")
+		convey.So(err, convey.ShouldNotBeNil)
+
+		sql = fmt.Sprintf(getDbSnapshotRecordsFormat, "sys", "db1")
+		mrs = newMrsForPitrRecord([][]interface{}{{types.Date(1), int64(10000000)}})
+		bh.sql2result[sql] = mrs
+		_, err = getDbRecoveryWindowRows(ctx, ses, bh, "sys", "db1")
+		convey.So(err, convey.ShouldNotBeNil)
+
+		sql = fmt.Sprintf(getDbSnapshotRecordsFormat, "sys", "db1")
+		mrs = newMrsForPitrRecord([][]interface{}{{"snapshot_01", types.Date(1)}})
+		bh.sql2result[sql] = mrs
+		_, err = getDbRecoveryWindowRows(ctx, ses, bh, "sys", "db1")
+		convey.So(err, convey.ShouldNotBeNil)
+
+		sql = fmt.Sprintf(getDbPitrRecordsFormat, 0, "sys", "db1", SYSMOCATALOGPITR)
+		mrs = newMrsForPitrRecord([][]interface{}{{"pitr_01", "2025-01-13 00:00:00", uint64(1), "h", uint64(1), "2025-01-13 00:00:00"}})
+		bh.sql2result[sql] = mrs
+		sql = fmt.Sprintf(getDbSnapshotRecordsFormat, "sys", "db1")
+		mrs = newMrsForPitrRecord([][]interface{}{{"snapshot_01", int64(10000000)}})
+		bh.sql2result[sql] = mrs
+		_, err = getDbRecoveryWindowRows(ctx, ses, bh, "sys", "db1")
+		convey.So(err, convey.ShouldBeNil)
+	})
 }
