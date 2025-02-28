@@ -70,7 +70,7 @@ func (o *objCompactPolicy) revise(rc *resourceController) []reviseResult {
 	for _, obj := range o.objects {
 		if rc.resourceAvailable([]*catalog.ObjectEntry{obj}) {
 			rc.reserveResources([]*catalog.ObjectEntry{obj})
-			results = append(results, reviseResult{[]*catalog.ObjectEntry{obj}, taskHostDN})
+			results = append(results, reviseResult{objs: []*catalog.ObjectEntry{obj}, kind: taskHostDN})
 		}
 	}
 	return results

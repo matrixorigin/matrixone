@@ -408,10 +408,10 @@ func (entry *TableEntry) ObjectStats(level common.PPLevel, start, end int, isTom
 	slices.SortFunc(objEntries, func(a, b *ObjectEntry) int {
 		zmA := a.SortKeyZoneMap()
 		zmB := b.SortKeyZoneMap()
-		if zmA == nil {
+		if !zmA.IsInited() {
 			return -1
 		}
-		if zmB == nil {
+		if !zmB.IsInited() {
 			return 1
 		}
 

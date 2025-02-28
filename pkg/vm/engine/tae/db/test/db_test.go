@@ -10190,6 +10190,7 @@ func TestStartStopTableMerge(t *testing.T) {
 	defer db.Close()
 
 	scheduler := merge.NewScheduler(db.Runtime, nil)
+	scheduler.PreExecute()
 
 	schema := catalog.MockSchema(2, 0)
 	schema.Extra.BlockMaxRows = 1000
