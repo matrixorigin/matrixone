@@ -224,7 +224,7 @@ func ConstructRowidColumnTo(
 	}
 	for i := uint32(0); i < length; i++ {
 		rid := NewRowid(id, start+i)
-		if err = vector.AppendFixed(vec, *rid, false, mp); err != nil {
+		if err = vector.AppendFixed(vec, rid, false, mp); err != nil {
 			break
 		}
 	}
@@ -245,7 +245,7 @@ func ConstructRowidColumnToWithSels(
 	}
 	for _, row := range sels {
 		rid := NewRowid(id, uint32(row))
-		if err = vector.AppendFixed(vec, *rid, false, mp); err != nil {
+		if err = vector.AppendFixed(vec, rid, false, mp); err != nil {
 			break
 		}
 	}
@@ -1044,7 +1044,7 @@ func MockOneObj_MulBlks_Rowids(
 		} else {
 			blkId = uint16(i)
 		}
-		bid := NewBlockidWithObjectID(obj, blkId)
+		bid := NewBlockidWithObjectID(&obj, blkId)
 		for j := 0; j < rowsPerBlk; j++ {
 			var row uint32
 			if reversed {
@@ -1052,8 +1052,8 @@ func MockOneObj_MulBlks_Rowids(
 			} else {
 				row = uint32(j)
 			}
-			rid := NewRowid(bid, row)
-			if err = vector.AppendFixed(vec, *rid, false, mp); err != nil {
+			rid := NewRowid(&bid, row)
+			if err = vector.AppendFixed(vec, rid, false, mp); err != nil {
 				break
 			}
 		}

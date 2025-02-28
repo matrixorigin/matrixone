@@ -321,8 +321,8 @@ func TestDeletedBlocks_GetDeletedRowIDs(t *testing.T) {
 
 	rowIds := make([]types.Rowid, 0)
 
-	delBlks.getDeletedRowIDs(func(row *types.Rowid) {
-		rowIds = append(rowIds, *row)
+	delBlks.getDeletedRowIDs(func(row types.Rowid) {
+		rowIds = append(rowIds, row)
 	})
 
 	for i := range rowIds {

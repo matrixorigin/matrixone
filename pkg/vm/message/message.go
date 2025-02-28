@@ -21,10 +21,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-
-	"github.com/google/uuid"
 )
 
 const messageTimeout = 300 * time.Second
