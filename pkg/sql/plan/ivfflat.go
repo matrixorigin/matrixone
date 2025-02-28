@@ -24,7 +24,7 @@ import (
 // coldef shall copy index type
 var (
 	ivf_create_func_name = "ivf_create"
-	//ivf_search_func_name = "ivf_search"
+	ivf_search_func_name = "ivf_search"
 
 	ivfBuildIndexColDefs = []*plan.ColDef{
 		{
@@ -37,26 +37,23 @@ var (
 		},
 	}
 
-	/*
-		ivfSearchColDefs = []*plan.ColDef{
-			{
-				Name: "pkid",
-				Typ: plan.Type{
-					Id:          int32(types.T_int64),
-					NotNullable: false,
-					Width:       8,
-				},
+	ivfSearchColDefs = []*plan.ColDef{
+		{
+			Name: "pkid",
+			Typ: plan.Type{
+				Id:          int32(types.T_any),
+				NotNullable: false,
 			},
-			{
-				Name: "score",
-				Typ: plan.Type{
-					Id:          int32(types.T_float32),
-					NotNullable: false,
-					Width:       4,
-				},
+		},
+		{
+			Name: "score",
+			Typ: plan.Type{
+				Id:          int32(types.T_float32),
+				NotNullable: false,
+				Width:       4,
 			},
-		}
-	*/
+		},
+	}
 )
 
 // arg list [param, ivf.IndexTableConfig (JSON), vec]
@@ -99,7 +96,6 @@ func (builder *QueryBuilder) buildIvfCreate(tbl *tree.TableFunction, ctx *BindCo
 	return builder.appendNode(node, ctx), nil
 }
 
-/*
 // arg list [param, ivf.IndexTableconfig (JSON), search_vec]
 func (builder *QueryBuilder) buildIvfSearch(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
 	if len(exprs) != 3 {
@@ -108,7 +104,7 @@ func (builder *QueryBuilder) buildIvfSearch(tbl *tree.TableFunction, ctx *BindCo
 
 	colDefs := _getColDefs(ivfSearchColDefs)
 
-	params, err := builder.getHnswParams(tbl.Func)
+	params, err := builder.getIvfParams(tbl.Func)
 	if err != nil {
 		return 0, err
 	}
@@ -133,7 +129,6 @@ func (builder *QueryBuilder) buildIvfSearch(tbl *tree.TableFunction, ctx *BindCo
 	}
 	return builder.appendNode(node, ctx), nil
 }
-*/
 
 func (builder *QueryBuilder) getIvfParams(fn *tree.FuncExpr) (string, error) {
 	if _, ok := fn.Exprs[0].(*tree.NumVal); ok {

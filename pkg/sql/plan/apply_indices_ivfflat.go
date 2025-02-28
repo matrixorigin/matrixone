@@ -16,6 +16,7 @@ package plan
 
 import (
 	"encoding/json"
+	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -26,7 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 )
 
-func (builder *QueryBuilder) checkValidHnswDistFn(nodeID int32, projNode, sortNode, scanNode *plan.Node,
+func (builder *QueryBuilder) checkValidIvfflatDistFn(nodeID int32, projNode, sortNode, scanNode *plan.Node,
 	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr, multiTableIndex *MultiTableIndex) bool {
 
 	if len(sortNode.OrderBy) != 1 {
@@ -53,7 +54,7 @@ func (builder *QueryBuilder) checkValidHnswDistFn(nodeID int32, projNode, sortNo
 		return false
 	}
 
-	idxdef := multiTableIndex.IndexDefs[catalog.Hnsw_TblType_Metadata]
+	idxdef := multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata]
 
 	params, err := catalog.IndexParamsStringToMap(idxdef.IndexAlgoParams)
 	if err != nil {
@@ -74,7 +75,7 @@ func (builder *QueryBuilder) checkValidHnswDistFn(nodeID int32, projNode, sortNo
 		return false
 	}
 
-	if value.Typ.GetId() != int32(types.T_array_float32) {
+	if value.Typ.GetId() != int32(types.T_array_float32) && value.Typ.GetId() != int32(types.T_array_float64) {
 		return false
 	}
 
@@ -90,12 +91,13 @@ func (builder *QueryBuilder) checkValidHnswDistFn(nodeID int32, projNode, sortNo
 	return true
 }
 
-func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, projNode, sortNode, scanNode *plan.Node,
+func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, projNode, sortNode, scanNode *plan.Node,
 	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr, multiTableIndex *MultiTableIndex) (int32, error) {
 
 	ctx := builder.ctxByNode[nodeID]
-	metadef := multiTableIndex.IndexDefs[catalog.Hnsw_TblType_Metadata]
-	idxdef := multiTableIndex.IndexDefs[catalog.Hnsw_TblType_Storage]
+	metadef := multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata]
+	idxdef := multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids]
+	entriesdef := multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries]
 	pkPos := scanNode.TableDef.Name2ColIndex[scanNode.TableDef.Pkey.PkeyColName]
 	pkType := scanNode.TableDef.Cols[pkPos].Typ
 	keypart := idxdef.Parts[0]
@@ -112,15 +114,30 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, projNode
 		limit = projNode.Limit
 	}
 
-	val, err := builder.compCtx.ResolveVariable("hnsw_threads_search", true, false)
+	val, err := builder.compCtx.ResolveVariable("ivf_threads_search", true, false)
 	if err != nil {
 		return nodeID, err
 	}
+
+	nprobe := 5
+	nprobeif, err := builder.compCtx.ResolveVariable("probe_limit", false, true)
+	if err != nil {
+		return nodeID, err
+	}
+	if nprobeif != nil {
+		nprobe, err = strconv.Atoi(nprobeif.(string))
+		if err != nil {
+			return nodeID, err
+		}
+	}
+
 	tblcfg := vectorindex.IndexTableConfig{DbName: scanNode.ObjRef.SchemaName,
 		SrcTable:      scanNode.TableDef.Name,
 		MetadataTable: metadef.IndexTableName,
 		IndexTable:    idxdef.IndexTableName,
-		ThreadsSearch: val.(int64)}
+		ThreadsSearch: val.(int64),
+		EntriesTable:  entriesdef.IndexTableName,
+		Nprobe:        uint(nprobe)}
 
 	cfgbytes, err := json.Marshal(tblcfg)
 	if err != nil {
@@ -154,15 +171,15 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, projNode
 
 	exprs = append(exprs, valExpr)
 
-	hnsw_func := tree.NewCStr(hnsw_search_func_name, 1)
-	alias_name := "mo_hnsw_alias_0"
-	name := tree.NewUnresolvedName(hnsw_func)
+	ivf_func := tree.NewCStr(ivf_search_func_name, 1)
+	alias_name := "mo_ivf_alias_0"
+	name := tree.NewUnresolvedName(ivf_func)
 
 	tmpTableFunc := &tree.AliasedTableExpr{
 		Expr: &tree.TableFunction{
 			Func: &tree.FuncExpr{
 				Func:     tree.FuncName2ResolvableFunctionReference(name),
-				FuncName: hnsw_func,
+				FuncName: ivf_func,
 				Exprs:    exprs,
 				Type:     tree.FUNC_TYPE_TABLE,
 			},
@@ -190,6 +207,11 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, projNode
 			},
 		},
 	}
+
+	// change doc_id type to the primary type here
+	curr_node.TableDef.Cols[0].Typ.Id = pkType.Id
+	curr_node.TableDef.Cols[0].Typ.Width = pkType.Width
+	curr_node.TableDef.Cols[0].Typ.Scale = pkType.Scale
 
 	// pushdown limit
 	if limit != nil {
@@ -253,116 +275,5 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, projNode
 
 	projNode.Children[0] = sortByID
 
-	/*
-		// check equal distFn and only compute once for equal function()
-		projids := builder.findEqualDistFnFromProject(projNode, distFnExpr)
-
-		// replace the project with ColRef (same distFn as the order by)
-		for _, id := range projids {
-			projNode.ProjectList[id] = &Expr{
-				Typ: curr_node.TableDef.Cols[1].Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: curr_node.BindingTags[0],
-						ColPos: 1, // score
-					},
-				},
-			}
-		}
-	*/
-
 	return nodeID, nil
 }
-
-func (builder *QueryBuilder) getArgsFromDistFn(scanNode *plan.Node, distfn *plan.Function, keypart string) (key *plan.Expr, value *plan.Expr, found bool) {
-
-	found = false
-	keyid := -1
-	key = nil
-	value = nil
-
-	for i, a := range distfn.Args {
-		if a.GetCol() != nil {
-			colPosOrderBy := a.GetCol().ColPos
-			if colPosOrderBy == scanNode.TableDef.Name2ColIndex[keypart] {
-				found = true
-				keyid = i
-				break
-			}
-		}
-	}
-
-	if found {
-		key = distfn.Args[keyid]
-		if keyid == 0 {
-			value = distfn.Args[1]
-		} else {
-			value = distfn.Args[0]
-		}
-	}
-
-	return key, value, found
-}
-
-/*
-func (builder *QueryBuilder) findPkFromProject(projNode *plan.Node, pkPos int32) []int32 {
-
-	projids := make([]int32, 0)
-	for i, expr := range projNode.ProjectList {
-		if expr.GetCol() != nil {
-			if expr.GetCol().ColPos == pkPos {
-				projids = append(projids, int32(i))
-			}
-		}
-	}
-	return projids
-}
-
-// e.g. SELECT a, L2_DISTANCE(b, '[0, ..]') FROM SRC ORDER BY L2_DISTANCE(b, '[0,..]') limit 4
-// the plan is 'project -> sort -> project -> tablescan'
-func (builder *QueryBuilder) findEqualDistFnFromProject(projNode *plan.Node, distfn *plan.Function) []int32 {
-
-	projids := make([]int32, 0)
-	optype := distfn.Func.ObjName
-
-	for i, expr := range projNode.ProjectList {
-		fn := expr.GetF()
-		if fn == nil {
-			continue
-		}
-
-		if fn.Func.ObjName != optype {
-			continue
-		}
-
-		// check args
-
-		equal := false
-		for j := range distfn.Args {
-			targ := distfn.Args[j]
-			arg := fn.Args[j]
-
-			if targ.GetCol() != nil && arg.GetCol() != nil && targ.GetCol().ColPos == arg.GetCol().ColPos {
-				equal = true
-				continue
-			}
-			if targ.GetF() != nil && arg.GetF() != nil && targ.GetF().Func.ObjName == "cast" && arg.GetF().Func.ObjName == "cast" {
-				tv32 := targ.GetF().Args[0].GetLit().GetSval()
-				v32 := arg.GetF().Args[0].GetLit().GetSval()
-				if tv32 == v32 {
-					equal = true
-					continue
-				}
-			}
-
-			equal = false
-		}
-
-		if equal {
-			projids = append(projids, int32(i))
-		}
-	}
-
-	return projids
-}
-*/
