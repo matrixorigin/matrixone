@@ -11441,6 +11441,81 @@ func TestDedupx(t *testing.T) {
 	}
 }
 
+func TestCheckpointCompatibility(t *testing.T) {
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(3, 2)
+	schema.Extra.BlockMaxRows = 5
+	schema.Extra.ObjectMaxBlocks = 5
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 21)
+	defer bat.Close()
+	tae.CreateRelAndAppend2(bat, true)
+
+	txn, rel := tae.GetRelation()
+	obj := testutil.GetOneBlockMeta(rel)
+	id := obj.AsCommonID()
+	err := rel.RangeDelete(id, 0, 0, handle.DT_Normal)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.ApplyCommit())
+	tae.ForceFlush(ctx, tae.TxnMgr.Now())
+
+	t.Log(tae.Catalog.SimplePPString(3))
+
+	end := tae.TxnMgr.Now()
+	loc, err := logtail.MockCheckpointV12(
+		ctx,
+		tae.Catalog,
+		types.TS{},
+		end,
+		common.CheckpointAllocator,
+		tae.Opts.Fs,
+	)
+	assert.NoError(t, err)
+	dataFactory := tables.NewDataFactory(
+		tae.Runtime, tae.Dir,
+	)
+	catalog2 := catalog.MockCatalog(dataFactory)
+	reader := logtail.NewCKPReader(
+		logtail.CheckpointVersion12,
+		loc,
+		common.CheckpointAllocator,
+		tae.Opts.Fs,
+	)
+	err = reader.ReadMeta(ctx)
+	assert.NoError(t, err)
+	err = logtail.ReplayCheckpoint(ctx, catalog2, true, reader)
+	assert.NoError(t, err)
+	sortFunc := func(cols []containers.Vector, pkidx int) (err2 error) {
+		_, err2 = mergesort.SortBlockColumns(cols, pkidx, tae.Runtime.VectorPool.Transient)
+		return
+	}
+
+	readTxn, err := tae.StartTxn(nil)
+	assert.NoError(t, err)
+	closeFn := catalog2.RelayFromSysTableObjects(
+		ctx,
+		readTxn,
+		tables.ReadSysTableBatch,
+		sortFunc,
+		&objlistReplayer{},
+	)
+	assert.NoError(t, readTxn.Commit(ctx))
+	for _, fn := range closeFn {
+		fn()
+	}
+
+	err = logtail.ReplayCheckpoint(ctx, catalog2, false, reader)
+	assert.NoError(t, err)
+
+	t.Log(catalog2.SimplePPString(3))
+	testutil.IsCatalogEqual(t, tae.Catalog, catalog2)
+	return
+}
+
 func Test_OpenWithError(t *testing.T) {
 	// defer leaktest.AfterTest(t)()
 	ctx := context.Background()

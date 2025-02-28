@@ -413,7 +413,7 @@ func mockCheckpointV12_writeTo(
 	batFn := func(
 		srcBatch *containers.Batch,
 		dataType uint16, //5 for data, 7 for tombstone
-		indexes []blockIndexes,
+		indexes *[]blockIndexes,
 	) {
 		offset := 0
 		formatBatch(srcBatch)
@@ -446,7 +446,7 @@ func mockCheckpointV12_writeTo(
 				return
 			}
 			blockLoc := BuildBlockLoaction(block.GetID(), uint64(offset), uint64(0))
-			indexes = append(indexes, blockIndexes{
+			*indexes = append(*indexes, blockIndexes{
 				fileNum: fileNum,
 				indexes: &blockLoc,
 			})
@@ -465,7 +465,7 @@ func mockCheckpointV12_writeTo(
 				}
 				Endoffset := offset + bat.Length()
 				blockLoc := BuildBlockLoaction(block.GetID(), uint64(offset), uint64(Endoffset))
-				indexes = append(indexes, blockIndexes{
+				*indexes = append(*indexes, blockIndexes{
 					fileNum: fileNum,
 					indexes: &blockLoc,
 				})
@@ -475,8 +475,8 @@ func mockCheckpointV12_writeTo(
 			}
 		}
 	}
-	batFn(dataBatch, 5, dataIndexes)
-	batFn(tombstoneBatch, 7, tombstoneIndexes)
+	batFn(dataBatch, 5, &dataIndexes)
+	batFn(tombstoneBatch, 7, &tombstoneIndexes)
 	blks, _, err := writer.Sync(ctx)
 	if err != nil {
 		return
@@ -486,8 +486,8 @@ func mockCheckpointV12_writeTo(
 
 	tnMetaBatch := prepareTNMeta(checkpointNames, objectBlocks, schemas, mp)
 
-	for _, mata := range meta {
-		for i, table := range mata.tables {
+	for _, tableMeta := range meta {
+		for i, table := range tableMeta.tables {
 			if table == nil || table.ClosedInterval.Start == table.ClosedInterval.End {
 				continue
 			}
@@ -498,6 +498,8 @@ func mockCheckpointV12_writeTo(
 				indexes = dataIndexes
 			case 3:
 				indexes = tombstoneIndexes
+			default:
+				panic("invalid table")
 			}
 			for _, blockIdx := range indexes {
 				block := blockIdx.indexes
@@ -629,6 +631,7 @@ func prepareCNMeta(meta map[uint64]*CheckpointMeta, mp *mpool.MPool) (bat *conta
 			vector.AppendBytes(usageDelLoc, meta[uint64(tid)].tables[StorageUsageDel].locations, false, mp)
 		}
 	}
+	formatBatch(bat)
 	return
 }
 
