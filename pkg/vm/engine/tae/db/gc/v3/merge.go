@@ -51,7 +51,11 @@ func MergeCheckpoint(
 	client checkpoint.Runner,
 	pool *mpool.MPool,
 	fs fileservice.FileService,
-) (deleteFiles, newFiles []string, checkpointEntry *checkpoint.CheckpointEntry, ckpData *logtail.CheckpointData, err error) {
+) (deleteFiles,
+	newFiles []string,
+	checkpointEntry *checkpoint.CheckpointEntry,
+	ckpData *logtail.CheckpointData,
+	err error) {
 	if len(ckpEntries) == 0 {
 		return
 	}
@@ -69,43 +73,9 @@ func MergeCheckpoint(
 			zap.String("task", taskName),
 			zap.String("entry", ckpEntry.String()),
 		)
-		err = processCheckpointEntry(ctx, ckpEntry, sid, fs, bf, ckpData)
+		err = processCheckpointEntry(ctx, taskName, ckpEntry, sid, fs, bf, ckpData, deleteSet)
 		if err != nil {
 			return
-		}
-		var locations map[string]objectio.Location
-		var nameMeta string
-		if ckpEntry.GetType() == checkpoint.ET_Compacted {
-			nameMeta = ioutil.EncodeCompactCKPMetadataFullName(
-				ckpEntry.GetStart(), ckpEntry.GetEnd(),
-			)
-		} else {
-			nameMeta = ioutil.EncodeCKPMetadataFullName(
-				ckpEntry.GetStart(), ckpEntry.GetEnd(),
-			)
-		}
-
-		// add checkpoint metafile(ckp/mete_ts-ts.ckp...) to deleteFiles
-		deleteSet[nameMeta] = struct{}{}
-		// add checkpoint idx file to deleteFiles
-		deleteSet[ckpEntry.GetLocation().Name().String()] = struct{}{}
-		locations, err = logtail.LoadCheckpointLocations(
-			ctx, sid, ckpEntry.GetTNLocation(), ckpEntry.GetVersion(), fs,
-		)
-		if err != nil {
-			if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
-				logutil.Warn(
-					"GC-MERGE-CHECKPOINT-FILE-NOTFOUND",
-					zap.String("task", taskName),
-					zap.String("filename", nameMeta),
-				)
-				continue
-			}
-			return
-		}
-
-		for name := range locations {
-			deleteSet[name] = struct{}{}
 		}
 	}
 
@@ -189,32 +159,44 @@ func processTIDs(batch *containers.Batch, offsetMap map[uint64]*tableOffset) {
 
 func processCheckpointEntry(
 	ctx context.Context,
+	taskName string,
 	ckpEntry *checkpoint.CheckpointEntry,
 	sid string,
 	fs fileservice.FileService,
 	bf *bloomfilter.BloomFilter,
 	ckpData *logtail.CheckpointData,
+	deleteSet map[string]struct{},
 ) error {
-	nameMeta := ioutil.EncodeCKPMetadataFullName(
-		ckpEntry.GetStart(), ckpEntry.GetEnd(),
-	)
-	deleteFiles := []string{
-		nameMeta,
-		ckpEntry.GetLocation().Name().String(),
+	var nameMeta string
+	if ckpEntry.GetType() == checkpoint.ET_Compacted {
+		nameMeta = ioutil.EncodeCompactCKPMetadataFullName(
+			ckpEntry.GetStart(), ckpEntry.GetEnd(),
+		)
+	} else {
+		nameMeta = ioutil.EncodeCKPMetadataFullName(
+			ckpEntry.GetStart(), ckpEntry.GetEnd(),
+		)
 	}
-
+	// add checkpoint metafile(ckp/mete_ts-ts.ckp...) to deleteFiles
+	deleteSet[nameMeta] = struct{}{}
+	// add checkpoint idx file to deleteFiles
+	deleteSet[ckpEntry.GetLocation().Name().String()] = struct{}{}
 	locations, err := logtail.LoadCheckpointLocations(
 		ctx, sid, ckpEntry.GetTNLocation(), ckpEntry.GetVersion(), fs,
 	)
 	if err != nil {
 		if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
-			deleteFiles = append(deleteFiles, nameMeta)
+			logutil.Warn(
+				"GC-MERGE-CHECKPOINT-FILE-NOTFOUND",
+				zap.String("task", taskName),
+				zap.String("filename", nameMeta),
+			)
 			return nil
 		}
 		return err
 	}
 	for name := range locations {
-		deleteFiles = append(deleteFiles, name)
+		deleteSet[name] = struct{}{}
 	}
 
 	var data *logtail.CheckpointData
