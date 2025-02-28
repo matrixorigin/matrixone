@@ -68,7 +68,7 @@ func (u *ivfSearchState) call(tf *TableFunction, proc *process.Process) (vm.Call
 
 	u.batch.CleanOnlyData()
 
-	keys, ok := u.keys.([]int64)
+	keys, ok := u.keys.([]any)
 	if !ok {
 		return vm.CancelResult, moerr.NewInternalError(proc.Ctx, "keys is not []int64")
 	}
