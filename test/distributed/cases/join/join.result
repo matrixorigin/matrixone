@@ -266,3 +266,5 @@ a    b
 7    9993
 drop table t1;
 drop table t2;
+select * from mo_catalog.mo_indexes where name = 'idx1' and table_id = (select rel_id from mo_catalog.mo_tables where relname = 't1');
+id    table_id    database_id    name    type    algo    algo_table_type    algo_params    is_visible    hidden    comment    column_name    ordinal_position    options    index_table_name
