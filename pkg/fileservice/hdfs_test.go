@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 )
 
 func TestHDFS(t *testing.T) {
@@ -81,10 +82,11 @@ func TestHDFS(t *testing.T) {
 				fs, err := NewS3FS(
 					context.Background(),
 					ObjectStorageArguments{
-						Name:     name,
-						Endpoint: kase.Addr,
-						User:     kase.User,
-						Bucket:   kase.Path,
+						Name:      name,
+						Endpoint:  kase.Addr,
+						User:      kase.User,
+						Bucket:    kase.Path,
+						KeyPrefix: time.Now().Format("2006-01-02.15:04:05.000000"),
 					},
 					DisabledCacheConfig,
 					nil,
