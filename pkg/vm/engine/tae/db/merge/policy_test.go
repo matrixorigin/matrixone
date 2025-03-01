@@ -532,4 +532,7 @@ func TestToolFunctions(t *testing.T) {
 	objectio.SetObjectStatsObjectName(&objs[2].ObjectStats, objectio.BuildObjectName(segID, 3))
 	require.True(t, IsSameSegment(objs[:3]))
 	require.False(t, IsSameSegment(objs[:4]))
+
+	require.False(t, isAllGreater(objs, 2*common.Const1MBytes))
+	require.True(t, isAllGreater(objs, common.Const1MBytes/2))
 }
