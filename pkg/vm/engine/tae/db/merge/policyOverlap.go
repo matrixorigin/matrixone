@@ -276,11 +276,12 @@ func objectsWithGivenOverlaps(points []endPoint, overlaps int) [][]*catalog.Obje
 			}
 		}
 
-		if len(tmp) > 1 {
-			res = append(res, slices.Collect(maps.Keys(tmp)))
-		}
 		if len(tmp) < overlaps {
 			return res
+		}
+
+		if len(tmp) > 1 {
+			res = append(res, slices.Collect(maps.Keys(tmp)))
 		}
 
 		points = slices.DeleteFunc(points, func(point endPoint) bool {
