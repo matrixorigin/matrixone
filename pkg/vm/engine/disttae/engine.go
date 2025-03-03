@@ -786,8 +786,8 @@ func (e *Engine) PushClient() *PushClient {
 }
 
 // TryToSubscribeTable implements the LogtailEngine interface.
-func (e *Engine) TryToSubscribeTable(ctx context.Context, dbID, tbID uint64) error {
-	return e.PushClient().TryToSubscribeTable(ctx, dbID, tbID)
+func (e *Engine) TryToSubscribeTable(ctx context.Context, dbID, tbID uint64, dbName, tblName string) error {
+	return e.PushClient().TryToSubscribeTable(ctx, dbID, tbID, dbName, tblName)
 }
 
 // UnsubscribeTable implements the LogtailEngine interface.

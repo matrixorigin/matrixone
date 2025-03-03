@@ -446,52 +446,12 @@ func (c *PushClient) toSubscribeTable(
 }
 
 // TryToSubscribeTable subscribe a table and block until subscribe succeed.
-// It's deprecated, please use toSubscribeTable instead.
 func (c *PushClient) TryToSubscribeTable(
 	ctx context.Context,
-	dbId, tblId uint64) (err error) {
-
-	//if table has been subscribed, return quickly.
-	if ok := c.subscribed.isSubscribed(dbId, tblId); ok {
-		return nil
-	}
-
-	state, err := c.toSubIfUnsubscribed(ctx, dbId, tblId)
-	if err != nil {
-		return err
-	}
-
-	// state machine for subscribe table.
-	//Unsubscribed -> Subscribing -> SubRspReceived -> Subscribed-->Unsubscribing-->Unsubscribed
-	for {
-		switch state {
-
-		case Subscribing:
-			//wait for the next possible state: subscribed or unsubscribed or unsubscribing or Subscribing
-			state, err = c.waitUntilSubscribingChanged(ctx, dbId, tblId)
-			if err != nil {
-				return err
-			}
-		case Unsubscribing:
-			//need to wait for unsubscribe succeed for making the subscribe and unsubscribe execute in order,
-			// otherwise the partition state will leak log tails.
-			state, err = c.waitUntilUnsubscribingChanged(ctx, dbId, tblId)
-			if err != nil {
-				return err
-			}
-
-		case Subscribed:
-			return nil
-
-		case Unsubscribed:
-			panic("Impossible Path")
-
-		case SubRspReceived:
-			return nil
-		}
-
-	}
-
+	dbId, tblId uint64,
+	dbName, tblName string) (err error) {
+	_, err = c.toSubscribeTable(ctx, tblId, tblName, dbId, dbName)
+	return
 }
 
 // this method will ignore lock check, subscribe a table and block until subscribe succeed.
