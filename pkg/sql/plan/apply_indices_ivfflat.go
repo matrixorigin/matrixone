@@ -16,7 +16,6 @@ package plan
 
 import (
 	"encoding/json"
-	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -119,15 +118,16 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, projN
 		return nodeID, err
 	}
 
-	nprobe := 5
+	nprobe := int64(5)
 	nprobeif, err := builder.compCtx.ResolveVariable("probe_limit", false, true)
 	if err != nil {
 		return nodeID, err
 	}
 	if nprobeif != nil {
-		nprobe, err = strconv.Atoi(nprobeif.(string))
-		if err != nil {
-			return nodeID, err
+		var ok bool
+		nprobe, ok = (nprobeif.(int64))
+		if !ok {
+			return nodeID, moerr.NewInternalErrorNoCtx("ResolveVariable: probe_limit is not int64")
 		}
 	}
 
