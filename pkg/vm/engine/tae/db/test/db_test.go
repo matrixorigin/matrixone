@@ -11460,7 +11460,9 @@ func TestCheckpointCompatibility(t *testing.T) {
 	id := obj.AsCommonID()
 	err := rel.RangeDelete(id, 0, 0, handle.DT_Normal)
 	assert.NoError(t, err)
-	assert.NoError(t, txn.ApplyCommit())
+	tableID := rel.ID()
+	assert.NoError(t, txn.Commit(ctx))
+
 	tae.ForceFlush(ctx, tae.TxnMgr.Now())
 
 	t.Log(tae.Catalog.SimplePPString(3))
@@ -11513,6 +11515,37 @@ func TestCheckpointCompatibility(t *testing.T) {
 
 	t.Log(catalog2.SimplePPString(3))
 	testutil.IsCatalogEqual(t, tae.Catalog, catalog2)
+
+	reader = logtail.NewCKPReaderWithTableID_V2(
+		logtail.CheckpointVersion12,
+		loc,
+		tableID,
+		common.DebugAllocator,
+		tae.Opts.Fs,
+	)
+	err = reader.ReadMeta(ctx)
+	assert.NoError(t, err)
+
+	objCount := 0
+	err = reader.ConsumeCheckpointWithTableID(
+		ctx,
+		func(
+			ctx context.Context, obj objectio.ObjectEntry, isTombstone bool,
+		) (err error) {
+			objCount++
+			return nil
+		},
+	)
+	assert.Equal(t, 14, objCount)
+
+	reader = logtail.NewCKPReader(
+		logtail.CheckpointVersion12,
+		loc,
+		common.DebugAllocator,
+		tae.Opts.Fs,
+	)
+	_, err = logtail.GetCheckpointMetaInfo(ctx, tableID, reader)
+	assert.NoError(t, err)
 }
 
 func Test_OpenWithError(t *testing.T) {
