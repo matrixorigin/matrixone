@@ -341,7 +341,7 @@ func (m *CheckpointMeta) String() string {
 }
 
 type CheckpointData struct {
-	bats      [MaxIDX]*containers.Batch
+	bats [MaxIDX]*containers.Batch
 }
 
 func LoadBlkColumnsByMeta(

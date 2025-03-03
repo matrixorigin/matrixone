@@ -1226,30 +1226,6 @@ func parseStorageUsageTrace(expr string, ac *cmd_util.AccessInfo, db *db.DB) (
 	return
 }
 
-func checkUsageData(data logtail.UsageData, c *storageUsageHistoryArg) bool {
-	if c.detail.accId == math.MaxUint32 {
-		return true
-	}
-
-	if c.detail.accId != data.AccId {
-		return false
-	}
-
-	if c.detail.dbI == math.MaxUint64 {
-		return true
-	}
-
-	if c.detail.dbI != data.DbId {
-		return false
-	}
-
-	if c.detail.tblId == math.MaxUint64 {
-		return true
-	}
-
-	return c.detail.tblId == data.TblId
-}
-
 func storageUsageDetails(c *storageUsageHistoryArg) (err error) {
 	// ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second*5, moerr.CauseStorageUsageDetails)
 	// defer cancel()

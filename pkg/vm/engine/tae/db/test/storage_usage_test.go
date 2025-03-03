@@ -26,10 +26,7 @@ import (
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 
 	// "github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/stretchr/testify/require"
 )
@@ -193,19 +190,6 @@ func mockDeletesAndInserts(
 	}
 
 	return deletes, segDeletes, segInserts
-}
-
-func appendUsageToBatch(bat *containers.Batch, usage logtail.UsageData) {
-	accVec := bat.GetVectorByName(pkgcatalog.SystemColAttr_AccID).GetDownstreamVector()
-	dbVec := bat.GetVectorByName(catalog.SnapshotAttr_DBID).GetDownstreamVector()
-	tblVec := bat.GetVectorByName(catalog.SnapshotAttr_TID).GetDownstreamVector()
-	sizeVec := bat.GetVectorByName(logtail.CheckpointMetaAttr_ObjectSize).GetDownstreamVector()
-
-	vector.AppendFixed(accVec, usage.AccId, false, common.DebugAllocator)
-	vector.AppendFixed(dbVec, usage.DbId, false, common.DebugAllocator)
-	vector.AppendFixed(tblVec, usage.TblId, false, common.DebugAllocator)
-	vector.AppendFixed(sizeVec, usage.Size, false, common.DebugAllocator)
-
 }
 
 func Test_UsageDataMerge(t *testing.T) {
