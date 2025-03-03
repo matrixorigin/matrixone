@@ -11536,6 +11536,7 @@ func TestCheckpointCompatibility(t *testing.T) {
 			return nil
 		},
 	)
+	assert.NoError(t, err)
 	assert.Equal(t, 14, objCount)
 
 	reader = logtail.NewCKPReader(
@@ -11544,6 +11545,8 @@ func TestCheckpointCompatibility(t *testing.T) {
 		common.DebugAllocator,
 		tae.Opts.Fs,
 	)
+	err = reader.ReadMeta(ctx)
+	assert.NoError(t, err)
 	_, err = logtail.GetCheckpointMetaInfo(ctx, tableID, reader)
 	assert.NoError(t, err)
 }
