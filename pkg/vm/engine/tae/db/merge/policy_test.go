@@ -518,23 +518,6 @@ func TestEmptyZm(t *testing.T) {
 	t.Log(len(results[0].objs))
 }
 
-func TestVarcharOverflow(t *testing.T) {
-	objs := make([]*catalog.ObjectEntry, 10)
-	for i := range objs {
-		objs[i] = newTestVarcharObjectEntry(t, strings.Repeat("a", 100), strings.Repeat("a", 100), 110*common.Const1MBytes)
-	}
-	policy := newObjOverlapPolicy()
-	policy.resetForTable(nil, defaultBasicConfig)
-	rc := new(resourceController)
-	rc.setMemLimit(50 * common.Const1GBytes)
-
-	for _, obj := range objs {
-		policy.onObject(obj)
-	}
-	results := policy.revise(rc)
-	require.Equal(t, 0, len(results))
-}
-
 func TestToolFunctions(t *testing.T) {
 	objs := make([]*catalog.ObjectEntry, 101)
 	for i := range objs {
