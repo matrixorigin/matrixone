@@ -192,6 +192,7 @@ func init() {
 		"float4":                     UNUSED,
 		"float8":                     UNUSED,
 		"for":                        FOR,
+		"of":                         OF,
 		"force":                      FORCE,
 		"foreign":                    FOREIGN,
 		"format":                     FORMAT,

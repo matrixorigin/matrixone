@@ -91,6 +91,44 @@ func hasHundredSmallObjs(objs []*catalog.ObjectEntry, small uint32) bool {
 	return false
 }
 
+func isAllGreater(objs []*catalog.ObjectEntry, size uint32) bool {
+	for _, obj := range objs {
+		if obj.OriginSize() < size {
+			return false
+		}
+	}
+	return true
+}
+
+func IsSameSegment(objs []*catalog.ObjectEntry) bool {
+	if len(objs) < 2 {
+		return true
+	}
+	segId := objs[0].ObjectName().SegmentId()
+	for _, obj := range objs {
+		if !obj.ObjectName().SegmentId().Eq(segId) {
+			return false
+		}
+	}
+	return true
+}
+
+func hasHundredSmallObjs(objs []*catalog.ObjectEntry, small uint32) bool {
+	if len(objs) < 100 {
+		return false
+	}
+	cnt := 0
+	for _, obj := range objs {
+		if obj.OriginSize() < small {
+			cnt++
+		}
+		if cnt > 100 {
+			return true
+		}
+	}
+	return false
+}
+
 func (m *objOverlapPolicy) revise(rc *resourceController) []reviseResult {
 	if rc.cpuPercent > 80 {
 		return nil
@@ -193,6 +231,11 @@ func (m *objOverlapPolicy) revise(rc *resourceController) []reviseResult {
 		}
 
 		if len(reviseResults[i].objs) < 2 {
+			continue
+		}
+
+		if original-len(reviseResults[i].objs) > 0 && isAllGreater(reviseResults[i].objs, m.config.ObjectMinOsize) {
+			// avoid zm infinited loop
 			continue
 		}
 

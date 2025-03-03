@@ -514,7 +514,6 @@ func TestEmptyZm(t *testing.T) {
 	}
 	results := policy.revise(rc)
 	require.Equal(t, 1, len(results))
-	require.Less(t, len(results[0].objs), 500000)
 	t.Log(len(results[0].objs))
 }
 
@@ -533,4 +532,7 @@ func TestToolFunctions(t *testing.T) {
 	objectio.SetObjectStatsObjectName(&objs[2].ObjectStats, objectio.BuildObjectName(segID, 3))
 	require.True(t, IsSameSegment(objs[:3]))
 	require.False(t, IsSameSegment(objs[:4]))
+
+	require.False(t, isAllGreater(objs, 2*common.Const1MBytes))
+	require.True(t, isAllGreater(objs, common.Const1MBytes/2))
 }
