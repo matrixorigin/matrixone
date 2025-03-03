@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"os"
 	"sync"
-	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -55,9 +54,6 @@ type IvfflatSearch[T types.RealNumbers] struct {
 	Idxcfg        vectorindex.IndexConfig
 	Tblcfg        vectorindex.IndexTableConfig
 	Index         *IvfflatSearchIndex[T]
-	Concurrency   atomic.Int64
-	Mutex         sync.Mutex
-	Cond          *sync.Cond
 	ThreadsSearch int64
 }
 
@@ -264,30 +260,13 @@ func (idx *IvfflatSearchIndex[T]) Search(proc *process.Process, idxcfg vectorind
 }
 
 func (idx *IvfflatSearchIndex[T]) Destroy() {
+	idx.Centroids = nil
 }
 
 func NewIvfflatSearch[T types.RealNumbers](idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) *IvfflatSearch[T] {
 	nthread := vectorindex.GetConcurrency(tblcfg.ThreadsSearch)
 	s := &IvfflatSearch[T]{Idxcfg: idxcfg, Tblcfg: tblcfg, ThreadsSearch: nthread}
-	s.Cond = sync.NewCond(&s.Mutex)
 	return s
-}
-
-// acquire lock from a usearch threads
-func (s *IvfflatSearch[T]) lock() {
-	// check max threads
-	s.Cond.L.Lock()
-	defer s.Cond.L.Unlock()
-	for s.Concurrency.Load() >= s.ThreadsSearch {
-		s.Cond.Wait()
-	}
-	s.Concurrency.Add(1)
-}
-
-// release a lock from a usearch threads
-func (s *IvfflatSearch[T]) unlock() {
-	s.Concurrency.Add(-1)
-	s.Cond.Signal()
 }
 
 // Search the hnsw index (implement VectorIndexSearch.Search)
