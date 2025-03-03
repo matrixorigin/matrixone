@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -66,6 +67,8 @@ func (idx *IvfflatSearchIndex[T]) LoadIndex(proc *process.Process, idxcfg vector
 		tblcfg.DbName, tblcfg.IndexTable,
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
 		idxcfg.Ivfflat.Version)
+
+	os.Stderr.WriteString(fmt.Sprintf("Load Index SQL = %s\n", sql))
 	res, err := runSql(proc, sql)
 	if err != nil {
 		return err
@@ -83,6 +86,7 @@ func (idx *IvfflatSearchIndex[T]) LoadIndex(proc *process.Process, idxcfg vector
 		for r := range bat.RowCount() {
 			id := vector.GetFixedAtWithTypeCheck[int64](idVec, r)
 			if faVec.IsNull(uint64(r)) {
+				os.Stderr.WriteString("Centroid is NULL\n")
 				continue
 			}
 			vec := types.BytesToArray[T](faVec.GetBytesAt(r))
@@ -90,6 +94,7 @@ func (idx *IvfflatSearchIndex[T]) LoadIndex(proc *process.Process, idxcfg vector
 		}
 	}
 
+	os.Stderr.WriteString(fmt.Sprintf("%d centroids loaded... lists = %d, centroid %v\n", len(idx.Centroids), idxcfg.Ivfflat.Lists, idx.Centroids))
 	return nil
 }
 
@@ -128,7 +133,8 @@ func (idx *IvfflatSearchIndex[T]) searchEntries(proc *process.Process, query *ma
 func (idx *IvfflatSearchIndex[T]) findCentroids(proc *process.Process, query *mat.VecDense, distfn kmeans.DistanceFunction, idxcfg vectorindex.IndexConfig, probe uint, nthread int64) ([]int64, error) {
 
 	if len(idx.Centroids) == 0 {
-		return []int64{0}, nil
+		// empty index has id = 1
+		return []int64{1}, nil
 	}
 
 	nworker := int(nthread)
@@ -166,6 +172,7 @@ func (idx *IvfflatSearchIndex[T]) findCentroids(proc *process.Process, query *ma
 		res = append(res, sr.Id)
 	}
 
+	os.Stderr.WriteString(fmt.Sprintf("probe %d... return centroid ids %v\n", probe, res))
 	return res, nil
 }
 
@@ -182,17 +189,17 @@ func (idx *IvfflatSearchIndex[T]) Search(proc *process.Process, idxcfg vectorind
 
 	qry := moarray.ToGonumVector[T](query)
 
-	var instr string
 	centroids_ids, err := idx.findCentroids(proc, qry, distfn, idxcfg, rt.Probe, nthread)
 	if err != nil {
 		return nil, nil, err
 	}
 
+	var instr string
 	for i, c := range centroids_ids {
 		if i > 0 {
 			instr += ","
 		}
-		instr += string(c)
+		instr += strconv.FormatInt(c, 10)
 	}
 
 	sql := fmt.Sprintf("SELECT `%s`, `%s` FROM `%s`.`%s` WHERE `%s` = %d AND `%s` IN (%s)",
