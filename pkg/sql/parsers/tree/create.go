@@ -996,15 +996,17 @@ func (node *CreateTable) Format(ctx *FmtCtx) {
 		}
 	} else {
 
-		ctx.WriteString(" (")
-		for i, def := range node.Defs {
-			if i != 0 {
-				ctx.WriteString(",")
-				ctx.WriteByte(' ')
+		if !node.IsAsSelect {
+			ctx.WriteString(" (")
+			for i, def := range node.Defs {
+				if i != 0 {
+					ctx.WriteString(",")
+					ctx.WriteByte(' ')
+				}
+				def.Format(ctx)
 			}
-			def.Format(ctx)
+			ctx.WriteByte(')')
 		}
-		ctx.WriteByte(')')
 	}
 
 	if node.IsAsSelect {
