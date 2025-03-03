@@ -215,7 +215,10 @@ func (idx *IvfflatSearchIndex[T]) Search(proc *process.Process, idxcfg vectorind
 	go func() {
 		_, err := runSql_streaming(proc, sql, stream_chan, error_chan)
 		if err != nil {
-			error_chan <- err
+			// send multiple errors to stop the nworker threads
+			for i := int64(0); i < nthread; i++ {
+				error_chan <- err
+			}
 			return
 		}
 	}()
