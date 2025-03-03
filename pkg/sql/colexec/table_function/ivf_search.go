@@ -77,7 +77,7 @@ func (u *ivfSearchState) call(tf *TableFunction, proc *process.Process) (vm.Call
 
 	keys, ok := u.keys.([]any)
 	if !ok {
-		return vm.CancelResult, moerr.NewInternalError(proc.Ctx, "keys is not []int64")
+		return vm.CancelResult, moerr.NewInternalError(proc.Ctx, "keys is not []any")
 	}
 
 	nkeys := len(keys)

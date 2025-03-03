@@ -38,7 +38,7 @@ import (
 var runSql = sqlexec.RunSql
 var runSql_streaming = sqlexec.RunStreamingSql
 
-type Centroid[T types.RealNumbers] struct {
+type Centroid struct {
 	Id  int64
 	Vec *mat.VecDense
 }
@@ -46,7 +46,7 @@ type Centroid[T types.RealNumbers] struct {
 // Ivf search index struct to hold the usearch index
 type IvfflatSearchIndex[T types.RealNumbers] struct {
 	Version   int64
-	Centroids []Centroid[T]
+	Centroids []Centroid
 }
 
 // This is the Ivf search implementation that implement VectorIndexSearchIf interface
@@ -76,7 +76,7 @@ func (idx *IvfflatSearchIndex[T]) LoadIndex(proc *process.Process, idxcfg vector
 		return nil
 	}
 
-	idx.Centroids = make([]Centroid[T], 0, idxcfg.Ivfflat.Lists)
+	idx.Centroids = make([]Centroid, 0, idxcfg.Ivfflat.Lists)
 	for _, bat := range res.Batches {
 		idVec := bat.Vecs[0]
 		faVec := bat.Vecs[1]
@@ -86,7 +86,7 @@ func (idx *IvfflatSearchIndex[T]) LoadIndex(proc *process.Process, idxcfg vector
 				continue
 			}
 			vec := types.BytesToArray[T](faVec.GetBytesAt(r))
-			idx.Centroids = append(idx.Centroids, Centroid[T]{Id: id, Vec: moarray.ToGonumVector[T](vec)})
+			idx.Centroids = append(idx.Centroids, Centroid{Id: id, Vec: moarray.ToGonumVector[T](vec)})
 		}
 	}
 
