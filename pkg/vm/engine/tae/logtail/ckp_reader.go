@@ -665,23 +665,23 @@ func consumeCheckpointWithTableID(
 ) (err error) {
 	if len(dataRanges) != 0 {
 		iter := ckputil.NewObjectIter(ctx, dataRanges, mp, fs)
+		defer iter.Close()
 		for ok, err := iter.Next(); ok && err == nil; ok, err = iter.Next() {
 			entry := iter.Entry()
 			if err := forEachObject(ctx, entry, false); err != nil {
 				return err
 			}
 		}
-		iter.Close()
 	}
 	if tombstoneRanges != nil {
 		iter := ckputil.NewObjectIter(ctx, tombstoneRanges, mp, fs)
+		defer iter.Close()
 		for ok, err := iter.Next(); ok && err == nil; ok, err = iter.Next() {
 			entry := iter.Entry()
 			if err := forEachObject(ctx, entry, true); err != nil {
 				return err
 			}
 		}
-		iter.Close()
 	}
 	return
 }
