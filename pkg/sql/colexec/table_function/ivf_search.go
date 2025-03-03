@@ -49,8 +49,15 @@ type ivfSearchState struct {
 // stub function
 var newIvfAlgo = newIvfAlgoFn
 
-func newIvfAlgoFn(idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) veccache.VectorIndexSearchIf {
-	return ivfflat.NewIvfflatSearch(idxcfg, tblcfg)
+func newIvfAlgoFn(idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) (veccache.VectorIndexSearchIf, error) {
+	switch idxcfg.Ivfflat.VectorType {
+	case int32(types.T_array_float32):
+		return ivfflat.NewIvfflatSearch[float32](idxcfg, tblcfg), nil
+	case int32(types.T_array_float64):
+		return ivfflat.NewIvfflatSearch[float64](idxcfg, tblcfg), nil
+	default:
+		return nil, moerr.NewInternalErrorNoCtx("newIvfAlgoFn: invalid vector type")
+	}
 }
 
 func (u *ivfSearchState) end(tf *TableFunction, proc *process.Process) error {
@@ -204,7 +211,11 @@ func (u *ivfSearchState) start(tf *TableFunction, proc *process.Process, nthRow 
 
 	// vector cache
 	veccache.Cache.Once()
-	algo := newIvfAlgo(u.idxcfg, u.tblcfg)
+	algo, err := newIvfAlgo(u.idxcfg, u.tblcfg)
+	if err != nil {
+		return err
+	}
+
 	key := fmt.Sprintf("%s:%d", u.tblcfg.IndexTable, u.version)
 
 	faVec := tf.ctr.argVecs[1]
