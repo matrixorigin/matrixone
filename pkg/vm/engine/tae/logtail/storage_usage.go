@@ -21,7 +21,6 @@ import (
 	"math"
 	"math/rand"
 	"regexp"
-	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -749,9 +748,6 @@ func getStorageUsageVectorCols(vecs []*vector.Vector) (
 
 const UsageBatMetaTableId uint64 = StorageUsageMagic
 
-var lastInsUsage UsageData = zeroUsageData
-var lastDelUsage UsageData = zeroUsageData
-
 // 0: insert, 1: delete
 var summaryLog [2][]UsageData
 
@@ -781,51 +777,6 @@ func Objects2Usages(objs []*catalog.ObjectEntry, isGlobal bool) (usages []UsageD
 	}
 
 	return
-}
-
-func doSummary(ckp string, fields ...zap.Field) {
-	defer func() {
-		summaryLog[0] = summaryLog[0][:0]
-		summaryLog[1] = summaryLog[1][:0]
-
-		lastInsUsage = zeroUsageData
-		lastDelUsage = zeroUsageData
-	}()
-
-	sort.Slice(summaryLog[0], func(i, j int) bool { return usageLess(summaryLog[0][i], summaryLog[0][j]) })
-	sort.Slice(summaryLog[1], func(i, j int) bool { return usageLess(summaryLog[1][i], summaryLog[1][j]) })
-
-	var buf bytes.Buffer
-	buf.WriteString(fmt.Sprintf("\nCKP[%s]\t%s\n", ckp, time.Now().UTC().String()))
-
-	//format := "\t%19d\t%19d\t%19d\t%19.6fmb"
-	accumulated := int64(0)
-
-	for idx := range summaryLog[0] {
-		//buf.WriteString(fmt.Sprintf(format+" -> i\n",
-		//	summaryLog[0][idx].AccId,
-		//	summaryLog[0][idx].DbId,
-		//	summaryLog[0][idx].TblId,
-		//	float64(summaryLog[0][idx].Size)/(1024*1024)))
-
-		accumulated += int64(summaryLog[0][idx].Size)
-	}
-
-	for idx := range summaryLog[1] {
-		//buf.WriteString(fmt.Sprintf(format+" -> d\n",
-		//	summaryLog[1][idx].AccId,
-		//	summaryLog[1][idx].DbId,
-		//	summaryLog[1][idx].TblId,
-		//	float64(summaryLog[1][idx].Size)/(1024*1024)))
-		//
-		accumulated -= int64(summaryLog[1][idx].Size)
-	}
-
-	buf.WriteString(fmt.Sprintf("accumulated size in this ckp: %19.6fmb, ",
-		float64(accumulated)/(1024*1024)))
-
-	fields = append(fields, zap.String("storage usage summary when ckp", buf.String()))
-	logutil.Info(fmt.Sprintf("storage usage [%s]", ckp), fields...)
 }
 
 func FillUsageBatOfCompacted(

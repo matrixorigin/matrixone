@@ -74,7 +74,6 @@ type checkpointDataItem struct {
 }
 
 var checkpointDataSchemas_V12 [MaxIDX]*catalog.Schema
-var checkpointDataSchemas_Curr [MaxIDX]*catalog.Schema
 
 var checkpointDataReferVersions map[uint32][MaxIDX]*checkpointDataItem
 
@@ -91,7 +90,6 @@ func init() {
 
 	checkpointDataReferVersions = make(map[uint32][MaxIDX]*checkpointDataItem)
 	registerCheckpointDataReferVersion(CheckpointVersion12, checkpointDataSchemas_V12[:])
-	checkpointDataSchemas_Curr = checkpointDataSchemas_V12
 }
 
 func IDXString(idx uint16) string {
@@ -343,11 +341,7 @@ func (m *CheckpointMeta) String() string {
 }
 
 type CheckpointData struct {
-	sid       string
-	meta      map[uint64]*CheckpointMeta
-	locations map[string]objectio.Location
 	bats      [MaxIDX]*containers.Batch
-	allocator *mpool.MPool
 }
 
 func LoadBlkColumnsByMeta(
