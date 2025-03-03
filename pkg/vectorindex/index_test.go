@@ -128,7 +128,7 @@ func TestSafeHeapAny(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for i := 0; i < 10; i++ {
-				h.Push(&SearchAnyResult{any(int64(usearch.Key(j*10 + i))), float64(j*10 + i)})
+				h.Push(&SearchResultAnyKey{any(int64(usearch.Key(j*10 + i))), float64(j*10 + i)})
 			}
 		}()
 	}
@@ -139,7 +139,7 @@ func TestSafeHeapAny(t *testing.T) {
 	fmt.Printf("Len = %d\n", n)
 	for i := 0; i < n; i++ {
 		srif := h.Pop()
-		sr := srif.(*SearchAnyResult)
+		sr := srif.(*SearchResultAnyKey)
 		fmt.Printf("id = %d, score = %f\n", sr.Id, sr.Distance)
 	}
 }

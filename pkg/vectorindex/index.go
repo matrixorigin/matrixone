@@ -70,12 +70,12 @@ func (s *SearchResult) GetDistance() float64 {
 	return s.Distance
 }
 
-type SearchAnyResult struct {
+type SearchResultAnyKey struct {
 	Id       any
 	Distance float64
 }
 
-func (s *SearchAnyResult) GetDistance() float64 {
+func (s *SearchResultAnyKey) GetDistance() float64 {
 	return s.Distance
 }
 
