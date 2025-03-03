@@ -40,7 +40,7 @@ type ivfSearchState struct {
 	offset    int
 	limit     uint64
 	keys      any
-	distances []float32
+	distances []float64
 	version   int
 	// holding one call batch, tokenizedState owns it.
 	batch *batch.Batch
@@ -78,7 +78,7 @@ func (u *ivfSearchState) call(tf *TableFunction, proc *process.Process) (vm.Call
 
 	for i := u.offset; i < nkeys && n < 8192; i++ {
 		vector.AppendAny(u.batch.Vecs[0], keys[i], false, proc.Mp())
-		vector.AppendFixed[float32](u.batch.Vecs[1], u.distances[i], false, proc.Mp())
+		vector.AppendFixed[float64](u.batch.Vecs[1], u.distances[i], false, proc.Mp())
 		n++
 	}
 

@@ -60,7 +60,7 @@ func CheckSum(path string) (string, error) {
 // Priority Queue/Heap structure for getting N-Best results from multiple mini-indexes
 type SearchResult struct {
 	id       int64
-	distance float32
+	distance float64
 }
 
 // Non thread-safe heap struct
@@ -109,14 +109,14 @@ func (h *SearchResultSafeHeap) Len() int {
 	return h.resheap.Len()
 }
 
-func (h *SearchResultSafeHeap) Push(id int64, distance float32) {
+func (h *SearchResultSafeHeap) Push(id int64, distance float64) {
 	h.mutex.Lock()
 	defer h.mutex.Unlock()
 
 	heap.Push(&h.resheap, &SearchResult{id, distance})
 }
 
-func (h *SearchResultSafeHeap) Pop() (int64, float32) {
+func (h *SearchResultSafeHeap) Pop() (int64, float64) {
 	h.mutex.Lock()
 	defer h.mutex.Unlock()
 	x := heap.Pop(&h.resheap).(*SearchResult)

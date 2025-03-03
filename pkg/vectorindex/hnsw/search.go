@@ -200,7 +200,7 @@ func (s *HnswSearch) unlock() {
 }
 
 // Search the hnsw index (implement VectorIndexSearch.Search)
-func (s *HnswSearch) Search(anyquery any, rt vectorindex.RuntimeConfig) (keys any, distances []float32, err error) {
+func (s *HnswSearch) Search(anyquery any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
 
 	query, ok := anyquery.([]float32)
 	if !ok {
@@ -210,7 +210,7 @@ func (s *HnswSearch) Search(anyquery any, rt vectorindex.RuntimeConfig) (keys an
 	limit := rt.Limit
 
 	if len(s.Indexes) == 0 {
-		return []int64{}, []float32{}, nil
+		return []int64{}, []float64{}, nil
 	}
 
 	s.lock()
@@ -241,7 +241,7 @@ func (s *HnswSearch) Search(anyquery any, rt vectorindex.RuntimeConfig) (keys an
 					}
 
 					for k := range keys {
-						heap.Push(int64(keys[k]), distances[k])
+						heap.Push(int64(keys[k]), float64(distances[k]))
 					}
 				}
 			}
@@ -255,7 +255,7 @@ func (s *HnswSearch) Search(anyquery any, rt vectorindex.RuntimeConfig) (keys an
 	}
 
 	reskeys := make([]int64, 0, limit)
-	resdistances := make([]float32, 0, limit)
+	resdistances := make([]float64, 0, limit)
 
 	n := heap.Len()
 	for i := 0; i < int(limit) && i < n; i++ {

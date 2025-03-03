@@ -57,7 +57,7 @@ var (
 
 // Various vector index algorithm wants to share with VectorIndexCache need to implement VectorIndexSearchIf interface (see HnswSearch)
 type VectorIndexSearchIf interface {
-	Search(query any, rt vectorindex.RuntimeConfig) (keys any, distances []float32, err error)
+	Search(query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error)
 	Load(*process.Process) error
 	UpdateConfig(VectorIndexSearchIf) error
 	Destroy()
@@ -114,7 +114,7 @@ func (s *VectorIndexSearch) extend(update bool) {
 	s.ExpireAt.Store(ts)
 }
 
-func (s *VectorIndexSearch) Search(newalgo VectorIndexSearchIf, query any, rt vectorindex.RuntimeConfig) (keys any, distances []float32, err error) {
+func (s *VectorIndexSearch) Search(newalgo VectorIndexSearchIf, query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
 	s.Mutex.RLock()
 
 	for s.Status.Load() == 0 {
@@ -243,7 +243,7 @@ func (c *VectorIndexCache) Destroy() {
 
 // Get index from cache and return VectorIndexSearchIf interface
 func (c *VectorIndexCache) Search(proc *process.Process, key string, newalgo VectorIndexSearchIf,
-	query any, rt vectorindex.RuntimeConfig) (keys any, distances []float32, err error) {
+	query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
 	value, loaded := c.IndexMap.LoadOrStore(key, &VectorIndexSearch{Algo: newalgo})
 	algo := value.(*VectorIndexSearch)
 	if !loaded {

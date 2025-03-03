@@ -89,7 +89,7 @@ func TestHnsw(t *testing.T) {
 
 				require.Equal(t, len(keys), 4)
 				require.Equal(t, keys[0], int64(0))
-				require.Equal(t, distances[0], float32(0))
+				require.Equal(t, distances[0], float64(0))
 				//os.Stderr.WriteString(fmt.Sprintf("keys %v distance %v\n", keys, distances))
 			}
 		}()

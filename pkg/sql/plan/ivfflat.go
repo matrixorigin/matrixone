@@ -48,9 +48,9 @@ var (
 		{
 			Name: "score",
 			Typ: plan.Type{
-				Id:          int32(types.T_float32),
+				Id:          int32(types.T_float64),
 				NotNullable: false,
-				Width:       4,
+				Width:       8,
 			},
 		},
 	}

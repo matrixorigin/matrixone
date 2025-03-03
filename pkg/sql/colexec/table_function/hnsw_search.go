@@ -41,7 +41,7 @@ type hnswSearchState struct {
 	offset    int
 	limit     uint64
 	keys      []int64
-	distances []float32
+	distances []float64
 	// holding one call batch, tokenizedState owns it.
 	batch *batch.Batch
 }
@@ -73,7 +73,7 @@ func (u *hnswSearchState) call(tf *TableFunction, proc *process.Process) (vm.Cal
 
 	for i := u.offset; i < nkeys && n < 8192; i++ {
 		vector.AppendFixed[int64](u.batch.Vecs[0], u.keys[i], false, proc.Mp())
-		vector.AppendFixed[float32](u.batch.Vecs[1], u.distances[i], false, proc.Mp())
+		vector.AppendFixed[float64](u.batch.Vecs[1], u.distances[i], false, proc.Mp())
 		n++
 	}
 

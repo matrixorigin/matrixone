@@ -35,9 +35,9 @@ type MockSearch struct {
 	Tblcfg vectorindex.IndexTableConfig
 }
 
-func (m *MockSearch) Search(query any, rt vectorindex.RuntimeConfig) (keys any, distances []float32, err error) {
+func (m *MockSearch) Search(query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
 	//time.Sleep(2 * time.Millisecond)
-	return []int64{1}, []float32{2.0}, nil
+	return []int64{1}, []float64{2.0}, nil
 }
 
 func (m *MockSearch) Destroy() {
@@ -57,9 +57,9 @@ type MockAnySearch struct {
 	Tblcfg vectorindex.IndexTableConfig
 }
 
-func (m *MockAnySearch) Search(query any, rt vectorindex.RuntimeConfig) (keys any, distances []float32, err error) {
+func (m *MockAnySearch) Search(query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
 	//time.Sleep(2 * time.Millisecond)
-	return []any{any(1)}, []float32{2.0}, nil
+	return []any{any(1)}, []float64{2.0}, nil
 }
 
 func (m *MockAnySearch) Destroy() {
@@ -80,8 +80,8 @@ type MockSearchLoadError struct {
 	Tblcfg vectorindex.IndexTableConfig
 }
 
-func (m *MockSearchLoadError) Search(query any, rt vectorindex.RuntimeConfig) (keys any, distances []float32, err error) {
-	return []int64{1}, []float32{2.0}, nil
+func (m *MockSearchLoadError) Search(query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
+	return []int64{1}, []float64{2.0}, nil
 }
 
 func (m *MockSearchLoadError) Destroy() {
@@ -102,7 +102,7 @@ type MockSearchSearchError struct {
 	Tblcfg vectorindex.IndexTableConfig
 }
 
-func (m *MockSearchSearchError) Search(query any, rt vectorindex.RuntimeConfig) (keys any, distances []float32, err error) {
+func (m *MockSearchSearchError) Search(query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
 	return nil, nil, moerr.NewInternalErrorNoCtx("Search error")
 }
 
@@ -134,7 +134,7 @@ func TestCacheServe(t *testing.T) {
 		require.Equal(t, len(keys), 1)
 		require.Equal(t, keys[0], int64(1))
 	}
-	require.Equal(t, distances[0], float32(2.0))
+	require.Equal(t, distances[0], float64(2.0))
 
 	Cache.Remove(tblcfg.IndexTable)
 
@@ -157,7 +157,7 @@ func TestCacheAny(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, len(keys), 1)
 	require.Equal(t, keys[0], any(1))
-	require.Equal(t, distances[0], float32(2.0))
+	require.Equal(t, distances[0], float64(2.0))
 
 	Cache.Remove(tblcfg.IndexTable)
 
@@ -191,7 +191,7 @@ func TestCache(t *testing.T) {
 		require.Equal(t, len(keys1), 1)
 		require.Equal(t, keys1[0], int64(1))
 	}
-	require.Equal(t, distances[0], float32(2.0))
+	require.Equal(t, distances[0], float64(2.0))
 
 	os.Stderr.WriteString("cache sleep\n")
 	time.Sleep(8 * time.Second)
@@ -206,7 +206,7 @@ func TestCache(t *testing.T) {
 		require.Equal(t, len(keys2), 1)
 		require.Equal(t, keys2[0], int64(1))
 	}
-	require.Equal(t, distances[0], float32(2.0))
+	require.Equal(t, distances[0], float64(2.0))
 
 	os.Stderr.WriteString("cache.Destroy\n")
 	Cache.Destroy()
@@ -249,7 +249,7 @@ func TestCacheConcurrent(t *testing.T) {
 					require.Equal(t, len(keys), 1)
 					require.Equal(t, keys[0], int64(1))
 				}
-				require.Equal(t, distances[0], float32(2.0))
+				require.Equal(t, distances[0], float64(2.0))
 			}
 		}()
 	}
