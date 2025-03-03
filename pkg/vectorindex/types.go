@@ -49,6 +49,7 @@ type IndexTableConfig struct {
 	DataSize     int64  `json:"datasize"`
 	Nprobe       uint   `json:"nprobe"`
 	PKeyType     int32  `json:"pktype"`
+	Version      int64  `json:"version"`
 }
 
 // HNSW specified parameters

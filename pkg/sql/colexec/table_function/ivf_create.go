@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/kmeans"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/kmeans/elkans"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
@@ -95,32 +96,7 @@ func (u *ivfCreateState) end(tf *TableFunction, proc *process.Process) error {
 		return nil
 	}
 
-	version, err := func() (int64, error) {
-		sql := fmt.Sprintf("SELECT CAST(`%s` AS BIGINT) FROM `%s`.`%s` WHERE `%s` = 'version'",
-			catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
-			u.tblcfg.DbName,
-			u.tblcfg.MetadataTable,
-			catalog.SystemSI_IVFFLAT_TblCol_Metadata_key)
-
-		res, err := ivf_runSql(proc, sql)
-		if err != nil {
-			return 0, err
-		}
-		defer res.Close()
-
-		if len(res.Batches) == 0 {
-			return 0, moerr.NewInternalError(proc.Ctx, "version not found")
-		}
-
-		version := int64(0)
-		bat := res.Batches[0]
-		if bat.RowCount() == 1 {
-			version = vector.GetFixedAtWithTypeCheck[int64](bat.Vecs[0], 0)
-			//logutil.Infof("NROW = %d", nrow)
-		}
-
-		return version, nil
-	}()
+	version, err := ivfflat.GetVersion(proc, u.tblcfg)
 	if err != nil {
 		return err
 	}
