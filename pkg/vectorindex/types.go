@@ -74,6 +74,7 @@ type IvfflatIndexConfig struct {
 	Dimensions uint
 	Normalize  bool
 	Version    int64
+	VectorType int32
 }
 
 // This is generalized index config and able to share between various algorithm types.  Simply add your new configuration such as usearch.IndexConfig

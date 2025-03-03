@@ -169,8 +169,13 @@ func (u *ivfSearchState) start(tf *TableFunction, proc *process.Process, nthRow 
 		// f32vec
 		faVec := tf.ctr.argVecs[1]
 		if faVec.GetType().Oid != types.T_array_float32 && faVec.GetType().Oid != types.T_array_float64 {
-			return moerr.NewInvalidInput(proc.Ctx, "Third argument (vector must be a vecf32 or vecf64 type")
+			return moerr.NewInvalidInput(proc.Ctx, "Second argument (vector must be a vecf32 or vecf64 type")
 		}
+
+		if int32(faVec.GetType().Oid) != u.tblcfg.KeyPartType {
+			return moerr.NewInvalidInput(proc.Ctx, "Second argument (vector type not match with source part type")
+		}
+
 		dimension := faVec.GetType().Width
 
 		// dimension
@@ -182,7 +187,8 @@ func (u *ivfSearchState) start(tf *TableFunction, proc *process.Process, nthRow 
 		if err != nil {
 			return err
 		}
-		u.idxcfg.Ivfflat.Version = version
+		u.idxcfg.Ivfflat.Version = version                 // version from meta table
+		u.idxcfg.Ivfflat.VectorType = u.tblcfg.KeyPartType // array float32 or array float64
 
 		u.batch = tf.createResultBatch()
 		u.inited = true
