@@ -17,7 +17,6 @@ package ivfflat
 import (
 	"errors"
 	"fmt"
-	"os"
 	"strconv"
 	"sync"
 
@@ -68,7 +67,7 @@ func (idx *IvfflatSearchIndex[T]) LoadIndex(proc *process.Process, idxcfg vector
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
 		idxcfg.Ivfflat.Version)
 
-	os.Stderr.WriteString(fmt.Sprintf("Load Index SQL = %s\n", sql))
+	//os.Stderr.WriteString(fmt.Sprintf("Load Index SQL = %s\n", sql))
 	res, err := runSql(proc, sql)
 	if err != nil {
 		return err
@@ -86,7 +85,7 @@ func (idx *IvfflatSearchIndex[T]) LoadIndex(proc *process.Process, idxcfg vector
 		for r := range bat.RowCount() {
 			id := vector.GetFixedAtWithTypeCheck[int64](idVec, r)
 			if faVec.IsNull(uint64(r)) {
-				os.Stderr.WriteString("Centroid is NULL\n")
+				//os.Stderr.WriteString("Centroid is NULL\n")
 				continue
 			}
 			vec := types.BytesToArray[T](faVec.GetBytesAt(r))
@@ -94,7 +93,7 @@ func (idx *IvfflatSearchIndex[T]) LoadIndex(proc *process.Process, idxcfg vector
 		}
 	}
 
-	os.Stderr.WriteString(fmt.Sprintf("%d centroids loaded... lists = %d, centroid %v\n", len(idx.Centroids), idxcfg.Ivfflat.Lists, idx.Centroids))
+	//os.Stderr.WriteString(fmt.Sprintf("%d centroids loaded... lists = %d, centroid %v\n", len(idx.Centroids), idxcfg.Ivfflat.Lists, idx.Centroids))
 	return nil
 }
 
@@ -172,7 +171,7 @@ func (idx *IvfflatSearchIndex[T]) findCentroids(proc *process.Process, query *ma
 		res = append(res, sr.Id)
 	}
 
-	os.Stderr.WriteString(fmt.Sprintf("probe %d... return centroid ids %v\n", probe, res))
+	//os.Stderr.WriteString(fmt.Sprintf("probe %d... return centroid ids %v\n", probe, res))
 	return res, nil
 }
 
@@ -212,7 +211,7 @@ func (idx *IvfflatSearchIndex[T]) Search(proc *process.Process, idxcfg vectorind
 		instr,
 	)
 
-	os.Stderr.WriteString(sql)
+	//os.Stderr.WriteString(sql)
 	go func() {
 		_, err := runSql_streaming(proc, sql, stream_chan, error_chan)
 		if err != nil {
