@@ -102,7 +102,7 @@ func TestSafeHeap(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for i := 0; i < 10; i++ {
-				h.Push(int64(usearch.Key(j*10+i)), float32(j*10+i))
+				h.Push(&SearchResult{int64(usearch.Key(j*10 + i)), float64(j*10 + i)})
 			}
 		}()
 	}
@@ -112,8 +112,35 @@ func TestSafeHeap(t *testing.T) {
 	n := h.Len()
 	fmt.Printf("Len = %d\n", n)
 	for i := 0; i < n; i++ {
-		id, score := h.Pop()
-		fmt.Printf("id = %d, score = %f\n", id, score)
+		srif := h.Pop()
+		sr := srif.(*SearchResult)
+		fmt.Printf("id = %d, score = %f\n", sr.Id, sr.Distance)
+	}
+}
+
+func TestSafeHeapAny(t *testing.T) {
+
+	var wg sync.WaitGroup
+
+	h := NewSearchResultSafeHeap(40)
+	for j := 0; j < 4; j++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 10; i++ {
+				h.Push(&SearchAnyResult{any(int64(usearch.Key(j*10 + i))), float64(j*10 + i)})
+			}
+		}()
+	}
+
+	wg.Wait()
+
+	n := h.Len()
+	fmt.Printf("Len = %d\n", n)
+	for i := 0; i < n; i++ {
+		srif := h.Pop()
+		sr := srif.(*SearchAnyResult)
+		fmt.Printf("id = %d, score = %f\n", sr.Id, sr.Distance)
 	}
 }
 

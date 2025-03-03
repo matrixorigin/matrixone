@@ -241,7 +241,7 @@ func (s *HnswSearch) Search(proc *process.Process, anyquery any, rt vectorindex.
 					}
 
 					for k := range keys {
-						heap.Push(int64(keys[k]), float64(distances[k]))
+						heap.Push(&vectorindex.SearchResult{int64(keys[k]), float64(distances[k])})
 					}
 				}
 			}
@@ -259,9 +259,13 @@ func (s *HnswSearch) Search(proc *process.Process, anyquery any, rt vectorindex.
 
 	n := heap.Len()
 	for i := 0; i < int(limit) && i < n; i++ {
-		key, distance := heap.Pop()
-		reskeys = append(reskeys, key)
-		resdistances = append(resdistances, distance)
+		srif := heap.Pop()
+		sr, ok := srif.(*vectorindex.SearchResult)
+		if !ok {
+			return nil, nil, moerr.NewInternalError(proc.Ctx, "heap return key is not int64")
+		}
+		reskeys = append(reskeys, sr.Id)
+		resdistances = append(resdistances, sr.Distance)
 	}
 
 	return reskeys, resdistances, nil

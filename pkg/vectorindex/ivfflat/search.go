@@ -27,8 +27,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/kmeans"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/kmeans/elkans"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"gonum.org/v1/gonum/mat"
 )
 
 var runSql = sqlexec.RunSql
@@ -36,7 +40,7 @@ var runSql_streaming = sqlexec.RunStreamingSql
 
 type Centroid[T types.RealNumbers] struct {
 	Id  int64
-	Vec []T
+	Vec *mat.VecDense
 }
 
 // Ivf search index struct to hold the usearch index
@@ -199,16 +203,63 @@ func (idx *IvfflatSearchIndex[T]) LoadIndex(proc *process.Process, idxcfg vector
 				continue
 			}
 			vec := types.BytesToArray[T](faVec.GetBytesAt(r))
-			copyvec := append(make([]T, 0, len(vec)), vec...)
-			idx.Centroids = append(idx.Centroids, Centroid[T]{Id: id, Vec: copyvec})
+			//copyvec := append(make([]T, 0, len(vec)), vec...)
+			idx.Centroids = append(idx.Centroids, Centroid[T]{Id: id, Vec: moarray.ToGonumVector[T](vec)})
 		}
 	}
 
 	return nil
 }
 
-func (idx *IvfflatSearchIndex[T]) findCentroids(query []T, idxcfg vectorindex.IndexConfig, probe uint, nthread int64) []int64 {
-	return []int64{0, 1, 2}
+func (idx *IvfflatSearchIndex[T]) findCentroids(proc *process.Process, query []T, idxcfg vectorindex.IndexConfig, probe uint, nthread int64) ([]int64, error) {
+
+	distfn, err := elkans.ResolveDistanceFn(kmeans.DistanceType(idxcfg.Ivfflat.Metric))
+	if err != nil {
+		return nil, err
+	}
+
+	qry := moarray.ToGonumVector[T](query)
+
+	if len(idx.Centroids) == 0 {
+		return []int64{0}, nil
+	}
+
+	nworker := int(nthread)
+	ncentroids := int(len(idx.Centroids))
+	if ncentroids < nworker {
+		nworker = ncentroids
+	}
+
+	heap := vectorindex.NewSearchResultSafeHeap(ncentroids)
+	var wg sync.WaitGroup
+	for n := 0; n < nworker; n++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i, c := range idx.Centroids {
+				if i%nworker != n {
+					continue
+				}
+				dist := distfn(qry, c.Vec)
+				heap.Push(&vectorindex.SearchResult{c.Id, dist})
+			}
+		}()
+	}
+
+	wg.Wait()
+
+	res := make([]int64, 0, probe)
+	n := heap.Len()
+	for i := 0; i < int(probe) && i < n; i++ {
+		srif := heap.Pop()
+		sr, ok := srif.(*vectorindex.SearchResult)
+		if !ok {
+			return nil, moerr.NewInternalError(proc.Ctx, "findCentroids: heap return key is not int64")
+		}
+		res = append(res, sr.Id)
+	}
+
+	return res, nil
 }
 
 // Call usearch.Search
@@ -218,7 +269,11 @@ func (idx *IvfflatSearchIndex[T]) Search(proc *process.Process, idxcfg vectorind
 	error_chan := make(chan error, nthread)
 
 	var instr string
-	centroids_ids := idx.findCentroids(query, idxcfg, rt.Probe, nthread)
+	centroids_ids, err := idx.findCentroids(proc, query, idxcfg, rt.Probe, nthread)
+	if err != nil {
+		return nil, nil, err
+	}
+
 	for i, c := range centroids_ids {
 		if i > 0 {
 			instr += ","

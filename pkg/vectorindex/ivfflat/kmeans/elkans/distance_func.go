@@ -80,7 +80,7 @@ func L1Distance(v1, v2 *mat.VecDense) float64 {
 // We use
 // - L2Distance distance for L2Distance
 // - SphericalDistance for InnerProduct and CosineDistance
-func resolveDistanceFn(distType kmeans.DistanceType) (kmeans.DistanceFunction, error) {
+func ResolveDistanceFn(distType kmeans.DistanceType) (kmeans.DistanceFunction, error) {
 	var distanceFunction kmeans.DistanceFunction
 	switch distType {
 	case kmeans.L2Distance:
