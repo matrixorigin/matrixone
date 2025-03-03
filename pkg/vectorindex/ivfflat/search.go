@@ -207,7 +207,7 @@ func (idx *IvfflatSearchIndex[T]) LoadIndex(proc *process.Process, idxcfg vector
 	return nil
 }
 
-func (idx *IvfflatSearchIndex[T]) findCentroids(query []T, probe uint, nthread int64) []int64 {
+func (idx *IvfflatSearchIndex[T]) findCentroids(query []T, idxcfg vectorindex.IndexConfig, probe uint, nthread int64) []int64 {
 	return []int64{0, 1, 2}
 }
 
@@ -218,7 +218,7 @@ func (idx *IvfflatSearchIndex[T]) Search(proc *process.Process, idxcfg vectorind
 	error_chan := make(chan error, nthread)
 
 	var instr string
-	centroids_ids := idx.findCentroids(query, rt.Probe, nthread)
+	centroids_ids := idx.findCentroids(query, idxcfg, rt.Probe, nthread)
 	for i, c := range centroids_ids {
 		if i > 0 {
 			instr += ","
