@@ -171,10 +171,12 @@ func (idx *IvfflatSearchIndex) LoadIndex(proc *process.Process, idxcfg vectorind
 func (idx *IvfflatSearchIndex[T]) LoadIndex(proc *process.Process, idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig, nthread int64) error {
 
 	idx.Version = idxcfg.Ivfflat.Version
-	sql := fmt.Sprintf("SELECT `%s`, `%s` FROM `%s`.`%s` WHERE version = '%d'",
+	sql := fmt.Sprintf("SELECT `%s`, `%s` FROM `%s`.`%s` WHERE `%s` = %d",
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_id,
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid,
-		tblcfg.DbName, tblcfg.IndexTable, idxcfg.Ivfflat.Version)
+		tblcfg.DbName, tblcfg.IndexTable,
+		catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
+		idxcfg.Ivfflat.Version)
 	res, err := runSql(proc, sql)
 	if err != nil {
 		return err
