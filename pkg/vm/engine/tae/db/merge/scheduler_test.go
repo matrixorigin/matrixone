@@ -39,6 +39,7 @@ func TestStopStartMerge(t *testing.T) {
 		executor: newMergeExecutor(&dbutils.Runtime{
 			LockMergeService: dbutils.NewLockMergeService(),
 		}, cnScheduler),
+		rc: new(resourceController),
 	}
 
 	lockService := scheduler.executor.rt.LockMergeService
