@@ -55,7 +55,6 @@ type CkpReplayer struct {
 	r          *runner
 	ckpEntries []*CheckpointEntry
 	ckpReader  []*logtail.CKPReader
-	closes     []func()
 	emptyFile  []*CheckpointEntry
 
 	globalCkpIdx int
@@ -69,9 +68,6 @@ type CkpReplayer struct {
 }
 
 func (c *CkpReplayer) Close() {
-	for _, close := range c.closes {
-		close()
-	}
 	for _, worker := range c.objectReplayWorker {
 		worker.Stop()
 	}
