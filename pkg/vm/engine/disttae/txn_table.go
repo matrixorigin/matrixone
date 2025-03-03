@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -538,10 +539,6 @@ func (tbl *txnTable) GetProcess() any {
 	return tbl.proc.Load()
 }
 
-func (tbl *txnTable) resetSnapshot() {
-	tbl._partState.Store(nil)
-}
-
 func (tbl *txnTable) CollectTombstones(
 	ctx context.Context,
 	txnOffset int,
@@ -583,8 +580,8 @@ func (tbl *txnTable) CollectTombstones(
 			})
 
 		//collect uncommitted in-memory tombstones belongs to blocks persisted by CN writing S3
-		tbl.getTxn().deletedBlocks.getDeletedRowIDs(func(row *types.Rowid) {
-			tombstone.AppendInMemory(*row)
+		tbl.getTxn().deletedBlocks.getDeletedRowIDs(func(row types.Rowid) {
+			tombstone.AppendInMemory(row)
 		})
 
 		//collect uncommitted persisted tombstones.
@@ -646,9 +643,16 @@ func (tbl *txnTable) Ranges(ctx context.Context, rangesParam engine.RangesParam)
 
 func (tbl *txnTable) getObjList(ctx context.Context, rangesParam engine.RangesParam) (data engine.RelData, err error) {
 	needUncommited := rangesParam.Policy&engine.Policy_CollectUncommittedData != 0
+
+	var part *logtailreplay.PartitionState
+	if part, err = tbl.getPartitionState(ctx); err != nil {
+		return
+	}
+
 	objRelData := &readutil.ObjListRelData{
 		NeedFirstEmpty: needUncommited,
 		Rsp:            rangesParam.Rsp,
+		PState:         part,
 	}
 
 	if needUncommited {
@@ -659,12 +663,9 @@ func (tbl *txnTable) getObjList(ctx context.Context, rangesParam engine.RangesPa
 		}
 	}
 
-	var part *logtailreplay.PartitionState
 	// get the table's snapshot
-	if rangesParam.Policy&engine.Policy_CollectCommittedData != 0 {
-		if part, err = tbl.getPartitionState(ctx); err != nil {
-			return
-		}
+	if !(rangesParam.Policy&engine.Policy_CollectCommittedData != 0) {
+		part = nil
 	}
 
 	if err = ForeachSnapshotObjects(
@@ -800,9 +801,18 @@ func (tbl *txnTable) doRanges(ctx context.Context, rangesParam engine.RangesPara
 		return
 	}
 
-	blklist := &readutil.BlockListRelData{}
+	if part == nil {
+		if part, err = tbl.getPartitionState(ctx); err != nil {
+			return
+		}
+	}
+
+	blklist := readutil.NewBlockListRelationData(
+		0,
+		readutil.WithPartitionState(part))
 	blklist.SetBlockList(blocks)
 	data = blklist
+
 	return
 }
 
@@ -1790,6 +1800,46 @@ func BuildLocalDataSource(
 		engine.GeneralLocalDataSource)
 }
 
+func extractPStateFromRelData(
+	ctx context.Context,
+	tbl *txnTable,
+	relData engine.RelData,
+) (*logtailreplay.PartitionState, error) {
+
+	var part any
+
+	if x1, o1 := relData.(*readutil.ObjListRelData); o1 {
+		part = x1.PState
+	} else if x2, o2 := relData.(*readutil.BlockListRelData); o2 {
+		part = x2.GetPState()
+	}
+
+	if part == nil {
+		// why the partition will be nil ??
+		sql := ""
+		if p := tbl.proc.Load().GetStmtProfile(); p != nil {
+			sql = p.GetSqlOfStmt()
+		}
+
+		logutil.Warn("RELDATA-WITH-EMPTY-PSTATE",
+			zap.String("db", tbl.db.databaseName),
+			zap.String("table", tbl.tableName),
+			zap.String("sql", sql),
+			zap.String("relDataType", fmt.Sprintf("%T", relData)),
+			zap.String("relDataContent", relData.String()),
+			zap.String("stack", string(debug.Stack())))
+
+		pState, err := tbl.getPartitionState(ctx)
+		if err != nil {
+			return nil, err
+		}
+
+		return pState, nil
+	}
+
+	return part.(*logtailreplay.PartitionState), nil
+}
+
 func (tbl *txnTable) buildLocalDataSource(
 	ctx context.Context,
 	txnOffset int,
@@ -1800,6 +1850,13 @@ func (tbl *txnTable) buildLocalDataSource(
 
 	switch relData.GetType() {
 	case engine.RelDataObjList, engine.RelDataBlockList:
+		var pState *logtailreplay.PartitionState
+
+		pState, err = extractPStateFromRelData(ctx, tbl, relData)
+		if err != nil {
+			return nil, err
+		}
+
 		ranges := relData.GetBlockInfoSlice()
 		skipReadMem := !bytes.Equal(
 			objectio.EncodeBlockInfo(ranges.Get(0)), objectio.EmptyBlockInfoBytes)
@@ -1823,6 +1880,7 @@ func (tbl *txnTable) buildLocalDataSource(
 				ctx,
 				tbl,
 				txnOffset,
+				pState,
 				ranges,
 				relData.GetTombstones(),
 				skipReadMem,
@@ -1860,14 +1918,22 @@ func (tbl *txnTable) BuildReaders(
 	var rds []engine.Reader
 	proc := p.(*process.Process)
 
-	if orderBy && num != 1 {
-		return nil, moerr.NewInternalErrorNoCtx("orderBy only support one reader")
-	}
+	//if orderBy && num != 1 {
+	//	return nil, moerr.NewInternalErrorNoCtx("orderBy only support one reader")
+	//}
 
 	//relData maybe is nil, indicate that only read data from memory.
 	if relData == nil || relData.DataCnt() == 0 {
-		relData = readutil.NewBlockListRelationData(1)
+		part, err := tbl.getPartitionState(ctx)
+		if err != nil {
+			return nil, err
+		}
+
+		relData = readutil.NewBlockListRelationData(
+			1,
+			readutil.WithPartitionState(part))
 	}
+
 	blkCnt := relData.DataCnt()
 	newNum := num
 	if blkCnt < num {
@@ -1921,44 +1987,42 @@ func (tbl *txnTable) BuildShardingReaders(
 func (tbl *txnTable) getPartitionState(
 	ctx context.Context,
 ) (*logtailreplay.PartitionState, error) {
-	if !tbl.db.op.IsSnapOp() {
-		if tbl._partState.Load() == nil {
-			ps, err := tbl.tryToSubscribe(ctx)
-			if err != nil {
-				return nil, err
-			}
-			if ps == nil {
-				ps = tbl.getTxn().engine.GetOrCreateLatestPart(tbl.db.databaseId, tbl.tableId).Snapshot()
-			}
-			tbl._partState.Store(ps)
-			if tbl.tableId == catalog.MO_COLUMNS_ID {
-				logutil.Info("open partition state for mo_columns",
-					zap.String("txn", tbl.db.op.Txn().DebugString()),
-					zap.String("desc", ps.Desc()),
-					zap.String("pointer", fmt.Sprintf("%p", ps)))
-			}
-		}
-		return tbl._partState.Load(), nil
-	}
 
-	// for snapshot txnOp
-	if tbl._partState.Load() == nil {
-		ps, err := tbl.getTxn().engine.getOrCreateSnapPart(
-			ctx,
-			tbl,
-			types.TimestampToTS(tbl.db.op.Txn().SnapshotTS))
+	if !tbl.db.op.IsSnapOp() {
+		ps, err := tbl.tryToSubscribe(ctx)
 		if err != nil {
 			return nil, err
 		}
-		logutil.Infof("Get partition state for snapshot read, tbl:%p, table name:%s, tid:%v, txn:%s, ps:%p",
-			tbl,
-			tbl.tableName,
-			tbl.tableId,
-			tbl.db.op.Txn().DebugString(),
-			ps)
-		tbl._partState.Store(ps)
+		if ps == nil {
+			ps = tbl.getTxn().engine.GetOrCreateLatestPart(tbl.db.databaseId, tbl.tableId).Snapshot()
+		}
+
+		if tbl.tableId == catalog.MO_COLUMNS_ID {
+			logutil.Info("open partition state for mo_columns",
+				zap.String("txn", tbl.db.op.Txn().DebugString()),
+				zap.String("desc", ps.Desc(true)),
+				zap.String("pointer", fmt.Sprintf("%p", ps)))
+		}
+
+		return ps, nil
 	}
-	return tbl._partState.Load(), nil
+
+	// for snapshot txnOp
+	ps, err := tbl.getTxn().engine.getOrCreateSnapPart(
+		ctx,
+		tbl,
+		types.TimestampToTS(tbl.db.op.Txn().SnapshotTS))
+	if err != nil {
+		return nil, err
+	}
+	logutil.Infof("Get partition state for snapshot read, tbl:%p, table name:%s, tid:%v, txn:%s, ps:%p",
+		tbl,
+		tbl.tableName,
+		tbl.tableId,
+		tbl.db.op.Txn().DebugString(),
+		ps)
+
+	return ps, nil
 }
 
 func (tbl *txnTable) tryToSubscribe(ctx context.Context) (ps *logtailreplay.PartitionState, err error) {
@@ -2298,6 +2362,8 @@ func (tbl *txnTable) GetNonAppendableObjectStats(ctx context.Context) ([]objecti
 	return objStats, nil
 }
 
+// Reset what?
+// TODO: txnTable should be stateless
 func (tbl *txnTable) Reset(op client.TxnOperator) error {
 	ws := op.GetWorkspace()
 	if ws == nil {
@@ -2312,7 +2378,6 @@ func (tbl *txnTable) Reset(op client.TxnOperator) error {
 	tbl.proc.Store(txn.proc)
 	tbl.createdInTxn = false
 	tbl.lastTS = op.SnapshotTS()
-	tbl.resetSnapshot()
 	return nil
 }
 

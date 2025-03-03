@@ -16,6 +16,7 @@ package testutil
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 
@@ -603,5 +604,20 @@ func MockCNDeleteInS3(
 
 	stats = writer.GetObjectStats(objectio.WithCNCreated())
 
+	return
+}
+
+func CreateOneDatabase(
+	ctx context.Context,
+	t *testing.T,
+	tae *db.DB,
+	i int,
+) (name string) {
+	txn, err := tae.StartTxn(nil)
+	assert.NoError(t, err)
+	name = fmt.Sprintf("db_%d", i)
+	_, err = CreateDatabase2(ctx, txn, name)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit(ctx))
 	return
 }

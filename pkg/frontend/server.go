@@ -18,18 +18,17 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
-	"go.uber.org/zap"
 	"io"
 	"net"
-	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/frontend/tcpconn"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -52,7 +51,6 @@ type MOServer struct {
 	mu          sync.RWMutex
 	wg          sync.WaitGroup
 	running     bool
-	connMap     sync.Map
 
 	pu        *config.ParameterUnit
 	listeners []net.Listener
@@ -81,48 +79,6 @@ type BaseService interface {
 	GetFinalVersion() string
 	// UpgradeTenant used to upgrade tenant
 	UpgradeTenant(ctx context.Context, tenantName string, retryCount uint32, isALLAccount bool) error
-}
-
-func isConnected(connMap *sync.Map) {
-	defer func() {
-		if pErr := recover(); pErr != nil {
-			err := moerr.ConvertPanicError(context.Background(), pErr)
-			logutil.Error("panic in check Connection", zap.String("error", err.Error()))
-		}
-	}()
-
-	tcpconn.IsConnected(connMap)
-}
-
-func (mo *MOServer) checkConnected(ctx context.Context) {
-
-	ticker := time.Tick(time.Minute)
-	quit := false
-
-	for {
-		if quit {
-			break
-		}
-		select {
-		case <-ctx.Done():
-			quit = true
-		default:
-			select {
-			case <-ticker:
-				logutil.Debugf("Goruntine %d is checking TCP status", GetRoutineId())
-			default:
-			}
-			isConnected(&mo.connMap)
-			time.Sleep(mo.pu.SV.CheckInterval * time.Second)
-		}
-	}
-}
-
-func (mo *MOServer) ClearConnMap() {
-	mo.connMap.Range(func(key, value any) bool {
-		mo.connMap.Delete(key)
-		return true
-	})
 }
 
 func (mo *MOServer) GetRoutineManager() *RoutineManager {
@@ -161,7 +117,6 @@ func (mo *MOServer) Stop() error {
 
 	mo.rm.cancelCtx()
 	mo.rm.killNetConns()
-	mo.ClearConnMap()
 
 	logutil.Debug("application stopped")
 	return nil
@@ -189,15 +144,6 @@ func (mo *MOServer) startAccept(ctx context.Context, listener net.Listener) {
 	defer mo.wg.Done()
 
 	var tempDelay time.Duration
-
-	if runtime.GOOS == "linux" {
-		switch listener.(type) {
-		case *net.TCPListener:
-			go mo.checkConnected(ctx)
-		default:
-		}
-	}
-
 	quit := false
 	for {
 		select {
@@ -231,7 +177,6 @@ func (mo *MOServer) startAccept(ctx context.Context, listener net.Listener) {
 		go mo.handleConn(ctx, conn)
 	}
 }
-
 func (mo *MOServer) handleConn(ctx context.Context, conn net.Conn) {
 	var rs *Conn
 	var err error
@@ -244,21 +189,6 @@ func (mo *MOServer) handleConn(ctx context.Context, conn net.Conn) {
 			}
 		}
 	}()
-
-	if runtime.GOOS == "linux" {
-		tcpConn, ok := conn.(*net.TCPConn)
-		if ok {
-			var cancel context.CancelFunc
-			ctx, cancel = context.WithCancel(ctx)
-			mo.connMap.Store(tcpConn, cancel)
-			defer func() {
-				_, ok = mo.connMap.Load(tcpConn)
-				if ok {
-					mo.connMap.Delete(tcpConn)
-				}
-			}()
-		}
-	}
 
 	rs, err = NewIOSession(conn, mo.pu, mo.service)
 	if err != nil {

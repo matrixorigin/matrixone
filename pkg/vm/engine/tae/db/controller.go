@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -42,10 +43,15 @@ import (
 type ControlCmdType uint32
 
 const (
-	ControlCmd_Noop ControlCmdType = iota
+	ControlCmd_Customized ControlCmdType = iota
 	ControlCmd_ToReplayMode
 	ControlCmd_ToWriteMode
 )
+
+type ControlCmd interface {
+	WaitDone()
+	Error() error
+}
 
 type stepFunc struct {
 	fn   func() error
@@ -133,6 +139,7 @@ type controlCmd struct {
 	ctx  context.Context
 	wg   sync.WaitGroup
 	sarg string
+	fn   func() error
 }
 
 func (c *controlCmd) String() string {
@@ -144,13 +151,18 @@ func (c *controlCmd) setError(err error) {
 	c.wg.Done()
 }
 
-func (c *controlCmd) waitDone() {
+func (c *controlCmd) WaitDone() {
 	c.wg.Wait()
 }
 
+func (c *controlCmd) Error() error {
+	return c.err
+}
+
 type Controller struct {
-	queue sm.Queue
-	db    *DB
+	queue     sm.Queue
+	db        *DB
+	closedCmd atomic.Pointer[controlCmd]
 }
 
 func NewController(db *DB) *Controller {
@@ -163,10 +175,48 @@ func NewController(db *DB) *Controller {
 	return c
 }
 
+func (c *Controller) stopReceiver(fn func() error) bool {
+	closeCmd := newControlCmd(context.Background(), ControlCmd_Customized, "")
+	closeCmd.fn = fn
+	if c.closedCmd.CompareAndSwap(nil, closeCmd) {
+		now := time.Now()
+		for {
+			if _, err := c.queue.Enqueue(closeCmd); err != nil {
+				time.Sleep(time.Millisecond * 1)
+				if int(time.Since(now).Seconds())%10 == 1 {
+					logutil.Warn(
+						"controller-stopReceiver",
+						zap.Error(err),
+					)
+				}
+				continue
+			}
+			closeCmd.WaitDone()
+			return true
+		}
+	}
+	c.closedCmd.Load().WaitDone()
+	return false
+}
+
+func (c *Controller) onReceiveCmd(cmd *controlCmd) (err error) {
+	if c.closedCmd.Load() != nil {
+		err = moerr.NewInternalErrorNoCtx("controller is closed")
+		cmd.setError(err)
+		return
+	}
+	if _, err = c.queue.Enqueue(cmd); err != nil {
+		cmd.setError(err)
+	}
+	return
+}
+
 func (c *Controller) onCmd(cmds ...any) {
 	for _, cmd := range cmds {
 		command := cmd.(*controlCmd)
 		switch command.typ {
+		case ControlCmd_Customized:
+			c.handleCustomized(command)
 		case ControlCmd_ToReplayMode:
 			c.handleToReplayCmd(command)
 		case ControlCmd_ToWriteMode:
@@ -176,6 +226,14 @@ func (c *Controller) onCmd(cmds ...any) {
 				moerr.NewInternalErrorNoCtxf("unknown command type %d", command.typ),
 			)
 		}
+	}
+}
+
+func (c *Controller) handleCustomized(cmd *controlCmd) {
+	if cmd.fn != nil {
+		cmd.setError(cmd.fn())
+	} else {
+		cmd.setError(nil)
 	}
 }
 
@@ -408,15 +466,31 @@ func (c *Controller) Start() {
 	c.queue.Start()
 }
 
-func (c *Controller) Stop() {
-	c.queue.Stop()
+func (c *Controller) Stop(fn func() error) {
+	if c.stopReceiver(fn) {
+		c.queue.Stop()
+	}
+}
+
+func (c *Controller) ScheduleCustomized(
+	ctx context.Context,
+	fn func() error,
+) (cmd ControlCmd, err error) {
+	command := newControlCmd(ctx, ControlCmd_Customized, "")
+	command.fn = fn
+	if err = c.onReceiveCmd(command); err != nil {
+		cmd = nil
+		return
+	}
+	cmd = command
+	return
 }
 
 func (c *Controller) SwitchTxnMode(
 	ctx context.Context,
 	iarg int,
 	sarg string,
-) error {
+) (err error) {
 	var typ ControlCmdType
 	switch iarg {
 	case 1:
@@ -427,10 +501,10 @@ func (c *Controller) SwitchTxnMode(
 		return moerr.NewTxnControlErrorNoCtxf("unknown txn mode switch iarg %d", iarg)
 	}
 	cmd := newControlCmd(ctx, typ, sarg)
-	if _, err := c.queue.Enqueue(cmd); err != nil {
-		return err
+	if err = c.onReceiveCmd(cmd); err != nil {
+		return
 	}
-	cmd.waitDone()
+	cmd.WaitDone()
 	return cmd.err
 }
 
@@ -588,10 +662,14 @@ func (c *Controller) AssembleDB(ctx context.Context) (err error) {
 		return
 	}
 
+	// in the write mode
+	// 1. we need to wait the replayCtl to finish the wal replay
+	// 2. close the replayCtl after replaying the wal in write mode
+	// in the replay mode
+	// there is one replay loop running in the background
+	// replayCtl is will be assigned to db.ReplayCtl
+	// we can use db.ReplayCtl to control the replay loop
 	if db.IsWriteMode() {
-		// in the write mode
-		// 1. we need to wait the replayCtl to finish the wal replay
-		// 2. close the replayCtl after replaying the wal in write mode
 		if err = replayCtl.Wait(); err != nil {
 			return
 		}

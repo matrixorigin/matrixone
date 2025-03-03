@@ -38,7 +38,7 @@ func (store *NoopTxnStore) EndTrace()          {}
 func (store *NoopTxnStore) Freeze(_ context.Context) error               { return nil }
 func (store *NoopTxnStore) WaitPrepared(ctx context.Context) (err error) { return }
 func (store *NoopTxnStore) GetLSN() uint64                               { return 0 }
-func (store *NoopTxnStore) BindTxn(txn txnif.AsyncTxn)                   {}
+func (store *NoopTxnStore) BindTxn(txn txnif.AsyncTxn, _ bool)           {}
 func (store *NoopTxnStore) Close() error                                 { return nil }
 func (store *NoopTxnStore) Append(ctx context.Context, dbId, id uint64, data *containers.Batch) error {
 	return nil
@@ -156,8 +156,9 @@ func (store *NoopTxnStore) LogTxnState(sync bool) (logEntry entry.Entry, err err
 	return
 }
 
-func (store *NoopTxnStore) IsReadonly() bool      { return false }
-func (store *NoopTxnStore) IncreateWriteCnt() int { return 0 }
+func (store *NoopTxnStore) IsOffline() bool               { return false }
+func (store *NoopTxnStore) IsReadonly() bool              { return false }
+func (store *NoopTxnStore) IncreateWriteCnt(string) error { return nil }
 
 func (store *NoopTxnStore) HasAnyTableDataChanges() bool                 { return false }
 func (store *NoopTxnStore) GetDirty() *model.Tree                        { return nil }

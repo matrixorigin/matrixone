@@ -715,7 +715,8 @@ func Test_RunnerStore7(t *testing.T) {
 
 	entry2 := NewCheckpointEntry("", types.TS{}, t1, ET_Incremental)
 	entry2.SetState(ST_Finished)
-	objName := objectio.BuildObjectNameWithObjectID(objectio.NewObjectid())
+	nobjid := objectio.NewObjectid()
+	objName := objectio.BuildObjectNameWithObjectID(&nobjid)
 	entry2.SetLocation(objectio.MockLocation(objName), objectio.MockLocation(objName))
 
 	assert.True(t, store.AddGCKPIntent(entry1))
