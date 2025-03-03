@@ -15,6 +15,7 @@
 package ivfflat
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"sync"
@@ -60,120 +61,6 @@ type IvfflatSearch[T types.RealNumbers] struct {
 	ThreadsSearch int64
 }
 
-/*
-// load chunk from database
-func (idx *IvfflatSearchIndex) loadChunk(proc *process.Process, stream_chan chan executor.Result, error_chan chan error, fp *os.File) (stream_closed bool, err error) {
-	var res executor.Result
-	var ok bool
-
-	select {
-	case res, ok = <-stream_chan:
-		if !ok {
-			return true, nil
-		}
-	case err = <-error_chan:
-		return false, err
-	case <-proc.Ctx.Done():
-		return false, moerr.NewInternalError(proc.Ctx, "context cancelled")
-	}
-
-	bat := res.Batches[0]
-	defer res.Close()
-
-	for i := 0; i < bat.RowCount(); i++ {
-		chunk_id := vector.GetFixedAtWithTypeCheck[int64](bat.Vecs[0], i)
-		data := bat.Vecs[1].GetRawBytesAt(i)
-
-		offset := chunk_id * vectorindex.MaxChunkSize
-		_, err = fp.Seek(offset, io.SeekStart)
-		if err != nil {
-			return false, err
-		}
-
-		_, err = fp.Write(data)
-		if err != nil {
-			return false, err
-		}
-	}
-	return false, nil
-}
-
-// load index from database
-// TODO: loading file is tricky.
-// 1. we need to know the size of the file.
-// 2. Write Zero to file to have a pre-allocated size
-// 3. SELECT chunk_id, data from index_table WHERE index_id = id.  Result will be out of order
-// 4. according to the chunk_id, seek to the offset and write the chunk
-// 5. check the checksum to verify the correctness of the file
-func (idx *IvfflatSearchIndex) LoadIndex(proc *process.Process, idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig, nthread int64) error {
-
-	stream_chan := make(chan executor.Result, 2)
-	error_chan := make(chan error)
-
-	// create tempfile for writing
-	fp, err := os.CreateTemp("", "hnswindx")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(fp.Name())
-
-	err = fallocate.Fallocate(fp, 0, idx.Filesize)
-	if err != nil {
-		return err
-	}
-
-	// run streaming sql
-	sql := fmt.Sprintf("SELECT chunk_id, data from `%s`.`%s` WHERE index_id = '%s'", tblcfg.DbName, tblcfg.IndexTable, idx.Id)
-	go func() {
-		_, err := runSql_streaming(proc, sql, stream_chan, error_chan)
-		if err != nil {
-			error_chan <- err
-			return
-		}
-	}()
-
-	// incremental load from database
-	sql_closed := false
-	for !sql_closed {
-		sql_closed, err = idx.loadChunk(proc, stream_chan, error_chan, fp)
-		if err != nil {
-			return err
-		}
-	}
-
-	// load index to memory
-	fp.Close()
-
-	// check checksum
-	chksum, err := vectorindex.CheckSum(fp.Name())
-	if err != nil {
-		return err
-	}
-	if chksum != idx.Checksum {
-		return moerr.NewInternalError(proc.Ctx, "Checksum mismatch with the index file")
-	}
-
-	usearchidx, err := usearch.NewIndex(idxcfg.Usearch)
-	if err != nil {
-		return err
-	}
-
-	err = usearchidx.ChangeThreadsSearch(uint(nthread))
-	if err != nil {
-		return err
-	}
-
-	err = usearchidx.Load(fp.Name())
-	if err != nil {
-		return err
-	}
-
-	idx.Index = usearchidx
-
-	return nil
-}
-*/
-
 func (idx *IvfflatSearchIndex[T]) LoadIndex(proc *process.Process, idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig, nthread int64) error {
 
 	idx.Version = idxcfg.Ivfflat.Version
@@ -203,7 +90,6 @@ func (idx *IvfflatSearchIndex[T]) LoadIndex(proc *process.Process, idxcfg vector
 				continue
 			}
 			vec := types.BytesToArray[T](faVec.GetBytesAt(r))
-			//copyvec := append(make([]T, 0, len(vec)), vec...)
 			idx.Centroids = append(idx.Centroids, Centroid[T]{Id: id, Vec: moarray.ToGonumVector[T](vec)})
 		}
 	}
@@ -211,14 +97,39 @@ func (idx *IvfflatSearchIndex[T]) LoadIndex(proc *process.Process, idxcfg vector
 	return nil
 }
 
-func (idx *IvfflatSearchIndex[T]) findCentroids(proc *process.Process, query []T, idxcfg vectorindex.IndexConfig, probe uint, nthread int64) ([]int64, error) {
+// load chunk from database
+func (idx *IvfflatSearchIndex[T]) searchEntries(proc *process.Process, query *mat.VecDense, distfn kmeans.DistanceFunction, heap *vectorindex.SearchResultSafeHeap,
+	stream_chan chan executor.Result, error_chan chan error) (stream_closed bool, err error) {
 
-	distfn, err := elkans.ResolveDistanceFn(kmeans.DistanceType(idxcfg.Ivfflat.Metric))
-	if err != nil {
-		return nil, err
+	var res executor.Result
+	var ok bool
+
+	select {
+	case res, ok = <-stream_chan:
+		if !ok {
+			return true, nil
+		}
+	case err = <-error_chan:
+		return false, err
+	case <-proc.Ctx.Done():
+		return false, moerr.NewInternalError(proc.Ctx, "context cancelled")
 	}
 
-	qry := moarray.ToGonumVector[T](query)
+	bat := res.Batches[0]
+	defer res.Close()
+
+	for i := 0; i < bat.RowCount(); i++ {
+		pk := vector.GetAny(bat.Vecs[0], i)
+		vec := types.BytesToArray[T](bat.Vecs[1].GetBytesAt(i))
+		mat := moarray.ToGonumVector[T](vec)
+		dist := distfn(query, mat)
+
+		heap.Push(&vectorindex.SearchResultAnyKey{pk, dist})
+	}
+	return false, nil
+}
+
+func (idx *IvfflatSearchIndex[T]) findCentroids(proc *process.Process, query *mat.VecDense, distfn kmeans.DistanceFunction, idxcfg vectorindex.IndexConfig, probe uint, nthread int64) ([]int64, error) {
 
 	if len(idx.Centroids) == 0 {
 		return []int64{0}, nil
@@ -240,7 +151,7 @@ func (idx *IvfflatSearchIndex[T]) findCentroids(proc *process.Process, query []T
 				if i%nworker != n {
 					continue
 				}
-				dist := distfn(qry, c.Vec)
+				dist := distfn(query, c.Vec)
 				heap.Push(&vectorindex.SearchResult{c.Id, dist})
 			}
 		}()
@@ -268,8 +179,15 @@ func (idx *IvfflatSearchIndex[T]) Search(proc *process.Process, idxcfg vectorind
 	stream_chan := make(chan executor.Result, nthread)
 	error_chan := make(chan error, nthread)
 
+	distfn, err := elkans.ResolveDistanceFn(kmeans.DistanceType(idxcfg.Ivfflat.Metric))
+	if err != nil {
+		return nil, nil, err
+	}
+
+	qry := moarray.ToGonumVector[T](query)
+
 	var instr string
-	centroids_ids, err := idx.findCentroids(proc, query, idxcfg, rt.Probe, nthread)
+	centroids_ids, err := idx.findCentroids(proc, qry, distfn, idxcfg, rt.Probe, nthread)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -300,7 +218,49 @@ func (idx *IvfflatSearchIndex[T]) Search(proc *process.Process, idxcfg vectorind
 		}
 	}()
 
-	return nil, nil, nil
+	heap := vectorindex.NewSearchResultSafeHeap(int(rt.Probe * 1000))
+	var wg sync.WaitGroup
+	var errs error
+
+	for n := int64(0); n < nthread; n++ {
+
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+
+			// brute force search with selected centroids
+			sql_closed := false
+			for !sql_closed {
+				sql_closed, err = idx.searchEntries(proc, qry, distfn, heap, stream_chan, error_chan)
+				if err != nil {
+					errs = errors.Join(errs, err)
+					return
+				}
+			}
+		}()
+	}
+
+	wg.Wait()
+
+	if errs != nil {
+		return nil, nil, errs
+	}
+
+	resid := make([]any, 0, rt.Limit)
+	resdist := make([]float64, 0, rt.Limit)
+	n := heap.Len()
+	for i := 0; i < int(rt.Limit) && i < n; i++ {
+		srif := heap.Pop()
+		sr, ok := srif.(*vectorindex.SearchResultAnyKey)
+		if !ok {
+			return nil, nil, moerr.NewInternalError(proc.Ctx, "ivf search: heap return key is not any")
+		}
+		resid = append(resid, sr.Id)
+		resdist = append(resdist, sr.Distance)
+	}
+
+	return resid, resdist, nil
 }
 
 func (idx *IvfflatSearchIndex[T]) Destroy() {
