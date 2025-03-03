@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
@@ -206,12 +207,18 @@ func (idx *IvfflatSearchIndex[T]) LoadIndex(proc *process.Process, idxcfg vector
 	return nil
 }
 
-// Call usearch.Search
-func (idx *IvfflatSearchIndex[T]) Search(proc *process.Process, idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig, query []T, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
+func (idx *IvfflatSearchIndex[T]) findCentroids(query []T, rt vectorindex.RuntimeConfig, nthread int64) []int64 {
+	return []int64{0, 1, 2}
+}
 
-	centroids_ids := []int64{0, 1, 2}
+// Call usearch.Search
+func (idx *IvfflatSearchIndex[T]) Search(proc *process.Process, idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig, query []T, rt vectorindex.RuntimeConfig, nthread int64) (keys any, distances []float64, err error) {
+
+	stream_chan := make(chan executor.Result, nthread)
+	error_chan := make(chan error, nthread)
 
 	var instr string
+	centroids_ids := idx.findCentroids(query, rt, nthread)
 	for i, c := range centroids_ids {
 		if i > 0 {
 			instr += ","
@@ -230,6 +237,13 @@ func (idx *IvfflatSearchIndex[T]) Search(proc *process.Process, idxcfg vectorind
 	)
 
 	os.Stderr.WriteString(sql)
+	go func() {
+		_, err := runSql_streaming(proc, sql, stream_chan, error_chan)
+		if err != nil {
+			error_chan <- err
+			return
+		}
+	}()
 
 	return nil, nil, nil
 }
@@ -268,7 +282,7 @@ func (s *IvfflatSearch[T]) Search(proc *process.Process, anyquery any, rt vector
 		return nil, nil, moerr.NewInternalErrorNoCtx("IvfSearch: query not match with index type")
 	}
 
-	return s.Index.Search(proc, s.Idxcfg, s.Tblcfg, query, rt)
+	return s.Index.Search(proc, s.Idxcfg, s.Tblcfg, query, rt, s.ThreadsSearch)
 }
 
 func (s *IvfflatSearch[T]) Contains(key int64) (bool, error) {
