@@ -35,7 +35,7 @@ type MockSearch struct {
 	Tblcfg vectorindex.IndexTableConfig
 }
 
-func (m *MockSearch) Search(query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
+func (m *MockSearch) Search(proc *process.Process, query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
 	//time.Sleep(2 * time.Millisecond)
 	return []int64{1}, []float64{2.0}, nil
 }
@@ -57,7 +57,7 @@ type MockAnySearch struct {
 	Tblcfg vectorindex.IndexTableConfig
 }
 
-func (m *MockAnySearch) Search(query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
+func (m *MockAnySearch) Search(proc *process.Process, query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
 	//time.Sleep(2 * time.Millisecond)
 	return []any{any(1)}, []float64{2.0}, nil
 }
@@ -80,7 +80,7 @@ type MockSearchLoadError struct {
 	Tblcfg vectorindex.IndexTableConfig
 }
 
-func (m *MockSearchLoadError) Search(query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
+func (m *MockSearchLoadError) Search(proc *process.Process, query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
 	return []int64{1}, []float64{2.0}, nil
 }
 
@@ -102,7 +102,7 @@ type MockSearchSearchError struct {
 	Tblcfg vectorindex.IndexTableConfig
 }
 
-func (m *MockSearchSearchError) Search(query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
+func (m *MockSearchSearchError) Search(proc *process.Process, query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
 	return nil, nil, moerr.NewInternalErrorNoCtx("Search error")
 }
 

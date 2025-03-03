@@ -16,6 +16,7 @@ package ivfflat
 
 import (
 	"fmt"
+	"os"
 	"sync"
 	"sync/atomic"
 
@@ -206,7 +207,30 @@ func (idx *IvfflatSearchIndex[T]) LoadIndex(proc *process.Process, idxcfg vector
 }
 
 // Call usearch.Search
-func (idx *IvfflatSearchIndex[T]) Search(query []T, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
+func (idx *IvfflatSearchIndex[T]) Search(proc *process.Process, idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig, query []T, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
+
+	centroids_ids := []int64{0, 1, 2}
+
+	var instr string
+	for i, c := range centroids_ids {
+		if i > 0 {
+			instr += ","
+		}
+		instr += string(c)
+	}
+
+	sql := fmt.Sprintf("SELECT `%s`, `%s` FROM `%s`.`%s` WHERE `%s` = %d AND `%s` IN (%s)",
+		catalog.SystemSI_IVFFLAT_TblCol_Entries_pk,
+		catalog.SystemSI_IVFFLAT_TblCol_Entries_entry,
+		tblcfg.DbName, tblcfg.EntriesTable,
+		catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
+		idx.Version,
+		catalog.SystemSI_IVFFLAT_TblCol_Entries_id,
+		instr,
+	)
+
+	os.Stderr.WriteString(sql)
+
 	return nil, nil, nil
 }
 
@@ -238,13 +262,13 @@ func (s *IvfflatSearch[T]) unlock() {
 }
 
 // Search the hnsw index (implement VectorIndexSearch.Search)
-func (s *IvfflatSearch[T]) Search(anyquery any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
+func (s *IvfflatSearch[T]) Search(proc *process.Process, anyquery any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
 	query, ok := anyquery.([]T)
 	if !ok {
 		return nil, nil, moerr.NewInternalErrorNoCtx("IvfSearch: query not match with index type")
 	}
 
-	return s.Index.Search(query, rt)
+	return s.Index.Search(proc, s.Idxcfg, s.Tblcfg, query, rt)
 }
 
 func (s *IvfflatSearch[T]) Contains(key int64) (bool, error) {

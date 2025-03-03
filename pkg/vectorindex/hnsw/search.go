@@ -200,7 +200,7 @@ func (s *HnswSearch) unlock() {
 }
 
 // Search the hnsw index (implement VectorIndexSearch.Search)
-func (s *HnswSearch) Search(anyquery any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
+func (s *HnswSearch) Search(proc *process.Process, anyquery any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
 
 	query, ok := anyquery.([]float32)
 	if !ok {
