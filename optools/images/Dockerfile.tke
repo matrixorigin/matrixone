@@ -1,21 +1,12 @@
-FROM ubuntu:22.04 AS builder
-
-
-# Install some utilities used for debugging or by startup script
-RUN apt-get update && apt-get install -y \
-    golang-1.23 \
-    build-essential \
-    dnsutils \
-    curl \
-    git \
-    cmake \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
-
-ENV PATH ${PATH}:/usr/lib/go-1.23/bin/
+FROM ccr.ccs.tencentyun.com/mo-infra/golang:1.23.0-bookworm AS builder
 
 # goproxy
-ARG GOPROXY="https://proxy.golang.org,direct"
+ARG GOPROXY="https://goproxy.cn,direct"
 RUN go env -w GOPROXY=${GOPROXY}
+
+# Install some utilities used for debugging or by startup script
+RUN sed -i 's/deb.debian.org/mirrors.ustc.edu.cn/g' /etc/apt/sources.list.d/debian.sources; \
+    apt-get update && apt-get install -y dnsutils curl git cmake;
 
 RUN mkdir -p /go/src/github.com/matrixorigin/matrixone
 
@@ -32,25 +23,20 @@ COPY . .
 
 RUN make build
 
-FROM ubuntu:22.04
+FROM ccr.ccs.tencentyun.com/mo-infra/ubuntu:22.04
+
 
 COPY --from=builder /go/src/github.com/matrixorigin/matrixone/mo-service /mo-service
 COPY --from=builder /go/src/github.com/matrixorigin/matrixone/etc /etc
 COPY --from=builder /go/src/github.com/matrixorigin/matrixone/thirdparties/install/lib/*.so /usr/local/lib
 
 # Install some utilities used for debugging or by startup script
-RUN apt-get update && apt-get install -y \
-    dnsutils \
-    curl \
-    git \
-    cmake \
-    libcurl4-openssl-dev libgomp1 \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
-
-RUN ldconfig
-
-# Debug purpose - run below command to check shared library not found
-RUN /mo-service -h
+RUN sed -i 's/security.ubuntu.com/mirrors.ustc.edu.cn/g' /etc/apt/sources.list; \
+    sed -i 's@http://.*archive.ubuntu.com@https://mirrors.ustc.edu.cn@g' /etc/apt/sources.list; \
+    sed -i 's@http://.*ports.ubuntu.com@https://mirrors.ustc.edu.cn@g' /etc/apt/sources.list; \
+    apt-get update && apt-get install -y dnsutils curl git cmake libcurl4-openssl-dev libgomp1; \
+    apt-get clean && rm -rf /var/lib/apt/lists/*; \
+    ldconfig;
 
 WORKDIR /
 

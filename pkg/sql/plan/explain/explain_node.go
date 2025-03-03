@@ -713,7 +713,7 @@ func (ndesc *NodeDescribeImpl) GetSendMessageInfo(ctx context.Context, options *
 				buf.WriteString(", ")
 			}
 			first = false
-			describeMessage(v, buf)
+			describeMessage(&v, buf)
 		}
 	} else if options.Format == EXPLAIN_FORMAT_JSON {
 		return "", moerr.NewNYI(ctx, "explain format json")
@@ -737,7 +737,7 @@ func (ndesc *NodeDescribeImpl) GetRecvMessageInfo(ctx context.Context, options *
 				buf.WriteString(", ")
 			}
 			first = false
-			describeMessage(v, buf)
+			describeMessage(&v, buf)
 		}
 	} else if options.Format == EXPLAIN_FORMAT_JSON {
 		return "", moerr.NewNYI(ctx, "explain format json")

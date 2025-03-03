@@ -69,7 +69,8 @@ func TestReplayCatalog1(t *testing.T) {
 			assert.Nil(t, err)
 			objCnt := rand.Intn(5) + 1
 			for i := 0; i < objCnt; i++ {
-				stats := objectio.NewObjectStatsWithObjectID(objectio.NewObjectid(), false, false, false)
+				noid := objectio.NewObjectid()
+				stats := objectio.NewObjectStatsWithObjectID(&noid, false, false, false)
 				obj, err := rel.CreateNonAppendableObject(false, &objectio.CreateObjOpt{Stats: stats})
 				testutil.MockObjectStats(t, obj)
 				assert.Nil(t, err)
