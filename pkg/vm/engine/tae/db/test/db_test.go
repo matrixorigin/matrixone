@@ -11546,6 +11546,12 @@ func TestCheckpointCompatibility(t *testing.T) {
 		tae.Opts.Fs,
 	)
 	err = reader.ReadMeta(ctx)
+	reader.GetLocations()
+	bat2, err := reader.GetCheckpointData(ctx)
+	assert.NoError(t, err)
+	assert.Equal(t, bat2.RowCount(), 23)
+	bat2.Clean(common.DebugAllocator)
+
 	assert.NoError(t, err)
 	_, err = logtail.GetCheckpointMetaInfo(ctx, tableID, reader)
 	assert.NoError(t, err)
