@@ -23,16 +23,14 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/kmeans"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/kmeans/elkans"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/rand"
@@ -58,6 +56,8 @@ var (
 		"vector_cosine_ops": kmeans.CosineDistance,
 		"vector_l1_ops":     kmeans.L1Distance,
 	}
+
+	ivf_runSql = sqlexec.RunSql
 )
 
 type ivfCreateState struct {
@@ -324,33 +324,4 @@ func (u *ivfCreateState) start(tf *TableFunction, proc *process.Process, nthRow 
 	u.data = append(u.data, append(make([]float64, 0, len(f64a)), f64a...))
 
 	return nil
-}
-
-var ivf_runSql = ivf_runSql_fn
-
-// run SQL in batch mode. Result batches will stored in memory and return once all result batches received.
-func ivf_runSql_fn(proc *process.Process, sql string) (executor.Result, error) {
-	v, ok := moruntime.ServiceRuntime(proc.GetService()).GetGlobalVariables(moruntime.InternalSQLExecutor)
-	if !ok {
-		panic("missing lock service")
-	}
-
-	//-------------------------------------------------------
-	topContext := proc.GetTopContext()
-	accountId, err := defines.GetAccountId(proc.Ctx)
-	if err != nil {
-		return executor.Result{}, err
-	}
-	//-------------------------------------------------------
-
-	exec := v.(executor.SQLExecutor)
-	opts := executor.Options{}.
-		// All runSql and runSqlWithResult is a part of input sql, can not incr statement.
-		// All these sub-sql's need to be rolled back and retried en masse when they conflict in pessimistic mode
-		WithDisableIncrStatement().
-		WithTxn(proc.GetTxnOperator()).
-		WithDatabase(proc.GetSessionInfo().Database).
-		WithTimeZone(proc.GetSessionInfo().TimeZone).
-		WithAccountID(accountId)
-	return exec.Exec(topContext, sql, opts)
 }
