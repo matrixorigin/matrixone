@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/monlp/tokenizer"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 /*
@@ -44,7 +45,7 @@ import (
 */
 
 // Init Search Accum
-func NewSearchAccum(srctbl string, tblname string, pattern string, mode int64, params string) (*SearchAccum, error) {
+func NewSearchAccum(srctbl string, tblname string, pattern string, mode int64, params string, scoreAlgo FullTextScoreAlgo) (*SearchAccum, error) {
 
 	ps, err := ParsePattern(pattern, mode)
 	if err != nil {
@@ -53,7 +54,7 @@ func NewSearchAccum(srctbl string, tblname string, pattern string, mode int64, p
 
 	nwords := GetResultCountFromPattern(ps)
 	return &SearchAccum{SrcTblName: srctbl, TblName: tblname, Mode: mode,
-		Pattern: ps, Params: params, Nkeywords: nwords}, nil
+		Pattern: ps, Params: params, Nkeywords: nwords, ScoreAlgo: scoreAlgo}, nil
 }
 
 // find pattern by operator
@@ -91,7 +92,7 @@ func (s *SearchAccum) PatternAnyPlus() bool {
 }
 
 // Evaluate the search string
-func (s *SearchAccum) Eval(docvec []uint8, aggcnt []int64) ([]float32, error) {
+func (s *SearchAccum) Eval(docvec []uint8, docLen int64, aggcnt []int64) ([]float32, error) {
 	var result []float32
 	var err error
 
@@ -100,7 +101,7 @@ func (s *SearchAccum) Eval(docvec []uint8, aggcnt []int64) ([]float32, error) {
 	}
 
 	for _, p := range s.Pattern {
-		result, err = p.Eval(s, docvec, aggcnt, float32(1.0), result)
+		result, err = p.Eval(s, docvec, docLen, aggcnt, float32(1.0), result)
 		if err != nil {
 			return nil, err
 		}
@@ -164,7 +165,7 @@ func (p *Pattern) GetLeafText(operator int) []string {
 }
 
 // Eval leaf node.  compute the tfidf from the data in WordAccums and return result as map[doc_id]float32
-func (p *Pattern) EvalLeaf(s *SearchAccum, docvec []uint8, aggcnt []int64, weight float32, result []float32) ([]float32, error) {
+func (p *Pattern) EvalLeaf(s *SearchAccum, docvec []uint8, docLen int64, aggcnt []int64, weight float32, result []float32) ([]float32, error) {
 	index := p.Index
 	cnt := docvec[index]
 
@@ -178,11 +179,26 @@ func (p *Pattern) EvalLeaf(s *SearchAccum, docvec []uint8, aggcnt []int64, weigh
 		result = []float32{}
 	}
 
-	nmatch := float64(aggcnt[index])
-	idf := math.Log10(float64(s.Nrow) / nmatch)
-	idfSq := float32(idf * idf)
-	tf := float32(docvec[index])
-	score := weight * tf * idfSq
+	var score float32
+	switch s.ScoreAlgo {
+	case ALGO_TFIDF:
+		nmatch := float64(aggcnt[index])
+		idf := math.Log10(float64(s.Nrow) / nmatch)
+		idfSq := float32(idf * idf)
+		tf := float32(docvec[index])
+		score = weight * tf * idfSq
+
+	case ALGO_BM25:
+		//@see https://zhuanlan.zhihu.com/p/670322092
+		nmatch := float64(aggcnt[index])
+		idf := math.Log10(float64(s.Nrow) / nmatch) //use old tfidf algo
+		idfSq := float32(idf * idf)
+
+		tf := float32(docvec[index])
+		tfSq := tf * (BM25_K1 + 1) / (tf + BM25_K1*float32(1.0-BM25_B+BM25_B*(float64(docLen)/s.AvgDocLen)))
+		score = weight * idfSq * tfSq
+	}
+
 	if len(result) > 0 {
 		result[0] = score
 	} else {
@@ -338,15 +354,15 @@ func (p *Pattern) Combine(s *SearchAccum, docvec []uint8, aggcnt []int64, arg, r
 }
 
 // Eval() function to evaluate the previous result from Eval and the current pattern (with data from datasource)  and return map[doc_id]float32
-func (p *Pattern) Eval(accum *SearchAccum, docvec []uint8, aggcnt []int64, weight float32, result []float32) ([]float32, error) {
+func (p *Pattern) Eval(accum *SearchAccum, docvec []uint8, docLen int64, aggcnt []int64, weight float32, result []float32) ([]float32, error) {
 	switch p.Operator {
 	case TEXT, STAR:
 		// leaf node: TEXT, STAR
 		// calculate the score with weight
 		if result == nil {
-			return p.EvalLeaf(accum, docvec, aggcnt, weight, result)
+			return p.EvalLeaf(accum, docvec, docLen, aggcnt, weight, result)
 		} else {
-			child_result, err := p.EvalLeaf(accum, docvec, aggcnt, weight, nil)
+			child_result, err := p.EvalLeaf(accum, docvec, docLen, aggcnt, weight, nil)
 			if err != nil {
 				return nil, err
 			}
@@ -359,9 +375,9 @@ func (p *Pattern) Eval(accum *SearchAccum, docvec []uint8, aggcnt []int64, weigh
 
 	case JOIN:
 		if result == nil {
-			return p.EvalLeaf(accum, docvec, aggcnt, weight, nil)
+			return p.EvalLeaf(accum, docvec, docLen, aggcnt, weight, nil)
 		} else {
-			child_result, err := p.EvalLeaf(accum, docvec, aggcnt, weight, nil)
+			child_result, err := p.EvalLeaf(accum, docvec, docLen, aggcnt, weight, nil)
 			if err != nil {
 				return nil, err
 			}
@@ -370,9 +386,9 @@ func (p *Pattern) Eval(accum *SearchAccum, docvec []uint8, aggcnt []int64, weigh
 		}
 	case PLUS:
 		if result == nil {
-			return p.Children[0].Eval(accum, docvec, aggcnt, weight, nil)
+			return p.Children[0].Eval(accum, docvec, docLen, aggcnt, weight, nil)
 		} else {
-			child_result, err := p.Children[0].Eval(accum, docvec, aggcnt, weight, nil)
+			child_result, err := p.Children[0].Eval(accum, docvec, docLen, aggcnt, weight, nil)
 			if err != nil {
 				return nil, err
 			}
@@ -384,7 +400,7 @@ func (p *Pattern) Eval(accum *SearchAccum, docvec []uint8, aggcnt []int64, weigh
 			result = []float32{}
 			return result, nil
 		} else {
-			child_result, err := p.Children[0].Eval(accum, docvec, aggcnt, weight, nil)
+			child_result, err := p.Children[0].Eval(accum, docvec, docLen, aggcnt, weight, nil)
 			if err != nil {
 				return nil, err
 			}
@@ -397,9 +413,9 @@ func (p *Pattern) Eval(accum *SearchAccum, docvec []uint8, aggcnt []int64, weigh
 		weight *= p.GetWeight()
 
 		if result == nil {
-			return p.Children[0].Eval(accum, docvec, aggcnt, weight, nil)
+			return p.Children[0].Eval(accum, docvec, docLen, aggcnt, weight, nil)
 		} else {
-			child_result, err := p.Children[0].Eval(accum, docvec, aggcnt, weight, nil)
+			child_result, err := p.Children[0].Eval(accum, docvec, docLen, aggcnt, weight, nil)
 			if err != nil {
 				return nil, err
 			}
@@ -411,9 +427,9 @@ func (p *Pattern) Eval(accum *SearchAccum, docvec []uint8, aggcnt []int64, weigh
 		weight *= p.GetWeight()
 
 		if result == nil {
-			return p.Children[0].Eval(accum, docvec, aggcnt, weight, nil)
+			return p.Children[0].Eval(accum, docvec, docLen, aggcnt, weight, nil)
 		} else {
-			child_result, err := p.Children[0].Eval(accum, docvec, aggcnt, weight, nil)
+			child_result, err := p.Children[0].Eval(accum, docvec, docLen, aggcnt, weight, nil)
 			if err != nil {
 				return nil, err
 			}
@@ -428,7 +444,7 @@ func (p *Pattern) Eval(accum *SearchAccum, docvec []uint8, aggcnt []int64, weigh
 	case GROUP:
 		result := []float32{}
 		for _, c := range p.Children {
-			child_result, err := c.Eval(accum, docvec, aggcnt, weight, nil)
+			child_result, err := c.Eval(accum, docvec, docLen, aggcnt, weight, nil)
 			if err != nil {
 				return nil, err
 			}
@@ -444,7 +460,7 @@ func (p *Pattern) Eval(accum *SearchAccum, docvec []uint8, aggcnt []int64, weigh
 	case PHRASE:
 		// all children are TEXT and AND operations
 		for i, c := range p.Children {
-			child_result, err := c.Eval(accum, docvec, aggcnt, weight, nil)
+			child_result, err := c.Eval(accum, docvec, docLen, aggcnt, weight, nil)
 			if err != nil {
 				return nil, err
 			}
@@ -934,4 +950,19 @@ func ParsePattern(pattern string, mode int64) ([]*Pattern, error) {
 		return nil, moerr.NewInternalErrorNoCtx("invalid fulltext search mode")
 
 	}
+}
+
+func GetScoreAlgo(proc *process.Process) (FullTextScoreAlgo, error) {
+	scoreAlgo := ALGO_TFIDF
+	val, err := proc.GetResolveVariableFunc()(FulltextRelevancyAlgo, true, false)
+	if err != nil {
+		return scoreAlgo, err
+	}
+	if val != nil {
+		algo := fmt.Sprintf("%v", val)
+		if algo == FulltextRelevancyAlgo_bm25 {
+			scoreAlgo = ALGO_BM25
+		}
+	}
+	return scoreAlgo, err
 }
