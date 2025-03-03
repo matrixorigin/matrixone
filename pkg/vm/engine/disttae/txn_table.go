@@ -157,11 +157,16 @@ func (tbl *txnTable) PrefetchAllMeta(ctx context.Context) bool {
 }
 
 func (tbl *txnTable) Stats(ctx context.Context, sync bool) (*pb.StatsInfo, error) {
-	_, err := tbl.getPartitionState(ctx)
-	if err != nil {
-		logutil.Errorf("failed to get partition state of table %d: %v", tbl.tableId, err)
-		return nil, err
+	//Stats only stats the committed data of the table.
+	if tbl.db.getTxn().tableOps.existCreatedInTxn(tbl.tableId) ||
+		strings.ToUpper(tbl.relKind) == "V" {
+		return nil, nil
 	}
+	//_, err := tbl.getPartitionState(ctx)
+	//if err != nil {
+	//	logutil.Errorf("failed to get partition state of table %d: %v", tbl.tableId, err)
+	//	return nil, err
+	//}
 	return tbl.getEngine().Stats(ctx, pb.StatsInfoKey{
 		AccId:      tbl.accountId,
 		DatabaseID: tbl.db.databaseId,
