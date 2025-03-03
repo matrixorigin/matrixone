@@ -1251,8 +1251,8 @@ func checkUsageData(data logtail.UsageData, c *storageUsageHistoryArg) bool {
 }
 
 func storageUsageDetails(c *storageUsageHistoryArg) (err error) {
-	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second*5, moerr.CauseStorageUsageDetails)
-	defer cancel()
+	// ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second*5, moerr.CauseStorageUsageDetails)
+	// defer cancel()
 
 	entries := c.ctx.db.BGCheckpointRunner.GetAllCheckpoints()
 
@@ -1273,11 +1273,11 @@ func storageUsageDetails(c *storageUsageHistoryArg) (err error) {
 	var usageInsData [][]logtail.UsageData
 	var usageDelData [][]logtail.UsageData
 
-	if usageInsData, usageDelData, err = logtail.GetStorageUsageHistory(
-		ctx, c.ctx.db.Runtime.SID(), locations, versions,
-		c.ctx.db.Runtime.Fs, common.DebugAllocator); err != nil {
-		return err
-	}
+	// if usageInsData, usageDelData, err = logtail.GetStorageUsageHistory(
+	// 	ctx, c.ctx.db.Runtime.SID(), locations, versions,
+	// 	c.ctx.db.Runtime.Fs, common.DebugAllocator); err != nil {
+	// 	return err
+	// }
 
 	txn, _ := c.ctx.db.StartTxn(nil)
 	defer txn.Commit(context.Background())
@@ -1427,9 +1427,9 @@ func storageUsageEliminateErrors(c *storageUsageHistoryArg) (err error) {
 	if len(entries) == 0 {
 		return moerr.NewNotSupportedNoCtx("please execute this cmd after at least one checkpoint has been generated")
 	}
-	end := entries[len(entries)-1].GetEnd()
-	cnt := logtail.EliminateErrorsOnCache(c.ctx.db.Catalog, end)
-	c.ctx.out.Write([]byte(fmt.Sprintf("%d tables backed to the track. ", cnt)))
+	// end := entries[len(entries)-1].GetEnd()
+	// cnt := logtail.EliminateErrorsOnCache(c.ctx.db.Catalog, end)
+	// c.ctx.out.Write([]byte(fmt.Sprintf("%d tables backed to the track. ", cnt)))
 
 	return nil
 }

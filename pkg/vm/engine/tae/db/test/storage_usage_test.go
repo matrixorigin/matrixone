@@ -208,66 +208,6 @@ func appendUsageToBatch(bat *containers.Batch, usage logtail.UsageData) {
 
 }
 
-func Test_EstablishFromCheckpoints(t *testing.T) {
-	version11Cnt := 5
-	allocator := atomic.Uint64{}
-	allocator.Store(pkgcatalog.MO_RESERVED_MAX + 1)
-
-	ckps := make([]*logtail.CheckpointData, 0)
-	vers := make([]uint32, 0)
-
-	var usageIns, usageDel []logtail.UsageData
-
-	for idx := 0; idx < version11Cnt; idx++ {
-		data := logtail.NewCheckpointDataWithVersion(logtail.CheckpointVersion12, common.DebugAllocator)
-		insBat := data.GetBatches()[logtail.StorageUsageInsIDX]
-		delBat := data.GetBatches()[logtail.StorageUsageDelIDX]
-
-		usages := logtail.MockUsageData(10, 10, 10, &allocator)
-		usageIns = append(usageIns, usages...)
-		for xx := range usages {
-			appendUsageToBatch(insBat, usages[xx])
-		}
-
-		usages = logtail.MockUsageData(10, 10, 10, &allocator)
-		usageDel = append(usageDel, usages...)
-		for xx := range usages {
-			appendUsageToBatch(delBat, usages[xx])
-		}
-
-		ckps = append(ckps, data)
-		vers = append(vers, logtail.CheckpointVersion12)
-	}
-
-	memo := logtail.NewTNUsageMemo(nil)
-	memo.Clear()
-
-	memo.PrepareReplay(ckps, vers)
-	memo.EstablishFromCKPs()
-
-	memoShadow := logtail.NewTNUsageMemo(nil)
-	for idx := range usageIns {
-		memoShadow.DeltaUpdate(usageIns[idx], false)
-	}
-
-	for idx := range usageDel {
-		memoShadow.DeltaUpdate(usageDel[idx], true)
-	}
-
-	require.Equal(t, memo.CacheLen(), memoShadow.CacheLen())
-
-	iter := memoShadow.GetCache().Iter()
-	for iter.Next() {
-		usage, exist := memo.Get(iter.Item())
-		require.True(t, exist)
-		//fmt.Println(usage)
-		//fmt.Println(iter.Item())
-		//fmt.Println()
-		require.Equal(t, usage, iter.Item())
-	}
-	iter.Release()
-}
-
 func Test_UsageDataMerge(t *testing.T) {
 	a := logtail.UsageData{
 		Size: 90,

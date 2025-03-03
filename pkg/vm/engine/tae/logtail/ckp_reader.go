@@ -861,6 +861,24 @@ func getMetaInfo(
 	}
 	return
 }
+func LoadCheckpointLocations(
+	ctx context.Context,
+	sid string,
+	reader *CKPReader,
+) (map[string]objectio.Location, error) {
+	select {
+	case <-ctx.Done():
+		return nil, context.Cause(ctx)
+	default:
+	}
+	locationMap := make(map[string]objectio.Location)
+	locations := reader.GetLocations()
+	for _, loc := range locations {
+		locationMap[loc.Name().String()] = loc
+	}
+	return locationMap, nil
+}
+
 func GetTableIDsFromCheckpoint(
 	ctx context.Context,
 	reader *CKPReader,
