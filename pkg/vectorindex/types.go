@@ -50,7 +50,6 @@ type IndexTableConfig struct {
 	Nprobe       uint   `json:"nprobe"`
 	PKeyType     int32  `json:"pktype"`
 	KeyPartType  int32  `json:"parttype"`
-	Version      int64  `json:"version"`
 }
 
 // HNSW specified parameters
@@ -74,6 +73,7 @@ type IvfflatIndexConfig struct {
 	InitType   uint16
 	Dimensions uint
 	Normalize  bool
+	Version    int64
 }
 
 // This is generalized index config and able to share between various algorithm types.  Simply add your new configuration such as usearch.IndexConfig

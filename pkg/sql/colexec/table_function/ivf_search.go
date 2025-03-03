@@ -177,7 +177,12 @@ func (u *ivfSearchState) start(tf *TableFunction, proc *process.Process, nthRow 
 		u.idxcfg.Ivfflat.Dimensions = uint(dimension)
 		u.idxcfg.Type = "ivfflat"
 
-		// TODO: ERIC get version here
+		// get version
+		version, err := ivfflat.GetVersion(proc, u.tblcfg)
+		if err != nil {
+			return err
+		}
+		u.idxcfg.Ivfflat.Version = version
 
 		u.batch = tf.createResultBatch()
 		u.inited = true
