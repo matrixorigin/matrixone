@@ -11546,6 +11546,7 @@ func TestCheckpointCompatibility(t *testing.T) {
 		tae.Opts.Fs,
 	)
 	err = reader.ReadMeta(ctx)
+	assert.NoError(t, err)
 	reader.GetLocations()
 	bat2, err := reader.GetCheckpointData(ctx)
 	assert.NoError(t, err)
