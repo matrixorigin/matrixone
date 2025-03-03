@@ -197,6 +197,12 @@ type resourceController struct {
 	transferPageLimit int64
 
 	cpuPercent float64
+
+	skippedFromOOM bool
+	count          int
+	prevCount      int
+
+	tableStart time.Time
 }
 
 func (c *resourceController) setMemLimit(total uint64) {
@@ -246,6 +252,9 @@ func (c *resourceController) refresh() {
 	}
 	c.reservedMergeRows = 0
 	c.reserved = 0
+
+	c.skippedFromOOM = false
+	c.count = 0
 }
 
 func (c *resourceController) availableMem() int64 {
@@ -277,9 +286,6 @@ func (c *resourceController) reserveResources(objs []*catalog.ObjectEntry) {
 }
 
 func (c *resourceController) resourceAvailable(objs []*catalog.ObjectEntry) bool {
-	if c.reservedMergeRows*36 /*28 * 1.3 */ > c.transferPageLimit/8 {
-		return false
-	}
 
 	mem := c.availableMem()
 	if mem > constMaxMemCap {
