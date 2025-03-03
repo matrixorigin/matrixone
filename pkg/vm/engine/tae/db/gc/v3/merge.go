@@ -136,7 +136,7 @@ func MergeCheckpoint(
 	}
 	_, tsFile := ioutil.TryDecodeTSRangeFile(name)
 	client.AddCheckpointMetaFile(tsFile.GetName())
-	checkpointEntry = checkpoint.NewCheckpointEntry("", ckpEntries[0].GetStart(), *end, checkpoint.ET_Compacted)
+	checkpointEntry = checkpoint.NewCheckpointEntry(sid, ckpEntries[0].GetStart(), *end, checkpoint.ET_Compacted)
 	checkpointEntry.SetLocation(cnLocation, tnLocation)
 	checkpointEntry.SetLSN(ckpEntries[len(ckpEntries)-1].LSN(), ckpEntries[len(ckpEntries)-1].GetTruncateLsn())
 	checkpointEntry.SetState(checkpoint.ST_Finished)
@@ -216,12 +216,20 @@ func processCheckpointEntry(
 	ins := data.GetObjectBatchs()
 	tombstone := data.GetTombstoneObjectBatchs()
 
-	bf.Test(ins.GetVectorByName(catalog.ObjectAttr_ObjectStats).GetDownstreamVector(), func(exists bool, i int) {
-		appendValToBatch(ins, ckpData.GetObjectBatchs(), i)
-	})
-	bf.Test(tombstone.GetVectorByName(catalog.ObjectAttr_ObjectStats).GetDownstreamVector(), func(exists bool, i int) {
-		appendValToBatch(tombstone, ckpData.GetTombstoneObjectBatchs(), i)
-	})
+	bf.Test(ins.GetVectorByName(catalog.ObjectAttr_ObjectStats).GetDownstreamVector(),
+		func(exists bool, i int) {
+			if !exists {
+				return
+			}
+			appendValToBatch(ins, ckpData.GetObjectBatchs(), i)
+		})
+	bf.Test(tombstone.GetVectorByName(catalog.ObjectAttr_ObjectStats).GetDownstreamVector(),
+		func(exists bool, i int) {
+			if !exists {
+				return
+			}
+			appendValToBatch(tombstone, ckpData.GetTombstoneObjectBatchs(), i)
+		})
 
 	return nil
 }
