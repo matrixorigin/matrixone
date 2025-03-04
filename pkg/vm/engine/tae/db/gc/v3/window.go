@@ -33,7 +33,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"go.uber.org/zap"
 
@@ -139,6 +138,7 @@ func (w *GCWindow) ExecuteGlobalCheckpointBasedGC(
 	job := NewCheckpointBasedGCJob(
 		&gcTS,
 		gCkp.GetLocation(),
+		gCkp.GetVersion(),
 		sourcer,
 		pitrs,
 		accountSnapshots,
@@ -174,8 +174,8 @@ func (w *GCWindow) ExecuteGlobalCheckpointBasedGC(
 func (w *GCWindow) ScanCheckpoints(
 	ctx context.Context,
 	checkpointEntries []*checkpoint.CheckpointEntry,
-	collectCkpData func(context.Context, *checkpoint.CheckpointEntry) (*logtail.CheckpointData, error),
-	processCkpData func(*checkpoint.CheckpointEntry, *logtail.CheckpointData) error,
+	collectCkpData func(context.Context, *checkpoint.CheckpointEntry) (*logtail.CKPReader, error),
+	processCkpData func(*checkpoint.CheckpointEntry, *logtail.CKPReader) error,
 	onScanDone func() error,
 	buffer *containers.OneSchemaBatchBuffer,
 ) (metaFile string, err error) {
@@ -197,14 +197,13 @@ func (w *GCWindow) ScanCheckpoints(
 		if err != nil {
 			return false, err
 		}
-		defer data.Close()
 		if processCkpData != nil {
 			if err = processCkpData(checkpointEntries[0], data); err != nil {
 				return false, err
 			}
 		}
 		objects := make(map[string]*ObjectEntry)
-		collectObjectsFromCheckpointData(data, objects)
+		collectObjectsFromCheckpointData(ctx, data, objects)
 		if err = collectMapData(objects, bat, mp); err != nil {
 			return false, err
 		}
@@ -321,48 +320,29 @@ func (w *GCWindow) Merge(o *GCWindow) {
 	}
 }
 
-func collectObjectsFromCheckpointData(data *logtail.CheckpointData, objects map[string]*ObjectEntry) {
-	ins := data.GetObjectBatchs()
-	insDeleteTSVec := ins.GetVectorByName(catalog.EntryNode_DeleteAt).GetDownstreamVector()
-	insCreateTSVec := ins.GetVectorByName(catalog.EntryNode_CreateAt).GetDownstreamVector()
-	dbid := ins.GetVectorByName(catalog.SnapshotAttr_DBID).GetDownstreamVector()
-	tableID := ins.GetVectorByName(catalog.SnapshotAttr_TID).GetDownstreamVector()
-
-	for i := 0; i < ins.Length(); i++ {
-		buf := ins.GetVectorByName(catalog.ObjectAttr_ObjectStats).Get(i).([]byte)
-		stats := (objectio.ObjectStats)(buf)
-		name := stats.ObjectName().String()
-		deleteTS := vector.GetFixedAtNoTypeCheck[types.TS](insDeleteTSVec, i)
-		createTS := vector.GetFixedAtNoTypeCheck[types.TS](insCreateTSVec, i)
-		object := &ObjectEntry{
-			stats:    &stats,
-			createTS: createTS,
-			dropTS:   deleteTS,
-			db:       vector.GetFixedAtNoTypeCheck[uint64](dbid, i),
-			table:    vector.GetFixedAtNoTypeCheck[uint64](tableID, i),
-		}
-		objects[name] = object
-	}
-	del := data.GetTombstoneObjectBatchs()
-	delDeleteTSVec := del.GetVectorByName(catalog.EntryNode_DeleteAt).GetDownstreamVector()
-	delCreateTSVec := del.GetVectorByName(catalog.EntryNode_CreateAt).GetDownstreamVector()
-	delDbid := del.GetVectorByName(catalog.SnapshotAttr_DBID).GetDownstreamVector()
-	delTableID := del.GetVectorByName(catalog.SnapshotAttr_TID).GetDownstreamVector()
-	for i := 0; i < del.Length(); i++ {
-		buf := del.GetVectorByName(catalog.ObjectAttr_ObjectStats).Get(i).([]byte)
-		stats := (objectio.ObjectStats)(buf)
-		name := stats.ObjectName().String()
-		deleteTS := vector.GetFixedAtNoTypeCheck[types.TS](delDeleteTSVec, i)
-		createTS := vector.GetFixedAtNoTypeCheck[types.TS](delCreateTSVec, i)
-		object := &ObjectEntry{
-			stats:    &stats,
-			createTS: createTS,
-			dropTS:   deleteTS,
-			db:       vector.GetFixedAtNoTypeCheck[uint64](delDbid, i),
-			table:    vector.GetFixedAtNoTypeCheck[uint64](delTableID, i),
-		}
-		objects[name] = object
-	}
+func collectObjectsFromCheckpointData(ctx context.Context, data *logtail.CKPReader, objects map[string]*ObjectEntry) {
+	data.ForEachRow(
+		ctx,
+		func(
+			account uint32,
+			dbid, tid uint64,
+			objectType int8,
+			stats objectio.ObjectStats,
+			createTS, deleteTS types.TS,
+			rowID types.Rowid,
+		) error {
+			name := stats.ObjectName().String()
+			object := &ObjectEntry{
+				stats:    &stats,
+				createTS: createTS,
+				dropTS:   deleteTS,
+				db:       dbid,
+				table:    tid,
+			}
+			objects[name] = object
+			return nil
+		},
+	)
 }
 
 func (w *GCWindow) Close() {
