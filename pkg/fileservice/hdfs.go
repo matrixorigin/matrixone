@@ -55,6 +55,9 @@ func NewHDFS(
 		return nil, err
 	}
 
+	if !strings.HasPrefix(args.Endpoint, "hdfs://") {
+		args.Endpoint = "hdfs://" + args.Endpoint
+	}
 	u, err := url.Parse(args.Endpoint)
 	if err != nil {
 		return nil, err
