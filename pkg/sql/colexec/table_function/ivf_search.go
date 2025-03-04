@@ -226,12 +226,18 @@ func (u *ivfSearchState) start(tf *TableFunction, proc *process.Process, nthRow 
 
 	if faVec.GetType().Oid == types.T_array_float32 {
 		f32a := types.BytesToArray[float32](faVec.GetBytesAt(nthRow))
+		if uint(len(f32a)) != u.idxcfg.Ivfflat.Dimensions {
+			return moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("vector ops between different dimensions (%d, %d) is not permitted.", u.idxcfg.Ivfflat.Dimensions, len(f32a)))
+		}
 		u.keys, u.distances, err = veccache.Cache.Search(proc, key, algo, f32a, vectorindex.RuntimeConfig{Limit: uint(u.limit), Probe: uint(u.tblcfg.Nprobe)})
 		if err != nil {
 			return err
 		}
 	} else {
 		f64a := types.BytesToArray[float64](faVec.GetBytesAt(nthRow))
+		if uint(len(f64a)) != u.idxcfg.Ivfflat.Dimensions {
+			return moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("vector ops between different dimensions (%d, %d) is not permitted.", u.idxcfg.Ivfflat.Dimensions, len(f64a)))
+		}
 		u.keys, u.distances, err = veccache.Cache.Search(proc, key, algo, f64a, vectorindex.RuntimeConfig{Limit: uint(u.limit), Probe: uint(u.tblcfg.Nprobe)})
 		if err != nil {
 			return err

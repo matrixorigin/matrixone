@@ -1,4 +1,5 @@
 SET experimental_ivf_index = 1;
+SET @probe_limit=1;
 
 -- create vector index: create->create index->insert
 create table vector_index_01(a int primary key, b vecf32(128),c int,key c_k(c));
@@ -106,11 +107,11 @@ show create table vector_index_08;
 insert into vector_index_08(d) values ("[2.36,5.021,9.222]");
 insert into vector_index_08(d) values ("[8.555,2.11,7.22]");
 alter table vector_index_08 alter reindex idx02 ivfflat lists=3;
-select * from vector_index_08 where a>9774 order by  L2_DISTANCE(d,"[1.02,0.2,3.2]") desc limit 2;
+select * from vector_index_08 where a>9774 order by  L2_DISTANCE(d,"[2.36,0.021,9.222]") desc limit 2;
 --explain select * from vector_index_08 where a>1 order by  L2_DISTANCE(c,"[1.02,0.2,3.2]") desc;
 
 alter table vector_index_08 rename column d to e;
-select * from vector_index_08 where a>9775 order by  L2_DISTANCE(e,"[1.02,0.2,3.2]") desc limit 2;
+select * from vector_index_08 where a>9775 order by  L2_DISTANCE(e,"[8.555,2.11,7.22]") desc limit 2;
 --explain select * from vector_index_08 where a>1 order by  L2_DISTANCE(c,"[1.02,0.2,3.2]") desc;
 
 alter table vector_index_08 drop column e;

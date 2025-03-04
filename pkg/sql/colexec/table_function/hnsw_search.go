@@ -16,6 +16,7 @@ package table_function
 
 import (
 	"encoding/json"
+	"fmt"
 	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -212,6 +213,9 @@ func (u *hnswSearchState) start(tf *TableFunction, proc *process.Process, nthRow
 	}
 
 	f32a := types.BytesToArray[float32](f32aVec.GetBytesAt(nthRow))
+	if uint(len(f32a)) != u.idxcfg.Usearch.Dimensions {
+		return moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("vector ops between different dimensions (%d, %d) is not permitted.", u.idxcfg.Usearch.Dimensions, len(f32a)))
+	}
 
 	veccache.Cache.Once()
 
