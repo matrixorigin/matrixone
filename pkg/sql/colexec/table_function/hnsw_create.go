@@ -27,11 +27,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-
-	usearch "github.com/unum-cloud/usearch/golang"
 )
 
 var hnsw_runSql = sqlexec.RunSql
@@ -135,12 +134,11 @@ func (u *hnswCreateState) start(tf *TableFunction, proc *process.Process, nthRow
 			u.idxcfg.Usearch.Connectivity = uint(val)
 		}
 
-		// default L2Sq
-		if u.param.OpType != "vector_l2_ops" {
-			return moerr.NewInternalError(proc.Ctx, "invalid optype")
+		metric, ok := metric.DistTypeStrToUsearch[u.param.OpType]
+		if !ok {
+			return moerr.NewInternalError(proc.Ctx, "Invalid op_type")
 		}
-
-		u.idxcfg.Usearch.Metric = usearch.L2sq
+		u.idxcfg.Usearch.Metric = metric
 
 		if len(u.param.EfConstruction) > 0 {
 			val, err := strconv.Atoi(u.param.EfConstruction)

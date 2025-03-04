@@ -14,7 +14,10 @@
 
 package metric
 
-import "gonum.org/v1/gonum/mat"
+import (
+	usearch "github.com/unum-cloud/usearch/golang"
+	"gonum.org/v1/gonum/mat"
+)
 
 type MetricType uint16
 
@@ -44,6 +47,20 @@ var (
 		"vector_ip_ops":     Metric_InnerProduct,
 		"vector_cosine_ops": Metric_CosineDistance,
 		"vector_l1_ops":     Metric_L1Distance,
+	}
+
+	DistTypeStrToUsearch = map[string]usearch.Metric{
+		"vector_l2_ops":     usearch.L2sq,
+		"vector_ip_ops":     usearch.InnerProduct,
+		"vector_cosine_ops": usearch.Cosine,
+		/*
+			"vector_haversine_ops":  usearch.Haversine,
+			"vector_divergence_ops": usearch.Divergence,
+			"vector_pearson_ops":    usearch.Pearson,
+			"vector_hamming_ops":    usearch.Hamming,
+			"vector_tanimoto_ops":   usearch.Tanimoto,
+			"vector_sorensen_ops":   usearch.Sorensen,
+		*/
 	}
 )
 

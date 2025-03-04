@@ -28,10 +28,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-
-	usearch "github.com/unum-cloud/usearch/golang"
 )
 
 type hnswSearchState struct {
@@ -146,10 +145,11 @@ func (u *hnswSearchState) start(tf *TableFunction, proc *process.Process, nthRow
 		}
 
 		// default L2Sq
-		if u.param.OpType != "vector_l2_ops" {
+		metric, ok := metric.DistTypeStrToUsearch[u.param.OpType]
+		if !ok {
 			return moerr.NewInternalError(proc.Ctx, "Invalid op_type")
 		}
-		u.idxcfg.Usearch.Metric = usearch.L2sq
+		u.idxcfg.Usearch.Metric = metric
 
 		if len(u.param.EfConstruction) > 0 {
 			val, err := strconv.Atoi(u.param.EfConstruction)
