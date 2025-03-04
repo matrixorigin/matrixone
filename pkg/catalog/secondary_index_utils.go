@@ -267,13 +267,10 @@ func indexParamsToMap(def interface{}) (map[string]string, error) {
 
 			if len(idx.IndexOption.AlgoParamVectorOpType) > 0 {
 				opType := ToLower(idx.IndexOption.AlgoParamVectorOpType)
-				if opType != IndexAlgoParamOpType_l2 {
-					//opType != IndexAlgoParamOpType_ip &&
-					//opType != IndexAlgoParamOpType_cos &&
-
-					return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid op_type. not of type '%s'",
-						IndexAlgoParamOpType_l2))
-					//IndexAlgoParamOpType_ip, IndexAlgoParamOpType_cos,
+				if opType != IndexAlgoParamOpType_l2 &&
+					opType != IndexAlgoParamOpType_ip &&
+					opType != IndexAlgoParamOpType_cos {
+					return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid op_type. '%s'", opType))
 				}
 				res[IndexAlgoParamOpType] = idx.IndexOption.AlgoParamVectorOpType
 			} else {
