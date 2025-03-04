@@ -169,6 +169,10 @@ type tableInfo struct {
 	pk        string
 }
 
+func (t *tableInfo) IsDrop() bool {
+	return !t.deleteAt.IsEmpty()
+}
+
 type PitrInfo struct {
 	cluster  types.TS
 	account  map[uint32]types.TS
@@ -330,6 +334,19 @@ func IsMoTable(tid uint64) bool {
 	return tid == catalog2.MO_TABLES_ID
 }
 
+func (sm *SnapshotMeta) GetSnapshotTableIDs() map[uint64]struct{} {
+	return sm.snapshotTableIDs
+}
+func (sm *SnapshotMeta) GetTableIDs() map[uint64]*tableInfo {
+	sm.RLock()
+	defer sm.RUnlock()
+	tables := make(map[uint64]*tableInfo)
+	for id, table := range sm.tableIDIndex {
+		tables[id] = table
+	}
+	return tables
+}
+
 type tombstone struct {
 	rowid types.Rowid
 	pk    types.Tuple
@@ -363,7 +380,6 @@ func (sm *SnapshotMeta) updateTableInfo(
 		}
 		id := stats.ObjectName().SegmentId()
 		moTable := (*objects)[tid]
-
 		// dropped object will overwrite the created object, updating the deleteAt
 		moTable[id] = &objectInfo{
 			stats:    stats,
