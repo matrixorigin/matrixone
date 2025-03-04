@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/kmeans"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"gonum.org/v1/gonum/mat"
 )
@@ -60,7 +61,7 @@ type ElkanClusterer struct {
 	clusterCnt int // k in paper
 	vectorCnt  int // n in paper
 
-	distFn    kmeans.DistanceFunction
+	distFn    metric.DistanceFunction
 	initType  kmeans.InitType
 	rand      *rand.Rand
 	normalize bool
@@ -85,7 +86,7 @@ var _ kmeans.Clusterer = new(ElkanClusterer)
 
 func NewKMeans(vectors [][]float64, clusterCnt,
 	maxIterations int, deltaThreshold float64,
-	distanceType kmeans.DistanceType, initType kmeans.InitType,
+	distanceType metric.MetricType, initType kmeans.InitType,
 	normalize bool,
 	nworker int,
 ) (kmeans.Clusterer, error) {
@@ -116,7 +117,7 @@ func NewKMeans(vectors [][]float64, clusterCnt,
 	}
 	minCentroidDist := make([]float64, clusterCnt)
 
-	distanceFunction, err := ResolveDistanceFn(distanceType)
+	distanceFunction, err := metric.ResolveDistanceFn(distanceType)
 	if err != nil {
 		return nil, err
 	}
@@ -211,7 +212,7 @@ func (km *ElkanClusterer) elkansCluster() ([]*mat.VecDense, error) {
 
 func validateArgs(vectorList [][]float64, clusterCnt,
 	maxIterations int, deltaThreshold float64,
-	distanceType kmeans.DistanceType, initType kmeans.InitType) error {
+	distanceType metric.MetricType, initType kmeans.InitType) error {
 	if len(vectorList) == 0 || len(vectorList[0]) == 0 {
 		return moerr.NewInternalErrorNoCtx("input vectors is empty")
 	}
@@ -224,7 +225,7 @@ func validateArgs(vectorList [][]float64, clusterCnt,
 	if deltaThreshold <= 0.0 || deltaThreshold >= 1.0 {
 		return moerr.NewInternalErrorNoCtx("delta threshold is out of bounds (must be > 0.0 and < 1.0)")
 	}
-	if distanceType >= kmeans.DistanceTypeCount {
+	if distanceType >= metric.Metric_TypeCount {
 		return moerr.NewInternalErrorNoCtx("distance type is not supported")
 	}
 	if initType > 1 {

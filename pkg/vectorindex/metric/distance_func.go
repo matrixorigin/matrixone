@@ -12,11 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package elkans
+package metric
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/kmeans"
 	"gonum.org/v1/gonum/mat"
 )
 
@@ -80,16 +79,16 @@ func L1Distance(v1, v2 *mat.VecDense) float64 {
 // We use
 // - L2Distance distance for L2Distance
 // - SphericalDistance for InnerProduct and CosineDistance
-func ResolveDistanceFn(distType kmeans.DistanceType) (kmeans.DistanceFunction, error) {
-	var distanceFunction kmeans.DistanceFunction
-	switch distType {
-	case kmeans.L2Distance:
+func ResolveDistanceFn(metric MetricType) (DistanceFunction, error) {
+	var distanceFunction DistanceFunction
+	switch metric {
+	case Metric_L2Distance:
 		distanceFunction = L2Distance
-	case kmeans.InnerProduct:
+	case Metric_InnerProduct:
 		distanceFunction = InnerProduct
-	case kmeans.CosineDistance:
+	case Metric_CosineDistance:
 		distanceFunction = CosineDistance
-	case kmeans.L1Distance:
+	case Metric_L1Distance:
 		distanceFunction = L1Distance
 	default:
 		return nil, moerr.NewInternalErrorNoCtx("invalid distance type")

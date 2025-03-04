@@ -27,8 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/kmeans"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/kmeans/elkans"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -98,7 +97,7 @@ func (idx *IvfflatSearchIndex[T]) LoadIndex(proc *process.Process, idxcfg vector
 }
 
 // load chunk from database
-func (idx *IvfflatSearchIndex[T]) searchEntries(proc *process.Process, query *mat.VecDense, distfn kmeans.DistanceFunction, heap *vectorindex.SearchResultSafeHeap,
+func (idx *IvfflatSearchIndex[T]) searchEntries(proc *process.Process, query *mat.VecDense, distfn metric.DistanceFunction, heap *vectorindex.SearchResultSafeHeap,
 	stream_chan chan executor.Result, error_chan chan error) (stream_closed bool, err error) {
 
 	var res executor.Result
@@ -129,7 +128,7 @@ func (idx *IvfflatSearchIndex[T]) searchEntries(proc *process.Process, query *ma
 	return false, nil
 }
 
-func (idx *IvfflatSearchIndex[T]) findCentroids(proc *process.Process, query *mat.VecDense, distfn kmeans.DistanceFunction, idxcfg vectorindex.IndexConfig, probe uint, nthread int64) ([]int64, error) {
+func (idx *IvfflatSearchIndex[T]) findCentroids(proc *process.Process, query *mat.VecDense, distfn metric.DistanceFunction, idxcfg vectorindex.IndexConfig, probe uint, nthread int64) ([]int64, error) {
 
 	if len(idx.Centroids) == 0 {
 		// empty index has id = 1
@@ -181,7 +180,7 @@ func (idx *IvfflatSearchIndex[T]) Search(proc *process.Process, idxcfg vectorind
 	stream_chan := make(chan executor.Result, nthread)
 	error_chan := make(chan error, nthread)
 
-	distfn, err := elkans.ResolveDistanceFn(kmeans.DistanceType(idxcfg.Ivfflat.Metric))
+	distfn, err := metric.ResolveDistanceFn(metric.MetricType(idxcfg.Ivfflat.Metric))
 	if err != nil {
 		return nil, nil, err
 	}

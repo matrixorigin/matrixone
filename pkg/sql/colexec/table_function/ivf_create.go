@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/kmeans"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/kmeans/elkans"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -40,7 +41,7 @@ import (
 const (
 	defaultKmeansMaxIteration   = 500
 	defaultKmeansDeltaThreshold = 0.01
-	defaultKmeansDistanceType   = kmeans.L2Distance
+	defaultKmeansDistanceType   = metric.Metric_L2Distance
 	defaultKmeansInitType       = kmeans.Random
 	defaultKmeansClusterCnt     = 1
 	defaultKmeansNormalize      = false
@@ -49,13 +50,6 @@ const (
 var (
 	ClusterCentersSupportTypes = []types.T{
 		types.T_array_float32, types.T_array_float64,
-	}
-
-	distTypeStrToEnum = map[string]kmeans.DistanceType{
-		"vector_l2_ops":     kmeans.L2Distance,
-		"vector_ip_ops":     kmeans.InnerProduct,
-		"vector_cosine_ops": kmeans.CosineDistance,
-		"vector_l1_ops":     kmeans.L1Distance,
 	}
 
 	ivf_runSql = sqlexec.RunSql
@@ -107,7 +101,7 @@ func (u *ivfCreateState) end(tf *TableFunction, proc *process.Process) error {
 		u.data, int(u.idxcfg.Ivfflat.Lists),
 		defaultKmeansMaxIteration,
 		defaultKmeansDeltaThreshold,
-		kmeans.DistanceType(u.idxcfg.Ivfflat.Metric),
+		metric.MetricType(u.idxcfg.Ivfflat.Metric),
 		kmeans.InitType(u.idxcfg.Ivfflat.InitType),
 		u.idxcfg.Ivfflat.Normalize,
 		int(nworker)); err != nil {
@@ -208,7 +202,7 @@ func (u *ivfCreateState) start(tf *TableFunction, proc *process.Process, nthRow 
 		u.idxcfg.Ivfflat.InitType = uint16(kmeans.KmeansPlusPlus)
 		//u.idxcfg.Ivfflat.InitType = uint16(kmeans.Random)
 
-		metric, ok := distTypeStrToEnum[u.param.OpType]
+		metric, ok := metric.DistTypeStrToEnum[u.param.OpType]
 		if !ok {
 			return moerr.NewInternalError(proc.Ctx, "invalid optype")
 		}

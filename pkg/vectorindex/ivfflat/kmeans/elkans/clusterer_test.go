@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/assertx"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/kmeans"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 )
 
@@ -30,7 +31,7 @@ func Test_NewKMeans(t *testing.T) {
 		clusterCnt     int
 		maxIterations  int
 		deltaThreshold float64
-		distType       kmeans.DistanceType
+		distType       metric.MetricType
 		initType       kmeans.InitType
 	}
 	tests := []struct {
@@ -49,7 +50,7 @@ func Test_NewKMeans(t *testing.T) {
 				clusterCnt:     2,
 				maxIterations:  500,
 				deltaThreshold: 0.01,
-				distType:       kmeans.L2Distance,
+				distType:       metric.Metric_L2Distance,
 				initType:       kmeans.Random,
 			},
 			wantErr: true,
@@ -65,7 +66,7 @@ func Test_NewKMeans(t *testing.T) {
 				clusterCnt:     4,
 				maxIterations:  500,
 				deltaThreshold: 0.01,
-				distType:       kmeans.L2Distance,
+				distType:       metric.Metric_L2Distance,
 				initType:       kmeans.Random,
 			},
 			wantErr: true,
@@ -81,7 +82,7 @@ func Test_NewKMeans(t *testing.T) {
 				clusterCnt:     4,
 				maxIterations:  500,
 				deltaThreshold: 0.01,
-				distType:       kmeans.L2Distance,
+				distType:       metric.Metric_L2Distance,
 				initType:       kmeans.Random,
 			},
 			wantErr: true,
@@ -110,7 +111,7 @@ func Test_Cluster(t *testing.T) {
 		clusterCnt     int
 		maxIterations  int
 		deltaThreshold float64
-		distType       kmeans.DistanceType
+		distType       metric.MetricType
 		initType       kmeans.InitType
 	}
 	tests := []struct {
@@ -140,7 +141,7 @@ func Test_Cluster(t *testing.T) {
 				clusterCnt:     2,
 				maxIterations:  500,
 				deltaThreshold: 0.01,
-				distType:       kmeans.L2Distance,
+				distType:       metric.Metric_L2Distance,
 				initType:       kmeans.Random,
 			},
 			want: [][]float64{
@@ -182,7 +183,7 @@ func TestElkanClusterer_initBounds(t *testing.T) {
 		clusterCnt     int
 		maxIterations  int
 		deltaThreshold float64
-		distType       kmeans.DistanceType
+		distType       metric.MetricType
 		initType       kmeans.InitType
 	}
 	type internalState struct {
@@ -211,7 +212,7 @@ func TestElkanClusterer_initBounds(t *testing.T) {
 				clusterCnt:     2,
 				maxIterations:  500,
 				deltaThreshold: 0.01,
-				distType:       kmeans.L2Distance,
+				distType:       metric.Metric_L2Distance,
 				initType:       kmeans.Random,
 			},
 			state: internalState{
@@ -298,7 +299,7 @@ func TestElkanClusterer_computeCentroidDistances(t *testing.T) {
 		clusterCnt     int
 		maxIterations  int
 		deltaThreshold float64
-		distType       kmeans.DistanceType
+		distType       metric.MetricType
 		initType       kmeans.InitType
 	}
 	type internalState struct {
@@ -324,7 +325,7 @@ func TestElkanClusterer_computeCentroidDistances(t *testing.T) {
 				clusterCnt:     2,
 				maxIterations:  500,
 				deltaThreshold: 0.01,
-				distType:       kmeans.L2Distance,
+				distType:       metric.Metric_L2Distance,
 				initType:       kmeans.Random,
 			},
 			state: internalState{
@@ -383,7 +384,7 @@ func TestElkanClusterer_recalculateCentroids(t *testing.T) {
 		clusterCnt     int
 		maxIterations  int
 		deltaThreshold float64
-		distType       kmeans.DistanceType
+		distType       metric.MetricType
 		initType       kmeans.InitType
 	}
 	type internalState struct {
@@ -411,7 +412,7 @@ func TestElkanClusterer_recalculateCentroids(t *testing.T) {
 				clusterCnt:     2,
 				maxIterations:  500,
 				deltaThreshold: 0.01,
-				distType:       kmeans.L2Distance,
+				distType:       metric.Metric_L2Distance,
 				initType:       kmeans.Random,
 			},
 			state: internalState{
@@ -464,7 +465,7 @@ func TestElkanClusterer_updateBounds(t *testing.T) {
 		clusterCnt     int
 		maxIterations  int
 		deltaThreshold float64
-		distType       kmeans.DistanceType
+		distType       metric.MetricType
 		initType       kmeans.InitType
 	}
 	type internalState struct {
@@ -494,7 +495,7 @@ func TestElkanClusterer_updateBounds(t *testing.T) {
 				clusterCnt:     2,
 				maxIterations:  500,
 				deltaThreshold: 0.01,
-				distType:       kmeans.L2Distance,
+				distType:       metric.Metric_L2Distance,
 				initType:       kmeans.Random,
 			},
 			state: internalState{

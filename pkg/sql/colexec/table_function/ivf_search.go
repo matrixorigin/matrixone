@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -150,7 +151,7 @@ func (u *ivfSearchState) start(tf *TableFunction, proc *process.Process, nthRow 
 			return moerr.NewInternalError(proc.Ctx, "Invalid Lists value")
 		}
 
-		metric, ok := distTypeStrToEnum[u.param.OpType]
+		metric, ok := metric.DistTypeStrToEnum[u.param.OpType]
 		if !ok {
 			return moerr.NewInternalError(proc.Ctx, "invalid optype")
 		}

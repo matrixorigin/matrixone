@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 )
 
 func (builder *QueryBuilder) checkValidIvfflatDistFn(nodeID int32, projNode, sortNode, scanNode *plan.Node,
@@ -37,7 +38,7 @@ func (builder *QueryBuilder) checkValidIvfflatDistFn(nodeID int32, projNode, sor
 	if distFnExpr == nil {
 		return false
 	}
-	if _, ok := distFuncOpTypes[distFnExpr.Func.ObjName]; !ok {
+	if _, ok := metric.DistFuncOpTypes[distFnExpr.Func.ObjName]; !ok {
 		return false
 	}
 
@@ -65,7 +66,7 @@ func (builder *QueryBuilder) checkValidIvfflatDistFn(nodeID int32, projNode, sor
 		return false
 	}
 
-	if optype != distFuncOpTypes[distFnExpr.Func.ObjName] {
+	if optype != metric.DistFuncOpTypes[distFnExpr.Func.ObjName] {
 		return false
 	}
 

@@ -21,6 +21,7 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/kmeans"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"gonum.org/v1/gonum/mat"
 )
 
@@ -59,10 +60,10 @@ func (r *Random) InitCentroids(vectors []*mat.VecDense, k int) (centroids []*mat
 // Using kmeans++, we are sure that 3 centroids are farther away from each other.
 type KMeansPlusPlus struct {
 	rand   rand.Rand
-	distFn kmeans.DistanceFunction
+	distFn metric.DistanceFunction
 }
 
-func NewKMeansPlusPlusInitializer(distFn kmeans.DistanceFunction) Initializer {
+func NewKMeansPlusPlusInitializer(distFn metric.DistanceFunction) Initializer {
 	return &KMeansPlusPlus{
 		rand:   *rand.New(rand.NewSource(kmeans.DefaultRandSeed)),
 		distFn: distFn,
