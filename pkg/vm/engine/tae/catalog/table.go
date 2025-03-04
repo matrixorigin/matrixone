@@ -698,7 +698,7 @@ func (entry *TableEntry) isColumnChangedInSchemaLocked() bool {
 
 func (entry *TableEntry) isColumnChangedInSchema() bool {
 	entry.RLock()
-	defer entry.RLock()
+	defer entry.RUnlock()
 	return entry.isColumnChangedInSchemaLocked()
 }
 
