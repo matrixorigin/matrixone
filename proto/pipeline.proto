@@ -399,6 +399,7 @@ message TableFunction {
   repeated plan.Expr args = 3;
   bytes params = 4;
   string name = 5;
+  bool is_single = 6;
 }
 
 message ExternalName2ColIndex {
