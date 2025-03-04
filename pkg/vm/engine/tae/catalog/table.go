@@ -685,9 +685,7 @@ func (entry *TableEntry) ApplyCommit(id string) (err error) {
 
 // deprecated: handle column change in CN
 // hasColumnChangedSchema checks if add or drop columns on previous schema
-func (entry *TableEntry) isColumnChangedInSchema() bool {
-	entry.RLock()
-	defer entry.RUnlock()
+func (entry *TableEntry) isColumnChangedInSchemaLocked() bool {
 	node := entry.GetLatestNodeLocked()
 	toCommitted := node.BaseNode.Schema
 	ver := toCommitted.Version
@@ -696,6 +694,12 @@ func (entry *TableEntry) isColumnChangedInSchema() bool {
 		return false
 	}
 	return toCommitted.Extra.ColumnChanged
+}
+
+func (entry *TableEntry) isColumnChangedInSchema() bool {
+	entry.RLock()
+	defer entry.RUnlock()
+	return entry.isColumnChangedInSchemaLocked()
 }
 
 func (entry *TableEntry) FreezeAppend() {
