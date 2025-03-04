@@ -43,6 +43,13 @@ type IndexTableConfig struct {
 	KeyPart       string `json:"part"`
 	ThreadsBuild  int64  `json:"threads_build"`
 	ThreadsSearch int64  `json:"threads_search"`
+
+	// IVF related
+	EntriesTable string `json:"entries"`
+	DataSize     int64  `json:"datasize"`
+	Nprobe       uint   `json:"nprobe"`
+	PKeyType     int32  `json:"pktype"`
+	KeyPartType  int32  `json:"parttype"`
 }
 
 // HNSW specified parameters
@@ -54,10 +61,32 @@ type HnswParam struct {
 	EfSearch       string `json:"ef_search"`
 }
 
+// IVF specified parameters
+type IvfParam struct {
+	Lists  string `json:"lists"`
+	OpType string `json:"op_type"`
+}
+
+type IvfflatIndexConfig struct {
+	Lists      uint
+	Metric     uint16
+	InitType   uint16
+	Dimensions uint
+	Normalize  bool
+	Version    int64
+	VectorType int32
+}
+
 // This is generalized index config and able to share between various algorithm types.  Simply add your new configuration such as usearch.IndexConfig
 type IndexConfig struct {
 	Type    string
 	Usearch usearch.IndexConfig
+	Ivfflat IvfflatIndexConfig
+}
+
+type RuntimeConfig struct {
+	Limit uint
+	Probe uint
 }
 
 // nthread == 0, result will return NumCPU - 1

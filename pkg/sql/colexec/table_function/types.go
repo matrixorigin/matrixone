@@ -36,6 +36,7 @@ type TableFunction struct {
 	Params      []byte
 	FuncName    string
 	Limit       *plan.Expr
+	IsSingle    bool
 	OffsetTotal [][2]int64
 	CanOpt      bool
 

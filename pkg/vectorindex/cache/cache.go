@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -56,7 +57,7 @@ var (
 
 // Various vector index algorithm wants to share with VectorIndexCache need to implement VectorIndexSearchIf interface (see HnswSearch)
 type VectorIndexSearchIf interface {
-	Search(query []float32, limit uint) (keys []int64, distances []float32, err error)
+	Search(proc *process.Process, query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error)
 	Load(*process.Process) error
 	UpdateConfig(VectorIndexSearchIf) error
 	Destroy()
@@ -113,7 +114,7 @@ func (s *VectorIndexSearch) extend(update bool) {
 	s.ExpireAt.Store(ts)
 }
 
-func (s *VectorIndexSearch) Search(newalgo VectorIndexSearchIf, query []float32, limit uint) (keys []int64, distances []float32, err error) {
+func (s *VectorIndexSearch) Search(proc *process.Process, newalgo VectorIndexSearchIf, query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
 	s.Mutex.RLock()
 
 	for s.Status.Load() == 0 {
@@ -139,7 +140,7 @@ func (s *VectorIndexSearch) Search(newalgo VectorIndexSearchIf, query []float32,
 	}
 
 	s.extend(false)
-	return s.Algo.Search(query, limit)
+	return s.Algo.Search(proc, query, rt)
 }
 
 // implementation of VectorIndexCache
@@ -242,7 +243,7 @@ func (c *VectorIndexCache) Destroy() {
 
 // Get index from cache and return VectorIndexSearchIf interface
 func (c *VectorIndexCache) Search(proc *process.Process, key string, newalgo VectorIndexSearchIf,
-	query []float32, limit uint) (keys []int64, distances []float32, err error) {
+	query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
 	value, loaded := c.IndexMap.LoadOrStore(key, &VectorIndexSearch{Algo: newalgo})
 	algo := value.(*VectorIndexSearch)
 	if !loaded {
@@ -253,7 +254,7 @@ func (c *VectorIndexCache) Search(proc *process.Process, key string, newalgo Vec
 			return nil, nil, err
 		}
 	}
-	return algo.Search(newalgo, query, limit)
+	return algo.Search(proc, newalgo, query, rt)
 }
 
 // remove key from cache

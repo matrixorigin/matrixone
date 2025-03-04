@@ -12,11 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package elkans
+package metric
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 )
 
 func Test_L2Distance(t *testing.T) {

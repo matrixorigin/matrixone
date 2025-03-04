@@ -13,58 +13,6 @@ insert into t1 values(5, "[1,3,5]", "[1,3,5,4,5]");
 insert into t1 values(6, "[100,44,50]", "[100,44,50,60,70]");
 insert into t1 values(7, "[120,50,70]", "[120,50,70,80,90]");
 insert into t1 values(8, "[130,40,90]", "[130,40,90,100,110]");
-select a,b,normalize_l2(b) from t1;
-a    b    normalize_l2(b)
-2    [1, 2, 4]    [0.2182179, 0.4364358, 0.8728716]
-3    [1, 2.4, 4]    [0.20961091, 0.5030662, 0.83844364]
-4    [1, 2, 5]    [0.18257418, 0.36514837, 0.91287094]
-5    [1, 3, 5]    [0.16903085, 0.50709254, 0.8451542]
-6    [100, 44, 50]    [0.8322936, 0.36620918, 0.4161468]
-7    [120, 50, 70]    [0.81274253, 0.33864272, 0.4740998]
-8    [130, 40, 90]    [0.7970811, 0.24525574, 0.5518254]
-select cluster_centers(b kmeans '2,vector_cosine_ops') from t1;
-cluster_centers(b, 2,vector_cosine_ops)
-[ [116.666664, 44.666668, 70],[1, 2.35, 4.5] ]
-select cluster_centers(b kmeans '2,vector_ip_ops') from t1;
-cluster_centers(b, 2,vector_ip_ops)
-[ [0.4377142, 0.4246375, 0.68682307],[50.57143, 20.485714, 32.57143] ]
-select cluster_centers(b kmeans '2,vector_cosine_ops') from t1;
-cluster_centers(b, 2,vector_cosine_ops)
-[ [116.666664, 44.666668, 70],[1, 2.35, 4.5] ]
-SELECT value FROM  (SELECT cluster_centers(b kmeans '2,vector_cosine_ops,kmeansplusplus,false') AS centers FROM t1) AS subquery CROSS JOIN  UNNEST(subquery.centers) AS u;
-value
-[116.666664, 44.666668, 70]
-[1, 2.35, 4.5]
-SELECT value FROM  (SELECT cluster_centers(b kmeans '2,vector_cosine_ops,kmeansplusplus,true') AS centers FROM t1) AS subquery CROSS JOIN  UNNEST(subquery.centers) AS u;
-value
-[0.8140391, 0.31670254, 0.4806907]
-[0.19485846, 0.45293573, 0.8673351]
-select a,c,normalize_l2(c) from t1;
-a    c    normalize_l2(c)
-2    [1, 2, 4, 4, 5]    [0.1270001270001905, 0.254000254000381, 0.508000508000762, 0.508000508000762, 0.6350006350009525]
-3    [1, 2.4, 4, 4, 5]    [0.12523503624640608, 0.3005640869913746, 0.5009401449856243, 0.5009401449856243, 0.6261751812320304]
-4    [1, 2, 5, 4, 5]    [0.11867816581938533, 0.23735633163877065, 0.5933908290969266, 0.4747126632775413, 0.5933908290969266]
-5    [1, 3, 5, 4, 5]    [0.11470786693528087, 0.3441236008058426, 0.5735393346764044, 0.4588314677411235, 0.5735393346764044]
-6    [100, 44, 50, 60, 70]    [0.6602997913373754, 0.29053190818844515, 0.3301498956686877, 0.3961798748024252, 0.46220985393616276]
-7    [120, 50, 70, 80, 90]    [0.6298366572977736, 0.262431940540739, 0.3674047167570346, 0.4198911048651824, 0.4723774929733302]
-8    [130, 40, 90, 100, 110]    [0.5890862307582768, 0.18125730177177748, 0.40782892898649936, 0.45314325442944375, 0.4984575798723881]
-select cluster_centers(c kmeans '2,vector_cosine_ops') from t1;
-cluster_centers(c, 2,vector_cosine_ops)
-[ [116.66666666666666, 44.666666666666664, 70, 80, 90],[1, 2.35, 4.5, 4, 5] ]
-select cluster_centers(c kmeans '2,vector_ip_ops') from t1;
-cluster_centers(c, 2,vector_ip_ops)
-[ [0.6868230728671094, 0.06563701921747622, 0.15651925473279124, 0.09696951891448456, 0.30091186058528707],[50.57142857142857, 20.485714285714284, 32.57142857142857, 36.57142857142857, 41.42857142857142] ]
-select cluster_centers(c kmeans '2,vector_cosine_ops') from t1;
-cluster_centers(c, 2,vector_cosine_ops)
-[ [116.66666666666666, 44.666666666666664, 70, 80, 90],[1, 2.35, 4.5, 4, 5] ]
-SELECT value FROM  (SELECT cluster_centers(c kmeans '2,vector_cosine_ops') AS centers FROM t1) AS subquery CROSS JOIN  UNNEST(subquery.centers) AS u;
-value
-[116.66666666666666, 44.666666666666664, 70, 80, 90]
-[1, 2.35, 4.5, 4, 5]
-SELECT value FROM  (SELECT cluster_centers(c kmeans '2,vector_cosine_ops,kmeansplusplus,true') AS centers FROM t1) AS subquery CROSS JOIN  UNNEST(subquery.centers) AS u;
-value
-[0.6264075597978086, 0.24474038350032057, 0.3684611804707405, 0.42307141136568377, 0.477681642260627]
-[0.1214052990003157, 0.28401106835909223, 0.5439677041899293, 0.4856211960012628, 0.6070264950015785]
 drop table if exists tbl;
 create table tbl(id int primary key, embedding vecf32(3));
 insert into tbl values(1, "[1,2,3]");
@@ -513,14 +461,14 @@ insert into tbl values(8, "[130,40,90]");
 SELECT id, embedding FROM tbl ORDER BY cosine_distance(embedding,'[120,51,70]') ASC LIMIT 3;
 id    embedding
 7    [120, 50, 70]
-8    [130, 40, 90]
 6    [100, 44, 50]
+8    [130, 40, 90]
 create index idx using ivfflat on tbl(embedding) lists=2 op_type "vector_cosine_ops";
 SELECT id, embedding FROM tbl ORDER BY cosine_distance(embedding,'[120,51,70]') ASC LIMIT 3;
 id    embedding
 7    [120, 50, 70]
-8    [130, 40, 90]
 6    [100, 44, 50]
+8    [130, 40, 90]
 drop table if exists tbl;
 create table tbl(id int, embedding vecf32(3));
 insert into tbl values(1, "[1,2,3]");
@@ -534,14 +482,14 @@ insert into tbl values(8, "[130,40,90]");
 SELECT id, embedding FROM tbl ORDER BY cosine_distance(embedding,'[120,51,70]') ASC LIMIT 3;
 id    embedding
 7    [120, 50, 70]
-8    [130, 40, 90]
 6    [100, 44, 50]
+8    [130, 40, 90]
 create index idx using ivfflat on tbl(embedding) lists=2 op_type "vector_cosine_ops";
 SELECT id, embedding FROM tbl ORDER BY cosine_distance(embedding,'[120,51,70]') ASC LIMIT 3;
 id    embedding
 7    [120, 50, 70]
-8    [130, 40, 90]
 6    [100, 44, 50]
+8    [130, 40, 90]
 drop table if exists tbl;
 create table tbl(id int, id2 int, embedding vecf32(3), primary key(id, id2));
 insert into tbl values(1, 0,"[1,2,3]");
@@ -555,14 +503,14 @@ insert into tbl values(8, 0, "[130,40,90]");
 SELECT id,id2, embedding FROM tbl ORDER BY cosine_distance(embedding,'[120,51,70]') ASC LIMIT 3;
 id    id2    embedding
 7    0    [120, 50, 70]
-8    0    [130, 40, 90]
 6    0    [100, 44, 50]
+8    0    [130, 40, 90]
 create index idx using ivfflat on tbl(embedding) lists=2 op_type "vector_cosine_ops";
 SELECT id,id2, embedding FROM tbl ORDER BY cosine_distance(embedding,'[120,51,70]') ASC LIMIT 3;
 id    id2    embedding
 7    0    [120, 50, 70]
-8    0    [130, 40, 90]
 6    0    [100, 44, 50]
+8    0    [130, 40, 90]
 SET @test_limit = 3;
 SELECT id from tbl LIMIT @test_limit;
 id

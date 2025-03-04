@@ -15,9 +15,11 @@
 package elkans
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"reflect"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 )
 
 func TestRandom_InitCentroids(t *testing.T) {
@@ -109,7 +111,7 @@ func TestKMeansPlusPlus_InitCentroids(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			r := NewKMeansPlusPlusInitializer(L2Distance)
+			r := NewKMeansPlusPlusInitializer(metric.L2Distance)
 			gonumVectors, _ := moarray.ToGonumVectors[float64](tt.args.vectors...)
 
 			gotCentroids := r.InitCentroids(gonumVectors, tt.args.k)
@@ -140,7 +142,7 @@ func Benchmark_InitCentroids(b *testing.B) {
 	populateRandData(rowCnt, dims, data)
 
 	random := NewRandomInitializer()
-	kmeanspp := NewKMeansPlusPlusInitializer(L2Distance)
+	kmeanspp := NewKMeansPlusPlusInitializer(metric.L2Distance)
 
 	b.Run("RANDOM", func(b *testing.B) {
 		b.ResetTimer()

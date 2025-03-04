@@ -19,16 +19,15 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fulltext"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -36,6 +35,9 @@ import (
 const (
 	countstar_sql = "SELECT COUNT(*), AVG(pos) from %s where word = '%s'"
 )
+
+var ft_runSql = sqlexec.RunSql
+var ft_runSql_streaming = sqlexec.RunStreamingSql
 
 type fulltextState struct {
 	inited      bool
@@ -219,64 +221,6 @@ func fulltextIndexScanPrepare(proc *process.Process, tableFunction *TableFunctio
 		}
 	}
 	return st, err
-}
-
-var ft_runSql = ft_runSql_fn
-
-// run SQL in batch mode. Result batches will stored in memory and return once all result batches received.
-func ft_runSql_fn(proc *process.Process, sql string) (executor.Result, error) {
-	v, ok := moruntime.ServiceRuntime(proc.GetService()).GetGlobalVariables(moruntime.InternalSQLExecutor)
-	if !ok {
-		panic("missing lock service")
-	}
-
-	//-------------------------------------------------------
-	topContext := proc.GetTopContext()
-	accountId, err := defines.GetAccountId(proc.Ctx)
-	if err != nil {
-		return executor.Result{}, err
-	}
-	//-------------------------------------------------------
-
-	exec := v.(executor.SQLExecutor)
-	opts := executor.Options{}.
-		// All runSql and runSqlWithResult is a part of input sql, can not incr statement.
-		// All these sub-sql's need to be rolled back and retried en masse when they conflict in pessimistic mode
-		WithDisableIncrStatement().
-		WithTxn(proc.GetTxnOperator()).
-		WithDatabase(proc.GetSessionInfo().Database).
-		WithTimeZone(proc.GetSessionInfo().TimeZone).
-		WithAccountID(accountId)
-	return exec.Exec(topContext, sql, opts)
-}
-
-var ft_runSql_streaming = ft_runSql_streaming_fn
-
-// run SQL in WithStreaming() and pass the channel to SQL executor
-func ft_runSql_streaming_fn(proc *process.Process, sql string, stream_chan chan executor.Result, error_chan chan error) (executor.Result, error) {
-	v, ok := moruntime.ServiceRuntime(proc.GetService()).GetGlobalVariables(moruntime.InternalSQLExecutor)
-	if !ok {
-		panic("missing lock service")
-	}
-
-	//-------------------------------------------------------
-	topContext := proc.GetTopContext()
-	accountId, err := defines.GetAccountId(proc.Ctx)
-	if err != nil {
-		return executor.Result{}, err
-	}
-	//-------------------------------------------------------
-	exec := v.(executor.SQLExecutor)
-	opts := executor.Options{}.
-		// All runSql and runSqlWithResult is a part of input sql, can not incr statement.
-		// All these sub-sql's need to be rolled back and retried en masse when they conflict in pessimistic mode
-		WithDisableIncrStatement().
-		WithTxn(proc.GetTxnOperator()).
-		WithDatabase(proc.GetSessionInfo().Database).
-		WithTimeZone(proc.GetSessionInfo().TimeZone).
-		WithAccountID(accountId).
-		WithStreaming(stream_chan, error_chan)
-	return exec.Exec(topContext, sql, opts)
 }
 
 // run SQL to get the (doc_id, word_index) of all patterns (words) in the search string
