@@ -81,7 +81,7 @@ func NewS3FS(
 	var err error
 	switch {
 
-	case strings.HasPrefix(strings.ToLower(args.Endpoint), "hdfs"):
+	case args.IsHDFS || strings.HasPrefix(strings.ToLower(args.Endpoint), "hdfs"):
 		// HDFS
 		fs.storage, err = NewHDFS(ctx, args, perfCounterSets)
 		if err != nil {
