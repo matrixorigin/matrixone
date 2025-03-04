@@ -80,7 +80,7 @@ func (o *objCompactPolicy) onObject(entry *catalog.ObjectEntry, config *BasicPol
 
 		if (entryOutdated(tombstone, config.TombstoneLifetime) && tombstone.OriginSize() > 10*common.Const1MBytes) ||
 			tombstone.OriginSize() > common.DefaultMinOsizeQualifiedMB*common.Const1MBytes {
-			logutil.Info("[MERGE-POLICY]",
+			logutil.Debug("[MERGE-POLICY]",
 				zap.String("policy", "compact"),
 				zap.String("table", o.tblEntry.GetFullName()),
 				zap.String("data object", entry.ID().ShortStringEx()),
