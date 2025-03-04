@@ -267,3 +267,4 @@ SELECT a FROM t3 ORDER BY l2_distance(b,'[1.0,3.0,11.0,110.0,62.0,22.0,4.0,0.0,4
 a
 1
 SET experimental_ivf_index = 0;
+SET @probe_limit = 5;
