@@ -35,6 +35,11 @@ ut-report/
 **/scratch/
 pkg/util/trace/impl/motrace/pprof/
 **/.tmp.*
+thirdparties/SimSIMD-*/*
+thirdparties/StringZilla-*/*
+thirdparties/fp16/*
+thirdparties/install/*
+thirdparties/usearch-*/*
 
 # bvt generate files
 test/distributed/resources/into_outfile/outfile_*.csv
