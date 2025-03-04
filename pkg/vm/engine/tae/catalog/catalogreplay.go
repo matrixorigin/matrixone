@@ -79,6 +79,8 @@ func (catalog *Catalog) onReplayUpdateDatabase(cmd *EntryCommand[*EmptyMVCCNode,
 
 	db, err := catalog.GetDatabaseByID(cmd.ID.DbID)
 	if err != nil {
+		catalog.Lock()
+		defer catalog.Unlock()
 		db = NewReplayDBEntry()
 		db.ID = cmd.ID.DbID
 		db.catalog = catalog
@@ -94,6 +96,8 @@ func (catalog *Catalog) onReplayUpdateDatabase(cmd *EntryCommand[*EmptyMVCCNode,
 		return
 	}
 
+	db.Lock()
+	defer db.Unlock()
 	dbun := db.SearchNodeLocked(un)
 	if dbun == nil {
 		db.InsertLocked(un)
@@ -120,6 +124,8 @@ func (catalog *Catalog) onReplayUpdateTable(cmd *EntryCommand[*TableMVCCNode, *T
 
 	un := cmd.mvccNode
 	if err != nil {
+		db.Lock()
+		defer db.Unlock()
 		tbl = NewReplayTableEntry()
 		tbl.ID = cmd.ID.TableID
 		tbl.db = db
@@ -134,10 +140,13 @@ func (catalog *Catalog) onReplayUpdateTable(cmd *EntryCommand[*TableMVCCNode, *T
 		}
 		return
 	}
+
+	tbl.Lock()
+	defer tbl.Unlock()
 	tblun := tbl.SearchNodeLocked(un)
 	if tblun == nil {
 		tbl.InsertLocked(un) //TODO isvalid
-		if tbl.isColumnChangedInSchema() {
+		if tbl.isColumnChangedInSchemaLocked() {
 			tbl.FreezeAppend()
 		}
 		schema := un.BaseNode.Schema
@@ -179,6 +188,8 @@ func (catalog *Catalog) onReplayUpdateObject(
 	}
 	var obj *ObjectEntry
 	if cmd.mvccNode.CreatedAt.Equal(&txnif.UncommitTS) {
+		rel.Lock()
+		defer rel.Unlock()
 		obj = NewReplayObjectEntry()
 		obj.table = rel
 		obj.ObjectNode = *cmd.node

@@ -11670,19 +11670,19 @@ func Test_RWDB2(t *testing.T) {
 	rTae2Sem.Wait()
 	txnSem.Wait()
 
-	maxLSN := wTae.DB.Wal.GetLSNWatermark()
+	// maxLSN := wTae.DB.Wal.GetLSNWatermark()
 
 	checkName := func(tae *testutil.TestEngine) {
 		testutils.WaitExpect(
 			4000,
 			func() bool {
 				// wait checkpointed
-				lsn := tae.DB.ReplayCtl.MaxLSN()
-				return lsn == maxLSN
-				// txn, err := tae.StartTxn(nil)
-				// assert.NoError(t, err)
-				// _, err = txn.GetDatabase(name)
-				// return err == nil
+				// lsn := tae.DB.ReplayCtl.MaxLSN()
+				// return lsn == maxLSN
+				txn, err := tae.StartTxn(nil)
+				assert.NoError(t, err)
+				_, err = txn.GetDatabase(name)
+				return err == nil
 			},
 		)
 		txn, err := tae.StartTxn(nil)
