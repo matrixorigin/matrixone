@@ -145,7 +145,7 @@ func (u *hnswSearchState) start(tf *TableFunction, proc *process.Process, nthRow
 		}
 
 		// default L2Sq
-		metric, ok := metric.DistTypeStrToUsearch[u.param.OpType]
+		metric, ok := metric.OpTypeToUsearch[u.param.OpType]
 		if !ok {
 			return moerr.NewInternalError(proc.Ctx, "Invalid op_type")
 		}

@@ -150,7 +150,7 @@ func (u *ivfSearchState) start(tf *TableFunction, proc *process.Process, nthRow 
 			return moerr.NewInternalError(proc.Ctx, "Invalid Lists value")
 		}
 
-		metric, ok := metric.DistTypeStrToEnum[u.param.OpType]
+		metric, ok := metric.OpTypeToMetric[u.param.OpType]
 		if !ok {
 			return moerr.NewInternalError(proc.Ctx, "invalid optype")
 		}

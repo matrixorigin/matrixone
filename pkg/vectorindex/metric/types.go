@@ -22,37 +22,49 @@ import (
 type MetricType uint16
 
 const (
+	OpType_L2Distance     = "vector_l2_ops"
+	OpType_InnerProduct   = "vector_ip_ops"
+	OpType_CosineDistance = "vector_cosine_ops"
+	OpType_L1Distance     = "vector_l1_ops"
+
+	DistFn_L2Distance     = "l2_distance"
+	DistFn_InnerProduct   = "inner_product"
+	DistFn_CosineDistance = "cosine_distance"
+
+	DistIntFn_L2Distance     = "l2_distance_sq"
+	DistIntFn_InnerProduct   = "inner_product"
+	DistIntFn_CosineDistance = "cosine_distance"
+
 	Metric_L2Distance MetricType = iota
 	Metric_InnerProduct
 	Metric_CosineDistance
 	Metric_L1Distance
-
 	Metric_TypeCount
 )
 
 var (
 	DistFuncOpTypes = map[string]string{
-		"l2_distance":     "vector_l2_ops",
-		"inner_product":   "vector_ip_ops",
-		"cosine_distance": "vector_cosine_ops",
+		DistFn_L2Distance:     OpType_L2Distance,
+		DistFn_InnerProduct:   OpType_InnerProduct,
+		DistFn_CosineDistance: OpType_CosineDistance,
 	}
 	DistFuncInternalDistFunc = map[string]string{
-		"l2_distance":     "l2_distance_sq",
-		"inner_product":   "inner_product",
-		"cosine_distance": "cosine_distance",
+		DistFn_L2Distance:     DistIntFn_L2Distance,
+		DistFn_InnerProduct:   DistIntFn_InnerProduct,
+		DistFn_CosineDistance: DistIntFn_CosineDistance,
 	}
 
-	DistTypeStrToEnum = map[string]MetricType{
-		"vector_l2_ops":     Metric_L2Distance,
-		"vector_ip_ops":     Metric_InnerProduct,
-		"vector_cosine_ops": Metric_CosineDistance,
-		"vector_l1_ops":     Metric_L1Distance,
+	OpTypeToMetric = map[string]MetricType{
+		OpType_L2Distance:     Metric_L2Distance,
+		OpType_InnerProduct:   Metric_InnerProduct,
+		OpType_CosineDistance: Metric_CosineDistance,
+		OpType_L1Distance:     Metric_L1Distance,
 	}
 
-	DistTypeStrToUsearch = map[string]usearch.Metric{
-		"vector_l2_ops":     usearch.L2sq,
-		"vector_ip_ops":     usearch.InnerProduct,
-		"vector_cosine_ops": usearch.Cosine,
+	OpTypeToUsearch = map[string]usearch.Metric{
+		OpType_L2Distance:     usearch.L2sq,
+		OpType_InnerProduct:   usearch.InnerProduct,
+		OpType_CosineDistance: usearch.Cosine,
 		/*
 			"vector_haversine_ops":  usearch.Haversine,
 			"vector_divergence_ops": usearch.Divergence,
