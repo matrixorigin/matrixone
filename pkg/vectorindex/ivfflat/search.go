@@ -119,6 +119,9 @@ func (idx *IvfflatSearchIndex[T]) searchEntries(proc *process.Process, query *ma
 
 	for i := 0; i < bat.RowCount(); i++ {
 		pk := vector.GetAny(bat.Vecs[0], i)
+		if bat.Vecs[1].IsNull(uint64(i)) {
+			continue
+		}
 		vec := types.BytesToArray[T](bat.Vecs[1].GetBytesAt(i))
 		mat := moarray.ToGonumVector[T](vec)
 		dist := distfn(query, mat)

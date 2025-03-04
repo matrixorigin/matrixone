@@ -42,7 +42,6 @@ type ivfSearchState struct {
 	limit     uint64
 	keys      any
 	distances []float64
-	version   int
 	// holding one call batch, tokenizedState owns it.
 	batch *batch.Batch
 }
@@ -217,7 +216,7 @@ func (u *ivfSearchState) start(tf *TableFunction, proc *process.Process, nthRow 
 		return err
 	}
 
-	key := fmt.Sprintf("%s:%d", u.tblcfg.IndexTable, u.version)
+	key := fmt.Sprintf("%s:%d", u.tblcfg.IndexTable, u.idxcfg.Ivfflat.Version)
 
 	faVec := tf.ctr.argVecs[1]
 	if faVec.IsNull(uint64(nthRow)) {

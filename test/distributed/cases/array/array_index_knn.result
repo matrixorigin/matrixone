@@ -20,6 +20,7 @@ a    b
 1    [1, 0, 0, 0]
 2    [2, 0, 0, 0]
 3    [3, 0, 0, 0]
+4    [11, 11, 0, 0]
 drop table if exists t1;
 create table t1(a int primary key,b vecf32(4), c varchar(3) );
 insert into t1 values(1, "[1,0,0,0]" , "1");
@@ -42,6 +43,7 @@ a    b
 7    [111, 111, 111, 0]
 8    [112, 112, 112, 0]
 9    [113, 113, 113, 0]
+6    [13, 13, 0, 0]
 insert into t1 values(10, "[114,114,114,0]", "10");
 select a, b from t1 order by l2_distance(b, "[111,111,111,0]") limit 4;
 a    b
@@ -64,11 +66,13 @@ a    b
 1    [1, 0, 0, 0]
 2    [2, 0, 0, 0]
 3    [3, 0, 0, 0]
+4    [11, 11, 0, 0]
 select a, b from t1 order by l2_distance(b, "[11,11,0,0]") limit 4;
 a    b
 4    [11, 11, 0, 0]
 5    [12, 12, 0, 0]
 6    [13, 13, 0, 0]
+3    [3, 0, 0, 0]
 select a, b from t1 order by l2_distance(b, "[111,111,111,0]") limit 4;
 a    b
 7    [111, 111, 111, 0]
@@ -80,6 +84,7 @@ a    b
 11    [1111, 1111, 1111, 1111]
 12    [1112, 1112, 1112, 1112]
 13    [1113, 1113, 1113, 1113]
+10    [114, 114, 114, 0]
 drop table if exists t3;
 create table t2(a int,b vecf32(4), c varchar(3), d int, primary key(a,d));
 insert into t2 values(1, "[1,0,0,0]" , "1", 1);
@@ -102,11 +107,13 @@ b
 [111, 111, 111, 0]
 [112, 112, 112, 0]
 [113, 113, 113, 0]
+[13, 13, 0, 0]
 select a, b from t2 order by l2_distance(b, "[111,111,111,0]") limit 4; -- slow path
 a    b
 7    [111, 111, 111, 0]
 8    [112, 112, 112, 0]
 9    [113, 113, 113, 0]
+6    [13, 13, 0, 0]
 insert into t2 values(10, "[114,114,114,0]", "10", 10);
 select b from t2 order by l2_distance(b, "[111,111,111,0]") limit 4; -- speed path
 b
@@ -135,11 +142,13 @@ a    b
 1    [1, 0, 0, 0]
 2    [2, 0, 0, 0]
 3    [3, 0, 0, 0]
+4    [11, 11, 0, 0]
 select a, b from t2 order by l2_distance(b, "[11,11,0,0]") limit 4;
 a    b
 4    [11, 11, 0, 0]
 5    [12, 12, 0, 0]
 6    [13, 13, 0, 0]
+3    [3, 0, 0, 0]
 select a, b from t2 order by l2_distance(b, "[111,111,111,0]") limit 4;
 a    b
 7    [111, 111, 111, 0]
@@ -151,6 +160,7 @@ a    b
 11    [1111, 1111, 1111, 1111]
 12    [1112, 1112, 1112, 1112]
 13    [1113, 1113, 1113, 1113]
+10    [114, 114, 114, 0]
 drop table if exists t3;
 create table t3(a int,b vecf32(4), c varchar(3));
 insert into t3 values(1, "[1,0,0,0]" , "1");
@@ -173,6 +183,7 @@ a    b
 7    [111, 111, 111, 0]
 8    [112, 112, 112, 0]
 9    [113, 113, 113, 0]
+6    [13, 13, 0, 0]
 insert into t3 values(10, "[114,114,114,0]", "10");
 select a, b from t3 order by l2_distance(b, "[111,111,111,0]") limit 4;
 a    b
@@ -195,11 +206,13 @@ a    b
 1    [1, 0, 0, 0]
 2    [2, 0, 0, 0]
 3    [3, 0, 0, 0]
+4    [11, 11, 0, 0]
 select a, b from t3 order by l2_distance(b, "[11,11,0,0]") limit 4;
 a    b
 4    [11, 11, 0, 0]
 5    [12, 12, 0, 0]
 6    [13, 13, 0, 0]
+3    [3, 0, 0, 0]
 select a, b from t3 order by l2_distance(b, "[111,111,111,0]") limit 4;
 a    b
 7    [111, 111, 111, 0]
@@ -211,6 +224,7 @@ a    b
 11    [1111, 1111, 1111, 1111]
 12    [1112, 1112, 1112, 1112]
 13    [1113, 1113, 1113, 1113]
+10    [114, 114, 114, 0]
 drop table if exists t4;
 create table t4(a int primary key,b vecf32(4), c varchar(3) );
 insert into t4 values(1, "[1,0,0,0]" , "1");
@@ -232,12 +246,15 @@ select a, b from t4 order by l2_distance(b, "[111,111,111,0]") limit 4;
 a    b
 7    [111, 111, 111, 0]
 8    [112, 112, 112, 0]
+6    [13, 13, 0, 0]
+5    [12, 12, 0, 0]
 insert into t4 values(10, "[114,114,114,0]", "10");
 select a, b from t4 order by l2_distance(b, "[111,111,111,0]") limit 4;
 a    b
 7    [111, 111, 111, 0]
 8    [112, 112, 112, 0]
 10    [114, 114, 114, 0]
+6    [13, 13, 0, 0]
 drop table if exists t5;
 create table t5(a int primary key,b vecf32(4), c varchar(3) );
 insert into t5 values(1, "[1,0,0,0]" , "1");
@@ -260,11 +277,20 @@ select a, b from t5 order by l2_distance(b, "[111,111,111,0]") limit 7;
 a    b
 7    [111, 111, 111, 0]
 8    [112, 112, 112, 0]
+6    [13, 13, 0, 0]
+5    [12, 12, 0, 0]
+4    [11, 11, 0, 0]
+3    [3, 0, 0, 0]
+2    [2, 0, 0, 0]
 insert into t5 values(11, "[114,114,114,0]", "11");
 select a, b from t5 order by l2_distance(b, "[111,111,111,0]") limit 7;
 a    b
 7    [111, 111, 111, 0]
 8    [112, 112, 112, 0]
 11    [114, 114, 114, 0]
+6    [13, 13, 0, 0]
+5    [12, 12, 0, 0]
+4    [11, 11, 0, 0]
+3    [3, 0, 0, 0]
 SET experimental_ivf_index = 0;
 drop database vecdb3;
