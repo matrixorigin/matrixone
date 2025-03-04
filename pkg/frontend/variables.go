@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fulltext"
 )
 
 var (
@@ -3541,6 +3542,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableBoolType("experimental_fulltext_index"),
 		Default:           int64(0),
+	},
+	"ft_relevancy_algorithm": {
+		Name:              fulltext.FulltextRelevancyAlgo,
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableStringType(fulltext.FulltextRelevancyAlgo),
+		Default:           fulltext.FulltextRelevancyAlgo_tfidf,
 	},
 	"experimental_hnsw_index": {
 		Name:              "experimental_hnsw_index",

@@ -1,0 +1,12 @@
+logservices = [
+    "./etc/launch-hdfs/log.toml",
+]
+
+tnservices = [
+    "./etc/launch-hdfs/tn.toml"
+]
+
+cnservices = [
+    "./etc/launch-hdfs/cn.toml"
+]
+
