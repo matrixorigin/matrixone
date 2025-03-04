@@ -150,7 +150,7 @@ func Test_Append(t *testing.T) {
 
 	t.Log(taeEngine.GetDB().Catalog.SimplePPString(common.PPL1))
 
-	err = disttaeEngine.SubscribeTable(ctx, database.GetID(), rel.ID(), false)
+	err = disttaeEngine.SubscribeTable(ctx, database.GetID(), rel.ID(), databaseName, schema.Name, false)
 	require.Nil(t, err)
 
 	// check partition state without flush
@@ -245,7 +245,7 @@ func Test_Bug_CheckpointInsertObjectOverwrittenMergeDeletedObject(t *testing.T) 
 				testutil2.MergeBlocks(t, accountId, taeEngine.GetDB(), databaseName, schema, false)
 			}
 
-			err = disttaeEngine.SubscribeTable(ctx, database.GetID(), rel.ID(), false)
+			err = disttaeEngine.SubscribeTable(ctx, database.GetID(), rel.ID(), databaseName, tableName, false)
 			require.Nil(t, err)
 
 			// check partition state without consume ckp
@@ -270,7 +270,11 @@ func Test_Bug_CheckpointInsertObjectOverwrittenMergeDeletedObject(t *testing.T) 
 				engineTbl, err := engineDB.Relation(ctx, tableName, nil)
 				require.Nil(t, err)
 
-				_, err = disttaeEngine.Engine.LazyLoadLatestCkp(ctx, engineTbl)
+				_, err = disttaeEngine.Engine.LazyLoadLatestCkp(ctx,
+					engineTbl.GetTableID(ctx),
+					engineTbl.GetTableName(),
+					engineTbl.GetDBID(ctx),
+					databaseName)
 				require.Nil(t, err)
 
 				stats, err := disttaeEngine.GetPartitionStateStats(ctx, database.GetID(), rel.ID())
@@ -336,7 +340,7 @@ func Test_Bug_MissCleanDirtyBlockFlag(t *testing.T) {
 		txn.Commit(context.Background())
 	}
 
-	err = disttaeEngine.SubscribeTable(ctx, database.GetID(), rel.ID(), false)
+	err = disttaeEngine.SubscribeTable(ctx, database.GetID(), rel.ID(), databaseName, tableName, false)
 	require.Nil(t, err)
 
 	{
@@ -475,7 +479,7 @@ func Test_EmptyObjectStats(t *testing.T) {
 	// push dela loc to cn
 	testutil2.CompactBlocks(t, accountId, taeEngine.GetDB(), databaseName, schema, false)
 	disttaeEngine := p.D
-	err = disttaeEngine.SubscribeTable(p.Ctx, database.GetID(), rel.ID(), false)
+	err = disttaeEngine.SubscribeTable(p.Ctx, database.GetID(), rel.ID(), databaseName, tableName, false)
 	require.Nil(t, err)
 
 	{
@@ -500,7 +504,11 @@ func Test_EmptyObjectStats(t *testing.T) {
 		engineTbl, err := engineDB.Relation(p.Ctx, tableName, nil)
 		require.Nil(t, err)
 
-		_, err = disttaeEngine.Engine.LazyLoadLatestCkp(p.Ctx, engineTbl)
+		_, err = disttaeEngine.Engine.LazyLoadLatestCkp(p.Ctx,
+			engineTbl.GetTableID(p.Ctx),
+			engineTbl.GetTableName(),
+			engineTbl.GetDBID(p.Ctx),
+			databaseName)
 		require.Nil(t, err)
 
 		stats, err := disttaeEngine.GetPartitionStateStats(p.Ctx, database.GetID(), rel.ID())
@@ -584,7 +592,7 @@ func Test_SubscribeUnsubscribeConsistency(t *testing.T) {
 
 	try := 3
 	for try > 0 {
-		err = disttaeEngine.SubscribeTable(ctx, database.GetID(), rel.ID(), true)
+		err = disttaeEngine.SubscribeTable(ctx, database.GetID(), rel.ID(), databaseName, schema.Name, true)
 		require.Nil(t, err)
 
 		checkSubscribed()
@@ -788,7 +796,7 @@ func TestConsumeCheckpointEntry(t *testing.T) {
 	require.Nil(t, err)
 	require.Nil(t, txn.Commit(ctx))
 
-	err = disttaeEngine.SubscribeTable(ctx, id.DbID, id.TableID, false)
+	err = disttaeEngine.SubscribeTable(ctx, id.DbID, id.TableID, databaseName, tableName, false)
 	require.Nil(t, err)
 	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
 	mp := common.DebugAllocator

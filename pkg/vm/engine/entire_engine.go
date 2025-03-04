@@ -98,8 +98,8 @@ func (e *EntireEngine) AllocateIDByKey(ctx context.Context, key string) (uint64,
 	return e.Engine.AllocateIDByKey(ctx, key)
 }
 
-func (e *EntireEngine) TryToSubscribeTable(ctx context.Context, dbID, tbID uint64) error {
-	return e.Engine.TryToSubscribeTable(ctx, dbID, tbID)
+func (e *EntireEngine) TryToSubscribeTable(ctx context.Context, dbID, tbID uint64, dbName, tblName string) error {
+	return e.Engine.TryToSubscribeTable(ctx, dbID, tbID, dbName, tblName)
 }
 
 func (e *EntireEngine) UnsubscribeTable(ctx context.Context, dbID, tbID uint64) error {
