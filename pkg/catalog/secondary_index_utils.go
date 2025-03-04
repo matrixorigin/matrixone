@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 )
 
 // Index Algorithm names
@@ -129,10 +130,7 @@ func IndexParamsToStringList(indexParams string) (string, error) {
 
 	if opType, ok := result[IndexAlgoParamOpType]; ok {
 		opType = ToLower(opType)
-		if opType != IndexAlgoParamOpType_l2 &&
-			opType != IndexAlgoParamOpType_ip &&
-			opType != IndexAlgoParamOpType_cos &&
-			opType != IndexAlgoParamOpType_l1 {
+		if _, ok := metric.OpTypeToMetric[opType]; !ok {
 			return "", moerr.NewInternalErrorNoCtxf("invalid op_type: '%s'", opType)
 		}
 
@@ -223,10 +221,7 @@ func indexParamsToMap(def interface{}) (map[string]string, error) {
 
 			if len(idx.IndexOption.AlgoParamVectorOpType) > 0 {
 				opType := ToLower(idx.IndexOption.AlgoParamVectorOpType)
-				if opType != IndexAlgoParamOpType_l2 &&
-					opType != IndexAlgoParamOpType_ip &&
-					opType != IndexAlgoParamOpType_cos &&
-					opType != IndexAlgoParamOpType_l1 {
+				if _, ok := metric.OpTypeToMetric[opType]; !ok {
 					return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid op_type: '%s'", opType))
 				}
 				res[IndexAlgoParamOpType] = idx.IndexOption.AlgoParamVectorOpType
@@ -267,9 +262,7 @@ func indexParamsToMap(def interface{}) (map[string]string, error) {
 
 			if len(idx.IndexOption.AlgoParamVectorOpType) > 0 {
 				opType := ToLower(idx.IndexOption.AlgoParamVectorOpType)
-				if opType != IndexAlgoParamOpType_l2 &&
-					opType != IndexAlgoParamOpType_ip &&
-					opType != IndexAlgoParamOpType_cos {
+				if _, ok := metric.OpTypeToUsearch[opType]; !ok {
 					return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid op_type. '%s'", opType))
 				}
 				res[IndexAlgoParamOpType] = idx.IndexOption.AlgoParamVectorOpType
