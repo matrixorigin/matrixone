@@ -157,6 +157,8 @@ const (
 	MO_PITR_ACCOUNT_ID    = "account_id"
 	MO_PITR_DB_NAME       = "database_name"
 	MO_PITR_TABLE_NAME    = "table_name"
+	MO_PITR_STATUS        = "pitr_status"
+	MO_PITR_CHANGED_TIME  = "pitr_status_changed_time"
 
 	MO_RETENTION = "mo_retention"
 
