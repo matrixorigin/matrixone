@@ -123,7 +123,7 @@ func (idx *IvfflatSearchIndex[T]) searchEntries(proc *process.Process, query *ma
 		mat := moarray.ToGonumVector[T](vec)
 		dist := distfn(query, mat)
 
-		heap.Push(&vectorindex.SearchResultAnyKey{pk, dist})
+		heap.Push(&vectorindex.SearchResultAnyKey{Id: pk, Distance: dist})
 	}
 	return false, nil
 }
@@ -152,7 +152,7 @@ func (idx *IvfflatSearchIndex[T]) findCentroids(proc *process.Process, query *ma
 					continue
 				}
 				dist := distfn(query, c.Vec)
-				heap.Push(&vectorindex.SearchResult{c.Id, dist})
+				heap.Push(&vectorindex.SearchResult{Id: c.Id, Distance: dist})
 			}
 		}()
 	}

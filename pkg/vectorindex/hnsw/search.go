@@ -241,7 +241,7 @@ func (s *HnswSearch) Search(proc *process.Process, anyquery any, rt vectorindex.
 					}
 
 					for k := range keys {
-						heap.Push(&vectorindex.SearchResult{int64(keys[k]), float64(distances[k])})
+						heap.Push(&vectorindex.SearchResult{Id: int64(keys[k]), Distance: float64(distances[k])})
 					}
 				}
 			}
