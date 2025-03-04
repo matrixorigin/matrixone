@@ -21,8 +21,6 @@ import (
 	"strings"
 	"time"
 
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -37,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 )
 
 // I create this file to store the two most important entry functions for the Compile struct and their helper functions.
@@ -285,7 +284,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		}
 
 		// rebuild context for the retry.
-		runC.InitPipelineContextToReryQuery()
+		runC.InitPipelineContextToRetryQuery()
 	}
 
 	if err = runC.proc.GetQueryContextError(); err != nil {
@@ -374,9 +373,9 @@ func (c *Compile) InitPipelineContextToExecuteQuery() {
 	}
 }
 
-// InitPipelineContextToReryQuery initializes the context for each pipeline tree.
+// InitPipelineContextToRetryQuery initializes the context for each pipeline tree.
 // the only place diff to InitPipelineContextToExecuteQuery is this function build query context from the last query.
-func (c *Compile) InitPipelineContextToReryQuery() {
+func (c *Compile) InitPipelineContextToRetryQuery() {
 	lastQueryCtx, _ := process.GetQueryCtxFromProc(c.proc)
 	contextBase := c.proc.Base.GetContextBase()
 	contextBase.BuildQueryCtx(lastQueryCtx)
@@ -445,7 +444,12 @@ func handleDdlPlanAnalyze(runC *Compile, stats *statistic.StatsInfo) {
 }
 
 func (c *Compile) handleQueryPlanAnalyze(runC *Compile, queryResult *util2.RunResult, stats *statistic.StatsInfo, isExplainPhy bool, option *ExplainOption) {
-	c.GenPhyPlan(runC)
+	if c.anal.phyPlan == nil {
+		c.GenPhyPlan(runC)
+	} else {
+		c.UpdatePreparePhyPlan(runC)
+	}
+
 	c.fillPlanNodeAnalyzeInfo(stats)
 
 	if isExplainPhy {

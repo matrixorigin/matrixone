@@ -1,6 +1,7 @@
 -- TODO: run all tests with both experimental_fulltext_index = 0 and 1
 -- TODO: GENERATE the test case to cover all combinations of types (varchar, char and text)
 set experimental_fulltext_index=1;
+set ft_relevancy_algorithm="TF-IDF";
 
 -- bytejson parser
 create table src (id bigint primary key, json1 json, json2 json);

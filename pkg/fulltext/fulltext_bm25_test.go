@@ -23,202 +23,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type TestCase struct {
-	pattern string
-	expect  string
-}
-
-func TestPatternPhrase(t *testing.T) {
-	tests := []TestCase{
-		{
-			pattern: "\"Ma'trix     Origin\"",
-			expect:  "(phrase (text 0 0 ma'trix) (text 1 12 origin))",
-		},
-		{
-			pattern: "\"Matrix Origin\"",
-			expect:  "(phrase (text 0 0 matrix) (text 1 7 origin))",
-		},
-		{
-			pattern: "\"Matrix\"",
-			expect:  "(phrase (text 0 0 matrix))",
-		},
-		{
-			pattern: "\"    Matrix     \"",
-			expect:  "(phrase (text 0 0 matrix))",
-		},
-		{
-			pattern: "\"Matrix     Origin\"",
-			expect:  "(phrase (text 0 0 matrix) (text 1 11 origin))",
-		},
-		{
-			pattern: "\"  你好嗎? Hello World  在一起  Happy  再见  \"",
-			expect:  "(phrase (text 0 0 你好嗎?) (text 1 11 hello) (text 2 17 world) (text 3 24 在一起) (text 4 35 happy) (text 5 42 再见))",
-		},
-	}
-
-	for _, c := range tests {
-		result, err := PatternToStringWithPosition(c.pattern, int64(tree.FULLTEXT_BOOLEAN))
-		require.Nil(t, err)
-		assert.Equal(t, c.expect, result)
-	}
-}
-
-func TestPatternBoolean(t *testing.T) {
-
-	tests := []TestCase{
-		{
-			pattern: "Ma'trix Origin",
-			expect:  "(text 0 ma'trix) (text 1 origin)",
-		},
-		{
-			pattern: "Matrix Origin",
-			expect:  "(text 0 matrix) (text 1 origin)",
-		},
-		{
-			pattern: "+Matrix Origin",
-			expect:  "(+ (text 0 matrix)) (text 1 origin)",
-		},
-		{
-			pattern: "+Matrix -Origin",
-			expect:  "(+ (text 0 matrix)) (- (text 1 origin))",
-		},
-		{
-			pattern: "Matrix ~Origin",
-			expect:  "(text 0 matrix) (~ (text 1 origin))",
-		},
-		{
-			pattern: "Matrix +(<Origin >One)",
-			expect:  "(+ (group (< (text 0 origin)) (> (text 1 one)))) (text 2 matrix)",
-		},
-		{
-			pattern: "+Matrix +Origin",
-			expect:  "(join 0 (+ (text 0 matrix)) (+ (text 0 origin)))",
-		},
-		{
-			pattern: "\"Matrix origin\"",
-			expect:  "(phrase (text 0 matrix) (text 1 origin))",
-		},
-		{
-			pattern: "Matrix Origin*",
-			expect:  "(text 0 matrix) (* 1 origin*)",
-		},
-		{
-			pattern: "+Matrix +(Origin (One Two))",
-			expect:  "(+ (text 0 matrix)) (+ (group (text 1 origin) (group (text 2 one) (text 3 two))))",
-		},
-		{
-			pattern: "+读写汉字 -学中文",
-			expect:  "(+ (text 0 读写汉字)) (- (text 1 学中文))",
-		},
-	}
-
-	for _, c := range tests {
-		result, err := PatternToString(c.pattern, int64(tree.FULLTEXT_BOOLEAN))
-		require.Nil(t, err)
-		assert.Equal(t, c.expect, result)
-	}
-}
-
-func TestPatternNL(t *testing.T) {
-
-	tests := []TestCase{
-		{
-			pattern: "Ma'trix Origin",
-			expect:  "(* 0 0 ma*) (text 1 3 trix) (text 2 8 origin)",
-		},
-		{
-			pattern: "Matrix Origin",
-			expect:  "(text 0 0 matrix) (text 1 7 origin)",
-		},
-		{
-			pattern: "读写汉字 学中文",
-			expect:  "(text 0 0 读写汉) (text 1 3 写汉字) (* 2 6 汉字*) (* 3 9 字*) (text 4 13 学中文) (* 5 16 中文*) (* 6 19 文*)",
-		},
-		{
-			pattern: "读写",
-			expect:  "(* 0 0 读写*)",
-		},
-	}
-
-	for _, c := range tests {
-		result, err := PatternToStringWithPosition(c.pattern, int64(tree.FULLTEXT_NL))
-		require.Nil(t, err)
-		assert.Equal(t, c.expect, result)
-	}
-}
-
-func TestPatternQueryExpansion(t *testing.T) {
-
-	tests := []TestCase{
-		{
-			pattern: "Matrix Origin",
-			expect:  "(text 0 matrix) (text 1 origin)",
-		},
-		{
-			pattern: "读写汉字 学中文",
-			expect:  "(+ (text 0 读写汉字)) (- (text 1 学中文))",
-		},
-	}
-
-	for _, c := range tests {
-		_, err := PatternToString(c.pattern, int64(tree.FULLTEXT_QUERY_EXPANSION))
-		require.NotNil(t, err)
-	}
-}
-
-func TestPatternFail(t *testing.T) {
-
-	tests := []TestCase{
-		{
-			pattern: "Matrix Origin( ",
-		},
-		{
-			pattern: "(+Matrix Origin",
-		},
-		{
-			pattern: "++Matrix -Origin",
-		},
-		{
-			pattern: "Matrix ~~Origin",
-		},
-		{
-			pattern: "Matrix +(<(+Origin -apple) >One)",
-		},
-		{
-			pattern: "+Matrix --Origin",
-		},
-	}
-
-	for _, c := range tests {
-		_, err := PatternToString(c.pattern, int64(tree.FULLTEXT_BOOLEAN))
-		require.NotNil(t, err)
-	}
-}
-
-func TestPatternNLFail(t *testing.T) {
-
-	tests := []TestCase{
-		{
-			pattern: "+[[[",
-		},
-		{
-			pattern: "+''",
-		},
-	}
-
-	for _, c := range tests {
-		_, err := PatternToString(c.pattern, int64(tree.FULLTEXT_NL))
-		require.NotNil(t, err)
-	}
-}
-
-func TestFullTextNL(t *testing.T) {
+func TestFullTextNLBM25(t *testing.T) {
 
 	pattern := "apple banana"
-	s, err := NewSearchAccum("src", "index", pattern, int64(tree.FULLTEXT_NL), "", ALGO_TFIDF)
+	s, err := NewSearchAccum("src", "index", pattern, int64(tree.FULLTEXT_NL), "", ALGO_BM25)
 	require.Nil(t, err)
 
-	sql, err := PatternToSql(s.Pattern, int64(tree.FULLTEXT_NL), "indextbl", "", ALGO_TFIDF)
+	sql, err := PatternToSql(s.Pattern, int64(tree.FULLTEXT_NL), "indextbl", "", ALGO_BM25)
 	require.Nil(t, err)
 
 	fmt.Println(sql)
@@ -271,10 +82,10 @@ func TestFullTextNL(t *testing.T) {
 
 }
 
-func TestFullTextOr(t *testing.T) {
+func TestFullTextOrBM25(t *testing.T) {
 
 	pattern := "apple banana"
-	s, err := NewSearchAccum("src", "index", pattern, int64(tree.FULLTEXT_BOOLEAN), "", ALGO_TFIDF)
+	s, err := NewSearchAccum("src", "index", pattern, int64(tree.FULLTEXT_BOOLEAN), "", ALGO_BM25)
 	require.Nil(t, err)
 
 	agghtab := make(map[any][]uint8)
@@ -319,11 +130,11 @@ func TestFullTextOr(t *testing.T) {
 
 }
 
-func TestFullTextPlusPlus(t *testing.T) {
+func TestFullTextPlusPlusBM25(t *testing.T) {
 
 	pattern := "+apple -orange"
 	//pattern := "+apple +banana -orange"
-	s, err := NewSearchAccum("src", "index", pattern, int64(tree.FULLTEXT_BOOLEAN), "", ALGO_TFIDF)
+	s, err := NewSearchAccum("src", "index", pattern, int64(tree.FULLTEXT_BOOLEAN), "", ALGO_BM25)
 	require.Nil(t, err)
 
 	agghtab := make(map[any][]uint8)
@@ -371,10 +182,10 @@ func TestFullTextPlusPlus(t *testing.T) {
 	assert.Equal(t, ok, false)
 }
 
-func TestFullTextPlusOr(t *testing.T) {
+func TestFullTextPlusOrBM25(t *testing.T) {
 
 	pattern := "+apple banana"
-	s, err := NewSearchAccum("src", "index", pattern, int64(tree.FULLTEXT_BOOLEAN), "", ALGO_TFIDF)
+	s, err := NewSearchAccum("src", "index", pattern, int64(tree.FULLTEXT_BOOLEAN), "", ALGO_BM25)
 	require.Nil(t, err)
 
 	agghtab := make(map[any][]uint8)
@@ -420,10 +231,10 @@ func TestFullTextPlusOr(t *testing.T) {
 	assert.Equal(t, ok, false)
 }
 
-func TestFullTextMinus(t *testing.T) {
+func TestFullTextMinusBM25(t *testing.T) {
 
 	pattern := "+apple -banana"
-	s, err := NewSearchAccum("src", "index", pattern, int64(tree.FULLTEXT_BOOLEAN), "", ALGO_TFIDF)
+	s, err := NewSearchAccum("src", "index", pattern, int64(tree.FULLTEXT_BOOLEAN), "", ALGO_BM25)
 	require.Nil(t, err)
 
 	agghtab := make(map[any][]uint8)
@@ -470,10 +281,10 @@ func TestFullTextMinus(t *testing.T) {
 
 }
 
-func TestFullTextTilda(t *testing.T) {
+func TestFullTextTildaBM25(t *testing.T) {
 
 	pattern := "+apple ~banana"
-	s, err := NewSearchAccum("src", "index", pattern, int64(tree.FULLTEXT_BOOLEAN), "", ALGO_TFIDF)
+	s, err := NewSearchAccum("src", "index", pattern, int64(tree.FULLTEXT_BOOLEAN), "", ALGO_BM25)
 	require.Nil(t, err)
 
 	agghtab := make(map[any][]uint8)
@@ -519,10 +330,10 @@ func TestFullTextTilda(t *testing.T) {
 	assert.Equal(t, ok, false)
 }
 
-func TestFullText1(t *testing.T) {
+func TestFullText1BM25(t *testing.T) {
 
 	pattern := "we aRe so Happy"
-	s, err := NewSearchAccum("src", "index", pattern, int64(tree.FULLTEXT_BOOLEAN), "", ALGO_TFIDF)
+	s, err := NewSearchAccum("src", "index", pattern, int64(tree.FULLTEXT_BOOLEAN), "", ALGO_BM25)
 	require.Nil(t, err)
 
 	agghtab := make(map[any][]uint8)
@@ -586,10 +397,10 @@ func TestFullText1(t *testing.T) {
 	}
 }
 
-func TestFullText2(t *testing.T) {
+func TestFullText2BM25(t *testing.T) {
 
 	pattern := "+we +aRe +so +Happy"
-	s, err := NewSearchAccum("src", "index", pattern, int64(tree.FULLTEXT_BOOLEAN), "", ALGO_TFIDF)
+	s, err := NewSearchAccum("src", "index", pattern, int64(tree.FULLTEXT_BOOLEAN), "", ALGO_BM25)
 	require.Nil(t, err)
 
 	agghtab := make(map[any][]uint8)
@@ -647,10 +458,10 @@ func TestFullText2(t *testing.T) {
 
 }
 
-func TestFullText3(t *testing.T) {
+func TestFullText3BM25(t *testing.T) {
 
 	pattern := "+we -aRe -so -Happy"
-	s, err := NewSearchAccum("src", "index", pattern, int64(tree.FULLTEXT_BOOLEAN), "", ALGO_TFIDF)
+	s, err := NewSearchAccum("src", "index", pattern, int64(tree.FULLTEXT_BOOLEAN), "", ALGO_BM25)
 	require.Nil(t, err)
 
 	agghtab := make(map[any][]uint8)
@@ -709,10 +520,10 @@ func TestFullText3(t *testing.T) {
 	assert.Equal(t, ok, true)
 }
 
-func TestFullText5(t *testing.T) {
+func TestFullText5BM25(t *testing.T) {
 
 	pattern := "we aRe so +Happy"
-	s, err := NewSearchAccum("src", "index", pattern, int64(tree.FULLTEXT_BOOLEAN), "", ALGO_TFIDF)
+	s, err := NewSearchAccum("src", "index", pattern, int64(tree.FULLTEXT_BOOLEAN), "", ALGO_BM25)
 	require.Nil(t, err)
 
 	agghtab := make(map[any][]uint8)
@@ -757,10 +568,10 @@ func TestFullText5(t *testing.T) {
 
 }
 
-func TestFullTextGroup(t *testing.T) {
+func TestFullTextGroupBM25(t *testing.T) {
 
 	pattern := "+we +(<are >so)"
-	s, err := NewSearchAccum("src", "index", pattern, int64(tree.FULLTEXT_BOOLEAN), "", ALGO_TFIDF)
+	s, err := NewSearchAccum("src", "index", pattern, int64(tree.FULLTEXT_BOOLEAN), "", ALGO_BM25)
 	require.Nil(t, err)
 
 	agghtab := make(map[any][]uint8)
@@ -814,10 +625,10 @@ func TestFullTextGroup(t *testing.T) {
 	assert.Equal(t, ok, true)
 }
 
-func TestFullTextJoinGroupTilda(t *testing.T) {
+func TestFullTextJoinGroupTildaBM25(t *testing.T) {
 
 	pattern := "+we +also ~(<are >so)"
-	s, err := NewSearchAccum("src", "index", pattern, int64(tree.FULLTEXT_BOOLEAN), "", ALGO_TFIDF)
+	s, err := NewSearchAccum("src", "index", pattern, int64(tree.FULLTEXT_BOOLEAN), "", ALGO_BM25)
 	require.Nil(t, err)
 
 	agghtab := make(map[any][]uint8)
@@ -872,10 +683,10 @@ func TestFullTextJoinGroupTilda(t *testing.T) {
 	assert.Equal(t, 2, len(test_result))
 }
 
-func TestFullTextGroupTilda(t *testing.T) {
+func TestFullTextGroupTildaBM25(t *testing.T) {
 
 	pattern := "+we ~(<are >so)"
-	s, err := NewSearchAccum("src", "index", pattern, int64(tree.FULLTEXT_BOOLEAN), "", ALGO_TFIDF)
+	s, err := NewSearchAccum("src", "index", pattern, int64(tree.FULLTEXT_BOOLEAN), "", ALGO_BM25)
 	require.Nil(t, err)
 
 	agghtab := make(map[any][]uint8)
@@ -930,10 +741,10 @@ func TestFullTextGroupTilda(t *testing.T) {
 	assert.Equal(t, 2, len(test_result))
 }
 
-func TestFullTextStar(t *testing.T) {
+func TestFullTextStarBM25(t *testing.T) {
 
 	pattern := "apple*"
-	s, err := NewSearchAccum("src", "index", pattern, int64(tree.FULLTEXT_BOOLEAN), "", ALGO_TFIDF)
+	s, err := NewSearchAccum("src", "index", pattern, int64(tree.FULLTEXT_BOOLEAN), "", ALGO_BM25)
 	require.Nil(t, err)
 
 	//fmt.Println(PatternListToString(s.Pattern))
@@ -977,13 +788,13 @@ func TestFullTextStar(t *testing.T) {
 
 }
 
-func TestFullTextPhrase(t *testing.T) {
+func TestFullTextPhraseBM25(t *testing.T) {
 
 	pattern := "\"we aRe so Happy\""
-	s, err := NewSearchAccum("src", "index", pattern, int64(tree.FULLTEXT_BOOLEAN), "", ALGO_TFIDF)
+	s, err := NewSearchAccum("src", "index", pattern, int64(tree.FULLTEXT_BOOLEAN), "", ALGO_BM25)
 	require.Nil(t, err)
 
-	sql, err := PatternToSql(s.Pattern, int64(tree.FULLTEXT_BOOLEAN), "idxtbl", "", ALGO_TFIDF)
+	sql, err := PatternToSql(s.Pattern, int64(tree.FULLTEXT_BOOLEAN), "idxtbl", "", ALGO_BM25)
 	require.Nil(t, err)
 	fmt.Println(sql)
 
@@ -1042,16 +853,4 @@ func TestFullTextPhrase(t *testing.T) {
 	var ok bool
 	_, ok = test_result[0]
 	assert.Equal(t, ok, true)
-}
-
-func TestFullTextCombine(t *testing.T) {
-	p := &Pattern{}
-
-	s1 := []float32{1}
-	s2 := []float32{2}
-
-	result, err := p.Combine(nil, nil, nil, s1, s2)
-	require.Nil(t, err)
-
-	assert.Equal(t, result[0], float32(2))
 }

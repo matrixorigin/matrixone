@@ -198,3 +198,49 @@ func Test_UpgEntry(t *testing.T) {
 		},
 	)
 }
+
+func Test_UpgradeBM25(t *testing.T) {
+	sid := ""
+	runtime.RunTest(
+		sid,
+		func(rt runtime.Runtime) {
+			txnOperator := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
+			txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{CN: sid}).AnyTimes()
+			executor := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+				// get index table list
+				if strings.Contains(sql, "select distinct") {
+					types := []types.Type{
+						types.New(types.T_varchar, 64, 0),
+						types.New(types.T_varchar, 64, 0),
+					}
+					memRes := executor.NewMemResult(
+						types,
+						mpool.MustNewZero())
+					memRes.NewBatchWithRowCount(1)
+					executor.AppendStringRows(memRes, 0, []string{"dbName"})
+					executor.AppendStringRows(memRes, 1, []string{"idxTableName"})
+					return memRes.GetResult(), nil
+				}
+
+				// check need upgrade
+				if strings.Contains(sql, "select count") {
+					types := []types.Type{
+						types.New(types.T_int64, 0, 0),
+					}
+					memRes := executor.NewMemResult(
+						types,
+						mpool.MustNewZero())
+					memRes.NewBatchWithRowCount(1)
+					executor.AppendFixedRows(memRes, 0, []int64{0})
+					return memRes.GetResult(), nil
+				}
+
+				// insert doclen values
+				return executor.Result{}, nil
+			}, txnOperator)
+
+			err := upgradeForBM25(0, executor)
+			assert.Nil(t, err)
+		},
+	)
+}
