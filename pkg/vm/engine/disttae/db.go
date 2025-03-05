@@ -530,7 +530,7 @@ func (e *Engine) getOrCreateSnapPart(
 		locs = append(locs, checkpoint.GetLocation().String())
 		locs = append(locs, strconv.Itoa(int(checkpoint.GetVersion())))
 		locations := strings.Join(locs, ";")
-		entries, closeCBs, err := logtail.LoadCheckpointEntries(
+		err := logtail.ConsumeCheckpointEntries(
 			ctx,
 			e.service,
 			locations,
@@ -538,29 +538,11 @@ func (e *Engine) getOrCreateSnapPart(
 			tbl.tableName,
 			tbl.db.databaseId,
 			tbl.db.databaseName,
+			state.HandleObjectEntry,
 			e.mp,
 			e.fs)
 		if err != nil {
 			return err
-		}
-		defer func() {
-			for _, cb := range closeCBs {
-				if cb != nil {
-					cb()
-				}
-			}
-		}()
-		for _, entry := range entries {
-			if err = consumeEntry(
-				ctx,
-				tbl.primarySeqnum,
-				e,
-				nil,
-				state,
-				entry,
-				false); err != nil {
-				return err
-			}
 		}
 		return nil
 	})
@@ -654,22 +636,12 @@ func (e *Engine) LazyLoadLatestCkp(
 	dbID uint64,
 	dbName string) (*logtailreplay.Partition, error) {
 
-	var (
-	//ok  bool
-	//tbl *txnTable
-	)
-	//if tbl, ok = tblHandler.(*txnTable); !ok {
-	//	delegate := tblHandler.(*txnTableDelegate)
-	//	tbl = delegate.origin
-	//}
-
 	part := e.GetOrCreateLatestPart(dbID, tableID)
-	cache := e.GetLatestCatalogCache()
 
 	if err := part.ConsumeCheckpoints(
 		ctx,
 		func(checkpoint string, state *logtailreplay.PartitionState) error {
-			entries, closeCBs, err := logtail.LoadCheckpointEntries(
+			err := logtail.ConsumeCheckpointEntries(
 				ctx,
 				e.service,
 				checkpoint,
@@ -677,30 +649,11 @@ func (e *Engine) LazyLoadLatestCkp(
 				tableName,
 				dbID,
 				dbName,
+				state.HandleObjectEntry,
 				e.mp,
 				e.fs)
 			if err != nil {
 				return err
-			}
-			defer func() {
-				for _, cb := range closeCBs {
-					if cb != nil {
-						cb()
-					}
-				}
-			}()
-			for _, entry := range entries {
-				//the primarySeqnum is not used in the consume of checkpoint.
-				if err = consumeEntry(
-					ctx,
-					-1,
-					e,
-					cache,
-					state,
-					entry,
-					false); err != nil {
-					return err
-				}
 			}
 			return nil
 		},

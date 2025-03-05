@@ -1,4 +1,5 @@
 set experimental_fulltext_index=1;
+set ft_relevancy_algorithm="TF-IDF";
 drop database if exists test_fulltext;
 create database test_fulltext;
 use test_fulltext;
