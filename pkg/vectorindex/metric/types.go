@@ -34,7 +34,9 @@ const (
 	DistIntFn_L2Distance     = "l2_distance_sq"
 	DistIntFn_InnerProduct   = "inner_product"
 	DistIntFn_CosineDistance = "cosine_distance"
+)
 
+const (
 	Metric_L2Distance MetricType = iota
 	Metric_InnerProduct
 	Metric_CosineDistance
