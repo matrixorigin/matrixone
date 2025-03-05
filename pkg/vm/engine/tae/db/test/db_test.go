@@ -11747,14 +11747,17 @@ func Test_RWDB3(t *testing.T) {
 				assert.NoError(t, err)
 				db, err := txn.GetDatabase("db")
 				if err != nil {
+					assert.NoError(t, txn.Commit(ctx))
 					return false
 				}
 				rel, err := db.GetRelationByName(schema.Name)
 				if err != nil {
+					assert.NoError(t, txn.Commit(ctx))
 					return false
 				}
 				rows := testutil.GetColumnRowsByScan(t, rel, 3, true)
 				if rows == 0 {
+					assert.NoError(t, txn.Commit(ctx))
 					return false
 				}
 				assert.Equal(t, 5, rows)
@@ -11763,6 +11766,10 @@ func Test_RWDB3(t *testing.T) {
 					filter,
 					3,
 				)
+				if err != nil {
+					assert.NoError(t, txn.Commit(ctx))
+					return false
+				}
 				assert.NoError(t, err)
 				assert.NoError(t, txn.Commit(ctx))
 				return val == int64(99)
