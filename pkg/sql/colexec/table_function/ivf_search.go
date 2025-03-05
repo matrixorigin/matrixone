@@ -153,11 +153,11 @@ func (u *ivfSearchState) start(tf *TableFunction, proc *process.Process, nthRow 
 			return moerr.NewInternalError(proc.Ctx, "Invalid Lists value")
 		}
 
-		metric, ok := metric.OpTypeToIvfMetric[u.param.OpType]
+		metrictype, ok := metric.OpTypeToIvfMetric[u.param.OpType]
 		if !ok {
 			return moerr.NewInternalError(proc.Ctx, "invalid optype")
 		}
-		u.idxcfg.Ivfflat.Metric = uint16(metric)
+		u.idxcfg.Ivfflat.Metric = uint16(metrictype)
 
 		// IndexTableConfig
 		cfgVec := tf.ctr.argVecs[0]

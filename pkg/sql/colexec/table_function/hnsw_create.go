@@ -134,11 +134,11 @@ func (u *hnswCreateState) start(tf *TableFunction, proc *process.Process, nthRow
 			u.idxcfg.Usearch.Connectivity = uint(val)
 		}
 
-		metric, ok := metric.OpTypeToUsearchMetric[u.param.OpType]
+		metrictype, ok := metric.OpTypeToUsearchMetric[u.param.OpType]
 		if !ok {
 			return moerr.NewInternalError(proc.Ctx, "Invalid op_type")
 		}
-		u.idxcfg.Usearch.Metric = metric
+		u.idxcfg.Usearch.Metric = metrictype
 
 		if len(u.param.EfConstruction) > 0 {
 			val, err := strconv.Atoi(u.param.EfConstruction)
