@@ -98,6 +98,14 @@ func (catalog *Catalog) onReplayUpdateDatabase(cmd *EntryCommand[*EmptyMVCCNode,
 
 	db.Lock()
 	defer db.Unlock()
+	cmd.applyCommitFn = func() {
+		db.Lock()
+		defer db.Unlock()
+		err := cmd.mvccNode.ApplyCommit(cmd.mvccNode.Txn.GetID())
+		if err != nil {
+			panic(err)
+		}
+	}
 	dbun := db.SearchNodeLocked(un)
 	if dbun == nil {
 		db.InsertLocked(un)
@@ -143,6 +151,14 @@ func (catalog *Catalog) onReplayUpdateTable(cmd *EntryCommand[*TableMVCCNode, *T
 
 	tbl.Lock()
 	defer tbl.Unlock()
+	cmd.applyCommitFn = func() {
+		tbl.Lock()
+		defer tbl.Unlock()
+		err := cmd.mvccNode.ApplyCommit(cmd.mvccNode.Txn.GetID())
+		if err != nil {
+			panic(err)
+		}
+	}
 	tblun := tbl.SearchNodeLocked(un)
 	if tblun == nil {
 		tbl.InsertLocked(un) //TODO isvalid
@@ -223,6 +239,13 @@ func (catalog *Catalog) onReplayUpdateObject(
 		}
 		obj.ObjectState = ObjectState_Delete_ApplyCommit
 		rel.AddEntryLocked(obj)
+	}
+
+	cmd.applyCommitFn = func() {
+		err := obj.ApplyCommit(cmd.mvccNode.Txn.GetID())
+		if err != nil {
+			panic(err)
+		}
 	}
 
 	if obj.objData == nil {
