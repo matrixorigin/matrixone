@@ -79,16 +79,12 @@ func IsHnswIndexAlgo(algo string) bool {
 
 // ------------------------[START] IndexAlgoParams------------------------
 const (
-	IndexAlgoParamLists      = "lists"
-	IndexAlgoParamOpType     = "op_type"
-	IndexAlgoParamOpType_l2  = "vector_l2_ops"
-	IndexAlgoParamOpType_ip  = "vector_ip_ops"
-	IndexAlgoParamOpType_cos = "vector_cosine_ops"
-	IndexAlgoParamOpType_l1  = "vector_l1_ops"
-	HnswM                    = "m"
-	HnswEfConstruction       = "ef_construction"
-	HnswQuantization         = "quantization"
-	HnswEfSearch             = "ef_search"
+	IndexAlgoParamLists  = "lists"
+	IndexAlgoParamOpType = "op_type"
+	HnswM                = "m"
+	HnswEfConstruction   = "ef_construction"
+	HnswQuantization     = "quantization"
+	HnswEfSearch         = "ef_search"
 )
 
 /* 1. ToString Functions */
@@ -226,7 +222,7 @@ func indexParamsToMap(def interface{}) (map[string]string, error) {
 				}
 				res[IndexAlgoParamOpType] = idx.IndexOption.AlgoParamVectorOpType
 			} else {
-				res[IndexAlgoParamOpType] = IndexAlgoParamOpType_l2 // set l2 as default
+				res[IndexAlgoParamOpType] = metric.OpType_L2Distance // set l2 as default
 			}
 		case tree.INDEX_TYPE_HNSW:
 			if idx.IndexOption.HnswM < 0 {
@@ -267,7 +263,7 @@ func indexParamsToMap(def interface{}) (map[string]string, error) {
 				}
 				res[IndexAlgoParamOpType] = idx.IndexOption.AlgoParamVectorOpType
 			} else {
-				res[IndexAlgoParamOpType] = IndexAlgoParamOpType_l2 // set l2 as default
+				res[IndexAlgoParamOpType] = metric.OpType_L2Distance // set l2 as default
 			}
 		default:
 			return nil, moerr.NewInternalErrorNoCtx("invalid index alogorithm type")
@@ -280,8 +276,8 @@ func indexParamsToMap(def interface{}) (map[string]string, error) {
 
 func DefaultIvfIndexAlgoOptions() map[string]string {
 	res := make(map[string]string)
-	res[IndexAlgoParamLists] = "1"                      // set lists = 1 as default
-	res[IndexAlgoParamOpType] = IndexAlgoParamOpType_l2 // set l2 as default
+	res[IndexAlgoParamLists] = "1"                       // set lists = 1 as default
+	res[IndexAlgoParamOpType] = metric.OpType_L2Distance // set l2 as default
 	return res
 }
 
