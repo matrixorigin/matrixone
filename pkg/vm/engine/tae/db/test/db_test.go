@@ -11700,3 +11700,91 @@ func Test_RWDB2(t *testing.T) {
 	rTae1.Close()
 	rTae2.Close()
 }
+
+func Test_RWDB3(t *testing.T) {
+	ctx := context.Background()
+	wOpts := config.WithLongScanAndCKPOpts(nil, options.WithWalClientFactory(nil))
+	wTae := testutil.NewTestEngine(ctx, ModuleName, t, wOpts)
+	defer wTae.Close()
+
+	rOpts := config.WithLongScanAndCKPOpts(nil, options.WithWalClientFactory(wOpts.WalClientFactory))
+	rTae1 := testutil.NewReplayTestEngine(ctx, ModuleName, t, rOpts)
+
+	rOpts = config.WithLongScanAndCKPOpts(nil, options.WithWalClientFactory(wOpts.WalClientFactory))
+	rTae2 := testutil.NewReplayTestEngine(ctx, ModuleName, t, rOpts)
+
+	schema := catalog.MockSchemaAll(4, 2)
+	schema.Extra.BlockMaxRows = 5
+	schema.Extra.ObjectMaxBlocks = 256
+	bat := catalog.MockBatch(schema, 5)
+	pkv := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(0)
+	filter := handle.NewEQFilter(pkv)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+
+		wTae.BindSchema(schema)
+		defer bat.Close()
+		wTae.CreateRelAndAppend2(bat, true)
+
+		for i := 0; i < 100; i++ {
+			updateV := int64(i)
+			txn, rel := wTae.GetRelation()
+			err := rel.UpdateByFilter(context.Background(), filter, 3, updateV, false)
+			assert.NoError(t, err)
+			assert.NoError(t, txn.Commit(ctx))
+		}
+	}()
+
+	// maxLSN := wTae.DB.Wal.GetLSNWatermark()
+
+	checkName := func(tae *testutil.TestEngine) {
+		testutils.WaitExpect(
+			4000,
+			func() bool {
+				txn, err := tae.StartTxn(nil)
+				assert.NoError(t, err)
+				db, err := txn.GetDatabase("db")
+				if err != nil {
+					return false
+				}
+				rel, err := db.GetRelationByName(schema.Name)
+				if err != nil {
+					return false
+				}
+				rows := testutil.GetColumnRowsByScan(t, rel, 3, true)
+				if rows == 0 {
+					return false
+				}
+				assert.Equal(t, 5, rows)
+				val, _, err := rel.GetValueByFilter(
+					context.Background(),
+					filter,
+					3,
+				)
+				assert.NoError(t, err)
+				assert.NoError(t, txn.Commit(ctx))
+				return val == int64(99)
+			},
+		)
+
+		tae.BindSchema(schema)
+		txn, rel := tae.GetRelation()
+		val, _, err := rel.GetValueByFilter(
+			context.Background(),
+			filter,
+			3,
+		)
+		assert.NoError(t, err)
+		assert.Equal(t, int64(99), val)
+		assert.NoError(t, txn.Commit(ctx))
+	}
+
+	checkName(rTae1)
+	checkName(rTae2)
+	wg.Wait()
+
+	rTae1.Close()
+	rTae2.Close()
+}
