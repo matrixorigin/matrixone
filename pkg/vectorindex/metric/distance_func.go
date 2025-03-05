@@ -28,7 +28,8 @@ func L2Distance(v1, v2 *mat.VecDense) float64 {
 
 // InnerProduct is used for InnerProduct distance in Spherical Kmeans.
 func InnerProduct(v1, v2 *mat.VecDense) float64 {
-	return mat.Dot(v1, v2)
+	// return negative inner product
+	return -mat.Dot(v1, v2)
 }
 
 // CosineDistance is used for CosineDistance distance in Spherical Kmeans.

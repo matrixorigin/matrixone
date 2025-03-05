@@ -97,11 +97,12 @@ func (u *ivfCreateState) end(tf *TableFunction, proc *process.Process) error {
 
 	nworker := vectorindex.GetConcurrencyForBuild(u.tblcfg.ThreadsBuild)
 
+	// NOTE: We use L2 distance to caculate centroid.  Ivfflat metric just for searching.
 	if clusterer, err = elkans.NewKMeans(
 		u.data, int(u.idxcfg.Ivfflat.Lists),
 		defaultKmeansMaxIteration,
 		defaultKmeansDeltaThreshold,
-		metric.MetricType(u.idxcfg.Ivfflat.Metric),
+		defaultKmeansDistanceType,
 		kmeans.InitType(u.idxcfg.Ivfflat.InitType),
 		u.idxcfg.Ivfflat.Normalize,
 		int(nworker)); err != nil {
@@ -202,11 +203,12 @@ func (u *ivfCreateState) start(tf *TableFunction, proc *process.Process, nthRow 
 		u.idxcfg.Ivfflat.InitType = uint16(kmeans.KmeansPlusPlus)
 		//u.idxcfg.Ivfflat.InitType = uint16(kmeans.Random)
 
-		metric, ok := metric.OpTypeToIvfMetric[u.param.OpType]
+		metrictype, ok := metric.OpTypeToIvfMetric[u.param.OpType]
 		if !ok {
 			return moerr.NewInternalError(proc.Ctx, "invalid optype")
 		}
-		u.idxcfg.Ivfflat.Metric = uint16(metric)
+		u.idxcfg.Ivfflat.Metric = uint16(metrictype)
+		u.idxcfg.Ivfflat.Normalize = false
 
 		// IndexTableConfig
 		cfgVec := tf.ctr.argVecs[0]
