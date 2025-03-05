@@ -47,7 +47,10 @@ type ivfSearchState struct {
 }
 
 // stub function
-var newIvfAlgo = newIvfAlgoFn
+var (
+	newIvfAlgo = newIvfAlgoFn
+	getVersion = ivfflat.GetVersion
+)
 
 func newIvfAlgoFn(idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) (veccache.VectorIndexSearchIf, error) {
 	switch idxcfg.Ivfflat.VectorType {
@@ -190,7 +193,7 @@ func (u *ivfSearchState) start(tf *TableFunction, proc *process.Process, nthRow 
 		u.idxcfg.Type = "ivfflat"
 
 		// get version
-		version, err := ivfflat.GetVersion(proc, u.tblcfg)
+		version, err := getVersion(proc, u.tblcfg)
 		if err != nil {
 			return err
 		}
