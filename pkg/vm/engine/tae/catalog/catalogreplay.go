@@ -93,6 +93,14 @@ func (catalog *Catalog) onReplayUpdateDatabase(cmd *EntryCommand[*EmptyMVCCNode,
 		if err != nil {
 			panic(err)
 		}
+		cmd.applyCommitFn = func() {
+			db.Lock()
+			defer db.Unlock()
+			err := cmd.mvccNode.ApplyCommit(cmd.mvccNode.Txn.GetID())
+			if err != nil {
+				panic(err)
+			}
+		}
 		return
 	}
 
@@ -145,6 +153,14 @@ func (catalog *Catalog) onReplayUpdateTable(cmd *EntryCommand[*TableMVCCNode, *T
 		if err != nil {
 			logutil.Warn(catalog.SimplePPString(common.PPL3))
 			panic(err)
+		}
+		cmd.applyCommitFn = func() {
+			tbl.Lock()
+			defer tbl.Unlock()
+			err := cmd.mvccNode.ApplyCommit(cmd.mvccNode.Txn.GetID())
+			if err != nil {
+				panic(err)
+			}
 		}
 		return
 	}
@@ -218,7 +234,7 @@ func (catalog *Catalog) onReplayUpdateObject(
 			rel.UpdateReplayEntryTs(obj, ts)
 		}
 		obj.ObjectMVCCNode = *cmd.mvccNode.BaseNode
-		obj.ObjectState = ObjectState_Create_ApplyCommit
+		obj.ObjectState = ObjectState_Create_PrepareCommit
 		rel.AddEntryLocked(obj)
 	}
 	if cmd.mvccNode.DeletedAt.Equal(&txnif.UncommitTS) {
@@ -237,7 +253,7 @@ func (catalog *Catalog) onReplayUpdateObject(
 			obj.EntryMVCCNode.ApplyCommit(ts)
 			rel.UpdateReplayEntryTs(obj, ts)
 		}
-		obj.ObjectState = ObjectState_Delete_ApplyCommit
+		obj.ObjectState = ObjectState_Delete_PrepareCommit
 		rel.AddEntryLocked(obj)
 	}
 

@@ -235,7 +235,9 @@ func (cmd *EntryCommand[T, N]) SetReplayTxn(txn txnif.AsyncTxn) {
 }
 
 func (cmd *EntryCommand[T, N]) ApplyCommit() {
-	cmd.applyCommitFn()
+	if cmd.applyCommitFn != nil {
+		cmd.applyCommitFn()
+	}
 }
 
 func (cmd *EntryCommand[T, N]) ApplyRollback() {
