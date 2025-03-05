@@ -95,7 +95,7 @@ func TestToPath(t *testing.T) {
 	mopath, query, err := s.ToPath()
 	require.Nil(t, err)
 
-	require.Equal(t, mopath, "s3,endpoint,region,bucket,key,secret,\n:/path/a.csv")
+	require.Equal(t, mopath, "s3-opts,endpoint=endpoint,region=region,bucket=bucket,key=key,secret=secret\n:/path/a.csv")
 	fmt.Printf("mo=%s, query = %s", mopath, query)
 
 	// file path
@@ -111,6 +111,17 @@ func TestToPath(t *testing.T) {
 	require.Equal(t, query, "")
 
 	require.Equal(t, mopath, "/tmp/dir/subdir/file.pdf")
+
+	// hdfs path
+	u, err = url.Parse("hdfs://localhost:8080/dir/path.txt")
+	require.Nil(t, err)
+	s = StageDef{Id: 0,
+		Name:   "mystage",
+		Url:    u,
+		Status: ""}
+	mopath, query, err = s.ToPath()
+	require.Nil(t, err)
+	require.Equal(t, mopath, "hdfs,endpoint=localhost:8080\n:/dir/path.txt")
 
 	// invalid schema
 	u, err = url.Parse("https://localhost/path/file.pdf")
