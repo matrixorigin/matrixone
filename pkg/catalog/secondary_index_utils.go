@@ -130,7 +130,7 @@ func IndexParamsToStringList(indexParams string) (string, error) {
 
 	if opType, ok := result[IndexAlgoParamOpType]; ok {
 		opType = ToLower(opType)
-		if _, ok := metric.OpTypeToMetric[opType]; !ok {
+		if _, ok := metric.OpTypeToIvfMetric[opType]; !ok {
 			return "", moerr.NewInternalErrorNoCtxf("invalid op_type: '%s'", opType)
 		}
 
@@ -221,7 +221,7 @@ func indexParamsToMap(def interface{}) (map[string]string, error) {
 
 			if len(idx.IndexOption.AlgoParamVectorOpType) > 0 {
 				opType := ToLower(idx.IndexOption.AlgoParamVectorOpType)
-				if _, ok := metric.OpTypeToMetric[opType]; !ok {
+				if _, ok := metric.OpTypeToIvfMetric[opType]; !ok {
 					return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid op_type: '%s'", opType))
 				}
 				res[IndexAlgoParamOpType] = idx.IndexOption.AlgoParamVectorOpType
@@ -262,7 +262,7 @@ func indexParamsToMap(def interface{}) (map[string]string, error) {
 
 			if len(idx.IndexOption.AlgoParamVectorOpType) > 0 {
 				opType := ToLower(idx.IndexOption.AlgoParamVectorOpType)
-				if _, ok := metric.OpTypeToUsearch[opType]; !ok {
+				if _, ok := metric.OpTypeToUsearchMetric[opType]; !ok {
 					return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid op_type. '%s'", opType))
 				}
 				res[IndexAlgoParamOpType] = idx.IndexOption.AlgoParamVectorOpType

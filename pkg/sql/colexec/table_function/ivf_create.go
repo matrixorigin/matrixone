@@ -202,7 +202,7 @@ func (u *ivfCreateState) start(tf *TableFunction, proc *process.Process, nthRow 
 		u.idxcfg.Ivfflat.InitType = uint16(kmeans.KmeansPlusPlus)
 		//u.idxcfg.Ivfflat.InitType = uint16(kmeans.Random)
 
-		metric, ok := metric.OpTypeToMetric[u.param.OpType]
+		metric, ok := metric.OpTypeToIvfMetric[u.param.OpType]
 		if !ok {
 			return moerr.NewInternalError(proc.Ctx, "invalid optype")
 		}

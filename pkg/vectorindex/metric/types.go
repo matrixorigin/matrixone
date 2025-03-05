@@ -54,14 +54,14 @@ var (
 		DistFn_CosineDistance: DistIntFn_CosineDistance,
 	}
 
-	OpTypeToMetric = map[string]MetricType{
+	OpTypeToIvfMetric = map[string]MetricType{
 		OpType_L2Distance:     Metric_L2Distance,
 		OpType_InnerProduct:   Metric_InnerProduct,
 		OpType_CosineDistance: Metric_CosineDistance,
 		OpType_L1Distance:     Metric_L1Distance,
 	}
 
-	OpTypeToUsearch = map[string]usearch.Metric{
+	OpTypeToUsearchMetric = map[string]usearch.Metric{
 		OpType_L2Distance:     usearch.L2sq,
 		OpType_InnerProduct:   usearch.InnerProduct,
 		OpType_CosineDistance: usearch.Cosine,
