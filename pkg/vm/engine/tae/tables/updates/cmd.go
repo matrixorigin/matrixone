@@ -160,10 +160,12 @@ func (c *UpdateCmd) GetCurrentVersion() uint16 {
 func (c *UpdateCmd) ApplyCommit() {
 	switch c.cmdType {
 	case IOET_WALTxnCommand_AppendNode:
-		c.append.mvcc.Lock()
-		defer c.append.mvcc.Unlock()
-		if _, err := c.append.TxnMVCCNode.ApplyCommit(c.append.Txn.GetID()); err != nil {
-			panic(err)
+		if c.append.mvcc != nil {
+			c.append.mvcc.Lock()
+			defer c.append.mvcc.Unlock()
+			if _, err := c.append.TxnMVCCNode.ApplyCommit(c.append.Txn.GetID()); err != nil {
+				panic(err)
+			}
 		}
 	default:
 		panic(fmt.Sprintf("invalid command type %d", c.cmdType))
