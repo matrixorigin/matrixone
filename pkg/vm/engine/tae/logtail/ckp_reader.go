@@ -42,6 +42,7 @@ import (
 
 type ckpDataReader interface {
 	read(ctx context.Context, bat *batch.Batch, mp *mpool.MPool) (end bool, err error)
+	reset(ctx context.Context)
 }
 
 type ckpObjectReader struct {
@@ -101,6 +102,22 @@ func (r *ckpObjectReader) read(
 			ctx,
 			r.fs,
 			object,
+		)
+	}
+}
+
+func (r *ckpObjectReader) reset(ctx context.Context) {
+	r.objectIdx = 0
+	if len(r.objects) != 0 {
+		object := r.objects[0]
+		r.reader = ckputil.NewDataReader(
+			ctx,
+			r.fs,
+			object,
+			readutil.WithColumns(
+				ckputil.DataScan_TableIDSeqnums,
+				ckputil.DataScan_TableIDTypes,
+			),
 		)
 	}
 }
@@ -177,6 +194,10 @@ func (r *ckpObjectReaderForV12) read(
 	return
 }
 
+func (r *ckpObjectReaderForV12) reset(ctx context.Context) {
+	r.objectIndex = 0
+}
+
 type CKPReader struct {
 	version     uint32
 	location    objectio.Location
@@ -194,7 +215,6 @@ type CKPReader struct {
 	objectReader ckpDataReader
 }
 
-// with opt
 func NewCKPReader(
 	version uint32,
 	location objectio.Location,
@@ -640,7 +660,7 @@ func compatibilityForV12(
 		vector.AppendMultiFixed(
 			ckpData.Vecs[ckputil.TableObjectsAttr_ObjectType_Idx],
 			dataType,
-			true,
+			false,
 			src.Length(),
 			mp,
 		)
@@ -682,6 +702,7 @@ func (reader *CKPReader) ForEachRow(
 	}
 	tmpBatch := ckputil.MakeDataScanTableIDBatch()
 	defer tmpBatch.Clean(reader.mp)
+	defer reader.objectReader.reset(ctx)
 	for {
 		tmpBatch.CleanOnlyData()
 		var end bool
