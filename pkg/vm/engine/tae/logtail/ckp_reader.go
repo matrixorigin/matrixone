@@ -670,27 +670,42 @@ func (reader *CKPReader) ForEachRow(
 		rowID types.Rowid,
 	) error,
 ) (err error) {
-	if reader.version <= CheckpointVersion12 {
-		var dataBatch, tombstoneBatch *containers.Batch
-		if dataBatch, tombstoneBatch, err = getCKPDataForV12(
-			ctx, reader.dataLocations, reader.tombstoneLocations, reader.mp, reader.fs,
-		); err != nil {
+	if reader.withTableID {
+		panic("not support")
+	}
+	tmpBatch := ckputil.NewObjectListBatch()
+	defer tmpBatch.Clean(reader.mp)
+	for {
+		tmpBatch.CleanOnlyData()
+		var end bool
+		if end, err = reader.objectReader.read(ctx, tmpBatch, reader.mp); err != nil {
 			return
 		}
-		if dataBatch != nil {
-			defer dataBatch.Close()
-		}
-		if tombstoneBatch != nil {
-			defer tombstoneBatch.Close()
-		}
-		if err = forEachRowForV12(dataBatch, tombstoneBatch, forEachRow); err != nil {
+		if end {
 			return
 		}
-		return
-	} else {
-		return forEachRowInCKPData(
-			ctx, reader.ckpDataObjectStats, forEachRow, reader.mp, reader.fs,
-		)
+		accouts := vector.MustFixedColNoTypeCheck[uint32](tmpBatch.Vecs[0])
+		dbids := vector.MustFixedColNoTypeCheck[uint64](tmpBatch.Vecs[1])
+		tableIds := vector.MustFixedColNoTypeCheck[uint64](tmpBatch.Vecs[2])
+		objectTypes := vector.MustFixedColNoTypeCheck[int8](tmpBatch.Vecs[3])
+		objectStatsVec := tmpBatch.Vecs[4]
+		createTSs := vector.MustFixedColNoTypeCheck[types.TS](tmpBatch.Vecs[5])
+		deleteTSs := vector.MustFixedColNoTypeCheck[types.TS](tmpBatch.Vecs[6])
+		rowids := vector.MustFixedColNoTypeCheck[types.Rowid](tmpBatch.Vecs[8])
+		for i, rows := 0, tmpBatch.RowCount(); i < rows; i++ {
+			if err = forEachRow(
+				accouts[i],
+				dbids[i],
+				tableIds[i],
+				objectTypes[i],
+				objectio.ObjectStats(objectStatsVec.GetBytesAt(i)),
+				createTSs[i],
+				deleteTSs[i],
+				rowids[i],
+			); err != nil {
+				return
+			}
+		}
 	}
 }
 
