@@ -137,9 +137,11 @@ func (r *ckpObjectReaderForV12) read(
 	var batchIndex uint16
 	if r.objectIndex >= len(r.dataLocations) {
 		isTombstone = true
+		batchIndex = TombstoneObjectInfoIDX
 		location = r.tombstoneLocations[r.objectIndex-len(r.dataLocations)]
 	} else {
 		isTombstone = false
+		batchIndex = ObjectInfoIDX
 		location = r.dataLocations[r.objectIndex]
 	}
 
@@ -167,6 +169,7 @@ func (r *ckpObjectReaderForV12) read(
 				return
 			}
 		}
+		bat.Close()
 	}
 	r.objectIndex++
 	return
@@ -484,27 +487,25 @@ func (reader *CKPReader) PrefetchData(sid string) {
 	}
 }
 
-func (reader *CKPReader) GetCheckpointData(ctx context.Context) (bat *batch.Batch, err error) {
+func (reader *CKPReader) GetCheckpointData(ctx context.Context) (ckpData *batch.Batch, err error) {
 	if reader.withTableID {
 		panic("not support")
 	}
-	bat = ckputil.NewObjectListBatch()
-	if reader.version <= CheckpointVersion12 {
-		var dataBatch, tombstoneBatch *containers.Batch
-		if dataBatch, tombstoneBatch, err = getCKPDataForV12(
-			ctx, reader.dataLocations, reader.tombstoneLocations, reader.mp, reader.fs,
-		); err != nil {
+	ckpData = ckputil.NewObjectListBatch()
+	tmpBatch := ckputil.NewObjectListBatch()
+	defer tmpBatch.Clean(reader.mp)
+	for {
+		tmpBatch.CleanOnlyData()
+		var end bool
+		if end, err = reader.objectReader.read(ctx, tmpBatch, reader.mp); err != nil {
 			return
 		}
-		if err = compatibilityForV12(dataBatch, tombstoneBatch, bat, reader.mp); err != nil {
+		if end {
 			return
 		}
-		return
-	} else {
-		if err = getCKPData(ctx, reader.ckpDataObjectStats, bat, reader.mp, reader.fs); err != nil {
+		if _, err = ckpData.Append(ctx, reader.mp, tmpBatch); err != nil {
 			return
 		}
-		return
 	}
 }
 
@@ -645,7 +646,7 @@ func compatibilityForV12(
 	mp *mpool.MPool,
 ) (err error) {
 	if ckpData == nil {
-		return nil
+		panic("invalid batch")
 	}
 	compatibilityFn := func(src *containers.Batch, dataType int8) {
 		vector.AppendMultiFixed(
@@ -674,8 +675,12 @@ func compatibilityForV12(
 		src.Vecs[ObjectInfo_DeleteAt_Idx+2] = nil
 	}
 
-	compatibilityFn(dataBatch, ckputil.ObjectType_Data)
-	compatibilityFn(tombstoneBatch, ckputil.ObjectType_Tombstone)
+	if dataBatch != nil {
+		compatibilityFn(dataBatch, ckputil.ObjectType_Data)
+	}
+	if tombstoneBatch != nil {
+		compatibilityFn(tombstoneBatch, ckputil.ObjectType_Tombstone)
+	}
 	ckpData.SetRowCount(ckpData.Vecs[0].Length())
 	return
 }
