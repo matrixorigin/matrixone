@@ -189,7 +189,6 @@ type CKPReader struct {
 	dataLocations      map[string]objectio.Location // for version 12
 	tombstoneLocations map[string]objectio.Location // for version 12
 
-	objectIdx    int
 	objectReader ckpDataReader
 }
 
@@ -519,32 +518,7 @@ func (reader *CKPReader) LoadBatchData(
 	if data == nil {
 		panic("invalid input")
 	}
-	if reader.version <= CheckpointVersion12 {
-		if reader.objectIdx >= 1 {
-			return true, nil
-		}
-		var bat *batch.Batch
-		if bat, err = reader.GetCheckpointData(ctx); err != nil {
-			return
-		}
-		defer bat.Clean(reader.mp)
-		if _, err = data.Append(ctx, reader.mp, bat); err != nil {
-			return
-		}
-		reader.objectIdx++
-		return
-	} else {
-		if reader.objectIdx >= len(reader.ckpDataObjectStats) {
-			return true, nil
-		}
-		if err = getDataFromObject(
-			ctx, reader.ckpDataObjectStats[reader.objectIdx], data, reader.mp, reader.fs,
-		); err != nil {
-			return
-		}
-		reader.objectIdx++
-		return
-	}
+	return reader.objectReader.read(ctx, data, reader.mp)
 }
 
 func getDataFromObject(
