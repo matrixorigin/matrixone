@@ -26,6 +26,20 @@ func L2Distance(v1, v2 *mat.VecDense) float64 {
 	return mat.Norm(diff, 2)
 }
 
+// L2Distance is used for L2Distance distance in Euclidean Kmeans.
+func L2DistanceSq(v1, v2 *mat.VecDense) float64 {
+	fv1 := v1.RawVector().Data
+	fv2 := v2.RawVector().Data
+
+	var sumOfSquares float64
+	var difference float64
+	for i := range fv1 {
+		difference = fv1[i] - fv2[i]
+		sumOfSquares += difference * difference
+	}
+	return sumOfSquares
+}
+
 // InnerProduct is used for InnerProduct distance in Spherical Kmeans.
 func InnerProduct(v1, v2 *mat.VecDense) float64 {
 	// return negative inner product
@@ -80,11 +94,28 @@ func L1Distance(v1, v2 *mat.VecDense) float64 {
 // We use
 // - L2Distance distance for L2Distance
 // - SphericalDistance for InnerProduct and CosineDistance
-func ResolveDistanceFn(metric MetricType) (DistanceFunction, error) {
+func ResolveKmeansDistanceFn(metric MetricType) (DistanceFunction, error) {
 	var distanceFunction DistanceFunction
 	switch metric {
 	case Metric_L2Distance:
 		distanceFunction = L2Distance
+	case Metric_InnerProduct:
+		distanceFunction = InnerProduct
+	case Metric_CosineDistance:
+		distanceFunction = CosineDistance
+	case Metric_L1Distance:
+		distanceFunction = L1Distance
+	default:
+		return nil, moerr.NewInternalErrorNoCtx("invalid distance type")
+	}
+	return distanceFunction, nil
+}
+
+func ResolveDistanceFn(metric MetricType) (DistanceFunction, error) {
+	var distanceFunction DistanceFunction
+	switch metric {
+	case Metric_L2Distance:
+		distanceFunction = L2DistanceSq
 	case Metric_InnerProduct:
 		distanceFunction = InnerProduct
 	case Metric_CosineDistance:

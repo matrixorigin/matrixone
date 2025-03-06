@@ -56,7 +56,7 @@ func (productl2 *Productl2) Prepare(proc *process.Process) error {
 		return moerr.NewInternalError(proc.Ctx, "ProductL2: vector optype not found")
 	}
 
-	distfn, err := metric.ResolveDistanceFn(metrictype)
+	distfn, err := metric.ResolveKmeansDistanceFn(metrictype)
 	if err != nil {
 		return moerr.NewInternalError(proc.Ctx, "ProductL2: failed to get distance function")
 	}

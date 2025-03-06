@@ -117,7 +117,7 @@ func NewKMeans(vectors [][]float64, clusterCnt,
 	}
 	minCentroidDist := make([]float64, clusterCnt)
 
-	distanceFunction, err := metric.ResolveDistanceFn(distanceType)
+	distanceFunction, err := metric.ResolveKmeansDistanceFn(distanceType)
 	if err != nil {
 		return nil, err
 	}
