@@ -215,6 +215,10 @@ func (u *hnswCreateState) start(tf *TableFunction, proc *process.Process, nthRow
 
 	f32a := types.BytesToArray[float32](f32aVec.GetBytesAt(nthRow))
 
+	if uint(len(f32a)) != u.idxcfg.Usearch.Dimensions {
+		return moerr.NewInternalError(proc.Ctx, "vector dimension mismatch")
+	}
+
 	err = u.build.Add(id, f32a)
 	if err != nil {
 		return err

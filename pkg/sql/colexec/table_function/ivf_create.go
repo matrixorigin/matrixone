@@ -293,6 +293,10 @@ func (u *ivfCreateState) start(tf *TableFunction, proc *process.Process, nthRow 
 		f64a = types.BytesToArray[float64](fpaVec.GetBytesAt(nthRow))
 	}
 
+	if uint(len(f64a)) != u.idxcfg.Ivfflat.Dimensions {
+		return moerr.NewInternalError(proc.Ctx, "vector dimension mismatch")
+	}
+
 	u.data = append(u.data, append(make([]float64, 0, len(f64a)), f64a...))
 
 	return nil
