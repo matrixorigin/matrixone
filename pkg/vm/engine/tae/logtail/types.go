@@ -138,26 +138,6 @@ var (
 	}
 )
 
-var (
-	skippedDB = map[uint64]bool{
-		pkgcatalog.MO_CATALOG_ID: true,
-	}
-
-	skippedTbl = map[uint64]bool{
-		pkgcatalog.MO_DATABASE_ID: true,
-		pkgcatalog.MO_TABLES_ID:   true,
-		pkgcatalog.MO_COLUMNS_ID:  true,
-	}
-)
-
-func shouldIgnoreDBInLogtail(id uint64) bool {
-	return skippedDB[id]
-}
-
-func shouldIgnoreTblInLogtail(id uint64) bool {
-	return skippedTbl[id]
-}
-
 func init() {
 
 	MetaSchema = catalog.NewEmptySchema("meta")

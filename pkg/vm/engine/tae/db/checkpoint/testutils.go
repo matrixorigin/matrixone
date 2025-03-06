@@ -270,8 +270,8 @@ func (r *runner) CreateSpecialCheckpointFile(
 	default:
 	}
 
-	factory := logtail.BackupCheckpointDataFactory(r.rt.SID(), start, end)
-	var data *logtail.CheckpointData
+	factory := logtail.BackupCheckpointDataFactory(start, end, r.rt.Fs)
+	var data *logtail.CheckpointData_V2
 	if data, err = factory(r.catalog); err != nil {
 		return
 	}
@@ -286,7 +286,7 @@ func (r *runner) CreateSpecialCheckpointFile(
 		cnLocation, tnLocation objectio.Location
 	)
 	if cnLocation, tnLocation, _, err = data.WriteTo(
-		ctx, cfg.BlockMaxRowsHint, cfg.SizeHint, r.rt.Fs,
+		ctx, r.rt.Fs,
 	); err != nil {
 		return
 	}

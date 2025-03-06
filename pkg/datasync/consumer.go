@@ -517,7 +517,7 @@ func (c *consumer) parseCheckpointLocations(ctx context.Context, locationStr str
 			return nil, err
 		}
 		var ts types.TS
-		objLocations, data, err := logtail.LoadCheckpointEntriesFromKey(
+		objLocations, _, err := logtail.LoadCheckpointEntriesFromKey(
 			ctx,
 			c.sid,
 			c.srcFS,
@@ -529,7 +529,6 @@ func (c *consumer) parseCheckpointLocations(ctx context.Context, locationStr str
 		if err != nil {
 			return nil, err
 		}
-		data.Close()
 		for _, name := range objLocations {
 			locations = append(locations, name.Location.String())
 		}

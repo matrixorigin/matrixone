@@ -30,6 +30,13 @@ import (
 	"go.uber.org/zap"
 )
 
+const (
+	CKPProtocolVersion_V1 uint8 = 1
+	CKPProtocolVersion_V2 uint8 = 2
+
+	CKPProtocolVersion_Curr = CKPProtocolVersion_V2
+)
+
 func newRunnerStore(
 	sid string,
 	globalHistoryDuration time.Duration,
@@ -773,6 +780,7 @@ func (s *runnerStore) CollectCheckpointsInRange(
 			ckpStart.ToString(),
 			checkpointed.ToString())
 		locs = append(locs, duration)
+		locs = append([]string{strconv.Itoa(int(CKPProtocolVersion_Curr))}, locs...)
 		locations = strings.Join(locs, ";")
 	}()
 

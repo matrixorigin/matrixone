@@ -18,7 +18,6 @@ import (
 	"context"
 	"fmt"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -801,7 +800,6 @@ func TestConsumeCheckpointEntry(t *testing.T) {
 	assert.NoError(t, err)
 	locationsAndVersions := strings.Split(metaLoc, ";")
 	locationsAndVersions = locationsAndVersions[:len(locationsAndVersions)-1]
-	locationsAndVersions = append([]string{strconv.Itoa(2)}, locationsAndVersions...)
 	metaLoc = strings.Join(locationsAndVersions, ";")
 
 	err = logtail.ConsumeCheckpointEntries(

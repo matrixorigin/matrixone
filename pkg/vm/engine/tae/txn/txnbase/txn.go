@@ -313,7 +313,10 @@ func (txn *Txn) GetStore() txnif.TxnStore {
 	return txn.Store
 }
 
-func (txn *Txn) GetLSN() uint64 { return txn.LSN }
+func (txn *Txn) GetLSN() uint64 {
+	txn.GetTxnState(true)
+	return txn.LSN
+}
 
 func (txn *Txn) DoneWithErr(err error, isAbort bool) {
 	// Idempotent check

@@ -532,7 +532,7 @@ func (e *Engine) getOrCreateSnapPart(
 		locs = append(locs, checkpoint.GetLocation().String())
 		locs = append(locs, strconv.Itoa(int(checkpoint.GetVersion())))
 		locations := strings.Join(locs, ";")
-		entries, closeCBs, err := logtail.LoadCheckpointEntries(
+		err := logtail.ConsumeCheckpointEntries(
 			ctx,
 			e.service,
 			locations,
@@ -540,29 +540,11 @@ func (e *Engine) getOrCreateSnapPart(
 			tbl.tableName,
 			tbl.db.databaseId,
 			tbl.db.databaseName,
+			state.HandleObjectEntry,
 			e.mp,
 			e.fs)
 		if err != nil {
 			return err
-		}
-		defer func() {
-			for _, cb := range closeCBs {
-				if cb != nil {
-					cb()
-				}
-			}
-		}()
-		for _, entry := range entries {
-			if err = consumeEntry(
-				ctx,
-				tbl.primarySeqnum,
-				e,
-				nil,
-				state,
-				entry,
-				false); err != nil {
-				return err
-			}
 		}
 		return nil
 	})
@@ -664,12 +646,11 @@ func (e *Engine) LazyLoadLatestCkp(
 	}
 
 	part := e.GetOrCreateLatestPart(tbl.db.databaseId, tbl.tableId)
-	cache := e.GetLatestCatalogCache()
 
 	if err := part.ConsumeCheckpoints(
 		ctx,
 		func(checkpoint string, state *logtailreplay.PartitionState) error {
-			entries, closeCBs, err := logtail.LoadCheckpointEntries(
+			err := logtail.ConsumeCheckpointEntries(
 				ctx,
 				e.service,
 				checkpoint,
@@ -677,22 +658,11 @@ func (e *Engine) LazyLoadLatestCkp(
 				tbl.tableName,
 				tbl.db.databaseId,
 				tbl.db.databaseName,
+				state.HandleObjectEntry,
 				e.mp,
 				e.fs)
 			if err != nil {
 				return err
-			}
-			defer func() {
-				for _, cb := range closeCBs {
-					if cb != nil {
-						cb()
-					}
-				}
-			}()
-			for _, entry := range entries {
-				if err = consumeEntry(ctx, tbl.primarySeqnum, e, cache, state, entry, false); err != nil {
-					return err
-				}
 			}
 			return nil
 		},

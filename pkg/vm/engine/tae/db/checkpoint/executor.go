@@ -112,8 +112,8 @@ func (job *checkpointJob) doGlobalCheckpoint(
 		return
 	}
 
-	var data *logtail.CheckpointData
-	factory := logtail.GlobalCheckpointDataFactory(runner.rt.SID(), entry.end, interval)
+	var data *logtail.CheckpointData_V2
+	factory := logtail.GlobalCheckpointDataFactory(entry.end, interval, runner.rt.Fs)
 
 	if data, err = factory(runner.catalog); err != nil {
 		runner.store.RemoveGCKPIntent()
@@ -125,7 +125,7 @@ func (job *checkpointJob) doGlobalCheckpoint(
 	fields = data.ExportStats("")
 
 	cnLocation, tnLocation, files, err := data.WriteTo(
-		job.executor.ctx, job.executor.cfg.BlockMaxRowsHint, job.executor.cfg.SizeHint, runner.rt.Fs,
+		job.executor.ctx, runner.rt.Fs,
 	)
 	if err != nil {
 		runner.store.RemoveGCKPIntent()
