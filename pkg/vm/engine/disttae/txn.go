@@ -73,6 +73,24 @@ func (txn *Transaction) ReadOnly() bool {
 	return txn.readOnly.Load()
 }
 
+func (txn *Transaction) genRowIdCol(bat *batch.Batch) (vec *vector.Vector, err error) {
+	if bat.Vecs[0].GetType().Oid == types.T_Rowid {
+		panic("RowId column had been generated in batch")
+	}
+	txn.genBlock()
+	len := bat.RowCount()
+	vec = vector.NewVec(types.T_Rowid.ToType())
+	for i := 0; i < len; i++ {
+		if err := vector.AppendFixed(vec, txn.genRowId(), false,
+			txn.proc.Mp()); err != nil {
+			return nil, err
+		}
+	}
+	bat.Vecs = append([]*vector.Vector{vec}, bat.Vecs...)
+	bat.Attrs = append([]string{objectio.PhysicalAddr_Attr}, bat.Attrs...)
+	return
+}
+
 // WriteBatch used to write data to the transaction buffer
 // insert/delete/update all use this api
 // truncate : it denotes the batch with typ DELETE on mo_tables is generated when Truncating
@@ -114,20 +132,10 @@ func (txn *Transaction) WriteBatch(
 	// generate rowid for insert
 	// TODO(aptend): move this outside WriteBatch? Call twice for the same batch will generate different rowid
 	if typ == INSERT {
-		if bat.Vecs[0].GetType().Oid == types.T_Rowid {
-			panic("rowid should not be generated in Insert WriteBatch")
+		genRowidVec, err = txn.genRowIdCol(bat)
+		if err != nil {
+			return nil, err
 		}
-		txn.genBlock()
-		len := bat.RowCount()
-		genRowidVec = vector.NewVec(types.T_Rowid.ToType())
-		for i := 0; i < len; i++ {
-			if err := vector.AppendFixed(genRowidVec, txn.genRowId(), false,
-				txn.proc.Mp()); err != nil {
-				return nil, err
-			}
-		}
-		bat.Vecs = append([]*vector.Vector{genRowidVec}, bat.Vecs...)
-		bat.Attrs = append([]string{objectio.PhysicalAddr_Attr}, bat.Attrs...)
 		if tableId != catalog.MO_DATABASE_ID &&
 			tableId != catalog.MO_TABLES_ID && tableId != catalog.MO_COLUMNS_ID {
 			txn.approximateInMemInsertSize += uint64(bat.Size())
@@ -1074,7 +1082,7 @@ func (txn *Transaction) genRowId() types.Rowid {
 	return types.DecodeFixed[types.Rowid](types.EncodeSlice(txn.rowId[:]))
 }
 
-func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
+func (txn *Transaction) MergeTxnWorkspaceLocked(ctx context.Context) error {
 	txn.restoreTxnTableFunc = txn.restoreTxnTableFunc[:0]
 
 	if len(txn.batchSelectList) > 0 {
@@ -1325,7 +1333,7 @@ func (txn *Transaction) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
 		return nil, err
 	}
 
-	if err := txn.mergeTxnWorkspaceLocked(ctx); err != nil {
+	if err := txn.MergeTxnWorkspaceLocked(ctx); err != nil {
 		return nil, err
 	}
 	if err := txn.dumpBatchLocked(ctx, -1); err != nil {
