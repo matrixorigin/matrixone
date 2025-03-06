@@ -634,9 +634,10 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 	case *productl2.Productl2:
 		relList, colList := getRelColList(t.Result)
 		in.ProductL2 = &pipeline.ProductL2{
-			RelList:    relList,
-			ColList:    colList,
-			JoinMapTag: t.JoinMapTag,
+			RelList:      relList,
+			ColList:      colList,
+			JoinMapTag:   t.JoinMapTag,
+			VectorOpType: t.VectorOpType,
 		}
 	case *projection.Projection:
 		in.ProjectList = t.ProjectList

@@ -575,7 +575,8 @@ import (
 %type <order> order
 %type <orderBy> order_list order_by_clause order_by_opt
 %type <limit> limit_opt limit_clause
-%type <str> insert_column
+%type <str> insert_column optype_opt
+%type <str> optype
 %type <identifierList> column_list column_list_opt partition_clause_opt partition_id_list insert_column_list accounts_list
 %type <joinCond> join_condition join_condition_opt on_expression_opt
 %type <selectLockInfo> select_lock_opt
@@ -5997,12 +5998,23 @@ table_reference:
 join_table:
     table_reference inner_join table_factor join_condition_opt
     {
-        $$ = &tree.JoinTableExpr{
-            Left: $1,
-            JoinType: $2,
-            Right: $3,
-            Cond: $4,
-        }
+	if strings.Contains($2, ":") {
+		ss := strings.SplitN($2, ":", 2)
+        	$$ = &tree.JoinTableExpr{
+            		Left: $1,
+            		JoinType: ss[0],
+            		Right: $3,
+            		Cond: $4,
+			Option: ss[1],
+        	}
+	} else {
+        	$$ = &tree.JoinTableExpr{
+            		Left: $1,
+            		JoinType: $2,
+            		Right: $3,
+            		Cond: $4,
+        	}
+	}
     }
 |   table_reference straight_join table_factor on_expression_opt
     {
@@ -6135,6 +6147,19 @@ on_expression_opt:
         $$ = &tree.OnJoinCond{Expr: $2}
     }
 
+optype:
+    STRING
+    {
+        $$ = $1
+    }
+
+
+optype_opt:
+	  '(' optype ')'
+    {
+	$$ = $2
+    }
+
 straight_join:
     STRAIGHT_JOIN
     {
@@ -6154,9 +6179,9 @@ inner_join:
     {
         $$ = tree.JOIN_TYPE_CROSS
     }
-|   CROSS_L2 JOIN
+|   CROSS_L2 optype_opt JOIN
     {
-        $$ = tree.JOIN_TYPE_CROSS_L2
+        $$ = tree.JOIN_TYPE_CROSS_L2 + ":" + $2
     }
 
 join_condition_opt:

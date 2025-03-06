@@ -331,6 +331,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.Result = t.Result
 		op.OnExpr = t.OnExpr
 		op.JoinMapTag = t.JoinMapTag
+		op.VectorOpType = t.VectorOpType
 		op.SetInfo(&info)
 		return op
 	case vm.Projection:
@@ -1738,6 +1739,7 @@ func constructProductL2(n *plan.Node, proc *process.Process) *productl2.Productl
 		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
 	}
 	arg := productl2.NewArgument()
+	arg.VectorOpType = n.ExtraOptions
 	arg.Result = result
 	arg.OnExpr = colexec.RewriteFilterExprList(n.OnList)
 	for i := range n.SendMsgList {

@@ -4719,6 +4719,9 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 		joinType = plan.Node_INNER
 	case tree.JOIN_TYPE_CROSS_L2:
 		joinType = plan.Node_L2
+		if len(tbl.Option) == 0 {
+			return 0, moerr.NewSyntaxError(builder.GetContext(), "CROSS_L2 without optype")
+		}
 	case tree.JOIN_TYPE_LEFT, tree.JOIN_TYPE_NATURAL_LEFT:
 		joinType = plan.Node_LEFT
 	case tree.JOIN_TYPE_RIGHT, tree.JOIN_TYPE_NATURAL_RIGHT:
@@ -4757,9 +4760,10 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 	}
 
 	nodeID := builder.appendNode(&plan.Node{
-		NodeType: plan.Node_JOIN,
-		Children: []int32{leftChildID, rightChildID},
-		JoinType: joinType,
+		NodeType:     plan.Node_JOIN,
+		Children:     []int32{leftChildID, rightChildID},
+		JoinType:     joinType,
+		ExtraOptions: tbl.Option,
 	}, ctx)
 	node := builder.qry.Nodes[nodeID]
 

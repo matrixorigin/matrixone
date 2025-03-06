@@ -17,7 +17,9 @@ package productl2
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"math"
+	"os"
 	"runtime"
 	"sync"
 	"time"
@@ -55,6 +57,7 @@ func (productl2 *Productl2) Prepare(proc *process.Process) error {
 func (productl2 *Productl2) Call(proc *process.Process) (vm.CallResult, error) {
 	analyzer := productl2.OpAnalyzer
 
+	os.Stderr.WriteString(fmt.Sprintf("Product L2 call optype='%s'\n", productl2.VectorOpType))
 	ap := productl2
 	ctr := &ap.ctr
 	result := vm.NewCallResult()

@@ -274,6 +274,16 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 	metadataTableName string,
 	centroidsTableName string) error {
 
+	// 1.a algo params
+	params, err := catalog.IndexParamsStringToMap(indexDef.IndexAlgoParams)
+	if err != nil {
+		return err
+	}
+	optype, ok := params[catalog.IndexAlgoParamOpType]
+	if !ok {
+		return moerr.NewInternalErrorNoCtx("vector optype not found")
+	}
+
 	// 1. Original table's pkey name and value
 	var originalTblPkColsCommaSeperated string
 	var originalTblPkColMaySerial string
@@ -319,7 +329,7 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 	indexColumnName := indexDef.Parts[0]
 	centroidsCrossL2JoinTbl := fmt.Sprintf("%s "+
 		"SELECT `%s`, `%s`,  %s, `%s`"+
-		" FROM `%s` cross_l2 join %s "+
+		" FROM `%s` cross_l2 ('%s') join %s "+
 		" using (`%s`, `%s`) ",
 		insertSQL,
 
@@ -329,13 +339,14 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 		indexColumnName,
 
 		originalTableDef.Name,
+		optype,
 		centroidsTableForCurrentVersionSql,
 
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid,
 		indexColumnName,
 	)
 
-	err := s.logTimestamp(c, qryDatabase, metadataTableName, "mapping_start")
+	err = s.logTimestamp(c, qryDatabase, metadataTableName, "mapping_start")
 	if err != nil {
 		return err
 	}

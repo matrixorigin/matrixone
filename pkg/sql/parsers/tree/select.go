@@ -489,6 +489,7 @@ type JoinTableExpr struct {
 	Left     TableExpr
 	Right    TableExpr
 	Cond     JoinCond
+	Option   string
 }
 
 func (node *JoinTableExpr) Format(ctx *FmtCtx) {
@@ -497,7 +498,14 @@ func (node *JoinTableExpr) Format(ctx *FmtCtx) {
 	}
 	if node.JoinType != "" && node.Right != nil {
 		ctx.WriteByte(' ')
-		ctx.WriteString(strings.ToLower(node.JoinType))
+		if node.JoinType == JOIN_TYPE_CROSS_L2 {
+			ctx.WriteString(strings.ToLower(node.JoinType))
+			ctx.WriteString(" ('")
+			ctx.WriteString(strings.ToLower(node.Option))
+			ctx.WriteString("')")
+		} else {
+			ctx.WriteString(strings.ToLower(node.JoinType))
+		}
 	}
 	if node.JoinType != JOIN_TYPE_STRAIGHT && node.Right != nil {
 		ctx.WriteByte(' ')

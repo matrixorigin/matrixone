@@ -40,10 +40,11 @@ type container struct {
 }
 
 type Productl2 struct {
-	ctr        container
-	Result     []colexec.ResultPos
-	OnExpr     *plan.Expr
-	JoinMapTag int32
+	ctr          container
+	Result       []colexec.ResultPos
+	OnExpr       *plan.Expr
+	JoinMapTag   int32
+	VectorOpType string
 
 	vm.OperatorBase
 }
