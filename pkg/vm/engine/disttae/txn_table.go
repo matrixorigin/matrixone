@@ -1997,7 +1997,7 @@ func (tbl *txnTable) getPartitionState(
 		start, end = ps.GetDuration()
 	}
 	logutil.Infof(
-		"Try to get snapshot partition state, tbl:%p, table name:%s, tid:%v, txn:%s, isSnspshot:%v, ps:%p[%s_%s], err:%s",
+		"xxxx Try to get snapshot partition state, tbl:%p, table name:%s, tid:%v, txn:%s, isSnspshot:%v, ps:%p[%s_%s], err:%s",
 		tbl,
 		tbl.tableName,
 		tbl.tableId,
@@ -2024,7 +2024,7 @@ func (tbl *txnTable) getPartitionState(
 	}
 	if ps != nil {
 		logutil.Infof(
-			"Get snapshot partition state succeed, tbl:%p, table name:%s, tid:%v, txn:%s, isSnspshot:%v, ps:%p[%s_%s]",
+			"xxxx Get snapshot partition state succeed, tbl:%p, table name:%s, tid:%v, txn:%s, isSnspshot:%v, ps:%p[%s_%s]",
 			tbl,
 			tbl.tableName,
 			tbl.tableId,
@@ -2037,7 +2037,7 @@ func (tbl *txnTable) getPartitionState(
 		return
 	}
 	logutil.Errorf(
-		"Get partition state failed, tbl:%p, table name:%s, tid:%v, txn:%s, isSnspshot:%v,err:%s",
+		"xxxx Get partition state failed, tbl:%p, table name:%s, tid:%v, txn:%s, isSnspshot:%v,err:%s",
 		tbl,
 		tbl.tableName,
 		tbl.tableId,
