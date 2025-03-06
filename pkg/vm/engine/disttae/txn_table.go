@@ -2047,18 +2047,6 @@ func (tbl *txnTable) getPartitionState(
 	return
 }
 
-func (tbl *txnTable) tryToSubscribe(ctx context.Context) (ps *logtailreplay.PartitionState, err error) {
-	eng := tbl.eng.(*Engine)
-
-	ps, err = eng.PushClient().toSubscribeTable(
-		ctx,
-		tbl.tableId,
-		tbl.tableName,
-		tbl.db.databaseId,
-		tbl.db.databaseName)
-	return ps, err
-}
-
 func (tbl *txnTable) PKPersistedBetween(
 	p *logtailreplay.PartitionState,
 	from types.TS,
