@@ -162,11 +162,6 @@ func (tbl *txnTable) Stats(ctx context.Context, sync bool) (*pb.StatsInfo, error
 		strings.ToUpper(tbl.relKind) == "V" {
 		return nil, nil
 	}
-	//_, err := tbl.getPartitionState(ctx)
-	//if err != nil {
-	//	logutil.Errorf("failed to get partition state of table %d: %v", tbl.tableId, err)
-	//	return nil, err
-	//}
 	return tbl.getEngine().Stats(ctx, pb.StatsInfoKey{
 		AccId:      tbl.accountId,
 		DatabaseID: tbl.db.databaseId,
@@ -1958,61 +1953,102 @@ func (tbl *txnTable) BuildShardingReaders(
 
 func (tbl *txnTable) getPartitionState(
 	ctx context.Context,
-) (*logtailreplay.PartitionState, error) {
+) (ps *logtailreplay.PartitionState, err error) {
 
-	if !tbl.db.op.IsSnapOp() {
-		ps, err := tbl.tryToSubscribe(ctx)
-		if err != nil {
-			return nil, err
-		}
-		if ps == nil {
-			ps = tbl.getTxn().engine.GetOrCreateLatestPart(tbl.db.databaseId, tbl.tableId).Snapshot()
-		}
-
+	defer func() {
 		if tbl.tableId == catalog.MO_COLUMNS_ID {
 			logutil.Info("open partition state for mo_columns",
 				zap.String("txn", tbl.db.op.Txn().DebugString()),
 				zap.String("desc", ps.Desc(true)),
 				zap.String("pointer", fmt.Sprintf("%p", ps)))
 		}
+	}()
 
-		return ps, nil
-	}
-
-	// for snapshot txnOp
-	ps, err := tbl.getTxn().engine.getOrCreateSnapPart(
-		ctx,
-		tbl,
-		types.TimestampToTS(tbl.db.op.Txn().SnapshotTS))
+	createdInTxn, err := tbl.isCreatedInTxn(ctx)
 	if err != nil {
 		return nil, err
-	}
-	logutil.Infof("Get partition state for snapshot read, tbl:%p, table name:%s, tid:%v, txn:%s, ps:%p",
-		tbl,
-		tbl.tableName,
-		tbl.tableId,
-		tbl.db.op.Txn().DebugString(),
-		ps)
-
-	return ps, nil
-}
-
-func (tbl *txnTable) tryToSubscribe(ctx context.Context) (ps *logtailreplay.PartitionState, err error) {
-	eng := tbl.eng.(*Engine)
-	var createdInTxn bool
-	createdInTxn, err = tbl.isCreatedInTxn(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if createdInTxn {
-		return
 	}
 
 	// no need to subscribe a view
 	// for issue #19192
-	if strings.ToUpper(tbl.relKind) == "V" {
+	if createdInTxn || strings.ToUpper(tbl.relKind) == "V" {
+		//return an empty partition state.
+		ps = tbl.getTxn().engine.GetOrCreateLatestPart(
+			tbl.db.databaseId,
+			tbl.tableId).Snapshot()
 		return
 	}
+
+	// Subscribe a latest partition state
+	eng := tbl.eng.(*Engine)
+	ps, err = eng.PushClient().toSubscribeTable(
+		ctx,
+		tbl.tableId,
+		tbl.tableName,
+		tbl.db.databaseId,
+		tbl.db.databaseName)
+	if ps != nil && ps.CanServe(types.TimestampToTS(tbl.db.op.SnapshotTS())) {
+		return
+	}
+
+	//Try to create a snapshot partition state for the table through consume the history checkpoints.
+	start, end := types.MaxTs(), types.MinTs()
+	if ps != nil {
+		start, end = ps.GetDuration()
+	}
+	logutil.Infof(
+		"Try to get snapshot partition state, tbl:%p, table name:%s, tid:%v, txn:%s, isSnspshot:%v, ps:%p[%s_%s], err:%s",
+		tbl,
+		tbl.tableName,
+		tbl.tableId,
+		tbl.db.op.Txn().DebugString(),
+		tbl.db.op.IsSnapOp(),
+		ps,
+		start.ToString(),
+		end.ToString(),
+		err,
+	)
+
+	//If ps == nil, it indicates that subscribe failed due to 1: network timeout,
+	//2:table id is too old for snapshot read,pls ref to issue:https://github.com/matrixorigin/matrixone/issues/17012
+
+	// To get a partition state for snapshot read, we need to consume the history checkpoints.
+	ps, err = tbl.getTxn().engine.getOrCreateSnapPartBy(
+		ctx,
+		tbl,
+		types.TimestampToTS(tbl.db.op.Txn().SnapshotTS))
+
+	start, end = types.MaxTs(), types.MinTs()
+	if ps != nil {
+		start, end = ps.GetDuration()
+	}
+	if ps != nil {
+		logutil.Infof(
+			"Get snapshot partition state succeed, tbl:%p, table name:%s, tid:%v, txn:%s, isSnspshot:%v, ps:%p[%s_%s]",
+			tbl,
+			tbl.tableName,
+			tbl.tableId,
+			tbl.db.op.Txn().DebugString(),
+			tbl.db.op.IsSnapOp(),
+			ps,
+			start.ToString(),
+			end.ToString(),
+		)
+		return
+	}
+	logutil.Errorf(
+		"Get partition state failed, tbl:%p, table name:%s, tid:%v, txn:%s, isSnspshot:%v,err:%s",
+		tbl,
+		tbl.tableName,
+		tbl.tableId,
+		tbl.db.op.Txn().DebugString(),
+		tbl.db.op.IsSnapOp(),
+		err)
+	return
+}
+
+func (tbl *txnTable) tryToSubscribe(ctx context.Context) (ps *logtailreplay.PartitionState, err error) {
+	eng := tbl.eng.(*Engine)
 
 	ps, err = eng.PushClient().toSubscribeTable(
 		ctx,
