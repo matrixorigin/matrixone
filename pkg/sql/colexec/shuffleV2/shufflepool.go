@@ -161,28 +161,15 @@ func (sp *ShufflePoolV2) DebugPrint() { // only for debug
 }
 
 // shuffle operator is ending, release buf and sending remaining batches
-func (sp *ShufflePoolV2) getEndingBatch(shuffleIDX int32, proc *process.Process, isDebug bool) *batch.Batch {
-	if isDebug {
-		return sp.batches[shuffleIDX].PopFront()
-	}
+func (sp *ShufflePoolV2) waitBatchOrEnd(shuffleIDX int32, proc *process.Process) {
 	for {
 		select {
 		case <-sp.batchWaiters[shuffleIDX]:
-			// bat := sp.getFullBatch(shuffleIDX)
-			// if bat != nil && bat.RowCount() > 0 {
-			// 	return bat
-			// }
-			return nil
+			return
 		case <-sp.endingWaiters[shuffleIDX]:
-
-			//if bat != nil {
-			//sp.statsLock.Lock()
-			//sp.stats.outputCNT[shuffleIDX] += int64(bat.RowCount())
-			//sp.statsLock.Unlock()
-			//}
-			return nil
+			return
 		case <-proc.Ctx.Done():
-			return nil
+			return
 		}
 	}
 }
@@ -217,10 +204,6 @@ func (sp *ShufflePoolV2) putAllBatchIntoPoolByShuffleIdx(srcBatch *batch.Batch, 
 	if sp.batches[shuffleIDX].Length() > 1 && len(sp.batchWaiters[shuffleIDX]) == 0 {
 		sp.batchWaiters[shuffleIDX] <- true
 	}
-	// sp.batches[shuffleIDX], err = sp.batches[shuffleIDX].AppendWithCopy(proc.Ctx, proc.Mp(), srcBatch)
-	// if err != nil {
-	// 	return err
-	// }
 	//sp.statsLock.Lock()
 	//if sp.batches[shuffleIDX].RowCount() > sp.stats.maxBatchCNT {
 	//	sp.stats.maxBatchCNT = sp.batches[shuffleIDX].RowCount()
@@ -248,27 +231,6 @@ func (sp *ShufflePoolV2) putBatchIntoShuffledPoolsBySels(srcBatch *batch.Batch, 
 				sp.batchWaiters[i] <- true
 			}
 			sp.batchLocks[i].Unlock()
-
-			// err = sp.initBatch(srcBatch, proc, int32(i))
-			// if err != nil {
-			// 	sp.batchLocks[i].Unlock()
-			// 	return err
-			// }
-			// bat := sp.batches[i].Get(0)
-			// for vecIndex := range bat.Vecs {
-			// 	v := bat.Vecs[vecIndex]
-			// 	v.SetSorted(false)
-			// 	err = v.UnionInt32(srcBatch.Vecs[vecIndex], currentSels, proc.Mp())
-			// 	if err != nil {
-			// 		sp.batchLocks[i].Unlock()
-			// 		return err
-			// 	}
-			// }
-			// bat.AddRowCount(len(currentSels))
-			// if bat.RowCount() >= colexec.DefaultBatchSize && len(sp.batchWaiters[i]) == 0 {
-			// 	sp.batchWaiters[i] <- true
-			// }
-			// sp.batchLocks[i].Unlock()
 			//sp.statsLock.Lock()
 			//sp.stats.inputCNT[i] += int64(len(currentSels))
 			//if bat.RowCount() > sp.stats.maxBatchCNT {

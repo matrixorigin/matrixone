@@ -84,7 +84,7 @@ func (shuffle *ShuffleV2) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 
 	if shuffle.ctr.ending {
-		_ = shuffle.ctr.shufflePool.getEndingBatch(shuffle.CurrentShuffleIdx, proc, shuffle.IsDebug)
+		shuffle.ctr.shufflePool.waitBatchOrEnd(shuffle.CurrentShuffleIdx, proc)
 		result.Batch = batch.EmptyBatch
 		return result, nil
 	}
