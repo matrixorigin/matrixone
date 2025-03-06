@@ -65,8 +65,8 @@ func newObjectReader(
 			fs,
 			object,
 			readutil.WithColumns(
-				ckputil.TableObjectsSeqnums,
-				ckputil.TableObjectsTypes,
+				ckputil.DataScan_TableIDSeqnums,
+				ckputil.DataScan_TableIDTypes,
 			),
 		)
 	}
@@ -159,13 +159,15 @@ func (r *ckpObjectReaderForV12) read(
 	); err != nil {
 		return
 	}
-	for _, bat := range bats {
+	objID := location.ObjectId()
+	for i, bat := range bats {
+		blkID := objectio.NewBlockidWithObjectID(&objID, uint16(i))
 		if isTombstone {
-			if err = compatibilityForV12(nil, bat, destBatch, mp); err != nil {
+			if err = compatibilityForV12(&blkID, nil, bat, destBatch, mp); err != nil {
 				return
 			}
 		} else {
-			if err = compatibilityForV12(bat, nil, destBatch, mp); err != nil {
+			if err = compatibilityForV12(&blkID, bat, nil, destBatch, mp); err != nil {
 				return
 			}
 		}
@@ -490,8 +492,8 @@ func (reader *CKPReader) GetCheckpointData(ctx context.Context) (ckpData *batch.
 	if reader.withTableID {
 		panic("not support")
 	}
-	ckpData = ckputil.NewObjectListBatch()
-	tmpBatch := ckputil.NewObjectListBatch()
+	ckpData = ckputil.MakeDataScanTableIDBatch()
+	tmpBatch := ckputil.MakeDataScanTableIDBatch()
 	defer tmpBatch.Clean(reader.mp)
 	for {
 		tmpBatch.CleanOnlyData()
@@ -615,6 +617,7 @@ func getCKPDataForV12(
 }
 
 func compatibilityForV12(
+	blockID *objectio.Blockid,
 	dataBatch, tombstoneBatch *containers.Batch,
 	ckpData *batch.Batch,
 	mp *mpool.MPool,
@@ -647,6 +650,10 @@ func compatibilityForV12(
 		src.Vecs[ObjectInfo_CreateAt_Idx+2] = nil
 		ckpData.Vecs[ckputil.TableObjectsAttr_DeleteTS_Idx] = src.Vecs[ObjectInfo_DeleteAt_Idx+2].GetDownstreamVector()
 		src.Vecs[ObjectInfo_DeleteAt_Idx+2] = nil
+		for i := 0; i < src.Length(); i++ {
+			rowID := types.NewRowid(blockID, uint32(i))
+			vector.AppendFixed(ckpData.Vecs[ckputil.TableObjectsAttr_PhysicalAddr_Idx], rowID, false, mp)
+		}
 	}
 
 	if dataBatch != nil {
@@ -673,7 +680,7 @@ func (reader *CKPReader) ForEachRow(
 	if reader.withTableID {
 		panic("not support")
 	}
-	tmpBatch := ckputil.NewObjectListBatch()
+	tmpBatch := ckputil.MakeDataScanTableIDBatch()
 	defer tmpBatch.Clean(reader.mp)
 	for {
 		tmpBatch.CleanOnlyData()

@@ -136,7 +136,7 @@ func (e *CheckpointBasedGCJob) fillDefaults() {
 }
 
 func (e *CheckpointBasedGCJob) Execute(ctx context.Context) error {
-	attrs, attrTypes := ckputil.TableObjectsAttrs, ckputil.TableObjectsTypes
+	attrs, attrTypes := ckputil.DataScan_TableIDAtrrs, ckputil.DataScan_TableIDTypes
 	buffer := containers.NewOneSchemaBatchBuffer(
 		mpool.MB*16,
 		attrs,
