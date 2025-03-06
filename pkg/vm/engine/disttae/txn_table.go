@@ -2006,7 +2006,7 @@ func (tbl *txnTable) getPartitionState(
 		ps,
 		start.ToString(),
 		end.ToString(),
-		err,
+		err.Error(),
 	)
 
 	//If ps == nil, it indicates that subscribe failed due to 1: network timeout,
@@ -2043,7 +2043,7 @@ func (tbl *txnTable) getPartitionState(
 		tbl.tableId,
 		tbl.db.op.Txn().DebugString(),
 		tbl.db.op.IsSnapOp(),
-		err)
+		err.Error())
 	return
 }
 
