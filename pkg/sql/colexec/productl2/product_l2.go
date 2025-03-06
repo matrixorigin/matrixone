@@ -19,6 +19,7 @@ import (
 	"errors"
 	"math"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -51,7 +52,7 @@ func (productl2 *Productl2) Prepare(proc *process.Process) error {
 		productl2.OpAnalyzer.Reset()
 	}
 
-	metrictype, ok := metric.OpTypeToIvfMetric[productl2.VectorOpType]
+	metrictype, ok := metric.OpTypeToIvfMetric[strings.ToLower(productl2.VectorOpType)]
 	if !ok {
 		return moerr.NewInternalError(proc.Ctx, "ProductL2: vector optype not found")
 	}

@@ -1953,7 +1953,7 @@ func appendPreInsertSkVectorPlan(builder *QueryBuilder, bindCtx *BindContext, ta
 		posOriginPk, typeOriginPk = getPkPos(tableDef, false)
 	}
 
-	// ERIC get optype
+	// get optype
 	idxdef := multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata]
 
 	params, err := catalog.IndexParamsStringToMap(idxdef.IndexAlgoParams)
