@@ -32,12 +32,145 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"go.uber.org/zap"
 )
+
+type ckpDataReader interface {
+	read(ctx context.Context, bat *batch.Batch, mp *mpool.MPool) (end bool, err error)
+}
+
+type ckpObjectReader struct {
+	objects   []objectio.ObjectStats
+	objectIdx int
+	reader    engine.Reader
+	fs        fileservice.FileService
+}
+
+func newObjectReader(
+	ctx context.Context,
+	objects []objectio.ObjectStats,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+) *ckpObjectReader {
+	var reader engine.Reader
+	if len(objects) != 0 {
+		object := objects[0]
+		reader = ckputil.NewDataReader(
+			ctx,
+			fs,
+			object,
+			readutil.WithColumns(
+				ckputil.TableObjectsSeqnums,
+				ckputil.TableObjectsTypes,
+			),
+		)
+	}
+	return &ckpObjectReader{
+		objects: objects,
+		reader:  reader,
+		fs:      fs,
+	}
+}
+
+func (r *ckpObjectReader) read(
+	ctx context.Context,
+	bat *batch.Batch,
+	mp *mpool.MPool,
+) (end bool, err error) {
+	if r.objectIdx >= len(r.objects) {
+		return true, nil
+	}
+	for {
+		if end, err = r.reader.Read(ctx, bat.Attrs, nil, mp, bat); err != nil {
+			return
+		}
+		if !end {
+			return
+		}
+		r.objectIdx++
+		if r.objectIdx >= len(r.objects) {
+			return true, nil
+		}
+		object := r.objects[r.objectIdx]
+		r.reader = ckputil.NewDataReader(
+			ctx,
+			r.fs,
+			object,
+		)
+	}
+}
+
+type ckpObjectReaderForV12 struct {
+	dataLocations      []objectio.Location
+	tombstoneLocations []objectio.Location
+	objectIndex        int
+	fs                 fileservice.FileService
+}
+
+func newCKPObjectReaderForV12(
+	dataLocations []objectio.Location,
+	tombstoneLocations []objectio.Location,
+	fs fileservice.FileService,
+) *ckpObjectReaderForV12 {
+	return &ckpObjectReaderForV12{
+		dataLocations:      dataLocations,
+		tombstoneLocations: tombstoneLocations,
+		fs:                 fs,
+	}
+}
+
+func (r *ckpObjectReaderForV12) read(
+	ctx context.Context,
+	destBatch *batch.Batch,
+	mp *mpool.MPool,
+) (end bool, err error) {
+	if r.objectIndex >= len(r.dataLocations)+len(r.tombstoneLocations) {
+		return true, nil
+	}
+	var location objectio.Location
+	var isTombstone bool
+	var batchIndex uint16
+	if r.objectIndex >= len(r.dataLocations) {
+		isTombstone = true
+		location = r.tombstoneLocations[r.objectIndex-len(r.dataLocations)]
+	} else {
+		isTombstone = false
+		location = r.dataLocations[r.objectIndex]
+	}
+
+	var reader *ioutil.BlockReader
+	if reader, err = ioutil.NewObjectReader(r.fs, location); err != nil {
+		return
+	}
+	typs := make([]types.Type, len(destBatch.Vecs))
+	for i, vec := range destBatch.Vecs {
+		typs[i] = *vec.GetType()
+	}
+	var bats []*containers.Batch
+	if bats, err = LoadBlkColumnsByMeta(
+		CheckpointVersion12, ctx, typs, destBatch.Attrs, batchIndex, reader, mp,
+	); err != nil {
+		return
+	}
+	for _, bat := range bats {
+		if isTombstone {
+			if err = compatibilityForV12(nil, bat, destBatch, mp); err != nil {
+				return
+			}
+		} else {
+			if err = compatibilityForV12(bat, nil, destBatch, mp); err != nil {
+				return
+			}
+		}
+	}
+	r.objectIndex++
+	return
+}
 
 type CKPReader struct {
 	version     uint32
@@ -53,7 +186,8 @@ type CKPReader struct {
 	dataLocations      map[string]objectio.Location // for version 12
 	tombstoneLocations map[string]objectio.Location // for version 12
 
-	objectIdx int
+	objectIdx    int
+	objectReader ckpDataReader
 }
 
 // with opt
@@ -101,14 +235,34 @@ func (reader *CKPReader) ReadMeta(
 				ctx, reader.location, reader.mp, reader.fs,
 			)
 		}
+		dataLocations := make([]objectio.Location, 0, len(reader.dataLocations))
+		for _, loc := range reader.dataLocations {
+			dataLocations = append(dataLocations, loc)
+		}
+		tombstoneLocations := make([]objectio.Location, 0, len(reader.tombstoneLocations))
+		for _, loc := range reader.tombstoneLocations {
+			tombstoneLocations = append(tombstoneLocations, loc)
+		}
+		reader.objectReader = newCKPObjectReaderForV12(
+			dataLocations,
+			tombstoneLocations,
+			reader.fs,
+		)
 	} else {
 		if reader.withTableID {
 			reader.dataRanges, reader.tombstoneRanges, err = readMetaWithTableID(
 				ctx, reader.location, reader.tid, reader.mp, reader.fs,
 			)
+			// TODO new reader
 		} else {
 			reader.ckpDataObjectStats, err = readMeta(
 				ctx, reader.location, reader.mp, reader.fs,
+			)
+			reader.objectReader = newObjectReader(
+				ctx,
+				reader.ckpDataObjectStats,
+				reader.mp,
+				reader.fs,
 			)
 		}
 	}
@@ -491,7 +645,7 @@ func compatibilityForV12(
 	mp *mpool.MPool,
 ) (err error) {
 	if ckpData == nil {
-		panic("invalid batch")
+		return nil
 	}
 	compatibilityFn := func(src *containers.Batch, dataType int8) {
 		vector.AppendMultiFixed(
