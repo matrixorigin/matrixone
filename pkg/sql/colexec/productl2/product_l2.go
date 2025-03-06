@@ -17,16 +17,16 @@ package productl2
 import (
 	"bytes"
 	"errors"
-	"fmt"
 	"math"
-	"os"
 	"runtime"
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -51,13 +51,23 @@ func (productl2 *Productl2) Prepare(proc *process.Process) error {
 		productl2.OpAnalyzer.Reset()
 	}
 
+	metrictype, ok := metric.OpTypeToIvfMetric[productl2.VectorOpType]
+	if !ok {
+		return moerr.NewInternalError(proc.Ctx, "ProductL2: vector optype not found")
+	}
+
+	distfn, err := metric.ResolveDistanceFn(metrictype)
+	if err != nil {
+		return moerr.NewInternalError(proc.Ctx, "ProductL2: failed to get distance function")
+	}
+	productl2.ctr.distfn = distfn
+
 	return nil
 }
 
 func (productl2 *Productl2) Call(proc *process.Process) (vm.CallResult, error) {
 	analyzer := productl2.OpAnalyzer
 
-	os.Stderr.WriteString(fmt.Sprintf("Product L2 call optype='%s'\n", productl2.VectorOpType))
 	ap := productl2
 	ctr := &ap.ctr
 	result := vm.NewCallResult()
@@ -219,11 +229,10 @@ func (ctr *container) probe(ap *Productl2, proc *process.Process, result *vm.Cal
 						} else {
 							clusterEmbeddingF32 := types.BytesToArray[float32](ctr.bat.Vecs[centroidColPos].GetBytesAt(i))
 
-							dist, err := moarray.L2DistanceSq[float32](clusterEmbeddingF32, tblEmbeddingF32)
-							if err != nil {
-								errs = errors.Join(errs, err)
-								return
-							}
+							centroidmat := moarray.ToGonumVector[float32](clusterEmbeddingF32)
+							vecmat := moarray.ToGonumVector[float32](tblEmbeddingF32)
+							dist := ctr.distfn(centroidmat, vecmat)
+
 							if dist < leastDistance[j] {
 								leastDistance[j] = dist
 								leastClusterIndex[j] = i
@@ -257,10 +266,10 @@ func (ctr *container) probe(ap *Productl2, proc *process.Process, result *vm.Cal
 						} else {
 							clusterEmbeddingF64 := types.BytesToArray[float64](ctr.bat.Vecs[centroidColPos].GetBytesAt(i))
 
-							dist, err := moarray.L2DistanceSq[float64](clusterEmbeddingF64, tblEmbeddingF64)
-							if err != nil {
-								errs = errors.Join(errs, err)
-							}
+							centroidmat := moarray.ToGonumVector[float64](clusterEmbeddingF64)
+							vecmat := moarray.ToGonumVector[float64](tblEmbeddingF64)
+							dist := ctr.distfn(centroidmat, vecmat)
+
 							if dist < leastDistance[j] {
 								leastDistance[j] = dist
 								leastClusterIndex[j] = i

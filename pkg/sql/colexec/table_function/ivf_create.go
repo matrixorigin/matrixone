@@ -102,7 +102,7 @@ func (u *ivfCreateState) end(tf *TableFunction, proc *process.Process) error {
 		u.data, int(u.idxcfg.Ivfflat.Lists),
 		defaultKmeansMaxIteration,
 		defaultKmeansDeltaThreshold,
-		defaultKmeansDistanceType,
+		metric.MetricType(u.idxcfg.Ivfflat.Metric),
 		kmeans.InitType(u.idxcfg.Ivfflat.InitType),
 		u.idxcfg.Ivfflat.Normalize,
 		int(nworker)); err != nil {
