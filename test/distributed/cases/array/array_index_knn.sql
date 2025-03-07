@@ -1,5 +1,5 @@
 SET experimental_ivf_index = 1;
-SET @probe_limit = 1;
+SET probe_limit = 1;
 
 -- pre
 drop database if exists vecdb3;
@@ -185,5 +185,5 @@ select a, b from t5 order by l2_distance(b, "[111,111,111,0]") limit 7;
 
 -- post
 SET experimental_ivf_index = 0;
-SET @probe_limit = 5;
+SET probe_limit = 5;
 drop database vecdb3;

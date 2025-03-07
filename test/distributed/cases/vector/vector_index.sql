@@ -1,5 +1,5 @@
 SET experimental_ivf_index = 1;
-SET @probe_limit=1;
+SET probe_limit=1;
 
 -- create vector index: create->create index->insert
 create table vector_index_01(a int primary key, b vecf32(128),c int,key c_k(c));
@@ -210,4 +210,4 @@ select * from vector_cos_01 order by  cosine_distance(b, "[1, 15, 15, 0, 5, 7, 5
 
 
 SET experimental_ivf_index = 0;
-SET @probe_limit = 5;
+SET probe_limit = 5;
