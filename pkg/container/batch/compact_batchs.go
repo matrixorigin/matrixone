@@ -18,6 +18,7 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
 const (
@@ -47,6 +48,26 @@ func (bats *CompactBatchs) Get(idx int) *Batch {
 		return nil
 	}
 	return bats.batchs[idx]
+}
+
+func (bats *CompactBatchs) PopFront() *Batch {
+	batchLen := bats.Length()
+	if batchLen == 0 {
+		return nil
+	}
+	bat := bats.batchs[0]
+	bats.batchs = bats.batchs[1:]
+	return bat
+}
+
+func (bats *CompactBatchs) Pop() *Batch {
+	if len(bats.batchs) == 0 {
+		return nil
+	}
+	last := len(bats.batchs) - 1
+	bat := bats.batchs[last]
+	bats.batchs = bats.batchs[:last]
+	return bat
 }
 
 // Push  append inBatch to CompactBatchs.
@@ -130,6 +151,70 @@ func (bats *CompactBatchs) Extend(mpool *mpool.MPool, inBatch *Batch) error {
 	}()
 
 	return bats.fillData(mpool, copyBat)
+}
+
+// Union  union some data from one batch to CompactBatchs
+func (bats *CompactBatchs) Union(mpool *mpool.MPool, inBatch *Batch, sels []int32) error {
+	selsLen := len(sels)
+	if selsLen == 0 {
+		return nil
+	}
+	if selsLen == inBatch.RowCount() {
+		return bats.Extend(mpool, inBatch)
+	}
+	if selsLen > inBatch.RowCount() {
+		panic("sels len > inBatch.RowCount()")
+	}
+
+	if bats.Length() == 0 {
+		tmpBat := NewWithSize(len(inBatch.Vecs))
+		for i := range tmpBat.Vecs {
+			tmpBat.Vecs[i] = vector.NewVec(*inBatch.Vecs[i].GetType())
+			err := tmpBat.Vecs[i].UnionInt32(inBatch.Vecs[i], sels, mpool)
+			if err != nil {
+				return err
+			}
+		}
+		tmpBat.rowCount = tmpBat.Vecs[0].Length()
+		bats.batchs = append(bats.batchs, tmpBat)
+		return nil
+	}
+
+	batLen := bats.Length()
+	lastBat := bats.batchs[batLen-1]
+	firstSelsLen := DefaultBatchMaxRow - lastBat.rowCount
+	if firstSelsLen > selsLen {
+		firstSelsLen = selsLen
+	}
+	firstSels := sels[:firstSelsLen]
+	for i := range lastBat.Vecs {
+		err := lastBat.Vecs[i].UnionInt32(inBatch.Vecs[i], firstSels, mpool)
+		if err != nil {
+			return err
+		}
+	}
+	lastBat.rowCount = lastBat.Vecs[0].Length()
+
+	newSels := sels[firstSelsLen:]
+	for len(newSels) > 0 {
+		tmpSize := len(newSels)
+		if tmpSize > DefaultBatchMaxRow {
+			tmpSize = DefaultBatchMaxRow
+		}
+		tmpSels := newSels[:tmpSize]
+		tmpBat := NewWithSize(len(inBatch.Vecs))
+		for i := range tmpBat.Vecs {
+			tmpBat.Vecs[i] = vector.NewVec(*inBatch.Vecs[i].GetType())
+			err := tmpBat.Vecs[i].UnionInt32(inBatch.Vecs[i], tmpSels, mpool)
+			if err != nil {
+				return err
+			}
+		}
+		tmpBat.rowCount = tmpBat.Vecs[0].Length()
+		bats.batchs = append(bats.batchs, tmpBat)
+		newSels = newSels[tmpSize:]
+	}
+	return nil
 }
 
 func (bats *CompactBatchs) RowCount() int {

@@ -159,8 +159,73 @@ func TestCompactBatchsExtend(t *testing.T) {
 	require.Equal(t, 8192, bats.Get(0).rowCount)
 	require.Equal(t, 8192, bats.Get(1).rowCount)
 	require.Equal(t, 4, bats.Get(2).rowCount)
+
+	bat := bats.Pop()
+	require.Equal(t, 4, bat.rowCount)
+	bat.Clean(mp)
+
+	bat = bats.PopFront()
+	require.Equal(t, 8192, bat.rowCount)
+	bat.Clean(mp)
+
 	bats.Clean(mp)
 	require.Equal(t, int64(0), mp.CurrNB())
+}
+
+func TestCompactBatchsUnion(t *testing.T) {
+	mp := mpool.MustNewZero()
+	bats := NewCompactBatchs()
+
+	bat1 := makeTestBatch(50, mp)
+	bat2 := makeTestBatch(8192, mp)
+
+	err := bats.Union(mp, bat1, []int32{})
+	require.NoError(t, err)
+
+	err = bats.Union(mp, bat1, []int32{1, 2, 3, 4, 5})
+	require.NoError(t, err)
+	require.Equal(t, 5, bats.RowCount())
+
+	err = bats.Union(mp, bat1, []int32{1, 2, 3, 4, 5})
+	require.NoError(t, err)
+	require.Equal(t, 10, bats.RowCount())
+	require.Equal(t, 1, bats.Length())
+
+	var sels []int32
+	for i := 0; i < 8192; i++ {
+		sels = append(sels, int32(i))
+	}
+	err = bats.Union(mp, bat2, sels)
+	require.NoError(t, err)
+	require.Equal(t, 8192+10, bats.RowCount())
+	require.Equal(t, 2, bats.Length())
+
+	sels = nil
+	for i := 0; i < 8182; i++ {
+		sels = append(sels, int32(i))
+	}
+	err = bats.Union(mp, bat2, sels)
+	require.NoError(t, err)
+	require.Equal(t, 8192+10+8182, bats.RowCount())
+	require.Equal(t, 2, bats.Length())
+
+	err = bats.Union(mp, bat1, []int32{1, 2, 3, 4, 5})
+	require.NoError(t, err)
+	require.Equal(t, 8192+10+8182+5, bats.RowCount())
+	require.Equal(t, 3, bats.Length())
+
+	sels = nil
+	for i := 0; i < 8190; i++ {
+		sels = append(sels, int32(i))
+	}
+	err = bats.Union(mp, bat2, sels)
+	require.NoError(t, err)
+	require.Equal(t, 8192+10+8182+5+8190, bats.RowCount())
+	require.Equal(t, 4, bats.Length())
+
+	bat1.Clean(mp)
+	bat2.Clean(mp)
+	bats.Clean(mp)
 }
 
 func makeTestBatch(max int, mp *mpool.MPool) *Batch {
