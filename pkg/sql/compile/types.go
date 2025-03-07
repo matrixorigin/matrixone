@@ -19,10 +19,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-
 	"github.com/google/uuid"
-
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
@@ -136,6 +134,8 @@ type Source struct {
 
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
 	OrderBy            []*plan.OrderBySpec // for ordered scan
+
+	RecvMsgList []plan.MsgHeader
 }
 
 // Col is the information of attribute
@@ -275,8 +275,6 @@ type Compile struct {
 	nodeRegs map[[2]int32]*process.WaitRegister
 	stepRegs map[int32][][2]int32
 
-	isInternal bool
-
 	// cnLabel is the CN labels which is received from proxy when build connection.
 	cnLabel map[string]string
 
@@ -285,17 +283,17 @@ type Compile struct {
 	// use for duplicate check
 	fuzzys []*fuzzyCheck
 
-	needLockMeta bool
-	needBlock    bool
-	lockMeta     *LockMeta
-	lockTables   map[uint64]*plan.LockTarget
-	disableRetry bool
+	lockMeta   *LockMeta
+	lockTables map[uint64]*plan.LockTarget
 
 	filterExprExes []colexec.ExpressionExecutor
 
-	isPrepare bool
-
-	hasMergeOp bool
+	needLockMeta bool
+	needBlock    bool
+	isPrepare    bool
+	disableRetry bool
+	isInternal   bool
+	hasMergeOp   bool
 
 	// ncpu set as system.GoRoutines() while NewCompile, instead of global static value.
 	ncpu int

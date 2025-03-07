@@ -40,7 +40,7 @@ const (
 
 func TestCreateDB1(t *testing.T) {
 	defer testutils.AfterTest(t)()
-	catalog := MockCatalog()
+	catalog := MockCatalog(nil)
 	defer catalog.Close()
 
 	txnMgr := txnbase.NewTxnManager(MockTxnStoreFactory(catalog), MockTxnFactory(catalog), types.NewMockHLCClock(1))
@@ -128,7 +128,7 @@ func TestCreateDB1(t *testing.T) {
 //	[TXN1]: CREATE DB1 [OK] | GET DB [OK]
 func TestTableEntry1(t *testing.T) {
 	defer testutils.AfterTest(t)()
-	catalog := MockCatalog()
+	catalog := MockCatalog(nil)
 	defer catalog.Close()
 
 	txnMgr := txnbase.NewTxnManager(MockTxnStoreFactory(catalog), MockTxnFactory(catalog), types.NewMockHLCClock(1))
@@ -203,7 +203,7 @@ func TestTableEntry1(t *testing.T) {
 
 func TestTableEntry2(t *testing.T) {
 	defer testutils.AfterTest(t)()
-	catalog := MockCatalog()
+	catalog := MockCatalog(nil)
 	defer catalog.Close()
 
 	txnMgr := txnbase.NewTxnManager(MockTxnStoreFactory(catalog), MockTxnFactory(catalog), types.NewMockHLCClock(1))
@@ -267,7 +267,7 @@ func TestTableEntry2(t *testing.T) {
 
 func TestDB1(t *testing.T) {
 	defer testutils.AfterTest(t)()
-	catalog := MockCatalog()
+	catalog := MockCatalog(nil)
 	defer catalog.Close()
 
 	txnMgr := txnbase.NewTxnManager(MockTxnStoreFactory(catalog), MockTxnFactory(catalog), types.NewMockHLCClock(1))
@@ -303,7 +303,7 @@ func TestDB1(t *testing.T) {
 
 func TestTable1(t *testing.T) {
 	defer testutils.AfterTest(t)()
-	catalog := MockCatalog()
+	catalog := MockCatalog(nil)
 	defer catalog.Close()
 
 	txnMgr := txnbase.NewTxnManager(MockTxnStoreFactory(catalog), MockTxnFactory(catalog), types.NewMockHLCClock(1))
@@ -356,7 +356,7 @@ func TestTable1(t *testing.T) {
 // 5. Start Txn4, scan "tb" and both "obj1" and "obj2" found
 func TestObject1(t *testing.T) {
 	defer testutils.AfterTest(t)()
-	catalog := MockCatalog()
+	catalog := MockCatalog(nil)
 	defer catalog.Close()
 	txnMgr := txnbase.NewTxnManager(MockTxnStoreFactory(catalog), MockTxnFactory(catalog), types.NewMockHLCClock(1))
 	txnMgr.Start(context.Background())
@@ -370,7 +370,8 @@ func TestObject1(t *testing.T) {
 	schema.Name = tbName
 	tb, err := db.CreateTableEntry(schema, txn1, nil)
 	assert.Nil(t, err)
-	stats := objectio.NewObjectStatsWithObjectID(objectio.NewObjectid(), true, false, false)
+	nobjid := objectio.NewObjectid()
+	stats := objectio.NewObjectStatsWithObjectID(&nobjid, true, false, false)
 	obj1, err := tb.CreateObject(txn1, &objectio.CreateObjOpt{Stats: stats, IsTombstone: false}, nil)
 	assert.Nil(t, err)
 	err = txn1.Commit(context.Background())
@@ -427,7 +428,7 @@ func randomTxnID(t *testing.T) []byte {
 }
 
 func TestTxnManager_GetOrCreateTxnWithMeta(t *testing.T) {
-	mockCatalog := MockCatalog()
+	mockCatalog := MockCatalog(nil)
 	txnMgr := txnbase.NewTxnManager(MockTxnStoreFactory(mockCatalog), MockTxnFactory(mockCatalog), types.NewMockHLCClock(1))
 	txn1 := randomTxnID(t)
 	ts := *types.BuildTSForTest(10, 0)

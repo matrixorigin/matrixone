@@ -1226,101 +1226,77 @@ func parseStorageUsageTrace(expr string, ac *cmd_util.AccessInfo, db *db.DB) (
 	return
 }
 
-func checkUsageData(data logtail.UsageData, c *storageUsageHistoryArg) bool {
-	if c.detail.accId == math.MaxUint32 {
-		return true
-	}
-
-	if c.detail.accId != data.AccId {
-		return false
-	}
-
-	if c.detail.dbI == math.MaxUint64 {
-		return true
-	}
-
-	if c.detail.dbI != data.DbId {
-		return false
-	}
-
-	if c.detail.tblId == math.MaxUint64 {
-		return true
-	}
-
-	return c.detail.tblId == data.TblId
-}
-
 func storageUsageDetails(c *storageUsageHistoryArg) (err error) {
-	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second*5, moerr.CauseStorageUsageDetails)
-	defer cancel()
+	// ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second*5, moerr.CauseStorageUsageDetails)
+	// defer cancel()
 
 	entries := c.ctx.db.BGCheckpointRunner.GetAllCheckpoints()
 
 	versions := make([]uint32, 0)
-	locations := make([]objectio.Location, 0)
+	// locations := make([]objectio.Location, 0)
 
 	for idx := range entries {
 		// if entries[idx].GetVersion() < logtail.CheckpointVersion11 {
 		// 	continue
 		// }
 		versions = append(versions, entries[idx].GetVersion())
-		locations = append(locations, entries[idx].GetLocation())
+		// locations = append(locations, entries[idx].GetLocation())
 	}
 
 	// remove the old version
 	entries = entries[len(entries)-len(versions):]
 
-	var usageInsData [][]logtail.UsageData
-	var usageDelData [][]logtail.UsageData
+	// var usageInsData [][]logtail.UsageData
+	// var usageDelData [][]logtail.UsageData
 
-	if usageInsData, usageDelData, err = logtail.GetStorageUsageHistory(
-		ctx, c.ctx.db.Runtime.SID(), locations, versions,
-		c.ctx.db.Runtime.Fs, common.DebugAllocator); err != nil {
-		return err
-	}
+	// if usageInsData, usageDelData, err = logtail.GetStorageUsageHistory(
+	// 	ctx, c.ctx.db.Runtime.SID(), locations, versions,
+	// 	c.ctx.db.Runtime.Fs, common.DebugAllocator); err != nil {
+	// 	return err
+	// }
 
 	txn, _ := c.ctx.db.StartTxn(nil)
 	defer txn.Commit(context.Background())
 
-	getDbAndTblNames := func(dbId, tblId uint64) (string, string) {
-		h, _ := txn.GetDatabaseByID(dbId)
-		if h == nil {
-			return "deleted", "deleted"
-		}
+	// getDbAndTblNames := func(dbId, tblId uint64) (string, string) {
+	// 	h, _ := txn.GetDatabaseByID(dbId)
+	// 	if h == nil {
+	// 		return "deleted", "deleted"
+	// 	}
 
-		r, _ := h.GetRelationByID(tblId)
-		if r == nil {
-			return h.GetName(), "deleted"
-		}
-		return h.GetName(), r.Schema(false).(*catalog.Schema).Name
-	}
+	// 	r, _ := h.GetRelationByID(tblId)
+	// 	if r == nil {
+	// 		return h.GetName(), "deleted"
+	// 	}
+	// 	return h.GetName(), r.Schema(false).(*catalog.Schema).Name
+	// }
 
-	getAllDbAndTblNames := func(usages []logtail.UsageData) (dbs, tbls []string, maxDbLen, maxTblLen int) {
-		for idx := range usages {
-			if checkUsageData(usages[idx], c) {
-				dbName, tblName := getDbAndTblNames(usages[idx].DbId, usages[idx].TblId)
-				dbs = append(dbs, dbName)
-				tbls = append(tbls, tblName)
+	// getAllDbAndTblNames := func(usages []logtail.UsageData) (dbs, tbls []string, maxDbLen, maxTblLen int) {
+	// 	for idx := range usages {
+	// 		if checkUsageData(usages[idx], c) {
+	// 			dbName, tblName := getDbAndTblNames(usages[idx].DbId, usages[idx].TblId)
+	// 			dbs = append(dbs, dbName)
+	// 			tbls = append(tbls, tblName)
 
-				maxDbLen = int(math.Max(float64(maxDbLen), float64(len(dbName))))
-				maxTblLen = int(math.Max(float64(maxTblLen), float64(len(tblName))))
-			}
-		}
-		return
-	}
+	// 			maxDbLen = int(math.Max(float64(maxDbLen), float64(len(dbName))))
+	// 			maxTblLen = int(math.Max(float64(maxTblLen), float64(len(tblName))))
+	// 		}
+	// 	}
+	// 	return
+	// }
 
-	formatOutput := func(
-		dst *bytes.Buffer, data logtail.UsageData,
-		dbName, tblName string, maxDbLen, maxTblLen int, hint string) float64 {
+	// formatOutput := func(
+	// 	dst *bytes.Buffer, data logtail.UsageData,
+	// 	dbName, tblName string, maxDbLen, maxTblLen int, hint string) float64 {
 
-		size := float64(data.Size) / 1048576
+	// 	size := float64(data.Size) / 1048576
 
-		dst.WriteString(fmt.Sprintf("\t[(acc)-%-10d (%*s)-%-10d (%*s)-%-10d] %s -> %15.6f (mb)\n",
-			data.AccId, maxDbLen, dbName, data.DbId,
-			maxTblLen, tblName, data.TblId, hint, size))
+	// 	dst.WriteString(fmt.Sprintf("\t[(acc)-%-10d (%*s)-%-10d (%*s)-%-10d] %s -> %15.6f (mb)\n",
+	// 		data.AccId, maxDbLen, dbName, data.DbId,
+	// 		maxTblLen, tblName, data.TblId, hint, size))
 
-		return size
-	}
+	// 	return size
+	// }
 
 	b := &bytes.Buffer{}
 	ckpType := []string{"G", "I"}
@@ -1332,23 +1308,23 @@ func storageUsageDetails(c *storageUsageHistoryArg) (err error) {
 		b.WriteString(fmt.Sprintf("CKP[%s]: %s\n", ckpType[entries[x].GetType()],
 			time.Unix(0, entries[x].GetEnd().Physical())))
 
-		dbNames, tblNames, dbLen, tblLen := getAllDbAndTblNames(usageInsData[x])
-		for _, data := range usageInsData[x] {
-			if checkUsageData(data, c) {
-				eachCkpTotal += formatOutput(b, data, dbNames[0], tblNames[0], dbLen, tblLen, "insert")
-				dbNames = dbNames[1:]
-				tblNames = tblNames[1:]
-			}
-		}
+		// dbNames, tblNames, dbLen, tblLen := getAllDbAndTblNames(usageInsData[x])
+		// for _, data := range usageInsData[x] {
+		// 	if checkUsageData(data, c) {
+		// 		eachCkpTotal += formatOutput(b, data, dbNames[0], tblNames[0], dbLen, tblLen, "insert")
+		// 		dbNames = dbNames[1:]
+		// 		tblNames = tblNames[1:]
+		// 	}
+		// }
 
-		dbNames, tblNames, dbLen, tblLen = getAllDbAndTblNames(usageDelData[x])
-		for _, data := range usageDelData[x] {
-			if checkUsageData(data, c) {
-				eachCkpTotal -= formatOutput(b, data, dbNames[0], tblNames[0], dbLen, tblLen, "delete")
-				dbNames = dbNames[1:]
-				tblNames = tblNames[1:]
-			}
-		}
+		// dbNames, tblNames, dbLen, tblLen = getAllDbAndTblNames(usageDelData[x])
+		// for _, data := range usageDelData[x] {
+		// 	if checkUsageData(data, c) {
+		// 		eachCkpTotal -= formatOutput(b, data, dbNames[0], tblNames[0], dbLen, tblLen, "delete")
+		// 		dbNames = dbNames[1:]
+		// 		tblNames = tblNames[1:]
+		// 	}
+		// }
 
 		if eachCkpTotal != 0 {
 			b.WriteString(fmt.Sprintf("\n\taccumulation: %f (mb)\n", eachCkpTotal))
@@ -1427,9 +1403,9 @@ func storageUsageEliminateErrors(c *storageUsageHistoryArg) (err error) {
 	if len(entries) == 0 {
 		return moerr.NewNotSupportedNoCtx("please execute this cmd after at least one checkpoint has been generated")
 	}
-	end := entries[len(entries)-1].GetEnd()
-	cnt := logtail.EliminateErrorsOnCache(c.ctx.db.Catalog, end)
-	c.ctx.out.Write([]byte(fmt.Sprintf("%d tables backed to the track. ", cnt)))
+	// end := entries[len(entries)-1].GetEnd()
+	// cnt := logtail.EliminateErrorsOnCache(c.ctx.db.Catalog, end)
+	// c.ctx.out.Write([]byte(fmt.Sprintf("%d tables backed to the track. ", cnt)))
 
 	return nil
 }

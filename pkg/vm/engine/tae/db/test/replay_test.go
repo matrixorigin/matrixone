@@ -69,7 +69,8 @@ func TestReplayCatalog1(t *testing.T) {
 			assert.Nil(t, err)
 			objCnt := rand.Intn(5) + 1
 			for i := 0; i < objCnt; i++ {
-				stats := objectio.NewObjectStatsWithObjectID(objectio.NewObjectid(), false, false, false)
+				noid := objectio.NewObjectid()
+				stats := objectio.NewObjectStatsWithObjectID(&noid, false, false, false)
 				obj, err := rel.CreateNonAppendableObject(false, &objectio.CreateObjOpt{Stats: stats})
 				testutil.MockObjectStats(t, obj)
 				assert.Nil(t, err)
@@ -899,7 +900,7 @@ func TestReplay5(t *testing.T) {
 		return tae.Runtime.Scheduler.GetPenddingLSNCnt() == 0
 	})
 	testutil.PrintCheckpointStats(t, tae)
-	assert.Equal(t, tae.Wal.GetDSN(), tae.Wal.GetCheckpointed())
+	assert.Equal(t, tae.Wal.GetLSNWatermark(), tae.Wal.GetCheckpointed())
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 }
 

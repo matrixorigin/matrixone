@@ -24,7 +24,7 @@ import (
 type Driver interface {
 	Append(*entry.Entry) error
 	Truncate(lsn uint64) error
-	GetTruncated() (lsn uint64, err error)
+	GetTruncated() (dsn uint64, err error)
 	Close() error
 	Replay(
 		ctx context.Context,

@@ -24,9 +24,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/panjf2000/ants/v2"
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -90,6 +87,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/panjf2000/ants/v2"
+	"go.uber.org/zap"
 )
 
 // Note: Now the cost going from stat is actually the number of rows, so we can only estimate a number for the size of each row.
@@ -182,7 +181,7 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 	c.fill = fill
 	c.sql = sql
 	c.affectRows.Store(0)
-	c.anal.Reset()
+	c.anal.Reset(c.isPrepare, c.IsTpQuery())
 
 	if c.lockMeta != nil {
 		c.lockMeta.reset(c.proc)
@@ -1989,26 +1988,16 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node, first
 	return s, nil
 }
 
-func (c *Compile) compileTableScanDataSource(s *Scope) error {
+func (c *Compile) getCompileTableScanDataSourceTxn(s *Scope) (client.TxnOperator, context.Context, error) {
 	var err error
-	var tblDef *plan.TableDef
-	var ts timestamp.Timestamp
-	var db engine.Database
-	var rel engine.Relation
 	var txnOp client.TxnOperator
 
 	node := s.DataSource.node
-	attrs := make([]string, len(node.TableDef.Cols))
-	for j, col := range node.TableDef.Cols {
-		attrs[j] = col.GetOriginCaseName()
-	}
-
-	//-----------------------------------------------------------------------------------------------------
 	ctx := c.proc.GetTopContext()
 	txnOp = c.proc.GetTxnOperator()
 	err = disttae.CheckTxnIsValid(txnOp)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
 	if node.ScanSnapshot != nil && node.ScanSnapshot.TS != nil {
 		if !node.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
@@ -2025,25 +2014,50 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 			}
 		}
 	}
+
+	err = disttae.CheckTxnIsValid(txnOp)
+	if err != nil {
+		return nil, nil, err
+	}
+	if util.TableIsClusterTable(node.TableDef.GetTableType()) {
+		ctx = defines.AttachAccountId(ctx, catalog.System_Account)
+	}
+	if node.ObjRef.PubInfo != nil {
+		ctx = defines.AttachAccountId(ctx, uint32(node.ObjRef.PubInfo.TenantId))
+	}
+	if util.TableIsLoggingTable(node.ObjRef.SchemaName, node.ObjRef.ObjName) {
+		ctx = defines.AttachAccountId(ctx, catalog.System_Account)
+	}
+	return txnOp, ctx, nil
+}
+
+func (c *Compile) compileTableScanDataSource(s *Scope) error {
+	var err error
+	var tblDef *plan.TableDef
+	var ts timestamp.Timestamp
+	var db engine.Database
+
+	node := s.DataSource.node
+	attrs := make([]string, len(node.TableDef.Cols))
+	for j, col := range node.TableDef.Cols {
+		attrs[j] = col.GetOriginCaseName()
+	}
+
+	//-----------------------------------------------------------------------------------------------------
+
+	txnOp, ctx, err := c.getCompileTableScanDataSourceTxn(s)
+	if err != nil {
+		return err
+	}
+
 	//-----------------------------------------------------------------------------------------------------
 
 	if c.proc != nil && c.proc.GetTxnOperator() != nil {
 		ts = txnOp.Txn().SnapshotTS
 	}
-	{
-		err = disttae.CheckTxnIsValid(txnOp)
-		if err != nil {
-			return err
-		}
-		if util.TableIsClusterTable(node.TableDef.GetTableType()) {
-			ctx = defines.AttachAccountId(ctx, catalog.System_Account)
-		}
-		if node.ObjRef.PubInfo != nil {
-			ctx = defines.AttachAccountId(ctx, uint32(node.ObjRef.PubInfo.TenantId))
-		}
-		if util.TableIsLoggingTable(node.ObjRef.SchemaName, node.ObjRef.ObjName) {
-			ctx = defines.AttachAccountId(ctx, catalog.System_Account)
-		}
+
+	if s.DataSource.Rel == nil {
+		var rel engine.Relation
 		db, err = c.e.Database(ctx, node.ObjRef.SchemaName, txnOp)
 		if err != nil {
 			panic(err)
@@ -2064,6 +2078,10 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 			}
 		}
 		tblDef = rel.GetTableDef(ctx)
+		s.DataSource.Rel = rel
+	} else {
+		s.DataSource.Rel.Reset(txnOp)
+		tblDef = s.DataSource.Rel.GetTableDef(ctx)
 	}
 
 	if len(node.FilterList) != len(s.DataSource.FilterList) {
@@ -2096,12 +2114,12 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	s.DataSource.Timestamp = ts
 	s.DataSource.Attributes = attrs
 	s.DataSource.TableDef = tblDef
-	s.DataSource.Rel = rel
 	s.DataSource.RelationName = node.TableDef.Name
 	s.DataSource.SchemaName = node.ObjRef.SchemaName
 	s.DataSource.AccountId = node.ObjRef.GetPubInfo()
 	s.DataSource.RuntimeFilterSpecs = node.RuntimeFilterProbeList
 	s.DataSource.OrderBy = node.OrderBy
+	s.DataSource.RecvMsgList = node.RecvMsgList
 
 	return nil
 }
@@ -4223,9 +4241,9 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 			forceSingle = true
 		}
 	}
-	if len(n.OrderBy) > 0 {
-		forceSingle = true
-	}
+	//if len(n.OrderBy) > 0 {
+	//	forceSingle = true
+	//}
 
 	var nodes engine.Nodes
 	// scan on current CN

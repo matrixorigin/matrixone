@@ -71,7 +71,7 @@ func BuildLocationTo(
 
 func NewRandomLocation(id uint16, rows uint32) Location {
 	objID := NewObjectid()
-	objName := BuildObjectNameWithObjectID(objID)
+	objName := BuildObjectNameWithObjectID(&objID)
 	extent := NewRandomExtent()
 	return BuildLocation(objName, extent, rows, id)
 }

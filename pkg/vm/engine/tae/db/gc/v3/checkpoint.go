@@ -24,6 +24,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -31,10 +32,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/wal"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 	"go.uber.org/zap"
 )
 
@@ -47,7 +47,7 @@ type checkpointCleaner struct {
 	mp *mpool.MPool
 	fs fileservice.FileService
 
-	logDriver     wal.Driver
+	logDriver     wal.Store
 	checkpointCli checkpoint.Runner
 	deleter       *Deleter
 
@@ -167,7 +167,7 @@ func NewCheckpointCleaner(
 	ctx context.Context,
 	sid string,
 	fs fileservice.FileService,
-	logDriver wal.Driver,
+	logDriver wal.Store,
 	checkpointCli checkpoint.Runner,
 	opts ...CheckpointCleanerOption,
 ) Cleaner {
@@ -398,7 +398,7 @@ func (c *checkpointCleaner) Replay(inputCtx context.Context) (err error) {
 		end := compacted.GetEnd()
 		c.updateCheckpointGCWaterMark(&end)
 
-		var ckpData *logtail.CheckpointData
+		var ckpData *logtail.CKPReader
 		if ckpData, err = c.collectCkpData(ctx, compacted); err != nil {
 			logutil.Error(
 				"GC-REPLAY-COLLECT-ERROR",
@@ -408,7 +408,6 @@ func (c *checkpointCleaner) Replay(inputCtx context.Context) (err error) {
 			)
 			return
 		}
-		defer ckpData.Close()
 		var snapshots map[uint32]containers.Vector
 		var pitrs *logtail.PitrInfo
 		pitrs, err = c.GetPITRsLocked(ctx)
@@ -431,9 +430,14 @@ func (c *checkpointCleaner) Replay(inputCtx context.Context) (err error) {
 		}
 		accountSnapshots := TransformToTSList(snapshots)
 		logtail.CloseSnapshotList(snapshots)
+		var ckpBatch *batch.Batch
+		if ckpBatch, err = ckpData.GetCheckpointData(ctx); err != nil {
+			return
+		}
 		logtail.FillUsageBatOfCompacted(
+			ctx,
 			c.checkpointCli.GetCatalog().GetUsageMemo().(*logtail.TNUsageMemo),
-			ckpData,
+			ckpBatch,
 			c.mutation.snapshotMeta,
 			accountSnapshots,
 			pitrs,
@@ -765,12 +769,12 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 		checkpointMaxEnd  types.TS
 		toMergeEntries    []*checkpoint.CheckpointEntry
 		extraErrMsg       string
-		newCheckpointData *logtail.CheckpointData
+		newCheckpointData *batch.Batch
 	)
 
 	defer func() {
 		if newCheckpointData != nil {
-			newCheckpointData.Close()
+			newCheckpointData.Clean(common.CheckpointAllocator)
 		}
 		logger := logutil.Info
 		if err != nil {
@@ -840,6 +844,7 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 		return err
 	}
 	logtail.FillUsageBatOfCompacted(
+		ctx,
 		c.checkpointCli.GetCatalog().GetUsageMemo().(*logtail.TNUsageMemo),
 		newCheckpointData,
 		c.mutation.snapshotMeta,
@@ -906,7 +911,7 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 func (c *checkpointCleaner) collectCkpData(
 	ctx context.Context,
 	ckp *checkpoint.CheckpointEntry,
-) (data *logtail.CheckpointData, err error) {
+) (data *logtail.CKPReader, err error) {
 	return logtail.GetCheckpointData(
 		ctx, c.sid, c.fs, ckp.GetLocation(), ckp.GetVersion(),
 	)
@@ -1204,7 +1209,7 @@ func (c *checkpointCleaner) scanCheckpointsAsDebugWindow(
 	return
 }
 
-func (c *checkpointCleaner) DoCheck() error {
+func (c *checkpointCleaner) DoCheck(ctx context.Context) error {
 	c.StartMutationTask("gc-check")
 	defer c.StopMutationTask()
 
@@ -1395,14 +1400,14 @@ func (c *checkpointCleaner) DoCheck() error {
 		if err != nil {
 			return err
 		}
-		collectObjectsFromCheckpointData(data, ickpObjects)
+		collectObjectsFromCheckpointData(ctx, data, ickpObjects)
 	}
 	cptCkpObjects := make(map[string]*ObjectEntry, 0)
 	data, err := c.collectCkpData(c.ctx, compacted)
 	if err != nil {
 		return err
 	}
-	collectObjectsFromCheckpointData(data, cptCkpObjects)
+	collectObjectsFromCheckpointData(ctx, data, cptCkpObjects)
 
 	tList, pList := c.mutation.snapshotMeta.AccountToTableSnapshots(accoutSnapshots, pitr)
 	for name, entry := range ickpObjects {
@@ -1596,11 +1601,11 @@ func (c *checkpointCleaner) appendFilesToWAL(files ...string) error {
 	if c.logDriver == nil {
 		return nil
 	}
-	entry, err := store.BuildFilesEntry(files)
+	entry, err := wal.BuildFilesEntry(files)
 	if err != nil {
 		return err
 	}
-	_, err = c.logDriver.AppendEntry(store.GroupFiles, entry)
+	_, err = c.logDriver.AppendEntry(wal.GroupFiles, entry)
 	if err != nil {
 		return err
 	}
@@ -1716,7 +1721,7 @@ func (c *checkpointCleaner) scanCheckpointsLocked(
 
 func (c *checkpointCleaner) mutUpdateSnapshotMetaLocked(
 	ckp *checkpoint.CheckpointEntry,
-	data *logtail.CheckpointData,
+	data *logtail.CKPReader,
 ) error {
 	return c.mutation.snapshotMeta.Update(
 		c.ctx,

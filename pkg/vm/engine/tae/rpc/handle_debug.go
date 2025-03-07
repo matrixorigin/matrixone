@@ -41,7 +41,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
@@ -223,14 +222,7 @@ func getChangedListFromCheckpoints(
 
 	var (
 		dbEntry *catalog2.DBEntry
-		data    = &logtail.CheckpointData{}
 	)
-
-	defer func() {
-		if data != nil {
-			data.Close()
-		}
-	}()
 
 	logErr := func(e error, hint string) {
 		logutil.Info("handle get changed table list from ckp failed",
@@ -239,72 +231,78 @@ func getChangedListFromCheckpoints(
 	}
 
 	ckps := h.GetDB().BGCheckpointRunner.GetAllCheckpoints()
+	tblIds = make([]uint64, 0)
+	readers := make([]*logtail.CKPReader, len(ckps))
 	for i := 0; i < len(ckps); i++ {
-		if data != nil {
-			data.Close()
-		}
 
 		if ckps[i] == nil {
 			continue
 		}
-
 		if !ckps[i].HasOverlap(from, to) {
 			continue
 		}
+		ioutil.Prefetch(
+			h.GetDB().Runtime.SID(),
+			h.GetDB().Runtime.Fs,
+			ckps[i].GetLocation(),
+		)
+	}
+	for i := 0; i < len(ckps); i++ {
 
-		if data, err = ckps[i].PrefetchMetaIdx(ctx, h.GetDB().Runtime.Fs); err != nil {
-			logErr(err, ckps[i].String())
+		if ckps[i] == nil {
 			continue
 		}
-
-		if err = ckps[i].ReadMetaIdx(ctx, h.GetDB().Runtime.Fs, data); err != nil {
-			logErr(err, ckps[i].String())
+		if !ckps[i].HasOverlap(from, to) {
 			continue
 		}
+		readers[i] = logtail.NewCKPReader(
+			ckps[i].GetVersion(),
+			ckps[i].GetLocation(),
+			common.CheckpointAllocator,
+			h.GetDB().Runtime.Fs,
+		)
+		if err = readers[i].ReadMeta(ctx); err != nil {
+			return
+		}
+		readers[i].PrefetchData(h.GetDB().Runtime.SID())
+	}
+	for i := 0; i < len(ckps); i++ {
 
-		if err = ckps[i].Prefetch(ctx, h.GetDB().Runtime.Fs, data); err != nil {
-			logErr(err, ckps[i].String())
+		if ckps[i] == nil {
 			continue
 		}
-
-		if err = ckps[i].Read(ctx, h.GetDB().Runtime.Fs, data); err != nil {
-			logErr(err, ckps[i].String())
+		if !ckps[i].HasOverlap(from, to) {
 			continue
 		}
-
-		dataObjBat := data.GetObjectBatchs()
-		tombstoneObjBat := data.GetTombstoneObjectBatchs()
-
-		bats := []*containers.Batch{dataObjBat, tombstoneObjBat}
-
-		for j := range bats {
-			for k := range bats[j].Length() {
-				dbIdVec := bats[j].GetVectorByName(logtail.SnapshotAttr_DBID)
-				tblIdVec := bats[j].GetVectorByName(logtail.SnapshotAttr_TID)
-				commitVec := bats[j].GetVectorByName(objectio.DefaultCommitTS_Attr)
-				if dbIdVec.Length() <= k || tblIdVec.Length() <= k || commitVec.Length() <= k {
-					continue
+		readers[i].ForEachRow(
+			ctx,
+			func(
+				accout uint32,
+				dbid, tid uint64,
+				objectType int8,
+				objectStats objectio.ObjectStats,
+				create, delete types.TS,
+				rowID types.Rowid,
+			) error {
+				commit := create
+				if !delete.IsEmpty() {
+					commit = delete
 				}
-
-				dbId := dbIdVec.Get(k).(uint64)
-				tblId := tblIdVec.Get(k).(uint64)
-				commit := commitVec.Get(k).(types.TS)
-
-				if !isTheTblIWant(tblIds, tblId, commit) {
-					continue
+				if !isTheTblIWant(tblIds, tid, commit) {
+					return nil
 				}
-
-				dbEntry, err = h.GetDB().Catalog.GetDatabaseByID(dbId)
+				dbEntry, err = h.GetDB().Catalog.GetDatabaseByID(dbid)
 				if err != nil {
-					logErr(err, fmt.Sprintf("get db entry failed: %d", dbId))
-					continue
+					logErr(err, fmt.Sprintf("get db entry failed: %d", dbid))
+					return nil
 				}
 
-				tblIds = append(tblIds, tblId)
-				dbIds = append(dbIds, dbId)
+				tblIds = append(tblIds, tid)
+				dbIds = append(dbIds, dbid)
 				accIds = append(accIds, uint64(dbEntry.GetTenantID()))
-			}
-		}
+				return nil
+			},
+		)
 	}
 	return
 }

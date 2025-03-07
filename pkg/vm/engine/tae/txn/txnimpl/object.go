@@ -214,5 +214,5 @@ func (obj *txnObject) HybridScan(
 	}
 	blkID := objectio.NewBlockidWithObjectID(obj.GetID(), blkOffset)
 	return tables.HybridScanByBlock(
-		ctx, obj.entry.GetTable(), obj.Txn, bat, obj.table.getSchema(obj.entry.IsTombstone), colIdxs, blkID, mp)
+		ctx, obj.entry.GetTable(), obj.Txn, bat, obj.table.getSchema(obj.entry.IsTombstone), colIdxs, &blkID, mp)
 }
