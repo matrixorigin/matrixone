@@ -554,6 +554,10 @@ func compatibilityForV12(
 		panic("invalid batch")
 	}
 	compatibilityFn := func(src *containers.Batch, dataType int8) {
+		sels := make([]int64, src.Length())
+		for i := 0; i < src.Length(); i++ {
+			sels[i] = int64(i)
+		}
 		vector.AppendMultiFixed(
 			ckpData.Vecs[ckputil.TableObjectsAttr_Accout_Idx],
 			0,
@@ -561,10 +565,8 @@ func compatibilityForV12(
 			src.Length(),
 			mp,
 		)
-		ckpData.Vecs[ckputil.TableObjectsAttr_DB_Idx] = src.Vecs[ObjectInfo_DBID_Idx+2].GetDownstreamVector()
-		src.Vecs[ObjectInfo_DBID_Idx+2] = nil
-		ckpData.Vecs[ckputil.TableObjectsAttr_Table_Idx] = src.Vecs[ObjectInfo_TID_Idx+2].GetDownstreamVector()
-		src.Vecs[ObjectInfo_TID_Idx+2] = nil
+		ckpData.Vecs[ckputil.TableObjectsAttr_DB_Idx].Union(src.Vecs[ObjectInfo_DBID_Idx+2].GetDownstreamVector(), sels, mp)
+		ckpData.Vecs[ckputil.TableObjectsAttr_Table_Idx].Union(src.Vecs[ObjectInfo_TID_Idx+2].GetDownstreamVector(), sels, mp)
 		vector.AppendMultiFixed(
 			ckpData.Vecs[ckputil.TableObjectsAttr_ObjectType_Idx],
 			dataType,
@@ -572,12 +574,9 @@ func compatibilityForV12(
 			src.Length(),
 			mp,
 		)
-		ckpData.Vecs[ckputil.TableObjectsAttr_ID_Idx] = src.Vecs[ObjectInfo_ObjectStats_Idx+2].GetDownstreamVector()
-		src.Vecs[ObjectInfo_ObjectStats_Idx+2] = nil
-		ckpData.Vecs[ckputil.TableObjectsAttr_CreateTS_Idx] = src.Vecs[ObjectInfo_CreateAt_Idx+2].GetDownstreamVector()
-		src.Vecs[ObjectInfo_CreateAt_Idx+2] = nil
-		ckpData.Vecs[ckputil.TableObjectsAttr_DeleteTS_Idx] = src.Vecs[ObjectInfo_DeleteAt_Idx+2].GetDownstreamVector()
-		src.Vecs[ObjectInfo_DeleteAt_Idx+2] = nil
+		ckpData.Vecs[ckputil.TableObjectsAttr_ID_Idx].Union(src.Vecs[ObjectInfo_ObjectStats_Idx+2].GetDownstreamVector(), sels, mp)
+		ckpData.Vecs[ckputil.TableObjectsAttr_CreateTS_Idx].Union(src.Vecs[ObjectInfo_CreateAt_Idx+2].GetDownstreamVector(), sels, mp)
+		ckpData.Vecs[ckputil.TableObjectsAttr_DeleteTS_Idx].Union(src.Vecs[ObjectInfo_DeleteAt_Idx+2].GetDownstreamVector(), sels, mp)
 		for i := 0; i < src.Length(); i++ {
 			rowID := types.NewRowid(blockID, uint32(i))
 			vector.AppendFixed(ckpData.Vecs[ckputil.TableObjectsAttr_PhysicalAddr_Idx], rowID, false, mp)
