@@ -576,7 +576,7 @@ insert into tbl values(9, "[130,40,90]");
 --                                                  ->  Table Scan on vecdb3.__mo_index_secondary_018db491-b45f-724d-9dea-3bbf4d8104bf
 --              ->  Table Scan on vecdb3.tbl
 drop table if exists tbl;
-SET @PROBE_LIMIT=1;
+SET GLOBAL PROBE_LIMIT=1;
 create table tbl(id int PRIMARY KEY, embedding vecf32(3));
 insert into tbl values(1, "[1,2,3]");
 insert into tbl values(2, "[1,2,4]");

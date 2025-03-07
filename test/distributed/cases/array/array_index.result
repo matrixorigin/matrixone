@@ -497,7 +497,7 @@ create index idx17 using ivfflat on tbl(embedding) lists=2 op_type "vector_l2_op
 not supported: Multiple IVFFLAT indexes are not allowed to use the same column
 insert into tbl values(9, "[130,40,90]");
 drop table if exists tbl;
-SET @PROBE_LIMIT=1;
+SET GLOBAL PROBE_LIMIT=1;
 create table tbl(id int PRIMARY KEY, embedding vecf32(3));
 insert into tbl values(1, "[1,2,3]");
 insert into tbl values(2, "[1,2,4]");
