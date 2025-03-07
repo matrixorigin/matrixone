@@ -120,7 +120,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, projN
 	}
 
 	nprobe := int64(5)
-	nprobeif, err := builder.compCtx.ResolveVariable("probe_limit", false, true)
+	nprobeif, err := builder.compCtx.ResolveVariable("probe_limit", true, false)
 	if err != nil {
 		return nodeID, err
 	}

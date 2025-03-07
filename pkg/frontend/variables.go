@@ -3532,7 +3532,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Scope:             ScopeBoth,
 		Dynamic:           true,
 		SetVarHintApplies: false,
-		Type:              InitSystemVariableIntType("probe_limit", 0, 1024, false),
+		Type:              InitSystemVariableIntType("probe_limit", 1, 1024, false),
 		Default:           int64(5),
 	},
 	"disable_agg_statement": {
