@@ -8,5 +8,6 @@ COPY . /matrixone
 RUN cd mo-tester && sed -i 's/127.0.0.1/cn0/g' mo.yml
 
 ENV LC_ALL 'C.UTF-8'
+ENV LD_LIBRARY_PATH '/matrixone/thirdparties/install/lib'
 
 CMD ["/matrixone/optools/compose_bvt/entrypoint.sh"]

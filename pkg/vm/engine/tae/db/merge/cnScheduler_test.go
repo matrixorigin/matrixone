@@ -16,6 +16,10 @@ package merge
 
 import (
 	"context"
+	"slices"
+	"testing"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -25,9 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/stretchr/testify/require"
-	"slices"
-	"testing"
-	"time"
 )
 
 func TestScheduler_CNActiveObjectsString(t *testing.T) {
@@ -36,7 +37,7 @@ func TestScheduler_CNActiveObjectsString(t *testing.T) {
 		return taskservice.NewTaskService(runtime.DefaultRuntime(), memStorage), true
 	})
 
-	cata := catalog.MockCatalog()
+	cata := catalog.MockCatalog(nil)
 	defer cata.Close()
 	txnMgr := txnbase.NewTxnManager(catalog.MockTxnStoreFactory(cata), catalog.MockTxnFactory(cata), types.NewMockHLCClock(1))
 	txnMgr.Start(context.Background())
@@ -84,7 +85,7 @@ func TestScheduler_CNActiveObjectsString(t *testing.T) {
 
 func TestExecutorCNMerge(t *testing.T) {
 
-	cata := catalog.MockCatalog()
+	cata := catalog.MockCatalog(nil)
 	defer cata.Close()
 	txnMgr := txnbase.NewTxnManager(catalog.MockTxnStoreFactory(cata), catalog.MockTxnFactory(cata), types.NewMockHLCClock(1))
 	txnMgr.Start(context.Background())

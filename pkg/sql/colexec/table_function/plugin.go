@@ -70,6 +70,10 @@ type pluginState struct {
 	batch *batch.Batch
 }
 
+func (u *pluginState) end(tf *TableFunction, proc *process.Process) error {
+	return nil
+}
+
 func (u *pluginState) reset(tf *TableFunction, proc *process.Process) {
 	if u.batch != nil {
 		u.batch.CleanOnlyData()

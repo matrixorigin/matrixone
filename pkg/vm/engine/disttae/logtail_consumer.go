@@ -2173,14 +2173,15 @@ func consumeCkpsAndLogTail(
 	tableId uint64,
 	isSub bool,
 ) (err error) {
-	var entries []*api.Entry
 	var closeCBs []func()
-	if entries, closeCBs, err = taeLogtail.LoadCheckpointEntries(
+	if err = taeLogtail.ConsumeCheckpointEntries(
 		ctx,
 		engine.service,
 		lt.CkpLocation,
 		tableId, lt.Table.TbName,
-		databaseId, lt.Table.DbName, engine.mp, engine.fs); err != nil {
+		databaseId, lt.Table.DbName,
+		state.HandleObjectEntry,
+		engine.mp, engine.fs); err != nil {
 		return
 	}
 	defer func() {
@@ -2190,11 +2191,5 @@ func consumeCkpsAndLogTail(
 			}
 		}
 	}()
-	for _, entry := range entries {
-		if err = consumeEntry(ctx, primarySeqnum,
-			engine, engine.GetLatestCatalogCache(), state, entry, isSub); err != nil {
-			return
-		}
-	}
 	return consumeLogTail(ctx, primarySeqnum, engine, state, lt, isSub)
 }

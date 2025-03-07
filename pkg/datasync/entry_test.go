@@ -32,10 +32,9 @@ import (
 	driverEntry "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/logservicedriver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/wal"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -88,7 +87,7 @@ func (m *mockEntry) WriteTo(w io.Writer) (int64, error) {
 }
 
 func runWithBaseEnv(fn func(cat *catalog.Catalog, txn txnif.AsyncTxn) error) error {
-	cat := catalog.MockCatalog()
+	cat := catalog.MockCatalog(nil)
 	defer cat.Close()
 	txnMgr := txnbase.NewTxnManager(
 		catalog.MockTxnStoreFactory(cat),
@@ -109,7 +108,7 @@ type parameter struct {
 func newParameter() *parameter {
 	return &parameter{
 		cmdType:   logservicedriver.Cmd_Normal,
-		groupType: wal.GroupPrepare,
+		groupType: wal.GroupUserTxn,
 	}
 }
 
@@ -210,7 +209,7 @@ func generateCkpPayload(data []byte) ([]byte, error) {
 	baseEntry.SetType(entry.IOET_WALEntry_Test)
 	baseEntry.SetVersion(entry.IOET_WALEntry_V1)
 	baseEntry.SetInfo(&entry.Info{
-		Group: store.GroupFiles,
+		Group: wal.GroupFiles,
 	})
 	drEntry := driverEntry.NewEntry(baseEntry)
 	// prepare write, set the info buf
@@ -299,7 +298,7 @@ func TestEntry_ParseLocation(t *testing.T) {
 
 	t.Run("ckp, invalid payload", func(t *testing.T) {
 		p, err := generateCmdPayload(
-			*newParameter().withGroupType(store.GroupFiles),
+			*newParameter().withGroupType(wal.GroupFiles),
 			genLocation(uuid.New(), 0, 0, 0, 0, 0),
 		)
 		assert.NoError(t, err)

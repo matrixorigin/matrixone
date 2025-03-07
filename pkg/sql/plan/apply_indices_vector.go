@@ -40,8 +40,8 @@ var (
 	}
 	distFuncInternalDistFunc = map[string]string{
 		"l2_distance":     "l2_distance_sq",
-		"inner_product":   "spherical_distance",
-		"cosine_distance": "spherical_distance",
+		"inner_product":   "inner_product",
+		"cosine_distance": "cosine_distance",
 	}
 	textType = types.T_text.ToType() // return type of @probe_limit
 )

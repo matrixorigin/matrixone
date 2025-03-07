@@ -49,6 +49,7 @@ type DataFactory interface {
 }
 
 type Catalog struct {
+	DataFactory
 	*IDAllocator
 	*sync.RWMutex
 
@@ -60,19 +61,20 @@ type Catalog struct {
 	gcTS      types.TS
 }
 
-func MockCatalog() *Catalog {
+func MockCatalog(dataFactory DataFactory) *Catalog {
 	catalog := &Catalog{
 		RWMutex:     new(sync.RWMutex),
 		IDAllocator: NewIDAllocator(),
 		entries:     make(map[uint64]*common.GenericDLNode[*DBEntry]),
 		nameNodes:   make(map[string]*nodeList[*DBEntry]),
 		link:        common.NewGenericSortedDList((*DBEntry).Less),
+		DataFactory: dataFactory,
 	}
 	catalog.InitSystemDB()
 	return catalog
 }
 
-func OpenCatalog(usageMemo any) (*Catalog, error) {
+func OpenCatalog(usageMemo any, dataFactory DataFactory) (*Catalog, error) {
 	catalog := &Catalog{
 		RWMutex:     new(sync.RWMutex),
 		IDAllocator: NewIDAllocator(),
@@ -80,6 +82,7 @@ func OpenCatalog(usageMemo any) (*Catalog, error) {
 		nameNodes:   make(map[string]*nodeList[*DBEntry]),
 		link:        common.NewGenericSortedDList((*DBEntry).Less),
 		usageMemo:   usageMemo,
+		DataFactory: dataFactory,
 	}
 	catalog.InitSystemDB()
 	return catalog, nil

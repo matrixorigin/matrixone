@@ -45,8 +45,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/indexwrapper"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/wal"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 	"go.uber.org/zap"
 )
 
@@ -513,7 +513,7 @@ func (tbl *txnTable) recurTransferDelete(
 		pkVec.Append(pk, false)
 		defer pkVec.Close()
 		rowIDVec := tbl.store.rt.VectorPool.Small.GetVector(&objectio.RowidType)
-		rowID := *types.NewRowid(&newID.BlockID, offset)
+		rowID := types.NewRowid(&newID.BlockID, offset)
 		rowIDVec.Append(rowID, false)
 		defer rowIDVec.Close()
 		//transfer the deletes to the target block.
@@ -676,7 +676,9 @@ func (tbl *txnTable) SoftDeleteObject(id *types.Objectid, isTombstone bool) (err
 	if err != nil {
 		return
 	}
-	tbl.store.IncreateWriteCnt()
+	if err = tbl.store.IncreateWriteCnt("soft delete object"); err != nil {
+		return
+	}
 	if txnEntry != nil {
 		tbl.txnEntries.Append(txnEntry)
 	}
@@ -690,8 +692,9 @@ func (tbl *txnTable) CreateObject(isTombstone bool) (obj handle.Object, err erro
 		counter.TAE.Object.Create.Add(1)
 	})
 	sorted := isTombstone
+	noid := objectio.NewObjectid()
 	stats := objectio.NewObjectStatsWithObjectID(
-		objectio.NewObjectid(),
+		&noid,
 		true,
 		sorted,
 		false,
@@ -712,8 +715,8 @@ func (tbl *txnTable) CreateNonAppendableObject(opts *objectio.CreateObjOpt) (obj
 
 func (tbl *txnTable) createObject(opts *objectio.CreateObjOpt) (obj handle.Object, err error) {
 	var factory catalog.ObjectDataFactory
-	if tbl.store.dataFactory != nil {
-		factory = tbl.store.dataFactory.MakeObjectFactory()
+	if tbl.store.catalog.DataFactory != nil {
+		factory = tbl.store.catalog.DataFactory.MakeObjectFactory()
 	}
 	var meta *catalog.ObjectEntry
 	if meta, err = tbl.entry.CreateObject(
@@ -721,7 +724,9 @@ func (tbl *txnTable) createObject(opts *objectio.CreateObjOpt) (obj handle.Objec
 		return
 	}
 	obj = newObject(tbl, meta)
-	tbl.store.IncreateWriteCnt()
+	if err = tbl.store.IncreateWriteCnt("create object"); err != nil {
+		return
+	}
 	tbl.store.txn.GetMemo().AddObject(
 		tbl.entry.GetDB().ID, tbl.entry.ID, meta.ID(), opts.IsTombstone)
 	tbl.txnEntries.Append(meta)
@@ -729,7 +734,9 @@ func (tbl *txnTable) createObject(opts *objectio.CreateObjOpt) (obj handle.Objec
 }
 
 func (tbl *txnTable) LogTxnEntry(entry txnif.TxnEntry, readedObject, readedTombstone []*common.ID) (err error) {
-	tbl.store.IncreateWriteCnt()
+	if err = tbl.store.IncreateWriteCnt("log txn entry"); err != nil {
+		return
+	}
 	tbl.txnEntries.Append(entry)
 	for _, id := range readedObject {
 		// warChecker skip non-block read
@@ -760,25 +767,30 @@ func (tbl *txnTable) LogTxnEntry(entry txnif.TxnEntry, readedObject, readedTombs
 	return
 }
 
-func (tbl *txnTable) SetCreateEntry(e txnif.TxnEntry) {
+func (tbl *txnTable) SetCreateEntry(e txnif.TxnEntry) (err error) {
 	if tbl.createEntry != nil {
 		panic("logic error")
 	}
-	tbl.store.IncreateWriteCnt()
+	if err = tbl.store.IncreateWriteCnt("set create entry"); err != nil {
+		return
+	}
 	tbl.store.txn.GetMemo().AddCatalogChange()
 	tbl.createEntry = e
 	tbl.txnEntries.Append(e)
+	return
 }
 
-func (tbl *txnTable) SetDropEntry(e txnif.TxnEntry) error {
+func (tbl *txnTable) SetDropEntry(e txnif.TxnEntry) (err error) {
 	if tbl.dropEntry != nil {
 		panic("logic error")
 	}
-	tbl.store.IncreateWriteCnt()
+	if err = tbl.store.IncreateWriteCnt("set drop entry"); err != nil {
+		return
+	}
 	tbl.store.txn.GetMemo().AddCatalogChange()
 	tbl.dropEntry = e
 	tbl.txnEntries.Append(e)
-	return nil
+	return
 }
 
 func (tbl *txnTable) IsDeleted() bool {
@@ -987,7 +999,9 @@ func (tbl *txnTable) AlterTable(ctx context.Context, req *apipb.AlterTableReq) e
 	default:
 		return moerr.NewNYIf(ctx, "alter table %s", req.Kind.String())
 	}
-	tbl.store.IncreateWriteCnt()
+	if err := tbl.store.IncreateWriteCnt("alter table"); err != nil {
+		return err
+	}
 	tbl.store.txn.GetMemo().AddCatalogChange()
 	isNewNode, newSchema, err := tbl.entry.AlterTable(ctx, tbl.store.txn, req)
 	if isNewNode {

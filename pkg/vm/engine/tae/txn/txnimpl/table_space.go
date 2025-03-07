@@ -210,7 +210,7 @@ func (space *tableSpace) prepareApplyANode(node *anode, startOffset uint32) erro
 		blkID := objectio.NewBlockidWithObjectID(objID, 0)
 		if err = objectio.ConstructRowidColumnTo(
 			col.GetDownstreamVector(),
-			blkID,
+			&blkID,
 			anode.GetMaxRow()-toAppend,
 			toAppend,
 			col.GetAllocator(),
@@ -228,7 +228,9 @@ func (space *tableSpace) prepareApplyANode(node *anode, startOffset uint32) erro
 			count:  toAppend,
 		}
 		if created {
-			space.table.store.IncreateWriteCnt()
+			if err = space.table.store.IncreateWriteCnt("prepare apply anode"); err != nil {
+				return err
+			}
 			space.table.txnEntries.Append(anode)
 		}
 		id := appender.GetID()

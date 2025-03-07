@@ -26,9 +26,11 @@ select cluster_centers(b kmeans '2,vector_l2_ops') from t1;
 cluster_centers(b, 2,vector_l2_ops)
 [ [116.666664, 44.666668, 70],[1, 2.35, 4.5] ]
 select cluster_centers(b kmeans '2,vector_ip_ops') from t1;
-internal error: unsupported distance_type 'vector_ip_ops' for cluster_centers
+cluster_centers(b, 2,vector_ip_ops)
+[ [0.4377142, 0.4246375, 0.68682307],[50.57143, 20.485714, 32.57143] ]
 select cluster_centers(b kmeans '2,vector_cosine_ops') from t1;
-internal error: unsupported distance_type 'vector_cosine_ops' for cluster_centers
+cluster_centers(b, 2,vector_cosine_ops)
+[ [116.666664, 44.666668, 70],[1, 2.35, 4.5] ]
 SELECT value FROM  (SELECT cluster_centers(b kmeans '2,vector_l2_ops,kmeansplusplus,false') AS centers FROM t1) AS subquery CROSS JOIN  UNNEST(subquery.centers) AS u;
 value
 [116.666664, 44.666668, 70]
@@ -50,9 +52,11 @@ select cluster_centers(c kmeans '2,vector_l2_ops') from t1;
 cluster_centers(c, 2,vector_l2_ops)
 [ [116.66666666666666, 44.666666666666664, 70, 80, 90],[1, 2.35, 4.5, 4, 5] ]
 select cluster_centers(c kmeans '2,vector_ip_ops') from t1;
-internal error: unsupported distance_type 'vector_ip_ops' for cluster_centers
+cluster_centers(c, 2,vector_ip_ops)
+[ [0.6868230728671094, 0.06563701921747622, 0.15651925473279124, 0.09696951891448456, 0.30091186058528707],[50.57142857142857, 20.485714285714284, 32.57142857142857, 36.57142857142857, 41.42857142857142] ]
 select cluster_centers(c kmeans '2,vector_cosine_ops') from t1;
-internal error: unsupported distance_type 'vector_cosine_ops' for cluster_centers
+cluster_centers(c, 2,vector_cosine_ops)
+[ [116.66666666666666, 44.666666666666664, 70, 80, 90],[1, 2.35, 4.5, 4, 5] ]
 SELECT value FROM  (SELECT cluster_centers(c kmeans '2,vector_l2_ops') AS centers FROM t1) AS subquery CROSS JOIN  UNNEST(subquery.centers) AS u;
 value
 [116.66666666666666, 44.666666666666664, 70, 80, 90]
@@ -141,7 +145,6 @@ not supported: don't support multi column  IVF vector index
 create index idx5 using IVFFLAT on tbl(b) lists = -1;
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 51 near " -1;";
 create index idx6 using IVFFLAT on tbl(b) lists = 1 op_type 'vector_l1_ops';
-internal error: invalid op_type. not of type 'vector_l2_ops'
 drop table if exists tbl;
 create table tbl(a int primary key,b vecf32(3), c vecf32(3));
 insert into tbl values(1, "[1,2,3]","[1,2,3]");

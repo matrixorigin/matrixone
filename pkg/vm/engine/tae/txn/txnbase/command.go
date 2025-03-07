@@ -125,8 +125,8 @@ type TxnCmd struct {
 	Txn txnif.AsyncTxn
 
 	// for replay
-	isLast bool
-	Lsn    uint64
+	isEnd bool
+	Lsn   uint64
 }
 
 type TxnStateCmd struct {
@@ -273,12 +273,12 @@ func NewEmptyTxnCmd() *TxnCmd {
 		TxnCtx: NewEmptyTxnCtx(),
 	}
 }
-func NewLastTxnCmd() *TxnCmd {
+func NewEndCmd() *TxnCmd {
 	return &TxnCmd{
-		isLast: true,
+		isEnd: true,
 	}
 }
-func (c *TxnCmd) IsLastCmd() bool { return c.isLast }
+func (c *TxnCmd) IsEnd() bool { return c.isEnd }
 func (c *TxnCmd) ApplyCommit() {
 	c.ComposedCmd.ApplyCommit()
 }

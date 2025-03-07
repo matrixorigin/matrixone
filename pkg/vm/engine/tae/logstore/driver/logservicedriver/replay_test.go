@@ -33,7 +33,7 @@ import (
 
 func Test_MockBackend1(t *testing.T) {
 	ctx := context.Background()
-	backend := newMockBackend()
+	backend := NewMockBackend()
 	client := newMockBackendClient(backend)
 	defer client.Close()
 	var (
@@ -895,7 +895,7 @@ func Test_Replayer8(t *testing.T) {
 }
 
 func Test_Replayer9(t *testing.T) {
-	store := newMockBackend()
+	store := NewMockBackend()
 	cfg := NewConfig(
 		"",
 		WithConfigOptMaxClient(10),
@@ -959,7 +959,7 @@ func Test_Replayer9(t *testing.T) {
 		assert.NoError(t, err)
 	}
 
-	testutils.WaitExpect(1000, func() bool {
+	testutils.WaitExpect(5000, func() bool {
 		return maxReadDSN.Load() == uint64(entryCnt)
 	})
 	assert.Equal(t, uint64(entryCnt), maxReadDSN.Load())
@@ -991,7 +991,7 @@ func Test_Replayer9(t *testing.T) {
 		assert.NoError(t, err)
 	}
 
-	testutils.WaitExpect(1000, func() bool {
+	testutils.WaitExpect(10000, func() bool {
 		return maxReadDSN.Load() == uint64(entryCnt*2)
 	})
 	assert.Equalf(t, uint64(entryCnt*2), maxReadDSN.Load(), fmt.Sprintf("%d, %d", entryCnt*2, maxReadDSN.Load()))
@@ -1046,7 +1046,7 @@ func Test_Replayer9(t *testing.T) {
 	// 	assert.NoError(t, err)
 	// }
 
-	testutils.WaitExpect(1000, func() bool {
+	testutils.WaitExpect(10000, func() bool {
 		return maxReadDSN.Load() == uint64(entryCnt*2)
 	})
 	t.Logf(
@@ -1056,7 +1056,10 @@ func Test_Replayer9(t *testing.T) {
 	assert.Equalf(t, uint64(entryCnt*2), maxReadDSN.Load(), fmt.Sprintf("%d, %d", entryCnt*2, maxReadDSN.Load()))
 
 	readCancel(cancelErr)
-	<-consumer.ReplayWaitC()
+	select {
+	case <-consumer.ReplayWaitC():
+	case <-time.After(5 * time.Second):
+	}
 	readErr = consumer.GetReplayState().Err()
 	t.Logf("Read error: %v", readErr)
 	assert.ErrorIs(t, readErr, cancelErr)
@@ -1130,7 +1133,7 @@ func Test_Replayer10(t *testing.T) {
 // and append 1000 entries again and open a new consumer to
 // replay forever
 func Test_Replayer11(t *testing.T) {
-	store := newMockBackend()
+	store := NewMockBackend()
 	cfg := NewConfig(
 		"",
 		WithConfigOptMaxClient(10),

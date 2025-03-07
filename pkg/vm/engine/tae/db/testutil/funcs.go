@@ -16,6 +16,7 @@ package testutil
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 
@@ -604,4 +605,58 @@ func MockCNDeleteInS3(
 	stats = writer.GetObjectStats(objectio.WithCNCreated())
 
 	return
+}
+
+func CreateOneDatabase(
+	ctx context.Context,
+	t *testing.T,
+	tae *db.DB,
+	i int,
+) (name string) {
+	txn, err := tae.StartTxn(nil)
+	assert.NoError(t, err)
+	name = fmt.Sprintf("db_%d", i)
+	_, err = CreateDatabase2(ctx, txn, name)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit(ctx))
+	return
+}
+
+func IsCatalogEqual(t *testing.T, c1, c2 *catalog.Catalog) {
+	p := &catalog.LoopProcessor{}
+	objCount := 0
+	objFn := func(oe *catalog.ObjectEntry) error {
+		objCount++
+		dbID := oe.GetTable().GetDB().ID
+		db, err := c2.GetDatabaseByID(dbID)
+		assert.NoError(t, err)
+		tid := oe.GetTable().ID
+		tbl, err := db.GetTableEntryByID(tid)
+		assert.NoError(t, err)
+		oe2, err := tbl.GetObjectByID(oe.ID(), oe.IsTombstone)
+		assert.NoError(t, err)
+		create2 := oe2.CreatedAt
+		assert.True(t, oe.CreatedAt.EQ(&create2))
+		delete2 := oe2.DeletedAt
+		assert.True(t, oe.DeletedAt.EQ(&delete2))
+		return nil
+	}
+	p.ObjectFn = objFn
+	p.TombstoneFn = objFn
+	err := c1.RecurLoop(p)
+	assert.NoError(t, err)
+
+	objCount2 := 0
+	p2 := &catalog.LoopProcessor{}
+	p2.ObjectFn = func(oe *catalog.ObjectEntry) error {
+		objCount2++
+		return nil
+	}
+	p2.TombstoneFn = func(oe *catalog.ObjectEntry) error {
+		objCount2++
+		return nil
+	}
+	err = c2.RecurLoop(p2)
+	assert.NoError(t, err)
+	assert.Equal(t, objCount, objCount2)
 }
