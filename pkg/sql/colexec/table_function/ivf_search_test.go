@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
@@ -34,15 +35,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type hnswSearchTestCase struct {
+type ivfSearchTestCase struct {
 	arg  *TableFunction
 	proc *process.Process
 }
 
 var (
-	hnswsearchdefaultAttrs = []string{"pkid", "score"}
+	ivfsearchdefaultAttrs = []string{"pkid", "score"}
 
-	hnswsearchdefaultColdefs = []*plan.ColDef{
+	ivfsearchdefaultColdefs = []*plan.ColDef{
 		// row_id type should be same as index type
 		{
 			Name: "pkid",
@@ -62,24 +63,24 @@ var (
 	}
 )
 
-func newHnswSearchTestCase(m *mpool.MPool, attrs []string, param string) hnswSearchTestCase {
+func newIvfSearchTestCase(m *mpool.MPool, attrs []string, param string) ivfSearchTestCase {
 	proc := testutil.NewProcessWithMPool("", m)
 	colDefs := make([]*plan.ColDef, len(attrs))
 	for i := range attrs {
-		for j := range hnswsearchdefaultColdefs {
-			if attrs[i] == hnswsearchdefaultColdefs[j].Name {
-				colDefs[i] = hnswsearchdefaultColdefs[j]
+		for j := range ivfsearchdefaultColdefs {
+			if attrs[i] == ivfsearchdefaultColdefs[j].Name {
+				colDefs[i] = ivfsearchdefaultColdefs[j]
 				break
 			}
 		}
 	}
 
-	ret := hnswSearchTestCase{
+	ret := ivfSearchTestCase{
 		proc: proc,
 		arg: &TableFunction{
 			Attrs:    attrs,
 			Rets:     colDefs,
-			FuncName: "hnsw_search",
+			FuncName: "ivf_search",
 			OperatorBase: vm.OperatorBase{
 				OperatorInfo: vm.OperatorInfo{
 					Idx:     0,
@@ -93,42 +94,52 @@ func newHnswSearchTestCase(m *mpool.MPool, attrs []string, param string) hnswSea
 	return ret
 }
 
-type MockSearch struct {
+func mock_ivf_runSql(proc *process.Process, sql string) (executor.Result, error) {
+
+	return executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{}}, nil
+}
+
+func mockVersion(proc *process.Process, tblcfg vectorindex.IndexTableConfig) (int64, error) {
+	return 0, nil
+}
+
+type MockIvfSearch[T types.RealNumbers] struct {
 	Idxcfg vectorindex.IndexConfig
 	Tblcfg vectorindex.IndexTableConfig
 }
 
-func (m *MockSearch) Search(proc *process.Process, query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
+func (m *MockIvfSearch[T]) Search(proc *process.Process, query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
 	//time.Sleep(2 * time.Millisecond)
-	return []int64{1}, []float64{2.0}, nil
+	return []any{int64(1)}, []float64{2.0}, nil
 }
 
-func (m *MockSearch) Destroy() {
+func (m *MockIvfSearch[T]) Destroy() {
 }
 
-func (m *MockSearch) Load(*process.Process) error {
+func (m *MockIvfSearch[T]) Load(*process.Process) error {
 	//time.Sleep(6 * time.Second)
 	return nil
 }
 
-func (m *MockSearch) UpdateConfig(newalgo cache.VectorIndexSearchIf) error {
+func (m *MockIvfSearch[T]) UpdateConfig(newalgo cache.VectorIndexSearchIf) error {
 	return nil
 }
 
-func newMockAlgoFn(idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) veccache.VectorIndexSearchIf {
-	return &MockSearch{Idxcfg: idxcfg, Tblcfg: tblcfg}
+func newMockIvfAlgoFn(idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) (veccache.VectorIndexSearchIf, error) {
+	return &MockIvfSearch[float32]{Idxcfg: idxcfg, Tblcfg: tblcfg}, nil
 }
 
-func TestHnswSearch(t *testing.T) {
+func TestIvfSearch(t *testing.T) {
 
-	newHnswAlgo = newMockAlgoFn
+	newIvfAlgo = newMockIvfAlgoFn
+	getVersion = mockVersion
 
-	param := "{\"op_type\": \"vector_l2_ops\"}"
-	ut := newHnswSearchTestCase(mpool.MustNewZero(), hnswsearchdefaultAttrs, param)
+	param := "{\"op_type\": \"vector_l2_ops\", \"lists\": \"3\"}"
+	ut := newIvfSearchTestCase(mpool.MustNewZero(), ivfsearchdefaultAttrs, param)
 
-	inbat := makeBatchHnswSearch(ut.proc)
+	inbat := makeBatchIvfSearch(ut.proc)
 
-	ut.arg.Args = makeConstInputExprsHnswSearch()
+	ut.arg.Args = makeConstInputExprsIvfSearch()
 
 	// Prepare
 	err := ut.arg.Prepare(ut.proc)
@@ -159,24 +170,23 @@ func TestHnswSearch(t *testing.T) {
 	ut.arg.ctr.state.free(ut.arg, ut.proc, false, nil)
 }
 
-var failedsearchparam []string = []string{"{",
-	"{\"op_type\": \"vector_cos_ops\"}",
-	"{\"op_type\": \"vector_l2_ops\", \"quantization\":\"invalid\"}",
-	"{\"op_type\": \"vector_l2_ops\", \"m\":\"notnumber\"}",
-	"{\"op_type\": \"vector_l2_ops\", \"ef_construction\":\"notnumber\"}",
-	"{\"op_type\": \"vector_l2_ops\"}, \"ef_search\":\"notnumber\"",
+var failedivfsearchparam []string = []string{"{",
+	"{\"op_type\": \"vector_xxx_ops\"}",
+	"{\"op_type\": \"vector_l2_ops\", \"lists\":\"\"}",
+	"{\"op_type\": \"vector_l2_ops\", \"lists\":\"notnumber\"}",
 }
 
-func TestHnswSearchParamFail(t *testing.T) {
+func TestIvfSearchParamFail(t *testing.T) {
 
-	newHnswAlgo = newMockAlgoFn
+	newIvfAlgo = newMockIvfAlgoFn
+	getVersion = mockVersion
 
-	for _, param := range failedsearchparam {
-		ut := newHnswSearchTestCase(mpool.MustNewZero(), hnswsearchdefaultAttrs, param)
+	for _, param := range failedivfsearchparam {
+		ut := newIvfSearchTestCase(mpool.MustNewZero(), ivfsearchdefaultAttrs, param)
 
-		inbat := makeBatchHnswSearch(ut.proc)
+		inbat := makeBatchIvfSearch(ut.proc)
 
-		ut.arg.Args = makeConstInputExprsHnswSearch()
+		ut.arg.Args = makeConstInputExprsIvfSearch()
 
 		// Prepare
 		err := ut.arg.Prepare(ut.proc)
@@ -188,6 +198,7 @@ func TestHnswSearchParamFail(t *testing.T) {
 		}
 
 		// start
+		fmt.Println(param)
 		err = ut.arg.ctr.state.start(ut.arg, ut.proc, 0, nil)
 		require.NotNil(t, err)
 		os.Stderr.WriteString(fmt.Sprintf("%v\n", err))
@@ -211,13 +222,14 @@ func TestHnswSearchParamFail(t *testing.T) {
 	*/
 }
 
-func TestHnswSearchIndexTableConfigFail(t *testing.T) {
+func TestIvfSearchIndexTableConfigFail(t *testing.T) {
 
-	hnsw_runSql = mock_hnsw_runSql
-	param := "{\"op_type\": \"vector_l2_ops\"}"
+	ivf_runSql = mock_ivf_runSql
+	getVersion = mockVersion
+	param := "{\"op_type\": \"vector_l2_ops\", \"lists\": \"3\"}"
 
-	ut := newHnswSearchTestCase(mpool.MustNewZero(), hnswsearchdefaultAttrs, param)
-	failbatches := makeBatchHnswSearchFail(ut.proc)
+	ut := newIvfSearchTestCase(mpool.MustNewZero(), ivfsearchdefaultAttrs, param)
+	failbatches := makeBatchIvfSearchFail(ut.proc)
 	for _, b := range failbatches {
 
 		inbat := b.bat
@@ -256,9 +268,9 @@ func TestHnswSearchIndexTableConfigFail(t *testing.T) {
 	*/
 }
 
-func makeConstInputExprsHnswSearch() []*plan.Expr {
+func makeConstInputExprsIvfSearch() []*plan.Expr {
 
-	tblcfg := `{"db":"db", "src":"src", "metadata":"__metadata", "index":"__index"}`
+	tblcfg := fmt.Sprintf(`{"db":"db", "src":"src", "metadata":"__metadata", "index":"__index", "entries":"__entries", "parttype": %d}`, int32(types.T_array_float32))
 	ret := []*plan.Expr{
 		{
 			Typ: plan.Type{
@@ -279,14 +291,14 @@ func makeConstInputExprsHnswSearch() []*plan.Expr {
 
 	return ret
 }
-func makeBatchHnswSearch(proc *process.Process) *batch.Batch {
+func makeBatchIvfSearch(proc *process.Process) *batch.Batch {
 
 	bat := batch.NewWithSize(2)
 
 	bat.Vecs[0] = vector.NewVec(types.New(types.T_varchar, 128, 0))     // index table config
 	bat.Vecs[1] = vector.NewVec(types.New(types.T_array_float32, 3, 0)) // float32 array [3]float32
 
-	tblcfg := `{"db":"db", "src":"src", "metadata":"__metadata", "index":"__index"}`
+	tblcfg := fmt.Sprintf(`{"db":"db", "src":"src", "metadata":"__metadata", "index":"__index", "entries":"__entries", "parttype": %d}`, int32(types.T_array_float32))
 	vector.AppendBytes(bat.Vecs[0], []byte(tblcfg), false, proc.Mp())
 
 	v := []float32{0, 1, 2}
@@ -297,7 +309,7 @@ func makeBatchHnswSearch(proc *process.Process) *batch.Batch {
 
 }
 
-func makeBatchHnswSearchFail(proc *process.Process) []failBatch {
+func makeBatchIvfSearchFail(proc *process.Process) []failBatch {
 
 	failBatches := make([]failBatch, 0, 3)
 

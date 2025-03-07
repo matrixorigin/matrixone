@@ -1,4 +1,5 @@
 SET experimental_ivf_index = 1;
+SET probe_limit = 1;
 drop database if exists vecdb3;
 create database vecdb3;
 use vecdb3;
@@ -267,4 +268,5 @@ a    b
 8    [112, 112, 112, 0]
 11    [114, 114, 114, 0]
 SET experimental_ivf_index = 0;
+SET probe_limit = 5;
 drop database vecdb3;

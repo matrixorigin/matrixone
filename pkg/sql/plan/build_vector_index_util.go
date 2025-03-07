@@ -102,11 +102,12 @@ func makeCrossJoinCentroidsMetaForCurrVersion(builder *QueryBuilder, bindCtx *Bi
 	return joinMetaAndCentroidsId, nil
 }
 
-func makeTblCrossJoinL2Centroids(builder *QueryBuilder, bindCtx *BindContext, tableDef *TableDef, lastNodeId int32, currVersionCentroids int32, typeOriginPk Type, posOriginPk int, typeOriginVecColumn Type, posOriginVecColumn int) int32 {
+func makeTblCrossJoinL2Centroids(builder *QueryBuilder, bindCtx *BindContext, tableDef *TableDef, lastNodeId int32, currVersionCentroids int32, typeOriginPk Type, posOriginPk int, typeOriginVecColumn Type, posOriginVecColumn int, optype string) int32 {
 	joinTblAndCentroidsUsingCrossL2Join := builder.appendNode(&plan.Node{
-		NodeType: plan.Node_JOIN,
-		JoinType: plan.Node_L2,
-		Children: []int32{lastNodeId, currVersionCentroids},
+		NodeType:     plan.Node_JOIN,
+		JoinType:     plan.Node_L2,
+		ExtraOptions: optype,
+		Children:     []int32{lastNodeId, currVersionCentroids},
 		ProjectList: []*Expr{
 			{ // centroids.version
 				Typ: makePlan2TypeValue(&bigIntType),

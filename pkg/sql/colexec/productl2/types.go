@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -33,18 +34,19 @@ const (
 )
 
 type container struct {
-	state    int
-	probeIdx int
-	bat      *batch.Batch // build batch
-	rbat     *batch.Batch
-	inBat    *batch.Batch // probe batch
+	state  int
+	bat    *batch.Batch // build batch
+	rbat   *batch.Batch
+	inBat  *batch.Batch // probe batch
+	distfn metric.DistanceFunction
 }
 
 type Productl2 struct {
-	ctr        container
-	Result     []colexec.ResultPos
-	OnExpr     *plan.Expr
-	JoinMapTag int32
+	ctr          container
+	Result       []colexec.ResultPos
+	OnExpr       *plan.Expr
+	JoinMapTag   int32
+	VectorOpType string
 
 	vm.OperatorBase
 }
@@ -89,7 +91,6 @@ func (productl2 *Productl2) Reset(proc *process.Process, pipelineFailed bool, er
 	}
 	productl2.ctr.inBat = nil
 	productl2.ctr.state = Build
-	productl2.ctr.probeIdx = 0
 }
 
 func (productl2 *Productl2) Free(proc *process.Process, pipelineFailed bool, err error) {

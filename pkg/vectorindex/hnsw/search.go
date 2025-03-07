@@ -24,16 +24,18 @@ import (
 
 	"github.com/detailyang/go-fallocate"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	usearch "github.com/unum-cloud/usearch/golang"
 )
+
+var runSql = sqlexec.RunSql
+var runSql_streaming = sqlexec.RunStreamingSql
 
 // Hnsw search index struct to hold the usearch index
 type HnswSearchIndex struct {
@@ -198,9 +200,17 @@ func (s *HnswSearch) unlock() {
 }
 
 // Search the hnsw index (implement VectorIndexSearch.Search)
-func (s *HnswSearch) Search(query []float32, limit uint) (keys []int64, distances []float32, err error) {
+func (s *HnswSearch) Search(proc *process.Process, anyquery any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
+
+	query, ok := anyquery.([]float32)
+	if !ok {
+		return nil, nil, moerr.NewInternalErrorNoCtx("query is not []float32")
+	}
+
+	limit := rt.Limit
+
 	if len(s.Indexes) == 0 {
-		return []int64{}, []float32{}, nil
+		return []int64{}, []float64{}, nil
 	}
 
 	s.lock()
@@ -231,7 +241,7 @@ func (s *HnswSearch) Search(query []float32, limit uint) (keys []int64, distance
 					}
 
 					for k := range keys {
-						heap.Push(int64(keys[k]), distances[k])
+						heap.Push(&vectorindex.SearchResult{Id: int64(keys[k]), Distance: float64(distances[k])})
 					}
 				}
 			}
@@ -245,13 +255,17 @@ func (s *HnswSearch) Search(query []float32, limit uint) (keys []int64, distance
 	}
 
 	reskeys := make([]int64, 0, limit)
-	resdistances := make([]float32, 0, limit)
+	resdistances := make([]float64, 0, limit)
 
 	n := heap.Len()
 	for i := 0; i < int(limit) && i < n; i++ {
-		key, distance := heap.Pop()
-		reskeys = append(reskeys, key)
-		resdistances = append(resdistances, distance)
+		srif := heap.Pop()
+		sr, ok := srif.(*vectorindex.SearchResult)
+		if !ok {
+			return nil, nil, moerr.NewInternalError(proc.Ctx, "heap return key is not int64")
+		}
+		reskeys = append(reskeys, sr.Id)
+		resdistances = append(resdistances, sr.Distance)
 	}
 
 	return reskeys, resdistances, nil
@@ -357,63 +371,4 @@ func (s *HnswSearch) Load(proc *process.Process) error {
 func (s *HnswSearch) UpdateConfig(newalgo cache.VectorIndexSearchIf) error {
 
 	return nil
-}
-
-var runSql = runSql_fn
-
-// run SQL in batch mode. Result batches will stored in memory and return once all result batches received.
-func runSql_fn(proc *process.Process, sql string) (executor.Result, error) {
-	v, ok := moruntime.ServiceRuntime(proc.GetService()).GetGlobalVariables(moruntime.InternalSQLExecutor)
-	if !ok {
-		panic("missing lock service")
-	}
-
-	//-------------------------------------------------------
-	topContext := proc.GetTopContext()
-	accountId, err := defines.GetAccountId(proc.Ctx)
-	if err != nil {
-		return executor.Result{}, err
-	}
-	//-------------------------------------------------------
-
-	exec := v.(executor.SQLExecutor)
-	opts := executor.Options{}.
-		// All runSql and runSqlWithResult is a part of input sql, can not incr statement.
-		// All these sub-sql's need to be rolled back and retried en masse when they conflict in pessimistic mode
-		WithDisableIncrStatement().
-		WithTxn(proc.GetTxnOperator()).
-		WithDatabase(proc.GetSessionInfo().Database).
-		WithTimeZone(proc.GetSessionInfo().TimeZone).
-		WithAccountID(accountId)
-	return exec.Exec(topContext, sql, opts)
-}
-
-var runSql_streaming = runSql_streaming_fn
-
-// run SQL in WithStreaming() and pass the channel to SQL executor
-func runSql_streaming_fn(proc *process.Process, sql string, stream_chan chan executor.Result, error_chan chan error) (executor.Result, error) {
-	v, ok := moruntime.ServiceRuntime(proc.GetService()).GetGlobalVariables(moruntime.InternalSQLExecutor)
-	if !ok {
-		panic("missing lock service")
-	}
-
-	//-------------------------------------------------------
-	topContext := proc.GetTopContext()
-	accountId, err := defines.GetAccountId(proc.Ctx)
-	if err != nil {
-		return executor.Result{}, err
-	}
-	//-------------------------------------------------------
-
-	exec := v.(executor.SQLExecutor)
-	opts := executor.Options{}.
-		// All runSql and runSqlWithResult is a part of input sql, can not incr statement.
-		// All these sub-sql's need to be rolled back and retried en masse when they conflict in pessimistic mode
-		WithDisableIncrStatement().
-		WithTxn(proc.GetTxnOperator()).
-		WithDatabase(proc.GetSessionInfo().Database).
-		WithTimeZone(proc.GetSessionInfo().TimeZone).
-		WithAccountID(accountId).
-		WithStreaming(stream_chan, error_chan)
-	return exec.Exec(topContext, sql, opts)
 }

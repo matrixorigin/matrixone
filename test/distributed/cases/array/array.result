@@ -92,7 +92,7 @@ vector_dims(b)
 3
 select inner_product(b,"[1,2,3]") from vec_table;
 inner_product(b, [1,2,3])
-14.0
+-14.0
 select cosine_similarity(b,"[1,2,3]") from vec_table;
 cosine_similarity(b, [1,2,3])
 1.0

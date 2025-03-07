@@ -12,11 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package elkans
+package metric
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 )
 
 func Test_L2Distance(t *testing.T) {
@@ -74,6 +75,66 @@ func Test_L2Distance(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := L2Distance(moarray.ToGonumVector[float64](tt.args.v1), moarray.ToGonumVector[float64](tt.args.v2)); got != tt.want {
 				t.Errorf("L2Distance() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func Test_L2DistanceSq(t *testing.T) {
+	type args struct {
+		v1 []float64
+		v2 []float64
+	}
+	tests := []struct {
+		name string
+		args args
+		want float64
+	}{
+		{
+			name: "Test 1",
+			args: args{
+				v1: []float64{1, 2, 3, 4},
+				v2: []float64{1, 2, 4, 5},
+			},
+			want: 2,
+		},
+		{
+			name: "Test 2",
+			args: args{
+				v1: []float64{10, 20, 30, 40},
+				v2: []float64{10.5, 21.5, 31.5, 43.5},
+			},
+			want: 17,
+		},
+		{
+			name: "Test 3.a",
+			args: args{
+				v1: []float64{1, 1},
+				v2: []float64{4, 1},
+			},
+			want: 9,
+		},
+		{
+			name: "Test 3.b",
+			args: args{
+				v1: []float64{4, 1},
+				v2: []float64{1, 4},
+			},
+			want: 18,
+		},
+		{
+			name: "Test 3.c",
+			args: args{
+				v1: []float64{1, 4},
+				v2: []float64{1, 1},
+			},
+			want: 9,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := L2DistanceSq(moarray.ToGonumVector[float64](tt.args.v1), moarray.ToGonumVector[float64](tt.args.v2)); got != tt.want {
+				t.Errorf("L2DistanceSq() = %v, want %v", got, tt.want)
 			}
 		})
 	}

@@ -15,11 +15,12 @@
 package moarray
 
 import (
+	"math"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/momath"
 	"gonum.org/v1/gonum/mat"
-	"math"
 )
 
 // These functions are exposed externally via SQL API.
@@ -105,7 +106,8 @@ func InnerProduct[T types.RealNumbers](v1, v2 []T) (float64, error) {
 		return 0, err
 	}
 
-	return mat.Dot(vec[0], vec[1]), nil
+	// return negative InnerProduct for ASC
+	return -mat.Dot(vec[0], vec[1]), nil
 }
 
 func L2Distance[T types.RealNumbers](v1, v2 []T) (float64, error) {

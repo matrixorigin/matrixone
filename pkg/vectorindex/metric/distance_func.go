@@ -12,11 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package elkans
+package metric
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec/algos/kmeans"
 	"gonum.org/v1/gonum/mat"
 )
 
@@ -27,9 +26,24 @@ func L2Distance(v1, v2 *mat.VecDense) float64 {
 	return mat.Norm(diff, 2)
 }
 
+// L2Distance is used for L2Distance distance in Euclidean Kmeans.
+func L2DistanceSq(v1, v2 *mat.VecDense) float64 {
+	fv1 := v1.RawVector().Data
+	fv2 := v2.RawVector().Data
+
+	var sumOfSquares float64
+	var difference float64
+	for i := range fv1 {
+		difference = fv1[i] - fv2[i]
+		sumOfSquares += difference * difference
+	}
+	return sumOfSquares
+}
+
 // InnerProduct is used for InnerProduct distance in Spherical Kmeans.
 func InnerProduct(v1, v2 *mat.VecDense) float64 {
-	return mat.Dot(v1, v2)
+	// return negative inner product
+	return -mat.Dot(v1, v2)
 }
 
 // CosineDistance is used for CosineDistance distance in Spherical Kmeans.
@@ -46,6 +60,9 @@ func L1Distance(v1, v2 *mat.VecDense) float64 {
 	return mat.Norm(diff, 1)
 }
 
+//// IMPORTANT: Spherical Kmeans is not implemented yet.  We cannot use InnerProduct and CosineDistance as similiarity
+//// to estimate the centroid by Elkans Kmeans.
+//
 //// SphericalDistance is used for InnerProduct and CosineDistance in Spherical Kmeans.
 //// NOTE: spherical distance between two points on a sphere is equal to the
 //// angular distance between the two points, scaled by pi.
@@ -75,21 +92,37 @@ func L1Distance(v1, v2 *mat.VecDense) float64 {
 //	// Spherical distance is a measure of the spatial separation between two points on a sphere. [Satisfy triangle inequality]
 //}
 
-// resolveDistanceFn returns the distance function corresponding to the distance type
-// Distance function should satisfy triangle inequality.
-// We use
-// - L2Distance distance for L2Distance
-// - SphericalDistance for InnerProduct and CosineDistance
-func resolveDistanceFn(distType kmeans.DistanceType) (kmeans.DistanceFunction, error) {
-	var distanceFunction kmeans.DistanceFunction
-	switch distType {
-	case kmeans.L2Distance:
+// IMPORTANT: Elkans Kmeans always use L2Distance for clustering.  After getting the centroids, we can use other distance function
+// specified by user to assign vector to corresponding centroids (CENTROIDX JOIN / ProductL2).
+func ResolveKmeansDistanceFn(metric MetricType) (DistanceFunction, error) {
+	var distanceFunction DistanceFunction
+	switch metric {
+	case Metric_L2Distance:
 		distanceFunction = L2Distance
-	case kmeans.InnerProduct:
+	case Metric_InnerProduct:
+		distanceFunction = L2Distance
+	case Metric_CosineDistance:
+		distanceFunction = L2Distance
+	case Metric_L1Distance:
+		distanceFunction = L2Distance
+	default:
+		return nil, moerr.NewInternalErrorNoCtx("invalid distance type")
+	}
+	return distanceFunction, nil
+}
+
+// ResolveDistanceFn is used for similarity score for search and assign vector to centroids (CENTROIDX JOIN / ProductL2).
+// IMPORTANT: Don't use it for Elkans Kmeans
+func ResolveDistanceFn(metric MetricType) (DistanceFunction, error) {
+	var distanceFunction DistanceFunction
+	switch metric {
+	case Metric_L2Distance:
+		distanceFunction = L2DistanceSq
+	case Metric_InnerProduct:
 		distanceFunction = InnerProduct
-	case kmeans.CosineDistance:
+	case Metric_CosineDistance:
 		distanceFunction = CosineDistance
-	case kmeans.L1Distance:
+	case Metric_L1Distance:
 		distanceFunction = L1Distance
 	default:
 		return nil, moerr.NewInternalErrorNoCtx("invalid distance type")

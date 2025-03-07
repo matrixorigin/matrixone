@@ -15,12 +15,14 @@
 package elkans
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/assertx"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec/algos/kmeans"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"reflect"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/common/assertx"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/kmeans"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 )
 
 func Test_NewKMeans(t *testing.T) {
@@ -29,7 +31,7 @@ func Test_NewKMeans(t *testing.T) {
 		clusterCnt     int
 		maxIterations  int
 		deltaThreshold float64
-		distType       kmeans.DistanceType
+		distType       metric.MetricType
 		initType       kmeans.InitType
 	}
 	tests := []struct {
@@ -48,7 +50,7 @@ func Test_NewKMeans(t *testing.T) {
 				clusterCnt:     2,
 				maxIterations:  500,
 				deltaThreshold: 0.01,
-				distType:       kmeans.L2Distance,
+				distType:       metric.Metric_L2Distance,
 				initType:       kmeans.Random,
 			},
 			wantErr: true,
@@ -64,7 +66,7 @@ func Test_NewKMeans(t *testing.T) {
 				clusterCnt:     4,
 				maxIterations:  500,
 				deltaThreshold: 0.01,
-				distType:       kmeans.L2Distance,
+				distType:       metric.Metric_L2Distance,
 				initType:       kmeans.Random,
 			},
 			wantErr: true,
@@ -80,7 +82,7 @@ func Test_NewKMeans(t *testing.T) {
 				clusterCnt:     4,
 				maxIterations:  500,
 				deltaThreshold: 0.01,
-				distType:       kmeans.L2Distance,
+				distType:       metric.Metric_L2Distance,
 				initType:       kmeans.Random,
 			},
 			wantErr: true,
@@ -90,7 +92,7 @@ func Test_NewKMeans(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := NewKMeans(tt.fields.vectorList, tt.fields.clusterCnt,
 				tt.fields.maxIterations, tt.fields.deltaThreshold,
-				tt.fields.distType, tt.fields.initType, false) //<-- Not Spherical Kmeans UT
+				tt.fields.distType, tt.fields.initType, false, 0) //<-- Not Spherical Kmeans UT
 			if (err != nil) != tt.wantErr {
 				t.Errorf("NewKMeans() error = %v, wantErr %v", err, tt.wantErr)
 				return
@@ -109,7 +111,7 @@ func Test_Cluster(t *testing.T) {
 		clusterCnt     int
 		maxIterations  int
 		deltaThreshold float64
-		distType       kmeans.DistanceType
+		distType       metric.MetricType
 		initType       kmeans.InitType
 	}
 	tests := []struct {
@@ -139,7 +141,7 @@ func Test_Cluster(t *testing.T) {
 				clusterCnt:     2,
 				maxIterations:  500,
 				deltaThreshold: 0.01,
-				distType:       kmeans.L2Distance,
+				distType:       metric.Metric_L2Distance,
 				initType:       kmeans.Random,
 			},
 			want: [][]float64{
@@ -157,7 +159,7 @@ func Test_Cluster(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			clusterer, _ := NewKMeans(tt.fields.vectorList, tt.fields.clusterCnt,
 				tt.fields.maxIterations, tt.fields.deltaThreshold,
-				tt.fields.distType, tt.fields.initType, false)
+				tt.fields.distType, tt.fields.initType, false, 0)
 			got, err := clusterer.Cluster()
 			if (err != nil) != tt.wantErr {
 				t.Errorf("Cluster() error = %v, wantErr %v", err, tt.wantErr)
@@ -181,7 +183,7 @@ func TestElkanClusterer_initBounds(t *testing.T) {
 		clusterCnt     int
 		maxIterations  int
 		deltaThreshold float64
-		distType       kmeans.DistanceType
+		distType       metric.MetricType
 		initType       kmeans.InitType
 	}
 	type internalState struct {
@@ -210,7 +212,7 @@ func TestElkanClusterer_initBounds(t *testing.T) {
 				clusterCnt:     2,
 				maxIterations:  500,
 				deltaThreshold: 0.01,
-				distType:       kmeans.L2Distance,
+				distType:       metric.Metric_L2Distance,
 				initType:       kmeans.Random,
 			},
 			state: internalState{
@@ -255,7 +257,7 @@ func TestElkanClusterer_initBounds(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			km, err := NewKMeans(tt.fields.vectorList, tt.fields.clusterCnt,
 				tt.fields.maxIterations, tt.fields.deltaThreshold,
-				tt.fields.distType, tt.fields.initType, false)
+				tt.fields.distType, tt.fields.initType, false, 0)
 
 			// NOTE: here km.Normalize() is skipped as we not calling km.Cluster() in this test.
 			// Here we are only testing the working of initBounds() function.
@@ -297,7 +299,7 @@ func TestElkanClusterer_computeCentroidDistances(t *testing.T) {
 		clusterCnt     int
 		maxIterations  int
 		deltaThreshold float64
-		distType       kmeans.DistanceType
+		distType       metric.MetricType
 		initType       kmeans.InitType
 	}
 	type internalState struct {
@@ -323,7 +325,7 @@ func TestElkanClusterer_computeCentroidDistances(t *testing.T) {
 				clusterCnt:     2,
 				maxIterations:  500,
 				deltaThreshold: 0.01,
-				distType:       kmeans.L2Distance,
+				distType:       metric.Metric_L2Distance,
 				initType:       kmeans.Random,
 			},
 			state: internalState{
@@ -344,7 +346,7 @@ func TestElkanClusterer_computeCentroidDistances(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			km, err := NewKMeans(tt.fields.vectorList, tt.fields.clusterCnt,
 				tt.fields.maxIterations, tt.fields.deltaThreshold,
-				tt.fields.distType, tt.fields.initType, false)
+				tt.fields.distType, tt.fields.initType, false, 0)
 
 			if err != nil {
 				t.Errorf("Error while creating KMeans object %v", err)
@@ -382,7 +384,7 @@ func TestElkanClusterer_recalculateCentroids(t *testing.T) {
 		clusterCnt     int
 		maxIterations  int
 		deltaThreshold float64
-		distType       kmeans.DistanceType
+		distType       metric.MetricType
 		initType       kmeans.InitType
 	}
 	type internalState struct {
@@ -410,7 +412,7 @@ func TestElkanClusterer_recalculateCentroids(t *testing.T) {
 				clusterCnt:     2,
 				maxIterations:  500,
 				deltaThreshold: 0.01,
-				distType:       kmeans.L2Distance,
+				distType:       metric.Metric_L2Distance,
 				initType:       kmeans.Random,
 			},
 			state: internalState{
@@ -428,7 +430,7 @@ func TestElkanClusterer_recalculateCentroids(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			km, err := NewKMeans(tt.fields.vectorList, tt.fields.clusterCnt,
 				tt.fields.maxIterations, tt.fields.deltaThreshold,
-				tt.fields.distType, tt.fields.initType, false)
+				tt.fields.distType, tt.fields.initType, false, 0)
 
 			if err != nil {
 				t.Errorf("Error while creating KMeans object %v", err)
@@ -463,7 +465,7 @@ func TestElkanClusterer_updateBounds(t *testing.T) {
 		clusterCnt     int
 		maxIterations  int
 		deltaThreshold float64
-		distType       kmeans.DistanceType
+		distType       metric.MetricType
 		initType       kmeans.InitType
 	}
 	type internalState struct {
@@ -493,7 +495,7 @@ func TestElkanClusterer_updateBounds(t *testing.T) {
 				clusterCnt:     2,
 				maxIterations:  500,
 				deltaThreshold: 0.01,
-				distType:       kmeans.L2Distance,
+				distType:       metric.Metric_L2Distance,
 				initType:       kmeans.Random,
 			},
 			state: internalState{
@@ -568,7 +570,7 @@ func TestElkanClusterer_updateBounds(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			km, err := NewKMeans(tt.fields.vectorList, tt.fields.clusterCnt,
 				tt.fields.maxIterations, tt.fields.deltaThreshold,
-				tt.fields.distType, tt.fields.initType, false)
+				tt.fields.distType, tt.fields.initType, false, 0)
 
 			if err != nil {
 				t.Errorf("Error while creating KMeans object %v", err)
