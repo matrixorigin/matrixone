@@ -3218,8 +3218,8 @@ var (
 			output: "alter table t1 alter reindex idx1 hnsw",
 		},
 		{
-			input:  "select t.a from sa.t cross_l2 ('Vector_ip_ops') join u",
-			output: "select t.a from sa.t cross_l2 ('vector_ip_ops') join u",
+			input:  "select t.a from sa.t centroidx ('Vector_ip_ops') join u",
+			output: "select t.a from sa.t centroidx ('vector_ip_ops') join u",
 		},
 	}
 )

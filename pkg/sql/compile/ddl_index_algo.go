@@ -329,7 +329,7 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 	indexColumnName := indexDef.Parts[0]
 	centroidsCrossL2JoinTbl := fmt.Sprintf("%s "+
 		"SELECT `%s`, `%s`,  %s, `%s`"+
-		" FROM `%s` cross_l2 ('%s') join %s "+
+		" FROM `%s` CENTROIDX ('%s') join %s "+
 		" using (`%s`, `%s`) ",
 		insertSQL,
 

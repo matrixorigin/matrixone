@@ -282,7 +282,7 @@ import (
 %token <str> VALUES
 %token <str> NEXT VALUE SHARE MODE
 %token <str> SQL_NO_CACHE SQL_CACHE
-%left <str> JOIN STRAIGHT_JOIN LEFT RIGHT INNER OUTER CROSS NATURAL USE FORCE CROSS_L2 APPLY DEDUP
+%left <str> JOIN STRAIGHT_JOIN LEFT RIGHT INNER OUTER CROSS NATURAL USE FORCE CENTROIDX APPLY DEDUP
 %nonassoc LOWER_THAN_ON
 %nonassoc <str> ON USING
 %left <str> SUBQUERY_AS_EXPR
@@ -6179,9 +6179,9 @@ inner_join:
     {
         $$ = tree.JOIN_TYPE_CROSS
     }
-|   CROSS_L2 optype_opt JOIN
+|   CENTROIDX optype_opt JOIN
     {
-        $$ = tree.JOIN_TYPE_CROSS_L2 + ":" + $2
+        $$ = tree.JOIN_TYPE_CENTROIDX + ":" + $2
     }
 
 join_condition_opt:

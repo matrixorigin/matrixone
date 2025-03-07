@@ -4717,10 +4717,10 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 	switch tbl.JoinType {
 	case tree.JOIN_TYPE_CROSS, tree.JOIN_TYPE_INNER, tree.JOIN_TYPE_NATURAL:
 		joinType = plan.Node_INNER
-	case tree.JOIN_TYPE_CROSS_L2:
+	case tree.JOIN_TYPE_CENTROIDX:
 		joinType = plan.Node_L2
 		if len(tbl.Option) == 0 {
-			return 0, moerr.NewSyntaxError(builder.GetContext(), "CROSS_L2 without optype")
+			return 0, moerr.NewSyntaxError(builder.GetContext(), "CENTROIDX without optype")
 		}
 	case tree.JOIN_TYPE_LEFT, tree.JOIN_TYPE_NATURAL_LEFT:
 		joinType = plan.Node_LEFT
@@ -4778,7 +4778,7 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 		node.OnList = joinConds
 
 	case *tree.UsingJoinCond:
-		if tbl.JoinType == tree.JOIN_TYPE_CROSS_L2 {
+		if tbl.JoinType == tree.JOIN_TYPE_CENTROIDX {
 			for _, col := range cond.Cols {
 				expr, err := ctx.addUsingColForCrossL2(string(col), joinType, leftCtx, rightCtx)
 				if err != nil {

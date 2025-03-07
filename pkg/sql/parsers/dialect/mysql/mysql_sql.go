@@ -94,7 +94,7 @@ const CROSS = 57417
 const NATURAL = 57418
 const USE = 57419
 const FORCE = 57420
-const CROSS_L2 = 57421
+const CENTROIDX = 57421
 const APPLY = 57422
 const DEDUP = 57423
 const LOWER_THAN_ON = 57424
@@ -739,7 +739,7 @@ var yyToknames = [...]string{
 	"NATURAL",
 	"USE",
 	"FORCE",
-	"CROSS_L2",
+	"CENTROIDX",
 	"APPLY",
 	"DEDUP",
 	"LOWER_THAN_ON",
@@ -17956,7 +17956,7 @@ yydefault:
 		yyDollar = yyS[yypt-3 : yypt+1]
 //line mysql_sql.y:6183
 		{
-			yyVAL.str = tree.JOIN_TYPE_CROSS_L2 + ":" + yyDollar[2].str
+			yyVAL.str = tree.JOIN_TYPE_CENTROIDX + ":" + yyDollar[2].str
 		}
 	case 942:
 		yyDollar = yyS[yypt-0 : yypt+1]
