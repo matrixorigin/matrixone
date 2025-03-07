@@ -225,8 +225,6 @@ func (u *ivfSearchState) start(tf *TableFunction, proc *process.Process, nthRow 
 	default:
 		return moerr.NewInternalError(proc.Ctx, "vector is not array_float32 or array_float64")
 	}
-
-	return nil
 }
 
 func runIvfSearchVector[T types.RealNumbers](u *ivfSearchState, proc *process.Process, faVec *vector.Vector, nthRow int) (err error) {
