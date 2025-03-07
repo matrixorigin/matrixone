@@ -60,6 +60,9 @@ func L1Distance(v1, v2 *mat.VecDense) float64 {
 	return mat.Norm(diff, 1)
 }
 
+//// IMPORTANT: Spherical Kmeans is not implemented yet.  We cannot use InnerProduct and CosineDistance as similiarity
+//// to estimate the centroid by Elkans Kmeans.
+//
 //// SphericalDistance is used for InnerProduct and CosineDistance in Spherical Kmeans.
 //// NOTE: spherical distance between two points on a sphere is equal to the
 //// angular distance between the two points, scaled by pi.
@@ -89,28 +92,27 @@ func L1Distance(v1, v2 *mat.VecDense) float64 {
 //	// Spherical distance is a measure of the spatial separation between two points on a sphere. [Satisfy triangle inequality]
 //}
 
-// resolveDistanceFn returns the distance function corresponding to the distance type
-// Distance function should satisfy triangle inequality.
-// We use
-// - L2Distance distance for L2Distance
-// - SphericalDistance for InnerProduct and CosineDistance
+// IMPORTANT: Elkans Kmeans always use L2Distance for clustering.  After getting the centroids, we can use other distance function
+// specified by user to assign vector to corresponding centroids (CENTROIDX JOIN / ProductL2).
 func ResolveKmeansDistanceFn(metric MetricType) (DistanceFunction, error) {
 	var distanceFunction DistanceFunction
 	switch metric {
 	case Metric_L2Distance:
 		distanceFunction = L2Distance
 	case Metric_InnerProduct:
-		distanceFunction = InnerProduct
+		distanceFunction = L2Distance
 	case Metric_CosineDistance:
-		distanceFunction = CosineDistance
+		distanceFunction = L2Distance
 	case Metric_L1Distance:
-		distanceFunction = L1Distance
+		distanceFunction = L2Distance
 	default:
 		return nil, moerr.NewInternalErrorNoCtx("invalid distance type")
 	}
 	return distanceFunction, nil
 }
 
+// ResolveDistanceFn is used for similarity score for search and assign vector to centroids (CENTROIDX JOIN / ProductL2).
+// IMPORTANT: Don't use it for Elkans Kmeans
 func ResolveDistanceFn(metric MetricType) (DistanceFunction, error) {
 	var distanceFunction DistanceFunction
 	switch metric {
