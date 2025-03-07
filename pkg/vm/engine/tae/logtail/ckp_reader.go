@@ -16,6 +16,7 @@ package logtail
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -809,21 +810,47 @@ func (reader *CKPReader) ConsumeCheckpointWithTableID(
 		panic("not support")
 	}
 	if reader.version <= CheckpointVersion12 {
-		var dataBatch, tombstoneBatch *containers.Batch
-		if dataBatch, tombstoneBatch, err = getCKPDataForV12(
-			ctx, reader.dataLocations, reader.tombstoneLocations, reader.mp, reader.fs,
-		); err != nil {
-			return
+		tmpBatch := ckputil.MakeDataScanTableIDBatch()
+		defer tmpBatch.Clean(reader.mp)
+		defer reader.objectReader.reset(ctx)
+		for {
+			tmpBatch.CleanOnlyData()
+			var end bool
+			if end, err = reader.objectReader.read(ctx, tmpBatch, reader.mp); err != nil {
+				return
+			}
+			if end {
+				return
+			}
+			tableIds := vector.MustFixedColNoTypeCheck[uint64](tmpBatch.Vecs[2])
+			objectTypes := vector.MustFixedColNoTypeCheck[int8](tmpBatch.Vecs[3])
+			objectStatsVec := tmpBatch.Vecs[4]
+			createTSs := vector.MustFixedColNoTypeCheck[types.TS](tmpBatch.Vecs[5])
+			deleteTSs := vector.MustFixedColNoTypeCheck[types.TS](tmpBatch.Vecs[6])
+
+			for i := 0; i < tmpBatch.RowCount(); i++ {
+				if tableIds[i] != reader.tid {
+					continue
+				}
+				obj := objectio.ObjectEntry{
+					ObjectStats: objectio.ObjectStats(objectStatsVec.GetBytesAt(i)),
+					CreateTime:  createTSs[i],
+					DeleteTime:  deleteTSs[i],
+				}
+				var isTombstone bool
+				switch objectTypes[i] {
+				case ckputil.ObjectType_Data:
+					isTombstone = false
+				case ckputil.ObjectType_Tombstone:
+					isTombstone = true
+				default:
+					panic(fmt.Sprintf("invalid object type %d", objectTypes[i]))
+				}
+				if err = forEachObject(ctx, obj, isTombstone); err != nil {
+					return
+				}
+			}
 		}
-		if dataBatch != nil {
-			defer dataBatch.Close()
-		}
-		if tombstoneBatch != nil {
-			defer tombstoneBatch.Close()
-		}
-		return consumeCheckpointWithTableIDForV12(
-			ctx, forEachObject, dataBatch, tombstoneBatch, reader.tid,
-		)
 	} else {
 		return consumeCheckpointWithTableID(
 			ctx, forEachObject, reader.dataRanges, reader.tombstoneRanges, reader.tid, reader.mp, reader.fs,
