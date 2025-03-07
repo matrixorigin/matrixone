@@ -60,8 +60,6 @@ type CkpReplayer struct {
 	ckpEntries []*CheckpointEntry
 	ckpReader  *CheckpointReader
 
-	globalCkpIdx int
-
 	readDuration, applyDuration       time.Duration
 	readCount, applyCount, totalCount int
 
@@ -220,6 +218,7 @@ func (c *CkpReplayer) readCheckpointEntries() (
 			},
 		)
 		for _, entry := range allEntries {
+			entry.sid = c.r.rt.SID()
 			logutil.Info(
 				"Read-CKP-META",
 				zap.String("entry", entry.String()),
