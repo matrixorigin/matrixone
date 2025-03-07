@@ -3527,6 +3527,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableIntType("ivf_threads_search", 0, 1024, false),
 		Default:           int64(0),
 	},
+	"probe_limit": {
+		Name:              "probe_limit",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("probe_limit", 0, 1024, false),
+		Default:           int64(5),
+	},
 	"disable_agg_statement": {
 		Name:              "disable_agg_statement",
 		Scope:             ScopeSession,
