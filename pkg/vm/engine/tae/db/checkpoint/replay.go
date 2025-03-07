@@ -692,6 +692,10 @@ func (reader *CheckpointReader) Read(
 					reader.maxLSN = ckpEntry.ckpLSN
 				}
 			}
+			if ckpEntry.ckpLSN < reader.maxLSN {
+				panic(fmt.Sprintf("logic error, current lsn %d, incoming lsn %d", reader.maxLSN, ckpEntry.ckpLSN))
+			}
+			reader.maxLSN = ckpEntry.ckpLSN
 		}
 	}
 	for {
@@ -730,11 +734,10 @@ func (reader *CheckpointReader) Read(
 			reader.maxTS = ckpEntry.end
 		}
 		// for force checkpoint, ckp LSN is 0.
-		if ckpEntry.ckpLSN > 0 {
-			if ckpEntry.ckpLSN < reader.maxLSN {
-				reader.maxLSN = ckpEntry.ckpLSN
-			}
+		if ckpEntry.ckpLSN < reader.maxLSN {
+			panic(fmt.Sprintf("logic error, current lsn %d, incoming lsn %d", reader.maxLSN, ckpEntry.ckpLSN))
 		}
+		reader.maxLSN = ckpEntry.ckpLSN
 		reader.currentIdx++
 	}
 }
