@@ -42,8 +42,8 @@ import (
 )
 
 type ckpDataReader interface {
-	read(ctx context.Context, bat *batch.Batch, mp *mpool.MPool) (end bool, err error)
-	reset(ctx context.Context)
+	Read(ctx context.Context, bat *batch.Batch, mp *mpool.MPool) (end bool, err error)
+	Reset(ctx context.Context)
 }
 
 type ckpObjectReader struct {
@@ -79,7 +79,7 @@ func newObjectReader(
 	}
 }
 
-func (r *ckpObjectReader) read(
+func (r *ckpObjectReader) Read(
 	ctx context.Context,
 	bat *batch.Batch,
 	mp *mpool.MPool,
@@ -107,7 +107,7 @@ func (r *ckpObjectReader) read(
 	}
 }
 
-func (r *ckpObjectReader) reset(ctx context.Context) {
+func (r *ckpObjectReader) Reset(ctx context.Context) {
 	r.objectIdx = 0
 	if len(r.objects) != 0 {
 		object := r.objects[0]
@@ -142,7 +142,7 @@ func newCKPObjectReaderForV12(
 	}
 }
 
-func (r *ckpObjectReaderForV12) read(
+func (r *ckpObjectReaderForV12) Read(
 	ctx context.Context,
 	destBatch *batch.Batch,
 	mp *mpool.MPool,
@@ -195,7 +195,7 @@ func (r *ckpObjectReaderForV12) read(
 	return
 }
 
-func (r *ckpObjectReaderForV12) reset(ctx context.Context) {
+func (r *ckpObjectReaderForV12) Reset(ctx context.Context) {
 	r.objectIndex = 0
 }
 
@@ -213,7 +213,7 @@ type CKPReader struct {
 	dataLocations      map[string]objectio.Location // for version 12
 	tombstoneLocations map[string]objectio.Location // for version 12
 
-	objectReader ckpDataReader
+	ckpDataReader
 }
 
 func NewCKPReader(
@@ -268,7 +268,7 @@ func (reader *CKPReader) ReadMeta(
 		for _, loc := range reader.tombstoneLocations {
 			tombstoneLocations = append(tombstoneLocations, loc)
 		}
-		reader.objectReader = newCKPObjectReaderForV12(
+		reader.ckpDataReader = newCKPObjectReaderForV12(
 			dataLocations,
 			tombstoneLocations,
 			reader.fs,
@@ -283,7 +283,7 @@ func (reader *CKPReader) ReadMeta(
 			reader.ckpDataObjectStats, err = readMeta(
 				ctx, reader.location, reader.mp, reader.fs,
 			)
-			reader.objectReader = newObjectReader(
+			reader.ckpDataReader = newObjectReader(
 				ctx,
 				reader.ckpDataObjectStats,
 				reader.mp,
@@ -519,7 +519,7 @@ func (reader *CKPReader) GetCheckpointData(ctx context.Context) (ckpData *batch.
 	for {
 		tmpBatch.CleanOnlyData()
 		var end bool
-		if end, err = reader.objectReader.read(ctx, tmpBatch, reader.mp); err != nil {
+		if end, err = reader.ckpDataReader.Read(ctx, tmpBatch, reader.mp); err != nil {
 			return
 		}
 		if end {
@@ -541,7 +541,7 @@ func (reader *CKPReader) LoadBatchData(
 	if data == nil {
 		panic("invalid input")
 	}
-	return reader.objectReader.read(ctx, data, reader.mp)
+	return reader.ckpDataReader.Read(ctx, data, reader.mp)
 }
 
 func compatibilityForV12(
@@ -610,11 +610,11 @@ func (reader *CKPReader) ForEachRow(
 	}
 	tmpBatch := ckputil.MakeDataScanTableIDBatch()
 	defer tmpBatch.Clean(reader.mp)
-	defer reader.objectReader.reset(ctx)
+	defer reader.ckpDataReader.Reset(ctx)
 	for {
 		tmpBatch.CleanOnlyData()
 		var end bool
-		if end, err = reader.objectReader.read(ctx, tmpBatch, reader.mp); err != nil {
+		if end, err = reader.ckpDataReader.Read(ctx, tmpBatch, reader.mp); err != nil {
 			return
 		}
 		if end {
@@ -655,11 +655,11 @@ func (reader *CKPReader) ConsumeCheckpointWithTableID(
 	if reader.version <= CheckpointVersion12 {
 		tmpBatch := ckputil.MakeDataScanTableIDBatch()
 		defer tmpBatch.Clean(reader.mp)
-		defer reader.objectReader.reset(ctx)
+		defer reader.ckpDataReader.Reset(ctx)
 		for {
 			tmpBatch.CleanOnlyData()
 			var end bool
-			if end, err = reader.objectReader.read(ctx, tmpBatch, reader.mp); err != nil {
+			if end, err = reader.ckpDataReader.Read(ctx, tmpBatch, reader.mp); err != nil {
 				return
 			}
 			if end {
