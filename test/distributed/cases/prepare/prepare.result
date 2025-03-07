@@ -691,3 +691,12 @@ col1    col2    col1    col2
 drop table test_prepare_1;
 drop table test_prepare_2;
 drop database db1;
+create account prepare_account_01 ADMIN_NAME admin IDENTIFIED BY '111111';
+create role prepare_role1;
+grant create database on account * to prepare_role1;
+create user prepare_user1 identified by '123456' default role prepare_role1;
+select mo_ctl('cn', 'task', ':retention');
+internal error: do not have privilege to execute the statement
+drop user prepare_user1;
+drop role prepare_role1;
+drop account prepare_account_01;
