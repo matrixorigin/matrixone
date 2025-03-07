@@ -307,6 +307,8 @@ func (obj *aobject) Contains(
 }
 
 func (obj *aobject) OnReplayAppend(node txnif.AppendNode) (err error) {
+	obj.Lock()
+	defer obj.Unlock()
 	an := node.(*updates.AppendNode)
 	obj.appendMVCC.OnReplayAppendNode(an)
 	return

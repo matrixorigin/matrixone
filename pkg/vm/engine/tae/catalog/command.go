@@ -173,6 +173,8 @@ type EntryCommand[T BaseNode[T], N Node] struct {
 	ID       *common.ID
 	mvccNode *MVCCNode[T]
 	node     N
+
+	applyCommitFn func()
 }
 
 func newEmptyEntryCmd[T BaseNode[T], N Node](cmdType uint16, mvccNodeFactory func() *MVCCNode[T], nodeFactory func() N, ver uint16) *EntryCommand[T, N] {
@@ -233,8 +235,8 @@ func (cmd *EntryCommand[T, N]) SetReplayTxn(txn txnif.AsyncTxn) {
 }
 
 func (cmd *EntryCommand[T, N]) ApplyCommit() {
-	if err := cmd.mvccNode.ApplyCommit(cmd.mvccNode.Txn.GetID()); err != nil {
-		panic(err)
+	if cmd.applyCommitFn != nil {
+		cmd.applyCommitFn()
 	}
 }
 
