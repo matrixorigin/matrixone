@@ -179,6 +179,7 @@ func (r *ckpObjectReaderForV12) Read(
 	}
 	objID := location.ObjectId()
 	for i, bat := range bats {
+		defer bat.Close()
 		blkID := objectio.NewBlockidWithObjectID(&objID, uint16(i))
 		if isTombstone {
 			if err = compatibilityForV12(&blkID, nil, bat, destBatch, mp); err != nil {
@@ -189,7 +190,6 @@ func (r *ckpObjectReaderForV12) Read(
 				return
 			}
 		}
-		bat.Close()
 	}
 	r.objectIndex++
 	return
