@@ -270,8 +270,8 @@ func makeCentroidsSingleJoinMetaOnCurrVersionOrderByL2Dist(builder *QueryBuilder
 		Expr: &plan.Expr_V{
 			V: &plan.VarRef{
 				Name:   "probe_limit",
-				Global: false,
-				System: false,
+				Global: true,
+				System: true,
 			},
 		},
 	}

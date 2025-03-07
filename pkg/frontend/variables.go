@@ -3686,6 +3686,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableStringType("mo_table_stats.reset_update_time"),
 		Default:           "",
 	},
+	"probe_limit": {
+		Name:              "probe_limit",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("probe_limit", 0, 1000000000, false),
+		Default:           int64(1000000000),
+	},
 }
 
 func updateTimeZone(ctx context.Context, sess *Session, sv *SystemVariables, name string, val interface{}) error {
