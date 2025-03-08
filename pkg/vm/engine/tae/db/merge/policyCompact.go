@@ -33,7 +33,8 @@ type objCompactPolicy struct {
 
 	objects []*catalog.ObjectEntry
 
-	tombstoneMetas []objectio.ObjectDataMeta
+	tombstoneMetas   []objectio.ObjectDataMeta
+	tombstoneEntries []*catalog.ObjectEntry
 
 	config *BasicPolicyConfig
 }
@@ -53,8 +54,11 @@ func (o *objCompactPolicy) onObject(entry *catalog.ObjectEntry) bool {
 		return false
 	}
 
-	for _, meta := range o.tombstoneMetas {
-		if !checkTombstoneMeta(meta, entry.ID()) {
+	for i := range o.tombstoneMetas {
+		if o.tombstoneEntries[i].CreatedAt.GE(&entry.CreatedAt) {
+			continue
+		}
+		if !checkTombstoneMeta(o.tombstoneMetas[i], entry.ID()) {
 			continue
 		}
 		o.objects = append(o.objects, entry)
@@ -73,12 +77,16 @@ func (o *objCompactPolicy) revise(rc *resourceController) []reviseResult {
 			results = append(results, reviseResult{objs: []*catalog.ObjectEntry{obj}, kind: taskHostDN})
 		}
 	}
+	if len(o.objects) > 0 && len(o.tombstoneEntries) > 0 {
+		results = append(results, reviseResult{objs: o.tombstoneEntries, kind: taskHostDN})
+	}
 	return results
 }
 
 func (o *objCompactPolicy) resetForTable(entry *catalog.TableEntry, config *BasicPolicyConfig) {
 	o.tblEntry = entry
 	o.tombstoneMetas = o.tombstoneMetas[:0]
+	o.tombstoneEntries = o.tombstoneEntries[:0]
 	o.objects = o.objects[:0]
 	o.config = config
 
@@ -96,6 +104,7 @@ func (o *objCompactPolicy) resetForTable(entry *catalog.TableEntry, config *Basi
 				continue
 			}
 			o.tombstoneMetas = append(o.tombstoneMetas, meta)
+			o.tombstoneEntries = append(o.tombstoneEntries, tEntry)
 		}
 	}
 }
