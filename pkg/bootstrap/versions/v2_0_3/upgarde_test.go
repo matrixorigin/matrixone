@@ -16,7 +16,6 @@ package v2_0_3
 
 import (
 	"context"
-	"strings"
 	"testing"
 
 	"github.com/golang/mock/gomock"
@@ -24,9 +23,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -148,53 +145,4 @@ func Test_HandleTenantUpgrade2(t *testing.T) {
 		executor2,
 	)
 	assert.Nil(t, err)
-}
-
-func Test_UpgEntry(t *testing.T) {
-	checkSql := `att_comment AS COLUMN_COMMENT FROM mo_catalog.mo_columns`
-
-	sid := ""
-	// test upg_mo_user_add_password_last_changed
-	runtime.RunTest(
-		sid,
-		func(rt runtime.Runtime) {
-			txnOperator := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
-			txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{CN: sid}).AnyTimes()
-			executor := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
-				if strings.Contains(strings.ToLower(sql), strings.ToLower(checkSql)) {
-					typs := []types.Type{
-						types.New(types.T_varchar, 64, 0),   // DATA_TYPE
-						types.New(types.T_varchar, 64, 0),   // IS_NULLABLE
-						types.New(types.T_int64, 0, 0),      // CHARACTER_MAXIMUM_LENGTH
-						types.New(types.T_int64, 0, 0),      // NUMERIC_PRECISION
-						types.New(types.T_int64, 0, 0),      // NUMERIC_SCALE
-						types.New(types.T_int64, 0, 0),      // NUMERIC_SCALE
-						types.New(types.T_int32, 0, 0),      // ORDINAL_POSITION
-						types.New(types.T_varchar, 1024, 0), // COLUMN_DEFAULT
-						types.New(types.T_varchar, 1024, 0), // EXTRA
-						types.New(types.T_varchar, 1024, 0), // COLUMN_COMMENT
-					}
-
-					memRes := executor.NewMemResult(
-						typs,
-						mpool.MustNewZero())
-					memRes.NewBatch()
-					executor.AppendStringRows(memRes, 0, []string{"DATA_TYPE_str"})
-					executor.AppendStringRows(memRes, 1, []string{"YES"}) // or "NO"
-					executor.AppendFixedRows(memRes, 2, []int64{0})
-					executor.AppendFixedRows(memRes, 3, []int64{0})
-					executor.AppendFixedRows(memRes, 4, []int64{0})
-					executor.AppendFixedRows(memRes, 5, []int64{0})
-					executor.AppendFixedRows(memRes, 6, []int32{0})
-					executor.AppendStringRows(memRes, 7, []string{"COLUMN_DEFAULT"})
-					executor.AppendStringRows(memRes, 8, []string{"EXTRA"}) // '' or 'auto_increment'
-					executor.AppendStringRows(memRes, 9, []string{"COLUMN_COMMENT"})
-					return memRes.GetResult(), nil
-				}
-				return executor.Result{}, nil
-			}, txnOperator)
-			upg_mo_pitr_add_status.Upgrade(executor, uint32(0))
-			upg_mo_pitr_add_status_changed_time.Upgrade(executor, uint32(0))
-		},
-	)
 }

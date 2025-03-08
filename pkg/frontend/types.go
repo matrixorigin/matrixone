@@ -188,7 +188,6 @@ const (
 	FPResumeCDC
 	FPShowCDC
 	FPCommitUnsafeBeforeRollbackWhenCommitPanic
-	FPShowRecoveryWindow
 )
 
 type (

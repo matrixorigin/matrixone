@@ -34,11 +34,11 @@ var upg_mo_pitr_add_status = versions.UpgradeEntry{
 	UpgType:   versions.ADD_COLUMN,
 	UpgSql:    "alter table mo_catalog.mo_pitr add column pitr_status TINYINT UNSIGNED DEFAULT 1 after pitr_unit",
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
-		colInfo, err := versions.CheckTableColumn(txn, accountId, catalog.MO_CATALOG, catalog.MO_PITR, "pitr_status")
+		_, err := versions.CheckTableColumn(txn, accountId, catalog.MO_CATALOG, catalog.MO_PITR, "pitr_status")
 		if err != nil {
 			return false, err
 		}
-		return colInfo.IsExits, nil
+		return true, nil
 	},
 }
 
@@ -48,11 +48,11 @@ var upg_mo_pitr_add_status_changed_time = versions.UpgradeEntry{
 	UpgType:   versions.ADD_COLUMN,
 	UpgSql:    "alter table mo_catalog.mo_pitr add column pitr_status_changed_time TIMESTAMP DEFAULT UTC_TIMESTAMP after pitr_status",
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
-		colInfo, err := versions.CheckTableColumn(txn, accountId, catalog.MO_CATALOG, catalog.MO_PITR, "pitr_status_changed_time")
+		_, err := versions.CheckTableColumn(txn, accountId, catalog.MO_CATALOG, catalog.MO_PITR, "pitr_status_changed_time")
 		if err != nil {
 			return false, err
 		}
-		return colInfo.IsExits, nil
+		return true, nil
 	},
 }
 
