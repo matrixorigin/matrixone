@@ -484,38 +484,10 @@ func Test_EmptyObjectStats(t *testing.T) {
 	{
 		stats, err := disttaeEngine.GetPartitionStateStats(p.Ctx, database.GetID(), rel.ID())
 		require.Nil(t, err)
-
-		// before consume the ckp, the object in partition state expect to be empty
-		for idx := range stats.Details.DataObjectList.Visible {
-			require.Equal(t, uint32(0), stats.Details.DataObjectList.Visible[idx].Rows())
-		}
-
-	}
-
-	// consume ckp
-	{
-		txnOp, err := disttaeEngine.NewTxnOperator(p.Ctx, disttaeEngine.Now())
-		require.Nil(t, err)
-
-		engineDB, err := disttaeEngine.Engine.Database(p.Ctx, databaseName, txnOp)
-		require.Nil(t, err)
-
-		engineTbl, err := engineDB.Relation(p.Ctx, tableName, nil)
-		require.Nil(t, err)
-
-		_, err = disttaeEngine.Engine.LazyLoadLatestCkp(p.Ctx,
-			engineTbl.GetTableID(p.Ctx),
-			engineTbl.GetTableName(),
-			engineTbl.GetDBID(p.Ctx),
-			databaseName)
-		require.Nil(t, err)
-
-		stats, err := disttaeEngine.GetPartitionStateStats(p.Ctx, database.GetID(), rel.ID())
-		require.Nil(t, err)
-
 		for idx := range stats.Details.DataObjectList.Visible {
 			require.Equal(t, uint32(rowsCnt), stats.Details.DataObjectList.Visible[idx].Rows())
 		}
+
 	}
 }
 
