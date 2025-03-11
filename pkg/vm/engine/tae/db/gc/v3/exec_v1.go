@@ -16,27 +16,29 @@ package gc
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
-
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 )
 
 type CheckpointBasedGCJob struct {
 	BaseCheckpointGCJob
 	globalCkpLoc objectio.Location
+	globalCkpVer uint32
 }
 
 func NewCheckpointBasedGCJob(
 	ts *types.TS,
 	globalCkpLoc objectio.Location,
+	gckpVersion uint32,
 	sourcer engine.BaseReader,
 	pitr *logtail.PitrInfo,
 	accountSnapshots map[uint32][]types.TS,
@@ -64,6 +66,7 @@ func NewCheckpointBasedGCJob(
 	job := &CheckpointBasedGCJob{
 		BaseCheckpointGCJob: *e,
 		globalCkpLoc:        globalCkpLoc,
+		globalCkpVer:        gckpVersion,
 	}
 	job.filterProvider = job
 	return job
@@ -81,6 +84,7 @@ func (e *CheckpointBasedGCJob) CoarseFilter(ctx context.Context) (FilterFn, erro
 		e.config.coarseProbility,
 		e.buffer,
 		e.globalCkpLoc,
+		e.globalCkpVer,
 		e.ts,
 		&e.transObjects,
 		e.mp,
@@ -94,6 +98,7 @@ func MakeBloomfilterCoarseFilter(
 	probability float64,
 	buffer containers.IBatchBuffer,
 	location objectio.Location,
+	ckpVersion uint32,
 	ts *types.TS,
 	transObjects *map[string]*ObjectEntry,
 	mp *mpool.MPool,
@@ -102,24 +107,23 @@ func MakeBloomfilterCoarseFilter(
 	FilterFn,
 	error,
 ) {
-	reader, err := logtail.MakeGlobalCheckpointDataReader(ctx, "", fs, location, 0)
-	if err != nil {
+	reader := logtail.NewCKPReader(ckpVersion, location, mp, fs)
+	var err error
+	if err = reader.ReadMeta(ctx); err != nil {
 		return nil, err
 	}
 	bf, err := BuildBloomfilter(
 		ctx,
 		rowCount,
 		probability,
-		2,
+		ckputil.TableObjectsAttr_ID_Idx,
 		reader.LoadBatchData,
 		buffer,
 		mp,
 	)
 	if err != nil {
-		reader.Close()
 		return nil, err
 	}
-	reader.Close()
 	return func(
 		ctx context.Context,
 		bm *bitmap.Bitmap,

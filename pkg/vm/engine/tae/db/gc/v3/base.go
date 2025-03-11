@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 )
@@ -122,7 +123,7 @@ func (e *BaseCheckpointGCJob) Execute(ctx context.Context) error {
 	if len(e.transObjects) > 0 {
 		logutil.Warnf("transObjects is not empty: %d, maybe it is not closed", len(e.transObjects))
 	}
-	attrs, attrTypes := logtail.GetDataSchema()
+	attrs, attrTypes := ckputil.DataScan_TableIDAtrrs, ckputil.DataScan_TableIDTypes
 	e.buffer = containers.NewOneSchemaBatchBuffer(
 		mpool.MB*16,
 		attrs,

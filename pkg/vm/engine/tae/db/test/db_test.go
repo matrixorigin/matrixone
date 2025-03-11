@@ -2720,14 +2720,9 @@ func TestSegDelLogtail(t *testing.T) {
 		ckpEntries := tae.BGCheckpointRunner.GetAllIncrementalCheckpoints()
 		assert.Equal(t, 1, len(ckpEntries))
 		entry := ckpEntries[0]
-		ins, del, dataObj, tombstoneObj, err := entry.GetTableByID(context.Background(), tae.Runtime.Fs, tid)
+		data, err := entry.GetTableByID(context.Background(), tae.Runtime.Fs, tid, common.CheckpointAllocator)
 		assert.NoError(t, err)
-		assert.Nil(t, ins)                              // 0 ins
-		assert.Nil(t, del)                              // 0  del
-		assert.Equal(t, uint32(9), dataObj.Vecs[0].Len) // 5 create + 4 delete
-		assert.Equal(t, 10, len(dataObj.Vecs))
-		assert.Equal(t, uint32(4), tombstoneObj.Vecs[0].Len) // 2 create + 2 delete
-		assert.Equal(t, 10, len(tombstoneObj.Vecs))
+		assert.Equal(t, 13, data.RowCount()) // data: 5 create + 4 delete, tombstone: 2 create + 2 delete
 	}
 	check()
 
@@ -4794,31 +4789,18 @@ func TestReadCheckpoint(t *testing.T) {
 	}
 	for _, entry := range entries {
 		for _, tid := range tids {
-			ins, del, _, _, err := entry.GetTableByID(context.Background(), tae.Runtime.Fs, tid)
+			_, err := entry.GetTableByID(context.Background(), tae.Runtime.Fs, tid, common.CheckpointAllocator)
 			assert.NoError(t, err)
 			t.Logf("table %d", tid)
-			if ins != nil {
-				logutil.Infof("ins is %v", ins.Vecs[0].String())
-				t.Log(common.ApiBatchToString(ins, 3))
-			}
-			if del != nil {
-				t.Log(common.ApiBatchToString(del, 3))
-			}
 		}
 	}
 	tae.Restart(ctx)
 	entries = tae.BGCheckpointRunner.GetAllGlobalCheckpoints()
 	entry := entries[len(entries)-1]
 	for _, tid := range tids {
-		ins, del, _, _, err := entry.GetTableByID(context.Background(), tae.Runtime.Fs, tid)
+		_, err := entry.GetTableByID(context.Background(), tae.Runtime.Fs, tid, common.CheckpointAllocator)
 		assert.NoError(t, err)
 		t.Logf("table %d", tid)
-		if ins != nil {
-			t.Log(common.ApiBatchToString(ins, 3))
-		}
-		if del != nil {
-			t.Log(common.ApiBatchToString(del, 3))
-		}
 	}
 }
 
@@ -6992,48 +6974,57 @@ func TestSnapshotGC(t *testing.T) {
 	assert.True(t, end.GE(&minEnd))
 	err = db.DiskCleaner.GetCleaner().DoCheck(true)
 	assert.Nil(t, err)
-	dataObject, tombstoneObject := testutil.GetUserTablesInsBatch(t, rele2.ID(), types.TS{}, viewSnapshot, db.Catalog)
+	tbl := rele2.GetMeta().(*catalog.TableEntry)
+	db2, err := db.Catalog.GetDatabaseByID(tbl.GetDB().ID)
+	assert.NoError(t, err)
+	tbl2, err := db2.GetTableEntryByID(tbl.ID)
+	assert.NoError(t, err)
 	db.BGCheckpointRunner.GetCheckpointMetaFiles()
 	ckps, err := checkpoint.ListSnapshotCheckpoint(ctx, "", db.Opts.Fs, viewSnapshot, db.BGCheckpointRunner.GetCheckpointMetaFiles())
 	assert.Nil(t, err)
 	objects := make(map[string]struct{})
 	tombstones := make(map[string]struct{})
 	for _, ckp := range ckps {
-		_, _, dataObject, tombstoneObject, cbs := testutil.ReadSnapshotCheckpoint(t, rele2.ID(), ckp.GetLocation(), db.Opts.Fs)
-		for _, cb := range cbs {
-			if cb != nil {
-				cb()
-			}
-		}
-		if dataObject != nil {
-			moIns, err := batch.ProtoBatchToBatch(dataObject)
-			assert.NoError(t, err)
-			for i := 0; i < moIns.Vecs[2].Length(); i++ {
-				stats := objectio.ObjectStats(moIns.Vecs[2].GetBytesAt(i))
-				objects[stats.ObjectName().String()] = struct{}{}
-			}
-		}
-		if tombstoneObject != nil {
-			moIns, err := batch.ProtoBatchToBatch(tombstoneObject)
-			assert.NoError(t, err)
-			for i := 0; i < moIns.Vecs[2].Length(); i++ {
-				stats := objectio.ObjectStats(moIns.Vecs[2].GetBytesAt(i))
-				tombstones[stats.ObjectName().String()] = struct{}{}
-			}
-		}
+		reader := logtail.NewCKPReaderWithTableID_V2(
+			logtail.CheckpointCurrentVersion,
+			ckp.GetLocation(),
+			rele2.ID(),
+			common.DebugAllocator,
+			tae.Opts.Fs,
+		)
+		err = reader.ReadMeta(ctx)
+		assert.NoError(t, err)
+		reader.ConsumeCheckpointWithTableID(
+			ctx,
+			func(ctx context.Context, obj objectio.ObjectEntry, isTombstone bool) (err error) {
+				if isTombstone {
+					tombstones[obj.ObjectName().String()] = struct{}{}
+				} else {
+					objects[obj.ObjectName().String()] = struct{}{}
+				}
+				return
+			},
+		)
 	}
-	vec1 := dataObject.GetVectorByName(catalog.ObjectAttr_ObjectStats).GetDownstreamVector()
-	vec2 := tombstoneObject.GetVectorByName(catalog.ObjectAttr_ObjectStats).GetDownstreamVector()
-	for i := 0; i < dataObject.Length(); i++ {
-		stats := objectio.ObjectStats(vec1.GetBytesAt(i))
-		_, ok := objects[stats.ObjectName().String()]
+	p := &catalog.LoopProcessor{}
+	p.ObjectFn = func(oe *catalog.ObjectEntry) error {
+		if oe.CreatedAt.GT(&viewSnapshot) {
+			return nil
+		}
+		_, ok := objects[oe.ObjectName().String()]
 		assert.True(t, ok)
+		return nil
 	}
-	for i := 0; i < tombstoneObject.Length(); i++ {
-		stats := objectio.ObjectStats(vec2.GetBytesAt(i))
-		_, ok := tombstones[stats.ObjectName().String()]
+	p.TombstoneFn = func(oe *catalog.ObjectEntry) error {
+		if oe.CreatedAt.GT(&viewSnapshot) {
+			return nil
+		}
+		_, ok := tombstones[oe.ObjectName().String()]
 		assert.True(t, ok)
+		return nil
 	}
+	err = tbl2.RecurLoop(p)
+	assert.NoError(t, err)
 	assert.True(t, checkPK == db.DiskCleaner.GetCleaner().GetTablePK(checkrel.ID()))
 }
 
@@ -9399,7 +9390,7 @@ func TestCheckpointReadWrite(t *testing.T) {
 	assert.NoError(t, txn.Commit(context.Background()))
 
 	t1 := tae.TxnMgr.Now()
-	testutil.CheckCheckpointReadWrite(t, types.TS{}, t1, tae.Catalog, smallCheckpointBlockRows, smallCheckpointSize, tae.Opts.Fs)
+	testutil.CheckCheckpointReadWrite(t, t1, tae.Catalog, smallCheckpointSize, tae)
 
 	txn, err = tae.StartTxn(nil)
 	assert.NoError(t, err)
@@ -9412,8 +9403,7 @@ func TestCheckpointReadWrite(t *testing.T) {
 	assert.NoError(t, txn.Commit(context.Background()))
 
 	t2 := tae.TxnMgr.Now()
-	testutil.CheckCheckpointReadWrite(t, types.TS{}, t2, tae.Catalog, smallCheckpointBlockRows, smallCheckpointSize, tae.Opts.Fs)
-	testutil.CheckCheckpointReadWrite(t, t1, t2, tae.Catalog, smallCheckpointBlockRows, smallCheckpointSize, tae.Opts.Fs)
+	testutil.CheckCheckpointReadWrite(t, t2, tae.Catalog, smallCheckpointSize, tae)
 
 	txn, err = tae.StartTxn(nil)
 	assert.NoError(t, err)
@@ -9421,8 +9411,7 @@ func TestCheckpointReadWrite(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 	t3 := tae.TxnMgr.Now()
-	testutil.CheckCheckpointReadWrite(t, types.TS{}, t3, tae.Catalog, smallCheckpointBlockRows, smallCheckpointSize, tae.Opts.Fs)
-	testutil.CheckCheckpointReadWrite(t, t2, t3, tae.Catalog, smallCheckpointBlockRows, smallCheckpointSize, tae.Opts.Fs)
+	testutil.CheckCheckpointReadWrite(t, t3, tae.Catalog, smallCheckpointSize, tae)
 
 	schema := catalog.MockSchemaAll(2, 1)
 	schema.Extra.BlockMaxRows = 1
@@ -9432,13 +9421,11 @@ func TestCheckpointReadWrite(t *testing.T) {
 
 	tae.CreateRelAndAppend(bat, true)
 	t4 := tae.TxnMgr.Now()
-	testutil.CheckCheckpointReadWrite(t, types.TS{}, t4, tae.Catalog, smallCheckpointBlockRows, smallCheckpointSize, tae.Opts.Fs)
-	testutil.CheckCheckpointReadWrite(t, t3, t4, tae.Catalog, smallCheckpointBlockRows, smallCheckpointSize, tae.Opts.Fs)
+	testutil.CheckCheckpointReadWrite(t, t4, tae.Catalog, smallCheckpointSize, tae)
 
 	tae.CompactBlocks(false)
 	t5 := tae.TxnMgr.Now()
-	testutil.CheckCheckpointReadWrite(t, types.TS{}, t5, tae.Catalog, smallCheckpointBlockRows, smallCheckpointSize, tae.Opts.Fs)
-	testutil.CheckCheckpointReadWrite(t, t4, t5, tae.Catalog, smallCheckpointBlockRows, smallCheckpointSize, tae.Opts.Fs)
+	testutil.CheckCheckpointReadWrite(t, t5, tae.Catalog, smallCheckpointSize, tae)
 }
 
 func TestCheckpointReadWrite2(t *testing.T) {
@@ -9464,7 +9451,7 @@ func TestCheckpointReadWrite2(t *testing.T) {
 	}
 
 	t1 := tae.TxnMgr.Now()
-	testutil.CheckCheckpointReadWrite(t, types.TS{}, t1, tae.Catalog, smallCheckpointBlockRows, smallCheckpointSize, tae.Opts.Fs)
+	testutil.CheckCheckpointReadWrite(t, t1, tae.Catalog, smallCheckpointSize, tae)
 }
 
 func TestSnapshotCheckpoint(t *testing.T) {
@@ -9534,47 +9521,56 @@ func TestSnapshotCheckpoint(t *testing.T) {
 			t.Log(tae.Catalog.SimplePPString(3))
 			tae.ForceCheckpoint()
 			tae.ForceCheckpoint()
-			dataObject, tombstoneObject := testutil.GetUserTablesInsBatch(t, rel1.ID(), types.TS{}, snapshot, db.Catalog)
+			tbl := rel1.GetMeta().(*catalog.TableEntry)
+			db2, err := db.Catalog.GetDatabaseByID(tbl.GetDB().ID)
+			assert.NoError(t, err)
+			tbl2, err := db2.GetTableEntryByID(tbl.ID)
+			assert.NoError(t, err)
 			ckps, err := checkpoint.ListSnapshotCheckpoint(ctx, "", db.Opts.Fs, snapshot, db.BGCheckpointRunner.GetCheckpointMetaFiles())
 			assert.Nil(t, err)
 			objects := make(map[string]struct{})
 			tombstones := make(map[string]struct{})
 			for _, ckp := range ckps {
-				_, _, dataObject, tombstoneObject, cbs := testutil.ReadSnapshotCheckpoint(t, rel1.ID(), ckp.GetLocation(), db.Opts.Fs)
-				for _, cb := range cbs {
-					if cb != nil {
-						cb()
-					}
-				}
-				if dataObject != nil {
-					moIns, err := batch.ProtoBatchToBatch(dataObject)
-					assert.NoError(t, err)
-					for i := 0; i < moIns.Vecs[2].Length(); i++ {
-						stats := objectio.ObjectStats(moIns.Vecs[2].GetBytesAt(i))
-						objects[stats.ObjectName().String()] = struct{}{}
-					}
-				}
-				if tombstoneObject != nil {
-					moIns, err := batch.ProtoBatchToBatch(tombstoneObject)
-					assert.NoError(t, err)
-					for i := 0; i < moIns.Vecs[2].Length(); i++ {
-						stats := objectio.ObjectStats(moIns.Vecs[2].GetBytesAt(i))
-						tombstones[stats.ObjectName().String()] = struct{}{}
-					}
-				}
+				reader := logtail.NewCKPReaderWithTableID_V2(
+					logtail.CheckpointCurrentVersion,
+					ckp.GetLocation(),
+					rel1.ID(),
+					common.DebugAllocator,
+					tae.Opts.Fs,
+				)
+				err = reader.ReadMeta(ctx)
+				assert.NoError(t, err)
+				reader.ConsumeCheckpointWithTableID(
+					ctx,
+					func(ctx context.Context, obj objectio.ObjectEntry, isTombstone bool) (err error) {
+						if isTombstone {
+							tombstones[obj.ObjectName().String()] = struct{}{}
+						} else {
+							objects[obj.ObjectName().String()] = struct{}{}
+						}
+						return
+					},
+				)
 			}
-			vec1 := dataObject.GetVectorByName(catalog.ObjectAttr_ObjectStats).GetDownstreamVector()
-			vec2 := tombstoneObject.GetVectorByName(catalog.ObjectAttr_ObjectStats).GetDownstreamVector()
-			for i := 0; i < dataObject.Length(); i++ {
-				stats := objectio.ObjectStats(vec1.GetBytesAt(i))
-				_, ok := objects[stats.ObjectName().String()]
+			p := &catalog.LoopProcessor{}
+			p.ObjectFn = func(oe *catalog.ObjectEntry) error {
+				if oe.CreatedAt.GT(&snapshot) {
+					return nil
+				}
+				_, ok := objects[oe.ObjectName().String()]
 				assert.True(t, ok)
+				return nil
 			}
-			for i := 0; i < tombstoneObject.Length(); i++ {
-				stats := objectio.ObjectStats(vec2.GetBytesAt(i))
-				_, ok := tombstones[stats.ObjectName().String()]
+			p.TombstoneFn = func(oe *catalog.ObjectEntry) error {
+				if oe.CreatedAt.GT(&snapshot) {
+					return nil
+				}
+				_, ok := tombstones[oe.ObjectName().String()]
 				assert.True(t, ok)
+				return nil
 			}
+			err = tbl2.RecurLoop(p)
+			assert.NoError(t, err)
 		},
 	)
 }
@@ -10158,6 +10154,7 @@ func TestCKPCollectObject(t *testing.T) {
 			schema.Extra.ObjectMaxBlocks = 10
 			tae.BindSchema(schema)
 			bat := catalog.MockBatch(schema, 1)
+			defer bat.Close()
 
 			tae.CreateRelAndAppend(bat, true)
 
@@ -10167,11 +10164,19 @@ func TestCKPCollectObject(t *testing.T) {
 			assert.NoError(t, err)
 			assert.NoError(t, task1.Execute(ctx))
 
-			collector := logtail.NewIncrementalCollector("", types.TS{}, tae.TxnMgr.Now())
+			collector := logtail.NewBaseCollector_V2(types.TS{}, tae.TxnMgr.Now(), 0, tae.Opts.Fs)
 			assert.NoError(t, tae.Catalog.RecurLoop(collector))
 			ckpData := collector.OrphanData()
-			objBatch := ckpData.GetObjectBatchs()
-			assert.Equal(t, 1, objBatch.Length())
+			defer ckpData.Close()
+			loc, _, _, err := ckpData.WriteTo(ctx, tae.Opts.Fs)
+			assert.NoError(t, err)
+			reader := logtail.NewCKPReader(logtail.CheckpointCurrentVersion, loc, common.DebugAllocator, tae.Opts.Fs)
+			err = reader.ReadMeta(ctx)
+			assert.NoError(t, err)
+			bat2, err := reader.GetCheckpointData(ctx)
+			defer bat2.Clean(common.DebugAllocator)
+			assert.NoError(t, err)
+			assert.Equal(t, 1, bat2.RowCount())
 			assert.NoError(t, txn.Commit(ctx))
 		},
 	)
@@ -11379,7 +11384,7 @@ func TestCheckpointV2(t *testing.T) {
 		addobjFn(tbl)
 	}
 
-	collector := logtail.NewBaseCollector_V2(types.TS{}, tae.TxnMgr.Now(), tae.Opts.Fs, common.DebugAllocator)
+	collector := logtail.NewBaseCollector_V2(types.TS{}, tae.TxnMgr.Now(), 0, tae.Opts.Fs)
 	err = collector.Collect(tae.Catalog)
 	assert.NoError(t, err)
 	data := collector.OrphanData()
@@ -11393,9 +11398,16 @@ func TestCheckpointV2(t *testing.T) {
 	)
 	catalog2 := catalog.MockCatalog(dataFactory)
 
-	err = logtail.PrefetchCheckpoint(ctx, "", loc, common.DebugAllocator, tae.Opts.Fs)
+	reader := logtail.NewCKPReader(
+		logtail.CheckpointCurrentVersion,
+		loc,
+		common.DebugAllocator,
+		tae.Opts.Fs,
+	)
+	err = reader.ReadMeta(ctx)
 	assert.NoError(t, err)
-	err = logtail.ReplayCheckpoint(ctx, catalog2, true, loc, common.DebugAllocator, tae.Opts.Fs)
+
+	err = logtail.ReplayCheckpoint(ctx, catalog2, true, reader)
 	assert.NoError(t, err)
 	readTxn, err := tae.StartTxn(nil)
 	assert.NoError(t, err)
@@ -11408,7 +11420,7 @@ func TestCheckpointV2(t *testing.T) {
 	for _, fn := range closeFn {
 		fn()
 	}
-	err = logtail.ReplayCheckpoint(ctx, catalog2, false, loc, common.DebugAllocator, tae.Opts.Fs)
+	err = logtail.ReplayCheckpoint(ctx, catalog2, false, reader)
 	assert.NoError(t, err)
 
 	var tombstoneCnt2, dataCnt2 int
@@ -11431,12 +11443,17 @@ func TestCheckpointV2(t *testing.T) {
 	assert.Equal(t, tombstoneCnt, tombstoneCnt2)
 
 	var tombstoneCnt3, dataCnt3 int
-	err = logtail.PrefetchCheckpointWithTableID(ctx, "", rel.ID(), loc, common.DebugAllocator, tae.Opts.Fs)
-	assert.NoError(t, err)
-	err = logtail.ConsumeCheckpointWithTableID(
-		ctx,
-		rel.ID(),
+	reader = logtail.NewCKPReaderWithTableID_V2(
+		logtail.CheckpointCurrentVersion,
 		loc,
+		rel.ID(),
+		common.DebugAllocator,
+		tae.Opts.Fs,
+	)
+	err = reader.ReadMeta(ctx)
+	assert.NoError(t, err)
+	err = reader.ConsumeCheckpointWithTableID(
+		ctx,
 		func(
 			ctx context.Context, obj objectio.ObjectEntry, isTombstone bool,
 		) (err error) {
@@ -11447,8 +11464,6 @@ func TestCheckpointV2(t *testing.T) {
 			}
 			return
 		},
-		common.DebugAllocator,
-		tae.Opts.Fs,
 	)
 	assert.NoError(t, err)
 	assert.Equal(t, tombstoneEntryCnt, tombstoneCnt3)
@@ -11461,96 +11476,6 @@ func (r *objlistReplayer) Submit(_ uint64, fn func()) {
 	fn()
 }
 
-func TestCheckpointV2Compatibility(t *testing.T) {
-	ctx := context.Background()
-	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
-
-	txn, err := tae.StartTxn(nil)
-	assert.NoError(t, err)
-	db, err := testutil.CreateDatabase2(ctx, txn, "db")
-	require.NoError(t, err)
-	schema := catalog.MockSchemaAll(2, 1)
-	rel, err := testutil.CreateRelation2(ctx, txn, db, schema)
-	require.NoError(t, err)
-	assert.NoError(t, txn.Commit(ctx))
-
-	tbl := rel.GetMeta().(*catalog.TableEntry)
-
-	for i := 0; i < 100; i++ {
-		created := catalog.MockCreatedObjectEntry2List(tbl, tae.Catalog, false, tae.TxnMgr.Now())
-		catalog.MockDroppedObjectEntry2List(created, tae.TxnMgr.Now())
-		created = catalog.MockCreatedObjectEntry2List(tbl, tae.Catalog, true, tae.TxnMgr.Now())
-		catalog.MockDroppedObjectEntry2List(created, tae.TxnMgr.Now())
-	}
-
-	tae.ForceCheckpoint()
-	tae.ForceCheckpoint()
-
-	dataFactory := tables.NewDataFactory(
-		tae.Runtime, tae.Dir,
-	)
-	catalog2 := catalog.MockCatalog(dataFactory)
-
-	ckps := tae.BGCheckpointRunner.GetAllCheckpoints()
-	assert.Equal(t, 2, len(ckps))
-
-	locs := make([]objectio.Location, 0)
-
-	for _, ckp := range ckps {
-		locs = append(locs, ckp.GetTNLocation())
-	}
-
-	replayers := make([]*logtail.CheckpointReplayer, len(locs))
-	for i, loc := range locs {
-		replayer := logtail.NewCheckpointReplayer(loc, common.DebugAllocator)
-		replayers[i] = replayer
-	}
-	for _, replayer := range replayers {
-		err = replayer.ReadMetaForV12(ctx, tae.Opts.Fs)
-		assert.NoError(t, err)
-	}
-	for _, replayer := range replayers {
-		err = replayer.ReadDataForV12(ctx, tae.Opts.Fs)
-		assert.NoError(t, err)
-	}
-	for _, replayer := range replayers {
-		replayer.ReplayObjectlist(ctx, catalog2, true)
-	}
-	readTxn, err := tae.StartTxn(nil)
-	assert.NoError(t, err)
-	closeFn := catalog2.RelayFromSysTableObjects(
-		ctx, readTxn, tables.ReadSysTableBatch, func(cols []containers.Vector, pkidx int) (err2 error) {
-			_, err2 = mergesort.SortBlockColumns(cols, pkidx, tae.Runtime.VectorPool.Transient)
-			return
-		}, &objlistReplayer{},
-	)
-	for _, fn := range closeFn {
-		fn()
-	}
-	for _, replayer := range replayers {
-		replayer.ReplayObjectlist(ctx, catalog2, false)
-	}
-
-	var tombstoneCnt2, dataCnt2 int
-	p := &catalog.LoopProcessor{}
-	p.ObjectFn = func(oe *catalog.ObjectEntry) error {
-		if !pkgcatalog.IsSystemTable(oe.GetTable().ID) {
-			dataCnt2++
-		}
-		return nil
-	}
-	p.TombstoneFn = func(oe *catalog.ObjectEntry) error {
-		if !pkgcatalog.IsSystemTable(oe.GetTable().ID) {
-			tombstoneCnt2++
-		}
-		return nil
-	}
-	err = catalog2.RecurLoop(p)
-	assert.NoError(t, err)
-	assert.Equal(t, 100, dataCnt2)
-	assert.Equal(t, 100, tombstoneCnt2)
-}
 func TestDedupx(t *testing.T) {
 	ctx := context.Background()
 
@@ -11585,6 +11510,123 @@ func TestDedupx(t *testing.T) {
 	for nit.Next() {
 		t.Log(nit.Item().StringWithLevel(2))
 	}
+}
+
+func TestCheckpointCompatibility(t *testing.T) {
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(3, 2)
+	schema.Extra.BlockMaxRows = 5
+	schema.Extra.ObjectMaxBlocks = 5
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 21)
+	defer bat.Close()
+	tae.CreateRelAndAppend2(bat, true)
+
+	txn, rel := tae.GetRelation()
+	obj := testutil.GetOneBlockMeta(rel)
+	id := obj.AsCommonID()
+	err := rel.RangeDelete(id, 0, 0, handle.DT_Normal)
+	assert.NoError(t, err)
+	tableID := rel.ID()
+	assert.NoError(t, txn.Commit(ctx))
+
+	tae.ForceFlush(ctx, tae.TxnMgr.Now())
+
+	t.Log(tae.Catalog.SimplePPString(3))
+
+	end := tae.TxnMgr.Now()
+	loc, err := logtail.MockCheckpointV12(
+		ctx,
+		tae.Catalog,
+		types.TS{},
+		end,
+		common.CheckpointAllocator,
+		tae.Opts.Fs,
+	)
+	assert.NoError(t, err)
+	dataFactory := tables.NewDataFactory(
+		tae.Runtime, tae.Dir,
+	)
+	catalog2 := catalog.MockCatalog(dataFactory)
+	reader := logtail.NewCKPReader(
+		logtail.CheckpointVersion12,
+		loc,
+		common.CheckpointAllocator,
+		tae.Opts.Fs,
+	)
+	err = reader.ReadMeta(ctx)
+	assert.NoError(t, err)
+	err = logtail.ReplayCheckpoint(ctx, catalog2, true, reader)
+	assert.NoError(t, err)
+	sortFunc := func(cols []containers.Vector, pkidx int) (err2 error) {
+		_, err2 = mergesort.SortBlockColumns(cols, pkidx, tae.Runtime.VectorPool.Transient)
+		return
+	}
+
+	readTxn, err := tae.StartTxn(nil)
+	assert.NoError(t, err)
+	closeFn := catalog2.RelayFromSysTableObjects(
+		ctx,
+		readTxn,
+		tables.ReadSysTableBatch,
+		sortFunc,
+		&objlistReplayer{},
+	)
+	assert.NoError(t, readTxn.Commit(ctx))
+	for _, fn := range closeFn {
+		fn()
+	}
+
+	err = logtail.ReplayCheckpoint(ctx, catalog2, false, reader)
+	assert.NoError(t, err)
+
+	t.Log(catalog2.SimplePPString(3))
+	testutil.IsCatalogEqual(t, tae.Catalog, catalog2)
+
+	reader = logtail.NewCKPReaderWithTableID_V2(
+		logtail.CheckpointVersion12,
+		loc,
+		tableID,
+		common.DebugAllocator,
+		tae.Opts.Fs,
+	)
+	err = reader.ReadMeta(ctx)
+	assert.NoError(t, err)
+
+	objCount := 0
+	err = reader.ConsumeCheckpointWithTableID(
+		ctx,
+		func(
+			ctx context.Context, obj objectio.ObjectEntry, isTombstone bool,
+		) (err error) {
+			objCount++
+			return nil
+		},
+	)
+	assert.NoError(t, err)
+	assert.Equal(t, 14, objCount)
+
+	reader = logtail.NewCKPReader(
+		logtail.CheckpointVersion12,
+		loc,
+		common.DebugAllocator,
+		tae.Opts.Fs,
+	)
+	err = reader.ReadMeta(ctx)
+	assert.NoError(t, err)
+	reader.GetLocations()
+	bat2, err := reader.GetCheckpointData(ctx)
+	assert.NoError(t, err)
+	assert.Equal(t, bat2.RowCount(), 23)
+	bat2.Clean(common.DebugAllocator)
+
+	assert.NoError(t, err)
+	_, err = logtail.GetCheckpointMetaInfo(ctx, tableID, reader)
+	assert.NoError(t, err)
 }
 
 func Test_OpenWithError(t *testing.T) {

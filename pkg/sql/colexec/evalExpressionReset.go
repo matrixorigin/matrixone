@@ -181,13 +181,12 @@ func (expr *FunctionExpressionExecutor) doFold(proc *process.Process, atRuntime 
 
 func (expr *ParamExpressionExecutor) ResetForNextQuery() {
 	if expr.null != nil {
-		expr.null.Free(expr.mp)
-		expr.null = nil
+		expr.null.CleanOnlyData()
 	}
 	if expr.vec != nil {
-		expr.vec.Free(expr.mp)
-		expr.vec = nil
+		expr.vec.CleanOnlyData()
 	}
+	expr.folded = false
 }
 
 func (expr *VarExpressionExecutor) ResetForNextQuery() {
