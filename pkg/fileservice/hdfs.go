@@ -55,6 +55,9 @@ func NewHDFS(
 		return nil, err
 	}
 
+	if !strings.HasPrefix(args.Endpoint, "hdfs://") {
+		args.Endpoint = "hdfs://" + args.Endpoint
+	}
 	u, err := url.Parse(args.Endpoint)
 	if err != nil {
 		return nil, err
@@ -85,23 +88,30 @@ func NewHDFS(
 		return nil, err
 	}
 
+	rootPath := args.Bucket
+	if !strings.HasPrefix(rootPath, "/") {
+		rootPath = "/" + rootPath
+	}
+
 	ret := &HDFS{
 		name:            args.Name,
 		client:          client,
-		rootPath:        args.Bucket,
+		rootPath:        rootPath,
 		perfCounterSets: perfCounterSets,
 	}
 
-	if err := client.MkdirAll(ret.rootPath, 0755); err != nil {
-		return nil, err
-	}
+	if !args.NoBucketValidation && ret.rootPath != "" {
+		if err := client.MkdirAll(ret.rootPath, 0755); err != nil {
+			return nil, err
+		}
 
-	stat, err := client.Stat(ret.rootPath)
-	if err != nil {
-		return nil, err
-	}
-	if stat.Mode().Perm()&0444 == 0 {
-		return nil, moerr.NewBadConfigNoCtx(fmt.Sprintf("path not readable: %s", ret.rootPath))
+		stat, err := client.Stat(ret.rootPath)
+		if err != nil {
+			return nil, err
+		}
+		if stat.Mode().Perm()&0444 == 0 {
+			return nil, moerr.NewBadConfigNoCtx(fmt.Sprintf("path not readable: %s", ret.rootPath))
+		}
 	}
 
 	logutil.Info("new object storage",
@@ -136,7 +146,12 @@ func (h *HDFS) Delete(ctx context.Context, keys ...string) (err error) {
 }
 
 func (h *HDFS) keyToPath(key string) string {
-	return path.Join(h.rootPath, key)
+	ret := path.Join(h.rootPath, key)
+	// use absolute path
+	if !strings.HasPrefix(ret, "/") {
+		ret = "/" + ret
+	}
+	return ret
 }
 
 func (h *HDFS) createTemp() (*hdfs.FileWriter, string, error) {
