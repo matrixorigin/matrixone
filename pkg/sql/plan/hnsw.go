@@ -84,8 +84,9 @@ func (builder *QueryBuilder) buildHnswCreate(tbl *tree.TableFunction, ctx *BindC
 			TableType: "func_table", //test if ok
 			//Name:               tbl.String(),
 			TblFunc: &plan.TableFunction{
-				Name:  hnsw_create_func_name,
-				Param: []byte(params),
+				Name:     hnsw_create_func_name,
+				Param:    []byte(params),
+				IsSingle: true, // model building require single thread mode so set IsSingle to true
 			},
 			Cols: colDefs,
 		},
