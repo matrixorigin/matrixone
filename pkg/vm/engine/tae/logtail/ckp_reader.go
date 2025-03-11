@@ -619,14 +619,14 @@ func (reader *CKPReader) ForEachRow(
 		if end {
 			return
 		}
-		accouts := vector.MustFixedColNoTypeCheck[uint32](tmpBatch.Vecs[0])
-		dbids := vector.MustFixedColNoTypeCheck[uint64](tmpBatch.Vecs[1])
-		tableIds := vector.MustFixedColNoTypeCheck[uint64](tmpBatch.Vecs[2])
-		objectTypes := vector.MustFixedColNoTypeCheck[int8](tmpBatch.Vecs[3])
-		objectStatsVec := tmpBatch.Vecs[4]
-		createTSs := vector.MustFixedColNoTypeCheck[types.TS](tmpBatch.Vecs[5])
-		deleteTSs := vector.MustFixedColNoTypeCheck[types.TS](tmpBatch.Vecs[6])
-		rowids := vector.MustFixedColNoTypeCheck[types.Rowid](tmpBatch.Vecs[8])
+		accouts := vector.MustFixedColNoTypeCheck[uint32](tmpBatch.Vecs[ckputil.TableObjectsAttr_Accout_Idx])
+		dbids := vector.MustFixedColNoTypeCheck[uint64](tmpBatch.Vecs[ckputil.TableObjectsAttr_DB_Idx])
+		tableIds := vector.MustFixedColNoTypeCheck[uint64](tmpBatch.Vecs[ckputil.TableObjectsAttr_Table_Idx])
+		objectTypes := vector.MustFixedColNoTypeCheck[int8](tmpBatch.Vecs[ckputil.TableObjectsAttr_ObjectType_Idx])
+		objectStatsVec := tmpBatch.Vecs[ckputil.TableObjectsAttr_ID_Idx]
+		createTSs := vector.MustFixedColNoTypeCheck[types.TS](tmpBatch.Vecs[ckputil.TableObjectsAttr_CreateTS_Idx])
+		deleteTSs := vector.MustFixedColNoTypeCheck[types.TS](tmpBatch.Vecs[ckputil.TableObjectsAttr_DeleteTS_Idx])
+		rowids := vector.MustFixedColNoTypeCheck[types.Rowid](tmpBatch.Vecs[ckputil.TableObjectsAttr_PhysicalAddr_Idx])
 		for i, rows := 0, tmpBatch.RowCount(); i < rows; i++ {
 			if err = forEachRow(
 				accouts[i],
@@ -664,11 +664,12 @@ func (reader *CKPReader) ConsumeCheckpointWithTableID(
 			if end {
 				return
 			}
-			tableIds := vector.MustFixedColNoTypeCheck[uint64](tmpBatch.Vecs[2])
-			objectTypes := vector.MustFixedColNoTypeCheck[int8](tmpBatch.Vecs[3])
-			objectStatsVec := tmpBatch.Vecs[4]
-			createTSs := vector.MustFixedColNoTypeCheck[types.TS](tmpBatch.Vecs[5])
-			deleteTSs := vector.MustFixedColNoTypeCheck[types.TS](tmpBatch.Vecs[6])
+
+			tableIds := vector.MustFixedColNoTypeCheck[uint64](tmpBatch.Vecs[ckputil.TableObjectsAttr_Table_Idx])
+			objectTypes := vector.MustFixedColNoTypeCheck[int8](tmpBatch.Vecs[ckputil.TableObjectsAttr_ObjectType_Idx])
+			objectStatsVec := tmpBatch.Vecs[ckputil.TableObjectsAttr_ID_Idx]
+			createTSs := vector.MustFixedColNoTypeCheck[types.TS](tmpBatch.Vecs[ckputil.TableObjectsAttr_CreateTS_Idx])
+			deleteTSs := vector.MustFixedColNoTypeCheck[types.TS](tmpBatch.Vecs[ckputil.TableObjectsAttr_DeleteTS_Idx])
 
 			for i := 0; i < tmpBatch.RowCount(); i++ {
 				if tableIds[i] != reader.tid {
