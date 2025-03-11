@@ -513,7 +513,7 @@ func (tbl *txnTable) recurTransferDelete(
 		pkVec.Append(pk, false)
 		defer pkVec.Close()
 		rowIDVec := tbl.store.rt.VectorPool.Small.GetVector(&objectio.RowidType)
-		rowID := *types.NewRowid(&newID.BlockID, offset)
+		rowID := types.NewRowid(&newID.BlockID, offset)
 		rowIDVec.Append(rowID, false)
 		defer rowIDVec.Close()
 		//transfer the deletes to the target block.
@@ -692,8 +692,9 @@ func (tbl *txnTable) CreateObject(isTombstone bool) (obj handle.Object, err erro
 		counter.TAE.Object.Create.Add(1)
 	})
 	sorted := isTombstone
+	noid := objectio.NewObjectid()
 	stats := objectio.NewObjectStatsWithObjectID(
-		objectio.NewObjectid(),
+		&noid,
 		true,
 		sorted,
 		false,

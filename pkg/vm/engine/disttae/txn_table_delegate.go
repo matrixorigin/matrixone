@@ -543,9 +543,9 @@ func (tbl *txnTableDelegate) BuildShardingReaders(
 		return []engine.Reader{new(readutil.EmptyReader)}, nil
 	}
 
-	if orderBy && num != 1 {
-		return nil, moerr.NewInternalErrorNoCtx("orderBy only support one reader")
-	}
+	//if orderBy && num != 1 {
+	//	return nil, moerr.NewInternalErrorNoCtx("orderBy only support one reader")
+	//}
 
 	_, uncommittedObjNames := tbl.origin.collectUnCommittedDataObjs(txnOffset)
 	uncommittedTombstones, err := tbl.origin.CollectTombstones(

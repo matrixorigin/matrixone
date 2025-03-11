@@ -183,6 +183,10 @@ func generateSeriesPrepare(proc *process.Process, tableFunction *TableFunction) 
 	return st, err
 }
 
+func (g *generateSeriesArg) end(tf *TableFunction, proc *process.Process) error {
+	return nil
+}
+
 func (g *generateSeriesArg) reset(tf *TableFunction, proc *process.Process) {
 	if g.batch != nil {
 		g.batch.CleanOnlyData()

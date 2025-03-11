@@ -580,8 +580,8 @@ func (tbl *txnTable) CollectTombstones(
 			})
 
 		//collect uncommitted in-memory tombstones belongs to blocks persisted by CN writing S3
-		tbl.getTxn().deletedBlocks.getDeletedRowIDs(func(row *types.Rowid) {
-			tombstone.AppendInMemory(*row)
+		tbl.getTxn().deletedBlocks.getDeletedRowIDs(func(row types.Rowid) {
+			tombstone.AppendInMemory(row)
 		})
 
 		//collect uncommitted persisted tombstones.
@@ -1918,9 +1918,9 @@ func (tbl *txnTable) BuildReaders(
 	var rds []engine.Reader
 	proc := p.(*process.Process)
 
-	if orderBy && num != 1 {
-		return nil, moerr.NewInternalErrorNoCtx("orderBy only support one reader")
-	}
+	//if orderBy && num != 1 {
+	//	return nil, moerr.NewInternalErrorNoCtx("orderBy only support one reader")
+	//}
 
 	//relData maybe is nil, indicate that only read data from memory.
 	if relData == nil || relData.DataCnt() == 0 {
