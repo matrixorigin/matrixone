@@ -102,16 +102,8 @@ func (shuffle *Shuffle) Call(proc *process.Process) (vm.CallResult, error) {
 		if bat == nil {
 			shuffle.ctr.ending = true
 			shuffle.ctr.lastForShufflePool = shuffle.ctr.shufflePool.Ending()
-			if shuffle.ctr.lastForShufflePool {
-				//send shuffle pool
-				shuffle.ctr.buf = shuffle.ctr.shufflePool.GetEndingBatch(proc)
-				if shuffle.ctr.buf == nil {
-					result.Status = vm.ExecStop
-				} else {
-					result.Status = vm.ExecHasMore
-				}
-				result.Batch = shuffle.ctr.buf
-			}
+			result.Status = vm.ExecNext
+			result.Batch = batch.EmptyBatch
 			return result, nil
 		} else if !bat.IsEmpty() {
 			if shuffle.ShuffleType == int32(plan.ShuffleType_Hash) {

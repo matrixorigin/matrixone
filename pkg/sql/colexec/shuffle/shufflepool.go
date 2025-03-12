@@ -40,6 +40,9 @@ func NewShufflePool(bucketNum int32, maxHolders int32) *ShufflePool {
 	sp.holders = 0
 	sp.finished = 0
 	sp.batches = make([]*batch.CompactBatchs, sp.bucketNum)
+	for i := range sp.batches {
+		sp.batches[i] = batch.NewCompactBatchs()
+	}
 	sp.locks = make([]sync.Mutex, bucketNum)
 	sp.fullBatchIdx = make([]int, 0, bucketNum)
 	return sp
