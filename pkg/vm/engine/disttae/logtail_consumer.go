@@ -367,10 +367,10 @@ func (c *PushClient) validLogTailMustApplied(snapshotTS timestamp.Timestamp) {
 		ts))
 }
 
-func (c *PushClient) skipSubscribeIf(
+func (c *PushClient) skipSubIfSubscribed(
 	ctx context.Context, tbl *txnTable) (bool, *logtailreplay.PartitionState) {
 	//if table has been subscribed, return quickly.
-	if ps, ok := c.isSubscribed(tbl.db.databaseId, tbl.tableId); ok {
+	if ps, ok, _ := c.isSubscribed(tbl.db.databaseId, tbl.tableId); ok {
 		return true, ps
 	}
 
@@ -388,7 +388,7 @@ func (c *PushClient) toSubscribeTable(
 	tbl *txnTable) (ps *logtailreplay.PartitionState, err error) {
 
 	var skip bool
-	if skip, ps = c.skipSubscribeIf(ctx, tbl); skip {
+	if skip, ps = c.skipSubIfSubscribed(ctx, tbl); skip {
 		return ps, nil
 	}
 
@@ -426,9 +426,12 @@ func (c *PushClient) toSubscribeTable(
 
 		case Subscribed:
 			//if table has been subscribed, return the ps.
-			logutil.Infof("%s subscribe tbl[db: %d, tbl: %d, %s] succeed",
-				logTag, tbl.db.databaseId, tbl.tableId, tbl.tableName)
-			return
+			ps, _, state = c.isSubscribed(tbl.db.databaseId, tableId)
+			if ps != nil {
+				logutil.Infof("%s subscribe tbl[db: %d, tbl: %d, %s] succeed",
+					logTag, tbl.db.databaseId, tbl.tableId, tbl.tableName)
+				return
+			}
 
 		case Unsubscribed:
 			panic("Impossible Path")
@@ -1105,7 +1108,7 @@ type SubTableStatus struct {
 	LatestTime time.Time
 }
 
-func (c *PushClient) isSubscribed(dbId, tId uint64) (*logtailreplay.PartitionState, bool) {
+func (c *PushClient) isSubscribed(dbId, tId uint64) (*logtailreplay.PartitionState, bool, SubscribeState) {
 	s := &c.subscribed
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
@@ -1118,9 +1121,12 @@ func (c *PushClient) isSubscribed(dbId, tId uint64) (*logtailreplay.PartitionSta
 			SubState:   Subscribed,
 			LatestTime: time.Now(),
 		}
-		return c.eng.GetOrCreateLatestPart(dbId, tId).Snapshot(), true
+		return c.eng.GetOrCreateLatestPart(dbId, tId).Snapshot(), true, Subscribed
 	}
-	return nil, false
+	if !exist {
+		return nil, false, Unsubscribed
+	}
+	return nil, false, v.SubState
 }
 
 func (c *PushClient) toSubIfUnsubscribed(ctx context.Context, dbId, tblId uint64) (SubscribeState, error) {
