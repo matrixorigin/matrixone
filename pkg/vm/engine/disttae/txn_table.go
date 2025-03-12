@@ -1996,6 +1996,10 @@ func (tbl *txnTable) getPartitionState(
 	if ps != nil {
 		start, end = ps.GetDuration()
 	}
+	errStr := ""
+	if err != nil {
+		errStr = err.Error()
+	}
 	logutil.Infof(
 		"xxxx Try to get snapshot partition state, tbl:%p, table name:%s, tid:%v, txn:%s, isSnspshot:%v, ps:%p[%s_%s], err:%s",
 		tbl,
@@ -2006,7 +2010,7 @@ func (tbl *txnTable) getPartitionState(
 		ps,
 		start.ToString(),
 		end.ToString(),
-		err.Error(),
+		errStr,
 	)
 
 	//If ps == nil, it indicates that subscribe failed due to 1: network timeout,
