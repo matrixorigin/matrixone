@@ -181,6 +181,7 @@ func (sp *ShufflePoolV2) getFullBatch(shuffleIDX int32) *batch.Batch {
 	var bat *batch.Batch
 	if sp.batches[shuffleIDX].Length() > 1 {
 		bat = sp.batches[shuffleIDX].PopFront()
+		bat.ShuffleIDX = shuffleIDX
 	}
 	return bat
 }
@@ -190,6 +191,7 @@ func (sp *ShufflePoolV2) getLastBatch(shuffleIDX int32) *batch.Batch {
 	defer sp.batchLocks[shuffleIDX].Unlock()
 
 	bat := sp.batches[shuffleIDX].Pop()
+	bat.ShuffleIDX = shuffleIDX
 	return bat
 }
 
