@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/stretchr/testify/require"
 	"testing"
+	"time"
 )
 
 func TestStopStartMerge(t *testing.T) {
@@ -91,4 +92,22 @@ func TestStopStartMerge(t *testing.T) {
 	scheduler.StartMerge(tblEntry2.GetID(), false)
 	require.Equal(t, 0, len(lockService.LockedInfos()))
 	require.Equal(t, 0, len(lockService.Indexes()))
+}
+
+func TestSkippedFromOOM(t *testing.T) {
+	memStorage := taskservice.NewMemTaskStorage()
+	cnScheduler := NewTaskServiceGetter(func() (taskservice.TaskService, bool) {
+		return taskservice.NewTaskService(runtime.DefaultRuntime(), memStorage), true
+	})
+
+	scheduler := Scheduler{
+		executor: newMergeExecutor(&dbutils.Runtime{
+			LockMergeService: dbutils.NewLockMergeService(),
+		}, cnScheduler),
+		rc: new(resourceController),
+	}
+	scheduler.rc.skippedFromOOM = true
+	scheduler.rc.oomSleepDuration = time.Second
+	require.Error(t, scheduler.onTable(nil))
+	require.NoError(t, scheduler.PostExecute())
 }

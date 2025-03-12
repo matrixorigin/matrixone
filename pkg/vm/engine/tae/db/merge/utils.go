@@ -193,8 +193,9 @@ type resourceController struct {
 	using    int64
 	reserved int64
 
-	reservedMergeRows int64
-	transferPageLimit int64
+	reservedMergeRows     int64
+	transferPageLimit     int64
+	skipForTransPageLimit bool
 
 	cpuPercent float64
 
@@ -202,7 +203,8 @@ type resourceController struct {
 	count          int
 	prevCount      int
 
-	tableStart time.Time
+	tableStart       time.Time
+	oomSleepDuration time.Duration
 }
 
 func (c *resourceController) setMemLimit(total uint64) {
@@ -252,9 +254,9 @@ func (c *resourceController) refresh() {
 	}
 	c.reservedMergeRows = 0
 	c.reserved = 0
-
 	c.skippedFromOOM = false
 	c.count = 0
+	c.skipForTransPageLimit = false
 }
 
 func (c *resourceController) availableMem() int64 {

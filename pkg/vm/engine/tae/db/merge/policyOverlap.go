@@ -116,10 +116,10 @@ func (m *objOverlapPolicy) revise(rc *resourceController) []reviseResult {
 
 	checkNonoverlapObj := func(objs []*catalog.ObjectEntry, note string) {
 		tmp := make([]*catalog.ObjectEntry, 0)
-		sum := uint32(0)
+		sum := 0
 		for _, obj := range objs {
-			if obj.OriginSize() < m.config.MaxOsizeMergedObj/2 || sum < m.config.MaxOsizeMergedObj/2 {
-				sum += obj.OriginSize()
+			if obj.OriginSize() < m.config.MaxOsizeMergedObj/2 || sum < int(m.config.MaxOsizeMergedObj)/2 {
+				sum += int(obj.OriginSize())
 				tmp = append(tmp, obj)
 			} else {
 				if len(tmp) > 1 {
