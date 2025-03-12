@@ -59,22 +59,46 @@ func (shuffle *ShuffleV2) Call(proc *process.Process) (vm.CallResult, error) {
 	analyzer := shuffle.OpAnalyzer
 
 	result := vm.NewCallResult()
-SENDLAST:
-	if shuffle.ctr.ending { //send last batch in shuffle pool
-		result.Batch = shuffle.ctr.shufflePool.getEndingBatch(shuffle.ctr.buf, shuffle.CurrentShuffleIdx, proc, shuffle.IsDebug)
-		shuffle.ctr.buf = result.Batch
+
+	if shuffle.ctr.buf != nil {
+		shuffle.ctr.buf.Clean(proc.Mp())
+		shuffle.ctr.buf = nil
+	}
+
+	tmpBat := shuffle.ctr.shufflePool.getFullBatch(shuffle.CurrentShuffleIdx)
+	if tmpBat != nil && tmpBat.RowCount() > 0 {
+		shuffle.ctr.buf = tmpBat
+		result.Batch = shuffle.ctr.buf
 		return result, nil
 	}
 
-	var err error
-	for {
-		tmpBat := shuffle.ctr.shufflePool.getFullBatch(shuffle.ctr.buf, shuffle.CurrentShuffleIdx)
-		if tmpBat != nil && tmpBat.RowCount() > 0 { // find a full batch
+	if shuffle.ctr.shufflePool.allStop() {
+		shuffle.ctr.ending = true
+		tmpBat := shuffle.ctr.shufflePool.getLastBatch(shuffle.CurrentShuffleIdx)
+		if tmpBat != nil {
 			shuffle.ctr.buf = tmpBat
-			break
+			result.Batch = tmpBat
+			return result, nil
 		}
+		return vm.CancelResult, nil
+	}
+
+	if shuffle.ctr.ending {
+		shuffle.ctr.shufflePool.waitBatchOrEnd(shuffle.CurrentShuffleIdx, proc)
+		result.Batch = batch.EmptyBatch
+		return result, nil
+	}
+
+	for {
+		tmpBat := shuffle.ctr.shufflePool.getFullBatch(shuffle.CurrentShuffleIdx)
+		if tmpBat != nil { // find a full batch
+			shuffle.ctr.buf = tmpBat
+			result.Batch = shuffle.ctr.buf
+			return result, nil
+		}
+
 		// do input
-		result, err = vm.ChildrenCall(shuffle.GetChildren(0), proc, analyzer)
+		result, err := vm.ChildrenCall(shuffle.GetChildren(0), proc, analyzer)
 		if err != nil {
 			return result, err
 		}
@@ -82,7 +106,8 @@ SENDLAST:
 		if bat == nil {
 			shuffle.ctr.ending = true
 			shuffle.ctr.shufflePool.stopWriting()
-			goto SENDLAST
+			result.Batch = batch.EmptyBatch
+			return result, nil
 		} else if !bat.IsEmpty() {
 			if shuffle.ShuffleType == int32(plan.ShuffleType_Hash) {
 				bat, err = hashShuffle(shuffle, bat, proc)
@@ -99,9 +124,6 @@ SENDLAST:
 			}
 		}
 	}
-	// send the batch
-	result.Batch = shuffle.ctr.buf
-	return result, nil
 }
 
 func (shuffle *ShuffleV2) clearSels() [][]int32 {

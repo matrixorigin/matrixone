@@ -269,15 +269,21 @@ type ParamExpressionExecutor struct {
 	vec  *vector.Vector
 	pos  int
 	typ  types.Type
+
+	folded bool
 }
 
 func (expr *ParamExpressionExecutor) Eval(proc *process.Process, _ []*batch.Batch, _ []bool) (*vector.Vector, error) {
-	if expr.vec != nil {
-		return expr.vec, nil
+	if expr.folded {
+		if expr.null != nil {
+			return expr.null, nil
+		}
+		if expr.vec != nil {
+			return expr.vec, nil
+		}
 	}
-	if expr.null != nil {
-		return expr.null, nil
-	}
+
+	expr.folded = true
 	val, err := proc.GetPrepareParamsAt(expr.pos)
 	if err != nil {
 		return nil, err

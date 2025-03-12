@@ -389,6 +389,27 @@ func (parser *CSVParser) tryPeekExact(content []byte) (matched bool, eof bool, e
 	return false, false, err
 }
 
+func (parser *CSVParser) tryPeekNewLine(content []byte) (matched bool, eof bool, err error) {
+	if len(content) == 0 {
+		return true, false, nil
+	}
+	bs, err := parser.peekBytes(len(content))
+	if err == nil {
+		if bytes.Equal(bs, content) {
+			return true, false, nil
+		}
+		if bytes.Equal(content, []byte{'\n'}) {
+			if bytes.Equal(bs, []byte{'\r'}) {
+				parser.skipBytes(1)
+				return true, false, nil
+			}
+		}
+	} else if err == io.EOF {
+		return false, true, nil
+	}
+	return false, false, err
+}
+
 // tryReadExact peeks the bytes ahead, and if it matches `content` exactly will
 // consume it (advance the cursor) and return `true`.
 func (parser *CSVParser) tryReadExact(content []byte) (bool, error) {
@@ -400,9 +421,10 @@ func (parser *CSVParser) tryReadExact(content []byte) (bool, error) {
 }
 
 func (parser *CSVParser) tryReadNewLine(b byte) (bool, error) {
-	if len(parser.newLine) == 0 {
+	if len(parser.newLine) == 0 || bytes.Equal(parser.newLine, []byte{'\n'}) {
 		return b == '\r' || b == '\n', nil
 	}
+
 	if b != parser.newLine[0] {
 		return false, nil
 	}
@@ -689,10 +711,12 @@ func (parser *CSVParser) readQuotedField() error {
 				if comma || err2 != nil {
 					return err2
 				}
-				newline, eof, err2 := parser.tryPeekExact(parser.newLine)
+
+				newline, eof, err2 := parser.tryPeekNewLine(parser.newLine)
 				if eof || newline {
 					return nil
 				}
+
 				if err2 != nil {
 					return err2
 				}
