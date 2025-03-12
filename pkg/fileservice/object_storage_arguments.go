@@ -53,6 +53,7 @@ type ObjectStorageArguments struct {
 	SessionToken    string `json:"-" toml:"session-token"`
 
 	// HDFS
+	IsHDFS                       bool   `toml:"is-hdfs"`
 	User                         string `toml:"user"`
 	KerberosServicePrincipleName string `toml:"kerberos-service-principle-name"`
 	KerberosUsername             string `toml:"kerberos-username"`
@@ -132,6 +133,8 @@ func (o *ObjectStorageArguments) SetFromString(arguments []string) error {
 
 		case "user":
 			o.User = value
+		case "is-hdfs":
+			o.IsHDFS = value != "false" && value != "0"
 
 		case "kerberos-service-principle-name":
 			o.KerberosServicePrincipleName = value

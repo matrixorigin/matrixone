@@ -639,6 +639,13 @@ func (txn *Transaction) dumpInsertBatchLocked(ctx context.Context, offset int, s
 
 	txn.writes = writes[:lastWriteIndex]
 
+	var s3Writer *colexec.S3Writer
+	defer func() {
+		if s3Writer != nil {
+			s3Writer.Free(txn.proc.GetMPool())
+		}
+	}()
+
 	for tbKey := range mp {
 		// scenario 2 for cn write s3, more info in the comment of S3Writer
 		tbl, err := txn.getTable(tbKey.accountId, tbKey.dbName, tbKey.name)
@@ -648,53 +655,71 @@ func (txn *Transaction) dumpInsertBatchLocked(ctx context.Context, offset int, s
 
 		tableDef := tbl.GetTableDef(txn.proc.Ctx)
 
-		s3Writer, err := colexec.NewS3Writer(tableDef, 0)
-		if err != nil {
-			return err
-		}
-		defer s3Writer.Free(txn.proc.GetMPool())
-		for i := 0; i < len(mp[tbKey]); i++ {
-			s3Writer.StashBatch(txn.proc, mp[tbKey][i])
-		}
-		blockInfos, stats, err := s3Writer.SortAndSync(ctx, txn.proc)
-		if err != nil {
-			return err
-		}
-		err = s3Writer.FillBlockInfoBat(blockInfos, stats, txn.proc.GetMPool())
-		if err != nil {
-			return err
-		}
-		blockInfo := s3Writer.GetBlockInfoBat()
+		// TODO(ghs): simple fix, will refactor later
+		// split batches to multiple objects if batches size exceed the threshold
+		idx := 0
+		threshold := objectio.ObjectSizeLimit * 6 / 10
 
-		lenVecs := len(blockInfo.Attrs)
-		// only remain the metaLoc col and object stats
-		for i := 0; i < lenVecs-2; i++ {
-			blockInfo.Vecs[i].Free(txn.proc.GetMPool())
-		}
-		blockInfo.Vecs = blockInfo.Vecs[lenVecs-2:]
-		blockInfo.Attrs = blockInfo.Attrs[lenVecs-2:]
-		blockInfo.SetRowCount(blockInfo.Vecs[0].Length())
+		for idx < len(mp[tbKey]) {
+			stashSize := 0
+			if s3Writer != nil {
+				s3Writer.Free(txn.proc.GetMPool())
+			}
 
-		var table *txnTable
-		if v, ok := tbl.(*txnTableDelegate); ok {
-			table = v.origin
-		} else {
-			table = tbl.(*txnTable)
-		}
-		fileName := objectio.DecodeBlockInfo(blockInfo.Vecs[0].GetBytesAt(0)).MetaLocation().Name().String()
-		err = table.getTxn().WriteFileLocked(
-			INSERT,
-			table.accountId,
-			table.db.databaseId,
-			table.tableId,
-			table.db.databaseName,
-			table.tableName,
-			fileName,
-			blockInfo,
-			table.getTxn().tnStores[0],
-		)
-		if err != nil {
-			return err
+			s3Writer, err = colexec.NewS3Writer(tableDef, 0)
+			if err != nil {
+				return err
+			}
+
+			for ; stashSize < threshold && idx < len(mp[tbKey]); idx++ {
+				stashSize += mp[tbKey][idx].Size()
+				s3Writer.StashBatch(txn.proc, mp[tbKey][idx])
+			}
+
+			if stashSize == 0 {
+				break
+			}
+
+			blockInfos, stats, err := s3Writer.SortAndSync(ctx, txn.proc)
+			if err != nil {
+				return err
+			}
+			err = s3Writer.FillBlockInfoBat(blockInfos, stats, txn.proc.GetMPool())
+			if err != nil {
+				return err
+			}
+			blockInfo := s3Writer.GetBlockInfoBat()
+
+			lenVecs := len(blockInfo.Attrs)
+			// only remain the metaLoc col and object stats
+			for i := 0; i < lenVecs-2; i++ {
+				blockInfo.Vecs[i].Free(txn.proc.GetMPool())
+			}
+			blockInfo.Vecs = blockInfo.Vecs[lenVecs-2:]
+			blockInfo.Attrs = blockInfo.Attrs[lenVecs-2:]
+			blockInfo.SetRowCount(blockInfo.Vecs[0].Length())
+
+			var table *txnTable
+			if v, ok := tbl.(*txnTableDelegate); ok {
+				table = v.origin
+			} else {
+				table = tbl.(*txnTable)
+			}
+			fileName := objectio.DecodeBlockInfo(blockInfo.Vecs[0].GetBytesAt(0)).MetaLocation().Name().String()
+			err = table.getTxn().WriteFileLocked(
+				INSERT,
+				table.accountId,
+				table.db.databaseId,
+				table.tableId,
+				table.db.databaseName,
+				table.tableName,
+				fileName,
+				blockInfo,
+				table.getTxn().tnStores[0],
+			)
+			if err != nil {
+				return err
+			}
 		}
 	}
 	return nil
