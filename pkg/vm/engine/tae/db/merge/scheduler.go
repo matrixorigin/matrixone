@@ -38,8 +38,6 @@ type Scheduler struct {
 	policies *policyGroup
 	executor *executor
 
-	skipForTransPageLimit bool
-
 	rc *resourceController
 }
 
@@ -55,6 +53,7 @@ func NewScheduler(rt *dbutils.Runtime, sched *CNMergeScheduler) *Scheduler {
 		executor:      newMergeExecutor(rt, sched),
 		rc:            new(resourceController),
 	}
+	op.rc.oomSleepDuration = time.Minute
 
 	op.DatabaseFn = op.onDataBase
 	op.TableFn = op.onTable
@@ -83,28 +82,27 @@ func (s *Scheduler) resetForTable(entry *catalog.TableEntry) {
 
 func (s *Scheduler) PreExecute() error {
 	s.rc.refresh()
-	s.skipForTransPageLimit = false
-	m := &dto.Metric{}
+	m := new(dto.Metric)
 	if err := v2.TaskMergeTransferPageLengthGauge.Write(m); err != nil {
 		return err
 	}
-	pagesize := m.GetGauge().GetValue() * 28 /*int32 + rowid(24b)*/
-	if pagesize > float64(s.rc.transferPageLimit) {
+	pageSize := m.GetGauge().GetValue() * 28 /*int32 + rowid(24b)*/
+	if pageSize > float64(s.rc.transferPageLimit) {
 		logutil.Infof("[mergeblocks] skip merge scanning due to transfer page %s, limit %s",
-			common.HumanReadableBytes(int(pagesize)),
+			common.HumanReadableBytes(int(pageSize)),
 			common.HumanReadableBytes(int(s.rc.transferPageLimit)))
-		s.skipForTransPageLimit = true
+		s.rc.skipForTransPageLimit = true
 	}
-	logutil.Info("MergeExecutorEvent", zap.String("event", "begin"), zap.Int("prevBreakPoint", s.rc.prevCount), zap.String("avail", common.HumanReadableBytes(int(s.rc.availableMem()))))
+	logutil.Info("[MERGE-SCHEDULE]", zap.String("event", "begin"), zap.Int("prevBreakPoint", s.rc.prevCount), zap.String("avail", common.HumanReadableBytes(int(s.rc.availableMem()))))
 	return nil
 }
 
 func (s *Scheduler) PostExecute() error {
 	s.rc.printStats()
 	if s.rc.skippedFromOOM {
-		logutil.Info("MergeExecutorEvent", zap.String("event", "Merge Skipped from OOM"))
+		logutil.Info("[MERGE-SCHEDULE]", zap.String("event", "Merge Skipped from OOM"))
 		// if previous merge is too large, wait for a while.
-		time.Sleep(time.Minute)
+		time.Sleep(s.rc.oomSleepDuration)
 	} else {
 		s.rc.prevCount = 0
 	}
@@ -119,7 +117,7 @@ func (s *Scheduler) onDataBase(*catalog.DBEntry) (err error) {
 		return moerr.GetOkStopCurrRecur()
 	}
 
-	if s.skipForTransPageLimit {
+	if s.rc.skipForTransPageLimit {
 		return moerr.GetOkStopCurrRecur()
 	}
 
@@ -142,14 +140,14 @@ func (s *Scheduler) onTable(tableEntry *catalog.TableEntry) (err error) {
 	if s.rc.availableMem() < 100*common.Const1MBytes {
 		s.rc.skippedFromOOM = true
 		s.rc.prevCount = s.rc.count
-		logutil.Info("MergeExecutorEvent", zap.String("event", "skip table scane due to memcontrol"),
+		logutil.Info("[MERGE-SCHEDULE]", zap.String("event", "skip table scan due to memory control"),
 			zap.Int("breakpoint", s.rc.count),
 			zap.String("table", fmt.Sprintf("%v-%v", tableEntry.ID, tableEntry.GetLastestSchema(false).Name)))
 		return moerr.GetOkStopCurrRecur()
 	}
 
 	if s.executor.rt.LockMergeService.IsLockedByUser(tableEntry.ID, tableEntry.GetLastestSchema(false).Name) {
-		logutil.Infof("LockMerge skip table scan due to user lock %d", tableEntry.ID)
+		logutil.Infof("[MERGE-SCHEDULE] LockMerge skip table scan due to user lock %d", tableEntry.ID)
 		return moerr.GetOkStopCurrRecur()
 	}
 
