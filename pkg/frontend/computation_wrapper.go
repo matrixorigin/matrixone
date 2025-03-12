@@ -207,12 +207,13 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 
 	cacheHit := cwft.plan != nil
 	if !cacheHit {
-		cwft.plan, err = buildPlanWithAuthorization(execCtx.reqCtx, cwft.ses, cwft.ses.GetTxnCompileCtx(), cwft.stmt)
+		cwft.plan, err = buildPlan(execCtx.reqCtx, cwft.ses, cwft.ses.GetTxnCompileCtx(), cwft.stmt)
 		if err != nil {
 			return nil, err
 		}
-		//cwft.plan, err = buildPlan(execCtx.reqCtx, cwft.ses, cwft.ses.GetTxnCompileCtx(), cwft.stmt)
-	} else if cwft.ses != nil && cwft.ses.GetTenantInfo() != nil && !cwft.ses.IsBackgroundSession() {
+	}
+
+	if cwft.ses != nil && cwft.ses.GetTenantInfo() != nil && !cwft.ses.IsBackgroundSession() {
 		var accId uint32
 		accId, err = defines.GetAccountId(execCtx.reqCtx)
 		if err != nil {
@@ -220,23 +221,19 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 		}
 		cwft.ses.SetAccountId(accId)
 
-		//err = authenticateCanExecuteStatementAndPlan(execCtx.reqCtx, cwft.ses.(*Session), cwft.stmt, cwft.plan)
-		authStats, err := authenticateCanExecuteStatementAndPlan(execCtx.reqCtx, cwft.ses.(*Session), cwft.stmt, cwft.plan)
-		if err != nil {
-			return nil, err
+		// the content of prepare sql don't need to authenticate when execute stmt
+		if !execCtx.input.isBinaryProtExecute {
+			authStats, err := authenticateCanExecuteStatementAndPlan(execCtx.reqCtx, cwft.ses.(*Session), cwft.stmt, cwft.plan)
+			if err != nil {
+				return nil, err
+			}
+			// record permission statistics.
+			stats.PermissionAuth.Add(&authStats)
 		}
-		// record permission statistics.
-		stats.PermissionAuth.Add(&authStats)
 	}
-	//if err != nil {
-	//	return nil, err
-	//}
+
 	if !cwft.ses.IsBackgroundSession() {
 		cwft.ses.SetPlan(cwft.plan)
-		//if err := checkResultQueryPrivilege(cwft.proc, cwft.plan, execCtx.reqCtx, cwft.ses.GetService(), cwft.ses.(*Session)); err != nil {
-		//	return nil, err
-		//}
-
 		authStats, err := checkResultQueryPrivilege(cwft.proc, cwft.plan, execCtx.reqCtx, cwft.ses.GetService(), cwft.ses.(*Session))
 		if err != nil {
 			return nil, err
@@ -255,9 +252,6 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 			if err != nil {
 				return nil, err
 			}
-			//if err := checkResultQueryPrivilege(cwft.proc, plan, execCtx.reqCtx, cwft.ses.GetService(), cwft.ses.(*Session)); err != nil {
-			//	return nil, err
-			//}
 			authStats, err := checkResultQueryPrivilege(cwft.proc, plan, execCtx.reqCtx, cwft.ses.GetService(), cwft.ses.(*Session))
 			if err != nil {
 				return nil, err
