@@ -1194,7 +1194,7 @@ func (c *PushClient) loadAndConsumeLatestCkp(
 	if exist && (v.SubState == SubRspReceived || v.SubState == Subscribed) {
 		_, err := c.eng.LazyLoadLatestCkp(ctx, tbl)
 		if err != nil {
-			return InvalidSubState, nil, err
+			return InvalidSubState, err
 		}
 		//update latest time
 		c.subscribed.m[tableId] = SubTableStatus{
