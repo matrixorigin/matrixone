@@ -11803,18 +11803,33 @@ func Test_RWDB3(t *testing.T) {
 					return false
 				}
 				assert.Equal(t, 5, rows)
-				val, _, err := rel.GetValueByFilter(
-					context.Background(),
-					filter,
-					3,
-				)
-				if err != nil {
-					assert.NoError(t, txn.Commit(ctx))
-					return false
-				}
+
+				found := false
+				currentVal := int64(0)
+				testutil.ForEachObject(t, rel, func(obj handle.Object) error {
+					var view *containers.Batch
+					err := obj.HybridScan(context.Background(), &view, 0, []int{2, 3}, common.DefaultAllocator)
+					if err != nil {
+						return err
+					}
+					defer view.Close()
+					pks := vector.MustFixedColNoTypeCheck[int32](view.Vecs[0].GetDownstreamVector())
+					vals := vector.MustFixedColNoTypeCheck[int64](view.Vecs[1].GetDownstreamVector())
+					for i, pk := range pks {
+						if pk == pkv && !view.Deletes.Contains(uint64(i)) {
+							if found {
+								return moerr.NewInternalErrorNoCtx("found more than one value")
+							}
+							found = true
+							currentVal = vals[i]
+							return nil
+						}
+					}
+					return nil
+				})
 				assert.NoError(t, err)
 				assert.NoError(t, txn.Commit(ctx))
-				return val == int64(99)
+				return currentVal == 99
 			},
 		)
 
