@@ -213,9 +213,9 @@ func (s *Service) Filter(
 		return nil, err
 	}
 
-	var res []int
-	for _, p := range metadata.Partitions {
-		res = append(res, int(p.Position))
+	res := make([]int, len(metadata.Partitions))
+	for i, p := range metadata.Partitions {
+		res[i] = int(p.Position)
 	}
 	return res, nil
 }

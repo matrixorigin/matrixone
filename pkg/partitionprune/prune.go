@@ -28,13 +28,13 @@ func Prune(
 	bat *batch.Batch,
 	metadata partition.PartitionMetadata,
 ) (partitionservice.PruneResult, error) {
-	var bats []*batch.Batch
-	for _, p := range metadata.Partitions {
+	bats := make([]*batch.Batch, len(metadata.Partitions))
+	for i, p := range metadata.Partitions {
 		res, err := PrunePartitionByExpr(proc, bat, p)
 		if err != nil {
 			return partitionservice.PruneResult{}, err
 		}
-		bats = append(bats, res)
+		bats[i] = res
 	}
 	return partitionservice.NewPruneResult(bats, metadata.Partitions), nil
 }

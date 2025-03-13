@@ -39,10 +39,6 @@ func (p *PartitionBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, 
 	return p.baseBindColRef(astExpr, depth, isRoot)
 }
 
-func (p *PartitionBinder) bindColRef(name *tree.UnresolvedName, i int32, b bool) (expr *plan.Expr, err error) {
-	return p.baseBindColRef(name, i, b)
-}
-
 func (p *PartitionBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
 	return nil, moerr.NewInvalidInputf(p.GetContext(), "cannot bind agregate functions '%s'", funcName)
 }
