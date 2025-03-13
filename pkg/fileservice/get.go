@@ -16,8 +16,10 @@ package fileservice
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -28,6 +30,7 @@ func Get[T any](fs FileService, name string) (res T, err error) {
 	if fs, ok := fs.(*FileServices); ok {
 		f, ok := fs.mappings[lowerName]
 		if !ok {
+			fmt.Println(string(debug.Stack()))
 			err = moerr.NewNoServiceNoCtx(name)
 			return
 		}

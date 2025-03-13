@@ -16,6 +16,8 @@ package insert
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"sync/atomic"
 	"time"
 
@@ -48,11 +50,13 @@ func (insert *Insert) Prepare(proc *process.Process) error {
 
 	insert.ctr.state = vm.Build
 	if insert.ToWriteS3 {
-		// If the target is not partition table, you only need to operate the main table
-		s3Writer, err := colexec.NewS3Writer(insert.InsertCtx.TableDef, 0)
+		fs, err := fileservice.Get[fileservice.FileService](proc.GetFileService(), defines.SharedFileServiceName)
 		if err != nil {
 			return err
 		}
+
+		// If the target is not partition table, you only need to operate the main table
+		s3Writer := colexec.NewCNS3DataWriter(proc.Mp(), fs, insert.InsertCtx.TableDef)
 		insert.ctr.s3Writer = s3Writer
 
 		if insert.ctr.buf == nil {
@@ -128,7 +132,7 @@ func (insert *Insert) insert_s3(proc *process.Process, analyzer process.Analyzer
 
 			// write to s3.
 			input.Batch.Attrs = append(input.Batch.Attrs[:0], insert.InsertCtx.Attrs...)
-			err = writeBatch(proc, insert.ctr.s3Writer, input.Batch, analyzer)
+			err = insert.ctr.s3Writer.Write(proc.Ctx, input.Batch)
 			if err != nil {
 				insert.ctr.state = vm.End
 				return vm.CancelResult, err
@@ -205,45 +209,47 @@ func (insert *Insert) insert_table(proc *process.Process, analyzer process.Analy
 	return input, nil
 }
 
-func writeBatch(proc *process.Process, writer *colexec.S3Writer, bat *batch.Batch, analyzer process.Analyzer) error {
-	if writer.StashBatch(proc, bat) {
-		crs := analyzer.GetOpCounterSet()
-		newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
+//func writeBatch(proc *process.Process, writer *colexec.S3Writer, bat *batch.Batch, analyzer process.Analyzer) error {
+//	if writer.StashBatch(proc, bat) {
+//		crs := analyzer.GetOpCounterSet()
+//		newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
+//
+//		blockInfos, stats, err := writer.SortAndSync(newCtx, proc)
+//		if err != nil {
+//			return err
+//		}
+//		analyzer.AddS3RequestCount(crs)
+//		analyzer.AddFileServiceCacheInfo(crs)
+//		analyzer.AddDiskIO(crs)
+//
+//		err = writer.FillBlockInfoBat(blockInfos, stats, proc.GetMPool())
+//		if err != nil {
+//			return err
+//		}
+//	}
+//	return nil
+//}
 
-		blockInfos, stats, err := writer.SortAndSync(newCtx, proc)
-		if err != nil {
-			return err
-		}
-		analyzer.AddS3RequestCount(crs)
-		analyzer.AddFileServiceCacheInfo(crs)
-		analyzer.AddDiskIO(crs)
+func flushTailBatch(
+	proc *process.Process,
+	writer *colexec.CNS3Writer,
+	result *vm.CallResult,
+	analyzer process.Analyzer,
+) error {
 
-		err = writer.FillBlockInfoBat(blockInfos, stats, proc.GetMPool())
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func flushTailBatch(proc *process.Process, writer *colexec.S3Writer, result *vm.CallResult, analyzer process.Analyzer) error {
 	crs := analyzer.GetOpCounterSet()
 	newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
 
-	blockInfos, stats, err := writer.FlushTailBatch(newCtx, proc)
-	if err != nil {
+	if _, err := writer.Sync(newCtx); err != nil {
 		return err
 	}
+
 	analyzer.AddS3RequestCount(crs)
 	analyzer.AddFileServiceCacheInfo(crs)
 	analyzer.AddDiskIO(crs)
 
-	// if stats is not zero, then the blockInfos must not be nil
-	if !stats.IsZero() {
-		err = writer.FillBlockInfoBat(blockInfos, stats, proc.GetMPool())
-		if err != nil {
-			return err
-		}
+	if _, err := writer.FillBlockInfoBat(proc.Mp()); err != nil {
+		return err
 	}
 
 	return writer.Output(proc, result)

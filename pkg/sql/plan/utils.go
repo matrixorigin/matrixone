@@ -1919,6 +1919,12 @@ func ExprType2Type(typ *plan.Type) types.Type {
 	return types.New(types.T(typ.Id), typ.Width, typ.Scale)
 }
 
+func PkTypeByTableDef(tblDef *plan.TableDef) types.Type {
+	pkColIdx := tblDef.Name2ColIndex[tblDef.Pkey.PkeyColName]
+	pkCol := tblDef.Cols[pkColIdx]
+	return ExprType2Type(&pkCol.Typ)
+}
+
 func FormatExprs(exprs []*plan.Expr) string {
 	var w bytes.Buffer
 	for _, expr := range exprs {

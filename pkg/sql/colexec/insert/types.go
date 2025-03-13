@@ -15,11 +15,8 @@
 package insert
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -36,8 +33,8 @@ var _ vm.Operator = new(Insert)
 
 type container struct {
 	state              vm.CtrState
-	s3Writer           *colexec.S3Writer
-	partitionS3Writers []*colexec.S3Writer // The array is aligned with the partition number array
+	s3Writer           *colexec.CNS3Writer
+	partitionS3Writers []*colexec.CNS3Writer // The array is aligned with the partition number array
 	buf                *batch.Batch
 	affectedRows       uint64
 
@@ -97,12 +94,12 @@ type InsertCtx struct {
 func (insert *Insert) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	//@todo need add Reset method for s3Writer
 	if insert.ctr.s3Writer != nil {
-		insert.ctr.s3Writer.Free(proc.Mp())
+		insert.ctr.s3Writer.Close(proc.GetMPool())
 		insert.ctr.s3Writer = nil
 	}
 	if insert.ctr.partitionS3Writers != nil {
 		for _, writer := range insert.ctr.partitionS3Writers {
-			writer.Free(proc.Mp())
+			writer.Close(proc.GetMPool())
 		}
 		insert.ctr.partitionS3Writers = nil
 	}
@@ -117,14 +114,14 @@ func (insert *Insert) Reset(proc *process.Process, pipelineFailed bool, err erro
 // therefore, those argument in remote CN will be free in connector operator, and local argument will be free in mergeBlock operator
 func (insert *Insert) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if insert.ctr.s3Writer != nil {
-		insert.ctr.s3Writer.Free(proc.Mp())
+		insert.ctr.s3Writer.Close(proc.GetMPool())
 		insert.ctr.s3Writer = nil
 	}
 
 	// Free the partition table S3writer object resources
 	if insert.ctr.partitionS3Writers != nil {
 		for _, writer := range insert.ctr.partitionS3Writers {
-			writer.Free(proc.Mp())
+			writer.Close(proc.GetMPool())
 		}
 		insert.ctr.partitionS3Writers = nil
 	}
@@ -145,10 +142,12 @@ func (insert *Insert) GetAffectedRows() uint64 {
 }
 
 func (insert *Insert) initBufForS3() {
-	attrs := []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats}
-	insert.ctr.buf = batch.NewWithSize(len(attrs))
-	insert.ctr.buf.SetAttributes(attrs)
-	insert.ctr.buf.Vecs[0] = vector.NewVec(types.T_int16.ToType())
-	insert.ctr.buf.Vecs[1] = vector.NewVec(types.T_text.ToType())
-	insert.ctr.buf.Vecs[2] = vector.NewVec(types.T_binary.ToType())
+	//attrs := []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats}
+	//insert.ctr.buf = batch.NewWithSize(len(attrs))
+	//insert.ctr.buf.SetAttributes(attrs)
+	//insert.ctr.buf.Vecs[0] = vector.NewVec(types.T_int16.ToType())
+	//insert.ctr.buf.Vecs[1] = vector.NewVec(types.T_text.ToType())
+	//insert.ctr.buf.Vecs[2] = vector.NewVec(types.T_binary.ToType())
+
+	insert.ctr.buf = colexec.AllocCNS3ResultBat(false)
 }

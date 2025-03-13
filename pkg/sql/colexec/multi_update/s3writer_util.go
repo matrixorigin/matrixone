@@ -35,7 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func generateBlockWriter(writer *s3Writer,
+func generateBlockWriter(writer *s3WriterDelegate,
 	proc *process.Process, idx int,
 	isDelete bool) (*ioutil.BlockWriter, error) {
 	// Use uuid as segment id
@@ -82,7 +82,7 @@ func generateBlockWriter(writer *s3Writer,
 	return blockWriter, err
 }
 
-func appendCfgToWriter(writer *s3Writer, tableDef *plan.TableDef) {
+func appendCfgToWriter(writer *s3WriterDelegate, tableDef *plan.TableDef) {
 	var seqnums []uint16
 	sortIdx := -1
 	pkIdx := -1
