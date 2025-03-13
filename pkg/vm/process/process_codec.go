@@ -16,11 +16,7 @@ package process
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/partitionservice"
 	"time"
-
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -30,11 +26,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	"github.com/matrixorigin/matrixone/pkg/partitionservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 func MockProcessInfoWithPro(

@@ -16,7 +16,6 @@ package process
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/partitionservice"
 	"sync"
 	"time"
 
@@ -28,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	"github.com/matrixorigin/matrixone/pkg/partitionservice"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/stage"
