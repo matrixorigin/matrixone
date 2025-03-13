@@ -206,7 +206,7 @@ func TestChecksum(t *testing.T) {
 
 func TestGetConcurrency(t *testing.T) {
 	nthread := GetConcurrency(0)
-	require.Equal(t, int64(runtime.NumCPU()-1), nthread)
+	require.Equal(t, int64(runtime.NumCPU()), nthread)
 
 	concurrent := int64(64)
 	nthread = GetConcurrency(concurrent)
