@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	log "github.com/matrixorigin/matrixone/pkg/pb/logservice"
@@ -44,7 +45,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail/service"
 )
 
 /*
@@ -679,6 +679,21 @@ func TestPushClient_LoadAndConsumeLatestCkp(t *testing.T) {
 	rt := runtime.DefaultRuntime()
 	runtime.SetupServiceBasedRuntime(sid, rt)
 
+	clusterClient := &testHAKeeperClient{}
+	moc := clusterservice.NewMOCluster("", clusterClient, time.Hour)
+	runtime.ServiceRuntime(sid).SetGlobalVariables(
+		runtime.ClusterService,
+		moc,
+	)
+
+	lk := lockservice.NewLockService(lockservice.Config{
+		ServiceID: sid,
+	})
+	defer lk.Close()
+	rt.SetGlobalVariables(runtime.LockService, lk)
+
+	catalog.SetupDefines(sid)
+
 	// Create Engine and PushClient for testing
 	mp, err := mpool.NewMPool(sid, 1024*1024, 0)
 	assert.NoError(t, err)
@@ -753,11 +768,14 @@ func TestPushClient_LoadAndConsumeLatestCkp(t *testing.T) {
 			databaseId: dbID22,
 		},
 	}
-	client, err := service.NewLogtailClient(ctx, nil)
-	assert.NoError(t, err)
-	c.subscriber = &logTailSubscriber{
-		logTailClient: client,
+
+	c.subscriber = &logTailSubscriber{}
+	c.subscriber.mu.cond = sync.NewCond(&c.subscriber.mu)
+	c.subscriber.setReady()
+	c.subscriber.sendSubscribe = func(ctx context.Context, id api.TableID) error {
+		return nil
 	}
+
 	state, err = c.loadAndConsumeLatestCkp(ctx, tableID22, tbl22)
 	assert.NoError(t, err)
 	assert.Equal(t, Subscribing, state)
