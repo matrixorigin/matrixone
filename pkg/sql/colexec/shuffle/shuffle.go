@@ -62,34 +62,35 @@ func (shuffle *Shuffle) Prepare(proc *process.Process) error {
 // there are two ways for shuffle to send a batch
 // if a batch belongs to one bucket, send this batch directly, and shuffle need to do nothing
 // else split this batch into pieces, write data into pool. if one bucket is full, send this bucket.
-// next time, set this bucket rowcount to 0 and reuse it
 // for now, we shuffle null to the first bucket
 func (shuffle *Shuffle) Call(proc *process.Process) (vm.CallResult, error) {
 	analyzer := shuffle.OpAnalyzer
 
 	result := vm.NewCallResult()
-SENDLAST:
+
+	if shuffle.ctr.buf != nil {
+		shuffle.ctr.buf.Clean(proc.Mp())
+		shuffle.ctr.buf = nil
+	}
+
 	if shuffle.ctr.ending {
 		if shuffle.ctr.lastForShufflePool {
 			//send shuffle pool
-			result.Batch = shuffle.ctr.shufflePool.GetEndingBatch(shuffle.ctr.buf, proc)
-			if result.Batch == nil {
+			shuffle.ctr.buf = shuffle.ctr.shufflePool.GetEndingBatch(proc)
+			if shuffle.ctr.buf == nil {
 				result.Status = vm.ExecStop
 			} else {
 				result.Status = vm.ExecHasMore
 			}
-			shuffle.ctr.buf = result.Batch
+			result.Batch = shuffle.ctr.buf
 		}
 		return result, nil
 	}
 
 	var err error
 	for {
-		shuffle.ctr.buf, err = shuffle.ctr.shufflePool.GetFullBatch(shuffle.ctr.buf, proc)
-		if err != nil {
-			return result, err
-		}
-		if shuffle.ctr.buf != nil && shuffle.ctr.buf.RowCount() > 0 { // find a full batch
+		shuffle.ctr.buf = shuffle.ctr.shufflePool.GetFullBatch(proc)
+		if shuffle.ctr.buf != nil { // find a full batch
 			break
 		}
 		// do input
@@ -101,7 +102,9 @@ SENDLAST:
 		if bat == nil {
 			shuffle.ctr.ending = true
 			shuffle.ctr.lastForShufflePool = shuffle.ctr.shufflePool.Ending()
-			goto SENDLAST
+			result.Status = vm.ExecNext
+			result.Batch = batch.EmptyBatch
+			return result, nil
 		} else if !bat.IsEmpty() {
 			if shuffle.ShuffleType == int32(plan.ShuffleType_Hash) {
 				bat, err = hashShuffle(shuffle, bat, proc)
@@ -121,6 +124,7 @@ SENDLAST:
 			}
 		}
 	}
+
 	//need to wait for runtimefilter_pass before send batch
 	if err = shuffle.handleRuntimeFilter(proc); err != nil {
 		return vm.CancelResult, err
