@@ -17,6 +17,7 @@ package txnbase
 import (
 	"context"
 	"fmt"
+	"math/rand"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -28,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -193,8 +195,8 @@ func NewTxnManager(
 }
 
 func (mgr *TxnManager) initMaxCommittedTS() {
-	now := mgr.Now()
-	mgr.MaxCommittedTS.Store(&now)
+	maxCommit := types.BuildTS(1, 0)
+	mgr.MaxCommittedTS.Store(&maxCommit)
 }
 
 // Now gets a timestamp under the protect from a inner lock. The lock makes
@@ -758,6 +760,11 @@ func (mgr *TxnManager) dequeuePrepared(items ...any) {
 			if err := op.Txn.WaitPrepared(op.ctx); err != nil {
 				// v0.6 TODO: Error handling
 				panic(err)
+			}
+
+			if _, injected := objectio.CommitWaitInjected(); injected {
+				duration := time.Millisecond * time.Duration(rand.Intn(10))
+				time.Sleep(duration)
 			}
 
 			if op.Is2PC() {

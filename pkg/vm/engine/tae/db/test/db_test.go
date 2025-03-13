@@ -11852,3 +11852,111 @@ func Test_RWDB3(t *testing.T) {
 	rTae1.Close()
 	rTae2.Close()
 }
+
+func Test_RWDB4(t *testing.T) {
+	ctx := context.Background()
+	wOpts := config.WithLongScanAndCKPOpts(nil, options.WithWalClientFactory(nil))
+	wTae := testutil.NewTestEngine(ctx, ModuleName, t, wOpts)
+	// defer wTae.Close()
+
+	schema := catalog.MockSchemaAll(4, 2)
+	schema.Extra.BlockMaxRows = 5
+	schema.Extra.ObjectMaxBlocks = 256
+	bat := catalog.MockBatch(schema, 5)
+	pkv := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(0)
+	filter := handle.NewEQFilter(pkv)
+	var wg sync.WaitGroup
+
+	wTae.BindSchema(schema)
+	defer bat.Close()
+	wTae.CreateRelAndAppend2(bat, true)
+
+	for i := 0; i < 100; i++ {
+		updateV := int64(i)
+		txn, rel := wTae.GetRelation()
+		err := rel.UpdateByFilter(context.Background(), filter, 3, updateV, false)
+		assert.NoError(t, err)
+		assert.NoError(t, txn.Commit(ctx))
+	}
+
+	// maxLSN := wTae.DB.Wal.GetLSNWatermark()
+	wTae.Close()
+
+	rOpts := config.WithLongScanAndCKPOpts(nil, options.WithWalClientFactory(wOpts.WalClientFactory))
+	rTae1 := testutil.NewReplayTestEngine(ctx, ModuleName, t, rOpts)
+
+	fault.Enable()
+	defer fault.Disable()
+	rmFn, err := objectio.InjectCommitWait("")
+	assert.NoError(t, err)
+	defer rmFn()
+
+	checkName := func(tae *testutil.TestEngine) {
+		testutils.WaitExpect(
+			4000,
+			func() bool {
+				txn, err := tae.StartTxn(nil)
+				assert.NoError(t, err)
+				db, err := txn.GetDatabase("db")
+				if err != nil {
+					assert.NoError(t, txn.Commit(ctx))
+					return false
+				}
+				rel, err := db.GetRelationByName(schema.Name)
+				if err != nil {
+					assert.NoError(t, txn.Commit(ctx))
+					return false
+				}
+				rows := testutil.GetColumnRowsByScan(t, rel, 3, true)
+				if rows == 0 {
+					assert.NoError(t, txn.Commit(ctx))
+					return false
+				}
+				assert.Equal(t, 5, rows)
+
+				found := false
+				currentVal := int64(0)
+				testutil.ForEachObject(t, rel, func(obj handle.Object) error {
+					var view *containers.Batch
+					err := obj.HybridScan(context.Background(), &view, 0, []int{2, 3}, common.DefaultAllocator)
+					if err != nil {
+						return err
+					}
+					defer view.Close()
+					pks := vector.MustFixedColNoTypeCheck[int32](view.Vecs[0].GetDownstreamVector())
+					vals := vector.MustFixedColNoTypeCheck[int64](view.Vecs[1].GetDownstreamVector())
+					for i, pk := range pks {
+						if pk == pkv && !view.Deletes.Contains(uint64(i)) {
+							if found {
+								return moerr.NewInternalErrorNoCtx("found more than one value")
+							}
+							found = true
+							currentVal = vals[i]
+							return nil
+						}
+					}
+					return nil
+				})
+				assert.NoError(t, err)
+				assert.NoError(t, txn.Commit(ctx))
+				return currentVal == 99
+			},
+		)
+
+		tae.BindSchema(schema)
+		txn, rel := tae.GetRelation()
+		val, _, err := rel.GetValueByFilter(
+			context.Background(),
+			filter,
+			3,
+		)
+		assert.NoError(t, err)
+		assert.Equal(t, int64(99), val)
+		assert.NoError(t, txn.Commit(ctx))
+	}
+
+	checkName(rTae1)
+	wg.Wait()
+
+	rTae1.Close()
+}
