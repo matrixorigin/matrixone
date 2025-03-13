@@ -79,11 +79,11 @@ func (store *replayTxnStore) prepareCommit(txn txnif.AsyncTxn) (err error) {
 		command.SetReplayTxn(txn)
 		store.prepareCmd(command)
 	}
-	store.Cmd.ApplyCommit()
 	return
 }
 
 func (store *replayTxnStore) applyCommit(txn txnif.AsyncTxn) (err error) {
+	store.Cmd.ApplyCommit()
 	return
 }
 
