@@ -28,8 +28,8 @@ import (
 */
 
 const (
-	MaxIndexCapacity = 100000
-	MaxChunkSize     = 65536
+	MaxIndexCapacityInSize = 2000000000 // 2G
+	MaxChunkSize           = 65536
 )
 
 // HNSW have two secondary index tables, metadata and index storage.  For new vector index algorithm that share the same secondary tables,
@@ -91,15 +91,11 @@ type RuntimeConfig struct {
 
 // nthread == 0, result will return NumCPU - 1
 func GetConcurrency(nthread int64) int64 {
-	ret := int64(1)
 	if nthread > 0 {
 		return nthread
 	}
 	ncpu := runtime.NumCPU()
-	if ncpu > 1 {
-		ret = int64(ncpu - 1)
-	}
-	return ret
+	return int64(ncpu)
 }
 
 // nthread == 0, result will return NumCPU
