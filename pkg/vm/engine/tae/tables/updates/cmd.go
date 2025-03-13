@@ -161,9 +161,7 @@ func (c *UpdateCmd) ApplyCommit() {
 	switch c.cmdType {
 	case IOET_WALTxnCommand_AppendNode:
 		if c.append.mvcc != nil {
-			c.append.mvcc.Lock()
-			defer c.append.mvcc.Unlock()
-			if _, err := c.append.TxnMVCCNode.ApplyCommit(c.append.Txn.GetID()); err != nil {
+			if err := c.append.ApplyCommit(c.append.Txn.GetID()); err != nil {
 				panic(err)
 			}
 		}
