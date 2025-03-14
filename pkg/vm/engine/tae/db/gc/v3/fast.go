@@ -16,29 +16,26 @@ package gc
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 )
 
-type CheckpointBasedGCJob struct {
+type CheckpointFastGCJob struct {
 	BaseCheckpointGCJob
-	globalCkpLoc objectio.Location
-	globalCkpVer uint32
 }
 
-func NewCheckpointBasedGCJob(
+func NewCheckpointFastGCJob(
 	ts *types.TS,
-	globalCkpLoc objectio.Location,
-	gckpVersion uint32,
 	sourcer engine.BaseReader,
 	pitr *logtail.PitrInfo,
 	accountSnapshots map[uint32][]types.TS,
@@ -48,7 +45,7 @@ func NewCheckpointBasedGCJob(
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 	opts ...GCJobExecutorOption,
-) *CheckpointBasedGCJob {
+) *CheckpointFastGCJob {
 	e := &BaseCheckpointGCJob{
 		sourcer:          sourcer,
 		snapshotMeta:     snapshotMeta,
@@ -63,67 +60,30 @@ func NewCheckpointBasedGCJob(
 	}
 	e.fillDefaults()
 	e.GCExecutor = *NewGCExecutor(buffer, isOwner, e.config.canGCCacheSize, mp, fs)
-	job := &CheckpointBasedGCJob{
+	job := &CheckpointFastGCJob{
 		BaseCheckpointGCJob: *e,
-		globalCkpLoc:        globalCkpLoc,
-		globalCkpVer:        gckpVersion,
 	}
 	job.filterProvider = job
 	return job
 }
 
-func (e *CheckpointBasedGCJob) Close() error {
-	e.globalCkpLoc = nil
-	return e.BaseCheckpointGCJob.Close()
-}
-
-func (e *CheckpointBasedGCJob) CoarseFilter(ctx context.Context) (FilterFn, error) {
-	return MakeBloomfilterCoarseFilter(
-		ctx,
-		e.config.coarseEstimateRows,
-		e.config.coarseProbility,
-		e.buffer,
-		e.globalCkpLoc,
-		e.globalCkpVer,
-		e.ts,
-		&e.transObjects,
-		e.mp,
-		e.fs,
+func (e *CheckpointFastGCJob) CoarseFilter(_ context.Context) (FilterFn, error) {
+	return makeSoftDeleteFilterCoarseFilter(
+		e.transObjects,
+		e.snapshotMeta,
 	)
 }
 
-func MakeBloomfilterCoarseFilter(
-	ctx context.Context,
-	rowCount int,
-	probability float64,
-	buffer containers.IBatchBuffer,
-	location objectio.Location,
-	ckpVersion uint32,
-	ts *types.TS,
-	transObjects *map[string]*ObjectEntry,
-	mp *mpool.MPool,
-	fs fileservice.FileService,
+func makeSoftDeleteFilterCoarseFilter(
+	transObjects map[string]*ObjectEntry,
+	meta *logtail.SnapshotMeta,
 ) (
 	FilterFn,
 	error,
 ) {
-	reader := logtail.NewCKPReader(ckpVersion, location, mp, fs)
-	var err error
-	if err = reader.ReadMeta(ctx); err != nil {
-		return nil, err
-	}
-	bf, err := BuildBloomfilter(
-		ctx,
-		rowCount,
-		probability,
-		ckputil.TableObjectsAttr_ID_Idx,
-		reader.LoadBatchData,
-		buffer,
-		mp,
-	)
-	if err != nil {
-		return nil, err
-	}
+	filterTable := meta.GetSnapshotTableIDs()
+	tables := meta.GetTableIDs()
+	logutil.Infof("GetTableIDs count is %d", len(tables))
 	return func(
 		ctx context.Context,
 		bm *bitmap.Bitmap,
@@ -134,40 +94,42 @@ func MakeBloomfilterCoarseFilter(
 		dropTSs := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[2])
 		dbs := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[3])
 		tableIDs := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[4])
-		bf.Test(
-			bat.Vecs[0],
-			func(exists bool, i int) {
-				if exists {
-					return
+		for i := 0; i < bat.Vecs[0].Length(); i++ {
+			createTS := createTSs[i]
+			dropTS := dropTSs[i]
+			buf := bat.Vecs[0].GetRawBytesAt(i)
+			stats := (objectio.ObjectStats)(buf)
+			name := stats.ObjectName().UnsafeString()
+			dropTSIsEmpty := dropTS.IsEmpty()
+			if dropTSIsEmpty {
+				if (transObjects)[name] == nil {
+					object := NewObjectEntry()
+					object.stats = &stats
+					object.createTS = createTS
+					object.dropTS = dropTS
+					object.db = dbs[i]
+					object.table = tableIDs[i]
+					(transObjects)[name] = object
 				}
+				table := tables[tableIDs[i]]
+				if table != nil && !table.IsDrop() {
+					continue
+				}
+			}
 
-				bm.Add(uint64(i))
-				createTS := createTSs[i]
-				dropTS := dropTSs[i]
-				if !createTS.LT(ts) || !dropTS.LT(ts) {
-					return
-				}
+			if _, ok := filterTable[tableIDs[i]]; ok {
+				continue
+			}
 
-				buf := bat.Vecs[0].GetRawBytesAt(i)
-				stats := (objectio.ObjectStats)(buf)
-				name := stats.ObjectName().UnsafeString()
-
-				if dropTS.IsEmpty() && (*transObjects)[name] == nil {
-					entry := NewObjectEntry()
-					entry.stats = &stats
-					entry.createTS = createTS
-					entry.dropTS = dropTS
-					entry.db = dbs[i]
-					entry.table = tableIDs[i]
-					(*transObjects)[name] = entry
-					return
-				}
-				if (*transObjects)[name] != nil {
-					(*transObjects)[name].dropTS = dropTS
-					return
-				}
-			},
-		)
+			if catalog.IsSystemTable(tableIDs[i]) {
+				continue
+			}
+			bm.Add(uint64(i))
+			if (transObjects)[name] != nil {
+				(transObjects)[name].dropTS = dropTS
+				continue
+			}
+		}
 		return nil
 
 	}, nil
