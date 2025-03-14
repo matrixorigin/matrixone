@@ -52,11 +52,6 @@ func RegisterMedian(id int64) {
 	aggIdOfMedian = id
 }
 
-func RegisterClusterCenters(id int64) {
-	specialAgg[id] = true
-	aggIdOfClusterCenters = id
-}
-
 func RegisterRowNumberWin(id int64) {
 	specialAgg[id] = true
 	winIdOfRowNumber = id
@@ -93,17 +88,16 @@ var (
 	registeredAggFunctions = make(map[aggKey]aggImplementation)
 
 	// list of special aggregation function IDs.
-	aggIdOfCountColumn    = int64(-1)
-	aggIdOfCountStar      = int64(-2)
-	aggIdOfGroupConcat    = int64(-3)
-	aggIdOfApproxCount    = int64(-4)
-	aggIdOfMedian         = int64(-5)
-	aggIdOfClusterCenters = int64(-6)
-	winIdOfRowNumber      = int64(-7)
-	winIdOfRank           = int64(-8)
-	winIdOfDenseRank      = int64(-9)
-	groupConcatSep        = ","
-	getCroupConcatRet     = func(args ...types.Type) types.Type {
+	aggIdOfCountColumn = int64(-1)
+	aggIdOfCountStar   = int64(-2)
+	aggIdOfGroupConcat = int64(-3)
+	aggIdOfApproxCount = int64(-4)
+	aggIdOfMedian      = int64(-5)
+	winIdOfRowNumber   = int64(-7)
+	winIdOfRank        = int64(-8)
+	winIdOfDenseRank   = int64(-9)
+	groupConcatSep     = ","
+	getCroupConcatRet  = func(args ...types.Type) types.Type {
 		for _, p := range args {
 			if p.Oid == types.T_binary || p.Oid == types.T_varbinary || p.Oid == types.T_blob {
 				return types.T_blob.ToType()

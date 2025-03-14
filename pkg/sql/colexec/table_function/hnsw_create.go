@@ -21,20 +21,19 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-
-	usearch "github.com/unum-cloud/usearch/golang"
 )
+
+var hnsw_runSql = sqlexec.RunSql
 
 type hnswCreateState struct {
 	inited bool
@@ -43,6 +42,7 @@ type hnswCreateState struct {
 	tblcfg vectorindex.IndexTableConfig
 	idxcfg vectorindex.IndexConfig
 	offset int
+
 	// holding one call batch, tokenizedState owns it.
 	batch *batch.Batch
 }
@@ -112,6 +112,7 @@ func hnswCreatePrepare(proc *process.Process, arg *TableFunction) (tvfState, err
 func (u *hnswCreateState) start(tf *TableFunction, proc *process.Process, nthRow int, analyzer process.Analyzer) (err error) {
 
 	if !u.inited {
+
 		if len(tf.Params) > 0 {
 			err = json.Unmarshal([]byte(tf.Params), &u.param)
 			if err != nil {
@@ -135,12 +136,11 @@ func (u *hnswCreateState) start(tf *TableFunction, proc *process.Process, nthRow
 			u.idxcfg.Usearch.Connectivity = uint(val)
 		}
 
-		// default L2Sq
-		if u.param.OpType != "vector_l2_ops" {
-			return moerr.NewInternalError(proc.Ctx, "invalid optype")
+		metrictype, ok := metric.OpTypeToUsearchMetric[u.param.OpType]
+		if !ok {
+			return moerr.NewInternalError(proc.Ctx, "Invalid op_type")
 		}
-
-		u.idxcfg.Usearch.Metric = usearch.L2sq
+		u.idxcfg.Usearch.Metric = metrictype
 
 		if len(u.param.EfConstruction) > 0 {
 			val, err := strconv.Atoi(u.param.EfConstruction)
@@ -171,9 +171,13 @@ func (u *hnswCreateState) start(tf *TableFunction, proc *process.Process, nthRow
 		if len(cfgstr) == 0 {
 			return moerr.NewInternalError(proc.Ctx, "IndexTableConfig is empty")
 		}
-		err := json.Unmarshal([]byte(cfgstr), &u.tblcfg)
+		err = json.Unmarshal([]byte(cfgstr), &u.tblcfg)
 		if err != nil {
 			return err
+		}
+
+		if u.tblcfg.IndexCapacity <= 0 {
+			return moerr.NewInvalidInput(proc.Ctx, "Index Capacity must be greater than 0")
 		}
 
 		idVec := tf.ctr.argVecs[1]
@@ -217,38 +221,13 @@ func (u *hnswCreateState) start(tf *TableFunction, proc *process.Process, nthRow
 
 	f32a := types.BytesToArray[float32](f32aVec.GetBytesAt(nthRow))
 
+	if uint(len(f32a)) != u.idxcfg.Usearch.Dimensions {
+		return moerr.NewInternalError(proc.Ctx, "vector dimension mismatch")
+	}
+
 	err = u.build.Add(id, f32a)
 	if err != nil {
 		return err
 	}
 	return nil
-}
-
-var hnsw_runSql = hnsw_runSql_fn
-
-// run SQL in batch mode. Result batches will stored in memory and return once all result batches received.
-func hnsw_runSql_fn(proc *process.Process, sql string) (executor.Result, error) {
-	v, ok := moruntime.ServiceRuntime(proc.GetService()).GetGlobalVariables(moruntime.InternalSQLExecutor)
-	if !ok {
-		panic("missing lock service")
-	}
-
-	//-------------------------------------------------------
-	topContext := proc.GetTopContext()
-	accountId, err := defines.GetAccountId(proc.Ctx)
-	if err != nil {
-		return executor.Result{}, err
-	}
-	//-------------------------------------------------------
-
-	exec := v.(executor.SQLExecutor)
-	opts := executor.Options{}.
-		// All runSql and runSqlWithResult is a part of input sql, can not incr statement.
-		// All these sub-sql's need to be rolled back and retried en masse when they conflict in pessimistic mode
-		WithDisableIncrStatement().
-		WithTxn(proc.GetTxnOperator()).
-		WithDatabase(proc.GetSessionInfo().Database).
-		WithTimeZone(proc.GetSessionInfo().TimeZone).
-		WithAccountID(accountId)
-	return exec.Exec(topContext, sql, opts)
 }

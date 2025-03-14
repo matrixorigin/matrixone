@@ -58,18 +58,34 @@ func CheckSum(path string) (string, error) {
 }
 
 // Priority Queue/Heap structure for getting N-Best results from multiple mini-indexes
+type SearchResultIf interface {
+	GetDistance() float64
+}
 type SearchResult struct {
-	id       int64
-	distance float32
+	Id       int64
+	Distance float64
+}
+
+func (s *SearchResult) GetDistance() float64 {
+	return s.Distance
+}
+
+type SearchResultAnyKey struct {
+	Id       any
+	Distance float64
+}
+
+func (s *SearchResultAnyKey) GetDistance() float64 {
+	return s.Distance
 }
 
 // Non thread-safe heap struct
-type SearchResultHeap []*SearchResult
+type SearchResultHeap []SearchResultIf
 
 func (h SearchResultHeap) Len() int { return len(h) }
 
 func (h SearchResultHeap) Less(i, j int) bool {
-	return h[i].distance < h[j].distance
+	return h[i].GetDistance() < h[j].GetDistance()
 }
 
 func (h SearchResultHeap) Swap(i, j int) {
@@ -77,7 +93,7 @@ func (h SearchResultHeap) Swap(i, j int) {
 }
 
 func (h *SearchResultHeap) Push(x any) {
-	item := x.(*SearchResult)
+	item := x.(SearchResultIf)
 	*h = append(*h, item)
 }
 
@@ -109,16 +125,16 @@ func (h *SearchResultSafeHeap) Len() int {
 	return h.resheap.Len()
 }
 
-func (h *SearchResultSafeHeap) Push(id int64, distance float32) {
+func (h *SearchResultSafeHeap) Push(srif SearchResultIf) {
 	h.mutex.Lock()
 	defer h.mutex.Unlock()
 
-	heap.Push(&h.resheap, &SearchResult{id, distance})
+	heap.Push(&h.resheap, srif)
 }
 
-func (h *SearchResultSafeHeap) Pop() (int64, float32) {
+func (h *SearchResultSafeHeap) Pop() SearchResultIf {
 	h.mutex.Lock()
 	defer h.mutex.Unlock()
-	x := heap.Pop(&h.resheap).(*SearchResult)
-	return x.id, x.distance
+	x := heap.Pop(&h.resheap).(SearchResultIf)
+	return x
 }

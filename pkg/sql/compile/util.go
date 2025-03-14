@@ -535,6 +535,12 @@ func genBuildHnswIndex(proc *process.Process, indexDefs map[string]*plan.IndexDe
 	}
 	cfg.ThreadsBuild = val.(int64)
 
+	idxcap, err := proc.GetResolveVariableFunc()("hnsw_max_index_capacity", true, false)
+	if err != nil {
+		return nil, err
+	}
+	cfg.IndexCapacity = idxcap.(int64)
+
 	params := idxdef_index.IndexAlgoParams
 
 	cfgbytes, err := json.Marshal(cfg)
