@@ -11975,11 +11975,15 @@ func Test_ReplayGlobalCheckpoint(t *testing.T) {
 
 	tae.CreateRelAndAppend2(bat, true)
 
-	tae.ForceGlobalCheckpoint(ctx, tae.TxnMgr.Now(), time.Minute)
-
-	tae.DoAppend(bat)
-
-	tae.ForceCheckpoint()
-
-	tae.Restart(ctx)
+	collector := logtail.NewBaseCollector_V2(types.TS{}, tae.TxnMgr.Now(), 1, tae.Opts.Fs)
+	assert.NoError(t, tae.Catalog.RecurLoop(collector))
+	ckpData := collector.OrphanData()
+	defer ckpData.Close()
+	loc, _, _, err := ckpData.WriteTo(ctx, tae.Opts.Fs)
+	assert.NoError(t, err)
+	reader := logtail.NewCKPReader(logtail.CheckpointCurrentVersion, loc, common.DebugAllocator, tae.Opts.Fs)
+	err = reader.ReadMeta(ctx)
+	assert.NoError(t, err)
+	bat2, err := reader.GetCheckpointData(ctx)
+	defer bat2.Clean(common.DebugAllocator)
 }
