@@ -103,6 +103,10 @@ func (r *ckpObjectReader) Read(
 			ctx,
 			r.fs,
 			object,
+			readutil.WithColumns(
+				ckputil.DataScan_TableIDSeqnums,
+				ckputil.DataScan_TableIDTypes,
+			),
 		)
 	}
 }
