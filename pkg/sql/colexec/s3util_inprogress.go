@@ -36,7 +36,7 @@ import (
 const (
 	// WriteS3Threshold when batches'  size of table reaches this, we will
 	// trigger write s3
-	WriteS3Threshold uint64 = 500 * mpool.MB
+	WriteS3Threshold uint64 = 128 * mpool.MB
 )
 
 type CNS3Writer struct {
@@ -81,13 +81,28 @@ func NewCNS3DataWriter(
 		attrTypes []types.Type
 	)
 
+	pkColIdx := tableDef.Name2ColIndex[tableDef.Pkey.PkeyColName]
+	pkCol := tableDef.Cols[pkColIdx]
+
+	if catalog.IsFakePkName(pkCol.Name) {
+		if tableDef.ClusterBy != nil {
+			pkColIdx = tableDef.Name2ColIndex[tableDef.ClusterBy.Name]
+		} else {
+			pkColIdx = -1
+		}
+		isPrimaryKey = false
+	} else {
+		isPrimaryKey = true
+	}
+
+	sortKeyIdx = int(pkColIdx)
+
 	for i, colDef := range tableDef.Cols {
 		if colDef.Name != catalog.Row_ID {
 			sequms = append(sequms, uint16(colDef.Seqnum))
 			attrs = append(attrs, colDef.Name)
 
-			attrTypes = append(attrTypes,
-				types.New(types.T(colDef.Typ.Id), colDef.Typ.Width, colDef.Typ.Scale))
+			attrTypes = append(attrTypes, types.New(types.T(colDef.Typ.Id), colDef.Typ.Width, colDef.Typ.Scale))
 		} else {
 			// check rowid as the last column
 			if i != len(tableDef.Cols)-1 {
@@ -96,32 +111,6 @@ func NewCNS3DataWriter(
 		}
 	}
 	logutil.Debugf("s3 table set from NewS3Writer %q seqnums: %+v", tableDef.Name, sequms)
-
-	// Get Single Col pk index
-	if tableDef.Pkey != nil {
-		for idx, colDef := range tableDef.Cols {
-			if colDef.Name == tableDef.Pkey.PkeyColName && colDef.Name != catalog.FakePrimaryKeyColName {
-				sortKeyIdx = idx
-				isPrimaryKey = true
-				break
-			}
-		}
-	}
-
-	if tableDef.ClusterBy != nil && sortKeyIdx != -1 {
-		//writer.isClusterBy = true
-
-		// the `rowId` column has been excluded from target table's `TableDef` for insert statements (insert, load),
-		// link: `/pkg/sql/plan/build_constraint_util.go` -> func setTableExprToDmlTableInfo
-		// and the `sortIndex` position can be directly obtained using a name that matches the sorting key
-		for idx, colDef := range tableDef.Cols {
-			if colDef.Name == tableDef.ClusterBy.Name {
-				sortKeyIdx = idx
-				isPrimaryKey = false
-				break
-			}
-		}
-	}
 
 	writer := &CNS3Writer{}
 

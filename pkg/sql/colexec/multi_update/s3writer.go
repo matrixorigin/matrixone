@@ -329,7 +329,8 @@ func (writer *s3WriterDelegate) sortAndSync(proc *process.Process, analyzer proc
 			if err != nil {
 				return
 			}
-			err = writer.sortAndSyncOneTable(proc, updateCtx.TableDef, analyzer, i, 0, false, bats, needSortBatch, needCleanBatch)
+			err = writer.sortAndSyncOneTable(
+				proc, updateCtx.TableDef, analyzer, i, 0, false, bats, needSortBatch, needCleanBatch)
 			if err != nil {
 				return
 			}
@@ -382,8 +383,8 @@ func (writer *s3WriterDelegate) sortAndSyncOneTable(
 	}
 
 	if isDelete {
-		pkType := plan2.PkTypeByTableDef(tblDef)
-		s3Writer = colexec.NewCNS3TombstoneWriter(proc.Mp(), fs, pkType)
+		pkCol := plan2.PkColByTableDef(tblDef)
+		s3Writer = colexec.NewCNS3TombstoneWriter(proc.Mp(), fs, plan2.ExprType2Type(&pkCol.Typ))
 	} else {
 		s3Writer = colexec.NewCNS3DataWriter(proc.Mp(), fs, tblDef)
 	}

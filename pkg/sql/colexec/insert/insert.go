@@ -236,7 +236,6 @@ func flushTailBatch(
 	result *vm.CallResult,
 	analyzer process.Analyzer,
 ) error {
-
 	crs := analyzer.GetOpCounterSet()
 	newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
 

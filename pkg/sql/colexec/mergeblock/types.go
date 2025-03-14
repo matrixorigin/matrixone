@@ -249,17 +249,25 @@ func (mergeBlock *MergeBlock) Split(proc *process.Process, bat *batch.Batch, ana
 		blkInfosVec = bat.GetVector(0)
 	}
 
-	// for the new implementation, objects must be there.
-	hasObject := !hasTblIdxCol
-	for i := range tblIdx { // append s3 writer returned blk info
-		if tblIdx[i] >= 0 {
+	var hasObject bool
+
+	for i := range blkInfosVec.Length() { // append s3 writer returned blk info
+		if (len(tblIdx) > 0 && tblIdx[i] >= 0) || !hasTblIdxCol {
 			if mergeBlock.AddAffectedRows {
 				blkInfo := objectio.DecodeBlockInfo(blkInfosVec.GetBytesAt(i))
 				mergeBlock.container.affectedRows += uint64(blkInfo.MetaLocation().Rows())
 			}
-			vector.AppendBytes(mergeBlock.container.mp[int(tblIdx[i])].Vecs[0],
-				blkInfosVec.GetBytesAt(i), false, proc.GetMPool())
+
+			var dest *vector.Vector
+			if hasTblIdxCol {
+				dest = mergeBlock.container.mp[int(tblIdx[i])].Vecs[0]
+			} else {
+				dest = mergeBlock.container.mp[0].Vecs[0]
+			}
+			vector.AppendBytes(dest, blkInfosVec.GetBytesAt(i), false, proc.GetMPool())
+
 			hasObject = true
+
 		} else { // append data
 			idx := int(-(tblIdx[i] + 1))
 			newBat := &batch.Batch{}

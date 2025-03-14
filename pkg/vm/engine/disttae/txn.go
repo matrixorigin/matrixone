@@ -766,7 +766,7 @@ func (txn *Transaction) dumpDeleteBatchLocked(ctx context.Context, offset int, s
 	txn.writes = writes[:lastWriteIndex]
 
 	var (
-		pkType   types.Type
+		pkCol    *plan.ColDef
 		s3Writer *colexec.CNS3Writer
 
 		stats    []objectio.ObjectStats
@@ -791,8 +791,9 @@ func (txn *Transaction) dumpDeleteBatchLocked(ctx context.Context, offset int, s
 			return err
 		}
 
-		pkType = plan2.PkTypeByTableDef(tbl.GetTableDef(txn.proc.Ctx))
-		s3Writer = colexec.NewCNS3TombstoneWriter(txn.proc.GetMPool(), txn.proc.GetFileService(), pkType)
+		pkCol = plan2.PkColByTableDef(tbl.GetTableDef(txn.proc.Ctx))
+		s3Writer = colexec.NewCNS3TombstoneWriter(
+			txn.proc.GetMPool(), txn.proc.GetFileService(), plan2.ExprType2Type(&pkCol.Typ))
 
 		for i := 0; i < len(mp[tbKey]); i++ {
 			if err = s3Writer.Write(txn.proc.Ctx, mp[tbKey][i]); err != nil {
