@@ -16,6 +16,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"sync/atomic"
 	"time"
 
@@ -529,8 +530,15 @@ func (s *LogtailServer) getSubLogtailPhase(
 			closeCB()
 		}
 		s.logger.Error("fail to fetch table total logtail", zap.Error(subErr), zap.Any("table", table))
+
+		subErrCode, ok := moerr.GetMoErrCode(subErr)
+		if !ok {
+			subErrCode = moerr.ErrInternal
+		}
+		subErrMsg := fmt.Sprintf("fail to fetch table total logtail:%s", subErr.Error())
+
 		if err := sub.session.SendErrorResponse(
-			sendCtx, table, moerr.ErrInternal, "fail to fetch table total logtail",
+			sendCtx, table, subErrCode, subErrMsg,
 		); err != nil {
 			err = moerr.AttachCause(sendCtx, err)
 			s.logger.Error("fail to send error response", zap.Error(err))
