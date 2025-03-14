@@ -141,6 +141,10 @@ func (c *compilerContext) Stats(obj *plan.ObjectRef, snapshot *plan.Snapshot) (*
 	if err != nil {
 		return nil, err
 	}
+	if c.statsCache == nil {
+		c.statsCache = plan.NewStatsCache()
+	}
+	c.statsCache.SetStatsInfo(table.GetTableID(ctx), statsInfo)
 	return statsInfo, nil
 }
 
