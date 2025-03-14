@@ -11960,3 +11960,26 @@ func Test_RWDB4(t *testing.T) {
 
 	rTae1.Close()
 }
+
+func Test_ReplayGlobalCheckpoint(t *testing.T) {
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchema(2, -1)
+	schema.Extra.BlockMaxRows = 10
+	schema.Extra.ObjectMaxBlocks = 2
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 1)
+
+	tae.CreateRelAndAppend2(bat, true)
+
+	tae.ForceGlobalCheckpoint(ctx, tae.TxnMgr.Now(), time.Minute)
+
+	tae.DoAppend(bat)
+
+	tae.ForceCheckpoint()
+
+	tae.Restart(ctx)
+}
