@@ -29,6 +29,7 @@ const (
 const (
 	FJ_CommitDelete  = "fj/commit/delete"
 	FJ_CommitSlowLog = "fj/commit/slowlog"
+	FJ_CommitWait    = "fj/commit/wait"
 	FJ_TransferSlow  = "fj/transfer/slow"
 	FJ_FlushTimeout  = "fj/flush/timeout"
 
@@ -298,6 +299,11 @@ func CheckpointSaveInjected() (string, bool) {
 	return sarg, injected
 }
 
+func CommitWaitInjected() (string, bool) {
+	_, sarg, injected := fault.TriggerFault(FJ_CommitWait)
+	return sarg, injected
+}
+
 func WaitInjected(key string) {
 	fault.TriggerFault(key)
 }
@@ -356,6 +362,24 @@ func InjectCheckpointSave(msg string) (rmFault func() (bool, error), err error) 
 	}
 	rmFault = func() (ok bool, err error) {
 		return fault.RemoveFaultPoint(context.Background(), FJ_CheckpointSave)
+	}
+	return
+}
+
+func InjectCommitWait(msg string) (rmFault func() (bool, error), err error) {
+	if err = fault.AddFaultPoint(
+		context.Background(),
+		FJ_CommitWait,
+		":::",
+		"echo",
+		0,
+		msg,
+		false,
+	); err != nil {
+		return
+	}
+	rmFault = func() (ok bool, err error) {
+		return fault.RemoveFaultPoint(context.Background(), FJ_CommitWait)
 	}
 	return
 }
