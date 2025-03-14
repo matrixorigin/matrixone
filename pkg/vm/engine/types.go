@@ -1059,10 +1059,6 @@ type EntireEngine struct {
 	TempEngine Engine // new engine for temporarily table
 }
 
-func IsMemtable(tblRange []byte) bool {
-	return bytes.Equal(tblRange, objectio.EmptyBlockInfoBytes)
-}
-
 type forceBuildRemoteDSConfig struct {
 	sync.Mutex
 	force  bool

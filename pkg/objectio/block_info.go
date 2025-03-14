@@ -150,7 +150,11 @@ func (b *BlockInfo) SetMetaLocation(metaLoc Location) {
 }
 
 func (b *BlockInfo) IsMemBlk() bool {
-	return bytes.Equal(EncodeBlockInfo(b), EmptyBlockInfoBytes)
+	idx := b.PartitionIdx
+	b.PartitionIdx = 0
+	isMemBlk := bytes.Equal(EncodeBlockInfo(b), EmptyBlockInfoBytes)
+	b.PartitionIdx = idx
+	return isMemBlk
 }
 
 func EncodeBlockInfo(info *BlockInfo) []byte {

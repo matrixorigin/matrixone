@@ -112,7 +112,7 @@ func (proc *Process) GetLockService() lockservice.LockService {
 func (proc *Process) GetPartitionService() partitionservice.PartitionService {
 	ps := proc.Base.PartitionService
 	if ps == nil {
-		return partitionservice.DisabledService
+		return partitionservice.GetService(proc.GetLockService().GetConfig().ServiceID)
 	}
 	return ps
 }

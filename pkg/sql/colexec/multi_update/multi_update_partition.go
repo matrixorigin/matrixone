@@ -16,6 +16,7 @@ package multi_update
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/partitionprune"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
@@ -30,6 +31,7 @@ type PartitionMultiUpdate struct {
 
 	raw     *MultiUpdate
 	tableID uint64
+	meta    partition.PartitionMetadata
 }
 
 func NewPartitionMultiUpdate(
@@ -71,6 +73,11 @@ func (op *PartitionMultiUpdate) Prepare(
 		op.OpAnalyzer.Reset()
 	}
 
+	var err error
+	op.meta, _, err = proc.GetPartitionService().GetStorage().GetMetadata(proc.Ctx, op.tableID, proc.GetTxnOperator())
+	if err != nil {
+		return err
+	}
 	op.raw.OperatorBase = op.OperatorBase
 	return op.raw.Prepare(proc)
 }
@@ -93,14 +100,7 @@ func (op *PartitionMultiUpdate) Call(
 	op.raw.delegated = true
 	op.raw.input = input
 
-	ps := proc.GetPartitionService()
-
-	res, err := ps.Prune(
-		proc.Ctx,
-		op.tableID,
-		input.Batch,
-		proc.GetTxnOperator(),
-	)
+	res, err := partitionprune.Prune(proc, input.Batch, op.meta)
 	if err != nil {
 		return vm.CallResult{}, err
 	}
