@@ -11985,5 +11985,6 @@ func Test_ReplayGlobalCheckpoint(t *testing.T) {
 	err = reader.ReadMeta(ctx)
 	assert.NoError(t, err)
 	bat2, err := reader.GetCheckpointData(ctx)
+	assert.NoError(t, err)
 	defer bat2.Clean(common.DebugAllocator)
 }
