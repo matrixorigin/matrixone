@@ -653,6 +653,7 @@ func (c *Controller) AssembleDB(ctx context.Context) (err error) {
 	if checkpointed, ckpLSN, releaseReplayPinned, err = c.replayFromCheckpoints(ctx); err != nil {
 		return
 	}
+	db.TxnMgr.TryUpdateMaxCommittedTS(checkpointed)
 
 	if replayCtl, err = db.ReplayWal(
 		ctx, checkpointed, ckpLSN, releaseReplayPinned,

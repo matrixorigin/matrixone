@@ -17,6 +17,7 @@ package txnbase
 import (
 	"context"
 	"fmt"
+	"math/rand"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -28,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -36,6 +38,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
+
+var MinCommittedTS = types.BuildTS(1, 0)
 
 type TxnManagerOption func(*TxnManager)
 
@@ -193,8 +197,13 @@ func NewTxnManager(
 }
 
 func (mgr *TxnManager) initMaxCommittedTS() {
-	now := mgr.Now()
-	mgr.MaxCommittedTS.Store(&now)
+	mgr.MaxCommittedTS.Store(&MinCommittedTS)
+}
+
+func (mgr *TxnManager) TryUpdateMaxCommittedTS(ts types.TS) {
+	if ts.GT(&MinCommittedTS) {
+		mgr.MaxCommittedTS.CompareAndSwap(mgr.MaxCommittedTS.Load(), &ts)
+	}
 }
 
 // Now gets a timestamp under the protect from a inner lock. The lock makes
@@ -604,6 +613,9 @@ func (mgr *TxnManager) on1PCPrepared(op *OpTxn) {
 	_ = op.Txn.WaitDone(err, isAbort)
 }
 func (mgr *TxnManager) OnCommitTxn(txn txnif.AsyncTxn) {
+	if mgr.GetTxnSkipFlags().Skip(TxnFlag_Heartbeat) && txn.GetStore().IsHeartbeat() {
+		return
+	}
 	new := txn.GetCommitTS()
 	for old := mgr.MaxCommittedTS.Load(); new.GT(old); old = mgr.MaxCommittedTS.Load() {
 		if mgr.MaxCommittedTS.CompareAndSwap(old, &new) {
@@ -755,6 +767,11 @@ func (mgr *TxnManager) dequeuePrepared(items ...any) {
 			if err := op.Txn.WaitPrepared(op.ctx); err != nil {
 				// v0.6 TODO: Error handling
 				panic(err)
+			}
+
+			if _, injected := objectio.CommitWaitInjected(); injected {
+				duration := time.Millisecond * time.Duration(rand.Intn(10))
+				time.Sleep(duration)
 			}
 
 			if op.Is2PC() {

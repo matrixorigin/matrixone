@@ -313,7 +313,7 @@ func runShuffleCase(t *testing.T, tc shuffleTestCase, hasnull bool) {
 	for {
 		result, err = vm.Exec(tc.arg, tc.proc)
 		require.NoError(t, err)
-		if result.Batch == nil || result.Batch.RowCount() == 0 || result.Status == vm.ExecStop {
+		if result.Batch == nil || result.Status == vm.ExecStop {
 			break
 		}
 		count += result.Batch.RowCount()
