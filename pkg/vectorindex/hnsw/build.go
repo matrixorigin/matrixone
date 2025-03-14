@@ -40,18 +40,17 @@ type HnswBuildIndex struct {
 }
 
 type HnswBuild struct {
-	uid          string
-	cfg          vectorindex.IndexConfig
-	tblcfg       vectorindex.IndexTableConfig
-	indexes      []*HnswBuildIndex
-	nthread      int
-	add_chan     chan AddItem
-	err_chan     chan error
-	wg           sync.WaitGroup
-	once         sync.Once
-	mutex        sync.Mutex
-	count        atomic.Int64
-	max_capacity uint
+	uid      string
+	cfg      vectorindex.IndexConfig
+	tblcfg   vectorindex.IndexTableConfig
+	indexes  []*HnswBuildIndex
+	nthread  int
+	add_chan chan AddItem
+	err_chan chan error
+	wg       sync.WaitGroup
+	once     sync.Once
+	mutex    sync.Mutex
+	count    atomic.Int64
 }
 
 type AddItem struct {
@@ -219,7 +218,8 @@ func (idx *HnswBuildIndex) Add(key int64, vec []float32) error {
 }
 
 // create HsnwBuild struct
-func NewHnswBuild(proc *process.Process, uid string, nworker int32, cfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) (info *HnswBuild, err error) {
+func NewHnswBuild(proc *process.Process, uid string, nworker int32,
+	cfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) (info *HnswBuild, err error) {
 
 	// estimate the number of worker threads
 	nthread := 0
@@ -235,15 +235,12 @@ func NewHnswBuild(proc *process.Process, uid string, nworker int32, cfg vectorin
 		nthread = 1
 	}
 
-	max_capacity := vectorindex.MaxIndexCapacityInSize / (cfg.Usearch.Dimensions * 4)
-
 	info = &HnswBuild{
-		uid:          uid,
-		cfg:          cfg,
-		tblcfg:       tblcfg,
-		indexes:      make([]*HnswBuildIndex, 0, 16),
-		nthread:      int(nthread),
-		max_capacity: max_capacity,
+		uid:     uid,
+		cfg:     cfg,
+		tblcfg:  tblcfg,
+		indexes: make([]*HnswBuildIndex, 0, 16),
+		nthread: int(nthread),
 	}
 
 	if nthread > 1 {
@@ -351,7 +348,7 @@ func (h *HnswBuild) getIndexForAdd() (idx *HnswBuildIndex, save_idx *HnswBuildIn
 	save_idx = nil
 	nidx := int64(len(h.indexes))
 	if nidx == 0 {
-		idx, err = NewHnswBuildIndex(h.createIndexUniqueKey(nidx), h.cfg, h.nthread, h.max_capacity)
+		idx, err = NewHnswBuildIndex(h.createIndexUniqueKey(nidx), h.cfg, h.nthread, uint(h.tblcfg.IndexCapacity))
 		if err != nil {
 			return nil, nil, err
 		}
@@ -366,7 +363,7 @@ func (h *HnswBuild) getIndexForAdd() (idx *HnswBuildIndex, save_idx *HnswBuildIn
 			save_idx = idx
 
 			// create new index
-			idx, err = NewHnswBuildIndex(h.createIndexUniqueKey(nidx), h.cfg, h.nthread, h.max_capacity)
+			idx, err = NewHnswBuildIndex(h.createIndexUniqueKey(nidx), h.cfg, h.nthread, uint(h.tblcfg.IndexCapacity))
 			if err != nil {
 				return nil, nil, err
 			}

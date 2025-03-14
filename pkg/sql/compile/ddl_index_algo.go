@@ -452,7 +452,7 @@ func (s *Scope) handleVectorHnswIndex(c *Compile, dbSource engine.Database, inde
 	if ok, err := s.isExperimentalEnabled(c, hnswIndexFlag); err != nil {
 		return err
 	} else if !ok {
-		return moerr.NewInternalErrorNoCtx("Hnsw index is not enabled")
+		return moerr.NewInternalErrorNoCtx("experimental_hnsw_index is not enabled")
 	}
 
 	// 1. static check

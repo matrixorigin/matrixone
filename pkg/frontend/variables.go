@@ -3583,6 +3583,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableIntType("hnsw_threads_search", 0, 1024, false),
 		Default:           int64(0),
 	},
+	"hnsw_max_index_capacity": {
+		Name:              "hnsw_max_index_capacity",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("hnsw_max_index_capacity", 1, 5000000000, false),
+		Default:           int64(1000000),
+	},
 	"validate_password": {
 		Name:              "validate_password",
 		Scope:             ScopeGlobal,

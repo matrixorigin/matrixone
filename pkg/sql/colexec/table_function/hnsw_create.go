@@ -42,6 +42,7 @@ type hnswCreateState struct {
 	tblcfg vectorindex.IndexTableConfig
 	idxcfg vectorindex.IndexConfig
 	offset int
+
 	// holding one call batch, tokenizedState owns it.
 	batch *batch.Batch
 }
@@ -111,6 +112,7 @@ func hnswCreatePrepare(proc *process.Process, arg *TableFunction) (tvfState, err
 func (u *hnswCreateState) start(tf *TableFunction, proc *process.Process, nthRow int, analyzer process.Analyzer) (err error) {
 
 	if !u.inited {
+
 		if len(tf.Params) > 0 {
 			err = json.Unmarshal([]byte(tf.Params), &u.param)
 			if err != nil {
@@ -169,9 +171,13 @@ func (u *hnswCreateState) start(tf *TableFunction, proc *process.Process, nthRow
 		if len(cfgstr) == 0 {
 			return moerr.NewInternalError(proc.Ctx, "IndexTableConfig is empty")
 		}
-		err := json.Unmarshal([]byte(cfgstr), &u.tblcfg)
+		err = json.Unmarshal([]byte(cfgstr), &u.tblcfg)
 		if err != nil {
 			return err
+		}
+
+		if u.tblcfg.IndexCapacity <= 0 {
+			return moerr.NewInvalidInput(proc.Ctx, "Index Capacity must be greater than 0")
 		}
 
 		idVec := tf.ctr.argVecs[1]

@@ -49,13 +49,12 @@ func TestBuildMulti(t *testing.T) {
 	tblcfg := vectorindex.IndexTableConfig{DbName: "db", SrcTable: "src",
 		MetadataTable: "__secondary_meta", IndexTable: "__secondary_index",
 		ThreadsSearch: int64(nthread),
-		ThreadsBuild:  int64(nthread)}
+		ThreadsBuild:  int64(nthread),
+		IndexCapacity: MaxIndexCapacity}
 
 	uid := fmt.Sprintf("%s:%d:%d", "localhost", 1, 0)
 	build, err := NewHnswBuild(proc, uid, 1, idxcfg, tblcfg)
 
-	// change the max capacity for test to have a multiple mini-index
-	build.max_capacity = MaxIndexCapacity
 	require.Nil(t, err)
 	defer build.Destroy()
 
@@ -206,12 +205,12 @@ func TestBuildSingleThread(t *testing.T) {
 	tblcfg := vectorindex.IndexTableConfig{DbName: "db", SrcTable: "src",
 		MetadataTable: "__secondary_meta", IndexTable: "__secondary_index",
 		ThreadsSearch: 0,
-		ThreadsBuild:  1}
+		ThreadsBuild:  1,
+		IndexCapacity: MaxIndexCapacity}
+
 	uid := fmt.Sprintf("%s:%d:%d", "localhost", 1, 0)
 	build, err := NewHnswBuild(proc, uid, 1, idxcfg, tblcfg)
 	require.Nil(t, err)
-	// change the max capacity for test to have a multiple mini-index
-	build.max_capacity = MaxIndexCapacity
 	defer build.Destroy()
 
 	// fix the seek

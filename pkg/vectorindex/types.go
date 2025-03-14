@@ -28,8 +28,7 @@ import (
 */
 
 const (
-	MaxIndexCapacityInSize = 2000000000 // 2G
-	MaxChunkSize           = 65536
+	MaxChunkSize = 65536
 )
 
 // HNSW have two secondary index tables, metadata and index storage.  For new vector index algorithm that share the same secondary tables,
@@ -43,6 +42,7 @@ type IndexTableConfig struct {
 	KeyPart       string `json:"part"`
 	ThreadsBuild  int64  `json:"threads_build"`
 	ThreadsSearch int64  `json:"threads_search"`
+	IndexCapacity int64  `json:"index_capacity"`
 
 	// IVF related
 	EntriesTable string `json:"entries"`

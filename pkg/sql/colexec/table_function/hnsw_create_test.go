@@ -227,7 +227,7 @@ func TestHnswCreateIndexTableConfigFail(t *testing.T) {
 
 func makeConstInputExprsHnswCreate() []*plan.Expr {
 
-	tblcfg := `{"db":"db", "src":"src", "metadata":"__metadata", "index":"__index"}`
+	tblcfg := `{"db":"db", "src":"src", "metadata":"__metadata", "index":"__index", "index_capacity": 10000}`
 	ret := []*plan.Expr{
 		{
 			Typ: plan.Type{
@@ -269,7 +269,7 @@ func makeBatchHnswCreate(proc *process.Process) *batch.Batch {
 	bat.Vecs[1] = vector.NewVec(types.New(types.T_int64, 8, 0))         // pkid int64
 	bat.Vecs[2] = vector.NewVec(types.New(types.T_array_float32, 3, 0)) // float32 array [3]float32
 
-	tblcfg := `{"db":"db", "src":"src", "metadata":"__metadata", "index":"__index"}`
+	tblcfg := `{"db":"db", "src":"src", "metadata":"__metadata", "index":"__index", "index_capacity": 10000}`
 	vector.AppendBytes(bat.Vecs[0], []byte(tblcfg), false, proc.Mp())
 	vector.AppendFixed[int64](bat.Vecs[1], int64(1), false, proc.Mp())
 
@@ -290,7 +290,7 @@ func makeBatchHnswCreateFail(proc *process.Process) []failBatch {
 
 	failBatches := make([]failBatch, 0, 3)
 
-	//tblcfg := `{"db":"db", "src":"src", "metadata":"__metadata", "index":"__index"}`
+	//tblcfg := `{"db":"db", "src":"src", "metadata":"__metadata", "index":"__index", "index_capacity": 10000}`
 	{
 		tblcfg := ``
 		ret := []*plan.Expr{
@@ -342,7 +342,7 @@ func makeBatchHnswCreateFail(proc *process.Process) []failBatch {
 
 	}
 	{
-		tblcfg := `{"db":"db", "src":"src", "metadata":"__metadata", "index":"__index"}`
+		tblcfg := `{"db":"db", "src":"src", "metadata":"__metadata", "index":"__index", "index_capacity": 10000}`
 		ret := []*plan.Expr{
 			{
 				Typ: plan.Type{
@@ -392,7 +392,7 @@ func makeBatchHnswCreateFail(proc *process.Process) []failBatch {
 
 	}
 	{
-		//tblcfg := `{"db":"db", "src":"src", "metadata":"__metadata", "index":"__index"}`
+		//tblcfg := `{"db":"db", "src":"src", "metadata":"__metadata", "index":"__index", "index_capacity": 10000}`
 		ret := []*plan.Expr{
 			{
 
@@ -442,7 +442,7 @@ func makeBatchHnswCreateFail(proc *process.Process) []failBatch {
 
 	}
 	{
-		tblcfg := `{"db":"db", "src":"src", "metadata":"__metadata", "index":"__index"}`
+		tblcfg := `{"db":"db", "src":"src", "metadata":"__metadata", "index":"__index", "index_capacity": 10000}`
 		ret := []*plan.Expr{
 			{
 				Typ: plan.Type{
