@@ -508,6 +508,8 @@ func TestS3Writer_SortAndSync(t *testing.T) {
 		bat2.SetRowCount(cnt)
 
 		fs, err := fileservice.Get[fileservice.FileService](proc.Base.FileService, defines.SharedFileServiceName)
+		require.NoError(t, err)
+		
 		s3writer := NewCNS3TombstoneWriter(proc.Mp(), fs, types.T_int32.ToType())
 
 		err = s3writer.Write(ctx, bat2)
