@@ -1722,19 +1722,24 @@ func Test_CNTransferTombstoneObjects(t *testing.T) {
 
 	// mock tombstone object and put it into workspace
 	{
-		w, err := colexec.NewS3TombstoneWriter()
+		proc := rel.GetProcess().(*process.Process)
+
+		w := colexec.NewCNS3TombstoneWriter(proc.Mp(), proc.GetFileService(), types.T_int32.ToType())
 		require.NoError(t, err)
 
-		w.StashBatch(rel.GetProcess().(*process.Process), tombstoneBat)
-		_, ss, err := w.SortAndSync(ctx, rel.GetProcess().(*process.Process))
+		err = w.Write(proc.Ctx, tombstoneBat)
 		require.NoError(t, err)
 
-		require.Equal(t, bat.Length(), int(ss.Rows()))
+		ss, err := w.Sync(ctx)
+		require.NoError(t, err)
+		require.Equal(t, 1, len(ss))
+
+		require.Equal(t, bat.Length(), int(ss[0].Rows()))
 
 		tbat := batch.NewWithSize(1)
 		tbat.Attrs = []string{catalog.ObjectMeta_ObjectStats}
 		tbat.Vecs[0] = vector.NewVec(types.T_text.ToType())
-		err = vector.AppendBytes(tbat.Vecs[0], ss.Marshal(), false, p.Mp)
+		err = vector.AppendBytes(tbat.Vecs[0], ss[0].Marshal(), false, p.Mp)
 		require.NoError(t, err)
 
 		tbat.SetRowCount(tbat.Vecs[0].Length())
@@ -1743,7 +1748,7 @@ func Test_CNTransferTombstoneObjects(t *testing.T) {
 		err = transaction.WriteFile(
 			disttae.DELETE,
 			0, rel.GetDBID(ctx), rel.GetTableID(ctx), databaseName, tableName,
-			ss.ObjectLocation().String(),
+			ss[0].ObjectLocation().String(),
 			tbat,
 			p.D.Engine.GetTNServices()[0],
 		)

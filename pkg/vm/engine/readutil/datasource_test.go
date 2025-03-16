@@ -67,21 +67,22 @@ func TestRemoteDataSource_ApplyTombstones(t *testing.T) {
 
 	bat.SetRowCount(bat.Vecs[0].Length())
 
-	writer, err := colexec.NewS3TombstoneWriter()
-	assert.Nil(t, err)
+	writer := colexec.NewCNS3TombstoneWriter(proc.Mp(), proc.GetFileService(), types.T_int32.ToType())
 
-	writer.StashBatch(proc, bat)
-	_, ss, err := writer.SortAndSync(ctx, proc)
-	assert.Nil(t, err)
+	err := writer.Write(ctx, bat)
+	require.NoError(t, err)
 
-	require.Equal(t, len(rowIds)/2, int(ss.Rows()))
+	ss, err := writer.Sync(ctx)
+	assert.Nil(t, err)
+	require.Equal(t, 1, len(ss))
+	require.Equal(t, len(rowIds)/2, int(ss[0].Rows()))
 
 	tData := NewEmptyTombstoneData()
 	for i := len(rowIds) / 2; i < len(rowIds)-1; i++ {
 		require.NoError(t, tData.AppendInMemory(rowIds[i]))
 	}
 
-	require.NoError(t, tData.AppendFiles(ss))
+	require.NoError(t, tData.AppendFiles(ss[0]))
 
 	relData := NewBlockListRelationData(0)
 	require.NoError(t, relData.AttachTombstones(tData))

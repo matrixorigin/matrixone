@@ -1384,20 +1384,23 @@ func Test_SimpleReader(t *testing.T) {
 	}
 	bat1.SetRowCount(bat1.Vecs[0].Length())
 
-	w, err := colexec.NewS3TombstoneWriter()
-	require.NoError(t, err)
-	defer w.Free(mp)
-	w.StashBatch(proc, bat1)
-	_, stats, err := w.SortAndSync(proc.Ctx, proc)
-	require.NoError(t, err)
-	require.Equal(t, uint32(20), stats.Rows())
-	t.Logf("stats: %s", stats.String())
-
 	fs, err := fileservice.Get[fileservice.FileService](proc.GetFileService(), defines.SharedFileServiceName)
 	require.NoError(t, err)
 
+	w := colexec.NewCNS3TombstoneWriter(proc.Mp(), fs, types.T_int32.ToType())
+	defer w.Close(mp)
+
+	err = w.Write(proc.Ctx, bat1)
+	require.NoError(t, err)
+
+	stats, err := w.Sync(proc.Ctx)
+	require.NoError(t, err)
+	require.Equal(t, 1, len(stats))
+	require.Equal(t, uint32(20), stats[0].Rows())
+	t.Logf("stats: %s", stats[0].String())
+
 	r := readutil.SimpleTombstoneObjectReader(
-		context.Background(), fs, &stats, timestamp.Timestamp{},
+		context.Background(), fs, &stats[0], timestamp.Timestamp{},
 		readutil.WithColumns(
 			[]uint16{0, 1},
 			[]types.Type{objectio.RowidType, pkType},
@@ -1428,7 +1431,7 @@ func Test_SimpleReader(t *testing.T) {
 
 	r = readutil.SimpleMultiObjectsReader(
 		context.Background(), fs,
-		[]objectio.ObjectStats{stats, stats}, timestamp.Timestamp{},
+		[]objectio.ObjectStats{stats[0], stats[0]}, timestamp.Timestamp{},
 		readutil.WithColumns(
 			[]uint16{0, 1},
 			[]types.Type{objectio.RowidType, pkType},
