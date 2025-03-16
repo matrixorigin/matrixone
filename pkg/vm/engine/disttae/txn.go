@@ -656,9 +656,6 @@ func (txn *Transaction) dumpInsertBatchLocked(
 		if s3Writer != nil {
 			s3Writer.Close(txn.proc.GetMPool())
 		}
-		if bat != nil {
-			bat.Clean(txn.proc.GetMPool())
-		}
 	}()
 
 	for tbKey := range mp {
@@ -708,7 +705,6 @@ func (txn *Transaction) dumpInsertBatchLocked(
 		}
 
 		s3Writer.Close(txn.proc.GetMPool())
-		bat.Clean(txn.proc.GetMPool())
 
 		s3Writer = nil
 		bat = nil
@@ -777,10 +773,6 @@ func (txn *Transaction) dumpDeleteBatchLocked(ctx context.Context, offset int, s
 	defer func() {
 		if s3Writer != nil {
 			s3Writer.Close(txn.proc.GetMPool())
-		}
-
-		if bat != nil {
-			bat.Clean(txn.proc.GetMPool())
 		}
 	}()
 

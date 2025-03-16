@@ -839,10 +839,10 @@ var slowPathCounter atomic.Int64
 func (tbl *txnTable) rangesOnePart(
 	ctx context.Context,
 	state *logtailreplay.PartitionState, // snapshot state of this transaction
-	tableDef *plan.TableDef, // table definition (schema)
+	tableDef *plan.TableDef,             // table definition (schema)
 	rangesParam engine.RangesParam,
 	outBlocks *objectio.BlockInfoSlice, // output marshaled block list after filtering
-	proc *process.Process, // process of this transaction
+	proc *process.Process,              // process of this transaction
 	uncommittedObjects []objectio.ObjectStats,
 ) (err error) {
 	var done bool
@@ -1714,7 +1714,9 @@ func (tbl *txnTable) compaction(
 		fileName = stats[0].ObjectLocation().String()
 	}
 
-	return bat, fileName, nil
+	ret, err := bat.Dup(mp)
+	
+	return ret, fileName, err
 }
 
 func (tbl *txnTable) Delete(

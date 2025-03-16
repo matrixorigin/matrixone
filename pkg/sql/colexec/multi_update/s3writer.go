@@ -371,12 +371,6 @@ func (writer *s3WriterDelegate) sortAndSyncOneTable(
 		s3Writer *colexec.CNS3Writer
 	)
 
-	defer func() {
-		if bat != nil {
-			bat.Clean(proc.GetMPool())
-		}
-	}()
-
 	fs, err = fileservice.Get[fileservice.FileService](proc.GetFileService(), defines.SharedFileServiceName)
 	if err != nil {
 		return err
