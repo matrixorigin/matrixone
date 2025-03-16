@@ -74,7 +74,7 @@ func NewCNS3DataWriter(
 
 	var (
 		sequms       []uint16
-		sortKeyIdx   = -1
+		sortKeyIdx   int
 		isPrimaryKey bool
 
 		attrs     []string

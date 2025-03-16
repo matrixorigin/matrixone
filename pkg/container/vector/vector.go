@@ -4488,10 +4488,6 @@ func BuildVarlenaFromVarlena(vec *Vector, v1, v2 *types.Varlena, area *[]byte, m
 		return nil
 	}
 	voff, vlen := v2.OffsetLen()
-	if len((*area)) < int(voff+vlen) {
-		x := 0
-		x++
-	}
 	bs := (*area)[voff : voff+vlen]
 	return BuildVarlenaNoInline(vec, v1, &bs, m)
 }

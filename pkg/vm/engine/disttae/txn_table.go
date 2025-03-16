@@ -1715,7 +1715,7 @@ func (tbl *txnTable) compaction(
 	}
 
 	ret, err := bat.Dup(mp)
-	
+
 	return ret, fileName, err
 }
 

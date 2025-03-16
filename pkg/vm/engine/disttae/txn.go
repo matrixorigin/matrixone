@@ -707,7 +707,6 @@ func (txn *Transaction) dumpInsertBatchLocked(
 		s3Writer.Close(txn.proc.GetMPool())
 
 		s3Writer = nil
-		bat = nil
 	}
 
 	return nil

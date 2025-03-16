@@ -15,8 +15,6 @@
 package multi_update
 
 import (
-	"context"
-
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -27,60 +25,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
-
-func generateBlockWriter(writer *s3WriterDelegate,
-	proc *process.Process, idx int,
-	isDelete bool) (*ioutil.BlockWriter, error) {
-	// Use uuid as segment id
-	// TODO: multiple 64m file in one segment
-	obj := colexec.Get().GenerateObject()
-	s3, err := fileservice.Get[fileservice.FileService](proc.GetFileService(), defines.SharedFileServiceName)
-	if err != nil {
-		return nil, err
-	}
-	seqnums := writer.seqnums[idx]
-	sortIdx := writer.sortIdxs[idx]
-	if isDelete {
-		seqnums = nil
-		sortIdx = 0
-	}
-	blockWriter, err := ioutil.NewBlockWriterNew(
-		s3,
-		obj,
-		writer.schemaVersions[idx],
-		seqnums,
-		isDelete,
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	if sortIdx > -1 {
-		blockWriter.SetSortKey(uint16(sortIdx))
-	}
-
-	if isDelete {
-		blockWriter.SetPrimaryKeyWithType(
-			0,
-			index.HBF,
-			index.ObjectPrefixFn,
-			index.BlockPrefixFn,
-		)
-	} else {
-		if writer.pkIdxs[idx] > -1 {
-			blockWriter.SetPrimaryKey(uint16(writer.pkIdxs[idx]))
-		}
-	}
-
-	return blockWriter, err
-}
 
 func appendCfgToWriter(writer *s3WriterDelegate, tableDef *plan.TableDef) {
 	var seqnums []uint16
@@ -201,27 +149,6 @@ func fetchSomeVecFromCompactBatchs(
 		retBats[i] = newBat
 	}
 	return retBats, nil
-}
-
-func syncThenGetBlockInfoAndStats(ctx context.Context, blockWriter *ioutil.BlockWriter, sortIdx int) ([]objectio.BlockInfo, objectio.ObjectStats, error) {
-	blocks, _, err := blockWriter.Sync(ctx)
-	if err != nil {
-		return nil, objectio.ObjectStats{}, err
-	}
-	blkInfos := make([]objectio.BlockInfo, 0, len(blocks))
-	for j := range blocks {
-		blkInfos = append(blkInfos,
-			blocks[j].GenerateBlockInfo(blockWriter.GetName(), sortIdx != -1),
-		)
-	}
-
-	var stats objectio.ObjectStats
-	if sortIdx != -1 {
-		stats = blockWriter.GetObjectStats(objectio.WithCNCreated(), objectio.WithSorted())
-	} else {
-		stats = blockWriter.GetObjectStats(objectio.WithCNCreated())
-	}
-	return blkInfos, stats, err
 }
 
 func resetMergeBlockForOldCN(proc *process.Process, bat *batch.Batch) error {
