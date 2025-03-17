@@ -217,6 +217,7 @@ func (m *merger[T]) merge(ctx context.Context) error {
 			if _, err := m.writer.WriteBatch(m.buffer); err != nil {
 				return err
 			}
+			m.stats.writtenBytes = m.writer.GetWrittenOriginalSize()
 			// force clean
 			m.buffer.CleanOnlyData()
 
