@@ -280,7 +280,7 @@ func (rm *RoutineManager) Created(rs *Conn) error {
 	routine.setSession(ses)
 	pro.SetSession(ses)
 
-	ses.Debugf(cancelCtx, "have done some preparation for the connection %s", rs.RemoteAddress())
+	ses.Infof(cancelCtx, "have done some preparation for the connection %s", rs.RemoteAddress())
 
 	// With proxy module enabled, we try to update salt value and label info from proxy.
 	if getPu(rm.service).SV.ProxyEnabled {
