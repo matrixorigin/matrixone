@@ -466,22 +466,44 @@ func TestObjectsWithMaximumOverlaps(t *testing.T) {
 }
 
 func TestLargeMerge(t *testing.T) {
-	objs := make([]*catalog.ObjectEntry, 500000)
-	for i := range objs {
-		objs[i] = newTestVarcharObjectEntry(t, "a", "a", 110*common.Const1MBytes)
+	{
+		objs := make([]*catalog.ObjectEntry, 500000)
+		for i := range objs {
+			objs[i] = newTestVarcharObjectEntry(t, "a", "a", 110*common.Const1MBytes)
+		}
+
+		policy := newObjOverlapPolicy()
+		policy.resetForTable(nil, defaultBasicConfig)
+
+		rc := new(resourceController)
+		rc.setMemLimit(50 * common.Const1GBytes)
+		for _, obj := range objs {
+			policy.onObject(obj)
+		}
+		results := policy.revise(rc)
+		// skip all objs with min = max
+		require.Equal(t, 0, len(results))
 	}
 
-	policy := newObjOverlapPolicy()
-	policy.resetForTable(nil, defaultBasicConfig)
+	{
+		objs := make([]*catalog.ObjectEntry, 500000)
+		for i := range objs {
+			objs[i] = newTestVarcharObjectEntry(t, "a", "zdff", 110*common.Const1MBytes)
+		}
 
-	rc := new(resourceController)
-	rc.setMemLimit(50 * common.Const1GBytes)
-	for _, obj := range objs {
-		policy.onObject(obj)
+		policy := newObjOverlapPolicy()
+		policy.resetForTable(nil, defaultBasicConfig)
+
+		rc := new(resourceController)
+		rc.setMemLimit(50 * common.Const1GBytes)
+		for _, obj := range objs {
+			policy.onObject(obj)
+		}
+		results := policy.revise(rc)
+		require.Equal(t, 1, len(results))
+		// mem control squeeze out some objs
+		require.Less(t, len(results[0].objs), 500000)
 	}
-	results := policy.revise(rc)
-	require.Equal(t, 1, len(results))
-	require.Less(t, len(results[0].objs), 500000)
 }
 
 func TestVarcharOverflow(t *testing.T) {
