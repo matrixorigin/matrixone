@@ -342,7 +342,7 @@ func (w *CNS3Writer) OutputRawData(
 
 	for _, bat := range w._hold {
 		if err := vector.AppendFixed(
-			result.Vecs[0], -1, false, proc.Mp()); err != nil {
+			result.Vecs[0], int16(-1), false, proc.Mp()); err != nil {
 			return err
 		}
 

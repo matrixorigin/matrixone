@@ -16,7 +16,6 @@ package insert
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 	"testing"
 	"time"
 
@@ -31,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 	"github.com/stretchr/testify/require"
 )
 

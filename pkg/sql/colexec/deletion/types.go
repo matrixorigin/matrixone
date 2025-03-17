@@ -15,7 +15,6 @@
 package deletion
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -25,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"

@@ -18,13 +18,10 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"math"
 	"sort"
 	"sync"
 	"time"
-
-	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -39,12 +36,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"go.uber.org/zap"
 )
 
 //func (txn *Transaction) getObjInfos(
@@ -1198,46 +1197,6 @@ func (txn *Transaction) compactionBlksLocked(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-
-		//if len(createdBlks) > 0 {
-		//	bat := batch.NewWithSize(2)
-		//	bat.Attrs = []string{catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats}
-		//	bat.SetVector(0, vector.NewVec(types.T_text.ToType()))
-		//	bat.SetVector(1, vector.NewVec(types.T_binary.ToType()))
-		//	for _, blkInfo := range createdBlks {
-		//		vector.AppendBytes(
-		//			bat.GetVector(0),
-		//			objectio.EncodeBlockInfo(&blkInfo),
-		//			false,
-		//			tbl.getTxn().proc.GetMPool())
-		//	}
-		//
-		//	// append the object stats to bat
-		//	if err = vector.AppendBytes(bat.Vecs[1], stats.Marshal(),
-		//		false, tbl.getTxn().proc.GetMPool()); err != nil {
-		//		return err
-		//	}
-		//
-		//	bat.SetRowCount(len(createdBlks))
-		//	defer func() {
-		//		bat.Clean(tbl.getTxn().proc.GetMPool())
-		//	}()
-		//
-		//	err := txn.WriteFileLocked(
-		//		INSERT,
-		//		tbl.accountId,
-		//		tbl.db.databaseId,
-		//		tbl.tableId,
-		//		tbl.db.databaseName,
-		//		tbl.tableName,
-		//		createdBlks[0].MetaLocation().Name().String(),
-		//		bat,
-		//		tbl.getTxn().tnStores[0],
-		//	)
-		//	if err != nil {
-		//		return err
-		//	}
-		//}
 	}
 
 	//compaction for txn.writes
