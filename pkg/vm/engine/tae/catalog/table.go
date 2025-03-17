@@ -17,6 +17,7 @@ package catalog
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"fmt"
 	"math"
 	"slices"
@@ -452,7 +453,7 @@ func (entry *TableEntry) ObjectStats(level common.PPLevel, start, end int, isTom
 		return zmA.CompareMax(zmB)
 	})
 
-	if level > common.PPL0 {
+	if level > common.PPL0 && level < common.PPL4 {
 		for _, objEntry := range objEntries {
 			_ = w.WriteByte('\n')
 			_, _ = w.WriteString(objEntry.ID().String())
@@ -461,6 +462,20 @@ func (entry *TableEntry) ObjectStats(level common.PPLevel, start, end int, isTom
 
 			if w.Len() > 8*common.Const1MBytes {
 				w.WriteString("\n...(truncated for too long, more than 8 MB)")
+				break
+			}
+		}
+		if stat.ObjectCnt > 0 {
+			w.WriteByte('\n')
+		}
+	}
+
+	if level == common.PPL4 {
+		for _, objEntry := range objEntries {
+			_ = w.WriteByte('\n')
+			_, _ = w.WriteString(objEntry.ID().ShortStringEx() + " " + base64.StdEncoding.EncodeToString(objEntry.ObjectStats[:]))
+			if w.Len() > 64*common.Const1MBytes {
+				w.WriteString("\n...(truncated for too long, more than 64 MB)")
 				break
 			}
 		}
