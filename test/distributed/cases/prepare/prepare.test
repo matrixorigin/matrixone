@@ -532,4 +532,25 @@ drop table test_prepare_2;
 drop database db1;
 
 
+create account prepare_account_01 ADMIN_NAME admin IDENTIFIED BY '111111';
+-- @session:id=1&user=prepare_account_01:admin&password=111111
+create role prepare_role1;
+grant create database on account * to prepare_role1;
+create user prepare_user1 identified by '123456' default role prepare_role1;
+-- @session
+-- @session:id=2&user=prepare_account_01:prepare_user1:prepare_role1&password=123456
+select mo_ctl('cn', 'task', ':retention');
+-- @session
+
+-- @session:id=1&user=prepare_account_01:admin&password=111111
+drop user prepare_user1;
+drop role prepare_role1;
+
+-- @session
+
+drop account prepare_account_01;
+
+
+
+
 

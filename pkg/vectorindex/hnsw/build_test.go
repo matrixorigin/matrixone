@@ -29,6 +29,8 @@ import (
 	usearch "github.com/unum-cloud/usearch/golang"
 )
 
+const MaxIndexCapacity = 100000
+
 func TestBuildMulti(t *testing.T) {
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool("", m)
@@ -47,10 +49,12 @@ func TestBuildMulti(t *testing.T) {
 	tblcfg := vectorindex.IndexTableConfig{DbName: "db", SrcTable: "src",
 		MetadataTable: "__secondary_meta", IndexTable: "__secondary_index",
 		ThreadsSearch: int64(nthread),
-		ThreadsBuild:  int64(nthread)}
+		ThreadsBuild:  int64(nthread),
+		IndexCapacity: MaxIndexCapacity}
 
 	uid := fmt.Sprintf("%s:%d:%d", "localhost", 1, 0)
 	build, err := NewHnswBuild(proc, uid, 1, idxcfg, tblcfg)
+
 	require.Nil(t, err)
 	defer build.Destroy()
 
@@ -132,9 +136,10 @@ func TestBuildMulti(t *testing.T) {
 			defer wg2.Done()
 			for i := 0; i < nitem; i++ {
 				key := int64(j*nitem + i)
-				keys, distances, err := search.Search(sample[key], 10)
+				anykeys, distances, err := search.Search(nil, sample[key], vectorindex.RuntimeConfig{Limit: 10})
 				require.Nil(t, err)
-
+				keys, ok := anykeys.([]int64)
+				require.True(t, ok)
 				_ = distances
 				if keys[0] != key {
 					failed++
@@ -168,7 +173,7 @@ func TestBuildIndex(t *testing.T) {
 	idxcfg.Usearch.Metric = 100
 	//tblcfg := vectorindex.IndexTableConfig{DbName: "db", SrcTable: "src", MetadataTable: "__secondary_meta", IndexTable: "__secondary_index"}
 
-	idx, err := NewHnswBuildIndex("abc-0", idxcfg, 1)
+	idx, err := NewHnswBuildIndex("abc-0", idxcfg, 1, MaxIndexCapacity)
 	require.Nil(t, err)
 
 	empty, err := idx.Empty()
@@ -189,7 +194,7 @@ func TestBuildSingleThread(t *testing.T) {
 
 	ndim := 32
 	nthread := 2
-	nitem := vectorindex.MaxIndexCapacity
+	nitem := MaxIndexCapacity
 
 	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(uint(ndim))}
 	idxcfg.Usearch.Metric = usearch.L2sq
@@ -200,7 +205,9 @@ func TestBuildSingleThread(t *testing.T) {
 	tblcfg := vectorindex.IndexTableConfig{DbName: "db", SrcTable: "src",
 		MetadataTable: "__secondary_meta", IndexTable: "__secondary_index",
 		ThreadsSearch: 0,
-		ThreadsBuild:  1}
+		ThreadsBuild:  1,
+		IndexCapacity: MaxIndexCapacity}
+
 	uid := fmt.Sprintf("%s:%d:%d", "localhost", 1, 0)
 	build, err := NewHnswBuild(proc, uid, 1, idxcfg, tblcfg)
 	require.Nil(t, err)
@@ -294,9 +301,10 @@ func TestBuildSingleThread(t *testing.T) {
 			defer wg2.Done()
 			for i := 0; i < nitem; i++ {
 				key := int64(j*nitem + i)
-				keys, distances, err := search.Search(sample[key], 10)
+				anykeys, distances, err := search.Search(nil, sample[key], vectorindex.RuntimeConfig{Limit: 10})
 				require.Nil(t, err)
-
+				keys, ok := anykeys.([]int64)
+				require.True(t, ok)
 				_ = distances
 				if keys[0] != key {
 					failed++

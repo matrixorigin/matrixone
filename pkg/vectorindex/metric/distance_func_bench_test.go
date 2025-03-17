@@ -12,13 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package elkans
+package metric
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
-	"gonum.org/v1/gonum/mat"
 	"math/rand"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
+	"gonum.org/v1/gonum/mat"
 )
 
 /*

@@ -3217,6 +3217,10 @@ var (
 			input:  "alter table t1 alter reindex idx1 hnsw",
 			output: "alter table t1 alter reindex idx1 hnsw",
 		},
+		{
+			input:  "select t.a from sa.t centroidx ('Vector_ip_ops') join u",
+			output: "select t.a from sa.t centroidx ('vector_ip_ops') join u",
+		},
 	}
 )
 

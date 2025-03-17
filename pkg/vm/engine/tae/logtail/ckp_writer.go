@@ -37,6 +37,7 @@ import (
 type BaseCollector_V2 struct {
 	*catalog.LoopProcessor
 	data       *CheckpointData_V2
+	objectSize int
 	start, end types.TS
 	packer     *types.Packer
 }
@@ -47,7 +48,11 @@ func NewBaseCollector_V2(start, end types.TS, size int, fs fileservice.FileServi
 		data:          NewCheckpointData_V2(common.CheckpointAllocator, size, fs),
 		start:         start,
 		end:           end,
+		objectSize:    size,
 		packer:        types.NewPacker(),
+	}
+	if collector.objectSize == 0 {
+		collector.objectSize = DefaultCheckpointSize
 	}
 	collector.ObjectFn = collector.visitObject
 	collector.TombstoneFn = collector.visitObject
@@ -92,7 +97,7 @@ func (collector *BaseCollector_V2) visitObject(entry *catalog.ObjectEntry) error
 		); err != nil {
 			return err
 		}
-		if collector.data.batch.RowCount() >= DefaultCheckpointBlockRows {
+		if collector.data.batch.Size() >= collector.objectSize || collector.data.batch.RowCount() >= DefaultCheckpointBlockRows {
 			collector.data.sinker.Write(context.Background(), collector.data.batch)
 			collector.data.batch.CleanOnlyData()
 		}
