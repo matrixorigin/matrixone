@@ -24,13 +24,14 @@ var _ policy = (*tombstonePolicy)(nil)
 
 type tombstonePolicy struct {
 	tombstones []*catalog.ObjectEntry
+	config     *BasicPolicyConfig
 }
 
-func (t *tombstonePolicy) onObject(entry *catalog.ObjectEntry, config *BasicPolicyConfig) bool {
+func (t *tombstonePolicy) onObject(entry *catalog.ObjectEntry) bool {
 	if !entry.IsTombstone {
 		return false
 	}
-	if len(t.tombstones) == config.MergeMaxOneRun {
+	if len(t.tombstones) == t.config.MergeMaxOneRun {
 		return false
 	}
 	t.tombstones = append(t.tombstones, entry)
@@ -41,11 +42,12 @@ func (t *tombstonePolicy) revise(*resourceController) []reviseResult {
 	if len(t.tombstones) < 2 {
 		return nil
 	}
-	return []reviseResult{{slices.Clone(t.tombstones), taskHostDN}}
+	return []reviseResult{{objs: slices.Clone(t.tombstones), kind: taskHostDN}}
 }
 
-func (t *tombstonePolicy) resetForTable(*catalog.TableEntry, *BasicPolicyConfig) {
+func (t *tombstonePolicy) resetForTable(entry *catalog.TableEntry, config *BasicPolicyConfig) {
 	t.tombstones = t.tombstones[:0]
+	t.config = config
 }
 
 func newTombstonePolicy() policy {

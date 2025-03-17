@@ -15,9 +15,10 @@
 package mergesort
 
 import (
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestMergeStats(t *testing.T) {
@@ -50,12 +51,12 @@ func TestMergeStats(t *testing.T) {
 			expected: false,
 		},
 		{
-			stats:    mergeStats{targetObjSize: 5, rowSize: 1, objRowCnt: 6, mergedRowCnt: 6, totalRowCnt: 12},
+			stats:    mergeStats{targetObjSize: 5, rowSize: 1, objRowCnt: 6, mergedRowCnt: 6, totalRowCnt: 12, writtenBytes: 6},
 			expected: true,
 		},
 	}
 
-	for _, c := range cases {
-		require.Equal(t, c.expected, c.stats.needNewObject())
+	for i, c := range cases {
+		require.Equal(t, c.expected, c.stats.needNewObject(), "case %d", i)
 	}
 }
