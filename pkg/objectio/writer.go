@@ -206,6 +206,10 @@ func (w *objectWriterV1) Write(batch *batch.Batch) (BlockObject, error) {
 	return block, nil
 }
 
+func (w *objectWriterV1) GetOrignalSize() uint32 {
+	return w.originSize
+}
+
 func (w *objectWriterV1) WriteSubBlock(batch *batch.Batch, dataType DataMetaType) (BlockObject, int, error) {
 	denseSeqnums := NewSeqnums(nil)
 	denseSeqnums.InitWithColCnt(len(batch.Vecs))

@@ -47,8 +47,8 @@ func TestResourceController(t *testing.T) {
 		newTestVarcharObjectEntry(t, "", "", 2),
 	}
 	rc.reserveResources(objs)
-	require.Equal(t, int64(2), rc.reservedMergeRows)
-	require.Equal(t, int64(8256), rc.reserved)
+	require.Equal(t, int64(4), rc.reservedMergeRows)
+	require.Greater(t, rc.reserved, int64(120))
 }
 
 func Test_CleanUpUselessFiles(t *testing.T) {

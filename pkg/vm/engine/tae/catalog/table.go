@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"slices"
 	"sync/atomic"
 	"time"
 
@@ -435,16 +436,21 @@ func (entry *TableEntry) ObjectStats(level common.PPLevel, start, end int, isTom
 		}
 	}
 
-	// slices.SortFunc(objEntries, func(a, b *ObjectEntry) int {
-	// 	zmA := a.SortKeyZoneMap()
-	// 	zmB := b.SortKeyZoneMap()
-
-	// 	c := zmA.CompareMin(zmB)
-	// 	if c != 0 {
-	// 		return c
-	// 	}
-	// 	return zmA.CompareMax(zmB)
-	// })
+	slices.SortFunc(objEntries, func(a, b *ObjectEntry) int {
+		zmA := a.SortKeyZoneMap()
+		zmB := b.SortKeyZoneMap()
+		if !zmA.IsInited() {
+			return -1
+		}
+		if !zmB.IsInited() {
+			return 1
+		}
+		c := zmA.CompareMin(zmB)
+		if c != 0 {
+			return c
+		}
+		return zmA.CompareMax(zmB)
+	})
 
 	if level > common.PPL0 {
 		for _, objEntry := range objEntries {
