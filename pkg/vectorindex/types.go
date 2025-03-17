@@ -72,7 +72,7 @@ type IvfflatIndexConfig struct {
 	Metric     uint16
 	InitType   uint16
 	Dimensions uint
-	Normalize  bool
+	Spherical  bool
 	Version    int64
 	VectorType int32
 }

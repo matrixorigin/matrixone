@@ -104,7 +104,7 @@ func (u *ivfCreateState) end(tf *TableFunction, proc *process.Process) error {
 		defaultKmeansDeltaThreshold,
 		metric.MetricType(u.idxcfg.Ivfflat.Metric),
 		kmeans.InitType(u.idxcfg.Ivfflat.InitType),
-		u.idxcfg.Ivfflat.Normalize,
+		u.idxcfg.Ivfflat.Spherical, // For dense vector, spherical kmeans is false.
 		int(nworker)); err != nil {
 		return err
 	}
@@ -208,7 +208,7 @@ func (u *ivfCreateState) start(tf *TableFunction, proc *process.Process, nthRow 
 			return moerr.NewInternalError(proc.Ctx, "invalid optype")
 		}
 		u.idxcfg.Ivfflat.Metric = uint16(metrictype)
-		u.idxcfg.Ivfflat.Normalize = false
+		u.idxcfg.Ivfflat.Spherical = false // For Dense vector, spherical = false
 
 		// IndexTableConfig
 		cfgVec := tf.ctr.argVecs[0]

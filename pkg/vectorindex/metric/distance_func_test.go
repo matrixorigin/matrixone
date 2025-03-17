@@ -15,10 +15,79 @@
 package metric
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
+	"github.com/stretchr/testify/require"
 )
+
+func Test_ResolveFun(t *testing.T) {
+
+	tests := []struct {
+		metricType MetricType
+		spherical  bool
+		distfn     DistanceFunction
+		normalize  bool
+	}{
+		{
+			metricType: Metric_L2Distance,
+			spherical:  false,
+			distfn:     L2Distance,
+			normalize:  false,
+		},
+		{
+			metricType: Metric_InnerProduct,
+			spherical:  false,
+			distfn:     L2Distance,
+			normalize:  false,
+		},
+		{
+			metricType: Metric_CosineDistance,
+			spherical:  false,
+			distfn:     L2Distance,
+			normalize:  false,
+		},
+		{
+			metricType: Metric_L1Distance,
+			spherical:  false,
+			distfn:     L2Distance,
+			normalize:  false,
+		},
+
+		{
+			metricType: Metric_L2Distance,
+			spherical:  true,
+			distfn:     L2Distance,
+			normalize:  false,
+		},
+		{
+			metricType: Metric_InnerProduct,
+			spherical:  true,
+			distfn:     SphericalDistance,
+			normalize:  true,
+		},
+		{
+			metricType: Metric_CosineDistance,
+			spherical:  true,
+			distfn:     SphericalDistance,
+			normalize:  true,
+		},
+		{
+			metricType: Metric_L1Distance,
+			spherical:  true,
+			distfn:     L2Distance,
+			normalize:  false,
+		},
+	}
+
+	for _, tt := range tests {
+		distfn, normalize, err := ResolveKmeansDistanceFn(tt.metricType, tt.spherical)
+		require.Nil(t, err)
+		require.Equal(t, reflect.ValueOf(distfn), reflect.ValueOf(tt.distfn))
+		require.Equal(t, normalize, tt.normalize)
+	}
+}
 
 func Test_L2Distance(t *testing.T) {
 	type args struct {
