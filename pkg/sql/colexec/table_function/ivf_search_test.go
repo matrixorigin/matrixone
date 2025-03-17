@@ -27,49 +27,60 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
+	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
-type hnswCreateTestCase struct {
+type ivfSearchTestCase struct {
 	arg  *TableFunction
 	proc *process.Process
 }
 
 var (
-	hnswcreatedefaultAttrs = []string{"status"}
+	ivfsearchdefaultAttrs = []string{"pkid", "score"}
 
-	hnswcreatedefaultColdefs = []*plan.ColDef{
+	ivfsearchdefaultColdefs = []*plan.ColDef{
 		// row_id type should be same as index type
 		{
-			Name: "status",
+			Name: "pkid",
 			Typ: plan.Type{
-				Id:          int32(types.T_int32),
+				Id:          int32(types.T_int64),
 				NotNullable: false,
+			},
+		},
+		{
+			Name: "score",
+			Typ: plan.Type{
+				Id:          int32(types.T_float64),
+				NotNullable: false,
+				Width:       8,
 			},
 		},
 	}
 )
 
-func newHnswCreateTestCase(m *mpool.MPool, attrs []string, param string) hnswCreateTestCase {
+func newIvfSearchTestCase(m *mpool.MPool, attrs []string, param string) ivfSearchTestCase {
 	proc := testutil.NewProcessWithMPool("", m)
 	colDefs := make([]*plan.ColDef, len(attrs))
 	for i := range attrs {
-		for j := range hnswcreatedefaultColdefs {
-			if attrs[i] == hnswcreatedefaultColdefs[j].Name {
-				colDefs[i] = hnswcreatedefaultColdefs[j]
+		for j := range ivfsearchdefaultColdefs {
+			if attrs[i] == ivfsearchdefaultColdefs[j].Name {
+				colDefs[i] = ivfsearchdefaultColdefs[j]
 				break
 			}
 		}
 	}
 
-	ret := hnswCreateTestCase{
+	ret := ivfSearchTestCase{
 		proc: proc,
 		arg: &TableFunction{
 			Attrs:    attrs,
 			Rets:     colDefs,
-			FuncName: "hnsw_create",
+			FuncName: "ivf_search",
 			OperatorBase: vm.OperatorBase{
 				OperatorInfo: vm.OperatorInfo{
 					Idx:     0,
@@ -83,21 +94,52 @@ func newHnswCreateTestCase(m *mpool.MPool, attrs []string, param string) hnswCre
 	return ret
 }
 
-func mock_hnsw_runSql(proc *process.Process, sql string) (executor.Result, error) {
+func mock_ivf_runSql(proc *process.Process, sql string) (executor.Result, error) {
 
 	return executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{}}, nil
 }
 
-func TestHnswCreate(t *testing.T) {
+func mockVersion(proc *process.Process, tblcfg vectorindex.IndexTableConfig) (int64, error) {
+	return 0, nil
+}
 
-	hnsw_runSql = mock_hnsw_runSql
+type MockIvfSearch[T types.RealNumbers] struct {
+	Idxcfg vectorindex.IndexConfig
+	Tblcfg vectorindex.IndexTableConfig
+}
 
-	param := "{\"op_type\": \"vector_l2_ops\"}"
-	ut := newHnswCreateTestCase(mpool.MustNewZero(), hnswcreatedefaultAttrs, param)
+func (m *MockIvfSearch[T]) Search(proc *process.Process, query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
+	//time.Sleep(2 * time.Millisecond)
+	return []any{int64(1)}, []float64{2.0}, nil
+}
 
-	inbat := makeBatchHnswCreate(ut.proc)
+func (m *MockIvfSearch[T]) Destroy() {
+}
 
-	ut.arg.Args = makeConstInputExprsHnswCreate()
+func (m *MockIvfSearch[T]) Load(*process.Process) error {
+	//time.Sleep(6 * time.Second)
+	return nil
+}
+
+func (m *MockIvfSearch[T]) UpdateConfig(newalgo cache.VectorIndexSearchIf) error {
+	return nil
+}
+
+func newMockIvfAlgoFn(idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) (veccache.VectorIndexSearchIf, error) {
+	return &MockIvfSearch[float32]{Idxcfg: idxcfg, Tblcfg: tblcfg}, nil
+}
+
+func TestIvfSearch(t *testing.T) {
+
+	newIvfAlgo = newMockIvfAlgoFn
+	getVersion = mockVersion
+
+	param := "{\"op_type\": \"vector_l2_ops\", \"lists\": \"3\"}"
+	ut := newIvfSearchTestCase(mpool.MustNewZero(), ivfsearchdefaultAttrs, param)
+
+	inbat := makeBatchIvfSearch(ut.proc)
+
+	ut.arg.Args = makeConstInputExprsIvfSearch()
 
 	// Prepare
 	err := ut.arg.Prepare(ut.proc)
@@ -116,7 +158,7 @@ func TestHnswCreate(t *testing.T) {
 	result, err := ut.arg.ctr.state.call(ut.arg, ut.proc)
 	require.Nil(t, err)
 
-	require.Equal(t, result.Status, vm.ExecStop)
+	require.Equal(t, result.Status, vm.ExecNext)
 
 	err = ut.arg.ctr.state.end(ut.arg, ut.proc)
 	require.Nil(t, err)
@@ -128,24 +170,23 @@ func TestHnswCreate(t *testing.T) {
 	ut.arg.ctr.state.free(ut.arg, ut.proc, false, nil)
 }
 
-var failedparam []string = []string{"{",
-	"{\"op_type\": \"vector_cos_ops\"}",
-	"{\"op_type\": \"vector_l2_ops\", \"quantization\":\"invalid\"}",
-	"{\"op_type\": \"vector_l2_ops\", \"m\":\"notnumber\"}",
-	"{\"op_type\": \"vector_l2_ops\", \"ef_construction\":\"notnumber\"}",
-	"{\"op_type\": \"vector_l2_ops\"}, \"ef_search\":\"notnumber\"",
+var failedivfsearchparam []string = []string{"{",
+	"{\"op_type\": \"vector_xxx_ops\"}",
+	"{\"op_type\": \"vector_l2_ops\", \"lists\":\"\"}",
+	"{\"op_type\": \"vector_l2_ops\", \"lists\":\"notnumber\"}",
 }
 
-func TestHnswCreateParamFail(t *testing.T) {
+func TestIvfSearchParamFail(t *testing.T) {
 
-	hnsw_runSql = mock_hnsw_runSql
+	newIvfAlgo = newMockIvfAlgoFn
+	getVersion = mockVersion
 
-	for _, param := range failedparam {
-		ut := newHnswCreateTestCase(mpool.MustNewZero(), hnswcreatedefaultAttrs, param)
+	for _, param := range failedivfsearchparam {
+		ut := newIvfSearchTestCase(mpool.MustNewZero(), ivfsearchdefaultAttrs, param)
 
-		inbat := makeBatchHnswCreate(ut.proc)
+		inbat := makeBatchIvfSearch(ut.proc)
 
-		ut.arg.Args = makeConstInputExprsHnswCreate()
+		ut.arg.Args = makeConstInputExprsIvfSearch()
 
 		// Prepare
 		err := ut.arg.Prepare(ut.proc)
@@ -157,6 +198,7 @@ func TestHnswCreateParamFail(t *testing.T) {
 		}
 
 		// start
+		fmt.Println(param)
 		err = ut.arg.ctr.state.start(ut.arg, ut.proc, 0, nil)
 		require.NotNil(t, err)
 		os.Stderr.WriteString(fmt.Sprintf("%v\n", err))
@@ -180,13 +222,14 @@ func TestHnswCreateParamFail(t *testing.T) {
 	*/
 }
 
-func TestHnswCreateIndexTableConfigFail(t *testing.T) {
+func TestIvfSearchIndexTableConfigFail(t *testing.T) {
 
-	hnsw_runSql = mock_hnsw_runSql
-	param := "{\"op_type\": \"vector_l2_ops\"}"
+	ivf_runSql = mock_ivf_runSql
+	getVersion = mockVersion
+	param := "{\"op_type\": \"vector_l2_ops\", \"lists\": \"3\"}"
 
-	ut := newHnswCreateTestCase(mpool.MustNewZero(), hnswcreatedefaultAttrs, param)
-	failbatches := makeBatchHnswCreateFail(ut.proc)
+	ut := newIvfSearchTestCase(mpool.MustNewZero(), ivfsearchdefaultAttrs, param)
+	failbatches := makeBatchIvfSearchFail(ut.proc)
 	for _, b := range failbatches {
 
 		inbat := b.bat
@@ -225,9 +268,9 @@ func TestHnswCreateIndexTableConfigFail(t *testing.T) {
 	*/
 }
 
-func makeConstInputExprsHnswCreate() []*plan.Expr {
+func makeConstInputExprsIvfSearch() []*plan.Expr {
 
-	tblcfg := `{"db":"db", "src":"src", "metadata":"__metadata", "index":"__index", "index_capacity": 10000}`
+	tblcfg := fmt.Sprintf(`{"db":"db", "src":"src", "metadata":"__metadata", "index":"__index", "entries":"__entries", "parttype": %d}`, int32(types.T_array_float32))
 	ret := []*plan.Expr{
 		{
 			Typ: plan.Type{
@@ -242,55 +285,34 @@ func makeConstInputExprsHnswCreate() []*plan.Expr {
 				},
 			},
 		},
-		{
-
-			Typ: plan.Type{
-				Id: int32(types.T_int64),
-			},
-			Expr: &plan.Expr_Lit{
-				Lit: &plan.Literal{
-					Value: &plan.Literal_I64Val{
-						I64Val: 1,
-					},
-				},
-			},
-		},
 
 		plan2.MakePlan2Vecf32ConstExprWithType("[0,1,2]", 3),
 	}
 
 	return ret
 }
-func makeBatchHnswCreate(proc *process.Process) *batch.Batch {
+func makeBatchIvfSearch(proc *process.Process) *batch.Batch {
 
-	bat := batch.NewWithSize(3)
+	bat := batch.NewWithSize(2)
 
 	bat.Vecs[0] = vector.NewVec(types.New(types.T_varchar, 128, 0))     // index table config
-	bat.Vecs[1] = vector.NewVec(types.New(types.T_int64, 8, 0))         // pkid int64
-	bat.Vecs[2] = vector.NewVec(types.New(types.T_array_float32, 3, 0)) // float32 array [3]float32
+	bat.Vecs[1] = vector.NewVec(types.New(types.T_array_float32, 3, 0)) // float32 array [3]float32
 
-	tblcfg := `{"db":"db", "src":"src", "metadata":"__metadata", "index":"__index", "index_capacity": 10000}`
+	tblcfg := fmt.Sprintf(`{"db":"db", "src":"src", "metadata":"__metadata", "index":"__index", "entries":"__entries", "parttype": %d}`, int32(types.T_array_float32))
 	vector.AppendBytes(bat.Vecs[0], []byte(tblcfg), false, proc.Mp())
-	vector.AppendFixed[int64](bat.Vecs[1], int64(1), false, proc.Mp())
 
 	v := []float32{0, 1, 2}
-	vector.AppendArray[float32](bat.Vecs[2], v, false, proc.Mp())
+	vector.AppendArray[float32](bat.Vecs[1], v, false, proc.Mp())
 
 	bat.SetRowCount(1)
 	return bat
 
 }
 
-type failBatch struct {
-	args []*plan.Expr
-	bat  *batch.Batch
-}
-
-func makeBatchHnswCreateFail(proc *process.Process) []failBatch {
+func makeBatchIvfSearchFail(proc *process.Process) []failBatch {
 
 	failBatches := make([]failBatch, 0, 3)
 
-	//tblcfg := `{"db":"db", "src":"src", "metadata":"__metadata", "index":"__index", "index_capacity": 10000}`
 	{
 		tblcfg := ``
 		ret := []*plan.Expr{
@@ -307,34 +329,19 @@ func makeBatchHnswCreateFail(proc *process.Process) []failBatch {
 					},
 				},
 			},
-			{
-
-				Typ: plan.Type{
-					Id: int32(types.T_int64),
-				},
-				Expr: &plan.Expr_Lit{
-					Lit: &plan.Literal{
-						Value: &plan.Literal_I64Val{
-							I64Val: 1,
-						},
-					},
-				},
-			},
 
 			plan2.MakePlan2Vecf32ConstExprWithType("[0,1,2]", 3),
 		}
 
-		bat := batch.NewWithSize(3)
+		bat := batch.NewWithSize(2)
 
 		bat.Vecs[0] = vector.NewVec(types.New(types.T_varchar, 128, 0))     // index table config
-		bat.Vecs[1] = vector.NewVec(types.New(types.T_int64, 8, 0))         // pkid int64
-		bat.Vecs[2] = vector.NewVec(types.New(types.T_array_float32, 3, 0)) // float32 array [3]float32
+		bat.Vecs[1] = vector.NewVec(types.New(types.T_array_float32, 3, 0)) // float32 array [3]float32
 
 		vector.AppendBytes(bat.Vecs[0], []byte(tblcfg), false, proc.Mp())
-		vector.AppendFixed[int64](bat.Vecs[1], int64(1), false, proc.Mp())
 
 		v := []float32{0, 1, 2}
-		vector.AppendArray[float32](bat.Vecs[2], v, false, proc.Mp())
+		vector.AppendArray[float32](bat.Vecs[1], v, false, proc.Mp())
 
 		bat.SetRowCount(1)
 
@@ -342,57 +349,7 @@ func makeBatchHnswCreateFail(proc *process.Process) []failBatch {
 
 	}
 	{
-		tblcfg := `{"db":"db", "src":"src", "metadata":"__metadata", "index":"__index", "index_capacity": 10000}`
-		ret := []*plan.Expr{
-			{
-				Typ: plan.Type{
-					Id:    int32(types.T_varchar),
-					Width: 512,
-				},
-				Expr: &plan.Expr_Lit{
-					Lit: &plan.Literal{
-						Value: &plan.Literal_Sval{
-							Sval: tblcfg,
-						},
-					},
-				},
-			},
-			{
-
-				Typ: plan.Type{
-					Id: int32(types.T_int32),
-				},
-				Expr: &plan.Expr_Lit{
-					Lit: &plan.Literal{
-						Value: &plan.Literal_I32Val{
-							I32Val: 1,
-						},
-					},
-				},
-			},
-
-			plan2.MakePlan2Vecf32ConstExprWithType("[0,1,2]", 3),
-		}
-
-		bat := batch.NewWithSize(3)
-
-		bat.Vecs[0] = vector.NewVec(types.New(types.T_varchar, 128, 0))     // index table config
-		bat.Vecs[1] = vector.NewVec(types.New(types.T_int32, 8, 0))         // pkid int64
-		bat.Vecs[2] = vector.NewVec(types.New(types.T_array_float32, 3, 0)) // float32 array [3]float32
-
-		vector.AppendBytes(bat.Vecs[0], []byte(tblcfg), false, proc.Mp())
-		vector.AppendFixed[int32](bat.Vecs[1], int32(1), false, proc.Mp())
-
-		v := []float32{0, 1, 2}
-		vector.AppendArray[float32](bat.Vecs[2], v, false, proc.Mp())
-
-		bat.SetRowCount(1)
-
-		failBatches = append(failBatches, failBatch{ret, bat})
-
-	}
-	{
-		//tblcfg := `{"db":"db", "src":"src", "metadata":"__metadata", "index":"__index", "index_capacity": 10000}`
+		//tblcfg := `{"db":"db", "src":"src", "metadata":"__metadata", "index":"__index"}`
 		ret := []*plan.Expr{
 			{
 
@@ -407,34 +364,19 @@ func makeBatchHnswCreateFail(proc *process.Process) []failBatch {
 					},
 				},
 			},
-			{
-
-				Typ: plan.Type{
-					Id: int32(types.T_int64),
-				},
-				Expr: &plan.Expr_Lit{
-					Lit: &plan.Literal{
-						Value: &plan.Literal_I64Val{
-							I64Val: 1,
-						},
-					},
-				},
-			},
 
 			plan2.MakePlan2Vecf32ConstExprWithType("[0,1,2]", 3),
 		}
 
-		bat := batch.NewWithSize(3)
+		bat := batch.NewWithSize(2)
 
 		bat.Vecs[0] = vector.NewVec(types.New(types.T_int64, 8, 0))         // index table config
-		bat.Vecs[1] = vector.NewVec(types.New(types.T_int64, 8, 0))         // pkid int64
-		bat.Vecs[2] = vector.NewVec(types.New(types.T_array_float32, 3, 0)) // float32 array [3]float32
+		bat.Vecs[1] = vector.NewVec(types.New(types.T_array_float32, 3, 0)) // float32 array [3]float32
 
 		vector.AppendFixed[int64](bat.Vecs[0], int64(1), false, proc.Mp())
-		vector.AppendFixed[int64](bat.Vecs[1], int64(1), false, proc.Mp())
 
 		v := []float32{0, 1, 2}
-		vector.AppendArray[float32](bat.Vecs[2], v, false, proc.Mp())
+		vector.AppendArray[float32](bat.Vecs[1], v, false, proc.Mp())
 
 		bat.SetRowCount(1)
 
@@ -442,7 +384,7 @@ func makeBatchHnswCreateFail(proc *process.Process) []failBatch {
 
 	}
 	{
-		tblcfg := `{"db":"db", "src":"src", "metadata":"__metadata", "index":"__index", "index_capacity": 10000}`
+		tblcfg := `{"db":"db", "src":"src", "metadata":"__metadata", "index":"__index"}`
 		ret := []*plan.Expr{
 			{
 				Typ: plan.Type{
@@ -470,31 +412,15 @@ func makeBatchHnswCreateFail(proc *process.Process) []failBatch {
 					},
 				},
 			},
-
-			{
-
-				Typ: plan.Type{
-					Id: int32(types.T_int64),
-				},
-				Expr: &plan.Expr_Lit{
-					Lit: &plan.Literal{
-						Value: &plan.Literal_I64Val{
-							I64Val: 1,
-						},
-					},
-				},
-			},
 		}
 
-		bat := batch.NewWithSize(3)
+		bat := batch.NewWithSize(2)
 
 		bat.Vecs[0] = vector.NewVec(types.New(types.T_varchar, 128, 0)) // index table config
 		bat.Vecs[1] = vector.NewVec(types.New(types.T_int64, 8, 0))     // pkid int64
-		bat.Vecs[2] = vector.NewVec(types.New(types.T_int64, 8, 0))     // pkid int64
 
 		vector.AppendBytes(bat.Vecs[0], []byte(tblcfg), false, proc.Mp())
 		vector.AppendFixed[int64](bat.Vecs[1], int64(1), false, proc.Mp())
-		vector.AppendFixed[int64](bat.Vecs[2], int64(1), false, proc.Mp())
 
 		bat.SetRowCount(1)
 

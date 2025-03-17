@@ -23,10 +23,10 @@ import (
 
 // coldef shall copy index type
 var (
-	hnsw_create_func_name = "hnsw_create"
-	hnsw_search_func_name = "hnsw_search"
+	ivf_create_func_name = "ivf_create"
+	ivf_search_func_name = "ivf_search"
 
-	hnswBuildIndexColDefs = []*plan.ColDef{
+	ivfBuildIndexColDefs = []*plan.ColDef{
 		{
 			Name: "status",
 			Typ: plan.Type{
@@ -37,13 +37,12 @@ var (
 		},
 	}
 
-	hnswSearchColDefs = []*plan.ColDef{
+	ivfSearchColDefs = []*plan.ColDef{
 		{
 			Name: "pkid",
 			Typ: plan.Type{
-				Id:          int32(types.T_int64),
+				Id:          int32(types.T_any),
 				NotNullable: false,
-				Width:       8,
 			},
 		},
 		{
@@ -57,14 +56,14 @@ var (
 	}
 )
 
-// arg list [param, hnsw.IndexTableConfig (JSON), pkid, vec]
-func (builder *QueryBuilder) buildHnswCreate(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
-	if len(exprs) < 4 {
-		return 0, moerr.NewInvalidInput(builder.GetContext(), "Invalid number of arguments (NARGS < 4).")
+// arg list [param, ivf.IndexTableConfig (JSON), vec]
+func (builder *QueryBuilder) buildIvfCreate(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
+	if len(exprs) < 3 {
+		return 0, moerr.NewInvalidInput(builder.GetContext(), "Invalid number of arguments (NARGS < 3).")
 	}
 
-	colDefs := _getColDefs(hnswBuildIndexColDefs)
-	params, err := builder.getHnswParams(tbl.Func)
+	colDefs := _getColDefs(ivfBuildIndexColDefs)
+	params, err := builder.getIvfParams(tbl.Func)
 	if err != nil {
 		return 0, err
 	}
@@ -84,9 +83,9 @@ func (builder *QueryBuilder) buildHnswCreate(tbl *tree.TableFunction, ctx *BindC
 			TableType: "func_table", //test if ok
 			//Name:               tbl.String(),
 			TblFunc: &plan.TableFunction{
-				Name:     hnsw_create_func_name,
+				Name:     ivf_create_func_name,
 				Param:    []byte(params),
-				IsSingle: true, // model building require single thread mode so set IsSingle to true
+				IsSingle: true, // centroid computation require single thread mode so set IsSingle to true
 			},
 			Cols: colDefs,
 		},
@@ -97,15 +96,15 @@ func (builder *QueryBuilder) buildHnswCreate(tbl *tree.TableFunction, ctx *BindC
 	return builder.appendNode(node, ctx), nil
 }
 
-// arg list [param, hnsw.IndexTableconfig (JSON), search_vec]
-func (builder *QueryBuilder) buildHnswSearch(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
+// arg list [param, ivf.IndexTableconfig (JSON), search_vec]
+func (builder *QueryBuilder) buildIvfSearch(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
 	if len(exprs) != 3 {
 		return 0, moerr.NewInvalidInput(builder.GetContext(), "Invalid number of arguments (NARGS != 3).")
 	}
 
-	colDefs := _getColDefs(hnswSearchColDefs)
+	colDefs := _getColDefs(ivfSearchColDefs)
 
-	params, err := builder.getHnswParams(tbl.Func)
+	params, err := builder.getIvfParams(tbl.Func)
 	if err != nil {
 		return 0, err
 	}
@@ -119,7 +118,7 @@ func (builder *QueryBuilder) buildHnswSearch(tbl *tree.TableFunction, ctx *BindC
 			TableType: "func_table", //test if ok
 			//Name:               tbl.String(),
 			TblFunc: &plan.TableFunction{
-				Name:  hnsw_search_func_name,
+				Name:  ivf_search_func_name,
 				Param: []byte(params),
 			},
 			Cols: colDefs,
@@ -131,7 +130,7 @@ func (builder *QueryBuilder) buildHnswSearch(tbl *tree.TableFunction, ctx *BindC
 	return builder.appendNode(node, ctx), nil
 }
 
-func (builder *QueryBuilder) getHnswParams(fn *tree.FuncExpr) (string, error) {
+func (builder *QueryBuilder) getIvfParams(fn *tree.FuncExpr) (string, error) {
 	if _, ok := fn.Exprs[0].(*tree.NumVal); ok {
 		return fn.Exprs[0].String(), nil
 	}
