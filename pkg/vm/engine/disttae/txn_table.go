@@ -1695,14 +1695,14 @@ func (tbl *txnTable) compaction(
 			continue
 		}
 
-		if err = s3Writer.Write(ctx, bat); err != nil {
+		if err = s3Writer.Write(ctx, mp, bat); err != nil {
 			return nil, fileName, err
 		}
 
 		bat.Clean(tbl.getTxn().proc.GetMPool())
 	}
 
-	if stats, err = s3Writer.Sync(ctx); err != nil {
+	if stats, err = s3Writer.Sync(ctx, mp); err != nil {
 		return nil, fileName, err
 	}
 

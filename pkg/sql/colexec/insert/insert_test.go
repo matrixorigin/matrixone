@@ -16,6 +16,7 @@ package insert
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 	"testing"
 	"time"
 
@@ -133,7 +134,11 @@ func TestInsert_initBufForS3(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			insert := &Insert{}
+			insert := &Insert{
+				InsertCtx: &InsertCtx{
+					Engine: nil,
+				},
+			}
 			insert.initBufForS3()
 			require.NotNil(t, insert.ctr.buf)
 			require.Equal(t, 2, len(insert.ctr.buf.Attrs))
@@ -141,6 +146,23 @@ func TestInsert_initBufForS3(t *testing.T) {
 			require.Equal(t, catalog.ObjectMeta_ObjectStats, insert.ctr.buf.Attrs[1])
 			require.Equal(t, types.T_text, insert.ctr.buf.Vecs[0].GetType().Oid)
 			require.Equal(t, types.T_binary, insert.ctr.buf.Vecs[1].GetType().Oid)
+		})
+
+		t.Run(tt.name, func(t *testing.T) {
+			insert := &Insert{
+				InsertCtx: &InsertCtx{
+					Engine: &memoryengine.BindedEngine{},
+				},
+			}
+			insert.initBufForS3()
+			require.NotNil(t, insert.ctr.buf)
+			require.Equal(t, 3, len(insert.ctr.buf.Attrs))
+			require.Equal(t, catalog.BlockMeta_TableIdx_Insert, insert.ctr.buf.Attrs[0])
+			require.Equal(t, catalog.BlockMeta_BlockInfo, insert.ctr.buf.Attrs[1])
+			require.Equal(t, catalog.ObjectMeta_ObjectStats, insert.ctr.buf.Attrs[2])
+			require.Equal(t, types.T_int16, insert.ctr.buf.Vecs[0].GetType().Oid)
+			require.Equal(t, types.T_text, insert.ctr.buf.Vecs[1].GetType().Oid)
+			require.Equal(t, types.T_binary, insert.ctr.buf.Vecs[2].GetType().Oid)
 		})
 	}
 }

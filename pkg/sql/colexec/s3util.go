@@ -132,23 +132,35 @@ func NewCNS3DataWriter(
 	return writer
 }
 
-func (w *CNS3Writer) Write(ctx context.Context, bat *batch.Batch) error {
+func (w *CNS3Writer) Write(ctx context.Context, mp *mpool.MPool, bat *batch.Batch) error {
 	if w._holdFlushUntilSyncCall {
-		w._hold = append(w._hold, bat)
+		copied, err := bat.Dup(mp)
+		if err != nil {
+			return err
+		}
+		w._hold = append(w._hold, copied)
 	} else {
 		return w._sinker.Write(ctx, bat)
 	}
 	return nil
 }
 
-func (w *CNS3Writer) Sync(ctx context.Context) ([]objectio.ObjectStats, error) {
+func (w *CNS3Writer) Sync(ctx context.Context, mp *mpool.MPool) ([]objectio.ObjectStats, error) {
+	defer func() {
+		if len(w._hold) > 0 {
+			for _, bat := range w._hold {
+				bat.Clean(mp)
+			}
+			w._hold = w._hold[:0]
+		}
+	}()
+
 	if len(w._hold) != 0 {
 		for _, bat := range w._hold {
 			if err := w._sinker.Write(ctx, bat); err != nil {
 				return nil, err
 			}
 		}
-		w._hold = w._hold[:0]
 	}
 
 	if err := w._sinker.Sync(ctx); err != nil {
@@ -319,6 +331,14 @@ func (w *CNS3Writer) OutputRawData(
 	proc *process.Process,
 	result *batch.Batch,
 ) error {
+	defer func() {
+		if len(w._hold) > 0 {
+			for _, bat := range w._hold {
+				bat.Clean(proc.Mp())
+			}
+			w._hold = w._hold[:0]
+		}
+	}()
 
 	for _, bat := range w._hold {
 		if err := vector.AppendFixed(
@@ -335,6 +355,8 @@ func (w *CNS3Writer) OutputRawData(
 			return err
 		}
 	}
+
+	result.SetRowCount(result.Vecs[0].Length())
 
 	w._hold = nil
 

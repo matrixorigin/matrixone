@@ -88,10 +88,10 @@ func TestSetStatsCNCreated(t *testing.T) {
 
 	s3writer := NewCNS3TombstoneWriter(proc.Mp(), fs, types.T_int32.ToType())
 
-	err = s3writer.Write(ctx, bat)
+	err = s3writer.Write(ctx, proc.Mp(), bat)
 	require.NoError(t, err)
 
-	stats, err := s3writer.Sync(ctx)
+	stats, err := s3writer.Sync(ctx, proc.Mp())
 	require.NoError(t, err)
 	require.Equal(t, 1, len(stats))
 
@@ -446,7 +446,7 @@ func TestS3Writer_SortAndSync(t *testing.T) {
 
 		s3writer := NewCNS3TombstoneWriter(proc.Mp(), fs, types.T_int32.ToType())
 
-		s, err := s3writer.Sync(ctx)
+		s, err := s3writer.Sync(ctx, proc.Mp())
 		require.NoError(t, err)
 		require.Nil(t, s)
 	}
@@ -457,10 +457,10 @@ func TestS3Writer_SortAndSync(t *testing.T) {
 		ctx := proc.Ctx
 
 		s3writer := NewCNS3TombstoneWriter(proc.Mp(), proc.GetFileService(), types.T_int32.ToType())
-		err = s3writer.Write(ctx, bat)
+		err = s3writer.Write(ctx, proc.Mp(), bat)
 		require.NoError(t, err)
 
-		_, err = s3writer.Sync(ctx)
+		_, err = s3writer.Sync(ctx, proc.Mp())
 		require.Equal(t, err.(*moerr.Error).ErrorCode(), moerr.ErrNoService)
 	}
 
@@ -474,10 +474,10 @@ func TestS3Writer_SortAndSync(t *testing.T) {
 
 		s3writer := NewCNS3TombstoneWriter(proc.Mp(), fs, types.T_int32.ToType())
 
-		err = s3writer.Write(ctx, bat)
+		err = s3writer.Write(ctx, proc.Mp(), bat)
 		require.NoError(t, err)
 
-		_, err = s3writer.Sync(ctx)
+		_, err = s3writer.Sync(ctx, proc.Mp())
 		require.NoError(t, err)
 	}
 
@@ -511,10 +511,10 @@ func TestS3Writer_SortAndSync(t *testing.T) {
 		require.NoError(t, err)
 		s3writer := NewCNS3TombstoneWriter(proc.Mp(), fs, types.T_int32.ToType())
 
-		err = s3writer.Write(ctx, bat2)
+		err = s3writer.Write(ctx, proc.Mp(), bat2)
 		require.NoError(t, err)
 
-		_, err = s3writer.Sync(ctx)
+		_, err = s3writer.Sync(ctx, proc.Mp())
 		require.Equal(t, err.(*moerr.Error).ErrorCode(), moerr.ErrTooLargeObjectSize)
 	}
 }

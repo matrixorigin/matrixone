@@ -134,7 +134,7 @@ func (insert *Insert) insert_s3(proc *process.Process, analyzer process.Analyzer
 
 			// write to s3.
 			input.Batch.Attrs = append(input.Batch.Attrs[:0], insert.InsertCtx.Attrs...)
-			err = insert.ctr.s3Writer.Write(proc.Ctx, input.Batch)
+			err = insert.ctr.s3Writer.Write(proc.Ctx, proc.Mp(), input.Batch)
 			if err != nil {
 				insert.ctr.state = vm.End
 				return vm.CancelResult, err
@@ -228,9 +228,10 @@ func flushTailBatch(
 
 	if !isMemoryTable {
 		crs := analyzer.GetOpCounterSet()
+
 		newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
 
-		if _, err = writer.Sync(newCtx); err != nil {
+		if _, err = writer.Sync(newCtx, proc.Mp()); err != nil {
 			return err
 		}
 
