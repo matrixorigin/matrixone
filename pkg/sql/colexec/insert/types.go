@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -142,12 +143,10 @@ func (insert *Insert) GetAffectedRows() uint64 {
 }
 
 func (insert *Insert) initBufForS3() {
-	//attrs := []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats}
-	//insert.ctr.buf = batch.NewWithSize(len(attrs))
-	//insert.ctr.buf.SetAttributes(attrs)
-	//insert.ctr.buf.Vecs[0] = vector.NewVec(types.T_int16.ToType())
-	//insert.ctr.buf.Vecs[1] = vector.NewVec(types.T_text.ToType())
-	//insert.ctr.buf.Vecs[2] = vector.NewVec(types.T_binary.ToType())
+	insert.ctr.buf = colexec.AllocCNS3ResultBat(false, insert.isMemoryTable())
+}
 
-	insert.ctr.buf = colexec.AllocCNS3ResultBat(false)
+func (insert *Insert) isMemoryTable() bool {
+	_, ok := insert.InsertCtx.Engine.(*memoryengine.BindedEngine)
+	return ok
 }

@@ -1664,7 +1664,7 @@ func (tbl *txnTable) compaction(
 	compactedBlks map[objectio.ObjectLocation][]int64,
 ) (*batch.Batch, string, error) {
 
-	s3Writer := colexec.NewCNS3DataWriter(mp, fs, tbl.tableDef)
+	s3Writer := colexec.NewCNS3DataWriter(mp, fs, tbl.tableDef, false)
 	tbl.ensureSeqnumsAndTypesExpectRowid()
 
 	defer func() {

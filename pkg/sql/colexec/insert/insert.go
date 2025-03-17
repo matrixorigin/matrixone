@@ -56,7 +56,9 @@ func (insert *Insert) Prepare(proc *process.Process) error {
 		}
 
 		// If the target is not partition table, you only need to operate the main table
-		s3Writer := colexec.NewCNS3DataWriter(proc.Mp(), fs, insert.InsertCtx.TableDef)
+		s3Writer := colexec.NewCNS3DataWriter(
+			proc.Mp(), fs, insert.InsertCtx.TableDef, true)
+
 		insert.ctr.s3Writer = s3Writer
 
 		if insert.ctr.buf == nil {
@@ -145,8 +147,10 @@ func (insert *Insert) insert_s3(proc *process.Process, analyzer process.Analyzer
 	if insert.ctr.state == vm.Eval {
 		writer := insert.ctr.s3Writer
 		// handle the last Batch that batchSize less than DefaultBlockMaxRows
-		// for more info, refer to the comments about reSizeBatch
-		err := flushTailBatch(proc, writer, &result, analyzer)
+		// for more info, refer to the comments about reSizeBatch.
+		//
+		// data returned to the result would be raw data if it is a memory table.
+		err := flushTailBatch(proc, writer, &result, analyzer, insert.isMemoryTable())
 		if err != nil {
 			insert.ctr.state = vm.End
 			return result, err
@@ -209,47 +213,44 @@ func (insert *Insert) insert_table(proc *process.Process, analyzer process.Analy
 	return input, nil
 }
 
-//func writeBatch(proc *process.Process, writer *colexec.S3Writer, bat *batch.Batch, analyzer process.Analyzer) error {
-//	if writer.StashBatch(proc, bat) {
-//		crs := analyzer.GetOpCounterSet()
-//		newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
-//
-//		blockInfos, stats, err := writer.SortAndSync(newCtx, proc)
-//		if err != nil {
-//			return err
-//		}
-//		analyzer.AddS3RequestCount(crs)
-//		analyzer.AddFileServiceCacheInfo(crs)
-//		analyzer.AddDiskIO(crs)
-//
-//		err = writer.FillBlockInfoBat(blockInfos, stats, proc.GetMPool())
-//		if err != nil {
-//			return err
-//		}
-//	}
-//	return nil
-//}
-
 func flushTailBatch(
 	proc *process.Process,
 	writer *colexec.CNS3Writer,
 	result *vm.CallResult,
 	analyzer process.Analyzer,
+	isMemoryTable bool,
 ) error {
-	crs := analyzer.GetOpCounterSet()
-	newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
 
-	if _, err := writer.Sync(newCtx); err != nil {
-		return err
+	var (
+		err error
+		bat *batch.Batch
+	)
+
+	if !isMemoryTable {
+		crs := analyzer.GetOpCounterSet()
+		newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
+
+		if _, err = writer.Sync(newCtx); err != nil {
+			return err
+		}
+
+		analyzer.AddS3RequestCount(crs)
+		analyzer.AddFileServiceCacheInfo(crs)
+		analyzer.AddDiskIO(crs)
+
+		if bat, err = writer.FillBlockInfoBat(proc.Mp()); err != nil {
+			return err
+		}
+
+		result.Batch, err = result.Batch.Append(proc.Ctx, proc.GetMPool(), bat)
+		if err != nil {
+			return err
+		}
+
+		writer.ResetBlockInfoBat()
+
+		return nil
 	}
 
-	analyzer.AddS3RequestCount(crs)
-	analyzer.AddFileServiceCacheInfo(crs)
-	analyzer.AddDiskIO(crs)
-
-	if _, err := writer.FillBlockInfoBat(proc.Mp()); err != nil {
-		return err
-	}
-
-	return writer.Output(proc, result)
+	return writer.OutputRawData(proc, result.Batch)
 }

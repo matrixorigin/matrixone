@@ -29,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sort"
-	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -43,6 +42,9 @@ type CNS3Writer struct {
 	_sinker       *ioutil.Sinker
 	_written      []objectio.ObjectStats
 	_blockInfoBat *batch.Batch
+
+	_hold                   []*batch.Batch
+	_holdFlushUntilSyncCall bool
 
 	_isTombstone bool
 }
@@ -70,6 +72,7 @@ func NewCNS3DataWriter(
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 	tableDef *plan.TableDef,
+	holdFlushUntilSyncCall bool,
 ) *CNS3Writer {
 
 	var (
@@ -112,16 +115,17 @@ func NewCNS3DataWriter(
 	}
 	logutil.Debugf("s3 table set from NewS3Writer %q seqnums: %+v", tableDef.Name, sequms)
 
-	writer := &CNS3Writer{}
+	writer := &CNS3Writer{
+		_holdFlushUntilSyncCall: holdFlushUntilSyncCall,
+	}
 
 	factor := ioutil.NewFSinkerImplFactory(sequms, sortKeyIdx, isPrimaryKey, false, tableDef.Version)
 
 	writer._sinker = ioutil.NewSinker(
 		sortKeyIdx, attrs, attrTypes,
-		factor,
-		mp, fs,
-		ioutil.WithMemorySizeThreshold(int(WriteS3Threshold)),
-		ioutil.WithTailSizeCap(0))
+		factor, mp, fs,
+		ioutil.WithTailSizeCap(0),
+		ioutil.WithMemorySizeThreshold(int(WriteS3Threshold)))
 
 	writer.ResetBlockInfoBat()
 
@@ -129,10 +133,24 @@ func NewCNS3DataWriter(
 }
 
 func (w *CNS3Writer) Write(ctx context.Context, bat *batch.Batch) error {
-	return w._sinker.Write(ctx, bat)
+	if w._holdFlushUntilSyncCall {
+		w._hold = append(w._hold, bat)
+	} else {
+		return w._sinker.Write(ctx, bat)
+	}
+	return nil
 }
 
 func (w *CNS3Writer) Sync(ctx context.Context) ([]objectio.ObjectStats, error) {
+	if len(w._hold) != 0 {
+		for _, bat := range w._hold {
+			if err := w._sinker.Write(ctx, bat); err != nil {
+				return nil, err
+			}
+		}
+		w._hold = w._hold[:0]
+	}
+
 	if err := w._sinker.Sync(ctx); err != nil {
 		return nil, err
 	}
@@ -148,6 +166,14 @@ func (w *CNS3Writer) Close(mp *mpool.MPool) error {
 			return err
 		}
 		w._sinker = nil
+	}
+
+	if len(w._hold) != 0 {
+		for _, bat := range w._hold {
+			bat.Clean(mp)
+		}
+		w._hold = nil
+		w._holdFlushUntilSyncCall = false
 	}
 
 	if w._blockInfoBat != nil {
@@ -199,7 +225,11 @@ func (w *CNS3Writer) FillBlockInfoBat(
 	return w._blockInfoBat, nil
 }
 
-func AllocCNS3ResultBat(isTombstone bool) *batch.Batch {
+func AllocCNS3ResultBat(
+	isTombstone bool,
+	isMemoryTable bool,
+) *batch.Batch {
+
 	var (
 		attrs     []string
 		attrTypes []types.Type
@@ -207,7 +237,10 @@ func AllocCNS3ResultBat(isTombstone bool) *batch.Batch {
 		blockInfoBat *batch.Batch
 	)
 
-	if !isTombstone {
+	if isMemoryTable {
+		attrs = []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats}
+		attrTypes = []types.Type{types.T_int16.ToType(), types.T_text.ToType(), types.T_binary.ToType()}
+	} else if !isTombstone {
 		attrs = []string{catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats}
 		attrTypes = []types.Type{types.T_text.ToType(), types.T_binary.ToType()}
 	} else {
@@ -231,18 +264,7 @@ func (w *CNS3Writer) ResetBlockInfoBat() {
 		w._blockInfoBat.CleanOnlyData()
 	}
 
-	w._blockInfoBat = AllocCNS3ResultBat(w._isTombstone)
-}
-
-func (w *CNS3Writer) Output(proc *process.Process, result *vm.CallResult) error {
-	var err error
-	result.Batch, err = result.Batch.Append(proc.Ctx, proc.GetMPool(), w._blockInfoBat)
-	if err != nil {
-		return err
-	}
-
-	w.ResetBlockInfoBat()
-	return nil
+	w._blockInfoBat = AllocCNS3ResultBat(w._isTombstone, false)
 }
 
 // reference to pkg/sql/colexec/order/order.go logic
@@ -290,5 +312,31 @@ func SortByKey(
 	if needSort {
 		return bat.Shuffle(sels, m)
 	}
+	return nil
+}
+
+func (w *CNS3Writer) OutputRawData(
+	proc *process.Process,
+	result *batch.Batch,
+) error {
+
+	for _, bat := range w._hold {
+		if err := vector.AppendFixed(
+			result.Vecs[0], -1, false, proc.Mp()); err != nil {
+			return err
+		}
+
+		bytes, err := bat.MarshalBinary()
+		if err != nil {
+			return err
+		}
+		if err = vector.AppendBytes(
+			result.Vecs[1], bytes, false, proc.Mp()); err != nil {
+			return err
+		}
+	}
+
+	w._hold = nil
+
 	return nil
 }

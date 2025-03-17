@@ -380,7 +380,7 @@ func (writer *s3WriterDelegate) sortAndSyncOneTable(
 		pkCol := plan2.PkColByTableDef(tblDef)
 		s3Writer = colexec.NewCNS3TombstoneWriter(proc.Mp(), fs, plan2.ExprType2Type(&pkCol.Typ))
 	} else {
-		s3Writer = colexec.NewCNS3DataWriter(proc.Mp(), fs, tblDef)
+		s3Writer = colexec.NewCNS3DataWriter(proc.Mp(), fs, tblDef, false)
 	}
 
 	defer func() {
