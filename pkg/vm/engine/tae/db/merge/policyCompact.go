@@ -55,11 +55,8 @@ func (o *objCompactPolicy) onObject(entry *catalog.ObjectEntry) bool {
 		return false
 	}
 
-	for i := range o.tombstoneMetas {
-		if o.tombstoneEntries[i].CreatedAt.GE(&entry.CreatedAt) {
-			continue
-		}
-		if !checkTombstoneMeta(o.tombstoneMetas[i], entry.ID()) {
+	for _, meta := range o.tombstoneMetas {
+		if !checkTombstoneMeta(meta, entry.ID()) {
 			continue
 		}
 		o.objects = append(o.objects, entry)
