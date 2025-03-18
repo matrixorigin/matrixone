@@ -26,7 +26,7 @@ require (
 	github.com/cakturk/go-netstat v0.0.0-20200220111822-e5b49efee7a5
 	github.com/cespare/xxhash/v2 v2.3.0
 	github.com/cockroachdb/errors v1.11.3
-	github.com/confluentinc/confluent-kafka-go/v2 v2.4.0
+	github.com/confluentinc/confluent-kafka-go/v2 v2.8.0
 	github.com/containerd/cgroups/v3 v3.0.2
 	github.com/cpegeric/pdftotext-go v0.0.0-20241112122606-a8979920f0b1
 	github.com/docker/go-units v0.5.0
@@ -51,7 +51,7 @@ require (
 	github.com/hashicorp/memberlist v0.3.1
 	github.com/hayageek/threadsafe v1.0.1
 	github.com/itchyny/gojq v0.12.16
-	github.com/jhump/protoreflect v1.15.2
+	github.com/jhump/protoreflect v1.15.6
 	github.com/json-iterator/go v1.1.12
 	github.com/lni/dragonboat/v4 v4.0.0-20220815145555-6f622e8bcbef
 	github.com/lni/goutils v1.3.1-0.20220604063047-388d67b4dbc4
@@ -99,14 +99,11 @@ require (
 	filippo.io/edwards25519 v1.1.0 // indirect
 	github.com/Masterminds/semver/v3 v3.2.1 // indirect
 	github.com/andybalholm/brotli v1.1.0 // indirect
-	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
 	github.com/cilium/ebpf v0.16.0 // indirect
 	github.com/clbanning/mxj v1.8.4 // indirect
-	github.com/containerd/console v1.0.4 // indirect
 	github.com/containerd/containerd v1.7.26 // indirect
 	github.com/containerd/errdefs v1.0.0 // indirect
 	github.com/coreos/go-systemd/v22 v22.5.0 // indirect
-	github.com/distribution/reference v0.6.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/go-ini/ini v1.67.0 // indirect
 	github.com/gobwas/glob v0.2.3 // indirect
@@ -122,7 +119,6 @@ require (
 	github.com/itchyny/timefmt-go v0.1.6 // indirect
 	github.com/jmespath/go-jmespath v0.4.0 // indirect
 	github.com/josharian/native v1.1.0 // indirect
-	github.com/mailru/easyjson v0.7.7 // indirect
 	github.com/mattn/go-runewidth v0.0.15 // indirect
 	github.com/mdlayher/netlink v1.7.2 // indirect
 	github.com/mdlayher/socket v0.5.1 // indirect
@@ -143,7 +139,6 @@ require (
 	github.com/tetratelabs/wazero v1.7.3 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.59.0 // indirect
 	go.opentelemetry.io/otel v1.34.0 // indirect
-	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.34.0 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.34.0 // indirect
 	go.opentelemetry.io/otel/sdk v1.34.0 // indirect
 	go.uber.org/goleak v1.3.0 // indirect
@@ -176,7 +171,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.28.5 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/bits-and-blooms/bitset v1.8.0 // indirect
-	github.com/bufbuild/protocompile v0.6.0 // indirect
+	github.com/bufbuild/protocompile v0.8.0 // indirect
 	github.com/cockroachdb/logtags v0.0.0-20230118201751-21c54148d20b // indirect
 	github.com/cockroachdb/pebble v0.0.0-20220407171941-2120d145e292 // indirect
 	github.com/cockroachdb/redact v1.1.5 // indirect
@@ -190,7 +185,7 @@ require (
 	github.com/hashicorp/go-immutable-radix v1.3.1 // indirect
 	github.com/hashicorp/go-msgpack v0.5.3 // indirect
 	github.com/hashicorp/go-multierror v1.1.1 // indirect
-	github.com/hashicorp/go-sockaddr v1.0.0 // indirect
+	github.com/hashicorp/go-sockaddr v1.0.6 // indirect
 	github.com/hashicorp/golang-lru v0.5.4 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/jtolds/gls v4.20.0+incompatible // indirect
