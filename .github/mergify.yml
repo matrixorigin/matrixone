@@ -4,20 +4,20 @@ queue_rules:
     checks_timeout: 4h
     merge_method: squash
     commit_message_template: |
-        {{ title }} (#{{ number }})
+      {{ title }} (#{{ number }})
 
-        {{ body.split("___\n\n### **PR Type**")[0] | trim | get_section("## What this PR does / why we need it:") }}
+      {{ body.split("___\n\n### **PR Type**")[0] | trim | get_section("## What this PR does / why we need it:") }}
 
-        Approved by: @{{ approved_reviews_by | join(', @') }}
+      Approved by: @{{ approved_reviews_by | join(', @') }}
   - name: release-2.0
     merge_conditions: []
     checks_timeout: 4h
     merge_method: squash
     commit_message_template: |
       {{ title }} (#{{ number }})
-      
+
       {{ body.split("___\n\n### **PR Type**")[0] | trim | get_section("## What this PR does / why we need it:") }}
-      
+
       Approved by: @{{ approved_reviews_by | join(', @') }}
   - name: release-2.1
     merge_conditions: []
@@ -25,9 +25,9 @@ queue_rules:
     merge_method: squash
     commit_message_template: |
       {{ title }} (#{{ number }})
-      
+
       {{ body.split("___\n\n### **PR Type**")[0] | trim | get_section("## What this PR does / why we need it:") }}
-      
+
       Approved by: @{{ approved_reviews_by | join(', @') }}
 
 pull_request_rules:
@@ -59,64 +59,64 @@ pull_request_rules:
       queue:
         name: release-2.1
 
+  - name: Auto Request Reviewer For Non Main Branch
+    conditions:
+      - base!=main
+    actions:
+      request_reviews:
+        users:
+          - XuPeng-SH
+
   - name: Auto update branch
     conditions:
       - created-at>=00:10 ago
     actions:
-      update: 
-
- - name: Auto Request Reviewer For Non Main Branch
-   conditions:
-     - base!=main
-   actions:
-     request_reviews:
-       users:
-         - XuPeng-SH
+      update:
 
   - name: label for Bug
-    conditions: 
+    conditions:
       - body~=(?im)- \[x\] BUG
     actions:
       label:
         add:
           - kind/bug
   - name: label for Feature
-    conditions: 
+    conditions:
       - body~=(?im)- \[x\] Feature
     actions:
       label:
         add:
           - kind/feature
   - name: label for Improvement
-    conditions: 
+    conditions:
       - body~=(?im)- \[x\] Improvement
     actions:
       label:
         add:
           - kind/enhancement
   - name: label for Documentation
-    conditions: 
+    conditions:
       - body~=(?im)- \[x\] Documentation
     actions:
       label:
         add:
           - kind/documentation
   - name: label for Test and CI
-    conditions: 
+    conditions:
       - body~=(?im)- \[x\] Test and CI
     actions:
       label:
         add:
           - kind/test-ci
   - name: label for Code Refactoring
-    conditions: 
+    conditions:
       - body~=(?im)- \[x\] Code Refactoring
     actions:
       label:
         add:
           - kind/refactor
   - name: label for API-change
-    conditions: 
+    conditions:
       - body~=(?im)- \[x\] API-change
     actions:
       label:
