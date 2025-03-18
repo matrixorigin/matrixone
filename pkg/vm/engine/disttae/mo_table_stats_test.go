@@ -100,6 +100,36 @@ func Test_joinAccountDatabase(t *testing.T) {
 	wg.Wait()
 }
 
+func Test_constructInStmtByTableId(t *testing.T) {
+
+	t.Run("A", func(t *testing.T) {
+		var tblId []uint64
+		tblId = append(tblId, 3)
+		tblId = append(tblId, 5)
+		tblId = append(tblId, 7)
+		tblId = append(tblId, 9)
+
+		str, release := constructInStmt(tblId, "table_id")
+		defer release()
+
+		require.Equal(t,
+			"table_id in (3,5,7,9)",
+			str)
+	})
+
+	t.Run("B", func(t *testing.T) {
+		var tblId []uint64
+		tblId = append(tblId, 3)
+
+		str, release := constructInStmt(tblId, "table_id")
+		defer release()
+
+		require.Equal(t,
+			"table_id in (3)",
+			str)
+	})
+}
+
 func Test_joinAccountDatabaseTable(t *testing.T) {
 	wg := sync.WaitGroup{}
 	for range 100 {
