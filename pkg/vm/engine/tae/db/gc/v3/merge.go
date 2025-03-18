@@ -49,7 +49,7 @@ func MergeCheckpoint(
 	fs fileservice.FileService,
 ) (deleteFiles, newFiles []string, checkpointEntry *checkpoint.CheckpointEntry, ckpData *batch.Batch, err error) {
 	ckpData = ckputil.NewObjectListBatch()
-	datas := make([]*logtail.CKPReader, 0)
+	ckpReaders := make([]*logtail.CKPReader, 0)
 	deleteFiles = make([]string, 0)
 	for _, ckpEntry := range ckpEntries {
 		select {
@@ -76,7 +76,7 @@ func MergeCheckpoint(
 		); err != nil {
 			return
 		}
-		datas = append(datas, data)
+		ckpReaders = append(ckpReaders, data)
 		var nameMeta string
 		if ckpEntry.GetType() == checkpoint.ET_Compacted {
 			nameMeta = ioutil.EncodeCompactCKPMetadataFullName(
@@ -107,14 +107,14 @@ func MergeCheckpoint(
 			deleteFiles = append(deleteFiles, name)
 		}
 	}
-	if len(datas) == 0 {
+	if len(ckpReaders) == 0 {
 		return
 	}
 
 	newFiles = make([]string, 0)
 
 	// merge objects referenced by sansphot and pitr
-	for _, data := range datas {
+	for _, reader := range ckpReaders {
 		select {
 		case <-ctx.Done():
 			err = context.Cause(ctx)
@@ -122,7 +122,7 @@ func MergeCheckpoint(
 		default:
 		}
 		var objectBatch *batch.Batch
-		if objectBatch, err = data.GetCheckpointData(ctx); err != nil {
+		if objectBatch, err = reader.GetCheckpointData(ctx); err != nil {
 			return
 		}
 		defer objectBatch.Clean(common.CheckpointAllocator)
