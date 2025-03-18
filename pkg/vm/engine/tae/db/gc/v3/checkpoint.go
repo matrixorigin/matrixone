@@ -843,6 +843,7 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 		extraErrMsg = "MergeCheckpoint failed"
 		return err
 	}
+	defer newCheckpointData.Clean(c.mp)
 	logtail.FillUsageBatOfCompacted(
 		ctx,
 		c.checkpointCli.GetCatalog().GetUsageMemo().(*logtail.TNUsageMemo),
