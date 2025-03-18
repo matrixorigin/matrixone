@@ -63,9 +63,9 @@ func MergeCheckpoint(
 			zap.String("task", taskName),
 			zap.String("entry", ckpEntry.String()),
 		)
-		var data *logtail.CKPReader
+		var reader *logtail.CKPReader
 		var locations map[string]objectio.Location
-		if _, data, err = logtail.LoadCheckpointEntriesFromKey(
+		if _, reader, err = logtail.LoadCheckpointEntriesFromKey(
 			ctx,
 			sid,
 			fs,
@@ -76,7 +76,7 @@ func MergeCheckpoint(
 		); err != nil {
 			return
 		}
-		ckpReaders = append(ckpReaders, data)
+		ckpReaders = append(ckpReaders, reader)
 		var nameMeta string
 		if ckpEntry.GetType() == checkpoint.ET_Compacted {
 			nameMeta = ioutil.EncodeCompactCKPMetadataFullName(
@@ -93,7 +93,7 @@ func MergeCheckpoint(
 		// add checkpoint idx file to deleteFiles
 		deleteFiles = append(deleteFiles, ckpEntry.GetLocation().Name().String())
 		locations, err = logtail.LoadCheckpointLocations(
-			ctx, sid, data,
+			ctx, sid, reader,
 		)
 		if err != nil {
 			if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
@@ -137,6 +137,7 @@ func MergeCheckpoint(
 	}
 
 	sinker := ckputil.NewDataSinker(pool, fs)
+	defer sinker.Close()
 	if err = sinker.Write(ctx, ckpData); err != nil {
 		return
 	}
