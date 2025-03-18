@@ -9,17 +9,17 @@ queue_rules:
         {{ body.split("___\n\n### **PR Type**")[0] | trim | get_section("## What this PR does / why we need it:") }}
 
         Approved by: @{{ approved_reviews_by | join(', @') }}
-  - name: release-1.2
+  - name: release-2.0
     merge_conditions: []
     checks_timeout: 4h
     merge_method: squash
     commit_message_template: |
-        {{ title }} (#{{ number }})
-
-        {{ body.split("___\n\n### **PR Type**")[0] | trim | get_section("## What this PR does / why we need it:") }}
-
-        Approved by: @{{ approved_reviews_by | join(', @') }}
-  - name: release-2.0
+      {{ title }} (#{{ number }})
+      
+      {{ body.split("___\n\n### **PR Type**")[0] | trim | get_section("## What this PR does / why we need it:") }}
+      
+      Approved by: @{{ approved_reviews_by | join(', @') }}
+  - name: release-2.1
     merge_conditions: []
     checks_timeout: 4h
     merge_method: squash
@@ -40,15 +40,6 @@ pull_request_rules:
       queue:
         name: main
 
-  - name: Automatic queue on approval for release-1.2
-    conditions:
-      - "#changes-requested-reviews-by<=0"
-      - label!=do-not-merge/wip
-      - base=1.2-dev
-    actions:
-      queue:
-        name: release-1.2
-
   - name: Automatic queue on approval for release-2.0
     conditions:
       - "#changes-requested-reviews-by<=0"
@@ -58,6 +49,14 @@ pull_request_rules:
       queue:
         name: release-2.0
 
+  - name: Automatic queue on approval for release-2.1
+    conditions:
+      - "#changes-requested-reviews-by<=0"
+      - label!=do-not-merge/wip
+      - base=2.1-dev
+    actions:
+      queue:
+        name: release-2.1
 
   - name: Auto update branch
     conditions:
