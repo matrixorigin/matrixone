@@ -1,9 +1,7 @@
 module github.com/matrixorigin/matrixone
 
 // Minimum Go version required
-go 1.23.6
-
-toolchain go1.23.7
+go 1.24.1
 
 require (
 	github.com/BurntSushi/toml v1.3.2
