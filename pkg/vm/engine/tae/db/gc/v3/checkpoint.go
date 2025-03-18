@@ -434,7 +434,7 @@ func (c *checkpointCleaner) Replay(inputCtx context.Context) (err error) {
 		if ckpBatch, err = ckpData.GetCheckpointData(ctx); err != nil {
 			return
 		}
-		defer ckpBatch.Clean(c.mp)
+		defer ckpBatch.Clean(common.DebugAllocator)
 		logtail.FillUsageBatOfCompacted(
 			ctx,
 			c.checkpointCli.GetCatalog().GetUsageMemo().(*logtail.TNUsageMemo),
