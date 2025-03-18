@@ -295,7 +295,7 @@ func GetCheckpointData(
 		return nil, context.Cause(ctx)
 	default:
 	}
-	reader := NewCKPReader(version, location, common.DebugAllocator, fs)
+	reader := NewCKPReader(version, location, common.CheckpointAllocator, fs)
 	if err := reader.ReadMeta(ctx); err != nil {
 		return nil, err
 	}
