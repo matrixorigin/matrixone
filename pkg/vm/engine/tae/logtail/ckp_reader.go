@@ -16,6 +16,7 @@ package logtail
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -32,12 +33,175 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"go.uber.org/zap"
 )
+
+type ckpDataReader interface {
+	Read(ctx context.Context, bat *batch.Batch, mp *mpool.MPool) (end bool, err error)
+	Reset(ctx context.Context)
+}
+
+type ckpObjectReader struct {
+	objects   []objectio.ObjectStats
+	objectIdx int
+	reader    engine.Reader
+	fs        fileservice.FileService
+}
+
+func newObjectReader(
+	ctx context.Context,
+	objects []objectio.ObjectStats,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+) *ckpObjectReader {
+	var reader engine.Reader
+	if len(objects) != 0 {
+		object := objects[0]
+		reader = ckputil.NewDataReader(
+			ctx,
+			fs,
+			object,
+			readutil.WithColumns(
+				ckputil.DataScan_TableIDSeqnums,
+				ckputil.DataScan_TableIDTypes,
+			),
+		)
+	}
+	return &ckpObjectReader{
+		objects: objects,
+		reader:  reader,
+		fs:      fs,
+	}
+}
+
+func (r *ckpObjectReader) Read(
+	ctx context.Context,
+	bat *batch.Batch,
+	mp *mpool.MPool,
+) (end bool, err error) {
+	if r.objectIdx >= len(r.objects) {
+		return true, nil
+	}
+	for {
+		if end, err = r.reader.Read(ctx, bat.Attrs, nil, mp, bat); err != nil {
+			return
+		}
+		if !end {
+			return
+		}
+		r.objectIdx++
+		if r.objectIdx >= len(r.objects) {
+			return true, nil
+		}
+		object := r.objects[r.objectIdx]
+		r.reader = ckputil.NewDataReader(
+			ctx,
+			r.fs,
+			object,
+			readutil.WithColumns(
+				ckputil.DataScan_TableIDSeqnums,
+				ckputil.DataScan_TableIDTypes,
+			),
+		)
+	}
+}
+
+func (r *ckpObjectReader) Reset(ctx context.Context) {
+	r.objectIdx = 0
+	if len(r.objects) != 0 {
+		object := r.objects[0]
+		r.reader = ckputil.NewDataReader(
+			ctx,
+			r.fs,
+			object,
+			readutil.WithColumns(
+				ckputil.DataScan_TableIDSeqnums,
+				ckputil.DataScan_TableIDTypes,
+			),
+		)
+	}
+}
+
+type ckpObjectReaderForV12 struct {
+	dataLocations      []objectio.Location
+	tombstoneLocations []objectio.Location
+	objectIndex        int
+	fs                 fileservice.FileService
+}
+
+func newCKPObjectReaderForV12(
+	dataLocations []objectio.Location,
+	tombstoneLocations []objectio.Location,
+	fs fileservice.FileService,
+) *ckpObjectReaderForV12 {
+	return &ckpObjectReaderForV12{
+		dataLocations:      dataLocations,
+		tombstoneLocations: tombstoneLocations,
+		fs:                 fs,
+	}
+}
+
+func (r *ckpObjectReaderForV12) Read(
+	ctx context.Context,
+	destBatch *batch.Batch,
+	mp *mpool.MPool,
+) (end bool, err error) {
+	if r.objectIndex >= len(r.dataLocations)+len(r.tombstoneLocations) {
+		return true, nil
+	}
+	var location objectio.Location
+	var isTombstone bool
+	var batchIndex uint16
+	if r.objectIndex >= len(r.dataLocations) {
+		isTombstone = true
+		batchIndex = TombstoneObjectInfoIDX
+		location = r.tombstoneLocations[r.objectIndex-len(r.dataLocations)]
+	} else {
+		isTombstone = false
+		batchIndex = ObjectInfoIDX
+		location = r.dataLocations[r.objectIndex]
+	}
+
+	var reader *ioutil.BlockReader
+	if reader, err = ioutil.NewObjectReader(r.fs, location); err != nil {
+		return
+	}
+	typs := make([]types.Type, len(destBatch.Vecs))
+	for i, vec := range destBatch.Vecs {
+		typs[i] = *vec.GetType()
+	}
+	var bats []*containers.Batch
+	if bats, err = LoadBlkColumnsByMeta(
+		CheckpointVersion12, ctx, typs, destBatch.Attrs, batchIndex, reader, mp,
+	); err != nil {
+		return
+	}
+	objID := location.ObjectId()
+	for i, bat := range bats {
+		defer bat.Close()
+		blkID := objectio.NewBlockidWithObjectID(&objID, uint16(i))
+		if isTombstone {
+			if err = compatibilityForV12(&blkID, nil, bat, destBatch, mp); err != nil {
+				return
+			}
+		} else {
+			if err = compatibilityForV12(&blkID, bat, nil, destBatch, mp); err != nil {
+				return
+			}
+		}
+	}
+	r.objectIndex++
+	return
+}
+
+func (r *ckpObjectReaderForV12) Reset(ctx context.Context) {
+	r.objectIndex = 0
+}
 
 type CKPReader struct {
 	version     uint32
@@ -53,10 +217,9 @@ type CKPReader struct {
 	dataLocations      map[string]objectio.Location // for version 12
 	tombstoneLocations map[string]objectio.Location // for version 12
 
-	objectIdx int
+	ckpDataReader
 }
 
-// with opt
 func NewCKPReader(
 	version uint32,
 	location objectio.Location,
@@ -101,14 +264,34 @@ func (reader *CKPReader) ReadMeta(
 				ctx, reader.location, reader.mp, reader.fs,
 			)
 		}
+		dataLocations := make([]objectio.Location, 0, len(reader.dataLocations))
+		for _, loc := range reader.dataLocations {
+			dataLocations = append(dataLocations, loc)
+		}
+		tombstoneLocations := make([]objectio.Location, 0, len(reader.tombstoneLocations))
+		for _, loc := range reader.tombstoneLocations {
+			tombstoneLocations = append(tombstoneLocations, loc)
+		}
+		reader.ckpDataReader = newCKPObjectReaderForV12(
+			dataLocations,
+			tombstoneLocations,
+			reader.fs,
+		)
 	} else {
 		if reader.withTableID {
 			reader.dataRanges, reader.tombstoneRanges, err = readMetaWithTableID(
 				ctx, reader.location, reader.tid, reader.mp, reader.fs,
 			)
+			// TODO new reader
 		} else {
 			reader.ckpDataObjectStats, err = readMeta(
 				ctx, reader.location, reader.mp, reader.fs,
+			)
+			reader.ckpDataReader = newObjectReader(
+				ctx,
+				reader.ckpDataObjectStats,
+				reader.mp,
+				reader.fs,
 			)
 		}
 	}
@@ -330,27 +513,25 @@ func (reader *CKPReader) PrefetchData(sid string) {
 	}
 }
 
-func (reader *CKPReader) GetCheckpointData(ctx context.Context) (bat *batch.Batch, err error) {
+func (reader *CKPReader) GetCheckpointData(ctx context.Context) (ckpData *batch.Batch, err error) {
 	if reader.withTableID {
 		panic("not support")
 	}
-	bat = ckputil.NewObjectListBatch()
-	if reader.version <= CheckpointVersion12 {
-		var dataBatch, tombstoneBatch *containers.Batch
-		if dataBatch, tombstoneBatch, err = getCKPDataForV12(
-			ctx, reader.dataLocations, reader.tombstoneLocations, reader.mp, reader.fs,
-		); err != nil {
+	ckpData = ckputil.MakeDataScanTableIDBatch()
+	tmpBatch := ckputil.MakeDataScanTableIDBatch()
+	defer tmpBatch.Clean(reader.mp)
+	for {
+		tmpBatch.CleanOnlyData()
+		var end bool
+		if end, err = reader.ckpDataReader.Read(ctx, tmpBatch, reader.mp); err != nil {
 			return
 		}
-		if err = compatibilityForV12(dataBatch, tombstoneBatch, bat, reader.mp); err != nil {
+		if end {
 			return
 		}
-		return
-	} else {
-		if err = getCKPData(ctx, reader.ckpDataObjectStats, bat, reader.mp, reader.fs); err != nil {
+		if _, err = ckpData.Append(ctx, reader.mp, tmpBatch); err != nil {
 			return
 		}
-		return
 	}
 }
 
@@ -364,128 +545,11 @@ func (reader *CKPReader) LoadBatchData(
 	if data == nil {
 		panic("invalid input")
 	}
-	if reader.version <= CheckpointVersion12 {
-		if reader.objectIdx >= 1 {
-			return true, nil
-		}
-		var bat *batch.Batch
-		if bat, err = reader.GetCheckpointData(ctx); err != nil {
-			return
-		}
-		defer bat.Clean(reader.mp)
-		if _, err = data.Append(ctx, reader.mp, bat); err != nil {
-			return
-		}
-		reader.objectIdx++
-		return
-	} else {
-		if reader.objectIdx >= len(reader.ckpDataObjectStats) {
-			return true, nil
-		}
-		if err = getDataFromObject(
-			ctx, reader.ckpDataObjectStats[reader.objectIdx], data, reader.mp, reader.fs,
-		); err != nil {
-			return
-		}
-		reader.objectIdx++
-		return
-	}
-}
-
-func getDataFromObject(
-	ctx context.Context,
-	objectStats objectio.ObjectStats,
-	ckpData *batch.Batch,
-	mp *mpool.MPool,
-	fs fileservice.FileService,
-) (err error) {
-	reader := ckputil.NewDataReader(
-		ctx,
-		fs,
-		objectStats,
-		readutil.WithColumns(
-			ckputil.TableObjectsSeqnums,
-			ckputil.TableObjectsTypes,
-		),
-	)
-	var (
-		end bool
-	)
-	tmpBat := ckputil.NewObjectListBatch()
-	defer tmpBat.Clean(mp)
-	for {
-		tmpBat.CleanOnlyData()
-		if end, err = reader.Read(
-			ctx, tmpBat.Attrs, nil, mp, tmpBat,
-		); err != nil {
-			return
-		}
-		if end {
-			break
-		}
-		if _, err = ckpData.Append(ctx, mp, tmpBat); err != nil {
-			return
-		}
-	}
-	return
-}
-
-func getCKPData(
-	ctx context.Context,
-	objects []objectio.ObjectStats,
-	ckpData *batch.Batch,
-	mp *mpool.MPool,
-	fs fileservice.FileService,
-) (err error) {
-	if ckpData == nil {
-		panic("invalid batch")
-	}
-	for _, obj := range objects {
-		if err = getDataFromObject(ctx, obj, ckpData, mp, fs); err != nil {
-			return
-		}
-	}
-	return
-}
-
-func getCKPDataForV12(
-	ctx context.Context,
-	dataLocations, tombstoneLocations map[string]objectio.Location,
-	mp *mpool.MPool,
-	fs fileservice.FileService,
-) (dataBatch, tombstoneBatch *containers.Batch, err error) {
-	readFn := func(locs map[string]objectio.Location, batchIdx uint16, destBatch *containers.Batch) {
-		for _, loc := range locs {
-			var reader *ioutil.BlockReader
-			if reader, err = ioutil.NewObjectReader(fs, loc); err != nil {
-				return
-			}
-			typs := make([]types.Type, len(destBatch.Vecs))
-			for i, vec := range destBatch.Vecs {
-				typs[i] = *vec.GetType()
-			}
-			var bats []*containers.Batch
-			if bats, err = LoadBlkColumnsByMeta(
-				CheckpointVersion12, ctx, typs, destBatch.Attrs, batchIdx, reader, mp,
-			); err != nil {
-				return
-			}
-			for _, bat := range bats {
-				if err = destBatch.Append(bat); err != nil {
-					return
-				}
-				bat.Close()
-			}
-		}
-	}
-	dataBatch = makeRespBatchFromSchema(ObjectInfoSchema, mp)
-	readFn(dataLocations, ObjectInfoIDX, dataBatch)
-	tombstoneBatch = makeRespBatchFromSchema(ObjectInfoSchema, mp)
-	readFn(tombstoneLocations, TombstoneObjectInfoIDX, tombstoneBatch)
-	return
+	return reader.ckpDataReader.Read(ctx, data, reader.mp)
 }
 
 func compatibilityForV12(
+	blockID *objectio.Blockid,
 	dataBatch, tombstoneBatch *containers.Batch,
 	ckpData *batch.Batch,
 	mp *mpool.MPool,
@@ -494,6 +558,10 @@ func compatibilityForV12(
 		panic("invalid batch")
 	}
 	compatibilityFn := func(src *containers.Batch, dataType int8) {
+		sels := make([]int64, src.Length())
+		for i := 0; i < src.Length(); i++ {
+			sels[i] = int64(i)
+		}
 		vector.AppendMultiFixed(
 			ckpData.Vecs[ckputil.TableObjectsAttr_Accout_Idx],
 			0,
@@ -501,27 +569,30 @@ func compatibilityForV12(
 			src.Length(),
 			mp,
 		)
-		ckpData.Vecs[ckputil.TableObjectsAttr_DB_Idx] = src.Vecs[ObjectInfo_DBID_Idx+2].GetDownstreamVector()
-		src.Vecs[ObjectInfo_DBID_Idx+2] = nil
-		ckpData.Vecs[ckputil.TableObjectsAttr_Table_Idx] = src.Vecs[ObjectInfo_TID_Idx+2].GetDownstreamVector()
-		src.Vecs[ObjectInfo_TID_Idx+2] = nil
+		ckpData.Vecs[ckputil.TableObjectsAttr_DB_Idx].Union(src.Vecs[ObjectInfo_DBID_Idx+2].GetDownstreamVector(), sels, mp)
+		ckpData.Vecs[ckputil.TableObjectsAttr_Table_Idx].Union(src.Vecs[ObjectInfo_TID_Idx+2].GetDownstreamVector(), sels, mp)
 		vector.AppendMultiFixed(
 			ckpData.Vecs[ckputil.TableObjectsAttr_ObjectType_Idx],
 			dataType,
-			true,
+			false,
 			src.Length(),
 			mp,
 		)
-		ckpData.Vecs[ckputil.TableObjectsAttr_ID_Idx] = src.Vecs[ObjectInfo_ObjectStats_Idx+2].GetDownstreamVector()
-		src.Vecs[ObjectInfo_ObjectStats_Idx+2] = nil
-		ckpData.Vecs[ckputil.TableObjectsAttr_CreateTS_Idx] = src.Vecs[ObjectInfo_CreateAt_Idx+2].GetDownstreamVector()
-		src.Vecs[ObjectInfo_CreateAt_Idx+2] = nil
-		ckpData.Vecs[ckputil.TableObjectsAttr_DeleteTS_Idx] = src.Vecs[ObjectInfo_DeleteAt_Idx+2].GetDownstreamVector()
-		src.Vecs[ObjectInfo_DeleteAt_Idx+2] = nil
+		ckpData.Vecs[ckputil.TableObjectsAttr_ID_Idx].Union(src.Vecs[ObjectInfo_ObjectStats_Idx+2].GetDownstreamVector(), sels, mp)
+		ckpData.Vecs[ckputil.TableObjectsAttr_CreateTS_Idx].Union(src.Vecs[ObjectInfo_CreateAt_Idx+2].GetDownstreamVector(), sels, mp)
+		ckpData.Vecs[ckputil.TableObjectsAttr_DeleteTS_Idx].Union(src.Vecs[ObjectInfo_DeleteAt_Idx+2].GetDownstreamVector(), sels, mp)
+		for i := 0; i < src.Length(); i++ {
+			rowID := types.NewRowid(blockID, uint32(i))
+			vector.AppendFixed(ckpData.Vecs[ckputil.TableObjectsAttr_PhysicalAddr_Idx], rowID, false, mp)
+		}
 	}
 
-	compatibilityFn(dataBatch, ckputil.ObjectType_Data)
-	compatibilityFn(tombstoneBatch, ckputil.ObjectType_Tombstone)
+	if dataBatch != nil {
+		compatibilityFn(dataBatch, ckputil.ObjectType_Data)
+	}
+	if tombstoneBatch != nil {
+		compatibilityFn(tombstoneBatch, ckputil.ObjectType_Tombstone)
+	}
 	ckpData.SetRowCount(ckpData.Vecs[0].Length())
 	return
 }
@@ -537,92 +608,44 @@ func (reader *CKPReader) ForEachRow(
 		rowID types.Rowid,
 	) error,
 ) (err error) {
-	if reader.version <= CheckpointVersion12 {
-		var dataBatch, tombstoneBatch *containers.Batch
-		if dataBatch, tombstoneBatch, err = getCKPDataForV12(
-			ctx, reader.dataLocations, reader.tombstoneLocations, reader.mp, reader.fs,
-		); err != nil {
+	if reader.withTableID {
+		panic("not support")
+	}
+	tmpBatch := ckputil.MakeDataScanTableIDBatch()
+	defer tmpBatch.Clean(reader.mp)
+	defer reader.ckpDataReader.Reset(ctx)
+	for {
+		tmpBatch.CleanOnlyData()
+		var end bool
+		if end, err = reader.ckpDataReader.Read(ctx, tmpBatch, reader.mp); err != nil {
 			return
 		}
-		if dataBatch != nil {
-			defer dataBatch.Close()
-		}
-		if tombstoneBatch != nil {
-			defer tombstoneBatch.Close()
-		}
-		if err = forEachRowForV12(dataBatch, tombstoneBatch, forEachRow); err != nil {
+		if end {
 			return
 		}
-		return
-	} else {
-		return forEachRowInCKPData(
-			ctx, reader.ckpDataObjectStats, forEachRow, reader.mp, reader.fs,
-		)
-	}
-}
-
-func forEachRowInCKPData(
-	ctx context.Context,
-	objectstats []objectio.ObjectStats,
-	forEachRow func(
-		account uint32,
-		dbid, tid uint64,
-		objectType int8,
-		objectStats objectio.ObjectStats,
-		create, delete types.TS,
-		rowID types.Rowid,
-	) error,
-	mp *mpool.MPool,
-	fs fileservice.FileService,
-) (err error) {
-	for _, obj := range objectstats {
-		if err = ckputil.ForEachFile(
-			ctx,
-			obj,
-			forEachRow,
-			func() error {
-				return nil
-			},
-			mp,
-			fs,
-		); err != nil {
-			return
+		accouts := vector.MustFixedColNoTypeCheck[uint32](tmpBatch.Vecs[ckputil.TableObjectsAttr_Accout_Idx])
+		dbids := vector.MustFixedColNoTypeCheck[uint64](tmpBatch.Vecs[ckputil.TableObjectsAttr_DB_Idx])
+		tableIds := vector.MustFixedColNoTypeCheck[uint64](tmpBatch.Vecs[ckputil.TableObjectsAttr_Table_Idx])
+		objectTypes := vector.MustFixedColNoTypeCheck[int8](tmpBatch.Vecs[ckputil.TableObjectsAttr_ObjectType_Idx])
+		objectStatsVec := tmpBatch.Vecs[ckputil.TableObjectsAttr_ID_Idx]
+		createTSs := vector.MustFixedColNoTypeCheck[types.TS](tmpBatch.Vecs[ckputil.TableObjectsAttr_CreateTS_Idx])
+		deleteTSs := vector.MustFixedColNoTypeCheck[types.TS](tmpBatch.Vecs[ckputil.TableObjectsAttr_DeleteTS_Idx])
+		rowids := vector.MustFixedColNoTypeCheck[types.Rowid](tmpBatch.Vecs[ckputil.TableObjectsAttr_PhysicalAddr_Idx])
+		for i, rows := 0, tmpBatch.RowCount(); i < rows; i++ {
+			if err = forEachRow(
+				accouts[i],
+				dbids[i],
+				tableIds[i],
+				objectTypes[i],
+				objectio.ObjectStats(objectStatsVec.GetBytesAt(i)),
+				createTSs[i],
+				deleteTSs[i],
+				rowids[i],
+			); err != nil {
+				return
+			}
 		}
 	}
-	return
-}
-
-func forEachRowForV12(
-	dataBatch, tombstoneBatch *containers.Batch,
-	forEachRow func(
-		account uint32,
-		dbid, tid uint64,
-		objectType int8,
-		objectStats objectio.ObjectStats,
-		create, delete types.TS,
-		rowID types.Rowid,
-	) error,
-) (err error) {
-	scanFn := func(src *containers.Batch, objectType int8) {
-		dbids := vector.MustFixedColNoTypeCheck[uint64](src.Vecs[ObjectInfo_DBID_Idx+2].GetDownstreamVector())
-		tids := vector.MustFixedColNoTypeCheck[uint64](src.Vecs[ObjectInfo_TID_Idx+2].GetDownstreamVector())
-		objectstatsVec := src.Vecs[ObjectInfo_ObjectStats_Idx+2].GetDownstreamVector()
-		createTSs := vector.MustFixedColNoTypeCheck[types.TS](src.Vecs[ObjectInfo_CreateAt_Idx+2].GetDownstreamVector())
-		deleteTSs := vector.MustFixedColNoTypeCheck[types.TS](src.Vecs[ObjectInfo_DeleteAt_Idx+2].GetDownstreamVector())
-		for i := 0; i < src.Length(); i++ {
-			rowID := types.Rowid{}
-			rowID.SetRowOffset(uint32(i))
-			objStats := objectio.ObjectStats(objectstatsVec.GetBytesAt(i))
-			forEachRow(0, dbids[i], tids[i], objectType, objStats, createTSs[i], deleteTSs[i], rowID)
-		}
-	}
-	if dataBatch != nil {
-		scanFn(dataBatch, ckputil.ObjectType_Data)
-	}
-	if tombstoneBatch != nil {
-		scanFn(tombstoneBatch, ckputil.ObjectType_Tombstone)
-	}
-	return
 }
 
 func (reader *CKPReader) ConsumeCheckpointWithTableID(
@@ -633,21 +656,48 @@ func (reader *CKPReader) ConsumeCheckpointWithTableID(
 		panic("not support")
 	}
 	if reader.version <= CheckpointVersion12 {
-		var dataBatch, tombstoneBatch *containers.Batch
-		if dataBatch, tombstoneBatch, err = getCKPDataForV12(
-			ctx, reader.dataLocations, reader.tombstoneLocations, reader.mp, reader.fs,
-		); err != nil {
-			return
+		tmpBatch := ckputil.MakeDataScanTableIDBatch()
+		defer tmpBatch.Clean(reader.mp)
+		defer reader.ckpDataReader.Reset(ctx)
+		for {
+			tmpBatch.CleanOnlyData()
+			var end bool
+			if end, err = reader.ckpDataReader.Read(ctx, tmpBatch, reader.mp); err != nil {
+				return
+			}
+			if end {
+				return
+			}
+
+			tableIds := vector.MustFixedColNoTypeCheck[uint64](tmpBatch.Vecs[ckputil.TableObjectsAttr_Table_Idx])
+			objectTypes := vector.MustFixedColNoTypeCheck[int8](tmpBatch.Vecs[ckputil.TableObjectsAttr_ObjectType_Idx])
+			objectStatsVec := tmpBatch.Vecs[ckputil.TableObjectsAttr_ID_Idx]
+			createTSs := vector.MustFixedColNoTypeCheck[types.TS](tmpBatch.Vecs[ckputil.TableObjectsAttr_CreateTS_Idx])
+			deleteTSs := vector.MustFixedColNoTypeCheck[types.TS](tmpBatch.Vecs[ckputil.TableObjectsAttr_DeleteTS_Idx])
+
+			for i := 0; i < tmpBatch.RowCount(); i++ {
+				if tableIds[i] != reader.tid {
+					continue
+				}
+				obj := objectio.ObjectEntry{
+					ObjectStats: objectio.ObjectStats(objectStatsVec.GetBytesAt(i)),
+					CreateTime:  createTSs[i],
+					DeleteTime:  deleteTSs[i],
+				}
+				var isTombstone bool
+				switch objectTypes[i] {
+				case ckputil.ObjectType_Data:
+					isTombstone = false
+				case ckputil.ObjectType_Tombstone:
+					isTombstone = true
+				default:
+					panic(fmt.Sprintf("invalid object type %d", objectTypes[i]))
+				}
+				if err = forEachObject(ctx, obj, isTombstone); err != nil {
+					return
+				}
+			}
 		}
-		if dataBatch != nil {
-			defer dataBatch.Close()
-		}
-		if tombstoneBatch != nil {
-			defer tombstoneBatch.Close()
-		}
-		return consumeCheckpointWithTableIDForV12(
-			ctx, forEachObject, dataBatch, tombstoneBatch, reader.tid,
-		)
 	} else {
 		return consumeCheckpointWithTableID(
 			ctx, forEachObject, reader.dataRanges, reader.tombstoneRanges, reader.tid, reader.mp, reader.fs,
@@ -683,40 +733,6 @@ func consumeCheckpointWithTableID(
 			}
 		}
 	}
-	return
-}
-
-func consumeCheckpointWithTableIDForV12(
-	ctx context.Context,
-	forEachObject func(ctx context.Context, obj objectio.ObjectEntry, isTombstone bool) (err error),
-	dataBatch, tombstoneBatch *containers.Batch,
-	tableID uint64,
-) (err error) {
-	replayFn := func(src *containers.Batch, isTombstone bool) {
-		if src == nil || src.Length() == 0 {
-			return
-		}
-		tids := vector.MustFixedColNoTypeCheck[uint64](src.Vecs[ObjectInfo_TID_Idx+2].GetDownstreamVector())
-		objectstatsVec := src.Vecs[ObjectInfo_ObjectStats_Idx+2].GetDownstreamVector()
-		createTSs := vector.MustFixedColNoTypeCheck[types.TS](src.Vecs[ObjectInfo_CreateAt_Idx+2].GetDownstreamVector())
-		deleteTSs := vector.MustFixedColNoTypeCheck[types.TS](src.Vecs[ObjectInfo_DeleteAt_Idx+2].GetDownstreamVector())
-		for i := 0; i < src.Length(); i++ {
-			if tids[i] != tableID {
-				continue
-			}
-			obj := objectio.ObjectEntry{
-				ObjectStats: objectio.ObjectStats(objectstatsVec.GetBytesAt(i)),
-				CreateTime:  createTSs[i],
-				DeleteTime:  deleteTSs[i],
-			}
-			if err := forEachObject(ctx, obj, isTombstone); err != nil {
-				return
-			}
-		}
-
-	}
-	replayFn(dataBatch, false)
-	replayFn(tombstoneBatch, true)
 	return
 }
 

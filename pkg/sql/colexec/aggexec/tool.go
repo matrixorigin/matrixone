@@ -15,10 +15,11 @@
 package aggexec
 
 import (
+	"math"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"math"
 )
 
 // vectorAppendWildly is a more efficient version of vector.AppendFixed.
@@ -38,6 +39,7 @@ func vectorAppendWildly[T numeric | types.Decimal64 | types.Decimal128](v *vecto
 	return nil
 }
 
+/*
 func vectorAppendBytesWildly(v *vector.Vector, mp *mpool.MPool, value []byte) error {
 	var va types.Varlena
 	if err := vector.BuildVarlenaFromByteSlice(v, &va, &value, mp); err != nil {
@@ -57,6 +59,7 @@ func vectorAppendBytesWildly(v *vector.Vector, mp *mpool.MPool, value []byte) er
 	vs[oldLen] = va
 	return nil
 }
+*/
 
 // vectorUnmarshal is instead of vector.UnmarshalBinary.
 // it will check if mp is nil first.

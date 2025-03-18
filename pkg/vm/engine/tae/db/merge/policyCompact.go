@@ -35,20 +35,22 @@ type objCompactPolicy struct {
 	objects []*catalog.ObjectEntry
 
 	tombstoneMetas []objectio.ObjectDataMeta
+
+	config *BasicPolicyConfig
 }
 
 func newObjCompactPolicy(fs fileservice.FileService) *objCompactPolicy {
 	return &objCompactPolicy{fs: fs}
 }
 
-func (o *objCompactPolicy) onObject(entry *catalog.ObjectEntry, config *BasicPolicyConfig) bool {
+func (o *objCompactPolicy) onObject(entry *catalog.ObjectEntry) bool {
 	if o.tblEntry == nil {
 		return false
 	}
 	if entry.IsTombstone {
 		return false
 	}
-	if entry.OriginSize() < config.ObjectMinOsize {
+	if entry.OriginSize() < o.config.ObjectMinOsize {
 		return false
 	}
 	if len(o.tombstoneMetas) == 0 {
@@ -72,7 +74,7 @@ func (o *objCompactPolicy) revise(rc *resourceController) []reviseResult {
 	for _, obj := range o.objects {
 		if rc.resourceAvailable([]*catalog.ObjectEntry{obj}) {
 			rc.reserveResources([]*catalog.ObjectEntry{obj})
-			results = append(results, reviseResult{[]*catalog.ObjectEntry{obj}, taskHostDN})
+			results = append(results, reviseResult{objs: []*catalog.ObjectEntry{obj}, kind: taskHostDN})
 		}
 	}
 	return results
@@ -82,6 +84,7 @@ func (o *objCompactPolicy) resetForTable(entry *catalog.TableEntry, config *Basi
 	o.tblEntry = entry
 	o.tombstoneMetas = o.tombstoneMetas[:0]
 	o.objects = o.objects[:0]
+	o.config = config
 
 	tIter := entry.MakeTombstoneVisibleObjectIt(txnbase.MockTxnReaderWithNow())
 	defer tIter.Release()

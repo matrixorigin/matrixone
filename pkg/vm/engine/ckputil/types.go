@@ -53,7 +53,8 @@ const (
 	TableObjectsAttr_CreateTS_Idx   = ioutil.TableObjectsAttr_CreateTS_Idx
 	TableObjectsAttr_DeleteTS_Idx   = ioutil.TableObjectsAttr_DeleteTS_Idx
 	TableObjectsAttr_Cluster_Idx    = ioutil.TableObjectsAttr_Cluster_Idx
-	// TableObjectsAttr_PhysicalAddr_Idx = 8
+
+	TableObjectsAttr_PhysicalAddr_Idx = 8
 )
 
 const (

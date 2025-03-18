@@ -24,22 +24,27 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	log "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
-	"github.com/stretchr/testify/assert"
 )
 
 /*
@@ -662,4 +667,142 @@ func TestPushClient_DoGCPartitionState(t *testing.T) {
 
 func TestLogTailConnect(t *testing.T) {
 	// this case is tested by TestSpeedupAbortAllTxn
+}
+
+func TestPushClient_LoadAndConsumeLatestCkp(t *testing.T) {
+	ctx, cancel := context.WithTimeoutCause(
+		context.Background(),
+		5*time.Minute,
+		moerr.NewInternalErrorNoCtx("ut tester"))
+	defer cancel()
+	sid := "s1"
+	rt := runtime.DefaultRuntime()
+	runtime.SetupServiceBasedRuntime(sid, rt)
+
+	clusterClient := &testHAKeeperClient{}
+	moc := clusterservice.NewMOCluster("", clusterClient, time.Hour)
+	runtime.ServiceRuntime(sid).SetGlobalVariables(
+		runtime.ClusterService,
+		moc,
+	)
+
+	lk := lockservice.NewLockService(lockservice.Config{
+		ServiceID: sid,
+	})
+	defer lk.Close()
+	rt.SetGlobalVariables(runtime.LockService, lk)
+
+	catalog.SetupDefines(sid)
+
+	// Create Engine and PushClient for testing
+	mp, err := mpool.NewMPool(sid, 1024*1024, 0)
+	assert.NoError(t, err)
+	sender, err := rpc.NewSender(rpc.Config{}, rt)
+	require.NoError(t, err)
+	cli := client.NewTxnClient(sid, sender)
+	defer cli.Close()
+
+	// Create Engine
+	e := New(
+		ctx,
+		sid,
+		mp,
+		nil,
+		cli,
+		nil,
+		nil,
+		4,
+	)
+	defer e.Close()
+
+	tw := client.NewTimestampWaiter(runtime.GetLogger(""))
+	c := &PushClient{
+		eng:             e,
+		serviceID:       sid,
+		timestampWaiter: tw,
+		subscriber:      &logTailSubscriber{},
+		subscribed:      subscribedTable{m: make(map[uint64]SubTableStatus)},
+	}
+	c.receivedLogTailTime.initLogTailTimestamp(tw)
+
+	// Test Case 1.1: Table is subscribed with SubRspReceived state, LazyLoadLatestCkp succeeds
+	dbID1, tableID1 := uint64(1), uint64(1)
+	c.SetSubscribeState(dbID1, tableID1, SubRspReceived)
+	tbl1 := &txnTable{
+		db: &txnDatabase{
+			databaseId: dbID1,
+		},
+	}
+	state, err := c.loadAndConsumeLatestCkp(ctx, tableID1, tbl1)
+	assert.NoError(t, err)
+	assert.Equal(t, Subscribed, state)
+
+	// Test Case 1.2: Table is subscribed with Subscribed state
+	dbID12, tableID12 := uint64(12), uint64(12)
+	c.SetSubscribeState(dbID12, tableID12, Subscribed)
+	tbl12 := &txnTable{
+		db: &txnDatabase{
+			databaseId: dbID12,
+		},
+	}
+	state, err = c.loadAndConsumeLatestCkp(ctx, tableID12, tbl12)
+	assert.NoError(t, err)
+	assert.Equal(t, Subscribed, state)
+
+	// Test Case 2.1: Table is not subscribed, subscriber is not ready
+	dbID21, tableID21 := uint64(21), uint64(21)
+	tbl21 := &txnTable{
+		db: &txnDatabase{
+			databaseId: dbID21,
+		},
+	}
+	c.subscriber = &logTailSubscriber{} // not ready state
+	state, err = c.loadAndConsumeLatestCkp(ctx, tableID21, tbl21)
+	assert.Error(t, err)
+	assert.Equal(t, Unsubscribed, state)
+
+	// Test Case 2.2: Table is not subscribed, subscriber is ready and subscribeTable succeeds
+	dbID22, tableID22 := uint64(22), uint64(22)
+	tbl22 := &txnTable{
+		db: &txnDatabase{
+			databaseId: dbID22,
+		},
+	}
+
+	c.subscriber = &logTailSubscriber{}
+	c.subscriber.mu.cond = sync.NewCond(&c.subscriber.mu)
+	c.subscriber.setReady()
+	c.subscriber.sendSubscribe = func(ctx context.Context, id api.TableID) error {
+		return nil
+	}
+
+	state, err = c.loadAndConsumeLatestCkp(ctx, tableID22, tbl22)
+	assert.NoError(t, err)
+	assert.Equal(t, Subscribing, state)
+
+	// Test Case 2.3: Table is not subscribed, subscriber is ready but subscribeTable fails
+	dbID23, tableID23 := uint64(23), uint64(23)
+	tbl23 := &txnTable{
+		db: &txnDatabase{
+			databaseId: dbID23,
+		},
+	}
+	c.subscriber.sendSubscribe = func(ctx context.Context, id api.TableID) error {
+		return moerr.NewInternalErrorNoCtx("mock subscribe error")
+	}
+	state, err = c.loadAndConsumeLatestCkp(ctx, tableID23, tbl23)
+	assert.Error(t, err)
+	assert.Equal(t, Unsubscribed, state)
+
+	// Test Case 3: Table exists but has other state (Unsubscribing)
+	dbID3, tableID3 := uint64(3), uint64(3)
+	c.SetSubscribeState(dbID3, tableID3, Unsubscribing)
+	tbl3 := &txnTable{
+		db: &txnDatabase{
+			databaseId: dbID3,
+		},
+	}
+	state, err = c.loadAndConsumeLatestCkp(ctx, tableID3, tbl3)
+	assert.NoError(t, err)
+	assert.Equal(t, Unsubscribing, state)
 }

@@ -24,9 +24,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 )
 
-func (builder *QueryBuilder) checkValidDistFn(nodeID int32, projNode, sortNode, scanNode *plan.Node,
+func (builder *QueryBuilder) checkValidHnswDistFn(nodeID int32, projNode, sortNode, scanNode *plan.Node,
 	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr, multiTableIndex *MultiTableIndex) bool {
 
 	if len(sortNode.OrderBy) != 1 {
@@ -37,7 +38,7 @@ func (builder *QueryBuilder) checkValidDistFn(nodeID int32, projNode, sortNode, 
 	if distFnExpr == nil {
 		return false
 	}
-	if _, ok := distFuncOpTypes[distFnExpr.Func.ObjName]; !ok {
+	if _, ok := metric.DistFuncOpTypes[distFnExpr.Func.ObjName]; !ok {
 		return false
 	}
 
@@ -65,7 +66,7 @@ func (builder *QueryBuilder) checkValidDistFn(nodeID int32, projNode, sortNode, 
 		return false
 	}
 
-	if optype != distFuncOpTypes[distFnExpr.Func.ObjName] {
+	if optype != metric.DistFuncOpTypes[distFnExpr.Func.ObjName] {
 		return false
 	}
 

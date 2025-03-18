@@ -2516,7 +2516,7 @@ func initInnerProductArrayTestCase() []tcTemp {
 				NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}, {4, 5, 6}}, []bool{false, false}),
 			},
 			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{14, 77},
+				[]float64{-14, -77},
 				[]bool{false, false}),
 		},
 		{
@@ -2527,7 +2527,7 @@ func initInnerProductArrayTestCase() []tcTemp {
 				NewFunctionTestInput(types.T_array_float64.ToType(), [][]float64{{1, 2, 3}, {4, 5, 6}}, []bool{false, false}),
 			},
 			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{14, 77},
+				[]float64{-14, -77},
 				[]bool{false, false}),
 		},
 	}

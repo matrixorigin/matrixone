@@ -9,8 +9,8 @@ select moplugin('stage://mystage/hello.wasm', 'mowasm_hello', 'world');
 select moplugin('stage://mystage/hello.wasm', 'mowasm_hello', 'world');
 select moplugin('stage://mystage/hello.wasm', 'mowasm_add', '[3, 5]');
 
-select moplugin('https://github.com/matrixorigin/mojo/raw/main/plugin/hello/notexist.wasm', 'mowasm_add', '[3, 5]');
-select try_moplugin('https://github.com/matrixorigin/mojo/raw/main/plugin/hello/notexist.wasm', 'mowasm_add', '[3, 5]');
+-- select moplugin('https://github.com/matrixorigin/mojo/raw/main/plugin/hello/notexist.wasm', 'mowasm_add', '[3, 5]');
+-- select try_moplugin('https://github.com/matrixorigin/mojo/raw/main/plugin/hello/notexist.wasm', 'mowasm_add', '[3, 5]');
 
 select moplugin('stage://mystage/notexist.wasm', 'mowasm_add', '[3, 5]');
 select try_moplugin('stage://mystage/notexist.wasm', 'mowasm_add', '[3, 5]');

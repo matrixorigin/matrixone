@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"math/rand/v2"
+	"strings"
 	"testing"
 )
 
@@ -32,17 +33,17 @@ func TestHDFS(t *testing.T) {
 		{
 			Addr: "hdfs://hadoop-namenode.hadoop.svc.cluster.local:9820",
 			User: "root",
-			Path: "/user/root/mo-test/",
+			Path: "user/root/mo-test/",
 		},
 		{
 			Addr: "hdfs://hadoop-namenode.hadoop.svc.cluster.local:9820",
 			User: "runner",
-			Path: "/user/runner/mo-test/",
+			Path: "user/runner/mo-test/",
 		},
 	}
 
 	for _, kase := range cases {
-		t.Run(fmt.Sprintf("%+v", kase), func(t *testing.T) {
+		t.Run(kase.Addr, func(t *testing.T) {
 			_, err := NewHDFS(
 				context.Background(),
 				ObjectStorageArguments{
@@ -64,7 +65,7 @@ func TestHDFS(t *testing.T) {
 					fs, err := NewHDFS(
 						context.Background(),
 						ObjectStorageArguments{
-							Endpoint: kase.Addr,
+							Endpoint: strings.TrimPrefix(kase.Addr, "hdfs://"),
 							User:     kase.User,
 							Bucket:   kase.Path,
 						},
@@ -98,6 +99,31 @@ func TestHDFS(t *testing.T) {
 				}
 				return fs
 			})
+
+			// test GetForETL
+			endpoint := kase.Addr + "?user=" + kase.User
+			_, _, err = GetForETL(
+				context.Background(),
+				nil,
+				"hdfs,is-hdfs=true,endpoint="+endpoint+",bucket="+kase.Path+":/foo/bar/baz",
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			// bad path
+			_, err = NewHDFS(
+				context.Background(),
+				ObjectStorageArguments{
+					Endpoint: kase.Addr,
+					User:     kase.User,
+					Bucket:   "..:..",
+				},
+				nil,
+			)
+			if err == nil {
+				t.Fatal("should fail")
+			}
 
 		})
 	}
