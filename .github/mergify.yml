@@ -54,6 +54,7 @@ pull_request_rules:
       - "#changes-requested-reviews-by<=0"
       - label!=do-not-merge/wip
       - base=2.1-dev
+      - approved-reviews-by=XuPeng-SH
     actions:
       queue:
         name: release-2.1
@@ -64,13 +65,13 @@ pull_request_rules:
     actions:
       update: 
 
-#  - name: Auto Request Reviewer For Non Main Branch
-#    conditions:
-#      - base!=main
-#    actions:
-#      request_reviews:
-#        users:
-#          - sukki37
+ - name: Auto Request Reviewer For Non Main Branch
+   conditions:
+     - base!=main
+   actions:
+     request_reviews:
+       users:
+         - XuPeng-SH
 
   - name: label for Bug
     conditions: 
