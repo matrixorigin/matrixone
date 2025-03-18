@@ -85,8 +85,8 @@ require (
 	go.uber.org/ratelimit v0.2.0
 	go.uber.org/zap v1.24.0
 	golang.org/x/exp v0.0.0-20241009180824-f66d83c29e7c
-	golang.org/x/sync v0.8.0
-	golang.org/x/sys v0.26.0
+	golang.org/x/sync v0.12.0
+	golang.org/x/sys v0.31.0
 	gonum.org/v1/gonum v0.14.0
 	google.golang.org/grpc v1.62.1
 	google.golang.org/protobuf v1.34.2
@@ -131,9 +131,9 @@ require (
 	github.com/segmentio/asm v1.1.3 // indirect
 	github.com/shoenig/go-m1cpu v0.1.6 // indirect
 	github.com/tetratelabs/wazero v1.7.3 // indirect
-	golang.org/x/crypto v0.28.0 // indirect
+	golang.org/x/crypto v0.36.0 // indirect
 	golang.org/x/net v0.30.0 // indirect
-	golang.org/x/text v0.19.0 // indirect
+	golang.org/x/text v0.23.0 // indirect
 	golang.org/x/time v0.3.0 // indirect
 )
 
