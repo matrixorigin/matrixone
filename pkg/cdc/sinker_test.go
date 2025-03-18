@@ -959,3 +959,12 @@ func Test_consoleSinker_SendBeginCommitRollback(t *testing.T) {
 	s.SendCommit()
 	s.SendRollback()
 }
+
+func Test_mysqlSinker_ClearError(t *testing.T) {
+	s := &mysqlSinker{}
+	s.err = moerr.NewInternalErrorNoCtx("test err")
+	assert.Error(t, s.Error())
+
+	s.ClearError()
+	assert.Nil(t, s.Error())
+}
