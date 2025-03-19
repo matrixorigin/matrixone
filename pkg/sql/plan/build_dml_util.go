@@ -1953,6 +1953,19 @@ func appendPreInsertSkVectorPlan(builder *QueryBuilder, bindCtx *BindContext, ta
 		posOriginPk, typeOriginPk = getPkPos(tableDef, false)
 	}
 
+	// get optype
+	idxdef := multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata]
+
+	params, err := catalog.IndexParamsStringToMap(idxdef.IndexAlgoParams)
+	if err != nil {
+		return -1, err
+	}
+
+	optype, ok := params[catalog.IndexAlgoParamOpType]
+	if !ok {
+		return -1, err
+	}
+
 	//1.b Handle mo_cp_key
 	lastNodeId = recomputeMoCPKeyViaProjection(builder, bindCtx, tableDef, lastNodeId, posOriginPk)
 
@@ -1970,7 +1983,7 @@ func appendPreInsertSkVectorPlan(builder *QueryBuilder, bindCtx *BindContext, ta
 	}
 
 	// 4. create "CrossJoinL2" on tbl x centroids
-	joinTblAndCentroidsUsingCrossL2Join := makeTblCrossJoinL2Centroids(builder, bindCtx, tableDef, lastNodeId, currVersionCentroids, typeOriginPk, posOriginPk, typeOriginVecColumn, posOriginVecColumn)
+	joinTblAndCentroidsUsingCrossL2Join := makeTblCrossJoinL2Centroids(builder, bindCtx, tableDef, lastNodeId, currVersionCentroids, typeOriginPk, posOriginPk, typeOriginVecColumn, posOriginVecColumn, optype)
 
 	// 5. Create a Project with CP Key for LockNode
 	projectWithCpKey, err := makeFinalProject(builder, bindCtx, joinTblAndCentroidsUsingCrossL2Join)
