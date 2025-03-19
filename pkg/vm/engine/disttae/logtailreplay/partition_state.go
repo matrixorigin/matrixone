@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"math"
 	"runtime/trace"
+	"strings"
 	"sync/atomic"
 
 	"go.uber.org/zap"
@@ -168,7 +169,7 @@ func (p *PartitionState) handleDataObjectEntry(ctx context.Context, objEntry obj
 	p.dataObjectsNameIndex.Set(objEntry)
 
 	// Need to insert an ee in dataObjectTSIndex, when soft delete appendable object.
-	if objEntry.DeleteTime.IsEmpty() {
+	if !objEntry.DeleteTime.IsEmpty() {
 		e := ObjectIndexByTSEntry{
 			Time:         objEntry.DeleteTime,
 			IsDelete:     true,
@@ -954,7 +955,7 @@ func (p *PartitionState) truncate(ids [2]uint64, ts types.TS) {
 		ok = iter.Last()
 	}
 	objIDsToDelete := make(map[objectio.ObjectNameShort]struct{}, 0)
-	objectsToDelete := ""
+	var objectsToDeleteBuilder strings.Builder
 	for ; ok; ok = iter.Prev() {
 		entry := iter.Item()
 		if entry.Time.GT(&ts) {
@@ -963,13 +964,14 @@ func (p *PartitionState) truncate(ids [2]uint64, ts types.TS) {
 		if entry.IsDelete {
 			objIDsToDelete[entry.ShortObjName] = struct{}{}
 			if gced {
-				objectsToDelete = fmt.Sprintf("%s, %v", objectsToDelete, entry.ShortObjName)
-			} else {
-				objectsToDelete = fmt.Sprintf("%s%v", objectsToDelete, entry.ShortObjName)
+				objectsToDeleteBuilder.WriteString(", ")
 			}
+			objectsToDeleteBuilder.WriteString(entry.ShortObjName.ShortString())
 			gced = true
 		}
 	}
+	objectsToDelete := objectsToDeleteBuilder.String()
+
 	iter = p.dataObjectTSIndex.Copy().Iter()
 	ok = iter.Seek(pivot)
 	if !ok {
@@ -988,7 +990,7 @@ func (p *PartitionState) truncate(ids [2]uint64, ts types.TS) {
 		logutil.Infof("GC partition_state at %v for table %d:%s", ts.ToString(), ids[1], objectsToDelete)
 	}
 
-	objsToDelete := ""
+	objectsToDeleteBuilder.Reset()
 	objIter := p.dataObjectsNameIndex.Copy().Iter()
 	objGced := false
 	firstCalled := false
@@ -1008,19 +1010,14 @@ func (p *PartitionState) truncate(ids [2]uint64, ts types.TS) {
 
 		if !objEntry.DeleteTime.IsEmpty() && objEntry.DeleteTime.LE(&ts) {
 			p.dataObjectsNameIndex.Delete(objEntry)
-			//p.dataObjectsByCreateTS.Delete(ObjectIndexByCreateTSEntry{
-			//	//CreateTime:   objEntry.CreateTime,
-			//	//ShortObjName: objEntry.ShortObjName,
-			//	ObjectInfo: objEntry.ObjectInfo,
-			//})
 			if objGced {
-				objsToDelete = fmt.Sprintf("%s, %s", objsToDelete, objEntry.Location().Name().String())
-			} else {
-				objsToDelete = fmt.Sprintf("%s%s", objsToDelete, objEntry.Location().Name().String())
+				objectsToDeleteBuilder.WriteString(", ")
 			}
+			objectsToDeleteBuilder.WriteString(objEntry.ObjectShortName().ShortString())
 			objGced = true
 		}
 	}
+	objsToDelete := objectsToDeleteBuilder.String()
 	if objGced {
 		logutil.Infof("GC partition_state at %v for table %d:%s", ts.ToString(), ids[1], objsToDelete)
 	}
