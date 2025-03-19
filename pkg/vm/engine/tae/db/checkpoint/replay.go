@@ -74,6 +74,15 @@ func (c *CkpReplayer) Close() {
 	}
 }
 
+// readCheckpointEntries reads the checkpoint entries from the meta files.
+// It returns the checkpoint entries and the max global timestamp.
+// The checkpoint entries are sorted by the start timestamp.
+// steps:
+// 1. list all the meta files under the checkpoint directory `ckp/`
+// 2. read the compacted entries from the meta files
+// 3. read the global entries from the meta files
+// 4. sort the entries by the start timestamp
+// 5. return the entries and the max global timestamp
 func (c *CkpReplayer) readCheckpointEntries() (
 	allEntries []*CheckpointEntry, maxGlobalTS types.TS, err error,
 ) {
