@@ -324,7 +324,7 @@ func readMetaForV12(
 		for it.HasNext() {
 			loc := it.Next().GetLocation()
 			if !loc.IsEmpty() {
-				str := loc.String()
+				str := loc.Name().String()
 				data[str] = loc
 			}
 		}
@@ -333,7 +333,7 @@ func readMetaForV12(
 		for it.HasNext() {
 			loc := it.Next().GetLocation()
 			if !loc.IsEmpty() {
-				str := loc.String()
+				str := loc.Name().String()
 				tombstone[str] = loc
 			}
 		}
@@ -381,7 +381,7 @@ func readMetaForV12WithTableID(
 		for it.HasNext() {
 			loc := it.Next().GetLocation()
 			if !loc.IsEmpty() {
-				str := loc.String()
+				str := loc.Name().String()
 				data[str] = loc
 			}
 		}
@@ -390,7 +390,7 @@ func readMetaForV12WithTableID(
 		for it.HasNext() {
 			loc := it.Next().GetLocation()
 			if !loc.IsEmpty() {
-				str := loc.String()
+				str := loc.Name().String()
 				tombstone[str] = loc
 			}
 		}
