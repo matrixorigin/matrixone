@@ -249,7 +249,7 @@ func NewCheckpointDataWithSinker(sinker *ioutil.Sinker, allocator *mpool.MPool) 
 func (data *CheckpointData_V2) WriteTo(
 	ctx context.Context,
 	fs fileservice.FileService,
-) (CNLocation, TNLocation objectio.Location, ckpfiles []string, err error) {
+) (location objectio.Location, ckpfiles []string, err error) {
 	if data.batch != nil && data.batch.RowCount() != 0 {
 		err = data.sinker.Write(ctx, data.batch)
 		if err != nil {
@@ -284,8 +284,7 @@ func (data *CheckpointData_V2) WriteTo(
 	if blks, _, err = writer.Sync(ctx); err != nil {
 		return
 	}
-	CNLocation = objectio.BuildLocation(name, blks[0].GetExtent(), 0, blks[0].GetID())
-	TNLocation = CNLocation
+	location = objectio.BuildLocation(name, blks[0].GetExtent(), 0, blks[0].GetID())
 	ckpfiles = make([]string, 0)
 	for _, obj := range files {
 		ckpfiles = append(ckpfiles, obj.ObjectName().String())
