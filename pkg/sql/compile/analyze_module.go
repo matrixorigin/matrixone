@@ -50,7 +50,7 @@ type AnalyzeModule struct {
 // Reset When Compile reused, reset AnalyzeModule to prevent resource accumulation
 func (anal *AnalyzeModule) Reset(isPrepare bool, isTpQuery bool) {
 	if anal != nil {
-		if !isPrepare || !isTpQuery {
+		if !isPrepare {
 			anal.phyPlan = nil
 		}
 
@@ -281,15 +281,22 @@ func ConvertScopeToPhyScope(scope *Scope, receiverMap map[*process.WaitRegister]
 	return phyScope
 }
 
-func UpdatePreparePhyScope(scope *Scope, phyScope models.PhyScope) {
-	UpdatePreparePhyOperator(scope.RootOp, phyScope.RootOperator)
+func UpdatePreparePhyScope(scope *Scope, phyScope models.PhyScope) bool {
+	res := UpdatePreparePhyOperator(scope.RootOp, phyScope.RootOperator)
+	if !res {
+		return false
+	}
 	if scope.ScopeAnalyzer != nil {
 		phyScope.PrepareTimeConsumed = scope.ScopeAnalyzer.TimeConsumed
 	}
 
 	for i, preScope := range scope.PreScopes {
-		UpdatePreparePhyScope(preScope, phyScope.PreScopes[i])
+		res = UpdatePreparePhyScope(preScope, phyScope.PreScopes[i])
+		if !res {
+			return res
+		}
 	}
+	return true
 }
 
 func getScopeReceiver(s *Scope, rs []*process.WaitRegister, rmp map[*process.WaitRegister]int) []models.PhyReceiver {
@@ -350,9 +357,9 @@ func ConvertOperatorToPhyOperator(op vm.Operator, rmp map[*process.WaitRegister]
 	return phyOp
 }
 
-func UpdatePreparePhyOperator(op vm.Operator, phyOp *models.PhyOperator) {
+func UpdatePreparePhyOperator(op vm.Operator, phyOp *models.PhyOperator) bool {
 	if op == nil {
-		return
+		return true
 	}
 
 	if op.GetOperatorBase().OpAnalyzer != nil {
@@ -360,9 +367,16 @@ func UpdatePreparePhyOperator(op vm.Operator, phyOp *models.PhyOperator) {
 	}
 
 	children := op.GetOperatorBase().Children
-	for i, child := range children {
-		UpdatePreparePhyOperator(child, phyOp.Children[i])
+	if len(children) != len(phyOp.Children) {
+		return false
 	}
+	for i, child := range children {
+		res := UpdatePreparePhyOperator(child, phyOp.Children[i])
+		if !res {
+			return res
+		}
+	}
+	return true
 }
 
 // getDestReceiver returns the DestReceiver of the current Operator
@@ -424,16 +438,21 @@ func ConvertSourceToPhySource(source *Source) *models.PhySource {
 	}
 }
 
-func (c *Compile) UpdatePreparePhyPlan(runC *Compile) {
+// true means update success, if return false, GenPhyPlan
+func (c *Compile) UpdatePreparePhyPlan(runC *Compile) bool {
 	//------------------------------------------------------------------------------------------------------
 	c.anal.phyPlan.RetryTime = runC.anal.retryTimes
 	c.anal.curNodeIdx = runC.anal.curNodeIdx
 
 	if len(runC.scopes) > 0 {
 		for i := range runC.scopes {
-			UpdatePreparePhyScope(runC.scopes[i], c.anal.phyPlan.LocalScope[i])
+			res := UpdatePreparePhyScope(runC.scopes[i], c.anal.phyPlan.LocalScope[i])
+			if !res {
+				return false
+			}
 		}
 	}
+	return true
 }
 
 func (c *Compile) GenPhyPlan(runC *Compile) {
