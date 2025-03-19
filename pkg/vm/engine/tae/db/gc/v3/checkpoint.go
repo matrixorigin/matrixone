@@ -412,19 +412,23 @@ func (c *checkpointCleaner) Replay(inputCtx context.Context) (err error) {
 		var pitrs *logtail.PitrInfo
 		pitrs, err = c.GetPITRsLocked(ctx)
 		if err != nil {
-			logutil.Error("GC-REPLAY-GET-PITRS_ERROR",
+			logutil.Error(
+				"GC-REPLAY-GET-PITRS_ERROR",
 				zap.String("task", c.TaskNameLocked()),
-				zap.Error(err),
 				zap.Duration("duration", time.Since(start)),
+				zap.String("checkpoint", compacted.String()),
+				zap.Error(err),
 			)
 			return
 		}
 		snapshots, err = c.mutation.snapshotMeta.GetSnapshot(c.ctx, c.sid, c.fs, c.mp)
 		if err != nil {
-			logutil.Error("GC-REPLAY-GET-SNAPSHOT_ERROR",
+			logutil.Error(
+				"GC-REPLAY-GET-SNAPSHOT_ERROR",
 				zap.String("task", c.TaskNameLocked()),
-				zap.Error(err),
 				zap.Duration("duration", time.Since(start)),
+				zap.String("checkpoint", compacted.String()),
+				zap.Error(err),
 			)
 			return
 		}
@@ -432,6 +436,13 @@ func (c *checkpointCleaner) Replay(inputCtx context.Context) (err error) {
 		logtail.CloseSnapshotList(snapshots)
 		var ckpBatch *batch.Batch
 		if ckpBatch, err = ckpReader.GetCheckpointData(ctx); err != nil {
+			logutil.Error(
+				"GC-REPLAY-GET-CHECKPOINT-DATA_ERROR",
+				zap.String("task", c.TaskNameLocked()),
+				zap.Duration("duration", time.Since(start)),
+				zap.String("checkpoint", compacted.String()),
+				zap.Error(err),
+			)
 			return
 		}
 		logtail.FillUsageBatOfCompacted(
@@ -442,10 +453,13 @@ func (c *checkpointCleaner) Replay(inputCtx context.Context) (err error) {
 			accountSnapshots,
 			pitrs,
 			0)
-		logutil.Info("GC-REPLAY-COLLECT-SNAPSHOT-SIZE",
+		logutil.Info(
+			"GC-REPLAY-COLLECT-SNAPSHOT-SIZE",
 			zap.String("task", c.TaskNameLocked()),
 			zap.Int("size", len(accountSnapshots)),
 			zap.Duration("duration", time.Since(start)),
+			zap.String("checkpoint", compacted.String()),
+			zap.Int("count", ckpBatch.RowCount()),
 		)
 	}
 	return
