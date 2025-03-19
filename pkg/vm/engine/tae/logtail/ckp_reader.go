@@ -557,6 +557,8 @@ func compatibilityForV12(
 	if ckpData == nil {
 		panic("invalid batch")
 	}
+	encoder := types.NewPacker()
+	defer encoder.Close()
 	compatibilityFn := func(src *containers.Batch, dataType int8) {
 		sels := make([]int64, src.Length())
 		for i := 0; i < src.Length(); i++ {
@@ -584,6 +586,13 @@ func compatibilityForV12(
 		for i := 0; i < src.Length(); i++ {
 			rowID := types.NewRowid(blockID, uint32(i))
 			vector.AppendFixed(ckpData.Vecs[ckputil.TableObjectsAttr_PhysicalAddr_Idx], rowID, false, mp)
+		}
+		tids := vector.MustFixedColNoTypeCheck[uint64](src.Vecs[ObjectInfo_TID_Idx+2].GetDownstreamVector())
+		for i := 0; i < src.Length(); i++ {
+			objectStats := objectio.ObjectStats(src.Vecs[ObjectInfo_ObjectStats_Idx+2].GetDownstreamVector().GetBytesAt(i))
+			ckputil.EncodeCluser(encoder, tids[i], dataType, objectStats.ObjectName().ObjectId())
+			vector.AppendBytes(ckpData.Vecs[ckputil.TableObjectsAttr_Cluster_Idx], encoder.Bytes(), false, mp)
+			encoder.Reset()
 		}
 	}
 
