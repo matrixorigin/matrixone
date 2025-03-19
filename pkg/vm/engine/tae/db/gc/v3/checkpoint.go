@@ -912,7 +912,7 @@ func (c *checkpointCleaner) getCkpReader(
 	ctx context.Context,
 	ckp *checkpoint.CheckpointEntry,
 ) (reader *logtail.CKPReader, err error) {
-	return logtail.GetCheckpointData(
+	return logtail.GetCheckpointReader(
 		ctx, c.sid, c.fs, ckp.GetLocation(), ckp.GetVersion(),
 	)
 }
