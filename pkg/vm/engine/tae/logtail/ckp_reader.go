@@ -517,6 +517,19 @@ func (reader *CKPReader) GetCheckpointData(ctx context.Context) (ckpData *batch.
 	if reader.withTableID {
 		panic("not support")
 	}
+	t0 := time.Now()
+	batchCount := 0
+	rows := 0
+	defer func() {
+		logutil.Info(
+			"Read-Checkpoint:GetCheckpointData",
+			zap.Duration("cost", time.Since(t0)),
+			zap.Int("batch count", batchCount),
+			zap.Int("rows", rows),
+			zap.Uint32("version", reader.version),
+			zap.Error(err),
+		)
+	}()
 	ckpData = ckputil.MakeDataScanTableIDBatch()
 	tmpBatch := ckputil.MakeDataScanTableIDBatch()
 	defer tmpBatch.Clean(reader.mp)
@@ -529,6 +542,8 @@ func (reader *CKPReader) GetCheckpointData(ctx context.Context) (ckpData *batch.
 		if end {
 			return
 		}
+		batchCount++
+		rows += tmpBatch.RowCount()
 		if _, err = ckpData.Append(ctx, reader.mp, tmpBatch); err != nil {
 			return
 		}
