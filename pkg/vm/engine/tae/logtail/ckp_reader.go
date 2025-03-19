@@ -328,7 +328,7 @@ func readMetaForV12(
 		for it.HasNext() {
 			loc := it.Next().GetLocation()
 			if !loc.IsEmpty() {
-				str := loc.String()
+				str := loc.Name().String()
 				data[str] = loc
 			}
 		}
@@ -337,7 +337,7 @@ func readMetaForV12(
 		for it.HasNext() {
 			loc := it.Next().GetLocation()
 			if !loc.IsEmpty() {
-				str := loc.String()
+				str := loc.Name().String()
 				tombstone[str] = loc
 			}
 		}
@@ -385,7 +385,7 @@ func readMetaForV12WithTableID(
 		for it.HasNext() {
 			loc := it.Next().GetLocation()
 			if !loc.IsEmpty() {
-				str := loc.String()
+				str := loc.Name().String()
 				data[str] = loc
 			}
 		}
@@ -394,7 +394,7 @@ func readMetaForV12WithTableID(
 		for it.HasNext() {
 			loc := it.Next().GetLocation()
 			if !loc.IsEmpty() {
-				str := loc.String()
+				str := loc.Name().String()
 				tombstone[str] = loc
 			}
 		}
@@ -517,6 +517,19 @@ func (reader *CKPReader) GetCheckpointData(ctx context.Context) (ckpData *batch.
 	if reader.withTableID {
 		panic("not support")
 	}
+	t0 := time.Now()
+	batchCount := 0
+	rows := 0
+	defer func() {
+		logutil.Info(
+			"Read-Checkpoint:GetCheckpointData",
+			zap.Duration("cost", time.Since(t0)),
+			zap.Int("batch count", batchCount),
+			zap.Int("rows", rows),
+			zap.Uint32("version", reader.version),
+			zap.Error(err),
+		)
+	}()
 	ckpData = ckputil.MakeDataScanTableIDBatch()
 	tmpBatch := ckputil.MakeDataScanTableIDBatch()
 	defer tmpBatch.Clean(reader.mp)
@@ -529,6 +542,8 @@ func (reader *CKPReader) GetCheckpointData(ctx context.Context) (ckpData *batch.
 		if end {
 			return
 		}
+		batchCount++
+		rows += tmpBatch.RowCount()
 		if _, err = ckpData.Append(ctx, reader.mp, tmpBatch); err != nil {
 			return
 		}
@@ -557,6 +572,8 @@ func compatibilityForV12(
 	if ckpData == nil {
 		panic("invalid batch")
 	}
+	encoder := types.NewPacker()
+	defer encoder.Close()
 	compatibilityFn := func(src *containers.Batch, dataType int8) {
 		sels := make([]int64, src.Length())
 		for i := 0; i < src.Length(); i++ {
@@ -584,6 +601,13 @@ func compatibilityForV12(
 		for i := 0; i < src.Length(); i++ {
 			rowID := types.NewRowid(blockID, uint32(i))
 			vector.AppendFixed(ckpData.Vecs[ckputil.TableObjectsAttr_PhysicalAddr_Idx], rowID, false, mp)
+		}
+		tids := vector.MustFixedColNoTypeCheck[uint64](src.Vecs[ObjectInfo_TID_Idx+2].GetDownstreamVector())
+		for i := 0; i < src.Length(); i++ {
+			objectStats := objectio.ObjectStats(src.Vecs[ObjectInfo_ObjectStats_Idx+2].GetDownstreamVector().GetBytesAt(i))
+			ckputil.EncodeCluser(encoder, tids[i], dataType, objectStats.ObjectName().ObjectId())
+			vector.AppendBytes(ckpData.Vecs[ckputil.TableObjectsAttr_Cluster_Idx], encoder.Bytes(), false, mp)
+			encoder.Reset()
 		}
 	}
 

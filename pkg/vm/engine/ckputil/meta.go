@@ -191,7 +191,7 @@ func ScanObjectStats(
 	objectStatsVec := data.Vecs[MetaAttr_ObjectStats_Idx]
 	for i := 0; i < data.RowCount(); i++ {
 		stats := objectio.ObjectStats(objectStatsVec.GetBytesAt(i))
-		objectsMap[stats.String()] = stats
+		objectsMap[stats.ObjectName().String()] = stats
 	}
 	objs = make([]objectio.ObjectStats, 0, len(objectsMap))
 	for _, stats := range objectsMap {
