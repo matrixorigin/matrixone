@@ -4717,8 +4717,11 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 	switch tbl.JoinType {
 	case tree.JOIN_TYPE_CROSS, tree.JOIN_TYPE_INNER, tree.JOIN_TYPE_NATURAL:
 		joinType = plan.Node_INNER
-	case tree.JOIN_TYPE_CROSS_L2:
+	case tree.JOIN_TYPE_CENTROIDX:
 		joinType = plan.Node_L2
+		if len(tbl.Option) == 0 {
+			return 0, moerr.NewSyntaxError(builder.GetContext(), "CENTROIDX without optype")
+		}
 	case tree.JOIN_TYPE_LEFT, tree.JOIN_TYPE_NATURAL_LEFT:
 		joinType = plan.Node_LEFT
 	case tree.JOIN_TYPE_RIGHT, tree.JOIN_TYPE_NATURAL_RIGHT:
@@ -4757,9 +4760,10 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 	}
 
 	nodeID := builder.appendNode(&plan.Node{
-		NodeType: plan.Node_JOIN,
-		Children: []int32{leftChildID, rightChildID},
-		JoinType: joinType,
+		NodeType:     plan.Node_JOIN,
+		Children:     []int32{leftChildID, rightChildID},
+		JoinType:     joinType,
+		ExtraOptions: tbl.Option,
 	}, ctx)
 	node := builder.qry.Nodes[nodeID]
 
@@ -4774,7 +4778,7 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 		node.OnList = joinConds
 
 	case *tree.UsingJoinCond:
-		if tbl.JoinType == tree.JOIN_TYPE_CROSS_L2 {
+		if tbl.JoinType == tree.JOIN_TYPE_CENTROIDX {
 			for _, col := range cond.Cols {
 				expr, err := ctx.addUsingColForCrossL2(string(col), joinType, leftCtx, rightCtx)
 				if err != nil {
@@ -4920,6 +4924,10 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 		nodeId, err = builder.buildHnswCreate(tbl, ctx, exprs, children)
 	case "hnsw_search":
 		nodeId, err = builder.buildHnswSearch(tbl, ctx, exprs, children)
+	case "ivf_create":
+		nodeId, err = builder.buildIvfCreate(tbl, ctx, exprs, children)
+	case "ivf_search":
+		nodeId, err = builder.buildIvfSearch(tbl, ctx, exprs, children)
 	default:
 		err = moerr.NewNotSupportedf(builder.GetContext(), "table function '%s' not supported", id)
 	}
