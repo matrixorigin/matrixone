@@ -398,8 +398,8 @@ func (c *checkpointCleaner) Replay(inputCtx context.Context) (err error) {
 		end := compacted.GetEnd()
 		c.updateCheckpointGCWaterMark(&end)
 
-		var ckpData *logtail.CKPReader
-		if ckpData, err = c.collectCkpData(ctx, compacted); err != nil {
+		var ckpReader *logtail.CKPReader
+		if ckpReader, err = c.getCkpReader(ctx, compacted); err != nil {
 			logutil.Error(
 				"GC-REPLAY-COLLECT-ERROR",
 				zap.String("task", c.TaskNameLocked()),
@@ -412,26 +412,37 @@ func (c *checkpointCleaner) Replay(inputCtx context.Context) (err error) {
 		var pitrs *logtail.PitrInfo
 		pitrs, err = c.GetPITRsLocked(ctx)
 		if err != nil {
-			logutil.Error("GC-REPLAY-GET-PITRS_ERROR",
+			logutil.Error(
+				"GC-REPLAY-GET-PITRS_ERROR",
 				zap.String("task", c.TaskNameLocked()),
-				zap.Error(err),
 				zap.Duration("duration", time.Since(start)),
+				zap.String("checkpoint", compacted.String()),
+				zap.Error(err),
 			)
 			return
 		}
 		snapshots, err = c.mutation.snapshotMeta.GetSnapshot(c.ctx, c.sid, c.fs, c.mp)
 		if err != nil {
-			logutil.Error("GC-REPLAY-GET-SNAPSHOT_ERROR",
+			logutil.Error(
+				"GC-REPLAY-GET-SNAPSHOT_ERROR",
 				zap.String("task", c.TaskNameLocked()),
-				zap.Error(err),
 				zap.Duration("duration", time.Since(start)),
+				zap.String("checkpoint", compacted.String()),
+				zap.Error(err),
 			)
 			return
 		}
 		accountSnapshots := TransformToTSList(snapshots)
 		logtail.CloseSnapshotList(snapshots)
 		var ckpBatch *batch.Batch
-		if ckpBatch, err = ckpData.GetCheckpointData(ctx); err != nil {
+		if ckpBatch, err = ckpReader.GetCheckpointData(ctx); err != nil {
+			logutil.Error(
+				"GC-REPLAY-GET-CHECKPOINT-DATA_ERROR",
+				zap.String("task", c.TaskNameLocked()),
+				zap.Duration("duration", time.Since(start)),
+				zap.String("checkpoint", compacted.String()),
+				zap.Error(err),
+			)
 			return
 		}
 		logtail.FillUsageBatOfCompacted(
@@ -442,10 +453,13 @@ func (c *checkpointCleaner) Replay(inputCtx context.Context) (err error) {
 			accountSnapshots,
 			pitrs,
 			0)
-		logutil.Info("GC-REPLAY-COLLECT-SNAPSHOT-SIZE",
+		logutil.Info(
+			"GC-REPLAY-COLLECT-SNAPSHOT-SIZE",
 			zap.String("task", c.TaskNameLocked()),
 			zap.Int("size", len(accountSnapshots)),
 			zap.Duration("duration", time.Since(start)),
+			zap.String("checkpoint", compacted.String()),
+			zap.Int("count", ckpBatch.RowCount()),
 		)
 	}
 	return
@@ -908,11 +922,11 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 	return nil
 }
 
-func (c *checkpointCleaner) collectCkpData(
+func (c *checkpointCleaner) getCkpReader(
 	ctx context.Context,
 	ckp *checkpoint.CheckpointEntry,
-) (data *logtail.CKPReader, err error) {
-	return logtail.GetCheckpointData(
+) (reader *logtail.CKPReader, err error) {
+	return logtail.GetCheckpointReader(
 		ctx, c.sid, c.fs, ckp.GetLocation(), ckp.GetVersion(),
 	)
 }
@@ -1201,7 +1215,7 @@ func (c *checkpointCleaner) scanCheckpointsAsDebugWindow(
 ) (window *GCWindow, err error) {
 	window = NewGCWindow(c.mp, c.fs, WithWindowDir("debug/"))
 	if _, err = window.ScanCheckpoints(
-		c.ctx, ckps, c.collectCkpData, nil, nil, buffer,
+		c.ctx, ckps, c.getCkpReader, nil, nil, buffer,
 	); err != nil {
 		window.Close()
 		window = nil
@@ -1396,18 +1410,18 @@ func (c *checkpointCleaner) DoCheck(ctx context.Context) error {
 	}
 
 	for _, ckp := range debugCandidates {
-		data, err := c.collectCkpData(c.ctx, ckp)
+		ckpReader, err := c.getCkpReader(c.ctx, ckp)
 		if err != nil {
 			return err
 		}
-		collectObjectsFromCheckpointData(ctx, data, ickpObjects)
+		collectObjectsFromCheckpointData(c.ctx, ckpReader, ickpObjects)
 	}
 	cptCkpObjects := make(map[string]*ObjectEntry, 0)
-	data, err := c.collectCkpData(c.ctx, compacted)
+	ckpReader, err := c.getCkpReader(c.ctx, compacted)
 	if err != nil {
 		return err
 	}
-	collectObjectsFromCheckpointData(ctx, data, cptCkpObjects)
+	collectObjectsFromCheckpointData(c.ctx, ckpReader, cptCkpObjects)
 
 	tList, pList := c.mutation.snapshotMeta.AccountToTableSnapshots(accoutSnapshots, pitr)
 	for name, entry := range ickpObjects {
@@ -1695,7 +1709,7 @@ func (c *checkpointCleaner) scanCheckpointsLocked(
 	if gcMetaFile, err = gcWindow.ScanCheckpoints(
 		ctx,
 		ckps,
-		c.collectCkpData,
+		c.getCkpReader,
 		c.mutUpdateSnapshotMetaLocked,
 		saveSnapshot,
 		memoryBuffer,

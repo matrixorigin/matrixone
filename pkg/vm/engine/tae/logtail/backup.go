@@ -283,7 +283,7 @@ func (d *BackupDeltaLocDataSource) GetTombstones(
 	return
 }
 
-func GetCheckpointData(
+func GetCheckpointReader(
 	ctx context.Context,
 	sid string,
 	fs fileservice.FileService,
@@ -452,7 +452,7 @@ func LoadCheckpointEntriesFromKey(
 	baseTS *types.TS,
 ) ([]*objectio.BackupObject, *CKPReader, error) {
 	locations := make([]*objectio.BackupObject, 0)
-	data, err := GetCheckpointData(ctx, sid, fs, location, version)
+	ckpReader, err := GetCheckpointReader(ctx, sid, fs, location, version)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -462,14 +462,14 @@ func LoadCheckpointEntriesFromKey(
 		NeedCopy: true,
 	})
 
-	for _, location = range data.GetLocations() {
+	for _, location = range ckpReader.GetLocations() {
 		locations = append(locations, &objectio.BackupObject{
 			Location: location,
 			NeedCopy: true,
 		})
 	}
 
-	data.ForEachRow(
+	ckpReader.ForEachRow(
 		ctx,
 		func(
 			account uint32,
@@ -514,7 +514,7 @@ func LoadCheckpointEntriesFromKey(
 			return nil
 		},
 	)
-	return locations, data, nil
+	return locations, ckpReader, nil
 }
 
 func ReWriteCheckpointAndBlockFromKey(
@@ -557,7 +557,7 @@ func ReWriteCheckpointAndBlockFromKey(
 	}()
 	phaseNumber = 1
 	// Load checkpoint
-	data, err := GetCheckpointData(ctx, sid, fs, loc, version)
+	ckpReader, err := GetCheckpointReader(ctx, sid, fs, loc, version)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -572,7 +572,7 @@ func ReWriteCheckpointAndBlockFromKey(
 		dataType objectio.DataMetaType,
 	) {
 		i := 0
-		data.ForEachRow(
+		ckpReader.ForEachRow(
 			ctx,
 			func(
 				account uint32,
@@ -826,7 +826,7 @@ func ReWriteCheckpointAndBlockFromKey(
 
 		initCkpBatch := func(objectType int8, newMeta *batch.Batch, insertObjData map[int]*objData) {
 			i := 0
-			data.ForEachRow(
+			ckpReader.ForEachRow(
 				ctx,
 				func(
 					account uint32,
@@ -876,7 +876,7 @@ func ReWriteCheckpointAndBlockFromKey(
 
 	} else {
 		dest := ckputil.NewObjectListBatch()
-		data.ForEachRow(
+		ckpReader.ForEachRow(
 			ctx,
 			func(
 				account uint32,
@@ -895,18 +895,17 @@ func ReWriteCheckpointAndBlockFromKey(
 		dataSinker.Write(ctx, dest)
 	}
 	newData := NewCheckpointDataWithSinker(dataSinker, common.CheckpointAllocator)
-	cnLocation, dnLocation, checkpointFiles, err := newData.WriteTo(
+	location, checkpointFiles, err := newData.WriteTo(
 		ctx, dstFs,
 	)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 	logutil.Info("[Done]",
-		common.AnyField("checkpoint", cnLocation.String()),
+		common.AnyField("checkpoint", location.String()),
 		common.OperationField("ReWrite Checkpoint"),
 		common.AnyField("new object", checkpointFiles))
-	loc = cnLocation
 	files = append(files, checkpointFiles...)
-	files = append(files, cnLocation.Name().String())
-	return loc, dnLocation, files, nil
+	files = append(files, location.Name().String())
+	return location, location, files, nil
 }

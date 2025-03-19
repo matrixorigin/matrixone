@@ -1614,13 +1614,15 @@ func isSnapshotRefers(table *tableInfo, snapVec []types.TS, pitr *types.TS) bool
 		mid := left + (right-left)/2
 		snapTS := snapVec[mid]
 		if snapTS.GE(&table.createAt) && snapTS.LT(&table.deleteAt) {
-			logutil.Info(
-				"isSnapshotRefers",
-				zap.String("snap-ts", snapTS.ToString()),
-				zap.String("create-ts", table.createAt.ToString()),
-				zap.String("drop-ts", table.deleteAt.ToString()),
-				zap.Uint64("tid", table.tid),
-			)
+			common.DoIfDebugEnabled(func() {
+				logutil.Debug(
+					"isSnapshotRefers",
+					zap.String("snap-ts", snapTS.ToString()),
+					zap.String("create-ts", table.createAt.ToString()),
+					zap.String("drop-ts", table.deleteAt.ToString()),
+					zap.Uint64("tid", table.tid),
+				)
+			})
 			return true
 		} else if snapTS.LT(&table.createAt) {
 			left = mid + 1
