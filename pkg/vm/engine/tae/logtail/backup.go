@@ -895,18 +895,17 @@ func ReWriteCheckpointAndBlockFromKey(
 		dataSinker.Write(ctx, dest)
 	}
 	newData := NewCheckpointDataWithSinker(dataSinker, common.CheckpointAllocator)
-	cnLocation, dnLocation, checkpointFiles, err := newData.WriteTo(
+	loc, checkpointFiles, err := newData.WriteTo(
 		ctx, dstFs,
 	)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 	logutil.Info("[Done]",
-		common.AnyField("checkpoint", cnLocation.String()),
+		common.AnyField("checkpoint", loc.String()),
 		common.OperationField("ReWrite Checkpoint"),
 		common.AnyField("new object", checkpointFiles))
-	loc = cnLocation
 	files = append(files, checkpointFiles...)
-	files = append(files, cnLocation.Name().String())
-	return loc, dnLocation, files, nil
+	files = append(files, loc.Name().String())
+	return loc, loc, files, nil
 }
