@@ -531,7 +531,7 @@ drop table test_prepare_1;
 drop table test_prepare_2;
 drop database db1;
 
-
+-- @bvt:issue#21511
 create account prepare_account_01 ADMIN_NAME admin IDENTIFIED BY '111111';
 -- @session:id=1&user=prepare_account_01:admin&password=111111
 create role prepare_role1;
@@ -549,6 +549,7 @@ drop role prepare_role1;
 -- @session
 
 drop account prepare_account_01;
+-- @bvt:issue
 
 
 

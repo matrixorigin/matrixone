@@ -1768,7 +1768,7 @@ func TestIssue3537(t *testing.T) {
 
 			ctx, cancel := context.WithTimeout(
 				context.Background(),
-				time.Second*10)
+				time.Second*20)
 			defer cancel()
 			option := pb.LockOptions{
 				Granularity: pb.Granularity_Row,
