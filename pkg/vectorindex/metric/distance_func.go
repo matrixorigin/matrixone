@@ -15,6 +15,8 @@
 package metric
 
 import (
+	"math"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"gonum.org/v1/gonum/mat"
 )
@@ -60,55 +62,90 @@ func L1Distance(v1, v2 *mat.VecDense) float64 {
 	return mat.Norm(diff, 1)
 }
 
-//// IMPORTANT: Spherical Kmeans is not implemented yet.  We cannot use InnerProduct and CosineDistance as similiarity
-//// to estimate the centroid by Elkans Kmeans.
-//
-//// SphericalDistance is used for InnerProduct and CosineDistance in Spherical Kmeans.
-//// NOTE: spherical distance between two points on a sphere is equal to the
-//// angular distance between the two points, scaled by pi.
-//// Refs:
-//// https://en.wikipedia.org/wiki/Great-circle_distance#Vector_version
-//func SphericalDistance(v1, v2 *mat.VecDense) float64 {
-//	// Compute the dot product of the two vectors.
-//	// The dot product of two vectors is a measure of their similarity,
-//	// and it can be used to calculate the angle between them.
-//	dp := mat.Dot(v1, v2)
-//
-//	// Prevent NaN with acos with loss of precision.
-//	if dp > 1.0 {
-//		dp = 1.0
-//	} else if dp < -1.0 {
-//		dp = -1.0
-//	}
-//
-//	theta := math.Acos(dp)
-//
-//	//To scale the result to the range [0, 1], we divide by Pi.
-//	return theta / math.Pi
-//
-//	// NOTE:
-//	// Cosine distance is a measure of the similarity between two vectors. [Not satisfy triangle inequality]
-//	// Angular distance is a measure of the angular separation between two points. [Satisfy triangle inequality]
-//	// Spherical distance is a measure of the spatial separation between two points on a sphere. [Satisfy triangle inequality]
-//}
+// SphericalDistance is used for InnerProduct and CosineDistance in Spherical Kmeans.
+// NOTE: spherical distance between two points on a sphere is equal to the
+// angular distance between the two points, scaled by pi.
+// Refs:
+// https://en.wikipedia.org/wiki/Great-circle_distance#Vector_version
+func SphericalDistance(v1, v2 *mat.VecDense) float64 {
+	// Compute the dot product of the two vectors.
+	// The dot product of two vectors is a measure of their similarity,
+	// and it can be used to calculate the angle between them.
+	dp := mat.Dot(v1, v2)
 
-// IMPORTANT: Elkans Kmeans always use L2Distance for clustering.  After getting the centroids, we can use other distance function
+	// Prevent NaN with acos with loss of precision.
+	if dp > 1.0 {
+		dp = 1.0
+	} else if dp < -1.0 {
+		dp = -1.0
+	}
+
+	theta := math.Acos(dp)
+
+	//To scale the result to the range [0, 1], we divide by Pi.
+	return theta / math.Pi
+
+	// NOTE:
+	// Cosine distance is a measure of the similarity between two vectors. [Not satisfy triangle inequality]
+	// Angular distance is a measure of the angular separation between two points. [Satisfy triangle inequality]
+	// Spherical distance is a measure of the spatial separation between two points on a sphere. [Satisfy triangle inequality]
+}
+
+// IMPORTANT: Elkans Kmeans always use L2Distance for dense vector or images.  After getting the centroids, we can use other distance function
 // specified by user to assign vector to corresponding centroids (CENTROIDX JOIN / ProductL2).
-func ResolveKmeansDistanceFn(metric MetricType) (DistanceFunction, error) {
+
+func ResolveKmeansDistanceFn(metric MetricType, spherical bool) (DistanceFunction, bool, error) {
+	if spherical {
+		return ResolveKmeansDistanceFnForSparse(metric)
+	}
+	return ResolveKmeansDistanceFnForDense(metric)
+}
+
+func ResolveKmeansDistanceFnForDense(metric MetricType) (DistanceFunction, bool, error) {
 	var distanceFunction DistanceFunction
+	normalize := false
 	switch metric {
 	case Metric_L2Distance:
 		distanceFunction = L2Distance
+		normalize = false
 	case Metric_InnerProduct:
 		distanceFunction = L2Distance
+		normalize = false
 	case Metric_CosineDistance:
 		distanceFunction = L2Distance
+		normalize = false
 	case Metric_L1Distance:
 		distanceFunction = L2Distance
+		normalize = false
 	default:
-		return nil, moerr.NewInternalErrorNoCtx("invalid distance type")
+		return nil, normalize, moerr.NewInternalErrorNoCtx("invalid distance type")
 	}
-	return distanceFunction, nil
+	return distanceFunction, normalize, nil
+}
+
+// IMPORTANT: Spherical Kmeans always use Spherical Distance / Cosine Similarity for Sparse vector or text embedding (TD-IDF).
+// After getting the centroids, we can use other distance function
+// specified by user to assign vector to corresponding centroids (CENTROIDX JOIN / ProductL2).
+func ResolveKmeansDistanceFnForSparse(metric MetricType) (DistanceFunction, bool, error) {
+	var distanceFunction DistanceFunction
+	normalize := false
+	switch metric {
+	case Metric_L2Distance:
+		distanceFunction = L2Distance
+		normalize = false
+	case Metric_InnerProduct:
+		distanceFunction = SphericalDistance
+		normalize = true
+	case Metric_CosineDistance:
+		distanceFunction = SphericalDistance
+		normalize = true
+	case Metric_L1Distance:
+		distanceFunction = L2Distance
+		normalize = false
+	default:
+		return nil, normalize, moerr.NewInternalErrorNoCtx("invalid distance type")
+	}
+	return distanceFunction, normalize, nil
 }
 
 // ResolveDistanceFn is used for similarity score for search and assign vector to centroids (CENTROIDX JOIN / ProductL2).
