@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
@@ -292,6 +293,10 @@ func (c *checkpointCleaner) Replay(inputCtx context.Context) (err error) {
 	defer func() {
 		if err == nil {
 			c.mutation.replayDone = true
+		} else {
+			c.mutation.metaFiles = make(map[string]ioutil.TSRangeFile)
+			c.mutation.snapshotMeta = logtail.NewSnapshotMeta()
+			c.mutation.scanned = nil
 		}
 		logutil.Info(
 			"GC-REPLAY-TRACE",
@@ -434,6 +439,11 @@ func (c *checkpointCleaner) Replay(inputCtx context.Context) (err error) {
 		}
 		accountSnapshots := TransformToTSList(snapshots)
 		logtail.CloseSnapshotList(snapshots)
+		_, sarg, _ := fault.TriggerFault("replay error UT")
+		if sarg != "" {
+			err = moerr.NewInternalErrorNoCtxf("GC-REPLAY-GET-CHECKPOINT-DATA-ERROR %s", sarg)
+			return err
+		}
 		var ckpBatch *batch.Batch
 		if ckpBatch, err = ckpReader.GetCheckpointData(ctx); err != nil {
 			logutil.Error(
