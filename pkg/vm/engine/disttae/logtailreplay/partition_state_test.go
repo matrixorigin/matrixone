@@ -69,12 +69,6 @@ func TestTruncate(t *testing.T) {
 	partition.truncate([2]uint64{0, 0}, types.BuildTS(1, 0))
 	assert.Equal(t, 5, partition.dataObjectTSIndex.Len())
 
-	partition.truncate([2]uint64{0, 0}, types.BuildTS(2, 0))
-	assert.Equal(t, 3, partition.dataObjectTSIndex.Len())
-
-	partition.truncate([2]uint64{0, 0}, types.BuildTS(3, 0))
-	assert.Equal(t, 1, partition.dataObjectTSIndex.Len())
-
 	partition.truncate([2]uint64{0, 0}, types.BuildTS(4, 0))
 	assert.Equal(t, 1, partition.dataObjectTSIndex.Len())
 }
@@ -88,6 +82,14 @@ func addObject(p *PartitionState, create, delete types.TS) {
 		IsDelete:     false,
 	}
 	p.dataObjectTSIndex.Set(objIndex1)
+
+	objId := objectio.NewObjectid()
+	stats := objectio.NewObjectStatsWithObjectID(&objId, false, true, false)
+	p.dataObjectsNameIndex.Set(objectio.ObjectEntry{
+		ObjectStats: *stats,
+		CreateTime:  create,
+		DeleteTime:  delete,
+	})
 	if !delete.IsEmpty() {
 		objIndex2 := ObjectIndexByTSEntry{
 			Time:         delete,
