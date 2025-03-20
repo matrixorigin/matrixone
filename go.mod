@@ -23,7 +23,7 @@ require (
 	github.com/axiomhq/hyperloglog v0.0.0-20230201085229-3ddf4bad03dc
 	github.com/cakturk/go-netstat v0.0.0-20200220111822-e5b49efee7a5
 	github.com/cespare/xxhash/v2 v2.2.0
-	github.com/cockroachdb/errors v1.9.1
+	github.com/cockroachdb/errors v1.11.3
 	github.com/confluentinc/confluent-kafka-go/v2 v2.4.0
 	github.com/containerd/cgroups/v3 v3.0.1
 	github.com/cpegeric/pdftotext-go v0.0.0-20241112122606-a8979920f0b1
@@ -161,10 +161,10 @@ require (
 	github.com/bufbuild/protocompile v0.6.0 // indirect
 	github.com/cockroachdb/logtags v0.0.0-20230118201751-21c54148d20b // indirect
 	github.com/cockroachdb/pebble v0.0.0-20220407171941-2120d145e292 // indirect
-	github.com/cockroachdb/redact v1.1.3 // indirect
+	github.com/cockroachdb/redact v1.1.5 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/dgryski/go-metro v0.0.0-20180109044635-280f6062b5bc // indirect
-	github.com/getsentry/sentry-go v0.12.0 // indirect
+	github.com/getsentry/sentry-go v0.27.0 // indirect
 	github.com/go-ole/go-ole v1.2.6 // indirect
 	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/golang/snappy v0.0.4 // indirect
