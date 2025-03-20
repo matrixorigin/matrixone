@@ -7362,6 +7362,32 @@ func TestPitrMeta(t *testing.T) {
 	if db.Runtime.Scheduler.GetPenddingLSNCnt() != 0 {
 		return
 	}
+	txn, err = db.StartTxn(nil)
+	require.NoError(t, err)
+	db1, err = txn.GetDatabase("db1")
+	assert.NoError(t, err)
+	rel, err = db1.GetRelationByName(pitrSchema.Name)
+	assert.NoError(t, err)
+	filter = handle.NewEQFilter([]byte("account"))
+	id, offset, err = rel.GetByFilter(context.Background(), filter)
+	assert.NoError(t, err)
+	_, _, err = rel.GetValue(id, offset, 5, false)
+	assert.NoError(t, err)
+	err = rel.RangeDelete(id, offset, offset, handle.DT_Normal)
+	if err != nil {
+		t.Logf("range delete %v, rollbacking", err)
+		_ = txn.Rollback(context.Background())
+		return
+	}
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit(context.Background()))
+	testutils.WaitExpect(10000, func() bool {
+		return db.Runtime.Scheduler.GetPenddingLSNCnt() == 0
+	})
+	if db.Runtime.Scheduler.GetPenddingLSNCnt() != 0 {
+		return
+	}
+	db.ForceCheckpoint(ctx, tae.TxnMgr.Now())
 	db.DiskCleaner.GetCleaner().EnableGC()
 	assert.Equal(t, uint64(0), db.Runtime.Scheduler.GetPenddingLSNCnt())
 	initMinMerged := db.DiskCleaner.GetCleaner().GetMinMerged()
