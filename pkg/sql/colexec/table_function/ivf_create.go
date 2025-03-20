@@ -39,7 +39,6 @@ import (
 )
 
 const (
-	defaultKmeansMaxIteration   = 500
 	defaultKmeansDeltaThreshold = 0.01
 	defaultKmeansDistanceType   = metric.Metric_L2Distance
 	defaultKmeansInitType       = kmeans.Random
@@ -100,7 +99,7 @@ func (u *ivfCreateState) end(tf *TableFunction, proc *process.Process) error {
 	// NOTE: We use L2 distance to caculate centroid.  Ivfflat metric just for searching.
 	if clusterer, err = elkans.NewKMeans(
 		u.data, int(u.idxcfg.Ivfflat.Lists),
-		defaultKmeansMaxIteration,
+		int(u.tblcfg.IvfMaxIteration),
 		defaultKmeansDeltaThreshold,
 		metric.MetricType(u.idxcfg.Ivfflat.Metric),
 		kmeans.InitType(u.idxcfg.Ivfflat.InitType),
@@ -250,18 +249,23 @@ func (u *ivfCreateState) start(tf *TableFunction, proc *process.Process, nthRow 
 		if u.nsample < min_nsample {
 			u.nsample = min_nsample
 		}
+		if u.tblcfg.SampleLimit > 0 && int64(u.nsample) > u.tblcfg.SampleLimit {
+			u.nsample = uint(u.tblcfg.SampleLimit)
+		}
+
 		u.data = make([][]float64, 0, u.nsample)
 		u.sample_ratio = float64(1)
 		if u.tblcfg.DataSize > 0 {
 			u.sample_ratio = float64(u.nsample) / float64(u.tblcfg.DataSize)
-			if u.sample_ratio < 0.1 {
-				u.sample_ratio = 0.1
+			if u.sample_ratio < 0.05 {
+				u.sample_ratio = 0.05
 			}
 		}
 
 		u.rand = rand.New(rand.NewSource(uint64(time.Now().UnixMicro())))
 		u.batch = tf.createResultBatch()
 		u.inited = true
+		//os.Stderr.WriteString(fmt.Sprintf("kmean iteration %d, nsample %d\n", u.tblcfg.IvfMaxIteration, u.nsample))
 	}
 
 	// reset slice
