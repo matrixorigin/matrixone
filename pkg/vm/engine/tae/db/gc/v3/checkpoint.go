@@ -292,6 +292,10 @@ func (c *checkpointCleaner) Replay(inputCtx context.Context) (err error) {
 	defer func() {
 		if err == nil {
 			c.mutation.replayDone = true
+		} else {
+			c.mutation.metaFiles = make(map[string]ioutil.TSRangeFile)
+			c.mutation.snapshotMeta = logtail.NewSnapshotMeta()
+			c.mutation.scanned = nil
 		}
 		logutil.Info(
 			"GC-REPLAY-TRACE",
