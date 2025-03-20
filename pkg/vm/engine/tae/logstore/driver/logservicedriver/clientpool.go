@@ -172,17 +172,20 @@ func (c *wrappedClient) Append(
 		}
 	}()
 
-	for ; retryTimes < c.pool.cfg.MaxRetryCount+1; retryTimes++ {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeoutCause(
-			ctx, c.pool.cfg.MaxTimeout, timeoutCause,
+	for {
+		retryCtx, cancel := context.WithTimeoutCause(
+			ctx, DefaultOneTryTimeout, timeoutCause,
 		)
-		psn, err = c.wrapped.Append(ctx, c.buf)
+		psn, err = c.wrapped.Append(retryCtx, c.buf)
 		cancel()
 		if err == nil {
 			break
 		}
-		time.Sleep(c.pool.cfg.RetryInterval())
+		retryTimes++
+		if time.Since(now) > c.pool.cfg.MaxTimeout {
+			break
+		}
+		time.Sleep(c.pool.cfg.RetryInterval(retryTimes))
 	}
 	return
 }
