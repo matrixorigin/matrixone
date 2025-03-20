@@ -692,18 +692,11 @@ drop table test_prepare_1;
 drop table test_prepare_2;
 drop database db1;
 create account prepare_account_01 ADMIN_NAME admin IDENTIFIED BY '111111';
-[unknown result because it is related to issue#21511]
 create role prepare_role1;
-[unknown result because it is related to issue#21511]
 grant create database on account * to prepare_role1;
-[unknown result because it is related to issue#21511]
 create user prepare_user1 identified by '123456' default role prepare_role1;
-[unknown result because it is related to issue#21511]
 select mo_ctl('cn', 'task', ':retention');
-[unknown result because it is related to issue#21511]
+internal error: do not have privilege to execute the statement
 drop user prepare_user1;
-[unknown result because it is related to issue#21511]
 drop role prepare_role1;
-[unknown result because it is related to issue#21511]
 drop account prepare_account_01;
-[unknown result because it is related to issue#21511]
