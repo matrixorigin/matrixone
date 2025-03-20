@@ -285,7 +285,7 @@ func (r *runner) CreateSpecialCheckpointFile(
 	var (
 		loc objectio.Location
 	)
-	if loc, _, err = data.WriteTo(
+	if loc, _, err = data.Sync(
 		ctx, r.rt.Fs,
 	); err != nil {
 		return
