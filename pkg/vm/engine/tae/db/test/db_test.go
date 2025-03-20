@@ -7024,6 +7024,13 @@ func TestSnapshotGC(t *testing.T) {
 	err = tbl2.RecurLoop(p)
 	assert.NoError(t, err)
 	assert.True(t, checkPK == db.DiskCleaner.GetCleaner().GetTablePK(checkrel.ID()))
+
+	fault.Enable()
+	defer fault.Disable()
+	fault.AddFaultPoint(ctx, "replay error UT", ":::", "echo", 0, "test error", false)
+	defer fault.RemoveFaultPoint(ctx, "replay error UT")
+	tae.Restart(ctx)
+	assert.Nil(t, tae.DiskCleaner.GetCleaner().GetScannedWindow())
 }
 
 func TestSnapshotMeta(t *testing.T) {
