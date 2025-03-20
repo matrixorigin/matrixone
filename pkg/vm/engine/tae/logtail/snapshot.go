@@ -840,13 +840,11 @@ func (sm *SnapshotMeta) GetSnapshot(
 						snapshotList[id] = containers.MakeVector(types.T_TS.ToType(), mp)
 					}
 					// TODO: info to debug
-					common.DoIfDebugEnabled(func() {
-						logutil.Debug(
-							"GetSnapshot-P2",
-							zap.String("ts", snapTs.ToString()),
-							zap.Uint32("account", id),
-						)
-					})
+					logutil.Debug(
+						"GetSnapshot-P2",
+						zap.String("ts", snapTs.ToString()),
+						zap.Uint32("account", id),
+					)
 
 					if err = vector.AppendFixed[types.TS](
 						snapshotList[id].GetDownstreamVector(), snapTs, false, mp,
@@ -1625,15 +1623,13 @@ func isSnapshotRefers(table *tableInfo, snapVec []types.TS, pitr *types.TS) bool
 		mid := left + (right-left)/2
 		snapTS := snapVec[mid]
 		if snapTS.GE(&table.createAt) && snapTS.LT(&table.deleteAt) {
-			common.DoIfDebugEnabled(func() {
-				logutil.Debug(
-					"isSnapshotRefers",
-					zap.String("snap-ts", snapTS.ToString()),
-					zap.String("create-ts", table.createAt.ToString()),
-					zap.String("drop-ts", table.deleteAt.ToString()),
-					zap.Uint64("tid", table.tid),
-				)
-			})
+			logutil.Debug(
+				"isSnapshotRefers",
+				zap.String("snap-ts", snapTS.ToString()),
+				zap.String("create-ts", table.createAt.ToString()),
+				zap.String("drop-ts", table.deleteAt.ToString()),
+				zap.Uint64("tid", table.tid),
+			)
 			return true
 		} else if snapTS.LT(&table.createAt) {
 			left = mid + 1
