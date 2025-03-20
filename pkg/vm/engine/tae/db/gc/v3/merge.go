@@ -143,7 +143,7 @@ func MergeCheckpoint(
 	ckpWriter := logtail.NewCheckpointDataWithSinker(sinker, pool)
 	var location objectio.Location
 	var files []string
-	if location, files, err = ckpWriter.WriteTo(ctx, fs); err != nil {
+	if location, files, err = ckpWriter.Sync(ctx, fs); err != nil {
 		return
 	}
 

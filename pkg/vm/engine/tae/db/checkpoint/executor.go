@@ -124,7 +124,7 @@ func (job *checkpointJob) doGlobalCheckpoint(
 
 	fields = data.ExportStats("")
 
-	location, files, err := data.WriteTo(
+	location, files, err := data.Sync(
 		job.executor.ctx, runner.rt.Fs,
 	)
 	if err != nil {
