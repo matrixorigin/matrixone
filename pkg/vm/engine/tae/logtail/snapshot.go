@@ -719,6 +719,18 @@ func (sm *SnapshotMeta) Update(
 			}
 		}
 	}
+	for id, info := range sm.pitr.tombstones {
+		if !info.deleteAt.IsEmpty() {
+			delete(sm.pitr.tombstones, id)
+		}
+	}
+	for _, objs := range sm.tombstones {
+		for id, info := range objs {
+			if !info.deleteAt.IsEmpty() {
+				delete(objs, id)
+			}
+		}
+	}
 	return
 }
 
