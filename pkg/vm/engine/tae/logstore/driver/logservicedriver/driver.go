@@ -260,14 +260,14 @@ func (d *LogServiceDriver) readFromBackend(
 	defer client.Putback()
 
 	for {
-		ctx, cancel := context.WithTimeoutCause(
+		retryCtx, cancel := context.WithTimeoutCause(
 			ctx,
 			DefaultOneTryTimeout,
 			moerr.CauseReadFromLogService,
 		)
 
 		if records, nextPSN, err = client.wrapped.Read(
-			ctx, firstPSN, uint64(maxSize),
+			retryCtx, firstPSN, uint64(maxSize),
 		); err == nil {
 			cancel()
 			break

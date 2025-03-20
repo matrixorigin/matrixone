@@ -173,10 +173,10 @@ func (c *wrappedClient) Append(
 	}()
 
 	for {
-		ctx, cancel := context.WithTimeoutCause(
+		retryCtx, cancel := context.WithTimeoutCause(
 			ctx, DefaultOneTryTimeout, timeoutCause,
 		)
-		psn, err = c.wrapped.Append(ctx, c.buf)
+		psn, err = c.wrapped.Append(retryCtx, c.buf)
 		cancel()
 		if err == nil {
 			break
