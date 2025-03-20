@@ -951,6 +951,31 @@ func Test_mysqlSinker_SendBeginCommitRollback(t *testing.T) {
 	assert.NoError(t, err)
 	s.SendRollback()
 	assert.NoError(t, err)
+
+	// begin error
+	mock.ExpectBegin().WillReturnError(moerr.NewInternalErrorNoCtx("begin error"))
+	s.SendBegin()
+	s.SendDummy()
+	assert.Error(t, s.Error())
+	s.ClearError()
+
+	// commit error
+	mock.ExpectBegin()
+	mock.ExpectCommit().WillReturnError(moerr.NewInternalErrorNoCtx("commit error"))
+	s.SendBegin()
+	s.SendCommit()
+	s.SendDummy()
+	assert.Error(t, s.Error())
+	s.ClearError()
+
+	// rollback error
+	mock.ExpectBegin()
+	mock.ExpectRollback().WillReturnError(moerr.NewInternalErrorNoCtx("rollback error"))
+	s.SendBegin()
+	s.SendRollback()
+	s.SendDummy()
+	assert.Error(t, s.Error())
+	s.ClearError()
 }
 
 func Test_consoleSinker_SendBeginCommitRollback(t *testing.T) {
@@ -967,4 +992,13 @@ func Test_mysqlSinker_ClearError(t *testing.T) {
 
 	s.ClearError()
 	assert.Nil(t, s.Error())
+}
+
+func Test_mysqlSinker_Reset(t *testing.T) {
+	s := &mysqlSinker{}
+	s.sqlBufs[0] = make([]byte, sqlBufReserved, 1024)
+	s.sqlBufs[1] = make([]byte, sqlBufReserved, 1024)
+	s.curBufIdx = 0
+	s.sqlBuf = s.sqlBufs[s.curBufIdx]
+	s.Reset()
 }
