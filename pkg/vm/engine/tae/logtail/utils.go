@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -131,6 +130,7 @@ func IncrementalCheckpointDataFactory(
 ) func(c *catalog.Catalog) (*CheckpointData_V2, error) {
 	return func(c *catalog.Catalog) (data *CheckpointData_V2, err error) {
 		collector := NewBaseCollector_V2(start, end, size, fs)
+		defer collector.Close()
 		if err = collector.Collect(c); err != nil {
 			return
 		}
@@ -146,9 +146,8 @@ func BackupCheckpointDataFactory(
 	return func(c *catalog.Catalog) (data *CheckpointData_V2, err error) {
 		collector := NewBackupCollector_V2(start, end, fs)
 		defer collector.Close()
-		err = c.RecurLoop(collector)
-		if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
-			err = nil
+		if err = collector.Collect(c); err != nil {
+			return
 		}
 		data = collector.OrphanData()
 		return
@@ -163,17 +162,11 @@ func GlobalCheckpointDataFactory(
 	return func(c *catalog.Catalog) (data *CheckpointData_V2, err error) {
 		collector := NewGlobalCollector_V2(fs, end, versionInterval)
 		defer collector.Close()
-		err = c.RecurLoop(collector)
-		if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
-			err = nil
-		}
-
-		if err != nil {
+		if err = collector.Collect(c); err != nil {
 			return
 		}
 
 		data = collector.OrphanData()
-
 		return
 	}
 }
