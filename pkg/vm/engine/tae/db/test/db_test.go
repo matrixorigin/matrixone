@@ -10097,7 +10097,7 @@ func TestCKPCollectObject(t *testing.T) {
 			assert.NoError(t, tae.Catalog.RecurLoop(collector))
 			ckpData := collector.OrphanData()
 			defer ckpData.Close()
-			loc, _, _, err := ckpData.WriteTo(ctx, tae.Opts.Fs)
+			loc, _, err := ckpData.WriteTo(ctx, tae.Opts.Fs)
 			assert.NoError(t, err)
 			reader := logtail.NewCKPReader(logtail.CheckpointCurrentVersion, loc, common.DebugAllocator, tae.Opts.Fs)
 			err = reader.ReadMeta(ctx)
@@ -10570,6 +10570,7 @@ func TestStartStopTableMerge(t *testing.T) {
 	defer db.Close()
 
 	scheduler := merge.NewScheduler(db.Runtime, nil)
+	scheduler.PreExecute()
 
 	schema := catalog.MockSchema(2, 0)
 	schema.Extra.BlockMaxRows = 1000
@@ -11318,7 +11319,7 @@ func TestCheckpointV2(t *testing.T) {
 	assert.NoError(t, err)
 	data := collector.OrphanData()
 	collector.Close()
-	loc, _, _, err := data.WriteTo(ctx, tae.Opts.Fs)
+	loc, _, err := data.WriteTo(ctx, tae.Opts.Fs)
 	assert.NoError(t, err)
 	data.Close()
 
@@ -11979,7 +11980,7 @@ func Test_ReplayGlobalCheckpoint(t *testing.T) {
 	assert.NoError(t, tae.Catalog.RecurLoop(collector))
 	ckpData := collector.OrphanData()
 	defer ckpData.Close()
-	loc, _, _, err := ckpData.WriteTo(ctx, tae.Opts.Fs)
+	loc, _, err := ckpData.WriteTo(ctx, tae.Opts.Fs)
 	assert.NoError(t, err)
 	reader := logtail.NewCKPReader(logtail.CheckpointCurrentVersion, loc, common.DebugAllocator, tae.Opts.Fs)
 	err = reader.ReadMeta(ctx)
