@@ -231,7 +231,6 @@ func (d *LogServiceDriver) readFromBackend(
 ) {
 	var (
 		t0         = time.Now()
-		cancel     context.CancelFunc
 		retryTimes = 0
 	)
 
@@ -260,24 +259,25 @@ func (d *LogServiceDriver) readFromBackend(
 	}
 	defer client.Putback()
 
-	cfg := d.config
-	for ; retryTimes < cfg.MaxRetryCount; retryTimes++ {
-		ctx, cancel = context.WithTimeoutCause(
+	for {
+		ctx, cancel := context.WithTimeoutCause(
 			ctx,
-			cfg.MaxTimeout,
+			DefaultOneTryTimeout,
 			moerr.CauseReadFromLogService,
 		)
+
 		if records, nextPSN, err = client.wrapped.Read(
 			ctx, firstPSN, uint64(maxSize),
-		); err != nil {
-			err = moerr.AttachCause(ctx, err)
-		}
-		cancel()
-
-		if err == nil {
+		); err == nil {
+			cancel()
 			break
 		}
-		time.Sleep(cfg.RetryInterval() * time.Duration(retryTimes+1))
+		cancel()
+		retryTimes++
+		if time.Since(t0) > d.config.MaxTimeout {
+			break
+		}
+		time.Sleep(d.config.RetryInterval(retryTimes))
 	}
 
 	return
