@@ -142,9 +142,9 @@ func MergeCheckpoint(
 		return
 	}
 	ckpWriter := logtail.NewCheckpointDataWithSinker(sinker, pool)
-	var cnLocation, tnLocation objectio.Location
+	var location objectio.Location
 	var files []string
-	if cnLocation, tnLocation, files, err = ckpWriter.WriteTo(ctx, fs); err != nil {
+	if location, files, err = ckpWriter.WriteTo(ctx, fs); err != nil {
 		return
 	}
 
@@ -152,10 +152,10 @@ func MergeCheckpoint(
 	bat := makeBatchFromSchema(checkpoint.CheckpointSchema)
 	bat.GetVectorByName(checkpoint.CheckpointAttr_StartTS).Append(ckpEntries[0].GetStart(), false)
 	bat.GetVectorByName(checkpoint.CheckpointAttr_EndTS).Append(*end, false)
-	bat.GetVectorByName(checkpoint.CheckpointAttr_MetaLocation).Append([]byte(cnLocation), false)
+	bat.GetVectorByName(checkpoint.CheckpointAttr_MetaLocation).Append([]byte(location), false)
 	bat.GetVectorByName(checkpoint.CheckpointAttr_EntryType).Append(false, false)
 	bat.GetVectorByName(checkpoint.CheckpointAttr_Version).Append(ckpEntries[len(ckpEntries)-1].GetVersion(), false)
-	bat.GetVectorByName(checkpoint.CheckpointAttr_AllLocations).Append([]byte(tnLocation), false)
+	bat.GetVectorByName(checkpoint.CheckpointAttr_AllLocations).Append([]byte(location), false)
 	bat.GetVectorByName(checkpoint.CheckpointAttr_CheckpointLSN).Append(uint64(0), false)
 	bat.GetVectorByName(checkpoint.CheckpointAttr_TruncateLSN).Append(uint64(0), false)
 	bat.GetVectorByName(checkpoint.CheckpointAttr_Type).Append(int8(checkpoint.ET_Compacted), false)
@@ -177,7 +177,7 @@ func MergeCheckpoint(
 	_, tsFile := ioutil.TryDecodeTSRangeFile(name)
 	client.AddCheckpointMetaFile(tsFile.GetName())
 	checkpointEntry = checkpoint.NewCheckpointEntry("", ckpEntries[0].GetStart(), *end, checkpoint.ET_Compacted)
-	checkpointEntry.SetLocation(cnLocation, tnLocation)
+	checkpointEntry.SetLocation(location, location)
 	checkpointEntry.SetLSN(ckpEntries[len(ckpEntries)-1].LSN(), ckpEntries[len(ckpEntries)-1].GetTruncateLsn())
 	checkpointEntry.SetState(checkpoint.ST_Finished)
 	checkpointEntry.SetVersion(logtail.CheckpointCurrentVersion)
