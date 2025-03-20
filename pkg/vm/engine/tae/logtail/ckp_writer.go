@@ -72,6 +72,10 @@ func NewBackupCollector_V2(start, end types.TS, fs fileservice.FileService) *Bas
 }
 
 func (collector *BaseCollector_V2) Close() {
+	if collector.data != nil {
+		collector.data.Close()
+		collector.data = nil
+	}
 	collector.packer.Close()
 }
 func (collector *BaseCollector_V2) OrphanData() *CheckpointData_V2 {
