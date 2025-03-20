@@ -250,7 +250,7 @@ func NewCheckpointDataWithSinker(sinker *ioutil.Sinker, allocator *mpool.MPool) 
 	}
 }
 
-func (data *CheckpointData_V2) WriteTo(
+func (data *CheckpointData_V2) Sync(
 	ctx context.Context,
 	fs fileservice.FileService,
 ) (location objectio.Location, ckpfiles []string, err error) {

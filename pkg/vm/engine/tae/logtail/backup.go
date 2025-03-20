@@ -895,7 +895,7 @@ func ReWriteCheckpointAndBlockFromKey(
 		dataSinker.Write(ctx, dest)
 	}
 	newData := NewCheckpointDataWithSinker(dataSinker, common.CheckpointAllocator)
-	location, checkpointFiles, err := newData.WriteTo(
+	location, checkpointFiles, err := newData.Sync(
 		ctx, dstFs,
 	)
 	if err != nil {
