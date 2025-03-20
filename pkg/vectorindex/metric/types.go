@@ -15,8 +15,8 @@
 package metric
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	usearch "github.com/unum-cloud/usearch/golang"
-	"gonum.org/v1/gonum/mat"
 )
 
 type MetricType uint16
@@ -81,4 +81,4 @@ var (
 // DistanceFunction is a function that computes the distance between two vectors
 // NOTE: clusterer already ensures that the all the input vectors are of the same length,
 // so we don't need to check for that here again and return error if the lengths are different.
-type DistanceFunction func(v1, v2 *mat.VecDense) float64
+type DistanceFunction[T types.RealNumbers] func(v1, v2 []T) float64

@@ -28,11 +28,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"gonum.org/v1/gonum/mat"
 )
 
 const opName = "product_l2"
@@ -57,12 +55,7 @@ func (productl2 *Productl2) Prepare(proc *process.Process) error {
 	if !ok {
 		return moerr.NewInternalError(proc.Ctx, "ProductL2: vector optype not found")
 	}
-
-	distfn, err := metric.ResolveDistanceFn(metrictype)
-	if err != nil {
-		return moerr.NewInternalError(proc.Ctx, "ProductL2: failed to get distance function")
-	}
-	productl2.ctr.distfn = distfn
+	productl2.ctr.metrictype = metrictype
 
 	return nil
 }
@@ -169,16 +162,71 @@ func (productl2 *Productl2) build(proc *process.Process, analyzer process.Analyz
 //	}
 //)
 
-func (ctr *container) probe(ap *Productl2, proc *process.Process, result *vm.CallResult) error {
+func newMat[T float32 | float64](ctr *container, ap *Productl2) ([][]T, [][]T) {
 	buildCount := ctr.bat.RowCount()
 	probeCount := ctr.inBat.RowCount()
-
 	centroidColPos := ap.OnExpr.GetF().GetArgs()[0].GetCol().GetColPos()
 	tblColPos := ap.OnExpr.GetF().GetArgs()[1].GetCol().GetColPos()
+	centroidmat := make([][]T, buildCount)
+	for i := 0; i < buildCount; i++ {
+		switch ctr.bat.Vecs[centroidColPos].GetType().Oid {
+		case types.T_array_float32:
+			if ctr.bat.Vecs[centroidColPos].IsNull(uint64(i)) {
+				centroidmat[i] = nil
+				continue
+			}
+			clusterEmbeddingF32 := types.BytesToArray[T](ctr.bat.Vecs[centroidColPos].GetBytesAt(i))
+			centroidmat[i] = clusterEmbeddingF32
+		case types.T_array_float64:
+			if ctr.bat.Vecs[centroidColPos].IsNull(uint64(i)) {
+				centroidmat[i] = nil
+				continue
+			}
+			clusterEmbeddingF64 := types.BytesToArray[T](ctr.bat.Vecs[centroidColPos].GetBytesAt(i))
+			centroidmat[i] = clusterEmbeddingF64
+		}
+	}
 
-	var errs error
-	var mutex sync.Mutex
-	var wg sync.WaitGroup
+	// embedding mat
+	embedmat := make([][]T, probeCount)
+	for j := 0; j < probeCount; j++ {
+
+		switch ctr.bat.Vecs[centroidColPos].GetType().Oid {
+		case types.T_array_float32:
+			if ctr.inBat.Vecs[tblColPos].IsNull(uint64(j)) {
+				embedmat[j] = nil
+				continue
+			}
+			tblEmbeddingF32 := types.BytesToArray[T](ctr.inBat.Vecs[tblColPos].GetBytesAt(j))
+			embedmat[j] = tblEmbeddingF32
+		case types.T_array_float64:
+			if ctr.inBat.Vecs[tblColPos].IsNull(uint64(j)) {
+				embedmat[j] = nil
+				continue
+			}
+			tblEmbeddingF64 := types.BytesToArray[T](ctr.inBat.Vecs[tblColPos].GetBytesAt(j))
+			embedmat[j] = tblEmbeddingF64
+		}
+
+	}
+
+	return centroidmat, embedmat
+}
+
+func (ctr *container) probe(ap *Productl2, proc *process.Process, result *vm.CallResult) error {
+	centroidColPos := ap.OnExpr.GetF().GetArgs()[0].GetCol().GetColPos()
+	switch ctr.bat.Vecs[centroidColPos].GetType().Oid {
+	case types.T_array_float32:
+		return probeRun[float32](ctr, ap, proc, result)
+	case types.T_array_float64:
+		return probeRun[float64](ctr, ap, proc, result)
+	}
+	return nil
+}
+
+func probeRun[T float32 | float64](ctr *container, ap *Productl2, proc *process.Process, result *vm.CallResult) error {
+	buildCount := ctr.bat.RowCount()
+	probeCount := ctr.inBat.RowCount()
 
 	ncpu := runtime.NumCPU()
 	if probeCount < ncpu {
@@ -200,41 +248,15 @@ func (ctr *container) probe(ap *Productl2, proc *process.Process, result *vm.Cal
 		leastDistance[i] = math.MaxFloat64
 	}
 
-	// centroid mat
-	centroidmat := make([]*mat.VecDense, buildCount)
-	for i := 0; i < buildCount; i++ {
-		if ctr.bat.Vecs[centroidColPos].IsNull(uint64(i)) {
-			centroidmat[i] = nil
-			continue
-		}
-		switch ctr.bat.Vecs[centroidColPos].GetType().Oid {
-		case types.T_array_float32:
-			clusterEmbeddingF32 := types.BytesToArray[float32](ctr.bat.Vecs[centroidColPos].GetBytesAt(i))
-			centroidmat[i] = moarray.ToGonumVector[float32](clusterEmbeddingF32)
-		case types.T_array_float64:
-			clusterEmbeddingF32 := types.BytesToArray[float64](ctr.bat.Vecs[centroidColPos].GetBytesAt(i))
-			centroidmat[i] = moarray.ToGonumVector[float64](clusterEmbeddingF32)
-		}
+	centroidmat, embedmat := newMat[T](ctr, ap)
+	distfn, err := metric.ResolveDistanceFn[T](ctr.metrictype)
+	if err != nil {
+		return moerr.NewInternalError(proc.Ctx, "ProductL2: failed to get distance function")
 	}
 
-	// embedding mat
-	embedmat := make([]*mat.VecDense, probeCount)
-	for j := 0; j < probeCount; j++ {
-		if ctr.inBat.Vecs[tblColPos].IsNull(uint64(j)) {
-			embedmat[j] = nil
-			continue
-		}
-
-		switch ctr.bat.Vecs[centroidColPos].GetType().Oid {
-		case types.T_array_float32:
-			tblEmbeddingF32 := types.BytesToArray[float32](ctr.inBat.Vecs[tblColPos].GetBytesAt(j))
-			embedmat[j] = moarray.ToGonumVector[float32](tblEmbeddingF32)
-		case types.T_array_float64:
-			tblEmbeddingF64 := types.BytesToArray[float64](ctr.inBat.Vecs[tblColPos].GetBytesAt(j))
-			embedmat[j] = moarray.ToGonumVector[float64](tblEmbeddingF64)
-		}
-
-	}
+	var errs error
+	var mutex sync.Mutex
+	var wg sync.WaitGroup
 
 	for n := 0; n < ncpu; n++ {
 
@@ -255,7 +277,7 @@ func (ctr *container) probe(ap *Productl2, proc *process.Process, result *vm.Cal
 						leastDistance[j] = 0
 						leastClusterIndex[j] = i
 					} else {
-						dist := ctr.distfn(centroidmat[i], embedmat[j])
+						dist := distfn(centroidmat[i], embedmat[j])
 						if dist < leastDistance[j] {
 							leastDistance[j] = dist
 							leastClusterIndex[j] = i

@@ -60,10 +60,10 @@ func (r *Random) InitCentroids(vectors []*mat.VecDense, k int) (centroids []*mat
 // Using kmeans++, we are sure that 3 centroids are farther away from each other.
 type KMeansPlusPlus struct {
 	rand   rand.Rand
-	distFn metric.DistanceFunction
+	distFn metric.DistanceFunction[float64]
 }
 
-func NewKMeansPlusPlusInitializer(distFn metric.DistanceFunction) Initializer {
+func NewKMeansPlusPlusInitializer(distFn metric.DistanceFunction[float64]) Initializer {
 	return &KMeansPlusPlus{
 		rand:   *rand.New(rand.NewSource(kmeans.DefaultRandSeed)),
 		distFn: distFn,
@@ -109,7 +109,7 @@ func (kpp *KMeansPlusPlus) InitCentroids(vectors []*mat.VecDense, k int) (centro
 					// this is a deviation from standard kmeans.here we are not using minDistance to all the existing centers.
 					// This code was very slow: https://github.com/matrixorigin/matrixone/blob/77ff1452bd56cd93a10e3327632adebdbaf279cb/pkg/sql/plan/function/functionAgg/algos/kmeans/elkans/initializer.go#L81-L86
 					// but instead we are using the distance to the last center that was chosen.
-					distance := kpp.distFn(vectors[vecIdx], centroids[nextCentroidIdx-1])
+					distance := kpp.distFn(vectors[vecIdx].RawVector().Data, centroids[nextCentroidIdx-1].RawVector().Data)
 
 					distance *= distance
 					mutex.Lock()

@@ -61,7 +61,7 @@ type ElkanClusterer struct {
 	clusterCnt int // k in paper
 	vectorCnt  int // n in paper
 
-	distFn    metric.DistanceFunction
+	distFn    metric.DistanceFunction[float64]
 	initType  kmeans.InitType
 	rand      *rand.Rand
 	normalize bool
@@ -117,7 +117,7 @@ func NewKMeans(vectors [][]float64, clusterCnt,
 	}
 	minCentroidDist := make([]float64, clusterCnt)
 
-	distanceFunction, normalize, err := metric.ResolveKmeansDistanceFn(distanceType, spherical)
+	distanceFunction, normalize, err := metric.ResolveKmeansDistanceFn[float64](distanceType, spherical)
 	if err != nil {
 		return nil, err
 	}
@@ -268,7 +268,7 @@ func (km *ElkanClusterer) initBounds() {
 				minDist := math.MaxFloat64
 				closestCenter := 0
 				for c := range km.centroids {
-					dist := km.distFn(km.vectorList[x], km.centroids[c])
+					dist := km.distFn(km.vectorList[x].RawVector().Data, km.centroids[c].RawVector().Data)
 					km.vectorMetas[x].lower[c] = dist
 					if dist < minDist {
 						minDist = dist
@@ -306,7 +306,7 @@ func (km *ElkanClusterer) computeCentroidDistances() {
 					continue
 				}
 				for j := i + 1; j < km.clusterCnt; j++ {
-					dist := 0.5 * km.distFn(km.centroids[i], km.centroids[j])
+					dist := 0.5 * km.distFn(km.centroids[i].RawVector().Data, km.centroids[j].RawVector().Data)
 					km.halfInterCentroidDistMatrix[i][j] = dist
 					km.halfInterCentroidDistMatrix[j][i] = dist
 
@@ -374,7 +374,7 @@ func (km *ElkanClusterer) assignData() int {
 						if km.vectorMetas[currVector].recompute {
 							km.vectorMetas[currVector].recompute = false
 
-							dxcx = km.distFn(km.vectorList[currVector], km.centroids[km.assignments[currVector]])
+							dxcx = km.distFn(km.vectorList[currVector].RawVector().Data, km.centroids[km.assignments[currVector]].RawVector().Data)
 							km.vectorMetas[currVector].upper = dxcx
 							km.vectorMetas[currVector].lower[km.assignments[currVector]] = dxcx
 
@@ -397,7 +397,7 @@ func (km *ElkanClusterer) assignData() int {
 						if dxcx > km.vectorMetas[currVector].lower[c] ||
 							dxcx > km.halfInterCentroidDistMatrix[km.assignments[currVector]][c] {
 
-							dxc := km.distFn(km.vectorList[currVector], km.centroids[c]) // d(x,c) in the paper
+							dxc := km.distFn(km.vectorList[currVector].RawVector().Data, km.centroids[c].RawVector().Data) // d(x,c) in the paper
 							km.vectorMetas[currVector].lower[c] = dxc
 							if dxc < dxcx {
 								km.vectorMetas[currVector].upper = dxc
@@ -466,7 +466,7 @@ func (km *ElkanClusterer) updateBounds(newCentroid []*mat.VecDense) {
 	// d(c', m(c')) in the paper
 	centroidShiftDist := make([]float64, km.clusterCnt)
 	for c := 0; c < km.clusterCnt; c++ {
-		centroidShiftDist[c] = km.distFn(km.centroids[c], newCentroid[c])
+		centroidShiftDist[c] = km.distFn(km.centroids[c].RawVector().Data, newCentroid[c].RawVector().Data)
 		//logutil.Debugf("centroidShiftDist[%d]=%f", c, centroidShiftDist[c])
 	}
 
@@ -505,7 +505,7 @@ func (km *ElkanClusterer) isConverged(iter int, changes int) bool {
 func (km *ElkanClusterer) SSE() float64 {
 	sse := 0.0
 	for i := range km.vectorList {
-		distErr := km.distFn(km.vectorList[i], km.centroids[km.assignments[i]])
+		distErr := km.distFn(km.vectorList[i].RawVector().Data, km.centroids[km.assignments[i]].RawVector().Data)
 		sse += math.Pow(distErr, 2)
 	}
 	return sse
