@@ -274,3 +274,14 @@ func (b cdcSQLBuilder) GetWatermarkSQL(
 		taskId,
 	)
 }
+
+func (b cdcSQLBuilder) GetDataKeySQL(
+	accountId uint64,
+	keyId string,
+) string {
+	return fmt.Sprintf(
+		CDCGetDataKeySqlTemplate,
+		accountId,
+		keyId,
+	)
+}
