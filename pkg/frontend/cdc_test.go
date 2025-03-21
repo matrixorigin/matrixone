@@ -86,18 +86,6 @@ func Test_newCdcSqlFormat(t *testing.T) {
 	wantSql2 := "SELECT sink_uri, sink_type, sink_password, tables, filters, start_ts, end_ts, no_full, additional_config FROM mo_catalog.mo_cdc_task WHERE account_id = 3 AND task_id = \"019111fd-aed1-70c0-8760-9abadd8f0f4a\""
 	assert.Equal(t, wantSql2, sql2)
 
-	sql4 := getSqlForGetTable(10, "db", "t1")
-	wantsql4 := "select rel_id from `mo_catalog`.`mo_tables` where account_id = 10 and reldatabase ='db' and relname = 't1'"
-	assert.Equal(t, wantsql4, sql4)
-
-	sql5 := getSqlForCheckAccount("acc1")
-	wantsql5 := "select account_id from `mo_catalog`.`mo_account` where account_name='acc1'"
-	assert.Equal(t, wantsql5, sql5)
-
-	sql6 := getSqlForGetPkCount(13, "db1", "t2")
-	wantsql6 := "select count(att_constraint_type) from `mo_catalog`.`mo_columns` where account_id = 13 and att_database = 'db1' and att_relname = 't2' and att_constraint_type = 'p'"
-	assert.Equal(t, wantsql6, sql6)
-
 	sql7 := getSqlForDeleteWatermark(13, "task1")
 	wantsql7 := "delete from `mo_catalog`.`mo_cdc_watermark` where account_id = 13 and task_id = 'task1'"
 	assert.Equal(t, wantsql7, sql7)
