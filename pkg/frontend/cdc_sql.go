@@ -210,11 +210,20 @@ func (b cdcSQLBuilder) GetTaskSQL(
 
 func (b cdcSQLBuilder) ShowCdcTaskSQL(
 	accountId uint64,
+	showAll bool,
+	taskName string,
 ) string {
-	return fmt.Sprintf(
+	sql := fmt.Sprintf(
 		CDCShowCdcTaskSqlTemplate,
 		accountId,
 	)
+	if !showAll {
+		sql += fmt.Sprintf(
+			` AND task_name = '%s'`,
+			taskName,
+		)
+	}
+	return sql
 }
 
 // ------------------------------------------------------------------------------------------------

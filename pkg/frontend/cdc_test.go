@@ -2106,7 +2106,7 @@ func Test_handleShowCdc(t *testing.T) {
 	})
 	assert.NoError(t, err)
 
-	sql := getSqlForGetTask(sysAccountID, true, "")
+	sql := CDCSQLBuilder.ShowCdcTaskSQL(sysAccountID, true, "")
 	mrs := newMrsForGetTask([][]interface{}{
 		{"taskID-1", "task1", sourceUri, sinkUri, CdcRunning, ""},
 	})
@@ -2478,7 +2478,7 @@ func Test_getSqlForGetTask(t *testing.T) {
 				all:       true,
 				taskName:  "",
 			},
-			want: "select task_id, task_name, source_uri, sink_uri, state, err_msg from mo_catalog.mo_cdc_task where account_id = 0",
+			want: "SELECT task_id, task_name, source_uri, sink_uri, state, err_msg FROM mo_catalog.mo_cdc_task WHERE account_id = 0",
 		},
 		{
 			name: "t2",
@@ -2487,12 +2487,20 @@ func Test_getSqlForGetTask(t *testing.T) {
 				all:       false,
 				taskName:  "task1",
 			},
-			want: "select task_id, task_name, source_uri, sink_uri, state, err_msg from mo_catalog.mo_cdc_task where account_id = 0 and task_name = 'task1'",
+			want: "SELECT task_id, task_name, source_uri, sink_uri, state, err_msg FROM mo_catalog.mo_cdc_task WHERE account_id = 0 AND task_name = 'task1'",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equalf(t, tt.want, getSqlForGetTask(tt.args.accountId, tt.args.all, tt.args.taskName), "getSqlForGetTask(%v, %v, %v)", tt.args.accountId, tt.args.all, tt.args.taskName)
+			assert.Equalf(
+				t,
+				tt.want,
+				CDCSQLBuilder.ShowCdcTaskSQL(tt.args.accountId, tt.args.all, tt.args.taskName),
+				"getSqlForGetTask(%v, %v, %v)",
+				tt.args.accountId,
+				tt.args.all,
+				tt.args.taskName,
+			)
 		})
 	}
 }
