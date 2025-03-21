@@ -46,8 +46,6 @@ import (
 )
 
 const (
-	getDataKeyFormat = "select encrypted_key from mo_catalog.mo_data_key where account_id = %d and key_id = '%s'"
-
 	updateErrMsgFormat = "update `mo_catalog`.`mo_cdc_task` set state = '%s', err_msg = '%s' where account_id = %d and task_id = '%s'"
 )
 
@@ -779,7 +777,7 @@ func (cdc *CdcTask) initAesKeyByInternalExecutor(ctx context.Context, accountId 
 		return nil
 	}
 
-	querySql := fmt.Sprintf(getDataKeyFormat, accountId, cdc2.InitKeyId)
+	querySql := CDCSQLBuilder.GetDataKeySQL(uint64(accountId), cdc2.InitKeyId)
 	res := cdc.ie.Query(ctx, querySql, ie.SessionOverrideOptions{})
 	if res.Error() != nil {
 		return res.Error()
@@ -1503,7 +1501,7 @@ var initAesKeyBySqlExecutor = func(ctx context.Context, executor taskservice.Sql
 
 	var encryptedKey string
 	var ret bool
-	querySql := fmt.Sprintf(getDataKeyFormat, accountId, cdc2.InitKeyId)
+	querySql := CDCSQLBuilder.GetDataKeySQL(uint64(accountId), cdc2.InitKeyId)
 
 	ret, err = queryTable(ctx, executor, querySql, func(ctx context.Context, rows *sql.Rows) (bool, error) {
 		if err = rows.Scan(&encryptedKey); err != nil {
