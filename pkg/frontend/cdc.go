@@ -87,8 +87,6 @@ const (
 
 	updateCdcMetaFormat = "update `mo_catalog`.`mo_cdc_task` set state = ? where 1=1"
 
-	deleteWatermarkFormat = "delete from `mo_catalog`.`mo_cdc_watermark` where account_id = %d and task_id = '%s'"
-
 	getWatermarkFormat = "select db_name, table_name, watermark, err_msg from mo_catalog.mo_cdc_watermark where account_id = %d and task_id = '%s'"
 
 	getDataKeyFormat = "select encrypted_key from mo_catalog.mo_data_key where account_id = %d and key_id = '%s'"
@@ -152,67 +150,6 @@ var showCdcOutputColumns = [8]Column{
 			columnType: defines.MYSQL_TYPE_VARCHAR,
 		},
 	},
-}
-
-func getSqlForNewCdcTask(
-	accId uint64,
-	taskId uuid.UUID,
-	taskName string,
-	sourceUri string,
-	sourcePwd string,
-	sinkUri string,
-	sinkTyp string,
-	sinkPwd string,
-	sinkCaPath string,
-	sinkCertPath string,
-	sinkKeyPath string,
-	tables string,
-	filters string,
-	opfilters string,
-	sourceState string,
-	sinkState string,
-	startTs string,
-	endTs string,
-	configFile string,
-	taskCreateTime time.Time,
-	state string,
-	checkpoint uint64,
-	noFull bool,
-	incrConfig string,
-	additionalConfigStr string,
-) string {
-	return fmt.Sprintf(insertNewCdcTaskFormat,
-		accId,
-		taskId,
-		taskName,
-		sourceUri,
-		sourcePwd,
-		sinkUri,
-		sinkTyp,
-		sinkPwd,
-		sinkCaPath,
-		sinkCertPath,
-		sinkKeyPath,
-		tables,
-		filters,
-		opfilters,
-		sourceState,
-		sinkState,
-		startTs,
-		endTs,
-		configFile,
-		taskCreateTime.Format(time.DateTime),
-		state,
-		checkpoint,
-		checkpoint,
-		noFull,
-		incrConfig,
-		additionalConfigStr,
-	)
-}
-
-func getSqlForDeleteWatermark(accountId uint64, taskId string) string {
-	return fmt.Sprintf(deleteWatermarkFormat, accountId, taskId)
 }
 
 func getSqlForGetWatermark(accountId uint64, taskId string) string {
@@ -1435,7 +1372,7 @@ func deleteWatermark(ctx context.Context, tx taskservice.SqlExecutor, taskKeyMap
 	var err error
 	//deleting mo_cdc_watermark belongs to cancelled cdc task
 	for tInfo := range taskKeyMap {
-		deleteSql2 := getSqlForDeleteWatermark(tInfo.AccountId, tInfo.TaskId)
+		deleteSql2 := CDCSQLBuilder.DeleteWatermarkSQL(tInfo.AccountId, tInfo.TaskId)
 		cnt, err = executeSql(ctx, tx, deleteSql2)
 		if err != nil {
 			return 0, err
