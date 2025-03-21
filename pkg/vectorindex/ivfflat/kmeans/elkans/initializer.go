@@ -44,9 +44,8 @@ func NewRandomInitializer() Initializer {
 
 func (r *Random) InitCentroids(vectors any, k int) (_centroids any) {
 
-	switch vectors.(type) {
+	switch _vecs := vectors.(type) {
 	case [][]float32:
-		_vecs := vectors.([][]float32)
 		centroids := make([][]float32, k)
 		for i := 0; i < k; i++ {
 			randIdx := r.rand.Intn(len(_vecs))
@@ -55,7 +54,6 @@ func (r *Random) InitCentroids(vectors any, k int) (_centroids any) {
 		return centroids
 
 	case [][]float64:
-		_vecs := vectors.([][]float64)
 		centroids := make([][]float64, k)
 		for i := 0; i < k; i++ {
 			randIdx := r.rand.Intn(len(_vecs))
