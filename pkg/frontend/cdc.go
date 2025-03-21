@@ -81,12 +81,6 @@ const (
 
 	getShowCdcTaskFormat = "select task_id, task_name, source_uri, sink_uri, state, err_msg from mo_catalog.mo_cdc_task where account_id = %d"
 
-	getTableFormat = "select rel_id from `mo_catalog`.`mo_tables` where account_id = %d and reldatabase ='%s' and relname = '%s'"
-
-	getAccountIdFormat = "select account_id from `mo_catalog`.`mo_account` where account_name='%s'"
-
-	getPkCountFormat = "select count(att_constraint_type) from `mo_catalog`.`mo_columns` where account_id = %d and att_database = '%s' and att_relname = '%s' and att_constraint_type = '%s'"
-
 	getCdcTaskIdFormat = "select task_id from `mo_catalog`.`mo_cdc_task` where 1=1"
 
 	deleteCdcMetaFormat = "delete from `mo_catalog`.`mo_cdc_task` where 1=1"
@@ -215,18 +209,6 @@ func getSqlForNewCdcTask(
 		incrConfig,
 		additionalConfigStr,
 	)
-}
-
-func getSqlForGetTable(accountId uint64, db, table string) string {
-	return fmt.Sprintf(getTableFormat, accountId, db, table)
-}
-
-func getSqlForCheckAccount(account string) string {
-	return fmt.Sprintf(getAccountIdFormat, account)
-}
-
-func getSqlForGetPkCount(accountId uint64, db, table string) string {
-	return fmt.Sprintf(getPkCountFormat, accountId, db, table, catalog.SystemColPKConstraint)
 }
 
 func getSqlForDeleteWatermark(accountId uint64, taskId string) string {
