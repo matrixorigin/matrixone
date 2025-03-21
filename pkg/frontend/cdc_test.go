@@ -52,9 +52,9 @@ import (
 func Test_newCdcSqlFormat(t *testing.T) {
 	id, _ := uuid.Parse("019111fd-aed1-70c0-8760-9abadd8f0f4a")
 	d := time.Date(2024, 8, 2, 15, 20, 0, 0, time.UTC)
-	sql := getSqlForNewCdcTask(
+	sql := CDCSQLBuilder.InsertTaskSQL(
 		3,
-		id,
+		id.String(),
 		"task1",
 		"src uri",
 		"123",
@@ -79,7 +79,7 @@ func Test_newCdcSqlFormat(t *testing.T) {
 		"yyy",
 		"{}",
 	)
-	wantSql := "insert into mo_catalog.mo_cdc_task values(3,\"019111fd-aed1-70c0-8760-9abadd8f0f4a\",\"task1\",\"src uri\",\"123\",\"dst uri\",\"mysql\",\"456\",\"ca path\",\"cert path\",\"key path\",\"db1:t1\",\"xfilter\",\"op filters\",\"error\",\"common\",\"\",\"\",\"conf path\",\"2024-08-02 15:20:00\",\"running\",125,\"125\",\"true\",\"yyy\",'{}',\"\",\"\",\"\",\"\")"
+	wantSql := "INSERT INTO mo_catalog.mo_cdc_task VALUES(3,\"019111fd-aed1-70c0-8760-9abadd8f0f4a\",\"task1\",\"src uri\",\"123\",\"dst uri\",\"mysql\",\"456\",\"ca path\",\"cert path\",\"key path\",\"db1:t1\",\"xfilter\",\"op filters\",\"error\",\"common\",\"\",\"\",\"conf path\",\"2024-08-02 15:20:00\",\"running\",125,\"125\",\"true\",\"yyy\",'{}',\"\",\"\",\"\",\"\")"
 	assert.Equal(t, wantSql, sql)
 
 	sql2 := getSqlForRetrievingCdcTask(3, id)
@@ -375,7 +375,7 @@ func Test_handleCreateCdc(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	assert.NoError(t, err)
 
-	sql4 := "insert into mo_catalog.mo_cdc_task .*"
+	sql4 := "INSERT INTO mo_catalog.mo_cdc_task .*"
 	mock.ExpectExec(sql4).WillReturnResult(sqlmock.NewResult(1, 1))
 
 	pu := config.ParameterUnit{}
