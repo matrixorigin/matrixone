@@ -149,7 +149,9 @@ func (obj *aobject) PrepareCompact() bool {
 				logutil.Infof("obj %v, data prepare compact failed", obj.meta.Load().ID().String())
 				if !obj.meta.Load().HasPrintedPrepareComapct.Load() {
 					obj.meta.Load().HasPrintedPrepareComapct.Store(true)
+					obj.RLock()
 					logutil.Infof("append MVCC %v", obj.appendMVCC.StringLocked())
+					obj.RUnlock()
 				}
 			}
 			return false
