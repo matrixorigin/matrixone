@@ -81,8 +81,6 @@ const (
 
 	getShowCdcTaskFormat = "select task_id, task_name, source_uri, sink_uri, state, err_msg from mo_catalog.mo_cdc_task where account_id = %d"
 
-	getDbIdAndTableIdFormat = "select reldatabase_id,rel_id from mo_catalog.mo_tables where account_id = %d and reldatabase = '%s' and relname = '%s'"
-
 	getTableFormat = "select rel_id from `mo_catalog`.`mo_tables` where account_id = %d and reldatabase ='%s' and relname = '%s'"
 
 	getAccountIdFormat = "select account_id from `mo_catalog`.`mo_account` where account_name='%s'"
@@ -217,10 +215,6 @@ func getSqlForNewCdcTask(
 		incrConfig,
 		additionalConfigStr,
 	)
-}
-
-func getSqlForDbIdAndTableId(accId uint64, db, table string) string {
-	return fmt.Sprintf(getDbIdAndTableIdFormat, accId, db, table)
 }
 
 func getSqlForGetTable(accountId uint64, db, table string) string {
