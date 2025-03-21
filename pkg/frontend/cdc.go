@@ -1380,7 +1380,7 @@ func handleShowCdc(ses *Session, execCtx *ExecCtx, st *tree.ShowCDC) (err error)
 	timestamp := txnOp.SnapshotTS().ToStdTime().In(time.Local).String()
 
 	// get from task table
-	sql := CDCSQLBuilder.ShowCdcTaskSQL(uint64(ses.GetTenantInfo().GetTenantID()), st.Option.All, string(st.Option.TaskName))
+	sql := CDCSQLBuilder.ShowTaskSQL(uint64(ses.GetTenantInfo().GetTenantID()), st.Option.All, string(st.Option.TaskName))
 
 	bh.ClearExecResultSet()
 	if err = bh.Exec(ctx, sql); err != nil {
