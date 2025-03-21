@@ -81,15 +81,22 @@ const (
 		`WHERE ` +
 		`account_id = %d`
 
-	CDCGetCdcTaskIdSqlTemplate = `SELECT ` +
-		`task_id ` +
-		`FROM mo_catalog.mo_cdc_task ` +
-		`WHERE ` +
-		`account_id = %d`
+	CDCGetCdcTaskIdSqlTemplate = "SELECT " +
+		"task_id " +
+		"FROM `mo_catalog`.`mo_cdc_task` " +
+		"WHERE 1=1 AND account_id = %d"
 
-	CDCDeleteCdcMetaSqlTemplate = "DELETE FROM `mo_catalog`.mo_cdc_task WHERE 1=1"
+	CDCDeleteTaskSqlTemplate = "DELETE " +
+		"FROM " +
+		"`mo_catalog`.`mo_cdc_task` " +
+		"WHERE " +
+		"1=1 AND account_id = %d"
 
-	CDCUpdateCdcMetaSqlTemplate = "UPDATE `mo_catalog`.mo_cdc_task SET state = ? WHERE 1=1"
+	CDCUpdateTaskStateSqlTemplate = "UPDATE " +
+		"`mo_catalog`.`mo_cdc_task` " +
+		"SET state = ? " +
+		"WHERE " +
+		"1=1 AND account_id = %d"
 
 	CDCDeleteWatermarkSqlTemplate = "DELETE FROM `mo_catalog`.`mo_cdc_watermark` WHERE account_id = %d AND task_id = '%s'"
 
@@ -184,6 +191,57 @@ func (b cdcSQLBuilder) ShowTaskSQL(
 		accountId,
 	)
 	if !showAll {
+		sql += fmt.Sprintf(
+			` AND task_name = '%s'`,
+			taskName,
+		)
+	}
+	return sql
+}
+
+func (b cdcSQLBuilder) DeleteTaskSQL(
+	accountId uint64,
+	taskName string,
+) string {
+	sql := fmt.Sprintf(
+		CDCDeleteTaskSqlTemplate,
+		accountId,
+	)
+	if taskName != "" {
+		sql += fmt.Sprintf(
+			` AND task_name = '%s'`,
+			taskName,
+		)
+	}
+	return sql
+}
+
+func (b cdcSQLBuilder) UpdateTaskStateSQL(
+	accountId uint64,
+	taskName string,
+) string {
+	sql := fmt.Sprintf(
+		CDCUpdateTaskStateSqlTemplate,
+		accountId,
+	)
+	if taskName != "" {
+		sql += fmt.Sprintf(
+			` AND task_name = '%s'`,
+			taskName,
+		)
+	}
+	return sql
+}
+
+func (b cdcSQLBuilder) GetTaskIdSQL(
+	accountId uint64,
+	taskName string,
+) string {
+	sql := fmt.Sprintf(
+		CDCGetCdcTaskIdSqlTemplate,
+		accountId,
+	)
+	if taskName != "" {
 		sql += fmt.Sprintf(
 			` AND task_name = '%s'`,
 			taskName,

@@ -46,12 +46,6 @@ import (
 )
 
 const (
-	getCdcTaskIdFormat = "select task_id from `mo_catalog`.`mo_cdc_task` where 1=1"
-
-	deleteCdcMetaFormat = "delete from `mo_catalog`.`mo_cdc_task` where 1=1"
-
-	updateCdcMetaFormat = "update `mo_catalog`.`mo_cdc_task` set state = ? where 1=1"
-
 	getDataKeyFormat = "select encrypted_key from mo_catalog.mo_data_key where account_id = %d and key_id = '%s'"
 
 	updateErrMsgFormat = "update `mo_catalog`.`mo_cdc_task` set state = '%s', err_msg = '%s' where account_id = %d and task_id = '%s'"
@@ -1218,10 +1212,7 @@ func updateCdcTask(
 	var affectedCdcRow int
 	var cnt int64
 
-	//where : account_id = xxx and task_name = yyy
-	whereClauses := buildCdcTaskWhereClause(accountId, taskName)
-	//step1: query all account id & task id that we need from mo_cdc_task
-	query := getCdcTaskIdFormat + whereClauses
+	query := CDCSQLBuilder.GetTaskIdSQL(accountId, taskName)
 
 	rows, err := tx.QueryContext(ctx, query)
 	if err != nil {
@@ -1253,7 +1244,7 @@ func updateCdcTask(
 	if targetStatus != task.TaskStatus_CancelRequested {
 		//Update cdc task
 		//updating mo_cdc_task table
-		updateSql := updateCdcMetaFormat + whereClauses
+		updateSql := CDCSQLBuilder.UpdateTaskStateSQL(accountId, taskName)
 		prepare, err = tx.PrepareContext(ctx, updateSql)
 		if err != nil {
 			return 0, err
@@ -1292,7 +1283,7 @@ func updateCdcTask(
 	} else {
 		//Cancel cdc task
 		//deleting mo_cdc_task
-		deleteSql := deleteCdcMetaFormat + whereClauses
+		deleteSql := CDCSQLBuilder.DeleteTaskSQL(accountId, taskName)
 		cnt, err = executeSql(ctx, tx, deleteSql)
 		if err != nil {
 			return 0, err
