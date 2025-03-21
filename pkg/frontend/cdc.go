@@ -440,15 +440,15 @@ func doCreateCdc(ctx context.Context, ses *Session, create *tree.CreateCDC) (err
 		exclude = strings.ReplaceAll(exclude, "\\", "\\\\")
 
 		//step 5: create daemon task
-		insertSql := getSqlForNewCdcTask(
-			uint64(accountId), //the account_id of cdc creator
-			cdcId,
+		insertSql := CDCSQLBuilder.InsertTaskSQL(
+			uint64(accountId),
+			cdcId.String(),
 			create.TaskName.String(),
-			jsonSrcUri, //json bytes
+			jsonSrcUri,
 			"",
-			jsonSinkUri, //json bytes
+			jsonSinkUri,
 			sinkType,
-			encodedSinkPwd, //encrypted password
+			encodedSinkPwd,
 			"",
 			"",
 			"",
