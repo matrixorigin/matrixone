@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"gonum.org/v1/gonum/mat"
 )
 
 const opName = "product_l2"
@@ -178,9 +179,17 @@ func (ctr *container) probe(ap *Productl2, proc *process.Process, result *vm.Cal
 	var errs error
 	var mutex sync.Mutex
 	var wg sync.WaitGroup
-	ncpu := runtime.NumCPU() - 1
+
+	ncpu := runtime.NumCPU()
 	if probeCount < ncpu {
 		ncpu = probeCount
+	}
+
+	if ap.MaxParallel > 1 {
+		ncpu /= int(ap.MaxParallel)
+		if ncpu < 1 {
+			ncpu = 1
+		}
 	}
 
 	leastClusterIndex := make([]int, probeCount)
@@ -189,6 +198,42 @@ func (ctr *container) probe(ap *Productl2, proc *process.Process, result *vm.Cal
 	for i := 0; i < probeCount; i++ {
 		leastClusterIndex[i] = 0
 		leastDistance[i] = math.MaxFloat64
+	}
+
+	// centroid mat
+	centroidmat := make([]*mat.VecDense, buildCount)
+	for i := 0; i < buildCount; i++ {
+		if ctr.bat.Vecs[centroidColPos].IsNull(uint64(i)) {
+			centroidmat[i] = nil
+			continue
+		}
+		switch ctr.bat.Vecs[centroidColPos].GetType().Oid {
+		case types.T_array_float32:
+			clusterEmbeddingF32 := types.BytesToArray[float32](ctr.bat.Vecs[centroidColPos].GetBytesAt(i))
+			centroidmat[i] = moarray.ToGonumVector[float32](clusterEmbeddingF32)
+		case types.T_array_float64:
+			clusterEmbeddingF32 := types.BytesToArray[float64](ctr.bat.Vecs[centroidColPos].GetBytesAt(i))
+			centroidmat[i] = moarray.ToGonumVector[float64](clusterEmbeddingF32)
+		}
+	}
+
+	// embedding mat
+	embedmat := make([]*mat.VecDense, probeCount)
+	for j := 0; j < probeCount; j++ {
+		if ctr.inBat.Vecs[tblColPos].IsNull(uint64(j)) {
+			embedmat[j] = nil
+			continue
+		}
+
+		switch ctr.bat.Vecs[centroidColPos].GetType().Oid {
+		case types.T_array_float32:
+			tblEmbeddingF32 := types.BytesToArray[float32](ctr.inBat.Vecs[tblColPos].GetBytesAt(j))
+			embedmat[j] = moarray.ToGonumVector[float32](tblEmbeddingF32)
+		case types.T_array_float64:
+			tblEmbeddingF64 := types.BytesToArray[float64](ctr.inBat.Vecs[tblColPos].GetBytesAt(j))
+			embedmat[j] = moarray.ToGonumVector[float64](tblEmbeddingF64)
+		}
+
 	}
 
 	for n := 0; n < ncpu; n++ {
@@ -204,82 +249,20 @@ func (ctr *container) probe(ap *Productl2, proc *process.Process, result *vm.Cal
 
 				// for each row in probe table,
 				// find the nearest cluster center from the build table.
-				switch ctr.bat.Vecs[centroidColPos].GetType().Oid {
-				case types.T_array_float32:
-					var tblEmbeddingF32 []float32
+				for i := 0; i < buildCount; i++ {
 
-					tblEmbeddingF32IsNull := ctr.inBat.Vecs[tblColPos].IsNull(uint64(j))
-					if !tblEmbeddingF32IsNull {
-						tblEmbeddingF32 = types.BytesToArray[float32](ctr.inBat.Vecs[tblColPos].GetBytesAt(j))
-					}
-
-					//// NOTE: make sure you normalize_l2 probe vector once.
-					//normalizeTblEmbeddingPtrF32 = arrayF32Pool.Get().(*[]float32)
-					//normalizeTblEmbeddingF32 = *normalizeTblEmbeddingPtrF32
-					//if cap(normalizeTblEmbeddingF32) < len(tblEmbeddingF32) {
-					//	normalizeTblEmbeddingF32 = make([]float32, len(tblEmbeddingF32))
-					//} else {
-					//	normalizeTblEmbeddingF32 = normalizeTblEmbeddingF32[:len(tblEmbeddingF32)]
-					//}
-					//_ = moarray.NormalizeL2[float32](tblEmbeddingF32, normalizeTblEmbeddingF32)
-
-					for i := 0; i < buildCount; i++ {
-						if tblEmbeddingF32IsNull || ctr.bat.Vecs[centroidColPos].IsNull(uint64(i)) {
-							leastDistance[j] = 0
+					if embedmat[j] == nil || centroidmat[i] == nil {
+						leastDistance[j] = 0
+						leastClusterIndex[j] = i
+					} else {
+						dist := ctr.distfn(centroidmat[i], embedmat[j])
+						if dist < leastDistance[j] {
+							leastDistance[j] = dist
 							leastClusterIndex[j] = i
-						} else {
-							clusterEmbeddingF32 := types.BytesToArray[float32](ctr.bat.Vecs[centroidColPos].GetBytesAt(i))
-
-							centroidmat := moarray.ToGonumVector[float32](clusterEmbeddingF32)
-							vecmat := moarray.ToGonumVector[float32](tblEmbeddingF32)
-							dist := ctr.distfn(centroidmat, vecmat)
-
-							if dist < leastDistance[j] {
-								leastDistance[j] = dist
-								leastClusterIndex[j] = i
-							}
 						}
 					}
-					//// article:https://blog.mike.norgate.xyz/unlocking-go-slice-performance-navigating-sync-pool-for-enhanced-efficiency-7cb63b0b453e
-					//*normalizeTblEmbeddingPtrF32 = normalizeTblEmbeddingF32
-					//arrayF32Pool.Put(normalizeTblEmbeddingPtrF32)
-				case types.T_array_float64:
-					var tblEmbeddingF64 []float64
-
-					tblEmbeddingF64IsNull := ctr.inBat.Vecs[tblColPos].IsNull(uint64(j))
-					if !tblEmbeddingF64IsNull {
-						tblEmbeddingF64 = types.BytesToArray[float64](ctr.inBat.Vecs[tblColPos].GetBytesAt(j))
-					}
-
-					//normalizeTblEmbeddingPtrF64 = arrayF64Pool.Get().(*[]float64)
-					//normalizeTblEmbeddingF64 = *normalizeTblEmbeddingPtrF64
-					//if cap(normalizeTblEmbeddingF64) < len(tblEmbeddingF64) {
-					//	normalizeTblEmbeddingF64 = make([]float64, len(tblEmbeddingF64))
-					//} else {
-					//	normalizeTblEmbeddingF64 = normalizeTblEmbeddingF64[:len(tblEmbeddingF64)]
-					//}
-					//_ = moarray.NormalizeL2[float64](tblEmbeddingF64, normalizeTblEmbeddingF64)
-
-					for i := 0; i < buildCount; i++ {
-						if tblEmbeddingF64IsNull || ctr.bat.Vecs[centroidColPos].IsNull(uint64(i)) {
-							leastDistance[j] = 0
-							leastClusterIndex[j] = i
-						} else {
-							clusterEmbeddingF64 := types.BytesToArray[float64](ctr.bat.Vecs[centroidColPos].GetBytesAt(i))
-
-							centroidmat := moarray.ToGonumVector[float64](clusterEmbeddingF64)
-							vecmat := moarray.ToGonumVector[float64](tblEmbeddingF64)
-							dist := ctr.distfn(centroidmat, vecmat)
-
-							if dist < leastDistance[j] {
-								leastDistance[j] = dist
-								leastClusterIndex[j] = i
-							}
-						}
-					}
-					//*normalizeTblEmbeddingPtrF64 = normalizeTblEmbeddingF64
-					//arrayF64Pool.Put(normalizeTblEmbeddingPtrF64)
 				}
+
 				err := func() error {
 					mutex.Lock()
 					defer mutex.Unlock()
@@ -297,6 +280,7 @@ func (ctr *container) probe(ap *Productl2, proc *process.Process, result *vm.Cal
 
 					return nil
 				}()
+
 				if err != nil {
 					errs = errors.Join(errs, err)
 					return

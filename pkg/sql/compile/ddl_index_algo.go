@@ -236,6 +236,18 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef
 	}
 	cfg.ThreadsBuild = val.(int64)
 
+	val, err = c.proc.GetResolveVariableFunc()("ivf_sample_limit", true, false)
+	if err != nil {
+		return err
+	}
+	cfg.SampleLimit = val.(int64)
+
+	val, err = c.proc.GetResolveVariableFunc()("ivf_max_iteration", true, false)
+	if err != nil {
+		return err
+	}
+	cfg.IvfMaxIteration = val.(int64)
+
 	params_str := indexDef.IndexAlgoParams
 
 	cfgbytes, err := json.Marshal(cfg)
