@@ -86,9 +86,9 @@ func Test_newCdcSqlFormat(t *testing.T) {
 	wantSql2 := "SELECT sink_uri, sink_type, sink_password, tables, filters, start_ts, end_ts, no_full, additional_config FROM mo_catalog.mo_cdc_task WHERE account_id = 3 AND task_id = \"019111fd-aed1-70c0-8760-9abadd8f0f4a\""
 	assert.Equal(t, wantSql2, sql2)
 
-	sql7 := getSqlForDeleteWatermark(13, "task1")
-	wantsql7 := "delete from `mo_catalog`.`mo_cdc_watermark` where account_id = 13 and task_id = 'task1'"
-	assert.Equal(t, wantsql7, sql7)
+	sql3 := CDCSQLBuilder.DeleteWatermarkSQL(13, "task1")
+	wantSql3 := "DELETE FROM `mo_catalog`.`mo_cdc_watermark` WHERE account_id = 13 AND task_id = 'task1'"
+	assert.Equal(t, wantSql3, sql3)
 }
 
 func Test_getPatternTuples(t *testing.T) {
@@ -1076,7 +1076,7 @@ func Test_updateCdcTask_cancel(t *testing.T) {
 	sql8 := "delete from `mo_catalog`.`mo_cdc_task` where 1=1 and account_id = 0 and task_name = 'task1'"
 	mock.ExpectExec(sql8).WillReturnResult(sqlmock.NewResult(1, 1))
 
-	sql9 := "delete from `mo_catalog`.`mo_cdc_watermark` where account_id = 0 and task_id = 'taskID-1'"
+	sql9 := "DELETE FROM `mo_catalog`.`mo_cdc_watermark` WHERE account_id = 0 AND task_id = 'taskID-1'"
 	mock.ExpectExec(sql9).WillReturnResult(sqlmock.NewResult(1, 1))
 
 	genSqlIdx := func(sql string) int {
@@ -1151,7 +1151,7 @@ func Test_updateCdcTask_pause(t *testing.T) {
 	sql13 := "delete from `mo_catalog`.`mo_cdc_task` where 1=1 and account_id = 0 and task_name = 'task1'"
 	mock.ExpectExec(sql13).WillReturnResult(sqlmock.NewResult(1, 1))
 
-	sql14 := "delete from `mo_catalog`.`mo_cdc_watermark` where account_id = 0 and task_id = 'taskID-1'"
+	sql14 := "DELETE FROM `mo_catalog`.`mo_cdc_watermark` WHERE account_id = 0 AND task_id = 'taskID-1'"
 	mock.ExpectExec(sql14).WillReturnResult(sqlmock.NewResult(1, 1))
 
 	genSqlIdx := func(sql string) int {
@@ -1231,7 +1231,7 @@ func Test_updateCdcTask_restart(t *testing.T) {
 	sql17 := "update `mo_catalog`.`mo_cdc_task` set state = .* where 1=1 and account_id = 0 and task_name = 'task1'"
 	mock.ExpectExec(sql17).WillReturnResult(sqlmock.NewResult(1, 1))
 
-	sql18 := "delete from `mo_catalog`.`mo_cdc_watermark` where account_id = 0 and task_id = 'taskID-1'"
+	sql18 := "DELETE FROM `mo_catalog`.`mo_cdc_watermark` WHERE account_id = 0 AND task_id = 'taskID-1'"
 	mock.ExpectExec(sql18).WillReturnResult(sqlmock.NewResult(1, 1))
 
 	sql19 := "delete from `mo_catalog`.`mo_cdc_task` where 1=1 and account_id = 0 and task_name = 'task1'"
@@ -1314,10 +1314,10 @@ func Test_updateCdcTask_resume(t *testing.T) {
 	sql22 := "update `mo_catalog`.`mo_cdc_task` set state = .* where 1=1 and account_id = 0 and task_name = 'task1'"
 	mock.ExpectExec(sql22).WillReturnResult(sqlmock.NewResult(1, 1))
 
-	sql23 := "delete from `mo_catalog`.`mo_cdc_watermark` where account_id = 0 and task_id = 'taskID-1'"
+	sql23 := "DELETE FROM `mo_catalog`.`mo_cdc_watermark` WHERE account_id = 0 AND task_id = 'taskID-1'"
 	mock.ExpectExec(sql23).WillReturnResult(sqlmock.NewResult(1, 1))
 
-	sql24 := "delete from `mo_catalog`.`mo_cdc_task` where 1=1 and account_id = 0 and task_name = 'task1'"
+	sql24 := "DELETE FROM `mo_catalog`.`mo_cdc_task` WHERE account_id = 0 AND task_name = 'task1'"
 	mock.ExpectExec(sql24).WillReturnResult(sqlmock.NewResult(1, 1))
 
 	genSqlIdx := func(sql string) int {
@@ -1408,7 +1408,7 @@ func Test_updateCdc_cancel(t *testing.T) {
 	sql26 := "delete from `mo_catalog`.`mo_cdc_task` where 1=1 and account_id = 0 and task_name = 'task1'"
 	mock.ExpectExec(sql26).WillReturnResult(sqlmock.NewResult(1, 1))
 
-	sql27 := "delete from `mo_catalog`.`mo_cdc_watermark` where account_id = 0 and task_id = 'taskID-1'"
+	sql27 := "DELETE FROM `mo_catalog`.`mo_cdc_watermark` WHERE account_id = 0 AND task_id = 'taskID-1'"
 	mock.ExpectExec(sql27).WillReturnResult(sqlmock.NewResult(1, 1))
 
 	genSqlIdx := func(sql string) int {
@@ -1495,7 +1495,7 @@ func Test_updateCdc_cancel_all(t *testing.T) {
 	sql29 := "delete from `mo_catalog`.`mo_cdc_task` where 1=1 and account_id = 0"
 	mock.ExpectExec(sql29).WillReturnResult(sqlmock.NewResult(1, 1))
 
-	sql30 := "delete from `mo_catalog`.`mo_cdc_watermark` where account_id = 0 and task_id = 'taskID-1'"
+	sql30 := "DELETE FROM `mo_catalog`.`mo_cdc_watermark` WHERE account_id = 0 AND task_id = 'taskID-1'"
 	mock.ExpectExec(sql30).WillReturnResult(sqlmock.NewResult(1, 1))
 
 	genSqlIdx := func(sql string) int {
@@ -1599,7 +1599,7 @@ func Test_updateCdc_pause(t *testing.T) {
 	sql31 := "delete from `mo_catalog`.`mo_cdc_task` where 1=1 and account_id = 0 and task_name = 'task1'"
 	mock.ExpectExec(sql31).WillReturnResult(sqlmock.NewResult(1, 1))
 
-	sql32 := "delete from `mo_catalog`.`mo_cdc_watermark` where account_id = 0 and task_id = 'taskID-1'"
+	sql32 := "DELETE FROM `mo_catalog`.`mo_cdc_watermark` WHERE account_id = 0 AND task_id = 'taskID-1'"
 	mock.ExpectExec(sql32).WillReturnResult(sqlmock.NewResult(1, 1))
 
 	genSqlIdx := func(sql string) int {
@@ -1692,7 +1692,7 @@ func Test_updateCdc_pause_all(t *testing.T) {
 	sql38 := "delete from `mo_catalog`.`mo_cdc_task` where 1=1 and account_id = 0 and task_name = 'task1'"
 	mock.ExpectExec(sql38).WillReturnResult(sqlmock.NewResult(1, 1))
 
-	sql39 := "delete from `mo_catalog`.`mo_cdc_watermark` where account_id = 0 and task_id = 'taskID-1'"
+	sql39 := "DELETE FROM `mo_catalog`.`mo_cdc_watermark` WHERE account_id = 0 AND task_id = 'taskID-1'"
 	mock.ExpectExec(sql39).WillReturnResult(sqlmock.NewResult(1, 1))
 
 	genSqlIdx := func(sql string) int {
@@ -1791,7 +1791,7 @@ func Test_updateCdc_restart(t *testing.T) {
 	sql42 := "update `mo_catalog`.`mo_cdc_task` set state = .* where 1=1 and account_id = 0 and task_name = 'task1'"
 	mock.ExpectExec(sql42).WillReturnResult(sqlmock.NewResult(1, 1))
 
-	sql44 := "delete from `mo_catalog`.`mo_cdc_watermark` where.*account_id = 0 and task_id = 'taskID-1'"
+	sql44 := "DELETE FROM `mo_catalog`.`mo_cdc_watermark` WHERE account_id = 0 AND task_id = 'taskID-1'"
 	mock.ExpectExec(sql44).WillReturnResult(sqlmock.NewResult(1, 1))
 
 	sql43 := "delete from `mo_catalog`.`mo_cdc_task` where 1=1 and account_id = 0 and task_name = 'task1'"
@@ -1889,10 +1889,10 @@ func Test_updateCdc_resume(t *testing.T) {
 	sql47 := "update `mo_catalog`.`mo_cdc_task` set state = .* where 1=1 and account_id = 0 and task_name = 'task1'"
 	mock.ExpectExec(sql47).WillReturnResult(sqlmock.NewResult(1, 1))
 
-	sql48 := "delete from `mo_catalog`.`mo_cdc_watermark` where.*account_id = 0 and task_id = 'taskID-1'"
+	sql48 := "DELETE FROM `mo_catalog`.`mo_cdc_watermark` WHERE account_id = 0 AND task_id = 'taskID-1'"
 	mock.ExpectExec(sql48).WillReturnResult(sqlmock.NewResult(1, 1))
 
-	sql49 := "delete from `mo_catalog`.`mo_cdc_task` where 1=1 and account_id = 0 and task_name = 'task1'"
+	sql49 := "DELETE FROM `mo_catalog`.`mo_cdc_task` WHERE account_id = 0 AND task_name = 'task1'"
 	mock.ExpectExec(sql49).WillReturnResult(sqlmock.NewResult(1, 1))
 
 	genSqlIdx := func(sql string) int {
@@ -2257,7 +2257,7 @@ func TestCdcTask_Cancel(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	assert.NoError(t, err)
 
-	sqlx := "delete from mo_catalog.mo_cdc_watermark where account_id = .* and task_id = .*"
+	sqlx := "DELETE FROM `mo_catalog`.`mo_cdc_watermark` WHERE account_id = .* AND task_id = .*"
 	mock.ExpectExec(sqlx).WillReturnResult(sqlmock.NewResult(1, 1))
 	tie := &testIE{
 		db: db,
