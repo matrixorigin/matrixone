@@ -134,6 +134,9 @@ const (
 
 type CDCSQLBuilder struct{}
 
+// ------------------------------------------------------------------------------------------------
+// Task SQL
+// ------------------------------------------------------------------------------------------------
 func (b CDCSQLBuilder) InsertTaskSQL(
 	accountId uint64,
 	taskId string,
@@ -203,6 +206,18 @@ func (b CDCSQLBuilder) GetTaskSQL(
 	)
 }
 
+func (b CDCSQLBuilder) ShowCdcTaskSQL(
+	accountId uint64,
+) string {
+	return fmt.Sprintf(
+		CDCShowCdcTaskSqlTemplate,
+		accountId,
+	)
+}
+
+// ------------------------------------------------------------------------------------------------
+// Table SQL
+// ------------------------------------------------------------------------------------------------
 func (b CDCSQLBuilder) GetDbIdAndTableIdSQL(
 	accountId uint64,
 	db string,
@@ -252,6 +267,9 @@ func (b CDCSQLBuilder) GetPkCountSQL(
 	)
 }
 
+// ------------------------------------------------------------------------------------------------
+// Watermark SQL
+// ------------------------------------------------------------------------------------------------
 func (b CDCSQLBuilder) DeleteWatermarkSQL(
 	accountId uint64,
 	taskId string,
