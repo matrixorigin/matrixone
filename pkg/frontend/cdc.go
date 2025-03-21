@@ -46,39 +46,6 @@ import (
 )
 
 const (
-	insertNewCdcTaskFormat = `insert into mo_catalog.mo_cdc_task values(` +
-		`%d,` + //account id
-		`"%s",` + //task id
-		`"%s",` + //task name
-		`"%s",` + //source_uri
-		`"%s",` + //source_password
-		`"%s",` + //sink_uri
-		`"%s",` + //sink_type
-		`"%s",` + //sink_password
-		`"%s",` + //sink_ssl_ca_path
-		`"%s",` + //sink_ssl_cert_path
-		`"%s",` + //sink_ssl_key_path
-		`"%s",` + //tables
-		`"%s",` + //filters
-		`"%s",` + //opfilters
-		`"%s",` + //source_state
-		`"%s",` + //sink_state
-		`"%s",` + //start_ts
-		`"%s",` + //end_ts
-		`"%s",` + //config_file
-		`"%s",` + //task_create_time
-		`"%s",` + //state
-		`%d,` + //checkpoint
-		`"%d",` + //checkpoint_str
-		`"%t",` + //no_full
-		`"%s",` + //incr_config
-		`'%s',` + //additional_config
-		`"",` + //err_msg
-		`"",` + //reserved2
-		`"",` + //reserved3
-		`""` + //reserved4
-		`)`
-
 	getShowCdcTaskFormat = "select task_id, task_name, source_uri, sink_uri, state, err_msg from mo_catalog.mo_cdc_task where account_id = %d"
 
 	getCdcTaskIdFormat = "select task_id from `mo_catalog`.`mo_cdc_task` where 1=1"
@@ -86,8 +53,6 @@ const (
 	deleteCdcMetaFormat = "delete from `mo_catalog`.`mo_cdc_task` where 1=1"
 
 	updateCdcMetaFormat = "update `mo_catalog`.`mo_cdc_task` set state = ? where 1=1"
-
-	getWatermarkFormat = "select db_name, table_name, watermark, err_msg from mo_catalog.mo_cdc_watermark where account_id = %d and task_id = '%s'"
 
 	getDataKeyFormat = "select encrypted_key from mo_catalog.mo_data_key where account_id = %d and key_id = '%s'"
 
@@ -150,10 +115,6 @@ var showCdcOutputColumns = [8]Column{
 			columnType: defines.MYSQL_TYPE_VARCHAR,
 		},
 	},
-}
-
-func getSqlForGetWatermark(accountId uint64, taskId string) string {
-	return fmt.Sprintf(getWatermarkFormat, accountId, taskId)
 }
 
 func getSqlForGetTask(accountId uint64, all bool, taskName string) string {
@@ -1512,7 +1473,7 @@ func getTaskCkp(ctx context.Context, bh BackgroundExec, accountId uint32, taskId
 
 	s = "{\n"
 
-	sql := getSqlForGetWatermark(uint64(accountId), taskId)
+	sql := CDCSQLBuilder.GetWatermarkSQL(uint64(accountId), taskId)
 	bh.ClearExecResultSet()
 	if err = bh.Exec(ctx, sql); err != nil {
 		return
