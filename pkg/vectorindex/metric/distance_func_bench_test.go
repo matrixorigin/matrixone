@@ -17,9 +17,6 @@ package metric
 import (
 	"math/rand"
 	"testing"
-
-	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
-	"gonum.org/v1/gonum/mat"
 )
 
 /*
@@ -31,11 +28,11 @@ func Benchmark_L2Distance(b *testing.B) {
 	dim := 128
 
 	b.Run("L2 Distance", func(b *testing.B) {
-		v1, v2 := randomGonumVectors(b.N, dim), randomGonumVectors(b.N, dim)
+		v1, v2 := randomVectors(b.N, dim), randomVectors(b.N, dim)
 		b.ResetTimer()
 
 		for i := 0; i < b.N; i++ {
-			_ = L2Distance(v1[i], v2[i])
+			_ = L2Distance[float64](v1[i], v2[i])
 		}
 	})
 
@@ -45,18 +42,18 @@ func Benchmark_L2Distance(b *testing.B) {
 
 		for i := 0; i < b.N; i++ {
 			res := make([]float64, dim)
-			_ = moarray.NormalizeL2[float64](v1[i], res)
+			_ = NormalizeL2[float64](v1[i], res)
 		}
 	})
 
 	b.Run("L2 Distance(v1, NormalizeL2)", func(b *testing.B) {
-		v1, v2 := randomGonumVectors(b.N, dim), randomVectors(b.N, dim)
+		v1, v2 := randomVectors(b.N, dim), randomVectors(b.N, dim)
 		b.ResetTimer()
 
 		for i := 0; i < b.N; i++ {
 			res := make([]float64, dim)
-			_ = moarray.NormalizeL2[float64](v2[i], res)
-			_ = L2Distance(v1[i], moarray.ToGonumVector(res))
+			_ = NormalizeL2[float64](v2[i], res)
+			_ = L2Distance[float64](v1[i], res)
 		}
 	})
 
@@ -67,17 +64,6 @@ func randomVectors(size, dim int) [][]float64 {
 	for i := range vectors {
 		for j := 0; j < dim; j++ {
 			vectors[i] = append(vectors[i], rand.Float64())
-		}
-	}
-	return vectors
-}
-
-func randomGonumVectors(size, dim int) []*mat.VecDense {
-	vectors := make([]*mat.VecDense, size)
-	for i := range vectors {
-		vectors[i] = mat.NewVecDense(dim, nil)
-		for j := 0; j < dim; j++ {
-			vectors[i].SetVec(j, rand.Float64())
 		}
 	}
 	return vectors

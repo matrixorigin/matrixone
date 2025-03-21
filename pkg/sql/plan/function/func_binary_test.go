@@ -2606,7 +2606,7 @@ func initL2DistanceArrayTestCase() []tcTemp {
 				NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{10, 20, 30}, {40, 50, 60}}, []bool{false, false}),
 			},
 			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{33.67491648096547, 78.9746794865291},
+				[]float64{33.6749153137207, 78.97467803955078},
 				[]bool{false, false}),
 		},
 		{
@@ -2651,7 +2651,7 @@ func initCosineDistanceArrayTestCase() []tcTemp {
 				NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{10, 20, 30}, {5, 6, 7}}, []bool{false, false}),
 			},
 			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{0, 0.0003542540112345671},
+				[]float64{0, 0.00035416888764172594},
 				[]bool{false, false}),
 		},
 		{

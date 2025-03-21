@@ -3535,21 +3535,21 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableIntType("probe_limit", 1, 1024, false),
 		Default:           int64(5),
 	},
-	"ivf_sample_limit": {
-		Name:              "ivf_sample_limit",
+	"kmeans_train_percent": {
+		Name:              "kmeans_train_percent",
 		Scope:             ScopeBoth,
 		Dynamic:           true,
 		SetVarHintApplies: false,
-		Type:              InitSystemVariableIntType("ivf_sample_limit", 10000, 10000000, false),
-		Default:           int64(0),
+		Type:              InitSystemVariableIntType("kmeans_train_percent", 1, 100, false),
+		Default:           int64(10),
 	},
-	"ivf_max_iteration": {
-		Name:              "ivf_max_iteration",
+	"kmeans_max_iteration": {
+		Name:              "kmeans_max_iteration",
 		Scope:             ScopeBoth,
 		Dynamic:           true,
 		SetVarHintApplies: false,
-		Type:              InitSystemVariableIntType("ivf_max_iteration", 10, 500, false),
-		Default:           int64(500),
+		Type:              InitSystemVariableIntType("kmeans_max_iteration", 10, 500, false),
+		Default:           int64(20),
 	},
 	"disable_agg_statement": {
 		Name:              "disable_agg_statement",

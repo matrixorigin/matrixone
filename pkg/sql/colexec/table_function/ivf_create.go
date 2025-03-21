@@ -59,7 +59,8 @@ type ivfCreateState struct {
 	param        vectorindex.IvfParam
 	tblcfg       vectorindex.IndexTableConfig
 	idxcfg       vectorindex.IndexConfig
-	data         [][]float64
+	data32       [][]float32
+	data64       [][]float64
 	rand         *rand.Rand
 	nsample      uint
 	sample_ratio float64
@@ -69,25 +70,11 @@ type ivfCreateState struct {
 	batch *batch.Batch
 }
 
-func convertToF64(ar []float32) []float64 {
-	newar := make([]float64, len(ar))
-	var v float32
-	var i int
-	for i, v = range ar {
-		newar[i] = float64(v)
-	}
-	return newar
-}
-
-func (u *ivfCreateState) end(tf *TableFunction, proc *process.Process) error {
+func clustering[T types.RealNumbers](u *ivfCreateState, tf *TableFunction, proc *process.Process, data [][]T) error {
 
 	var clusterer kmeans.Clusterer
-	var centers [][]float64
 	var err error
-
-	if !u.inited || len(u.data) == 0 {
-		return nil
-	}
+	var ok bool
 
 	version, err := ivfflat.GetVersion(proc, u.tblcfg)
 	if err != nil {
@@ -97,9 +84,10 @@ func (u *ivfCreateState) end(tf *TableFunction, proc *process.Process) error {
 	nworker := vectorindex.GetConcurrencyForBuild(u.tblcfg.ThreadsBuild)
 
 	// NOTE: We use L2 distance to caculate centroid.  Ivfflat metric just for searching.
-	if clusterer, err = elkans.NewKMeans(
-		u.data, int(u.idxcfg.Ivfflat.Lists),
-		int(u.tblcfg.IvfMaxIteration),
+	var centers [][]T
+	if clusterer, err = elkans.NewKMeans[T](
+		data, int(u.idxcfg.Ivfflat.Lists),
+		int(u.tblcfg.KmeansMaxIteration),
 		defaultKmeansDeltaThreshold,
 		metric.MetricType(u.idxcfg.Ivfflat.Metric),
 		kmeans.InitType(u.idxcfg.Ivfflat.InitType),
@@ -107,15 +95,25 @@ func (u *ivfCreateState) end(tf *TableFunction, proc *process.Process) error {
 		int(nworker)); err != nil {
 		return err
 	}
-	if centers, err = clusterer.Cluster(); err != nil {
+	anycenters, err := clusterer.Cluster()
+	if err != nil {
 		return err
+	}
+
+	centers, ok = anycenters.([][]T)
+	if !ok {
+		return moerr.NewInternalError(proc.Ctx, "centers is not [][]float64")
 	}
 
 	// insert into centroid table
 	values := make([]string, 0, len(centers))
 	for i, c := range centers {
-		s := types.ArrayToString[float64](c)
+		s := types.ArrayToString[T](c)
 		values = append(values, fmt.Sprintf("(%d, %d, '%s')", version, i, s))
+	}
+
+	if len(values) == 0 {
+		return moerr.NewInternalError(proc.Ctx, "output centroids is empty")
 	}
 
 	sql := fmt.Sprintf("INSERT INTO `%s`.`%s` (`%s`, `%s`, `%s`) VALUES %s", u.tblcfg.DbName, u.tblcfg.IndexTable,
@@ -136,6 +134,19 @@ func (u *ivfCreateState) end(tf *TableFunction, proc *process.Process) error {
 	}
 
 	return nil
+}
+
+func (u *ivfCreateState) end(tf *TableFunction, proc *process.Process) error {
+
+	if !u.inited || (len(u.data32) == 0 && len(u.data64) == 0) {
+		return nil
+	}
+
+	if u.data32 != nil {
+		return clustering[float32](u, tf, proc, u.data32)
+	} else {
+		return clustering[float64](u, tf, proc, u.data64)
+	}
 }
 
 func (u *ivfCreateState) reset(tf *TableFunction, proc *process.Process) {
@@ -245,27 +256,36 @@ func (u *ivfCreateState) start(tf *TableFunction, proc *process.Process, nthRow 
 		u.idxcfg.Type = "ivfflat"
 
 		u.nsample = u.idxcfg.Ivfflat.Lists * 50
+		train_percent := float64(u.tblcfg.KmeansTrainPercent) / float64(100)
+		if u.tblcfg.DataSize > 0 {
+			ns := uint(train_percent * float64(u.tblcfg.DataSize))
+			if u.nsample > ns {
+				u.nsample = ns
+			}
+		}
 		min_nsample := uint(10000)
 		if u.nsample < min_nsample {
 			u.nsample = min_nsample
 		}
-		if u.tblcfg.SampleLimit > 0 && int64(u.nsample) > u.tblcfg.SampleLimit {
-			u.nsample = uint(u.tblcfg.SampleLimit)
+
+		if f32aVec.GetType().Oid == types.T_array_float32 {
+			u.data32 = make([][]float32, 0, u.nsample)
+		} else {
+			u.data64 = make([][]float64, 0, u.nsample)
 		}
 
-		u.data = make([][]float64, 0, u.nsample)
-		u.sample_ratio = float64(1)
+		u.sample_ratio = train_percent
 		if u.tblcfg.DataSize > 0 {
 			u.sample_ratio = float64(u.nsample) / float64(u.tblcfg.DataSize)
-			if u.sample_ratio < 0.05 {
-				u.sample_ratio = 0.05
+			if u.sample_ratio < train_percent {
+				u.sample_ratio = train_percent
 			}
 		}
 
 		u.rand = rand.New(rand.NewSource(uint64(time.Now().UnixMicro())))
 		u.batch = tf.createResultBatch()
 		u.inited = true
-		//os.Stderr.WriteString(fmt.Sprintf("kmean iteration %d, nsample %d\n", u.tblcfg.IvfMaxIteration, u.nsample))
+		//os.Stderr.WriteString(fmt.Sprintf("nsample %d, train_percent %f, iter %d\n", u.nsample, train_percent, u.tblcfg.KmeansMaxIteration))
 	}
 
 	// reset slice
@@ -274,7 +294,13 @@ func (u *ivfCreateState) start(tf *TableFunction, proc *process.Process, nthRow 
 	// cleanup the batch
 	u.batch.CleanOnlyData()
 
-	if uint(len(u.data)) >= u.nsample {
+	datasz := 0
+	if u.data32 != nil {
+		datasz = len(u.data32)
+	} else {
+		datasz = len(u.data64)
+	}
+	if uint(datasz) >= u.nsample {
 		// enough sample data
 		return nil
 	}
@@ -289,19 +315,19 @@ func (u *ivfCreateState) start(tf *TableFunction, proc *process.Process, nthRow 
 		return nil
 	}
 
-	var f64a []float64
 	if fpaVec.GetType().Oid == types.T_array_float32 {
 		f32a := types.BytesToArray[float32](fpaVec.GetBytesAt(nthRow))
-		f64a = convertToF64(f32a)
+		if uint(len(f32a)) != u.idxcfg.Ivfflat.Dimensions {
+			return moerr.NewInternalError(proc.Ctx, "vector dimension mismatch")
+		}
+		u.data32 = append(u.data32, append(make([]float32, 0, len(f32a)), f32a...))
 	} else {
-		f64a = types.BytesToArray[float64](fpaVec.GetBytesAt(nthRow))
+		f64a := types.BytesToArray[float64](fpaVec.GetBytesAt(nthRow))
+		if uint(len(f64a)) != u.idxcfg.Ivfflat.Dimensions {
+			return moerr.NewInternalError(proc.Ctx, "vector dimension mismatch")
+		}
+		u.data64 = append(u.data64, append(make([]float64, 0, len(f64a)), f64a...))
 	}
-
-	if uint(len(f64a)) != u.idxcfg.Ivfflat.Dimensions {
-		return moerr.NewInternalError(proc.Ctx, "vector dimension mismatch")
-	}
-
-	u.data = append(u.data, append(make([]float64, 0, len(f64a)), f64a...))
 
 	return nil
 }
