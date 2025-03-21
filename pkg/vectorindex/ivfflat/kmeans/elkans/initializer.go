@@ -150,7 +150,7 @@ func (kpp *KMeansPlusPlus[T]) InitCentroids(_vectors any, k int) (_centroids any
 		// 3. choose the next random center, using a weighted probability distribution
 		// where it is chosen with probability proportional to D(x)^2
 		// Ref: https://en.wikipedia.org/wiki/K-means%2B%2B#Improved_initialization_algorithm
-		target := T(kpp.rand.Float64()) * totalDistToExistingCenters
+		target := T(kpp.rand.Float32()) * totalDistToExistingCenters
 		for idx, distance := range distances {
 			target -= distance
 			if target <= 0 {

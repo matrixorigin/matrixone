@@ -447,7 +447,7 @@ func (km *ElkanClusterer[T]) recalculateCentroids() [][]T {
 			//// if the cluster is empty, reinitialize it to a random vector, since you can't find the mean of an empty set
 			randVector := make([]T, len(km.vectorList[0]))
 			for l := range randVector {
-				randVector[l] = T(km.rand.Float64())
+				randVector[l] = T(km.rand.Float32())
 			}
 			newCentroids[c] = randVector
 
