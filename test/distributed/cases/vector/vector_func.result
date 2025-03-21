@@ -131,9 +131,9 @@ null    null
 select inner_product(vecf32_3,"[1,1,1]") from vtab32;
 inner_product(vecf32_3, [1,1,1])
 null
--1.9714267253875732
--33.896610260009766
--837.328857421875
+-1.9714266657829285
+-33.89660960435867
+-837.3288311958313
 select inner_product(vecf32_3,"[0,0,-1]") from vtab32;
 inner_product(vecf32_3, [0,0,-1])
 null
@@ -143,9 +143,9 @@ null
 select inner_product(vecf32_3,vecf32_3), inner_product(vecf32_5,vecf32_5) from vtab32;
 inner_product(vecf32_3, vecf32_3)    inner_product(vecf32_5, vecf32_5)
 null    null
--1.3494319915771484    null
--937.032958984375    -2.1506858E7
--675766.875    -7.6586264E7
+-1.3494319015309593    null
+-937.0329415976587    -2.1506857792768624E7
+-675766.8704508307    -7.658626165813679E7
 select inner_product(vecf64_3,vecf64_3), inner_product(vecf64_5,vecf64_5) from vtab64;
 inner_product(vecf64_3, vecf64_3)    inner_product(vecf64_5, vecf64_5)
 null    null
@@ -154,7 +154,7 @@ null    null
 -0.9327473068927187    -115390.02486670813
 select inner_product("[0.45052445,2.19845265,9.579752]","[1,1,1]");
 inner_product([0.45052445,2.19845265,9.579752], [1,1,1])
--12.228729248046875
+-12.228729128837585
 select inner_product(1,1);
 invalid argument function inner_product, bad value [BIGINT BIGINT]
 select inner_product(NULL,NULL);
@@ -177,21 +177,21 @@ id    vecf32_3    vecf32_5
 select distinct(inner_product(vecf32_3,vecf32_3)) from vtab32;
 inner_product(vecf32_3, vecf32_3)
 null
--1.3494319915771484
--937.032958984375
--675766.875
+-1.3494319015309593
+-937.0329415976587
+-675766.8704508307
 select sum(inner_product(vecf32_3,vecf32_3)) from vtab32;
 sum(inner_product(vecf32_3, vecf32_3))
--676705.257390976
+-676705.2528243299
 select min(inner_product(vecf32_5,vecf32_5)) from vtab32;
 min(inner_product(vecf32_5, vecf32_5))
--7.6586264E7
+-7.658626165813679E7
 select max(inner_product(vecf32_3,vecf32_3)) from vtab32;
 max(inner_product(vecf32_3, vecf32_3))
--1.3494319915771484
+-1.3494319015309593
 select avg(inner_product(vecf32_5,vecf32_5)) from vtab32;
 avg(inner_product(vecf32_5, vecf32_5))
--4.9046561E7
+-4.9046559725452706E7
 select count(inner_product(vecf32_5,vecf32_5)) from vtab32;
 count(inner_product(vecf32_5, vecf32_5))
 2
@@ -211,14 +211,14 @@ select inner_product(vecf32_3,vecf32_3) - inner_product(vecf32_5,vecf32_5) from 
 inner_product(vecf32_3, vecf32_3) - inner_product(vecf32_5, vecf32_5)
 null
 null
-2.1505920967041016E7
-7.5910497125E7
+2.1505920759827025E7
+7.591049478768596E7
 select inner_product(vecf32_3,vecf32_3) * inner_product(vecf32_5,vecf32_5) from vtab32;
 inner_product(vecf32_3, vecf32_3) * inner_product(vecf32_5, vecf32_5)
 null
 null
-2.0152634790196777E10
-5.1754460291205E13
+2.0152634222080513E10
+5.175445836024754E13
 select inner_product(vecf64_3,vecf64_3) + inner_product(vecf64_5,vecf64_5) from vtab64;
 inner_product(vecf64_3, vecf64_3) + inner_product(vecf64_5, vecf64_5)
 null
@@ -234,9 +234,9 @@ null
 select * from (select inner_product(vecf32_3,vecf32_3),inner_product(vecf32_5,vecf32_5) from vtab32);
 inner_product(vecf32_3, vecf32_3)    inner_product(vecf32_5, vecf32_5)
 null    null
--1.3494319915771484    null
--937.032958984375    -2.1506858E7
--675766.875    -7.6586264E7
+-1.3494319015309593    null
+-937.0329415976587    -2.1506857792768624E7
+-675766.8704508307    -7.658626165813679E7
 select inner_product(vecf64_3,vecf64_3), inner_product(vecf64_5,vecf64_5) from (select * from vtab64);
 inner_product(vecf64_3, vecf64_3)    inner_product(vecf64_5, vecf64_5)
 null    null
@@ -246,9 +246,9 @@ null    null
 WITH qn AS (select inner_product(vecf32_3,vecf32_3),inner_product(vecf32_5,vecf32_5) from vtab32) SELECT * FROM qn;
 inner_product(vtab32.vecf32_3, vtab32.vecf32_3)    inner_product(vtab32.vecf32_5, vtab32.vecf32_5)
 null    null
--1.3494319915771484    null
--937.032958984375    -2.1506858E7
--675766.875    -7.6586264E7
+-1.3494319015309593    null
+-937.0329415976587    -2.1506857792768624E7
+-675766.8704508307    -7.658626165813679E7
 select l1_norm(vecf32_3), l1_norm(vecf32_5) from vtab32;
 l1_norm(vecf32_3)    l1_norm(vecf32_5)
 null    null

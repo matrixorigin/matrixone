@@ -152,7 +152,19 @@ func InnerProduct[T types.RealNumbers](v1, v2 []T) (float64, error) {
 		return 0, moerr.NewArrayInvalidOpNoCtx(len(v1), len(v2))
 	}
 
-	return float64(metric.InnerProduct[T](v1, v2)), nil
+	switch any(v1).(type) {
+	case []float32:
+		_v1 := blas32.Vector{N: len(v1), Inc: 1, Data: any(v1).([]float32)}
+		_v2 := blas32.Vector{N: len(v2), Inc: 1, Data: any(v2).([]float32)}
+		return -blas32.DDot(_v1, _v2), nil
+	case []float64:
+		_v1 := blas64.Vector{N: len(v1), Inc: 1, Data: any(v1).([]float64)}
+		_v2 := blas64.Vector{N: len(v2), Inc: 1, Data: any(v2).([]float64)}
+		return -blas64.Dot(_v1, _v2), nil
+	default:
+		panic("InnerProduct type not supported")
+
+	}
 }
 
 func L2Distance[T types.RealNumbers](v1, v2 []T) (float64, error) {

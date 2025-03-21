@@ -256,17 +256,16 @@ func (u *ivfCreateState) start(tf *TableFunction, proc *process.Process, nthRow 
 		u.idxcfg.Type = "ivfflat"
 
 		u.nsample = u.idxcfg.Ivfflat.Lists * 50
-		min_nsample := uint(10000)
-		if u.nsample < min_nsample {
-			u.nsample = min_nsample
-		}
-
 		train_percent := float64(u.tblcfg.KmeansTrainPercent) / float64(100)
 		if u.tblcfg.DataSize > 0 {
 			ns := uint(train_percent * float64(u.tblcfg.DataSize))
 			if u.nsample > ns {
 				u.nsample = ns
 			}
+		}
+		min_nsample := uint(10000)
+		if u.nsample < min_nsample {
+			u.nsample = min_nsample
 		}
 
 		if f32aVec.GetType().Oid == types.T_array_float32 {
