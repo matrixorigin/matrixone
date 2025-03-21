@@ -46,8 +46,6 @@ import (
 )
 
 const (
-	getShowCdcTaskFormat = "select task_id, task_name, source_uri, sink_uri, state, err_msg from mo_catalog.mo_cdc_task where account_id = %d"
-
 	getCdcTaskIdFormat = "select task_id from `mo_catalog`.`mo_cdc_task` where 1=1"
 
 	deleteCdcMetaFormat = "delete from `mo_catalog`.`mo_cdc_task` where 1=1"
@@ -115,14 +113,6 @@ var showCdcOutputColumns = [8]Column{
 			columnType: defines.MYSQL_TYPE_VARCHAR,
 		},
 	},
-}
-
-func getSqlForGetTask(accountId uint64, all bool, taskName string) string {
-	s := fmt.Sprintf(getShowCdcTaskFormat, accountId)
-	if !all {
-		s += fmt.Sprintf(" and task_name = '%s'", taskName)
-	}
-	return s
 }
 
 func handleCreateCdc(ses *Session, execCtx *ExecCtx, create *tree.CreateCDC) error {
@@ -1390,7 +1380,7 @@ func handleShowCdc(ses *Session, execCtx *ExecCtx, st *tree.ShowCDC) (err error)
 	timestamp := txnOp.SnapshotTS().ToStdTime().In(time.Local).String()
 
 	// get from task table
-	sql := getSqlForGetTask(uint64(ses.GetTenantInfo().GetTenantID()), st.Option.All, string(st.Option.TaskName))
+	sql := CDCSQLBuilder.ShowCdcTaskSQL(uint64(ses.GetTenantInfo().GetTenantID()), st.Option.All, string(st.Option.TaskName))
 
 	bh.ClearExecResultSet()
 	if err = bh.Exec(ctx, sql); err != nil {
