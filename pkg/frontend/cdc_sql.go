@@ -98,11 +98,15 @@ const (
 		"WHERE " +
 		"1=1 AND account_id = %d"
 
+	CDCUpdateTaskStateAndErrMsgSqlTemplate = "UPDATE " +
+		"`mo_catalog`.`mo_cdc_task` " +
+		"SET state = '%s', err_msg = '%s' " +
+		"WHERE " +
+		"1=1 AND account_id = %d AND task_id = '%s'"
+
 	CDCDeleteWatermarkSqlTemplate = "DELETE FROM `mo_catalog`.`mo_cdc_watermark` WHERE account_id = %d AND task_id = '%s'"
 
 	CDCGetWatermarkSqlTemplate = "SELECT db_name, table_name, watermark, err_msg FROM mo_catalog.mo_cdc_watermark WHERE account_id = %d and task_id = '%s'"
-
-	CDCUpdateErrMsgSqlTemplate = "UPDATE `mo_catalog`.mo_cdc_task SET state = ?, err_msg = ? WHERE account_id = %d and task_id = '%s'"
 
 	CDCGetDataKeySqlTemplate = "SELECT encrypted_key FROM mo_catalog.mo_data_key WHERE account_id = %d and key_id = '%s'"
 )
@@ -231,6 +235,21 @@ func (b cdcSQLBuilder) UpdateTaskStateSQL(
 		)
 	}
 	return sql
+}
+
+func (b cdcSQLBuilder) UpdateTaskStateAndErrMsgSQL(
+	accountId uint64,
+	taskId string,
+	state string,
+	errMsg string,
+) string {
+	return fmt.Sprintf(
+		CDCUpdateTaskStateAndErrMsgSqlTemplate,
+		state,
+		errMsg,
+		accountId,
+		taskId,
+	)
 }
 
 func (b cdcSQLBuilder) GetTaskIdSQL(
