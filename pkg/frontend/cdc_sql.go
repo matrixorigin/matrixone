@@ -21,6 +21,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 )
 
+var CDCSQLBuilder = cdcSQLBuilder{}
+
 const (
 	CDCInsertTaskSqlTemplate = `INSERT INTO mo_catalog.mo_cdc_task VALUES(` +
 		`%d,` + //account id
@@ -132,12 +134,12 @@ const (
 		`att_constraint_type = '%s'`
 )
 
-type CDCSQLBuilder struct{}
+type cdcSQLBuilder struct{}
 
 // ------------------------------------------------------------------------------------------------
 // Task SQL
 // ------------------------------------------------------------------------------------------------
-func (b CDCSQLBuilder) InsertTaskSQL(
+func (b cdcSQLBuilder) InsertTaskSQL(
 	accountId uint64,
 	taskId string,
 	taskName string,
@@ -195,7 +197,7 @@ func (b CDCSQLBuilder) InsertTaskSQL(
 	)
 }
 
-func (b CDCSQLBuilder) GetTaskSQL(
+func (b cdcSQLBuilder) GetTaskSQL(
 	accountId uint64,
 	taskId string,
 ) string {
@@ -206,7 +208,7 @@ func (b CDCSQLBuilder) GetTaskSQL(
 	)
 }
 
-func (b CDCSQLBuilder) ShowCdcTaskSQL(
+func (b cdcSQLBuilder) ShowCdcTaskSQL(
 	accountId uint64,
 ) string {
 	return fmt.Sprintf(
@@ -218,7 +220,7 @@ func (b CDCSQLBuilder) ShowCdcTaskSQL(
 // ------------------------------------------------------------------------------------------------
 // Table SQL
 // ------------------------------------------------------------------------------------------------
-func (b CDCSQLBuilder) GetDbIdAndTableIdSQL(
+func (b cdcSQLBuilder) GetDbIdAndTableIdSQL(
 	accountId uint64,
 	db string,
 	table string,
@@ -231,7 +233,7 @@ func (b CDCSQLBuilder) GetDbIdAndTableIdSQL(
 	)
 }
 
-func (b CDCSQLBuilder) GetTableSQL(
+func (b cdcSQLBuilder) GetTableSQL(
 	accountId uint64,
 	db string,
 	table string,
@@ -244,7 +246,7 @@ func (b CDCSQLBuilder) GetTableSQL(
 	)
 }
 
-func (b CDCSQLBuilder) GetAccountIdSQL(
+func (b cdcSQLBuilder) GetAccountIdSQL(
 	account string,
 ) string {
 	return fmt.Sprintf(
@@ -253,7 +255,7 @@ func (b CDCSQLBuilder) GetAccountIdSQL(
 	)
 }
 
-func (b CDCSQLBuilder) GetPkCountSQL(
+func (b cdcSQLBuilder) GetPkCountSQL(
 	accountId uint64,
 	db string,
 	table string,
@@ -270,7 +272,7 @@ func (b CDCSQLBuilder) GetPkCountSQL(
 // ------------------------------------------------------------------------------------------------
 // Watermark SQL
 // ------------------------------------------------------------------------------------------------
-func (b CDCSQLBuilder) DeleteWatermarkSQL(
+func (b cdcSQLBuilder) DeleteWatermarkSQL(
 	accountId uint64,
 	taskId string,
 ) string {
@@ -281,7 +283,7 @@ func (b CDCSQLBuilder) DeleteWatermarkSQL(
 	)
 }
 
-func (b CDCSQLBuilder) GetWatermarkSQL(
+func (b cdcSQLBuilder) GetWatermarkSQL(
 	accountId uint64,
 	taskId string,
 ) string {
