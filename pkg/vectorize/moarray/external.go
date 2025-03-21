@@ -353,6 +353,13 @@ func ScalarOp[T types.RealNumbers](v []T, operation string, scalar float64) ([]T
 	default:
 		return nil, moerr.NewInternalErrorNoCtx("scale_vector: invalid operation")
 	}
+
+	// check overflow
+	for i := range ret {
+		if math.IsInf(float64(ret[i]), 0) {
+			return nil, moerr.NewInternalErrorNoCtx("vector contains infinity values")
+		}
+	}
 	return ret, nil
 }
 
