@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -226,10 +227,6 @@ func (deletion *Deletion) SplitBatch(proc *process.Process, srcBat *batch.Batch,
 func (ctr *container) flush(proc *process.Process, analyzer process.Analyzer) (uint32, error) {
 	resSize := uint32(0)
 	for pidx, blockId_rowIdBatch := range ctr.partitionId_blockId_rowIdBatch {
-		s3writer, err := colexec.NewS3TombstoneWriter()
-		if err != nil {
-			return 0, err
-		}
 		blkids := make([]types.Blockid, 0, len(blockId_rowIdBatch))
 		for blkid := range blockId_rowIdBatch {
 			//Don't flush rowids belong to uncommitted cn block and raw data batch in txn's workspace.
@@ -238,39 +235,66 @@ func (ctr *container) flush(proc *process.Process, analyzer process.Analyzer) (u
 			}
 			blkids = append(blkids, blkid)
 		}
+
+		var (
+			err       error
+			statsList []objectio.ObjectStats
+			s3writer  *colexec.CNS3Writer
+		)
+
+		defer func() {
+			if s3writer != nil {
+				s3writer.Close(proc.GetMPool())
+			}
+		}()
+
 		slices.SortFunc(blkids, func(a, b types.Blockid) int {
 			return a.Compare(&b)
 		})
 		for _, blkid := range blkids {
 			bat := blockId_rowIdBatch[blkid]
 
-			s3writer.StashBatch(proc, bat)
+			if s3writer == nil {
+				pkType := *bat.Vecs[1].GetType()
+				s3writer = colexec.NewCNS3TombstoneWriter(proc.Mp(), proc.GetFileService(), pkType)
+			}
+
+			if err = s3writer.Write(proc.Ctx, proc.Mp(), bat); err != nil {
+				return 0, err
+			}
+
 			resSize += uint32(bat.Size())
 			bat.CleanOnlyData()
 			ctr.pool.put(bat)
 			delete(blockId_rowIdBatch, blkid)
 		}
 
+		if s3writer == nil {
+			continue
+		}
+
 		crs := analyzer.GetOpCounterSet()
 		newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
-		_, stats, err := s3writer.SortAndSync(newCtx, proc)
-		if err != nil {
+		if statsList, err = s3writer.Sync(newCtx, proc.Mp()); err != nil {
 			return 0, err
 		}
+
 		analyzer.AddS3RequestCount(crs)
 		analyzer.AddFileServiceCacheInfo(crs)
 		analyzer.AddDiskIO(crs)
 
-		bat := batch.New([]string{catalog.ObjectMeta_ObjectStats})
-		bat.SetVector(0, vector.NewVec(types.T_text.ToType()))
-		if err = vector.AppendBytes(
-			bat.GetVector(0), stats.Marshal(), false, proc.GetMPool()); err != nil {
-			return 0, err
-		}
+		for _, stats := range statsList {
+			bat := batch.New([]string{catalog.ObjectMeta_ObjectStats})
+			bat.SetVector(0, vector.NewVec(types.T_text.ToType()))
+			if err = vector.AppendBytes(
+				bat.GetVector(0), stats.Marshal(), false, proc.GetMPool()); err != nil {
+				return 0, err
+			}
 
-		bat.SetRowCount(bat.Vecs[0].Length())
-		ctr.partitionId_tombstoneObjectStatsBats[pidx] =
-			append(ctr.partitionId_tombstoneObjectStatsBats[pidx], bat)
+			bat.SetRowCount(bat.Vecs[0].Length())
+			ctr.partitionId_tombstoneObjectStatsBats[pidx] =
+				append(ctr.partitionId_tombstoneObjectStatsBats[pidx], bat)
+		}
 	}
 	return resSize, nil
 }

@@ -254,7 +254,7 @@ func getTestUniqueIndexTable(uniqueTblName string) (*plan.ObjectRef, *plan.Table
 			{ColId: 0, Name: catalog.IndexTableIndexColName, Typ: varcharTyp, NotNull: true, Primary: true, Default: &pbPlan.Default{
 				NullAbility: false,
 			}},
-			{ColId: 1, Name: catalog.IndexTablePrimaryColName, Typ: varcharTyp, NotNull: true, Default: &pbPlan.Default{
+			{ColId: 1, Name: catalog.IndexTablePrimaryColName, Typ: i64typ, NotNull: true, Default: &pbPlan.Default{
 				NullAbility: false,
 			}},
 			{ColId: 2, Name: catalog.Row_ID, Typ: rowIdTyp},
@@ -286,7 +286,7 @@ func getTestSecondaryIndexTable(secondaryIdxTblName string) (*plan.ObjectRef, *p
 			{ColId: 0, Name: catalog.IndexTableIndexColName, Typ: varcharTyp, NotNull: true, Primary: true, Default: &pbPlan.Default{
 				NullAbility: false,
 			}},
-			{ColId: 1, Name: catalog.IndexTablePrimaryColName, Typ: varcharTyp, NotNull: true},
+			{ColId: 1, Name: catalog.IndexTablePrimaryColName, Typ: i64typ, NotNull: true},
 			{ColId: 2, Name: catalog.Row_ID, Typ: rowIdTyp},
 		},
 		TableType: catalog.SystemOrdinaryRel,

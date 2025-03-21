@@ -66,7 +66,7 @@ type cnMergeTask struct {
 	fs fileservice.FileService
 
 	blkCnts  []int
-	blkIters []*StatsBlkIter
+	blkIters []*objectio.StatsBlkIter
 
 	targetObjSize uint32
 
@@ -111,7 +111,7 @@ func newCNMergeTask(
 	fs := proc.Base.FileService
 
 	blkCnts := make([]int, len(targets))
-	blkIters := make([]*StatsBlkIter, len(targets))
+	blkIters := make([]*objectio.StatsBlkIter, len(targets))
 	for i, objStats := range targets {
 		blkCnts[i] = int(objStats.BlkCnt())
 
@@ -121,7 +121,7 @@ func newCNMergeTask(
 			return nil, err
 		}
 
-		blkIters[i] = NewStatsBlkIter(&objStats, meta.MustDataMeta())
+		blkIters[i] = objectio.NewStatsBlkIter(&objStats, meta.MustDataMeta())
 	}
 	return &cnMergeTask{
 		taskId:        gTaskID.Add(1),
