@@ -87,7 +87,7 @@ func clustering[T types.RealNumbers](u *ivfCreateState, tf *TableFunction, proc 
 	var centers [][]T
 	if clusterer, err = elkans.NewKMeans[T](
 		data, int(u.idxcfg.Ivfflat.Lists),
-		int(u.tblcfg.IvfMaxIteration),
+		int(u.tblcfg.KmeansMaxIteration),
 		defaultKmeansDeltaThreshold,
 		metric.MetricType(u.idxcfg.Ivfflat.Metric),
 		kmeans.InitType(u.idxcfg.Ivfflat.InitType),
@@ -260,8 +260,13 @@ func (u *ivfCreateState) start(tf *TableFunction, proc *process.Process, nthRow 
 		if u.nsample < min_nsample {
 			u.nsample = min_nsample
 		}
-		if u.tblcfg.SampleLimit > 0 && int64(u.nsample) > u.tblcfg.SampleLimit {
-			u.nsample = uint(u.tblcfg.SampleLimit)
+
+		train_percent := float64(u.tblcfg.KmeansTrainPercent) / float64(100)
+		if u.tblcfg.DataSize > 0 {
+			ns := uint(train_percent * float64(u.tblcfg.DataSize))
+			if u.nsample > ns {
+				u.nsample = ns
+			}
 		}
 
 		if f32aVec.GetType().Oid == types.T_array_float32 {
@@ -270,18 +275,18 @@ func (u *ivfCreateState) start(tf *TableFunction, proc *process.Process, nthRow 
 			u.data64 = make([][]float64, 0, u.nsample)
 		}
 
-		u.sample_ratio = float64(1)
+		u.sample_ratio = train_percent
 		if u.tblcfg.DataSize > 0 {
 			u.sample_ratio = float64(u.nsample) / float64(u.tblcfg.DataSize)
-			if u.sample_ratio < 0.05 {
-				u.sample_ratio = 0.05
+			if u.sample_ratio < train_percent {
+				u.sample_ratio = train_percent
 			}
 		}
 
 		u.rand = rand.New(rand.NewSource(uint64(time.Now().UnixMicro())))
 		u.batch = tf.createResultBatch()
 		u.inited = true
-		//os.Stderr.WriteString(fmt.Sprintf("kmean iteration %d, nsample %d\n", u.tblcfg.IvfMaxIteration, u.nsample))
+		//os.Stderr.WriteString(fmt.Sprintf("nsample %d, train_percent %f, iter %d\n", u.nsample, train_percent, u.tblcfg.KmeansMaxIteration))
 	}
 
 	// reset slice
