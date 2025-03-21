@@ -1994,7 +1994,7 @@ func Test_getTaskCkp(t *testing.T) {
 	bh := &backgroundExecTest{}
 	bh.init()
 
-	sql := getSqlForGetWatermark(sysAccountID, "taskID-1")
+	sql := CDCSQLBuilder.GetWatermarkSQL(sysAccountID, "taskID-1")
 	mrs := newMrsForGetWatermark([][]interface{}{
 		{"db1", "tb1", "0-0", ""},
 	})
@@ -2112,7 +2112,7 @@ func Test_handleShowCdc(t *testing.T) {
 	})
 	bh.sql2result[sql] = mrs
 
-	sql = getSqlForGetWatermark(sysAccountID, "taskID-1")
+	sql = CDCSQLBuilder.GetWatermarkSQL(sysAccountID, "taskID-1")
 	mrs = newMrsForGetWatermark([][]interface{}{
 		{"db1", "tb1", "0-0", ""},
 	})
