@@ -444,10 +444,8 @@ func handleDdlPlanAnalyze(runC *Compile, stats *statistic.StatsInfo) {
 }
 
 func (c *Compile) handleQueryPlanAnalyze(runC *Compile, queryResult *util2.RunResult, stats *statistic.StatsInfo, isExplainPhy bool, option *ExplainOption) {
-	if c.anal.phyPlan == nil {
+	if c.anal.phyPlan == nil || !c.UpdatePreparePhyPlan(runC) {
 		c.GenPhyPlan(runC)
-	} else {
-		c.UpdatePreparePhyPlan(runC)
 	}
 
 	c.fillPlanNodeAnalyzeInfo(stats)
