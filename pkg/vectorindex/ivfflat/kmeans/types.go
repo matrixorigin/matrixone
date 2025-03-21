@@ -18,7 +18,7 @@ const DefaultRandSeed = 1
 
 type Clusterer interface {
 	InitCentroids() error
-	Cluster() ([][]float64, error)
+	Cluster() (any, error)
 	SSE() float64
 }
 

@@ -15,17 +15,15 @@
 package metric
 
 import (
-	"fmt"
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"gonum.org/v1/gonum/blas/blas32"
 	"gonum.org/v1/gonum/blas/blas64"
-	"gonum.org/v1/gonum/mat"
 )
 
-func L2DistanceBlas[T types.RealNumbers](v1, v2 []T) float64 {
+func L2Distance[T types.RealNumbers](v1, v2 []T) T {
 	switch any(v1).(type) {
 	case []float32:
 		_v1 := any(v1).([]float32)
@@ -40,7 +38,7 @@ func L2DistanceBlas[T types.RealNumbers](v1, v2 []T) float64 {
 		for i := range _v1 {
 			diff.Data[i] = _v1[i] - _v2[i]
 		}
-		return float64(blas32.Nrm2(diff))
+		return T(blas32.Nrm2(diff))
 
 	case []float64:
 		_v1 := any(v1).([]float64)
@@ -55,83 +53,106 @@ func L2DistanceBlas[T types.RealNumbers](v1, v2 []T) float64 {
 		for i := range _v1 {
 			diff.Data[i] = _v1[i] - _v2[i]
 		}
-		return blas64.Nrm2(diff)
+		return T(blas64.Nrm2(diff))
 	default:
-		fmt.Printf("type. %T\n", v1)
-		panic("type mismatch")
+		panic("L2Distance type not supported")
 	}
-
-	return float64(0)
 
 }
 
-func L2DistanceSqBlas[T types.RealNumbers](v1, v2 []T) float64 {
-	var sumOfSquares float64
+func L2DistanceSq[T types.RealNumbers](v1, v2 []T) T {
+	var sumOfSquares T
+	for i := range v1 {
+		diff := v1[i] - v2[i]
+		sumOfSquares += diff * diff
+	}
+	return sumOfSquares
+
+}
+
+func L1Distance[T types.RealNumbers](v1, v2 []T) T {
 	switch any(v1).(type) {
 	case []float32:
 		_v1 := any(v1).([]float32)
 		_v2 := any(v2).([]float32)
 
-		for i := range _v1 {
-			diff := float64(_v1[i] - _v2[i])
-			sumOfSquares += diff * diff
+		diff := blas32.Vector{
+			N:    len(_v1),
+			Inc:  1,
+			Data: make([]float32, len(_v1)),
 		}
-		return sumOfSquares
+
+		for i := range _v1 {
+			diff.Data[i] = _v1[i] - _v2[i]
+		}
+
+		return T(blas32.Asum(diff))
 
 	case []float64:
 		_v1 := any(v1).([]float64)
 		_v2 := any(v2).([]float64)
 
-		for i := range _v1 {
-			diff := float64(_v1[i] - _v2[i])
-			sumOfSquares += diff * diff
+		diff := blas64.Vector{
+			N:    len(_v1),
+			Inc:  1,
+			Data: make([]float64, len(_v1)),
 		}
-		return sumOfSquares
+
+		for i := range _v1 {
+			diff.Data[i] = _v1[i] - _v2[i]
+		}
+		return T(blas64.Asum(diff))
+	default:
+		panic("L1Distance type not supported")
 	}
-
-	return float64(0)
-
 }
 
-func InnerProductBlas[T types.RealNumbers](v1, v2 []T) float64 {
+func InnerProduct[T types.RealNumbers](v1, v2 []T) T {
 	switch any(v1).(type) {
 	case []float32:
 		_v1 := blas32.Vector{N: len(v1), Inc: 1, Data: any(v1).([]float32)}
 		_v2 := blas32.Vector{N: len(v2), Inc: 1, Data: any(v2).([]float32)}
 
-		return float64(-blas32.Dot(_v1, _v2))
+		return T(-blas32.Dot(_v1, _v2))
 
 	case []float64:
 		_v1 := blas64.Vector{N: len(v1), Inc: 1, Data: any(v1).([]float64)}
 		_v2 := blas64.Vector{N: len(v2), Inc: 1, Data: any(v2).([]float64)}
-		return -blas64.Dot(_v1, _v2)
+		return T(-blas64.Dot(_v1, _v2))
+	default:
+		panic("InnerProduct type not supported")
 	}
-
-	return float64(0)
-
 }
 
-func CosineDistanceBlas[T types.RealNumbers](v1, v2 []T) float64 {
+func CosineDistance[T types.RealNumbers](v1, v2 []T) T {
 	switch any(v1).(type) {
 	case []float32:
 		_v1 := blas32.Vector{N: len(v1), Inc: 1, Data: any(v1).([]float32)}
 		_v2 := blas32.Vector{N: len(v2), Inc: 1, Data: any(v2).([]float32)}
 
 		score := blas32.Dot(_v1, _v2) / (blas32.Nrm2(_v1) * blas32.Nrm2(_v2))
-		return float64(1 - score)
+		return T(1 - score)
 
 	case []float64:
 		_v1 := blas64.Vector{N: len(v1), Inc: 1, Data: any(v1).([]float64)}
 		_v2 := blas64.Vector{N: len(v2), Inc: 1, Data: any(v2).([]float64)}
 		score := blas64.Dot(_v1, _v2) / (blas64.Nrm2(_v1) * blas64.Nrm2(_v2))
-		return 1 - score
+		return T(1 - score)
+	default:
+		panic("CosineDistance type not supported")
 	}
-
-	return float64(0)
 
 }
 
-func SphericalDistanceBlas[T types.RealNumbers](v1, v2 []T) float64 {
+// SphericalDistance is used for InnerProduct and CosineDistance in Spherical Kmeans.
+// NOTE: spherical distance between two points on a sphere is equal to the
+// angular distance between the two points, scaled by pi.
+// Refs:
+// https://en.wikipedia.org/wiki/Great-circle_distance#Vector_version
+func SphericalDistance[T types.RealNumbers](v1, v2 []T) T {
+	// Compute the dot product of the two vectors.
+	// The dot product of two vectors is a measure of their similarity,
+	// and it can be used to calculate the angle between them.
 	dp := float64(0)
 
 	switch any(v1).(type) {
@@ -144,6 +165,8 @@ func SphericalDistanceBlas[T types.RealNumbers](v1, v2 []T) float64 {
 		_v1 := blas64.Vector{N: len(v1), Inc: 1, Data: any(v1).([]float64)}
 		_v2 := blas64.Vector{N: len(v2), Inc: 1, Data: any(v2).([]float64)}
 		dp = blas64.Dot(_v1, _v2)
+	default:
+		panic("SphericalDistance type not supported")
 	}
 
 	// Prevent NaN with acos with loss of precision.
@@ -156,78 +179,38 @@ func SphericalDistanceBlas[T types.RealNumbers](v1, v2 []T) float64 {
 	theta := math.Acos(dp)
 
 	//To scale the result to the range [0, 1], we divide by Pi.
-	return theta / math.Pi
+	return T(theta / math.Pi)
 }
 
-// blas32.Vector or blas64.Vector
-// L2Distance is used for L2Distance distance in Euclidean Kmeans.
-func L2Distance(v1, v2 *mat.VecDense) float64 {
-	diff := mat.NewVecDense(v1.Len(), nil)
-	diff.SubVec(v1, v2)
-	return mat.Norm(diff, 2)
-}
+func NormalizeL2[T types.RealNumbers](v1 []T, normalized []T) error {
 
-// L2Distance is used for L2Distance distance in Euclidean Kmeans.
-func L2DistanceSq(v1, v2 *mat.VecDense) float64 {
-	fv1 := v1.RawVector().Data
-	fv2 := v2.RawVector().Data
-
-	var sumOfSquares float64
-	var difference float64
-	for i := range fv1 {
-		difference = fv1[i] - fv2[i]
-		sumOfSquares += difference * difference
-	}
-	return sumOfSquares
-}
-
-// InnerProduct is used for InnerProduct distance in Spherical Kmeans.
-func InnerProduct(v1, v2 *mat.VecDense) float64 {
-	// return negative inner product
-	return -mat.Dot(v1, v2)
-}
-
-// CosineDistance is used for CosineDistance distance in Spherical Kmeans.
-func CosineDistance(v1, v2 *mat.VecDense) float64 {
-	similarity := mat.Dot(v1, v2) / (mat.Norm(v1, 2) * mat.Norm(v2, 2))
-	similarity = min(max(similarity, -1), 1)
-	return 1 - similarity
-}
-
-// L1Distance is used for L1Distance distance in Manhattan Kmeans.
-func L1Distance(v1, v2 *mat.VecDense) float64 {
-	diff := mat.NewVecDense(v1.Len(), nil)
-	diff.SubVec(v1, v2)
-	return mat.Norm(diff, 1)
-}
-
-// SphericalDistance is used for InnerProduct and CosineDistance in Spherical Kmeans.
-// NOTE: spherical distance between two points on a sphere is equal to the
-// angular distance between the two points, scaled by pi.
-// Refs:
-// https://en.wikipedia.org/wiki/Great-circle_distance#Vector_version
-func SphericalDistance(v1, v2 *mat.VecDense) float64 {
-	// Compute the dot product of the two vectors.
-	// The dot product of two vectors is a measure of their similarity,
-	// and it can be used to calculate the angle between them.
-	dp := mat.Dot(v1, v2)
-
-	// Prevent NaN with acos with loss of precision.
-	if dp > 1.0 {
-		dp = 1.0
-	} else if dp < -1.0 {
-		dp = -1.0
+	if len(v1) == 0 {
+		return moerr.NewInternalErrorNoCtx("cannot normalize empty vector")
 	}
 
-	theta := math.Acos(dp)
+	// Compute the norm of the vector
+	var sumSquares float64
+	for _, val := range v1 {
+		sumSquares += float64(val) * float64(val)
+	}
+	norm := math.Sqrt(sumSquares)
+	if norm == 0 {
+		copy(normalized, v1)
+		return nil
+	}
 
-	//To scale the result to the range [0, 1], we divide by Pi.
-	return theta / math.Pi
+	// Divide each element by the norm
+	for i, val := range v1 {
+		normalized[i] = T(float64(val) / norm)
+	}
 
-	// NOTE:
-	// Cosine distance is a measure of the similarity between two vectors. [Not satisfy triangle inequality]
-	// Angular distance is a measure of the angular separation between two points. [Satisfy triangle inequality]
-	// Spherical distance is a measure of the spatial separation between two points on a sphere. [Satisfy triangle inequality]
+	return nil
+}
+
+func ScaleInPlace[T types.RealNumbers](v []T, scale T) {
+	for i := range v {
+		v[i] *= scale
+	}
 }
 
 // IMPORTANT: Elkans Kmeans always use L2Distance for dense vector or images.  After getting the centroids, we can use other distance function
@@ -245,16 +228,16 @@ func ResolveKmeansDistanceFnForDense[T types.RealNumbers](metric MetricType) (Di
 	normalize := false
 	switch metric {
 	case Metric_L2Distance:
-		distanceFunction = L2DistanceBlas[T]
+		distanceFunction = L2Distance[T]
 		normalize = false
 	case Metric_InnerProduct:
-		distanceFunction = L2DistanceBlas[T]
+		distanceFunction = L2Distance[T]
 		normalize = false
 	case Metric_CosineDistance:
-		distanceFunction = L2DistanceBlas[T]
+		distanceFunction = L2Distance[T]
 		normalize = false
 	case Metric_L1Distance:
-		distanceFunction = L2DistanceBlas[T]
+		distanceFunction = L2Distance[T]
 		normalize = false
 	default:
 		return nil, normalize, moerr.NewInternalErrorNoCtx("invalid distance type")
@@ -270,16 +253,16 @@ func ResolveKmeansDistanceFnForSparse[T types.RealNumbers](metric MetricType) (D
 	normalize := false
 	switch metric {
 	case Metric_L2Distance:
-		distanceFunction = L2DistanceBlas[T]
+		distanceFunction = L2Distance[T]
 		normalize = false
 	case Metric_InnerProduct:
-		distanceFunction = SphericalDistanceBlas[T]
+		distanceFunction = SphericalDistance[T]
 		normalize = true
 	case Metric_CosineDistance:
-		distanceFunction = SphericalDistanceBlas[T]
+		distanceFunction = SphericalDistance[T]
 		normalize = true
 	case Metric_L1Distance:
-		distanceFunction = L2DistanceBlas[T]
+		distanceFunction = L2Distance[T]
 		normalize = false
 	default:
 		return nil, normalize, moerr.NewInternalErrorNoCtx("invalid distance type")
@@ -293,13 +276,13 @@ func ResolveDistanceFn[T types.RealNumbers](metric MetricType) (DistanceFunction
 	var distanceFunction DistanceFunction[T]
 	switch metric {
 	case Metric_L2Distance:
-		distanceFunction = L2DistanceSqBlas[T]
+		distanceFunction = L2DistanceSq[T]
 	case Metric_InnerProduct:
-		distanceFunction = InnerProductBlas[T]
+		distanceFunction = InnerProduct[T]
 	case Metric_CosineDistance:
-		distanceFunction = CosineDistanceBlas[T]
+		distanceFunction = CosineDistance[T]
 	case Metric_L1Distance:
-		distanceFunction = L2DistanceBlas[T]
+		distanceFunction = L1Distance[T]
 	default:
 		return nil, moerr.NewInternalErrorNoCtx("invalid distance type")
 	}

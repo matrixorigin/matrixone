@@ -84,6 +84,7 @@ func (u *ivfCreateState) end(tf *TableFunction, proc *process.Process) error {
 	var clusterer kmeans.Clusterer
 	var centers [][]float64
 	var err error
+	var ok bool
 
 	if !u.inited || len(u.data) == 0 {
 		return nil
@@ -97,7 +98,7 @@ func (u *ivfCreateState) end(tf *TableFunction, proc *process.Process) error {
 	nworker := vectorindex.GetConcurrencyForBuild(u.tblcfg.ThreadsBuild)
 
 	// NOTE: We use L2 distance to caculate centroid.  Ivfflat metric just for searching.
-	if clusterer, err = elkans.NewKMeans(
+	if clusterer, err = elkans.NewKMeans[float64](
 		u.data, int(u.idxcfg.Ivfflat.Lists),
 		int(u.tblcfg.IvfMaxIteration),
 		defaultKmeansDeltaThreshold,
@@ -107,8 +108,14 @@ func (u *ivfCreateState) end(tf *TableFunction, proc *process.Process) error {
 		int(nworker)); err != nil {
 		return err
 	}
-	if centers, err = clusterer.Cluster(); err != nil {
+	anycenters, err := clusterer.Cluster()
+	if err != nil {
 		return err
+	}
+
+	centers, ok = anycenters.([][]float64)
+	if !ok {
+		return moerr.NewInternalError(proc.Ctx, "centers is not [][]float64")
 	}
 
 	// insert into centroid table

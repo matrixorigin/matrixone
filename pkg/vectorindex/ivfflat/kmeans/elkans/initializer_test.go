@@ -19,7 +19,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
+	"github.com/stretchr/testify/require"
 )
 
 func TestRandom_InitCentroids(t *testing.T) {
@@ -62,11 +62,11 @@ func TestRandom_InitCentroids(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			r := NewRandomInitializer()
-			gonumVectors, _ := moarray.ToGonumVectors[float64](tt.args.vectors...)
-
-			gotCentroids := r.InitCentroids(gonumVectors, tt.args.k)
-			if arrays, _ := moarray.ToMoArrays[float64](gotCentroids); !reflect.DeepEqual(arrays, tt.wantCentroids) {
-				t.Errorf("InitCentroids() = %v, want %v", arrays, tt.wantCentroids)
+			_gotCentroids := r.InitCentroids(tt.args.vectors, tt.args.k)
+			gotCentroids, ok := _gotCentroids.([][]float64)
+			require.True(t, ok)
+			if !reflect.DeepEqual(gotCentroids, tt.wantCentroids) {
+				t.Errorf("InitCentroids() = %v, want %v", gotCentroids, tt.wantCentroids)
 			}
 
 		})
@@ -111,12 +111,11 @@ func TestKMeansPlusPlus_InitCentroids(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			r := NewKMeansPlusPlusInitializer(metric.L2DistanceBlas[float64])
-			gonumVectors, _ := moarray.ToGonumVectors[float64](tt.args.vectors...)
-
-			gotCentroids := r.InitCentroids(gonumVectors, tt.args.k)
-			if arrays, _ := moarray.ToMoArrays[float64](gotCentroids); !reflect.DeepEqual(arrays, tt.wantCentroids) {
-				t.Errorf("InitCentroids() = %v, want %v", arrays, tt.wantCentroids)
+			r := NewKMeansPlusPlusInitializer[float64](metric.L2Distance[float64])
+			_gotCentroids := r.InitCentroids(tt.args.vectors, tt.args.k)
+			gotCentroids := _gotCentroids.([][]float64)
+			if !reflect.DeepEqual(gotCentroids, tt.wantCentroids) {
+				t.Errorf("InitCentroids() = %v, want %v", gotCentroids, tt.wantCentroids)
 			}
 		})
 	}
@@ -142,21 +141,19 @@ func Benchmark_InitCentroids(b *testing.B) {
 	populateRandData(rowCnt, dims, data)
 
 	random := NewRandomInitializer()
-	kmeanspp := NewKMeansPlusPlusInitializer(metric.L2DistanceBlas[float64])
+	kmeanspp := NewKMeansPlusPlusInitializer[float64](metric.L2Distance[float64])
 
 	b.Run("RANDOM", func(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			gonumVectors, _ := moarray.ToGonumVectors[float64](data...)
-			_ = random.InitCentroids(gonumVectors, k)
+			_ = random.InitCentroids(data, k)
 		}
 	})
 
 	b.Run("KMEANS++", func(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			gonumVectors, _ := moarray.ToGonumVectors[float64](data...)
-			_ = kmeanspp.InitCentroids(gonumVectors, k)
+			_ = kmeanspp.InitCentroids(data, k)
 		}
 	})
 }

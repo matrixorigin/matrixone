@@ -123,7 +123,7 @@ func (idx *IvfflatSearchIndex[T]) searchEntries(proc *process.Process, query []T
 		vec := types.BytesToArray[T](bat.Vecs[1].GetBytesAt(i))
 		dist := distfn(query, vec)
 
-		heap.Push(&vectorindex.SearchResultAnyKey{Id: pk, Distance: dist})
+		heap.Push(&vectorindex.SearchResultAnyKey{Id: pk, Distance: float64(dist)})
 	}
 	return false, nil
 }
@@ -152,7 +152,7 @@ func (idx *IvfflatSearchIndex[T]) findCentroids(proc *process.Process, query []T
 					continue
 				}
 				dist := distfn(query, c.Vec)
-				heap.Push(&vectorindex.SearchResult{Id: c.Id, Distance: dist})
+				heap.Push(&vectorindex.SearchResult{Id: c.Id, Distance: float64(dist)})
 			}
 		}()
 	}

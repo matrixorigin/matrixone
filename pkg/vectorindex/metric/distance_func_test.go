@@ -54,50 +54,50 @@ func Test_ResolveFun(t *testing.T) {
 		{
 			metricType: Metric_L2Distance,
 			spherical:  false,
-			distfn:     L2DistanceBlas[float32],
+			distfn:     L2Distance[float32],
 			normalize:  false,
 		},
 		{
 			metricType: Metric_InnerProduct,
 			spherical:  false,
-			distfn:     L2DistanceBlas[float32],
+			distfn:     L2Distance[float32],
 			normalize:  false,
 		},
 		{
 			metricType: Metric_CosineDistance,
 			spherical:  false,
-			distfn:     L2DistanceBlas[float32],
+			distfn:     L2Distance[float32],
 			normalize:  false,
 		},
 		{
 			metricType: Metric_L1Distance,
 			spherical:  false,
-			distfn:     L2DistanceBlas[float32],
+			distfn:     L2Distance[float32],
 			normalize:  false,
 		},
 
 		{
 			metricType: Metric_L2Distance,
 			spherical:  true,
-			distfn:     L2DistanceBlas[float32],
+			distfn:     L2Distance[float32],
 			normalize:  false,
 		},
 		{
 			metricType: Metric_InnerProduct,
 			spherical:  true,
-			distfn:     SphericalDistanceBlas[float32],
+			distfn:     SphericalDistance[float32],
 			normalize:  true,
 		},
 		{
 			metricType: Metric_CosineDistance,
 			spherical:  true,
-			distfn:     SphericalDistanceBlas[float32],
+			distfn:     SphericalDistance[float32],
 			normalize:  true,
 		},
 		{
 			metricType: Metric_L1Distance,
 			spherical:  true,
-			distfn:     L2DistanceBlas[float32],
+			distfn:     L2Distance[float32],
 			normalize:  false,
 		},
 	}
@@ -170,7 +170,7 @@ func Test_L2Distance(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := L2DistanceBlas[float64](tt.args.v1, tt.args.v2); got != tt.want {
+			if got := L2Distance[float64](tt.args.v1, tt.args.v2); got != tt.want {
 				t.Errorf("L2Distance() = %v, want %v", got, tt.want)
 			}
 		})
@@ -230,7 +230,7 @@ func Test_L2DistanceSq(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := L2DistanceSqBlas[float64](tt.args.v1, tt.args.v2); got != tt.want {
+			if got := L2DistanceSq[float64](tt.args.v1, tt.args.v2); got != tt.want {
 				t.Errorf("L2DistanceSq() = %v, want %v", got, tt.want)
 			}
 		})
@@ -319,7 +319,7 @@ func Test_AngularDistance(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 
-			if got := SphericalDistanceBlas[float64](tt.args.v1, tt.args.v2); !assertx.InEpsilonF64(got, tt.want) {
+			if got := SphericalDistance[float64](tt.args.v1, tt.args.v2); !assertx.InEpsilonF64(got, tt.want) {
 				t.Errorf("SphericalDistance() = %v, want %v", got, tt.want)
 			}
 		})

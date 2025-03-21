@@ -241,11 +241,11 @@ func probeRun[T float32 | float64](ctr *container, ap *Productl2, proc *process.
 	}
 
 	leastClusterIndex := make([]int, probeCount)
-	leastDistance := make([]float64, probeCount)
+	leastDistance := make([]T, probeCount)
 
 	for i := 0; i < probeCount; i++ {
 		leastClusterIndex[i] = 0
-		leastDistance[i] = math.MaxFloat64
+		leastDistance[i] = T(math.MaxFloat32)
 	}
 
 	centroidmat, embedmat := newMat[T](ctr, ap)
