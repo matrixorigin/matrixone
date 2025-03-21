@@ -79,22 +79,6 @@ const (
 		`""` + //reserved4
 		`)`
 
-	getCdcTaskFormat = `select ` +
-		`sink_uri, ` +
-		`sink_type, ` +
-		`sink_password, ` +
-		`tables, ` +
-		`filters, ` +
-		`start_ts, ` +
-		`end_ts, ` +
-		`no_full, ` +
-		`additional_config ` +
-		`from ` +
-		`mo_catalog.mo_cdc_task ` +
-		`where ` +
-		`account_id = %d and ` +
-		`task_id = "%s"`
-
 	getShowCdcTaskFormat = "select task_id, task_name, source_uri, sink_uri, state, err_msg from mo_catalog.mo_cdc_task where account_id = %d"
 
 	getDbIdAndTableIdFormat = "select reldatabase_id,rel_id from mo_catalog.mo_tables where account_id = %d and reldatabase = '%s' and relname = '%s'"
@@ -233,13 +217,6 @@ func getSqlForNewCdcTask(
 		incrConfig,
 		additionalConfigStr,
 	)
-}
-
-func getSqlForRetrievingCdcTask(
-	accId uint64,
-	taskId uuid.UUID,
-) string {
-	return fmt.Sprintf(getCdcTaskFormat, accId, taskId)
 }
 
 func getSqlForDbIdAndTableId(accId uint64, db, table string) string {
@@ -1119,7 +1096,7 @@ func (cdc *CdcTask) retrieveCdcTask(ctx context.Context) error {
 
 	accId := cdc.cdcTask.Accounts[0].GetId()
 	cdcTaskId, _ := uuid.Parse(cdc.cdcTask.TaskId)
-	sql := getSqlForRetrievingCdcTask(accId, cdcTaskId)
+	sql := CDCSQLBuilder.GetTaskSQL(accId, cdcTaskId.String())
 	res := cdc.ie.Query(ctx, sql, ie.SessionOverrideOptions{})
 	if res.Error() != nil {
 		return res.Error()

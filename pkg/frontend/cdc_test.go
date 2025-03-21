@@ -82,8 +82,8 @@ func Test_newCdcSqlFormat(t *testing.T) {
 	wantSql := "INSERT INTO mo_catalog.mo_cdc_task VALUES(3,\"019111fd-aed1-70c0-8760-9abadd8f0f4a\",\"task1\",\"src uri\",\"123\",\"dst uri\",\"mysql\",\"456\",\"ca path\",\"cert path\",\"key path\",\"db1:t1\",\"xfilter\",\"op filters\",\"error\",\"common\",\"\",\"\",\"conf path\",\"2024-08-02 15:20:00\",\"running\",125,\"125\",\"true\",\"yyy\",'{}',\"\",\"\",\"\",\"\")"
 	assert.Equal(t, wantSql, sql)
 
-	sql2 := getSqlForRetrievingCdcTask(3, id)
-	wantSql2 := "select sink_uri, sink_type, sink_password, tables, filters, start_ts, end_ts, no_full, additional_config from mo_catalog.mo_cdc_task where account_id = 3 and task_id = \"019111fd-aed1-70c0-8760-9abadd8f0f4a\""
+	sql2 := CDCSQLBuilder.GetTaskSQL(3, id.String())
+	wantSql2 := "SELECT sink_uri, sink_type, sink_password, tables, filters, start_ts, end_ts, no_full, additional_config FROM mo_catalog.mo_cdc_task WHERE account_id = 3 AND task_id = \"019111fd-aed1-70c0-8760-9abadd8f0f4a\""
 	assert.Equal(t, wantSql2, sql2)
 
 	sql3 := getSqlForDbIdAndTableId(10, "db", "t1")
@@ -914,7 +914,7 @@ func TestRegisterCdcExecutor(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	assert.NoError(t, err)
 	/////////mock sql result
-	sql1 := `select sink_uri, sink_type, sink_password, tables, filters, start_ts, end_ts, no_full, additional_config from mo_catalog.mo_cdc_task where account_id = 0 and task_id = "00000000-0000-0000-0000-000000000000"`
+	sql1 := `SELECT sink_uri, sink_type, sink_password, tables, filters, start_ts, end_ts, no_full, additional_config FROM mo_catalog.mo_cdc_task WHERE account_id = 0 AND task_id = "00000000-0000-0000-0000-000000000000"`
 	mock.ExpectQuery(sql1).WillReturnRows(sqlmock.NewRows(
 		[]string{
 			"sink_uri",
@@ -2324,7 +2324,7 @@ func TestCdcTask_retrieveCdcTask(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	assert.NoError(t, err)
 
-	sqlx := "select sink_uri, sink_type, sink_password, tables, filters, start_ts, end_ts, no_full, additional_config from mo_catalog.mo_cdc_task where account_id = .* and task_id =.*"
+	sqlx := "SELECT sink_uri, sink_type, sink_password, tables, filters, start_ts, end_ts, no_full, additional_config FROM mo_catalog.mo_cdc_task WHERE account_id = .* AND task_id =.*"
 	sinkUri, err := cdc2.JsonEncode(&cdc2.UriInfo{
 		User: "root",
 		Ip:   "127.0.0.1",
