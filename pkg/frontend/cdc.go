@@ -46,10 +46,6 @@ import (
 )
 
 const (
-	updateErrMsgFormat = "update `mo_catalog`.`mo_cdc_task` set state = '%s', err_msg = '%s' where account_id = %d and task_id = '%s'"
-)
-
-const (
 	CdcRunning   = "running"
 	CdcPaused    = "paused"
 	CdcFailed    = "failed"
@@ -805,7 +801,7 @@ func (cdc *CdcTask) updateErrMsg(ctx context.Context, errMsg string) (err error)
 		errMsg = errMsg[:maxErrMsgLen]
 	}
 
-	sql := fmt.Sprintf(updateErrMsgFormat, state, errMsg, accId, cdcTaskId)
+	sql := CDCSQLBuilder.UpdateTaskStateAndErrMsgSQL(uint64(accId), cdcTaskId.String(), state, errMsg)
 	return cdc.ie.Exec(defines.AttachAccountId(ctx, catalog.System_Account), sql, ie.SessionOverrideOptions{})
 }
 
