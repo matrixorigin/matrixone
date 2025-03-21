@@ -17,8 +17,6 @@ package frontend
 import (
 	"fmt"
 	"time"
-
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 )
 
 var CDCSQLBuilder = cdcSQLBuilder{}
@@ -100,38 +98,6 @@ const (
 	CDCUpdateErrMsgSqlTemplate = "UPDATE `mo_catalog`.mo_cdc_task SET state = ?, err_msg = ? WHERE account_id = %d and task_id = '%s'"
 
 	CDCGetDataKeySqlTemplate = "SELECT encrypted_key FROM mo_catalog.mo_data_key WHERE account_id = %d and key_id = '%s'"
-
-	CDCGetDbIdAndTableIdSqlTemplate = `SELECT ` +
-		`reldatabase_id, ` +
-		`rel_id ` +
-		`FROM mo_catalog.mo_tables ` +
-		`WHERE ` +
-		`account_id = %d AND ` +
-		`reldatabase = '%s' AND ` +
-		`relname = '%s'`
-
-	CDCGetTableSqlTemplate = `SELECT ` +
-		`rel_id ` +
-		`FROM mo_catalog.mo_tables ` +
-		`WHERE ` +
-		`account_id = %d AND ` +
-		`reldatabase = '%s' AND ` +
-		`relname = '%s'`
-
-	CDCGetAccountIdSqlTemplate = `SELECT ` +
-		`account_id ` +
-		`FROM mo_catalog.mo_account ` +
-		`WHERE ` +
-		`account_name = '%s'`
-
-	CDCGetPKCountSqlTemplate = `SELECT ` +
-		`COUNT(att_constraint_type) ` +
-		`FROM mo_catalog.mo_columns ` +
-		`WHERE ` +
-		`account_id = %d AND ` +
-		`att_database = '%s' AND ` +
-		`att_relname = '%s' AND ` +
-		`att_constraint_type = '%s'`
 )
 
 type cdcSQLBuilder struct{}
@@ -208,7 +174,7 @@ func (b cdcSQLBuilder) GetTaskSQL(
 	)
 }
 
-func (b cdcSQLBuilder) ShowCdcTaskSQL(
+func (b cdcSQLBuilder) ShowTaskSQL(
 	accountId uint64,
 	showAll bool,
 	taskName string,
@@ -224,58 +190,6 @@ func (b cdcSQLBuilder) ShowCdcTaskSQL(
 		)
 	}
 	return sql
-}
-
-// ------------------------------------------------------------------------------------------------
-// Table SQL
-// ------------------------------------------------------------------------------------------------
-func (b cdcSQLBuilder) GetDbIdAndTableIdSQL(
-	accountId uint64,
-	db string,
-	table string,
-) string {
-	return fmt.Sprintf(
-		CDCGetDbIdAndTableIdSqlTemplate,
-		accountId,
-		db,
-		table,
-	)
-}
-
-func (b cdcSQLBuilder) GetTableSQL(
-	accountId uint64,
-	db string,
-	table string,
-) string {
-	return fmt.Sprintf(
-		CDCGetTableSqlTemplate,
-		accountId,
-		db,
-		table,
-	)
-}
-
-func (b cdcSQLBuilder) GetAccountIdSQL(
-	account string,
-) string {
-	return fmt.Sprintf(
-		CDCGetAccountIdSqlTemplate,
-		account,
-	)
-}
-
-func (b cdcSQLBuilder) GetPkCountSQL(
-	accountId uint64,
-	db string,
-	table string,
-) string {
-	return fmt.Sprintf(
-		CDCGetPKCountSqlTemplate,
-		accountId,
-		db,
-		table,
-		catalog.SystemColPKConstraint,
-	)
 }
 
 // ------------------------------------------------------------------------------------------------

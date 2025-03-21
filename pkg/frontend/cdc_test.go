@@ -2106,7 +2106,7 @@ func Test_handleShowCdc(t *testing.T) {
 	})
 	assert.NoError(t, err)
 
-	sql := CDCSQLBuilder.ShowCdcTaskSQL(sysAccountID, true, "")
+	sql := CDCSQLBuilder.ShowTaskSQL(sysAccountID, true, "")
 	mrs := newMrsForGetTask([][]interface{}{
 		{"taskID-1", "task1", sourceUri, sinkUri, CdcRunning, ""},
 	})
@@ -2495,7 +2495,7 @@ func Test_getSqlForGetTask(t *testing.T) {
 			assert.Equalf(
 				t,
 				tt.want,
-				CDCSQLBuilder.ShowCdcTaskSQL(tt.args.accountId, tt.args.all, tt.args.taskName),
+				CDCSQLBuilder.ShowTaskSQL(tt.args.accountId, tt.args.all, tt.args.taskName),
 				"getSqlForGetTask(%v, %v, %v)",
 				tt.args.accountId,
 				tt.args.all,
