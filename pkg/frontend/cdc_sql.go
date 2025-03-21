@@ -48,7 +48,7 @@ const (
 		`"%s",` + //state
 		`%d,` + //checkpoint
 		`"%d",` + //checkpoint str
-		`%t,` + //no full
+		`"%t",` + //no full
 		`"%s",` + //incr config
 		`'%s',` + //additional config
 		`"",` + //err msg
