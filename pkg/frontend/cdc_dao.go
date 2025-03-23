@@ -40,17 +40,26 @@ func NewCDCDao(
 }
 
 func (t *CDCDao) BuildCreateOpts(
-	ctx context.Context, req *CreateTaskRequest,
-) (opts CreateTaskRequestOptions, err error) {
+	ctx context.Context, req *CDCCreateTaskRequest,
+) (opts CDCCreateTaskOptions, err error) {
 	err = opts.ValidateAndFill(ctx, t.ses, req)
+	return
+}
+
+func (t *CDCDao) BuildShowOpts(
+	ctx context.Context, req *CDCShowTaskRequest,
+) (opts CDCShowCDCTaskOptions, err error) {
+	opts.AccountId = uint64(t.ses.GetTenantInfo().GetTenantID())
+	opts.ShowAll = req.Option.All
+	opts.TaskName = string(req.Option.TaskName)
 	return
 }
 
 func (t *CDCDao) CreateTask(
 	ctx context.Context,
-	req *CreateTaskRequest,
+	req *CDCCreateTaskRequest,
 ) (err error) {
-	var opts CreateTaskRequestOptions
+	var opts CDCCreateTaskOptions
 	if opts, err = t.BuildCreateOpts(ctx, req); err != nil {
 		return
 	}
@@ -84,3 +93,17 @@ func (t *CDCDao) CreateTask(
 	)
 	return
 }
+
+// func (t *CDCDao) ShowTasks(
+// 	ctx context.Context,
+// 	req *CDCShowTaskRequest,
+// ) (err error) {
+// 	var opts CDCShowCDCTaskOptions
+// 	if opts, err = t.BuildShowOpts(ctx, req); err != nil {
+// 		return
+// 	}
+
+// 	showSQL := opts.ToSQL()
+
+// 	return
+// }

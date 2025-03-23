@@ -29,7 +29,19 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 )
 
-type CreateTaskRequestOptions struct {
+type CDCShowCDCTaskOptions struct {
+	AccountId uint64
+	ShowAll   bool
+	TaskName  string
+}
+
+func (opts *CDCShowCDCTaskOptions) ToSQL() string {
+	return CDCSQLBuilder.ShowTaskSQL(
+		opts.AccountId, opts.ShowAll, opts.TaskName,
+	)
+}
+
+type CDCCreateTaskOptions struct {
 	TaskName     string
 	TaskId       string
 	AccountInfo  *TenantInfo
@@ -49,7 +61,7 @@ type CreateTaskRequestOptions struct {
 	UseConsole bool
 }
 
-func (opts *CreateTaskRequestOptions) Reset() {
+func (opts *CDCCreateTaskOptions) Reset() {
 	opts.Exclude = ""
 	opts.StartTs = ""
 	opts.EndTs = ""
@@ -65,10 +77,10 @@ func (opts *CreateTaskRequestOptions) Reset() {
 	opts.AccountInfo = nil
 }
 
-func (opts *CreateTaskRequestOptions) ValidateAndFill(
+func (opts *CDCCreateTaskOptions) ValidateAndFill(
 	ctx context.Context,
 	ses *Session,
-	req *CreateTaskRequest,
+	req *CDCCreateTaskRequest,
 ) (err error) {
 	opts.Reset()
 	taskId := cdc.NewTaskId()
@@ -205,7 +217,7 @@ func (opts *CreateTaskRequestOptions) ValidateAndFill(
 	return
 }
 
-func (opts *CreateTaskRequestOptions) BuildTaskMetadata() task.TaskMetadata {
+func (opts *CDCCreateTaskOptions) BuildTaskMetadata() task.TaskMetadata {
 	return task.TaskMetadata{
 		ID:       opts.TaskId,
 		Executor: task.TaskCode_InitCdc,
@@ -218,7 +230,7 @@ func (opts *CreateTaskRequestOptions) BuildTaskMetadata() task.TaskMetadata {
 	}
 }
 
-func (opts *CreateTaskRequestOptions) BuildTaskDetails() (details *task.Details, err error) {
+func (opts *CDCCreateTaskOptions) BuildTaskDetails() (details *task.Details, err error) {
 	accountInfo := opts.AccountInfo
 	accountId := accountInfo.GetTenantID()
 	accountName := accountInfo.GetTenant()
@@ -242,7 +254,7 @@ func (opts *CreateTaskRequestOptions) BuildTaskDetails() (details *task.Details,
 	return
 }
 
-func (opts *CreateTaskRequestOptions) ToInsertTaskSQL(
+func (opts *CDCCreateTaskOptions) ToInsertTaskSQL(
 	ctx context.Context,
 	tx taskservice.SqlExecutor,
 	service string,
@@ -292,10 +304,10 @@ func (opts *CreateTaskRequestOptions) ToInsertTaskSQL(
 // handleLevel validates the CDC task level and processes the pattern tuples for PITR.
 // It checks if the level is valid (account/db/table level), gets pattern tuples based on the level,
 // verifies PITR configuration, and encodes the pattern tuples as JSON.
-func (opts *CreateTaskRequestOptions) handleLevel(
+func (opts *CDCCreateTaskOptions) handleLevel(
 	ctx context.Context,
 	ses *Session,
-	req *CreateTaskRequest,
+	req *CDCCreateTaskRequest,
 	level string,
 ) (err error) {
 	if level != cdc.CDCPitrGranularity_Account && level != cdc.CDCPitrGranularity_DB && level != cdc.CDCPitrGranularity_Table {
