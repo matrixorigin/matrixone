@@ -24,6 +24,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -102,6 +103,16 @@ var CDCTaskExtraOptions = []string{
 var (
 	EnableConsoleSink = false
 )
+
+type TaskId = uuid.UUID
+
+func NewTaskId() TaskId {
+	return uuid.Must(uuid.NewV7())
+}
+
+func StringToTaskId(s string) (TaskId, error) {
+	return uuid.Parse(s)
+}
 
 type Reader interface {
 	Run(ctx context.Context, ar *ActiveRoutine)

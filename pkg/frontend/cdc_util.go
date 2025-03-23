@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"database/sql"
+	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/cdc"
@@ -195,4 +196,122 @@ func CDCStrToTS(tsStr string) (types.TS, error) {
 	}
 
 	return types.BuildTS(t.UnixNano(), 0), nil
+}
+
+// CDCParseTableInfo parses a string to get account,database,table info
+//
+// input format:
+//
+//	DbLevel: database
+//	TableLevel: database.table
+//
+// There must be no special characters (','  '.'  ':' '`') in database name & table name.
+func CDCParseTableInfo(
+	ctx context.Context,
+	input string,
+	level string,
+) (db string, table string, err error) {
+	parts := strings.Split(strings.TrimSpace(input), ".")
+	if level == cdc.CDCPitrGranularity_DB && len(parts) != 1 {
+		err = moerr.NewInternalErrorf(ctx, "invalid databases format: %s", input)
+		return
+	} else if level == cdc.CDCPitrGranularity_Table && len(parts) != 2 {
+		err = moerr.NewInternalErrorf(ctx, "invalid tables format: %s", input)
+		return
+	}
+
+	db = strings.TrimSpace(parts[0])
+	if !dbNameIsLegal(db) {
+		err = moerr.NewInternalErrorf(ctx, "invalid database name: %s", db)
+		return
+	}
+
+	if level == cdc.CDCPitrGranularity_Table {
+		table = strings.TrimSpace(parts[1])
+		if !tableNameIsLegal(table) {
+			err = moerr.NewInternalErrorf(ctx, "invalid table name: %s", table)
+			return
+		}
+	} else {
+		table = cdc.CDCPitrGranularity_All
+	}
+	return
+}
+
+// CDCParsePitrGranularity parses a comma-separated list of table patterns into a PatternTuples struct.
+// The level parameter specifies whether patterns are at account/db/table level.
+// For account level, returns a single pattern matching all DBs and tables.
+// For db/table level, parses each pattern into source and sink components.
+func CDCParsePitrGranularity(
+	ctx context.Context,
+	level string,
+	tables string,
+) (pts *cdc.PatternTuples, err error) {
+	pts = &cdc.PatternTuples{}
+
+	if level == cdc.CDCPitrGranularity_Account {
+		pts.Append(&cdc.PatternTuple{
+			Source: cdc.PatternTable{Database: cdc.CDCPitrGranularity_All, Table: cdc.CDCPitrGranularity_All},
+			Sink:   cdc.PatternTable{Database: cdc.CDCPitrGranularity_All, Table: cdc.CDCPitrGranularity_All},
+		})
+		return
+	}
+
+	// split tables by ',' => table pair
+	var pt *cdc.PatternTuple
+	tablePairs := strings.Split(strings.TrimSpace(tables), ",")
+	dup := make(map[string]struct{})
+	for _, pair := range tablePairs {
+		if pt, err = CDCParseGranularityTuple(ctx, level, pair, dup); err != nil {
+			return
+		}
+		pts.Append(pt)
+	}
+	return
+}
+
+// CDCParseGranularityTuple pattern example:
+//
+//	db1
+//	db1:db2
+//	db1.t1
+//	db1.t1:db2.t2
+//
+// There must be no special characters (','  '.'  ':' '`') in database name & table name.
+func CDCParseGranularityTuple(
+	ctx context.Context,
+	level string,
+	pattern string,
+	dup map[string]struct{},
+) (pt *cdc.PatternTuple, err error) {
+	splitRes := strings.Split(strings.TrimSpace(pattern), ":")
+	if len(splitRes) > 2 {
+		err = moerr.NewInternalErrorf(ctx, "invalid pattern format: %s, must be `source` or `source:sink`.", pattern)
+		return
+	}
+
+	pt = &cdc.PatternTuple{OriginString: pattern}
+
+	// handle source part
+	if pt.Source.Database, pt.Source.Table, err = CDCParseTableInfo(ctx, splitRes[0], level); err != nil {
+		return
+	}
+	key := cdc.GenDbTblKey(pt.Source.Database, pt.Source.Table)
+	if _, ok := dup[key]; ok {
+		err = moerr.NewInternalErrorf(ctx, "one db/table: %s can't be used as multi sources in a cdc task", key)
+		return
+	}
+	dup[key] = struct{}{}
+
+	// handle sink part
+	if len(splitRes) > 1 {
+		if pt.Sink.Database, pt.Sink.Table, err = CDCParseTableInfo(ctx, splitRes[1], level); err != nil {
+			return
+		}
+	} else {
+		// if not specify sink, then sink = source
+		pt.Sink.Database = pt.Source.Database
+		pt.Sink.Table = pt.Source.Table
+	}
+	return
 }

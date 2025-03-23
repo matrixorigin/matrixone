@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"regexp"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -132,107 +131,6 @@ var queryTable = func(
 		}
 	}
 	return false, nil
-}
-
-// getPatternTuple pattern example:
-//
-//	db1
-//	db1:db2
-//	db1.t1
-//	db1.t1:db2.t2
-//
-// There must be no special characters (','  '.'  ':' '`') in database name & table name.
-func getPatternTuple(ctx context.Context, level string, pattern string, dup map[string]struct{}) (pt *cdc2.PatternTuple, err error) {
-	splitRes := strings.Split(strings.TrimSpace(pattern), ":")
-	if len(splitRes) > 2 {
-		err = moerr.NewInternalErrorf(ctx, "invalid pattern format: %s, must be `source` or `source:sink`.", pattern)
-		return
-	}
-
-	pt = &cdc2.PatternTuple{OriginString: pattern}
-
-	// handle source part
-	if pt.Source.Database, pt.Source.Table, err = extractTableInfo(ctx, splitRes[0], level); err != nil {
-		return
-	}
-	key := cdc2.GenDbTblKey(pt.Source.Database, pt.Source.Table)
-	if _, ok := dup[key]; ok {
-		err = moerr.NewInternalErrorf(ctx, "one db/table: %s can't be used as multi sources in a cdc task", key)
-		return
-	}
-	dup[key] = struct{}{}
-
-	// handle sink part
-	if len(splitRes) > 1 {
-		if pt.Sink.Database, pt.Sink.Table, err = extractTableInfo(ctx, splitRes[1], level); err != nil {
-			return
-		}
-	} else {
-		// if not specify sink, then sink = source
-		pt.Sink.Database = pt.Source.Database
-		pt.Sink.Table = pt.Source.Table
-	}
-	return
-}
-
-// extractTableInfo get account,database,table info from string
-//
-// input format:
-//
-//	DbLevel: database
-//	TableLevel: database.table
-//
-// There must be no special characters (','  '.'  ':' '`') in database name & table name.
-func extractTableInfo(ctx context.Context, input string, level string) (db string, table string, err error) {
-	parts := strings.Split(strings.TrimSpace(input), ".")
-	if level == cdc2.CDCPitrGranularity_DB && len(parts) != 1 {
-		err = moerr.NewInternalErrorf(ctx, "invalid databases format: %s", input)
-		return
-	} else if level == cdc2.CDCPitrGranularity_Table && len(parts) != 2 {
-		err = moerr.NewInternalErrorf(ctx, "invalid tables format: %s", input)
-		return
-	}
-
-	db = strings.TrimSpace(parts[0])
-	if !dbNameIsLegal(db) {
-		err = moerr.NewInternalErrorf(ctx, "invalid database name: %s", db)
-		return
-	}
-
-	if level == cdc2.CDCPitrGranularity_Table {
-		table = strings.TrimSpace(parts[1])
-		if !tableNameIsLegal(table) {
-			err = moerr.NewInternalErrorf(ctx, "invalid table name: %s", table)
-			return
-		}
-	} else {
-		table = cdc2.CDCPitrGranularity_All
-	}
-	return
-}
-
-func getPatternTuples(ctx context.Context, level string, tables string) (pts *cdc2.PatternTuples, err error) {
-	pts = &cdc2.PatternTuples{}
-
-	if level == cdc2.CDCPitrGranularity_Account {
-		pts.Append(&cdc2.PatternTuple{
-			Source: cdc2.PatternTable{Database: cdc2.CDCPitrGranularity_All, Table: cdc2.CDCPitrGranularity_All},
-			Sink:   cdc2.PatternTable{Database: cdc2.CDCPitrGranularity_All, Table: cdc2.CDCPitrGranularity_All},
-		})
-		return
-	}
-
-	// split tables by ',' => table pair
-	var pt *cdc2.PatternTuple
-	tablePairs := strings.Split(strings.TrimSpace(tables), ",")
-	dup := make(map[string]struct{})
-	for _, pair := range tablePairs {
-		if pt, err = getPatternTuple(ctx, level, pair, dup); err != nil {
-			return
-		}
-		pts.Append(pt)
-	}
-	return
 }
 
 func RegisterCdcExecutor(
