@@ -2919,9 +2919,9 @@ func TestCdcTask_checkPitr(t *testing.T) {
 }
 
 func Test_parseTimestamp(t *testing.T) {
-	_, err := parseTimestamp("2006-01-02 15:04:05", time.Local)
+	_, err := CDCStrToTime("2006-01-02 15:04:05", time.Local)
 	assert.NoError(t, err)
 
-	_, err = parseTimestamp("2006-01-02T15:04:05-07:00", nil)
+	_, err = CDCStrToTime("2006-01-02T15:04:05-07:00", nil)
 	assert.NoError(t, err)
 }

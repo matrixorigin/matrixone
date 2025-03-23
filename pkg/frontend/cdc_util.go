@@ -16,9 +16,13 @@ package frontend
 
 import (
 	"context"
+	"database/sql"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 )
 
 func WithBackgroundExec(
@@ -138,4 +142,57 @@ var CDCCheckPitrGranularity = func(
 			pt.OriginString, minPitrLen)
 	}
 	return nil
+}
+
+var (
+	getGlobalPuWrapper = getPu
+)
+
+var initAesKeyBySqlExecutor = func(ctx context.Context, executor taskservice.SqlExecutor, accountId uint32, service string) (err error) {
+	if len(cdc.AesKey) > 0 {
+		return nil
+	}
+
+	var encryptedKey string
+	var ret bool
+	querySql := CDCSQLBuilder.GetDataKeySQL(uint64(accountId), cdc.InitKeyId)
+
+	ret, err = queryTable(ctx, executor, querySql, func(ctx context.Context, rows *sql.Rows) (bool, error) {
+		if err = rows.Scan(&encryptedKey); err != nil {
+			return false, err
+		}
+		return true, nil
+	})
+	if err != nil {
+		return
+	} else if !ret {
+		return moerr.NewInternalError(ctx, "no data key")
+	}
+
+	cdc.AesKey, err = cdc.AesCFBDecodeWithKey(ctx, encryptedKey, []byte(getGlobalPuWrapper(service).SV.KeyEncryptionKey))
+	return
+}
+
+func CDCStrToTime(tsStr string, tz *time.Location) (ts time.Time, err error) {
+	if tsStr == "" {
+		return
+	}
+
+	if tz != nil {
+		if ts, err = time.ParseInLocation(time.DateTime, tsStr, tz); err == nil {
+			return
+		}
+	}
+
+	ts, err = time.Parse(time.RFC3339, tsStr)
+	return
+}
+
+func CDCStrToTS(tsStr string) (types.TS, error) {
+	t, err := CDCStrToTime(tsStr, nil)
+	if err != nil {
+		return types.TS{}, err
+	}
+
+	return types.BuildTS(t.UnixNano(), 0), nil
 }
