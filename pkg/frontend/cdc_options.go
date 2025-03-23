@@ -87,7 +87,7 @@ func (opts *CreateTaskRequestOptions) ValidateAndFill(
 	// target field: SrcUri
 	{
 		if opts.SrcUri, opts.SrcUriInfo, err = extractUriInfo(
-			ctx, req.SourceUri, cdc.SourceUriPrefix,
+			ctx, req.SourceUri, cdc.CDCSourceUriPrefix,
 		); err != nil {
 			return
 		}
@@ -274,8 +274,8 @@ func (opts *CreateTaskRequestOptions) ToInsertTaskSQL(
 		opts.PitrTables,
 		opts.Exclude,
 		"",
-		cdc.SASCommon,
-		cdc.SASCommon,
+		cdc.CDCState_Common,
+		cdc.CDCState_Common,
 		opts.StartTs,
 		opts.EndTs,
 		opts.ConfigFile,
