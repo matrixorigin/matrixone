@@ -685,8 +685,8 @@ func (cdc *CdcTask) addExecPipelineForTable(ctx context.Context, info *cdc2.DbTa
 		info,
 		cdc.watermarkUpdater,
 		tableDef,
-		cdc2.DefaultRetryTimes,
-		cdc2.DefaultRetryDuration,
+		cdc2.CDCDefaultRetryTimes,
+		cdc2.CDCDefaultRetryDuration,
 		cdc.activeRoutine,
 		uint64(cdc.additionalConfig[cdc2.CDCTaskExtraOptions_MaxSqlLength].(float64)),
 		cdc.additionalConfig[cdc2.CDCTaskExtraOptions_SendSqlTimeout].(string),
@@ -740,7 +740,7 @@ func (cdc *CdcTask) retrieveCdcTask(ctx context.Context) error {
 		return err
 	}
 
-	if sinkTyp != cdc2.ConsoleSink {
+	if sinkTyp != cdc2.CDCSinkType_Console {
 		//sink uri
 		jsonSinkUri, err := res.GetString(ctx, 0, 0)
 		if err != nil {

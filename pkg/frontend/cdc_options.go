@@ -92,7 +92,7 @@ func (opts *CreateTaskRequestOptions) ValidateAndFill(
 			return
 		}
 		if _, err = cdc.OpenDbConn(
-			opts.SrcUriInfo.User, opts.SrcUriInfo.Password, opts.SrcUriInfo.Ip, opts.SrcUriInfo.Port, cdc.DefaultSendSqlTimeout,
+			opts.SrcUriInfo.User, opts.SrcUriInfo.Password, opts.SrcUriInfo.Ip, opts.SrcUriInfo.Port, cdc.CDCDefaultSendSqlTimeout,
 		); err != nil {
 			err = moerr.NewInternalErrorf(ctx, "failed to connect to source, please check the connection, err: %v", err)
 			return
@@ -106,10 +106,10 @@ func (opts *CreateTaskRequestOptions) ValidateAndFill(
 	// target field: SinkType, UseConsole
 	{
 		opts.SinkType = strings.ToLower(req.SinkType)
-		if cdc.EnableConsoleSink && opts.SinkType == cdc.ConsoleSink {
+		if cdc.EnableConsoleSink && opts.SinkType == cdc.CDCSinkType_Console {
 			opts.UseConsole = true
 		}
-		if !opts.UseConsole && opts.SinkType != cdc.MysqlSink && opts.SinkType != cdc.MatrixoneSink {
+		if !opts.UseConsole && opts.SinkType != cdc.CDCSinkType_MySQL && opts.SinkType != cdc.CDCSinkType_MO {
 			err = moerr.NewInternalErrorf(ctx, "unsupported sink type: %s", req.SinkType)
 			return
 		}
@@ -186,13 +186,13 @@ func (opts *CreateTaskRequestOptions) ValidateAndFill(
 
 	// fill default value for additional opts
 	if _, ok := extraOpts[cdc.CDCTaskExtraOptions_InitSnapshotSplitTxn]; !ok {
-		extraOpts[cdc.CDCTaskExtraOptions_InitSnapshotSplitTxn] = cdc.DefaultInitSnapshotSplitTxn
+		extraOpts[cdc.CDCTaskExtraOptions_InitSnapshotSplitTxn] = cdc.CDCDefaultTaskExtra_InitSnapshotSplitTxn
 	}
 	if _, ok := extraOpts[cdc.CDCTaskExtraOptions_SendSqlTimeout]; !ok {
-		extraOpts[cdc.CDCTaskExtraOptions_SendSqlTimeout] = cdc.DefaultSendSqlTimeout
+		extraOpts[cdc.CDCTaskExtraOptions_SendSqlTimeout] = cdc.CDCDefaultSendSqlTimeout
 	}
 	if _, ok := extraOpts[cdc.CDCTaskExtraOptions_MaxSqlLength]; !ok {
-		extraOpts[cdc.CDCTaskExtraOptions_MaxSqlLength] = cdc.DefaultMaxSqlLength
+		extraOpts[cdc.CDCTaskExtraOptions_MaxSqlLength] = cdc.CDCDefaultTaskExtra_MaxSQLLen
 	}
 
 	var extraOptsBytes []byte
