@@ -313,7 +313,7 @@ func (opts *CreateTaskRequestOptions) handleLevel(
 		ctx,
 		ses,
 		func(ctx context.Context, ses *Session, bh BackgroundExec) error {
-			return checkPitr(ctx, bh, ses.GetTenantName(), patterTupples)
+			return CDCCheckPitrGranularity(ctx, bh, ses.GetTenantName(), patterTupples)
 		},
 	); err != nil {
 		return
