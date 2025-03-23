@@ -372,7 +372,7 @@ func Test_handleCreateCdc(t *testing.T) {
 		IfNotExists: false,
 		TaskName:    "task1",
 		SourceUri:   "mysql://root:111@127.0.0.1:6001",
-		SinkType:    cdc2.MysqlSink,
+		SinkType:    cdc2.CDCSinkType_MySQL,
 		SinkUri:     "mysql://root:111@127.0.0.1:3306",
 		Tables:      "db1.t1:db1.t1,db1.t2",
 		Option: []string{
@@ -385,9 +385,9 @@ func Test_handleCreateCdc(t *testing.T) {
 			cdc2.CDCTaskExtraOptions_InitSnapshotSplitTxn,
 			"false",
 			cdc2.CDCTaskExtraOptions_MaxSqlLength,
-			fmt.Sprintf("%d", cdc2.DefaultMaxSqlLength),
+			fmt.Sprintf("%d", cdc2.CDCDefaultTaskExtra_MaxSQLLen),
 			cdc2.CDCTaskExtraOptions_SendSqlTimeout,
-			cdc2.DefaultSendSqlTimeout,
+			cdc2.CDCDefaultSendSqlTimeout,
 			cdc2.CDCRequestOptions_StartTs,
 			"2025-01-03 15:20:00",
 			cdc2.CDCRequestOptions_EndTs,
@@ -457,7 +457,7 @@ func Test_doCreateCdc_invalidStartTs(t *testing.T) {
 		IfNotExists: false,
 		TaskName:    "task1",
 		SourceUri:   "mysql://root:111@127.0.0.1:6001",
-		SinkType:    cdc2.MysqlSink,
+		SinkType:    cdc2.CDCSinkType_MySQL,
 		SinkUri:     "mysql://root:111@127.0.0.1:3306",
 		Tables:      "db1.t1:db1.t1,db1.t2",
 		Option: []string{
@@ -470,9 +470,9 @@ func Test_doCreateCdc_invalidStartTs(t *testing.T) {
 			cdc2.CDCTaskExtraOptions_InitSnapshotSplitTxn,
 			"false",
 			cdc2.CDCTaskExtraOptions_MaxSqlLength,
-			fmt.Sprintf("%d", cdc2.DefaultMaxSqlLength),
+			fmt.Sprintf("%d", cdc2.CDCDefaultTaskExtra_MaxSQLLen),
 			cdc2.CDCTaskExtraOptions_SendSqlTimeout,
-			cdc2.DefaultSendSqlTimeout,
+			cdc2.CDCDefaultSendSqlTimeout,
 			cdc2.CDCRequestOptions_StartTs,
 			"123456",
 		},
@@ -913,7 +913,7 @@ func TestRegisterCdcExecutor(t *testing.T) {
 		},
 	).AddRow(
 		sinkUri,
-		cdc2.ConsoleSink,
+		cdc2.CDCSinkType_Console,
 		pwd,
 		tables,
 		filters,
@@ -921,9 +921,9 @@ func TestRegisterCdcExecutor(t *testing.T) {
 		"",
 		true,
 		fmt.Sprintf("{\"%s\":%v,\"%s\":\"%s\",\"%s\":%v}",
-			cdc2.CDCTaskExtraOptions_InitSnapshotSplitTxn, cdc2.DefaultInitSnapshotSplitTxn,
-			cdc2.CDCTaskExtraOptions_SendSqlTimeout, cdc2.DefaultSendSqlTimeout,
-			cdc2.CDCTaskExtraOptions_MaxSqlLength, cdc2.DefaultMaxSqlLength,
+			cdc2.CDCTaskExtraOptions_InitSnapshotSplitTxn, cdc2.CDCDefaultTaskExtra_InitSnapshotSplitTxn,
+			cdc2.CDCTaskExtraOptions_SendSqlTimeout, cdc2.CDCDefaultSendSqlTimeout,
+			cdc2.CDCTaskExtraOptions_MaxSqlLength, cdc2.CDCDefaultTaskExtra_MaxSQLLen,
 		),
 	))
 
@@ -2346,7 +2346,7 @@ func TestCdcTask_retrieveCdcTask(t *testing.T) {
 		},
 	).AddRow(
 		sinkUri,
-		cdc2.MysqlSink,
+		cdc2.CDCSinkType_MySQL,
 		pwd,
 		tables,
 		filters,
@@ -2824,9 +2824,9 @@ func TestCdcTask_addExecPipelineForTable(t *testing.T) {
 		runningReaders:   &sync.Map{},
 		noFull:           true,
 		additionalConfig: map[string]interface{}{
-			cdc2.CDCTaskExtraOptions_MaxSqlLength:         float64(cdc2.DefaultMaxSqlLength),
-			cdc2.CDCTaskExtraOptions_SendSqlTimeout:       cdc2.DefaultSendSqlTimeout,
-			cdc2.CDCTaskExtraOptions_InitSnapshotSplitTxn: cdc2.DefaultInitSnapshotSplitTxn,
+			cdc2.CDCTaskExtraOptions_MaxSqlLength:         float64(cdc2.CDCDefaultTaskExtra_MaxSQLLen),
+			cdc2.CDCTaskExtraOptions_SendSqlTimeout:       cdc2.CDCDefaultSendSqlTimeout,
+			cdc2.CDCTaskExtraOptions_InitSnapshotSplitTxn: cdc2.CDCDefaultTaskExtra_InitSnapshotSplitTxn,
 		},
 	}
 

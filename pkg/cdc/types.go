@@ -35,23 +35,26 @@ import (
 )
 
 const (
-	MysqlSink       = "mysql"
-	MatrixoneSink   = "matrixone"
-	ConsoleSink     = "console"
 	SourceUriPrefix = "mysql://"
 	SinkUriPrefix   = "mysql://"
 	ConsolePrefix   = "console://" //only used in testing stage
 
 	SASCommon = "common"
 	SASError  = "error"
+)
 
-	DefaultInitSnapshotSplitTxn = true
+const (
+	CDCDefaultSendSqlTimeout                 = "10m"
+	CDCDefaultRetryTimes                     = -1
+	CDCDefaultRetryDuration                  = 30 * time.Minute
+	CDCDefaultTaskExtra_InitSnapshotSplitTxn = true
+	CDCDefaultTaskExtra_MaxSQLLen            = 4 * 1024 * 1024
+)
 
-	DefaultSendSqlTimeout = "10m"
-	DefaultRetryTimes     = -1
-	DefaultRetryDuration  = 30 * time.Minute
-
-	DefaultMaxSqlLength = 4 * 1024 * 1024
+const (
+	CDCSinkType_MySQL   = "mysql"
+	CDCSinkType_MO      = "matrixone"
+	CDCSinkType_Console = "console"
 )
 
 const (
