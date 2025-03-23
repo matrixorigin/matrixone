@@ -148,7 +148,7 @@ var checkPitr = func(ctx context.Context, bh BackgroundExec, accName string, pts
 		return !(unit == "h" && length < minPitrLen), nil
 	}
 
-	if ok, err := checkPitrByLevel(cdc2.ClusterLevel, "", ""); err != nil {
+	if ok, err := checkPitrByLevel(cdc2.CDCPitrGranularity_Cluster, "", ""); err != nil {
 		return err
 	} else if ok {
 		// covered by cluster level pitr
@@ -158,22 +158,22 @@ var checkPitr = func(ctx context.Context, bh BackgroundExec, accName string, pts
 	for _, pt := range pts.Pts {
 		dbName := pt.Source.Database
 		tblName := pt.Source.Table
-		level := cdc2.TableLevel
-		if dbName == cdc2.MatchAll && tblName == cdc2.MatchAll { // account level
-			level = cdc2.AccountLevel
-		} else if tblName == cdc2.MatchAll { // db level
-			level = cdc2.DbLevel
+		level := cdc2.CDCPitrGranularity_Table
+		if dbName == cdc2.CDCPitrGranularity_All && tblName == cdc2.CDCPitrGranularity_All { // account level
+			level = cdc2.CDCPitrGranularity_Account
+		} else if tblName == cdc2.CDCPitrGranularity_All { // db level
+			level = cdc2.CDCPitrGranularity_DB
 		}
 
-		if ok, err := checkPitrByLevel(cdc2.AccountLevel, dbName, tblName); err != nil {
+		if ok, err := checkPitrByLevel(cdc2.CDCPitrGranularity_Account, dbName, tblName); err != nil {
 			return err
 		} else if ok {
 			// covered by account level pitr
 			continue
 		}
 
-		if level == cdc2.DbLevel || level == cdc2.TableLevel {
-			if ok, err := checkPitrByLevel(cdc2.DbLevel, dbName, tblName); err != nil {
+		if level == cdc2.CDCPitrGranularity_DB || level == cdc2.CDCPitrGranularity_Table {
+			if ok, err := checkPitrByLevel(cdc2.CDCPitrGranularity_DB, dbName, tblName); err != nil {
 				return err
 			} else if ok {
 				// covered by db level pitr
@@ -181,8 +181,8 @@ var checkPitr = func(ctx context.Context, bh BackgroundExec, accName string, pts
 			}
 		}
 
-		if level == cdc2.TableLevel {
-			if ok, err := checkPitrByLevel(cdc2.TableLevel, dbName, tblName); err != nil {
+		if level == cdc2.CDCPitrGranularity_Table {
+			if ok, err := checkPitrByLevel(cdc2.CDCPitrGranularity_Table, dbName, tblName); err != nil {
 				return err
 			} else if ok {
 				// covered by table level pitr
@@ -246,10 +246,10 @@ func getPatternTuple(ctx context.Context, level string, pattern string, dup map[
 // There must be no special characters (','  '.'  ':' '`') in database name & table name.
 func extractTableInfo(ctx context.Context, input string, level string) (db string, table string, err error) {
 	parts := strings.Split(strings.TrimSpace(input), ".")
-	if level == cdc2.DbLevel && len(parts) != 1 {
+	if level == cdc2.CDCPitrGranularity_DB && len(parts) != 1 {
 		err = moerr.NewInternalErrorf(ctx, "invalid databases format: %s", input)
 		return
-	} else if level == cdc2.TableLevel && len(parts) != 2 {
+	} else if level == cdc2.CDCPitrGranularity_Table && len(parts) != 2 {
 		err = moerr.NewInternalErrorf(ctx, "invalid tables format: %s", input)
 		return
 	}
@@ -260,14 +260,14 @@ func extractTableInfo(ctx context.Context, input string, level string) (db strin
 		return
 	}
 
-	if level == cdc2.TableLevel {
+	if level == cdc2.CDCPitrGranularity_Table {
 		table = strings.TrimSpace(parts[1])
 		if !tableNameIsLegal(table) {
 			err = moerr.NewInternalErrorf(ctx, "invalid table name: %s", table)
 			return
 		}
 	} else {
-		table = cdc2.MatchAll
+		table = cdc2.CDCPitrGranularity_All
 	}
 	return
 }
@@ -275,10 +275,10 @@ func extractTableInfo(ctx context.Context, input string, level string) (db strin
 func getPatternTuples(ctx context.Context, level string, tables string) (pts *cdc2.PatternTuples, err error) {
 	pts = &cdc2.PatternTuples{}
 
-	if level == cdc2.AccountLevel {
+	if level == cdc2.CDCPitrGranularity_Account {
 		pts.Append(&cdc2.PatternTuple{
-			Source: cdc2.PatternTable{Database: cdc2.MatchAll, Table: cdc2.MatchAll},
-			Sink:   cdc2.PatternTable{Database: cdc2.MatchAll, Table: cdc2.MatchAll},
+			Source: cdc2.PatternTable{Database: cdc2.CDCPitrGranularity_All, Table: cdc2.CDCPitrGranularity_All},
+			Sink:   cdc2.PatternTable{Database: cdc2.CDCPitrGranularity_All, Table: cdc2.CDCPitrGranularity_All},
 		})
 		return
 	}
@@ -626,7 +626,7 @@ func (cdc *CdcTask) handleNewTables(allAccountTbls map[uint32]cdc2.TblMap) {
 
 func (cdc *CdcTask) matchAnyPattern(key string, info *cdc2.DbTableInfo) bool {
 	match := func(s, p string) bool {
-		if p == cdc2.MatchAll {
+		if p == cdc2.CDCPitrGranularity_All {
 			return true
 		}
 		return s == p
@@ -637,11 +637,11 @@ func (cdc *CdcTask) matchAnyPattern(key string, info *cdc2.DbTableInfo) bool {
 		if match(db, pt.Source.Database) && match(table, pt.Source.Table) {
 			// complete sink info
 			info.SinkDbName = pt.Sink.Database
-			if info.SinkDbName == cdc2.MatchAll {
+			if info.SinkDbName == cdc2.CDCPitrGranularity_All {
 				info.SinkDbName = db
 			}
 			info.SinkTblName = pt.Sink.Table
-			if info.SinkTblName == cdc2.MatchAll {
+			if info.SinkTblName == cdc2.CDCPitrGranularity_All {
 				info.SinkTblName = table
 			}
 			return true

@@ -1563,7 +1563,7 @@ func dbNameIsLegal(name string) bool {
 	if hasSpecialChars(name) {
 		return false
 	}
-	if name == cdc.MatchAll {
+	if name == cdc.CDCPitrGranularity_All {
 		return true
 	}
 
@@ -1588,7 +1588,7 @@ func tableNameIsLegal(name string) bool {
 	if hasSpecialChars(name) {
 		return false
 	}
-	if name == cdc.MatchAll {
+	if name == cdc.CDCPitrGranularity_All {
 		return true
 	}
 
