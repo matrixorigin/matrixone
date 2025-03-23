@@ -35,12 +35,10 @@ import (
 )
 
 const (
-	SourceUriPrefix = "mysql://"
-	SinkUriPrefix   = "mysql://"
-	ConsolePrefix   = "console://" //only used in testing stage
+	CDCSourceUriPrefix = "mysql://"
 
-	SASCommon = "common"
-	SASError  = "error"
+	CDCState_Common = "common"
+	CDCState_Error  = "error"
 )
 
 const (
@@ -423,7 +421,7 @@ func (info *UriInfo) GetEncodedPassword() (string, error) {
 }
 
 func (info *UriInfo) String() string {
-	return fmt.Sprintf("%s%s:%s@%s:%d", SourceUriPrefix, info.User, "******", info.Ip, info.Port)
+	return fmt.Sprintf("%s%s:%s@%s:%d", CDCSourceUriPrefix, info.User, "******", info.Ip, info.Port)
 }
 
 type PatternTable struct {

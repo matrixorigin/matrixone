@@ -134,67 +134,6 @@ var queryTable = func(
 	return false, nil
 }
 
-var checkPitr = func(ctx context.Context, bh BackgroundExec, accName string, pts *cdc2.PatternTuples) error {
-	// TODO min length
-	minPitrLen := int64(2)
-	checkPitrByLevel := func(level, dbName, tblName string) (bool, error) {
-		length, unit, ok, err := getPitrLengthAndUnit(ctx, bh, level, accName, dbName, tblName)
-		if err != nil {
-			return false, err
-		}
-		if !ok {
-			return false, nil
-		}
-		return !(unit == "h" && length < minPitrLen), nil
-	}
-
-	if ok, err := checkPitrByLevel(cdc2.CDCPitrGranularity_Cluster, "", ""); err != nil {
-		return err
-	} else if ok {
-		// covered by cluster level pitr
-		return nil
-	}
-
-	for _, pt := range pts.Pts {
-		dbName := pt.Source.Database
-		tblName := pt.Source.Table
-		level := cdc2.CDCPitrGranularity_Table
-		if dbName == cdc2.CDCPitrGranularity_All && tblName == cdc2.CDCPitrGranularity_All { // account level
-			level = cdc2.CDCPitrGranularity_Account
-		} else if tblName == cdc2.CDCPitrGranularity_All { // db level
-			level = cdc2.CDCPitrGranularity_DB
-		}
-
-		if ok, err := checkPitrByLevel(cdc2.CDCPitrGranularity_Account, dbName, tblName); err != nil {
-			return err
-		} else if ok {
-			// covered by account level pitr
-			continue
-		}
-
-		if level == cdc2.CDCPitrGranularity_DB || level == cdc2.CDCPitrGranularity_Table {
-			if ok, err := checkPitrByLevel(cdc2.CDCPitrGranularity_DB, dbName, tblName); err != nil {
-				return err
-			} else if ok {
-				// covered by db level pitr
-				continue
-			}
-		}
-
-		if level == cdc2.CDCPitrGranularity_Table {
-			if ok, err := checkPitrByLevel(cdc2.CDCPitrGranularity_Table, dbName, tblName); err != nil {
-				return err
-			} else if ok {
-				// covered by table level pitr
-				continue
-			}
-		}
-
-		return moerr.NewInternalErrorf(ctx, "no account/db/table level pitr with enough length found for pattern: %s, min pitr length: %d h", pt.OriginString, minPitrLen)
-	}
-	return nil
-}
-
 // getPatternTuple pattern example:
 //
 //	db1
