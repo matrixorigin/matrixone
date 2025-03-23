@@ -20,7 +20,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-type CreateTaskRequest = tree.CreateCDC
+type CDCCreateTaskRequest = tree.CreateCDC
+type CDCShowTaskRequest = tree.ShowCDC
 
 // All handle functions
 // 1. handleCreateCdc: create a cdc task
@@ -32,7 +33,7 @@ func handleCreateCdc(ses *Session, execCtx *ExecCtx, create *tree.CreateCDC) err
 func handleCreateCDCTaskRequest(
 	ctx context.Context,
 	ses *Session,
-	req *CreateTaskRequest,
+	req *CDCCreateTaskRequest,
 ) (err error) {
 	dao, err := NewCDCDao(ses)
 	if err != nil {
@@ -42,3 +43,17 @@ func handleCreateCDCTaskRequest(
 	err = dao.CreateTask(ctx, req)
 	return
 }
+
+// func handleShowCDCTaskRequest(
+// 	ctx context.Context,
+// 	ses *Session,
+// 	req *CDCShowTaskRequest,
+// ) (err error) {
+// 	dao, err := NewCDCDao(ses)
+// 	if err != nil {
+// 		return
+// 	}
+
+// 	err = dao.ShowTasks(ctx, req)
+// 	return
+// }
