@@ -329,7 +329,7 @@ func Test_getPatternTuples(t *testing.T) {
 	}
 
 	for _, tkase := range kases {
-		pts, err := getPatternTuples(context.Background(), tkase.level, tkase.tables)
+		pts, err := CDCParsePitrGranularity(context.Background(), tkase.level, tkase.tables)
 		if tkase.wantErr {
 			assert.Errorf(t, err, tkase.tables)
 		} else {

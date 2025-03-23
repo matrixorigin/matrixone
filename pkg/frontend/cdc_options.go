@@ -71,7 +71,7 @@ func (opts *CreateTaskRequestOptions) ValidateAndFill(
 	req *CreateTaskRequest,
 ) (err error) {
 	opts.Reset()
-	taskId := NewTaskId()
+	taskId := cdc.NewTaskId()
 	opts.TaskName = req.TaskName.String()
 	opts.TaskId = taskId.String()
 	opts.AccountInfo = ses.GetTenantInfo()
@@ -303,7 +303,7 @@ func (opts *CreateTaskRequestOptions) handleLevel(
 		return
 	}
 	var patterTupples *cdc.PatternTuples
-	if patterTupples, err = getPatternTuples(
+	if patterTupples, err = CDCParsePitrGranularity(
 		ctx, level, req.Tables,
 	); err != nil {
 		err = moerr.NewInternalErrorf(ctx, "invalid level: %s", level)
