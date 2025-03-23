@@ -26,6 +26,23 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 )
 
+func ExecuteAndGetRowsAffected(
+	ctx context.Context,
+	tx taskservice.SqlExecutor,
+	query string,
+	args ...interface{},
+) (int64, error) {
+	exec, err := tx.ExecContext(ctx, query, args...)
+	if err != nil {
+		return 0, err
+	}
+	rows, err := exec.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	return rows, nil
+}
+
 func WithBackgroundExec(
 	ctx context.Context,
 	ses *Session,

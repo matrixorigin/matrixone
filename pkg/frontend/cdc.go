@@ -872,7 +872,7 @@ func updateCdcTask(
 		//Cancel cdc task
 		//deleting mo_cdc_task
 		deleteSql := CDCSQLBuilder.DeleteTaskSQL(accountId, taskName)
-		cnt, err = executeSql(ctx, tx, deleteSql)
+		cnt, err = ExecuteAndGetRowsAffected(ctx, tx, deleteSql)
 		if err != nil {
 			return 0, err
 		}
@@ -888,14 +888,6 @@ func updateCdcTask(
 	return affectedCdcRow, nil
 }
 
-func buildCdcTaskWhereClause(accountId uint64, taskName string) string {
-	if len(taskName) == 0 {
-		return fmt.Sprintf(" and account_id = %d", accountId)
-	} else {
-		return fmt.Sprintf(" and account_id = %d and task_name = '%s'", accountId, taskName)
-	}
-}
-
 func deleteWatermark(ctx context.Context, tx taskservice.SqlExecutor, taskKeyMap map[taskservice.CdcTaskKey]struct{}) (int64, error) {
 	tCount := int64(0)
 	cnt := int64(0)
@@ -903,25 +895,13 @@ func deleteWatermark(ctx context.Context, tx taskservice.SqlExecutor, taskKeyMap
 	//deleting mo_cdc_watermark belongs to cancelled cdc task
 	for tInfo := range taskKeyMap {
 		deleteSql2 := CDCSQLBuilder.DeleteWatermarkSQL(tInfo.AccountId, tInfo.TaskId)
-		cnt, err = executeSql(ctx, tx, deleteSql2)
+		cnt, err = ExecuteAndGetRowsAffected(ctx, tx, deleteSql2)
 		if err != nil {
 			return 0, err
 		}
 		tCount += cnt
 	}
 	return tCount, nil
-}
-
-func executeSql(ctx context.Context, tx taskservice.SqlExecutor, query string, args ...interface{}) (int64, error) {
-	exec, err := tx.ExecContext(ctx, query, args...)
-	if err != nil {
-		return 0, err
-	}
-	rows, err := exec.RowsAffected()
-	if err != nil {
-		return 0, err
-	}
-	return rows, nil
 }
 
 func handleShowCdc(ses *Session, execCtx *ExecCtx, st *tree.ShowCDC) (err error) {
