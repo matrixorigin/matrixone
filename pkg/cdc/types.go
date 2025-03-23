@@ -51,20 +51,50 @@ const (
 	SASCommon = "common"
 	SASError  = "error"
 
-	InitSnapshotSplitTxn        = "InitSnapshotSplitTxn"
 	DefaultInitSnapshotSplitTxn = true
 
-	SendSqlTimeout        = "SendSqlTimeout"
 	DefaultSendSqlTimeout = "10m"
 	DefaultRetryTimes     = -1
 	DefaultRetryDuration  = 30 * time.Minute
 
-	MaxSqlLength        = "MaxSqlLength"
 	DefaultMaxSqlLength = 4 * 1024 * 1024
-
-	StartTs = "StartTS"
-	EndTs   = "EndTS"
 )
+
+const (
+	CDCRequestOptions_Level                = "Level"
+	CDCRequestOptions_Exclude              = "Exclude"
+	CDCRequestOptions_StartTs              = "StartTs"
+	CDCRequestOptions_EndTs                = "EndTs"
+	CDCRequestOptions_SendSqlTimeout       = "SendSqlTimeout"
+	CDCRequestOptions_InitSnapshotSplitTxn = "InitSnapshotSplitTxn"
+	CDCRequestOptions_MaxSqlLength         = "MaxSqlLength"
+	CDCRequestOptions_NoFull               = "NoFull"
+	CDCRequestOptions_ConfigFile           = "ConfigFile"
+)
+
+const (
+	CDCTaskExtraOptions_MaxSqlLength         = CDCRequestOptions_MaxSqlLength
+	CDCTaskExtraOptions_SendSqlTimeout       = CDCRequestOptions_SendSqlTimeout
+	CDCTaskExtraOptions_InitSnapshotSplitTxn = CDCRequestOptions_InitSnapshotSplitTxn
+)
+
+var CDCRequestOptions = []string{
+	CDCRequestOptions_Level,
+	CDCRequestOptions_Exclude,
+	CDCRequestOptions_StartTs,
+	CDCRequestOptions_EndTs,
+	CDCRequestOptions_MaxSqlLength,
+	CDCRequestOptions_SendSqlTimeout,
+	CDCRequestOptions_InitSnapshotSplitTxn,
+	CDCRequestOptions_ConfigFile,
+	CDCRequestOptions_NoFull,
+}
+
+var CDCTaskExtraOptions = []string{
+	CDCTaskExtraOptions_MaxSqlLength,
+	CDCTaskExtraOptions_SendSqlTimeout,
+	CDCTaskExtraOptions_InitSnapshotSplitTxn,
+}
 
 var (
 	EnableConsoleSink = false

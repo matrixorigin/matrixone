@@ -688,8 +688,8 @@ func (cdc *CdcTask) addExecPipelineForTable(ctx context.Context, info *cdc2.DbTa
 		cdc2.DefaultRetryTimes,
 		cdc2.DefaultRetryDuration,
 		cdc.activeRoutine,
-		uint64(cdc.additionalConfig[cdc2.MaxSqlLength].(float64)),
-		cdc.additionalConfig[cdc2.SendSqlTimeout].(string),
+		uint64(cdc.additionalConfig[cdc2.CDCTaskExtraOptions_MaxSqlLength].(float64)),
+		cdc.additionalConfig[cdc2.CDCTaskExtraOptions_SendSqlTimeout].(string),
 	)
 	if err != nil {
 		return err
@@ -706,7 +706,7 @@ func (cdc *CdcTask) addExecPipelineForTable(ctx context.Context, info *cdc2.DbTa
 		sinker,
 		cdc.watermarkUpdater,
 		tableDef,
-		cdc.additionalConfig[cdc2.InitSnapshotSplitTxn].(bool),
+		cdc.additionalConfig[cdc2.CDCTaskExtraOptions_InitSnapshotSplitTxn].(bool),
 		cdc.runningReaders,
 		cdc.startTs,
 		cdc.endTs,
