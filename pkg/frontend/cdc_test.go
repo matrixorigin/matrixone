@@ -409,7 +409,7 @@ func Test_handleCreateCdc(t *testing.T) {
 	})
 	defer stubOpenDbConn.Reset()
 
-	stubCheckPitr := gostub.Stub(&checkPitr, func(ctx context.Context, bh BackgroundExec, accName string, pts *cdc2.PatternTuples) error {
+	stubCheckPitr := gostub.Stub(&CDCCheckPitrGranularity, func(ctx context.Context, bh BackgroundExec, accName string, pts *cdc2.PatternTuples) error {
 		return nil
 	})
 	defer stubCheckPitr.Reset()
@@ -448,7 +448,7 @@ func Test_doCreateCdc_invalidStartTs(t *testing.T) {
 	pu.TaskService = &testTaskService{}
 	setPu("", &pu)
 
-	stubCheckPitr := gostub.Stub(&checkPitr, func(ctx context.Context, bh BackgroundExec, accName string, pts *cdc2.PatternTuples) error {
+	stubCheckPitr := gostub.Stub(&CDCCheckPitrGranularity, func(ctx context.Context, bh BackgroundExec, accName string, pts *cdc2.PatternTuples) error {
 		return nil
 	})
 	defer stubCheckPitr.Reset()
@@ -2895,7 +2895,7 @@ func TestCdcTask_checkPitr(t *testing.T) {
 			return 0, "", level == "table", nil
 		},
 	)
-	err := checkPitr(context.Background(), nil, "acc1", pts)
+	err := CDCCheckPitrGranularity(context.Background(), nil, "acc1", pts)
 	assert.Error(t, err)
 	stubGetPitrLength.Reset()
 
@@ -2904,7 +2904,7 @@ func TestCdcTask_checkPitr(t *testing.T) {
 			return 0, "", false, moerr.NewInternalErrorNoCtx("")
 		},
 	)
-	err = checkPitr(context.Background(), nil, "acc1", pts)
+	err = CDCCheckPitrGranularity(context.Background(), nil, "acc1", pts)
 	assert.Error(t, err)
 	stubGetPitrLength.Reset()
 
@@ -2913,7 +2913,7 @@ func TestCdcTask_checkPitr(t *testing.T) {
 			return 0, "", true, nil
 		},
 	)
-	err = checkPitr(context.Background(), nil, "acc1", pts)
+	err = CDCCheckPitrGranularity(context.Background(), nil, "acc1", pts)
 	assert.NoError(t, err)
 	stubGetPitrLength.Reset()
 }
