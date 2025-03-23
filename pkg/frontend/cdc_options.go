@@ -23,47 +23,11 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	cdc2 "github.com/matrixorigin/matrixone/pkg/cdc"
+	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 )
-
-const (
-	CDCRequestOptions_Level                = "Level"
-	CDCRequestOptions_Exclude              = "Exclude"
-	CDCRequestOptions_StartTs              = "StartTs"
-	CDCRequestOptions_EndTs                = "EndTs"
-	CDCRequestOptions_SendSqlTimeout       = "SendSqlTimeout"
-	CDCRequestOptions_InitSnapshotSplitTxn = "InitSnapshotSplitTxn"
-	CDCRequestOptions_MaxSqlLength         = "MaxSqlLength"
-	CDCRequestOptions_NoFull               = "NoFull"
-	CDCRequestOptions_ConfigFile           = "ConfigFile"
-)
-
-const (
-	CDCTaskExtraOptions_MaxSqlLength         = CDCRequestOptions_MaxSqlLength
-	CDCTaskExtraOptions_SendSqlTimeout       = CDCRequestOptions_SendSqlTimeout
-	CDCTaskExtraOptions_InitSnapshotSplitTxn = CDCRequestOptions_InitSnapshotSplitTxn
-)
-
-var CDCTaskExtraOptions = []string{
-	CDCTaskExtraOptions_MaxSqlLength,
-	CDCTaskExtraOptions_SendSqlTimeout,
-	CDCTaskExtraOptions_InitSnapshotSplitTxn,
-}
-
-var CDCRequestOptions = []string{
-	CDCRequestOptions_Level,
-	CDCRequestOptions_Exclude,
-	CDCRequestOptions_StartTs,
-	CDCRequestOptions_EndTs,
-	CDCRequestOptions_MaxSqlLength,
-	CDCRequestOptions_SendSqlTimeout,
-	CDCRequestOptions_InitSnapshotSplitTxn,
-	CDCRequestOptions_ConfigFile,
-	CDCRequestOptions_NoFull,
-}
 
 type CreateTaskRequestOptions struct {
 	TaskName     string
@@ -75,7 +39,7 @@ type CreateTaskRequestOptions struct {
 	MaxSqlLength int64
 	PitrTables   string // json encoded pitr tables: cdc2.PatternTuples
 	SrcUri       string // json encoded source uri: cdc2.UriInfo
-	SrcUriInfo   cdc2.UriInfo
+	SrcUriInfo   cdc.UriInfo
 	ExtraOpts    string // json encoded extra opts: map[string]any
 	SinkType     string
 	NoFull       bool
@@ -97,7 +61,7 @@ func (opts *CreateTaskRequestOptions) Reset() {
 	opts.NoFull = false
 	opts.UseConsole = true
 	opts.ConfigFile = ""
-	opts.SrcUriInfo = cdc2.UriInfo{}
+	opts.SrcUriInfo = cdc.UriInfo{}
 	opts.AccountInfo = nil
 }
 
@@ -123,12 +87,12 @@ func (opts *CreateTaskRequestOptions) ValidateAndFill(
 	// target field: SrcUri
 	{
 		if opts.SrcUri, opts.SrcUriInfo, err = extractUriInfo(
-			ctx, req.SourceUri, cdc2.SourceUriPrefix,
+			ctx, req.SourceUri, cdc.SourceUriPrefix,
 		); err != nil {
 			return
 		}
-		if _, err = cdc2.OpenDbConn(
-			opts.SrcUriInfo.User, opts.SrcUriInfo.Password, opts.SrcUriInfo.Ip, opts.SrcUriInfo.Port, cdc2.DefaultSendSqlTimeout,
+		if _, err = cdc.OpenDbConn(
+			opts.SrcUriInfo.User, opts.SrcUriInfo.Password, opts.SrcUriInfo.Ip, opts.SrcUriInfo.Port, cdc.DefaultSendSqlTimeout,
 		); err != nil {
 			err = moerr.NewInternalErrorf(ctx, "failed to connect to source, please check the connection, err: %v", err)
 			return
@@ -142,10 +106,10 @@ func (opts *CreateTaskRequestOptions) ValidateAndFill(
 	// target field: SinkType, UseConsole
 	{
 		opts.SinkType = strings.ToLower(req.SinkType)
-		if cdc2.EnableConsoleSink && opts.SinkType == cdc2.ConsoleSink {
+		if cdc.EnableConsoleSink && opts.SinkType == cdc.ConsoleSink {
 			opts.UseConsole = true
 		}
-		if !opts.UseConsole && opts.SinkType != cdc2.MysqlSink && opts.SinkType != cdc2.MatrixoneSink {
+		if !opts.UseConsole && opts.SinkType != cdc.MysqlSink && opts.SinkType != cdc.MatrixoneSink {
 			err = moerr.NewInternalErrorf(ctx, "unsupported sink type: %s", req.SinkType)
 			return
 		}
@@ -156,22 +120,22 @@ func (opts *CreateTaskRequestOptions) ValidateAndFill(
 		extraOpts      = make(map[string]any)
 	)
 
-	for _, key := range CDCRequestOptions {
+	for _, key := range cdc.CDCRequestOptions {
 		value := tmpOpts[key]
 		switch key {
-		case CDCRequestOptions_NoFull:
+		case cdc.CDCRequestOptions_NoFull:
 			opts.NoFull, _ = strconv.ParseBool(value)
-		case CDCRequestOptions_Level:
+		case cdc.CDCRequestOptions_Level:
 			if err = opts.handleLevel(ctx, ses, req, value); err != nil {
 				return
 			}
-		case CDCRequestOptions_Exclude:
+		case cdc.CDCRequestOptions_Exclude:
 			if _, err = regexp.Compile(value); err != nil {
 				err = moerr.NewInternalErrorf(ctx, "invalid exclude: %s, err: %v", value, err)
 				return
 			}
 			opts.Exclude = strings.ReplaceAll(value, "\\", "\\\\")
-		case CDCRequestOptions_StartTs:
+		case cdc.CDCRequestOptions_StartTs:
 			if value != "" {
 				if startTs, err = parseTimestamp(value, ses.timeZone); err != nil {
 					err = moerr.NewInternalErrorf(ctx, "invalid startTs: %s, supported timestamp format: `%s`, or `%s`", value, time.DateTime, time.RFC3339)
@@ -179,7 +143,7 @@ func (opts *CreateTaskRequestOptions) ValidateAndFill(
 				}
 				opts.StartTs = startTs.Format(time.RFC3339)
 			}
-		case CDCRequestOptions_EndTs:
+		case cdc.CDCRequestOptions_EndTs:
 			if value != "" {
 				if endTs, err = parseTimestamp(value, ses.timeZone); err != nil {
 					err = moerr.NewInternalErrorf(ctx, "invalid endTs: %s, supported timestamp format: `%s`, or `%s`", value, time.DateTime, time.RFC3339)
@@ -187,28 +151,28 @@ func (opts *CreateTaskRequestOptions) ValidateAndFill(
 				}
 				opts.EndTs = endTs.Format(time.RFC3339)
 			}
-		case CDCRequestOptions_MaxSqlLength:
+		case cdc.CDCRequestOptions_MaxSqlLength:
 			if value != "" {
 				var maxSqlLength int64
 				if maxSqlLength, err = strconv.ParseInt(value, 10, 64); err != nil {
 					err = moerr.NewInternalErrorf(ctx, "invalid maxSqlLength: %s", value)
 					return
 				}
-				extraOpts[CDCTaskExtraOptions_MaxSqlLength] = maxSqlLength
+				extraOpts[cdc.CDCTaskExtraOptions_MaxSqlLength] = maxSqlLength
 			}
-		case CDCRequestOptions_InitSnapshotSplitTxn:
+		case cdc.CDCRequestOptions_InitSnapshotSplitTxn:
 			if value == "false" {
-				extraOpts[CDCTaskExtraOptions_InitSnapshotSplitTxn] = false
+				extraOpts[cdc.CDCTaskExtraOptions_InitSnapshotSplitTxn] = false
 			}
-		case CDCRequestOptions_SendSqlTimeout:
+		case cdc.CDCRequestOptions_SendSqlTimeout:
 			if value != "" {
 				if _, err = time.ParseDuration(value); err != nil {
 					err = moerr.NewInternalErrorf(ctx, "invalid sendSqlTimeout: %s", value)
 					return
 				}
-				extraOpts[CDCTaskExtraOptions_SendSqlTimeout] = value
+				extraOpts[cdc.CDCTaskExtraOptions_SendSqlTimeout] = value
 			}
-		case CDCRequestOptions_ConfigFile:
+		case cdc.CDCRequestOptions_ConfigFile:
 			if value != "" {
 				opts.ConfigFile = value
 			}
@@ -221,14 +185,14 @@ func (opts *CreateTaskRequestOptions) ValidateAndFill(
 	}
 
 	// fill default value for additional opts
-	if _, ok := extraOpts[CDCTaskExtraOptions_InitSnapshotSplitTxn]; !ok {
-		extraOpts[cdc2.InitSnapshotSplitTxn] = cdc2.DefaultInitSnapshotSplitTxn
+	if _, ok := extraOpts[cdc.CDCTaskExtraOptions_InitSnapshotSplitTxn]; !ok {
+		extraOpts[cdc.CDCTaskExtraOptions_InitSnapshotSplitTxn] = cdc.DefaultInitSnapshotSplitTxn
 	}
-	if _, ok := extraOpts[CDCTaskExtraOptions_SendSqlTimeout]; !ok {
-		extraOpts[CDCTaskExtraOptions_SendSqlTimeout] = cdc2.DefaultSendSqlTimeout
+	if _, ok := extraOpts[cdc.CDCTaskExtraOptions_SendSqlTimeout]; !ok {
+		extraOpts[cdc.CDCTaskExtraOptions_SendSqlTimeout] = cdc.DefaultSendSqlTimeout
 	}
-	if _, ok := extraOpts[CDCTaskExtraOptions_MaxSqlLength]; !ok {
-		extraOpts[CDCTaskExtraOptions_MaxSqlLength] = cdc2.DefaultMaxSqlLength
+	if _, ok := extraOpts[cdc.CDCTaskExtraOptions_MaxSqlLength]; !ok {
+		extraOpts[cdc.CDCTaskExtraOptions_MaxSqlLength] = cdc.DefaultMaxSqlLength
 	}
 
 	var extraOptsBytes []byte
@@ -310,8 +274,8 @@ func (opts *CreateTaskRequestOptions) ToInsertTaskSQL(
 		opts.PitrTables,
 		opts.Exclude,
 		"",
-		cdc2.SASCommon,
-		cdc2.SASCommon,
+		cdc.SASCommon,
+		cdc.SASCommon,
 		opts.StartTs,
 		opts.EndTs,
 		opts.ConfigFile,
@@ -334,11 +298,11 @@ func (opts *CreateTaskRequestOptions) handleLevel(
 	req *CreateTaskRequest,
 	level string,
 ) (err error) {
-	if level != cdc2.AccountLevel && level != cdc2.DbLevel && level != cdc2.TableLevel {
+	if level != cdc.AccountLevel && level != cdc.DbLevel && level != cdc.TableLevel {
 		err = moerr.NewInternalErrorf(ctx, "invalid level: %s", level)
 		return
 	}
-	var patterTupples *cdc2.PatternTuples
+	var patterTupples *cdc.PatternTuples
 	if patterTupples, err = getPatternTuples(
 		ctx, level, req.Tables,
 	); err != nil {
@@ -354,6 +318,6 @@ func (opts *CreateTaskRequestOptions) handleLevel(
 	); err != nil {
 		return
 	}
-	opts.PitrTables, err = cdc2.JsonEncode(patterTupples)
+	opts.PitrTables, err = cdc.JsonEncode(patterTupples)
 	return
 }
