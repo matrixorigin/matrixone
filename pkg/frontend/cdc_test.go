@@ -116,7 +116,7 @@ func Test_getPatternTuples(t *testing.T) {
 		// table level
 		{
 			tables:  "db1.t1:db2.t2,db3.t3:db4.t4",
-			level:   cdc2.TableLevel,
+			level:   cdc2.CDCPitrGranularity_Table,
 			wantErr: false,
 			expect: &cdc2.PatternTuples{
 				Pts: []*cdc2.PatternTuple{
@@ -145,7 +145,7 @@ func Test_getPatternTuples(t *testing.T) {
 		},
 		{
 			tables:  "db1.t1,db3.t3:db4.t4",
-			level:   cdc2.TableLevel,
+			level:   cdc2.CDCPitrGranularity_Table,
 			wantErr: false,
 			expect: &cdc2.PatternTuples{
 				Pts: []*cdc2.PatternTuple{
@@ -174,7 +174,7 @@ func Test_getPatternTuples(t *testing.T) {
 		},
 		{
 			tables:  "db1.t1,db3.t3",
-			level:   cdc2.TableLevel,
+			level:   cdc2.CDCPitrGranularity_Table,
 			wantErr: false,
 			expect: &cdc2.PatternTuples{
 				Pts: []*cdc2.PatternTuple{
@@ -203,35 +203,35 @@ func Test_getPatternTuples(t *testing.T) {
 		},
 		{
 			tables:  "db1.t1:db2.t2,db1.t1:db4.t4",
-			level:   cdc2.TableLevel,
+			level:   cdc2.CDCPitrGranularity_Table,
 			wantErr: true,
 		},
 
 		// db level
 		{
 			tables:  "db1:db2,db3:db4",
-			level:   cdc2.DbLevel,
+			level:   cdc2.CDCPitrGranularity_DB,
 			wantErr: false,
 			expect: &cdc2.PatternTuples{
 				Pts: []*cdc2.PatternTuple{
 					{
 						Source: cdc2.PatternTable{
 							Database: "db1",
-							Table:    cdc2.MatchAll,
+							Table:    cdc2.CDCPitrGranularity_All,
 						},
 						Sink: cdc2.PatternTable{
 							Database: "db2",
-							Table:    cdc2.MatchAll,
+							Table:    cdc2.CDCPitrGranularity_All,
 						},
 					},
 					{
 						Source: cdc2.PatternTable{
 							Database: "db3",
-							Table:    cdc2.MatchAll,
+							Table:    cdc2.CDCPitrGranularity_All,
 						},
 						Sink: cdc2.PatternTable{
 							Database: "db4",
-							Table:    cdc2.MatchAll,
+							Table:    cdc2.CDCPitrGranularity_All,
 						},
 					},
 				},
@@ -239,28 +239,28 @@ func Test_getPatternTuples(t *testing.T) {
 		},
 		{
 			tables:  "db1,db3:db4",
-			level:   cdc2.DbLevel,
+			level:   cdc2.CDCPitrGranularity_DB,
 			wantErr: false,
 			expect: &cdc2.PatternTuples{
 				Pts: []*cdc2.PatternTuple{
 					{
 						Source: cdc2.PatternTable{
 							Database: "db1",
-							Table:    cdc2.MatchAll,
+							Table:    cdc2.CDCPitrGranularity_All,
 						},
 						Sink: cdc2.PatternTable{
 							Database: "db1",
-							Table:    cdc2.MatchAll,
+							Table:    cdc2.CDCPitrGranularity_All,
 						},
 					},
 					{
 						Source: cdc2.PatternTable{
 							Database: "db3",
-							Table:    cdc2.MatchAll,
+							Table:    cdc2.CDCPitrGranularity_All,
 						},
 						Sink: cdc2.PatternTable{
 							Database: "db4",
-							Table:    cdc2.MatchAll,
+							Table:    cdc2.CDCPitrGranularity_All,
 						},
 					},
 				},
@@ -268,28 +268,28 @@ func Test_getPatternTuples(t *testing.T) {
 		},
 		{
 			tables:  "db1,db3",
-			level:   cdc2.DbLevel,
+			level:   cdc2.CDCPitrGranularity_DB,
 			wantErr: false,
 			expect: &cdc2.PatternTuples{
 				Pts: []*cdc2.PatternTuple{
 					{
 						Source: cdc2.PatternTable{
 							Database: "db1",
-							Table:    cdc2.MatchAll,
+							Table:    cdc2.CDCPitrGranularity_All,
 						},
 						Sink: cdc2.PatternTable{
 							Database: "db1",
-							Table:    cdc2.MatchAll,
+							Table:    cdc2.CDCPitrGranularity_All,
 						},
 					},
 					{
 						Source: cdc2.PatternTable{
 							Database: "db3",
-							Table:    cdc2.MatchAll,
+							Table:    cdc2.CDCPitrGranularity_All,
 						},
 						Sink: cdc2.PatternTable{
 							Database: "db3",
-							Table:    cdc2.MatchAll,
+							Table:    cdc2.CDCPitrGranularity_All,
 						},
 					},
 				},
@@ -299,18 +299,18 @@ func Test_getPatternTuples(t *testing.T) {
 		// account level
 		{
 			tables:  "",
-			level:   cdc2.AccountLevel,
+			level:   cdc2.CDCPitrGranularity_Account,
 			wantErr: false,
 			expect: &cdc2.PatternTuples{
 				Pts: []*cdc2.PatternTuple{
 					{
 						Source: cdc2.PatternTable{
-							Database: cdc2.MatchAll,
-							Table:    cdc2.MatchAll,
+							Database: cdc2.CDCPitrGranularity_All,
+							Table:    cdc2.CDCPitrGranularity_All,
 						},
 						Sink: cdc2.PatternTable{
-							Database: cdc2.MatchAll,
-							Table:    cdc2.MatchAll,
+							Database: cdc2.CDCPitrGranularity_All,
+							Table:    cdc2.CDCPitrGranularity_All,
 						},
 					},
 				},
@@ -377,7 +377,7 @@ func Test_handleCreateCdc(t *testing.T) {
 		Tables:      "db1.t1:db1.t1,db1.t2",
 		Option: []string{
 			cdc2.CDCRequestOptions_Level,
-			cdc2.TableLevel,
+			cdc2.CDCPitrGranularity_Table,
 			"Account",
 			sysAccountName,
 			cdc2.CDCRequestOptions_Exclude,
@@ -462,7 +462,7 @@ func Test_doCreateCdc_invalidStartTs(t *testing.T) {
 		Tables:      "db1.t1:db1.t1,db1.t2",
 		Option: []string{
 			cdc2.CDCRequestOptions_Level,
-			cdc2.TableLevel,
+			cdc2.CDCPitrGranularity_Table,
 			"Account",
 			sysAccountName,
 			cdc2.CDCRequestOptions_Exclude,
@@ -482,7 +482,7 @@ func Test_doCreateCdc_invalidStartTs(t *testing.T) {
 
 	create.Option = []string{
 		cdc2.CDCRequestOptions_Level,
-		cdc2.AccountLevel,
+		cdc2.CDCPitrGranularity_Account,
 		cdc2.CDCRequestOptions_StartTs,
 		"2025-01-03 15:20:00",
 		cdc2.CDCRequestOptions_EndTs,
@@ -2714,7 +2714,7 @@ func TestCdcTask_handleNewTables(t *testing.T) {
 				{
 					Source: cdc2.PatternTable{
 						Database: "db1",
-						Table:    cdc2.MatchAll,
+						Table:    cdc2.CDCPitrGranularity_All,
 					},
 				},
 			},
@@ -2878,13 +2878,13 @@ func TestCdcTask_checkPitr(t *testing.T) {
 			{
 				Source: cdc2.PatternTable{
 					Database: "db2",
-					Table:    cdc2.MatchAll,
+					Table:    cdc2.CDCPitrGranularity_All,
 				},
 			},
 			{
 				Source: cdc2.PatternTable{
-					Database: cdc2.MatchAll,
-					Table:    cdc2.MatchAll,
+					Database: cdc2.CDCPitrGranularity_All,
+					Table:    cdc2.CDCPitrGranularity_All,
 				},
 			},
 		},

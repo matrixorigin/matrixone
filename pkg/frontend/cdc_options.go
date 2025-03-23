@@ -298,7 +298,7 @@ func (opts *CreateTaskRequestOptions) handleLevel(
 	req *CreateTaskRequest,
 	level string,
 ) (err error) {
-	if level != cdc.AccountLevel && level != cdc.DbLevel && level != cdc.TableLevel {
+	if level != cdc.CDCPitrGranularity_Account && level != cdc.CDCPitrGranularity_DB && level != cdc.CDCPitrGranularity_Table {
 		err = moerr.NewInternalErrorf(ctx, "invalid level: %s", level)
 		return
 	}

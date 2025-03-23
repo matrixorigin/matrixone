@@ -35,12 +35,6 @@ import (
 )
 
 const (
-	TableLevel   = "table"
-	DbLevel      = "database"
-	AccountLevel = "account"
-	ClusterLevel = "cluster"
-	MatchAll     = "*"
-
 	MysqlSink       = "mysql"
 	MatrixoneSink   = "matrixone"
 	ConsoleSink     = "console"
@@ -58,6 +52,14 @@ const (
 	DefaultRetryDuration  = 30 * time.Minute
 
 	DefaultMaxSqlLength = 4 * 1024 * 1024
+)
+
+const (
+	CDCPitrGranularity_Table   = "table"
+	CDCPitrGranularity_DB      = "database"
+	CDCPitrGranularity_Account = "account"
+	CDCPitrGranularity_Cluster = "cluster"
+	CDCPitrGranularity_All     = "*"
 )
 
 const (
