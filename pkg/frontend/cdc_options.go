@@ -137,7 +137,7 @@ func (opts *CreateTaskRequestOptions) ValidateAndFill(
 			opts.Exclude = strings.ReplaceAll(value, "\\", "\\\\")
 		case cdc.CDCRequestOptions_StartTs:
 			if value != "" {
-				if startTs, err = parseTimestamp(value, ses.timeZone); err != nil {
+				if startTs, err = CDCStrToTime(value, ses.timeZone); err != nil {
 					err = moerr.NewInternalErrorf(ctx, "invalid startTs: %s, supported timestamp format: `%s`, or `%s`", value, time.DateTime, time.RFC3339)
 					return
 				}
@@ -145,7 +145,7 @@ func (opts *CreateTaskRequestOptions) ValidateAndFill(
 			}
 		case cdc.CDCRequestOptions_EndTs:
 			if value != "" {
-				if endTs, err = parseTimestamp(value, ses.timeZone); err != nil {
+				if endTs, err = CDCStrToTime(value, ses.timeZone); err != nil {
 					err = moerr.NewInternalErrorf(ctx, "invalid endTs: %s, supported timestamp format: `%s`, or `%s`", value, time.DateTime, time.RFC3339)
 					return
 				}

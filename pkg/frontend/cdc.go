@@ -730,26 +730,13 @@ func (cdc *CdcTask) retrieveCdcTask(ctx context.Context) error {
 		}
 	}
 
-	convertToTs := func(tsStr string) (types.TS, error) {
-		t, err := parseTimestamp(tsStr, nil)
-		if err != nil {
-			return types.TS{}, err
-		}
-
-		return types.BuildTS(t.UnixNano(), 0), nil
-	}
-
 	// startTs
 	startTs, err := res.GetString(ctx, 0, 5)
 	if err != nil {
 		return err
 	}
-	if startTs == "" {
-		cdc.startTs = types.TS{}
-	} else {
-		if cdc.startTs, err = convertToTs(startTs); err != nil {
-			return err
-		}
+	if cdc.startTs, err = CDCStrToTS(startTs); err != nil {
+		return err
 	}
 
 	// endTs
@@ -757,12 +744,8 @@ func (cdc *CdcTask) retrieveCdcTask(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if endTs == "" {
-		cdc.endTs = types.TS{}
-	} else {
-		if cdc.endTs, err = convertToTs(endTs); err != nil {
-			return err
-		}
+	if cdc.endTs, err = CDCStrToTS(endTs); err != nil {
+		return err
 	}
 
 	// noFull
@@ -1196,49 +1179,5 @@ func getTaskCkp(ctx context.Context, bh BackgroundExec, accountId uint32, taskId
 	}
 
 	s += "}"
-	return
-}
-
-var (
-	getGlobalPuWrapper = getPu
-)
-
-var initAesKeyBySqlExecutor = func(ctx context.Context, executor taskservice.SqlExecutor, accountId uint32, service string) (err error) {
-	if len(cdc2.AesKey) > 0 {
-		return nil
-	}
-
-	var encryptedKey string
-	var ret bool
-	querySql := CDCSQLBuilder.GetDataKeySQL(uint64(accountId), cdc2.InitKeyId)
-
-	ret, err = queryTable(ctx, executor, querySql, func(ctx context.Context, rows *sql.Rows) (bool, error) {
-		if err = rows.Scan(&encryptedKey); err != nil {
-			return false, err
-		}
-		return true, nil
-	})
-	if err != nil {
-		return
-	} else if !ret {
-		return moerr.NewInternalError(ctx, "no data key")
-	}
-
-	cdc2.AesKey, err = cdc2.AesCFBDecodeWithKey(ctx, encryptedKey, []byte(getGlobalPuWrapper(service).SV.KeyEncryptionKey))
-	return
-}
-
-func parseTimestamp(tsStr string, tz *time.Location) (ts time.Time, err error) {
-	if tsStr == "" {
-		return
-	}
-
-	if tz != nil {
-		if ts, err = time.ParseInLocation(time.DateTime, tsStr, tz); err == nil {
-			return
-		}
-	}
-
-	ts, err = time.Parse(time.RFC3339, tsStr)
 	return
 }
