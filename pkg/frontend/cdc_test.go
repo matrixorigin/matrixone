@@ -477,7 +477,7 @@ func Test_doCreateCdc_invalidStartTs(t *testing.T) {
 			"123456",
 		},
 	}
-	err := doCreateCdc(context.Background(), ses, create)
+	err := handleCreateCDCTaskRequest(context.Background(), ses, create)
 	assert.Error(t, err)
 
 	create.Option = []string{
@@ -488,7 +488,7 @@ func Test_doCreateCdc_invalidStartTs(t *testing.T) {
 		cdc2.EndTs,
 		"2025-01-03 14:20:00",
 	}
-	err = doCreateCdc(context.Background(), ses, create)
+	err = handleCreateCDCTaskRequest(context.Background(), ses, create)
 	assert.Error(t, err)
 }
 
