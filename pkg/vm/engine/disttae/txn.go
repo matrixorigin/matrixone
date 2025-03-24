@@ -1137,6 +1137,10 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 			continue
 		}
 
+		if e.databaseId == catalog.MO_CATALOG_ID {
+			continue
+		}
+
 		if e.bat.RowCount() >= batch.DefaultBatchMaxRow/2 {
 			continue
 		}
@@ -1157,7 +1161,8 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 
 			for j := i + 1; j < len(idxes); j++ {
 				b := txn.writes[idxes[j]]
-				if b.bat != nil && a.tableId == b.tableId && a.bat.RowCount()+b.bat.RowCount() <= batch.DefaultBatchMaxRow {
+				if b.bat != nil && a.tableId == b.tableId && a.databaseId == b.databaseId &&
+					a.bat.RowCount()+b.bat.RowCount() <= batch.DefaultBatchMaxRow {
 					if a.bat, err = a.bat.Append(ctx, txn.proc.Mp(), b.bat); err != nil {
 						return err
 					}
