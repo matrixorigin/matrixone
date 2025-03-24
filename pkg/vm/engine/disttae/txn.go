@@ -1141,34 +1141,38 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 			continue
 		}
 
-		if e.bat.RowCount() >= batch.DefaultBatchMaxRow/2 {
+		if e.bat.RowCount() >= batch.DefaultBatchMaxRow {
 			continue
 		}
 
 		if e.typ == INSERT {
-			inserts.Add(uint64(i))
-		} else {
+			//inserts.Add(uint64(i))
+		} else if e.typ == DELETE {
 			deletes.Add(uint64(i))
 		}
 	}
 
 	foo := func(idxes []uint64) (err error) {
 		for i := 0; i < len(idxes); i++ {
-			a := txn.writes[idxes[i]]
-			if a.bat == nil {
+			a := &txn.writes[idxes[i]]
+			if a.bat == nil || a.bat.RowCount() == batch.DefaultBatchMaxRow {
 				continue
 			}
 
 			for j := i + 1; j < len(idxes); j++ {
-				b := txn.writes[idxes[j]]
+				b := &txn.writes[idxes[j]]
 				if b.bat != nil && a.tableId == b.tableId && a.databaseId == b.databaseId &&
 					a.bat.RowCount()+b.bat.RowCount() <= batch.DefaultBatchMaxRow {
-					if a.bat, err = a.bat.Append(ctx, txn.proc.Mp(), b.bat); err != nil {
+					if _, err = a.bat.Append(ctx, txn.proc.Mp(), b.bat); err != nil {
 						return err
 					}
 
-					txn.writes[idxes[j]].bat.Clean(txn.proc.GetMPool())
-					txn.writes[idxes[j]].bat = nil
+					b.bat.Clean(txn.proc.GetMPool())
+					b.bat = nil
+				}
+
+				if a.bat.RowCount() == batch.DefaultBatchMaxRow {
+					break
 				}
 			}
 		}
@@ -1176,13 +1180,13 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 		return nil
 	}
 
-	if inserts.Count()+deletes.Count() >= batch.DefaultBatchMaxRow/64 {
-		ins := inserts.ToArray()
+	if inserts.Count()+deletes.Count() >= 10 {
+		//ins := inserts.ToArray()
 		del := deletes.ToArray()
 
-		if err := foo(ins); err != nil {
-			return err
-		}
+		//if err := foo(ins); err != nil {
+		//	return err
+		//}
 
 		if err := foo(del); err != nil {
 			return err
