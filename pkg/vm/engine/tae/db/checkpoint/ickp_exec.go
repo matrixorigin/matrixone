@@ -240,7 +240,7 @@ func (executor *checkpointExecutor) doIncrementalCheckpoint(
 	fields = data.ExportStats("")
 	defer data.Close()
 	var location objectio.Location
-	location, files, err = data.WriteTo(
+	location, files, err = data.Sync(
 		executor.ctx,
 		executor.runner.rt.Fs,
 	)

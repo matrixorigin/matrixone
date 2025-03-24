@@ -87,7 +87,7 @@ var _ kmeans.Clusterer = new(ElkanClusterer)
 func NewKMeans(vectors [][]float64, clusterCnt,
 	maxIterations int, deltaThreshold float64,
 	distanceType metric.MetricType, initType kmeans.InitType,
-	normalize bool,
+	spherical bool,
 	nworker int,
 ) (kmeans.Clusterer, error) {
 
@@ -117,7 +117,7 @@ func NewKMeans(vectors [][]float64, clusterCnt,
 	}
 	minCentroidDist := make([]float64, clusterCnt)
 
-	distanceFunction, err := metric.ResolveKmeansDistanceFn(distanceType)
+	distanceFunction, normalize, err := metric.ResolveKmeansDistanceFn(distanceType, spherical)
 	if err != nil {
 		return nil, err
 	}
