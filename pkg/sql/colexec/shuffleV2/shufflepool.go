@@ -21,7 +21,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -60,7 +59,7 @@ type ShufflePoolV2 struct {
 	holders       int32
 	finished      int32
 	stoppers      int32
-	batches       []*batch.Batch
+	batches       []*batch.CompactBatchs
 	holderLock    sync.Mutex
 	statsLock     sync.Mutex
 	batchLocks    []sync.Mutex
@@ -74,7 +73,10 @@ func NewShufflePool(bucketNum int32, maxHolders int32) *ShufflePoolV2 {
 	sp.holders = 0
 	sp.finished = 0
 	sp.stoppers = 0
-	sp.batches = make([]*batch.Batch, sp.bucketNum)
+	sp.batches = make([]*batch.CompactBatchs, sp.bucketNum)
+	for i := range sp.batches {
+		sp.batches[i] = batch.NewCompactBatchs()
+	}
 	sp.batchLocks = make([]sync.Mutex, bucketNum)
 	sp.endingWaiters = make([]chan bool, bucketNum)
 	sp.batchWaiters = make([]chan bool, bucketNum)
@@ -111,6 +113,12 @@ func (sp *ShufflePoolV2) stopWriting() {
 			sp.endingWaiters[i] <- true
 		}
 	}
+}
+
+func (sp *ShufflePoolV2) allStop() bool {
+	sp.holderLock.Lock()
+	defer sp.holderLock.Unlock()
+	return sp.stoppers == sp.maxHolders
 }
 
 func (sp *ShufflePoolV2) Reset(m *mpool.MPool) {
@@ -153,84 +161,54 @@ func (sp *ShufflePoolV2) DebugPrint() { // only for debug
 }
 
 // shuffle operator is ending, release buf and sending remaining batches
-func (sp *ShufflePoolV2) getEndingBatch(buf *batch.Batch, shuffleIDX int32, proc *process.Process, isDebug bool) *batch.Batch {
-	if isDebug {
-		return sp.batches[shuffleIDX]
-	}
+func (sp *ShufflePoolV2) waitBatchOrEnd(shuffleIDX int32, proc *process.Process) {
 	for {
-		bat := sp.getFullBatch(buf, shuffleIDX)
-		if bat != nil && bat.RowCount() > 0 {
-			return bat
-		}
 		select {
 		case <-sp.batchWaiters[shuffleIDX]:
-			bat = sp.getFullBatch(buf, shuffleIDX)
-			if bat != nil && bat.RowCount() > 0 {
-				return bat
-			}
+			return
 		case <-sp.endingWaiters[shuffleIDX]:
-			if buf != nil {
-				buf.Clean(proc.Mp())
-			}
-			sp.endingWaiters[shuffleIDX] <- true
-			bat = sp.batches[shuffleIDX]
-			sp.batches[shuffleIDX] = nil
-			//if bat != nil {
-			//sp.statsLock.Lock()
-			//sp.stats.outputCNT[shuffleIDX] += int64(bat.RowCount())
-			//sp.statsLock.Unlock()
-			//}
-			return bat
+			return
 		case <-proc.Ctx.Done():
-			if buf != nil {
-				buf.Clean(proc.Mp())
-			}
-			return nil
+			return
 		}
 	}
 }
 
 // if there is full batch  in pool, return it and put buf in the place to continue writing into pool
-func (sp *ShufflePoolV2) getFullBatch(buf *batch.Batch, shuffleIDX int32) *batch.Batch {
+func (sp *ShufflePoolV2) getFullBatch(shuffleIDX int32) *batch.Batch {
 	sp.batchLocks[shuffleIDX].Lock()
 	defer sp.batchLocks[shuffleIDX].Unlock()
-	bat := sp.batches[shuffleIDX]
-	if bat == nil || bat.RowCount() < colexec.DefaultBatchSize { // not full
-		return nil
+	var bat *batch.Batch
+	if sp.batches[shuffleIDX].Length() > 1 {
+		bat = sp.batches[shuffleIDX].PopFront()
+		if bat != nil {
+			bat.ShuffleIDX = shuffleIDX
+		}
 	}
-	//find a full batch, put buf in place
-	if buf != nil {
-		buf.CleanOnlyData()
-		buf.ShuffleIDX = bat.ShuffleIDX
-	}
-	sp.batches[shuffleIDX] = buf
-	//sp.statsLock.Lock()
-	//sp.stats.outputCNT[shuffleIDX] += int64(bat.RowCount())
-	//sp.statsLock.Unlock()
 	return bat
 }
 
-func (sp *ShufflePoolV2) initBatch(srcBatch *batch.Batch, proc *process.Process, shuffleIDX int32) error {
-	bat := sp.batches[shuffleIDX]
-	if bat == nil {
-		var err error
-		bat, err = proc.NewBatchFromSrc(srcBatch, colexec.DefaultBatchSize)
-		if err != nil {
-			return err
-		}
+func (sp *ShufflePoolV2) getLastBatch(shuffleIDX int32) *batch.Batch {
+	sp.batchLocks[shuffleIDX].Lock()
+	defer sp.batchLocks[shuffleIDX].Unlock()
+
+	bat := sp.batches[shuffleIDX].Pop()
+	if bat != nil {
 		bat.ShuffleIDX = shuffleIDX
-		sp.batches[shuffleIDX] = bat
 	}
-	return nil
+	return bat
 }
 
 func (sp *ShufflePoolV2) putAllBatchIntoPoolByShuffleIdx(srcBatch *batch.Batch, proc *process.Process, shuffleIDX int32) error {
 	sp.batchLocks[shuffleIDX].Lock()
 	defer sp.batchLocks[shuffleIDX].Unlock()
-	var err error
-	sp.batches[shuffleIDX], err = sp.batches[shuffleIDX].AppendWithCopy(proc.Ctx, proc.Mp(), srcBatch)
+
+	err := sp.batches[shuffleIDX].Extend(proc.Mp(), srcBatch)
 	if err != nil {
 		return err
+	}
+	if sp.batches[shuffleIDX].Length() > 1 && len(sp.batchWaiters[shuffleIDX]) == 0 {
+		sp.batchWaiters[shuffleIDX] <- true
 	}
 	//sp.statsLock.Lock()
 	//if sp.batches[shuffleIDX].RowCount() > sp.stats.maxBatchCNT {
@@ -238,9 +216,9 @@ func (sp *ShufflePoolV2) putAllBatchIntoPoolByShuffleIdx(srcBatch *batch.Batch, 
 	//}
 	//sp.stats.inputCNT[shuffleIDX] += int64(srcBatch.RowCount())
 	//sp.statsLock.Unlock()
-	if sp.batches[shuffleIDX].RowCount() >= colexec.DefaultBatchSize && len(sp.batchWaiters[shuffleIDX]) == 0 {
-		sp.batchWaiters[shuffleIDX] <- true
-	}
+	// if sp.batches[shuffleIDX].RowCount() >= colexec.DefaultBatchSize && len(sp.batchWaiters[shuffleIDX]) == 0 {
+	// 	sp.batchWaiters[shuffleIDX] <- true
+	// }
 	return nil
 }
 
@@ -250,23 +228,12 @@ func (sp *ShufflePoolV2) putBatchIntoShuffledPoolsBySels(srcBatch *batch.Batch, 
 		currentSels := sels[i]
 		if len(currentSels) > 0 {
 			sp.batchLocks[i].Lock()
-			err = sp.initBatch(srcBatch, proc, int32(i))
+			err = sp.batches[i].Union(proc.Mp(), srcBatch, currentSels)
 			if err != nil {
 				sp.batchLocks[i].Unlock()
 				return err
 			}
-			bat := sp.batches[i]
-			for vecIndex := range bat.Vecs {
-				v := bat.Vecs[vecIndex]
-				v.SetSorted(false)
-				err = v.UnionInt32(srcBatch.Vecs[vecIndex], currentSels, proc.Mp())
-				if err != nil {
-					sp.batchLocks[i].Unlock()
-					return err
-				}
-			}
-			bat.AddRowCount(len(currentSels))
-			if bat.RowCount() >= colexec.DefaultBatchSize && len(sp.batchWaiters[i]) == 0 {
+			if sp.batches[i].Length() > 1 && len(sp.batchWaiters[i]) == 0 {
 				sp.batchWaiters[i] <- true
 			}
 			sp.batchLocks[i].Unlock()

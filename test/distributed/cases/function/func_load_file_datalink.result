@@ -1,7 +1,7 @@
 select load_file(cast('file://$resources/file_test/normal.txt?offset=0&size=a' as datalink));
-strconv.Atoi: parsing "a": invalid syntax
+strconv.ParseInt: parsing "a": invalid syntax
 select load_file(cast('file://$resources/file_test/normal.txt?offset=b&size=3' as datalink));
-strconv.Atoi: parsing "b": invalid syntax
+strconv.ParseInt: parsing "b": invalid syntax
 select load_file(cast('file://$resources/file_test/normal.txt' as datalink));
 load_file(cast(file:///Users/eric/github/mo-tester/../matrixone/test/distributed/resources/file_test/normal.txt as datalink))
 Hello world!

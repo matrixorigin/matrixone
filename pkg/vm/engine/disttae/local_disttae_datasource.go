@@ -46,6 +46,7 @@ func NewLocalDataSource(
 	ctx context.Context,
 	table *txnTable,
 	txnOffset int,
+	pState *logtailreplay.PartitionState,
 	rangesSlice objectio.BlockInfoSlice,
 	extraTombstones engine.Tombstoner,
 	skipReadMem bool,
@@ -75,11 +76,7 @@ func NewLocalDataSource(
 	}
 
 	if source.category != engine.ShardingLocalDataSource {
-		state, err := table.getPartitionState(ctx)
-		if err != nil {
-			return nil, err
-		}
-		source.pState = state
+		source.pState = pState
 	}
 
 	source.table = table
@@ -1092,7 +1089,7 @@ func (ls *LocalDisttaeDataSource) applyPStateInMemDeletes(
 	leftRows = offsets
 
 	if len(leftRows) == logtailreplay.IndexScaleOne {
-		if ls.pState.CheckRowIdDeletedInMem(ls.snapshotTS, *types.NewRowid(bid, uint32(offsets[0]))) {
+		if ls.pState.CheckRowIdDeletedInMem(ls.snapshotTS, types.NewRowid(bid, uint32(offsets[0]))) {
 			return nil
 		}
 
@@ -1155,7 +1152,7 @@ func (ls *LocalDisttaeDataSource) applyPStateTombstoneObjects(
 		deleted, err := ioutil.IsRowDeleted(
 			ls.ctx,
 			&ls.snapshotTS,
-			rowid,
+			&rowid,
 			getTombstone,
 			ls.fs,
 		)

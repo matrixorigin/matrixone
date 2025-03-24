@@ -44,6 +44,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -637,8 +638,9 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 				} else if !indexDef.Unique && catalog.IsFullTextIndexAlgo(indexDef.IndexAlgo) {
 					// 3. FullText index
 					err = s.handleFullTextIndexTable(c, dbSource, indexDef, qry.Database, tableDef, indexInfo)
-				} else if !indexDef.Unique && catalog.IsIvfIndexAlgo(indexDef.IndexAlgo) {
-					// 4. IVF indexDefs are aggregated and handled later
+				} else if !indexDef.Unique &&
+					(catalog.IsIvfIndexAlgo(indexDef.IndexAlgo) || catalog.IsHnswIndexAlgo(indexDef.IndexAlgo)) {
+					// 4. IVF and HNSW indexDefs are aggregated and handled later
 					if _, ok := multiTableIndexes[indexDef.IndexName]; !ok {
 						multiTableIndexes[indexDef.IndexName] = &MultiTableIndex{
 							IndexAlgo: catalog.ToLower(indexDef.IndexAlgo),
@@ -656,6 +658,8 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 				switch multiTableIndex.IndexAlgo { // no need for catalog.ToLower() here
 				case catalog.MoIndexIvfFlatAlgo.ToString():
 					err = s.handleVectorIvfFlatIndex(c, dbSource, multiTableIndex.IndexDefs, qry.Database, tableDef, indexInfo)
+				case catalog.MoIndexHnswAlgo.ToString():
+					err = s.handleVectorHnswIndex(c, dbSource, multiTableIndex.IndexDefs, qry.Database, tableDef, indexInfo)
 				}
 
 				if err != nil {
@@ -710,38 +714,40 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 				if indexDef.IndexName == constraintName {
 					alterIndex = indexDef
 
-					// 1. Get old AlgoParams
-					newAlgoParamsMap, err := catalog.IndexParamsStringToMap(alterIndex.IndexAlgoParams)
-					if err != nil {
-						return err
-					}
-
-					// 2.a update AlgoParams for the index to be re-indexed
-					// NOTE: this will throw error if the algo type is not supported for reindex.
-					// So Step 4. will not be executed if error is thrown here.
 					indexAlgo := catalog.ToLower(alterIndex.IndexAlgo)
 					switch catalog.ToLower(indexAlgo) {
 					case catalog.MoIndexIvfFlatAlgo.ToString():
+						// 1. Get old AlgoParams
+						newAlgoParamsMap, err := catalog.IndexParamsStringToMap(alterIndex.IndexAlgoParams)
+						if err != nil {
+							return err
+						}
+						// 2.a update AlgoParams for the index to be re-indexed
+						// NOTE: this will throw error if the algo type is not supported for reindex.
+						// So Step 4. will not be executed if error is thrown here.
 						newAlgoParamsMap[catalog.IndexAlgoParamLists] = fmt.Sprintf("%d", tableAlterIndex.IndexAlgoParamList)
+
+						// 2.b generate new AlgoParams string
+						newAlgoParams, err := catalog.IndexParamsMapToJsonString(newAlgoParamsMap)
+						if err != nil {
+							return err
+						}
+
+						// 3.a Update IndexDef and TableDef
+						alterIndex.IndexAlgoParams = newAlgoParams
+						tableDef.Indexes[i].IndexAlgoParams = newAlgoParams
+
+						// 3.b Update mo_catalog.mo_indexes
+						updateSql := fmt.Sprintf(updateMoIndexesAlgoParams, newAlgoParams, tableDef.TblId, alterIndex.IndexName)
+						err = c.runSql(updateSql)
+						if err != nil {
+							return err
+						}
+
+					case catalog.MoIndexHnswAlgo.ToString():
+						// PASS: keep option unchange for incremental update
 					default:
 						return moerr.NewInternalError(c.proc.Ctx, "invalid index algo type for alter reindex")
-					}
-
-					// 2.b generate new AlgoParams string
-					newAlgoParams, err := catalog.IndexParamsMapToJsonString(newAlgoParamsMap)
-					if err != nil {
-						return err
-					}
-
-					// 3.a Update IndexDef and TableDef
-					alterIndex.IndexAlgoParams = newAlgoParams
-					tableDef.Indexes[i].IndexAlgoParams = newAlgoParams
-
-					// 3.b Update mo_catalog.mo_indexes
-					updateSql := fmt.Sprintf(updateMoIndexesAlgoParams, newAlgoParams, tableDef.TblId, alterIndex.IndexName)
-					err = c.runSql(updateSql)
-					if err != nil {
-						return err
 					}
 
 					// 4. Add to multiTableIndexes
@@ -755,15 +761,14 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 				}
 			}
 
-			if len(multiTableIndexes) != 1 {
-				return moerr.NewInternalError(c.proc.Ctx, "invalid index algo type for alter reindex")
-			}
-
 			// update the hidden tables
 			for _, multiTableIndex := range multiTableIndexes {
 				switch multiTableIndex.IndexAlgo {
 				case catalog.MoIndexIvfFlatAlgo.ToString():
 					err = s.handleVectorIvfFlatIndex(c, dbSource, multiTableIndex.IndexDefs, qry.Database, tableDef, nil)
+				case catalog.MoIndexHnswAlgo.ToString():
+					// TODO: we should call refresh Hnsw Index function instead of CreateHnswIndex function
+					err = s.handleVectorHnswIndex(c, dbSource, multiTableIndex.IndexDefs, qry.Database, tableDef, nil)
 				}
 
 				if err != nil {
@@ -1751,7 +1756,8 @@ func (s *Scope) CreateIndex(c *Compile) error {
 		} else if !indexDef.Unique && catalog.IsMasterIndexAlgo(indexAlgo) {
 			// 3. Master index
 			err = s.handleMasterIndexTable(c, dbSource, indexDef, qry.Database, originalTableDef, indexInfo)
-		} else if !indexDef.Unique && catalog.IsIvfIndexAlgo(indexAlgo) {
+		} else if !indexDef.Unique &&
+			(catalog.IsIvfIndexAlgo(indexAlgo) || catalog.IsHnswIndexAlgo(indexAlgo)) {
 			// 4. IVF indexDefs are aggregated and handled later
 			if _, ok := multiTableIndexes[indexDef.IndexName]; !ok {
 				multiTableIndexes[indexDef.IndexName] = &MultiTableIndex{
@@ -1773,6 +1779,8 @@ func (s *Scope) CreateIndex(c *Compile) error {
 		switch multiTableIndex.IndexAlgo {
 		case catalog.MoIndexIvfFlatAlgo.ToString():
 			err = s.handleVectorIvfFlatIndex(c, dbSource, multiTableIndex.IndexDefs, qry.Database, originalTableDef, indexInfo)
+		case catalog.MoIndexHnswAlgo.ToString():
+			err = s.handleVectorHnswIndex(c, dbSource, multiTableIndex.IndexDefs, qry.Database, originalTableDef, indexInfo)
 		}
 
 		if err != nil {
@@ -1886,6 +1894,10 @@ func (s *Scope) handleVectorIvfFlatIndex(c *Compile, dbSource engine.Database, i
 			}
 		}
 	}
+
+	// remove the cache with version 0
+	key := fmt.Sprintf("%s:0", indexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IndexTableName)
+	cache.Cache.Remove(key)
 
 	// 3. get count of secondary index column in original table
 	totalCnt, err := s.handleIndexColCount(c, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata], qryDatabase, originalTableDef)

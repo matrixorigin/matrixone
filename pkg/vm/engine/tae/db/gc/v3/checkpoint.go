@@ -24,17 +24,17 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/wal"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 	"go.uber.org/zap"
 )
 
@@ -45,9 +45,9 @@ type checkpointCleaner struct {
 	sid string
 
 	mp *mpool.MPool
-	fs *objectio.ObjectFS
+	fs fileservice.FileService
 
-	logDriver     wal.Driver
+	logDriver     wal.Store
 	checkpointCli checkpoint.Runner
 	deleter       *Deleter
 
@@ -166,8 +166,8 @@ type CheckpointCleanerOption func(*checkpointCleaner)
 func NewCheckpointCleaner(
 	ctx context.Context,
 	sid string,
-	fs *objectio.ObjectFS,
-	logDriver wal.Driver,
+	fs fileservice.FileService,
+	logDriver wal.Store,
 	checkpointCli checkpoint.Runner,
 	opts ...CheckpointCleanerOption,
 ) Cleaner {
@@ -305,7 +305,7 @@ func (c *checkpointCleaner) Replay(inputCtx context.Context) (err error) {
 		tsFiles []ioutil.TSRangeFile
 	)
 	if tsFiles, err = ioutil.ListTSRangeFilesInGCDir(
-		ctx, c.fs.Service,
+		ctx, c.fs,
 	); err != nil || len(tsFiles) == 0 {
 		return
 	}
@@ -349,7 +349,7 @@ func (c *checkpointCleaner) Replay(inputCtx context.Context) (err error) {
 		if err = c.mutation.snapshotMeta.ReadTableInfo(
 			c.ctx,
 			ioutil.MakeGCFullName(acctFile),
-			c.fs.Service,
+			c.fs,
 		); err != nil {
 			return
 		}
@@ -360,11 +360,11 @@ func (c *checkpointCleaner) Replay(inputCtx context.Context) (err error) {
 	logger := logutil.Info
 	for _, name := range gcFiles {
 		start := time.Now()
-		window := NewGCWindow(c.mp, c.fs.Service)
+		window := NewGCWindow(c.mp, c.fs)
 		if err = window.ReadTable(
 			ctx,
 			ioutil.MakeGCFullName(name),
-			c.fs.Service,
+			c.fs,
 		); err != nil {
 			logger = logutil.Error
 		}
@@ -383,7 +383,7 @@ func (c *checkpointCleaner) Replay(inputCtx context.Context) (err error) {
 		if err = c.mutation.snapshotMeta.ReadMeta(
 			ctx,
 			ioutil.MakeGCFullName(snapFile),
-			c.fs.Service,
+			c.fs,
 		); err != nil {
 			return
 		}
@@ -398,8 +398,8 @@ func (c *checkpointCleaner) Replay(inputCtx context.Context) (err error) {
 		end := compacted.GetEnd()
 		c.updateCheckpointGCWaterMark(&end)
 
-		var ckpData *logtail.CheckpointData
-		if ckpData, err = c.collectCkpData(ctx, compacted); err != nil {
+		var ckpReader *logtail.CKPReader
+		if ckpReader, err = c.getCkpReader(ctx, compacted); err != nil {
 			logutil.Error(
 				"GC-REPLAY-COLLECT-ERROR",
 				zap.String("task", c.TaskNameLocked()),
@@ -408,40 +408,58 @@ func (c *checkpointCleaner) Replay(inputCtx context.Context) (err error) {
 			)
 			return
 		}
-		defer ckpData.Close()
 		var snapshots map[uint32]containers.Vector
 		var pitrs *logtail.PitrInfo
 		pitrs, err = c.GetPITRsLocked(ctx)
 		if err != nil {
-			logutil.Error("GC-REPLAY-GET-PITRS_ERROR",
+			logutil.Error(
+				"GC-REPLAY-GET-PITRS_ERROR",
 				zap.String("task", c.TaskNameLocked()),
-				zap.Error(err),
 				zap.Duration("duration", time.Since(start)),
+				zap.String("checkpoint", compacted.String()),
+				zap.Error(err),
 			)
 			return
 		}
-		snapshots, err = c.mutation.snapshotMeta.GetSnapshot(c.ctx, c.sid, c.fs.Service, c.mp)
+		snapshots, err = c.mutation.snapshotMeta.GetSnapshot(c.ctx, c.sid, c.fs, c.mp)
 		if err != nil {
-			logutil.Error("GC-REPLAY-GET-SNAPSHOT_ERROR",
+			logutil.Error(
+				"GC-REPLAY-GET-SNAPSHOT_ERROR",
 				zap.String("task", c.TaskNameLocked()),
-				zap.Error(err),
 				zap.Duration("duration", time.Since(start)),
+				zap.String("checkpoint", compacted.String()),
+				zap.Error(err),
 			)
 			return
 		}
 		accountSnapshots := TransformToTSList(snapshots)
 		logtail.CloseSnapshotList(snapshots)
+		var ckpBatch *batch.Batch
+		if ckpBatch, err = ckpReader.GetCheckpointData(ctx); err != nil {
+			logutil.Error(
+				"GC-REPLAY-GET-CHECKPOINT-DATA_ERROR",
+				zap.String("task", c.TaskNameLocked()),
+				zap.Duration("duration", time.Since(start)),
+				zap.String("checkpoint", compacted.String()),
+				zap.Error(err),
+			)
+			return
+		}
 		logtail.FillUsageBatOfCompacted(
+			ctx,
 			c.checkpointCli.GetCatalog().GetUsageMemo().(*logtail.TNUsageMemo),
-			ckpData,
+			ckpBatch,
 			c.mutation.snapshotMeta,
 			accountSnapshots,
 			pitrs,
 			0)
-		logutil.Info("GC-REPLAY-COLLECT-SNAPSHOT-SIZE",
+		logutil.Info(
+			"GC-REPLAY-COLLECT-SNAPSHOT-SIZE",
 			zap.String("task", c.TaskNameLocked()),
 			zap.Int("size", len(accountSnapshots)),
 			zap.Duration("duration", time.Since(start)),
+			zap.String("checkpoint", compacted.String()),
+			zap.Int("count", ckpBatch.RowCount()),
 		)
 	}
 	return
@@ -543,7 +561,7 @@ func (c *checkpointCleaner) deleteStaleSnapshotFilesLocked() error {
 		if maxTS.LT(thisTS) {
 			newMaxFile = thisFile
 			newMaxTS = *thisTS
-			if err = c.fs.Delete(ioutil.MakeGCFullName(maxFile)); err != nil {
+			if err = c.fs.Delete(c.ctx, ioutil.MakeGCFullName(maxFile)); err != nil {
 				logutil.Error(
 					"GC-DELETE-SNAPSHOT-FILE-ERROR",
 					zap.String("task", c.TaskNameLocked()),
@@ -566,7 +584,7 @@ func (c *checkpointCleaner) deleteStaleSnapshotFilesLocked() error {
 		}
 
 		// thisTS <= maxTS: this file is expired and should be deleted
-		if err = c.fs.Delete(ioutil.MakeGCFullName(thisFile)); err != nil {
+		if err = c.fs.Delete(c.ctx, ioutil.MakeGCFullName(thisFile)); err != nil {
 			logutil.Error(
 				"GC-DELETE-SNAPSHOT-FILE-ERROR",
 				zap.String("task", c.TaskNameLocked()),
@@ -646,12 +664,12 @@ func (c *checkpointCleaner) deleteStaleCKPMetaFileLocked() (err error) {
 			)
 			continue
 		}
-		gcWindow := NewGCWindow(c.mp, c.fs.Service)
+		gcWindow := NewGCWindow(c.mp, c.fs)
 		defer gcWindow.Close()
 		if err = gcWindow.ReadTable(
 			c.ctx,
 			metaFile.GetGCFullName(),
-			c.fs.Service,
+			c.fs,
 		); err != nil {
 			logutil.Error(
 				"GC-WINDOW-READ-ERROR",
@@ -669,7 +687,7 @@ func (c *checkpointCleaner) deleteStaleCKPMetaFileLocked() (err error) {
 	}
 
 	// TODO: if file is not found, it should be ignored
-	if err = c.fs.DelFiles(c.ctx, filesToDelete); err != nil {
+	if err = c.fs.Delete(c.ctx, filesToDelete...); err != nil {
 		logutil.Error(
 			"GC-DELETE-CKP-FILES-ERROR",
 			zap.Error(err),
@@ -765,12 +783,12 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 		checkpointMaxEnd  types.TS
 		toMergeEntries    []*checkpoint.CheckpointEntry
 		extraErrMsg       string
-		newCheckpointData *logtail.CheckpointData
+		newCheckpointData *batch.Batch
 	)
 
 	defer func() {
 		if newCheckpointData != nil {
-			newCheckpointData.Close()
+			newCheckpointData.Clean(common.CheckpointAllocator)
 		}
 		logger := logutil.Info
 		if err != nil {
@@ -814,7 +832,7 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 		panic(fmt.Sprintf("checkpointMaxEnd %s < window end %s", checkpointMaxEnd.ToString(), window.tsRange.end.ToString()))
 	}
 
-	sourcer := window.MakeFilesReader(ctx, c.fs.Service)
+	sourcer := window.MakeFilesReader(ctx, c.fs)
 	bf, err := BuildBloomfilter(
 		ctx,
 		Default_Coarse_EstimateRows,
@@ -834,12 +852,13 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 		&checkpointMaxEnd,
 		c.checkpointCli,
 		c.mp,
-		c.fs.Service,
+		c.fs,
 	); err != nil {
 		extraErrMsg = "MergeCheckpoint failed"
 		return err
 	}
 	logtail.FillUsageBatOfCompacted(
+		ctx,
 		c.checkpointCli.GetCatalog().GetUsageMemo().(*logtail.TNUsageMemo),
 		newCheckpointData,
 		c.mutation.snapshotMeta,
@@ -883,7 +902,7 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 		}
 	}
 	if c.GCCheckpointEnabled() {
-		if err = c.fs.DelFiles(ctx, deleteFiles); err != nil {
+		if err = c.fs.Delete(ctx, deleteFiles...); err != nil {
 			extraErrMsg = "DelFiles failed"
 			return err
 		}
@@ -903,12 +922,12 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 	return nil
 }
 
-func (c *checkpointCleaner) collectCkpData(
+func (c *checkpointCleaner) getCkpReader(
 	ctx context.Context,
 	ckp *checkpoint.CheckpointEntry,
-) (data *logtail.CheckpointData, err error) {
-	return logtail.GetCheckpointData(
-		ctx, c.sid, c.fs.Service, ckp.GetLocation(), ckp.GetVersion(),
+) (reader *logtail.CKPReader, err error) {
+	return logtail.GetCheckpointReader(
+		ctx, c.sid, c.fs, ckp.GetLocation(), ckp.GetVersion(),
 	)
 }
 
@@ -916,12 +935,12 @@ func (c *checkpointCleaner) GetPITRs() (*logtail.PitrInfo, error) {
 	c.mutation.Lock()
 	defer c.mutation.Unlock()
 	ts := time.Now()
-	return c.mutation.snapshotMeta.GetPITR(c.ctx, c.sid, ts, c.fs.Service, c.mp)
+	return c.mutation.snapshotMeta.GetPITR(c.ctx, c.sid, ts, c.fs, c.mp)
 }
 
 func (c *checkpointCleaner) GetPITRsLocked(ctx context.Context) (*logtail.PitrInfo, error) {
 	ts := time.Now()
-	return c.mutation.snapshotMeta.GetPITR(ctx, c.sid, ts, c.fs.Service, c.mp)
+	return c.mutation.snapshotMeta.GetPITR(ctx, c.sid, ts, c.fs, c.mp)
 }
 
 func (c *checkpointCleaner) TryGC(inputCtx context.Context) (err error) {
@@ -1050,7 +1069,7 @@ func (c *checkpointCleaner) tryGCAgainstGCKPLocked(
 		extraErrMsg = "GetPITRs failed"
 		return
 	}
-	snapshots, err = c.mutation.snapshotMeta.GetSnapshot(ctx, c.sid, c.fs.Service, c.mp)
+	snapshots, err = c.mutation.snapshotMeta.GetSnapshot(ctx, c.sid, c.fs, c.mp)
 	if err != nil {
 		extraErrMsg = "GetSnapshot failed"
 		return
@@ -1152,7 +1171,7 @@ func (c *checkpointCleaner) doGCAgainstGlobalCheckpointLocked(
 		c.config.estimateRows,
 		c.config.probility,
 		c.mp,
-		c.fs.Service,
+		c.fs,
 	); err != nil {
 		extraErrMsg = fmt.Sprintf("ExecuteGlobalCheckpointBasedGC %v failed", gckp.String())
 		return nil, err
@@ -1194,9 +1213,9 @@ func (c *checkpointCleaner) scanCheckpointsAsDebugWindow(
 	ckps []*checkpoint.CheckpointEntry,
 	buffer *containers.OneSchemaBatchBuffer,
 ) (window *GCWindow, err error) {
-	window = NewGCWindow(c.mp, c.fs.Service, WithWindowDir("debug/"))
+	window = NewGCWindow(c.mp, c.fs, WithWindowDir("debug/"))
 	if _, err = window.ScanCheckpoints(
-		c.ctx, ckps, c.collectCkpData, nil, nil, buffer,
+		c.ctx, ckps, c.getCkpReader, nil, nil, buffer,
 	); err != nil {
 		window.Close()
 		window = nil
@@ -1204,7 +1223,7 @@ func (c *checkpointCleaner) scanCheckpointsAsDebugWindow(
 	return
 }
 
-func (c *checkpointCleaner) DoCheck() error {
+func (c *checkpointCleaner) DoCheck(ctx context.Context) error {
 	c.StartMutationTask("gc-check")
 	defer c.StopMutationTask()
 
@@ -1310,7 +1329,7 @@ func (c *checkpointCleaner) DoCheck() error {
 		c.config.estimateRows,
 		c.config.probility,
 		c.mp,
-		c.fs.Service,
+		c.fs,
 	); err != nil {
 		logutil.Error(
 			"GC-EXECUTE-GC-ERROR",
@@ -1332,7 +1351,7 @@ func (c *checkpointCleaner) DoCheck() error {
 		c.config.estimateRows,
 		c.config.probility,
 		c.mp,
-		c.fs.Service,
+		c.fs,
 	); err != nil {
 		logutil.Error(
 			"GC-EXECUTE-GC-ERROR",
@@ -1391,18 +1410,18 @@ func (c *checkpointCleaner) DoCheck() error {
 	}
 
 	for _, ckp := range debugCandidates {
-		data, err := c.collectCkpData(c.ctx, ckp)
+		ckpReader, err := c.getCkpReader(c.ctx, ckp)
 		if err != nil {
 			return err
 		}
-		collectObjectsFromCheckpointData(data, ickpObjects)
+		collectObjectsFromCheckpointData(c.ctx, ckpReader, ickpObjects)
 	}
 	cptCkpObjects := make(map[string]*ObjectEntry, 0)
-	data, err := c.collectCkpData(c.ctx, compacted)
+	ckpReader, err := c.getCkpReader(c.ctx, compacted)
 	if err != nil {
 		return err
 	}
-	collectObjectsFromCheckpointData(data, cptCkpObjects)
+	collectObjectsFromCheckpointData(c.ctx, ckpReader, cptCkpObjects)
 
 	tList, pList := c.mutation.snapshotMeta.AccountToTableSnapshots(accoutSnapshots, pitr)
 	for name, entry := range ickpObjects {
@@ -1596,11 +1615,11 @@ func (c *checkpointCleaner) appendFilesToWAL(files ...string) error {
 	if c.logDriver == nil {
 		return nil
 	}
-	entry, err := store.BuildFilesEntry(files)
+	entry, err := wal.BuildFilesEntry(files)
 	if err != nil {
 		return err
 	}
-	_, err = c.logDriver.AppendEntry(store.GroupFiles, entry)
+	_, err = c.logDriver.AppendEntry(wal.GroupFiles, entry)
 	if err != nil {
 		return err
 	}
@@ -1646,7 +1665,7 @@ func (c *checkpointCleaner) scanCheckpointsLocked(
 		)
 		if snapSize, err2 = c.mutation.snapshotMeta.SaveMeta(
 			ioutil.MakeGCFullName(name),
-			c.fs.Service,
+			c.fs,
 		); err2 != nil {
 			logutil.Error(
 				"GC-SAVE-SNAPSHOT-META-ERROR",
@@ -1667,7 +1686,7 @@ func (c *checkpointCleaner) scanCheckpointsLocked(
 		)
 		if tableSize, err2 = c.mutation.snapshotMeta.SaveTableInfo(
 			ioutil.MakeGCFullName(name),
-			c.fs.Service,
+			c.fs,
 		); err2 != nil {
 			logutil.Error(
 				"GC-SAVE-TABLE-META-ERROR",
@@ -1685,12 +1704,12 @@ func (c *checkpointCleaner) scanCheckpointsLocked(
 		return
 	}
 
-	gcWindow = NewGCWindow(c.mp, c.fs.Service)
+	gcWindow = NewGCWindow(c.mp, c.fs)
 	var gcMetaFile string
 	if gcMetaFile, err = gcWindow.ScanCheckpoints(
 		ctx,
 		ckps,
-		c.collectCkpData,
+		c.getCkpReader,
 		c.mutUpdateSnapshotMetaLocked,
 		saveSnapshot,
 		memoryBuffer,
@@ -1716,11 +1735,11 @@ func (c *checkpointCleaner) scanCheckpointsLocked(
 
 func (c *checkpointCleaner) mutUpdateSnapshotMetaLocked(
 	ckp *checkpoint.CheckpointEntry,
-	data *logtail.CheckpointData,
+	data *logtail.CKPReader,
 ) error {
 	return c.mutation.snapshotMeta.Update(
 		c.ctx,
-		c.fs.Service,
+		c.fs,
 		data,
 		ckp.GetStart(),
 		ckp.GetEnd(),
@@ -1731,10 +1750,10 @@ func (c *checkpointCleaner) mutUpdateSnapshotMetaLocked(
 func (c *checkpointCleaner) GetSnapshots() (map[uint32]containers.Vector, error) {
 	c.mutation.Lock()
 	defer c.mutation.Unlock()
-	return c.mutation.snapshotMeta.GetSnapshot(c.ctx, c.sid, c.fs.Service, c.mp)
+	return c.mutation.snapshotMeta.GetSnapshot(c.ctx, c.sid, c.fs, c.mp)
 }
 func (c *checkpointCleaner) GetSnapshotsLocked() (map[uint32]containers.Vector, error) {
-	return c.mutation.snapshotMeta.GetSnapshot(c.ctx, c.sid, c.fs.Service, c.mp)
+	return c.mutation.snapshotMeta.GetSnapshot(c.ctx, c.sid, c.fs, c.mp)
 }
 func (c *checkpointCleaner) GetTablePK(tid uint64) string {
 	c.mutation.Lock()

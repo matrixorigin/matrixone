@@ -39,7 +39,7 @@ func Test_ClusterKey1(t *testing.T) {
 	tableId := uint64(20)
 	obj := types.NewObjectid()
 
-	EncodeCluser(packer, tableId, ObjectType_Data, obj)
+	EncodeCluser(packer, tableId, ObjectType_Data, &obj)
 
 	buf := packer.Bytes()
 	packer.Reset()
@@ -116,6 +116,8 @@ func mockDataBatch(
 				objectio.SetObjectStatsObjectName(&obj, objname)
 				// Here we hard code the object size to 1000 for testing
 				objectio.SetObjectStatsSize(&obj, uint32(1000))
+				obj2 := obj.Clone()
+				objectio.SetObjectStatsSize(obj2, 0)
 				packer.Reset()
 				EncodeCluser(packer, tableid, ObjectType_Data, objname.ObjectId())
 				// if tableid == uint64(4) {
@@ -130,7 +132,7 @@ func mockDataBatch(
 
 				require.NoError(t, vector.AppendFixed(vec, dbid, false, mp))
 				require.NoError(t, vector.AppendFixed(tableVec, tableid, false, mp))
-				require.NoError(t, vector.AppendBytes(idVec, []byte(objname), false, mp))
+				require.NoError(t, vector.AppendBytes(idVec, obj2[:], false, mp))
 				require.NoError(t, vector.AppendBytes(clusterVec, packer.Bytes(), false, mp))
 			}
 		} else if i == TableObjectsAttr_CreateTS_Idx {

@@ -17,8 +17,10 @@ package catalog
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"fmt"
 	"math"
+	"slices"
 	"sync/atomic"
 	"time"
 
@@ -106,8 +108,8 @@ func NewSystemTableEntry(db *DBEntry, id uint64, schema *Schema) *TableEntry {
 			Schema:          schema,
 			TombstoneSchema: GetTombstoneSchema(schema)})
 
-	if DefaultTableDataFactory != nil {
-		e.tableData = DefaultTableDataFactory(e)
+	if db.catalog.DataFactory != nil {
+		e.tableData = db.catalog.DataFactory.MakeTableFactory()(e)
 	}
 	return e
 }
@@ -435,18 +437,23 @@ func (entry *TableEntry) ObjectStats(level common.PPLevel, start, end int, isTom
 		}
 	}
 
-	// slices.SortFunc(objEntries, func(a, b *ObjectEntry) int {
-	// 	zmA := a.SortKeyZoneMap()
-	// 	zmB := b.SortKeyZoneMap()
+	slices.SortFunc(objEntries, func(a, b *ObjectEntry) int {
+		zmA := a.SortKeyZoneMap()
+		zmB := b.SortKeyZoneMap()
+		if !zmA.IsInited() {
+			return -1
+		}
+		if !zmB.IsInited() {
+			return 1
+		}
+		c := zmA.CompareMin(zmB)
+		if c != 0 {
+			return c
+		}
+		return zmA.CompareMax(zmB)
+	})
 
-	// 	c := zmA.CompareMin(zmB)
-	// 	if c != 0 {
-	// 		return c
-	// 	}
-	// 	return zmA.CompareMax(zmB)
-	// })
-
-	if level > common.PPL0 {
+	if level > common.PPL0 && level < common.PPL4 {
 		for _, objEntry := range objEntries {
 			_ = w.WriteByte('\n')
 			_, _ = w.WriteString(objEntry.ID().String())
@@ -455,6 +462,20 @@ func (entry *TableEntry) ObjectStats(level common.PPLevel, start, end int, isTom
 
 			if w.Len() > 8*common.Const1MBytes {
 				w.WriteString("\n...(truncated for too long, more than 8 MB)")
+				break
+			}
+		}
+		if stat.ObjectCnt > 0 {
+			w.WriteByte('\n')
+		}
+	}
+
+	if level == common.PPL4 {
+		for _, objEntry := range objEntries {
+			_ = w.WriteByte('\n')
+			_, _ = w.WriteString(objEntry.ID().ShortStringEx() + " " + base64.StdEncoding.EncodeToString(objEntry.ObjectStats[:]))
+			if w.Len() > 64*common.Const1MBytes {
+				w.WriteString("\n...(truncated for too long, more than 64 MB)")
 				break
 			}
 		}
@@ -685,9 +706,7 @@ func (entry *TableEntry) ApplyCommit(id string) (err error) {
 
 // deprecated: handle column change in CN
 // hasColumnChangedSchema checks if add or drop columns on previous schema
-func (entry *TableEntry) isColumnChangedInSchema() bool {
-	entry.RLock()
-	defer entry.RUnlock()
+func (entry *TableEntry) isColumnChangedInSchemaLocked() bool {
 	node := entry.GetLatestNodeLocked()
 	toCommitted := node.BaseNode.Schema
 	ver := toCommitted.Version
@@ -696,6 +715,12 @@ func (entry *TableEntry) isColumnChangedInSchema() bool {
 		return false
 	}
 	return toCommitted.Extra.ColumnChanged
+}
+
+func (entry *TableEntry) isColumnChangedInSchema() bool {
+	entry.RLock()
+	defer entry.RUnlock()
+	return entry.isColumnChangedInSchemaLocked()
 }
 
 func (entry *TableEntry) FreezeAppend() {

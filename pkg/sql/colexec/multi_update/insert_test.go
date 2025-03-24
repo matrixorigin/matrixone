@@ -98,13 +98,13 @@ func TestFlushS3Info(t *testing.T) {
 	hasSecondaryKey := false
 
 	_, ctrl, proc := prepareTestCtx(t, true)
-	eng := prepareTestEng(ctrl)
+	eng := prepareTestEng(ctrl, false)
 
 	batchs, rowCount := buildFlushS3InfoBatch(proc.GetMPool(), hasUniqueKey, hasSecondaryKey)
 
 	multiUpdateCtxs := prepareTestInsertMultiUpdateCtx(hasUniqueKey, hasSecondaryKey)
 	action := UpdateFlushS3Info
-	retCase := buildTestCase(multiUpdateCtxs, eng, batchs, rowCount, action)
+	retCase := buildTestCase(multiUpdateCtxs, eng, batchs, rowCount, action, false)
 
 	runTestCases(t, proc, []*testCase{retCase})
 }
@@ -112,23 +112,23 @@ func TestFlushS3Info(t *testing.T) {
 // ----- util function ----
 func buildInsertTestCase(t *testing.T, hasUniqueKey bool, hasSecondaryKey bool) (*process.Process, *testCase) {
 	_, ctrl, proc := prepareTestCtx(t, false)
-	eng := prepareTestEng(ctrl)
+	eng := prepareTestEng(ctrl, false)
 
 	batchs, affectRows := prepareTestInsertBatchs(proc.GetMPool(), 2, hasUniqueKey, hasSecondaryKey)
 	multiUpdateCtxs := prepareTestInsertMultiUpdateCtx(hasUniqueKey, hasSecondaryKey)
 	action := UpdateWriteTable
-	retCase := buildTestCase(multiUpdateCtxs, eng, batchs, affectRows, action)
+	retCase := buildTestCase(multiUpdateCtxs, eng, batchs, affectRows, action, false)
 	return proc, retCase
 }
 
 func buildInsertS3TestCase(t *testing.T, hasUniqueKey bool, hasSecondaryKey bool) (*process.Process, *testCase) {
 	_, ctrl, proc := prepareTestCtx(t, true)
-	eng := prepareTestEng(ctrl)
+	eng := prepareTestEng(ctrl, false)
 
 	batchs, _ := prepareTestInsertBatchs(proc.GetMPool(), 10, hasUniqueKey, hasSecondaryKey)
 	multiUpdateCtxs := prepareTestInsertMultiUpdateCtx(hasUniqueKey, hasSecondaryKey)
 	action := UpdateWriteS3
-	retCase := buildTestCase(multiUpdateCtxs, eng, batchs, 0, action)
+	retCase := buildTestCase(multiUpdateCtxs, eng, batchs, 0, action, false)
 	return proc, retCase
 }
 
@@ -249,7 +249,7 @@ func buildFlushS3InfoBatch(mp *mpool.MPool, hasUniqueKey bool, hasSecondaryKey b
 	totalRowCount := 0
 	for _, bat := range insertBats {
 		totalRowCount += bat.RowCount()
-		_ = vector.AppendFixed(retBat.Vecs[3], bat.RowCount(), false, mp)
+		_ = vector.AppendFixed[uint64](retBat.Vecs[3], uint64(bat.RowCount()), false, mp)
 
 		val, _ := bat.MarshalBinary()
 		_ = vector.AppendBytes(retBat.Vecs[5], val, false, mp)

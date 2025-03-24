@@ -302,7 +302,7 @@ func TestLogtailBasic(t *testing.T) {
 				id := obj.GetMeta().(*catalog2.ObjectEntry).ID()
 				for j := 0; j < obj.BlkCnt(); j++ {
 					blkID := objectio.NewBlockidWithObjectID(id, uint16(j))
-					deleteRowIDs = append(deleteRowIDs, *objectio.NewRowid(blkID, 5))
+					deleteRowIDs = append(deleteRowIDs, objectio.NewRowid(&blkID, 5))
 				}
 			}
 			blkIt.Close()
@@ -655,7 +655,7 @@ func TestInProgressTransfer(t *testing.T) {
 		userTbl, _ := userDB.GetRelationByID(tid)
 		id, row, err := userTbl.GetByFilter(p.Ctx, handle.NewEQFilter(int64(7)))
 		require.NoError(t, err)
-		rowid := *objectio.NewRowid(&id.BlockID, row)
+		rowid := objectio.NewRowid(&id.BlockID, row)
 
 		vec1 := vector.NewVec(types.T_Rowid.ToType())
 		require.NoError(t, vector.AppendFixed(vec1, rowid, false, p.Mp))
@@ -1521,4 +1521,27 @@ func TestCacheNotServing(t *testing.T) {
 	t.Log(err)
 
 	require.NoError(t, staleTxn.Commit(p.Ctx))
+}
+
+func TestInvalidTxnOp(t *testing.T) {
+	opts := config.WithLongScanAndCKPOpts(nil)
+	p := testutil.InitEnginePack(testutil.TestOptions{TaeEngineOptions: opts}, t)
+	defer p.Close()
+	txnop := p.StartCNTxn()
+
+	schema := catalog2.MockSchemaAll(2, 0)
+	schema.Name = "test"
+	p.CreateDBAndTable(txnop, "db", schema)
+
+	require.NoError(t, txnop.Commit(p.Ctx))
+
+	txnop = p.StartCNTxn()
+
+	userDb, err := p.D.Engine.Database(p.Ctx, "db", txnop)
+	require.NoError(t, err)
+
+	require.NoError(t, txnop.Commit(p.Ctx))
+
+	_, err = userDb.Relation(p.Ctx, "test", nil)
+	require.Error(t, err)
 }

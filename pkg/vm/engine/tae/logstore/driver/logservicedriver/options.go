@@ -28,16 +28,15 @@ import (
 const (
 	DefaultMaxClient     = 100
 	DefaultClientBufSize = mpool.MB
-	DefaultMaxTimeout    = time.Second * 30
-	DefaultMaxRetryCount = 10
+	DefaultMaxTimeout    = time.Minute * 3
+	DefaultOneTryTimeout = time.Minute
 )
 
 type Config struct {
 	ClientMaxCount int
 	ClientBufSize  int
 
-	MaxTimeout    time.Duration
-	MaxRetryCount int
+	MaxTimeout time.Duration
 
 	ClientFactory LogServiceClientFactory
 	IsMockBackend bool
@@ -46,6 +45,13 @@ type Config struct {
 type LogServiceClientFactory logservice.ClientFactory
 
 type ConfigOption func(*Config)
+
+func NewMockServiceAndClientFactory() (MockBackend, LogServiceClientFactory) {
+	backend := NewMockBackend()
+	return backend, func() (logservice.Client, error) {
+		return newMockBackendClient(backend), nil
+	}
+}
 
 func WithConfigOptClientFactory(f LogServiceClientFactory) ConfigOption {
 	return func(cfg *Config) {
@@ -88,12 +94,6 @@ func WithConfigOptMaxTimeout(timeout time.Duration) ConfigOption {
 	}
 }
 
-func WithConfigOptMaxRetryCount(retryCount int) ConfigOption {
-	return func(cfg *Config) {
-		cfg.MaxRetryCount = retryCount
-	}
-}
-
 func WithConfigMockClient(backend MockBackend) ConfigOption {
 	return func(cfg *Config) {
 		cfg.IsMockBackend = true
@@ -124,8 +124,6 @@ func (cfg Config) String() string {
 	w.WriteString(strconv.Itoa(cfg.ClientBufSize))
 	w.WriteString(",MaxTimeout:")
 	w.WriteString(cfg.MaxTimeout.String())
-	w.WriteString(",MaxRetryCount:")
-	w.WriteString(strconv.Itoa(cfg.MaxRetryCount))
 	w.WriteString(",IsMockBackend:")
 	w.WriteString(strconv.FormatBool(cfg.IsMockBackend))
 	w.WriteString("}")
@@ -133,9 +131,6 @@ func (cfg Config) String() string {
 }
 
 func (cfg *Config) fillDefaults() {
-	if cfg.MaxRetryCount <= 0 {
-		cfg.MaxRetryCount = DefaultMaxRetryCount
-	}
 	if cfg.ClientMaxCount <= 0 {
 		cfg.ClientMaxCount = DefaultMaxClient
 	}
@@ -153,9 +148,18 @@ func (cfg *Config) validate() {
 	}
 }
 
-func (cfg Config) RetryInterval() time.Duration {
-	if cfg.MaxRetryCount == 0 {
-		return 0
+// RetryInterval returns exponential backoff interval based on retry count
+// Starting from 100ms, doubles each time up to max 4s
+// retry 0: 100ms
+// retry 1: 200ms
+// retry 2: 400ms
+// retry 3: 800ms
+// retry 4: 1600ms
+// retry 5+: 4000ms
+func (cfg Config) RetryInterval(thisRetry int) time.Duration {
+	interval := time.Millisecond * 100
+	for i := 0; i < thisRetry && interval < time.Second*4; i++ {
+		interval *= 2
 	}
-	return cfg.MaxTimeout / time.Duration(cfg.MaxRetryCount) / 100
+	return interval
 }

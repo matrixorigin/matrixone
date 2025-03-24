@@ -44,6 +44,9 @@ func testObjectStorage[T ObjectStorage](
 
 			// write
 			err := storage.Write(ctx, name, bytes.NewReader([]byte("foo")), ptrTo[int64](3), nil)
+			if err != nil {
+				t.Fatal(err.Error())
+			}
 			assert.Nil(t, err)
 
 			// list
@@ -66,7 +69,7 @@ func testObjectStorage[T ObjectStorage](
 			exists, err := storage.Exists(ctx, name)
 			assert.Nil(t, err)
 			assert.True(t, exists)
-			exists, err = storage.Exists(ctx, "bar")
+			exists, err = storage.Exists(ctx, prefix+"bar")
 			assert.Nil(t, err)
 			assert.False(t, exists)
 
@@ -85,17 +88,17 @@ func testObjectStorage[T ObjectStorage](
 			assert.Nil(t, err)
 
 			// file not found
-			_, err = storage.Stat(ctx, "filenotexists")
+			_, err = storage.Stat(ctx, prefix+"filenotexists")
 			assert.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
-			_, err = storage.Read(ctx, "filenotexists", nil, nil)
+			_, err = storage.Read(ctx, prefix+"filenotexists", nil, nil)
 			assert.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
 
 			// sub dirs
-			err = storage.Write(ctx, "a/1/1", bytes.NewReader([]byte{'a'}), ptrTo[int64](1), nil)
+			err = storage.Write(ctx, prefix+"a/1/1", bytes.NewReader([]byte{'a'}), ptrTo[int64](1), nil)
 			assert.Nil(t, err)
-			err = storage.Write(ctx, "a/1/2", bytes.NewReader([]byte{'a'}), nil, nil)
+			err = storage.Write(ctx, prefix+"a/1/2", bytes.NewReader([]byte{'a'}), nil, nil)
 			assert.Nil(t, err)
-			err = storage.Write(ctx, "a/2", bytes.NewReader([]byte{'a'}), ptrTo[int64](1), nil)
+			err = storage.Write(ctx, prefix+"a/2", bytes.NewReader([]byte{'a'}), ptrTo[int64](1), nil)
 			assert.Nil(t, err)
 
 			// set list max entries
@@ -112,7 +115,7 @@ func testObjectStorage[T ObjectStorage](
 
 			// list dir
 			n = 0
-			for _, err := range storage.List(ctx, "a/1") {
+			for _, err := range storage.List(ctx, prefix+"a/1") {
 				assert.Nil(t, err)
 				n++
 			}
@@ -120,7 +123,7 @@ func testObjectStorage[T ObjectStorage](
 
 			// list files
 			n = 0
-			for _, err := range storage.List(ctx, "a/1/") {
+			for _, err := range storage.List(ctx, prefix+"a/1/") {
 				assert.Nil(t, err)
 				n++
 			}
@@ -128,20 +131,20 @@ func testObjectStorage[T ObjectStorage](
 
 			// list mixed
 			n = 0
-			for _, err := range storage.List(ctx, "a/") {
+			for _, err := range storage.List(ctx, prefix+"a/") {
 				assert.Nil(t, err)
 				n++
 			}
 			assert.Equal(t, 2, n)
 
 			// early break
-			for entry, err := range storage.List(ctx, "a/") {
+			for entry, err := range storage.List(ctx, prefix+"a/") {
 				assert.Nil(t, err)
 				if entry.IsDir {
 					break
 				}
 			}
-			for entry, err := range storage.List(ctx, "a/") {
+			for entry, err := range storage.List(ctx, prefix+"a/") {
 				assert.Nil(t, err)
 				if !entry.IsDir {
 					break
@@ -149,7 +152,7 @@ func testObjectStorage[T ObjectStorage](
 			}
 
 			// list empty
-			for range storage.List(ctx, "notexistsd") {
+			for range storage.List(ctx, prefix+"notexistsd") {
 				t.Fatal()
 			}
 
@@ -206,6 +209,16 @@ func TestObjectStorages(t *testing.T) {
 		t.Run(args.Name, func(t *testing.T) {
 
 			switch {
+
+			case strings.HasPrefix(strings.ToLower(args.Endpoint), "hdfs"):
+				// HDFS
+				testObjectStorage(t, "hdfs", func(t *testing.T) *HDFS {
+					storage, err := NewHDFS(context.Background(), args, nil)
+					if err != nil {
+						t.Fatal(err)
+					}
+					return storage
+				})
 
 			case args.Endpoint == "disk":
 				// disk

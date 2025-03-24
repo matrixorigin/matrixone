@@ -142,6 +142,8 @@ func newMerger[T comparable](host MergeTaskHost, lessFunc sort.LessFunc[T], sort
 }
 
 func (m *merger[T]) merge(ctx context.Context) error {
+	defer m.release()
+
 	for i := 0; i < m.objCnt; i++ {
 		if ok, err := m.loadBlk(ctx, uint32(i)); !ok {
 			if err == nil {
@@ -156,7 +158,6 @@ func (m *merger[T]) merge(ctx context.Context) error {
 			src:    uint32(i),
 		})
 	}
-	defer m.release()
 
 	var releaseF func()
 	for i := 0; i < m.objCnt; i++ {
@@ -216,6 +217,7 @@ func (m *merger[T]) merge(ctx context.Context) error {
 			if _, err := m.writer.WriteBatch(m.buffer); err != nil {
 				return err
 			}
+			m.stats.writtenBytes = m.writer.GetWrittenOriginalSize()
 			// force clean
 			m.buffer.CleanOnlyData()
 

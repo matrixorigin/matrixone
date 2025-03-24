@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v2_0_0"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v2_0_1"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v2_0_2"
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v2_0_3"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v2_1_0"
 )
 
@@ -38,8 +39,8 @@ func (s *service) initUpgrade() {
 	s.handles = append(s.handles, v2_0_1.Handler)
 	// TODO: When v2.0.1 release, open the commented code as follows, Enable v2.0.2 upgrade package
 	s.handles = append(s.handles, v2_0_2.Handler)
+	s.handles = append(s.handles, v2_0_3.Handler)
 	s.handles = append(s.handles, v2_1_0.Handler)
-
 }
 
 func (s *service) getFinalVersionHandle() VersionHandle {

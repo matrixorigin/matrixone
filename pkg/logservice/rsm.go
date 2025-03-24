@@ -152,15 +152,12 @@ func (s *stateMachine) handleTruncateLsn(cmd []byte) sm.Result {
 // sm.Result value with the Value field set to the current leaseholder ID
 // to indicate rejection by mismatched leaseholder ID.
 func (s *stateMachine) handleUserUpdate(cmd []byte) sm.Result {
-	// TODO(volgariver6): no need to check leaseholder if there is only one TN replica.
-	// If there are multiple TN replicas, do the check.
-
 	// if the leaseholder is reserved, skip the check, as it is the RSM of standby shard.
-	// if s.state.LeaseHolderID != 0 && s.state.LeaseHolderID != parseLeaseHolderID(cmd) {
-	// 	data := make([]byte, 8)
-	// 	binaryEnc.PutUint64(data, s.state.LeaseHolderID)
-	// 	return sm.Result{Data: data}
-	// }
+	if s.state.LeaseHolderID != 0 && s.state.LeaseHolderID != parseLeaseHolderID(cmd) {
+		data := make([]byte, 8)
+		binaryEnc.PutUint64(data, s.state.LeaseHolderID)
+		return sm.Result{Data: data}
+	}
 	return sm.Result{Value: s.state.Index}
 }
 

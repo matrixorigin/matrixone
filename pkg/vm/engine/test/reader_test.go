@@ -1383,6 +1383,30 @@ func Test_ShardingLocalReader(t *testing.T) {
 
 	}
 
+	// test build reader using nil relData
+	{
+		//start to build sharding readers.
+		_, rel, txn, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
+		require.NoError(t, err)
+
+		shardSvr := testutil.MockShardService()
+		delegate, _ := disttae.MockTableDelegate(rel, shardSvr)
+		num := 10
+		_, err = delegate.BuildShardingReaders(
+			ctx,
+			rel.GetProcess(),
+			nil,
+			nil,
+			num,
+			0,
+			false,
+			0,
+		)
+
+		require.NoError(t, err)
+		require.NoError(t, txn.Commit(ctx))
+	}
+
 	{
 		//start to build sharding readers.
 		_, rel, txn, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
@@ -1390,6 +1414,8 @@ func Test_ShardingLocalReader(t *testing.T) {
 
 		relData, err := rel.Ranges(ctx, engine.DefaultRangesParam)
 		require.NoError(t, err)
+
+		fmt.Println(relData.String())
 
 		shardSvr := testutil.MockShardService()
 		delegate, _ := disttae.MockTableDelegate(rel, shardSvr)
@@ -1462,8 +1488,8 @@ func Test_SimpleReader(t *testing.T) {
 	)
 	defer bat1.Clean(mp)
 	obj := types.NewObjectid()
-	blk0 := types.NewBlockidWithObjectID(obj, 0)
-	blk1 := types.NewBlockidWithObjectID(obj, 1)
+	blk0 := types.NewBlockidWithObjectID(&obj, 0)
+	blk1 := types.NewBlockidWithObjectID(&obj, 1)
 	idx := int32(0)
 	for i := 0; i < 10; i++ {
 		vector.AppendFixed[int32](
@@ -1473,10 +1499,10 @@ func Test_SimpleReader(t *testing.T) {
 			mp,
 		)
 		idx++
-		rowid := types.NewRowid(blk0, uint32(i))
+		rowid := types.NewRowid(&blk0, uint32(i))
 		vector.AppendFixed[types.Rowid](
 			bat1.Vecs[0],
-			*rowid,
+			rowid,
 			false,
 			mp,
 		)
@@ -1489,10 +1515,10 @@ func Test_SimpleReader(t *testing.T) {
 			mp,
 		)
 		idx++
-		rowid := types.NewRowid(blk1, uint32(i))
+		rowid := types.NewRowid(&blk1, uint32(i))
 		vector.AppendFixed[types.Rowid](
 			bat1.Vecs[0],
-			*rowid,
+			rowid,
 			false,
 			mp,
 		)

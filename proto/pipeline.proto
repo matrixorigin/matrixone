@@ -386,6 +386,7 @@ message ProductL2 {
   repeated int32 col_list = 2;
   plan.Expr  expr = 3;
   int32 join_map_tag = 4;
+  string vector_op_type = 5;
 }
 
 message IndexJoin {
@@ -399,6 +400,7 @@ message TableFunction {
   repeated plan.Expr args = 3;
   bytes params = 4;
   string name = 5;
+  bool is_single = 6;
 }
 
 message ExternalName2ColIndex {
@@ -567,6 +569,7 @@ message Source {
   timestamp.Timestamp timestamp = 10;
   repeated plan.RuntimeFilterSpec runtime_filter_probe_list = 11;
   bool is_const = 12;
+  repeated plan.msgHeader recv_msg_list = 13 [(gogoproto.nullable) = false];
 }
 
 message NodeInfo {

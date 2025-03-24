@@ -43,14 +43,14 @@ func (builder *QueryBuilder) gatherLeavesForMessageFromTopToScan(nodeID int32) i
 }
 
 // send message from top to scan. if block node(like group or window), no need to send this message
-func (builder *QueryBuilder) handleMessgaeFromTopToScan(nodeID int32) {
+func (builder *QueryBuilder) handleMessageFromTopToScan(nodeID int32) {
 	if builder.optimizerHints != nil && builder.optimizerHints.sendMessageFromTopToScan != 0 {
 		return
 	}
 	node := builder.qry.Nodes[nodeID]
 	if len(node.Children) > 0 {
 		for _, child := range node.Children {
-			builder.handleMessgaeFromTopToScan(child)
+			builder.handleMessageFromTopToScan(child)
 		}
 	}
 	if node.NodeType != plan.Node_SORT {
@@ -67,20 +67,20 @@ func (builder *QueryBuilder) handleMessgaeFromTopToScan(nodeID int32) {
 	if scanID == -1 {
 		return
 	}
-	orderByCol, ok := node.OrderBy[0].Expr.Expr.(*plan.Expr_Col)
-	if !ok {
+	orderByCol := node.OrderBy[0].Expr.GetCol()
+	if orderByCol == nil {
 		return
 	}
 	scanNode := builder.qry.Nodes[scanID]
 	if len(scanNode.OrderBy) != 0 {
 		panic("orderby in scannode should be nil!")
 	}
-	if orderByCol.Col.RelPos != scanNode.BindingTags[0] {
+	if orderByCol.RelPos != scanNode.BindingTags[0] {
 		return
 	}
 
 	msgTag := builder.genNewMsgTag()
-	msgHeader := &plan.MsgHeader{MsgTag: msgTag, MsgType: int32(message.MsgTopValue)}
+	msgHeader := plan.MsgHeader{MsgTag: msgTag, MsgType: int32(message.MsgTopValue)}
 	node.SendMsgList = append(node.SendMsgList, msgHeader)
 	scanNode.RecvMsgList = append(scanNode.RecvMsgList, msgHeader)
 	scanNode.OrderBy = append(scanNode.OrderBy, DeepCopyOrderBy(node.OrderBy[0]))
@@ -102,11 +102,13 @@ func (builder *QueryBuilder) handleHashMapMessages(nodeID int32) {
 	}
 
 	msgTag := builder.genNewMsgTag()
-	msgHeader := &plan.MsgHeader{MsgTag: msgTag, MsgType: int32(message.MsgJoinMap)}
-	node.SendMsgList = append(node.SendMsgList, msgHeader)
+	node.SendMsgList = append(node.SendMsgList, plan.MsgHeader{
+		MsgTag:  msgTag,
+		MsgType: int32(message.MsgJoinMap),
+	})
 }
 
-func (builder *QueryBuilder) handleMessgaes(nodeID int32) {
-	builder.handleMessgaeFromTopToScan(nodeID)
+func (builder *QueryBuilder) handleMessages(nodeID int32) {
+	builder.handleMessageFromTopToScan(nodeID)
 	builder.handleHashMapMessages(nodeID)
 }

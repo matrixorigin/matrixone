@@ -21,8 +21,8 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 )
 
 var deleteTimeout = 10 * time.Minute
@@ -38,12 +38,12 @@ func SetDeleteTimeout(duration time.Duration) {
 type Deleter struct {
 	// toDeletePaths is list of files that can be GC
 	toDeletePaths   []string
-	fs              *objectio.ObjectFS
+	fs              fileservice.FileService
 	deleteTimeout   time.Duration
 	deleteBatchSize int
 }
 
-func NewDeleter(fs *objectio.ObjectFS) *Deleter {
+func NewDeleter(fs fileservice.FileService) *Deleter {
 	w := &Deleter{
 		fs:              fs,
 		deleteTimeout:   deleteTimeout,
@@ -106,7 +106,7 @@ func (g *Deleter) DeleteMany(
 		now := time.Now()
 		deleteCtx, cancel := context.WithTimeout(ctx, g.deleteTimeout)
 		defer cancel()
-		err = g.fs.DelFiles(deleteCtx, toDeletePaths[i:end])
+		err = g.fs.Delete(deleteCtx, toDeletePaths[i:end]...)
 		logutil.Info(
 			"GC-ExecDelete-Group",
 			zap.String("task", taskName),

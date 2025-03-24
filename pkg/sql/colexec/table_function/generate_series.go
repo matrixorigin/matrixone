@@ -183,6 +183,10 @@ func generateSeriesPrepare(proc *process.Process, tableFunction *TableFunction) 
 	return st, err
 }
 
+func (g *generateSeriesArg) end(tf *TableFunction, proc *process.Process) error {
+	return nil
+}
+
 func (g *generateSeriesArg) reset(tf *TableFunction, proc *process.Process) {
 	if g.batch != nil {
 		g.batch.CleanOnlyData()
@@ -197,6 +201,16 @@ func (g *generateSeriesArg) free(tf *TableFunction, proc *process.Process, pipel
 
 func (g *generateSeriesArg) start(tf *TableFunction, proc *process.Process, nthRow int, analyzer process.Analyzer) error {
 	var err error
+
+	if tf.CanOpt {
+		if g.batch == nil {
+			g.batch = tf.createResultBatch()
+		} else {
+			g.batch.CleanOnlyData()
+		}
+		return err
+	}
+
 	var startVec, endVec, stepVec *vector.Vector
 	// get result type, this should happen in parpare.
 	// no matter how many args, the first arg is always the correct output type.
@@ -217,6 +231,7 @@ func (g *generateSeriesArg) start(tf *TableFunction, proc *process.Process, nthR
 		if err = initStartAndEndNumNoTypeCheck(&g.i64State, proc, startVec, endVec, stepVec, nthRow); err != nil {
 			return err
 		}
+
 	case types.T_datetime:
 		if err = initDateTimeStep(&g.dtState, proc, stepVec, nthRow); err != nil {
 			return err
@@ -248,6 +263,7 @@ func (g *generateSeriesArg) start(tf *TableFunction, proc *process.Process, nthR
 	} else {
 		g.batch.CleanOnlyData()
 	}
+
 	return nil
 }
 

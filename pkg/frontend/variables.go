@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fulltext"
 )
 
 var (
@@ -3510,6 +3511,46 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableBoolType("experimental_ivf_index"),
 		Default:           int64(0),
 	},
+	"ivf_threads_build": {
+		Name:              "ivf_threads_build",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("ivf_threads_build", 0, 1024, false),
+		Default:           int64(0),
+	},
+	"ivf_threads_search": {
+		Name:              "ivf_threads_search",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("ivf_threads_search", 0, 1024, false),
+		Default:           int64(0),
+	},
+	"probe_limit": {
+		Name:              "probe_limit",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("probe_limit", 1, 1024, false),
+		Default:           int64(5),
+	},
+	"ivf_sample_limit": {
+		Name:              "ivf_sample_limit",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("ivf_sample_limit", 10000, 10000000, false),
+		Default:           int64(0),
+	},
+	"ivf_max_iteration": {
+		Name:              "ivf_max_iteration",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("ivf_max_iteration", 10, 500, false),
+		Default:           int64(500),
+	},
 	"disable_agg_statement": {
 		Name:              "disable_agg_statement",
 		Scope:             ScopeSession,
@@ -3525,6 +3566,46 @@ var gSysVarsDefs = map[string]SystemVariable{
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableBoolType("experimental_fulltext_index"),
 		Default:           int64(0),
+	},
+	"ft_relevancy_algorithm": {
+		Name:              fulltext.FulltextRelevancyAlgo,
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableStringType(fulltext.FulltextRelevancyAlgo),
+		Default:           fulltext.FulltextRelevancyAlgo_tfidf,
+	},
+	"experimental_hnsw_index": {
+		Name:              "experimental_hnsw_index",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableBoolType("experimental_hnsw_index"),
+		Default:           int64(0),
+	},
+	"hnsw_threads_build": {
+		Name:              "hnsw_threads_build",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("hnsw_threads_build", 0, 1024, false),
+		Default:           int64(0),
+	},
+	"hnsw_threads_search": {
+		Name:              "hnsw_threads_search",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("hnsw_threads_search", 0, 1024, false),
+		Default:           int64(0),
+	},
+	"hnsw_max_index_capacity": {
+		Name:              "hnsw_max_index_capacity",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("hnsw_max_index_capacity", 1, 5000000000, false),
+		Default:           int64(1000000),
 	},
 	"validate_password": {
 		Name:              "validate_password",

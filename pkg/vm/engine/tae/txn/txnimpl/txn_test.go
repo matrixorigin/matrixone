@@ -31,10 +31,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/wal"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/assert"
 )
@@ -381,7 +381,7 @@ func TestNodeCommand(t *testing.T) {
 func TestTxnManager1(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	mgr := txnbase.NewTxnManager(TxnStoreFactory(context.Background(), nil, nil, nil, nil, 0),
+	mgr := txnbase.NewTxnManager(TxnStoreFactory(context.Background(), nil, nil, nil, 0),
 		TxnFactory(nil), types.NewMockHLCClock(1))
 	mgr.Start(context.Background())
 	txn, _ := mgr.StartTxn(nil)
@@ -434,17 +434,15 @@ func TestTxnManager1(t *testing.T) {
 	assert.Equal(t, expected, seqs)
 }
 
-func initTestContext(ctx context.Context, t *testing.T, dir string) (*catalog.Catalog, *txnbase.TxnManager, wal.Driver) {
-	c := catalog.MockCatalog()
-	driver := wal.NewBatchStoreDriver(ctx, dir, "store", nil)
-	serviceDir := path.Join(dir, "data")
-	service := objectio.TmpNewFileservice(ctx, path.Join(dir, "data"))
-	fs := objectio.NewObjectFS(service, serviceDir)
+func initTestContext(ctx context.Context, t *testing.T, dir string) (*catalog.Catalog, *txnbase.TxnManager, wal.Store) {
+	fs := objectio.TmpNewFileservice(ctx, path.Join(dir, "data"))
 	rt := dbutils.NewRuntime(
 		dbutils.WithRuntimeObjectFS(fs),
 	)
 	factory := tables.NewDataFactory(rt, dir)
-	mgr := txnbase.NewTxnManager(TxnStoreFactory(context.Background(), c, driver, rt, factory, 0),
+	c := catalog.MockCatalog(factory)
+	driver := wal.NewLocalHandle(dir, "store", nil)
+	mgr := txnbase.NewTxnManager(TxnStoreFactory(context.Background(), c, driver, rt, 0),
 		TxnFactory(c), types.NewMockHLCClock(1))
 	rt.Now = mgr.Now
 	mgr.Start(context.Background())

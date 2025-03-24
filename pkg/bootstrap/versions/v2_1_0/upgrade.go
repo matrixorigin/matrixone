@@ -16,11 +16,14 @@ package v2_1_0
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fulltext"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"go.uber.org/zap"
 )
@@ -29,7 +32,7 @@ var (
 	Handler = &versionHandle{
 		metadata: versions.Version{
 			Version:           "2.1.0",
-			MinUpgradeVersion: "2.0.2",
+			MinUpgradeVersion: "2.0.3",
 			UpgradeCluster:    versions.Yes,
 			UpgradeTenant:     versions.Yes,
 			VersionOffset:     uint32(len(clusterUpgEntries) + len(tenantUpgEntries)),
@@ -101,4 +104,55 @@ func (v *versionHandle) HandleClusterUpgrade(
 
 func (v *versionHandle) HandleCreateFrameworkDeps(txn executor.TxnExecutor) error {
 	return moerr.NewInternalErrorNoCtxf("Only v1.2.0 can initialize upgrade framework, current version is:%s", Handler.metadata.Version)
+}
+
+func upgradeForBM25(accountId uint32, txn executor.TxnExecutor) error {
+
+	getLogger(txn.Txn().TxnOptions().CN).Info("begin upgrade for BM25",
+		zap.Uint32("accountId", accountId))
+
+	sql := `select distinct b.datname, a.index_table_name from mo_catalog.mo_indexes a 
+	join mo_catalog.mo_database b on a.database_id = b.dat_id where a.algo = 'fulltext'`
+
+	res, err := txn.Exec(sql, executor.StatementOption{}.WithAccountID(accountId))
+	if err != nil {
+		return err
+	}
+	defer res.Close()
+
+	for _, batch := range res.Batches {
+		for i := 0; i < batch.RowCount(); i++ {
+			dbName := batch.Vecs[0].GetStringAt(i)
+			idxTable := batch.Vecs[1].GetStringAt(i)
+
+			checkSQL := fmt.Sprintf("select count(*) from `%s`.`%s` where word = '%s'", dbName, idxTable, fulltext.DOC_LEN_WORD)
+			checkRes, checkErr := txn.Exec(checkSQL, executor.StatementOption{}.WithAccountID(accountId))
+			if checkErr != nil {
+				return checkErr
+			}
+			defer checkRes.Close()
+			if len(checkRes.Batches) == 0 {
+				continue
+			}
+			rowCount := vector.GetFixedAtNoTypeCheck[uint64](checkRes.Batches[0].Vecs[0], 0)
+			if rowCount > 0 {
+				continue
+			}
+
+			insertSQL := fmt.Sprintf("insert into `%s`.`%s` select doc_id, count(*), '%s' from `%s`.`%s` group by doc_id", dbName, idxTable, fulltext.DOC_LEN_WORD, dbName, idxTable)
+			insertRes, insertErr := txn.Exec(insertSQL, executor.StatementOption{}.WithAccountID(accountId))
+			if insertErr != nil {
+				return insertErr
+			}
+			defer insertRes.Close()
+
+			getLogger(txn.Txn().TxnOptions().CN).Info("insert doclen for BM25",
+				zap.String("db", dbName),
+				zap.String("index table", idxTable))
+		}
+	}
+
+	getLogger(txn.Txn().TxnOptions().CN).Info("finish upgrade for BM25",
+		zap.Uint32("accountId", accountId))
+	return nil
 }

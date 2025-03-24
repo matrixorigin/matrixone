@@ -92,6 +92,11 @@ func TestTruncationExportSnapshot(t *testing.T) {
 
 func TestTruncationImportSnapshot(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
+		// start hakeeper
+		peers := make(map[uint64]dragonboat.Target)
+		peers[1] = s.ID()
+		assert.NoError(t, s.store.startHAKeeperReplica(1, peers, false))
+
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
 		defer cancel()
 
@@ -352,4 +357,112 @@ func TestHAKeeperTruncation2(t *testing.T) {
 
 	}
 	runServiceTest(t, true, true, fn)
+}
+
+func TestShouldDoImport(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	t.Run("dir is null, do no import", func(t *testing.T) {
+		st := &store{}
+		assert.False(t, st.shouldDoImport(ctx, 1, 0, ""))
+	})
+
+	t.Run("no hakeeper, failed", func(t *testing.T) {
+		fn := func(t *testing.T, s *Service) {
+			assert.False(t, s.store.shouldDoImport(ctx, 1, 0, "test-dir"))
+		}
+		runServiceTest(t, false, true, fn)
+	})
+
+	t.Run("lsn too small, failed", func(t *testing.T) {
+		fn := func(t *testing.T, s *Service) {
+			// start hakeeper
+			peers := make(map[uint64]dragonboat.Target)
+			peers[1] = s.ID()
+			assert.NoError(t, s.store.startHAKeeperReplica(1, peers, false))
+
+			hb := pb.TNStoreHeartbeat{
+				UUID:        "tn1",
+				ReplayedLsn: 90,
+			}
+			ctx, cancel := context.WithTimeout(ctx, time.Second*3)
+			defer cancel()
+			_, err := s.store.addTNStoreHeartbeat(ctx, hb)
+			assert.NoError(t, err)
+
+			assert.False(t, s.store.shouldDoImport(ctx, 1, 0, "test-dir"))
+		}
+		runServiceTest(t, false, true, fn)
+	})
+
+	t.Run("replayed lsn is too small, failed", func(t *testing.T) {
+		fn := func(t *testing.T, s *Service) {
+			// start hakeeper
+			peers := make(map[uint64]dragonboat.Target)
+			peers[1] = s.ID()
+			assert.NoError(t, s.store.startHAKeeperReplica(1, peers, false))
+
+			hb := pb.TNStoreHeartbeat{
+				UUID:        "tn1",
+				ReplayedLsn: 90,
+			}
+			ctx, cancel := context.WithTimeout(ctx, time.Second*3)
+			defer cancel()
+			_, err := s.store.addTNStoreHeartbeat(ctx, hb)
+			assert.NoError(t, err)
+
+			assert.False(t, s.store.shouldDoImport(ctx, 1, 100, "test-dir"))
+		}
+		runServiceTest(t, false, true, fn)
+	})
+
+	t.Run("not all replayed lsn are big enough, failed", func(t *testing.T) {
+		fn := func(t *testing.T, s *Service) {
+			// start hakeeper
+			peers := make(map[uint64]dragonboat.Target)
+			peers[1] = s.ID()
+			assert.NoError(t, s.store.startHAKeeperReplica(1, peers, false))
+
+			hb := pb.TNStoreHeartbeat{
+				UUID:        "tn1",
+				ReplayedLsn: 90,
+			}
+			ctx, cancel := context.WithTimeout(ctx, time.Second*3)
+			defer cancel()
+			_, err := s.store.addTNStoreHeartbeat(ctx, hb)
+			assert.NoError(t, err)
+
+			hb = pb.TNStoreHeartbeat{
+				UUID:        "tn2",
+				ReplayedLsn: 190,
+			}
+			_, err = s.store.addTNStoreHeartbeat(ctx, hb)
+			assert.NoError(t, err)
+
+			assert.False(t, s.store.shouldDoImport(ctx, 1, 100, "test-dir"))
+		}
+		runServiceTest(t, false, true, fn)
+	})
+
+	t.Run("replayed lsn is big enough, ok", func(t *testing.T) {
+		fn := func(t *testing.T, s *Service) {
+			// start hakeeper
+			peers := make(map[uint64]dragonboat.Target)
+			peers[1] = s.ID()
+			assert.NoError(t, s.store.startHAKeeperReplica(1, peers, false))
+
+			hb := pb.TNStoreHeartbeat{
+				UUID:        "tn1",
+				ReplayedLsn: 90,
+			}
+			ctx, cancel := context.WithTimeout(ctx, time.Second*3)
+			defer cancel()
+			_, err := s.store.addTNStoreHeartbeat(ctx, hb)
+			assert.NoError(t, err)
+
+			assert.True(t, s.store.shouldDoImport(ctx, 1, 10, "test-dir"))
+		}
+		runServiceTest(t, false, true, fn)
+	})
 }

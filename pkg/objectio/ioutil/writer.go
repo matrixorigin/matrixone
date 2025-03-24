@@ -72,7 +72,8 @@ func ConstructWriter(
 	isTombstone bool,
 	fs fileservice.FileService,
 ) *BlockWriter {
-	name := objectio.BuildObjectNameWithObjectID(objectio.NewObjectid())
+	noid := objectio.NewObjectid()
+	name := objectio.BuildObjectNameWithObjectID(&noid)
 	return constructWriterWithName(name,
 		ver, seqnums, sortkeyPos, sortkeyIsPK, isTombstone, fs)
 }
@@ -194,6 +195,10 @@ func (w *BlockWriter) SetAppendable() {
 
 func (w *BlockWriter) GetObjectStats(opts ...objectio.ObjectStatsOptions) objectio.ObjectStats {
 	return w.writer.GetObjectStats(opts...)
+}
+
+func (w *BlockWriter) GetWrittenOriginalSize() uint32 {
+	return w.writer.GetOrignalSize()
 }
 
 // WriteBatch write a batch whose schema is decribed by seqnum in NewBlockWriterNew, write batch to memroy cache, not S3

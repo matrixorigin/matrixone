@@ -81,7 +81,7 @@ func Test_Reader1(t *testing.T) {
 		t.Log(file.String())
 		totalRows += int(file.Rows())
 	}
-	require.Equal(t, 4, len(files))
+	require.Equal(t, 5, len(files))
 	require.Equal(t, allRows, totalRows)
 
 	tableidScanBat := batch.NewWithSchema(

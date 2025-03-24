@@ -72,7 +72,7 @@ func Test_versionHandle_HandleClusterUpgrade(t *testing.T) {
 
 	v := &versionHandle{
 		metadata: versions.Version{
-			Version: "v2.1.0",
+			Version: "v2.0.3",
 		},
 	}
 	sid := ""
@@ -102,7 +102,7 @@ func Test_HandleTenantUpgrade(t *testing.T) {
 
 	v := &versionHandle{
 		metadata: versions.Version{
-			Version: "v2.1.0",
+			Version: "v2.0.3",
 		},
 	}
 	sid := ""
@@ -133,7 +133,7 @@ func Test_HandleTenantUpgrade2(t *testing.T) {
 
 	v := &versionHandle{
 		metadata: versions.Version{
-			Version: "v2.1.0",
+			Version: "v2.0.3",
 		},
 	}
 	sid := ""
@@ -195,6 +195,52 @@ func Test_UpgEntry(t *testing.T) {
 			}, txnOperator)
 			upg_mo_pitr_add_status.Upgrade(executor, uint32(0))
 			upg_mo_pitr_add_status_changed_time.Upgrade(executor, uint32(0))
+		},
+	)
+}
+
+func Test_UpgradeBM25(t *testing.T) {
+	sid := ""
+	runtime.RunTest(
+		sid,
+		func(rt runtime.Runtime) {
+			txnOperator := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
+			txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{CN: sid}).AnyTimes()
+			executor := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+				// get index table list
+				if strings.Contains(sql, "select distinct") {
+					types := []types.Type{
+						types.New(types.T_varchar, 64, 0),
+						types.New(types.T_varchar, 64, 0),
+					}
+					memRes := executor.NewMemResult(
+						types,
+						mpool.MustNewZero())
+					memRes.NewBatchWithRowCount(1)
+					executor.AppendStringRows(memRes, 0, []string{"dbName"})
+					executor.AppendStringRows(memRes, 1, []string{"idxTableName"})
+					return memRes.GetResult(), nil
+				}
+
+				// check need upgrade
+				if strings.Contains(sql, "select count") {
+					types := []types.Type{
+						types.New(types.T_int64, 0, 0),
+					}
+					memRes := executor.NewMemResult(
+						types,
+						mpool.MustNewZero())
+					memRes.NewBatchWithRowCount(1)
+					executor.AppendFixedRows(memRes, 0, []int64{0})
+					return memRes.GetResult(), nil
+				}
+
+				// insert doclen values
+				return executor.Result{}, nil
+			}, txnOperator)
+
+			err := upgradeForBM25(0, executor)
+			assert.Nil(t, err)
 		},
 	)
 }

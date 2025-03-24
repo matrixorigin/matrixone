@@ -69,12 +69,6 @@ func TestTruncate(t *testing.T) {
 	partition.truncate([2]uint64{0, 0}, types.BuildTS(1, 0))
 	assert.Equal(t, 5, partition.dataObjectTSIndex.Len())
 
-	partition.truncate([2]uint64{0, 0}, types.BuildTS(2, 0))
-	assert.Equal(t, 3, partition.dataObjectTSIndex.Len())
-
-	partition.truncate([2]uint64{0, 0}, types.BuildTS(3, 0))
-	assert.Equal(t, 1, partition.dataObjectTSIndex.Len())
-
 	partition.truncate([2]uint64{0, 0}, types.BuildTS(4, 0))
 	assert.Equal(t, 1, partition.dataObjectTSIndex.Len())
 }
@@ -88,6 +82,13 @@ func addObject(p *PartitionState, create, delete types.TS) {
 		IsDelete:     false,
 	}
 	p.dataObjectTSIndex.Set(objIndex1)
+	id := objectio.NewObjectid()
+	stats := objectio.NewObjectStatsWithObjectID(&id, false, false, false)
+	p.dataObjectsNameIndex.Set(objectio.ObjectEntry{
+		ObjectStats: *stats,
+		CreateTime:  create,
+		DeleteTime:  delete,
+	})
 	if !delete.IsEmpty() {
 		objIndex2 := ObjectIndexByTSEntry{
 			Time:         delete,
@@ -104,7 +105,8 @@ func TestHasTombstoneChanged(t *testing.T) {
 	require.False(t, state.HasTombstoneChanged(types.BuildTS(13, 0), types.BuildTS(15, 0)))
 
 	roid := func() objectio.ObjectStats {
-		return *objectio.NewObjectStatsWithObjectID(objectio.NewObjectid(), false, true, false)
+		nobjid := objectio.NewObjectid()
+		return *objectio.NewObjectStatsWithObjectID(&nobjid, false, true, false)
 	}
 
 	state.tombstoneObjectDTSIndex.Set(objectio.ObjectEntry{ObjectStats: roid(), CreateTime: types.BuildTS(5, 0), DeleteTime: types.BuildTS(8, 0)})

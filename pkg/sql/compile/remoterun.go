@@ -19,7 +19,6 @@ import (
 	"unsafe"
 
 	"github.com/google/uuid"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -219,6 +218,7 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 			Timestamp:              &s.DataSource.Timestamp,
 			RuntimeFilterProbeList: s.DataSource.RuntimeFilterSpecs,
 			IsConst:                s.DataSource.isConst,
+			RecvMsgList:            s.DataSource.RecvMsgList,
 		}
 	}
 	// PreScope
@@ -331,6 +331,7 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 			Timestamp:          *dsc.Timestamp,
 			RuntimeFilterSpecs: dsc.RuntimeFilterProbeList,
 			isConst:            dsc.IsConst,
+			RecvMsgList:        dsc.RecvMsgList,
 		}
 	}
 	//var relData engine.RelData
@@ -633,9 +634,10 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 	case *productl2.Productl2:
 		relList, colList := getRelColList(t.Result)
 		in.ProductL2 = &pipeline.ProductL2{
-			RelList:    relList,
-			ColList:    colList,
-			JoinMapTag: t.JoinMapTag,
+			RelList:      relList,
+			ColList:      colList,
+			JoinMapTag:   t.JoinMapTag,
+			VectorOpType: t.VectorOpType,
 		}
 	case *projection.Projection:
 		in.ProjectList = t.ProjectList
@@ -706,11 +708,12 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		}
 	case *table_function.TableFunction:
 		in.TableFunction = &pipeline.TableFunction{
-			Attrs:  t.Attrs,
-			Rets:   t.Rets,
-			Args:   t.Args,
-			Params: t.Params,
-			Name:   t.FuncName,
+			Attrs:    t.Attrs,
+			Rets:     t.Rets,
+			Args:     t.Args,
+			Params:   t.Params,
+			Name:     t.FuncName,
+			IsSingle: t.IsSingle,
 		}
 
 	case *external.External:
@@ -817,11 +820,12 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			Types:     convertToPlanTypes(t.Typs),
 		}
 		in.TableFunction = &pipeline.TableFunction{
-			Attrs:  t.TableFunction.Attrs,
-			Rets:   t.TableFunction.Rets,
-			Args:   t.TableFunction.Args,
-			Params: t.TableFunction.Params,
-			Name:   t.TableFunction.FuncName,
+			Attrs:    t.TableFunction.Attrs,
+			Rets:     t.TableFunction.Rets,
+			Args:     t.TableFunction.Args,
+			Params:   t.TableFunction.Params,
+			Name:     t.TableFunction.FuncName,
+			IsSingle: t.TableFunction.IsSingle,
 		}
 	case *multi_update.MultiUpdate:
 		updateCtxList := make([]*plan.UpdateCtx, len(t.MultiUpdateCtx))
@@ -1216,6 +1220,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.Args = opr.TableFunction.Args
 		arg.FuncName = opr.TableFunction.Name
 		arg.Params = opr.TableFunction.Params
+		arg.IsSingle = opr.TableFunction.IsSingle
 		op = arg
 	case vm.External:
 		t := opr.GetExternalScan()
@@ -1330,6 +1335,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.TableFunction.Args = opr.TableFunction.Args
 		arg.TableFunction.FuncName = opr.TableFunction.Name
 		arg.TableFunction.Params = opr.TableFunction.Params
+		arg.TableFunction.IsSingle = opr.TableFunction.IsSingle
 		op = arg
 	case vm.MultiUpdate:
 		arg := multi_update.NewArgument()

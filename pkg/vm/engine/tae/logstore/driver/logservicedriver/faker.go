@@ -164,7 +164,7 @@ type mockBackend struct {
 	shardId   uint64
 }
 
-func newMockBackend() *mockBackend {
+func NewMockBackend() *mockBackend {
 	return &mockBackend{nextPSN: 1, shardId: 1}
 }
 
@@ -263,6 +263,10 @@ func (c *mockBackend) Read(
 
 func (c *mockBackendClient) Close() (err error) {
 	return
+}
+
+func (c *mockBackendClient) UpdateLeaseholderID(ctx context.Context, id uint64) error {
+	return nil
 }
 
 func (c *mockBackendClient) GetLogRecord(size int) logservice.LogRecord {

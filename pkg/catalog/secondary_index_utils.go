@@ -22,6 +22,8 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 )
 
 // Index Algorithm names
@@ -31,6 +33,7 @@ const (
 	MoIndexIvfFlatAlgo  = tree.INDEX_TYPE_IVFFLAT  // used for IVF flat index on Vector/Array columns
 	MOIndexMasterAlgo   = tree.INDEX_TYPE_MASTER   // used for Master Index on VARCHAR columns
 	MOIndexFullTextAlgo = tree.INDEX_TYPE_FULLTEXT // used for Fulltext Index on VARCHAR columns
+	MoIndexHnswAlgo     = tree.INDEX_TYPE_HNSW     // used for HNSW Index on Vector/Array columns
 )
 
 // ToLower is used for before comparing AlgoType and IndexAlgoParamOpType. Reason why they are strings
@@ -69,39 +72,20 @@ func IsFullTextIndexAlgo(algo string) bool {
 	return _algo == MOIndexFullTextAlgo.ToString()
 }
 
+func IsHnswIndexAlgo(algo string) bool {
+	_algo := ToLower(algo)
+	return _algo == MoIndexHnswAlgo.ToString()
+}
+
 // ------------------------[START] IndexAlgoParams------------------------
 const (
-	IndexAlgoParamLists     = "lists"
-	IndexAlgoParamOpType    = "op_type"
-	IndexAlgoParamOpType_l2 = "vector_l2_ops"
-	//IndexAlgoParamOpType_ip  = "vector_ip_ops"
-	//IndexAlgoParamOpType_cos = "vector_cosine_ops"
+	IndexAlgoParamLists  = "lists"
+	IndexAlgoParamOpType = "op_type"
+	HnswM                = "m"
+	HnswEfConstruction   = "ef_construction"
+	HnswQuantization     = "quantization"
+	HnswEfSearch         = "ef_search"
 )
-
-const (
-	KmeansSamplePerList = 50
-	MaxSampleCount      = 10_000
-)
-
-// CalcSampleCount is used to calculate the sample count for Kmeans index.
-func CalcSampleCount(lists, totalCnt int64) (sampleCnt int64) {
-
-	if totalCnt > lists*KmeansSamplePerList {
-		sampleCnt = lists * KmeansSamplePerList
-	} else {
-		sampleCnt = totalCnt
-	}
-
-	if totalCnt > MaxSampleCount && sampleCnt < MaxSampleCount {
-		sampleCnt = MaxSampleCount
-	}
-
-	if sampleCnt > MaxSampleCount {
-		sampleCnt = MaxSampleCount
-	}
-
-	return sampleCnt
-}
 
 /* 1. ToString Functions */
 
@@ -119,14 +103,31 @@ func IndexParamsToStringList(indexParams string) (string, error) {
 		res += fmt.Sprintf(" %s = %s ", IndexAlgoParamLists, val)
 	}
 
+	if val, ok := result[HnswM]; ok {
+		res += fmt.Sprintf(" %s = %s ", HnswM, val)
+	}
+
+	if val, ok := result[HnswEfConstruction]; ok {
+		res += fmt.Sprintf(" %s = %s ", HnswEfConstruction, val)
+	}
+
+	if val, ok := result[HnswEfSearch]; ok {
+		res += fmt.Sprintf(" %s = %s ", HnswEfSearch, val)
+	}
+
+	if val, ok := result[HnswQuantization]; ok {
+		val = ToLower(val)
+		_, ok := vectorindex.QuantizationValid(val)
+		if !ok {
+			return "", moerr.NewInternalErrorNoCtxf("invalid quantization '%s'", val)
+		}
+		res += fmt.Sprintf(" %s '%s' ", HnswQuantization, val)
+	}
+
 	if opType, ok := result[IndexAlgoParamOpType]; ok {
 		opType = ToLower(opType)
-		if opType != IndexAlgoParamOpType_l2 {
-			//	opType != IndexAlgoParamOpType_ip &&
-			//	opType != IndexAlgoParamOpType_cos
-			return "", moerr.NewInternalErrorNoCtxf("invalid op_type. not of type '%s'", IndexAlgoParamOpType_l2)
-			//IndexAlgoParamOpType_ip, , IndexAlgoParamOpType_cos)
-
+		if _, ok := metric.OpTypeToIvfMetric[opType]; !ok {
+			return "", moerr.NewInternalErrorNoCtxf("invalid op_type: '%s'", opType)
 		}
 
 		res += fmt.Sprintf(" %s '%s' ", IndexAlgoParamOpType, opType)
@@ -216,17 +217,53 @@ func indexParamsToMap(def interface{}) (map[string]string, error) {
 
 			if len(idx.IndexOption.AlgoParamVectorOpType) > 0 {
 				opType := ToLower(idx.IndexOption.AlgoParamVectorOpType)
-				if opType != IndexAlgoParamOpType_l2 {
-					//opType != IndexAlgoParamOpType_ip &&
-					//opType != IndexAlgoParamOpType_cos &&
-
-					return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid op_type. not of type '%s'",
-						IndexAlgoParamOpType_l2))
-					//IndexAlgoParamOpType_ip, IndexAlgoParamOpType_cos,
+				if _, ok := metric.OpTypeToIvfMetric[opType]; !ok {
+					return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid op_type: '%s'", opType))
 				}
 				res[IndexAlgoParamOpType] = idx.IndexOption.AlgoParamVectorOpType
 			} else {
-				res[IndexAlgoParamOpType] = IndexAlgoParamOpType_l2 // set l2 as default
+				res[IndexAlgoParamOpType] = metric.OpType_L2Distance // set l2 as default
+			}
+		case tree.INDEX_TYPE_HNSW:
+			if idx.IndexOption.HnswM < 0 {
+				return nil, moerr.NewInternalErrorNoCtx("invalid M. hnsw.M must be > 0")
+			}
+			if idx.IndexOption.HnswEfConstruction < 0 {
+				return nil, moerr.NewInternalErrorNoCtx("invalid ef_construction. hnsw.ef_construction must be > 0")
+			}
+			if idx.IndexOption.HnswEfSearch < 0 {
+				return nil, moerr.NewInternalErrorNoCtx("invalid ef_search. hnsw.ef_search must be > 0")
+			}
+			if len(idx.IndexOption.HnswQuantization) > 0 {
+				_, ok := vectorindex.QuantizationValid(idx.IndexOption.HnswQuantization)
+				if !ok {
+					return nil, moerr.NewInternalErrorNoCtx("invalid hnsw quantization.")
+				}
+			}
+
+			// hnswM or HnswEfConstruction == 0, use usearch default value
+			if idx.IndexOption.HnswM > 0 {
+				res[HnswM] = strconv.FormatInt(idx.IndexOption.HnswM, 10)
+			}
+			if idx.IndexOption.HnswEfConstruction > 0 {
+				res[HnswEfConstruction] = strconv.FormatInt(idx.IndexOption.HnswEfConstruction, 10)
+			}
+			if idx.IndexOption.HnswEfSearch > 0 {
+				res[HnswEfSearch] = strconv.FormatInt(idx.IndexOption.HnswEfSearch, 10)
+			}
+
+			if len(idx.IndexOption.HnswQuantization) > 0 {
+				res[HnswQuantization] = idx.IndexOption.HnswQuantization
+			}
+
+			if len(idx.IndexOption.AlgoParamVectorOpType) > 0 {
+				opType := ToLower(idx.IndexOption.AlgoParamVectorOpType)
+				if _, ok := metric.OpTypeToUsearchMetric[opType]; !ok {
+					return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid op_type. '%s'", opType))
+				}
+				res[IndexAlgoParamOpType] = idx.IndexOption.AlgoParamVectorOpType
+			} else {
+				res[IndexAlgoParamOpType] = metric.OpType_L2Distance // set l2 as default
 			}
 		default:
 			return nil, moerr.NewInternalErrorNoCtx("invalid index alogorithm type")
@@ -239,8 +276,8 @@ func indexParamsToMap(def interface{}) (map[string]string, error) {
 
 func DefaultIvfIndexAlgoOptions() map[string]string {
 	res := make(map[string]string)
-	res[IndexAlgoParamLists] = "1"                      // set lists = 1 as default
-	res[IndexAlgoParamOpType] = IndexAlgoParamOpType_l2 // set l2 as default
+	res[IndexAlgoParamLists] = "1"                       // set lists = 1 as default
+	res[IndexAlgoParamOpType] = metric.OpType_L2Distance // set l2 as default
 	return res
 }
 

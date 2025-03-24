@@ -17,6 +17,7 @@ package txnbase
 import (
 	"context"
 	"fmt"
+	"math/rand"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -28,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -36,6 +38,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
+
+var MinCommittedTS = types.BuildTS(1, 0)
 
 type TxnManagerOption func(*TxnManager)
 
@@ -193,8 +197,13 @@ func NewTxnManager(
 }
 
 func (mgr *TxnManager) initMaxCommittedTS() {
-	now := mgr.Now()
-	mgr.MaxCommittedTS.Store(&now)
+	mgr.MaxCommittedTS.Store(&MinCommittedTS)
+}
+
+func (mgr *TxnManager) TryUpdateMaxCommittedTS(ts types.TS) {
+	if ts.GT(&MinCommittedTS) {
+		mgr.MaxCommittedTS.CompareAndSwap(mgr.MaxCommittedTS.Load(), &ts)
+	}
 }
 
 // Now gets a timestamp under the protect from a inner lock. The lock makes
@@ -259,13 +268,17 @@ func (mgr *TxnManager) GetTxnSkipFlags() TxnSkipFlag {
 	return TxnSkipFlag(mgr.txns.skipFlags.Load())
 }
 
-func (mgr *TxnManager) Init(prevTs types.TS) error {
-	logutil.Info(
-		"TxnManager-Init",
-		zap.String("prev-ts", prevTs.ToString()),
-	)
-	mgr.ts.allocator.SetStart(prevTs)
-	return nil
+// open a txn for offline use
+// the txn cannot be committed or rollbacked
+// the txn can be used to read data
+func (mgr *TxnManager) OpenOfflineTxn(
+	ts types.TS,
+) txnif.AsyncTxn {
+	txnId := mgr.IdAlloc.Alloc()
+	store := mgr.TxnStoreFactory()
+	txn := mgr.TxnFactory(nil, store, txnId, ts, types.TS{})
+	store.BindTxn(txn, true)
+	return txn
 }
 
 // Note: Replay should always runs in a single thread
@@ -286,8 +299,8 @@ func (mgr *TxnManager) StartTxn(info []byte) (txn txnif.AsyncTxn, err error) {
 
 	store := mgr.TxnStoreFactory()
 	txn = mgr.TxnFactory(mgr, store, txnId, startTs, types.TS{})
-	store.BindTxn(txn)
-	mgr.storeTxn(txn, TxnFlag_Normal)
+	offline := mgr.storeTxn(txn, TxnFlag_Normal)
+	store.BindTxn(txn, offline)
 	return
 }
 
@@ -303,8 +316,8 @@ func (mgr *TxnManager) StartTxnWithStartTSAndSnapshotTS(
 	store := mgr.TxnStoreFactory()
 	txnId := mgr.IdAlloc.Alloc()
 	txn = mgr.TxnFactory(mgr, store, txnId, startTS, snapshotTS)
-	store.BindTxn(txn)
-	err = mgr.storeTxn(txn, TxnFlag_Normal)
+	offline := mgr.storeTxn(txn, TxnFlag_Normal)
+	store.BindTxn(txn, offline)
 	return
 }
 
@@ -342,19 +355,19 @@ func (mgr *TxnManager) loadAndDeleteTxn(
 }
 
 // flag: specify the txn type. only one bit is set
+// offline: true
+// means the txn is not managed by TxnManager and
+// it is not writeable
 func (mgr *TxnManager) storeTxn(
 	newTxn txnif.AsyncTxn, flag TxnFlag,
-) (err error) {
+) (offline bool) {
 	mgr.txns.wg.Add(1)
 
 	skipFlags := TxnSkipFlag(mgr.txns.skipFlags.Load())
 	if skipFlags.Skip(flag) {
 		mgr.txns.wg.Done()
-		return moerr.NewTxnControlErrorNoCtxf(
-			"%s Skip %s",
-			skipFlags.String(),
-			flag.String(),
-		)
+		offline = true
+		return
 	}
 
 	mgr.txns.store.Store(newTxn.GetID(), newTxn)
@@ -362,28 +375,27 @@ func (mgr *TxnManager) storeTxn(
 }
 
 // flag: specify the txn type. only one bit is set
+// return: txn, loaded, offline
 func (mgr *TxnManager) loadOrStoreTxn(
 	newTxn txnif.AsyncTxn, flag TxnFlag,
-) (txnif.AsyncTxn, bool, error) {
+) (retTxn txnif.AsyncTxn, loaded bool, offline bool) {
 	mgr.txns.wg.Add(1)
 
 	skipFlags := TxnSkipFlag(mgr.txns.skipFlags.Load())
 	if skipFlags.Skip(flag) {
-		mgr.txns.wg.Done()
-		return nil, false, moerr.NewTxnControlErrorNoCtxf(
-			"%s Skip %s",
-			skipFlags.String(),
-			flag.String(),
-		)
+		offline = true
 	}
 
-	if actual, loaded := mgr.txns.store.LoadOrStore(
+	actual, loaded := mgr.txns.store.LoadOrStore(
 		newTxn.GetID(), newTxn,
-	); loaded {
-		mgr.txns.wg.Done()
-		return actual.(txnif.AsyncTxn), true, nil
+	)
+	if loaded {
+		retTxn = actual.(txnif.AsyncTxn)
+		offline = retTxn.GetStore().IsOffline()
+	} else {
+		retTxn = newTxn
 	}
-	return newTxn, false, nil
+	return
 }
 
 // GetOrCreateTxnWithMeta Get or create a txn initiated by CN
@@ -400,10 +412,16 @@ func (mgr *TxnManager) GetOrCreateTxnWithMeta(
 		return
 	}
 
-	store := mgr.TxnStoreFactory()
+	var (
+		loaded  bool
+		offline bool
+		store   = mgr.TxnStoreFactory()
+	)
 	txn = mgr.TxnFactory(mgr, store, id, ts, ts)
-	store.BindTxn(txn)
-	txn, _, err = mgr.loadOrStoreTxn(txn, TxnFlag_Normal)
+	txn, loaded, offline = mgr.loadOrStoreTxn(txn, TxnFlag_Normal)
+	if !loaded {
+		store.BindTxn(txn, offline)
+	}
 	return
 }
 
@@ -448,7 +466,7 @@ func (mgr *TxnManager) newHeartbeatOpTxn(ctx context.Context) *OpTxn {
 	txnId := mgr.IdAlloc.Alloc()
 	store := &heartbeatStore{}
 	txn := DefaultTxnFactory(mgr, store, txnId, startTs, types.TS{})
-	store.BindTxn(txn)
+	store.BindTxn(txn, false)
 	return &OpTxn{
 		ctx: ctx,
 		Txn: txn,
@@ -457,6 +475,9 @@ func (mgr *TxnManager) newHeartbeatOpTxn(ctx context.Context) *OpTxn {
 }
 
 func (mgr *TxnManager) OnOpTxn(op *OpTxn) (err error) {
+	if op.Txn.GetStore().IsOffline() {
+		panic("offline txn should not be here")
+	}
 	_, err = mgr.PreparingSM.EnqueueReceived(op)
 	return
 }
@@ -592,6 +613,9 @@ func (mgr *TxnManager) on1PCPrepared(op *OpTxn) {
 	_ = op.Txn.WaitDone(err, isAbort)
 }
 func (mgr *TxnManager) OnCommitTxn(txn txnif.AsyncTxn) {
+	if mgr.GetTxnSkipFlags().Skip(TxnFlag_Heartbeat) && txn.GetStore().IsHeartbeat() {
+		return
+	}
 	new := txn.GetCommitTS()
 	for old := mgr.MaxCommittedTS.Load(); new.GT(old); old = mgr.MaxCommittedTS.Load() {
 		if mgr.MaxCommittedTS.CompareAndSwap(old, &new) {
@@ -743,6 +767,11 @@ func (mgr *TxnManager) dequeuePrepared(items ...any) {
 			if err := op.Txn.WaitPrepared(op.ctx); err != nil {
 				// v0.6 TODO: Error handling
 				panic(err)
+			}
+
+			if _, injected := objectio.CommitWaitInjected(); injected {
+				duration := time.Millisecond * time.Duration(rand.Intn(10))
+				time.Sleep(duration)
 			}
 
 			if op.Is2PC() {

@@ -16,6 +16,24 @@ package fulltext
 
 import "strings"
 
+const BM25_K1 = 1.5
+const BM25_B = 0.75
+
+const DOC_LEN_WORD = "__DocLen" //
+
+type FullTextScoreAlgo int
+
+const (
+	ALGO_BM25 FullTextScoreAlgo = iota
+	ALGO_TFIDF
+)
+
+const (
+	FulltextRelevancyAlgo       = "ft_relevancy_algorithm"
+	FulltextRelevancyAlgo_bm25  = "BM25"
+	FulltextRelevancyAlgo_tfidf = "TF-IDF"
+)
+
 /*
 The following examples demonstrate some search strings that use boolean full-text operators:
 
@@ -95,6 +113,9 @@ type SearchAccum struct {
 	Params     string
 	Nrow       int64
 	Nkeywords  int
+
+	ScoreAlgo FullTextScoreAlgo
+	AvgDocLen float64
 }
 
 // Boolean mode search string parsing

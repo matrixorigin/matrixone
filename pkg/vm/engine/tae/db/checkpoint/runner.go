@@ -33,8 +33,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/wal"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
 type timeBasedPolicy struct {
@@ -176,7 +176,7 @@ type runner struct {
 	catalog   *catalog.Catalog
 	rt        *dbutils.Runtime
 	observers *observers
-	wal       wal.Driver
+	wal       wal.Store
 
 	// memory storage of the checkpoint entries
 	store *runnerStore
@@ -196,7 +196,7 @@ func NewRunner(
 	rt *dbutils.Runtime,
 	catalog *catalog.Catalog,
 	source logtail.Collector,
-	wal wal.Driver,
+	wal wal.Store,
 	cfg *CheckpointCfg,
 	opts ...Option,
 ) *runner {
@@ -456,7 +456,7 @@ func (r *runner) saveCheckpoint(
 	bat := r.collectCheckpointMetadata(start, end)
 	defer bat.Close()
 	name = ioutil.EncodeCKPMetadataFullName(start, end)
-	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterCheckpoint, name, r.rt.Fs.Service)
+	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterCheckpoint, name, r.rt.Fs)
 	if err != nil {
 		return
 	}

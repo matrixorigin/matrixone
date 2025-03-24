@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -113,7 +114,6 @@ func (s *Scope) resetForReuse(c *Compile) (err error) {
 	}
 
 	if s.DataSource != nil && !s.DataSource.isConst {
-		s.DataSource.Rel = nil
 		s.DataSource.R = nil
 	}
 
@@ -129,9 +129,6 @@ func (s *Scope) initDataSource(c *Compile) (err error) {
 		return nil
 	}
 
-	if s.DataSource.Rel != nil {
-		return nil
-	}
 	return c.compileTableScanDataSource(s)
 }
 
@@ -193,8 +190,8 @@ func (s *Scope) Run(c *Compile) (err error) {
 			}
 
 			var tag int32
-			if s.DataSource.node != nil && len(s.DataSource.node.RecvMsgList) > 0 {
-				tag = s.DataSource.node.RecvMsgList[0].MsgTag
+			if len(s.DataSource.RecvMsgList) > 0 {
+				tag = s.DataSource.RecvMsgList[0].MsgTag
 			}
 			s.ScopeAnalyzer.Stop()
 			_, err = p.RunWithReader(s.DataSource.R, tag, s.Proc)
@@ -473,6 +470,10 @@ func (s *Scope) ParallelRun(c *Compile) (err error) {
 		parallelScope, err = buildScanParallelRun(s, c)
 		//fmt.Println("after scan parallel run", DebugShowScopes([]*Scope{parallelScope}, OldLevel))
 
+	// probability 3: src op is tablefunction
+	case s.IsTbFunc:
+		parallelScope, err = buildLoadParallelRun(s, c)
+
 	// others.
 	default:
 		parallelScope, err = s, nil
@@ -534,12 +535,19 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 		return s, nil
 	}
 
-	if len(s.DataSource.OrderBy) > 0 {
-		return nil, moerr.NewInternalError(c.proc.Ctx, "ordered scan must run in only one parallel.")
-	}
+	//if len(s.DataSource.OrderBy) > 0 {
+	//	return nil, moerr.NewInternalError(c.proc.Ctx, "ordered scan must run in only one parallel.")
+	//}
 
 	ms, ss := newParallelScope(s)
 	for i := range ss {
+		recvMsgList := slices.Clone(s.DataSource.RecvMsgList)
+		for j := range recvMsgList {
+			if recvMsgList[j].MsgType == int32(message.MsgTopValue) {
+				recvMsgList[j].MsgTag += int32(i) << 16
+			}
+		}
+
 		ss[i].DataSource = &Source{
 			R:            readers[i],
 			SchemaName:   s.DataSource.SchemaName,
@@ -547,6 +555,7 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 			Attributes:   s.DataSource.Attributes,
 			AccountId:    s.DataSource.AccountId,
 			node:         s.DataSource.node,
+			RecvMsgList:  recvMsgList,
 		}
 	}
 
@@ -634,8 +643,8 @@ func (s *Scope) getRelData(c *Compile, blockExprList []*plan.Expr) error {
 		if err != nil {
 			return err
 		}
-		s.NodeInfo.Data.AppendBlockInfoSlice(commited.GetBlockInfoSlice())
 
+		s.NodeInfo.Data.AppendBlockInfoSlice(commited.GetBlockInfoSlice())
 	} else {
 		tombstones := s.NodeInfo.Data.GetTombstones()
 		commited.AttachTombstones(tombstones)
@@ -973,6 +982,7 @@ func (s *Scope) aggOptimize(c *Compile, rel engine.Relation, ctx context.Context
 			}); err != nil {
 				return err
 			}
+
 			if partialResults != nil {
 				s.NodeInfo.Data = newRelData
 				//find the last mergegroup

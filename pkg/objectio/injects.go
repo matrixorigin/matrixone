@@ -29,6 +29,7 @@ const (
 const (
 	FJ_CommitDelete  = "fj/commit/delete"
 	FJ_CommitSlowLog = "fj/commit/slowlog"
+	FJ_CommitWait    = "fj/commit/wait"
 	FJ_TransferSlow  = "fj/transfer/slow"
 	FJ_FlushTimeout  = "fj/flush/timeout"
 
@@ -47,6 +48,8 @@ const (
 
 	FJ_LogReader    = "fj/log/reader"
 	FJ_LogWorkspace = "fj/log/workspace"
+
+	FJ_CronJobsOpen = "fj/cronjobs/open"
 )
 
 const (
@@ -214,6 +217,29 @@ func InjectLogging(
 	return
 }
 
+func SimpleInject(key string) (rmFault func(), err error) {
+	if err = fault.AddFaultPoint(
+		context.Background(),
+		key,
+		":::",
+		"echo",
+		0,
+		"",
+		false,
+	); err != nil {
+		return
+	}
+	rmFault = func() {
+		fault.RemoveFaultPoint(context.Background(), key)
+	}
+	return
+}
+
+func SimpleInjected(key string) bool {
+	_, _, injected := fault.TriggerFault(key)
+	return injected
+}
+
 // inject log reader and partition state
 // `name` is the table name
 func InjectLog1(
@@ -270,6 +296,11 @@ func InjectLog1(
 
 func CheckpointSaveInjected() (string, bool) {
 	_, sarg, injected := fault.TriggerFault(FJ_CheckpointSave)
+	return sarg, injected
+}
+
+func CommitWaitInjected() (string, bool) {
+	_, sarg, injected := fault.TriggerFault(FJ_CommitWait)
 	return sarg, injected
 }
 
@@ -331,6 +362,24 @@ func InjectCheckpointSave(msg string) (rmFault func() (bool, error), err error) 
 	}
 	rmFault = func() (ok bool, err error) {
 		return fault.RemoveFaultPoint(context.Background(), FJ_CheckpointSave)
+	}
+	return
+}
+
+func InjectCommitWait(msg string) (rmFault func() (bool, error), err error) {
+	if err = fault.AddFaultPoint(
+		context.Background(),
+		FJ_CommitWait,
+		":::",
+		"echo",
+		0,
+		msg,
+		false,
+	); err != nil {
+		return
+	}
+	rmFault = func() (ok bool, err error) {
+		return fault.RemoveFaultPoint(context.Background(), FJ_CommitWait)
 	}
 	return
 }

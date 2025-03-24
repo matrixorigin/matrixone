@@ -1559,6 +1559,25 @@ func Benchmark_RecordStatement_IsTrue(b *testing.B) {
 	})
 }
 
+func Test_unsupportedCommand(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ses := newTestSession(t, ctrl)
+	execCtx := &ExecCtx{
+		ses: ses,
+	}
+	req := &Request{
+		cmd: COM_SLEEP,
+	}
+
+	resp, err := ExecRequest(ses, execCtx, req)
+	assert.Nil(t, err)
+	assert.NotNil(t, resp)
+	respErr := resp.GetData().(*moerr.Error)
+	assert.Equal(t, "internal error: unsupported command. 0x0", respErr.Error())
+}
+
 func Test_panic(t *testing.T) {
 	fault.EnableDomain(fault.DomainFrontend)
 	defer fault.DisableDomain(fault.DomainFrontend)

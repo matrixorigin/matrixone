@@ -19,23 +19,25 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fulltext"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 const (
-	countstar_sql = "SELECT COUNT(*) FROM %s"
+	countstar_sql = "SELECT COUNT(*), AVG(pos) from %s where word = '%s'"
 )
+
+var ft_runSql = sqlexec.RunSql
+var ft_runSql_streaming = sqlexec.RunStreamingSql
 
 type fulltextState struct {
 	inited      bool
@@ -50,9 +52,14 @@ type fulltextState struct {
 	aggcnt      []int64
 	mpool       *fulltext.FixedBytePool
 	param       fulltext.FullTextParserParam
+	docLenMap   map[any]int32
 
 	// holding output batch
 	batch *batch.Batch
+}
+
+func (u *fulltextState) end(tf *TableFunction, proc *process.Process) error {
+	return nil
 }
 
 func (u *fulltextState) reset(tf *TableFunction, proc *process.Process) {
@@ -164,6 +171,7 @@ func (u *fulltextState) start(tf *TableFunction, proc *process.Process, nthRow i
 		u.stream_chan = make(chan executor.Result, 8)
 		u.idx2word = make(map[int]string)
 		u.inited = true
+		u.docLenMap = make(map[any]int32)
 	}
 
 	v := tf.ctr.argVecs[0]
@@ -190,7 +198,12 @@ func (u *fulltextState) start(tf *TableFunction, proc *process.Process, nthRow i
 	}
 	mode := vector.GetFixedAtNoTypeCheck[int64](v, 0)
 
-	return fulltextIndexMatch(u, proc, tf, source_table, index_table, pattern, mode, u.batch)
+	scoreAlgo, err := fulltext.GetScoreAlgo(proc)
+	if err != nil {
+		return err
+	}
+
+	return fulltextIndexMatch(u, proc, tf, source_table, index_table, pattern, mode, scoreAlgo, u.batch)
 }
 
 // prepare
@@ -210,68 +223,10 @@ func fulltextIndexScanPrepare(proc *process.Process, tableFunction *TableFunctio
 	return st, err
 }
 
-var ft_runSql = ft_runSql_fn
-
-// run SQL in batch mode. Result batches will stored in memory and return once all result batches received.
-func ft_runSql_fn(proc *process.Process, sql string) (executor.Result, error) {
-	v, ok := moruntime.ServiceRuntime(proc.GetService()).GetGlobalVariables(moruntime.InternalSQLExecutor)
-	if !ok {
-		panic("missing lock service")
-	}
-
-	//-------------------------------------------------------
-	topContext := proc.GetTopContext()
-	accountId, err := defines.GetAccountId(proc.Ctx)
-	if err != nil {
-		return executor.Result{}, err
-	}
-	//-------------------------------------------------------
-
-	exec := v.(executor.SQLExecutor)
-	opts := executor.Options{}.
-		// All runSql and runSqlWithResult is a part of input sql, can not incr statement.
-		// All these sub-sql's need to be rolled back and retried en masse when they conflict in pessimistic mode
-		WithDisableIncrStatement().
-		WithTxn(proc.GetTxnOperator()).
-		WithDatabase(proc.GetSessionInfo().Database).
-		WithTimeZone(proc.GetSessionInfo().TimeZone).
-		WithAccountID(accountId)
-	return exec.Exec(topContext, sql, opts)
-}
-
-var ft_runSql_streaming = ft_runSql_streaming_fn
-
-// run SQL in WithStreaming() and pass the channel to SQL executor
-func ft_runSql_streaming_fn(proc *process.Process, sql string, stream_chan chan executor.Result, error_chan chan error) (executor.Result, error) {
-	v, ok := moruntime.ServiceRuntime(proc.GetService()).GetGlobalVariables(moruntime.InternalSQLExecutor)
-	if !ok {
-		panic("missing lock service")
-	}
-
-	//-------------------------------------------------------
-	topContext := proc.GetTopContext()
-	accountId, err := defines.GetAccountId(proc.Ctx)
-	if err != nil {
-		return executor.Result{}, err
-	}
-	//-------------------------------------------------------
-	exec := v.(executor.SQLExecutor)
-	opts := executor.Options{}.
-		// All runSql and runSqlWithResult is a part of input sql, can not incr statement.
-		// All these sub-sql's need to be rolled back and retried en masse when they conflict in pessimistic mode
-		WithDisableIncrStatement().
-		WithTxn(proc.GetTxnOperator()).
-		WithDatabase(proc.GetSessionInfo().Database).
-		WithTimeZone(proc.GetSessionInfo().TimeZone).
-		WithAccountID(accountId).
-		WithStreaming(stream_chan, error_chan)
-	return exec.Exec(topContext, sql, opts)
-}
-
 // run SQL to get the (doc_id, word_index) of all patterns (words) in the search string
 func runWordStats(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) (executor.Result, error) {
 
-	sql, err := fulltext.PatternToSql(s.Pattern, s.Mode, s.TblName, u.param.Parser)
+	sql, err := fulltext.PatternToSql(s.Pattern, s.Mode, s.TblName, u.param.Parser, s.ScoreAlgo)
 	if err != nil {
 		return executor.Result{}, err
 	}
@@ -300,7 +255,12 @@ func evaluate(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) 
 			return nil, err
 		}
 
-		score, err := s.Eval(docvec, aggcnt)
+		docLen := int64(0)
+		if len, ok := u.docLenMap[doc_id]; ok {
+			docLen = int64(len)
+		}
+
+		score, err := s.Eval(docvec, docLen, aggcnt)
 		if err != nil {
 			return nil, err
 		}
@@ -350,9 +310,10 @@ func groupby(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) (
 	bat := res.Batches[0]
 	defer res.Close()
 
-	if len(bat.Vecs) != 2 {
+	if len(bat.Vecs) > 3 {
 		return false, moerr.NewInternalError(proc.Ctx, "output vector columns not match")
 	}
+	needSetDocLen := len(bat.Vecs) == 3
 
 	u.nrows += bat.RowCount()
 
@@ -365,6 +326,11 @@ func groupby(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) (
 			// change it to string
 			key := string(bytes)
 			doc_id = key
+		}
+
+		if needSetDocLen {
+			docLen := vector.GetFixedAtWithTypeCheck[int32](bat.Vecs[2], i)
+			u.docLenMap[doc_id] = docLen
 		}
 
 		// word string
@@ -440,36 +406,42 @@ func groupby(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) (
 }
 
 // Run SQL to get number of records in source table
-func runCountStar(proc *process.Process, s *fulltext.SearchAccum) (int64, error) {
-	var nrow int64
-	nrow = 0
-	sql := fmt.Sprintf(countstar_sql, s.SrcTblName)
+func runCountStar(proc *process.Process, s *fulltext.SearchAccum) error {
+	sql := fmt.Sprintf(countstar_sql, s.TblName, fulltext.DOC_LEN_WORD)
 
 	res, err := ft_runSql(proc, sql)
 	if err != nil {
-		return 0, err
+		return err
 	}
 	defer res.Close()
 
 	if len(res.Batches) == 0 {
-		return 0, nil
+		return nil
 	}
 
 	bat := res.Batches[0]
 	if bat.RowCount() == 1 {
-		nrow = vector.GetFixedAtWithTypeCheck[int64](bat.Vecs[0], 0)
+		nrow := vector.GetFixedAtWithTypeCheck[int64](bat.Vecs[0], 0)
+		s.Nrow = nrow
+
+		avgDocLen := vector.GetFixedAtWithTypeCheck[float64](bat.Vecs[1], 0)
+		s.AvgDocLen = avgDocLen
 		//logutil.Infof("NROW = %d", nrow)
 	}
+	// downgrade BM25 to TF-IDF if AvgDocLen is zro
+	if s.ScoreAlgo == fulltext.ALGO_BM25 && s.AvgDocLen == 0 {
+		s.ScoreAlgo = fulltext.ALGO_TFIDF
+	}
 
-	return nrow, nil
+	return nil
 }
 
 func fulltextIndexMatch(u *fulltextState, proc *process.Process, tableFunction *TableFunction, srctbl, tblname, pattern string,
-	mode int64, bat *batch.Batch) (err error) {
+	mode int64, scoreAlgo fulltext.FullTextScoreAlgo, bat *batch.Batch) (err error) {
 
 	if u.sacc == nil {
 		// parse the search string to []Pattern and create SearchAccum
-		s, err := fulltext.NewSearchAccum(srctbl, tblname, pattern, mode, "")
+		s, err := fulltext.NewSearchAccum(srctbl, tblname, pattern, mode, "", scoreAlgo)
 		if err != nil {
 			return err
 		}
@@ -479,11 +451,10 @@ func fulltextIndexMatch(u *fulltextState, proc *process.Process, tableFunction *
 		u.aggcnt = make([]int64, s.Nkeywords)
 
 		// count(*) to get number of records in source table
-		nrow, err := runCountStar(proc, s)
+		err = runCountStar(proc, s)
 		if err != nil {
 			return err
 		}
-		s.Nrow = nrow
 
 		u.sacc = s
 

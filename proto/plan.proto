@@ -37,7 +37,7 @@ message Type {
 
 message	msgHeader {
 	int32 msg_tag = 1;
-	int32 msg_type =2;
+	int32 msg_type = 2;
 };
 
 // Literal: if a literal value can be reprensented by int64 or
@@ -437,6 +437,7 @@ message TableDef {
 message TableFunction{
 	string name = 1;
 	bytes param = 2;
+        bool is_single = 3;
 }
 
 enum ShuffleType {
@@ -489,9 +490,9 @@ message Stats {
 	//for scan, selectivity means outcnt divide total count
 	double selectivity = 6;
 	bool forceOneCN = 7;
- int32 dop = 8;
+	int32 dop = 8;
 	HashMapStats hashmapStats = 9;
-        string sql = 10;
+	string sql = 10;
 }
 
 message RowsetExpr {
@@ -838,8 +839,8 @@ message Node {
 	bool ifInsertFromUnique = 57;
 
 	//for message
-	repeated msgHeader send_msg_list = 58;
-	repeated msgHeader recv_msg_list = 59;
+	repeated msgHeader send_msg_list = 58 [(gogoproto.nullable) = false];
+	repeated msgHeader recv_msg_list = 59 [(gogoproto.nullable) = false];
 
 	DedupJoinCtx dedup_join_ctx = 60;
 	

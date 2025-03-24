@@ -59,3 +59,9 @@ func TestUnsafeSliceCast(t *testing.T) {
 	s = UnsafeSliceCast[int]([]int64(nil))
 	assert.Equal(t, []int(nil), s)
 }
+
+func TestUnsafeUintptr(t *testing.T) {
+	a := int(100)
+	ptr := UnsafeUintptr(&a)
+	assert.NotEqual(t, ptr, uintptr(0))
+}

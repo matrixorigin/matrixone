@@ -83,7 +83,15 @@ func newCNMergeTask(
 	targets []objectio.ObjectStats,
 	targetObjSize uint32,
 ) (*cnMergeTask, error) {
-	relData := readutil.NewBlockListRelationData(1)
+
+	part, err := tbl.getPartitionState(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	relData := readutil.NewBlockListRelationData(1,
+		readutil.WithPartitionState(part))
+
 	source, err := tbl.buildLocalDataSource(
 		ctx,
 		0,

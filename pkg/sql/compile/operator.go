@@ -126,8 +126,8 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		IsLast:      srcOpBase.IsLast,
 		CnAddr:      srcOpBase.CnAddr,
 		OperatorID:  srcOpBase.OperatorID,
-		MaxParallel: srcOpBase.MaxParallel,
-		ParallelID:  srcOpBase.ParallelID,
+		MaxParallel: int32(maxParallel),
+		ParallelID:  int32(index),
 	}
 	switch sourceOp.OpType() {
 	case vm.ShuffleBuild:
@@ -331,6 +331,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.Result = t.Result
 		op.OnExpr = t.OnExpr
 		op.JoinMapTag = t.JoinMapTag
+		op.VectorOpType = t.VectorOpType
 		op.SetInfo(&info)
 		return op
 	case vm.Projection:
@@ -376,7 +377,9 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		t := sourceOp.(*top.Top)
 		op := top.NewArgument()
 		op.Limit = t.Limit
-		op.TopValueTag = t.TopValueTag
+		if t.TopValueTag > 0 {
+			op.TopValueTag = t.TopValueTag + int32(index)<<16
+		}
 		op.Fs = t.Fs
 		op.SetInfo(&info)
 		return op
@@ -414,10 +417,16 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op := table_function.NewArgument()
 		op.FuncName = t.FuncName
 		op.Args = t.Args
+		op.OffsetTotal = t.OffsetTotal
 		op.Rets = t.Rets
+		op.CanOpt = t.CanOpt
 		op.Attrs = t.Attrs
 		op.Params = t.Params
+		op.IsSingle = t.IsSingle
 		op.SetInfo(&info)
+		if op.FuncName == "generate_series" {
+			op.GenerateSeriesCtrNumState(t.OffsetTotal[index][0], t.OffsetTotal[index][1], t.GetGenerateSeriesCtrNumStateStep(), t.OffsetTotal[index][0])
+		}
 		return op
 	case vm.External:
 		t := sourceOp.(*external.External)
@@ -602,6 +611,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.TableFunction.Rets = t.TableFunction.Rets
 		op.TableFunction.Attrs = t.TableFunction.Attrs
 		op.TableFunction.Params = t.TableFunction.Params
+		op.TableFunction.IsSingle = t.TableFunction.IsSingle
 		op.TableFunction.SetInfo(&info)
 		op.SetInfo(&info)
 		return op
@@ -1002,6 +1012,7 @@ func constructTableFunction(n *plan.Node) *table_function.TableFunction {
 	arg.Args = n.TblFuncExprList
 	arg.FuncName = n.TableDef.TblFunc.Name
 	arg.Params = n.TableDef.TblFunc.Param
+	arg.IsSingle = n.TableDef.TblFunc.IsSingle
 	arg.Limit = n.Limit
 	return arg
 }
@@ -1010,7 +1021,7 @@ func constructTop(n *plan.Node, topN *plan.Expr) *top.Top {
 	arg := top.NewArgument()
 	arg.Fs = n.OrderBy
 	arg.Limit = topN
-	if len(n.SendMsgList) > 0 {
+	if len(n.SendMsgList) > 0 && n.SendMsgList[0].MsgType == int32(message.MsgTopValue) {
 		arg.TopValueTag = n.SendMsgList[0].MsgTag
 	}
 	return arg
@@ -1728,6 +1739,7 @@ func constructProductL2(n *plan.Node, proc *process.Process) *productl2.Productl
 		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
 	}
 	arg := productl2.NewArgument()
+	arg.VectorOpType = n.ExtraOptions
 	arg.Result = result
 	arg.OnExpr = colexec.RewriteFilterExprList(n.OnList)
 	for i := range n.SendMsgList {

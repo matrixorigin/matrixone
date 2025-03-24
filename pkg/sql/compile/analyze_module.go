@@ -48,9 +48,12 @@ type AnalyzeModule struct {
 }
 
 // Reset When Compile reused, reset AnalyzeModule to prevent resource accumulation
-func (anal *AnalyzeModule) Reset() {
+func (anal *AnalyzeModule) Reset(isPrepare bool, isTpQuery bool) {
 	if anal != nil {
-		anal.phyPlan = nil
+		if !isPrepare {
+			anal.phyPlan = nil
+		}
+
 		anal.remotePhyPlans = nil
 		anal.explainPhyBuffer = nil
 		anal.retryTimes = 0
@@ -278,6 +281,24 @@ func ConvertScopeToPhyScope(scope *Scope, receiverMap map[*process.WaitRegister]
 	return phyScope
 }
 
+func UpdatePreparePhyScope(scope *Scope, phyScope models.PhyScope) bool {
+	res := UpdatePreparePhyOperator(scope.RootOp, phyScope.RootOperator)
+	if !res {
+		return false
+	}
+	if scope.ScopeAnalyzer != nil {
+		phyScope.PrepareTimeConsumed = scope.ScopeAnalyzer.TimeConsumed
+	}
+
+	for i, preScope := range scope.PreScopes {
+		res = UpdatePreparePhyScope(preScope, phyScope.PreScopes[i])
+		if !res {
+			return res
+		}
+	}
+	return true
+}
+
 func getScopeReceiver(s *Scope, rs []*process.WaitRegister, rmp map[*process.WaitRegister]int) []models.PhyReceiver {
 	receivers := make([]models.PhyReceiver, 0)
 	for i := range rs {
@@ -334,6 +355,28 @@ func ConvertOperatorToPhyOperator(op vm.Operator, rmp map[*process.WaitRegister]
 
 	phyOp.Children = phyChildren
 	return phyOp
+}
+
+func UpdatePreparePhyOperator(op vm.Operator, phyOp *models.PhyOperator) bool {
+	if op == nil {
+		return true
+	}
+
+	if op.GetOperatorBase().OpAnalyzer != nil {
+		phyOp.OpStats = op.GetOperatorBase().OpAnalyzer.GetOpStats()
+	}
+
+	children := op.GetOperatorBase().Children
+	if len(children) != len(phyOp.Children) {
+		return false
+	}
+	for i, child := range children {
+		res := UpdatePreparePhyOperator(child, phyOp.Children[i])
+		if !res {
+			return res
+		}
+	}
+	return true
 }
 
 // getDestReceiver returns the DestReceiver of the current Operator
@@ -393,6 +436,23 @@ func ConvertSourceToPhySource(source *Source) *models.PhySource {
 		RelationName: source.RelationName,
 		Attributes:   source.Attributes,
 	}
+}
+
+// true means update success, if return false, GenPhyPlan
+func (c *Compile) UpdatePreparePhyPlan(runC *Compile) bool {
+	//------------------------------------------------------------------------------------------------------
+	c.anal.phyPlan.RetryTime = runC.anal.retryTimes
+	c.anal.curNodeIdx = runC.anal.curNodeIdx
+
+	if len(runC.scopes) > 0 {
+		for i := range runC.scopes {
+			res := UpdatePreparePhyScope(runC.scopes[i], c.anal.phyPlan.LocalScope[i])
+			if !res {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func (c *Compile) GenPhyPlan(runC *Compile) {

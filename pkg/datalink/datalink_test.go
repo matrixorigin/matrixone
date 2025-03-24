@@ -25,32 +25,32 @@ func TestParseDatalink(t *testing.T) {
 		name          string
 		data          string
 		wantMoUrl     string
-		wantUrlParams []int
+		wantUrlParams []int64
 	}
 	tests := []testCase{
 		{
 			name:          "Test1 - File",
 			data:          "file:///a/b/c/1.txt",
 			wantMoUrl:     "/a/b/c/1.txt",
-			wantUrlParams: []int{0, -1},
+			wantUrlParams: []int64{0, -1},
 		},
 		{
 			name:          "Test2 - File",
 			data:          "file:///a/b/c/1.txt?offset=1&size=2",
 			wantMoUrl:     "/a/b/c/1.txt",
-			wantUrlParams: []int{1, 2},
+			wantUrlParams: []int64{1, 2},
 		},
 		{
 			name:          "Test3 - File",
 			data:          "file:///a/b/c/1.txt?offset=1",
 			wantMoUrl:     "/a/b/c/1.txt",
-			wantUrlParams: []int{1, -1},
+			wantUrlParams: []int64{1, -1},
 		},
 		{
 			name:          "Test4 - File",
 			data:          "file:///a/b/c/1.txt?size=2",
 			wantMoUrl:     "/a/b/c/1.txt",
-			wantUrlParams: []int{0, 2},
+			wantUrlParams: []int64{0, 2},
 		},
 	}
 	for _, tt := range tests {
