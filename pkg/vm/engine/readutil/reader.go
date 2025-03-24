@@ -417,6 +417,27 @@ func (r *reader) Read(
 		if err != nil || dataState == engine.End {
 			r.Close()
 		}
+
+		// if r.name begin with bmsql ,then log info
+		if r.name == "bmsql_stock" {
+			//if strings.HasPrefix(r.name, "bmsql") {
+			pkPos := 0
+			for i := 0; i < len(cols); i++ {
+				if cols[i] == r.tableDef.GetPkey().PkeyColName {
+					pkPos = i
+				}
+			}
+			logutil.Info(
+				"Debug-Reader-Duplication",
+				zap.String("name", r.name),
+				zap.String("ts", r.ts.DebugString()),
+				zap.Error(err),
+				zap.String("data", common.MoBatchColToString(
+					outBatch,
+					outBatch.RowCount(),
+					pkPos)))
+		}
+
 		if injected, logLevel := objectio.LogReaderInjected("", r.name); injected || err != nil {
 			if err != nil {
 				logutil.Error(
