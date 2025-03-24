@@ -20,6 +20,7 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -211,7 +212,9 @@ type mysqlSinker struct {
 	// the length of all completed sql statement in sqlBuf
 	preSqlBufLen int
 
-	err  error
+	err error
+	mtx sync.Mutex
+
 	isMO bool
 }
 
@@ -431,10 +434,14 @@ func (s *mysqlSinker) SendDummy() {
 }
 
 func (s *mysqlSinker) Error() error {
+	s.mtx.Lock()
+	defer s.mtx.Unlock()
 	return s.err
 }
 
 func (s *mysqlSinker) ClearError() {
+	s.mtx.Lock()
+	defer s.mtx.Unlock()
 	s.err = nil
 }
 

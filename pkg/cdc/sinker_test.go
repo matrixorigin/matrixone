@@ -920,10 +920,6 @@ func Test_mysqlSinker_Close(t *testing.T) {
 func Test_mysqlSinker_SendBeginCommitRollback(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	assert.NoError(t, err)
-	mock.ExpectBegin()
-	mock.ExpectCommit()
-	mock.ExpectBegin()
-	mock.ExpectRollback()
 
 	ar := NewCdcActiveRoutine()
 	s := &mysqlSinker{
@@ -942,15 +938,21 @@ func Test_mysqlSinker_SendBeginCommitRollback(t *testing.T) {
 		s.Close()
 	}()
 
+	mock.ExpectBegin()
+	mock.ExpectCommit()
 	s.SendBegin()
 	assert.NoError(t, err)
 	s.SendCommit()
 	assert.NoError(t, err)
+	s.SendDummy()
 
+	mock.ExpectBegin()
+	mock.ExpectRollback()
 	s.SendBegin()
 	assert.NoError(t, err)
 	s.SendRollback()
 	assert.NoError(t, err)
+	s.SendDummy()
 
 	// begin error
 	mock.ExpectBegin().WillReturnError(moerr.NewInternalErrorNoCtx("begin error"))
