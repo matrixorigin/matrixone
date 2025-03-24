@@ -139,6 +139,11 @@ func (l *store) exportSnapshot(ctx context.Context, shardID uint64, replicaID ui
 		l.runtime.Logger().Error("request export snapshot failed", zap.Error(err))
 		return err
 	}
+	l.runtime.Logger().Info("export snapshot success",
+		zap.Uint64("shard", shardID),
+		zap.Uint64("replica", replicaID),
+		zap.Uint64("index", idx),
+	)
 	// Add the exported snapshot to snapshot manager.
 	if err := l.snapshotMgr.Add(shardID, replicaID, idx); err != nil {
 		l.runtime.Logger().Error("add exported snapshot failed", zap.Error(err))
@@ -157,6 +162,12 @@ func (l *store) importSnapshot(
 		l.runtime.Logger().Error("import snapshot failed", zap.Error(err))
 		return err
 	}
+	l.runtime.Logger().Info("import snapshot success",
+		zap.Uint64("shard", shardID),
+		zap.Uint64("replica", replicaID),
+		zap.Uint64("index", lsn),
+		zap.String("dir", dir),
+	)
 	// Then remove the exported snapshot in manager.
 	if err := l.snapshotMgr.Remove(shardID, replicaID, lsn); err != nil {
 		l.runtime.Logger().Error("remove exported snapshots failed")
