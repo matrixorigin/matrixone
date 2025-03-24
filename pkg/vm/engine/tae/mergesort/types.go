@@ -66,6 +66,8 @@ type mergeStats struct {
 	totalRowCnt, rowSize, targetObjSize uint32
 	blkPerObj                           uint16
 
+	writtenBytes uint32
+
 	blkRowCnt, objRowCnt, objBlkCnt int
 	mergedRowCnt, objCnt            int
 }
@@ -78,7 +80,7 @@ func (s *mergeStats) needNewObject() bool {
 		return s.objBlkCnt == int(s.blkPerObj)
 	}
 
-	if uint32(s.objRowCnt)*s.rowSize > s.targetObjSize {
+	if s.writtenBytes > s.targetObjSize {
 		return (s.totalRowCnt-uint32(s.mergedRowCnt))*s.rowSize > s.targetObjSize
 	}
 	return false

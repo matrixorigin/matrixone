@@ -26,6 +26,22 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 )
 
+// name is like `meta_<start_ts>_<end_ts>.<ext>`
+// ReadEntriesFromMeta reads the checkpoint entries from the meta file.
+//
+//	+--------------------------------+-------------------+
+//	| Attrs                          | Types             |
+//	+--------------------------------+-------------------+
+//	| CheckpointAttr_Start           | types.TS          |
+//	| CheckpointAttr_End             | types.TS          |
+//	| CheckpointAttr_MetaLocation    | objectio.Location |
+//	| CheckpointAttr_EntryType       | int8              |
+//	| CheckpointAttr_Version         | uint32            |
+//	| CheckpointAttr_AllLocations    | objectio.Location |
+//	| CheckpointAttr_CheckpointLSN   | uint64            |
+//	| CheckpointAttr_TruncateLSN     | uint64            |
+//	| CheckpointAttr_Type            | int8              |
+//	+--------------------------------+-------------------+
 func ReadEntriesFromMeta(
 	ctx context.Context,
 	sid string,

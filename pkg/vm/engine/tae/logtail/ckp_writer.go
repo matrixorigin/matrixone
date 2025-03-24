@@ -37,6 +37,7 @@ import (
 type BaseCollector_V2 struct {
 	*catalog.LoopProcessor
 	data       *CheckpointData_V2
+	objectSize int
 	start, end types.TS
 	packer     *types.Packer
 }
@@ -47,7 +48,11 @@ func NewBaseCollector_V2(start, end types.TS, size int, fs fileservice.FileServi
 		data:          NewCheckpointData_V2(common.CheckpointAllocator, size, fs),
 		start:         start,
 		end:           end,
+		objectSize:    size,
 		packer:        types.NewPacker(),
+	}
+	if collector.objectSize == 0 {
+		collector.objectSize = DefaultCheckpointSize
 	}
 	collector.ObjectFn = collector.visitObject
 	collector.TombstoneFn = collector.visitObject
@@ -67,6 +72,10 @@ func NewBackupCollector_V2(start, end types.TS, fs fileservice.FileService) *Bas
 }
 
 func (collector *BaseCollector_V2) Close() {
+	if collector.data != nil {
+		collector.data.Close()
+		collector.data = nil
+	}
 	collector.packer.Close()
 }
 func (collector *BaseCollector_V2) OrphanData() *CheckpointData_V2 {
@@ -92,7 +101,7 @@ func (collector *BaseCollector_V2) visitObject(entry *catalog.ObjectEntry) error
 		); err != nil {
 			return err
 		}
-		if collector.data.batch.RowCount() >= DefaultCheckpointBlockRows {
+		if collector.data.batch.Size() >= collector.objectSize || collector.data.batch.RowCount() >= DefaultCheckpointBlockRows {
 			collector.data.sinker.Write(context.Background(), collector.data.batch)
 			collector.data.batch.CleanOnlyData()
 		}
@@ -241,10 +250,10 @@ func NewCheckpointDataWithSinker(sinker *ioutil.Sinker, allocator *mpool.MPool) 
 	}
 }
 
-func (data *CheckpointData_V2) WriteTo(
+func (data *CheckpointData_V2) Sync(
 	ctx context.Context,
 	fs fileservice.FileService,
-) (CNLocation, TNLocation objectio.Location, ckpfiles []string, err error) {
+) (location objectio.Location, ckpfiles []string, err error) {
 	if data.batch != nil && data.batch.RowCount() != 0 {
 		err = data.sinker.Write(ctx, data.batch)
 		if err != nil {
@@ -279,8 +288,7 @@ func (data *CheckpointData_V2) WriteTo(
 	if blks, _, err = writer.Sync(ctx); err != nil {
 		return
 	}
-	CNLocation = objectio.BuildLocation(name, blks[0].GetExtent(), 0, blks[0].GetID())
-	TNLocation = CNLocation
+	location = objectio.BuildLocation(name, blks[0].GetExtent(), 0, blks[0].GetID())
 	ckpfiles = make([]string, 0)
 	for _, obj := range files {
 		ckpfiles = append(ckpfiles, obj.ObjectName().String())

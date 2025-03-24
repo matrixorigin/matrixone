@@ -124,7 +124,7 @@ func (job *checkpointJob) doGlobalCheckpoint(
 
 	fields = data.ExportStats("")
 
-	cnLocation, tnLocation, files, err := data.WriteTo(
+	location, files, err := data.Sync(
 		job.executor.ctx, runner.rt.Fs,
 	)
 	if err != nil {
@@ -133,9 +133,9 @@ func (job *checkpointJob) doGlobalCheckpoint(
 		return
 	}
 
-	entry.SetLocation(cnLocation, tnLocation)
+	entry.SetLocation(location, location)
 
-	files = append(files, cnLocation.Name().String())
+	files = append(files, location.Name().String())
 	var name string
 	if name, err = runner.saveCheckpoint(entry.start, entry.end); err != nil {
 		runner.store.RemoveGCKPIntent()
