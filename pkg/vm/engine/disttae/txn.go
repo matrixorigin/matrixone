@@ -1126,8 +1126,18 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 
 	inserts := objectio.GetReusableBitmap()
 	deletes := objectio.GetReusableBitmap()
+
+	defer func() {
+		inserts.Release()
+		deletes.Release()
+	}()
+
 	for i, e := range txn.writes {
 		if e.bat == nil || e.bat.IsEmpty() || e.bat.Attrs[0] == catalog.BlockMeta_MetaLoc {
+			continue
+		}
+
+		if e.bat.RowCount() >= batch.DefaultBatchMaxRow/2 {
 			continue
 		}
 
@@ -1138,50 +1148,55 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 		}
 	}
 
-	var (
-		err error
-	)
-
-	if inserts.Count()+deletes.Count() >= 20 {
-		ins := inserts.ToArray()
-
-		for i := 0; i < len(ins); i++ {
-			a := txn.writes[ins[i]]
+	foo := func(idxes []uint64) (err error) {
+		for i := 0; i < len(idxes); i++ {
+			a := txn.writes[idxes[i]]
 			if a.bat == nil {
 				continue
 			}
 
-			for j := i + 1; j < len(ins); j++ {
-				b := txn.writes[ins[j]]
-				if b.bat != nil && a.tableId == b.tableId && a.bat.RowCount()+b.bat.RowCount() <= 8192 {
+			for j := i + 1; j < len(idxes); j++ {
+				b := txn.writes[idxes[j]]
+				if b.bat != nil && a.tableId == b.tableId && a.bat.RowCount()+b.bat.RowCount() <= batch.DefaultBatchMaxRow {
 					if a.bat, err = a.bat.Append(ctx, txn.proc.Mp(), b.bat); err != nil {
-						logutil.Fatal(err.Error())
+						return err
 					}
 
-					txn.writes[ins[j]].bat.Clean(txn.proc.GetMPool())
-					txn.writes[ins[j]].bat = nil
+					txn.writes[idxes[j]].bat.Clean(txn.proc.GetMPool())
+					txn.writes[idxes[j]].bat = nil
 				}
 			}
 		}
 
+		return nil
+	}
+
+	if inserts.Count()+deletes.Count() >= batch.DefaultBatchMaxRow/64 {
+		ins := inserts.ToArray()
 		del := deletes.ToArray()
-		for i := 0; i < len(del); i++ {
-			a := txn.writes[del[i]]
-			if a.bat == nil {
-				continue
-			}
 
-			for j := i + 1; j < len(del); j++ {
-				b := txn.writes[del[j]]
-				if b.bat != nil && a.tableId == b.tableId && a.bat.RowCount()+b.bat.RowCount() <= 8192 {
-					if a.bat, err = a.bat.Append(ctx, txn.proc.Mp(), b.bat); err != nil {
-						logutil.Fatal(err.Error())
-					}
+		if err := foo(ins); err != nil {
+			return err
+		}
 
-					txn.writes[del[j]].bat.Clean(txn.proc.GetMPool())
-					txn.writes[del[j]].bat = nil
-				}
+		if err := foo(del); err != nil {
+			return err
+		}
+
+		i, j := 0, len(txn.writes)-1
+		for i <= j {
+			if txn.writes[i].bat == nil {
+				txn.writes[i], txn.writes[j] = txn.writes[j], txn.writes[i]
+				j--
+			} else {
+				i++
 			}
+		}
+
+		if i < len(txn.writes) && txn.writes[i].bat == nil {
+			txn.writes = txn.writes[:i]
+		} else {
+			txn.writes = txn.writes[:i+1]
 		}
 	}
 
