@@ -240,7 +240,7 @@ func transferTombstones(
 		// skip all non-delete entries
 		if entry.tableId != table.tableId ||
 			entry.typ != DELETE ||
-			entry.fileName != "" {
+			entry.fileName != "" || entry.bat == nil {
 			continue
 		}
 

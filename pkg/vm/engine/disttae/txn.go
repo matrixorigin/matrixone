@@ -1119,7 +1119,73 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 			}
 		}
 	}
-	return txn.compactionBlksLocked(ctx)
+
+	if err := txn.compactionBlksLocked(ctx); err != nil {
+		return err
+	}
+
+	inserts := objectio.GetReusableBitmap()
+	deletes := objectio.GetReusableBitmap()
+	for i, e := range txn.writes {
+		if e.bat == nil || e.bat.IsEmpty() || e.bat.Attrs[0] == catalog.BlockMeta_MetaLoc {
+			continue
+		}
+
+		if e.typ == INSERT {
+			inserts.Add(uint64(i))
+		} else {
+			deletes.Add(uint64(i))
+		}
+	}
+
+	var (
+		err error
+	)
+
+	if inserts.Count()+deletes.Count() >= 20 {
+		ins := inserts.ToArray()
+
+		for i := 0; i < len(ins); i++ {
+			a := txn.writes[ins[i]]
+			if a.bat == nil {
+				continue
+			}
+
+			for j := i + 1; j < len(ins); j++ {
+				b := txn.writes[ins[j]]
+				if b.bat != nil && a.tableId == b.tableId && a.bat.RowCount()+b.bat.RowCount() <= 8192 {
+					if a.bat, err = a.bat.Append(ctx, txn.proc.Mp(), b.bat); err != nil {
+						logutil.Fatal(err.Error())
+					}
+
+					txn.writes[ins[j]].bat.Clean(txn.proc.GetMPool())
+					txn.writes[ins[j]].bat = nil
+				}
+			}
+		}
+
+		del := deletes.ToArray()
+		for i := 0; i < len(del); i++ {
+			a := txn.writes[del[i]]
+			if a.bat == nil {
+				continue
+			}
+
+			for j := i + 1; j < len(del); j++ {
+				b := txn.writes[del[j]]
+				if b.bat != nil && a.tableId == b.tableId && a.bat.RowCount()+b.bat.RowCount() <= 8192 {
+					if a.bat, err = a.bat.Append(ctx, txn.proc.Mp(), b.bat); err != nil {
+						logutil.Fatal(err.Error())
+					}
+
+					txn.writes[del[j]].bat.Clean(txn.proc.GetMPool())
+					txn.writes[del[j]].bat = nil
+				}
+			}
+		}
+	}
+
+	return nil
 }
 
 // CN blocks compaction for txn
