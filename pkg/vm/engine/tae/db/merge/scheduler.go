@@ -191,7 +191,7 @@ func (s *Scheduler) onPostTable(tableEntry *catalog.TableEntry) (err error) {
 }
 
 func (s *Scheduler) onObject(objectEntry *catalog.ObjectEntry) (err error) {
-	if !objectValid(objectEntry) {
+	if !ObjectValid(objectEntry) {
 		return moerr.GetOkStopCurrRecur()
 	}
 
