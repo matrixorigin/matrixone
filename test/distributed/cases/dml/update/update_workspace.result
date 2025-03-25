@@ -1,0 +1,51 @@
+drop database if exists test;
+create database test;
+use test;
+create table hhh(a int primary key);
+insert into hhh select * from generate_series(1, 81920)g;
+begin;
+update hhh set a = a + 81920 where a = 1;
+update hhh set a = a + 81920 where a = 2;
+update hhh set a = a + 81920 where a = 3;
+update hhh set a = a + 81920 where a = 4;
+update hhh set a = a + 81920 where a = 5;
+update hhh set a = a + 81920 where a = 6;
+update hhh set a = a + 81920 where a = 7;
+update hhh set a = a + 81920 where a = 8;
+update hhh set a = a + 81920 where a = 9;
+update hhh set a = a + 81920 where a = 10;
+update hhh set a = a + 81920 where a = 11;
+update hhh set a = a + 81920 where a = 12;
+update hhh set a = a + 81920 where a = 13;
+update hhh set a = a + 81920 where a = 14;
+update hhh set a = a + 81920 where a = 15;
+update hhh set a = a + 81920 where a = 16;
+update hhh set a = a + 81920 where a = 17;
+update hhh set a = a + 81920 where a = 18;
+update hhh set a = a + 81920 where a = 19;
+update hhh set a = a + 81920 where a = 10;
+update hhh set a = a + 81920 where a = 20;
+update hhh set a = a + 81920 where a = 21;
+update hhh set a = a + 81920 where a = 22;
+update hhh set a = a + 81920 where a = 23;
+update hhh set a = a + 81920 where a = 24;
+update hhh set a = a + 81920 where a = 25;
+update hhh set a = a + 81920 where a = 26;
+update hhh set a = a + 81920 where a = 27;
+update hhh set a = a + 81920 where a = 28;
+update hhh set a = a + 81920 where a = 29;
+update hhh set a = a + 81920 where a = 30;
+update hhh set a = a + 81920 where a = 31;
+update hhh set a = a + 81920 where a = 32;
+commit;
+select count(*) from hhh;
+count(*)
+81920
+select min(a) from hhh;
+min(a)
+33
+select max(a)=min(a)+81920-1 from hhh;
+max(a)=min(a)+81920-1
+true
+drop table if exists hhh;
+drop database if exists test;
