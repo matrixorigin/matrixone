@@ -1141,7 +1141,7 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 			continue
 		}
 
-		if e.bat.RowCount() >= batch.DefaultBatchMaxRow {
+		if e.bat.RowCount() >= batch.DefaultBatchMaxRow/2 {
 			continue
 		}
 
@@ -1180,10 +1180,12 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 		return nil
 	}
 
-	if inserts.Count()+deletes.Count() >= 10 {
+	// this threshold may have a bad effect on the performance
+	if inserts.Count()+deletes.Count() >= 30 {
 		//ins := inserts.ToArray()
 		del := deletes.ToArray()
 
+		// TODO: merge inserts will cause to not found in the TPCC test
 		//if err := foo(ins); err != nil {
 		//	return err
 		//}
