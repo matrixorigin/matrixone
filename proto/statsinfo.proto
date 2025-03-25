@@ -71,6 +71,8 @@ message StatsInfoKey {
   uint64 DatabaseID = 1;
   uint64 TableID = 2;
   uint32 AccId = 3;
+  string TableName = 4;
+  string DbName = 5;
 }
 
 message StatsInfoKeys {
