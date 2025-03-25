@@ -21,7 +21,6 @@ import (
 	"go.uber.org/zap"
 	"slices"
 	"sort"
-	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -470,21 +469,6 @@ func checkWorkspaceEntryType(
 	return (entry.typ == DELETE) && (entry.fileName == "")
 }
 
-var _offsetsPool = sync.Pool{
-	New: func() interface{} {
-		offsets := make([]int64, 1024)
-		return &offsets
-	},
-}
-
-func getReusableOffsets() (*[]int64, func()) {
-	offsets := _offsetsPool.Get().(*[]int64)
-	return offsets, func() {
-		*offsets = (*offsets)[:0]
-		_offsetsPool.Put(offsets)
-	}
-}
-
 func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 	_ context.Context,
 	seqNums []uint16,
@@ -590,24 +574,20 @@ func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 			put.Put()
 		}
 
-		offsets, release := getReusableOffsets()
-		readutil.RowIdsToOffset(retainedRowIds, offsets, skipMask)
+		offsets := readutil.RowIdsToOffset(retainedRowIds, int64(0), skipMask).([]int64)
 		skipMask.Release()
 
-		if len(*offsets) == 0 {
+		if len(offsets) == 0 {
 			ls.wsCursor++
-			release()
 			continue
 		}
 		//row ids in retainedRowIds come from the same block, pls ref to writeBatch().
 		b := retainedRowIds[0].BorrowBlockID()
 		sels, err := ls.ApplyTombstones(
-			ls.ctx, b, *offsets, engine.Policy_CheckUnCommittedOnly)
+			ls.ctx, b, offsets, engine.Policy_CheckUnCommittedOnly)
 		if err != nil {
-			release()
 			return err
 		}
-		release()
 
 		if len(sels) == 0 {
 			ls.wsCursor++
