@@ -430,7 +430,12 @@ func (s *mysqlSinker) SendDummy() {
 }
 
 func (s *mysqlSinker) Error() error {
-	return *s.err.Load().(*error)
+	if errPtr := s.err.Load().(*error); *errPtr != nil {
+		if moErr := (*errPtr).(*moerr.Error); moErr != nil {
+			return moErr
+		}
+	}
+	return nil
 }
 
 func (s *mysqlSinker) SetError(err error) {
