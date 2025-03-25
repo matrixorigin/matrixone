@@ -364,8 +364,19 @@ func applyDistributivity(ctx context.Context, expr *plan.Expr) *plan.Expr {
 
 		condMap := make(map[string]int)
 
+		relPos := int32(-1)
 		for _, cond := range rightConds {
 			condMap[cond.String()] = JoinSideRight
+			if col := cond.GetF().Args[0].GetCol(); col != nil {
+				if relPos == -1 {
+					relPos = col.RelPos
+				} else if relPos != col.RelPos {
+					relPos = -2
+				}
+			}
+		}
+		if relPos >= 0 {
+			return expr
 		}
 
 		var commonConds, leftOnlyConds, rightOnlyConds []*plan.Expr
