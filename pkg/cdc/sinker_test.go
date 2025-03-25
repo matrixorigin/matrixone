@@ -381,6 +381,7 @@ func Test_mysqlSinker_appendSqlBuf(t *testing.T) {
 	s.sqlBufs[1] = make([]byte, sqlBufReserved, len(tsDeletePrefix)+8+sqlBufReserved)
 	s.curBufIdx = 0
 	s.sqlBuf = s.sqlBufs[s.curBufIdx]
+	s.ClearError()
 	go s.Run(ctx, ar)
 	defer func() {
 		// call dummy to guarantee sqls has been sent, then close
@@ -530,6 +531,7 @@ func Test_mysqlSinker_Sink(t *testing.T) {
 	ar := NewCdcActiveRoutine()
 
 	s := NewMysqlSinker(sink, dbTblInfo, watermarkUpdater, tableDef, ar, DefaultMaxSqlLength, false)
+	s.ClearError()
 	go s.Run(ctx, ar)
 	defer func() {
 		// call dummy to guarantee sqls has been sent, then close
@@ -663,6 +665,7 @@ func Test_mysqlSinker_Sink_NoMoreData(t *testing.T) {
 	s.sqlBuf = s.sqlBufs[s.curBufIdx]
 	s.preSqlBufLen = 128
 	s.sqlBufSendCh = make(chan []byte)
+	s.ClearError()
 	go s.Run(ctx, ar)
 	defer func() {
 		// call dummy to guarantee sqls has been sent, then close
@@ -931,6 +934,7 @@ func Test_mysqlSinker_SendBeginCommitRollback(t *testing.T) {
 		ar:           ar,
 		sqlBufSendCh: make(chan []byte),
 	}
+	s.ClearError()
 	go s.Run(context.Background(), ar)
 	defer func() {
 		// call dummy to guarantee sqls has been sent, then close
@@ -989,7 +993,7 @@ func Test_consoleSinker_SendBeginCommitRollback(t *testing.T) {
 
 func Test_mysqlSinker_ClearError(t *testing.T) {
 	s := &mysqlSinker{}
-	s.err = moerr.NewInternalErrorNoCtx("test err")
+	s.SetError(moerr.NewInternalErrorNoCtx("test err"))
 	assert.Error(t, s.Error())
 
 	s.ClearError()
