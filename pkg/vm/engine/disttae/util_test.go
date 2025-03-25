@@ -387,7 +387,7 @@ func TestShrinkBatchWithRowids(t *testing.T) {
 	require.Equal(t, bat.RowCount(), 6)
 
 	rowids := vector.MustFixedColWithTypeCheck[objectio.Rowid](bat.Vecs[0])
-	var offsets []uint32
+	offsets := make([]uint32, 0, bat.RowCount())
 	for i := range rowids {
 		offsets = append(offsets, rowids[i].GetRowOffset())
 	}
