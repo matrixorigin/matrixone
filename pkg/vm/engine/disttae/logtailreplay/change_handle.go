@@ -184,6 +184,7 @@ func (r *BatchHandle) next(bat **batch.Batch, mp *mpool.MPool, start, end int) (
 			appendFromEntry(r.batches.Vecs[i], vec, r.rowOffsetCursor, mp)
 		}
 	}
+	(*bat).SetRowCount((*bat).Vecs[0].Length())
 	r.baseHandle.changesHandle.copyDuration += time.Since(t0)
 	return
 }
@@ -303,6 +304,7 @@ func (h *CNObjectHandle) Next(ctx context.Context, bat **batch.Batch, mp *mpool.
 		src := data.Vecs[i]
 		vec.Union(src, sels, mp)
 	}
+	(*bat).SetRowCount((*bat).Vecs[0].Length())
 	h.base.changesHandle.copyDuration += time.Since(t0)
 	return
 }
@@ -463,6 +465,7 @@ func (h *AObjectHandle) next(ctx context.Context, bat **batch.Batch, mp *mpool.M
 			appendFromEntry(h.currentBatch.Vecs[i], vec, h.rowOffsetCursor, mp)
 		}
 	}
+	(*bat).SetRowCount((*bat).Vecs[0].Length())
 	h.p.changesHandle.copyDuration += time.Since(t0)
 	h.rowOffsetCursor = end
 	if h.rowOffsetCursor >= h.batchLength {
