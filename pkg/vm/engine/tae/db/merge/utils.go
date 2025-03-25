@@ -177,8 +177,9 @@ func estimateMergeSize(objs []*catalog.ObjectEntry) int {
 		} else if r < 8192 {
 			blkRow = int(r)
 		}
-		size += blkRow * int(o.OriginSize()/o.Rows()) / 2 * 3
-		size += int(o.Rows()) * estimateMemUsagePerRow
+		size += blkRow * int(o.OriginSize()/o.Rows()) / 2 * 3 // read one block
+		size += int(o.Rows()) * estimateMemUsagePerRow        // transfer page
+		size += int(o.OriginSize())                           // objectio write buffer
 	}
 	// Go's load factor is 6.5. This means there are average 6.5 key/elem pairs per bucket.
 	// Each bucket holds up to 8 key/elem pairs. So the memory wasted are 1.5 / 8 ~= 0.2.
@@ -297,7 +298,7 @@ func (c *resourceController) resourceAvailable(objs []*catalog.ObjectEntry) bool
 	return estimateMergeSize(objs) <= int(2*mem/3)
 }
 
-func objectValid(objectEntry *catalog.ObjectEntry) bool {
+func ObjectValid(objectEntry *catalog.ObjectEntry) bool {
 	if objectEntry.IsAppendable() {
 		return false
 	}
