@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -313,52 +314,22 @@ func (tomb *tombstoneData) Merge(other engine.Tombstoner) error {
 	)
 }
 
-func RowIdsToOffset(rowIds []types.Rowid, wantedType any, skipMask objectio.Bitmap) any {
-	switch wantedType.(type) {
-	case int32:
-		var ret []int32
-		for i, rowId := range rowIds {
-			if skipMask.Contains(uint64(i)) {
-				continue
-			}
-			offset := rowId.GetRowOffset()
-			ret = append(ret, int32(offset))
-		}
-		return ret
+func RowIdsToOffset(
+	rowIds []types.Rowid,
+	skipMask objectio.Bitmap,
+) ([]int64, func()) {
 
-	case uint32:
-		var ret []uint32
-		for i, rowId := range rowIds {
-			if skipMask.Contains(uint64(i)) {
-				continue
-			}
-			offset := rowId.GetRowOffset()
-			ret = append(ret, uint32(offset))
-		}
-		return ret
+	ret := common.DefaultAllocator.GetSels()
 
-	case uint64:
-		var ret []uint64
-		for i, rowId := range rowIds {
-			if skipMask.Contains(uint64(i)) {
-				continue
-			}
-			offset := rowId.GetRowOffset()
-			ret = append(ret, uint64(offset))
+	for i, rowId := range rowIds {
+		if skipMask.Contains(uint64(i)) {
+			continue
 		}
-		return ret
-
-	case int64:
-		var ret []int64
-		for i, rowId := range rowIds {
-			if skipMask.Contains(uint64(i)) {
-				continue
-			}
-			offset := rowId.GetRowOffset()
-			ret = append(ret, int64(offset))
-		}
-		return ret
+		offset := rowId.GetRowOffset()
+		ret = append(ret, int64(offset))
 	}
 
-	return nil
+	return ret, func() {
+		common.DefaultAllocator.PutSels(ret)
+	}
 }
