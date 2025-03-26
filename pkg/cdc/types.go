@@ -37,6 +37,7 @@ import (
 
 const (
 	CDCSourceUriPrefix = "mysql://"
+	CDCSinkUriPrefix   = "mysql://"
 
 	CDCState_Common = "common"
 	CDCState_Error  = "error"
