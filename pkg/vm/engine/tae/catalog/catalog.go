@@ -181,7 +181,7 @@ func (catalog *Catalog) GCByTS(ctx context.Context, ts types.TS) {
 		needGC := te.DeleteBefore(ts)
 		if needGC {
 			db := te.db
-			db.RemoveEntry(te)
+			db.RemoveEntry(te, "GC")
 			tblCnt++
 		}
 		return nil

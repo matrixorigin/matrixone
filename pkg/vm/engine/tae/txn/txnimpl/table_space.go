@@ -170,7 +170,11 @@ func (space *tableSpace) prepareApplyANode(node *anode, startOffset uint32) erro
 				return err
 			}
 			appender = space.tableHandle.SetAppender(objH.Fingerprint())
-			logutil.Info("CreateObject", zap.String("objH", appender.GetID().ObjectString()), zap.String("txn", node.GetTxn().String()))
+			logutil.Info(
+				"Workspace-New-AObject",
+				zap.String("name", appender.GetID().ObjectString()),
+				zap.String("txn", node.GetTxn().String()),
+			)
 			objH.Close()
 		}
 		if !appender.IsSameColumns(space.table.GetLocalSchema(space.isTombstone)) {

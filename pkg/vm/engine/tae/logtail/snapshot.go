@@ -429,7 +429,7 @@ func (sm *SnapshotMeta) updateTableInfo(
 			if name == catalog2.MO_SNAPSHOTS {
 				sm.snapshotTableIDs[tid] = struct{}{}
 				logutil.Info(
-					"UpdateSnapTable-P1",
+					"GC-UpdateSnapTable-P1",
 					zap.Uint64("tid", tid),
 					zap.Uint32("account", account),
 					zap.String("create-at", createAt.ToString()),
@@ -437,7 +437,8 @@ func (sm *SnapshotMeta) updateTableInfo(
 			}
 			if name == catalog2.MO_PITR {
 				if sm.pitr.tid > 0 && sm.pitr.tid != tid {
-					logutil.Warn("GC-PANIC-UPDATE-TABLE-P8",
+					logutil.Warn(
+						"GC-PANIC-UPDATE-TABLE-P8",
 						zap.Uint64("tid", tid),
 						zap.Uint64("old-tid", sm.pitr.tid),
 					)
@@ -504,7 +505,11 @@ func (sm *SnapshotMeta) updateTableInfo(
 				continue
 			}
 			if _, ok := sm.aobjDelTsMap[commitTs]; ok {
-				logutil.Infof("yyyy skip table %v @ %v", pk.ErrString(nil), commitTs.ToString())
+				logutil.Info(
+					"GC-Skip-Table",
+					zap.String("table", pk.ErrString(nil)),
+					zap.String("commitTs", commitTs.ToString()),
+				)
 				continue
 			}
 			deleteRows = append(deleteRows, tombstone{
@@ -525,8 +530,14 @@ func (sm *SnapshotMeta) updateTableInfo(
 			continue
 		}
 		if len(sm.tablePKIndex[pk]) == 0 {
-			logutil.Warnf("[UpdateTableInfoWarn] delete table %v not found @ rowid %v, commit %v, start is %v, end is %v",
-				del.pk.ErrString(nil), del.rowid.String(), del.ts.ToString(), startts.ToString(), endts.ToString())
+			logutil.Warn(
+				"GC-UpdateTableInfoWarn",
+				zap.String("table", pk),
+				zap.String("rowid", del.rowid.String()),
+				zap.String("commitTs", del.ts.ToString()),
+				zap.String("startTs", startts.ToString()),
+				zap.String("endTs", endts.ToString()),
+			)
 			continue
 		}
 		table := sm.tablePKIndex[pk][0]
@@ -555,7 +566,8 @@ func (sm *SnapshotMeta) updateTableInfo(
 
 	for pk, tables := range sm.tablePKIndex {
 		if len(tables) > 1 {
-			logutil.Warn("UpdateSnapTable-Error",
+			logutil.Warn(
+				"GC-UpdateSnapTable-Error",
 				zap.String("table", pk),
 				zap.Int("len", len(tables)),
 			)
@@ -761,7 +773,7 @@ func (sm *SnapshotMeta) GetSnapshot(
 			logger = logutil.Error
 		}
 		logger(
-			"GetSnapshot",
+			"GC-GetSnapshot",
 			zap.Error(err),
 			zap.Duration("cost", time.Since(now)),
 		)
@@ -835,7 +847,7 @@ func (sm *SnapshotMeta) GetSnapshot(
 							}
 							// TODO: info to debug
 							logutil.Info(
-								"GetSnapshot-P1",
+								"GC-GetSnapshot-P1",
 								zap.String("ts", snapTs.ToString()),
 								zap.Uint32("account", account),
 							)
@@ -848,7 +860,7 @@ func (sm *SnapshotMeta) GetSnapshot(
 					}
 					// TODO: info to debug
 					logutil.Debug(
-						"GetSnapshot-P2",
+						"GC-GetSnapshot-P2",
 						zap.String("ts", snapTs.ToString()),
 						zap.Uint32("account", id),
 					)
@@ -869,7 +881,7 @@ func (sm *SnapshotMeta) GetSnapshot(
 			count = snapshotList[i].GetDownstreamVector().Length()
 		}
 		logutil.Info(
-			"GetSnapshot-P3",
+			"GC-GetSnapshot-P3",
 			zap.Uint32("account", i),
 			zap.Int("snapshot count", count),
 		)
@@ -1183,9 +1195,11 @@ func (sm *SnapshotMeta) RebuildTableInfo(ins *containers.Batch) {
 			continue
 		}
 		if len(sm.tablePKIndex[pk]) > 0 {
-			logutil.Warn("RebuildTableInfo-PK-Exists",
+			logutil.Warn(
+				"GC-RebuildTableInfo-PK-Exists",
 				zap.String("pk", pk),
-				zap.Uint64("table", tid))
+				zap.Uint64("table", tid),
+			)
 		}
 		sm.tablePKIndex[pk] = make([]*tableInfo, 1)
 		sm.tablePKIndex[pk][0] = table
@@ -1200,16 +1214,20 @@ func (sm *SnapshotMeta) RebuildTid(ins *containers.Batch) {
 	accIDs := vector.MustFixedColWithTypeCheck[uint32](
 		ins.GetVectorByName(catalog2.SystemColAttr_AccID).GetDownstreamVector())
 	if ins.Length() < 1 {
-		logutil.Warnf("RebuildTid unexpected length %d", ins.Length())
+		logutil.Warnf("GC-RebuildTid unexpected length %d", ins.Length())
 		return
 	}
-	logutil.Infof("RebuildTid tid %d", insTIDs[0])
+	logutil.Info("GC-RebuildTid", zap.Uint64("tid", insTIDs[0]))
 	for i := 0; i < ins.Length(); i++ {
 		tid := insTIDs[i]
 		accid := accIDs[i]
 		if _, ok := sm.snapshotTableIDs[tid]; !ok {
 			sm.snapshotTableIDs[tid] = struct{}{}
-			logutil.Info("[RebuildSnapshotTid]", zap.Uint64("tid", tid), zap.Uint32("account id", accid))
+			logutil.Info(
+				"GC-RebuildSnapshotTid",
+				zap.Uint64("tid", tid),
+				zap.Uint32("accountid", accid),
+			)
 		}
 	}
 }
@@ -1220,10 +1238,10 @@ func (sm *SnapshotMeta) RebuildPitr(ins *containers.Batch) {
 	insTIDs := vector.MustFixedColWithTypeCheck[uint64](
 		ins.GetVectorByName(catalog.SnapshotAttr_TID).GetDownstreamVector())
 	if ins.Length() < 1 {
-		logutil.Warnf("RebuildPitr unexpected length %d", ins.Length())
+		logutil.Warnf("GC-RebuildPitr unexpected length %d", ins.Length())
 		return
 	}
-	logutil.Infof("RebuildPitr tid %d", insTIDs[0])
+	logutil.Info("GC-RebuildPitr", zap.Uint64("tid", insTIDs[0]))
 	for i := 0; i < ins.Length(); i++ {
 		tid := insTIDs[i]
 		sm.pitr.tid = tid
@@ -1234,7 +1252,7 @@ func (sm *SnapshotMeta) RebuildAObjectDel(ins *containers.Batch) {
 	sm.Lock()
 	defer sm.Unlock()
 	if ins.Length() < 1 {
-		logutil.Warnf("RebuildAObjectDel unexpected length %d", ins.Length())
+		logutil.Warnf("GC-RebuildAObjectDel unexpected length %d", ins.Length())
 		return
 	}
 	sm.aobjDelTsMap = make(map[types.TS]struct{})
@@ -1242,7 +1260,10 @@ func (sm *SnapshotMeta) RebuildAObjectDel(ins *containers.Batch) {
 	for i := 0; i < ins.Length(); i++ {
 		commitTs := commitTsVec[i]
 		if _, ok := sm.aobjDelTsMap[commitTs]; ok {
-			logutil.Warn("RebuildAObjectDel-Exists", zap.Any("commitTs", commitTs))
+			logutil.Warn(
+				"GC-RebuildAObjectDel-Exists",
+				zap.Any("commitTs", commitTs),
+			)
 		}
 		sm.aobjDelTsMap[commitTs] = struct{}{}
 	}
