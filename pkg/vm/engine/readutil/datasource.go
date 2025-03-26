@@ -16,12 +16,10 @@ package readutil
 
 import (
 	"context"
-	"slices"
-	"sort"
-
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -30,6 +28,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"slices"
+	"sort"
 )
 
 const (
@@ -218,6 +218,70 @@ func NewRemoteDataSource(
 // --------------------------------------------------------------------------------
 //	util functions
 // --------------------------------------------------------------------------------
+
+func FastApplyDeletedRows2(
+	checkBid *objectio.Blockid,
+	leftRows *[]int64,
+	deletedMask *objectio.Bitmap,
+	deletedRowIdsVec *vector.Vector,
+) {
+	var (
+		ptr int
+		hit bool
+		cur types.Rowid
+
+		lb int
+		ub int
+
+		sorted        = deletedRowIdsVec.GetSorted()
+		deletedRowIds = vector.MustFixedColNoTypeCheck[objectio.Rowid](deletedRowIdsVec)
+	)
+
+	if len(*leftRows) != 0 {
+		if sorted {
+			cur = types.NewRowid(checkBid, 0)
+		}
+
+		useBinarySearch := len(deletedRowIds) >= 5
+
+		for _, o := range *leftRows {
+			cur.SetRowOffset(uint32(o))
+
+			hit = false
+			if sorted && useBinarySearch {
+				_, hit = sort.Find(len(deletedRowIds), func(i int) int { return cur.Compare(&deletedRowIds[i]) })
+			} else {
+				if useBinarySearch {
+					lb, ub = ioutil.FindStartEndOfBlockFromSortedRowids(deletedRowIds, checkBid)
+				} else {
+					lb, ub = 0, len(deletedRowIds)
+				}
+
+				for i := lb; i < ub; i++ {
+					b, offset := deletedRowIds[i].Decode()
+					if (useBinarySearch || b.EQ(checkBid)) && o == int64(offset) {
+						hit = true
+						break
+					}
+				}
+			}
+
+			if hit {
+				(*leftRows)[ptr] = o
+				ptr++
+			}
+		}
+
+		*leftRows = (*leftRows)[:ptr]
+
+	} else if deletedMask != nil {
+		lb, ub = ioutil.FindStartEndOfBlockFromSortedRowids(deletedRowIds, checkBid)
+		for i := lb; i < ub; i++ {
+			_, o := deletedRowIds[i].Decode()
+			deletedMask.Add(uint64(o))
+		}
+	}
+}
 
 // FastApplyDeletedRows will return the rows which applied deletes if the `leftRows` is not empty,
 // or the deletes will only record into the `deleteRows` bitmap.

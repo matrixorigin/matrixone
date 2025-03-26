@@ -18,9 +18,10 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"go.uber.org/zap"
 	"slices"
 	"sort"
+
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -441,7 +442,7 @@ func checkWorkspaceEntryType(
 		return false
 	}
 
-	if entry.bat == nil || entry.bat.IsEmpty() {
+	if entry.bat == nil {
 		return false
 	}
 
@@ -499,8 +500,17 @@ func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 
 		enableFilter bool
 
+		offsets []int64
+		release func()
+
 		retainedRowIds []objectio.Rowid
 	)
+
+	defer func() {
+		if release != nil {
+			release()
+		}
+	}()
 
 	if ls.memPKFilter.Valid() && ls.wsCursor < ls.txnOffset {
 		enableFilter = true
@@ -574,7 +584,11 @@ func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 			put.Put()
 		}
 
-		offsets := readutil.RowIdsToOffset(retainedRowIds, int64(0), skipMask).([]int64)
+		if release != nil {
+			release()
+		}
+
+		offsets, release = readutil.RowIdsToOffset(retainedRowIds, skipMask)
 		skipMask.Release()
 
 		if len(offsets) == 0 {
@@ -931,31 +945,17 @@ func (ls *LocalDisttaeDataSource) applyWorkspaceEntryDeletes(
 		defer ls.table.getTxn().Unlock()
 	}
 
-	done := false
+	//done := false
 	writes := ls.table.getTxn().writes[:ls.txnOffset]
-
-	var delRowIds []objectio.Rowid
 
 	for idx := range writes {
 		if ok := checkWorkspaceEntryType(ls.table, writes[idx], false); !ok {
 			continue
 		}
 
-		delRowIds = vector.MustFixedColWithTypeCheck[objectio.Rowid](writes[idx].bat.Vecs[0])
-		for _, delRowId := range delRowIds {
-			b, o := delRowId.Decode()
-			if bid.Compare(b) != 0 {
-				continue
-			}
+		readutil.FastApplyDeletedRows2(bid, &leftRows, deletedRows, writes[idx].bat.Vecs[0])
 
-			leftRows = readutil.FastApplyDeletedRows(leftRows, deletedRows, o)
-			if leftRows != nil && len(leftRows) == 0 {
-				done = true
-				break
-			}
-		}
-
-		if done {
+		if leftRows != nil && len(leftRows) == 0 {
 			break
 		}
 	}
