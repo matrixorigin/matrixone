@@ -52,6 +52,8 @@ type CDCCreateTaskOptions struct {
 	PitrTables   string // json encoded pitr tables: cdc2.PatternTuples
 	SrcUri       string // json encoded source uri: cdc2.UriInfo
 	SrcUriInfo   cdc.UriInfo
+	SinkUri      string // json encoded sink uri: cdc2.UriInfo
+	SinkUriInfo  cdc.UriInfo
 	ExtraOpts    string // json encoded extra opts: map[string]any
 	SinkType     string
 	NoFull       bool
@@ -67,6 +69,7 @@ func (opts *CDCCreateTaskOptions) Reset() {
 	opts.EndTs = ""
 	opts.MaxSqlLength = 0
 	opts.SrcUri = ""
+	opts.SinkUri = ""
 	opts.ExtraOpts = ""
 	opts.PitrTables = ""
 	opts.SinkType = ""
@@ -74,6 +77,7 @@ func (opts *CDCCreateTaskOptions) Reset() {
 	opts.UseConsole = true
 	opts.ConfigFile = ""
 	opts.SrcUriInfo = cdc.UriInfo{}
+	opts.SinkUriInfo = cdc.UriInfo{}
 	opts.AccountInfo = nil
 }
 
@@ -123,6 +127,18 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 		}
 		if !opts.UseConsole && opts.SinkType != cdc.CDCSinkType_MySQL && opts.SinkType != cdc.CDCSinkType_MO {
 			err = moerr.NewInternalErrorf(ctx, "unsupported sink type: %s", req.SinkType)
+			return
+		}
+
+		if opts.SinkUri, opts.SinkUriInfo, err = extractUriInfo(
+			ctx, req.SinkUri, cdc.CDCSinkUriPrefix,
+		); err != nil {
+			return
+		}
+		if _, err = cdc.OpenDbConn(
+			opts.SinkUriInfo.User, opts.SinkUriInfo.Password, opts.SinkUriInfo.Ip, opts.SinkUriInfo.Port, cdc.CDCDefaultSendSqlTimeout,
+		); err != nil {
+			err = moerr.NewInternalErrorf(ctx, "failed to connect to sink, please check the connection, err: %v", err)
 			return
 		}
 	}
@@ -266,7 +282,7 @@ func (opts *CDCCreateTaskOptions) ToInsertTaskSQL(
 		); err != nil {
 			return
 		}
-		if encodedSinkPwd, err = opts.SrcUriInfo.GetEncodedPassword(); err != nil {
+		if encodedSinkPwd, err = opts.SinkUriInfo.GetEncodedPassword(); err != nil {
 			return
 		}
 	}
@@ -277,7 +293,7 @@ func (opts *CDCCreateTaskOptions) ToInsertTaskSQL(
 		opts.TaskName,
 		opts.SrcUri,
 		"",
-		encodedSinkPwd,
+		opts.SinkUri,
 		opts.SinkType,
 		encodedSinkPwd,
 		"",
