@@ -86,6 +86,7 @@ type Sinker interface {
 	SendDummy()
 	// Error must be called after Sink
 	Error() error
+	ClearError()
 	Reset()
 	Close()
 }

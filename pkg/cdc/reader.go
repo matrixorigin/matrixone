@@ -254,6 +254,8 @@ func (reader *tableReader) readTableWithTxn(
 		if !curTs.Equal(&toTs) {
 			logutil.Errorf("cdc tableReader(%v).readTableWithTxn end abnormally", reader.info)
 			if hasBegin {
+				// clear previous error
+				reader.sinker.ClearError()
 				reader.sinker.SendRollback()
 				reader.sinker.SendDummy()
 				if rollbackErr := reader.sinker.Error(); rollbackErr != nil {
