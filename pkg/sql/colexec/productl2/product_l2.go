@@ -162,7 +162,7 @@ func (productl2 *Productl2) build(proc *process.Process, analyzer process.Analyz
 //	}
 //)
 
-func newMat[T float32 | float64](ctr *container, ap *Productl2) ([][]T, [][]T) {
+func newMat[T types.RealNumbers](ctr *container, ap *Productl2) ([][]T, [][]T) {
 	buildCount := ctr.bat.RowCount()
 	probeCount := ctr.inBat.RowCount()
 	centroidColPos := ap.OnExpr.GetF().GetArgs()[0].GetCol().GetColPos()
@@ -175,15 +175,13 @@ func newMat[T float32 | float64](ctr *container, ap *Productl2) ([][]T, [][]T) {
 				centroidmat[i] = nil
 				continue
 			}
-			clusterEmbeddingF32 := types.BytesToArray[T](ctr.bat.Vecs[centroidColPos].GetBytesAt(i))
-			centroidmat[i] = clusterEmbeddingF32
+			centroidmat[i] = types.BytesToArray[T](ctr.bat.Vecs[centroidColPos].GetBytesAt(i))
 		case types.T_array_float64:
 			if ctr.bat.Vecs[centroidColPos].IsNull(uint64(i)) {
 				centroidmat[i] = nil
 				continue
 			}
-			clusterEmbeddingF64 := types.BytesToArray[T](ctr.bat.Vecs[centroidColPos].GetBytesAt(i))
-			centroidmat[i] = clusterEmbeddingF64
+			centroidmat[i] = types.BytesToArray[T](ctr.bat.Vecs[centroidColPos].GetBytesAt(i))
 		}
 	}
 
@@ -197,15 +195,13 @@ func newMat[T float32 | float64](ctr *container, ap *Productl2) ([][]T, [][]T) {
 				embedmat[j] = nil
 				continue
 			}
-			tblEmbeddingF32 := types.BytesToArray[T](ctr.inBat.Vecs[tblColPos].GetBytesAt(j))
-			embedmat[j] = tblEmbeddingF32
+			embedmat[j] = types.BytesToArray[T](ctr.inBat.Vecs[tblColPos].GetBytesAt(j))
 		case types.T_array_float64:
 			if ctr.inBat.Vecs[tblColPos].IsNull(uint64(j)) {
 				embedmat[j] = nil
 				continue
 			}
-			tblEmbeddingF64 := types.BytesToArray[T](ctr.inBat.Vecs[tblColPos].GetBytesAt(j))
-			embedmat[j] = tblEmbeddingF64
+			embedmat[j] = types.BytesToArray[T](ctr.inBat.Vecs[tblColPos].GetBytesAt(j))
 		}
 
 	}
@@ -224,7 +220,7 @@ func (ctr *container) probe(ap *Productl2, proc *process.Process, result *vm.Cal
 	return nil
 }
 
-func probeRun[T float32 | float64](ctr *container, ap *Productl2, proc *process.Process, result *vm.CallResult) error {
+func probeRun[T types.RealNumbers](ctr *container, ap *Productl2, proc *process.Process, result *vm.CallResult) error {
 	buildCount := ctr.bat.RowCount()
 	probeCount := ctr.inBat.RowCount()
 
