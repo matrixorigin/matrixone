@@ -16,6 +16,7 @@ package rpc
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -27,6 +28,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+var wasmPath = "../../../../../test/distributed/resources/plugin/filterStats.wasm"
+
 // TestPreparePlugin tests the plugin preparation with different URL schemes
 func TestPreparePlugin(t *testing.T) {
 
@@ -35,7 +38,7 @@ func TestPreparePlugin(t *testing.T) {
 	require.Error(t, err)
 
 	// Test with file path
-	plugin, err := preparePlugin("./filterStats.wasm")
+	plugin, err := preparePlugin(wasmPath)
 	require.NoError(t, err)
 	require.NotNil(t, plugin)
 
@@ -118,10 +121,10 @@ func TestWasmArgRun(t *testing.T) {
 	resp, _ = runCmd("policy wasm -t db1.test1 -d") // no wasm file
 	require.Contains(t, resp.Message, "invalid input")
 
-	resp, _ = runCmd(`policy wasm -w "./filterStats.wasm" -t db1.test1 -d`)
+	resp, _ = runCmd(fmt.Sprintf(`policy wasm -w "%s" -t db1.test1 -d`, wasmPath))
 	require.Contains(t, string(resp.Payload), "dryrun(2):")
 
-	runCmd(`policy wasm -w "./filterStats.wasm" -t db1.test1`)
+	runCmd(fmt.Sprintf(`policy wasm -w "%s" -t db1.test1`, wasmPath))
 
 	{
 		asyncTxn, err := handle.db.StartTxn(nil)
