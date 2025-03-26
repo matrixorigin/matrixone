@@ -2826,6 +2826,8 @@ func (m mockSinker) Close() {
 	panic("implement me")
 }
 
+func (m mockSinker) ClearError() {}
+
 func TestCdcTask_addExecPipelineForTable(t *testing.T) {
 	cdc := &CdcTask{
 		watermarkUpdater: &mockWatermarkUpdater{},
