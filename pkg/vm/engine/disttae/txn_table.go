@@ -27,8 +27,6 @@ import (
 	"unsafe"
 
 	"github.com/google/uuid"
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -62,6 +60,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 )
 
 const (
@@ -806,10 +805,10 @@ var slowPathCounter atomic.Int64
 func (tbl *txnTable) rangesOnePart(
 	ctx context.Context,
 	state *logtailreplay.PartitionState, // snapshot state of this transaction
-	tableDef *plan.TableDef, // table definition (schema)
+	tableDef *plan.TableDef,
 	rangesParam engine.RangesParam,
 	outBlocks *objectio.BlockInfoSlice, // output marshaled block list after filtering
-	proc *process.Process, // process of this transaction
+	proc *process.Process,
 	uncommittedObjects []objectio.ObjectStats,
 ) (err error) {
 	var done bool
@@ -926,7 +925,7 @@ func (tbl *txnTable) rangesOnePart(
 				meta = objMeta.MustDataMeta()
 			}
 
-			ForeachBlkInObjStatsList(true, meta, func(blk objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
+			objectio.ForeachBlkInObjStatsList(true, meta, func(blk objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
 				skipBlk := false
 
 				if auxIdCnt > 0 {
@@ -1624,35 +1623,66 @@ func (tbl *txnTable) ensureSeqnumsAndTypesExpectRowid() {
 }
 
 // TODO:: do prefetch read and parallel compaction
-func (tbl *txnTable) compaction(ctx context.Context,
+func (tbl *txnTable) compaction(
+	ctx context.Context,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
 	compactedBlks map[objectio.ObjectLocation][]int64,
-) ([]objectio.BlockInfo, objectio.ObjectStats, error) {
-	s3writer, err := colexec.NewS3Writer(tbl.tableDef, 0)
-	if err != nil {
-		return nil, objectio.ObjectStats{}, err
-	}
+) (*batch.Batch, string, error) {
+
+	s3Writer := colexec.NewCNS3DataWriter(mp, fs, tbl.tableDef, false)
 	tbl.ensureSeqnumsAndTypesExpectRowid()
+
+	defer func() {
+		s3Writer.Close(mp)
+	}()
+
+	var (
+		err      error
+		bat      *batch.Batch
+		stats    []objectio.ObjectStats
+		fileName string
+	)
 
 	for blkmetaloc, deletes := range compactedBlks {
 		//blk.MetaLocation()
-		bat, e := blockio.BlockCompactionRead(
+		if bat, err = blockio.BlockCompactionRead(
 			tbl.getTxn().proc.Ctx,
 			blkmetaloc[:],
 			deletes,
 			tbl.seqnums,
 			tbl.typs,
 			tbl.getTxn().engine.fs,
-			tbl.getTxn().proc.GetMPool())
-		if e != nil {
-			return nil, objectio.ObjectStats{}, e
+			tbl.getTxn().proc.GetMPool()); err != nil {
+			return nil, fileName, err
 		}
+
 		if bat.RowCount() == 0 {
 			continue
 		}
-		s3writer.StashBatch(tbl.getTxn().proc, bat)
+
+		if err = s3Writer.Write(ctx, mp, bat); err != nil {
+			return nil, fileName, err
+		}
+
 		bat.Clean(tbl.getTxn().proc.GetMPool())
 	}
-	return s3writer.SortAndSync(ctx, tbl.getTxn().proc)
+
+	if stats, err = s3Writer.Sync(ctx, mp); err != nil {
+		return nil, fileName, err
+	}
+
+	if bat, err = s3Writer.FillBlockInfoBat(mp); err != nil {
+		return nil, fileName, err
+	}
+
+	if len(stats) != 0 {
+		fileName = stats[0].ObjectLocation().String()
+	}
+
+	ret, err := bat.Dup(mp)
+
+	return ret, fileName, err
 }
 
 func (tbl *txnTable) Delete(
@@ -2123,7 +2153,7 @@ func (tbl *txnTable) PKPersistedBetween(
 				}
 			}
 
-			ForeachBlkInObjStatsList(false, meta,
+			objectio.ForeachBlkInObjStatsList(false, meta,
 				func(blk objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
 					if !blkMeta.IsEmpty() &&
 						!blkMeta.MustGetColumn(uint16(primaryIdx)).ZoneMap().AnyIn(keys) {

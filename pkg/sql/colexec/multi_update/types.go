@@ -92,7 +92,7 @@ type container struct {
 	affectedRows uint64
 	action       actionType
 
-	s3Writer       *s3Writer
+	s3Writer       *s3WriterDelegate
 	updateCtxInfos map[string]*updateCtxInfo
 
 	insertBuf []*batch.Batch

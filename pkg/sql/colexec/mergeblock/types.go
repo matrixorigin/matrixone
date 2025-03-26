@@ -113,19 +113,35 @@ func (mergeBlock *MergeBlock) ExecProjection(proc *process.Process, input *batch
 	return input, nil
 }
 
-func (mergeBlock *MergeBlock) GetMetaLocBat(src *batch.Batch, proc *process.Process) {
+func (mergeBlock *MergeBlock) GetMetaLocBat(
+	src *batch.Batch,
+	proc *process.Process,
+) bool {
+
+	hasTblIdxCol := src.Attrs[0] == catalog.BlockMeta_TableIdx_Insert
+
 	if len(mergeBlock.container.mp) > 0 {
 		for _, bat := range mergeBlock.container.mp {
 			bat.CleanOnlyData()
 		}
-		return
+		return hasTblIdxCol
 	}
 
-	var typs []types.Type
-	// exclude the table id column
-	attrs := src.Attrs[1:]
+	var (
+		vecStart int
 
-	for idx := 1; idx < len(src.Vecs); idx++ {
+		attrs []string
+		typs  []types.Type
+	)
+
+	attrs = src.Attrs
+	if hasTblIdxCol {
+		// exclude the table id column
+		attrs = attrs[1:]
+		vecStart = 1
+	}
+
+	for idx := vecStart; idx < len(src.Vecs); idx++ {
 		typs = append(typs, *src.Vecs[idx].GetType())
 	}
 
@@ -141,6 +157,8 @@ func (mergeBlock *MergeBlock) GetMetaLocBat(src *batch.Batch, proc *process.Proc
 		bat.Vecs[idx] = vector.NewVec(typs[idx])
 	}
 	mergeBlock.container.mp[0] = bat
+
+	return hasTblIdxCol
 }
 
 func splitObjectStats(mergeBlock *MergeBlock, proc *process.Process,
@@ -159,12 +177,20 @@ func splitObjectStats(mergeBlock *MergeBlock, proc *process.Process,
 	}
 
 	objDataMeta := objectio.BuildObjectMeta(uint16(blkVec.Length()))
-	var objStats objectio.ObjectStats
-	statsVec := bat.Vecs[2]
-	statsIdx := 0
+	var (
+		statsIdx int
+		statsVec *vector.Vector
+		objStats objectio.ObjectStats
+	)
 
-	for idx := 0; idx < len(tblIdx); idx++ {
-		if tblIdx[idx] < 0 {
+	if len(tblIdx) > 0 {
+		statsVec = bat.Vecs[2]
+	} else {
+		statsVec = bat.Vecs[1]
+	}
+
+	for idx := 0; idx < blkVec.Length(); idx++ {
+		if len(tblIdx) > 0 && tblIdx[idx] < 0 {
 			// will the data and blk infos mixed together in one batch?
 			// batch [ data | data | blk info | blk info | .... ]
 			continue
@@ -175,7 +201,12 @@ func splitObjectStats(mergeBlock *MergeBlock, proc *process.Process,
 			continue
 		}
 
-		destVec := mergeBlock.container.mp[int(tblIdx[idx])].Vecs[1]
+		var destVec *vector.Vector
+		if len(tblIdx) > 0 {
+			destVec = mergeBlock.container.mp[int(tblIdx[idx])].Vecs[1]
+		} else {
+			destVec = mergeBlock.container.mp[0].Vecs[1]
+		}
 
 		if needLoad {
 			crs := analyzer.GetOpCounterSet()
@@ -203,20 +234,40 @@ func splitObjectStats(mergeBlock *MergeBlock, proc *process.Process,
 
 func (mergeBlock *MergeBlock) Split(proc *process.Process, bat *batch.Batch, analyzer process.Analyzer) error {
 	// meta loc and object stats
-	mergeBlock.GetMetaLocBat(bat, proc)
-	tblIdx := vector.MustFixedColWithTypeCheck[int16](bat.GetVector(0))
-	blkInfosVec := bat.GetVector(1)
+	hasTblIdxCol := mergeBlock.GetMetaLocBat(bat, proc)
 
-	hasObject := false
-	for i := range tblIdx { // append s3 writer returned blk info
-		if tblIdx[i] >= 0 {
+	var (
+		tblIdx      []int16
+		blkInfosVec *vector.Vector
+	)
+
+	// table idx column only exists in the old implementation.
+	if hasTblIdxCol {
+		tblIdx = vector.MustFixedColWithTypeCheck[int16](bat.GetVector(0))
+		blkInfosVec = bat.GetVector(1)
+	} else {
+		blkInfosVec = bat.GetVector(0)
+	}
+
+	var hasObject bool
+
+	for i := range blkInfosVec.Length() { // append s3 writer returned blk info
+		if (len(tblIdx) > 0 && tblIdx[i] >= 0) || !hasTblIdxCol {
 			if mergeBlock.AddAffectedRows {
 				blkInfo := objectio.DecodeBlockInfo(blkInfosVec.GetBytesAt(i))
 				mergeBlock.container.affectedRows += uint64(blkInfo.MetaLocation().Rows())
 			}
-			vector.AppendBytes(mergeBlock.container.mp[int(tblIdx[i])].Vecs[0],
-				blkInfosVec.GetBytesAt(i), false, proc.GetMPool())
+
+			var dest *vector.Vector
+			if hasTblIdxCol {
+				dest = mergeBlock.container.mp[int(tblIdx[i])].Vecs[0]
+			} else {
+				dest = mergeBlock.container.mp[0].Vecs[0]
+			}
+			vector.AppendBytes(dest, blkInfosVec.GetBytesAt(i), false, proc.GetMPool())
+
 			hasObject = true
+
 		} else { // append data
 			idx := int(-(tblIdx[i] + 1))
 			newBat := &batch.Batch{}
