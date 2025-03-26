@@ -17,6 +17,7 @@ package disttae
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"fmt"
 	"runtime/debug"
 	"strconv"
@@ -742,7 +743,11 @@ func (tbl *txnTable) doRanges(ctx context.Context, rangesParam engine.RangesPara
 			err != nil ||
 			tbl.enableLogFilterExpr.Load() ||
 			cost > 5*time.Second {
-			logutil.Info(
+			logger := logutil.Info
+			if err != nil {
+				logger = logutil.Error
+			}
+			logger(
 				"TXN-FILTER-RANGE-LOG",
 				zap.String("name", tbl.tableDef.Name),
 				zap.String("exprs", plan2.FormatExprs(rangesParam.BlockFilters)),
@@ -773,9 +778,6 @@ func (tbl *txnTable) doRanges(ctx context.Context, rangesParam engine.RangesPara
 			err)
 
 		v2.TxnTableRangeDurationHistogram.Observe(cost.Seconds())
-		if err != nil {
-			logutil.Errorf("txn: %s, error: %v", tbl.db.op.Txn().DebugString(), err)
-		}
 	}()
 
 	if rangesParam.Policy&engine.Policy_CollectUncommittedPersistedData != 0 {
@@ -1039,68 +1041,6 @@ func (tbl *txnTable) collectUnCommittedDataObjs(txnOffset int) ([]objectio.Objec
 
 	return unCommittedObjects, unCommittedObjNames
 }
-
-//func (tbl *txnTable) collectDirtyBlocks(
-//	state *logtailreplay.PartitionState,
-//	uncommittedObjects []objectio.ObjectStats,
-//	txnOffset int, // Transaction writes offset used to specify the starting position for reading data.
-//) map[types.Blockid]struct{} {
-//	dirtyBlks := make(map[types.Blockid]struct{})
-//	//collect partitionState.dirtyBlocks which may be invisible to this txn into dirtyBlks.
-//	{
-//		iter := state.NewDirtyBlocksIter()
-//		for iter.Next() {
-//			entry := iter.Entry()
-//			//lazy load deletes for block.
-//			dirtyBlks[entry] = struct{}{}
-//		}
-//		iter.Close()
-//
-//	}
-//
-//	//only collect dirty blocks in PartitionState.blocks into dirtyBlks.
-//	for _, bid := range tbl.GetDirtyPersistedBlks(state) {
-//		dirtyBlks[bid] = struct{}{}
-//	}
-//
-//	if tbl.getTxn().hasDeletesOnUncommitedObject() {
-//		ForeachBlkInObjStatsList(true, nil, func(blk objectio.BlockInfo, _ objectio.BlockObject) bool {
-//			if tbl.getTxn().hasUncommittedDeletesOnBlock(&blk.BlockID) {
-//				dirtyBlks[blk.BlockID] = struct{}{}
-//			}
-//			return true
-//		}, uncommittedObjects...)
-//	}
-//
-//	if tbl.db.op.IsSnapOp() {
-//		txnOffset = tbl.getTxn().GetSnapshotWriteOffset()
-//	}
-//
-//	tbl.getTxn().ForEachTableWrites(
-//		tbl.db.databaseId,
-//		tbl.tableId,
-//		txnOffset,
-//		func(entry Entry) {
-//			// the CN workspace can only handle `INSERT` and `DELETE` operations. Other operations will be skipped,
-//			// TODO Adjustments will be made here in the future
-//			if entry.typ == DELETE || entry.typ == DELETE_TXN {
-//				if entry.IsGeneratedByTruncate() {
-//					return
-//				}
-//				//deletes in tbl.writes maybe comes from PartitionState.rows or PartitionState.blocks.
-//				if entry.fileName == "" &&
-//					entry.tableId != catalog.MO_DATABASE_ID && entry.tableId != catalog.MO_TABLES_ID && entry.tableId != catalog.MO_COLUMNS_ID {
-//					vs := vector.MustFixedColWithTypeCheck[types.Rowid](entry.bat.GetVector(0))
-//					for _, v := range vs {
-//						id, _ := v.Decode()
-//						dirtyBlks[id] = struct{}{}
-//					}
-//				}
-//			}
-//		})
-//
-//	return dirtyBlks
-//}
 
 // the return defs has no rowid column
 func (tbl *txnTable) TableDefs(ctx context.Context) ([]engine.TableDef, error) {
@@ -1997,12 +1937,12 @@ func (tbl *txnTable) getPartitionState(
 			ps = tbl.getTxn().engine.GetOrCreateLatestPart(tbl.db.databaseId, tbl.tableId).Snapshot()
 		}
 
-		if tbl.tableId == catalog.MO_COLUMNS_ID {
-			logutil.Info("open partition state for mo_columns",
-				zap.String("txn", tbl.db.op.Txn().DebugString()),
-				zap.String("desc", ps.Desc(true)),
-				zap.String("pointer", fmt.Sprintf("%p", ps)))
-		}
+		// if tbl.tableId == catalog.MO_COLUMNS_ID {
+		// 	logutil.Info("open partition state for mo_columns",
+		// 		zap.String("txn", tbl.db.op.Txn().DebugString()),
+		// 		zap.String("desc", ps.Desc(true)),
+		// 		zap.String("pointer", fmt.Sprintf("%p", ps)))
+		// }
 
 		return ps, nil
 	}
@@ -2015,13 +1955,13 @@ func (tbl *txnTable) getPartitionState(
 	if err != nil {
 		return nil, err
 	}
-	logutil.Infof("Get partition state for snapshot read, tbl:%p, table name:%s, tid:%v, txn:%s, ps:%p",
-		tbl,
-		tbl.tableName,
-		tbl.tableId,
-		tbl.db.op.Txn().DebugString(),
-		ps)
-
+	logutil.Info(
+		"Txn-GetPartitionState-SS",
+		zap.String("txn", hex.EncodeToString(tbl.db.op.Txn().ID)),
+		zap.String("name", tbl.tableName),
+		zap.String("id", fmt.Sprintf("%v", tbl.tableId)),
+		zap.String("ps", fmt.Sprintf("%p", ps)),
+	)
 	return ps, nil
 }
 
