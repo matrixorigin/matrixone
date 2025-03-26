@@ -207,6 +207,9 @@ func CDCStrToTime(tsStr string, tz *time.Location) (ts time.Time, err error) {
 }
 
 func CDCStrToTS(tsStr string) (types.TS, error) {
+	if tsStr == "" {
+		return types.TS{}, nil
+	}
 	t, err := CDCStrToTime(tsStr, nil)
 	if err != nil {
 		return types.TS{}, err
