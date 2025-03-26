@@ -192,28 +192,37 @@ func (db *txnDatabase) Delete(ctx context.Context, name string) error {
 // 2. useAlterNote means that the batch sent to TN will be just used
 // to insert into or delete from mo_tables and mo_columns,
 // rather than trigger an actual create or delete operation for table.
-func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bool, useAlterNote bool) ([]engine.TableDef, error) {
-	var id uint64
-	var rowid types.Rowid
-	var rowids []types.Rowid
-	var colPKs [][]byte
-	var defs []engine.TableDef
-	var packer *types.Packer
+func (db *txnDatabase) deleteTable(
+	ctx context.Context,
+	name string,
+	forAlter bool,
+	useAlterNote bool,
+) (defs []engine.TableDef, err error) {
+	var (
+		id        uint64
+		accountId uint32
+		rowid     types.Rowid
+		rowids    []types.Rowid
+		colPKs    [][]byte
+		packer    *types.Packer
+	)
 	if db.op.IsSnapOp() {
 		return nil, moerr.NewInternalErrorNoCtx("delete table in snapshot transaction")
 	}
 
-	accountId, err := defines.GetAccountId(ctx)
-	if err != nil {
+	if accountId, err = defines.GetAccountId(ctx); err != nil {
 		return nil, err
 	}
-	txn := db.getTxn()
-	putter := txn.engine.packerPool.Get(&packer)
+
+	var (
+		rel    engine.Relation
+		txn    = db.getTxn()
+		putter = txn.engine.packerPool.Get(&packer)
+	)
 	defer putter.Put()
 
 	// 1. Get id and columns infortmation to prepate delete batch
-	rel, err := db.Relation(ctx, name, nil)
-	if err != nil {
+	if rel, err = db.Relation(ctx, name, nil); err != nil {
 		return nil, err
 	}
 
@@ -266,8 +275,12 @@ func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bo
 	rowid = vector.GetFixedAtNoTypeCheck[types.Rowid](res.Batches[0].Vecs[0], 0)
 
 	// 1.2 table column rowids
-	res, err = execReadSql(ctx, db.op, fmt.Sprintf(catalog.MoColumnsRowidsQueryFormat, accountId, db.databaseName, name, id), true)
-	if err != nil {
+	if res, err = execReadSql(
+		ctx,
+		db.op,
+		fmt.Sprintf(catalog.MoColumnsRowidsQueryFormat, accountId, db.databaseName, name, id),
+		true,
+	); err != nil {
 		return nil, err
 	}
 	for _, b := range res.Batches {
@@ -369,7 +382,11 @@ func (db *txnDatabase) Truncate(ctx context.Context, name string) (uint64, error
 	return newId, nil
 }
 
-func (db *txnDatabase) Create(ctx context.Context, name string, defs []engine.TableDef) error {
+func (db *txnDatabase) Create(
+	ctx context.Context,
+	name string,
+	defs []engine.TableDef,
+) (err error) {
 	if db.op.IsSnapOp() {
 		return moerr.NewInternalErrorNoCtx("create table in snapshot transaction")
 	}
@@ -384,8 +401,11 @@ func (db *txnDatabase) Create(ctx context.Context, name string, defs []engine.Ta
 
 func (db *txnDatabase) createWithID(
 	ctx context.Context,
-	name string, tableId uint64, defs []engine.TableDef, useAlterNote bool,
-) error {
+	name string,
+	tableId uint64,
+	defs []engine.TableDef,
+	useAlterNote bool,
+) (err error) {
 	if db.op.IsSnapOp() {
 		return moerr.NewInternalErrorNoCtx("create table in snapshot transaction")
 	}
@@ -556,8 +576,7 @@ func (db *txnDatabase) loadTableFromStorage(
 	{
 		tblSql := fmt.Sprintf(catalog.MoTablesAllQueryFormat, accountID, db.databaseName, name)
 		var res executor.Result
-		res, err = execReadSql(ctx, db.op, tblSql, true)
-		if err != nil {
+		if res, err = execReadSql(ctx, db.op, tblSql, true); err != nil {
 			return
 		}
 		defer res.Close()
@@ -583,8 +602,7 @@ func (db *txnDatabase) loadTableFromStorage(
 		// fresh columns
 		colSql := fmt.Sprintf(catalog.MoColumnsAllQueryFormat, accountID, db.databaseName, name, tblid)
 		var res executor.Result
-		res, err = execReadSql(ctx, db.op, colSql, true)
-		if err != nil {
+		if res, err = execReadSql(ctx, db.op, colSql, true); err != nil {
 			return
 		}
 		defer res.Close()

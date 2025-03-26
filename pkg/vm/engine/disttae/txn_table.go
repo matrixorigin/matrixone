@@ -157,9 +157,8 @@ func (tbl *txnTable) PrefetchAllMeta(ctx context.Context) bool {
 	return true
 }
 
-func (tbl *txnTable) Stats(ctx context.Context, sync bool) (*pb.StatsInfo, error) {
-	_, err := tbl.getPartitionState(ctx)
-	if err != nil {
+func (tbl *txnTable) Stats(ctx context.Context, sync bool) (info *pb.StatsInfo, err error) {
+	if _, err = tbl.getPartitionState(ctx); err != nil {
 		logutil.Errorf("failed to get partition state of table %d: %v", tbl.tableId, err)
 		return nil, err
 	}
@@ -170,11 +169,7 @@ func (tbl *txnTable) Stats(ctx context.Context, sync bool) (*pb.StatsInfo, error
 			TableID:    tbl.tableId,
 		}, sync), nil
 	}
-	info, err := tbl.stats(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return info, nil
+	return tbl.stats(ctx)
 }
 
 func (tbl *txnTable) stats(ctx context.Context) (*pb.StatsInfo, error) {
@@ -306,8 +301,8 @@ func ForeachVisibleDataObject(
 	fn func(obj objectio.ObjectEntry) error,
 	executor ConcurrentExecutor,
 ) (err error) {
-	iter, err := state.NewObjectsIter(ts, true, false)
-	if err != nil {
+	var iter objectio.ObjectIter
+	if iter, err = state.NewObjectsIter(ts, true, false); err != nil {
 		return err
 	}
 	defer iter.Close()
@@ -1011,10 +1006,12 @@ func (tbl *txnTable) rangesOnePart(
 // Parameters:
 //   - txnOffset: Transaction writes offset used to specify the starting position for reading data.
 //   - fromSnapshot: Boolean indicating if the data is from a snapshot.
-func (tbl *txnTable) collectUnCommittedDataObjs(txnOffset int) ([]objectio.ObjectStats, map[objectio.ObjectNameShort]struct{}) {
-	var unCommittedObjects []objectio.ObjectStats
-	unCommittedObjNames := make(map[objectio.ObjectNameShort]struct{})
-
+func (tbl *txnTable) collectUnCommittedDataObjs(
+	txnOffset int,
+) (
+	unCommittedObjects []objectio.ObjectStats,
+	unCommittedObjNames map[objectio.ObjectNameShort]struct{},
+) {
 	if tbl.db.op.IsSnapOp() {
 		txnOffset = tbl.getTxn().GetSnapshotWriteOffset()
 	}
@@ -2218,7 +2215,9 @@ func (tbl *txnTable) primaryKeysMayBeChanged(
 		snap,
 		from,
 		to,
-		keysVector, checkTombstone)
+		keysVector,
+		checkTombstone,
+	)
 }
 
 func (tbl *txnTable) MergeObjects(
