@@ -296,7 +296,7 @@ func execBackup(
 	// When rewriting the checkpoint and trimming the aobject,
 	// you need to collect the atombstone in the last checkpoint
 	// Before this, only the last special checkpoint needs to be collected
-	var lastData *logtail.CKPReader
+	var lastReader *logtail.CKPReader
 	for i, name := range names {
 		if len(name) == 0 {
 			continue
@@ -315,18 +315,18 @@ func execBackup(
 			return err
 		}
 		var oneNames []*objectio.BackupObject
-		var data *logtail.CKPReader
+		var reader *logtail.CKPReader
 		if i == 0 {
-			oneNames, data, err = logtail.LoadCheckpointEntriesFromKey(ctx, sid, srcFs, key, uint32(version), nil, &baseTS)
+			oneNames, reader, err = logtail.LoadCheckpointEntriesFromKey(ctx, sid, srcFs, key, uint32(version), nil, &baseTS)
 		} else {
-			oneNames, data, err = logtail.LoadCheckpointEntriesFromKey(ctx, sid, srcFs, key, uint32(version), &softDeletes, &baseTS)
+			oneNames, reader, err = logtail.LoadCheckpointEntriesFromKey(ctx, sid, srcFs, key, uint32(version), &softDeletes, &baseTS)
 		}
 		if err != nil {
 			return err
 		}
 		oNames = append(oNames, oneNames...)
 		if i == len(names)-1 {
-			lastData = data
+			lastReader = reader
 		}
 	}
 	loadDuration += time.Since(now)
@@ -408,7 +408,7 @@ func execBackup(
 			tnLocation      objectio.Location
 		)
 		cnLocation, tnLocation, checkpointFiles, err = logtail.ReWriteCheckpointAndBlockFromKey(ctx, sid, srcFs, dstFs,
-			cnLocation, lastData, uint32(version), start)
+			cnLocation, lastReader, uint32(version), start)
 		for _, name := range checkpointFiles {
 			dentry, err := dstFs.StatFile(ctx, name)
 			if err != nil {

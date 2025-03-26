@@ -93,6 +93,7 @@ func reshape(ctx context.Context, host MergeTaskHost) error {
 					if _, err := writer.WriteBatch(buffer); err != nil {
 						return err
 					}
+					stats.writtenBytes = writer.GetWrittenOriginalSize()
 
 					stats.blkRowCnt = 0
 					stats.objBlkCnt++

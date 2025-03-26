@@ -707,18 +707,25 @@ func (sm *SnapshotMeta) Update(
 		ckputil.ObjectType_Tombstone,
 		collector,
 	)
-	for id, info := range sm.pitr.objects {
-		if !info.deleteAt.IsEmpty() {
-			delete(sm.pitr.objects, id)
+
+	trimList := func(
+		objects map[uint64]map[objectio.Segmentid]*objectInfo,
+		objects2 map[objectio.Segmentid]*objectInfo) {
+		for _, objs := range objects {
+			for id, info := range objs {
+				if !info.deleteAt.IsEmpty() {
+					delete(objs, id)
+				}
+			}
 		}
-	}
-	for _, objs := range sm.objects {
-		for id, info := range objs {
+		for id, info := range objects2 {
 			if !info.deleteAt.IsEmpty() {
-				delete(objs, id)
+				delete(objects2, id)
 			}
 		}
 	}
+	trimList(sm.objects, sm.pitr.objects)
+	trimList(sm.tombstones, sm.pitr.tombstones)
 	return
 }
 
@@ -840,7 +847,7 @@ func (sm *SnapshotMeta) GetSnapshot(
 						snapshotList[id] = containers.MakeVector(types.T_TS.ToType(), mp)
 					}
 					// TODO: info to debug
-					logutil.Info(
+					logutil.Debug(
 						"GetSnapshot-P2",
 						zap.String("ts", snapTs.ToString()),
 						zap.Uint32("account", id),
@@ -857,6 +864,15 @@ func (sm *SnapshotMeta) GetSnapshot(
 	}
 	for i := range snapshotList {
 		snapshotList[i].GetDownstreamVector().InplaceSort()
+		count := 0
+		if snapshotList[i].GetDownstreamVector() != nil {
+			count = snapshotList[i].GetDownstreamVector().Length()
+		}
+		logutil.Info(
+			"GetSnapshot-P3",
+			zap.Uint32("account", i),
+			zap.Int("snapshot count", count),
+		)
 	}
 	return snapshotList, nil
 }
@@ -1614,7 +1630,7 @@ func isSnapshotRefers(table *tableInfo, snapVec []types.TS, pitr *types.TS) bool
 		mid := left + (right-left)/2
 		snapTS := snapVec[mid]
 		if snapTS.GE(&table.createAt) && snapTS.LT(&table.deleteAt) {
-			logutil.Info(
+			logutil.Debug(
 				"isSnapshotRefers",
 				zap.String("snap-ts", snapTS.ToString()),
 				zap.String("create-ts", table.createAt.ToString()),
