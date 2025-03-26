@@ -74,7 +74,7 @@ func (opts *CDCCreateTaskOptions) Reset() {
 	opts.PitrTables = ""
 	opts.SinkType = ""
 	opts.NoFull = false
-	opts.UseConsole = true
+	opts.UseConsole = false
 	opts.ConfigFile = ""
 	opts.SrcUriInfo = cdc.UriInfo{}
 	opts.SinkUriInfo = cdc.UriInfo{}
