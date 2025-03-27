@@ -99,7 +99,7 @@ func (s *sqlExecutor) NewTxnOperator(ctx context.Context) client.TxnOperator {
 			return nil
 		}
 	}
-	opts.Txn().GetWorkspace().StartStatement()
+	opts.Txn().GetWorkspace().StartStatement("")
 	opts.Txn().GetWorkspace().IncrStatementID(ctx, false)
 	return opts.Txn()
 }
@@ -282,7 +282,7 @@ func (exec *txnExecutor) Exec(
 	// maybe we should fix it.
 	txnOp := exec.opts.Txn()
 	if txnOp != nil && !exec.opts.DisableIncrStatement() {
-		txnOp.GetWorkspace().StartStatement()
+		txnOp.GetWorkspace().StartStatement(sql)
 		defer func() {
 			txnOp.GetWorkspace().EndStatement()
 		}()

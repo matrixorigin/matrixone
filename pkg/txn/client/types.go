@@ -250,7 +250,7 @@ type Workspace interface {
 	Readonly() bool
 
 	// StartStatement tag a statement is running
-	StartStatement()
+	StartStatement(string)
 	// EndStatement tag end a statement is completed
 	EndStatement()
 

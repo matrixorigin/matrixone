@@ -809,7 +809,7 @@ func Test_BasicRollbackStatement(t *testing.T) {
 
 		require.NoError(t, testutil.WriteToRelation(ctx, txn, relation, bat1, false, true))
 
-		txn.GetWorkspace().StartStatement()
+		txn.GetWorkspace().StartStatement("")
 		require.NoError(t, relation.Write(ctx, bat2))
 		require.NoError(t, txn.GetWorkspace().RollbackLastStatement(ctx))
 		require.NoError(t, txn.GetWorkspace().IncrStatementID(ctx, false))
@@ -921,7 +921,7 @@ func Test_BasicRollbackStatementS3(t *testing.T) {
 
 		require.NoError(t, testutil.WriteToRelation(ctx, txn, relation, bat1, false, true))
 
-		txn.GetWorkspace().StartStatement()
+		txn.GetWorkspace().StartStatement("")
 		require.NoError(t, relation.Write(ctx, bat2))
 		require.NoError(t, txn.GetWorkspace().RollbackLastStatement(ctx))
 		require.NoError(t, txn.GetWorkspace().IncrStatementID(ctx, false))
@@ -1033,7 +1033,7 @@ func Test_RollbackDeleteAndDrop(t *testing.T) {
 	txnop = p.StartCNTxn()
 	exec := v.(executor.SQLExecutor)
 	execopts := executor.Options{}.WithTxn(txnop).WithDisableIncrStatement()
-	txnop.GetWorkspace().StartStatement()
+	txnop.GetWorkspace().StartStatement("")
 	txnop.GetWorkspace().IncrStatementID(p.Ctx, false)
 	dropTable := func() {
 		_, err := exec.Exec(p.Ctx, "delete from db.test3 where mock_1 = 0", execopts)
@@ -1182,7 +1182,7 @@ func Test_MultiTxnRollbackStatement(t *testing.T) {
 	{
 		require.NoError(t, testutil.WriteToRelation(ctx, txn, relation, bat2, false, true))
 
-		txn.GetWorkspace().StartStatement()
+		txn.GetWorkspace().StartStatement("")
 		require.NoError(t, relation.Write(ctx, bat2))
 		require.NoError(t, txn.GetWorkspace().RollbackLastStatement(ctx))
 		require.NoError(t, txn.GetWorkspace().IncrStatementID(ctx, false))
@@ -1357,7 +1357,7 @@ func Test_MultiTxnRollbackStatementS3(t *testing.T) {
 
 	// txn2 delete 5-15
 	{
-		txn.GetWorkspace().StartStatement()
+		txn.GetWorkspace().StartStatement("")
 		require.NoError(t, relation.Write(ctx, bat2))
 		require.NoError(t, txn.GetWorkspace().RollbackLastStatement(ctx))
 		require.NoError(t, txn.GetWorkspace().IncrStatementID(ctx, false))
@@ -1662,7 +1662,7 @@ func Test_CNTransferTombstoneObjects(t *testing.T) {
 		_, _, cnTxnOp, err = p.D.GetTable(ctx, databaseName, tableName)
 		require.NoError(t, err)
 
-		cnTxnOp.GetWorkspace().StartStatement()
+		cnTxnOp.GetWorkspace().StartStatement("")
 		err = cnTxnOp.GetWorkspace().IncrStatementID(ctx, false)
 		require.NoError(t, err)
 	}

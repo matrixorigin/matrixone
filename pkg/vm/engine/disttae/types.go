@@ -525,9 +525,12 @@ func (txn *Transaction) PPString() string {
 		stringifySlice(txn.transfer.timestamps, func(a any) string { t := a.(timestamp.Timestamp); return t.DebugString() }))
 }
 
-func (txn *Transaction) StartStatement() {
+func (txn *Transaction) StartStatement(sql string) {
 	if txn.startStatementCalled {
-		logutil.Fatal("BUG: StartStatement called twice", zap.String("txn", hex.EncodeToString(txn.op.Txn().ID)))
+		logutil.Fatal("BUG: StartStatement called twice",
+			zap.String("txn", hex.EncodeToString(txn.op.Txn().ID)),
+			zap.String("SQL", sql),
+		)
 	}
 	txn.startStatementCalled = true
 	txn.incrStatementCalled = false

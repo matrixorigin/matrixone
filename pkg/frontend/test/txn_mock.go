@@ -1238,15 +1238,15 @@ func (mr *MockWorkspaceMockRecorder) SetHaveDDL(flag interface{}) *gomock.Call {
 }
 
 // StartStatement mocks base method.
-func (m *MockWorkspace) StartStatement() {
+func (m *MockWorkspace) StartStatement(arg0 string) {
 	m.ctrl.T.Helper()
-	m.ctrl.Call(m, "StartStatement")
+	m.ctrl.Call(m, "StartStatement", arg0)
 }
 
 // StartStatement indicates an expected call of StartStatement.
-func (mr *MockWorkspaceMockRecorder) StartStatement() *gomock.Call {
+func (mr *MockWorkspaceMockRecorder) StartStatement(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "StartStatement", reflect.TypeOf((*MockWorkspace)(nil).StartStatement))
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "StartStatement", reflect.TypeOf((*MockWorkspace)(nil).StartStatement), arg0)
 }
 
 // UpdateSnapshotWriteOffset mocks base method.
