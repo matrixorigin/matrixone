@@ -35,11 +35,28 @@ const (
 
 	maxErrMsgLen = 256
 
-	updateWatermarkFormat = "update mo_catalog.mo_cdc_watermark set watermark='%s' where account_id = %d and task_id = '%s' and db_name = '%s' and table_name = '%s'"
+	updateWatermarkFormat = "UPDATE " +
+		"`mo_catalog`.`mo_cdc_watermark` " +
+		"SET watermark='%s' " +
+		"WHERE account_id = %d " +
+		"AND task_id = '%s' " +
+		"AND db_name = '%s' " +
+		"AND table_name = '%s'"
 
-	deleteWatermarkByTableFormat = "delete from mo_catalog.mo_cdc_watermark where account_id = %d and task_id = '%s' and db_name = '%s' and table_name = '%s'"
+	deleteWatermarkByTableFormat = "DELETE " +
+		"FROM `mo_catalog`.`mo_cdc_watermark` " +
+		"WHERE account_id = %d " +
+		"AND task_id = '%s' " +
+		"AND db_name = '%s' " +
+		"AND table_name = '%s'"
 
-	updateErrMsgFormat = "update mo_catalog.mo_cdc_watermark set err_msg='%s' where account_id = %d and task_id = '%s' and db_name = '%s' and table_name = '%s'"
+	updateErrMsgFormat = "UPDATE " +
+		"`mo_catalog`.`mo_cdc_watermark` " +
+		"SET err_msg='%s' " +
+		"WHERE account_id = %d " +
+		"AND task_id = '%s' " +
+		"AND db_name = '%s' " +
+		"AND table_name = '%s'"
 )
 
 var _ IWatermarkUpdater = new(WatermarkUpdater)
