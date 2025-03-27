@@ -19,6 +19,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -39,8 +42,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/test/testutil"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func TestChangesHandle1(t *testing.T) {
@@ -82,7 +83,7 @@ func TestChangesHandle1(t *testing.T) {
 	require.Nil(t, err)
 	require.Nil(t, txn.Commit(ctx))
 
-	err = disttaeEngine.SubscribeTable(ctx, id.DbID, id.TableID, false)
+	err = disttaeEngine.SubscribeTable(ctx, id.DbID, id.TableID, databaseName, tableName, false)
 	require.Nil(t, err)
 	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
 	mp := common.DebugAllocator
@@ -175,7 +176,7 @@ func TestChangesHandle2(t *testing.T) {
 
 	testutil2.CompactBlocks(t, accountId, taeHandler.GetDB(), databaseName, schema, true)
 
-	err = disttaeEngine.SubscribeTable(ctx, id.DbID, id.TableID, false)
+	err = disttaeEngine.SubscribeTable(ctx, id.DbID, id.TableID, databaseName, tableName, false)
 	require.Nil(t, err)
 	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
 
@@ -238,7 +239,7 @@ func checkInsertBatch(userBatch *containers.Batch, bat *batch.Batch, t *testing.
 	if bat == nil {
 		return
 	}
-	length := bat.Vecs[0].Length()
+	length := bat.RowCount()
 	assert.Equal(t, len(bat.Vecs), len(userBatch.Vecs)+1) // user rows + committs
 	for i, vec := range userBatch.Vecs {
 		assert.Equal(t, bat.Vecs[i].GetType().Oid, vec.GetType().Oid)
@@ -295,7 +296,7 @@ func TestChangesHandle3(t *testing.T) {
 	testutil2.CompactBlocks(t, accountId, taeHandler.GetDB(), databaseName, schema, true)
 
 	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
-	err = disttaeEngine.SubscribeTable(ctx, id.DbID, id.TableID, false)
+	err = disttaeEngine.SubscribeTable(ctx, id.DbID, id.TableID, databaseName, tableName, false)
 	require.Nil(t, err)
 
 	// check partition state, before flush
@@ -406,7 +407,7 @@ func TestChangesHandleForCNWrite(t *testing.T) {
 	id := dnRel.GetMeta().(*catalog2.TableEntry).AsCommonID()
 	t.Log(taeEngine.GetDB().Catalog.SimplePPString(3))
 	assert.NoError(t, dnTxn.Commit(ctx))
-	err = disttaeEngine.SubscribeTable(ctx, id.DbID, id.TableID, false)
+	err = disttaeEngine.SubscribeTable(ctx, id.DbID, id.TableID, databaseName, tableName, false)
 	require.Nil(t, err)
 
 	// check partition state, before flush
@@ -522,7 +523,7 @@ func TestChangesHandle4(t *testing.T) {
 	id := dnRel.GetMeta().(*catalog2.TableEntry).AsCommonID()
 	t.Log(taeEngine.GetDB().Catalog.SimplePPString(3))
 	assert.NoError(t, dnTxn.Commit(ctx))
-	err = disttaeEngine.SubscribeTable(ctx, id.DbID, id.TableID, false)
+	err = disttaeEngine.SubscribeTable(ctx, id.DbID, id.TableID, databaseName, tableName, false)
 	require.Nil(t, err)
 
 	dntxn, dnrel = testutil2.GetRelation(t, accountId, taeEngine.GetDB(), databaseName, tableName)
@@ -645,7 +646,7 @@ func TestChangesHandle5(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, flushTxn.Commit(context.Background()))
 
-	err = disttaeEngine.SubscribeTable(ctx, id.DbID, id.TableID, false)
+	err = disttaeEngine.SubscribeTable(ctx, id.DbID, id.TableID, databaseName, tableName, false)
 	require.Nil(t, err)
 	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
 	mp := common.DebugAllocator
@@ -747,7 +748,7 @@ func TestChangesHandle6(t *testing.T) {
 
 	testutil2.CompactBlocks(t, accountId, taeHandler.GetDB(), databaseName, schema, true)
 
-	err = disttaeEngine.SubscribeTable(ctx, id.DbID, id.TableID, false)
+	err = disttaeEngine.SubscribeTable(ctx, id.DbID, id.TableID, databaseName, tableName, false)
 	require.Nil(t, err)
 	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
 	mp := common.DebugAllocator
@@ -839,7 +840,7 @@ func TestChangesHandleStaleFiles1(t *testing.T) {
 
 	testutil2.CompactBlocks(t, accountId, taeHandler.GetDB(), databaseName, schema, true)
 
-	err = disttaeEngine.SubscribeTable(ctx, id.DbID, id.TableID, false)
+	err = disttaeEngine.SubscribeTable(ctx, id.DbID, id.TableID, databaseName, tableName, false)
 	require.Nil(t, err)
 	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
 	mp := common.DebugAllocator
@@ -927,7 +928,7 @@ func TestChangesHandleStaleFiles2(t *testing.T) {
 	id := dnRel.GetMeta().(*catalog2.TableEntry).AsCommonID()
 	t.Log(taeEngine.GetDB().Catalog.SimplePPString(3))
 	assert.NoError(t, dnTxn.Commit(ctx))
-	err = disttaeEngine.SubscribeTable(ctx, id.DbID, id.TableID, false)
+	err = disttaeEngine.SubscribeTable(ctx, id.DbID, id.TableID, databaseName, tableName, false)
 	require.Nil(t, err)
 
 	// check partition state, before flush
@@ -1018,7 +1019,7 @@ func TestChangesHandleStaleFiles5(t *testing.T) {
 	testutil2.CompactBlocks(t, accountId, taeHandler.GetDB(), databaseName, schema, true)
 
 	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
-	err = disttaeEngine.SubscribeTable(ctx, id.DbID, id.TableID, false)
+	err = disttaeEngine.SubscribeTable(ctx, id.DbID, id.TableID, databaseName, tableName, false)
 	require.Nil(t, err)
 
 	// check partition state, before flush

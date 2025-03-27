@@ -45,11 +45,13 @@ type IndexTableConfig struct {
 	IndexCapacity int64  `json:"index_capacity"`
 
 	// IVF related
-	EntriesTable string `json:"entries"`
-	DataSize     int64  `json:"datasize"`
-	Nprobe       uint   `json:"nprobe"`
-	PKeyType     int32  `json:"pktype"`
-	KeyPartType  int32  `json:"parttype"`
+	EntriesTable    string `json:"entries"`
+	DataSize        int64  `json:"datasize"`
+	Nprobe          uint   `json:"nprobe"`
+	PKeyType        int32  `json:"pktype"`
+	KeyPartType     int32  `json:"parttype"`
+	SampleLimit     int64  `json:"sample_limit"`
+	IvfMaxIteration int64  `json:"ivf_max_iteration"`
 }
 
 // HNSW specified parameters
@@ -72,7 +74,7 @@ type IvfflatIndexConfig struct {
 	Metric     uint16
 	InitType   uint16
 	Dimensions uint
-	Normalize  bool
+	Spherical  bool
 	Version    int64
 	VectorType int32
 }

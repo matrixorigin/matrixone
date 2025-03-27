@@ -368,7 +368,10 @@ func (de *TestDisttaeEngine) analyzeTombstone(
 }
 
 func (de *TestDisttaeEngine) SubscribeTable(
-	ctx context.Context, dbID, tbID uint64, setSubscribed bool,
+	ctx context.Context,
+	dbID, tbID uint64,
+	dbName, tblName string,
+	setSubscribed bool,
 ) (err error) {
 	ticker := time.NewTicker(time.Second)
 	timeout := 5
@@ -379,7 +382,7 @@ func (de *TestDisttaeEngine) SubscribeTable(
 			break
 		}
 
-		err = de.Engine.TryToSubscribeTable(ctx, dbID, tbID)
+		err = de.Engine.TryToSubscribeTable(ctx, dbID, tbID, dbName, tblName)
 		if err != nil {
 			timeout--
 			logutil.Errorf("test disttae engine subscribe table err %v, left trie %d", err, timeout)

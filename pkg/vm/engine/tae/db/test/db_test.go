@@ -7024,6 +7024,13 @@ func TestSnapshotGC(t *testing.T) {
 	err = tbl2.RecurLoop(p)
 	assert.NoError(t, err)
 	assert.True(t, checkPK == db.DiskCleaner.GetCleaner().GetTablePK(checkrel.ID()))
+
+	fault.Enable()
+	defer fault.Disable()
+	fault.AddFaultPoint(ctx, "replay error UT", ":::", "echo", 0, "test error", false)
+	defer fault.RemoveFaultPoint(ctx, "replay error UT")
+	tae.Restart(ctx)
+	assert.Nil(t, tae.DiskCleaner.GetCleaner().GetScannedWindow())
 }
 
 func TestSnapshotMeta(t *testing.T) {
@@ -7206,6 +7213,8 @@ func TestPitrMeta(t *testing.T) {
 	opts := new(options.Options)
 	opts = config.WithQuickScanAndCKPOpts(opts)
 	options.WithDisableGCCheckpoint()(opts)
+	merge.StopMerge.Store(true)
+	defer merge.StopMerge.Store(false)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	db := tae.DB
@@ -7338,6 +7347,31 @@ func TestPitrMeta(t *testing.T) {
 	assert.NoError(t, err)
 	filter := handle.NewEQFilter([]byte("cluster"))
 	id, offset, err := rel.GetByFilter(context.Background(), filter)
+	assert.NoError(t, err)
+	_, _, err = rel.GetValue(id, offset, 5, false)
+	assert.NoError(t, err)
+	err = rel.RangeDelete(id, offset, offset, handle.DT_Normal)
+	if err != nil {
+		t.Logf("range delete %v, rollbacking", err)
+		_ = txn.Rollback(context.Background())
+		return
+	}
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit(context.Background()))
+	testutils.WaitExpect(10000, func() bool {
+		return db.Runtime.Scheduler.GetPenddingLSNCnt() == 0
+	})
+	if db.Runtime.Scheduler.GetPenddingLSNCnt() != 0 {
+		return
+	}
+	txn, err = db.StartTxn(nil)
+	require.NoError(t, err)
+	db1, err = txn.GetDatabase("db1")
+	assert.NoError(t, err)
+	rel, err = db1.GetRelationByName(pitrSchema.Name)
+	assert.NoError(t, err)
+	filter = handle.NewEQFilter([]byte("account"))
+	id, offset, err = rel.GetByFilter(context.Background(), filter)
 	assert.NoError(t, err)
 	_, _, err = rel.GetValue(id, offset, 5, false)
 	assert.NoError(t, err)
@@ -10097,7 +10131,7 @@ func TestCKPCollectObject(t *testing.T) {
 			assert.NoError(t, tae.Catalog.RecurLoop(collector))
 			ckpData := collector.OrphanData()
 			defer ckpData.Close()
-			loc, _, _, err := ckpData.WriteTo(ctx, tae.Opts.Fs)
+			loc, _, err := ckpData.Sync(ctx, tae.Opts.Fs)
 			assert.NoError(t, err)
 			reader := logtail.NewCKPReader(logtail.CheckpointCurrentVersion, loc, common.DebugAllocator, tae.Opts.Fs)
 			err = reader.ReadMeta(ctx)
@@ -11319,7 +11353,7 @@ func TestCheckpointV2(t *testing.T) {
 	assert.NoError(t, err)
 	data := collector.OrphanData()
 	collector.Close()
-	loc, _, _, err := data.WriteTo(ctx, tae.Opts.Fs)
+	loc, _, err := data.Sync(ctx, tae.Opts.Fs)
 	assert.NoError(t, err)
 	data.Close()
 
@@ -11980,7 +12014,7 @@ func Test_ReplayGlobalCheckpoint(t *testing.T) {
 	assert.NoError(t, tae.Catalog.RecurLoop(collector))
 	ckpData := collector.OrphanData()
 	defer ckpData.Close()
-	loc, _, _, err := ckpData.WriteTo(ctx, tae.Opts.Fs)
+	loc, _, err := ckpData.Sync(ctx, tae.Opts.Fs)
 	assert.NoError(t, err)
 	reader := logtail.NewCKPReader(logtail.CheckpointCurrentVersion, loc, common.DebugAllocator, tae.Opts.Fs)
 	err = reader.ReadMeta(ctx)

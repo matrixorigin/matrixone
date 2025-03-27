@@ -328,7 +328,7 @@ func readMetaForV12(
 		for it.HasNext() {
 			loc := it.Next().GetLocation()
 			if !loc.IsEmpty() {
-				str := loc.String()
+				str := loc.Name().String()
 				data[str] = loc
 			}
 		}
@@ -337,7 +337,7 @@ func readMetaForV12(
 		for it.HasNext() {
 			loc := it.Next().GetLocation()
 			if !loc.IsEmpty() {
-				str := loc.String()
+				str := loc.Name().String()
 				tombstone[str] = loc
 			}
 		}
@@ -385,7 +385,7 @@ func readMetaForV12WithTableID(
 		for it.HasNext() {
 			loc := it.Next().GetLocation()
 			if !loc.IsEmpty() {
-				str := loc.String()
+				str := loc.Name().String()
 				data[str] = loc
 			}
 		}
@@ -394,7 +394,7 @@ func readMetaForV12WithTableID(
 		for it.HasNext() {
 			loc := it.Next().GetLocation()
 			if !loc.IsEmpty() {
-				str := loc.String()
+				str := loc.Name().String()
 				tombstone[str] = loc
 			}
 		}
@@ -523,7 +523,7 @@ func (reader *CKPReader) GetCheckpointData(ctx context.Context) (ckpData *batch.
 	for {
 		tmpBatch.CleanOnlyData()
 		var end bool
-		if end, err = reader.ckpDataReader.Read(ctx, tmpBatch, reader.mp); err != nil {
+		if end, err = reader.Read(ctx, tmpBatch, reader.mp); err != nil {
 			return
 		}
 		if end {
@@ -545,7 +545,7 @@ func (reader *CKPReader) LoadBatchData(
 	if data == nil {
 		panic("invalid input")
 	}
-	return reader.ckpDataReader.Read(ctx, data, reader.mp)
+	return reader.Read(ctx, data, reader.mp)
 }
 
 func compatibilityForV12(
@@ -617,7 +617,7 @@ func (reader *CKPReader) ForEachRow(
 	for {
 		tmpBatch.CleanOnlyData()
 		var end bool
-		if end, err = reader.ckpDataReader.Read(ctx, tmpBatch, reader.mp); err != nil {
+		if end, err = reader.Read(ctx, tmpBatch, reader.mp); err != nil {
 			return
 		}
 		if end {
@@ -662,7 +662,7 @@ func (reader *CKPReader) ConsumeCheckpointWithTableID(
 		for {
 			tmpBatch.CleanOnlyData()
 			var end bool
-			if end, err = reader.ckpDataReader.Read(ctx, tmpBatch, reader.mp); err != nil {
+			if end, err = reader.Read(ctx, tmpBatch, reader.mp); err != nil {
 				return
 			}
 			if end {

@@ -60,16 +60,23 @@ type MmapInfo struct {
 
 func (*MmapInfo) IsTrait() {}
 
+var unmapChan = make(chan []byte, 4096) // buffered chan for slice to unmap
+
+func init() {
+	go func() {
+		for {
+			slice := <-unmapChan
+			_ = unix.Munmap(slice)
+		}
+	}()
+}
+
 func NewFixedSizeMmapAllocator(
 	size uint64,
 ) (ret *fixedSizeMmapAllocator) {
 
 	// if size is larger than smallClassCap, num1 will be zero, buffer1 will be empty
-	num1 := smallClassCap / size
-	if num1 > maxBuffer1Cap {
-		// don't buffer too much, since chans with larger buffer consume more memory
-		num1 = maxBuffer1Cap
-	}
+	num1 := min(smallClassCap/size, maxBuffer1Cap)
 
 	ret = &fixedSizeMmapAllocator{
 		size:    size,
@@ -80,7 +87,8 @@ func NewFixedSizeMmapAllocator(
 			func(hints Hints, args *fixedSizeMmapDeallocatorArgs) {
 
 				if hints&DoNotReuse > 0 {
-					ret.freeMem(args.ptr)
+					slice := unsafe.Slice((*byte)(args.ptr), args.length)
+					unmapChan <- slice
 					return
 				}
 
@@ -99,6 +107,9 @@ func NewFixedSizeMmapAllocator(
 						// buffer in buffer2
 
 					default:
+						// Both buffers full, free immediately
+						slice := unsafe.Slice((*byte)(args.ptr), args.length)
+						unmapChan <- slice
 
 					}
 
