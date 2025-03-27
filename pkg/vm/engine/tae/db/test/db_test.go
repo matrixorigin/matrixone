@@ -7217,6 +7217,8 @@ func TestPitrMeta(t *testing.T) {
 	opts := new(options.Options)
 	opts = config.WithQuickScanAndCKPOpts(opts)
 	options.WithDisableGCCheckpoint()(opts)
+	merge.StopMerge.Store(true)
+	defer merge.StopMerge.Store(false)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	db := tae.DB
