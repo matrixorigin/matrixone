@@ -102,7 +102,7 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 	// extract source uri and check connection
 	// target field: SrcUri
 	{
-		if opts.SrcUri, opts.SrcUriInfo, err = extractUriInfo(
+		if opts.SrcUri, opts.SrcUriInfo, err = cdc.ExtractUriInfo(
 			ctx, req.SourceUri, cdc.CDCSourceUriPrefix,
 		); err != nil {
 			return
@@ -130,7 +130,7 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 			return
 		}
 
-		if opts.SinkUri, opts.SinkUriInfo, err = extractUriInfo(
+		if opts.SinkUri, opts.SinkUriInfo, err = cdc.ExtractUriInfo(
 			ctx, req.SinkUri, cdc.CDCSinkUriPrefix,
 		); err != nil {
 			return
