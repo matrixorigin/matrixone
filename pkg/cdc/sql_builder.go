@@ -111,7 +111,13 @@ const (
 
 	CDCDeleteWatermarkSqlTemplate = "DELETE FROM `mo_catalog`.`mo_cdc_watermark` WHERE account_id = %d AND task_id = '%s'"
 
-	CDCGetWatermarkSqlTemplate = "SELECT db_name, table_name, watermark, err_msg FROM mo_catalog.mo_cdc_watermark WHERE account_id = %d and task_id = '%s'"
+	CDCGetWatermarkSqlTemplate = "SELECT " +
+		"db_name, " +
+		"table_name, " +
+		"watermark, " +
+		"err_msg " +
+		"FROM `mo_catalog`.`mo_cdc_watermark` " +
+		"WHERE account_id = %d AND task_id = '%s'"
 )
 
 type cdcSQLBuilder struct{}
