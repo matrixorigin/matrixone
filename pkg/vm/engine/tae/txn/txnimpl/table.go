@@ -868,7 +868,7 @@ func (tbl *txnTable) Append(ctx context.Context, data *containers.Batch) (err er
 	if tbl.dataTable.tableSpace == nil {
 		tbl.dataTable.tableSpace = newTableSpace(tbl, false)
 	}
-	_, err = tbl.dataTable.tableSpace.Append(data)
+	err = tbl.dataTable.tableSpace.Append(data)
 	return
 }
 func (tbl *txnTable) AddDataFiles(ctx context.Context, stats containers.Vector) (err error) {
@@ -1609,15 +1609,17 @@ func (tbl *txnTable) DeleteByPhyAddrKeys(
 	if tbl.tombstoneTable == nil {
 		tbl.tombstoneTable = newBaseTable(tbl.entry.GetLastestSchema(true), true, tbl)
 	}
-	err = tbl.dedup(tbl.store.ctx, deleteBatch.GetVectorByName(objectio.TombstoneAttr_Rowid_Attr), true)
-	if err != nil {
+	if err = tbl.dedup(
+		tbl.store.ctx,
+		deleteBatch.GetVectorByName(objectio.TombstoneAttr_Rowid_Attr),
+		true,
+	); err != nil {
 		return
 	}
 	if tbl.tombstoneTable.tableSpace == nil {
 		tbl.tombstoneTable.tableSpace = newTableSpace(tbl, true)
 	}
-	_, err = tbl.tombstoneTable.tableSpace.Append(deleteBatch)
-	if err != nil {
+	if err = tbl.tombstoneTable.tableSpace.Append(deleteBatch); err != nil {
 		return
 	}
 	if dt == handle.DT_MergeCompact {

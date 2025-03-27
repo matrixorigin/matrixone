@@ -441,7 +441,13 @@ func loadNameByIdFromStorage(ctx context.Context, op client.TxnOperator, account
 	return
 }
 
-func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName, tableName string, rel engine.Relation, err error) {
+func (e *Engine) GetRelationById(
+	ctx context.Context,
+	op client.TxnOperator,
+	tableId uint64,
+) (
+	dbName, tableName string, rel engine.Relation, err error,
+) {
 	if catalog.IsSystemTable(tableId) {
 		dbName = catalog.MO_CATALOG
 		db := &txnDatabase{
@@ -524,8 +530,7 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 	}
 
 	var txn *Transaction
-	txn, err = txnIsValid(op)
-	if err != nil {
+	if txn, err = txnIsValid(op); err != nil {
 		return err
 	}
 
@@ -624,10 +629,12 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 func (e *Engine) Nodes(
 	isInternal bool, tenant string, username string, cnLabel map[string]string,
 ) (engine.Nodes, error) {
-	var ncpu = system.GoMaxProcs()
-	var nodes engine.Nodes
+	var (
+		nodes engine.Nodes
+		ncpu  = system.GoMaxProcs()
+		start = time.Now()
+	)
 
-	start := time.Now()
 	defer func() {
 		v2.TxnStatementNodesHistogram.Observe(time.Since(start).Seconds())
 	}()
@@ -700,11 +707,14 @@ func (e *Engine) BuildBlockReaders(
 	expr *plan.Expr,
 	def *plan.TableDef,
 	relData engine.RelData,
-	num int) ([]engine.Reader, error) {
-	var rds []engine.Reader
-	proc := p.(*process.Process)
-	blkCnt := relData.DataCnt()
-	newNum := num
+	num int,
+) ([]engine.Reader, error) {
+	var (
+		rds    []engine.Reader
+		proc   = p.(*process.Process)
+		blkCnt = relData.DataCnt()
+		newNum = num
+	)
 	if blkCnt < num {
 		newNum = blkCnt
 		for i := 0; i < num-blkCnt; i++ {
