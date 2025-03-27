@@ -36,7 +36,7 @@ type CDCShowCDCTaskOptions struct {
 }
 
 func (opts *CDCShowCDCTaskOptions) ToSQL() string {
-	return CDCSQLBuilder.ShowTaskSQL(
+	return cdc.CDCSQLBuilder.ShowTaskSQL(
 		opts.AccountId, opts.ShowAll, opts.TaskName,
 	)
 }
@@ -287,7 +287,7 @@ func (opts *CDCCreateTaskOptions) ToInsertTaskSQL(
 		}
 	}
 
-	sql = CDCSQLBuilder.InsertTaskSQL(
+	sql = cdc.CDCSQLBuilder.InsertTaskSQL(
 		uint64(opts.AccountInfo.GetTenantID()),
 		opts.TaskId,
 		opts.TaskName,

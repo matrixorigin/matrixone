@@ -173,7 +173,7 @@ var initAesKeyBySqlExecutor = func(ctx context.Context, executor taskservice.Sql
 
 	var encryptedKey string
 	var ret bool
-	querySql := CDCSQLBuilder.GetDataKeySQL(uint64(accountId), cdc.InitKeyId)
+	querySql := cdc.CDCSQLBuilder.GetDataKeySQL(uint64(accountId), cdc.InitKeyId)
 
 	ret, err = queryTable(ctx, executor, querySql, func(ctx context.Context, rows *sql.Rows) (bool, error) {
 		if err = rows.Scan(&encryptedKey); err != nil {

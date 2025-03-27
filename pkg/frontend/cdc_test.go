@@ -30,7 +30,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap"
 
-	cdc2 "github.com/matrixorigin/matrixone/pkg/cdc"
+	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -52,7 +52,7 @@ import (
 func Test_newCdcSqlFormat(t *testing.T) {
 	id, _ := uuid.Parse("019111fd-aed1-70c0-8760-9abadd8f0f4a")
 	d := time.Date(2024, 8, 2, 15, 20, 0, 0, time.UTC)
-	sql := CDCSQLBuilder.InsertTaskSQL(
+	sql := cdc.CDCSQLBuilder.InsertTaskSQL(
 		3,
 		id.String(),
 		"task1",
@@ -82,11 +82,11 @@ func Test_newCdcSqlFormat(t *testing.T) {
 	wantSql := "INSERT INTO mo_catalog.mo_cdc_task VALUES(3,\"019111fd-aed1-70c0-8760-9abadd8f0f4a\",\"task1\",\"src uri\",\"123\",\"dst uri\",\"mysql\",\"456\",\"ca path\",\"cert path\",\"key path\",\"db1:t1\",\"xfilter\",\"op filters\",\"error\",\"common\",\"\",\"\",\"conf path\",\"2024-08-02 15:20:00\",\"running\",125,\"125\",\"true\",\"yyy\",'{}',\"\",\"\",\"\",\"\")"
 	assert.Equal(t, wantSql, sql)
 
-	sql2 := CDCSQLBuilder.GetTaskSQL(3, id.String())
+	sql2 := cdc.CDCSQLBuilder.GetTaskSQL(3, id.String())
 	wantSql2 := "SELECT sink_uri, sink_type, sink_password, tables, filters, start_ts, end_ts, no_full, additional_config FROM mo_catalog.mo_cdc_task WHERE account_id = 3 AND task_id = \"019111fd-aed1-70c0-8760-9abadd8f0f4a\""
 	assert.Equal(t, wantSql2, sql2)
 
-	sql3 := CDCSQLBuilder.DeleteWatermarkSQL(13, "task1")
+	sql3 := cdc.CDCSQLBuilder.DeleteWatermarkSQL(13, "task1")
 	wantSql3 := "DELETE FROM `mo_catalog`.`mo_cdc_watermark` WHERE account_id = 13 AND task_id = 'task1'"
 	assert.Equal(t, wantSql3, sql3)
 }
@@ -109,33 +109,33 @@ func Test_getPatternTuples(t *testing.T) {
 		tables  string
 		level   string
 		wantErr bool
-		expect  *cdc2.PatternTuples
+		expect  *cdc.PatternTuples
 	}
 
 	kases := []kase{
 		// table level
 		{
 			tables:  "db1.t1:db2.t2,db3.t3:db4.t4",
-			level:   cdc2.CDCPitrGranularity_Table,
+			level:   cdc.CDCPitrGranularity_Table,
 			wantErr: false,
-			expect: &cdc2.PatternTuples{
-				Pts: []*cdc2.PatternTuple{
+			expect: &cdc.PatternTuples{
+				Pts: []*cdc.PatternTuple{
 					{
-						Source: cdc2.PatternTable{
+						Source: cdc.PatternTable{
 							Database: "db1",
 							Table:    "t1",
 						},
-						Sink: cdc2.PatternTable{
+						Sink: cdc.PatternTable{
 							Database: "db2",
 							Table:    "t2",
 						},
 					},
 					{
-						Source: cdc2.PatternTable{
+						Source: cdc.PatternTable{
 							Database: "db3",
 							Table:    "t3",
 						},
-						Sink: cdc2.PatternTable{
+						Sink: cdc.PatternTable{
 							Database: "db4",
 							Table:    "t4",
 						},
@@ -145,26 +145,26 @@ func Test_getPatternTuples(t *testing.T) {
 		},
 		{
 			tables:  "db1.t1,db3.t3:db4.t4",
-			level:   cdc2.CDCPitrGranularity_Table,
+			level:   cdc.CDCPitrGranularity_Table,
 			wantErr: false,
-			expect: &cdc2.PatternTuples{
-				Pts: []*cdc2.PatternTuple{
+			expect: &cdc.PatternTuples{
+				Pts: []*cdc.PatternTuple{
 					{
-						Source: cdc2.PatternTable{
+						Source: cdc.PatternTable{
 							Database: "db1",
 							Table:    "t1",
 						},
-						Sink: cdc2.PatternTable{
+						Sink: cdc.PatternTable{
 							Database: "db1",
 							Table:    "t1",
 						},
 					},
 					{
-						Source: cdc2.PatternTable{
+						Source: cdc.PatternTable{
 							Database: "db3",
 							Table:    "t3",
 						},
-						Sink: cdc2.PatternTable{
+						Sink: cdc.PatternTable{
 							Database: "db4",
 							Table:    "t4",
 						},
@@ -174,26 +174,26 @@ func Test_getPatternTuples(t *testing.T) {
 		},
 		{
 			tables:  "db1.t1,db3.t3",
-			level:   cdc2.CDCPitrGranularity_Table,
+			level:   cdc.CDCPitrGranularity_Table,
 			wantErr: false,
-			expect: &cdc2.PatternTuples{
-				Pts: []*cdc2.PatternTuple{
+			expect: &cdc.PatternTuples{
+				Pts: []*cdc.PatternTuple{
 					{
-						Source: cdc2.PatternTable{
+						Source: cdc.PatternTable{
 							Database: "db1",
 							Table:    "t1",
 						},
-						Sink: cdc2.PatternTable{
+						Sink: cdc.PatternTable{
 							Database: "db1",
 							Table:    "t1",
 						},
 					},
 					{
-						Source: cdc2.PatternTable{
+						Source: cdc.PatternTable{
 							Database: "db3",
 							Table:    "t3",
 						},
-						Sink: cdc2.PatternTable{
+						Sink: cdc.PatternTable{
 							Database: "db3",
 							Table:    "t3",
 						},
@@ -203,35 +203,35 @@ func Test_getPatternTuples(t *testing.T) {
 		},
 		{
 			tables:  "db1.t1:db2.t2,db1.t1:db4.t4",
-			level:   cdc2.CDCPitrGranularity_Table,
+			level:   cdc.CDCPitrGranularity_Table,
 			wantErr: true,
 		},
 
 		// db level
 		{
 			tables:  "db1:db2,db3:db4",
-			level:   cdc2.CDCPitrGranularity_DB,
+			level:   cdc.CDCPitrGranularity_DB,
 			wantErr: false,
-			expect: &cdc2.PatternTuples{
-				Pts: []*cdc2.PatternTuple{
+			expect: &cdc.PatternTuples{
+				Pts: []*cdc.PatternTuple{
 					{
-						Source: cdc2.PatternTable{
+						Source: cdc.PatternTable{
 							Database: "db1",
-							Table:    cdc2.CDCPitrGranularity_All,
+							Table:    cdc.CDCPitrGranularity_All,
 						},
-						Sink: cdc2.PatternTable{
+						Sink: cdc.PatternTable{
 							Database: "db2",
-							Table:    cdc2.CDCPitrGranularity_All,
+							Table:    cdc.CDCPitrGranularity_All,
 						},
 					},
 					{
-						Source: cdc2.PatternTable{
+						Source: cdc.PatternTable{
 							Database: "db3",
-							Table:    cdc2.CDCPitrGranularity_All,
+							Table:    cdc.CDCPitrGranularity_All,
 						},
-						Sink: cdc2.PatternTable{
+						Sink: cdc.PatternTable{
 							Database: "db4",
-							Table:    cdc2.CDCPitrGranularity_All,
+							Table:    cdc.CDCPitrGranularity_All,
 						},
 					},
 				},
@@ -239,28 +239,28 @@ func Test_getPatternTuples(t *testing.T) {
 		},
 		{
 			tables:  "db1,db3:db4",
-			level:   cdc2.CDCPitrGranularity_DB,
+			level:   cdc.CDCPitrGranularity_DB,
 			wantErr: false,
-			expect: &cdc2.PatternTuples{
-				Pts: []*cdc2.PatternTuple{
+			expect: &cdc.PatternTuples{
+				Pts: []*cdc.PatternTuple{
 					{
-						Source: cdc2.PatternTable{
+						Source: cdc.PatternTable{
 							Database: "db1",
-							Table:    cdc2.CDCPitrGranularity_All,
+							Table:    cdc.CDCPitrGranularity_All,
 						},
-						Sink: cdc2.PatternTable{
+						Sink: cdc.PatternTable{
 							Database: "db1",
-							Table:    cdc2.CDCPitrGranularity_All,
+							Table:    cdc.CDCPitrGranularity_All,
 						},
 					},
 					{
-						Source: cdc2.PatternTable{
+						Source: cdc.PatternTable{
 							Database: "db3",
-							Table:    cdc2.CDCPitrGranularity_All,
+							Table:    cdc.CDCPitrGranularity_All,
 						},
-						Sink: cdc2.PatternTable{
+						Sink: cdc.PatternTable{
 							Database: "db4",
-							Table:    cdc2.CDCPitrGranularity_All,
+							Table:    cdc.CDCPitrGranularity_All,
 						},
 					},
 				},
@@ -268,28 +268,28 @@ func Test_getPatternTuples(t *testing.T) {
 		},
 		{
 			tables:  "db1,db3",
-			level:   cdc2.CDCPitrGranularity_DB,
+			level:   cdc.CDCPitrGranularity_DB,
 			wantErr: false,
-			expect: &cdc2.PatternTuples{
-				Pts: []*cdc2.PatternTuple{
+			expect: &cdc.PatternTuples{
+				Pts: []*cdc.PatternTuple{
 					{
-						Source: cdc2.PatternTable{
+						Source: cdc.PatternTable{
 							Database: "db1",
-							Table:    cdc2.CDCPitrGranularity_All,
+							Table:    cdc.CDCPitrGranularity_All,
 						},
-						Sink: cdc2.PatternTable{
+						Sink: cdc.PatternTable{
 							Database: "db1",
-							Table:    cdc2.CDCPitrGranularity_All,
+							Table:    cdc.CDCPitrGranularity_All,
 						},
 					},
 					{
-						Source: cdc2.PatternTable{
+						Source: cdc.PatternTable{
 							Database: "db3",
-							Table:    cdc2.CDCPitrGranularity_All,
+							Table:    cdc.CDCPitrGranularity_All,
 						},
-						Sink: cdc2.PatternTable{
+						Sink: cdc.PatternTable{
 							Database: "db3",
-							Table:    cdc2.CDCPitrGranularity_All,
+							Table:    cdc.CDCPitrGranularity_All,
 						},
 					},
 				},
@@ -299,18 +299,18 @@ func Test_getPatternTuples(t *testing.T) {
 		// account level
 		{
 			tables:  "",
-			level:   cdc2.CDCPitrGranularity_Account,
+			level:   cdc.CDCPitrGranularity_Account,
 			wantErr: false,
-			expect: &cdc2.PatternTuples{
-				Pts: []*cdc2.PatternTuple{
+			expect: &cdc.PatternTuples{
+				Pts: []*cdc.PatternTuple{
 					{
-						Source: cdc2.PatternTable{
-							Database: cdc2.CDCPitrGranularity_All,
-							Table:    cdc2.CDCPitrGranularity_All,
+						Source: cdc.PatternTable{
+							Database: cdc.CDCPitrGranularity_All,
+							Table:    cdc.CDCPitrGranularity_All,
 						},
-						Sink: cdc2.PatternTable{
-							Database: cdc2.CDCPitrGranularity_All,
-							Table:    cdc2.CDCPitrGranularity_All,
+						Sink: cdc.PatternTable{
+							Database: cdc.CDCPitrGranularity_All,
+							Table:    cdc.CDCPitrGranularity_All,
 						},
 					},
 				},
@@ -318,7 +318,7 @@ func Test_getPatternTuples(t *testing.T) {
 		},
 	}
 
-	isSame := func(pt0, pt1 *cdc2.PatternTuples) {
+	isSame := func(pt0, pt1 *cdc.PatternTuples) {
 		assert.Equal(t, len(pt0.Pts), len(pt1.Pts))
 		for i := 0; i < len(pt0.Pts); i++ {
 			assert.Equal(t, pt0.Pts[i].Source.Database, pt1.Pts[i].Source.Database)
@@ -372,44 +372,44 @@ func Test_handleCreateCdc(t *testing.T) {
 		IfNotExists: false,
 		TaskName:    "task1",
 		SourceUri:   "mysql://root:111@127.0.0.1:6001",
-		SinkType:    cdc2.CDCSinkType_MySQL,
+		SinkType:    cdc.CDCSinkType_MySQL,
 		SinkUri:     "mysql://root:111@127.0.0.1:3306",
 		Tables:      "db1.t1:db1.t1,db1.t2",
 		Option: []string{
-			cdc2.CDCRequestOptions_Level,
-			cdc2.CDCPitrGranularity_Table,
+			cdc.CDCRequestOptions_Level,
+			cdc.CDCPitrGranularity_Table,
 			"Account",
 			sysAccountName,
-			cdc2.CDCRequestOptions_Exclude,
+			cdc.CDCRequestOptions_Exclude,
 			"db2.t3,db2.t4",
-			cdc2.CDCTaskExtraOptions_InitSnapshotSplitTxn,
+			cdc.CDCTaskExtraOptions_InitSnapshotSplitTxn,
 			"false",
-			cdc2.CDCTaskExtraOptions_MaxSqlLength,
-			fmt.Sprintf("%d", cdc2.CDCDefaultTaskExtra_MaxSQLLen),
-			cdc2.CDCTaskExtraOptions_SendSqlTimeout,
-			cdc2.CDCDefaultSendSqlTimeout,
-			cdc2.CDCRequestOptions_StartTs,
+			cdc.CDCTaskExtraOptions_MaxSqlLength,
+			fmt.Sprintf("%d", cdc.CDCDefaultTaskExtra_MaxSQLLen),
+			cdc.CDCTaskExtraOptions_SendSqlTimeout,
+			cdc.CDCDefaultSendSqlTimeout,
+			cdc.CDCRequestOptions_StartTs,
 			"2025-01-03 15:20:00",
-			cdc2.CDCRequestOptions_EndTs,
+			cdc.CDCRequestOptions_EndTs,
 			"2025-01-03 16:20:00",
 		},
 	}
 
 	ses.GetTxnCompileCtx().execCtx.stmt = create
 
-	cdc2.AesKey = "test-aes-key-not-use-it-in-cloud"
-	defer func() { cdc2.AesKey = "" }()
+	cdc.AesKey = "test-aes-key-not-use-it-in-cloud"
+	defer func() { cdc.AesKey = "" }()
 	stub := gostub.Stub(&initAesKeyBySqlExecutor, func(context.Context, taskservice.SqlExecutor, uint32, string) (err error) {
 		return nil
 	})
 	defer stub.Reset()
 
-	stubOpenDbConn := gostub.Stub(&cdc2.OpenDbConn, func(_, _, _ string, _ int, _ string) (*sql.DB, error) {
+	stubOpenDbConn := gostub.Stub(&cdc.OpenDbConn, func(_, _, _ string, _ int, _ string) (*sql.DB, error) {
 		return nil, nil
 	})
 	defer stubOpenDbConn.Reset()
 
-	stubCheckPitr := gostub.Stub(&CDCCheckPitrGranularity, func(ctx context.Context, bh BackgroundExec, accName string, pts *cdc2.PatternTuples) error {
+	stubCheckPitr := gostub.Stub(&CDCCheckPitrGranularity, func(ctx context.Context, bh BackgroundExec, accName string, pts *cdc.PatternTuples) error {
 		return nil
 	})
 	defer stubCheckPitr.Reset()
@@ -448,7 +448,7 @@ func Test_doCreateCdc_invalidStartTs(t *testing.T) {
 	pu.TaskService = &testTaskService{}
 	setPu("", &pu)
 
-	stubCheckPitr := gostub.Stub(&CDCCheckPitrGranularity, func(ctx context.Context, bh BackgroundExec, accName string, pts *cdc2.PatternTuples) error {
+	stubCheckPitr := gostub.Stub(&CDCCheckPitrGranularity, func(ctx context.Context, bh BackgroundExec, accName string, pts *cdc.PatternTuples) error {
 		return nil
 	})
 	defer stubCheckPitr.Reset()
@@ -457,23 +457,23 @@ func Test_doCreateCdc_invalidStartTs(t *testing.T) {
 		IfNotExists: false,
 		TaskName:    "task1",
 		SourceUri:   "mysql://root:111@127.0.0.1:6001",
-		SinkType:    cdc2.CDCSinkType_MySQL,
+		SinkType:    cdc.CDCSinkType_MySQL,
 		SinkUri:     "mysql://root:111@127.0.0.1:3306",
 		Tables:      "db1.t1:db1.t1,db1.t2",
 		Option: []string{
-			cdc2.CDCRequestOptions_Level,
-			cdc2.CDCPitrGranularity_Table,
+			cdc.CDCRequestOptions_Level,
+			cdc.CDCPitrGranularity_Table,
 			"Account",
 			sysAccountName,
-			cdc2.CDCRequestOptions_Exclude,
+			cdc.CDCRequestOptions_Exclude,
 			"db2.t3,db2.t4",
-			cdc2.CDCTaskExtraOptions_InitSnapshotSplitTxn,
+			cdc.CDCTaskExtraOptions_InitSnapshotSplitTxn,
 			"false",
-			cdc2.CDCTaskExtraOptions_MaxSqlLength,
-			fmt.Sprintf("%d", cdc2.CDCDefaultTaskExtra_MaxSQLLen),
-			cdc2.CDCTaskExtraOptions_SendSqlTimeout,
-			cdc2.CDCDefaultSendSqlTimeout,
-			cdc2.CDCRequestOptions_StartTs,
+			cdc.CDCTaskExtraOptions_MaxSqlLength,
+			fmt.Sprintf("%d", cdc.CDCDefaultTaskExtra_MaxSQLLen),
+			cdc.CDCTaskExtraOptions_SendSqlTimeout,
+			cdc.CDCDefaultSendSqlTimeout,
+			cdc.CDCRequestOptions_StartTs,
 			"123456",
 		},
 	}
@@ -481,11 +481,11 @@ func Test_doCreateCdc_invalidStartTs(t *testing.T) {
 	assert.Error(t, err)
 
 	create.Option = []string{
-		cdc2.CDCRequestOptions_Level,
-		cdc2.CDCPitrGranularity_Account,
-		cdc2.CDCRequestOptions_StartTs,
+		cdc.CDCRequestOptions_Level,
+		cdc.CDCPitrGranularity_Account,
+		cdc.CDCRequestOptions_StartTs,
 		"2025-01-03 15:20:00",
-		cdc2.CDCRequestOptions_EndTs,
+		cdc.CDCRequestOptions_EndTs,
 		"2025-01-03 14:20:00",
 	}
 	err = handleCreateCDCTaskRequest(context.Background(), ses, create)
@@ -860,12 +860,12 @@ func TestRegisterCdcExecutor(t *testing.T) {
 		curDTaskId   int
 	}
 
-	cdc2.AesKey = "test-aes-key-not-use-it-in-cloud"
-	defer func() { cdc2.AesKey = "" }()
+	cdc.AesKey = "test-aes-key-not-use-it-in-cloud"
+	defer func() { cdc.AesKey = "" }()
 
-	cdc2.EnableConsoleSink = true
+	cdc.EnableConsoleSink = true
 	defer func() {
-		cdc2.EnableConsoleSink = false
+		cdc.EnableConsoleSink = false
 	}()
 
 	ctrl := gomock.NewController(t)
@@ -873,18 +873,18 @@ func TestRegisterCdcExecutor(t *testing.T) {
 
 	ctx := context.Background()
 
-	sinkUri, err := cdc2.JsonEncode(&cdc2.UriInfo{
+	sinkUri, err := cdc.JsonEncode(&cdc.UriInfo{
 		User: "root",
 		Ip:   "127.0.0.1",
 		Port: 3306,
 	})
 	assert.NoError(t, err)
-	pwd, err := cdc2.AesCFBEncode([]byte("111"))
+	pwd, err := cdc.AesCFBEncode([]byte("111"))
 	assert.NoError(t, err)
-	tables, err := cdc2.JsonEncode(cdc2.PatternTuples{ //tables
-		Pts: []*cdc2.PatternTuple{
+	tables, err := cdc.JsonEncode(cdc.PatternTuples{ //tables
+		Pts: []*cdc.PatternTuple{
 			{
-				Source: cdc2.PatternTable{
+				Source: cdc.PatternTable{
 					Database: "db1",
 					Table:    "t1",
 				},
@@ -892,7 +892,7 @@ func TestRegisterCdcExecutor(t *testing.T) {
 		},
 	})
 	assert.NoError(t, err)
-	filters, err := cdc2.JsonEncode(cdc2.PatternTuples{})
+	filters, err := cdc.JsonEncode(cdc.PatternTuples{})
 	assert.NoError(t, err)
 
 	db, mock, err := sqlmock.New()
@@ -913,7 +913,7 @@ func TestRegisterCdcExecutor(t *testing.T) {
 		},
 	).AddRow(
 		sinkUri,
-		cdc2.CDCSinkType_Console,
+		cdc.CDCSinkType_Console,
 		pwd,
 		tables,
 		filters,
@@ -921,9 +921,9 @@ func TestRegisterCdcExecutor(t *testing.T) {
 		"",
 		true,
 		fmt.Sprintf("{\"%s\":%v,\"%s\":\"%s\",\"%s\":%v}",
-			cdc2.CDCTaskExtraOptions_InitSnapshotSplitTxn, cdc2.CDCDefaultTaskExtra_InitSnapshotSplitTxn,
-			cdc2.CDCTaskExtraOptions_SendSqlTimeout, cdc2.CDCDefaultSendSqlTimeout,
-			cdc2.CDCTaskExtraOptions_MaxSqlLength, cdc2.CDCDefaultTaskExtra_MaxSQLLen,
+			cdc.CDCTaskExtraOptions_InitSnapshotSplitTxn, cdc.CDCDefaultTaskExtra_InitSnapshotSplitTxn,
+			cdc.CDCTaskExtraOptions_SendSqlTimeout, cdc.CDCDefaultSendSqlTimeout,
+			cdc.CDCTaskExtraOptions_MaxSqlLength, cdc.CDCDefaultTaskExtra_MaxSQLLen,
 		),
 	))
 
@@ -999,11 +999,11 @@ func TestRegisterCdcExecutor(t *testing.T) {
 	assert.NoError(t, err)
 	defer mpool.DeleteMPool(mp)
 
-	gostub.Stub(&cdc2.GetTableScanner, func(cnUUID string) *cdc2.TableScanner {
-		return &cdc2.TableScanner{
+	gostub.Stub(&cdc.GetTableScanner, func(cnUUID string) *cdc.TableScanner {
+		return &cdc.TableScanner{
 			Mutex:     sync.Mutex{},
-			Mp:        make(map[uint32]cdc2.TblMap),
-			Callbacks: map[string]func(map[uint32]cdc2.TblMap){"id": func(mp map[uint32]cdc2.TblMap) {}},
+			Mp:        make(map[uint32]cdc.TblMap),
+			Callbacks: map[string]func(map[uint32]cdc.TblMap){"id": func(mp map[uint32]cdc.TblMap) {}},
 		}
 	})
 
@@ -1994,7 +1994,7 @@ func Test_getTaskCkp(t *testing.T) {
 	bh := &backgroundExecTest{}
 	bh.init()
 
-	sql := CDCSQLBuilder.GetWatermarkSQL(sysAccountID, "taskID-1")
+	sql := cdc.CDCSQLBuilder.GetWatermarkSQL(sysAccountID, "taskID-1")
 	mrs := newMrsForGetWatermark([][]interface{}{
 		{"db1", "tb1", "0-0", ""},
 	})
@@ -2092,27 +2092,27 @@ func Test_handleShowCdc(t *testing.T) {
 	bh := &backgroundExecTest{}
 	bh.init()
 
-	sourceUri, err := cdc2.JsonEncode(&cdc2.UriInfo{
+	sourceUri, err := cdc.JsonEncode(&cdc.UriInfo{
 		User: "root",
 		Ip:   "127.0.0.1",
 		Port: 6001,
 	})
 	assert.NoError(t, err)
 
-	sinkUri, err := cdc2.JsonEncode(&cdc2.UriInfo{
+	sinkUri, err := cdc.JsonEncode(&cdc.UriInfo{
 		User: "root",
 		Ip:   "127.0.0.1",
 		Port: 6001,
 	})
 	assert.NoError(t, err)
 
-	sql := CDCSQLBuilder.ShowTaskSQL(sysAccountID, true, "")
+	sql := cdc.CDCSQLBuilder.ShowTaskSQL(sysAccountID, true, "")
 	mrs := newMrsForGetTask([][]interface{}{
 		{"taskID-1", "task1", sourceUri, sinkUri, CdcRunning, ""},
 	})
 	bh.sql2result[sql] = mrs
 
-	sql = CDCSQLBuilder.GetWatermarkSQL(sysAccountID, "taskID-1")
+	sql = cdc.CDCSQLBuilder.GetWatermarkSQL(sysAccountID, "taskID-1")
 	mrs = newMrsForGetWatermark([][]interface{}{
 		{"db1", "tb1", "0-0", ""},
 	})
@@ -2194,7 +2194,7 @@ func Test_handleShowCdc(t *testing.T) {
 
 func TestCdcTask_Resume(t *testing.T) {
 	cdc := &CdcTask{
-		activeRoutine: cdc2.NewCdcActiveRoutine(),
+		activeRoutine: cdc.NewCdcActiveRoutine(),
 		cdcTask: &task.CreateCdcDetails{
 			TaskName: "task1",
 		},
@@ -2210,8 +2210,8 @@ func TestCdcTask_Resume(t *testing.T) {
 
 func TestCdcTask_Restart(t *testing.T) {
 	cdc := &CdcTask{
-		activeRoutine: cdc2.NewCdcActiveRoutine(),
-		watermarkUpdater: cdc2.NewWatermarkUpdater(
+		activeRoutine: cdc.NewCdcActiveRoutine(),
+		watermarkUpdater: cdc.NewWatermarkUpdater(
 			sysAccountID,
 			"taskID-0",
 			nil,
@@ -2237,7 +2237,7 @@ func TestCdcTask_Pause(t *testing.T) {
 	}()
 
 	cdc := &CdcTask{
-		activeRoutine: cdc2.NewCdcActiveRoutine(),
+		activeRoutine: cdc.NewCdcActiveRoutine(),
 		cdcTask: &task.CreateCdcDetails{
 			TaskName: "task1",
 		},
@@ -2263,8 +2263,8 @@ func TestCdcTask_Cancel(t *testing.T) {
 		db: db,
 	}
 	cdc := &CdcTask{
-		activeRoutine: cdc2.NewCdcActiveRoutine(),
-		watermarkUpdater: cdc2.NewWatermarkUpdater(
+		activeRoutine: cdc.NewCdcActiveRoutine(),
+		watermarkUpdater: cdc.NewWatermarkUpdater(
 			sysAccountID,
 			"taskID-1",
 			tie,
@@ -2290,37 +2290,37 @@ func TestCdcTask_retrieveCdcTask(t *testing.T) {
 		cdcTask              *task.CreateCdcDetails
 		mp                   *mpool.MPool
 		packerPool           *fileservice.Pool[*types.Packer]
-		sinkUri              cdc2.UriInfo
-		tables               cdc2.PatternTuples
+		sinkUri              cdc.UriInfo
+		tables               cdc.PatternTuples
 		exclude              *regexp.Regexp
 		startTs              types.TS
 		noFull               bool
-		activeRoutine        *cdc2.ActiveRoutine
-		sunkWatermarkUpdater *cdc2.WatermarkUpdater
+		activeRoutine        *cdc.ActiveRoutine
+		sunkWatermarkUpdater *cdc.WatermarkUpdater
 	}
 	type args struct {
 		ctx context.Context
 	}
 
-	cdc2.AesKey = "test-aes-key-not-use-it-in-cloud"
-	defer func() { cdc2.AesKey = "" }()
+	cdc.AesKey = "test-aes-key-not-use-it-in-cloud"
+	defer func() { cdc.AesKey = "" }()
 
 	db, mock, err := sqlmock.New()
 	assert.NoError(t, err)
 
 	sqlx := "SELECT sink_uri, sink_type, sink_password, tables, filters, start_ts, end_ts, no_full, additional_config FROM mo_catalog.mo_cdc_task WHERE account_id = .* AND task_id =.*"
-	sinkUri, err := cdc2.JsonEncode(&cdc2.UriInfo{
+	sinkUri, err := cdc.JsonEncode(&cdc.UriInfo{
 		User: "root",
 		Ip:   "127.0.0.1",
 		Port: 3306,
 	})
 	assert.NoError(t, err)
-	pwd, err := cdc2.AesCFBEncode([]byte("111"))
+	pwd, err := cdc.AesCFBEncode([]byte("111"))
 	assert.NoError(t, err)
-	tables, err := cdc2.JsonEncode(cdc2.PatternTuples{ //tables
-		Pts: []*cdc2.PatternTuple{
+	tables, err := cdc.JsonEncode(cdc.PatternTuples{ //tables
+		Pts: []*cdc.PatternTuple{
 			{
-				Source: cdc2.PatternTable{
+				Source: cdc.PatternTable{
 					Database: "db1",
 					Table:    "t1",
 				},
@@ -2329,7 +2329,7 @@ func TestCdcTask_retrieveCdcTask(t *testing.T) {
 	},
 	)
 	assert.NoError(t, err)
-	filters, err := cdc2.JsonEncode(cdc2.PatternTuples{})
+	filters, err := cdc.JsonEncode(cdc.PatternTuples{})
 	assert.NoError(t, err)
 
 	mock.ExpectQuery(sqlx).WillReturnRows(sqlmock.NewRows(
@@ -2346,7 +2346,7 @@ func TestCdcTask_retrieveCdcTask(t *testing.T) {
 		},
 	).AddRow(
 		sinkUri,
-		cdc2.CDCSinkType_MySQL,
+		cdc.CDCSinkType_MySQL,
 		pwd,
 		tables,
 		filters,
@@ -2446,7 +2446,7 @@ func Test_execFrontend(t *testing.T) {
 		&tree.ShowCDC{},
 	}
 
-	txnOpStub := gostub.Stub(&cdc2.GetTxnOp,
+	txnOpStub := gostub.Stub(&cdc.GetTxnOp,
 		func(ctx context.Context, cnEngine engine.Engine, cnTxnClient client.TxnClient, info string) (client.TxnOperator, error) {
 			return nil, moerr.NewInternalError(ctx, "error")
 		})
@@ -2495,7 +2495,7 @@ func Test_getSqlForGetTask(t *testing.T) {
 			assert.Equalf(
 				t,
 				tt.want,
-				CDCSQLBuilder.ShowTaskSQL(tt.args.accountId, tt.args.all, tt.args.taskName),
+				cdc.CDCSQLBuilder.ShowTaskSQL(tt.args.accountId, tt.args.all, tt.args.taskName),
 				"getSqlForGetTask(%v, %v, %v)",
 				tt.args.accountId,
 				tt.args.all,
@@ -2507,11 +2507,11 @@ func Test_getSqlForGetTask(t *testing.T) {
 
 func Test_initAesKey(t *testing.T) {
 	{
-		cdc2.AesKey = "test-aes-key-not-use-it-in-cloud"
+		cdc.AesKey = "test-aes-key-not-use-it-in-cloud"
 		err := initAesKeyBySqlExecutor(context.Background(), nil, 0, "")
 		assert.NoError(t, err)
 
-		cdc2.AesKey = ""
+		cdc.AesKey = ""
 	}
 
 	{
@@ -2541,7 +2541,7 @@ func Test_initAesKey(t *testing.T) {
 		})
 		defer queryTableStub.Reset()
 
-		decryptStub := gostub.Stub(&cdc2.AesCFBDecodeWithKey, func(context.Context, string, []byte) (string, error) {
+		decryptStub := gostub.Stub(&cdc.AesCFBDecodeWithKey, func(context.Context, string, []byte) (string, error) {
 			return "aesKey", nil
 		})
 		defer decryptStub.Reset()
@@ -2557,8 +2557,8 @@ func Test_initAesKey(t *testing.T) {
 
 		err := initAesKeyBySqlExecutor(context.Background(), nil, 0, "")
 		assert.NoError(t, err)
-		assert.Equal(t, "aesKey", cdc2.AesKey)
-		cdc2.AesKey = ""
+		assert.Equal(t, "aesKey", cdc.AesKey)
+		cdc.AesKey = ""
 	}
 }
 
@@ -2662,7 +2662,7 @@ func TestCdcTask_initAesKeyByInternalExecutor(t *testing.T) {
 		ie: mie,
 	}
 
-	decryptStub := gostub.Stub(&cdc2.AesCFBDecodeWithKey, func(context.Context, string, []byte) (string, error) {
+	decryptStub := gostub.Stub(&cdc.AesCFBDecodeWithKey, func(context.Context, string, []byte) (string, error) {
 		return "aesKey", nil
 	})
 	defer decryptStub.Reset()
@@ -2678,7 +2678,7 @@ func TestCdcTask_initAesKeyByInternalExecutor(t *testing.T) {
 
 	err := initAesKeyByInternalExecutor(context.Background(), cdcTask, 0)
 	assert.NoError(t, err)
-	cdc2.AesKey = ""
+	cdc.AesKey = ""
 
 	err = initAesKeyByInternalExecutor(context.Background(), cdcTask, 0)
 	assert.Error(t, err)
@@ -2691,12 +2691,12 @@ func TestCdcTask_initAesKeyByInternalExecutor(t *testing.T) {
 }
 
 func TestCdcTask_handleNewTables(t *testing.T) {
-	stub1 := gostub.Stub(&cdc2.GetTxnOp, func(context.Context, engine.Engine, client.TxnClient, string) (client.TxnOperator, error) {
+	stub1 := gostub.Stub(&cdc.GetTxnOp, func(context.Context, engine.Engine, client.TxnClient, string) (client.TxnOperator, error) {
 		return nil, nil
 	})
 	defer stub1.Reset()
 
-	stub2 := gostub.Stub(&cdc2.FinishTxnOp, func(context.Context, error, client.TxnOperator, engine.Engine) {})
+	stub2 := gostub.Stub(&cdc.FinishTxnOp, func(context.Context, error, client.TxnOperator, engine.Engine) {})
 	defer stub2.Reset()
 
 	ctrl := gomock.NewController(t)
@@ -2705,16 +2705,16 @@ func TestCdcTask_handleNewTables(t *testing.T) {
 	eng := mock_frontend.NewMockEngine(ctrl)
 	eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
-	cdc := &CdcTask{
+	cdcTask := &CdcTask{
 		cdcTask: &task.CreateCdcDetails{
 			Accounts: []*task.Account{{Id: 0}},
 		},
-		tables: cdc2.PatternTuples{
-			Pts: []*cdc2.PatternTuple{
+		tables: cdc.PatternTuples{
+			Pts: []*cdc.PatternTuple{
 				{
-					Source: cdc2.PatternTable{
+					Source: cdc.PatternTable{
 						Database: "db1",
-						Table:    cdc2.CDCPitrGranularity_All,
+						Table:    cdc.CDCPitrGranularity_All,
 					},
 				},
 			},
@@ -2724,23 +2724,23 @@ func TestCdcTask_handleNewTables(t *testing.T) {
 		runningReaders: &sync.Map{},
 	}
 
-	mp := map[uint32]cdc2.TblMap{
+	mp := map[uint32]cdc.TblMap{
 		0: {
-			"db1.tb1": &cdc2.DbTableInfo{},
-			"db2.tb1": &cdc2.DbTableInfo{},
+			"db1.tb1": &cdc.DbTableInfo{},
+			"db2.tb1": &cdc.DbTableInfo{},
 		},
 	}
-	cdc.handleNewTables(mp)
+	cdcTask.handleNewTables(mp)
 }
 
 type mockWatermarkUpdater struct{}
 
-func (m mockWatermarkUpdater) Run(context.Context, *cdc2.ActiveRoutine) {
+func (m mockWatermarkUpdater) Run(context.Context, *cdc.ActiveRoutine) {
 	//TODO implement me
 	panic("implement me")
 }
 
-func (m mockWatermarkUpdater) InsertIntoDb(*cdc2.DbTableInfo, types.TS) error {
+func (m mockWatermarkUpdater) InsertIntoDb(*cdc.DbTableInfo, types.TS) error {
 	return nil
 }
 
@@ -2770,15 +2770,15 @@ func (m mockWatermarkUpdater) SaveErrMsg(string, string, string) error {
 
 type mockReader struct{}
 
-func (m mockReader) Run(ctx context.Context, ar *cdc2.ActiveRoutine) {}
+func (m mockReader) Run(ctx context.Context, ar *cdc.ActiveRoutine) {}
 
 func (m mockReader) Close() {}
 
 type mockSinker struct{}
 
-func (m mockSinker) Run(ctx context.Context, ar *cdc2.ActiveRoutine) {}
+func (m mockSinker) Run(ctx context.Context, ar *cdc.ActiveRoutine) {}
 
-func (m mockSinker) Sink(ctx context.Context, data *cdc2.DecoderOutput) {
+func (m mockSinker) Sink(ctx context.Context, data *cdc.DecoderOutput) {
 	//TODO implement me
 	panic("implement me")
 }
@@ -2819,18 +2819,18 @@ func (m mockSinker) Close() {
 }
 
 func TestCdcTask_addExecPipelineForTable(t *testing.T) {
-	cdc := &CdcTask{
+	cdcTask := &CdcTask{
 		watermarkUpdater: &mockWatermarkUpdater{},
 		runningReaders:   &sync.Map{},
 		noFull:           true,
 		additionalConfig: map[string]interface{}{
-			cdc2.CDCTaskExtraOptions_MaxSqlLength:         float64(cdc2.CDCDefaultTaskExtra_MaxSQLLen),
-			cdc2.CDCTaskExtraOptions_SendSqlTimeout:       cdc2.CDCDefaultSendSqlTimeout,
-			cdc2.CDCTaskExtraOptions_InitSnapshotSplitTxn: cdc2.CDCDefaultTaskExtra_InitSnapshotSplitTxn,
+			cdc.CDCTaskExtraOptions_MaxSqlLength:         float64(cdc.CDCDefaultTaskExtra_MaxSQLLen),
+			cdc.CDCTaskExtraOptions_SendSqlTimeout:       cdc.CDCDefaultSendSqlTimeout,
+			cdc.CDCTaskExtraOptions_InitSnapshotSplitTxn: cdc.CDCDefaultTaskExtra_InitSnapshotSplitTxn,
 		},
 	}
 
-	info := &cdc2.DbTableInfo{
+	info := &cdc.DbTableInfo{
 		SourceDbId:      0,
 		SourceDbName:    "",
 		SourceTblId:     0,
@@ -2845,46 +2845,46 @@ func TestCdcTask_addExecPipelineForTable(t *testing.T) {
 	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 	txnOperator.EXPECT().SnapshotTS().Return(timestamp.Timestamp{}).AnyTimes()
 
-	stubGetTableDef := gostub.Stub(&cdc2.GetTableDef, func(context.Context, client.TxnOperator, engine.Engine, uint64) (*plan.TableDef, error) {
+	stubGetTableDef := gostub.Stub(&cdc.GetTableDef, func(context.Context, client.TxnOperator, engine.Engine, uint64) (*plan.TableDef, error) {
 		return nil, nil
 	})
 	defer stubGetTableDef.Reset()
 
-	stubSinker := gostub.Stub(&cdc2.NewSinker, func(cdc2.UriInfo, *cdc2.DbTableInfo, cdc2.IWatermarkUpdater,
-		*plan.TableDef, int, time.Duration, *cdc2.ActiveRoutine, uint64, string) (cdc2.Sinker, error) {
+	stubSinker := gostub.Stub(&cdc.NewSinker, func(cdc.UriInfo, *cdc.DbTableInfo, cdc.IWatermarkUpdater,
+		*plan.TableDef, int, time.Duration, *cdc.ActiveRoutine, uint64, string) (cdc.Sinker, error) {
 		return &mockSinker{}, nil
 	})
 	defer stubSinker.Reset()
 
-	stubReader := gostub.Stub(&cdc2.NewTableReader, func(client.TxnClient, engine.Engine, *mpool.MPool,
-		*fileservice.Pool[*types.Packer], *cdc2.DbTableInfo, cdc2.Sinker, cdc2.IWatermarkUpdater, *plan.TableDef, bool,
-		*sync.Map, types.TS, types.TS, bool) cdc2.Reader {
+	stubReader := gostub.Stub(&cdc.NewTableReader, func(client.TxnClient, engine.Engine, *mpool.MPool,
+		*fileservice.Pool[*types.Packer], *cdc.DbTableInfo, cdc.Sinker, cdc.IWatermarkUpdater, *plan.TableDef, bool,
+		*sync.Map, types.TS, types.TS, bool) cdc.Reader {
 		return &mockReader{}
 	})
 	defer stubReader.Reset()
 
-	assert.NoError(t, cdc.addExecPipelineForTable(context.Background(), info, txnOperator))
+	assert.NoError(t, cdcTask.addExecPipelineForTable(context.Background(), info, txnOperator))
 }
 
 func TestCdcTask_checkPitr(t *testing.T) {
-	pts := &cdc2.PatternTuples{
-		Pts: []*cdc2.PatternTuple{
+	pts := &cdc.PatternTuples{
+		Pts: []*cdc.PatternTuple{
 			{
-				Source: cdc2.PatternTable{
+				Source: cdc.PatternTable{
 					Database: "db1",
 					Table:    "tb1",
 				},
 			},
 			{
-				Source: cdc2.PatternTable{
+				Source: cdc.PatternTable{
 					Database: "db2",
-					Table:    cdc2.CDCPitrGranularity_All,
+					Table:    cdc.CDCPitrGranularity_All,
 				},
 			},
 			{
-				Source: cdc2.PatternTable{
-					Database: cdc2.CDCPitrGranularity_All,
-					Table:    cdc2.CDCPitrGranularity_All,
+				Source: cdc.PatternTable{
+					Database: cdc.CDCPitrGranularity_All,
+					Table:    cdc.CDCPitrGranularity_All,
 				},
 			},
 		},
